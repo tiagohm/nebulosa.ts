@@ -310,8 +310,9 @@ export class KeplerOrbit implements OsculatingElements {
 	static meanAnomaly(p: Distance, e: number, i: Angle, om: Angle, w: Angle, M: Angle, epoch: Time, mu: number = GM_SUN_PITJEVA_2005, rotation: Mat3 = REFERENCE_FRAME) {
 		let v: number
 
-		if (e < 1) v = trueAnomalyClosed(e, solveEccentricAnomaly(e, M))
-		else if (e > 1) v = trueAnomalyHyperbolic(e, solveEccentricAnomaly(e, M))
+		// Elliptic true anomaly is 2PI-periodic in M; wrap so tan(E/2) uses E in (-PI, PI].
+		if (e < 1) v = trueAnomalyClosed(e, eccentricAnomalyFromMean(normalizePI(M), e))
+		else if (e > 1) v = trueAnomalyHyperbolic(e, eccentricAnomalyFromMean(M, e))
 		else v = trueAnomalyParabolic(p, mu, M)
 
 		return KeplerOrbit.trueAnomaly(p, e, i, om, w, v, epoch, mu, rotation)
@@ -328,40 +329,6 @@ export class KeplerOrbit implements OsculatingElements {
 		const [position, velocity] = computePositionAndVelocityFromOrbitalElements(p, e, i, om, w, 0, mu)
 		return new KeplerOrbit(position, velocity, epoch, mu, rotation)
 	}
-}
-
-// Iterates to solve Kepler's equation to find eccentric anomaly.
-// Based on the algorithm in section 8.10.2 of the Explanatory Supplement
-// to the Astronomical Almanac, 3rd ed.
-function solveEccentricAnomaly(e: number, M: Angle): Angle {
-	if (e < 1) {
-		const m = normalizePI(M)
-		let E = m + e * Math.sin(m)
-
-		for (let i = 0; i < KEPLER_MAX_ITERATIONS; i++) {
-			const s = Math.sin(E)
-			const c = Math.cos(E)
-			const dE = (m - (E - e * s)) / (1 - e * c)
-			E += dE
-
-			if (Math.abs(dE) < KEPLER_EPSILON) break
-		}
-
-		return E
-	}
-
-	let E = Math.asinh(M / e)
-
-	for (let i = 0; i < KEPLER_MAX_ITERATIONS; i++) {
-		const s = Math.sinh(E)
-		const c = Math.cosh(E)
-		const dE = (M - (e * s - E)) / (e * c - 1)
-		E += dE
-
-		if (Math.abs(dE) < KEPLER_EPSILON) break
-	}
-
-	return E
 }
 
 // Computes true anomaly from eccentricity `e` and eccentric anomaly `E` for hyperbolic orbits.
@@ -389,8 +356,10 @@ export function trueAnomalyParabolic(p: Distance, mu: number, M: Angle): Angle {
 // Based on equations from this document:
 // https://web.archive.org/web/*/http://ccar.colorado.edu/asen5070/handouts/kep2cart_2002.doc
 function computePositionAndVelocityFromOrbitalElements(p: Distance, e: number, i: Angle, om: Angle, w: Angle, v: Angle, mu: number): PositionAndVelocity {
-	// Checks that true anomaly is less than arccos(-1/e) for hyperbolic orbits.
-	if (!(e <= 1) && !(Math.abs(normalizePI(v)) <= Math.acos(-1 / e) + ORBIT_EPSILON)) {
+	// Hyperbolic true anomaly cannot exceed the asymptote 2*atan(sqrt((e+1)/(e-1))), equal to
+	// acos(-1/e) in exact arithmetic. Compare against the atan form so a value produced by
+	// trueAnomalyHyperbolic, whose tanh saturates, is not rejected by a 1e-14 acos rounding gap.
+	if (!(e <= 1) && !(Math.abs(normalizePI(v)) <= 2 * Math.atan(Math.sqrt((e + 1) / (e - 1))) + ORBIT_EPSILON)) {
 		throw new Error('if eccentricity is > 1, abs(true anomaly) cannot be more than acos(-1/e)')
 	}
 
@@ -635,33 +604,51 @@ export function eccentricAnomaly(v: number, e: number) {
 
 // Solves Kepler's equation for the eccentric anomaly (radians) from mean anomaly `M` (radians) and
 // eccentricity `e`, the inverse of meanAnomaly. Newton-Raphson on the elliptic branch (e < 1) solves
-// E - e*sin(E) = M with M wrapped to -PI..PI, and on the hyperbolic branch (e > 1) solves
-// e*sinh(H) - H = M, returning the hyperbolic anomaly H. Returns 0 for the parabolic case (e == 1),
-// matching eccentricAnomaly. Converges to double precision; the iteration is capped for safety.
+// E - e*sin(E) = M with M wrapped to -PI..PI; e >= 0.8 starts at ±PI so near-parabolic ellipses do
+// not diverge when 1 - e*cos(E) vanishes at periapsis. The hyperbolic branch (e > 1) solves
+// e*sinh(H) - H = M. If the first Newton step from H = asinh(M/e) would exceed 1 rad (e → 1 and
+// small M), the starter is the Barker cubic (e-1)*H + e*H^3/6 = M, and each later step is clamped
+// to ±1 rad. Returns 0 for the parabolic case (e == 1), matching eccentricAnomaly. Throws if the
+// correction does not fall below KEPLER_EPSILON within KEPLER_MAX_ITERATIONS.
 export function eccentricAnomalyFromMean(M: Angle, e: number): Angle {
 	if (e === 1) return 0
 
 	if (e < 1) {
 		// Solve on the wrapped anomaly for robust convergence, then restore the revolution of M.
 		const m = normalizePI(M)
-		// Near-parabolic ellipses converge faster starting from the apsis side of the wrapped anomaly.
-		let E = e < 0.8 ? m : m < 0 ? -PI : PI
-		for (let i = 0; i < 30; i++) {
+		// Low-e first-order start (Explanatory Supplement 8.10.2). Near-parabolic ellipses instead
+		// start from the apsis side so 1 - e*cos(E) is not ~0 at periapsis.
+		let E = e < 0.8 ? m + e * Math.sin(m) : m < 0 ? -PI : PI
+		for (let i = 0; i < KEPLER_MAX_ITERATIONS; i++) {
 			const delta = (E - e * Math.sin(E) - m) / (1 - e * Math.cos(E))
 			E -= delta
-			if (Math.abs(delta) < 1e-14) break
+			if (Math.abs(delta) < KEPLER_EPSILON) return E + (M - m)
 		}
-		// M - m is a whole multiple of TAU, so adding it keeps E - e*sin(E) = M with E near M.
-		return E + (M - m)
+		throw new Error('Kepler equation did not converge')
 	}
 
+	// e*cosh(H)-1 → 0 at H = 0 when e → 1, so Newton from asinh(M/e) ≈ M/e takes a step ~ M/(e-1)
+	// and overflows. sqrt(e^2+M^2)-1 is that derivative at the asinh start (cosh(asinh x)=sqrt(1+x^2)).
 	let H = Math.asinh(M / e)
-	for (let i = 0; i < 50; i++) {
-		const delta = (e * Math.sinh(H) - H - M) / (e * Math.cosh(H) - 1)
-		H -= delta
-		if (Math.abs(delta) < 1e-14) break
+	if (!(Math.abs((e * Math.sinh(H) - H - M) / (Math.sqrt(e * e + M * M) - 1)) <= 1)) {
+		const p = (6 * (e - 1)) / e
+		const q = (-6 * M) / e
+		const halfQ = q / 2
+		const disc = halfQ * halfQ + (p / 3) ** 3
+		const root = Math.sqrt(Math.max(disc, 0))
+		H = Math.cbrt(-halfQ + root) + Math.cbrt(-halfQ - root)
 	}
-	return H
+
+	for (let i = 0; i < KEPLER_MAX_ITERATIONS; i++) {
+		const s = Math.sinh(H)
+		const c = Math.cosh(H)
+		let delta = (e * s - H - M) / (e * c - 1)
+		// Steele-style step limit; the inverted bound also rejects a NaN step.
+		if (!(delta >= -1 && delta <= 1)) delta = delta < 0 ? -1 : 1
+		H -= delta
+		if (Math.abs(delta) < KEPLER_EPSILON) return H
+	}
+	throw new Error('Kepler equation did not converge')
 }
 
 // Eccentricity vector from `position` (AU) and `velocity` (AU/day) and `mu`. Points toward periapsis

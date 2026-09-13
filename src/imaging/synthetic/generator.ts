@@ -395,6 +395,7 @@ export const DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG: Readonly<DeepRequired<Astr
 }
 
 // Adds realistic sky background and camera noise into a normalized image buffer in place.
+// Dead pixels also scale any pre-existing samples so already-drawn stars at that site are attenuated.
 export function generateNoiseImage(raw: ImageRawType, width: number, height: number, channels: 1 | 3, config: AstronomicalImageNoiseConfig = DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG): AstronomicalImageNoiseResult {
 	const resolved = resolveAstronomicalImageNoiseConfig(raw, width, height, channels, config)
 	const { expectedLength, height: imageHeight, width: imageWidth, seed } = resolved
@@ -425,7 +426,7 @@ export function generateNoiseImage(raw: ImageRawType, width: number, height: num
 
 	// Pixel-invariant sky and dark-current terms. These depend only on the resolved config, so
 	// evaluating them inside the per-pixel loop wasted a pow plus several multiplies on every pixel.
-	const { baseSkyElectrons, diffuseBoost } = computeSkyInvariants(resolved)
+	const { baseSkyElectrons, scatteringBaseElectrons, diffuseBoost } = computeSkyInvariants(resolved)
 	const darkCurrentElectrons = evaluateDarkCurrentElectrons(resolved)
 
 	const spatial: SkySpatialFields = { sharedSkyElectrons: 0, lightPollutionElectrons: 0, moonElectrons: 0, ampGlowElectrons: 0 }
@@ -440,7 +441,7 @@ export function generateNoiseImage(raw: ImageRawType, width: number, height: num
 			const pixelIndex = rowBase + x
 			const xc = xCentered[x]
 			const columnStructuredElectrons = columnNoise[x] + columnBanding[x]
-			evaluateSkySpatialFields(xc, yc, resolved, baseSkyElectrons, diffuseBoost, spatial)
+			evaluateSkySpatialFields(xc, yc, resolved, baseSkyElectrons, scatteringBaseElectrons, diffuseBoost, spatial)
 			sampleSensorDefect(resolved, random, defect)
 
 			if (defect.kind === 1) hotPixelCount++
@@ -461,7 +462,7 @@ export function generateNoiseImage(raw: ImageRawType, width: number, height: num
 				const signalElectrons = sampleSignalElectrons(channelSkyElectrons * resolved.channelGain[0], random, gaussianState, resolved.poissonThreshold) * fixedPatternGain
 				const darkSignalElectrons = sampleSignalElectrons(darkElectrons, random, gaussianState, resolved.poissonThreshold)
 				const totalElectrons = (signalElectrons + darkSignalElectrons + ampGlowTintedElectrons + defect.extraSignalElectrons) * defect.signalScale + resolved.biasElectrons + resolved.blackLevelElectrons + resolved.channelBiasElectrons[0] + rowStructuredElectrons + columnStructuredElectrons + readNoiseElectrons
-				const next = raw[pixelIndex] + totalElectrons * resolved.normalizedPerElectron
+				const next = raw[pixelIndex] * defect.signalScale + totalElectrons * resolved.normalizedPerElectron
 				raw[pixelIndex] = next
 				if (next > maxValueBeforeOutput) maxValueBeforeOutput = next
 				if (next >= 1) saturatedPixels++
@@ -478,7 +479,7 @@ export function generateNoiseImage(raw: ImageRawType, width: number, height: num
 					const ampGlowTintedElectrons = ampGlowElectrons * resolved.ampGlowTint[channel]
 					const totalElectrons =
 						(signalElectrons + darkSignalElectrons + ampGlowTintedElectrons + defect.extraSignalElectrons) * defect.signalScale + resolved.biasElectrons + resolved.blackLevelElectrons + resolved.channelBiasElectrons[channel] + rowStructuredElectrons + columnStructuredElectrons + readNoiseElectrons
-					const next = raw[baseIndex + channel] + totalElectrons * resolved.normalizedPerElectron
+					const next = raw[baseIndex + channel] * defect.signalScale + totalElectrons * resolved.normalizedPerElectron
 					raw[baseIndex + channel] = next
 					if (next > maxValueBeforeOutput) maxValueBeforeOutput = next
 					pixelSaturated ||= next >= 1
@@ -643,19 +644,21 @@ function resolveAstronomicalImageNoiseConfig(raw: ImageRawType, width: number, h
 
 // Precomputes the pixel-invariant sky brightness scale and diffuse-boost factor once per image.
 // Both depend only on the resolved config; computing them per pixel wasted a pow plus several
-// multiplies. The expressions are kept identical so the result is bit-for-bit unchanged.
+// multiplies. scatteringBaseElectrons keeps the sky-rate scale for moonlight and light pollution
+// when sky.enabled is false; twilight and horizon glow still follow the enabled sky base.
 function computeSkyInvariants(config: ResolvedAstronomicalImageNoiseConfig) {
 	const atmosphericPathScale = Math.max(0.35, config.airmass) ** 0.38
 	const transparencyScale = 0.35 + 0.65 * clamp(config.transparency, 0, 1.5)
 	const naturalSkyScale = 1 + config.airglowStrength + config.zodiacalLightFactor * 0.55 + config.milkyWayBackgroundFactor * 0.35 + config.humidity * 0.12
 	const diffuseBoost = 1 + config.haze * 0.9 + config.humidity * 0.35 + config.thinCloudVeil * 1.6
-	const baseSkyElectrons = config.skyEnabled ? config.skyBaseRate * config.exposureTime * atmosphericPathScale * transparencyScale * naturalSkyScale : 0
-	return { baseSkyElectrons, diffuseBoost } as const
+	const scatteringBaseElectrons = config.skyBaseRate * config.exposureTime * atmosphericPathScale * transparencyScale * naturalSkyScale
+	const baseSkyElectrons = config.skyEnabled ? scatteringBaseElectrons : 0
+	return { baseSkyElectrons, scatteringBaseElectrons, diffuseBoost } as const
 }
 
 // Evaluates the smooth sky, moon, light-pollution, and amp-glow fields for a pixel. The
-// pixel-invariant baseSkyElectrons and diffuseBoost are precomputed once via computeSkyInvariants.
-function evaluateSkySpatialFields(xc: number, yc: number, config: ResolvedAstronomicalImageNoiseConfig, baseSkyElectrons: number, diffuseBoost: number, out: SkySpatialFields): SkySpatialFields {
+// pixel-invariant bases and diffuseBoost are precomputed once via computeSkyInvariants.
+function evaluateSkySpatialFields(xc: number, yc: number, config: ResolvedAstronomicalImageNoiseConfig, baseSkyElectrons: number, scatteringBaseElectrons: number, diffuseBoost: number, out: SkySpatialFields): SkySpatialFields {
 	const radius2 = xc * xc + yc * yc
 	const linearGradient = (xc * config.skyGradientCos + yc * config.skyGradientSin) * 2
 	const lowFrequency = evaluateLowFrequencyVariation(xc, yc, config)
@@ -663,12 +666,13 @@ function evaluateSkySpatialFields(xc: number, yc: number, config: ResolvedAstron
 	const skyField = Math.max(0, 1 + config.skyGlobalOffset + config.skyGradientStrength * linearGradient + config.skyRadialGradientStrength * radius2 + config.skyLowFrequencyVariationStrength * lowFrequency)
 	const sharedNaturalSkyElectrons = Math.max(0, baseSkyElectrons * skyField)
 
-	out.lightPollutionElectrons = config.lightPollutionEnabled ? evaluateLightPollutionElectrons(xc, yc, horizonFactor, baseSkyElectrons, diffuseBoost, config) : 0
-	out.moonElectrons = config.moonEnabled ? evaluateMoonElectrons(xc, yc, baseSkyElectrons, diffuseBoost, config) : 0
+	out.lightPollutionElectrons = config.lightPollutionEnabled ? evaluateLightPollutionElectrons(xc, yc, horizonFactor, scatteringBaseElectrons, diffuseBoost, config) : 0
+	out.moonElectrons = config.moonEnabled ? evaluateMoonElectrons(xc, yc, scatteringBaseElectrons, diffuseBoost, config) : 0
 	const twilightElectrons = baseSkyElectrons * config.twilightContribution * 18 * horizonFactor
 	const horizonGlowElectrons = baseSkyElectrons * config.horizonGlow * (0.45 + 0.55 * horizonFactor) * diffuseBoost
 	out.ampGlowElectrons = config.ampGlowEnabled ? evaluateAmpGlowElectrons(xc, yc, config) : 0
-	out.sharedSkyElectrons = sharedNaturalSkyElectrons + twilightElectrons + horizonGlowElectrons + out.lightPollutionElectrons * (0.3 + 0.7 * config.lightPollutionGradientStrength)
+	// Light pollution and moonlight stay out of the shared sky so each is applied once, with its tint.
+	out.sharedSkyElectrons = sharedNaturalSkyElectrons + twilightElectrons + horizonGlowElectrons
 
 	return out
 }

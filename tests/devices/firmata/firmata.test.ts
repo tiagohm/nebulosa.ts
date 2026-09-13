@@ -5,7 +5,7 @@ import { MCP4725 } from '../../../src/devices/firmata/components/dac'
 import { HD44780 } from '../../../src/devices/firmata/components/display'
 import { KT0803L, RDA5807, TEA5767 } from '../../../src/devices/firmata/components/radio'
 import { DS1307, DS3231 } from '../../../src/devices/firmata/components/rtc'
-import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, type OneWirePowerMode, type OneWireSearchMode, type Pin, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../../../src/devices/firmata/firmata'
+import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, FirmataClientOverTcp, type FirmataClientHandler, type OneWirePowerMode, type OneWireSearchMode, type Pin, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../../../src/devices/firmata/firmata'
 import { PCF8574 } from '../../../src/devices/firmata/io'
 import { MPU6050 } from '../../../src/devices/firmata/sensors/accelerometer'
 import { ACS712 } from '../../../src/devices/firmata/sensors/ammeter'
@@ -16,6 +16,7 @@ import { HMC5883L } from '../../../src/devices/firmata/sensors/magnetometer'
 import { DS18B20, LM35 } from '../../../src/devices/firmata/sensors/thermometer'
 import { CRC } from '../../../src/io/crc'
 import { deg } from '../../../src/math/units/angle'
+import { fromPressure } from '../../../src/math/units/distance'
 
 type MockFirmataMessage =
 	| readonly ['mode', number, PinMode]
@@ -93,6 +94,20 @@ class MockFirmataClient {
 	}
 }
 
+describe('ESP8266 board', () => {
+	const board = new ESP8266()
+
+	test('reports PWM only for usable digital pins', () => {
+		for (const pin of [0, 1, 2, 3, 4, 5, 12, 13, 14, 15, 16]) {
+			expect(board.isPinPWM(pin)).toBeTrue()
+		}
+
+		for (const pin of [-1, 6, 7, 8, 9, 10, 11, 17]) {
+			expect(board.isPinPWM(pin)).toBeFalse()
+		}
+	})
+})
+
 describe('command decoding', () => {
 	const result: unknown[] = []
 
@@ -169,6 +184,17 @@ describe('command decoding', () => {
 		expect(result[4]).toBeTrue()
 	})
 
+	test('pin capability starts at pin zero when it has no modes', () => {
+		client.process(Buffer.from([0xf0, 0x79, 2, 3, 0xf7]))
+		result.length = 0
+		client.process(Buffer.from([0xf0, 0x6c, 0x7f, 1, 0, 0x7f, 0xf7]))
+		expect(result[0]).toBe(0)
+		expect(result[1]).toEqual([])
+		expect(result[2]).toBe(1)
+		expect(result[3]).toEqual([PinMode.OUTPUT])
+		expect(result[4]).toBeTrue()
+	})
+
 	test('analog mapping', () => {
 		client.process(Buffer.from([0xf0, 0x6a, 0x7f, 0x7f, 1, 2, 3, 0xf7]))
 		const mapping = result[0] as AnalogMapping
@@ -190,6 +216,19 @@ describe('command decoding', () => {
 		expect(result[0]).toBe('😊')
 	})
 
+	test('text message grows beyond the parser scratch buffer', () => {
+		const text = 'A'.repeat(200)
+		const encoded = Buffer.alloc(text.length * 2)
+
+		for (let i = 0; i < text.length; i++) {
+			encoded[i * 2] = text.charCodeAt(i) & 0x7f
+			encoded[i * 2 + 1] = (text.charCodeAt(i) >>> 7) & 0x01
+		}
+
+		client.process(Buffer.from([0xf0, 0x71, ...encoded, 0xf7]))
+		expect(result[0]).toBe(text)
+	})
+
 	test('custom message', () => {
 		client.process(Buffer.from([0xf0, 1, 65, 0, 66, 0, 67, 0, 0xf7]))
 		const buffer = result[0] as Buffer
@@ -204,6 +243,11 @@ describe('command decoding', () => {
 		expect(result[2]).toEqual(Buffer.from([1, 2, 3]))
 	})
 
+	test('ignores truncated two-wire messages', () => {
+		client.process(Buffer.from([0xf0, 0x77, 0xf7, 0xf0, 0x77, 0x22, 0x00, 0xf7]))
+		expect(result).toEqual([])
+	})
+
 	test('one-wire search reply', () => {
 		const addresses = Buffer.from([0x28, 0x1a, 0xbc, 0x4d, 0x2f, 0x00, 0x00, 0xc1, 0x28, 0xff, 0x2a, 0x01, 0x2f, 0x00, 0x00, 0x7e])
 
@@ -211,6 +255,17 @@ describe('command decoding', () => {
 		expect(result[0]).toBe(4)
 		expect(result[1]).toBeFalse()
 		expect(result[2]).toEqual([addresses.subarray(0, 8), addresses.subarray(8, 16)])
+	})
+
+	test('one-wire search reply grows beyond the parser scratch buffer', () => {
+		const addresses = Buffer.alloc(8 * 30)
+		for (let i = 0; i < addresses.length; i++) addresses[i] = (i * 37 + 11) & 0xff
+
+		client.process(Buffer.from([0xf0, 0x73, 0x42, 4, ...encodePacked7Bit(addresses), 0xf7]))
+		expect(result[0]).toBe(4)
+		expect(result[1]).toBeFalse()
+		expect(result[2]).toHaveLength(30)
+		expect(result[2]).toEqual(Array.from({ length: 30 }, (_, i) => addresses.subarray(i * 8, i * 8 + 8)))
 	})
 
 	test('one-wire read reply', () => {
@@ -275,6 +330,34 @@ test('a reconnect handshake does not inherit pins from the previous one', () => 
 	expect(client.pinAt(1)).toBeUndefined()
 })
 
+test('a TCP client can reconnect after a remote socket close', async () => {
+	let connections = 0
+	const clientClosed = Promise.withResolvers<void>()
+	const server = Bun.listen({
+		hostname: '127.0.0.1',
+		port: 0,
+		socket: {
+			open: (socket) => {
+				connections++
+				if (connections === 1) socket.close()
+			},
+			data: () => {},
+		},
+	})
+	const client = new FirmataClientOverTcp(new ESP8266())
+	client.addHandler({ close: () => clientClosed.resolve() })
+
+	try {
+		expect(await client.connect('127.0.0.1', server.port)).toBeTrue()
+		await clientClosed.promise
+		expect(await client.connect('127.0.0.1', server.port)).toBeTrue()
+		expect(connections).toBe(2)
+	} finally {
+		client.disconnect()
+		server.stop()
+	}
+})
+
 describe('command encoding', () => {
 	const transport: Transport = {
 		write: () => {},
@@ -315,6 +398,7 @@ describe('command encoding', () => {
 	test('digital and analog report commands', () => {
 		client.requestDigitalReport(true)
 		client.requestDigitalPinReport(6, false)
+		client.requestDigitalPinReport(16, true)
 		client.requestAnalogReport(false)
 		client.requestAnalogPinReport(ESP8266.A0, true)
 
@@ -331,9 +415,10 @@ describe('command encoding', () => {
 		}
 
 		expect(messages[0]).toEqual(digitalReport)
-		expect(messages[1]).toEqual(Buffer.from([0xd6, 0]))
-		expect(messages[2]).toEqual(analogReport)
-		expect(messages[3]).toEqual(Buffer.from([0xc0, 1]))
+		expect(messages[1]).toEqual(Buffer.from([0xd0, 0]))
+		expect(messages[2]).toEqual(Buffer.from([0xd2, 1]))
+		expect(messages[3]).toEqual(analogReport)
+		expect(messages[4]).toEqual(Buffer.from([0xc0, 1]))
 	})
 
 	test('pin mode and digital write', () => {
@@ -387,9 +472,9 @@ describe('command encoding', () => {
 		client.twoWireRead(0x1aa, 0x10, 3, false, 10, 'restart')
 		client.twoWireStop(0x55)
 
-		expect(messages[0]).toEqual(Buffer.from([0xf0, 0x76, 0x23, 0x42, 0x2a, 0x01, 0x3b, 0x01, 0xf7]))
-		expect(messages[1]).toEqual(Buffer.from([0xf0, 0x76, 0x2a, 0x2b, 0x10, 0, 0x03, 0, 0xf7]))
-		expect(messages[2]).toEqual(Buffer.from([0xf0, 0x76, 0x55, 0x58, 0xf7]))
+		expect(messages[0]).toEqual(Buffer.from([0xf0, 0x76, 0x23, 0x02, 0x2a, 0x01, 0x3b, 0x01, 0xf7]))
+		expect(messages[1]).toEqual(Buffer.from([0xf0, 0x76, 0x2a, 0x6b, 0x10, 0, 0x03, 0, 0xf7]))
+		expect(messages[2]).toEqual(Buffer.from([0xf0, 0x76, 0x55, 0x18, 0xf7]))
 	})
 
 	test('one-wire config', () => {
@@ -478,6 +563,130 @@ test('BMP180 calculate true temperature & pressure', () => {
 	expect(bmp180.calculateTruePressure(23843)).toBe(69964)
 })
 
+test('BMP180 reads high unsigned raw temperatures', () => {
+	const client = new MockFirmataClient()
+	const bmp180 = new BMP180(client as never, 0)
+	const calibration = Buffer.alloc(22)
+	calibration.writeInt16BE(408, 0)
+	calibration.writeInt16BE(-72, 2)
+	calibration.writeInt16BE(-14383, 4)
+	calibration.writeUInt16BE(32741, 6)
+	calibration.writeUInt16BE(32757, 8)
+	calibration.writeUInt16BE(23153, 10)
+	calibration.writeInt16BE(6190, 12)
+	calibration.writeInt16BE(4, 14)
+	calibration.writeInt16BE(-32768, 16)
+	calibration.writeInt16BE(-8711, 18)
+	calibration.writeInt16BE(2868, 20)
+
+	bmp180.start()
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xaa, calibration)
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xf6, Buffer.from([0x93, 0x99]))
+
+	expect(bmp180.temperature).toBe(85)
+	bmp180.stop()
+})
+
+test('BMP180 reinitializes after stopping', () => {
+	const client = new MockFirmataClient()
+	const bmp180 = new BMP180(client as never, 0)
+	const calibration = Buffer.alloc(22)
+
+	bmp180.start()
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xaa, calibration)
+	bmp180.stop()
+	bmp180.start()
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xaa, calibration)
+
+	expect(client.messages.filter((message) => message[0] === 'read' && message[2] === 0xaa)).toHaveLength(2)
+	expect(client.messages.filter((message) => message[0] === 'write')).toHaveLength(2)
+	bmp180.stop()
+})
+
+test('BMP280 reinitializes after stopping', () => {
+	const client = new MockFirmataClient()
+	const bmp280 = new BMP280(client as never, BMP280.ADDRESS, 100)
+	const calibration = Buffer.alloc(24)
+	calibration.writeUInt16LE(36477, 6)
+
+	bmp280.start()
+	bmp280.twoWireMessage(client as never, BMP280.ADDRESS, 0x88, calibration)
+	bmp280.stop()
+	bmp280.start()
+	bmp280.twoWireMessage(client as never, BMP280.ADDRESS, 0x88, calibration)
+
+	expect(client.messages.filter((message) => message[0] === 'read' && message[2] === 0x88)).toHaveLength(2)
+	expect(client.messages.filter((message) => message[0] === 'read' && message[2] === 0xf7)).toHaveLength(2)
+	bmp280.stop()
+})
+
+test('BMP280 retriggers forced measurements before polling', async () => {
+	const client = new MockFirmataClient()
+	const bmp280 = new BMP280(client as never, BMP280.ADDRESS, 100, { mode: 'forced' })
+	const calibration = Buffer.alloc(24)
+	calibration.writeUInt16LE(36477, 6)
+
+	bmp280.start()
+	bmp280.twoWireMessage(client as never, BMP280.ADDRESS, 0x88, calibration)
+
+	const controlWrites = () => client.messages.filter((message) => message[0] === 'write' && message[2][0] === BMP280.CTRL_MEAS_REG)
+	const dataReads = () => client.messages.filter((message) => message[0] === 'read' && message[2] === BMP280.DATA_REG)
+
+	expect(controlWrites()).toHaveLength(2)
+	expect(dataReads()).toHaveLength(0)
+	await Bun.sleep(20)
+	expect(dataReads()).toHaveLength(1)
+
+	await Bun.sleep(110)
+	expect(controlWrites()).toHaveLength(3)
+	expect(dataReads()).toHaveLength(2)
+	bmp280.stop()
+})
+
+test('BMP180 derives altitude from the standard sea-level temperature', () => {
+	const client = new MockFirmataClient()
+	const bmp180 = new BMP180(client as never, 0)
+	const calibration = Buffer.from([0x01, 0x98, 0xff, 0xb8, 0xc7, 0xd1, 0x7f, 0xe5, 0x7f, 0xf5, 0x5a, 0x71, 0x18, 0x2e, 0x00, 0x04, 0x80, 0x00, 0xdd, 0xf9, 0x0b, 0x34])
+
+	bmp180.start()
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xaa, calibration)
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xf6, Buffer.from([0x75, 0x30]))
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xf6, Buffer.from([0x00, 0x5d, 0x23]))
+
+	expect(bmp180.temperature).toBe(31.3)
+	expect(bmp180.altitude).toBe(fromPressure(bmp180.pressure))
+	bmp180.stop()
+})
+
+test('BMP280 derives altitude from the standard sea-level temperature', () => {
+	const client = new MockFirmataClient()
+	const bmp280 = new BMP280(client as never, BMP280.ADDRESS, 100)
+	const calibration = Buffer.from([0x70, 0x6b, 0x43, 0x67, 0x18, 0xfc, 0x7d, 0x8e, 0x43, 0xd6, 0xd0, 0x0b, 0x27, 0x0b, 0x8c, 0x00, 0xf9, 0xff, 0x8c, 0x3c, 0xf8, 0xc6, 0x70, 0x17])
+
+	bmp280.start()
+	bmp280.twoWireMessage(client as never, BMP280.ADDRESS, 0x88, calibration)
+	bmp280.twoWireMessage(client as never, BMP280.ADDRESS, 0xf7, Buffer.from([101, 90, 192, 126, 237, 0]))
+
+	expect(bmp280.temperature).toBeCloseTo(25.08, 2)
+	expect(bmp280.altitude).toBe(fromPressure(bmp280.pressure))
+	bmp280.stop()
+})
+
+test('BMP180 recovers when a pressure reply is lost', () => {
+	const client = new MockFirmataClient()
+	const bmp180 = new BMP180(client as never, 0)
+	const calibration = Buffer.alloc(22)
+
+	bmp180.start()
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xaa, calibration)
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xf6, Buffer.from([0x6d, 0x60]))
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xf6, Buffer.from([0x6d, 0x61]))
+
+	const pressureWrites = client.messages.filter((message) => message[0] === 'write' && message[2][1] === BMP180.READ_PRES_CMD)
+	expect(pressureWrites).toHaveLength(2)
+	bmp180.stop()
+})
+
 test('BMP280 compensate temperature & pressure', () => {
 	const bmp280 = new BMP280(undefined as never, 0)
 	expect(bmp280.compensateTemperature(519888)).toBeCloseTo(25.08, 2)
@@ -517,6 +726,33 @@ test('SHT21 configures i2c reads and emits temperature and humidity updates', ()
 
 	sht21.stop()
 	expect(client.handlers.size).toBe(0)
+})
+
+test('SHT21 clamps relative humidity to the Hygrometer domain', () => {
+	const client = new MockFirmataClient()
+	const sht21 = new SHT21(client as never, 1000)
+
+	sht21.twoWireMessage(client as never, SHT21.ADDRESS, 0xe5, Buffer.from([0xd9, 0x30]))
+	expect(sht21.humidity).toBe(100)
+
+	sht21.twoWireMessage(client as never, SHT21.ADDRESS, 0xe5, Buffer.from([0x00, 0x00]))
+	expect(sht21.humidity).toBe(0)
+})
+
+test('SHT21 ignores incomplete and unrelated I2C replies', () => {
+	const client = new MockFirmataClient()
+	const otherClient = new MockFirmataClient()
+	const sht21 = new SHT21(client as never, 1000)
+
+	for (const data of [Buffer.alloc(0), Buffer.from([0x68])]) {
+		sht21.twoWireMessage(client as never, SHT21.ADDRESS, 0xe3, data)
+		sht21.twoWireMessage(client as never, SHT21.ADDRESS, 0xe5, data)
+	}
+	sht21.twoWireMessage(otherClient as never, SHT21.ADDRESS, 0xe3, Buffer.from([0x68, 0xac]))
+
+	expect(sht21.temperature).toBe(0)
+	expect(sht21.humidity).toBe(0)
+	expect(sht21.samples).toBe(0)
 })
 
 test('LM35 converts ADC counts to temperature', () => {
@@ -587,25 +823,57 @@ test('peripheral fires on the first completed read even when the value equals th
 	expect(updates).toBe(2)
 })
 
-test('an ADC peripheral delivers an initial reading from a cached value of 0 on a real FirmataClient', () => {
+test('an ADC peripheral counts stable analog reports on a real FirmataClient', () => {
 	const transport: Transport = { write: () => {}, flush: () => {}, close: () => {} }
 	using client = new FirmataClient(transport, new ESP8266())
 
-	// Handshake far enough to register pin 0 as analog and have the board report pin state 0, leaving
-	// pin 0 cached at value 0.
+	// Handshake far enough to register pin 0 as analog, map analog channel 0 to it, and have the board
+	// report pin state 0, leaving pin 0 cached at value 0.
 	client.process(Buffer.from([0xf0, 0x79, 2, 3, 0xf7])) // firmware
 	client.process(Buffer.from([0xf0, 0x6c, 0x02, 0x0a, 0x7f, 0xf7])) // pin capability: pin 0 = analog
 	client.process(Buffer.from([0xf0, 0x6e, 0x00, 0x02, 0x00, 0xf7])) // pin state: pin 0 analog, value 0
+	client.process(Buffer.from([0xf0, 0x6a, 0x00, 0xf7])) // analog channel 0 = pin 0
 
 	const lm35 = new LM35(client, 0)
 	let updates = 0
 	lm35.addListener(() => updates++)
 	lm35.start()
 
-	// The first analog report would equal the cached value 0, so the board emits no analogMessage and
-	// pinChange never fires; start() must still deliver an initial reading from the cached value.
+	// start() delivers the cached value as the first reading. The first stable hardware report must still
+	// count as a sample, even though it does not change the temperature.
 	expect(updates).toBe(1)
 	expect(lm35.temperature).toBe(0)
+	expect(lm35.samples).toBe(1)
+
+	client.process(Buffer.from([0xe0, 0x00, 0x00]))
+	expect(lm35.samples).toBe(2)
+	expect(updates).toBe(1)
+
+	// A listener attached after start() must receive the current stable value on the next report.
+	let lateUpdates = 0
+	lm35.addListener(() => lateUpdates++)
+	client.process(Buffer.from([0xe0, 0x00, 0x00]))
+	expect(lateUpdates).toBe(1)
+	expect(lm35.samples).toBe(3)
+})
+
+test('pin mode updates the cached mode before analog reports', () => {
+	const transport: Transport = { write: () => {}, flush: () => {}, close: () => {} }
+	using client = new FirmataClient(transport, new ESP8266())
+	const changes: Pin[] = []
+	client.addHandler({ pinChange: (_, pin) => changes.push(pin) })
+
+	client.process(Buffer.from([0xf0, 0x79, 2, 3, 0xf7])) // firmware
+	client.process(Buffer.from([0xf0, 0x6c, 0x00, 0x00, 0x7f, 0xf7])) // pin 0 = input
+	client.process(Buffer.from([0xf0, 0x6e, 0x00, 0x00, 0x00, 0xf7])) // pin 0 input, value 0
+	client.process(Buffer.from([0xf0, 0x6a, 0x00, 0xf7])) // analog channel 0 = pin 0
+
+	client.pinMode(0, PinMode.ANALOG)
+	client.process(Buffer.from([0xe0, 0x10, 0x02]))
+
+	expect(client.pinAt(0)?.mode).toBe(PinMode.ANALOG)
+	expect(client.pinAt(0)?.value).toBe(0x10 | (0x02 << 7))
+	expect(changes).toHaveLength(1)
 })
 
 test('re-adding an already-registered listener does not re-arm its first read', () => {
@@ -791,13 +1059,22 @@ test('AM2320 configures i2c reads and emits humidity and temperature updates', a
 	expect(client.messages[2]).toEqual(['write', AM2320.ADDRESS, Buffer.from([AM2320.READ_HOLDING_REGISTERS_CMD, AM2320.START_REGISTER, AM2320.REGISTER_COUNT])])
 	expect(client.messages[3]).toEqual(['read', AM2320.ADDRESS, -1, AM2320.FRAME_SIZE, false, 7, 'stop'])
 
+	const validFrame = Buffer.from([AM2320.READ_HOLDING_REGISTERS_CMD, AM2320.REGISTER_COUNT, 0x02, 0x2b, 0x80, 0x7b, 0xa1, 0xbb])
+	am2320.twoWireMessage(client as never, AM2320.ADDRESS, -1, validFrame)
+	expect(am2320.humidity).toBeCloseTo(55.5, 6)
+	expect(am2320.temperature).toBeCloseTo(-12.3, 6)
+	expect(updates).toBe(1)
+	expect(am2320.samples).toBe(1)
+
 	am2320.twoWireMessage(client as never, AM2320.ADDRESS, -1, Buffer.from([AM2320.READ_HOLDING_REGISTERS_CMD, AM2320.REGISTER_COUNT, 0x02, 0x2b, 0x80, 0x7b, 0x00, 0x00]))
 	expect(am2320.humidity).toBeCloseTo(55.5, 6)
 	expect(am2320.temperature).toBeCloseTo(-12.3, 6)
 	expect(updates).toBe(1)
+	expect(am2320.samples).toBe(1)
 
-	am2320.twoWireMessage(client as never, AM2320.ADDRESS, -1, Buffer.from([AM2320.READ_HOLDING_REGISTERS_CMD, AM2320.REGISTER_COUNT, 0x02, 0x2b, 0x80, 0x7b, 0x00, 0x00]))
+	am2320.twoWireMessage(client as never, AM2320.ADDRESS, -1, validFrame)
 	expect(updates).toBe(1)
+	expect(am2320.samples).toBe(2)
 
 	am2320.stop()
 	expect(client.handlers.size).toBe(0)
@@ -873,7 +1150,7 @@ test('BH1750 configures i2c measurements and emits lux updates', async () => {
 
 	expect(client.messages[5]).toEqual(['read', BH1750.ADDRESS, -1, 2, false, 7, 'stop'])
 
-	bh1750.twoWireMessage(client as never, BH1750.ADDRESS, -1, Buffer.from([0x00, 0x78]))
+	bh1750.twoWireMessage(client as never, BH1750.ADDRESS, 0, Buffer.from([0x00, 0x78]))
 	expect(bh1750.raw).toBe(120)
 	expect(bh1750.lux).toBeCloseTo(222.58064516129, 6)
 	expect(updates).toBe(1)
@@ -890,9 +1167,10 @@ test('TSL2561 calculates lux from channel data', () => {
 	const tsl2561 = new TSL2561(undefined as never)
 	expect(tsl2561.calculateLux(67, 12)).toBeCloseTo(26.605572786225, 6)
 	expect(tsl2561.calculateLux(0, 0)).toBe(0)
+	expect(tsl2561.calculateLux(65535, 12)).toBe(TSL2561.SATURATED_LUX)
 })
 
-test('TSL2561 configures i2c reads and emits lux updates', () => {
+test('TSL2561 configures i2c reads and emits lux updates', async () => {
 	const client = new MockFirmataClient()
 	const tsl2561 = new TSL2561(client as never, TSL2561.ADDRESS, 1000)
 	let updates = 0
@@ -902,6 +1180,14 @@ test('TSL2561 configures i2c reads and emits lux updates', () => {
 	})
 
 	tsl2561.start()
+
+	expect(client.messages).toEqual([
+		['config', 0],
+		['write', TSL2561.ADDRESS, Buffer.from([TSL2561.COMMAND_BIT | TSL2561.CONTROL_REG, TSL2561.POWER_UP])],
+		['write', TSL2561.ADDRESS, Buffer.from([TSL2561.COMMAND_BIT | TSL2561.TIMING_REG, 0x02])],
+	])
+
+	await Bun.sleep(420)
 
 	expect(client.messages).toEqual([
 		['config', 0],
@@ -918,6 +1204,10 @@ test('TSL2561 configures i2c reads and emits lux updates', () => {
 
 	tsl2561.twoWireMessage(client as never, TSL2561.ADDRESS, TSL2561.COMMAND_BIT | TSL2561.BLOCK_BIT | TSL2561.DATA0LOW_REG, Buffer.from([0x43, 0x00, 0x0c, 0x00]))
 	expect(updates).toBe(1)
+
+	tsl2561.twoWireMessage(client as never, TSL2561.ADDRESS, TSL2561.COMMAND_BIT | TSL2561.BLOCK_BIT | TSL2561.DATA0LOW_REG, Buffer.from([0xff, 0xff, 0x0c, 0x00]))
+	expect(tsl2561.lux).toBe(TSL2561.SATURATED_LUX)
+	expect(updates).toBe(2)
 
 	tsl2561.stop()
 	expect(client.handlers.size).toBe(0)
@@ -946,14 +1236,14 @@ test('MAX44009 configures i2c reads and emits lux updates', () => {
 	expect(client.messages).toEqual([
 		['config', 0],
 		['write', MAX44009.ADDRESS, Buffer.from([MAX44009.CONFIGURATION_REG, MAX44009.DEFAULT_CONFIGURATION])],
-		['read', MAX44009.ADDRESS, MAX44009.LUX_HIGH_REG, 2, false, 7, 'restart'],
+		['read', MAX44009.ADDRESS, MAX44009.LUX_HIGH_REG, 1, false, 7, 'restart'],
 	])
 
-	max44009.twoWireMessage(client as never, MAX44009.ADDRESS, MAX44009.LUX_HIGH_REG, Buffer.from([0x10, 0x01]))
-	expect(max44009.lux).toBeCloseTo(0.09, 6)
+	max44009.twoWireMessage(client as never, MAX44009.ADDRESS, MAX44009.LUX_HIGH_REG, Buffer.from([0x12]))
+	expect(max44009.lux).toBeCloseTo(2.88, 6)
 	expect(updates).toBe(1)
 
-	max44009.twoWireMessage(client as never, MAX44009.ADDRESS, MAX44009.LUX_HIGH_REG, Buffer.from([0x10, 0x01]))
+	max44009.twoWireMessage(client as never, MAX44009.ADDRESS, MAX44009.LUX_HIGH_REG, Buffer.from([0x12]))
 	expect(updates).toBe(1)
 
 	max44009.stop()
@@ -1433,6 +1723,32 @@ test('HD44780 initializes a 16x2 display through the PCF8574 backpack mapping', 
 	expect(client.messages.filter((message) => message[0] === 'read')).toHaveLength(writes.length)
 })
 
+test('HD44780 inherits the default backlight pin for partial options', () => {
+	const client = new MockFirmataClient()
+	using expander = new PCF8574(client as never, PCF8574.ADDRESS, 0)
+	const lcd = new HD44780(expander, { backlight: true })
+	const writes: number[] = []
+
+	lcd.begin(16, 2)
+
+	for (const message of client.messages) {
+		if (message[0] === 'write') writes.push(message[2][0])
+	}
+
+	expect(writes[0]).toBe(0x08)
+
+	client.messages.length = 0
+	lcd.noBacklight()
+	lcd.backlight()
+
+	writes.length = 0
+	for (const message of client.messages) {
+		if (message[0] === 'write') writes.push(message[2][0])
+	}
+
+	expect(writes).toEqual([0x60, 0x68])
+})
+
 test('HD44780 sets the cursor and prints text through the expander', () => {
 	const client = new MockFirmataClient()
 	using expander = new PCF8574(client as never, PCF8574.ADDRESS, 1000)
@@ -1726,6 +2042,37 @@ test('DS18B20 configures one-wire reads and emits temperature updates', async ()
 
 	ds18b20.stop()
 	expect(client.handlers.size).toBe(0)
+})
+
+test('DS18B20 cancels a conversion when stopped and restarts cleanly', async () => {
+	const client = new MockFirmataClient()
+	const address = Buffer.from([DS18B20.FAMILY_CODE, 0x1a, 0xbc, 0x4d, 0x2f, 0x00, 0x00, 0xc1])
+	const ds18b20 = new DS18B20(client as never, 6, 1000, { address, resolution: 9 })
+
+	ds18b20.start()
+	ds18b20.stop()
+
+	await Bun.sleep(110)
+	expect(client.messages).toEqual([
+		['oneWireConfig', 6, 'normal'],
+		['oneWireWrite', 6, Buffer.from([DS18B20.WRITE_SCRATCHPAD_CMD, DS18B20.DEFAULT_TH, DS18B20.DEFAULT_TL, 0x1f]), address],
+		['oneWireWrite', 6, Buffer.from(DS18B20.CONVERT_T_CMD), address],
+	])
+
+	ds18b20.start()
+	await Bun.sleep(110)
+
+	expect(client.messages).toEqual([
+		['oneWireConfig', 6, 'normal'],
+		['oneWireWrite', 6, Buffer.from([DS18B20.WRITE_SCRATCHPAD_CMD, DS18B20.DEFAULT_TH, DS18B20.DEFAULT_TL, 0x1f]), address],
+		['oneWireWrite', 6, Buffer.from(DS18B20.CONVERT_T_CMD), address],
+		['oneWireConfig', 6, 'normal'],
+		['oneWireWrite', 6, Buffer.from([DS18B20.WRITE_SCRATCHPAD_CMD, DS18B20.DEFAULT_TH, DS18B20.DEFAULT_TL, 0x1f]), address],
+		['oneWireWrite', 6, Buffer.from(DS18B20.CONVERT_T_CMD), address],
+		['oneWireWriteAndRead', 6, Buffer.from(DS18B20.READ_SCRATCHPAD_CMD), DS18B20.SCRATCHPAD_SIZE, address, 0x4000],
+	])
+
+	ds18b20.stop()
 })
 
 function createDS18B20Scratchpad(temperature: number) {

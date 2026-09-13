@@ -3,7 +3,7 @@ import type { FlatDiagnostic, FlatExposureEstimate, FlatExposureInput, FlatExpos
 // Pure scalar exposure estimation for one explicitly selected flat plane. Corrected signals may use
 // proportional scaling; observed levels require interpolation or a positive-slope affine pedestal model.
 
-// Maximum affine fit RMSE relative to the larger target or observed span.
+// Maximum affine fit RMSE relative to the observed level span or magnitude.
 const MAXIMUM_AFFINE_RELATIVE_RMSE = 0.05
 
 // Affine level prediction used by interpolation, regression, and the corrected through-origin ratio.
@@ -41,7 +41,7 @@ export function estimateFlatExposure(input: FlatExposureInput): FlatExposureEsti
 	}
 
 	if (observations.length < 2) return invalidExposure('one observed level cannot separate illumination signal from its pedestal', 'insufficientSamples')
-	const affine = affineModel(observations, target)
+	const affine = affineModel(observations)
 	if (typeof affine === 'string') return invalidExposure(affine)
 	return finishExposureEstimate(current, target, affine, input.exposureRange, input.maximumStep)
 }
@@ -97,7 +97,7 @@ function bracketModel(observations: readonly FlatExposureObservation[], target: 
 }
 
 // Fits a positive-slope affine observed-level model and rejects unstable fits with three or more points.
-function affineModel(observations: readonly FlatExposureObservation[], target: number): ExposureModel | string {
+function affineModel(observations: readonly FlatExposureObservation[]): ExposureModel | string {
 	let meanExposure = 0
 	let meanLevel = 0
 	for (let i = 0; i < observations.length; i++) {
@@ -127,7 +127,7 @@ function affineModel(observations: readonly FlatExposureObservation[], target: n
 			squaredResiduals += residual * residual
 		}
 		const rmse = Math.sqrt(squaredResiduals / observations.length)
-		const scale = Math.max(maximumLevel - minimumLevel, Math.abs(target), 1)
+		const scale = Math.max(maximumLevel - minimumLevel, Math.abs(minimumLevel), Math.abs(maximumLevel), 1)
 		if (!Number.isFinite(rmse) || rmse > scale * MAXIMUM_AFFINE_RELATIVE_RMSE) return 'observed exposure levels are too unstable for an affine recommendation'
 	}
 

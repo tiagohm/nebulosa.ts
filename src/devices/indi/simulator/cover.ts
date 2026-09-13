@@ -26,7 +26,7 @@ export class CoverSimulator extends DeviceSimulator {
 		readonly options?: DeviceSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.DUSTCAP)
+		super(name, client, handler, DeviceInterfaceType.DUSTCAP, 'dustcap.simulator')
 
 		for (const property of this.properties) {
 			property.device = name
@@ -85,6 +85,7 @@ export class CoverSimulator extends DeviceSimulator {
 	// Stops any active cap transition.
 	stop(alert: boolean = true) {
 		const wasMoving = this.#moveTimer !== undefined
+
 		if (this.#moveTimer) {
 			clearTimeout(this.#moveTimer)
 			this.#moveTimer = undefined

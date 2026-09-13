@@ -155,7 +155,14 @@ test('triangle query handles longitude seam crossing', () => {
 	index.add('outside', deg(40), 0)
 	index.add('far-side', deg(180), deg(-5))
 
-	expect(idsOf(index.queryTriangle([deg(350), 0], [deg(10), 0], [0, deg(20)]))).toEqual(['inside'])
+	const a = [deg(350), 0] as const
+	const b = [deg(10), 0] as const
+	const c = [0, deg(20)] as const
+	const query = { kind: 'triangle', a, b, c } as const
+
+	expect(idsOf(index.queryTriangle(a, b, c))).toEqual(['inside'])
+	expect(idsOf(index.queryRegion(query))).toEqual(['inside'])
+	expect(idsOf([...index.streamRegion(query)])).toEqual(['inside'])
 })
 
 test('polygon query handles a convex polar region with a repeated closing vertex', () => {

@@ -55,8 +55,12 @@ test('guiding, trailing, exposure, and stacking formulas return expected values'
 test('atmospheric, transit, brightness, comet, and asteroid formulas return expected values', () => {
 	expect(airmass(45 * DEG2RAD)).toBeCloseTo(1.41421356, 8)
 	expect(airmassKastenYoung(30 * DEG2RAD)).toBeCloseTo(1.99429285, 8)
+	expect(airmassKastenYoung(PIOVERTWO)).toBe(1)
 	expect(atmosphericExtinction(0.2, 1.5)).toBeCloseTo(0.3, 12)
+	expect(atmosphericExtinction(0.2, airmassKastenYoung(PIOVERTWO))).toBeCloseTo(0.2, 12)
 	expect(atmosphericRefraction(45 * DEG2RAD)).toBeCloseTo(1.01270766, 8)
+	// Sæmundsson at 10° true altitude; Bennett on an apparent 10° is ~5.392'.
+	expect(atmosphericRefraction(10 * DEG2RAD)).toBeCloseTo(5.4076808, 8)
 	expect(dewPoint(20, 60)).toBeCloseTo(11.99989462, 8)
 	expect(relativeHumidity(20, 11.99989462)).toBeCloseTo(60, 7)
 	expect(relativeHumidity(-10, -15)).toBeCloseTo(66.82932857, 8)
@@ -99,6 +103,15 @@ test('hour angle at altitude returns undefined for circumpolar and never-rising 
 	expect(hourAngleAtAltitude(80 * DEG2RAD, 80 * DEG2RAD, 0)).toBeUndefined()
 	// Its southern counterpart never rises above h0 = 0.
 	expect(hourAngleAtAltitude(-80 * DEG2RAD, 80 * DEG2RAD, 0)).toBeUndefined()
+})
+
+test('hour angle at altitude is undefined when the diurnal circle is a parallel of altitude', () => {
+	// Geographic north pole: a body's altitude equals its declination at every hour angle.
+	expect(hourAngleAtAltitude(45 * DEG2RAD, PIOVERTWO, 45 * DEG2RAD)).toBeUndefined()
+	// Celestial north pole: altitude equals the observer's latitude at every hour angle.
+	expect(hourAngleAtAltitude(PIOVERTWO, 40 * DEG2RAD, 40 * DEG2RAD)).toBeUndefined()
+	// Equator on the south-pole horizon: the body stays on the horizon and never crosses it.
+	expect(hourAngleAtAltitude(0, -PIOVERTWO, 0)).toBeUndefined()
 })
 
 test('dew point and relative humidity invert each other over the useful domain', () => {

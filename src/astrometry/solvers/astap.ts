@@ -1,5 +1,5 @@
 import { tmpdir } from 'os'
-import { basename, dirname, extname, join } from 'path'
+import { basename, dirname, extname, join, resolve } from 'path'
 import type { DetectedStar } from '../../imaging/stars/detector'
 import { readCsv } from '../../io/csv'
 import { readFits } from '../../io/formats/fits/fits'
@@ -19,8 +19,6 @@ export interface AstapStarDetectionOptions {
 	minSNR?: number
 	// Keep only the brightest `maxStars` detections (0 = unlimited).
 	maxStars?: number
-	// Directory for ASTAP's CSV output; defaults to the input file's directory.
-	outputDirectory?: string
 	// Process timeout, in milliseconds.
 	timeout?: number
 }
@@ -40,37 +38,39 @@ const DEFAULT_TIMEOUT = 300000
 
 // Detects stars by running ASTAP's `-extract` and parsing its CSV (x, y, hfd, snr, flux). Returns the
 // detections sorted/truncated to `maxStars` by SNR, or an empty array on failure or missing input.
-export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0, outputDirectory, executable, timeout }: Readonly<AstapStarDetectionOptions> = {}, signal?: AbortSignal): Promise<DetectedStar[]> {
+// ASTAP writes FITS 1-based pixel coordinates (`xc+1`, `yc+1`); results use DetectedStar's 0-based
+// array indices, matching detectStars.
+export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0, executable, timeout }: Readonly<AstapStarDetectionOptions> = {}, signal?: AbortSignal): Promise<DetectedStar[]> {
 	if (!input || !(await Bun.file(input).exists())) {
 		console.error('invalid input or input file does not exists')
 		return []
 	}
 
-	const cwd = outputDirectory || dirname(input)
+	const inputPath = resolve(input)
 	executable ||= executableForCurrentPlatform()
 	timeout ||= DEFAULT_TIMEOUT
 
-	const process = Bun.spawn([executable, '-f', input, '-z', '0', '-extract', minSNR.toFixed(0)], { cwd, signal, timeout })
+	const process = Bun.spawn([executable, '-f', inputPath, '-z', '0', '-extract', minSNR.toFixed(0)], { signal, timeout })
 	const exitCode = await process.exited
 
-	const file = Bun.file(`${join(cwd, basename(input, extname(input)))}.csv`)
+	const file = Bun.file(`${join(dirname(inputPath), basename(inputPath, extname(inputPath)))}.csv`)
 
 	if (await file.exists()) {
 		try {
 			const csv = readCsv(await file.text())
 
-			if (csv.length > 1) {
-				const stars = new Array<DetectedStar>(csv.length - 1)
+			if (csv.length > 0) {
+				const stars = new Array<DetectedStar>(csv.length)
 
-				for (let i = 1; i < csv.length; i++) {
+				for (let i = 0; i < csv.length; i++) {
 					const row = csv[i]
-					const x = +row[0]
-					const y = +row[1]
+					const x = +row[0] - 1
+					const y = +row[1] - 1
 					const hfd = +row[2]
 					const snr = +row[3]
 					const flux = +row[4]
 
-					stars[i - 1] = { x, y, hfd, snr, flux }
+					stars[i] = { x, y, hfd, snr, flux }
 				}
 
 				if (maxStars > 0 && stars.length > maxStars) {
@@ -96,15 +96,15 @@ export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0
 
 // Plate-solves an image with ASTAP, optionally constrained by an RA/Dec/radius hint and FOV, then
 // parses the emitted WCS .ini into a PlateSolution. Returns undefined when ASTAP fails to solve.
-// RA hint is converted to hours and declination to south-polar-distance per ASTAP's CLI.
-export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, timeout = 300000, rightAscension = 0, declination = 0, radius = 0, executable, sip = true }: AstapPlateSolveOptions = {}, signal?: AbortSignal) {
+// RA/Dec are sent only when both are provided (hours and south-polar-distance). A radius without a
+// center is `-r` only, so ASTAP can use the FITS header instead of RA=0h, Dec=0°.
+export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, timeout = 300000, rightAscension, declination, radius, executable, sip = true }: AstapPlateSolveOptions = {}, signal?: AbortSignal) {
 	fov = Math.max(0, Math.min(toDeg(fov), 360)) // Specify 0 for auto
 	const name = Bun.randomUUIDv7()
 	const ini = Bun.file(join(tmpdir(), `${name}.ini`))
 	const wcs = Bun.file(join(tmpdir(), `${name}.wcs`))
-	radius = Math.max(0, Math.min(Math.ceil(toDeg(radius)), 180))
-	rightAscension = toHour(normalizeAngle(rightAscension))
-	const spd = toDeg(declination) + 90
+	const r = radius ? Math.max(0, Math.min(Math.ceil(toDeg(radius)), 180)) : 180
+
 	executable ||= executableForCurrentPlatform()
 	timeout ||= DEFAULT_TIMEOUT
 
@@ -112,8 +112,9 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 
 	if (fov) commands.push('-fov', `${fov}`)
 	if (sip) commands.push('-sip')
-	if (radius) commands.push('-ra', `${rightAscension}`, '-spd', `${spd}`, '-r', `${radius}`)
-	else commands.push('-r', '180')
+	// CLI RA/Dec override the FITS header; send them only when the caller supplied a center.
+	if (rightAscension !== undefined && declination !== undefined) commands.push('-ra', `${toHour(normalizeAngle(rightAscension))}`, '-spd', `${toDeg(declination) + 90}`)
+	commands.push('-r', `${r}`)
 
 	const process = Bun.spawn(commands, { signal, timeout })
 	const exitCode = await process.exited

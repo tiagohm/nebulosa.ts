@@ -62,7 +62,7 @@ export class ESP8266 implements Board {
 
 	// Whether the GPIO supports PWM output.
 	isPinPWM(pin: number) {
-		return pin < ESP8266.A0
+		return this.isPinDigital(pin)
 	}
 
 	// Whether the GPIO can drive a servo (digital and within the servo count).

@@ -174,7 +174,8 @@ test('compares an RGB image produced by debayer', () => {
 	})
 	expect(source).toBeDefined()
 	if (!source) return
-	expect(source.metadata.bayer).toBe('RGGB')
+	expect(source.metadata.channels).toBe(3)
+	expect(source.metadata.bayer).toBeUndefined()
 	const result = compareBahtinovChromatic({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 63.5, y: 63.5 } }, OPTIONS)
 	expect(result.success).toBeTrue()
 })

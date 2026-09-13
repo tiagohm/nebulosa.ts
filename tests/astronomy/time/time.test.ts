@@ -4,7 +4,7 @@ import { ANGVEL_PER_DAY, DAYSEC, J2000, PI } from '../../../src/core/constants'
 import { deg, hour } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 // oxfmt-ignore
-import { earthRotationAngle, equationOfEquinoxes, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthAngularVelocity, instantaneousEarthRotationMatrix, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, toJulianEpoch, tt, ut1, utc, TIME_PROVIDERS, dut1 } from '../../../src/astronomy/time/time'
+import { earthRotationAngle, equationOfEquinoxes, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthAngularVelocity, instantaneousEarthRotationMatrix, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, taiMinusUtc, tcb, tcg, tdb, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, toJulianEpoch, tt, ut1, utc, TIME_PROVIDERS, dut1 } from '../../../src/astronomy/time/time'
 import { downloadPerTag } from '../../download'
 import { expectNumberArrayToBeCloseTo } from '../../util'
 
@@ -155,10 +155,64 @@ test('time convert returns the same object for an unchanged scale', () => {
 test('to date', () => {
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 12, 0, 0))).toEqual([2020, 1, 1, 12, 0, 0, 0])
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59))).toEqual([2020, 1, 1, 23, 59, 59, 0])
+	// 7th field is truncated milliseconds, not nanoseconds (0.5 s → 500, not 5e8).
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59.5))).toEqual([2020, 1, 1, 23, 59, 59, 500])
+	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59.5))[6]).not.toBe(500_000_000)
 	expect(timeToDate(time(2460677, 0.503116, 0))).toEqual([2025, 1, 2, 0, 4, 29, 222])
 	expect(timeToDate(time(2460678, -0.496884, 0))).toEqual([2025, 1, 2, 0, 4, 29, 222])
 	expect(timeToDate(timeJulianYear(2000))).toEqual([2000, 1, 1, 12, 0, 0, 0])
+})
+
+test('UTC civil times on a leap-second day stay 36 s behind TAI', () => {
+	function secondsBetween(a: Time, b: Time) {
+		return Math.abs(toJulianDay(a) - toJulianDay(b)) * DAYSEC
+	}
+
+	for (let hour = 0; hour < 24; hour++) {
+		const u = timeYMDHMS(2016, 12, 31, hour, 0, 0, Timescale.UTC)
+		expect(timeToDate(u)).toEqual([2016, 12, 31, hour, 0, 0, 0])
+		expect(secondsBetween(tai(u), timeYMDHMS(2016, 12, 31, hour, 0, 36, Timescale.TAI))).toBeLessThan(1e-3)
+	}
+
+	expect(secondsBetween(tai(timeYMDHMS(2017, 1, 1, 12, 0, 0, Timescale.UTC)), timeYMDHMS(2017, 1, 1, 12, 0, 37, Timescale.TAI))).toBeLessThan(1e-3)
+	expect(secondsBetween(tai(timeYMD(2016, 12, 31, 0.5, Timescale.UTC)), timeYMDHMS(2016, 12, 31, 12, 0, 36, Timescale.TAI))).toBeLessThan(1e-3)
+})
+
+test('TAI 12:00:36 on a leap-second day is 12:00:00 UTC', () => {
+	const utcNoon = timeYMDHMS(2016, 12, 31, 12, 0, 0, Timescale.UTC)
+	const fromTai = utc(timeYMDHMS(2016, 12, 31, 12, 0, 36, Timescale.TAI))
+	expect(Math.abs(toJulianDay(fromTai) - toJulianDay(utcNoon)) * DAYSEC).toBeLessThan(1e-3)
+	expect(timeToDate(fromTai)).toEqual([2016, 12, 31, 12, 0, 0, 0])
+})
+
+test('UTC leap second 23:59:60 stays on that civil date', () => {
+	const u = timeYMDHMS(2016, 12, 31, 23, 59, 60, Timescale.UTC)
+	expect(timeToDate(u)).toEqual([2016, 12, 31, 23, 59, 60, 0])
+	expect(Math.abs(toJulianDay(tai(u)) - toJulianDay(timeYMDHMS(2017, 1, 1, 0, 0, 36, Timescale.TAI))) * DAYSEC).toBeLessThan(1e-3)
+	expect(Math.abs(toJulianDay(tai(timeYMDHMS(2016, 12, 31, 23, 59, 60.5, Timescale.UTC))) - toJulianDay(timeYMDHMS(2017, 1, 1, 0, 0, 36.5, Timescale.TAI))) * DAYSEC).toBeLessThan(1e-3)
+})
+
+test('TAI to UT1 near a leap second agrees with TAI to UTC to UT1', () => {
+	for (const [hour, minute, second, dat] of [
+		[0, 0, 0, 36],
+		[0, 0, 18, 36],
+		[0, 0, 40, 37],
+		[12, 0, 0, 37],
+	] as const) {
+		const taiTime = timeYMDHMS(2017, 1, 1, hour, minute, second, Timescale.TAI)
+		taiTime.providers = { dut1: () => 0 }
+		const viaTai = ut1(taiTime)
+
+		const taiTime2 = timeYMDHMS(2017, 1, 1, hour, minute, second, Timescale.TAI)
+		taiTime2.providers = { dut1: () => 0 }
+		const viaUtc = ut1(utc(taiTime2))
+
+		expect(Math.abs(toJulianDay(viaTai) - toJulianDay(viaUtc)) * DAYSEC).toBeLessThan(1e-3)
+
+		const taiTime3 = timeYMDHMS(2017, 1, 1, hour, minute, second, Timescale.TAI)
+		expect(taiMinusUtc(taiTime3)).toBe(dat)
+		expect(taiMinusUtc(utc(timeYMDHMS(2017, 1, 1, hour, minute, second, Timescale.TAI)))).toBe(dat)
+	}
 })
 
 test('to unix', () => {

@@ -229,6 +229,33 @@ test('matrix to vector', () => {
 	expect(v[2]).toBeCloseTo(-1.884955592153875943, 13)
 })
 
+test('matrix to vector at 180 degrees', () => {
+	expect(matToVec3(matIdentity())).toEqual([0, 0, 0])
+
+	const rx = matToVec3([1, 0, 0, 0, -1, 0, 0, 0, -1])
+	expect(rx[0]).toBeCloseTo(PI, 12)
+	expect(rx[1]).toBeCloseTo(0, 12)
+	expect(rx[2]).toBeCloseTo(0, 12)
+
+	const ry = matToVec3([-1, 0, 0, 0, 1, 0, 0, 0, -1])
+	expect(ry[0]).toBeCloseTo(0, 12)
+	expect(ry[1]).toBeCloseTo(PI, 12)
+	expect(ry[2]).toBeCloseTo(0, 12)
+
+	const rz = matToVec3([-1, 0, 0, 0, -1, 0, 0, 0, 1])
+	expect(rz[0]).toBeCloseTo(0, 12)
+	expect(rz[1]).toBeCloseTo(0, 12)
+	expect(rz[2]).toBeCloseTo(PI, 12)
+
+	const s = 1 / Math.sqrt(3)
+	const t = 2 * s * s
+	const r = matToVec3([t - 1, t, t, t, t - 1, t, t, t, t - 1])
+	expect(Math.hypot(r[0], r[1], r[2])).toBeCloseTo(PI, 12)
+	expect(r[0]).toBeCloseTo(PI * s, 12)
+	expect(r[1]).toBeCloseTo(PI * s, 12)
+	expect(r[2]).toBeCloseTo(PI * s, 12)
+})
+
 test('vector to matrix', () => {
 	const m = matFromVec3([0, 1.41371669, -1.88495559])
 

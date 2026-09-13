@@ -44,7 +44,11 @@ problem and end the session.
 3. For confirmed findings, apply the smallest necessary correction, preserving
    APIs, units, reference frames, conventions and behavior explained by the author.
 4. Follow SESSION.md's validation and per-finding commit workflow. Complete one
-   finding before editing the next. Do not create empty commits.
+   finding before editing the next. Correct lint, type, formatting and test
+   failures introduced by your fix and rerun the affected checks before committing;
+   these repairs belong to the same finding and do not require a new review.
+   Do not end the session merely because a validation check failed. Do not create
+   empty commits.
 
 Confirming a finding means checking its scenario and premises. It does not
 authorize repeating a general technical review. If an independent issue becomes

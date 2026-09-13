@@ -4,7 +4,7 @@ import { join } from 'path'
 import type { RequiredOnly } from '../../core/types'
 import { readFits } from '../../io/formats/fits/fits'
 import { bufferSource, fileHandleSource } from '../../io/io'
-import { type Angle, normalizeAngle, toDeg } from '../../math/units/angle'
+import { type Angle, normalizeAngle, toArcmin, toArcsec, toDeg } from '../../math/units/angle'
 import { type PlateSolution, type PlateSolveOptions, plateSolutionFrom } from './platesolver'
 
 // astrometry.net plate-solving integration, both the nova.astrometry.net web API (login → upload →
@@ -53,13 +53,13 @@ export interface Upload<T> extends NovaAstrometryNetPlateSolveOptions {
 	publiclyVisible?: boolean
 	// Unit for the scale bounds (default 'degwidth').
 	scaleUnits?: ScaleUnit
-	// Lower scale bound (radians, converted to degrees).
+	// Lower scale bound (radians, converted into `scaleUnits`).
 	scaleLower?: Angle
-	// Upper scale bound (radians, converted to degrees).
+	// Upper scale bound (radians, converted into `scaleUnits`).
 	scaleUpper?: Angle
 	// Scale-hint style (default 'ul').
 	scaleType?: ScaleType
-	// Estimated scale for 'ev' hints (radians).
+	// Estimated scale for 'ev' hints (radians, converted into `scaleUnits`).
 	scaleEstimated?: Angle
 	// Fractional scale error for 'ev' hints.
 	scaleError?: number
@@ -122,24 +122,28 @@ export function login(options?: Omit<RequestOptions, 'session'>, signal?: AbortS
 }
 
 // Submits an image to the nova API for solving, choosing URL upload for a string input or multipart
-// upload for a Blob, and applying scale/parity/center hints (angles converted to degrees).
+// upload for a Blob, and applying scale/parity/center hints. Sky-position angles are converted to
+// degrees; scale bounds are converted into `scaleUnits` (default degwidth).
 export function upload(upload: Upload<string | Blob>, signal?: AbortSignal) {
+	const scaleUnits = upload.scaleUnits || 'degwidth'
 	const data = {
 		session: typeof upload.session === 'string' ? upload.session : upload.session?.session,
 		url: typeof upload.input === 'string' ? upload.input : '',
 		allow_commercial_use: upload.allowCommercialUse ? 'y' : 'n',
 		allow_modifications: upload.allowModifications ? 'y' : 'n',
 		publicly_visible: upload.publiclyVisible ? 'y' : 'n',
-		scale_units: upload.scaleUnits || 'degwidth',
-		scale_lower: upload.scaleLower === undefined ? 0.1 : toDeg(upload.scaleLower),
-		scale_upper: upload.scaleUpper === undefined ? 180 : toDeg(upload.scaleUpper),
+		scale_units: scaleUnits,
+		// Nova's 0.1–180 defaults are degwidth numbers; other units omit the bound so the server
+		// does not interpret 0.1°/180° as arcmin or arcsec/pixel.
+		scale_lower: upload.scaleLower === undefined ? (scaleUnits === 'degwidth' ? 0.1 : undefined) : scaleInUnits(upload.scaleLower, scaleUnits),
+		scale_upper: upload.scaleUpper === undefined ? (scaleUnits === 'degwidth' ? 180 : undefined) : scaleInUnits(upload.scaleUpper, scaleUnits),
 		scale_type: upload.scaleType ?? 'ul',
-		scale_est: upload.scaleEstimated === undefined ? undefined : toDeg(upload.scaleEstimated),
+		scale_est: upload.scaleEstimated === undefined ? undefined : scaleInUnits(upload.scaleEstimated, scaleUnits),
 		scale_err: upload.scaleError,
 		center_ra: upload.rightAscension !== undefined ? toDeg(normalizeAngle(upload.rightAscension)) : undefined,
 		center_dec: upload.declination !== undefined ? toDeg(upload.declination) : undefined,
 		radius: upload.radius !== undefined ? toDeg(upload.radius) : undefined,
-		downsample_factor: Math.max(2, upload.downsample ?? 2),
+		downsample_factor: Math.max(1, upload.downsample ?? 2),
 		tweak_order: upload.tweakOrder ?? 2,
 		crpix_center: upload.crpixCenter ?? true,
 		parity: upload.parity ?? 2,
@@ -170,91 +174,76 @@ export function wcsFile(jobId: number, options: RequiredOnly<Omit<RequestOptions
 
 // End-to-end nova solve: logs in (unless a session is supplied), uploads the image, polls the
 // submission/job until a job succeeds or the timeout aborts, then parses the downloaded WCS into a
-// PlateSolution. Returns undefined on failure, timeout, or job failure.
+// PlateSolution. Returns undefined on failure, timeout, or job failure. A caller AbortSignal still
+// throws; only the solve timeout is mapped to undefined.
 export async function novaAstrometryNetPlateSolve(input: string | Blob, options?: Omit<Upload<never>, 'input'>, signal?: AbortSignal): Promise<PlateSolution | undefined> {
-	const session = options?.session || (await login(options, signal))
+	const timeout = AbortSignal.timeout(options?.timeout || 300000)
+	// Bound every HTTP call and the inter-poll wait by the solve timeout, plus the caller's signal.
+	const wait = signal ? AbortSignal.any([timeout, signal]) : timeout
 
-	if (session) {
-		const submission = await upload({ ...options, input, session }, signal)
+	try {
+		const session = options?.session || (await login(options, wait))
 
-		if (submission?.status === 'success') {
-			const timeout = AbortSignal.timeout(options?.timeout || 300000)
-			// Wake the inter-poll wait as soon as the overall timeout or the caller's signal aborts.
-			const wait = signal ? AbortSignal.any([timeout, signal]) : timeout
+		if (session) {
+			const submission = await upload({ ...options, input, session }, wait)
 
-			while (!timeout.aborted) {
-				const status = await submissionStatus(submission, { session }, signal)
+			if (submission?.status === 'success') {
+				while (!timeout.aborted) {
+					const status = await submissionStatus(submission, { session }, wait)
 
-				// A job slot is null until created and a created job stays 'solving' until it finishes,
-				// so wait for a real job id and poll its status instead of grabbing the WCS too early.
-				const jobId = status?.jobs.find((id) => typeof id === 'number')
+					// A job slot is null until created and a created job stays 'solving' until it finishes,
+					// so wait for a real job id and poll its status instead of grabbing the WCS too early.
+					const jobId = status?.jobs.find((id) => typeof id === 'number')
 
-				if (jobId !== undefined) {
-					const job = await jobStatus(jobId, { session }, signal)
+					if (jobId !== undefined) {
+						const job = await jobStatus(jobId, { session }, wait)
 
-					if (job?.status === 'success') {
-						const blob = await wcsFile(jobId, { session }, signal)
+						if (job?.status === 'success') {
+							const blob = await wcsFile(jobId, { session }, wait)
 
-						if (blob) {
-							const buffer = Buffer.from(await blob.arrayBuffer())
-							const fits = await readFits(bufferSource(buffer))
+							if (blob) {
+								const buffer = Buffer.from(await blob.arrayBuffer())
+								const fits = await readFits(bufferSource(buffer))
 
-							if (fits?.hdus.length) {
-								return plateSolutionFrom(fits.hdus[0].header)
+								if (fits?.hdus.length) {
+									return plateSolutionFrom(fits.hdus[0].header)
+								}
 							}
+
+							break
+						} else if (job?.status === 'failure') {
+							break
 						}
-
-						break
-					} else if (job?.status === 'failure') {
-						break
+						// Otherwise the job is still solving; keep polling until it resolves or times out.
 					}
-					// Otherwise the job is still solving; keep polling until it resolves or times out.
-				}
 
-				await abortableSleep(15000, wait)
+					await abortableSleep(15000, wait)
+				}
 			}
 		}
-	}
 
-	return undefined
+		return undefined
+	} catch (error) {
+		if (timeout.aborted && !signal?.aborted) return undefined
+		throw error
+	}
 }
 
 // https://astrometry.net/doc/readme.html
 
 // Plate-solves an image with the local `solve-field` CLI into a temporary directory, optionally
 // constrained by an RA/Dec/radius and FOV hint, then parses the produced .wcs into a PlateSolution.
-// Cleans up the temp directory afterward; returns undefined when solving fails. Declination defaults to
-// the pole only when no hint is given (0 is a valid equator hint).
+// The temp directory is removed on success, failure, timeout, or abort. Returns undefined when
+// solving fails. --ra/--dec/--radius are emitted only when the caller supplies all three; a radius
+// alone is not a north-polar window.
 export async function localAstrometryNetPlateSolve(input: string, options: RequiredOnly<LocalAstrometryNetPlateSolveOptions, 'executable'>, signal?: AbortSignal) {
 	const timeout = options.timeout ?? 0
-	const downsample = options.downsample ?? 2
-	const r = options?.radius ? Math.max(0, Math.min(Math.ceil(toDeg(options.radius)), 180)) : 0
-	const ra = options?.rightAscension !== undefined ? toDeg(normalizeAngle(options.rightAscension)) : 0
-	// declination 0 is the celestial equator, a valid hint; only fall back to the pole when it is absent.
-	const dec = options?.declination !== undefined ? toDeg(options.declination) : 90
+	const downsample = Math.max(1, options.downsample ?? 2)
 	const fov = Math.max(0, Math.min(toDeg(options?.fov ?? 0), 360))
 	const outDir = join(tmpdir(), Bun.randomUUIDv7())
 	const wcs = join(outDir, 'nebulosa.wcs')
 
-	const commands = [
-		options.executable,
-		'--out',
-		'nebulosa',
-		'--overwrite',
-		'--dir',
-		outDir,
-		'--cpulimit',
-		timeout >= 1000 ? Math.trunc(timeout / 1000).toFixed(0) : '300',
-		'--crpix-center',
-		'--downsample',
-		Math.max(downsample, 2).toFixed(0),
-		'--no-verify',
-		'--no-plots',
-		'--skip-solved',
-		'--no-remove-lines',
-		'--uniformize',
-		'0',
-	]
+	const commands = [options.executable, '--out', 'nebulosa', '--overwrite', '--dir', outDir, '--cpulimit', timeout >= 1000 ? Math.trunc(timeout / 1000).toFixed(0) : '300', '--crpix-center', '--downsample', downsample.toFixed(0), '--no-verify', '--no-plots', '--skip-solved', '--no-remove-lines', '--uniformize', '0']
 
 	if (fov > 0) {
 		commands.push('--scale-units', 'degwidth')
@@ -264,18 +253,22 @@ export async function localAstrometryNetPlateSolve(input: string, options: Requi
 		commands.push('--guess-scale')
 	}
 
-	if (r) {
-		commands.push('--ra', `${ra}`)
-		commands.push('--dec', `${dec}`)
-		commands.push('--radius', `${r}`)
+	if (options.rightAscension !== undefined && options.declination !== undefined && options.radius !== undefined) {
+		const radiusDeg = Math.max(0, Math.min(Math.ceil(toDeg(options.radius)), 180))
+
+		if (radiusDeg > 0) {
+			commands.push('--ra', `${toDeg(normalizeAngle(options.rightAscension))}`)
+			commands.push('--dec', `${toDeg(options.declination)}`)
+			commands.push('--radius', `${radiusDeg}`)
+		}
 	}
 
 	commands.push(input)
 
-	const process = Bun.spawn(commands, { signal, timeout: options?.timeout || 300000 })
-	const exitCode = await process.exited
-
 	try {
+		const process = Bun.spawn(commands, { signal, timeout: options?.timeout || 300000 })
+		const exitCode = await process.exited
+
 		if (exitCode === 0 && (await Bun.file(wcs).exists())) {
 			const handle = await fs.open(wcs)
 			await using source = fileHandleSource(handle)
@@ -291,6 +284,13 @@ export async function localAstrometryNetPlateSolve(input: string, options: Requi
 	}
 
 	return undefined
+}
+
+// Converts a scale hint from radians into the numeric value nova expects for `units`.
+function scaleInUnits(angle: Angle, units: ScaleUnit): number {
+	if (units === 'arcminwidth') return toArcmin(angle)
+	if (units === 'arcsecperpix') return toArcsec(angle)
+	return toDeg(angle)
 }
 
 // Resolves after the given delay, or earlier if the signal aborts. Never rejects.

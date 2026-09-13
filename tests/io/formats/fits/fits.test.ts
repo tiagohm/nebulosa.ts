@@ -241,6 +241,25 @@ test('write/read RICE compressed', async () => {
 	await saveImageAndCompareHash(output, 'write-fits-rice-16-1', 'c754bf834dc1bb3948ec3cf8b9aca303')
 }, 5000)
 
+test('reads Rice tiles using the spec default ZTILE2 of 1 when the card is omitted', async () => {
+	const width = 8
+	const height = 4
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height, BSCALE: 1, BZERO: 32768 }
+	const raw = new Float64Array(width * height)
+	for (let i = 0; i < raw.length; i++) raw[i] = i / (raw.length - 1)
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 4)
+
+	await writeFits(bufferSink(buffer), [{ header, raw }], { type: 'RICE_1', tileHeight: 1 })
+
+	const ztile2 = buffer.indexOf('ZTILE2  ', 0, 'ascii')
+	expect(ztile2).toBeGreaterThan(-1)
+	buffer.fill(32, ztile2, ztile2 + FITS_HEADER_CARD_SIZE)
+
+	const output = await readImageFromBuffer(buffer, { raw: 64 })
+	expect(output).toBeDefined()
+	for (let i = 0; i < raw.length; i++) expect(output!.raw[i]).toBeCloseTo(raw[i], 4)
+})
+
 test('writes and reads interleaved channels directly from Rice tiles', async () => {
 	const width = 3
 	const height = 3
@@ -463,6 +482,33 @@ test('write all keywords', () => {
 	expect(write({ HISTORY: `${'A'.repeat(71)}BBBBB` }, 160)).toBe(`HISTORY  ${'A'.repeat(71)}HISTORY  BBBBB${' '.repeat(66)}`)
 })
 
+test('XPIXSZ and YPIXSZ default comments describe binned pixel size', () => {
+	FitsKeywordWriter.keywords = KEYWORDS
+
+	const writer = new FitsKeywordWriter()
+	const buffer = Buffer.allocUnsafe(FITS_HEADER_CARD_SIZE)
+
+	function commentOf(card: FitsHeaderCard) {
+		const n = writer.write(card, buffer)
+		expect(n).toBe(FITS_HEADER_CARD_SIZE)
+		const text = buffer.toString('ascii', 0, n)
+		const separator = text.indexOf(' / ')
+		expect(separator).toBeGreaterThan(0)
+		return text
+			.slice(separator + 3)
+			.trimEnd()
+			.toLowerCase()
+	}
+
+	const xComment = commentOf(['XPIXSZ', 3.76])
+	expect(xComment).toContain('pixel')
+	expect(xComment).toContain('binning')
+
+	const yComment = commentOf(['YPIXSZ', 3.76])
+	expect(yComment).toContain('pixel')
+	expect(yComment).toContain('binning')
+})
+
 test('writeFits emits HISTORY as 80-byte cards without embedded newlines', async () => {
 	const header: FitsHeader = { SIMPLE: true, BITPIX: 8, NAXIS: 2, NAXIS1: 1, NAXIS2: 1, HISTORY: 'first processing step\nsecond processing step' }
 	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 2)
@@ -501,6 +547,24 @@ test('continue keyword', () => {
 	expect(sink).toEqual(source)
 })
 
+test('write keyword throws when CONTINUE cards do not fit the buffer', () => {
+	const writer = new FitsKeywordWriter()
+	const buffer = Buffer.alloc(FITS_HEADER_CARD_SIZE * 2)
+
+	expect(() => writer.write(['OBJECT', 'x'.repeat(200)], buffer)).toThrow(new RangeError('FITS header buffer too small'))
+})
+
+test('writeFits grows the header buffer for a long OBJECT string', async () => {
+	const object = 'x'.repeat(20000)
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 8, NAXIS: 2, NAXIS1: 1, NAXIS2: 1, OBJECT: object }
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 20)
+
+	await writeFits(bufferSink(buffer), [{ header, raw: new Float32Array([0]) }])
+
+	const fits = await readFits(bufferSource(buffer))
+	expect(fits!.hdus[0].header.OBJECT).toBe(object)
+})
+
 test('escape keyword', () => {
 	FitsKeywordWriter.keywords = {}
 
@@ -526,6 +590,28 @@ test('escape keyword', () => {
 	writer.write(['END'], sink, 320)
 
 	expect(sink).toEqual(source)
+})
+
+test('rejects a non-Rice compressed image HDU', () => {
+	const header: FitsHeader = {
+		XTENSION: 'BINTABLE',
+		BITPIX: 8,
+		NAXIS: 2,
+		NAXIS1: 8,
+		NAXIS2: 100,
+		PCOUNT: 0,
+		GCOUNT: 1,
+		ZIMAGE: true,
+		ZCMPTYPE: 'GZIP_1',
+		ZBITPIX: 16,
+		ZNAXIS: 2,
+		ZNAXIS1: 8,
+		ZNAXIS2: 100,
+	}
+	const hdu: FitsHdu = { header, data: { offset: 0, size: 800 } }
+	const output = new Float64Array(8 * 100)
+
+	expect(new FitsImageReader(hdu).read(bufferSource(Buffer.alloc(800)), output)).rejects.toThrow('unsupported FITS compression')
 })
 
 test('fits image reader and writer honor non-zero backing buffer offsets', async () => {
@@ -671,6 +757,19 @@ test('computeHduDataSize uses NAXIS1..NAXIS{n} and GCOUNT', () => {
 	expect(computeHduDataSize({ SIMPLE: true, BITPIX: 8, NAXIS: 4, NAXIS1: 10, NAXIS2: 10, NAXIS3: 2, NAXIS4: 5 })).toBe(1000)
 	expect(computeHduDataSize({ SIMPLE: true, BITPIX: 8, NAXIS: 2, NAXIS1: 10, NAXIS2: 10, GCOUNT: 3, PCOUNT: 0 })).toBe(300)
 	expect(computeHduDataSize({ XTENSION: 'BINTABLE', BITPIX: 8, NAXIS: 2, NAXIS1: 8, NAXIS2: 4, PCOUNT: 16, GCOUNT: 1 })).toBe(48)
+	expect(
+		computeHduDataSize({
+			SIMPLE: true,
+			BITPIX: -32,
+			NAXIS: 3,
+			NAXIS1: 0,
+			NAXIS2: 128,
+			NAXIS3: 128,
+			PCOUNT: 5,
+			GCOUNT: 100,
+			GROUPS: true,
+		}),
+	).toBe(6555600)
 })
 
 test('readFits skips a 1-D primary data segment to the next HDU', async () => {
@@ -733,6 +832,7 @@ test('right ascension keywords', () => {
 	expect(rightAscensionKeyword({ RA: 161.0177548315 }, undefined)).toBeCloseTo(hms(10, 44, 4.26115956), 12)
 	expect(rightAscensionKeyword({ OBJCTRA: '11 44 04.261', RA: 161.0177548315 }, undefined)).toBeCloseTo(hms(10, 44, 4.26115956), 12)
 	expect(rightAscensionKeyword({ CRVAL1: 161.0177548315 }, undefined)).toBeCloseTo(hms(10, 44, 4.26115956), 12)
+	expect(rightAscensionKeyword({ RA: 0, CRVAL1: 180 }, 0)).toBe(0)
 })
 
 test('declination keywords', () => {
@@ -740,6 +840,7 @@ test('declination keywords', () => {
 	expect(declinationKeyword({ DEC: -59.6022705034 }, undefined)).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
 	expect(declinationKeyword({ OBJCTDEC: '59 36 08.17', DEC: -59.6022705034 }, undefined)).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
 	expect(declinationKeyword({ CRVAL2: -59.6022705034 }, undefined)).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
+	expect(declinationKeyword({ DEC: 0, CRVAL2: 45 }, 0)).toBe(0)
 })
 
 test('observation date keywords', () => {
@@ -747,4 +848,9 @@ test('observation date keywords', () => {
 	expect(observationDateKeyword({ 'DATE-END': '2023-01-15T01:27:05.460' })).toBe(1673746025460)
 	expect(observationDateKeyword({ DATE: '2023-01-15T01:27:05.460', DEC: -59.6022705034 })).toBe(1673746025460)
 	expect(observationDateKeyword({ 'DATE-OBS': '2023-01-15', DATE: '2023-01-15T01:27:05.460' })).toBe(1673740800000)
+	expect(observationDateKeyword({ 'DATE-OBS': '2023-01-15T01:27:05.46' })).toBe(1673746025460)
+	expect(observationDateKeyword({ 'DATE-OBS': '2023-01-15T01:27:05Z' })).toBe(1673746025000)
+	expect(observationDateKeyword({ 'DATE-OBS': '2023-01-15T01:27:05.460Z' })).toBe(1673746025460)
+	expect(observationDateKeyword({ 'DATE-OBS': 'not-a-date', 'DATE-END': '2023-01-15T01:27:05.460' })).toBe(1673746025460)
+	expect(observationDateKeyword({ 'DATE-OBS': 'garbage' })).toBeUndefined()
 })

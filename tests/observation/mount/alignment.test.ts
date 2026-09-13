@@ -96,6 +96,23 @@ test('Tukey weighting rejects an outlier and protects the clean rotation', () =>
 	expect(robust.maximumResidual).toBeGreaterThan(robust.rms)
 })
 
+test('Tukey weighting rejects an outlier when exact inliers produce zero MAD', () => {
+	const outlierAngle = deg(20)
+	const result = fitDirectionAlignment(
+		[
+			{ mount: [1, 0, 0], world: [1, 0, 0] },
+			{ mount: [0, 1, 0], world: [0, 1, 0] },
+			{ mount: [0, 0, 1], world: [0, 0, 1] },
+			{ mount: [1, 0, 0], world: [Math.cos(outlierAngle), Math.sin(outlierAngle), 0] },
+		],
+		{ robust: 'tukey' },
+	)
+
+	expect(angularSeparation(predictWorldDirection(result, [1, 0, 0]), [1, 0, 0])).toBeLessThan(1e-12)
+	expect(result.weights[3]).toBe(0)
+	expect(result.rejectedCount).toBe(1)
+})
+
 test('zero-weight outliers do not inflate the robust residual scale', () => {
 	const samples: DirectionAlignmentSample[] = []
 	const axes = [

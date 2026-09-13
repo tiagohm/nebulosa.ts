@@ -115,12 +115,13 @@ export function lunation(time: Time, system: LunationSystem = 'BROWN') {
 	else return LN + 953
 }
 
-// Computes the saros series number for the lunar eclipse.
+// Computes the lunar Saros series number in 1..223 for the lunation containing `time`.
+// Anchored on the full moon of 18 January 2003 (series 192); each lunation advances the series by 38 (mod 223).
 export function lunarSaros(time: Time) {
 	// Full moon 18 Jan 2003
 	const LN = Math.round((time.day - 2452656 + (time.fraction - 0.94931)) / MOON_SYNODIC_DAYS)
-	const SNL = ((192 + LN * 38 - 1) % 223) + 1
-	return SNL < 0 ? SNL + 223 : SNL
+	// JavaScript remainder keeps the dividend sign; map into [0, 223) before adding 1 so LN ≡ -52 (mod 223) yields 223, not 0.
+	return ((((192 + LN * 38 - 1) % 223) + 223) % 223) + 1
 }
 
 // Converts a Time to the fractional Julian year used to seed Meeus' k indices.

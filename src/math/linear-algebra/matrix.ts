@@ -644,8 +644,11 @@ export class LuDecomposition {
 	}
 
 	// Determinant as the product of the U pivots, sign-corrected by the parity of the pivot swaps.
+	// The empty product for a 0×0 matrix is 1 (det I₀).
 	get determinant() {
 		const n = this.#A.rows
+		if (n === 0) return 1
+
 		const data = this.#A.data
 		let det = data[0]
 		for (let i = 1; i < n; i++) det *= data[i * n + i]
@@ -785,7 +788,10 @@ export class QrDecomposition {
 		return !this.#rdiag.includes(0)
 	}
 
-	// Solves the system of linear equations A*x = B, where A is the matrix and B is the right-hand side vector.
+	// Solves A*x = B, or min ‖A*x − B‖ when A is tall and full rank. `value` is B and must have
+	// length A.rows. Returns x as a Float64Array of length A.cols (a view of the first cols
+	// entries of the QᵀB workspace when A is tall). Throws if the row count disagrees or A is
+	// rank deficient.
 	solve(value: Readonly<NumberArray>) {
 		if (value.length !== this.#QR.rows) {
 			throw new Error('matrix row dimensions must agree')
@@ -796,8 +802,9 @@ export class QrDecomposition {
 		}
 
 		const X = new Float64Array(value)
+		const cols = this.#QR.cols
 
-		for (let k = 0; k < this.#QR.cols; k++) {
+		for (let k = 0; k < cols; k++) {
 			let s = 0
 
 			for (let i = k; i < this.#QR.rows; i++) {
@@ -811,7 +818,7 @@ export class QrDecomposition {
 			}
 		}
 
-		for (let k = this.#QR.cols - 1; k >= 0; k--) {
+		for (let k = cols - 1; k >= 0; k--) {
 			X[k] /= this.#rdiag[k]
 
 			for (let i = 0; i < k; i++) {
@@ -819,7 +826,7 @@ export class QrDecomposition {
 			}
 		}
 
-		return X
+		return cols === X.length ? X : X.subarray(0, cols)
 	}
 }
 

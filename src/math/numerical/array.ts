@@ -23,7 +23,8 @@ export function quickSelect(values: NumberArray, count: number, k: number): numb
 	let right = count - 1
 
 	while (left < right) {
-		const pivot = values[(left + right) >>> 1]
+		// (left + right) >>> 1 wraps past 2^32 and can hang the 3-way partition.
+		const pivot = values[left + ((right - left) >>> 1)]
 		const pivotIsNaN = Number.isNaN(pivot)
 		let lower = left
 		let index = left

@@ -103,6 +103,96 @@ test('does not promote one isolated cold pixel to a structural row or column whe
 	expect(result.columns).toHaveLength(0)
 })
 
+test('does not promote one isolated cold pixel to a structural row when row-profile MAD is positive', () => {
+	const width = 32
+	const height = 24
+	const darkRaw = new Float64Array(width * height).fill(100)
+	const flatRaw = new Float64Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) flatRaw[y * width + x] = 1100 + 0.02 * y
+	}
+	flatRaw[12 * width + 16] = 0
+	const result = measureSensorDefects(stack([darkRaw, darkRaw], width), stack([flatRaw, flatRaw], width), { maps: 'defects' })!
+	expect(result.cold).toBe(1)
+	expect(result.rows).toHaveLength(0)
+	expect(result.columns).toHaveLength(0)
+})
+
+test('does not promote one isolated hot pixel to a structural column when column-profile MAD is positive', () => {
+	const width = 32
+	const height = 24
+	const darkRaw = new Float64Array(width * height).fill(100)
+	const flatRaw = new Float64Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) flatRaw[y * width + x] = 1100 + 0.02 * x
+	}
+	darkRaw[12 * width + 16] = 500
+	const result = measureSensorDefects(stack([darkRaw, darkRaw], width), stack([flatRaw, flatRaw], width), { maps: 'defects' })!
+	expect(result.hot).toBe(1)
+	expect(result.rows).toHaveLength(0)
+	expect(result.columns).toHaveLength(0)
+})
+
+test('still marks a row when a quarter of its pixels are cold', () => {
+	const width = 32
+	const height = 24
+	const darkRaw = new Float64Array(width * height).fill(100)
+	const flatRaw = new Float64Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) flatRaw[y * width + x] = 1100 + 0.02 * y
+	}
+	for (let x = 0; x < 8; x++) flatRaw[12 * width + x] = 0
+	const result = measureSensorDefects(stack([darkRaw, darkRaw], width), stack([flatRaw, flatRaw], width), { maps: 'defects' })!
+	expect(result.cold).toBe(8)
+	expect(result.rows).toEqual([12])
+	expect(result.columns).toHaveLength(0)
+})
+
+test('does not mark extra-Gaussian temporal noise as unstable at eight or sixteen frames', () => {
+	const width = 8
+	const height = 8
+	const noisyCount = 8
+	const gaussian8 = [-15, -9, -4.5, -0.8, 0.8, 4.5, 9, 15]
+	const gaussian16 = [-22, -15, -11.5, -9, -6.5, -4.5, -2.5, -0.8, 0.8, 2.5, 4.5, 6.5, 9, 11.5, 15, 22]
+	for (const series of [gaussian8, gaussian16]) {
+		const dark: Float64Array[] = []
+		const flat: Float64Array[] = []
+		for (let frame = 0; frame < series.length; frame++) {
+			const darkRaw = new Float64Array(width * height).fill(100)
+			const flatRaw = new Float64Array(width * height).fill(1100)
+			for (let pixel = 0; pixel < noisyCount; pixel++) darkRaw[pixel] += series[frame]
+			dark.push(darkRaw)
+			flat.push(flatRaw)
+		}
+		const result = measureSensorDefects(stack(dark, width), stack(flat, width), { maps: 'defects' })!
+		expect(result.noisy).toBe(noisyCount)
+		expect(result.unstable).toBe(0)
+		for (let pixel = 0; pixel < noisyCount; pixel++) {
+			expect(result.mask![pixel] & SENSOR_DEFECT_NOISY).toBe(SENSOR_DEFECT_NOISY)
+			expect(result.mask![pixel] & SENSOR_DEFECT_UNSTABLE).toBe(0)
+		}
+	}
+})
+
+test('does not mark a noisy pixel unstable from two finite samples in an eight-frame stack', () => {
+	const width = 8
+	const frames = 8
+	const dark: Float64Array[] = []
+	const flat: Float64Array[] = []
+	for (let frame = 0; frame < frames; frame++) {
+		const darkRaw = new Float64Array(width * width).fill(100)
+		const flatRaw = new Float64Array(width * width).fill(1100)
+		darkRaw[0] = frame < 2 ? 100 + (frame === 0 ? -80 : 80) : Number.NaN
+		dark.push(darkRaw)
+		flat.push(flatRaw)
+	}
+	const result = measureSensorDefects(stack(dark, width), stack(flat, width), { maps: 'defects' })!
+	expect(result.noisy).toBe(1)
+	expect(result.unstable).toBe(0)
+	expect(result.mask![0] & SENSOR_DEFECT_NOISY).toBe(SENSOR_DEFECT_NOISY)
+	expect(result.mask![0] & SENSOR_DEFECT_UNSTABLE).toBe(0)
+})
+
 test('marks a pixel saturated when any flat frame reaches the digital clip', () => {
 	const width = 4
 	const darkRaw = new Float64Array(width * width).fill(100)

@@ -8,8 +8,8 @@ import { ASEC2RAD, PIOVERTWO } from '../../../src/core/constants'
 import { matMulVec, matRodriguesRotation } from '../../../src/math/linear-algebra/mat3'
 import { sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
 import { type Angle, arcmin, deg, hour, normalizePI } from '../../../src/math/units/angle'
-import { fitDirectionAlignment } from '../../../src/observation/mount/alignment'
-import { createIdealAltAzGeometry } from '../../../src/observation/mount/kinematics'
+import { applyDirectionAlignment, fitDirectionAlignment } from '../../../src/observation/mount/alignment'
+import { createIdealAltAzGeometry, mountDirectionFromEncoders } from '../../../src/observation/mount/kinematics'
 import { computePointingError, fitPointingModel, type PointingErrorRepresentation } from '../../../src/observation/mount/pointing'
 import type { SemiPhysicalTermName } from '../../../src/observation/mount/pointing.basis'
 import { celestialToEncoders, encodersToCelestial, type MountPointingChain } from '../../../src/observation/mount/pointing.pipeline'
@@ -167,12 +167,13 @@ test('the kinematic chain reproduces the horizontal direction the alignment was 
 	}
 	const desired = { rightAscension: hour(1.5), declination: deg(-5), ...CONTEXT }
 	const target = celestialToEncoders(chain, desired)
-	const [azimuth, altitude] = equatorialToHorizontal(desired.rightAscension, desired.declination, LATITUDE, localSiderealTime(TIME, LONGITUDE, true))
+	const [azimuth, altitude] = equatorialToHorizontal(desired.rightAscension, desired.declination, LATITUDE, localSiderealTime(TIME, LONGITUDE))
 	const expected = horizontalToEnuVector(azimuth, altitude)
+	const actual = mountDirectionFromEncoders(applyDirectionAlignment(chain.geometry, chain.alignment), target)
 
-	// With an identity alignment the encoders must land on the plain ENU direction of the target.
+	// With an identity alignment the encoders must land on the apparent-place ENU direction of the target.
 	expect(target.residual).toBeLessThan(1e-9)
-	expect(Math.abs(altitude - (PIOVERTWO - Math.acos(Math.min(1, Math.max(-1, expected[2])))))).toBeLessThan(1e-12)
+	expect(Math.hypot(actual[0] - expected[0], actual[1] - expected[1], actual[2] - expected[2])).toBeLessThan(1e-9)
 	expect(encodersToCelestial(chain, target, CONTEXT).rightAscension).toBeCloseTo(desired.rightAscension, 9)
 	expect(encodersToCelestial(chain, target, CONTEXT).declination).toBeCloseTo(desired.declination, 9)
 })

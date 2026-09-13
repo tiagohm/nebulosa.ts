@@ -104,6 +104,34 @@ test('readHnsky290Area decodes documented record formats', () => {
 	}
 })
 
+test('HNSKY readers preserve absent color in 6-byte records', async () => {
+	const field: SyntheticStar = { rightAscension: hour(2.02), declination: deg(5.1), magnitude: 1.4, bpRp: 1.2 }
+	const missingColor = makeCompactRecord(field, true)
+	// SkyChart u_290.pas reserves the signed color byte -128 for missing Gaia BP-RP.
+	missingColor[5] = 0x80
+	const buffer = Buffer.concat([makeHeader(6), makeCompactHeaderRecord(field, true), missingColor, makeCompactRecord(field, true)])
+	const area = 148
+	const stars = [...readHnsky290Area(readHnsky290Header(buffer), buffer, area, REGION_QUERY)]
+
+	expect(stars).toHaveLength(2)
+	expect(stars[0].bpRp).toBeUndefined()
+	expect(stars[0].rightAscension).toBeCloseTo(field.rightAscension, 6)
+	expect(stars[0].declination).toBeCloseTo(field.declination, 6)
+	expect(stars[0].magnitude).toBeCloseTo(field.magnitude, 6)
+	expect(stars[1].bpRp).toBeCloseTo(1.2, 6)
+
+	using catalog = openHnskyCatalog({ [`g16_${hnsky290AreaFile(area).fileName}`]: buffer }, 'g16')
+	const missing = await catalog.get('g16', area, 2)
+	const colored = await catalog.get('g16', area, 3)
+
+	expect(missing).toBeDefined()
+	expect(missing?.bpRp).toBeUndefined()
+	expect(missing?.rightAscension).toBeCloseTo(field.rightAscension, 6)
+	expect(missing?.declination).toBeCloseTo(field.declination, 6)
+	expect(missing?.magnitude).toBeCloseTo(field.magnitude, 6)
+	expect(colored?.bpRp).toBeCloseTo(1.2, 6)
+})
+
 test('readHnsky290Area decodes the final record of a tile', () => {
 	const field: SyntheticStar = { rightAscension: hour(2.02), declination: deg(5.1), magnitude: 1.4 }
 	const outside: SyntheticStar = { rightAscension: hour(4), declination: deg(5.12), magnitude: 1.3 }

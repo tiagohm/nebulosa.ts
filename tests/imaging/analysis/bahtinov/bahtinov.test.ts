@@ -253,7 +253,8 @@ test('analyzes an RGB image produced by debayer', () => {
 	const source = debayer(image(mono.raw, 128, 128, 'RGGB'))
 	expect(source).toBeDefined()
 	if (!source) return
-	expect(source.metadata.bayer).toBe('RGGB')
+	expect(source.metadata.channels).toBe(3)
+	expect(source.metadata.bayer).toBeUndefined()
 	const result = analyzeBahtinov({ image: source, area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, ANALYSIS_OPTIONS)
 	expect(result.success).toBeTrue()
 })

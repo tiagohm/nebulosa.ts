@@ -30,10 +30,15 @@ export class SafetyMonitorSimulator extends DeviceSimulator {
 		readonly options?: DeviceSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.AUXILIARY)
+		super(name, client, handler, DeviceInterfaceType.AUXILIARY, 'safetymonitor.simulator')
 
 		for (const property of this.properties) property.device = name
 		this.driverInfo.elements.DRIVER_EXEC.value = 'safetymonitor.simulator'
+	}
+
+	// Drops emissions for properties deleted on disconnect while keeping common controls observable.
+	protected notify(message: SimulatorProperty) {
+		if (this.isConnected || !this.properties.includes(message)) super.notify(message)
 	}
 
 	// Updates the standard status and emits a LightVector only when the aggregate condition changes.

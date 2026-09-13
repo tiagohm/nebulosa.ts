@@ -67,6 +67,22 @@ test('adaptive display function validates and reuses histogram storage', () => {
 	expect(() => adf(image, { bits: 25 })).toThrow()
 })
 
+test('adaptive display function is identity for a constant dark image', () => {
+	const [midtone, shadow, highlight] = adf(makeImage(8, 8, 1, new Float32Array(64).fill(0.25)))
+
+	expect(midtone).toBeCloseTo(0.5, 4)
+	expect(shadow).toBe(0)
+	expect(highlight).toBe(1)
+})
+
+test('adaptive display function uses the zero-MAD clipping path for a constant bright image', () => {
+	const [midtone, shadow, highlight] = adf(makeImage(8, 8, 1, new Float32Array(64).fill(0.9)))
+
+	expect(shadow).toBe(0)
+	expect(highlight).toBe(1)
+	expect(midtone).toBeCloseTo(0.75, 3)
+})
+
 test('sigma clip preserves caller-provided seed rejections', () => {
 	const image = makeImage(3, 1, 1, [0.2, 0.2, 0.2])
 	const seed = new Int8Array([1, 0, 0])
@@ -103,6 +119,32 @@ test('sigma clip rejects a non-finite iteration cap that would never terminate',
 	const image = makeImage(1, 1, 1, [0.5])
 
 	expect(() => sigmaClip(image, { maxIterations: Number.POSITIVE_INFINITY })).toThrow()
+})
+
+test('sigma clip restricts moments and rejection to the requested area', () => {
+	const values = new Float32Array(100).fill(0.1)
+	for (let i = 90; i < 100; i++) values[i] = 0.8
+	const image = makeImage(100, 1, 1, values)
+	const area = { left: 90, right: 99 }
+
+	const meanStd = sigmaClip(image, { area })
+	expect(Array.from(meanStd)).toEqual(new Array(100).fill(0))
+
+	const medianMad = sigmaClip(image, { area, centerMethod: 'median', dispersionMethod: 'mad' })
+	expect(Array.from(medianMad)).toEqual(new Array(100).fill(0))
+
+	const mixed = new Float32Array(100).fill(0.1)
+	for (let i = 90; i < 99; i++) mixed[i] = 0.2
+	mixed[99] = 0.9
+	const mixedMask = sigmaClip(makeImage(100, 1, 1, mixed), { area, sigmaLower: 1, sigmaUpper: 1, maxIterations: 1, tolerance: 0 })
+	expect(Array.from(mixedMask.slice(0, 90))).toEqual(new Array(90).fill(0))
+	expect(mixedMask[99]).toBe(1)
+
+	const rows = new Float32Array(20).fill(0.1)
+	for (let i = 10; i < 20; i++) rows[i] = 0.8
+	const bottomMask = sigmaClip(makeImage(10, 2, 1, rows), { area: { top: 1, bottom: 1, left: 0, right: 9 }, centerMethod: 'median', dispersionMethod: 'mad' })
+	expect(Array.from(bottomMask.slice(0, 10))).toEqual(new Array(10).fill(0))
+	expect(Array.from(bottomMask.slice(10))).toEqual(new Array(10).fill(0))
 })
 
 test('background estimation matches the median of the final clipped population', () => {

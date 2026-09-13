@@ -361,6 +361,15 @@ describe('errors and recovery', () => {
 		expect(parser.parse('<a/>')).toEqual([{ name: 'a', attributes: {}, children: [], text: EMPTY_TEXT }])
 	})
 
+	test('resets internal state after the text buffer overflows', () => {
+		const parser = new SimpleXmlParser(256)
+
+		expect(parser.parse('<a>')).toBeEmpty()
+		expect(() => parser.parse('x'.repeat(257))).toThrow('internal buffer exceeded max byte length')
+		// parse() resets before rethrowing RangeError, matching the syntax-error recovery contract.
+		expect(parser.parse('<b/>')).toEqual([{ name: 'b', attributes: {}, children: [], text: EMPTY_TEXT }])
+	})
+
 	test('reset() clears a partially parsed tree', () => {
 		const parser = new SimpleXmlParser()
 

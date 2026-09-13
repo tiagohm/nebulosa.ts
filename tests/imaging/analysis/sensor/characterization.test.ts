@@ -352,3 +352,40 @@ test('preserves temporal characterization when optional dark-current analysis fa
 	expect(result.planes[0].darkCurrent).toBeUndefined()
 	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'insufficientDarkLevels')).toBeTrue()
 })
+
+test('preserves temporal characterization when spatial stack exposures differ', () => {
+	const flats: SensorFlatFrameSet[] = []
+	for (let level = 1; level <= 10; level++) {
+		const signal = Math.min(level * 100, 700)
+		flats.push({ frames: pairedFrames(1000 + signal, 4 + signal * 0.5), darkFrames: pairedFrames(1000, 4), exposure: level })
+	}
+	const result = characterizeSensor({
+		operatingPoint: {},
+		bias: { frames: pairedFrames(1000, 4), exposure: 0.001 },
+		flats,
+		spatial: { dark: { frames: pairedFrames(1000, 4), exposure: 10 }, flat: { frames: pairedFrames(1500, 4), exposure: 1 } },
+	})
+
+	expect(result.planes).toHaveLength(1)
+	expect(result.planes[0].gain?.system).toBeCloseTo(0.5, 10)
+	expect(result.planes[0].dsnu).toBeUndefined()
+	expect(result.planes[0].prnu).toBeUndefined()
+	expect(result.planes[0].defects).toBeUndefined()
+	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'mixedSpatialExposure' && diagnostic.severity === 'error')).toBeTrue()
+	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'darkCurrentMismatch')).toBeFalse()
+})
+
+test('warns darkCurrentMismatch when mean and variance dark currents disagree', () => {
+	const flats: SensorFlatFrameSet[] = []
+	for (let level = 1; level <= 10; level++) {
+		const signal = Math.min(level * 100, 700)
+		flats.push({ frames: pairedFrames(1000 + signal, 4 + signal * 0.5), darkFrames: pairedFrames(1000, 4), exposure: level })
+	}
+	const darks = [0, 10, 20, 30, 40, 50].map((exposure) => ({ frames: pairedFrames(1000 + 5 * exposure, 4 + 0.1 * exposure), exposure }))
+	const result = characterizeSensor({ operatingPoint: {}, bias: { frames: pairedFrames(1000, 4), exposure: 0.001 }, flats, darks })
+
+	expect(result.planes).toHaveLength(1)
+	expect(result.planes[0].darkCurrent?.mean).toBeCloseTo(10, 10)
+	expect(result.planes[0].darkCurrent?.variance).toBeCloseTo(0.4, 10)
+	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'darkCurrentMismatch' && diagnostic.severity === 'warning')).toBeTrue()
+})

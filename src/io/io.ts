@@ -205,12 +205,15 @@ export class ReadableStreamSource implements Source, AsyncDisposable {
 		offset ??= 0
 
 		if (!this.#buffer || this.#position >= this.#buffer.byteLength) {
-			const { done, value } = await this.#reader.read()
-
-			if (done || value.byteLength === 0) return 0
-
-			this.#buffer = Buffer.from(value)
-			this.#position = 0
+			while (true) {
+				const { done, value } = await this.#reader.read()
+				// WHATWG allows zero-length chunks; EOF is only `done === true`.
+				if (done) return 0
+				if (value.byteLength === 0) continue
+				this.#buffer = Buffer.from(value)
+				this.#position = 0
+				break
+			}
 		}
 
 		size = Math.min(size ?? buffer.byteLength - offset, this.#buffer.byteLength - this.#position)
@@ -250,7 +253,13 @@ export class RangeHttpSource implements Source, Seekable {
 		if (size === 0) return 0
 
 		const response = await fetch(this.uri, { headers: { 'Accept-Encoding': 'identity', Range: `bytes=${this.position}-${this.position + size - 1}` } })
-		if (!response.ok) throw new Error(`HTTP range request failed with status ${response.status}`)
+		// RFC 9110: a first-byte-pos at or past the resource length is 416.
+		// Source.read must return 0 at EOF, matching FileHandleSource and BufferSource.
+		if (response.status === 416) return 0
+		// A successful range is 206 Partial Content. 200 OK is the full representation
+		// (Range ignored or lost on redirect/proxy/cache); copying from the start of
+		// that body would return the wrong bytes when position > 0.
+		if (response.status !== 206) throw new Error(`HTTP range request failed with status ${response.status}`)
 
 		let read = 0
 		if (size > 0x10000) {
@@ -280,7 +289,8 @@ export type Base64Alphabet = 'base64' | 'base64url'
 
 // A seekable source that streams Base64-decoded bytes from an underlying byte Source or string. Decodes
 // incrementally, tolerating whitespace and either alphabet, and keeps a partial 4-char group across reads;
-// seeks align to 3-byte/4-char group boundaries and discard the intra-group remainder.
+// seeks align to 3-byte/4-char group boundaries and discard the intra-group remainder. String seeks skip
+// whitespace; Source-backed seeks use packed 4-char offsets and require an unwrapped encoded stream.
 export class Base64Source implements Source, Seekable {
 	readonly #buffer = Buffer.allocUnsafe(1024)
 	readonly #decoded = [-1, -1, -1] // current decoded base64 bytes
@@ -308,8 +318,15 @@ export class Base64Source implements Source, Seekable {
 		let ok = false
 
 		if (typeof this.source === 'string') {
-			if (encodedPosition > this.source.length) return false
-			this.#spos = encodedPosition
+			let i = 0
+			let n = 0
+			const max = this.source.length
+			while (i < max && n < encodedPosition) {
+				const c = this.source.charCodeAt(i++)
+				if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 43 || c === 45 || c === 47 || c === 95) n++
+			}
+			if (n < encodedPosition) return false
+			this.#spos = i
 			ok = true
 		} else if (isSeekable(this.source)) {
 			ok = this.source.seek(encodedPosition)
@@ -727,16 +744,27 @@ export async function* readLines(source: Source, chunkSize: number, options?: Re
 }
 
 // Pumps all bytes from `source` into `sink` using a reusable transfer buffer (a byte count, or a
-// caller-provided Buffer), stopping when the source is exhausted or the sink stops accepting. Returns total bytes read.
+// caller-provided Buffer), retrying short writes. Stops when the source is exhausted or the sink
+// accepts no bytes. Returns total bytes transferred.
 export async function sourceTransferToSink(source: Source, sink: Sink, size: number | Buffer = 1024) {
 	const buffer = Buffer.isBuffer(size) ? size : Buffer.allocUnsafe(size)
 	let read = 0
 
 	while (true) {
 		const n = await source.read(buffer)
-		const m = n && (await sink.write(buffer, 0, n))
+		if (!n) break
+
+		let offset = 0
+		let remaining = n
+		while (remaining > 0) {
+			const m = await sink.write(buffer, offset, remaining)
+			if (!m && offset === 0) return read
+			if (!Number.isInteger(m) || !(m > 0) || !(m <= remaining)) throw new Error('sink failed to complete write')
+			offset += m
+			remaining -= m
+		}
+
 		read += n
-		if (!m) break
 	}
 
 	return read

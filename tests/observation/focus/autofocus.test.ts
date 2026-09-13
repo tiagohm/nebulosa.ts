@@ -140,6 +140,7 @@ describe('auto focus', () => {
 	test('reversed direction still converges to a valid focus point', () => {
 		const autoFocus = new AutoFocus({ fittingMode: 'TRENDLINES', initialOffsetSteps: 5, stepSize: 100, maxPosition: 100000, reversed: true, rmsdThreshold: 0.15 })
 		position = 25000
+		const sampledPositions: number[] = []
 
 		let step = autoFocus.add(position, 2)
 
@@ -147,13 +148,36 @@ describe('auto focus', () => {
 			move(step)
 			const point = GOOD_FOCUS_POINTS.find((e) => e.x === position)!
 			expect(point).toBeDefined()
+			sampledPositions.push(point.x)
 			step = autoFocus.add(point.x, point.y)
 		}
 
 		expect(step.type).toBe('COMPLETED')
-		// Reversed sweeps converge near the same minimum, within the sampled window.
-		expect(autoFocus.focusPoint!.x).toBeGreaterThan(24500)
-		expect(autoFocus.focusPoint!.x).toBeLessThan(25500)
+		expect(Math.min(...sampledPositions)).toBeLessThanOrEqual(24500)
+		expect(Math.max(...sampledPositions)).toBeGreaterThanOrEqual(25500)
+		expect(new Set(autoFocus.trendLine!.left.xPoints).size).toBeGreaterThanOrEqual(5)
+		expect(new Set(autoFocus.trendLine!.right.xPoints).size).toBeGreaterThanOrEqual(5)
+		expect(autoFocus.focusPoint!.x).toBeCloseTo(24989, -2)
+	})
+
+	test('reversed direction extends toward the best focus from the left', () => {
+		const autoFocus = new AutoFocus({ fittingMode: 'TRENDLINES', initialOffsetSteps: 5, stepSize: 100, maxPosition: 100000, reversed: true, rmsdThreshold: 0.15 })
+		position = 24700
+		const sampledPositions: number[] = []
+
+		let step = autoFocus.add(position, 2)
+
+		for (let i = 0; i < 100 && step.type === 'MOVE'; i++) {
+			move(step)
+			const point = GOOD_FOCUS_POINTS.find((e) => e.x === position)!
+			expect(point).toBeDefined()
+			sampledPositions.push(point.x)
+			step = autoFocus.add(point.x, point.y)
+		}
+
+		expect(step.type).toBe('COMPLETED')
+		expect(Math.max(...sampledPositions)).toBeGreaterThanOrEqual(25000)
+		expect(autoFocus.focusPoint!.x).toBeCloseTo(25000, -2)
 	})
 
 	test('parabolic ignores invalid hfd samples', () => {

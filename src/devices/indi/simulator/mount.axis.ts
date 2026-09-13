@@ -9,8 +9,8 @@ import type { AxisDirection } from './types'
 // Mechanical imperfections of one axis. Every field defaults to zero meaning a perfect transmission,
 // in which case the axis follows the motor exactly.
 export interface MechanicalAxisConfig {
-	// Total slack of the transmission, radians. On a direction reversal the motor must run through all
-	// of it before the axis starts moving again.
+	// Total slack of the transmission, radians. On a direction reversal the motor must run through the
+	// currently open part of it before the axis starts moving again.
 	readonly backlash: Angle
 	// Fraction of the motor travel that goes into closing the slack, in (0, 1]. At 1 the slack closes
 	// as fast as the motor turns; lower values stretch the reversal out over more motor travel. Values
@@ -49,7 +49,7 @@ export function mechanicalAxisState(): MechanicalAxisState {
 
 // Puts an axis back to rest without changing its slack, as when motion is aborted. The transmission
 // stays loaded in the direction it was last driven, so resuming in that direction is immediate while
-// reversing still costs the full backlash.
+// reversing costs only the complementary part of any slack that remains open.
 export function resetMechanicalAxisMotion(state: MechanicalAxisState) {
 	state.pendingCommand = 0
 	state.moving = false
@@ -108,9 +108,9 @@ export function reconcileMechanicalAxis(state: MechanicalAxisState, config: Mech
 // Advances one axis by `dtSeconds` under a motor running at `motorRate`, and returns the angle the
 // axis actually moved, radians, signed in the same sense as the rate.
 //
-// The order matters and follows the physical chain. A reversal first reloads the slack; the motor
-// then spends part of its travel closing that slack, and only what is left reaches the axis; that
-// remainder finally has to overcome static friction if the axis is at rest.
+// The order matters and follows the physical chain. A reversal first moves the open slack to the
+// other flank; the motor then spends part of its travel closing that slack, and only what is left
+// reaches the axis; that remainder finally has to overcome static friction if the axis is at rest.
 //
 // A zero rate leaves the axis where it is and lets it come to rest, so that friction has to be
 // overcome again on the next command, but keeps the slack loaded in its current direction.
@@ -129,9 +129,10 @@ export function advanceMechanicalAxis(state: MechanicalAxisState, motorRate: num
 
 	const direction: AxisDirection = commanded > 0 ? 1 : -1
 
-	// Reversing under load opens the slack again on the other flank of the gear.
+	// Reversing under load moves the open slack to the other flank of the gear. The remaining gap is
+	// the complement of the gap that was open on the previous flank.
 	if (state.loadDirection !== 0 && state.loadDirection !== direction) {
-		state.backlashRemaining = config.backlash
+		state.backlashRemaining = config.backlash - state.backlashRemaining
 		state.moving = false
 		state.pendingCommand = 0
 	}

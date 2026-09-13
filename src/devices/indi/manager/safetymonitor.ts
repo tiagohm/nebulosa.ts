@@ -50,12 +50,8 @@ export class SafetyMonitorManager extends DeviceManager<SafetyMonitor> {
 		return value !== undefined && isInterfaceType(+value, DeviceInterfaceType.AUXILIARY)
 	}
 
-	// Creates a proxy or authorized standalone, or migrates a standalone when its primary parent appears.
-	// TODO: SafetyMonitorManager.#materialize() exige que SAFETY_STATUS já tenha sido recebido.
-	// Porém, tanto o driver INDI quanto AlpacaSafetyMonitor publicam essa propriedade somente depois da conexão.
-	// Assim, o dispositivo não entra no manager, e o consumidor não consegue obter o dispositivo para chamar connect() — um ciclo impossível.
-	// A documentação do driver confirma que SAFETY_STATUS é definido em updateProperties() apenas quando conectado.
-	// Solução: criar um Auxiliary e AuxiliaryManager e fazer a conexão dele em vez do SafetyMonitor (pois não existe ainda no SafetyMonitorManager)
+	// Creates a proxy only after its primary has reported SAFETY_STATUS, or an authorized standalone from
+	// driver identity and connection state before the safety property exists.
 	#materialize(client: Client, name: string) {
 		const parent = this.provider.get(client, name)
 		let device = this.get(client, name)
@@ -68,14 +64,13 @@ export class SafetyMonitorManager extends DeviceManager<SafetyMonitor> {
 		if (device !== undefined) return device
 
 		const pending = this.#pending(client, name)!
-		if (pending.safetyStatus === undefined) return undefined
-
-		const state = pending.safetyStatus?.state
 
 		if (parent !== undefined) {
+			if (pending.safetyStatus === undefined) return undefined
+
 			const id = makeDeviceId(client, 'safetyMonitor', parent.name)
 			device = proxyDevice(parent, id, 'safetyMonitor') as SubDevice<SafetyMonitor, Device>
-			device.safe = state === 'Ok'
+			device.safe = pending.safetyStatus.state === 'Ok'
 			this.add(device, client)
 			return device
 		}
@@ -83,8 +78,7 @@ export class SafetyMonitorManager extends DeviceManager<SafetyMonitor> {
 		if (!this.#canCreateStandalone(client, pending)) return undefined
 
 		const standalone = makeDevice(DEFAULT_SAFETY_MONITOR, client, name, pending.driverInfo?.elements)
-		standalone.connected = pending.connection?.elements.CONNECT?.value === true
-		standalone.safe = state === 'Ok'
+		standalone.safe = pending.safetyStatus?.state === 'Ok'
 		this.add(standalone, client)
 		return standalone
 	}
@@ -93,8 +87,15 @@ export class SafetyMonitorManager extends DeviceManager<SafetyMonitor> {
 	textVector(client: Client, message: DefTextVector | SetTextVector, tag: string) {
 		if (message.name !== 'DRIVER_INFO') return
 
-		this.#pending(client, message.device)!.driverInfo = message
-		this.#materialize(client, message.device)
+		const pending = this.#pending(client, message.device)!
+		pending.driverInfo = message
+		const device = this.#materialize(client, message.device)
+
+		// A connection vector may precede DRIVER_INFO. Replay it after the standalone exists so the base
+		// manager can emit the connection transition and request properties for a connected device.
+		if (device !== undefined && pending.connection !== undefined) {
+			super.switchVector(client, pending.connection, tag)
+		}
 	}
 
 	// Caches and applies the common CONNECTION switch after a safety device can be materialized.
@@ -149,7 +150,8 @@ export class SafetyMonitorManager extends DeviceManager<SafetyMonitor> {
 				this.updated(device.parent, 'safe', 'Idle')
 			}
 
-			super.delProperty(client, message.name ? { ...message, name: undefined } : message)
+			if (message.name && device.parentId === undefined) super.delProperty(client, message)
+			else super.delProperty(client, message.name ? { ...message, name: undefined } : message)
 		}
 
 		const devices = this.#pendingByClient.get(client)

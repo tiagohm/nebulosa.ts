@@ -19,8 +19,10 @@ const MINIMUM_ROI_SIDE = 16
 const MAXIMUM_HOUGH_ANGLE_COUNT = 65536
 // Maximum normal-distance bins retained in the reusable accumulator.
 const MAXIMUM_HOUGH_DISTANCE_BIN_COUNT = 1048576
-// Connected saturated samples outside the initial core that indicate erased spike support.
+// Connected saturated samples that protrude beyond a compact equivalent core, indicating erased spike support.
 const MINIMUM_CONNECTED_SATURATED_SPIKE_SAMPLES = 32
+// Extra radial allowance, in pixels, so a discrete circular core is not treated as elongated spike saturation.
+const SATURATED_CORE_PROTRUSION_MARGIN = 1
 // Saturated source sample bit in the reusable mask.
 const MASK_SATURATED = 1
 // Dilated saturation-support bit in the reusable mask.
@@ -218,20 +220,28 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 	markCore(mask, width, height, centerX, centerY, coreRadius, options.autoCoreRadius ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.autoCoreRadius, workspace.coreQueue)
 	let coreSaturated = false
 	let spikeSaturatedCount = 0
-	let connectedSpikeSaturatedCount = 0
-	const coreRadiusSquared = coreRadius * coreRadius
+	let connectedCoreSaturatedCount = 0
 	for (let index = 0; index < pixelCount; index++) {
 		if ((mask[index] & MASK_SATURATED) === 0) continue
-		const x = index % width
-		const y = Math.floor(index / width)
-		const dx = x - centerX
-		const dy = y - centerY
 		if ((mask[index] & MASK_CORE) !== 0) {
 			coreSaturated = true
-			if (dx * dx + dy * dy >= coreRadiusSquared) connectedSpikeSaturatedCount++
+			connectedCoreSaturatedCount++
 		} else spikeSaturatedCount++
 	}
-	if (connectedSpikeSaturatedCount >= MINIMUM_CONNECTED_SATURATED_SPIKE_SAMPLES) return { success: false, reason: 'saturated', area }
+	// A compact flooded core has equivalent radius sqrt(N / PI). Count only farther samples so a disk
+	// larger than coreRadius stays measurable while a saturated spike attached to the core still fails.
+	if (connectedCoreSaturatedCount >= MINIMUM_CONNECTED_SATURATED_SPIKE_SAMPLES) {
+		const protrusionRadius = Math.sqrt(connectedCoreSaturatedCount / PI) + SATURATED_CORE_PROTRUSION_MARGIN
+		const protrusionRadiusSquared = protrusionRadius * protrusionRadius
+		let connectedSpikeSaturatedCount = 0
+		for (let index = 0; index < pixelCount; index++) {
+			if ((mask[index] & (MASK_SATURATED | MASK_CORE)) !== (MASK_SATURATED | MASK_CORE)) continue
+			const dx = (index % width) - centerX
+			const dy = Math.floor(index / width) - centerY
+			if (dx * dx + dy * dy > protrusionRadiusSquared) connectedSpikeSaturatedCount++
+		}
+		if (connectedSpikeSaturatedCount >= MINIMUM_CONNECTED_SATURATED_SPIKE_SAMPLES) return { success: false, reason: 'saturated', area }
+	}
 
 	const background = estimateBackground(source, mask, workspace.statistics, pixelCount, backgroundUpperQuantile)
 	if (!background) return { success: false, reason: 'lowSignal', area }

@@ -3,9 +3,10 @@ import { galileanMutualEvents, saturnianMutualEvents } from '../../../src/astron
 import { Timescale, type Time, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 
 // The 2026-2027 Jupiter mutual-event season (Earth and Sun near the Jovian equatorial plane) provides the
-// reference events. Positions come from the L1.2 Galilean theory; the geometry is cross-checked against
-// JPL Horizons, whose independent JUP365 ephemeris agrees to the L1.2 accuracy (~0.005" for the
-// occultation separation, a few hundred km for the eclipse shadow distance).
+// reference events. Galilean reference values include the full L1.2 long-period Chebyshev corrections
+// (the ephemeris tests check IMCCE TestL1.2.res). Independently checked with one-second scans using
+// atan2(|a x b|, a . b) for light-retarded geocentric rays and |relative x axis| / |axis| for shadows.
+// Eclipse times include the shadowed moon's Earth light time. Saturn references use JPL Horizons.
 
 // Seconds of elapsed UTC from a reference instant.
 function secondsAfter(time: Time, reference: Time): number {
@@ -23,12 +24,11 @@ test('finds the Europa-Ganymede mutual occultation on 2026-12-05', () => {
 	expect(occultation.front).toBe('europa')
 	expect(occultation.back).toBe('ganymede')
 
-	// Impact 0.318: Horizons gives the two moons' apparent separation as 0.366" at mid-event versus 0.371"
-	// here (the L1.2-vs-JUP365 ephemeris difference), i.e. the same fraction of the ~1.16" contact limit.
-	expect(occultation.impactParameter).toBeCloseTo(0.318, 2)
+	// The independent scan gives 0.376877" separation against a ~1.165" contact limit: impact 0.32364.
+	expect(occultation.impactParameter).toBeCloseTo(0.324, 2)
 
-	// Mid-occultation 2026-12-05 19:17:59.7 UTC; the event lasts ~17.7 min with its contacts bracketing it.
-	expect(secondsAfter(occultation.middle, start)).toBeCloseTo(4679.7, -1)
+	// Mid-occultation ~2026-12-05 19:17:52 UTC; the event lasts ~17.7 min with its contacts bracketing it.
+	expect(secondsAfter(occultation.middle, start)).toBeCloseTo(4672, -1)
 	expect(secondsAfter(occultation.start!, start)).toBeLessThan(secondsAfter(occultation.middle, start))
 	expect(secondsAfter(occultation.end!, start)).toBeGreaterThan(secondsAfter(occultation.middle, start))
 	expect(secondsAfter(occultation.end!, occultation.start!)).toBeGreaterThan(900)
@@ -41,24 +41,25 @@ test('finds the Ganymede-shadow mutual eclipses on 2026-12-02', () => {
 	expect(events.length).toBe(2)
 
 	// Ganymede is nearer the Sun and casts its shadow; the first event is a nearly central eclipse of
-	// Callisto. Horizons Sun-centered geometric vectors put Callisto ~620 km from the shadow axis (~445 km
-	// here), both far inside the ~7600 km penumbra.
+	// Callisto. The independent scan puts it ~225 km from the shadow axis, far inside the ~7624 km
+	// contact limit (penumbral radius plus Callisto's radius), giving impact 0.02945.
 	const central = events[0]
 	expect(central.kind).toBe('eclipse')
 	expect(central.front).toBe('ganymede')
 	expect(central.back).toBe('callisto')
-	expect(central.impactParameter).toBeCloseTo(0.058, 2)
-	expect(secondsAfter(central.middle, start)).toBeCloseTo(6714.3, -1)
+	expect(central.impactParameter).toBeCloseTo(0.029, 2)
+	expect(secondsAfter(central.middle, start)).toBeCloseTo(6719, -1)
 
 	// The second is Ganymede shadowing Europa, less central and later; events are chronological.
 	expect(events[1].kind).toBe('eclipse')
+	expect(events[1].front).toBe('ganymede')
 	expect(events[1].back).toBe('europa')
 	expect(secondsAfter(events[1].middle, start)).toBeGreaterThan(secondsAfter(central.middle, start))
 }, 5000)
 
 test('reports an event that is only underway during the window', () => {
-	// A narrow window wholly inside the 2026-12-05 Europa-Ganymede occultation (mid 19:17:59.7, ending
-	// 19:26:56): the event overlaps the window although both its minimum and first contact lie before the
+	// A narrow window starting inside the 2026-12-05 Europa-Ganymede occultation (mid ~19:17:52, ending
+	// ~19:26:47): the event overlaps the window although both its minimum and first contact lie before the
 	// window start, so it must still be reported with the first contact blanked as undefined.
 	const start = timeYMDHMS(2026, 12, 5, 19, 20, 0, Timescale.UTC)
 	const stop = timeYMDHMS(2026, 12, 5, 19, 30, 0, Timescale.UTC)

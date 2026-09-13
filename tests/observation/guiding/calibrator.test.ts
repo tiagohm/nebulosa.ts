@@ -38,6 +38,7 @@ interface CalibrationSimulation {
 	readonly decVector: readonly [number, number]
 	readonly decBacklashSteps?: number
 	readonly reverseRaScale?: number
+	readonly reverseRaVector?: readonly [number, number]
 	readonly reverseRaBacklashSteps?: number
 	readonly maxFrames?: number
 }
@@ -100,12 +101,13 @@ function runCalibration(config: Partial<GuidingCalibrationConfig>, simulation: C
 		if (pulse?.ra.duration !== undefined && pulse.ra.duration > 0) {
 			const sign = pulse.ra.direction === calibrator.config.raDirection ? 1 : -1
 			const scale = sign < 0 ? (simulation.reverseRaScale ?? 1) : 1
+			const vector = sign < 0 ? (simulation.reverseRaVector ?? simulation.raVector) : simulation.raVector
 
 			if (sign < 0 && reverseRaBacklashRemaining > 0) {
 				reverseRaBacklashRemaining--
 			} else {
-				offsetX += simulation.raVector[0] * sign * scale * (pulse.ra.duration / calibrator.config.raPulse)
-				offsetY += simulation.raVector[1] * sign * scale * (pulse.ra.duration / calibrator.config.raPulse)
+				offsetX += vector[0] * sign * scale * (pulse.ra.duration / calibrator.config.raPulse)
+				offsetY += vector[1] * sign * scale * (pulse.ra.duration / calibrator.config.raPulse)
 			}
 		}
 
@@ -276,6 +278,23 @@ test('accepts an RA clearing step that overshoots the origin', () => {
 	expect(simulation.phases).toContain('decForwardPulse')
 })
 
+test('accepts an RA clearing step that passes the closest approach with perpendicular drift', () => {
+	const simulation = runCalibration(
+		{ maxClearingOffsetPx: 0.8, maxClearingSteps: 10, maxFrameJumpPx: 4 },
+		{
+			raVector: [0.8, 1.5],
+			decVector: [-0.15, 0.75],
+			reverseRaScale: 5,
+			reverseRaVector: [0.8, 0],
+		},
+	)
+
+	expect(simulation.step.failure).toBeUndefined()
+	expect(simulation.step.completed).toBeDefined()
+	expect(simulation.phases).toContain('decForwardPulse')
+	expect(simulation.step.diagnostics.clearingSteps).toBe(1)
+})
+
 test('warns when RA clearing stops near the residual offset', () => {
 	const simulation = runCalibration({ maxClearingOffsetPx: 0.8 }, { raVector: [0.8, 0.2], decVector: [-0.15, 0.75], reverseRaScale: 2.2 })
 	expect(simulation.step.completed).toBeDefined()
@@ -334,6 +353,36 @@ test('fails validation when RA and DEC are nearly parallel', () => {
 	expect(simulation.step.completed).toBeUndefined()
 	expect(simulation.step.failure).toBeDefined()
 	expect(simulation.step.failure!.code).toBe('axes_too_parallel')
+})
+
+test('accepts well-conditioned orthogonal calibration at low image rates', () => {
+	const simulation = runCalibration(
+		{
+			clearingMoveEnabled: false,
+			raPulse: 650,
+			decPulse: 650,
+			maxRaSteps: 20,
+			maxDecSteps: 20,
+			minNetRaTravelPx: 12,
+			minNetDecTravelPx: 10,
+		},
+		{ raVector: [0.6, 0], decVector: [0, 0.5], maxFrames: 45 },
+	)
+
+	expect(simulation.step.failure).toBeUndefined()
+	expect(simulation.step.completed).toBeDefined()
+
+	const completed = simulation.step.completed!
+	expect(completed.ra.ratePxPerMs).toBeCloseTo(0.6 / 650, 12)
+	expect(completed.dec.ratePxPerMs).toBeCloseTo(0.5 / 650, 12)
+	expect(completed.determinant).toBeCloseTo((0.6 * 0.5) / (650 * 650), 12)
+	expect(() => flipGuidingCalibration(completed)).not.toThrow()
+
+	const product = multiply2x2(completed.imageMotion, completed.imageToAxis)
+	expect(product[0]).toBeCloseTo(1, 6)
+	expect(product[1]).toBeCloseTo(0, 6)
+	expect(product[2]).toBeCloseTo(0, 6)
+	expect(product[3]).toBeCloseTo(1, 6)
 })
 
 test('tolerates one bad frame and resumes with the same pending pulse', () => {

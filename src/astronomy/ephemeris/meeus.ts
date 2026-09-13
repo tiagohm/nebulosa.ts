@@ -1860,13 +1860,14 @@ export namespace Conjunction {
 
 	// Returns fresh [conjunction time, latitude/declination difference in radians]. Times use the
 	// units of t1/t5. Unwraps private scratch differences dr in place around the central row's nearest
-	// conjunction branch; dd is unchanged. The five equally spaced rows must bracket a central conjunction.
+	// conjunction branch; dd is unchanged. The five equally spaced rows must bracket a conjunction
+	// (Len5 interpolating factor n in [-2, 2]); Δδ uses the same table domain as zero().
 	function conj(t1: number, t5: number, dr: NumberArray, dd: NumberArray) {
 		for (let i = 1; i < dr.length; i++) dr[i] = dr[i - 1] + atan2(sin(dr[i] - dr[i - 1]), cos(dr[i] - dr[i - 1]))
 		const shift = TAU * round(dr[2] / TAU)
 		for (let i = 0; i < dr.length; i++) dr[i] -= shift
 		const t = new Interpolation.Len5(t1, t5, dr).zero(true)
-		const deltad = new Interpolation.Len5(t1, t5, dd).interpolateXStrict(t)
+		const deltad = new Interpolation.Len5(t1, t5, dd).interpolateX(t)
 		return [t, deltad] as const
 	}
 }

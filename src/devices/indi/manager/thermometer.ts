@@ -51,7 +51,8 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 				if (device !== undefined) {
 					const { elements } = message
 
-					if (handleNumberValue(device, 'temperature', elements.TEMPERATURE?.value ?? elements.CCD_TEMPERATURE_VALUE?.value, undefined, Math.round)) {
+					// Math.round is used to reduce temperature changes to 1°C.
+					if (handleNumberValue(device, 'temperature', elements.TEMPERATURE?.value ?? elements.CCD_TEMPERATURE_VALUE?.value, message.state, Math.round)) {
 						this.updated(device, 'temperature', message.state)
 
 						const parent = (device as SubDevice<Thermometer, Thermometer>).parent

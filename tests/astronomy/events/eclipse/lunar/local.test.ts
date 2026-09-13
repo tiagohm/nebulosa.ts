@@ -3,8 +3,8 @@ import { nearestLunarEclipse } from '../../../../../src/astronomy/bodies/moon'
 import type { SunMoonPosition } from '../../../../../src/astronomy/events/eclipse/eclipse'
 import { computeLocalLunarEclipseCircumstances, computeLocalLunarEclipseViewGeometry, listLocalLunarEclipses, moonAltitudeAt, type LocalLunarEclipseSvgCircle, type LocalLunarEclipseSvgPolygon } from '../../../../../src/astronomy/events/eclipse/lunar/local'
 import { computeLunarEclipseMapGeometry } from '../../../../../src/astronomy/events/eclipse/lunar/map'
-import { toJulianDay, type Time, timeYMDHMS, greenwichApparentSiderealTime, timeAtJulianDay } from '../../../../../src/astronomy/time/time'
-import { PI, PIOVERTWO, TAU } from '../../../../../src/core/constants'
+import { toJulianDay, type Time, timeShift, timeYMDHMS, greenwichApparentSiderealTime, timeAtJulianDay, tt, utc } from '../../../../../src/astronomy/time/time'
+import { DAYSEC, PI, PIOVERTWO, TAU } from '../../../../../src/core/constants'
 import { deg } from '../../../../../src/math/units/angle'
 import { fixedSunMoonPosition } from '../util'
 
@@ -326,8 +326,8 @@ describe('listLocalLunarEclipses', () => {
 	// below the horizon - none observable. Contact times still come from the real Meeus series.
 	const start = timeYMDHMS(1997, 1, 1)
 	const end = timeYMDHMS(2000, 1, 1)
-	const startJd = toJulianDay(start)
-	const endJd = toJulianDay(end)
+	const startJd = toJulianDay(tt(start))
+	const endJd = toJulianDay(tt(end))
 	const antiLongitude = FAST_LONGITUDE + PI
 
 	test('lists every eclipse in (start, end] observable from the location, earliest-first', () => {
@@ -356,6 +356,21 @@ describe('listLocalLunarEclipses', () => {
 		const direct = computeLocalLunarEclipseCircumstances(first.eclipse, FAST_LONGITUDE, FAST_LATITUDE, fastSunMoonPosition)
 		expect(first.circumstances.visibility.kind).toBe(direct.visibility.kind)
 		expect(first.circumstances.details.observableDuration).toBeCloseTo(direct.details.observableDuration, 6)
+	})
+
+	// maximalTime is TT; timeYMDHMS defaults to UTC. The closed end of (start, end] is an instant, so ending
+	// on utc(maximalTime) must include the same eclipse as ending on maximalTime itself.
+	test('includes an eclipse whose maximum equals a UTC endTime', () => {
+		const windowStart = timeYMDHMS(1997, 1, 1)
+		const maxJd = toJulianDay(TOTAL.maximalTime)
+		const listsMaximum = (endTime: Time) => listLocalLunarEclipses(FAST_LONGITUDE, FAST_LATITUDE, windowStart, endTime, fastSunMoonPosition).some((entry) => toJulianDay(entry.eclipse.maximalTime) === maxJd)
+
+		expect(listsMaximum(TOTAL.maximalTime)).toBe(true)
+		expect(listsMaximum(utc(TOTAL.maximalTime))).toBe(true)
+
+		const sixtyThreeSeconds = 63 / DAYSEC
+		expect(listsMaximum(timeShift(utc(TOTAL.maximalTime), -sixtyThreeSeconds))).toBe(false)
+		expect(listsMaximum(timeShift(utc(TOTAL.maximalTime), sixtyThreeSeconds))).toBe(true)
 	})
 })
 

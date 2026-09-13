@@ -52,6 +52,11 @@ describe.skipIf(SKIP)('search', () => {
 			expect(data.orbit.elements[0].sigma).not.toBeEmpty()
 			expect(data.orbit.elements[0].units).toBeNull()
 			expect(data.orbit.elements[0].name).toBe('e')
+			const elementNames = data.orbit.elements.map((element) => element.name)
+			expect(elementNames).toContain('tp_cd')
+			expect(elementNames).toContain('ad')
+			expect(elementNames).not.toContain('cd_tp')
+			expect(elementNames).not.toContain('a_D')
 			expect(data.phys_par).toHaveLength(2)
 			expect(data.phys_par[0].desc).toBe('absolute magnitude of comet and coma (i.e. total)')
 			expect(data.phys_par[0].value).toBe('8.5')
@@ -71,6 +76,18 @@ describe.skipIf(SKIP)('search', () => {
 			expect(data.list.length).toBeGreaterThanOrEqual(319)
 			expect(data.list[0].pdes).toBe('253P')
 			expect(data.list[0].name).toBe('253P/PANSTARRS')
+			expect(data.message).toBe('specified query matched more than one object')
+		}
+	})
+
+	test('alternate designations', async () => {
+		const data = await search('Eros')
+		expect('object' in data).toBeTrue()
+
+		if ('object' in data) {
+			expect(data.object.prefix).toBeNull()
+			expect(data.object.des_alt[0].des).toBe('1956 PC')
+			expect(data.object.des_alt[1].pri).toBe('A898 PA')
 		}
 	})
 

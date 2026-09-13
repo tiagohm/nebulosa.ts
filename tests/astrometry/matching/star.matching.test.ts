@@ -468,6 +468,41 @@ describe('star matching synthetic registration', () => {
 		expectTransformAgreement(expected, resultTransform(result)!, current)
 	})
 
+	test('keeps similarity for noiseless identity and translation under default affine fallback', () => {
+		const identityStars = generateScenario({ seed: 7, transform: similarity(1, 0, 0, 0), noiseStd: 0 }).reference
+		const identity = matchStars(identityStars, identityStars)
+		expect(identity.success).toBeTrue()
+		expect(identity.model).toBe('similarity')
+		expect(identity.similarity?.scale).toBeCloseTo(1, 10)
+		expect(identity.similarity?.rotation).toBeCloseTo(0, 10)
+		expect(identity.similarity?.mirrored).toBeFalse()
+		expect(identity.rmsError).toBeCloseTo(0, 10)
+
+		const translation = generateScenario({ seed: 8, transform: similarity(1, 0, 48, -26), noiseStd: 0 })
+		const translated = matchStars(translation.reference, translation.current)
+		expect(translated.success).toBeTrue()
+		expect(translated.model).toBe('similarity')
+		expect(translated.similarity?.scale).toBeCloseTo(1, 10)
+		expect(translated.similarity?.rotation).toBeCloseTo(0, 10)
+		expect(translated.similarity?.mirrored).toBeFalse()
+		expectTransformAgreement(translation.truth, resultTransform(translated)!, translation.current)
+	})
+
+	test('explicit affine preference still upgrades a noiseless similarity solution', () => {
+		const stars = generateScenario({ seed: 7, transform: similarity(1, 0, 0, 0), noiseStd: 0 }).reference
+		const result = matchStars(stars, stars, { modelPreference: 'affine' })
+		expect(result.success).toBeTrue()
+		expect(result.model).toBe('affine')
+		expect(result.similarity).toBeUndefined()
+		expect(result.affine).toBeDefined()
+		expect(result.affine?.m00).toBeCloseTo(1, 10)
+		expect(result.affine?.m01).toBeCloseTo(0, 10)
+		expect(result.affine?.m10).toBeCloseTo(0, 10)
+		expect(result.affine?.m11).toBeCloseTo(1, 10)
+		expect(result.affine?.tx).toBeCloseTo(0, 10)
+		expect(result.affine?.ty).toBeCloseTo(0, 10)
+	})
+
 	test('uses affine fallback only when enabled', () => {
 		const scenario = generateScenario({ seed: 6, transform: affine(1.01, 0.045, 22, -0.02, 0.97, 31), noiseStd: 0.08, currentDropFraction: 0.1, currentOutliers: 6 })
 		const similarityOnly = matchStars(scenario.reference, scenario.current, { allowAffineFallback: false, minInliers: 12 })

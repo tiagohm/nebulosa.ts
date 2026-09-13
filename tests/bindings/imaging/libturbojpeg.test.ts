@@ -13,6 +13,37 @@ describe('compress', () => {
 	const grayscale = Buffer.alloc(100 * 100)
 	for (let i = 0; i < grayscale.length; i++) grayscale[i] = i % 256
 
+	test('rejects an undersized destination without writing to it', () => {
+		const data = Buffer.alloc(32 * 32 * 3, 128)
+		// Keep native writes inside a live allocation even when running against the broken binding.
+		const backing = Buffer.alloc(jpeg.estimateBufferSize(32, 32, '4:4:4'), 0xa5)
+		const destination = backing.subarray(0, 32)
+
+		expect(jpeg.compress(data, 32, 32, 'RGB', 90, '4:4:4', destination)).toBeUndefined()
+		expect(backing.every((value) => value === 0xa5)).toBe(true)
+	})
+
+	test.each(['4:4:4', '4:2:0', 'GRAY'] as const)('accepts the worst-case destination for %s', (subsampling) => {
+		const data = Buffer.alloc(32 * 32 * 3, 128)
+		const destination = Buffer.alloc(jpeg.estimateBufferSize(32, 32, subsampling))
+		const bytes = jpeg.compress(data, 32, 32, 'RGB', 90, subsampling, destination)
+
+		expect(bytes).toBeDefined()
+		expect(bytes!.buffer).toBe(destination.buffer)
+		expect(bytes!.byteOffset).toBe(destination.byteOffset)
+		expect(jpeg.readHeader(bytes!)?.subsampling).toBe(subsampling)
+		expect(jpeg.decompress(bytes!)).toBeDefined()
+	})
+
+	test('sizes a grayscale destination using the effective subsampling', () => {
+		const data = Buffer.alloc(32 * 32, 128)
+		const destination = Buffer.alloc(jpeg.estimateBufferSize(32, 32, 'GRAY'))
+		const bytes = jpeg.compress(data, 32, 32, 'GRAY', 90, '4:4:4', destination)
+
+		expect(bytes).toBeDefined()
+		expect(jpeg.readHeader(bytes!)?.subsampling).toBe('GRAY')
+	})
+
 	test('rgb', () => {
 		const bytes = jpeg.compress(rgb, 100, 100, 'RGB', 100)
 		expect(bytes).toBeDefined()
@@ -64,6 +95,26 @@ describe('read header', () => {
 
 describe('decompress', () => {
 	const jpeg = new Jpeg()
+
+	test('defaults to CMYK for a YCCK stream', () => {
+		const width = 8
+		const height = 8
+		const cmyk = Buffer.alloc(width * height * 4, 64)
+		const bytes = jpeg.compress(cmyk, width, height, 'CMYK', 90)
+
+		expect(bytes).toBeDefined()
+		expect(jpeg.readHeader(bytes!)?.colorspace).toBe('YCCK')
+		const explicit = jpeg.decompress(bytes!, 'CMYK')
+		expect(explicit).toBeDefined()
+
+		const decoded = jpeg.decompress(bytes!)
+		expect(decoded).toBeDefined()
+		expect(decoded!.width).toBe(width)
+		expect(decoded!.height).toBe(height)
+		expect(decoded!.format).toBe('CMYK')
+		expect(decoded!.data.length).toBe(cmyk.length)
+		expect(decoded!.data).toEqual(explicit!.data)
+	})
 
 	test('grayscale', () => {
 		const width = 16

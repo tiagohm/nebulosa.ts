@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { DEFAULT_CAMERA, type Camera, type Client, type Device, DeviceInterfaceType } from '../../../../src/devices/indi/device'
 import { CameraManager } from '../../../../src/devices/indi/manager/camera'
-import type { DefText, DefTextVector } from '../../../../src/devices/indi/types'
+import { handleMinMaxValue } from '../../../../src/devices/indi/manager/device'
+import type { DefText, DefTextVector, OneNumber } from '../../../../src/devices/indi/types'
 import { client, setupDevice } from './util'
 
 test('dome interface bit is rediscovered as a dome device type after interface bitmask be updated', () => {
@@ -31,6 +32,14 @@ test('dome interface bit is rediscovered as a dome device type after interface b
 
 	updated = false
 
+	DRIVER_INTERFACE.value = (DeviceInterfaceType.CCD | DeviceInterfaceType.FOCUSER).toFixed(0)
+	manager.textVector(client, message, 'setTextVector')
+
+	expect(camera!.interfaces).toEqual(['camera', 'focuser'])
+	expect(updated).toBeTrue()
+
+	updated = false
+
 	DRIVER_INTERFACE.value = (DeviceInterfaceType.CCD | DeviceInterfaceType.FILTER | DeviceInterfaceType.FOCUSER).toFixed(0)
 	manager.textVector(client, message, 'setTextVector')
 
@@ -44,6 +53,14 @@ test('dome interface bit is rediscovered as a dome device type after interface b
 
 	expect(camera!.interfaces).toEqual(['camera', 'rotator'])
 	expect(updated).toBeTrue()
+})
+
+test('clamps a value when an updated range changes without changing the value', () => {
+	const property = { value: 80, min: 0, max: 100, step: 1 }
+	const element = { name: 'Gain', value: 80, min: 0, max: 50, step: 1 } satisfies OneNumber
+
+	expect(handleMinMaxValue(property, element, 'setNumberVector')).toBeTrue()
+	expect(property).toEqual({ value: 50, min: 0, max: 50, step: 1 })
 })
 
 describe('del property', () => {
@@ -84,5 +101,23 @@ describe('del property', () => {
 		expect(manager).toHaveLength(1)
 		expect(manager.get(client, closing.name)).toBeUndefined()
 		expect(manager.get(otherClient, remaining.name)).toBe(remaining)
+	})
+
+	test('list returns no devices for unknown or closed client IDs', () => {
+		const otherClient: Client = { ...client, id: 'other' }
+		const manager = new CameraManager()
+		const first = setupDevice(structuredClone(DEFAULT_CAMERA))
+		const second = setupDevice(structuredClone(DEFAULT_CAMERA), otherClient)
+
+		manager.add(first)
+		manager.add(second)
+
+		expect(manager.list('missing').size).toBe(0)
+		expect(manager.list(otherClient.id)).toEqual(new Set([second]))
+
+		manager.close(otherClient, true)
+
+		expect(manager.list(otherClient.id).size).toBe(0)
+		expect(manager.list(client)).toEqual(new Set([first]))
 	})
 })

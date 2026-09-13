@@ -77,6 +77,7 @@ test('azimuthal equidistant preserves the center angular distance as plane radiu
 
 test('azimuthal projection singularities and inverse domains are rejected', () => {
 	expect(new Gnomonic(0, 0).project(PI, 0)).toBeUndefined()
+	expect(new Gnomonic(0, 0).project(PIOVERTWO, 0)).toBeUndefined()
 	expect(new Orthographic(0, 0).project(PI, 0)).toBeUndefined()
 	expect(new Stereographic(0, 0).project(PI, 0)).toBeUndefined()
 	expect(new LambertAzimuthalEqualArea(0, 0).project(PI, 0)).toBeUndefined()
@@ -194,6 +195,56 @@ describe('cylindrical projections round-trip', () => {
 	}
 })
 
+test('mercator and web mercator round-trip with a non-zero central meridian', () => {
+	const longitude = deg(45)
+	const latitude = deg(10)
+	const options = { centralMeridian: deg(30) } as const
+	const westOptions = { centralMeridian: deg(30), raAxisDirection: 'west' } as const
+
+	for (const { projection, callOptions } of [
+		{ projection: new Mercator(options), callOptions: undefined },
+		{ projection: new Mercator(), callOptions: options },
+		{ projection: new Mercator(westOptions), callOptions: undefined },
+		{ projection: new Mercator(), callOptions: westOptions },
+		{ projection: new WebMercator(options), callOptions: undefined },
+		{ projection: new WebMercator(), callOptions: options },
+		{ projection: new WebMercator(westOptions), callOptions: undefined },
+		{ projection: new WebMercator(), callOptions: westOptions },
+	]) {
+		const projected = projection.project(longitude, latitude, undefined, callOptions)
+		expect(projected).toBeDefined()
+		if (projected === undefined) continue
+
+		const unprojected = projection.unproject(projected.x, projected.y, undefined, callOptions)
+		expect(unprojected).toBeDefined()
+		if (unprojected === undefined) continue
+
+		expect(normalizePI(unprojected.x - longitude)).toBeCloseTo(0, 12)
+		expect(unprojected.y).toBeCloseTo(latitude, 12)
+	}
+})
+
+test('web mercator honors constructor and per-call plane options', () => {
+	const longitude = deg(45)
+	const latitude = deg(10)
+	const web = new WebMercator({ centralMeridian: deg(30) })
+	const projected = web.project(longitude, latitude)
+	expect(projected).toBeDefined()
+	if (projected === undefined) return
+
+	expect(projected.x).toBeCloseTo(deg(15), 12)
+	expect(projected.y).toBeCloseTo(new Mercator().project(0, latitude)!.y, 12)
+
+	const scale = { scale: 100 } as const
+	expect(new WebMercator().project(deg(10), 0, undefined, scale)?.x).toBeCloseTo(new Mercator().project(deg(10), 0, undefined, scale)!.x, 12)
+
+	const unprojected = web.unproject(projected.x, projected.y)
+	expect(unprojected).toBeDefined()
+	if (unprojected === undefined) return
+	expect(normalizePI(unprojected.x - longitude)).toBeCloseTo(0, 12)
+	expect(unprojected.y).toBeCloseTo(latitude, 12)
+})
+
 test('standard-parallel projections round-trip with a non-zero central meridian', () => {
 	// These previously failed: the equal-area and stereographic projects scaled the longitude by
 	// cos(standardParallel) before subtracting the central meridian, and the stereographic inverse
@@ -249,6 +300,48 @@ describe('cylindrical projections match expected known values', () => {
 			expect(projected.y).toBeCloseTo(y, 14)
 		})
 	}
+})
+
+test('pole-finite cylindrical projections accept the poles by default', () => {
+	const poles = [PIOVERTWO, -PIOVERTWO] as const
+	const projections = [new PlateCarree(), new Miller(), new CylindricalEquidistant(), new CylindricalStereographic(), new Gall(), new Braun()] as const
+
+	for (const projection of projections) {
+		for (const latitude of poles) {
+			const projected = projection.project(0, latitude)
+			expect(projected).toBeDefined()
+			if (projected === undefined) continue
+			expect(Number.isFinite(projected.y)).toBe(true)
+		}
+	}
+
+	const millerPole = new Miller().project(0, PIOVERTWO)
+	expect(millerPole).toBeDefined()
+	if (millerPole !== undefined) {
+		expect(millerPole.y).toBeCloseTo(1.25 * Math.log(Math.tan(Math.PI / 4 + 0.4 * PIOVERTWO)), 12)
+	}
+
+	const highLatitude = deg(87)
+	const sphericalEllipsoidal = new EllipsoidalMercator({ sphericalOnly: true }).project(0, highLatitude)
+	const mercator = new Mercator().project(0, highLatitude)
+	expect(sphericalEllipsoidal).toBeDefined()
+	expect(mercator).toBeDefined()
+	if (sphericalEllipsoidal === undefined || mercator === undefined) return
+	expect(sphericalEllipsoidal.y).toBeCloseTo(mercator.y, 12)
+})
+
+test('cylindrical equal-area inverse rejects points outside the sphere image', () => {
+	expect(new CylindricalEqualArea().unproject(0, 10)).toBeUndefined()
+	expect(new GallPeters().unproject(0, 50)).toBeUndefined()
+
+	const pole = new CylindricalEqualArea().project(0, PIOVERTWO)
+	expect(pole).toBeDefined()
+	if (pole === undefined) return
+
+	const unprojected = new CylindricalEqualArea().unproject(pole.x, pole.y)
+	expect(unprojected).toBeDefined()
+	if (unprojected === undefined) return
+	expect(unprojected.y).toBeCloseTo(PIOVERTWO, 12)
 })
 
 test('projection options validate domains and parameters', () => {
@@ -343,6 +436,29 @@ test('latitude options clamp to the configured maximum latitude', () => {
 	expect(clamped.y).toBeCloseTo(Math.asinh(Math.tan(maxLatitude)), 12)
 })
 
+test('ellipsoidal mercator honors constructor plane options', () => {
+	const longitude = deg(45)
+	const latitude = deg(10)
+	const eccentricity = 0.08181919084262149
+	const constructorOptions = { eccentricity, scale: 100, centralMeridian: deg(30) }
+	const fromConstructor = new EllipsoidalMercator(constructorOptions).project(longitude, latitude)
+	const fromCall = new EllipsoidalMercator({ eccentricity }).project(longitude, latitude, undefined, { scale: 100, centralMeridian: deg(30) })
+
+	expect(fromConstructor).toBeDefined()
+	expect(fromCall).toBeDefined()
+	if (fromConstructor === undefined || fromCall === undefined) return
+
+	expect(fromConstructor.x).toBeCloseTo(fromCall.x, 12)
+	expect(fromConstructor.y).toBeCloseTo(fromCall.y, 12)
+	expect(fromConstructor.x).toBeCloseTo(deg(15) * 100, 12)
+
+	const unprojected = new EllipsoidalMercator(constructorOptions).unproject(fromConstructor.x, fromConstructor.y)
+	expect(unprojected).toBeDefined()
+	if (unprojected === undefined) return
+	expect(normalizePI(unprojected.x - longitude)).toBeCloseTo(0, 12)
+	expect(unprojected.y).toBeCloseTo(latitude, 12)
+})
+
 test('ellipsoidal projection options select the eccentricity model and inverse tolerance', () => {
 	const latitude = deg(45)
 	const eccentricity = 0.08181919084262149
@@ -417,6 +533,17 @@ test('batch projection rejects points outside the projection domain', () => {
 	expect(projected).toBeUndefined()
 })
 
+test('polyline split uses the projection instance central meridian', () => {
+	const points = [
+		{ x: deg(-10), y: 0 },
+		{ x: deg(10), y: 0 },
+	] as const
+	const projection = new PlateCarree(0, { centralMeridian: PI })
+
+	expect(projectPolyline(projection, points)).toHaveLength(2)
+	expect(projectPolyline(projection, points, { centralMeridian: PI })).toHaveLength(2)
+})
+
 test('anti-meridian polylines are split before projection', () => {
 	const projection = new PlateCarree()
 
@@ -428,6 +555,24 @@ test('anti-meridian polylines are split before projection', () => {
 	expect(lines).toHaveLength(2)
 	expect(lines[0]).toHaveLength(1)
 	expect(lines[1]).toHaveLength(1)
+})
+
+test('polyline densification still splits antimeridian crossings', () => {
+	const lines = projectPolyline(
+		new PlateCarree(),
+		[
+			{ x: deg(170), y: 0 },
+			{ x: deg(-170), y: 0 },
+		],
+		{ maxSegmentRadians: deg(10) },
+	)
+
+	expect(lines.length).toBeGreaterThanOrEqual(2)
+	for (const line of lines) {
+		for (let i = 1; i < line.length; i++) {
+			expect(Math.abs(line[i].x - line[i - 1].x)).toBeLessThan(PI)
+		}
+	}
 })
 
 test('polyline densification inserts intermediate projected points', () => {

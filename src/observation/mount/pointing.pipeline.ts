@@ -130,7 +130,7 @@ function celestialToWorldDirection(frame: MountWorldFrame, rightAscension: Angle
 
 	requireApparentFrame(context.frame)
 
-	const [azimuth, altitude] = equatorialToHorizontal(rightAscension, declination, latitude, localSiderealTime(time, longitude, true))
+	const [azimuth, altitude] = equatorialToHorizontal(rightAscension, declination, latitude, localSiderealTime(time, longitude))
 	return horizontalToEnuVector(azimuth, altitude)
 }
 
@@ -169,7 +169,7 @@ function worldDirectionToCelestial(frame: MountWorldFrame, direction: Vec3, cont
 	requireApparentFrame(context.frame)
 
 	const horizontal = enuVectorToHorizontal(direction)
-	const [rightAscension, declination] = horizontalToEquatorial(horizontal.azimuth, horizontal.altitude, latitude, localSiderealTime(time, longitude, true))
+	const [rightAscension, declination] = horizontalToEquatorial(horizontal.azimuth, horizontal.altitude, latitude, localSiderealTime(time, longitude))
 	return { rightAscension, declination }
 }
 

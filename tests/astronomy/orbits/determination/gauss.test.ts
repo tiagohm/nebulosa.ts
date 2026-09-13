@@ -104,6 +104,25 @@ test('does not select the far branch for multiple-root circular arcs', () => {
 	}
 })
 
+test('does not select the collocated observer root for a heliocentric NEO', () => {
+	const orbit = KeplerOrbit.trueAnomaly(1.05, 0.3, 0.2, 0.5, 1.2, 3, EPOCH, MU, IDENTITY_ROTATION)
+	const observation = (offsetDays: number): GaussObservation => {
+		const time = timeShift(EPOCH, offsetDays)
+		const angle = (TAU * offsetDays) / DAYSPERJY
+		const observer: MutVec3 = [Math.cos(angle), Math.sin(angle), 0]
+		const model = modelRaDec(orbit.at(time)[0], observer)
+		return { time, rightAscension: model.rightAscension, declination: model.declination, observer }
+	}
+
+	const result = gauss(observation(-2), observation(0), observation(2), { mu: MU })
+	const [truePosition] = orbit.at(EPOCH)
+
+	expect(result.diagnostics.candidateRoots.length).toBeGreaterThan(1)
+	expect(Math.abs(result.diagnostics.selectedRoot - vecLength(truePosition))).toBeLessThan(1e-3)
+	expect(result.ranges.rho2).toBeGreaterThan(1)
+	expect(vecDistance(result.state.r, truePosition)).toBeLessThan(1e-2)
+})
+
 test('rejects degenerate line-of-sight geometry', () => {
 	const [obs1, obs2, obs3] = observations()
 	const sameLineOfSight = { rightAscension: obs1.rightAscension, declination: obs1.declination }

@@ -780,17 +780,18 @@ export function correctPointingCoordinate(model: FittedPointingModel, input: Rea
 	}
 
 	const [rightAscension, declination] = eraC2s(...command)
+	const normalizedRightAscension = normalizeAngle(rightAscension)
 
-	if (!clamped) return { rightAscension, declination, predictedError, converged, iterations, residual, clamped }
+	if (!clamped) return { rightAscension: normalizedRightAscension, declination, predictedError, converged, iterations, residual, clamped }
 
 	// The clamp moved the command away from the candidate the loop settled on, so the residual measured
 	// there no longer describes where the mount would land. Re-measure it against the command actually
 	// returned, which is what the field documents and what a caller judges the correction by. A degenerate
 	// re-projection leaves the loop's value in place, as the loop itself does.
-	const clampedError = predictPointingModelError(model, { ...input, rightAscension, declination })
+	const clampedError = predictPointingModelError(model, { ...input, rightAscension: normalizedRightAscension, declination })
 	const offset = commandOffset(target, command, clampedError)
 
-	return { rightAscension, declination, predictedError: clampedError, converged, iterations, residual: offset === undefined ? residual : Math.hypot(offset.x, offset.y), clamped }
+	return { rightAscension: normalizedRightAscension, declination, predictedError: clampedError, converged, iterations, residual: offset === undefined ? residual : Math.hypot(offset.x, offset.y), clamped }
 }
 
 // Result returned when the inversion cannot produce a command it is able to measure: the target itself,

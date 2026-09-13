@@ -175,15 +175,15 @@ export function zellersCongruence(year: number | readonly [number, number, numbe
 		year -= 1
 	}
 
-	// Extract year part (k) and century (j)
-	const k = year % 100
+	// Century (j) and year-of-century (k) use Euclidean remainder so year <= 0 stays in 0..99.
 	const j = Math.floor(year / 100)
+	const k = year - 100 * j
 
 	// Gregorian calendar formula
 	// 0=Saturday, 1=Sunday, ..., 6=Friday
-	const h = (day + Math.floor((13 * (month + 1)) / 5) + k + Math.floor(k / 4) + Math.floor(j / 4) + 5 * j) % 7
+	const h = pmod(day + Math.floor((13 * (month + 1)) / 5) + k + Math.floor(k / 4) + Math.floor(j / 4) + 5 * j, 7)
 
-	return (h + 6) % 7
+	return pmod(h + 6, 7)
 }
 
 // Reads a single UTC calendar or time field.
@@ -226,7 +226,7 @@ export function temporalSet(temporal: Temporal, value: number, unit: TemporalUni
 
 // Formats a timestamp with either a custom pattern or Intl.DateTimeFormat.
 export function formatTemporal(temporal: Temporal | ReturnType<typeof temporalToDate>, format: Intl.DateTimeFormat | string = DATE_TIME_FORMAT, timezone: number | true = 0) {
-	return typeof format === 'string' ? formatTemporalFromPattern(temporal, format, timezone === true ? TIMEZONE : timezone) : format.format(typeof temporal === 'number' ? temporal : Date.UTC(...temporal))
+	return typeof format === 'string' ? formatTemporalFromPattern(temporal, format, timezone === true ? TIMEZONE : timezone) : format.format(typeof temporal === 'number' ? temporal : temporalFromDate(...temporal))
 }
 
 // Month and weekday display names (and lowercase short month names for case-insensitive parsing), plus
@@ -336,9 +336,11 @@ export function formatTemporalFromPattern(temporal: Temporal | ReturnType<typeof
 	for (const { found, text } of tokens) {
 		if (found) {
 			switch (text) {
-				case 'YYYY':
-					output.push(year.toFixed(0).padStart(4, '0'))
+				case 'YYYY': {
+					const abs = Math.abs(year).toFixed(0).padStart(4, '0')
+					output.push(year < 0 ? `-${abs}` : abs)
 					break
+				}
 				case 'YYY':
 					output.push(year.toFixed(0))
 					break

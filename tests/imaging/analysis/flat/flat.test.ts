@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { resolveFlatContextCfaOffset } from '../../../../src/imaging/analysis/flat/context'
 import { analyzeFlat } from '../../../../src/imaging/analysis/flat/flat'
 import { generateSyntheticFlatImage } from '../../../../src/imaging/synthetic/flat'
 
@@ -48,6 +49,35 @@ test('does not let conclusive RGB planes hide missing clipping evidence', () => 
 	expect(result.assessment.verdict).toBe('inconclusive')
 })
 
+test('explains inconclusive clipping when a plane has no finite samples', () => {
+	const image = generateSyntheticFlatImage({ width: 4, height: 4, bias: 0, signal: 100, vignetting: 0 })
+	image.raw.fill(Number.NaN)
+	const result = analyzeFlat({ frame: { image } }, { effectiveClip: { lower: 0, upper: 4095 }, criteria: { maximumClippedFraction: 0 } })
+
+	expect(result.assessment.clipping.status).toBe('unknown')
+	expect(result.assessment.verdict).toBe('inconclusive')
+	expect(result.assessment.reasons).toContain('nonFiniteSamples')
+	expect(result.assessment.reasons).toContain('insufficientSamples')
+})
+
+test('explains inconclusive clipping from a localized non-finite tile', () => {
+	const image = generateSyntheticFlatImage({ width: 64, height: 64, bias: 0, signal: 100, vignetting: 0 })
+	for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) image.raw[y * 64 + x] = Number.NaN
+	const result = analyzeFlat(
+		{ frame: { image } },
+		{
+			tile: { width: 16, height: 16 },
+			effectiveClip: { lower: 0, upper: 4095 },
+			criteria: { maximumClippedFraction: 0 },
+		},
+	)
+
+	expect(result.planes[0].spatial.tiles).toHaveLength(15)
+	expect(result.assessment.clipping.status).toBe('unknown')
+	expect(result.assessment.verdict).toBe('inconclusive')
+	expect(result.assessment.reasons).toContain('nonFiniteSamples')
+})
+
 test('evaluates RGB targets independently without hiding weak channels', () => {
 	const image = generateSyntheticFlatImage({ width: 2, height: 2, channels: 3, bias: 0, signal: 100, vignetting: 0, channelResponse: [1, 0.5, 0.25] })
 	const result = analyzeFlat(
@@ -90,6 +120,33 @@ test('uses targetArea for signal but the full area for clipping', () => {
 	expect(result.assessment.verdict).toBe('rejected')
 })
 
+test('ignores FITS Bayer offsets on images without a mosaic', () => {
+	const mono = generateSyntheticFlatImage({ width: 2, height: 2, bias: 0, signal: 1000, vignetting: 0 })
+	const monoWithOffset = { ...mono, header: { ...mono.header, XBAYROFF: 0, YBAYROFF: 0 } }
+	expect(monoWithOffset.metadata.bayer).toBeUndefined()
+	expect(resolveFlatContextCfaOffset({ image: monoWithOffset })).toBeUndefined()
+	expect(analyzeFlat({ frame: { image: monoWithOffset } }).planes.map((plane) => plane.plane)).toEqual(['mono'])
+
+	const rgb = generateSyntheticFlatImage({ width: 2, height: 2, channels: 3, bias: 0, signal: 1000, vignetting: 0 })
+	const rgbWithOffset = { ...rgb, header: { ...rgb.header, XBAYROFF: 0, YBAYROFF: 0 } }
+	expect(rgbWithOffset.metadata.bayer).toBeUndefined()
+	expect(resolveFlatContextCfaOffset({ image: rgbWithOffset })).toBeUndefined()
+	expect(analyzeFlat({ frame: { image: rgbWithOffset } }).planes.map((plane) => plane.plane)).toEqual(['red', 'green', 'blue'])
+})
+
+test('shifts CFA phase from a complete integer XBAYROFF/YBAYROFF pair', () => {
+	const image = generateSyntheticFlatImage({ width: 2, height: 2, bayer: 'RGGB', bias: 0, signal: 100, vignetting: 0, channelResponse: [1, 0.5, 0.25] })
+	const shifted = { ...image, header: { ...image.header, XBAYROFF: 1, YBAYROFF: 0 } }
+	expect(image.metadata.bayer).toBe('RGGB')
+	expect(resolveFlatContextCfaOffset({ image: shifted })).toEqual([1, 0])
+	expect(analyzeFlat({ frame: { image: shifted } }).planes.map((plane) => [plane.plane, plane.observed.median])).toEqual([
+		['red', 50],
+		['green1', 100],
+		['green2', 25],
+		['blue', 50],
+	])
+})
+
 test('preserves local CFA phase and separate green planes through analysis', () => {
 	const image = generateSyntheticFlatImage({
 		width: 2,
@@ -108,6 +165,14 @@ test('preserves local CFA phase and separate green planes through analysis', () 
 		['green2', 50],
 		['blue', 25],
 	])
+})
+
+test('does not treat an empty targets object as a configured check', () => {
+	const image = generateSyntheticFlatImage({ width: 4, height: 4, bias: 0, signal: 100, vignetting: 0 })
+	const result = analyzeFlat({ frame: { image } }, { effectiveClip: { upper: 4095 }, criteria: { targets: {}, maximumClippedFraction: 0 } })
+
+	expect(result.assessment.verdict).toBe('accepted')
+	expect(result.assessment.reasons).toEqual([])
 })
 
 test('requires corrected targets to have a reference', () => {

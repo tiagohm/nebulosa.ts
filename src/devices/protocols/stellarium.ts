@@ -23,12 +23,21 @@ export interface StellariumProtocolServerOptions {
 	handler: StellariumProtocolHandler
 }
 
+// Minimum valid message size: two-byte length and two-byte type fields.
+const STELLARIUM_MESSAGE_HEADER_SIZE = 4
+// Size of a client-to-server goto message, including its four-byte header.
+const STELLARIUM_GOTO_MESSAGE_SIZE = 20
+// Maximum message size accepted from Stellarium's telescope-control client.
+const STELLARIUM_MAX_MESSAGE_SIZE = 120
+
 // TCP server speaking the Stellarium telescope protocol. Decodes goto requests and broadcasts the
 // current coordinates as the protocol's 24-byte position messages.
 // https://free-astro.org/images/b/b7/Stellarium_telescope_protocol.txt
 // https://github.com/Stellarium/stellarium/blob/master/plugins/TelescopeControl/src/TelescopeClient.cpp
 export class StellariumProtocolServer {
 	readonly #sockets: Socket<unknown>[] = []
+	// Per-socket accumulation of length-prefixed messages split across TCP data events.
+	readonly #buffers = new Map<Socket<unknown>, Buffer>()
 	#server?: TCPSocketListener
 
 	constructor(readonly options: Readonly<StellariumProtocolServerOptions>) {}
@@ -51,8 +60,8 @@ export class StellariumProtocolServer {
 			port,
 			allowHalfOpen: false,
 			socket: {
-				data: (_, data) => {
-					this.#processData(data)
+				data: (socket, data) => {
+					this.#processData(socket, data)
 				},
 				open: (socket) => {
 					console.info('connection open')
@@ -63,6 +72,7 @@ export class StellariumProtocolServer {
 					console.warn('connection closed')
 					const index = this.#sockets.indexOf(socket)
 					if (index >= 0) this.#sockets.splice(index, 1)
+					this.#buffers.delete(socket)
 					this.options.handler.disconnect?.(this)
 				},
 				error: (_, error) => {
@@ -85,6 +95,7 @@ export class StellariumProtocolServer {
 		this.#server?.stop(true)
 		this.#server = undefined
 		this.#sockets.length = 0
+		this.#buffers.clear()
 	}
 
 	// Broadcasts the current position to all connected Stellarium clients, encoding RA/Dec (radians) as
@@ -108,14 +119,36 @@ export class StellariumProtocolServer {
 		}
 	}
 
-	// Decodes an inbound goto message, converting the fixed-point RA/Dec back to radians and invoking the
-	// handler.
-	#processData(buffer: Buffer) {
-		if (buffer.byteLength >= 20 && this.options.handler.goto) {
-			const ra = normalizeAngle((buffer.readUInt32LE(12) * PI) / 0x80000000)
-			const dec = (buffer.readInt32LE(16) * PI) / 0x80000000
-			this.options.handler.goto(this, ra, dec)
+	// Accumulates bytes per socket and decodes each complete length-prefixed message. Invalid message
+	// lengths close the connection to prevent the stream from losing synchronization.
+	#processData(socket: Socket<unknown>, data: Buffer) {
+		const previous = this.#buffers.get(socket)
+		const buffer = previous ? Buffer.concat([previous, data]) : data
+		let position = 0
+
+		while (buffer.byteLength - position >= 2) {
+			const length = buffer.readUInt16LE(position)
+
+			if (length < STELLARIUM_MESSAGE_HEADER_SIZE || length > STELLARIUM_MAX_MESSAGE_SIZE) {
+				this.#buffers.delete(socket)
+				socket.close()
+				return
+			}
+
+			if (buffer.byteLength - position < length) break
+
+			if (length >= STELLARIUM_GOTO_MESSAGE_SIZE && buffer.readUInt16LE(position + 2) === 0 && this.options.handler.goto) {
+				const message = buffer.subarray(position, position + length)
+				const ra = normalizeAngle((message.readUInt32LE(12) * PI) / 0x80000000)
+				const dec = (message.readInt32LE(16) * PI) / 0x80000000
+				this.options.handler.goto(this, ra, dec)
+			}
+
+			position += length
 		}
+
+		if (position === buffer.byteLength) this.#buffers.delete(socket)
+		else this.#buffers.set(socket, buffer.subarray(position))
 	}
 }
 

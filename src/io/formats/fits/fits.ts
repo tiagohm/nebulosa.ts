@@ -1,6 +1,6 @@
 import { type FitsKeyword, KEYWORDS } from './headers'
 // oxfmt-ignore
-import { bitpixInBytes, bitpixKeyword, computeHduDataSize, escapeQuotedText, heightKeyword, isCommentKeyword, isCommentStyleCard, isRiceCompressedImageHeader, numberOfChannelsKeyword, numericKeyword, RICE_1_COMPRESSION_TYPE, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, unescapeQuotedText, widthKeyword } from './util'
+import { bitpixInBytes, bitpixKeyword, computeHduDataSize, escapeQuotedText, heightKeyword, isCommentKeyword, isCommentStyleCard, isCompressedImageHeader, isRiceCompressedImageHeader, numberOfChannelsKeyword, numericKeyword, RICE_1_COMPRESSION_TYPE, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, unescapeQuotedText, widthKeyword } from './util'
 import type { Writable } from '../../../core/types'
 import { validatePositiveInteger } from '../../../core/validation'
 import type { Image, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
@@ -1063,9 +1063,21 @@ export class FitsKeywordWriter {
 			let from = this.#appendQuotedValue(output, value, comment, 0, position)
 
 			while (from < value.length) {
+				// CONTINUE cards are extra 80-byte records; without this check a full buffer
+				// lets #appendQuotedValue consume 0 characters and this loop never advances.
+				if (output.byteLength - position.offset < FITS_HEADER_CARD_SIZE) {
+					throw new RangeError(FITS_HEADER_BUFFER_TOO_SMALL)
+				}
+
 				this.#pad(output, position)
 				this.#appendText(output, 'CONTINUE  ', position)
-				from += this.#appendQuotedValue(output, value, comment, from, position)
+				const consumed = this.#appendQuotedValue(output, value, comment, from, position)
+
+				if (consumed === 0) {
+					throw new RangeError(FITS_HEADER_BUFFER_TOO_SMALL)
+				}
+
+				from += consumed
 			}
 		} else if (typeof value === 'boolean') {
 			this.#appendText(output, value ? 'T' : 'F', position)
@@ -1306,7 +1318,8 @@ function writePlanarTileToInterleaved(tile: NumberArray, output: ImageRawType, w
 }
 
 // Reads an image HDU's pixels into a channel-interleaved buffer, transparently handling both plain
-// big-endian images and Rice-compressed tile (ZIMAGE) extensions.
+// big-endian images and Rice-compressed tile (ZIMAGE) extensions. Other ZIMAGE compression types are
+// not implemented and throw rather than being decoded as an 8-bit table image.
 export class FitsImageReader {
 	readonly #compressed: boolean
 	readonly #buffer: Buffer
@@ -1329,10 +1342,13 @@ export class FitsImageReader {
 	}
 
 	// Reads FITS image samples into an interleaved buffer using the requested sample scale.
+	// Throws when the HDU is a tile-compressed image that is not RICE_1.
 	async read(source: Source & Seekable, output: ImageRawType, sampleScale: ImageSampleScale = 'normalized') {
 		if (this.#compressed) return await this.#readRiceCompressed(source, output, sampleScale)
 
 		const { header } = this.hdu
+		if (isCompressedImageHeader(header)) throw new Error('unsupported FITS compression')
+
 		const bitpix = bitpixKeyword(header, 0)
 		const pixelInBytes = bitpixInBytes(bitpix)
 		const width = widthKeyword(header, 0)
@@ -1380,8 +1396,9 @@ export class FitsImageReader {
 		const rowSize = widthKeyword(header, 0)
 		const rowCount = heightKeyword(header, 0)
 		const heapOffset = Math.trunc(numericKeyword(header, 'THEAP', rowSize * rowCount))
+		// Spec default tiling is row-by-row: ZTILE1 = ZNAXIS1, and ZTILEn = 1 for n > 1.
 		const tileWidth = Math.trunc(numericKeyword(header, 'ZTILE1', width))
-		const tileHeight = Math.trunc(numericKeyword(header, 'ZTILE2', height))
+		const tileHeight = Math.trunc(numericKeyword(header, 'ZTILE2', 1))
 		const tileDepth = Math.trunc(numericKeyword(header, 'ZTILE3', 1))
 		const blockSize = riceBlockSizeFromHeader(header)
 

@@ -78,10 +78,27 @@ function pixelStatistics(set: SensorFrameSet, sourceIndex: number, output: Float
 	output[2] = clipped ? 1 : 0
 }
 
-// Computes excess kurtosis around the measured dark mean for one source pixel.
-function excessKurtosis(set: SensorFrameSet, sourceIndex: number, mean: number, sampleVariance: number): number {
+// Gaussian P(|Z| < 1/2) = erf(1/(2√2)); expected fraction of samples inside ±0.5 σ under a normal null.
+const GAUSSIAN_HALF_SIGMA_PROBABILITY = 0.382924922548026
+// Fewest finite dark samples before G2 or a binomial central-gap test can reject Gaussian noise.
+const UNSTABLE_MIN_SAMPLES = 8
+// Standardized threshold, in Gaussian standard errors, for G2 and central occupancy.
+const UNSTABLE_GAUSSIAN_SIGMA = 3
+
+// Returns whether a noisy dark time series is inconsistent with Gaussian samples.
+// `mean` is the finite-sample dark mean in DN and `sampleVariance` is the unbiased temporal
+// variance in DN². Non-finite stack slots are ignored; the sample size is the finite count, not
+// frames.length. Fewer than eight finite samples never flag. Heavy tails use Fisher's
+// bias-corrected excess kurtosis G2 against its Gaussian standard error. RTS-like two-level
+// series are flagged when occupancy inside ±0.5 σ is three standard errors below the Gaussian
+// binomial expectation.
+function isTemporallyUnstable(set: SensorFrameSet, sourceIndex: number, mean: number, sampleVariance: number): boolean {
+	const std = Math.sqrt(sampleVariance)
+	if (!(std > 0)) return false
+	const halfSigma = 0.5 * std
 	let count = 0
 	let fourth = 0
+	let nearCenter = 0
 	for (let frameIndex = 0; frameIndex < set.frames.length; frameIndex++) {
 		const value = set.frames[frameIndex].raw[sourceIndex]
 		if (!Number.isFinite(value)) continue
@@ -89,9 +106,18 @@ function excessKurtosis(set: SensorFrameSet, sourceIndex: number, mean: number, 
 		const squared = residual * residual
 		fourth += squared * squared
 		count++
+		if (Math.abs(residual) < halfSigma) nearCenter++
 	}
-	const populationVariance = count > 1 ? (sampleVariance * (count - 1)) / count : 0
-	return populationVariance > 0 ? fourth / count / (populationVariance * populationVariance) - 3 : 0
+	if (count < UNSTABLE_MIN_SAMPLES) return false
+	const populationVariance = (sampleVariance * (count - 1)) / count
+	if (!(populationVariance > 0)) return false
+	const g2 = fourth / count / (populationVariance * populationVariance) - 3
+	const g2BiasCorrected = ((count - 1) / ((count - 2) * (count - 3))) * ((count + 1) * g2 + 6)
+	const g2Variance = (24 * count * (count - 1) * (count - 1)) / ((count - 2) * (count - 3) * (count + 3) * (count + 5))
+	if (g2BiasCorrected > UNSTABLE_GAUSSIAN_SIGMA * Math.sqrt(g2Variance)) return true
+	const expectedCenter = GAUSSIAN_HALF_SIGMA_PROBABILITY * count
+	const centerVariance = count * GAUSSIAN_HALF_SIGMA_PROBABILITY * (1 - GAUSSIAN_HALF_SIGMA_PROBABILITY)
+	return nearCenter < expectedCenter - UNSTABLE_GAUSSIAN_SIGMA * Math.sqrt(centerVariance)
 }
 
 // Computes an exact robust center and MAD for a small row/column profile.
@@ -214,12 +240,9 @@ export function measureSensorDefects(dark: SensorFrameSet, flat: SensorFrameSet,
 			if (darkVariance > noisyLimit) {
 				activeMask[index] |= SENSOR_DEFECT_NOISY
 				noisy++
-				if (dark.frames.length >= 8) {
-					const excess = excessKurtosis(dark, sourceIndex, darkMean, darkVariance)
-					if (excess < -0.8 || excess > 2) {
-						activeMask[index] |= SENSOR_DEFECT_UNSTABLE
-						unstable++
-					}
+				if (isTemporallyUnstable(dark, sourceIndex, darkMean, darkVariance)) {
+					activeMask[index] |= SENSOR_DEFECT_UNSTABLE
+					unstable++
 				}
 			}
 			if (response < coldLimit) {
@@ -227,7 +250,8 @@ export function measureSensorDefects(dark: SensorFrameSet, flat: SensorFrameSet,
 				cold++
 			}
 			if (flatStatistics[2] !== 0) activeMask[index] |= SENSOR_DEFECT_SATURATED
-			if (Number.isFinite(response)) {
+			// Structural density already counts point defects; the profile must not let one outlier shift a row/column mean.
+			if (Number.isFinite(response) && (activeMask[index] & 0x0f) === 0) {
 				rowProfiles[y] += response
 				columnProfiles[x] += response
 				rowCounts[y]++

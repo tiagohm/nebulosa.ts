@@ -436,6 +436,7 @@ export class PHD2Client implements Disposable {
 	// Connects to the PHD2 server, wiring socket events into the line parser. Returns false if already connected.
 	async connect(hostname: string, port: number = DEFAULT_PHD2_PORT) {
 		if (this.#socket) return false
+		this.#buffer = undefined
 
 		this.#socket = await Bun.connect({
 			hostname,
@@ -468,11 +469,13 @@ export class PHD2Client implements Disposable {
 		this.#socket?.close()
 		this.#socket = undefined
 
-		for (const { timer } of this.#commands.values()) {
-			clearTimeout(timer)
+		for (const command of this.#commands.values()) {
+			clearTimeout(command.timer)
+			command.promise.resolve({ success: false, error: 'socketUnavailable' })
 		}
 
 		this.#commands.clear()
+		this.#buffer = undefined
 	}
 
 	[Symbol.dispose]() {
@@ -488,7 +491,12 @@ export class PHD2Client implements Disposable {
 		const command: PHD2Command = { method, params, id }
 
 		const promise = Promise.withResolvers<PHD2CommandResult<T>>()
-		const timer = setTimeout(() => promise.resolve({ success: false, error: 'timeout' }), timeout <= 0 || !Number.isFinite(timeout) ? DEFAULT_TIMEOUT : timeout)
+		const timer = setTimeout(
+			() => {
+				if (this.#commands.delete(id)) promise.resolve({ success: false, error: 'timeout' })
+			},
+			timeout <= 0 || !Number.isFinite(timeout) ? DEFAULT_TIMEOUT : timeout,
+		)
 		this.#commands.set(id, { promise, timer, command } as PendingPHD2Command<unknown>)
 
 		try {
@@ -496,6 +504,8 @@ export class PHD2Client implements Disposable {
 			this.#socket.write('\r\n')
 		} catch (e) {
 			console.error('socket error:', e)
+			clearTimeout(timer)
+			this.#commands.delete(id)
 			return { success: false, error: 'socketError' }
 		}
 
@@ -513,7 +523,7 @@ export class PHD2Client implements Disposable {
 	findStar(roi: Partial<Point & Size> = DEFAULT_ROI) {
 		const { x, y, width, height } = Object.assign({}, DEFAULT_ROI, roi)
 		const subframe = width && height ? [x, y, width, height] : undefined
-		return this.send<readonly [number, number]>('find_star', subframe)
+		return this.send<readonly [number, number]>('find_star', subframe ? { roi: subframe } : undefined)
 	}
 
 	startCapture(exposure: number, roi: Partial<Point & Size> = DEFAULT_ROI) {
@@ -665,7 +675,7 @@ export class PHD2Client implements Disposable {
 		return this.send<number>('set_algo_param', [axis, name, value])
 	}
 
-	setConnected(connected: number) {
+	setConnected(connected: boolean) {
 		return this.send<number>('set_connected', [connected])
 	}
 
@@ -695,7 +705,7 @@ export class PHD2Client implements Disposable {
 	}
 
 	setPaused(paused: boolean, full: boolean = true) {
-		return this.send<number>('set_paused', [paused, full ? 'full' : null])
+		return this.send<number>('set_paused', full ? [paused, 'full'] : [paused])
 	}
 
 	setProfile(profile: number | PHD2Profile) {
@@ -710,20 +720,37 @@ export class PHD2Client implements Disposable {
 	// Buffers incoming bytes and parses complete JSON lines (PHD2 sends newline-delimited JSON), keeping
 	// any partial trailing line for the next chunk.
 	#processData(data: Buffer) {
-		const buffer = this.#buffer === undefined ? data : Buffer.concat([this.#buffer, data])
+		let buffer = this.#buffer === undefined ? data : Buffer.concat([this.#buffer, data])
 
-		const result = Bun.JSONL.parseChunk(buffer)
+		while (buffer.length > 0) {
+			const result = Bun.JSONL.parseChunk(buffer)
 
-		for (const event of result.values) {
-			this.#processEvent(event as never)
+			for (const event of result.values) {
+				this.#processEvent(event as never)
+			}
+
+			if (result.error) {
+				const newline = buffer.indexOf(10, result.read)
+				if (newline < 0) {
+					this.#buffer = undefined
+					return
+				}
+
+				buffer = buffer.subarray(newline + 1)
+				continue
+			}
+
+			if (result.done) {
+				this.#buffer = undefined
+			} else {
+				// Keep only the unconsumed portion
+				this.#buffer = buffer.subarray(result.read)
+			}
+
+			return
 		}
 
-		if (result.done) {
-			this.#buffer = undefined
-		} else {
-			// Keep only the unconsumed portion
-			this.#buffer = buffer.subarray(result.read)
-		}
+		this.#buffer = undefined
 	}
 
 	// Routes a parsed message: a JSON-RPC reply resolves the matching pending command (and fires the

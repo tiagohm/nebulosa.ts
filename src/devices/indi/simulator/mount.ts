@@ -1,5 +1,5 @@
 import type { EquatorialCoordinate } from '../../../astronomy/coordinates/coordinate'
-import { applyEquatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, polarAlignmentPointingModel, tubeFlexureError } from '../../../astronomy/coordinates/pointing'
+import { applyEquatorialPointingError, applyTubeFlexureError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, polarAlignmentPointingModel } from '../../../astronomy/coordinates/pointing'
 import { localSiderealTime } from '../../../astronomy/observer/location'
 import { formatTemporal, TIMEZONE } from '../../../astronomy/time/temporal'
 import { timeUnix } from '../../../astronomy/time/time'
@@ -304,7 +304,7 @@ export class MountSimulator extends DeviceSimulator {
 		readonly options?: DeviceSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.TELESCOPE | DeviceInterfaceType.GUIDER)
+		super(name, client, handler, DeviceInterfaceType.TELESCOPE | DeviceInterfaceType.GUIDER, 'mount.simulator')
 
 		for (const property of this.properties) {
 			property.device = name
@@ -476,12 +476,10 @@ export class MountSimulator extends DeviceSimulator {
 			}
 
 			if (flexureEnabled && TUBE_FLEXURE.value !== 0) {
-				// Evaluated at the mechanical orientation rather than at the partly corrected one: the tube
-				// sags according to where it is actually aimed, and the geometric terms are arcseconds, far
-				// too small to change how much it sags.
-				const flexure = tubeFlexureError(lst - this.#mechanical.rightAscension, this.#mechanical.declination, this.latitude, TUBE_FLEXURE.value * ASEC2RAD, this.#flexureError)
-				rightAscension -= flexure[0]
-				declination += flexure[1]
+				// Applied after the geometric terms. Those are arcseconds, far too small to change the zenith
+				// distance the tube sags under. Near the pole a hour-angle turn cannot express the east
+				// component of the droop, so this uses the same great-circle path as the geometric model.
+				;[rightAscension, declination] = applyTubeFlexureError(rightAscension, declination, lst, this.latitude, TUBE_FLEXURE.value * ASEC2RAD, this.#flexureError)
 			}
 
 			// The pier offset applies on one side only, so what it really configures is the difference
@@ -651,8 +649,10 @@ export class MountSimulator extends DeviceSimulator {
 		switch (vector.name) {
 			case 'TIME_UTC':
 				if (vector.elements.UTC) {
-					const utc = Date.parse(`${vector.elements.UTC}Z`)
-					const offset = Math.trunc(+vector.elements.OFFSET * 60)
+					const utcText = vector.elements.UTC
+					const hasTimezone = /[zZ]$|[+-]\d{2}(?::?\d{2})?$/.test(utcText)
+					const utc = Date.parse(hasTimezone ? utcText : `${utcText}Z`)
+					const offset = vector.elements.OFFSET === undefined ? this.#utcOffset : Math.trunc(+vector.elements.OFFSET * 60)
 					if (!Number.isNaN(utc)) this.setTime({ utc, offset })
 				}
 		}
@@ -689,14 +689,22 @@ export class MountSimulator extends DeviceSimulator {
 			case 'GUIDE_RATE':
 				this.setGuideRate(vector.elements.GUIDE_RATE_WE ?? this.guideRateRightAscension, vector.elements.GUIDE_RATE_NS ?? this.guideRateDeclination)
 				return
-			case 'TELESCOPE_TIMED_GUIDE_NS':
-				if (vector.elements.TIMED_GUIDE_N !== undefined && vector.elements.TIMED_GUIDE_N >= 0) this.pulse('NORTH', vector.elements.TIMED_GUIDE_N)
-				else if (vector.elements.TIMED_GUIDE_S !== undefined && vector.elements.TIMED_GUIDE_S >= 0) this.pulse('SOUTH', vector.elements.TIMED_GUIDE_S)
+			case 'TELESCOPE_TIMED_GUIDE_NS': {
+				const north = vector.elements.TIMED_GUIDE_N
+				const south = vector.elements.TIMED_GUIDE_S
+				if (north !== undefined && north > 0) this.pulse('NORTH', north)
+				else if (south !== undefined && south > 0) this.pulse('SOUTH', south)
+				else if (north === 0 || south === 0) this.pulse(north === 0 ? 'NORTH' : 'SOUTH', 0)
 				return
-			case 'TELESCOPE_TIMED_GUIDE_WE':
-				if (vector.elements.TIMED_GUIDE_W !== undefined && vector.elements.TIMED_GUIDE_W >= 0) this.pulse('WEST', vector.elements.TIMED_GUIDE_W)
-				else if (vector.elements.TIMED_GUIDE_E !== undefined && vector.elements.TIMED_GUIDE_E >= 0) this.pulse('EAST', vector.elements.TIMED_GUIDE_E)
+			}
+			case 'TELESCOPE_TIMED_GUIDE_WE': {
+				const west = vector.elements.TIMED_GUIDE_W
+				const east = vector.elements.TIMED_GUIDE_E
+				if (west !== undefined && west > 0) this.pulse('WEST', west)
+				else if (east !== undefined && east > 0) this.pulse('EAST', east)
+				else if (west === 0 || east === 0) this.pulse(west === 0 ? 'WEST' : 'EAST', 0)
 				return
+			}
 			case 'MOUNT_ALIGNMENT': {
 				const hourAngle = normalizePI(this.#siderealTime() - this.rightAscension)
 				if (applyNumberVectorValues(this.#alignment, vector.elements)) {
@@ -981,12 +989,14 @@ export class MountSimulator extends DeviceSimulator {
 				else if (vector.elements.SET === true) this.setHome()
 				return
 			case 'TELESCOPE_MOTION_NS':
-				if (vector.elements.MOTION_NORTH !== undefined) this.moveNorth(vector.elements.MOTION_NORTH)
-				if (vector.elements.MOTION_SOUTH !== undefined) this.moveSouth(vector.elements.MOTION_SOUTH)
+				if (vector.elements.MOTION_NORTH === true) this.moveNorth(true)
+				else if (vector.elements.MOTION_SOUTH === true) this.moveSouth(true)
+				else this.moveNorth(false)
 				return
 			case 'TELESCOPE_MOTION_WE':
-				if (vector.elements.MOTION_WEST !== undefined) this.moveWest(vector.elements.MOTION_WEST)
-				if (vector.elements.MOTION_EAST !== undefined) this.moveEast(vector.elements.MOTION_EAST)
+				if (vector.elements.MOTION_WEST === true) this.moveWest(true)
+				else if (vector.elements.MOTION_EAST === true) this.moveEast(true)
+				else this.moveWest(false)
 				return
 			case 'TELESCOPE_PARK':
 				if (vector.elements.PARK === true) this.park()
@@ -1261,6 +1271,11 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Unparks the mount without changing the current coordinate.
 	unpark() {
+		if (this.#slewMode === 'PARK') {
+			this.#abortSlew()
+			this.#refreshSlewingState()
+		}
+
 		this.isParked && selectOnSwitch(this.#park, 'UNPARK') && this.notify(this.#park)
 		this.#setParking(false)
 	}

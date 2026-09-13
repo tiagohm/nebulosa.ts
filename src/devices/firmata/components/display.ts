@@ -123,7 +123,8 @@ export class HD44780 extends PeripheralBase<HD44780> implements Display {
 		const data5Pin = options.data5Pin ?? DEFAULT_HD44780_OPTIONS.data5Pin
 		const data6Pin = options.data6Pin ?? DEFAULT_HD44780_OPTIONS.data6Pin
 		const data7Pin = options.data7Pin ?? DEFAULT_HD44780_OPTIONS.data7Pin
-		const { rwPin, backlightPin } = options
+		const rwPin = options.rwPin ?? DEFAULT_HD44780_OPTIONS.rwPin
+		const backlightPin = options.backlightPin ?? DEFAULT_HD44780_OPTIONS.backlightPin
 		const requiredPins = [rsPin, enablePin, data4Pin, data5Pin, data6Pin, data7Pin]
 
 		const pins = [...requiredPins]

@@ -123,11 +123,80 @@ describe.skipIf(SKIP)('dome simulator', () => {
 		await waitUntil(() => dome.shutterState === 'OPENING')
 		manager.stop(dome)
 		await waitUntil(() => dome.shutterState === 'ERROR')
+		manager.openShutter(dome)
+		await waitUntil(() => dome.shutterState === 'OPENING')
+		await waitUntil(() => dome.shutterState === 'OPEN', 2500)
 
 		simulator.dispose()
 		expect(manager.has(client, simulator.name)).toBeFalse()
 		expect(manager.properties.length).toBe(0)
 	}, 15000)
+
+	test('keeps home and park states exclusive', async () => {
+		const handler = new IndiClientHandlerSet()
+		const manager = new DomeManager()
+		handler.add(manager)
+
+		using client = new ClientSimulator('dome.state', handler)
+		using simulator = new DomeSimulator('Dome Simulator', client)
+		const dome = manager.get(client, simulator.name)!
+
+		manager.connect(dome)
+		await waitUntil(() => dome.connected)
+		manager.speed(dome, 12)
+		await waitUntil(() => dome.speed.value === 12)
+
+		manager.home(dome)
+		await waitUntil(() => dome.atHome)
+		manager.unpark(dome)
+		expect(dome.atHome).toBeTrue()
+
+		manager.park(dome)
+		await waitUntil(() => dome.parking)
+		manager.unpark(dome)
+		expect(dome.moving).toBeFalse()
+		expect(dome.parking).toBeFalse()
+		expect(dome.parked).toBeFalse()
+		await Bun.sleep(250)
+		expect(dome.parked).toBeFalse()
+
+		manager.park(dome)
+		await waitUntil(() => dome.parked)
+		manager.home(dome)
+		await waitUntil(() => dome.homing)
+		expect(dome.parking).toBeFalse()
+	}, 10000)
+
+	test('executes full-turn relative moves', async () => {
+		const handler = new IndiClientHandlerSet()
+		const manager = new DomeManager()
+		handler.add(manager)
+
+		using client = new ClientSimulator('dome.relative', handler)
+		using simulator = new DomeSimulator('Dome Simulator', client)
+		const dome = manager.get(client, simulator.name)!
+
+		manager.connect(dome)
+		await waitUntil(() => dome.connected)
+		manager.speed(dome, 12)
+		await waitUntil(() => dome.speed.value === 12)
+		manager.syncTo(dome, 0)
+
+		manager.moveBy(dome, deg(360))
+		await waitUntil(() => dome.moving)
+		await Bun.sleep(250)
+		expect(dome.azimuth.value).toBeGreaterThan(0)
+		manager.stop(dome)
+		await waitUntil(() => !dome.moving)
+
+		manager.syncTo(dome, 0)
+		manager.moveBy(dome, deg(-360))
+		await waitUntil(() => dome.moving)
+		await Bun.sleep(250)
+		expect(dome.azimuth.value).toBeGreaterThan(deg(330))
+		manager.stop(dome)
+		await waitUntil(() => !dome.moving)
+	}, 5000)
 
 	test('persists dome configuration but excludes transient operations', () => {
 		const saved: string[] = []

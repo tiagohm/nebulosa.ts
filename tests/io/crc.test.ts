@@ -369,3 +369,16 @@ describe('crc should accept previous value', () => {
 		})
 	}
 })
+
+test('reflected crc applies catalogue xor-out after output reflection', () => {
+	// Rocksoft/RevEng: poly and init are reflected into the register; xor-out is not.
+	const crc = new CRC(8, 0x07, 0x00, true, 0x01)
+	expect(crc.compute(buffer)).toBe(0x21)
+	expect(crc.compute(Buffer.alloc(0))).toBe(0x01)
+
+	let checksum: number | undefined
+	for (let i = 0; i < buffer.byteLength; i++) {
+		checksum = crc.compute(buffer, checksum, i, 1)
+	}
+	expect(checksum).toBe(0x21)
+})

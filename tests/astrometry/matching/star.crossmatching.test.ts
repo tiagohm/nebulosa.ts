@@ -383,7 +383,10 @@ test('real scenario', async () => {
 	expect(result.solution).toBeDefined()
 	expect(formatRA(result.solution!.rightAscension).slice(0, 8)).toBe('10 43 45')
 	expect(formatDEC(result.solution!.declination).slice(0, 9)).toBe('-59 34 04')
-	expect(formatAZ(result.solution!.rotation).slice(0, 9)).toBe('112 12 07')
+	// Merging close detections changes the fit slightly; 20 arcsec of rotation is <0.07 px at a corner.
+	expect(Math.abs(result.solution!.rotation - deg(112 + 12 / 60 + 7 / 3600))).toBeLessThan(arcsec(20))
+	expect(result.summary.matchedCount).toBeGreaterThan(60)
+	expect(result.summary.medianSkySeparation).toBeLessThan(arcsec(1))
 	expect(toArcsec(result.solution!.scale)).toBeCloseTo(2.735, 2)
 	expect(formatAZ(result.solution!.fieldRadius).slice(0, 9)).toBe('000 28 35')
 }, 2500)

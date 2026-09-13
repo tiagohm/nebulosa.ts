@@ -232,6 +232,23 @@ test('preserves batch identity and discriminates non-finite candidates', () => {
 	expect(profiles[1].y).toBe(0)
 })
 
+// Background-limited SNR on a noiseless normalized image is not a flux cut of ~9.
+test('accepts a compact noiseless star under the default SNR threshold', () => {
+	const source = image(65, 65)
+	addGaussian(source, 32, 32, 1.5, 1.5, 0, 0.6)
+
+	const profile = measureStarProfile(source, { x: 32, y: 32 })
+	const detected = detectStarProfiles(source, { maxStars: 5 })
+
+	expect(profile.valid).toBeTrue()
+	expect(profile.flags).not.toContain('lowSignal')
+	expect(profile.snr).toBeGreaterThan(1e6)
+	expect(profile.fwhm).toBeCloseTo(2 * Math.sqrt(2 * Math.LN2) * 1.5, 1)
+	expect(detected).toHaveLength(1)
+	expect(detected[0].valid).toBeTrue()
+	expect(detected[0].flags).not.toContain('lowSignal')
+})
+
 // Reuses the fast candidate detector before measuring profiles without changing detector output contracts.
 test('detects and profiles a candidate through the combined API', () => {
 	const source = image(65, 65)
@@ -295,6 +312,34 @@ test('marks a near-border profile', () => {
 
 	expect(profile.flags).toContain('nearBorder')
 	expect(Number.isFinite(profile.hfd)).toBeTrue()
+})
+
+// Grows the default aperture far enough that a defocused Gaussian recovers HFD and FWHM.
+test('measures a defocused Gaussian HFD with default aperture growth', () => {
+	const sigma = 10
+	const expectedFwhm = 2 * Math.sqrt(2 * Math.LN2) * sigma
+	const source = image(129, 129)
+	addGaussian(source, 64, 64, sigma, sigma, 0, 0.6)
+
+	const profile = measureStarProfile(source, { x: 64, y: 64 }, { minSNR: 0 })
+
+	expect(profile.valid).toBeTrue()
+	expect(profile.flags).not.toContain('clipped')
+	expect(profile.hfd).toBeCloseTo(expectedFwhm, 0)
+	expect(profile.fwhm).toBeGreaterThan(expectedFwhm - 1)
+	expect(profile.fwhm).toBeLessThan(expectedFwhm + 0.5)
+})
+
+// Does not publish a truncated curve of growth as a valid HFD when growth passes run out.
+test('flags a defocused profile when aperture growth is cut short', () => {
+	const source = image(129, 129)
+	addGaussian(source, 64, 64, 10, 10, 0, 0.6)
+
+	const profile = measureStarProfile(source, { x: 64, y: 64 }, { minSNR: 0, maxIterations: 3 })
+
+	expect(profile.valid).toBeFalse()
+	expect(profile.flags).toContain('clipped')
+	expect(profile.fwhm).toBeLessThan(20)
 })
 
 // Distinguishes an ROI truncated by the sensor boundary from a merely nearby warning.

@@ -159,7 +159,7 @@ export abstract class AzimuthalProjection implements Projection {
 // Gnomonic projection: great circles map to straight lines; shows less than one hemisphere.
 export class Gnomonic extends AzimuthalProjection {
 	protected radialDistance(sinC: number, cosC: number) {
-		return cosC <= 0 ? false : sinC / cosC
+		return cosC <= GEOMETRY_EPSILON ? false : sinC / cosC
 	}
 
 	protected angularDistance(rho: number) {
@@ -234,7 +234,7 @@ export class Mercator extends CylindricalProjection {
 	unproject(x: number, y: number, out?: Point, options?: ProjectionOptions) {
 		out = unprojectPoint(out, x, y, options, this.options)
 		if (out === undefined) return undefined
-		const longitude = longitudeFromLambda(out.x, options, this.options)
+		const longitude = longitudeFromDelta(out.x, options, this.options)
 		const latitude = latitudeInRange(Math.atan(Math.sinh(out.y)), options, this.options, DEFAULT_MAX_MERCATOR_LATITUDE)
 		return longitude === undefined || latitude === undefined ? undefined : fillPoint(out, longitude, latitude)
 	}
@@ -247,13 +247,6 @@ export const WEB_MERCATOR_MAX_LATITUDE = Math.atan(Math.sinh(PI))
 export class WebMercator extends Mercator {
 	constructor(options?: ProjectionOptions) {
 		super({ ...options, clampLatitude: true, maxLatitude: WEB_MERCATOR_MAX_LATITUDE })
-	}
-
-	project(lambda: Angle, phi: Angle, out?: Point, options?: ProjectionOptions) {
-		const longitude = longitudeFromLambda(lambda, options, this.options)
-		const latitude = latitudeFromPhi(phi, options, this.options, WEB_MERCATOR_MAX_LATITUDE, true)
-		if (longitude === undefined || latitude === undefined) return undefined
-		return super.project(longitude, latitude, out)
 	}
 }
 
@@ -288,14 +281,14 @@ export class EllipsoidalMercator extends CylindricalProjection {
 	private readonly eccentricity: number
 
 	constructor(options?: ProjectionOptions) {
-		super()
+		super(options)
 		this.eccentricity = eccentricityFrom(options, this.options) ?? 0
 	}
 
 	project(lambda: Angle, phi: Angle, out?: Point, options?: ProjectionOptions) {
 		const longitude = longitudeFromLambda(lambda, options, this.options)
 		if (longitude === undefined) return undefined
-		const latitude = latitudeFromPhi(phi, options, this.options, WEB_MERCATOR_MAX_LATITUDE)
+		const latitude = latitudeFromPhi(phi, options, this.options, DEFAULT_MAX_MERCATOR_LATITUDE)
 		if (latitude === undefined) return undefined
 		const sinLatitude = Math.sin(latitude)
 		return projectPoint(out, longitude, Math.atanh(sinLatitude) - this.eccentricity * Math.atanh(this.eccentricity * sinLatitude), options, this.options)
@@ -316,7 +309,7 @@ export class EllipsoidalMercator extends CylindricalProjection {
 export class Miller extends CylindricalProjection {
 	project(lambda: Angle, phi: Angle, out?: Point, options?: ProjectionOptions) {
 		const longitude = longitudeFromLambda(lambda, options, this.options)
-		const latitude = latitudeFromPhi(phi, options, this.options, WEB_MERCATOR_MAX_LATITUDE)
+		const latitude = latitudeFromPhi(phi, options, this.options)
 		return longitude === undefined || latitude === undefined ? undefined : projectPoint(out, longitude, 1.25 * Math.log(Math.tan(PIOVERFOUR + 0.4 * latitude)), options, this.options)
 	}
 
@@ -370,7 +363,12 @@ export class CylindricalEqualArea extends CylindricalProjection {
 		out = unprojectPoint(out, x, y, options, this.options)
 		if (out === undefined) return undefined
 		const longitude = longitudeFromDelta(out.x / this.cosStandardParallel, options, this.options)
-		return longitude === undefined ? undefined : fillPoint(out, longitude, Math.asin(out.y * this.cosStandardParallel + Math.sin(this.latitudeOfOrigin)))
+		if (longitude === undefined) return undefined
+		const sine = out.y * this.cosStandardParallel + Math.sin(this.latitudeOfOrigin)
+		const epsilon = epsilonFrom(options, this.options)
+		if (!(sine >= -1 - epsilon && sine <= 1 + epsilon)) return undefined
+		const latitude = latitudeInRange(Math.asin(clamp(sine, -1, 1)), options, this.options)
+		return latitude === undefined ? undefined : fillPoint(out, longitude, latitude)
 	}
 }
 
@@ -430,7 +428,7 @@ export class CylindricalStereographic extends CylindricalProjection {
 		// Wrap the longitude delta first, then apply the standard-parallel scale, so a non-zero
 		// central meridian round-trips (scaling lambda before subtracting it does not).
 		const longitude = longitudeFromLambda(lambda, options, this.options)
-		const latitude = latitudeFromPhi(phi, options, this.options, WEB_MERCATOR_MAX_LATITUDE)
+		const latitude = latitudeFromPhi(phi, options, this.options)
 		if (latitude === undefined) return undefined
 		return longitude === undefined || latitude === undefined ? undefined : projectPoint(out, longitude * this.cosStandardParallel, (1 + this.cosStandardParallel) * Math.tan(latitude / 2), options, this.options)
 	}
@@ -483,7 +481,7 @@ export class CylindricalEquidistant extends CylindricalProjection {
 
 	project(lambda: Angle, phi: Angle, out?: Point, options?: ProjectionOptions) {
 		const longitude = longitudeFromLambda(lambda, options, this.options)
-		const latitude = latitudeFromPhi(phi, options, this.options, WEB_MERCATOR_MAX_LATITUDE)
+		const latitude = latitudeFromPhi(phi, options, this.options)
 		if (latitude === undefined) return undefined
 		return longitude === undefined || latitude === undefined ? undefined : projectPoint(out, longitude * this.cosStandardParallel, latitude - this.latitudeOfOrigin, options, this.options)
 	}
@@ -697,6 +695,12 @@ function unprojectPoint(out: Point | undefined, x: number, y: number, a?: Projec
 	return fillPoint(out, (x - falseEasting) / scale, ((y - falseNorthing) / scale) * ySign)
 }
 
+// Constructor options stored on azimuthal and cylindrical projections; used as split/project
+// defaults when call-site polyline options omit central meridian, wrap, or axis.
+function optionsFromProjection(projection: Projection): ProjectionOptions | undefined {
+	return (projection as { readonly options?: ProjectionOptions }).options
+}
+
 // Decides whether the longitude jump between two consecutive points exceeds the split threshold
 // (an antimeridian crossing). Returns undefined when the inputs are invalid.
 function shouldSplitLongitude(a: Point, b: Point, options?: ProjectionPolylineOptions, defaults?: ProjectionOptions) {
@@ -741,9 +745,11 @@ export function projectPolyline(projection: Projection, points: readonly Readonl
 	let current: Point[] = []
 	let previousProjected: Point | undefined
 	let previousPoint: Point | undefined
+	let previousSpherical: Point | undefined
 	const maxSegmentRadians = options?.maxSegmentRadians
 	const discontinuityThreshold = options?.discontinuityThreshold
 	const p: Point = { x: 0, y: 0 }
+	const previousSphericalBuffer: Point = { x: 0, y: 0 }
 
 	for (let i = 0; i < points.length; i++) {
 		const target = points[i]
@@ -751,7 +757,9 @@ export function projectPolyline(projection: Projection, points: readonly Readonl
 
 		for (let step = 1; step <= segmentSteps; step++) {
 			const point = previousPoint === undefined || step === segmentSteps ? fillPoint(p, target.x, target.y) : densifiedPoint(previousPoint, target, step, segmentSteps, p)
-			const splitLongitude = previousPoint !== undefined && step === 1 && shouldSplitLongitude(previousPoint, point, options, undefined)
+			// Compare consecutive densified spherical points so a wrap on the short path is
+			// still detected after maxSegmentRadians inserts intermediates with Δλ ≪ π.
+			const splitLongitude = previousSpherical !== undefined && shouldSplitLongitude(previousSpherical, point, options, optionsFromProjection(projection))
 			const projected = projection.project(point.x, point.y, undefined, options)
 			const splitDiscontinuity = previousProjected !== undefined && projected !== undefined && discontinuityThreshold !== undefined && Number.isFinite(discontinuityThreshold) && discontinuityThreshold > 0 && euclideanDistance(previousProjected, projected) > discontinuityThreshold
 
@@ -765,6 +773,8 @@ export function projectPolyline(projection: Projection, points: readonly Readonl
 				current.push(projected)
 				previousProjected = projected
 			}
+
+			previousSpherical = fillPoint(previousSphericalBuffer, point.x, point.y)
 		}
 
 		previousPoint = target

@@ -1,6 +1,8 @@
 import { expect, describe, test } from 'bun:test'
 import { cfaChannelAt, type CfaPattern, type Image, shiftCfaPattern } from '../../../src/imaging/model/types'
 import { bayer, debayer } from '../../../src/imaging/processing/debayer'
+import { scnr } from '../../../src/imaging/processing/scnr'
+import { brightness } from '../../../src/imaging/processing/tone'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 import { expectImageValues, makeImage } from './util'
 
@@ -63,6 +65,22 @@ test('bayer and debayer preserve Float64 storage', () => {
 	expect(output).toBeDefined()
 	expect(output!.raw instanceof Float64Array).toBe(true)
 	expect(output!.metadata.strideInBytes).toBe(48)
+})
+
+test('debayer clears CFA mosaic metadata on the reconstructed RGB image', () => {
+	const original = makeImage(4, 4, 3, new Float32Array(4 * 4 * 3).fill(0.5))
+	const cfa = bayer(original, 'RGGB')
+	expect(cfa).toBeDefined()
+	expect(cfa!.metadata.bayer).toBe('RGGB')
+	expect(cfa!.header.BAYERPAT).toBe('RGGB')
+
+	const output = debayer(cfa!)
+	expect(output).toBeDefined()
+	expect(output!.metadata.channels).toBe(3)
+	expect(output!.metadata.bayer).toBeUndefined()
+	expect(output!.header.BAYERPAT).toBeUndefined()
+	expect(() => brightness(output!, 1.1)).not.toThrow()
+	expect(() => scnr(output!)).not.toThrow()
 })
 
 test('debayer reconstructs RGB samples from the stored CFA pattern', () => {

@@ -696,18 +696,19 @@ export interface LocalLunarEclipseListEntry {
 // returned so a caller never recomputes them; an eclipse that stays below the horizon at this location is omitted.
 //
 // longitude is east-positive radians, latitude geodetic radians; options set the horizon altitude and altitude
-// sampling (see computeLocalLunarEclipseCircumstances). Results are ordered earliest-first. previousMaxJd guards
-// against a non-advancing series so the loop can never spin.
+// sampling (see computeLocalLunarEclipseCircumstances). startTime and endTime may be any timescale; the window is
+// compared in TT, matching maximalTime. Results are ordered earliest-first. previousMaxJd guards against a
+// non-advancing series so the loop can never spin.
 export function listLocalLunarEclipses(longitude: Angle, latitude: Angle, startTime: Time, endTime: Time, sunMoonPosition: SunMoonProvider, options: LocalLunarEclipseCircumstancesOptions = {}): LocalLunarEclipseListEntry[] {
 	const result: LocalLunarEclipseListEntry[] = []
 
-	const startJd = toJulianDay(startTime)
-	const endJd = toJulianDay(endTime)
+	const startJd = toJulianDay(tt(startTime))
+	const endJd = toJulianDay(tt(endTime))
 	if (!Number.isFinite(startJd) || !Number.isFinite(endJd) || endJd < startJd) return result
 
 	// nearestLunarEclipse(t, true) returns the first eclipse strictly after t, so seeding the cursor with the
 	// previous maximalTime advances exactly one eclipse per step.
-	let cursor = startTime
+	let cursor = tt(startTime)
 	let previousMaxJd = -Infinity
 
 	while (true) {

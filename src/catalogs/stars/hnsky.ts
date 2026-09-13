@@ -111,7 +111,7 @@ function materializeHnsky290Star(area: number, record: Readonly<TiledStarRawReco
 		rightAscension: record.raRaw * TILED_STAR_RA_SCALE,
 		declination: record.decRaw * TILED_STAR_DEC_SCALE,
 		magnitude: record.magnitude,
-		bpRp: record.hasColor ? record.colorRaw / 10 : undefined,
+		bpRp: record.hasColor && record.colorRaw !== -128 ? record.colorRaw / 10 : undefined,
 		designation: record.hasDesignation ? decodeTiledStarDesignation(record.designationValue) : undefined,
 	}
 }
@@ -156,7 +156,7 @@ export class HnskyCatalog extends TiledStarCatalog<HnskyCatalogEntry, Hnsky290Da
 			rightAscension: record.raRaw * TILED_STAR_RA_SCALE,
 			declination: record.decRaw * TILED_STAR_DEC_SCALE,
 			magnitude: record.magnitude,
-			bpRp: record.hasColor ? record.colorRaw / 10 : undefined,
+			bpRp: record.hasColor && record.colorRaw !== -128 ? record.colorRaw / 10 : undefined,
 			designation: record.hasDesignation ? decodeTiledStarDesignation(record.designationValue) : undefined,
 		}
 	}

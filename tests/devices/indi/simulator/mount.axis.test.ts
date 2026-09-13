@@ -59,6 +59,25 @@ describe('mechanical axis', () => {
 			expect(toArcsec(advanceMechanicalAxis(state, arcsec(-50), 1, backlashConfig))).toBeCloseTo(-20, 9)
 		})
 
+		test('charges only the remaining slack after an incomplete reversal', () => {
+			const state = mechanicalAxisState()
+			advanceMechanicalAxis(state, arcsec(10), 1, backlashConfig)
+
+			// Ten arcseconds enter the gap on reversal, leaving twenty still open on the other flank.
+			expect(advanceMechanicalAxis(state, arcsec(-10), 1, backlashConfig)).toBe(0)
+			// Reversing again needs only the complementary ten arcseconds before the axis moves.
+			expect(toArcsec(advanceMechanicalAxis(state, arcsec(30), 1, backlashConfig))).toBeCloseTo(20, 9)
+		})
+
+		test('re-engages immediately when reversing from a fully open gap', () => {
+			const state = mechanicalAxisState()
+			advanceMechanicalAxis(state, arcsec(10), 1, backlashConfig)
+			driveMechanicalAxis(state, -1, 0, backlashConfig)
+
+			// The full gap is open on the negative flank, so reversing back reaches the positive flank at once.
+			expect(toArcsec(advanceMechanicalAxis(state, arcsec(10), 1, backlashConfig))).toBeCloseTo(10, 9)
+		})
+
 		test('does not reopen the gap while the direction holds', () => {
 			const state = mechanicalAxisState()
 			advanceMechanicalAxis(state, arcsec(-50), 1, backlashConfig)

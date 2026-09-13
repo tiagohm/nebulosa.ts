@@ -219,6 +219,11 @@ test('day of week using zellersCongruence', () => {
 	expect(zellersCongruence(2017, 10, 22)).toBe(0)
 	expect(zellersCongruence(2026, 6, 26)).toBe(5)
 	expect(zellersCongruence([2000, 1, 1])).toBe(6)
+	expect(zellersCongruence(0, 1, 1)).toBe(temporalDayOfWeek(temporalFromDate(0, 1, 1)))
+	expect(zellersCongruence(0, 1, 1)).toBe(6)
+	expect(zellersCongruence(-1, 12, 31)).toBe(temporalDayOfWeek(temporalFromDate(-1, 12, 31)))
+	expect(zellersCongruence(0, 3, 1)).toBe(temporalDayOfWeek(temporalFromDate(0, 3, 1)))
+	expect(formatTemporalFromPattern([0, 1, 1, 0, 0, 0, 0], 'W', 0)).toBe('Sat')
 })
 
 test('get', () => {
@@ -280,6 +285,20 @@ describe('format', () => {
 		})
 
 		expect(formatTemporal(1756510498123, format, 0)).toEqual('sexta-feira, 29 de agosto de 2025 às 20:34 BRT')
+	})
+
+	test('intl date array uses 1-based months and astronomical years', () => {
+		const format = new Intl.DateTimeFormat('en-CA', {
+			timeZone: 'UTC',
+			year: 'numeric',
+			month: '2-digit',
+			day: '2-digit',
+		})
+
+		expect(formatTemporal([2025, 8, 29, 0, 0, 0, 0], format)).toBe(format.format(temporalFromDate(2025, 8, 29)))
+		expect(formatTemporal([99, 6, 15, 0, 0, 0, 0], format)).toBe(format.format(temporalFromDate(99, 6, 15)))
+		expect(formatTemporal([2025, 8, 29, 0, 0, 0, 0], format)).toBe('2025-08-29')
+		expect(formatTemporal([99, 6, 15, 0, 0, 0, 0], format)).not.toContain('1999')
 	})
 
 	test('timezone', () => {
@@ -393,6 +412,12 @@ describe('format using pattern', () => {
 
 	test('negative timestamp', () => {
 		expect(formatTemporalFromPattern(-1, 'YYYY-MM-DD HH:mm:ss.SSS', 0)).toEqual('1969-12-31 23:59:59.999')
+	})
+
+	test('negative year', () => {
+		expect(formatTemporalFromPattern(temporalFromDate(-1, 12, 31), 'YYYY-MM-DD', 0)).toEqual('-0001-12-31')
+		expect(formatTemporalFromPattern(temporalFromDate(-99, 6, 15), 'YYYY-MM-DD', 0)).toEqual('-0099-06-15')
+		expect(formatTemporalFromPattern(temporalFromDate(0, 1, 1), 'YYYY-MM-DD', 0)).toEqual('0000-01-01')
 	})
 })
 

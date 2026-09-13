@@ -239,6 +239,11 @@ const ONE_WIRE_WRITE_REQUEST_BIT = 0x20
 
 const MIN_SAMPLING_INTERVAL = 1
 const MAX_SAMPLING_INTERVAL = 16383
+// Initial and maximum wire-payload sizes retained by the parser for one message, in bytes. Larger
+// sysex messages are discarded until END_SYSEX so malformed or unexpectedly large input cannot grow
+// memory without bound.
+const INITIAL_FIRMATA_BUFFER_SIZE = 256
+const MAX_FIRMATA_BUFFER_SIZE = 1 << 20
 
 // Decodes one byte from the two-7-bit-bytes layout (LSB nibble then MSB bit) at `offset`.
 export function decodeByteAs7Bit(input: Readonly<NumberArray> | Buffer, offset: number) {
@@ -354,7 +359,7 @@ class ParsingCapabilityResponseState implements FirmataFsmState {
 			fsm.pinCapabilitiesFinished()
 			fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 		} else if (b === 127) {
-			const pin = fsm.read(0)
+			const pin = fsm.offset === 0 ? 0 : fsm.read(0)
 
 			const modes = new Set<PinMode>()
 
@@ -435,9 +440,14 @@ const PARSING_STRING_MESSAGE_STATE = new ParsingStringMessageState()
 class ParsingTwoWireMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
+			if (fsm.offset < 4) {
+				fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
+				return
+			}
+
 			const address = fsm.read7Bit(0)
 			const register = fsm.read7Bit(2)
-			const size = (fsm.offset - 4) >>> 1
+			const size = (fsm.offset - 4) >> 1
 			const data = Buffer.allocUnsafe(size)
 			for (let i = 0; i < size; i++) data[i] = fsm.read7Bit(i * 2 + 4)
 			fsm.twoWireMessage(address, register, data)
@@ -582,6 +592,15 @@ class WaitingForMessageState implements FirmataFsmState {
 
 const WAITING_FOR_MESSAGE_STATE = new WaitingForMessageState()
 
+// Discards an oversized sysex message until its terminator, then returns the parser to the idle state.
+class DiscardingSysexMessageState implements FirmataFsmState {
+	process(b: number, fsm: FirmataFsm) {
+		if (b === END_SYSEX) fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
+	}
+}
+
+const DISCARDING_SYSEX_MESSAGE_STATE = new DiscardingSysexMessageState()
+
 // The parser state machine: holds the active state, a scratch byte buffer, and the set of handlers.
 // Parser states call its write/read helpers to accumulate bytes and its event methods to broadcast a
 // decoded message to every registered handler.
@@ -589,7 +608,7 @@ export class FirmataFsm {
 	readonly #handlers = new Set<FirmataClientHandler>()
 
 	// Scratch accumulation buffer for the message currently being parsed, and the write cursor into it.
-	readonly #buffer = Buffer.alloc(256)
+	#buffer = Buffer.alloc(INITIAL_FIRMATA_BUFFER_SIZE)
 	#offset = 0
 	#state: FirmataFsmState
 
@@ -632,6 +651,18 @@ export class FirmataFsm {
 
 	// Appends one byte to the accumulation buffer.
 	write(b: number) {
+		if (this.#offset >= this.#buffer.length) {
+			if (this.#buffer.length >= MAX_FIRMATA_BUFFER_SIZE) {
+				this.transitTo(DISCARDING_SYSEX_MESSAGE_STATE)
+				return
+			}
+
+			const size = Math.min(this.#buffer.length * 2, MAX_FIRMATA_BUFFER_SIZE)
+			const buffer = Buffer.alloc(size)
+			this.#buffer.copy(buffer)
+			this.#buffer = buffer
+		}
+
 		this.#buffer.writeUInt8(b, this.#offset++)
 	}
 
@@ -784,7 +815,7 @@ export class FirmataClient implements Disposable {
 		analogMessage: (client: FirmataClient, port: number, value: number) => {
 			const pin = this.#pinMap.get(this.#analogPins[port])
 
-			if (pin?.mode === PinMode.ANALOG && pin.value !== value) {
+			if (pin?.mode === PinMode.ANALOG) {
 				pin.value = value
 				this.#fsm.pinChange(pin)
 			}
@@ -948,7 +979,7 @@ export class FirmataClient implements Disposable {
 	}
 
 	requestDigitalPinReport(pin: number, enable: boolean) {
-		this.send(new Uint8Array([REPORT_DIGITAL | this.#board.pinToDigital(pin), enable ? 1 : 0]))
+		this.send(new Uint8Array([REPORT_DIGITAL | ((this.#board.pinToDigital(pin) >> 3) & 0x0f), enable ? 1 : 0]))
 	}
 
 	requestAnalogReport(enable: boolean) {
@@ -967,6 +998,9 @@ export class FirmataClient implements Disposable {
 	}
 
 	pinMode(pin: number, mode: PinMode) {
+		const state = this.#pinMap.get(pin)
+		if (state) state.mode = mode
+
 		this.send(new Uint8Array([SET_PIN_MODE, pin, mode]))
 	}
 
@@ -1013,7 +1047,7 @@ export class FirmataClient implements Disposable {
 		message[0] = START_SYSEX
 		message[1] = TWO_WIRE_REQUEST
 		message[2] = address & 0x7f
-		message[3] = ((address >>> 7) & 0x7) | (operationMode === 'write' ? TWO_WIRE_WRITE : operationMode === 'read' ? TWO_WIRE_READ : operationMode === 'readContinuously' ? TWO_WIRE_READ_CONTINUOUS : TWO_WIRE_STOP_READ) | (addressMode === 7 ? 0 : 0x20) | (autoRestart === 'stop' ? 0x40 : 0)
+		message[3] = ((address >>> 7) & 0x7) | (operationMode === 'write' ? TWO_WIRE_WRITE : operationMode === 'read' ? TWO_WIRE_READ : operationMode === 'readContinuously' ? TWO_WIRE_READ_CONTINUOUS : TWO_WIRE_STOP_READ) | (addressMode === 7 ? 0 : 0x20) | (autoRestart === 'restart' ? 0x40 : 0)
 
 		if (data !== undefined) {
 			for (let i = 0, offset = 4; i < data.length; i++, offset += 2) {
@@ -1151,6 +1185,7 @@ export class FirmataClient implements Disposable {
 // the firmware request once connected.
 export class FirmataClientOverTcp extends FirmataClient {
 	#socket?: Bun.Socket
+	#connectionId = 0
 
 	constructor(board: Board) {
 		super(
@@ -1174,25 +1209,30 @@ export class FirmataClientOverTcp extends FirmataClient {
 	async connect(hostname: string, port: number, options?: Omit<Bun.TCPSocketConnectOptions, 'hostname' | 'port' | 'socket'>) {
 		if (this.#socket) return false
 
-		this.#socket = await Bun.connect({
+		const connectionId = ++this.#connectionId
+		const socket = await Bun.connect({
 			...options,
 			hostname,
 			port,
 			socket: {
 				data: (_, buffer) => {
-					this.process(buffer)
+					if (connectionId === this.#connectionId) this.process(buffer)
 				},
 				error: (_, error) => {
 					console.error('firmata socket error:', error)
-					this.reset()
+					this.#closeConnection(connectionId)
 				},
 				connectError: (_, error) => {
 					console.error('firmata connection failed:', error)
-					this.reset()
+					if (connectionId === this.#connectionId) {
+						this.#connectionId++
+						this.#socket = undefined
+						this.reset()
+					}
 				},
 				end: () => {
 					console.info('firmata socket ended')
-					super.close()
+					this.#closeConnection(connectionId)
 				},
 				open(socket) {
 					console.info('firmata socket open at %s:%s', socket.remoteAddress, socket.localPort)
@@ -1202,10 +1242,17 @@ export class FirmataClientOverTcp extends FirmataClient {
 				},
 				close: (_, error) => {
 					console.info('firmata socket closed:', error)
-					super.close()
+					this.#closeConnection(connectionId)
 				},
 			},
 		})
+
+		if (connectionId !== this.#connectionId) {
+			socket.close()
+			return false
+		}
+
+		this.#socket = socket
 
 		this.requestFirmware()
 
@@ -1214,7 +1261,18 @@ export class FirmataClientOverTcp extends FirmataClient {
 
 	// Closes and clears the underlying socket.
 	close() {
-		this.#socket?.close()
+		const socket = this.#socket
 		this.#socket = undefined
+		this.#connectionId++
+		socket?.close()
+	}
+
+	// Invalidates one TCP connection, clears its socket, emits close, and ignores later callbacks from it.
+	#closeConnection(connectionId: number) {
+		if (connectionId !== this.#connectionId) return
+
+		this.#connectionId++
+		this.#socket = undefined
+		super.close()
 	}
 }

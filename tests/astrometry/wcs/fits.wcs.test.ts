@@ -421,6 +421,28 @@ describe('tan unproject', () => {
 	})
 })
 
+describe('tan lonpole defaults', () => {
+	// FITS WCS Paper II: for TAN, omitted LONPOLE is 0° when CRVAL2 ≥ 90° and 180° otherwise.
+	const TAN_NCP_HEADER = { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 100, CRPIX2: 100, CRVAL1: 0, CRVAL2: 90, CD1_1: -0.001, CD1_2: 0, CD2_1: 0, CD2_2: 0.001 } as const
+	const TAN_SCP_HEADER = { ...TAN_NCP_HEADER, CRVAL2: -90 } as const
+
+	test('defaults omitted LONPOLE to 0 at the north celestial pole', () => {
+		expectTanMatchesNativeUnproject(TAN_NCP_HEADER, 150, 100)
+		expectTanMatchesNativeProject(TAN_NCP_HEADER, deg(10), deg(89.5))
+	})
+
+	test('honors an explicit LONPOLE of 180 at the north celestial pole', () => {
+		const header = { ...TAN_NCP_HEADER, LONPOLE: 180 }
+		expectTanMatchesNativeUnproject(header, 150, 100)
+		expectTanMatchesNativeProject(header, deg(10), deg(89.5))
+	})
+
+	test('defaults omitted LONPOLE to 180 at the south celestial pole', () => {
+		expectTanMatchesNativeUnproject(TAN_SCP_HEADER, 150, 100)
+		expectTanMatchesNativeProject(TAN_SCP_HEADER, deg(10), deg(-89.5))
+	})
+})
+
 describe('tan project/unproject round-trip', () => {
 	// project(unproject(x, y)) must recover the original pixel without relying on the native binding.
 	const cases = [

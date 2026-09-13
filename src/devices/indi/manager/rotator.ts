@@ -58,6 +58,10 @@ export class RotatorManager extends DeviceManager<Rotator> {
 					}
 				}
 
+				if (handleSwitchValue(device, 'moving', message.state === 'Busy' || this.properties.get(device)?.ABS_ROTATOR_ANGLE?.state === 'Busy')) {
+					this.updated(device, 'moving', message.state)
+				}
+
 				return
 			case 'ROTATOR_REVERSE':
 				if (tag[0] === 'd') {
@@ -90,7 +94,7 @@ export class RotatorManager extends DeviceManager<Rotator> {
 					this.updated(device, 'angle', message.state)
 				}
 
-				if (handleSwitchValue(device, 'moving', message.state === 'Busy')) {
+				if (handleSwitchValue(device, 'moving', message.state === 'Busy' || this.properties.get(device)?.ROTATOR_HOME?.state === 'Busy')) {
 					this.updated(device, 'moving', message.state)
 				}
 
@@ -134,10 +138,18 @@ export class RotatorManager extends DeviceManager<Rotator> {
 		}
 		if (full || name === 'ABS_ROTATOR_ANGLE') {
 			resetDeviceValue(this, device, 'angle', DEFAULT_ROTATOR.angle)
-			resetDeviceValue(this, device, 'moving', DEFAULT_ROTATOR.moving)
 		}
 		if (full || name === 'SYNC_ROTATOR_ANGLE') {
 			resetDeviceValue(this, device, 'canSync', DEFAULT_ROTATOR.canSync)
+		}
+
+		if (full) {
+			resetDeviceValue(this, device, 'moving', DEFAULT_ROTATOR.moving)
+		} else if (name === 'ROTATOR_HOME' || name === 'ABS_ROTATOR_ANGLE') {
+			const otherName = name === 'ROTATOR_HOME' ? 'ABS_ROTATOR_ANGLE' : 'ROTATOR_HOME'
+			const moving = this.properties.get(device)?.[otherName]?.state === 'Busy'
+
+			if (handleSwitchValue(device, 'moving', moving)) this.updated(device, 'moving')
 		}
 
 		super.delProperty(client, message)

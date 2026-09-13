@@ -6,17 +6,19 @@ import { type Angle, arcsec } from '../../math/units/angle'
 import type { PolarMotion, Time, TimeDelta } from './time'
 
 // Earth Orientation Parameters (EOP) from the IERS: UT1-UTC (dut1) and polar motion (x, y), linearly
-// interpolated from the tabulated finals2000A (IERS A) and eopc04 (IERS B) data files. Provides loaders
-// for each file format, a combined source (IERS B preferred where it covers the date, falling back to
-// IERS A), and shared module-level instances feeding the time module. Values outside the table clamp to
-// the nearest edge; missing data yields 0. This is a runtime module (reads from an io Source).
+// interpolated from the tabulated finals2000A (IERS A) and eopc04 (IERS B) data files. DUT1 interpolation
+// removes the integer-second leap jump so UT1-UTC stays continuous through the leap-second day; polar
+// motion is interpolated as tabulated. Provides loaders for each file format, a combined source (IERS B
+// preferred where it covers the date, falling back to IERS A), and shared module-level instances feeding
+// the time module. Values outside the table clamp to the nearest edge; missing data yields 0. This is a
+// runtime module (reads from an io Source).
 
 // Reusable empty backing table.
 const EMPTY_TABLE = new Float64Array(0)
 
 // Provider of Earth Orientation Parameters for a given time.
 export interface Iers {
-	// UT1 - UTC in seconds at the given time.
+	// UT1 - UTC in seconds at the given time. Leap-second jumps between daily samples are unwrapped.
 	readonly dut1: TimeDelta
 	// Polar motion (x, y) angles at the given time.
 	readonly xy: PolarMotion
@@ -79,11 +81,15 @@ function interpolationAt(time: Time, input: NumberArray): EopInterpolation | und
 	return { lo: i, hi: i + 1, t: (mjd - t0) / (input[i + 1] - t0) }
 }
 
-// Applies a precomputed bracket to one EOP column with linear interpolation; clamped edges return the edge value.
-function interpolateColumn(bracket: EopInterpolation, data: NumberArray) {
+// Applies a precomputed bracket to one EOP column with linear interpolation; clamped edges return the
+// edge value. When `unwrapIntegerJump` is true, the nearest-integer part of the sample-to-sample delta
+// is subtracted first so a leap-second discontinuity in UT1-UTC is not ramped across the UTC day
+// (Astropy `IERS._interpolate`). Polar motion does not jump and must leave this false.
+function interpolateColumn(bracket: EopInterpolation, data: NumberArray, unwrapIntegerJump: boolean = false) {
 	const a = data[bracket.lo]
 	if (bracket.lo === bracket.hi) return a
-	return a + bracket.t * (data[bracket.hi] - a)
+	const d = data[bracket.hi] - a
+	return a + bracket.t * (unwrapIntegerJump ? d - Math.round(d) : d)
 }
 
 // Common EOP table storage and linear-interpolation logic; subclasses implement file-format parsing.
@@ -97,10 +103,12 @@ export abstract class IersBase implements Iers {
 	// UT1 - UTC per row, in seconds.
 	protected ut1MinusUtc: NumberArray = EMPTY_TABLE
 
-	// UT1 - UTC in seconds interpolated at `time` (0 when unavailable).
+	// UT1 - UTC in seconds interpolated at `time` (0 when unavailable). Leap-second jumps of ±1 s
+	// between daily 0h UTC samples are unwrapped so DUT1 remains continuous until the leap instant;
+	// the next tabulated 0h sample already includes the jump.
 	dut1(time: Time): number {
 		const bracket = interpolationAt(time, this.mjd)
-		const dut1 = bracket === undefined ? Number.NaN : interpolateColumn(bracket, this.ut1MinusUtc)
+		const dut1 = bracket === undefined ? Number.NaN : interpolateColumn(bracket, this.ut1MinusUtc, true)
 		return Number.isFinite(dut1) ? dut1 : 0
 	}
 

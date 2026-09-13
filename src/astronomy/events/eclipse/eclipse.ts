@@ -220,9 +220,9 @@ export function refineRoot(f: (x: number) => number, min: number, max: number) {
 }
 
 // Number of uniform theta samples used to bracket extrema and crossings on the Earth-limb ellipse. The
-// limb is smooth and nearly circular (flattening ~1/298), so a 2 deg scan reliably brackets every
-// extremum/intersection basin before local refinement (ternary search for extrema, bisection for
-// crossings), which then converges to full precision independently of this resolution.
+// limb is smooth and nearly circular (flattening ~1/298), so a 2 deg scan brackets every extremum
+// basin before local refinement. Two simple roots of a shallow secant can share one step without a
+// sample sign change; those are recovered from the refined extremum in earthLimbCircleIntersections.
 const LIMB_SCAN_STEPS = 180
 
 // Precomputed cos/sin of the uniform limb scan grid (theta = TAU*k/LIMB_SCAN_STEPS), since those angles are
@@ -267,10 +267,11 @@ export function earthLimbDistanceSquared(theta: number, cx: number, cy: number, 
 // Intersections of a circle of the given radius centered at (cx, cy) with the Earth-limb ellipse,
 // returned as limb points (cos theta, sin theta / omega) ordered by descending y. The circle and the
 // ellipse can meet in up to four points, so g(theta) = earthLimbDistanceSquared(theta) - radius^2 is
-// scanned uniformly and every root is captured: exact zeros and sign changes (the transversal crossings),
-// plus near-zero local extrema that never change sign (tangencies, which are double roots and would
-// otherwise be missed unless they landed exactly on a sample). This is the ellipse counterpart of
-// findCircleIntersections for rise/set.
+// scanned uniformly and every root is captured: exact zeros and sign changes (the transversal crossings);
+// near-zero local extrema that never change sign (tangencies, which are double roots); and pairs of
+// simple roots that both sit in one scan step, where samples never change sign but the refined extremum
+// of g has crossed zero (a shallow secant, typical of rise/set just after P1/P4 tangency). This is the
+// ellipse counterpart of findCircleIntersections for rise/set.
 export function earthLimbCircleIntersections(cx: number, cy: number, omega: number, radius: number) {
 	if (!Number.isFinite(radius) || radius < 0 || !Number.isFinite(cx) || !Number.isFinite(cy)) return []
 
@@ -296,8 +297,9 @@ export function earthLimbCircleIntersections(cx: number, cy: number, omega: numb
 		}
 	}
 
-	// Tangencies: a strict local minimum or maximum of g whose refined extremum value is within tolerance
-	// of zero is a grazing (double) contact that the sign-change pass cannot see.
+	// Local extrema of g that the sign-change pass cannot see: a near-zero extremum is a grazing
+	// (double) contact; a minimum below zero or a maximum above zero with same-sign neighbors is a
+	// pair of simple roots sharing the scan step (shallow secant).
 	for (let k = 0; k < LIMB_SCAN_STEPS; k++) {
 		const previous = values[(k - 1 + LIMB_SCAN_STEPS) % LIMB_SCAN_STEPS]
 		const value = values[k]
@@ -307,7 +309,15 @@ export function earthLimbCircleIntersections(cx: number, cy: number, omega: numb
 
 		if (isMinimum || isMaximum) {
 			const extreme = refineLimbExtreme(k * step, step, cx, cy, omega, isMinimum)
-			if (Math.abs(g(extreme)) <= LIMB_TANGENCY_RESIDUAL) thetas.push(extreme)
+			const gExtreme = g(extreme)
+
+			if (Math.abs(gExtreme) <= LIMB_TANGENCY_RESIDUAL) thetas.push(extreme)
+			else if ((isMinimum && gExtreme < 0 && previous > 0 && next > 0) || (isMaximum && gExtreme > 0 && previous < 0 && next < 0)) {
+				const left = bisectRoot(g, (k - 1) * step, extreme)
+				const right = bisectRoot(g, extreme, (k + 1) * step)
+				if (left !== undefined) thetas.push(left)
+				if (right !== undefined) thetas.push(right)
+			}
 		}
 	}
 

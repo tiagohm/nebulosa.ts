@@ -71,6 +71,11 @@ test('DomeManager maps motion, angular ranges, shutter, and measurements', () =>
 	expect(dome.azimuth.value).toBeCloseTo(PIOVERTWO)
 	expect(dome.azimuth.min).toBe(0)
 	expect(dome.azimuth.max).toBeCloseTo(TAU)
+	expect(dome.moving).toBeTrue()
+	expect(dome.slewing).toBeTrue()
+
+	manager.switchVector(recordingClient, { ...motion, state: 'Ok', elements: { DOME_CW: defSwitch('DOME_CW', false), DOME_CCW: defSwitch('DOME_CCW', false) } }, 'setSwitchVector')
+
 	expect(dome.moving).toBeFalse()
 	expect(dome.slewing).toBeFalse()
 
@@ -111,6 +116,61 @@ test('DomeManager maps motion, angular ranges, shutter, and measurements', () =>
 
 	expect(dome.hasMeasurements).toBeTrue()
 	expect(dome.measurements).toMatchObject({ radius: 4, shutterWidth: 1, northDisplacement: 2, eastDisplacement: 3, upDisplacement: 5, otaOffset: 0.5 })
+})
+
+test('DomeManager maps standard dome measurement element names', () => {
+	const manager = new DomeManager()
+	const dome = setupDome(manager)
+	const measurements: DefNumberVector = {
+		device: dome.name,
+		name: 'DOME_MEASUREMENTS',
+		permission: 'ro',
+		state: 'Ok',
+		elements: {
+			DM_DOME_RADIUS: defNumber('DM_DOME_RADIUS', 4, 0, 10),
+			DM_SHUTTER_WIDTH: defNumber('DM_SHUTTER_WIDTH', 1, 0, 10),
+			DM_NORTH_DISPLACEMENT: defNumber('DM_NORTH_DISPLACEMENT', 2, -10, 10),
+			DM_EAST_DISPLACEMENT: defNumber('DM_EAST_DISPLACEMENT', 3, -10, 10),
+			DM_UP_DISPLACEMENT: defNumber('DM_UP_DISPLACEMENT', 5, -10, 10),
+			DM_OTA_OFFSET: defNumber('DM_OTA_OFFSET', 0.5, -10, 10),
+		},
+	}
+	manager.numberVector(recordingClient, measurements, 'defNumberVector')
+
+	expect(dome.hasMeasurements).toBeTrue()
+	expect(dome.measurements).toMatchObject({ radius: 4, shutterWidth: 1, northDisplacement: 2, eastDisplacement: 3, upDisplacement: 5, otaOffset: 0.5 })
+})
+
+test('DomeManager keeps other motion sources active when one property is deleted', () => {
+	const manager = new DomeManager()
+	const dome = setupDome(manager)
+	const motion: DefSwitchVector = {
+		device: dome.name,
+		name: 'DOME_MOTION',
+		permission: 'rw',
+		rule: 'OneOfMany',
+		state: 'Busy',
+		elements: { DOME_CW: defSwitch('DOME_CW', true), DOME_CCW: defSwitch('DOME_CCW', false) },
+	}
+	const position: DefNumberVector = {
+		device: dome.name,
+		name: 'ABS_DOME_POSITION',
+		permission: 'rw',
+		state: 'Busy',
+		elements: { DOME_ABSOLUTE_POSITION: defNumber('DOME_ABSOLUTE_POSITION', 90) },
+	}
+	manager.switchVector(recordingClient, motion, 'defSwitchVector')
+	manager.numberVector(recordingClient, position, 'defNumberVector')
+
+	manager.delProperty(recordingClient, { device: dome.name, name: 'ABS_DOME_POSITION' })
+
+	expect(dome.moving).toBeTrue()
+	expect(dome.slewing).toBeTrue()
+
+	manager.delProperty(recordingClient, { device: dome.name, name: 'DOME_MOTION' })
+
+	expect(dome.moving).toBeFalse()
+	expect(dome.slewing).toBeFalse()
 })
 
 test('DomeManager sends capability-gated commands in INDI units', () => {
@@ -229,6 +289,34 @@ test('DomeManager preserves driver-specific slaving element names', () => {
 	manager.slave(dome, false)
 
 	expect(switchCommands.map(({ elements }) => elements)).toEqual([{ ENABLE: true }, { DISABLE: true }])
+})
+
+test('DomeManager supports standard slaving element names', () => {
+	numberCommands.length = 0
+	switchCommands.length = 0
+
+	const manager = new DomeManager()
+	const dome = setupDome(manager)
+	manager.switchVector(
+		recordingClient,
+		{
+			device: dome.name,
+			name: 'DOME_AUTOSYNC',
+			permission: 'rw',
+			rule: 'OneOfMany',
+			state: 'Ok',
+			elements: { DOME_AUTOSYNC_ENABLE: defSwitch('DOME_AUTOSYNC_ENABLE', false), DOME_AUTOSYNC_DISABLE: defSwitch('DOME_AUTOSYNC_DISABLE', true) },
+		},
+		'defSwitchVector',
+	)
+
+	expect(dome.canSlave).toBeTrue()
+	expect(dome.slaved).toBeFalse()
+
+	manager.slave(dome, true)
+	manager.slave(dome, false)
+
+	expect(switchCommands.map(({ elements }) => elements)).toEqual([{ DOME_AUTOSYNC_ENABLE: true }, { DOME_AUTOSYNC_DISABLE: true }])
 })
 
 test('DomeManager does not complete failed home or park operations', () => {

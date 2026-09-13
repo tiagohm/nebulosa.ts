@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { PI, PIOVERTWO } from '../../../src/core/constants'
+import { PI, PIOVERFOUR, PIOVERTWO } from '../../../src/core/constants'
 import { type MutVec2, vec2Angle, vec2Cross, vec2CrossLength, vec2Distance, vec2Div, vec2DivScalar, vec2Dot, vec2Longitude, vec2Minus, vec2MinusScalar, vec2Mul, vec2MulScalar, vec2Negate, vec2Normalize, vec2Plus, vec2PlusScalar, vec2Rot, vec2XAxis, vec2YAxis } from '../../../src/math/linear-algebra/vec2'
 
 test('angle', () => {
@@ -7,6 +7,11 @@ test('angle', () => {
 	expect(vec2Angle([1, 2], [-1, -2])).toBeCloseTo(PI, 15)
 	expect(vec2Angle([2, -3], [4, -6])).toBeCloseTo(0, 15)
 	expect(vec2Angle([3, 4], [1, 2])).toBeCloseTo(Math.acos(11 / Math.sqrt(125)), 15)
+	expect(vec2Angle([1, 1e-8], [1, 0])).toBeCloseTo(1e-8, 15)
+	expect(vec2Angle([1e308, 0], [1e308, 0])).toBe(0)
+	expect(vec2Angle([1e308, 0], [0, 1e308])).toBe(PIOVERTWO)
+	expect(vec2Angle([1e200, 1e200], [1e200, 1e199])).toBeCloseTo(0.685729510906286, 12)
+	expect(vec2Angle([1e-200, 0], [1e-200, 1e-200])).toBeCloseTo(PIOVERFOUR, 15)
 })
 
 test('normalize', () => {

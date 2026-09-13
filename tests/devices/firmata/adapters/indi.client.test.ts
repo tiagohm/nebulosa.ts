@@ -5,6 +5,7 @@ import { FirmataClient, type FirmataClientHandler, type Transport } from '../../
 import type { Accelerometer, Altimeter, Ammeter, Barometer, Gyroscope, Hygrometer, ListenablePeripheral, Luxmeter, Magnetometer, Peripheral, PeripheralListener, RealTimeClock, Thermometer } from '../../../../src/devices/firmata/peripheral'
 import { LM35 } from '../../../../src/devices/firmata/sensors/thermometer'
 import type { IndiClientHandler } from '../../../../src/devices/indi/client'
+import { WeatherManager } from '../../../../src/devices/indi/manager/weather'
 import type { DefNumberVector, DelProperty, SetNumberVector, SetSwitchVector } from '../../../../src/devices/indi/types'
 import { meter } from '../../../../src/math/units/distance'
 import { waitUntil } from '../../../util'
@@ -587,6 +588,40 @@ describe('firmata indi client', () => {
 		expect(set?.value).toBe(20)
 	})
 
+	test('does not replay Busy measurement placeholders to a weather manager', async () => {
+		const firmata = new FakeFirmata()
+		const manager = new WeatherManager()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler: manager })
+
+		const peripheral = new FakeBarometer('BMP280', firmata as never)
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		const weather = manager.get(client, peripheral.name)!
+		expect(weather.hasThermometer).toBeFalse()
+		expect(weather.pressure).toBeUndefined()
+		expect(manager.updatedAt(weather, 'temperature')).toBeUndefined()
+		expect(manager.updatedAt(weather, 'pressure')).toBeUndefined()
+
+		// The connected-state ask() and this explicit replay both see the measurement still Busy; neither
+		// may turn its declared zero defaults into observations.
+		client.getProperties({ device: peripheral.name, name: 'WEATHER_PARAMETERS' })
+		expect(weather.hasThermometer).toBeFalse()
+		expect(weather.pressure).toBeUndefined()
+		expect(manager.updatedAt(weather, 'temperature')).toBeUndefined()
+		expect(manager.updatedAt(weather, 'pressure')).toBeUndefined()
+
+		peripheral.temperature = 21.5
+		peripheral.pressure = 1013.25
+		peripheral.emit()
+
+		expect(weather.hasThermometer).toBeTrue()
+		expect(weather.temperature).toBe(21.5)
+		expect(weather.pressure).toBe(1013.25)
+		expect(manager.updatedAt(weather, 'temperature')).toBeGreaterThan(0)
+		expect(manager.updatedAt(weather, 'pressure')).toBeGreaterThan(0)
+	})
+
 	test('hygrometer and barometer factories define required and optional measurements', async () => {
 		const firmata = new FakeFirmata()
 		const { events, handler } = createRecorder()
@@ -945,6 +980,7 @@ describe('firmata indi client', () => {
 		peripheral.temperature = 10
 		const device = client.createPeripheral(peripheral)
 		await device.connect()
+		peripheral.emit()
 
 		// Unrelated device that must not respond to the filtered query.
 		client.createPeripheral(new FakeThermometer('LM35b', firmata as never))

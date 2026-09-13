@@ -246,9 +246,12 @@ export function debayer(image: Image, pattern?: CfaPattern): Image | undefined {
 				}
 			}
 
+			const header: Image['header'] = { ...image.header, NAXIS: 3, NAXIS3: 3 }
+			delete header.BAYERPAT
+
 			return {
-				header: { ...image.header, NAXIS: 3, NAXIS3: 3 },
-				metadata: { ...metadata, channels: 3, stride: width * 3, strideInBytes: width * 3 * metadata.pixelSizeInBytes },
+				header,
+				metadata: { ...metadata, bayer: undefined, channels: 3, stride: width * 3, strideInBytes: width * 3 * metadata.pixelSizeInBytes },
 				raw: output,
 			}
 		}

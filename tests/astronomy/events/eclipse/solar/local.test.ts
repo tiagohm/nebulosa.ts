@@ -4,7 +4,7 @@ import { computePolynomialBesselianElements, type PolynomialBesselianElements } 
 import { ASEC2RAD, PI, PIOVERFOUR, PIOVERTWO, RAD2DEG, TAU } from '../../../../../src/core/constants'
 import { deg, normalizeAngle } from '../../../../../src/math/units/angle'
 // oxfmt-ignore
-import { computeLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeGreatestDurationCircumstances, computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances, findLocalContactRoots, findLocalMaximumTime, listLocalSolarEclipses, type LocalFundamentalState, type LocalSolarEclipseCircumstancesOptions, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions, type LocalSolarEclipseCircumstances, } from '../../../../../src/astronomy/events/eclipse/solar/local'
+import { computeLocalSolarEclipseViewGeometry, computeLocalViewDiskPair, buildLocalViewHorizonGeometry, computeGreatestDurationCircumstances, computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances, findLocalContactRoots, findLocalMaximumTime, listLocalSolarEclipses, type LocalFundamentalState, type LocalSolarEclipseCircumstancesOptions, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions, type LocalSolarEclipseCircumstances, } from '../../../../../src/astronomy/events/eclipse/solar/local'
 import { sunMoonPosition } from '../../../../../src/astronomy/events/eclipse/eclipse'
 import { timeToDate, timeYMD, toJulianDay, type Time } from '../../../../../src/astronomy/time/time'
 import { sphericalSeparation } from '../../../../../src/math/numerical/geometry'
@@ -459,6 +459,49 @@ describe('local view horizon geometry', () => {
 		// Project the line midpoint's displacement from the Sun onto the away-from-zenith direction (-zenith).
 		const awayDotDisplacement = (midX - sunCx) * -Math.sin(q) + (midY - sunCy) * Math.cos(q)
 		expect(awayDotDisplacement).toBeCloseTo(solarRadiusPx, 6)
+	})
+})
+
+describe('computeLocalViewDiskPair', () => {
+	const width = 450
+	const height = 160
+	const solarRadiusPx = 34
+
+	function diskEvent(centerPositionAngle: number | undefined, parallacticAngle: number): LocalSolarEclipseEvent {
+		return {
+			kind: 'MAX',
+			description: '',
+			time: total2024.eclipse.maximalTime,
+			jd: 0,
+			sunAltitude: PIOVERTWO,
+			positionAngle: centerPositionAngle,
+			zenithAngle: 0,
+			visibility: 'aboveHorizon',
+			observable: true,
+			magnitude: 1,
+			moonSunDiameterRatio: 1,
+			centralPhaseKind: 'total',
+			localViewState: { separationSolarRadii: 1, centerPositionAngle, centerZenithAngle: 0, parallacticAngle, sunAltitude: PIOVERTWO, solarAngularRadius: deg(0.26) },
+		}
+	}
+
+	test('zenith mode treats a celestial-north lunar center (P = 0) as a real angle', () => {
+		// P = 0 is Moon due celestial north; with q = π/2 the zenith-frame angle is Z = −q, so the Moon sits
+		// due west of the Sun (eastRight), not on the zenith vertical. `centerP &&` used to skip that subtraction.
+		const options = viewOptions({ width, height, solarRadiusPx, orientationMode: 'zenith', includeGhostDisks: false, includeHorizon: false })
+		const { moon } = computeLocalViewDiskPair(diskEvent(0, PIOVERTWO), options)
+		expect(moon.cx).toBeCloseTo(width / 2 - solarRadiusPx, 9)
+		expect(moon.cy).toBeCloseTo(height / 2, 9)
+	})
+
+	test('zenith mode with a tiny truthy P matches Z = P − q', () => {
+		const centerP = 1e-12
+		const q = PIOVERTWO
+		const options = viewOptions({ width, height, solarRadiusPx, orientationMode: 'zenith', includeGhostDisks: false, includeHorizon: false })
+		const { moon } = computeLocalViewDiskPair(diskEvent(centerP, q), options)
+		const z = normalizeAngle(centerP - q)
+		expect(moon.cx).toBeCloseTo(width / 2 + solarRadiusPx * Math.sin(z), 12)
+		expect(moon.cy).toBeCloseTo(height / 2 - solarRadiusPx * Math.cos(z), 12)
 	})
 })
 

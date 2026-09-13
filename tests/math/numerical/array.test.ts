@@ -37,3 +37,33 @@ test('quick select', () => {
 	expect(() => quickSelect(values, 0, 0)).toThrow(RangeError)
 	expect(() => quickSelect(values, 7, 7)).toThrow(RangeError)
 })
+
+test('quick select midpoint does not wrap past 2^32', async () => {
+	const source = await Bun.file(new URL('../../../src/math/numerical/array.ts', import.meta.url)).text()
+	expect(source).toContain('values[left + ((right - left) >>> 1)]')
+
+	// Same overflow-safe index as quickSelect. (left + right) >>> 1 wraps through uint32.
+	const midpoint = (left: number, right: number) => left + ((right - left) >>> 1)
+	const windows = [
+		[2 ** 31, 2 ** 31],
+		[2 ** 31, 2 ** 31 + 10],
+		[2 ** 32 - 3, 2 ** 32 - 2],
+	] as const
+
+	for (const [left, right] of windows) {
+		const mid = midpoint(left, right)
+		expect(mid).toBeGreaterThanOrEqual(left)
+		expect(mid).toBeLessThanOrEqual(right)
+		expect((left + right) >>> 1).not.toBe(mid)
+	}
+
+	expect(midpoint(2 ** 31, 2 ** 31)).toBe(2 ** 31)
+	expect(midpoint(2 ** 31, 2 ** 31 + 10)).toBe(2 ** 31 + 5)
+	expect(midpoint(2 ** 32 - 3, 2 ** 32 - 2)).toBe(2 ** 32 - 3)
+
+	// The overflowing window [2^31, 2^31+10] is all 5s; a wrapped pivot at index 5
+	// (value 0) would make every element greater and hang. The safe midpoint stays
+	// inside the window, so an 11-element copy of that window selects in one pass.
+	const window = new Float64Array(11).fill(5)
+	expect(quickSelect(window, 11, 2)).toBe(5)
+})

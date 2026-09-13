@@ -134,12 +134,15 @@ export const CIRS: Frame = {
 
 // The Terrestrial Intermediate Reference System (TIRS): Earth-fixed apart from
 // polar motion (true equator and equinox of date rotated by GAST about the
-// pole). ITRS adds the polar-motion wobble on top of this.
+// pole). ITRS adds the polar-motion wobble on top of this. Uses the same mean
+// Earth-rotation velocity operator as ITRS so a crust-fixed state has near-zero
+// TIRS velocity (only polar-motion rate remains).
 export const TIRS: Frame = {
 	rotationAt: (time) => {
 		const m = matRotZ(greenwichApparentSiderealTime(time))
 		return matMul(m, precessionNutationMatrix(time), m)
 	},
+	dRdtTimesRtAt: () => EARTH_DRDT_TIMES_RT_MATRIX,
 }
 
 // The True Equator, Mean Equinox (TEME) frame used by the SGP4 satellite model.
@@ -338,7 +341,8 @@ const NO_TIME: Time = { day: 0, fraction: 0, scale: 0 }
 
 // Convenience wrappers that rotate a position or [p, v] state from the base frame into the named frame
 // (the inverse direction is available via frameToBase/frameToFrame). Each delegates to frameAt with the
-// matching Frame; the time-independent ones pass NO_TIME. Pass `o` to write in place and avoid allocation.
+// matching Frame; the time-independent ones pass NO_TIME and the time-dependent ones require `time`.
+// Pass `o` to write in place and avoid allocation.
 
 export function meanEquatorAndEquinoxAtB1950<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
 	return frameAt(pv, MEAN_EQUATOR_AND_EQUINOX_AT_B1950, NO_TIME, o)
@@ -368,8 +372,8 @@ export function supergalactic<T extends CoordinateFrame>(pv: T, o?: CoordinateFr
 	return frameAt(pv, SUPERGALACTIC, NO_TIME, o)
 }
 
-export function trueEquatorAndEquinoxOfDate<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
-	return frameAt(pv, TRUE_EQUATOR_AND_EQUINOX_OF_DATE, NO_TIME, o)
+export function trueEquatorAndEquinoxOfDate<T extends CoordinateFrame>(pv: T, time: Time, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, TRUE_EQUATOR_AND_EQUINOX_OF_DATE, time, o)
 }
 
 export function icrs<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
@@ -380,32 +384,32 @@ export function ecliptic<T extends CoordinateFrame>(pv: T, time: Time, o?: Coord
 	return frameAt(pv, ECLIPTIC, time, o)
 }
 
-export function meanEquatorAndEquinoxOfDate<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
-	return frameAt(pv, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, NO_TIME, o)
+export function meanEquatorAndEquinoxOfDate<T extends CoordinateFrame>(pv: T, time: Time, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, time, o)
 }
 
-export function meanEclipticOfDate<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
-	return frameAt(pv, MEAN_ECLIPTIC_OF_DATE, NO_TIME, o)
+export function meanEclipticOfDate<T extends CoordinateFrame>(pv: T, time: Time, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, MEAN_ECLIPTIC_OF_DATE, time, o)
 }
 
-export function cirs<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
-	return frameAt(pv, CIRS, NO_TIME, o)
+export function cirs<T extends CoordinateFrame>(pv: T, time: Time, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, CIRS, time, o)
 }
 
-export function tirs<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
-	return frameAt(pv, TIRS, NO_TIME, o)
+export function tirs<T extends CoordinateFrame>(pv: T, time: Time, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, TIRS, time, o)
 }
 
-export function teme<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
-	return frameAt(pv, TEME, NO_TIME, o)
+export function teme<T extends CoordinateFrame>(pv: T, time: Time, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, TEME, time, o)
 }
 
-export function itrs<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
-	return frameAt(pv, ITRS, NO_TIME, o)
+export function itrs<T extends CoordinateFrame>(pv: T, time: Time, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, ITRS, time, o)
 }
 
-export function itrsInstantaneous<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
-	return frameAt(pv, ITRS_INSTANTANEOUS, NO_TIME, o)
+export function itrsInstantaneous<T extends CoordinateFrame>(pv: T, time: Time, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, ITRS_INSTANTANEOUS, time, o)
 }
 
 // Converts an ICRS cartesian coordinate (or state) to FK5 (J2000) by applying

@@ -205,7 +205,8 @@ export function approximateArcsinhStretchParameters(midtone: number = 0.5, shado
 	const a = Number.isFinite(shadow) ? clamp(shadow, 0, 1) : 0
 	const b = Number.isFinite(highlight) ? clamp(highlight, 0, 1) : 1
 	shadow = Math.min(a, b)
-	highlight = Math.max(b, shadow + 1e-6)
+	highlight = Math.max(a, b)
+	if (!(highlight > shadow)) highlight = Math.min(1, shadow + 1e-6)
 
 	if (resolvedMidtone === 0.5 && shadow === 0 && highlight === 1) {
 		return { stretchFactor: 1, blackPoint: 0 }

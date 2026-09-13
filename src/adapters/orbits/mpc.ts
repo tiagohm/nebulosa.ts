@@ -135,7 +135,7 @@ const ADES_FIELD_ALIASES: Readonly<Record<string, string>> = {
 }
 
 const CAR_STATE_NAMES = ['x', 'y', 'z', 'vx', 'vy', 'vz'] as const
-const TWO_LINE_NOTE2 = new Set(['S', 's', 'V', 'v', 'W', 'w', 'R', 'r', 'Q', 'q', 'T', 't'])
+const TWO_LINE_NOTE2 = new Set(['S', 's', 'V', 'v', 'W', 'w', 'R', 'r', 'Q', 'q'])
 const SPACECRAFT_SYS = new Set(['ICRF_KM', 'ICRF_AU'])
 const GEODETIC_SYS = new Set(['WGS84', 'ITRF', 'IAU'])
 const OBSERVATORY_TYPES = new Set(['optical', 'occultation', 'satellite', 'radar', 'roving'])
@@ -1262,19 +1262,24 @@ function parseADESTime(value: string): Time {
 }
 
 function formatADESTime(time: Time): string {
-	const [year, month, day, fraction] = eraJdToCal(time.day, time.fraction)
-	let seconds = fraction * 86400
-	if (seconds < 0) seconds = 0
-	if (seconds >= 86400) seconds = 86399.999
-	const hour = Math.floor(seconds / 3600)
-	const minute = Math.floor((seconds - hour * 3600) / 60)
-	const second = seconds - hour * 3600 - minute * 60
-	const whole = Math.floor(second)
-	const milli = Math.round((second - whole) * 1000)
-	const carry = milli === 1000
-	const s = carry ? whole + 1 : whole
-	const ms = carry ? 0 : milli
-	return `${pad4(year)}-${pad2(month)}-${pad2(day)}T${pad2(hour)}:${pad2(minute)}:${pad2(s)}.${String(ms).padStart(3, '0')}Z`
+	const date = eraJdToCal(time.day, time.fraction)
+	let [year, month, day] = date
+	const fraction = date[3]
+	let milliseconds = Math.round(Math.max(0, fraction) * 86400000)
+	if (milliseconds >= 86400000) {
+		const nextDate = eraJdToCal(time.day + 1, 0)
+		year = nextDate[0]
+		month = nextDate[1]
+		day = nextDate[2]
+		milliseconds = 0
+	}
+	const hour = Math.floor(milliseconds / 3600000)
+	milliseconds -= hour * 3600000
+	const minute = Math.floor(milliseconds / 60000)
+	milliseconds -= minute * 60000
+	const second = Math.floor(milliseconds / 1000)
+	const milli = milliseconds - second * 1000
+	return `${pad4(year)}-${pad2(month)}-${pad2(day)}T${pad2(hour)}:${pad2(minute)}:${pad2(second)}.${String(milli).padStart(3, '0')}Z`
 }
 
 // Canonicalizes one ADES JSON or PSV record and converts units to radians/AU/UTC.
@@ -1740,7 +1745,7 @@ export function packMPCDesignation(value: string): string {
 	throw new RangeError(`designation "${value}" cannot be packed`)
 }
 
-const PACKED_PCDXAI_12_REGEX = /^[\d ]{4}[PCDXAI]/
+const PACKED_PCDXAI_12_REGEX = /^[\d ]{4}[PCDXAIS]/
 
 // Unpacks a 5/7/8/12-character MPC packed designation, including the extended `_YHxxxx` scheme.
 export function unpackMPCDesignation(value: string): string {
@@ -1755,13 +1760,14 @@ export function unpackMPCDesignation(value: string): string {
 		if (/^\d{4}[PCDXAI]$/.test(trimmed)) return `${+trimmed.slice(0, 4)}${trimmed[4]}`
 	}
 
+	if (trimmed.length === 8 && trimmed.startsWith('S')) return `S/${unpackMPCNaturalSatellite(trimmed.slice(1))}`
 	if (trimmed.length === 8 && /^[PCDXAI]_/.test(trimmed)) return `${trimmed[0]}/${unpackMPCDesignation(trimmed.slice(1))}`
 	if (trimmed.length === 8 && /^[PCDXAI][IJKL_]/.test(trimmed)) return `${trimmed[0]}/${unpackMPCDesignation(trimmed.slice(1))}`
 
 	if (trimmed.length === 12 && PACKED_PCDXAI_12_REGEX.test(trimmed)) {
 		const number = trimmed.slice(0, 4).trim()
 		const type = trimmed[4]
-		const rest = unpackMPCDesignation(trimmed.slice(5))
+		const rest = type === 'S' ? unpackMPCNaturalSatellite(trimmed.slice(5)) : unpackMPCDesignation(trimmed.slice(5))
 		return number ? `${+number}${type}/${rest}` : `${type}/${rest}`
 	}
 
@@ -1781,10 +1787,18 @@ export function unpackMPCDesignation(value: string): string {
 	throw new RangeError(`packed designation "${value}" cannot be unpacked`)
 }
 
+// Unpacks the seven-character provisional tail used after the `S` natural-satellite prefix.
+function unpackMPCNaturalSatellite(value: string) {
+	const unpacked = unpackMPCDesignation(value)
+	const match = /^(\S+)\s+([JSUN])(\d+)$/.exec(unpacked)
+	if (!match) throw new RangeError(`packed natural-satellite designation "${value}" cannot be unpacked`)
+	return `${match[1]} ${match[2]} ${match[3]}`
+}
+
 const PACKED_PERMANENT_REGEX = /^(\d{5}|[A-Za-z]\d{4}|~[0-9A-Za-z]{4}|[JSUN]\d{3}S|\d{4}[PCDXAI])$/
 const PACKED_PROVISIONAL_PLST_REGEX = /^(PLS|T[123]S)\d{4}$/
 const PACKED_PROVISIONAL_IL_REGEX = /^[I-L]\d{2}/
-const PACKED_PCDXAI_8_REGEX = /^[PCDXAI]/
+const PACKED_PCDXAI_8_REGEX = /^[PCDXAIS]/
 
 function looksPacked(value: string) {
 	if (value.length === PACKED_PERMANENT_LENGTH) {
@@ -1826,6 +1840,11 @@ function parseSatelliteDesignation(value: string) {
 	if (packed) return `${packed[1]}${packed[2].padStart(3, '0')}S`
 	const readable = READABLE_SATELLITE_DESIGNATION_REGEX.exec(value)
 	if (readable) return `${readable[1]}${readable[2].padStart(3, '0')}S`
+	const provisional = /^S\/(A?\d{3,4})\s+([JSUN])\s+(\d+)$/.exec(value)
+	if (provisional) {
+		const packedProvisional = packCometProvisional(`${provisional[1]} ${provisional[2]}${provisional[3]}`)
+		if (packedProvisional) return `S${packedProvisional}`
+	}
 	return undefined
 }
 
@@ -2020,8 +2039,10 @@ export function parseMPC80Lines(text: string): readonly MPCObservation[] {
 
 		if (note2 === 's' || note2 === 'v' || note2 === 'w' || note2 === 'r' || note2 === 'q' || note2 === 't') throw new Error('orphan MPC80 second line')
 
-		if (TWO_LINE_NOTE2.has(note2)) {
-			const second = lines[i + 1]
+		const second = lines[i + 1]
+		const isConvertedSatellitePair = note2 === 'T' && second?.[14] === 't' && line.slice(0, 12) === second.slice(0, 12) && line.slice(15, 32) === second.slice(15, 32)
+
+		if (TWO_LINE_NOTE2.has(note2) || isConvertedSatellitePair) {
 			if (!second) throw new Error('MPC80 two-line observation is missing its second record')
 			observations.push(parseMpc80Pair(line, second))
 			i++
@@ -2172,15 +2193,16 @@ function parseRadarPair(first: string, second: string): MPCRadarObservation {
 
 	return {
 		...firstParsed,
-		delayError: microsecondsToSeconds(parseImplicitDecimal(second.slice(32, 47), 11)),
+		delayError: microsecondsToSeconds(parseImplicitDecimal(second.slice(33, 47), 10)),
 		dopplerError: parseImplicitDecimal(second.slice(47, 62), 11),
 		bounce,
 	}
 }
 
 function parseMpc80Ids(line: string) {
-	const packedPermanent = emptyToUndefined(line.slice(0, 5).trim())
-	const packedProvisional = emptyToUndefined(line.slice(5, 12).trim())
+	const packedNaturalSatellite = line.slice(0, 4).trim() === '' && line[4] === 'S' ? line.slice(4, 12).trim() : undefined
+	const packedPermanent = packedNaturalSatellite ? undefined : emptyToUndefined(line.slice(0, 5).trim())
+	const packedProvisional = packedNaturalSatellite ?? emptyToUndefined(line.slice(5, 12).trim())
 	let permanentId: string | undefined
 	let provisionalId: string | undefined
 	let temporaryId: string | undefined
@@ -2291,15 +2313,15 @@ function writeRovingSecondLine(first: string, observer: MPCGeodeticObserver, sta
 function writeRadarPair(observation: MPCRadarObservation): readonly [string, string] {
 	const ids = formatMpc80Ids(observation)
 	const date = formatMpc80Date(observation.time)
-	const delay = formatImplicitDecimal((observation.delay ?? 0) * 1e6, 15, 4, 11)
-	const doppler = formatSignedImplicitDecimal(observation.doppler ?? 0, 15, 4, 11)
-	const freq = formatImplicitDecimal((observation.transmitFrequency ?? 0) / 1e6, 6, 1, 5)
+	const delay = observation.delay === undefined ? ' '.repeat(15) : formatImplicitDecimal(observation.delay * 1e6, 15, 4, 11)
+	const doppler = observation.doppler === undefined ? '-'.padEnd(15) : formatSignedImplicitDecimal(observation.doppler, 15, 4, 11)
+	const freq = observation.transmitFrequency === undefined ? ' '.repeat(6) : formatImplicitDecimal(observation.transmitFrequency / 1e6, 6, 1, 5)
 	const trx = (observation.transmitterStation ?? observation.station).padEnd(3).slice(0, 3)
 	const rcv = (observation.receiverStation ?? observation.station).padEnd(3).slice(0, 3)
 	const first = `${ids}  R${date}${delay}${doppler}${freq}${trx}${' '.repeat(6)}${rcv}`
-	const bounce = observation.bounce === 'com' ? 'C' : 'S'
-	const delayErr = formatImplicitDecimal((observation.delayError ?? 0) * 1e6, 14, 4, 11)
-	const dopplerErr = formatImplicitDecimal(observation.dopplerError ?? 0, 15, 4, 11)
+	const bounce = observation.bounce === undefined ? ' ' : observation.bounce === 'com' ? 'C' : 'S'
+	const delayErr = observation.delayError === undefined ? ' '.repeat(14) : formatImplicitDecimal(observation.delayError * 1e6, 14, 4, 10)
+	const dopplerErr = observation.dopplerError === undefined ? ' '.repeat(15) : formatImplicitDecimal(observation.dopplerError, 15, 4, 11)
 	const second = `${ids}  r${date}${bounce}${delayErr}${dopplerErr}${' '.repeat(6)}${trx}${' '.repeat(6)}${rcv}`
 	return [first.padEnd(80).slice(0, 80), second.padEnd(80).slice(0, 80)]
 }
@@ -2308,15 +2330,22 @@ function formatMpc80Ids(observation: MPCObservation) {
 	const permanent = observation.permanentId ? packMPCDesignation(observation.permanentId).padEnd(5).slice(0, 5) : '     '
 	const packedPermanent = permanent.length === 5 ? permanent : permanent.padStart(5, ' ')
 	let provisional = '       '
+	let naturalSatellite: string | undefined
 	const source = observation.provisionalId ?? observation.trackletSubmissionId
 
 	if (source) {
 		try {
 			const packed = packMPCDesignation(source)
-			provisional = packed.length === 7 ? packed : source.padEnd(7).slice(0, 7)
+			if (packed.length === 8 && packed.startsWith('S')) naturalSatellite = packed
+			else provisional = packed.length === 7 ? packed : source.padEnd(7).slice(0, 7)
 		} catch {
 			provisional = source.padEnd(7).slice(0, 7)
 		}
+	}
+
+	if (naturalSatellite) {
+		if (packedPermanent.trim()) throw new RangeError('natural-satellite provisional designation cannot have a permanent id')
+		return `${packedPermanent.slice(0, 4)}${naturalSatellite}`
 	}
 
 	const ids = `${packedPermanent}${provisional}`
@@ -2325,11 +2354,16 @@ function formatMpc80Ids(observation: MPCObservation) {
 }
 
 function formatMpc80Date(time: Time) {
-	const [year, month, day, fraction] = eraJdToCal(time.day, time.fraction)
-	let frac = fraction
-	const d = frac >= 1 ? day + 1 : day
-	if (frac >= 1) frac -= 1
-	return `${pad4(year)} ${pad2(month)} ${pad2(d)}${frac.toFixed(6).slice(1)}`
+	let [year, month, day, fraction] = eraJdToCal(time.day, time.fraction)
+	const roundedFraction = fraction.toFixed(6)
+	if (roundedFraction === '1.000000') {
+		const nextDate = eraJdToCal(time.day + 1, 0)
+		year = nextDate[0]
+		month = nextDate[1]
+		day = nextDate[2]
+		fraction = 0
+	}
+	return `${pad4(year)} ${pad2(month)} ${pad2(day)}${fraction.toFixed(6).slice(1)}`
 }
 
 function formatMagnitude(magnitude?: number, band?: string) {

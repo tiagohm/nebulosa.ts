@@ -328,10 +328,9 @@ export abstract class ADCPeripheral<D extends Peripheral = never> extends Periph
 		this.client.pinMode(this.pin, PinMode.ANALOG)
 		this.client.requestAnalogPinReport(this.pin, true)
 
-		// The board only emits an analogMessage (and thus pinChange) when the pin's cached value changes,
-		// so a pin already sitting at its value (for example 0) would never produce a first reading.
-		// Deliver an initial sample from the pin's currently cached value so a consumer awaiting a first
-		// read can settle even when the first hardware report equals the cached value.
+		// The cached value can predate the first analog report, so deliver an initial sample from it while
+		// a consumer awaits its first read. The subsequent report is still a completed sample, even when
+		// it has the same value.
 		const pin = this.client.pinAt(this.pin)
 		if (pin !== undefined) this.commit(this.calculate(pin.value))
 	}
@@ -342,7 +341,7 @@ export abstract class ADCPeripheral<D extends Peripheral = never> extends Periph
 		this.client.requestAnalogPinReport(this.pin, false)
 	}
 
-	// Firmata analog-report hook: recomputes and commits the reading when the watched pin changes.
+	// Firmata analog-report hook: recomputes and commits every report for the watched pin.
 	pinChange(client: FirmataClient, pin: Pin) {
 		if (this.client === client && pin.id === this.pin) {
 			this.commit(this.calculate(pin.value))

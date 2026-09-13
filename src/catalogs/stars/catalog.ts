@@ -1,6 +1,8 @@
 import type { EquatorialCoordinate } from '../../astronomy/coordinates/coordinate'
+import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import { DEG2RAD, PI, PIOVERTWO, TAU } from '../../core/constants'
 import { GEOMETRY_EPSILON } from '../../core/validation'
+import { type MutVec3, type Vec3, vecCross, vecDot, vecLength } from '../../math/linear-algebra/vec3'
 import { clamp } from '../../math/numerical/math'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import type { Velocity } from '../../math/units/velocity'
@@ -9,7 +11,8 @@ import type { Velocity } from '../../math/units/velocity'
 // entry shape, the cone/triangle/box/polygon query union, and the normalization that turns each query
 // into coarse RA/Dec preselection boxes plus an exact membership test. BaseStarCatalog drives the
 // shared stream/filter flow; concrete providers supply only the candidate stream. Angles are radians,
-// RA normalized to [0, TAU); polygon/triangle tests use a tangent-plane projection centered on the region.
+// RA normalized to [0, TAU); polygon/triangle tests use a local planar approximation, switching to
+// spherical great-circle edges when a convex region contains a pole, where RA cannot form a local chart.
 
 // Minimum declination (south pole), radians.
 const MIN_DEC = -PIOVERTWO
@@ -51,6 +54,7 @@ export interface StarCatalogConeQuery {
 }
 
 // A spherical-triangle region query.
+// Uses a local planar approximation except for regions containing a pole, which use great-circle edges.
 export interface StarCatalogTriangleQuery {
 	readonly kind: 'triangle'
 	readonly a: Vertex
@@ -69,6 +73,7 @@ export interface StarCatalogBoxQuery {
 }
 
 // A convex-polygon region query.
+// Ordered vertices use the local planar approximation, or great-circle edges if the region contains a pole.
 export interface StarCatalogPolygonQuery {
 	readonly kind: 'polygon'
 	readonly vertices: readonly Vertex[]
@@ -127,6 +132,8 @@ interface NormalizedConeQuery extends NormalizedQueryBase {
 // Normalized triangle query with its tangent-plane projection.
 interface NormalizedTriangleQuery extends NormalizedQueryBase {
 	readonly kind: 'triangle'
+	// Inward unit edge normals in equatorial Cartesian coordinates for polar spherical membership, if needed.
+	readonly edgeNormals?: readonly Vec3[]
 	// Triangle vertices projected onto the tangent plane.
 	readonly projectedVertices: readonly Vertex[]
 	// Tangent-plane center right ascension, radians.
@@ -147,6 +154,8 @@ interface NormalizedBoxQuery extends NormalizedQueryBase {
 // Normalized polygon query with its tangent-plane projection.
 interface NormalizedPolygonQuery extends NormalizedQueryBase {
 	readonly kind: 'polygon'
+	// Inward unit edge normals in equatorial Cartesian coordinates for polar spherical membership, if needed.
+	readonly edgeNormals?: readonly Vec3[]
 	// Polygon vertices projected onto the tangent plane.
 	readonly projectedVertices: readonly Vertex[]
 	// Tangent-plane center right ascension, radians.
@@ -159,6 +168,14 @@ interface NormalizedPolygonQuery extends NormalizedQueryBase {
 
 // Union of all normalized query shapes.
 export type NormalizedStarCatalogQuery = NormalizedConeQuery | NormalizedTriangleQuery | NormalizedBoxQuery | NormalizedPolygonQuery
+
+// Cached spherical membership and conservative preselection for a convex region containing a pole.
+interface PolarPolygonGeometry {
+	// Inward unit normals of nonzero great-circle edges, in equatorial Cartesian coordinates.
+	readonly edgeNormals: readonly Vec3[]
+	// Full-RA boxes enclosing the region, with declinations in radians.
+	readonly preselectionBoxes: readonly StarCatalogRaDecBox[]
+}
 
 // Implements the generic query, filtering, projection, and propagation flow for concrete catalogs.
 export abstract class BaseStarCatalog<T extends StarCatalogEntry> implements StarCatalog<T> {
@@ -313,16 +330,18 @@ function normalizeTriangleQuery(query: StarCatalogTriangleQuery): NormalizedTria
 	const tangentCenterDEC = (normalizedVertices[0][1] + normalizedVertices[1][1] + normalizedVertices[2][1]) / 3
 	const projectedVertices = normalizedVertices.map(([ra, dec]) => projectPolygonVertex(ra, dec, tangentCenterRA, tangentCenterDEC))
 	const [minProjectedX, maxProjectedX, minDEC, maxDEC] = polygonBounds(projectedVertices, tangentCenterDEC)
-	const preselectionBoxes = projectedPolygonToBoxes(minProjectedX, maxProjectedX, minDEC, maxDEC, tangentCenterRA, tangentCenterDEC)
+	const polarGeometry = polarPolygonGeometry(normalizedVertices, minDEC, maxDEC)
+	const preselectionBoxes = polarGeometry?.preselectionBoxes ?? projectedPolygonToBoxes(minProjectedX, maxProjectedX, minDEC, maxDEC, tangentCenterRA, tangentCenterDEC)
 	const wrapAround = preselectionBoxes.length > 1
 
 	return {
 		kind: 'triangle',
+		edgeNormals: polarGeometry?.edgeNormals,
 		projectedVertices,
 		tangentCenterRA: tangentCenterRA,
 		tangentCenterDEC: tangentCenterDEC,
 		cosTangentCenterDEC: Math.cos(tangentCenterDEC),
-		geometryMode: 'planarTangent',
+		geometryMode: polarGeometry ? 'spherical' : 'planarTangent',
 		wrapAround,
 		preselectionBoxes,
 		sortAnchor: [tangentCenterRA, tangentCenterDEC],
@@ -362,7 +381,8 @@ function normalizePolygonQuery(query: StarCatalogPolygonQuery): NormalizedPolygo
 	const tangentCenterDEC = normalizedVertices.reduce((sum, [, dec]) => sum + dec, 0) / normalizedVertices.length
 	const projectedVertices = normalizedVertices.map(([ra, dec]) => projectPolygonVertex(ra, dec, tangentCenterRA, tangentCenterDEC))
 	const [minProjectedX, maxProjectedX, minDEC, maxDEC] = polygonBounds(projectedVertices, tangentCenterDEC)
-	const preselectionBoxes = projectedPolygonToBoxes(minProjectedX, maxProjectedX, minDEC, maxDEC, tangentCenterRA, tangentCenterDEC)
+	const polarGeometry = polarPolygonGeometry(normalizedVertices, minDEC, maxDEC)
+	const preselectionBoxes = polarGeometry?.preselectionBoxes ?? projectedPolygonToBoxes(minProjectedX, maxProjectedX, minDEC, maxDEC, tangentCenterRA, tangentCenterDEC)
 	const wrapAround = preselectionBoxes.length > 1
 
 	if (maxProjectedX - minProjectedX > TANGENT_POLYGON_RECOMMENDED_SPAN) {
@@ -371,11 +391,12 @@ function normalizePolygonQuery(query: StarCatalogPolygonQuery): NormalizedPolygo
 
 	return {
 		kind: 'polygon',
+		edgeNormals: polarGeometry?.edgeNormals,
 		projectedVertices,
 		tangentCenterRA: tangentCenterRA,
 		tangentCenterDEC: tangentCenterDEC,
 		cosTangentCenterDEC: Math.cos(tangentCenterDEC),
-		geometryMode: 'planarTangent',
+		geometryMode: polarGeometry ? 'spherical' : 'planarTangent',
 		wrapAround,
 		preselectionBoxes,
 		sortAnchor: [tangentCenterRA, tangentCenterDEC],
@@ -391,6 +412,17 @@ function matchesNormalizedGeometry(entry: StarCatalogEntry, query: NormalizedSta
 			return query.boxes.some((box) => matchesBox(entry.rightAscension, entry.declination, box))
 		case 'triangle':
 		case 'polygon': {
+			if (query.edgeNormals) {
+				const cosDEC = Math.cos(entry.declination)
+				const x = cosDEC * Math.cos(entry.rightAscension)
+				const y = cosDEC * Math.sin(entry.rightAscension)
+				const z = Math.sin(entry.declination)
+				for (const normal of query.edgeNormals) {
+					if (normal[0] * x + normal[1] * y + normal[2] * z < -GEOMETRY_EPSILON) return false
+				}
+				return true
+			}
+
 			// Inline the tangent-plane projection using the cached cos(centerDEC) and avoid a per-candidate tuple allocation.
 			const deltaRa = shortestSignedRaDelta(entry.rightAscension, query.tangentCenterRA)
 			return pointInProjectedPolygon(deltaRa * query.cosTangentCenterDEC, entry.declination - query.tangentCenterDEC, query.projectedVertices)
@@ -432,6 +464,45 @@ function meanRightAscension(vertices: readonly Vertex[]) {
 	return normalizeAngle(Math.atan2(sinSum, cosSum))
 }
 
+// Builds spherical geometry only when ordered convex vertices enclose or touch a pole. Vertices and
+// their declination extrema are in radians; repeated vertices are ignored. Returns undefined for
+// nonpolar or degenerate regions, retaining their planar behavior. Allocates normals once per query.
+function polarPolygonGeometry(vertices: readonly Vertex[], minDEC: Angle, maxDEC: Angle): PolarPolygonGeometry | undefined {
+	const vectors = vertices.map(([ra, dec]) => eraS2c(ra, dec))
+	const centroid: MutVec3 = [0, 0, 0]
+	for (const vector of vectors) {
+		centroid[0] += vector[0]
+		centroid[1] += vector[1]
+		centroid[2] += vector[2]
+	}
+
+	const edgeNormals: Vec3[] = []
+	let north = true
+	let south = true
+	for (let i = 0; i < vectors.length; i++) {
+		const normal = vecCross(vectors[i], vectors[(i + 1) % vectors.length])
+		const length = vecLength(normal)
+		if (length === 0) continue
+		const side = vecDot(normal, centroid)
+		if (side === 0) return undefined
+		const signedLength = side > 0 ? length : -length
+		normal[0] /= signedLength
+		normal[1] /= signedLength
+		normal[2] /= signedLength
+		edgeNormals.push(normal)
+		north &&= normal[2] >= -GEOMETRY_EPSILON
+		south &&= normal[2] <= GEOMETRY_EPSILON
+		if (!north && !south) return undefined
+	}
+	if (edgeNormals.length < 3) return undefined
+
+	// A cap of radius <= PI/2 is geodesically convex, so the farthest vertex from the enclosed
+	// pole bounds the whole region. For vertices across the equator, use the full sky conservatively.
+	const lowerDEC = north && minDEC >= 0 ? minDEC : MIN_DEC
+	const upperDEC = south && maxDEC <= 0 ? maxDEC : MAX_DEC
+	return { edgeNormals, preselectionBoxes: [{ minRA: 0, maxRA: TAU, minDEC: lowerDEC, maxDEC: upperDEC }] }
+}
+
 // Computes the tangent-plane bounds of a projected polygon.
 function polygonBounds(projectedVertices: readonly Vertex[], tangentCenterDec: Angle): readonly [number, number, Angle, Angle] {
 	let minX = Number.POSITIVE_INFINITY
@@ -457,7 +528,8 @@ function projectedPolygonToBoxes(minProjectedX: number, maxProjectedX: number, m
 	return splitRaBox(minRA, maxRA, minDEC, maxDEC)
 }
 
-// Checks whether a tangent-plane point (px, py) falls inside a polygon using ray casting.
+// Checks whether a tangent-plane point (px, py), in radians, lies inside or within GEOMETRY_EPSILON
+// of a polygon edge. Tests closed segments before ray casting, including repeated vertices.
 function pointInProjectedPolygon(px: number, py: number, polygon: readonly Vertex[]) {
 	let inside = false
 	let j = polygon.length - 1
@@ -467,10 +539,16 @@ function pointInProjectedPolygon(px: number, py: number, polygon: readonly Verte
 		const yi = polygon[i][1]
 		const xj = polygon[j][0]
 		const yj = polygon[j][1]
-		const crosses = yi > py !== yj > py
-		const xIntersection = ((xj - xi) * (py - yi)) / (yj - yi || Number.MIN_VALUE) + xi
+		const dx = xj - xi
+		const dy = yj - yi
+		const lengthSquared = dx * dx + dy * dy
+		const fraction = lengthSquared > 0 ? clamp(((px - xi) * dx + (py - yi) * dy) / lengthSquared, 0, 1) : 0
 
-		if (crosses && px <= xIntersection + GEOMETRY_EPSILON) {
+		if (Math.hypot(px - xi - fraction * dx, py - yi - fraction * dy) <= GEOMETRY_EPSILON) return true
+
+		const crosses = yi > py !== yj > py
+
+		if (crosses && px < (dx * (py - yi)) / dy + xi) {
 			inside = !inside
 		}
 

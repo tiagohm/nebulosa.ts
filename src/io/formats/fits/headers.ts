@@ -117,10 +117,10 @@ export const XBAYROFF: FitsKeyword = { type: 'REAL', comment: 'X offset of Bayer
 export const YBAYROFF: FitsKeyword = { type: 'REAL', comment: 'Y offset of Bayer array on imaging sensor' }
 export const XBINNING: FitsKeyword = { type: 'REAL', comment: 'Binning factor used on X axis' }
 export const XORGSUBF: FitsKeyword = { type: 'REAL', comment: 'Subframe origin on X axis' }
-export const XPIXSZ: FitsKeyword = { type: 'REAL', comment: 'Physical X dimension of the sensor in microns' }
+export const XPIXSZ: FitsKeyword = { type: 'REAL', comment: 'Pixel width in microns (after binning)' }
 export const YBINNING: FitsKeyword = { type: 'REAL', comment: 'Binning factor used on Y axis' }
 export const YORGSUBF: FitsKeyword = { type: 'REAL', comment: 'Subframe origin on Y axis' }
-export const YPIXSZ: FitsKeyword = { type: 'REAL', comment: 'Physical Y dimension of the sensor in microns' }
+export const YPIXSZ: FitsKeyword = { type: 'REAL', comment: 'Pixel height in microns (after binning)' }
 
 // Other
 

@@ -4,8 +4,6 @@ import { arcmin, deg, formatDEC, formatRA, toDeg, toMas } from '../../../src/mat
 import { toKilometerPerSecond } from '../../../src/math/units/velocity'
 import { isNetworkTestSkipped } from '../../util'
 
-const SKIP = isNetworkTestSkipped()
-
 const SIMBAD_HEADER = 'oid\totype\tra\tdec\tV\tpmra\tpmdec\tplx_value\trvz_radvel'
 
 async function withMockSimbadCatalog<T>(rows: readonly string[], callback: (catalog: SimbadCatalog, queries: string[]) => Promise<T> | T) {
@@ -16,8 +14,12 @@ async function withMockSimbadCatalog<T>(rows: readonly string[], callback: (cata
 		async fetch(request) {
 			const form = await request.formData()
 			const query = form.get('query')
-			queries.push(typeof query === 'string' ? query : '')
-			return new Response(`${SIMBAD_HEADER}\n${rows.join('\n')}`)
+			const queryText = typeof query === 'string' ? query : ''
+			queries.push(queryText)
+			const top = Number(queryText.match(/\bTOP (\d+)/)?.[1] ?? rows.length)
+			const afterId = queryText.match(/b\.oid > (\d+)/)?.[1]
+			const start = afterId === undefined ? 0 : rows.findIndex((row) => row.startsWith(`${afterId}\t`)) + 1
+			return new Response(`${SIMBAD_HEADER}\n${rows.slice(start, start + top).join('\n')}`)
 		},
 	})
 
@@ -79,7 +81,21 @@ test('SimbadCatalog skips rows with missing required numeric columns', async () 
 	}
 })
 
-test.skipIf(SKIP)('query', async () => {
+test('SimbadCatalog paginates regional candidate queries', async () => {
+	const rows = Array.from({ length: 50001 }, (_, id) => `${id}\t*\t0\t0\t${id}\t0\t0\t0\t0`)
+
+	await withMockSimbadCatalog(rows, async (catalog, queries) => {
+		const stars = await catalog.queryCone(deg(0), deg(0), deg(1))
+
+		expect(stars).toHaveLength(rows.length)
+		expect(queries).toHaveLength(2)
+		expect(queries[0]).toContain('TOP 50000')
+		expect(queries[0]).toContain("CONTAINS(POINT('ICRS'")
+		expect(queries[1]).toContain('b.oid > 49999')
+	})
+})
+
+test.skipIf(isNetworkTestSkipped())('query', async () => {
 	const query = `
     SELECT b.oid, b.otype, b.ra, b.dec, b.pmra, b.pmdec, b.plx_value, b.rvz_radvel, b.rvz_redshift, b.main_id
     FROM basic AS b INNER JOIN ident AS i ON b.oid = i.oidref
@@ -99,7 +115,7 @@ test.skipIf(SKIP)('query', async () => {
 	expect(data[0]).toEqual(['3392496', 'BLL', '201.36506337683332', '-43.019112508083325', '', '', '', '562.1673793553026', '0.00187695', 'NAME Centaurus A'])
 })
 
-describe.serial.skipIf(SKIP)('simbad catalog', () => {
+describe.skipIf(isNetworkTestSkipped())('simbad catalog', () => {
 	const catalog = new SimbadCatalog()
 	const sourceId = 8399845 // Sirius
 	const centerRA = deg(101.28715533333335)

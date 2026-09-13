@@ -1,5 +1,5 @@
 import { HealpixIndex, type HealpixIndexOptions } from '../../astronomy/sky/spatial/healpix'
-import type { Source } from '../../io/io'
+import { readUntil, type Source } from '../../io/io'
 import type { StarCatalogEntry } from './catalog'
 
 // Streaming reader and HEALPix-indexed catalog for the SAO star catalog binary format. Parses the
@@ -26,6 +26,7 @@ export interface SaoCatalogEntry extends Omit<StarCatalogEntry, 'epoch' | 'magni
 }
 
 // Streams SAO catalog stars from a binary `source`. `bigEndian` selects the byte order of the file.
+// Retries partial source reads; an incomplete header or final entry ends iteration without decoding it.
 export async function* readSaoCatalog(source: Source, bigEndian: boolean): AsyncIterable<SaoCatalogEntry> {
 	const buffer = Buffer.allocUnsafe(SAO_CATALOG_BUFFER_SIZE)
 	let position = 0
@@ -40,14 +41,14 @@ export async function* readSaoCatalog(source: Source, bigEndian: boolean): Async
 	let nmag = 0 // Number of magnitudes present
 	let nbent = 0 // Number of bytes per star entry
 
-	// Refill the parser buffer while preserving unread bytes to avoid overlapping source reads.
+	// Preserve unread bytes and fill the remaining buffer, retrying partial reads until full or EOF.
 	async function read() {
 		const remaining = size - position
 
 		if (remaining > 0) buffer.copy(buffer, 0, position, size)
 
 		position = 0
-		size = remaining + (await source.read(buffer, remaining, buffer.byteLength - remaining))
+		size = remaining + (await readUntil(source, buffer, buffer.byteLength - remaining, remaining))
 		return size > 0
 	}
 
@@ -93,6 +94,8 @@ export async function* readSaoCatalog(source: Source, bigEndian: boolean): Async
 	}
 
 	await read()
+
+	if (size < 28) return
 
 	readHeader()
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 // oxfmt-ignore
-import { applyEquatorialPointingError, equatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, isIdentityEquatorialPointingModel, MAX_POINTING_DECLINATION, tubeFlexureError } from '../../../src/astronomy/coordinates/pointing'
+import { applyEquatorialPointingError, applyTubeFlexureError, equatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, isIdentityEquatorialPointingModel, MAX_POINTING_DECLINATION, polarAlignmentPointingModel, tubeFlexureError } from '../../../src/astronomy/coordinates/pointing'
 import { angularDistance } from '../../../src/astronomy/coordinates/coordinate'
 import { PIOVERTWO } from '../../../src/core/constants'
 import { arcsec, deg, hour, normalizePI, toArcsec } from '../../../src/math/units/angle'
@@ -66,6 +66,16 @@ describe('equatorial pointing error', () => {
 		expect(toArcsec(equatorialPointingError(hour(-2), deg(45), axisModel)[0])).toBeCloseTo(90, 6)
 
 		expect(equatorialPointingError(hour(-2), deg(45), axisModel)[1]).toBe(0)
+	})
+
+	test('polarAlignmentPointingModel stores TPoint ME, opposite the altitude knob', () => {
+		// Pass altitude is positive when the polar axis points above the true pole. TPoint ME is the
+		// opposite sign: at H = 0, Δδ = ME, and an axis that is too high places the mechanical equator
+		// south of the true equator, so declination decreases.
+		const altitudeError = arcsec(60)
+		const aligned = polarAlignmentPointingModel(0, altitudeError, deg(40))
+		expect(toArcsec(aligned.polarAltitudeError)).toBeCloseTo(-60, 9)
+		expect(toArcsec(equatorialPointingError(0, deg(45), aligned)[1])).toBeCloseTo(-60, 9)
 	})
 
 	test('polar axis errors follow the classic MA/ME dependency', () => {
@@ -234,6 +244,38 @@ describe('tube flexure', () => {
 		expect(Number.isFinite(deltaHourAngle)).toBeTrue()
 		expect(Math.abs(toArcsec(deltaHourAngle))).toBeLessThan(1e5)
 		expect(Math.abs(toArcsec(deltaDeclination))).toBeLessThanOrEqual(toArcsec(flexure))
+	})
+
+	test('keeps the east-west droop on the sky at the pole', () => {
+		// At H = ±6 h the parallactic angle is ±90°, so the sag is purely east-west. Written as ΔH and
+		// applied as a turn about the polar axis it stays at the pole; the great-circle path keeps the
+		// on-sky offset of TF·cos φ. Both hour angles sag onto the same anti-meridian from opposite
+		// starting meridians, which is the RA-mirror of the east component.
+		const lst = 0
+		const expected = toArcsec(flexure) * Math.cos(latitude)
+
+		for (const declination of [PIOVERTWO, -PIOVERTWO]) {
+			const rightAscensionAtSix = lst - hour(6)
+			const rightAscensionAtMinusSix = lst - hour(-6)
+			const atSix = applyTubeFlexureError(rightAscensionAtSix, declination, lst, latitude, flexure)
+			const atMinusSix = applyTubeFlexureError(rightAscensionAtMinusSix, declination, lst, latitude, flexure)
+
+			expect(Math.abs(toArcsec(angularDistance(rightAscensionAtSix, declination, atSix[0], atSix[1])) - expected)).toBeLessThan(0.1)
+			expect(Math.abs(toArcsec(angularDistance(rightAscensionAtMinusSix, declination, atMinusSix[0], atMinusSix[1])) - expected)).toBeLessThan(0.1)
+			expect(toArcsec(angularDistance(atSix[0], atSix[1], atMinusSix[0], atMinusSix[1]))).toBeCloseTo(0, 6)
+
+			for (const hourAngle of [hour(6), hour(-6)]) {
+				const rightAscension = lst - hourAngle
+				const [deltaHourAngle, deltaDeclination] = tubeFlexureError(hourAngle, declination, latitude, flexure)
+				const naive = angularDistance(rightAscension, declination, rightAscension - deltaHourAngle, declination + deltaDeclination)
+				expect(toArcsec(naive)).toBeCloseTo(0, 6)
+			}
+		}
+
+		// On the meridian the offset is pure Δδ and already covered away from the pole; at the pole it
+		// must still leave the pole by the same droop, not vanish.
+		const [meridianRightAscension, meridianDeclination] = applyTubeFlexureError(0, PIOVERTWO, 0, latitude, flexure)
+		expect(Math.abs(toArcsec(angularDistance(0, PIOVERTWO, meridianRightAscension, meridianDeclination)) - expected)).toBeLessThan(0.1)
 	})
 
 	test('writes into the optional output parameter and returns it', () => {

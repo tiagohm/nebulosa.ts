@@ -72,7 +72,7 @@ export function mulberry32(seed: number = Date.now()): Random {
 	let state = normalizeSeed(seed)
 
 	return () => {
-		let z = (state += 0x6d2b79f5)
+		let z = (state = (state + 0x6d2b79f5) | 0)
 		z = Math.imul(z ^ (z >>> 15), z | 1)
 		z ^= z + Math.imul(z ^ (z >>> 7), z | 61)
 		return ((z ^ (z >>> 14)) >>> 0) * INV_MAX_INT

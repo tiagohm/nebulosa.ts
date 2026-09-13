@@ -87,6 +87,17 @@ describe('parse header', () => {
 		expect(hdus[0].location).toEqual({ offset: 24, size: 4 })
 	})
 
+	test('omitted colorSpace defaults to Gray', () => {
+		const XML = `<xisf version="1.0"><Image geometry="2:1:1" sampleFormat="UInt16" location="attachment:24:4"></Image><Image geometry="1:1:3" sampleFormat="UInt8" colorSpace="CIELab" location="attachment:28:3"></Image></xisf>`
+		const hdus = parseXisfHeader(Buffer.from(XML))
+
+		expect(hdus).toHaveLength(1)
+		expect(hdus[0].colorSpace).toBe('Gray')
+		expect(hdus[0].sampleFormat).toBe('UInt16')
+		expect(hdus[0].geometry).toEqual({ width: 2, height: 1, channels: 1 })
+		expect(hdus[0].location).toEqual({ offset: 24, size: 4 })
+	})
+
 	test('skips images with unimplemented compression codecs without aborting the header', () => {
 		const XML = `<xisf version="1.0"><Image geometry="1:1:1" sampleFormat="UInt16" colorSpace="Gray" location="attachment:16:4" compression="lz4:2"></Image><Image geometry="1:1:1" sampleFormat="UInt16" colorSpace="Gray" location="attachment:20:4" compression="lz4hc:2"></Image><Image geometry="2:1:1" sampleFormat="UInt16" colorSpace="Gray" location="attachment:24:4"></Image></xisf>`
 		const hdus = parseXisfHeader(Buffer.from(XML))
@@ -299,6 +310,18 @@ describe('write', () => {
 		expect(size).toBeGreaterThan(16)
 		expect(buffer.subarray(0, 8).toString('ascii')).toBe(XISF_SIGNATURE)
 		expect(buffer.readUInt32LE(12)).toBe(0)
+	})
+
+	test('rejects BITPIX 64 without emitting UInt64', () => {
+		const image = { header: { SIMPLE: true, BITPIX: 64, NAXIS: 2, NAXIS1: 2, NAXIS2: 1 }, raw: new Float64Array([0, 1]) }
+		const cases = [false, { format: 'zstd' as const }, { format: 'zstd' as const, shuffled: true }] as const
+
+		for (const compression of cases) {
+			const buffer = Buffer.alloc(4096)
+			expect(writeXisf(bufferSink(buffer), [image], { compression })).rejects.toThrow('unsupported XISF BITPIX: 64')
+			expect(buffer.toString('ascii')).not.toContain('UInt64')
+			expect(buffer.subarray(0, 8).toString('ascii')).not.toBe(XISF_SIGNATURE)
+		}
 	})
 
 	test('completes partial sink writes', async () => {

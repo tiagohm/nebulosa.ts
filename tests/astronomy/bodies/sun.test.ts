@@ -45,6 +45,10 @@ test('saros', () => {
 	expect(solarSaros(timeYMD(2013, 11, 3))).toBe(143)
 	expect(solarSaros(timeYMD(2009, 7, 22))).toBe(136)
 	expect(solarSaros(time(2270969.5))).toBe(108)
+	// LN = -49421: JS remainder of NS+NC*223-1 is negative; Kluepfel modulo wraps to series 220, not -3.
+	const eclipse = nearestSolarEclipse(timeYMD(-1996, 1, 1), true)
+	expect(eclipse.lunation).toBe(-49421)
+	expect(solarSaros(eclipse.maximalTime)).toBe(220)
 })
 
 describe('nearest solar eclipse', () => {
@@ -119,6 +123,27 @@ describe('nearest solar eclipse', () => {
 		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2024, 10, 2, 18, 45])
 		expect(eclipse.type).toBe('annular')
 		expect(timeToDate(utc(nearestSolarEclipse(timeYMDHMS(2024, 10, 2, 18, 46), true).maximalTime)).slice(0, 5)).toEqual([2025, 3, 29, 10, 48])
+	})
+
+	test('Meeus example 54.a (1993 May 21) stays near NASA TD', () => {
+		const eclipse = nearestSolarEclipse(timeYMD(1993, 5, 21), true)
+		expect(eclipse.lunation).toBe(-82)
+		expect(eclipse.type).toBe('partial')
+		expect(eclipse.gamma).toBeCloseTo(1.1348, 3)
+		const nasa = timeYMDHMS(1993, 5, 21, 14, 20, 15, Timescale.TT)
+		expect(Math.abs(toJulianDay(eclipse.maximalTime) - toJulianDay(nasa)) * 86400).toBeLessThan(60)
+	})
+
+	test('year-1 total retains the Meeus 49.1 secular powers', () => {
+		// NASA 5MCSE 0001 Jun 10 06:44:16 TD (Julian calendar), lunation -24719, Saros 66, γ=0.3625, mag=1.0617.
+		// Proleptic Gregorian is 0001 Jun 08. |T|~20, so a T vs T^2 swap in 49.1 shifts the epoch by ~1.5 h.
+		const eclipse = nearestSolarEclipse(timeYMD(1, 6, 1, 0, Timescale.TT), true)
+		expect(eclipse.lunation).toBe(-24719)
+		expect(eclipse.type).toBe('total')
+		expect(eclipse.gamma).toBeCloseTo(0.3625, 3)
+		expect(eclipse.magnitude).toBeCloseTo(1.0617, 3)
+		const nasa = 1721583.5 + (6 + 44 / 60 + 16 / 3600) / 24
+		expect(Math.abs(toJulianDay(eclipse.maximalTime) - nasa) * 1440).toBeLessThan(3)
 	})
 })
 

@@ -1784,6 +1784,58 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('cancels an in-flight park when unparked', () => {
+		const { simulator } = makeMeridianFlipMount('mount.park.unpark')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			simulator.setPark()
+			simulator.syncTo(normalizeAngle(lst + hour(2)), deg(20))
+			simulator.setTrackingEnabled(true)
+			simulator.park()
+			simulator.advance(0.1)
+			expect(simulator.isParking).toBeTrue()
+
+			simulator.unpark()
+			expect(simulator.isParked).toBeFalse()
+			expect(simulator.isParking).toBeFalse()
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.isTracking).toBeTrue()
+
+			simulator.advance(FAST_FLIP_DURATION + 1)
+			expect(simulator.isParked).toBeFalse()
+			expect(simulator.isTracking).toBeTrue()
+
+			simulator.goTo(normalizeAngle(simulator.rightAscension + deg(1)), simulator.declination)
+			expect(simulator.isSlewing).toBeTrue()
+		} finally {
+			simulator.dispose()
+		}
+	})
+
+	test('accepts published and manager TIME_UTC formats', () => {
+		const { client, mount, simulator } = makeMeridianFlipMount('mount.time.roundtrip')
+
+		try {
+			const publishedUtc = Date.UTC(2026, 0, 1)
+			client.sendText({ device: simulator.name, name: 'TIME_UTC', elements: { UTC: new Date(publishedUtc).toISOString(), OFFSET: '0' } })
+			expect(simulator.utcTime).toBe(publishedUtc)
+			expect(mount.time.utc).toBe(publishedUtc)
+
+			const managerUtc = Date.UTC(2026, 0, 2, 3, 4, 5)
+			client.sendText({ device: simulator.name, name: 'TIME_UTC', elements: { UTC: '2026-01-02T03:04:05', OFFSET: '0' } })
+			expect(simulator.utcTime).toBe(managerUtc)
+
+			const retainedOffsetUtc = Date.UTC(2026, 0, 3, 4, 5, 6)
+			client.sendText({ device: simulator.name, name: 'TIME_UTC', elements: { UTC: '2026-01-03T04:05:06' } })
+			expect(simulator.utcTime).toBe(retainedOffsetUtc)
+			expect(mount.time.offset).toBe(0)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('includes pier-side travel when homing and parking', () => {
 		const { simulator } = makeMeridianFlipMount('mount.flip.home.park')
 
@@ -2122,6 +2174,78 @@ describe('mount simulator pointing errors', () => {
 
 			expect(mount.pointingErrorBound).toBe(0)
 			expect(mount.boresight.declination).toBe(mount.mechanical.declination)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('accepts full timed-guide vectors for every direction', () => {
+		const { client, mount } = makeMount('mount.guiding.full-vector')
+
+		try {
+			mount.setTrackingEnabled(true)
+
+			const northStart = mount.mechanical.declination
+			client.sendNumber({ device: mount.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_N: 1000, TIMED_GUIDE_S: 0 } })
+			mount.advance(1)
+			expect(mount.mechanical.declination).toBeGreaterThan(northStart)
+
+			const southStart = mount.mechanical.declination
+			client.sendNumber({ device: mount.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_N: 0, TIMED_GUIDE_S: 1000 } })
+			mount.advance(1)
+			expect(mount.mechanical.declination).toBeLessThan(southStart)
+
+			const westStart = mount.mechanical.rightAscension
+			client.sendNumber({ device: mount.name, name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_W: 1000, TIMED_GUIDE_E: 0 } })
+			mount.advance(1)
+			expect(normalizePI(mount.mechanical.rightAscension - westStart)).toBeLessThan(0)
+
+			const eastStart = mount.mechanical.rightAscension
+			client.sendNumber({ device: mount.name, name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_W: 0, TIMED_GUIDE_E: 1000 } })
+			mount.advance(1)
+			expect(normalizePI(mount.mechanical.rightAscension - eastStart)).toBeGreaterThan(0)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('accepts full manual-motion vectors for every direction', () => {
+		const { client, mount } = makeMount('mount.motion.full-vector')
+
+		try {
+			mount.setTrackingEnabled(true)
+
+			const northStart = mount.mechanical.declination
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: true, MOTION_SOUTH: false } })
+			expect(mount.isSlewing).toBeTrue()
+			mount.advance(0.1)
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: false, MOTION_SOUTH: false } })
+			expect(mount.isSlewing).toBeFalse()
+			expect(mount.mechanical.declination).toBeGreaterThan(northStart)
+
+			const southStart = mount.mechanical.declination
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: false, MOTION_SOUTH: true } })
+			expect(mount.isSlewing).toBeTrue()
+			mount.advance(0.1)
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: false, MOTION_SOUTH: false } })
+			expect(mount.isSlewing).toBeFalse()
+			expect(mount.mechanical.declination).toBeLessThan(southStart)
+
+			const westStart = mount.mechanical.rightAscension
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: true, MOTION_EAST: false } })
+			expect(mount.isSlewing).toBeTrue()
+			mount.advance(0.1)
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: false, MOTION_EAST: false } })
+			expect(mount.isSlewing).toBeFalse()
+			expect(normalizePI(mount.mechanical.rightAscension - westStart)).toBeLessThan(0)
+
+			const eastStart = mount.mechanical.rightAscension
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: false, MOTION_EAST: true } })
+			expect(mount.isSlewing).toBeTrue()
+			mount.advance(0.1)
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: false, MOTION_EAST: false } })
+			expect(mount.isSlewing).toBeFalse()
+			expect(normalizePI(mount.mechanical.rightAscension - eastStart)).toBeGreaterThan(0)
 		} finally {
 			mount.dispose()
 		}

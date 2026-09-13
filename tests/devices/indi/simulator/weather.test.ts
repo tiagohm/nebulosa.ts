@@ -6,6 +6,7 @@ import { WeatherManager } from '../../../../src/devices/indi/manager/weather'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
 import type { SimulatorProperty } from '../../../../src/devices/indi/simulator/types'
 import { WeatherSimulator } from '../../../../src/devices/indi/simulator/weather'
+import { makeNumberVector } from '../../../../src/devices/indi/types'
 import { waitUntil } from '../../../util'
 
 function permissionOf(property: DeviceProperty) {
@@ -30,6 +31,7 @@ describe('weather simulator', () => {
 		const weather = manager.get(client, simulator.name)!
 		expect(weather.type).toBe('weather')
 		expect(weather.interfaces).toEqual(['weather'])
+		expect(weather.driver.executable).toBe('weather.simulator')
 		expect(weather.connected).toBeFalse()
 
 		// Sensors only exist once WEATHER_PARAMETERS arrives, which needs a connection.
@@ -170,6 +172,35 @@ describe('weather simulator', () => {
 		client[Symbol.dispose]()
 	})
 
+	test('does not publish a load that completes after disconnect', async () => {
+		let finishLoad!: (properties: readonly SimulatorProperty[]) => void
+		const handler = new IndiClientHandlerSet()
+		const manager = new WeatherManager()
+		handler.add(manager)
+
+		using client = new ClientSimulator('weather-late-load', handler)
+		using simulator = new WeatherSimulator('Weather Simulator', client, {
+			load: () =>
+				new Promise<readonly SimulatorProperty[]>((resolve) => {
+					finishLoad = resolve
+				}),
+		})
+
+		const emitted: string[] = []
+		handler.add({ setNumberVector: (_, message) => emitted.push(message.name) })
+
+		simulator.connect()
+		const weather = manager.get(client, simulator.name)!
+		emitted.length = 0
+		simulator.disconnect()
+		finishLoad([makeNumberVector('', 'SIMULATOR_WEATHER', '', '', 'rw', ['WEATHER_TEMPERATURE', '', 21.5, -60, 60, 0.1, '%.1f'])])
+		await Promise.resolve()
+		await Promise.resolve()
+
+		expect(manager.properties.get(weather)?.WEATHER_PARAMETERS).toBeUndefined()
+		expect(emitted).toEqual([])
+	})
+
 	test('stores the update period without scheduling a timer', async () => {
 		const { manager, client, simulator } = setup()
 
@@ -196,6 +227,12 @@ describe('weather simulator', () => {
 		const handler = new IndiClientHandlerSet()
 		const manager = new WeatherManager()
 		handler.add(manager)
+		const configStates: string[] = []
+		handler.add({
+			setSwitchVector: (_, message) => {
+				if (message.name === 'CONFIG' && message.state !== undefined) configStates.push(message.state)
+			},
+		})
 
 		using client = new ClientSimulator('weather-persistence', handler)
 		using simulator = new WeatherSimulator('Weather Simulator', client, {
@@ -213,6 +250,7 @@ describe('weather simulator', () => {
 		simulator.setParameter('WEATHER_PRESSURE', 990.5)
 		client.sendSwitch({ device: simulator.name, name: 'CONFIG', elements: { SAVE: true } })
 
+		expect(configStates).toEqual(['Ok'])
 		expect(saved.some((e) => e.name === 'SIMULATOR_WEATHER')).toBeTrue()
 		expect(saved.some((e) => e.name === 'WEATHER_UPDATE')).toBeTrue()
 		// Derived properties are excluded from persistence.
@@ -224,7 +262,29 @@ describe('weather simulator', () => {
 
 		client.sendSwitch({ device: simulator.name, name: 'CONFIG', elements: { LOAD: true } })
 		await waitUntil(() => weather.pressure === 990.5)
+		expect(configStates.slice(-2)).toEqual(['Busy', 'Ok'])
 		expect(manager.properties.get(weather)!.WEATHER_PARAMETERS.elements.WEATHER_PRESSURE.value).toBe(990.5)
+	})
+
+	test('reports a failed config load', async () => {
+		const handler = new IndiClientHandlerSet()
+		const configStates: string[] = []
+		handler.add({
+			setSwitchVector: (_, message) => {
+				if (message.name === 'CONFIG' && message.state !== undefined) configStates.push(message.state)
+			},
+		})
+
+		using client = new ClientSimulator('weather-config-error', handler)
+		using simulator = new WeatherSimulator('Weather Simulator', client, {
+			load: () => Promise.reject(new Error('load failed')),
+		})
+
+		client.sendSwitch({ device: simulator.name, name: 'CONFIG', elements: { LOAD: true } })
+
+		expect(configStates).toEqual(['Busy'])
+		await waitUntil(() => configStates.at(-1) === 'Alert')
+		expect(configStates).toEqual(['Busy', 'Alert'])
 	})
 
 	test('removes every property on disconnect and the device on dispose', async () => {

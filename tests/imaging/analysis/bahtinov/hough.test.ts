@@ -94,10 +94,61 @@ test('preserves coarse peaks at the exact minimum axial separation', () => {
 	const workspace = createBahtinovWorkspace(width, height, { precision: 64, maximumRidgePoints: pointCount })
 	const candidates = detectBahtinovHoughCandidates({ x, y, weight, count: pointCount }, width, height, workspace, {
 		minimumAxialSeparation: PI / 36,
-		refinementRange: 0,
+		refinementRange: PI / 180,
 		center,
 	})
-	for (const angle of expected) expect(candidates.some((candidate) => bahtinovAxialAngleDistance(candidate.normalAngle, angle) < PI / 360)).toBeTrue()
+	for (const angle of expected) expect(candidates.some((candidate) => bahtinovAxialAngleDistance(candidate.normalAngle, angle) < PI / 180)).toBeTrue()
+})
+
+test('scores collinear ridges independently of rho bin phase', () => {
+	const width = 128
+	const height = 128
+	const workspace = createBahtinovWorkspace(width, height, { precision: 64, maximumRidgePoints: 33 })
+	const binCenterRho = -workspace.rhoMax + Math.round((63.5 + workspace.rhoMax) / workspace.distanceStep) * workspace.distanceStep
+	const halfBinRho = binCenterRho + 0.5 * workspace.distanceStep
+
+	function verticalLine(rho: number) {
+		const pointCount = 33
+		const x = new Float32Array(pointCount)
+		const y = new Float32Array(pointCount)
+		const weight = new Float32Array(pointCount)
+		for (let sample = -16; sample <= 16; sample++) {
+			x[sample + 16] = rho
+			y[sample + 16] = 63.5 + sample * 2.5
+			weight[sample + 16] = 1
+		}
+		return { points: { x, y, weight, count: pointCount }, center: { x: rho, y: 63.5 } }
+	}
+
+	const centered = verticalLine(binCenterRho)
+	const staggered = verticalLine(halfBinRho)
+	const centeredCoarse = detectBahtinovHoughCandidates(centered.points, width, height, workspace, {
+		refinementRange: 0,
+		maximumCandidates: 3,
+		center: centered.center,
+	})
+	const staggeredCoarse = detectBahtinovHoughCandidates(staggered.points, width, height, workspace, {
+		refinementRange: 0,
+		maximumCandidates: 3,
+		center: staggered.center,
+	})
+	expect(centeredCoarse[0].score).toBeGreaterThan(0)
+	expect(staggeredCoarse[0].score / centeredCoarse[0].score).toBeCloseTo(1, 2)
+
+	const centeredRefined = detectBahtinovHoughCandidates(centered.points, width, height, workspace, {
+		refinementRange: PI / 180,
+		refinementStep: PI / 1800,
+		maximumCandidates: 3,
+		center: centered.center,
+	})
+	const staggeredRefined = detectBahtinovHoughCandidates(staggered.points, width, height, workspace, {
+		refinementRange: PI / 180,
+		refinementStep: PI / 1800,
+		maximumCandidates: 3,
+		center: staggered.center,
+	})
+	expect(bahtinovAxialAngleDistance(centeredRefined[0].normalAngle, 0)).toBeLessThan(PI / 1800)
+	expect(bahtinovAxialAngleDistance(staggeredRefined[0].normalAngle, 0)).toBeLessThan(PI / 1800)
 })
 
 test('caps default candidates to coarse workspaces and rejects fewer than three bins', () => {

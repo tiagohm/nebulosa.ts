@@ -1,7 +1,7 @@
 import type { PhotonTransferPoint, SensorGain, SensorReadNoise } from './ptc'
 
 // Saturation-capacity and dynamic-range analysis for a characterized sensor plane. Detection uses
-// measured PTC behavior in acquisition order and treats digital range only as a low-confidence output
+// measured PTC behavior versus stimulus and treats digital range only as a low-confidence output
 // limit. Capacity is observable charge at output saturation, not an assertion of physical full well.
 
 // Dark-corrected output saturation estimate.
@@ -53,6 +53,10 @@ export function computeSensorDynamicRange(saturation: SensorSaturation, readNois
 	return { practical: dynamicRangeValue(practicalRatio), emva: dynamicRangeValue(emvaRatio) }
 }
 
+// Isolated-defect clip fraction below which a level is still treated as unclipped. Matches the 1%
+// tooManySaturatedPixels warning; EMVA saturation is variance collapse, not the first ADC hit.
+const SATURATION_CLIPPED_FRACTION = 0.01
+
 // Adds electron capacity only when the conversion gain is finite and positive.
 function saturation(point: PhotonTransferPoint | undefined, signal: number, method: SensorSaturation['method'], confidence: number, gain?: SensorGain): SensorSaturation | undefined {
 	if (!Number.isFinite(signal) || signal <= 0) return undefined
@@ -60,14 +64,23 @@ function saturation(point: PhotonTransferPoint | undefined, signal: number, meth
 	return { signal, capacity, index: point?.level ?? -1, method, confidence }
 }
 
-// Detects output saturation from clipping, PTC variance collapse, response plateau, or digital limit.
+// True when a measured clip fraction is large enough to treat the plane as digitally saturated.
+function isArrayClipped(fraction: number | undefined): boolean {
+	return (fraction ?? 0) > SATURATION_CLIPPED_FRACTION
+}
+
+// Detects output saturation from substantial digital clipping, PTC variance collapse, response plateau, or digital limit.
 export function detectSensorSaturation(points: readonly PhotonTransferPoint[], gain?: SensorGain, digitalSignalLimit?: number): SensorSaturation | undefined {
-	const ordered = points.toSorted((a, b) => a.level - b.level)
-	const valid = ordered.filter((point) => point.valid && point.clippedFraction <= 0 && (point.darkClippedFraction ?? 0) <= 0)
+	const ordered = points.toSorted((a, b) => {
+		const stimulusA = a.stimulus ?? a.exposure
+		const stimulusB = b.stimulus ?? b.exposure
+		return stimulusA !== stimulusB ? stimulusA - stimulusB : a.signal - b.signal
+	})
+	const valid = ordered.filter((point) => point.valid && !isArrayClipped(point.clippedFraction) && !isArrayClipped(point.darkClippedFraction))
 	for (let i = 0; i < ordered.length; i++) {
-		if (ordered[i].clippedFraction <= 0) continue
+		if (!isArrayClipped(ordered[i].clippedFraction)) continue
 		let candidate = i - 1
-		while (candidate >= 0 && (!ordered[candidate].valid || ordered[candidate].clippedFraction > 0 || (ordered[candidate].darkClippedFraction ?? 0) > 0)) candidate--
+		while (candidate >= 0 && (!ordered[candidate].valid || isArrayClipped(ordered[candidate].clippedFraction) || isArrayClipped(ordered[candidate].darkClippedFraction))) candidate--
 		if (candidate < 0) continue
 		const selected = ordered[candidate]
 		const result = saturation(selected, selected.signal, 'unclippedLevel', 0.95, gain)
@@ -77,14 +90,18 @@ export function detectSensorSaturation(points: readonly PhotonTransferPoint[], g
 	let peak = -1
 	let peakVariance = Number.NEGATIVE_INFINITY
 	for (let i = 0; i < valid.length; i++) {
-		const point = valid[i]
-		if (point.variance > peakVariance) {
-			peakVariance = point.variance
+		if (valid[i].variance > peakVariance) {
+			peakVariance = valid[i].variance
 			peak = i
-		} else if (peak >= 1 && point.variance < peakVariance * 0.9 && point.signal >= valid[peak].signal) {
-			const selected = valid[peak]
-			const result = saturation(selected, selected.signal, 'variance', 0.75, gain)
-			if (result) return result
+		}
+	}
+	if (peak >= 1) {
+		const selected = valid[peak]
+		for (let i = peak + 1; i < valid.length; i++) {
+			if (valid[i].variance < peakVariance * 0.9 && valid[i].signal >= selected.signal) {
+				const result = saturation(selected, selected.signal, 'variance', 0.75, gain)
+				if (result) return result
+			}
 		}
 	}
 

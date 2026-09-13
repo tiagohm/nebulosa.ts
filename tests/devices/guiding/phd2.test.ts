@@ -1,44 +1,96 @@
-import { test } from 'bun:test'
+import { expect, test } from 'bun:test'
+import type { Socket } from 'bun'
 import { PHD2Client } from '../../../src/devices/guiding/phd2'
+import { isBinaryTestSkipped } from '../../util'
 
-test.skip('client', async () => {
-	const client = new PHD2Client({
-		handler: {
-			event: (_, event) => {
-				console.info('EVENT:', event)
+test.skipIf(isBinaryTestSkipped() && process.env.PHD2 !== 'true')(
+	'client',
+	async () => {
+		const client = new PHD2Client({
+			handler: {
+				event: (_, event) => {
+					console.info('EVENT:', event)
+				},
+			},
+		})
+
+		await client.connect('0.0.0.0')
+
+		await Bun.sleep(1000)
+
+		console.info('FIND_STAR:', await client.findStar())
+		console.info('GET_ALGORITHM_PARAM_NAMES(RA):', await client.getAlgorithmParamNames('RA'))
+		console.info('GET_ALGORITHM_PARAM_NAMES(DEC):', await client.getAlgorithmParamNames('DEC'))
+		console.info('GET_ALGORITHM_PARAM(RA, NAME):', await client.getAlgorithmParam('RA', 'algorithmName'))
+		console.info('GET_ALGORITHM_PARAM(DEC, NAME):', await client.getAlgorithmParam('DEC', 'algorithmName'))
+		console.info('GET_APP_STATE:', await client.getAppState())
+		console.info('GET_CALIBRATED:', await client.getCalibrated())
+		console.info('GET_CALIBRATION_DATA(MOUNT):', await client.getCalibrationData('MOUNT'))
+		console.info('GET_CAMERA_BINNING:', await client.getCameraBinning())
+		console.info('GET_CAMERA_FRAME_SIZE:', await client.getCameraFrameSize())
+		console.info('GET_CONNECTED:', await client.getConnected())
+		console.info('GET_CURRENT_EQUIPMENT:', await client.getCurrentEquipment())
+		console.info('GET_DECLINATION_GUIDE_MODE:', await client.getDeclinationGuideMode())
+		console.info('GET_EXPOSURE:', await client.getExposure())
+		console.info('GET_EXPOSURE_DURATIONS:', await client.getExposureDurations())
+		console.info('GET_GUIDE_OUTPUT_ENABLED:', await client.getGuideOutputEnabled())
+		console.info('GET_LOCK_POSITION:', await client.getLockPosition())
+		console.info('GET_LOCK_SHIFT_ENABLED:', await client.getLockShiftEnabled())
+		console.info('GET_LOCK_SHIFT_PARAMS:', await client.getLockShiftParams())
+		console.info('GET_PAUSED:', await client.getPaused())
+		console.info('GET_PIXEL_SCALE:', await client.getPixelScale())
+		console.info('GET_PROFILE:', await client.getProfile())
+		console.info('GET_PROFILES:', await client.getProfiles())
+		console.info('GET_SEARCH_REGION:', await client.getSearchRegion())
+		console.info('GET_SETTLING:', await client.getSettling())
+		console.info('GET_STAR_IMAGE:', await client.getStarImage())
+		console.info('GET_USE_SUBFRAMES:', await client.getUseSubframes())
+	},
+	5000,
+)
+
+test('reconnect discards a partial message from the previous socket', async () => {
+	const eventReceived = Promise.withResolvers<string>()
+	const firstClosed = Promise.withResolvers<void>()
+	const connections = new Map<Socket<unknown>, number>()
+	let connectionCount = 0
+	const server = Bun.listen({
+		hostname: '127.0.0.1',
+		port: 0,
+		socket: {
+			open: (socket) => {
+				const connection = ++connectionCount
+				connections.set(socket, connection)
+				if (connection === 2) socket.write(`${JSON.stringify({ Event: 'Version' })}\r\n`)
+			},
+			data: (socket) => {
+				if (connections.get(socket) === 1) {
+					socket.write('{"Event":"Ver')
+					setTimeout(() => socket.close(), 10)
+				}
+			},
+			close: (socket) => {
+				connections.delete(socket)
+				firstClosed.resolve()
 			},
 		},
 	})
+	const client = new PHD2Client({
+		handler: {
+			close: () => firstClosed.resolve(),
+			event: (_, event) => eventReceived.resolve(event.Event),
+		},
+	})
 
-	await client.connect('0.0.0.0')
-
-	await Bun.sleep(1000)
-
-	console.info('FIND_STAR:', await client.findStar())
-	console.info('GET_ALGORITHM_PARAM_NAMES(RA):', await client.getAlgorithmParamNames('RA'))
-	console.info('GET_ALGORITHM_PARAM_NAMES(DEC):', await client.getAlgorithmParamNames('DEC'))
-	console.info('GET_ALGORITHM_PARAM(RA, NAME):', await client.getAlgorithmParam('RA', 'algorithmName'))
-	console.info('GET_ALGORITHM_PARAM(DEC, NAME):', await client.getAlgorithmParam('DEC', 'algorithmName'))
-	console.info('GET_APP_STATE:', await client.getAppState())
-	console.info('GET_CALIBRATED:', await client.getCalibrated())
-	console.info('GET_CALIBRATION_DATA(MOUNT):', await client.getCalibrationData('MOUNT'))
-	console.info('GET_CAMERA_BINNING:', await client.getCameraBinning())
-	console.info('GET_CAMERA_FRAME_SIZE:', await client.getCameraFrameSize())
-	console.info('GET_CONNECTED:', await client.getConnected())
-	console.info('GET_CURRENT_EQUIPMENT:', await client.getCurrentEquipment())
-	console.info('GET_DECLINATION_GUIDE_MODE:', await client.getDeclinationGuideMode())
-	console.info('GET_EXPOSURE:', await client.getExposure())
-	console.info('GET_EXPOSURE_DURATIONS:', await client.getExposureDurations())
-	console.info('GET_GUIDE_OUTPUT_ENABLED:', await client.getGuideOutputEnabled())
-	console.info('GET_LOCK_POSITION:', await client.getLockPosition())
-	console.info('GET_LOCK_SHIFT_ENABLED:', await client.getLockShiftEnabled())
-	console.info('GET_LOCK_SHIFT_PARAMS:', await client.getLockShiftParams())
-	console.info('GET_PAUSED:', await client.getPaused())
-	console.info('GET_PIXEL_SCALE:', await client.getPixelScale())
-	console.info('GET_PROFILE:', await client.getProfile())
-	console.info('GET_PROFILES:', await client.getProfiles())
-	console.info('GET_SEARCH_REGION:', await client.getSearchRegion())
-	console.info('GET_SETTLING:', await client.getSettling())
-	console.info('GET_STAR_IMAGE:', await client.getStarImage())
-	console.info('GET_USE_SUBFRAMES:', await client.getUseSubframes())
-}, 5000)
+	try {
+		expect(await client.connect('127.0.0.1', server.port)).toBeTrue()
+		const pending = client.send('get_app_state', undefined, 1000)
+		await firstClosed.promise
+		expect(await pending).toEqual({ success: false, error: 'socketUnavailable' })
+		expect(await client.connect('127.0.0.1', server.port)).toBeTrue()
+		expect(await eventReceived.promise).toBe('Version')
+	} finally {
+		client.close()
+		server.stop(true)
+	}
+})

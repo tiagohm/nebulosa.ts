@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { ImageMetadata, ImageRawType } from '../../../src/imaging/model/types'
 import { clone } from '../../../src/imaging/processing/arithmetic'
-import { blur, convolution, convolutionKernel, edges, emboss, gaussianBlur, mean, separableSmoothingKernel, separableSmoothing, sharpen } from '../../../src/imaging/processing/convolution'
+import { blur, convolution, convolutionKernel, edges, emboss, gaussianBlur, gaussianBlurKernel, mean, separableSmoothingKernel, separableSmoothing, sharpen } from '../../../src/imaging/processing/convolution'
 import { expectImageValues, makeImage, pixelOffset } from './util'
 
 // Applies the separable kernel as one direct 2D convolution for an independent small-image reference.
@@ -223,7 +223,7 @@ test('gaussianBlur produces a symmetric monotonic halo around an impulse', () =>
 
 	gaussianBlur(image)
 
-	expect(image.raw[center]).toBeCloseTo(0.093487374, 8)
+	expect(image.raw[center]).toBeCloseTo(0.093487382, 8)
 	expect(image.raw[orthogonal]).toBeCloseTo(0.072437517, 8)
 	expect(image.raw[diagonal]).toBeCloseTo(0.056127302, 8)
 	expect(image.raw[outer]).toBeCloseTo(0.0153413, 7)
@@ -251,4 +251,72 @@ test('gaussianBlur validates sigma and size', () => {
 
 	expect(() => gaussianBlur(image, { size: 2 })).toThrow('size must be odd and greater or equal to 3')
 	expect(() => gaussianBlur(image, { sigma: 0.25 })).toThrow('kernel size bust be in range [0.5..5]')
+})
+
+test('gaussianBlurKernel stays finite when the corner sample underflows', () => {
+	for (const [sigma, size] of [
+		[0.5, 11],
+		[1.4, 29],
+		[5, 99],
+	] as const) {
+		const built = gaussianBlurKernel(sigma, size)
+		const center = built.kernel[(size * size) >>> 1]
+
+		expect(Number.isFinite(built.divisor)).toBe(true)
+		expect(built.divisor).toBeGreaterThan(0)
+		expect(Number.isFinite(center)).toBe(true)
+		expect(center).toBeGreaterThan(0)
+
+		for (let i = 0; i < built.kernel.length; i++) {
+			expect(Number.isFinite(built.kernel[i])).toBe(true)
+			expect(built.kernel[i]).toBeGreaterThanOrEqual(0)
+		}
+	}
+})
+
+test('gaussianBlur preserves constants for wide kernels relative to sigma', () => {
+	const tight = makeImage(15, 15, 1, new Float32Array(225).fill(0.25))
+	gaussianBlur(tight, { sigma: 0.5, size: 11 })
+
+	for (let i = 0; i < tight.raw.length; i++) {
+		expect(Number.isFinite(tight.raw[i])).toBe(true)
+		expect(Math.abs(tight.raw[i] - 0.25)).toBeLessThan(1e-5)
+	}
+
+	const wide = makeImage(101, 101, 1, new Float32Array(10201).fill(0.25))
+	gaussianBlur(wide, { sigma: 5, size: 99 })
+
+	for (let i = 0; i < wide.raw.length; i++) {
+		expect(Number.isFinite(wide.raw[i])).toBe(true)
+		expect(Math.abs(wide.raw[i] - 0.25)).toBeLessThan(1e-5)
+	}
+})
+
+test('gaussianBlur impulse response stays finite, symmetric, and normalized for a wide small-sigma kernel', () => {
+	const image = makeImage(15, 15, 1, new Float32Array(225))
+	const cx = 7
+	const cy = 7
+	image.raw[pixelOffset(image, cx, cy)] = 1
+
+	gaussianBlur(image, { sigma: 0.5, size: 11 })
+
+	const center = image.raw[pixelOffset(image, cx, cy)]
+	expect(Number.isFinite(center)).toBe(true)
+	expect(center).toBeGreaterThan(image.raw[pixelOffset(image, cx + 1, cy)])
+	expect(image.raw[pixelOffset(image, cx + 1, cy)]).toBeGreaterThan(image.raw[pixelOffset(image, cx + 2, cy)])
+
+	let sum = 0
+
+	for (let y = 0; y < 15; y++) {
+		for (let x = 0; x < 15; x++) {
+			const value = image.raw[pixelOffset(image, x, y)]
+			expect(Number.isFinite(value)).toBe(true)
+			expect(value).toBeCloseTo(image.raw[pixelOffset(image, 2 * cx - x, y)], 6)
+			expect(value).toBeCloseTo(image.raw[pixelOffset(image, x, 2 * cy - y)], 6)
+			expect(value).toBeCloseTo(image.raw[pixelOffset(image, cx + (y - cy), cy + (x - cx))], 6)
+			sum += value
+		}
+	}
+
+	expect(sum).toBeCloseTo(1, 5)
 })

@@ -351,12 +351,9 @@ export function gaussianBlurKernel(sigma: number = 1.4, size: number = 5) {
 		}
 	}
 
-	const min = kernel[0]
-
-	for (let i = 0; i < kernel.length; i++) {
-		kernel[i] /= min
-	}
-
+	// Keep the sampled density. Dividing by the corner (the smallest weight) overflows
+	// to Inf/NaN when that sample underflows in Float32; convolutionKernel already
+	// normalizes by the sum of the weights.
 	return convolutionKernel(kernel, size)
 }
 

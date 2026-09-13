@@ -22,6 +22,30 @@ test('uses the last unbiased level before digital clipping as saturation capacit
 	expect(result).toEqual({ signal: 500, capacity: 1000, index: 2, method: 'unclippedLevel', confidence: 0.95 })
 })
 
+test('walks saturation heuristics in stimulus order rather than acquisition index', () => {
+	const result = detectSensorSaturation([point(0, 1000, 400, 0, 10), point(1, 100, 40, 0, 1), point(2, 1800, 200, 0.2, 20)], GAIN)
+	expect(result).toEqual({ signal: 1000, capacity: 2000, index: 0, method: 'unclippedLevel', confidence: 0.95 })
+})
+
+test('ignores residual digital clip below the array-saturation fraction', () => {
+	const linear = detectSensorSaturation([point(0, 100, 50), point(1, 300, 150), point(2, 500, 250), point(3, 700, 350, 1e-6)], GAIN)
+	expect(linear).toBeUndefined()
+
+	const variance = detectSensorSaturation([point(0, 100, 50), point(1, 300, 160), point(2, 500, 140), point(3, 600, 100, 1e-6)], GAIN)
+	expect(variance?.method).toBe('variance')
+	expect(variance?.signal).toBe(300)
+})
+
+test('keeps sparse dark-reference clip from emptying the PTC saturation series', () => {
+	function sparseDark(level: number, signal: number, variance: number): PhotonTransferPoint {
+		return { ...point(level, signal, variance), darkClippedFraction: 1e-6 }
+	}
+
+	const result = detectSensorSaturation([sparseDark(0, 100, 50), sparseDark(1, 300, 160), sparseDark(2, 500, 140), sparseDark(3, 600, 100)], GAIN)
+	expect(result?.method).toBe('variance')
+	expect(result?.signal).toBe(300)
+})
+
 test('skips dark-clipped levels before a clipped flat', () => {
 	const darkClipped = { ...point(1, 300, 150), darkClippedFraction: 0.1 }
 	const result = detectSensorSaturation([point(0, 100, 50), darkClipped, point(2, 500, 200, 0.2)], GAIN)
@@ -42,6 +66,13 @@ test('detects variance collapse and uses digital range only as low-confidence fa
 
 	const fallback = detectSensorSaturation([point(0, 100, 50), point(1, 200, 100)], GAIN, 1000)
 	expect(fallback).toEqual({ signal: 1000, capacity: 2000, index: -1, method: 'digitalRange', confidence: 0.2 })
+})
+
+test('uses the global PTC variance maximum after a local dip', () => {
+	const result = detectSensorSaturation([point(0, 100, 50), point(1, 200, 100), point(2, 300, 88), point(3, 500, 200), point(4, 700, 250), point(5, 800, 100)], GAIN)
+	expect(result?.method).toBe('variance')
+	expect(result?.signal).toBe(700)
+	expect(result?.index).toBe(4)
 })
 
 test('requires an earlier valid variance sample before reporting collapse', () => {

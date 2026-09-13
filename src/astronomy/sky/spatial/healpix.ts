@@ -333,6 +333,8 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 		switch (query.kind) {
 			case 'cone':
 				return this.queryCone(query.centerRA, query.centerDEC, query.radius, options)
+			case 'triangle':
+				return this.queryTriangle(query.a, query.b, query.c, options)
 			case 'box':
 				return this.queryBox(query.minRA, query.maxRA, query.minDEC, query.maxDEC, options)
 			case 'polygon':

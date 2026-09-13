@@ -219,6 +219,73 @@ describe('quoted edge cases', () => {
 	})
 })
 
+describe('comment lines with quotes', () => {
+	test('unpaired quote in a leading comment does not swallow following rows', () => {
+		expect(readCsv('# telescope 8"\nHIP,RA\n1,0', { skipFirstLine: false })).toEqual([
+			['HIP', 'RA'],
+			['1', '0'],
+		])
+	})
+
+	test('unpaired quote in a mid-file comment does not swallow following rows', () => {
+		expect(readCsv('a,b\n# 10"\nc,d', { skipFirstLine: false })).toEqual([
+			['a', 'b'],
+			['c', 'd'],
+		])
+	})
+
+	test('paired quotes in a comment still skip only that line', () => {
+		expect(readCsv('# The "best" catalog\na,b\nc,d', { skipFirstLine: false })).toEqual([
+			['a', 'b'],
+			['c', 'd'],
+		])
+	})
+
+	test('indented comment with an unpaired quote is still a physical line', () => {
+		expect(readCsv('  # 10"\na,b', { skipFirstLine: false })).toEqual([['a', 'b']])
+	})
+
+	test('stream with 1-byte chunks keeps rows after a comment with an unpaired quote', async () => {
+		expect(await readCsvRows(Buffer.from('# telescope 8"\nHIP,RA\n1,0'), { skipFirstLine: false, bufferSize: 1 })).toEqual([
+			['HIP', 'RA'],
+			['1', '0'],
+		])
+		expect(await readCsvRows(Buffer.from('a,b\n# 10"\nc,d'), { skipFirstLine: false, bufferSize: 1 })).toEqual([
+			['a', 'b'],
+			['c', 'd'],
+		])
+	})
+})
+
+describe('unquoted interior quotes', () => {
+	test('literal quote in an unquoted field does not join the next record', () => {
+		expect(readCsv('name,size\nstar,10"\nother,1', { skipFirstLine: false })).toEqual([
+			['name', 'size'],
+			['star', '10"'],
+			['other', '1'],
+		])
+	})
+
+	test('literal quote in an unquoted TSV field does not join the next record', () => {
+		expect(readCsv('star\t10"\nother\t1', { skipFirstLine: false, delimiter: TSV_DELIMITER })).toEqual([
+			['star', '10"'],
+			['other', '1'],
+		])
+	})
+
+	test('stream with 1-byte chunks keeps a literal quote on a chunk boundary', async () => {
+		expect(await readCsvRows(Buffer.from('name,size\nstar,10"\nother,1'), { skipFirstLine: false, bufferSize: 1 })).toEqual([
+			['name', 'size'],
+			['star', '10"'],
+			['other', '1'],
+		])
+		expect(await readCsvRows(Buffer.from('star\t10"\nother\t1'), { skipFirstLine: false, delimiter: TSV_DELIMITER, bufferSize: 1 })).toEqual([
+			['star', '10"'],
+			['other', '1'],
+		])
+	})
+})
+
 test('IAU-CSN', async () => {
 	const rows: CsvRow[] = []
 

@@ -59,9 +59,8 @@ export function searchRoots(f: (time: Time) => number, start: Time, stop: Time, 
 		const f1 = g(x1)
 
 		if (f1 === 0) {
-			// Report a sample that lands exactly on a root, but defer to the next interval so the boundary
-			// is not counted twice; skip if it is the closing endpoint already handled by the loop guard.
-			if (x1 < span) roots.push(timeShift(start, x1))
+			// Exact sample zeros, including stop. The loop never retests f0 === 0, so this is not a duplicate.
+			roots.push(timeShift(start, x1))
 		} else if ((f0 < 0 && f1 > 0) || (f0 > 0 && f1 < 0)) {
 			const root = brentRoot(g, x0, x1, { tolerance })
 			roots.push(timeShift(start, root.root))

@@ -5,7 +5,7 @@ import { equatorialFromJ2000, equatorialToJ2000 } from '../../astronomy/coordina
 import { SIDEREAL_RATE } from '../../core/constants'
 import { computeRemainingBytes, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeader, FitsKeywordWriter } from '../../io/formats/fits/fits'
 import { bitpixInBytes } from '../../io/formats/fits/util'
-import { type Angle, formatDEC, formatRA, normalizeAngle, toDeg } from '../../math/units/angle'
+import { type Angle, deg, formatDEC, formatRA, hour, normalizeAngle, toDeg, toHour } from '../../math/units/angle'
 import { handleDefLightVector, handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetLightVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from '../indi/client'
 import type { Camera, Client, Device, Focuser, Mount, Rotator, WeatherSensor, Wheel } from '../indi/device'
 import type { DeviceProvider } from '../indi/manager/device'
@@ -30,6 +30,17 @@ export interface AlpacaClientOptions {
 	handler: AlpacaClientHandler
 	// Polling period in milliseconds (clamped to a 1000 ms minimum). Misspelled to match existing API.
 	poolingInterval?: number
+	// Starts an immediate poll and schedules repeats at intervalMs milliseconds, returning a cancellation
+	// handle. Each poll resolves after its reads/publications; independent polls may overlap. Omit for timers.
+	schedulePoll?: (poll: () => Promise<void>, intervalMs: number) => Disposable
+}
+
+// Schedules independent HTTP polling cycles every intervalMs milliseconds. Disposal prevents future
+// ticks; in-flight reads retain their session guards. Unexpected asynchronous failures are reported.
+function scheduleAlpacaPoll(poll: () => Promise<void>, intervalMs: number): Disposable {
+	const timer = setInterval(() => void poll().catch(console.error), intervalMs)
+	void poll().catch(console.error)
+	return { [Symbol.dispose]: () => clearInterval(timer) }
 }
 
 // Top-level Alpaca connection: discovers the server's configured devices, builds a device wrapper for
@@ -48,7 +59,10 @@ export class AlpacaClient implements Client {
 	// multi-interface INDI driver.
 	readonly #devices = new Map<string, AlpacaDevice>()
 	readonly #management: AlpacaManagementApi
-	#timer?: NodeJS.Timeout
+	#timer?: Disposable
+	// Discovery belongs to one start/stop generation, including while no timer exists yet.
+	#generation = 0
+	#starting = false
 
 	constructor(
 		readonly url: string,
@@ -91,11 +105,18 @@ export class AlpacaClient implements Client {
 	// Queries the server's configured devices and begins polling. Returns false if already started or the
 	// server reports no devices.
 	async start() {
-		if (this.#timer) return false
-		const configuredDevices = await this.#management.configuredDevices()
-		if (!configuredDevices.ok || configuredDevices.value.length === 0) return false
-		this.#initialize(configuredDevices.value)
-		return true
+		if (this.#timer || this.#starting) return false
+		const generation = this.#generation
+		this.#starting = true
+
+		try {
+			const configuredDevices = await this.#management.configuredDevices()
+			if (generation !== this.#generation || !configuredDevices.ok || configuredDevices.value.length === 0) return false
+			this.#initialize(configuredDevices.value)
+			return generation === this.#generation
+		} finally {
+			if (generation === this.#generation) this.#starting = false
+		}
 	}
 
 	// Builds a wrapper for each new device, initializes it, and (re)starts the polling timer.
@@ -125,21 +146,23 @@ export class AlpacaClient implements Client {
 			device.onInit()
 		}
 
-		clearInterval(this.#timer)
-		this.#timer = setInterval(this.#update.bind(this), Math.max(1000, this.options?.poolingInterval ?? 1000))
-		this.#update()
+		this.#timer?.[Symbol.dispose]()
+		this.#timer = (this.options.schedulePoll ?? scheduleAlpacaPoll)(this.#update.bind(this), Math.max(1000, this.options.poolingInterval ?? 1000))
 	}
 
-	// One polling tick: advances every device wrapper.
-	#update() {
-		for (const device of this.#devices.values()) device.update()
+	// One polling tick: starts all device reads concurrently and resolves after their results are applied.
+	async #update() {
+		await Promise.all(Array.from(this.#devices.values(), (device) => device.update()))
 	}
 
 	// Stops polling, closes and clears all devices, and notifies the handler. `server` flags whether the
 	// stop originated from a server-side disconnect.
 	stop(server: boolean = false) {
+		this.#generation++
+		this.#starting = false
+
 		if (this.#timer) {
-			clearInterval(this.#timer)
+			this.#timer[Symbol.dispose]()
 			this.#timer = undefined
 
 			for (const device of this.#devices.values()) device.close()
@@ -214,6 +237,9 @@ interface AlpacaClientDeviceState {
 // handshake. Subclasses declare their device-specific endpoints and translate polled state into property
 // updates via handleEndpointsAfterRun.
 abstract class AlpacaDevice {
+	// Asynchronous publication started by reconciliation (sensor definitions or camera download).
+	// The initiating poll awaits it; timers remain free to start independent subsequent polls.
+	protected publication?: Promise<void>
 	// Alpaca device number used in REST paths.
 	readonly id: number
 
@@ -401,6 +427,7 @@ abstract class AlpacaDevice {
 	// session so nothing in flight from the previous one is applied.
 	protected reset() {
 		this.#session++
+		this.publication = undefined
 		this.state.Step = 0
 		this.#hasDeviceState = 0
 		this.state.DeviceState = undefined
@@ -424,9 +451,11 @@ abstract class AlpacaDevice {
 
 	// One polling tick: runs the enabled endpoints, which then invoke handleEndpointsAfterRun. A closed
 	// wrapper polls nothing: its session is over.
-	update() {
+	async update() {
 		if (this.#closed) return
-		void this.runner.run(this.state as never)
+		const previous = this.publication
+		await this.runner.run(this.state as never)
+		if (this.publication !== previous) await this.publication
 	}
 
 	// Hook called once the device is found not to support the bulk DeviceState endpoint; subclasses may
@@ -444,7 +473,9 @@ abstract class AlpacaDevice {
 		const { Connected, Step } = this.state
 
 		if (Connected === undefined) {
-			return this.client.stop(true)
+			// A failed device poll says nothing about the other devices or the server. Keep the last
+			// connection state and retry next tick; only an explicit false disconnects this wrapper.
+			return false
 		}
 
 		if (Connected !== this.isConnected) {
@@ -579,10 +610,12 @@ abstract class AlpacaDevice {
 
 	// Issues the Alpaca connect/disconnect call, reflecting Busy → Idle/Alert in the connection property.
 	async #handleConnection(mode: 'connect' | 'disconnect') {
+		const session = this.session
 		this.connection.state = 'Busy'
 		this.sendSetProperty(this.connection)
 
 		const { ok } = await this.api[mode](this.id)
+		if (session !== this.session) return
 		this.connection.state = ok ? 'Idle' : 'Alert'
 		this.sendSetProperty(this.connection)
 	}
@@ -592,6 +625,7 @@ abstract class AlpacaDevice {
 	close() {
 		this.#session++
 		this.#closed = true
+		this.publication = undefined
 	}
 }
 
@@ -675,6 +709,8 @@ class AlpacaCamera extends AlpacaDevice {
 	readonly #image = makeBlobVector('', 'CCD1', 'CCD Image', MAIN_CONTROL, 'ro', ['CCD1', 'Image'])
 
 	readonly #now = timeNow() // Used in the conversion from JNOW to J2000. Changes in precession/nutation angles are negligible.
+	// Identifies the latest start/stop command so delayed replies cannot overwrite a newer exposure.
+	#exposureSequence = 0
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice, name: string) {
 		super(client, device, client.options.handler, name)
@@ -740,9 +776,9 @@ class AlpacaCamera extends AlpacaDevice {
 		this.api = api
 	}
 
-	// True when the selected frame type is a light frame.
+	// True when the selected frame requires an open shutter (light or flat).
 	get isLight() {
-		return this.#frameType.elements.FRAME_LIGHT?.value === true
+		return this.#frameType.elements.FRAME_LIGHT?.value === true || this.#frameType.elements.FRAME_FLAT?.value === true
 	}
 
 	// Reconciles polled camera state into the INDI CCD properties: dimensions/pixel size, cooler and
@@ -938,7 +974,7 @@ class AlpacaCamera extends AlpacaDevice {
 
 			if (ImageReady) {
 				if (ExposureStarted) {
-					void this.#handleImageReady()
+					this.publication = this.#handleImageReady()
 					return true
 				}
 			} else {
@@ -987,7 +1023,7 @@ class AlpacaCamera extends AlpacaDevice {
 
 				break
 			case 'CCD_ABORT_EXPOSURE':
-				if (vector.elements.ABORT === true) void this.api.stopExposure(this.id)
+				if (vector.elements.ABORT === true) void this.#stopExposure()
 				break
 			case 'CCD_FRAME_TYPE':
 				for (const key in vector.elements) {
@@ -1008,11 +1044,15 @@ class AlpacaCamera extends AlpacaDevice {
 
 		switch (vector.name) {
 			case 'CCD_EXPOSURE':
-				if (vector.elements.CCD_EXPOSURE_VALUE) {
+				if (vector.elements.CCD_EXPOSURE_VALUE !== undefined) {
+					const session = this.session
+					const sequence = ++this.#exposureSequence
 					this.state.ExposureStarted = true
 					this.state.ExposureDuration = Math.max(this.#exposure.elements.CCD_EXPOSURE_VALUE.min, Math.min(vector.elements.CCD_EXPOSURE_VALUE, this.#exposure.elements.CCD_EXPOSURE_VALUE.max))
 
 					void this.api.startExposure(this.id, this.state.ExposureDuration, this.isLight).then(({ ok }) => {
+						if (session !== this.session || sequence !== this.#exposureSequence) return
+
 						if (ok) {
 							this.updatePropertyState(this.#exposure, 'Busy')
 							this.updatePropertyValue(this.#exposure, 'CCD_EXPOSURE_VALUE', this.state.ExposureDuration)
@@ -1076,23 +1116,55 @@ class AlpacaCamera extends AlpacaDevice {
 		}
 	}
 
-	// Called when an exposure completes: downloads the image, emits it, and returns the exposure to Ok.
+	// Stops the active exposure. A successful stop releases the pending-image flag even if the driver
+	// produces no image. A failed stop reports Alert and keeps the active exposure eligible for download.
+	// Replies superseded by another command or an ended session publish nothing.
+	async #stopExposure() {
+		const session = this.session
+		const sequence = ++this.#exposureSequence
+		const result = await this.api.stopExposure(this.id)
+		if (session !== this.session || sequence !== this.#exposureSequence) return
+		if (result.ok) {
+			this.state.ExposureStarted = false
+			this.updatePropertyValue(this.#exposure, 'CCD_EXPOSURE_VALUE', 0)
+		}
+		this.updatePropertyState(this.#exposure, result.ok ? 'Idle' : 'Alert')
+		this.sendSetProperty(this.#exposure)
+	}
+
+	// Downloads and emits a completed exposure, returning Ok or Alert if ImageBytes conversion fails.
 	async #handleImageReady() {
+		const session = this.session
+		const sequence = this.#exposureSequence
 		this.#exposure.state = 'Busy'
 		this.#exposure.elements.CCD_EXPOSURE_VALUE.value = 0
 		this.sendSetProperty(this.#exposure)
 
 		this.state.ExposureStarted = false
-		await this.#readImageDataAsFits()
 
-		this.#exposure.state = 'Ok'
+		try {
+			const ok = await this.#readImageDataAsFits(session, sequence)
+			if (session !== this.session || sequence !== this.#exposureSequence) return
+			this.#exposure.state = ok ? 'Ok' : 'Alert'
+		} catch (error) {
+			if (session !== this.session || sequence !== this.#exposureSequence) return
+			console.error(error)
+			this.#image.state = 'Alert'
+			this.#image.elements.CCD1.value = undefined
+			handleSetBlobVector(this.client, this.handler, this.#image)
+			this.#exposure.state = 'Alert'
+		}
+
 		this.sendSetProperty(this.#exposure)
 	}
 
 	// Downloads the ImageBytes buffer, converts it to FITS (stamping camera/mount/etc. metadata), and
-	// publishes it through the CCD1 BLOB property.
-	async #readImageDataAsFits() {
+	// publishes it through the CCD1 BLOB property. session and sequence identify the owning exposure;
+	// obsolete downloads emit nothing. Returns whether the current download succeeded.
+	async #readImageDataAsFits(session: number, sequence: number) {
 		const buffer = await this.api.getImageArray(this.id)
+
+		if (session !== this.session || sequence !== this.#exposureSequence) return false
 
 		if (buffer.ok) {
 			this.#image.state = 'Ok'
@@ -1106,6 +1178,8 @@ class AlpacaCamera extends AlpacaDevice {
 		}
 
 		handleSetBlobVector(this.client, this.handler, this.#image)
+
+		return buffer.ok
 	}
 }
 
@@ -1119,6 +1193,7 @@ interface AlpacaClientTelescopeState extends AlpacaClientDeviceState {
 	readonly CanMoveAxis: boolean
 	readonly CanPulseGuide: boolean
 	readonly CanTrack: boolean
+	// Whether SlewToCoordinatesAsync is supported; synchronous slew capability is irrelevant here.
 	readonly CanSlew: boolean
 	readonly CanSync: boolean
 	readonly CanSetGuideRate: boolean
@@ -1218,7 +1293,7 @@ class AlpacaTelescope extends AlpacaDevice {
 		this.registerEndpoint('CanMoveAxis', () => canMoveAxis(this.id), false)
 		this.registerEndpoint('CanPulseGuide', () => api.canPulseGuide(this.id), false)
 		this.registerEndpoint('CanTrack', () => api.canSetTracking(this.id), false)
-		this.registerEndpoint('CanSlew', () => api.canSlew(this.id), false)
+		this.registerEndpoint('CanSlew', () => api.canSlewAsync(this.id), false)
 		this.registerEndpoint('CanSync', () => api.canSync(this.id), false)
 		this.registerEndpoint('CanSetGuideRate', () => api.canSetGuideRates(this.id), false)
 		this.registerEndpoint('SlewRates', () => api.getAxisRates(this.id, 0), false)
@@ -1252,6 +1327,8 @@ class AlpacaTelescope extends AlpacaDevice {
 		const { Step, CanTrack, CanHome, CanPark, CanSlew, CanSync, CanMoveAxis, CanPulseGuide, CanSetGuideRate, CanSetSideOfPier, Tracking, AtPark, IsPulseGuiding, Slewing } = this.state
 		const { RightAscension, Declination, SlewRates, TrackingRates, TrackingRate, SideOfPier, UTCDate, Latitude, Longitude, Elevation, GuideRateRA, GuideRateDEC, EquatorialSystem } = this.state
 		const { LastRightAscension, LastDeclination } = this.state
+		// Alpaca and INDI are both east-positive, but INDI publishes longitude in [0, 360).
+		const longitude = Longitude !== undefined && Longitude < 0 ? Longitude + 360 : Longitude
 
 		// Initial
 		if (Step === 1) {
@@ -1321,7 +1398,7 @@ class AlpacaTelescope extends AlpacaDevice {
 			}
 
 			this.#geographicCoordinate.elements.LAT.value = Latitude ?? 0
-			this.#geographicCoordinate.elements.LONG.value = Longitude ?? 0
+			this.#geographicCoordinate.elements.LONG.value = longitude ?? 0
 			this.#geographicCoordinate.elements.ELEV.value = Elevation ?? 0
 			this.sendDefProperty(this.#geographicCoordinate)
 
@@ -1367,7 +1444,7 @@ class AlpacaTelescope extends AlpacaDevice {
 
 			if (Latitude !== undefined && Longitude !== undefined) {
 				let updated = this.updatePropertyValue(this.#geographicCoordinate, 'LAT', Latitude)
-				updated = this.updatePropertyValue(this.#geographicCoordinate, 'LONG', Longitude) || updated
+				updated = this.updatePropertyValue(this.#geographicCoordinate, 'LONG', longitude) || updated
 				if (Elevation !== undefined) updated = this.updatePropertyValue(this.#geographicCoordinate, 'ELEV', Elevation) || updated
 				updated && this.sendSetProperty(this.#geographicCoordinate)
 				this.state.Latitude = undefined
@@ -1389,7 +1466,9 @@ class AlpacaTelescope extends AlpacaDevice {
 				let declination = Declination
 
 				if (EquatorialSystem === 2) {
-					;[rightAscension, declination] = equatorialFromJ2000(RightAscension, Declination, this.#now)
+					const [ra, dec] = equatorialFromJ2000(hour(RightAscension), deg(Declination), this.#now)
+					rightAscension = toHour(normalizeAngle(ra))
+					declination = toDeg(dec)
 				}
 
 				let updated = this.updatePropertyState(this.#equatorialCoordinate, Slewing ? 'Busy' : 'Idle')
@@ -1429,7 +1508,9 @@ class AlpacaTelescope extends AlpacaDevice {
 							void this.api.moveAxis(this.id, 1, 0)
 						}
 					} else if (MOTION_WEST === true || MOTION_EAST === true) {
-						void this.api.moveAxis(this.id, 0, MOTION_WEST === true ? Maximum : -Maximum)
+						// Match this repository's AlpacaServer convention: positive primary-axis rate is east.
+						// ASCOM itself leaves the mechanical rotation sign to the driver.
+						void this.api.moveAxis(this.id, 0, MOTION_EAST === true ? Maximum : -Maximum)
 					} else if (MOTION_WEST === false || MOTION_EAST === false) {
 						void this.api.moveAxis(this.id, 0, 0)
 					}
@@ -1528,8 +1609,8 @@ class AlpacaTelescope extends AlpacaDevice {
 			case 'GUIDE_RATE':
 				if (this.state.CanSetGuideRate) {
 					// Guide rate in deg/second
-					vector.elements.GUIDE_RATE_WE && void this.api.setGuideRateRightAscension(this.id, vector.elements.GUIDE_RATE_WE * (SIDEREAL_RATE / 3600))
-					vector.elements.GUIDE_RATE_NS && void this.api.setGuideRateDeclination(this.id, vector.elements.GUIDE_RATE_NS * (SIDEREAL_RATE / 3600))
+					if (vector.elements.GUIDE_RATE_WE !== undefined) void this.api.setGuideRateRightAscension(this.id, vector.elements.GUIDE_RATE_WE * (SIDEREAL_RATE / 3600))
+					if (vector.elements.GUIDE_RATE_NS !== undefined) void this.api.setGuideRateDeclination(this.id, vector.elements.GUIDE_RATE_NS * (SIDEREAL_RATE / 3600))
 					this.enableEndpoints('GuideRateRA', 'GuideRateDEC')
 				}
 
@@ -1556,10 +1637,14 @@ class AlpacaTelescope extends AlpacaDevice {
 	}
 
 	// Slews or syncs to the requested equatorial target (RA hours, Dec degrees). Converts JNOW input to
-	// J2000 when the mount reports a JNOW equatorial system; the slew/sync choice follows ON_COORD_SET.
+	// J2000 when the mount reports a J2000 equatorial system; the slew/sync choice follows ON_COORD_SET.
 	async #moveToTarget(rightAscension?: number, declination?: number) {
 		if (rightAscension !== undefined && declination !== undefined) {
-			if (this.state.EquatorialSystem === 2) [rightAscension, declination] = equatorialToJ2000(rightAscension, declination, this.#now)
+			if (this.state.EquatorialSystem === 2) {
+				const [ra, dec] = equatorialToJ2000(hour(rightAscension), deg(declination), this.#now)
+				rightAscension = toHour(normalizeAngle(ra))
+				declination = toDeg(dec)
+			}
 			if (this.#onCoordSet.elements.SLEW?.value === true) await this.api.slewToCoordinatesAsync(this.id, rightAscension, declination)
 			else if (this.#onCoordSet.elements.SYNC?.value === true) await this.api.syncToCoordinates(this.id, rightAscension, declination)
 		}
@@ -1668,6 +1753,8 @@ class AlpacaFocuser extends AlpacaDevice {
 	readonly #direction = makeSwitchVector('', 'FOCUS_MOTION', 'Direction', MAIN_CONTROL, 'OneOfMany', 'rw', ['FOCUS_INWARD', 'In', true], ['FOCUS_OUTWARD', 'Out', false])
 
 	#position = this.#absolutePosition
+	// Invalidates a position read when a newer move or halt supersedes the relative command.
+	#moveSequence = 0
 
 	protected readonly api: AlpacaFocuserApi
 	// https://ascom-standards.org/newdocs/focuser.html#Focuser.DeviceState
@@ -1710,8 +1797,8 @@ class AlpacaFocuser extends AlpacaDevice {
 		return this.#direction.elements.FOCUS_OUTWARD.value === true
 	}
 
-	// Defines the position/direction/temperature/abort properties (choosing absolute vs relative from the
-	// device's capability) at step 1, then publishes position (Busy while moving) and temperature each
+	// Defines relative motion and, when supported, absolute position at step 1, then publishes motion
+	// state (Busy while moving), absolute position in steps, and temperature each
 	// tick. Returns false until initialized.
 	protected handleEndpointsAfterRun() {
 		if (!super.handleEndpointsAfterRun()) return false
@@ -1721,15 +1808,17 @@ class AlpacaFocuser extends AlpacaDevice {
 		// Initial
 		if (Step === 1) {
 			if (MaxStep) {
+				this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.max = MaxStep
+
 				if (IsAbsolute) {
 					this.#absolutePosition.elements.FOCUS_ABSOLUTE_POSITION.max = MaxStep
 					this.#position = this.#absolutePosition
+					this.sendDefProperty(this.#absolutePosition)
 				} else {
-					this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.max = MaxStep
 					this.#position = this.#relativePosition
 				}
 
-				this.sendDefProperty(this.#position)
+				this.sendDefProperty(this.#relativePosition)
 			}
 
 			if (Temperature !== undefined) {
@@ -1749,6 +1838,7 @@ class AlpacaFocuser extends AlpacaDevice {
 			let updated = this.updatePropertyState(this.#position, IsMoving ? 'Busy' : 'Idle')
 			if (IsAbsolute) updated = this.updatePropertyValue(this.#position, 'FOCUS_ABSOLUTE_POSITION', Position) || updated
 			updated && this.sendSetProperty(this.#position)
+			if (IsAbsolute && this.updatePropertyState(this.#relativePosition, IsMoving ? 'Busy' : 'Idle')) this.sendSetProperty(this.#relativePosition)
 
 			if (Temperature !== undefined) {
 				this.updatePropertyValue(this.#temperature, 'TEMPERATURE', Math.trunc(Temperature)) && this.sendSetProperty(this.#temperature)
@@ -1764,7 +1854,10 @@ class AlpacaFocuser extends AlpacaDevice {
 
 		switch (vector.name) {
 			case 'FOCUS_ABORT_MOTION':
-				if (vector.elements.ABORT === true) void this.api.halt(this.id)
+				if (vector.elements.ABORT === true) {
+					this.#moveSequence++
+					void this.api.halt(this.id)
+				}
 				break
 			case 'FOCUS_MOTION':
 				if (vector.elements.FOCUS_INWARD === true) this.updatePropertyValue(this.#direction, 'FOCUS_INWARD', true)
@@ -1773,19 +1866,44 @@ class AlpacaFocuser extends AlpacaDevice {
 		}
 	}
 
-	// Handles focuser move commands: relative steps (signed by direction) on relative focusers, or an
-	// absolute target on absolute focusers.
+	// Handles relative steps on either focuser type, or an absolute target on absolute focusers.
 	sendNumber(vector: NewNumberVector) {
 		super.sendNumber(vector)
 
 		switch (vector.name) {
 			case 'REL_FOCUS_POSITION':
-				if (!this.isAbsolute) void this.api.move(this.id, this.isFocusOut ? vector.elements.FOCUS_RELATIVE_POSITION : -vector.elements.FOCUS_RELATIVE_POSITION)
+				void this.#moveRelative(this.isFocusOut ? vector.elements.FOCUS_RELATIVE_POSITION : -vector.elements.FOCUS_RELATIVE_POSITION)
 				break
 			case 'ABS_FOCUS_POSITION':
-				if (this.isAbsolute) void this.api.move(this.id, vector.elements.FOCUS_ABSOLUTE_POSITION)
+				if (this.isAbsolute) {
+					this.#moveSequence++
+					void this.api.move(this.id, vector.elements.FOCUS_ABSOLUTE_POSITION)
+				}
 				break
 		}
+	}
+
+	// Moves by signed steps (positive outward). Absolute focusers read the current position before
+	// computing a target clamped to [0, MaxStep], avoiding a stale polling position between moves.
+	// A failed read issues no movement; answers from an ended session are ignored.
+	async #moveRelative(steps: number) {
+		const session = this.session
+		const sequence = ++this.#moveSequence
+
+		if (this.isAbsolute) {
+			const position = await this.api.getPosition(this.id)
+
+			if (session !== this.session || sequence !== this.#moveSequence) return
+
+			if (!position.ok) {
+				this.updatePropertyState(this.#relativePosition, 'Alert') && this.sendSetProperty(this.#relativePosition)
+				return
+			}
+
+			steps = Math.max(0, Math.min(this.state.MaxStep, position.value + steps))
+		}
+
+		await this.api.move(this.id, steps)
 	}
 }
 
@@ -1838,7 +1956,7 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 
 	// Detects whether the device is a cover, a calibrator, or both, defines the matching properties at
 	// step 1 (adjusting DRIVER_INTERFACE), then publishes cover park state and calibrator on/off and
-	// brightness each tick. Alpaca state codes: 0 not present, 1 closed/off, 2 moving, 3 open/on.
+	// brightness each tick. Codes: 0 absent, 1 closed/off, 2 moving/not ready, 3 open/ready, 5 error.
 	protected handleEndpointsAfterRun() {
 		if (!super.handleEndpointsAfterRun()) return false
 
@@ -1880,12 +1998,14 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 		// State
 		else if (Step === 2) {
 			if (CoverState !== 0) {
-				let updated = this.updatePropertyState(this.#park, CoverState === 2 || CoverMoving ? 'Busy' : 'Idle')
-				if (CoverState === 1 || CoverState === 2) updated = this.updatePropertyValue(this.#park, CoverState === 1 ? 'PARK' : 'UNPARK', true) || updated
+				let updated = this.updatePropertyState(this.#park, CoverState === 5 ? 'Alert' : CoverState === 2 || CoverMoving ? 'Busy' : 'Idle')
+				if (CoverState === 1 || CoverState === 3) updated = this.updatePropertyValue(this.#park, CoverState === 1 ? 'PARK' : 'UNPARK', true) || updated
 				updated && this.sendSetProperty(this.#park)
 			}
 
 			if (CalibratorState !== 0) {
+				if (this.updatePropertyState(this.#light, CalibratorState === 5 ? 'Alert' : CalibratorState === 2 ? 'Busy' : 'Idle')) this.sendSetProperty(this.#light)
+
 				if (CalibratorState === 3) {
 					this.updatePropertyValue(this.#light, 'FLAT_LIGHT_ON', true) && this.sendSetProperty(this.#light)
 					this.updatePropertyValue(this.#brightness, 'FLAT_LIGHT_INTENSITY_VALUE', Brightness) && this.sendSetProperty(this.#brightness)
@@ -2734,7 +2854,7 @@ class AlpacaObservingConditions extends AlpacaDevice {
 		if (this.#labels === undefined) {
 			if (!this.#defining) {
 				this.#defining = true
-				void this.#defineParameters(this.session)
+				this.publication = this.#defineParameters(this.session)
 			}
 
 			return false
@@ -2808,15 +2928,23 @@ class AlpacaObservingConditions extends AlpacaDevice {
 function normalizeLongitude(angle: number) {
 	angle = angle % 360
 	if (angle > 180) angle -= 360
+	else if (angle <= -180) angle += 360
 	return angle
 }
 
 // Converts an Alpaca ImageBytes binary buffer into an in-memory FITS, stamping observation metadata
 // (J2000 coordinates from the mount, filter, focuser, rotator, exposure). `time` is used for the JNOW→
 // J2000 conversion and `lastExposureDuration` is in seconds. Disconnected devices are ignored.
+// Accepts mono/RGB byte, signed/unsigned 16/32-bit integer and 32/64-bit float transmission data.
+// Allocates a new FITS buffer with planar channels and big-endian pixels; leaves data unchanged.
+// Throws for unsupported encodings (including 64-bit integers), malformed dimensions, truncated
+// pixels, an incomplete header, an Alpaca error response, or an invalid data offset.
 // https://github.com/ASCOMInitiative/ASCOMRemote/blob/main/Documentation/AlpacaImageBytes.pdf
 export function makeFitsFromImageBytes(data: ArrayBuffer, time?: Time, camera?: Camera, mount?: Mount, wheel?: Wheel, focuser?: Focuser, rotator?: Rotator, lastExposureDuration: number = 0) {
-	const metadataArray = new Int32Array(data, 0, 44)
+	// ImageBytes has eleven int32 fields, totaling 44 bytes even for a tiny ROI.
+	if (data.byteLength < 44) throw new Error('incomplete ImageBytes header')
+
+	const metadataArray = new Int32Array(data, 0, 11)
 	const metadata: ImageBytesMetadata = {
 		MetadataVersion: metadataArray[0],
 		ErrorNumber: metadataArray[1],
@@ -2830,6 +2958,9 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, time?: Time, camera?: 
 		Dimension2: metadataArray[9],
 		Dimension3: metadataArray[10],
 	}
+
+	if (metadata.ErrorNumber !== 0) throw new Error(`ImageBytes error ${metadata.ErrorNumber}`)
+	if (!(metadata.DataStart >= 44 && metadata.DataStart <= data.byteLength)) throw new Error('invalid ImageBytes data offset')
 
 	const NumX = metadata.Dimension1
 	const NumY = metadata.Dimension2
@@ -2848,6 +2979,14 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, time?: Time, camera?: 
 
 	const bitpix = alpacaImageElementTypeToBitpix(metadata.TransmissionElementType)
 	const bytesPerPixel = bitpixInBytes(bitpix)
+	// These are untrusted file dimensions. Reject unsupported encodings and truncated or nonsensical
+	// shapes before allocating: a tiny corrupt header must not request gigabytes of output memory.
+	if (bitpix === 0 || bitpix === 64) throw new Error('unsupported ImageBytes transmission type')
+	const numberOfPixels = NumX * NumY
+	const elementCount = numberOfPixels * NumZ
+	const expectedDataSize = elementCount * bytesPerPixel
+	if (!(NumX > 0 && NumY > 0) || !((metadata.Rank === 2 && metadata.Dimension3 === 0) || (metadata.Rank === 3 && metadata.Dimension3 === 3)) || !Number.isSafeInteger(expectedDataSize) || !(expectedDataSize <= data.byteLength - metadata.DataStart)) throw new Error('invalid ImageBytes dimensions or truncated pixels')
+	const zero = metadata.TransmissionElementType === 8 ? 32768 : metadata.TransmissionElementType === 9 ? 2147483648 : 0
 
 	// https://github.com/indilib/indi/blob/3b0cdcb6caf41c859b77c6460981772fe8d5d22d/libs/indibase/indiccd.cpp#L2028
 	const header: FitsHeader = {
@@ -2858,7 +2997,7 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, time?: Time, camera?: 
 		NAXIS2: NumY,
 		NAXIS3: NumZ === 3 ? 3 : undefined,
 		EXTEND: true,
-		BZERO: bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : undefined,
+		BZERO: bitpix === 16 || bitpix === 32 ? zero : undefined,
 		BSCALE: bitpix === 16 || bitpix === 32 ? 1 : undefined,
 		ROWORDER: 'TOP-DOWN',
 		INSTRUME: camera?.name,
@@ -2897,22 +3036,21 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, time?: Time, camera?: 
 		COMMENT: "FITS (Flexible Image Transport System) format is defined in 'Astronomy\n and Astrophysics', volume 376, page 359; bibcode: 2001A&A...376..359H\nGenerated by Nebulosa",
 	}
 
-	const numberOfPixels = NumX * NumY
-	const elementCount = numberOfPixels * NumZ
 	const estimatedHeaderSize = Object.keys(header).filter((e) => header[e] !== undefined).length * FITS_HEADER_CARD_SIZE + FITS_BLOCK_SIZE
-	const expectedDataSize = elementCount * bytesPerPixel
 	const output = Buffer.allocUnsafe(estimatedHeaderSize + computeRemainingBytes(estimatedHeaderSize) + expectedDataSize + computeRemainingBytes(expectedDataSize))
 
 	const writer = new FitsKeywordWriter()
 	let headerOffset = writer.writeAll(header, output)
 	headerOffset += writer.writeEnd(output, headerOffset)
 
-	const SourceTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Uint16Array : bitpix === 32 ? Uint32Array : bitpix === -32 ? Float32Array : Float64Array
-	const sourceArray = new SourceTypedArray(data, metadata.DataStart, elementCount)
+	const SourceTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? (zero ? Uint16Array : Int16Array) : bitpix === 32 ? (zero ? Uint32Array : Int32Array) : bitpix === -32 ? Float32Array : Float64Array
+	// DataStart is a byte offset, not a typed-array alignment guarantee. Preserve the zero-copy path
+	// when aligned; copy only the pixel bytes otherwise (notably doubles following the 44-byte header).
+	const sourceArray = metadata.DataStart % bytesPerPixel === 0 ? new SourceTypedArray(data, metadata.DataStart, elementCount) : new SourceTypedArray(data.slice(metadata.DataStart, metadata.DataStart + expectedDataSize))
 	const byteOffset = headerOffset + computeRemainingBytes(headerOffset)
+	output.fill(32, headerOffset, byteOffset)
 	const OutputTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : bitpix === 32 ? Int32Array : bitpix === -32 ? Float32Array : Float64Array
 	const outputArray = new OutputTypedArray(output.buffer, byteOffset, sourceArray.length)
-	const zero = bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : 0
 
 	let p = 0
 
@@ -2927,6 +3065,7 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, time?: Time, camera?: 
 	p *= bytesPerPixel
 
 	const size = byteOffset + p + computeRemainingBytes(p)
+	output.fill(0, byteOffset + p, size)
 	// FITS is big-endian
 	if (bytesPerPixel === 2) output.subarray(byteOffset, size).swap16()
 	else if (bytesPerPixel === 4) output.subarray(byteOffset, size).swap32()

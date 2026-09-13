@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { eraEpv00 } from '../../../../src/astronomy/coordinates/erfa/earth'
 import * as erfa from '../../../../src/astronomy/coordinates/erfa/erfa'
 import { eraMoon98 } from '../../../../src/astronomy/coordinates/erfa/moon'
+import { DAYSEC, MJD0 } from '../../../../src/core/constants'
 import type { Mat3, MutMat3 } from '../../../../src/math/linear-algebra/mat3'
 import { arcsec, toArcsec } from '../../../../src/math/units/angle'
 import { kilometer, meter } from '../../../../src/math/units/distance'
@@ -73,6 +74,31 @@ test('eraUt1Utc', () => {
 	const [a, b] = erfa.eraUt1Utc(2453750.5, 0.892104561, 0.3341)
 	expect(a).toBe(2453750.5)
 	expect(b).toBeCloseTo(0.8921006941018518519, 13)
+})
+
+test('eraUt1Utc ramps a negative leap second with ERFA grouping', () => {
+	// Historical leaps are +1 s, where `ddats * fd` equals `fd` and the
+	// unparenthesized form `duts += ddats * fd <= 1 ? fd : 1` coincides with
+	// ERFA ut1utc.c (`duts += ddats * min(fd, 1)`). Inject a -1 s jump so
+	// the grouping is observable.
+	const n = erfa.LEAP_SECOND_CHANGES.length
+	erfa.LEAP_SECOND_CHANGES.push([4099, 1, 36])
+
+	try {
+		expect(erfa.eraDat(4098, 12, 31, 0)).toBe(37)
+		expect(erfa.eraDat(4099, 1, 1, 0)).toBe(36)
+
+		const dut1Before = 0.4
+		const ddats = -1
+		const fd = 0.5
+		const ut11 = MJD0 + erfa.eraCalToJd(4098, 12, 31)
+		const ut12 = dut1Before / DAYSEC + (fd * (DAYSEC + ddats)) / DAYSEC
+		const [utc1, utc2] = erfa.eraUt1Utc(ut11, ut12, dut1Before)
+		expect(utc1).toBe(ut11)
+		expect(utc2).toBeCloseTo(ut12 - (dut1Before + ddats * fd) / DAYSEC, 12)
+	} finally {
+		erfa.LEAP_SECOND_CHANGES.length = n
+	}
 })
 
 test('eraTaiTt', () => {

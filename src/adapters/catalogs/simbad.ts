@@ -266,6 +266,8 @@ export function findSimbadObjectTypeInfoByCode(code: SimbadObjectCode) {
 const SIMBAD_COLUMNS = 'b.oid, b.otype, b.ra, b.dec, f.V, b.pmra, b.pmdec, b.plx_value, b.rvz_radvel'
 // Catalog epoch for all SIMBAD entries (J2000).
 const SIMBAD_EPOCH = 2000
+// Maximum rows requested per paginated regional query, matching the SIMBAD TAP output limit.
+const SIMBAD_QUERY_PAGE_SIZE = 50000
 // |cos(dec)| floor when converting μα·cosδ to dα/dt near the pole.
 const SIMBAD_PM_COS_DEC_EPSILON = 1e-12
 // Pattern validating a SIMBAD object id (digits only).
@@ -302,19 +304,35 @@ export class SimbadCatalog extends BaseStarCatalog<SimbadCatalogEntry> {
 
 	// Streams Simbad candidates intersecting the normalized coarse boxes.
 	protected async *streamCandidateEntries(query: NormalizedStarCatalogQuery): AsyncIterable<SimbadCatalogEntry> {
-		const rows = await this.#query(buildSimbadWhere(query), 5000)
-		if (!rows?.length) return
+		const baseWhere = buildSimbadWhere(query)
+		let where = baseWhere
 
-		for (const row of rows) {
-			const entry = parseSimbadCatalogRow(row)
-			if (entry) yield entry
+		while (true) {
+			const rows = await this.#query(where, SIMBAD_QUERY_PAGE_SIZE)
+			if (!rows?.length) return
+
+			for (const row of rows) {
+				const entry = parseSimbadCatalogRow(row)
+				if (entry) yield entry
+			}
+
+			if (rows.length < SIMBAD_QUERY_PAGE_SIZE) return
+
+			const lastRow = rows.at(-1) ?? []
+			const lastId = parseSimbadObjectId(lastRow[0])
+			const lastMagnitude = parseSimbadNumber(lastRow[4])
+			if (lastId === undefined || lastMagnitude === undefined) {
+				throw new Error('invalid SIMBAD pagination cursor')
+			}
+
+			where = `${baseWhere} AND (f.V > ${lastMagnitude} OR (f.V = ${lastMagnitude} AND b.oid > ${lastId}))`
 		}
 	}
 
 	// Executes one Simbad TSV query with only the columns needed by the catalog API.
 	async #query(where: string, limit?: number) {
 		const top = limit && limit > 0 ? `TOP ${Math.trunc(limit)} ` : ''
-		const query = `SELECT ${top}${SIMBAD_COLUMNS} FROM basic b JOIN allfluxes f ON f.oidref = b.oid WHERE ${where} ORDER BY V ASC` // NOTE: order by doesn't support tables
+		const query = `SELECT ${top}${SIMBAD_COLUMNS} FROM basic b JOIN allfluxes f ON f.oidref = b.oid WHERE ${where} ORDER BY V ASC, oid ASC` // NOTE: order by doesn't support tables
 		return await simbadQuery(query, this.options)
 	}
 }
@@ -367,6 +385,11 @@ function parseSimbadCatalogRow(row: Readonly<CsvRow>): SimbadCatalogEntry | unde
 // Builds the ADQL predicate for a normalized query.
 function buildSimbadWhere(query: NormalizedStarCatalogQuery) {
 	const constraints = [buildSimbadGeometryConstraint(query.preselectionBoxes)]
+
+	if (query.kind === 'cone') {
+		constraints.push(`1=CONTAINS(POINT('ICRS', b.ra, b.dec), CIRCLE('ICRS', ${toDeg(query.centerRA)}, ${toDeg(query.centerDEC)}, ${toDeg(query.radius)}))`)
+	}
+
 	const magnitudeConstraint = buildSimbadMagnitudeConstraint(query)
 
 	if (magnitudeConstraint) {

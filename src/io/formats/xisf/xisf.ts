@@ -419,7 +419,7 @@ function writeShuffledXisfSamples(input: ImageRawType, output: Buffer, bitpix: B
 			output[total + stored] = little ? b1 : b2
 			output[total * 2 + stored] = little ? b2 : b1
 			output[total * 3 + stored] = little ? b3 : b0
-		} else if (pixelInBytes === 8) {
+		} else if (pixelInBytes === 8 && bitpix < 0) {
 			bits.setFloat64(0, input[source], little)
 			output[stored] = bits.getUint8(0)
 			output[total + stored] = bits.getUint8(1)
@@ -430,7 +430,7 @@ function writeShuffledXisfSamples(input: ImageRawType, output: Buffer, bitpix: B
 			output[total * 6 + stored] = bits.getUint8(6)
 			output[total * 7 + stored] = bits.getUint8(7)
 		} else {
-			throw new Error('invalid XISF image buffer size')
+			throw new Error(`unsupported XISF BITPIX: ${bitpix}`)
 		}
 
 		if (planar) {
@@ -444,7 +444,8 @@ function writeShuffledXisfSamples(input: ImageRawType, output: Buffer, bitpix: B
 	}
 }
 
-// Maps a FITS BITPIX code to the corresponding XISF sample format (unsigned integers / IEEE floats).
+// Maps a supported FITS BITPIX code to the corresponding XISF sample format (UInt8/16/32 or
+// Float32/64). BITPIX 64 is XISF UInt64, which this writer does not encode.
 function sampleFormatFromBitpix(bitpix: Bitpix): XisfSampleFormat {
 	switch (bitpix) {
 		case 8:
@@ -453,8 +454,6 @@ function sampleFormatFromBitpix(bitpix: Bitpix): XisfSampleFormat {
 			return 'UInt16'
 		case 32:
 			return 'UInt32'
-		case 64:
-			return 'UInt64'
 		case -32:
 			return 'Float32'
 		case -64:
@@ -622,7 +621,8 @@ const XML_PARSER = new XMLParser(XML_PARSE_OPTIONS)
 
 // Parses the XISF XML header buffer into the list of supported images, skipping any image whose location
 // is not an attachment, whose color space is not Gray/RGB, whose sample format is unsupported, or whose
-// geometry/location/compression metadata is invalid.
+// geometry/location/compression metadata is invalid. A missing colorSpace attribute is treated as Gray
+// (XISF 1.0 §11.5.2); CIELab and unknown values remain skipped.
 export function parseXisfHeader(data: Buffer) {
 	const parsedHeader = XML_PARSER.parse(data)?.xisf as XisfParsedHeader | undefined
 	if (!parsedHeader?.Image) return []
@@ -633,7 +633,8 @@ export function parseXisfHeader(data: Buffer) {
 	for (const image of parsedImages) {
 		if (typeof image.location !== 'string' || !image.location.startsWith('attachment:')) continue
 		if (typeof image.geometry !== 'string') continue
-		if (image.colorSpace !== 'Gray' && image.colorSpace !== 'RGB') continue
+		const colorSpace = image.colorSpace ?? 'Gray'
+		if (colorSpace !== 'Gray' && colorSpace !== 'RGB') continue
 		if (!isSupportedSampleFormat(image.sampleFormat) || image.sampleFormat === 'UInt64') continue
 
 		const geometry = parseGeometry(image.geometry)
@@ -644,7 +645,6 @@ export function parseXisfHeader(data: Buffer) {
 		if (image.compression && !compression) continue
 
 		const header = makeFitsHeaderFromParsedImage(image, geometry)
-		const colorSpace = image.colorSpace
 		const sampleFormat = image.sampleFormat
 		const byteOrder = image.byteOrder === 'big' ? 'big' : 'little'
 		const imageType = image.imageType ?? 'Light'
