@@ -1679,6 +1679,55 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		for (let i = 0; i < LOCK_AVERAGING_FRAMES; i++) await feedFrame(harness)
 	}
 
+	function statefulTracker() {
+		const calibrationPositions = [
+			[100, 100],
+			[108, 100],
+			[116, 100],
+			[116, 108],
+			[116, 116],
+		] as const
+		let calibrationFrame = 0
+		let committedPosition: readonly [number, number] | undefined
+		let pendingPosition: readonly [number, number] | undefined
+		let lastResult: GuideTrackerResult | undefined
+		let commitCount = 0
+
+		const tracker: GuideTracker = {
+			reset() {
+				calibrationFrame = 0
+				committedPosition = undefined
+				pendingPosition = undefined
+				lastResult = undefined
+			},
+			get lastResult() {
+				return lastResult
+			},
+			track(_frame, context) {
+				const position = context.phase === 'calibrating' ? calibrationPositions[Math.min(calibrationFrame++, calibrationPositions.length - 1)] : (committedPosition ?? [116, 116])
+				const result: GuideTrackerResult = {
+					measurement: { x: position[0], y: position[1], confidence: 1 },
+					candidateCount: 1,
+					acceptedCount: 1,
+					qualityScore: 1,
+					rejectedReasons: {},
+					notes: [],
+				}
+				pendingPosition = position
+				lastResult = result
+				return result
+			},
+			commit() {
+				if (pendingPosition === undefined) return
+				committedPosition = pendingPosition
+				pendingPosition = undefined
+				commitCount++
+			},
+		}
+
+		return { tracker, commitCount: () => commitCount }
+	}
+
 	// Dither size, in pixels. Large enough that the resulting pulses dwarf the sub-pixel corrections
 	// the guider keeps issuing, and small enough to stay well inside the maximum frame jump.
 	const DITHER_AMOUNT_PX = 3
@@ -2000,6 +2049,20 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			// The default calibration pulse moves the star farther than StarTracker's normal 6 px
 			// association radius, so at least one progress frame proves calibration used its jump budget.
 			expect(eventsOf(harness.events, 'Calibrating').some((event) => Math.hypot(event.dx, event.dy) > 6)).toBeTrue()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
+		'commits every accepted lock initialization sample for a stateful tracker',
+		async () => {
+			const state = statefulTracker()
+			const harness = await calibrateAndGuide({ tracker: state.tracker })
+			const commitsBeforeInitialization = state.commitCount()
+
+			await establishLockReference(harness)
+
+			expect(state.commitCount() - commitsBeforeInitialization).toBe(LOCK_AVERAGING_FRAMES)
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)

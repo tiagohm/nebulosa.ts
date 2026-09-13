@@ -1193,7 +1193,8 @@ export class GuiderClient {
 	// Runs the guide controller, applies settle tracking, and returns the max pulse delay.
 	#processGuidingFrame(frame: GuideFrame) {
 		const command = this.#guider.processFrame(frame)
-		if (!command.diagnostics.badFrame) this.#tracker.commit?.()
+		const acceptedMeasurement = command.tracking.measurement !== undefined && command.tracking.qualityScore >= this.#guider.config.minFrameQuality && !command.diagnostics.notes.includes('init_waiting') && !command.diagnostics.notes.includes('jump_rejected')
+		if (acceptedMeasurement) this.#tracker.commit?.()
 		// Retained for #emitFrameImage, which runs after this frame has been fully processed.
 		this.#acceptedStars = starTrackingOf(command.tracking)?.accepted
 		const timestamp = frame.timestamp ?? Date.now()
