@@ -573,6 +573,27 @@ describe('tracking, translation, and lock acquisition', () => {
 		expect(state.referenceY).toBeCloseTo(BASE_STARS[0].y + 0.4, 6)
 	})
 
+	test('reference lock ignores a distant replacement star during averaging', () => {
+		const anchor = star(0, { x: 100, y: 100 })
+		const neighbor = star(1, { x: 120, y: 100 })
+		const g = guider({ lockAveragingFrames: 3, maxMatchDistancePx: 6, maxFrameJumpPx: 12 })
+
+		g.processFrame(guideFrame([anchor, neighbor], 0))
+		const skipped = g.processFrame(guideFrame([neighbor], 1000))
+		expect(skipped.state).toBe('initializing')
+		expect(skipped.diagnostics.notes).toContain('init_waiting')
+
+		g.processFrame(guideFrame([anchor, neighbor], 2000))
+		expect(g.currentState.state).toBe('initializing')
+		const acquired = g.processFrame(guideFrame([anchor], 3000))
+
+		expect(acquired.state).toBe('guiding')
+		expect(g.currentState.referenceX).toBeCloseTo(anchor.x, 6)
+		expect(g.currentState.referenceY).toBeCloseTo(anchor.y, 6)
+		expect(acquired.diagnostics.measurementX).toBeCloseTo(anchor.x, 6)
+		expect(acquired.diagnostics.dx).toBeCloseTo(0, 6)
+	})
+
 	test('single-star tracking keeps the nearest lock even if another star becomes brighter', () => {
 		const g = guider({ mode: 'single-star' })
 		g.processFrame(guideFrame(BASE_STARS, 0))

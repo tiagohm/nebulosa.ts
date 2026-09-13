@@ -1140,6 +1140,16 @@ export class Guider {
 			return filtered.accepted
 		}
 
+		if (previous !== undefined) {
+			const maxLockSampleDistance = Math.min(this.config.maxMatchDistancePx, this.config.maxFrameJumpPx)
+			const dx = preferred.x - previous.x
+			const dy = preferred.y - previous.y
+			if (dx * dx + dy * dy > maxLockSampleDistance * maxLockSampleDistance) {
+				this.#updateDiagnostics(frame, quality, undefined, false, true, ['init_waiting'])
+				return filtered.accepted
+			}
+		}
+
 		this.state.lockSamples.push({ x: preferred.x, y: preferred.y, stars: filtered.accepted })
 
 		const [targetX, targetY] = this.config.referencePosition ?? [preferred.x, preferred.y]
