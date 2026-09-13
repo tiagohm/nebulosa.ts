@@ -1148,7 +1148,7 @@ export class GuiderClient {
 	#processCalibrationFrame(frame: GuideFrame) {
 		const step = this.#calibrator.processFrame(frame)
 		// Retained for #emitFrameImage, which runs after this frame has been fully processed.
-		this.#acceptedStars = step.stars
+		this.#acceptedStars = undefined
 
 		this.#updateLockPositionFromCalibration(step.diagnostics)
 		this.#emitCalibratingEvent(step.diagnostics)
