@@ -65,11 +65,14 @@ export function twoProduct(a: number, b: number, out?: NumberArray) {
 	return out
 }
 
-// Computes the Euclidean modulo where the result is always non-negative.
+// Computes the Euclidean remainder in [0, |other|).
 export function pmod(num: number, other: number) {
 	const modulo = Math.abs(other)
-	const rem = num % modulo
-	return rem < 0 ? rem + modulo : rem + 0
+	let rem = num % modulo
+	if (rem < 0) rem += modulo
+	// Tiny negative residuals can round rem + |other| back to |other|.
+	if (rem >= modulo) rem = 0
+	return rem + 0
 }
 
 // Computes the Euclidean modulo where the result is always positive.
@@ -91,6 +94,7 @@ export function floorDiv(x: number, y: number) {
 	return Math.floor(x / y)
 }
 
+const TWO_POW_45 = 35184372088832 // 2 ** 45
 const TWO_POW_52 = 4503599627370496 // 2 ** 52
 
 // Rounds to the nearest integer with ties going away from zero, leaving non-finite values and values
@@ -135,9 +139,14 @@ export function roundToNthDecimal(a: number, n: number) {
 	const floor = Math.floor(abs)
 	const fraction = abs - floor
 
+	if (fraction === 0) return (sign * floor) / factor
+
+	// Treat a near-half as a decimal tie only while abs * EPSILON is a ~1 ulp
+	// representation error. Past ~2^45 that product reaches 0.008 and then
+	// 0.25 / 0.375 / 0, which must not count as halves.
 	const tolerance = Math.max(Number.EPSILON, abs * Number.EPSILON)
 
-	if (Math.abs(fraction - 0.5) <= tolerance) {
+	if (abs < TWO_POW_45 && Math.abs(fraction - 0.5) <= tolerance) {
 		return (sign * (floor + 1)) / factor
 	}
 

@@ -11,7 +11,8 @@ import { FAIRHEAD, FK4_FK5, IAU2000_EECT, IAU2000_S, IAU2006_S, NUT00A_LS, NUT00
 
 const DBL_EPSILON = 2.220446049250313e-16
 
-const LEAP_SECOND_CHANGES: LeapSecondChange[] = [
+// IERS TAI-UTC leap-second table (year, month, TAI-UTC seconds), matching ERFA dat.c.
+export const LEAP_SECOND_CHANGES: LeapSecondChange[] = [
 	[1960, 1, 1.417818],
 	[1961, 1, 1.422818],
 	[1961, 8, 1.372818],
@@ -798,7 +799,7 @@ export function eraUt1Utc(ut11: number, ut12: number, dut1: number, out?: Number
 				const fd = (du * DAYSEC) / (DAYSEC + ddats)
 
 				// Ramp UT1-UTC to bring about ERFA's JD(UTC) convention.
-				duts += ddats * fd <= 1 ? fd : 1
+				duts += ddats * Math.min(fd, 1)
 			}
 
 			break

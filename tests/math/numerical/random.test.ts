@@ -58,6 +58,15 @@ test('mulberry32', () => {
 	expect(random()).toBeCloseTo(0.6966334171593189, 14)
 })
 
+// After 5e6 draws from seed 1, seed + n * 0x6d2b79f5 exceeds Number.MAX_SAFE_INTEGER.
+// The expected value is the uint32-wrapped mulberry32 mixer at that step.
+test('mulberry32 wraps the Weyl counter modulo 2^32', () => {
+	const random = mulberry32(1)
+
+	for (let i = 1; i < 5_000_000; i++) random()
+	expect(random()).toBeCloseTo(0.8585379563737661, 14)
+})
+
 test('xorshift32', () => {
 	const random = xorshift32(1066)
 

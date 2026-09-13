@@ -31,6 +31,36 @@ test('searchRoots returns nothing for an empty or inverted window', () => {
 	expect(searchRoots(sine, EPOCH, earlier)).toHaveLength(0)
 })
 
+test('searchRoots reports an exact sample zero at either closed endpoint without duplicating interior samples', () => {
+	const stop = timeYMDHMS(2026, 1, 2, 0, 0, 0, Timescale.UTC) // EPOCH + 1 day
+	const options = { step: 0.25 }
+
+	const atStop = searchRoots((t) => timeSubtract(t, EPOCH) - 1, EPOCH, stop, options)
+	expect(atStop).toHaveLength(1)
+	expect(timeSubtract(atStop[0], EPOCH)).toBeCloseTo(1, 12)
+
+	const atStart = searchRoots((t) => timeSubtract(t, EPOCH), EPOCH, stop, options)
+	expect(atStart).toHaveLength(1)
+	expect(timeSubtract(atStart[0], EPOCH)).toBeCloseTo(0, 12)
+
+	const bothEnds = searchRoots(
+		(t) => {
+			const x = timeSubtract(t, EPOCH)
+			return x * (x - 1)
+		},
+		EPOCH,
+		stop,
+		options,
+	)
+	expect(bothEnds).toHaveLength(2)
+	expect(timeSubtract(bothEnds[0], EPOCH)).toBeCloseTo(0, 12)
+	expect(timeSubtract(bothEnds[1], EPOCH)).toBeCloseTo(1, 12)
+
+	const interior = searchRoots((t) => timeSubtract(t, EPOCH) - 0.5, EPOCH, stop, options)
+	expect(interior).toHaveLength(1)
+	expect(timeSubtract(interior[0], EPOCH)).toBeCloseTo(0.5, 12)
+})
+
 test('searchExtrema locates the maximum and minimum of the sinusoid', () => {
 	const stop = timeYMDHMS(2026, 1, 2, 0, 0, 0, Timescale.UTC) // EPOCH + 1 day
 	const extrema = searchExtrema(sine, EPOCH, stop)

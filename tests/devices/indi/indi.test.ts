@@ -13,7 +13,7 @@ import { PowerManager } from '../../../src/devices/indi/manager/power'
 import { RotatorManager } from '../../../src/devices/indi/manager/rotator'
 import { ThermometerManager } from '../../../src/devices/indi/manager/thermometer'
 import { WheelManager } from '../../../src/devices/indi/manager/wheel'
-import type { DefNumberVector, DefSwitchVector, DefTextVector, PropertyState, SetBlobVector, SetTextVector } from '../../../src/devices/indi/types'
+import type { DefNumberVector, DefSwitchVector, DefTextVector, PropertyState, SetBlobVector, SetNumberVector, SetTextVector } from '../../../src/devices/indi/types'
 import { SimpleXmlParser, type XmlNode } from '../../../src/io/xml'
 import { downloadPerTag } from '../../download'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
@@ -225,6 +225,45 @@ describe('parse', () => {
 		expect(rotation.max).toBe(360)
 	})
 
+	test('parses decimal and sexagesimal number values', () => {
+		const defVector = client.parseDefVector({
+			name: 'defNumberVector',
+			attributes: { device: 'Device', name: 'NUMBERS', state: 'Ok', perm: 'rw' },
+			children: [{ name: 'defNumber', attributes: { name: 'DEC', min: '-90', max: '90', step: '1' }, children: [], text: encodeText(' -10:30:18 ') }],
+			text: EMPTY_TEXT,
+		}) as DefNumberVector
+
+		expect(defVector.elements.DEC.value).toBeCloseTo(-10.505, 12)
+
+		const setVector = client.parseSetVector({
+			name: 'setNumberVector',
+			attributes: { device: 'Device', name: 'NUMBERS' },
+			children: [
+				{ name: 'oneNumber', attributes: { name: 'RA' }, children: [], text: encodeText('5:34:32.1') },
+				{ name: 'oneNumber', attributes: { name: 'SHORT' }, children: [], text: encodeText('5 30') },
+				{ name: 'oneNumber', attributes: { name: 'DECIMAL' }, children: [], text: encodeText('1.25') },
+				{ name: 'oneNumber', attributes: { name: 'EXPONENT' }, children: [], text: encodeText('1e-6') },
+			],
+			text: EMPTY_TEXT,
+		}) as SetNumberVector
+
+		expect(setVector.elements.RA.value).toBeCloseTo(5 + 34 / 60 + 32.1 / 3600, 12)
+		expect(setVector.elements.SHORT.value).toBe(5.5)
+		expect(setVector.elements.DECIMAL.value).toBe(1.25)
+		expect(setVector.elements.EXPONENT.value).toBe(1e-6)
+	})
+
+	test('resets an incomplete document before parsing the next connection', () => {
+		let received: DefTextVector | undefined
+		const reconnectingClient = new IndiClient({ handler: { defTextVector: (_, vector) => (received = vector) } })
+
+		reconnectingClient.parse(Buffer.from('<defTextVector device="Device" name="PROPERTY">'))
+		reconnectingClient.close()
+		reconnectingClient.parse(Buffer.from('<defTextVector device="Device" name="PROPERTY"><defText name="VALUE">ready</defText></defTextVector>'))
+
+		expect(received?.elements.VALUE.value).toBe('ready')
+	})
+
 	test('keeps element names that collide with object prototype keys', () => {
 		const vector = client.parseDefVector({
 			name: 'defTextVector',
@@ -277,6 +316,33 @@ describe('parse', () => {
 })
 
 describe('write', () => {
+	test('does not overlap connection attempts', async () => {
+		let connections = 0
+		const server = Bun.listen({
+			hostname: '127.0.0.1',
+			port: 0,
+			socket: {
+				data: () => {},
+				open: () => {
+					connections++
+				},
+			},
+		})
+
+		const client = new IndiClient()
+
+		try {
+			const [first, second] = await Promise.all([client.connect('127.0.0.1', server.port), client.connect('127.0.0.1', server.port)])
+
+			expect(first).toBeTrue()
+			expect(second).toBeFalse()
+			expect(connections).toBe(1)
+		} finally {
+			client.close()
+			server.stop(true)
+		}
+	})
+
 	test('escapes XML attributes and text in outbound commands', async () => {
 		const payload = await captureClientWrites('</newTextVector>', (client) => {
 			client.sendText({

@@ -171,6 +171,17 @@ function validateSequenceCompatibility(frames: readonly FlatFrame[], options: Pa
 			metadata.map((value) => value.sensorOrigin),
 			'flat sequence sensor origins must match when known',
 		) || metadataUnknown
+	metadataUnknown =
+		validateOptionalStringCompatibility(
+			metadata.map((value) => value.camera),
+			'flat sequence cameras must match when known',
+		) || metadataUnknown
+	metadataUnknown =
+		validateOptionalNumericCompatibility(
+			metadata.map((value) => value.bitDepth),
+			0,
+			'flat sequence bit depths must match when known',
+		) || metadataUnknown
 	metadataUnknown = validateOptionalStringCompatibility(frames.map(resolveFrameFilter), 'flat sequence filters must match when known') || metadataUnknown
 	metadataUnknown =
 		validateOptionalStringCompatibility(
@@ -201,11 +212,21 @@ function validateSequenceCompatibility(frames: readonly FlatFrame[], options: Pa
 	return { metadataUnknown }
 }
 
-// Compares every known numeric value and returns true when at least one frame lacks the field.
+// Compares the spread of known numeric values against tolerance and returns true when at least one frame lacks the field.
 function validateOptionalNumericCompatibility(values: readonly (number | undefined)[], tolerance: number, mismatchMessage: string): boolean {
-	const known = values.find((value) => value !== undefined)
-	if (known !== undefined) for (const value of values) if (value !== undefined && !(Math.abs(value - known) <= tolerance)) throw new RangeError(mismatchMessage)
-	return values.some((value) => value === undefined)
+	let minimum = Number.POSITIVE_INFINITY
+	let maximum = Number.NEGATIVE_INFINITY
+	let missing = false
+	for (const value of values) {
+		if (value === undefined) {
+			missing = true
+			continue
+		}
+		minimum = Math.min(minimum, value)
+		maximum = Math.max(maximum, value)
+	}
+	if (!(maximum - minimum <= tolerance)) throw new RangeError(mismatchMessage)
+	return missing
 }
 
 // Compares every known string value and returns true when at least one frame lacks the field.
@@ -593,11 +614,17 @@ function assessSignalStability(planes: readonly FlatSequencePlaneAnalysis[], tim
 function assessMetric(values: readonly (number | undefined)[], limit: number | undefined): FlatCheck {
 	if (limit === undefined) return { status: 'unknown' }
 	let worst = 0
+	let missing = false
 	for (const value of values) {
-		if (value === undefined || !Number.isFinite(value)) return { status: 'unknown', value: worst, limits: [0, limit] }
+		if (value === undefined || !Number.isFinite(value)) {
+			missing = true
+			continue
+		}
 		worst = Math.max(worst, value)
 	}
-	return { status: worst > limit ? 'fail' : 'pass', value: worst, limits: [0, limit] }
+	if (worst > limit) return { status: 'fail', value: worst, limits: [0, limit] }
+	if (missing) return { status: 'unknown', value: worst, limits: [0, limit] }
+	return { status: 'pass', value: worst, limits: [0, limit] }
 }
 
 // Aggregates multiple configured checks without comparing values that use different rates.

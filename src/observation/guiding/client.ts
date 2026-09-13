@@ -383,13 +383,26 @@ export class GuiderClient {
 		const selected = this.#guider.selectGuideStar(this.#frame).primary
 		if (selected === undefined) return undefined
 
+		this.#abortGuidingAssistantForTransition('guide star changed')
 		this.#lockPosition = [selected.x, selected.y] as const
 		this.#lockSearchPosition = this.#lockPosition
 		this.#exactLockPosition = false
+		this.#ditherOffsetX = 0
+		this.#ditherOffsetY = 0
+		this.#dither.reset()
+		this.#lockShiftOffsetX = 0
+		this.#lockShiftOffsetY = 0
+		this.#lockShiftTimestamp = 0
+		this.#lockShiftLimitReached = false
+		this.#avgDistanceNeedReset = true
 		this.emitEvent('StarSelected', { X: selected.x, Y: selected.y })
 		this.emitEvent('LockPositionSet', { X: selected.x, Y: selected.y })
 
-		if (this.#appState === 'Stopped' || this.#appState === 'Looping') {
+		if (this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused') {
+			this.#guider = this.#makeGuider(this.#calibration)
+			this.#resumeState = 'Guiding'
+			if (!this.#paused) this.#setAppState('Guiding')
+		} else if (this.#appState === 'Stopped' || this.#appState === 'Looping') {
 			this.#setAppState('Selected')
 		}
 
@@ -596,12 +609,15 @@ export class GuiderClient {
 		if (this.#guidingAssistant !== undefined || this.#settling || guiderState.state !== 'guiding' || (appState !== 'Guiding' && appState !== 'LostLock')) return false
 
 		const imageScale = this.getPixelScale()
+		const exposure = this.getExposure()
 		const assistant = new GuidingAssistant({
 			imageScale: imageScale > 0 ? imageScale : undefined,
-			exposure: this.getExposure(),
+			...(exposure > 0 && Number.isFinite(exposure) ? { exposure: exposure / 1000 } : {}),
 			multiStar: this.#guider.config.mode === 'multi-star',
 			suspectCalibration: this.#calibration === undefined,
 			decPositiveDirection: this.#calibration?.dec.direction ?? 'NORTH',
+			raRatePxPerMs: this.#calibration?.ra.ratePxPerMs,
+			decRatePxPerMs: this.#calibration?.dec.ratePxPerMs,
 			...config,
 		})
 
@@ -1326,6 +1342,10 @@ export class GuiderClient {
 		if (this.#settleStableSince === 0) {
 			this.#settleStableSince = timestamp
 			this.#emitSettlingEvent(distance, timestamp, true)
+			if (this.#settle.time <= 0) {
+				this.#settling = false
+				this.#emitSettleDoneEvent(0)
+			}
 			return
 		}
 

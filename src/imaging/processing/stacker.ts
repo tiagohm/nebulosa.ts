@@ -5,7 +5,7 @@ import { bitpixInBytes } from '../../io/formats/fits/util'
 import type { Rect, Size } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
 import { meanOf, medianAbsoluteDeviationOf, medianOf } from '../../math/numerical/statistics'
-import { type Image, type ImageRawPrecision, type ImageRawType, makeImageRawTypedArray } from '../model/types'
+import { type Image, type ImageRawPrecision, type ImageRawType, makeImageRawTypedArray, shiftCfaPattern } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 import type { SigmaClipCenterMethod, SigmaClipDispersionMethod } from './computation'
 import { createDrizzleAccumulator, depositDrizzle, type DrizzleAccumulator, drizzleNormalization, drizzleOverlap, prepareDrizzleFootprint } from './drizzle'
@@ -521,10 +521,10 @@ export class LiveStacker {
 		const valid = registration.validityMask
 		const overlapFraction = registration.coveredPixels / Math.max(valid.length, 1)
 		if (overlapFraction <= 0) return this.#reject(frameIndex, frame, quality, 'no-overlap')
-		if (overlapFraction < this.#options.minOverlapFraction) return this.#reject(frameIndex, frame, quality, 'insufficient-overlap')
+		if (overlapFraction < this.#options.minOverlapFraction) return this.#reject(frameIndex, frame, quality, 'insufficient-overlap', overlapFraction, registration.transform.summary)
 
 		const normalization = computeNormalization(raw, valid, frame, this.#referenceFrame, quality, this.#options)
-		if (normalization.transform.kind === 'rejected') return this.#reject(frameIndex, frame, quality, 'normalization-failed', overlapFraction)
+		if (normalization.transform.kind === 'rejected') return this.#reject(frameIndex, frame, quality, 'normalization-failed', overlapFraction, registration.transform.summary)
 		applyNormalizationInPlace(raw, valid, frame.image.metadata.channels, normalization.transform)
 		accumulateAlignedFrame(this.#referenceFrame.image.metadata.channels, raw, valid, this.#sum!, this.#weightSum!, this.#coverageMap, this.#options.combinationMethod, normalization.summary.weight)
 
@@ -570,9 +570,10 @@ export class LiveStacker {
 	// Records a structured rejection result. `overlapFraction` defaults to 0 for the failures that happen
 	// before registration measures any coverage; a frame dropped after a successful registration passes
 	// the coverage it actually had, so the diagnostics stay distinguishable from a no-overlap frame.
-	#reject(frameIndex: number, frame: StackingFrame, quality: StackingFrameQualityMetrics, reason: FrameRejectionReason, overlapFraction = 0): FrameAcceptanceResult {
+	// `transform` is the fitted summary when registration succeeded before the rejection.
+	#reject(frameIndex: number, frame: StackingFrame, quality: StackingFrameQualityMetrics, reason: FrameRejectionReason, overlapFraction = 0, transform?: StackingTransformSummary): FrameAcceptanceResult {
 		this.#rejectedFrames++
-		const result: FrameAcceptanceResult = { accepted: false, frameIndex, frameId: frame.id, overlapFraction, quality, reason }
+		const result: FrameAcceptanceResult = transform === undefined ? { accepted: false, frameIndex, frameId: frame.id, overlapFraction, quality, reason } : { accepted: false, frameIndex, frameId: frame.id, overlapFraction, quality, reason, transform }
 		this.#diagnostics.push(result)
 		return result
 	}
@@ -597,6 +598,10 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 
 	if (!isImageShapeValid(referenceFrame.image)) {
 		return emptyStackResult(resolved, referenceIndex, [{ accepted: false, frameIndex: referenceIndex, frameId: referenceFrame.id, overlapFraction: 0, quality: qualities[referenceIndex], reason: 'invalid-image-shape' }])
+	}
+
+	if (!resolved.allowStarlessReference && referenceFrame.stars.length < resolved.minAcceptedStars) {
+		return emptyStackResult(resolved, referenceIndex, [{ accepted: false, frameIndex: referenceIndex, frameId: referenceFrame.id, overlapFraction: 0, quality: qualities[referenceIndex], reason: 'too-few-stars' }])
 	}
 
 	const accepted: AlignedFrame[] = []
@@ -836,6 +841,8 @@ function finalizeBatchImage(referenceFrame: StackingFrame, options: ResolvedStac
 	const raw = createLike(referenceFrame.image.raw, referenceFrame.image.metadata.pixelCount * referenceFrame.image.metadata.channels)
 	const values = new Float64Array(accepted.length)
 	const weights = new Float64Array(accepted.length)
+	// Reused by MAD sigma-clip so each pixel does not allocate a fresh scratch array.
+	const madScratch = new Float64Array(accepted.length)
 
 	for (let pixel = 0; pixel < referenceFrame.image.metadata.pixelCount; pixel++) {
 		if (coverageMap[pixel] < threshold) continue
@@ -849,7 +856,7 @@ function finalizeBatchImage(referenceFrame: StackingFrame, options: ResolvedStac
 				used++
 			}
 			if (used === 0) continue
-			raw[base + channel] = combineValues(options.combinationMethod, values, weights, used, options)
+			raw[base + channel] = combineValues(options.combinationMethod, values, weights, used, options, madScratch)
 		}
 	}
 
@@ -857,7 +864,8 @@ function finalizeBatchImage(referenceFrame: StackingFrame, options: ResolvedStac
 }
 
 // Combines one per-pixel sample vector according to the selected method.
-function combineValues(method: StackingCombinationMethod, values: Float64Array, weights: Float64Array, count: number, options: ResolvedStackingOptions) {
+// `madScratch` is a reusable workspace for MAD sigma-clip; ignored by other methods.
+function combineValues(method: StackingCombinationMethod, values: Float64Array, weights: Float64Array, count: number, options: ResolvedStackingOptions, madScratch?: Float64Array) {
 	const sorted = values.subarray(0, count)
 	const sortedWeights = weights.subarray(0, count)
 
@@ -898,7 +906,7 @@ function combineValues(method: StackingCombinationMethod, values: Float64Array, 
 			return combinePercentileClipAverage(sorted, count, options.percentileClip.lower, options.percentileClip.upper)
 		case 'sigma-clip':
 			sorted.sort()
-			return combineSigmaClip(sorted, count, options.sigmaClip)
+			return combineSigmaClip(sorted, count, options.sigmaClip, madScratch)
 	}
 }
 
@@ -941,7 +949,8 @@ function combinePercentileClipAverage(values: Float64Array, count: number, lower
 }
 
 // Computes a conservative sigma-clipped average for one sample vector.
-function combineSigmaClip(values: Float64Array, count: number, options: Required<SigmaClipStackingOptions>) {
+// `madScratch` is reused across pixels and iterations when dispersion is MAD; omitted, a temporary array is allocated.
+function combineSigmaClip(values: Float64Array, count: number, options: Required<SigmaClipStackingOptions>, madScratch?: Float64Array) {
 	if (count <= 2) return meanOf(values.subarray(0, count))
 	let active = count
 
@@ -960,7 +969,7 @@ function combineSigmaClip(values: Float64Array, count: number, options: Required
 
 			sigma = Math.sqrt(sumSq / active)
 		} else {
-			sigma = medianAbsoluteDeviationOf(sorted, center, true, active)
+			sigma = medianAbsoluteDeviationOf(sorted, center, true, active, madScratch)
 		}
 
 		if (!(sigma > 0)) return center
@@ -1127,6 +1136,8 @@ function coverageThreshold(acceptedFrames: number, options: ResolvedStackingOpti
 }
 
 // Crops the final image for intersection mode while preserving reference metadata shape otherwise.
+// The cloned FITS header is rewritten to the cropped raster so NAXIS/CRPIX/CFA match `raw`; coverage
+// and validity maps stay on the pre-crop reference grid documented by `StackResult`.
 function maybeCropImage(referenceImage: Image, raw: ImageRawType, cropBounds: StackBounds | undefined, options: ResolvedStackingOptions): Image {
 	if (options.cropMode !== 'intersection' || cropBounds === undefined) return buildImage(raw, referenceImage.header, referenceImage.metadata.width, referenceImage.metadata.height, referenceImage.metadata.channels, raw instanceof Float64Array ? Bitpix.DOUBLE : Bitpix.FLOAT, referenceImage.metadata.bayer)
 
@@ -1141,7 +1152,19 @@ function maybeCropImage(referenceImage: Image, raw: ImageRawType, cropBounds: St
 		}
 	}
 
-	return buildImage(cropped, referenceImage.header, cropBounds.width, cropBounds.height, referenceImage.metadata.channels, cropped instanceof Float64Array ? Bitpix.DOUBLE : Bitpix.FLOAT, referenceImage.metadata.bayer)
+	const bayer = shiftCfaPattern(referenceImage.metadata.bayer, cropBounds.left, cropBounds.top)
+	const image = buildImage(cropped, referenceImage.header, cropBounds.width, cropBounds.height, referenceImage.metadata.channels, cropped instanceof Float64Array ? Bitpix.DOUBLE : Bitpix.FLOAT, bayer)
+	const { header } = image
+	header.NAXIS = referenceImage.metadata.channels === 3 ? 3 : 2
+	header.NAXIS1 = cropBounds.width
+	header.NAXIS2 = cropBounds.height
+	if (referenceImage.metadata.channels === 3) header.NAXIS3 = 3
+	else delete header.NAXIS3
+	if (header.IMAGEW !== undefined) header.IMAGEW = cropBounds.width
+	if (header.IMAGEH !== undefined) header.IMAGEH = cropBounds.height
+	if (bayer !== undefined) header.BAYERPAT = bayer
+	scaleAndCropFitsWcs(header, 1, 1, cropBounds.left, cropBounds.top)
+	return image
 }
 
 // Builds a valid Image structure from raw data and metadata pieces.

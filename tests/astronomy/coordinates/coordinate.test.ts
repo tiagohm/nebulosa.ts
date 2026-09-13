@@ -1,26 +1,10 @@
 import { expect, test } from 'bun:test'
-import {
-	angularDistance,
-	angularDistanceHaversine,
-	eclipticJ2000ToEquatorial,
-	eclipticToEquatorial,
-	equatorEcliptic,
-	equatorialFromJ2000,
-	equatorialToEcliptic,
-	equatorialToEclipticJ2000,
-	equatorialToGalatic,
-	equatorialToHorizontal,
-	equatorialToJ2000,
-	galacticToEquatorial,
-	horizontalToEquatorial,
-	meridianEcliptic,
-	meridianEquator,
-	positionAngleBetween,
-	zenith,
-} from '../../../src/astronomy/coordinates/coordinate'
+// oxfmt-ignore
+import { angularDistance, angularDistanceHaversine, eclipticJ2000ToEquatorial, eclipticToEquatorial, equatorEcliptic, equatorialFromJ2000, equatorialToEcliptic, equatorialToEclipticJ2000, equatorialToGalatic, equatorialToHorizontal, equatorialToJ2000, galacticToEquatorial, horizontalToEquatorial, meridianEcliptic, meridianEquator, positionAngleBetween, zenith } from '../../../src/astronomy/coordinates/coordinate'
+import { localSiderealTime } from '../../../src/astronomy/observer/location'
 import { timeNormalize, timeYMDHMS } from '../../../src/astronomy/time/time'
-import { PI, TAU } from '../../../src/core/constants'
-import { deg, formatDEC, formatRA, normalizeAngle, parseAngle } from '../../../src/math/units/angle'
+import { PI, PIOVERTWO, TAU } from '../../../src/core/constants'
+import { deg, formatDEC, formatRA, normalizeAngle, parseAngle, toArcsec } from '../../../src/math/units/angle'
 
 const TIME = timeYMDHMS(2026, 1, 4, 23, 30, 0)
 const SIRIUS_J2000 = [parseAngle('06h 45 09.22')!, parseAngle('-16 43 30.49')!] as const
@@ -109,7 +93,7 @@ test('meridian - ecliptic', () => {
 	const [rightAscension, declination] = meridianEcliptic(deg(-45), TIME)
 
 	expect(formatRA(rightAscension, false)).toBe('03 28 20')
-	expect(formatDEC(declination, false)).toBe('+18 52 53')
+	expect(formatDEC(declination, false)).toBe('+18 52 54')
 })
 
 test('equator - ecliptic', () => {
@@ -127,6 +111,40 @@ test('equator - ecliptic', () => {
 
 	expect(formatRA(rightAscension)).toBe('00 00 00.00')
 	expect(formatDEC(declination)).toBe('+00 00 00.00')
+})
+
+test('zenith and meridian right ascension are local apparent sidereal time', () => {
+	const longitude = deg(-45)
+	const latitude = deg(-22)
+	const last = localSiderealTime(TIME, longitude)
+	const [zenithRightAscension, zenithDeclination] = zenith(longitude, latitude, TIME)
+	const [meridianRightAscension] = meridianEquator(longitude, TIME)
+
+	expect(zenithRightAscension).toBe(last)
+	expect(zenithDeclination).toBe(latitude)
+	expect(meridianRightAscension).toBe(last)
+
+	const [, altitude] = equatorialToHorizontal(zenithRightAscension, zenithDeclination, latitude, last)
+	expect(toArcsec(PIOVERTWO - altitude)).toBeCloseTo(0, 9)
+})
+
+test('mean sidereal time is not the true-of-date zenith right ascension near a nutation peak', () => {
+	// 2001-11-15: |equation of the equinoxes| ≈ 17 arcsec, so mean LST is off by more than 10 arcsec.
+	const time = timeYMDHMS(2001, 11, 15, 0, 0, 0)
+	const longitude = deg(-45)
+	const latitude = deg(-22)
+	const last = localSiderealTime(time, longitude)
+	const lmst = localSiderealTime(time, longitude, true)
+	const [rightAscension, declination] = zenith(longitude, latitude, time)
+
+	expect(Math.abs(toArcsec(last - lmst))).toBeGreaterThan(10)
+	expect(rightAscension).toBe(last)
+	expect(rightAscension).not.toBe(lmst)
+
+	const [, altitude] = equatorialToHorizontal(rightAscension, declination, latitude, last)
+	expect(toArcsec(PIOVERTWO - altitude)).toBeCloseTo(0, 9)
+	const [, altitudeFromMean] = equatorialToHorizontal(lmst, latitude, latitude, last)
+	expect(Math.abs(toArcsec(PIOVERTWO - altitudeFromMean))).toBeGreaterThan(10)
 })
 
 test('angular distance is zero for identical coordinates', () => {

@@ -305,8 +305,9 @@ export class AlpacaCameraApi extends AlpacaDeviceApi {
 		return request<number>(this.url, `${id}/gainmin`, 'GET')
 	}
 
+	// Returns device id's gain names in index order; Gain selects a label by its zero-based index.
 	getGains(id: number) {
-		return request<readonly number[]>(this.url, `${id}/gains`, 'GET')
+		return request<readonly string[]>(this.url, `${id}/gains`, 'GET')
 	}
 
 	hasShutter(id: number) {
@@ -317,16 +318,43 @@ export class AlpacaCameraApi extends AlpacaDeviceApi {
 		return request<number>(this.url, `${id}/heatsinktemperature`, 'GET')
 	}
 
-	// Downloads the last exposure as a raw ImageBytes ArrayBuffer. The response is binary rather than the
-	// JSON envelope, so this is the one endpoint that cannot go through request, but it reports the
-	// same result shape. Decoding the header and pixels is the caller's responsibility.
+	// Downloads device id's last exposure as a newly allocated raw ImageBytes ArrayBuffer. Alpaca errors
+	// in JSON or binary responses are returned as failures; successful JSON images are unsupported.
+	// Checks the v1 transport header; decoding image dimensions and pixels remains the caller's task.
+	// ASCOM Alpaca API Reference sections 8.5.3, 8.7 and 8.9 define content negotiation and error layout.
 	async getImageArray(id: number): Promise<AlpacaRequestResult<ArrayBuffer>> {
 		const url = new URL(`${id}/imagearray`, this.url)
 
 		try {
 			const response = await fetch(url, { headers: IMAGE_ARRAY_HEADERS })
 			if (!response.ok) return failed('GET', url, (await response.text()) || `status ${response.status}`)
-			return { ok: true, value: await response.arrayBuffer() }
+
+			const contentType = response.headers.get('Content-Type')?.toLowerCase() ?? ''
+
+			if (contentType.includes('application/imagebytes')) {
+				const buffer = await response.arrayBuffer()
+				// Reject incomplete metadata before reading offsets or passing it to an image decoder.
+				if (buffer.byteLength < 44) return failed('GET', url, 'truncated ImageBytes header')
+				const header = new DataView(buffer)
+				if (header.getInt32(0, true) !== 1) return failed('GET', url, 'unsupported ImageBytes metadata version')
+				const errorNumber = header.getInt32(4, true)
+				const dataStart = header.getInt32(16, true)
+				if (!(dataStart >= 44 && dataStart <= buffer.byteLength)) return failed('GET', url, 'invalid ImageBytes data offset', errorNumber || undefined)
+				if (errorNumber !== 0) return failed('GET', url, new TextDecoder().decode(new Uint8Array(buffer, dataStart)), errorNumber)
+				return { ok: true, value: buffer }
+			}
+
+			const text = await response.text()
+			if (contentType.includes('application/json') || text.trimStart().startsWith('{')) {
+				const json: unknown = JSON.parse(text)
+				if (typeof json !== 'object' || json === null || !('ErrorNumber' in json) || typeof json.ErrorNumber !== 'number' || !('ErrorMessage' in json) || typeof json.ErrorMessage !== 'string') {
+					return failed('GET', url, 'invalid Alpaca image response')
+				}
+				if (json.ErrorNumber !== 0) return failed('GET', url, json.ErrorMessage, json.ErrorNumber)
+				return failed('GET', url, 'JSON image arrays are not supported; ImageBytes is required')
+			}
+
+			return failed('GET', url, `unsupported image response content type: ${contentType}`)
 		} catch (e) {
 			return failed('GET', url, e instanceof Error ? e.message : String(e))
 		}
@@ -344,8 +372,9 @@ export class AlpacaCameraApi extends AlpacaDeviceApi {
 		return request<number>(this.url, `${id}/lastexposureduration`, 'GET')
 	}
 
+	// Returns device id's last exposure start as the unchanged FITS UTC string CCYY-MM-DDThh:mm:ss[.sss...].
 	getLastExposureStartTime(id: number) {
-		return request<number>(this.url, `${id}/lastexposurestarttime`, 'GET')
+		return request<string>(this.url, `${id}/lastexposurestarttime`, 'GET')
 	}
 
 	getMaxAdu(id: number) {

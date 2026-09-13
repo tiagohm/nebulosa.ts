@@ -230,6 +230,37 @@ test('eccentricAnomalyFromMean solves the hyperbolic branch', () => {
 	expect(eccentricAnomalyFromMean(1, 1)).toBe(0)
 })
 
+test('near-parabolic elliptic mean anomaly construction recovers Kepler state', () => {
+	// Classical Newton from E = M + e sin M diverges for e → 1^- and small nonzero M.
+	const e = 0.999999
+	const a = 10
+	const M = (0.01 * Math.PI) / 180
+	const p = a * (1 - e * e)
+	const orbit = KeplerOrbit.meanAnomaly(p, e, 0.1, 0.2, 0.3, M, t)
+	const E = eccentricAnomalyFromMean(M, e)
+
+	expect(E - e * Math.sin(E)).toBeCloseTo(M, 12)
+	expect(orbit.meanAnomaly).toBeCloseTo(M, 12)
+	expect(Math.hypot(orbit.position[0], orbit.position[1], orbit.position[2])).toBeCloseTo(a * (1 - e * Math.cos(E)), 10)
+})
+
+test('near-parabolic hyperbolic mean anomaly construction converges', () => {
+	const e = 1.000001
+	const M = 0.001
+	const H = eccentricAnomalyFromMean(M, e)
+	expect(e * Math.sinh(H) - H).toBeCloseTo(M, 10)
+
+	const a = -10
+	const p = a * (1 - e * e)
+	const orbit = KeplerOrbit.meanAnomaly(p, e, 0.1, 0.2, 0.3, M, t)
+	expect(orbit.meanAnomaly).toBeCloseTo(M, 10)
+
+	// tanh saturation of trueAnomalyHyperbolic reaches 2*atan(sqrt((e+1)/(e-1))), which exceeds
+	// acos(-1/e) by ~1e-14 and used to trip the hyperbolic true-anomaly guard.
+	const vAsymptote = trueAnomalyHyperbolic(1.0000001, 40)
+	expect(() => KeplerOrbit.trueAnomaly(1e-4, 1.0000001, 0.1, 0.2, 0.3, vAsymptote, t)).not.toThrow()
+})
+
 test('eccentricity vector and node angles handle circular and inclined states', () => {
 	const circular = eccentricityVector([1, 0, 0], [0, 1, 0], 1)
 	expect(circular[0]).toBeCloseTo(0, 15)

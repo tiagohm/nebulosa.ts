@@ -29,30 +29,30 @@ export interface AstrobinPage<T extends AstrobinEquipment> {
 	readonly count: number
 	readonly results: T[]
 	// URL of the next page, if any.
-	readonly next?: string
+	readonly next: string | null
 	// URL of the previous page, if any.
-	readonly previous?: string
+	readonly previous: string | null
 }
 
 // A camera record.
 export interface AstrobinCamera extends AstrobinEquipment {
-	readonly cooled: boolean
+	readonly cooled: boolean | null
 	// Id of the associated sensor.
-	readonly sensor: number
+	readonly sensor: number | null
 	readonly type: string
 }
 
 // A sensor record (numeric specs are strings as returned by the API).
 export interface AstrobinSensor extends AstrobinEquipment {
-	readonly quantumEfficiency: string
+	readonly quantumEfficiency: string | null
 	readonly pixelSize: string
 	readonly pixelWidth: number
 	readonly pixelHeight: number
-	readonly readNoise: string
-	readonly fullWellCapacity: string
-	readonly frameRate: number
-	readonly adc: number
-	readonly colorOrMono: SensorColor
+	readonly readNoise: string | null
+	readonly fullWellCapacity: string | null
+	readonly frameRate: number | null
+	readonly adc: number | null
+	readonly colorOrMono: SensorColor | null
 	// Ids of cameras using this sensor.
 	readonly cameras: number[]
 }
@@ -60,9 +60,9 @@ export interface AstrobinSensor extends AstrobinEquipment {
 // A telescope record.
 export interface AstrobinTelescope extends AstrobinEquipment {
 	readonly type: string
-	readonly aperture: string
-	readonly minFocalLength: string
-	readonly maxFocalLength: string
+	readonly aperture: string | null
+	readonly minFocalLength: string | null
+	readonly maxFocalLength: string | null
 }
 
 // Default request headers (JSON).

@@ -31,6 +31,14 @@ test('approximateArcsinhStretchParameters yields a close visual match to STF on 
 	expect(meanAbsoluteDifference(stfImage, arcsinhImage)).toBeLessThan(0.025)
 })
 
+test('approximateArcsinhStretchParameters swaps inverted shadow and highlight', () => {
+	const ordered = approximateArcsinhStretchParameters(0.18, 0.03, 0.97)
+	const inverted = approximateArcsinhStretchParameters(0.18, 0.97, 0.03)
+
+	expect(inverted.stretchFactor).toBeCloseTo(ordered.stretchFactor, 12)
+	expect(inverted.blackPoint).toBeCloseTo(ordered.blackPoint, 12)
+})
+
 test('arcsinhStretch applies black point normalization on monochrome data', () => {
 	const image = makeImage(3, 1, 1, [0.25, 0.5, 1])
 

@@ -1044,6 +1044,7 @@ function interpolateRadius(start: number, end: number, step: number, steps: numb
 }
 
 // Tries an affine refit only when it materially improves the similarity solution.
+// Near-zero similarity RMS is not a relative gain: the ratio floor would otherwise promote an equivalent affine model.
 function maybeUpgradeToAffine(best: HypothesisScore, referenceStars: readonly RankedStar[], currentStars: readonly RankedStar[], config: ReturnType<typeof resolveConfig>) {
 	if (!config.allowAffineFallback || best.matches.length < 3 || best.model === 'affine') return undefined
 	const candidate = refineAffineFromPairs(best.matches, referenceStars, currentStars, config)
@@ -1052,7 +1053,10 @@ function maybeUpgradeToAffine(best: HypothesisScore, referenceStars: readonly Ra
 	const ratio = candidate.rmsError / Math.max(1e-9, best.rmsError)
 	if (candidate.inlierCount + 1 < best.inlierCount) return undefined
 	if (candidate.spreadScore + 0.05 < best.spreadScore) return undefined
-	if (config.modelPreference !== 'affine' && improvement < 0.2 && ratio > 0.82) return undefined
+	if (config.modelPreference !== 'affine') {
+		const relativeGain = best.rmsError > 1e-6 && ratio <= 0.82
+		if (improvement < 0.2 && !relativeGain) return undefined
+	}
 	return candidate
 }
 

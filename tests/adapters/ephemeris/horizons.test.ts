@@ -4,7 +4,7 @@ import { readDaf } from '../../../src/astronomy/ephemeris/kernels/daf'
 import { extendedPermanentAsteroidNumber } from '../../../src/astronomy/ephemeris/kernels/naif'
 import { readSpk } from '../../../src/astronomy/ephemeris/kernels/spk'
 import { temporalAdd, temporalFromDate } from '../../../src/astronomy/time/temporal'
-import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { tdb, timeUnix, toJulianDay, Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import type { CsvRow } from '../../../src/io/csv'
 import { bufferSource } from '../../../src/io/io'
 import { deg } from '../../../src/math/units/angle'
@@ -232,6 +232,74 @@ test.skipIf(SKIP)('spkFile', async () => {
 	expect(vy).toBeCloseTo(-8.634062784008313e-3, 10)
 	expect(vz).toBeCloseTo(-3.234414083822303e-3, 10)
 })
+
+test('elements defaults to the ecliptic reference plane', async () => {
+	const requests = await captureHorizonsRequests(() => elements('3517;', '500@10', START_TIME, END_TIME))
+
+	expect(queryValue(requests[0], 'REF_PLANE')).toBe('E')
+})
+
+test('vector normalizes input times to TDB', async () => {
+	const temporalRequests = await captureHorizonsRequests(() => vector('3517;', '500@10', false, START_TIME, END_TIME, { stepSize: 5 }))
+	const startTime = tdb(timeUnix(START_TIME / 1000))
+	const endTime = tdb(timeUnix(END_TIME / 1000))
+	const timeRequests = await captureHorizonsRequests(() => vector('3517;', '500@10', false, startTime, endTime, { stepSize: 5 }))
+
+	expect(queryValue(temporalRequests[0], 'TIME_TYPE')).toBe('TDB')
+	expect(queryValue(temporalRequests[0], 'START_TIME')).toBe(queryValue(timeRequests[0], 'START_TIME'))
+	expect(queryValue(temporalRequests[0], 'STOP_TIME')).toBe(queryValue(timeRequests[0], 'STOP_TIME'))
+})
+
+test('CAP retry uses the temporal Julian date', async () => {
+	const requests = await captureHorizonsRequests(() => observer('DES=1000094;', 'coord', false, START_TIME, END_TIME, [], {}), [smallBodyMatchResponse(), ''])
+	const retryCommand = queryValue(requests[1], 'COMMAND')
+
+	expect(retryCommand).toContain(`CAP<${toJulianDay(timeUnix(START_TIME / 1000)).toFixed(1)};`)
+	expect(retryCommand).not.toContain('CAP<2025;')
+})
+
+test('uses the Horizons cylindrical coordinate token', async () => {
+	const requests = await captureHorizonsRequests(() => observer('3517;', 'coord', false, START_TIME, END_TIME, [], { coordinateType: 'CYLINDRICAL' }))
+
+	expect(queryValue(requests[0], 'COORD_TYPE')).toBe('CYLINDRICAL')
+})
+
+test('uses Horizons reference-plane abbreviations', async () => {
+	const requests = await captureHorizonsRequests(() => elements('3517;', '500@10', START_TIME, END_TIME, { referencePlane: 'BODY_EQUATOR' }))
+
+	expect(queryValue(requests[0], 'REF_PLANE')).toBe('B')
+})
+
+async function captureHorizonsRequests(callback: () => Promise<unknown>, responses: readonly string[] = ['']) {
+	const restore = globalThis.fetch
+	const requests: string[] = []
+	let responseIndex = 0
+
+	globalThis.fetch = ((input) => {
+		requests.push(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
+		const response = responses[Math.min(responseIndex++, responses.length - 1)] ?? ''
+		return Promise.resolve(new Response(response))
+	}) as typeof fetch
+
+	try {
+		await callback()
+	} finally {
+		globalThis.fetch = restore
+	}
+
+	return requests
+}
+
+function queryValue(request: string, name: string) {
+	return new URL(request).searchParams.get(name)?.replaceAll(/^'|'$/g, '')
+}
+
+function smallBodyMatchResponse() {
+	const header = ['Record #', 'Epoch-yr', '>MATCH DESIG<', 'Primary Desig', 'Name'].map((value, index) => value.padEnd([10, 10, 16, 16, 0][index])).join('')
+	const row = (record: number) => `${record}`.padEnd(10) + '2024'.padEnd(10) + '10P'.padEnd(16) + '10P'.padEnd(16) + 'Tempel'
+
+	return ['Small-body Index Search Results', header, '', row(1), row(2), '2 matches'].join('\n')
+}
 
 function expectCsvRow(row: CsvRow, expected: readonly (string | number | null)[]) {
 	for (let i = 0; i < expected.length; i++) {

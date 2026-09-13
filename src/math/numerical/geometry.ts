@@ -389,7 +389,8 @@ export function sphericalDestination(longitude: number, latitude: number, positi
 	const nextSinLatitude = sinLatitude * cosDistance + cosLatitude * sinDistance * cosPositionAngle
 	const nextLatitude = nextSinLatitude <= -1 ? -PIOVERTWO : nextSinLatitude >= 1 ? PIOVERTWO : Math.asin(nextSinLatitude)
 	const y = sinPositionAngle * sinDistance * cosLatitude
-	const x = cosDistance - sinLatitude * nextSinLatitude
+	// Algebraically equal to cos(d) - sin(lat) * nextSinLatitude, but keeps the position-angle term at the poles.
+	const x = cosLatitude * (cosLatitude * cosDistance - sinLatitude * sinDistance * cosPositionAngle)
 	return [normalizeAngle(longitude + Math.atan2(y, x)), nextLatitude] as const
 }
 

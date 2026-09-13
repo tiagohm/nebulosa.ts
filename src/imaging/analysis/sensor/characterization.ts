@@ -38,6 +38,7 @@ export type SensorDiagnosticCode =
 	| 'invalidQuantumEfficiency'
 	| 'spatialBuffersRequired'
 	| 'insufficientSpatialFrames'
+	| 'mixedSpatialExposure'
 	| 'insufficientValidPixels'
 
 // One acquisition or measurement diagnostic.
@@ -328,10 +329,8 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 	if (input.flats.length < 9) diagnostics.push({ severity: input.flats.length < 2 ? 'error' : 'warning', code: 'insufficientFlatLevels', message: 'At least nine flat levels are recommended for production gain and linearity fits.' })
 	if (input.darks && input.darks.length < 6) diagnostics.push({ severity: input.darks.length < 3 ? 'error' : 'warning', code: 'insufficientDarkLevels', message: 'At least six dark exposure levels are recommended; three distinct times are the mathematical minimum.' })
 	if (input.spatial && (input.spatial.dark.frames.length < 100 || input.spatial.flat.frames.length < 100)) diagnostics.push({ severity: 'warning', code: 'insufficientSpatialFrames', message: 'Spatial DSNU/PRNU stacks contain fewer than the recommended 100 frames.' })
-	if (input.spatial && input.spatial.dark.exposure !== input.spatial.flat.exposure) {
-		diagnostics.push({ severity: 'error', code: 'darkCurrentMismatch', message: 'Spatial dark and flat exposures differ and no exposure correction was requested.' })
-		structuralError = true
-	}
+	const skipSpatial = input.spatial !== undefined && input.spatial.dark.exposure !== input.spatial.flat.exposure
+	if (skipSpatial) diagnostics.push({ severity: 'error', code: 'mixedSpatialExposure', message: 'Spatial dark and flat stacks must use the same exposure; DSNU, PRNU, and defect analysis were skipped.' })
 	const temperatures = temperatureRange(sets)
 	if (temperatures && temperatures[1] - temperatures[0] > temperatureTolerance) diagnostics.push({ severity: 'warning', code: 'temperatureDrift', message: `Recorded temperature span exceeds ${temperatureTolerance} °C.` })
 
@@ -364,7 +363,7 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 			let dsnu: SensorSpatialNoise | undefined
 			let prnu: SensorPhotoResponse | undefined
 			let defects: SensorDefects | undefined
-			if (input.spatial && temporal.gain) {
+			if (input.spatial && temporal.gain && !skipSpatial) {
 				try {
 					const spatial = measureSensorSpatial(input.spatial.dark, input.spatial.flat, temporal.gain.conversion, { area: roi, plane, cfaOffset: offset, spatialDetrend: options.spatialDetrend, maps: options.maps, spatialBuffers: options.spatialBuffers, tile: options.tile })
 					dsnu = spatial.dsnu
@@ -373,7 +372,7 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 					diagnostics.push({ severity: 'error', code: 'insufficientValidPixels', message: error instanceof Error ? error.message : 'Spatial sensor analysis failed.', plane })
 				}
 			}
-			if (input.spatial) {
+			if (input.spatial && !skipSpatial) {
 				try {
 					const measuredDefects = measureSensorDefects(input.spatial.dark, input.spatial.flat, { area: roi, plane, cfaOffset: offset, rejectionSigma: options.rejectionSigma, digitalClip: digitalMaximum, maps: options.maps, spatialBuffers: options.spatialBuffers })
 					defects = measuredDefects?.mask && options.spatialBuffers?.mask ? { ...measuredDefects, mask: measuredDefects.mask.slice() } : measuredDefects

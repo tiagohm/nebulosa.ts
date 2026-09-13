@@ -331,6 +331,11 @@ describe('LU decomposition', () => {
 		expect(x[4]).toBeCloseTo(0.3808955223880599, 12)
 	})
 
+	test('0x0 determinant is 1 and invert is empty', () => {
+		expect(new LuDecomposition(new Matrix(0, 0)).determinant).toBe(1)
+		expect(new Matrix(0, 0).invert().size).toBe(0)
+	})
+
 	test('singular matrix rejects solve and invert', () => {
 		const decomposition = new LuDecomposition(Matrix.square(2, [1, 2, 2, 4]))
 
@@ -392,10 +397,34 @@ describe('QR decomposition', () => {
 	test('5x2', () => {
 		const matrix = new Matrix(5, 2, [10000, 10001, 10002, 10003, 10004, 10001, 10002, 10003, 10004, 10005])
 		const decomposition = new QrDecomposition(matrix)
-		const x = decomposition.solve([20001, 20003, 20005, 20007, 20009])
+		const b = [20001, 20003, 20005, 20007, 20009]
+		const x = decomposition.solve(b)
 
+		expect(x.length).toBe(2)
 		expect(x[0]).toBeCloseTo(1, 12)
 		expect(x[1]).toBeCloseTo(1, 12)
+
+		const ax = matrix.mulVec(x)
+		expect(ax.length).toBe(5)
+		const residual = new Float64Array(5)
+		for (let i = 0; i < 5; i++) residual[i] = ax[i] - b[i]
+		const normal = matrix.mulTransposedVec(residual)
+		expect(normal[0]).toBeCloseTo(0, 8)
+		expect(normal[1]).toBeCloseTo(0, 8)
+	})
+
+	test('4x2 least-squares solution has length cols', () => {
+		const matrix = new Matrix(4, 2, [1, 0, 0, 1, 1, 0, 0, 1])
+		const x = new QrDecomposition(matrix).solve([1, 1, 100, 100])
+
+		expect(x.length).toBe(2)
+		expect(x[0]).toBeCloseTo(50.5, 12)
+		expect(x[1]).toBeCloseTo(50.5, 12)
+	})
+
+	test('3x0 full-rank solve returns an empty coefficient vector', () => {
+		const x = new QrDecomposition(new Matrix(3, 0)).solve([1, 2, 3])
+		expect(x.length).toBe(0)
 	})
 
 	test('destructive factorization solves in place and mutates the input', () => {

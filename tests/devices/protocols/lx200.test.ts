@@ -31,11 +31,11 @@ test('responds to product and firmware commands', async () => {
 test('responds to coordinate, site, date, time, offset, status, and slewing getters', async () => {
 	await withLx200Server(
 		async (client) => {
-			const response = readUntil(client, (value) => value === '01:02:03#-04*05:06#+070*30#+12*15#04/24/26#05:06:07#+03.0#GTP#|#')
+			const response = readUntil(client, (value) => value === '01:02:03#-04*05:06#+070*30#+12*15#04/24/26#02:06:07#+03.0#GTP#|#')
 
 			client.write('#:GR##:GD##:Gg##:Gt##:GC##:GL##:GG##:GW##:D#', 'ascii')
 
-			expect(await response).toBe('01:02:03#-04*05:06#+070*30#+12*15#04/24/26#05:06:07#+03.0#GTP#|#')
+			expect(await response).toBe('01:02:03#-04*05:06#+070*30#+12*15#04/24/26#02:06:07#+03.0#GTP#|#')
 		},
 		makeHandler({
 			rightAscension: () => hms(1, 2, 3),
@@ -68,11 +68,11 @@ test('sets target coordinates and uses them for sync and goto', async () => {
 
 	await withLx200Server(
 		async (client) => {
-			const response = readUntil(client, (value) => value === '1100')
+			const response = readUntil(client, (value) => value === '11#0')
 
 			client.write('#:Sr01:02:03##:Sd-04*05:06##:CM##:MS#', 'ascii')
 
-			expect(await response).toBe('1100')
+			expect(await response).toBe('11#0')
 		},
 		makeHandler({
 			sync: (server, rightAscension, declination) => {
@@ -92,17 +92,98 @@ test('sets target coordinates and uses them for sync and goto', async () => {
 	expect(slewed[0][1]).toBeCloseTo(dms(-4, 5, 6), 12)
 })
 
+test('accepts standard colon-prefixed commands', async () => {
+	const slewed: number[][] = []
+
+	await withLx200Server(
+		async (client) => {
+			const response = readUntil(client, (value) => value === '110')
+
+			client.write(':Sr12:00:00#:Sd+45*00:00#:MS#', 'ascii')
+
+			expect(await response).toBe('110')
+		},
+		makeHandler({
+			goto: (server, rightAscension, declination) => {
+				slewed.push([rightAscension, declination])
+			},
+		}),
+	)
+
+	expect(slewed).toHaveLength(1)
+	expect(slewed[0][0]).toBeCloseTo(hms(12), 12)
+	expect(slewed[0][1]).toBeCloseTo(dms(45), 12)
+})
+
+test('preserves staged target and connection state across clients', async () => {
+	const slewed: number[][] = []
+	let disconnects = 0
+	const server = new Lx200ProtocolServer({
+		handler: makeHandler({
+			goto: (server, rightAscension, declination) => {
+				slewed.push([rightAscension, declination])
+			},
+			disconnect: () => {
+				disconnects++
+			},
+		}),
+	})
+	server.start('127.0.0.1', 0)
+
+	const first = await connectClient(server.port)
+	let second: Socket | undefined
+
+	try {
+		const targetResponse = readUntil(first, (value) => value === '11')
+
+		first.write('#:Sr12:00:00##:Sd+45*00:00#', 'ascii')
+
+		expect(await targetResponse).toBe('11')
+
+		const secondSocket = await connectClient(server.port)
+		second = secondSocket
+		const secondResponse = readUntil(secondSocket, (value) => value === '00:00:00#')
+
+		secondSocket.write('#:GR#', 'ascii')
+
+		expect(await secondResponse).toBe('00:00:00#')
+
+		const slewResponse = readUntil(first, (value) => value === '0')
+
+		first.write('#:MS#', 'ascii')
+
+		expect(await slewResponse).toBe('0')
+
+		const secondClosed = new Promise<void>((resolve) => {
+			secondSocket.once('close', () => resolve())
+		})
+		secondSocket.destroy()
+		await secondClosed
+		await Bun.sleep(1)
+
+		expect(disconnects).toBe(0)
+	} finally {
+		first.destroy()
+		second?.destroy()
+		server.stop()
+	}
+
+	expect(slewed).toHaveLength(1)
+	expect(slewed[0][0]).toBeCloseTo(hms(12), 12)
+	expect(slewed[0][1]).toBeCloseTo(dms(45), 12)
+})
+
 test('keeps the previous target coordinates after invalid coordinate writes', async () => {
 	const synced: number[][] = []
 	const slewed: number[][] = []
 
 	await withLx200Server(
 		async (client) => {
-			const response = readUntil(client, (value) => value === '111100')
+			const response = readUntil(client, (value) => value === '1100#0')
 
 			client.write('#:Sr01:02:03##:Sd-04*05:06##:Srxx##:Sdxx##:CM##:MS#', 'ascii')
 
-			expect(await response).toBe('111100')
+			expect(await response).toBe('1100#0')
 		},
 		makeHandler({
 			sync: (server, rightAscension, declination) => {
@@ -118,6 +199,39 @@ test('keeps the previous target coordinates after invalid coordinate writes', as
 	expect(synced[0][1]).toBeCloseTo(dms(-4, 5, 6), 12)
 	expect(slewed[0][0]).toBeCloseTo(hms(1, 2, 3), 12)
 	expect(slewed[0][1]).toBeCloseTo(dms(-4, 5, 6), 12)
+})
+
+test('rejects invalid LX200 setter payloads', async () => {
+	const updates: Array<readonly [number, number]> = []
+	const longitudes: number[] = []
+	const latitudes: number[] = []
+
+	await withLx200Server(
+		async (client) => {
+			const invalidResponse = readUntil(client, (value) => value === '0000000')
+
+			client.write('#:Srxx##:Sdxx##:Sgxx##:Stxx##:SG+abc##:SLxx##:SC02/30/26#', 'ascii')
+
+			expect(await invalidResponse).toBe('0000000')
+			expect(updates).toHaveLength(0)
+			expect(longitudes).toHaveLength(0)
+			expect(latitudes).toHaveLength(0)
+		},
+		makeHandler({
+			dateTime: (server, date) => {
+				if (date !== undefined) updates.push(date)
+				return updates.at(-1) ?? [temporalFromDate(2026, 1, 1), 0]
+			},
+			longitude: (server, longitude) => {
+				if (longitude !== undefined) longitudes.push(longitude)
+				return longitudes.at(-1) ?? 0
+			},
+			latitude: (server, latitude) => {
+				if (latitude !== undefined) latitudes.push(latitude)
+				return latitudes.at(-1) ?? 0
+			},
+		}),
+	)
 })
 
 test('sets site longitude and latitude', async () => {
@@ -155,11 +269,17 @@ test('applies UTC offset, local time, and calendar date together', async () => {
 
 	await withLx200Server(
 		async (client) => {
-			const response = readUntil(client, (value) => value === '111Updating planetary data       #                              #')
+			const updateResponse = readUntil(client, (value) => value === '111Updating planetary data       #                              #')
 
 			client.write('#:SG+03##:SL12:34:56##:SC04/24/26#', 'ascii')
 
-			expect(await response).toBe('111Updating planetary data       #                              #')
+			expect(await updateResponse).toBe('111Updating planetary data       #                              #')
+
+			const getResponse = readUntil(client, (value) => value === '04/24/26#12:34:56#+03.0#')
+
+			client.write('#:GC##:GL##:GG#', 'ascii')
+
+			expect(await getResponse).toBe('04/24/26#12:34:56#+03.0#')
 		},
 		makeHandler({
 			dateTime: (server, date) => {

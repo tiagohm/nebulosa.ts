@@ -121,17 +121,18 @@ export class CRC {
 	static #crc32xfer?: CRC
 
 	// Configures a CRC. `bit` is the width in [1, 32]; `polynomial`, `initial`, and `finalXor` are given
-	// in normal (non-reflected) form and are internally reflected when `reflect` is true; `reorder`
-	// reverses the output byte order. Throws RangeError when the width is out of range.
+	// in catalogue (normal, non-reflected) form. Poly and init are internally reflected when `reflect`
+	// is true; xor-out is applied after output reflection and is not mirrored. `reorder` reverses the
+	// output byte order. Throws RangeError when the width is out of range.
 	constructor(bit: number, polynomial: number, initial: number, reflect: boolean, finalXor: number, reorder: boolean = false) {
 		if (!(bit >= 1 && bit <= 32)) {
 			throw new RangeError('crc bit width must be in range [1..32]')
 		}
 
-		// Reflected algorithms consume the catalogue init/xor values in reversed register order.
+		// Reflected algorithms consume the catalogue poly/init in reversed register order; xor-out stays in catalogue form.
 		this.#polynomial = polynomial = reflect ? reflectBits(polynomial, bit) : normalizeCrcValue(polynomial, bit)
 		this.#initial = normalizeCrcValue(reflect ? reflectBits(initial, bit) : initial, bit)
-		this.#finalXor = normalizeCrcValue(reflect ? reflectBits(finalXor, bit) : finalXor, bit)
+		this.#finalXor = normalizeCrcValue(finalXor, bit)
 		this.#bit = bit
 		this.#reflect = reflect
 		this.#reorder = reorder

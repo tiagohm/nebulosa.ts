@@ -2,7 +2,8 @@ import type { PathLike } from 'fs'
 import fs, { type FileHandle } from 'fs/promises'
 import { isJpeg, Jpeg, type PixelFormat } from '../../bindings/imaging/libturbojpeg'
 import { type Bitpix, type Fits, type FitsHdu, FitsImageReader, readFits, writeFits } from '../../io/formats/fits/fits'
-import { bitpixInBytes, cfaPatternKeyword, heightKeyword, isRiceCompressedImageHeader, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, widthKeyword } from '../../io/formats/fits/util'
+// oxfmt-ignore
+import { bitpixInBytes, cfaPatternKeyword, heightKeyword, isCompressedImageHeader, isRiceCompressedImageHeader, numberOfAxesKeyword, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, widthKeyword } from '../../io/formats/fits/util'
 import { readXisf, writeXisf, type Xisf, type XisfImage, XisfImageReader, type XisfWriteFormat } from '../../io/formats/xisf/xisf'
 import { bufferSink, bufferSource, fileHandleSource, readRemaining, readUntil, type Seekable, type Sink, type Source } from '../../io/io'
 import { clamp } from '../../math/numerical/math'
@@ -21,9 +22,19 @@ function findCompressedImageHdu(hdu: FitsHdu) {
 	return isRiceCompressedImageHeader(hdu.header)
 }
 
-// Predicate selecting an uncompressed image HDU with positive dimensions.
+// Predicate selecting a primary or IMAGE HDU with at least two positive axes and no ZIMAGE table.
 function findUncompressedImageHdu(hdu: FitsHdu) {
-	return widthKeyword(hdu.header, 0) > 0 && heightKeyword(hdu.header, 0) > 0
+	const { header } = hdu
+	if (isCompressedImageHeader(header)) return false
+	if (!(numberOfAxesKeyword(header, 0) >= 2)) return false
+	if (!(widthKeyword(header, 0) > 0 && heightKeyword(header, 0) > 0)) return false
+	const extension = textKeyword(header, 'XTENSION', '').trim().toUpperCase()
+	return extension === '' || extension === 'IMAGE'
+}
+
+// True when the HDU is a Rice-compressed image or an uncompressed 2-D IMAGE/primary raster.
+function isReadableImageHdu(hdu: FitsHdu) {
+	return findCompressedImageHdu(hdu) || findUncompressedImageHdu(hdu)
 }
 
 // Resolves legacy raw arguments and discriminated reader options.
@@ -70,7 +81,8 @@ export function readImageFromFits(fits: Fits | FitsHdu, source: Source & Seekabl
 export function readImageFromFits(fits: Fits | FitsHdu, source: Source & Seekable, options: ImageReadOptions): Promise<Image | DigitalImage | undefined>
 
 export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & Seekable, argument: ImageReadArgument = 'auto'): Promise<Image | DigitalImage | undefined> {
-	const hdu = 'hdus' in fits ? (fits.hdus.find(findCompressedImageHdu) ?? fits.hdus.find(findUncompressedImageHdu) ?? fits.hdus[0]) : fits
+	const hdu = 'hdus' in fits ? (fits.hdus.find(findCompressedImageHdu) ?? fits.hdus.find(findUncompressedImageHdu)) : fits
+	if (!hdu || !isReadableImageHdu(hdu)) return undefined
 	const { header } = hdu
 
 	const bitpix: Bitpix = uncompressedBitpixKeyword(header, 8)
@@ -89,10 +101,13 @@ export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & S
 	let raw = resolved[0]
 	const sampleScale = resolved[1]
 
+	const sampleCount = pixelCount * channels
 	if (raw === 'auto') raw = bitpix === 8 ? 32 : 64
-	if (typeof raw === 'number') raw = makeImageRawTypedArray(raw, pixelCount * channels)
-	if (raw.length < pixelCount * channels) return undefined
+	if (typeof raw === 'number') raw = makeImageRawTypedArray(raw, sampleCount)
+	if (raw.length < sampleCount) return undefined
 	if (!(await reader.read(source, raw, sampleScale))) return undefined
+	// A reused caller buffer may be longer than this image; leftover samples must not enter min-max or consumers.
+	raw = raw.subarray(0, sampleCount)
 
 	const metadata = { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer }
 	if (sampleScale === 'digital') return { header, raw, metadata, sampleScale, ...fitsDigitalProperties(header, bitpix) }
@@ -113,6 +128,7 @@ export function readImageFromXisf(xisf: Xisf | XisfImage, source: Source & Seeka
 
 export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source & Seekable, argument: ImageReadArgument = 'auto'): Promise<Image | DigitalImage | undefined> {
 	const image = 'images' in xisf ? xisf.images[0] : xisf
+	if (image === undefined) return undefined
 	const { bitpix, geometry, header } = image
 	const { width, height, channels } = geometry
 
@@ -127,10 +143,13 @@ export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source &
 	let raw = resolved[0]
 	const sampleScale = resolved[1]
 
+	const sampleCount = pixelCount * channels
 	if (raw === 'auto') raw = bitpix === 8 ? 32 : 64
-	if (typeof raw === 'number') raw = makeImageRawTypedArray(raw, pixelCount * channels)
-	if (raw.length < pixelCount * channels) return undefined
+	if (typeof raw === 'number') raw = makeImageRawTypedArray(raw, sampleCount)
+	if (raw.length < sampleCount) return undefined
 	if (!(await reader.read(source, raw, sampleScale))) return undefined
+	// A reused caller buffer may be longer than this image; leftover samples must not enter min-max or consumers.
+	raw = raw.subarray(0, sampleCount)
 
 	const metadata = { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer }
 	if (sampleScale === 'digital') return { header, raw, metadata, sampleScale, ...xisfDigitalProperties(bitpix) }
@@ -140,14 +159,13 @@ export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source &
 	return { header, raw, metadata }
 }
 
-// Decodes a JPEG buffer into a single-channel (luminance) normalized Image, or undefined if not JPEG.
+// Decodes a JPEG buffer into a single-channel (luminance) normalized Image.
+// Returns undefined when the buffer is not JPEG or `format` is present and not GRAY.
 export function readImageFromJpeg(buffer: Buffer, raw: ImageRawType | ImageRawPrecision = 'auto', format?: PixelFormat): Image | undefined {
 	if (!isJpeg(buffer)) return undefined
+	if (format !== undefined && format !== 'GRAY') return undefined
 
-	// The output is a single-channel image, so decode as luminance. Without this a color
-	// JPEG would decode to interleaved RGB and the mono-sized copy below would read
-	// R,G,B,... as a raster, producing a garbled frame.
-	const image = new Jpeg().decompress(buffer, format ?? 'GRAY')
+	const image = new Jpeg().decompress(buffer, 'GRAY')
 	if (!image) return undefined
 
 	const { data, width, height } = image
@@ -158,6 +176,7 @@ export function readImageFromJpeg(buffer: Buffer, raw: ImageRawType | ImageRawPr
 	if (raw.length < pixelCount) return undefined
 
 	for (let i = 0; i < pixelCount; i++) raw[i] = data[i] / 255
+	raw = raw.subarray(0, pixelCount)
 
 	const header = { BITPIX: 8, NAXIS: 2, NAXIS1: width, NAXIS2: height }
 	return { header, raw, metadata: { width, height, channels: 1, pixelCount, pixelSizeInBytes: 1, strideInBytes: width, stride: width, bitpix: 8, bayer: undefined } }

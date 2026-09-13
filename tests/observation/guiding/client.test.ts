@@ -2636,6 +2636,28 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	)
 
 	test(
+		'startGuidingAssistant reports exposure in seconds',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			expect(harness.client.startGuidingAssistant({ measureBacklash: false })).toBeTrue()
+			expect(eventsOf(harness.events, 'GuidingAssistantStarted').at(-1)!.Result.exposure).toBe(1)
+			harness.client.stopGuidingAssistant()
+
+			expect(harness.client.setExposure(2500)).toBeTrue()
+			expect(harness.client.startGuidingAssistant({ measureBacklash: false })).toBeTrue()
+			expect(eventsOf(harness.events, 'GuidingAssistantStarted').at(-1)!.Result.exposure).toBe(2.5)
+			harness.client.stopGuidingAssistant()
+
+			expect(harness.client.startGuidingAssistant({ exposure: 3, measureBacklash: false })).toBeTrue()
+			expect(eventsOf(harness.events, 'GuidingAssistantStarted').at(-1)!.Result.exposure).toBe(3)
+			harness.client.stopGuidingAssistant()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
 		'startGuidingAssistant is allowed while lock-shift holds a non-zero offset',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3324,6 +3346,58 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	)
 
 	test(
+		'findStar while guiding reinitializes the controller on the selected star',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+			harness.client.setGuideOutputEnabled(false)
+
+			await feedStars(harness, [[STAR_B[0], STAR_B[1]]])
+			const selected = harness.client.findStar()!
+			expect(selected[0]).toBeCloseTo(STAR_B[0] + harness.mount.offsetX, 0)
+			expect(selected[1]).toBeCloseTo(STAR_B[1] + harness.mount.offsetY, 0)
+			expect(harness.client.getAppState()).toBe('Guiding')
+
+			for (let i = 0; i < LOCK_AVERAGING_FRAMES; i++) await feedFrame(harness)
+
+			const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+			const lock = harness.client.getLockPosition()!
+			expect(lock[0]).toBeCloseTo(selected[0], 0)
+			expect(lock[1]).toBeCloseTo(selected[1], 0)
+			expect(Math.hypot(step.dx, step.dy)).toBeLessThan(1)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
+		'findStar while lost reinitializes the controller and recovers the new star',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			for (let i = 0; i < 8; i++) await feedEmptyFrame(harness)
+			expect(harness.client.getAppState()).toBe('LostLock')
+
+			await feedStars(harness, [[STAR_B[0], STAR_B[1]]])
+			const selected = harness.client.findStar()!
+			expect(selected[0]).toBeCloseTo(STAR_B[0] + harness.mount.offsetX, 0)
+			expect(selected[1]).toBeCloseTo(STAR_B[1] + harness.mount.offsetY, 0)
+			expect(harness.client.getAppState()).toBe('Guiding')
+			const lostEventsBeforeRecovery = eventsOf(harness.events, 'StarLost').length
+
+			for (let i = 0; i < LOCK_AVERAGING_FRAMES; i++) await feedStars(harness, [[STAR_B[0], STAR_B[1]]])
+
+			const lock = harness.client.getLockPosition()!
+			expect(lock[0]).toBeCloseTo(selected[0], 0)
+			expect(lock[1]).toBeCloseTo(selected[1], 0)
+			expect(eventsOf(harness.events, 'StarLost')).toHaveLength(lostEventsBeforeRecovery)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
 		'stars outside the search box remain available for multi-star measurement',
 		async () => {
 			const frames: GuideFrameImage[] = []
@@ -3906,6 +3980,24 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 
 			expect(harness.client.getSettling()).toBeTrue()
 			expect(eventsOf(harness.events, 'SettleDone').filter((event) => event.Status === 0)).toHaveLength(successesBefore)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
+		'a zero-duration settle completes on the first in-tolerance frame',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			expect(harness.client.guide(false, { pixels: 5, time: 0, timeout: 8 })).toBeTrue()
+			expect(harness.client.getSettling()).toBeTrue()
+
+			await feedFrame(harness)
+
+			const done = eventsOf(harness.events, 'SettleDone').at(-1)!
+			expect(done.Status).toBe(0)
+			expect(harness.client.getSettling()).toBeFalse()
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)

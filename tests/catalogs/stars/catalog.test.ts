@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogRaDecBox } from '../../../src/catalogs/stars/catalog'
+import { BaseStarCatalog, type NormalizedStarCatalogQuery, normalizeStarCatalogQuery, type StarCatalogRaDecBox, type Vertex } from '../../../src/catalogs/stars/catalog'
 import { deg } from '../../../src/math/units/angle'
 
 const GEOMETRY_EPSILON = 1e-12
@@ -57,7 +57,86 @@ test('stream region yields the same matches as the query helpers', async () => {
 	expect(streamed.sort()).toEqual(['cone-center', 'cone-edge'])
 })
 
-export type MockCatalogEntry = (typeof FIXTURE_STARS)[number]
+test('polygon includes every vertex and edge midpoint in either winding', async () => {
+	const vertices = [
+		[deg(10), deg(-5)],
+		[deg(20), deg(-5)],
+		[deg(20), deg(5)],
+		[deg(10), deg(5)],
+	] as const
+	const entries: MockCatalogEntry[] = []
+	for (const ra of [10, 15, 20]) {
+		for (const dec of [-5, 0, 5]) {
+			entries.push({ id: `${ra},${dec}`, rightAscension: deg(ra), declination: deg(dec) })
+		}
+	}
+	entries.push({ id: 'outside', rightAscension: deg(9.99), declination: 0 })
+	const catalog = new MockCatalog(entries)
+	const expected = idsOf(await catalog.queryBox(deg(10), deg(20), deg(-5), deg(5)))
+	expect(expected).toHaveLength(9)
+	expect(idsOf(await catalog.queryPolygon(vertices))).toEqual(expected)
+	expect(idsOf(await catalog.queryPolygon(vertices.toReversed()))).toEqual(expected)
+	expect(idsOf(await catalog.queryPolygon([...vertices, vertices[0]]))).toEqual(expected)
+})
+
+test('triangle includes its vertices and all edge midpoints', async () => {
+	const vertices = [
+		[deg(100), deg(10)],
+		[deg(110), deg(10)],
+		[deg(100), deg(20)],
+	] as const
+	const entries = [
+		[100, 10],
+		[110, 10],
+		[100, 20],
+		[105, 10],
+		[100, 15],
+		[105, 15],
+		[102, 12],
+	].map(([ra, dec]) => ({ id: `${ra},${dec}`, rightAscension: deg(ra), declination: deg(dec) }))
+	const outside = { id: 'outside', rightAscension: deg(106), declination: deg(15) }
+	const catalog = new MockCatalog([...entries, outside])
+	expect(idsOf(await catalog.queryTriangle(...vertices))).toEqual(idsOf(entries))
+	expect(idsOf(await catalog.queryTriangle(vertices[2], vertices[1], vertices[0]))).toEqual(idsOf(entries))
+})
+
+test.each([1, -1])('triangle encloses the celestial pole for hemisphere %i', async (hemisphere) => {
+	const vertices: readonly [Vertex, Vertex, Vertex] = [
+		[0, deg(88 * hemisphere)],
+		[deg(120), deg(88 * hemisphere)],
+		[deg(240), deg(88 * hemisphere)],
+	]
+	const entries = [
+		{ id: 'pole', rightAscension: deg(310), declination: deg(90 * hemisphere) },
+		{ id: 'inside', rightAscension: deg(10), declination: deg(89 * hemisphere) },
+		{ id: 'outside-edge', rightAscension: deg(60), declination: deg(88.2 * hemisphere) },
+		{ id: 'outside-cap', rightAscension: deg(20), declination: deg(45 * hemisphere) },
+		{ id: 'opposite-pole', rightAscension: 0, declination: deg(-90 * hemisphere) },
+	]
+	const catalog = new MockCatalog(entries)
+	expect(idsOf(await catalog.queryTriangle(...vertices))).toEqual(['inside', 'pole'])
+	expect(idsOf(await catalog.queryTriangle(vertices[2], vertices[1], vertices[0]))).toEqual(['inside', 'pole'])
+	const normalized = normalizeStarCatalogQuery({ kind: 'triangle', a: vertices[0], b: vertices[1], c: vertices[2] })
+	expect(normalized.geometryMode).toBe('spherical')
+	expect(matchesAnyBox(deg(310), deg(90 * hemisphere), normalized.preselectionBoxes)).toBe(true)
+})
+
+test.each([1, -1])('polygon preserves the polar cap with repeated closure for hemisphere %i', async (hemisphere) => {
+	// Same four-meridian region as the HEALPix polar regression, reflected for the south pole.
+	const vertices: Vertex[] = [0, 90, 180, 270, 0].map((ra) => [deg(ra), deg(80 * hemisphere)])
+	const catalog = new MockCatalog([
+		{ id: 'inside', rightAscension: deg(20), declination: deg(85 * hemisphere) },
+		{ id: 'outside', rightAscension: deg(20), declination: deg(45 * hemisphere) },
+	])
+	expect(idsOf(await catalog.queryPolygon(vertices))).toEqual(['inside'])
+	expect(idsOf(await catalog.queryPolygon(vertices.toReversed()))).toEqual(['inside'])
+})
+
+export interface MockCatalogEntry {
+	readonly id: string
+	readonly rightAscension: number
+	readonly declination: number
+}
 
 // Keeps the generic catalog tests focused on normalized preselection boxes.
 class MockCatalog extends BaseStarCatalog<MockCatalogEntry> {

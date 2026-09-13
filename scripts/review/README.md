@@ -46,16 +46,18 @@ default; `--allow-subagents` and `--timeout` enable them. Codex does not support
 Codex session. CLI argument compatibility was checked against Codex 0.153.4.
 
 `--status` reports completed, failed, skipped, existing-artifact and remaining counts
-for the selected files in the chosen provider and mode. A completed entry or an
-existing report, prompt, raw log or stderr file skips the file unless `--force`
-is supplied. This includes reports
-without a valid trailer or a corresponding `COMPLETED.txt` entry. Existing reports
-are left untouched, including hand-written notes. Dry runs use the same selection.
+for the selected files. Review progress is scoped to the provider; fix progress is
+shared across providers. A completed entry or a successful report skips the file
+unless `--force` is supplied. Reports without completion metadata or a valid
+trailer are preserved unless failure metadata identifies an unsuccessful attempt.
+Prompts, raw logs and stderr never block retries. Dry runs use the same selection.
 
 `--force` permits a new session and replacement of its artifacts. It removes the
 previous completion **before** attempting each file. Missing source files are
-recorded in `SKIPPED.txt` during real batches. A failed or interrupted session with
-saved artifacts also requires `--force` to retry; those files are otherwise preserved.
+recorded in `SKIPPED.txt` during real batches. Failed, incomplete and interrupted
+sessions produce no report and remain pending without `--force`. Diagnostics are
+retained until the next attempt replaces them. Legacy reports marked failed or
+interrupted in progress/history are also retried automatically.
 
 ## Fix mode
 
@@ -100,14 +102,20 @@ perform a new review or search for additional findings. It checks each original
 finding against the current code and author notes, then fixes, dismisses, recognizes
 an existing correction, or records an unresolved point. The output maps every
 original finding to its decision, validation and any commit. Original reports and
-notes are preserved; outputs remain in `.reviews/<execution-provider>/fix/reports/`.
+notes are preserved; successful outputs are saved in `.reviews/fix/reports/`.
 The fix output's `findings` count includes only confirmed original defects that
 remain unresolved, excluding dismissed and resolved findings.
 The saved prompt records the input path, hash and full snapshot for traceability.
 
-Fix completion remains per source file and execution provider. If you change the
-input report or notes after a completed fix, use `--force` to process that file
-again. `--force` does not bypass report eligibility or start a new review.
+Fix completion is shared per source file. Changing `--provider` continues with
+the pending files; keep `--reports` pointing at the same input directory when the
+reports belong to another provider. On first use, successful entries from existing
+`.reviews/<provider>/fix/COMPLETED.txt` lists are imported into the shared state.
+Dry runs and status preview this import without writing. Legacy files are retained;
+once the shared completion list exists, it is authoritative, including after a
+failed forced retry. If you change the input report or notes after a completed fix,
+use `--force` to process that file again. `--force` does not bypass report
+eligibility or start a new review.
 
 Real `--fix` batches require a clean worktree. After acquiring the repository lock,
 the orchestrator runs `git status --porcelain=v1 -z --untracked-files=all` before
@@ -129,8 +137,15 @@ staged, unstaged or untracked changes make the session incomplete and stop the
 batch before the next file. This catches fixes whose commits were not completed.
 Previously created commits remain intact. Partial edits after a failure are
 preserved; handle them before restarting `--fix`, since the clean-start check
-still applies. Sessions must stop on validation or commit failures. They must
-never amend, squash, rebase, rewrite existing commits or push.
+still applies. Sessions must repair lint, type, formatting and test failures
+introduced by their own changes, then rerun the affected checks before committing
+or moving to the next finding. This includes validation failures from commit
+hooks. A failed check alone does not end the session. Unrelated pre-existing or
+environment failures follow AGENTS.md's verification policy. An unresolved blocker
+after diagnosis and reasonable repair attempts, or a non-validation commit
+failure, stops the session with an explanation of the remaining work. Sessions
+must never commit introduced failures, weaken checks to pass, amend, squash,
+rebase, rewrite existing commits or push.
 
 Review mode never stages or commits. Review mode, dry runs, status and help do
 not require a clean worktree. The orchestrator does not combine all fixes into
@@ -180,10 +195,11 @@ and a nonempty agent message in that turn. `turn.failed` and top-level `error`
 events fail the session even if a partial report exists. Empty or malformed JSONL
 fails; a stream missing its completion event or final message is incomplete.
 Individual tool failures do not decide the review outcome; Codex can recover
-from them within the session. Partial reports and raw logs remain available.
+from them within the session. Partial output remains available in raw logs.
 
 New state is independent of legacy `.grok-reviews/`, which is neither imported
-nor deleted. `.reviews/` is gitignored. Each provider and mode has its own progress.
+nor deleted. `.reviews/` is gitignored. Review progress is provider-specific;
+fix progress is shared.
 
 ```text
 .reviews/
@@ -198,13 +214,18 @@ nor deleted. `.reviews/` is gitignored. Each provider and mode has its own progr
       logs/
       reports/
       stderr/
-    fix/
-      ...
   codex/
     review/
       ...
-    fix/
-      ...
+  fix/
+    COMPLETED.txt
+    FAILED.txt
+    SKIPPED.txt
+    USAGE.tsv
+    prompts/
+    logs/
+    reports/
+    stderr/
 ```
 
 Lists contain normalized paths, one per line; tabs, newlines and NUL in filenames
@@ -216,20 +237,21 @@ Selected source paths that would collide after sanitization abort the batch.
 Prompts, raw logs and stderr use the same sanitized name with their respective
 extensions: `prompts/src_io_xml.ts.md`, `logs/src_io_xml.ts.json` and
 `stderr/src_io_xml.ts.log`. There are no hashes or attempt IDs in artifact names.
-Only `--force` permits replacing these files. Exclusive file creation prevents
-an unforced session from overwriting artifacts that appeared while it was running.
+Pending attempts replace their diagnostic files while holding the repository lock.
+Only `--force` repeats completed work. A retry invalidates the previous completion
+and removes any old report before starting the provider.
 Codex logs contain JSONL, even though log artifact filenames use `.json`.
 `USAGE.tsv` stores file, mode, outcome, stop reason, optional metrics, session ID
 and the log basename. Empty cells mean absent values; backslashes and control
 characters in TSV fields are escaped as `\\`, `\t`, `\r` and `\n`.
-The prompt, stdout, stderr, report and usage history are saved before completion.
+The prompt, stdout, stderr, successful report and usage history are saved before completion.
 Progress lists are replaced using a temporary file and rename.
 
 The first error, incomplete session (including an exhausted turn/token limit) or
 timeout stops the batch with exit code `1`. The current file is not completed;
-retry it with `--force` if any artifacts were saved. Later files are not started.
-Reports, logs, optional metrics and failure history remain available
-for diagnosis. `--limit` simply ends the batch after the requested number of
+run again without `--force` to retry it. Later files are not started.
+Logs, optional metrics and failure history remain available for diagnosis; an
+unsuccessful attempt does not create a report. `--limit` simply ends the batch after the requested number of
 sessions and is not a session failure.
 SIGINT/Ctrl+C and SIGTERM cancel the batch, preserving partial output and leaving
 the interrupted file pending. Exit codes are `0` for no failures, `1` for failures,

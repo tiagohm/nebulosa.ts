@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { Jpeg } from '../../../src/bindings/imaging/libturbojpeg'
 import { makeImageBytesFromFits } from '../../../src/devices/alpaca/server'
 import { type AlpacaConfiguredDevice, AlpacaException, AlpacaImageElementType, type AlpacaStateItem } from '../../../src/devices/alpaca/types'
@@ -6,6 +6,7 @@ import type { Device } from '../../../src/devices/indi/device'
 import type { DeviceManager } from '../../../src/devices/indi/manager/device'
 import type { DeviceSimulator } from '../../../src/devices/indi/simulator/device'
 import { bitpixInBytes } from '../../../src/io/formats/fits/util'
+import { deg, hour } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
 import { saveAndCompareHash } from '../../imaging/util'
 import { waitUntil } from '../../util'
@@ -570,3 +571,229 @@ test('the alpaca fixtures stand up every simulated device type', async () => {
 	await expectFixtureServesDevice(ALPACA_SAFETY_MONITOR)
 	await expectFixtureServesDevice(ALPACA_WEATHER)
 }, 30000)
+
+test('mount target slews and sync preserve radians and coordinate slews update the target', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_MOUNT)
+	using goTo = spyOn(fixture.manager, 'goTo')
+	using syncTo = spyOn(fixture.manager, 'syncTo')
+	const initial = { ...fixture.device.equatorialCoordinate }
+	await fixture.put(fixture.path + '/slewtotargetasync')
+	expect(goTo).toHaveBeenLastCalledWith(fixture.device, initial.rightAscension, initial.declination)
+	await fixture.put(fixture.path + '/targetrightascension', { TargetRightAscension: '5' })
+	await fixture.put(fixture.path + '/targetdeclination', { TargetDeclination: '45' })
+	for (const command of ['slewtotarget', 'slewtotargetasync']) {
+		expect((await fixture.put(fixture.path + '/' + command)).ErrorNumber).toBe(0)
+		expect(goTo).toHaveBeenLastCalledWith(fixture.device, hour(5), deg(45))
+	}
+	await fixture.put(fixture.path + '/synctotarget')
+	expect(syncTo).toHaveBeenLastCalledWith(fixture.device, hour(5), deg(45))
+	for (const command of ['slewtocoordinates', 'slewtocoordinatesasync']) {
+		await fixture.put(fixture.path + '/' + command, { RightAscension: '9', Declination: '-20' })
+		expect((await fixture.get(fixture.path + '/targetrightascension')).Value).toBeCloseTo(9, 12)
+		expect((await fixture.get(fixture.path + '/targetdeclination')).Value).toBeCloseTo(-20, 12)
+		expect(goTo).toHaveBeenLastCalledWith(fixture.device, hour(9), deg(-20))
+	}
+})
+
+test('destination pier side follows query coordinates independently of the current pointing', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_MOUNT)
+	const lst = (await fixture.get(fixture.path + '/siderealtime')).Value as number
+	fixture.device.equatorialCoordinate.rightAscension = hour((lst + 6) % 24)
+	fixture.device.equatorialCoordinate.declination = deg(10)
+	for (const [offset, expected] of [
+		[6, 1],
+		[18, 0],
+	]) {
+		const response = await fixture.get(fixture.path + '/destinationsideofpier?RightAscension=' + ((lst + offset) % 24) + '&Declination=10')
+		expect(response.ErrorNumber).toBe(0)
+		expect(response.Value).toBe(expected)
+	}
+	expect((await fixture.get(fixture.path + '/destinationsideofpier?RightAscension=5&Declination=90')).Value).toBe(-1)
+})
+
+test('camera sensor dimensions remain unbinned and full size after cropping', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_CAMERA)
+	const width = fixture.device.frame.width.max
+	const height = fixture.device.frame.height.max
+	await fixture.put(fixture.path + '/numx', { NumX: '100' })
+	await fixture.put(fixture.path + '/numy', { NumY: '80' })
+	expect(fixture.device.frame.width.value).toBe(100)
+	expect(fixture.device.frame.height.value).toBe(80)
+	await fixture.put(fixture.path + '/binx', { BinX: '2' })
+	expect((await fixture.get(fixture.path + '/cameraxsize')).Value).toBe(width)
+	expect((await fixture.get(fixture.path + '/cameraysize')).Value).toBe(height)
+})
+
+test('camera subframe setters convert binned pixels and preserve untouched axes', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_CAMERA)
+	await fixture.put(fixture.path + '/binx', { BinX: '2' })
+	using frame = spyOn(fixture.manager, 'frame')
+	const height = fixture.device.frame.height.value
+	await fixture.put(fixture.path + '/numx', { NumX: '100' })
+	expect(frame).toHaveBeenLastCalledWith(fixture.device, 0, 0, 200, height)
+	await fixture.put(fixture.path + '/numy', { NumY: '80' })
+	await fixture.put(fixture.path + '/startx', { StartX: '10' })
+	await fixture.put(fixture.path + '/starty', { StartY: '12' })
+	expect(frame).toHaveBeenLastCalledWith(fixture.device, 20, 24, 200, 160)
+	for (const [name, value] of [
+		['numx', 100],
+		['numy', 80],
+		['startx', 10],
+		['starty', 12],
+	] as const) {
+		expect((await fixture.get(fixture.path + '/' + name)).Value).toBe(value)
+	}
+	await fixture.put(fixture.path + '/startx', { StartX: '0' })
+	expect(frame).toHaveBeenLastCalledWith(fixture.device, 0, 24, 200, 160)
+})
+
+test('camera forwards zero-duration bias exposures', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_CAMERA)
+	using enableBlob = spyOn(fixture.manager, 'enableBlob')
+	using startExposure = spyOn(fixture.manager, 'startExposure')
+
+	const response = await fixture.put(fixture.path + '/startexposure', { Duration: '0', Light: 'False' })
+
+	expect(response.ErrorNumber).toBe(0)
+	expect(enableBlob).toHaveBeenCalledWith(fixture.device)
+	expect(startExposure).toHaveBeenCalledWith(fixture.device, 0)
+})
+
+test('mount UTCDate follows the mount clock', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_MOUNT)
+	const utc = Date.UTC(2020, 0, 1)
+	fixture.simulator.setTime({ utc, offset: 0 })
+	await waitUntil(() => fixture.device.time.utc === utc)
+
+	expect((await fixture.get(fixture.path + '/utcdate')).Value).toBe(new Date(utc).toISOString())
+})
+
+test('mount sidereal time and bulk horizontal coordinates refresh on demand', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_MOUNT)
+	const base = fixture.path
+	const before = (await fixture.get(`${base}/siderealtime`)).Value as number
+	const now = Date.now
+	const start = now()
+
+	try {
+		Date.now = () => start + 3_600_000
+		const after = (await fixture.get(`${base}/siderealtime`)).Value as number
+		const delta = (after - before + 24) % 24
+		expect(delta).toBeCloseTo(1.0027, 2)
+
+		const altitude = (await fixture.get(`${base}/altitude`)).Value as number
+		const azimuth = (await fixture.get(`${base}/azimuth`)).Value as number
+		const state = (await fixture.get(`${base}/devicestate`)).Value as AlpacaStateItem[]
+		expect(state.find((item) => item.Name === 'Altitude')?.Value).toBeCloseTo(altitude, 10)
+		expect(state.find((item) => item.Name === 'Azimuth')?.Value).toBeCloseTo(azimuth, 10)
+		expect(state.find((item) => item.Name === 'SiderealTime')?.Value).toBeCloseTo(after, 10)
+	} finally {
+		Date.now = now
+	}
+
+	expect((await fixture.put(`${base}/slewtoaltazasync`, { Azimuth: '120', Altitude: '45' })).ErrorNumber).toBe(0)
+})
+
+test('camera exposes readout modes as indexed strings', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_CAMERA)
+
+	expect((await fixture.get(fixture.path + '/readoutmodes')).Value).toEqual(['Mono', 'RGB'])
+	expect((await fixture.get(fixture.path + '/readoutmode')).Value).toBe(0)
+
+	await fixture.put(fixture.path + '/readoutmode', { ReadoutMode: '1' })
+	await waitUntil(() => fixture.device.frameFormat === 'RGB')
+	expect((await fixture.get(fixture.path + '/readoutmode')).Value).toBe(1)
+})
+
+function makeTinyFits(value: number) {
+	const fits = Buffer.alloc(2881, 32)
+	const cards = ['SIMPLE  =                    T', 'BITPIX  =                    8', 'NAXIS   =                    2', 'NAXIS1  =                    1', 'NAXIS2  =                    1', 'END']
+
+	for (let i = 0; i < cards.length; i++) fits.write(cards[i].padEnd(80), i * 80)
+	fits[2880] = value
+	return fits
+}
+
+test('camera image array preserves a pending image for JSON requests', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_CAMERA)
+	const fits = makeTinyFits(7)
+	await fixture.put(fixture.path + '/startexposure', { Duration: '60', Light: 'True' })
+	fixture.manager.blobReceived(fixture.device, fits, 'raw')
+
+	const response = await fetch(new URL(fixture.path + '/imagearray', fixture.url), { headers: { Accept: 'application/json' } })
+	const body = (await response.json()) as { ErrorNumber: number }
+
+	expect(body.ErrorNumber).toBe(AlpacaException.Driver)
+	expect((await fixture.get(fixture.path + '/imageready')).Value).toBeTrue()
+})
+
+test('camera image array reports InvalidOperation before an image is ready', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_CAMERA)
+	const response = await fetch(new URL(fixture.path + '/imagearray', fixture.url), { headers: { Accept: 'application/imagebytes' } })
+	const body = (await response.json()) as { ErrorNumber: number }
+
+	expect(response.status).toBe(200)
+	expect(body.ErrorNumber).toBe(AlpacaException.InvalidOperation)
+})
+
+test('image bytes respect FITS buffer views and their response bounds', async () => {
+	const compact = makeTinyFits(7)
+	const prefixed = Buffer.alloc(compact.length + 8)
+	compact.copy(prefixed, 8)
+	const view = prefixed.subarray(8)
+
+	expect(makeImageBytesFromFits(view)).toEqual(makeImageBytesFromFits(compact))
+
+	await using fixture = await startAlpacaServer(ALPACA_CAMERA)
+	await fixture.put(fixture.path + '/startexposure', { Duration: '60', Light: 'True' })
+	fixture.manager.blobReceived(fixture.device, compact, 'raw')
+	const response = await fetch(new URL(fixture.path + '/imagearray', fixture.url), { headers: { Accept: 'application/imagebytes' } })
+	const body = await response.arrayBuffer()
+
+	expect(body.byteLength).toBe(makeImageBytesFromFits(compact).byteLength)
+})
+
+test('filter wheel exposes and updates its real slot names', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_WHEEL)
+	const names = fixture.device.names.map((name, index) => `${name} ${index + 1}`)
+
+	expect((await fixture.get(fixture.path + '/names')).Value).toEqual(fixture.device.names)
+	expect((await fixture.get(fixture.path + '/supportedactions')).Value).toEqual(['SetNames'])
+
+	const response = await fixture.put(fixture.path + '/action', { Action: 'SetNames', Parameters: JSON.stringify(names) })
+	await waitUntil(() => fixture.device.names.every((name, index) => name === names[index]))
+
+	expect(response.ErrorNumber).toBe(0)
+	expect(response.Value).toBe('OK')
+	expect((await fixture.get(fixture.path + '/names')).Value).toEqual(names)
+})
+
+test('cover calibrator reports missing halves without throwing', async () => {
+	{
+		await using fixture = await startAlpacaServer(ALPACA_COVER)
+
+		expect((await fixture.get(fixture.path + '/maxbrightness')).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+		expect((await fixture.put(fixture.path + '/calibratoron', { Brightness: '10' })).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+		expect((await fixture.put(fixture.path + '/closecover')).ErrorNumber).toBe(0)
+	}
+
+	{
+		await using fixture = await startAlpacaServer(ALPACA_FLAT_PANEL)
+
+		expect((await fixture.put(fixture.path + '/opencover')).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+		expect((await fixture.put(fixture.path + '/calibratoron', { Brightness: '10' })).ErrorNumber).toBe(0)
+	}
+})
+
+test('relative focuser moves send a positive step magnitude', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_FOCUSER)
+	fixture.device.canAbsoluteMove = false
+	using moveIn = spyOn(fixture.manager, 'moveIn')
+	using moveOut = spyOn(fixture.manager, 'moveOut')
+
+	const response = await fixture.put(fixture.path + '/move', { Position: '-50' })
+
+	expect(response.ErrorNumber).toBe(0)
+	expect(moveIn).not.toHaveBeenCalled()
+	expect(moveOut).toHaveBeenCalledWith(fixture.device, 50)
+})

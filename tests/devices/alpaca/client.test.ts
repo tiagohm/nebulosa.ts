@@ -1,5 +1,6 @@
 import { type TestOptions, describe, expect, test } from 'bun:test'
-import { timeYMDHMS } from '../../../src/astronomy/time/time'
+import { equatorialFromJ2000, equatorialToJ2000 } from '../../../src/astronomy/coordinates/coordinate'
+import { timeNow, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { DEG2RAD, PIOVERTWO } from '../../../src/core/constants'
 import { AlpacaClient, type AlpacaClientHandler, makeFitsFromImageBytes } from '../../../src/devices/alpaca/client'
 import { makeImageBytesFromFits } from '../../../src/devices/alpaca/server'
@@ -16,12 +17,12 @@ import { MountManager } from '../../../src/devices/indi/manager/mount'
 import { RotatorManager } from '../../../src/devices/indi/manager/rotator'
 import { ThermometerManager } from '../../../src/devices/indi/manager/thermometer'
 import { WheelManager } from '../../../src/devices/indi/manager/wheel'
-import type { PropertyState } from '../../../src/devices/indi/types'
+import type { DefNumberVector, DefSwitchVector, PropertyState } from '../../../src/devices/indi/types'
 import { readImageFromBuffer } from '../../../src/imaging/model/image'
 import { debayer } from '../../../src/imaging/processing/debayer'
 import type { FitsHeader } from '../../../src/io/formats/fits/fits'
 import { roundToNthDecimal } from '../../../src/math/numerical/math'
-import { deg, hour } from '../../../src/math/units/angle'
+import { deg, hour, normalizeAngle, toDeg, toHour } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
 import { saveImageAndCompareHash } from '../../imaging/util'
 import { isNonWindowsSkipped, isTimeConsumingTestSkipped, waitUntil } from '../../util'
@@ -31,7 +32,444 @@ await downloadPerTag('alpaca.client')
 
 const NOW = timeYMDHMS(2026, 2, 18, 12, 0, 0)
 
+// A scripted HTTP driver for protocol cases the simulator does not expose. Values stay mutable so a
+// test can change a polled answer, while PUT bodies and emitted vectors preserve the wire contract.
+async function scriptedClient(type: AlpacaConfiguredDevice['DeviceType'], values: Record<string, unknown>, spy?: AlpacaClientHandler, respond?: (req: Request) => Response | undefined | Promise<Response | undefined>) {
+	const numbers = new Map<string, DefNumberVector>()
+	const switches = new Map<string, DefSwitchVector>()
+	const commands: { endpoint: string; body: URLSearchParams }[] = []
+	const server = Bun.serve({
+		hostname: '127.0.0.1',
+		port: 0,
+		async fetch(req) {
+			const scripted = await respond?.(req)
+			if (scripted) return scripted
+			const endpoint = new URL(req.url).pathname.split('/').at(-1)!
+			let value: unknown
+			let errorNumber = 0
+			if (endpoint === 'configureddevices') value = [{ DeviceName: 'Scripted', DeviceType: type, DeviceNumber: 0, UniqueID: 'scripted' }]
+			else if (req.method === 'PUT') {
+				commands.push({ endpoint, body: new URLSearchParams(await req.text()) })
+				value = true
+			} else if (endpoint in values) value = values[endpoint]
+			else if (endpoint === 'connected') value = true
+			else if (endpoint === 'devicestate') value = []
+			else errorNumber = AlpacaException.MethodOrPropertyNotImplemented
+			return Response.json({ Value: value, ErrorNumber: errorNumber, ErrorMessage: '', ClientTransactionID: 0, ServerTransactionID: 0 })
+		},
+	})
+	const client = new AlpacaClient(
+		`http://127.0.0.1:${server.port}`,
+		{
+			handler: {
+				...spy,
+				numberVector: (client, vector, tag) => {
+					numbers.set(vector.name, structuredClone(vector) as DefNumberVector)
+					spy?.numberVector?.(client, vector, tag)
+				},
+				switchVector: (client, vector, tag) => {
+					switches.set(vector.name, structuredClone(vector) as DefSwitchVector)
+					spy?.switchVector?.(client, vector, tag)
+				},
+			},
+		},
+		{ get: () => undefined },
+	)
+	await client.start()
+	return {
+		client,
+		numbers,
+		switches,
+		commands,
+		async [Symbol.asyncDispose]() {
+			client.stop()
+			await server.stop(true)
+		},
+	}
+}
+
+test('J2000 telescope converts both published and commanded coordinates in protocol units', async () => {
+	const now = timeNow()
+	const [ra, dec] = equatorialFromJ2000(hour(12), deg(45), now)
+	await using remote = await scriptedClient('telescope', {
+		equatorialsystem: 2,
+		canslew: true,
+		canslewasync: true,
+		cansync: true,
+		devicestate: [
+			{ Name: 'RightAscension', Value: 12 },
+			{ Name: 'Declination', Value: 45 },
+		],
+	})
+	await waitUntil(() => remote.numbers.get('EQUATORIAL_EOD_COORD')?.elements.RA.value !== 0 && remote.switches.has('ON_COORD_SET'), 8000)
+	const coordinate = remote.numbers.get('EQUATORIAL_EOD_COORD')!
+	expect(coordinate.elements.RA.value).toBeCloseTo(toHour(normalizeAngle(ra)), 6)
+	expect(coordinate.elements.DEC.value).toBeCloseTo(toDeg(dec), 6)
+	const [targetRA, targetDEC] = equatorialToJ2000(hour(18), deg(-30), now)
+	for (const mode of ['SLEW', 'SYNC']) {
+		remote.client.sendSwitch({ device: coordinate.device, name: 'ON_COORD_SET', elements: { [mode]: true } })
+		remote.client.sendNumber({ device: coordinate.device, name: coordinate.name, elements: { RA: 18, DEC: -30 } })
+		const endpoint = mode === 'SLEW' ? 'slewtocoordinatesasync' : 'synctocoordinates'
+		await waitUntil(() => remote.commands.some((e) => e.endpoint === endpoint), 1000)
+		const command = remote.commands.find((e) => e.endpoint === endpoint)!
+		expect(Number(command.body.get('RightAscension'))).toBeCloseTo(toHour(normalizeAngle(targetRA)), 6)
+		expect(Number(command.body.get('Declination'))).toBeCloseTo(toDeg(targetDEC), 6)
+	}
+}, 10000)
+
+test('manual east and west motion follows the AlpacaServer rate convention', async () => {
+	await using remote = await scriptedClient('telescope', { canmoveaxis: true, axisrates: [{ Minimum: 0, Maximum: 3 }] })
+	await waitUntil(() => remote.switches.has('TELESCOPE_SLEW_RATE'), 8000)
+	const motion = remote.switches.get('TELESCOPE_MOTION_WE')!
+	for (const [direction, rate] of [
+		['MOTION_EAST', 3],
+		['MOTION_WEST', -3],
+	] as const) {
+		const count = remote.commands.length
+		remote.client.sendSwitch({ device: motion.device, name: motion.name, elements: { [direction]: true } })
+		await waitUntil(() => remote.commands.length > count, 1000)
+		expect(remote.commands.at(-1)!.endpoint).toBe('moveaxis')
+		expect(Number(remote.commands.at(-1)!.body.get('Axis'))).toBe(0)
+		expect(Number(remote.commands.at(-1)!.body.get('Rate'))).toBe(rate)
+		remote.client.sendSwitch({ device: motion.device, name: motion.name, elements: { [direction]: false } })
+		await waitUntil(() => remote.commands.length > count + 1, 1000)
+		expect(Number(remote.commands.at(-1)!.body.get('Rate'))).toBe(0)
+	}
+}, 10000)
+
+test('camera opens the shutter for light and flat frames only', async () => {
+	await using remote = await scriptedClient('camera', { exposuremin: 0.001, exposuremax: 60 })
+	await waitUntil(() => remote.numbers.has('CCD_EXPOSURE'), 8000)
+	const exposure = remote.numbers.get('CCD_EXPOSURE')!
+	for (const [frame, light] of [
+		['FLAT', 'True'],
+		['DARK', 'False'],
+		['BIAS', 'False'],
+		['LIGHT', 'True'],
+	]) {
+		const count = remote.commands.length
+		remote.client.sendSwitch({ device: exposure.device, name: 'CCD_FRAME_TYPE', elements: { [`FRAME_${frame}`]: true } })
+		remote.client.sendNumber({ device: exposure.device, name: exposure.name, elements: { CCD_EXPOSURE_VALUE: 1 } })
+		await waitUntil(() => remote.commands.length > count, 1000)
+		expect(remote.commands.at(-1)!.endpoint).toBe('startexposure')
+		expect(remote.commands.at(-1)!.body.get('Light')).toBe(light)
+	}
+}, 10000)
+
+test.each([43, 44])(
+	'camera reports Alert when downloaded ImageBytes is malformed (%i bytes)',
+	async (length) => {
+		const state = [{ Name: 'ImageReady', Value: false }]
+		const data = new ArrayBuffer(length)
+		if (length === 44) new Int32Array(data).set([1, 0, 1, 2, 44, 1, 6, 2, 10, 10, 0])
+		await using remote = await scriptedClient('camera', { exposuremax: 60, devicestate: state }, undefined, (req) => (new URL(req.url).pathname.endsWith('/imagearray') ? new Response(data, { headers: { 'Content-Type': 'application/imagebytes' } }) : undefined))
+		await waitUntil(() => remote.numbers.has('CCD_EXPOSURE'), 8000)
+		const exposure = remote.numbers.get('CCD_EXPOSURE')!
+		remote.client.sendNumber({ device: exposure.device, name: exposure.name, elements: { CCD_EXPOSURE_VALUE: 1 } })
+		await waitUntil(() => remote.numbers.get('CCD_EXPOSURE')?.state === 'Busy', 1000)
+		state[0].Value = true
+		await waitUntil(() => remote.numbers.get('CCD_EXPOSURE')?.state === 'Alert', 3000)
+		expect(remote.numbers.get('CCD_EXPOSURE')!.elements.CCD_EXPOSURE_VALUE.value).toBe(0)
+	},
+	12000,
+)
+
+test('a failed Connected poll preserves other devices and recovers on the next tick', async () => {
+	let fail = false
+	let disconnected = false
+	let failures = 0
+	let closes = 0
+	let position = 0
+	const connections = new Map<string, boolean>()
+	const positions = new Map<string, number>()
+	await using remote = await scriptedClient(
+		'focuser',
+		{ absolute: true, maxstep: 100000 },
+		{
+			close: () => {
+				closes++
+			},
+			switchVector: (_, vector) => {
+				if (vector.name === 'CONNECTION') connections.set(vector.device, vector.elements.CONNECT.value === true)
+			},
+			numberVector: (_, vector) => {
+				if (vector.name === 'ABS_FOCUS_POSITION') positions.set(vector.device, vector.elements.FOCUS_ABSOLUTE_POSITION.value)
+			},
+		},
+		(req) => {
+			const path = new URL(req.url).pathname
+			let value: unknown
+			if (path.endsWith('/configureddevices')) value = [0, 1].map((id) => ({ DeviceName: 'Scripted', DeviceType: 'focuser', DeviceNumber: id, UniqueID: `focuser-${id}` }))
+			else if (path.endsWith('/0/connected')) {
+				if (fail) {
+					fail = false
+					failures++
+					return new Response('transient failure', { status: 500 })
+				}
+				value = !disconnected
+			} else if (path.endsWith('/devicestate'))
+				value = [
+					{ Name: 'Position', Value: ++position },
+					{ Name: 'IsMoving', Value: false },
+				]
+			else return undefined
+			return Response.json({ Value: value, ErrorNumber: 0, ErrorMessage: '' })
+		},
+	)
+	const first = 'Scripted (Focuser 0)'
+	const second = 'Scripted (Focuser 1)'
+	await waitUntil(() => (positions.get(first) ?? 0) > 0 && (positions.get(second) ?? 0) > 0, 8000)
+	const previous = positions.get(second)!
+	fail = true
+	await waitUntil(() => failures === 1 && positions.get(second)! > previous, 3000)
+	expect(connections.get(first)).toBeTrue()
+	expect(connections.get(second)).toBeTrue()
+	expect(closes).toBe(0)
+	const beforeRecovery = positions.get(first)!
+	await waitUntil(() => positions.get(first)! > beforeRecovery, 3000)
+	disconnected = true
+	await waitUntil(() => connections.get(first) === false, 3000)
+	expect(connections.get(second)).toBeTrue()
+	expect(closes).toBe(0)
+}, 18000)
+
+test.each([0, 0.001])(
+	'camera sends zero-second bias requests through the exposure limits (min=%f)',
+	async (minimum) => {
+		await using remote = await scriptedClient('camera', { exposuremin: minimum, exposuremax: 60 })
+		await waitUntil(() => remote.numbers.has('CCD_EXPOSURE'), 8000)
+		const exposure = remote.numbers.get('CCD_EXPOSURE')!
+		remote.client.sendSwitch({ device: exposure.device, name: 'CCD_FRAME_TYPE', elements: { FRAME_BIAS: true } })
+		remote.client.sendNumber({ device: exposure.device, name: exposure.name, elements: { CCD_EXPOSURE_VALUE: 0 } })
+		await waitUntil(() => remote.commands.length === 1, 1000)
+		expect(remote.commands[0].endpoint).toBe('startexposure')
+		expect(Number(remote.commands[0].body.get('Duration'))).toBe(minimum)
+		expect(remote.commands[0].body.get('Light')).toBe('False')
+	},
+	10000,
+)
+
+test.each([true, false])(
+	'telescope exposes slew according to its asynchronous capability (%s)',
+	async (canSlewAsync) => {
+		await using remote = await scriptedClient('telescope', { canslew: !canSlewAsync, canslewasync: canSlewAsync, cansync: true, equatorialsystem: 1 })
+		await waitUntil(() => remote.switches.has('ON_COORD_SET'), 8000)
+		const mode = remote.switches.get('ON_COORD_SET')!
+		expect('SLEW' in mode.elements).toBe(canSlewAsync)
+		if (canSlewAsync) {
+			remote.client.sendSwitch({ device: mode.device, name: mode.name, elements: { SLEW: true } })
+			remote.client.sendNumber({ device: mode.device, name: 'EQUATORIAL_EOD_COORD', elements: { RA: 12, DEC: 45 } })
+			await waitUntil(() => remote.commands.length === 1, 1000)
+			expect(remote.commands[0].endpoint).toBe('slewtocoordinatesasync')
+			expect(Number(remote.commands[0].body.get('RightAscension'))).toBe(12)
+			expect(Number(remote.commands[0].body.get('Declination'))).toBe(45)
+		}
+	},
+	10000,
+)
+
+test.each([true, false])(
+	'focuser manager can request relative moves with Absolute=%s',
+	async (absolute) => {
+		const manager = new FocuserManager()
+		const state = [
+			{ Name: 'Position', Value: 10000 },
+			{ Name: 'IsMoving', Value: false },
+		]
+		const values = { absolute, maxstep: 20000, position: 12000, devicestate: state }
+		await using remote = await scriptedClient('focuser', values, {
+			textVector: manager.textVector.bind(manager),
+			numberVector: manager.numberVector.bind(manager),
+			switchVector: manager.switchVector.bind(manager),
+		})
+		const name = 'Scripted (Focuser 0)'
+		await waitUntil(() => manager.get(remote.client, name)?.canRelativeMove === true, 8000)
+		const focuser = manager.get(remote.client, name)!
+		expect(focuser.canAbsoluteMove).toBe(absolute)
+		manager.moveOut(focuser, 50)
+		await waitUntil(() => remote.commands.length === 1, 1000)
+		expect(Number(remote.commands[0].body.get('Position'))).toBe(absolute ? 12050 : 50)
+		manager.moveIn(focuser, 50)
+		await waitUntil(() => remote.commands.length === 2, 1000)
+		expect(Number(remote.commands[1].body.get('Position'))).toBe(absolute ? 11950 : -50)
+		if (absolute) {
+			values.position = 19990
+			manager.moveOut(focuser, 50)
+			await waitUntil(() => remote.commands.length === 3, 1000)
+			expect(Number(remote.commands[2].body.get('Position'))).toBe(20000)
+			values.position = 10
+			manager.moveIn(focuser, 50)
+			await waitUntil(() => remote.commands.length === 4, 1000)
+			expect(Number(remote.commands[3].body.get('Position'))).toBe(0)
+		}
+		state[1].Value = true
+		await waitUntil(() => remote.numbers.get('REL_FOCUS_POSITION')?.state === 'Busy', 3000)
+		state[1].Value = false
+		await waitUntil(() => remote.numbers.get('REL_FOCUS_POSITION')?.state === 'Idle', 3000)
+		expect(focuser.moving).toBeFalse()
+	},
+	15000,
+)
+
+test.each([false, true])(
+	'relative focuser position read cannot move after failure or halt (halt=%s)',
+	async (halt) => {
+		const response = Promise.withResolvers<Response>()
+		let reading = false
+		await using remote = await scriptedClient('focuser', { absolute: true, maxstep: 20000 }, undefined, (req) => {
+			if (!new URL(req.url).pathname.endsWith('/position')) return undefined
+			reading = true
+			return response.promise
+		})
+		await waitUntil(() => remote.numbers.has('REL_FOCUS_POSITION'), 8000)
+		const relative = remote.numbers.get('REL_FOCUS_POSITION')!
+		remote.client.sendNumber({ device: relative.device, name: relative.name, elements: { FOCUS_RELATIVE_POSITION: 50 } })
+		await waitUntil(() => reading, 1000)
+		if (halt) {
+			remote.client.sendSwitch({ device: relative.device, name: 'FOCUS_ABORT_MOTION', elements: { ABORT: true } })
+			await waitUntil(() => remote.commands.some((e) => e.endpoint === 'halt'), 1000)
+			response.resolve(Response.json({ Value: 10000, ErrorNumber: 0, ErrorMessage: '' }))
+			await Bun.sleep(100)
+		} else {
+			response.resolve(new Response('position unavailable', { status: 500 }))
+			await waitUntil(() => remote.numbers.get(relative.name)?.state === 'Alert', 1000)
+		}
+		expect(remote.commands.some((e) => e.endpoint === 'move')).toBeFalse()
+	},
+	10000,
+)
+
+test.each([true, false])(
+	'camera abort settles without ImageReady and reports failure (success=%s)',
+	async (success) => {
+		await using remote = await scriptedClient(
+			'camera',
+			{
+				exposuremax: 60,
+				canstopexposure: true,
+				devicestate: [
+					{ Name: 'CameraState', Value: 0 },
+					{ Name: 'ImageReady', Value: false },
+					{ Name: 'PercentCompleted', Value: 0 },
+				],
+			},
+			undefined,
+			(req) => (!success && new URL(req.url).pathname.endsWith('/stopexposure') ? new Response('cannot stop', { status: 500 }) : undefined),
+		)
+		await waitUntil(() => remote.numbers.has('CCD_EXPOSURE'), 8000)
+		const exposure = remote.numbers.get('CCD_EXPOSURE')!
+		remote.client.sendNumber({ device: exposure.device, name: exposure.name, elements: { CCD_EXPOSURE_VALUE: 60 } })
+		await waitUntil(() => remote.numbers.get(exposure.name)?.state === 'Busy', 1000)
+		remote.client.sendSwitch({ device: exposure.device, name: 'CCD_ABORT_EXPOSURE', elements: { ABORT: true } })
+		await waitUntil(() => remote.numbers.get(exposure.name)?.state === (success ? 'Idle' : 'Alert'), 1000)
+		if (success) {
+			await Bun.sleep(1100)
+			expect(remote.numbers.get(exposure.name)!.state).toBe('Idle')
+			expect(remote.numbers.get(exposure.name)!.elements.CCD_EXPOSURE_VALUE.value).toBe(0)
+		} else expect(remote.numbers.get(exposure.name)!.elements.CCD_EXPOSURE_VALUE.value).toBe(60)
+	},
+	12000,
+)
+
+test('a delayed camera abort reply cannot clear a newer exposure', async () => {
+	const stopped = Promise.withResolvers<Response>()
+	let stopping = false
+	await using remote = await scriptedClient('camera', { exposuremax: 60, canstopexposure: true }, undefined, (req) => {
+		if (!new URL(req.url).pathname.endsWith('/stopexposure')) return undefined
+		stopping = true
+		return stopped.promise
+	})
+	await waitUntil(() => remote.numbers.has('CCD_EXPOSURE'), 8000)
+	const exposure = remote.numbers.get('CCD_EXPOSURE')!
+	remote.client.sendNumber({ device: exposure.device, name: exposure.name, elements: { CCD_EXPOSURE_VALUE: 60 } })
+	await waitUntil(() => remote.commands.length === 1, 1000)
+	remote.client.sendSwitch({ device: exposure.device, name: 'CCD_ABORT_EXPOSURE', elements: { ABORT: true } })
+	await waitUntil(() => stopping, 1000)
+	remote.client.sendNumber({ device: exposure.device, name: exposure.name, elements: { CCD_EXPOSURE_VALUE: 10 } })
+	await waitUntil(() => remote.numbers.get(exposure.name)?.elements.CCD_EXPOSURE_VALUE.value === 10, 1000)
+	stopped.resolve(Response.json({ ErrorNumber: 0, ErrorMessage: '' }))
+	await Bun.sleep(100)
+	expect(remote.numbers.get(exposure.name)!.state).toBe('Busy')
+	expect(remote.numbers.get(exposure.name)!.elements.CCD_EXPOSURE_VALUE.value).toBe(10)
+}, 10000)
+
+test('cover preserves its last position while moving and explicitly publishes open', async () => {
+	const cover = { Name: 'CoverState', Value: 1 }
+	await using remote = await scriptedClient('covercalibrator', { devicestate: [cover] })
+	await waitUntil(() => remote.switches.get('CAP_PARK')?.elements.PARK.value === true, 8000)
+	cover.Value = 2
+	await waitUntil(() => remote.switches.get('CAP_PARK')?.state === 'Busy', 3000)
+	expect(remote.switches.get('CAP_PARK')!.elements.PARK.value).toBeTrue()
+	cover.Value = 3
+	await waitUntil(() => remote.switches.get('CAP_PARK')?.state === 'Idle', 3000)
+	expect(remote.switches.get('CAP_PARK')!.elements.UNPARK.value).toBeTrue()
+	cover.Value = 2
+	await waitUntil(() => remote.switches.get('CAP_PARK')?.state === 'Busy', 3000)
+	expect(remote.switches.get('CAP_PARK')!.elements.UNPARK.value).toBeTrue()
+	cover.Value = 1
+	await waitUntil(() => remote.switches.get('CAP_PARK')?.state === 'Idle', 3000)
+	expect(remote.switches.get('CAP_PARK')!.elements.PARK.value).toBeTrue()
+	// A poll can miss the moving state entirely.
+	cover.Value = 3
+	await waitUntil(() => remote.switches.get('CAP_PARK')?.elements.UNPARK.value === true, 3000)
+	expect(remote.switches.get('CAP_PARK')!.elements.PARK.value).toBeFalse()
+}, 16000)
+
+test('telescope normalizes longitude at both INDI and Alpaca boundaries', async () => {
+	const manager = new MountManager()
+	const values = { sitelatitude: 40, sitelongitude: -74, siteelevation: 0 }
+	await using remote = await scriptedClient('telescope', values, {
+		textVector: manager.textVector.bind(manager),
+		numberVector: manager.numberVector.bind(manager),
+		switchVector: manager.switchVector.bind(manager),
+	})
+	await waitUntil(() => remote.numbers.has('GEOGRAPHIC_COORD'), 8000)
+	const location = remote.numbers.get('GEOGRAPHIC_COORD')!
+	expect(location.elements.LONG.value).toBe(286)
+	const mount = manager.get(remote.client, location.device)!
+	expect(mount.geographicCoordinate.longitude).toBeCloseTo(deg(-74), 12)
+	values.sitelongitude = -122
+	for (const [input, expected] of [
+		[238, -122],
+		[286, -74],
+		[-190, 170],
+		[-180, 180],
+		[180, 180],
+		[360, 0],
+	]) {
+		const count = remote.commands.length
+		remote.client.sendNumber({ device: location.device, name: location.name, elements: { LAT: 40, LONG: input } })
+		await waitUntil(() => remote.commands.length === count + 2, 1000)
+		const command = remote.commands.slice(count).find((e) => e.endpoint === 'sitelongitude')!
+		expect(Number(command.body.get('SiteLongitude'))).toBe(expected)
+	}
+	await waitUntil(() => remote.numbers.get(location.name)?.elements.LONG.value === 238, 3000)
+	expect(mount.geographicCoordinate.longitude).toBeCloseTo(deg(-122), 12)
+}, 12000)
+
 describe('make fits from image bytes', () => {
+	test('converts a 10 by 10 byte ROI smaller than 176 bytes', async () => {
+		const data = new ArrayBuffer(144)
+		new Int32Array(data, 0, 11).set([1, 0, 1, 2, 44, 1, 6, 2, 10, 10, 0])
+		new Uint8Array(data, 44).fill(255)
+		const image = await readImageFromBuffer(makeFitsFromImageBytes(data))
+		expectNaxis(image!.header, 2, 10, 10, undefined)
+		expect(image!.header.BITPIX).toBe(8)
+		expect(image!.raw.length).toBe(100)
+		expect(image!.raw.every((pixel) => pixel === 1)).toBeTrue()
+	})
+
+	test('rejects incomplete headers, error responses and out-of-buffer offsets', () => {
+		expect(() => makeFitsFromImageBytes(new ArrayBuffer(43))).toThrow('incomplete ImageBytes header')
+		const data = new ArrayBuffer(44)
+		const header = new Int32Array(data)
+		header.set([1, 1025, 0, 0, 44, 1, 6, 2, 1, 1, 0])
+		expect(() => makeFitsFromImageBytes(data)).toThrow('ImageBytes error 1025')
+		header[1] = 0
+		header[4] = 45
+		expect(() => makeFitsFromImageBytes(data)).toThrow('invalid ImageBytes data offset')
+	})
+
 	const camera = structuredClone(DEFAULT_CAMERA)
 	const mount = structuredClone(DEFAULT_MOUNT)
 

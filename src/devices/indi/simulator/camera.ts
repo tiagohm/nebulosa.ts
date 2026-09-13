@@ -279,7 +279,7 @@ export class CameraSimulator extends DeviceSimulator {
 		readonly options?: CameraSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.CCD | DeviceInterfaceType.GUIDER)
+		super(name, client, handler, DeviceInterfaceType.CCD | DeviceInterfaceType.GUIDER, 'camera.simulator')
 
 		for (const property of this.properties) {
 			property.device = name
@@ -751,12 +751,9 @@ export class CameraSimulator extends DeviceSimulator {
 		const nextTemperature = Math.abs(delta) < 0.02 ? target : current + step
 		const deltaFromAmbient = Math.max(0, CAMERA_AMBIENT_TEMPERATURE - nextTemperature)
 		const nextCoolerPower = coolerEnabled ? clamp(deltaFromAmbient * 6.5, 0, 100) : 0
-		let updated = false
+		this.#temperature.elements.CCD_TEMPERATURE_VALUE.value = nextTemperature
 
-		if (Math.abs(nextTemperature - current) >= 0.1) {
-			this.#temperature.elements.CCD_TEMPERATURE_VALUE.value = nextTemperature
-			updated = true
-		}
+		const updated = Math.abs(nextTemperature - current) >= 0.1 || nextTemperature === target
 
 		if (Math.abs(this.#coolerPower.elements.CCD_COOLER_POWER.value - nextCoolerPower) >= 0.5) {
 			this.#coolerPower.elements.CCD_COOLER_POWER.value = nextCoolerPower

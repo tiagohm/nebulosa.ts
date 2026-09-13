@@ -86,6 +86,35 @@ test('rejects insufficient, contradictory, non-positive-slope, and unstable obse
 		exposureRange: [0.1, 10],
 	})
 	expect(unstable.status).toBe('invalid')
+	expect(unstable.diagnostics[0].message).toContain('unstable')
+})
+
+test('rejects an unstable affine fit even when the target dwarfs the observed span', () => {
+	const observations = [
+		{ exposure: 1, level: 100 },
+		{ exposure: 2, level: 300 },
+		{ exposure: 3, level: 110 },
+	] as const
+	const far = estimateFlatExposure({
+		observations,
+		levelMode: 'observed',
+		targetRange: [19900, 20100],
+		exposureRange: [0.1, 10000],
+	})
+	expect(far.status).toBe('invalid')
+	expect(far.diagnostics[0].message).toContain('unstable')
+
+	const collinear = estimateFlatExposure({
+		observations: [
+			{ exposure: 1, level: 150 },
+			{ exposure: 2, level: 250 },
+			{ exposure: 3, level: 350 },
+		],
+		levelMode: 'observed',
+		targetRange: [19900, 20100],
+		exposureRange: [0.1, 10000],
+	})
+	expect(collinear).toMatchObject({ status: 'increase', method: 'affine', recommendedExposure: 199.5, predictedLevel: 20000 })
 })
 
 test('reports allowed-range bounds and limits each absolute exposure step', () => {

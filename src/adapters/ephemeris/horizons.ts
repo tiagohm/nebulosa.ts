@@ -1,5 +1,5 @@
-import { formatTemporal, temporalGet, type Temporal } from '../../astronomy/time/temporal'
-import { toJulianDay, type Time } from '../../astronomy/time/time'
+import { formatTemporal, type Temporal } from '../../astronomy/time/temporal'
+import { tdb, timeUnix, toJulianDay, utc, type Time } from '../../astronomy/time/time'
 import { type ReadCsvOptions, readCsv } from '../../io/csv'
 import { type Angle, toDeg } from '../../math/units/angle'
 import { type Distance, toKilometer } from '../../math/units/distance'
@@ -35,7 +35,7 @@ export type ObserverSiteCoord = readonly [Angle, Angle, Distance] | `${number},$
 export type ReferencePlane = 'ECLIPTIC' | 'FRAME' | 'BODY_EQUATOR'
 
 // User coordinate type for the observing site.
-export type CoordinateType = 'GEODETIC' | 'CILINDRICAL'
+export type CoordinateType = 'GEODETIC' | 'CYLINDRICAL'
 
 // Kind of ephemeris to generate.
 export type EphemerisType = 'OBSERVER' | 'VECTOR' | 'ELEMENTS' | 'SPK'
@@ -379,7 +379,7 @@ export async function vector(input: string | ObserverWithOsculatingElements | Ob
 }
 
 // Requests an osculating-elements ephemeris for `input` over [startTime, endTime] and returns the parsed CSV rows.
-export async function elements(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: BodyCenter, startTime: Temporal | Time, endTime: Temporal | Time, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS, signal?: AbortSignal) {
+export async function elements(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: BodyCenter, startTime: Temporal | Time, endTime: Temporal | Time, options: ObserverVectorElementsOptions = {}, signal?: AbortSignal) {
 	const parameters = structuredClone(DEFAULT_ELEMENTS_PARAMETERS) as HorizonsQueryParameters
 	makeParametersFromInput(parameters, input)
 	makeParametersFromCenterAndCoordinates(parameters, center, undefined, options)
@@ -409,7 +409,7 @@ async function makeRequestAndGetResponseWithRetry(input: string | ObserverWithOs
 		if (retryPlan !== undefined) {
 			if (retryPlan.useNoFrag && !input.includes(';NOFRAG')) input += 'NOFRAG;'
 			if (retryPlan.useCap && !input.includes(';CAP')) {
-				if (typeof time === 'number') input += `CAP<${temporalGet(time, 'y')};`
+				if (typeof time === 'number') input += `CAP<${toJulianDay(timeUnix(time / 1000)).toFixed(1)};`
 				else input += `CAP<${toJulianDay(time).toFixed(1)};`
 			}
 			makeParametersFromInput(parameters, input)
@@ -478,17 +478,22 @@ function makeParametersFromInput(parameters: HorizonsQueryParameters, input: str
 
 // https://ssd.jpl.nasa.gov/horizons/manual.html#time
 function makeParametersFromStartAndStopTime(parameters: HorizonsQueryParameters, startTime: Temporal | Time, endTime: Temporal | Time) {
-	if (typeof startTime === 'number') {
-		parameters.START_TIME = formatTemporal(startTime)
-	} else {
-		parameters.START_TIME = `JD ${startTime.day + startTime.fraction}`
+	const isObserver = parameters.EPHEM_TYPE === 'OBSERVER'
+	const timeType = isObserver ? 'UT' : 'TDB'
+	if (parameters.EPHEM_TYPE !== 'SPK') parameters.TIME_TYPE = timeType
+	parameters.START_TIME = formatHorizonsTime(startTime, timeType, parameters.EPHEM_TYPE === 'SPK')
+	parameters.STOP_TIME = formatHorizonsTime(endTime, timeType, parameters.EPHEM_TYPE === 'SPK')
+}
+
+// Converts a project time to the scale accepted by the requested Horizons ephemeris type.
+function formatHorizonsTime(time: Temporal | Time, timeType: TimeType, includeScale: boolean) {
+	if (typeof time === 'number') {
+		if (timeType === 'UT') return formatTemporal(time)
+		time = timeUnix(time / 1000)
 	}
 
-	if (typeof endTime === 'number') {
-		parameters.STOP_TIME = formatTemporal(endTime)
-	} else {
-		parameters.STOP_TIME = `JD ${endTime.day + endTime.fraction}`
-	}
+	const converted = timeType === 'UT' ? utc(time) : tdb(time)
+	return `JD ${toJulianDay(converted)}${includeScale ? ` ${timeType}` : ''}`
 }
 
 // Sets the CENTER and, for coordinate centers, the SITE_COORD/COORD_TYPE parameters.
@@ -509,7 +514,10 @@ function makeParametersFromOptions(parameters: HorizonsQueryParameters, options?
 		const isElements = parameters.EPHEM_TYPE === 'ELEMENTS'
 
 		parameters.REF_SYSTEM = options.referenceSystem || DEFAULT_OVE_OPTIONS.referenceSystem
-		if (!isObserver) parameters.REF_PLANE = options.referencePlane || parameters.REF_PLANE || DEFAULT_OVE_OPTIONS.referencePlane
+		if (!isObserver) {
+			const defaultReferencePlane = parameters.REF_PLANE === 'ECLIPTIC' ? 'ECLIPTIC' : DEFAULT_OVE_OPTIONS.referencePlane
+			parameters.REF_PLANE = formatReferencePlane(options.referencePlane ?? defaultReferencePlane)
+		}
 		if (isObserver) parameters.CAL_FORMAT = options.calendarFormat || DEFAULT_OVE_OPTIONS.calendarFormat
 		parameters.CAL_TYPE = options.calendarType || DEFAULT_OVE_OPTIONS.calendarType
 		if (isObserver) parameters.APPARENT = (options.refractionCorrection ?? DEFAULT_OVE_OPTIONS.refractionCorrection) ? 'REFRACTED' : 'AIRLESS'
@@ -526,6 +534,11 @@ function makeParametersFromOptions(parameters: HorizonsQueryParameters, options?
 		if (isElements) parameters.TP_TYPE = options.timeOfPeriapsisType || DEFAULT_OVE_OPTIONS.timeOfPeriapsisType
 		if (options.stepSize) parameters.STEP_SIZE = formatStepSize(options.stepSize, options.stepSizeUnit)
 	}
+}
+
+// Maps the public reference-plane names to the single-letter codes accepted by Horizons.
+function formatReferencePlane(referencePlane: ReferencePlane) {
+	return referencePlane === 'ECLIPTIC' ? 'E' : referencePlane === 'FRAME' ? 'F' : 'B'
 }
 
 // Sets the QUANTITIES parameter for observer ephemerides from the requested quantity codes.

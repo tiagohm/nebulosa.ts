@@ -25,7 +25,8 @@ export interface LocalPointingResidualOptions {
 	// plate-solve noise, and the global model alone is the safer answer.
 	readonly enabled?: boolean
 	// Number of neighbours averaged at each query (default 6). The bandwidth is the distance to the
-	// k-th of them, so the k-th itself receives zero tricube weight and k-1 effectively contribute.
+	// k-th of them, so the k-th itself receives zero tricube weight; at least three same-side samples
+	// are required for a local average.
 	readonly neighbors?: number
 	// Accepted-sample count below which the layer is not built at all (default 30). Under it the
 	// neighbourhoods are too sparse for the average to describe anything but noise.
@@ -67,8 +68,9 @@ const MINIMUM_BANDWIDTH = 1e-6
 export function resolveLocalResidualOptions(options: LocalPointingResidualOptions = {}): ResolvedLocalPointingResidualOptions {
 	return {
 		enabled: options.enabled ?? DEFAULT_LOCAL_RESIDUAL_OPTIONS.enabled,
-		// One neighbour would be nearest-neighbour interpolation, which is discontinuous across the sky.
-		neighbors: Math.max(2, Math.trunc(options.neighbors ?? DEFAULT_LOCAL_RESIDUAL_OPTIONS.neighbors)),
+		// Fewer than three neighbours would leave a nearest-neighbour contribution after the compact
+		// kernel assigns zero weight to the sample defining the bandwidth.
+		neighbors: Math.max(3, Math.trunc(options.neighbors ?? DEFAULT_LOCAL_RESIDUAL_OPTIONS.neighbors)),
 		minimumSamples: Math.max(1, Math.trunc(options.minimumSamples ?? DEFAULT_LOCAL_RESIDUAL_OPTIONS.minimumSamples)),
 	}
 }
@@ -121,7 +123,10 @@ export function predictLocalPointingResidual(model: Readonly<LocalPointingResidu
 	const requested = side === 'NEITHER' ? undefined : side
 	const neighbors = nearestNeighbors(model.directions, model.pierSides, x, y, z, requested !== undefined && model.pierSides.includes(requested) ? requested : undefined, -1, model.neighbors)
 
-	if (neighbors.found === 0) return { dx: 0, dy: 0 }
+	// With fewer than three same-side samples, the farthest sample defines the bandwidth and leaves only
+	// the nearest sample with positive weight. Skip the local term instead of introducing a discontinuous
+	// nearest-neighbour correction across the sky.
+	if (neighbors.found < 3) return { dx: 0, dy: 0 }
 
 	// Tricube over the distance normalized by the k-th neighbour distance: smooth, compactly supported,
 	// and adaptive, since the bandwidth follows the local sampling density instead of a fixed radius.

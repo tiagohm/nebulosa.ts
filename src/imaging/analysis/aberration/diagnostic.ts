@@ -1,6 +1,6 @@
 import { PI, PIOVERTWO } from '../../../core/constants'
 import { clamp } from '../../../math/numerical/math'
-import type { FocusCurvatureAnalysis, FocusPlaneAnalysis, FocusSurfaceFitResult } from '../../../math/numerical/surface.fit'
+import type { FocusCurvatureAnalysis, FocusPlaneAnalysis, FocusSurfaceFitResult, FocusSurfaceModel, FocusSurfaceSample } from '../../../math/numerical/surface.fit'
 import type { Angle } from '../../../math/units/angle'
 import type { FocusFieldOffset } from './physical'
 import type { AberrationFinding, AberrationInspectionQuality, AberrationLimitationCode, AberrationRegionResult, AberrationStar } from './types'
@@ -19,6 +19,14 @@ const DIRECTIONAL_ALIGNMENT = 0.65
 const FIELD_DEGRADATION_RATIO = 1.1
 // Minimum combined HFD coordinate correlation treated as a one-frame focus gradient.
 const FOCUS_GRADIENT_CORRELATION = 0.55
+// Two-sided unit-Gaussian 3σ tail, 2(1-Φ(3)), used as the Wald/F false-positive budget.
+const SIGNIFICANCE_ALPHA = 0.002699796063260207
+// Minimum residual degrees of freedom required before a finite Wald statistic is published.
+const MINIMUM_WALD_DEGREES_OF_FREEDOM = 4
+// Extra tail factor applied after robust sample rejection, which otherwise inflates Wald statistics.
+const REJECTED_SAMPLE_ALPHA_FACTOR = 10
+// Lanczos g=7 coefficients for log Γ(z) after the reflection formula for z < 0.5.
+const LOG_GAMMA_LANCZOS = [0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059, 12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7] as const
 
 // Evaluates non-definitive optical patterns from selected profiles and regional support diagnostics.
 export function diagnoseSingleFrameAberration(stars: readonly AberrationStar[], regions: readonly AberrationRegionResult[], quality: AberrationInspectionQuality): AberrationFinding[] {
@@ -88,55 +96,299 @@ export function diagnoseFocusScan(surface: FocusSurfaceFitResult | undefined, pl
 
 	const findings: AberrationFinding[] = []
 	const columns = surface.model === 'plane' ? 3 : surface.model === 'radialQuadratic' ? 4 : 6
-	const planeUncertainty = linearEffectUncertainty(surface.coefficients.ax, surface.coefficients.ay, surface.covariance, columns)
-	if (planeUncertainty !== undefined && plane.effect > 3 * planeUncertainty) {
-		const significance = plane.effect / Math.max(planeUncertainty, Number.EPSILON)
-		findings.push({
-			kind: 'sensorTiltPattern',
-			likelihood: clamp((significance - 3) / 7, 0, 1),
-			confidence: surface.confidence,
-			evidence: [
-				{ code: 'planeEffect', value: plane.effect, reference: 3 * planeUncertainty, confidence: surface.confidence },
-				{ code: 'planeSignificance', value: significance, reference: 3, confidence: surface.confidence },
-			],
-			limitations: ['missingPhysicalScale'],
-		})
+	const degreesOfFreedom = surface.degreesOfFreedom
+	const covariance = retainedCovariance(surface, columns)
+	if (!(degreesOfFreedom > 0) || covariance === undefined || covariance.length !== columns * columns) {
+		return [{ kind: 'inconclusive', likelihood: 1, confidence: surface.confidence, evidence: [{ code: 'surfaceConditionNumber', value: surface.conditionNumber, confidence: surface.confidence }], limitations: ['modelUncertaintyUnavailable'] }]
 	}
 
-	const curvatureUncertainty = quadraticEffectUncertainty(surface, columns)
-	if (curvatureUncertainty !== undefined && curvature.effect > 3 * curvatureUncertainty) {
-		const significance = curvature.effect / Math.max(curvatureUncertainty, Number.EPSILON)
-		findings.push({ kind: 'fieldCurvature', likelihood: clamp((significance - 3) / 7, 0, 1), confidence: surface.confidence, evidence: [{ code: 'curvatureEffect', value: curvature.effect, reference: 3 * curvatureUncertainty, confidence: surface.confidence }], limitations: [] })
-		if ((curvature.anisotropy ?? 0) >= 0.2)
-			findings.push({ kind: 'astigmaticCurvature', likelihood: clamp(curvature.anisotropy ?? 0, 0, 1), confidence: surface.confidence, evidence: [{ code: 'curvatureAnisotropy', value: curvature.anisotropy ?? 0, reference: 0.2, confidence: surface.confidence }], limitations: [] })
+	const rejectedCount = surface.rejectedIndices.length
+	const tiltWald = coefficientWald([surface.coefficients.ax, surface.coefficients.ay], covariance, [1, 2], columns)
+	if (tiltWald !== undefined) {
+		const pValue = fTailProbability(tiltWald, 2, degreesOfFreedom)
+		if (significantWald(pValue, degreesOfFreedom, rejectedCount)) {
+			findings.push({
+				kind: 'sensorTiltPattern',
+				likelihood: significanceLikelihood(pValue),
+				confidence: surface.confidence,
+				evidence: [
+					{ code: 'planeEffect', value: plane.effect, confidence: surface.confidence },
+					{ code: 'planePValue', value: pValue, reference: SIGNIFICANCE_ALPHA, confidence: surface.confidence },
+				],
+				limitations: ['missingPhysicalScale'],
+			})
+		}
 	}
 
-	if (backfocusCalibrated && fieldOffset !== undefined && curvatureUncertainty !== undefined && Math.abs(fieldOffset.centerToEdge) > 3 * curvatureUncertainty) {
-		findings.push({
-			kind: 'backfocusMismatch',
-			likelihood: clamp(Math.abs(fieldOffset.centerToEdge) / Math.max(curvature.effect, Number.EPSILON), 0, 1),
-			confidence: Math.min(surface.confidence, fieldOffset.confidence),
-			evidence: [{ code: 'centerToEdgeFocus', value: fieldOffset.centerToEdge, reference: 3 * curvatureUncertainty, confidence: fieldOffset.confidence }],
-			limitations: [],
-		})
+	const curvatureParameters = surface.model === 'radialQuadratic' ? 1 : surface.model === 'quadratic' ? 3 : 0
+	const curvatureWald = curvatureParameters === 1 ? coefficientWald([surface.coefficients.qxx], covariance, [3], columns) : curvatureParameters === 3 ? coefficientWald([surface.coefficients.qxx, surface.coefficients.qxy, surface.coefficients.qyy], covariance, [3, 4, 5], columns) : undefined
+	if (curvatureWald !== undefined) {
+		const pValue = fTailProbability(curvatureWald, curvatureParameters, degreesOfFreedom)
+		if (significantWald(pValue, degreesOfFreedom, rejectedCount)) {
+			findings.push({
+				kind: 'fieldCurvature',
+				likelihood: significanceLikelihood(pValue),
+				confidence: surface.confidence,
+				evidence: [
+					{ code: 'curvatureEffect', value: curvature.effect, confidence: surface.confidence },
+					{ code: 'curvaturePValue', value: pValue, reference: SIGNIFICANCE_ALPHA, confidence: surface.confidence },
+				],
+				limitations: [],
+			})
+			if ((curvature.anisotropy ?? 0) >= 0.2)
+				findings.push({ kind: 'astigmaticCurvature', likelihood: clamp(curvature.anisotropy ?? 0, 0, 1), confidence: surface.confidence, evidence: [{ code: 'curvatureAnisotropy', value: curvature.anisotropy ?? 0, reference: 0.2, confidence: surface.confidence }], limitations: [] })
+		}
+	}
+
+	if (backfocusCalibrated && fieldOffset !== undefined) {
+		const curvatureUncertainty = quadraticEffectUncertainty(surface, covariance, columns)
+		if (curvatureUncertainty !== undefined) {
+			const offset = Math.abs(fieldOffset.centerToEdge)
+			const wald = curvatureUncertainty > 0 ? (offset * offset) / (curvatureUncertainty * curvatureUncertainty) : offset === 0 ? 0 : Number.POSITIVE_INFINITY
+			const pValue = fTailProbability(wald, 1, degreesOfFreedom)
+			if (significantWald(pValue, degreesOfFreedom, rejectedCount)) {
+				findings.push({
+					kind: 'backfocusMismatch',
+					likelihood: clamp(offset / Math.max(curvature.effect, Number.EPSILON), 0, 1),
+					confidence: Math.min(surface.confidence, fieldOffset.confidence),
+					evidence: [
+						{ code: 'centerToEdgeFocus', value: fieldOffset.centerToEdge, confidence: fieldOffset.confidence },
+						{ code: 'backfocusPValue', value: pValue, reference: SIGNIFICANCE_ALPHA, confidence: fieldOffset.confidence },
+					],
+					limitations: [],
+				})
+			}
+		}
 	}
 
 	return findings.length > 0 ? findings : [{ kind: 'inconclusive', likelihood: 1, confidence: surface.confidence, evidence: [{ code: 'surfaceConditionNumber', value: surface.conditionNumber, confidence: surface.confidence }], limitations: [] }]
 }
 
-// Propagates the covariance of ax and ay to abs(ax) + abs(ay).
-function linearEffectUncertainty(ax: number, ay: number, covariance: Float64Array, columns: number): number | undefined {
-	if (covariance.length !== columns * columns) return undefined
-	const signX = ax < 0 ? -1 : 1
-	const signY = ay < 0 ? -1 : 1
-	const variance = covariance[columns + 1] + covariance[2 * columns + 2] + 2 * signX * signY * covariance[columns + 2]
-	return variance >= 0 && Number.isFinite(variance) ? Math.sqrt(variance) : undefined
+// Whether a Wald/F p-value may be published, requiring residual df and a tighter tail after robust rejection.
+function significantWald(pValue: number, degreesOfFreedom: number, rejectedCount: number): boolean {
+	if (!(pValue < SIGNIFICANCE_ALPHA)) return false
+	if (pValue === 0) return true
+	if (!(degreesOfFreedom >= MINIMUM_WALD_DEGREES_OF_FREEDOM)) return false
+	return rejectedCount > 0 ? pValue < SIGNIFICANCE_ALPHA / REJECTED_SAMPLE_ALPHA_FACTOR : true
+}
+
+// Maps a significant Wald/F p-value onto 0..1, reaching 1 at a 100× smaller tail than the 3σ budget.
+function significanceLikelihood(pValue: number): number {
+	if (!(pValue > 0)) return 1
+	return clamp(Math.log(SIGNIFICANCE_ALPHA / pValue) / Math.log(100), 0, 1)
+}
+
+// Survival function of p * F_{p, ν} evaluated at a Wald statistic, returning 1 when the test is undefined.
+function fTailProbability(wald: number, parameters: number, degreesOfFreedom: number): number {
+	if (wald === Number.POSITIVE_INFINITY && parameters > 0 && degreesOfFreedom > 0) return 0
+	if (!(wald >= 0) || !(parameters > 0) || !(degreesOfFreedom > 0) || !Number.isFinite(wald) || !Number.isFinite(parameters) || !Number.isFinite(degreesOfFreedom)) return 1
+	if (wald === 0) return 1
+	const x = degreesOfFreedom / (degreesOfFreedom + wald)
+	if (parameters === 2) {
+		const pValue = Math.exp((degreesOfFreedom / 2) * -Math.log1p(wald / degreesOfFreedom))
+		return Number.isFinite(pValue) ? clamp(pValue, 0, 1) : 0
+	}
+	const pValue = regularizedIncompleteBeta(x, degreesOfFreedom / 2, parameters / 2)
+	return Number.isFinite(pValue) ? clamp(pValue, 0, 1) : 1
+}
+
+// Regularized incomplete beta I_x(a, b) via the continued-fraction representation and log Γ.
+function regularizedIncompleteBeta(x: number, a: number, b: number): number {
+	if (!Number.isFinite(x) || !(a > 0) || !(b > 0)) return Number.NaN
+	if (!(x > 0)) return 0
+	if (!(x < 1)) return 1
+	const logBeta = logGamma(a) + logGamma(b) - logGamma(a + b)
+	const front = Math.exp(a * Math.log(x) + b * Math.log(1 - x) - logBeta)
+	if (!Number.isFinite(front)) return x < (a + 1) / (a + b + 2) ? 0 : 1
+	if (x < (a + 1) / (a + b + 2)) return (front * betaContinuedFraction(x, a, b)) / a
+	return 1 - (Math.exp(b * Math.log(1 - x) + a * Math.log(x) - logBeta) * betaContinuedFraction(1 - x, b, a)) / b
+}
+
+// Lentz continued fraction for the incomplete-beta series, converging for x in (0, 1) and a, b > 0.
+function betaContinuedFraction(x: number, a: number, b: number): number {
+	const qab = a + b
+	const qap = a + 1
+	const qam = a - 1
+	let c = 1
+	let d = 1 - (qab * x) / qap
+	if (Math.abs(d) < Number.MIN_VALUE) d = Number.MIN_VALUE
+	d = 1 / d
+	let h = d
+	for (let m = 1; m <= 200; m++) {
+		const m2 = 2 * m
+		let aa = (m * (b - m) * x) / ((qam + m2) * (a + m2))
+		d = 1 + aa * d
+		if (Math.abs(d) < Number.MIN_VALUE) d = Number.MIN_VALUE
+		c = 1 + aa / c
+		if (Math.abs(c) < Number.MIN_VALUE) c = Number.MIN_VALUE
+		d = 1 / d
+		h *= d * c
+		aa = (-(a + m) * (qab + m) * x) / ((a + m2) * (qap + m2))
+		d = 1 + aa * d
+		if (Math.abs(d) < Number.MIN_VALUE) d = Number.MIN_VALUE
+		c = 1 + aa / c
+		if (Math.abs(c) < Number.MIN_VALUE) c = Number.MIN_VALUE
+		d = 1 / d
+		const delta = d * c
+		h *= delta
+		if (Math.abs(delta - 1) < 1e-14) break
+	}
+	return h
+}
+
+// Lanczos log Γ(z) for z > 0, using the reflection formula below 0.5.
+function logGamma(z: number): number {
+	if (!(z > 0) || !Number.isFinite(z)) return Number.NaN
+	if (z < 0.5) return Math.log(PI / Math.sin(PI * z)) - logGamma(1 - z)
+	z -= 1
+	let x = LOG_GAMMA_LANCZOS[0]
+	for (let i = 1; i < LOG_GAMMA_LANCZOS.length; i++) x += LOG_GAMMA_LANCZOS[i] / (z + i)
+	const t = z + 7.5
+	return 0.5 * Math.log(2 * PI) + (z + 0.5) * Math.log(t) - t + Math.log(x)
+}
+
+// Wald statistic v' Σ^{-1} v for a coefficient block, or infinity when a zero covariance meets a non-zero estimate.
+function coefficientWald(values: readonly number[], covariance: Float64Array, indices: readonly number[], columns: number): number | undefined {
+	if (covariance.length !== columns * columns || values.length !== indices.length) return undefined
+	const n = indices.length
+	if (n === 1) {
+		const variance = covariance[indices[0] * columns + indices[0]]
+		if (!Number.isFinite(variance) || variance < 0) return undefined
+		if (!(variance > 0)) return zeroSubmatrixWald(values)
+		const wald = (values[0] * values[0]) / variance
+		return Number.isFinite(wald) ? wald : undefined
+	}
+	if (n === 2) {
+		const i = indices[0]
+		const j = indices[1]
+		const s11 = covariance[i * columns + i]
+		const s12 = covariance[i * columns + j]
+		const s22 = covariance[j * columns + j]
+		if (!Number.isFinite(s11) || !Number.isFinite(s12) || !Number.isFinite(s22)) return undefined
+		const det = s11 * s22 - s12 * s12
+		if (!(s11 > 0) || !(det > 0)) return s11 === 0 && s12 === 0 && s22 === 0 ? zeroSubmatrixWald(values) : undefined
+		const wald = (s22 * values[0] * values[0] - 2 * s12 * values[0] * values[1] + s11 * values[1] * values[1]) / det
+		return wald >= 0 && Number.isFinite(wald) ? wald : undefined
+	}
+	if (n !== 3) return undefined
+	const i0 = indices[0]
+	const i1 = indices[1]
+	const i2 = indices[2]
+	const a00 = covariance[i0 * columns + i0]
+	const a01 = covariance[i0 * columns + i1]
+	const a02 = covariance[i0 * columns + i2]
+	const a11 = covariance[i1 * columns + i1]
+	const a12 = covariance[i1 * columns + i2]
+	const a22 = covariance[i2 * columns + i2]
+	if (!Number.isFinite(a00) || !Number.isFinite(a01) || !Number.isFinite(a02) || !Number.isFinite(a11) || !Number.isFinite(a12) || !Number.isFinite(a22)) return undefined
+	const minor = a00 * a11 - a01 * a01
+	const det = a00 * (a11 * a22 - a12 * a12) - a01 * (a01 * a22 - a02 * a12) + a02 * (a01 * a12 - a02 * a11)
+	if (!(a00 > 0) || !(minor > 0) || !(det > 0)) return a00 === 0 && a01 === 0 && a02 === 0 && a11 === 0 && a12 === 0 && a22 === 0 ? zeroSubmatrixWald(values) : undefined
+	const c00 = a11 * a22 - a12 * a12
+	const c01 = a02 * a12 - a01 * a22
+	const c02 = a01 * a12 - a02 * a11
+	const c11 = a00 * a22 - a02 * a02
+	const c12 = a02 * a01 - a00 * a12
+	const c22 = a00 * a11 - a01 * a01
+	const y0 = c00 * values[0] + c01 * values[1] + c02 * values[2]
+	const y1 = c01 * values[0] + c11 * values[1] + c12 * values[2]
+	const y2 = c02 * values[0] + c12 * values[1] + c22 * values[2]
+	const wald = (values[0] * y0 + values[1] * y1 + values[2] * y2) / det
+	return wald >= 0 && Number.isFinite(wald) ? wald : undefined
+}
+
+// Infinite significance when a non-zero coefficient block has a numerically zero covariance, otherwise 0.
+function zeroSubmatrixWald(values: readonly number[]): number {
+	let maxAbs = 0
+	for (let i = 0; i < values.length; i++) maxAbs = Math.max(maxAbs, Math.abs(values[i]))
+	// Roundoff-sized coefficients on an exact interpolant are not a physical signal.
+	return maxAbs > 1e-8 * Math.max(1, maxAbs) ? Number.POSITIVE_INFINITY : 0
+}
+
+// OLS covariance on robustly retained samples using caller weights, not fractional IRLS weights.
+function retainedCovariance(surface: FocusSurfaceFitResult & { readonly success: true }, columns: number): Float64Array | undefined {
+	if (!(surface.degreesOfFreedom > 0)) return undefined
+	const normal = new Float64Array(columns * columns)
+	let weightedSse = 0
+	for (let row = 0; row < surface.samples.length; row++) {
+		if (!surface.used[row]) continue
+		const sample = surface.samples[row]
+		const weight = retainedSampleWeight(sample)
+		const residual = surface.residuals[row]
+		weightedSse += weight * residual * residual
+		const design = retainedDesignRow(sample.u, sample.v, surface.model)
+		for (let i = 0; i < columns; i++) {
+			const left = design[i] * weight
+			for (let j = 0; j < columns; j++) normal[i * columns + j] += left * design[j]
+		}
+	}
+	const inverse = invertSquareMatrix(normal, columns)
+	if (inverse === undefined) return undefined
+	const variance = weightedSse / surface.degreesOfFreedom
+	if (!Number.isFinite(variance) || variance < 0) return undefined
+	for (let i = 0; i < inverse.length; i++) inverse[i] *= variance
+	return inverse
+}
+
+// Caller statistical weight used to retain a sample after robust rejection.
+function retainedSampleWeight(sample: FocusSurfaceSample): number {
+	return sample.weight ?? (sample.uncertainty === undefined ? 1 : 1 / (sample.uncertainty * sample.uncertainty))
+}
+
+// Design row matching the focus-surface model column order used by the published covariance.
+function retainedDesignRow(u: number, v: number, model: FocusSurfaceModel): Float64Array {
+	return model === 'plane' ? new Float64Array([1, u, v]) : model === 'radialQuadratic' ? new Float64Array([1, u, v, u * u + v * v]) : new Float64Array([1, u, v, u * u, u * v, v * v])
+}
+
+// Inverts a small dense square matrix by partial-pivot Gauss-Jordan elimination.
+function invertSquareMatrix(source: Readonly<Float64Array>, size: number): Float64Array | undefined {
+	const width = size * 2
+	const augmented = new Float64Array(size * width)
+	for (let row = 0; row < size; row++) {
+		for (let column = 0; column < size; column++) augmented[row * width + column] = source[row * size + column]
+		augmented[row * width + size + row] = 1
+	}
+
+	for (let column = 0; column < size; column++) {
+		let pivot = column
+		let maximum = Math.abs(augmented[pivot * width + column])
+		for (let row = column + 1; row < size; row++) {
+			const candidate = Math.abs(augmented[row * width + column])
+			if (candidate > maximum) {
+				maximum = candidate
+				pivot = row
+			}
+		}
+		if (!(maximum > Number.EPSILON) || !Number.isFinite(maximum)) return undefined
+
+		if (pivot !== column) {
+			for (let index = 0; index < width; index++) {
+				const temporary = augmented[column * width + index]
+				augmented[column * width + index] = augmented[pivot * width + index]
+				augmented[pivot * width + index] = temporary
+			}
+		}
+
+		const divisor = augmented[column * width + column]
+		for (let index = 0; index < width; index++) augmented[column * width + index] /= divisor
+		for (let row = 0; row < size; row++) {
+			if (row === column) continue
+			const factor = augmented[row * width + column]
+			if (factor === 0) continue
+			for (let index = 0; index < width; index++) augmented[row * width + index] -= factor * augmented[column * width + index]
+		}
+	}
+
+	const inverse = new Float64Array(size * size)
+	for (let row = 0; row < size; row++) {
+		for (let column = 0; column < size; column++) inverse[row * size + column] = augmented[row * width + size + column]
+	}
+	return inverse
 }
 
 // Estimates a conservative curvature-effect uncertainty from quadratic coefficient covariance.
-function quadraticEffectUncertainty(surface: FocusSurfaceFitResult & { readonly success: true }, columns: number): number | undefined {
-	const covariance = surface.covariance
-	if (covariance === undefined || covariance.length !== columns * columns || surface.model === 'plane') return undefined
+function quadraticEffectUncertainty(surface: FocusSurfaceFitResult & { readonly success: true }, covariance: Float64Array, columns: number): number | undefined {
+	if (covariance.length !== columns * columns || surface.model === 'plane') return undefined
 	if (surface.model === 'radialQuadratic') {
 		const variance = covariance[3 * columns + 3]
 		return variance >= 0 && Number.isFinite(variance) ? 0.5 * Math.sqrt(variance) : undefined

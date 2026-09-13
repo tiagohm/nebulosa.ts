@@ -52,6 +52,11 @@ describe.skipIf(SKIP)('search', () => {
 			expect(data.orbit.elements[0].sigma).not.toBeEmpty()
 			expect(data.orbit.elements[0].units).toBeNull()
 			expect(data.orbit.elements[0].name).toBe('e')
+			const elementNames = data.orbit.elements.map((element) => element.name)
+			expect(elementNames).toContain('tp_cd')
+			expect(elementNames).toContain('ad')
+			expect(elementNames).not.toContain('cd_tp')
+			expect(elementNames).not.toContain('a_D')
 			expect(data.phys_par).toHaveLength(2)
 			expect(data.phys_par[0].desc).toBe('absolute magnitude of comet and coma (i.e. total)')
 			expect(data.phys_par[0].value).toBe('8.5')
@@ -71,6 +76,18 @@ describe.skipIf(SKIP)('search', () => {
 			expect(data.list.length).toBeGreaterThanOrEqual(319)
 			expect(data.list[0].pdes).toBe('253P')
 			expect(data.list[0].name).toBe('253P/PANSTARRS')
+			expect(data.message).toBe('specified query matched more than one object')
+		}
+	})
+
+	test('alternate designations', async () => {
+		const data = await search('Eros')
+		expect('object' in data).toBeTrue()
+
+		if ('object' in data) {
+			expect(data.object.prefix).toBeNull()
+			expect(data.object.des_alt[0].des).toBe('1956 PC')
+			expect(data.object.des_alt[1].pri).toBe('A898 PA')
 		}
 	})
 
@@ -123,3 +140,49 @@ describe.skipIf(SKIP)('close approaches', () => {
 		// expect(response.data.map((e) => e[0])).toContainValues(asteroids)
 	})
 })
+
+test('relative close-approach end date starts at the requested minimum', async () => {
+	const from = temporalFromDate(2024, 3, 13)
+	const request = await captureCloseApproachRequest(() => closeApproaches(from, '7d'))
+
+	expect(request.searchParams.get('date-min')).toBe('2024-03-13')
+	expect(request.searchParams.get('date-max')).toBe('2024-03-20')
+})
+
+test('preserves the Unix epoch as the close-approach minimum', async () => {
+	const request = await captureCloseApproachRequest(() => closeApproaches(temporalFromDate(1970, 1, 1), temporalFromDate(1970, 1, 2)))
+
+	expect(request.searchParams.get('date-min')).toBe('1970-01-01')
+})
+
+test('normalizes an empty close-approach response', async () => {
+	const restore = globalThis.fetch
+	globalThis.fetch = ((_input) => Promise.resolve(new Response('{"signature":{"version":"test","source":"test"},"count":0}'))) as typeof fetch
+
+	try {
+		const response = await closeApproaches(temporalFromDate(2024, 3, 13), temporalFromDate(2024, 3, 13))
+		expect(response.count).toBe(0)
+		expect(response.fields).toEqual([])
+		expect(response.data).toEqual([])
+	} finally {
+		globalThis.fetch = restore
+	}
+})
+
+async function captureCloseApproachRequest(callback: () => Promise<unknown>) {
+	const restore = globalThis.fetch
+	let request = ''
+
+	globalThis.fetch = ((input) => {
+		request = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+		return Promise.resolve(new Response('{"signature":{"version":"test","source":"test"},"count":0}'))
+	}) as typeof fetch
+
+	try {
+		await callback()
+	} finally {
+		globalThis.fetch = restore
+	}
+
+	return new URL(request)
+}

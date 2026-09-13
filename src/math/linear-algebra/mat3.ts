@@ -1,3 +1,4 @@
+import { PI } from '../../core/constants'
 import type { Angle } from '../units/angle'
 import { type MutVec3, type Vec3, vecFill } from './vec3'
 
@@ -300,12 +301,16 @@ export function matRodriguesRotation(axis: Vec3, angle: Angle, o?: MutMat3): Mut
 	return [a, b, c, d, e, f, g, h, i]
 }
 
-// Expresses an matrix as a vector.
+// Expresses a rotation matrix as an r-vector.
 // A rotation matrix describes a rotation through some angle about
 // some arbitrary axis called the Euler axis. The "rotation vector"
 // returned by this function has the same direction as the Euler axis,
-// and its magnitude is the angle in radians. (The magnitude and
-// direction can be separated by means of modulus and unit vector functions.)
+// and its magnitude is the angle in radians in [0, π]. Identity maps to
+// the zero vector. At angle π the antisymmetric part of R vanishes; the
+// axis is recovered from R + I = 2 ûûᵀ, choosing the sign so the largest
+// component of û is non-negative. ±π û represent the same rotation.
+// When `out` is supplied the result is written into it and returned;
+// otherwise a new vector is allocated.
 export function matToVec3(m: Mat3, out?: MutVec3): MutVec3 {
 	const x = m[5] - m[7]
 	const y = m[6] - m[2]
@@ -319,11 +324,40 @@ export function matToVec3(m: Mat3, out?: MutVec3): MutVec3 {
 		const f = phi / s2
 		if (out) return vecFill(out, x * f, y * f, z * f)
 		return [x * f, y * f, z * f]
-	} else if (out) {
-		return vecFill(out, 0, 0, 0)
-	} else {
+	}
+
+	// s2 = 0: identity (trace = 3) or a 180° rotation (trace = −1).
+	if (m[0] + m[4] + m[8] > 0) {
+		if (out) return vecFill(out, 0, 0, 0)
 		return [0, 0, 0]
 	}
+
+	const xx = m[0] + 1
+	const yy = m[4] + 1
+	const zz = m[8] + 1
+	let ax: number
+	let ay: number
+	let az: number
+
+	if (xx >= yy && xx >= zz) {
+		ax = Math.sqrt(xx * 0.5)
+		const inv = 0.5 / ax
+		ay = m[1] * inv
+		az = m[2] * inv
+	} else if (yy >= zz) {
+		ay = Math.sqrt(yy * 0.5)
+		const inv = 0.5 / ay
+		ax = m[1] * inv
+		az = m[5] * inv
+	} else {
+		az = Math.sqrt(zz * 0.5)
+		const inv = 0.5 / az
+		ax = m[2] * inv
+		ay = m[5] * inv
+	}
+
+	if (out) return vecFill(out, ax * PI, ay * PI, az * PI)
+	return [ax * PI, ay * PI, az * PI]
 }
 
 // Forms the r-matrix corresponding to a given r-vector.

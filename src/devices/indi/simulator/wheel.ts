@@ -28,7 +28,7 @@ export class WheelSimulator extends DeviceSimulator {
 		readonly options?: DeviceSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.FILTER)
+		super(name, client, handler, DeviceInterfaceType.FILTER, 'filterwheel.simulator')
 
 		for (const property of this.properties) {
 			property.device = name
@@ -89,7 +89,15 @@ export class WheelSimulator extends DeviceSimulator {
 
 		slot = clamp(Math.round(slot), this.#position.elements.FILTER_SLOT_VALUE.min, this.#position.elements.FILTER_SLOT_VALUE.max)
 		const current = this.#position.elements.FILTER_SLOT_VALUE.value
-		if (slot === current) return
+		if (slot === current) {
+			if (this.#moveTimer) {
+				clearTimeout(this.#moveTimer)
+				this.#moveTimer = undefined
+				this.#position.state = 'Idle'
+				this.notify(this.#position)
+			}
+			return
+		}
 
 		if (this.#moveTimer) {
 			clearTimeout(this.#moveTimer)

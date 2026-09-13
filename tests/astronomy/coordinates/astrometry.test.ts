@@ -2,9 +2,9 @@ import { expect, test } from 'bun:test'
 // oxfmt-ignore
 import { cirsToIcrs, cirsToObserved, distance, equatorial, icrsToCirs, icrsToObserved, lightTime, observedToCirs, parallacticAngle, phaseAngle, type PositionAndVelocity, refractedAltitude, relativePositionAndVelocity, separationFrom, topocentricDirection, unrefractedAltitude } from '../../../src/astronomy/coordinates/astrometry'
 import { eraEpv00 } from '../../../src/astronomy/coordinates/erfa/earth'
-import { eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
+import { eraEors, eraPnm06a, eraS06, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
-import { tdb, Timescale, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { tdb, Timescale, timeShift, timeYMDHMS, tt } from '../../../src/astronomy/time/time'
 import { PIOVERTWO } from '../../../src/core/constants'
 import { deg, toArcsec, toDeg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
@@ -92,8 +92,11 @@ test('refracted altitude stays finite and lifts the object at low altitude', () 
 	expect(toArcsec(refractedAltitude(deg(2)) - deg(2))).toBeGreaterThan(500)
 })
 
-test('no refraction model below the horizon', () => {
-	expect(refractedAltitude(deg(-1))).toBe(deg(-1))
+test('refracted altitude lifts a geometrically below-horizon object', () => {
+	const trueAltitude = deg(-1)
+	const apparent = refractedAltitude(trueAltitude)
+	expect(apparent).toBeGreaterThan(trueAltitude)
+	expect(Number.isFinite(apparent)).toBe(true)
 })
 
 test('zero pressure disables atmospheric refraction', () => {
@@ -175,7 +178,12 @@ test('observed and CIRS transforms round-trip without refraction', () => {
 
 	expect(roundTrip[0]).toBeCloseTo(cirs[0], 11)
 	expect(roundTrip[1]).toBeCloseTo(cirs[1], 11)
-	expect(observed.equationOfOrigins).toBeFinite()
+
+	const a = tt(time)
+	const rnpb = eraPnm06a(a.day, a.fraction)
+	const eo = eraEors(rnpb, eraS06(a.day, a.fraction, rnpb[6], rnpb[7]))
+	expect(observed.equationOfOrigins).not.toBe(0)
+	expect(observed.equationOfOrigins).toBeCloseTo(eo, 12)
 })
 
 test('ICRS to observed matches the explicit ICRS to CIRS to observed pipeline', () => {
@@ -192,6 +200,7 @@ test('ICRS to observed matches the explicit ICRS to CIRS to observed pipeline', 
 	expect(direct.altitude).toBeCloseTo(viaCirs.altitude, 9)
 	expect(direct.rightAscension).toBeCloseTo(viaCirs.rightAscension, 9)
 	expect(direct.declination).toBeCloseTo(viaCirs.declination, 9)
+	expect(direct.equationOfOrigins).toBeCloseTo(viaCirs.equationOfOrigins, 12)
 })
 
 test('unrefractedAltitude inverts refractedAltitude', () => {
@@ -205,6 +214,11 @@ test('unrefractedAltitude inverts refractedAltitude', () => {
 	}
 })
 
-test('unrefractedAltitude leaves below-horizon altitudes unchanged', () => {
-	expect(unrefractedAltitude(deg(-1))).toBe(deg(-1))
+test('unrefractedAltitude inverts near-horizon apparent altitudes', () => {
+	for (const apparentDeg of [0.01, 0.05, 0.1]) {
+		const apparent = deg(apparentDeg)
+		const trueAltitude = unrefractedAltitude(apparent)
+		expect(trueAltitude).toBeLessThan(0)
+		expect(Math.abs(toArcsec(refractedAltitude(trueAltitude) - apparent))).toBeLessThan(1)
+	}
 })

@@ -108,9 +108,13 @@ test('frame convenience wrappers delegate to their matching frames', () => {
 	] as const
 
 	for (const { wrapper, frame } of timeDependentCases) {
-		const direct = wrapper(XYZ)
-		const generic = frameAt(XYZ, frame, NO_TIME)
+		const direct = wrapper(XYZ, TIME)
+		const generic = frameAt(XYZ, frame, TIME)
 		for (let i = 0; i < 3; i++) expect(direct[i]).toBeCloseTo(generic[i], 15)
+
+		const atJd0 = frameAt(XYZ, frame, NO_TIME)
+		const separation = Math.abs(direct[0] - atJd0[0]) + Math.abs(direct[1] - atJd0[1]) + Math.abs(direct[2] - atJd0[2])
+		expect(separation).toBeGreaterThan(1e-3)
 	}
 })
 
@@ -352,6 +356,39 @@ test('ITRS_INSTANTANEOUS matches ITRS closely but uses the exact drift term', ()
 	for (let i = 0; i < 3; i++) {
 		expect(back[0][i]).toBeCloseTo(state[0][i], 12)
 		expect(back[1][i]).toBeCloseTo(state[1][i], 12)
+	}
+})
+
+test('TIRS applies the earth-rotation velocity term', () => {
+	// TIRS is Earth-fixed apart from polar motion, so a crust-fixed ITRS rest
+	// state must have near-zero TIRS velocity (only polar-motion rate remains).
+	const itrsRest: PositionAndVelocity = [
+		[1, 0, 0],
+		[0, 0, 0],
+	]
+	const gcrs = frameToFrame(itrsRest, ITRS, ICRS, TIME)
+	const tirsFromItrs = frameToFrame(gcrs, ICRS, TIRS, TIME)
+	// Without W the TIRS speed would be ~ω|r|; polar-motion residual is ~1e-6 relative.
+	expect(Math.hypot(...tirsFromItrs[1])).toBeLessThan(1e-3 * ANGVEL_PER_DAY)
+
+	// A GCRS rest state in TIRS is the rotating-frame drag W · p.
+	const gcrsRest: PositionAndVelocity = [
+		[1, 0, 0],
+		[0, 0, 0],
+	]
+	const tirsFromGcrs = frameAt(gcrsRest, TIRS, TIME)
+	expect(tirsFromGcrs[1][0]).toBeCloseTo(ANGVEL_PER_DAY * tirsFromGcrs[0][1], 12)
+	expect(tirsFromGcrs[1][1]).toBeCloseTo(-ANGVEL_PER_DAY * tirsFromGcrs[0][0], 12)
+	expect(tirsFromGcrs[1][2]).toBeCloseTo(0, 12)
+
+	const pv: PositionAndVelocity = [
+		[0.4, -0.6, 0.3],
+		[1e-4, 2e-4, -3e-4],
+	]
+	const back = frameToFrame(frameToFrame(pv, ICRS, TIRS, TIME), TIRS, ICRS, TIME)
+	for (let i = 0; i < 3; i++) {
+		expect(back[0][i]).toBeCloseTo(pv[0][i], 12)
+		expect(back[1][i]).toBeCloseTo(pv[1][i], 12)
 	}
 })
 

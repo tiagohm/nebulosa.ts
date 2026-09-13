@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { crescentWidth, lunarSaros, lunation, moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase, nearestLunarStandstill, nearestMaxDeclination, nearestMeanLunarApsis, nearestLunarNode, moonMeanAscendingNode, moonTopocentricSemidiameter, moonTopocentricSemidiameterApprox } from '../../../src/astronomy/bodies/moon'
 import { Julian, MoonPosition } from '../../../src/astronomy/ephemeris/meeus'
 import { type Time, time, timeToDate, timeYMD, timeYMDHMS, timeShift, Timescale, toJulianDay, utc } from '../../../src/astronomy/time/time'
-import { PI } from '../../../src/core/constants'
+import { MOON_SYNODIC_DAYS, PI } from '../../../src/core/constants'
 import { deg, normalizeAngle, toArcsec, toDeg } from '../../../src/math/units/angle'
 import { kilometer, toKilometer } from '../../../src/math/units/distance'
 
@@ -42,6 +42,19 @@ test('saros', () => {
 	expect(lunarSaros(timeYMD(2016, 9, 16))).toBe(147)
 	expect(lunarSaros(timeYMD(2031, 10, 30))).toBe(117)
 	expect(lunarSaros(time(2276890.5))).toBe(138)
+	// LN = -52: JS remainder of 192+38*LN-1 is -1, which must wrap to series 223, not 0.
+	expect(lunarSaros(nearestLunarPhase(timeYMDHMS(1998, 11, 1), 'FULL', true))).toBe(223)
+	expect(lunarSaros(timeYMD(1998, 11, 4))).toBe(223)
+	expect(lunarSaros(timeYMD(1980, 11, 1))).toBe(223)
+	expect(lunarSaros(timeYMD(1908, 9, 1))).toBe(223)
+
+	const full1998 = nearestLunarPhase(timeYMDHMS(1998, 11, 1), 'FULL', true)
+	for (let n = 0; n < 6; n++) {
+		const series = lunarSaros(timeShift(full1998, -n * 223 * MOON_SYNODIC_DAYS))
+		expect(series).toBeGreaterThanOrEqual(1)
+		expect(series).toBeLessThanOrEqual(223)
+		expect(series).toBe(223)
+	}
 })
 
 describe('nearest lunar phase', () => {
@@ -49,6 +62,12 @@ describe('nearest lunar phase', () => {
 	test('new moon', () => {
 		const time = nearestLunarPhase(timeYMDHMS(1977, 2, 15), 'NEW', true)
 		expect(timeToDate(utc(time)).slice(0, 5)).toEqual([1977, 2, 18, 3, 36])
+	})
+
+	// Meeus, Astronomical Algorithms, example 49.a (TD = TT).
+	test('new moon Meeus example 49.a is 1977-02-18 3h37m42s TT', () => {
+		const time = nearestLunarPhase(timeYMDHMS(1977, 2, 15, 0, 0, 0, Timescale.TT), 'NEW', true)
+		expect(timeToDate(time).slice(0, 6)).toEqual([1977, 2, 18, 3, 37, 42])
 	})
 
 	// https://www.timeanddate.com/moon/phases/?year=2044
@@ -448,6 +467,15 @@ describe('Meeus lunar event examples', () => {
 		expect(toDeg(dec)).toBeCloseTo(-28.25989030189065, 9)
 	})
 
+	test('southern monthly maximum at k=139 follows Meeus table 52.B', () => {
+		// Meeus table 52.B at k=139 (2010-05-28 22:09 TT, -25.0288 deg). Reusing the northern
+		// periodic series with F shifted by 180 deg misses this extremum by ~0.05 d (~1.2 h).
+		const [t, dec] = nearestMaxDeclination(time(2455344, 0, Timescale.TT), 'SOUTH', true)
+		expect(toJulianDay(t)).toBeCloseTo(2455345.4235335686, 8)
+		expect(toDeg(dec)).toBeCloseTo(-25.028843843252513, 9)
+		expect(timeToDate(t).slice(0, 5)).toEqual([2010, 5, 28, 22, 9])
+	})
+
 	test('previous perigee is not skipped when the index estimate is too early', () => {
 		// Meeus chapter 50 series at k=-1288; independent legacy implementation before consolidation.
 		const jde = 2416042.578635584
@@ -514,6 +542,8 @@ describe('lunar event selection boundaries', () => {
 test('lunar phases retain the secular powers centuries from J2000', () => {
 	// PyMeeus 0.5.12, Moon.moon_phase(Epoch(year,1,1), target), TT. One-second tolerance.
 	const fixtures = [
+		// Year 0: |T| ~ 20, so a T vs T^2 swap in Meeus 49.1 shifts the epoch by ~1.5 h.
+		['NEW', 1721052.289317138],
 		['NEW', 2305462.7136972747],
 		['FIRST_QUARTER', 2305469.502773242],
 		['FULL', 2305476.7750151046],

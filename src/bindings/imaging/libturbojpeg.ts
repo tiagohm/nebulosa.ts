@@ -190,31 +190,34 @@ export class Jpeg {
 	}
 
 	// Compresses raw pixels to JPEG. `quality` is 1..100. When `jpeg` is omitted a worst-case buffer is
-	// allocated; if supplied it must be large enough (NOREALLOC is forced). GRAY input is encoded with
+	// allocated; a supplied buffer smaller than that bound returns undefined. GRAY input is encoded with
 	// grayscale subsampling regardless of `chrominanceSubsampling`. Returns a subarray view of the
 	// destination buffer trimmed to the encoded size, or undefined on failure. Throws if init fails.
 	compress(data: NodeJS.TypedArray | DataView, width: number, height: number, format: PixelFormat, quality: number, chrominanceSubsampling: ChrominanceSubsampling = '4:4:4', jpeg?: Buffer) {
+		if (format === 'GRAY') chrominanceSubsampling = 'GRAY'
+		const size = this.estimateBufferSize(width, height, chrominanceSubsampling)
+		// NOREALLOC assumes worst-case capacity and ignores the supplied size. Check before native
+		// compression to prevent writes past the JS-owned destination buffer.
+		if (jpeg && !(jpeg.byteLength >= size)) return undefined
+		jpeg ??= Buffer.allocUnsafe(size)
+
 		const pointer = this.#lib.tjInitCompress()
 
 		if (!pointer) {
 			throw new Error('failed to initialize JPEG compressor')
 		}
 
-		const isGray = format === 'GRAY'
 		const pitch = width * PIXEL_FORMAT_MAP[format][1]
 		// Always disable TurboJPEG (re)allocation: the destination is a JS-owned Buffer (whether
-		// caller-supplied or allocated here) that TurboJPEG must never realloc or free. A too-small
-		// buffer then fails gracefully (tjCompress2 returns an error) instead of corrupting the heap.
+		// caller-supplied or allocated here) that TurboJPEG must never realloc or free.
 		const flag = FASTDCT | NOREALLOC
-
-		jpeg ??= Buffer.allocUnsafe(this.estimateBufferSize(width, height, chrominanceSubsampling))
 
 		const p = new BigInt64Array(2)
 		p[0] = BigInt(ptr(jpeg)) // ubyte** jpegBuf
 		p[1] = BigInt(jpeg.byteLength) // ulong* jpegSize
 
 		try {
-			const result = this.#lib.tjCompress2(pointer, data, width, pitch, height, PIXEL_FORMAT_MAP[format][0], ptr(p, 0), ptr(p, 8), isGray ? 3 : CHROMINANCE_SUBSAMPLING_MAP[chrominanceSubsampling], quality, flag)
+			const result = this.#lib.tjCompress2(pointer, data, width, pitch, height, PIXEL_FORMAT_MAP[format][0], ptr(p, 0), ptr(p, 8), CHROMINANCE_SUBSAMPLING_MAP[chrominanceSubsampling], quality, flag)
 
 			if (result === 0) {
 				// without NOREALLOC flag
@@ -233,7 +236,7 @@ export class Jpeg {
 	}
 
 	// Decodes a JPEG stream to raw pixels. When `format` is omitted it is chosen from the stream
-	// colorspace (GRAY/CMYK preserved, everything else to RGB). Returns the decoded pixels and geometry,
+	// colorspace (GRAY preserved, CMYK/YCCK to CMYK, everything else to RGB). Returns the decoded pixels and geometry,
 	// or undefined if the header or decode fails. Throws if the decompressor cannot be initialized.
 	decompress(jpeg: NodeJS.TypedArray | DataView, format?: PixelFormat): DecodedJpeg | undefined {
 		const pointer = this.#lib.tjInitDecompress()
@@ -246,7 +249,7 @@ export class Jpeg {
 			if (!header) return undefined
 
 			const { width, height, colorspace } = header
-			format ??= colorspace === 'GRAY' ? 'GRAY' : colorspace === 'CMYK' ? 'CMYK' : 'RGB'
+			format ??= colorspace === 'GRAY' ? 'GRAY' : colorspace === 'CMYK' || colorspace === 'YCCK' ? 'CMYK' : 'RGB'
 			const pitch = width * PIXEL_FORMAT_MAP[format][1]
 			const data = Buffer.allocUnsafe(pitch * height)
 			const decompressed = this.#lib.tjDecompress2(pointer, jpeg, jpeg.byteLength, data, width, pitch, height, PIXEL_FORMAT_MAP[format][0], FASTDCT)

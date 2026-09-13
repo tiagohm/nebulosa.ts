@@ -81,10 +81,14 @@ const DEFAULT_STEP = 120 * ONE_SECOND
 const MIN_INTERVALS = 4
 
 // Topocentric geometry of a transit at one instant: the light-time-corrected directions to the planet and to
-// the Sun's centre, their angular separation, and the two angular radii.
+// the Sun's centre, their topocentric distances, their angular separation, and the two angular radii.
 interface TransitGeometry {
 	readonly planetDirection: Vec3
 	readonly sunDirection: Vec3
+	// Topocentric distance to the Sun's centre, AU.
+	readonly sunDistance: Distance
+	// Topocentric distance to the planet's centre, AU.
+	readonly planetDistance: Distance
 	readonly separation: number
 	readonly sunAngularRadius: number
 	readonly planetAngularRadius: number
@@ -100,7 +104,7 @@ function transitGeometry(planet: PositionAndVelocityOverTime, sun: PositionAndVe
 	const planetDistance = Math.hypot(planetDirection[0], planetDirection[1], planetDirection[2])
 	const sunAngularRadius = Math.asin(clamp(sunRadius / sunDistance, 0, 1))
 	const planetAngularRadius = Math.asin(clamp(planetRadius / planetDistance, 0, 1))
-	return { planetDirection, sunDirection, separation, sunAngularRadius, planetAngularRadius }
+	return { planetDirection, sunDirection, sunDistance, planetDistance, separation, sunAngularRadius, planetAngularRadius }
 }
 
 // Position angle of `planetDirection` relative to `sunDirection` on the sky, radians in [0, TAU), measured
@@ -152,11 +156,13 @@ function lastRootBefore(f: (time: Time) => number, from: Time, to: Time, step: n
 // observerState so the diurnal parallax is included). `sunRadius` and `planetRadius` are the bodies' physical
 // radii in AU.
 //
-// Each separation minimum below the sum of the angular radii is a transit: its appulse is the mid-transit and
-// impact parameter, its exterior contacts (I, IV) are the crossings of the radius sum on either side, and its
-// interior contacts (II, III) — present only for a full, non-grazing transit — are the crossings of the
-// radius difference. Contacts carry their limb position angle (north through east) and the total I->IV
-// duration.
+// Each separation minimum that places the planet in front of the Sun (planetDistance < sunDistance) and
+// below the sum of the angular radii is a transit: its appulse is the mid-transit and impact parameter, its
+// exterior contacts (I, IV) are the crossings of the radius sum on either side, and its interior contacts
+// (II, III) — present only for a full, non-grazing transit — are the crossings of the radius difference. A
+// node-aligned superior conjunction can also overlap the solar disk, but that is a solar occultation of the
+// planet, not a transit, and is discarded. Contacts carry their limb position angle (north through east) and
+// the total I->IV duration.
 //
 // Detection anchors on the mid-transit appulse, so the window must contain the instant of least separation: a
 // transit whose closest approach lies outside the window is not reported at all (open the window before
@@ -213,6 +219,9 @@ export function planetaryTransits(planet: PositionAndVelocityOverTime, sun: Posi
 
 	for (const minimum of minima) {
 		const mid = geometryAt(minimum.time)
+		// Inferior conjunction only: behind the Sun the same angular overlap is a solar occultation of the
+		// planet, not a transit.
+		if (!(mid.planetDistance < mid.sunDistance)) continue
 		// A separation minimum that never reaches the radius sum is only an appulse near the Sun, not a transit.
 		if (minimum.value >= mid.sunAngularRadius + mid.planetAngularRadius) continue
 		// A full transit dips below the radius difference (planet wholly inside); otherwise it merely grazes.

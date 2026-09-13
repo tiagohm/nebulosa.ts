@@ -47,7 +47,7 @@ export class PowerManager extends DeviceManager<Power> {
 			case 'USB_PORTS':
 				handlePowerChannel(this, device, message, tag, 'usb', 'enabled')
 				return
-			case 'POWER_CYCLE_Toggle':
+			case 'POWER_CYCLE':
 				if (tag[0] === 'd') {
 					if (handleSwitchValue(device, 'hasPowerCycle', true)) {
 						this.updated(device, 'hasPowerCycle', message.state)
@@ -56,8 +56,8 @@ export class PowerManager extends DeviceManager<Power> {
 		}
 	}
 
-	// Applies power number vectors: aggregate voltage/current/power sensors and per-channel current/duty
-	// values for DC/dew/auto-dew/variable channels.
+	// Applies power number vectors: aggregate voltage/current/power sensors and per-channel DC current,
+	// dew duty-cycle, and variable-voltage values.
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -85,9 +85,7 @@ export class PowerManager extends DeviceManager<Power> {
 			case 'DEW_DUTY_CYCLES':
 				handlePowerChannel(this, device, message, tag, 'dew', 'value')
 				return
-			case 'DEW_CURRENTS':
-				handlePowerChannel(this, device, message, tag, 'autoDew', 'value')
-				return
+			// DEW_CURRENTS has no corresponding model field because dew values represent duty cycle.
 			case 'VARIABLE_VOLTAGES':
 				handlePowerChannel(this, device, message, tag, 'variableVoltage', 'value')
 		}
@@ -132,7 +130,7 @@ export class PowerManager extends DeviceManager<Power> {
 		if (full || name === 'DEW_CHANNELS' || name === 'DEW_DUTY_CYCLES' || name === 'DEW_LABELS') {
 			resetDeviceValue(this, device, 'dew', DEFAULT_POWER.dew)
 		}
-		if (full || name === 'AUTO_DEW_CONTROL' || name === 'DEW_CURRENTS') {
+		if (full || name === 'AUTO_DEW_CONTROL') {
 			resetDeviceValue(this, device, 'autoDew', DEFAULT_POWER.autoDew)
 		}
 		if (full || name === 'VARIABLE_CHANNELS' || name === 'VARIABLE_VOLTAGES' || name === 'VARIABLE_LABELS') {
@@ -141,7 +139,7 @@ export class PowerManager extends DeviceManager<Power> {
 		if (full || name === 'USB_PORTS' || name === 'USB_LABELS') {
 			resetDeviceValue(this, device, 'usb', DEFAULT_POWER.usb)
 		}
-		if (full || name === 'POWER_CYCLE_Toggle') {
+		if (full || name === 'POWER_CYCLE') {
 			resetDeviceValue(this, device, 'hasPowerCycle', DEFAULT_POWER.hasPowerCycle)
 		}
 		if (full || name === 'POWER_SENSORS') {

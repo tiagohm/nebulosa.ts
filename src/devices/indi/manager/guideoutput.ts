@@ -12,25 +12,25 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 	// Issues a timed pulse-guide in one direction; duration is milliseconds. No-op without the capability.
 	pulseNorth(device: GuideOutput, duration: number, client = device[CLIENT]!) {
 		if (device.canPulseGuide) {
-			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_N: duration } })
+			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_N: duration, TIMED_GUIDE_S: 0 } })
 		}
 	}
 
 	pulseSouth(device: GuideOutput, duration: number, client = device[CLIENT]!) {
 		if (device.canPulseGuide) {
-			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_S: duration } })
+			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_N: 0, TIMED_GUIDE_S: duration } })
 		}
 	}
 
 	pulseWest(device: GuideOutput, duration: number, client = device[CLIENT]!) {
 		if (device.canPulseGuide) {
-			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_W: duration } })
+			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_W: duration, TIMED_GUIDE_E: 0 } })
 		}
 	}
 
 	pulseEast(device: GuideOutput, duration: number, client = device[CLIENT]!) {
 		if (device.canPulseGuide) {
-			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_E: duration } })
+			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_W: 0, TIMED_GUIDE_E: duration } })
 		}
 	}
 
@@ -80,11 +80,18 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 			case 'TELESCOPE_TIMED_GUIDE_WE': {
 				let device = this.get(client, message.device)
 
-				if (device === undefined && tag[0] === 'd') {
+				if (tag[0] === 'd') {
 					const parent = this.provider.get(client, message.device, 'mount') ?? this.provider.get(client, message.device, 'camera')
 
-					if (parent !== undefined && handleSwitchValue(parent, 'canPulseGuide', true)) {
-						device = this.#addProxy(client, parent)
+					if (parent !== undefined) {
+						const canPulseGuideChanged = handleSwitchValue(parent, 'canPulseGuide', true)
+
+						if (device === undefined) {
+							device = this.#addProxy(client, parent)
+						} else if (canPulseGuideChanged) {
+							this.updated(device, 'canPulseGuide', message.state)
+							this.updated(parent, 'canPulseGuide', message.state)
+						}
 					}
 				}
 
@@ -106,7 +113,15 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 				return
 			}
 			case 'GUIDE_RATE': {
-				const device = this.get(client, message.device)
+				let device = this.get(client, message.device)
+
+				if (device === undefined && tag[0] === 'd') {
+					const parent = this.provider.get(client, message.device, 'mount') ?? this.provider.get(client, message.device, 'camera')
+
+					if (parent !== undefined && handleSwitchValue(parent, 'canPulseGuide', true)) {
+						device = this.#addProxy(client, parent)
+					}
+				}
 
 				if (device !== undefined) {
 					if (tag[0] === 'd') {
@@ -146,10 +161,15 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 		const full = !name
 
 		if (full || name === 'TELESCOPE_TIMED_GUIDE_NS' || name === 'TELESCOPE_TIMED_GUIDE_WE') {
-			resetDeviceValue(this, device, 'canPulseGuide', DEFAULT_GUIDE_OUTPUT.canPulseGuide)
-			resetDeviceValue(this, device, 'pulsing', DEFAULT_GUIDE_OUTPUT.pulsing)
-			resetDeviceValue(this, device, 'pulsingNS', DEFAULT_GUIDE_OUTPUT.pulsingNS)
-			resetDeviceValue(this, device, 'pulsingWE', DEFAULT_GUIDE_OUTPUT.pulsingWE)
+			const properties = this.properties.get(device)
+			const hasTimedGuideNS = properties?.TELESCOPE_TIMED_GUIDE_NS !== undefined
+			const hasTimedGuideWE = properties?.TELESCOPE_TIMED_GUIDE_WE !== undefined
+			const canPulseGuide = full ? false : name === 'TELESCOPE_TIMED_GUIDE_NS' ? hasTimedGuideWE : hasTimedGuideNS
+
+			resetDeviceValue(this, device, 'canPulseGuide', canPulseGuide)
+			if (full || name === 'TELESCOPE_TIMED_GUIDE_NS') resetDeviceValue(this, device, 'pulsingNS', DEFAULT_GUIDE_OUTPUT.pulsingNS)
+			if (full || name === 'TELESCOPE_TIMED_GUIDE_WE') resetDeviceValue(this, device, 'pulsingWE', DEFAULT_GUIDE_OUTPUT.pulsingWE)
+			resetDeviceValue(this, device, 'pulsing', full ? DEFAULT_GUIDE_OUTPUT.pulsing : name === 'TELESCOPE_TIMED_GUIDE_NS' ? device.pulsingWE : device.pulsingNS)
 
 			const parent = (device as SubDevice<GuideOutput, GuideOutput>).parent
 			this.updated(parent, 'canPulseGuide')

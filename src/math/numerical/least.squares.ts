@@ -193,14 +193,14 @@ function leastSquaresLeverage(design: readonly Readonly<NumberArray>[], weights:
 export function robustLinearLeastSquares(
 	design: readonly Readonly<NumberArray>[],
 	target: Readonly<NumberArray>,
-	{ weights, ridge = 0, method = 'huber', maxIterations = DEFAULT_ROBUST_ITERATIONS, tolerance = DEFAULT_ROBUST_TOLERANCE, tuning = DEFAULT_ROBUST_TUNING }: RobustLinearLeastSquaresOptions = {},
+	{ weights, ridge = 0, leverage = false, method = 'huber', maxIterations = DEFAULT_ROBUST_ITERATIONS, tolerance = DEFAULT_ROBUST_TOLERANCE, tuning = DEFAULT_ROBUST_TUNING }: RobustLinearLeastSquaresOptions = {},
 ): RobustLinearLeastSquaresResult {
 	if (design.length !== target.length) throw new Error('design matrix row count must match target length')
 	const { rows } = validateLeastSquaresInput(design, weights)
 	const baseWeights = initialLeastSquaresWeights(rows, weights)
 
 	if (method === 'none' || rows === 0) {
-		const result = linearLeastSquares(design, target, { weights: baseWeights, ridge })
+		const result = linearLeastSquares(design, target, { weights: baseWeights, ridge, leverage })
 		return { ...result, weights: baseWeights, iterations: 1, scale: robustResidualScale(result.residuals, baseWeights) }
 	}
 
@@ -217,7 +217,7 @@ export function robustLinearLeastSquares(
 		scale = robustResidualScale(residuals, baseWeights)
 
 		if (!Number.isFinite(scale) || scale === 0) {
-			const result = linearLeastSquares(design, target, { weights: currentWeights, ridge })
+			const result = linearLeastSquares(design, target, { weights: currentWeights, ridge, leverage })
 			return { ...result, weights: currentWeights, iterations: iterations + 1, scale }
 		}
 
@@ -234,7 +234,7 @@ export function robustLinearLeastSquares(
 		}
 	}
 
-	const result = linearLeastSquares(design, target, { weights: currentWeights, ridge })
+	const result = linearLeastSquares(design, target, { weights: currentWeights, ridge, leverage })
 	return { ...result, weights: currentWeights, iterations: Math.max(1, iterations), scale }
 }
 
@@ -321,8 +321,7 @@ function solveLinearLeastSquares(design: readonly Readonly<NumberArray>[], targe
 	const qr = new QrDecomposition(matrix, true)
 
 	if (qr.isFullRank) {
-		const solution = qr.solve(rhs)
-		return solution.length === cols ? solution : solution.subarray(0, cols)
+		return qr.solve(rhs)
 	}
 
 	return solveRegularizedNormalEquations(design, target, weights, effectiveRidge > 0 ? effectiveRidge : DEFAULT_RIDGE)
@@ -427,9 +426,10 @@ function estimateLeastSquaresConditionNumber(design: readonly Readonly<NumberArr
 		return Number.POSITIVE_INFINITY
 	}
 
-	// Eigenvalues at or below this relative threshold are numerically indistinguishable from zero
-	// (the Jacobi noise floor), so a smallest eigenvalue under it signals a rank-deficient matrix.
-	const threshold = maxEigenvalue * 1e-12
+	// λ_i = σ_i² of W^{1/2} X. Values at or below n ε λ_max are Gram-matrix rounding noise, not a
+	// resolved singular value. A 1e-12 relative cut on λ would flag κ₂(X) ≳ 1e6 as singular and hide
+	// the public 1e12 cutoff on κ(X) = σ_max / σ_min.
+	const threshold = eigenvalues.length * Number.EPSILON * maxEigenvalue
 	let minEigenvalue = Number.POSITIVE_INFINITY
 
 	for (let i = 0; i < eigenvalues.length; i++) {
@@ -439,7 +439,7 @@ function estimateLeastSquaresConditionNumber(design: readonly Readonly<NumberArr
 	}
 
 	// A near-zero (or negative-noise) smallest eigenvalue means an effectively infinite condition number.
-	if (minEigenvalue <= threshold) return Number.POSITIVE_INFINITY
+	if (!(minEigenvalue > threshold)) return Number.POSITIVE_INFINITY
 
 	return Math.sqrt(maxEigenvalue / minEigenvalue)
 }
@@ -455,12 +455,16 @@ function symmetricEigenvalues(matrix: Matrix) {
 		let p = 0
 		let q = 1
 		let maxOffDiagonal = 0
+		let maxAbs = 0
 
 		for (let i = 0; i < n; i++) {
 			const rowOffset = i * n
+			const diag = Math.abs(data[rowOffset + i])
+			if (diag > maxAbs) maxAbs = diag
 
 			for (let j = i + 1; j < n; j++) {
 				const value = Math.abs(data[rowOffset + j])
+				if (value > maxAbs) maxAbs = value
 
 				if (value > maxOffDiagonal) {
 					maxOffDiagonal = value
@@ -470,7 +474,8 @@ function symmetricEigenvalues(matrix: Matrix) {
 			}
 		}
 
-		if (maxOffDiagonal <= 1e-14) {
+		// Relative to the matrix scale so λ_min ≪ 1e-14 is still visible when λ_max is O(1).
+		if (maxOffDiagonal <= Number.EPSILON * maxAbs) {
 			break
 		}
 

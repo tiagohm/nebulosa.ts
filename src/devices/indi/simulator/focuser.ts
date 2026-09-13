@@ -56,7 +56,7 @@ export class FocuserSimulator extends DeviceSimulator {
 		readonly options?: FocuserSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.FOCUSER)
+		super(name, client, handler, DeviceInterfaceType.FOCUSER, 'focuser.simulator')
 		this.#backlash.elements.BACKLASH_IN.value = options?.backlashIn ?? 0
 		this.#backlash.elements.BACKLASH_OUT.value = options?.backlashOut ?? 0
 
@@ -185,7 +185,10 @@ export class FocuserSimulator extends DeviceSimulator {
 		if (!this.isConnected) return
 
 		position = clamp(position, this.#position.elements.FOCUS_ABSOLUTE_POSITION.min, this.#position.elements.FOCUS_ABSOLUTE_POSITION.max)
-		if (position === this.position) return
+		if (position === this.position) {
+			this.stop(false)
+			return
+		}
 
 		this.#targetPosition = position
 		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = Math.abs(position - this.position)
@@ -226,7 +229,7 @@ export class FocuserSimulator extends DeviceSimulator {
 		const wasMoving = this.isMoving
 		this.#targetPosition = undefined
 		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = 0
-		this.#setMoving(false, alert)
+		this.#setMoving(false, alert && wasMoving)
 
 		if (alert && wasMoving) {
 			this.#abort.elements.ABORT.value = true

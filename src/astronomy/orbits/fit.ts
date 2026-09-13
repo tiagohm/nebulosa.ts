@@ -210,8 +210,8 @@ export function fitOrbit(observations: readonly OrbitFitObservation[], epoch: Ti
 				continue
 			}
 
-			const stepNorm = vecLength(step as unknown as Vec3)
-			const parameterScale = vecLength(params as unknown as Vec3) + config.parameterTolerance
+			const stepNorm = parameterNorm(step)
+			const parameterScale = parameterNorm(params) + config.parameterTolerance
 
 			if (stepNorm <= config.parameterTolerance * parameterScale) {
 				converged = true
@@ -689,6 +689,11 @@ function maxAbs(vector: Readonly<Float64Array>) {
 	let max = 0
 	for (let i = 0; i < vector.length; i++) max = Math.max(max, Math.abs(vector[i]))
 	return max
+}
+
+// Euclidean norm of the 6-element Cartesian parameter vector (position and velocity).
+function parameterNorm(v: Readonly<Float64Array>) {
+	return Math.hypot(v[0], v[1], v[2], v[3], v[4], v[5])
 }
 
 function isFiniteVector(vector: Vec3) {

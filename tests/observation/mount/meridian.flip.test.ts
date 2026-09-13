@@ -237,6 +237,18 @@ test('failed state exposes retry only after threshold, not while exposing or alr
 	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(2), { pierSide: 'WEST' }), state), 'FAILED', 'NONE', 'EXECUTION_FAILED')
 })
 
+test('failed retry aborts an overdue exposure before retrying', () => {
+	const state: MeridianFlipState = { phase: 'FAILED', attempts: 1, preparationCompleted: true, failure: 'EXECUTION_FAILED' }
+	const policy = basePolicy({ maxRetries: 1 })
+
+	const beforeLatest = evaluateMeridianFlip(policy, snapshotAt(deg(2), { isExposing: true }), state)
+	expectDecision(beforeLatest, 'FAILED', 'NONE', 'EXECUTION_FAILED')
+
+	const overdue = evaluateMeridianFlip(policy, snapshotAt(deg(6), { isExposing: true }), state)
+	expectDecision(overdue, 'FAILED', 'ABORT_EXPOSURE', 'LATEST_THRESHOLD_REACHED')
+	expect(overdue.isOverdue).toBeTrue()
+})
+
 test('failed retry rechecks pre-flip pier-side guards before starting another flip', () => {
 	const state: MeridianFlipState = { phase: 'FAILED', attempts: 1, preparationCompleted: true, failure: 'EXECUTION_FAILED' }
 	const policy = basePolicy({ beforeFlipPierSide: 'EAST', maxRetries: 1 })
@@ -245,6 +257,14 @@ test('failed retry rechecks pre-flip pier-side guards before starting another fl
 	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(2)), state), 'FAILED', 'FAIL', 'PIER_SIDE_NEITHER')
 	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(2), { pierSide: 'EAST' }), state), 'FAILED', 'START_FLIP', 'RETRY_AVAILABLE')
 	expectDecision(evaluateMeridianFlip(basePolicy({ beforeFlipPierSide: 'EAST', allowUnknownPierSide: true, maxRetries: 1 }), snapshotAt(deg(2)), state), 'FAILED', 'START_FLIP', 'RETRY_AVAILABLE')
+})
+
+test('failed retry pauses active guiding before starting another flip', () => {
+	const state: MeridianFlipState = { phase: 'FAILED', attempts: 1, preparationCompleted: true, failure: 'EXECUTION_FAILED' }
+	const policy = basePolicy({ maxRetries: 1 })
+
+	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(2), { isGuiding: true }), state), 'FAILED', 'PAUSE_GUIDING', 'RETRY_AVAILABLE')
+	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(2), { isGuiding: false }), state), 'FAILED', 'START_FLIP', 'RETRY_AVAILABLE')
 })
 
 test('failed retry waits while the mount is slewing or unsettled', () => {

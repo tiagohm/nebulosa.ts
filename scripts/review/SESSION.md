@@ -91,7 +91,10 @@ For every confirmed defect that is safe to fix:
    conventions.
 4. Add or update tests when they lock the correction.
 5. Run the closest existing tests and, if you edited TypeScript, the
-   targeted lint/format checks from AGENTS.md.
+   targeted lint/format checks from AGENTS.md. If a check fails because of your
+   changes, diagnose and correct the problem, then rerun the failed check and
+   any affected checks. Repeat until the introduced failures are resolved before
+   committing or moving to the next finding.
 6. Re-read the resulting diff for new mistakes.
 7. Inspect `git status --short`, stage only the explicit paths belonging to this
    finding (never `git add .` or `git add -A`), and inspect `git diff --staged`.
@@ -117,10 +120,22 @@ that cannot safely be fixed. Report those findings and why they remain unresolve
 In the final report, map every fixed finding to its commit hash and record the
 verification performed. Never claim a fix is complete if its commit failed.
 
-If validation or a commit fails, stop immediately and report the failure. Do not
-start another finding, stash, reset or discard partial work. Previously created
-commits remain intact. A successful fix session must leave no uncommitted fixes;
-the orchestrator checks the worktree before marking the file completed.
+Validation is part of the fix cycle. A failing lint, type, formatting or test
+check is not by itself a reason to end the session. Repair failures introduced
+by your changes within the current finding and include those repairs in its
+commit. This also applies to validation failures from commit hooks. Do not skip
+checks, disable rules or weaken assertions merely to make validation pass.
+Distinguish introduced failures from unrelated pre-existing or environment
+failures using AGENTS.md's verification policy; report the latter with evidence
+without expanding into unrelated fixes.
+
+If the current finding remains blocked after diagnosis and reasonable repair
+attempts, or a commit fails for a non-validation reason, stop and report the
+exact blocker, attempted repairs and remaining work. Do not start another
+finding, stash, reset or discard partial work. Previously created commits remain
+intact. Never commit introduced failures or unresolved errors in the touched
+area. A successful fix session must leave no uncommitted fixes; the orchestrator
+checks the worktree before marking the file completed.
 
 ## Report
 

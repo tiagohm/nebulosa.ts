@@ -84,7 +84,7 @@ test('accepts the alias element names used by common drivers', () => {
 	const weather = weatherDevice(manager)
 
 	const parameters = weatherParameters(weather.name, {
-		WEATHER_CLOUD: defNumber('WEATHER_CLOUD', 33, 0, 100),
+		WEATHER_CLOUD: { ...defNumber('WEATHER_CLOUD', 33, 0, 100), label: 'Cloud Cover (%)' },
 		WEATHER_DEWPOINT: defNumber('WEATHER_DEWPOINT', 2.5, -60, 60),
 		WEATHER_RELATIVE_HUMIDITY: defNumber('WEATHER_RELATIVE_HUMIDITY', 70, 0, 100),
 		WEATHER_RAIN_RATE: defNumber('WEATHER_RAIN_RATE', 12, 0, 500),
@@ -105,6 +105,28 @@ test('accepts the alias element names used by common drivers', () => {
 
 	// An unmapped element stays reachable as a raw property but never reaches the typed interface.
 	expect(manager.properties.get(weather)!.WEATHER_PARAMETERS.elements.WEATHER_UNMAPPED.value).toBe(7)
+})
+
+test('disambiguates AAG CloudWatcher weather elements by their definition label', () => {
+	const manager = new WeatherManager()
+	const weather = weatherDevice(manager)
+	const parameters = weatherParameters(weather.name, {
+		WEATHER_CLOUD: { ...defNumber('WEATHER_CLOUD', -15, -40, 60), label: 'Cloud (corrected infrared sky temperature °C)' },
+		WEATHER_RAIN: { ...defNumber('WEATHER_RAIN', 2432, 2000, 10000), label: 'Rain (cycles)' },
+	})
+
+	manager.numberVector(recordingClient, parameters, 'defNumberVector')
+
+	// AAG rain is a raw sensor cycle count, while its cloud element is an infrared sky temperature.
+	expect(weather.rainRate).toBeUndefined()
+	expect(weather.cloudCover).toBeUndefined()
+	expect(weather.skyTemperature).toBe(-15)
+
+	manager.numberVector(recordingClient, { device: weather.name, name: 'WEATHER_PARAMETERS', state: 'Ok', elements: { WEATHER_CLOUD: { name: 'WEATHER_CLOUD', value: -12 }, WEATHER_RAIN: { name: 'WEATHER_RAIN', value: 2500 } } }, 'setNumberVector')
+
+	expect(weather.rainRate).toBeUndefined()
+	expect(weather.cloudCover).toBeUndefined()
+	expect(weather.skyTemperature).toBe(-12)
 })
 
 test('converts wind direction from degrees to normalized radians', () => {
@@ -305,6 +327,23 @@ test('does not date a failed report as an observation', async () => {
 	manager.numberVector(recordingClient, parameters, 'setNumberVector')
 
 	expect(manager.updatedAt(weather, 'temperature')!).toBeGreaterThan(first)
+})
+
+test('does not date a Busy report as an observation', async () => {
+	const manager = new WeatherManager()
+	const weather = weatherDevice(manager)
+	const parameters = weatherParameters(weather.name, { WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 10, -60, 60) })
+
+	manager.numberVector(recordingClient, parameters, 'defNumberVector')
+	const first = manager.updatedAt(weather, 'temperature')!
+
+	await Bun.sleep(5)
+	parameters.state = 'Busy'
+	manager.numberVector(recordingClient, parameters, 'setNumberVector')
+
+	expect(weather.temperature).toBe(10)
+	expect(manager.updatedAt(weather, 'temperature')).toBe(first)
+	expect(manager.elapsedSince(weather, 'temperature')!).toBeGreaterThanOrEqual(5)
 })
 
 test('measures sensor age on the monotonic clock', async () => {

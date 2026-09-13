@@ -268,13 +268,34 @@ export function timeBesselianYear(epoch: number, scale: Timescale = Timescale.TT
 	return timeMJD(15019.81352 + (epoch - 1900) * DAYSPERTY, scale)
 }
 
+// ERFA/SOFA dleap at a Gregorian civil date: the jump in TAI-UTC between 0h today
+// and 0h tomorrow after removing any pre-1972 linear drift. Post-1972 this is +1,
+// 0, or -1 and is the extra length of that UTC day in seconds. eraDtf2d uses
+// DAYSEC+dleap as the UTC day length; eraUtcTai unspreads the same quantity.
+function utcLeapSeconds(year: number, month: number, day: number): number {
+	const dat0 = eraDat(year, month, day, 0)
+	const dat12 = eraDat(year, month, day, 0.5)
+	const calt = eraJdToCal(MJD0 + eraCalToJd(year, month, day), 1.5)
+	return eraDat(calt[0], calt[1], calt[2], 0) - (2 * dat12 - dat0)
+}
+
 // Time from year, month, day, hour, minute and second.
+// `second` may be fractional. For Timescale.UTC the day length is DAYSEC+dleap
+// (ERFA eraDtf2d), so 23:59:60 on a positive leap-second day stays on that civil
+// date. Other scales always use a 86400 s day.
 export function timeYMDHMS(year: number, month: number = 1, day: number = 1, hour: number = 0, minute: number = 0, second: number = 0, scale: Timescale = Timescale.UTC) {
-	return time(MJD0 + eraCalToJd(year, month, day), (second + minute * 60 + hour * 3600) / DAYSEC, scale)
+	const dayLength = scale === Timescale.UTC ? DAYSEC + utcLeapSeconds(year, month, day) : DAYSEC
+	return time(MJD0 + eraCalToJd(year, month, day), (second + minute * 60 + hour * 3600) / dayLength, scale)
 }
 
 // Time from year, month, day.
+// `fraction` is the civil day fraction from midnight (0.5 = 12:00:00). For
+// Timescale.UTC it is scaled onto the ERFA quasi-JD day of length DAYSEC+dleap.
 export function timeYMD(year: number, month: number = 1, day: number = 1, fraction: number = 0, scale: Timescale = Timescale.UTC) {
+	if (scale === Timescale.UTC && fraction !== 0) {
+		const dleap = utcLeapSeconds(year, month, day)
+		if (dleap !== 0) fraction = (fraction * DAYSEC) / (DAYSEC + dleap)
+	}
 	return time(MJD0 + eraCalToJd(year, month, day), fraction, scale)
 }
 
@@ -341,9 +362,27 @@ export function timeSubtract(a: Time, b: Time, scale: Timescale = a.scale) {
 	return c.day - d.day + (c.fraction - d.fraction)
 }
 
-// Converts the time to year, month, day, hour, minute, second and nanosecond.
+// Converts the time to year, month, day, hour, minute, second and truncated
+// millisecond (0-999), not nanosecond. For Timescale.UTC, inverts the ERFA
+// quasi-JD stretch (eraD2dtf) so the clock is the civil HMS, including 23:59:60
+// on a positive leap-second day.
 export function timeToDate(time: Time): [number, number, number, number, number, number, number] {
-	const [year, month, day, fraction] = eraJdToCal(time.day, time.fraction)
+	const [year, month, day, rawFraction] = eraJdToCal(time.day, time.fraction)
+	let fraction = rawFraction
+	let dleap = 0
+	if (time.scale === Timescale.UTC) {
+		dleap = utcLeapSeconds(year, month, day)
+		if (dleap !== 0) {
+			// Invert the ERFA stretch, then snap to 1 ms so 12:00:00 does not
+			// become 11:59:59.999 from (DAYSEC+dleap)/DAYSEC roundoff.
+			fraction = Math.round(fraction * (DAYSEC + dleap) * 1000) / (DAYSEC * 1000)
+		}
+	}
+	if (dleap !== 0 && fraction >= 1) {
+		const extra = (fraction - 1) * DAYSEC
+		const whole = Math.trunc(extra)
+		return [year, month, day, 23, 59, 60 + whole, Math.trunc((extra - whole) * 1000)]
+	}
 	const hour = fraction * 24
 	const minute = ((hour - Math.trunc(hour)) * 60) % 60
 	const second = ((minute - Math.trunc(minute)) * 60) % 60
@@ -849,20 +888,28 @@ export const tdbMinusTtByFairheadAndBretagnon1990: TimeDelta = (time) => {
 }
 
 // Computes TAI - UTC in seconds at time.
+// eraDat is tabulated by UTC civil date, so non-UTC instants are converted
+// first. Using the TAI or UT1 calendar is wrong by 1 s in the first ~DAT
+// seconds of the TAI day after a leap second, when that calendar has already
+// rolled over but UTC has not.
 export const taiMinusUtc: TimeDelta = (time) => {
 	const cached = time.cache?.taiMinusUtc
 	if (cached !== undefined) return cached
-	const cal = eraJdToCal(time.day, time.fraction)
+	const u = time.scale === Timescale.UTC ? time : utc(time)
+	const cal = eraJdToCal(u.day, u.fraction)
 	const dt = eraDat(cal[0], cal[1], cal[2], cal[3])
 	cacheKey(cache(time), 'taiMinusUtc', dt)
 	return dt
 }
 
 // Computes UT1 - TAI in seconds at time.
+// DAT is taken from the corresponding UTC date (as in taiMinusUtc) so the
+// TAI↔UT1 shortcut agrees with TAI↔UTC↔UT1 across a leap second.
 export const ut1MinusTai: TimeDelta = (time) => {
 	const cached = time.cache?.ut1MinusTai
 	if (cached !== undefined) return cached
-	const cal = eraJdToCal(time.day, time.fraction)
+	const u = time.scale === Timescale.UTC ? time : utc(time)
+	const cal = eraJdToCal(u.day, u.fraction)
 	const dat = eraDat(cal[0], cal[1], cal[2], cal[3])
 	const ut1MinusUtc = dut1(time)
 	const dt = ut1MinusUtc - dat

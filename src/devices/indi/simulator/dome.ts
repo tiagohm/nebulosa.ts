@@ -68,7 +68,7 @@ export class DomeSimulator extends DeviceSimulator {
 		readonly options?: DomeSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.DOME)
+		super(name, client, handler, DeviceInterfaceType.DOME, 'dome.simulator')
 
 		this.#mountManager = options?.mountManager
 		this.properties = [
@@ -273,8 +273,13 @@ export class DomeSimulator extends DeviceSimulator {
 	unpark() {
 		if (!this.isConnected) return
 
+		if (this.#operation === 'park' || this.#park.state === 'Busy') this.stopMotion(false)
 		this.clearParkState('Ok')
-		this.clearHomeState('Ok')
+		if (this.#goto.elements.DOME_PARK.value) {
+			this.#goto.elements.DOME_PARK.value = false
+			this.#goto.state = 'Ok'
+			this.notify(this.#goto)
+		}
 	}
 
 	// Stores the current azimuth as the park position in both supported number vectors.
@@ -406,9 +411,11 @@ export class DomeSimulator extends DeviceSimulator {
 		} else if (operation === 'home') {
 			this.#goto.state = 'Busy'
 			this.#goto.elements.DOME_HOME.value = true
+			this.#goto.elements.DOME_PARK.value = false
 			this.notify(this.#goto)
 		} else if (operation === 'park') {
 			this.#goto.state = 'Busy'
+			this.#goto.elements.DOME_HOME.value = false
 			this.#goto.elements.DOME_PARK.value = true
 			this.#park.state = 'Busy'
 			this.#park.elements.PARK.value = true
@@ -417,7 +424,7 @@ export class DomeSimulator extends DeviceSimulator {
 			this.notify(this.#park)
 		}
 
-		if (this.#targetAzimuth === this.azimuth) this.finishTarget()
+		if (this.#targetAzimuth === this.azimuth && (operation !== 'relative' || relativeDelta === 0)) this.finishTarget()
 	}
 
 	// Starts continuous clockwise or counter-clockwise motion.
@@ -524,7 +531,7 @@ export class DomeSimulator extends DeviceSimulator {
 
 		const alreadyOpen = this.#shutter.elements.SHUTTER_OPEN.value
 		const alreadyClosed = this.#shutter.elements.SHUTTER_CLOSE.value
-		if ((target === 'OPEN' && alreadyOpen && this.#shutterTarget === undefined) || (target === 'CLOSED' && alreadyClosed && this.#shutterTarget === undefined)) {
+		if (this.#shutter.state === 'Ok' && ((target === 'OPEN' && alreadyOpen && this.#shutterTarget === undefined) || (target === 'CLOSED' && alreadyClosed && this.#shutterTarget === undefined))) {
 			this.#shutter.state = 'Ok'
 			this.notify(this.#shutter)
 			return

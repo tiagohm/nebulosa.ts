@@ -3,11 +3,55 @@ import { DeviceInterfaceType, type SafetyMonitor } from '../../../../src/devices
 import { CameraManager } from '../../../../src/devices/indi/manager/camera'
 import type { DeviceHandler } from '../../../../src/devices/indi/manager/device'
 import { SafetyMonitorManager } from '../../../../src/devices/indi/manager/safetymonitor'
-import type { DefLightVector, SetLightVector } from '../../../../src/devices/indi/types'
-import { client, driverInfo } from './util'
+import type { DefLightVector, DefSwitchVector, SetLightVector } from '../../../../src/devices/indi/types'
+import { client, createRecordingClient, defSwitch, driverInfo } from './util'
 
 function safetyStatus(device: string, state: DefLightVector['state']): DefLightVector {
 	return { device, name: 'SAFETY_STATUS', state, elements: { SAFETY: { name: 'SAFETY', value: state } } }
+}
+
+function connection(device: string, connected: boolean): DefSwitchVector {
+	return {
+		device,
+		name: 'CONNECTION',
+		state: 'Ok',
+		permission: 'rw',
+		rule: 'OneOfMany',
+		elements: {
+			CONNECT: defSwitch('CONNECT', connected),
+			DISCONNECT: defSwitch('DISCONNECT', !connected),
+		},
+	}
+}
+
+for (const clientType of ['INDI', 'ALPACA'] as const) {
+	test(`keeps a standalone ${clientType} monitor connectable before SAFETY_STATUS`, () => {
+		const { recordingClient, switchCommands } = createRecordingClient(clientType)
+		const manager = new SafetyMonitorManager({ get: () => undefined })
+		const testClient = { ...recordingClient, type: clientType }
+
+		manager.textVector(testClient, driverInfo('Safety', DeviceInterfaceType.AUXILIARY), 'defTextVector')
+		const safety = manager.get(testClient, 'Safety')!
+		expect(safety).toBeDefined()
+		expect(safety.connected).toBeFalse()
+		expect(safety.safe).toBeFalse()
+
+		manager.connect(safety)
+		expect(switchCommands.at(-1)).toEqual({ device: 'Safety', name: 'CONNECTION', elements: { CONNECT: true } })
+
+		manager.switchVector(testClient, connection('Safety', true), 'setSwitchVector')
+		expect(safety.connected).toBeTrue()
+		manager.lightVector(testClient, safetyStatus('Safety', 'Ok'), 'defLightVector')
+		expect(safety.safe).toBeTrue()
+
+		manager.switchVector(testClient, connection('Safety', false), 'setSwitchVector')
+		manager.delProperty(testClient, { device: 'Safety', name: 'SAFETY_STATUS' })
+		expect(manager.get(testClient, 'Safety')).toBe(safety)
+		expect(safety.safe).toBeFalse()
+
+		manager.connect(safety)
+		expect(switchCommands.at(-1)).toEqual({ device: 'Safety', name: 'CONNECTION', elements: { CONNECT: true } })
+	})
 }
 
 test('creates only AUXILIARY native INDI standalones', () => {

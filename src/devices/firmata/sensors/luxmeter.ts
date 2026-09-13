@@ -160,7 +160,7 @@ export class BH1750 extends PeripheralBase<BH1750> implements Luxmeter {
 
 	// Decodes the 16-bit sensor output into lux.
 	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
-		if (client !== this.client || address !== this.address || register !== -1 || data.byteLength !== 2) return
+		if (client !== this.client || address !== this.address || data.byteLength !== 2) return
 
 		const raw = data.readUInt16BE(0)
 		const lux = this.calculateLux(raw)
@@ -235,6 +235,8 @@ export class TSL2561 extends PeripheralBase<TSL2561> implements Luxmeter {
 	static readonly CLIP_13_7_MS = 5047
 	static readonly CLIP_101_MS = 37177
 	static readonly CLIP_402_MS = 65535
+	// Lux sentinel returned when an ADC channel exceeds its configured full-scale threshold.
+	static readonly SATURATED_LUX = 65536
 
 	#timer?: NodeJS.Timeout
 	// Timing-register byte and the precomputed gain/integration scales, clip threshold, and minimum poll.
@@ -265,15 +267,17 @@ export class TSL2561 extends PeripheralBase<TSL2561> implements Luxmeter {
 		this.#minimumPollingInterval = Math.ceil(integrationTime)
 	}
 
-	// Powers up the device, configures timing, and starts reading both ADC channels.
+	// Powers up the device, configures timing, and starts reading both ADC channels after integration.
 	start() {
 		if (this.#timer === undefined) {
 			this.client.addHandler(this)
 			this.client.twoWireConfig(0)
 			this.client.twoWireWrite(this.address, [TSL2561.COMMAND_BIT | TSL2561.CONTROL_REG, TSL2561.POWER_UP])
 			this.client.twoWireWrite(this.address, [TSL2561.COMMAND_BIT | TSL2561.TIMING_REG, this.#timing])
-			this.#readMeasurement()
-			this.#timer = setInterval(this.#readMeasurement.bind(this), Math.max(this.#minimumPollingInterval, this.pollingInterval))
+			this.#timer = setTimeout(() => {
+				this.#readMeasurement()
+				this.#timer = setInterval(this.#readMeasurement.bind(this), Math.max(this.#minimumPollingInterval, this.pollingInterval))
+			}, this.#minimumPollingInterval)
 		}
 	}
 
@@ -306,7 +310,7 @@ export class TSL2561 extends PeripheralBase<TSL2561> implements Luxmeter {
 	// Converts raw channel counts into lux using the T package coefficients from the datasheet.
 	calculateLux(broadband: number, infrared: number) {
 		if (broadband <= 0 || infrared < 0) return 0
-		if (broadband >= this.#clipThreshold || infrared >= this.#clipThreshold) return this.lux
+		if (broadband >= this.#clipThreshold || infrared >= this.#clipThreshold) return TSL2561.SATURATED_LUX
 
 		const scaledBroadband = broadband * this.#gainScale * this.#integrationScale
 		const scaledInfrared = infrared * this.#gainScale * this.#integrationScale
@@ -383,9 +387,9 @@ export class MAX44009 extends PeripheralBase<MAX44009> implements Luxmeter {
 
 	// Decodes the high/low lux registers and commits the new reading.
 	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
-		if (client !== this.client || address !== this.address || register !== MAX44009.LUX_HIGH_REG || data.byteLength !== 2) return
+		if (client !== this.client || address !== this.address || register !== MAX44009.LUX_HIGH_REG || data.byteLength !== 1) return
 
-		const lux = this.calculateLux(data[0], data[1])
+		const lux = this.calculateLux(data[0])
 		const changed = lux !== this.lux
 
 		if (changed) this.lux = lux
@@ -393,8 +397,8 @@ export class MAX44009 extends PeripheralBase<MAX44009> implements Luxmeter {
 		this.commit(changed)
 	}
 
-	// Decodes the exponent and mantissa registers into the ambient light level in lux.
-	calculateLux(highByte: number, lowByte: number) {
+	// Decodes the exponent and mantissa registers into lux; an omitted low byte leaves its nibble at zero.
+	calculateLux(highByte: number, lowByte: number = 0) {
 		const exponent = (highByte >>> 4) & 0x0f
 
 		if (exponent === 0x0f) return MAX44009.MAX_LUX
@@ -403,9 +407,9 @@ export class MAX44009 extends PeripheralBase<MAX44009> implements Luxmeter {
 		return 2 ** exponent * mantissa * 0.045
 	}
 
-	// Reads the high+low lux registers in one transaction (repeated start, no register auto-increment).
+	// Reads the high lux register; the device does not auto-increment its register pointer for burst reads.
 	#readMeasurement() {
-		this.client.twoWireRead(this.address, MAX44009.LUX_HIGH_REG, 2, false, 7, 'restart')
+		this.client.twoWireRead(this.address, MAX44009.LUX_HIGH_REG, 1, false, 7, 'restart')
 	}
 }
 

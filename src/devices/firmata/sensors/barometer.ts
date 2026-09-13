@@ -126,10 +126,15 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 			return
 		}
 
+		// A temperature frame from the next polling cycle also re-arms the state after a lost pressure reply.
+		if (this.#command === BMP180.READ_PRES_CMD && register === BMP180.TEMP_DATA_REG && data.byteLength === 2) {
+			this.#command = BMP180.READ_TEMP_CMD
+		}
+
 		if (this.#command === BMP180.READ_TEMP_CMD) {
 			if (register !== BMP180.TEMP_DATA_REG || data.byteLength !== 2) return
 
-			const UT = data.readInt16BE(0)
+			const UT = data.readUInt16BE(0)
 			this.temperature = this.calculateTrueTemperature(UT)
 			this.#command = BMP180.READ_PRES_CMD
 			void this.#readUncompensatedPressure()
@@ -138,7 +143,7 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 
 			const UP = ((data.readUint8(0) << 16) | data.readUint16BE(1)) >> (8 - this.mode)
 			this.pressure = pascal(this.calculateTruePressure(UP))
-			this.altitude = fromPressure(this.pressure, this.temperature)
+			this.altitude = fromPressure(this.pressure)
 			this.#command = BMP180.READ_TEMP_CMD
 			this.fire()
 		}
@@ -159,6 +164,8 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 		this.client.removeHandler(this)
 		clearInterval(this.#timer)
 		this.#timer = undefined
+		this.#initialized = false
+		this.#command = BMP180.READ_TEMP_CMD
 	}
 
 	// Requests the 22-byte factory calibration block.
@@ -247,6 +254,8 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 	// Precomputed control-measurement and config register bytes for the chosen options.
 	readonly #ctrlMeasValue: number
 	readonly #configValue: number
+	// Maximum forced-mode conversion time for the selected oversampling, in milliseconds.
+	readonly #forcedMeasurementTime: number
 
 	readonly name = 'BMP280'
 
@@ -269,9 +278,12 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 		const pressureSamplingBits = pressureSampling === 'skip' ? 0 : pressureSampling === 'x1' ? 1 : pressureSampling === 'x2' ? 2 : pressureSampling === 'x4' ? 3 : pressureSampling === 'x8' ? 4 : 5
 		const filterBits = filter === 'off' ? 0 : filter === 'x2' ? 1 : filter === 'x4' ? 2 : filter === 'x8' ? 3 : 4
 		const standbyBits = standbyDuration === 0.5 ? 0 : standbyDuration === 62.5 ? 1 : standbyDuration === 125 ? 2 : standbyDuration === 250 ? 3 : standbyDuration === 500 ? 4 : standbyDuration === 1000 ? 5 : standbyDuration === 2000 ? 6 : 7
+		const temperatureOversampling = temperatureSamplingBits === 0 ? 0 : 2 ** (temperatureSamplingBits - 1)
+		const pressureOversampling = pressureSamplingBits === 0 ? 0 : 2 ** (pressureSamplingBits - 1)
 
 		this.#ctrlMeasValue = (temperatureSamplingBits << 5) | (pressureSamplingBits << 2) | modeBits
 		this.#configValue = (standbyBits << 5) | (filterBits << 2)
+		this.#forcedMeasurementTime = mode === 'forced' ? Math.ceil(1.25 + 2.3 * temperatureOversampling + 2.3 * pressureOversampling + 0.575) : 0
 	}
 
 	// Enables I2C, writes the config/control-measurement registers, and requests the calibration block.
@@ -290,6 +302,7 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 		this.client.removeHandler(this)
 		clearInterval(this.#timer)
 		this.#timer = undefined
+		this.#initialized = false
 	}
 
 	// Ingests the 24-byte calibration block (starting polling once valid), then decodes each 6-byte data
@@ -316,8 +329,8 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 
 			if (!this.#initialized) return
 
-			this.#readMeasurement()
-			this.#timer = setInterval(this.#readMeasurement.bind(this), Math.max(100, this.pollingInterval))
+			void this.#readMeasurement()
+			this.#timer = setInterval(() => void this.#readMeasurement(), Math.max(100, this.pollingInterval))
 
 			return
 		}
@@ -329,7 +342,7 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 
 		const temperature = this.compensateTemperature(adcT)
 		const pressure = pascal(this.compensatePressure(adcP))
-		const altitude = fromPressure(pressure, temperature)
+		const altitude = fromPressure(pressure)
 
 		const changed = temperature !== this.temperature || pressure !== this.pressure || altitude !== this.altitude
 
@@ -347,8 +360,14 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 		this.client.twoWireRead(this.address, BMP280.CALIBRATION_REG, 24)
 	}
 
-	// Requests one 6-byte pressure+temperature data frame.
-	#readMeasurement() {
+	// Triggers a forced conversion when configured, waits for its completion, and requests one 6-byte
+	// pressure+temperature data frame.
+	async #readMeasurement() {
+		if (this.#forcedMeasurementTime > 0) {
+			this.client.twoWireWrite(this.address, [BMP280.CTRL_MEAS_REG, this.#ctrlMeasValue])
+			await Bun.sleep(this.#forcedMeasurementTime)
+		}
+
 		this.client.twoWireRead(this.address, BMP280.DATA_REG, 6)
 	}
 

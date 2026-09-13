@@ -4,7 +4,7 @@ import { gibbs, type GibbsWarning } from '../../../../src/astronomy/orbits/deter
 import { Timescale, timeYMDHMS } from '../../../../src/astronomy/time/time'
 import { AU_KM, DEG2RAD, GM_SUN_PITJEVA_2005, GM_SUN_PITJEVA_2005_KM3_S2 } from '../../../../src/core/constants'
 import { matIdentity } from '../../../../src/math/linear-algebra/mat3'
-import { type MutVec3, type Vec3, vecDistance } from '../../../../src/math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecDistance, vecLength } from '../../../../src/math/linear-algebra/vec3'
 
 const EPOCH = timeYMDHMS(2026, 1, 1, 0, 0, 0, Timescale.TT)
 const IDENTITY_ROTATION = matIdentity()
@@ -43,6 +43,21 @@ test('returns a defensive copy of the middle position', () => {
 
 	expect(r2[0]).toBe(1)
 	expect(result.r).not.toBe(r2)
+})
+
+test('recovers the middle velocity for a circular half-orbit with an antipodal pair', () => {
+	const radius = 2
+	const mu = 8
+	const r1 = circularPosition(0, radius)
+	const r2 = circularPosition(Math.PI / 2, radius)
+	const r3 = circularPosition(Math.PI, radius)
+	const result = gibbs(r1, r2, r3, mu)
+	const expected: Vec3 = [-Math.sqrt(mu / radius), 0, 0]
+
+	expect(result.r).toEqual(r2)
+	expect(vecDistance(result.v, expected)).toBeLessThan(1e-14)
+	expect(result.diagnostics.reliability).not.toBe('bad')
+	expect(result.diagnostics.warnings).not.toContain('NEAR_COLINEAR_POSITIONS')
 })
 
 test('recovers the middle velocity for an elliptical orbit sample', () => {
@@ -101,6 +116,18 @@ test('reports weak geometry for angular separations above the recommended range'
 	expect(result.v.every(Number.isFinite)).toBeTrue()
 	expect(result.diagnostics.reliability).toBe('warning')
 	expectWarnings(result.diagnostics.warnings, 'ANGULAR_SEPARATION_TOO_LARGE')
+})
+
+test('recovers the middle velocity for an elliptical half-orbit through periapsis, quadrature, and apoapsis', () => {
+	const orbit1 = KeplerOrbit.trueAnomaly(1.8, 0.24, 0.18, 0.4, 0.7, 0, EPOCH, GM_SUN_PITJEVA_2005, IDENTITY_ROTATION)
+	const orbit2 = KeplerOrbit.trueAnomaly(1.8, 0.24, 0.18, 0.4, 0.7, Math.PI / 2, EPOCH, GM_SUN_PITJEVA_2005, IDENTITY_ROTATION)
+	const orbit3 = KeplerOrbit.trueAnomaly(1.8, 0.24, 0.18, 0.4, 0.7, Math.PI, EPOCH, GM_SUN_PITJEVA_2005, IDENTITY_ROTATION)
+	const result = gibbs(orbit1.position, orbit2.position, orbit3.position, GM_SUN_PITJEVA_2005)
+	const speed = vecLength(orbit2.velocity)
+
+	expect(vecDistance(result.v, orbit2.velocity) / speed).toBeLessThan(1e-12)
+	expect(result.diagnostics.reliability).not.toBe('bad')
+	expect(result.diagnostics.warnings).not.toContain('NEAR_COLINEAR_POSITIONS')
 })
 
 test('rejects collinear and degenerate vectors', () => {

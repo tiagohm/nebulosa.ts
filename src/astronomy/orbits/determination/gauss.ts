@@ -1,9 +1,11 @@
 import { DEG2RAD } from '../../../core/constants'
-import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecCrossLength, vecDot, vecLength, vecNormalizeMut, vecTripleProduct } from '../../../math/linear-algebra/vec3'
+import { matIdentity } from '../../../math/linear-algebra/mat3'
+import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecCrossLength, vecDot, vecLength, vecMinus, vecNormalizeMut, vecTripleProduct } from '../../../math/linear-algebra/vec3'
 import type { Angle } from '../../../math/units/angle'
 import type { CartesianCoordinate } from '../../coordinates/coordinate'
 import { eraS2c } from '../../coordinates/erfa/erfa'
 import { type Time, timeSubtract } from '../../time/time'
+import { KeplerOrbit } from '../asteroid'
 import { gibbs, type GibbsWarning } from './gibbs'
 import { herrickGibbs, type HerrickGibbsWarning } from './herrickgibbs'
 
@@ -11,8 +13,9 @@ import { herrickGibbs, type HerrickGibbsWarning } from './herrickgibbs'
 // observations (with known observer positions), solves the eighth-degree scalar range equation for
 // the middle distance, reconstructs the three position vectors, and estimates the middle velocity via
 // Gibbs or Herrick-Gibbs. Robustness machinery brackets and refines every positive polynomial root,
-// scores candidates by two-body smoothness, and surfaces geometry/convergence warnings. Units follow
-// the supplied `mu` (positions and velocities share its length and time units); angles are radians.
+// rejects the degenerate observer-collocated root, scores remaining candidates by two-body
+// line-of-sight residual, and surfaces geometry/convergence warnings. Units follow the supplied `mu`
+// (positions and velocities share its length and time units); angles are radians.
 
 // Smallest positive topocentric range (rho) accepted as physical.
 const DEFAULT_MIN_POSITIVE_RHO = 1e-12
@@ -32,6 +35,20 @@ const MAX_ROOT_SCAN_STEPS = 256
 const ROOT_SCAN_EXPANSION = 1e6
 // Relative spacing below which two roots are treated as the same.
 const ROOT_UNIQUENESS_TOLERANCE = 1e-8
+// Mean topocentric range below this fraction of |R2| is the classical degenerate Gauss root
+// that places the object at the observer (rho ≪ |R|), not a physical target orbit. Dimensionless.
+// Satellite IOD stays well above this floor (LEO rho/|R| is typically ~0.08).
+const MIN_RANGE_TO_OBSERVER_RATIO = 1e-3
+// Converts a two-body line-of-sight residual (radians) into score units so ~1 μrad of mismatch
+// is comparable to a typical rangeSpread and outranks bound-orbit eccentricity.
+const LINE_OF_SIGHT_RESIDUAL_WEIGHT = 1e6
+// Score weight for eccentricity when the first-shot state is hyperbolic. Bound-orbit eccentricity
+// is only a weak remainder so it cannot prefer the observer-collocated or far elliptic branch.
+const HYPERBOLIC_ECCENTRICITY_WEIGHT = 10
+// Score weight for eccentricity of bound (e ≤ 1) first-shot states; a weak remainder after LOS residual.
+const BOUND_ECCENTRICITY_WEIGHT = 1e-3
+// Identity working-frame rotation so KeplerOrbit.at does not apply its ecliptic-to-equatorial default.
+const IDENTITY_ROTATION = matIdentity()
 
 // Method used to recover the middle velocity once positions are known.
 export type GaussVelocityMethod = 'gibbs' | 'herrick-gibbs'
@@ -143,7 +160,7 @@ interface Candidate {
 	readonly r1: MutVec3
 	readonly r2: MutVec3
 	readonly r3: MutVec3
-	// Lower-is-better quality score favoring the smooth two-body branch.
+	// Lower-is-better quality score favoring the two-body branch that reprojects onto the sight lines.
 	readonly score: number
 	// Condition flags raised while building this candidate.
 	readonly warnings: readonly GaussWarning[]
@@ -188,7 +205,7 @@ export function gauss(obs1: GaussObservation, obs2: GaussObservation, obs3: Gaus
 		addWarning(diagnosticsWarnings, 'MULTIPLE_POSITIVE_ROOTS')
 	}
 
-	const candidates = buildCandidates(candidateRoots, determinants, coefficients.A, coefficients.B, obs1.observer, obs2.observer, obs3.observer, rhoHat1, rhoHat2, rhoHat3, tau1, tau3, tau, angles, config)
+	const candidates = buildCandidates(candidateRoots, determinants, coefficients.A, coefficients.B, obs1.observer, obs2.observer, obs3.observer, rhoHat1, rhoHat2, rhoHat3, obs1.time, obs2.time, obs3.time, tau1, tau3, tau, angles, config)
 
 	if (candidates.length === 0) {
 		throw new RangeError(`gauss rejected all positive range candidates (roots=${candidateRoots.map(formatMetric).join(', ')})`)
@@ -434,11 +451,11 @@ function addUniqueRoot(roots: number[], root: number, tolerance: number) {
 	roots.push(root)
 }
 
-function buildCandidates(roots: readonly number[], D: Determinants, A: number, B: number, R1: Vec3, R2: Vec3, R3: Vec3, rhoHat1: Vec3, rhoHat2: Vec3, rhoHat3: Vec3, tau1: number, tau3: number, tau: number, angles: GaussResult['diagnostics']['angles'], config: ResolvedGaussOptions) {
+function buildCandidates(roots: readonly number[], D: Determinants, A: number, B: number, R1: Vec3, R2: Vec3, R3: Vec3, rhoHat1: Vec3, rhoHat2: Vec3, rhoHat3: Vec3, t1: Time, t2: Time, t3: Time, tau1: number, tau3: number, tau: number, angles: GaussResult['diagnostics']['angles'], config: ResolvedGaussOptions) {
 	const candidates: Candidate[] = []
 
 	for (const root of roots) {
-		const candidate = buildCandidate(root, D, A, B, R1, R2, R3, rhoHat1, rhoHat2, rhoHat3, tau1, tau3, tau, angles, config)
+		const candidate = buildCandidate(root, D, A, B, R1, R2, R3, rhoHat1, rhoHat2, rhoHat3, t1, t2, t3, tau1, tau3, tau, angles, config)
 
 		if (candidate) {
 			candidates.push(candidate)
@@ -449,9 +466,29 @@ function buildCandidates(roots: readonly number[], D: Determinants, A: number, B
 }
 
 // Builds a full candidate from one |r2| root: the three ranges and positions via the f/g series,
-// a reprojection-consistency check, and a score blending warnings, range spread, and the implied
-// two-body eccentricity. Returns undefined when the root yields non-physical or inconsistent geometry.
-function buildCandidate(root: number, D: Determinants, A: number, B: number, R1: Vec3, R2: Vec3, R3: Vec3, rhoHat1: Vec3, rhoHat2: Vec3, rhoHat3: Vec3, tau1: number, tau3: number, tau: number, angles: GaussResult['diagnostics']['angles'], config: ResolvedGaussOptions): Candidate | undefined {
+// a reprojection-consistency check, and a score from warnings, range spread, Kepler line-of-sight
+// residual, and eccentricity. Returns undefined when the root yields non-physical or inconsistent
+// geometry, including the degenerate branch that places the object at the observer.
+function buildCandidate(
+	root: number,
+	D: Determinants,
+	A: number,
+	B: number,
+	R1: Vec3,
+	R2: Vec3,
+	R3: Vec3,
+	rhoHat1: Vec3,
+	rhoHat2: Vec3,
+	rhoHat3: Vec3,
+	t1: Time,
+	t2: Time,
+	t3: Time,
+	tau1: number,
+	tau3: number,
+	tau: number,
+	angles: GaussResult['diagnostics']['angles'],
+	config: ResolvedGaussOptions,
+): Candidate | undefined {
 	const warnings: GaussWarning[] = []
 	const x3 = root * root * root
 	const rho2 = A + (config.mu * B) / x3
@@ -490,6 +527,14 @@ function buildCandidate(root: number, D: Determinants, A: number, B: number, R1:
 		return undefined
 	}
 
+	const rangeMean = (rho1 + rho2 + rho3) / 3
+	const observerScale = vecLength(R2)
+	// The eighth-degree polynomial has an extra positive root at |r2| ≈ |R2| that reconstructs
+	// as the observing site itself. Reject it so scoring cannot prefer that near-circular 1 AU orbit.
+	if (observerScale > 0 && !(rangeMean / observerScale >= MIN_RANGE_TO_OBSERVER_RATIO)) {
+		return undefined
+	}
+
 	const r1 = reconstructPosition(R1, rho1, rhoHat1)
 	const r2 = reconstructPosition(R2, rho2, rhoHat2)
 	const r3 = reconstructPosition(R3, rho3, rhoHat3)
@@ -514,7 +559,6 @@ function buildCandidate(root: number, D: Determinants, A: number, B: number, R1:
 		addWarning(warnings, 'POSSIBLE_COPLANARITY_PROBLEM')
 	}
 
-	const rangeMean = (rho1 + rho2 + rho3) / 3
 	const rangeSpread = Math.max(Math.abs(rho1 - rangeMean), Math.abs(rho2 - rangeMean), Math.abs(rho3 - rangeMean)) / Math.max(config.minPositiveRho, rangeMean)
 	const lagrangeVelocity = centralVelocityFromFG(r1, r3, f1, f3, denominator)
 	const eccentricity = stateEccentricity(r2, lagrangeVelocity, config.mu)
@@ -523,9 +567,16 @@ function buildCandidate(root: number, D: Determinants, A: number, B: number, R1:
 		return undefined
 	}
 
-	// Multiple positive Gauss roots can all reproject exactly. Prefer the
-	// smoother two-body branch instead of rewarding the largest position arc.
-	const score = warnings.length * 100 + rootMismatch * 100 + rangeSpread + 10 * eccentricity + root * 1e-9
+	const losResidual = lineOfSightResidual(r2, lagrangeVelocity, t1, t2, t3, R1, R3, rhoHat1, rhoHat3, config.mu)
+	if (!Number.isFinite(losResidual)) {
+		return undefined
+	}
+
+	// Multiple positive Gauss roots can all reproject exactly. Prefer the branch whose
+	// two-body propagation stays on the observed sight lines; keep a strong hyperbolic
+	// penalty so the far high-e root of short circular arcs still loses.
+	const eccentricityTerm = eccentricity > 1 ? HYPERBOLIC_ECCENTRICITY_WEIGHT * eccentricity : BOUND_ECCENTRICITY_WEIGHT * eccentricity
+	const score = warnings.length * 100 + rootMismatch * 100 + rangeSpread + LINE_OF_SIGHT_RESIDUAL_WEIGHT * losResidual + eccentricityTerm + root * 1e-9
 
 	return {
 		root,
@@ -566,6 +617,26 @@ function stateEccentricity(r: Vec3, v: Vec3, mu: number) {
 	const ey = (r[1] * radialScale - v[1] * rv) / mu
 	const ez = (r[2] * radialScale - v[2] * rv) / mu
 	return Math.hypot(ex, ey, ez)
+}
+
+// Two-body line-of-sight residual of a first-shot Gauss state. Propagates `r2`, `v2` from
+// middle epoch `t2` to `t1` and `t3` with KeplerOrbit in the working frame (`mu` consistent
+// with the positions). Returns the sum of the angles (radians) between the predicted
+// topocentric directions and the observed unit sight lines `rhoHat1`/`rhoHat3`. Infinity when
+// the motion is non-conical, Kepler propagation throws, or a predicted topocentric vector
+// vanishes. Does not mutate the input vectors; allocates temporary position and LOS vectors.
+function lineOfSightResidual(r2: Vec3, v2: Vec3, t1: Time, t2: Time, t3: Time, R1: Vec3, R3: Vec3, rhoHat1: Vec3, rhoHat3: Vec3, mu: number) {
+	try {
+		const orbit = new KeplerOrbit(r2, v2, t2, mu, IDENTITY_ROTATION)
+		const p1 = orbit.at(t1)[0]
+		const p3 = orbit.at(t3)[0]
+		const los1 = vecMinus(p1, R1)
+		const los3 = vecMinus(p3, R3)
+		if (!(vecLength(los1) > 0 && vecLength(los3) > 0)) return Number.POSITIVE_INFINITY
+		return vecAngleUnit(vecNormalizeMut(los1), rhoHat1) + vecAngleUnit(vecNormalizeMut(los3), rhoHat3)
+	} catch {
+		return Number.POSITIVE_INFINITY
+	}
 }
 
 // Picks the lowest-scoring candidate, breaking ties toward the smaller range root.

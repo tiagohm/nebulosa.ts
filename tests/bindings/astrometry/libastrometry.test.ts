@@ -1,9 +1,9 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { DEC_TAN_SIP, RA_TAN_SIP } from '../../../src/astrometry/wcs/fits.wcs'
-import { astrometryNetIndexFiles, libAstrometryNetPlateSolve } from '../../../src/bindings/astrometry/libastrometry'
+import { AstrometryNet, astrometryNetIndexFiles, libAstrometryNetPlateSolve, load } from '../../../src/bindings/astrometry/libastrometry'
 import { readImageFromJpeg } from '../../../src/imaging/model/image'
 import { detectStars } from '../../../src/imaging/stars/detector'
 import { deg, toArcsec, toDeg, toHour } from '../../../src/math/units/angle'
@@ -32,6 +32,31 @@ test('expand index directory and files', async () => {
 	}
 })
 
+test.skipIf(SKIP)('configure default and explicit acceptance log-odds on each solve', async () => {
+	const lib = load()
+	const keepLogOdds = spyOn(lib, 'solver_set_keep_logodds')
+	const run = spyOn(lib, 'solver_run').mockReturnValue(undefined)
+
+	try {
+		using solver = new AstrometryNet()
+		const stars = [
+			{ x: 10, y: 10, flux: 3 },
+			{ x: 20, y: 10, flux: 2 },
+			{ x: 10, y: 20, flux: 1 },
+		]
+
+		for (const logOddsToKeep of [undefined, 0, Math.log(1e12), undefined]) {
+			keepLogOdds.mockClear()
+			await solver.solve(stars, 100, 100, { indexes: 'data/index-4116.fits', logOddsToKeep })
+			expect(keepLogOdds).toHaveBeenCalledTimes(1)
+			expect(keepLogOdds.mock.calls[0][1]).toBeCloseTo(logOddsToKeep ?? 20.72326583694641, 12)
+		}
+	} finally {
+		run.mockRestore()
+		keepLogOdds.mockRestore()
+	}
+})
+
 test.skipIf(SKIP)(
 	'solve apod4.jpg',
 	async () => {
@@ -47,13 +72,17 @@ test.skipIf(SKIP)(
 		})
 
 		// https://nova.astrometry.net/status/14909666
-		// Orientation/FOV compare to 0.005 deg: flux-weighted centroids move stars by a fraction
-		// of a pixel, about 9 arcsec at this plate scale, versus integer-peak positions.
+		// FOV compares to 0.005 deg because flux-weighted centroids differ from integer peaks.
+		// Center and orientation: Astropy 8.0.1 evaluated the previous SIP WCS at FITS (360, 254),
+		// origin=1, then recentered its gnomonic plane there (0.01-pixel central-difference Jacobian).
+		// Recentring preserves the celestial frame; tolerances allow the native SIP refit.
 		expect(solution).toBeDefined()
-		expect(toDeg(solution!.orientation)).toBeCloseTo(58.4507, 2)
+		expect(solution!.CRPIX1).toBe((image.metadata.width + 1) / 2)
+		expect(solution!.CRPIX2).toBe((image.metadata.height + 1) / 2)
+		expect(toDeg(solution!.orientation)).toBeCloseTo(58.5039782352, 2)
 		expect(toArcsec(solution!.scale)).toBeCloseTo(170.85, 1)
-		expect(toHour(solution!.rightAscension)).toBeCloseTo(12.474879, 3)
-		expect(toDeg(solution!.declination)).toBeCloseTo(56.7205, 3)
+		expect(toHour(solution!.rightAscension)).toBeCloseTo(12.478627009, 3)
+		expect(toDeg(solution!.declination)).toBeCloseTo(56.7124022211, 3)
 		expect(toDeg(solution!.width)).toBeCloseTo(34.092, 2)
 		expect(toDeg(solution!.height)).toBeCloseTo(24.0842, 3)
 		expect(toDeg(solution!.radius)).toBeCloseTo(20.8705, 2)

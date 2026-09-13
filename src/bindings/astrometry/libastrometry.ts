@@ -58,7 +58,7 @@ export interface AstrometryNetSolveOptions extends Partial<DetectStarOptions> {
 	readonly verifyPixelSigma?: number
 	// Code (quad shape) matching tolerance.
 	readonly codeTolerance?: number
-	// Minimum log-odds for a match to be kept.
+	// Minimum natural log-odds for an accepted solution; defaults to Math.log(1e9), as in solve-field.
 	readonly logOddsToKeep?: number
 	// Cap on the number of quads tried.
 	readonly maxQuads?: number
@@ -234,7 +234,8 @@ export class AstrometryNet implements Disposable {
 		if (!field) throw new Error('failed to create astrometry.net star field')
 
 		this.#lib.solver_set_field(this.#pointer!, field)
-		this.#lib.solver_set_field_bounds(this.#pointer!, 1, width, 1, height)
+		// Native field sizes are max - min; FITS star coordinates remain 1-based.
+		this.#lib.solver_set_field_bounds(this.#pointer!, 0, width, 0, height)
 
 		const [scaleLow, scaleHigh] = scaleRange(width, options)
 
@@ -269,7 +270,7 @@ export class AstrometryNet implements Disposable {
 
 		if (options.verifyPixelSigma !== undefined) this.#lib.solver_set_verify_pix(this.#pointer!, Math.max(options.verifyPixelSigma, Number.EPSILON))
 		if (options.codeTolerance !== undefined) this.#lib.solver_set_codetol(this.#pointer!, Math.max(options.codeTolerance, Number.EPSILON))
-		if (options.logOddsToKeep !== undefined) this.#lib.solver_set_keep_logodds(this.#pointer!, options.logOddsToKeep)
+		this.#lib.solver_set_keep_logodds(this.#pointer!, options.logOddsToKeep ?? Math.log(1e9))
 		if (options.maxQuads !== undefined) this.#lib.solver_set_maxquads(this.#pointer!, Math.max(0, Math.trunc(options.maxQuads)))
 		if (options.maxMatches !== undefined) this.#lib.solver_set_maxmatches(this.#pointer!, Math.max(0, Math.trunc(options.maxMatches)))
 	}

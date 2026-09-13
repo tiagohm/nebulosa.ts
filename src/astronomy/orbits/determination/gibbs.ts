@@ -1,5 +1,5 @@
 import { DEG2RAD } from '../../../core/constants'
-import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecCrossLength, vecLength, vecTripleProduct } from '../../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecCrossLength, vecDot, vecLength, vecTripleProduct } from '../../../math/linear-algebra/vec3'
 import type { Angle } from '../../../math/units/angle'
 import type { CartesianCoordinate } from '../../coordinates/coordinate'
 
@@ -138,7 +138,7 @@ export function gibbs(r1: Vec3, r2: Vec3, r3: Vec3, mu: number, options?: GibbsO
 		addWarning(warnings, 'POOR_COPLANARITY')
 	}
 
-	if (isNearColinear(crossNorm12, R1, R2, config) || isNearColinear(crossNorm23, R2, R3, config) || isNearColinear(crossNorm31, R3, R1, config)) {
+	if (isNearColinear(r1, r2, crossNorm12, R1, R2, config) || isNearColinear(r2, r3, crossNorm23, R2, R3, config) || isNearColinear(r3, r1, crossNorm31, R3, R1, config)) {
 		addWarning(warnings, 'NEAR_COLINEAR_POSITIONS')
 	}
 
@@ -251,10 +251,13 @@ function isTooSmallAngle(value: Angle, config: ResolvedGibbsOptions) {
 	return Number.isFinite(value) && value < config.minAngularSeparation
 }
 
-function isNearColinear(crossNorm: number, aNorm: number, bNorm: number, config: ResolvedGibbsOptions) {
+// Same-ray alignment (θ ≈ 0) zeros N and D. |ri × rj| / (|ri||rj|) = |sin θ| also vanishes at
+// θ ≈ π, but an antipodal pair leaves N and D well-conditioned, so it is not a Gibbs degeneracy.
+function isNearColinear(a: Vec3, b: Vec3, crossNorm: number, aNorm: number, bNorm: number, config: ResolvedGibbsOptions) {
 	const denominator = aNorm * bNorm
 	if (!(Number.isFinite(crossNorm) && Number.isFinite(denominator) && denominator > 0)) return false
-	return crossNorm / denominator <= config.degeneracyTolerance
+	if (crossNorm / denominator > config.degeneracyTolerance) return false
+	return vecDot(a, b) > 0
 }
 
 function isNearZeroD(normD: number, crossNorm12: number, crossNorm23: number, crossNorm31: number, config: ResolvedGibbsOptions) {

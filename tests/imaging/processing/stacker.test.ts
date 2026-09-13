@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { readImageFromBuffer } from '../../../src/imaging/model/image'
-import type { CfaPattern, Image } from '../../../src/imaging/model/types'
+import { type CfaPattern, type Image, shiftCfaPattern } from '../../../src/imaging/model/types'
 import { bayer } from '../../../src/imaging/processing/debayer'
 import { LiveStacker, type StackingFrame, type StackingOptions, stackFrames } from '../../../src/imaging/processing/stacker'
 import type { DetectedStar } from '../../../src/imaging/stars/detector'
@@ -485,6 +485,33 @@ describe('stacker batch mode', () => {
 		expect(result.diagnostics.find((entry) => entry.accepted === false)?.reason).toBe('too-few-stars')
 	})
 
+	test('does not accept a starless batch reference when allowStarlessReference is false', () => {
+		const image = makeImage(18, 18, 1, 0.4)
+		const starless = makeFrame(image, [])
+		const starred = makeFrame(image, makeStars())
+		const options = { ...DEFAULT_STACK_OPTIONS, allowStarlessReference: false } as const satisfies StackingOptions
+
+		const both = stackFrames([starless, starless], options)
+		expect(both.acceptedFrames).toBe(0)
+		expect(both.finalImage).toBeUndefined()
+		expect(both.diagnostics[0].reason).toBe('too-few-stars')
+
+		const live = new LiveStacker(options)
+		expect(live.add(starless).reason).toBe('too-few-stars')
+		expect(live.add(starless).reason).toBe('too-few-stars')
+		expect(live.snapshot()).toBeUndefined()
+
+		const indexed = stackFrames([starless, starred], { ...options, batchReference: { mode: 'index', index: 0 } })
+		expect(indexed.acceptedFrames).toBe(0)
+		expect(indexed.referenceFrameIndex).toBe(0)
+		expect(indexed.diagnostics[0].reason).toBe('too-few-stars')
+		expect(indexed.finalImage).toBeUndefined()
+
+		const first = stackFrames([starless, starred], options)
+		expect(first.referenceFrameIndex).toBe(1)
+		expect(first.acceptedFrames).toBe(1)
+	})
+
 	test('preserves RGB channel values consistently after alignment', () => {
 		const reference = makeImage(16, 16, 3, (x, y, channel) => (channel === 0 ? x / 16 : channel === 1 ? y / 16 : (x + y) / 32))
 		const current = translateImage(reference, -1, 2)
@@ -493,6 +520,56 @@ describe('stacker batch mode', () => {
 		expect(result.acceptedFrames).toBe(2)
 		expect(result.finalImage).toBeDefined()
 		expectRawClose(result.finalImage!.raw, reference.raw)
+	})
+
+	test('intersection crop rewrites FITS geometry and CFA phase to the output raster', async () => {
+		const reference = makeImage(18, 18, 1, (x, y) => ((x * 3 + y * 5) % 11) / 32)
+		Object.assign(reference.metadata, { bayer: 'RGGB' })
+		Object.assign(reference.header, {
+			BITPIX: Bitpix.FLOAT,
+			NAXIS: 2,
+			NAXIS1: 18,
+			NAXIS2: 18,
+			CRPIX1: 9.5,
+			CRPIX2: 9.5,
+			CRVAL1: 10,
+			CRVAL2: 20,
+			CTYPE1: 'RA---TAN',
+			CTYPE2: 'DEC--TAN',
+			CD1_1: -0.001,
+			CD1_2: 0,
+			CD2_1: 0,
+			CD2_2: 0.001,
+			BAYERPAT: 'RGGB',
+		})
+		const current = translateImage(reference, 4, -3)
+		Object.assign(current.metadata, { bayer: 'RGGB' })
+		const frames = [makeFrame(reference, makeStars()), makeFrame(current, makeStars(-4, 3))]
+		const result = stackFrames(frames, { ...DEFAULT_STACK_OPTIONS, cropMode: 'intersection', interpolationMode: 'nearest' })
+		const image = result.finalImage!
+		const bounds = result.effectiveCropBounds!
+
+		expect(result.acceptedFrames).toBe(2)
+		expect(image.metadata.width).toBe(bounds.width)
+		expect(image.metadata.height).toBe(bounds.height)
+		expect(image.metadata.width).toBeLessThan(18)
+		expect(image.header.NAXIS1).toBe(image.metadata.width)
+		expect(image.header.NAXIS2).toBe(image.metadata.height)
+		expect(image.header.CRPIX1).toBeCloseTo(9.5 - bounds.left, 10)
+		expect(image.header.CRPIX2).toBeCloseTo(9.5 - bounds.top, 10)
+		expect(image.metadata.bayer).toBe(shiftCfaPattern('RGGB', bounds.left, bounds.top))
+		expect(image.header.BAYERPAT).toBe(image.metadata.bayer)
+		// Coverage and validity stay on the documented pre-crop reference grid.
+		expect(result.validityMask!.length).toBe(18 * 18)
+		expect(result.coverageMap!.length).toBe(18 * 18)
+
+		const storage = Buffer.alloc(32768)
+		const sink = bufferSink(storage)
+		await writeFits(sink, [image])
+		const restored = (await readImageFromBuffer(storage.subarray(0, sink.position), { raw: 32 }))!
+		expect(restored.metadata.width).toBe(image.metadata.width)
+		expect(restored.metadata.height).toBe(image.metadata.height)
+		expectRawClose(restored.raw, image.raw, 1e-5)
 	})
 })
 
@@ -602,10 +679,15 @@ describe('stacker normalization modes', () => {
 
 		const batch = stackFrames(frames, options)
 		expect(batch.diagnostics[1].reason).toBe('insufficient-overlap')
+		expect(batch.diagnostics[1].overlapFraction).toBeGreaterThan(0)
+		expect(batch.diagnostics[1].transform).toBeDefined()
 
 		const live = new LiveStacker(options)
 		live.add(frames[0])
-		expect(live.add(frames[1]).reason).toBe('insufficient-overlap')
+		const liveRejected = live.add(frames[1])
+		expect(liveRejected.reason).toBe('insufficient-overlap')
+		expect(liveRejected.overlapFraction).toBe(batch.diagnostics[1].overlapFraction)
+		expect(liveRejected.transform).toEqual(batch.diagnostics[1].transform)
 	})
 	test('a reject fallback drops the frame as normalization-failed', () => {
 		const { reference, current } = localFrames(
@@ -619,10 +701,14 @@ describe('stacker normalization modes', () => {
 		const batch = stackFrames(frames, options)
 		expect(batch.acceptedFrames).toBe(1)
 		expect(batch.diagnostics[1].reason).toBe('normalization-failed')
+		expect(batch.diagnostics[1].transform).toBeDefined()
 
 		const live = new LiveStacker(options)
 		live.add(frames[0])
-		expect(live.add(frames[1]).reason).toBe('normalization-failed')
+		const liveRejected = live.add(frames[1])
+		expect(liveRejected.reason).toBe('normalization-failed')
+		expect(liveRejected.overlapFraction).toBe(batch.diagnostics[1].overlapFraction)
+		expect(liveRejected.transform).toEqual(batch.diagnostics[1].transform)
 	})
 
 	test('a global fallback keeps the frame and flags the diagnostics', () => {

@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { Jpeg } from '../../../src/bindings/imaging/libturbojpeg'
-import { readImageFromJpeg, readImageFromPath, readImageFromSource, writeImageToFits, writeImageToXisf } from '../../../src/imaging/model/image'
+import { readImageFromFits, readImageFromJpeg, readImageFromPath, readImageFromSource, readImageFromXisf, writeImageToFits, writeImageToXisf } from '../../../src/imaging/model/image'
 import { approximateArcsinhStretchParameters, arcsinhStretch } from '../../../src/imaging/processing/arcsinh'
 import { clone } from '../../../src/imaging/processing/arithmetic'
 import { calibrate } from '../../../src/imaging/processing/calibration'
 import { adf, estimateBackground, estimateBackgroundUsingMode, histogram, sigmaClip } from '../../../src/imaging/processing/computation'
-import { Bitpix } from '../../../src/io/formats/fits/fits'
+import { Bitpix, FITS_BLOCK_SIZE, type FitsHdu, type FitsHeaderCard, FitsKeywordWriter, readFits, writeFits } from '../../../src/io/formats/fits/fits'
 // oxfmt-ignore
 import { blur3x3, blur5x5, blur7x7, blurConvolutionKernel, convolution, convolutionKernel, edges, emboss, gaussianBlur, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, sharpen } from '../../../src/imaging/processing/convolution'
 import type { Image } from '../../../src/imaging/model/types'
@@ -69,6 +69,134 @@ test('reads a JPEG into an explicit 64-bit raw buffer', () => {
 		expect(value).toBeGreaterThanOrEqual(0)
 		expect(value).toBeLessThanOrEqual(1)
 	}
+})
+
+test('does not min-max stretch leftover samples past a FITS image', async () => {
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 2, 0)
+	const header = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 4, NAXIS2: 1, BZERO: 32768, BSCALE: 1 }
+	const midScale = 32768 / 65535
+	await writeFits(bufferSink(buffer), [{ header, raw: new Float32Array([midScale, midScale, midScale, midScale]) }], { type: false })
+
+	const fits = (await readFits(bufferSource(buffer)))!
+	const raw = new Float64Array(8).fill(2)
+	const image = await readImageFromFits(fits, bufferSource(buffer), raw)
+
+	expect(image).toBeDefined()
+	expect(image!.raw.length).toBe(4)
+	for (const value of image!.raw) {
+		expect(value).toBeCloseTo(midScale, 6)
+	}
+})
+
+test('drops leftover samples past a JPEG image', () => {
+	const width = 2
+	const height = 2
+	const gray = new Uint8Array([0, 64, 128, 192])
+	const jpeg = new Jpeg().compress(gray, width, height, 'GRAY', 100, 'GRAY')!
+	const raw = new Float32Array(8).fill(2)
+	const image = readImageFromJpeg(jpeg, raw)!
+
+	expect(image.raw.length).toBe(width * height)
+	for (const value of image.raw) {
+		expect(value).toBeGreaterThanOrEqual(0)
+		expect(value).toBeLessThanOrEqual(1)
+	}
+})
+
+function fitsHeaderBlock(cards: readonly FitsHeaderCard[]) {
+	const writer = new FitsKeywordWriter()
+	const header = Buffer.alloc(FITS_BLOCK_SIZE, 32)
+	let offset = writer.writeAll(cards, header)
+	offset += writer.writeEnd(header, offset)
+	header.fill(32, offset)
+	return header
+}
+
+test('reads the IMAGE HDU after a preceding BINTABLE', async () => {
+	const primary = fitsHeaderBlock([
+		['SIMPLE', true],
+		['BITPIX', 8],
+		['NAXIS', 0],
+		['EXTEND', true],
+	])
+	const table = Buffer.concat([
+		fitsHeaderBlock([
+			['XTENSION', 'BINTABLE'],
+			['BITPIX', 8],
+			['NAXIS', 2],
+			['NAXIS1', 4],
+			['NAXIS2', 1],
+			['PCOUNT', 0],
+			['GCOUNT', 1],
+			['TFIELDS', 1],
+		]),
+		Buffer.alloc(FITS_BLOCK_SIZE, 0),
+	])
+	const imageData = Buffer.alloc(FITS_BLOCK_SIZE, 0)
+	imageData.writeInt16BE(0, 0)
+	imageData.writeInt16BE(1000, 2)
+	const imageHdu = Buffer.concat([
+		fitsHeaderBlock([
+			['XTENSION', 'IMAGE'],
+			['BITPIX', 16],
+			['NAXIS', 2],
+			['NAXIS1', 2],
+			['NAXIS2', 1],
+			['PCOUNT', 0],
+			['GCOUNT', 1],
+			['BZERO', 32768],
+			['BSCALE', 1],
+		]),
+		imageData,
+	])
+	const file = Buffer.concat([primary, table, imageHdu])
+	const fits = (await readFits(bufferSource(file)))!
+	const image = await readImageFromFits(fits, bufferSource(file))
+
+	expect(image).toBeDefined()
+	expect(image!.metadata).toMatchObject({ width: 2, height: 1, channels: 1, bitpix: 16 })
+	expect(image!.raw[0]).toBeCloseTo(32768 / 65535, 6)
+	expect(image!.raw[1]).toBeCloseTo((1000 + 32768) / 65535, 6)
+})
+
+test('returns undefined for a non-Rice ZIMAGE HDU', async () => {
+	const hdu: FitsHdu = {
+		header: {
+			XTENSION: 'BINTABLE',
+			BITPIX: 8,
+			NAXIS: 2,
+			NAXIS1: 8,
+			NAXIS2: 1,
+			PCOUNT: 0,
+			GCOUNT: 1,
+			ZIMAGE: true,
+			ZCMPTYPE: 'GZIP_1',
+			ZBITPIX: 16,
+			ZNAXIS: 2,
+			ZNAXIS1: 2,
+			ZNAXIS2: 1,
+		},
+		data: { offset: 0, size: 8 },
+	}
+
+	expect(await readImageFromFits({ hdus: [hdu] }, bufferSource(Buffer.alloc(16)))).toBeUndefined()
+	expect(await readImageFromFits(hdu, bufferSource(Buffer.alloc(16)))).toBeUndefined()
+})
+
+test('returns undefined when XISF has no supported images', async () => {
+	expect(await readImageFromXisf({ images: [] }, bufferSource(Buffer.alloc(1)))).toBeUndefined()
+})
+
+test('returns undefined when JPEG pixel format is not GRAY', () => {
+	const width = 2
+	const height = 2
+	const rgb = new Uint8Array([255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0])
+	const jpeg = new Jpeg().compress(rgb, width, height, 'RGB', 100, '4:4:4')!
+
+	expect(readImageFromJpeg(jpeg, 'auto', 'RGB')).toBeUndefined()
+	expect(readImageFromJpeg(jpeg, 'auto', 'BGR')).toBeUndefined()
+	expect(readImageFromJpeg(jpeg, 'auto', 'CMYK')).toBeUndefined()
+	expect(readImageFromJpeg(jpeg, 'auto', 'GRAY')?.metadata.channels).toBe(1)
 })
 
 describe('read image from fits', () => {
@@ -310,8 +438,8 @@ test('sigma clip excludes rejected pixels from the iteration statistics', () => 
 test('adf honors explicit zero options', () => {
 	const image = {
 		header: {},
-		metadata: { width: 1, height: 1, channels: 1, stride: 1, pixelCount: 1, strideInBytes: 4, pixelSizeInBytes: 4, bitpix: Bitpix.FLOAT, bayer: undefined },
-		raw: new Float32Array([0.25]),
+		metadata: { width: 3, height: 1, channels: 1, stride: 3, pixelCount: 3, strideInBytes: 12, pixelSizeInBytes: 4, bitpix: Bitpix.FLOAT, bayer: undefined },
+		raw: new Float32Array([0.1, 0.25, 0.4]),
 	}
 	const median = histogram(image).median
 

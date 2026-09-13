@@ -506,16 +506,20 @@ export function mergeVeryCloseStars(stars: StarList, minLimitSq: number = 25) {
 			const d2 = dx * dx + dy * dy
 
 			if (d2 < minLimitSq) {
+				const next = a.next
 				stars.deleteAfter(previous)
 				deleted = true
+				current = previous ? previous.next : next
 				break
 			}
 
 			b = b.next
 		}
 
-		current = a.next
-		if (!deleted) previous = a
+		if (!deleted) {
+			previous = a
+			current = a.next
+		}
 	}
 }
 

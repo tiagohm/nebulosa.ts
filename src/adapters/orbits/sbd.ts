@@ -1,4 +1,4 @@
-import { DATE_FORMAT, formatTemporal, type Temporal, temporalNow } from '../../astronomy/time/temporal'
+import { DATE_FORMAT, formatTemporal, temporalAdd, type Temporal, temporalNow } from '../../astronomy/time/temporal'
 import type { Time } from '../../astronomy/time/time'
 import { DEG2RAD } from '../../core/constants'
 import { type Angle, type FormatAngleOptions, formatAngle, toDeg } from '../../math/units/angle'
@@ -35,6 +35,20 @@ export interface Signature {
 
 // https://ssd-api.jpl.nasa.gov/doc/sbdb.html
 
+// One alternate designation entry returned by SBDB, with one designation kind per object.
+export interface SmallBodySearchAlternateDesignation {
+	// Standard designation for the body.
+	readonly des?: string
+	// Primary designation for the body.
+	readonly pri?: string
+	// Component designation for the body.
+	readonly com?: string
+	// Related name for the body.
+	readonly rn?: string
+	// Year-letter designation for the body.
+	readonly yl?: string
+}
+
 // Object-identity block of an SBDB search result.
 export interface SmallBodySearchObject {
 	readonly orbit_id: string
@@ -46,20 +60,21 @@ export interface SmallBodySearchObject {
 	readonly neo: boolean
 	// True if a potentially hazardous asteroid.
 	readonly pha: boolean
-	readonly des_alt: string[]
+	readonly des_alt: SmallBodySearchAlternateDesignation[]
 	// Object kind: 'a' asteroid / 'c' comet, suffixed 'n' numbered / 'u' unnumbered.
 	readonly kind: 'an' | 'au' | 'cn' | 'cu'
 	readonly fullname: string
 	readonly shortname: string
-	readonly prefix: string
+	readonly prefix: string | null
 	readonly des: string
 	// SPICE kernel ID of the body.
 	readonly spkid: string
 }
 
 // SBDB orbital-element identifiers (e eccentricity, a semi-major axis, q perihelion, i inclination,
-// om node, w argument of perihelion, ma mean anomaly, tp time of perihelion, per period, n mean motion, ...).
-export type SmallBodySearchOrbitElementName = 'e' | 'a' | 'q' | 'i' | 'om' | 'w' | 'ma' | 'tp' | 'cd_tp' | 'per' | 'n' | 'a_D' | 'dn_dt'
+// om node, w argument of perihelion, ma mean anomaly, tp time of perihelion, tp_cd calendar date of
+// perihelion, per period, n mean motion, and ad aphelion distance).
+export type SmallBodySearchOrbitElementName = 'e' | 'a' | 'q' | 'i' | 'om' | 'w' | 'ma' | 'tp' | 'tp_cd' | 'per' | 'n' | 'ad'
 
 // One published orbital element with its value, 1-sigma uncertainty, and units (all as strings).
 export interface SmallBodySearchOrbitElement {
@@ -128,6 +143,12 @@ export interface SmallBodySearchListItem {
 // SBDB response when several bodies match the query string.
 export interface SmallBodySearchList {
 	readonly list: SmallBodySearchListItem[]
+	// Optional message returned when the query matches multiple bodies.
+	readonly message?: string
+	// Optional status code associated with the response.
+	readonly code?: string
+	// Optional number of matching bodies reported by the service.
+	readonly count?: number
 }
 
 // SBDB response carrying an informational/error message instead of a result.
@@ -171,6 +192,9 @@ export interface SmallBodyCloseApproach {
 	readonly data: readonly string[][]
 }
 
+// Wire-level CAD response, whose table fields are omitted when count is zero.
+type SmallBodyCloseApproachResponse = Omit<SmallBodyCloseApproach, 'fields' | 'data'> & Partial<Pick<SmallBodyCloseApproach, 'fields' | 'data'>>
+
 // Searches the SBDB for small bodies matching `text` (name or designation). Returns a single match,
 // a list of candidates, or a message. Performs a network request.
 export async function search(text: string) {
@@ -193,8 +217,10 @@ export async function identify(dateTime: Temporal | Time, longitude: Angle, lati
 // (a date or a relative `${n}d` span, default 7 days), within `distance` lunar distances (default 10).
 // Performs a network request.
 export async function closeApproaches(dateMin?: Temporal | 'now', dateMax: Temporal | `${number}d` = '7d', distance: number = 10) {
-	dateMin = !dateMin || dateMin === 'now' ? temporalNow() : dateMin
-	const uri = `${SBD_BASE_URL}${CLOSE_APPROACHES_PATH}&date-min=${formatTemporal(dateMin, DATE_FORMAT)}&date-max=${typeof dateMax === 'string' ? `%2B${dateMax.slice(0, dateMax.length - 1)}` : formatTemporal(dateMax, DATE_FORMAT)}&dist-max=${distance}LD`
+	dateMin = dateMin === undefined || dateMin === 'now' ? temporalNow() : dateMin
+	const maxDate = typeof dateMax === 'string' ? temporalAdd(dateMin, Number(dateMax.slice(0, dateMax.length - 1)), 'd') : dateMax
+	const uri = `${SBD_BASE_URL}${CLOSE_APPROACHES_PATH}&date-min=${formatTemporal(dateMin, DATE_FORMAT)}&date-max=${formatTemporal(maxDate, DATE_FORMAT)}&dist-max=${distance}LD`
 	const response = await fetch(uri)
-	return (await response.json()) as SmallBodyCloseApproach
+	const data = (await response.json()) as SmallBodyCloseApproachResponse
+	return { ...data, fields: data.fields ?? [], data: data.data ?? [] }
 }

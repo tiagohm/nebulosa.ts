@@ -600,7 +600,8 @@ function rejectStarReason(star: GuideStar, config: StarFilterConfig, borderRight
 	if (star.hfd > config.maxHfd) return 'high_hfd'
 	if (star.saturated === true) return 'saturated'
 	if (config.saturationPeak !== undefined && star.peak !== undefined && star.peak >= config.saturationPeak) return 'saturated_peak'
-	if (star.ellipticity !== undefined && star.ellipticity > config.maxEllipticity) return 'elongated'
+	const ellipticity = star.ellipticity ?? star.eccentricity
+	if (ellipticity !== undefined && ellipticity > config.maxEllipticity) return 'elongated'
 	if (config.maxFwhm !== undefined && star.fwhm !== undefined && star.fwhm > config.maxFwhm) return 'high_fwhm'
 	if (star.x < borderLeft || star.y < borderLeft || star.x >= borderRight || star.y >= borderBottom) return 'border'
 	return undefined
@@ -1047,7 +1048,11 @@ export class Guider {
 
 		if (badFrame) {
 			this.state.consecutiveBadFrames++
-			if (this.state.consecutiveBadFrames >= this.config.lostStarFrameCount) this.state.state = 'lost'
+			if (this.state.consecutiveBadFrames >= this.config.lostStarFrameCount) {
+				this.state.state = 'lost'
+				this.#clearRaControlState()
+				this.#clearDecControlState()
+			}
 			this.#updateDiagnostics(frame, quality, undefined, droppedFrame, true, notes)
 			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, stars: filtered.accepted }
 		}
@@ -1134,6 +1139,16 @@ export class Guider {
 		if (preferred === undefined) {
 			this.#updateDiagnostics(frame, quality, undefined, false, true, ['init_no_star'])
 			return filtered.accepted
+		}
+
+		if (previous !== undefined) {
+			const maxLockSampleDistance = Math.min(this.config.maxMatchDistancePx, this.config.maxFrameJumpPx)
+			const dx = preferred.x - previous.x
+			const dy = preferred.y - previous.y
+			if (dx * dx + dy * dy > maxLockSampleDistance * maxLockSampleDistance) {
+				this.#updateDiagnostics(frame, quality, undefined, false, true, ['init_waiting'])
+				return filtered.accepted
+			}
 		}
 
 		this.state.lockSamples.push({ x: preferred.x, y: preferred.y, stars: filtered.accepted })

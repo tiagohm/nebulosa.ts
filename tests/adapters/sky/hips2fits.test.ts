@@ -7,6 +7,24 @@ import { isNetworkTestSkipped } from '../../util'
 
 const SKIP = isNetworkTestSkipped()
 
+test('encodes HiPS IDs in request URLs', async () => {
+	let requestedUrl: string | undefined
+	const fetch = globalThis.fetch
+
+	try {
+		globalThis.fetch = ((input) => {
+			requestedUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+			return Promise.resolve(new Response())
+		}) as typeof fetch
+
+		await hips2Fits('ov-gso/P/EFFELSBERG+EMLS/21cm', deg(0), deg(0), { baseUrl: 'https://example.test/' })
+	} finally {
+		globalThis.fetch = fetch
+	}
+
+	expect(requestedUrl).toContain('hips=ov-gso%2FP%2FEFFELSBERG%2BEMLS%2F21cm')
+})
+
 test.skipIf(SKIP)('fits', async () => {
 	const options: Hips2FitsOptions = { width: 400, height: 400, baseUrl: HIPS2FITS_ALTERNATIVE_URL }
 	const blob = await hips2Fits('CDS/P/DSS2/red', deg(201.36506337683), deg(-43.01911250808), options)

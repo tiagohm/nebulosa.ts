@@ -88,6 +88,21 @@ test('star filtering rejects low quality detections', () => {
 	expect(filtered.rejectedReasons.high_fwhm).toBe(1)
 })
 
+test('star filtering rejects detector eccentricity as elongation', () => {
+	const filtered = filterGuideStars(guideFrame([{ x: 100, y: 100, snr: 20, flux: 1000, hfd: 2, eccentricity: 0.9 }]), {
+		minStarSnr: 8,
+		minFlux: 100,
+		maxHfd: 8,
+		borderMarginPx: 10,
+		maxEllipticity: 0.5,
+		maxFwhm: 10,
+		saturationPeak: 65000,
+	})
+
+	expect(filtered.accepted).toHaveLength(0)
+	expect(filtered.rejectedReasons.elongated).toBe(1)
+})
+
 test('single-star tracking fallback computes correction pulses', () => {
 	const guider = new Guider({ mode: 'single-star', lockAveragingFrames: 2, minMoveRA: 0.01, minMoveDEC: 0.01, msPerRAUnit: 1000, msPerDECUnit: 1000 })
 	guider.processFrame(guideFrame(BASE_STARS, 0))
@@ -573,6 +588,27 @@ describe('tracking, translation, and lock acquisition', () => {
 		expect(state.referenceY).toBeCloseTo(BASE_STARS[0].y + 0.4, 6)
 	})
 
+	test('reference lock ignores a distant replacement star during averaging', () => {
+		const anchor = star(0, { x: 100, y: 100 })
+		const neighbor = star(1, { x: 120, y: 100 })
+		const g = guider({ lockAveragingFrames: 3, maxMatchDistancePx: 6, maxFrameJumpPx: 12 })
+
+		g.processFrame(guideFrame([anchor, neighbor], 0))
+		const skipped = g.processFrame(guideFrame([neighbor], 1000))
+		expect(skipped.state).toBe('initializing')
+		expect(skipped.diagnostics.notes).toContain('init_waiting')
+
+		g.processFrame(guideFrame([anchor, neighbor], 2000))
+		expect(g.currentState.state).toBe('initializing')
+		const acquired = g.processFrame(guideFrame([anchor], 3000))
+
+		expect(acquired.state).toBe('guiding')
+		expect(g.currentState.referenceX).toBeCloseTo(anchor.x, 6)
+		expect(g.currentState.referenceY).toBeCloseTo(anchor.y, 6)
+		expect(acquired.diagnostics.measurementX).toBeCloseTo(anchor.x, 6)
+		expect(acquired.diagnostics.dx).toBeCloseTo(0, 6)
+	})
+
 	test('single-star tracking keeps the nearest lock even if another star becomes brighter', () => {
 		const g = guider({ mode: 'single-star' })
 		g.processFrame(guideFrame(BASE_STARS, 0))
@@ -669,6 +705,32 @@ describe('quality, loss state machine, and processFrame diagnostics', () => {
 		expect(reacquired.diagnostics.qualityScore).toBeGreaterThan(0)
 		expect(reacquired.diagnostics.axisErrorRA).toBeDefined()
 		expect(reacquired.diagnostics.axisErrorDEC).toBeDefined()
+	})
+
+	test('loss clears controller memory before centered reacquisition', () => {
+		const g = guider({ lostStarFrameCount: 2, hysteresisRA: 0.5, hysteresisDEC: 0.5 })
+		g.processFrame(guideFrame(BASE_STARS, 0))
+		const correction = g.processFrame(guideFrame(shiftStars(BASE_STARS, 0.8, 0.6), 1000))
+		expect(correction.ra.duration).toBeGreaterThan(0)
+		expect(correction.dec.duration).toBeGreaterThan(0)
+		expect(g.currentState.filteredRA).not.toBe(0)
+		expect(g.currentState.filteredDEC).not.toBe(0)
+		expect(g.currentState.lastDecDirection).toBeDefined()
+
+		g.processFrame(guideFrame([], 2000))
+		const lost = g.processFrame(guideFrame([], 3000))
+		expect(lost.state).toBe('lost')
+		expect(g.currentState.filteredRA).toBe(0)
+		expect(g.currentState.filteredDEC).toBe(0)
+		expect(g.currentState.lastDecDirection).toBeUndefined()
+		expect(g.currentState.oppositeDecErrorAccum).toBe(0)
+
+		const reacquired = g.processFrame(guideFrame(BASE_STARS, 4000))
+		expect(reacquired.state).toBe('guiding')
+		expect(reacquired.ra.duration).toBe(0)
+		expect(reacquired.dec.duration).toBe(0)
+		expect(reacquired.diagnostics.dx).toBeCloseTo(0, 6)
+		expect(reacquired.diagnostics.dy).toBeCloseTo(0, 6)
 	})
 
 	test('end-to-end x/y drifts map to axis pulses and no-pulse when centered', () => {

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readSaoCatalog, SaoCatalog, type SaoCatalogEntry } from '../../../src/catalogs/stars/sao'
-import { fileHandleSource } from '../../../src/io/io'
+import { bufferSource, fileHandleSource, readableStreamSource } from '../../../src/io/io'
 import { deg, formatDEC, formatRA, parseAngle, toMas } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
 
@@ -45,3 +45,55 @@ test('read', async () => {
 
 	expect(catalog.queryCone(parseAngle('05h 35 16.8')!, parseAngle('-05 23 24')!, deg(1))).toHaveLength(54)
 }, 3000)
+
+test.each([16, 65536])(
+	'read stream with %i-byte chunks',
+	async (chunkSize: number) => {
+		const data = await Bun.file('data/SAO.pc.dat').bytes()
+		let offset = 0
+		const stream = new ReadableStream<Uint8Array>({
+			pull(controller: ReadableStreamDefaultController<Uint8Array>) {
+				if (offset >= data.length) controller.close()
+				else {
+					controller.enqueue(data.subarray(offset, offset + chunkSize))
+					offset += chunkSize
+				}
+			},
+		})
+		await using source = readableStreamSource(stream)
+		await using reference = fileHandleSource(await fs.open('data/SAO.pc.dat'))
+		const expected = readSaoCatalog(reference, false)[Symbol.asyncIterator]()
+		let count = 0
+
+		for await (const entry of readSaoCatalog(source, false)) {
+			const next = await expected.next()
+			expect(next.done).toBe(false)
+			expect(entry).toEqual(next.value)
+			expect(entry.id).toBe(++count)
+		}
+
+		expect(count).toBe(258997)
+		expect((await expected.next()).done).toBe(true)
+	},
+	10000,
+)
+
+test.each([
+	[0, 0],
+	[16, 0],
+	[27, 0],
+	[28, 0],
+	[55, 0],
+	[56, 1],
+	[57, 1],
+])('read truncated catalog with %i bytes yields %i entries', async (size: number, expectedCount: number) => {
+	const data = await Bun.file('data/SAO.pc.dat').slice(0, size).bytes()
+	const source = bufferSource(Buffer.from(data))
+	let count = 0
+
+	for await (const entry of readSaoCatalog(source, false)) {
+		expect(entry.id).toBe(++count)
+	}
+
+	expect(count).toBe(expectedCount)
+})

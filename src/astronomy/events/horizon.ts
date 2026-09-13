@@ -1,5 +1,6 @@
 import { DEG2RAD, ONE_SECOND } from '../../core/constants'
 import type { Vec3 } from '../../math/linear-algebra/vec3'
+import { brentMinimize, brentRoot } from '../../math/numerical/optimization'
 import type { Angle } from '../../math/units/angle'
 import { equatorial } from '../coordinates/astrometry'
 import { equatorialFromJ2000, equatorialToHorizontal } from '../coordinates/coordinate'
@@ -97,15 +98,82 @@ export function riseTransitSet(directionAt: (time: Time) => Vec3, location: Geog
 		}
 	}
 
+	// searchExtrema needs an interior triple, so a culmination on or within ~step/2 of either
+	// window end is missed and would otherwise leave the -Infinity sentinel in the public result.
+	if (transit === undefined) {
+		const stepDays = step ?? 1 / 24
+		const span = timeSubtract(stop, time)
+		const altitudeAtOffset = (x: number) => altAt(timeShift(time, x))
+		const refineTolerance = tolerance ?? 1e-6
+
+		for (const left of [0, Math.max(0, span - stepDays)]) {
+			const right = Math.min(span, left + stepDays)
+			if (!(right > left)) continue
+
+			const result = brentMinimize((x: number) => -altitudeAtOffset(x), left, right, { tolerance: refineTolerance })
+			const value = -result.value
+			// A true local maximum is no lower than both one-second neighbours, including a
+			// neighbour just outside the window. A monotonic run toward an endpoint fails that test.
+			if (value >= altitudeAtOffset(result.minimum - ONE_SECOND) && value >= altitudeAtOffset(result.minimum + ONE_SECOND) && value > transitAltitude) {
+				transit = timeShift(time, result.minimum)
+				transitAltitude = value
+			}
+		}
+
+		if (transit === undefined) {
+			const startAltitude = altitudeAtOffset(0)
+			const stopAltitude = altitudeAtOffset(span)
+			if (startAltitude > transitAltitude) transitAltitude = startAltitude
+			if (stopAltitude > transitAltitude) transitAltitude = stopAltitude
+		}
+	}
+
 	// Horizon crossings, classified into rising and setting by the local altitude slope.
-	const crossings = searchRoots((t) => altAt(t) - horizon, time, stop, { step, tolerance })
+	let crossings = searchRoots((t) => altAt(t) - horizon, time, stop, { step, tolerance })
 
 	if (crossings.length === 0) {
-		// No crossing: the body is wholly above or wholly below the horizon for the window. Decide from
-		// the transit altitude when available, otherwise from the window-start altitude.
-		const reference = transit !== undefined ? transitAltitude : altAt(time)
-		const up = reference > horizon
-		return { rise: undefined, transit, set: undefined, transitAltitude: transit !== undefined ? transitAltitude : reference, alwaysUp: up, alwaysDown: !up }
+		// A grazing dip or pop can sit entirely between two coarse samples, so searchRoots sees no
+		// sign change even though a refined minimum is below the horizon (or a maximum above it).
+		const stepDays = step ?? 1 / 24
+		const span = timeSubtract(stop, time)
+		const refineTolerance = tolerance ?? 1e-6
+		const residualAtOffset = (x: number) => altAt(timeShift(time, x)) - horizon
+		const recovered: Time[] = []
+
+		for (const e of extrema) {
+			if ((e.kind === 'minimum' && !(e.value < horizon)) || (e.kind === 'maximum' && !(e.value > horizon))) continue
+			const xE = timeSubtract(e.time, time)
+			for (const [x0, x1] of [
+				[Math.max(0, xE - stepDays), xE],
+				[xE, Math.min(span, xE + stepDays)],
+			] as const) {
+				if (!(x1 > x0)) continue
+				const f0 = residualAtOffset(x0)
+				const f1 = residualAtOffset(x1)
+				if (f0 === 0) recovered.push(timeShift(time, x0))
+				else if (f1 === 0) recovered.push(timeShift(time, x1))
+				else if ((f0 < 0 && f1 > 0) || (f0 > 0 && f1 < 0)) recovered.push(timeShift(time, brentRoot(residualAtOffset, x0, x1, { tolerance: refineTolerance }).root))
+			}
+		}
+
+		if (recovered.length > 0) crossings = recovered
+	}
+
+	if (crossings.length === 0) {
+		// No crossing: the body is wholly above or wholly below the horizon for the window. alwaysUp
+		// requires the lowest sampled altitude (including any refined minimum) to stay above the horizon.
+		let minAltitude = Number.isFinite(transitAltitude) ? transitAltitude : altAt(time)
+		let maxAltitude = minAltitude
+		for (const e of extrema) {
+			if (e.value < minAltitude) minAltitude = e.value
+			if (e.value > maxAltitude) maxAltitude = e.value
+		}
+		const startAltitude = altAt(time)
+		if (startAltitude < minAltitude) minAltitude = startAltitude
+		if (startAltitude > maxAltitude) maxAltitude = startAltitude
+		const alwaysUp = minAltitude > horizon
+		const alwaysDown = maxAltitude < horizon
+		return { rise: undefined, transit, set: undefined, transitAltitude: Number.isFinite(transitAltitude) ? transitAltitude : startAltitude, alwaysUp, alwaysDown }
 	}
 
 	const transitOffset = transit !== undefined ? timeSubtract(transit, time) : 0.5 * window

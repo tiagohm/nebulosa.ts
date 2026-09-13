@@ -82,6 +82,22 @@ test('reports no transit for a window with no inferior conjunction crossing', ()
 	expect(transits.length).toBe(0)
 }, 15000)
 
+test('reports no transit at the 2024-06-04 Venus superior conjunction', () => {
+	const observer = observerAt(GREENWICH)
+	// Venus is behind the Sun (planetDistance ~1.74 AU > sunDistance ~1.02 AU). The disks overlap on the sky,
+	// which is a solar occultation of Venus, not a transit; the next Venus transit is 2117-12-11.
+	const transits = planetaryTransits(venus, sun, observer, timeYMDHMS(2024, 6, 3, 0, 0, 0, Timescale.UTC), timeYMDHMS(2024, 6, 6, 0, 0, 0, Timescale.UTC), { sunRadius: SUN_RADIUS_AU, planetRadius: VENUS_RADIUS })
+	expect(transits.length).toBe(0)
+}, 30000)
+
+test('reports no transit at the 2026-05-14 Mercury superior conjunction', () => {
+	const observer = observerAt(GREENWICH)
+	// Mercury is behind the Sun at this node-aligned superior conjunction; the angular overlap is not a
+	// transit.
+	const transits = planetaryTransits(mercury, sun, observer, timeYMDHMS(2026, 5, 13, 0, 0, 0, Timescale.UTC), timeYMDHMS(2026, 5, 16, 0, 0, 0, Timescale.UTC), { sunRadius: SUN_RADIUS_AU, planetRadius: MERCURY_RADIUS })
+	expect(transits.length).toBe(0)
+}, 30000)
+
 test('leaves ingress contacts undefined when the window opens after ingress', () => {
 	const observer = observerAt(GREENWICH)
 	// Window opens at 07:30, after both ingress contacts (06:41, 06:44) but before mid-transit (08:55): the

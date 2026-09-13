@@ -36,9 +36,22 @@ test('simple linear stays accurate for large-x offsets', () => {
 	const x = [1e8, 1e8 + 1, 1e8 + 2, 1e8 + 3]
 	const y = x.map((xi) => 2 * xi + 5)
 	const regression = simpleLinearRegression(x, y)
+	const score = regressionScore(regression)
 
 	expect(regression.slope).toBeCloseTo(2, 9)
 	expect(regression.predict(1e8 + 10)).toBeCloseTo(2 * (1e8 + 10) + 5, 3)
+	expect(score.r).toBeCloseTo(1, 12)
+	expect(score.r2).toBeCloseTo(1, 12)
+	expect(score.rss).toBeCloseTo(0, 12)
+})
+
+test('regression score matches centered Pearson for large-x noisy samples', () => {
+	const x = [1e8, 1e8 + 1, 1e8 + 2, 1e8 + 3]
+	const y = [20, 40, 30, 50]
+	const score = regressionScore(simpleLinearRegression(x, y))
+
+	expect(score.r).toBeCloseTo(0.8, 12)
+	expect(score.r2).toBeCloseTo(0.64, 12)
 })
 
 test('weighted linear regression remains centered and reports parameter uncertainty', () => {
@@ -122,6 +135,15 @@ describe('polynomial', () => {
 		expect(regression.coefficients).toHaveLength(2)
 		expect(regression.coefficients[0]).toBeCloseTo(0.018041553971009705, 5)
 		expect(regression.coefficients[1]).toBeCloseTo(1.0095279075485593, 5)
+	})
+
+	test('degree 1 stays accurate for large-x offsets', () => {
+		const x = [1e12, 1e12 + 1, 1e12 + 2, 1e12 + 3]
+		const y = x.map((xi) => 2 * xi + 5)
+		const regression = polynomialRegression(x, y, 1)
+
+		expect(regression.coefficients[1]).toBeCloseTo(2, 9)
+		expect(regression.predict(1e12 + 10)).toBeCloseTo(2 * (1e12 + 10) + 5, 3)
 	})
 })
 
@@ -256,6 +278,18 @@ test('quadratic regression reports no minimum for a downward parabola', () => {
 	expect(Number.isNaN(regression.minimum.y)).toBe(true)
 })
 
+test('quadratic regression recovers a convex vertex at large-x offsets', () => {
+	const offset = 1e7
+	const vertex = offset + 200
+	const x = [offset, offset + 100, offset + 200, offset + 300, offset + 400]
+	const y = x.map((xi) => 1e-4 * (xi - vertex) ** 2 + 3)
+	const regression = quadraticRegression(x, y)
+
+	expect(regression.coefficients[2]).toBeGreaterThan(0)
+	expect(regression.minimum.x).toBeCloseTo(vertex, 0)
+	expect(regression.minimum.y).toBeCloseTo(3, 6)
+})
+
 test('exponential regression', () => {
 	const x = [0, 1, 2, 3, 4]
 	const y = [1.5, 2.5, 3.5, 5, 7.5]
@@ -332,7 +366,7 @@ test('regression score', () => {
 
 	const score = regressionScore(regression)
 	expect(score.r).toBeCloseTo(0.9946, 3)
-	expect(score.r2).toBe(score.r * score.r)
+	expect(score.r2).toBeCloseTo(score.r * score.r, 12)
 	// expect(score.rss).toBeLessThan(1)
 	expect(score.rmsd).toBeLessThan(1)
 })
@@ -346,6 +380,29 @@ test('regression score is perfect for an exact linear fit', () => {
 	expect(score.r).toBeCloseTo(1, 12)
 	expect(score.r2).toBeCloseTo(1, 12)
 	expect(score.rmsd).toBeCloseTo(0, 12)
+})
+
+test('regression score uses the model predictions, not Pearson of x and y', () => {
+	const x = [-2, -1, 0, 1, 2]
+	const y = x.map((xi) => xi * xi)
+	const score = regressionScore(quadraticRegression(x, y))
+
+	expect(score.rss).toBeCloseTo(0, 12)
+	expect(score.r).toBeCloseTo(1, 12)
+	expect(score.r2).toBeCloseTo(1, 12)
+})
+
+test('regression score distinguishes an exponential fit from a linear fit', () => {
+	const x = [0, 1, 2, 3, 4, 5]
+	const y = x.map((xi) => Math.exp(xi))
+	const exponential = regressionScore(exponentialRegression(x, y))
+	const linear = regressionScore(simpleLinearRegression(x, y))
+
+	expect(exponential.rss).toBeCloseTo(0, 10)
+	expect(exponential.r2).toBeCloseTo(1, 12)
+	expect(linear.r2).toBeLessThan(exponential.r2)
+	expect(linear.r2).not.toBeCloseTo(exponential.r2, 2)
+	expect(linear.rss).toBeGreaterThan(exponential.rss)
 })
 
 test('chebyshev least squares fits basis coefficients', () => {

@@ -71,7 +71,7 @@ export class WeatherSimulator extends DeviceSimulator {
 		readonly options?: DeviceSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.WEATHER)
+		super(name, client, handler, DeviceInterfaceType.WEATHER, 'weather.simulator')
 
 		for (const property of this.properties) property.device = name
 		this.driverInfo.elements.DRIVER_EXEC.value = 'weather.simulator'

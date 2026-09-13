@@ -11,7 +11,8 @@ import type { Distance } from '../math/units/distance'
 
 // Arcseconds per radian divided by 1000: converts (pixel size in microns / focal length in mm) to arcsec/pixel.
 const ARCSECONDS_PER_PIXEL_FACTOR = ARCSEC_PER_RADIAN / 1000
-// cos(declination) below this is treated as the pole, where the max-exposure denominator becomes unstable.
+// Cosine magnitude below this is treated as a pole: max-exposure's 1/cos(δ) and the hour-angle
+// denominator cos(φ)cos(δ) are both degenerate in IEEE-754 at ±π/2 (Math.cos(π/2) is ~6e-17, not 0).
 const MAX_EXPOSURE_COSINE_EPSILON = 1e-12
 // Magnus formula coefficients for the dew-point approximation over water (dimensionless a, b in °C).
 const MAGNUS_A_WATER = 17.625
@@ -321,9 +322,11 @@ export function airmass(zenithDistance: Angle) {
 
 // Airmass Kasten-Young. Improved planning approximation near the horizon.
 // Parameters: altitude is finite and above the horizon in (0, pi/2]; constants 6.07995 and -1.6364 use altitude in degrees.
-// Returns: dimensionless airmass.
+// Returns: dimensionless airmass, at least 1. The published fit undershoots 1 near zenith
+// (~0.99971 at 90°); that artefact is clamped to the physical zenith value.
 export function airmassKastenYoung(altitude: Angle) {
-	return 1 / (Math.sin(altitude) + 0.50572 * (altitude * RAD2DEG + 6.07995) ** -1.6364)
+	const x = 1 / (Math.sin(altitude) + 0.50572 * (altitude * RAD2DEG + 6.07995) ** -1.6364)
+	return Math.max(1, x)
 }
 
 // Atmospheric Extinction. Planning formula delta_m = k * X.
@@ -334,8 +337,10 @@ export function atmosphericExtinction(extinctionCoefficientMagPerAirmass: number
 	return extinctionCoefficientMagPerAirmass * airmass
 }
 
-// Atmospheric Refraction. Approximate planning formula R = 1.02 / tan(h + 10.3 / (h + 5.11)) arcmin.
-// Parameters: altitude is an apparent altitude in (0, pi/2] radians; h and the tangent argument are converted through degrees.
+// Atmospheric Refraction. Sæmundsson's planning formula R = 1.02 / tan(h + 10.3 / (h + 5.11)) arcmin
+// (Meeus AA ch. 16). Add R to the true (airless) altitude to obtain the apparent altitude.
+// Parameters: altitude is a true geometric altitude in (0, pi/2] radians; h and the tangent argument
+// are converted through degrees. This is not Bennett's apparent-altitude formula.
 // Returns: refraction correction in arcminutes.
 export function atmosphericRefraction(altitude: Angle) {
 	const altitudeDeg = altitude * RAD2DEG
@@ -393,7 +398,7 @@ export function altitudeAtTransit(latitude: Angle, declination: Angle) {
 // poles, where the diurnal circle is a parallel of altitude and the formula is degenerate.
 export function hourAngleAtAltitude(declination: Angle, latitude: Angle, targetAltitude: Angle) {
 	const denominator = Math.cos(latitude) * Math.cos(declination)
-	if (denominator === 0) return undefined
+	if (!(Math.abs(denominator) > MAX_EXPOSURE_COSINE_EPSILON)) return undefined
 	const cosHourAngle = (Math.sin(targetAltitude) - Math.sin(latitude) * Math.sin(declination)) / denominator
 	if (cosHourAngle < -1 || cosHourAngle > 1) return undefined
 	return Math.acos(cosHourAngle)

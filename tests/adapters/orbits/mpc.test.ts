@@ -347,6 +347,15 @@ permID |trkSub |mode|stn |obsTime                |ra         |dec        |rmsRA|
 			expect(copy.raError).toBeCloseTo(original.raError ?? Number.NaN, 12)
 		}
 	})
+
+	test('ADES time rounding carries into the next day', () => {
+		const document = parseADESPSV(SAMPLE)
+		const block = document.blocks[0]
+		if (!block) throw new Error('expected an ADES block')
+		const observation = { ...block.observations[0], time: timeYMDHMS(2000, 1, 1, 23, 59, 59.9996, Timescale.UTC) }
+		const written = writeADESPSV({ ...document, blocks: [{ ...block, observations: [observation] }] })
+		expect(written).toContain('2000-01-02T00:00:00.000Z')
+	})
 })
 
 describe('packed designations', () => {
@@ -392,6 +401,10 @@ describe('packed designations', () => {
 		expect(packMPCDesignation('P/2023 BA')).toBe('PK23B00A')
 		expect(unpackMPCDesignation('J013S')).toBe('J 13')
 		expect(packMPCDesignation('J 13')).toBe('J013S')
+		expect(unpackMPCDesignation('SJ99U030')).toBe('S/1999 U 3')
+		expect(packMPCDesignation('S/1999 U 3')).toBe('SJ99U030')
+		expect(unpackMPCDesignation('SK20J010')).toBe('S/2020 J 1')
+		expect(packMPCDesignation('S/2020 J 1')).toBe('SK20J010')
 	})
 })
 
@@ -405,6 +418,13 @@ describe('MPC80', () => {
 		expect(observation.rightAscension).toBeCloseTo(0, 10)
 		expect(observation.declination).toBeCloseTo(0, 10)
 		expect(observation.station).toBe('500')
+		expect(writeMPC80(observation)).toBe(line)
+	})
+
+	test('provisional natural satellite ids use columns 5-12', () => {
+		const line = mpc80('    SJ99U030  C2000 01 01.00000000 00 00.000+00 00 00.00                     500')
+		const observation = parseMPC80(line)
+		expect(observation.provisionalId).toBe('S/1999 U 3')
 		expect(writeMPC80(observation)).toBe(line)
 	})
 
@@ -445,6 +465,33 @@ describe('MPC80', () => {
 			}),
 		).toThrow(RangeError)
 		expect(written).toBe('00001         C2000 01 01.00000000 00 00.000+00 00 00.00                     500')
+	})
+
+	test('MPC80 date rounding carries into the next day', () => {
+		const observation: MPCObservation = {
+			type: 'optical',
+			time: timeYMDHMS(2000, 1, 1, 23, 59, 59.96, Timescale.UTC),
+			station: '500',
+			rightAscension: 0,
+			declination: 0,
+		}
+		const line = writeMPC80(observation)
+		expect(line.slice(15, 32)).toBe('2000 01 02.000000')
+	})
+
+	test('MPC80 meridian T lines are not paired unless followed by converted satellite t', () => {
+		const meridian = mpc80('00001         T2000 01 01.00000000 00 00.000+00 00 00.00                     500')
+		const optical = mpc80('00001         C2000 01 01.00000000 00 00.000+00 00 00.00                     500')
+		const observations = parseMPC80Lines(`${meridian}\n${optical}`)
+		expect(observations).toHaveLength(2)
+		expect(observations[0]?.mode).toBe('T')
+
+		const first = mpc80('     T1S1222  T1995 10 19.53839 23 45 35.737+09 09 38.13                     250')
+		const second = mpc80('     T1S1222  t1995 10 19.53839 1 + 5530.3041 - 4255.1515 -  550.2319        250')
+		const [satellite] = parseMPC80Lines(`${first}\n${second}`)
+		expect(satellite?.type).toBe('optical')
+		if (satellite?.type !== 'optical') return
+		expect(satellite.observer?.kind).toBe('spacecraft')
 	})
 
 	test('Hubble two-line satellite example', () => {
@@ -490,8 +537,26 @@ ${mpc80('z9987K06UJ8Y  s2019 07 26.2427421 + 551363.13 -1190783.85 - 650915.72  
 		expect(observation.permanentId).toBe('433')
 		expect(observation.bounce).toBe('surface')
 		expect(observation.delay).toBeCloseTo(150.88536, 5)
+		expect(observation.delayError).toBeCloseTo(15e-6, 12)
+		expect(observation.dopplerError).toBeCloseTo(2, 12)
 		expect(() => parseMPC80(second)).toThrow()
 		expect(() => parseMPC80Lines(second)).toThrow()
+
+		const omitted = { ...observation, doppler: undefined, delayError: undefined, dopplerError: undefined, bounce: undefined, transmitFrequency: undefined }
+		const written = writeMPC80(omitted).split('\n')
+		expect(written[0]?.slice(47, 62)).toBe('-              ')
+		expect(written[0]?.slice(62, 68)).toBe('      ')
+		expect(written[1]?.[32]).toBe(' ')
+		expect(written[1]?.slice(33, 47)).toBe('              ')
+		expect(written[1]?.slice(47, 62)).toBe('               ')
+		const [roundTrip] = parseMPC80Lines(written.join('\n'))
+		if (roundTrip?.type !== 'radar') throw new Error('expected radar')
+		expect(roundTrip.delay).toBeCloseTo(observation.delay ?? Number.NaN, 10)
+		expect(roundTrip.doppler).toBeUndefined()
+		expect(roundTrip.transmitFrequency).toBeUndefined()
+		expect(roundTrip.delayError).toBeUndefined()
+		expect(roundTrip.dopplerError).toBeUndefined()
+		expect(roundTrip.bounce).toBeUndefined()
 	})
 
 	test('parse then write then parse keeps RA/Dec', () => {

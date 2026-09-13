@@ -97,6 +97,28 @@ test('spherical destination preserves distance and position angle', () => {
 	expect(sphericalPositionAngle(longitude, latitude, nextLongitude, nextLatitude)).toBeCloseTo(positionAngle, 11)
 })
 
+test('spherical destination preserves position angle at the poles', () => {
+	const distance = deg(1)
+
+	const [northLon, northLat] = sphericalDestination(0, PIOVERTWO, PI, distance)
+	expect(northLat).toBeCloseTo(deg(89), 10)
+	expect(northLon).toBeCloseTo(0, 10)
+	expect(sphericalPositionAngle(0, PIOVERTWO, northLon, northLat)).toBeCloseTo(PI, 10)
+	expect(sphericalSeparation(0, PIOVERTWO, northLon, northLat)).toBeCloseTo(distance, 10)
+
+	const [overNorthLon, overNorthLat] = sphericalDestination(0, PIOVERTWO, 0, distance)
+	expect(overNorthLat).toBeCloseTo(deg(89), 10)
+	expect(overNorthLon).toBeCloseTo(PI, 10)
+	expect(sphericalPositionAngle(0, PIOVERTWO, overNorthLon, overNorthLat)).toBeCloseTo(0, 10)
+	expect(sphericalSeparation(0, PIOVERTWO, overNorthLon, overNorthLat)).toBeCloseTo(distance, 10)
+
+	const [southLon, southLat] = sphericalDestination(0, -PIOVERTWO, 0, distance)
+	expect(southLat).toBeCloseTo(deg(-89), 10)
+	expect(southLon).toBeCloseTo(0, 10)
+	expect(sphericalPositionAngle(0, -PIOVERTWO, southLon, southLat)).toBeCloseTo(0, 10)
+	expect(sphericalSeparation(0, -PIOVERTWO, southLon, southLat)).toBeCloseTo(distance, 10)
+})
+
 test('spherical interpolation follows the great-circle arc', () => {
 	let [longitude, latitude] = sphericalInterpolate(0, 0, deg(90), 0, 0.5)
 	expect(longitude).toBeCloseTo(deg(45), 14)

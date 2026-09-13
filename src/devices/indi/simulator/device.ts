@@ -1,6 +1,6 @@
 import { handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetLightVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from '../client'
 import { DeviceInterfaceType, type DeviceType } from '../device'
-import { type EnableBlob, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, selectOnSwitch } from '../types'
+import { type EnableBlob, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type PropertyState, selectOnSwitch } from '../types'
 import type { ClientSimulator } from './client'
 import { GENERAL_INFO, MAIN_CONTROL } from './constants'
 import type { DeviceSimulatorOptions, SimulatorProperty } from './types'
@@ -25,14 +25,23 @@ export abstract class DeviceSimulator implements Disposable {
 	protected abstract readonly propertiesToNotSave: readonly SimulatorProperty[]
 	protected abstract readonly options?: DeviceSimulatorOptions
 
+	// Identifies the connection cycle that an asynchronous load belongs to.
+	#lifecycleVersion = 0
+	// Prevents late asynchronous work from publishing after disposal.
+	#disposed = false
+	// Identifies the latest CONFIG operation so stale load completions cannot change its state.
+	#configOperation = 0
+
 	constructor(
 		readonly name: string,
 		readonly client: ClientSimulator,
 		readonly handler: IndiClientHandler,
 		interfaceType: DeviceInterfaceType,
+		driverExecutable: string,
 	) {
 		this.driverInfo.device = name
 		this.driverInfo.elements.DRIVER_INTERFACE.value = interfaceType.toFixed(0)
+		this.driverInfo.elements.DRIVER_EXEC.value = driverExecutable
 		this.driverInfo.elements.DRIVER_NAME.value = name
 		this.connection.device = name
 		this.snoopDevices.device = name
@@ -65,34 +74,63 @@ export abstract class DeviceSimulator implements Disposable {
 	// Base switch handling: the CONFIG load/save action. Subclasses override and call super.
 	sendSwitch(vector: NewSwitchVector) {
 		switch (vector.name) {
-			case 'CONFIG':
-				if (vector.elements.LOAD === true) void this.loadProperties()
-				else if (vector.elements.SAVE === true) this.saveProperties()
+			case 'CONFIG': {
+				if (vector.elements.LOAD === true) {
+					const operation = ++this.#configOperation
+					this.notifyConfig('Busy')
+					void this.loadProperties().then(
+						() => operation === this.#configOperation && this.notifyConfig('Ok'),
+						() => operation === this.#configOperation && this.notifyConfig('Alert'),
+					)
+				} else if (vector.elements.SAVE === true) {
+					++this.#configOperation
+					try {
+						this.saveProperties()
+						this.notifyConfig('Ok')
+					} catch {
+						this.notifyConfig('Alert')
+					}
+				}
+				break
+			}
 		}
+	}
+
+	// Updates the momentary CONFIG switches and publishes their operation state while registered.
+	private notifyConfig(state: PropertyState) {
+		this.config.state = state
+		this.config.elements.LOAD.value = false
+		this.config.elements.SAVE.value = false
+		if (!this.#disposed && this.client.get(this.name) === this) this.notify(this.config)
 	}
 
 	// Deletes the device's properties and unregisters from the client.
 	dispose() {
+		if (this.#disposed) return
+		this.#disposed = true
+		this.#lifecycleVersion++
 		this.handler.delProperty?.(this.client, { device: this.name })
 		this.client.unregister(this)
 	}
 
 	// Connects the simulated device.
 	connect() {
-		if (this.isConnected) return
+		if (this.#disposed || this.client.get(this.name) !== this || this.isConnected) return
 		selectOnSwitch(this.connection, 'CONNECT') && handleSetSwitchVector(this.client, this.handler, this.connection)
 		if (!this.isConnected) return
+		this.#lifecycleVersion++
 
 		for (const property of this.properties) {
 			sendDefinition(this.client, this.handler, property)
 		}
 
-		void this.loadProperties()
+		void this.loadProperties().catch(() => undefined)
 	}
 
 	// Disconnects the simulated device.
 	disconnect() {
 		if (!this.isConnected) return
+		this.#lifecycleVersion++
 		selectOnSwitch(this.connection, 'DISCONNECT') && handleSetSwitchVector(this.client, this.handler, this.connection)
 
 		for (const property of this.properties) {
@@ -122,7 +160,9 @@ export abstract class DeviceSimulator implements Disposable {
 	// non-persisted properties.
 	async loadProperties() {
 		if (this.options?.load) {
+			const lifecycleVersion = this.#lifecycleVersion
 			const properties = await this.options.load(this.name)
+			if (this.#disposed || this.client.get(this.name) !== this || lifecycleVersion !== this.#lifecycleVersion) return
 
 			for (const property of properties) {
 				const actual = this.properties.find((e) => e.name === property.name)
@@ -142,10 +182,10 @@ export abstract class DeviceSimulator implements Disposable {
 					}
 				}
 
-				updated && this.notify(actual)
+				updated && this.isConnected && this.notify(actual)
 			}
 
-			this.onPropertiesLoaded()
+			if (this.isConnected) this.onPropertiesLoaded()
 		}
 	}
 

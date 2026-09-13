@@ -273,7 +273,10 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	list(client?: Client | string) {
 		const devices = new Set<D>()
 
-		client = typeof client === 'string' ? this.#clients.get(client) : client
+		if (typeof client === 'string') {
+			client = this.#clients.get(client)
+			if (client === undefined) return devices
+		}
 
 		for (const device of this.#devices.values()) {
 			if (client === undefined || device[CLIENT] === client) devices.add(device)
@@ -400,7 +403,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 
 				this.add(device)
 				this.ask(device)
-			} else if (device.interfaces.length !== interfaces.length) {
+			} else if (device.interfaces.length !== interfaces.length || device.interfaces.some((type, index) => type !== interfaces[index])) {
 				device.interfaces = interfaces
 				this.updated(device, 'interfaces', undefined)
 			}
@@ -520,10 +523,12 @@ export function handleMinMaxValue(property: MinMaxValueProperty, element: DefNum
 		}
 	}
 
-	if (property.value !== element.value) {
-		// Clamp only when a real range is known; otherwise keep the reported value as-is so a
-		// still-unbounded property (max === 0) is not forced to zero.
-		property.value = property.max > property.min ? Math.max(property.min, Math.min(element.value, property.max)) : element.value
+	// Clamp only when a real range is known; otherwise keep the reported value as-is so a
+	// still-unbounded property (max === 0) is not forced to zero.
+	const value = property.max > property.min ? Math.max(property.min, Math.min(element.value, property.max)) : element.value
+
+	if (property.value !== value) {
+		property.value = value
 		update = true
 	}
 

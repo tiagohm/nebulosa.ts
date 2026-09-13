@@ -18,7 +18,7 @@ export interface BahtinovHoughCandidate {
 	readonly normalAngle: Angle
 	// Refined normal-form distance from the local ROI origin, in pixels.
 	readonly distance: number
-	// Weighted Hough peak score after coverage and balance penalties.
+	// Nearest-bin Hough peak score after coverage and balance penalties.
 	readonly score: number
 	// Fraction of the visible line segment spanned by supporting ridges, from 0 to 1.
 	readonly coverage: number
@@ -32,7 +32,8 @@ export interface BahtinovHoughCandidate {
 export interface BahtinovHoughOptions {
 	// Maximum number of candidates returned.
 	readonly maximumCandidates?: number
-	// Minimum axial normal-angle separation between returned candidates, in radians.
+	// Minimum axial normal-angle separation between coarse Hough hypotheses, in radians.
+	// Local refinement may bring returned angles closer by up to twice the refinement range.
 	readonly minimumAxialSeparation?: Angle
 	// Half-range of local normal-angle refinement in radians.
 	readonly refinementRange?: Angle
@@ -54,10 +55,11 @@ export function detectBahtinovHoughCandidates(ridgePoints: BahtinovRidgePoints, 
 	const angleCount = workspace.angleCount
 	const binCount = workspace.distanceBinCount
 	const accumulator = workspace.accumulator
+	const nearest = new Float64Array(binCount)
 	workspace.angleScore.fill(0)
 
 	for (let angleIndex = 0; angleIndex < angleCount; angleIndex++) {
-		const peak = accumulateHoughAngle(ridgePoints, workspace.angleCos[angleIndex], workspace.angleSin[angleIndex], workspace.rhoMax, workspace.distanceStep, accumulator, binCount)
+		const peak = accumulateHoughAngle(ridgePoints, workspace.angleCos[angleIndex], workspace.angleSin[angleIndex], workspace.rhoMax, workspace.distanceStep, accumulator, nearest, binCount)
 		workspace.angleScore[angleIndex] = peak.score
 		workspace.angleDistance[angleIndex] = peak.distance
 	}
@@ -84,10 +86,12 @@ export function detectBahtinovHoughCandidates(ridgePoints: BahtinovRidgePoints, 
 		)
 	}
 
+	// Coarse NMS already marked distinct hypotheses. Refinement may close the gap by up to 2 * range.
+	const refinedSeparation = Math.max(0, minimumAxialSeparation - 2 * refinementRange)
 	const refined: BahtinovHoughCandidate[] = []
 	for (let index = 0; index < coarse.length; index++) {
-		const next = refineCandidate(coarse[index], ridgePoints, width, height, workspace, refinementRange, refinementStep, centerX, centerY)
-		if (!refined.some((candidate) => bahtinovAxialAngleDistance(candidate.normalAngle, next.normalAngle) < minimumAxialSeparation)) insertCandidate(refined, next, maximumCandidates)
+		const next = refineCandidate(coarse[index], ridgePoints, width, height, workspace, nearest, refinementRange, refinementStep, centerX, centerY)
+		if (!refined.some((candidate) => bahtinovAxialAngleDistance(candidate.normalAngle, next.normalAngle) < refinedSeparation)) insertCandidate(refined, next, maximumCandidates)
 	}
 	return refined
 }
@@ -112,27 +116,34 @@ function resolveHoughOptions(workspace: BahtinovWorkspace, options: BahtinovHoug
 	return { maximumCandidates, minimumAxialSeparation, refinementRange, refinementStep }
 }
 
-// Accumulates interpolated normal-distance votes for one angle and returns its peak.
-function accumulateHoughAngle(ridgePoints: BahtinovRidgePoints, normalX: number, normalY: number, rhoMax: number, distanceStep: number, accumulator: Float64Array, binCount: number): { readonly score: number; readonly distance: number } {
+// Accumulates nearest-bin votes for scoring and interpolated votes for distance.
+// Linear interpolation is kept only for ρ; nearest-bin peak height does not depend on ρ phase.
+function accumulateHoughAngle(ridgePoints: BahtinovRidgePoints, normalX: number, normalY: number, rhoMax: number, distanceStep: number, accumulator: Float64Array, nearest: Float64Array, binCount: number): { readonly score: number; readonly distance: number } {
 	accumulator.fill(0, 0, binCount)
+	nearest.fill(0, 0, binCount)
 	for (let index = 0; index < ridgePoints.count; index++) {
 		const rho = ridgePoints.x[index] * normalX + ridgePoints.y[index] * normalY
 		const position = (rho + rhoMax) / distanceStep
 		const lower = Math.floor(position)
-		if (lower < 0 || lower >= binCount) continue
-		const fraction = position - lower
 		const weight = ridgePoints.weight[index]
-		accumulator[lower] += weight * (1 - fraction)
-		if (lower + 1 < binCount) accumulator[lower + 1] += weight * fraction
+		if (lower >= 0 && lower < binCount) {
+			const fraction = position - lower
+			accumulator[lower] += weight * (1 - fraction)
+			if (lower + 1 < binCount) accumulator[lower + 1] += weight * fraction
+		}
+		const nearestBin = Math.round(position)
+		if (nearestBin >= 0 && nearestBin < binCount) nearest[nearestBin] += weight
 	}
 
+	let score = nearest[0]
 	let peakBin = 0
 	let peakScore = accumulator[0]
 	for (let bin = 1; bin < binCount; bin++) {
-		const score = accumulator[bin]
-		if (score > peakScore) {
+		if (nearest[bin] > score) score = nearest[bin]
+		const interpolated = accumulator[bin]
+		if (interpolated > peakScore) {
 			peakBin = bin
-			peakScore = score
+			peakScore = interpolated
 		}
 	}
 
@@ -144,7 +155,7 @@ function accumulateHoughAngle(ridgePoints: BahtinovRidgePoints, normalX: number,
 		const denominator = left - 2 * center + right
 		if (denominator < 0 && Number.isFinite(denominator)) subBin = Math.max(-0.5, Math.min(0.5, (0.5 * (left - right)) / denominator))
 	}
-	return { score: peakScore, distance: -rhoMax + (peakBin + subBin) * distanceStep }
+	return { score, distance: -rhoMax + (peakBin + subBin) * distanceStep }
 }
 
 // Tests circular angular NMS strictly inside the configured axial separation.
@@ -195,14 +206,14 @@ function measureHoughSupport(ridgePoints: BahtinovRidgePoints, width: number, he
 }
 
 // Refines one coarse candidate by scanning a bounded local angle window.
-function refineCandidate(candidate: BahtinovHoughCandidate, ridgePoints: BahtinovRidgePoints, width: number, height: number, workspace: BahtinovWorkspace, range: Angle, step: Angle, centerX: number, centerY: number): BahtinovHoughCandidate {
+function refineCandidate(candidate: BahtinovHoughCandidate, ridgePoints: BahtinovRidgePoints, width: number, height: number, workspace: BahtinovWorkspace, nearest: Float64Array, range: Angle, step: Angle, centerX: number, centerY: number): BahtinovHoughCandidate {
 	if (range === 0) return candidate
 	let best = candidate
 	const sampleCount = Math.ceil((range * 2) / step)
 	for (let sample = 0; sample <= sampleCount; sample++) {
 		const offset = Math.min(range, -range + sample * step)
 		const angle = canonicalizeBahtinovLine(candidate.normalAngle + offset, 0).normalAngle
-		const peak = accumulateHoughAngle(ridgePoints, Math.cos(angle), Math.sin(angle), workspace.rhoMax, workspace.distanceStep, workspace.accumulator, workspace.distanceBinCount)
+		const peak = accumulateHoughAngle(ridgePoints, Math.cos(angle), Math.sin(angle), workspace.rhoMax, workspace.distanceStep, workspace.accumulator, nearest, workspace.distanceBinCount)
 		if (!(peak.score > 0)) continue
 		const support = measureHoughSupport(ridgePoints, width, height, angle, peak.distance, workspace.distanceStep, centerX, centerY)
 		if (!(support.strength > 0) || !(support.coverage > 0) || !(support.balance > 0)) continue

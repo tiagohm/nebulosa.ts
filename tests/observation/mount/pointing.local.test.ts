@@ -146,6 +146,25 @@ test('the local layer averages same-pier-side residuals and cancels when the sid
 	expect(Math.abs(neither.dx)).toBeLessThan(arcmin(0.05))
 })
 
+test('the local layer skips a discontinuous correction with fewer than three same-side samples', () => {
+	const east = patch(6, deg(9)).slice(0, 28)
+	const west = [eraS2c(deg(0), deg(10)), eraS2c(deg(2), deg(10))]
+	const directions = [...east, ...west]
+	const pierSides: PierSide[] = [...new Array<PierSide>(east.length).fill('EAST'), 'WEST', 'WEST']
+	const dx = [...new Array<number>(east.length).fill(0), 0, arcmin(10)]
+	const dy = new Array<number>(directions.length).fill(0)
+	const model = buildLocalPointingResidual(flatten(directions), pierSides, dx, dy, resolveLocalResidualOptions({ enabled: true }))!
+
+	expect(resolveLocalResidualOptions({ neighbors: 2 }).neighbors).toBe(3)
+	expect(model.neighbors).toBe(6)
+
+	const beforeMidpoint = predictLocalPointingResidual(model, deg(0.99), deg(10), 'WEST')
+	const afterMidpoint = predictLocalPointingResidual(model, deg(1.01), deg(10), 'WEST')
+
+	expect(beforeMidpoint).toEqual({ dx: 0, dy: 0 })
+	expect(afterMidpoint).toEqual({ dx: 0, dy: 0 })
+})
+
 test('the local contribution decays to zero outside the sampled region', () => {
 	const directions = patch(6, deg(9))
 	const dx = new Array<number>(directions.length).fill(arcmin(1))

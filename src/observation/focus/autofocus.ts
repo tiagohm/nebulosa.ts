@@ -209,7 +209,7 @@ export class AutoFocus {
 				return this.#makeAbsoluteStep('MOVE', firstX)
 			} else {
 				// More points needed to the left.
-				return this.#makeRelativeStep('MOVE', this.#direction * -this.#stepSize)
+				return this.#makeRelativeStep('MOVE', -this.#stepSize)
 			}
 		} else if (right.xPoints.length < this.#initialOffsetSteps && invalidRightFocusPoints < this.#initialOffsetSteps) {
 			// Now we can go to the right, if necessary.
@@ -229,7 +229,7 @@ export class AutoFocus {
 				return this.#makeAbsoluteStep('MOVE', lastX)
 			} else {
 				// More points needed to the right.
-				return this.#makeRelativeStep('MOVE', this.#direction * this.#stepSize)
+				return this.#makeRelativeStep('MOVE', this.#stepSize)
 			}
 		}
 

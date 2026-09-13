@@ -14,6 +14,12 @@ const DEFAULT_MIN_SAMPLING_SECONDS = 120
 // Long-run seeing windows use two-minute spans with one-minute overlap, matching PHD2's guiding assistant.
 const SEEING_WINDOW_SECONDS = 120
 
+// RA low-pass filtering uses PHD2's minimum cutoff period, in seconds.
+const RA_LOW_PASS_MIN_CUTOFF_SECONDS = 6
+
+// RA low-pass cutoff is also scaled to three guide exposures, matching PHD2's cadence filter.
+const RA_LOW_PASS_EXPOSURE_FACTOR = 3
+
 // Seeing windows covering less than this span are ignored to avoid unstable RMS estimates.
 // A discrete [start, start+120] window can only reach a full 120 s span when samples land
 // exactly on both edges, so this floor lets interior windows qualify like the trailing one.
@@ -58,6 +64,10 @@ export interface GuidingAssistantConfig {
 	readonly minSampling: number
 	// Current guide exposure in seconds; used for exposure recommendations and filter cadence.
 	readonly exposure: number
+	// Calibrated RA axis motion rate in pixels per millisecond; converts calibrated axis errors back to pixels.
+	readonly raRatePxPerMs?: number
+	// Calibrated DEC axis motion rate in pixels per millisecond; converts calibrated axis errors back to pixels.
+	readonly decRatePxPerMs?: number
 	// Image scale in arc-seconds per pixel; when omitted, arc-second values are returned as undefined.
 	readonly imageScale?: number
 	// Current pointing declination in radians; required for polar alignment error estimates.
@@ -329,7 +339,7 @@ export class GuidingAssistant {
 
 		if (this.#status === 'idle') this.start(frame.timestamp ?? Date.now())
 
-		const sample = makeSample(frame, command, this.#startTime)
+		const sample = makeSample(frame, command, this.#startTime, this.config)
 
 		let pulse: CalibrationPulseCommand | undefined
 
@@ -374,7 +384,7 @@ export class GuidingAssistant {
 			return { result: this.result(timestamp), aligned: false }
 		}
 
-		const sample = makeSample(frame, command, this.#startTime)
+		const sample = makeSample(frame, command, this.#startTime, this.config)
 		if (sample === undefined) return { result: this.result(timestamp), aligned: false }
 
 		this.#backlash.originDec = sample.decPx
@@ -540,7 +550,7 @@ export class GuidingAssistant {
 
 // Normalizes one accepted guide frame/command into an assistant sample, preferring calibrated axis
 // errors and falling back to raw image deltas. Returns undefined for non-guiding, bad, or unusable frames.
-function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number): GuidingAssistantSample | undefined {
+function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number, config: GuidingAssistantConfig): GuidingAssistantSample | undefined {
 	if (command.state !== 'guiding' || command.diagnostics.badFrame) return undefined
 
 	const timestamp = frame.timestamp ?? Date.now()
@@ -550,8 +560,8 @@ function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number)
 
 	if (!hasAxisErrors && !hasImageDeltas) return undefined
 
-	const raPx = hasAxisErrors ? command.diagnostics.axisErrorRA! : command.diagnostics.dx!
-	const decPx = hasAxisErrors ? command.diagnostics.axisErrorDEC! : command.diagnostics.dy!
+	const raPx = hasAxisErrors ? axisErrorToPixels(command.diagnostics.axisErrorRA!, config.raRatePxPerMs) : command.diagnostics.dx!
+	const decPx = hasAxisErrors ? axisErrorToPixels(command.diagnostics.axisErrorDEC!, config.decRatePxPerMs) : command.diagnostics.dy!
 
 	return {
 		frameId: frame.frameId,
@@ -569,17 +579,24 @@ function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number)
 	}
 }
 
+// Converts a calibrated axis error into pixels when its solved axis rate is available; an undefined
+// rate denotes the uncalibrated identity controller, whose axis errors are already pixel values.
+function axisErrorToPixels(axisError: number, ratePxPerMs: number | undefined) {
+	return ratePxPerMs !== undefined && Number.isFinite(ratePxPerMs) && ratePxPerMs > 0 ? axisError * ratePxPerMs : axisError
+}
+
 // Derives passive motion metrics. `decCorrectedRmsPx` is the precomputed drift-removed DEC
 // seeing estimate and `raMinMovePx` the recommended RA min-move, both passed in so a snapshot
 // computes them once instead of repeating the work here.
 function computeMotionMetrics(samples: readonly GuidingAssistantSample[], config: GuidingAssistantConfig, decCorrectedRmsPx: number, raMinMovePx: number): GuidingAssistantMotionMetrics {
 	const raFit = linearFit(samples, 'raPx')
 	const decFit = linearFit(samples, 'decPx')
-	const maxRateRA = maxAdjacentRate(samples, 'raPx')
+	const lowPassRa = lowPassRaValues(samples, config.exposure)
+	const maxRateRA = maxAdjacentRate(samples, lowPassRa)
 	const scale = scaleOrNull(config)
 	const raPeakPx = peakFromOrigin(samples, 'raPx')
 	const decPeakPx = peakFromOrigin(samples, 'decPx')
-	const raPeakPeakPx = peakToPeak(samples, 'raPx')
+	const raPeakPeakPx = peakToPeak(lowPassRa)
 	const polarAlignmentErrorArcmin = computePolarAlignmentError(decFit.slope * 60, config)
 
 	return {
@@ -768,28 +785,43 @@ function peakFromOrigin(samples: readonly GuidingAssistantSample[], key: 'raPx' 
 	return peak
 }
 
-// Peak-to-peak (max minus min) excursion of one axis, in pixels.
-function peakToPeak(samples: readonly GuidingAssistantSample[], key: 'raPx' | 'decPx') {
-	if (samples.length === 0) return 0
+// Applies PHD2's first-order RA low-pass filter to guide samples. The cutoff is max(6 s, three
+// guide exposures), and the recursive filter uses the configured exposure as its sample period.
+function lowPassRaValues(samples: readonly GuidingAssistantSample[], exposure: number) {
+	if (samples.length === 0) return []
 
-	let min = samples[0][key]
+	const cutoff = Math.max(RA_LOW_PASS_MIN_CUTOFF_SECONDS, RA_LOW_PASS_EXPOSURE_FACTOR * exposure)
+	const alpha = 1 - cutoff / (cutoff + Math.max(1, exposure))
+	const values = new Array<number>(samples.length)
+	values[0] = samples[0].raPx
+
+	for (let i = 1; i < samples.length; i++) values[i] = values[i - 1] + alpha * (samples[i].raPx - values[i - 1])
+
+	return values
+}
+
+// Peak-to-peak (max minus min) excursion of filtered RA values, in pixels.
+function peakToPeak(values: readonly number[]) {
+	if (values.length === 0) return 0
+
+	let min = values[0]
 	let max = min
 
-	for (const sample of samples) {
-		min = Math.min(min, sample[key])
-		max = Math.max(max, sample[key])
+	for (let i = 1; i < values.length; i++) {
+		min = Math.min(min, values[i])
+		max = Math.max(max, values[i])
 	}
 
 	return max - min
 }
 
-// Largest absolute rate of change between consecutive samples for one axis, in pixels per second.
-function maxAdjacentRate(samples: readonly GuidingAssistantSample[], key: 'raPx' | 'decPx') {
+// Largest absolute rate of change between consecutive filtered RA samples, in pixels per second.
+function maxAdjacentRate(samples: readonly GuidingAssistantSample[], values: readonly number[]) {
 	let maxRate = 0
 
 	for (let i = 1; i < samples.length; i++) {
 		const dt = samples[i].elapsed - samples[i - 1].elapsed
-		if (dt > 0) maxRate = Math.max(maxRate, Math.abs(samples[i][key] - samples[i - 1][key]) / dt)
+		if (dt > 0) maxRate = Math.max(maxRate, Math.abs(values[i] - values[i - 1]) / dt)
 	}
 
 	return maxRate

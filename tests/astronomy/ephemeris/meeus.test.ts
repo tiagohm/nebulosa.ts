@@ -1039,6 +1039,15 @@ describe('Conjunction', () => {
 		expect(() => Conjunction.stellar(0, 4, [0, 0], moving)).toThrow()
 	})
 
+	test('conjunction in the first interval of a five-point table', () => {
+		const fixed = [0, 0] as const
+		const moving = [-0.2, 0.5, 1.2, 1.9, 2.6].map((ra, i) => [deg(ra), 0.01 * i] as const)
+		for (const result of [Conjunction.stellar(0, 4, fixed, moving), Conjunction.planetary(0, 4, [fixed, fixed, fixed, fixed, fixed], moving)]) {
+			expect(result[0]).toBeCloseTo(2 / 7, 12)
+			expect(result[1]).toBeCloseTo(0.02 / 7, 12)
+		}
+	})
+
 	test('planetary', () => {
 		// Example 18.a, p. 117.0
 

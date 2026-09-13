@@ -49,9 +49,10 @@ export function resolveFlatAcquisitionMetadata(context: FlatImageContext): Resol
 	}
 }
 
-// Resolves a caller-provided CFA offset or a complete integer XBAYROFF/YBAYROFF header pair.
+// Resolves a caller-provided CFA offset, or a complete integer XBAYROFF/YBAYROFF pair when the image has a mosaic.
 export function resolveFlatContextCfaOffset(context: FlatImageContext): readonly [number, number] | undefined {
 	if (context.cfaOffset !== undefined) return context.cfaOffset
+	if (context.image.metadata.bayer === undefined) return undefined
 	return headerIntegerPair(context.image.header.XBAYROFF, context.image.header.YBAYROFF, false)
 }
 

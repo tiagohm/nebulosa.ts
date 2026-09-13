@@ -20,6 +20,7 @@ interface FixtureRecord {
 	readonly pmDecMasYr?: number
 	readonly objectType?: number
 	readonly includeProperMotion?: boolean
+	readonly uniqueStarNumber?: number
 }
 
 const FIXTURE_RECORDS: readonly FixtureRecord[] = [
@@ -50,6 +51,11 @@ test('queries a cone with RA wrap-around and native index use', async () => {
 test('queries a box that crosses RA 0', async () => {
 	const result = await catalog.queryBox(deg(359.7), deg(0.3), deg(-0.1), deg(0.1))
 	expect(idsOf(result)).toEqual(['451-1', '451-3'])
+})
+
+test('reads zone 451 from the first RA bin in the native Fortran index', async () => {
+	const result = await catalog.queryBox(0, deg(0.25), 0, deg(0.2))
+	expect(idsOf(result)).toEqual(['451-1'])
 })
 
 test('includes stars when maxRA falls exactly on a UCAC4 index bin boundary', async () => {
@@ -110,6 +116,82 @@ test('detects malformed records with invalid coordinates', async () => {
 	}
 })
 
+test('preserves ordinary proper motion and its no-data flags without a supplement', async () => {
+	const entry = (await catalog.get(451, 2))!
+	expect(toMas(entry.pmRA!) * Math.cos(entry.declination)).toBeCloseTo(4, 10)
+	expect(toMas(entry.pmDEC!)).toBeCloseTo(-1, 10)
+	const missing = (await catalog.get(451, 1))!
+	expect(missing.pmRA).toBeUndefined()
+	expect(missing.pmDEC).toBeUndefined()
+})
+
+test.each([
+	['', 3276.7, 3276.7],
+	['u4i', 3276.7, 3141.3],
+	['u4i', 1099, 3276.7],
+] as const)('loads high proper motion from "%s" with stored components %s/%s', async (directory: string, pmRA: number, pmDEC: number) => {
+	const root = await fs.mkdtemp(join(tmpdir(), 'nebulosa-ucac4-hpm-'))
+	let localCatalog: Ucac4Catalog | undefined
+
+	try {
+		await fs.mkdir(join(root, directory), { recursive: true })
+		const tablePath = join(root, directory, 'u4hpm.dat')
+		// USNO readme_u4 section 5c: retain the sample IDs and motions, with synthetic local record numbers.
+		await fs.writeFile(tablePath, '          1 644 101666   41087   31413 1140226325  463469832 20000\r\n  113038183 494  48937   10990  -51230  442763714  355581607 12513\r\n\r\n')
+		const decOnly = pmRA !== 3276.7
+		const record: FixtureRecord = {
+			zone: decOnly ? 494 : 644,
+			ra: deg(10),
+			dec: deg(decOnly ? 8.7 : 38.7),
+			pmRaCosDecMasYr: pmRA,
+			pmDecMasYr: pmDEC,
+			uniqueStarNumber: decOnly ? 113038183 : 1,
+		}
+		const records = Buffer.alloc(RECORD_SIZE * 3)
+		writeRecord(records, 0, record, 1)
+		writeRecord(records, RECORD_SIZE, { ...record, uniqueStarNumber: 999 }, 2)
+		writeRecord(records, RECORD_SIZE * 2, record, 3)
+		records.writeInt8(127, RECORD_SIZE * 2 + 28)
+		await fs.writeFile(join(root, `z${record.zone}`), records)
+		localCatalog = await openUcac4Catalog(root)
+
+		const expectedRA = decOnly ? 1099 : 4108.7
+		const expectedDEC = decOnly ? -5123 : 3141.3
+		const entry = (await localCatalog.get(record.zone, 1))!
+		expect(toMas(entry.pmRA!) * Math.cos(entry.declination)).toBeCloseTo(expectedRA, 8)
+		expect(toMas(entry.pmDEC!)).toBeCloseTo(expectedDEC, 8)
+		const result = await localCatalog.queryCone(record.ra, record.dec, deg(0.01))
+		expect(result).toHaveLength(3)
+		expect(result[0]).toEqual(entry)
+		for (const missing of result.slice(1)) {
+			expect(missing.pmRA).toBeUndefined()
+			expect(missing.pmDEC).toBeUndefined()
+		}
+
+		await localCatalog.close()
+		await fs.rm(tablePath)
+		await localCatalog.open(root)
+		const withoutTable = (await localCatalog.get(record.zone, 1))!
+		expect(withoutTable.pmRA).toBeUndefined()
+		expect(withoutTable.pmDEC).toBeUndefined()
+	} finally {
+		await localCatalog?.close()
+		await fs.rm(root, { recursive: true, force: true })
+	}
+})
+
+test.each(['1 644 1 NaN 31413 1140226325 463469832 20000', '1 644 1 41087', '1 644 1 41087 31413 1140226325 463469832 20000\n1 644 2 41087 31413 1140226325 463469832 20000'])('rejects malformed high proper motion data: %s', async (data: string) => {
+	const root = await fs.mkdtemp(join(tmpdir(), 'nebulosa-ucac4-hpm-bad-'))
+
+	try {
+		await fs.writeFile(join(root, 'z644'), Buffer.alloc(RECORD_SIZE))
+		await fs.writeFile(join(root, 'u4hpm.dat'), data)
+		expect(openUcac4Catalog(root)).rejects.toThrow('corrupt UCAC4 high proper motion file')
+	} finally {
+		await fs.rm(root, { recursive: true, force: true })
+	}
+})
+
 function idsOf(items: readonly Ucac4CatalogEntry[]) {
 	return items.map((item) => `${item.zone}-${item.recordNumber}`).sort()
 }
@@ -142,8 +224,9 @@ async function createCatalog() {
 		for (let i = 0; i < records.length; i++) {
 			writeRecord(output, i * RECORD_SIZE, records[i], i + 1)
 			const bin = Math.min(BIN_COUNT - 1, Math.floor(records[i].ra / deg(0.25)))
-			const index = (zone - 1) * BIN_COUNT + bin
-			if (counts[index] === 0) starts[index] = i + 1
+			// USNO readme_u4 section 5c: n0(900,1440), with n0 the predecessor record number.
+			const index = bin * ZONE_COUNT + zone - 1
+			if (counts[index] === 0) starts[index] = i
 			counts[index]++
 		}
 
@@ -206,7 +289,7 @@ function writeRecord(buffer: Buffer, offset: number, record: FixtureRecord, reco
 	buffer.writeInt32LE(300000000, offset + 62)
 	buffer.writeUInt8(0, offset + 66)
 	buffer.writeUInt8(0, offset + 67)
-	buffer.writeInt32LE(record.zone * 100000 + recordNumber, offset + 68)
+	buffer.writeInt32LE(record.uniqueStarNumber ?? record.zone * 100000 + recordNumber, offset + 68)
 	buffer.writeInt16LE(0, offset + 72)
 	buffer.writeInt32LE(0, offset + 74)
 }
