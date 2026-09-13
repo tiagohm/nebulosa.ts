@@ -623,7 +623,7 @@ export class StarTracker implements GuideTracker {
 		const quality = filterQualityGuideStars(frameForFilter, this.config.filter)
 		const filtered = filterGuideStars({ stars: orderedDetections, width: frame.width, height: frame.height }, this.config.filter)
 		const selectionStars = searchPosition === undefined || searchRegion === undefined ? orderedDetections : qualityStarsOf(frameForFilter)
-		const selection = selectGuideStar(selectionStars, frame.width, frame.height, undefined, { ...this.config.selection, filter: { ...this.config.selection.filter, ...this.config.filter } })
+		const selection = selectGuideStar(selectionStars, frame.width, frame.height, undefined, { ...this.config.selection, filter: { ...this.config.filter, ...this.config.selection.filter } })
 		const primary = searchPosition === undefined || searchRegion === undefined ? orderedDetections[0] : searchPrimary
 		const notes: string[] = []
 

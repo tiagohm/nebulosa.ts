@@ -359,6 +359,23 @@ test('uses initialPosition to seed unbounded acquisition', () => {
 	expect(result.measurement?.y).toBeCloseTo(400, 0)
 })
 
+test('honors nested selection filter overrides', () => {
+	const tracker = new StarTracker({ filter: { minStarSnr: 2 }, selection: { filter: { minStarSnr: 100 } } })
+	const result = tracker.track(
+		{
+			image: imageWithStars([[300, 300, 10]]),
+			width: WIDTH,
+			height: HEIGHT,
+			timestamp: 0,
+			frameId: 1,
+		},
+		{ phase: 'looping', allowAcquisition: true, preserveIdentity: false },
+	)
+
+	expect(result.measurement).toBeUndefined()
+	expect(result.selectionPrimary).toBeUndefined()
+})
+
 test('does not measure a field star when the search box has no acceptable candidate', () => {
 	const tracker = new StarTracker()
 	const context = { phase: 'guiding' as const, searchPosition: [100, 100] as const, searchRegion: 64, allowAcquisition: true, preserveIdentity: true }
