@@ -383,13 +383,26 @@ export class GuiderClient {
 		const selected = this.#guider.selectGuideStar(this.#frame).primary
 		if (selected === undefined) return undefined
 
+		this.#abortGuidingAssistantForTransition('guide star changed')
 		this.#lockPosition = [selected.x, selected.y] as const
 		this.#lockSearchPosition = this.#lockPosition
 		this.#exactLockPosition = false
+		this.#ditherOffsetX = 0
+		this.#ditherOffsetY = 0
+		this.#dither.reset()
+		this.#lockShiftOffsetX = 0
+		this.#lockShiftOffsetY = 0
+		this.#lockShiftTimestamp = 0
+		this.#lockShiftLimitReached = false
+		this.#avgDistanceNeedReset = true
 		this.emitEvent('StarSelected', { X: selected.x, Y: selected.y })
 		this.emitEvent('LockPositionSet', { X: selected.x, Y: selected.y })
 
-		if (this.#appState === 'Stopped' || this.#appState === 'Looping') {
+		if (this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused') {
+			this.#guider = this.#makeGuider(this.#calibration)
+			this.#resumeState = 'Guiding'
+			if (!this.#paused) this.#setAppState('Guiding')
+		} else if (this.#appState === 'Stopped' || this.#appState === 'Looping') {
 			this.#setAppState('Selected')
 		}
 

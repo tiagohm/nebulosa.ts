@@ -3324,6 +3324,58 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	)
 
 	test(
+		'findStar while guiding reinitializes the controller on the selected star',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+			harness.client.setGuideOutputEnabled(false)
+
+			await feedStars(harness, [[STAR_B[0], STAR_B[1]]])
+			const selected = harness.client.findStar()!
+			expect(selected[0]).toBeCloseTo(STAR_B[0] + harness.mount.offsetX, 0)
+			expect(selected[1]).toBeCloseTo(STAR_B[1] + harness.mount.offsetY, 0)
+			expect(harness.client.getAppState()).toBe('Guiding')
+
+			for (let i = 0; i < LOCK_AVERAGING_FRAMES; i++) await feedFrame(harness)
+
+			const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+			const lock = harness.client.getLockPosition()!
+			expect(lock[0]).toBeCloseTo(selected[0], 0)
+			expect(lock[1]).toBeCloseTo(selected[1], 0)
+			expect(Math.hypot(step.dx, step.dy)).toBeLessThan(1)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
+		'findStar while lost reinitializes the controller and recovers the new star',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			for (let i = 0; i < 8; i++) await feedEmptyFrame(harness)
+			expect(harness.client.getAppState()).toBe('LostLock')
+
+			await feedStars(harness, [[STAR_B[0], STAR_B[1]]])
+			const selected = harness.client.findStar()!
+			expect(selected[0]).toBeCloseTo(STAR_B[0] + harness.mount.offsetX, 0)
+			expect(selected[1]).toBeCloseTo(STAR_B[1] + harness.mount.offsetY, 0)
+			expect(harness.client.getAppState()).toBe('Guiding')
+			const lostEventsBeforeRecovery = eventsOf(harness.events, 'StarLost').length
+
+			for (let i = 0; i < LOCK_AVERAGING_FRAMES; i++) await feedStars(harness, [[STAR_B[0], STAR_B[1]]])
+
+			const lock = harness.client.getLockPosition()!
+			expect(lock[0]).toBeCloseTo(selected[0], 0)
+			expect(lock[1]).toBeCloseTo(selected[1], 0)
+			expect(eventsOf(harness.events, 'StarLost')).toHaveLength(lostEventsBeforeRecovery)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
 		'stars outside the search box remain available for multi-star measurement',
 		async () => {
 			const frames: GuideFrameImage[] = []
