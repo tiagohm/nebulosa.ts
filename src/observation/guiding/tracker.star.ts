@@ -487,6 +487,14 @@ export interface StarTrackerConfig {
 	readonly selection: GuideStarSelectionConfig
 }
 
+// Partial overrides accepted before StarTracker merges the resolved stellar configuration.
+export type StarTrackerConfigOverrides = Partial<Omit<StarTrackerConfig, 'filter' | 'selection'>> & {
+	// Partial quality-threshold overrides.
+	readonly filter?: Partial<StarFilterConfig>
+	// Partial primary-selection and alternative-star overrides.
+	readonly selection?: GuideStarSelectionOptions
+}
+
 // Default star-tracker configuration, preserving the previous guider's stellar tuning.
 export const DEFAULT_STAR_TRACKER_CONFIG: Readonly<StarTrackerConfig> = {
 	mode: 'multiStar',
@@ -529,7 +537,7 @@ export class StarTracker implements GuideTracker {
 	#width = 0
 	#height = 0
 
-	constructor(config: Partial<StarTrackerConfig> = {}) {
+	constructor(config: StarTrackerConfigOverrides = {}) {
 		const filter = { ...DEFAULT_STAR_TRACKER_CONFIG.filter, ...config.filter }
 		const selection = {
 			...DEFAULT_STAR_TRACKER_CONFIG.selection,

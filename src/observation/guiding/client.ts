@@ -16,7 +16,7 @@ import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalib
 import { DitherGenerator, type DitherMode } from './dither'
 import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, Guider } from './guider'
 import type { GuideFrame, GuideTracker, GuideTrackerResult } from './tracker'
-import { StarTracker, type GuideStar, type StarTrackerConfig, type StarTrackerResult } from './tracker.star'
+import { StarTracker, type GuideStar, type StarTrackerConfigOverrides, type StarTrackerResult } from './tracker.star'
 
 // Local autoguiding orchestrator exposing a PHD2-compatible API over INDI camera and guide-output
 // devices. It decodes each camera BLOB, delegates one frame to the configured tracker, drives the
@@ -162,7 +162,7 @@ export interface GuiderClientOptions {
 	// Optional synchronous tracker implementation. When provided, trackerConfig is ignored.
 	readonly tracker?: GuideTracker
 	// Partial configuration for the default StarTracker.
-	readonly trackerConfig?: Partial<StarTrackerConfig>
+	readonly trackerConfig?: StarTrackerConfigOverrides
 	// Overrides for the calibration state machine, merged over DEFAULT_GUIDING_CALIBRATOR_CONFIG. Pulse
 	// durations are milliseconds and distances are pixels; an invalid combination throws at
 	// construction. Mounts with a fast guide rate usually only need shorter raPulse/decPulse.

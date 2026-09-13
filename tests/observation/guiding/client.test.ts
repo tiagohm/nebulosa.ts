@@ -397,6 +397,11 @@ describe('construction', () => {
 		expect(makeHarness({ searchRegion: 0 }).client.getSearchRegion()).toBe(64)
 	})
 
+	test('accepts nested partial tracker configuration', () => {
+		const options = { trackerConfig: { filter: { minStarSnr: 8 } } } satisfies GuiderClientOptions
+		expect(makeHarness(options).client.getAppState()).toBe('Stopped')
+	})
+
 	test('applies sticky lock and dither-mode options', () => {
 		const sticky = makeHarness({ stickyLockPosition: true, ditherMode: 'spiral' })
 		expect(sticky.client.getStickyLockPositionEnabled()).toBeTrue()
