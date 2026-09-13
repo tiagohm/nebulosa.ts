@@ -1172,9 +1172,6 @@ describe('frame-driven behavior', () => {
 		let resets = 0
 		let lastResult: GuideTrackerResult | undefined
 		const tracker: GuideTracker = {
-			get lastResult() {
-				return lastResult
-			},
 			reset() {
 				resets++
 				lastResult = undefined

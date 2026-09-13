@@ -384,7 +384,7 @@ export class GuiderClient {
 
 	// Finds the best star in the most recent frame and stores it as the preferred lock position.
 	findStar() {
-		const tracking = this.#tracker.lastResult
+		const tracking = this.#frame?.tracking ?? this.#tracker.lastResult
 		const starResult = starTrackingOf(tracking)
 		const selected = starResult?.primary ?? tracking?.measurement
 		if (selected === undefined) return undefined
