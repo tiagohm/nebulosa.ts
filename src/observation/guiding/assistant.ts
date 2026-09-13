@@ -554,7 +554,7 @@ function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number,
 	if (command.state !== 'guiding' || command.diagnostics.badFrame) return undefined
 
 	const timestamp = frame.timestamp ?? Date.now()
-	const star = frame.stars[0]
+	const star = frame.stars?.[0]
 	const hasAxisErrors = isFiniteNumber(command.diagnostics.axisErrorRA) && isFiniteNumber(command.diagnostics.axisErrorDEC)
 	const hasImageDeltas = isFiniteNumber(command.diagnostics.dx) && isFiniteNumber(command.diagnostics.dy)
 

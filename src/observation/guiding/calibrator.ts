@@ -933,7 +933,7 @@ export class GuidingCalibrator {
 		this.state.lastDiagnostics = {
 			phase: this.state.phase,
 			frameId: frame.frameId,
-			totalStars: frame.stars.length,
+			totalStars: frame.stars?.length ?? 0,
 			acceptedStars: filtered.accepted.length,
 			qualityScore: filtered.qualityScore,
 			rejectedReasons: filtered.rejectedReasons,

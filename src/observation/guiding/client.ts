@@ -16,6 +16,7 @@ import { GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantRes
 import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationConfig, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
 import { DitherGenerator, type DitherMode } from './dither'
 import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, type GuideFrame, Guider, type GuideStar, starInsideSearchRegion } from './guider'
+import { type GuideTrackerResult, trackingOf } from './tracker'
 
 // Local autoguiding orchestrator exposing a PHD2-compatible API over INDI camera and guide-output
 // devices. It decodes each camera BLOB, detects stars, drives the GuidingCalibrator and Guider state
@@ -123,6 +124,9 @@ export interface GuideFrameImage {
 	// Decoded guide image. Pixel data lives in `image.raw`; dimensions and channel layout are in
 	// `image.metadata`.
 	readonly image: Image
+	// Generic tracking result for this frame. Optional for source compatibility; the client always
+	// populates it for newly emitted overlays.
+	readonly tracking?: GuideTrackerResult
 	// Every star detected in the frame, before the guider quality thresholds. The star nearest to the
 	// current search position, when there is one inside the search region, is moved to index 0.
 	readonly stars: readonly GuideStar[]
@@ -698,7 +702,7 @@ export class GuiderClient {
 	getStarImage(): PHD2StarImage<ImageRawType> | undefined {
 		if (this.#image === undefined) return undefined
 
-		const star = this.#frame?.stars[0]
+		const star = this.#frame?.stars?.[0]
 		// Uses the current lock target when available, otherwise the latest measured star centroid or [0, 0].
 		const [x, y] = this.#lockPosition ?? [star?.x ?? 0, star?.y ?? 0]
 		return cropStarImage(this.#image, this.#frame?.frameId ?? 0, x, y, this.#searchRegion)
@@ -846,8 +850,8 @@ export class GuiderClient {
 
 		this.#abortGuidingAssistantForTransition('lock position changed')
 
-		if (this.#frame !== undefined && this.#frame.stars.length > 0) {
-			const nearest = nearestGuideStar(this.#frame.stars, x, y)
+		if (this.#frame !== undefined && (this.#frame.stars?.length ?? 0) > 0) {
+			const nearest = nearestGuideStar(this.#frame.stars ?? [], x, y)
 			this.#lockSearchPosition = nearest === undefined ? ([x, y] as const) : ([nearest.x, nearest.y] as const)
 		} else {
 			this.#lockSearchPosition = [x, y] as const
@@ -1115,9 +1119,10 @@ export class GuiderClient {
 				timestamp: frame.timestamp ?? Date.now(),
 				state: this.#appState,
 				image,
-				stars: frame.stars,
+				tracking: trackingOf(frame),
+				stars: frame.stars ?? [],
 				acceptedStars: this.#acceptedStars,
-				star: this.#primaryOutsideSearchRegion ? undefined : frame.stars[0],
+				star: this.#primaryOutsideSearchRegion ? undefined : (frame.stars ?? [])[0],
 				lockPosition: this.#lockPosition,
 				searchPosition: this.#lockSearchPosition ?? this.#lockPosition,
 				searchRegion: this.#searchRegion,
@@ -1737,7 +1742,7 @@ export class GuiderClient {
 
 	// Emits one passive frame event while exposures are looping.
 	#emitLoopingExposuresEvent(frame: GuideFrame) {
-		const star = frame.stars[0]
+		const star = frame.stars?.[0]
 
 		this.emitEvent('LoopingExposures', {
 			Frame: frame.frameId ?? 0,
@@ -1772,7 +1777,7 @@ export class GuiderClient {
 	// Emits one guide-step event using the latest guider command and diagnostics.
 	#emitGuideStepEvent(frame: GuideFrame, command: GuideCommand, avgDistance: number) {
 		const { diagnostics, ra, dec } = command
-		const star = frame.stars[0]
+		const star = frame.stars?.[0]
 		const dx = diagnostics.dx ?? 0
 		const dy = diagnostics.dy ?? 0
 		const outputActive = !this.#paused && this.#guideOutputActive
@@ -1823,7 +1828,7 @@ export class GuiderClient {
 
 	// Emits a star-lost event for the current frame.
 	#emitStarLostEvent(frame: GuideFrame, command: GuideCommand) {
-		const star = frame.stars[0]
+		const star = frame.stars?.[0]
 
 		this.emitEvent('StarLost', {
 			Frame: frame.frameId ?? 0,

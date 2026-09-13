@@ -4,6 +4,9 @@ import type { DetectedStar } from '../../imaging/stars/detector'
 import { Matrix } from '../../math/linear-algebra/matrix'
 import { clamp } from '../../math/numerical/math'
 import { medianAbsoluteDeviationOf, medianOf } from '../../math/numerical/statistics'
+import { type GuideFrame, type GuideTrackerResult, trackingOf } from './tracker'
+
+export type { GuideFrame, GuideMeasurement, GuideTrackerContext, GuideTrackerFrame, GuideTrackerResult, GuideTrackerTelemetry, GuideTrackingPhase } from './tracker'
 
 // Self-contained autoguiding controller. Given a stream of star-detection frames and a calibration
 // matrix mapping image pixels to mount RA/DEC axes, the Guider averages a lock reference, measures
@@ -38,31 +41,6 @@ export interface GuideStar extends DetectedStar {
 	readonly fwhm?: number
 }
 
-// One guide-camera frame of detected stars.
-export interface GuideFrame {
-	// Stars detected in this frame.
-	readonly stars: readonly GuideStar[]
-	// Frame width, in pixels.
-	readonly width: number
-	// Frame height, in pixels.
-	readonly height: number
-	// Capture timestamp, in milliseconds; enables cadence and dropped-frame detection.
-	readonly timestamp?: number
-	// Optional monotonic frame identifier.
-	readonly frameId?: number
-	// Exposure duration that produced this frame, in milliseconds. When set, pulse-gain cadence
-	// scaling and dropped-frame detection use this instead of the wall-clock gap between frames,
-	// so a pulse wait is not treated as extra uncorrected drift or a dropped frame. Frames without
-	// `cadenceMs` still classify drops from `timestamp`.
-	readonly cadenceMs?: number
-	// Center of the star-search window, in pixels. When set together with `searchRegion`, lock
-	// quality and primary acquisition use only detections inside this box; `stars` still holds the
-	// full-frame list so multi-star matching can use neighbors outside the box.
-	readonly searchPosition?: readonly [number, number]
-	// Side of the square star-search window, in pixels. Ignored unless `searchPosition` is set.
-	readonly searchRegion?: number
-}
-
 // A commanded pulse on one mount axis.
 export interface AxisPulse {
 	// Pulse direction, or undefined for no motion.
@@ -81,6 +59,9 @@ export interface GuideCommand {
 	readonly dec: AxisPulse
 	// Detailed diagnostics for this frame.
 	readonly diagnostics: GuideDiagnostics
+	// Generic tracking result consumed for this command. Undefined only for legacy callers that
+	// supplied the temporary stars fixture field instead of `tracking`.
+	readonly tracking?: GuideTrackerResult
 	// Stars that passed the quality filter on this frame, in detection order. This is the subset the
 	// controller actually measured from, so it excludes low-SNR, saturated, elongated, and border
 	// stars present in `frame.stars`. Undefined only when the command was not produced by
@@ -96,6 +77,10 @@ export interface GuideDiagnostics {
 	readonly totalStars: number
 	// Stars accepted after filtering.
 	readonly acceptedStars: number
+	// Generic candidate count for this frame.
+	readonly candidateCount?: number
+	// Generic accepted-candidate count for this frame.
+	readonly acceptedCount?: number
 	// Accepted/total ratio in [0, 1].
 	readonly qualityScore: number
 	// Measurement mode actually used, or undefined when no measurement was made.
@@ -139,6 +124,8 @@ export interface GuideDiagnostics {
 	readonly droppedFrame: boolean
 	// Free-form per-frame notes.
 	readonly notes: readonly string[]
+	// Generic tracking result used to produce these diagnostics.
+	readonly tracking?: GuideTrackerResult
 }
 
 // Row-major 2×2 image-to-axis calibration matrix [a, b, c, d].
@@ -461,8 +448,9 @@ export function filterGuideStars(frame: GuideFrame, config: StarFilterConfig): F
 	const rejectedReasons: Record<string, number> = {}
 	const borderRight = frame.width - config.borderMarginPx
 	const borderBottom = frame.height - config.borderMarginPx
+	const stars = frame.stars ?? []
 
-	for (const star of frame.stars) {
+	for (const star of stars) {
 		const reason = rejectStarReason(star, config, borderRight, borderBottom, config.borderMarginPx)
 
 		if (reason !== undefined) {
@@ -473,7 +461,7 @@ export function filterGuideStars(frame: GuideFrame, config: StarFilterConfig): F
 		accepted.push(star)
 	}
 
-	const ratio = frame.stars.length > 0 ? accepted.length / frame.stars.length : 0
+	const ratio = stars.length > 0 ? accepted.length / stars.length : 0
 	const qualityScore = clamp(ratio, 0, 1)
 	return { accepted, rejectedReasons, qualityScore }
 }
@@ -489,10 +477,10 @@ export function starInsideSearchRegion(star: GuideStar, position: readonly [numb
 // window, only detections inside that box are returned; otherwise every detection is used.
 export function qualityStarsOf(frame: GuideFrame): readonly GuideStar[] {
 	const { searchPosition, searchRegion, stars } = frame
-	if (searchPosition === undefined || searchRegion === undefined) return stars
+	if (searchPosition === undefined || searchRegion === undefined) return stars ?? []
 
 	const inside: GuideStar[] = []
-	for (const star of stars) {
+	for (const star of stars ?? []) {
 		if (starInsideSearchRegion(star, searchPosition, searchRegion)) inside.push(star)
 	}
 	return inside
@@ -871,6 +859,8 @@ const EMPTY_STATE: Readonly<GuiderInternalState> = {
 	lastDiagnostics: {
 		totalStars: 0,
 		acceptedStars: 0,
+		candidateCount: 0,
+		acceptedCount: 0,
 		qualityScore: 0,
 		modeUsed: undefined,
 		rejectedReasons: {},
@@ -1017,7 +1007,7 @@ export class Guider {
 
 		if (this.state.state === 'initializing') {
 			const stars = this.#processInitializationFrame(frame)
-			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, stars }
+			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, tracking: trackingOf(frame), stars }
 		}
 
 		const quality = filterQualityGuideStars(frame, this.config.filter)
@@ -1054,7 +1044,7 @@ export class Guider {
 				this.#clearDecControlState()
 			}
 			this.#updateDiagnostics(frame, quality, undefined, droppedFrame, true, notes)
-			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, stars: filtered.accepted }
+			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, tracking: trackingOf(frame), stars: filtered.accepted }
 		}
 
 		this.state.consecutiveBadFrames = 0
@@ -1092,7 +1082,7 @@ export class Guider {
 			notes,
 		)
 
-		return { state: this.state.state, ra, dec, diagnostics: this.state.lastDiagnostics, stars: filtered.accepted }
+		return { state: this.state.state, ra, dec, diagnostics: this.state.lastDiagnostics, tracking: trackingOf(frame), stars: filtered.accepted }
 	}
 
 	// Returns a public snapshot of current guider runtime state.
@@ -1119,7 +1109,7 @@ export class Guider {
 
 	// Selects the best guide star and spaced alternatives using this guider's filter defaults.
 	selectGuideStar(frame: GuideFrame, options?: GuideStarSelectionOptions): GuideStarSelection {
-		return selectGuideStar(frame.stars, frame.width, frame.height, undefined, { ...options, filter: { ...this.config.filter, ...options?.filter } })
+		return selectGuideStar(frame.stars ?? [], frame.width, frame.height, undefined, { ...options, filter: { ...this.config.filter, ...options?.filter } })
 	}
 
 	// Consumes frame while the lock reference is being averaged. Returns the stars accepted by the
@@ -1330,6 +1320,8 @@ export class Guider {
 			frameId: frame.frameId,
 			totalStars: qualityStarsOf(frame).length,
 			acceptedStars: filtered.accepted.length,
+			candidateCount: trackingOf(frame).candidateCount,
+			acceptedCount: trackingOf(frame).acceptedCount,
 			qualityScore: filtered.qualityScore,
 			modeUsed: measurement?.modeUsed,
 			measurementX: measurement?.measurementX,
@@ -1351,6 +1343,7 @@ export class Guider {
 			ditherActive: this.state.ditherActive,
 			droppedFrame,
 			notes,
+			tracking: trackingOf(frame),
 		}
 	}
 }

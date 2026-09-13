@@ -482,7 +482,7 @@ describe('star filtering and star matching', () => {
 		const saturated = star(7, { x: 470, y: 260, flux: 12000, snr: 90, hfd: 2.1, peak: 70000 })
 		const frame = guideFrame([crowdedA, crowdedB, primary, closeAlternative, wideAlternativeA, wideAlternativeB, edge, saturated])
 
-		const selection = selectGuideStar(frame.stars, frame.width, frame.height, undefined, { minNeighborDistancePx: 12, alternativeSeparationPx: 32, maxAlternatives: 2 })
+		const selection = selectGuideStar(frame.stars ?? [], frame.width, frame.height, undefined, { minNeighborDistancePx: 12, alternativeSeparationPx: 32, maxAlternatives: 2 })
 
 		expect(selection.primary?.x).toBe(primary.x)
 		expect(selection.primary?.y).toBe(primary.y)
