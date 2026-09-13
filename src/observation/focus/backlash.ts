@@ -56,9 +56,9 @@ export class BacklashCompensator {
 				const backlashCompensation = this.#calculateOvershootBacklashCompensation(currentPosition, targetPosition)
 
 				if (backlashCompensation !== 0) {
-					const overshoot = targetPosition + backlashCompensation
+					const overshoot = Math.max(0, Math.min(targetPosition + backlashCompensation, this.maxPosition))
 
-					if (overshoot >= 0 && overshoot <= this.maxPosition) {
+					if (overshoot !== targetPosition) {
 						// The final approach is overshoot -> target, and that is the direction
 						// that must be remembered for the next backlash decision.
 						this.#lastDirection = this.#determineMovingDirection(overshoot, newPosition)

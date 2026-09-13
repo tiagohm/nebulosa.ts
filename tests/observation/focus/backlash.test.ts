@@ -63,6 +63,19 @@ describe('backlash compensation', () => {
 		expect(compensator.compute(0, 1000)).toEqual([0])
 	})
 
+	test('overshoot clamps an inward compensation to the minimum', () => {
+		const compensator = new BacklashCompensator({ mode: 'OVERSHOOT', backlashIn: 100, backlashOut: 0 }, 10000)
+
+		expect(compensator.compute(1000, 0)).toEqual([1000])
+		expect(compensator.compute(50, 1000)).toEqual([0, 50])
+	})
+
+	test('overshoot clamps an outward compensation to the maximum', () => {
+		const compensator = new BacklashCompensator({ mode: 'OVERSHOOT', backlashIn: 0, backlashOut: 200 }, 10000)
+
+		expect(compensator.compute(9950, 9000)).toEqual([10000, 9950])
+	})
+
 	test('overshoot no-op', () => {
 		const compensator = new BacklashCompensator({ mode: 'OVERSHOOT', backlashIn: 100, backlashOut: 100 }, 10000)
 
