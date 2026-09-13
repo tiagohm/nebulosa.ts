@@ -247,6 +247,14 @@ test('failed retry rechecks pre-flip pier-side guards before starting another fl
 	expectDecision(evaluateMeridianFlip(basePolicy({ beforeFlipPierSide: 'EAST', allowUnknownPierSide: true, maxRetries: 1 }), snapshotAt(deg(2)), state), 'FAILED', 'START_FLIP', 'RETRY_AVAILABLE')
 })
 
+test('failed retry pauses active guiding before starting another flip', () => {
+	const state: MeridianFlipState = { phase: 'FAILED', attempts: 1, preparationCompleted: true, failure: 'EXECUTION_FAILED' }
+	const policy = basePolicy({ maxRetries: 1 })
+
+	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(2), { isGuiding: true }), state), 'FAILED', 'PAUSE_GUIDING', 'RETRY_AVAILABLE')
+	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(2), { isGuiding: false }), state), 'FAILED', 'START_FLIP', 'RETRY_AVAILABLE')
+})
+
 test('failed retry waits while the mount is slewing or unsettled', () => {
 	const state: MeridianFlipState = { phase: 'FAILED', attempts: 1, preparationCompleted: true, failure: 'EXECUTION_FAILED' }
 	const policy = basePolicy({ maxRetries: 1 })

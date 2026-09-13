@@ -431,6 +431,7 @@ function evaluateFailedState(resolved: ResolvedMeridianFlipPolicy, snapshot: Mer
 		if (isAtOrAfterThreshold(hourAngle, resolved.flipAt) && snapshot.isExposing !== true && !isAlreadyFlipped) {
 			const pierSideFailure = evaluatePreFlipPierSide(resolved, snapshot, state, hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped)
 			if (pierSideFailure) return pierSideFailure
+			if (snapshot.isGuiding === true) return decision('FAILED', 'PAUSE_GUIDING', 'RETRY_AVAILABLE', hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, state)
 			if (!isMountReadyForFlip(snapshot)) return decision('FAILED', 'NONE', 'EXECUTION_FAILED', hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, state)
 			return decision('FAILED', 'START_FLIP', 'RETRY_AVAILABLE', hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, state)
 		}
