@@ -316,3 +316,24 @@ test('exposes a quality-approved primary separately from the nearest raw detecti
 	expect(result.selectionPrimary?.x).toBeCloseTo(120, 0)
 	expect(result.rejectedReasons.low_snr).toBe(1)
 })
+
+test('keeps the raw primary for telemetry when no search region is active', () => {
+	const tracker = new StarTracker()
+	const result = tracker.track(
+		{
+			image: imageWithStars([
+				[100, 100, 100],
+				[120, 120, 10],
+			]),
+			width: WIDTH,
+			height: HEIGHT,
+			timestamp: 0,
+			frameId: 1,
+		},
+		{ phase: 'looping', allowAcquisition: true, preserveIdentity: false },
+	)
+
+	expect(result.primary?.x).toBeCloseTo(100, 0)
+	expect(result.selectionPrimary?.x).toBeCloseTo(120, 0)
+	expect(result.rejectedReasons.saturated_peak).toBe(1)
+})

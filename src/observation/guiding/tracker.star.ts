@@ -610,7 +610,7 @@ export class StarTracker implements GuideTracker {
 		const filtered = filterGuideStars({ stars: orderedDetections, width: frame.width, height: frame.height }, this.config.filter)
 		const selectionStars = searchPosition === undefined || searchRegion === undefined ? orderedDetections : qualityStarsOf(frameForFilter)
 		const selection = selectGuideStar(selectionStars, frame.width, frame.height, undefined, { ...this.config.selection, filter: { ...this.config.selection.filter, ...this.config.filter } })
-		const primary = searchPosition === undefined || searchRegion === undefined ? selection.primary : searchPrimary
+		const primary = searchPosition === undefined || searchRegion === undefined ? orderedDetections[0] : searchPrimary
 		const notes: string[] = []
 
 		if (!primaryInsideSearchRegion) notes.push('primary_outside_search_region')
