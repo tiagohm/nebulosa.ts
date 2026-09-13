@@ -1,4 +1,5 @@
 import type { Image } from '../../imaging/model/types'
+import type { GuidingMode } from './tracker.star'
 
 // Generic synchronous tracking contracts. Frames use image pixels for coordinates, Unix epoch
 // milliseconds for timestamps, and optional images so a failed decode can still advance the guide
@@ -76,7 +77,7 @@ export interface GuideTrackerResult {
 	// Target-relative tracker offset in image pixels, excluding dither and lock shift.
 	readonly targetOffset?: readonly [number, number]
 	// Informational measurement mode; controllers must not depend on a particular value.
-	readonly measurementMode?: string
+	readonly measurementMode?: GuidingMode
 	// Optional tracker-specific telemetry.
 	readonly telemetry?: GuideTrackerTelemetry
 }
@@ -94,11 +95,9 @@ export interface GuideTracker {
 
 // DTO consumed by the calibrator, controller, assistant, and overlay pipeline.
 export interface GuideFrame {
-	// Result produced by the tracker for this frame. Optional only during the compatibility window
-	// while old synthetic consumers are migrated; production client frames always populate it.
-	readonly tracking?: GuideTrackerResult
-	// @deprecated Compatibility fixture field; production consumers must read `tracking` instead.
-	readonly stars?: readonly GuideTrackerStarLike[]
+	// Result produced by the tracker for this frame. Every production frame carries exactly one
+	// result; fixture adapters should create it before invoking a state machine.
+	readonly tracking: GuideTrackerResult
 	// Frame width in pixels.
 	readonly width: number
 	// Frame height in pixels.
@@ -109,10 +108,6 @@ export interface GuideFrame {
 	readonly frameId?: number
 	// Exposure cadence that produced this frame, in milliseconds.
 	readonly cadenceMs?: number
-	// @deprecated Tracking context now carries the search-box center.
-	readonly searchPosition?: readonly [number, number]
-	// @deprecated Tracking context now carries the search-box side.
-	readonly searchRegion?: number
 }
 
 // Minimal structural star shape accepted by the temporary fixture adapter.
@@ -153,12 +148,12 @@ export function trackingResultFromStars(stars: readonly GuideTrackerStarLike[] =
 		qualityScore: stars.length > 0 ? 1 : 0,
 		rejectedReasons: {},
 		notes: [],
-		measurementMode: primary === undefined ? undefined : 'single-star',
+		measurementMode: primary === undefined ? undefined : 'singleStar',
 		telemetry: primary === undefined ? undefined : { signalToNoise: primary.snr, mass: primary.flux, hfdPx: primary.hfd },
 	}
 }
 
-// Returns a frame's generic result, falling back to the temporary legacy fixture adapter.
+// Returns the single generic result attached to a guide frame.
 export function trackingOf(frame: GuideFrame): GuideTrackerResult {
-	return frame.tracking ?? trackingResultFromStars(frame.stars)
+	return frame.tracking
 }

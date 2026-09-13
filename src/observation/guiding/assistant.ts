@@ -1,6 +1,7 @@
 import type { CalibrationPulseCommand } from './calibrator'
-import { type GuideCommand, type GuideDirectionDEC, type GuideFrame, type GuidingMode, NO_PULSE, oppositeDEC } from './guider'
-import { trackingOf } from './tracker'
+import { type GuideCommand, type GuideDirectionDEC, NO_PULSE, oppositeDEC } from './guider'
+import { type GuideFrame, trackingOf } from './tracker'
+import type { GuidingMode } from './tracker.star'
 
 // PHD2-style "guiding assistant": passively analyzes a stream of accepted tracker frames to characterize
 // mount/seeing behavior and produce actionable recommendations (exposure range, RA/DEC min-move,
@@ -140,7 +141,7 @@ export interface GuidingAssistantSample {
 	// Whether the guider considered this a bad frame.
 	readonly badFrame: boolean
 	// Actual guide mode used by the guider for this accepted sample.
-	readonly modeUsed?: GuidingMode
+	readonly usedMode?: GuidingMode
 }
 
 // RMS and peak motion statistics for one axis.
@@ -576,7 +577,7 @@ function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number,
 		starMass: finiteOrZero(telemetry?.mass),
 		hfd: finiteOrZero(telemetry?.hfdPx),
 		badFrame: command.diagnostics.badFrame,
-		modeUsed: command.diagnostics.modeUsed,
+		usedMode: command.diagnostics.usedMode,
 	}
 }
 
@@ -633,7 +634,7 @@ function computeMotionMetrics(samples: readonly GuidingAssistantSample[], config
 // multipliers, floored, sanity-checked against arc-second limits, and reduced for multi-star guiding.
 function computeMinMove(samples: readonly GuidingAssistantSample[], config: GuidingAssistantConfig, seeingPx = bestDecSeeingEstimate(samples)) {
 	const multiplierDec = (config.imageScale ?? Number.POSITIVE_INFINITY) < config.fineScaleThreshold ? config.fineScaleDecMultiplier : config.coarseScaleDecMultiplier
-	const multiStarMeasured = config.multiStar && samples.length > 0 && samples.every((sample) => sample.modeUsed === 'multi-star')
+	const multiStarMeasured = config.multiStar && samples.length > 0 && samples.every((sample) => sample.usedMode === 'multiStar')
 	const minMoveFloor = multiStarMeasured ? MULTISTAR_MIN_MOVE_FLOOR_PX : DEFAULT_MIN_MOVE_FLOOR_PX
 	const adjustedSeeing = multiStarMeasured ? seeingPx * 0.9 : seeingPx
 	const dec = roundUpToUnit(Math.max(adjustedSeeing * multiplierDec, minMoveFloor), MIN_MOVE_UNIT_PX)

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import type { Image } from '../../../src/imaging/model/types'
-import { applyCalibration, applyDeadband, estimateTranslation, filterGuideStars, type GuideFrame, Guider, type GuiderConfig, type GuideStar, invertCalibration, selectGuideStar, validateCalibration } from '../../../src/observation/guiding/guider'
+import { applyCalibration, applyDeadband, type GuiderConfig, Guider, invertCalibration, validateCalibration } from '../../../src/observation/guiding/guider'
+import { trackingResultFromStars, type GuideFrame, type GuideTrackerResult } from '../../../src/observation/guiding/tracker'
+import type { GuideStar } from '../../../src/observation/guiding/tracker.star'
 
 const WIDTH = 800
 const HEIGHT = 600
@@ -24,7 +25,7 @@ function starList(count: number, patch?: (value: GuideStar, index: number) => Gu
 
 // Builds a guide frame fixture with explicit timestamp.
 function guideFrame(stars: readonly GuideStar[], timestamp = 0, frameId?: number): GuideFrame {
-	return { stars, width: WIDTH, height: HEIGHT, timestamp, frameId }
+	return { tracking: trackingResultFromStars(stars), width: WIDTH, height: HEIGHT, timestamp, frameId }
 }
 
 // Shifts stars by dx/dy with deterministic optional mutation.
@@ -50,12 +51,18 @@ test('search-box quality ignores out-of-box field stars', () => {
 	}
 
 	const frame = (timestamp: number, dx = 0): GuideFrame => ({
-		stars: [{ ...lock, x: lock.x + dx }, ...noise],
+		tracking: {
+			measurement: { x: lock.x + dx, y: lock.y, confidence: 1 },
+			candidateCount: noise.length + 1,
+			acceptedCount: 1,
+			qualityScore: 1,
+			rejectedReasons: { low_snr: noise.length },
+			notes: [],
+			measurementMode: 'singleStar',
+		},
 		width: WIDTH,
 		height: HEIGHT,
 		timestamp,
-		searchPosition: [120, 140],
-		searchRegion: 64,
 	})
 
 	const instance = guider({ lockAveragingFrames: 1, minFrameQuality: 0.2 })
@@ -68,59 +75,15 @@ test('search-box quality ignores out-of-box field stars', () => {
 	expect(cmd.state).toBe('guiding')
 })
 
-test('star filtering rejects low quality detections', () => {
-	const stars: GuideStar[] = [
-		{ x: 8, y: 20, snr: 20, flux: 1000, hfd: 2 },
-		{ x: 100, y: 100, snr: 2, flux: 1000, hfd: 2 },
-		{ x: 100, y: 100, snr: 20, flux: 1000, hfd: 2, saturated: true },
-		{ x: 100, y: 100, snr: 20, flux: 1000, hfd: 2, ellipticity: 0.8 },
-		{ x: 100, y: 100, snr: 20, flux: 1000, hfd: 2, fwhm: 40 },
-		{ x: 120, y: 120, snr: 20, flux: 1000, hfd: 2, ellipticity: 0.2, fwhm: 4 },
-	]
-
-	const filtered = filterGuideStars(guideFrame(stars), { minStarSnr: 8, minFlux: 100, maxHfd: 8, borderMarginPx: 10, maxEllipticity: 0.5, maxFwhm: 10, saturationPeak: 65000 })
-
-	expect(filtered.accepted).toHaveLength(1)
-	expect(filtered.rejectedReasons.border).toBe(1)
-	expect(filtered.rejectedReasons.low_snr).toBe(1)
-	expect(filtered.rejectedReasons.saturated).toBe(1)
-	expect(filtered.rejectedReasons.elongated).toBe(1)
-	expect(filtered.rejectedReasons.high_fwhm).toBe(1)
-})
-
-test('star filtering rejects detector eccentricity as elongation', () => {
-	const filtered = filterGuideStars(guideFrame([{ x: 100, y: 100, snr: 20, flux: 1000, hfd: 2, eccentricity: 0.9 }]), {
-		minStarSnr: 8,
-		minFlux: 100,
-		maxHfd: 8,
-		borderMarginPx: 10,
-		maxEllipticity: 0.5,
-		maxFwhm: 10,
-		saturationPeak: 65000,
-	})
-
-	expect(filtered.accepted).toHaveLength(0)
-	expect(filtered.rejectedReasons.elongated).toBe(1)
-})
-
 test('single-star tracking fallback computes correction pulses', () => {
-	const guider = new Guider({ mode: 'single-star', lockAveragingFrames: 2, minMoveRA: 0.01, minMoveDEC: 0.01, msPerRAUnit: 1000, msPerDECUnit: 1000 })
+	const guider = new Guider({ lockAveragingFrames: 2, minMoveRA: 0.01, minMoveDEC: 0.01, msPerRAUnit: 1000, msPerDECUnit: 1000 })
 	guider.processFrame(guideFrame(BASE_STARS, 0))
 	guider.processFrame(guideFrame(BASE_STARS, 1000))
 	const moved = shiftStars(BASE_STARS, 0.4, -0.3)
 	const cmd = guider.processFrame(guideFrame(moved, 2000))
 	expect(cmd.ra.duration).toBeGreaterThan(0)
 	expect(cmd.dec.duration).toBeGreaterThan(0)
-	expect(cmd.diagnostics.modeUsed).toBe('single-star')
-})
-
-test('multi-star translation rejects outlier and keeps weighted estimate', () => {
-	const moved = shiftStars(BASE_STARS, 1.5, -0.8, (star, index) => (index === 3 ? { ...star, x: star.x + 20, y: star.y - 15 } : star))
-	const translation = estimateTranslation(BASE_STARS, moved, 8, 2.5)
-	expect(translation).toBeDefined()
-	expect(translation!.matches).toBe(4)
-	expect(translation!.dx).toBeCloseTo(1.5, 1)
-	expect(translation!.dy).toBeCloseTo(-0.8, 1)
+	expect(cmd.diagnostics.usedMode).toBe('singleStar')
 })
 
 test('calibration transform and inverse are coherent', () => {
@@ -184,16 +147,17 @@ test('setTargetOffset shifts the lock without marking dither active', () => {
 
 test('adds tracker target offset once to the generic lock target', () => {
 	const g = guider({ lockAveragingFrames: 1 })
-	const tracking = (x: number, y: number, targetOffset?: readonly [number, number]) => ({
-		measurement: { x, y, confidence: 1 },
-		candidateCount: 1,
-		acceptedCount: 1,
-		qualityScore: 1,
-		rejectedReasons: {},
-		notes: [],
-		targetOffset,
-		measurementMode: 'synthetic',
-	})
+	const tracking = (x: number, y: number, targetOffset?: readonly [number, number]) =>
+		({
+			measurement: { x, y, confidence: 1 },
+			candidateCount: 1,
+			acceptedCount: 1,
+			qualityScore: 1,
+			rejectedReasons: {},
+			notes: [],
+			targetOffset,
+			measurementMode: 'singleStar',
+		}) satisfies GuideTrackerResult
 
 	g.processFrame({ tracking: tracking(100, 100), width: WIDTH, height: HEIGHT })
 	g.setTargetOffset(2, -1)
@@ -455,148 +419,15 @@ describe('math and calibration foundations', () => {
 	})
 })
 
-describe('star filtering and star matching', () => {
-	test('filters mixed star list with per-edge border rejection', () => {
-		const stars = [star(0, { x: 15, y: 15 }), star(1, { x: 5 }), star(2, { x: WIDTH - 8 }), star(3, { y: 4 }), star(4, { y: HEIGHT - 1 }), star(5, { snr: 2 }), star(6, { saturated: true }), star(7, { valid: false }), star(8, { ellipticity: 0.9 }), star(9, { fwhm: 100 })]
-		const filtered = filterGuideStars(guideFrame(stars), {
-			minStarSnr: 8,
-			minFlux: 100,
-			maxHfd: 8,
-			borderMarginPx: 10,
-			maxEllipticity: 0.5,
-			maxFwhm: 10,
-			saturationPeak: 65000,
-		})
-		expect(filtered.accepted).toHaveLength(1)
-		expect(filtered.rejectedReasons.border).toBe(4)
-		expect(filtered.rejectedReasons.low_snr).toBe(1)
-		expect(filtered.rejectedReasons.saturated).toBe(1)
-		expect(filtered.rejectedReasons.invalid).toBe(1)
-		expect(filtered.rejectedReasons.elongated).toBe(1)
-		expect(filtered.rejectedReasons.high_fwhm).toBe(1)
-	})
-
-	test('classifies detector artifacts like clipped peaks and NaN centroids', () => {
-		const stars = [star(0, { peak: 70000 }), star(1, { x: Number.NaN }), star(2, { flux: 80 }), star(3, { hfd: 12 }), star(4, { peak: 64000 })]
-		const filtered = filterGuideStars(guideFrame(stars), {
-			minStarSnr: 8,
-			minFlux: 100,
-			maxHfd: 8,
-			borderMarginPx: 10,
-			maxEllipticity: 0.5,
-			maxFwhm: 10,
-			saturationPeak: 65000,
-		})
-		expect(filtered.accepted).toHaveLength(1)
-		expect(filtered.rejectedReasons.saturated_peak).toBe(1)
-		expect(filtered.rejectedReasons.nan).toBe(1)
-		expect(filtered.rejectedReasons.low_flux).toBe(1)
-		expect(filtered.rejectedReasons.high_hfd).toBe(1)
-	})
-
-	test('selects an isolated guide star and spaced alternatives', () => {
-		const crowdedA = star(0, { x: 395, y: 300, flux: 6200, snr: 38, hfd: 2.2 })
-		const crowdedB = star(1, { x: 402, y: 304, flux: 5400, snr: 34, hfd: 2.1 })
-		const primary = star(2, { x: 430, y: 320, flux: 4300, snr: 30, hfd: 2.4 })
-		const closeAlternative = star(3, { x: 452, y: 331, flux: 4100, snr: 28, hfd: 2.5 })
-		const wideAlternativeA = star(4, { x: 245, y: 215, flux: 3600, snr: 24, hfd: 2.6 })
-		const wideAlternativeB = star(5, { x: 610, y: 395, flux: 3500, snr: 23, hfd: 2.7 })
-		const edge = star(6, { x: 8, y: 300, flux: 9000, snr: 70, hfd: 2 })
-		const saturated = star(7, { x: 470, y: 260, flux: 12000, snr: 90, hfd: 2.1, peak: 70000 })
-		const frame = guideFrame([crowdedA, crowdedB, primary, closeAlternative, wideAlternativeA, wideAlternativeB, edge, saturated])
-
-		const selection = selectGuideStar(frame.stars ?? [], frame.width, frame.height, undefined, { minNeighborDistancePx: 12, alternativeSeparationPx: 32, maxAlternatives: 2 })
-
-		expect(selection.primary?.x).toBe(primary.x)
-		expect(selection.primary?.y).toBe(primary.y)
-		expect(selection.alternatives).toHaveLength(2)
-		expect(selection.alternatives.some((value) => value.x === closeAlternative.x && value.y === closeAlternative.y)).toBeFalse()
-		expect(selection.alternatives.some((value) => value.x === wideAlternativeA.x && value.y === wideAlternativeA.y)).toBeTrue()
-		expect(selection.alternatives.some((value) => value.x === wideAlternativeB.x && value.y === wideAlternativeB.y)).toBeTrue()
-		expect(selection.rejectedReasons.double_star).toBe(2)
-		expect(selection.rejectedReasons.border).toBe(1)
-		expect(selection.rejectedReasons.saturated_peak).toBe(1)
-	})
-
-	test('uses image peaks to reject saturated guide stars when the catalog lacks peak data', () => {
-		const width = 96
-		const height = 96
-		const raw = new Float64Array(width * height)
-		const image: Image = {
-			header: {},
-			raw,
-			metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width, strideInBytes: width * 8, bayer: undefined },
-		}
-		const saturated = star(0, { x: 48, y: 48, flux: 4200, snr: 28, hfd: 2.5, peak: undefined })
-		const safe = star(1, { x: 26, y: 28, flux: 3300, snr: 24, hfd: 2.6, peak: undefined })
-
-		raw[48 * width + 48] = 70000
-		raw[28 * width + 26] = 32000
-
-		const selection = selectGuideStar([saturated, safe], width, height, image, {
-			filter: {
-				minStarSnr: 8,
-				minFlux: 100,
-				maxHfd: 10,
-				borderMarginPx: 8,
-				maxEllipticity: 0.5,
-				maxFwhm: 12,
-				saturationPeak: 65000,
-			},
-			maxAlternatives: 1,
-		})
-
-		expect(selection.primary?.x).toBe(safe.x)
-		expect(selection.primary?.y).toBe(safe.y)
-		expect(selection.rejectedReasons.saturated_peak).toBe(1)
-		expect(selection.candidates[0].peak).toBe(32000)
-	})
-
-	test('does not reject a lone valid star as double star on a small frame', () => {
-		const width = 20
-		const height = 18
-		const lone = star(0, { x: 10, y: 9, flux: 1800, snr: 18, hfd: 2.4 })
-
-		const selection = selectGuideStar([lone], width, height, undefined, {
-			filter: { minStarSnr: 8, minFlux: 100, maxHfd: 10, borderMarginPx: 4, maxEllipticity: 0.5, maxFwhm: 12, saturationPeak: 65000 },
-			minNeighborDistancePx: 40,
-		})
-
-		expect(selection.primary?.x).toBe(lone.x)
-		expect(selection.primary?.y).toBe(lone.y)
-		expect(selection.rejectedReasons.double_star).toBeUndefined()
-		expect(selection.candidates[0].nearestNeighborDistance).toBe(Infinity)
-	})
-
-	test('enforces one-to-one nearest matching and max radius', () => {
-		const reference = [star(0), star(1), star(2)]
-		const current = [star(20, { x: reference[0].x + 1, y: reference[0].y }), star(21, { x: reference[1].x + 1, y: reference[1].y })]
-		const ok = estimateTranslation(reference, current, 3, 2)
-		expect(ok).toBeDefined()
-		expect(ok!.matches).toBe(2)
-		const far = shiftStars(reference, 20, 20, (value) => ({ ...value }))
-		expect(estimateTranslation(reference, far, 3, 2)).toBeUndefined()
-	})
-})
-
 describe('tracking, translation, and lock acquisition', () => {
 	test('single-star initializes and follows modest drift', () => {
-		const g = guider({ mode: 'single-star' })
+		const g = guider()
 		g.processFrame(guideFrame(BASE_STARS, 0))
 		const cmd = g.processFrame(guideFrame(shiftStars(BASE_STARS, 0.3, -0.2), 1000))
 		expect(cmd.state).toBe('guiding')
-		expect(cmd.diagnostics.modeUsed).toBe('single-star')
+		expect(cmd.diagnostics.usedMode).toBe('singleStar')
 		expect(cmd.diagnostics.dx).toBeCloseTo(0.3, 6)
 		expect(cmd.diagnostics.dy).toBeCloseTo(-0.2, 6)
-	})
-
-	test('multi-star translation rejects outlier and preserves inlier shift', () => {
-		const moved = shiftStars(BASE_STARS, 1.2, -0.6, (value, index) => (index === 4 ? { ...value, x: value.x + 30, y: value.y - 20 } : value))
-		const translation = estimateTranslation(BASE_STARS, moved, 8, 2.5)
-		expect(translation).toBeDefined()
-		expect(translation!.matches).toBe(BASE_STARS.length - 1)
-		expect(translation!.dx).toBeCloseTo(1.2, 1)
-		expect(translation!.dy).toBeCloseTo(-0.6, 1)
 	})
 
 	test('reference lock averages startup frames and ignores bad startup frame', () => {
@@ -614,7 +445,7 @@ describe('tracking, translation, and lock acquisition', () => {
 	test('reference lock ignores a distant replacement star during averaging', () => {
 		const anchor = star(0, { x: 100, y: 100 })
 		const neighbor = star(1, { x: 120, y: 100 })
-		const g = guider({ lockAveragingFrames: 3, maxMatchDistancePx: 6, maxFrameJumpPx: 12 })
+		const g = guider({ lockAveragingFrames: 3, maxFrameJumpPx: 12 })
 
 		g.processFrame(guideFrame([anchor, neighbor], 0))
 		const skipped = g.processFrame(guideFrame([neighbor], 1000))
@@ -633,7 +464,7 @@ describe('tracking, translation, and lock acquisition', () => {
 	})
 
 	test('single-star tracking keeps the nearest lock even if another star becomes brighter', () => {
-		const g = guider({ mode: 'single-star' })
+		const g = guider()
 		g.processFrame(guideFrame(BASE_STARS, 0))
 		const moved = shiftStars(BASE_STARS, 0.35, -0.25, (value, index) => {
 			if (index === 0) return { ...value, snr: 9, flux: 300 }
@@ -642,18 +473,18 @@ describe('tracking, translation, and lock acquisition', () => {
 		})
 		const cmd = g.processFrame(guideFrame(moved, 1000))
 		expect(cmd.state).toBe('guiding')
-		expect(cmd.diagnostics.modeUsed).toBe('single-star')
+		expect(cmd.diagnostics.usedMode).toBe('singleStar')
 		expect(cmd.diagnostics.dx).toBeCloseTo(0.35, 6)
 		expect(cmd.diagnostics.dy).toBeCloseTo(-0.25, 6)
 	})
 
 	test('multi-star mode falls back to one visible star after cloud loss', () => {
-		const g = guider({ mode: 'multi-star', maxFrameJumpPx: 20 })
+		const g = guider({ maxFrameJumpPx: 20 })
 		g.processFrame(guideFrame(BASE_STARS, 0))
 		const survivingStar = [{ ...BASE_STARS[0], x: BASE_STARS[0].x + 0.6, y: BASE_STARS[0].y - 0.4 }]
 		const cmd = g.processFrame(guideFrame(survivingStar, 1000))
 		expect(cmd.state).toBe('guiding')
-		expect(cmd.diagnostics.modeUsed).toBe('single-star')
+		expect(cmd.diagnostics.usedMode).toBe('singleStar')
 		expect(cmd.diagnostics.dx).toBeCloseTo(0.6, 6)
 		expect(cmd.diagnostics.dy).toBeCloseTo(-0.4, 6)
 	})
@@ -772,7 +603,7 @@ describe('quality, loss state machine, and processFrame diagnostics', () => {
 	test('timestamp-less frames neither flag dropped cadence nor scale pulses', () => {
 		const g = guider({ minMoveDEC: 1, msPerRAUnit: 100 })
 		g.processFrame(guideFrame(BASE_STARS, 0))
-		const cmd = g.processFrame({ stars: shiftStars(BASE_STARS, 0.4, 0), width: WIDTH, height: HEIGHT })
+		const cmd = g.processFrame(guideFrame(shiftStars(BASE_STARS, 0.4, 0)))
 		expect(cmd.diagnostics.droppedFrame).toBeFalse()
 		expect(cmd.ra.duration).toBeCloseTo(40, 8)
 		expect(cmd.dec.duration).toBe(0)
@@ -815,7 +646,6 @@ describe('configuration and regression tests', () => {
 		expect(() => guider({ minPulseMsRA: -1 })).toThrow()
 		expect(() => guider({ minPulseMsRA: 10, maxPulseMsRA: 5 })).toThrow()
 		expect(() => guider({ hysteresisRA: 1.5 })).toThrow()
-		expect(() => guider({ maxMatchDistancePx: 0 })).toThrow()
 		expect(() => guider({ lostStarFrameCount: 0 })).toThrow()
 		expect(() => guider({ calibration: [1, 2, 2, 4] })).toThrow()
 	})

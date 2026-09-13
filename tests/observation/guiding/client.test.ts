@@ -1192,7 +1192,7 @@ describe('frame-driven behavior', () => {
 				return lastResult
 			},
 		}
-		const local = makeHarness({ tracker, trackerConfig: { mode: 'single-star' }, handler: { frame: (_client, frame) => frames.push(frame) } })
+		const local = makeHarness({ tracker, trackerConfig: { mode: 'singleStar' }, handler: { frame: (_client, frame) => frames.push(frame) } })
 		connect(local)
 		local.client.loop()
 		const resetsAfterConnect = resets
@@ -1988,7 +1988,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	test(
 		'calibration with mild measurement jitter still recovers rate and angle',
 		async () => {
-			const harness = makeHarness({ calibrator: { ...FAST_CALIBRATION, maxFrameJumpPx: 12, maxMatchDistancePx: 16 } })
+			const harness = makeHarness({ calibrator: { ...FAST_CALIBRATION, maxFrameJumpPx: 12 } })
 			connect(harness)
 			harness.client.loop()
 			await feedFrame(harness)

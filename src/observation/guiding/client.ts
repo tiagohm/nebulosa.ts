@@ -14,12 +14,13 @@ import { clamp } from '../../math/numerical/math'
 import { GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './assistant'
 import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationConfig, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
 import { DitherGenerator, type DitherMode } from './dither'
-import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, type GuideFrame, Guider, type GuideStar } from './guider'
-import type { GuideTracker, GuideTrackerResult } from './tracker'
-import { StarTracker, type StarTrackerConfig, type StarTrackerResult } from './tracker.star'
+import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, Guider } from './guider'
+import type { GuideFrame, GuideTracker, GuideTrackerResult } from './tracker'
+import { StarTracker, type GuideStar, type StarTrackerConfig, type StarTrackerResult } from './tracker.star'
 
 // Local autoguiding orchestrator exposing a PHD2-compatible API over INDI camera and guide-output
-// devices. It decodes each camera BLOB, detects stars, drives the GuidingCalibrator and Guider state
+// devices. It decodes each camera BLOB, delegates one frame to the configured tracker, drives the
+// GuidingCalibrator and Guider state
 // machines, and reproduces PHD2 behaviors — app-state lifecycle, lock position, dithering (random and
 // spiral), lock-shift drift compensation, settle tracking, meridian-flip calibration flip, and the
 // guiding assistant — while emitting PHD2-shaped events. Distances are pixels; pulse durations and
@@ -107,11 +108,10 @@ export interface GuiderEventMap extends PHD2EventMap {
 }
 
 // Snapshot of one processed guide exposure, published for UI rendering. It carries the decoded
-// image plus everything needed to draw the usual guiding overlay: detected stars, the star being
-// tracked, the guide target, and the search window. Distances and positions are image pixels with
-// the origin at the top-left corner of the full frame, matching the detector and PHD2 conventions.
-// The image and star array are the live instances used by the guider for this frame; treat them as
-// read-only and do not retain them across frames.
+// image plus the generic tracking result, optional stellar overlay data, the guide target, and the
+// search window. Distances and positions are image pixels with the origin at the top-left corner of
+// the full frame, matching detector and PHD2 conventions. The image and arrays are live instances
+// owned by the current frame; treat them as read-only and do not retain them across frames.
 export interface GuideFrameImage {
 	// Monotonic frame counter, identical to the Frame field of the GuideStep, StarLost, and
 	// LoopingExposures events emitted for the same exposure, so the UI can correlate both streams.
@@ -127,17 +127,14 @@ export interface GuideFrameImage {
 	// Generic tracking result for this frame. Optional for source compatibility; the client always
 	// populates it for newly emitted overlays.
 	readonly tracking?: GuideTrackerResult
-	// Every star detected in the frame, before the guider quality thresholds. The star nearest to the
+	// Every star detected in the frame, before StarTracker quality thresholds. The star nearest to the
 	// current search position, when there is one inside the search region, is moved to index 0.
 	readonly stars: readonly GuideStar[]
-	// Subset of `stars` accepted by the quality filter of whichever state machine consumed this frame,
-	// the guider while guiding or the calibrator while calibrating, so the UI can dim the detections
-	// that were ignored. Undefined when the frame reached neither, that is while merely looping.
+	// Subset of `stars` accepted by StarTracker for the current tracking result. Undefined when the
+	// configured tracker is not stellar or the frame reached neither guiding nor calibration.
 	readonly acceptedStars?: readonly GuideStar[]
-	// Star this frame reported as the guide star, that is `stars[0]`, the same source of the StarMass,
-	// SNR, and HFD fields of the emitted event. Undefined when no star was detected or the nearest
-	// star to the search position lies outside the search region. It is not necessarily present in
-	// `acceptedStars`: a rejected star still drives the reported photometry.
+	// Stellar primary reported by StarTracker and used for StarMass, SNR, and HFD event fields. It is
+	// undefined for a non-stellar tracker or when no primary is available in the search region.
 	readonly star?: GuideStar
 	// Current guide target in pixels, that is where the guide star is being held. This is the lock
 	// position including the accumulated dither and lock-shift offsets. Undefined before a lock exists.
@@ -265,13 +262,12 @@ export class GuiderClient {
 	#lockShiftLimitReached = false
 	#focalLength = 0
 	#pixelSize = 0
-	// Stars accepted by the guider or calibrator quality filter on the frame currently being
-	// processed. Cleared at the start of every BLOB so a frame that never reaches either state
+	// Stellar detections accepted by the StarTracker result for the frame currently being processed.
+	// Cleared at the start of every BLOB so a frame that never reaches either state
 	// machine — plain looping, decode failure — cannot publish the star list of an older frame.
 	#acceptedStars?: readonly GuideStar[]
-	// True when a lock/search position exists and no detection falls inside the PHD2 search box.
-	// The published frame still carries every detection so multi-star and the overlay can use
-	// them; the calibrator/guider receive an empty star list so they report the primary lost.
+	// Search-region semantics are owned by StarTracker; the client publishes its result unchanged
+	// and maps only its stellar arrays to the legacy overlay fields.
 	readonly #searchRegion: number
 	readonly #lockShiftParams = { ...DEFAULT_LOCK_SHIFT_PARAMS }
 	readonly #eventHandler?: GuiderClientHandler['event']
@@ -628,7 +624,7 @@ export class GuiderClient {
 		const assistant = new GuidingAssistant({
 			imageScale: imageScale > 0 ? imageScale : undefined,
 			exposure: exposure > 0 && Number.isFinite(exposure) ? exposure / 1000 : undefined,
-			multiStar: this.#tracker instanceof StarTracker && this.#tracker.config.mode === 'multi-star',
+			multiStar: this.#tracker instanceof StarTracker && this.#tracker.config.mode === 'multiStar',
 			suspectCalibration: this.#calibration === undefined,
 			decPositiveDirection: this.#calibration?.dec.direction ?? 'NORTH',
 			raRatePxPerMs: this.#calibration?.ra.ratePxPerMs,

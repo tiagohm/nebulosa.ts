@@ -10,7 +10,7 @@ test('generic tracking result preserves measurements, quality, notes, and offset
 		rejectedReasons: { low_snr: 1 },
 		notes: ['reacquired'],
 		targetOffset: [0.5, -0.25],
-		measurementMode: 'synthetic',
+		measurementMode: 'singleStar',
 	}
 
 	expect(result.measurement).toEqual({ x: 12.5, y: 8.25, confidence: 0.75 })
@@ -54,10 +54,10 @@ test('legacy star fixtures adapt to generic measurement and telemetry', () => {
 		qualityScore: 1,
 		rejectedReasons: {},
 		notes: [],
-		measurementMode: 'single-star',
+		measurementMode: 'singleStar',
 		telemetry: { signalToNoise: 12, mass: 400, hfdPx: 3 },
 	})
 
-	const frame = { stars, width: 100, height: 80 }
+	const frame = { tracking: result, width: 100, height: 80 }
 	expect(trackingOf(frame).measurement).toEqual({ x: 10, y: 20, confidence: 1 })
 })
