@@ -26,6 +26,25 @@ describe('backlash compensation', () => {
 		expect(compensator.compute(1050, 800)).toEqual([1050])
 	})
 
+	test('absolute preserves offset when the target reaches the minimum', () => {
+		const compensator = new BacklashCompensator({ mode: 'ABSOLUTE', backlashIn: 100, backlashOut: 0 }, 10000)
+
+		expect(compensator.compute(1000, 0)).toEqual([1000])
+		expect(compensator.compute(100, 1000)).toEqual([0])
+		expect(compensator.compute(50, 0)).toEqual([0])
+		expect(compensator.compute(1000, 0)).toEqual([900])
+	})
+
+	test('absolute records only the compensated travel available at the maximum', () => {
+		const compensator = new BacklashCompensator({ mode: 'ABSOLUTE', backlashIn: 100, backlashOut: 200 }, 1050)
+
+		expect(compensator.compute(1000, 0)).toEqual([1000])
+		expect(compensator.compute(900, 1000)).toEqual([800])
+		expect(compensator.compute(1000, 800)).toEqual([1050])
+		expect(compensator.compute(1000, 1050)).toEqual([1050])
+		expect(compensator.compute(900, 1050)).toEqual([850])
+	})
+
 	test('overshoot in', () => {
 		const compensator = new BacklashCompensator({ mode: 'OVERSHOOT', backlashIn: 100, backlashOut: 0 }, 10000)
 
