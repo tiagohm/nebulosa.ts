@@ -13,6 +13,7 @@ import type { GuidingCalibrationResult } from '../../../src/observation/guiding/
 import { GuiderClient, type GuideFrameImage, type GuiderClientConnectOptions, type GuiderClientOptions, type GuiderEvents } from '../../../src/observation/guiding/client'
 import { ditherPulsePlanFromCalibration } from '../../../src/observation/guiding/dither.pulse'
 import type { GuideDirectionDEC, GuideDirectionRA } from '../../../src/observation/guiding/guider'
+import type { GuideTracker, GuideTrackerResult } from '../../../src/observation/guiding/tracker'
 import { isTimeConsumingTestSkipped } from '../../util'
 
 // One recorded pulse issued through the fake guide-output manager.
@@ -194,7 +195,7 @@ const FRAME_BUFFER = await buildFrameBuffer()
 
 // Image-space star displacement produced by one millisecond of guide pulse on either axis, in
 // pixels/ms. The calibrator's default 650 ms pulses then move the star ~7.5 px per step: below its
-// 8 px maximum accepted frame jump, yet large enough that two steps already exceed the minimum net
+// 12 px maximum accepted frame jump, yet large enough that two steps already exceed the minimum net
 // travel each axis requires, which keeps the wall-clock cost of a calibration run low.
 const MOUNT_RATE_PX_PER_MS = 0.0115
 // Camera rotation relative to the mount axes, in radians. A non-zero angle keeps the solved
@@ -394,6 +395,11 @@ describe('construction', () => {
 	test('defaults the search region when none or zero is provided', () => {
 		expect(makeHarness().client.getSearchRegion()).toBe(64)
 		expect(makeHarness({ searchRegion: 0 }).client.getSearchRegion()).toBe(64)
+	})
+
+	test('accepts nested partial tracker configuration', () => {
+		const options = { trackerConfig: { filter: { minStarSnr: 8 } } } satisfies GuiderClientOptions
+		expect(makeHarness(options).client.getAppState()).toBe('Stopped')
 	})
 
 	test('applies sticky lock and dither-mode options', () => {
@@ -1165,6 +1171,49 @@ describe('frame-driven behavior', () => {
 		expect(looping.SNR).toBeGreaterThanOrEqual(0)
 	})
 
+	test('an injected generic tracker is called once per frame and feeds the overlay without stars', async () => {
+		const frames: GuideFrameImage[] = []
+		let calls = 0
+		let resets = 0
+		let lastResult: GuideTrackerResult | undefined
+		const tracker: GuideTracker = {
+			reset() {
+				resets++
+				lastResult = undefined
+			},
+			track(frame) {
+				calls++
+				lastResult = {
+					measurement: { x: 120 + calls, y: 120, confidence: 1 },
+					candidateCount: 1,
+					acceptedCount: 1,
+					qualityScore: 1,
+					rejectedReasons: {},
+					notes: [`frame_${frame.frameId}`],
+				}
+				return lastResult
+			},
+		}
+		const local = makeHarness({ tracker, trackerConfig: { mode: 'singleStar' }, handler: { frame: (_client, frame) => frames.push(frame) } })
+		connect(local)
+		local.client.loop()
+		const resetsAfterConnect = resets
+
+		await feedBuffer(local, FRAME_BUFFER)
+		expect(calls).toBe(1)
+		expect(frames.at(-1)?.tracking).toBe(lastResult)
+		expect(frames.at(-1)?.stars).toEqual([])
+		expect(frames.at(-1)?.acceptedStars).toBeUndefined()
+		expect(frames.at(-1)?.star).toBeUndefined()
+
+		local.client.findStar()
+		expect(calls).toBe(1)
+		expect(resets).toBe(resetsAfterConnect + 1)
+		local.client.deselectStar()
+		expect(resets).toBe(resetsAfterConnect + 2)
+		local.client.stopCapture()
+	})
+
 	test('accepted looping frames use a strictly increasing frame id', async () => {
 		connect(harness)
 		harness.client.loop()
@@ -1232,6 +1281,25 @@ describe('frame-driven behavior', () => {
 		expect(lock![0]).toBeCloseTo(120, 0)
 		expect(lock![1]).toBeCloseTo(120, 0)
 		expect(harness.client.getAppState()).toBe('Selected')
+		harness.client.stopCapture()
+	})
+
+	test('findStar ignores a rejected nearest detection inside the search box', async () => {
+		connect(harness)
+		harness.client.loop()
+		expect(harness.client.setLockPosition(70, 70, true)).toBeTrue()
+		await feedBuffer(
+			harness,
+			await buildFrameBufferAt([
+				[70, 70, 0.5],
+				[100, 100, STAR_FLUX],
+			]),
+		)
+
+		const lock = harness.client.findStar()
+		expect(lock).toBeDefined()
+		expect(lock![0]).toBeCloseTo(100, 0)
+		expect(lock![1]).toBeCloseTo(100, 0)
 		harness.client.stopCapture()
 	})
 
@@ -1616,6 +1684,55 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		for (let i = 0; i < LOCK_AVERAGING_FRAMES; i++) await feedFrame(harness)
 	}
 
+	function statefulTracker() {
+		const calibrationPositions = [
+			[100, 100],
+			[108, 100],
+			[116, 100],
+			[116, 108],
+			[116, 116],
+		] as const
+		let calibrationFrame = 0
+		let committedPosition: readonly [number, number] | undefined
+		let pendingPosition: readonly [number, number] | undefined
+		let lastResult: GuideTrackerResult | undefined
+		let commitCount = 0
+
+		const tracker: GuideTracker = {
+			reset() {
+				calibrationFrame = 0
+				committedPosition = undefined
+				pendingPosition = undefined
+				lastResult = undefined
+			},
+			get lastResult() {
+				return lastResult
+			},
+			track(_frame, context) {
+				const position = context.phase === 'calibrating' ? calibrationPositions[Math.min(calibrationFrame++, calibrationPositions.length - 1)] : (committedPosition ?? [116, 116])
+				const result: GuideTrackerResult = {
+					measurement: { x: position[0], y: position[1], confidence: 1 },
+					candidateCount: 1,
+					acceptedCount: 1,
+					qualityScore: 1,
+					rejectedReasons: {},
+					notes: [],
+				}
+				pendingPosition = position
+				lastResult = result
+				return result
+			},
+			commit() {
+				if (pendingPosition === undefined) return
+				committedPosition = pendingPosition
+				pendingPosition = undefined
+				commitCount++
+			},
+		}
+
+		return { tracker, commitCount: () => commitCount }
+	}
+
 	// Dither size, in pixels. Large enough that the resulting pulses dwarf the sub-pixel corrections
 	// the guider keeps issuing, and small enough to stay well inside the maximum frame jump.
 	const DITHER_AMOUNT_PX = 3
@@ -1934,6 +2051,23 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			expect(eventsOf(harness.events, 'CalibrationComplete')).toHaveLength(1)
 			expect(eventsOf(harness.events, 'StartGuiding')).toHaveLength(1)
 			expect(harness.client.getAppState()).toBe('Guiding')
+			// The default calibration pulse moves the star farther than StarTracker's normal 6 px
+			// association radius, so at least one progress frame proves calibration used its jump budget.
+			expect(eventsOf(harness.events, 'Calibrating').some((event) => Math.hypot(event.dx, event.dy) > 6)).toBeTrue()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
+		'commits every accepted lock initialization sample for a stateful tracker',
+		async () => {
+			const state = statefulTracker()
+			const harness = await calibrateAndGuide({ tracker: state.tracker })
+			const commitsBeforeInitialization = state.commitCount()
+
+			await establishLockReference(harness)
+
+			expect(state.commitCount() - commitsBeforeInitialization).toBe(LOCK_AVERAGING_FRAMES)
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
@@ -1941,7 +2075,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	test(
 		'calibration with mild measurement jitter still recovers rate and angle',
 		async () => {
-			const harness = makeHarness({ calibrator: { ...FAST_CALIBRATION, maxFrameJumpPx: 12, maxMatchDistancePx: 16 } })
+			const harness = makeHarness({ calibrator: { ...FAST_CALIBRATION, maxFrameJumpPx: 12 } })
 			connect(harness)
 			harness.client.loop()
 			await feedFrame(harness)
@@ -2124,7 +2258,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	)
 
 	test(
-		'constant RA drift is corrected without a matching DEC pulse',
+		'constant RA drift remains trackable across cumulative displacement',
 		async () => {
 			const harness = await calibrateAndGuide()
 			await establishLockReference(harness)
@@ -2151,6 +2285,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			expect(ra).toBeGreaterThan(0)
 			expect(dec).toBeLessThan(ra * 0.4)
 			expect(distances.at(-1)!).toBeLessThan(8)
+			expect(eventsOf(harness.events, 'StarLost')).toBeEmpty()
 			expect(harness.client.getAppState()).toBe('Guiding')
 		},
 		CLOSED_LOOP_TIMEOUT,
@@ -3034,7 +3169,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			for (let i = 0; i < 4; i++) await feedFrame(harness)
 			const atTwoSeconds = eventsOf(harness.events, 'GuideStep').at(-1)!.RADuration
 
-			// cadenceMs tracks the requested exposure, so a 2 s cadence must not apply the old
+			// cadence tracks the requested exposure, so a 2 s cadence must not apply the old
 			// lastCadence/1000 scale cap of 2x. The two pulses chase the same per-frame drift.
 			expect(atTwoSeconds).toBeGreaterThan(0)
 			expect(atTwoSeconds).toBeLessThan(atOneSecond * 1.6 + 1)
@@ -4316,7 +4451,9 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			expect(Math.abs(second.totals[0])).toBeGreaterThan(DITHER_PULSE_BAND[0] * raPlan.rightAscension!.duration)
 			expect(Math.abs(second.totals[0])).toBeLessThan(DITHER_PULSE_BAND[1] * raPlan.rightAscension!.duration)
 			expect(Math.abs(second.totals[1])).toBeLessThan(CROSS_AXIS_PULSE_RATIO * Math.abs(second.totals[0]))
-			expect(first.dx * second.dx + first.dy * second.dy).toBeCloseTo(0, 5)
+			// Closed-loop corrections leave a small sub-pixel residual on the orthogonal axis; the dot
+			// product remains negligible compared with the 3 px dither vectors.
+			expect(first.dx * second.dx + first.dy * second.dy).toBeCloseTo(0, 2)
 
 			// Re-selecting the same mode restarts the lattice, so the next dither repeats the first step.
 			harness.client.setDitherMode('spiral')

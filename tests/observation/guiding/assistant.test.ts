@@ -2,7 +2,9 @@ import { expect, test } from 'bun:test'
 import { PIOVERTWO } from '../../../src/core/constants'
 import { GuidingAssistant, type GuidingAssistantResult } from '../../../src/observation/guiding/assistant'
 import { GuiderClient } from '../../../src/observation/guiding/client'
-import type { GuideCommand, GuideFrame, GuideStar } from '../../../src/observation/guiding/guider'
+import type { GuideCommand } from '../../../src/observation/guiding/guider'
+import { trackingResultFromStars, type GuideFrame } from '../../../src/observation/guiding/tracker'
+import type { GuideStar } from '../../../src/observation/guiding/tracker.star'
 
 const WIDTH = 800
 const HEIGHT = 600
@@ -14,12 +16,13 @@ function star(patch: Partial<GuideStar> = {}): GuideStar {
 
 // Builds one frame carrying a single guide star.
 function frame(timestamp: number, frameId: number, patch: Partial<GuideStar> = {}): GuideFrame {
-	return { stars: [star(patch)], width: WIDTH, height: HEIGHT, timestamp, frameId }
+	return { tracking: trackingResultFromStars([star(patch)]), width: WIDTH, height: HEIGHT, timestamp, frameId }
 }
 
 // Builds a guide command with mount-axis diagnostics in pixels.
-function command(raPx: number, decPx: number, patch: Partial<GuideCommand['diagnostics']> = {}, state: GuideCommand['state'] = 'guiding'): GuideCommand {
+function command(raPx: number, decPx: number, patch: Partial<GuideCommand['diagnostics']> = {}, state: GuideCommand['state'] = 'guiding', tracking: GuideCommand['tracking'] = trackingResultFromStars([star()])): GuideCommand {
 	return {
+		tracking,
 		state,
 		ra: { direction: undefined, duration: 0 },
 		dec: { direction: undefined, duration: 0 },
@@ -27,7 +30,7 @@ function command(raPx: number, decPx: number, patch: Partial<GuideCommand['diagn
 			totalStars: 1,
 			acceptedStars: 1,
 			qualityScore: 1,
-			modeUsed: 'single-star',
+			usedMode: 'singleStar',
 			axisErrorRA: raPx,
 			axisErrorDEC: decPx,
 			dx: raPx,
@@ -51,7 +54,7 @@ function run(samples: readonly [number, number, number, Partial<GuideStar>?][], 
 
 	for (let i = 0; i < samples.length; i++) {
 		const [timestamp, ra, dec, patch] = samples[i]
-		assistant.addSample(frame(timestamp, i + 1, patch), command(ra, dec))
+		assistant.addSample(frame(timestamp, i + 1, patch), command(ra, dec, {}, 'guiding', trackingResultFromStars([star(patch)])))
 	}
 
 	return assistant.complete(samples.at(-1)?.[0] ?? 0)

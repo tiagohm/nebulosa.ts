@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test'
 import { DEG2RAD } from '../../../src/core/constants'
-import { DEFAULT_GUIDING_CALIBRATOR_CONFIG, flipGuidingCalibration, type GuidingCalibrationConfig, type GuidingCalibrationPhase, GuidingCalibrator } from '../../../src/observation/guiding/calibrator'
-import type { CalibrationMatrix, GuideFrame, GuideStar } from '../../../src/observation/guiding/guider'
+import { flipGuidingCalibration, type GuidingCalibrationConfig, type GuidingCalibrationPhase, GuidingCalibrator } from '../../../src/observation/guiding/calibrator'
+import type { CalibrationMatrix } from '../../../src/observation/guiding/guider'
+import { trackingResultFromStars, type GuideFrame } from '../../../src/observation/guiding/tracker'
+import type { GuideStar } from '../../../src/observation/guiding/tracker.star'
 
 const WIDTH = 800
 const HEIGHT = 600
@@ -25,7 +27,7 @@ function starList(count: number, patch?: (star: GuideStar, index: number) => Gui
 
 // Wraps a star list into a guide frame fixture.
 function guideFrame(stars: readonly GuideStar[], timestamp = 0, frameId?: number): GuideFrame {
-	return { stars, width: WIDTH, height: HEIGHT, timestamp, frameId }
+	return { tracking: trackingResultFromStars(stars), width: WIDTH, height: HEIGHT, timestamp, frameId }
 }
 
 // Applies a global translation to all stars in one frame.
@@ -60,14 +62,9 @@ const BASE_CONFIG: Partial<GuidingCalibrationConfig> = {
 	clearingMoveFraction: 1,
 	maxClearingSteps: 10,
 	maxClearingOffsetPx: 0.8,
-	maxMatchDistancePx: 5,
 	edgeMarginPx: 10,
 	minRatePxPerMs: 1e-4,
 	maxRatePxPerMs: 1,
-	filter: {
-		...DEFAULT_GUIDING_CALIBRATOR_CONFIG.filter,
-		borderMarginPx: 8,
-	},
 }
 
 // Merges the test defaults into a fully-specified calibrator config.
@@ -75,11 +72,6 @@ function calibrationConfig(config: Partial<GuidingCalibrationConfig> = {}) {
 	return {
 		...BASE_CONFIG,
 		...config,
-		filter: {
-			...DEFAULT_GUIDING_CALIBRATOR_CONFIG.filter,
-			...BASE_CONFIG.filter,
-			...config.filter,
-		},
 	}
 }
 
@@ -403,7 +395,7 @@ test('tolerates one bad frame and resumes with the same pending pulse', () => {
 })
 
 test('classifies a jump beyond maxFrameJumpPx as impossible_jump rather than star_lost', () => {
-	const calibrator = new GuidingCalibrator(calibrationConfig({ maxFrameJumpPx: 4, maxMatchDistancePx: 5, maxBadFrames: 0 }))
+	const calibrator = new GuidingCalibrator(calibrationConfig({ maxFrameJumpPx: 4, maxBadFrames: 0 }))
 	expect(calibrator.processFrame(guideFrame(BASE_STARS, 0, 0)).pulse?.ra.duration).toBe(100)
 
 	// 6 px is beyond both the jump (4) and match (5) radii; the star is still in the frame, so this
@@ -414,7 +406,7 @@ test('classifies a jump beyond maxFrameJumpPx as impossible_jump rather than sta
 })
 
 test('tolerates a transient jump within the bad-frame budget', () => {
-	const calibrator = new GuidingCalibrator(calibrationConfig({ maxFrameJumpPx: 4, maxMatchDistancePx: 5, maxBadFrames: 1 }))
+	const calibrator = new GuidingCalibrator(calibrationConfig({ maxFrameJumpPx: 4, maxBadFrames: 1 }))
 	expect(calibrator.processFrame(guideFrame(BASE_STARS, 0, 0)).pulse?.ra.duration).toBe(100)
 
 	const jumped = calibrator.processFrame(guideFrame(shiftStars(BASE_STARS, 6, 0), 1000, 1))
@@ -458,13 +450,19 @@ test('search-box quality acquires the in-box star among field noise', () => {
 	}
 
 	const frame: GuideFrame = {
-		stars: [lock, ...noise],
+		tracking: {
+			measurement: { x: lock.x, y: lock.y, confidence: 1 },
+			candidateCount: 21,
+			acceptedCount: 1,
+			qualityScore: 1,
+			rejectedReasons: { low_snr: noise.length },
+			notes: [],
+			measurementMode: 'singleStar',
+		},
 		width: WIDTH,
 		height: HEIGHT,
 		timestamp: 0,
 		frameId: 0,
-		searchPosition: [140, 120],
-		searchRegion: 64,
 	}
 
 	const step = calibrator.processFrame(frame)
