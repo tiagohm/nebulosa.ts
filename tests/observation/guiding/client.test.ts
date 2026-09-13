@@ -2636,6 +2636,28 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	)
 
 	test(
+		'startGuidingAssistant reports exposure in seconds',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			expect(harness.client.startGuidingAssistant({ measureBacklash: false })).toBeTrue()
+			expect(eventsOf(harness.events, 'GuidingAssistantStarted').at(-1)!.Result.exposure).toBe(1)
+			harness.client.stopGuidingAssistant()
+
+			expect(harness.client.setExposure(2500)).toBeTrue()
+			expect(harness.client.startGuidingAssistant({ measureBacklash: false })).toBeTrue()
+			expect(eventsOf(harness.events, 'GuidingAssistantStarted').at(-1)!.Result.exposure).toBe(2.5)
+			harness.client.stopGuidingAssistant()
+
+			expect(harness.client.startGuidingAssistant({ exposure: 3, measureBacklash: false })).toBeTrue()
+			expect(eventsOf(harness.events, 'GuidingAssistantStarted').at(-1)!.Result.exposure).toBe(3)
+			harness.client.stopGuidingAssistant()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
 		'startGuidingAssistant is allowed while lock-shift holds a non-zero offset',
 		async () => {
 			const harness = await calibrateAndGuide()

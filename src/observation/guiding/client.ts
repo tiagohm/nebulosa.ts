@@ -609,9 +609,10 @@ export class GuiderClient {
 		if (this.#guidingAssistant !== undefined || this.#settling || guiderState.state !== 'guiding' || (appState !== 'Guiding' && appState !== 'LostLock')) return false
 
 		const imageScale = this.getPixelScale()
+		const exposure = this.getExposure()
 		const assistant = new GuidingAssistant({
 			imageScale: imageScale > 0 ? imageScale : undefined,
-			exposure: this.getExposure(),
+			...(exposure > 0 && Number.isFinite(exposure) ? { exposure: exposure / 1000 } : {}),
 			multiStar: this.#guider.config.mode === 'multi-star',
 			suspectCalibration: this.#calibration === undefined,
 			decPositiveDirection: this.#calibration?.dec.direction ?? 'NORTH',
