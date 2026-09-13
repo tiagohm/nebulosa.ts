@@ -619,9 +619,10 @@ export class StarTracker implements GuideTracker {
 		let measurementMode: GuidingMode | undefined
 		let matches = 0
 		const accepted = primaryInsideSearchRegion ? filtered.accepted : []
+		const hasAcceptableSearchCandidate = searchPosition === undefined || searchRegion === undefined || quality.accepted.length > 0
 		const maxMatchDistancePx = context.phase === 'calibrating' ? Math.max(this.config.maxMatchDistancePx, context.maxMeasurementJumpPx ?? DEFAULT_CALIBRATION_MATCH_DISTANCE_PX) : this.config.maxMatchDistancePx
 
-		if (primaryInsideSearchRegion && accepted.length > 0 && (this.#measurementOrigin === undefined || !context.preserveIdentity)) {
+		if (hasAcceptableSearchCandidate && primaryInsideSearchRegion && accepted.length > 0 && (this.#measurementOrigin === undefined || !context.preserveIdentity)) {
 			const acquired = searchPosition === undefined || searchRegion === undefined ? selection.primary : pickAcquisition(quality.accepted, context.initialPosition)
 			if (acquired !== undefined && context.allowAcquisition) {
 				measurement = { x: acquired.x, y: acquired.y, confidence: confidenceOf(quality.qualityScore) }
@@ -630,7 +631,7 @@ export class StarTracker implements GuideTracker {
 				matches = 1
 				notes.push('acquired')
 			}
-		} else if (primaryInsideSearchRegion && accepted.length > 0 && this.#measurementOrigin !== undefined) {
+		} else if (hasAcceptableSearchCandidate && primaryInsideSearchRegion && accepted.length > 0 && this.#measurementOrigin !== undefined) {
 			const translation = this.#measureTranslation(accepted, maxMatchDistancePx)
 			if (translation !== undefined) {
 				measurement = { x: translation.x, y: translation.y, confidence: confidenceOf(quality.qualityScore) }
@@ -640,7 +641,7 @@ export class StarTracker implements GuideTracker {
 			}
 		}
 
-		if (measurement === undefined && primaryInsideSearchRegion && accepted.length > 0 && context.allowAcquisition && this.#measurementOrigin !== undefined) {
+		if (measurement === undefined && hasAcceptableSearchCandidate && primaryInsideSearchRegion && accepted.length > 0 && context.allowAcquisition && this.#measurementOrigin !== undefined) {
 			// Preserve the controller's legacy single-star fallback: the generic jump guard, rather
 			// than identity association, decides whether a larger measured displacement is safe.
 			const fallback = nearestWithin(accepted, this.#measurementOrigin, Number.POSITIVE_INFINITY)
@@ -653,7 +654,7 @@ export class StarTracker implements GuideTracker {
 		}
 
 		if (measurement === undefined) {
-			if (primaryInsideSearchRegion && accepted.length === 0) notes.push('no_usable_measurement')
+			if (primaryInsideSearchRegion && (!hasAcceptableSearchCandidate || accepted.length === 0)) notes.push('no_usable_measurement')
 			else if (primaryInsideSearchRegion && !context.allowAcquisition) notes.push('acquisition_disabled')
 			else notes.push('measurement_lost')
 		}

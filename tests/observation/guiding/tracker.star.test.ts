@@ -241,7 +241,8 @@ test('keeps the last accepted stellar identity after an uncommitted frame', () =
 		},
 		context,
 	)
-	expect(rejected.measurement?.x).toBeCloseTo(200, 0)
+	expect(rejected.measurement).toBeUndefined()
+	expect(rejected.notes).toContain('no_usable_measurement')
 
 	const recovered = tracker.track(
 		{
@@ -336,4 +337,42 @@ test('keeps the raw primary for telemetry when no search region is active', () =
 	expect(result.primary?.x).toBeCloseTo(100, 0)
 	expect(result.selectionPrimary?.x).toBeCloseTo(120, 0)
 	expect(result.rejectedReasons.saturated_peak).toBe(1)
+})
+
+test('does not measure a field star when the search box has no acceptable candidate', () => {
+	const tracker = new StarTracker()
+	const context = { phase: 'guiding' as const, searchPosition: [100, 100] as const, searchRegion: 64, allowAcquisition: true, preserveIdentity: true }
+
+	tracker.track(
+		{
+			image: imageWithStars([
+				[100, 100, 10],
+				[200, 200, 10],
+			]),
+			width: WIDTH,
+			height: HEIGHT,
+			timestamp: 0,
+			frameId: 1,
+		},
+		context,
+	)
+	tracker.commit()
+
+	const result = tracker.track(
+		{
+			image: imageWithStars([
+				[100, 100, 0.5],
+				[200, 200, 10],
+			]),
+			width: WIDTH,
+			height: HEIGHT,
+			timestamp: 1,
+			frameId: 2,
+		},
+		context,
+	)
+
+	expect(result.measurement).toBeUndefined()
+	expect(result.acceptedCount).toBe(1)
+	expect(result.notes).toContain('no_usable_measurement')
 })
