@@ -316,6 +316,17 @@ test('exposes a quality-approved primary separately from the nearest raw detecti
 	expect(result.primary?.x).toBeCloseTo(100, 0)
 	expect(result.selectionPrimary?.x).toBeCloseTo(120, 0)
 	expect(result.rejectedReasons.low_snr).toBe(1)
+	const selected = tracker.select(result)!
+	expect(selected[0]).toBeCloseTo(120, 0)
+	expect(selected[1]).toBeCloseTo(120, 0)
+	const nearest = tracker.select(result, [100, 100])!
+	expect(nearest[0]).toBeCloseTo(100, 0)
+	expect(nearest[1]).toBeCloseTo(100, 0)
+	expect(tracker.lastResult).toBe(result)
+	const tied = { ...result, detections: [star(0, { x: 100, y: 100 }), star(1, { x: 120, y: 100 })] }
+	expect(tracker.select(tied, [110, 100])).toEqual([100, 100])
+	const empty = { ...result, detections: [] }
+	expect(tracker.select(empty, [100, 100])).toBeUndefined()
 })
 
 test('keeps the raw primary for telemetry when no search region is active', () => {
@@ -374,6 +385,7 @@ test('honors nested selection filter overrides', () => {
 
 	expect(result.measurement).toBeUndefined()
 	expect(result.selectionPrimary).toBeUndefined()
+	expect(tracker.select(result)).toBeUndefined()
 })
 
 test('does not measure a field star when the search box has no acceptable candidate', () => {

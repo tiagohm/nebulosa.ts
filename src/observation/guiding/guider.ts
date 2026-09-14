@@ -1,7 +1,7 @@
 import type { Writable } from '../../core/types'
 import { Matrix } from '../../math/linear-algebra/matrix'
 import { clamp } from '../../math/numerical/math'
-import { type GuideFrame, type GuideTrackerResult, trackingOf } from './tracker'
+import { type GuideFrame, type GuideTargetEnvelope, type GuideTrackerResult, trackingOf } from './tracker'
 import { starTrackingOf } from './tracker.star'
 
 // Generic autoguiding controller. Given a stream of tracker results and a calibration matrix mapping
@@ -100,6 +100,18 @@ export interface GuideDiagnostics {
 	readonly notes: readonly string[]
 	// Generic tracking result used to produce these diagnostics.
 	readonly tracking?: GuideTrackerResult
+	// Structured target-envelope rejection, when the proposed target could not be pulsed safely.
+	readonly targetLimit?: GuideTargetLimitDiagnostic
+}
+
+// Structured preflight failure for the combined reference, dither, lock-shift, and tracker target.
+export interface GuideTargetLimitDiagnostic {
+	// Reason the proposed target was rejected.
+	readonly reason: 'nonFiniteTarget' | 'outsideEnvelope'
+	// Proposed combined target in image pixels.
+	readonly proposed: readonly [number, number]
+	// Inclusive permitted target bounds in image pixels.
+	readonly envelope: GuideTargetEnvelope
 }
 
 // Row-major 2×2 image-to-axis calibration matrix [a, b, c, d].
@@ -181,6 +193,8 @@ interface GuiderInternalState {
 	ditherOffsetY: number
 	ditherActive: boolean
 	lastTimestamp?: number
+	// Monotonic capture clock of the last accepted frame, in milliseconds.
+	lastCaptureMonotonic?: number
 	lastCadence: number
 	consecutiveBadFrames: number
 	lastGoodMeasurementX?: number
@@ -305,6 +319,7 @@ const EMPTY_STATE: Readonly<GuiderInternalState> = {
 	// makes the first frame after a re-lock look like an impossible jump, and a stale lastTimestamp
 	// corrupts the dropped-frame cadence check.
 	lastTimestamp: undefined,
+	lastCaptureMonotonic: undefined,
 	lastGoodMeasurementX: undefined,
 	lastGoodMeasurementY: undefined,
 	filteredRA: 0,
@@ -448,9 +463,17 @@ export class Guider {
 
 	// Processes one frame and returns RA/DEC pulse commands.
 	processFrame(frame: GuideFrame): GuideCommand {
+		const frameClock = this.#classifyFrameClock(frame)
+
 		if (this.state.state === 'idle') {
 			this.state.state = 'initializing'
 			this.state.lockSamples.length = 0
+		}
+
+		if (frameClock.outOfOrder) {
+			const notes = [...trackingOf(frame).notes, frameClock.duplicate ? 'duplicate_frame' : 'out_of_order']
+			this.#updateDiagnostics(frame, trackingOf(frame), undefined, false, true, notes)
+			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, tracking: trackingOf(frame) }
 		}
 
 		if (this.state.state === 'initializing') {
@@ -459,7 +482,7 @@ export class Guider {
 		}
 
 		const tracking = trackingOf(frame)
-		const droppedFrame = this.#isDroppedFrame(frame)
+		const droppedFrame = frameClock.dropped
 		const notes = [...tracking.notes]
 
 		if (droppedFrame) notes.push('dropped_frame')
@@ -493,6 +516,16 @@ export class Guider {
 		this.state.lastGoodMeasurementY = measurement.y
 		const targetX = this.state.referenceX + this.state.ditherOffsetX + (tracking.targetOffset?.[0] ?? 0)
 		const targetY = this.state.referenceY + this.state.ditherOffsetY + (tracking.targetOffset?.[1] ?? 0)
+		const targetLimit = this.#preflightTarget(frame, targetX, targetY)
+		if (targetLimit !== undefined) {
+			this.state.state = 'lost'
+			this.state.consecutiveBadFrames = this.config.lostStarFrameCount
+			this.#clearRaControlState()
+			this.#clearDecControlState()
+			notes.push('target_limit')
+			this.#updateDiagnostics(frame, tracking, undefined, droppedFrame, true, notes, targetLimit)
+			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, tracking }
+		}
 		const dx = measurement.x - targetX
 		const dy = measurement.y - targetY
 		const axisError = applyCalibration(this.config.calibration, dx, dy)
@@ -521,6 +554,24 @@ export class Guider {
 		)
 
 		return { state: this.state.state, ra, dec, diagnostics: this.state.lastDiagnostics, tracking }
+	}
+
+	// Rejects a combined target before any axis controller can turn it into a pulse. The default
+	// envelope is the decoded image; callers can provide tighter search-region or detector margins.
+	#preflightTarget(frame: GuideFrame, targetX: number, targetY: number): GuideTargetLimitDiagnostic | undefined {
+		const configuredEnvelope = frame.targetEnvelope
+		const envelope =
+			configuredEnvelope === undefined
+				? frame.width > 0 && frame.height > 0
+					? { minX: 0, maxX: frame.width - 1, minY: 0, maxY: frame.height - 1 }
+					: undefined
+				: { minX: configuredEnvelope.minX, maxX: configuredEnvelope.maxX, minY: configuredEnvelope.minY, maxY: configuredEnvelope.maxY, marginPx: configuredEnvelope.marginPx }
+		const proposed: readonly [number, number] = [Number.isFinite(targetX) ? targetX : 0, Number.isFinite(targetY) ? targetY : 0]
+		if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) return { reason: 'nonFiniteTarget', proposed, envelope: envelope ?? { minX: 0, maxX: 0, minY: 0, maxY: 0 } }
+		if (envelope === undefined || !Number.isFinite(envelope.minX) || !Number.isFinite(envelope.maxX) || !Number.isFinite(envelope.minY) || !Number.isFinite(envelope.maxY) || envelope.minX > envelope.maxX || envelope.minY > envelope.maxY)
+			return envelope === undefined ? undefined : { reason: 'outsideEnvelope', proposed, envelope }
+		if (targetX < envelope.minX || targetX > envelope.maxX || targetY < envelope.minY || targetY > envelope.maxY) return { reason: 'outsideEnvelope', proposed, envelope }
+		return undefined
 	}
 
 	// Returns a public snapshot of current guider runtime state.
@@ -575,7 +626,7 @@ export class Guider {
 
 		if (this.state.lockSamples.length < this.config.lockAveragingFrames) {
 			notes.push('init_collecting')
-			this.#updateDiagnostics(frame, tracking, { measurementX: measurement.x, measurementY: measurement.y, dx, dy, axisErrorRA: 0, axisErrorDEC: 0, usedMode: tracking.measurementMode, measurementMode: tracking.measurementMode, targetX, targetY, notes }, false, true, notes)
+			this.#updateDiagnostics(frame, tracking, { measurementX: measurement.x, measurementY: measurement.y, dx, dy, axisErrorRA: 0, axisErrorDEC: 0, usedMode: tracking.measurementMode, measurementMode: tracking.measurementMode, targetX, targetY, notes }, false, false, notes)
 			return
 		}
 
@@ -620,32 +671,34 @@ export class Guider {
 		return dx * dx + dy * dy > this.config.maxFrameJumpPx * this.config.maxFrameJumpPx
 	}
 
-	// Detects dropped frames. When the frame reports the exposure that produced it, classify from
-	// that cadence rather than the wall-clock gap so an ST4 pulse wait is not a drop. Frames
-	// without `cadence` still use timestamp deltas.
-	#isDroppedFrame(frame: GuideFrame) {
-		const { timestamp, cadence } = frame
+	// Classifies capture order and elapsed time from the monotonic clock when available. A supplied
+	// cadence is the commanded exposure duration, so pulse and decode delays cannot look like a lost
+	// exposure even when the arrival-clock interval is long.
+	#classifyFrameClock(frame: GuideFrame) {
+		const monotonic = frame.captureMonotonic
+		const hasMonotonic = monotonic !== undefined && Number.isFinite(monotonic)
+		const hasTimestamp = frame.timestamp !== undefined && frame.timestamp > 0 && Number.isFinite(frame.timestamp)
+		const current = hasMonotonic ? monotonic : hasTimestamp ? frame.timestamp : undefined
 
-		if (cadence !== undefined) {
-			if (timestamp !== undefined) this.state.lastTimestamp = timestamp
-			if (cadence > 0) this.state.lastCadence = cadence
-			return cadence > this.config.nominalCadence * this.config.droppedFrameFactor
+		if (current === undefined) {
+			if (frame.cadence !== undefined && frame.cadence > 0) this.state.lastCadence = frame.cadence
+			return { outOfOrder: false, duplicate: false, dropped: false } as const
 		}
 
-		if (timestamp === undefined) return false
-
-		const lastTimestamp = this.state.lastTimestamp
-
-		if (lastTimestamp === undefined) {
-			this.state.lastTimestamp = timestamp
-			this.state.lastCadence = this.config.nominalCadence
-			return false
+		const previous = hasMonotonic ? this.state.lastCaptureMonotonic : this.state.lastTimestamp
+		if (previous !== undefined && current <= previous) {
+			return { outOfOrder: true, duplicate: current === previous, dropped: false } as const
 		}
 
-		const dt = Math.max(1, timestamp - lastTimestamp)
-		this.state.lastTimestamp = timestamp
-		this.state.lastCadence = dt
-		return dt > this.config.nominalCadence * this.config.droppedFrameFactor
+		if (hasMonotonic) this.state.lastCaptureMonotonic = monotonic
+		else this.state.lastTimestamp = current
+
+		const interval = previous === undefined ? undefined : current - previous
+		if (frame.cadence !== undefined && frame.cadence > 0) this.state.lastCadence = frame.cadence
+		else if (interval !== undefined && interval > 0) this.state.lastCadence = interval
+
+		const dropped = frame.cadence === undefined && interval !== undefined && interval > this.config.nominalCadence * this.config.droppedFrameFactor
+		return { outOfOrder: false, duplicate: false, dropped } as const
 	}
 
 	// Computes frame cadence scale to keep pulse gain stable across variable cadence.
@@ -697,7 +750,7 @@ export class Guider {
 	}
 
 	// Updates diagnostics payload for telemetry and testing.
-	#updateDiagnostics(frame: GuideFrame, tracking: GuideTrackerResult, measurement: DiagnosticMeasurement | undefined, droppedFrame: boolean, badFrame: boolean, notes: readonly string[]) {
+	#updateDiagnostics(frame: GuideFrame, tracking: GuideTrackerResult, measurement: DiagnosticMeasurement | undefined, droppedFrame: boolean, badFrame: boolean, notes: readonly string[], targetLimit?: GuideTargetLimitDiagnostic) {
 		const stellar = starTrackingOf(tracking)
 		this.state.lastDiagnostics = {
 			frameId: frame.frameId,
@@ -728,6 +781,7 @@ export class Guider {
 			droppedFrame,
 			notes,
 			tracking,
+			targetLimit,
 		}
 	}
 }
