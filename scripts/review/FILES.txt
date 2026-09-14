@@ -207,6 +207,7 @@ src/catalogs/stars/catalog.ts
 src/catalogs/stars/hnsky.ts
 src/catalogs/stars/hyg.ts
 src/catalogs/stars/sao.ts
+src/catalogs/stars/stellarium.ts
 src/catalogs/stars/tiled.catalog.ts
 src/catalogs/stars/ucac4.ts
 
