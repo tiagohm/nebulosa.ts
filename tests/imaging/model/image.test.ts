@@ -29,7 +29,7 @@ function autoStf(image: Image) {
 	return stf(image, ...adf(image))
 }
 
-test('reads a color JPEG as luminance when no pixel format is given', () => {
+test('reads a color JPEG as RGB when no pixel format is given', () => {
 	// Build a small color JPEG with distinct per-channel content.
 	const width = 8
 	const height = 8
@@ -43,13 +43,14 @@ test('reads a color JPEG as luminance when no pixel format is given', () => {
 	const jpeg = new Jpeg().compress(rgb, width, height, 'RGB', 100, '4:4:4')!
 
 	const noFormat = readImageFromJpeg(jpeg)!
-	const gray = readImageFromJpeg(jpeg, undefined, 'GRAY')!
+	const explicitRgb = readImageFromJpeg(jpeg, undefined, 'RGB')!
 
-	// The default path must produce the same single-channel luminance image as an explicit GRAY decode.
-	expect(noFormat.metadata.channels).toBe(1)
-	expect(noFormat.raw.length).toBe(width * height)
-	for (let i = 0; i < gray.raw.length; i++) {
-		expect(noFormat.raw[i]).toBeCloseTo(gray.raw[i], 6)
+	// The default path must produce the same RGB image as an explicit RGB decode.
+	expect(noFormat.metadata).toMatchObject({ width, height, channels: 3, pixelCount: width * height, stride: width * 3, strideInBytes: width * 3, bitpix: 8 })
+	expect(noFormat.header).toEqual({ BITPIX: 8, NAXIS: 3, NAXIS1: width, NAXIS2: height, NAXIS3: 3 })
+	expect(noFormat.raw.length).toBe(width * height * 3)
+	for (let i = 0; i < explicitRgb.raw.length; i++) {
+		expect(noFormat.raw[i]).toBeCloseTo(explicitRgb.raw[i], 6)
 	}
 })
 
@@ -88,15 +89,15 @@ test('does not min-max stretch leftover samples past a FITS image', async () => 
 	}
 })
 
-test('drops leftover samples past a JPEG image', () => {
+test('drops leftover samples past a multichannel JPEG image', () => {
 	const width = 2
 	const height = 2
-	const gray = new Uint8Array([0, 64, 128, 192])
-	const jpeg = new Jpeg().compress(gray, width, height, 'GRAY', 100, 'GRAY')!
-	const raw = new Float32Array(8).fill(2)
-	const image = readImageFromJpeg(jpeg, raw)!
+	const rgb = new Uint8Array([255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0])
+	const jpeg = new Jpeg().compress(rgb, width, height, 'RGB', 100, '4:4:4')!
+	const raw = new Float32Array(16).fill(2)
+	const image = readImageFromJpeg(jpeg, raw, 'RGB')!
 
-	expect(image.raw.length).toBe(width * height)
+	expect(image.raw.length).toBe(width * height * 3)
 	for (const value of image.raw) {
 		expect(value).toBeGreaterThanOrEqual(0)
 		expect(value).toBeLessThanOrEqual(1)
@@ -187,17 +188,46 @@ test('returns undefined when XISF has no supported images', async () => {
 	expect(await readImageFromXisf({ images: [] }, bufferSource(Buffer.alloc(1)))).toBeUndefined()
 })
 
-test('returns undefined when JPEG pixel format is not GRAY', () => {
+for (const [format, channels] of [
+	['RGB', 3],
+	['BGR', 3],
+	['RGBX', 4],
+	['BGRX', 4],
+	['XBGR', 4],
+	['XRGB', 4],
+	['GRAY', 1],
+	['RGBA', 4],
+	['BGRA', 4],
+	['ABGR', 4],
+	['ARGB', 4],
+	['CMYK', 4],
+] as const) {
 	const width = 2
 	const height = 2
 	const rgb = new Uint8Array([255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0])
-	const jpeg = new Jpeg().compress(rgb, width, height, 'RGB', 100, '4:4:4')!
+	const cmyk = new Uint8Array(width * height * 4).fill(64)
 
-	expect(readImageFromJpeg(jpeg, 'auto', 'RGB')).toBeUndefined()
-	expect(readImageFromJpeg(jpeg, 'auto', 'BGR')).toBeUndefined()
-	expect(readImageFromJpeg(jpeg, 'auto', 'CMYK')).toBeUndefined()
-	expect(readImageFromJpeg(jpeg, 'auto', 'GRAY')?.metadata.channels).toBe(1)
-})
+	test(`reads a JPEG as ${format}`, () => {
+		const source = format === 'CMYK' ? cmyk : rgb
+		const sourceFormat = format === 'CMYK' ? 'CMYK' : 'RGB'
+		const jpeg = new Jpeg().compress(source, width, height, sourceFormat, 100, '4:4:4')!
+		const image = readImageFromJpeg(jpeg, 'auto', format)!
+
+		expect(image.metadata).toMatchObject({ width, height, channels, pixelCount: width * height, stride: width * channels, strideInBytes: width * channels, bitpix: 8 })
+		expect(image.raw.length).toBe(width * height * channels)
+		expect(image.header).toEqual(channels === 1 ? { BITPIX: 8, NAXIS: 2, NAXIS1: width, NAXIS2: height } : { BITPIX: 8, NAXIS: 3, NAXIS1: width, NAXIS2: height, NAXIS3: channels })
+
+		for (const value of image.raw) {
+			expect(value).toBeGreaterThanOrEqual(0)
+			expect(value).toBeLessThanOrEqual(1)
+		}
+
+		if (format === 'RGB' || format === 'BGR') {
+			const decoded = new Jpeg().decompress(jpeg, format)!
+			for (let i = 0; i < decoded.data.length; i++) expect(image.raw[i]).toBeCloseTo(decoded.data[i] / 255, 6)
+		}
+	})
+}
 
 describe('read image from fits', () => {
 	for (const bitpix of BITPIXES) {

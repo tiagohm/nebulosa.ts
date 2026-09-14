@@ -159,27 +159,29 @@ export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source &
 	return { header, raw, metadata }
 }
 
-// Decodes a JPEG buffer into a single-channel (luminance) normalized Image.
-// Returns undefined when the buffer is not JPEG or `format` is present and not GRAY.
+// Decodes a JPEG buffer into a normalized Image. When `format` is omitted, TurboJPEG selects the
+// output layout from the JPEG colorspace; otherwise all samples are preserved in the requested
+// interleaved pixel format.
 export function readImageFromJpeg(buffer: Buffer, raw: ImageRawType | ImageRawPrecision = 'auto', format?: PixelFormat): Image | undefined {
 	if (!isJpeg(buffer)) return undefined
-	if (format !== undefined && format !== 'GRAY') return undefined
 
-	const image = new Jpeg().decompress(buffer, 'GRAY')
+	const image = new Jpeg().decompress(buffer, format)
 	if (!image) return undefined
 
 	const { data, width, height } = image
 	const pixelCount = width * height
+	const sampleCount = data.length
+	const channels = sampleCount / pixelCount
 
 	if (raw === 'auto') raw = 32
-	if (typeof raw === 'number') raw = makeImageRawTypedArray(raw, pixelCount)
-	if (raw.length < pixelCount) return undefined
+	if (typeof raw === 'number') raw = makeImageRawTypedArray(raw, sampleCount)
+	if (raw.length < sampleCount) return undefined
 
-	for (let i = 0; i < pixelCount; i++) raw[i] = data[i] / 255
-	raw = raw.subarray(0, pixelCount)
+	for (let i = 0; i < sampleCount; i++) raw[i] = data[i] / 255
+	raw = raw.subarray(0, sampleCount)
 
-	const header = { BITPIX: 8, NAXIS: 2, NAXIS1: width, NAXIS2: height }
-	return { header, raw, metadata: { width, height, channels: 1, pixelCount, pixelSizeInBytes: 1, strideInBytes: width, stride: width, bitpix: 8, bayer: undefined } }
+	const header = channels === 1 ? { BITPIX: 8, NAXIS: 2, NAXIS1: width, NAXIS2: height } : { BITPIX: 8, NAXIS: 3, NAXIS1: width, NAXIS2: height, NAXIS3: channels }
+	return { header, raw, metadata: { width, height, channels, pixelCount, pixelSizeInBytes: 1, strideInBytes: width * channels, stride: width * channels, bitpix: 8, bayer: undefined } }
 }
 
 // Reads a FITS or XISF source while preserving source digital numbers.
