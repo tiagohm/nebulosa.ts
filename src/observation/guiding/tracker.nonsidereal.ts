@@ -321,6 +321,12 @@ export function nonSiderealEphemerisFromInterpolator(interpolator: EphemerisInte
 
 // Persistent decorator that combines a synchronous non-sidereal target offset with a base image
 // tracker. The base tracker owns detection, identity, staged state, and commit timing.
+// The integration owns arming, state observation, and lock-shift coordination. When used with a
+// guide client, synchronously invalidate the transform with onCalibrationChanged() on its
+// CalibrationDataFlipped event, then supply the replacement before resuming correction. Stop the
+// guided session before clear() to avoid a target jump. Disable lock shift before arming unless its
+// additional drift is intentional; restart the guide session to discard previously accumulated
+// drift. Frame diagnostics remain in nonSiderealTrackingOf().
 export class NonSiderealTracker implements GuideTracker {
 	#ephemeris?: NonSiderealEphemeris
 	#transform?: NonSiderealImageTransform
@@ -408,6 +414,16 @@ export class NonSiderealTracker implements GuideTracker {
 			this.#failureReason = 'invalidTransform'
 			this.#state = 'faulted'
 		}
+	}
+
+	// Selects from the supplied result using the base tracker without tracking another frame or
+	// changing state. Position and returned fresh tuple use full-frame pixels, X right/Y down from
+	// the top-left. Without base selection support, returns the measurement for automatic selection
+	// and undefined for a requested position so the consumer keeps that position unchanged.
+	select(result: GuideTrackerResult, position?: readonly [number, number]): readonly [number, number] | undefined {
+		if (this.baseTracker.select !== undefined) return this.baseTracker.select(result, position)
+		const measurement = result.measurement
+		return position !== undefined || measurement === undefined ? undefined : [measurement.x, measurement.y]
 	}
 
 	// Delegates staged state commit to the base tracker at the exact point chosen by the guide

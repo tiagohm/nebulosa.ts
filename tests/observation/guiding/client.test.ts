@@ -13,7 +13,9 @@ import type { GuidingCalibrationResult } from '../../../src/observation/guiding/
 import { GuiderClient, type GuideFrameImage, type GuiderClientConnectOptions, type GuiderClientOptions, type GuiderEvents } from '../../../src/observation/guiding/client'
 import { ditherPulsePlanFromCalibration } from '../../../src/observation/guiding/dither.pulse'
 import type { GuideDirectionDEC, GuideDirectionRA } from '../../../src/observation/guiding/guider'
-import type { GuideTracker, GuideTrackerResult } from '../../../src/observation/guiding/tracker'
+import { type GuideTracker, type GuideTrackerResult, trackingResultFromStars } from '../../../src/observation/guiding/tracker'
+import { NonSiderealTracker, nonSiderealTrackingOf } from '../../../src/observation/guiding/tracker.nonsidereal'
+import { StarTracker, starTrackingOf } from '../../../src/observation/guiding/tracker.star'
 import { isTimeConsumingTestSkipped } from '../../util'
 
 // One recorded pulse issued through the fake guide-output manager.
@@ -286,11 +288,11 @@ interface Harness {
 }
 
 // Creates a fresh client wired to fake managers and an event recorder.
-function makeHarness(options: GuiderClientOptions = {}): Harness {
+function makeHarness(options: GuiderClientOptions = {}, tracker: GuideTracker = new StarTracker()): Harness {
 	const cameraManager = new FakeCameraManager()
 	const guideOutputManager = new FakeGuideOutputManager()
 	const events: GuiderEvents[] = []
-	const client = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, {
+	const client = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, tracker, {
 		...options,
 		handler: {
 			event: (client, event) => {
@@ -298,7 +300,6 @@ function makeHarness(options: GuiderClientOptions = {}): Harness {
 				events.push(event)
 			},
 			frame: options.handler?.frame,
-			nonSiderealState: options.handler?.nonSiderealState,
 		},
 	})
 
@@ -398,9 +399,9 @@ describe('construction', () => {
 		expect(makeHarness({ searchRegion: 0 }).client.getSearchRegion()).toBe(64)
 	})
 
-	test('accepts nested partial tracker configuration', () => {
-		const options = { trackerConfig: { filter: { minStarSnr: 8 } } } satisfies GuiderClientOptions
-		expect(makeHarness(options).client.getAppState()).toBe('Stopped')
+	test('accepts an explicitly configured tracker', () => {
+		const tracker = new StarTracker({ filter: { minStarSnr: 8 } })
+		expect(makeHarness({}, tracker).client.getAppState()).toBe('Stopped')
 	})
 
 	test('applies sticky lock and dither-mode options', () => {
@@ -432,18 +433,27 @@ describe('construction', () => {
 	})
 })
 
-test('non-sidereal arming is persistent, disables automatic lock shift, and clears safely', () => {
-	const harness = makeHarness()
+test('the caller coordinates non-sidereal tracking and lock shift explicitly', () => {
+	const tracker = new NonSiderealTracker(new StarTracker())
+	const harness = makeHarness({}, tracker)
 	const ephemeris = {
 		position: (_time: unknown, out: { rightAscension: number; declination: number }) => out,
 	}
 
-	expect(harness.client.getNonSiderealState()).toBe('disabled')
-	expect(harness.client.armNonSidereal(ephemeris, { offsetToImage: () => [0, 0] })).toBeTrue()
-	expect(harness.client.getNonSiderealState()).toBe('armed')
-	expect(harness.client.setLockShiftParams({ rate: [1, 0], axes: 'X/Y' })).toBeFalse()
-	expect(harness.client.clearNonSidereal()).toBeTrue()
-	expect(harness.client.getNonSiderealState()).toBe('disabled')
+	expect(harness.client.setLockShiftParams({ rate: [1, 0], axes: 'X/Y' })).toBeTrue()
+	expect(harness.client.setLockShiftEnabled(true)).toBeTrue()
+	// The integration disables drift and clears its configured rate before arming its tracker.
+	harness.client.setLockShiftEnabled(false)
+	harness.client.setLockShiftParams({ rate: [0, 0], axes: 'X/Y' })
+	tracker.arm(ephemeris, { offsetToImage: () => [0, 0] })
+	expect(tracker.state).toBe('armed')
+	expect(harness.client.getLockShiftEnabled()).toBeFalse()
+	expect(harness.client.getLockShiftParams().rate).toEqual([0, 0])
+	// Generic offsets and explicit lock shift may coexist when the caller requests both.
+	expect(harness.client.setLockShiftEnabled(true)).toBeTrue()
+	expect(harness.client.setLockShiftParams({ rate: [1, 0], axes: 'X/Y' })).toBeTrue()
+	tracker.clear()
+	expect(tracker.state).toBe('disabled')
 })
 
 describe('connect / disconnect', () => {
@@ -1167,10 +1177,10 @@ describe('frame-driven behavior', () => {
 		await feedBuffer(local, await buildFrameBufferAt([inside, outside]))
 
 		const frame = frames.at(-1)!
-		expect(frame.star).toBeDefined()
-		expect(frame.star!.x).toBeCloseTo(inside[0], 1)
-		expect(frame.star!.y).toBeCloseTo(inside[1], 1)
-		expect(frame.stars).toHaveLength(2)
+		expect(starTrackingOf(frame.tracking)?.primary).toBeDefined()
+		expect(starTrackingOf(frame.tracking)?.primary!.x).toBeCloseTo(inside[0], 1)
+		expect(starTrackingOf(frame.tracking)?.primary!.y).toBeCloseTo(inside[1], 1)
+		expect(starTrackingOf(frame.tracking)!.detections).toHaveLength(2)
 		local.client.stopCapture()
 	})
 
@@ -1209,7 +1219,7 @@ describe('frame-driven behavior', () => {
 				return lastResult
 			},
 		}
-		const local = makeHarness({ tracker, trackerConfig: { mode: 'singleStar' }, handler: { frame: (_client, frame) => frames.push(frame) } })
+		const local = makeHarness({ handler: { frame: (_client, frame) => frames.push(frame) } }, tracker)
 		connect(local)
 		local.client.loop()
 		const resetsAfterConnect = resets
@@ -1217,9 +1227,7 @@ describe('frame-driven behavior', () => {
 		await feedBuffer(local, FRAME_BUFFER)
 		expect(calls).toBe(1)
 		expect(frames.at(-1)?.tracking).toBe(lastResult)
-		expect(frames.at(-1)?.stars).toEqual([])
-		expect(frames.at(-1)?.acceptedStars).toBeUndefined()
-		expect(frames.at(-1)?.star).toBeUndefined()
+		expect(starTrackingOf(frames.at(-1)?.tracking)).toBeUndefined()
 
 		local.client.findStar()
 		expect(calls).toBe(1)
@@ -1227,6 +1235,90 @@ describe('frame-driven behavior', () => {
 		local.client.deselectStar()
 		expect(resets).toBe(resetsAfterConnect + 2)
 		local.client.stopCapture()
+	})
+
+	test.each([false, true])('selection uses the injected tracker policy without another tracking pass (decorated=%s)', async (decorated) => {
+		let calls = 0
+		let resets = 0
+		let declined = false
+		const result = trackingResultFromStars([{ x: 121, y: 122, snr: 10, flux: 100, hfd: 2 }])
+		const frames: GuideFrameImage[] = []
+		const base: GuideTracker = {
+			reset: () => {
+				resets++
+			},
+			track: () => {
+				calls++
+				return result
+			},
+			select: (current, position) => {
+				expect(current).toBe(result)
+				return declined ? undefined : position === undefined ? [130, 140] : [position[0] + 1, position[1] + 2]
+			},
+		}
+		const tracker = decorated ? new NonSiderealTracker(base) : base
+		const local = makeHarness({ handler: { frame: (_client, frame) => frames.push(frame) } }, tracker)
+		connect(local)
+		local.client.loop()
+		try {
+			await feedBuffer(local, FRAME_BUFFER)
+			const resetsBefore = resets
+			declined = true
+			// A declined selection must not promote the otherwise valid measurement.
+			expect(local.client.findStar()).toBeUndefined()
+			expect(resets).toBe(resetsBefore)
+			declined = false
+			expect(local.client.findStar()).toEqual([130, 140])
+			expect(resets).toBe(resetsBefore + 1)
+			expect(local.client.setLockPosition(100, 110)).toBeTrue()
+			expect(local.client.getLockPosition()).toEqual([101, 112])
+			expect(local.client.setLockPosition(100, 110, true)).toBeTrue()
+			expect(local.client.getLockPosition()).toEqual([100, 110])
+			expect(calls).toBe(1)
+			await feedBuffer(local, FRAME_BUFFER)
+			expect(frames.at(-1)?.searchPosition).toEqual([101, 112])
+			declined = true
+			expect(local.client.setLockPosition(90, 95)).toBeTrue()
+			expect(local.client.getLockPosition()).toEqual([90, 95])
+			expect(calls).toBe(2)
+		} finally {
+			local.client.stopCapture()
+		}
+	})
+
+	test.each([false, true])('a tracker without selection uses measurement for findStar and preserves requested coordinates (decorated=%s)', async (decorated) => {
+		const result = trackingResultFromStars([{ x: 121, y: 122, snr: 10, flux: 100, hfd: 2 }])
+		const base: GuideTracker = { reset: () => {}, track: () => result }
+		const local = makeHarness({}, decorated ? new NonSiderealTracker(base) : base)
+		connect(local)
+		local.client.loop()
+		try {
+			await feedBuffer(local, FRAME_BUFFER)
+			expect(local.client.findStar()).toEqual([121, 122])
+			expect(local.client.setLockPosition(90, 95)).toBeTrue()
+			expect(local.client.getLockPosition()).toEqual([90, 95])
+		} finally {
+			local.client.stopCapture()
+		}
+	})
+
+	test('stellar selection and overlays survive explicit non-sidereal decoration', async () => {
+		const tracker = new NonSiderealTracker(new StarTracker())
+		const frames: GuideFrameImage[] = []
+		const local = makeHarness({ handler: { frame: (_client, frame) => frames.push(frame) } }, tracker)
+		connect(local)
+		local.client.loop()
+		try {
+			await feedBuffer(local, FRAME_BUFFER)
+			const tracking = starTrackingOf(frames.at(-1)?.tracking)!
+			expect(local.client.findStar()).toEqual([tracking.selectionPrimary!.x, tracking.selectionPrimary!.y])
+			expect(local.client.setLockPosition(STAR_B[0] + 3, STAR_B[1] - 2)).toBeTrue()
+			expect(local.client.getLockPosition()![0]).toBeCloseTo(STAR_B[0], 0)
+			expect(local.client.getLockPosition()![1]).toBeCloseTo(STAR_B[1], 0)
+			expect(tracking.detections.length).toBeGreaterThanOrEqual(2)
+		} finally {
+			local.client.stopCapture()
+		}
 	})
 
 	test('accepted looping frames use a strictly increasing frame id', async () => {
@@ -1448,7 +1540,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('frame processing robustness', () 
 		const cameraManager = new FakeCameraManager()
 		const guideOutputManager = new FakeGuideOutputManager()
 		const events: GuiderEvents[] = []
-		const client = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, {
+		const client = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, new StarTracker(), {
 			handler: {
 				event: (_client, event) => {
 					events.push(event)
@@ -1678,8 +1770,8 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	// while the client is guiding. Every test owns its harness so the sessions, which spend nearly all
 	// of their wall time asleep waiting for commanded pulses, can run concurrently without sharing
 	// state through the module-level harness.
-	async function calibrateAndGuide(options: GuiderClientOptions = {}, connectOptions?: GuiderClientConnectOptions) {
-		const harness = makeHarness({ ...options, calibrator: FAST_CALIBRATION })
+	async function calibrateAndGuide(options: GuiderClientOptions = {}, connectOptions?: GuiderClientConnectOptions, tracker: GuideTracker = new StarTracker()) {
+		const harness = makeHarness({ ...options, calibrator: FAST_CALIBRATION }, tracker)
 
 		connect(harness, connectOptions)
 		harness.client.loop()
@@ -2085,7 +2177,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		'commits every accepted lock initialization sample for a stateful tracker',
 		async () => {
 			const state = statefulTracker()
-			const harness = await calibrateAndGuide({ tracker: state.tracker })
+			const harness = await calibrateAndGuide({}, undefined, state.tracker)
 			const commitsBeforeInitialization = state.commitCount()
 
 			await establishLockReference(harness)
@@ -2099,7 +2191,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		'does not commit a frame rejected by the target envelope',
 		async () => {
 			const state = statefulTracker()
-			const harness = await calibrateAndGuide({ tracker: state.tracker })
+			const harness = await calibrateAndGuide({}, undefined, state.tracker)
 			await establishLockReference(harness)
 			const commitsBeforeRejectedFrame = state.commitCount()
 
@@ -2793,9 +2885,20 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	)
 
 	test(
-		'non-sidereal moving targets fail closed across a calibration flip until the transform is replaced',
+		'caller invalidates a non-sidereal transform on calibration flip before further correction',
 		async () => {
-			const harness = await calibrateAndGuide()
+			const tracker = new NonSiderealTracker(new StarTracker())
+			const harness = await calibrateAndGuide(
+				{
+					handler: {
+						event: (_client, event) => {
+							if (event.Event === 'CalibrationDataFlipped') tracker.onCalibrationChanged()
+						},
+					},
+				},
+				undefined,
+				tracker,
+			)
 			await establishLockReference(harness)
 			let providerCalls = 0
 			const ephemeris = {
@@ -2807,77 +2910,90 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 				},
 			}
 
-			expect(harness.client.armNonSidereal(ephemeris, { offsetToImage: ([east, north]) => [east * 1e6, north * 1e6] })).toBeTrue()
-			expect(harness.client.getNonSiderealState()).toBe('armed')
+			tracker.arm(ephemeris, { offsetToImage: ([east, north]) => [east * 1e6, north * 1e6] })
+			expect(tracker.state).toBe('armed')
 			await feedFrame(harness)
 			expect(providerCalls).toBeGreaterThan(0)
-			expect(harness.client.getNonSiderealState()).toBe('active')
-			expect(harness.client.clearNonSidereal()).toBeFalse()
+			expect(tracker.state).toBe('active')
 
 			expect(harness.client.flipCalibration()).toBeTrue()
-			expect(harness.client.getNonSiderealState()).toBe('faulted')
-			expect(harness.client.setNonSiderealTransform({ offsetToImage: ([east, north]) => [-east * 1e6, north * 1e6] })).toBeTrue()
+			expect(tracker.state).toBe('faulted')
+			const pulsesBefore = harness.guideOutputManager.pulses.length
 			await feedFrame(harness)
-			expect(harness.client.getNonSiderealState()).toBe('active')
+			expect(harness.guideOutputManager.pulses).toHaveLength(pulsesBefore)
+			expect(tracker.lastResult?.measurement).toBeUndefined()
 
-			harness.client.deselectStar()
-			expect(harness.client.clearNonSidereal()).toBeTrue()
-			expect(harness.client.getNonSiderealState()).toBe('disabled')
+			tracker.onCalibrationChanged({ offsetToImage: ([east, north]) => [-east * 1e6, north * 1e6] })
+			await feedFrame(harness)
+			expect(tracker.state).toBe('active')
+			expect(tracker.lastResult?.measurement).toBeDefined()
+
+			harness.client.stopCapture()
+			tracker.clear()
+			expect(tracker.state).toBe('disabled')
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
 
 	test(
-		'non-sidereal sources clear after stopping or returning to looping',
+		'the caller clears non-sidereal sources after stopping or returning to looping',
 		async () => {
-			const harness = await calibrateAndGuide()
+			const tracker = new NonSiderealTracker(new StarTracker())
+			const harness = await calibrateAndGuide({}, undefined, tracker)
 			await establishLockReference(harness)
 			const ephemeris = {
 				position: (_time: unknown, out: { rightAscension: number; declination: number }) => out,
 			}
 			const transform = { offsetToImage: () => [0, 0] as const }
 
-			expect(harness.client.armNonSidereal(ephemeris, transform)).toBeTrue()
+			tracker.arm(ephemeris, transform)
 			await feedFrame(harness)
-			expect(harness.client.getNonSiderealState()).toBe('active')
+			expect(tracker.state).toBe('active')
 			expect(harness.client.stopCapture()).toBeTrue()
 			expect(harness.client.getAppState()).toBe('Stopped')
-			expect(harness.client.clearNonSidereal()).toBeTrue()
-			expect(harness.client.getNonSiderealState()).toBe('disabled')
+			tracker.clear()
+			expect(tracker.state).toBe('disabled')
 
-			expect(harness.client.armNonSidereal(ephemeris, transform)).toBeTrue()
+			tracker.arm(ephemeris, transform)
 			expect(harness.client.loop()).toBeTrue()
-			expect(harness.client.clearNonSidereal()).toBeTrue()
-			expect(harness.client.getNonSiderealState()).toBe('disabled')
+			tracker.clear()
+			expect(tracker.state).toBe('disabled')
+			harness.client.stopCapture()
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
 
 	test(
-		'emits non-sidereal armed state again when a guiding session restarts',
+		'non-sidereal state is observed on the injected tracker and generic frames across session restart',
 		async () => {
-			const states: string[] = []
-			const harness = await calibrateAndGuide({
-				handler: {
-					nonSiderealState: (_client, event) => states.push(event.state),
+			const tracker = new NonSiderealTracker(new StarTracker())
+			const frames: GuideFrameImage[] = []
+			const harness = await calibrateAndGuide(
+				{
+					handler: { frame: (_client, frame) => frames.push(frame) },
 				},
-			})
+				undefined,
+				tracker,
+			)
 			await establishLockReference(harness)
 			const ephemeris = {
 				position: (_time: unknown, out: { rightAscension: number; declination: number }) => out,
 			}
-			const transform = { offsetToImage: () => [0, 0] as const }
 
-			expect(harness.client.armNonSidereal(ephemeris, transform)).toBeTrue()
+			tracker.arm(ephemeris, { offsetToImage: () => [0, 0] })
+			expect(tracker.state).toBe('armed')
 			await feedFrame(harness)
-			expect(states.slice(-2)).toEqual(['armed', 'active'])
+			expect(nonSiderealTrackingOf(frames.at(-1)?.tracking)?.state).toBe('active')
+			expect(frames.at(-1)?.tracking).toBe(tracker.lastResult)
 
 			expect(harness.client.loop()).toBeTrue()
-			expect(states.at(-1)).toBe('armed')
+			expect(tracker.state).toBe('armed')
 			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
 			await establishLockReference(harness)
 			await feedFrame(harness)
-			expect(states.at(-1)).toBe('active')
+			expect(tracker.state).toBe('active')
+			expect(nonSiderealTrackingOf(frames.at(-1)?.tracking)?.state).toBe('active')
+			harness.client.stopCapture()
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
@@ -3653,12 +3769,12 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			await feedFrame(harness)
 
 			const frame = frames.at(-1)!
-			expect(frame.stars.length).toBeGreaterThanOrEqual(2)
-			expect(frame.acceptedStars?.length).toBeGreaterThanOrEqual(2)
-			expect(frame.star).toBeDefined()
+			expect(starTrackingOf(frame.tracking)!.detections.length).toBeGreaterThanOrEqual(2)
+			expect(starTrackingOf(frame.tracking)?.accepted?.length).toBeGreaterThanOrEqual(2)
+			expect(starTrackingOf(frame.tracking)?.primary).toBeDefined()
 
-			const primary = frame.star!
-			const secondary = frame.stars.find((star) => Math.hypot(star.x - primary.x, star.y - primary.y) > harness.client.getSearchRegion() / 2)
+			const primary = starTrackingOf(frame.tracking)!.primary!
+			const secondary = starTrackingOf(frame.tracking)!.detections.find((star) => Math.hypot(star.x - primary.x, star.y - primary.y) > harness.client.getSearchRegion() / 2)
 			expect(secondary).toBeDefined()
 			expect(harness.client.getAppState()).toBe('Guiding')
 			expect(eventsOf(harness.events, 'StarLost')).toBeEmpty()
@@ -3688,10 +3804,10 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			expect(eventsOf(harness.events, 'LockPositionLost')).toHaveLength(1)
 
 			const frame = frames.at(-1)!
-			expect(frame.star).toBeUndefined()
-			expect(frame.stars.length).toBeGreaterThanOrEqual(2)
-			expect(frame.acceptedStars ?? []).toHaveLength(0)
-			for (const star of frame.stars) {
+			expect(starTrackingOf(frame.tracking)?.primary).toBeUndefined()
+			expect(starTrackingOf(frame.tracking)!.detections.length).toBeGreaterThanOrEqual(2)
+			expect(starTrackingOf(frame.tracking)?.accepted ?? []).toHaveLength(0)
+			for (const star of starTrackingOf(frame.tracking)!.detections) {
 				expect(Math.hypot(star.x - lock[0], star.y - lock[1])).toBeGreaterThan(harness.client.getSearchRegion() / 2)
 			}
 		},
@@ -3713,7 +3829,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			await feedFrame(harness)
 
 			const frame = frames.at(-1)!
-			expect(frame.acceptedStars?.length).toBeGreaterThanOrEqual(2)
+			expect(starTrackingOf(frame.tracking)?.accepted?.length).toBeGreaterThanOrEqual(2)
 			const step = eventsOf(harness.events, 'GuideStep').at(-1)!
 			expect(Math.hypot(step.dx, step.dy)).toBeGreaterThan(shift - 1.5)
 			expect(Math.hypot(step.dx, step.dy)).toBeLessThan(shift + 1.5)

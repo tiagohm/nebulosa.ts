@@ -553,6 +553,34 @@ export class StarTracker implements GuideTracker {
 		this.config = { ...DEFAULT_STAR_TRACKER_CONFIG, ...config, filter, selection }
 	}
 
+	// Selects the quality-approved acquisition target, or the detection nearest position, from a
+	// previously produced result. Positions use full-frame pixels, X right/Y down from the top-left.
+	// Returns a fresh tuple or undefined; equal distances retain detector order. Does not detect or
+	// mutate tracking state, and explicit nearest selection preserves the unfiltered detection policy.
+	select(result: GuideTrackerResult, position?: readonly [number, number]): readonly [number, number] | undefined {
+		const tracking = starTrackingOf(result)
+		if (tracking === undefined) return undefined
+
+		let selected: GuideStar | undefined = tracking.selectionPrimary
+		if (position !== undefined) {
+			selected = undefined
+			let distanceSq = Number.POSITIVE_INFINITY
+
+			for (const star of tracking.detections) {
+				const dx = star.x - position[0]
+				const dy = star.y - position[1]
+				const candidateDistanceSq = dx * dx + dy * dy
+
+				if (candidateDistanceSq < distanceSq) {
+					distanceSq = candidateDistanceSq
+					selected = star
+				}
+			}
+		}
+
+		return selected === undefined ? undefined : [selected.x, selected.y]
+	}
+
 	// Clears the tracked identity, translation reference, and last frame result.
 	reset() {
 		this.#lastResult = undefined

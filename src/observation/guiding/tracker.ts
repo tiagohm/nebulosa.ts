@@ -117,6 +117,12 @@ export interface GuideTracker {
 	readonly lastResult?: GuideTrackerResult
 	// Tracks one frame synchronously; it must not return a Promise or perform I/O.
 	readonly track: (frame: GuideTrackerFrame, context: GuideTrackerContext) => GuideTrackerResult
+	// Selects a target from a result produced by this tracker, optionally near a requested position.
+	// Coordinates are full-frame pixels with a top-left origin and X right/Y down. Returns a fresh
+	// position or undefined when selection is declined. This synchronous query must not mutate state,
+	// detect another image, or perform I/O. Without position, applies the tracker's acquisition policy.
+	// Consumers may use measurement when this callback is absent, but must respect a declined selection.
+	readonly select?: (result: GuideTrackerResult, position?: readonly [number, number]) => readonly [number, number] | undefined
 	// Commits the latest candidate state after the consuming state machine accepts its frame.
 	// Trackers that do not stage state may omit this callback.
 	readonly commit?: () => void
