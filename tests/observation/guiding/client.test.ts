@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { pixelScale } from '../../../src/astronomy/formulas'
-import { DEG2RAD, PIOVERTWO } from '../../../src/core/constants'
+import { Timescale, time, toJulianDay, type Time } from '../../../src/astronomy/time/time'
+import { DAYSEC, DEG2RAD, PIOVERTWO } from '../../../src/core/constants'
 import { type Camera, DEFAULT_CAMERA, DEFAULT_GUIDE_OUTPUT, type GuideDirection, type GuideOutput } from '../../../src/devices/indi/device'
 import type { CameraManager } from '../../../src/devices/indi/manager/camera'
 import type { DeviceHandler } from '../../../src/devices/indi/manager/device'
@@ -1765,6 +1766,45 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	// defaults: shortening them to a single sample per leg leaves the solved camera angle at the mercy
 	// of the centroid error over a seven-pixel baseline.
 	const FAST_CALIBRATION = { clearingMoveEnabled: false } as const
+	// Synthetic TT epoch used by the local non-sidereal providers below. Each test's time factory
+	// anchors its first capture at this epoch, so the short linear trajectories remain deterministic
+	// without depending on the wall-clock date.
+	const NON_SIDEREAL_JD0 = 2460000
+
+	// Builds a time factory and an ephemeris clocked to the client's Unix-millisecond timestamps.
+	function nonSiderealClock() {
+		let epochMillis: number | undefined
+		const timestamps: number[] = []
+
+		return {
+			timestamps,
+			timeFactory: (timestampMillis: number) => {
+				timestamps.push(timestampMillis)
+				epochMillis ??= timestampMillis
+				return time(NON_SIDEREAL_JD0, (timestampMillis - epochMillis) / 1000 / DAYSEC, Timescale.TT)
+			},
+			secondsAt: (captureTime: Time) => (toJulianDay(captureTime) - NON_SIDEREAL_JD0) * DAYSEC,
+		}
+	}
+
+	// Builds a synchronous linear RA/DEC source. Rates are radians per second and the source writes
+	// into the output object supplied by the tracker, matching the production ephemeris contract.
+	function linearNonSiderealEphemeris(clock: ReturnType<typeof nonSiderealClock>, eastRate: number = 1e-6, northRate: number = -0.5e-6) {
+		return {
+			position: (captureTime: Time, out: { rightAscension: number; declination: number }) => {
+				const seconds = clock.secondsAt(captureTime)
+				out.rightAscension = seconds * eastRate
+				out.declination = seconds * northRate
+				return out
+			},
+		}
+	}
+
+	// Maps local east/north radians into image pixels with a known one-million-pixel-per-radian
+	// scale, making the expected target offset directly readable in integration diagnostics.
+	const linearNonSiderealTransform = {
+		offsetToImage: ([east, north]: readonly [number, number]) => [east * 1e6, north * 1e6] as const,
+	}
 
 	// Creates a dedicated harness, runs a full calibration against its simulated mount and returns it
 	// while the client is guiding. Every test owns its harness so the sessions, which spend nearly all
@@ -2994,6 +3034,273 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			expect(tracker.state).toBe('active')
 			expect(nonSiderealTrackingOf(frames.at(-1)?.tracking)?.state).toBe('active')
 			harness.client.stopCapture()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
+		'uses the exposure midpoint and custom time factory before evaluating a non-sidereal source',
+		async () => {
+			const clock = nonSiderealClock()
+			const frames: GuideFrameImage[] = []
+			let providerCalls = 0
+			const source = linearNonSiderealEphemeris(clock)
+			const tracker = new NonSiderealTracker(new StarTracker())
+			const harness = makeHarness(
+				{
+					timeFactory: clock.timeFactory,
+					handler: { frame: (_client, frame) => frames.push(frame) },
+				},
+				tracker,
+			)
+			const exposureStarts: number[] = []
+			const originalStartExposure = harness.cameraManager.startExposure.bind(harness.cameraManager)
+			harness.cameraManager.startExposure = (camera, exposure) => {
+				exposureStarts.push(Date.now())
+				originalStartExposure(camera, exposure)
+			}
+
+			connect(harness)
+			tracker.arm(
+				{
+					position: (captureTime, out) => {
+						providerCalls++
+						return source.position(captureTime, out)
+					},
+				},
+				linearNonSiderealTransform,
+			)
+			expect(harness.client.setExposure(2000)).toBeTrue()
+			expect(harness.client.loop()).toBeTrue()
+			await feedBuffer(harness, FRAME_BUFFER)
+
+			const frame = frames.at(-1)!
+			expect(frame.timestamp).toBeGreaterThanOrEqual(exposureStarts[0] + 950)
+			expect(frame.timestamp).toBeLessThanOrEqual(exposureStarts[0] + 1050)
+			expect(clock.timestamps[0]).toBe(frame.timestamp)
+			expect(frame.captureTime).toBeDefined()
+			expect(providerCalls).toBe(0)
+			expect(tracker.state).toBe('armed')
+			expect(nonSiderealTrackingOf(frame.tracking)).toBeUndefined()
+
+			harness.client.stopCapture()
+			tracker.clear()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
+		'delays non-sidereal evaluation until lock establishment and publishes capture diagnostics',
+		async () => {
+			const clock = nonSiderealClock()
+			const frames: GuideFrameImage[] = []
+			const providerTimes: Time[] = []
+			let providerCalls = 0
+			const source = linearNonSiderealEphemeris(clock)
+			const tracker = new NonSiderealTracker(new StarTracker())
+			const harness = makeHarness(
+				{
+					timeFactory: clock.timeFactory,
+					handler: { frame: (_client, frame) => frames.push(frame) },
+				},
+				tracker,
+			)
+			tracker.arm(
+				{
+					position: (captureTime, out) => {
+						providerCalls++
+						providerTimes.push(captureTime)
+						return source.position(captureTime, out)
+					},
+				},
+				linearNonSiderealTransform,
+			)
+
+			connect(harness)
+			harness.client.loop()
+			await feedBuffer(harness, FRAME_BUFFER)
+			expect(providerCalls).toBe(0)
+			expect(tracker.state).toBe('armed')
+
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+			for (let i = 0; i < MAX_CALIBRATION_FRAMES && !harness.client.getCalibrated(); i++) await feedFrame(harness)
+			expect(harness.client.getCalibrated()).toBeTrue()
+			expect(providerCalls).toBe(0)
+
+			for (let i = 0; i < LOCK_AVERAGING_FRAMES; i++) {
+				await feedFrame(harness)
+				if (providerCalls > 0) break
+			}
+			expect(providerCalls).toBeGreaterThan(0)
+			const frame = frames.at(-1)!
+			const diagnostic = nonSiderealTrackingOf(frame.tracking)!
+			expect(diagnostic.state).toBe('active')
+			const captureTime = frame.captureTime
+			expect(captureTime).toBeDefined()
+			expect(diagnostic.captureTime).toBe(captureTime)
+			expect(diagnostic.frameId).toBe(frame.frameId)
+			expect(providerTimes).toContain(captureTime!)
+			const lastResult = tracker.lastResult
+			expect(lastResult).toBeDefined()
+			if (lastResult === undefined) throw new Error('non-sidereal tracker did not publish its active result')
+			expect(Object.is(lastResult, frame.tracking)).toBeTrue()
+
+			harness.client.stopCapture()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
+		'adds non-sidereal, dither and lock-shift offsets exactly once to the guide target',
+		async () => {
+			const clock = nonSiderealClock()
+			const frames: GuideFrameImage[] = []
+			const tracker = new NonSiderealTracker(new StarTracker())
+			const harness = await calibrateAndGuide(
+				{
+					timeFactory: clock.timeFactory,
+					handler: { frame: (_client, frame) => frames.push(frame) },
+				},
+				undefined,
+				tracker,
+			)
+			await establishLockReference(harness)
+
+			tracker.arm(linearNonSiderealEphemeris(clock), linearNonSiderealTransform)
+			await feedFrame(harness)
+			await feedFrame(harness)
+			const beforeDither = frames.at(-1)!
+			const beforeDitherTracking = nonSiderealTrackingOf(beforeDither.tracking)!
+			expect(beforeDither.lockPosition).toBeDefined()
+
+			expect(harness.client.dither(3, false, IMMEDIATE_SETTLE)).toBeTrue()
+			const ditherTarget = harness.client.getLockPosition()!
+			await feedFrame(harness)
+			const afterDither = frames.at(-1)!
+			const afterDitherTracking = nonSiderealTrackingOf(afterDither.tracking)!
+			expect(afterDitherTracking.targetOffset).toBeDefined()
+			expect(afterDither.lockPosition![0] - ditherTarget[0]).toBeCloseTo(afterDitherTracking.targetOffset![0], 1)
+			expect(afterDither.lockPosition![1] - ditherTarget[1]).toBeCloseTo(afterDitherTracking.targetOffset![1], 1)
+
+			expect(harness.client.setLockShiftParams({ rate: [36000, 0], axes: 'X/Y' })).toBeTrue()
+			expect(harness.client.setLockShiftEnabled(true)).toBeTrue()
+			await feedFrame(harness)
+			const afterLockShift = frames.at(-1)!
+			const afterLockShiftTracking = nonSiderealTrackingOf(afterLockShift.tracking)!
+			const elapsed = afterLockShift.captureMonotonic! - afterDither.captureMonotonic!
+			const expectedLockShift = (36000 * elapsed) / 3600000
+			expect(afterLockShift.lockPosition![0] - afterDither.lockPosition![0]).toBeCloseTo(afterLockShiftTracking.targetOffset![0] - afterDitherTracking.targetOffset![0] + expectedLockShift, 1)
+			expect(afterLockShift.lockPosition![1] - afterDither.lockPosition![1]).toBeCloseTo(afterLockShiftTracking.targetOffset![1] - afterDitherTracking.targetOffset![1], 1)
+			expect(beforeDitherTracking.targetOffset).toBeDefined()
+
+			harness.client.stopCapture()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.each(['provider', 'transform', 'angular', 'rate'] as const)(
+		'blocks pulses and exposes a recoverable non-sidereal failure (%s)',
+		async (failure) => {
+			const clock = nonSiderealClock()
+			const frames: GuideFrameImage[] = []
+			const source = linearNonSiderealEphemeris(clock)
+			let failing = false
+			const tracker = new NonSiderealTracker(new StarTracker(), failure === 'rate' ? { maxRate: 1e-12 } : failure === 'angular' ? { geometry: { maxAngularSeparation: 1e-9 } } : {})
+			const harness = await calibrateAndGuide(
+				{
+					timeFactory: clock.timeFactory,
+					handler: { frame: (_client, frame) => frames.push(frame) },
+				},
+				undefined,
+				tracker,
+			)
+			await establishLockReference(harness)
+
+			tracker.arm(
+				{
+					position: (captureTime, out) => {
+						if (failure === 'provider' && failing) throw new Error('ephemeris unavailable')
+						if (failure === 'angular' && failing) {
+							out.rightAscension = Math.PI
+							out.declination = 0
+							return out
+						}
+						return source.position(captureTime, out)
+					},
+				},
+				{
+					offsetToImage: (eastNorth) => (failure === 'transform' && failing ? undefined : linearNonSiderealTransform.offsetToImage(eastNorth)),
+				},
+			)
+			await feedFrame(harness)
+			const pulsesBeforeFailure = harness.guideOutputManager.pulses.length
+			failing = true
+			await feedFrame(harness)
+
+			const frame = frames.at(-1)!
+			const diagnostic = nonSiderealTrackingOf(frame.tracking)!
+			const reasonByFailure = { provider: 'providerError', transform: 'invalidTransform', angular: 'angularLimit', rate: 'rateLimit' } as const
+			const reason = reasonByFailure[failure]
+			expect(diagnostic.reason).toBe(reason)
+			expect(diagnostic.state).not.toBe('active')
+			expect(frame.tracking.measurement).toBeUndefined()
+			expect(frame.tracking.targetOffset).toBeUndefined()
+			expect(harness.guideOutputManager.pulses).toHaveLength(pulsesBeforeFailure)
+
+			tracker.arm(source, linearNonSiderealTransform)
+			await feedFrame(harness)
+			expect(tracker.state).toBe('active')
+			harness.client.stopCapture()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
+		'resets the non-sidereal anchor on client transitions but preserves it during a partial pause',
+		async () => {
+			const clock = nonSiderealClock()
+			let providerCalls = 0
+			const source = linearNonSiderealEphemeris(clock)
+			const tracker = new NonSiderealTracker(new StarTracker())
+			const harness = await calibrateAndGuide({ timeFactory: clock.timeFactory }, undefined, tracker)
+			await establishLockReference(harness)
+
+			tracker.arm(
+				{
+					position: (captureTime, out) => {
+						providerCalls++
+						return source.position(captureTime, out)
+					},
+				},
+				linearNonSiderealTransform,
+			)
+			await feedFrame(harness)
+			expect(tracker.state).toBe('active')
+
+			const callsBeforePause = providerCalls
+			expect(harness.client.setPaused(true, false)).toBeTrue()
+			await feedFrame(harness)
+			expect(providerCalls).toBeGreaterThan(callsBeforePause)
+			expect(tracker.state).toBe('active')
+			expect(harness.client.setPaused(false, false)).toBeTrue()
+
+			harness.client.clearCalibration()
+			expect(tracker.state).toBe('armed')
+			expect(tracker.lastResult).toBeUndefined()
+
+			harness.client.deselectStar()
+			expect(tracker.state).toBe('armed')
+			tracker.arm(source, linearNonSiderealTransform)
+			expect(harness.client.loop()).toBeTrue()
+			expect(tracker.state).toBe('armed')
+
+			expect(harness.client.disconnect()).toBeTrue()
+			expect(tracker.state).toBe('armed')
+			expect(connect(harness)).toBeTrue()
+			expect(tracker.state).toBe('armed')
+
+			harness.client.disconnect()
+			tracker.clear()
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
