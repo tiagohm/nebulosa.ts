@@ -435,7 +435,7 @@ export class GuiderClient {
 		this.emitEvent('LockPositionSet', { X: selected.x, Y: selected.y })
 		// The explicit selection becomes the identity seed for the next frame. The current tracker
 		// result was already consumed above, so resetting here cannot cause a second detection.
-		this.#tracker.reset()
+		this.#resetNonSiderealSession()
 
 		if (this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused') {
 			this.#guider = this.#makeGuider(this.#calibration)
@@ -511,7 +511,7 @@ export class GuiderClient {
 
 		this.#calibration = undefined
 		this.#calibrator.reset()
-		this.#tracker.reset()
+		this.#resetNonSiderealSession()
 		this.#guider = this.#makeGuider(undefined)
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
@@ -546,7 +546,7 @@ export class GuiderClient {
 		this.#abortSettling('guide star deselected')
 		this.#guider.reset()
 		this.#guider.stopDither()
-		this.#tracker.reset()
+		this.#resetNonSiderealSession()
 
 		if (this.#appState !== 'Stopped') {
 			this.#resumeState = 'Looping'
@@ -872,7 +872,7 @@ export class GuiderClient {
 		this.#dither.reset()
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
-		this.#tracker.reset()
+		this.#resetNonSiderealSession()
 		this.emitEvent('SettleBegin')
 
 		if (recalibrate || this.#calibration === undefined) {
@@ -922,7 +922,7 @@ export class GuiderClient {
 		this.#dither.reset()
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
-		this.#tracker.reset()
+		this.#resetNonSiderealSession()
 		this.#guider.stopDither()
 		if (hadTargetOffset && (this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused')) {
 			const { referenceX, referenceY } = this.#guider.currentState
@@ -989,7 +989,7 @@ export class GuiderClient {
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
 		this.#avgDistanceNeedReset = true
-		this.#tracker.reset()
+		this.#resetNonSiderealSession()
 		this.emitEvent('LockPositionSet', { X: lockX, Y: lockY })
 
 		if (this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused') {
@@ -1628,6 +1628,13 @@ export class GuiderClient {
 		}
 	}
 
+	// Resets the non-sidereal temporal anchor for a new visual session and publishes the resulting
+	// armed or disabled lifecycle state.
+	#resetNonSiderealSession() {
+		this.#tracker.reset()
+		this.#emitNonSiderealState(this.#tracker.state)
+	}
+
 	// Returns true when either Sticky Lock Position or an exact lock request should preserve the reference point.
 	get #fixedLockReferenceEnabled() {
 		return this.#stickyLockPosition || this.#exactLockPosition
@@ -1826,7 +1833,7 @@ export class GuiderClient {
 		this.#lockShiftParams.units = 'pixels/hr'
 		this.#lockShiftParams.axes = 'X/Y'
 		this.#calibrator.reset()
-		this.#tracker.reset()
+		this.#resetNonSiderealSession()
 		if (clearCalibration) this.#calibration = undefined
 		this.#guider = this.#makeGuider(this.#calibration)
 	}

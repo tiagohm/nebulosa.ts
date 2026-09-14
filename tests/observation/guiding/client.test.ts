@@ -298,6 +298,7 @@ function makeHarness(options: GuiderClientOptions = {}): Harness {
 				events.push(event)
 			},
 			frame: options.handler?.frame,
+			nonSiderealState: options.handler?.nonSiderealState,
 		},
 	})
 
@@ -2848,6 +2849,35 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			expect(harness.client.loop()).toBeTrue()
 			expect(harness.client.clearNonSidereal()).toBeTrue()
 			expect(harness.client.getNonSiderealState()).toBe('disabled')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
+		'emits non-sidereal armed state again when a guiding session restarts',
+		async () => {
+			const states: string[] = []
+			const harness = await calibrateAndGuide({
+				handler: {
+					nonSiderealState: (_client, event) => states.push(event.state),
+				},
+			})
+			await establishLockReference(harness)
+			const ephemeris = {
+				position: (_time: unknown, out: { rightAscension: number; declination: number }) => out,
+			}
+			const transform = { offsetToImage: () => [0, 0] as const }
+
+			expect(harness.client.armNonSidereal(ephemeris, transform)).toBeTrue()
+			await feedFrame(harness)
+			expect(states.slice(-2)).toEqual(['armed', 'active'])
+
+			expect(harness.client.loop()).toBeTrue()
+			expect(states.at(-1)).toBe('armed')
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+			await establishLockReference(harness)
+			await feedFrame(harness)
+			expect(states.at(-1)).toBe('active')
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
