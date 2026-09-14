@@ -516,6 +516,7 @@ describe('tracking, translation, and lock acquisition', () => {
 		g.processFrame(guideFrame(shiftStars(BASE_STARS, 0.4, 0.4), 2000))
 		const cmd = g.processFrame(guideFrame(shiftStars(BASE_STARS, 0.6, 0.6), 3000))
 		expect(cmd.state).toBe('guiding')
+		expect(cmd.diagnostics.badFrame).toBeFalse()
 		const state = g.currentState
 		expect(state.referenceX).toBeCloseTo(BASE_STARS[0].x + 0.4, 6)
 		expect(state.referenceY).toBeCloseTo(BASE_STARS[0].y + 0.4, 6)

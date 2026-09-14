@@ -626,7 +626,7 @@ export class Guider {
 
 		if (this.state.lockSamples.length < this.config.lockAveragingFrames) {
 			notes.push('init_collecting')
-			this.#updateDiagnostics(frame, tracking, { measurementX: measurement.x, measurementY: measurement.y, dx, dy, axisErrorRA: 0, axisErrorDEC: 0, usedMode: tracking.measurementMode, measurementMode: tracking.measurementMode, targetX, targetY, notes }, false, true, notes)
+			this.#updateDiagnostics(frame, tracking, { measurementX: measurement.x, measurementY: measurement.y, dx, dy, axisErrorRA: 0, axisErrorDEC: 0, usedMode: tracking.measurementMode, measurementMode: tracking.measurementMode, targetX, targetY, notes }, false, false, notes)
 			return
 		}
 
