@@ -260,6 +260,18 @@ test('large jump rejection and dropped frame diagnostics', () => {
 	expect(cmd.diagnostics.droppedFrame).toBeTrue()
 })
 
+test('does not classify a long arrival delay as dropped when cadence is supplied', () => {
+	const guider = new Guider({ lockAveragingFrames: 1, nominalCadence: 1000, droppedFrameFactor: 2 })
+	const first = { ...guideFrame(BASE_STARS, 0), captureMonotonic: 10, cadence: 1000 }
+	const delayed = { ...guideFrame(BASE_STARS, 1000), captureMonotonic: 5010, cadence: 1000 }
+
+	guider.processFrame(first)
+	const command = guider.processFrame(delayed)
+
+	expect(command.diagnostics.droppedFrame).toBeFalse()
+	expect(command.diagnostics.notes).not.toContain('dropped_frame')
+})
+
 test('cadence scaling uses previous frame timestamp', () => {
 	const guider = new Guider({ lockAveragingFrames: 1, calibration: [1, 0, 0, 1], hysteresisRA: 0, hysteresisDEC: 0, minMoveRA: 0.01, minMoveDEC: 1, msPerRAUnit: 1000, nominalCadence: 1000 })
 	guider.processFrame(guideFrame(BASE_STARS, 0))

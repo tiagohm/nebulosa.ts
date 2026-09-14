@@ -671,8 +671,9 @@ export class Guider {
 		return dx * dx + dy * dy > this.config.maxFrameJumpPx * this.config.maxFrameJumpPx
 	}
 
-	// Classifies capture order and elapsed time from the monotonic clock when available. Exposure
-	// cadence remains only the exposure duration and is never interpreted as the interval between frames.
+	// Classifies capture order and elapsed time from the monotonic clock when available. A supplied
+	// cadence is the commanded exposure duration, so pulse and decode delays cannot look like a lost
+	// exposure even when the arrival-clock interval is long.
 	#classifyFrameClock(frame: GuideFrame) {
 		const monotonic = frame.captureMonotonic
 		const hasMonotonic = monotonic !== undefined && Number.isFinite(monotonic)
@@ -696,7 +697,7 @@ export class Guider {
 		if (frame.cadence !== undefined && frame.cadence > 0) this.state.lastCadence = frame.cadence
 		else if (interval !== undefined && interval > 0) this.state.lastCadence = interval
 
-		const dropped = hasMonotonic || frame.cadence === undefined ? interval !== undefined && interval > this.config.nominalCadence * this.config.droppedFrameFactor : false
+		const dropped = frame.cadence === undefined && interval !== undefined && interval > this.config.nominalCadence * this.config.droppedFrameFactor
 		return { outOfOrder: false, duplicate: false, dropped } as const
 	}
 
