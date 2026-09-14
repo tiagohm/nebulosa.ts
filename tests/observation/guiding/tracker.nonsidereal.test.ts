@@ -80,6 +80,20 @@ test('converts arcsec per pixel with explicit calibration orientation', () => {
 	expect(transform.offsetToImage([ASEC2RAD, -ASEC2RAD], instant(0), { width: 10, height: 10, timestamp: 1, frameId: 1 })).toEqual([1, -1])
 })
 
+test.each([1e-11, -1e-11, 1e-14])('computes tiny same-direction offsets of %s radians', (angle) => {
+	const anchor = { rightAscension: 0, declination: 0 }
+	const east = nonSiderealAngularOffset(anchor, { rightAscension: angle, declination: 0 })
+	const north = nonSiderealAngularOffset(anchor, { rightAscension: 0, declination: angle })
+	expect(east.east).toBeCloseTo(angle, 20)
+	expect(east.north).toBe(0)
+	expect(east.separation).toBeCloseTo(Math.abs(angle), 20)
+	expect(north.east).toBe(0)
+	expect(north.north).toBeCloseTo(angle, 20)
+	expect(north.separation).toBeCloseTo(Math.abs(angle), 20)
+	expect(nonSiderealAngularOffset(anchor, anchor)).toEqual({ east: 0, north: 0, separation: 0 })
+	expect(() => nonSiderealAngularOffset(anchor, { rightAscension: PI - 1e-8, declination: 0 }, { maxAngularSeparation: PI - 1e-9, antipodalTolerance: 1e-7 })).toThrow('no unique tangent direction')
+})
+
 describe('finite-difference derivatives', () => {
 	test('uses a centered five-point stencil for a smooth local trajectory', () => {
 		const eastRate = 1.2e-6
@@ -120,6 +134,17 @@ describe('finite-difference derivatives', () => {
 })
 
 describe('NonSiderealTracker decorator', () => {
+	test('keeps a tiny trajectory active near its anchor with an available derivative', () => {
+		const tracker = new NonSiderealTracker(baseStub(baseResult([0, 0])))
+		tracker.arm(linearEphemeris(1e-13, 0), { offsetToImage: ([east, north]) => [east * 1e6, north * 1e6] })
+		tracker.track(trackerFrame(0), guideContext(true))
+		const result = tracker.track(trackerFrame(100), guideContext(true))
+		expect(result.nonSidereal.state).toBe('active')
+		expect(result.measurement).toBeDefined()
+		expect(result.targetOffset?.[0]).toBeCloseTo(1e-5, 10)
+		expect(result.nonSidereal.rate?.[0]).toBeCloseTo(1e-13, 18)
+	})
+
 	test.each(['calibration', 'provider', 'limit'] as const)('suppresses controller pulses through lost lock after a %s fault', (failure) => {
 		const guider = new Guider({ lockAveragingFrames: 1, lostStarFrameCount: 1 })
 		const measurement = { x: 10, y: 20, confidence: 1 }

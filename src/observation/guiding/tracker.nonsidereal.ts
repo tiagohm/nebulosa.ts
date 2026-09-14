@@ -221,12 +221,9 @@ export function nonSiderealAngularOffset(anchor: EquatorialCoordinate, current: 
 	const east = [-sinRightAscension, cosRightAscension, 0] as const
 	const north = [-sinDeclination * cosRightAscension, -sinDeclination * sinRightAscension, cosDeclination] as const
 
-	if (crossMagnitude <= antipodalTolerance) {
-		if (separation === 0) return { east: 0, north: 0, separation }
-		throw new NonSiderealError('antipodal', 'non-sidereal tangent direction is numerically undefined')
-	}
+	if (separation === 0) return { east: 0, north: 0, separation }
 
-	const scale = separation / crossMagnitude
+	const scale = crossMagnitude <= antipodalTolerance ? 1 : separation / crossMagnitude
 	const tangentX = (currentVector[0] - dot * anchorVector[0]) * scale
 	const tangentY = (currentVector[1] - dot * anchorVector[1]) * scale
 	const tangentZ = (currentVector[2] - dot * anchorVector[2]) * scale
