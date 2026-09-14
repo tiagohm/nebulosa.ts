@@ -592,6 +592,7 @@ export class GuiderClient {
 		this.#calibration = flipGuidingCalibration(this.#calibration, this.options?.reverseDecOutputAfterMeridianFlip === true)
 		this.#applyCalibrationToGuider(this.#calibration)
 		this.#tracker.onCalibrationChanged()
+		this.#emitNonSiderealState(this.#tracker.state)
 		this.#syncGuideTargetOffset()
 		this.emitEvent('CalibrationDataFlipped', { Mount: this.#guideOutput?.name ?? '' })
 		this.emitEvent('ConfigurationChange')
@@ -658,6 +659,8 @@ export class GuiderClient {
 		} catch {
 			return false
 		}
+
+		this.#emitNonSiderealState(this.#tracker.state)
 
 		return true
 	}

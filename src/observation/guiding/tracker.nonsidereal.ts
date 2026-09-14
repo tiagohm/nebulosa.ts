@@ -392,10 +392,22 @@ export class NonSiderealTracker implements GuideTracker {
 		this.#state = 'disabled'
 	}
 
-	// Invalidates transform-dependent derivative diagnostics while retaining the celestial anchor.
+	// Invalidates a captured calibration transform unless its replacement is supplied, retaining the
+	// celestial anchor but failing closed so a meridian flip cannot reuse stale image signs.
 	onCalibrationChanged(transform?: NonSiderealImageTransform) {
-		if (transform !== undefined) this.#transform = transform
-		if (this.#state === 'active' || this.#state === 'rateDegraded') this.#state = 'active'
+		if (transform !== undefined) {
+			this.#transform = transform
+			if (this.#state !== 'disabled') {
+				this.#failureReason = undefined
+				this.#state = this.#anchor === undefined ? 'armed' : 'active'
+			}
+			return
+		}
+
+		if (this.#state !== 'disabled') {
+			this.#failureReason = 'invalidTransform'
+			this.#state = 'faulted'
+		}
 	}
 
 	// Delegates staged state commit to the base tracker at the exact point chosen by the guide

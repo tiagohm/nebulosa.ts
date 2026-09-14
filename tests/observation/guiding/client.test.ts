@@ -2767,7 +2767,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	)
 
 	test(
-		'non-sidereal activation anchors after lock and survives calibration flip',
+		'non-sidereal moving targets fail closed across a calibration flip until the transform is replaced',
 		async () => {
 			const harness = await calibrateAndGuide()
 			await establishLockReference(harness)
@@ -2775,11 +2775,13 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			const ephemeris = {
 				position: (_time: unknown, out: { rightAscension: number; declination: number }) => {
 					providerCalls++
+					out.rightAscension = providerCalls * 1e-6
+					out.declination = 0
 					return out
 				},
 			}
 
-			expect(harness.client.armNonSidereal(ephemeris, { offsetToImage: () => [0, 0] })).toBeTrue()
+			expect(harness.client.armNonSidereal(ephemeris, { offsetToImage: ([east, north]) => [east * 1e6, north * 1e6] })).toBeTrue()
 			expect(harness.client.getNonSiderealState()).toBe('armed')
 			await feedFrame(harness)
 			expect(providerCalls).toBeGreaterThan(0)
@@ -2787,6 +2789,8 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			expect(harness.client.clearNonSidereal()).toBeFalse()
 
 			expect(harness.client.flipCalibration()).toBeTrue()
+			expect(harness.client.getNonSiderealState()).toBe('faulted')
+			expect(harness.client.setNonSiderealTransform({ offsetToImage: ([east, north]) => [-east * 1e6, north * 1e6] })).toBeTrue()
 			await feedFrame(harness)
 			expect(harness.client.getNonSiderealState()).toBe('active')
 

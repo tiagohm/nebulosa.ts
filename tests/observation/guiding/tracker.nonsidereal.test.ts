@@ -214,6 +214,35 @@ describe('NonSiderealTracker decorator', () => {
 		expect(providerCalls).toBe(2)
 	})
 
+	test('fails closed when calibration changes without a replacement transform', () => {
+		const tracker = new NonSiderealTracker(baseStub(baseResult([0, 0])))
+		tracker.arm(
+			{
+				position: (captureTime, out) => {
+					out.rightAscension = (toJulianDay(captureTime) - J0) * DAYSEC * 1e-6
+					out.declination = 0
+					return out
+				},
+			},
+			{ offsetToImage: ([east, north]) => [east * 1e6, north * 1e6] },
+		)
+
+		const anchor = tracker.track(trackerFrame(0), guideContext(true))
+		expect(anchor.nonSidereal.state).toBe('active')
+
+		tracker.onCalibrationChanged()
+		expect(tracker.state).toBe('faulted')
+
+		const blocked = tracker.track(trackerFrame(60), guideContext(true))
+		expect(blocked.nonSidereal.reason).toBe('invalidTransform')
+		expect(blocked.targetOffset).toBeUndefined()
+
+		tracker.onCalibrationChanged({ offsetToImage: ([east, north]) => [-east * 1e6, north * 1e6] })
+		const recovered = tracker.track(trackerFrame(120), guideContext(true))
+		expect(recovered.nonSidereal.state).toBe('active')
+		expect(recovered.targetOffset?.[0]).toBeCloseTo(-120, 4)
+	})
+
 	test('keeps an absolute offset when the derivative is unavailable', () => {
 		const source: NonSiderealEphemeris = {
 			validTime: [J0, J0 + 30 / DAYSEC],
