@@ -431,6 +431,20 @@ describe('construction', () => {
 	})
 })
 
+test('non-sidereal arming is persistent, disables automatic lock shift, and clears safely', () => {
+	const harness = makeHarness()
+	const ephemeris = {
+		position: (_time: unknown, out: { rightAscension: number; declination: number }) => out,
+	}
+
+	expect(harness.client.getNonSiderealState()).toBe('disabled')
+	expect(harness.client.armNonSidereal(ephemeris, { offsetToImage: () => [0, 0] })).toBeTrue()
+	expect(harness.client.getNonSiderealState()).toBe('armed')
+	expect(harness.client.setLockShiftParams({ rate: [1, 0], axes: 'X/Y' })).toBeFalse()
+	expect(harness.client.clearNonSidereal()).toBeTrue()
+	expect(harness.client.getNonSiderealState()).toBe('disabled')
+})
+
 describe('connect / disconnect', () => {
 	test('binds devices, enables blobs and registers a handler', () => {
 		expect(connect(harness)).toBeTrue()
@@ -2748,6 +2762,37 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			expect(lock[0]).toBeCloseTo(dithered[0], 1)
 			expect(lock[1]).toBeCloseTo(dithered[1], 1)
 			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
+		'non-sidereal activation anchors after lock and survives calibration flip',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+			let providerCalls = 0
+			const ephemeris = {
+				position: (_time: unknown, out: { rightAscension: number; declination: number }) => {
+					providerCalls++
+					return out
+				},
+			}
+
+			expect(harness.client.armNonSidereal(ephemeris, { offsetToImage: () => [0, 0] })).toBeTrue()
+			expect(harness.client.getNonSiderealState()).toBe('armed')
+			await feedFrame(harness)
+			expect(providerCalls).toBeGreaterThan(0)
+			expect(harness.client.getNonSiderealState()).toBe('active')
+			expect(harness.client.clearNonSidereal()).toBeFalse()
+
+			expect(harness.client.flipCalibration()).toBeTrue()
+			await feedFrame(harness)
+			expect(harness.client.getNonSiderealState()).toBe('active')
+
+			harness.client.deselectStar()
+			expect(harness.client.clearNonSidereal()).toBeTrue()
+			expect(harness.client.getNonSiderealState()).toBe('disabled')
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)

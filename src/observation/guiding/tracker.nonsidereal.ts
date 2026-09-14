@@ -162,6 +162,13 @@ export interface NonSiderealTrackerResult extends GuideTrackerResult {
 	readonly nonSidereal: NonSiderealTrackerDiagnostic
 }
 
+// Returns the structured non-sidereal diagnostic carried by a decorated result, or undefined for a
+// plain tracker result. The check is structural so custom clients need not depend on the class.
+export function nonSiderealTrackingOf(result: GuideTrackerResult | undefined): NonSiderealTrackerDiagnostic | undefined {
+	if (result === undefined || !('nonSidereal' in result)) return undefined
+	return (result as NonSiderealTrackerResult).nonSidereal
+}
+
 // Runtime configuration for the persistent non-sidereal decorator. All angular limits are radians.
 export interface NonSiderealTrackerOptions {
 	// Geometry limits applied to the absolute anchor-to-current offset.
@@ -404,7 +411,8 @@ export class NonSiderealTracker implements GuideTracker {
 	}
 
 	// Invalidates transform-dependent derivative diagnostics while retaining the celestial anchor.
-	onCalibrationChanged() {
+	onCalibrationChanged(transform?: NonSiderealImageTransform) {
+		if (transform !== undefined) this.#transform = transform
 		if (this.#state === 'active' || this.#state === 'rateDegraded') this.#state = 'active'
 	}
 
@@ -418,8 +426,10 @@ export class NonSiderealTracker implements GuideTracker {
 	// guided lock. Calibration, acquisition, and lost-lock frames remain free of ephemeris calls.
 	track(frame: GuideTrackerFrame, context: GuideTrackerContext): NonSiderealTrackerResult {
 		const baseResult = this.baseTracker.track(frame, context)
-		if (this.#ephemeris === undefined || this.#transform === undefined) return this.#publish(this.#result(baseResult, { state: 'disabled', frameId: frame.frameId }))
-		if (context.phase !== 'guiding' || context.lockEstablished !== true) return this.#publish(this.#result(baseResult, { state: this.#state, frameId: frame.frameId }))
+		// Keep the disabled and pre-lock paths observationally transparent: existing clients may
+		// retain the exact base result object for overlays and telemetry.
+		if (this.#ephemeris === undefined || this.#transform === undefined) return baseResult as NonSiderealTrackerResult
+		if (context.phase !== 'guiding' || context.lockEstablished !== true) return baseResult as NonSiderealTrackerResult
 
 		if (frame.captureTime === undefined) return this.#failure(baseResult, frame, 'invalidTime', 'non-sidereal guiding requires an astronomical capture time')
 		let julianDay: number

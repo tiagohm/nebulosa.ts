@@ -1,3 +1,4 @@
+import type { EquatorialCoordinate } from '../../astronomy/coordinates/coordinate'
 import { pixelScale } from '../../astronomy/formulas'
 import { timeUnix, type Time } from '../../astronomy/time/time'
 import type { PartialOnly, Writable } from '../../core/types'
@@ -17,6 +18,7 @@ import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalib
 import { DitherGenerator, type DitherMode } from './dither'
 import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, Guider } from './guider'
 import type { GuideFrame, GuideTracker, GuideTrackerResult } from './tracker'
+import { baseTrackerOf, nonSiderealTrackingOf, NonSiderealTracker, type NonSiderealEphemeris, type NonSiderealImageTransform, type NonSiderealState, type NonSiderealTrackerDiagnostic, type NonSiderealTrackerOptions } from './tracker.nonsidereal'
 import { StarTracker, starTrackingOf, type GuideStar, type StarTrackerConfigOverrides } from './tracker.star'
 
 // Local autoguiding orchestrator exposing a PHD2-compatible API over INDI camera and guide-output
@@ -166,6 +168,8 @@ export interface GuiderClientOptions {
 	readonly ditherMode?: DitherMode
 	// Optional synchronous tracker implementation. When provided, trackerConfig is ignored.
 	readonly tracker?: GuideTracker
+	// Optional configuration for the persistent non-sidereal decorator around the selected tracker.
+	readonly nonSiderealTracker?: NonSiderealTrackerOptions
 	// Converts a Unix capture timestamp in milliseconds into the caller's astronomical Time model.
 	// The returned value is used for ephemeris evaluation and may carry custom providers/location.
 	readonly timeFactory?: (timestampMillis: number) => Time
@@ -193,6 +197,16 @@ export interface GuiderClientHandler {
 	// PHD2 events for that frame were emitted. Not called when the BLOB fails to decode. Exceptions
 	// thrown here are caught and logged so a failing UI cannot break the exposure loop.
 	readonly frame?: (client: GuiderClient, frame: GuideFrameImage) => void
+	// Invoked once per non-sidereal state transition with a current-frame diagnostic snapshot.
+	readonly nonSiderealState?: (client: GuiderClient, event: NonSiderealStateEvent) => void
+}
+
+// Local non-sidereal lifecycle event kept separate from the narrow PHD2 event union.
+export interface NonSiderealStateEvent {
+	// State after arming, tracking, degradation, failure, limit, or clearing.
+	readonly state: NonSiderealState | 'cleared'
+	// Current-frame diagnostic, when a frame caused the transition.
+	readonly diagnostic?: NonSiderealTrackerDiagnostic
 }
 
 // GuiderClient adapts local INDI camera/guide-output devices to a PHD2-like API.
@@ -202,7 +216,8 @@ export class GuiderClient {
 	#guideOutput?: GuideOutput
 	#id?: string
 	readonly #calibrator: GuidingCalibrator
-	readonly #tracker: GuideTracker
+	readonly #tracker: NonSiderealTracker
+	#lastNonSiderealState: NonSiderealState | 'cleared' = 'disabled'
 	#calibration?: GuidingCalibrationResult
 	#frame?: GuideFrame
 	#image?: Image
@@ -284,6 +299,7 @@ export class GuiderClient {
 	readonly #lockShiftParams = { ...DEFAULT_LOCK_SHIFT_PARAMS }
 	readonly #eventHandler?: GuiderClientHandler['event']
 	readonly #frameHandler?: GuiderClientHandler['frame']
+	readonly #nonSiderealStateHandler?: GuiderClientHandler['nonSiderealState']
 
 	readonly #cameraHandler: DeviceHandler<Camera> = {
 		// Ignores manager-level add callbacks because connect binds one camera explicitly.
@@ -312,13 +328,15 @@ export class GuiderClient {
 		readonly options?: GuiderClientOptions,
 	) {
 		this.#calibrator = new GuidingCalibrator(options?.calibrator)
-		this.#tracker = options?.tracker ?? new StarTracker(options?.trackerConfig)
+		const baseTracker = options?.tracker ?? new StarTracker(options?.trackerConfig)
+		this.#tracker = baseTracker instanceof NonSiderealTracker ? baseTracker : new NonSiderealTracker(baseTracker, options?.nonSiderealTracker)
 		this.#guider = this.#makeGuider(undefined)
 		this.#searchRegion = clamp(options?.searchRegion || DEFAULT_SEARCH_REGION, 16, 128)
 		this.#stickyLockPosition = options?.stickyLockPosition === true
 		this.#dither = new DitherGenerator({ mode: options?.ditherMode })
 		this.#eventHandler = options?.handler?.event
 		this.#frameHandler = options?.handler?.frame
+		this.#nonSiderealStateHandler = options?.handler?.nonSiderealState
 	}
 
 	get camera() {
@@ -573,6 +591,7 @@ export class GuiderClient {
 
 		this.#calibration = flipGuidingCalibration(this.#calibration, this.options?.reverseDecOutputAfterMeridianFlip === true)
 		this.#applyCalibrationToGuider(this.#calibration)
+		this.#tracker.onCalibrationChanged()
 		this.#syncGuideTargetOffset()
 		this.emitEvent('CalibrationDataFlipped', { Mount: this.#guideOutput?.name ?? '' })
 		this.emitEvent('ConfigurationChange')
@@ -588,6 +607,72 @@ export class GuiderClient {
 	// Returns whether a valid calibration has been solved.
 	getCalibrated() {
 		return this.#calibration !== undefined
+	}
+
+	// Arms the persistent local non-sidereal source. The first established visual lock becomes its
+	// anchor; enabling it during an existing guide lock therefore starts with a zero offset frame.
+	armNonSidereal(ephemeris: NonSiderealEphemeris, transform: NonSiderealImageTransform) {
+		try {
+			this.#tracker.arm(ephemeris, transform)
+		} catch {
+			return false
+		}
+
+		if (this.#lockShiftParams.enabled) {
+			this.#lockShiftParams.enabled = false
+			this.#lockShiftOffsetX = 0
+			this.#lockShiftOffsetY = 0
+			this.#lockShiftTimestamp = 0
+			this.#lockShiftLimitReached = false
+			this.#syncGuideTargetOffset()
+			this.emitEvent('GuideParamChange', { Name: 'LockShiftEnabled', Value: false })
+			this.emitEvent('ConfigurationChange')
+		}
+
+		this.#emitNonSiderealState(this.#tracker.state)
+		this.emitEvent('ConfigurationChange')
+		return true
+	}
+
+	// Reanchors an armed source at an explicit astronomical instant without replacing its provider or
+	// transform. This is the explicit recovery operation after a continuity or validity fault.
+	reanchorNonSidereal(time: Time, position?: EquatorialCoordinate) {
+		try {
+			this.#tracker.reanchor(time, position)
+		} catch {
+			return false
+		}
+		this.#emitNonSiderealState(this.#tracker.state)
+		return true
+	}
+
+	// Replaces only the image transform after calibration or WCS changes, preserving the celestial
+	// anchor and accumulated angular trajectory.
+	setNonSiderealTransform(transform: NonSiderealImageTransform) {
+		if (this.#tracker.state === 'disabled') return false
+		try {
+			this.#tracker.onCalibrationChanged(transform)
+		} catch {
+			return false
+		}
+		return true
+	}
+
+	// Clears non-sidereal tracking only outside an active guiding session, preventing a silent target
+	// jump. A stopped, looping, or merely selected session can clear the source immediately.
+	clearNonSidereal() {
+		const guidingSession = this.#appState === 'Guiding' || this.#appState === 'LostLock' || (this.#appState === 'Paused' && this.#resumeState === 'Guiding')
+		if (guidingSession || this.#guider.currentState.state === 'guiding' || this.#guider.currentState.state === 'lost') return false
+		this.#tracker.clear()
+		this.#emitNonSiderealState('cleared')
+		this.#lastNonSiderealState = 'disabled'
+		this.emitEvent('ConfigurationChange')
+		return true
+	}
+
+	// Returns the current non-sidereal lifecycle state without exposing provider internals.
+	getNonSiderealState() {
+		return this.#tracker.state
 	}
 
 	// Returns a PHD2-shaped snapshot of the current calibration solution.
@@ -637,10 +722,11 @@ export class GuiderClient {
 
 		const imageScale = this.getPixelScale()
 		const exposure = this.getExposure()
+		const baseTracker = baseTrackerOf(this.#tracker)
 		const assistant = new GuidingAssistant({
 			imageScale: imageScale > 0 ? imageScale : undefined,
 			exposure: exposure > 0 && Number.isFinite(exposure) ? exposure / 1000 : undefined,
-			multiStar: this.#tracker instanceof StarTracker && this.#tracker.config.mode === 'multiStar',
+			multiStar: baseTracker instanceof StarTracker && baseTracker.config.mode === 'multiStar',
 			suspectCalibration: this.#calibration === undefined,
 			decPositiveDirection: this.#calibration?.dec.direction ?? 'NORTH',
 			raRatePxPerMs: this.#calibration?.ra.ratePxPerMs,
@@ -779,11 +865,11 @@ export class GuiderClient {
 		this.#dither.reset()
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
+		this.#tracker.reset()
 		this.emitEvent('SettleBegin')
 
 		if (recalibrate || this.#calibration === undefined) {
 			if (recalibrate) this.#calibration = undefined
-			this.#tracker.reset()
 			this.#calibrator.reset()
 			this.emitEvent('StartCalibration', { Mount: this.#guideOutput.name })
 			this.#setAppState('Calibrating')
@@ -829,6 +915,7 @@ export class GuiderClient {
 		this.#dither.reset()
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
+		this.#tracker.reset()
 		this.#guider.stopDither()
 		if (hadTargetOffset && (this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused')) {
 			const { referenceX, referenceY } = this.#guider.currentState
@@ -938,6 +1025,7 @@ export class GuiderClient {
 
 	// Enables or disables drift compensation by moving the guide target at the configured lock-shift rate.
 	setLockShiftEnabled(enabled: boolean) {
+		if (enabled && this.#tracker.state !== 'disabled') return false
 		if (enabled && this.#lockShiftParams.units === 'arcsec/hr' && this.getPixelScale() <= 0) {
 			return false
 		}
@@ -954,6 +1042,7 @@ export class GuiderClient {
 	// Stores the lock-shift drift rate used to incrementally move the guider target between frames.
 	setLockShiftParams(params: PartialOnly<Omit<Writable<PHD2LockShiftParams>, 'enabled'>, 'units'>) {
 		const { rate, axes } = params
+		if (this.#tracker.state !== 'disabled' && params.rate !== undefined && (params.rate[0] !== 0 || params.rate[1] !== 0)) return false
 
 		// Reject non-finite drift rates so they cannot accumulate NaN into the lock position and
 		// leak into getLockPosition or the emitted lock-shift events.
@@ -1129,6 +1218,8 @@ export class GuiderClient {
 			preserveIdentity: lockSearchPosition !== undefined || appState === 'Guiding' || appState === 'LostLock' || this.#guidingAssistant !== undefined,
 			lockEstablished: this.#guider.currentState.state === 'guiding',
 		})
+		const nonSidereal = nonSiderealTrackingOf(tracking)
+		this.#emitNonSiderealState(nonSidereal?.state, nonSidereal)
 
 		return {
 			tracking,
@@ -1512,6 +1603,18 @@ export class GuiderClient {
 		if (x !== undefined && y !== undefined) {
 			this.#lockSearchPosition = [x, y] as const
 			if (!this.#fixedLockReferenceEnabled) this.#lockPosition = this.#lockSearchPosition
+		}
+	}
+
+	// Emits non-sidereal lifecycle telemetry only on state transitions; frame-rate diagnostics remain
+	// attached to GuideFrame and are not flooded through the control callback.
+	#emitNonSiderealState(state: NonSiderealState | 'cleared' | undefined, diagnostic?: NonSiderealTrackerDiagnostic) {
+		if (state === undefined || this.#lastNonSiderealState === state) return
+		this.#lastNonSiderealState = state
+		try {
+			this.#nonSiderealStateHandler?.(this, { state, diagnostic })
+		} catch (error) {
+			console.error('non-sidereal state handler failed:', error)
 		}
 	}
 
