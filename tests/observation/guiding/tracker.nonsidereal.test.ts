@@ -183,8 +183,39 @@ describe('NonSiderealTracker decorator', () => {
 			expect(command.tracking.measurement).toBeUndefined()
 		}
 		providerFailed = false
+		if (failure === 'calibration') tracker.onCalibrationChanged({ offsetToImage: () => [0, 0] })
 		tracker.reanchor(instant(5))
 		expect(process(6).state).toBe('guiding')
+	})
+
+	test.each(['reset', 'reanchor'] as const)('preserves calibration invalidation after %s until a replacement is supplied', (transition) => {
+		let staleTransformCalls = 0
+		const tracker = new NonSiderealTracker(baseStub(baseResult([0, 0])))
+		tracker.arm(linearEphemeris(1e-6, 0), {
+			offsetToImage: ([east, north]) => {
+				staleTransformCalls++
+				return [east * 1e6, north * 1e6]
+			},
+		})
+		tracker.track(trackerFrame(0), guideContext(true))
+		tracker.onCalibrationChanged()
+		if (transition === 'reset') tracker.reset()
+		else tracker.reanchor(instant(10))
+		expect(tracker.state).toBe('faulted')
+		for (const context of [guideContext(false), guideContext(true), { ...guideContext(false), phase: 'lostLock' as const }]) {
+			const blocked = tracker.track(trackerFrame(20), context)
+			expect(blocked.measurement).toBeUndefined()
+			expect(blocked.targetOffset).toBeUndefined()
+			expect(blocked.nonSidereal.reason).toBe('invalidTransform')
+		}
+		expect(staleTransformCalls).toBe(0)
+		tracker.onCalibrationChanged({ offsetToImage: ([east, north]) => [-east * 1e6, north * 1e6] })
+		tracker.track(trackerFrame(30), guideContext(true))
+		const recovered = tracker.track(trackerFrame(40), guideContext(true))
+		expect(recovered.nonSidereal.state).toBe('active')
+		expect(recovered.measurement).toBeDefined()
+		expect(recovered.targetOffset?.[0]).toBeCloseTo(transition === 'reset' ? -10 : -30, 4)
+		expect(staleTransformCalls).toBe(0)
 	})
 
 	test('retains the celestial anchor and offset while reacquiring a lost lock', () => {

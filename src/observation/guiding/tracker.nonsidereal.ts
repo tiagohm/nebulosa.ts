@@ -327,6 +327,8 @@ export function nonSiderealEphemerisFromInterpolator(interpolator: EphemerisInte
 export class NonSiderealTracker implements GuideTracker {
 	#ephemeris?: NonSiderealEphemeris
 	#transform?: NonSiderealImageTransform
+	// Calibration validity survives temporal resets and changes only with explicit configuration.
+	#transformInvalidated = false
 	#anchor?: { readonly time: Time; readonly position: EquatorialCoordinate }
 	#lastCapture?: { readonly julianDay: number; readonly monotonic?: number }
 	#failureReason?: NonSiderealFailureCode | 'rateUnavailable'
@@ -354,6 +356,7 @@ export class NonSiderealTracker implements GuideTracker {
 	arm(ephemeris: NonSiderealEphemeris, transform: NonSiderealImageTransform) {
 		this.#ephemeris = ephemeris
 		this.#transform = transform
+		this.#transformInvalidated = false
 		this.#anchor = undefined
 		this.#lastCapture = undefined
 		this.#failureReason = undefined
@@ -363,31 +366,34 @@ export class NonSiderealTracker implements GuideTracker {
 
 	// Captures a fresh celestial anchor while preserving the configured source and transform. The
 	// optional position avoids a second provider call when the caller already owns a valid sample.
+	// An invalidated calibration remains faulted until a replacement transform is supplied.
 	reanchor(time: Time, position?: EquatorialCoordinate) {
 		if (this.#ephemeris === undefined || this.#transform === undefined) throw new NonSiderealError('providerError', 'non-sidereal tracker is not armed')
 		const snapshot = position === undefined ? this.#positionAt(time) : { ...position }
 		const julianDay = this.#julianDayOf(time)
 		this.#anchor = { time, position: snapshot }
 		this.#lastCapture = { julianDay }
-		this.#failureReason = undefined
-		this.#state = 'active'
+		this.#failureReason = this.#transformInvalidated ? 'invalidTransform' : undefined
+		this.#state = this.#transformInvalidated ? 'faulted' : 'active'
 	}
 
 	// Clears temporal state and the base tracker while preserving a configured source for the next
-	// visual lock. An armed source returns to armed; an unconfigured source returns to disabled.
+	// visual lock. An invalidated calibration remains faulted; otherwise a configured source returns
+	// to armed and an unconfigured source returns to disabled.
 	reset() {
 		this.baseTracker.reset()
 		this.#anchor = undefined
 		this.#lastCapture = undefined
-		this.#failureReason = undefined
+		this.#failureReason = this.#transformInvalidated ? 'invalidTransform' : undefined
 		this.#lastResult = undefined
-		this.#state = this.#ephemeris === undefined || this.#transform === undefined ? 'disabled' : 'armed'
+		this.#state = this.#transformInvalidated ? 'faulted' : this.#ephemeris === undefined || this.#transform === undefined ? 'disabled' : 'armed'
 	}
 
 	// Disables non-sidereal control and removes its source, transform, anchor, and diagnostics.
 	clear() {
 		this.#ephemeris = undefined
 		this.#transform = undefined
+		this.#transformInvalidated = false
 		this.#anchor = undefined
 		this.#lastCapture = undefined
 		this.#failureReason = undefined
@@ -400,6 +406,7 @@ export class NonSiderealTracker implements GuideTracker {
 	onCalibrationChanged(transform?: NonSiderealImageTransform) {
 		if (transform !== undefined) {
 			this.#transform = transform
+			this.#transformInvalidated = false
 			if (this.#state !== 'disabled') {
 				this.#failureReason = undefined
 				this.#state = this.#anchor === undefined ? 'armed' : 'active'
@@ -408,6 +415,7 @@ export class NonSiderealTracker implements GuideTracker {
 		}
 
 		if (this.#state !== 'disabled') {
+			this.#transformInvalidated = true
 			this.#failureReason = 'invalidTransform'
 			this.#state = 'faulted'
 		}
