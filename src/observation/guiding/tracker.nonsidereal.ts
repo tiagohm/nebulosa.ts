@@ -1,6 +1,6 @@
 import type { EquatorialCoordinate } from '../../astronomy/coordinates/coordinate'
 import type { EphemerisInterpolator } from '../../astronomy/ephemeris/interpolation/ephemeris'
-import { Timescale, timeConvert, timeShift, toJulianDay, tt, type Time } from '../../astronomy/time/time'
+import { timeShift, toJulianDay, tt, type Time } from '../../astronomy/time/time'
 import { DAYSEC, PI, ASEC2RAD } from '../../core/constants'
 import { normalizeAngle, type Angle } from '../../math/units/angle'
 import type { GuideTracker, GuideTrackerContext, GuideTrackerFrame, GuideTrackerResult } from './tracker'
@@ -262,14 +262,12 @@ export function calibratedNonSiderealTransform(options: CalibratedNonSiderealTra
 export class InterpolatedNonSiderealEphemeris implements NonSiderealEphemeris {
 	#interpolator: EphemerisInterpolator
 	#generation = 0
-	#validTime: readonly [number, number]
 
 	readonly position: NonSiderealEphemeris['position']
 
 	// Creates an adapter around a local interpolation table and captures its inclusive TT bounds.
 	constructor(interpolator: EphemerisInterpolator) {
 		this.#interpolator = interpolator
-		this.#validTime = [interpolator.startTime, interpolator.endTime]
 
 		const scratch: [number, number] = [0, 0]
 
@@ -277,7 +275,7 @@ export class InterpolatedNonSiderealEphemeris implements NonSiderealEphemeris {
 			time = tt(time)
 
 			const julianDay = toJulianDay(time)
-			if (julianDay < this.#validTime[0] || julianDay > this.#validTime[1]) throw new NonSiderealError('outsideValidity', 'ephemeris time is outside the inclusive interpolation window')
+			if (julianDay < interpolator.startTime || julianDay > interpolator.endTime) throw new NonSiderealError('outsideValidity', 'ephemeris time is outside the inclusive interpolation window')
 
 			try {
 				this.#interpolator.computeInto(time, scratch)
@@ -295,7 +293,7 @@ export class InterpolatedNonSiderealEphemeris implements NonSiderealEphemeris {
 
 	// Returns the inclusive Julian-date validity interval in TT.
 	get validTime() {
-		return this.#validTime
+		return [this.#interpolator.startTime, this.#interpolator.endTime] as const
 	}
 
 	// Current adapter generation; update() increments it so consumers can invalidate local caches.
@@ -306,7 +304,6 @@ export class InterpolatedNonSiderealEphemeris implements NonSiderealEphemeris {
 	// Replaces the local interpolator and validity window without exposing a stale cached table.
 	update(interpolator: EphemerisInterpolator) {
 		this.#interpolator = interpolator
-		this.#validTime = [interpolator.startTime, interpolator.endTime]
 		this.#generation++
 	}
 }
@@ -582,7 +579,7 @@ export class NonSiderealTracker implements GuideTracker {
 
 	// Converts a capture instant to finite JD TT for frame ordering and derivative-window checks.
 	#julianDayOf(time: Time) {
-		const julianDay = toJulianDay(timeConvert(time, Timescale.TT))
+		const julianDay = toJulianDay(tt(time))
 		if (!Number.isFinite(julianDay)) throw new NonSiderealError('invalidTime', 'non-sidereal time is not finite')
 		return julianDay
 	}
@@ -617,7 +614,7 @@ export function estimateNonSiderealDerivative(ephemeris: NonSiderealEphemeris, t
 	}
 
 	const valid = ephemeris.validTime
-	const centerDay = toJulianDay(timeConvert(time, Timescale.TT))
+	const centerDay = toJulianDay(tt(time))
 	const h = stepSeconds / DAYSEC
 
 	const canSample = (offset: number) => valid === undefined || (centerDay + offset >= valid[0] && centerDay + offset <= valid[1])
