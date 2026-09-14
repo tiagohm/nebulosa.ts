@@ -1,4 +1,5 @@
 import { pixelScale } from '../../astronomy/formulas'
+import { timeUnix, type Time } from '../../astronomy/time/time'
 import type { PartialOnly, Writable } from '../../core/types'
 import { errorMessage } from '../../core/util'
 import { DEFAULT_PHD2_SETTLE, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2EventType, type PHD2GuideDirection, type PHD2GuideStepEvent, type PHD2LockShiftParams, type PHD2Settle, type PHD2StarImage } from '../../devices/guiding/phd2'
@@ -119,6 +120,10 @@ export interface GuideFrameImage {
 	// Frame timestamp in milliseconds since the Unix epoch, shared with the GuideFrame given to the
 	// calibrator/guider.
 	readonly timestamp: number
+	// Astronomical capture instant used by local ephemeris consumers.
+	readonly captureTime?: Time
+	// Monotonic capture instant used for ordering and elapsed-time decisions.
+	readonly captureMonotonic?: number
 	// PHD2 application state after this frame was processed, useful to color or label the view.
 	readonly state: PHD2AppState
 	// Decoded guide image. Pixel data lives in `image.raw`; dimensions and channel layout are in
@@ -161,6 +166,9 @@ export interface GuiderClientOptions {
 	readonly ditherMode?: DitherMode
 	// Optional synchronous tracker implementation. When provided, trackerConfig is ignored.
 	readonly tracker?: GuideTracker
+	// Converts a Unix capture timestamp in milliseconds into the caller's astronomical Time model.
+	// The returned value is used for ephemeris evaluation and may carry custom providers/location.
+	readonly timeFactory?: (timestampMillis: number) => Time
 	// Partial configuration for the default StarTracker.
 	readonly trackerConfig?: StarTrackerConfigOverrides
 	// Overrides for the calibration state machine, merged over DEFAULT_GUIDING_CALIBRATOR_CONFIG. Pulse
@@ -235,6 +243,10 @@ export class GuiderClient {
 	// change `#exposure` while a BLOB is still in flight; the arriving frame must keep the cadence
 	// that actually produced its pixels so gain scaling and dropped-frame checks stay consistent.
 	#inFlightExposure = DEFAULT_GUIDER_EXPOSURE
+	#exposureStartedAt = 0
+	#exposureStartedMonotonic = 0
+	#hasExposureStart = false
+	#lastAcceptedCaptureMonotonic?: number
 	// Constructed after #exposure: #makeGuider reads the cadence so the uncalibrated guider matches
 	// the default loop instead of Guider's own 1000 ms default (which happens to be the same today).
 	#guider: Guider
@@ -450,6 +462,10 @@ export class GuiderClient {
 		this.#emitCaptureStoppedEvent()
 		this.#blobAdmission = 'accept'
 		this.#awaitingBlob = false
+		this.#hasExposureStart = false
+		this.#exposureStartedAt = 0
+		this.#exposureStartedMonotonic = 0
+		this.#lastAcceptedCaptureMonotonic = undefined
 		this.#clearExposureWatchdog()
 
 		if (this.#camera !== undefined) {
@@ -927,7 +943,7 @@ export class GuiderClient {
 		}
 
 		this.#lockShiftParams.enabled = enabled
-		this.#lockShiftTimestamp = enabled ? (this.#frame?.timestamp ?? 0) : 0
+		this.#lockShiftTimestamp = enabled ? (this.#frame?.captureMonotonic ?? this.#frame?.timestamp ?? 0) : 0
 		this.#lockShiftLimitReached = false
 		this.emitEvent('GuideParamChange', { Name: 'LockShiftEnabled', Value: enabled })
 		this.emitEvent('ConfigurationChange')
@@ -954,7 +970,7 @@ export class GuiderClient {
 		if (rate !== undefined) this.#lockShiftParams.rate = rate
 		if (axes !== undefined) this.#lockShiftParams.axes = axes
 		this.#lockShiftParams.units = units
-		this.#lockShiftTimestamp = this.#frame?.timestamp ?? 0
+		this.#lockShiftTimestamp = this.#frame?.captureMonotonic ?? this.#frame?.timestamp ?? 0
 		this.#lockShiftLimitReached = false
 		this.emitEvent('GuideParamChange', { Name: 'LockShiftParams', Value: this.getLockShiftParams() })
 		this.emitEvent('ConfigurationChange')
@@ -1055,6 +1071,7 @@ export class GuiderClient {
 			this.#image = image
 
 			const frame = this.#makeGuideFrame(image)
+			if (frame === undefined) return
 			this.#frame = frame
 
 			try {
@@ -1085,13 +1102,23 @@ export class GuiderClient {
 	}
 
 	// Converts a decoded image into a guide frame and executes exactly one tracker pass.
-	#makeGuideFrame(image?: Image): GuideFrame {
+	#makeGuideFrame(image?: Image): GuideFrame | undefined {
 		const lockSearchPosition = this.#lockSearchPosition ?? this.#lockPosition
 		const appState = this.#appState === 'Paused' && !this.#fullPause ? this.#resumeState : this.#appState
 		const phase = this.#guidingAssistant !== undefined ? 'assistant' : appState === 'Calibrating' ? 'calibrating' : appState === 'Guiding' ? 'guiding' : appState === 'LostLock' ? 'lostLock' : appState === 'Selected' ? 'selected' : 'looping'
 		const width = image?.metadata.width ?? this.#camera?.frame.width.value ?? 0
 		const height = image?.metadata.height ?? this.#camera?.frame.height.value ?? 0
-		const trackerFrame = { image, width, height, timestamp: Date.now(), frameId: ++this.#frameId, cadence: this.#inFlightExposure } as const
+		const fallbackTimestamp = Date.now()
+		const fallbackMonotonic = performance.now()
+		const timestamp = this.#hasExposureStart ? this.#exposureStartedAt + this.#inFlightExposure / 2 : fallbackTimestamp
+		// The monotonic clock is sampled when the BLOB is admitted. It is the operational fallback when
+		// the camera does not provide a capture clock; the astronomical `captureTime` above still uses
+		// the exposure midpoint.
+		const captureMonotonic = fallbackMonotonic
+		if (this.#lastAcceptedCaptureMonotonic !== undefined && captureMonotonic <= this.#lastAcceptedCaptureMonotonic) return undefined
+		this.#lastAcceptedCaptureMonotonic = captureMonotonic
+		const captureTime = this.options?.timeFactory?.(timestamp) ?? timeUnix(timestamp / 1000)
+		const trackerFrame = { image, width, height, timestamp, captureTime, captureMonotonic, frameId: ++this.#frameId, cadence: this.#inFlightExposure } as const
 		const tracking = this.#tracker.track(trackerFrame, {
 			phase,
 			maxMeasurementJumpPx: this.#calibrator.config.maxFrameJumpPx,
@@ -1100,6 +1127,7 @@ export class GuiderClient {
 			initialPosition: this.#lockSearchPosition,
 			allowAcquisition: appState !== 'Stopped' && !(appState === 'Paused' && this.#fullPause),
 			preserveIdentity: lockSearchPosition !== undefined || appState === 'Guiding' || appState === 'LostLock' || this.#guidingAssistant !== undefined,
+			lockEstablished: this.#guider.currentState.state === 'guiding',
 		})
 
 		return {
@@ -1109,6 +1137,8 @@ export class GuiderClient {
 			timestamp: trackerFrame.timestamp,
 			frameId: trackerFrame.frameId,
 			cadence: this.#inFlightExposure,
+			captureTime: trackerFrame.captureTime,
+			captureMonotonic: trackerFrame.captureMonotonic,
 		}
 	}
 
@@ -1123,6 +1153,8 @@ export class GuiderClient {
 			this.#frameHandler(this, {
 				frameId: frame.frameId ?? 0,
 				timestamp: frame.timestamp ?? Date.now(),
+				captureTime: frame.captureTime,
+				captureMonotonic: frame.captureMonotonic,
 				state: this.#appState,
 				image,
 				tracking: frame.tracking,
@@ -1198,6 +1230,7 @@ export class GuiderClient {
 		// Retained for #emitFrameImage, which runs after this frame has been fully processed.
 		this.#acceptedStars = starTrackingOf(command.tracking)?.accepted
 		const timestamp = frame.timestamp ?? Date.now()
+		const captureMonotonic = frame.captureMonotonic
 
 		this.#updateLockPositionFromGuider(command.diagnostics.targetX, command.diagnostics.targetY)
 		this.#updateLockSearchPositionFromGuider(command.diagnostics.measurementX, command.diagnostics.measurementY)
@@ -1210,7 +1243,7 @@ export class GuiderClient {
 			if (this.#resumeState !== 'LostLock') this.emitEvent('LockPositionLost')
 			this.#resumeState = 'LostLock'
 			if (!this.#paused) this.#setAppState('LostLock')
-			this.#updateSettling(undefined, undefined, true, true, timestamp)
+			this.#updateSettling(undefined, undefined, true, true, timestamp, captureMonotonic)
 			if (this.#guidingAssistant !== undefined) this.#finishGuidingAssistant(false, 'guide star lost')
 			return 0
 		}
@@ -1221,7 +1254,7 @@ export class GuiderClient {
 		this.#resumeState = 'Guiding'
 		if (!this.#paused) this.#setAppState('Guiding')
 
-		this.#updateSettling(command.diagnostics.dx, command.diagnostics.dy, command.diagnostics.badFrame, command.diagnostics.lost, timestamp)
+		this.#updateSettling(command.diagnostics.dx, command.diagnostics.dy, command.diagnostics.badFrame, command.diagnostics.lost, timestamp, captureMonotonic)
 		this.#updateLockShift(frame)
 
 		if (assistantDelay !== undefined) return assistantDelay
@@ -1319,11 +1352,12 @@ export class GuiderClient {
 	}
 
 	// Updates settle state from current guide error and elapsed settle timing.
-	#updateSettling(dx: number | undefined, dy: number | undefined, badFrame: boolean, lost: boolean, timestamp: number) {
+	#updateSettling(dx: number | undefined, dy: number | undefined, badFrame: boolean, lost: boolean, timestamp: number, captureMonotonic?: number) {
 		if (!this.#settling || this.#paused) return
+		const clock = captureMonotonic ?? timestamp
 
 		if (this.#settleStartTime === 0) {
-			this.#settleStartTime = timestamp
+			this.#settleStartTime = clock
 			this.#settleStableSince = 0
 			this.#settleFrameCount = 0
 			this.#settleDroppedFrameCount = 0
@@ -1331,7 +1365,7 @@ export class GuiderClient {
 
 		this.#settleFrameCount++
 
-		if (this.#settle.timeout > 0 && timestamp - this.#settleStartTime >= this.#settle.timeout * 1000) {
+		if (this.#settle.timeout > 0 && clock - this.#settleStartTime >= this.#settle.timeout * 1000) {
 			this.#settling = false
 			this.#emitSettleDoneEvent(1, 'settle timeout')
 			return
@@ -1340,7 +1374,7 @@ export class GuiderClient {
 		if (badFrame || lost || dx === undefined || dy === undefined) {
 			this.#settleStableSince = 0
 			this.#settleDroppedFrameCount++
-			this.#emitSettlingEvent(0, timestamp, false)
+			this.#emitSettlingEvent(0, timestamp, false, clock)
 			return
 		}
 
@@ -1348,13 +1382,13 @@ export class GuiderClient {
 
 		if (distance > this.#settle.pixels) {
 			this.#settleStableSince = 0
-			this.#emitSettlingEvent(distance, timestamp, true)
+			this.#emitSettlingEvent(distance, timestamp, true, clock)
 			return
 		}
 
 		if (this.#settleStableSince === 0) {
-			this.#settleStableSince = timestamp
-			this.#emitSettlingEvent(distance, timestamp, true)
+			this.#settleStableSince = clock
+			this.#emitSettlingEvent(distance, timestamp, true, clock)
 
 			if (this.#settle.time <= 0) {
 				this.#settling = false
@@ -1364,13 +1398,13 @@ export class GuiderClient {
 			return
 		}
 
-		if (timestamp - this.#settleStableSince >= this.#settle.time * 1000) {
+		if (clock - this.#settleStableSince >= this.#settle.time * 1000) {
 			this.#settling = false
 			this.#emitSettleDoneEvent(0)
 			return
 		}
 
-		this.#emitSettlingEvent(distance, timestamp, true)
+		this.#emitSettlingEvent(distance, timestamp, true, clock)
 	}
 
 	// Refreshes the public lock target from guider diagnostics when available.
@@ -1391,7 +1425,7 @@ export class GuiderClient {
 
 	// Advances the lock-shift offset using elapsed time and the configured X/Y or RA/DEC drift rates.
 	#updateLockShift(frame: GuideFrame) {
-		const timestamp = frame.timestamp ?? Date.now()
+		const timestamp = frame.captureMonotonic ?? frame.timestamp ?? performance.now()
 
 		if (this.#guidingAssistant !== undefined) {
 			this.#lockShiftTimestamp = timestamp
@@ -1567,14 +1601,23 @@ export class GuiderClient {
 	#beginExposure() {
 		if (!this.#connected || this.#camera === undefined || this.#camera.connected !== true) return
 		const previousExposureMs = this.#inFlightExposure
+		const previousExposureStartedAt = this.#exposureStartedAt
+		const previousExposureStartedMonotonic = this.#exposureStartedMonotonic
+		const previousHasExposureStart = this.#hasExposureStart
 		this.#exposureAttempt++
 		this.#inFlightExposure = this.#exposure
+		this.#exposureStartedAt = Date.now()
+		this.#exposureStartedMonotonic = performance.now()
+		this.#hasExposureStart = true
 		this.#awaitingBlob = true
 
 		try {
 			this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
 		} catch (error) {
 			this.#inFlightExposure = previousExposureMs
+			this.#exposureStartedAt = previousExposureStartedAt
+			this.#exposureStartedMonotonic = previousExposureStartedMonotonic
+			this.#hasExposureStart = previousHasExposureStart
 			this.#awaitingBlob = false
 			this.#clearExposureWatchdog()
 			throw error
@@ -1634,6 +1677,10 @@ export class GuiderClient {
 	#resetRuntimeState(clearCalibration: boolean, preserveGuidingAssistantResult: boolean = false) {
 		this.#blobAdmission = 'accept'
 		this.#awaitingBlob = false
+		this.#hasExposureStart = false
+		this.#exposureStartedAt = 0
+		this.#exposureStartedMonotonic = 0
+		this.#lastAcceptedCaptureMonotonic = undefined
 		this.#clearExposureWatchdog()
 		const guidingAssistantResult = preserveGuidingAssistantResult ? this.#guidingAssistantResult : undefined
 		this.#frame = undefined
@@ -1877,10 +1924,10 @@ export class GuiderClient {
 	}
 
 	// Emits one in-progress settle event using PHD2's time-in-range and requested settle duration fields.
-	#emitSettlingEvent(distance: number, timestamp: number, starLocked: boolean) {
+	#emitSettlingEvent(distance: number, timestamp: number, starLocked: boolean, clock: number = timestamp) {
 		this.emitEvent('Settling', {
 			Distance: distance,
-			Time: this.#settleStableSince === 0 ? 0 : (timestamp - this.#settleStableSince) * 0.001,
+			Time: this.#settleStableSince === 0 ? 0 : (clock - this.#settleStableSince) * 0.001,
 			SettleTime: this.#settle.time,
 			StarLocked: starLocked,
 		})

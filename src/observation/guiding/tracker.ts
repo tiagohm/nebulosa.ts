@@ -1,3 +1,4 @@
+import type { Time } from '../../astronomy/time/time'
 import type { Image } from '../../imaging/model/types'
 
 // Generic synchronous tracking contracts. Frames use image pixels for coordinates, Unix epoch
@@ -17,6 +18,11 @@ export interface GuideTrackerFrame {
 	readonly height: number
 	// Capture timestamp in milliseconds since the Unix epoch.
 	readonly timestamp: number
+	// Astronomical capture instant, preferably the exposure midpoint. The time scale and providers
+	// belong to the caller and are preserved for synchronous ephemeris evaluation.
+	readonly captureTime?: Time
+	// Monotonic capture instant in milliseconds, used only for ordering and elapsed-time decisions.
+	readonly captureMonotonic?: number
 	// Monotonic logical frame identifier.
 	readonly frameId: number
 	// Exposure cadence that produced the image, in milliseconds.
@@ -41,6 +47,8 @@ export interface GuideTrackerContext {
 	readonly allowAcquisition: boolean
 	// Whether an existing target identity should be preferred over a fresh acquisition.
 	readonly preserveIdentity: boolean
+	// Whether visual lock was already established before this frame was captured.
+	readonly lockEstablished?: boolean
 }
 
 // Generic measured target position in image pixels.
@@ -110,6 +118,10 @@ export interface GuideFrame {
 	readonly height: number
 	// Capture timestamp in milliseconds since the Unix epoch.
 	readonly timestamp?: number
+	// Astronomical capture instant, preferably the exposure midpoint.
+	readonly captureTime?: Time
+	// Monotonic capture instant in milliseconds, used for ordering and elapsed-time decisions.
+	readonly captureMonotonic?: number
 	// Monotonic logical frame identifier.
 	readonly frameId?: number
 	// Exposure cadence that produced this frame, in milliseconds.

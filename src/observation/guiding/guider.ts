@@ -181,6 +181,8 @@ interface GuiderInternalState {
 	ditherOffsetY: number
 	ditherActive: boolean
 	lastTimestamp?: number
+	// Monotonic capture clock of the last accepted frame, in milliseconds.
+	lastCaptureMonotonic?: number
 	lastCadence: number
 	consecutiveBadFrames: number
 	lastGoodMeasurementX?: number
@@ -305,6 +307,7 @@ const EMPTY_STATE: Readonly<GuiderInternalState> = {
 	// makes the first frame after a re-lock look like an impossible jump, and a stale lastTimestamp
 	// corrupts the dropped-frame cadence check.
 	lastTimestamp: undefined,
+	lastCaptureMonotonic: undefined,
 	lastGoodMeasurementX: undefined,
 	lastGoodMeasurementY: undefined,
 	filteredRA: 0,
@@ -448,9 +451,17 @@ export class Guider {
 
 	// Processes one frame and returns RA/DEC pulse commands.
 	processFrame(frame: GuideFrame): GuideCommand {
+		const frameClock = this.#classifyFrameClock(frame)
+
 		if (this.state.state === 'idle') {
 			this.state.state = 'initializing'
 			this.state.lockSamples.length = 0
+		}
+
+		if (frameClock.outOfOrder) {
+			const notes = [...trackingOf(frame).notes, frameClock.duplicate ? 'duplicate_frame' : 'out_of_order']
+			this.#updateDiagnostics(frame, trackingOf(frame), undefined, false, true, notes)
+			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, tracking: trackingOf(frame) }
 		}
 
 		if (this.state.state === 'initializing') {
@@ -459,7 +470,7 @@ export class Guider {
 		}
 
 		const tracking = trackingOf(frame)
-		const droppedFrame = this.#isDroppedFrame(frame)
+		const droppedFrame = frameClock.dropped
 		const notes = [...tracking.notes]
 
 		if (droppedFrame) notes.push('dropped_frame')
@@ -620,32 +631,33 @@ export class Guider {
 		return dx * dx + dy * dy > this.config.maxFrameJumpPx * this.config.maxFrameJumpPx
 	}
 
-	// Detects dropped frames. When the frame reports the exposure that produced it, classify from
-	// that cadence rather than the wall-clock gap so an ST4 pulse wait is not a drop. Frames
-	// without `cadence` still use timestamp deltas.
-	#isDroppedFrame(frame: GuideFrame) {
-		const { timestamp, cadence } = frame
-
-		if (cadence !== undefined) {
-			if (timestamp !== undefined) this.state.lastTimestamp = timestamp
-			if (cadence > 0) this.state.lastCadence = cadence
-			return cadence > this.config.nominalCadence * this.config.droppedFrameFactor
+	// Classifies capture order and elapsed time from the monotonic clock when available. Exposure
+	// cadence remains only the exposure duration and is never interpreted as the interval between
+	// frames.
+	#classifyFrameClock(frame: GuideFrame) {
+		const monotonic = frame.captureMonotonic
+		const hasMonotonic = monotonic !== undefined && Number.isFinite(monotonic)
+		const hasTimestamp = frame.timestamp !== undefined && frame.timestamp > 0 && Number.isFinite(frame.timestamp)
+		const current = hasMonotonic ? monotonic : hasTimestamp ? frame.timestamp : undefined
+		if (current === undefined) {
+			if (frame.cadence !== undefined && frame.cadence > 0) this.state.lastCadence = frame.cadence
+			return { outOfOrder: false, duplicate: false, dropped: false } as const
 		}
 
-		if (timestamp === undefined) return false
-
-		const lastTimestamp = this.state.lastTimestamp
-
-		if (lastTimestamp === undefined) {
-			this.state.lastTimestamp = timestamp
-			this.state.lastCadence = this.config.nominalCadence
-			return false
+		const previous = hasMonotonic ? this.state.lastCaptureMonotonic : this.state.lastTimestamp
+		if (previous !== undefined && current <= previous) {
+			return { outOfOrder: true, duplicate: current === previous, dropped: false } as const
 		}
 
-		const dt = Math.max(1, timestamp - lastTimestamp)
-		this.state.lastTimestamp = timestamp
-		this.state.lastCadence = dt
-		return dt > this.config.nominalCadence * this.config.droppedFrameFactor
+		if (hasMonotonic) this.state.lastCaptureMonotonic = monotonic
+		else this.state.lastTimestamp = current
+
+		const interval = previous === undefined ? undefined : current - previous
+		if (frame.cadence !== undefined && frame.cadence > 0) this.state.lastCadence = frame.cadence
+		else if (interval !== undefined && interval > 0) this.state.lastCadence = interval
+
+		const dropped = hasMonotonic || frame.cadence === undefined ? interval !== undefined && interval > this.config.nominalCadence * this.config.droppedFrameFactor : false
+		return { outOfOrder: false, duplicate: false, dropped } as const
 	}
 
 	// Computes frame cadence scale to keep pulse gain stable across variable cadence.
