@@ -1709,6 +1709,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		let calibrationFrame = 0
 		let committedPosition: readonly [number, number] | undefined
 		let pendingPosition: readonly [number, number] | undefined
+		let targetOffset: readonly [number, number] | undefined
 		let lastResult: GuideTrackerResult | undefined
 		let commitCount = 0
 
@@ -1731,6 +1732,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 					qualityScore: 1,
 					rejectedReasons: {},
 					notes: [],
+					targetOffset: context.phase === 'guiding' ? targetOffset : undefined,
 				}
 				pendingPosition = position
 				lastResult = result
@@ -1744,7 +1746,13 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			},
 		}
 
-		return { tracker, commitCount: () => commitCount }
+		return {
+			tracker,
+			commitCount: () => commitCount,
+			setTargetOffset: (offset: readonly [number, number] | undefined) => {
+				targetOffset = offset
+			},
+		}
 	}
 
 	// Dither size, in pixels. Large enough that the resulting pulses dwarf the sub-pixel corrections
@@ -2082,6 +2090,23 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			await establishLockReference(harness)
 
 			expect(state.commitCount() - commitsBeforeInitialization).toBe(LOCK_AVERAGING_FRAMES)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
+		'does not commit a frame rejected by the target envelope',
+		async () => {
+			const state = statefulTracker()
+			const harness = await calibrateAndGuide({ tracker: state.tracker })
+			await establishLockReference(harness)
+			const commitsBeforeRejectedFrame = state.commitCount()
+
+			state.setTargetOffset([1000, 0])
+			await feedFrame(harness)
+
+			expect(harness.client.getAppState()).toBe('LostLock')
+			expect(state.commitCount()).toBe(commitsBeforeRejectedFrame)
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)

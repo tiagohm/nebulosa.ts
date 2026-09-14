@@ -1322,7 +1322,8 @@ export class GuiderClient {
 	#processGuidingFrame(frame: GuideFrame) {
 		this.#updateLockShift(frame)
 		const command = this.#guider.processFrame(frame)
-		const acceptedMeasurement = command.tracking.measurement !== undefined && command.tracking.qualityScore >= this.#guider.config.minFrameQuality && !command.diagnostics.notes.includes('init_waiting') && !command.diagnostics.notes.includes('jump_rejected')
+		const acceptedMeasurement =
+			command.tracking.measurement !== undefined && command.tracking.qualityScore >= this.#guider.config.minFrameQuality && !command.diagnostics.badFrame && command.diagnostics.targetLimit === undefined && !command.diagnostics.notes.includes('init_waiting') && !command.diagnostics.notes.includes('jump_rejected')
 		if (acceptedMeasurement) this.#tracker.commit?.()
 		// Retained for #emitFrameImage, which runs after this frame has been fully processed.
 		this.#acceptedStars = starTrackingOf(command.tracking)?.accepted
