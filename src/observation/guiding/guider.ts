@@ -672,13 +672,13 @@ export class Guider {
 	}
 
 	// Classifies capture order and elapsed time from the monotonic clock when available. Exposure
-	// cadence remains only the exposure duration and is never interpreted as the interval between
-	// frames.
+	// cadence remains only the exposure duration and is never interpreted as the interval between frames.
 	#classifyFrameClock(frame: GuideFrame) {
 		const monotonic = frame.captureMonotonic
 		const hasMonotonic = monotonic !== undefined && Number.isFinite(monotonic)
 		const hasTimestamp = frame.timestamp !== undefined && frame.timestamp > 0 && Number.isFinite(frame.timestamp)
 		const current = hasMonotonic ? monotonic : hasTimestamp ? frame.timestamp : undefined
+
 		if (current === undefined) {
 			if (frame.cadence !== undefined && frame.cadence > 0) this.state.lastCadence = frame.cadence
 			return { outOfOrder: false, duplicate: false, dropped: false } as const

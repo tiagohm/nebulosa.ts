@@ -1,7 +1,8 @@
 import type { EquatorialCoordinate } from '../../astronomy/coordinates/coordinate'
 import type { EphemerisInterpolator } from '../../astronomy/ephemeris/interpolation/ephemeris'
-import { Timescale, timeConvert, timeShift, toJulianDay, type Time } from '../../astronomy/time/time'
-import { DAYSEC, PI, ASEC2RAD, TAU } from '../../core/constants'
+import { Timescale, timeConvert, timeShift, toJulianDay, tt, type Time } from '../../astronomy/time/time'
+import { DAYSEC, PI, ASEC2RAD } from '../../core/constants'
+import { normalizeAngle, type Angle } from '../../math/units/angle'
 import type { GuideTracker, GuideTrackerContext, GuideTrackerFrame, GuideTrackerResult } from './tracker'
 
 // Synchronous non-sidereal contracts and numerical helpers. Positions are equatorial RA/DEC in
@@ -30,7 +31,7 @@ export interface NonSiderealEphemeris {
 // calibration, orientation, scale, WCS/Jacobian choice, image origin, and any position dependence.
 export interface NonSiderealImageTransform {
 	// Converts [east, north] radians at `time` into [x, y] image pixels, or rejects the frame.
-	readonly offsetToImage: (eastNorthRadians: readonly [number, number], time: Time, frame: GuideTrackerFrame) => readonly [number, number] | undefined
+	readonly offsetToImage: (eastNorth: readonly [Angle, Angle], time: Time, frame: GuideTrackerFrame) => readonly [number, number] | undefined
 	// Optional generation used to invalidate cached image derivatives after calibration changes.
 	readonly generation?: number | (() => number)
 }
@@ -53,17 +54,17 @@ export class NonSiderealError extends Error {
 // tangent-plane radians at the anchor; separation is the great-circle distance in radians.
 export interface NonSiderealAngularOffset {
 	// Eastward tangent-plane component, in radians.
-	readonly east: number
+	readonly east: Angle
 	// Northward tangent-plane component, in radians.
-	readonly north: number
+	readonly north: Angle
 	// Great-circle separation between anchor and current position, in radians.
-	readonly separation: number
+	readonly separation: Angle
 }
 
 // Limits protecting the local tangent approximation and image-control envelope.
 export interface NonSiderealGeometryOptions {
 	// Maximum accepted great-circle separation, in radians; must be strictly below PI.
-	readonly maxAngularSeparationRadians?: number
+	readonly maxAngularSeparation?: Angle
 	// Cross-product magnitude below which an antipodal direction is considered undefined.
 	readonly antipodalTolerance?: number
 }
@@ -74,11 +75,11 @@ export interface NonSiderealDerivative {
 	// Whether a finite rate was obtained.
 	readonly available: boolean
 	// Local angular velocity [east, north], in radians per second.
-	readonly rate?: readonly [number, number]
+	readonly rate?: readonly [Angle, Angle]
 	// Local angular acceleration [east, north], in radians per second squared.
-	readonly acceleration?: readonly [number, number]
+	readonly acceleration?: readonly [Angle, Angle]
 	// Step used for the estimate, in seconds.
-	readonly stepSeconds?: number
+	readonly step?: number
 	// Whether the selected stencil was one-sided at a validity boundary.
 	readonly oneSided: boolean
 	// Stable reason when no derivative is available.
@@ -89,11 +90,11 @@ export interface NonSiderealDerivative {
 // interval permits it, then falls back to centered/one-sided lower-order formulas without retries.
 export interface NonSiderealDerivativeOptions {
 	// Requested finite-difference step, in seconds.
-	readonly stepSeconds?: number
+	readonly step?: number
 	// Minimum allowed step, in seconds.
-	readonly minStepSeconds?: number
+	readonly minStep?: number
 	// Maximum allowed step, in seconds.
-	readonly maxStepSeconds?: number
+	readonly maxStep?: number
 }
 
 // Explicit mapping from celestial east/north radians to calibrated RA/DEC axis radians. The first
@@ -109,19 +110,13 @@ export interface CalibratedNonSiderealTransformOptions {
 	readonly pixelScaleArcsecPerPixel: number
 	// Unit image directions observed for positive calibrated axes.
 	readonly calibration: {
-		readonly ra: { readonly unitX: number; readonly unitY: number }
-		readonly dec: { readonly unitX: number; readonly unitY: number }
+		readonly rightAscension: { readonly unitX: number; readonly unitY: number }
+		readonly declination: { readonly unitX: number; readonly unitY: number }
 	}
 	// Explicit celestial-to-axis orientation; identity means east=RA and north=DEC.
 	readonly orientation?: NonSiderealAxisOrientation
 	// Optional generation forwarded to the transform contract.
 	readonly generation?: number | (() => number)
-}
-
-// Snapshot of an equatorial position with no alias to provider scratch state.
-export interface NonSiderealPositionSnapshot {
-	readonly rightAscension: number
-	readonly declination: number
 }
 
 // Structured non-sidereal telemetry attached to a generic tracker result. Snapshots are freshly
@@ -132,23 +127,23 @@ export interface NonSiderealTrackerDiagnostic {
 	// Stable failure or degraded-quality reason, when applicable.
 	readonly reason?: NonSiderealFailureCode | 'rateUnavailable'
 	// Current absolute position, in RA/DEC radians.
-	readonly position?: NonSiderealPositionSnapshot
+	readonly position?: EquatorialCoordinate
 	// Current position time in the provider's Time representation.
 	readonly captureTime?: Time
 	// Relative angular offset from the anchor, in east/north radians.
-	readonly angularOffset?: readonly [number, number]
+	readonly angularOffset?: readonly [Angle, Angle]
 	// Relative image target offset, in pixels.
 	readonly targetOffset?: readonly [number, number]
 	// Angular separation from the anchor, in radians.
-	readonly separationRadians?: number
+	readonly separation?: Angle
 	// Finite-difference angular rate, in radians per second.
-	readonly rateRadiansPerSecond?: readonly [number, number]
+	readonly rate?: readonly [Angle, Angle]
 	// Finite-difference angular acceleration, in radians per second squared.
-	readonly accelerationRadiansPerSecondSquared?: readonly [number, number]
+	readonly acceleration?: readonly [Angle, Angle]
 	// Step used by the derivative estimate, in seconds.
-	readonly derivativeStepSeconds?: number
+	readonly derivativeStep?: number
 	// Age of the derivative sample relative to this frame, in seconds.
-	readonly derivativeAgeSeconds?: number
+	readonly derivativeAge?: number
 	// Generation of the transform used for this frame, when supplied.
 	readonly transformGeneration?: number
 	// Frame identifier associated with the diagnostic.
@@ -176,9 +171,9 @@ export interface NonSiderealTrackerOptions {
 	// Finite-difference step and validity-window controls.
 	readonly derivative?: NonSiderealDerivativeOptions
 	// Optional maximum angular velocity in radians per second.
-	readonly maxRateRadiansPerSecond?: number
+	readonly maxRate?: Angle
 	// Optional maximum angular acceleration in radians per second squared.
-	readonly maxAccelerationRadiansPerSecondSquared?: number
+	readonly maxAcceleration?: Angle
 }
 
 // Default maximum local separation leaves a unique tangent direction away from the antipode.
@@ -195,50 +190,36 @@ export function nonSiderealGenerationOf(source: { readonly generation?: number |
 	return typeof source.generation === 'function' ? source.generation() : source.generation
 }
 
-// Copies and validates an equatorial position. The result is a new object and the input object is
-// never retained; RA is normalized and DEC remains signed in its physical domain.
-export function nonSiderealPositionSnapshot(position: EquatorialCoordinate): NonSiderealPositionSnapshot {
-	const rightAscension = position.rightAscension
-	const declination = position.declination
-	if (!Number.isFinite(rightAscension) || !Number.isFinite(declination) || declination < -Math.PI / 2 || declination > Math.PI / 2) {
-		throw new NonSiderealError('invalidPosition', 'non-sidereal position is not finite or has invalid declination')
-	}
-	return { rightAscension: normalizeRightAscension(rightAscension), declination }
-}
-
 // Converts equatorial RA/DEC radians into a unit vector in the source's declared frame.
 export function nonSiderealUnitVector(position: EquatorialCoordinate): readonly [number, number, number] {
-	const snapshot = nonSiderealPositionSnapshot(position)
-	const cosDeclination = Math.cos(snapshot.declination)
-	return [cosDeclination * Math.cos(snapshot.rightAscension), cosDeclination * Math.sin(snapshot.rightAscension), Math.sin(snapshot.declination)]
+	const cosDeclination = Math.cos(position.declination)
+	return [cosDeclination * Math.cos(position.rightAscension), cosDeclination * Math.sin(position.rightAscension), Math.sin(position.declination)]
 }
 
 // Computes a stable local tangent-plane offset with atan2 separation and a log-map scale. Tiny
 // offsets use the direct projected difference; near-antipodal positions are rejected because their
 // direction is not unique. East and north are the anchor's conventional RA/DEC basis.
-export function nonSiderealAngularOffset(anchor: EquatorialCoordinate, current: EquatorialCoordinate, options: NonSiderealGeometryOptions = {}): NonSiderealAngularOffset {
-	const anchorSnapshot = nonSiderealPositionSnapshot(anchor)
-	const currentSnapshot = nonSiderealPositionSnapshot(current)
-	const anchorVector = nonSiderealUnitVector(anchorSnapshot)
-	const currentVector = nonSiderealUnitVector(currentSnapshot)
+export function nonSiderealAngularOffset(anchor: EquatorialCoordinate, current: EquatorialCoordinate, options?: NonSiderealGeometryOptions): NonSiderealAngularOffset {
+	const anchorVector = nonSiderealUnitVector(anchor)
+	const currentVector = nonSiderealUnitVector(current)
 	const crossX = anchorVector[1] * currentVector[2] - anchorVector[2] * currentVector[1]
 	const crossY = anchorVector[2] * currentVector[0] - anchorVector[0] * currentVector[2]
 	const crossZ = anchorVector[0] * currentVector[1] - anchorVector[1] * currentVector[0]
 	const crossMagnitude = Math.hypot(crossX, crossY, crossZ)
 	const dot = clampUnit(anchorVector[0] * currentVector[0] + anchorVector[1] * currentVector[1] + anchorVector[2] * currentVector[2])
 	const separation = Math.atan2(crossMagnitude, dot)
-	const maxSeparation = options.maxAngularSeparationRadians ?? DEFAULT_NONSIDEREAL_MAX_ANGULAR_SEPARATION
-	const antipodalTolerance = options.antipodalTolerance ?? DEFAULT_NONSIDEREAL_ANTIPODAL_TOLERANCE
+	const maxSeparation = options?.maxAngularSeparation ?? DEFAULT_NONSIDEREAL_MAX_ANGULAR_SEPARATION
+	const antipodalTolerance = options?.antipodalTolerance ?? DEFAULT_NONSIDEREAL_ANTIPODAL_TOLERANCE
 
 	if (!(maxSeparation > 0 && maxSeparation < PI) || separation > maxSeparation) throw new NonSiderealError('angularLimit', `non-sidereal separation exceeds ${maxSeparation} radians`)
 	if (dot < 0 && crossMagnitude <= antipodalTolerance) throw new NonSiderealError('antipodal', 'non-sidereal separation has no unique tangent direction')
 
-	const sinRightAscension = Math.sin(anchorSnapshot.rightAscension)
-	const cosRightAscension = Math.cos(anchorSnapshot.rightAscension)
-	const sinDeclination = Math.sin(anchorSnapshot.declination)
-	const cosDeclination = Math.cos(anchorSnapshot.declination)
-	const east: readonly [number, number, number] = [-sinRightAscension, cosRightAscension, 0]
-	const north: readonly [number, number, number] = [-sinDeclination * cosRightAscension, -sinDeclination * sinRightAscension, cosDeclination]
+	const sinRightAscension = Math.sin(anchor.rightAscension)
+	const cosRightAscension = Math.cos(anchor.rightAscension)
+	const sinDeclination = Math.sin(anchor.declination)
+	const cosDeclination = Math.cos(anchor.declination)
+	const east = [-sinRightAscension, cosRightAscension, 0] as const
+	const north = [-sinDeclination * cosRightAscension, -sinDeclination * sinRightAscension, cosDeclination] as const
 
 	if (crossMagnitude <= antipodalTolerance) {
 		if (separation === 0) return { east: 0, north: 0, separation }
@@ -249,6 +230,7 @@ export function nonSiderealAngularOffset(anchor: EquatorialCoordinate, current: 
 	const tangentX = (currentVector[0] - dot * anchorVector[0]) * scale
 	const tangentY = (currentVector[1] - dot * anchorVector[1]) * scale
 	const tangentZ = (currentVector[2] - dot * anchorVector[2]) * scale
+
 	return {
 		east: tangentX * east[0] + tangentY * east[1] + tangentZ * east[2],
 		north: tangentX * north[0] + tangentY * north[1] + tangentZ * north[2],
@@ -262,15 +244,13 @@ export function calibratedNonSiderealTransform(options: CalibratedNonSiderealTra
 	const scale = options.pixelScaleArcsecPerPixel * ASEC2RAD
 	if (!(scale > 0) || !Number.isFinite(scale)) throw new NonSiderealError('invalidTransform', 'pixel scale must be finite and positive')
 	const [a00, a01, a10, a11] = options.orientation?.axisFromEastNorth ?? [1, 0, 0, 1]
-	const { ra, dec } = options.calibration
+	const { rightAscension: ra, declination: dec } = options.calibration
 	const values = [a00, a01, a10, a11, ra.unitX, ra.unitY, dec.unitX, dec.unitY]
 	if (values.some((value) => !Number.isFinite(value))) throw new NonSiderealError('invalidTransform', 'calibration transform contains a non-finite value')
 
 	return {
 		generation: options.generation,
-		offsetToImage: (eastNorthRadians) => {
-			const east = eastNorthRadians[0]
-			const north = eastNorthRadians[1]
+		offsetToImage: ([east, north]) => {
 			const raPixels = (a00 * east + a01 * north) / scale
 			const decPixels = (a10 * east + a11 * north) / scale
 			const result: readonly [number, number] = [ra.unitX * raPixels + dec.unitX * decPixels, ra.unitY * raPixels + dec.unitY * decPixels]
@@ -285,33 +265,39 @@ export function calibratedNonSiderealTransform(options: CalibratedNonSiderealTra
 export class InterpolatedNonSiderealEphemeris implements NonSiderealEphemeris {
 	#interpolator: EphemerisInterpolator
 	#generation = 0
-	#validTime: [number, number]
+	#validTime: readonly [number, number]
+
 	readonly position: NonSiderealEphemeris['position']
 
 	// Creates an adapter around a local interpolation table and captures its inclusive TT bounds.
 	constructor(interpolator: EphemerisInterpolator) {
 		this.#interpolator = interpolator
 		this.#validTime = [interpolator.startTime, interpolator.endTime]
+
+		const scratch: [number, number] = [0, 0]
+
 		this.position = (time, out) => {
-			const tt = timeConvert(time, Timescale.TT)
-			const julianDay = toJulianDay(tt)
+			time = tt(time)
+
+			const julianDay = toJulianDay(time)
 			if (julianDay < this.#validTime[0] || julianDay > this.#validTime[1]) throw new NonSiderealError('outsideValidity', 'ephemeris time is outside the inclusive interpolation window')
-			const scratch: [number, number] = [0, 0]
+
 			try {
-				this.#interpolator.computeInto(tt, scratch)
+				this.#interpolator.computeInto(time, scratch)
 			} catch (error) {
 				if (error instanceof NonSiderealError) throw error
 				throw new NonSiderealError('providerError', error instanceof Error ? error.message : 'ephemeris interpolation failed')
 			}
-			out.rightAscension = normalizeRightAscension(scratch[0])
+
+			out.rightAscension = normalizeAngle(scratch[0])
 			out.declination = scratch[1]
-			nonSiderealPositionSnapshot(out)
+
 			return out
 		}
 	}
 
 	// Returns the inclusive Julian-date validity interval in TT.
-	get validTime(): readonly [number, number] {
+	get validTime() {
 		return this.#validTime
 	}
 
@@ -336,21 +322,19 @@ export function nonSiderealEphemerisFromInterpolator(interpolator: EphemerisInte
 // Persistent decorator that combines a synchronous non-sidereal target offset with a base image
 // tracker. The base tracker owns detection, identity, staged state, and commit timing.
 export class NonSiderealTracker implements GuideTracker {
-	readonly baseTracker: GuideTracker
-	readonly options: NonSiderealTrackerOptions
 	#ephemeris?: NonSiderealEphemeris
 	#transform?: NonSiderealImageTransform
-	#anchor?: { readonly time: Time; readonly position: NonSiderealPositionSnapshot }
+	#anchor?: { readonly time: Time; readonly position: EquatorialCoordinate }
 	#lastCapture?: { readonly julianDay: number; readonly monotonic?: number }
 	#failureReason?: NonSiderealFailureCode | 'rateUnavailable'
 	#state: NonSiderealState = 'disabled'
 	#lastResult?: NonSiderealTrackerResult
 
 	// Creates a persistent wrapper around a base tracker without changing the base tracker's identity.
-	constructor(baseTracker: GuideTracker, options: NonSiderealTrackerOptions = {}) {
-		this.baseTracker = baseTracker
-		this.options = options
-	}
+	constructor(
+		readonly baseTracker: GuideTracker,
+		readonly options: NonSiderealTrackerOptions = {},
+	) {}
 
 	// Returns the current state without exposing mutable internal objects.
 	get state() {
@@ -358,15 +342,13 @@ export class NonSiderealTracker implements GuideTracker {
 	}
 
 	// Returns the most recent decorated result, including its immutable telemetry snapshot.
-	get lastResult(): NonSiderealTrackerResult | undefined {
+	get lastResult() {
 		return this.#lastResult
 	}
 
 	// Configures a synchronous source and image transform, clears the previous anchor, and arms the
 	// decorator. Provider and transform execution begins only after a guided lock exists.
 	arm(ephemeris: NonSiderealEphemeris, transform: NonSiderealImageTransform) {
-		if (typeof ephemeris.position !== 'function') throw new NonSiderealError('providerError', 'non-sidereal ephemeris has no synchronous position function')
-		if (typeof transform.offsetToImage !== 'function') throw new NonSiderealError('invalidTransform', 'non-sidereal transform has no synchronous offset function')
 		this.#ephemeris = ephemeris
 		this.#transform = transform
 		this.#anchor = undefined
@@ -380,7 +362,7 @@ export class NonSiderealTracker implements GuideTracker {
 	// optional position avoids a second provider call when the caller already owns a valid sample.
 	reanchor(time: Time, position?: EquatorialCoordinate) {
 		if (this.#ephemeris === undefined || this.#transform === undefined) throw new NonSiderealError('providerError', 'non-sidereal tracker is not armed')
-		const snapshot = position === undefined ? this.#positionAt(time) : nonSiderealPositionSnapshot(position)
+		const snapshot = position === undefined ? this.#positionAt(time) : { ...position }
 		const julianDay = this.#julianDayOf(time)
 		this.#anchor = { time, position: snapshot }
 		this.#lastCapture = { julianDay }
@@ -432,16 +414,19 @@ export class NonSiderealTracker implements GuideTracker {
 		if (context.phase !== 'guiding' || context.lockEstablished !== true) return baseResult as NonSiderealTrackerResult
 
 		if (frame.captureTime === undefined) return this.#failure(baseResult, frame, 'invalidTime', 'non-sidereal guiding requires an astronomical capture time')
+
 		let julianDay: number
 		try {
 			julianDay = this.#julianDayOf(frame.captureTime)
 		} catch {
 			return this.#failure(baseResult, frame, 'invalidTime', 'non-sidereal capture time is not finite')
 		}
+
 		const hasCurrentMonotonic = frame.captureMonotonic !== undefined && Number.isFinite(frame.captureMonotonic)
 		if (this.#lastCapture !== undefined && (this.#lastCapture.monotonic !== undefined && hasCurrentMonotonic ? frame.captureMonotonic <= this.#lastCapture.monotonic : julianDay <= this.#lastCapture.julianDay)) {
 			return this.#failure(baseResult, frame, 'outOfOrder', 'non-sidereal frame capture time is duplicate or out of order')
 		}
+
 		if (this.#state === 'faulted' || this.#state === 'limitReached') return this.#failure(baseResult, frame, this.#failureReason ?? 'providerError', 'non-sidereal tracker requires reset, clear, or reanchor after a fault')
 
 		if (this.#anchor === undefined) {
@@ -450,13 +435,15 @@ export class NonSiderealTracker implements GuideTracker {
 			} catch (error) {
 				return this.#failure(baseResult, frame, error instanceof NonSiderealError ? error.code : 'providerError', error instanceof Error ? error.message : 'non-sidereal anchor failed')
 			}
+
 			this.#rememberCapture(frame, julianDay)
 			const baseOffset = baseResult.targetOffset ?? [0, 0]
 			return this.#publish(this.#result(baseResult, { state: 'active', targetOffset: [baseOffset[0], baseOffset[1]], captureTime: frame.captureTime, frameId: frame.frameId }))
 		}
 
 		this.#rememberCapture(frame, julianDay)
-		let position: NonSiderealPositionSnapshot
+
+		let position: EquatorialCoordinate
 		try {
 			position = this.#positionAt(frame.captureTime)
 		} catch (error) {
@@ -482,15 +469,16 @@ export class NonSiderealTracker implements GuideTracker {
 		}
 
 		const derivative = estimateNonSiderealDerivative(this.#ephemeris, frame.captureTime, this.options.derivative)
-		if (this.options.maxRateRadiansPerSecond !== undefined && derivative.rate !== undefined && Math.hypot(derivative.rate[0], derivative.rate[1]) > this.options.maxRateRadiansPerSecond) {
+		if (this.options.maxRate !== undefined && derivative.rate !== undefined && Math.hypot(derivative.rate[0], derivative.rate[1]) > this.options.maxRate) {
 			return this.#failure(baseResult, frame, 'rateLimit', 'non-sidereal angular rate exceeded its configured limit', position, angularOffset, derivative)
 		}
-		if (this.options.maxAccelerationRadiansPerSecondSquared !== undefined && derivative.acceleration !== undefined && Math.hypot(derivative.acceleration[0], derivative.acceleration[1]) > this.options.maxAccelerationRadiansPerSecondSquared) {
+		if (this.options.maxAcceleration !== undefined && derivative.acceleration !== undefined && Math.hypot(derivative.acceleration[0], derivative.acceleration[1]) > this.options.maxAcceleration) {
 			return this.#failure(baseResult, frame, 'rateLimit', 'non-sidereal angular acceleration exceeded its configured limit', position, angularOffset, derivative)
 		}
 
 		const state: NonSiderealState = derivative.available ? 'active' : 'rateDegraded'
 		this.#state = state
+
 		return this.#publish(
 			this.#result(baseResult, {
 				state,
@@ -499,10 +487,10 @@ export class NonSiderealTracker implements GuideTracker {
 				captureTime: frame.captureTime,
 				angularOffset: [angularOffset.east, angularOffset.north],
 				targetOffset,
-				separationRadians: angularOffset.separation,
-				rateRadiansPerSecond: derivative.rate,
-				accelerationRadiansPerSecondSquared: derivative.acceleration,
-				derivativeStepSeconds: derivative.stepSeconds,
+				separation: angularOffset.separation,
+				rate: derivative.rate,
+				acceleration: derivative.acceleration,
+				derivativeStep: derivative.step,
 				frameId: frame.frameId,
 			}),
 		)
@@ -521,7 +509,7 @@ export class NonSiderealTracker implements GuideTracker {
 
 	// Produces a safe failure result: the visual measurement cannot feed the sideral controller and
 	// no previous target offset is reused after a provider, time, or transform failure.
-	#failure(baseResult: GuideTrackerResult, frame: GuideTrackerFrame, reason: NonSiderealFailureCode | 'rateUnavailable', message: string, position?: NonSiderealPositionSnapshot, angularOffset?: NonSiderealAngularOffset, derivative?: NonSiderealDerivative): NonSiderealTrackerResult {
+	#failure(baseResult: GuideTrackerResult, frame: GuideTrackerFrame, reason: NonSiderealFailureCode | 'rateUnavailable', message: string, position?: EquatorialCoordinate, angularOffset?: NonSiderealAngularOffset, derivative?: NonSiderealDerivative): NonSiderealTrackerResult {
 		this.#failureReason = reason
 		this.#state = reason === 'rateUnavailable' ? 'rateDegraded' : reason === 'angularLimit' || reason === 'pixelLimit' ? 'limitReached' : 'faulted'
 		return this.#publish({
@@ -536,21 +524,22 @@ export class NonSiderealTracker implements GuideTracker {
 				position,
 				captureTime: frame.captureTime,
 				angularOffset: angularOffset === undefined ? undefined : [angularOffset.east, angularOffset.north],
-				separationRadians: angularOffset?.separation,
-				rateRadiansPerSecond: derivative?.rate,
-				accelerationRadiansPerSecondSquared: derivative?.acceleration,
-				derivativeStepSeconds: derivative?.stepSeconds,
+				separation: angularOffset?.separation,
+				rate: derivative?.rate,
+				acceleration: derivative?.acceleration,
+				derivativeStep: derivative?.step,
 				frameId: frame.frameId,
 			},
 		})
 	}
 
 	// Evaluates and validates one absolute ephemeris position without retaining provider scratch.
-	#positionAt(time: Time): NonSiderealPositionSnapshot {
+	#positionAt(time: Time): EquatorialCoordinate {
 		if (this.#ephemeris === undefined) throw new NonSiderealError('providerError', 'non-sidereal tracker is not armed')
 		const output: EquatorialCoordinate = { rightAscension: 0, declination: 0 }
+
 		try {
-			return nonSiderealPositionSnapshot(this.#ephemeris.position(time, output))
+			return this.#ephemeris.position(time, output)
 		} catch (error) {
 			if (error instanceof NonSiderealError) throw error
 			throw new NonSiderealError('providerError', error instanceof Error ? error.message : 'non-sidereal position provider failed')
@@ -578,12 +567,15 @@ export function baseTrackerOf(tracker: GuideTracker): GuideTracker {
 // Estimates local angular rate and, when the centered five-point stencil is available, acceleration.
 // Samples are absolute positions evaluated at valid times; no rate is integrated into a position.
 export function estimateNonSiderealDerivative(ephemeris: NonSiderealEphemeris, time: Time, options: NonSiderealDerivativeOptions = {}): NonSiderealDerivative {
-	const requestedStep = options.stepSeconds ?? DEFAULT_NONSIDEREAL_DERIVATIVE_STEP_SECONDS
-	const minStep = options.minStepSeconds ?? 0.001
-	const maxStep = options.maxStepSeconds ?? 3600
+	const requestedStep = options.step ?? DEFAULT_NONSIDEREAL_DERIVATIVE_STEP_SECONDS
+	const minStep = options.minStep ?? 0.001
+	const maxStep = options.maxStep ?? 3600
+
 	const stepSeconds = clampFinite(requestedStep, minStep, maxStep)
 	if (!(stepSeconds > 0)) return { available: false, oneSided: false, reason: 'rateUnavailable' }
+
 	const center = makePosition()
+
 	try {
 		ephemeris.position(time, center)
 	} catch (error) {
@@ -593,6 +585,7 @@ export function estimateNonSiderealDerivative(ephemeris: NonSiderealEphemeris, t
 	const valid = ephemeris.validTime
 	const centerDay = toJulianDay(timeConvert(time, Timescale.TT))
 	const h = stepSeconds / DAYSEC
+
 	const canSample = (offset: number) => valid === undefined || (centerDay + offset >= valid[0] && centerDay + offset <= valid[1])
 	const sample = (offset: number) => {
 		const sampleTime = timeShift(time, offset)
@@ -600,6 +593,7 @@ export function estimateNonSiderealDerivative(ephemeris: NonSiderealEphemeris, t
 		ephemeris.position(sampleTime, position)
 		return nonSiderealAngularOffset(center, position)
 	}
+
 	const values = (offsets: readonly number[]) => offsets.map((offset) => sample(offset))
 
 	try {
@@ -607,27 +601,27 @@ export function estimateNonSiderealDerivative(ephemeris: NonSiderealEphemeris, t
 			const [minus2, minus1, plus1, plus2] = values([-2 * h, -h, h, 2 * h])
 			const rate = derivativeFivePoint(minus2, minus1, plus1, plus2, stepSeconds)
 			const acceleration = accelerationFivePoint(minus2, minus1, { east: 0, north: 0, separation: 0 }, plus1, plus2, stepSeconds)
-			return { available: true, rate, acceleration, stepSeconds, oneSided: false } as const
+			return { available: true, rate, acceleration, step: stepSeconds, oneSided: false } as const
 		}
 		if (canSample(-h) && canSample(h)) {
 			const [minus1, plus1] = values([-h, h])
-			return { available: true, rate: derivativeCentered(minus1, plus1, stepSeconds), stepSeconds, oneSided: false } as const
+			return { available: true, rate: derivativeCentered(minus1, plus1, stepSeconds), step: stepSeconds, oneSided: false } as const
 		}
 		if (canSample(0) && canSample(h) && canSample(2 * h) && canSample(3 * h) && canSample(4 * h)) {
 			const [zero, plus1, plus2, plus3, plus4] = values([0, h, 2 * h, 3 * h, 4 * h])
-			return { available: true, rate: derivativeForwardFivePoint(zero, plus1, plus2, plus3, plus4, stepSeconds), stepSeconds, oneSided: true } as const
+			return { available: true, rate: derivativeForwardFivePoint(zero, plus1, plus2, plus3, plus4, stepSeconds), step: stepSeconds, oneSided: true } as const
 		}
 		if (canSample(0) && canSample(-h) && canSample(-2 * h) && canSample(-3 * h) && canSample(-4 * h)) {
 			const [zero, minus1, minus2, minus3, minus4] = values([0, -h, -2 * h, -3 * h, -4 * h])
-			return { available: true, rate: derivativeBackwardFivePoint(zero, minus1, minus2, minus3, minus4, stepSeconds), stepSeconds, oneSided: true } as const
+			return { available: true, rate: derivativeBackwardFivePoint(zero, minus1, minus2, minus3, minus4, stepSeconds), step: stepSeconds, oneSided: true } as const
 		}
 		if (canSample(0) && canSample(h) && canSample(2 * h)) {
 			const [zero, plus1, plus2] = values([0, h, 2 * h])
-			return { available: true, rate: derivativeForwardThreePoint(zero, plus1, plus2, stepSeconds), stepSeconds, oneSided: true } as const
+			return { available: true, rate: derivativeForwardThreePoint(zero, plus1, plus2, stepSeconds), step: stepSeconds, oneSided: true } as const
 		}
 		if (canSample(0) && canSample(-h) && canSample(-2 * h)) {
 			const [zero, minus1, minus2] = values([0, -h, -2 * h])
-			return { available: true, rate: derivativeBackwardThreePoint(zero, minus1, minus2, stepSeconds), stepSeconds, oneSided: true } as const
+			return { available: true, rate: derivativeBackwardThreePoint(zero, minus1, minus2, stepSeconds), step: stepSeconds, oneSided: true } as const
 		}
 	} catch (error) {
 		return { available: false, oneSided: false, reason: error instanceof NonSiderealError && error.code === 'outsideValidity' ? 'outsideValidity' : 'providerError' }
@@ -639,13 +633,6 @@ export function estimateNonSiderealDerivative(ephemeris: NonSiderealEphemeris, t
 // Allocates a mutable position scratch object for one synchronous provider call.
 function makePosition(): EquatorialCoordinate {
 	return { rightAscension: 0, declination: 0 }
-}
-
-// Normalizes a right ascension and rejects non-finite input before it can enter vector geometry.
-function normalizeRightAscension(value: number) {
-	if (!Number.isFinite(value)) throw new NonSiderealError('invalidPosition', 'right ascension is not finite')
-	const normalized = value % TAU
-	return normalized < 0 ? normalized + TAU : normalized
 }
 
 // Clamps a dot product affected by floating-point roundoff into the inverse-trigonometric domain.

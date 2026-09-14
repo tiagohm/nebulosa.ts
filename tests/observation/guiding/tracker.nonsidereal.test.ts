@@ -73,7 +73,7 @@ test('computes wrap-safe east/north tangent offsets with finite pole behavior', 
 test('converts arcsec per pixel with explicit calibration orientation', () => {
 	const transform = calibratedNonSiderealTransform({
 		pixelScaleArcsecPerPixel: 1,
-		calibration: { ra: { unitX: 1, unitY: 0 }, dec: { unitX: 0, unitY: 1 } },
+		calibration: { rightAscension: { unitX: 1, unitY: 0 }, declination: { unitX: 0, unitY: 1 } },
 	})
 
 	expect(transform.offsetToImage([ASEC2RAD, -ASEC2RAD], instant(0), { width: 10, height: 10, timestamp: 1, frameId: 1 })).toEqual([1, -1])
@@ -84,7 +84,7 @@ describe('finite-difference derivatives', () => {
 		const eastRate = 1.2e-6
 		const northRate = -0.8e-6
 		const ephemeris = linearEphemeris(eastRate, northRate)
-		const derivative = estimateNonSiderealDerivative(ephemeris, instant(1200), { stepSeconds: 30 })
+		const derivative = estimateNonSiderealDerivative(ephemeris, instant(1200), { step: 30 })
 
 		expect(derivative.available).toBeTrue()
 		expect(derivative.oneSided).toBeFalse()
@@ -95,7 +95,7 @@ describe('finite-difference derivatives', () => {
 	})
 
 	test('falls back to a one-sided stencil at a validity boundary', () => {
-		const derivative = estimateNonSiderealDerivative(linearEphemeris(1e-6, 0, 2400), instant(0), { stepSeconds: 30 })
+		const derivative = estimateNonSiderealDerivative(linearEphemeris(1e-6, 0, 2400), instant(0), { step: 30 })
 
 		expect(derivative.available).toBeTrue()
 		expect(derivative.oneSided).toBeTrue()
@@ -111,7 +111,7 @@ describe('finite-difference derivatives', () => {
 				return out
 			},
 		}
-		const derivative = estimateNonSiderealDerivative(source, instant(0), { stepSeconds: 30 })
+		const derivative = estimateNonSiderealDerivative(source, instant(0), { step: 30 })
 
 		expect(derivative.available).toBeFalse()
 		expect(derivative.reason).toBe('rateUnavailable')

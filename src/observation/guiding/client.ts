@@ -642,7 +642,9 @@ export class GuiderClient {
 		} catch {
 			return false
 		}
+
 		this.#emitNonSiderealState(this.#tracker.state)
+
 		return true
 	}
 
@@ -650,11 +652,13 @@ export class GuiderClient {
 	// anchor and accumulated angular trajectory.
 	setNonSiderealTransform(transform: NonSiderealImageTransform) {
 		if (this.#tracker.state === 'disabled') return false
+
 		try {
 			this.#tracker.onCalibrationChanged(transform)
 		} catch {
 			return false
 		}
+
 		return true
 	}
 
@@ -1197,13 +1201,11 @@ export class GuiderClient {
 		const phase = this.#guidingAssistant !== undefined ? 'assistant' : appState === 'Calibrating' ? 'calibrating' : appState === 'Guiding' ? 'guiding' : appState === 'LostLock' ? 'lostLock' : appState === 'Selected' ? 'selected' : 'looping'
 		const width = image?.metadata.width ?? this.#camera?.frame.width.value ?? 0
 		const height = image?.metadata.height ?? this.#camera?.frame.height.value ?? 0
-		const fallbackTimestamp = Date.now()
-		const fallbackMonotonic = performance.now()
-		const timestamp = this.#hasExposureStart ? this.#exposureStartedAt + this.#inFlightExposure / 2 : fallbackTimestamp
+		const timestamp = this.#hasExposureStart ? this.#exposureStartedAt + this.#inFlightExposure / 2 : Date.now()
 		// The monotonic clock is sampled when the BLOB is admitted. It is the operational fallback when
 		// the camera does not provide a capture clock; the astronomical `captureTime` above still uses
 		// the exposure midpoint.
-		const captureMonotonic = fallbackMonotonic
+		const captureMonotonic = performance.now()
 		if (this.#lastAcceptedCaptureMonotonic !== undefined && captureMonotonic <= this.#lastAcceptedCaptureMonotonic) return undefined
 		this.#lastAcceptedCaptureMonotonic = captureMonotonic
 		const captureTime = this.options?.timeFactory?.(timestamp) ?? timeUnix(timestamp / 1000)
@@ -1445,6 +1447,7 @@ export class GuiderClient {
 	// Updates settle state from current guide error and elapsed settle timing.
 	#updateSettling(dx: number | undefined, dy: number | undefined, badFrame: boolean, lost: boolean, timestamp: number, captureMonotonic?: number) {
 		if (!this.#settling || this.#paused) return
+
 		const clock = captureMonotonic ?? timestamp
 
 		if (this.#settleStartTime === 0) {
@@ -1555,6 +1558,7 @@ export class GuiderClient {
 		}
 
 		this.#syncGuideTargetOffset()
+
 		if (!limitReached) {
 			this.#lockPosition = [lockX, lockY] as const
 			if (!this.#searchFollowsMeasurement) this.#lockSearchPosition = this.#lockPosition
@@ -1601,7 +1605,7 @@ export class GuiderClient {
 		const y = diagnostics.currentY ?? diagnostics.startY
 
 		if (x !== undefined && y !== undefined) {
-			this.#lockSearchPosition = [x, y] as const
+			this.#lockSearchPosition = [x, y]
 			if (!this.#fixedLockReferenceEnabled) this.#lockPosition = this.#lockSearchPosition
 		}
 	}
@@ -1610,7 +1614,9 @@ export class GuiderClient {
 	// attached to GuideFrame and are not flooded through the control callback.
 	#emitNonSiderealState(state: NonSiderealState | 'cleared' | undefined, diagnostic?: NonSiderealTrackerDiagnostic) {
 		if (state === undefined || this.#lastNonSiderealState === state) return
+
 		this.#lastNonSiderealState = state
+
 		try {
 			this.#nonSiderealStateHandler?.(this, { state, diagnostic })
 		} catch (error) {
@@ -1655,9 +1661,7 @@ export class GuiderClient {
 
 		const timeout = Math.max(3 * this.#exposure, EXPOSURE_WATCHDOG_MIN_MS)
 		const attempt = this.#exposureAttempt
-		this.#exposureWatchdog = setTimeout(() => {
-			this.#onExposureWatchdog(attempt)
-		}, timeout)
+		this.#exposureWatchdog = setTimeout(() => this.#onExposureWatchdog(attempt), timeout)
 		this.#exposureWatchdog.unref()
 	}
 
