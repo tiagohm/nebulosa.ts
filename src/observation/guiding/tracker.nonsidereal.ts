@@ -432,14 +432,17 @@ export class NonSiderealTracker implements GuideTracker {
 		this.baseTracker.commit?.()
 	}
 
-	// Tracks the base frame first, then adds an absolute-position offset only for an established
-	// guided lock. Calibration, acquisition, and lost-lock frames remain free of ephemeris calls.
+	// Tracks the base frame first, then adds an absolute-position offset after a guided lock is
+	// established, including lost-lock recovery. Calibration and initial acquisition skip ephemeris
+	// calls; persistent faults suppress measurements until explicit recovery.
 	track(frame: GuideTrackerFrame, context: GuideTrackerContext): NonSiderealTrackerResult {
 		const baseResult = this.baseTracker.track(frame, context)
 		// Keep the disabled and pre-lock paths observationally transparent: existing clients may
 		// retain the exact base result object for overlays and telemetry.
 		if (this.#ephemeris === undefined || this.#transform === undefined) return baseResult as NonSiderealTrackerResult
-		if (context.phase !== 'guiding' || context.lockEstablished !== true) return baseResult as NonSiderealTrackerResult
+		if (context.phase !== 'guiding' && context.phase !== 'lostLock') return baseResult as NonSiderealTrackerResult
+		if (this.#state === 'faulted' || this.#state === 'limitReached') return this.#failure(baseResult, frame, this.#failureReason ?? 'providerError', 'non-sidereal tracker requires reset, clear, or reanchor after a fault')
+		if (this.#anchor === undefined && (context.phase !== 'guiding' || context.lockEstablished !== true)) return baseResult as NonSiderealTrackerResult
 
 		if (frame.captureTime === undefined) return this.#failure(baseResult, frame, 'invalidTime', 'non-sidereal guiding requires an astronomical capture time')
 
@@ -454,8 +457,6 @@ export class NonSiderealTracker implements GuideTracker {
 		if (this.#lastCapture !== undefined && (this.#lastCapture.monotonic !== undefined && hasCurrentMonotonic ? frame.captureMonotonic <= this.#lastCapture.monotonic : julianDay <= this.#lastCapture.julianDay)) {
 			return this.#failure(baseResult, frame, 'outOfOrder', 'non-sidereal frame capture time is duplicate or out of order')
 		}
-
-		if (this.#state === 'faulted' || this.#state === 'limitReached') return this.#failure(baseResult, frame, this.#failureReason ?? 'providerError', 'non-sidereal tracker requires reset, clear, or reanchor after a fault')
 
 		if (this.#anchor === undefined) {
 			try {

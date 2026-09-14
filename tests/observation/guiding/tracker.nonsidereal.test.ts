@@ -3,6 +3,7 @@ import type { EquatorialCoordinate } from '../../../src/astronomy/coordinates/co
 import { linearInterpolator, type EphemerisPoint } from '../../../src/astronomy/ephemeris/interpolation/ephemeris'
 import { Timescale, time, toJulianDay } from '../../../src/astronomy/time/time'
 import { ASEC2RAD, DAYSEC, PI, TAU } from '../../../src/core/constants'
+import { Guider } from '../../../src/observation/guiding/guider'
 import type { GuideTracker, GuideTrackerContext, GuideTrackerFrame, GuideTrackerResult } from '../../../src/observation/guiding/tracker'
 import { baseTrackerOf, nonSiderealAngularOffset, calibratedNonSiderealTransform, estimateNonSiderealDerivative, InterpolatedNonSiderealEphemeris, NonSiderealError, NonSiderealTracker, type NonSiderealEphemeris } from '../../../src/observation/guiding/tracker.nonsidereal'
 import { starTrackingOf } from '../../../src/observation/guiding/tracker.star'
@@ -119,6 +120,59 @@ describe('finite-difference derivatives', () => {
 })
 
 describe('NonSiderealTracker decorator', () => {
+	test.each(['calibration', 'provider', 'limit'] as const)('suppresses controller pulses through lost lock after a %s fault', (failure) => {
+		const guider = new Guider({ lockAveragingFrames: 1, lostStarFrameCount: 1 })
+		const measurement = { x: 10, y: 20, confidence: 1 }
+		const result = { ...baseResult([0, 0]), measurement }
+		const tracker = new NonSiderealTracker(baseStub(result), { geometry: { maxAngularSeparation: 0.001 } })
+		let providerFailed = false
+		let limitExceeded = false
+		tracker.arm(
+			{
+				position: (_time, out) => {
+					if (providerFailed) throw new Error('provider unavailable')
+					out.rightAscension = limitExceeded ? 0.002 : 0
+					out.declination = 0
+					return out
+				},
+			},
+			{ offsetToImage: () => [0, 0] },
+		)
+		const process = (seconds: number) => {
+			const state = guider.currentState.state
+			const frame = trackerFrame(seconds)
+			const tracking = tracker.track(frame, { ...guideContext(state === 'guiding'), phase: state === 'lost' ? 'lostLock' : 'guiding' })
+			return guider.processFrame({ ...frame, tracking })
+		}
+		expect(process(0).state).toBe('guiding')
+		process(1)
+		measurement.x += 1
+		if (failure === 'calibration') tracker.onCalibrationChanged()
+		if (failure === 'provider') providerFailed = true
+		if (failure === 'limit') limitExceeded = true
+		for (const seconds of [2, 3, 4]) {
+			const command = process(seconds)
+			expect(command.state).toBe('lost')
+			expect(command.ra.duration).toBe(0)
+			expect(command.dec.duration).toBe(0)
+			expect(command.tracking.measurement).toBeUndefined()
+		}
+		providerFailed = false
+		tracker.reanchor(instant(5))
+		expect(process(6).state).toBe('guiding')
+	})
+
+	test('retains the celestial anchor and offset while reacquiring a lost lock', () => {
+		const tracker = new NonSiderealTracker(baseStub(baseResult([0, 0])))
+		tracker.arm(linearEphemeris(1e-6, 0), { offsetToImage: ([east, north]) => [east * 1e6, north * 1e6] })
+		tracker.track(trackerFrame(0), guideContext(true))
+		const recovered = tracker.track(trackerFrame(10), { ...guideContext(false), phase: 'lostLock' })
+		expect(recovered.nonSidereal.state).toBe('active')
+		expect(recovered.targetOffset?.[0]).toBeCloseTo(10, 4)
+		const guiding = tracker.track(trackerFrame(20), guideContext(true))
+		expect(guiding.targetOffset?.[0]).toBeCloseTo(20, 4)
+	})
+
 	test('does not call the ephemeris before a visual lock and preserves base fields', () => {
 		let providerCalls = 0
 		const result = baseResult()
