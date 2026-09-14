@@ -65,7 +65,7 @@ describe('computed polar alignment error', () => {
 				}
 			}
 		}
-	})
+	}, 3000)
 
 	test('northern hemisphere with refraction', () => {
 		time.location = northLocation
