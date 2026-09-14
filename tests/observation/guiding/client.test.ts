@@ -3282,10 +3282,11 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	)
 
 	test(
-		'an error large enough to saturate the right ascension pulse reports RALimited',
+		'an out-of-envelope lock target is rejected before any correction pulse',
 		async () => {
 			const harness = await calibrateAndGuide()
 			await establishLockReference(harness)
+			const pulsesBefore = harness.guideOutputManager.pulses.length
 
 			// Moving the lock target instead of the star creates an arbitrarily large guide error without
 			// tripping the frame-jump rejection, and a sticky lock keeps the guider from re-averaging its
@@ -3297,26 +3298,22 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			expect(harness.client.setLockPosition(lockX + awayX, lockY + awayY, true)).toBeTrue()
 
 			let steps = eventsOf(harness.events, 'GuideStep')
-			let limited: (typeof steps)[number] | undefined
 
 			// The moved lock target restarts the reference averaging, so the first frames report no error.
-			for (let i = 0; i < 14 && limited === undefined; i++) {
+			for (let i = 0; i < 14 && harness.client.getAppState() !== 'LostLock'; i++) {
 				await feedFrame(harness)
 				steps = eventsOf(harness.events, 'GuideStep')
-				limited = steps.find((step) => step.RALimited === true)
 			}
 
-			expect(limited).toBeDefined()
-			// The clipped pulse is reported at exactly the configured right ascension maximum, while the
-			// declination axis, which sees a much smaller share of the offset, is never clipped.
-			expect(limited!.RADuration).toBe(2000)
-			expect(limited!.DecLimited).toBeUndefined()
+			expect(steps.find((step) => step.RALimited === true)).toBeUndefined()
+			expect(harness.client.getAppState()).toBe('LostLock')
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
 
 	test(
-		'a saturated pulse recovers once the lock error shrinks',
+		'an out-of-envelope target recovers only after explicit relock',
 		async () => {
 			const harness = await calibrateAndGuide()
 			await establishLockReference(harness)
@@ -3326,31 +3323,14 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			const [awayX, awayY] = offsetAwayFromOtherStar(harness, lockX, lockY, LARGE_LOCK_OFFSET_PX)
 			expect(harness.client.setLockPosition(lockX + awayX, lockY + awayY, true)).toBeTrue()
 
-			let steps = eventsOf(harness.events, 'GuideStep')
-			let limited: (typeof steps)[number] | undefined
-			for (let i = 0; i < 14 && limited === undefined; i++) {
+			for (let i = 0; i < 14 && harness.client.getAppState() !== 'LostLock'; i++) {
 				await feedFrame(harness)
-				steps = eventsOf(harness.events, 'GuideStep')
-				limited = steps.find((step) => step.RALimited === true)
 			}
 
-			expect(limited).toBeDefined()
-			expect(limited!.RADuration).toBe(2000)
+			expect(harness.client.getAppState()).toBe('LostLock')
+			expect(harness.client.setLockPosition(STAR_A[0], STAR_A[1], true)).toBeTrue()
+			for (let i = 0; i < 8; i++) await feedFrame(harness)
 
-			// The saturated pulses have already walked the star toward the far lock. Relocking on the
-			// current measurement shrinks the error without asking the mount to reverse the whole trip.
-			const farLock = harness.client.getLockPosition()!
-			const lastLimited = eventsOf(harness.events, 'GuideStep').at(-1)!
-			expect(harness.client.setLockPosition(farLock[0] + lastLimited.dx, farLock[1] + lastLimited.dy, true)).toBeTrue()
-			for (let i = 0; i < 16; i++) await feedFrame(harness)
-
-			const recovered = eventsOf(harness.events, 'GuideStep').slice(-4)
-			expect(recovered.length).toBe(4)
-			for (const step of recovered) {
-				expect(step.RALimited).toBeUndefined()
-				expect(step.RADuration).toBeLessThan(500)
-			}
-			expect(Math.hypot(recovered.at(-1)!.dx, recovered.at(-1)!.dy)).toBeLessThan(6)
 			expect(harness.client.getAppState()).toBe('Guiding')
 		},
 		CLOSED_LOOP_TIMEOUT,
@@ -4374,10 +4354,11 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	)
 
 	test(
-		'lock-shift clamps the target at the frame edge',
+		'lock-shift reports an envelope failure without silently clamping the target',
 		async () => {
 			const harness = await calibrateAndGuide()
 			await establishLockReference(harness)
+			const lockBefore = harness.client.getLockPosition()!
 
 			expect(harness.client.setLockShiftParams({ rate: [1e7, 0], axes: 'X/Y' })).toBeTrue()
 			expect(harness.client.setLockShiftEnabled(true)).toBeTrue()
@@ -4385,9 +4366,8 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			await feedFrame(harness)
 
 			const lock = harness.client.getLockPosition()!
-			expect(lock[0]).toBe(FRAME_WIDTH - 1)
-			expect(lock[1]).toBeGreaterThanOrEqual(0)
-			expect(lock[1]).toBeLessThan(FRAME_HEIGHT)
+			expect(lock).toEqual(lockBefore)
+			expect(harness.client.getAppState()).toBe('LostLock')
 			expect(eventsOf(harness.events, 'LockPositionShiftLimitReached')).toHaveLength(1)
 		},
 		CLOSED_LOOP_TIMEOUT,

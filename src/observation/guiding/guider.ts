@@ -1,7 +1,7 @@
 import type { Writable } from '../../core/types'
 import { Matrix } from '../../math/linear-algebra/matrix'
 import { clamp } from '../../math/numerical/math'
-import { type GuideFrame, type GuideTrackerResult, trackingOf } from './tracker'
+import { type GuideFrame, type GuideTargetEnvelope, type GuideTrackerResult, trackingOf } from './tracker'
 import { starTrackingOf } from './tracker.star'
 
 // Generic autoguiding controller. Given a stream of tracker results and a calibration matrix mapping
@@ -100,6 +100,18 @@ export interface GuideDiagnostics {
 	readonly notes: readonly string[]
 	// Generic tracking result used to produce these diagnostics.
 	readonly tracking?: GuideTrackerResult
+	// Structured target-envelope rejection, when the proposed target could not be pulsed safely.
+	readonly targetLimit?: GuideTargetLimitDiagnostic
+}
+
+// Structured preflight failure for the combined reference, dither, lock-shift, and tracker target.
+export interface GuideTargetLimitDiagnostic {
+	// Reason the proposed target was rejected.
+	readonly reason: 'nonFiniteTarget' | 'outsideEnvelope'
+	// Proposed combined target in image pixels.
+	readonly proposed: readonly [number, number]
+	// Inclusive permitted target bounds in image pixels.
+	readonly envelope: GuideTargetEnvelope
 }
 
 // Row-major 2×2 image-to-axis calibration matrix [a, b, c, d].
@@ -504,6 +516,16 @@ export class Guider {
 		this.state.lastGoodMeasurementY = measurement.y
 		const targetX = this.state.referenceX + this.state.ditherOffsetX + (tracking.targetOffset?.[0] ?? 0)
 		const targetY = this.state.referenceY + this.state.ditherOffsetY + (tracking.targetOffset?.[1] ?? 0)
+		const targetLimit = this.#preflightTarget(frame, targetX, targetY)
+		if (targetLimit !== undefined) {
+			this.state.state = 'lost'
+			this.state.consecutiveBadFrames = this.config.lostStarFrameCount
+			this.#clearRaControlState()
+			this.#clearDecControlState()
+			notes.push('target_limit')
+			this.#updateDiagnostics(frame, tracking, undefined, droppedFrame, true, notes, targetLimit)
+			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, tracking }
+		}
 		const dx = measurement.x - targetX
 		const dy = measurement.y - targetY
 		const axisError = applyCalibration(this.config.calibration, dx, dy)
@@ -532,6 +554,24 @@ export class Guider {
 		)
 
 		return { state: this.state.state, ra, dec, diagnostics: this.state.lastDiagnostics, tracking }
+	}
+
+	// Rejects a combined target before any axis controller can turn it into a pulse. The default
+	// envelope is the decoded image; callers can provide tighter search-region or detector margins.
+	#preflightTarget(frame: GuideFrame, targetX: number, targetY: number): GuideTargetLimitDiagnostic | undefined {
+		const configuredEnvelope = frame.targetEnvelope
+		const envelope =
+			configuredEnvelope === undefined
+				? frame.width > 0 && frame.height > 0
+					? { minX: 0, maxX: frame.width - 1, minY: 0, maxY: frame.height - 1 }
+					: undefined
+				: { minX: configuredEnvelope.minX, maxX: configuredEnvelope.maxX, minY: configuredEnvelope.minY, maxY: configuredEnvelope.maxY, marginPx: configuredEnvelope.marginPx }
+		const proposed: readonly [number, number] = [Number.isFinite(targetX) ? targetX : 0, Number.isFinite(targetY) ? targetY : 0]
+		if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) return { reason: 'nonFiniteTarget', proposed, envelope: envelope ?? { minX: 0, maxX: 0, minY: 0, maxY: 0 } }
+		if (envelope === undefined || !Number.isFinite(envelope.minX) || !Number.isFinite(envelope.maxX) || !Number.isFinite(envelope.minY) || !Number.isFinite(envelope.maxY) || envelope.minX > envelope.maxX || envelope.minY > envelope.maxY)
+			return envelope === undefined ? undefined : { reason: 'outsideEnvelope', proposed, envelope }
+		if (targetX < envelope.minX || targetX > envelope.maxX || targetY < envelope.minY || targetY > envelope.maxY) return { reason: 'outsideEnvelope', proposed, envelope }
+		return undefined
 	}
 
 	// Returns a public snapshot of current guider runtime state.
@@ -709,7 +749,7 @@ export class Guider {
 	}
 
 	// Updates diagnostics payload for telemetry and testing.
-	#updateDiagnostics(frame: GuideFrame, tracking: GuideTrackerResult, measurement: DiagnosticMeasurement | undefined, droppedFrame: boolean, badFrame: boolean, notes: readonly string[]) {
+	#updateDiagnostics(frame: GuideFrame, tracking: GuideTrackerResult, measurement: DiagnosticMeasurement | undefined, droppedFrame: boolean, badFrame: boolean, notes: readonly string[], targetLimit?: GuideTargetLimitDiagnostic) {
 		const stellar = starTrackingOf(tracking)
 		this.state.lastDiagnostics = {
 			frameId: frame.frameId,
@@ -740,6 +780,7 @@ export class Guider {
 			droppedFrame,
 			notes,
 			tracking,
+			targetLimit,
 		}
 	}
 }

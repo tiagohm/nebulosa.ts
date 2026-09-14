@@ -1224,6 +1224,7 @@ export class GuiderClient {
 
 	// Runs the guide controller, applies settle tracking, and returns the max pulse delay.
 	#processGuidingFrame(frame: GuideFrame) {
+		this.#updateLockShift(frame)
 		const command = this.#guider.processFrame(frame)
 		const acceptedMeasurement = command.tracking.measurement !== undefined && command.tracking.qualityScore >= this.#guider.config.minFrameQuality && !command.diagnostics.notes.includes('init_waiting') && !command.diagnostics.notes.includes('jump_rejected')
 		if (acceptedMeasurement) this.#tracker.commit?.()
@@ -1255,7 +1256,6 @@ export class GuiderClient {
 		if (!this.#paused) this.#setAppState('Guiding')
 
 		this.#updateSettling(command.diagnostics.dx, command.diagnostics.dy, command.diagnostics.badFrame, command.diagnostics.lost, timestamp, captureMonotonic)
-		this.#updateLockShift(frame)
 
 		if (assistantDelay !== undefined) return assistantDelay
 
@@ -1455,26 +1455,19 @@ export class GuiderClient {
 		this.#lockShiftOffsetY += rate[1] * shiftScale
 
 		const { referenceX, referenceY } = this.#guider.currentState
-		let lockX = referenceX + this.#ditherOffsetX + this.#lockShiftOffsetX
-		let lockY = referenceY + this.#ditherOffsetY + this.#lockShiftOffsetY
+		const lockX = referenceX + this.#ditherOffsetX + this.#lockShiftOffsetX
+		const lockY = referenceY + this.#ditherOffsetY + this.#lockShiftOffsetY
 		let limitReached = false
 
 		if (frame.width > 0 && frame.height > 0) {
-			const clampedLockX = clamp(lockX, 0, frame.width - 1)
-			const clampedLockY = clamp(lockY, 0, frame.height - 1)
-			limitReached = clampedLockX !== lockX || clampedLockY !== lockY
-
-			if (limitReached) {
-				lockX = clampedLockX
-				lockY = clampedLockY
-				this.#lockShiftOffsetX = clampedLockX - referenceX - this.#ditherOffsetX
-				this.#lockShiftOffsetY = clampedLockY - referenceY - this.#ditherOffsetY
-			}
+			limitReached = lockX < 0 || lockX > frame.width - 1 || lockY < 0 || lockY > frame.height - 1
 		}
 
 		this.#syncGuideTargetOffset()
-		this.#lockPosition = [lockX, lockY] as const
-		if (!this.#searchFollowsMeasurement) this.#lockSearchPosition = this.#lockPosition
+		if (!limitReached) {
+			this.#lockPosition = [lockX, lockY] as const
+			if (!this.#searchFollowsMeasurement) this.#lockSearchPosition = this.#lockPosition
+		}
 
 		if (limitReached) {
 			if (!this.#lockShiftLimitReached) this.emitEvent('LockPositionShiftLimitReached')

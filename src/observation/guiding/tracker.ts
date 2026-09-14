@@ -93,6 +93,21 @@ export interface GuideTrackerResult {
 	readonly telemetry?: GuideTrackerTelemetry
 }
 
+// Valid image-space envelope for a commanded target. Bounds are inclusive pixels and should
+// include any caller-specific search-region or detector-margin policy.
+export interface GuideTargetEnvelope {
+	// Minimum permitted target X coordinate, in pixels.
+	readonly minX: number
+	// Maximum permitted target X coordinate, in pixels.
+	readonly maxX: number
+	// Minimum permitted target Y coordinate, in pixels.
+	readonly minY: number
+	// Maximum permitted target Y coordinate, in pixels.
+	readonly maxY: number
+	// Informational margin represented by these bounds, in pixels.
+	readonly marginPx?: number
+}
+
 // Stateful synchronous tracker contract. `lastResult` is replaced for every call and contains no
 // historical frame arrays.
 export interface GuideTracker {
@@ -116,6 +131,8 @@ export interface GuideFrame {
 	readonly width: number
 	// Frame height in pixels.
 	readonly height: number
+	// Optional validated target envelope for preflight before a correction pulse.
+	readonly targetEnvelope?: GuideTargetEnvelope
 	// Capture timestamp in milliseconds since the Unix epoch.
 	readonly timestamp?: number
 	// Astronomical capture instant, preferably the exposure midpoint.

@@ -214,6 +214,28 @@ test('adds tracker target offset once to the generic lock target', () => {
 	expect(command.diagnostics.dy).toBe(-0.5)
 })
 
+test('rejects a combined target outside the image envelope before pulsing', () => {
+	const g = guider({ lockAveragingFrames: 1 })
+	const tracking = (targetOffset?: readonly [number, number]): GuideTrackerResult => ({
+		measurement: { x: 100, y: 100, confidence: 1 },
+		candidateCount: 1,
+		acceptedCount: 1,
+		qualityScore: 1,
+		rejectedReasons: {},
+		notes: [],
+		targetOffset,
+	})
+
+	g.processFrame({ tracking: tracking(), width: 200, height: 200 })
+	const command = g.processFrame({ tracking: tracking([100, 0]), width: 200, height: 200 })
+
+	expect(command.state).toBe('lost')
+	expect(command.ra.duration).toBe(0)
+	expect(command.dec.duration).toBe(0)
+	expect(command.diagnostics.targetLimit?.reason).toBe('outsideEnvelope')
+	expect(command.diagnostics.targetLimit?.proposed).toEqual([200, 100])
+})
+
 test('dither offset shifts target and settles after stop', () => {
 	const guider = new Guider({ lockAveragingFrames: 1, minMoveRA: 0.01, minMoveDEC: 0.01, hysteresisRA: 0, hysteresisDEC: 0 })
 	guider.processFrame(guideFrame(BASE_STARS, 0))
