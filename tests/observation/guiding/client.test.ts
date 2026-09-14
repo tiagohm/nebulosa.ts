@@ -2802,6 +2802,32 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	)
 
 	test(
+		'non-sidereal sources clear after stopping or returning to looping',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+			const ephemeris = {
+				position: (_time: unknown, out: { rightAscension: number; declination: number }) => out,
+			}
+			const transform = { offsetToImage: () => [0, 0] as const }
+
+			expect(harness.client.armNonSidereal(ephemeris, transform)).toBeTrue()
+			await feedFrame(harness)
+			expect(harness.client.getNonSiderealState()).toBe('active')
+			expect(harness.client.stopCapture()).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Stopped')
+			expect(harness.client.clearNonSidereal()).toBeTrue()
+			expect(harness.client.getNonSiderealState()).toBe('disabled')
+
+			expect(harness.client.armNonSidereal(ephemeris, transform)).toBeTrue()
+			expect(harness.client.loop()).toBeTrue()
+			expect(harness.client.clearNonSidereal()).toBeTrue()
+			expect(harness.client.getNonSiderealState()).toBe('disabled')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
 		'startGuidingAssistant is allowed after a settled dither',
 		async () => {
 			const harness = await calibrateAndGuide()

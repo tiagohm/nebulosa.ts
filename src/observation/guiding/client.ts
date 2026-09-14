@@ -669,7 +669,7 @@ export class GuiderClient {
 	// jump. A stopped, looping, or merely selected session can clear the source immediately.
 	clearNonSidereal() {
 		const guidingSession = this.#appState === 'Guiding' || this.#appState === 'LostLock' || (this.#appState === 'Paused' && this.#resumeState === 'Guiding')
-		if (guidingSession || this.#guider.currentState.state === 'guiding' || this.#guider.currentState.state === 'lost') return false
+		if (guidingSession) return false
 		this.#tracker.clear()
 		this.#emitNonSiderealState('cleared')
 		this.#lastNonSiderealState = 'disabled'
