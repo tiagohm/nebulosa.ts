@@ -1722,6 +1722,39 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(JSON.stringify(thermometer)).toContain('parentId')
 	}, 1000)
 
+	test('uses the non-zero timed-guide duration when the opposite axis is zero', async () => {
+		const handler = new IndiClientHandlerSet()
+		const cameraManager = new CameraManager()
+		const guideOutputManager = new GuideOutputManager(cameraManager)
+
+		handler.add(cameraManager)
+		handler.add(guideOutputManager)
+
+		using client = new ClientSimulator('camera', handler)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client)
+
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+		cameraManager.connect(camera)
+		await waitUntil(() => camera.connected)
+		await waitUntil(() => camera.canPulseGuide)
+
+		guideOutputManager.pulseSouth(camera, 1000)
+		await waitUntil(() => camera.pulsingNS)
+		expect(camera.pulsingWE).toBeFalse()
+
+		guideOutputManager.pulseEast(camera, 1000)
+		await waitUntil(() => camera.pulsingWE)
+		expect(camera.pulsingNS).toBeTrue()
+
+		guideOutputManager.pulseSouth(camera, 0)
+		await waitUntil(() => !camera.pulsingNS)
+		expect(camera.pulsingWE).toBeTrue()
+
+		guideOutputManager.pulseEast(camera, 0)
+		await waitUntil(() => !camera.pulsingWE)
+		expect(camera.pulsingNS).toBeFalse()
+	}, 2000)
+
 	test('camera uses focuser position', async () => {
 		const handler = new IndiClientHandlerSet()
 		const cameraManager = new CameraManager()
