@@ -11,19 +11,21 @@ import type { MeteorActivityProfile, MeteorExponentialActivityProfile, MeteorSam
 // unwrapped locally within each circular support and all exponential slopes use degrees as published.
 
 // Tests whether a solar longitude lies in a forward circular interval. Undefined support means that
-// the catalog did not publish a window, so the result is undefined rather than false.
+// the catalog did not publish a window, so the result is undefined rather than false; fullCircle
+// explicitly covers all longitudes while equal ordinary bounds remain empty.
 export function isMeteorShowerActive(interval: MeteorSolarLongitudeInterval | undefined, solarLongitude: Angle): boolean | undefined {
 	if (interval === undefined) return undefined
-	const width = meteorSolarLongitudeForwardDelta(interval.start, interval.end)
+	if (interval.fullCircle) return true
+	const width = meteorSolarLongitudeIntervalWidth(interval)
 	if (width === 0) return false
 	return meteorSolarLongitudeForwardDelta(interval.start, solarLongitude) <= width
 }
 
-// Returns progress through a known interval, in [0, 1]. Undefined means that the activity window
-// itself is absent; an equal start/end is deliberately not a full circular interval.
+// Returns progress through a known interval, in [0, 1]. A full circle uses start as its phase origin
+// and yields [0, 1); undefined means that the window is absent or an ordinary zero-width interval.
 export function meteorActivityPhase(interval: MeteorSolarLongitudeInterval | undefined, solarLongitude: Angle): number | undefined {
 	if (interval === undefined) return undefined
-	const width = meteorSolarLongitudeForwardDelta(interval.start, interval.end)
+	const width = meteorSolarLongitudeIntervalWidth(interval)
 	if (width === 0) return undefined
 	return Math.min(1, meteorSolarLongitudeForwardDelta(interval.start, solarLongitude) / width)
 }
@@ -82,7 +84,8 @@ export function meteorActivityMaximumSolarLongitude(profile: MeteorActivityProfi
 }
 
 // Returns all circular intervals where a profile is at least the selected fraction of its own peak.
-// Disconnected intervals are retained separately, which is important for overlapping multi-peak profiles.
+// Fraction zero returns one explicit fullCircle interval; disconnected positive-fraction intervals are
+// retained separately, which is important for overlapping multi-peak profiles.
 export function meteorActivityIntervalsAboveFraction(profile: MeteorActivityProfile, fraction: number, options: { readonly samples?: number } = {}): readonly MeteorSolarLongitudeInterval[] {
 	if (!(fraction >= 0) || fraction > 1) return []
 	const maximum = meteorActivityMaximumSolarLongitude(profile)
@@ -103,7 +106,7 @@ export function meteorActivityIntervalsAboveFraction(profile: MeteorActivityProf
 			transitions.push({ longitude: boundary, entering: active[i] === 1 })
 		}
 	}
-	if (transitions.length === 0) return active[0] ? [{ start: 0, end: 0 }] : []
+	if (transitions.length === 0) return active[0] ? [{ start: 0, end: 0, fullCircle: true }] : []
 	const intervals: MeteorSolarLongitudeInterval[] = []
 	for (let i = 0; i < transitions.length; i++) {
 		if (!transitions[i].entering) continue
@@ -171,7 +174,7 @@ export interface MeteorIntegrationOptions {
 // Converts an exponential profile to a sampled function using its forward support coordinate.
 function exponentialZhr(profile: MeteorExponentialActivityProfile, solarLongitude: Angle): number {
 	const offset = meteorSolarLongitudeForwardDelta(profile.support.start, solarLongitude)
-	const width = meteorSolarLongitudeForwardDelta(profile.support.start, profile.support.end)
+	const width = meteorSolarLongitudeIntervalWidth(profile.support)
 	if (width === 0 || offset > width) return 0
 	const maximumOffset = meteorSolarLongitudeForwardDelta(profile.support.start, profile.solarLongitude)
 	const deltaDegrees = (Math.abs(offset - maximumOffset) * 180) / PI
@@ -181,7 +184,7 @@ function exponentialZhr(profile: MeteorExponentialActivityProfile, solarLongitud
 
 function sampledZhr(profile: MeteorSampledActivityProfile, solarLongitude: Angle): number {
 	const offset = meteorSolarLongitudeForwardDelta(profile.support.start, solarLongitude)
-	const width = meteorSolarLongitudeForwardDelta(profile.support.start, profile.support.end)
+	const width = meteorSolarLongitudeIntervalWidth(profile.support)
 	if (width === 0 || offset > width || profile.samples.length === 0) return 0
 	if (profile.samples.length === 1) return offset === meteorSolarLongitudeForwardDelta(profile.support.start, profile.samples[0].solarLongitude) ? profile.samples[0].zhr : 0
 	const x = new Float64Array(profile.samples.length)
@@ -224,4 +227,10 @@ function refineActivityBoundary(profile: MeteorActivityProfile, threshold: numbe
 // Computes a forward circular longitude offset in [0, 2π).
 export function meteorSolarLongitudeForwardDelta(start: Angle, end: Angle): Angle {
 	return normalizeAngle(end - start)
+}
+
+// Returns an interval span in radians, distinguishing explicit full-circle intervals from empty
+// equal-bound intervals.
+function meteorSolarLongitudeIntervalWidth(interval: MeteorSolarLongitudeInterval): Angle {
+	return interval.fullCircle ? TAU : meteorSolarLongitudeForwardDelta(interval.start, interval.end)
 }

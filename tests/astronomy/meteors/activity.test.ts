@@ -71,7 +71,10 @@ test('fraction thresholds include limiting cases and sampled support edges', () 
 	expect(intervals).toHaveLength(1)
 	expect(toDeg(intervals[0].start)).toBeCloseTo(350, 8)
 	expect(toDeg(intervals[0].end)).toBeCloseTo(10, 8)
-	expect(meteorActivityIntervalsAboveFraction(SAMPLED_PROFILE, 0)).toEqual([{ start: 0, end: 0 }])
+	const fullCircle = meteorActivityIntervalsAboveFraction(SAMPLED_PROFILE, 0)
+	expect(fullCircle).toEqual([{ start: 0, end: 0, fullCircle: true }])
+	expect(isMeteorShowerActive(fullCircle[0], deg(180))).toBe(true)
+	expect(meteorActivityPhase(fullCircle[0], Math.PI)).toBeCloseTo(0.5, 14)
 	expect(meteorActivityIntervalsAboveFraction(SAMPLED_PROFILE, 1)).toHaveLength(1)
 
 	const empty = { type: 'sampled', support: WRAPPED_INTERVAL, samples: [] } satisfies MeteorActivityProfile

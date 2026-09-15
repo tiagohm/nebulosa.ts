@@ -76,6 +76,10 @@ test('shower dates cross the angular seam and honor year-specific policy', () =>
 	expect(meteorShowerDates(YEAR_SPECIFIC_SOLUTION, 2025)).toEqual({})
 	const extrapolated = meteorShowerDates(YEAR_SPECIFIC_SOLUTION, 2025, { extrapolateYearSpecific: true, step: 7 })
 	expect(extrapolated.start).toBeDefined()
+
+	const fullYear = { ...BASE_SOLUTION, activityInterval: { start: 0, end: 0, fullCircle: true } } satisfies MeteorShowerSolution
+	const fullYearDates = meteorShowerDates(fullYear, 2024, { step: 7, tolerance: TOLERANCE.time })
+	expect(timeSubtract(fullYearDates.end!, fullYearDates.start!)).toBeGreaterThan(365)
 })
 
 test('computation context caches the solar value and retains observer LST', () => {

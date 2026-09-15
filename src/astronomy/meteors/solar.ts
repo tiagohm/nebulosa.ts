@@ -61,8 +61,11 @@ export function meteorShowerDates(solution: MeteorShowerSolution, year: number, 
 
 	const interval = solution.activityInterval
 	const start = interval === undefined ? undefined : timeAtMeteorSolarLongitude(year, interval.start, options)
-	let end = interval === undefined ? undefined : timeAtMeteorSolarLongitude(year, interval.end, options)
-	if (interval !== undefined && start !== undefined && end !== undefined && timeSubtract(end, start, Timescale.UTC) < 0) end = timeAtMeteorSolarLongitude(year + 1, interval.end, options)
+	let end: Time | undefined
+	if (interval !== undefined) {
+		end = timeAtMeteorSolarLongitude(interval.fullCircle ? year + 1 : year, interval.fullCircle ? interval.start : interval.end, options)
+		if (!interval.fullCircle && start !== undefined && timeSubtract(end, start, Timescale.UTC) < 0) end = timeAtMeteorSolarLongitude(year + 1, interval.end, options)
+	}
 
 	const reference = solution.referenceSolarLongitude === undefined ? undefined : timeAtMeteorSolarLongitude(year, solution.referenceSolarLongitude, options)
 	const profile = options.profile

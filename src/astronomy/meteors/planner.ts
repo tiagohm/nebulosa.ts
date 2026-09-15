@@ -6,7 +6,7 @@ import { meteorActivityZhr, isMeteorShowerActive } from './activity'
 import { meteorObservingConditions, meteorLocalHourlyRate } from './observation'
 import { meteorRadiantJ2000 } from './radiant'
 import { meteorSolarLongitude } from './solar'
-import type { MeteorActivityProfile, MeteorComputationContext, MeteorObservingConditions, MeteorObservingWindow, MeteorObservingWindowOptions, MeteorShowerSolution, MeteorVisualObservation } from './types'
+import type { MeteorActivityProfile, MeteorComputationContext, MeteorObservingConditions, MeteorObservingWindow, MeteorObservingWindowOptions, MeteorShowerSolution, MeteorSolarLongitudeInterval, MeteorVisualObservation } from './types'
 
 // Local observing-window planner. It intersects catalog/profile support, solar darkness, radiant
 // altitude and opt-in lunar constraints, refines every detected boundary, evaluates endpoints and
@@ -170,7 +170,8 @@ function chooseStep(profile: MeteorActivityProfile, activityInterval: MeteorShow
 	return smallestSupport > 0 ? Math.min(step, smallestSupport / 4) : step
 }
 
-function supportDays(support: { readonly start: number; readonly end: number }): number {
+function supportDays(support: MeteorSolarLongitudeInterval): number {
+	if (support.fullCircle) return 365.25
 	return (((support.end - support.start + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2)) * 365.25
 }
 

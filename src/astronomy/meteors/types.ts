@@ -64,8 +64,10 @@ export interface MeteorShowerActivity {
 export interface MeteorSolarLongitudeInterval {
 	// Start longitude in radians; the interval advances in increasing longitude.
 	readonly start: Angle
-	// End longitude in radians; equality is not interpreted as a full circle.
+	// End longitude in radians; equality is empty unless fullCircle is true.
 	readonly end: Angle
+	// Explicitly covers every longitude. start remains the phase origin and end is ignored.
+	readonly fullCircle?: boolean
 }
 
 // Published, partial stream-orbit elements in the J2000 ecliptic frame.
