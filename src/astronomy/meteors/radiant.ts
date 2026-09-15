@@ -11,6 +11,11 @@ import type { MeteorComputationContext, MeteorRadiant, MeteorRadiantOptions, Met
 // Drift is applied only with its declared unit basis, RA is wrapped after extrapolation, and a
 // declination that crosses a pole is rejected because reflecting it would change the parameterization.
 
+// Per-solution daily-drift caches retain the three adjacent occurrences for each calendar-year/search
+// variant. Weak ownership follows catalog solutions and bounded entries prevent unbounded histories.
+const DAILY_DRIFT_REFERENCE_CACHE = new WeakMap<MeteorShowerSolution, Map<string, readonly [Time, Time, Time]>>()
+const DAILY_DRIFT_REFERENCE_CACHE_LIMIT = 6
+
 // Evaluates a shower solution's radiant at a context instant.
 export function meteorRadiantJ2000(solution: MeteorShowerSolution, context: MeteorComputationContext, options: MeteorRadiantOptions = {}): MeteorRadiantResult | undefined {
 	if (solution.rightAscension === undefined || solution.declination === undefined) return undefined
@@ -27,7 +32,7 @@ export function meteorRadiantJ2000(solution: MeteorShowerSolution, context: Mete
 		if (Math.abs(delta) > limit) return undefined
 		extrapolated = delta !== 0
 	} else {
-		const reference = nearestDailyDriftReference(solution.referenceSolarLongitude, context.time, options)
+		const reference = nearestDailyDriftReference(solution, solution.referenceSolarLongitude, context.time, options)
 		delta = timeSubtract(context.time, reference, context.time.scale)
 		if (options.extrapolate === false && delta !== 0) return undefined
 		const limit = options.maxExtrapolationDays ?? 366
@@ -43,12 +48,27 @@ export function meteorRadiantJ2000(solution: MeteorShowerSolution, context: Mete
 
 // Chooses the nearest annual occurrence of a daily-drift reference longitude, including the years
 // on either side of the context year so a December reference remains near a following January date.
-function nearestDailyDriftReference(referenceSolarLongitude: number, time: Time, options: MeteorRadiantOptions): Time {
+// A seven-day coarse scan is safe for the one monotonic annual solar-longitude root and avoids the
+// general hourly event-search default before the result is cached.
+function nearestDailyDriftReference(solution: MeteorShowerSolution, referenceSolarLongitude: number, time: Time, options: MeteorRadiantOptions): Time {
 	const [year] = timeToDate(time)
-	let nearest = timeAtMeteorSolarLongitude(year - 1, referenceSolarLongitude, { ...options.solarLongitudeSearch, scale: time.scale })
+	const key = dailyDriftReferenceKey(year, time, options)
+	const cached = DAILY_DRIFT_REFERENCE_CACHE.get(solution)?.get(key)
+	if (cached !== undefined) return nearestDailyDriftReferenceAt(time, cached)
+
+	const search = { step: 7, ...options.solarLongitudeSearch, scale: time.scale }
+	const references = [timeAtMeteorSolarLongitude(year - 1, referenceSolarLongitude, search), timeAtMeteorSolarLongitude(year, referenceSolarLongitude, search), timeAtMeteorSolarLongitude(year + 1, referenceSolarLongitude, search)] as const
+	cacheDailyDriftReference(solution, key, references)
+	return nearestDailyDriftReferenceAt(time, references)
+}
+
+// Selects the closest of one cached year-boundary triplet, allowing the reference to change at the
+// midpoint between annual occurrences without repeating the solar inversion.
+function nearestDailyDriftReferenceAt(time: Time, references: readonly [Time, Time, Time]): Time {
+	let nearest = references[0]
 	let smallestDistance = Math.abs(timeSubtract(time, nearest, time.scale))
-	for (let candidateYear = year; candidateYear <= year + 1; candidateYear++) {
-		const candidate = timeAtMeteorSolarLongitude(candidateYear, referenceSolarLongitude, { ...options.solarLongitudeSearch, scale: time.scale })
+	for (let index = 1; index < references.length; index++) {
+		const candidate = references[index]
 		const distance = Math.abs(timeSubtract(time, candidate, time.scale))
 		if (distance < smallestDistance) {
 			nearest = candidate
@@ -56,6 +76,26 @@ function nearestDailyDriftReference(referenceSolarLongitude: number, time: Time,
 		}
 	}
 	return nearest
+}
+
+// Builds a stable cache key for inputs that change the annual inversion result or its output scale.
+function dailyDriftReferenceKey(year: number, time: Time, options: MeteorRadiantOptions): string {
+	const search = options.solarLongitudeSearch
+	return `${year}:${time.scale}:${search?.step ?? 7}:${search?.tolerance ?? 1e-6}`
+}
+
+// Stores one reference while evicting the oldest entry after the fixed per-solution capacity.
+function cacheDailyDriftReference(solution: MeteorShowerSolution, key: string, references: readonly [Time, Time, Time]): void {
+	let cache = DAILY_DRIFT_REFERENCE_CACHE.get(solution)
+	if (cache === undefined) {
+		cache = new Map()
+		DAILY_DRIFT_REFERENCE_CACHE.set(solution, cache)
+	}
+	if (cache.size >= DAILY_DRIFT_REFERENCE_CACHE_LIMIT) {
+		const oldest = cache.keys().next().value
+		if (oldest !== undefined) cache.delete(oldest)
+	}
+	cache.set(key, references)
 }
 
 // Converts a J2000 geocentric radiant to the true equator/equinox of date.

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { meteorRadiantDegrees, meteorRadiantHorizontal, meteorRadiantJ2000, meteorRadiantOfDate, meteorRadiantRiseTransitSet, meteorRadiantVector, meteorRadiantVisibility } from '../../../src/astronomy/meteors/radiant'
 import type { MeteorComputationContext, MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
-import { timeYMDHMS, Timescale, type Time } from '../../../src/astronomy/time/time'
+import { timeShift, timeYMDHMS, Timescale, type Time } from '../../../src/astronomy/time/time'
 import { deg, toDeg } from '../../../src/math/units/angle'
 import { ASTROPY_HORIZONTAL, ASTROPY_RADIANT_OF_DATE, BASE_SOLUTION, DAILY_DRIFT_SOLUTION, MISSING_RADIANT_SOLUTION, OBSERVER, REFERENCE_UTC, SOLAR_DRIFT_SOLUTION, TOLERANCE } from './util'
 
@@ -58,6 +58,15 @@ test('daily drift selects the preceding December reference for a January radiant
 	expect(result).toBeDefined()
 	expect(toDeg(result!.radiant.rightAscension)).toBeGreaterThan(110)
 	expect(toDeg(result!.radiant.rightAscension)).toBeLessThan(120)
+})
+
+test('daily drift caches the annual reference across sampled contexts', () => {
+	for (let hour = 0; hour < 10; hour++) {
+		const time = timeShift(REFERENCE_UTC, hour / 24)
+		expect(meteorRadiantJ2000(DAILY_DRIFT_SOLUTION, context(time, deg(283)))).toBeDefined()
+	}
+	const december = timeYMDHMS(2024, 12, 30, 0, 0, 0, Timescale.UTC)
+	expect(meteorRadiantJ2000(DAILY_DRIFT_SOLUTION, context(december, deg(279)))).toBeDefined()
 })
 
 test('J2000 radiant reduction agrees with frozen Astropy geometric coordinates', () => {
