@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test'
 import { meteorObservingWindows } from '../../../src/astronomy/meteors/planner'
+import { meteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import type { MeteorActivityProfile, MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
+import { timeShift } from '../../../src/astronomy/time/time'
 import { deg } from '../../../src/math/units/angle'
 import { BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, PLANNER_END, PLANNER_MULTI_PROFILE, PLANNER_START, SITE_EPOCH, SITE_EPOCH_END, SOLAR_DRIFT_SOLUTION, ZERO_WIDTH_INTERVAL } from './util'
 
@@ -36,6 +38,24 @@ test('planner refines a minimum radiant-altitude boundary', () => {
 test('planner can reject bright lunar constraints', () => {
 	const windows = meteorObservingWindows(BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, { ...DAY_OPTIONS, maximumMoonIllumination: 0.5 })
 	expect(windows).toEqual([])
+})
+
+test('planner samples a sub-step catalog activity interval inside a broad profile', () => {
+	const center = meteorSolarLongitude(timeShift(SITE_EPOCH, 0.5 / 24))
+	const start = timeShift(SITE_EPOCH, 0.25 / 24)
+	const end = timeShift(SITE_EPOCH, 0.75 / 24)
+	const narrowCatalog = {
+		...BASE_SOLUTION,
+		activityInterval: { start: center - deg(0.0075), end: center + deg(0.0075) },
+	} satisfies MeteorShowerSolution
+	const windows = meteorObservingWindows(narrowCatalog, EXPONENTIAL_PROFILE, OBSERVER, start, end, {
+		...DAY_OPTIONS,
+		step: 1 / 24,
+	})
+
+	expect(windows).toHaveLength(1)
+	expect(windows[0].durationHours).toBeGreaterThan(0)
+	expect(windows[0].durationHours).toBeLessThan(0.5)
 })
 
 test('planner integrates a constant local hourly rate over the window duration', () => {

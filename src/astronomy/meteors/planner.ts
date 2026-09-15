@@ -22,7 +22,7 @@ export function meteorObservingWindows(first: MeteorShowerSolution | MeteorActiv
 	const profile = isSolution(first) ? (second as MeteorActivityProfile) : first
 	const duration = timeSubtract(end, start)
 	if (!(duration > 0)) return []
-	const step = chooseStep(profile, options.step)
+	const step = chooseStep(profile, solution.activityInterval, options.step)
 	const qualifies = (time: Time) => scoreAt(solution, profile, observer, time, options) >= 0
 	const score = (time: Time) => scoreAt(solution, profile, observer, time, options)
 	const boundaries: Time[] = [start, end]
@@ -159,13 +159,14 @@ function bisect(f: (time: Time) => number, left: Time, right: Time, tolerance: n
 	return timeShift(a, timeSubtract(b, a) * 0.5)
 }
 
-function chooseStep(profile: MeteorActivityProfile, requested: number | undefined): number {
+function chooseStep(profile: MeteorActivityProfile, activityInterval: MeteorShowerSolution['activityInterval'], requested: number | undefined): number {
 	const step = requested ?? 1 / 24
 	if (!(step > 0) || !Number.isFinite(step)) throw new Error('meteor observing-window step must be finite and positive')
 	let smallestSupport = Number.POSITIVE_INFINITY
 	if (profile.type === 'exponential') smallestSupport = supportDays(profile.support)
 	else if (profile.type === 'sampled') smallestSupport = supportDays(profile.support)
 	else for (const component of profile.components) smallestSupport = Math.min(smallestSupport, supportDays(component.support))
+	if (activityInterval !== undefined) smallestSupport = Math.min(smallestSupport, supportDays(activityInterval))
 	return smallestSupport > 0 ? Math.min(step, smallestSupport / 4) : step
 }
 
