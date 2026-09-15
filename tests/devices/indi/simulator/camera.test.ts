@@ -1504,10 +1504,23 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(clippedImage).toBeDefined()
 		expect(sumPixels(clippedImage!.raw)).toBeGreaterThan(0)
 
+		// Keep the star just beyond the old isotropic culling bound while leaving a quantizable part of
+		// the softened annulus inside the frame after horizontal 4x binning. The signal is boosted only
+		// for this edge case so its partial tail survives the simulator's 16-bit FITS encoding.
+		client.sendNumber({ device: camera.name, name: 'CCD_GAIN', elements: { GAIN: 400 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_EXPOSURE', elements: { EXPOSURE_TIME: 0.001 } })
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_COLLIMATION_PATTERN', elements: { EDGE_SOFTNESS: 10 } })
 		cameraManager.bin(camera, 4, 1)
-		cameraManager.frame(camera, 790, 384, 256, 256)
-		await waitUntil(() => camera.frame.x.value === 790 && camera.bin.x.value === 4 && camera.bin.y.value === 1 && cameraManager.properties.get(camera)?.SIMULATOR_COLLIMATION_PATTERN?.elements.EDGE_SOFTNESS.value === 10)
+		cameraManager.frame(camera, 760, 384, 256, 256)
+		await waitUntil(
+			() =>
+				camera.frame.x.value === 760 &&
+				camera.bin.x.value === 4 &&
+				camera.bin.y.value === 1 &&
+				camera.gain.value === 400 &&
+				cameraManager.properties.get(camera)?.SIMULATOR_NOISE_EXPOSURE?.elements.EXPOSURE_TIME.value === 0.001 &&
+				cameraManager.properties.get(camera)?.SIMULATOR_COLLIMATION_PATTERN?.elements.EDGE_SOFTNESS.value === 10,
+		)
 		cameraManager.startExposure(camera, 0.05)
 		await waitUntil(() => frameReceiver.length > 5, 10000, 50)
 		const asymmetricEdgeImage = await readImageFromBuffer(frameReceiver.lastFrame)
