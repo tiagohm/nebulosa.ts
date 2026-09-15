@@ -50,9 +50,9 @@ test('stream node encounters return both geometric nodes with independent candid
 
 test('Southworth-Hawkins, Drummond and Jopek match the independent MNRAS formula table', () => {
 	// Values are frozen from the Southworth-Hawkins/Drummond/Jopek definitions in MNRAS 455 (2016), Appendix formulas.
-	expect(meteorDSouthworthHawkins(FIRST_ORBIT, SECOND_ORBIT)).toBeCloseTo(1.1477385127242428, 12)
+	expect(meteorDSouthworthHawkins(FIRST_ORBIT, SECOND_ORBIT)).toBeCloseTo(1.1838518761810128, 12)
 	expect(meteorDDrummond(FIRST_ORBIT, SECOND_ORBIT)).toBeCloseTo(0.43336957172192836, 12)
-	expect(meteorDJopek(FIRST_ORBIT, SECOND_ORBIT)).toBeCloseTo(1.144264706685383, 12)
+	expect(meteorDJopek(FIRST_ORBIT, SECOND_ORBIT)).toBeCloseTo(1.1804843455601746, 12)
 	expect(meteorDSouthworthHawkins(FIRST_ORBIT, FIRST_ORBIT)).toBe(0)
 	expect(meteorDDrummond(FIRST_ORBIT, FIRST_ORBIT)).toBe(0)
 	expect(meteorDJopek(FIRST_ORBIT, FIRST_ORBIT)).toBe(0)

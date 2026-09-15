@@ -1,7 +1,7 @@
 import { ECLIPTIC_J2000_MATRIX, GM_SUN_PITJEVA_2005, PI, TAU } from '../../core/constants'
 import { matIdentity, matMulVec, matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecCross, vecDot, vecLength, vecNormalize } from '../../math/linear-algebra/vec3'
-import { type Angle, normalizeAngle } from '../../math/units/angle'
+import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import type { Velocity } from '../../math/units/velocity'
 import { equatorial, relativePositionAndVelocity } from '../coordinates/astrometry'
@@ -128,8 +128,20 @@ function criterionGeometry(first: MeteorComparableOrbit, second: MeteorComparabl
 	const planeAngle = vectorAngle(normal1, normal2)
 	const perihelion1 = perihelionDirection(first)
 	const perihelion2 = perihelionDirection(second)
-	const perihelionAngle = vectorAngle(perihelion1, perihelion2)
-	return { planeAngle, perihelionAngle, perihelionDirectionAngle: perihelionAngle }
+	const perihelionAngle = mutualNodePerihelionAngle(first, second, planeAngle)
+	if (perihelionAngle === undefined) return undefined
+	return { planeAngle, perihelionAngle, perihelionDirectionAngle: vectorAngle(perihelion1, perihelion2) }
+}
+
+// Computes the Southworth-Hawkins/Jopek longitude-of-perihelion separation Π from the mutual node.
+// The denominator vanishes only when the plane orientations make that mutual-node direction singular.
+function mutualNodePerihelionAngle(first: MeteorComparableOrbit, second: MeteorComparableOrbit, planeAngle: Angle): Angle | undefined {
+	const cosineHalfPlaneAngle = Math.cos(planeAngle * 0.5)
+	if (!(Math.abs(cosineHalfPlaneAngle) > 1e-12)) return undefined
+	const nodeDifference = normalizePI(second.longitudeOfAscendingNode - first.longitudeOfAscendingNode)
+	const numerator = Math.cos((first.inclination + second.inclination) * 0.5) * Math.sin(nodeDifference * 0.5)
+	const correction = 2 * Math.asin(Math.max(-1, Math.min(1, numerator / cosineHalfPlaneAngle)))
+	return second.argumentOfPerihelion - first.argumentOfPerihelion + correction
 }
 
 function comparableOrbitOf(orbit: MeteorComparableOrbit): MeteorComparableOrbit | undefined {
