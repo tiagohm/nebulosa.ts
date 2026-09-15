@@ -1,6 +1,28 @@
 import { expect, test } from 'bun:test'
 import { TAU } from '../../../src/core/constants'
-import { Histogram, geometricMedian, maxOf, meanOf, medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, minOf, percentileOf, rmsOf, standardDeviationOf } from '../../../src/math/numerical/statistics'
+// oxfmt-ignore
+import { Histogram, chiSquareCdf, chiSquareQuantile, fDistributionSurvival, geometricMedian, logGamma, maxOf, meanOf, medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, minOf, pearsonCorrelationOf, percentileOf, regularizedGammaP, regularizedIncompleteBeta, rmsOf, standardDeviationOf } from '../../../src/math/numerical/statistics'
+
+test('distribution functions match closed-form and SciPy 1.18.1 references', () => {
+	expect(logGamma(5)).toBeCloseTo(Math.log(24), 14)
+	expect(regularizedGammaP(2, 3)).toBeCloseTo(1 - 4 * Math.exp(-3), 14)
+	expect(regularizedIncompleteBeta(0.5, 2, 2)).toBeCloseTo(0.5, 14)
+	expect(chiSquareCdf(3.841458820694124, 1)).toBeCloseTo(0.95, 14)
+	expect(chiSquareCdf(5.99146454710798, 2)).toBeCloseTo(0.95, 14)
+	expect(chiSquareQuantile(0.975, 2)).toBeCloseTo(7.37775890822787, 12)
+	expect(chiSquareQuantile(0, 2)).toBe(0)
+	expect(chiSquareQuantile(1, 2)).toBe(Number.POSITIVE_INFINITY)
+	expect(fDistributionSurvival(5, 2, 10)).toBeCloseTo(0.03125, 14)
+	expect(fDistributionSurvival(1, 1, 1)).toBeCloseTo(0.5, 14)
+	expect(fDistributionSurvival(Number.POSITIVE_INFINITY, 2, 10)).toBe(0)
+})
+
+test('Pearson correlation handles paired, degenerate and empty samples', () => {
+	expect(pearsonCorrelationOf([1, 2, 3], [2, 4, 6])).toBeCloseTo(1, 14)
+	expect(pearsonCorrelationOf([1, 2, 3], [6, 4, 2])).toBeCloseTo(-1, 14)
+	expect(pearsonCorrelationOf([1, 1], [2, 3])).toBe(0)
+	expect(pearsonCorrelationOf([], [])).toBe(0)
+})
 
 test('min of', () => {
 	expect(minOf([1, 2, 3])).toEqual([1, 0])

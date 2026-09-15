@@ -1,6 +1,7 @@
 import { ECLIPTIC_J2000_MATRIX } from '../../core/constants'
 import { matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type Vec3, vecAngle } from '../../math/linear-algebra/vec3'
+import { chiSquareQuantile } from '../../math/numerical/statistics'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import { moon } from '../ephemeris/models/analytical/elpmpp02'
 import { earth, sun } from '../ephemeris/models/analytical/vsop87e'
@@ -147,30 +148,6 @@ export function meteorGarwoodZhr(observation: MeteorVisualObservation, confidenc
 	return { lower: interval.lower * factor, upper: interval.upper * factor } as const
 }
 
-// CDF of a chi-square random variable, exposed for independently testing the Garwood quantile path.
-export function chiSquareCdf(value: number, degreesOfFreedom: number): number {
-	return Math.min(1, Math.max(0, regularizedGammaP(degreesOfFreedom * 0.5, value * 0.5)))
-}
-
-// Quantile of a chi-square distribution, solved against the tested incomplete-gamma CDF.
-export function chiSquareQuantile(probability: number, degreesOfFreedom: number): number {
-	if (!(probability > 0)) return 0
-	if (probability >= 1) return Number.POSITIVE_INFINITY
-
-	let low = 0
-	let high = Math.max(1, degreesOfFreedom)
-
-	while (chiSquareCdf(high, degreesOfFreedom) < probability) high *= 2
-
-	for (let iteration = 0; iteration < 120; iteration++) {
-		const middle = (low + high) * 0.5
-		if (chiSquareCdf(middle, degreesOfFreedom) < probability) low = middle
-		else high = middle
-	}
-
-	return (low + high) * 0.5
-}
-
 // Options for expected-count integration. At least the four observation-model parameters are
 // explicit so a caller cannot accidentally receive a universal lunar/weather correction.
 export interface MeteorExpectedCountOptions {
@@ -210,47 +187,4 @@ function geocentricSunDirection(time: Time): Vec3 {
 function radiantVectorOf(radiant: MeteorRadiant): Vec3 {
 	const cosDeclination = Math.cos(radiant.declination)
 	return [cosDeclination * Math.cos(normalizeAngle(radiant.rightAscension)), cosDeclination * Math.sin(normalizeAngle(radiant.rightAscension)), Math.sin(radiant.declination)]
-}
-
-// Lanczos approximation used by the regularized gamma CDF; the fixed coefficients are sufficient for
-// the small integer shape parameters used by Poisson confidence intervals.
-function logGamma(value: number): number {
-	const coefficients = [0.9999999999998099, 676.5203681218851, -1259.1392167224028, 771.3234287776531, -176.6150291621406, 12.507343278686905, -0.13857109526572012, 9.984369578019572e-6, 1.5056327351493116e-7]
-	if (value < 0.5) return Math.log(Math.PI) - Math.log(Math.sin(Math.PI * value)) - logGamma(1 - value)
-	let sum = coefficients[0]
-	const shifted = value - 1
-	for (let i = 1; i < coefficients.length; i++) sum += coefficients[i] / (shifted + i)
-	const t = shifted + coefficients.length - 1.5
-	return 0.5 * Math.log(2 * Math.PI) + (shifted + 0.5) * Math.log(t) - t + Math.log(sum)
-}
-
-function regularizedGammaP(shape: number, value: number): number {
-	if (!(value > 0)) return 0
-	if (value < shape + 1) {
-		let term = 1 / shape
-		let sum = term
-		for (let i = 1; i < 1000; i++) {
-			term *= value / (shape + i)
-			sum += term
-			if (Math.abs(term) <= Math.abs(sum) * 3e-15) break
-		}
-		return sum * Math.exp(-value + shape * Math.log(value) - logGamma(shape))
-	}
-	let b = value + 1 - shape
-	let c = 1 / 1e-300
-	let d = 1 / b
-	let fraction = d
-	for (let i = 1; i < 1000; i++) {
-		const an = -i * (i - shape)
-		b += 2
-		d = an * d + b
-		if (Math.abs(d) < 1e-300) d = 1e-300
-		c = b + an / c
-		if (Math.abs(c) < 1e-300) c = 1e-300
-		d = 1 / d
-		const delta = d * c
-		fraction *= delta
-		if (Math.abs(delta - 1) <= 3e-15) break
-	}
-	return 1 - Math.exp(-value + shape * Math.log(value) - logGamma(shape)) * fraction
 }

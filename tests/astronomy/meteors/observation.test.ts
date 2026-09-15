@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
-import { chiSquareCdf, chiSquareQuantile, combineMeteorVisualObservations, integrateMeteorExpectedCount, meteorGarwoodInterval, meteorGarwoodZhr, meteorLocalHourlyRate, meteorMagnitudeRatio, meteorMassIndex, meteorObservingConditionsAt, meteorObservationContext, meteorPopulationIndex, meteorVisualRate, meteorZhrFromObservation } from '../../../src/astronomy/meteors/observation'
+import { combineMeteorVisualObservations, integrateMeteorExpectedCount, meteorGarwoodInterval, meteorGarwoodZhr, meteorLocalHourlyRate, meteorMagnitudeRatio, meteorMassIndex, meteorObservingConditionsAt, meteorObservationContext, meteorPopulationIndex, meteorVisualRate, meteorZhrFromObservation } from '../../../src/astronomy/meteors/observation'
 import { meteorRadiantHorizontal } from '../../../src/astronomy/meteors/radiant'
 import type { MeteorHorizontalRadiant, MeteorVisualObservation } from '../../../src/astronomy/meteors/types'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
@@ -106,7 +106,7 @@ test('expected-count integration supports all providers and both quadrature path
 	expect(() => integrateMeteorExpectedCount(EXPONENTIAL_PROFILE, start, end, { ...options, step: 0 })).toThrow('finite and positive')
 })
 
-test('Garwood intervals and chi-square CDF/quantiles match SciPy 1.18.1 at 95%', () => {
+test('Garwood intervals match SciPy 1.18.1 at 95%', () => {
 	const expected = [
 		[0, 0, 3.6888794541139354],
 		[1, 0.025317807984289876, 5.571643390938898],
@@ -119,11 +119,6 @@ test('Garwood intervals and chi-square CDF/quantiles match SciPy 1.18.1 at 95%',
 		expect(actual.lower).toBeCloseTo(lower, 12)
 		expect(actual.upper).toBeCloseTo(upper, 12)
 	}
-	expect(chiSquareCdf(3.841458820694124, 1)).toBeCloseTo(0.95, 14)
-	expect(chiSquareCdf(5.99146454710798, 2)).toBeCloseTo(0.95, 14)
-	expect(chiSquareQuantile(0.975, 2)).toBeCloseTo(7.37775890822787, 12)
-	expect(chiSquareQuantile(0, 2)).toBe(0)
-	expect(chiSquareQuantile(1, 2)).toBe(Number.POSITIVE_INFINITY)
 })
 
 test('Garwood ZHR propagates the Poisson interval through the observation scale', () => {
