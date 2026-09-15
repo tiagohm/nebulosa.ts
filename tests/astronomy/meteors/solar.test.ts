@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
 import { meteorComputationContext, meteorShowerDates, meteorSolarLongitude, meteorSolarLongitudeDelta, meteorSolarLongitudeForwardDelta, meteorSolarRelativeState, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import type { MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
-import { Timescale, timeSubtract, timeToDate } from '../../../src/astronomy/time/time'
-import { deg, toDeg } from '../../../src/math/units/angle'
+import { Timescale, timeSubtract, timeToDate, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { deg, normalizeAngle, toDeg } from '../../../src/math/units/angle'
 import { BASE_SOLUTION, HORIZONS_EARTH_STATE, REFERENCE_TDB, REFERENCE_UTC, TOLERANCE, WRAPPED_EXPONENTIAL_PROFILE, WRAPPED_INTERVAL, YEAR_SPECIFIC_SOLUTION } from './util'
 
 test('solar longitude and geocentric state match the frozen Horizons DE441 state', () => {
@@ -38,6 +38,17 @@ test('solar-longitude inversion is stable at the annual seam and in a leap year'
 	expect(beforeDate.slice(0, 6)).toEqual([2024, 3, 19, 10, 57, 22])
 	expect(timeSubtract(equinox, beforeEquinox)).toBeCloseTo(1 + 9.3437 / 1440, 5)
 	expect(toDeg(meteorSolarLongitude(equinox))).toBeCloseTo(0, 5)
+})
+
+test('solar-longitude inversion requires a root instead of comparing radians to day tolerance', () => {
+	const start = timeYMDHMS(2023, 1, 1, 0, 0, 0, Timescale.UTC)
+	const end = timeYMDHMS(2024, 1, 1, 0, 0, 0, Timescale.UTC)
+	const finalLongitude = meteorSolarLongitude(end)
+	const annualGap = meteorSolarLongitudeForwardDelta(finalLongitude, meteorSolarLongitude(start))
+	const targetInGap = normalizeAngle(finalLongitude + annualGap * 0.5)
+
+	// This midpoint is about 0.13 day beyond 2023, even though its angular residual is < 0.01 rad.
+	expect(() => timeAtMeteorSolarLongitude(2023, targetInGap, { step: 7, tolerance: 0.01 })).toThrow('does not occur')
 })
 
 test('longitude inversion preserves the requested UTC, TT and TDB output scales', () => {

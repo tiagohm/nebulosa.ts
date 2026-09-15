@@ -50,12 +50,7 @@ export function timeAtMeteorSolarLongitude(year: number, longitude: Angle, optio
 
 	const roots = searchRoots((time) => unwrapped(time) - target, start, stop, options)
 	const root = roots[0]
-	if (root === undefined) {
-		// A requested angle can coincide with the final endpoint after the target was unwrapped.
-		const finalValue = unwrapped(stop)
-		if (Math.abs(finalValue - target) <= (options.tolerance ?? 1e-6)) return convertScale(stop, options.scale)
-		throw new Error(`solar longitude ${longitude} does not occur in calendar year ${year}`)
-	}
+	if (root === undefined) throw new Error(`solar longitude ${longitude} does not occur in calendar year ${year}`)
 	return convertScale(root, options.scale)
 }
 
