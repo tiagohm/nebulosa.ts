@@ -1,11 +1,10 @@
-import type { Mat3 } from '../../math/linear-algebra/mat3'
 import type { Vec3 } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import type { Velocity } from '../../math/units/velocity'
-import type { RiseTransitSet, RiseTransitSetOptions } from '../events/horizon'
+import type { RiseTransitSetOptions } from '../events/horizon'
 import type { TimeSearchOptions } from '../events/search'
-import type { Ellipsoid, GeographicPosition } from '../observer/location'
+import type { Ellipsoid } from '../observer/location'
 import type { Time } from '../time/time'
 
 // Normalized meteor-shower records and the value objects shared by catalog, activity,
@@ -458,6 +457,3 @@ export interface MeteorGarwoodInterval {
 	// Upper count-rate or ZHR bound.
 	readonly upper: number
 }
-
-// Keep these imports visible in generated declaration output for consumers that use the aliases.
-export type { GeographicPosition, Mat3, RiseTransitSet, Time }

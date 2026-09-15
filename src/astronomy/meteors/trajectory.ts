@@ -1,9 +1,9 @@
-import { ECLIPTIC_J2000_MATRIX, GM_EARTH, PIOVERTWO } from '../../core/constants'
+import { GM_EARTH, PIOVERTWO } from '../../core/constants'
 import { matTransposeMulVec } from '../../math/linear-algebra/mat3'
-import { type MutVec3, type Vec3, vecCross, vecDot, vecLength, vecNormalize } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngle, vecCross, vecDot, vecLength, vecNormalize } from '../../math/linear-algebra/vec3'
 import { sphericalGreatCirclePole, sphericalInterpolate } from '../../math/numerical/geometry'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
-import { kilometer, type Distance } from '../../math/units/distance'
+import type { Distance } from '../../math/units/distance'
 import type { Velocity } from '../../math/units/velocity'
 import { equatorial } from '../coordinates/astrometry'
 import { equatorialToJ2000, horizontalToEquatorial } from '../coordinates/coordinate'
@@ -33,9 +33,6 @@ export function meteorSpeedAtGeodeticAltitude(geocentricSpeed: Velocity, latitud
 	return meteorSpeedAtDistance(geocentricSpeed, meteorGeocentricRadius(latitude, entryAltitude, ellipsoid))
 }
 
-// Concise alias for the ellipsoid-aware entry-speed calculation.
-export const meteorSpeedAtEntry = meteorSpeedAtGeodeticAltitude
-
 // Computes Schiaparelli's zenith attraction Δz for an apparent entry zenith angle.
 export function meteorZenithAttraction(apparentZenith: Angle, geocentricSpeed: Velocity, entrySpeed: Velocity): Angle {
 	return 2 * Math.atan2((entrySpeed - geocentricSpeed) * Math.tan(apparentZenith * 0.5), entrySpeed + geocentricSpeed)
@@ -46,15 +43,13 @@ export function geocentricZenithAngleFromApparent(apparentZenith: Angle, geocent
 	return apparentZenith + meteorZenithAttraction(apparentZenith, geocentricSpeed, entrySpeed)
 }
 
-// Concise alias for the forward Schiaparelli transformation.
-export const meteorGeocentricZenithAngle = geocentricZenithAngleFromApparent
-
 // Inverts the zenith-attraction relation numerically. The monotone bisection is stable at the zenith
 // and at the horizon, where directly subtracting a correction evaluated at the wrong angle is biased.
 export function apparentZenithAngleFromGeocentric(geocentricZenith: Angle, geocentricSpeed: Velocity, entrySpeed: Velocity, tolerance: Angle = 1e-12): Angle | undefined {
 	if (geocentricZenith < 0 || geocentricZenith > PIOVERTWO) return undefined
 	let low = 0
 	let high = geocentricZenith
+
 	for (let iteration = 0; iteration < 100; iteration++) {
 		const middle = (low + high) * 0.5
 		const value = geocentricZenithAngleFromApparent(middle, geocentricSpeed, entrySpeed)
@@ -62,11 +57,9 @@ export function apparentZenithAngleFromGeocentric(geocentricZenith: Angle, geoce
 		else low = middle
 		if (high - low <= tolerance) break
 	}
+
 	return (low + high) * 0.5
 }
-
-// Concise alias for the numerically inverted Schiaparelli transformation.
-export const meteorApparentZenithAngle = apparentZenithAngleFromGeocentric
 
 // Applies gravitational attraction to a geocentric J2000 radiant and returns its apparent local
 // horizontal radiant. A geocentric radiant below the geometric horizon is outside this approximation.
@@ -118,10 +111,6 @@ export function meteorRadiantWithEarthRotation(radiant: MeteorRadiant, geocentri
 	return { rightAscension: normalizeAngle(rightAscension), declination }
 }
 
-// Alias for applications that describe the same correction as a topocentric velocity adjustment.
-export const meteorRadiantRotationCorrection = meteorRadiantWithEarthRotation
-export const meteorRadiantWithRotation = meteorRadiantWithEarthRotation
-
 // Returns the unit pole of a non-degenerate great circle through a J2000 equatorial track. A
 // coincident or antipodal pair does not define a unique plane and therefore returns undefined.
 export function meteorTrackGreatCircle(track: MeteorTrack): Vec3 | undefined {
@@ -146,12 +135,12 @@ export function meteorTrackDirectionCompatible(radiant: MeteorRadiant, track: Me
 	const end = meteorRadiantVector(track.end)
 	const distance = vecLength(vecCross(start, end))
 	if (!(distance > 1e-15)) return undefined
-	return angularSeparationVectors(meteorRadiantVector(radiant), end) > angularSeparationVectors(meteorRadiantVector(radiant), start)
+	return vecAngle(meteorRadiantVector(radiant), end) > vecAngle(meteorRadiantVector(radiant), start)
 }
 
 // Returns the observed great-circle length in radians.
 export function meteorTrackLength(track: MeteorTrack): Angle | undefined {
-	return meteorTrackGreatCircle(track) === undefined ? undefined : angularSeparationVectors(meteorRadiantVector(track.start), meteorRadiantVector(track.end))
+	return meteorTrackGreatCircle(track) === undefined ? undefined : vecAngle(meteorRadiantVector(track.start), meteorRadiantVector(track.end))
 }
 
 // Returns a point along the short great-circle trail, or undefined for a degenerate/antipodal pair.
@@ -160,13 +149,4 @@ export function meteorTrackPoint(track: MeteorTrack, fraction: number): MeteorRa
 	if (length === undefined) return undefined
 	const [rightAscension, declination] = sphericalInterpolate(track.start.rightAscension, track.start.declination, track.end.rightAscension, track.end.declination, fraction)
 	return { rightAscension, declination }
-}
-
-function angularSeparationVectors(first: Vec3, second: Vec3): Angle {
-	return Math.atan2(vecLength(vecCross(first, second)), vecDot(first, second))
-}
-
-// Distance-unit convenience for callers expressing an entry height in kilometers.
-export function meteorEntryAltitudeKilometers(value: number): Distance {
-	return kilometer(value)
 }

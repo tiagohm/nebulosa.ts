@@ -5,7 +5,7 @@ import { earth, sun } from '../ephemeris/models/analytical/vsop87e'
 import { searchRoots } from '../events/search'
 import { Timescale, type Time, timeConvert, timeSubtract, timeYMD } from '../time/time'
 import { meteorActivityMaximumSolarLongitude } from './activity'
-import type { MeteorActivityProfile, MeteorShowerDates, MeteorShowerDateOptions, MeteorShowerSolution, MeteorSolarLongitudeSearchOptions } from './types'
+import type { MeteorShowerDates, MeteorShowerDateOptions, MeteorShowerSolution, MeteorSolarLongitudeSearchOptions } from './types'
 
 // Solar-longitude calculations for meteor showers. The longitude is geometric and geocentric in
 // the dynamical J2000 ecliptic: VSOP87E supplies barycentric Sun/Earth states and the position
@@ -61,6 +61,7 @@ export function meteorShowerDates(solution: MeteorShowerSolution, year: number, 
 
 	const interval = solution.activityInterval
 	const start = interval === undefined ? undefined : timeAtMeteorSolarLongitude(year, interval.start, options)
+
 	let end: Time | undefined
 	if (interval !== undefined) {
 		end = timeAtMeteorSolarLongitude(interval.fullCircle ? year + 1 : year, interval.fullCircle ? interval.start : interval.end, options)

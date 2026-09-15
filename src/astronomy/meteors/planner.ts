@@ -1,12 +1,13 @@
+import { DAYSPERJY } from '../../core/constants'
 import { deg } from '../../math/units/angle'
 import { searchExtrema, searchRoots } from '../events/search'
 import type { GeographicPosition } from '../observer/location'
 import { type Time, timeShift, timeSubtract } from '../time/time'
 import { meteorActivityZhr, isMeteorShowerActive } from './activity'
-import { meteorObservingConditions, meteorLocalHourlyRate } from './observation'
+import { meteorObservingConditionsAt, meteorLocalHourlyRate } from './observation'
 import { meteorRadiantJ2000 } from './radiant'
 import { meteorSolarLongitude } from './solar'
-import type { MeteorActivityProfile, MeteorComputationContext, MeteorObservingConditions, MeteorObservingWindow, MeteorObservingWindowOptions, MeteorShowerSolution, MeteorSolarLongitudeInterval, MeteorVisualObservation } from './types'
+import type { MeteorActivityProfile, MeteorObservingConditions, MeteorObservingWindow, MeteorObservingWindowOptions, MeteorShowerSolution, MeteorSolarLongitudeInterval, MeteorVisualObservation } from './types'
 
 // Local observing-window planner. It intersects catalog/profile support, solar darkness, radiant
 // altitude and opt-in lunar constraints, refines every detected boundary, evaluates endpoints and
@@ -17,11 +18,12 @@ import type { MeteorActivityProfile, MeteorComputationContext, MeteorObservingCo
 export function meteorObservingWindows(solution: MeteorShowerSolution, profile: MeteorActivityProfile, observer: GeographicPosition, start: Time, end: Time, options?: MeteorObservingWindowOptions): readonly MeteorObservingWindow[]
 // Equivalent argument order for applications that naturally select a profile first.
 export function meteorObservingWindows(profile: MeteorActivityProfile, solution: MeteorShowerSolution, observer: GeographicPosition, start: Time, end: Time, options?: MeteorObservingWindowOptions): readonly MeteorObservingWindow[]
+
 export function meteorObservingWindows(first: MeteorShowerSolution | MeteorActivityProfile, second: MeteorActivityProfile | MeteorShowerSolution, observer: GeographicPosition, start: Time, end: Time, options: MeteorObservingWindowOptions = {}): readonly MeteorObservingWindow[] {
-	const solution = isSolution(first) ? first : (second as MeteorShowerSolution)
-	const profile = isSolution(first) ? (second as MeteorActivityProfile) : first
 	const duration = timeSubtract(end, start)
 	if (!(duration > 0)) return []
+	const solution = isSolution(first) ? first : (second as MeteorShowerSolution)
+	const profile = isSolution(first) ? (second as MeteorActivityProfile) : first
 	const step = chooseStep(profile, solution.activityInterval, options.step)
 	const qualifies = (time: Time) => scoreAt(solution, profile, observer, time, options) >= 0
 	const score = (time: Time) => scoreAt(solution, profile, observer, time, options)
@@ -38,31 +40,41 @@ export function meteorObservingWindows(first: MeteorShowerSolution | MeteorActiv
 	const unique: Time[] = []
 	for (const boundary of boundaries) if (unique.length === 0 || timeSubtract(boundary, unique.at(-1)!) > 1e-8) unique.push(boundary)
 	const windows: MeteorObservingWindow[] = []
+
+	const rateAt = (time: Time) => expectedRateAt(solution, profile, observer, time, options)
+
 	for (let i = 0; i + 1 < unique.length; i++) {
 		const left = unique[i]
 		const right = unique[i + 1]
 		if (!qualifies(timeShift(left, timeSubtract(right, left) * 0.5))) continue
+
 		const durationDays = timeSubtract(right, left)
 		const durationHours = durationDays * 24
 		if (durationHours < (options.minimumDurationHours ?? 0)) continue
-		const rateAt = (time: Time) => expectedRateAt(solution, profile, observer, time, options)
+
 		let bestTime: Time | undefined
 		let bestRate = rateAt(left)
 		const endRate = rateAt(right)
+
 		if (endRate > bestRate) {
 			bestRate = endRate
 			bestTime = right
-		} else bestTime = left
+		} else {
+			bestTime = left
+		}
+
 		for (const extremum of searchExtrema(rateAt, left, right, { step: Math.min(step, durationDays), tolerance: options.tolerance })) {
 			if (extremum.kind === 'maximum' && extremum.value > bestRate) {
 				bestRate = extremum.value
 				bestTime = extremum.time
 			}
 		}
+
 		const expectedCount = integrateRate(rateAt, left, right, step)
 		const bestConditions = conditionsAt(solution, observer, bestTime, options)
 		windows.push({ start: left, end: right, durationHours, expectedCount, bestTime, bestLocalHourlyRate: bestRate, moonIlluminationAtBest: bestConditions?.moonIllumination })
 	}
+
 	return windows.sort((a, b) => b.expectedCount - a.expectedCount)
 }
 
@@ -76,7 +88,7 @@ function scoreAt(solution: MeteorShowerSolution, profile: MeteorActivityProfile,
 	if (catalogActivity === false) return -1
 	const radiant = radiantAt(solution, time, solarLongitude)
 	if (radiant === undefined) return -1
-	const conditions = meteorObservingConditions(radiant, observer, time, { time, solarLongitude })
+	const conditions = meteorObservingConditionsAt(radiant, observer, time, { time, solarLongitude })
 	let margin = (options.maximumSolarAltitude ?? deg(-18)) - conditions.sunAltitude
 	margin = Math.min(margin, conditions.radiant.altitude - (options.minimumRadiantAltitude ?? 0))
 	if (options.minimumMoonRadiantSeparation !== undefined) margin = Math.min(margin, conditions.moonRadiantSeparation - options.minimumMoonRadiantSeparation)
@@ -88,7 +100,8 @@ function expectedRateAt(solution: MeteorShowerSolution, profile: MeteorActivityP
 	const solarLongitude = meteorSolarLongitude(time)
 	const radiant = radiantAt(solution, time, solarLongitude)
 	if (radiant === undefined) return 0
-	const conditions = meteorObservingConditions(radiant, observer, time, { time, solarLongitude })
+
+	const conditions = meteorObservingConditionsAt(radiant, observer, time, { time, solarLongitude })
 	const observation: MeteorVisualObservation = {
 		count: 1,
 		effectiveTime: 1,
@@ -98,6 +111,7 @@ function expectedRateAt(solution: MeteorShowerSolution, profile: MeteorActivityP
 		radiantAltitude: conditions.radiant.altitude,
 		altitudeExponent: options.altitudeExponent ?? 1,
 	}
+
 	const rate = meteorLocalHourlyRate(meteorActivityZhr(profile, solarLongitude), observation)
 	return rate * (options.rateCorrection?.(time, conditions) ?? 1)
 }
@@ -106,7 +120,7 @@ function conditionsAt(solution: MeteorShowerSolution, observer: GeographicPositi
 	if (time === undefined) return undefined
 	const solarLongitude = meteorSolarLongitude(time)
 	const radiant = radiantAt(solution, time, solarLongitude)
-	return radiant === undefined ? undefined : meteorObservingConditions(radiant, observer, time, { time, solarLongitude })
+	return radiant === undefined ? undefined : meteorObservingConditionsAt(radiant, observer, time, { time, solarLongitude })
 }
 
 function radiantAt(solution: MeteorShowerSolution, time: Time, solarLongitude: number) {
@@ -117,19 +131,25 @@ function integrateRate(rateAt: (time: Time) => number, start: Time, end: Time, s
 	const duration = timeSubtract(end, start)
 	const panels = Math.max(1, Math.ceil(duration / step))
 	const h = duration / panels
+
 	let total = 0
+
 	for (let i = 0; i <= panels; i++) {
 		const coefficient = i === 0 || i === panels ? 1 : panels % 2 === 0 ? (i % 2 === 0 ? 2 : 4) : 2
 		total += coefficient * rateAt(timeShift(start, i * h))
 	}
+
 	if (panels % 2 === 0) return ((total * h) / 3) * 24
+
 	let trapezoid = 0
 	let previous = rateAt(start)
+
 	for (let i = 1; i <= panels; i++) {
 		const current = rateAt(timeShift(start, i * h))
 		trapezoid += (previous + current) * h * 0.5
 		previous = current
 	}
+
 	return trapezoid * 24
 }
 
@@ -145,17 +165,22 @@ function bisect(f: (time: Time) => number, left: Time, right: Time, tolerance: n
 	let a = left
 	let b = right
 	let fa = f(a)
+
 	for (let iteration = 0; iteration < 100; iteration++) {
 		const half = timeSubtract(b, a) * 0.5
 		const middle = timeShift(a, half)
 		const fm = f(middle)
+
 		if (Math.abs(half) <= tolerance) return middle
-		if ((fa < 0 && fm > 0) || (fa > 0 && fm < 0)) b = middle
-		else {
+
+		if ((fa < 0 && fm > 0) || (fa > 0 && fm < 0)) {
+			b = middle
+		} else {
 			a = middle
 			fa = fm
 		}
 	}
+
 	return timeShift(a, timeSubtract(b, a) * 0.5)
 }
 
@@ -171,8 +196,8 @@ function chooseStep(profile: MeteorActivityProfile, activityInterval: MeteorShow
 }
 
 function supportDays(support: MeteorSolarLongitudeInterval): number {
-	if (support.fullCircle) return 365.25
-	return (((support.end - support.start + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2)) * 365.25
+	if (support.fullCircle) return DAYSPERJY
+	return (((support.end - support.start + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2)) * DAYSPERJY
 }
 
 function isSolution(value: MeteorShowerSolution | MeteorActivityProfile): value is MeteorShowerSolution {

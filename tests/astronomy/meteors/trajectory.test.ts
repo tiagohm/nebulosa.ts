@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
-import { apparentMeteorRadiantHorizontal, apparentZenithAngleFromGeocentric, geocentricMeteorRadiantFromHorizontal, geocentricZenithAngleFromApparent, meteorEntryAltitudeKilometers, meteorGeocentricRadius, meteorRadiantWithEarthRotation, meteorSpeedAtDistance, meteorSpeedAtGeodeticAltitude, meteorTrackDirectionCompatible, meteorTrackGreatCircle, meteorTrackLength, meteorTrackPoint, meteorRadiantTrackResidual, meteorZenithAttraction, } from '../../../src/astronomy/meteors/trajectory'
+import { apparentMeteorRadiantHorizontal, apparentZenithAngleFromGeocentric, geocentricMeteorRadiantFromHorizontal, geocentricZenithAngleFromApparent, meteorGeocentricRadius, meteorRadiantWithEarthRotation, meteorSpeedAtDistance, meteorSpeedAtGeodeticAltitude, meteorTrackDirectionCompatible, meteorTrackGreatCircle, meteorTrackLength, meteorTrackPoint, meteorRadiantTrackResidual, meteorZenithAttraction } from '../../../src/astronomy/meteors/trajectory'
 import { Ellipsoid } from '../../../src/astronomy/observer/location'
 import { deg, toDeg } from '../../../src/math/units/angle'
 import { meter, toKilometer } from '../../../src/math/units/distance'
@@ -15,7 +15,6 @@ test('speed and entry radius use AU/day, AU and the selected ellipsoid', () => {
 	expect(toKilometer(meteorGeocentricRadius(0, meter(100), Ellipsoid.WGS84))).toBeCloseTo(6378.237, 9)
 	expect(toKilometer(meteorGeocentricRadius(deg(45), meter(100), Ellipsoid.IERS2010))).toBeCloseTo(6367.58911540201, 9)
 	expect(meteorSpeedAtGeodeticAltitude(METEOR_SPEED, deg(-23.55), ENTRY_ALTITUDE, Ellipsoid.WGS84)).toBeCloseTo(meteorSpeedAtDistance(METEOR_SPEED, meteorGeocentricRadius(deg(-23.55), ENTRY_ALTITUDE, Ellipsoid.WGS84)), 14)
-	expect(meteorEntryAltitudeKilometers(100)).toBe(ENTRY_ALTITUDE)
 })
 
 test('Schiaparelli attraction is invertible and rejects invalid zenith angles', () => {

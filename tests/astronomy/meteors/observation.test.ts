@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
-import { chiSquareCdf, chiSquareQuantile, combineMeteorVisualObservations, integrateMeteorExpectedCount, meteorGarwoodInterval, meteorGarwoodZhr, meteorLocalHourlyRate, meteorMagnitudeRatio, meteorMassIndex, meteorObservingConditions, meteorObservationContext, meteorPopulationIndex, meteorVisualRate, meteorZhrFromObservation } from '../../../src/astronomy/meteors/observation'
+import { chiSquareCdf, chiSquareQuantile, combineMeteorVisualObservations, integrateMeteorExpectedCount, meteorGarwoodInterval, meteorGarwoodZhr, meteorLocalHourlyRate, meteorMagnitudeRatio, meteorMassIndex, meteorObservingConditionsAt, meteorObservationContext, meteorPopulationIndex, meteorVisualRate, meteorZhrFromObservation } from '../../../src/astronomy/meteors/observation'
 import { meteorRadiantHorizontal } from '../../../src/astronomy/meteors/radiant'
 import type { MeteorHorizontalRadiant, MeteorVisualObservation } from '../../../src/astronomy/meteors/types'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
@@ -48,7 +48,7 @@ test('observation context and circumstances retain supplied local and lunar prov
 
 	const time = timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.UTC)
 	const horizontal = meteorRadiantHorizontal({ rightAscension: 0, declination: 0 }, OBSERVER, time, { time, solarLongitude: 0, localSiderealTime: deg(123) })
-	const conditions = meteorObservingConditions({ rightAscension: 0, declination: 0 }, OBSERVER, time, {
+	const conditions = meteorObservingConditionsAt({ rightAscension: 0, declination: 0 }, OBSERVER, time, {
 		time,
 		solarLongitude: 0,
 		localSiderealTime: deg(123),

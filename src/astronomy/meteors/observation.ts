@@ -1,8 +1,7 @@
 import { ECLIPTIC_J2000_MATRIX } from '../../core/constants'
 import { matTransposeMulVec } from '../../math/linear-algebra/mat3'
-import { type Vec3, vecAngle, vecDot } from '../../math/linear-algebra/vec3'
+import { type Vec3, vecAngle } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
-import { equatorialFromJ2000 } from '../coordinates/coordinate'
 import { moon } from '../ephemeris/models/analytical/elpmpp02'
 import { earth, sun } from '../ephemeris/models/analytical/vsop87e'
 import { altitudeOf } from '../events/horizon'
@@ -26,9 +25,6 @@ export function meteorZhrFromObservation(observation: MeteorVisualObservation): 
 	return (observation.count * observation.obstructionCorrection * observation.populationIndex ** (6.5 - observation.limitingMagnitude)) / (observation.effectiveTime * sine ** exponent)
 }
 
-// Concise alias for the direct visual ZHR equation.
-export const meteorZhrFromVisualObservation = meteorZhrFromObservation
-
 // Converts a ZHR to an idealized local hourly rate. A radiant at or below the geometric horizon
 // produces zero; the return unit is expected meteors per local hour, not ZHR.
 export function meteorLocalHourlyRate(zhr: number, observation: MeteorVisualObservation): number {
@@ -37,9 +33,6 @@ export function meteorLocalHourlyRate(zhr: number, observation: MeteorVisualObse
 	if (!(sine > 0)) return 0
 	return (zhr * sine ** exponent) / (observation.obstructionCorrection * observation.populationIndex ** (6.5 - observation.limitingMagnitude))
 }
-
-// Concise alias for the local expected hourly-rate equation.
-export const meteorLocalRate = meteorLocalHourlyRate
 
 // Computes both the corrected ZHR and the idealized local hourly rate for an observation.
 export function meteorVisualRate(observation: MeteorVisualObservation): MeteorVisualRate {
@@ -51,6 +44,7 @@ export function meteorVisualRate(observation: MeteorVisualObservation): MeteorVi
 export function combineMeteorVisualObservations(observations: readonly MeteorVisualObservation[]): number {
 	let numerator = 0
 	let denominator = 0
+
 	for (const observation of observations) {
 		const sine = Math.sin(observation.radiantAltitude)
 		const exponent = observation.altitudeExponent ?? 1
@@ -59,11 +53,9 @@ export function combineMeteorVisualObservations(observations: readonly MeteorVis
 		numerator += observation.count
 		denominator += observation.effectiveTime / correction
 	}
+
 	return denominator > 0 ? numerator / denominator : 0
 }
-
-// Concise alias for exposure-weighted visual-observation combination.
-export const meteorCombineVisualObservations = combineMeteorVisualObservations
 
 // Returns N(m + Δm) / N(m) for a population index r. Positive Δm denotes a fainter magnitude class.
 export function meteorMagnitudeRatio(populationIndex: number, deltaMagnitude: number): number {
@@ -75,29 +67,19 @@ export function meteorMassIndex(populationIndex: number): number {
 	return 1 + 2.3 * Math.log10(populationIndex)
 }
 
-// Explicit name for the population-to-mass conversion.
-export const meteorMassIndexFromPopulationIndex = meteorMassIndex
-
 // Converts a meteor mass index back into the population index.
 export function meteorPopulationIndex(massIndex: number): number {
 	return 10 ** ((massIndex - 1) / 2.3)
 }
 
-// Explicit name for the mass-to-population conversion.
-export const meteorPopulationIndexFromMassIndex = meteorPopulationIndex
-
 // Creates a context once per instant, including the local sidereal time when an observer is given.
 export function meteorObservationContext(time: Time, observer?: GeographicPosition): MeteorComputationContext {
-	return {
-		time,
-		solarLongitude: meteorSolarLongitude(time),
-		localSiderealTime: observer === undefined ? undefined : localSiderealTime(time, observer),
-	}
+	return { time, solarLongitude: meteorSolarLongitude(time), localSiderealTime: observer === undefined ? undefined : localSiderealTime(time, observer) }
 }
 
 // Computes the Sun, Moon and radiant circumstances at one identified instant. All altitudes are
 // geometric and no atmospheric refraction is applied.
-export function meteorObservingConditions(radiant: MeteorRadiant, observer: GeographicPosition, time: Time, context?: MeteorComputationContext): MeteorObservingConditions {
+export function meteorObservingConditionsAt(radiant: MeteorRadiant, observer: GeographicPosition, time: Time, context?: MeteorComputationContext): MeteorObservingConditions {
 	const horizontal = meteorRadiantHorizontal(radiant, observer, time, context)
 	const sunVector = context?.sun ?? geocentricSunDirection(time)
 	const moonVector = context?.moon ?? moon(time)[0]
@@ -110,57 +92,59 @@ export function meteorObservingConditions(radiant: MeteorRadiant, observer: Geog
 	return { time, sunAltitude, moonAltitude, moonIllumination, moonRadiantSeparation, radiant: horizontal }
 }
 
-// Concise alias for time-tagged local meteor circumstances.
-export const meteorConditionsAt = meteorObservingConditions
-
 // Integrates the local expected count over a time window. The model supplies the non-universal
 // population, limiting magnitude and obstruction policy, and may provide a time-dependent correction.
 export function integrateMeteorExpectedCount(profile: MeteorActivityProfile, start: Time, end: Time, options: MeteorExpectedCountOptions): number {
 	const duration = timeSubtract(end, start)
 	if (!(duration > 0)) return 0
+
 	const step = options.step ?? 1 / 24
 	if (!(step > 0) || !Number.isFinite(step)) throw new Error('meteor expected-count integration step must be finite and positive')
+
 	const panels = Math.max(1, Math.ceil(duration / step))
 	const h = duration / panels
+
 	if (panels % 2 === 0) {
 		let total = 0
+
 		for (let i = 0; i <= panels; i++) {
 			const current = timeShift(start, i * h)
 			const coefficient = i === 0 || i === panels ? 1 : i % 2 === 0 ? 2 : 4
 			total += coefficient * expectedRateAt(profile, current, options)
 		}
+
 		return ((total * h) / 3) * 24
 	}
+
 	let trapezoid = 0
 	let previous = expectedRateAt(profile, start, options)
+
 	for (let i = 1; i <= panels; i++) {
 		const current = expectedRateAt(profile, timeShift(start, i * h), options)
 		trapezoid += previous + current
 		previous = current
 	}
+
 	return trapezoid * h * 0.5 * 24
 }
 
-// Alias used by planners and applications that describe the same integral as an expected count.
-export const meteorExpectedMeteorCount = integrateMeteorExpectedCount
-
 // Computes an exact two-sided Garwood confidence interval for a Poisson count. The interval is
 // expressed in counts and uses chi-square quantiles rather than the normal approximation.
-export function meteorGarwoodInterval(count: number, confidence: number = 0.95): { readonly lower: number; readonly upper: number } {
+export function meteorGarwoodInterval(count: number, confidence: number = 0.95) {
 	const alpha = 1 - confidence
 	const lower = count === 0 ? 0 : chiSquareQuantile(alpha * 0.5, 2 * count) * 0.5
 	const upper = chiSquareQuantile(1 - alpha * 0.5, 2 * (count + 1)) * 0.5
-	return { lower, upper }
+	return { lower, upper } as const
 }
 
 // Propagates a Garwood count interval through the linear ZHR scale of one visual observation.
-export function meteorGarwoodZhr(observation: MeteorVisualObservation, confidence: number = 0.95): { readonly lower: number; readonly upper: number } {
+export function meteorGarwoodZhr(observation: MeteorVisualObservation, confidence: number = 0.95) {
 	const sine = Math.sin(observation.radiantAltitude)
 	const exponent = observation.altitudeExponent ?? 1
 	if (!(observation.effectiveTime > 0) || !(sine > 0)) return { lower: 0, upper: 0 }
 	const factor = (observation.obstructionCorrection * observation.populationIndex ** (6.5 - observation.limitingMagnitude)) / (observation.effectiveTime * sine ** exponent)
 	const interval = meteorGarwoodInterval(observation.count, confidence)
-	return { lower: interval.lower * factor, upper: interval.upper * factor }
+	return { lower: interval.lower * factor, upper: interval.upper * factor } as const
 }
 
 // CDF of a chi-square random variable, exposed for independently testing the Garwood quantile path.
@@ -172,20 +156,20 @@ export function chiSquareCdf(value: number, degreesOfFreedom: number): number {
 export function chiSquareQuantile(probability: number, degreesOfFreedom: number): number {
 	if (!(probability > 0)) return 0
 	if (probability >= 1) return Number.POSITIVE_INFINITY
+
 	let low = 0
 	let high = Math.max(1, degreesOfFreedom)
+
 	while (chiSquareCdf(high, degreesOfFreedom) < probability) high *= 2
+
 	for (let iteration = 0; iteration < 120; iteration++) {
 		const middle = (low + high) * 0.5
 		if (chiSquareCdf(middle, degreesOfFreedom) < probability) low = middle
 		else high = middle
 	}
+
 	return (low + high) * 0.5
 }
-
-// Conventional aliases for statistical callers.
-export const garwoodInterval = meteorGarwoodInterval
-export const garwoodZhr = meteorGarwoodZhr
 
 // Options for expected-count integration. At least the four observation-model parameters are
 // explicit so a caller cannot accidentally receive a universal lunar/weather correction.

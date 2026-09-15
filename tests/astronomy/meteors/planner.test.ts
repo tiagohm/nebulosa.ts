@@ -48,10 +48,7 @@ test('planner samples a sub-step catalog activity interval inside a broad profil
 		...BASE_SOLUTION,
 		activityInterval: { start: center - deg(0.0075), end: center + deg(0.0075) },
 	} satisfies MeteorShowerSolution
-	const windows = meteorObservingWindows(narrowCatalog, EXPONENTIAL_PROFILE, OBSERVER, start, end, {
-		...DAY_OPTIONS,
-		step: 1 / 24,
-	})
+	const windows = meteorObservingWindows(narrowCatalog, EXPONENTIAL_PROFILE, OBSERVER, start, end, { ...DAY_OPTIONS, step: 1 / 24 })
 
 	expect(windows).toHaveLength(1)
 	expect(windows[0].durationHours).toBeGreaterThan(0)

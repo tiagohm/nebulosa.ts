@@ -19,12 +19,14 @@ const DAILY_DRIFT_REFERENCE_CACHE_LIMIT = 6
 // Evaluates a shower solution's radiant at a context instant.
 export function meteorRadiantJ2000(solution: MeteorShowerSolution, context: MeteorComputationContext, options: MeteorRadiantOptions = {}): MeteorRadiantResult | undefined {
 	if (solution.rightAscension === undefined || solution.declination === undefined) return undefined
+
 	const drift = solution.radiantDrift
 	if (drift === undefined) return { radiant: { rightAscension: normalizeAngle(solution.rightAscension), declination: solution.declination }, extrapolated: false }
 	if (solution.referenceSolarLongitude === undefined) return undefined
 
 	let delta = 0
 	let extrapolated = false
+
 	if (drift.basis === 'solarLongitude') {
 		delta = meteorSolarLongitudeDelta(context.solarLongitude, solution.referenceSolarLongitude)
 		if (options.extrapolate === false && delta !== 0) return undefined
@@ -67,6 +69,7 @@ function nearestDailyDriftReference(solution: MeteorShowerSolution, referenceSol
 function nearestDailyDriftReferenceAt(time: Time, references: readonly [Time, Time, Time]): Time {
 	let nearest = references[0]
 	let smallestDistance = Math.abs(timeSubtract(time, nearest, time.scale))
+
 	for (let index = 1; index < references.length; index++) {
 		const candidate = references[index]
 		const distance = Math.abs(timeSubtract(time, candidate, time.scale))
@@ -75,6 +78,7 @@ function nearestDailyDriftReferenceAt(time: Time, references: readonly [Time, Ti
 			smallestDistance = distance
 		}
 	}
+
 	return nearest
 }
 
@@ -87,14 +91,17 @@ function dailyDriftReferenceKey(year: number, time: Time, options: MeteorRadiant
 // Stores one reference while evicting the oldest entry after the fixed per-solution capacity.
 function cacheDailyDriftReference(solution: MeteorShowerSolution, key: string, references: readonly [Time, Time, Time]): void {
 	let cache = DAILY_DRIFT_REFERENCE_CACHE.get(solution)
+
 	if (cache === undefined) {
 		cache = new Map()
 		DAILY_DRIFT_REFERENCE_CACHE.set(solution, cache)
 	}
+
 	if (cache.size >= DAILY_DRIFT_REFERENCE_CACHE_LIMIT) {
 		const oldest = cache.keys().next().value
 		if (oldest !== undefined) cache.delete(oldest)
 	}
+
 	cache.set(key, references)
 }
 
@@ -118,8 +125,10 @@ export function meteorRadiantHorizontal(radiant: MeteorRadiant, observer: Geogra
 // circumpolar test.
 export function meteorRadiantRiseTransitSet(solution: MeteorShowerSolution, observer: GeographicPosition, time: Time, options: import('./types').MeteorRadiantRiseTransitSetOptions = {}): RiseTransitSet | undefined {
 	if (solution.rightAscension === undefined || solution.declination === undefined) return undefined
-	let unavailable = false
+
 	const stop = timeShift(time, options.window ?? 1)
+	let unavailable = false
+
 	const result = riseTransitSet(
 		(current) => {
 			const context: MeteorComputationContext = { time: current, solarLongitude: meteorSolarLongitude(current), localSiderealTime: localSiderealTime(current, observer) }
@@ -128,12 +137,13 @@ export function meteorRadiantRiseTransitSet(solution: MeteorShowerSolution, obse
 				if (timeSubtract(current, time) >= 0 && timeSubtract(stop, current) >= 0) unavailable = true
 				return [1, 0, 0]
 			}
-			return radiantVector(result.radiant)
+			return meteorRadiantVector(result.radiant)
 		},
 		observer,
 		time,
 		options,
 	)
+
 	return unavailable ? undefined : result
 }
 
@@ -155,12 +165,7 @@ export function meteorRadiantVector(radiant: MeteorRadiant): readonly [number, n
 	return [cosDeclination * Math.cos(rightAscension), cosDeclination * Math.sin(rightAscension), Math.sin(radiant.declination)]
 }
 
-function radiantVector(radiant: MeteorRadiant): readonly [number, number, number] {
-	return meteorRadiantVector(radiant)
-}
-
-// Retain a named conversion helper for callers that already use this module's vocabulary.
-export const meteorRadiantToOfDate = meteorRadiantOfDate
-
 // Degree conversion is kept available for applications that build a drift from MDC documentation.
-export const meteorRadiantDegrees = (rightAscension: number, declination: number): MeteorRadiant => ({ rightAscension: normalizeAngle(deg(rightAscension)), declination: deg(declination) })
+export function meteorRadiantDegrees(rightAscension: number, declination: number): MeteorRadiant {
+	return { rightAscension: normalizeAngle(deg(rightAscension)), declination: deg(declination) }
+}

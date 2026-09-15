@@ -1,13 +1,11 @@
 import { ECLIPTIC_J2000_MATRIX, GM_SUN_PITJEVA_2005, PI, TAU } from '../../core/constants'
 import { matIdentity, matMulVec, matTransposeMulVec } from '../../math/linear-algebra/mat3'
-import { type MutVec3, type Vec3, vecCross, vecDot, vecLength, vecNormalize } from '../../math/linear-algebra/vec3'
+import { type Vec3, vecAngle, vecLength, vecNormalize } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
-import type { Distance } from '../../math/units/distance'
 import type { Velocity } from '../../math/units/velocity'
 import { equatorial, relativePositionAndVelocity } from '../coordinates/astrometry'
 import { earth, sun } from '../ephemeris/models/analytical/vsop87e'
 import { KeplerOrbit } from '../orbits/asteroid'
-import { moid } from '../orbits/moid'
 import type { Time } from '../time/time'
 import { meteorRadiantVector } from './radiant'
 import type { MeteorComparableOrbit, MeteorCompleteStreamOrbit, MeteorHeliocentricState, MeteorNodeEncounter, MeteorRadiant } from './types'
@@ -37,35 +35,38 @@ export function meteorOrbitFromRadiant(radiant: MeteorRadiant, geocentricSpeed: 
 export function meteorStreamOrbitNodeEncounters(stream: MeteorCompleteStreamOrbit, time: Time, mu: number = GM_SUN_PITJEVA_2005): readonly MeteorNodeEncounter[] {
 	const q = stream.perihelionDistance
 	const e = stream.eccentricity
+
+	if (!(q > 0) || !(e >= 0)) return []
+
 	const inclination = stream.inclination
 	const node = stream.longitudeOfAscendingNode
 	const argument = stream.argumentOfPerihelion
-	if (!(q > 0) || !(e >= 0)) return []
 
 	const earthState = relativePositionAndVelocity(earthEcliptic, sunEcliptic, time)
 	const candidates: MeteorNodeEncounter[] = []
+
 	for (const [kind, trueAnomaly] of [
 		['ascending', -argument],
 		['descending', PI - argument],
 	] as const) {
 		if (!(1 + e * Math.cos(trueAnomaly) > 0)) continue
+
 		const nodeOrbit = KeplerOrbit.trueAnomaly(q * (1 + e), e, inclination, node, argument, trueAnomaly, time, mu, matIdentity())
 		const position = nodeOrbit.position
 		const velocity = nodeOrbit.velocity
 		const relativeVelocity: Vec3 = [velocity[0] - earthState[1][0], velocity[1] - earthState[1][1], velocity[2] - earthState[1][2]]
+
 		const speed = vecLength(relativeVelocity)
 		if (!(speed > 0)) continue
+
 		const incomingEcliptic = vecNormalize([-relativeVelocity[0], -relativeVelocity[1], -relativeVelocity[2]])
 		const incomingEquatorial = matTransposeMulVec(ECLIPTIC_J2000_MATRIX, incomingEcliptic)
 		const [rightAscension, declination] = equatorial(incomingEquatorial)
 		candidates.push({ node: kind, radiant: { rightAscension: normalizeAngle(rightAscension), declination }, geocentricSpeed: speed, earthNodeDistance: vecLength([position[0] - earthState[0][0], position[1] - earthState[0][1], position[2] - earthState[0][2]]) })
 	}
+
 	return candidates
 }
-
-// Alias for callers using the shorter node terminology.
-export const meteorOrbitNodeEncounters = meteorStreamOrbitNodeEncounters
-export const meteorOrbitAtNodes = meteorStreamOrbitNodeEncounters
 
 // Converts a complete KeplerOrbit into the dimensionless element shape accepted by meteor criteria.
 export function meteorComparableOrbitFromKepler(orbit: KeplerOrbit): MeteorComparableOrbit | undefined {
@@ -108,29 +109,16 @@ export function meteorDJopek(first: MeteorComparableOrbit, second: MeteorCompara
 	return Math.sqrt(value)
 }
 
-// Short aliases matching the conventional names in the literature.
-export const dSouthworthHawkins = meteorDSouthworthHawkins
-export const dDrummond = meteorDDrummond
-export const dJopek = meteorDJopek
-export const meteorDSh = meteorDSouthworthHawkins
-export const meteorDd = meteorDDrummond
-export const meteorDh = meteorDJopek
-
-// Computes MOID for two materialized Kepler orbits; this remains complementary to D criteria.
-export function meteorMoid(first: KeplerOrbit, second: KeplerOrbit, options?: Parameters<typeof moid>[2]) {
-	return moid(first, second, options)
-}
-
 function criterionGeometry(first: MeteorComparableOrbit, second: MeteorComparableOrbit) {
 	if (!validComparableOrbit(first) || !validComparableOrbit(second)) return undefined
 	const normal1 = orbitalNormal(first)
 	const normal2 = orbitalNormal(second)
-	const planeAngle = vectorAngle(normal1, normal2)
+	const planeAngle = vecAngle(normal1, normal2)
 	const perihelion1 = perihelionDirection(first)
 	const perihelion2 = perihelionDirection(second)
 	const perihelionAngle = mutualNodePerihelionAngle(first, second, planeAngle)
 	if (perihelionAngle === undefined) return undefined
-	return { planeAngle, perihelionAngle, perihelionDirectionAngle: vectorAngle(perihelion1, perihelion2) }
+	return { planeAngle, perihelionAngle, perihelionDirectionAngle: vecAngle(perihelion1, perihelion2) }
 }
 
 // Computes the Southworth-Hawkins/Jopek longitude-of-perihelion separation Π from the mutual node.
@@ -173,11 +161,6 @@ function perihelionDirection(orbit: MeteorComparableOrbit): Vec3 {
 	const cosineArgument = Math.cos(argument)
 	const sineArgument = Math.sin(argument)
 	return [Math.cos(longitude) * cosineArgument - Math.sin(longitude) * sineArgument * cosineInclination, Math.sin(longitude) * cosineArgument + Math.cos(longitude) * sineArgument * cosineInclination, sineArgument * Math.sin(orbit.inclination)]
-}
-
-function vectorAngle(first: Vec3, second: Vec3): Angle {
-	const cross = vecCross(first, second)
-	return Math.atan2(vecLength(cross), vecDot(first, second))
 }
 
 function square(value: number): number {
