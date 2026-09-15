@@ -41,6 +41,25 @@ test('daily drift uses the reference longitude inversion and rejects pole crossi
 	expect(meteorRadiantJ2000(polar, context(REFERENCE_UTC, deg(101)))).toBeUndefined()
 })
 
+test('daily drift selects the preceding December reference for a January radiant', () => {
+	const decemberReference = {
+		...BASE_SOLUTION,
+		referenceSolarLongitude: deg(270),
+		rightAscension: deg(100),
+		declination: 0,
+		radiantDrift: { basis: 'day', rightAscensionRate: deg(1), declinationRate: 0 },
+	} satisfies MeteorShowerSolution
+	const january = timeYMDHMS(2024, 1, 5, 0, 0, 0, Timescale.UTC)
+	const result = meteorRadiantJ2000(decemberReference, context(january, deg(284)), {
+		maxExtrapolationDays: 20,
+		solarLongitudeSearch: { step: 7, tolerance: TOLERANCE.time },
+	})
+
+	expect(result).toBeDefined()
+	expect(toDeg(result!.radiant.rightAscension)).toBeGreaterThan(110)
+	expect(toDeg(result!.radiant.rightAscension)).toBeLessThan(120)
+})
+
 test('J2000 radiant reduction agrees with frozen Astropy geometric coordinates', () => {
 	const radiant = { rightAscension: deg(100), declination: deg(-20) }
 	const ofDate = meteorRadiantOfDate(radiant, ASTROPY_EPOCH)

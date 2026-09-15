@@ -27,8 +27,7 @@ export function meteorRadiantJ2000(solution: MeteorShowerSolution, context: Mete
 		if (Math.abs(delta) > limit) return undefined
 		extrapolated = delta !== 0
 	} else {
-		const [year] = timeToDate(context.time)
-		const reference = timeAtMeteorSolarLongitude(year, solution.referenceSolarLongitude, { ...options.solarLongitudeSearch, scale: context.time.scale })
+		const reference = nearestDailyDriftReference(solution.referenceSolarLongitude, context.time, options)
 		delta = timeSubtract(context.time, reference, context.time.scale)
 		if (options.extrapolate === false && delta !== 0) return undefined
 		const limit = options.maxExtrapolationDays ?? 366
@@ -40,6 +39,23 @@ export function meteorRadiantJ2000(solution: MeteorShowerSolution, context: Mete
 	const declination = solution.declination + drift.declinationRate * delta
 	if (declination < -PIOVERTWO || declination > PIOVERTWO) return undefined
 	return { radiant: { rightAscension, declination }, extrapolated }
+}
+
+// Chooses the nearest annual occurrence of a daily-drift reference longitude, including the years
+// on either side of the context year so a December reference remains near a following January date.
+function nearestDailyDriftReference(referenceSolarLongitude: number, time: Time, options: MeteorRadiantOptions): Time {
+	const [year] = timeToDate(time)
+	let nearest = timeAtMeteorSolarLongitude(year - 1, referenceSolarLongitude, { ...options.solarLongitudeSearch, scale: time.scale })
+	let smallestDistance = Math.abs(timeSubtract(time, nearest, time.scale))
+	for (let candidateYear = year; candidateYear <= year + 1; candidateYear++) {
+		const candidate = timeAtMeteorSolarLongitude(candidateYear, referenceSolarLongitude, { ...options.solarLongitudeSearch, scale: time.scale })
+		const distance = Math.abs(timeSubtract(time, candidate, time.scale))
+		if (distance < smallestDistance) {
+			nearest = candidate
+			smallestDistance = distance
+		}
+	}
+	return nearest
 }
 
 // Converts a J2000 geocentric radiant to the true equator/equinox of date.
