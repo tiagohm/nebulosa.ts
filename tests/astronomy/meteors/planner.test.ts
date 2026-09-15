@@ -15,7 +15,7 @@ test('both observing-window overloads identify the same real short window', () =
 	expect(reversed[0].durationHours).toBeCloseTo(direct[0].durationHours, 12)
 	expect(reversed[0].expectedCount).toBeCloseTo(direct[0].expectedCount, 12)
 	expect(direct[0].durationHours).toBeCloseTo(2, 12)
-	expect(direct[0].expectedCount).toBeCloseTo(5.612838137013493, 8)
+	expect(direct[0].expectedCount).toBeCloseTo(134.70811528832383, 8)
 	expect(direct[0].bestTime).toBeDefined()
 	expect(direct[0].moonIlluminationAtBest).toBeDefined()
 }, 4000)
@@ -36,6 +36,19 @@ test('planner refines a minimum radiant-altitude boundary', () => {
 test('planner can reject bright lunar constraints', () => {
 	const windows = meteorObservingWindows(BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, { ...DAY_OPTIONS, maximumMoonIllumination: 0.5 })
 	expect(windows).toEqual([])
+})
+
+test('planner integrates a constant local hourly rate over the window duration', () => {
+	const flatProfile = { ...EXPONENTIAL_PROFILE, slopeBefore: 0, slopeAfter: 0 } satisfies MeteorActivityProfile
+	const windows = meteorObservingWindows(BASE_SOLUTION, flatProfile, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, {
+		...DAY_OPTIONS,
+		step: 1 / 24,
+		rateCorrection: (_time, conditions) => 1 / Math.sin(conditions.radiant.altitude),
+	})
+
+	expect(windows).toHaveLength(1)
+	expect(windows[0].bestLocalHourlyRate).toBeCloseTo(120, 12)
+	expect(windows[0].expectedCount).toBeCloseTo(windows[0].bestLocalHourlyRate * windows[0].durationHours, 10)
 })
 
 test('planner can reject a radiant that is too close to the Moon', () => {
@@ -62,7 +75,7 @@ test('rate correction scales integrated count', () => {
 	})
 
 	expect(corrected).toHaveLength(1)
-	expect(corrected[0].expectedCount).toBeCloseTo(2.893195963784442, 6)
+	expect(corrected[0].expectedCount).toBeCloseTo(69.43670313082661, 6)
 	expect(corrected[0].bestLocalHourlyRate).toBeCloseTo(35.68435, 4)
 }, 2000)
 

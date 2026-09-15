@@ -122,7 +122,7 @@ function integrateRate(rateAt: (time: Time) => number, start: Time, end: Time, s
 		const coefficient = i === 0 || i === panels ? 1 : panels % 2 === 0 ? (i % 2 === 0 ? 2 : 4) : 2
 		total += coefficient * rateAt(timeShift(start, i * h))
 	}
-	if (panels % 2 === 0) return (total * h) / 3
+	if (panels % 2 === 0) return ((total * h) / 3) * 24
 	let trapezoid = 0
 	let previous = rateAt(start)
 	for (let i = 1; i <= panels; i++) {
@@ -130,7 +130,7 @@ function integrateRate(rateAt: (time: Time) => number, start: Time, end: Time, s
 		trapezoid += (previous + current) * h * 0.5
 		previous = current
 	}
-	return trapezoid
+	return trapezoid * 24
 }
 
 function addRootIfBracketed(boundaries: Time[], f: (time: Time) => number, left: Time, right: Time, tolerance: number | undefined): void {
