@@ -129,7 +129,7 @@ export function integrateMeteorExpectedCount(profile: MeteorActivityProfile, sta
 			const coefficient = i === 0 || i === panels ? 1 : i % 2 === 0 ? 2 : 4
 			total += coefficient * expectedRateAt(profile, current, options)
 		}
-		return (total * h) / 3
+		return ((total * h) / 3) * 24
 	}
 	let trapezoid = 0
 	let previous = expectedRateAt(profile, start, options)
@@ -138,7 +138,7 @@ export function integrateMeteorExpectedCount(profile: MeteorActivityProfile, sta
 		trapezoid += previous + current
 		previous = current
 	}
-	return trapezoid * h * 0.5
+	return trapezoid * h * 0.5 * 24
 }
 
 // Alias used by planners and applications that describe the same integral as an expected count.

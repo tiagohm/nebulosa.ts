@@ -80,7 +80,8 @@ test('expected-count integration supports all providers and both quadrature path
 			return deg(90)
 		},
 	}
-	expect(integrateMeteorExpectedCount(EXPONENTIAL_PROFILE, start, end, options)).toBeCloseTo(120, 12)
+	// 120 meteors per hour maintained for 24 hours integrates to 2,880 meteors.
+	expect(integrateMeteorExpectedCount(EXPONENTIAL_PROFILE, start, end, options)).toBeCloseTo(2880, 12)
 	expect(longitudes).toBe(3)
 	expect(altitudes).toBe(3)
 
@@ -95,11 +96,11 @@ test('expected-count integration supports all providers and both quadrature path
 			},
 			rateCorrection: () => 0.5,
 		}),
-	).toBeCloseTo(60, 12)
+	).toBeCloseTo(1440, 12)
 	expect(samples).toBe(4)
 
 	const horizontal = { ...meteorRadiantHorizontal({ rightAscension: 0, declination: 0 }, OBSERVER, start), altitude: deg(90) } satisfies MeteorHorizontalRadiant
-	expect(integrateMeteorExpectedCount(EXPONENTIAL_PROFILE, start, end, { ...options, step: 0.5, radiant: () => horizontal })).toBeCloseTo(120, 12)
+	expect(integrateMeteorExpectedCount(EXPONENTIAL_PROFILE, start, end, { ...options, step: 0.5, radiant: () => horizontal })).toBeCloseTo(2880, 12)
 	expect(integrateMeteorExpectedCount(EXPONENTIAL_PROFILE, start, end, { ...options, radiantAltitude: undefined, radiant: undefined, step: 0.5 })).toBe(0)
 	expect(integrateMeteorExpectedCount(EXPONENTIAL_PROFILE, end, start, options)).toBe(0)
 	expect(() => integrateMeteorExpectedCount(EXPONENTIAL_PROFILE, start, end, { ...options, step: 0 })).toThrow('finite and positive')
