@@ -582,6 +582,8 @@ export type MeteorRadiantVisibility = 'alwaysDown' | 'alwaysUp' | 'risesAndSets'
 
 // Planner restrictions and numerical options.
 export interface MeteorObservingWindowOptions extends TimeSearchOptions {
+	// Permit a dated observation or outburst to be planned outside its catalog years.
+	readonly extrapolateYearLimitedActivity?: boolean
 	// Minimum geometric radiant altitude in radians.
 	readonly minimumRadiantAltitude?: Angle
 	// Maximum geometric solar altitude for darkness.

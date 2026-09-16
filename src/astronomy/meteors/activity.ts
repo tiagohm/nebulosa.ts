@@ -2,7 +2,7 @@ import { PI, TAU } from '../../core/constants'
 import { brentMinimize } from '../../math/numerical/optimization'
 import { pchip, type PchipSpline } from '../../math/numerical/spline'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
-import { timeConvert, timeShift, timeSubtract, timeToDate, Timescale, type Time } from '../time/time'
+import { timeShift, timeSubtract, timeToDate, type Time, utc } from '../time/time'
 import { meteorSolarLongitude } from './solar'
 import type { MeteorActivityPhase, MeteorActivityProfile, MeteorExponentialActivityProfile, MeteorSampledActivityProfile, MeteorShowerActivity, MeteorSolarLongitudeInterval } from './types'
 
@@ -48,7 +48,7 @@ export function isMeteorShowerActive(interval: MeteorSolarLongitudeInterval | un
 export function meteorShowerActivityYearApplies(activity: MeteorShowerActivity, timeOrYear: Time | number): boolean {
 	const years = activity.years
 	if (years === undefined || (activity.kind !== 'yearSpecific' && activity.kind !== 'outburst')) return true
-	const year = typeof timeOrYear === 'number' ? timeOrYear : timeToDate(timeConvert(timeOrYear, Timescale.UTC))[0]
+	const year = typeof timeOrYear === 'number' ? timeOrYear : timeToDate(utc(timeOrYear))[0]
 	return year >= years.start && year <= years.end
 }
 

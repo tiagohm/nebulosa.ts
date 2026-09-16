@@ -3,7 +3,7 @@ import { meteorObservingWindows } from '../../../src/astronomy/meteors/planner'
 import { meteorSolarLongitude, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import { meteorShowerComputationContext, meteorShowerState } from '../../../src/astronomy/meteors/state'
 import type { MeteorActivityProfile, MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
-import { timeShift, timeYMDHMS, Timescale } from '../../../src/astronomy/time/time'
+import { timeShift, timeSubtract, timeToDate, timeYMDHMS, Timescale } from '../../../src/astronomy/time/time'
 import { deg } from '../../../src/math/units/angle'
 import { BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, PLANNER_END, PLANNER_MULTI_PROFILE, PLANNER_START, SITE_EPOCH, SITE_EPOCH_END, SOLAR_DRIFT_SOLUTION, ZERO_WIDTH_INTERVAL } from './util'
 
@@ -108,6 +108,18 @@ test('planner restricts a year-long scan to a narrow activity support', () => {
 	expect(windows[0].durationHours).toBeLessThan(1)
 })
 
+test('planner limits long candidate searches to catalog activity years', () => {
+	const support = { start: deg(99.99), end: deg(100.01) }
+	const solution = { ...BASE_SOLUTION, activity: { kind: 'yearSpecific', source: '2014-16', years: { start: 2014, end: 2016 } }, activityInterval: support } satisfies MeteorShowerSolution
+	const profile = { ...EXPONENTIAL_PROFILE, support } satisfies MeteorActivityProfile
+	const start = timeYMDHMS(2000, 1, 1, 0, 0, 0, Timescale.UTC)
+	const end = timeYMDHMS(2031, 1, 1, 0, 0, 0, Timescale.UTC)
+	const windows = meteorObservingWindows(solution, profile, OBSERVER, start, end, { maximumSolarAltitude: deg(90), minimumRadiantAltitude: deg(-90), step: 1 })
+
+	expect(windows.length).toBeGreaterThanOrEqual(3)
+	expect([...new Set(windows.map((window) => timeToDate(window.start)[0]))].sort((a, b) => a - b)).toEqual([2014, 2015, 2016])
+})
+
 test('planner integrates a constant local hourly rate over the window duration', () => {
 	const flatProfile = { ...EXPONENTIAL_PROFILE, slopeBefore: 0, slopeAfter: 0 } satisfies MeteorActivityProfile
 	const windows = meteorObservingWindows(BASE_SOLUTION, flatProfile, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, {
@@ -119,6 +131,30 @@ test('planner integrates a constant local hourly rate over the window duration',
 	expect(windows).toHaveLength(1)
 	expect(windows[0].bestLocalHourlyRate).toBeCloseTo(120, 12)
 	expect(windows[0].expectedCount).toBeCloseTo(windows[0].bestLocalHourlyRate * windows[0].durationHours, 10)
+})
+
+test('planner selects the greatest refined maximum when a lower coarse sample hides it', () => {
+	const flatProfile = { ...EXPONENTIAL_PROFILE, slopeBefore: 0, slopeAfter: 0 } satisfies MeteorActivityProfile
+	const end = timeShift(SITE_EPOCH, 2 / 24)
+	const windows = meteorObservingWindows(BASE_SOLUTION, flatProfile, OBSERVER, SITE_EPOCH, end, {
+		...DAY_OPTIONS,
+		step: 0.5 / 24,
+		rateCorrection: (time, conditions) => {
+			const hours = timeSubtract(time, SITE_EPOCH) * 24
+			const firstOffset = (hours - 0.5) / 0.18
+			const secondOffset = (hours - 1.7) / 0.12
+			const first = 6 * Math.exp(-(firstOffset * firstOffset))
+			const second = 10 * Math.exp(-(secondOffset * secondOffset))
+			return (first + second) / (120 * Math.sin(conditions.radiant.altitude))
+		},
+	})
+
+	expect(windows).toHaveLength(1)
+	const bestTime = windows[0].bestTime
+	expect(bestTime).toBeDefined()
+	if (bestTime === undefined) return
+	expect(timeSubtract(bestTime, SITE_EPOCH) * 24).toBeCloseTo(1.7, 3)
+	expect(windows[0].bestLocalHourlyRate).toBeCloseTo(10, 6)
 })
 
 test('planner can reject a radiant that is too close to the Moon', () => {
@@ -178,4 +214,6 @@ test('planner honors an inclusive catalog year range', () => {
 	})
 
 	expect(hasWindows).toEqual([false, true, true, true, false])
+	const start = timeAtMeteorSolarLongitude(2017, BASE_SOLUTION.referenceSolarLongitude, { step: 7 })
+	expect(meteorObservingWindows(yearSpecific, EXPONENTIAL_PROFILE, OBSERVER, start, timeShift(start, 2 / 24), { maximumSolarAltitude: deg(90), minimumRadiantAltitude: deg(-90), extrapolateYearLimitedActivity: true, step: 1 / 48 })).toHaveLength(1)
 })

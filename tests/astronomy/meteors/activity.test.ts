@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 // oxfmt-ignore
 import { integrateMeteorZhr, isMeteorShowerActive, meteorActivityFraction, meteorActivityIntervalsAboveFraction, meteorActivityMaximumSolarLongitude, meteorActivityMaximumZhr, meteorActivityPhase, meteorActivityProgress, meteorActivityZhr, meteorExponentialZhr, meteorShowerActivityYearApplies, meteorSolarLongitudeForwardDelta } from '../../../src/astronomy/meteors/activity'
 import type { MeteorActivityProfile } from '../../../src/astronomy/meteors/types'
-import { timeConvert, timeYMDHMS, Timescale } from '../../../src/astronomy/time/time'
+import { timeYMDHMS, Timescale, tt, tdb } from '../../../src/astronomy/time/time'
 import { deg, toDeg } from '../../../src/math/units/angle'
 import { EXPONENTIAL_PROFILE, MULTI_PEAK_PROFILE, REFERENCE_UTC, SAMPLED_PROFILE, WRAPPED_EXPONENTIAL_PROFILE, WRAPPED_INTERVAL, ZERO_WIDTH_INTERVAL } from './util'
 
@@ -43,8 +43,8 @@ test('dated activity uses the civil UTC year even for TT and TDB inputs', () => 
 	const activity = { kind: 'outburst', source: '2023out', years: { start: 2023, end: 2023 } } as const
 
 	expect(meteorShowerActivityYearApplies(activity, utc)).toBe(true)
-	expect(meteorShowerActivityYearApplies(activity, timeConvert(utc, Timescale.TT))).toBe(true)
-	expect(meteorShowerActivityYearApplies(activity, timeConvert(utc, Timescale.TDB))).toBe(true)
+	expect(meteorShowerActivityYearApplies(activity, tt(utc))).toBe(true)
+	expect(meteorShowerActivityYearApplies(activity, tdb(utc))).toBe(true)
 	expect(meteorShowerActivityYearApplies(activity, 2024)).toBe(false)
 	expect(meteorShowerActivityYearApplies({ kind: 'annual', source: 'annual', years: { start: 2023, end: 2023 } }, 2024)).toBe(true)
 })
@@ -54,8 +54,8 @@ test('multi-year activity includes both boundaries and every intervening civil y
 
 	expect([2013, 2014, 2015, 2016, 2017].map((year) => meteorShowerActivityYearApplies(activity, year))).toEqual([false, true, true, true, false])
 	const boundary = timeYMDHMS(2016, 12, 31, 23, 59, 59, Timescale.UTC)
-	expect(meteorShowerActivityYearApplies(activity, timeConvert(boundary, Timescale.TT))).toBe(true)
-	expect(meteorShowerActivityYearApplies(activity, timeConvert(boundary, Timescale.TDB))).toBe(true)
+	expect(meteorShowerActivityYearApplies(activity, tt(boundary))).toBe(true)
+	expect(meteorShowerActivityYearApplies(activity, tdb(boundary))).toBe(true)
 	expect(meteorShowerActivityYearApplies(activity, timeYMDHMS(2017, 1, 1, 0, 0, 0, Timescale.UTC))).toBe(false)
 })
 

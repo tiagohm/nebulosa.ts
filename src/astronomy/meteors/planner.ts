@@ -3,7 +3,7 @@ import { brentMinimize } from '../../math/numerical/optimization'
 import { deg, normalizeAngle } from '../../math/units/angle'
 import { searchExtrema, searchRoots } from '../events/search'
 import type { GeographicPosition } from '../observer/location'
-import { type Time, timeConvert, timeShift, timeSubtract, timeToDate, Timescale } from '../time/time'
+import { type Time, timeShift, timeSubtract, timeToDate, utc } from '../time/time'
 import { meteorActivityMaximumZhr } from './activity'
 import { meteorSolarLongitudeTimes } from './solar'
 import { meteorShowerComputationContext, meteorShowerState } from './state'
@@ -25,7 +25,7 @@ export function meteorObservingWindows(first: MeteorShowerSolution | MeteorActiv
 	const solution = isSolution(first) ? first : (second as MeteorShowerSolution)
 	const profile = isSolution(first) ? (second as MeteorActivityProfile) : first
 	const step = chooseStep(profile, solution.activityInterval, options.step)
-	const candidates = plannerCandidateIntervals(profile, solution.activityInterval, start, end, step, options)
+	const candidates = plannerCandidateIntervals(profile, solution.activity, solution.activityInterval, start, end, step, options)
 	const windows: MeteorObservingWindow[] = []
 	for (const candidate of candidates) windows.push(...meteorObservingWindowsInInterval(solution, profile, observer, candidate.start, candidate.end, step, options))
 	return windows.sort((a, b) => b.expectedCount - a.expectedCount)
@@ -141,7 +141,7 @@ function scoreAt(evaluation: PlannerEvaluation, options: MeteorObservingWindowOp
 function plannerEvaluationAt(solution: MeteorShowerSolution, profile: MeteorActivityProfile, observer: GeographicPosition, time: Time, options: MeteorObservingWindowOptions, activityMaximumZhr: number | undefined, rateModel: PlannerRateModel): PlannerEvaluation {
 	const includeMoon = needsMoon(options)
 	const context = meteorShowerComputationContext(time, observer, { includeHorizontal: true, includeSun: true, includeMoon })
-	const state = meteorShowerState(solution, context, { profile, activityMaximumZhr, includeRadiantOfDate: false, includeHorizontal: true, includeSun: true, includeMoon })
+	const state = meteorShowerState(solution, context, { profile, activityMaximumZhr, includeRadiantOfDate: false, includeHorizontal: true, includeSun: true, includeMoon, extrapolateYearLimitedActivity: options.extrapolateYearLimitedActivity })
 	if (state.horizontal === undefined || state.zhr === undefined) return { state, rate: 0 }
 	const sine = Math.sin(state.horizontal.altitude)
 	const rate = sine > 0 ? (state.zhr * sine ** rateModel.altitudeExponent) / rateModel.denominator : 0
@@ -200,16 +200,17 @@ interface PlannerRateModel {
 	readonly altitudeExponent: number
 }
 
-// Integrates one window while locating its best coarse sample and refining only that neighborhood.
+// Integrates one window while detecting and refining every local maximum in the same coarse scan.
 function summarizeRate(rateAt: (time: Time) => number, start: Time, end: Time, step: number, tolerance: number | undefined): { readonly expectedCount: number; readonly bestTime: Time; readonly bestRate: number } {
 	const duration = timeSubtract(end, start)
 	const panels = Math.max(1, Math.ceil(duration / step))
 	const h = duration / panels
-	let bestIndex = 0
+	const maxima: number[] = []
 	let bestTime = start
 	let bestRate = Number.NEGATIVE_INFINITY
 	let total = 0
-	let previous = 0
+	let beforePrevious: number | undefined
+	let previous: number | undefined
 
 	for (let i = 0; i <= panels; i++) {
 		const time = i === panels ? end : timeShift(start, i * h)
@@ -218,22 +219,24 @@ function summarizeRate(rateAt: (time: Time) => number, start: Time, end: Time, s
 		if (rate > bestRate) {
 			bestRate = rate
 			bestTime = time
-			bestIndex = i
 		}
+
+		if (beforePrevious !== undefined && previous !== undefined && previous > beforePrevious && previous > rate) maxima.push(i - 1)
 
 		if (panels % 2 === 0) {
 			const coefficient = i === 0 || i === panels ? 1 : i % 2 === 0 ? 2 : 4
 			total += coefficient * rate
-		} else if (i > 0) {
+		} else if (previous !== undefined) {
 			total += (previous + rate) * 0.5
 		}
 
+		beforePrevious = previous
 		previous = rate
 	}
 
-	if (bestIndex > 0 && bestIndex < panels) {
-		const left = (bestIndex - 1) * h
-		const right = (bestIndex + 1) * h
+	for (const index of maxima) {
+		const left = (index - 1) * h
+		const right = (index + 1) * h
 		const refined = brentMinimize((offset) => -rateAt(timeShift(start, offset)), left, right, { tolerance: tolerance ?? 1e-6 })
 
 		if (-refined.value > bestRate) {
@@ -296,7 +299,7 @@ function supportDays(support: MeteorSolarLongitudeInterval): number {
 
 // Restricts long, highly oversampled searches to the temporal intersection of catalog and profile
 // support. Short searches retain their original interval to avoid unnecessary annual inversions.
-function plannerCandidateIntervals(profile: MeteorActivityProfile, activityInterval: MeteorShowerSolution['activityInterval'], start: Time, end: Time, step: number, options: MeteorObservingWindowOptions): readonly PlannerCandidateInterval[] {
+function plannerCandidateIntervals(profile: MeteorActivityProfile, activity: MeteorShowerSolution['activity'], activityInterval: MeteorShowerSolution['activityInterval'], start: Time, end: Time, step: number, options: MeteorObservingWindowOptions): readonly PlannerCandidateInterval[] {
 	const duration = timeSubtract(end, start)
 	if (duration / step <= 512) return [{ start, end }]
 
@@ -323,8 +326,15 @@ function plannerCandidateIntervals(profile: MeteorActivityProfile, activityInter
 	if (spans.length === 0) return []
 	if (spans.length === 1 && spans[0].start === 0 && spans[0].end === TAU) return [{ start, end }]
 
-	const firstYear = timeToDate(timeConvert(start, Timescale.UTC))[0] - 1
-	const lastYear = timeToDate(timeConvert(end, Timescale.UTC))[0]
+	let firstYear = timeToDate(utc(start))[0] - 1
+	let lastYear = timeToDate(utc(end))[0]
+	if (activity.years !== undefined && options.extrapolateYearLimitedActivity !== true) {
+		// Keep the preceding candidate because a solar-longitude span can cross into the first valid civil year.
+		firstYear = Math.max(firstYear, activity.years.start - 1)
+		lastYear = Math.min(lastYear, activity.years.end)
+		if (lastYear < firstYear) return []
+	}
+
 	const candidates: PlannerCandidateInterval[] = []
 
 	for (let year = firstYear; year <= lastYear; year++) {
