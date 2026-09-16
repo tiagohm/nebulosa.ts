@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { meteorComputationContext, meteorShowerDates, meteorSolarLongitude, meteorSolarLongitudeDelta, meteorSolarLongitudeForwardDelta, meteorSolarLongitudeTimes, meteorSolarRelativeState, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
+import { meteorComputationContext, meteorShowerDates, meteorSolarLongitude, meteorSolarLongitudeDelta, meteorSolarLongitudeForwardDelta, meteorSolarLongitudeTimes, meteorSolarRelativeState, meteorSolarState, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import type { MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
 import { Timescale, timeSubtract, timeToDate, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { deg, normalizeAngle, toDeg } from '../../../src/math/units/angle'
@@ -19,6 +19,9 @@ test('solar longitude and geocentric state match the frozen Horizons DE441 state
 	// The fixed longitude is atan2(Y, X) of the same Horizons vector; the small residual is
 	// the documented VSOP87E-versus-DE441 ephemeris difference.
 	expect(toDeg(meteorSolarLongitude(REFERENCE_TDB))).toBeCloseTo(282.7674525147974, 4)
+	const solar = meteorSolarState(REFERENCE_TDB)
+	expect(solar.solarLongitude).toBe(meteorSolarLongitude(REFERENCE_TDB))
+	for (let i = 0; i < 3; i++) expect(Number.isFinite(solar.sun[i])).toBe(true)
 })
 
 test('signed and forward longitude deltas use their distinct wrap conventions', () => {

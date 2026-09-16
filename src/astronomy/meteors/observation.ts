@@ -1,16 +1,13 @@
-import { ECLIPTIC_J2000_MATRIX } from '../../core/constants'
-import { matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type Vec3, vecAngle } from '../../math/linear-algebra/vec3'
 import { chiSquareQuantile } from '../../math/numerical/statistics'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import { moon } from '../ephemeris/models/analytical/elpmpp02'
-import { earth, sun } from '../ephemeris/models/analytical/vsop87e'
 import { altitudeOf } from '../events/horizon'
 import { localSiderealTime, type GeographicPosition } from '../observer/location'
 import { type Time, timeShift, timeSubtract } from '../time/time'
 import { meteorActivityZhr } from './activity'
 import { meteorRadiantHorizontal } from './radiant'
-import { meteorSolarLongitude } from './solar'
+import { meteorSolarLongitude, meteorSolarState } from './solar'
 import type { MeteorActivityProfile, MeteorComputationContext, MeteorHorizontalRadiant, MeteorMagnitudeBin, MeteorObservingConditions, MeteorPopulationIndexOptions, MeteorRadiant, MeteorVisualObservation, MeteorVisualRate } from './types'
 
 // Visual meteor observation equations and local circumstances. Counts use the standard ZHR
@@ -133,9 +130,7 @@ export function meteorObservingConditionsAt(radiant: MeteorRadiant, observer: Ge
 
 // Returns the geocentric J2000 equatorial Sun direction vector in AU.
 export function meteorSunDirection(time: Time): Vec3 {
-	const sunState = sun(time, 'eclipticJ2000')
-	const earthState = earth(time, 'eclipticJ2000')
-	return matTransposeMulVec(ECLIPTIC_J2000_MATRIX, [sunState[0][0] - earthState[0][0], sunState[0][1] - earthState[0][1], sunState[0][2] - earthState[0][2]])
+	return meteorSolarState(time).sun
 }
 
 // Returns the geocentric J2000 equatorial Moon direction vector in AU.

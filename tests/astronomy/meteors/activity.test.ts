@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
-import { integrateMeteorZhr, isMeteorShowerActive, meteorActivityFraction, meteorActivityIntervalsAboveFraction, meteorActivityMaximumSolarLongitude, meteorActivityPhase, meteorActivityProgress, meteorActivityZhr, meteorExponentialZhr, meteorShowerActivityYearApplies, meteorSolarLongitudeForwardDelta } from '../../../src/astronomy/meteors/activity'
+import { integrateMeteorZhr, isMeteorShowerActive, meteorActivityFraction, meteorActivityIntervalsAboveFraction, meteorActivityMaximumSolarLongitude, meteorActivityMaximumZhr, meteorActivityPhase, meteorActivityProgress, meteorActivityZhr, meteorExponentialZhr, meteorShowerActivityYearApplies, meteorSolarLongitudeForwardDelta } from '../../../src/astronomy/meteors/activity'
 import type { MeteorActivityProfile } from '../../../src/astronomy/meteors/types'
 import { timeConvert, timeYMDHMS, Timescale } from '../../../src/astronomy/time/time'
 import { deg, toDeg } from '../../../src/math/units/angle'
@@ -94,8 +94,20 @@ test('sampled profiles use PCHIP inside support and reject unordered samples', (
 	expect(() => meteorActivityZhr(unordered, deg(5))).toThrow('strictly increasing')
 })
 
+test('prepared sampled profiles preserve exact values across repeated evaluations', () => {
+	const expected = [10, 17.5, 20, 17.5, 10]
+	const longitudes = [deg(350), deg(355), 0, deg(5), deg(10)]
+
+	for (let repetition = 0; repetition < 1000; repetition++) {
+		for (let index = 0; index < longitudes.length; index++) expect(meteorActivityZhr(SAMPLED_PROFILE, longitudes[index])).toBeCloseTo(expected[index], 14)
+	}
+})
+
 test('multi-peak profiles preserve disconnected widths and find the global maximum', () => {
-	expect(toDeg(meteorActivityMaximumSolarLongitude(MULTI_PEAK_PROFILE)!)).toBeCloseTo(10, 10)
+	const maximum = meteorActivityMaximumSolarLongitude(MULTI_PEAK_PROFILE)
+	expect(toDeg(maximum!)).toBeCloseTo(10, 10)
+	expect(meteorActivityMaximumZhr(MULTI_PEAK_PROFILE)).toBeCloseTo(100, 10)
+	for (let repetition = 0; repetition < 1000; repetition++) expect(meteorActivityMaximumSolarLongitude(MULTI_PEAK_PROFILE)).toBe(maximum)
 	const intervals = meteorActivityIntervalsAboveFraction(MULTI_PEAK_PROFILE, 0.5)
 	expect(intervals).toHaveLength(2)
 	expect(toDeg(intervals[0].start)).toBeCloseTo(6.9897, 3)

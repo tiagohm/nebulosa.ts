@@ -2,11 +2,11 @@ import { vecAngle } from '../../math/linear-algebra/vec3'
 import { altitudeOf } from '../events/horizon'
 import { type GeographicPosition, localSiderealTime } from '../observer/location'
 import type { Time } from '../time/time'
-import { isMeteorShowerActive, meteorActivityMaximumSolarLongitude, meteorActivityZhr, meteorShowerActivityYearApplies } from './activity'
+import { isMeteorShowerActive, meteorActivityMaximumZhr, meteorActivityZhr, meteorShowerActivityYearApplies } from './activity'
 import { meteorMoonDirection, meteorMoonIllumination, meteorSunDirection } from './observation'
 import { meteorRadiantHorizontal, meteorRadiantJ2000, meteorRadiantOfDate, meteorRadiantVector } from './radiant'
-import { meteorSolarLongitude } from './solar'
-import type { MeteorActivityProfile, MeteorShowerBatchStateOptions, MeteorShowerComputationContext, MeteorShowerContextOptions, MeteorShowerSolution, MeteorShowerState, MeteorShowerStateInput, MeteorShowerStateOptions } from './types'
+import { meteorSolarLongitude, meteorSolarState } from './solar'
+import type { MeteorShowerBatchStateOptions, MeteorShowerComputationContext, MeteorShowerContextOptions, MeteorShowerSolution, MeteorShowerState, MeteorShowerStateInput, MeteorShowerStateOptions } from './types'
 
 // High-level instantaneous meteor-shower states. A prepared context owns all shared solar, lunar and
 // observer work for one instant; batch evaluation allocates only per-solution result objects and does
@@ -15,6 +15,14 @@ import type { MeteorActivityProfile, MeteorShowerBatchStateOptions, MeteorShower
 // Prepares solar longitude and the optional observer/ephemeris values used by one or many shower
 // states. Sun and Moon vectors are evaluated only when their corresponding result groups are enabled.
 export function meteorShowerComputationContext(time: Time, observer?: GeographicPosition, options: MeteorShowerContextOptions = {}): MeteorShowerComputationContext {
+	const includeMoon = options.includeMoon ?? true
+	const includeSun = options.includeSun ?? observer !== undefined
+
+	if (includeSun || includeMoon) {
+		const solar = meteorSolarState(time)
+		return completeContext({ time, solarLongitude: solar.solarLongitude, sun: solar.sun, observer }, options)
+	}
+
 	return completeContext({ time, solarLongitude: meteorSolarLongitude(time), observer }, options)
 }
 
@@ -28,10 +36,9 @@ export function meteorShowerState(solution: MeteorShowerSolution, context: Meteo
 // and Moon evaluations.
 export function meteorShowerStates(inputs: readonly MeteorShowerStateInput[], context: MeteorShowerComputationContext, options: MeteorShowerBatchStateOptions = {}): readonly MeteorShowerState[] {
 	const complete = completeContext(context, options)
-	const maximumZhrByProfile = new Map<MeteorActivityProfile, number | undefined>()
 	return inputs.map((input) => {
 		const stateOptions: MeteorShowerStateOptions = { ...options, profile: input.profile, activityMaximumZhr: input.activityMaximumZhr }
-		return stateFromCompleteContext(input.solution, complete, stateOptions, cachedProfileMaximumZhr(stateOptions, maximumZhrByProfile))
+		return stateFromCompleteContext(input.solution, complete, stateOptions, profileMaximumZhr(stateOptions))
 	})
 }
 
@@ -42,11 +49,16 @@ function completeContext(context: MeteorShowerComputationContext, options: Meteo
 	const includeMoon = options.includeMoon ?? true
 	const includeSun = options.includeSun ?? observer !== undefined
 	const needsSun = includeSun || includeMoon
+	const sun = context.sun ?? (needsSun ? meteorSunDirection(context.time) : undefined)
+	const moon = context.moon ?? (includeMoon ? meteorMoonDirection(context.time) : undefined)
 	return {
 		...context,
 		localSiderealTime: context.localSiderealTime ?? (observer !== undefined && includeHorizontal ? localSiderealTime(context.time, observer) : undefined),
-		sun: context.sun ?? (needsSun ? meteorSunDirection(context.time) : undefined),
-		moon: context.moon ?? (includeMoon ? meteorMoonDirection(context.time) : undefined),
+		sun,
+		moon,
+		sunAltitude: context.sunAltitude ?? (includeSun && sun !== undefined && observer !== undefined ? altitudeOf(sun, context.time, observer) : undefined),
+		moonAltitude: context.moonAltitude ?? (includeMoon && moon !== undefined && observer !== undefined ? altitudeOf(moon, context.time, observer) : undefined),
+		moonIllumination: context.moonIllumination ?? (includeMoon && moon !== undefined && sun !== undefined ? meteorMoonIllumination(sun, moon) : undefined),
 	}
 }
 
@@ -66,12 +78,14 @@ function stateFromCompleteContext(solution: MeteorShowerSolution, context: Meteo
 	const includeHorizontal = options.includeHorizontal ?? observer !== undefined
 	const includeMoon = options.includeMoon ?? true
 	const includeSun = options.includeSun ?? observer !== undefined
-	const horizontal = radiantJ2000 !== undefined && observer !== undefined && includeHorizontal ? meteorRadiantHorizontal(radiantJ2000, observer, context.time, context) : undefined
-	const radiantOfDate = radiantJ2000 !== undefined && (options.includeRadiantOfDate ?? true) ? meteorRadiantOfDate(radiantJ2000, context.time) : undefined
-	const moonAltitude = includeMoon && context.moon !== undefined && observer !== undefined ? altitudeOf(context.moon, context.time, observer) : undefined
+	const includeRadiantOfDate = options.includeRadiantOfDate ?? true
+	const preparedOfDate = radiantJ2000 !== undefined && (includeRadiantOfDate || (observer !== undefined && includeHorizontal)) ? meteorRadiantOfDate(radiantJ2000, context.time) : undefined
+	const horizontal = radiantJ2000 !== undefined && preparedOfDate !== undefined && observer !== undefined && includeHorizontal ? meteorRadiantHorizontal(radiantJ2000, observer, context.time, context, preparedOfDate) : undefined
+	const radiantOfDate = includeRadiantOfDate ? preparedOfDate : undefined
+	const moonAltitude = includeMoon ? context.moonAltitude : undefined
 	const moonSeparation = includeMoon && context.moon !== undefined && radiantJ2000 !== undefined ? vecAngle(context.moon, meteorRadiantVector(radiantJ2000)) : undefined
-	const moonIllumination = includeMoon && context.moon !== undefined && context.sun !== undefined ? meteorMoonIllumination(context.sun, context.moon) : undefined
-	const sunAltitude = includeSun && context.sun !== undefined && observer !== undefined ? altitudeOf(context.sun, context.time, observer) : undefined
+	const moonIllumination = includeMoon ? context.moonIllumination : undefined
+	const sunAltitude = includeSun ? context.sunAltitude : undefined
 	const zhr = profile === undefined || !includeActivity ? undefined : meteorActivityZhr(profile, context.solarLongitude)
 	const activityFraction = zhr === undefined ? undefined : !(maximumZhr !== undefined && maximumZhr > 0) || !Number.isFinite(zhr) ? 0 : Math.min(1, Math.max(0, zhr / maximumZhr))
 
@@ -102,8 +116,7 @@ function isProfileActive(profile: NonNullable<MeteorShowerStateOptions['profile'
 function profileMaximumZhr(options: MeteorShowerStateOptions): number | undefined {
 	if (options.activityMaximumZhr !== undefined) return options.activityMaximumZhr
 	if (options.profile === undefined || options.includeActivity === false) return undefined
-	const maximum = meteorActivityMaximumSolarLongitude(options.profile)
-	return maximum === undefined ? undefined : meteorActivityZhr(options.profile, maximum)
+	return meteorActivityMaximumZhr(options.profile)
 }
 
 // Returns the conjunction of all known support states while preserving complete uncertainty.
@@ -112,14 +125,4 @@ function combineActivityState(catalogActive: boolean | undefined, profileActive:
 	if (catalogActive !== undefined) return catalogActive
 	if (profileActive !== undefined) return profileActive
 	return undefined
-}
-
-// Reuses one profile maximum within a batch while preserving explicit per-input maximum values.
-function cachedProfileMaximumZhr(options: MeteorShowerStateOptions, cache: Map<MeteorActivityProfile, number | undefined>): number | undefined {
-	if (options.activityMaximumZhr !== undefined) return options.activityMaximumZhr
-	if (options.profile === undefined || options.includeActivity === false) return undefined
-	if (cache.has(options.profile)) return cache.get(options.profile)
-	const maximumZhr = profileMaximumZhr(options)
-	cache.set(options.profile, maximumZhr)
-	return maximumZhr
 }

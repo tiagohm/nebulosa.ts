@@ -3,7 +3,7 @@ import { meteorObservingWindows } from '../../../src/astronomy/meteors/planner'
 import { meteorSolarLongitude, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import { meteorShowerComputationContext, meteorShowerState } from '../../../src/astronomy/meteors/state'
 import type { MeteorActivityProfile, MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
-import { timeShift } from '../../../src/astronomy/time/time'
+import { timeShift, timeYMDHMS, Timescale } from '../../../src/astronomy/time/time'
 import { deg } from '../../../src/math/units/angle'
 import { BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, PLANNER_END, PLANNER_MULTI_PROFILE, PLANNER_START, SITE_EPOCH, SITE_EPOCH_END, SOLAR_DRIFT_SOLUTION, ZERO_WIDTH_INTERVAL } from './util'
 
@@ -62,7 +62,7 @@ test('planner applies lunar altitude and retains sampled lunar metrics', () => {
 		maximumMoonIllumination: 1,
 	})
 	expect(combined).toHaveLength(1)
-}, 4000)
+}, 1500)
 
 test('a below-horizon Moon satisfies illumination, separation and inclusive altitude limits', () => {
 	const start = timeShift(SITE_EPOCH, -6 / 24)
@@ -78,7 +78,7 @@ test('a below-horizon Moon satisfies illumination, separation and inclusive alti
 	})
 	expect(windows).toHaveLength(1)
 	expect(windows[0].maximumMoonAltitude).toBeLessThanOrEqual(moonLimit + 1e-10)
-}, 1500)
+})
 
 test('planner samples a sub-step catalog activity interval inside a broad profile', () => {
 	const center = meteorSolarLongitude(timeShift(SITE_EPOCH, 0.5 / 24))
@@ -93,7 +93,20 @@ test('planner samples a sub-step catalog activity interval inside a broad profil
 	expect(windows).toHaveLength(1)
 	expect(windows[0].durationHours).toBeGreaterThan(0)
 	expect(windows[0].durationHours).toBeLessThan(0.5)
-}, 1500)
+})
+
+test('planner restricts a year-long scan to a narrow activity support', () => {
+	const support = { start: deg(99.99), end: deg(100.01) }
+	const solution = { ...BASE_SOLUTION, activityInterval: support } satisfies MeteorShowerSolution
+	const profile = { ...EXPONENTIAL_PROFILE, support } satisfies MeteorActivityProfile
+	const start = timeYMDHMS(2026, 1, 1, 0, 0, 0, Timescale.UTC)
+	const end = timeYMDHMS(2027, 1, 1, 0, 0, 0, Timescale.UTC)
+	const windows = meteorObservingWindows(solution, profile, OBSERVER, start, end, { maximumSolarAltitude: deg(90), minimumRadiantAltitude: deg(-90), step: 1 })
+
+	expect(windows).toHaveLength(1)
+	expect(windows[0].durationHours).toBeGreaterThan(0)
+	expect(windows[0].durationHours).toBeLessThan(1)
+})
 
 test('planner integrates a constant local hourly rate over the window duration', () => {
 	const flatProfile = { ...EXPONENTIAL_PROFILE, slopeBefore: 0, slopeAfter: 0 } satisfies MeteorActivityProfile

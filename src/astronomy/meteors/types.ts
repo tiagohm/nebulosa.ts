@@ -229,10 +229,24 @@ export interface MeteorComputationContext {
 	readonly moon?: Vec3
 }
 
+// Joint solar values derived from one geocentric VSOP Sun/Earth evaluation.
+export interface MeteorSolarState {
+	// Geometric geocentric solar longitude in the J2000 ecliptic, normalized to [0, 2π).
+	readonly solarLongitude: Angle
+	// Geocentric J2000 equatorial Sun vector in AU.
+	readonly sun: Vec3
+}
+
 // Shared ephemeris and observer values for one or many instantaneous shower states.
 export interface MeteorShowerComputationContext extends MeteorComputationContext {
 	// Observer used for local horizontal quantities, when requested.
 	readonly observer?: GeographicPosition
+	// Geometric solar altitude in radians, shared by all showers at this observer and instant.
+	readonly sunAltitude?: Angle
+	// Geometric lunar altitude in radians, shared by all showers at this observer and instant.
+	readonly moonAltitude?: Angle
+	// Lunar illuminated fraction in [0, 1], shared by all showers at this instant.
+	readonly moonIllumination?: number
 }
 
 // Controls only the observer and ephemeris values prepared in a shared shower context.

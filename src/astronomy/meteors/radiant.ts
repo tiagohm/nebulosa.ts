@@ -101,22 +101,28 @@ export function meteorRadiantPathSegmentsBetween(solution: MeteorShowerSolution,
 	for (let index = 0; index <= count; index++) {
 		const time = index === count && !hasPartialStep ? end : timeShift(start, index * step)
 		const point = timedMeteorRadiantPoint(solution, time, options)
+
 		if (point !== undefined) {
 			if (current === undefined) {
 				current = []
 				segments.push(current)
 			}
+
 			current.push(point)
-		} else current = undefined
+		} else {
+			current = undefined
+		}
 	}
 
 	if (hasPartialStep) {
 		const point = timedMeteorRadiantPoint(solution, end, options)
+
 		if (point !== undefined) {
 			if (current === undefined) {
 				current = []
 				segments.push(current)
 			}
+
 			current.push(point)
 		}
 	}
@@ -140,12 +146,14 @@ export function meteorRadiantMaximumAltitude(solution: MeteorShowerSolution, obs
 	const step = options.step ?? 1 / 24
 	if (!(step > 0) || !Number.isFinite(step)) throw new Error('meteor radiant-altitude step must be finite and positive')
 	const panels = Math.max(1, Math.ceil(duration / step))
+	const needsSolarLongitude = solution.radiantDrift?.basis === 'solarLongitude'
+	const fallbackSolarLongitude = solution.referenceSolarLongitude ?? 0
 	let bestIndex = 0
 	let best: MeteorHorizontalRadiant | undefined
 
 	const horizontalAt = (offset: number) => {
 		const time = timeShift(start, offset)
-		const solarLongitude = meteorSolarLongitude(time)
+		const solarLongitude = needsSolarLongitude ? meteorSolarLongitude(time) : fallbackSolarLongitude
 		const radiant = meteorRadiantJ2000(solution, { time, solarLongitude }, options)?.radiant
 		return radiant === undefined ? undefined : meteorRadiantHorizontal(radiant, observer, time, { time, solarLongitude })
 	}
@@ -255,8 +263,13 @@ export function meteorRadiantOfDate(radiant: MeteorRadiant, time: Time): MeteorR
 
 // Converts a J2000 radiant to local geometric horizontal coordinates. Refraction is intentionally
 // absent; callers that need it must apply a named atmospheric reduction separately.
-export function meteorRadiantHorizontal(radiant: MeteorRadiant, observer: GeographicPosition, time: Time, context?: MeteorComputationContext): MeteorHorizontalRadiant {
-	const ofDate = meteorRadiantOfDate(radiant, time)
+export function meteorRadiantHorizontal(radiant: MeteorRadiant, observer: GeographicPosition, time: Time, context?: MeteorComputationContext, ofDate: MeteorRadiant = meteorRadiantOfDate(radiant, time)): MeteorHorizontalRadiant {
+	return meteorRadiantHorizontalFromOfDate(radiant, ofDate, observer, time, context)
+}
+
+// Converts a J2000 radiant to local horizontal coordinates using an already prepared of-date
+// transform. This avoids repeating precession/nutation work in aggregated state calculations.
+function meteorRadiantHorizontalFromOfDate(radiant: MeteorRadiant, ofDate: MeteorRadiant, observer: GeographicPosition, time: Time, context?: MeteorComputationContext): MeteorHorizontalRadiant {
 	const lst = context?.localSiderealTime ?? localSiderealTime(time, observer)
 	const [azimuth, altitude] = equatorialToHorizontal(ofDate.rightAscension, ofDate.declination, observer.latitude, lst)
 	return { ...radiant, rightAscension: normalizeAngle(radiant.rightAscension), rightAscensionOfDate: ofDate.rightAscension, declinationOfDate: ofDate.declination, azimuth, altitude, time }
@@ -269,11 +282,13 @@ export function meteorRadiantRiseTransitSet(solution: MeteorShowerSolution, obse
 	if (solution.rightAscension === undefined || solution.declination === undefined) return undefined
 
 	const stop = timeShift(time, options.window ?? 1)
+	const needsSolarLongitude = solution.radiantDrift?.basis === 'solarLongitude'
+	const fallbackSolarLongitude = solution.referenceSolarLongitude ?? 0
 	let unavailable = false
 
 	const result = riseTransitSet(
 		(current) => {
-			const context: MeteorComputationContext = { time: current, solarLongitude: meteorSolarLongitude(current), localSiderealTime: localSiderealTime(current, observer) }
+			const context: MeteorComputationContext = { time: current, solarLongitude: needsSolarLongitude ? meteorSolarLongitude(current) : fallbackSolarLongitude, localSiderealTime: localSiderealTime(current, observer) }
 			const result = meteorRadiantJ2000(solution, context, options)
 			if (result === undefined) {
 				if (timeSubtract(current, time) >= 0 && timeSubtract(stop, current) >= 0) unavailable = true

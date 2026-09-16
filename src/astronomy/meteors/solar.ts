@@ -1,11 +1,12 @@
-import { DAYSPERTY, TAU } from '../../core/constants'
+import { DAYSPERTY, ECLIPTIC_J2000_MATRIX, TAU } from '../../core/constants'
+import { matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { normalizeAngle, normalizePI, type Angle } from '../../math/units/angle'
 import { relativePositionAndVelocity, type PositionAndVelocity } from '../coordinates/astrometry'
 import { earth, sun } from '../ephemeris/models/analytical/vsop87e'
 import { searchRoots } from '../events/search'
 import { Timescale, type Time, timeConvert, timeShift, timeSubtract, timeYMD } from '../time/time'
 import { meteorActivityMaximumSolarLongitude, meteorShowerActivityYearApplies } from './activity'
-import type { MeteorShowerDates, MeteorShowerDateOptions, MeteorShowerSolution, MeteorSolarLongitudeSearchOptions } from './types'
+import type { MeteorShowerDates, MeteorShowerDateOptions, MeteorShowerSolution, MeteorSolarLongitudeSearchOptions, MeteorSolarState } from './types'
 
 // Solar-longitude calculations for meteor showers. The longitude is geometric and geocentric in
 // the dynamical J2000 ecliptic: VSOP87E supplies barycentric Sun/Earth states and the position
@@ -16,6 +17,12 @@ import type { MeteorShowerDates, MeteorShowerDateOptions, MeteorShowerSolution, 
 export function meteorSolarLongitude(time: Time): Angle {
 	const [position] = meteorSolarRelativeState(time)
 	return normalizeAngle(Math.atan2(position[1], position[0]))
+}
+
+// Computes solar longitude and the equatorial Sun vector from one shared geocentric VSOP state.
+export function meteorSolarState(time: Time): MeteorSolarState {
+	const [position] = meteorSolarRelativeState(time)
+	return { solarLongitude: normalizeAngle(Math.atan2(position[1], position[0])), sun: matTransposeMulVec(ECLIPTIC_J2000_MATRIX, position) }
 }
 
 // Returns the signed shortest angular displacement longitude - reference in [-π, π).
@@ -81,18 +88,20 @@ export function meteorShowerDates(solution: MeteorShowerSolution, year: number, 
 	if (!meteorShowerActivityYearApplies(solution.activity, year) && !options?.extrapolateYearLimitedActivity) return {}
 
 	const interval = solution.activityInterval
-	const start = interval === undefined ? undefined : timeAtMeteorSolarLongitude(year, interval.start, options)
-
-	let end: Time | undefined
-	if (interval !== undefined) {
-		end = timeAtMeteorSolarLongitude(interval.fullCircle ? year + 1 : year, interval.fullCircle ? interval.start : interval.end, options)
-		if (!interval.fullCircle && start !== undefined && timeSubtract(end, start, Timescale.UTC) < 0) end = timeAtMeteorSolarLongitude(year + 1, interval.end, options)
-	}
-
-	const reference = solution.referenceSolarLongitude === undefined ? undefined : timeAtMeteorSolarLongitude(year, solution.referenceSolarLongitude, options)
 	const profile = options?.profile
 	const maximumLongitude = profile === undefined ? undefined : meteorActivityMaximumSolarLongitude(profile)
-	const maximum = maximumLongitude === undefined ? undefined : timeAtMeteorSolarLongitude(year, maximumLongitude, options)
+	const longitudes: Angle[] = []
+	const startIndex = interval === undefined ? undefined : longitudes.push(interval.start) - 1
+	const endIndex = interval === undefined || interval.fullCircle ? undefined : longitudes.push(interval.end) - 1
+	const referenceIndex = solution.referenceSolarLongitude === undefined ? undefined : longitudes.push(solution.referenceSolarLongitude) - 1
+	const maximumIndex = maximumLongitude === undefined ? undefined : longitudes.push(maximumLongitude) - 1
+	const times = meteorSolarLongitudeTimes(year, longitudes, options)
+	const start = startIndex === undefined ? undefined : times[startIndex]
+	let end = endIndex === undefined ? undefined : times[endIndex]
+	if (interval?.fullCircle) end = meteorSolarLongitudeTimes(year + 1, [interval.start], options)[0]
+	else if (interval !== undefined && start !== undefined && end !== undefined && timeSubtract(end, start, Timescale.UTC) < 0) end = meteorSolarLongitudeTimes(year + 1, [interval.end], options)[0]
+	const reference = referenceIndex === undefined ? undefined : times[referenceIndex]
+	const maximum = maximumIndex === undefined ? undefined : times[maximumIndex]
 	return { start, reference, end, maximum }
 }
 

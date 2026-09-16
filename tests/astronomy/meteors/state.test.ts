@@ -23,6 +23,9 @@ test('instantaneous state agrees with individual activity and radiant helpers', 
 
 test('batch states reuse one prepared context and equal scalar states', () => {
 	const context = meteorShowerComputationContext(REFERENCE_UTC, OBSERVER)
+	expect(context.sunAltitude).toBeDefined()
+	expect(context.moonAltitude).toBeDefined()
+	expect(context.moonIllumination).toBeDefined()
 	const solutions = [BASE_SOLUTION, SOLAR_DRIFT_SOLUTION]
 	const inputs = solutions.map((solution) => ({ solution, profile: EXPONENTIAL_PROFILE }))
 	const batch = meteorShowerStates(inputs, context)

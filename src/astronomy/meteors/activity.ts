@@ -1,6 +1,6 @@
 import { PI, TAU } from '../../core/constants'
 import { brentMinimize } from '../../math/numerical/optimization'
-import { pchip } from '../../math/numerical/spline'
+import { pchip, type PchipSpline } from '../../math/numerical/spline'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 import { timeConvert, timeShift, timeSubtract, timeToDate, Timescale, type Time } from '../time/time'
 import { meteorSolarLongitude } from './solar'
@@ -9,6 +9,28 @@ import type { MeteorActivityPhase, MeteorActivityProfile, MeteorExponentialActiv
 // Meteor activity profiles and visual-rate mathematics. Catalog support intervals only decide where
 // a shower is active; ZHR profiles are explicit caller-supplied data. Solar-longitude coordinates are
 // unwrapped locally within each circular support and all exponential slopes use degrees as published.
+
+// Prepared sampled-profile interpolation retained only while the immutable profile remains reachable.
+interface PreparedSampledActivity {
+	// First unwrapped sample longitude offset in radians.
+	readonly first: number
+	// Last unwrapped sample longitude offset in radians.
+	readonly last: number
+	// Shape-preserving interpolator, absent for a single sample.
+	readonly spline?: PchipSpline
+}
+
+// Cached global activity peak for one immutable profile identity.
+interface ActivityMaximum {
+	// Solar longitude of the global maximum in radians.
+	readonly longitude?: Angle
+	// ZHR at the global maximum in meteors per hour.
+	readonly zhr?: number
+}
+
+// Weak caches avoid rebuilding immutable derived data without extending profile lifetimes.
+const SAMPLED_ACTIVITY_CACHE = new WeakMap<MeteorSampledActivityProfile, PreparedSampledActivity>()
+const ACTIVITY_MAXIMUM_CACHE = new WeakMap<MeteorActivityProfile, ActivityMaximum>()
 
 // Tests whether a solar longitude lies in a forward circular interval. Undefined support means that
 // the catalog did not publish a window, so the result is undefined rather than false; fullCircle
@@ -83,10 +105,8 @@ export function meteorActivityZhr(profile: MeteorActivityProfile, solarLongitude
 // Returns profile intensity relative to its finite global maximum. Empty, zero and degenerate
 // profiles return zero instead of propagating NaN or Infinity.
 export function meteorActivityFraction(profile: MeteorActivityProfile, solarLongitude: Angle): number {
-	const maximum = meteorActivityMaximumSolarLongitude(profile)
-	if (maximum === undefined) return 0
-	const peak = meteorActivityZhr(profile, maximum)
-	if (!(peak > 0) || !Number.isFinite(peak)) return 0
+	const peak = meteorActivityMaximumZhr(profile)
+	if (peak === undefined || !(peak > 0) || !Number.isFinite(peak)) return 0
 	const fraction = meteorActivityZhr(profile, solarLongitude) / peak
 	if (!Number.isFinite(fraction)) return 0
 	return Math.min(1, Math.max(0, fraction))
@@ -95,17 +115,41 @@ export function meteorActivityFraction(profile: MeteorActivityProfile, solarLong
 // Finds the longitude of the maximum of a profile. Multi-peak profiles are optimized as a sum and
 // therefore may peak away from every individual component maximum.
 export function meteorActivityMaximumSolarLongitude(profile: MeteorActivityProfile): Angle | undefined {
-	if (profile.type === 'exponential') return isMeteorShowerActive(profile.support, profile.solarLongitude) ? normalizeAngle(profile.solarLongitude) : undefined
+	return activityMaximum(profile).longitude
+}
 
-	if (profile.type === 'sampled') {
+// Returns the finite global peak ZHR while sharing the same weakly cached optimization as the
+// maximum-longitude query. Undefined denotes an empty or unsupported profile maximum.
+export function meteorActivityMaximumZhr(profile: MeteorActivityProfile): number | undefined {
+	return activityMaximum(profile).zhr
+}
+
+// Computes and weakly caches both coordinates of a profile's immutable global maximum.
+function activityMaximum(profile: MeteorActivityProfile): ActivityMaximum {
+	const cached = ACTIVITY_MAXIMUM_CACHE.get(profile)
+	if (cached !== undefined) return cached
+
+	let maximum: ActivityMaximum
+	if (profile.type === 'exponential') {
+		const longitude = isMeteorShowerActive(profile.support, profile.solarLongitude) ? normalizeAngle(profile.solarLongitude) : undefined
+		maximum = longitude === undefined ? {} : { longitude, zhr: meteorExponentialZhr(profile, longitude) }
+	} else if (profile.type === 'sampled') {
 		let best: { longitude: Angle; value: number } | undefined
 		for (const sample of profile.samples) if (best === undefined || sample.zhr > best.value) best = { longitude: sample.solarLongitude, value: sample.zhr }
-		return best?.longitude
+		maximum = best === undefined ? {} : { longitude: best.longitude, zhr: meteorActivityZhr(profile, best.longitude) }
+	} else {
+		maximum = multiPeakMaximum(profile)
 	}
 
+	ACTIVITY_MAXIMUM_CACHE.set(profile, maximum)
+	return maximum
+}
+
+// Finds a multi-peak profile maximum by grid search and bounded Brent refinements.
+function multiPeakMaximum(profile: Extract<MeteorActivityProfile, { readonly type: 'multiPeak' }>): ActivityMaximum {
 	const candidates: number[] = []
 	for (const component of profile.components) candidates.push(normalizeAngle(component.solarLongitude), normalizeAngle(component.support.start), normalizeAngle(component.support.end))
-	if (candidates.length === 0) return undefined
+	if (candidates.length === 0) return {}
 
 	const grid = 1440
 	let bestLongitude = candidates[0]
@@ -131,7 +175,7 @@ export function meteorActivityMaximumSolarLongitude(profile: MeteorActivityProfi
 		}
 	}
 
-	return bestLongitude
+	return { longitude: bestLongitude, zhr: bestValue }
 }
 
 // Returns all circular intervals where a profile is at least the selected fraction of its own peak.
@@ -140,11 +184,8 @@ export function meteorActivityMaximumSolarLongitude(profile: MeteorActivityProfi
 export function meteorActivityIntervalsAboveFraction(profile: MeteorActivityProfile, fraction: number, options: { readonly samples?: number } = {}): readonly MeteorSolarLongitudeInterval[] {
 	if (!(fraction >= 0) || fraction > 1) return []
 
-	const maximum = meteorActivityMaximumSolarLongitude(profile)
-	if (maximum === undefined) return []
-
-	const peak = meteorActivityZhr(profile, maximum)
-	if (!(peak > 0)) return []
+	const peak = meteorActivityMaximumZhr(profile)
+	if (peak === undefined || !(peak > 0)) return []
 
 	const count = Math.max(32, Math.trunc(options.samples ?? 1440))
 	const threshold = peak * fraction
@@ -238,7 +279,16 @@ function sampledZhr(profile: MeteorSampledActivityProfile, solarLongitude: Angle
 	const offset = meteorSolarLongitudeForwardDelta(profile.support.start, solarLongitude)
 	const width = meteorSolarLongitudeIntervalWidth(profile.support)
 	if (width === 0 || offset > width || profile.samples.length === 0) return 0
-	if (profile.samples.length === 1) return offset === meteorSolarLongitudeForwardDelta(profile.support.start, profile.samples[0].solarLongitude) ? profile.samples[0].zhr : 0
+	const prepared = preparedSampledActivity(profile)
+	if (profile.samples.length === 1) return offset === prepared.first ? profile.samples[0].zhr : 0
+	if (offset < prepared.first || offset > prepared.last) return 0
+	return prepared.spline!.compute(offset)
+}
+
+// Unwraps and validates one sampled profile once, then retains its PCHIP by weak identity.
+function preparedSampledActivity(profile: MeteorSampledActivityProfile): PreparedSampledActivity {
+	const cached = SAMPLED_ACTIVITY_CACHE.get(profile)
+	if (cached !== undefined) return cached
 
 	const x = new Float64Array(profile.samples.length)
 	const y = new Float64Array(profile.samples.length)
@@ -248,9 +298,9 @@ function sampledZhr(profile: MeteorSampledActivityProfile, solarLongitude: Angle
 		if (i > 0 && !(x[i] > x[i - 1])) throw new Error('meteor activity samples must be strictly increasing within support')
 	}
 
-	if (offset < x.at(0)! || offset > x.at(-1)!) return 0
-
-	return pchip(x, y, { outOfRange: 'throw' }).compute(offset)
+	const prepared: PreparedSampledActivity = { first: x[0], last: x.at(-1)!, spline: x.length > 1 ? pchip(x, y, { outOfRange: 'throw' }) : undefined }
+	SAMPLED_ACTIVITY_CACHE.set(profile, prepared)
+	return prepared
 }
 
 // Refines a sampled activity threshold crossing in its unwrapped local longitude coordinate. At a
