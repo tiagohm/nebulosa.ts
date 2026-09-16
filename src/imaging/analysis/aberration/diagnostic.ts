@@ -1,5 +1,6 @@
 import { PI, PIOVERTWO } from '../../../core/constants'
 import { clamp } from '../../../math/numerical/math'
+import { fDistributionSurvival, pearsonCorrelationOf } from '../../../math/numerical/statistics'
 import type { FocusCurvatureAnalysis, FocusPlaneAnalysis, FocusSurfaceFitResult, FocusSurfaceModel, FocusSurfaceSample } from '../../../math/numerical/surface.fit'
 import type { Angle } from '../../../math/units/angle'
 import type { FocusFieldOffset } from './physical'
@@ -25,8 +26,6 @@ const SIGNIFICANCE_ALPHA = 0.002699796063260207
 const MINIMUM_WALD_DEGREES_OF_FREEDOM = 4
 // Extra tail factor applied after robust sample rejection, which otherwise inflates Wald statistics.
 const REJECTED_SAMPLE_ALPHA_FACTOR = 10
-// Lanczos g=7 coefficients for log Γ(z) after the reflection formula for z < 0.5.
-const LOG_GAMMA_LANCZOS = [0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059, 12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7] as const
 
 // Evaluates non-definitive optical patterns from selected profiles and regional support diagnostics.
 export function diagnoseSingleFrameAberration(stars: readonly AberrationStar[], regions: readonly AberrationRegionResult[], quality: AberrationInspectionQuality): AberrationFinding[] {
@@ -105,7 +104,7 @@ export function diagnoseFocusScan(surface: FocusSurfaceFitResult | undefined, pl
 	const rejectedCount = surface.rejectedIndices.length
 	const tiltWald = coefficientWald([surface.coefficients.ax, surface.coefficients.ay], covariance, [1, 2], columns)
 	if (tiltWald !== undefined) {
-		const pValue = fTailProbability(tiltWald, 2, degreesOfFreedom)
+		const pValue = fDistributionSurvival(tiltWald / 2, 2, degreesOfFreedom)
 		if (significantWald(pValue, degreesOfFreedom, rejectedCount)) {
 			findings.push({
 				kind: 'sensorTiltPattern',
@@ -123,7 +122,7 @@ export function diagnoseFocusScan(surface: FocusSurfaceFitResult | undefined, pl
 	const curvatureParameters = surface.model === 'radialQuadratic' ? 1 : surface.model === 'quadratic' ? 3 : 0
 	const curvatureWald = curvatureParameters === 1 ? coefficientWald([surface.coefficients.qxx], covariance, [3], columns) : curvatureParameters === 3 ? coefficientWald([surface.coefficients.qxx, surface.coefficients.qxy, surface.coefficients.qyy], covariance, [3, 4, 5], columns) : undefined
 	if (curvatureWald !== undefined) {
-		const pValue = fTailProbability(curvatureWald, curvatureParameters, degreesOfFreedom)
+		const pValue = fDistributionSurvival(curvatureWald / curvatureParameters, curvatureParameters, degreesOfFreedom)
 		if (significantWald(pValue, degreesOfFreedom, rejectedCount)) {
 			findings.push({
 				kind: 'fieldCurvature',
@@ -145,7 +144,7 @@ export function diagnoseFocusScan(surface: FocusSurfaceFitResult | undefined, pl
 		if (curvatureUncertainty !== undefined) {
 			const offset = Math.abs(fieldOffset.centerToEdge)
 			const wald = curvatureUncertainty > 0 ? (offset * offset) / (curvatureUncertainty * curvatureUncertainty) : offset === 0 ? 0 : Number.POSITIVE_INFINITY
-			const pValue = fTailProbability(wald, 1, degreesOfFreedom)
+			const pValue = fDistributionSurvival(wald, 1, degreesOfFreedom)
 			if (significantWald(pValue, degreesOfFreedom, rejectedCount)) {
 				findings.push({
 					kind: 'backfocusMismatch',
@@ -176,75 +175,6 @@ function significantWald(pValue: number, degreesOfFreedom: number, rejectedCount
 function significanceLikelihood(pValue: number): number {
 	if (!(pValue > 0)) return 1
 	return clamp(Math.log(SIGNIFICANCE_ALPHA / pValue) / Math.log(100), 0, 1)
-}
-
-// Survival function of p * F_{p, ν} evaluated at a Wald statistic, returning 1 when the test is undefined.
-function fTailProbability(wald: number, parameters: number, degreesOfFreedom: number): number {
-	if (wald === Number.POSITIVE_INFINITY && parameters > 0 && degreesOfFreedom > 0) return 0
-	if (!(wald >= 0) || !(parameters > 0) || !(degreesOfFreedom > 0) || !Number.isFinite(wald) || !Number.isFinite(parameters) || !Number.isFinite(degreesOfFreedom)) return 1
-	if (wald === 0) return 1
-	const x = degreesOfFreedom / (degreesOfFreedom + wald)
-	if (parameters === 2) {
-		const pValue = Math.exp((degreesOfFreedom / 2) * -Math.log1p(wald / degreesOfFreedom))
-		return Number.isFinite(pValue) ? clamp(pValue, 0, 1) : 0
-	}
-	const pValue = regularizedIncompleteBeta(x, degreesOfFreedom / 2, parameters / 2)
-	return Number.isFinite(pValue) ? clamp(pValue, 0, 1) : 1
-}
-
-// Regularized incomplete beta I_x(a, b) via the continued-fraction representation and log Γ.
-function regularizedIncompleteBeta(x: number, a: number, b: number): number {
-	if (!Number.isFinite(x) || !(a > 0) || !(b > 0)) return Number.NaN
-	if (!(x > 0)) return 0
-	if (!(x < 1)) return 1
-	const logBeta = logGamma(a) + logGamma(b) - logGamma(a + b)
-	const front = Math.exp(a * Math.log(x) + b * Math.log(1 - x) - logBeta)
-	if (!Number.isFinite(front)) return x < (a + 1) / (a + b + 2) ? 0 : 1
-	if (x < (a + 1) / (a + b + 2)) return (front * betaContinuedFraction(x, a, b)) / a
-	return 1 - (Math.exp(b * Math.log(1 - x) + a * Math.log(x) - logBeta) * betaContinuedFraction(1 - x, b, a)) / b
-}
-
-// Lentz continued fraction for the incomplete-beta series, converging for x in (0, 1) and a, b > 0.
-function betaContinuedFraction(x: number, a: number, b: number): number {
-	const qab = a + b
-	const qap = a + 1
-	const qam = a - 1
-	let c = 1
-	let d = 1 - (qab * x) / qap
-	if (Math.abs(d) < Number.MIN_VALUE) d = Number.MIN_VALUE
-	d = 1 / d
-	let h = d
-	for (let m = 1; m <= 200; m++) {
-		const m2 = 2 * m
-		let aa = (m * (b - m) * x) / ((qam + m2) * (a + m2))
-		d = 1 + aa * d
-		if (Math.abs(d) < Number.MIN_VALUE) d = Number.MIN_VALUE
-		c = 1 + aa / c
-		if (Math.abs(c) < Number.MIN_VALUE) c = Number.MIN_VALUE
-		d = 1 / d
-		h *= d * c
-		aa = (-(a + m) * (qab + m) * x) / ((a + m2) * (qap + m2))
-		d = 1 + aa * d
-		if (Math.abs(d) < Number.MIN_VALUE) d = Number.MIN_VALUE
-		c = 1 + aa / c
-		if (Math.abs(c) < Number.MIN_VALUE) c = Number.MIN_VALUE
-		d = 1 / d
-		const delta = d * c
-		h *= delta
-		if (Math.abs(delta - 1) < 1e-14) break
-	}
-	return h
-}
-
-// Lanczos log Γ(z) for z > 0, using the reflection formula below 0.5.
-function logGamma(z: number): number {
-	if (!(z > 0) || !Number.isFinite(z)) return Number.NaN
-	if (z < 0.5) return Math.log(PI / Math.sin(PI * z)) - logGamma(1 - z)
-	z -= 1
-	let x = LOG_GAMMA_LANCZOS[0]
-	for (let i = 1; i < LOG_GAMMA_LANCZOS.length; i++) x += LOG_GAMMA_LANCZOS[i] / (z + i)
-	const t = z + 7.5
-	return 0.5 * Math.log(2 * PI) + (z + 0.5) * Math.log(t) - t + Math.log(x)
 }
 
 // Wald statistic v' Σ^{-1} v for a coefficient block, or infinity when a zero covariance meets a non-zero estimate.
@@ -472,8 +402,8 @@ function focusGradientFinding(stars: readonly AberrationStar[], quality: Aberrat
 		v[i] = stars[i].v
 	}
 
-	const correlationU = correlation(hfd, u)
-	const correlationV = correlation(hfd, v)
+	const correlationU = pearsonCorrelationOf(hfd, u)
+	const correlationV = pearsonCorrelationOf(hfd, v)
 	const magnitude = Math.hypot(correlationU, correlationV) / Math.SQRT2
 	if (magnitude < FOCUS_GRADIENT_CORRELATION) return undefined
 
@@ -607,32 +537,6 @@ function axialDistance(a: Angle, b: Angle): number {
 	let delta = Math.abs(a - b) % PI
 	if (delta > PIOVERTWO) delta = PI - delta
 	return delta
-}
-
-// Computes Pearson correlation for equal-length numeric arrays, returning zero for a degenerate axis.
-function correlation(a: Readonly<Float64Array>, b: Readonly<Float64Array>): number {
-	let sumA = 0
-	let sumB = 0
-	for (let i = 0; i < a.length; i++) {
-		sumA += a[i]
-		sumB += b[i]
-	}
-
-	const meanA = sumA / a.length
-	const meanB = sumB / b.length
-	let covariance = 0
-	let varianceA = 0
-	let varianceB = 0
-
-	for (let i = 0; i < a.length; i++) {
-		const da = a[i] - meanA
-		const db = b[i] - meanB
-		covariance += da * db
-		varianceA += da * da
-		varianceB += db * db
-	}
-
-	return varianceA > 0 && varianceB > 0 ? covariance / Math.sqrt(varianceA * varianceB) : 0
 }
 
 // Builds the mandatory single-frame limitation list from inspection support metrics.

@@ -2,16 +2,26 @@ import { quickSelect } from './array'
 import type { Point } from './geometry'
 import type { NumberArray } from './math'
 
-// Descriptive statistics over numeric samples and histogram bins, including robust scalar estimators
-// and an unweighted 2D geometric median. Sample statistics retain the input units; variance uses
-// squared units. Most scalar reducers return NaN for empty input. Selection-based medians rearrange
-// their input prefix; geometric medians preserve paired coordinates and allocate scratch buffers.
-// Histogram caches descriptors of bin counts, normalizes positions by max, and requires reset()
-// after bins change. Sorted-input requirements and scratch-buffer mutation are documented per helper.
+// Distribution and descriptive statistics over numeric samples and histogram bins, including robust
+// scalar estimators and an unweighted 2D geometric median. Distribution arguments are dimensionless.
+// Sample statistics retain the input units; variance uses squared units. Most scalar reducers return
+// NaN for empty input. Selection-based medians rearrange their input prefix; geometric medians preserve
+// paired coordinates and allocate scratch buffers. Histogram caches descriptors of bin counts,
+// normalizes positions by max, and requires reset() after bins change. Sorted-input requirements and
+// scratch-buffer mutation are documented per helper.
 
 // Scale factor 1/Φ⁻¹(3/4) that converts a median absolute deviation into a consistent estimator of
 // the standard deviation for normally distributed data.
 export const STANDARD_DEVIATION_SCALE = 1.482602218505602
+
+// Lanczos g=7 coefficients for log Gamma after applying the reflection formula below 0.5.
+const LOG_GAMMA_LANCZOS = [0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059, 12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7] as const
+// Iteration cap for the regularized incomplete gamma series and continued fraction.
+const DISTRIBUTION_ITERATIONS = 1000
+// Relative convergence tolerance for the regularized incomplete gamma calculation.
+const GAMMA_TOLERANCE = 3e-15
+// Iteration cap for the regularized incomplete beta continued fraction.
+const BETA_CONTINUED_FRACTION_ITERATIONS = 200
 
 // Modified Weiszfeld iterations; every accepted result also passes a convex subgradient criterion.
 const GEOMETRIC_MEDIAN_ITERATIONS = 512
@@ -23,6 +33,168 @@ const GEOMETRIC_MEDIAN_LINE_SEARCH_STEPS = 24
 // Largest sample count in the common 3x3 local-median window; insertion sort avoids a TypedArray
 // subarray/sort call for the per-pixel.
 const SMALL_MEDIAN_SORT_LIMIT = 9
+
+// Computes log Gamma(x) for a finite positive, dimensionless x with a Lanczos approximation.
+// Non-positive or non-finite inputs return NaN instead of a complex-valued continuation.
+export function logGamma(value: number): number {
+	if (!(value > 0) || !Number.isFinite(value)) return Number.NaN
+	if (value < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * value)) - logGamma(1 - value)
+	const shifted = value - 1
+	let sum = LOG_GAMMA_LANCZOS[0]
+	for (let i = 1; i < LOG_GAMMA_LANCZOS.length; i++) sum += LOG_GAMMA_LANCZOS[i] / (shifted + i)
+	const t = shifted + 7.5
+	return 0.5 * Math.log(2 * Math.PI) + (shifted + 0.5) * Math.log(t) - t + Math.log(sum)
+}
+
+// Computes the regularized lower incomplete gamma P(a, x) for finite positive shape a and x in
+// [0, Infinity]. Negative x maps to the lower boundary; invalid shapes return NaN.
+export function regularizedGammaP(shape: number, value: number): number {
+	if (!(shape > 0) || !Number.isFinite(shape) || Number.isNaN(value)) return Number.NaN
+	if (!(value > 0)) return 0
+	if (value === Number.POSITIVE_INFINITY) return 1
+	if (value < shape + 1) {
+		let term = 1 / shape
+		let sum = term
+		for (let i = 1; i < DISTRIBUTION_ITERATIONS; i++) {
+			term *= value / (shape + i)
+			sum += term
+			if (Math.abs(term) <= Math.abs(sum) * GAMMA_TOLERANCE) break
+		}
+		return sum * Math.exp(-value + shape * Math.log(value) - logGamma(shape))
+	}
+
+	let b = value + 1 - shape
+	let c = 1 / 1e-300
+	let d = 1 / b
+	let fraction = d
+	for (let i = 1; i < DISTRIBUTION_ITERATIONS; i++) {
+		const an = -i * (i - shape)
+		b += 2
+		d = an * d + b
+		if (Math.abs(d) < 1e-300) d = 1e-300
+		c = b + an / c
+		if (Math.abs(c) < 1e-300) c = 1e-300
+		d = 1 / d
+		const delta = d * c
+		fraction *= delta
+		if (Math.abs(delta - 1) <= GAMMA_TOLERANCE) break
+	}
+	return 1 - Math.exp(-value + shape * Math.log(value) - logGamma(shape)) * fraction
+}
+
+// Computes the regularized incomplete beta I_x(a, b) for positive finite, dimensionless shapes a
+// and b. Inputs at or outside x = 0 and x = 1 return the respective boundary; invalid shapes or a
+// non-finite x return NaN.
+export function regularizedIncompleteBeta(x: number, a: number, b: number): number {
+	if (!Number.isFinite(x) || !(a > 0) || !(b > 0) || !Number.isFinite(a) || !Number.isFinite(b)) return Number.NaN
+	if (!(x > 0)) return 0
+	if (!(x < 1)) return 1
+	const logBeta = logGamma(a) + logGamma(b) - logGamma(a + b)
+	const front = Math.exp(a * Math.log(x) + b * Math.log(1 - x) - logBeta)
+	if (!Number.isFinite(front)) return x < (a + 1) / (a + b + 2) ? 0 : 1
+	if (x < (a + 1) / (a + b + 2)) return (front * betaContinuedFraction(x, a, b)) / a
+	return 1 - (Math.exp(b * Math.log(1 - x) + a * Math.log(x) - logBeta) * betaContinuedFraction(1 - x, b, a)) / b
+}
+
+// Computes the chi-square CDF for a non-negative statistic and positive degrees of freedom.
+export function chiSquareCdf(value: number, degreesOfFreedom: number): number {
+	return Math.min(1, Math.max(0, regularizedGammaP(degreesOfFreedom * 0.5, value * 0.5)))
+}
+
+// Computes a chi-square quantile by bisection for probability in [0, 1] and positive degrees of
+// freedom. The probability boundaries return zero and positive infinity, respectively.
+export function chiSquareQuantile(probability: number, degreesOfFreedom: number): number {
+	if (!(probability > 0)) return 0
+	if (probability >= 1) return Number.POSITIVE_INFINITY
+
+	let low = 0
+	let high = Math.max(1, degreesOfFreedom)
+
+	while (chiSquareCdf(high, degreesOfFreedom) < probability) high *= 2
+
+	for (let iteration = 0; iteration < 120; iteration++) {
+		const middle = (low + high) * 0.5
+		if (chiSquareCdf(middle, degreesOfFreedom) < probability) low = middle
+		else high = middle
+	}
+
+	return (low + high) * 0.5
+}
+
+// Computes the survival function P(F_numerator,denominator >= value) for an F-distributed statistic.
+// Invalid statistics or degrees of freedom return one, the conservative p-value used by callers that
+// cannot publish an undefined hypothesis test.
+export function fDistributionSurvival(value: number, numeratorDegreesOfFreedom: number, denominatorDegreesOfFreedom: number): number {
+	if (value === Number.POSITIVE_INFINITY && numeratorDegreesOfFreedom > 0 && denominatorDegreesOfFreedom > 0) return 0
+	if (!(value >= 0) || !(numeratorDegreesOfFreedom > 0) || !(denominatorDegreesOfFreedom > 0) || !Number.isFinite(value) || !Number.isFinite(numeratorDegreesOfFreedom) || !Number.isFinite(denominatorDegreesOfFreedom)) return 1
+	if (value === 0) return 1
+	const statistic = numeratorDegreesOfFreedom * value
+	const x = denominatorDegreesOfFreedom / (denominatorDegreesOfFreedom + statistic)
+	if (numeratorDegreesOfFreedom === 2) {
+		const probability = Math.exp((denominatorDegreesOfFreedom / 2) * -Math.log1p(statistic / denominatorDegreesOfFreedom))
+		return Number.isFinite(probability) ? Math.min(1, Math.max(0, probability)) : 0
+	}
+	const probability = regularizedIncompleteBeta(x, denominatorDegreesOfFreedom / 2, numeratorDegreesOfFreedom / 2)
+	return Number.isFinite(probability) ? Math.min(1, Math.max(0, probability)) : 1
+}
+
+// Computes Pearson's product-moment correlation over paired prefixes of two numeric arrays. The
+// shorter length selects the paired prefix. Empty inputs or a zero-variance axis return zero.
+export function pearsonCorrelationOf(a: Readonly<NumberArray>, b: Readonly<NumberArray>): number {
+	const count = Math.min(a.length, b.length)
+	if (count === 0) return 0
+
+	let meanA = 0
+	let meanB = 0
+	let covariance = 0
+	let varianceA = 0
+	let varianceB = 0
+
+	for (let i = 0; i < count; i++) {
+		const nextCount = i + 1
+		const deltaA = a[i] - meanA
+		const deltaB = b[i] - meanB
+		meanA += deltaA / nextCount
+		meanB += deltaB / nextCount
+		covariance += deltaA * (b[i] - meanB)
+		varianceA += deltaA * (a[i] - meanA)
+		varianceB += deltaB * (b[i] - meanB)
+	}
+
+	return varianceA > 0 && varianceB > 0 ? covariance / Math.sqrt(varianceA * varianceB) : 0
+}
+
+// Evaluates the Lentz continued fraction in I_x(a, b) for x in (0, 1) and positive shapes.
+function betaContinuedFraction(x: number, a: number, b: number): number {
+	const qab = a + b
+	const qap = a + 1
+	const qam = a - 1
+	let c = 1
+	let d = 1 - (qab * x) / qap
+	if (Math.abs(d) < Number.MIN_VALUE) d = Number.MIN_VALUE
+	d = 1 / d
+	let h = d
+	for (let m = 1; m <= BETA_CONTINUED_FRACTION_ITERATIONS; m++) {
+		const m2 = 2 * m
+		let aa = (m * (b - m) * x) / ((qam + m2) * (a + m2))
+		d = 1 + aa * d
+		if (Math.abs(d) < Number.MIN_VALUE) d = Number.MIN_VALUE
+		c = 1 + aa / c
+		if (Math.abs(c) < Number.MIN_VALUE) c = Number.MIN_VALUE
+		d = 1 / d
+		h *= d * c
+		aa = (-(a + m) * (qab + m) * x) / ((a + m2) * (qap + m2))
+		d = 1 + aa * d
+		if (Math.abs(d) < Number.MIN_VALUE) d = Number.MIN_VALUE
+		c = 1 + aa / c
+		if (Math.abs(c) < Number.MIN_VALUE) c = Number.MIN_VALUE
+		d = 1 / d
+		const delta = d * c
+		h *= delta
+		if (Math.abs(delta - 1) < 1e-14) break
+	}
+	return h
+}
 
 // Computes the median with an overflow-safe midpoint of the mutable prefix [0, count) by selection instead of a full sort.
 // The prefix is rearranged in place, the suffix is preserved, and an empty prefix returns NaN.
