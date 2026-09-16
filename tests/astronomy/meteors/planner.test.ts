@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { meteorObservingWindows } from '../../../src/astronomy/meteors/planner'
 import { meteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
+import { meteorShowerComputationContext, meteorShowerState } from '../../../src/astronomy/meteors/state'
 import type { MeteorActivityProfile, MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
 import { timeShift } from '../../../src/astronomy/time/time'
 import { deg } from '../../../src/math/units/angle'
@@ -19,7 +20,12 @@ test('both observing-window overloads identify the same real short window', () =
 	expect(direct[0].durationHours).toBeCloseTo(2, 12)
 	expect(direct[0].expectedCount).toBeCloseTo(134.70811528832383, 8)
 	expect(direct[0].bestTime).toBeDefined()
-	expect(direct[0].moonIlluminationAtBest).toBeDefined()
+	expect(direct[0].moonIlluminationAtBest).toBeUndefined()
+	expect(direct[0].maximumRadiantAltitude).toBeDefined()
+	expect(direct[0].maximumActivityFraction).toBeDefined()
+	expect(direct[0].maximumZhr).toBeDefined()
+	expect(direct[0].minimumMoonRadiantSeparation).toBeUndefined()
+	expect(direct[0].maximumMoonAltitude).toBeUndefined()
 }, 4000)
 
 test('planner intersects a real short window with astronomical darkness', () => {
@@ -40,6 +46,40 @@ test('planner can reject bright lunar constraints', () => {
 	expect(windows).toEqual([])
 })
 
+test('planner applies lunar altitude and retains sampled lunar metrics', () => {
+	const permissive = meteorObservingWindows(BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, { ...DAY_OPTIONS, maximumMoonAltitude: deg(90) })
+	expect(permissive).toHaveLength(1)
+	expect(permissive[0].moonIlluminationAtBest).toBeDefined()
+	expect(permissive[0].minimumMoonRadiantSeparation).toBeDefined()
+	expect(permissive[0].maximumMoonAltitude).toBeDefined()
+
+	const rejected = meteorObservingWindows(BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, { ...DAY_OPTIONS, maximumMoonAltitude: deg(-90) })
+	expect(rejected).toEqual([])
+	const combined = meteorObservingWindows(BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, {
+		...DAY_OPTIONS,
+		maximumMoonAltitude: deg(90),
+		minimumMoonRadiantSeparation: 0,
+		maximumMoonIllumination: 1,
+	})
+	expect(combined).toHaveLength(1)
+}, 4000)
+
+test('a below-horizon Moon satisfies illumination, separation and inclusive altitude limits', () => {
+	const start = timeShift(SITE_EPOCH, -6 / 24)
+	const end = timeShift(SITE_EPOCH, -4 / 24)
+	const moonLimit = meteorShowerState(BASE_SOLUTION, meteorShowerComputationContext(end, OBSERVER)).moonAltitude!
+	const windows = meteorObservingWindows(BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, start, end, {
+		maximumSolarAltitude: deg(90),
+		minimumRadiantAltitude: 0,
+		maximumMoonAltitude: moonLimit,
+		maximumMoonIllumination: 0,
+		minimumMoonRadiantSeparation: deg(180),
+		step: 1 / 48,
+	})
+	expect(windows).toHaveLength(1)
+	expect(windows[0].maximumMoonAltitude).toBeLessThanOrEqual(moonLimit + 1e-10)
+}, 1500)
+
 test('planner samples a sub-step catalog activity interval inside a broad profile', () => {
 	const center = meteorSolarLongitude(timeShift(SITE_EPOCH, 0.5 / 24))
 	const start = timeShift(SITE_EPOCH, 0.25 / 24)
@@ -53,7 +93,7 @@ test('planner samples a sub-step catalog activity interval inside a broad profil
 	expect(windows).toHaveLength(1)
 	expect(windows[0].durationHours).toBeGreaterThan(0)
 	expect(windows[0].durationHours).toBeLessThan(0.5)
-})
+}, 1500)
 
 test('planner integrates a constant local hourly rate over the window duration', () => {
 	const flatProfile = { ...EXPONENTIAL_PROFILE, slopeBefore: 0, slopeAfter: 0 } satisfies MeteorActivityProfile

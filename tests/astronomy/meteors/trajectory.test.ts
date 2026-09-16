@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
-import { apparentMeteorRadiantHorizontal, apparentZenithAngleFromGeocentric, geocentricMeteorRadiantFromHorizontal, geocentricZenithAngleFromApparent, meteorGeocentricRadius, meteorRadiantWithEarthRotation, meteorSpeedAtDistance, meteorSpeedAtGeodeticAltitude, meteorTrackDirectionCompatible, meteorTrackGreatCircle, meteorTrackLength, meteorTrackPoint, meteorRadiantTrackResidual, meteorZenithAttraction } from '../../../src/astronomy/meteors/trajectory'
+import { apparentMeteorRadiantHorizontal, apparentZenithAngleFromGeocentric, associateMeteorTrack, geocentricMeteorRadiantFromHorizontal, geocentricZenithAngleFromApparent, meteorGeocentricRadius, meteorRadiantWithEarthRotation, meteorSpeedAtDistance, meteorSpeedAtGeodeticAltitude, meteorTrackDirectionCompatible, meteorTrackGreatCircle, meteorTrackLength, meteorTrackPoint, meteorTrackPositionAngle, meteorRadiantTrackResidual, meteorZenithAttraction } from '../../../src/astronomy/meteors/trajectory'
 import { Ellipsoid } from '../../../src/astronomy/observer/location'
 import { deg, toDeg } from '../../../src/math/units/angle'
 import { meter, toKilometer } from '../../../src/math/units/distance'
@@ -66,6 +66,27 @@ test('great-circle geometry interpolates, measures residuals and checks directio
 	const quarterEquator = { start: { rightAscension: 0, declination: 0 }, end: { rightAscension: deg(90), declination: 0 } } as const
 	expect(toDeg(meteorTrackLength(quarterEquator)!)).toBeCloseTo(90, 12)
 	expect(toDeg(meteorTrackPoint(quarterEquator, 0.5)!.rightAscension)).toBeCloseTo(45, 12)
+})
+
+test('track position angle and aggregate association handle wrap and direction', () => {
+	expect(toDeg(meteorTrackPositionAngle({ rightAscension: deg(359), declination: 0 }, { rightAscension: deg(1), declination: 0 }))).toBeCloseTo(90, 12)
+	const equatorial = { start: { rightAscension: deg(10), declination: 0 }, end: { rightAscension: deg(40), declination: 0 } } as const
+	const aligned = associateMeteorTrack({ rightAscension: 0, declination: 0 }, equatorial, {
+		maximumCrossTrackError: deg(0.1),
+		maximumRadiantDistance: deg(15),
+		requireDirectionCompatibility: true,
+	})
+	expect(aligned.compatible).toBe(true)
+	expect(aligned.crossTrackError).toBeCloseTo(0, 14)
+	expect(toDeg(aligned.radiantDistance)).toBeCloseTo(10, 12)
+	expect(aligned.directionCompatible).toBe(true)
+
+	const reversed = associateMeteorTrack({ rightAscension: 0, declination: 0 }, { start: equatorial.end, end: equatorial.start }, { requireDirectionCompatibility: true })
+	expect(reversed.compatible).toBe(false)
+	expect(reversed.directionCompatible).toBe(false)
+	const offCircle = associateMeteorTrack({ rightAscension: 0, declination: deg(20) }, equatorial, { maximumCrossTrackError: deg(5) })
+	expect(offCircle.compatible).toBe(false)
+	expect(toDeg(offCircle.crossTrackError)).toBeCloseTo(20, 12)
 })
 
 test('coincident and antipodal trails are explicitly degenerate', () => {

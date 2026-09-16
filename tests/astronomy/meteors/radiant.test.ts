@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test'
-import { meteorRadiantDegrees, meteorRadiantHorizontal, meteorRadiantJ2000, meteorRadiantOfDate, meteorRadiantRiseTransitSet, meteorRadiantVector, meteorRadiantVisibility } from '../../../src/astronomy/meteors/radiant'
+import { meteorRadiantDegrees, meteorRadiantHorizontal, meteorRadiantJ2000, meteorRadiantMaximumAltitude, meteorRadiantOfDate, meteorRadiantPath, meteorRadiantRiseTransitSet, meteorRadiantVector, meteorRadiantVisibility } from '../../../src/astronomy/meteors/radiant'
 import type { MeteorComputationContext, MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
 import { timeShift, timeYMDHMS, Timescale, type Time } from '../../../src/astronomy/time/time'
 import { deg, toDeg } from '../../../src/math/units/angle'
-import { ASTROPY_HORIZONTAL, ASTROPY_RADIANT_OF_DATE, BASE_SOLUTION, DAILY_DRIFT_SOLUTION, MISSING_RADIANT_SOLUTION, OBSERVER, REFERENCE_UTC, SOLAR_DRIFT_SOLUTION, TOLERANCE } from './util'
+import { ASTROPY_HORIZONTAL, ASTROPY_RADIANT_OF_DATE, BASE_SOLUTION, DAILY_DRIFT_SOLUTION, MISSING_RADIANT_SOLUTION, OBSERVER, REFERENCE_UTC, SITE_EPOCH, SITE_EPOCH_END, SOLAR_DRIFT_SOLUTION, TOLERANCE } from './util'
 
 const ASTROPY_EPOCH = timeYMDHMS(2026, 6, 29, 21, 0, 0, Timescale.UTC)
 
@@ -27,6 +27,62 @@ test('solar-longitude drift wraps RA, changes declination and obeys extrapolatio
 	expect(result.extrapolated).toBe(true)
 	expect(meteorRadiantJ2000(SOLAR_DRIFT_SOLUTION, context(REFERENCE_UTC, deg(101)), { extrapolate: false })).toBeUndefined()
 	expect(meteorRadiantJ2000(SOLAR_DRIFT_SOLUTION, context(REFERENCE_UTC, deg(101)), { maxExtrapolationSolarLongitude: deg(0.5) })).toBeUndefined()
+})
+
+test('radiant path applies drift across ordinary and wrapped longitude intervals', () => {
+	const ordinary = meteorRadiantPath(SOLAR_DRIFT_SOLUTION, deg(99), deg(101), deg(1))
+	expect(ordinary).toHaveLength(3)
+	for (let index = 0; index < ordinary.length; index++) {
+		expect(toDeg(ordinary[index].solarLongitude)).toBeCloseTo(99 + index, 12)
+		expect(toDeg(ordinary[index].rightAscension)).toBeCloseTo([357, 359, 1][index], 12)
+		expect(toDeg(ordinary[index].declination)).toBeCloseTo(9 + index, 12)
+	}
+
+	const wrapped = meteorRadiantPath({ ...BASE_SOLUTION, radiantDrift: undefined }, deg(359), deg(1), deg(1))
+	for (let index = 0; index < wrapped.length; index++) expect(toDeg(wrapped[index].solarLongitude)).toBeCloseTo([359, 0, 1][index], 12)
+	expect(wrapped.every((point) => point.rightAscension === BASE_SOLUTION.rightAscension)).toBe(true)
+	expect(() => meteorRadiantPath(BASE_SOLUTION, 0, 1, 0)).toThrow('finite and positive')
+	expect(() => meteorRadiantPath(DAILY_DRIFT_SOLUTION, 0, 1, deg(1))).toThrow('absolute time')
+})
+
+test('published Perseid and Geminid drift directions retain their signs and scales', () => {
+	// IMO 2024 calendar mean radiants and daily drifts, converted with 0.9856 solar degree/day.
+	const showers = [
+		{ reference: 140, rightAscension: 48, declination: 58, rightAscensionDaily: 1.4, declinationDaily: 0.25 },
+		{ reference: 262, rightAscension: 112, declination: 33, rightAscensionDaily: 1, declinationDaily: -0.1 },
+	] as const
+	for (const shower of showers) {
+		const solution = {
+			...BASE_SOLUTION,
+			referenceSolarLongitude: deg(shower.reference),
+			rightAscension: deg(shower.rightAscension),
+			declination: deg(shower.declination),
+			radiantDrift: {
+				basis: 'solarLongitude',
+				rightAscensionRate: shower.rightAscensionDaily / 0.9856,
+				declinationRate: shower.declinationDaily / 0.9856,
+			},
+		} satisfies MeteorShowerSolution
+		const before = meteorRadiantJ2000(solution, context(REFERENCE_UTC, deg(shower.reference - 2)))!.radiant
+		const after = meteorRadiantJ2000(solution, context(REFERENCE_UTC, deg(shower.reference + 2)))!.radiant
+		expect(toDeg(after.rightAscension - before.rightAscension)).toBeCloseTo((4 * shower.rightAscensionDaily) / 0.9856, 10)
+		expect(toDeg(after.declination - before.declination)).toBeCloseTo((4 * shower.declinationDaily) / 0.9856, 10)
+	}
+})
+
+test('radiant maximum altitude refines a visible interval and rejects an always-down radiant', () => {
+	const maximum = meteorRadiantMaximumAltitude(BASE_SOLUTION, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, { step: 1 / 48 })
+	expect(maximum).toBeDefined()
+	let bruteAltitude = Number.NEGATIVE_INFINITY
+	for (let index = 0; index <= 240; index++) {
+		const time = timeShift(SITE_EPOCH, (index * 2) / (24 * 240))
+		const horizontal = meteorRadiantHorizontal(BASE_SOLUTION, OBSERVER, time)
+		bruteAltitude = Math.max(bruteAltitude, horizontal.altitude)
+	}
+	expect(Math.abs(maximum!.altitude - bruteAltitude)).toBeLessThan(deg(0.01))
+	expect(maximum!.azimuth).toBeGreaterThanOrEqual(0)
+	expect(meteorRadiantMaximumAltitude({ ...BASE_SOLUTION, declination: deg(85) }, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, { step: 1 / 48 })).toBeUndefined()
+	expect(() => meteorRadiantMaximumAltitude(BASE_SOLUTION, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, { step: 0 })).toThrow('finite and positive')
 })
 
 test('daily drift uses the reference longitude inversion and rejects pole crossing', () => {

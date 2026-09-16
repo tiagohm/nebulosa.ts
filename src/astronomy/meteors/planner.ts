@@ -3,11 +3,11 @@ import { deg } from '../../math/units/angle'
 import { searchExtrema, searchRoots } from '../events/search'
 import type { GeographicPosition } from '../observer/location'
 import { type Time, timeShift, timeSubtract } from '../time/time'
-import { meteorActivityZhr, isMeteorShowerActive } from './activity'
-import { meteorObservingConditionsAt, meteorLocalHourlyRate } from './observation'
-import { meteorRadiantJ2000 } from './radiant'
+import { meteorActivityMaximumSolarLongitude, meteorActivityZhr } from './activity'
+import { meteorLocalHourlyRate } from './observation'
 import { meteorSolarLongitude } from './solar'
-import type { MeteorActivityProfile, MeteorObservingConditions, MeteorObservingWindow, MeteorObservingWindowOptions, MeteorShowerSolution, MeteorSolarLongitudeInterval, MeteorVisualObservation } from './types'
+import { meteorShowerState } from './state'
+import type { MeteorActivityProfile, MeteorObservingConditions, MeteorObservingWindow, MeteorObservingWindowOptions, MeteorShowerSolution, MeteorShowerState, MeteorSolarLongitudeInterval, MeteorVisualObservation } from './types'
 
 // Local observing-window planner. It intersects catalog/profile support, solar darkness, radiant
 // altitude and opt-in lunar constraints, refines every detected boundary, evaluates endpoints and
@@ -25,8 +25,11 @@ export function meteorObservingWindows(first: MeteorShowerSolution | MeteorActiv
 	const solution = isSolution(first) ? first : (second as MeteorShowerSolution)
 	const profile = isSolution(first) ? (second as MeteorActivityProfile) : first
 	const step = chooseStep(profile, solution.activityInterval, options.step)
-	const qualifies = (time: Time) => scoreAt(solution, profile, observer, time, options) >= 0
-	const score = (time: Time) => scoreAt(solution, profile, observer, time, options)
+	const maximumSolarLongitude = meteorActivityMaximumSolarLongitude(profile)
+	const activityMaximumZhr = maximumSolarLongitude === undefined ? undefined : meteorActivityZhr(profile, maximumSolarLongitude)
+	const evaluate = (time: Time) => plannerEvaluationAt(solution, profile, observer, time, options, activityMaximumZhr)
+	const qualifies = (time: Time) => scoreAt(evaluate(time), options) >= 0
+	const score = (time: Time) => scoreAt(evaluate(time), options)
 	const boundaries: Time[] = [start, end]
 	for (const root of searchRoots(score, start, end, { step, tolerance: options.tolerance })) boundaries.push(root)
 	for (const extremum of searchExtrema(score, start, end, { step, tolerance: options.tolerance })) {
@@ -41,7 +44,12 @@ export function meteorObservingWindows(first: MeteorShowerSolution | MeteorActiv
 	for (const boundary of boundaries) if (unique.length === 0 || timeSubtract(boundary, unique.at(-1)!) > 1e-8) unique.push(boundary)
 	const windows: MeteorObservingWindow[] = []
 
-	const rateAt = (time: Time) => expectedRateAt(solution, profile, observer, time, options)
+	const metrics: PlannerMetrics = {}
+	const rateAt = (time: Time) => {
+		const evaluation = evaluate(time)
+		accumulateMetrics(metrics, evaluation.state)
+		return evaluation.rate
+	}
 
 	for (let i = 0; i + 1 < unique.length; i++) {
 		const left = unique[i]
@@ -52,7 +60,13 @@ export function meteorObservingWindows(first: MeteorShowerSolution | MeteorActiv
 		const durationHours = durationDays * 24
 		if (durationHours < (options.minimumDurationHours ?? 0)) continue
 
-		let bestTime: Time | undefined
+		metrics.maximumActivityFraction = undefined
+		metrics.maximumMoonAltitude = undefined
+		metrics.maximumRadiantAltitude = undefined
+		metrics.maximumZhr = undefined
+		metrics.minimumMoonRadiantSeparation = undefined
+
+		let bestTime: Time
 		let bestRate = rateAt(left)
 		const endRate = rateAt(right)
 
@@ -71,8 +85,22 @@ export function meteorObservingWindows(first: MeteorShowerSolution | MeteorActiv
 		}
 
 		const expectedCount = integrateRate(rateAt, left, right, step)
-		const bestConditions = conditionsAt(solution, observer, bestTime, options)
-		windows.push({ start: left, end: right, durationHours, expectedCount, bestTime, bestLocalHourlyRate: bestRate, moonIlluminationAtBest: bestConditions?.moonIllumination })
+		const bestState = evaluate(bestTime).state
+		accumulateMetrics(metrics, bestState)
+		windows.push({
+			start: left,
+			end: right,
+			durationHours,
+			expectedCount,
+			bestTime,
+			bestLocalHourlyRate: bestRate,
+			moonIlluminationAtBest: bestState.moonIllumination,
+			maximumRadiantAltitude: metrics.maximumRadiantAltitude,
+			minimumMoonRadiantSeparation: metrics.minimumMoonRadiantSeparation,
+			maximumMoonAltitude: metrics.maximumMoonAltitude,
+			maximumActivityFraction: metrics.maximumActivityFraction,
+			maximumZhr: metrics.maximumZhr,
+		})
 	}
 
 	return windows.sort((a, b) => b.expectedCount - a.expectedCount)
@@ -80,51 +108,82 @@ export function meteorObservingWindows(first: MeteorShowerSolution | MeteorActiv
 
 // Computes the scalar margin used to find all planner boundaries. Positive values satisfy every
 // selected constraint; the profile itself supplies the activity support when catalog bounds are absent.
-function scoreAt(solution: MeteorShowerSolution, profile: MeteorActivityProfile, observer: GeographicPosition, time: Time, options: MeteorObservingWindowOptions): number {
-	const solarLongitude = meteorSolarLongitude(time)
-	const profileZhr = meteorActivityZhr(profile, solarLongitude)
-	if (!(profileZhr > 0)) return -1
-	const catalogActivity = isMeteorShowerActive(solution.activityInterval, solarLongitude)
-	if (catalogActivity === false) return -1
-	const radiant = radiantAt(solution, time, solarLongitude)
-	if (radiant === undefined) return -1
-	const conditions = meteorObservingConditionsAt(radiant, observer, time, { time, solarLongitude })
-	let margin = (options.maximumSolarAltitude ?? deg(-18)) - conditions.sunAltitude
-	margin = Math.min(margin, conditions.radiant.altitude - (options.minimumRadiantAltitude ?? 0))
-	if (options.minimumMoonRadiantSeparation !== undefined) margin = Math.min(margin, conditions.moonRadiantSeparation - options.minimumMoonRadiantSeparation)
-	if (options.maximumMoonIllumination !== undefined) margin = Math.min(margin, options.maximumMoonIllumination - conditions.moonIllumination)
+function scoreAt(evaluation: PlannerEvaluation, options: MeteorObservingWindowOptions): number {
+	const state = evaluation.state
+	if (!state.active || !(state.zhr !== undefined && state.zhr > 0) || state.horizontal === undefined || state.sunAltitude === undefined) return -1
+	let margin = (options.maximumSolarAltitude ?? deg(-18)) - state.sunAltitude
+	margin = Math.min(margin, state.horizontal.altitude - (options.minimumRadiantAltitude ?? 0))
+	if (options.maximumMoonAltitude !== undefined && state.moonAltitude !== undefined) margin = Math.min(margin, options.maximumMoonAltitude - state.moonAltitude)
+	if (state.moonAltitude !== undefined && state.moonAltitude > 0) {
+		if (options.minimumMoonRadiantSeparation !== undefined && state.moonSeparation !== undefined) margin = Math.min(margin, state.moonSeparation - options.minimumMoonRadiantSeparation)
+		if (options.maximumMoonIllumination !== undefined && state.moonIllumination !== undefined) margin = Math.min(margin, options.maximumMoonIllumination - state.moonIllumination)
+	}
 	return margin
 }
 
-function expectedRateAt(solution: MeteorShowerSolution, profile: MeteorActivityProfile, observer: GeographicPosition, time: Time, options: MeteorObservingWindowOptions): number {
+// Computes all quantities for one planner sample, evaluating lunar ephemerides only when a selected
+// lunar constraint or a condition-aware rate correction requires them.
+function plannerEvaluationAt(solution: MeteorShowerSolution, profile: MeteorActivityProfile, observer: GeographicPosition, time: Time, options: MeteorObservingWindowOptions, activityMaximumZhr: number | undefined): PlannerEvaluation {
 	const solarLongitude = meteorSolarLongitude(time)
-	const radiant = radiantAt(solution, time, solarLongitude)
-	if (radiant === undefined) return 0
-
-	const conditions = meteorObservingConditionsAt(radiant, observer, time, { time, solarLongitude })
+	const includeMoon = needsMoon(options)
+	const state = meteorShowerState(solution, { time, solarLongitude, observer }, { profile, activityMaximumZhr, includeRadiantOfDate: false, includeHorizontal: true, includeSun: true, includeMoon })
+	if (state.horizontal === undefined || state.zhr === undefined) return { state, rate: 0 }
 	const observation: MeteorVisualObservation = {
 		count: 1,
 		effectiveTime: 1,
 		limitingMagnitude: options.limitingMagnitude ?? 6.5,
 		populationIndex: options.populationIndex ?? 2,
 		obstructionCorrection: options.obstructionCorrection ?? 1,
-		radiantAltitude: conditions.radiant.altitude,
+		radiantAltitude: state.horizontal.altitude,
 		altitudeExponent: options.altitudeExponent ?? 1,
 	}
 
-	const rate = meteorLocalHourlyRate(meteorActivityZhr(profile, solarLongitude), observation)
-	return rate * (options.rateCorrection?.(time, conditions) ?? 1)
+	const rate = meteorLocalHourlyRate(state.zhr, observation)
+	if (options.rateCorrection === undefined) return { state, rate }
+	const conditions = observingConditionsFromState(time, state)
+	return { state, rate: conditions === undefined ? 0 : rate * options.rateCorrection(time, conditions) }
 }
 
-function conditionsAt(solution: MeteorShowerSolution, observer: GeographicPosition, time: Time | undefined, options: MeteorObservingWindowOptions): MeteorObservingConditions | undefined {
-	if (time === undefined) return undefined
-	const solarLongitude = meteorSolarLongitude(time)
-	const radiant = radiantAt(solution, time, solarLongitude)
-	return radiant === undefined ? undefined : meteorObservingConditionsAt(radiant, observer, time, { time, solarLongitude })
+// Returns whether any selected behavior needs lunar altitude, phase or separation.
+function needsMoon(options: MeteorObservingWindowOptions): boolean {
+	return options.maximumMoonAltitude !== undefined || options.minimumMoonRadiantSeparation !== undefined || options.maximumMoonIllumination !== undefined || options.rateCorrection !== undefined
 }
 
-function radiantAt(solution: MeteorShowerSolution, time: Time, solarLongitude: number) {
-	return meteorRadiantJ2000(solution, { time, solarLongitude })?.radiant
+// Restores the legacy full condition object only for the explicit correction callback seam.
+function observingConditionsFromState(time: Time, state: MeteorShowerState): MeteorObservingConditions | undefined {
+	if (state.horizontal === undefined || state.sunAltitude === undefined || state.moonAltitude === undefined || state.moonIllumination === undefined || state.moonSeparation === undefined) return undefined
+	return { time, sunAltitude: state.sunAltitude, moonAltitude: state.moonAltitude, moonIllumination: state.moonIllumination, moonRadiantSeparation: state.moonSeparation, radiant: state.horizontal }
+}
+
+// Metrics accumulated from the same samples already used for rate search and integration.
+interface PlannerMetrics {
+	// Greatest sampled radiant altitude in radians.
+	maximumRadiantAltitude?: number
+	// Smallest sampled Moon-radiant separation in radians.
+	minimumMoonRadiantSeparation?: number
+	// Greatest sampled lunar altitude in radians.
+	maximumMoonAltitude?: number
+	// Greatest sampled profile fraction.
+	maximumActivityFraction?: number
+	// Greatest sampled ZHR in meteors per hour.
+	maximumZhr?: number
+}
+
+// Updates sampled extrema without triggering any additional ephemeris evaluation.
+function accumulateMetrics(metrics: PlannerMetrics, state: MeteorShowerState): void {
+	if (state.horizontal !== undefined) metrics.maximumRadiantAltitude = Math.max(metrics.maximumRadiantAltitude ?? Number.NEGATIVE_INFINITY, state.horizontal.altitude)
+	if (state.moonSeparation !== undefined) metrics.minimumMoonRadiantSeparation = Math.min(metrics.minimumMoonRadiantSeparation ?? Number.POSITIVE_INFINITY, state.moonSeparation)
+	if (state.moonAltitude !== undefined) metrics.maximumMoonAltitude = Math.max(metrics.maximumMoonAltitude ?? Number.NEGATIVE_INFINITY, state.moonAltitude)
+	if (state.activityFraction !== undefined) metrics.maximumActivityFraction = Math.max(metrics.maximumActivityFraction ?? 0, state.activityFraction)
+	if (state.zhr !== undefined) metrics.maximumZhr = Math.max(metrics.maximumZhr ?? 0, state.zhr)
+}
+
+// One fully evaluated sample and its local expected rate in meteors per hour.
+interface PlannerEvaluation {
+	// Aggregated state at the sample instant.
+	readonly state: MeteorShowerState
+	// Expected local rate in meteors per hour.
+	readonly rate: number
 }
 
 function integrateRate(rateAt: (time: Time) => number, start: Time, end: Time, step: number): number {

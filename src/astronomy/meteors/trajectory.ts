@@ -1,7 +1,7 @@
 import { GM_EARTH, PIOVERTWO } from '../../core/constants'
 import { matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecAngle, vecCross, vecDot, vecLength, vecNormalize } from '../../math/linear-algebra/vec3'
-import { sphericalGreatCirclePole, sphericalInterpolate } from '../../math/numerical/geometry'
+import { sphericalGreatCirclePole, sphericalInterpolate, sphericalPositionAngle, sphericalSeparation } from '../../math/numerical/geometry'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import type { Velocity } from '../../math/units/velocity'
@@ -11,7 +11,7 @@ import { itrs } from '../coordinates/itrs'
 import { Ellipsoid, geodeticLocation, localSiderealTime, type GeographicPosition } from '../observer/location'
 import { gcrsToItrsRotationMatrix, instantaneousEarthAngularVelocity, type Time } from '../time/time'
 import { meteorRadiantHorizontal, meteorRadiantVector } from './radiant'
-import type { MeteorGravityOptions, MeteorHorizontalInput, MeteorHorizontalRadiant, MeteorRadiant, MeteorTrack } from './types'
+import type { MeteorGravityOptions, MeteorHorizontalInput, MeteorHorizontalRadiant, MeteorRadiant, MeteorTrack, MeteorTrackAssociation, MeteorTrackAssociationOptions } from './types'
 
 // Meteor trajectory corrections in the local horizontal system and GCRS velocity frame. Speeds are
 // AU/day, distances AU, and zenith angles radians. Atmospheric drag is excluded; the entry height
@@ -120,6 +120,12 @@ export function meteorTrackGreatCircle(track: MeteorTrack): Vec3 | undefined {
 	return vecLength(pole) <= 1e-15 || vecDot(start, end) <= -1 + 1e-15 ? undefined : pole
 }
 
+// Returns the apparent trail position angle at its start, measured east of celestial north and
+// normalized to [0, 2π). The spherical formulation handles right-ascension wrap directly.
+export function meteorTrackPositionAngle(start: MeteorRadiant, end: MeteorRadiant): Angle {
+	return sphericalPositionAngle(start.rightAscension, start.declination, end.rightAscension, end.declination)
+}
+
 // Returns the angular residual of a radiant from the track great-circle plane, in radians.
 export function meteorRadiantTrackResidual(radiant: MeteorRadiant, track: MeteorTrack): Angle | undefined {
 	const pole = meteorTrackGreatCircle(track)
@@ -136,6 +142,24 @@ export function meteorTrackDirectionCompatible(radiant: MeteorRadiant, track: Me
 	const distance = vecLength(vecCross(start, end))
 	if (!(distance > 1e-15)) return undefined
 	return vecAngle(meteorRadiantVector(radiant), end) > vecAngle(meteorRadiantVector(radiant), start)
+}
+
+// Composes great-circle residual, radiant-to-start distance and direction diagnostics into one
+// association decision. Optional thresholds constrain only the quantities explicitly configured;
+// degenerate tracks are always incompatible.
+export function associateMeteorTrack(radiant: MeteorRadiant, track: MeteorTrack, options: MeteorTrackAssociationOptions = {}): MeteorTrackAssociation {
+	const residual = meteorRadiantTrackResidual(radiant, track)
+	const direction = meteorTrackDirectionCompatible(radiant, track)
+	const radiantDistance = sphericalSeparation(radiant.rightAscension, radiant.declination, track.start.rightAscension, track.start.declination)
+	const crossTrackError = residual ?? PIOVERTWO
+	const directionCompatible = direction ?? false
+	const compatible =
+		residual !== undefined &&
+		direction !== undefined &&
+		(options.maximumCrossTrackError === undefined || crossTrackError <= options.maximumCrossTrackError) &&
+		(options.maximumRadiantDistance === undefined || radiantDistance <= options.maximumRadiantDistance) &&
+		(options.requireDirectionCompatibility !== true || directionCompatible)
+	return { compatible, crossTrackError, radiantDistance, directionCompatible }
 }
 
 // Returns the observed great-circle length in radians.

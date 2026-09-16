@@ -3,7 +3,7 @@ import { normalizeAngle, normalizePI, type Angle } from '../../math/units/angle'
 import { relativePositionAndVelocity, type PositionAndVelocity } from '../coordinates/astrometry'
 import { earth, sun } from '../ephemeris/models/analytical/vsop87e'
 import { searchRoots } from '../events/search'
-import { Timescale, type Time, timeConvert, timeSubtract, timeYMD } from '../time/time'
+import { Timescale, type Time, timeConvert, timeShift, timeSubtract, timeYMD } from '../time/time'
 import { meteorActivityMaximumSolarLongitude } from './activity'
 import type { MeteorShowerDates, MeteorShowerDateOptions, MeteorShowerSolution, MeteorSolarLongitudeSearchOptions } from './types'
 
@@ -31,13 +31,26 @@ export function meteorSolarLongitudeForwardDelta(start: Angle, end: Angle): Angl
 // Converts one requested solar longitude into the first occurrence in the civil UTC year. The
 // unwrapped objective remains continuous through the 0/2π seam; the returned instant uses options.scale.
 export function timeAtMeteorSolarLongitude(year: number, longitude: Angle, options: MeteorSolarLongitudeSearchOptions = {}): Time {
+	return meteorSolarLongitudeSolver(year, options)(longitude)
+}
+
+// Converts several solar longitudes within one civil UTC year while sharing the annual epoch,
+// unwrapping convention and coarse mean-motion bracket. Results preserve input order and scale.
+export function meteorSolarLongitudeTimes(year: number, longitudes: readonly Angle[], options: MeteorSolarLongitudeSearchOptions = {}): readonly Time[] {
+	if (longitudes.length === 0) return []
+	const solve = meteorSolarLongitudeSolver(year, options)
+	return longitudes.map(solve)
+}
+
+// Prepares one annual inversion context. The seven-day mean-motion bracket is wider than the
+// VSOP87E seasonal equation-of-center displacement; a full-year fallback retains correctness at a
+// civil-year endpoint or when a caller supplies an unusually coarse search step.
+function meteorSolarLongitudeSolver(year: number, options: MeteorSolarLongitudeSearchOptions): (longitude: Angle) => Time {
 	const start = timeYMD(year, 1, 1, 0, Timescale.UTC)
 	const stop = timeYMD(year + 1, 1, 1, 0, Timescale.UTC)
+	const duration = timeSubtract(stop, start, Timescale.UTC)
 	const initial = meteorSolarLongitude(start)
-	const initialTarget = normalizeAngle(longitude)
 	const initialUnwrapped = initial
-	let target = initialTarget
-	if (target < initialUnwrapped) target += TAU
 
 	const unwrapped = (time: Time) => {
 		const elapsed = timeSubtract(time, start, Timescale.UTC)
@@ -48,10 +61,18 @@ export function timeAtMeteorSolarLongitude(year: number, longitude: Angle, optio
 		return raw + turns * TAU
 	}
 
-	const roots = searchRoots((time) => unwrapped(time) - target, start, stop, options)
-	const root = roots[0]
-	if (root === undefined) throw new Error(`solar longitude ${longitude} does not occur in calendar year ${year}`)
-	return convertScale(root, options.scale)
+	return (longitude: Angle) => {
+		let target = normalizeAngle(longitude)
+		if (target < initialUnwrapped) target += TAU
+		const estimate = ((target - initialUnwrapped) / TAU) * DAYSPERTY
+		const bracketStart = timeShift(start, Math.max(0, estimate - 7))
+		const bracketEnd = timeShift(start, Math.min(duration, estimate + 7))
+		let roots = searchRoots((time) => unwrapped(time) - target, bracketStart, bracketEnd, options)
+		if (roots.length === 0) roots = searchRoots((time) => unwrapped(time) - target, start, stop, options)
+		const root = roots[0]
+		if (root === undefined) throw new Error(`solar longitude ${longitude} does not occur in calendar year ${year}`)
+		return convertScale(root, options.scale)
+	}
 }
 
 // Derives activity dates from the two catalog bounds and mean reference longitude. LoS is exposed as

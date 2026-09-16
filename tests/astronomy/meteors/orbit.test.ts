@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { meteorComparableOrbitFromKepler, meteorDDrummond, meteorDJopek, meteorDSouthworthHawkins, meteorHeliocentricState, meteorOrbitFromRadiant, meteorStreamOrbitNodeEncounters } from '../../../src/astronomy/meteors/orbit'
+import { timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import type { MeteorComparableOrbit, MeteorCompleteStreamOrbit } from '../../../src/astronomy/meteors/types'
 import { asteroid } from '../../../src/astronomy/orbits/asteroid'
 import { deg, toDeg } from '../../../src/math/units/angle'
@@ -33,6 +34,18 @@ test('heliocentric reconstruction agrees with frozen Horizons Earth DE441 geomet
 		longitudeOfAscendingNode: orbit.longitudeOfAscendingNode,
 		argumentOfPerihelion: orbit.argumentOfPeriapsis,
 	})
+})
+
+test('Geminid radiant reconstruction agrees with a published 2006 mean orbit', () => {
+	// Shrbeny (2009), Table 3.9: mean 2006 Geminids q=0.144 AU, e=0.892,
+	// i=22.6°, ω=324.2° and Ω=262.7°; radiant inputs are rounded catalog means.
+	const time = timeAtMeteorSolarLongitude(2006, deg(262.7), { step: 7 })
+	const orbit = meteorOrbitFromRadiant({ rightAscension: deg(113), declination: deg(32.6) }, kilometerPerSecond(35), time)
+	expect(Math.abs(orbit.periapsisDistance - 0.144)).toBeLessThan(0.01)
+	expect(Math.abs(orbit.eccentricity - 0.892)).toBeLessThan(0.02)
+	expect(Math.abs(toDeg(orbit.inclination) - 22.6)).toBeLessThan(2)
+	expect(Math.abs(toDeg(orbit.argumentOfPeriapsis) - 324.2)).toBeLessThan(3)
+	expect(Math.abs(toDeg(orbit.longitudeOfAscendingNode) - 262.7)).toBeLessThan(0.1)
 })
 
 test('stream node encounters return both geometric nodes with independent candidates', () => {

@@ -4,7 +4,7 @@ import type { Distance } from '../../math/units/distance'
 import type { Velocity } from '../../math/units/velocity'
 import type { RiseTransitSetOptions } from '../events/horizon'
 import type { TimeSearchOptions } from '../events/search'
-import type { Ellipsoid } from '../observer/location'
+import type { Ellipsoid, GeographicPosition } from '../observer/location'
 import type { Time } from '../time/time'
 
 // Normalized meteor-shower records and the value objects shared by catalog, activity,
@@ -177,6 +177,25 @@ export interface MeteorRadiant {
 	readonly declination: Angle
 }
 
+// One radiant sample along a forward solar-longitude interval.
+export interface MeteorRadiantPathPoint extends MeteorRadiant {
+	// Geocentric solar longitude in radians, normalized to [0, 2π).
+	readonly solarLongitude: Angle
+}
+
+// Highest visible geometric radiant position found in a bounded time interval.
+export interface MeteorRadiantMaximumAltitude {
+	// Instant of the maximum.
+	readonly time: Time
+	// Geometric altitude in radians.
+	readonly altitude: Angle
+	// North-through-east azimuth in radians.
+	readonly azimuth: Angle
+}
+
+// Numerical and drift controls for a radiant-altitude search.
+export interface MeteorRadiantMaximumAltitudeOptions extends TimeSearchOptions, MeteorRadiantOptions {}
+
 // Shared per-instant values used by batch radiant and activity calculations.
 export interface MeteorComputationContext {
 	// Evaluation instant.
@@ -189,6 +208,58 @@ export interface MeteorComputationContext {
 	readonly sun?: Vec3
 	// Optional geocentric J2000 Moon vector.
 	readonly moon?: Vec3
+}
+
+// Shared ephemeris and observer values for one or many instantaneous shower states.
+export interface MeteorShowerComputationContext extends MeteorComputationContext {
+	// Observer used for local horizontal quantities, when requested.
+	readonly observer?: GeographicPosition
+}
+
+// Controls which optional quantities an instantaneous shower-state calculation evaluates.
+export interface MeteorShowerStateOptions extends MeteorRadiantOptions {
+	// Activity profile used for ZHR and relative activity.
+	readonly profile?: MeteorActivityProfile
+	// Known global profile maximum ZHR, allowing repeated scalar calls to skip peak optimization.
+	readonly activityMaximumZhr?: number
+	// Compute the true equator-of-date radiant; defaults to true.
+	readonly includeRadiantOfDate?: boolean
+	// Compute local horizontal coordinates when the context has an observer; defaults to true.
+	readonly includeHorizontal?: boolean
+	// Compute lunar illumination and separation plus altitude when an observer exists; defaults to true.
+	readonly includeMoon?: boolean
+	// Compute solar altitude; defaults to true with an observer.
+	readonly includeSun?: boolean
+	// Compute profile ZHR and relative activity; defaults to true when a profile is supplied.
+	readonly includeActivity?: boolean
+}
+
+// Instantaneous observational state of one meteor-shower solution.
+export interface MeteorShowerState {
+	// Source catalog solution.
+	readonly solution: MeteorShowerSolution
+	// Geocentric geometric solar longitude in the J2000 ecliptic, radians.
+	readonly solarLongitude: Angle
+	// Whether catalog/profile support contains the instant.
+	readonly active: boolean
+	// ZHR relative to the profile's global maximum, in [0, 1].
+	readonly activityFraction?: number
+	// Profile ZHR in meteors per hour.
+	readonly zhr?: number
+	// Geocentric equatorial J2000 radiant.
+	readonly radiantJ2000?: MeteorRadiant
+	// Radiant transformed to the true equator/equinox of date.
+	readonly radiantOfDate?: MeteorRadiant
+	// Local geometric radiant coordinates, including altitude and north-through-east azimuth.
+	readonly horizontal?: MeteorHorizontalRadiant
+	// Moon-radiant angular separation in radians.
+	readonly moonSeparation?: Angle
+	// Geometric lunar altitude in radians.
+	readonly moonAltitude?: Angle
+	// Lunar illuminated fraction in [0, 1].
+	readonly moonIllumination?: number
+	// Geometric solar altitude in radians.
+	readonly sunAltitude?: Angle
 }
 
 // Radiant result with an explicit indication that a catalog value was extrapolated.
@@ -295,10 +366,30 @@ export interface MeteorObservingWindow {
 	readonly bestLocalHourlyRate: number
 	// Lunar illumination at bestTime, with its instant identified by bestTime.
 	readonly moonIlluminationAtBest?: number
+	// Greatest sampled geometric radiant altitude in radians.
+	readonly maximumRadiantAltitude?: Angle
+	// Smallest sampled Moon-radiant separation in radians, when lunar data was requested.
+	readonly minimumMoonRadiantSeparation?: Angle
+	// Greatest sampled geometric lunar altitude in radians, when lunar data was requested.
+	readonly maximumMoonAltitude?: Angle
+	// Greatest sampled activity relative to the global profile maximum, in [0, 1].
+	readonly maximumActivityFraction?: number
+	// Greatest sampled profile ZHR in meteors per hour.
+	readonly maximumZhr?: number
 }
 
 // User-selectable activity profile for a shower.
 export type MeteorActivityProfile = MeteorExponentialActivityProfile | MeteorSampledActivityProfile | MeteorMultiPeakActivityProfile
+
+// Explicit activity membership and phase information at one solar longitude.
+export interface MeteorActivityPhase {
+	// True when the longitude belongs to at least one finite profile support.
+	readonly active: boolean
+	// Progress through the active component support in [0, 1], when a unique component applies.
+	readonly progress?: number
+	// Signed shortest longitude displacement from the profile's global maximum, radians.
+	readonly deltaFromMaximum?: Angle
+}
 
 // Piecewise exponential ZHR profile around one maximum.
 export interface MeteorExponentialActivityProfile {
@@ -351,6 +442,28 @@ export interface MeteorTrack {
 	readonly frame?: 'j2000'
 }
 
+// Thresholds composing a meteor-track/radiant association decision.
+export interface MeteorTrackAssociationOptions {
+	// Maximum radiant residual from the track great-circle plane, radians.
+	readonly maximumCrossTrackError?: Angle
+	// Maximum angular distance from the radiant to the track start, radians.
+	readonly maximumRadiantDistance?: Angle
+	// Require the observed trail direction to move away from the radiant.
+	readonly requireDirectionCompatibility?: boolean
+}
+
+// Geometric diagnostics for associating one observed trail with a radiant.
+export interface MeteorTrackAssociation {
+	// True when the non-degenerate geometry satisfies every configured constraint.
+	readonly compatible: boolean
+	// Radiant residual from the track great-circle plane, radians.
+	readonly crossTrackError: Angle
+	// Angular distance from the radiant to the trail start, radians.
+	readonly radiantDistance: Angle
+	// Whether the observed trail direction moves away from the radiant.
+	readonly directionCompatible: boolean
+}
+
 // Input to the rotation and gravity horizontal helpers.
 export interface MeteorHorizontalInput {
 	// North-through-east azimuth in radians.
@@ -398,6 +511,8 @@ export interface MeteorObservingWindowOptions extends TimeSearchOptions {
 	readonly minimumMoonRadiantSeparation?: Angle
 	// Optional maximum lunar illumination.
 	readonly maximumMoonIllumination?: number
+	// Maximum geometric lunar altitude in radians.
+	readonly maximumMoonAltitude?: Angle
 	// Minimum duration in hours.
 	readonly minimumDurationHours?: number
 	// Observation model used to convert ZHR to a local expected rate.
@@ -407,6 +522,20 @@ export interface MeteorObservingWindowOptions extends TimeSearchOptions {
 	readonly altitudeExponent?: number
 	// Optional provider for explicit, time-varying rate corrections.
 	readonly rateCorrection?: (time: Time, conditions: MeteorObservingConditions) => number
+}
+
+// One magnitude class and its observed meteor count.
+export interface MeteorMagnitudeBin {
+	// Representative visual magnitude of the class.
+	readonly magnitude: number
+	// Non-negative observed count in the class.
+	readonly count: number
+}
+
+// Controls the log-linear population-index estimate.
+export interface MeteorPopulationIndexOptions {
+	// Weight each logarithmic bin by its Poisson count; defaults to true.
+	readonly weighted?: boolean
 }
 
 // Options used by local rise/transit/set evaluation.

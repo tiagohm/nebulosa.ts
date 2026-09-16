@@ -35,11 +35,22 @@ test('normalizes the versioned IAU shower object without inventing activity data
 						'Parent body': 'Test parent',
 						References: [null, '<A>reference</A>'],
 					},
+					{
+						AdNo: '001',
+						activity: 'annual',
+						LoS: null,
+						Ra: 12,
+						De: null,
+						q: 0.91,
+						e: 0.72,
+						Ote: 'RAD',
+					},
 				],
 			},
 		],
 	})
-	const solution = normalizeIauMeteorShowerCatalog(catalog).showers[0].solutions[0]
+	const shower = normalizeIauMeteorShowerCatalog(catalog).showers[0]
+	const solution = shower.solutions[0]
 
 	expect(solution.status).toBe('removed')
 	expect(solution.sourceStatus).toBe(-2)
@@ -50,6 +61,16 @@ test('normalizes the versioned IAU shower object without inventing activity data
 	expect(toKilometerPerSecond(solution.geocentricSpeed!)).toBeCloseTo(20, 12)
 	expect(solution.orbit).toEqual({ semiMajorAxis: undefined, perihelionDistance: undefined, eccentricity: undefined, argumentOfPerihelion: undefined, longitudeOfAscendingNode: undefined, inclination: expect.any(Number) })
 	expect(solution.reference).toBe('<A>reference</A>')
+	expect(shower.code).toBe('TST')
+	expect(shower.provisionalName).toBe('M2026-X1')
+	expect(shower.solutions).toHaveLength(2)
+	expect(shower.solutions[1].activity).toEqual({ kind: 'annual', source: 'annual', year: undefined })
+	expect(shower.solutions[1].declination).toBeUndefined()
+	expect(shower.solutions[1].referenceSolarLongitude).toBeUndefined()
+	expect(shower.solutions[1].radiantDrift).toBeUndefined()
+	expect(shower.solutions[1].orbit).toEqual({ semiMajorAxis: undefined, perihelionDistance: 0.91, eccentricity: 0.72, argumentOfPerihelion: undefined, longitudeOfAscendingNode: undefined, inclination: undefined })
+	expect(shower.solutions[1].observationTechnique).toBe('radar')
+	expect(shower.solutions[1].parentBody).toBeUndefined()
 })
 
 test('rejects an unversioned array root', () => {

@@ -1,11 +1,12 @@
 import { PI, PIOVERTWO } from '../../core/constants'
+import { brentMinimize } from '../../math/numerical/optimization'
 import { deg, normalizeAngle } from '../../math/units/angle'
 import { equatorialFromJ2000, equatorialToHorizontal } from '../coordinates/coordinate'
 import { riseTransitSet, type RiseTransitSet } from '../events/horizon'
 import { localSiderealTime, type GeographicPosition } from '../observer/location'
 import { timeShift, timeSubtract, timeToDate, type Time } from '../time/time'
 import { meteorSolarLongitude, meteorSolarLongitudeDelta, timeAtMeteorSolarLongitude } from './solar'
-import type { MeteorComputationContext, MeteorRadiant, MeteorRadiantOptions, MeteorRadiantResult, MeteorShowerSolution, MeteorHorizontalRadiant, MeteorRadiantVisibility } from './types'
+import type { MeteorComputationContext, MeteorHorizontalRadiant, MeteorRadiant, MeteorRadiantMaximumAltitude, MeteorRadiantMaximumAltitudeOptions, MeteorRadiantOptions, MeteorRadiantPathPoint, MeteorRadiantResult, MeteorRadiantVisibility, MeteorShowerSolution } from './types'
 
 // Radiant evaluation in the catalog's geocentric equatorial J2000 frame and its local reductions.
 // Drift is applied only with its declared unit basis, RA is wrapped after extrapolation, and a
@@ -28,11 +29,7 @@ export function meteorRadiantJ2000(solution: MeteorShowerSolution, context: Mete
 	let extrapolated = false
 
 	if (drift.basis === 'solarLongitude') {
-		delta = meteorSolarLongitudeDelta(context.solarLongitude, solution.referenceSolarLongitude)
-		if (options.extrapolate === false && delta !== 0) return undefined
-		const limit = options.maxExtrapolationSolarLongitude ?? PI
-		if (Math.abs(delta) > limit) return undefined
-		extrapolated = delta !== 0
+		return meteorRadiantAtSolarLongitude(solution, context.solarLongitude, options)
 	} else {
 		const reference = nearestDailyDriftReference(solution, solution.referenceSolarLongitude, context.time, options)
 		delta = timeSubtract(context.time, reference, context.time.scale)
@@ -46,6 +43,92 @@ export function meteorRadiantJ2000(solution: MeteorShowerSolution, context: Mete
 	const declination = solution.declination + drift.declinationRate * delta
 	if (declination < -PIOVERTWO || declination > PIOVERTWO) return undefined
 	return { radiant: { rightAscension, declination }, extrapolated }
+}
+
+// Samples a fixed or solar-longitude-drifting radiant over a forward circular interval. A daily
+// drift needs an absolute year and is therefore rejected by this longitude-only API. The endpoint is
+// included exactly when reached by a step or appended once when the final partial step remains.
+export function meteorRadiantPath(solution: MeteorShowerSolution, startSolarLongitude: number, endSolarLongitude: number, step: number): readonly MeteorRadiantPathPoint[] {
+	if (!(step > 0) || !Number.isFinite(step)) throw new Error('meteor radiant-path step must be finite and positive')
+	if (solution.radiantDrift?.basis === 'day') throw new Error('daily radiant drift requires an absolute time interval')
+	const width = normalizeAngle(endSolarLongitude - startSolarLongitude)
+	const count = Math.floor(width / step)
+	if (count > 1_000_000) throw new Error('meteor radiant path would contain too many points')
+	const points: MeteorRadiantPathPoint[] = []
+	const tolerance = Math.max(1e-12, step * 1e-12)
+
+	for (let index = 0; index <= count; index++) {
+		const offset = Math.min(width, index * step)
+		const solarLongitude = normalizeAngle(startSolarLongitude + offset)
+		const result = meteorRadiantAtSolarLongitude(solution, solarLongitude)
+		if (result !== undefined) points.push({ ...result.radiant, solarLongitude })
+	}
+
+	if (width - count * step > tolerance) {
+		const solarLongitude = normalizeAngle(endSolarLongitude)
+		const result = meteorRadiantAtSolarLongitude(solution, solarLongitude)
+		if (result !== undefined) points.push({ ...result.radiant, solarLongitude })
+	}
+
+	return points
+}
+
+// Finds the highest above-horizon radiant position in a bounded interval by coarse sampling followed
+// by a bounded Brent refinement around the best sample. A wholly invisible or unavailable radiant
+// returns undefined.
+export function meteorRadiantMaximumAltitude(solution: MeteorShowerSolution, observer: GeographicPosition, start: Time, end: Time, options: MeteorRadiantMaximumAltitudeOptions = {}): MeteorRadiantMaximumAltitude | undefined {
+	const duration = timeSubtract(end, start)
+	if (!(duration >= 0)) return undefined
+	const step = options.step ?? 1 / 24
+	if (!(step > 0) || !Number.isFinite(step)) throw new Error('meteor radiant-altitude step must be finite and positive')
+	const panels = Math.max(1, Math.ceil(duration / step))
+	let bestIndex = 0
+	let best: MeteorHorizontalRadiant | undefined
+
+	const horizontalAt = (offset: number) => {
+		const time = timeShift(start, offset)
+		const solarLongitude = meteorSolarLongitude(time)
+		const radiant = meteorRadiantJ2000(solution, { time, solarLongitude }, options)?.radiant
+		return radiant === undefined ? undefined : meteorRadiantHorizontal(radiant, observer, time, { time, solarLongitude })
+	}
+
+	for (let index = 0; index <= panels; index++) {
+		const horizontal = horizontalAt((duration * index) / panels)
+		if (horizontal !== undefined && (best === undefined || horizontal.altitude > best.altitude)) {
+			best = horizontal
+			bestIndex = index
+		}
+	}
+
+	if (best === undefined) return undefined
+
+	if (duration > 0 && bestIndex > 0 && bestIndex < panels) {
+		const left = (duration * (bestIndex - 1)) / panels
+		const right = (duration * (bestIndex + 1)) / panels
+		const refined = brentMinimize((offset) => -(horizontalAt(offset)?.altitude ?? -PIOVERTWO), left, right, { tolerance: options.tolerance ?? 1e-6 })
+		const horizontal = horizontalAt(refined.minimum)
+		if (horizontal !== undefined && horizontal.altitude > best.altitude) best = horizontal
+	}
+
+	return best.altitude > 0 ? { time: best.time, altitude: best.altitude, azimuth: best.azimuth } : undefined
+}
+
+// Evaluates the longitude-defined subset of radiant drift without duplicating its formula.
+function meteorRadiantAtSolarLongitude(solution: MeteorShowerSolution, solarLongitude: number, options: MeteorRadiantOptions = {}): MeteorRadiantResult | undefined {
+	if (solution.rightAscension === undefined || solution.declination === undefined) return undefined
+	const drift = solution.radiantDrift
+	if (drift === undefined) return { radiant: { rightAscension: normalizeAngle(solution.rightAscension), declination: solution.declination }, extrapolated: false }
+	if (drift.basis !== 'solarLongitude' || solution.referenceSolarLongitude === undefined) return undefined
+	const delta = meteorSolarLongitudeDelta(solarLongitude, solution.referenceSolarLongitude)
+	if (options.extrapolate === false && delta !== 0) return undefined
+	if (Math.abs(delta) > (options.maxExtrapolationSolarLongitude ?? PI)) return undefined
+	const declination = solution.declination + drift.declinationRate * delta
+	if (declination < -PIOVERTWO || declination > PIOVERTWO) return undefined
+
+	return {
+		radiant: { rightAscension: normalizeAngle(solution.rightAscension + drift.rightAscensionRate * delta), declination },
+		extrapolated: delta !== 0,
+	}
 }
 
 // Chooses the nearest annual occurrence of a daily-drift reference longitude, including the years
@@ -73,6 +156,7 @@ function nearestDailyDriftReferenceAt(time: Time, references: readonly [Time, Ti
 	for (let index = 1; index < references.length; index++) {
 		const candidate = references[index]
 		const distance = Math.abs(timeSubtract(time, candidate, time.scale))
+
 		if (distance < smallestDistance) {
 			nearest = candidate
 			smallestDistance = distance

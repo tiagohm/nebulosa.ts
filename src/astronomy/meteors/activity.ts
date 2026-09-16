@@ -1,10 +1,10 @@
 import { PI, TAU } from '../../core/constants'
 import { brentMinimize } from '../../math/numerical/optimization'
 import { pchip } from '../../math/numerical/spline'
-import { type Angle, normalizeAngle } from '../../math/units/angle'
+import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 import { timeShift, timeSubtract, type Time } from '../time/time'
 import { meteorSolarLongitude } from './solar'
-import type { MeteorActivityProfile, MeteorExponentialActivityProfile, MeteorSampledActivityProfile, MeteorSolarLongitudeInterval } from './types'
+import type { MeteorActivityPhase, MeteorActivityProfile, MeteorExponentialActivityProfile, MeteorSampledActivityProfile, MeteorSolarLongitudeInterval } from './types'
 
 // Meteor activity profiles and visual-rate mathematics. Catalog support intervals only decide where
 // a shower is active; ZHR profiles are explicit caller-supplied data. Solar-longitude coordinates are
@@ -21,13 +21,45 @@ export function isMeteorShowerActive(interval: MeteorSolarLongitudeInterval | un
 	return meteorSolarLongitudeForwardDelta(interval.start, solarLongitude) <= width
 }
 
-// Returns progress through a known interval, in [0, 1]. A full circle uses start as its phase origin
-// and yields [0, 1); undefined means that the window is absent or an ordinary zero-width interval.
-export function meteorActivityPhase(interval: MeteorSolarLongitudeInterval | undefined, solarLongitude: Angle): number | undefined {
+// Returns progress through a known active interval, in [0, 1]. A full circle uses start as its phase
+// origin and yields [0, 1); undefined means absent, inactive or an ordinary zero-width interval.
+export function meteorActivityProgress(interval: MeteorSolarLongitudeInterval | undefined, solarLongitude: Angle): number | undefined {
 	if (interval === undefined) return undefined
 	const width = meteorSolarLongitudeIntervalWidth(interval)
 	if (width === 0) return undefined
-	return Math.min(1, meteorSolarLongitudeForwardDelta(interval.start, solarLongitude) / width)
+	const offset = meteorSolarLongitudeForwardDelta(interval.start, solarLongitude)
+	return offset <= width ? offset / width : undefined
+}
+
+// Returns explicit activity membership, active-support progress and displacement from the global
+// maximum. For overlapping multi-peak components, progress follows the strongest component at the
+// requested longitude; inactive longitudes never masquerade as progress zero or one.
+export function meteorActivityPhase(profile: MeteorActivityProfile, solarLongitude: Angle): MeteorActivityPhase {
+	let progress: number | undefined
+
+	if (profile.type === 'multiPeak') {
+		let strongest = Number.NEGATIVE_INFINITY
+
+		for (const component of profile.components) {
+			const candidate = meteorActivityProgress(component.support, solarLongitude)
+			if (candidate === undefined) continue
+			const zhr = meteorExponentialZhr(component, solarLongitude)
+			if (zhr > strongest) {
+				strongest = zhr
+				progress = candidate
+			}
+		}
+	} else {
+		progress = meteorActivityProgress(profile.support, solarLongitude)
+	}
+
+	const maximum = meteorActivityMaximumSolarLongitude(profile)
+
+	return {
+		active: progress !== undefined,
+		progress,
+		deltaFromMaximum: maximum === undefined ? undefined : normalizePI(solarLongitude - maximum),
+	}
 }
 
 // Evaluates a supplied activity profile in ZHR (meteors per hour), returning zero outside its support.
@@ -37,6 +69,18 @@ export function meteorActivityZhr(profile: MeteorActivityProfile, solarLongitude
 	let total = 0
 	for (const component of profile.components) total += meteorExponentialZhr(component, solarLongitude)
 	return total
+}
+
+// Returns profile intensity relative to its finite global maximum. Empty, zero and degenerate
+// profiles return zero instead of propagating NaN or Infinity.
+export function meteorActivityFraction(profile: MeteorActivityProfile, solarLongitude: Angle): number {
+	const maximum = meteorActivityMaximumSolarLongitude(profile)
+	if (maximum === undefined) return 0
+	const peak = meteorActivityZhr(profile, maximum)
+	if (!(peak > 0) || !Number.isFinite(peak)) return 0
+	const fraction = meteorActivityZhr(profile, solarLongitude) / peak
+	if (!Number.isFinite(fraction)) return 0
+	return Math.min(1, Math.max(0, fraction))
 }
 
 // Finds the longitude of the maximum of a profile. Multi-peak profiles are optimized as a sum and
@@ -57,6 +101,7 @@ export function meteorActivityMaximumSolarLongitude(profile: MeteorActivityProfi
 	const grid = 1440
 	let bestLongitude = candidates[0]
 	let bestValue = meteorActivityZhr(profile, bestLongitude)
+
 	for (let i = 0; i < grid; i++) {
 		const longitude = (i * TAU) / grid
 		const value = meteorActivityZhr(profile, longitude)
@@ -133,17 +178,21 @@ export function integrateMeteorZhr(profile: MeteorActivityProfile, start: Time, 
 	if (!(step > 0) || !Number.isFinite(step)) throw new Error('meteor ZHR integration step must be finite and positive')
 	const count = Math.max(1, Math.ceil(duration / step))
 	const h = duration / count
+
 	const longitudeAt = options.solarLongitude ?? meteorSolarLongitude
 	// Simpson's rule is used only when an even number of panels is available; otherwise trapezoids
 	// preserve the requested endpoint and remain deterministic for arbitrary short windows.
 	if (count % 2 === 0) {
 		let total = 0
+
 		for (let i = 0; i <= count; i++) {
 			const coefficient = i === 0 || i === count ? 1 : i % 2 === 0 ? 2 : 4
 			total += coefficient * meteorActivityZhr(profile, longitudeAt(timeShift(start, i * h)))
 		}
+
 		return ((total * h) / 3) * 24
 	}
+
 	let trapezoid = 0
 	let previous = meteorActivityZhr(profile, longitudeAt(start))
 	for (let i = 1; i <= count; i++) {
@@ -151,6 +200,7 @@ export function integrateMeteorZhr(profile: MeteorActivityProfile, start: Time, 
 		trapezoid += (previous + current) * h * 0.5
 		previous = current
 	}
+
 	return trapezoid * 24
 }
 

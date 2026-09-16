@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
-import { combineMeteorVisualObservations, integrateMeteorExpectedCount, meteorGarwoodInterval, meteorGarwoodZhr, meteorLocalHourlyRate, meteorMagnitudeRatio, meteorMassIndex, meteorObservingConditionsAt, meteorObservationContext, meteorPopulationIndex, meteorVisualRate, meteorZhrFromObservation } from '../../../src/astronomy/meteors/observation'
+import { combineMeteorVisualObservations, integrateMeteorExpectedCount, meteorGarwoodInterval, meteorGarwoodZhr, meteorLocalHourlyRate, meteorMagnitudeRatio, meteorMassIndex, meteorObservingConditionsAt, meteorObservationContext, meteorPopulationIndex, meteorPopulationIndexFromMagnitudeBins, meteorVisualRate, meteorZhrFromObservation } from '../../../src/astronomy/meteors/observation'
 import { meteorRadiantHorizontal } from '../../../src/astronomy/meteors/radiant'
 import type { MeteorHorizontalRadiant, MeteorVisualObservation } from '../../../src/astronomy/meteors/types'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
@@ -36,6 +36,36 @@ test('combining observations weights valid exposure instead of averaging their Z
 			{ ...first, radiantAltitude: 0 },
 		]),
 	).toBe(0)
+})
+
+test('population index regression recovers a synthetic magnitude distribution', () => {
+	const bins = [-2, -1, 0, 1, 2].map((magnitude) => ({ magnitude, count: 10 * 2 ** (magnitude + 2) }))
+	expect(meteorPopulationIndexFromMagnitudeBins(bins)).toBeCloseTo(2, 12)
+	expect(meteorPopulationIndexFromMagnitudeBins([{ magnitude: 0, count: 10 }])).toBeUndefined()
+	expect(meteorPopulationIndexFromMagnitudeBins([])).toBeUndefined()
+	expect(meteorPopulationIndexFromMagnitudeBins(bins.map((bin) => ({ magnitude: bin.magnitude, count: 0 })))).toBeUndefined()
+	expect(
+		meteorPopulationIndexFromMagnitudeBins(
+			[
+				{ magnitude: -1, count: 9 },
+				{ magnitude: 0, count: 21 },
+				{ magnitude: 1, count: 38 },
+			],
+			{ weighted: false },
+		),
+	).toBeGreaterThan(1)
+	expect(() =>
+		meteorPopulationIndexFromMagnitudeBins([
+			{ magnitude: Number.NaN, count: 1 },
+			{ magnitude: 1, count: 2 },
+		]),
+	).toThrow('magnitudes must be finite')
+	expect(() =>
+		meteorPopulationIndexFromMagnitudeBins([
+			{ magnitude: 0, count: -1 },
+			{ magnitude: 1, count: 2 },
+		]),
+	).toThrow('counts must be finite and non-negative')
 })
 
 test('observation context and circumstances retain supplied local and lunar providers', () => {

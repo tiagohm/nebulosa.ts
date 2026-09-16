@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { integrateMeteorZhr, isMeteorShowerActive, meteorActivityIntervalsAboveFraction, meteorActivityMaximumSolarLongitude, meteorActivityPhase, meteorActivityZhr, meteorExponentialZhr, meteorSolarLongitudeForwardDelta } from '../../../src/astronomy/meteors/activity'
+import { integrateMeteorZhr, isMeteorShowerActive, meteorActivityFraction, meteorActivityIntervalsAboveFraction, meteorActivityMaximumSolarLongitude, meteorActivityPhase, meteorActivityProgress, meteorActivityZhr, meteorExponentialZhr, meteorSolarLongitudeForwardDelta } from '../../../src/astronomy/meteors/activity'
 import type { MeteorActivityProfile } from '../../../src/astronomy/meteors/types'
 import { timeYMDHMS, Timescale } from '../../../src/astronomy/time/time'
 import { deg, toDeg } from '../../../src/math/units/angle'
@@ -13,10 +13,28 @@ test('circular intervals handle the 0/2π seam and expose phase', () => {
 	expect(isMeteorShowerActive(WRAPPED_INTERVAL, deg(21))).toBe(false)
 	expect(isMeteorShowerActive(undefined, deg(10))).toBeUndefined()
 	expect(isMeteorShowerActive(ZERO_WIDTH_INTERVAL, deg(25))).toBe(false)
-	expect(meteorActivityPhase(WRAPPED_INTERVAL, deg(350))).toBe(0)
-	expect(meteorActivityPhase(WRAPPED_INTERVAL, deg(20))).toBe(1)
-	expect(meteorActivityPhase(undefined, deg(10))).toBeUndefined()
-	expect(meteorActivityPhase(ZERO_WIDTH_INTERVAL, deg(25))).toBeUndefined()
+	expect(meteorActivityProgress(WRAPPED_INTERVAL, deg(350))).toBe(0)
+	expect(meteorActivityProgress(WRAPPED_INTERVAL, deg(20))).toBe(1)
+	expect(meteorActivityProgress(WRAPPED_INTERVAL, deg(21))).toBeUndefined()
+	expect(meteorActivityProgress(undefined, deg(10))).toBeUndefined()
+	expect(meteorActivityProgress(ZERO_WIDTH_INTERVAL, deg(25))).toBeUndefined()
+	const before = meteorActivityPhase(WRAPPED_EXPONENTIAL_PROFILE, deg(349))
+	expect(before.active).toBe(false)
+	expect(before.progress).toBeUndefined()
+	expect(before.deltaFromMaximum).toBeCloseTo(deg(-11), 14)
+	const start = meteorActivityPhase(WRAPPED_EXPONENTIAL_PROFILE, deg(350))
+	expect(start.active).toBe(true)
+	expect(start.progress).toBe(0)
+	expect(start.deltaFromMaximum).toBeCloseTo(deg(-10), 14)
+	const maximum = meteorActivityPhase(WRAPPED_EXPONENTIAL_PROFILE, 0)
+	expect(maximum.active).toBe(true)
+	expect(maximum.progress).toBeCloseTo(1 / 3, 14)
+	expect(maximum.deltaFromMaximum).toBe(0)
+	const end = meteorActivityPhase(WRAPPED_EXPONENTIAL_PROFILE, deg(20))
+	expect(end.active).toBe(true)
+	expect(end.progress).toBe(1)
+	expect(end.deltaFromMaximum).toBeCloseTo(deg(20), 14)
+	expect(meteorActivityPhase(WRAPPED_EXPONENTIAL_PROFILE, deg(21)).active).toBe(false)
 })
 
 test('exponential activity applies degree slopes on both sides of its maximum', () => {
@@ -66,6 +84,23 @@ test('multi-peak profiles preserve disconnected widths and find the global maxim
 	expect(meteorActivityIntervalsAboveFraction(MULTI_PEAK_PROFILE, 1.1)).toEqual([])
 })
 
+test('activity fractions are normalized by the finite global peak', () => {
+	expect(meteorActivityFraction(EXPONENTIAL_PROFILE, EXPONENTIAL_PROFILE.solarLongitude)).toBe(1)
+	expect(meteorActivityFraction(EXPONENTIAL_PROFILE, deg(80))).toBe(0)
+	expect(meteorActivityFraction(SAMPLED_PROFILE, deg(350))).toBeCloseTo(0.5, 14)
+	expect(meteorActivityFraction(SAMPLED_PROFILE, 0)).toBe(1)
+	const unequal = {
+		type: 'multiPeak',
+		components: [
+			{ type: 'exponential', support: { start: deg(0), end: deg(20) }, solarLongitude: deg(10), zhr: 100, slopeBefore: 1, slopeAfter: 1 },
+			{ type: 'exponential', support: { start: deg(180), end: deg(200) }, solarLongitude: deg(190), zhr: 25, slopeBefore: 1, slopeAfter: 1 },
+		],
+	} satisfies MeteorActivityProfile
+	expect(meteorActivityFraction(unequal, deg(190))).toBeCloseTo(0.25, 12)
+	const zero = { type: 'sampled', support: WRAPPED_INTERVAL, samples: [{ solarLongitude: 0, zhr: 0 }] } satisfies MeteorActivityProfile
+	expect(meteorActivityFraction(zero, 0)).toBe(0)
+})
+
 test('fraction thresholds include limiting cases and sampled support edges', () => {
 	const intervals = meteorActivityIntervalsAboveFraction(SAMPLED_PROFILE, 0.5)
 	expect(intervals).toHaveLength(1)
@@ -74,7 +109,7 @@ test('fraction thresholds include limiting cases and sampled support edges', () 
 	const fullCircle = meteorActivityIntervalsAboveFraction(SAMPLED_PROFILE, 0)
 	expect(fullCircle).toEqual([{ start: 0, end: 0, fullCircle: true }])
 	expect(isMeteorShowerActive(fullCircle[0], deg(180))).toBe(true)
-	expect(meteorActivityPhase(fullCircle[0], Math.PI)).toBeCloseTo(0.5, 14)
+	expect(meteorActivityProgress(fullCircle[0], Math.PI)).toBeCloseTo(0.5, 14)
 	expect(meteorActivityIntervalsAboveFraction(SAMPLED_PROFILE, 1)).toHaveLength(1)
 
 	const empty = { type: 'sampled', support: WRAPPED_INTERVAL, samples: [] } satisfies MeteorActivityProfile
