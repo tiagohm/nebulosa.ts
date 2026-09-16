@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
-import { meteorRadiantDegrees, meteorRadiantHorizontal, meteorRadiantJ2000, meteorRadiantMaximumAltitude, meteorRadiantOfDate, meteorRadiantPath, meteorRadiantRiseTransitSet, meteorRadiantVector, meteorRadiantVisibility } from '../../../src/astronomy/meteors/radiant'
+import { meteorRadiantDegrees, meteorRadiantHorizontal, meteorRadiantJ2000, meteorRadiantMaximumAltitude, meteorRadiantOfDate, meteorRadiantPath, meteorRadiantPathBetween, meteorRadiantRiseTransitSet, meteorRadiantVector, meteorRadiantVisibility } from '../../../src/astronomy/meteors/radiant'
+import { meteorSolarLongitude, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import type { MeteorComputationContext, MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
 import { timeShift, timeYMDHMS, Timescale, type Time } from '../../../src/astronomy/time/time'
 import { deg, toDeg } from '../../../src/math/units/angle'
@@ -43,6 +44,52 @@ test('radiant path applies drift across ordinary and wrapped longitude intervals
 	expect(wrapped.every((point) => point.rightAscension === BASE_SOLUTION.rightAscension)).toBe(true)
 	expect(() => meteorRadiantPath(BASE_SOLUTION, 0, 1, 0)).toThrow('finite and positive')
 	expect(() => meteorRadiantPath(DAILY_DRIFT_SOLUTION, 0, 1, deg(1))).toThrow('absolute time')
+})
+
+test('absolute-time radiant paths sample fixed, solar and daily drift through the final endpoint', () => {
+	const start = timeAtMeteorSolarLongitude(2024, DAILY_DRIFT_SOLUTION.referenceSolarLongitude, { step: 7, tolerance: TOLERANCE.time })
+	const end = timeShift(start, 2.5)
+	const daily = meteorRadiantPathBetween(DAILY_DRIFT_SOLUTION, start, end, { step: 1, solarLongitudeSearch: { step: 7, tolerance: TOLERANCE.time } })
+
+	expect(daily).toHaveLength(4)
+	expect(daily.at(-1)!.time).toBe(end)
+	for (let index = 0; index < daily.length; index++) {
+		expect(daily[index].solarLongitude).toBeCloseTo(meteorSolarLongitude(daily[index].time), 14)
+		expect(toDeg(daily[index].rightAscension)).toBeCloseTo([359, 0, 1, 1.5][index], 5)
+		expect(toDeg(daily[index].declination)).toBeCloseTo([10, 9.75, 9.5, 9.375][index], 5)
+	}
+
+	const fixed = meteorRadiantPathBetween(BASE_SOLUTION, start, end, { step: 1 })
+	expect(fixed).toHaveLength(4)
+	expect(fixed.every((point) => point.rightAscension === BASE_SOLUTION.rightAscension)).toBe(true)
+	const solarStart = timeAtMeteorSolarLongitude(2024, SOLAR_DRIFT_SOLUTION.referenceSolarLongitude, { step: 7, tolerance: TOLERANCE.time })
+	const solar = meteorRadiantPathBetween(SOLAR_DRIFT_SOLUTION, solarStart, timeShift(solarStart, 2.5), { step: 1 })
+	expect(solar).toHaveLength(4)
+	for (const point of solar) {
+		expect(point).toMatchObject(meteorRadiantJ2000(SOLAR_DRIFT_SOLUTION, context(point.time, point.solarLongitude))!.radiant)
+		expect(point).toMatchObject(meteorRadiantPath(SOLAR_DRIFT_SOLUTION, point.solarLongitude, point.solarLongitude, deg(1))[0])
+	}
+})
+
+test('absolute-time radiant paths handle year boundaries, unavailable samples and limits', () => {
+	const decemberReference = {
+		...BASE_SOLUTION,
+		referenceSolarLongitude: deg(270),
+		rightAscension: deg(359),
+		declination: deg(80),
+		radiantDrift: { basis: 'day', rightAscensionRate: deg(1), declinationRate: deg(1) },
+	} satisfies MeteorShowerSolution
+	const start = timeYMDHMS(2023, 12, 31, 0, 0, 0, Timescale.UTC)
+	const end = timeYMDHMS(2024, 1, 2, 0, 0, 0, Timescale.UTC)
+	const path = meteorRadiantPathBetween(decemberReference, start, end, { step: 0.5, maxExtrapolationDays: 20 })
+
+	expect(path.length).toBeLessThan(5)
+	expect(path.every((point) => point.declination <= Math.PI / 2)).toBe(true)
+	expect(path.some((point) => point.rightAscension < deg(20))).toBe(true)
+	expect(meteorRadiantPathBetween(decemberReference, start, end, { step: 0.5, maxExtrapolationDays: 0.1 })).toEqual([])
+	expect(meteorRadiantPathBetween(BASE_SOLUTION, end, start)).toEqual([])
+	expect(() => meteorRadiantPathBetween(BASE_SOLUTION, start, end, { step: 0 })).toThrow('finite and positive')
+	expect(() => meteorRadiantPathBetween(BASE_SOLUTION, start, end, { step: 1e-7 })).toThrow('too many points')
 })
 
 test('published Perseid and Geminid drift directions retain their signs and scales', () => {

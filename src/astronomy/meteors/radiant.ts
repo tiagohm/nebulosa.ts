@@ -6,7 +6,8 @@ import { riseTransitSet, type RiseTransitSet } from '../events/horizon'
 import { localSiderealTime, type GeographicPosition } from '../observer/location'
 import { timeShift, timeSubtract, timeToDate, type Time } from '../time/time'
 import { meteorSolarLongitude, meteorSolarLongitudeDelta, timeAtMeteorSolarLongitude } from './solar'
-import type { MeteorComputationContext, MeteorHorizontalRadiant, MeteorRadiant, MeteorRadiantMaximumAltitude, MeteorRadiantMaximumAltitudeOptions, MeteorRadiantOptions, MeteorRadiantPathPoint, MeteorRadiantResult, MeteorRadiantVisibility, MeteorShowerSolution } from './types'
+// oxfmt-ignore
+import type { MeteorComputationContext, MeteorHorizontalRadiant, MeteorRadiant, MeteorRadiantMaximumAltitude, MeteorRadiantMaximumAltitudeOptions, MeteorRadiantOptions, MeteorRadiantPathPoint, MeteorRadiantResult, MeteorRadiantTimePathOptions, MeteorRadiantVisibility, MeteorShowerSolution, TimedMeteorRadiantPathPoint } from './types'
 
 // Radiant evaluation in the catalog's geocentric equatorial J2000 frame and its local reductions.
 // Drift is applied only with its declared unit basis, RA is wrapped after extrapolation, and a
@@ -71,6 +72,37 @@ export function meteorRadiantPath(solution: MeteorShowerSolution, startSolarLong
 	}
 
 	return points
+}
+
+// Samples any fixed, solar-longitude or daily radiant drift over an absolute forward time interval.
+// Times are retained in their input scales, the step is in days, and the final endpoint appears once.
+export function meteorRadiantPathBetween(solution: MeteorShowerSolution, start: Time, end: Time, options: MeteorRadiantTimePathOptions = {}): readonly TimedMeteorRadiantPathPoint[] {
+	const step = options.step ?? 1
+	if (!(step > 0) || !Number.isFinite(step)) throw new Error('meteor radiant time-path step must be finite and positive')
+
+	const duration = timeSubtract(end, start)
+	if (!(duration >= 0)) return []
+
+	const count = Math.floor(duration / step)
+	const tolerance = Math.max(1e-12, step * 1e-12)
+	const hasPartialStep = duration - count * step > tolerance
+	if (count + 1 + Number(hasPartialStep) > 1_000_001) throw new Error('meteor radiant time path would contain too many points')
+	const points: TimedMeteorRadiantPathPoint[] = []
+
+	for (let index = 0; index <= count; index++) {
+		const time = index === count && !hasPartialStep ? end : timeShift(start, index * step)
+		appendTimedRadiant(points, solution, time, options)
+	}
+
+	if (hasPartialStep) appendTimedRadiant(points, solution, end, options)
+	return points
+}
+
+// Appends one available absolute-time radiant without exposing unavailable pole/limit samples.
+function appendTimedRadiant(points: TimedMeteorRadiantPathPoint[], solution: MeteorShowerSolution, time: Time, options: MeteorRadiantOptions): void {
+	const solarLongitude = meteorSolarLongitude(time)
+	const result = meteorRadiantJ2000(solution, { time, solarLongitude }, options)
+	if (result !== undefined) points.push({ ...result.radiant, solarLongitude, time })
 }
 
 // Finds the highest above-horizon radiant position in a bounded interval by coarse sampling followed

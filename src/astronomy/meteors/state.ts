@@ -6,7 +6,7 @@ import { isMeteorShowerActive, meteorActivityMaximumSolarLongitude, meteorActivi
 import { meteorMoonDirection, meteorMoonIllumination, meteorSunDirection } from './observation'
 import { meteorRadiantHorizontal, meteorRadiantJ2000, meteorRadiantOfDate, meteorRadiantVector } from './radiant'
 import { meteorSolarLongitude } from './solar'
-import type { MeteorShowerComputationContext, MeteorShowerSolution, MeteorShowerState, MeteorShowerStateOptions } from './types'
+import type { MeteorActivityProfile, MeteorShowerBatchStateOptions, MeteorShowerComputationContext, MeteorShowerSolution, MeteorShowerState, MeteorShowerStateInput, MeteorShowerStateOptions } from './types'
 
 // High-level instantaneous meteor-shower states. A prepared context owns all shared solar, lunar and
 // observer work for one instant; batch evaluation allocates only per-solution result objects and does
@@ -24,15 +24,19 @@ export function meteorShowerState(solution: MeteorShowerSolution, context: Meteo
 	return stateFromCompleteContext(solution, completeContext(context, options), options, profileMaximumZhr(options))
 }
 
-// Computes several shower solutions while sharing solar longitude, LST, Sun and Moon evaluations.
-export function meteorShowerStates(solutions: readonly MeteorShowerSolution[], context: MeteorShowerComputationContext, options: MeteorShowerStateOptions = {}): readonly MeteorShowerState[] {
+// Computes several independently profiled shower solutions while sharing solar longitude, LST, Sun
+// and Moon evaluations.
+export function meteorShowerStates(inputs: readonly MeteorShowerStateInput[], context: MeteorShowerComputationContext, options: MeteorShowerBatchStateOptions = {}): readonly MeteorShowerState[] {
 	const complete = completeContext(context, options)
-	const maximumZhr = profileMaximumZhr(options)
-	return solutions.map((solution) => stateFromCompleteContext(solution, complete, options, maximumZhr))
+	const maximumZhrByProfile = new Map<MeteorActivityProfile, number | undefined>()
+	return inputs.map((input) => {
+		const stateOptions: MeteorShowerStateOptions = { ...options, profile: input.profile, activityMaximumZhr: input.activityMaximumZhr }
+		return stateFromCompleteContext(input.solution, complete, stateOptions, cachedProfileMaximumZhr(stateOptions, maximumZhrByProfile))
+	})
 }
 
 // Adds only the common values selected by options, preserving caller-supplied ephemerides.
-function completeContext(context: MeteorShowerComputationContext, options: MeteorShowerStateOptions): MeteorShowerComputationContext {
+function completeContext(context: MeteorShowerComputationContext, options: MeteorShowerBatchStateOptions): MeteorShowerComputationContext {
 	const observer = context.observer
 	const includeHorizontal = options.includeHorizontal ?? observer !== undefined
 	const includeMoon = options.includeMoon ?? true
@@ -50,9 +54,9 @@ function completeContext(context: MeteorShowerComputationContext, options: Meteo
 function stateFromCompleteContext(solution: MeteorShowerSolution, context: MeteorShowerComputationContext, options: MeteorShowerStateOptions, maximumZhr: number | undefined): MeteorShowerState {
 	const profile = options.profile
 	const includeActivity = options.includeActivity ?? profile !== undefined
-	const profileActive = profile === undefined || !includeActivity ? true : isProfileActive(profile, context.solarLongitude)
-	const catalogActive = isMeteorShowerActive(solution.activityInterval, context.solarLongitude) ?? true
-	const active = catalogActive && profileActive
+	const profileActive = profile === undefined || !includeActivity ? undefined : isProfileActive(profile, context.solarLongitude)
+	const catalogActive = isMeteorShowerActive(solution.activityInterval, context.solarLongitude)
+	const active = combineActivityState(catalogActive, profileActive)
 	const radiantJ2000 = meteorRadiantJ2000(solution, context, options)?.radiant
 	const observer = context.observer
 	const includeHorizontal = options.includeHorizontal ?? observer !== undefined
@@ -95,4 +99,22 @@ function profileMaximumZhr(options: MeteorShowerStateOptions): number | undefine
 	if (options.profile === undefined || options.includeActivity === false) return undefined
 	const maximum = meteorActivityMaximumSolarLongitude(options.profile)
 	return maximum === undefined ? undefined : meteorActivityZhr(options.profile, maximum)
+}
+
+// Returns the conjunction of all known support states while preserving complete uncertainty.
+function combineActivityState(catalogActive: boolean | undefined, profileActive: boolean | undefined): boolean | undefined {
+	if (catalogActive !== undefined && profileActive !== undefined) return catalogActive && profileActive
+	if (catalogActive !== undefined) return catalogActive
+	if (profileActive !== undefined) return profileActive
+	return undefined
+}
+
+// Reuses one profile maximum within a batch while preserving explicit per-input maximum values.
+function cachedProfileMaximumZhr(options: MeteorShowerStateOptions, cache: Map<MeteorActivityProfile, number | undefined>): number | undefined {
+	if (options.activityMaximumZhr !== undefined) return options.activityMaximumZhr
+	if (options.profile === undefined || options.includeActivity === false) return undefined
+	if (cache.has(options.profile)) return cache.get(options.profile)
+	const maximumZhr = profileMaximumZhr(options)
+	cache.set(options.profile, maximumZhr)
+	return maximumZhr
 }

@@ -183,6 +183,12 @@ export interface MeteorRadiantPathPoint extends MeteorRadiant {
 	readonly solarLongitude: Angle
 }
 
+// One absolute-time radiant sample, including its corresponding solar longitude.
+export interface TimedMeteorRadiantPathPoint extends MeteorRadiantPathPoint {
+	// Instant at which the radiant and solar longitude were evaluated.
+	readonly time: Time
+}
+
 // Highest visible geometric radiant position found in a bounded time interval.
 export interface MeteorRadiantMaximumAltitude {
 	// Instant of the maximum.
@@ -234,14 +240,38 @@ export interface MeteorShowerStateOptions extends MeteorRadiantOptions {
 	readonly includeActivity?: boolean
 }
 
+// One solution and its independent activity inputs for a shared-context batch calculation.
+export interface MeteorShowerStateInput {
+	// Catalog solution evaluated at the common instant.
+	readonly solution: MeteorShowerSolution
+	// Activity profile used only for this solution's ZHR and support.
+	readonly profile?: MeteorActivityProfile
+	// Known global maximum ZHR for this profile, avoiding repeated peak optimization.
+	readonly activityMaximumZhr?: number
+}
+
+// Shared controls for a batch whose profiles and maximum ZHR values belong to individual inputs.
+export interface MeteorShowerBatchStateOptions extends MeteorRadiantOptions {
+	// Compute the true equator-of-date radiant; defaults to true.
+	readonly includeRadiantOfDate?: boolean
+	// Compute local horizontal coordinates when the context has an observer; defaults to true.
+	readonly includeHorizontal?: boolean
+	// Compute lunar illumination and separation plus altitude when an observer exists; defaults to true.
+	readonly includeMoon?: boolean
+	// Compute solar altitude; defaults to true with an observer.
+	readonly includeSun?: boolean
+	// Compute each supplied profile's ZHR and relative activity; defaults to true.
+	readonly includeActivity?: boolean
+}
+
 // Instantaneous observational state of one meteor-shower solution.
 export interface MeteorShowerState {
 	// Source catalog solution.
 	readonly solution: MeteorShowerSolution
 	// Geocentric geometric solar longitude in the J2000 ecliptic, radians.
 	readonly solarLongitude: Angle
-	// Whether catalog/profile support contains the instant.
-	readonly active: boolean
+	// Whether known catalog/profile support contains the instant, or undefined when neither is known.
+	readonly active?: boolean
 	// ZHR relative to the profile's global maximum, in [0, 1].
 	readonly activityFraction?: number
 	// Profile ZHR in meteors per hour.
@@ -280,6 +310,12 @@ export interface MeteorRadiantOptions {
 	readonly maxExtrapolationSolarLongitude?: Angle
 	// Solar-longitude inversion options used by a daily drift.
 	readonly solarLongitudeSearch?: TimeSearchOptions
+}
+
+// Controls absolute-time radiant path sampling; the step is measured in days.
+export interface MeteorRadiantTimePathOptions extends MeteorRadiantOptions {
+	// Sampling interval in days; defaults to one day and must be finite and positive.
+	readonly step?: number
 }
 
 // A radiant after conversion to the true equator of date and the local geometric horizon.
@@ -448,7 +484,7 @@ export interface MeteorTrackAssociationOptions {
 	readonly maximumCrossTrackError?: Angle
 	// Maximum angular distance from the radiant to the track start, radians.
 	readonly maximumRadiantDistance?: Angle
-	// Require the observed trail direction to move away from the radiant.
+	// Require the observed trail direction to move away from the radiant; defaults to true.
 	readonly requireDirectionCompatibility?: boolean
 }
 
@@ -473,9 +509,9 @@ export interface MeteorHorizontalInput {
 }
 
 // Search options for converting a catalog longitude into a time.
-export interface MeteorSolarLongitudeSearchOptions extends TimeSearchOptions {
+export interface MeteorSolarLongitudeSearchOptions<S> extends TimeSearchOptions {
 	// Output time scale, UTC by default.
-	readonly scale?: import('../time/time').Timescale
+	readonly scale?: S
 }
 
 // Dates derived from catalog activity bounds and an optional external profile.
@@ -491,7 +527,7 @@ export interface MeteorShowerDates {
 }
 
 // Options for deriving shower dates.
-export interface MeteorShowerDateOptions extends MeteorSolarLongitudeSearchOptions {
+export interface MeteorShowerDateOptions<S> extends MeteorSolarLongitudeSearchOptions<S> {
 	// External activity profile that supplies a true maximum.
 	readonly profile?: MeteorActivityProfile
 	// Permit a year-specific solution to be used outside its source year.

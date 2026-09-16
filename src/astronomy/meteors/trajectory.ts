@@ -145,8 +145,8 @@ export function meteorTrackDirectionCompatible(radiant: MeteorRadiant, track: Me
 }
 
 // Composes great-circle residual, radiant-to-start distance and direction diagnostics into one
-// association decision. Optional thresholds constrain only the quantities explicitly configured;
-// degenerate tracks are always incompatible.
+// association decision. Direction compatibility is required unless explicitly disabled, optional
+// thresholds constrain only configured quantities, and degenerate tracks are always incompatible.
 export function associateMeteorTrack(radiant: MeteorRadiant, track: MeteorTrack, options: MeteorTrackAssociationOptions = {}): MeteorTrackAssociation {
 	const residual = meteorRadiantTrackResidual(radiant, track)
 	const direction = meteorTrackDirectionCompatible(radiant, track)
@@ -158,7 +158,7 @@ export function associateMeteorTrack(radiant: MeteorRadiant, track: MeteorTrack,
 		direction !== undefined &&
 		(options.maximumCrossTrackError === undefined || crossTrackError <= options.maximumCrossTrackError) &&
 		(options.maximumRadiantDistance === undefined || radiantDistance <= options.maximumRadiantDistance) &&
-		(options.requireDirectionCompatibility !== true || directionCompatible)
+		(options.requireDirectionCompatibility === false || directionCompatible)
 	return { compatible, crossTrackError, radiantDistance, directionCompatible }
 }
 

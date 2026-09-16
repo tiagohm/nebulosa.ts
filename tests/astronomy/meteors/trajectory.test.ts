@@ -81,9 +81,11 @@ test('track position angle and aggregate association handle wrap and direction',
 	expect(toDeg(aligned.radiantDistance)).toBeCloseTo(10, 12)
 	expect(aligned.directionCompatible).toBe(true)
 
-	const reversed = associateMeteorTrack({ rightAscension: 0, declination: 0 }, { start: equatorial.end, end: equatorial.start }, { requireDirectionCompatibility: true })
+	const reversedTrack = { start: equatorial.end, end: equatorial.start }
+	const reversed = associateMeteorTrack({ rightAscension: 0, declination: 0 }, reversedTrack)
 	expect(reversed.compatible).toBe(false)
 	expect(reversed.directionCompatible).toBe(false)
+	expect(associateMeteorTrack({ rightAscension: 0, declination: 0 }, reversedTrack, { requireDirectionCompatibility: false }).compatible).toBe(true)
 	const offCircle = associateMeteorTrack({ rightAscension: 0, declination: deg(20) }, equatorial, { maximumCrossTrackError: deg(5) })
 	expect(offCircle.compatible).toBe(false)
 	expect(toDeg(offCircle.crossTrackError)).toBeCloseTo(20, 12)

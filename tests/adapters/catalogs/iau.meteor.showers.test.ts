@@ -1,5 +1,9 @@
 import { expect, test } from 'bun:test'
 import { normalizeIauMeteorShowerCatalog, parseIauMeteorShowerCatalog } from '../../../src/adapters/catalogs/iau.meteor.showers'
+import { meteorRadiantPathBetween } from '../../../src/astronomy/meteors/radiant'
+import { meteorSolarLongitude, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
+import { meteorShowerState } from '../../../src/astronomy/meteors/state'
+import { timeShift } from '../../../src/astronomy/time/time'
 import { toDeg } from '../../../src/math/units/angle'
 import { toKilometerPerSecond } from '../../../src/math/units/velocity'
 
@@ -75,4 +79,34 @@ test('normalizes the versioned IAU shower object without inventing activity data
 
 test('rejects an unversioned array root', () => {
 	expect(() => parseIauMeteorShowerCatalog([])).toThrow('versioned object')
+})
+
+test('normalized IAU bounds and daily drift feed time paths and tri-state shower state', () => {
+	const catalog = parseIauMeteorShowerCatalog({
+		source: 'IAU Meteor Data Center',
+		version: 'integration-fixture',
+		count: 1,
+		fields: {},
+		data: [
+			{
+				IAUNo: '7',
+				Code: 'PER',
+				Name: 'Perseids-like fixture',
+				solution: [{ AdNo: '000', activity: 'annual', LoSb: 110, LoSe: 160, LoS: 140, Ra: 48, De: 58, dRa: 1.4, dDe: 0.25, Vg: 59 }],
+			},
+		],
+	})
+	const solution = normalizeIauMeteorShowerCatalog(catalog).showers[0].solutions[0]
+	expect(solution.radiantDrift?.basis).toBe('day')
+	const start = timeAtMeteorSolarLongitude(2024, solution.referenceSolarLongitude!, { step: 7 })
+	const end = timeShift(start, 2)
+	const path = meteorRadiantPathBetween(solution, start, end, { step: 1, solarLongitudeSearch: { step: 7 } })
+
+	expect(path).toHaveLength(3)
+	expect(path[1].rightAscension).toBeGreaterThan(path[0].rightAscension)
+	expect(path[1].declination).toBeGreaterThan(path[0].declination)
+	const context = { time: start, solarLongitude: meteorSolarLongitude(start) }
+	const options = { includeHorizontal: false, includeMoon: false, includeRadiantOfDate: false, includeSun: false } as const
+	expect(meteorShowerState(solution, context, options).active).toBe(true)
+	expect(meteorShowerState({ ...solution, activityInterval: undefined }, context, options).active).toBeUndefined()
 })

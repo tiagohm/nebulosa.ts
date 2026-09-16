@@ -110,7 +110,7 @@ export function meteorObservingWindows(first: MeteorShowerSolution | MeteorActiv
 // selected constraint; the profile itself supplies the activity support when catalog bounds are absent.
 function scoreAt(evaluation: PlannerEvaluation, options: MeteorObservingWindowOptions): number {
 	const state = evaluation.state
-	if (!state.active || !(state.zhr !== undefined && state.zhr > 0) || state.horizontal === undefined || state.sunAltitude === undefined) return -1
+	if (state.active !== true || !(state.zhr !== undefined && state.zhr > 0) || state.horizontal === undefined || state.sunAltitude === undefined) return -1
 	let margin = (options.maximumSolarAltitude ?? deg(-18)) - state.sunAltitude
 	margin = Math.min(margin, state.horizontal.altitude - (options.minimumRadiantAltitude ?? 0))
 	if (options.maximumMoonAltitude !== undefined && state.moonAltitude !== undefined) margin = Math.min(margin, options.maximumMoonAltitude - state.moonAltitude)
@@ -191,14 +191,14 @@ function integrateRate(rateAt: (time: Time) => number, start: Time, end: Time, s
 	const panels = Math.max(1, Math.ceil(duration / step))
 	const h = duration / panels
 
-	let total = 0
-
-	for (let i = 0; i <= panels; i++) {
-		const coefficient = i === 0 || i === panels ? 1 : panels % 2 === 0 ? (i % 2 === 0 ? 2 : 4) : 2
-		total += coefficient * rateAt(timeShift(start, i * h))
+	if (panels % 2 === 0) {
+		let total = 0
+		for (let i = 0; i <= panels; i++) {
+			const coefficient = i === 0 || i === panels ? 1 : i % 2 === 0 ? 2 : 4
+			total += coefficient * rateAt(timeShift(start, i * h))
+		}
+		return ((total * h) / 3) * 24
 	}
-
-	if (panels % 2 === 0) return ((total * h) / 3) * 24
 
 	let trapezoid = 0
 	let previous = rateAt(start)

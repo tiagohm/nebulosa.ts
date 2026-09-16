@@ -30,13 +30,13 @@ export function meteorSolarLongitudeForwardDelta(start: Angle, end: Angle): Angl
 
 // Converts one requested solar longitude into the first occurrence in the civil UTC year. The
 // unwrapped objective remains continuous through the 0/2π seam; the returned instant uses options.scale.
-export function timeAtMeteorSolarLongitude(year: number, longitude: Angle, options: MeteorSolarLongitudeSearchOptions = {}): Time {
+export function timeAtMeteorSolarLongitude(year: number, longitude: Angle, options?: MeteorSolarLongitudeSearchOptions<Timescale>): Time {
 	return meteorSolarLongitudeSolver(year, options)(longitude)
 }
 
 // Converts several solar longitudes within one civil UTC year while sharing the annual epoch,
 // unwrapping convention and coarse mean-motion bracket. Results preserve input order and scale.
-export function meteorSolarLongitudeTimes(year: number, longitudes: readonly Angle[], options: MeteorSolarLongitudeSearchOptions = {}): readonly Time[] {
+export function meteorSolarLongitudeTimes(year: number, longitudes: readonly Angle[], options?: MeteorSolarLongitudeSearchOptions<Timescale>): readonly Time[] {
 	if (longitudes.length === 0) return []
 	const solve = meteorSolarLongitudeSolver(year, options)
 	return longitudes.map(solve)
@@ -45,7 +45,7 @@ export function meteorSolarLongitudeTimes(year: number, longitudes: readonly Ang
 // Prepares one annual inversion context. The seven-day mean-motion bracket is wider than the
 // VSOP87E seasonal equation-of-center displacement; a full-year fallback retains correctness at a
 // civil-year endpoint or when a caller supplies an unusually coarse search step.
-function meteorSolarLongitudeSolver(year: number, options: MeteorSolarLongitudeSearchOptions): (longitude: Angle) => Time {
+function meteorSolarLongitudeSolver(year: number, options?: MeteorSolarLongitudeSearchOptions<Timescale>): (longitude: Angle) => Time {
 	const start = timeYMD(year, 1, 1, 0, Timescale.UTC)
 	const stop = timeYMD(year + 1, 1, 1, 0, Timescale.UTC)
 	const duration = timeSubtract(stop, start, Timescale.UTC)
@@ -71,14 +71,14 @@ function meteorSolarLongitudeSolver(year: number, options: MeteorSolarLongitudeS
 		if (roots.length === 0) roots = searchRoots((time) => unwrapped(time) - target, start, stop, options)
 		const root = roots[0]
 		if (root === undefined) throw new Error(`solar longitude ${longitude} does not occur in calendar year ${year}`)
-		return convertScale(root, options.scale)
+		return convertScale(root, options?.scale)
 	}
 }
 
 // Derives activity dates from the two catalog bounds and mean reference longitude. LoS is exposed as
 // `reference`; `maximum` is populated only when an external profile supplies a maximum longitude.
-export function meteorShowerDates(solution: MeteorShowerSolution, year: number, options: MeteorShowerDateOptions = {}): MeteorShowerDates {
-	if (solution.activity.kind === 'yearSpecific' && solution.activity.year !== undefined && solution.activity.year !== year && !options.extrapolateYearSpecific) return {}
+export function meteorShowerDates(solution: MeteorShowerSolution, year: number, options?: MeteorShowerDateOptions<Timescale>): MeteorShowerDates {
+	if (solution.activity.kind === 'yearSpecific' && solution.activity.year !== undefined && solution.activity.year !== year && !options?.extrapolateYearSpecific) return {}
 
 	const interval = solution.activityInterval
 	const start = interval === undefined ? undefined : timeAtMeteorSolarLongitude(year, interval.start, options)
@@ -90,7 +90,7 @@ export function meteorShowerDates(solution: MeteorShowerSolution, year: number, 
 	}
 
 	const reference = solution.referenceSolarLongitude === undefined ? undefined : timeAtMeteorSolarLongitude(year, solution.referenceSolarLongitude, options)
-	const profile = options.profile
+	const profile = options?.profile
 	const maximumLongitude = profile === undefined ? undefined : meteorActivityMaximumSolarLongitude(profile)
 	const maximum = maximumLongitude === undefined ? undefined : timeAtMeteorSolarLongitude(year, maximumLongitude, options)
 	return { start, reference, end, maximum }
