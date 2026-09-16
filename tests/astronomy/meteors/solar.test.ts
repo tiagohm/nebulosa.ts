@@ -101,8 +101,11 @@ test('shower dates cross the angular seam and honor year-specific policy', () =>
 	expect(timeToDate(dates.maximum!).slice(0, 3)).toEqual([2024, 3, 20])
 
 	expect(meteorShowerDates(YEAR_SPECIFIC_SOLUTION, 2025)).toEqual({})
-	const extrapolated = meteorShowerDates(YEAR_SPECIFIC_SOLUTION, 2025, { extrapolateYearSpecific: true, step: 7 })
+	const extrapolated = meteorShowerDates(YEAR_SPECIFIC_SOLUTION, 2025, { extrapolateYearLimitedActivity: true, step: 7 })
 	expect(extrapolated.start).toBeDefined()
+	const datedOutburst = { ...BASE_SOLUTION, activity: { kind: 'outburst', source: '1989out', year: 1989 } } satisfies MeteorShowerSolution
+	expect(meteorShowerDates(datedOutburst, 2024)).toEqual({})
+	expect(meteorShowerDates(datedOutburst, 2024, { extrapolateYearLimitedActivity: true, step: 7 }).start).toBeDefined()
 
 	const fullYear = { ...BASE_SOLUTION, activityInterval: { start: 0, end: 0, fullCircle: true } } satisfies MeteorShowerSolution
 	const fullYearDates = meteorShowerDates(fullYear, 2024, { step: 7, tolerance: TOLERANCE.time })

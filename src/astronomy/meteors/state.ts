@@ -2,11 +2,11 @@ import { vecAngle } from '../../math/linear-algebra/vec3'
 import { altitudeOf } from '../events/horizon'
 import { type GeographicPosition, localSiderealTime } from '../observer/location'
 import type { Time } from '../time/time'
-import { isMeteorShowerActive, meteorActivityMaximumSolarLongitude, meteorActivityZhr } from './activity'
+import { isMeteorShowerActive, meteorActivityMaximumSolarLongitude, meteorActivityZhr, meteorShowerActivityYearApplies } from './activity'
 import { meteorMoonDirection, meteorMoonIllumination, meteorSunDirection } from './observation'
 import { meteorRadiantHorizontal, meteorRadiantJ2000, meteorRadiantOfDate, meteorRadiantVector } from './radiant'
 import { meteorSolarLongitude } from './solar'
-import type { MeteorActivityProfile, MeteorShowerBatchStateOptions, MeteorShowerComputationContext, MeteorShowerSolution, MeteorShowerState, MeteorShowerStateInput, MeteorShowerStateOptions } from './types'
+import type { MeteorActivityProfile, MeteorShowerBatchStateOptions, MeteorShowerComputationContext, MeteorShowerContextOptions, MeteorShowerSolution, MeteorShowerState, MeteorShowerStateInput, MeteorShowerStateOptions } from './types'
 
 // High-level instantaneous meteor-shower states. A prepared context owns all shared solar, lunar and
 // observer work for one instant; batch evaluation allocates only per-solution result objects and does
@@ -14,7 +14,7 @@ import type { MeteorActivityProfile, MeteorShowerBatchStateOptions, MeteorShower
 
 // Prepares solar longitude and the optional observer/ephemeris values used by one or many shower
 // states. Sun and Moon vectors are evaluated only when their corresponding result groups are enabled.
-export function meteorShowerComputationContext(time: Time, observer?: GeographicPosition, options: MeteorShowerStateOptions = {}): MeteorShowerComputationContext {
+export function meteorShowerComputationContext(time: Time, observer?: GeographicPosition, options: MeteorShowerContextOptions = {}): MeteorShowerComputationContext {
 	return completeContext({ time, solarLongitude: meteorSolarLongitude(time), observer }, options)
 }
 
@@ -36,7 +36,7 @@ export function meteorShowerStates(inputs: readonly MeteorShowerStateInput[], co
 }
 
 // Adds only the common values selected by options, preserving caller-supplied ephemerides.
-function completeContext(context: MeteorShowerComputationContext, options: MeteorShowerBatchStateOptions): MeteorShowerComputationContext {
+function completeContext(context: MeteorShowerComputationContext, options: MeteorShowerContextOptions): MeteorShowerComputationContext {
 	const observer = context.observer
 	const includeHorizontal = options.includeHorizontal ?? observer !== undefined
 	const includeMoon = options.includeMoon ?? true
@@ -56,8 +56,11 @@ function stateFromCompleteContext(solution: MeteorShowerSolution, context: Meteo
 	const includeActivity = options.includeActivity ?? profile !== undefined
 	const profileActive = profile === undefined || !includeActivity ? undefined : isProfileActive(profile, context.solarLongitude)
 	const catalogActive = isMeteorShowerActive(solution.activityInterval, context.solarLongitude)
-	const active = combineActivityState(catalogActive, profileActive)
-	const radiantJ2000 = meteorRadiantJ2000(solution, context, options)?.radiant
+	const supportActive = combineActivityState(catalogActive, profileActive)
+	const active = options.extrapolateYearLimitedActivity === true || meteorShowerActivityYearApplies(solution.activity, context.time) ? supportActive : false
+	const radiantResult = meteorRadiantJ2000(solution, context, options)
+	const radiantJ2000 = radiantResult?.radiant
+	const radiantExtrapolated = radiantResult?.extrapolated
 	const observer = context.observer
 	const includeHorizontal = options.includeHorizontal ?? observer !== undefined
 	const includeMoon = options.includeMoon ?? true
@@ -78,6 +81,7 @@ function stateFromCompleteContext(solution: MeteorShowerSolution, context: Meteo
 		activityFraction,
 		zhr,
 		radiantJ2000,
+		radiantExtrapolated,
 		radiantOfDate,
 		horizontal,
 		moonSeparation,

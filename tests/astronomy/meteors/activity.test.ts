@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
-import { integrateMeteorZhr, isMeteorShowerActive, meteorActivityFraction, meteorActivityIntervalsAboveFraction, meteorActivityMaximumSolarLongitude, meteorActivityPhase, meteorActivityProgress, meteorActivityZhr, meteorExponentialZhr, meteorSolarLongitudeForwardDelta } from '../../../src/astronomy/meteors/activity'
+// oxfmt-ignore
+import { integrateMeteorZhr, isMeteorShowerActive, meteorActivityFraction, meteorActivityIntervalsAboveFraction, meteorActivityMaximumSolarLongitude, meteorActivityPhase, meteorActivityProgress, meteorActivityZhr, meteorExponentialZhr, meteorShowerActivityYearApplies, meteorSolarLongitudeForwardDelta } from '../../../src/astronomy/meteors/activity'
 import type { MeteorActivityProfile } from '../../../src/astronomy/meteors/types'
-import { timeYMDHMS, Timescale } from '../../../src/astronomy/time/time'
+import { timeConvert, timeYMDHMS, Timescale } from '../../../src/astronomy/time/time'
 import { deg, toDeg } from '../../../src/math/units/angle'
 import { EXPONENTIAL_PROFILE, MULTI_PEAK_PROFILE, REFERENCE_UTC, SAMPLED_PROFILE, WRAPPED_EXPONENTIAL_PROFILE, WRAPPED_INTERVAL, ZERO_WIDTH_INTERVAL } from './util'
 
@@ -35,6 +36,17 @@ test('circular intervals handle the 0/2π seam and expose phase', () => {
 	expect(end.progress).toBe(1)
 	expect(end.deltaFromMaximum).toBeCloseTo(deg(20), 14)
 	expect(meteorActivityPhase(WRAPPED_EXPONENTIAL_PROFILE, deg(21)).active).toBe(false)
+})
+
+test('dated activity uses the civil UTC year even for TT and TDB inputs', () => {
+	const utc = timeYMDHMS(2023, 12, 31, 23, 59, 59, Timescale.UTC)
+	const activity = { kind: 'outburst', source: '2023out', year: 2023 } as const
+
+	expect(meteorShowerActivityYearApplies(activity, utc)).toBe(true)
+	expect(meteorShowerActivityYearApplies(activity, timeConvert(utc, Timescale.TT))).toBe(true)
+	expect(meteorShowerActivityYearApplies(activity, timeConvert(utc, Timescale.TDB))).toBe(true)
+	expect(meteorShowerActivityYearApplies(activity, 2024)).toBe(false)
+	expect(meteorShowerActivityYearApplies({ kind: 'annual', source: 'annual', year: 2023 }, 2024)).toBe(true)
 })
 
 test('exponential activity applies degree slopes on both sides of its maximum', () => {

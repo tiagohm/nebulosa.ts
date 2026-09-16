@@ -49,6 +49,8 @@ test('normalizes the versioned IAU shower object without inventing activity data
 						e: 0.72,
 						Ote: 'RAD',
 					},
+					{ AdNo: '002', activity: '2022', LoSb: 100, LoSe: 150, LoS: 120, Ra: 40, De: 50 },
+					{ AdNo: '003', activity: '1989out', LoSb: 100, LoSe: 150, LoS: 120, Ra: 40, De: 50 },
 				],
 			},
 		],
@@ -67,7 +69,7 @@ test('normalizes the versioned IAU shower object without inventing activity data
 	expect(solution.reference).toBe('<A>reference</A>')
 	expect(shower.code).toBe('TST')
 	expect(shower.provisionalName).toBe('M2026-X1')
-	expect(shower.solutions).toHaveLength(2)
+	expect(shower.solutions).toHaveLength(4)
 	expect(shower.solutions[1].activity).toEqual({ kind: 'annual', source: 'annual', year: undefined })
 	expect(shower.solutions[1].declination).toBeUndefined()
 	expect(shower.solutions[1].referenceSolarLongitude).toBeUndefined()
@@ -75,6 +77,8 @@ test('normalizes the versioned IAU shower object without inventing activity data
 	expect(shower.solutions[1].orbit).toEqual({ semiMajorAxis: undefined, perihelionDistance: 0.91, eccentricity: 0.72, argumentOfPerihelion: undefined, longitudeOfAscendingNode: undefined, inclination: undefined })
 	expect(shower.solutions[1].observationTechnique).toBe('radar')
 	expect(shower.solutions[1].parentBody).toBeUndefined()
+	expect(shower.solutions[2].activity).toEqual({ kind: 'yearSpecific', source: '2022', year: 2022 })
+	expect(shower.solutions[3].activity).toEqual({ kind: 'outburst', source: '1989out', year: 1989 })
 })
 
 test('rejects an unversioned array root', () => {
@@ -92,13 +96,13 @@ test('normalized IAU bounds and daily drift feed time paths and tri-state shower
 				IAUNo: '7',
 				Code: 'PER',
 				Name: 'Perseids-like fixture',
-				solution: [{ AdNo: '000', activity: 'annual', LoSb: 110, LoSe: 160, LoS: 140, Ra: 48, De: 58, dRa: 1.4, dDe: 0.25, Vg: 59 }],
+				solution: [{ AdNo: '000', activity: '2022', LoSb: 110, LoSe: 160, LoS: 140, Ra: 48, De: 58, dRa: 1.4, dDe: 0.25, Vg: 59 }],
 			},
 		],
 	})
 	const solution = normalizeIauMeteorShowerCatalog(catalog).showers[0].solutions[0]
 	expect(solution.radiantDrift?.basis).toBe('day')
-	const start = timeAtMeteorSolarLongitude(2024, solution.referenceSolarLongitude!, { step: 7 })
+	const start = timeAtMeteorSolarLongitude(2022, solution.referenceSolarLongitude!, { step: 7 })
 	const end = timeShift(start, 2)
 	const path = meteorRadiantPathBetween(solution, start, end, { step: 1, solarLongitudeSearch: { step: 7 } })
 
@@ -109,4 +113,6 @@ test('normalized IAU bounds and daily drift feed time paths and tri-state shower
 	const options = { includeHorizontal: false, includeMoon: false, includeRadiantOfDate: false, includeSun: false } as const
 	expect(meteorShowerState(solution, context, options).active).toBe(true)
 	expect(meteorShowerState({ ...solution, activityInterval: undefined }, context, options).active).toBeUndefined()
+	const future = timeAtMeteorSolarLongitude(2026, solution.referenceSolarLongitude!, { step: 7 })
+	expect(meteorShowerState(solution, { time: future, solarLongitude: meteorSolarLongitude(future) }, options).active).toBe(false)
 })

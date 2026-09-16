@@ -4,7 +4,7 @@ import { relativePositionAndVelocity, type PositionAndVelocity } from '../coordi
 import { earth, sun } from '../ephemeris/models/analytical/vsop87e'
 import { searchRoots } from '../events/search'
 import { Timescale, type Time, timeConvert, timeShift, timeSubtract, timeYMD } from '../time/time'
-import { meteorActivityMaximumSolarLongitude } from './activity'
+import { meteorActivityMaximumSolarLongitude, meteorShowerActivityYearApplies } from './activity'
 import type { MeteorShowerDates, MeteorShowerDateOptions, MeteorShowerSolution, MeteorSolarLongitudeSearchOptions } from './types'
 
 // Solar-longitude calculations for meteor showers. The longitude is geometric and geocentric in
@@ -78,7 +78,7 @@ function meteorSolarLongitudeSolver(year: number, options?: MeteorSolarLongitude
 // Derives activity dates from the two catalog bounds and mean reference longitude. LoS is exposed as
 // `reference`; `maximum` is populated only when an external profile supplies a maximum longitude.
 export function meteorShowerDates(solution: MeteorShowerSolution, year: number, options?: MeteorShowerDateOptions<Timescale>): MeteorShowerDates {
-	if (solution.activity.kind === 'yearSpecific' && solution.activity.year !== undefined && solution.activity.year !== year && !options?.extrapolateYearSpecific) return {}
+	if (!meteorShowerActivityYearApplies(solution.activity, year) && !options?.extrapolateYearLimitedActivity) return {}
 
 	const interval = solution.activityInterval
 	const start = interval === undefined ? undefined : timeAtMeteorSolarLongitude(year, interval.start, options)

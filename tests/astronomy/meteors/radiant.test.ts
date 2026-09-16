@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test'
-import { meteorRadiantDegrees, meteorRadiantHorizontal, meteorRadiantJ2000, meteorRadiantMaximumAltitude, meteorRadiantOfDate, meteorRadiantPath, meteorRadiantPathBetween, meteorRadiantRiseTransitSet, meteorRadiantVector, meteorRadiantVisibility } from '../../../src/astronomy/meteors/radiant'
+// oxfmt-ignore
+import { meteorRadiantDegrees, meteorRadiantHorizontal, meteorRadiantJ2000, meteorRadiantMaximumAltitude, meteorRadiantOfDate, meteorRadiantPath, meteorRadiantPathBetween, meteorRadiantPathSegmentsBetween, meteorRadiantRiseTransitSet, meteorRadiantVector, meteorRadiantVisibility } from '../../../src/astronomy/meteors/radiant'
 import { meteorSolarLongitude, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import type { MeteorComputationContext, MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
-import { timeShift, timeYMDHMS, Timescale, type Time } from '../../../src/astronomy/time/time'
+import { timeShift, timeSubtract, timeYMDHMS, Timescale, type Time } from '../../../src/astronomy/time/time'
 import { deg, toDeg } from '../../../src/math/units/angle'
 import { ASTROPY_HORIZONTAL, ASTROPY_RADIANT_OF_DATE, BASE_SOLUTION, DAILY_DRIFT_SOLUTION, MISSING_RADIANT_SOLUTION, OBSERVER, REFERENCE_UTC, SITE_EPOCH, SITE_EPOCH_END, SOLAR_DRIFT_SOLUTION, TOLERANCE } from './util'
 
@@ -38,10 +39,12 @@ test('radiant path applies drift across ordinary and wrapped longitude intervals
 		expect(toDeg(ordinary[index].rightAscension)).toBeCloseTo([357, 359, 1][index], 12)
 		expect(toDeg(ordinary[index].declination)).toBeCloseTo(9 + index, 12)
 	}
+	expect(ordinary.map((point) => point.extrapolated)).toEqual([true, false, true])
 
 	const wrapped = meteorRadiantPath({ ...BASE_SOLUTION, radiantDrift: undefined }, deg(359), deg(1), deg(1))
 	for (let index = 0; index < wrapped.length; index++) expect(toDeg(wrapped[index].solarLongitude)).toBeCloseTo([359, 0, 1][index], 12)
 	expect(wrapped.every((point) => point.rightAscension === BASE_SOLUTION.rightAscension)).toBe(true)
+	expect(wrapped.every((point) => point.extrapolated === false)).toBe(true)
 	expect(() => meteorRadiantPath(BASE_SOLUTION, 0, 1, 0)).toThrow('finite and positive')
 	expect(() => meteorRadiantPath(DAILY_DRIFT_SOLUTION, 0, 1, deg(1))).toThrow('absolute time')
 })
@@ -53,6 +56,8 @@ test('absolute-time radiant paths sample fixed, solar and daily drift through th
 
 	expect(daily).toHaveLength(4)
 	expect(daily.at(-1)!.time).toBe(end)
+	expect(daily.map((point) => point.extrapolated)).toEqual([false, true, true, true])
+	expect(meteorRadiantPathBetween(DAILY_DRIFT_SOLUTION, timeShift(start, -1), start, { step: 1, solarLongitudeSearch: { step: 7, tolerance: TOLERANCE.time } }).map((point) => point.extrapolated)).toEqual([true, false])
 	for (let index = 0; index < daily.length; index++) {
 		expect(daily[index].solarLongitude).toBeCloseTo(meteorSolarLongitude(daily[index].time), 14)
 		expect(toDeg(daily[index].rightAscension)).toBeCloseTo([359, 0, 1, 1.5][index], 5)
@@ -62,6 +67,7 @@ test('absolute-time radiant paths sample fixed, solar and daily drift through th
 	const fixed = meteorRadiantPathBetween(BASE_SOLUTION, start, end, { step: 1 })
 	expect(fixed).toHaveLength(4)
 	expect(fixed.every((point) => point.rightAscension === BASE_SOLUTION.rightAscension)).toBe(true)
+	expect(fixed.every((point) => point.extrapolated === false)).toBe(true)
 	const solarStart = timeAtMeteorSolarLongitude(2024, SOLAR_DRIFT_SOLUTION.referenceSolarLongitude, { step: 7, tolerance: TOLERANCE.time })
 	const solar = meteorRadiantPathBetween(SOLAR_DRIFT_SOLUTION, solarStart, timeShift(solarStart, 2.5), { step: 1 })
 	expect(solar).toHaveLength(4)
@@ -69,6 +75,42 @@ test('absolute-time radiant paths sample fixed, solar and daily drift through th
 		expect(point).toMatchObject(meteorRadiantJ2000(SOLAR_DRIFT_SOLUTION, context(point.time, point.solarLongitude))!.radiant)
 		expect(point).toMatchObject(meteorRadiantPath(SOLAR_DRIFT_SOLUTION, point.solarLongitude, point.solarLongitude, deg(1))[0])
 	}
+})
+
+test('segmented time paths preserve unavailable gaps without changing the flat path', () => {
+	const start = timeAtMeteorSolarLongitude(2024, 0, { step: 7, tolerance: TOLERANCE.time })
+	const gapSolution = {
+		...BASE_SOLUTION,
+		referenceSolarLongitude: 0,
+		declination: 0,
+		radiantDrift: { basis: 'solarLongitude', rightAscensionRate: 0, declinationRate: 1 },
+	} satisfies MeteorShowerSolution
+	const end = timeShift(start, 365)
+	const segments = meteorRadiantPathSegmentsBetween(gapSolution, start, end, { step: 60 })
+	const flat = meteorRadiantPathBetween(gapSolution, start, end, { step: 60 })
+
+	expect(segments).toHaveLength(2)
+	expect(segments.every((segment) => segment.length > 0)).toBe(true)
+	expect(flat).toHaveLength(segments[0].length + segments[1].length)
+	expect(flat[0].rightAscension).toBeCloseTo(segments[0][0].rightAscension, 14)
+	expect(flat.at(-1)!.rightAscension).toBeCloseTo(segments[1].at(-1)!.rightAscension, 14)
+	expect(meteorRadiantPathSegmentsBetween(BASE_SOLUTION, start, end, { step: 60 })).toEqual([meteorRadiantPathBetween(BASE_SOLUTION, start, end, { step: 60 })])
+	expect(meteorRadiantPathSegmentsBetween(MISSING_RADIANT_SOLUTION, start, end, { step: 60 })).toEqual([])
+	expect(meteorRadiantPathSegmentsBetween(gapSolution, start, timeShift(start, 730), { step: 60 })).toHaveLength(3)
+})
+
+test('segmented time paths preserve unavailable gaps at both interval edges', () => {
+	const reference = timeAtMeteorSolarLongitude(2024, DAILY_DRIFT_SOLUTION.referenceSolarLongitude, { step: 7, tolerance: TOLERANCE.time })
+	const options = { step: 1, maxExtrapolationDays: 0.1, solarLongitudeSearch: { step: 7, tolerance: TOLERANCE.time } } as const
+	const gapAtStart = meteorRadiantPathSegmentsBetween(DAILY_DRIFT_SOLUTION, timeShift(reference, -2), reference, options)
+	const gapAtEnd = meteorRadiantPathSegmentsBetween(DAILY_DRIFT_SOLUTION, reference, timeShift(reference, 2), options)
+
+	expect(gapAtStart).toHaveLength(1)
+	expect(gapAtStart[0]).toHaveLength(1)
+	expect(gapAtStart[0][0].time).toBe(reference)
+	expect(gapAtEnd).toHaveLength(1)
+	expect(gapAtEnd[0]).toHaveLength(1)
+	expect(timeSubtract(gapAtEnd[0][0].time, reference)).toBeCloseTo(0, 14)
 })
 
 test('absolute-time radiant paths handle year boundaries, unavailable samples and limits', () => {

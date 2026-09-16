@@ -194,13 +194,14 @@ function normalizeOrbit(raw: IauMeteorShowerRecord) {
 
 function activityOf(source: string): MeteorShowerActivity {
 	const value = source.trim().toLowerCase()
-	const year = /^(\d{4})(?:\/\d{2})?$/.exec(value)?.[1]
+	const year = /^(\d{4})(?:\/\d{2}|out)?$/.exec(value)?.[1]
 	let kind: MeteorShowerActivity['kind'] = 'unknown'
 	if (value === 'annual' || value === 'annual?' || value === 'periodic') kind = 'annual'
-	else if (year !== undefined) kind = 'yearSpecific'
+	else if (value.endsWith('out')) kind = 'outburst'
+	else if (/^\d{4}(?:\/\d{2})?$/.test(value)) kind = 'yearSpecific'
 	else if (value === 'variable') kind = 'variable'
 	else if (value === 'irr.' || value === 'irregular') kind = 'irregular'
-	else if (value.includes('outburst') || value.endsWith('out')) kind = 'outburst'
+	else if (value.includes('outburst')) kind = 'outburst'
 	else if (value === 'episodic') kind = 'irregular'
 	return { kind, source, year: year === undefined ? undefined : Number(year) }
 }

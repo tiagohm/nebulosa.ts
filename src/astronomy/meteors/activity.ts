@@ -2,9 +2,9 @@ import { PI, TAU } from '../../core/constants'
 import { brentMinimize } from '../../math/numerical/optimization'
 import { pchip } from '../../math/numerical/spline'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
-import { timeShift, timeSubtract, type Time } from '../time/time'
+import { timeConvert, timeShift, timeSubtract, timeToDate, Timescale, type Time } from '../time/time'
 import { meteorSolarLongitude } from './solar'
-import type { MeteorActivityPhase, MeteorActivityProfile, MeteorExponentialActivityProfile, MeteorSampledActivityProfile, MeteorSolarLongitudeInterval } from './types'
+import type { MeteorActivityPhase, MeteorActivityProfile, MeteorExponentialActivityProfile, MeteorSampledActivityProfile, MeteorShowerActivity, MeteorSolarLongitudeInterval } from './types'
 
 // Meteor activity profiles and visual-rate mathematics. Catalog support intervals only decide where
 // a shower is active; ZHR profiles are explicit caller-supplied data. Solar-longitude coordinates are
@@ -19,6 +19,14 @@ export function isMeteorShowerActive(interval: MeteorSolarLongitudeInterval | un
 	const width = meteorSolarLongitudeIntervalWidth(interval)
 	if (width === 0) return false
 	return meteorSolarLongitudeForwardDelta(interval.start, solarLongitude) <= width
+}
+
+// Tests whether a dated observation or outburst applies to an instant or requested civil UTC year.
+// A matching year is only a gate: longitude/profile support must still establish actual activity.
+export function meteorShowerActivityYearApplies(activity: MeteorShowerActivity, timeOrYear: Time | number): boolean {
+	if (activity.year === undefined || (activity.kind !== 'yearSpecific' && activity.kind !== 'outburst')) return true
+	const year = typeof timeOrYear === 'number' ? timeOrYear : timeToDate(timeConvert(timeOrYear, Timescale.UTC))[0]
+	return year === activity.year
 }
 
 // Returns progress through a known active interval, in [0, 1]. A full circle uses start as its phase

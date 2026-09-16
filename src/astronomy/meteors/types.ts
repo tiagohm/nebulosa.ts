@@ -55,7 +55,7 @@ export interface MeteorShowerActivity {
 	readonly kind: 'annual' | 'yearSpecific' | 'outburst' | 'variable' | 'irregular' | 'unknown'
 	// Original source text, including unrecognized values.
 	readonly source: string
-	// First calendar year for a year-specific activity label.
+	// Calendar year encoded by a year-limited observation or dated outburst label.
 	readonly year?: number
 }
 
@@ -181,6 +181,8 @@ export interface MeteorRadiant {
 export interface MeteorRadiantPathPoint extends MeteorRadiant {
 	// Geocentric solar longitude in radians, normalized to [0, 2π).
 	readonly solarLongitude: Angle
+	// True when a published drift model was evaluated away from its reference point.
+	readonly extrapolated: boolean
 }
 
 // One absolute-time radiant sample, including its corresponding solar longitude.
@@ -188,6 +190,9 @@ export interface TimedMeteorRadiantPathPoint extends MeteorRadiantPathPoint {
 	// Instant at which the radiant and solar longitude were evaluated.
 	readonly time: Time
 }
+
+// One continuous run of available absolute-time radiant samples.
+export type TimedMeteorRadiantPathSegment = readonly TimedMeteorRadiantPathPoint[]
 
 // Highest visible geometric radiant position found in a bounded time interval.
 export interface MeteorRadiantMaximumAltitude {
@@ -222,6 +227,16 @@ export interface MeteorShowerComputationContext extends MeteorComputationContext
 	readonly observer?: GeographicPosition
 }
 
+// Controls only the observer and ephemeris values prepared in a shared shower context.
+export interface MeteorShowerContextOptions {
+	// Prepare local sidereal time for horizontal coordinates; defaults to true with an observer.
+	readonly includeHorizontal?: boolean
+	// Prepare Sun and Moon vectors for lunar quantities; defaults to true.
+	readonly includeMoon?: boolean
+	// Prepare the Sun vector for solar altitude; defaults to true with an observer.
+	readonly includeSun?: boolean
+}
+
 // Controls which optional quantities an instantaneous shower-state calculation evaluates.
 export interface MeteorShowerStateOptions extends MeteorRadiantOptions {
 	// Activity profile used for ZHR and relative activity.
@@ -238,6 +253,8 @@ export interface MeteorShowerStateOptions extends MeteorRadiantOptions {
 	readonly includeSun?: boolean
 	// Compute profile ZHR and relative activity; defaults to true when a profile is supplied.
 	readonly includeActivity?: boolean
+	// Permit a dated observation or outburst to be evaluated outside its catalog year.
+	readonly extrapolateYearLimitedActivity?: boolean
 }
 
 // One solution and its independent activity inputs for a shared-context batch calculation.
@@ -262,6 +279,8 @@ export interface MeteorShowerBatchStateOptions extends MeteorRadiantOptions {
 	readonly includeSun?: boolean
 	// Compute each supplied profile's ZHR and relative activity; defaults to true.
 	readonly includeActivity?: boolean
+	// Permit dated observations or outbursts to be evaluated outside their catalog years.
+	readonly extrapolateYearLimitedActivity?: boolean
 }
 
 // Instantaneous observational state of one meteor-shower solution.
@@ -278,6 +297,8 @@ export interface MeteorShowerState {
 	readonly zhr?: number
 	// Geocentric equatorial J2000 radiant.
 	readonly radiantJ2000?: MeteorRadiant
+	// True when the radiant drift model was evaluated away from its reference point.
+	readonly radiantExtrapolated?: boolean
 	// Radiant transformed to the true equator/equinox of date.
 	readonly radiantOfDate?: MeteorRadiant
 	// Local geometric radiant coordinates, including altitude and north-through-east azimuth.
@@ -530,8 +551,8 @@ export interface MeteorShowerDates {
 export interface MeteorShowerDateOptions<S> extends MeteorSolarLongitudeSearchOptions<S> {
 	// External activity profile that supplies a true maximum.
 	readonly profile?: MeteorActivityProfile
-	// Permit a year-specific solution to be used outside its source year.
-	readonly extrapolateYearSpecific?: boolean
+	// Permit a dated observation or outburst to be used outside its source year.
+	readonly extrapolateYearLimitedActivity?: boolean
 }
 
 // A local visibility classification based on a complete RiseTransitSet result.

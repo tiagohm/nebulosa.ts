@@ -156,3 +156,8 @@ test('an unavailable drifting radiant removes the candidate window', () => {
 	const windows = meteorObservingWindows(polar, EXPONENTIAL_PROFILE, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, DAY_OPTIONS)
 	expect(windows).toEqual([])
 })
+
+test('planner rejects a year-limited solution outside its catalog year', () => {
+	const yearSpecific = { ...BASE_SOLUTION, activity: { kind: 'yearSpecific', source: '2022', year: 2022 } } satisfies MeteorShowerSolution
+	expect(meteorObservingWindows(yearSpecific, EXPONENTIAL_PROFILE, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, DAY_OPTIONS)).toEqual([])
+})
