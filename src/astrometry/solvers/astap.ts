@@ -108,9 +108,8 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 	executable ||= executableForCurrentPlatform()
 	timeout ||= DEFAULT_TIMEOUT
 
-	const commands = [executable, '-o', ini.name!, '-z', downsample.toFixed(0), '-f', input, '-wcs']
+	const commands = [executable, '-o', ini.name!, '-z', downsample.toFixed(0), '-f', input, '-wcs', '-fov', `${fov}`]
 
-	if (fov) commands.push('-fov', `${fov}`)
 	if (sip) commands.push('-sip')
 	// CLI RA/Dec override the FITS header; send them only when the caller supplied a center.
 	if (rightAscension !== undefined && declination !== undefined) commands.push('-ra', `${toHour(normalizeAngle(rightAscension))}`, '-spd', `${toDeg(declination) + 90}`)
