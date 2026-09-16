@@ -4,7 +4,7 @@ import { deg, normalizeAngle } from '../../math/units/angle'
 import { searchExtrema, searchRoots } from '../events/search'
 import type { GeographicPosition } from '../observer/location'
 import { type Time, timeShift, timeSubtract, timeToDate, utc } from '../time/time'
-import { meteorActivityMaximumZhr } from './activity'
+import { isMeteorShowerActivityYearLimited, meteorActivityMaximumZhr } from './activity'
 import { meteorSolarLongitudeTimes } from './solar'
 import { meteorShowerComputationContext, meteorShowerState } from './state'
 import type { MeteorActivityProfile, MeteorObservingConditions, MeteorObservingWindow, MeteorObservingWindowOptions, MeteorShowerSolution, MeteorShowerState, MeteorSolarLongitudeInterval } from './types'
@@ -328,10 +328,12 @@ function plannerCandidateIntervals(profile: MeteorActivityProfile, activity: Met
 
 	let firstYear = timeToDate(utc(start))[0] - 1
 	let lastYear = timeToDate(utc(end))[0]
-	if (activity.years !== undefined && options.extrapolateYearLimitedActivity !== true) {
+	const yearLimited = isMeteorShowerActivityYearLimited(activity)
+
+	if (yearLimited && options.extrapolateYearLimitedActivity !== true) {
 		// Keep the preceding candidate because a solar-longitude span can cross into the first valid civil year.
-		firstYear = Math.max(firstYear, activity.years.start - 1)
-		lastYear = Math.min(lastYear, activity.years.end)
+		firstYear = Math.max(firstYear, activity.years!.start - 1)
+		lastYear = Math.min(lastYear, activity.years!.end)
 		if (lastYear < firstYear) return []
 	}
 

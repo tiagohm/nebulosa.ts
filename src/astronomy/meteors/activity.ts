@@ -43,13 +43,16 @@ export function isMeteorShowerActive(interval: MeteorSolarLongitudeInterval | un
 	return meteorSolarLongitudeForwardDelta(interval.start, solarLongitude) <= width
 }
 
+export function isMeteorShowerActivityYearLimited(activity: MeteorShowerActivity): boolean {
+	return activity.years !== undefined && (activity.kind === 'yearSpecific' || activity.kind === 'outburst')
+}
+
 // Tests whether a dated observation or outburst applies to an instant or requested civil UTC year.
 // Membership in the inclusive range is only a gate: support must still establish actual activity.
 export function meteorShowerActivityYearApplies(activity: MeteorShowerActivity, timeOrYear: Time | number): boolean {
-	const years = activity.years
-	if (years === undefined || (activity.kind !== 'yearSpecific' && activity.kind !== 'outburst')) return true
+	if (!isMeteorShowerActivityYearLimited(activity)) return true
 	const year = typeof timeOrYear === 'number' ? timeOrYear : timeToDate(utc(timeOrYear))[0]
-	return year >= years.start && year <= years.end
+	return year >= activity.years!.start && year <= activity.years!.end
 }
 
 // Returns progress through a known active interval, in [0, 1]. A full circle uses start as its phase
