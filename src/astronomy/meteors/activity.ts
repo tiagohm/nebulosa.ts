@@ -22,11 +22,12 @@ export function isMeteorShowerActive(interval: MeteorSolarLongitudeInterval | un
 }
 
 // Tests whether a dated observation or outburst applies to an instant or requested civil UTC year.
-// A matching year is only a gate: longitude/profile support must still establish actual activity.
+// Membership in the inclusive range is only a gate: support must still establish actual activity.
 export function meteorShowerActivityYearApplies(activity: MeteorShowerActivity, timeOrYear: Time | number): boolean {
-	if (activity.year === undefined || (activity.kind !== 'yearSpecific' && activity.kind !== 'outburst')) return true
+	const years = activity.years
+	if (years === undefined || (activity.kind !== 'yearSpecific' && activity.kind !== 'outburst')) return true
 	const year = typeof timeOrYear === 'number' ? timeOrYear : timeToDate(timeConvert(timeOrYear, Timescale.UTC))[0]
-	return year === activity.year
+	return year >= years.start && year <= years.end
 }
 
 // Returns progress through a known active interval, in [0, 1]. A full circle uses start as its phase

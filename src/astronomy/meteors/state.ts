@@ -57,7 +57,8 @@ function stateFromCompleteContext(solution: MeteorShowerSolution, context: Meteo
 	const profileActive = profile === undefined || !includeActivity ? undefined : isProfileActive(profile, context.solarLongitude)
 	const catalogActive = isMeteorShowerActive(solution.activityInterval, context.solarLongitude)
 	const supportActive = combineActivityState(catalogActive, profileActive)
-	const active = options.extrapolateYearLimitedActivity === true || meteorShowerActivityYearApplies(solution.activity, context.time) ? supportActive : false
+	const yearApplies = options.extrapolateYearLimitedActivity === true || meteorShowerActivityYearApplies(solution.activity, context.time)
+	const active = yearApplies ? supportActive : false
 	const radiantResult = meteorRadiantJ2000(solution, context, options)
 	const radiantJ2000 = radiantResult?.radiant
 	const radiantExtrapolated = radiantResult?.extrapolated

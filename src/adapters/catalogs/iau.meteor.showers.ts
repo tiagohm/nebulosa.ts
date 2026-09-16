@@ -1,4 +1,4 @@
-import type { MeteorCatalogMetadata, MeteorObservationTechnique, MeteorShower, MeteorShowerActivity, MeteorShowerSolution, MeteorShowerSolutionSelector, MeteorShowerStatus } from '../../astronomy/meteors/types'
+import type { MeteorCatalogMetadata, MeteorObservationTechnique, MeteorShower, MeteorShowerActivity, MeteorShowerActivityYearRange, MeteorShowerSolution, MeteorShowerSolutionSelector, MeteorShowerStatus } from '../../astronomy/meteors/types'
 import { deg, normalizeAngle } from '../../math/units/angle'
 import { kilometerPerSecond } from '../../math/units/velocity'
 
@@ -192,18 +192,58 @@ function normalizeOrbit(raw: IauMeteorShowerRecord) {
 	}
 }
 
+const DATED_OUTBURST_PATTERN = /^(\d{4})out$/
+
 function activityOf(source: string): MeteorShowerActivity {
 	const value = source.trim().toLowerCase()
-	const year = /^(\d{4})(?:\/\d{2}|out)?$/.exec(value)?.[1]
-	let kind: MeteorShowerActivity['kind'] = 'unknown'
-	if (value === 'annual' || value === 'annual?' || value === 'periodic') kind = 'annual'
-	else if (value.endsWith('out')) kind = 'outburst'
-	else if (/^\d{4}(?:\/\d{2})?$/.test(value)) kind = 'yearSpecific'
-	else if (value === 'variable') kind = 'variable'
-	else if (value === 'irr.' || value === 'irregular') kind = 'irregular'
-	else if (value.includes('outburst')) kind = 'outburst'
-	else if (value === 'episodic') kind = 'irregular'
-	return { kind, source, year: year === undefined ? undefined : Number(year) }
+	if (value === 'annual' || value === 'annual?' || value === 'periodic') return { kind: 'annual', source }
+
+	const datedOutburst = DATED_OUTBURST_PATTERN.exec(value)
+	if (datedOutburst !== null) {
+		const year = Number(datedOutburst[1])
+		return { kind: 'outburst', source, years: { start: year, end: year } }
+	}
+
+	const years = activityYears(value)
+	if (years !== undefined) return { kind: 'yearSpecific', source, years }
+	if (value === 'variable') return { kind: 'variable', source }
+	if (value === 'irr.' || value === 'irregular' || value === 'episodic') return { kind: 'irregular', source }
+	if (value.includes('outburst')) return { kind: 'outburst', source }
+	return { kind: 'unknown', source }
+}
+
+const SINGLE_YEAR_PATTERN = /^(\d{4})(?:\/\d{2})?$/
+const SHORT_RANGE_YEAR_PATTERN = /^(\d{4})-(\d{2})$/
+const FULL_RANGE_YEAR_PATTERN = /^(\d{4})-(\d{4})$/
+
+// Parses supported MDC single-year and inclusive multi-year labels. Month suffixes remain only in
+// source because solar-longitude bounds provide the astronomical within-year activity support.
+function activityYears(value: string): MeteorShowerActivityYearRange | undefined {
+	const single = SINGLE_YEAR_PATTERN.exec(value)
+	if (single !== null) {
+		const year = Number(single[1])
+		return { start: year, end: year }
+	}
+
+	const shortRange = SHORT_RANGE_YEAR_PATTERN.exec(value)
+	if (shortRange !== null) {
+		const start = Number(shortRange[1])
+		return { start, end: expandShortEndYear(start, Number(shortRange[2])) }
+	}
+
+	const fullRange = FULL_RANGE_YEAR_PATTERN.exec(value)
+	if (fullRange === null) return undefined
+
+	const start = Number(fullRange[1])
+	const end = Number(fullRange[2])
+	return end >= start ? { start, end } : undefined
+}
+
+// Expands a two-digit inclusive end year in the first matching or following century.
+function expandShortEndYear(start: number, suffix: number): number {
+	const century = Math.floor(start / 100) * 100
+	const end = century + suffix
+	return end < start ? end + 100 : end
 }
 
 function statusOf(value: number | undefined): MeteorShowerStatus {

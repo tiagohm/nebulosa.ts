@@ -74,16 +74,17 @@ test('state applies dated observation and outburst years only as an activity gat
 	const stateAt = (activity: MeteorShowerActivity, year: number, activityInterval: MeteorShowerSolution['activityInterval']) => meteorShowerState({ ...BASE_SOLUTION, activity, activityInterval }, { time: timeYMDHMS(year, 6, 1, 0, 0, 0, Timescale.UTC), solarLongitude: deg(100) }, quietOptions).active
 
 	expect(stateAt({ kind: 'annual', source: 'annual' }, 2026, activeInterval)).toBe(true)
-	expect(stateAt({ kind: 'yearSpecific', source: '2022', year: 2022 }, 2022, activeInterval)).toBe(true)
-	expect(stateAt({ kind: 'yearSpecific', source: '2022', year: 2022 }, 2026, activeInterval)).toBe(false)
-	expect(stateAt({ kind: 'yearSpecific', source: '2022', year: 2022 }, 2022, inactiveInterval)).toBe(false)
-	expect(stateAt({ kind: 'yearSpecific', source: '2022', year: 2022 }, 2022, undefined)).toBeUndefined()
-	expect(stateAt({ kind: 'outburst', source: '1989out', year: 1989 }, 1989, activeInterval)).toBe(true)
-	expect(stateAt({ kind: 'outburst', source: '1989out', year: 1989 }, 2026, activeInterval)).toBe(false)
+	expect(stateAt({ kind: 'yearSpecific', source: '2022', years: { start: 2022, end: 2022 } }, 2022, activeInterval)).toBe(true)
+	expect(stateAt({ kind: 'yearSpecific', source: '2022', years: { start: 2022, end: 2022 } }, 2026, activeInterval)).toBe(false)
+	expect(stateAt({ kind: 'yearSpecific', source: '2022', years: { start: 2022, end: 2022 } }, 2022, inactiveInterval)).toBe(false)
+	expect(stateAt({ kind: 'yearSpecific', source: '2022', years: { start: 2022, end: 2022 } }, 2022, undefined)).toBeUndefined()
+	expect(stateAt({ kind: 'outburst', source: '1989out', years: { start: 1989, end: 1989 } }, 1989, activeInterval)).toBe(true)
+	expect(stateAt({ kind: 'outburst', source: '1989out', years: { start: 1989, end: 1989 } }, 2026, activeInterval)).toBe(false)
+	expect([2013, 2014, 2015, 2016, 2017].map((year) => stateAt({ kind: 'yearSpecific', source: '2014-16', years: { start: 2014, end: 2016 } }, year, activeInterval))).toEqual([false, true, true, true, false])
 	expect(stateAt({ kind: 'variable', source: 'variable' }, 2026, activeInterval)).toBe(true)
 	expect(stateAt({ kind: 'unknown', source: '' }, 2026, undefined)).toBeUndefined()
 
-	const extrapolated = meteorShowerState({ ...BASE_SOLUTION, activity: { kind: 'yearSpecific', source: '2022', year: 2022 } }, { time: timeYMDHMS(2026, 6, 1, 0, 0, 0, Timescale.UTC), solarLongitude: deg(100) }, { ...quietOptions, extrapolateYearLimitedActivity: true })
+	const extrapolated = meteorShowerState({ ...BASE_SOLUTION, activity: { kind: 'yearSpecific', source: '2022', years: { start: 2022, end: 2022 } } }, { time: timeYMDHMS(2026, 6, 1, 0, 0, 0, Timescale.UTC), solarLongitude: deg(100) }, { ...quietOptions, extrapolateYearLimitedActivity: true })
 	expect(extrapolated.active).toBe(true)
 })
 

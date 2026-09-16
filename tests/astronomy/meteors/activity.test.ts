@@ -40,13 +40,23 @@ test('circular intervals handle the 0/2π seam and expose phase', () => {
 
 test('dated activity uses the civil UTC year even for TT and TDB inputs', () => {
 	const utc = timeYMDHMS(2023, 12, 31, 23, 59, 59, Timescale.UTC)
-	const activity = { kind: 'outburst', source: '2023out', year: 2023 } as const
+	const activity = { kind: 'outburst', source: '2023out', years: { start: 2023, end: 2023 } } as const
 
 	expect(meteorShowerActivityYearApplies(activity, utc)).toBe(true)
 	expect(meteorShowerActivityYearApplies(activity, timeConvert(utc, Timescale.TT))).toBe(true)
 	expect(meteorShowerActivityYearApplies(activity, timeConvert(utc, Timescale.TDB))).toBe(true)
 	expect(meteorShowerActivityYearApplies(activity, 2024)).toBe(false)
-	expect(meteorShowerActivityYearApplies({ kind: 'annual', source: 'annual', year: 2023 }, 2024)).toBe(true)
+	expect(meteorShowerActivityYearApplies({ kind: 'annual', source: 'annual', years: { start: 2023, end: 2023 } }, 2024)).toBe(true)
+})
+
+test('multi-year activity includes both boundaries and every intervening civil year', () => {
+	const activity = { kind: 'yearSpecific', source: '2014-16', years: { start: 2014, end: 2016 } } as const
+
+	expect([2013, 2014, 2015, 2016, 2017].map((year) => meteorShowerActivityYearApplies(activity, year))).toEqual([false, true, true, true, false])
+	const boundary = timeYMDHMS(2016, 12, 31, 23, 59, 59, Timescale.UTC)
+	expect(meteorShowerActivityYearApplies(activity, timeConvert(boundary, Timescale.TT))).toBe(true)
+	expect(meteorShowerActivityYearApplies(activity, timeConvert(boundary, Timescale.TDB))).toBe(true)
+	expect(meteorShowerActivityYearApplies(activity, timeYMDHMS(2017, 1, 1, 0, 0, 0, Timescale.UTC))).toBe(false)
 })
 
 test('exponential activity applies degree slopes on both sides of its maximum', () => {

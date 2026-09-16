@@ -46,7 +46,7 @@ export const MISSING_RADIANT_SOLUTION = {
 
 export const YEAR_SPECIFIC_SOLUTION = {
 	...BASE_SOLUTION,
-	activity: { kind: 'yearSpecific', source: '2024', year: 2024 },
+	activity: { kind: 'yearSpecific', source: '2024', years: { start: 2024, end: 2024 } },
 } satisfies MeteorShowerSolution
 
 export const EXPONENTIAL_PROFILE = {

@@ -49,14 +49,22 @@ export interface MeteorShower {
 // Explicit policy for selecting one solution; no implicit merging of solution properties is allowed.
 export type MeteorShowerSolutionSelector = 'largestSample' | ((solutions: readonly MeteorShowerSolution[]) => MeteorShowerSolution | undefined)
 
+// Inclusive civil-year validity range encoded by one MDC activity label.
+export interface MeteorShowerActivityYearRange {
+	// First applicable UTC civil year.
+	readonly start: number
+	// Last applicable UTC civil year; it is greater than or equal to start.
+	readonly end: number
+}
+
 // Activity label attached to one MDC solution; it is not a ZHR profile.
 export interface MeteorShowerActivity {
 	// Interpreted activity family.
 	readonly kind: 'annual' | 'yearSpecific' | 'outburst' | 'variable' | 'irregular' | 'unknown'
 	// Original source text, including unrecognized values.
 	readonly source: string
-	// Calendar year encoded by a year-limited observation or dated outburst label.
-	readonly year?: number
+	// Inclusive UTC civil-year range encoded by a year-limited observation or dated outburst label.
+	readonly years?: MeteorShowerActivityYearRange
 }
 
 // A circular interval of geocentric solar longitude in the J2000 ecliptic.

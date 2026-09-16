@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { meteorObservingWindows } from '../../../src/astronomy/meteors/planner'
-import { meteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
+import { meteorSolarLongitude, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import { meteorShowerComputationContext, meteorShowerState } from '../../../src/astronomy/meteors/state'
 import type { MeteorActivityProfile, MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
 import { timeShift } from '../../../src/astronomy/time/time'
@@ -157,7 +157,12 @@ test('an unavailable drifting radiant removes the candidate window', () => {
 	expect(windows).toEqual([])
 })
 
-test('planner rejects a year-limited solution outside its catalog year', () => {
-	const yearSpecific = { ...BASE_SOLUTION, activity: { kind: 'yearSpecific', source: '2022', year: 2022 } } satisfies MeteorShowerSolution
-	expect(meteorObservingWindows(yearSpecific, EXPONENTIAL_PROFILE, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, DAY_OPTIONS)).toEqual([])
+test('planner honors an inclusive catalog year range', () => {
+	const yearSpecific = { ...BASE_SOLUTION, activity: { kind: 'yearSpecific', source: '2014-16', years: { start: 2014, end: 2016 } } } satisfies MeteorShowerSolution
+	const hasWindows = [2013, 2014, 2015, 2016, 2017].map((year) => {
+		const start = timeAtMeteorSolarLongitude(year, BASE_SOLUTION.referenceSolarLongitude, { step: 7 })
+		return meteorObservingWindows(yearSpecific, EXPONENTIAL_PROFILE, OBSERVER, start, timeShift(start, 2 / 24), { maximumSolarAltitude: deg(90), minimumRadiantAltitude: deg(-90), step: 1 / 48 }).length > 0
+	})
+
+	expect(hasWindows).toEqual([false, true, true, true, false])
 })
