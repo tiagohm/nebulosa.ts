@@ -265,6 +265,86 @@ describe('parse', () => {
 })
 
 describe('behavior', () => {
+	test('ignores XML declarations and processing instructions', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse('<?xml version="1.0" encoding="UTF-8"?><a/>')).toEqual([{ name: 'a', attributes: {}, children: [], text: EMPTY_TEXT }])
+		expect(parser.parse('<a>before<?target data?>after</a>')).toEqual([{ name: 'a', attributes: {}, children: [], text: encodeText('beforeafter') }])
+	})
+
+	test('streams processing instructions across delimiter boundaries', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse('<?xml version="1.0"')).toBeEmpty()
+		expect(parser.parse('?')).toBeEmpty()
+		expect(parser.parse('><a><?target')).toBeEmpty()
+		expect(parser.parse('?')).toBeEmpty()
+		expect(parser.parse('><b/></a>')).toEqual([{ name: 'a', attributes: {}, children: [{ name: 'b', attributes: {}, children: [], text: EMPTY_TEXT }], text: EMPTY_TEXT }])
+	})
+
+	test('ignores comments around and between elements', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse('<!-- before --><a><b/><!-- between --><c/></a><!-- after -->')).toEqual([
+			{
+				name: 'a',
+				attributes: {},
+				children: [
+					{ name: 'b', attributes: {}, children: [], text: EMPTY_TEXT },
+					{ name: 'c', attributes: {}, children: [], text: EMPTY_TEXT },
+				],
+				text: EMPTY_TEXT,
+			},
+		])
+	})
+
+	test('does not include comments in mixed content', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse('<a>before<!-- ignored -->after</a>')).toEqual([{ name: 'a', attributes: {}, children: [], text: encodeText('beforeafter') }])
+	})
+
+	test('streams comments across start and terminator boundaries', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse('<!')).toBeEmpty()
+		expect(parser.parse('-')).toBeEmpty()
+		expect(parser.parse('- comment -')).toBeEmpty()
+		expect(parser.parse('-')).toBeEmpty()
+		expect(parser.parse('><a/>')).toEqual([{ name: 'a', attributes: {}, children: [], text: EMPTY_TEXT }])
+	})
+
+	test('accepts single and double quoted attributes independently', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse(`<a x='one' y="two" double='"' single="'"/>`)).toEqual([{ name: 'a', attributes: { x: 'one', y: 'two', double: '"', single: "'" }, children: [], text: EMPTY_TEXT }])
+	})
+
+	test('streams attribute quotes and values across chunks', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse('<a x=')).toBeEmpty()
+		expect(parser.parse("'")).toBeEmpty()
+		expect(parser.parse('value')).toBeEmpty()
+		expect(parser.parse('\' y="')).toBeEmpty()
+		expect(parser.parse('other"/>')).toEqual([{ name: 'a', attributes: { x: 'value', y: 'other' }, children: [], text: EMPTY_TEXT }])
+	})
+
+	test('decodes predefined and numeric entities in attributes', () => {
+		const parser = new SimpleXmlParser()
+		const [node] = parser.parse(`<a predefined="&amp;&lt;&gt;&quot;&apos;" decimal="&#65;" hexadecimal="&#x41;" unicode="&#x1F60E;"/>`)
+
+		expect(node.attributes).toEqual({ predefined: `&<>"'`, decimal: 'A', hexadecimal: 'A', unicode: '😎' })
+	})
+
+	test('preserves unknown and malformed entities literally', () => {
+		const parser = new SimpleXmlParser()
+		const [node] = parser.parse('<a x="&unknown; &#xZZ; &#0; &#xFFFE; &#x110000; &#xD800; &broken &amp; ok" plain="unchanged"/>')
+
+		expect(node.attributes.x).toBe('&unknown; &#xZZ; &#0; &#xFFFE; &#x110000; &#xD800; &broken & ok')
+		expect(node.attributes.plain).toBe('unchanged')
+	})
+
 	test('an opening tag with attributes is only emitted when it closes', () => {
 		const parser = new SimpleXmlParser()
 
@@ -348,9 +428,8 @@ describe('errors and recovery', () => {
 		expect(() => new SimpleXmlParser().parse('</person>')).toThrow('mismatched closing tag: expected none, received person')
 	})
 
-	test('rejects XML declarations and comments (outside the supported subset)', () => {
-		expect(() => new SimpleXmlParser().parse('<?xml version="1.0"?>')).toThrow('invalid tag start character')
-		expect(() => new SimpleXmlParser().parse('<!-- comment -->')).toThrow('invalid tag start character')
+	test('rejects unsupported declarations', () => {
+		expect(() => new SimpleXmlParser().parse('<!DOCTYPE xisf>')).toThrow('unsupported XML declaration')
 	})
 
 	test('resets internal state after a failure so the parser stays reusable', () => {
