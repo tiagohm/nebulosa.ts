@@ -295,6 +295,7 @@ src/adapters/sky/hips2fits.ts
 src/observation/alignment/ipolar.ts
 src/observation/alignment/polaralignment.challis.ts
 src/observation/alignment/polaralignment.darv.ts
+src/observation/alignment/polaralignment.exposure.ts
 src/observation/alignment/polaralignment.overlay.ts
 src/observation/alignment/polaralignment.ts
 src/observation/alignment/polaralignment.util.ts
