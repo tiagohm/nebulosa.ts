@@ -1,9 +1,9 @@
-import { type X2jOptions, XMLParser } from 'fast-xml-parser'
 import type { Image, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
 import type { Size } from '../../../math/numerical/geometry'
 import { clamp, type NumberArray } from '../../../math/numerical/math'
 import { deflate, inflate } from '../../compression'
 import { readUntil, type Seekable, type Sink, type Source, writeFully } from '../../io'
+import { SimpleXmlParser, type XmlNode } from '../../xml'
 import type { Bitpix, FitsHeader, FitsHeaderValue } from '../fits/fits'
 import { bitpixInBytes, formatFitsHeaderValue, unescapeQuotedText } from '../fits/util'
 
@@ -13,7 +13,7 @@ import { bitpixInBytes, formatFitsHeaderValue, unescapeQuotedText } from '../fit
 // into FITS-compatible headers plus pixel buffers, and serializes images back out. Supports planar and
 // normal pixel storage, big/little byte order, optional zlib/zstd compression with byte-shuffling, and
 // 8/16/32-bit unsigned integer and 32/64-bit float samples. This is a Bun/Node runtime module (Buffer,
-// Bun.zstd*), and relies on fast-xml-parser for header parsing.
+// Bun.zstd*), and interprets the shared SimpleXmlParser tree directly for header parsing.
 
 // XISF pixel sample data type.
 export type XisfSampleFormat = 'UInt8' | 'UInt16' | 'UInt32' | 'UInt64' | 'Float32' | 'Float64'
@@ -167,14 +167,6 @@ export interface XisfParsedFitsKeyword {
 export interface XisfParsedHeader {
 	// Parsed image element(s), if any.
 	readonly Image?: XisfParsedImage | readonly XisfParsedImage[]
-}
-
-// fast-xml-parser configuration: keep attributes (unprefixed) and read element text into a `value` field.
-const XML_PARSE_OPTIONS: X2jOptions = {
-	ignoreAttributes: false,
-	attributeNamePrefix: '',
-	removeNSPrefix: true,
-	textNodeName: 'value',
 }
 
 // Reads an XISF file from a seekable source: validates the signature, reads the XML header of the
@@ -616,21 +608,62 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 	return size
 }
 
-// Shared XML parser instance for XISF headers.
-const XML_PARSER = new XMLParser(XML_PARSE_OPTIONS)
+// Returns the local portion of an XML element name while leaving namespace handling out of the
+// generic parser.
+function xmlLocalName(name: string) {
+	const separator = name.indexOf(':')
+	return separator < 0 ? name : name.slice(separator + 1)
+}
+
+// Projects one FITSKeyword element into the legacy parsed-keyword shape. Elements without a keyword
+// name are ignored because they cannot contribute to a FITS header.
+function parsedFitsKeywordFromXmlNode(node: XmlNode): XisfParsedFitsKeyword | undefined {
+	const { name, value, comment } = node.attributes
+	if (name === undefined) return undefined
+	return { name, value, comment }
+}
+
+// Projects the attributes and direct FITSKeyword children of one Image element into the legacy
+// parsed-image shape consumed by the existing XISF validation and FITS-header logic.
+function parsedImageFromXmlNode(node: XmlNode): XisfParsedImage {
+	const { geometry, sampleFormat, bounds, colorSpace, location, pixelStorage, imageType, byteOrder, checksum, compression } = node.attributes
+	const keywords: XisfParsedFitsKeyword[] = []
+
+	for (const child of node.children) {
+		if (xmlLocalName(child.name) !== 'FITSKeyword') continue
+		const keyword = parsedFitsKeywordFromXmlNode(child)
+		if (keyword) keywords.push(keyword)
+	}
+
+	return {
+		geometry,
+		sampleFormat,
+		bounds,
+		colorSpace,
+		location,
+		pixelStorage,
+		imageType,
+		byteOrder,
+		checksum,
+		compression,
+		FITSKeyword: keywords.length > 0 ? keywords : undefined,
+	} as XisfParsedImage
+}
 
 // Parses the XISF XML header buffer into the list of supported images, skipping any image whose location
 // is not an attachment, whose color space is not Gray/RGB, whose sample format is unsupported, or whose
 // geometry/location/compression metadata is invalid. A missing colorSpace attribute is treated as Gray
 // (XISF 1.0 §11.5.2); CIELab and unknown values remain skipped.
 export function parseXisfHeader(data: Buffer) {
-	const parsedHeader = XML_PARSER.parse(data)?.xisf as XisfParsedHeader | undefined
-	if (!parsedHeader?.Image) return []
+	const nodes = new SimpleXmlParser().parse(data)
+	const root = nodes.find((node) => xmlLocalName(node.name) === 'xisf')
+	if (!root) return []
 
-	const parsedImages = parsedHeader.Image instanceof Array ? parsedHeader.Image : [parsedHeader.Image]
 	const images: XisfImage[] = []
 
-	for (const image of parsedImages) {
+	for (const node of root.children) {
+		if (xmlLocalName(node.name) !== 'Image') continue
+		const image = parsedImageFromXmlNode(node)
 		if (typeof image.location !== 'string' || !image.location.startsWith('attachment:')) continue
 		if (typeof image.geometry !== 'string') continue
 		const colorSpace = image.colorSpace ?? 'Gray'

@@ -20,7 +20,6 @@
 	},
 	"peerDependencies": {
 		"@types/bun": "latest",
-		"fast-xml-parser": "latest",
 		"typescript": "latest"
 	}
 }

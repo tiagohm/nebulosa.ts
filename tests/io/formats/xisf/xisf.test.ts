@@ -117,6 +117,21 @@ describe('parse header', () => {
 		expect(hdus[0].sampleFormat).toBe('UInt16')
 		expect(hdus[0].location).toEqual({ offset: 24, size: 4 })
 	})
+
+	test('decodes escaped FITS keyword attributes', () => {
+		const XML = `<xisf><Image geometry="1:1:1" sampleFormat="UInt16" location="attachment:16:2"><FITSKeyword name="OBJECT" value="&apos;M42 &amp; M43&apos;" comment="A &lt; B &amp; C"/></Image></xisf>`
+		const [image] = parseXisfHeader(Buffer.from(XML))
+
+		expect(image.header.OBJECT).toBe('M42 & M43')
+	})
+
+	test('accepts namespace-prefixed XISF elements and ignores unrelated image children', () => {
+		const XML = `<x:xisf xmlns:x="http://www.pixinsight.com/xisf"><x:Image geometry="1:1:1" sampleFormat="UInt16" location="attachment:16:2"><x:Property/><x:ColorFilterArray/><x:Resolution/><x:FITSKeyword name="OBJECT" value="&apos;M42&apos;" comment=""/></x:Image></x:xisf>`
+		const [image] = parseXisfHeader(Buffer.from(XML))
+
+		expect(image.header.OBJECT).toBe('M42')
+		expect(image.geometry).toEqual({ width: 1, height: 1, channels: 1 })
+	})
 })
 
 describe('read', () => {
@@ -289,6 +304,15 @@ describe('read compressed', () => {
 
 describe('write', () => {
 	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
+
+	test('round-trips XML-special characters in FITS string values', async () => {
+		const value = `A & B < C > D "quote" 'apostrophe'`
+		const output = Buffer.alloc(4096)
+		const size = await writeXisf(bufferSink(output), [{ header: { SIMPLE: true, BITPIX: 8, NAXIS: 2, NAXIS1: 1, NAXIS2: 1, OBJECT: value }, raw: new Float64Array([0]) }])
+		const image = await readImageFromBuffer(output.subarray(0, size))
+
+		expect(image?.header.OBJECT).toBe(value)
+	})
 
 	test('clamps overflowing normalized samples to the unsigned XISF range', async () => {
 		const cases = [false, { format: 'zstd' as const }, { format: 'zstd' as const, shuffled: true }] as const

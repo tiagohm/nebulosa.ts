@@ -3,8 +3,8 @@
 // Minimal streaming XML parser, sufficient for the simple element/attribute/text documents the library
 // consumes (e.g. INDI/Alpaca payloads). `SimpleXmlParser` is a chunk-fed state machine that copies token
 // runs (text, quoted attribute values, and names) in bulk and emits each top-level node once it closes.
-// It does not handle DTDs, namespaces beyond `:` in names, entity references, CDATA, or processing
-// instructions.
+// It handles processing instructions, comments, and basic attribute entities, but not DTDs, CDATA,
+// namespace resolution, or entity decoding in element text.
 
 // XML element attributes as a name -> value map.
 export type XmlNodeAttributes = Record<string, string>
@@ -33,6 +33,12 @@ enum XmlState {
 	TEXT,
 	TAG_CLOSE,
 	SELF_CLOSE,
+	PROCESSING_INSTRUCTION,
+	DECLARATION,
+	COMMENT_START,
+	COMMENT,
+	COMMENT_DASH,
+	COMMENT_END,
 }
 
 // ASCII byte codes recognized by the tokenizer (whitespace, structural punctuation, and name-character ranges).
@@ -40,7 +46,12 @@ const WHITESPACE = 32
 const TAB = 9
 const LINE_FEED = 10
 const CARRIAGE_RETURN = 13
-const QUOTE = 34
+const DOUBLE_QUOTE = 34
+const SINGLE_QUOTE = 39
+const QUESTION = 63
+const EXCLAMATION = 33
+const AMPERSAND = 38
+const SEMICOLON = 59
 const SLASH = 47
 const OPEN_ANGLE = 60
 const EQUAL = 61
@@ -162,6 +173,76 @@ function mergeArray(a: Uint8Array, b: Uint8Array) {
 	return merged
 }
 
+// Decodes the five predefined XML entities and valid decimal/hexadecimal Unicode scalar references
+// in an attribute value. Unknown or malformed references remain literal.
+function decodeXmlAttribute(text: string) {
+	let ampersand = text.indexOf('&')
+	if (ampersand < 0) return text
+
+	let decoded = ''
+	let start = 0
+
+	while (ampersand >= 0) {
+		let end = ampersand + 1
+		while (end < text.length && text.charCodeAt(end) !== AMPERSAND && text.charCodeAt(end) !== SEMICOLON) end++
+		if (end >= text.length) break
+
+		if (text.charCodeAt(end) === AMPERSAND) {
+			ampersand = end
+			continue
+		}
+
+		const entity = text.slice(ampersand + 1, end)
+		const replacement = decodeXmlEntity(entity)
+
+		if (replacement !== undefined) {
+			decoded += text.slice(start, ampersand) + replacement
+			start = end + 1
+		}
+
+		ampersand = text.indexOf('&', end + 1)
+	}
+
+	return start === 0 ? text : decoded + text.slice(start)
+}
+
+// Resolves one supported entity body to a character, rejecting malformed numeric references and
+// code points outside XML's valid character ranges.
+function decodeXmlEntity(entity: string): string | undefined {
+	switch (entity) {
+		case 'amp':
+			return '&'
+		case 'lt':
+			return '<'
+		case 'gt':
+			return '>'
+		case 'quot':
+			return '"'
+		case 'apos':
+			return "'"
+	}
+
+	if (entity.length < 2 || entity.charCodeAt(0) !== 35) return undefined
+
+	const hexadecimal = entity.charCodeAt(1) === 120 || entity.charCodeAt(1) === 88
+	const firstDigit = hexadecimal ? 2 : 1
+	if (firstDigit === entity.length) return undefined
+
+	let codePoint = 0
+
+	for (let i = firstDigit; i < entity.length; i++) {
+		const code = entity.charCodeAt(i)
+		const digit = code >= ZERO && code <= NINE ? code - ZERO : hexadecimal && code >= A_UPPER && code <= 70 ? code - A_UPPER + 10 : hexadecimal && code >= A_LOWER && code <= 102 ? code - A_LOWER + 10 : -1
+		if (digit < 0) return undefined
+		codePoint = codePoint * (hexadecimal ? 16 : 10) + digit
+		if (codePoint > 0x10ffff) return undefined
+	}
+
+	const valid = codePoint === TAB || codePoint === LINE_FEED || codePoint === CARRIAGE_RETURN || (codePoint >= 0x20 && codePoint <= 0xd7ff) || (codePoint >= 0xe000 && codePoint <= 0xfffd) || (codePoint >= 0x10000 && codePoint <= 0x10ffff)
+	if (!valid) return undefined
+	return String.fromCodePoint(codePoint)
+}
+
 // Incremental XML parser. Feed bytes/strings via parse(); it returns any top-level nodes that completed
 // during that call and retains partial state between calls. Throws on malformed input or when element
 // text exceeds the buffer cap, and resets in both cases.
@@ -176,6 +257,7 @@ export class SimpleXmlParser {
 	#tree: XmlNode[] = []
 	#prevCode?: number
 	#closeTagSealed = false
+	#attributeQuote = 0
 	readonly #encoder = new TextEncoder()
 	readonly #nodes: XmlNode[] = []
 
@@ -216,6 +298,7 @@ export class SimpleXmlParser {
 		this.#tree = []
 		this.#prevCode = undefined
 		this.#closeTagSealed = false
+		this.#attributeQuote = 0
 	}
 
 	// Append a new node to the current tree and optionally keep it open.
@@ -293,8 +376,8 @@ export class SimpleXmlParser {
 				continue
 			}
 
-			if (this.#state === XmlState.ATTR_VALUE && input[i] !== QUOTE) {
-				const q = input.indexOf(QUOTE, i)
+			if (this.#state === XmlState.ATTR_VALUE && this.#attributeQuote !== 0 && input[i] !== this.#attributeQuote) {
+				const q = input.indexOf(this.#attributeQuote, i)
 				const end = q < 0 ? length : q
 				if (end > i) {
 					this.#value.writeBytes(input, i, end)
@@ -347,6 +430,10 @@ export class SimpleXmlParser {
 				this.#tag.reset()
 				this.#closeTagSealed = false
 				this.#state = XmlState.TAG_CLOSE
+			} else if (code === QUESTION) {
+				this.#state = XmlState.PROCESSING_INSTRUCTION
+			} else if (code === EXCLAMATION) {
+				this.#state = XmlState.DECLARATION
 			} else {
 				this.#fail(`invalid tag start character: ${code}`)
 			}
@@ -387,16 +474,16 @@ export class SimpleXmlParser {
 				this.#fail(`invalid attribute name character: ${code}`)
 			}
 		} else if (this.#state === XmlState.ATTR_VALUE) {
-			if (code === QUOTE) {
-				if (this.#value.length > 0 || this.#prevCode === QUOTE) {
-					const name = this.#name.text()
-					this.#attributes[name] = this.#value.text()
-					this.#name.reset()
-					this.#value.reset()
-					this.#state = XmlState.ATTR_NAME
-				} else {
-					this.#value.reset()
-				}
+			if (this.#attributeQuote === 0) {
+				if (code === DOUBLE_QUOTE || code === SINGLE_QUOTE) this.#attributeQuote = code
+				else if (!isWhitespace(code)) this.#fail(`invalid attribute value start character: ${code}`)
+			} else if (code === this.#attributeQuote) {
+				const name = this.#name.text()
+				this.#attributes[name] = decodeXmlAttribute(this.#value.text())
+				this.#name.reset()
+				this.#value.reset()
+				this.#attributeQuote = 0
+				this.#state = XmlState.ATTR_NAME
 			} else {
 				this.#value.write(code)
 			}
@@ -437,6 +524,21 @@ export class SimpleXmlParser {
 			} else {
 				this.#fail(`invalid closing tag character: ${code}`)
 			}
+		} else if (this.#state === XmlState.PROCESSING_INSTRUCTION) {
+			if (this.#prevCode === QUESTION && code === CLOSE_ANGLE) this.#state = this.#tree.length === 0 ? XmlState.START : XmlState.TEXT
+		} else if (this.#state === XmlState.DECLARATION) {
+			if (code === DASH) this.#state = XmlState.COMMENT_START
+			else this.#fail('unsupported XML declaration')
+		} else if (this.#state === XmlState.COMMENT_START) {
+			if (code === DASH) this.#state = XmlState.COMMENT
+			else this.#fail('invalid XML comment start')
+		} else if (this.#state === XmlState.COMMENT) {
+			if (code === DASH) this.#state = XmlState.COMMENT_DASH
+		} else if (this.#state === XmlState.COMMENT_DASH) {
+			this.#state = code === DASH ? XmlState.COMMENT_END : XmlState.COMMENT
+		} else if (this.#state === XmlState.COMMENT_END) {
+			if (code === CLOSE_ANGLE) this.#state = this.#tree.length === 0 ? XmlState.START : XmlState.TEXT
+			else if (code !== DASH) this.#state = XmlState.COMMENT
 		}
 
 		this.#prevCode = code
