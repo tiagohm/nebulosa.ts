@@ -1,10 +1,11 @@
 import { pixelScale } from '../../astronomy/formulas'
 import type { GeographicPosition } from '../../astronomy/observer/location'
-import { PI, SIDEREAL_DAYSEC, SIDEREAL_DRIFT_RATE } from '../../core/constants'
-import { type MutVec3, type Vec3, vecAngleUnit, vecDot, vecLength } from '../../math/linear-algebra/vec3'
+import type { Time } from '../../astronomy/time/time'
+import { PI, PIOVERTWO, SIDEREAL_DAYSEC, SIDEREAL_DRIFT_RATE } from '../../core/constants'
+import { type MutVec3, type Vec3, vecAngleUnit, vecDot, vecLength, vecNegateMut } from '../../math/linear-algebra/vec3'
 import { type Angle, arcsec } from '../../math/units/angle'
 import type { ThreePointPolarAlignmentResult } from './polaralignment'
-import { celestialPoleVector } from './polaralignment.util'
+import { celestialPoleVector, transportEarthFixed } from './polaralignment.util'
 
 // Exposure limits imposed exclusively by polar-axis misalignment. All directions share the inertial
 // frame used by plate solutions, angular quantities are radians, rates are radians per SI second,
@@ -69,8 +70,9 @@ export interface PolarAlignmentUnguidedExposureLimit {
 
 // Guided field-rotation rate, field extent, and exposure limit.
 export interface PolarAlignmentGuidedExposureLimit {
-	// Signed instantaneous field rotation rate at the guide star, in radians per second.
-	readonly rotationRate: Angle
+	// Signed instantaneous field rotation rate at the guide star, in radians per second; undefined
+	// when the RA/DEC guiding geometry is singular.
+	readonly rotationRate?: Angle
 	// Largest guide-to-field separation protected by the limit, in radians.
 	readonly fieldRadius: Angle
 	// Time-dependent field-rotation limit in seconds; absent only for singular RA/DEC geometry.
@@ -97,6 +99,9 @@ export interface PolarAlignmentExposureLimit {
 export interface PolarAlignmentResultExposureInput extends Omit<PolarAlignmentExposureInput, 'mountPole' | 'celestialPole'> {
 	// Mechanical pole and exposure epoch produced by three-point polar alignment.
 	readonly alignment: Pick<ThreePointPolarAlignmentResult, 'pole' | 'time'>
+	// Optional exposure-start epoch. The alignment pole is transported as Earth-fixed from
+	// alignment.time; when omitted, the estimate starts at alignment.time.
+	readonly time?: Time
 }
 
 // Normalized geometry shared by instantaneous and time-dependent calculations.
@@ -158,6 +163,7 @@ export function polarAlignmentImageScale(pixelSize: number, focalLength: number)
 // Computes the guide-centered angular radius to a sensor corner using a gnomonic projection. Width
 // and height are positive finite pixel extents and imageScale is a positive finite radian pixel angle.
 export function polarAlignmentFieldRadius(width: number, height: number, imageScale: Angle): Angle {
+	if (!(imageScale > 0) || imageScale >= PIOVERTWO) throw new RangeError('imageScale must be positive and less than PI / 2')
 	return Math.atan((Math.hypot(width, height) / 2) * Math.tan(imageScale))
 }
 
@@ -202,9 +208,9 @@ export function polarAlignmentExposureLimit(input: Readonly<PolarAlignmentExposu
 		const rotationRate = guidedRateForMount(geometry, guide, poleGuideDot, geometry.mount[0], geometry.mount[1], geometry.mount[2], SIDEREAL_DRIFT_RATE)
 
 		if (rotationRate === undefined) {
-			guided = { rotationRate: 0, fieldRadius, singular: true }
+			guided = { fieldRadius, singular: true }
 		} else {
-			const fieldFactor = Math.sin(fieldRadius)
+			const fieldFactor = Math.sin(Math.min(fieldRadius, PIOVERTWO))
 
 			const mount: MutVec3 = [0, 0, 0]
 			const rateAt = (sampleTime: number) => {
@@ -222,18 +228,31 @@ export function polarAlignmentExposureLimit(input: Readonly<PolarAlignmentExposu
 	return { polarError: geometry.polarError, imageScale: input.imageScale, maxTrail, unguided, guided }
 }
 
-// Estimates exposure limits directly from a three-point alignment result. The true pole is computed
-// once at the result epoch without atmospheric refraction, then delegated to the vector estimator.
-export function polarAlignmentExposureLimitForResult(input: Readonly<PolarAlignmentResultExposureInput>, location: GeographicPosition = input.alignment.time.location!): PolarAlignmentExposureLimit {
-	const { alignment, ...exposure } = input
-	const celestialPole = celestialPoleVector(alignment.time, location, false)
-	return polarAlignmentExposureLimit({ ...exposure, mountPole: alignment.pole, celestialPole })
+// Estimates exposure limits directly from a three-point alignment result. By default the estimate
+// starts at alignment.time. An explicit time transports the Earth-fixed mechanical pole through ITRS
+// to that epoch. The true pole is computed once without refraction before delegating to the vector
+// estimator; target and guide directions must describe the selected start epoch.
+export function polarAlignmentExposureLimitForResult(input: Readonly<PolarAlignmentResultExposureInput>, location: GeographicPosition = input.time?.location ?? input.alignment.time.location!): PolarAlignmentExposureLimit {
+	const { alignment, time: requestedTime, ...exposure } = input
+	const time = requestedTime ?? alignment.time
+	const mountPole = transportEarthFixed(alignment.pole, alignment.time, time)
+	const celestialPole = celestialPoleVector(time, location, false)
+	return polarAlignmentExposureLimit({ ...exposure, mountPole, celestialPole })
 }
 
 // Builds normalized immutable pole geometry and stable small-angle separation terms.
 function preparePolarGeometry(mountPole: Vec3, celestialPole: Vec3): PolarGeometry {
 	const mount = normalizeFiniteVector(mountPole, 'mountPole')
 	const pole = normalizeFiniteVector(celestialPole, 'celestialPole')
+
+	// Plate solves use the above-horizon pole, which is the SCP in the southern hemisphere. Earth
+	// rotation is physically oriented toward the NCP, so express both equivalent unoriented axes on
+	// that side before applying signed rates or evolving the Earth-fixed mechanical axis.
+	if (pole[2] < 0) {
+		vecNegateMut(mount)
+		vecNegateMut(pole)
+	}
+
 	const mu = Math.max(-1, Math.min(1, vecDot(pole, mount)))
 	const crossX = pole[1] * mount[2] - pole[2] * mount[1]
 	const crossY = pole[2] * mount[0] - pole[0] * mount[2]
@@ -247,7 +266,7 @@ function preparePolarGeometry(mountPole: Vec3, celestialPole: Vec3): PolarGeomet
 }
 
 // Returns a fresh unit direction or rejects non-finite and numerically degenerate vectors.
-function normalizeFiniteVector(vector: Vec3, name: string): Vec3 {
+function normalizeFiniteVector(vector: Vec3, name: string): MutVec3 {
 	const length = vecLength(vector)
 	if (!Number.isFinite(vector[0]) || !Number.isFinite(vector[1]) || !Number.isFinite(vector[2]) || !Number.isFinite(length) || !(length > VECTOR_EPSILON)) throw new RangeError(`${name} must be finite and non-zero`)
 	return [vector[0] / length, vector[1] / length, vector[2] / length]

@@ -1,9 +1,9 @@
 import { DEFAULT_REFRACTION_PARAMETERS, observedToCirs, type RefractionParameters, refractedAltitude } from '../../astronomy/coordinates/astrometry'
 import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import type { GeographicPosition } from '../../astronomy/observer/location'
-import { cirsRotationMatrix, type Time } from '../../astronomy/time/time'
+import { cirsRotationMatrix, gcrsToItrsRotationMatrix, type Time } from '../../astronomy/time/time'
 import { PI } from '../../core/constants'
-import { matTransposeMulVec } from '../../math/linear-algebra/mat3'
+import { matMulVec, matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type Vec3, vecAngleUnit, vecCross, vecDot, vecLength, vecNormalize, vecNormalizeMut, vecRotateByRodrigues } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 
@@ -40,6 +40,14 @@ export function celestialPoleVector(time: Time, location: GeographicPosition = t
 	const altitude = refraction === false ? trueAltitude : refractedAltitude(trueAltitude, refraction)
 	const [rightAscension, declination] = observedToCirs(azimuth, altitude, time, refraction, location)
 	return vecNormalizeMut(matTransposeMulVec(cirsRotationMatrix(time), eraS2c(rightAscension, declination)))
+}
+
+// Re-expresses an ICRF direction attached to the Earth from `from` to `to`, preserving its ITRS
+// orientation. Returns `vector` itself when the Time object is unchanged, otherwise a fresh vector.
+export function transportEarthFixed(vector: Vec3, from: Time, to: Time): Vec3 {
+	if (from === to) return vector
+	const transported = matMulVec(gcrsToItrsRotationMatrix(from), vector)
+	return matTransposeMulVec(gcrsToItrsRotationMatrix(to), transported, transported)
 }
 
 // Applies azimuth about local up, then altitude about the east axis carried by the rotated mount

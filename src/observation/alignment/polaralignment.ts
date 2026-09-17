@@ -8,7 +8,7 @@ import { DAYSEC, PI, SIDEREAL_DRIFT_RATE } from '../../core/constants'
 import { matMulVec, matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecCross, vecDivScalarMut, vecDot, vecLength, vecMinus, vecNegateMut, vecNormalizeMut, vecPlane, vecRotateByRodrigues } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizePI } from '../../math/units/angle'
-import { applyMountAdjustment } from './polaralignment.util'
+import { applyMountAdjustment, transportEarthFixed } from './polaralignment.util'
 
 // Three-point polar alignment from timestamped ICRF/J2000 plate solves. The mechanical axis is
 // fixed to the Earth between base adjustments; samples are transported to a common epoch before
@@ -39,14 +39,6 @@ export interface ThreePointPolarAlignmentResult extends Readonly<HorizontalCoord
 // collinear, so the mount pole is undefined. A vanishing normal would otherwise survive
 // vecNormalize and become a fake equatorial direction in cirsToObserved.
 const DEGENERATE_POLE_NORMAL = 1e-14
-
-// Re-expresses an ICRF direction attached to the Earth from `from` to `to`, preserving its ITRS
-// orientation. Returns `vector` itself when the Time object is unchanged, otherwise a fresh vector.
-function transportEarthFixed(vector: Vec3, from: Time, to: Time): Vec3 {
-	if (from === to) return vector
-	const transported = matMulVec(gcrsToItrsRotationMatrix(from), vector)
-	return matTransposeMulVec(gcrsToItrsRotationMatrix(to), transported, transported)
-}
 
 // Altitude (radians) of the true celestial pole as the alignment target: the absolute latitude,
 // optionally raised by atmospheric refraction so it matches the observed pole position.
