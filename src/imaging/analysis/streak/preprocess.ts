@@ -142,6 +142,7 @@ export function preprocessStreakImage(image: Image, options: Readonly<StreakDete
 		if (Number.isFinite(measuredGlobalNoise) && measuredGlobalNoise > noiseFloor) globalNoise = measuredGlobalNoise
 		for (let cell = 0; cell < cellCount; cell++) if (workspace.noise[cell] === 0) workspace.noise[cell] = globalNoise
 	}
+	prepareStreakNoiseInterpolation(workspace, backgroundColumns, backgroundRows, backgroundCellSize, grid.width, grid.height)
 
 	workspace.state.edgeCount = 0
 	workspace.state.candidateCount = 0
@@ -207,6 +208,39 @@ function reduceResidualDifferenceNoise(statistics: RobustReservoir, scratch: Flo
 export function streakLocalNoise(prepared: PreparedStreakImage, x: number, y: number): number {
 	const { backgroundColumns, backgroundRows, backgroundCellSize } = prepared
 	return Math.max(0, interpolateGrid(prepared.workspace.noise, backgroundColumns, backgroundRows, backgroundCellSize, prepared.grid.width, prepared.grid.height, x, y))
+}
+
+// Returns local noise at an integer native-plane pixel using preprocessing interpolation tables.
+export function streakLocalNoiseAtPixel(prepared: PreparedStreakImage, x: number, y: number): number {
+	const { workspace } = prepared
+	const x0 = workspace.noiseColumn0[x]
+	const x1 = workspace.noiseColumn1[x]
+	const fractionX = workspace.noiseColumnFraction[x]
+	const row0 = workspace.noiseRowOffset0[y]
+	const row1 = workspace.noiseRowOffset1[y]
+	const fractionY = workspace.noiseRowFraction[y]
+	const top = workspace.noise[row0 + x0] * (1 - fractionX) + workspace.noise[row0 + x1] * fractionX
+	const bottom = workspace.noise[row1 + x0] * (1 - fractionX) + workspace.noise[row1 + x1] * fractionX
+	return Math.max(0, top * (1 - fractionY) + bottom * fractionY)
+}
+
+// Precomputes coarse-grid interpolation geometry for every integer native-plane coordinate.
+function prepareStreakNoiseInterpolation(workspace: StreakDetectionWorkspace, columns: number, rows: number, cellSize: number, width: number, height: number): void {
+	for (let x = 0; x < width; x++) {
+		const cell = interpolationAxisCoordinate(x, cellSize, columns, width)
+		const first = columns === 1 ? 0 : Math.max(0, Math.min(columns - 2, Math.floor(cell)))
+		workspace.noiseColumn0[x] = first
+		workspace.noiseColumn1[x] = Math.min(columns - 1, first + 1)
+		workspace.noiseColumnFraction[x] = columns === 1 ? 0 : cell - first
+	}
+
+	for (let y = 0; y < height; y++) {
+		const cell = interpolationAxisCoordinate(y, cellSize, rows, height)
+		const first = rows === 1 ? 0 : Math.max(0, Math.min(rows - 2, Math.floor(cell)))
+		workspace.noiseRowOffset0[y] = first * columns
+		workspace.noiseRowOffset1[y] = Math.min(rows - 1, first + 1) * columns
+		workspace.noiseRowFraction[y] = rows === 1 ? 0 : cell - first
+	}
 }
 
 // Bilinearly interpolates cell-center values across one native-plane sample position.

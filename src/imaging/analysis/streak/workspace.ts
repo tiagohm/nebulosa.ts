@@ -74,6 +74,18 @@ export interface StreakDetectionWorkspace {
 	readonly background: Float64Array
 	// Coarse local normalized-MAD noise in row-major cell order; zero means unresolved.
 	readonly noise: Float64Array
+	// Left coarse-noise column for each integer native-plane X coordinate.
+	readonly noiseColumn0: Uint32Array
+	// Right coarse-noise column for each integer native-plane X coordinate.
+	readonly noiseColumn1: Uint32Array
+	// Horizontal interpolation fraction for each integer native-plane X coordinate.
+	readonly noiseColumnFraction: Float64Array
+	// Top coarse-noise row offset for each integer native-plane Y coordinate.
+	readonly noiseRowOffset0: Uint32Array
+	// Bottom coarse-noise row offset for each integer native-plane Y coordinate.
+	readonly noiseRowOffset1: Uint32Array
+	// Vertical interpolation fraction for each integer native-plane Y coordinate.
+	readonly noiseRowFraction: Float64Array
 	// Sparse oriented-edge X coordinates in native-plane pixels.
 	readonly edgeX: Float32Array
 	// Sparse oriented-edge Y coordinates in native-plane pixels.
@@ -165,6 +177,12 @@ export function createStreakDetectionWorkspace(width: number, height: number, op
 		mask: new Uint8Array(length),
 		background: new Float64Array(backgroundCapacity),
 		noise: new Float64Array(backgroundCapacity),
+		noiseColumn0: new Uint32Array(width),
+		noiseColumn1: new Uint32Array(width),
+		noiseColumnFraction: new Float64Array(width),
+		noiseRowOffset0: new Uint32Array(height),
+		noiseRowOffset1: new Uint32Array(height),
+		noiseRowFraction: new Float64Array(height),
 		edgeX: new Float32Array(maximumEdgePoints),
 		edgeY: new Float32Array(maximumEdgePoints),
 		edgeWeight: new Float32Array(maximumEdgePoints),

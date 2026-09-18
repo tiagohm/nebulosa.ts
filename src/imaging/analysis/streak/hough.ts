@@ -2,7 +2,7 @@ import { PI, PIOVERTWO } from '../../../core/constants'
 import { validateInRange, validatePositiveInteger } from '../../../core/validation'
 import type { Angle } from '../../../math/units/angle'
 import { normalizeStreakAngle, streakAxialAngleDistance } from './geometry'
-import { type PreparedStreakImage, STREAK_MASK_INVALID, streakLocalNoise } from './preprocess'
+import { type PreparedStreakImage, STREAK_MASK_INVALID, streakLocalNoiseAtPixel } from './preprocess'
 import type { StreakDetectionWorkspace } from './workspace'
 
 // Sparse orientation-gated Hough seeding for straight streaks. Edge arrays are structure-of-arrays,
@@ -239,7 +239,7 @@ function forEachEligibleEdge(prepared: PreparedStreakImage, thresholdSigma: numb
 		for (let x = 1; x < width - 1; x++) {
 			const center = y * width + x
 			if (mask[center] & STREAK_MASK_INVALID) continue
-			const noise = streakLocalNoise(prepared, x, y)
+			const noise = streakLocalNoiseAtPixel(prepared, x, y)
 			const signalThreshold = noise > 0 ? thresholdSigma * noise : numericalFloor
 			const gradientThreshold = noise > 0 ? gradientSigma * noise * 4 : numericalFloor * 4
 			let positive = 0

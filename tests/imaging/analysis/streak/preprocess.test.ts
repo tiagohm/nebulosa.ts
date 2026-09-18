@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { preprocessStreakImage, STREAK_MASK_INVALID, STREAK_MASK_SATURATED, streakLocalNoise } from '../../../../src/imaging/analysis/streak/preprocess'
+import { preprocessStreakImage, STREAK_MASK_INVALID, STREAK_MASK_SATURATED, streakLocalNoise, streakLocalNoiseAtPixel } from '../../../../src/imaging/analysis/streak/preprocess'
 import { createStreakDetectionWorkspace } from '../../../../src/imaging/analysis/streak/workspace'
 import type { Image } from '../../../../src/imaging/model/types'
 
@@ -86,4 +86,15 @@ test('uses bounded global fallback for an unresolved cell and ignores invalid sa
 	expect(prepared.globalNoise).toBeLessThan(0.02)
 	expect(prepared.workspace.noise[0]).toBe(prepared.globalNoise)
 	expect(Number.isFinite(streakLocalNoise(prepared, 12, 4))).toBeTrue()
+})
+
+test('precomputes integer-pixel noise interpolation without changing its values', () => {
+	const width = 35
+	const height = 27
+	const raw = new Float32Array(width * height).fill(0.2)
+	addGaussianNoise(raw, (x, y) => 0.002 + x * 0.0002 + y * 0.0001, width)
+	const prepared = preprocessStreakImage(image(raw, width, height), { backgroundCellSize: 8 })
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) expect(streakLocalNoiseAtPixel(prepared, x, y)).toBeCloseTo(streakLocalNoise(prepared, x, y), 14)
+	}
 })
