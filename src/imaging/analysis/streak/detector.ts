@@ -107,6 +107,7 @@ interface FinalStreakSupport {
 export function detectStreaks(image: Image, options: Readonly<StreakDetectionOptions> = {}, workspace?: StreakDetectionWorkspace): readonly Streak[] {
 	const resolved = resolveStreakOptions(options)
 	const prepared = preprocessStreakImage(image, options, workspace)
+	if (resolved.maxWidth < prepared.grid.step) throw new RangeError('maxWidth is below the native analysis-plane resolution')
 	const edges = collectStreakEdges(prepared, resolved)
 
 	if (edges.count === 0) return []
@@ -159,7 +160,7 @@ function resolveStreakOptions(options: Readonly<StreakDetectionOptions>): Resolv
 	}
 
 	validateInRange(resolved.minLength, 1, 1_000_000)
-	validateInRange(resolved.maxWidth, 0.5, MAXIMUM_STREAK_WIDTH)
+	validateInRange(resolved.maxWidth, 1, MAXIMUM_STREAK_WIDTH)
 	validateInRange(resolved.minSNR, 0, 1_000_000)
 	validateInRange(resolved.minLinearity, 0, 1)
 	validatePositiveInteger(resolved.maxStreaks)

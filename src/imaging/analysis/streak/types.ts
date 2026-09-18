@@ -52,7 +52,7 @@ export interface StreakDetectionOptions {
 	readonly area?: Readonly<Rect>
 	// Minimum accepted observed segment length, in received-image pixels.
 	readonly minLength?: number
-	// Maximum accepted equivalent transverse FWHM, in received-image pixels.
+	// Maximum accepted equivalent transverse FWHM, in received-image pixels; must span at least one native analysis-plane sample.
 	readonly maxWidth?: number
 	// Minimum detection SNR when background noise is measurable.
 	readonly minSNR?: number

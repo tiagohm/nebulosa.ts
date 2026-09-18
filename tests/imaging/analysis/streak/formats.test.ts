@@ -42,6 +42,20 @@ test('supports explicit RGB and CFA planes and both precisions', () => {
 	expect(preprocessStreakImage(image(cfa, 16, 16, 1, 'BGGR'), { plane: 'green2', backgroundCellSize: 8 }).plane).toBe('green2')
 })
 
+test('rejects widths below the selected native-plane resolution', () => {
+	const mono = image(new Float32Array(16 * 16).fill(0.1), 16, 16)
+	expect(() => detectStreaks(mono, { maxWidth: 0.99, backgroundCellSize: 8 })).toThrow()
+	expect(() => detectStreaks(mono, { maxWidth: 1, backgroundCellSize: 8 })).not.toThrow()
+
+	const rgb = image(new Float32Array(16 * 16 * 3).fill(0.1), 16, 16, 3)
+	expect(() => detectStreaks(rgb, { maxWidth: 0.99, backgroundCellSize: 8 })).toThrow()
+	expect(() => detectStreaks(rgb, { maxWidth: 1, backgroundCellSize: 8 })).not.toThrow()
+
+	const cfa = image(new Float32Array(16 * 16).fill(0.1), 16, 16, 1, 'RGGB')
+	expect(() => detectStreaks(cfa, { maxWidth: 1.99, backgroundCellSize: 8 })).toThrow('native analysis-plane resolution')
+	expect(() => detectStreaks(cfa, { maxWidth: 2, backgroundCellSize: 8 })).not.toThrow()
+})
+
 for (const [channels, bayer] of [
 	[3, undefined],
 	[1, 'RGGB'],
