@@ -48,6 +48,14 @@ export interface StreakHoughCandidate {
 	readonly score: number
 }
 
+// Mutable scratch pair used to canonicalize one normal-form line without per-refinement allocation.
+interface MutableStreakHoughLine {
+	// Axial tangent angle in radians in [0, PI).
+	angle: number
+	// Signed distance along the canonical angle's left-hand normal, in plane pixels.
+	rho: number
+}
+
 // Operational settings for sparse edge extraction and orientation-gated Hough voting.
 export interface StreakHoughOptions {
 	// Positive residual threshold in local noise sigmas.
@@ -205,11 +213,12 @@ export function detectStreakHoughCandidates(edges: StreakEdgePoints, width: numb
 	}
 
 	let refinementEdgeWork = 0
+	const refinementLine: MutableStreakHoughLine = { angle: 0, rho: 0 }
 	for (let i = 0; i < coarse.length; i++) {
 		const seed = coarse[i]
 		for (let offset = -2; offset <= 2; offset++) {
-			const angle = normalizeStreakAngle(seed.angle + (offset * edges.angleStep) / 4)
-			const bin = Math.round(angle / edges.angleStep) % edges.angleCount
+			canonicalizeStreakHoughLine(seed.angle + (offset * edges.angleStep) / 4, seed.rho, refinementLine)
+			const bin = Math.round(refinementLine.angle / edges.angleStep) % edges.angleCount
 			refinementEdgeWork += orientationWindowEdgeCount(edges, workspace, bin, toleranceBins, effectiveLocalAngleVotes)
 			workspace.state.houghRefinementEdgeWork = refinementEdgeWork
 			if (coarseEdgeWork + refinementEdgeWork > MAX_STREAK_HOUGH_EDGE_VOTES) throw new RangeError('streak Hough refinement voting exceeds the bounded work budget')
@@ -222,10 +231,10 @@ export function detectStreakHoughCandidates(edges: StreakEdgePoints, width: numb
 		let best = seed
 
 		for (let offset = -2; offset <= 2; offset++) {
-			const angle = normalizeStreakAngle(seed.angle + (offset * edges.angleStep) / 4)
-			const bin = Math.round(angle / edges.angleStep) % edges.angleCount
-			const peak = accumulateAngle(edges, workspace, angle, bin, toleranceBins, effectiveLocalAngleVotes, diagonal, distanceStep, rhoCount, seed.rho)
-			if (peak.score > best.score) best = { angle, rho: peak.rho, score: peak.score }
+			canonicalizeStreakHoughLine(seed.angle + (offset * edges.angleStep) / 4, seed.rho, refinementLine)
+			const bin = Math.round(refinementLine.angle / edges.angleStep) % edges.angleCount
+			const peak = accumulateAngle(edges, workspace, refinementLine.angle, bin, toleranceBins, effectiveLocalAngleVotes, diagonal, distanceStep, rhoCount, refinementLine.rho)
+			if (peak.score > best.score) best = { angle: refinementLine.angle, rho: peak.rho, score: peak.score }
 		}
 
 		insertHoughCandidate(refined, best, maximumCandidates, edges.angleStep, distanceStep * 1.5)
@@ -234,6 +243,14 @@ export function detectStreakHoughCandidates(edges: StreakEdgePoints, width: numb
 	workspace.state.candidateCount = refined.length
 
 	return refined
+}
+
+// Canonicalizes an axial normal-form line, reversing rho after every odd PI crossing.
+function canonicalizeStreakHoughLine(angle: number, rho: number, out: MutableStreakHoughLine): MutableStreakHoughLine {
+	const halfTurns = Math.floor(angle / PI)
+	out.angle = angle - halfTurns * PI
+	out.rho = halfTurns % 2 === 0 ? rho : -rho
+	return out
 }
 
 // Marks every coarse angle whose unique circular orientation window contains an edge.

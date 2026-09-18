@@ -176,6 +176,23 @@ test('visits every orientation bin once when a four-bin window covers the circle
 	expect(workspace.state.houghRefinementEdgeWork).toBe(fixture.count * 5)
 })
 
+test('refines an off-origin line across the zero-PI normal-form seam', () => {
+	const angleCount = 36
+	const angleStep = PI / angleCount
+	const angle = PI - angleStep / 4
+	const width = 128
+	const height = 96
+	const fixture = edges([{ angle, rho: 5 }], width, height, angleCount)
+	const workspace = createStreakDetectionWorkspace(width, height, { angleStep, maximumCandidates: 1, maximumEdgePoints: fixture.count })
+	const candidates = detectStreakHoughCandidates(fixture, width, height, workspace, { orientationTolerance: angleStep, maximumCandidates: 1 })
+	const normalX = -Math.sin(angle)
+	const normalY = Math.cos(angle)
+	const expectedRho = (width / 2) * normalX + (height / 2) * normalY + 5
+	expect(streakAxialAngleDistance(candidates[0].angle, angle)).toBeLessThan(angleStep / 8)
+	expect(candidates[0].rho).toBeCloseTo(expectedRho, 0)
+	expect(Math.abs(candidates[0].rho)).toBeGreaterThan(4)
+})
+
 test('admits sparse inputs using only active angles in the Hough rho budget', () => {
 	const angleCount = 4096
 	const angleStep = PI / angleCount
@@ -219,5 +236,7 @@ test('skips unsupported angles without changing the sparse line candidate', () =
 	expect(fineWorkspace.state.houghActiveAngles).toBeLessThan(fineAngleCount)
 	expect(fine.length).toBeGreaterThan(0)
 	expect(streakAxialAngleDistance(fine[0].angle, coarse[0].angle)).toBeLessThan(PI / 180)
-	expect(Math.abs(fine[0].rho - coarse[0].rho)).toBeLessThan(1)
+	const rawAngleDistance = Math.abs(fine[0].angle - coarse[0].angle)
+	const rhoDistance = rawAngleDistance <= PIOVERTWO ? Math.abs(fine[0].rho - coarse[0].rho) : Math.abs(fine[0].rho + coarse[0].rho)
+	expect(rhoDistance).toBeLessThan(1)
 })
