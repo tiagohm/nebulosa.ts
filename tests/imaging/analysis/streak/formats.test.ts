@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test'
+import { detectStreaks } from '../../../../src/imaging/analysis/streak/detector'
 import { preprocessStreakImage } from '../../../../src/imaging/analysis/streak/preprocess'
 import type { Image } from '../../../../src/imaging/model/types'
+import { renderSyntheticStreak } from '../../../../src/imaging/synthetic/streak'
 
 function image(raw: Float32Array | Float64Array, width: number, height: number, channels: 1 | 3 = 1, bayer?: Image['metadata']['bayer']): Image {
 	const bytes = raw.BYTES_PER_ELEMENT
@@ -36,4 +38,21 @@ test('supports explicit RGB and CFA planes and both precisions', () => {
 	expect(preprocessStreakImage(image(rgb, 16, 16, 3), { plane: 'red', backgroundCellSize: 8 }).plane).toBe('red')
 	const cfa = new Float32Array(16 * 16).fill(0.5)
 	expect(preprocessStreakImage(image(cfa, 16, 16, 1, 'BGGR'), { plane: 'green2', backgroundCellSize: 8 }).plane).toBe('green2')
+})
+
+test('detects RGB and CFA trails in received-image coordinates without mutating input', () => {
+	for (const [channels, bayer] of [
+		[3, undefined],
+		[1, 'RGGB'],
+	] as const) {
+		const frame = image(new Float32Array(128 * 96 * channels).fill(0.1), 128, 96, channels, bayer)
+		renderSyntheticStreak(frame, { start: { x: 15, y: 20 }, end: { x: 112, y: 76 }, width: 4, intensity: 0.8 })
+		const before = frame.raw.slice()
+		const streaks = detectStreaks(frame, { minLength: 50, maxWidth: 10, backgroundCellSize: 24 })
+		expect(frame.raw).toEqual(before)
+		expect(streaks.length).toBeGreaterThan(0)
+		expect(Math.abs(streaks[0].center.x - 63.5)).toBeLessThanOrEqual(3)
+		expect(Math.abs(streaks[0].center.y - 48)).toBeLessThanOrEqual(3)
+		expect(streaks[0].length).toBeGreaterThan(100)
+	}
 })

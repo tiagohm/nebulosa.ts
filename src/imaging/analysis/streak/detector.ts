@@ -67,6 +67,18 @@ interface StreakPhotometry {
 	readonly saturationFraction?: number
 }
 
+// Supported interval found by rescanning the final TLS axis.
+interface FinalStreakSupport {
+	// First supported point on the final axis, in plane pixels.
+	readonly start: Readonly<Point>
+	// Last supported point on the final axis, in plane pixels.
+	readonly end: Readonly<Point>
+	// Supported longitudinal fraction inside the selected run.
+	readonly coverage: number
+	// Whether the selected run reaches either plane/ROI boundary.
+	readonly clippedAtBorder: boolean
+}
+
 // Detects, measures, and deterministically ranks straight luminous streaks without physical classification.
 export function detectStreaks(image: Image, options: Readonly<StreakDetectionOptions> = {}, workspace?: StreakDetectionWorkspace): readonly Streak[] {
 	const resolved = resolveStreakOptions(options)
@@ -276,6 +288,23 @@ function finishStreakRun(
 	const { workspace, grid } = prepared
 	const observedLength = (last - first) * sampleStep * grid.step
 	if (observedLength < options.minLength) return
+	let longitudinalSum = 0
+	let longitudinalSquaredSum = 0
+	let longitudinalCount = 0
+	workspace.statistics.reset()
+	for (let sample = first; sample <= last; sample++) {
+		if (!workspace.longitudinalSupported[sample]) continue
+		const signal = workspace.longitudinalSignal[sample]
+		longitudinalSum += signal
+		longitudinalSquaredSum += signal * signal
+		longitudinalCount++
+		workspace.statistics.push(signal)
+	}
+	const longitudinalCoherence = longitudinalSquaredSum > 0 ? (longitudinalSum * longitudinalSum) / (longitudinalCount * longitudinalSquaredSum) : 0
+	if (longitudinalCoherence < 0.55) return
+	const longitudinalMean = longitudinalCount > 0 ? longitudinalSum / longitudinalCount : 0
+	const longitudinalMedian = workspace.statistics.median()
+	if (!(longitudinalMean > 0) || longitudinalMedian / longitudinalMean < 0.5) return
 	const fit = fitLongitudinalCentroids(workspace, origin, seedTangentX, seedTangentY, seedNormalX, seedNormalY, sampleStep, first, last)
 	if (!fit || fit.linearity < options.minLinearity) return
 	const vectors = streakLineVectors(fit.angle)
@@ -299,8 +328,17 @@ function finishStreakRun(
 	minimum = Math.max(minimum, Math.min(clipFirst, clipSecond))
 	maximum = Math.min(maximum, Math.max(clipFirst, clipSecond))
 	if (!(maximum > minimum)) return
-	const planeStart = { x: Math.max(0, Math.min(grid.width - 1, fit.center.x + minimum * vectors.tangent.x)), y: Math.max(0, Math.min(grid.height - 1, fit.center.y + minimum * vectors.tangent.y)) }
-	const planeEnd = { x: Math.max(0, Math.min(grid.width - 1, fit.center.x + maximum * vectors.tangent.x)), y: Math.max(0, Math.min(grid.height - 1, fit.center.y + maximum * vectors.tangent.y)) }
+	let planeStart = { x: Math.max(0, Math.min(grid.width - 1, fit.center.x + minimum * vectors.tangent.x)), y: Math.max(0, Math.min(grid.height - 1, fit.center.y + minimum * vectors.tangent.y)) }
+	let planeEnd = { x: Math.max(0, Math.min(grid.width - 1, fit.center.x + maximum * vectors.tangent.x)), y: Math.max(0, Math.min(grid.height - 1, fit.center.y + maximum * vectors.tangent.y)) }
+	let coverage = supported / (last - first + 1)
+	let clippedAtBorder = first === 0 || last === sampleCount - 1
+	const finalSupport = scanFinalStreakSupport(prepared, fit, options)
+	if (finalSupport && Math.hypot(finalSupport.end.x - finalSupport.start.x, finalSupport.end.y - finalSupport.start.y) >= Math.hypot(planeEnd.x - planeStart.x, planeEnd.y - planeStart.y)) {
+		planeStart = { x: finalSupport.start.x, y: finalSupport.start.y }
+		planeEnd = { x: finalSupport.end.x, y: finalSupport.end.y }
+		coverage = finalSupport.coverage
+		clippedAtBorder = finalSupport.clippedAtBorder
+	}
 	const photometry = measureStreakPhotometry(prepared, planeStart, planeEnd, fit.angle, options.maxWidth / grid.step)
 	const width = photometry.width * grid.step
 	if (!Number.isFinite(width) || width > options.maxWidth) return
@@ -309,12 +347,10 @@ function finishStreakRun(
 	if (linearity < options.minLinearity) return
 	const snr = prepared.globalNoise > 0 && photometry.validSamples > 0 ? photometry.flux / (prepared.globalNoise * Math.sqrt(photometry.validSamples)) : undefined
 	if (snr !== undefined && snr < options.minSNR) return
-	const clippedAtBorder = first === 0 || last === sampleCount - 1
 	if (clippedAtBorder && !options.allowBorderClipping) return
 	const [start, end] = canonicalizeStreakEndpoints(streakPlanePointToImage(planeStart, grid.sourceLeft, grid.sourceTop, grid.step), streakPlanePointToImage(planeEnd, grid.sourceLeft, grid.sourceTop, grid.step))
 	const length = Math.hypot(end.x - start.x, end.y - start.y)
 	if (length < options.minLength) return
-	const coverage = supported / (last - first + 1)
 	const snrEvidence = snr === undefined ? Math.min(1, candidate.score / Math.max(1, supported * 8)) : snr / (snr + Math.max(1, options.minSNR))
 	const residualEvidence = 1 / (1 + (fit.rmsResidual * grid.step) / Math.max(width, 0.5))
 	const confidence = Math.max(0, Math.min(1, (snrEvidence + linearity + coverage + residualEvidence) * 0.25 * (clippedAtBorder ? 0.95 : 1)))
@@ -339,12 +375,93 @@ function finishStreakRun(
 	})
 }
 
+// Rescans the final TLS axis and returns the supported run containing its fitted center.
+function scanFinalStreakSupport(prepared: PreparedStreakImage, fit: WeightedLineFit, options: ResolvedStreakDetectionOptions): FinalStreakSupport | undefined {
+	const { workspace, grid } = prepared
+	const clipped = clipStreakLineToArea(fit.angle, fit.rho, { left: 0, top: 0, right: grid.width, bottom: grid.height })
+	if (!clipped) return undefined
+	const dx = clipped[1].x - clipped[0].x
+	const dy = clipped[1].y - clipped[0].y
+	const length = Math.hypot(dx, dy)
+	const sampleCount = Math.min(workspace.longitudinalSignal.length, Math.floor(length) + 1)
+	if (sampleCount < 2) return undefined
+	const sampleStep = length / (sampleCount - 1)
+	const tangentX = dx / length
+	const tangentY = dy / length
+	const normalX = -tangentY
+	const normalY = tangentX
+	const halfWidth = Math.max(1, Math.ceil(options.maxWidth / grid.step))
+	const numericalFloor = Math.max(1e-12, Number.EPSILON * Math.max(1, Math.abs(prepared.globalBackground)) * 32)
+	for (let sample = 0; sample < sampleCount; sample++) {
+		const baseX = clipped[0].x + tangentX * sample * sampleStep
+		const baseY = clipped[0].y + tangentY * sample * sampleStep
+		let flux = 0
+		let valid = 0
+		for (let offset = -halfWidth; offset <= halfWidth; offset++) {
+			const x = Math.round(baseX + normalX * offset)
+			const y = Math.round(baseY + normalY * offset)
+			if (x < 0 || x >= grid.width || y < 0 || y >= grid.height) continue
+			const index = y * grid.width + x
+			if (workspace.mask[index] & STREAK_MASK_INVALID) continue
+			valid++
+			flux += Math.max(0, workspace.signal[index])
+		}
+		const noise = streakLocalNoise(prepared, baseX, baseY)
+		const threshold = noise > 0 ? options.thresholdSigma * noise * Math.sqrt(valid) : numericalFloor
+		workspace.longitudinalSupported[sample] = flux > threshold ? 1 : 0
+	}
+	const centerProjection = (fit.center.x - clipped[0].x) * tangentX + (fit.center.y - clipped[0].y) * tangentY
+	const centerIndex = Math.max(0, Math.min(sampleCount - 1, Math.round(centerProjection / sampleStep)))
+	const maximumGap = Math.floor(options.mergeGap / grid.step)
+	let selectedFirst = -1
+	let selectedLast = -1
+	let selectedSupported = 0
+	let selectedContainsCenter = false
+	let first = -1
+	let last = -1
+	let supported = 0
+	for (let sample = 0; sample <= sampleCount; sample++) {
+		if (sample < sampleCount && workspace.longitudinalSupported[sample]) {
+			if (first < 0) first = sample
+			last = sample
+			supported++
+			continue
+		}
+		if (first < 0 || sample - last - 1 <= maximumGap) continue
+		const containsCenter = first <= centerIndex && centerIndex <= last
+		if (containsCenter || (!selectedContainsCenter && (selectedFirst < 0 || last - first > selectedLast - selectedFirst))) {
+			selectedFirst = first
+			selectedLast = last
+			selectedSupported = supported
+			selectedContainsCenter = containsCenter
+		}
+		first = -1
+		last = -1
+		supported = 0
+	}
+	if (first >= 0) {
+		const containsCenter = first <= centerIndex && centerIndex <= last
+		if (containsCenter || (!selectedContainsCenter && (selectedFirst < 0 || last - first > selectedLast - selectedFirst))) {
+			selectedFirst = first
+			selectedLast = last
+			selectedSupported = supported
+		}
+	}
+	if (selectedFirst < 0 || selectedLast <= selectedFirst) return undefined
+	return {
+		start: { x: clipped[0].x + tangentX * selectedFirst * sampleStep, y: clipped[0].y + tangentY * selectedFirst * sampleStep },
+		end: { x: clipped[0].x + tangentX * selectedLast * sampleStep, y: clipped[0].y + tangentY * selectedLast * sampleStep },
+		coverage: selectedSupported / (selectedLast - selectedFirst + 1),
+		clippedAtBorder: selectedFirst === 0 || selectedLast === sampleCount - 1,
+	}
+}
+
 // Fits longitudinal flux centroids with bounded weights and three Huber-like residual iterations.
 function fitLongitudinalCentroids(workspace: StreakDetectionWorkspace, origin: Readonly<Point>, tangentX: number, tangentY: number, normalX: number, normalY: number, sampleStep: number, first: number, last: number): WeightedLineFit | undefined {
 	workspace.statistics.reset()
 	for (let sample = first; sample <= last; sample++) if (workspace.longitudinalSupported[sample]) workspace.statistics.push(workspace.longitudinalWeight[sample])
 	const medianWeight = workspace.statistics.median()
-	const weightCap = Number.isFinite(medianWeight) && medianWeight > 0 ? medianWeight * 5 : Number.POSITIVE_INFINITY
+	const weightCap = Number.isFinite(medianWeight) && medianWeight > 0 ? medianWeight * 2 : Number.POSITIVE_INFINITY
 	let previous: WeightedLineFit | undefined
 
 	for (let iteration = 0; iteration < 3; iteration++) {
