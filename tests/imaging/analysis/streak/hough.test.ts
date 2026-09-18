@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { PI, PIOVERFOUR, PIOVERTWO } from '../../../../src/core/constants'
 import { streakAxialAngleDistance } from '../../../../src/imaging/analysis/streak/geometry'
-import { collectStreakEdges, detectStreakHoughCandidates, type StreakEdgePoints } from '../../../../src/imaging/analysis/streak/hough'
+import { collectStreakEdges, detectStreakHoughCandidates, MAX_STREAK_LOCAL_ANGLE_VOTES, type StreakEdgePoints } from '../../../../src/imaging/analysis/streak/hough'
 import { preprocessStreakImage } from '../../../../src/imaging/analysis/streak/preprocess'
 import { createStreakDetectionWorkspace } from '../../../../src/imaging/analysis/streak/workspace'
 import type { Image } from '../../../../src/imaging/model/types'
@@ -122,4 +122,13 @@ test('supports angular scratch capacity on a minimal Sobel plane', () => {
 	const prepared = preprocessStreakImage(image(raw, 3, 3), { backgroundCellSize: 8 }, workspace)
 	expect(() => collectStreakEdges(prepared)).not.toThrow()
 	expect(workspace.rhoNearest.length).toBeGreaterThanOrEqual(workspace.angleCapacity)
+})
+
+test('rejects local-angle and edge-vote combinations beyond the Hough work budget', () => {
+	const angleStep = PI / 4096
+	const workspace = createStreakDetectionWorkspace(128, 128, { angleStep, maximumEdgePoints: 1024 })
+	const fixture = edges([{ angle: 0, rho: 0 }], 128, 128, 4096)
+	const maximumTolerance = angleStep * ((MAX_STREAK_LOCAL_ANGLE_VOTES - 1) / 2)
+	expect(() => detectStreakHoughCandidates(fixture, 128, 128, workspace, { orientationTolerance: maximumTolerance, maximumCandidates: 8 })).not.toThrow()
+	expect(() => detectStreakHoughCandidates(fixture, 128, 128, workspace, { orientationTolerance: maximumTolerance + angleStep, maximumCandidates: 8 })).toThrow('bounded work budget')
 })

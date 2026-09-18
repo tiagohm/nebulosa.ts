@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { PI } from '../../../../src/core/constants'
 import { detectStreaks } from '../../../../src/imaging/analysis/streak/detector'
 import { createStreakDetectionWorkspace } from '../../../../src/imaging/analysis/streak/workspace'
 import type { Image } from '../../../../src/imaging/model/types'
@@ -32,6 +33,8 @@ test('reuses every large workspace buffer with numerically stable output', () =>
 		workspace.longitudinalOffset,
 		workspace.longitudinalWeight,
 		workspace.longitudinalSupported,
+		workspace.transverseSignal,
+		workspace.transverseNoise,
 	]
 	const first = detectStreaks(frame, { minLength: 80, maxWidth: 8, backgroundCellSize: 32 }, workspace)
 	const second = detectStreaks(frame, { minLength: 80, maxWidth: 8, backgroundCellSize: 32 }, workspace)
@@ -55,11 +58,13 @@ test('reuses every large workspace buffer with numerically stable output', () =>
 		workspace.longitudinalOffset,
 		workspace.longitudinalWeight,
 		workspace.longitudinalSupported,
+		workspace.transverseSignal,
+		workspace.transverseNoise,
 	]
 	for (let index = 0; index < identities.length; index++) expect(repeated[index]).toBe(identities[index])
 	expect(workspace.state.edgeCount).toBeLessThanOrEqual(workspace.maximumEdgePoints)
 	expect(workspace.state.candidateCount).toBeLessThanOrEqual(workspace.maximumCandidates)
-})
+}, 2000)
 
 test('matches a fresh workspace and remains bounded under candidate pressure', () => {
 	const frame = image(512, 384)
@@ -73,4 +78,16 @@ test('matches a fresh workspace and remains bounded under candidate pressure', (
 	expect(constrained.state.edgeCount).toBeLessThanOrEqual(512)
 	expect(constrained.state.candidateCount).toBeLessThanOrEqual(32)
 	expect(constrained.state.edgesTruncated).toBeTrue()
-})
+}, 3000)
+
+test('rejects multiplicative work explosions and clamps width work to the frame', () => {
+	const frame = image(96, 64)
+	renderSyntheticStreak(frame, { start: { x: 8, y: 15 }, end: { x: 88, y: 50 }, width: 3, intensity: 0.5 })
+	expect(() => detectStreaks(frame, { angleStep: PI / 4096, orientationTolerance: PI / 2 })).toThrow('voting budget')
+	expect(() => detectStreaks(frame, { maxWidth: 257 })).toThrow()
+	expect(() => detectStreaks(frame, { maxCandidates: 513 })).toThrow()
+	const narrow = detectStreaks(frame, { minLength: 40, maxWidth: 8, backgroundCellSize: 16 })
+	const frameBounded = detectStreaks(frame, { minLength: 40, maxWidth: 256, backgroundCellSize: 16 })
+	expect(Math.abs(frameBounded[0].flux / narrow[0].flux - 1)).toBeLessThan(0.0001)
+	expect(Math.abs(frameBounded[0].width / narrow[0].width - 1)).toBeLessThan(0.01)
+}, 2000)

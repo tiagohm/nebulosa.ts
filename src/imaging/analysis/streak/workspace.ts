@@ -13,6 +13,9 @@ export const MINIMUM_STREAK_BACKGROUND_CELL_SIZE = 8
 // Default retained oriented-edge capacity under candidate pressure.
 export const DEFAULT_MAXIMUM_STREAK_EDGE_POINTS = 131_072
 
+// Fixed transverse-profile capacity for the detector's maximum 256-pixel FWHM.
+export const STREAK_TRANSVERSE_PROFILE_CAPACITY = 515
+
 // Construction settings that determine fixed workspace capacities.
 export interface StreakDetectionWorkspaceOptions {
 	// Floating-point precision of the full-plane residual buffer.
@@ -91,6 +94,10 @@ export interface StreakDetectionWorkspace {
 	readonly longitudinalWeight: Float64Array
 	// Boolean support classification at each longitudinal position.
 	readonly longitudinalSupported: Uint8Array
+	// Signed residual accumulated by transverse offset during width measurement.
+	readonly transverseSignal: Float64Array
+	// Local residual-noise variance accumulated by transverse offset.
+	readonly transverseNoise: Float64Array
 	// Reused counters and truncation state from the latest call.
 	readonly state: StreakDetectionWorkspaceState
 }
@@ -151,6 +158,8 @@ export function createStreakDetectionWorkspace(width: number, height: number, op
 		longitudinalOffset: new Float64Array(longitudinalCapacity),
 		longitudinalWeight: new Float64Array(longitudinalCapacity),
 		longitudinalSupported: new Uint8Array(longitudinalCapacity),
+		transverseSignal: new Float64Array(STREAK_TRANSVERSE_PROFILE_CAPACITY),
+		transverseNoise: new Float64Array(STREAK_TRANSVERSE_PROFILE_CAPACITY),
 		state: { edgeCount: 0, candidateCount: 0, edgesTruncated: false },
 	}
 }

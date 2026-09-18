@@ -71,7 +71,7 @@ test('merges short collinear gaps but preserves separated fragments', () => {
 	renderLine(separated, 90, 48, 140, 48, 3, 0.8)
 	const fragments = detectStreaks(separated, { minLength: 20, maxWidth: 8, mergeGap: 12, backgroundCellSize: 32 })
 	expect(fragments.length).toBe(2)
-})
+}, 2000)
 
 test('preserves separated parallel and crossing streaks while removing duplicates', () => {
 	const parallel = image(160, 128)
@@ -87,4 +87,16 @@ test('preserves separated parallel and crossing streaks while removing duplicate
 	const crossingDetections = detectStreaks(crossing, { minLength: 40, maxWidth: 8, backgroundCellSize: 32 })
 	expect(crossingDetections.length).toBe(2)
 	expect(streakAxialAngleDistance(crossingDetections[0].angle, crossingDetections[1].angle)).toBeGreaterThan(PI / 3)
-})
+}, 2000)
+
+for (const crossingDegrees of [5, 8, 12]) {
+	test(`preserves two resolved streaks crossing at ${crossingDegrees} degrees`, () => {
+		const frame = image(256, 192)
+		const angle = (crossingDegrees * PI) / 180
+		renderLine(frame, 18, 96, 238, 96, 1.5, 0.8)
+		renderLine(frame, 18, 96 - Math.tan(angle) * 110, 238, 96 + Math.tan(angle) * 110, 1.5, 0.7)
+		const detections = detectStreaks(frame, { minLength: 140, maxWidth: 5, angleStep: PI / 180, orientationTolerance: PI / 90, mergeAngleTolerance: PI / 180, backgroundCellSize: 32, maxStreaks: 8 })
+		expect(detections.length).toBe(2)
+		expect(streakAxialAngleDistance(detections[0].angle, detections[1].angle)).toBeGreaterThan(((crossingDegrees - 2) * PI) / 180)
+	})
+}

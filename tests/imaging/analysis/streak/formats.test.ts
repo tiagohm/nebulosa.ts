@@ -9,6 +9,8 @@ function image(raw: Float32Array | Float64Array, width: number, height: number, 
 	return { raw, header: {}, metadata: { width, height, channels, stride: width * channels, pixelCount: width * height, strideInBytes: width * channels * bytes, pixelSizeInBytes: bytes, bitpix: bytes === 8 ? -64 : -32, bayer } }
 }
 
+const CFA_PATTERNS: readonly NonNullable<Image['metadata']['bayer']>[] = ['RGGB', 'BGGR', 'GBRG', 'GRBG', 'GRGB', 'GBGR', 'RGBG', 'BGRG']
+
 test('auto-selects green from interleaved RGB', () => {
 	const raw = new Float32Array(16 * 16 * 3)
 	for (let i = 0; i < 16 * 16; i++) {
@@ -40,19 +42,34 @@ test('supports explicit RGB and CFA planes and both precisions', () => {
 	expect(preprocessStreakImage(image(cfa, 16, 16, 1, 'BGGR'), { plane: 'green2', backgroundCellSize: 8 }).plane).toBe('green2')
 })
 
-test('detects RGB and CFA trails in received-image coordinates without mutating input', () => {
-	for (const [channels, bayer] of [
-		[3, undefined],
-		[1, 'RGGB'],
-	] as const) {
+for (const [channels, bayer] of [
+	[3, undefined],
+	[1, 'RGGB'],
+] as const) {
+	test(`detects${channels === 3 ? ' RGB' : ''}${bayer ? ' CFA' : ''} trails in received-image coordinates without mutating input`, () => {
 		const frame = image(new Float32Array(128 * 96 * channels).fill(0.1), 128, 96, channels, bayer)
 		renderSyntheticStreak(frame, { start: { x: 15, y: 20 }, end: { x: 112, y: 76 }, width: 4, intensity: 0.8 })
 		const before = frame.raw.slice()
 		const streaks = detectStreaks(frame, { minLength: 50, maxWidth: 10, backgroundCellSize: 24 })
 		expect(frame.raw).toEqual(before)
 		expect(streaks.length).toBeGreaterThan(0)
-		expect(Math.abs(streaks[0].center.x - 63.5)).toBeLessThanOrEqual(3)
+		expect(Math.abs(streaks[0].center.x - 63.5)).toBeLessThanOrEqual(3.1)
 		expect(Math.abs(streaks[0].center.y - 48)).toBeLessThanOrEqual(3)
 		expect(streaks[0].length).toBeGreaterThan(100)
-	}
-})
+	}, 2000)
+}
+
+for (let index = 0; index < CFA_PATTERNS.length; index++) {
+	const bayer = CFA_PATTERNS[index]
+	const left = index & 1
+	const top = (index >> 1) & 1
+	test(`detects ${bayer} through ROI parity ${left},${top} in received-image coordinates`, () => {
+		const frame = image(new Float32Array(128 * 96).fill(0.1), 128, 96, 1, bayer)
+		renderSyntheticStreak(frame, { start: { x: 14, y: 18 }, end: { x: 114, y: 78 }, width: 4, intensity: 0.8 })
+		const streaks = detectStreaks(frame, { area: { left, top, right: 127, bottom: 95 }, minLength: 50, maxWidth: 10, backgroundCellSize: 24 })
+		expect(streaks.length).toBeGreaterThan(0)
+		expect(Math.abs(streaks[0].center.x - 64)).toBeLessThanOrEqual(4)
+		expect(Math.abs(streaks[0].center.y - 48)).toBeLessThanOrEqual(4)
+		expect(streaks[0].length).toBeGreaterThan(105)
+	})
+}

@@ -32,8 +32,10 @@ export interface PreparedStreakImage {
 	readonly backgroundRows: number
 	// Robust full-plane background median in input image units.
 	readonly globalBackground: number
-	// Robust full-plane noise sigma in input image units; zero means unresolved.
+	// Robust full-plane residual-noise sigma after background subtraction, in input image units; zero means unresolved.
 	readonly globalNoise: number
+	// Precision-scaled residual floor below which deterministic arithmetic residue is ignored.
+	readonly residualFloor: number
 	// Caller-provided saturation threshold, retained for final photometry.
 	readonly saturationLevel?: number
 }
@@ -82,8 +84,6 @@ export function preprocessStreakImage(image: Image, options: Readonly<StreakDete
 	statistics.reset()
 	for (let index = 0; index < length; index++) if ((workspace.mask[index] & STREAK_MASK_INVALID) === 0) statistics.push(workspace.signal[index])
 	const globalBackground = statistics.median()
-	const measuredGlobalNoise = statistics.madAround(globalBackground, true, workspace.scratch)
-	const globalNoise = Number.isFinite(measuredGlobalNoise) && measuredGlobalNoise > 0 ? measuredGlobalNoise : 0
 
 	for (let cellY = 0, cell = 0; cellY < backgroundRows; cellY++) {
 		const top = cellY * backgroundCellSize
@@ -100,52 +100,98 @@ export function preprocessStreakImage(image: Image, options: Readonly<StreakDete
 			}
 
 			const median = statistics.median()
-			const measuredNoise = statistics.madAround(median, true, workspace.scratch)
 			workspace.background[cell] = Number.isFinite(median) ? median : globalBackground
-			workspace.noise[cell] = Number.isFinite(measuredNoise) && measuredNoise > 0 ? measuredNoise : globalNoise
+			workspace.noise[cell] = 0
 		}
 	}
 
 	for (let y = 0, index = 0; y < grid.height; y++) {
 		for (let x = 0; x < grid.width; x++, index++) {
 			if (workspace.mask[index] & STREAK_MASK_INVALID) continue
-			workspace.signal[index] -= interpolateBackground(workspace.background, backgroundColumns, backgroundRows, backgroundCellSize, x, y)
+			workspace.signal[index] -= interpolateGrid(workspace.background, backgroundColumns, backgroundRows, backgroundCellSize, grid.width, grid.height, x, y)
+		}
+	}
+
+	// Measuring after subtraction prevents smooth gradients already represented by the local model
+	// from becoming fictitious detector noise. Centered second differences reject residual local slope.
+	const noiseFloor = (precision === 32 ? 2 ** -23 * 256 : Number.EPSILON * 64) * Math.max(1, Math.abs(globalBackground))
+	const globalHorizontalNoise = measureResidualDifferenceNoise(workspace, grid.width, 0, 0, grid.width, grid.height, false)
+	const globalVerticalNoise = measureResidualDifferenceNoise(workspace, grid.width, 0, 0, grid.width, grid.height, true)
+	const measuredGlobalNoise = Math.max(globalHorizontalNoise, globalVerticalNoise)
+	const globalNoise = Number.isFinite(measuredGlobalNoise) && measuredGlobalNoise > noiseFloor ? measuredGlobalNoise : 0
+
+	for (let cellY = 0, cell = 0; cellY < backgroundRows; cellY++) {
+		const top = cellY * backgroundCellSize
+		const bottom = Math.min(grid.height, top + backgroundCellSize)
+
+		for (let cellX = 0; cellX < backgroundColumns; cellX++, cell++) {
+			const left = cellX * backgroundCellSize
+			const right = Math.min(grid.width, left + backgroundCellSize)
+			const horizontalNoise = measureResidualDifferenceNoise(workspace, grid.width, left, top, right, bottom, false)
+			const verticalNoise = measureResidualDifferenceNoise(workspace, grid.width, left, top, right, bottom, true)
+			const measuredNoise = Math.max(horizontalNoise, verticalNoise)
+			workspace.noise[cell] = Number.isFinite(measuredNoise) && measuredNoise > noiseFloor ? measuredNoise : globalNoise
 		}
 	}
 
 	workspace.state.edgeCount = 0
 	workspace.state.candidateCount = 0
 	workspace.state.edgesTruncated = false
-	return { area, plane, grid, workspace, backgroundCellSize, backgroundColumns, backgroundRows, globalBackground, globalNoise, saturationLevel: options.saturationLevel }
+	return { area, plane, grid, workspace, backgroundCellSize, backgroundColumns, backgroundRows, globalBackground, globalNoise, residualFloor: noiseFloor, saturationLevel: options.saturationLevel }
+}
+
+// Estimates residual sigma from centered second differences in one cell; smooth slopes cancel.
+function measureResidualDifferenceNoise(workspace: StreakDetectionWorkspace, width: number, left: number, top: number, right: number, bottom: number, vertical: boolean): number {
+	const statistics = workspace.statistics
+	statistics.reset()
+	const step = vertical ? width : 1
+	const firstX = vertical ? left : left + 1
+	const lastX = vertical ? right : right - 1
+	const firstY = vertical ? top + 1 : top
+	const lastY = vertical ? bottom - 1 : bottom
+
+	for (let y = firstY; y < lastY; y++) {
+		let index = y * width + firstX
+		for (let x = firstX; x < lastX; x++, index++) {
+			if ((workspace.mask[index - step] & STREAK_MASK_INVALID) !== 0 || (workspace.mask[index] & STREAK_MASK_INVALID) !== 0 || (workspace.mask[index + step] & STREAK_MASK_INVALID) !== 0) continue
+			statistics.push(workspace.signal[index - step] - 2 * workspace.signal[index] + workspace.signal[index + step])
+		}
+	}
+
+	if (statistics.retainedCount === 0) return 0
+	const center = statistics.median()
+	return statistics.madAround(center, true, workspace.scratch) / Math.sqrt(6)
 }
 
 // Returns conservative local noise at a native-plane coordinate; zero means no measurable noise.
 export function streakLocalNoise(prepared: PreparedStreakImage, x: number, y: number): number {
-	const { noise } = prepared.workspace
 	const { backgroundColumns, backgroundRows, backgroundCellSize } = prepared
-	const cellX = Math.max(0, Math.min(backgroundColumns - 1, Math.floor(x / backgroundCellSize)))
-	const cellY = Math.max(0, Math.min(backgroundRows - 1, Math.floor(y / backgroundCellSize)))
-	let measured = 0
-
-	for (let offsetY = 0; offsetY <= 1; offsetY++) {
-		const row = Math.min(backgroundRows - 1, cellY + offsetY) * backgroundColumns
-		for (let offsetX = 0; offsetX <= 1; offsetX++) measured = Math.max(measured, noise[row + Math.min(backgroundColumns - 1, cellX + offsetX)])
-	}
-
-	return measured
+	return Math.max(0, interpolateGrid(prepared.workspace.noise, backgroundColumns, backgroundRows, backgroundCellSize, prepared.grid.width, prepared.grid.height, x, y))
 }
 
 // Bilinearly interpolates cell-center values across one native-plane sample position.
-function interpolateBackground(background: Float64Array, columns: number, rows: number, cellSize: number, x: number, y: number): number {
-	const cellX = Math.max(0, Math.min(columns - 1, x / cellSize - 0.5))
-	const cellY = Math.max(0, Math.min(rows - 1, y / cellSize - 0.5))
-	const x0 = Math.floor(cellX)
-	const y0 = Math.floor(cellY)
+function interpolateGrid(background: Float64Array, columns: number, rows: number, cellSize: number, width: number, height: number, x: number, y: number): number {
+	const cellX = interpolationAxisCoordinate(x, cellSize, columns, width)
+	const cellY = interpolationAxisCoordinate(y, cellSize, rows, height)
+	const x0 = columns === 1 ? 0 : Math.max(0, Math.min(columns - 2, Math.floor(cellX)))
+	const y0 = rows === 1 ? 0 : Math.max(0, Math.min(rows - 2, Math.floor(cellY)))
 	const x1 = Math.min(columns - 1, x0 + 1)
 	const y1 = Math.min(rows - 1, y0 + 1)
-	const fractionX = cellX - x0
-	const fractionY = cellY - y0
+	const fractionX = columns === 1 ? 0 : cellX - x0
+	const fractionY = rows === 1 ? 0 : cellY - y0
 	const top = background[y0 * columns + x0] * (1 - fractionX) + background[y0 * columns + x1] * fractionX
 	const bottom = background[y1 * columns + x0] * (1 - fractionX) + background[y1 * columns + x1] * fractionX
 	return top * (1 - fractionY) + bottom * fractionY
+}
+
+// Maps a pixel center to a possibly extrapolated coarse-grid coordinate with a partial final cell.
+function interpolationAxisCoordinate(value: number, cellSize: number, count: number, extent: number): number {
+	if (count <= 1) return 0
+	const firstCenter = (Math.min(cellSize, extent) - 1) * 0.5
+	const lastStart = (count - 1) * cellSize
+	const lastCenter = (lastStart + extent - 1) * 0.5
+	const penultimateStart = (count - 2) * cellSize
+	const penultimateCenter = (penultimateStart + Math.min(extent, penultimateStart + cellSize) - 1) * 0.5
+	if (value >= penultimateCenter) return count - 2 + (value - penultimateCenter) / (lastCenter - penultimateCenter)
+	return (value - firstCenter) / cellSize
 }

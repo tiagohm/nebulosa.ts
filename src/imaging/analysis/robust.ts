@@ -67,15 +67,14 @@ export class RobustReservoir {
 	median(): number {
 		const count = this.retainedCount
 		if (count === 0) return Number.NaN
-		return medianBySelectionOf(this.#values.subarray(0, count))
+		return medianBySelectionOf(this.#values, count)
 	}
 
 	// Returns the median absolute deviation of retained samples, optionally reusing caller-owned scratch.
 	mad(normalized: boolean = false, scratch?: Float64Array): number {
 		const count = this.retainedCount
 		if (count === 0) return Number.NaN
-		const selected = this.#values.subarray(0, count)
-		const center = medianBySelectionOf(selected)
+		const center = medianBySelectionOf(this.#values, count)
 		return this.madAround(center, normalized, scratch)
 	}
 
@@ -91,9 +90,9 @@ export class RobustReservoir {
 	robustStandardDeviation(): number {
 		const count = this.retainedCount
 		if (count === 0) return Number.NaN
-		const selected = this.#values.subarray(0, count)
-		const center = medianBySelectionOf(selected)
-		const mad = medianAbsoluteDeviationOf(selected, center, true)
+		const selected = this.#values
+		const center = medianBySelectionOf(selected, count)
+		const mad = medianAbsoluteDeviationOf(selected, center, true, count)
 		const limit = mad > 0 ? mad * 5 : 0
 		let accepted = 0
 		let mean = 0

@@ -26,13 +26,13 @@ export interface Streak {
 	readonly rmsResidual: number
 	// Fraction of the endpoint interval containing accepted longitudinal support, in [0, 1].
 	readonly coverage: number
-	// Number of longitudinal/transverse samples accepted by final refinement.
+	// Number of unique positive-residual image-plane pixels in the final corridor.
 	readonly supportPixels: number
 	// Whether observed support reaches the analysis ROI boundary, so length may be truncated.
 	readonly clippedAtBorder: boolean
-	// Sum of positive background-subtracted samples in the final corridor, in image units.
+	// Signed sum of unique background-subtracted pixels in the final corridor, in image units.
 	readonly flux: number
-	// Mean positive background-subtracted signal among supported samples, in image units.
+	// Mean signed background-subtracted signal over valid corridor pixels, in image units.
 	readonly meanSignal: number
 	// Maximum valid background-subtracted sample in the final corridor, in image units.
 	readonly peakSignal: number

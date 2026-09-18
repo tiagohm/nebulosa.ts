@@ -8,6 +8,12 @@ import type { StreakDetectionWorkspace } from './workspace'
 // Sparse orientation-gated Hough seeding for straight streaks. Edge arrays are structure-of-arrays,
 // angles are axial tangent bins, and rho storage is reused one angle at a time.
 
+// Maximum local angular bins visited for one edge-equivalent Hough vote.
+export const MAX_STREAK_LOCAL_ANGLE_VOTES = 33
+
+// Maximum edge/local-angle combinations accepted by one Hough call.
+export const MAX_STREAK_HOUGH_EDGE_VOTES = 16_777_216
+
 // A bounded structure-of-arrays view of oriented edge samples.
 export interface StreakEdgePoints {
 	// Number of populated entries in each array.
@@ -125,6 +131,9 @@ export function detectStreakHoughCandidates(edges: StreakEdgePoints, width: numb
 	const rhoCount = Math.ceil((2 * diagonal) / distanceStep) + 3
 	if (rhoCount > workspace.rhoCapacity) throw new RangeError('streak workspace rho capacity is too small')
 	const toleranceBins = Math.ceil(orientationTolerance / edges.angleStep)
+	const localAngleVotes = 2 * toleranceBins + 1
+	// This prevents a type-valid tolerance/step combination from degenerating into global Hough work.
+	if (localAngleVotes > MAX_STREAK_LOCAL_ANGLE_VOTES || edges.count * localAngleVotes > MAX_STREAK_HOUGH_EDGE_VOTES) throw new RangeError('streak Hough voting exceeds the bounded work budget')
 	const coarse: StreakHoughCandidate[] = []
 	const peakBins = new Int32Array(4)
 	const peakScores = new Float64Array(4)
@@ -186,7 +195,7 @@ export function detectStreakHoughCandidates(edges: StreakEdgePoints, width: numb
 function forEachEligibleEdge(prepared: PreparedStreakImage, thresholdSigma: number, gradientSigma: number, angleStep: number, angleCount: number, visit: (x: number, y: number, weight: number, bin: number) => void): void {
 	const { signal, mask } = prepared.workspace
 	const { width, height } = prepared.grid
-	const numericalFloor = Math.max(1e-12, Number.EPSILON * Math.max(1, Math.abs(prepared.globalBackground)) * 32)
+	const numericalFloor = prepared.residualFloor
 
 	for (let y = 1; y < height - 1; y++) {
 		for (let x = 1; x < width - 1; x++) {
