@@ -141,7 +141,7 @@ export function createStreakDetectionWorkspace(width: number, height: number, op
 		angleCounts: new Uint32Array(angleCapacity),
 		angleOffsets: new Uint32Array(angleCapacity + 1),
 		rhoAccumulator: new Float64Array(rhoCapacity),
-		rhoNearest: new Float64Array(rhoCapacity),
+		rhoNearest: new Float64Array(Math.max(rhoCapacity, angleCapacity)),
 		statistics: new RobustReservoir(length),
 		scratch: new Float64Array(Math.min(length, ROBUST_SAMPLE_CAPACITY)),
 		longitudinalSignal: new Float64Array(longitudinalCapacity),
