@@ -148,6 +148,8 @@ export function preprocessStreakImage(image: Image, options: Readonly<StreakDete
 	workspace.state.edgeCount = 0
 	workspace.state.candidateCount = 0
 	workspace.state.edgesTruncated = false
+	workspace.state.houghCoarseEdgeWork = 0
+	workspace.state.houghRefinementEdgeWork = 0
 	workspace.state.houghActiveAngles = 0
 	workspace.state.houghRhoWork = 0
 	workspace.state.refinementWork = 0

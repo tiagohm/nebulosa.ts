@@ -136,6 +136,8 @@ export function collectStreakEdges(prepared: PreparedStreakImage, options: Reado
 export function detectStreakHoughCandidates(edges: StreakEdgePoints, width: number, height: number, workspace: StreakDetectionWorkspace, options: Readonly<StreakHoughOptions> = {}): readonly StreakHoughCandidate[] {
 	validatePositiveInteger(width)
 	validatePositiveInteger(height)
+	workspace.state.houghCoarseEdgeWork = 0
+	workspace.state.houghRefinementEdgeWork = 0
 	workspace.state.houghActiveAngles = 0
 	workspace.state.houghRhoWork = 0
 	if (edges.count > workspace.maximumEdgePoints || edges.angleCount > workspace.angleCapacity) throw new RangeError('streak edge input exceeds workspace capacity')
@@ -151,27 +153,26 @@ export function detectStreakHoughCandidates(edges: StreakEdgePoints, width: numb
 	if (rhoCount > workspace.rhoCapacity) throw new RangeError('streak workspace rho capacity is too small')
 	const toleranceBins = Math.ceil(orientationTolerance / edges.angleStep)
 	const localAngleVotes = 2 * toleranceBins + 1
+	const effectiveLocalAngleVotes = Math.min(localAngleVotes, edges.angleCount)
+	const coarseEdgeWork = edges.count * effectiveLocalAngleVotes
+	workspace.state.houghCoarseEdgeWork = coarseEdgeWork
 	// This prevents a type-valid tolerance/step combination from degenerating into global Hough work.
-	if (localAngleVotes > MAX_STREAK_LOCAL_ANGLE_VOTES || edges.count * localAngleVotes > MAX_STREAK_HOUGH_EDGE_VOTES) throw new RangeError('streak Hough voting exceeds the bounded work budget')
-	const rhoWork = STREAK_HOUGH_FULL_RHO_PASSES * edges.angleCount * rhoCount
-	if (rhoWork > MAX_STREAK_HOUGH_RHO_WORK) throw new RangeError('streak Hough rho scan exceeds the bounded work budget')
-	workspace.state.houghRhoWork = rhoWork
+	if (effectiveLocalAngleVotes > MAX_STREAK_LOCAL_ANGLE_VOTES || coarseEdgeWork > MAX_STREAK_HOUGH_EDGE_VOTES) throw new RangeError('streak Hough voting exceeds the bounded work budget')
 	countingSortEdges(edges, workspace)
+	const activeAngleCount = markActiveHoughAngles(edges, workspace, toleranceBins, effectiveLocalAngleVotes)
+	workspace.state.houghActiveAngles = activeAngleCount
+	const rhoWork = STREAK_HOUGH_FULL_RHO_PASSES * activeAngleCount * rhoCount
+	workspace.state.houghRhoWork = rhoWork
+	if (rhoWork > MAX_STREAK_HOUGH_RHO_WORK) throw new RangeError('streak Hough rho scan exceeds the bounded work budget')
 	const coarse: StreakHoughCandidate[] = []
 	const peakBins = new Int32Array(4)
 	const peakScores = new Float64Array(4)
-	const counts = workspace.angleCounts
-	let supportedEdges = edges.count
-	if (localAngleVotes < edges.angleCount) {
-		supportedEdges = 0
-		for (let offset = -toleranceBins; offset <= toleranceBins; offset++) supportedEdges += counts[(offset + edges.angleCount) % edges.angleCount]
-	}
+	const activeAngles = workspace.rhoNearest
 
 	for (let angleBin = 0; angleBin < edges.angleCount; angleBin++) {
-		if (supportedEdges > 0) {
-			workspace.state.houghActiveAngles++
+		if (activeAngles[angleBin] !== 0) {
 			const angle = angleBin * edges.angleStep
-			const peak = accumulateAngle(edges, workspace, angle, angleBin, toleranceBins, diagonal, distanceStep, rhoCount)
+			const peak = accumulateAngle(edges, workspace, angle, angleBin, toleranceBins, effectiveLocalAngleVotes, diagonal, distanceStep, rhoCount)
 
 			if (peak.score > 0) {
 				peakBins.fill(-1)
@@ -201,11 +202,17 @@ export function detectStreakHoughCandidates(edges: StreakEdgePoints, width: numb
 				}
 			}
 		}
+	}
 
-		if (localAngleVotes < edges.angleCount) {
-			const outgoing = (angleBin - toleranceBins + edges.angleCount) % edges.angleCount
-			const incoming = (angleBin + toleranceBins + 1) % edges.angleCount
-			supportedEdges += counts[incoming] - counts[outgoing]
+	let refinementEdgeWork = 0
+	for (let i = 0; i < coarse.length; i++) {
+		const seed = coarse[i]
+		for (let offset = -2; offset <= 2; offset++) {
+			const angle = normalizeStreakAngle(seed.angle + (offset * edges.angleStep) / 4)
+			const bin = Math.round(angle / edges.angleStep) % edges.angleCount
+			refinementEdgeWork += orientationWindowEdgeCount(edges, workspace, bin, toleranceBins, effectiveLocalAngleVotes)
+			workspace.state.houghRefinementEdgeWork = refinementEdgeWork
+			if (coarseEdgeWork + refinementEdgeWork > MAX_STREAK_HOUGH_EDGE_VOTES) throw new RangeError('streak Hough refinement voting exceeds the bounded work budget')
 		}
 	}
 
@@ -217,7 +224,7 @@ export function detectStreakHoughCandidates(edges: StreakEdgePoints, width: numb
 		for (let offset = -2; offset <= 2; offset++) {
 			const angle = normalizeStreakAngle(seed.angle + (offset * edges.angleStep) / 4)
 			const bin = Math.round(angle / edges.angleStep) % edges.angleCount
-			const peak = accumulateAngle(edges, workspace, angle, bin, toleranceBins, diagonal, distanceStep, rhoCount, seed.rho)
+			const peak = accumulateAngle(edges, workspace, angle, bin, toleranceBins, effectiveLocalAngleVotes, diagonal, distanceStep, rhoCount, seed.rho)
 			if (peak.score > best.score) best = { angle, rho: peak.rho, score: peak.score }
 		}
 
@@ -227,6 +234,42 @@ export function detectStreakHoughCandidates(edges: StreakEdgePoints, width: numb
 	workspace.state.candidateCount = refined.length
 
 	return refined
+}
+
+// Marks every coarse angle whose unique circular orientation window contains an edge.
+function markActiveHoughAngles(edges: StreakEdgePoints, workspace: StreakDetectionWorkspace, toleranceBins: number, effectiveLocalAngleVotes: number): number {
+	const active = workspace.rhoNearest
+	active.fill(0, 0, edges.angleCount)
+	if (edges.count === 0) return 0
+	if (effectiveLocalAngleVotes === edges.angleCount) {
+		active.fill(1, 0, edges.angleCount)
+		return edges.angleCount
+	}
+
+	const counts = workspace.angleCounts
+	let supportedEdges = 0
+	let activeAngleCount = 0
+	for (let offset = -toleranceBins; offset <= toleranceBins; offset++) supportedEdges += counts[(offset + edges.angleCount) % edges.angleCount]
+
+	for (let angleBin = 0; angleBin < edges.angleCount; angleBin++) {
+		if (supportedEdges > 0) {
+			active[angleBin] = 1
+			activeAngleCount++
+		}
+		const outgoing = (angleBin - toleranceBins + edges.angleCount) % edges.angleCount
+		const incoming = (angleBin + toleranceBins + 1) % edges.angleCount
+		supportedEdges += counts[incoming] - counts[outgoing]
+	}
+
+	return activeAngleCount
+}
+
+// Counts edge visits in one unique circular orientation window without traversing edge storage.
+function orientationWindowEdgeCount(edges: StreakEdgePoints, workspace: StreakDetectionWorkspace, centerBin: number, toleranceBins: number, effectiveLocalAngleVotes: number): number {
+	if (effectiveLocalAngleVotes === edges.angleCount) return edges.count
+	let count = 0
+	for (let offset = -toleranceBins; offset <= toleranceBins; offset++) count += workspace.angleCounts[(centerBin + offset + edges.angleCount) % edges.angleCount]
+	return count
 }
 
 // Visits every qualifying Sobel edge without allocating per-pixel records.
@@ -285,7 +328,7 @@ function countingSortEdges(edges: StreakEdgePoints, workspace: StreakDetectionWo
 }
 
 // Accumulates one tangent angle using only nearby local-orientation bins and returns its strongest rho.
-function accumulateAngle(edges: StreakEdgePoints, workspace: StreakDetectionWorkspace, angle: number, centerBin: number, toleranceBins: number, diagonal: number, distanceStep: number, rhoCount: number, preferredRho?: number): { readonly rho: number; readonly score: number } {
+function accumulateAngle(edges: StreakEdgePoints, workspace: StreakDetectionWorkspace, angle: number, centerBin: number, toleranceBins: number, effectiveLocalAngleVotes: number, diagonal: number, distanceStep: number, rhoCount: number, preferredRho?: number): { readonly rho: number; readonly score: number } {
 	const accumulator = workspace.rhoAccumulator
 	const preferredBin = preferredRho === undefined ? undefined : (preferredRho + diagonal) / distanceStep
 	const firstPeakBin = preferredBin === undefined ? 1 : Math.max(1, Math.ceil(preferredBin - 4))
@@ -296,8 +339,11 @@ function accumulateAngle(edges: StreakEdgePoints, workspace: StreakDetectionWork
 	const normalX = -Math.sin(angle)
 	const normalY = Math.cos(angle)
 
-	for (let offset = -toleranceBins; offset <= toleranceBins; offset++) {
-		const bin = (centerBin + offset + edges.angleCount) % edges.angleCount
+	const fullOrientationWindow = effectiveLocalAngleVotes === edges.angleCount
+	const firstOffset = fullOrientationWindow ? 0 : -toleranceBins
+	const lastOffset = fullOrientationWindow ? edges.angleCount - 1 : toleranceBins
+	for (let offset = firstOffset; offset <= lastOffset; offset++) {
+		const bin = fullOrientationWindow ? offset : (centerBin + offset + edges.angleCount) % edges.angleCount
 
 		for (let order = workspace.angleOffsets[bin]; order < workspace.angleOffsets[bin + 1]; order++) {
 			const edge = workspace.edgeOrder[order]
