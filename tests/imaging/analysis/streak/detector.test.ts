@@ -3,6 +3,7 @@ import { PI, PIOVERFOUR, PIOVERTWO } from '../../../../src/core/constants'
 import { detectStreaks } from '../../../../src/imaging/analysis/streak/detector'
 import { streakAxialAngleDistance } from '../../../../src/imaging/analysis/streak/geometry'
 import type { Image } from '../../../../src/imaging/model/types'
+import { renderSyntheticStreak } from '../../../../src/imaging/synthetic/streak'
 
 function image(width: number, height: number): Image {
 	const raw = new Float32Array(width * height).fill(0.1)
@@ -100,3 +101,36 @@ for (const crossingDegrees of [5, 8, 12]) {
 		expect(streakAxialAngleDistance(detections[0].angle, detections[1].angle)).toBeGreaterThan(((crossingDegrees - 2) * PI) / 180)
 	})
 }
+
+for (const [name, on, off] of [
+	['half-duty', 8, 8],
+	['quarter-duty', 4, 12],
+] as const) {
+	test(`detects one long ${name} dashed streak and reports its coverage`, () => {
+		const frame = image(240, 96)
+		const intervals: { start: number; end: number }[] = []
+		const segmentLength = on + off
+		for (let start = 0; start < 200; start += segmentLength) intervals.push({ start: start / 200, end: Math.min(1, (start + on) / 200) })
+		renderSyntheticStreak(frame, { start: { x: 20, y: 48 }, end: { x: 220, y: 48 }, width: 3, intensity: 0.8, profile: { type: 'segments', intervals } })
+		const detections = detectStreaks(frame, { minLength: 140, maxWidth: 8, mergeGap: off + 2, backgroundCellSize: 32 })
+		expect(detections.length).toBe(1)
+		expect(detections[0].length).toBeGreaterThan(190)
+		const expectedCoverage = on / segmentLength
+		expect(detections[0].coverage).toBeGreaterThan(expectedCoverage - 0.12)
+		expect(detections[0].coverage).toBeLessThan(expectedCoverage + 0.2)
+	})
+}
+
+test('does not bridge randomly displaced short fragments into a long streak', () => {
+	const frame = image(240, 128)
+	for (const [startX, y] of [
+		[20, 28],
+		[52, 83],
+		[84, 45],
+		[116, 101],
+		[148, 36],
+		[180, 73],
+	] as const)
+		renderLine(frame, startX, y, startX + 12, y + 2, 3, 0.8)
+	expect(detectStreaks(frame, { minLength: 140, maxWidth: 8, mergeGap: 20, backgroundCellSize: 32 })).toEqual([])
+})

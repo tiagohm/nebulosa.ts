@@ -422,7 +422,6 @@ function finishStreakRun(
 		coverage = finalSupport.coverage
 		clippedAtBorder = finalSupport.clippedAtBorder
 	}
-	if (coverage < 0.6) return
 
 	const photometry = measureStreakPhotometry(prepared, planeStart, planeEnd, fit.angle, options.maxWidth / grid.step, options.thresholdSigma)
 	if (!photometry) return
