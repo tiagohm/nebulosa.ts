@@ -1,4 +1,4 @@
-import { PI } from '../../../core/constants'
+import { PI, PIOVERTWO } from '../../../core/constants'
 import { validateInRange, validatePositiveInteger } from '../../../core/validation'
 import type { Angle } from '../../../math/units/angle'
 import { normalizeStreakAngle, streakAxialAngleDistance } from './geometry'
@@ -82,6 +82,7 @@ export function collectStreakEdges(prepared: PreparedStreakImage, options: Reado
 	let remaining = workspace.maximumEdgePoints - baseQuota * nonempty.length
 	const quotas = workspace.angleOffsets
 	quotas.fill(0, 0, angleCount)
+
 	for (let i = 0; i < nonempty.length; i++) {
 		const bin = nonempty[i]
 		quotas[bin] = Math.min(counts[bin], baseQuota + (remaining-- > 0 ? 1 : 0))
@@ -89,6 +90,7 @@ export function collectStreakEdges(prepared: PreparedStreakImage, options: Reado
 
 	const seen = new Uint32Array(angleCount)
 	let edgeCount = 0
+
 	forEachEligibleEdge(prepared, thresholdSigma, gradientSigma, actualAngleStep, angleCount, (x, y, weight, bin) => {
 		const occurrence = seen[bin]++
 		const quota = quotas[bin]
@@ -115,10 +117,9 @@ export function detectStreakHoughCandidates(edges: StreakEdgePoints, width: numb
 	const orientationTolerance = options.orientationTolerance ?? PI / 36
 	const maximumCandidates = options.maximumCandidates ?? Math.min(128, workspace.maximumCandidates)
 	validateInRange(distanceStep, 1 / 16, Math.hypot(width, height))
-	validateInRange(orientationTolerance, 0, PI / 2)
+	validateInRange(orientationTolerance, 0, PIOVERTWO)
 	validatePositiveInteger(maximumCandidates)
 	if (maximumCandidates > workspace.maximumCandidates) throw new RangeError('streak workspace candidate capacity is too small')
-
 	countingSortEdges(edges, workspace)
 	const diagonal = Math.hypot(width - 1, height - 1)
 	const rhoCount = Math.ceil((2 * diagonal) / distanceStep) + 3
@@ -131,23 +132,31 @@ export function detectStreakHoughCandidates(edges: StreakEdgePoints, width: numb
 	for (let angleBin = 0; angleBin < edges.angleCount; angleBin++) {
 		const angle = angleBin * edges.angleStep
 		const peak = accumulateAngle(edges, workspace, angle, angleBin, toleranceBins, diagonal, distanceStep, rhoCount)
+
 		if (!(peak.score > 0)) continue
+
 		peakBins.fill(-1)
 		peakScores.fill(0)
+
 		for (let rhoBin = 1; rhoBin < rhoCount - 1; rhoBin++) {
 			const score = workspace.rhoAccumulator[rhoBin]
 			if (!(score > 0) || score < workspace.rhoAccumulator[rhoBin - 1] || score < workspace.rhoAccumulator[rhoBin + 1]) continue
+
 			for (let slot = 0; slot < peakScores.length; slot++) {
 				if (score <= peakScores[slot]) continue
+
 				for (let shift = peakScores.length - 1; shift > slot; shift--) {
 					peakScores[shift] = peakScores[shift - 1]
 					peakBins[shift] = peakBins[shift - 1]
 				}
+
 				peakScores[slot] = score
 				peakBins[slot] = rhoBin
+
 				break
 			}
 		}
+
 		for (let slot = 0; slot < peakBins.length && peakBins[slot] >= 0; slot++) {
 			insertHoughCandidate(coarse, { angle, rho: peakBins[slot] * distanceStep - diagonal, score: peakScores[slot] }, maximumCandidates, edges.angleStep * 1.5, distanceStep * 2)
 		}
@@ -157,15 +166,19 @@ export function detectStreakHoughCandidates(edges: StreakEdgePoints, width: numb
 	for (let i = 0; i < coarse.length; i++) {
 		const seed = coarse[i]
 		let best = seed
+
 		for (let offset = -2; offset <= 2; offset++) {
 			const angle = normalizeStreakAngle(seed.angle + (offset * edges.angleStep) / 4)
 			const bin = Math.round(angle / edges.angleStep) % edges.angleCount
 			const peak = accumulateAngle(edges, workspace, angle, bin, toleranceBins, diagonal, distanceStep, rhoCount, seed.rho)
 			if (peak.score > best.score) best = { angle, rho: peak.rho, score: peak.score }
 		}
+
 		insertHoughCandidate(refined, best, maximumCandidates, edges.angleStep, distanceStep * 1.5)
 	}
+
 	workspace.state.candidateCount = refined.length
+
 	return refined
 }
 
@@ -174,6 +187,7 @@ function forEachEligibleEdge(prepared: PreparedStreakImage, thresholdSigma: numb
 	const { signal, mask } = prepared.workspace
 	const { width, height } = prepared.grid
 	const numericalFloor = Math.max(1e-12, Number.EPSILON * Math.max(1, Math.abs(prepared.globalBackground)) * 32)
+
 	for (let y = 1; y < height - 1; y++) {
 		for (let x = 1; x < width - 1; x++) {
 			const center = y * width + x
@@ -182,16 +196,21 @@ function forEachEligibleEdge(prepared: PreparedStreakImage, thresholdSigma: numb
 			const signalThreshold = noise > 0 ? thresholdSigma * noise : numericalFloor
 			const gradientThreshold = noise > 0 ? gradientSigma * noise * 4 : numericalFloor * 4
 			let positive = 0
+
 			for (let offsetY = -1; offsetY <= 1; offsetY++) {
 				const row = center + offsetY * width
 				for (let offsetX = -1; offsetX <= 1; offsetX++) positive = Math.max(positive, signal[row + offsetX])
 			}
+
 			if (!(positive > signalThreshold)) continue
+
 			const gx = -signal[center - width - 1] + signal[center - width + 1] - 2 * signal[center - 1] + 2 * signal[center + 1] - signal[center + width - 1] + signal[center + width + 1]
 			const gy = -signal[center - width - 1] - 2 * signal[center - width] - signal[center - width + 1] + signal[center + width - 1] + 2 * signal[center + width] + signal[center + width + 1]
+
 			const magnitude = Math.hypot(gx, gy)
 			if (!(magnitude > gradientThreshold)) continue
-			const angle = normalizeStreakAngle(Math.atan2(gy, gx) + PI / 2)
+
+			const angle = normalizeStreakAngle(Math.atan2(gy, gx) + PIOVERTWO)
 			const bin = Math.min(angleCount - 1, Math.floor(angle / angleStep))
 			const weight = Math.min(64, Math.max(positive / signalThreshold, magnitude / gradientThreshold))
 			visit(x, y, weight, bin)
@@ -203,11 +222,15 @@ function forEachEligibleEdge(prepared: PreparedStreakImage, thresholdSigma: numb
 function countingSortEdges(edges: StreakEdgePoints, workspace: StreakDetectionWorkspace): void {
 	const counts = workspace.angleCounts
 	const offsets = workspace.angleOffsets
+
 	counts.fill(0, 0, edges.angleCount)
 	for (let i = 0; i < edges.count; i++) counts[edges.angleBin[i]]++
+
 	offsets[0] = 0
 	for (let bin = 0; bin < edges.angleCount; bin++) offsets[bin + 1] = offsets[bin] + counts[bin]
+
 	counts.fill(0, 0, edges.angleCount)
+
 	for (let i = 0; i < edges.count; i++) {
 		const bin = edges.angleBin[i]
 		workspace.edgeOrder[offsets[bin] + counts[bin]++] = i
@@ -220,8 +243,10 @@ function accumulateAngle(edges: StreakEdgePoints, workspace: StreakDetectionWork
 	accumulator.fill(0, 0, rhoCount)
 	const normalX = -Math.sin(angle)
 	const normalY = Math.cos(angle)
+
 	for (let offset = -toleranceBins; offset <= toleranceBins; offset++) {
 		const bin = (centerBin + offset + edges.angleCount) % edges.angleCount
+
 		for (let order = workspace.angleOffsets[bin]; order < workspace.angleOffsets[bin + 1]; order++) {
 			const edge = workspace.edgeOrder[order]
 			const position = (edges.x[edge] * normalX + edges.y[edge] * normalY + diagonal) / distanceStep
@@ -231,8 +256,10 @@ function accumulateAngle(edges: StreakEdgePoints, workspace: StreakDetectionWork
 			if (lower + 1 >= 0 && lower + 1 < rhoCount) accumulator[lower + 1] += edges.weight[edge] * fraction
 		}
 	}
+
 	let peak = 0
 	let score = 0
+
 	for (let bin = 1; bin < rhoCount - 1; bin++) {
 		const value = accumulator[bin]
 		const rho = bin * distanceStep - diagonal
@@ -242,7 +269,9 @@ function accumulateAngle(edges: StreakEdgePoints, workspace: StreakDetectionWork
 			score = value
 		}
 	}
+
 	if (!(score > 0)) return { rho: 0, score: 0 }
+
 	const left = accumulator[peak - 1]
 	const right = accumulator[peak + 1]
 	const denominator = left - 2 * score + right
@@ -250,19 +279,25 @@ function accumulateAngle(edges: StreakEdgePoints, workspace: StreakDetectionWork
 	return { rho: (peak + correction) * distanceStep - diagonal, score }
 }
 
+function streakHoughCandidateComparator(a: StreakHoughCandidate, b: StreakHoughCandidate) {
+	return b.score - a.score || a.angle - b.angle || a.rho - b.rho
+}
+
 // Inserts a score-sorted candidate unless a stronger nearby theta/rho hypothesis already represents it.
 function insertHoughCandidate(candidates: StreakHoughCandidate[], candidate: StreakHoughCandidate, capacity: number, angleTolerance: number, distanceTolerance: number): void {
 	for (let i = 0; i < candidates.length; i++) {
 		const previous = candidates[i]
 		const rawAngleDistance = Math.abs(previous.angle - candidate.angle)
-		const rhoDistance = rawAngleDistance <= PI / 2 ? Math.abs(previous.rho - candidate.rho) : Math.abs(previous.rho + candidate.rho)
+		const rhoDistance = rawAngleDistance <= PIOVERTWO ? Math.abs(previous.rho - candidate.rho) : Math.abs(previous.rho + candidate.rho)
+
 		if (streakAxialAngleDistance(previous.angle, candidate.angle) <= angleTolerance && rhoDistance <= distanceTolerance) {
 			if (candidate.score > previous.score) candidates[i] = candidate
-			candidates.sort((a, b) => b.score - a.score || a.angle - b.angle || a.rho - b.rho)
+			candidates.sort(streakHoughCandidateComparator)
 			return
 		}
 	}
+
 	candidates.push(candidate)
-	candidates.sort((a, b) => b.score - a.score || a.angle - b.angle || a.rho - b.rho)
+	candidates.sort(streakHoughCandidateComparator)
 	if (candidates.length > capacity) candidates.length = capacity
 }

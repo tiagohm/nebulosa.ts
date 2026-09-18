@@ -41,6 +41,7 @@ export interface PreparedStreakImage {
 // Extracts a native plane, builds a robust local median/MAD grid, and subtracts interpolated background.
 export function preprocessStreakImage(image: Image, options: Readonly<StreakDetectionOptions> = {}, providedWorkspace?: StreakDetectionWorkspace): PreparedStreakImage {
 	const { width, height, channels, stride, pixelCount, bayer } = image.metadata
+
 	// These relations prevent plausible measurements from the wrong raw offsets.
 	if ((channels !== 1 && channels !== 3) || (bayer !== undefined && channels !== 1)) throw new RangeError('streak detection requires mono, RGB, or one-channel CFA layout')
 	if (pixelCount !== width * height || stride !== width * channels || image.raw.length < stride * height) throw new RangeError('streak image has inconsistent raw layout')
@@ -67,6 +68,7 @@ export function preprocessStreakImage(image: Image, options: Readonly<StreakDete
 			workspace.mask[index] = mask
 		}
 	}
+
 	workspace.mask.fill(0, length, workspace.mask.length)
 
 	const backgroundCellSize = options.backgroundCellSize ?? 64
@@ -76,7 +78,6 @@ export function preprocessStreakImage(image: Image, options: Readonly<StreakDete
 	const backgroundRows = Math.ceil(grid.height / backgroundCellSize)
 	const cellCount = backgroundColumns * backgroundRows
 	if (workspace.background.length < cellCount) throw new RangeError('streak workspace background-grid capacity is too small')
-
 	const statistics = workspace.statistics
 	statistics.reset()
 	for (let index = 0; index < length; index++) if ((workspace.mask[index] & STREAK_MASK_INVALID) === 0) statistics.push(workspace.signal[index])
@@ -87,14 +88,17 @@ export function preprocessStreakImage(image: Image, options: Readonly<StreakDete
 	for (let cellY = 0, cell = 0; cellY < backgroundRows; cellY++) {
 		const top = cellY * backgroundCellSize
 		const bottom = Math.min(grid.height, top + backgroundCellSize)
+
 		for (let cellX = 0; cellX < backgroundColumns; cellX++, cell++) {
 			const left = cellX * backgroundCellSize
 			const right = Math.min(grid.width, left + backgroundCellSize)
 			statistics.reset()
+
 			for (let y = top; y < bottom; y++) {
 				let index = y * grid.width + left
 				for (let x = left; x < right; x++, index++) if ((workspace.mask[index] & STREAK_MASK_INVALID) === 0) statistics.push(workspace.signal[index])
 			}
+
 			const median = statistics.median()
 			const measuredNoise = statistics.madAround(median, true, workspace.scratch)
 			workspace.background[cell] = Number.isFinite(median) ? median : globalBackground
@@ -122,10 +126,12 @@ export function streakLocalNoise(prepared: PreparedStreakImage, x: number, y: nu
 	const cellX = Math.max(0, Math.min(backgroundColumns - 1, Math.floor(x / backgroundCellSize)))
 	const cellY = Math.max(0, Math.min(backgroundRows - 1, Math.floor(y / backgroundCellSize)))
 	let measured = 0
+
 	for (let offsetY = 0; offsetY <= 1; offsetY++) {
 		const row = Math.min(backgroundRows - 1, cellY + offsetY) * backgroundColumns
 		for (let offsetX = 0; offsetX <= 1; offsetX++) measured = Math.max(measured, noise[row + Math.min(backgroundColumns - 1, cellX + offsetX)])
 	}
+
 	return measured
 }
 

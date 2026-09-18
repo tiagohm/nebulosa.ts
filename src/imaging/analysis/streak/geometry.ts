@@ -85,19 +85,22 @@ export function streakLineVectors(angle: Angle): { readonly tangent: Readonly<Po
 export function clipStreakLineToArea(angle: Angle, rho: number, area: Readonly<Rect>): readonly [Readonly<Point>, Readonly<Point>] | undefined {
 	const { tangent, normal } = streakLineVectors(angle)
 	const origin = { x: normal.x * rho, y: normal.y * rho }
+	const bounds = [area.left, area.right - 1, area.top, area.bottom - 1] as const
+
 	let minimum = Number.NEGATIVE_INFINITY
 	let maximum = Number.POSITIVE_INFINITY
-	const bounds: readonly [number, number, number, number] = [area.left, area.right - 1, area.top, area.bottom - 1]
 
 	for (let axis = 0; axis < 2; axis++) {
 		const position = axis === 0 ? origin.x : origin.y
 		const direction = axis === 0 ? tangent.x : tangent.y
 		const lower = bounds[axis * 2]
 		const upper = bounds[axis * 2 + 1]
+
 		if (Math.abs(direction) <= Number.EPSILON) {
 			if (position < lower || position > upper) return undefined
 			continue
 		}
+
 		let first = (lower - position) / direction
 		let second = (upper - position) / direction
 		if (first > second) [first, second] = [second, first]
@@ -107,6 +110,7 @@ export function clipStreakLineToArea(angle: Angle, rho: number, area: Readonly<R
 	}
 
 	if (!(maximum > minimum)) return undefined
+
 	return canonicalizeStreakEndpoints({ x: origin.x + minimum * tangent.x, y: origin.y + minimum * tangent.y }, { x: origin.x + maximum * tangent.x, y: origin.y + maximum * tangent.y })
 }
 
@@ -115,38 +119,51 @@ export function fitWeightedStreakLine(points: readonly WeightedLinePoint[]): Wei
 	let weightSum = 0
 	let centerX = 0
 	let centerY = 0
+
 	for (let i = 0; i < points.length; i++) {
 		const point = points[i]
+
 		if (!(point.weight > 0) || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue
+
 		weightSum += point.weight
 		centerX += point.weight * point.x
 		centerY += point.weight * point.y
 	}
+
 	if (!(weightSum > 0)) return undefined
+
 	centerX /= weightSum
 	centerY /= weightSum
 
 	let xx = 0
 	let xy = 0
 	let yy = 0
+
 	for (let i = 0; i < points.length; i++) {
 		const point = points[i]
+
 		if (!(point.weight > 0) || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue
+
 		const x = point.x - centerX
 		const y = point.y - centerY
 		xx += point.weight * x * x
 		xy += point.weight * x * y
 		yy += point.weight * y * y
 	}
+
 	xx /= weightSum
 	xy /= weightSum
 	yy /= weightSum
+
 	const discriminant = Math.hypot(xx - yy, 2 * xy)
 	const majorVariance = Math.max(0, (xx + yy + discriminant) * 0.5)
 	const minorVariance = Math.max(0, (xx + yy - discriminant) * 0.5)
+
 	if (!(majorVariance > 0)) return undefined
+
 	const angle = normalizeStreakAngle(0.5 * Math.atan2(2 * xy, xx - yy))
 	const { normal } = streakLineVectors(angle)
+
 	return {
 		center: { x: centerX, y: centerY },
 		angle,
@@ -181,6 +198,7 @@ export function streakSegmentProjectionRelation(first: StreakSegmentGeometry, se
 	const firstMaximum = Math.max(firstA, firstB)
 	const secondMinimum = Math.min(secondA, secondB)
 	const secondMaximum = Math.max(secondA, secondB)
+
 	return {
 		gap: Math.max(0, Math.max(firstMinimum, secondMinimum) - Math.min(firstMaximum, secondMaximum)),
 		overlap: Math.max(0, Math.min(firstMaximum, secondMaximum) - Math.max(firstMinimum, secondMinimum)),
@@ -211,6 +229,7 @@ export function streakPlanePointToImage(point: Readonly<Point>, sourceLeft: numb
 export function canonicalizeStreakEndpoints(first: Readonly<Point>, second: Readonly<Point>): readonly [Readonly<Point>, Readonly<Point>] {
 	const x = second.x - first.x
 	const y = second.y - first.y
+
 	return x > 0 || (Math.abs(x) <= Number.EPSILON && y >= 0)
 		? [
 				{ x: first.x, y: first.y },

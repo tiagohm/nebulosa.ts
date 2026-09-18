@@ -1,3 +1,4 @@
+import { PI } from '../../../core/constants'
 import type { Point, Rect } from '../../../math/numerical/geometry'
 import type { Angle } from '../../../math/units/angle'
 import type { ImageAnalysisPlane } from '../plane'
@@ -86,7 +87,7 @@ export interface StreakDetectionOptions {
 }
 
 // Resolved operational defaults; values are algorithm settings rather than physical constants.
-export const DEFAULT_STREAK_DETECTION_OPTIONS = {
+export const DEFAULT_STREAK_DETECTION_OPTIONS: Required<Omit<StreakDetectionOptions, 'area' | 'saturationLevel'>> = {
 	plane: 'auto',
 	minLength: 12,
 	maxWidth: 16,
@@ -96,12 +97,12 @@ export const DEFAULT_STREAK_DETECTION_OPTIONS = {
 	backgroundCellSize: 64,
 	thresholdSigma: 2.5,
 	gradientSigma: 1.5,
-	angleStep: Math.PI / 90,
-	orientationTolerance: Math.PI / 36,
+	angleStep: PI / 90,
+	orientationTolerance: PI / 36,
 	distanceStep: 1,
 	maxCandidates: 128,
-	mergeAngleTolerance: Math.PI / 90,
+	mergeAngleTolerance: PI / 90,
 	mergeGap: 12,
 	mergeDistance: 3,
 	allowBorderClipping: true,
-} as const satisfies Required<Omit<StreakDetectionOptions, 'area' | 'saturationLevel'>>
+}

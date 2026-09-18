@@ -1,3 +1,4 @@
+import { PI } from '../../../core/constants'
 import { validateInRange, validatePositiveInteger } from '../../../core/validation'
 import type { Angle } from '../../../math/units/angle'
 import { makeImageRawTypedArray, type ImageRawType } from '../../model/types'
@@ -100,22 +101,24 @@ export function createStreakDetectionWorkspace(width: number, height: number, op
 	validatePositiveInteger(height)
 	validateInRange(width, 1, 32_768)
 	validateInRange(height, 1, 32_768)
+
 	const length = width * height
 	if (!Number.isSafeInteger(length) || length > 67_108_864) throw new RangeError('streak workspace is limited to 67108864 received-image pixels')
 
 	const precision = options.precision ?? 32
 	const maximumCandidates = options.maximumCandidates ?? 128
 	const maximumEdgePoints = options.maximumEdgePoints ?? DEFAULT_MAXIMUM_STREAK_EDGE_POINTS
-	const angleStep = options.angleStep ?? Math.PI / 90
+	const angleStep = options.angleStep ?? PI / 90
 	const distanceStep = options.distanceStep ?? 1
+
 	validatePositiveInteger(maximumCandidates)
 	validatePositiveInteger(maximumEdgePoints)
 	validateInRange(maximumCandidates, 1, 4096)
 	validateInRange(maximumEdgePoints, 1, 4_194_304)
-	validateInRange(angleStep, Math.PI / 4096, Math.PI)
+	validateInRange(angleStep, PI / 4096, PI)
 	validateInRange(distanceStep, 1 / 16, Math.hypot(width, height))
 
-	const angleCapacity = Math.ceil(Math.PI / angleStep)
+	const angleCapacity = Math.ceil(PI / angleStep)
 	const rhoCapacity = Math.ceil((2 * Math.hypot(width, height)) / distanceStep) + 4
 	const backgroundCapacity = Math.ceil(width / MINIMUM_STREAK_BACKGROUND_CELL_SIZE) * Math.ceil(height / MINIMUM_STREAK_BACKGROUND_CELL_SIZE)
 	const longitudinalCapacity = Math.ceil(Math.hypot(width, height)) + 4

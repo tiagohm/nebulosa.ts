@@ -25,12 +25,12 @@ function renderLine(image: Image, startX: number, startY: number, endX: number, 
 	}
 }
 
-test('detects horizontal vertical and diagonal streak geometry', () => {
-	for (const [startX, startY, endX, endY, angle] of [
-		[20, 40, 100, 40, 0],
-		[60, 20, 60, 100, PIOVERTWO],
-		[25, 25, 95, 95, PIOVERFOUR],
-	] as const) {
+for (const [name, startX, startY, endX, endY, angle] of [
+	['horizontal', 20, 40, 100, 40, 0],
+	['vertical', 60, 20, 60, 100, PIOVERTWO],
+	['diagonal', 25, 25, 95, 95, PIOVERFOUR],
+] as const) {
+	test(`detects ${name} streak geometry`, () => {
 		const frame = image(128, 128)
 		renderLine(frame, startX, startY, endX, endY, 3, 0.8)
 		const detected = detectStreaks(frame, { minLength: 30, maxWidth: 8, minLinearity: 0.8, backgroundCellSize: 32, maxStreaks: 8 })
@@ -43,8 +43,8 @@ test('detects horizontal vertical and diagonal streak geometry', () => {
 		expect(streak.width).toBeGreaterThan(1)
 		expect(streak.width).toBeLessThan(5)
 		expect(streak.snr).toBeUndefined()
-	}
-})
+	})
+}
 
 test('reports ROI border clipping and honors clipping rejection', () => {
 	const frame = image(128, 128)
