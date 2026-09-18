@@ -33,6 +33,11 @@ test('reuses every large workspace buffer with numerically stable output', () =>
 		workspace.longitudinalSignal,
 		workspace.longitudinalOffset,
 		workspace.longitudinalWeight,
+		workspace.longitudinalNormalFirst,
+		workspace.longitudinalNormalSecond,
+		workspace.longitudinalPositionFirst,
+		workspace.longitudinalPositionSecond,
+		workspace.longitudinalPositionNormal,
 		workspace.longitudinalSupported,
 		workspace.transverseSignal,
 		workspace.transverseNoise,
@@ -59,6 +64,11 @@ test('reuses every large workspace buffer with numerically stable output', () =>
 		workspace.longitudinalSignal,
 		workspace.longitudinalOffset,
 		workspace.longitudinalWeight,
+		workspace.longitudinalNormalFirst,
+		workspace.longitudinalNormalSecond,
+		workspace.longitudinalPositionFirst,
+		workspace.longitudinalPositionSecond,
+		workspace.longitudinalPositionNormal,
 		workspace.longitudinalSupported,
 		workspace.transverseSignal,
 		workspace.transverseNoise,
@@ -66,6 +76,9 @@ test('reuses every large workspace buffer with numerically stable output', () =>
 	for (let index = 0; index < identities.length; index++) expect(repeated[index]).toBe(identities[index])
 	expect(workspace.state.edgeCount).toBeLessThanOrEqual(workspace.maximumEdgePoints)
 	expect(workspace.state.candidateCount).toBeLessThanOrEqual(workspace.maximumCandidates)
+	expect(workspace.state.refinementWork).toBeGreaterThan(0)
+	expect(workspace.state.supportedRuns).toBeGreaterThan(0)
+	expect(workspace.state.mergeRefits).toBeGreaterThan(0)
 }, 2000)
 
 test('matches a fresh workspace and remains bounded under candidate pressure', () => {
@@ -93,3 +106,21 @@ test('rejects multiplicative work explosions and clamps width work to the frame'
 	expect(Math.abs(frameBounded[0].flux / narrow[0].flux - 1)).toBeLessThan(0.001)
 	expect(Math.abs(frameBounded[0].width / narrow[0].width - 1)).toBeLessThan(0.01)
 }, 2000)
+
+test('rejects candidate sets whose initial and final refinement stages exceed the budget', () => {
+	const width = 1024
+	const height = 768
+	const frame = image(width, height)
+	let state = 1
+	for (let index = 0; index < frame.raw.length; index++) {
+		state ^= state << 13
+		state ^= state >>> 17
+		state ^= state << 5
+		frame.raw[index] = (state >>> 0) / 0x1_0000_0000
+	}
+	const workspace = createStreakDetectionWorkspace(width, height, { maximumCandidates: 128, maximumEdgePoints: 512 })
+	expect(() => detectStreaks(frame, { backgroundCellSize: 32, thresholdSigma: 0, gradientSigma: 0, maxWidth: 256, maxCandidates: 128 }, workspace)).toThrow('bounded work budget')
+	const priorSinglePassEstimate = workspace.state.candidateCount * (Math.ceil(Math.hypot(width, height)) + 1) * 513
+	expect(priorSinglePassEstimate).toBeLessThan(100_000_000)
+	expect(workspace.state.refinementWork).toBe(0)
+}, 3000)

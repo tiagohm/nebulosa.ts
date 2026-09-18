@@ -146,6 +146,9 @@ export function preprocessStreakImage(image: Image, options: Readonly<StreakDete
 	workspace.state.edgeCount = 0
 	workspace.state.candidateCount = 0
 	workspace.state.edgesTruncated = false
+	workspace.state.refinementWork = 0
+	workspace.state.supportedRuns = 0
+	workspace.state.mergeRefits = 0
 	return { area, plane, grid, workspace, backgroundCellSize, backgroundColumns, backgroundRows, globalBackground, globalNoise, residualFloor: noiseFloor, saturationLevel: options.saturationLevel }
 }
 

@@ -38,6 +38,12 @@ export interface StreakDetectionWorkspaceState {
 	candidateCount: number
 	// Whether eligible edge points exceeded fixed storage in the latest call.
 	edgesTruncated: boolean
+	// Estimated refinement/corridor pixel visits charged in the latest call.
+	refinementWork: number
+	// Supported runs admitted to final support and photometric measurement.
+	supportedRuns: number
+	// Compatible detection pairs admitted to a full merge refit.
+	mergeRefits: number
 }
 
 // Caller-reusable fixed-capacity storage for the complete detector pipeline.
@@ -94,6 +100,16 @@ export interface StreakDetectionWorkspace {
 	readonly longitudinalOffset: Float64Array
 	// Bounded fit weight at each longitudinal position.
 	readonly longitudinalWeight: Float64Array
+	// Capped positive-signal first normal moment for each longitudinal bin.
+	readonly longitudinalNormalFirst: Float64Array
+	// Capped positive-signal second normal moment for each longitudinal bin.
+	readonly longitudinalNormalSecond: Float64Array
+	// Capped positive-signal first longitudinal moment for each longitudinal bin.
+	readonly longitudinalPositionFirst: Float64Array
+	// Capped positive-signal second longitudinal moment for each longitudinal bin.
+	readonly longitudinalPositionSecond: Float64Array
+	// Capped positive-signal longitudinal-normal cross moment for each bin.
+	readonly longitudinalPositionNormal: Float64Array
 	// Boolean support classification at each longitudinal position.
 	readonly longitudinalSupported: Uint8Array
 	// Signed residual accumulated by transverse offset during width measurement.
@@ -160,9 +176,14 @@ export function createStreakDetectionWorkspace(width: number, height: number, op
 		longitudinalSignal: new Float64Array(longitudinalCapacity),
 		longitudinalOffset: new Float64Array(longitudinalCapacity),
 		longitudinalWeight: new Float64Array(longitudinalCapacity),
+		longitudinalNormalFirst: new Float64Array(longitudinalCapacity),
+		longitudinalNormalSecond: new Float64Array(longitudinalCapacity),
+		longitudinalPositionFirst: new Float64Array(longitudinalCapacity),
+		longitudinalPositionSecond: new Float64Array(longitudinalCapacity),
+		longitudinalPositionNormal: new Float64Array(longitudinalCapacity),
 		longitudinalSupported: new Uint8Array(longitudinalCapacity),
 		transverseSignal: new Float64Array(STREAK_TRANSVERSE_PROFILE_CAPACITY),
 		transverseNoise: new Float64Array(STREAK_TRANSVERSE_PROFILE_CAPACITY),
-		state: { edgeCount: 0, candidateCount: 0, edgesTruncated: false },
+		state: { edgeCount: 0, candidateCount: 0, edgesTruncated: false, refinementWork: 0, supportedRuns: 0, mergeRefits: 0 },
 	}
 }
