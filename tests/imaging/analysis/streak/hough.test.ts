@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { PI, PIOVERFOUR, PIOVERTWO } from '../../../../src/core/constants'
 import { streakAxialAngleDistance } from '../../../../src/imaging/analysis/streak/geometry'
-import { collectStreakEdges, detectStreakHoughCandidates, MAX_STREAK_HOUGH_RHO_WORK, MAX_STREAK_LOCAL_ANGLE_VOTES, type StreakEdgePoints } from '../../../../src/imaging/analysis/streak/hough'
+import { collectStreakEdges, detectStreakHoughCandidates, MAX_STREAK_HOUGH_EDGE_VOTES, MAX_STREAK_HOUGH_RHO_WORK, MAX_STREAK_LOCAL_ANGLE_VOTES, type StreakEdgePoints } from '../../../../src/imaging/analysis/streak/hough'
 import { preprocessStreakImage } from '../../../../src/imaging/analysis/streak/preprocess'
 import { createStreakDetectionWorkspace } from '../../../../src/imaging/analysis/streak/workspace'
 import type { Image } from '../../../../src/imaging/model/types'
@@ -192,6 +192,27 @@ test('refines an off-origin line across the zero-PI normal-form seam', () => {
 	expect(candidates[0].rho).toBeCloseTo(expectedRho, 0)
 	expect(Math.abs(candidates[0].rho)).toBeGreaterThan(4)
 })
+
+test('rejects refinement edge work that exceeds the shared Hough vote budget', () => {
+	const angleCount = MAX_STREAK_LOCAL_ANGLE_VOTES
+	const angleStep = PI / angleCount
+	const edgeCount = Math.floor(MAX_STREAK_HOUGH_EDGE_VOTES / angleCount)
+	const workspace = createStreakDetectionWorkspace(2, 1, { angleStep, maximumCandidates: 1, maximumEdgePoints: edgeCount })
+	const fixture: StreakEdgePoints = {
+		count: edgeCount,
+		x: new Float32Array(edgeCount),
+		y: new Float32Array(edgeCount),
+		weight: new Float32Array(edgeCount).fill(1),
+		angleBin: new Uint16Array(edgeCount),
+		angleCount,
+		angleStep,
+	}
+	expect(workspace.state.houghRefinementEdgeWork).toBe(0)
+	expect(() => detectStreakHoughCandidates(fixture, 2, 1, workspace, { orientationTolerance: PIOVERTWO, maximumCandidates: 1 })).toThrow('refinement voting exceeds')
+	expect(workspace.state.houghCoarseEdgeWork).toBe(edgeCount * angleCount)
+	expect(workspace.state.houghCoarseEdgeWork).toBeLessThanOrEqual(MAX_STREAK_HOUGH_EDGE_VOTES)
+	expect(workspace.state.houghCoarseEdgeWork + workspace.state.houghRefinementEdgeWork).toBeGreaterThan(MAX_STREAK_HOUGH_EDGE_VOTES)
+}, 5000)
 
 test('admits sparse inputs using only active angles in the Hough rho budget', () => {
 	const angleCount = 4096
