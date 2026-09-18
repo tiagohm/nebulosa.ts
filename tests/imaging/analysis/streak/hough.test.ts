@@ -95,6 +95,11 @@ test('respects candidate capacity and is deterministic without theta-rho storage
 	const second = detectStreakHoughCandidates(fixture, 128, 128, workspace, { maximumCandidates: 3 })
 	expect(first).toEqual(second)
 	expect(first.length).toBeLessThanOrEqual(3)
+	for (let index = 1; index < first.length; index++) {
+		const previous = first[index - 1]
+		const current = first[index]
+		expect(previous.score > current.score || (previous.score === current.score && (previous.angle < current.angle || (previous.angle === current.angle && previous.rho <= current.rho)))).toBeTrue()
+	}
 	expect(workspace.rhoAccumulator.length).toBe(workspace.rhoCapacity)
 	expect(workspace.rhoAccumulator.length).toBeLessThan(workspace.angleCapacity * workspace.rhoCapacity)
 })

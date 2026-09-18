@@ -341,13 +341,30 @@ function insertHoughCandidate(candidates: StreakHoughCandidate[], candidate: Str
 		const rhoDistance = rawAngleDistance <= PIOVERTWO ? Math.abs(previous.rho - candidate.rho) : Math.abs(previous.rho + candidate.rho)
 
 		if (streakAxialAngleDistance(previous.angle, candidate.angle) <= angleTolerance && rhoDistance <= distanceTolerance) {
-			if (candidate.score > previous.score) candidates[i] = candidate
-			candidates.sort(streakHoughCandidateComparator)
+			if (candidate.score <= previous.score) return
+			for (let shift = i; shift + 1 < candidates.length; shift++) candidates[shift] = candidates[shift + 1]
+			candidates.length--
+			insertSortedHoughCandidate(candidates, candidate, capacity)
 			return
 		}
 	}
 
-	candidates.push(candidate)
-	candidates.sort(streakHoughCandidateComparator)
-	if (candidates.length > capacity) candidates.length = capacity
+	insertSortedHoughCandidate(candidates, candidate, capacity)
+}
+
+// Inserts into the bounded comparator order using one binary search and in-place suffix shift.
+function insertSortedHoughCandidate(candidates: StreakHoughCandidate[], candidate: StreakHoughCandidate, capacity: number): void {
+	let low = 0
+	let high = candidates.length
+	while (low < high) {
+		const middle = (low + high) >>> 1
+		if (streakHoughCandidateComparator(candidate, candidates[middle]) < 0) high = middle
+		else low = middle + 1
+	}
+	if (low >= capacity) return
+	const previousLength = candidates.length
+	const nextLength = Math.min(capacity, previousLength + 1)
+	candidates.length = nextLength
+	for (let shift = nextLength - 1; shift > low; shift--) candidates[shift] = candidates[shift - 1]
+	candidates[low] = candidate
 }
