@@ -57,3 +57,34 @@ test('reports ROI border clipping and honors clipping rejection', () => {
 	expect(detected[0].end.x).toBeLessThan(area.right)
 	expect(detectStreaks(frame, { area, minLength: 30, maxWidth: 8, backgroundCellSize: 32, allowBorderClipping: false })).toEqual([])
 })
+
+test('merges short collinear gaps but preserves separated fragments', () => {
+	const joined = image(160, 96)
+	renderLine(joined, 15, 48, 65, 48, 3, 0.8)
+	renderLine(joined, 72, 48, 140, 48, 3, 0.8)
+	const merged = detectStreaks(joined, { minLength: 20, maxWidth: 8, mergeGap: 12, backgroundCellSize: 32 })
+	expect(merged.length).toBe(1)
+	expect(merged[0].length).toBeGreaterThan(115)
+
+	const separated = image(160, 96)
+	renderLine(separated, 15, 48, 55, 48, 3, 0.8)
+	renderLine(separated, 90, 48, 140, 48, 3, 0.8)
+	const fragments = detectStreaks(separated, { minLength: 20, maxWidth: 8, mergeGap: 12, backgroundCellSize: 32 })
+	expect(fragments.length).toBe(2)
+})
+
+test('preserves separated parallel and crossing streaks while removing duplicates', () => {
+	const parallel = image(160, 128)
+	renderLine(parallel, 15, 40, 140, 40, 3, 0.8)
+	renderLine(parallel, 15, 75, 140, 75, 3, 0.7)
+	const parallelDetections = detectStreaks(parallel, { minLength: 40, maxWidth: 8, backgroundCellSize: 32 })
+	expect(parallelDetections.length).toBe(2)
+	expect(Math.abs(parallelDetections[0].center.y - parallelDetections[1].center.y)).toBeGreaterThan(30)
+
+	const crossing = image(160, 128)
+	renderLine(crossing, 15, 64, 140, 64, 3, 0.8)
+	renderLine(crossing, 80, 10, 80, 118, 3, 0.7)
+	const crossingDetections = detectStreaks(crossing, { minLength: 40, maxWidth: 8, backgroundCellSize: 32 })
+	expect(crossingDetections.length).toBe(2)
+	expect(streakAxialAngleDistance(crossingDetections[0].angle, crossingDetections[1].angle)).toBeGreaterThan(PI / 3)
+})

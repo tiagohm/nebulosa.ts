@@ -2,7 +2,7 @@ import { PI } from '../../../core/constants'
 import { validateInRange, validatePositiveInteger } from '../../../core/validation'
 import type { Point } from '../../../math/numerical/geometry'
 import type { Image } from '../../model/types'
-import { canonicalizeStreakEndpoints, clipStreakLineToArea, normalizeStreakAngle, streakLineVectors, streakPlanePointToImage, type WeightedLineFit } from './geometry'
+import { areStreakSegmentsMergeCompatible, canonicalizeStreakEndpoints, clipStreakLineToArea, normalizeStreakAngle, streakAxialAngleDistance, streakLineVectors, streakPlanePointToImage, streakSegmentProjectionRelation, type WeightedLineFit } from './geometry'
 import { collectStreakEdges, detectStreakHoughCandidates, type StreakHoughCandidate } from './hough'
 import { preprocessStreakImage, type PreparedStreakImage, STREAK_MASK_INVALID, STREAK_MASK_SATURATED, streakLocalNoise } from './preprocess'
 import { DEFAULT_STREAK_DETECTION_OPTIONS, type Streak, type StreakDetectionOptions } from './types'
@@ -37,6 +37,10 @@ interface ResolvedStreakDetectionOptions {
 	readonly maxCandidates: number
 	// Maximum unsupported gap within one seed line, in received-image pixels.
 	readonly mergeGap: number
+	// Maximum axial angle difference for global fragment merging, in radians.
+	readonly mergeAngleTolerance: number
+	// Maximum perpendicular line separation for global fragment merging, in received-image pixels.
+	readonly mergeDistance: number
 	// Whether ROI-truncated results are retained.
 	readonly allowBorderClipping: boolean
 }
@@ -51,6 +55,10 @@ interface StreakPhotometry {
 	readonly peakSignal: number
 	// Equivalent transverse FWHM in plane pixels.
 	readonly width: number
+	// Two-dimensional corridor-flux anisotropy in [0, 1].
+	readonly linearity: number
+	// Axial offset between corridor-flux principal direction and the refined seed axis, in radians.
+	readonly angleOffset: number
 	// Count of positive samples contributing flux.
 	readonly supportPixels: number
 	// Count of valid samples evaluated for noise scaling and saturation.
@@ -74,8 +82,11 @@ export function detectStreaks(image: Image, options: Readonly<StreakDetectionOpt
 	const detections: Streak[] = []
 	for (let i = 0; i < candidates.length; i++) refineStreakCandidate(prepared, candidates[i], resolved, detections)
 	detections.sort(compareStreaks)
-	if (detections.length > resolved.maxStreaks) detections.length = resolved.maxStreaks
-	return detections
+	if (detections.length > resolved.maxCandidates) detections.length = resolved.maxCandidates
+	const merged = suppressStreakDuplicates(mergeStreakDetections(prepared, detections, resolved), resolved)
+	merged.sort(compareStreaks)
+	if (merged.length > resolved.maxStreaks) merged.length = resolved.maxStreaks
+	return merged
 }
 
 // Validates bounded-work settings and fills operational defaults.
@@ -93,6 +104,8 @@ function resolveStreakOptions(options: Readonly<StreakDetectionOptions>): Resolv
 		distanceStep: options.distanceStep ?? DEFAULT_STREAK_DETECTION_OPTIONS.distanceStep,
 		maxCandidates: options.maxCandidates ?? DEFAULT_STREAK_DETECTION_OPTIONS.maxCandidates,
 		mergeGap: options.mergeGap ?? DEFAULT_STREAK_DETECTION_OPTIONS.mergeGap,
+		mergeAngleTolerance: options.mergeAngleTolerance ?? DEFAULT_STREAK_DETECTION_OPTIONS.mergeAngleTolerance,
+		mergeDistance: options.mergeDistance ?? DEFAULT_STREAK_DETECTION_OPTIONS.mergeDistance,
 		allowBorderClipping: options.allowBorderClipping ?? DEFAULT_STREAK_DETECTION_OPTIONS.allowBorderClipping,
 	}
 	validateInRange(resolved.minLength, 1, 1_000_000)
@@ -109,7 +122,77 @@ function resolveStreakOptions(options: Readonly<StreakDetectionOptions>): Resolv
 	validateInRange(resolved.orientationTolerance, 0, PI / 2)
 	validateInRange(resolved.distanceStep, 1 / 16, 65_536)
 	validateInRange(resolved.mergeGap, 0, 1_000_000)
+	validateInRange(resolved.mergeAngleTolerance, 0, PI / 2)
+	validateInRange(resolved.mergeDistance, 0, 1_000_000)
 	return resolved
+}
+
+// Merges compatible refined fragments by rescanning a combined native-plane seed until stable.
+function mergeStreakDetections(prepared: PreparedStreakImage, detections: readonly Streak[], options: ResolvedStreakDetectionOptions): Streak[] {
+	const merged = detections.slice()
+	let changed = true
+	while (changed) {
+		changed = false
+		outer: for (let first = 0; first < merged.length - 1; first++) {
+			for (let second = first + 1; second < merged.length; second++) {
+				if (!areStreakSegmentsMergeCompatible(merged[first], merged[second], { angle: options.mergeAngleTolerance, gap: options.mergeGap, distance: options.mergeDistance })) continue
+				const refitted = refitMergedStreak(prepared, merged[first], merged[second], options)
+				if (!refitted) continue
+				merged[first] = refitted
+				merged.splice(second, 1)
+				changed = true
+				break outer
+			}
+		}
+	}
+	return merged
+}
+
+// Builds a union seed from two image-space detections and returns the best full photometric refit.
+function refitMergedStreak(prepared: PreparedStreakImage, first: Streak, second: Streak, options: ResolvedStreakDetectionOptions): Streak | undefined {
+	const sine = Math.sin(2 * first.angle) + Math.sin(2 * second.angle)
+	const cosine = Math.cos(2 * first.angle) + Math.cos(2 * second.angle)
+	const angle = normalizeStreakAngle(0.5 * Math.atan2(sine, cosine))
+	const centerX = (first.center.x * first.length + second.center.x * second.length) / (first.length + second.length)
+	const centerY = (first.center.y * first.length + second.center.y * second.length) / (first.length + second.length)
+	const planeX = (centerX - prepared.grid.sourceLeft) / prepared.grid.step
+	const planeY = (centerY - prepared.grid.sourceTop) / prepared.grid.step
+	const normal = streakLineVectors(angle).normal
+	const output: Streak[] = []
+	refineStreakCandidate(prepared, { angle, rho: planeX * normal.x + planeY * normal.y, score: Math.max(first.confidence, second.confidence) }, options, output)
+	if (output.length === 0) return undefined
+	output.sort(compareStreaks)
+	const requiredLength = Math.max(first.length, second.length)
+	return output.find((candidate) => candidate.length >= requiredLength * 0.9)
+}
+
+// Removes strongly overlapping corridor hypotheses while preserving separated parallels and crossings.
+function suppressStreakDuplicates(detections: readonly Streak[], options: ResolvedStreakDetectionOptions): Streak[] {
+	const retained: Streak[] = []
+	for (let index = 0; index < detections.length; index++) {
+		const candidate = detections[index]
+		let duplicate = -1
+		for (let previous = 0; previous < retained.length; previous++) {
+			const accepted = retained[previous]
+			if (streakAxialAngleDistance(candidate.angle, accepted.angle) > options.orientationTolerance * 2) continue
+			const relation = streakSegmentProjectionRelation(candidate, accepted, accepted.angle)
+			if (relation.overlap < Math.min(candidate.length, accepted.length) * 0.5) continue
+			const normal = streakLineVectors(accepted.angle).normal
+			const separation = Math.abs((candidate.center.x - accepted.center.x) * normal.x + (candidate.center.y - accepted.center.y) * normal.y)
+			if (separation > Math.max(options.mergeDistance, candidate.width, accepted.width)) continue
+			duplicate = previous
+			break
+		}
+		if (duplicate < 0) {
+			retained.push(candidate)
+			continue
+		}
+		const accepted = retained[duplicate]
+		const candidateEvidence = candidate.flux * candidate.linearity * candidate.coverage
+		const acceptedEvidence = accepted.flux * accepted.linearity * accepted.coverage
+		if (candidateEvidence > acceptedEvidence || (candidateEvidence === acceptedEvidence && compareStreaks(candidate, accepted) < 0)) retained[duplicate] = candidate
+	}
+	return retained
 }
 
 // Converts one infinite Hough seed into one or more supported longitudinal segments.
@@ -216,11 +299,14 @@ function finishStreakRun(
 	minimum = Math.max(minimum, Math.min(clipFirst, clipSecond))
 	maximum = Math.min(maximum, Math.max(clipFirst, clipSecond))
 	if (!(maximum > minimum)) return
-	const planeStart = { x: fit.center.x + minimum * vectors.tangent.x, y: fit.center.y + minimum * vectors.tangent.y }
-	const planeEnd = { x: fit.center.x + maximum * vectors.tangent.x, y: fit.center.y + maximum * vectors.tangent.y }
+	const planeStart = { x: Math.max(0, Math.min(grid.width - 1, fit.center.x + minimum * vectors.tangent.x)), y: Math.max(0, Math.min(grid.height - 1, fit.center.y + minimum * vectors.tangent.y)) }
+	const planeEnd = { x: Math.max(0, Math.min(grid.width - 1, fit.center.x + maximum * vectors.tangent.x)), y: Math.max(0, Math.min(grid.height - 1, fit.center.y + maximum * vectors.tangent.y)) }
 	const photometry = measureStreakPhotometry(prepared, planeStart, planeEnd, fit.angle, options.maxWidth / grid.step)
 	const width = photometry.width * grid.step
 	if (!Number.isFinite(width) || width > options.maxWidth) return
+	if (photometry.angleOffset > Math.max(options.angleStep, options.orientationTolerance * 0.5)) return
+	const linearity = Math.min(fit.linearity, photometry.linearity)
+	if (linearity < options.minLinearity) return
 	const snr = prepared.globalNoise > 0 && photometry.validSamples > 0 ? photometry.flux / (prepared.globalNoise * Math.sqrt(photometry.validSamples)) : undefined
 	if (snr !== undefined && snr < options.minSNR) return
 	const clippedAtBorder = first === 0 || last === sampleCount - 1
@@ -231,7 +317,7 @@ function finishStreakRun(
 	const coverage = supported / (last - first + 1)
 	const snrEvidence = snr === undefined ? Math.min(1, candidate.score / Math.max(1, supported * 8)) : snr / (snr + Math.max(1, options.minSNR))
 	const residualEvidence = 1 / (1 + (fit.rmsResidual * grid.step) / Math.max(width, 0.5))
-	const confidence = Math.max(0, Math.min(1, (snrEvidence + fit.linearity + coverage + residualEvidence) * 0.25 * (clippedAtBorder ? 0.95 : 1)))
+	const confidence = Math.max(0, Math.min(1, (snrEvidence + linearity + coverage + residualEvidence) * 0.25 * (clippedAtBorder ? 0.95 : 1)))
 	output.push({
 		start,
 		end,
@@ -239,7 +325,7 @@ function finishStreakRun(
 		length,
 		width,
 		angle: normalizeStreakAngle(fit.angle),
-		linearity: fit.linearity,
+		linearity,
 		rmsResidual: fit.rmsResidual * grid.step,
 		coverage,
 		supportPixels: photometry.supportPixels,
@@ -337,6 +423,9 @@ function measureStreakPhotometry(prepared: PreparedStreakImage, start: Readonly<
 	let flux = 0
 	let normalFirst = 0
 	let normalSecond = 0
+	let longitudinalFirst = 0
+	let longitudinalSecond = 0
+	let crossMoment = 0
 	let peakSignal = 0
 	let supportPixels = 0
 	let validSamples = 0
@@ -356,20 +445,35 @@ function measureStreakPhotometry(prepared: PreparedStreakImage, start: Readonly<
 			if (mask & STREAK_MASK_SATURATED) saturatedSamples++
 			const signal = Math.max(0, workspace.signal[index])
 			if (!(signal > 0)) continue
+			const offsetX = x - start.x
+			const offsetY = y - start.y
+			const longitudinal = offsetX * vectors.tangent.x + offsetY * vectors.tangent.y
+			const normal = offsetX * vectors.normal.x + offsetY * vectors.normal.y
 			flux += signal
-			normalFirst += signal * offset
-			normalSecond += signal * offset * offset
+			normalFirst += signal * normal
+			normalSecond += signal * normal * normal
+			longitudinalFirst += signal * longitudinal
+			longitudinalSecond += signal * longitudinal * longitudinal
+			crossMoment += signal * longitudinal * normal
 			peakSignal = Math.max(peakSignal, signal)
 			supportPixels++
 		}
 	}
 	const center = flux > 0 ? normalFirst / flux : 0
-	const variance = flux > 0 ? Math.max(0, normalSecond / flux - center * center) : 0
+	const longitudinalCenter = flux > 0 ? longitudinalFirst / flux : 0
+	const normalVariance = flux > 0 ? Math.max(0, normalSecond / flux - center * center) : 0
+	const longitudinalVariance = flux > 0 ? Math.max(0, longitudinalSecond / flux - longitudinalCenter * longitudinalCenter) : 0
+	const covariance = flux > 0 ? crossMoment / flux - longitudinalCenter * center : 0
+	const discriminant = Math.hypot(longitudinalVariance - normalVariance, 2 * covariance)
+	const majorVariance = Math.max(0, (longitudinalVariance + normalVariance + discriminant) * 0.5)
+	const minorVariance = Math.max(0, (longitudinalVariance + normalVariance - discriminant) * 0.5)
 	return {
 		flux,
 		meanSignal: supportPixels > 0 ? flux / supportPixels : 0,
 		peakSignal,
-		width: 2 * Math.sqrt(2 * Math.log(2)) * Math.sqrt(variance),
+		width: 2 * Math.sqrt(2 * Math.log(2)) * Math.sqrt(normalVariance),
+		linearity: majorVariance > 0 ? Math.max(0, Math.min(1, 1 - minorVariance / majorVariance)) : 0,
+		angleOffset: Math.abs(0.5 * Math.atan2(2 * covariance, longitudinalVariance - normalVariance)),
 		supportPixels,
 		validSamples,
 		saturationFraction: prepared.saturationLevel === undefined || validSamples === 0 ? undefined : saturatedSamples / validSamples,
