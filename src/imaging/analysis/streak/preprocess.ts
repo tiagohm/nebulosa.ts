@@ -55,6 +55,7 @@ export function preprocessStreakImage(image: Image, options: Readonly<StreakDete
 	if (!planes.includes(plane)) throw new RangeError(`analysis plane ${plane} is incompatible with the image layout`)
 	const grid = imagePlaneGeometry(image.metadata, area, plane)
 	if (!grid) throw new RangeError('selected CFA plane has no samples inside the analysis area')
+	if (options.maxWidth !== undefined && options.maxWidth < grid.step) throw new RangeError('maxWidth is below the native analysis-plane resolution')
 
 	const precision = image.raw.BYTES_PER_ELEMENT === 8 ? 64 : 32
 	const workspace = providedWorkspace ?? createStreakDetectionWorkspace(width, height, { precision, maximumCandidates: options.maxCandidates, angleStep: options.angleStep, distanceStep: options.distanceStep })

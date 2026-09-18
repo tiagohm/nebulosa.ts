@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { detectStreaks } from '../../../../src/imaging/analysis/streak/detector'
 import { preprocessStreakImage } from '../../../../src/imaging/analysis/streak/preprocess'
+import { createStreakDetectionWorkspace } from '../../../../src/imaging/analysis/streak/workspace'
 import type { Image } from '../../../../src/imaging/model/types'
 import { renderSyntheticStreak } from '../../../../src/imaging/synthetic/streak'
 
@@ -52,7 +53,10 @@ test('rejects widths below the selected native-plane resolution', () => {
 	expect(() => detectStreaks(rgb, { maxWidth: 1, backgroundCellSize: 8 })).not.toThrow()
 
 	const cfa = image(new Float32Array(16 * 16).fill(0.1), 16, 16, 1, 'RGGB')
-	expect(() => detectStreaks(cfa, { maxWidth: 1.99, backgroundCellSize: 8 })).toThrow('native analysis-plane resolution')
+	const workspace = createStreakDetectionWorkspace(16, 16)
+	workspace.signal[0] = 7
+	expect(() => detectStreaks(cfa, { maxWidth: 1.99, backgroundCellSize: 8 }, workspace)).toThrow('native analysis-plane resolution')
+	expect(workspace.signal[0]).toBe(7)
 	expect(() => detectStreaks(cfa, { maxWidth: 2, backgroundCellSize: 8 })).not.toThrow()
 })
 

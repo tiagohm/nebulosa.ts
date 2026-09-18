@@ -107,7 +107,6 @@ interface FinalStreakSupport {
 export function detectStreaks(image: Image, options: Readonly<StreakDetectionOptions> = {}, workspace?: StreakDetectionWorkspace): readonly Streak[] {
 	const resolved = resolveStreakOptions(options)
 	const prepared = preprocessStreakImage(image, options, workspace)
-	if (resolved.maxWidth < prepared.grid.step) throw new RangeError('maxWidth is below the native analysis-plane resolution')
 	const edges = collectStreakEdges(prepared, resolved)
 
 	if (edges.count === 0) return []
