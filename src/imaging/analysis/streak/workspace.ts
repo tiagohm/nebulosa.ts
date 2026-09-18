@@ -38,6 +38,10 @@ export interface StreakDetectionWorkspaceState {
 	candidateCount: number
 	// Whether eligible edge points exceeded fixed storage in the latest call.
 	edgesTruncated: boolean
+	// Number of coarse Hough angles whose local orientation window contained edges.
+	houghActiveAngles: number
+	// Conservative full-rho slot operations admitted for coarse Hough scanning.
+	houghRhoWork: number
 	// Estimated refinement/corridor pixel visits charged in the latest call.
 	refinementWork: number
 	// Supported runs admitted to final support and photometric measurement.
@@ -184,6 +188,6 @@ export function createStreakDetectionWorkspace(width: number, height: number, op
 		longitudinalSupported: new Uint8Array(longitudinalCapacity),
 		transverseSignal: new Float64Array(STREAK_TRANSVERSE_PROFILE_CAPACITY),
 		transverseNoise: new Float64Array(STREAK_TRANSVERSE_PROFILE_CAPACITY),
-		state: { edgeCount: 0, candidateCount: 0, edgesTruncated: false, refinementWork: 0, supportedRuns: 0, mergeRefits: 0 },
+		state: { edgeCount: 0, candidateCount: 0, edgesTruncated: false, houghActiveAngles: 0, houghRhoWork: 0, refinementWork: 0, supportedRuns: 0, mergeRefits: 0 },
 	}
 }

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { PI, PIOVERFOUR, PIOVERTWO } from '../../../../src/core/constants'
 import { streakAxialAngleDistance } from '../../../../src/imaging/analysis/streak/geometry'
-import { collectStreakEdges, detectStreakHoughCandidates, MAX_STREAK_LOCAL_ANGLE_VOTES, type StreakEdgePoints } from '../../../../src/imaging/analysis/streak/hough'
+import { collectStreakEdges, detectStreakHoughCandidates, MAX_STREAK_HOUGH_RHO_WORK, MAX_STREAK_LOCAL_ANGLE_VOTES, type StreakEdgePoints } from '../../../../src/imaging/analysis/streak/hough'
 import { preprocessStreakImage } from '../../../../src/imaging/analysis/streak/preprocess'
 import { createStreakDetectionWorkspace } from '../../../../src/imaging/analysis/streak/workspace'
 import type { Image } from '../../../../src/imaging/model/types'
@@ -131,4 +131,29 @@ test('rejects local-angle and edge-vote combinations beyond the Hough work budge
 	const maximumTolerance = angleStep * ((MAX_STREAK_LOCAL_ANGLE_VOTES - 1) / 2)
 	expect(() => detectStreakHoughCandidates(fixture, 128, 128, workspace, { orientationTolerance: maximumTolerance, maximumCandidates: 8 })).not.toThrow()
 	expect(() => detectStreakHoughCandidates(fixture, 128, 128, workspace, { orientationTolerance: maximumTolerance + angleStep, maximumCandidates: 8 })).toThrow('bounded work budget')
+})
+
+test('rejects sparse inputs whose angle-rho raster exceeds the Hough work budget', () => {
+	const angleCount = 4096
+	const angleStep = PI / angleCount
+	const distanceStep = 1 / 16
+	const workspace = createStreakDetectionWorkspace(1024, 1024, { angleStep, distanceStep, maximumEdgePoints: 1 })
+	const fixture: StreakEdgePoints = { count: 1, x: new Float32Array([512]), y: new Float32Array([512]), weight: new Float32Array([1]), angleBin: new Uint16Array([0]), angleCount, angleStep }
+	expect(() => detectStreakHoughCandidates(fixture, 1024, 1024, workspace, { distanceStep, orientationTolerance: angleStep, maximumCandidates: 1 })).toThrow('rho scan exceeds')
+	expect(3 * angleCount * (Math.ceil((2 * Math.hypot(1023, 1023)) / distanceStep) + 3)).toBeGreaterThan(MAX_STREAK_HOUGH_RHO_WORK)
+	expect(workspace.state.houghActiveAngles).toBe(0)
+})
+
+test('skips unsupported angles without changing the sparse line candidate', () => {
+	const fineAngleCount = 4096
+	const fineAngleStep = PI / fineAngleCount
+	const fineWorkspace = createStreakDetectionWorkspace(128, 128, { angleStep: fineAngleStep, maximumEdgePoints: 1024 })
+	const fine = detectStreakHoughCandidates(edges([{ angle: 0, rho: 5 }], 128, 128, fineAngleCount), 128, 128, fineWorkspace, { orientationTolerance: 0, maximumCandidates: 8 })
+	const coarseWorkspace = createStreakDetectionWorkspace(128, 128, { angleStep: PI / 180, maximumEdgePoints: 1024 })
+	const coarse = detectStreakHoughCandidates(edges([{ angle: 0, rho: 5 }], 128, 128), 128, 128, coarseWorkspace, { orientationTolerance: 0, maximumCandidates: 8 })
+	expect(fineWorkspace.state.houghActiveAngles).toBe(1)
+	expect(fineWorkspace.state.houghActiveAngles).toBeLessThan(fineAngleCount)
+	expect(fine.length).toBeGreaterThan(0)
+	expect(streakAxialAngleDistance(fine[0].angle, coarse[0].angle)).toBeLessThan(PI / 180)
+	expect(Math.abs(fine[0].rho - coarse[0].rho)).toBeLessThan(1)
 })
