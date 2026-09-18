@@ -84,6 +84,8 @@ export interface StreakDetectionWorkspace {
 	readonly rhoNearest: Float64Array
 	// Deterministic robust sample reservoir shared by sequential reductions.
 	readonly statistics: RobustReservoir
+	// Second deterministic reservoir used to reduce horizontal and vertical noise together.
+	readonly noiseStatistics: RobustReservoir
 	// Robust-statistics and refinement scratch storage.
 	readonly scratch: Float64Array
 	// Integrated signal at each sampled longitudinal position.
@@ -153,6 +155,7 @@ export function createStreakDetectionWorkspace(width: number, height: number, op
 		rhoAccumulator: new Float64Array(rhoCapacity),
 		rhoNearest: new Float64Array(Math.max(rhoCapacity, angleCapacity)),
 		statistics: new RobustReservoir(length),
+		noiseStatistics: new RobustReservoir(length),
 		scratch: new Float64Array(Math.min(length, ROBUST_SAMPLE_CAPACITY)),
 		longitudinalSignal: new Float64Array(longitudinalCapacity),
 		longitudinalOffset: new Float64Array(longitudinalCapacity),

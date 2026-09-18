@@ -2,6 +2,7 @@ import { validateInRange, validatePositiveInteger } from '../../../core/validati
 import type { Rect } from '../../../math/numerical/geometry'
 import type { Image } from '../../model/types'
 import { CFA_ANALYSIS_PLANES, imagePlaneGeometry, type ImageAnalysisPlane, type ImagePlaneGeometry, MONO_ANALYSIS_PLANES, resolveAnalysisArea, RGB_ANALYSIS_PLANES } from '../plane'
+import { ROBUST_SAMPLE_CAPACITY, type RobustReservoir } from '../robust'
 import type { StreakDetectionOptions } from './types'
 import { createStreakDetectionWorkspace, MINIMUM_STREAK_BACKGROUND_CELL_SIZE, type StreakDetectionWorkspace } from './workspace'
 
@@ -60,6 +61,8 @@ export function preprocessStreakImage(image: Image, options: Readonly<StreakDete
 	if (workspace.width < width || workspace.height < height || workspace.precision !== precision) throw new RangeError('incompatible streak workspace extent or precision')
 	if (options.maxCandidates !== undefined && workspace.maximumCandidates < options.maxCandidates) throw new RangeError('streak workspace candidate capacity is too small')
 	const length = grid.width * grid.height
+	const statistics = workspace.statistics
+	statistics.reset()
 
 	for (let y = 0, index = 0; y < grid.height; y++) {
 		let rawIndex = grid.rawStart + y * grid.rawRowStep
@@ -68,10 +71,12 @@ export function preprocessStreakImage(image: Image, options: Readonly<StreakDete
 			const mask = !Number.isFinite(value) ? STREAK_MASK_INVALID : options.saturationLevel !== undefined && value >= options.saturationLevel ? STREAK_MASK_SATURATED : 0
 			workspace.signal[index] = mask & STREAK_MASK_INVALID ? 0 : value
 			workspace.mask[index] = mask
+			if ((mask & STREAK_MASK_INVALID) === 0) statistics.push(value)
 		}
 	}
 
 	workspace.mask.fill(0, length, workspace.mask.length)
+	const globalBackground = statistics.median()
 
 	const backgroundCellSize = options.backgroundCellSize ?? 64
 	validatePositiveInteger(backgroundCellSize)
@@ -80,11 +85,6 @@ export function preprocessStreakImage(image: Image, options: Readonly<StreakDete
 	const backgroundRows = Math.ceil(grid.height / backgroundCellSize)
 	const cellCount = backgroundColumns * backgroundRows
 	if (workspace.background.length < cellCount) throw new RangeError('streak workspace background-grid capacity is too small')
-	const statistics = workspace.statistics
-	statistics.reset()
-	for (let index = 0; index < length; index++) if ((workspace.mask[index] & STREAK_MASK_INVALID) === 0) statistics.push(workspace.signal[index])
-	const globalBackground = statistics.median()
-
 	for (let cellY = 0, cell = 0; cellY < backgroundRows; cellY++) {
 		const top = cellY * backgroundCellSize
 		const bottom = Math.min(grid.height, top + backgroundCellSize)
@@ -115,10 +115,7 @@ export function preprocessStreakImage(image: Image, options: Readonly<StreakDete
 	// Measuring after subtraction prevents smooth gradients already represented by the local model
 	// from becoming fictitious detector noise. Centered second differences reject residual local slope.
 	const noiseFloor = (precision === 32 ? 2 ** -23 * 256 : Number.EPSILON * 64) * Math.max(1, Math.abs(globalBackground))
-	const globalHorizontalNoise = measureResidualDifferenceNoise(workspace, grid.width, 0, 0, grid.width, grid.height, false)
-	const globalVerticalNoise = measureResidualDifferenceNoise(workspace, grid.width, 0, 0, grid.width, grid.height, true)
-	const measuredGlobalNoise = Math.max(globalHorizontalNoise, globalVerticalNoise)
-	const globalNoise = Number.isFinite(measuredGlobalNoise) && measuredGlobalNoise > noiseFloor ? measuredGlobalNoise : 0
+	let unresolvedNoise = false
 
 	for (let cellY = 0, cell = 0; cellY < backgroundRows; cellY++) {
 		const top = cellY * backgroundCellSize
@@ -127,11 +124,23 @@ export function preprocessStreakImage(image: Image, options: Readonly<StreakDete
 		for (let cellX = 0; cellX < backgroundColumns; cellX++, cell++) {
 			const left = cellX * backgroundCellSize
 			const right = Math.min(grid.width, left + backgroundCellSize)
-			const horizontalNoise = measureResidualDifferenceNoise(workspace, grid.width, left, top, right, bottom, false)
-			const verticalNoise = measureResidualDifferenceNoise(workspace, grid.width, left, top, right, bottom, true)
-			const measuredNoise = Math.max(horizontalNoise, verticalNoise)
-			workspace.noise[cell] = Number.isFinite(measuredNoise) && measuredNoise > noiseFloor ? measuredNoise : globalNoise
+			const measured = measureResidualDifferenceNoisePair(workspace, grid.width, left, top, right, bottom)
+			const measuredNoise = Math.max(measured.horizontal, measured.vertical)
+			workspace.noise[cell] = Number.isFinite(measuredNoise) && measuredNoise > noiseFloor ? measuredNoise : 0
+			unresolvedNoise ||= workspace.noise[cell] === 0
 		}
+	}
+
+	statistics.reset()
+	for (let cell = 0; cell < cellCount; cell++) if (workspace.noise[cell] > 0) statistics.push(workspace.noise[cell])
+	const medianCellNoise = statistics.median()
+	let globalNoise = Number.isFinite(medianCellNoise) && medianCellNoise > noiseFloor ? medianCellNoise : 0
+
+	if (unresolvedNoise) {
+		const measured = measureGlobalResidualDifferenceNoisePair(workspace, grid.width, grid.height)
+		const measuredGlobalNoise = Math.max(measured.horizontal, measured.vertical)
+		if (Number.isFinite(measuredGlobalNoise) && measuredGlobalNoise > noiseFloor) globalNoise = measuredGlobalNoise
+		for (let cell = 0; cell < cellCount; cell++) if (workspace.noise[cell] === 0) workspace.noise[cell] = globalNoise
 	}
 
 	workspace.state.edgeCount = 0
@@ -140,27 +149,53 @@ export function preprocessStreakImage(image: Image, options: Readonly<StreakDete
 	return { area, plane, grid, workspace, backgroundCellSize, backgroundColumns, backgroundRows, globalBackground, globalNoise, residualFloor: noiseFloor, saturationLevel: options.saturationLevel }
 }
 
-// Estimates residual sigma from centered second differences in one cell; smooth slopes cancel.
-function measureResidualDifferenceNoise(workspace: StreakDetectionWorkspace, width: number, left: number, top: number, right: number, bottom: number, vertical: boolean): number {
-	const statistics = workspace.statistics
-	statistics.reset()
-	const step = vertical ? width : 1
-	const firstX = vertical ? left : left + 1
-	const lastX = vertical ? right : right - 1
-	const firstY = vertical ? top + 1 : top
-	const lastY = vertical ? bottom - 1 : bottom
+// Estimates horizontal and vertical residual sigma in one cell during one pixel traversal.
+function measureResidualDifferenceNoisePair(workspace: StreakDetectionWorkspace, width: number, left: number, top: number, right: number, bottom: number): { readonly horizontal: number; readonly vertical: number } {
+	const horizontal = workspace.statistics
+	const vertical = workspace.noiseStatistics
+	horizontal.reset()
+	vertical.reset()
 
-	for (let y = firstY; y < lastY; y++) {
-		let index = y * width + firstX
-		for (let x = firstX; x < lastX; x++, index++) {
-			if ((workspace.mask[index - step] & STREAK_MASK_INVALID) !== 0 || (workspace.mask[index] & STREAK_MASK_INVALID) !== 0 || (workspace.mask[index + step] & STREAK_MASK_INVALID) !== 0) continue
-			statistics.push(workspace.signal[index - step] - 2 * workspace.signal[index] + workspace.signal[index + step])
+	for (let y = top; y < bottom; y++) {
+		let index = y * width + left
+		for (let x = left; x < right; x++, index++) {
+			if (x > left && x + 1 < right && (workspace.mask[index - 1] & STREAK_MASK_INVALID) === 0 && (workspace.mask[index] & STREAK_MASK_INVALID) === 0 && (workspace.mask[index + 1] & STREAK_MASK_INVALID) === 0) horizontal.push(workspace.signal[index - 1] - 2 * workspace.signal[index] + workspace.signal[index + 1])
+			if (y > top && y + 1 < bottom && (workspace.mask[index - width] & STREAK_MASK_INVALID) === 0 && (workspace.mask[index] & STREAK_MASK_INVALID) === 0 && (workspace.mask[index + width] & STREAK_MASK_INVALID) === 0)
+				vertical.push(workspace.signal[index - width] - 2 * workspace.signal[index] + workspace.signal[index + width])
 		}
 	}
 
+	return { horizontal: reduceResidualDifferenceNoise(horizontal, workspace.scratch), vertical: reduceResidualDifferenceNoise(vertical, workspace.scratch) }
+}
+
+// Estimates global residual noise from at most one spatially stratified sample per capacity slot.
+function measureGlobalResidualDifferenceNoisePair(workspace: StreakDetectionWorkspace, width: number, height: number): { readonly horizontal: number; readonly vertical: number } {
+	const horizontal = workspace.statistics
+	const vertical = workspace.noiseStatistics
+	horizontal.reset()
+	vertical.reset()
+	const interiorWidth = Math.max(0, width - 2)
+	const interiorHeight = Math.max(0, height - 2)
+	const population = interiorWidth * interiorHeight
+	const sampleCount = Math.min(population, ROBUST_SAMPLE_CAPACITY)
+
+	for (let sample = 0; sample < sampleCount; sample++) {
+		const position = Math.min(population - 1, Math.floor(((sample + 0.5) * population) / sampleCount))
+		const x = 1 + (position % interiorWidth)
+		const y = 1 + Math.floor(position / interiorWidth)
+		const index = y * width + x
+		if ((workspace.mask[index - 1] & STREAK_MASK_INVALID) === 0 && (workspace.mask[index] & STREAK_MASK_INVALID) === 0 && (workspace.mask[index + 1] & STREAK_MASK_INVALID) === 0) horizontal.push(workspace.signal[index - 1] - 2 * workspace.signal[index] + workspace.signal[index + 1])
+		if ((workspace.mask[index - width] & STREAK_MASK_INVALID) === 0 && (workspace.mask[index] & STREAK_MASK_INVALID) === 0 && (workspace.mask[index + width] & STREAK_MASK_INVALID) === 0) vertical.push(workspace.signal[index - width] - 2 * workspace.signal[index] + workspace.signal[index + width])
+	}
+
+	return { horizontal: reduceResidualDifferenceNoise(horizontal, workspace.scratch), vertical: reduceResidualDifferenceNoise(vertical, workspace.scratch) }
+}
+
+// Converts a centered-second-difference population to the equivalent input noise sigma.
+function reduceResidualDifferenceNoise(statistics: RobustReservoir, scratch: Float64Array): number {
 	if (statistics.retainedCount === 0) return 0
 	const center = statistics.median()
-	return statistics.madAround(center, true, workspace.scratch) / Math.sqrt(6)
+	return statistics.madAround(center, true, scratch) / Math.sqrt(6)
 }
 
 // Returns conservative local noise at a native-plane coordinate; zero means no measurable noise.

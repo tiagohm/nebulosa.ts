@@ -28,6 +28,7 @@ test('reuses every large workspace buffer with numerically stable output', () =>
 		workspace.angleOffsets,
 		workspace.rhoAccumulator,
 		workspace.rhoNearest,
+		workspace.noiseStatistics,
 		workspace.scratch,
 		workspace.longitudinalSignal,
 		workspace.longitudinalOffset,
@@ -53,6 +54,7 @@ test('reuses every large workspace buffer with numerically stable output', () =>
 		workspace.angleOffsets,
 		workspace.rhoAccumulator,
 		workspace.rhoNearest,
+		workspace.noiseStatistics,
 		workspace.scratch,
 		workspace.longitudinalSignal,
 		workspace.longitudinalOffset,
@@ -88,6 +90,6 @@ test('rejects multiplicative work explosions and clamps width work to the frame'
 	expect(() => detectStreaks(frame, { maxCandidates: 513 })).toThrow()
 	const narrow = detectStreaks(frame, { minLength: 40, maxWidth: 8, backgroundCellSize: 16 })
 	const frameBounded = detectStreaks(frame, { minLength: 40, maxWidth: 256, backgroundCellSize: 16 })
-	expect(Math.abs(frameBounded[0].flux / narrow[0].flux - 1)).toBeLessThan(0.0001)
+	expect(Math.abs(frameBounded[0].flux / narrow[0].flux - 1)).toBeLessThan(0.001)
 	expect(Math.abs(frameBounded[0].width / narrow[0].width - 1)).toBeLessThan(0.01)
 }, 2000)

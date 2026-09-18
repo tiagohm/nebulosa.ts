@@ -75,11 +75,23 @@ export function collectStreakEdges(prepared: PreparedStreakImage, options: Reado
 	workspace.rhoNearest.fill(0, 0, angleCount)
 	let eligible = 0
 
-	forEachEligibleEdge(prepared, thresholdSigma, gradientSigma, actualAngleStep, angleCount, (_x, _y, weight, bin) => {
+	forEachEligibleEdge(prepared, thresholdSigma, gradientSigma, actualAngleStep, angleCount, (x, y, weight, bin) => {
 		counts[bin]++
 		workspace.rhoNearest[bin] = Math.max(workspace.rhoNearest[bin], weight)
+		if (eligible < workspace.maximumEdgePoints) {
+			workspace.edgeX[eligible] = x
+			workspace.edgeY[eligible] = y
+			workspace.edgeWeight[eligible] = weight
+			workspace.edgeAngleBin[eligible] = bin
+		}
 		eligible++
 	})
+
+	if (eligible <= workspace.maximumEdgePoints) {
+		workspace.state.edgeCount = eligible
+		workspace.state.edgesTruncated = false
+		return { count: eligible, x: workspace.edgeX, y: workspace.edgeY, weight: workspace.edgeWeight, angleBin: workspace.edgeAngleBin, angleCount, angleStep: actualAngleStep }
+	}
 
 	const nonempty: number[] = []
 	for (let bin = 0; bin < angleCount; bin++) if (counts[bin] > 0) nonempty.push(bin)
