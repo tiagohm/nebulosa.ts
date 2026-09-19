@@ -1260,6 +1260,8 @@ export class MountSimulator extends DeviceSimulator {
 		const targetPierSide = this.#homePierSide
 		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
 		this.#startCoordinateSlew('HOME', target, targetPierSide, changesPierSide, false)
+		this.#homeAction = 'GO'
+		this.#homeAcquireRemaining = 0
 		this.#setHoming(true)
 	}
 
@@ -1850,13 +1852,18 @@ export class MountSimulator extends DeviceSimulator {
 			this.#clearFlipMotion()
 			this.#arrivalBoresightPierSide = arrivalBoresightPierSide
 			this.#setSlewing(false)
-			this.#setHoming(false)
+			if (mode === 'HOME' && this.#homeAction === 'GO') {
+				this.#homeAction = undefined
+				this.#setHomeState('Ok')
+			} else {
+				this.#setHoming(false)
+			}
 
 			// Homing zeroes the encoders on a sensor that does not trip in exactly the same place twice,
 			// so the mount ends up believing it is at the home position while the axes sit a little off
 			// it. Every coordinate derived afterwards inherits that difference, which is where an index
 			// error comes from in the first place. Redrawn on each home, so two homings in a row disagree.
-			this.#pendingHomeScatter = mode === 'HOME'
+			this.#pendingHomeScatter = mode === 'HOME' && this.#homeAction === 'FIND'
 
 			if (mode === 'PARK') {
 				this.#setParking(false, true)
@@ -2296,8 +2303,13 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Updates the homing flag and notifies listeners.
 	#setHoming(value: boolean) {
-		if (this.isHoming === value) return
-		this.#home.state = value ? 'Busy' : 'Idle'
+		this.#setHomeState(value ? 'Busy' : 'Idle')
+	}
+
+	// Publishes the lifecycle of the active INDI home command.
+	#setHomeState(state: 'Idle' | 'Busy' | 'Ok' | 'Alert') {
+		if (this.#home.state === state) return
+		this.#home.state = state
 		this.notify(this.#home)
 	}
 
