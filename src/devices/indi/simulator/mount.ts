@@ -26,6 +26,12 @@ import { applyMultiSwitchValues, applyNumberVectorValues, clampDeclination } fro
 
 // Simulated equatorial mount, tracking, slewing, site, and pulse-guiding behavior.
 
+// Active home command; only FIND acquires a new physical sensor reference.
+type HomeAction = 'GO' | 'FIND'
+
+// Simulated seconds spent latching the home index after the axes reach it.
+const HOME_ACQUIRE_DURATION = 0.5
+
 // Simulated equatorial mount. Models tracking drift per track mode, manual axis motion, slew/sync/goto,
 // explicit and autonomous Meridian Flips, park/home, pier side, site location and time, and pulse
 // guiding, advancing the equatorial coordinate on each tick and emitting the corresponding INDI vectors.
@@ -204,6 +210,10 @@ export class MountSimulator extends DeviceSimulator {
 	#slewMidpointSample?: { time: number; rightAscension: Angle; declination: Angle; pierSide: PierSide }
 	// HOME arrival waiting until any deferred midpoint sample has been recorded.
 	#pendingHomeScatter = false
+	// Active home command, including the sensor acquisition interval after a FIND slew.
+	#homeAction?: HomeAction
+	// Sensor acquisition time still to consume, in simulated seconds.
+	#homeAcquireRemaining = 0
 	// One-shot latch preventing an aborted or completed automatic flip from immediately restarting.
 	#automaticFlipArmed = true
 
