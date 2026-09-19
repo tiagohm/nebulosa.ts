@@ -44,6 +44,7 @@ export class MountSimulator extends DeviceSimulator {
 	readonly #abort = makeSwitchVector('', 'TELESCOPE_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
 	readonly #trackMode = makeSwitchVector('', 'TELESCOPE_TRACK_MODE', 'Track Mode', MAIN_CONTROL, 'OneOfMany', 'rw', ['TRACK_SIDEREAL', 'Sidereal', true], ['TRACK_SOLAR', 'Solar', false], ['TRACK_LUNAR', 'Lunar', false], ['TRACK_KING', 'King', false])
 	readonly #tracking = makeSwitchVector('', 'TELESCOPE_TRACK_STATE', 'Tracking', MAIN_CONTROL, 'OneOfMany', 'rw', ['TRACK_ON', 'On', false], ['TRACK_OFF', 'Off', true])
+	// INDI Home operations: FIND reacquires the sensor, SET saves this pose, GO uses the current reference.
 	readonly #home = makeSwitchVector('', 'TELESCOPE_HOME', 'Home', MAIN_CONTROL, 'AtMostOne', 'rw', ['FIND', 'Find', false], ['SET', 'Set', false], ['GO', 'Go', false])
 	readonly #motionNS = makeSwitchVector('', 'TELESCOPE_MOTION_NS', 'Motion N/S', MAIN_CONTROL, 'AtMostOne', 'rw', ['MOTION_NORTH', 'North', false], ['MOTION_SOUTH', 'South', false])
 	readonly #motionWE = makeSwitchVector('', 'TELESCOPE_MOTION_WE', 'Motion W/E', MAIN_CONTROL, 'AtMostOne', 'rw', ['MOTION_WEST', 'West', false], ['MOTION_EAST', 'East', false])
@@ -251,9 +252,8 @@ export class MountSimulator extends DeviceSimulator {
 	// Current deflection of the optical axis by the wind, and the conditions producing it.
 	readonly #windState = windState()
 	#windConfig: WindConfig = IDENTITY_WIND_CONFIG
-	// How far the axes really sat from the home position the last time the mount homed, radians. A home
-	// sensor has hysteresis, so the mount zeroes its encoders a little short of where it did last time
-	// and every subsequent coordinate inherits the difference. This is where index errors come from.
+	// Residual sensor repeatability from the last successful FIND, in radians per axis. GO and SET
+	// retain it; only a new physical index acquisition redraws it.
 	#homeScatterRightAscension: Angle = 0
 	#homeScatterDeclination: Angle = 0
 	// Travel the drive has delivered beyond what the encoders counted, radians of right ascension.
@@ -509,7 +509,7 @@ export class MountSimulator extends DeviceSimulator {
 
 		// Held constant across the extrapolation window rather than projected forward: over the fraction
 		// of a second a caller extrapolates by, a part-per-million rate error moves nothing measurable.
-		// The same applies to the wind and to the home scatter, which is constant until the next home.
+		// The same applies to the wind and to the home scatter, which is constant until the next FIND.
 		rightAscension += this.#trackingRateOffset + this.#homeScatterRightAscension
 		declination += this.#homeScatterDeclination
 
@@ -541,8 +541,8 @@ export class MountSimulator extends DeviceSimulator {
 	}
 
 	// Right ascension the drive has delivered beyond what the encoders counted, radians. Grows while
-	// tracking with a non-zero rate error and is cleared by a sync, which is what re-registers the
-	// bookkeeping against the sky.
+	// tracking with a non-zero rate error and is cleared by sync or successful FIND, which restore
+	// the controller's reference against the sky or the physical home index.
 	get trackingRateOffset(): Angle {
 		return this.#trackingRateOffset
 	}
@@ -1253,7 +1253,8 @@ export class MountSimulator extends DeviceSimulator {
 		this.#absorbAccumulatedError()
 	}
 
-	// Slews to the configured home position.
+	// Goes to the stored mechanical Home pose and pier side using the current reference, without
+	// acquiring the sensor or changing accumulated drive error. A connected, unparked mount is required.
 	home() {
 		if (!this.isConnected || this.isParked) return
 		const target = { rightAscension: this.#homeCoordinate.rightAscension, declination: this.#homeCoordinate.declination }
@@ -1265,7 +1266,8 @@ export class MountSimulator extends DeviceSimulator {
 		this.#setHoming(true)
 	}
 
-	// Seeks the stored mechanical home pose before acquiring the physical sensor reference.
+	// Seeks the stored mechanical Home pose and pier side, then spends 0.5 simulated seconds acquiring
+	// the index. Remains Busy through both phases and recalibrates only after successful acquisition.
 	findHome() {
 		if (!this.isConnected || this.isParked) return
 		const target = { rightAscension: this.#homeCoordinate.rightAscension, declination: this.#homeCoordinate.declination }
@@ -1277,11 +1279,18 @@ export class MountSimulator extends DeviceSimulator {
 		this.#setHoming(true)
 	}
 
-	// Stores the current mechanical orientation and physical shaft branch as the new home position.
+	// Stores the current mechanical orientation and physical shaft branch as Home immediately. This
+	// changes neither the sensor residual nor accumulated tracking-rate drift.
 	setHome() {
+		const pierSide = this.#storedPosePierSide()
+		if (this.#homeAction !== undefined) {
+			this.#abortSlew()
+			this.#refreshSlewingState()
+		}
 		this.#homeCoordinate.rightAscension = this.#mechanical.rightAscension
 		this.#homeCoordinate.declination = this.#mechanical.declination
-		this.#homePierSide = this.#storedPosePierSide()
+		this.#homePierSide = pierSide
+		this.#setHomeState('Ok')
 	}
 
 	// Parks the mount at the configured park position.
@@ -1655,7 +1664,8 @@ export class MountSimulator extends DeviceSimulator {
 			this.#advanceRingDown(stepSeconds, stepTime)
 			this.#recordBoresightAt(stepTime)
 		}
-		this.#homeAcquireRemaining = Math.max(0, this.#homeAcquireRemaining - duration)
+		this.#homeAcquireRemaining -= duration
+		if (this.#homeAcquireRemaining <= 1e-12) this.#homeAcquireRemaining = 0
 		if (this.#homeAcquireRemaining === 0) {
 			this.#trackingRateOffset = 0
 			this.#scatterHome()
@@ -2097,10 +2107,10 @@ export class MountSimulator extends DeviceSimulator {
 		this.notify(this.#wormPhaseVector)
 	}
 
-	// Draws how far the axes really sat from the home position on this homing, in radians.
+	// Draws the new sensor repeatability residual at successful FIND acquisition, in radians.
 	//
 	// Gaussian on each axis with the configured repeatability as its standard deviation. A zero
-	// repeatability makes the sensor perfect and clears any scatter left by an earlier home.
+	// repeatability makes the sensor perfect and clears any scatter left by an earlier FIND.
 	#scatterHome() {
 		const scatter = this.#simulatesMechanics ? this.#mechanics.elements.HOME_SCATTER.value * ASEC2RAD : 0
 
@@ -2291,7 +2301,7 @@ export class MountSimulator extends DeviceSimulator {
 		this.#appliedDeclinationRing = 0
 	}
 
-	// Cancels any goto, flip, home, or park slew without committing a pending pier-side change.
+	// Cancels any goto, flip, home seek/acquisition, or park without committing a pending pier-side change.
 	#abortSlew() {
 		const hadCoordinateSlew = this.#slewTarget !== undefined
 		this.#slewMode = undefined

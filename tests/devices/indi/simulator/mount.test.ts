@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { angularDistance } from '../../../../src/astronomy/coordinates/coordinate'
 import { PI, PIOVERTWO, SIDEREAL_DRIFT_RATE, TAU } from '../../../../src/core/constants'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
-import { expectedPierSide } from '../../../../src/devices/indi/device'
+import { expectedPierSide, type PierSide } from '../../../../src/devices/indi/device'
 import { GuideOutputManager } from '../../../../src/devices/indi/manager/guideoutput'
 import { MountManager } from '../../../../src/devices/indi/manager/mount'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
@@ -66,6 +66,12 @@ describe.skipIf(SKIP)('mount simulator', () => {
 		expect(closeTo(normalizePI(mount.equatorialCoordinate.rightAscension - hour(5)), 0, 5e-3)).toBeTrue()
 		expect(closeTo(mount.equatorialCoordinate.declination, deg(20), 5e-3)).toBeTrue()
 
+		mountManager.findHome(mount)
+		await waitUntil(() => mount.homing)
+		await waitUntil(() => !mount.homing, 3000)
+		expect(closeTo(normalizePI(mount.equatorialCoordinate.rightAscension - hour(5)), 0, 5e-3)).toBeTrue()
+		expect(closeTo(mount.equatorialCoordinate.declination, deg(20), 5e-3)).toBeTrue()
+
 		mountManager.goTo(mount, hour(5.12), deg(22))
 		await waitUntil(() => !mount.slewing, 3000)
 		mountManager.park(mount)
@@ -84,7 +90,7 @@ describe.skipIf(SKIP)('mount simulator', () => {
 
 		mountSimulator.dispose()
 		expect(mountManager.has(client, mountSimulator.name)).toBeFalse()
-	})
+	}, 2000)
 
 	test('applies tracking drift for disabled, sidereal, king, solar and lunar modes', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -723,6 +729,44 @@ describe('mount simulator meridian flip', () => {
 			expect(full.simulator.sampleBoresightTrajectory(midpointTime, midpointTime, 1, trajectory)).toBe(1)
 			stepped.simulator.advance(duration / 2 + 0.5 + 1e-6)
 			expect(toArcsec(angularDistance(full.simulator.boresight.rightAscension, full.simulator.boresight.declination, stepped.simulator.boresight.rightAscension, stepped.simulator.boresight.declination))).toBeCloseTo(0, 3)
+		} finally {
+			full.simulator.dispose()
+			stepped.simulator.dispose()
+		}
+	})
+
+	test('keeps acquisition and its trajectory jump independent of advance size', () => {
+		const full = makeMeridianFlipMount('mount.find.acquisition.full')
+		const stepped = makeMeridianFlipMount('mount.find.acquisition.stepped')
+		try {
+			for (const { client, simulator } of [full, stepped]) {
+				simulator.setTime({ utc: Date.UTC(2026, 0, 1), offset: 0 })
+				simulator.syncTo(hour(5), deg(20))
+				client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { MECHANICS: true, TRACKING_RATE: true } })
+				client.sendNumber({ device: simulator.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, HOME_SCATTER: 600 } })
+				client.sendNumber({ device: simulator.name, name: 'MOUNT_TRACKING_RATE', elements: { ...NO_TRACKING_RATE, BIAS: 1000 } })
+				simulator.setHome()
+				simulator.setTrackingEnabled(true)
+				simulator.findHome()
+			}
+			const startTime = full.simulator.utcTime
+			full.simulator.advance(1)
+			stepped.simulator.advance(0.25)
+			expect(stepped.simulator.isHoming).toBeTrue()
+			stepped.simulator.advance(0.25)
+			expect(stepped.simulator.isHoming).toBeFalse()
+			stepped.simulator.advance(0.5)
+			expect(full.simulator.utcTime).toBe(stepped.simulator.utcTime)
+			expect(full.simulator.mechanical.rightAscension).toBeCloseTo(stepped.simulator.mechanical.rightAscension, 12)
+			expect(full.simulator.mechanical.declination).toBeCloseTo(stepped.simulator.mechanical.declination, 12)
+			expect(full.simulator.boresight.rightAscension).toBeCloseTo(stepped.simulator.boresight.rightAscension, 12)
+			expect(full.simulator.boresight.declination).toBeCloseTo(stepped.simulator.boresight.declination, 12)
+			expect(full.simulator.trackingRateOffset).toBeCloseTo(stepped.simulator.trackingRateOffset, 12)
+			const before = new Float64Array(2)
+			const after = new Float64Array(2)
+			expect(full.simulator.sampleBoresightTrajectory(startTime + 499, startTime + 499, 1, before)).toBe(1)
+			expect(full.simulator.sampleBoresightTrajectory(startTime + 501, startTime + 501, 1, after)).toBe(1)
+			expect(toArcsec(angularDistance(before[0], before[1], after[0], after[1]))).toBeGreaterThan(1)
 		} finally {
 			full.simulator.dispose()
 			stepped.simulator.dispose()
@@ -2099,6 +2143,54 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('finds the stored shaft pose and returns to pole-neutral Home', () => {
+		for (const pose of ['saved', 'pole'] as const) {
+			const { simulator } = makeMeridianFlipMount(`mount.find.${pose}.side`)
+			try {
+				const lst = simulator.siderealTimeAt(simulator.utcTime)
+				let target = { ...simulator.mechanical }
+				let side: PierSide = 'NEITHER'
+				if (pose === 'saved') {
+					simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+					simulator.setHome()
+					target = { ...simulator.mechanical }
+					side = simulator.pierSide
+					simulator.syncTo(normalizeAngle(lst - hour(1)), deg(20))
+				} else {
+					simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+				}
+				simulator.setTrackingEnabled(true)
+				simulator.findHome()
+				simulator.advance(FAST_FLIP_DURATION + 1)
+				expect(simulator.isHoming).toBeFalse()
+				expect(simulator.pierSide).toBe(side)
+				expect(simulator.mechanical.declination).toBeCloseTo(target.declination, 12)
+				if (pose === 'saved') expect(normalizePI(simulator.mechanical.rightAscension - target.rightAscension)).toBeCloseTo(0, 12)
+				else expect(Number.isFinite(simulator.mechanical.rightAscension)).toBeTrue()
+			} finally {
+				simulator.dispose()
+			}
+		}
+	})
+
+	test('FIND takes ownership from an in-flight flip', () => {
+		const { simulator } = makeMeridianFlipMount('mount.find.supersedes.flip')
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			simulator.flipTo(simulator.rightAscension, simulator.declination)
+			simulator.advance(FAST_FLIP_DURATION / 2)
+			simulator.findHome()
+			expect(simulator.isHoming).toBeTrue()
+			simulator.advance(FAST_FLIP_DURATION + 1)
+			expect(simulator.isHoming).toBeFalse()
+			expect(simulator.pierSide).toBe('NEITHER')
+			expect(simulator.mechanical.declination).toBeCloseTo(PIOVERTWO, 12)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('persists automatic flip configuration without transient operation state', () => {
 		const saved: string[] = []
 		let savedProperties: readonly SimulatorProperty[] = []
@@ -2281,10 +2373,9 @@ describe('mount simulator pointing errors', () => {
 		try {
 			mount.setTrackingEnabled(true)
 			mount.setSlewRate('SPEED_6')
+			mount.findHome()
+			for (let i = 0; i < 300 && mount.isHoming; i++) mount.advance(1)
 			mount.advance(600)
-
-			mount.home()
-			for (let i = 0; i < 300 && mount.isSlewing; i++) mount.advance(1)
 
 			// Both families have now integrated into state of their own rather than staying a function of
 			// their vector, which is what makes them different from the rest.
@@ -3076,41 +3167,45 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
-	test.skipIf(SKIP)('overshoots and rings after a slew, then lands exactly on target', () => {
-		const { client, mount } = makeMount('mount.settling.slew', 'SETTLING')
+	test.skipIf(SKIP)(
+		'overshoots and rings after a slew, then lands exactly on target',
+		() => {
+			const { client, mount } = makeMount('mount.settling.slew', 'SETTLING')
 
-		try {
-			// A springy mount: half an arcminute of overshoot at two hertz, lightly damped.
-			client.sendNumber({ device: mount.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 30, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
-			mount.setSlewRate('SPEED_7')
+			try {
+				// A springy mount: half an arcminute of overshoot at two hertz, lightly damped.
+				client.sendNumber({ device: mount.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 30, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
+				mount.setSlewRate('SPEED_7')
 
-			const target = mount.declination + deg(10)
-			mount.goTo(mount.rightAscension, target)
+				const target = mount.declination + deg(10)
+				mount.goTo(mount.rightAscension, target)
 
-			let overshoot = 0
-			let arrived = false
+				let overshoot = 0
+				let arrived = false
 
-			// Stepped finely enough to resolve a two hertz ring-down.
-			for (let i = 0; i < 2000; i++) {
-				mount.advance(0.01)
-				if (!mount.isSlewing) {
-					arrived = true
-					overshoot = Math.max(overshoot, Math.abs(mount.mechanical.declination - target))
+				// Stepped finely enough to resolve a two hertz ring-down.
+				for (let i = 0; i < 2000; i++) {
+					mount.advance(0.01)
+					if (!mount.isSlewing) {
+						arrived = true
+						overshoot = Math.max(overshoot, Math.abs(mount.mechanical.declination - target))
+					}
 				}
+
+				expect(arrived).toBeTrue()
+
+				// It went past the target on the way in.
+				expect(toArcsec(overshoot)).toBeGreaterThan(5)
+
+				// And came back to it: the excursion is borrowed and paid back, so a goto still lands where
+				// it was told to once the ringing dies away.
+				expect(toArcsec(Math.abs(mount.mechanical.declination - target))).toBeLessThan(0.01)
+			} finally {
+				mount.dispose()
 			}
-
-			expect(arrived).toBeTrue()
-
-			// It went past the target on the way in.
-			expect(toArcsec(overshoot)).toBeGreaterThan(5)
-
-			// And came back to it: the excursion is borrowed and paid back, so a goto still lands where
-			// it was told to once the ringing dies away.
-			expect(toArcsec(Math.abs(mount.mechanical.declination - target))).toBeLessThan(0.01)
-		} finally {
-			mount.dispose()
-		}
-	})
+		},
+		2000,
+	)
 
 	test('publishes the worm phase while sidereal tracking holds the coordinate still', () => {
 		const handler = new IndiClientHandlerSet()
@@ -3323,83 +3418,95 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
-	test.skipIf(SKIP)('lands on the pole after ringing against the declination clamp', () => {
-		const { client, mount } = makeMount('mount.settling.pole', 'SETTLING')
-
-		try {
-			client.sendNumber({ device: mount.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 30, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
-			mount.setSlewRate('SPEED_7')
-
-			// Homing points at the pole, so this is the ordinary path rather than an exotic one. The
-			// northward half of the ring-down is discarded by the declination clamp; paying it back anyway
-			// left the mount permanently short of the pole it had reached.
-			mount.goTo(mount.rightAscension, PIOVERTWO)
-			for (let i = 0; i < 2000; i++) mount.advance(0.01)
-
-			expect(mount.isSlewing).toBeFalse()
-			expect(toArcsec(PIOVERTWO - mount.mechanical.declination)).toBeCloseTo(0, 6)
-		} finally {
-			mount.dispose()
-		}
-	})
-
-	test.skipIf(SKIP)('lands on a second target commanded while the first is still ringing', () => {
-		const { client, mount } = makeMount('mount.settling.interrupted', 'SETTLING')
-
-		try {
-			client.sendNumber({ device: mount.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 30, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
-			mount.setSlewRate('SPEED_7')
-
-			const first = mount.declination + deg(10)
-			mount.goTo(mount.rightAscension, first)
-			for (let i = 0; i < 100 && mount.isSlewing; i++) mount.advance(0.01)
-
-			expect(mount.isSlewing).toBeFalse()
-
-			// Partway into the ring-down, so the axes sit measurably off the target they just reached.
-			mount.advance(0.05)
-			expect(toArcsec(Math.abs(mount.mechanical.declination - first))).toBeGreaterThan(5)
-
-			// A second goto takes the axes over from there. The excursion it interrupted has been absorbed
-			// by the move, so nothing is owed on it and the mount must land on the new target: an
-			// oscillator left running would pay the old offset back a second time and stop short.
-			const second = first + deg(1)
-			mount.goTo(mount.rightAscension, second)
-			for (let i = 0; i < 2000; i++) mount.advance(0.01)
-
-			expect(toArcsec(Math.abs(mount.mechanical.declination - second))).toBeLessThan(0.01)
-		} finally {
-			mount.dispose()
-		}
-	})
-
-	test.skipIf(SKIP)('settles more gently after a slow slew than a fast one', () => {
-		function overshootAt(rate: string, name: string) {
-			const { client, mount } = makeMount(name, 'SETTLING')
+	test.skipIf(SKIP)(
+		'lands on the pole after ringing against the declination clamp',
+		() => {
+			const { client, mount } = makeMount('mount.settling.pole', 'SETTLING')
 
 			try {
 				client.sendNumber({ device: mount.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 30, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
-				mount.setSlewRate(rate)
+				mount.setSlewRate('SPEED_7')
 
-				const target = mount.declination + deg(1)
-				mount.goTo(mount.rightAscension, target)
+				// Homing points at the pole, so this is the ordinary path rather than an exotic one. The
+				// northward half of the ring-down is discarded by the declination clamp; paying it back anyway
+				// left the mount permanently short of the pole it had reached.
+				mount.goTo(mount.rightAscension, PIOVERTWO)
+				for (let i = 0; i < 2000; i++) mount.advance(0.01)
 
-				let overshoot = 0
-
-				for (let i = 0; i < 2000; i++) {
-					mount.advance(0.01)
-					if (!mount.isSlewing) overshoot = Math.max(overshoot, Math.abs(mount.mechanical.declination - target))
-				}
-
-				return overshoot
+				expect(mount.isSlewing).toBeFalse()
+				expect(toArcsec(PIOVERTWO - mount.mechanical.declination)).toBeCloseTo(0, 6)
 			} finally {
 				mount.dispose()
 			}
-		}
+		},
+		2000,
+	)
 
-		// The excitation scales with the speed the axes were running at, not with how far they went.
-		expect(overshootAt('SPEED_1', 'mount.settling.slow')).toBeLessThan(overshootAt('SPEED_7', 'mount.settling.fast'))
-	})
+	test.skipIf(SKIP)(
+		'lands on a second target commanded while the first is still ringing',
+		() => {
+			const { client, mount } = makeMount('mount.settling.interrupted', 'SETTLING')
+
+			try {
+				client.sendNumber({ device: mount.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 30, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
+				mount.setSlewRate('SPEED_7')
+
+				const first = mount.declination + deg(10)
+				mount.goTo(mount.rightAscension, first)
+				for (let i = 0; i < 100 && mount.isSlewing; i++) mount.advance(0.01)
+
+				expect(mount.isSlewing).toBeFalse()
+
+				// Partway into the ring-down, so the axes sit measurably off the target they just reached.
+				mount.advance(0.05)
+				expect(toArcsec(Math.abs(mount.mechanical.declination - first))).toBeGreaterThan(5)
+
+				// A second goto takes the axes over from there. The excursion it interrupted has been absorbed
+				// by the move, so nothing is owed on it and the mount must land on the new target: an
+				// oscillator left running would pay the old offset back a second time and stop short.
+				const second = first + deg(1)
+				mount.goTo(mount.rightAscension, second)
+				for (let i = 0; i < 2000; i++) mount.advance(0.01)
+
+				expect(toArcsec(Math.abs(mount.mechanical.declination - second))).toBeLessThan(0.01)
+			} finally {
+				mount.dispose()
+			}
+		},
+		2000,
+	)
+
+	test.skipIf(SKIP)(
+		'settles more gently after a slow slew than a fast one',
+		() => {
+			function overshootAt(rate: string, name: string) {
+				const { client, mount } = makeMount(name, 'SETTLING')
+
+				try {
+					client.sendNumber({ device: mount.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 30, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
+					mount.setSlewRate(rate)
+
+					const target = mount.declination + deg(1)
+					mount.goTo(mount.rightAscension, target)
+
+					let overshoot = 0
+
+					for (let i = 0; i < 2000; i++) {
+						mount.advance(0.01)
+						if (!mount.isSlewing) overshoot = Math.max(overshoot, Math.abs(mount.mechanical.declination - target))
+					}
+
+					return overshoot
+				} finally {
+					mount.dispose()
+				}
+			}
+
+			// The excitation scales with the speed the axes were running at, not with how far they went.
+			expect(overshootAt('SPEED_1', 'mount.settling.slow')).toBeLessThan(overshootAt('SPEED_7', 'mount.settling.fast'))
+		},
+		5000,
+	)
 
 	test('separates the reported coordinate from the axes by the encoder index errors', () => {
 		const { client, mount } = makeMount('mount.index.error', 'ALIGNMENT')
@@ -4128,19 +4235,18 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
-	test('lands a little off the home position, differently every time', () => {
+	test('redraws the sensor residual on FIND and preserves it on GO', () => {
 		const { client, mount } = makeMount('mount.home.scatter', 'MECHANICS')
 
 		try {
 			client.sendNumber({ device: mount.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, HOME_SCATTER: 30 } })
 			mount.setSlewRate('SPEED_6')
 
-			// Homes the mount and returns how far the optical axis ended up from where the controller
-			// believes it parked itself, in arcseconds per axis.
+			// FIND acquires the sensor, with one repeatability draw per successful operation.
 			function homeAndMeasure() {
-				mount.home()
-				for (let i = 0; i < 200 && mount.isSlewing; i++) mount.advance(1)
-				expect(mount.isSlewing).toBeFalse()
+				mount.findHome()
+				for (let i = 0; i < 200 && mount.isHoming; i++) mount.advance(1)
+				expect(mount.isHoming).toBeFalse()
 				return [toArcsec(normalizePI(mount.boresight.rightAscension - mount.mechanical.rightAscension)), toArcsec(mount.boresight.declination - mount.mechanical.declination)] as const
 			}
 
@@ -4152,6 +4258,13 @@ describe('mount simulator pointing errors', () => {
 			const second = homeAndMeasure()
 			expect(second[0]).not.toBe(first[0])
 			expect(second[1]).not.toBe(first[1])
+			mount.setHome()
+			expect(mount.isHoming).toBeFalse()
+			expect(toArcsec(normalizePI(mount.boresight.rightAscension - mount.mechanical.rightAscension))).toBe(second[0])
+			mount.home()
+			for (let i = 0; i < 200 && mount.isHoming; i++) mount.advance(1)
+			expect(toArcsec(normalizePI(mount.boresight.rightAscension - mount.mechanical.rightAscension))).toBe(second[0])
+			expect(toArcsec(mount.boresight.declination - mount.mechanical.declination)).toBe(second[1])
 
 			// A sync re-registers the bookkeeping, which is exactly what absorbs it.
 			mount.syncTo(hour(5), deg(20))
@@ -4162,16 +4275,61 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
-	test('homes exactly onto the home position with a perfect sensor', () => {
+	test('finds the home position with a perfect sensor', () => {
 		const { mount } = makeMount('mount.home.repeatable')
 
 		try {
 			mount.setSlewRate('SPEED_6')
-			mount.home()
-			for (let i = 0; i < 200 && mount.isSlewing; i++) mount.advance(1)
+			mount.findHome()
+			for (let i = 0; i < 200 && mount.isHoming; i++) mount.advance(1)
 
 			expect(mount.boresight.rightAscension).toBe(mount.mechanical.rightAscension)
 			expect(mount.boresight.declination).toBe(mount.mechanical.declination)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('keeps FIND Busy at Home until the sensor acquisition time elapses', () => {
+		const { mount } = makeMount('mount.find.at.home')
+		try {
+			mount.setHome()
+			mount.findHome()
+			expect(mount.isHoming).toBeTrue()
+			mount.advance(0.25)
+			expect(mount.isSlewing).toBeFalse()
+			expect(mount.isHoming).toBeTrue()
+			mount.advance(0.249)
+			expect(mount.isHoming).toBeTrue()
+			mount.advance(0.001)
+			expect(mount.isHoming).toBeFalse()
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('recalibrates rate drift on FIND but preserves it on GO and SET', () => {
+		const { client, mount } = makeMount('mount.find.rate', 'TRACKING_RATE')
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { ...NO_TRACKING_RATE, BIAS: 1000 } })
+			mount.setHome()
+			mount.setTrackingEnabled(true)
+			mount.advance(600)
+			const drift = mount.trackingRateOffset
+			expect(Math.abs(drift)).toBeGreaterThan(0)
+			mount.setHome()
+			expect(mount.trackingRateOffset).toBe(drift)
+			mount.setTrackingEnabled(false)
+			mount.home()
+			mount.advance(1)
+			expect(mount.trackingRateOffset).toBe(drift)
+			mount.setHome()
+			mount.findHome()
+			mount.advance(0.5)
+			expect(mount.trackingRateOffset).toBe(0)
+			mount.setTrackingEnabled(true)
+			mount.advance(600)
+			expect(Math.abs(mount.trackingRateOffset)).toBeGreaterThan(0)
 		} finally {
 			mount.dispose()
 		}
@@ -4194,6 +4352,68 @@ describe('mount simulator pointing errors', () => {
 			} finally {
 				mount.dispose()
 			}
+		}
+	})
+
+	test('disconnect and a superseding goto cancel FIND without a late completion', () => {
+		for (const [operation, phase] of [
+			['disconnect', 'seek'],
+			['disconnect', 'acquire'],
+			['goto', 'acquire'],
+		] as const) {
+			const { client, mount } = makeMount(`mount.find.superseded.${operation}.${phase}`, 'MECHANICS')
+			try {
+				client.sendNumber({ device: mount.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, HOME_SCATTER: 600 } })
+				if (phase === 'acquire') mount.setHome()
+				mount.findHome()
+				mount.advance(0.25)
+				if (operation === 'disconnect') mount.disconnect()
+				else mount.goTo(hour(6), deg(25))
+				mount.advance(2)
+				expect(mount.isHoming).toBeFalse()
+				expect(normalizePI(mount.boresight.rightAscension - mount.mechanical.rightAscension)).toBe(0)
+				expect(mount.boresight.declination - mount.mechanical.declination).toBe(0)
+			} finally {
+				mount.dispose()
+			}
+		}
+	})
+
+	test('does not start FIND while parked', () => {
+		const { mount } = makeMount('mount.find.parked')
+		try {
+			mount.setPark()
+			mount.park()
+			mount.advance(0.1)
+			expect(mount.isParked).toBeTrue()
+			const parked = { ...mount.mechanical }
+			mount.findHome()
+			expect(mount.isHoming).toBeFalse()
+			expect(mount.mechanical).toEqual(parked)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('preserves configured alignment and periodic error across FIND', () => {
+		const { client, mount } = makeMount('mount.find.physical', 'ALIGNMENT', 'PERIODIC_ERROR')
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { ...NO_ALIGNMENT, POLAR_AZIMUTH_ERROR: 300, CONE_ERROR: 120, RA_INDEX_ERROR: 90, DEC_INDEX_ERROR: 60 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { ...NO_PERIODIC_ERROR, RA_PERIOD: 480, RA_AMPLITUDE: 15 } })
+			mount.setHome()
+			const reported = { rightAscension: mount.rightAscension, declination: mount.declination }
+			const boresight = { ...mount.boresight }
+			expect(angularDistance(boresight.rightAscension, boresight.declination, mount.mechanical.rightAscension, mount.mechanical.declination)).toBeGreaterThan(arcsec(10))
+			const wormPhase = mount.wormPhase
+			mount.findHome()
+			mount.advance(0.5)
+			expect(mount.isHoming).toBeFalse()
+			expect(mount.rightAscension).toBe(reported.rightAscension)
+			expect(mount.declination).toBe(reported.declination)
+			expect(angularDistance(mount.boresight.rightAscension, mount.boresight.declination, boresight.rightAscension, boresight.declination)).toBeLessThan(arcsec(0.1))
+			expect(mount.wormPhase).toBe(wormPhase)
+		} finally {
+			mount.dispose()
 		}
 	})
 
