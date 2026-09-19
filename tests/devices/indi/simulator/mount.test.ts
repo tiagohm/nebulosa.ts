@@ -4177,6 +4177,26 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('cancels find home during seek and acquisition without a late sensor redraw', () => {
+		for (const phase of ['seek', 'acquire'] as const) {
+			const { client, mount } = makeMount(`mount.find.abort.${phase}`, 'MECHANICS')
+			try {
+				client.sendNumber({ device: mount.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, HOME_SCATTER: 600 } })
+				if (phase === 'acquire') mount.setHome()
+				mount.findHome()
+				mount.advance(0.25)
+				expect(mount.isHoming).toBeTrue()
+				mount.stop()
+				mount.advance(2)
+				expect(mount.isHoming).toBeFalse()
+				expect(normalizePI(mount.boresight.rightAscension - mount.mechanical.rightAscension)).toBe(0)
+				expect(mount.boresight.declination - mount.mechanical.declination).toBe(0)
+			} finally {
+				mount.dispose()
+			}
+		}
+	})
+
 	test('walks the boresight away from the reported coordinate with a tracking rate error', () => {
 		const { client, mount } = makeMount('mount.rate.bias', 'TRACKING_RATE')
 

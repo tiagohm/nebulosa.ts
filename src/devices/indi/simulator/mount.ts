@@ -1197,6 +1197,8 @@ export class MountSimulator extends DeviceSimulator {
 		this.#clearPulseGuide()
 		this.#takeSlewControl()
 		this.#clearFlipMotion()
+		this.#homeAction = undefined
+		this.#homeAcquireRemaining = 0
 		this.#slewMode = mode
 		this.#slewTarget = target
 		this.#slewTargetPierSide = targetPierSide
@@ -2294,6 +2296,8 @@ export class MountSimulator extends DeviceSimulator {
 		const hadCoordinateSlew = this.#slewTarget !== undefined
 		this.#slewMode = undefined
 		this.#slewTarget = undefined
+		this.#homeAction = undefined
+		this.#homeAcquireRemaining = 0
 		this.#clearFlipMotion()
 		if (hadCoordinateSlew) this.#resetAutomaticFlipHourAngle(this.#utcTime + this.#utcTimeRemainder, false)
 		this.#setHoming(false)
