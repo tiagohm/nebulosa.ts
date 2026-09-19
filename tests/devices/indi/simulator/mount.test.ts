@@ -38,6 +38,7 @@ describe.skipIf(SKIP)('mount simulator', () => {
 		expect(mount.canSync).toBeTrue()
 		expect(mount.canGoTo).toBeTrue()
 		expect(mount.canHome).toBeTrue()
+		expect(mount.canFindHome).toBeTrue()
 		expect(mount.canSetHome).toBeTrue()
 		expect(mount.canPark).toBeTrue()
 		expect(mount.canSetPark).toBeTrue()
