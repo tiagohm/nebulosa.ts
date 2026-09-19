@@ -544,7 +544,8 @@ export class AlpacaServer {
 			reusePort: options?.reusePort ?? false,
 			development: false,
 			error: (error) => {
-				console.error('server error:', error)
+				console.error('alpaca server error:', error.code, error.message)
+				return new Response(error.message, { status: 400 })
 			},
 			websocket: undefined,
 			fetch: (req) => {
@@ -639,7 +640,7 @@ export class AlpacaServer {
 	#device<D extends Device>(key: Device | number, type: AlpacaDeviceType, deviceType?: DeviceType): AlpacaRegisteredDevice<D> {
 		if (typeof key === 'object') return this.#equipment[type].get(key)! as never
 		else for (const item of this.#equipment[type].values()) if (item.configuredDevice.DeviceNumber === key && (!deviceType || item.device.type === deviceType)) return item as never
-		return undefined as never
+		throw new AlpacaError(AlpacaException.InvalidOperation, `"Instance ${key} does not exist in this server."`)
 	}
 
 	// Typed device lookups by Alpaca type (covercalibrator splits into cover and flat-panel subtypes).
@@ -799,7 +800,7 @@ export class AlpacaServer {
 	}
 
 	#deviceIsConnected(id: number, type: AlpacaDeviceType) {
-		return makeAlpacaResponse(this.#device(id, type)?.device.connected)
+		return makeAlpacaResponse(this.#device(id, type).device.connected)
 	}
 
 	#deviceIsConnecting(id: number, type: AlpacaDeviceType) {
