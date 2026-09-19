@@ -1625,10 +1625,10 @@ export class MountSimulator extends DeviceSimulator {
 			// remainder alone charged every pulse twice for the part of the step the slew had taken. A
 			// pulse confined to the last tenth of a step arrived at a tenth of its strength, and one that
 			// had already finished before the mount arrived went on moving the axes afterwards.
-			if (settlingSeconds > 0) this.#advanceGuidedMotion(endTime - settlingSeconds * 1000, endTime)
-		} else {
-			this.#advanceGuidedMotion(startTime, endTime)
 		}
+		let freeStartTime = endTime - settlingSeconds * 1000
+		if (this.#homeAcquireRemaining > 0) freeStartTime = this.#advanceHomeAcquire(freeStartTime, endTime)
+		if (freeStartTime < endTime) this.#advanceGuidedMotion(freeStartTime, endTime)
 
 		// Retired only after the interval has been accounted for, so the tail of a pulse is never lost.
 		// Both axes are always visited: short-circuiting the second call would leave its queue growing.
@@ -1644,6 +1644,27 @@ export class MountSimulator extends DeviceSimulator {
 		// Autonomous flips begin after the interval has been fully accounted for, so crossing the threshold
 		// starts a Busy operation for the following tick instead of retroactively consuming elapsed time.
 		this.#updateAutomaticMeridianFlip()
+	}
+
+	// Holds the axes at Home while the sensor latches, then returns the first free-motion time in ms.
+	// Wind and settling continue over the consumed simulated seconds; the stopped worm does not turn.
+	#advanceHomeAcquire(startTime: number, endTime: number) {
+		const duration = Math.min(this.#homeAcquireRemaining, (endTime - startTime) / 1000)
+		const acquisitionTime = startTime + duration * 1000
+		const steps = this.#settlingSteps(duration)
+		for (let step = 1; step <= steps; step++) {
+			const stepSeconds = duration / steps
+			const stepTime = startTime + ((acquisitionTime - startTime) * step) / steps
+			advanceWind(this.#windState, stepSeconds, this.#windConfig, this.#normal)
+			this.#advanceRingDown(stepSeconds, stepTime)
+			this.#recordBoresightAt(stepTime)
+		}
+		this.#homeAcquireRemaining = Math.max(0, this.#homeAcquireRemaining - duration)
+		if (this.#homeAcquireRemaining === 0) {
+			this.#homeAction = undefined
+			this.#setHomeState('Ok')
+		}
+		return acquisitionTime
 	}
 
 	// Sub-steps a ring-down of `dtSeconds` is advanced and recorded in, so that a resonance faster than
