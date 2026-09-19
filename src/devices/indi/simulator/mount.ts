@@ -1272,6 +1272,8 @@ export class MountSimulator extends DeviceSimulator {
 		const targetPierSide = this.#homePierSide
 		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
 		this.#startCoordinateSlew('HOME', target, targetPierSide, changesPierSide, false)
+		this.#homeAction = 'FIND'
+		this.#homeAcquireRemaining = 0
 		this.#setHoming(true)
 	}
 
