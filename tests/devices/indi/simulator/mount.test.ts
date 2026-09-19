@@ -695,7 +695,7 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
-	test('records a single-step home midpoint before drawing home scatter', () => {
+	test('records a single-step find home midpoint before acquiring the sensor', () => {
 		const full = makeMeridianFlipMount('mount.home.single.step.midpoint.full')
 		const stepped = makeMeridianFlipMount('mount.home.single.step.midpoint.stepped')
 
@@ -708,19 +708,21 @@ describe('mount simulator meridian flip', () => {
 				simulator.syncTo(homeRightAscension, deg(20))
 				simulator.setHome()
 				simulator.syncTo(startRightAscension, deg(20))
-				simulator.home()
+				simulator.findHome()
 			}
 
 			const duration = deg(1) / FAST_SLEW_SPEED
 			const startTime = full.simulator.utcTime
 			const midpointTime = startTime + (duration * 1000) / 2
-			full.simulator.advance(duration + 1e-6)
+			full.simulator.advance(duration + 0.5 + 1e-6)
 			stepped.simulator.advance(duration / 2)
 
 			const trajectory = new Float64Array(6)
 			expect(full.simulator.sampleBoresightTrajectory(startTime, startTime + duration * 1000, 3, trajectory)).toBe(3)
 			expect(toArcsec(angularDistance(trajectory[2], trajectory[3], stepped.simulator.boresight.rightAscension, stepped.simulator.boresight.declination))).toBeCloseTo(0, 0)
 			expect(full.simulator.sampleBoresightTrajectory(midpointTime, midpointTime, 1, trajectory)).toBe(1)
+			stepped.simulator.advance(duration / 2 + 0.5 + 1e-6)
+			expect(toArcsec(angularDistance(full.simulator.boresight.rightAscension, full.simulator.boresight.declination, stepped.simulator.boresight.rightAscension, stepped.simulator.boresight.declination))).toBeCloseTo(0, 3)
 		} finally {
 			full.simulator.dispose()
 			stepped.simulator.dispose()

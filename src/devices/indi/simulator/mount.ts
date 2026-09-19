@@ -1827,7 +1827,7 @@ export class MountSimulator extends DeviceSimulator {
 			// covers exactly PI would otherwise leave the slew Busy. That leftover is not real travel; it
 			// is snapped here and must not become a negative remainder either, or the rest of the step
 			// would run backwards on the clock.
-			remaining = maxStep > 0 && span <= maxStep ? dtSeconds * (1 - span / maxStep) : 0
+			remaining = span === 0 ? dtSeconds : maxStep > 0 && span <= maxStep ? dtSeconds * (1 - span / maxStep) : 0
 			const priorPierSide = this.pierSide
 			if (span > 0 && slewSeconds > 0) {
 				const shaftSampleTime = endTime - (remaining + slewSeconds / 2) * 1000
