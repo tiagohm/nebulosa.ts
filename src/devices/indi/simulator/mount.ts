@@ -1857,6 +1857,8 @@ export class MountSimulator extends DeviceSimulator {
 			if (mode === 'HOME' && this.#homeAction === 'GO') {
 				this.#homeAction = undefined
 				this.#setHomeState('Ok')
+			} else if (mode === 'HOME' && this.#homeAction === 'FIND') {
+				this.#homeAcquireRemaining = HOME_ACQUIRE_DURATION
 			} else {
 				this.#setHoming(false)
 			}
