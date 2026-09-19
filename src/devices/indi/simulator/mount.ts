@@ -208,8 +208,6 @@ export class MountSimulator extends DeviceSimulator {
 	#arrivalBoresightPierSide?: PierSide
 	// Mid-slew shaft sample waiting for worm and wind state to reach the same timestamp.
 	#slewMidpointSample?: { time: number; rightAscension: Angle; declination: Angle; pierSide: PierSide }
-	// HOME arrival waiting until any deferred midpoint sample has been recorded.
-	#pendingHomeScatter = false
 	// Active home command, including the sensor acquisition interval after a FIND slew.
 	#homeAction?: HomeAction
 	// Sensor acquisition time still to consume, in simulated seconds.
@@ -1598,10 +1596,6 @@ export class MountSimulator extends DeviceSimulator {
 				advanceWind(this.#windState, slewSeconds, this.#windConfig, this.#normal)
 			}
 			this.#slewMidpointSample = undefined
-			if (this.#pendingHomeScatter) {
-				this.#pendingHomeScatter = false
-				this.#scatterHome()
-			}
 
 			// Arriving is a moment inside the step, and the trajectory has to say so. Recorded only at the
 			// end of the step, the arrival was left between two samples a whole tick apart and the history
@@ -1661,8 +1655,11 @@ export class MountSimulator extends DeviceSimulator {
 		}
 		this.#homeAcquireRemaining = Math.max(0, this.#homeAcquireRemaining - duration)
 		if (this.#homeAcquireRemaining === 0) {
+			this.#trackingRateOffset = 0
+			this.#scatterHome()
 			this.#homeAction = undefined
 			this.#setHomeState('Ok')
+			this.#recordBoresightAt(acquisitionTime)
 		}
 		return acquisitionTime
 	}
@@ -1883,12 +1880,6 @@ export class MountSimulator extends DeviceSimulator {
 			} else {
 				this.#setHoming(false)
 			}
-
-			// Homing zeroes the encoders on a sensor that does not trip in exactly the same place twice,
-			// so the mount ends up believing it is at the home position while the axes sit a little off
-			// it. Every coordinate derived afterwards inherits that difference, which is where an index
-			// error comes from in the first place. Redrawn on each home, so two homings in a row disagree.
-			this.#pendingHomeScatter = mode === 'HOME' && this.#homeAction === 'FIND'
 
 			if (mode === 'PARK') {
 				this.#setParking(false, true)
