@@ -985,8 +985,9 @@ export class MountSimulator extends DeviceSimulator {
 				if (vector.elements.ABORT === true) this.stop()
 				return
 			case 'TELESCOPE_HOME':
-				if (vector.elements.GO === true || vector.elements.FIND === true) this.home()
+				if (vector.elements.FIND === true) this.findHome()
 				else if (vector.elements.SET === true) this.setHome()
+				else if (vector.elements.GO === true) this.home()
 				return
 			case 'TELESCOPE_MOTION_NS':
 				if (vector.elements.MOTION_NORTH === true) this.moveNorth(true)
@@ -1244,6 +1245,16 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Slews to the configured home position.
 	home() {
+		if (!this.isConnected || this.isParked) return
+		const target = { rightAscension: this.#homeCoordinate.rightAscension, declination: this.#homeCoordinate.declination }
+		const targetPierSide = this.#homePierSide
+		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
+		this.#startCoordinateSlew('HOME', target, targetPierSide, changesPierSide, false)
+		this.#setHoming(true)
+	}
+
+	// Seeks the stored mechanical home pose before acquiring the physical sensor reference.
+	findHome() {
 		if (!this.isConnected || this.isParked) return
 		const target = { rightAscension: this.#homeCoordinate.rightAscension, declination: this.#homeCoordinate.declination }
 		const targetPierSide = this.#homePierSide
