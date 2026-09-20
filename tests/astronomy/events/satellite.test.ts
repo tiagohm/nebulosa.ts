@@ -1,13 +1,16 @@
 import { expect, test } from 'bun:test'
 import { equatorial } from '../../../src/astronomy/coordinates/astrometry'
 import { eraS2p } from '../../../src/astronomy/coordinates/erfa/erfa'
+import { frameToFrame, ICRS, TEME } from '../../../src/astronomy/coordinates/frame'
 import { linearInterpolator, type EphemerisPoint } from '../../../src/astronomy/ephemeris/interpolation/ephemeris'
 import { earth, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
+import { earthOccultation } from '../../../src/astronomy/events/occultation.earth'
 import { isSatelliteSunlit, satelliteConjunctions, satelliteEclipses, satelliteLookAngles, satelliteMagnitude, satellitePasses, satelliteShadowState } from '../../../src/astronomy/events/satellite'
-import { geodeticLocation } from '../../../src/astronomy/observer/location'
-import { parseTLE, recordFromTLE } from '../../../src/astronomy/orbits/propagation/sgp4'
-import { type Time, Timescale, timeShift, timeSubtract, tt } from '../../../src/astronomy/time/time'
-import { AU_KM, DAYSEC, ONE_SECOND } from '../../../src/core/constants'
+import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
+import { parseTLE, recordFromTLE, sgp4 } from '../../../src/astronomy/orbits/propagation/sgp4'
+import { gcrsToItrsRotationMatrix, type Time, Timescale, timeShift, timeSubtract, tt } from '../../../src/astronomy/time/time'
+import { AU_KM, DAYSEC, ELLIPSOID_PARAMETERS, ONE_SECOND } from '../../../src/core/constants'
+import { matTransposeMulVec } from '../../../src/math/linear-algebra/mat3'
 import { type Vec3, vecAngle, vecLength, vecMinus } from '../../../src/math/linear-algebra/vec3'
 import { clamp } from '../../../src/math/numerical/math'
 import { linearSpline } from '../../../src/math/numerical/spline'
@@ -79,6 +82,48 @@ function cachedSun(sunAt: (time: Time) => Vec3, start: Time, stop: Time) {
 // Interpolated Sun over the one-day shadow-scan window, so the eclipse scans do not re-evaluate the full
 // VSOP87E series at every coarse sample. The interpolation error is well below a milliarcsecond.
 const CACHED_SUN = cachedSun(sunAt, EPOCH, timeShift(EPOCH, 1))
+
+test('Earth occultation rotates both geocentric endpoints into ITRS', () => {
+	const time = timeShift(EPOCH, 0.2345)
+	const radius = ELLIPSOID_PARAMETERS[Ellipsoid.IERS2010].radius
+	const rotation = gcrsToItrsRotationMatrix(time)
+	const observer = matTransposeMulVec(rotation, [2 * radius, 0, 0])
+	const blockedTarget = matTransposeMulVec(rotation, [-2 * radius, 0, 0])
+	const visibleTarget = matTransposeMulVec(rotation, [3 * radius, 0, 0])
+	const hit = earthOccultation(observer, blockedTarget, time)
+	expect(hit.occulted).toBeTrue()
+	expect(hit.intersection).toBeCloseTo(0.25, 12)
+	expect(earthOccultation(observer, visibleTarget, time).occulted).toBeFalse()
+})
+
+test('selected Earth flattening moves the polar limb below the equatorial radius', () => {
+	const time = timeShift(EPOCH, 0.2345)
+	const rotation = gcrsToItrsRotationMatrix(time)
+	for (const ellipsoid of [Ellipsoid.WGS84, Ellipsoid.IERS2010]) {
+		const { radius, oneMinusFlattening } = ELLIPSOID_PARAMETERS[ellipsoid]
+		const polarRadius = radius * oneMinusFlattening
+		const z = (radius + polarRadius) / 2
+		const observer = matTransposeMulVec(rotation, [2 * radius, 0, z])
+		const target = matTransposeMulVec(rotation, [-2 * radius, 0, z])
+		expect(earthOccultation(observer, target, time, ellipsoid).occulted).toBeFalse()
+		const equatorialObserver = matTransposeMulVec(rotation, [2 * radius, z, 0])
+		const equatorialTarget = matTransposeMulVec(rotation, [-2 * radius, z, 0])
+		expect(earthOccultation(equatorialObserver, equatorialTarget, time, ellipsoid).occulted).toBeTrue()
+	}
+})
+
+test('ISS-to-Sun occultation agrees with independent Skyfield samples', () => {
+	// Skyfield 1.55, DE421, the ISS TLE above: (Earth + satellite).at(t).observe(sun)
+	// .apparent().is_behind_earth() is true at epoch and false 40 minutes later.
+	for (const [minutes, expected] of [
+		[0, true],
+		[40, false],
+	] as const) {
+		const time = timeShift(EPOCH, minutes / 1440)
+		const observer = frameToFrame(sgp4(time, ISS)[0], TEME, ICRS, time)
+		expect(earthOccultation(observer, sunAt(time), time).occulted).toBe(expected)
+	}
+})
 
 // Minutes elapsed from the TLE epoch, the reference clock for the Skyfield comparisons.
 function minutesAfterEpoch(time: Time): number {

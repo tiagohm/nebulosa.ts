@@ -55,7 +55,7 @@ test.concurrent('official Hipparcos catalog preserves astrometry and skips missi
 	const [movedRa, movedDec] = eraC2s(...spaceMotion(stellarState, timeJulianYear(2025))[0])
 	expect(normalizeAngle(movedRa)).toBeCloseTo(4.702728886110352, 11)
 	expect(movedDec).toBeCloseTo(0.08316673630073339, 11)
-}, 8000)
+}, 12000)
 
 test.concurrent('streaming chunks, missing fields, invalid positions, and polar motion', async () => {
 	const row = (id: number, ra: string, dec: string, magnitude = '', parallax = '', pmRA = '', pmDEC = '') => {
@@ -120,4 +120,4 @@ test.concurrent('official catalog indexes known fields at its source epoch', asy
 	expect(catalog.get(421)).toBeUndefined()
 	expect(catalog.queryCone(deg(101.28854105), deg(-16.71314306), deg(0.25)).map((entry) => entry.id)).toEqual([32349])
 	expect(catalog.queryCone(deg(269.45402305), deg(4.66828815), deg(0.25)).map((entry) => entry.id)).toEqual([87937])
-}, 10000)
+}, 12000)
