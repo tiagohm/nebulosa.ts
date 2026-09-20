@@ -4,24 +4,44 @@ import { type Angle, normalizeAngle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import type { Pressure } from '../../math/units/pressure'
 import type { Temperature } from '../../math/units/temperature'
+import type { Velocity } from '../../math/units/velocity'
 import type { GeographicCoordinate } from '../observer/location'
 import { pmAngles, type Time, timeShift, tt, ut1 } from '../time/time'
 import type { CartesianCoordinate, EquatorialCoordinate, SphericalCoordinate } from './coordinate'
 import { type EraAstrom, eraApci13, eraApco13, eraApio13, eraAtciqz, eraAticq, eraAtioq, eraAtoiq, eraC2s, eraEo06a, eraP2s, eraRefco } from './erfa/erfa'
+import { frameAt, type Frame } from './frame'
 
 // High-level astrometric place transforms built on the ERFA "apc/atio" pipeline: ICRS<->CIRS,
 // CIRS<->observed (azimuth/altitude), and ICRS->observed, plus the scalar helpers (distance,
-// light time, equatorial coordinates, parallactic angle, angular separation, and atmospheric
-// refraction). Positions are AU and angles are radians unless noted; refraction uses pressure
-// in hPa and temperature in Celsius. The observed transforms require an EOP-aware Time and an
-// observing location, and share ERFA's bounded refraction model so forward/inverse round trips
-// stay consistent.
+// light time, equatorial coordinates, parallactic angle, angular separation, atmospheric
+// refraction, and analytic spherical coordinates with rates). Positions are AU, velocities
+// AU/day, and angles radians unless noted; refraction uses pressure in hPa and temperature in
+// Celsius. The observed transforms require an EOP-aware Time and an observing location, and
+// share ERFA's bounded refraction model so forward/inverse round trips stay consistent.
 
 // Barycentric/heliocentric position (AU) and velocity (AU/day) pair, in ICRS/BCRS axes.
 export type PositionAndVelocity = [MutVec3, MutVec3]
 
 // Sampler returning the position and velocity of a body at the given time.
 export type PositionAndVelocityOverTime = (time: Time) => PositionAndVelocity
+
+// Spherical coordinates and first derivatives of a Cartesian position+velocity state,
+// expressed in whatever frame that state is already written in. Angular rates are
+// omitted at an exact Cartesian pole, where the spherical chart is singular.
+export interface SphericalPositionAndVelocity {
+	// Longitude around the frame z-axis, in radians, normalized to [0, TAU).
+	readonly longitude: Angle
+	// Latitude above the frame xy-plane, in radians, in [-PI/2, PI/2].
+	readonly latitude: Angle
+	// Radial distance from the origin, in AU.
+	readonly distance: Distance
+	// d(longitude)/dt, in radians/day. Absent when x = y = 0, where longitude is singular.
+	readonly longitudeRate?: number
+	// d(latitude)/dt, in radians/day. Absent when x = y = 0, where the spherical chart is singular.
+	readonly latitudeRate?: number
+	// Radial speed, in AU/day. Positive when distance is increasing.
+	readonly radialVelocity: Velocity
+}
 
 // Atmospheric conditions feeding the refraction model. All fields are optional;
 // missing fields fall back to DEFAULT_REFRACTION_PARAMETERS.
@@ -71,6 +91,42 @@ export function lightTime(p: CartesianCoordinate) {
 // Computes the equatorial coordinates.
 export function equatorial(p: CartesianCoordinate): SphericalCoordinate {
 	return eraP2s(...p)
+}
+
+// Converts a Cartesian position (AU) and velocity (AU/day) already expressed in the
+// desired frame into spherical longitude, latitude, distance, and their analytic
+// first derivatives. Returns undefined for the zero position, which has no sky
+// direction. At an exact Cartesian pole (x = y = 0, z ≠ 0) longitude uses the
+// conventional atan2(0, 0) value 0 and both angular rates are omitted; near a pole
+// the true (possibly large) longitude rate is returned rather than clipped.
+export function sphericalPositionAndVelocity(pv: readonly [Vec3, Vec3]): SphericalPositionAndVelocity | undefined {
+	const [x, y, z] = pv[0]
+	const [vx, vy, vz] = pv[1]
+	const rho2 = x * x + y * y
+	const r2 = rho2 + z * z
+	if (!(r2 > 0)) return undefined
+
+	const R = Math.sqrt(r2)
+	const rho = Math.sqrt(rho2)
+	const xyDotV = x * vx + y * vy
+
+	return {
+		longitude: normalizeAngle(Math.atan2(y, x)),
+		latitude: Math.atan2(z, rho),
+		distance: R,
+		longitudeRate: rho2 > 0 ? (x * vy - y * vx) / rho2 : undefined,
+		latitudeRate: rho2 > 0 ? (rho2 * vz - z * xyDotV) / (r2 * rho) : undefined,
+		radialVelocity: (xyDotV + z * vz) / R,
+	}
+}
+
+// Transforms the full Cartesian state into `frame` at `time`, then converts the
+// result with sphericalPositionAndVelocity. The frame rotation (including any
+// rotating-frame drag term W = dR/dt·Rᵀ) is applied before the spherical rates
+// are formed, so an ITRS-rest state has near-zero Earth-fixed angular rates.
+// Pass `out` to reuse a transformed-state workspace; it may alias `pv`.
+export function frameSphericalPositionAndVelocity(pv: readonly [Vec3, Vec3], frame: Frame, time: Time, out?: PositionAndVelocity): SphericalPositionAndVelocity | undefined {
+	return sphericalPositionAndVelocity(frameAt(pv, frame, time, out))
 }
 
 // Computes the deviation between zenith angle and north angle.
