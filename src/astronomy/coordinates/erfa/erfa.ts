@@ -2214,7 +2214,7 @@ export interface LdBody {
 
 // For a star, apply light deflection by multiple solar-system bodies,
 // as part of transforming coordinate direction into natural direction.
-export function eraLdn(b: LdBody[], ob: Vec3, sc: Vec3) {
+export function eraLdn(b: readonly LdBody[], ob: Vec3, sc: Vec3) {
 	const v: MutVec3 = [0, 0, 0]
 	const ev: MutVec3 = [0, 0, 0]
 
