@@ -4,7 +4,7 @@ import { vector } from '../../../../src/adapters/ephemeris/horizons'
 import type { PositionAndVelocity } from '../../../../src/astronomy/coordinates/astrometry'
 import { itrfToTemeByGmst, temeToItrfByGmst } from '../../../../src/astronomy/coordinates/frame'
 import { type DsInitOptions, internal, type MeanElements, parseTLE, recordFromOMM, recordFromSgp4Elements, recordFromTLE, SGP4_WGS72, SGP4_WGS72_OLD, SGP4_WGS84, sgp4, type Sgp4ElementSet, type Sgp4GravityModel } from '../../../../src/astronomy/orbits/propagation/sgp4'
-import { Timescale, timeYMDHMS } from '../../../../src/astronomy/time/time'
+import { Timescale, timeYMDHMS, tt } from '../../../../src/astronomy/time/time'
 import { DAYMIN, DEG2RAD, TAU } from '../../../../src/core/constants'
 import { fileHandleSource, readLines } from '../../../../src/io/io'
 import { toKilometer } from '../../../../src/math/units/distance'
@@ -334,6 +334,44 @@ const DEEP_SPACE_SGP4INIT_SAMPLES = [
 	{ minutes: 10080, position: [-4255.688353474943, 29254.953920982574, -24059.683465035927], velocity: [-1.3765206562081918, -1.336144885401336, -0.14513369677042212] },
 ] as const
 
+// Low-inclination 12-hour resonant orbit: inclination 0.10 rad is below dpper's 0.2 rad Lyddane
+// threshold, and mean motion 0.00873 rad/min with e=0.72 selects irez=2 so gsto seeds xlamo.
+// Python sgp4 2.25 Satrec.sgp4init(WGS72, 'i'|'a', ...) produces distinct TEME km / km/s.
+const LOW_INCLINATION_RESONANT_ELEMENTS: Sgp4ElementSet = {
+	satelliteNumber: '99999',
+	epoch: timeYMDHMS(2023, 8, 19, 12, 25, 27.896736, Timescale.UTC),
+	eccentricity: 0.72,
+	inclination: 0.1,
+	rightAscensionOfAscendingNode: 0,
+	argumentOfPerigee: 4.7,
+	meanAnomaly: 0.2,
+	meanMotion: 0.00873,
+}
+
+const LOW_INCLINATION_RESONANT_REFERENCES: ReadonlyArray<{
+	operationMode: 'a' | 'i'
+	samples: ReadonlyArray<{ minutes: number; position: readonly [number, number, number]; velocity: readonly [number, number, number] }>
+}> = [
+	{
+		operationMode: 'i',
+		samples: [
+			{ minutes: 0, position: [10501.209354255487, -2821.6410352010657, -289.5873226444803], velocity: [5.460804794802861, 5.310150500595454, 0.5291904396632081] },
+			{ minutes: 360, position: [-1686.3502717682798, 45350.68174367788, 4547.839277539443], velocity: [-1.560894417045885, -0.24319683486525556, -0.023581862754948547] },
+			{ minutes: 1440, position: [10699.09230304265, -2588.507800343866, -261.1427591482285], velocity: [5.324321250617062, 5.364117954403994, 0.5372634409145113] },
+			{ minutes: 10080, position: [11761.22364956415, -1124.9692755523818, -84.35235400829808], velocity: [4.540382768808933, 5.6158324668559265, 0.5742280919939747] },
+		],
+	},
+	{
+		operationMode: 'a',
+		samples: [
+			{ minutes: 0, position: [10501.209354255487, -2821.6410352010657, -289.5873226444803], velocity: [5.460804794802861, 5.310150500595454, 0.5291904396632081] },
+			{ minutes: 360, position: [-1687.7862278882317, 45350.62878291328, 4547.834706885965], velocity: [-1.5608867184703814, -0.24324576535050418, -0.02358677458447381] },
+			{ minutes: 1440, position: [10699.17746969766, -2588.1592911361795, -261.1078299290131], velocity: [5.324144764561963, 5.364291379390473, 0.5372808574338268] },
+			{ minutes: 10080, position: [11761.244648157375, -1124.7513754545234, -84.33045784489285], velocity: [4.540277655765669, 5.615916611474544, 0.5742362740783116] },
+		],
+	},
+]
+
 function elementsFromTLE(tle: ReturnType<typeof parseTLE>): Sgp4ElementSet {
 	return {
 		satelliteNumber: tle.satelliteNumber,
@@ -389,17 +427,6 @@ for (const { gravity, samples } of VANGUARD_SGP4INIT_REFERENCES) {
 	}
 }
 
-test('Vanguard sgp4init AFSPC and improved modes both match Python sgp4', () => {
-	for (const operationMode of ['i', 'a'] as const) {
-		const rec = recordFromSgp4Elements(VANGUARD_ELEMENTS, { operationMode, gravity: SGP4_WGS72 })
-		expect(rec.operationmode).toBe(operationMode)
-		const sample = VANGUARD_SGP4INIT_REFERENCES[0].samples[0]
-		const state = sgp4(VANGUARD_ELEMENTS.epoch, rec)
-		expectVector(state[0].map(toKilometer), sample.position, 7)
-		expectVector(state[1].map(toKilometerPerSecond), sample.velocity, 9)
-	}
-})
-
 test('deep-space sgp4init selects SDP4 and matches Python sgp4', () => {
 	const rec = recordFromSgp4Elements(DEEP_SPACE_ELEMENTS, { gravity: SGP4_WGS72 })
 	expect(rec.method).toBe('d')
@@ -412,14 +439,51 @@ test('deep-space sgp4init selects SDP4 and matches Python sgp4', () => {
 	}
 })
 
-test('deep-space sgp4init AFSPC mode matches improved Python reference', () => {
-	const rec = recordFromSgp4Elements(DEEP_SPACE_ELEMENTS, { operationMode: 'a', gravity: SGP4_WGS72 })
-	expect(rec.operationmode).toBe('a')
-	expect(rec.method).toBe('d')
-	const sample = DEEP_SPACE_SGP4INIT_SAMPLES[2]
-	const state = sgp4(timeFromEpoch(DEEP_SPACE_ELEMENTS.epoch, sample.minutes), rec)
-	expectVector(state[0].map(toKilometer), sample.position, 7)
-	expectVector(state[1].map(toKilometerPerSecond), sample.velocity, 9)
+for (const { operationMode, samples } of LOW_INCLINATION_RESONANT_REFERENCES) {
+	test(`low-inclination resonant sgp4init opsmode ${operationMode} matches Python sgp4`, () => {
+		const rec = recordFromSgp4Elements(LOW_INCLINATION_RESONANT_ELEMENTS, { operationMode, gravity: SGP4_WGS72 })
+		expect(rec.operationmode).toBe(operationMode)
+		expect(rec.method).toBe('d')
+		expect(rec.inclo).toBeLessThan(0.2)
+
+		for (const sample of samples) {
+			const state = sgp4(timeFromEpoch(LOW_INCLINATION_RESONANT_ELEMENTS.epoch, sample.minutes), rec)
+			// Resonant SDP4 at day scale sits ~5e-8 km past 7 decimal places on one component.
+			expectVector(state[0].map(toKilometer), sample.position, 6)
+			expectVector(state[1].map(toKilometerPerSecond), sample.velocity, 8)
+		}
+	})
+}
+
+test('AFSPC and improved modes diverge for a low-inclination resonant orbit', () => {
+	const improved = sgp4(timeFromEpoch(LOW_INCLINATION_RESONANT_ELEMENTS.epoch, 360), recordFromSgp4Elements(LOW_INCLINATION_RESONANT_ELEMENTS, { operationMode: 'i' }))
+	const afspc = sgp4(timeFromEpoch(LOW_INCLINATION_RESONANT_ELEMENTS.epoch, 360), recordFromSgp4Elements(LOW_INCLINATION_RESONANT_ELEMENTS, { operationMode: 'a' }))
+	const dx = toKilometer(improved[0][0]) - toKilometer(afspc[0][0])
+	const dy = toKilometer(improved[0][1]) - toKilometer(afspc[0][1])
+	const dz = toKilometer(improved[0][2]) - toKilometer(afspc[0][2])
+	expect(Math.hypot(dx, dy, dz)).toBeGreaterThan(1)
+})
+
+test('recordFromSgp4Elements converts a TT epoch to the same UTC instant', () => {
+	const utcEpoch = VANGUARD_ELEMENTS.epoch
+	const ttEpoch = tt(utcEpoch)
+	expect(ttEpoch.scale).toBe(Timescale.TT)
+	expect(ttEpoch.day !== utcEpoch.day || ttEpoch.fraction !== utcEpoch.fraction).toBe(true)
+
+	const fromUtc = recordFromSgp4Elements(VANGUARD_ELEMENTS)
+	const fromTt = recordFromSgp4Elements({ ...VANGUARD_ELEMENTS, epoch: ttEpoch })
+	expect(fromUtc.epoch.scale).toBe(Timescale.UTC)
+	expect(fromTt.epoch.scale).toBe(Timescale.UTC)
+	expect(fromUtc.epoch.day).toBe(fromTt.epoch.day)
+	expect(fromUtc.epoch.fraction).toBeCloseTo(fromTt.epoch.fraction, 12)
+
+	for (const minutes of [0, 360, 1440]) {
+		const time = timeFromEpoch(utcEpoch, minutes)
+		const a = sgp4(time, fromUtc)
+		const b = sgp4(time, fromTt)
+		expectVector(a[0], b[0], 12)
+		expectVector(a[1], b[1], 12)
+	}
 })
 
 test('recordFromTLE matches recordFromSgp4Elements on converted TLE fields', () => {
