@@ -83,7 +83,7 @@ export async function download(name: FileName) {
 	downloading.set(name, promise)
 
 	const file = Bun.file(`data/${name}`)
-	const signal = AbortSignal.timeout(name === 'hip_main.dat' ? 120000 : 30000)
+	const signal = AbortSignal.timeout(120000)
 
 	try {
 		if (!(await file.exists())) {

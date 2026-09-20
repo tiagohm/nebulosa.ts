@@ -75,7 +75,7 @@ jobs:
               uses: actions/cache@v6
               with:
                   path: data/
-                  key: data-cache-${{ hashFiles('data/.version') }}
+                  key: data
 
             - name: Check Formatting
               if: ${{ matrix.os == 'ubuntu-24.04' }}
