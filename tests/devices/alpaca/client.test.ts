@@ -7,16 +7,18 @@ import { readImageFromBuffer } from '../../../src/imaging/model/image'
 import { debayer } from '../../../src/imaging/processing/debayer'
 import type { FitsHeader } from '../../../src/io/formats/fits/fits'
 import { deg, hour } from '../../../src/math/units/angle'
-import { download } from '../../download'
+import { downloadPerTag } from '../../download'
 import { saveImageAndCompareHash } from '../../imaging/util'
 
 const NOW = timeYMDHMS(2026, 2, 18, 12, 0, 0)
+
+await downloadPerTag('alpaca.client')
 
 describe('make fits from image bytes', () => {
 	// Small non-square images expose transposition, channel interleaving and endian mistakes without
 	// image codecs or downloaded fixtures. Values below are the physical pixel values in FITS order.
 	for (const channels of [1, 3]) {
-		test.each([
+		test.concurrent.each([
 			[6, 8, 1],
 			[8, 16, 2],
 			[9, 32, 4],
@@ -51,7 +53,7 @@ describe('make fits from image bytes', () => {
 		})
 	}
 
-	test.each([
+	test.concurrent.each([
 		[2, 100000, 100000, 0],
 		[3, 2, 2, 2],
 		[1, 2, 2, 0],
@@ -62,7 +64,7 @@ describe('make fits from image bytes', () => {
 		expect(() => makeFitsFromImageBytes(data)).toThrow()
 	})
 
-	test.each([0, 5, 7])('rejects unsupported transmission type %i', (transmission) => {
+	test.concurrent.each([0, 5, 7])('rejects unsupported transmission type %i', (transmission) => {
 		const data = new ArrayBuffer(64)
 		new Int32Array(data, 0, 11).set([1, 0, 0, 0, 48, transmission, transmission, 2, 1, 1, 0])
 		expect(() => makeFitsFromImageBytes(data)).toThrow('unsupported ImageBytes transmission type')
@@ -133,8 +135,8 @@ describe('make fits from image bytes', () => {
 
 	// Real megapixel fixtures and native image encoding are intentionally outside the fast suite.
 	test('unsigned 16-bit mono', async () => {
-		const bytes = await download('Sky Simulator.8.1.dat')
-		const fits = makeFitsFromImageBytes(await bytes.arrayBuffer(), NOW, camera, mount, undefined, undefined, undefined, 5)
+		const buffer = await Bun.file('data/Sky Simulator.8.1.dat').arrayBuffer()
+		const fits = makeFitsFromImageBytes(buffer, NOW, camera, mount, undefined, undefined, undefined, 5)
 		const image = await readImageFromBuffer(fits)
 		expectNaxis(image!.header, 2, 1280, 1024, undefined)
 		expectHeader(image!.header)
@@ -142,8 +144,8 @@ describe('make fits from image bytes', () => {
 	}, 3000)
 
 	test('unsigned 16-bit color (bayered)', async () => {
-		const bytes = await download('Sky Simulator.8.3.dat')
-		const fits = makeFitsFromImageBytes(await bytes.arrayBuffer(), NOW, camera, mount, undefined, undefined, undefined, 5)
+		const buffer = await Bun.file('data/Sky Simulator.8.3.dat').arrayBuffer()
+		const fits = makeFitsFromImageBytes(buffer, NOW, camera, mount, undefined, undefined, undefined, 5)
 		const image = await readImageFromBuffer(fits)
 		expectNaxis(image!.header, 2, 1280, 1024, undefined)
 		expectHeader(image!.header)
@@ -152,8 +154,8 @@ describe('make fits from image bytes', () => {
 
 	for (const bitpix of [8, 16, 32, -32, -64] as const) {
 		for (const channel of [1, 3] as const) {
-			test(`write and read, bitpix = ${bitpix}, channel = ${channel}`, async () => {
-				const buffer = await (await download(`NGC3372-${bitpix}.${channel}.fit`)).arrayBuffer()
+			test.concurrent(`write and read, bitpix = ${bitpix}, channel = ${channel}`, async () => {
+				const buffer = await Bun.file(`data/NGC3372-${bitpix}.${channel}.fit`).arrayBuffer()
 				const bytes = makeImageBytesFromFits(Buffer.from(buffer))
 				const fits = makeFitsFromImageBytes(bytes.buffer)
 				expect(fits.byteLength % 2880).toBe(0)
