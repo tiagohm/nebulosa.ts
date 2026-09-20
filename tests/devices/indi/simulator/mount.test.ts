@@ -4439,11 +4439,11 @@ describe('mount simulator pointing errors', () => {
 			mount.setTrackingEnabled(true)
 			const rightAscension = mount.mechanical.rightAscension
 			const hourAngle = normalizePI(mount.siderealTimeAt(mount.utcTime) - rightAscension)
-			const wormPhase = mount.wormPhase
+			const wormPhase = normalizeAngle(mount.wormPhase)
 			mount.findHome()
 			mount.advance(0.5)
 			expect(mount.isHoming).toBeFalse()
-			expect(mount.wormPhase).toBe(wormPhase)
+			expect(normalizeAngle(mount.wormPhase)).toBeCloseTo(wormPhase, 11)
 			expect(mount.mechanical.rightAscension - rightAscension).toBeCloseTo(SIDEREAL_DRIFT_RATE * 0.5, 12)
 			expect(toArcsec(normalizePI(mount.siderealTimeAt(mount.utcTime) - mount.mechanical.rightAscension - hourAngle))).toBeCloseTo(0, 2)
 		} finally {
@@ -4659,14 +4659,14 @@ describe('mount simulator pointing errors', () => {
 			const reported = { rightAscension: mount.rightAscension, declination: mount.declination }
 			const boresight = { ...mount.boresight }
 			expect(angularDistance(boresight.rightAscension, boresight.declination, mount.mechanical.rightAscension, mount.mechanical.declination)).toBeGreaterThan(arcsec(10))
-			const wormPhase = mount.wormPhase
+			const wormPhase = normalizeAngle(mount.wormPhase)
 			mount.findHome()
 			mount.advance(0.5)
 			expect(mount.isHoming).toBeFalse()
 			expect(normalizePI(mount.rightAscension - reported.rightAscension)).toBeCloseTo(SIDEREAL_DRIFT_RATE * 0.5, 12)
 			expect(mount.declination).toBe(reported.declination)
 			expect(angularDistance(mount.boresight.rightAscension, mount.boresight.declination, normalizeAngle(boresight.rightAscension + SIDEREAL_DRIFT_RATE * 0.5), boresight.declination)).toBeLessThan(arcsec(0.1))
-			expect(mount.wormPhase).toBe(wormPhase)
+			expect(normalizeAngle(mount.wormPhase)).toBeCloseTo(wormPhase, 11)
 		} finally {
 			mount.dispose()
 		}

@@ -1,8 +1,10 @@
 import { expect, test } from 'bun:test'
 import { frameSphericalPositionAndVelocity, type PositionAndVelocity, sphericalPositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
-import { frameAt, frameToBase, GALACTIC, galactic, ICRS, ITRS, ITRS_INSTANTANEOUS } from '../../../src/astronomy/coordinates/frame'
-import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
-import { ANGVEL_PER_DAY, PI, PIOVERTWO } from '../../../src/core/constants'
+import { eraNut06a, eraPmat06, eraPnm06a } from '../../../src/astronomy/coordinates/erfa/erfa'
+import { CIRS, ECLIPTIC, frameAt, frameToBase, GALACTIC, galactic, ICRS, ITRS, ITRS_INSTANTANEOUS, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, TRUE_EQUATOR_AND_EQUINOX_OF_DATE } from '../../../src/astronomy/coordinates/frame'
+import { type Time, type TimeProviders, Timescale, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { ANGVEL_PER_DAY, DAYSEC, PI, PIOVERTWO } from '../../../src/core/constants'
+import { matMulVec } from '../../../src/math/linear-algebra/mat3'
 import type { Vec3 } from '../../../src/math/linear-algebra/vec3'
 import { normalizeAngle, normalizePI } from '../../../src/math/units/angle'
 
@@ -330,6 +332,34 @@ test('frame helper reuses a transformed-state workspace', () => {
 	expect(fromWorkspace.longitude).toBeCloseTo(sph.longitude, 15)
 	expect(fromWorkspace.longitudeRate).toBeCloseTo(sph.longitudeRate!, 15)
 	expect(fromWorkspace.radialVelocity).toBeCloseTo(sph.radialVelocity, 15)
+})
+
+test('fixed ICRS direction has celestial-frame coordinate rates from basis drift', () => {
+	const rest: PositionAndVelocity = [
+		[0.8, -0.4, 0.3],
+		[0, 0, 0],
+	]
+	const delta = 3600 / DAYSEC
+	const frames = [MEAN_EQUATOR_AND_EQUINOX_OF_DATE, TRUE_EQUATOR_AND_EQUINOX_OF_DATE, ECLIPTIC, CIRS] as const
+	// tests/setup.ts freezes PNM/nutation per rounded Julian day; attach exact ERFA models.
+	const exactProviders: TimeProviders = {
+		pnm: (t) => eraPnm06a(t.day, t.fraction),
+		nut: (t) => eraNut06a(t.day, t.fraction),
+		pmat: (t) => eraPmat06(t.day, t.fraction),
+	}
+	const time: Time = timeShift({ day: TIME.day, fraction: TIME.fraction, scale: TIME.scale, providers: exactProviders }, 0)
+
+	for (const frame of frames) {
+		const actual = frameSphericalPositionAndVelocity(rest, frame, time)!
+		expect(Math.abs(actual.longitudeRate!)).toBeGreaterThan(1e-8)
+		expect(Number.isFinite(actual.latitudeRate!)).toBe(true)
+		expect(actual.radialVelocity).toBeCloseTo(0, 12)
+
+		const plus = sphericalPositionAndVelocity([matMulVec(frame.rotationAt(timeShift(time, delta)), rest[0]), [0, 0, 0]])!
+		const minus = sphericalPositionAndVelocity([matMulVec(frame.rotationAt(timeShift(time, -delta)), rest[0]), [0, 0, 0]])!
+		expect(actual.longitudeRate).toBeCloseTo(normalizePI(plus.longitude - minus.longitude) / (2 * delta), 8)
+		expect(actual.latitudeRate).toBeCloseTo((plus.latitude - minus.latitude) / (2 * delta), 8)
+	}
 })
 
 // Skyfield 1.55 ICRF([0.8, -0.4, 0.3], [0.012, -0.007, 0.004]).frame_latlon_and_rates(ICRS).
