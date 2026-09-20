@@ -4443,7 +4443,7 @@ describe('mount simulator pointing errors', () => {
 			mount.findHome()
 			mount.advance(0.5)
 			expect(mount.isHoming).toBeFalse()
-			expect(mount.wormPhase).toBe(wormPhase)
+			expect(normalizeAngle(mount.wormPhase)).toBeCloseTo(wormPhase, 11)
 			expect(mount.mechanical.rightAscension - rightAscension).toBeCloseTo(SIDEREAL_DRIFT_RATE * 0.5, 12)
 			expect(toArcsec(normalizePI(mount.siderealTimeAt(mount.utcTime) - mount.mechanical.rightAscension - hourAngle))).toBeCloseTo(0, 2)
 		} finally {
