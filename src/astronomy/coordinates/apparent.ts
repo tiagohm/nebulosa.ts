@@ -21,6 +21,11 @@ const LIGHT_TIME_DAYS_PER_AU = LIGHT_TIME_AU / DAYSEC
 // same-epoch direction; a few iterations converge to the retarded solution.
 const DEFAULT_LIGHT_TIME_ITERATIONS = 3
 
+// Inclusive upper bound on ApparentDirectionOptions.lightTimeIterations. Solar-System
+// light-time fixed-point iteration already converges at the default of 3; 16 leaves
+// margin without allowing an unbounded or arbitrarily expensive loop.
+const MAX_LIGHT_TIME_ITERATIONS = 16
+
 // Mass of the Sun in solar masses, the unit of LightDeflector.mass.
 // ERFA eraLdn note 4.
 export const SUN_LIGHT_DEFLECTOR_MASS = 1
@@ -55,7 +60,8 @@ export interface LightDeflector {
 // Optional corrections for apparentDirection. Omitted fields keep the documented defaults.
 export interface ApparentDirectionOptions {
 	// Fixed-point light-time iterations for finite targets. 0 is the geometric same-epoch
-	// direction. Default 3.
+	// direction. Default 3. Must be an integer in [0, 16]; other values throw rather than
+	// clamp, truncate, or hang.
 	readonly lightTimeIterations?: number
 	// Bodies whose gravity bends the line of sight, in the order the photon encounters them.
 	// Empty or omitted applies no gravitational deflection. The Sun is included only if listed.
@@ -90,7 +96,8 @@ export interface ApparentDirection {
 // (photon-path) order via eraLd with finite-source geometry, then annualAberration.
 // Returns undefined when the retarded observer-target vector is the zero vector, which
 // has no sky direction. Throws if aberration is enabled (the default) and `options.sun`
-// is omitted. Returned vectors are freshly allocated and do not alias each other.
+// is omitted, or if `lightTimeIterations` is not an integer in [0, 16]. Returned vectors
+// are freshly allocated and do not alias each other.
 export function apparentDirection(target: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, time: Time, options?: ApparentDirectionOptions): ApparentDirection | undefined {
 	const aberration = options?.aberration ?? true
 	const sun = options?.sun
@@ -98,6 +105,11 @@ export function apparentDirection(target: PositionAndVelocityOverTime, observer:
 
 	const [observerPosition, observerVelocity] = observer(time)
 	const iterations = options?.lightTimeIterations ?? DEFAULT_LIGHT_TIME_ITERATIONS
+	// Rejects Infinity (unbounded loop), negatives (silent undefined), and fractions
+	// (truncated iteration count) before delegating to topocentricDirection.
+	if (!Number.isSafeInteger(iterations) || !(iterations >= 0 && iterations <= MAX_LIGHT_TIME_ITERATIONS)) {
+		throw new Error(`lightTimeIterations must be an integer in [0, ${MAX_LIGHT_TIME_ITERATIONS}]`)
+	}
 	const astrometricVector = topocentricDirection(target, observer, time, iterations)
 	const distance = vecLength(astrometricVector)
 	if (!(distance > 0)) return undefined

@@ -52,6 +52,7 @@ test('light-time convergence matches topocentricDirection and is internally cons
 	}
 
 	const place = apparentDirection(target, observer, TIME, { lightTimeIterations: 3, aberration: false })!
+	const byDefault = apparentDirection(target, observer, TIME, { aberration: false })!
 	const retarded = topocentricDirection(target, observer, TIME, 3)
 	const tau = lightTime(retarded)
 
@@ -61,6 +62,47 @@ test('light-time convergence matches topocentricDirection and is internally cons
 	expect(place.astrometric[0]).toBeCloseTo(retarded[0] / vecLength(retarded), 15)
 	expect(place.astrometric[1]).toBeCloseTo(retarded[1] / vecLength(retarded), 15)
 	expect(place.astrometric[2]).toBeCloseTo(retarded[2] / vecLength(retarded), 15)
+	expect(byDefault.distance).toBe(place.distance)
+	expect(byDefault.lightTime).toBe(place.lightTime)
+	expect(byDefault.astrometric).toEqual(place.astrometric)
+})
+
+test('accepts the maximum supported light-time iteration count', () => {
+	const observer = constantPv([0, 0, 0])
+	const target = constantPv([1, 0.2, -0.1])
+	const place = apparentDirection(target, observer, TIME, { lightTimeIterations: 16, aberration: false })!
+	const retarded = topocentricDirection(target, observer, TIME, 16)
+
+	expect(place.distance).toBeCloseTo(vecLength(retarded), 15)
+	expect(place.astrometric[0]).toBeCloseTo(retarded[0] / vecLength(retarded), 15)
+	expect(place.astrometric[1]).toBeCloseTo(retarded[1] / vecLength(retarded), 15)
+	expect(place.astrometric[2]).toBeCloseTo(retarded[2] / vecLength(retarded), 15)
+})
+
+test('rejects non-finite light-time iteration counts', () => {
+	const observer = constantPv([0, 0, 0])
+	const target = constantPv([1, 0, 0])
+	expect(() => apparentDirection(target, observer, TIME, { aberration: false, lightTimeIterations: Infinity })).toThrow('lightTimeIterations must be an integer in [0, 16]')
+	expect(() => apparentDirection(target, observer, TIME, { aberration: false, lightTimeIterations: -Infinity })).toThrow('lightTimeIterations must be an integer in [0, 16]')
+	expect(() => apparentDirection(target, observer, TIME, { aberration: false, lightTimeIterations: Number.NaN })).toThrow('lightTimeIterations must be an integer in [0, 16]')
+})
+
+test('rejects negative light-time iteration counts', () => {
+	const observer = constantPv([0, 0, 0])
+	const target = constantPv([1, 0, 0])
+	expect(() => apparentDirection(target, observer, TIME, { aberration: false, lightTimeIterations: -1 })).toThrow('lightTimeIterations must be an integer in [0, 16]')
+})
+
+test('rejects fractional light-time iteration counts', () => {
+	const observer = constantPv([0, 0, 0])
+	const target = constantPv([1, 0, 0])
+	expect(() => apparentDirection(target, observer, TIME, { aberration: false, lightTimeIterations: 1.5 })).toThrow('lightTimeIterations must be an integer in [0, 16]')
+})
+
+test('rejects light-time iteration counts above the supported bound', () => {
+	const observer = constantPv([0, 0, 0])
+	const target = constantPv([1, 0, 0])
+	expect(() => apparentDirection(target, observer, TIME, { aberration: false, lightTimeIterations: 17 })).toThrow('lightTimeIterations must be an integer in [0, 16]')
 })
 
 test('zero observer-target distance has no sky direction', () => {
