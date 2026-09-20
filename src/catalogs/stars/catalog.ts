@@ -32,14 +32,16 @@ export type StarCatalogGeometryMode = 'spherical' | 'planarTangent'
 
 // A catalog star: an equatorial position plus optional epoch, photometry, and motion.
 export interface StarCatalogEntry extends Readonly<EquatorialCoordinate> {
-	// Catalog epoch as a Julian year number or a Besselian "B1950"-style string.
-	readonly epoch?: number | `B${number}`
+	// Catalog epoch as a Julian year number.
+	readonly epoch?: number
 	// Apparent magnitude.
 	readonly magnitude?: number
 	readonly pmRA?: Angle // per year
 	readonly pmDEC?: Angle // per year
 	// Radial velocity.
 	readonly rv?: Velocity
+	// Parallax.
+	readonly parallax?: Angle
 }
 
 // A circular (cone) region query around a center.

@@ -16,7 +16,6 @@ export interface StellariumCatalogEntry extends StarCatalogEntry {
 	readonly minorAxis: Angle
 	readonly orientation: Angle
 	readonly redshift: number
-	readonly px: Angle
 	readonly distance: Distance
 	readonly mType?: string
 	readonly ngc: number
@@ -168,7 +167,7 @@ export async function* readCatalogDat(source: Source): AsyncIterable<StellariumC
 		const orientation = deg(readInt())
 		const redshift = readDouble()
 		readDouble() // Redshift error
-		const px = mas(readDouble())
+		const parallax = mas(readDouble())
 		readDouble() // Parallax error
 		const distance = parsec(readDouble() * 1000) // Distance
 		readDouble() // Distance error
@@ -203,7 +202,7 @@ export async function* readCatalogDat(source: Source): AsyncIterable<StellariumC
 		const vdbha = readInt()
 		const magnitude = mV === 99 ? (mB === 99 ? undefined : mB) : mV
 
-		yield { id, epoch: 2000, rightAscension, declination, magnitude, type, majorAxis, minorAxis, orientation, redshift, px, distance, mType, ngc, ic, m, c, b, sh2, vdb, rcw, ldn, lbn, cr, mel, pgc, ugc, ced, arp, vv, pk, png, snrg, aco, hcg, eso, vdbh, dwb, tr, st, ru, vdbha }
+		yield { id, epoch: 2000, rightAscension, declination, magnitude, type, majorAxis, minorAxis, orientation, redshift, parallax, distance, mType, ngc, ic, m, c, b, sh2, vdb, rcw, ldn, lbn, cr, mel, pgc, ugc, ced, arp, vv, pk, png, snrg, aco, hcg, eso, vdbh, dwb, tr, st, ru, vdbha }
 	}
 }
 

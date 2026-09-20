@@ -46,7 +46,7 @@ test('catalog', async () => {
 	expect(NGC281.minorAxis).toBe(0.008726646259971648)
 	expect(NGC281.orientation).toBe(0)
 	expect(NGC281.redshift).toBe(99)
-	expect(NGC281.px).toBe(2.908882202245805e-9)
+	expect(NGC281.parallax).toBe(2.908882202245805e-9)
 	expect(toLightYear(NGC281.distance)).toBeCloseTo(5544.6, 0)
 
 	const catalog = new StellariumCatalog()

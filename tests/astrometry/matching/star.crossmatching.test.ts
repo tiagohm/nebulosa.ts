@@ -16,7 +16,6 @@ await downloadPerTag('hnsky')
 
 interface SyntheticCatalogStar extends StarCatalogEntry {
 	readonly id: number
-	readonly magnitude?: number
 }
 
 interface ScenarioOptions {
