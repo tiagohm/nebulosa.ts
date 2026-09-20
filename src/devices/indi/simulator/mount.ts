@@ -1651,8 +1651,8 @@ export class MountSimulator extends DeviceSimulator {
 		this.#updateAutomaticMeridianFlip()
 	}
 
-	// Holds the axes at Home while the sensor latches, then returns the first free-motion time in ms.
-	// Wind and settling continue over the consumed simulated seconds; the stopped worm does not turn.
+	// Holds the motors at Home while the sensor latches, then returns the first free-motion time in ms.
+	// Celestial RA drifts with the sky while the stopped worm stays still; wind and settling also evolve.
 	#advanceHomeAcquire(startTime: number, endTime: number) {
 		// An arrival at the step endpoint has no acquisition interval yet. The arrival's prior pier
 		// side must be recorded before any new-side sample at that same timestamp.
@@ -1664,6 +1664,9 @@ export class MountSimulator extends DeviceSimulator {
 			const stepSeconds = duration / steps
 			const stepTime = startTime + ((acquisitionTime - startTime) * step) / steps
 			advanceWind(this.#windState, stepSeconds, this.#windConfig, this.#normal)
+			const priorPierSide = this.pierSide
+			this.#setMechanical(this.#mechanical.rightAscension + SIDEREAL_DRIFT_RATE * stepSeconds, this.#mechanical.declination)
+			this.#reconcilePierSideAfterPoleMotion(priorPierSide, 0, stepTime)
 			this.#advanceRingDown(stepSeconds, stepTime)
 			this.#recordBoresightAt(stepTime)
 		}

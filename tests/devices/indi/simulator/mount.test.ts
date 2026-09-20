@@ -814,7 +814,8 @@ describe('mount simulator meridian flip', () => {
 			}
 			const homeRightAscension = normalizeAngle(full.simulator.siderealTimeAt(startTime) + hour(1))
 			expect(full.simulator.sampleBoresightTrajectory(acquisitionTime - 1, acquisitionTime - 1, 1, fullSample)).toBe(1)
-			expect(toArcsec(angularDistance(fullSample[0], fullSample[1], homeRightAscension, deg(20)))).toBeLessThan(0.05)
+			const acquiredRightAscension = normalizeAngle(homeRightAscension + SIDEREAL_DRIFT_RATE * (0.5 - 0.001))
+			expect(toArcsec(angularDistance(fullSample[0], fullSample[1], acquiredRightAscension, deg(20)))).toBeLessThan(0.05)
 			expect(full.simulator.sampleBoresightTrajectory(acquisitionTime + 1, acquisitionTime + 1, 1, fullSample)).toBe(1)
 			expect(toArcsec(angularDistance(fullSample[0], fullSample[1], homeRightAscension, deg(20)))).toBeGreaterThan(1)
 		} finally {
@@ -2277,7 +2278,7 @@ describe('mount simulator meridian flip', () => {
 				expect(simulator.isHoming).toBeFalse()
 				expect(simulator.pierSide).toBe(side)
 				expect(simulator.mechanical.declination).toBeCloseTo(target.declination, 12)
-				if (pose === 'saved') expect(normalizePI(simulator.mechanical.rightAscension - target.rightAscension)).toBeCloseTo(0, 12)
+				if (pose === 'saved') expect(normalizePI(simulator.mechanical.rightAscension - target.rightAscension)).toBeCloseTo(SIDEREAL_DRIFT_RATE * 0.5, 12)
 				else expect(Number.isFinite(simulator.mechanical.rightAscension)).toBeTrue()
 			} finally {
 				simulator.dispose()
@@ -4425,6 +4426,25 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('advances celestial RA while the home sensor holds the stopped RA motor', () => {
+		const { mount } = makeMount('mount.find.passive.sidereal')
+		try {
+			mount.setHome()
+			mount.setTrackingEnabled(true)
+			const rightAscension = mount.mechanical.rightAscension
+			const hourAngle = normalizePI(mount.siderealTimeAt(mount.utcTime) - rightAscension)
+			const wormPhase = mount.wormPhase
+			mount.findHome()
+			mount.advance(0.5)
+			expect(mount.isHoming).toBeFalse()
+			expect(mount.wormPhase).toBe(wormPhase)
+			expect(mount.mechanical.rightAscension - rightAscension).toBeCloseTo(SIDEREAL_DRIFT_RATE * 0.5, 12)
+			expect(toArcsec(normalizePI(mount.siderealTimeAt(mount.utcTime) - mount.mechanical.rightAscension - hourAngle))).toBeCloseTo(0, 2)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('recalibrates rate drift on FIND but preserves it on GO and SET', () => {
 		const { client, mount } = makeMount('mount.find.rate', 'TRACKING_RATE')
 		try {
@@ -4538,9 +4558,9 @@ describe('mount simulator pointing errors', () => {
 			mount.findHome()
 			mount.advance(0.5)
 			expect(mount.isHoming).toBeFalse()
-			expect(mount.rightAscension).toBe(reported.rightAscension)
+			expect(normalizePI(mount.rightAscension - reported.rightAscension)).toBeCloseTo(SIDEREAL_DRIFT_RATE * 0.5, 12)
 			expect(mount.declination).toBe(reported.declination)
-			expect(angularDistance(mount.boresight.rightAscension, mount.boresight.declination, boresight.rightAscension, boresight.declination)).toBeLessThan(arcsec(0.1))
+			expect(angularDistance(mount.boresight.rightAscension, mount.boresight.declination, normalizeAngle(boresight.rightAscension + SIDEREAL_DRIFT_RATE * 0.5), boresight.declination)).toBeLessThan(arcsec(0.1))
 			expect(mount.wormPhase).toBe(wormPhase)
 		} finally {
 			mount.dispose()
