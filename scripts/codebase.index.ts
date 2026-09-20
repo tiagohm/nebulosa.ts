@@ -9,7 +9,13 @@ const file = Bun.file(join(tmpdir(), Bun.randomUUIDv7() + '.json'))
 await Bun.write(file, JSON.stringify(args))
 
 try {
-	await $`codebase-memory-mcp cli index_repository --args-file '${file}'`
+	// Exit 0 with no output is treated as success and Codex continues.
+	await $`codebase-memory-mcp cli index_repository -args-file '${file}'`.quiet()
+} catch (e) {
+	if (e instanceof $.ShellError) {
+		process.exitCode = e.exitCode
+		console.error(e.stderr.toString())
+	}
 } finally {
 	await file.delete()
 }

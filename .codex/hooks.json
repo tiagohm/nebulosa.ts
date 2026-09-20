@@ -5,7 +5,8 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "bun run index"
+						"command": "bun run index",
+						"timeout": 15
 					}
 				]
 			}
