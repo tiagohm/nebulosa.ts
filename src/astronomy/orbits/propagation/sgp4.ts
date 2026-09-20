@@ -1,4 +1,4 @@
-import { DAYMIN, DEG2RAD, EARTH_RADIUS_KM, PI, TAU } from '../../../core/constants'
+import { DAYMIN, DEG2RAD, PI, TAU } from '../../../core/constants'
 import type { Angle } from '../../../math/units/angle'
 import { kilometer } from '../../../math/units/distance'
 import { kilometerPerSecond } from '../../../math/units/velocity'
@@ -11,24 +11,67 @@ import { greenwichMeanSiderealTime, type Time, Timescale, timeSubtract, timeYMDH
 // and propagates to a given time, returning the TEME-frame position (AU) and velocity (AU/day) via
 // the public sgp4() entry point. Internal subroutines (dpper, dscom, dsInit, dspace, initl) keep
 // Vallado's original names and comments; their scalar option fields mirror that algorithm state.
-// The WGS-72 gravity model is used throughout. Angles are radians; mean motion is radians/minute.
+// Gravity constants are selectable among Vallado's WGS-72 old, WGS-72, and WGS-84 sets and are
+// bound to each initialized SatRec; WGS-72 remains the default for operational GP/TLE data.
+// This is not a geodetic ellipsoid choice. Angles are radians; mean motion is radians/minute.
 
-// Earth gravitational parameter (WGS-72), km^3/s^2.
-const MU = 398600.8 // in km3 / s2
-// sqrt(GM) in earth-radii^1.5 per minute; the SGP4 reciprocal-time normalization constant.
-const XKE = 60 / Math.sqrt((EARTH_RADIUS_KM * EARTH_RADIUS_KM * EARTH_RADIUS_KM) / MU)
-// Conversion from earth-radii-per-minute to km/s.
-const VKMPERSEC = (EARTH_RADIUS_KM * XKE) / 60
-// Minutes per canonical time unit (1/XKE).
-const tumin = 1 / XKE
-// Second zonal harmonic of the WGS-72 geopotential.
-const J2 = 0.001082616
-// Third zonal harmonic of the WGS-72 geopotential.
-const J3 = -0.00000253881
-// Fourth zonal harmonic of the WGS-72 geopotential.
-const J4 = -0.00000165597
-// Ratio J3/J2, used in the long-period periodic terms.
-const J3OJ2 = J3 / J2
+// Identifier of a Vallado SGP4 gravity-constant set from getgravconst().
+export type Sgp4GravityModelName = 'wgs72old' | 'wgs72' | 'wgs84'
+
+// SGP4 gravity-constant set: the un-normalized zonal harmonics and derived canonical-time
+// constants used by initialization and propagation. Distinct from Ellipsoid.WGS72/WGS84 in
+// observer geometry; operational GP/TLE data is generated for the WGS-72 SGP4 set.
+export interface Sgp4GravityModel {
+	// Vallado constant-set identifier.
+	readonly name: Sgp4GravityModelName
+	// Earth gravitational parameter, km^3/s^2.
+	readonly mu: number
+	// Equatorial Earth radius used by SGP4 length scaling, km.
+	readonly radius: number
+	// Un-normalized second zonal harmonic J2 (dimensionless).
+	readonly j2: number
+	// Un-normalized third zonal harmonic J3 (dimensionless).
+	readonly j3: number
+	// Un-normalized fourth zonal harmonic J4 (dimensionless).
+	readonly j4: number
+	// Reciprocal canonical time unit, min^-1. Equal to 60 / sqrt(radius^3 / mu), except WGS-72
+	// old which keeps Vallado's explicit low-precision 0.0743669161.
+	readonly xke: number
+	// Minutes per canonical time unit (1/xke).
+	readonly tumin: number
+	// Ratio j3/j2, used in the long-period periodic terms.
+	readonly j3OverJ2: number
+	// Conversion from Earth-radii per minute to km/s: (radius * xke) / 60.
+	readonly velocityScale: number
+}
+
+// Builds an immutable SGP4 constant set, deriving xke (unless supplied), tumin, j3/j2, and the
+// km/s velocity scale once. `mu` is km^3/s^2; `radius` is km; `xke` is min^-1 when given.
+function resolveSgp4GravityModel(name: Sgp4GravityModelName, mu: number, radius: number, j2: number, j3: number, j4: number, xke = 60 / Math.sqrt((radius * radius * radius) / mu)): Sgp4GravityModel {
+	return Object.freeze({
+		name,
+		mu,
+		radius,
+		j2,
+		j3,
+		j4,
+		xke,
+		tumin: 1 / xke,
+		j3OverJ2: j3 / j2,
+		velocityScale: (radius * xke) / 60,
+	})
+}
+
+// Vallado WGS-72 old (Spacetrack Report #3) SGP4 constants, including the explicit low-precision xke.
+export const SGP4_WGS72_OLD: Sgp4GravityModel = resolveSgp4GravityModel('wgs72old', 398600.79964, 6378.135, 0.001082616, -0.00000253881, -0.00000165597, 0.0743669161)
+
+// Vallado WGS-72 SGP4 constants. Default for operational GP/TLE data; not a geodetic ellipsoid.
+export const SGP4_WGS72: Sgp4GravityModel = resolveSgp4GravityModel('wgs72', 398600.8, 6378.135, 0.001082616, -0.00000253881, -0.00000165597)
+
+// Vallado WGS-84 SGP4 constants, for reproducing implementations initialized with that set.
+// Not a more accurate replacement for operational WGS-72 TLE/GP data.
+export const SGP4_WGS84: Sgp4GravityModel = resolveSgp4GravityModel('wgs84', 398600.5, 6378.137, 0.00108262998905, -0.00000253215306, -0.00000161098761)
+
 // Constant 2/3, the exponent linking mean motion and semi-major axis.
 const X2O3 = 2 / 3
 // Revolutions/day to radians/minute conversion (DAYMIN/TAU).
@@ -134,6 +177,8 @@ export interface SatRec {
 	readonly epochyr: number
 	readonly epochtynumrev: number
 	error: SatRecError
+	// Gravity-constant set resolved at initialization; propagation reads its numeric fields.
+	readonly gravity: Sgp4GravityModel
 	// A single character that directs SGP4 to either operate in its modern 'i' improved mode or
 	// in its legacy 'a' AFSPC mode.
 	operationmode: 'a' | 'i'
@@ -248,7 +293,7 @@ export interface SatRec {
 	no: Angle // Mean motion in radians per minute.
 }
 
-export type SatRecInit = Pick<SatRec, 'error' | 'satnum' | 'epochyr' | 'ndot' | 'nddot' | 'bstar' | 'inclo' | 'nodeo' | 'ecco' | 'argpo' | 'mo' | 'no' | 'epoch'>
+export type SatRecInit = Pick<SatRec, 'error' | 'satnum' | 'epochyr' | 'ndot' | 'nddot' | 'bstar' | 'inclo' | 'nodeo' | 'ecco' | 'argpo' | 'mo' | 'no' | 'epoch' | 'gravity'>
 
 // Parses two TLE lines into a validated structured object.
 export function parseTLE(line1: string, line2: string, name?: string): TLE {
@@ -297,7 +342,9 @@ export function parseTLE(line1: string, line2: string, name?: string): TLE {
 }
 
 // Builds a reusable SGP4 record from parsed TLE elements.
-export function recordFromTLE(tle: TLE) {
+// `gravity` selects the Vallado constant set bound to the record; WGS-72 is the default used for
+// operational GP/TLE data and must not be swapped for WGS-84 merely for a later epoch.
+export function recordFromTLE(tle: TLE, gravity: Sgp4GravityModel = SGP4_WGS72) {
 	const satrec: SatRecInit = {
 		error: 0,
 		satnum: tle.satelliteNumber,
@@ -312,6 +359,7 @@ export function recordFromTLE(tle: TLE) {
 		mo: tle.meanAnomaly,
 		no: tle.meanMotion / XPDOTP,
 		epoch: tle.epoch,
+		gravity,
 	}
 
 	// Initialize the orbit at sgp4epoch
@@ -333,7 +381,9 @@ export function recordFromTLE(tle: TLE) {
 }
 
 // Builds a reusable SGP4 record from an OMM object.
-export function recordFromOMM(omm: OMM, opsmode: 'a' | 'i' = 'i') {
+// `opsmode` is Vallado 'i' improved (default) or 'a' AFSPC; `gravity` is the Vallado constant set
+// bound to the record, defaulting to WGS-72.
+export function recordFromOMM(omm: OMM, opsmode: 'a' | 'i' = 'i', gravity: Sgp4GravityModel = SGP4_WGS72) {
 	const epoch = parseOmmEpoch(omm.EPOCH)
 	const satrec: SatRecInit = {
 		error: SatRecError.None,
@@ -349,6 +399,7 @@ export function recordFromOMM(omm: OMM, opsmode: 'a' | 'i' = 'i') {
 		mo: +omm.MEAN_ANOMALY * DEG2RAD,
 		no: +omm.MEAN_MOTION / XPDOTP,
 		epoch: epoch.jd,
+		gravity,
 	}
 
 	sgp4Init(satrec, {
@@ -379,6 +430,7 @@ export function satelliteRecordErrorMessage(error: SatRecError) {
 }
 
 // Propagates a TLE, OMM, or precomputed SGP4 record to a Julian day in TEME.
+// Direct TLE/OMM arguments use the WGS-72 constant set; pass a SatRec to propagate with another model.
 export function sgp4(time: Time, source: TLE | OMM | SatRec, meanElements?: MeanElements): PositionAndVelocity {
 	const satrec = isSatRec(source) ? source : isTLE(source) ? recordFromTLE(source) : recordFromOMM(source)
 	const result = sgp4Propagate(satrec, timeSubtract(time, satrec.epoch, Timescale.UTC) * DAYMIN, meanElements)
@@ -1009,12 +1061,15 @@ export interface DsInitOptions {
 	readonly xlamo: number
 	readonly xli: number
 	readonly xni: number
+	// Gravity-constant set used to form the resonant aonv term. Defaults to WGS-72.
+	readonly gravity?: Sgp4GravityModel
 }
 
 // Provides deep space contributions to mean motion dot dueto geopotential resonance with half day and one day orbits.
 // author: david vallado 719-573-2600 28 jun 2005
 function dsInit(options: DsInitOptions) {
-	const { cosim, argpo, s1, s2, s3, s4, s5, sinim, ss1, ss2, ss3, ss4, ss5, sz1, sz3, sz11, sz13, sz21, sz23, sz31, sz33, t, tc, gsto, mo, mdot, no, nodeo, nodedot, xpidot, z1, z3, z11, z13, z21, z23, z31, z33, ecco, eccsq } = options
+	const { cosim, argpo, s1, s2, s3, s4, s5, sinim, ss1, ss2, ss3, ss4, ss5, sz1, sz3, sz11, sz13, sz21, sz23, sz31, sz33, t, tc, gsto, mo, mdot, no, nodeo, nodedot, xpidot, z1, z3, z11, z13, z21, z23, z31, z33, ecco, eccsq, gravity = SGP4_WGS72 } = options
+	const { xke } = gravity
 	let { emsq, em, argpm, inclm, mm, nm, nodem, atime, d2201, d2211, d3210, d3222, d4410, d4422, d5220, d5232, d5421, d5433, dedt, didt, dmdt, dnodt, domdt, del1, del2, del3, xfact, xlamo, xli, xni } = options
 
 	const Q22 = 1.7891679e-6
@@ -1105,7 +1160,7 @@ function dsInit(options: DsInitOptions) {
 
 	// initialize the resonance terms
 	if (irez !== 0) {
-		const aonv = (nm / XKE) ** X2O3
+		const aonv = (nm / xke) ** X2O3
 
 		// geopotential resonance for 12 hour orbits
 		if (irez === 2) {
@@ -1433,14 +1488,17 @@ export interface InitlOptions {
 	readonly epochfrac: number
 	readonly inclo: number
 	readonly no: number
+	// Gravity-constant set used to un-kozai mean motion. Defaults to WGS-72.
+	readonly gravity?: Sgp4GravityModel
 }
 
 // Initializes the sgp4 propagator. all the initialization is
 // consolidated here instead of having multiple loops inside other routines.
 // author: david vallado 719-573-2600 28 jun 2005
 function initl(options: InitlOptions) {
-	const { opsmode, ecco, epochday, epochfrac, inclo } = options
+	const { opsmode, ecco, epochday, epochfrac, inclo, gravity = SGP4_WGS72 } = options
 	let { no } = options
+	const { xke, j2 } = gravity
 
 	// earth constants
 	const eccsq = ecco * ecco
@@ -1450,14 +1508,14 @@ function initl(options: InitlOptions) {
 	const cosio2 = cosio * cosio
 
 	// un-kozai the mean motion
-	const ak = (XKE / no) ** X2O3
-	const d1 = (0.75 * J2 * (3 * cosio2 - 1)) / (rteosq * omeosq)
+	const ak = (xke / no) ** X2O3
+	const d1 = (0.75 * j2 * (3 * cosio2 - 1)) / (rteosq * omeosq)
 	let delPrime = d1 / (ak * ak)
 	const adel = ak * (1 - delPrime * delPrime - delPrime * (1 / 3 + (134 * delPrime * delPrime) / 81))
 	delPrime = d1 / (adel * adel)
 	no /= 1 + delPrime
 
-	const ao = (XKE / no) ** X2O3
+	const ao = (xke / no) ** X2O3
 	const sinio = Math.sin(inclo)
 	const po = ao * omeosq
 	const con42 = 1 - 5 * cosio2
@@ -1534,6 +1592,7 @@ function sgp4Propagate(satrec: SatRec, tsince: number, meanElements?: MeanElemen
 	// the old check used 1 + cos(pi-1e-9), but then compared it to
 	// 1.5 e-12, so the threshold was changed to 1.5e-12 for consistency
 	const temp4 = 1.5e-12
+	const { xke, j2, j3OverJ2, radius, velocityScale } = satrec.gravity
 
 	// clear sgp4 error flag
 	satrec.t = tsince
@@ -1625,8 +1684,8 @@ function sgp4Propagate(satrec: SatRec, tsince: number, meanElements?: MeanElemen
 		return undefined
 	}
 
-	const am = (XKE / nm) ** X2O3 * tempa * tempa
-	nm = XKE / am ** 1.5
+	const am = (xke / nm) ** X2O3 * tempa * tempa
+	nm = xke / am ** 1.5
 	em -= tempe
 
 	// fix tolerance for error recognition
@@ -1707,13 +1766,13 @@ function sgp4Propagate(satrec: SatRec, tsince: number, meanElements?: MeanElemen
 	if (satrec.method === 'd') {
 		sinip = Math.sin(xincp)
 		cosip = Math.cos(xincp)
-		satrec.aycof = -0.5 * J3OJ2 * sinip
+		satrec.aycof = -0.5 * j3OverJ2 * sinip
 
 		// sgp4fix for divide by zero for xincp = 180 deg
 		if (Math.abs(cosip + 1) > 1.5e-12) {
-			satrec.xlcof = (-0.25 * J3OJ2 * sinip * (3 + 5 * cosip)) / (1 + cosip)
+			satrec.xlcof = (-0.25 * j3OverJ2 * sinip * (3 + 5 * cosip)) / (1 + cosip)
 		} else {
-			satrec.xlcof = (-0.25 * J3OJ2 * sinip * (3 + 5 * cosip)) / temp4
+			satrec.xlcof = (-0.25 * j3OverJ2 * sinip * (3 + 5 * cosip)) / temp4
 		}
 	}
 
@@ -1772,7 +1831,7 @@ function sgp4Propagate(satrec: SatRec, tsince: number, meanElements?: MeanElemen
 	const sin2u = (cosu + cosu) * sinu
 	const cos2u = 1 - 2 * sinu * sinu
 	temp = 1 / pl
-	const temp1 = 0.5 * J2 * temp
+	const temp1 = 0.5 * j2 * temp
 	const temp2 = temp1 * temp
 
 	// update for short period periodics
@@ -1794,8 +1853,8 @@ function sgp4Propagate(satrec: SatRec, tsince: number, meanElements?: MeanElemen
 	su -= 0.25 * temp2 * satrec.x7thm1 * sin2u
 	const xnode = nodep + 1.5 * temp2 * cosip * sin2u
 	const xinc = xincp + 1.5 * temp2 * cosip * sinip * cos2u
-	const mvt = rdotl - (nm * temp1 * satrec.x1mth2 * sin2u) / XKE
-	const rvdot = rvdotl + (nm * temp1 * (satrec.x1mth2 * cos2u + 1.5 * satrec.con41)) / XKE
+	const mvt = rdotl - (nm * temp1 * satrec.x1mth2 * sin2u) / xke
+	const rvdot = rvdotl + (nm * temp1 * (satrec.x1mth2 * cos2u + 1.5 * satrec.con41)) / xke
 
 	// orientation vectors
 	const sinsu = Math.sin(su)
@@ -1815,14 +1874,14 @@ function sgp4Propagate(satrec: SatRec, tsince: number, meanElements?: MeanElemen
 
 	// position and velocity (in km and km/sec)
 	const position = {
-		x: mrt * ux * EARTH_RADIUS_KM,
-		y: mrt * uy * EARTH_RADIUS_KM,
-		z: mrt * uz * EARTH_RADIUS_KM,
+		x: mrt * ux * radius,
+		y: mrt * uy * radius,
+		z: mrt * uz * radius,
 	}
 	const velocity = {
-		x: (mvt * ux + rvdot * vx) * VKMPERSEC,
-		y: (mvt * uy + rvdot * vy) * VKMPERSEC,
-		z: (mvt * uz + rvdot * vz) * VKMPERSEC,
+		x: (mvt * ux + rvdot * vx) * velocityScale,
+		y: (mvt * uy + rvdot * vy) * velocityScale,
+		z: (mvt * uz + rvdot * vz) * velocityScale,
 	}
 
 	return { position, velocity, meanElements } as const
@@ -1962,10 +2021,11 @@ function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts sat
 
 	// earth constants
 	// sgp4fix identify constants and allow alternate values
+	const { radius, tumin, j2, j3OverJ2, j4 } = satrec.gravity
 
-	const ss = 78 / EARTH_RADIUS_KM + 1
+	const ss = 78 / radius + 1
 	// sgp4fix use multiply for speed instead of pow
-	const qzms2ttemp = (120 - 78) / EARTH_RADIUS_KM
+	const qzms2ttemp = (120 - 78) / radius
 	const qzms2t = qzms2ttemp * qzms2ttemp * qzms2ttemp * qzms2ttemp
 
 	satrec.init = 'y'
@@ -1982,6 +2042,7 @@ function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts sat
 
 		method: satrec.method,
 		opsmode: satrec.operationmode,
+		gravity: satrec.gravity,
 	}
 
 	const initlResult = initl(initlOptions)
@@ -1999,13 +2060,13 @@ function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts sat
 	if (omeosq >= 0 || satrec.no >= 0) {
 		satrec.isimp = 0
 
-		if (rp < 220 / EARTH_RADIUS_KM + 1) {
+		if (rp < 220 / radius + 1) {
 			satrec.isimp = 1
 		}
 
 		let sfour = ss
 		let qzms24 = qzms2t
-		const perige = (rp - 1) * EARTH_RADIUS_KM
+		const perige = (rp - 1) * radius
 
 		// for perigees below 156 km, s and qoms2t are altered
 		if (perige < 156) {
@@ -2016,9 +2077,9 @@ function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts sat
 			}
 
 			// sgp4fix use multiply for speed instead of pow
-			const qzms24temp = (120 - sfour) / EARTH_RADIUS_KM
+			const qzms24temp = (120 - sfour) / radius
 			qzms24 = qzms24temp * qzms24temp * qzms24temp * qzms24temp
-			sfour = sfour / EARTH_RADIUS_KM + 1
+			sfour = sfour / radius + 1
 		}
 
 		const pinvsq = 1 / posq
@@ -2029,21 +2090,21 @@ function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts sat
 		const psisq = Math.abs(1 - etasq)
 		const coef = qzms24 * tsi ** 4
 		const coef1 = coef / psisq ** 3.5
-		const cc2 = coef1 * satrec.no * (ao * (1 + 1.5 * etasq + eeta * (4 + etasq)) + ((0.375 * J2 * tsi) / psisq) * satrec.con41 * (8 + 3 * etasq * (8 + etasq)))
+		const cc2 = coef1 * satrec.no * (ao * (1 + 1.5 * etasq + eeta * (4 + etasq)) + ((0.375 * j2 * tsi) / psisq) * satrec.con41 * (8 + 3 * etasq * (8 + etasq)))
 		satrec.cc1 = satrec.bstar * cc2
 		let cc3 = 0
 
 		if (satrec.ecco > 1e-4) {
-			cc3 = (-2 * coef * tsi * J3OJ2 * satrec.no * sinio) / satrec.ecco
+			cc3 = (-2 * coef * tsi * j3OverJ2 * satrec.no * sinio) / satrec.ecco
 		}
 
 		satrec.x1mth2 = 1 - cosio2
-		satrec.cc4 = 2 * satrec.no * coef1 * ao * omeosq * (satrec.eta * (2 + 0.5 * etasq) + satrec.ecco * (0.5 + 2 * etasq) - ((J2 * tsi) / (ao * psisq)) * (-3 * satrec.con41 * (1 - 2 * eeta + etasq * (1.5 - 0.5 * eeta)) + 0.75 * satrec.x1mth2 * (2 * etasq - eeta * (1 + etasq)) * Math.cos(2 * satrec.argpo)))
+		satrec.cc4 = 2 * satrec.no * coef1 * ao * omeosq * (satrec.eta * (2 + 0.5 * etasq) + satrec.ecco * (0.5 + 2 * etasq) - ((j2 * tsi) / (ao * psisq)) * (-3 * satrec.con41 * (1 - 2 * eeta + etasq * (1.5 - 0.5 * eeta)) + 0.75 * satrec.x1mth2 * (2 * etasq - eeta * (1 + etasq)) * Math.cos(2 * satrec.argpo)))
 		satrec.cc5 = 2 * coef1 * ao * omeosq * (1 + 2.75 * (etasq + eeta) + eeta * etasq)
 		const cosio4 = cosio2 * cosio2
-		const temp1 = 1.5 * J2 * pinvsq * satrec.no
-		const temp2 = 0.5 * temp1 * J2 * pinvsq
-		const temp3 = -0.46875 * J4 * pinvsq * pinvsq * satrec.no
+		const temp1 = 1.5 * j2 * pinvsq * satrec.no
+		const temp2 = 0.5 * temp1 * j2 * pinvsq
+		const temp3 = -0.46875 * j4 * pinvsq * pinvsq * satrec.no
 		satrec.mdot = satrec.no + 0.5 * temp1 * rteosq * satrec.con41 + 0.0625 * temp2 * rteosq * (13 - 78 * cosio2 + 137 * cosio4)
 		satrec.argpdot = -0.5 * temp1 * con42 + 0.0625 * temp2 * (7 - 114 * cosio2 + 395 * cosio4) + temp3 * (3 - 36 * cosio2 + 49 * cosio4)
 		const xhdot1 = -temp1 * cosio
@@ -2061,12 +2122,12 @@ function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts sat
 
 		// sgp4fix for divide by zero with xinco = 180 deg
 		if (Math.abs(cosio + 1) > 1.5e-12) {
-			satrec.xlcof = (-0.25 * J3OJ2 * sinio * (3 + 5 * cosio)) / (1 + cosio)
+			satrec.xlcof = (-0.25 * j3OverJ2 * sinio * (3 + 5 * cosio)) / (1 + cosio)
 		} else {
-			satrec.xlcof = (-0.25 * J3OJ2 * sinio * (3 + 5 * cosio)) / temp4
+			satrec.xlcof = (-0.25 * j3OverJ2 * sinio * (3 + 5 * cosio)) / temp4
 		}
 
-		satrec.aycof = -0.5 * J3OJ2 * sinio
+		satrec.aycof = -0.5 * j3OverJ2 * sinio
 
 		// sgp4fix use multiply for speed instead of pow
 		const delmotemp = 1 + satrec.eta * Math.cos(satrec.mo)
@@ -2267,6 +2328,7 @@ function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts sat
 				xlamo: satrec.xlamo,
 				xli: satrec.xli,
 				xni: satrec.xni,
+				gravity: satrec.gravity,
 			}
 
 			const dsinitResult = dsInit(dsinitOptions)
