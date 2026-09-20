@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { eraC2s, eraS2c, eraS2p } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { arcmin, deg, hour } from '../../../src/math/units/angle'
 // oxfmt-ignore
-import { intersectLineAndSphere, midPoint, rectIntersection, type SphericalMountBasis, type SphericalTangentBasis, sphericalCoordinateBasis, sphericalDestination, sphericalDirectionVector, sphericalGreatCirclePole, sphericalInterpolate, sphericalMountBasis, sphericalMountDeclinationAxisVector, sphericalMountPolarAxisVector, sphericalOffsetVector, sphericalPoleVector, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTangentBasis, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
+import { intersectLineAndSphere, intersectSegmentEllipsoid, midPoint, rectIntersection, type SphericalMountBasis, type SphericalTangentBasis, sphericalCoordinateBasis, sphericalDestination, sphericalDirectionVector, sphericalGreatCirclePole, sphericalInterpolate, sphericalMountBasis, sphericalMountDeclinationAxisVector, sphericalMountPolarAxisVector, sphericalOffsetVector, sphericalPoleVector, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTangentBasis, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
 import { PI, PIOVERTWO } from '../../../src/core/constants'
 import { type Vec3, vecCross, vecDot, vecLength, vecNormalize } from '../../../src/math/linear-algebra/vec3'
 
@@ -74,6 +74,32 @@ test('intersect line and sphere', () => {
 	expect(tangent).not.toBeFalse()
 	tangent && expect(tangent[0]).toBeCloseTo(0, 12)
 	tangent && expect(tangent[1]).toBeCloseTo(0, 12)
+})
+
+test('finite segment intersects an oblate ellipsoid only between its endpoints', () => {
+	const hit = intersectSegmentEllipsoid([3, 0, 0], [-3, 0, 0], 2, 1)
+	expect(hit).toEqual({ intersects: true, intersection: 1 / 6, tangent: false })
+	expect(intersectSegmentEllipsoid([3, 0, 0], [2.5, 0, 0], 2, 1).intersects).toBeFalse()
+	expect(intersectSegmentEllipsoid([3, 0, 0], [4, 0, 0], 2, 1).intersects).toBeFalse()
+	expect(intersectSegmentEllipsoid([3, 0, 0], [2, 0, 0], 2, 1).intersection).toBeCloseTo(1, 14)
+	expect(intersectSegmentEllipsoid([3, 0, 0], [3, 0, 0], 2, 1).intersects).toBeFalse()
+	expect(intersectSegmentEllipsoid([3, 0, 2], [-3, 0, 2], 2, 1).intersects).toBeFalse()
+	expect(intersectSegmentEllipsoid([2, 0, 0], [-3, 0, 0], 2, 1).intersection).toBe(0)
+	expect(intersectSegmentEllipsoid([2 + 1e-12, 0, 0], [-3, 0, 0], 2, 1).intersection).toBeGreaterThan(0)
+})
+
+test('ellipsoid tangent and near-limb classifications remain finite', () => {
+	const tangent = intersectSegmentEllipsoid([2, 0, 1], [-2, 0, 1], 2, 1)
+	expect(tangent).toEqual({ intersects: true, intersection: 0.5, tangent: true })
+	const above = intersectSegmentEllipsoid([2, 0, 1 + 1e-8], [-2, 0, 1 + 1e-8], 2, 1)
+	const below = intersectSegmentEllipsoid([2, 0, 1 - 1e-8], [-2, 0, 1 - 1e-8], 2, 1)
+	expect(above.intersects).toBeFalse()
+	expect(below.intersects).toBeTrue()
+	expect(below.tangent).toBeFalse()
+	expect(Number.isFinite(below.intersection)).toBeTrue()
+	// At z=1.5, the same line clears the oblate body but cuts the analytic radius-2 sphere.
+	expect(intersectSegmentEllipsoid([3, 0, 1.5], [-3, 0, 1.5], 2, 1).intersects).toBeFalse()
+	expect(intersectSegmentEllipsoid([3, 0, 1.5], [-3, 0, 1.5], 2, 2).intersects).toBeTrue()
 })
 
 test('spherical separation stays stable near the pole', () => {
