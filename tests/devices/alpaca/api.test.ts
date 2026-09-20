@@ -516,7 +516,7 @@ describe('telescope', () => {
 	})
 
 	test('canFindHome', async () => {
-		expectOk(await api.telescope.canFindHome(ID), false)
+		expectOk(await api.telescope.canFindHome(ID), true)
 	})
 
 	test('canPark', async () => {

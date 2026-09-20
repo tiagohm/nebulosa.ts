@@ -26,6 +26,12 @@ import { applyMultiSwitchValues, applyNumberVectorValues, clampDeclination } fro
 
 // Simulated equatorial mount, tracking, slewing, site, and pulse-guiding behavior.
 
+// Active home command; only FIND acquires a new physical sensor reference.
+type HomeAction = 'GO' | 'FIND'
+
+// Simulated seconds spent latching the home index after the axes reach it.
+const HOME_ACQUIRE_DURATION = 0.5
+
 // Simulated equatorial mount. Models tracking drift per track mode, manual axis motion, slew/sync/goto,
 // explicit and autonomous Meridian Flips, park/home, pier side, site location and time, and pulse
 // guiding, advancing the equatorial coordinate on each tick and emitting the corresponding INDI vectors.
@@ -38,7 +44,8 @@ export class MountSimulator extends DeviceSimulator {
 	readonly #abort = makeSwitchVector('', 'TELESCOPE_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
 	readonly #trackMode = makeSwitchVector('', 'TELESCOPE_TRACK_MODE', 'Track Mode', MAIN_CONTROL, 'OneOfMany', 'rw', ['TRACK_SIDEREAL', 'Sidereal', true], ['TRACK_SOLAR', 'Solar', false], ['TRACK_LUNAR', 'Lunar', false], ['TRACK_KING', 'King', false])
 	readonly #tracking = makeSwitchVector('', 'TELESCOPE_TRACK_STATE', 'Tracking', MAIN_CONTROL, 'OneOfMany', 'rw', ['TRACK_ON', 'On', false], ['TRACK_OFF', 'Off', true])
-	readonly #home = makeSwitchVector('', 'TELESCOPE_HOME', 'Home', MAIN_CONTROL, 'AtMostOne', 'rw', ['GO', 'Go', false], ['SET', 'Set', false])
+	// INDI Home operations: FIND reacquires the sensor, SET saves this pose, GO uses the current reference.
+	readonly #home = makeSwitchVector('', 'TELESCOPE_HOME', 'Home', MAIN_CONTROL, 'AtMostOne', 'rw', ['FIND', 'Find', false], ['SET', 'Set', false], ['GO', 'Go', false])
 	readonly #motionNS = makeSwitchVector('', 'TELESCOPE_MOTION_NS', 'Motion N/S', MAIN_CONTROL, 'AtMostOne', 'rw', ['MOTION_NORTH', 'North', false], ['MOTION_SOUTH', 'South', false])
 	readonly #motionWE = makeSwitchVector('', 'TELESCOPE_MOTION_WE', 'Motion W/E', MAIN_CONTROL, 'AtMostOne', 'rw', ['MOTION_WEST', 'West', false], ['MOTION_EAST', 'East', false])
 	readonly #slewRate = makeSwitchVector('', 'TELESCOPE_SLEW_RATE', 'Slew Rate', MAIN_CONTROL, 'OneOfMany', 'rw')
@@ -202,8 +209,10 @@ export class MountSimulator extends DeviceSimulator {
 	#arrivalBoresightPierSide?: PierSide
 	// Mid-slew shaft sample waiting for worm and wind state to reach the same timestamp.
 	#slewMidpointSample?: { time: number; rightAscension: Angle; declination: Angle; pierSide: PierSide }
-	// HOME arrival waiting until any deferred midpoint sample has been recorded.
-	#pendingHomeScatter = false
+	// Active home command, including the sensor acquisition interval after a FIND slew.
+	#homeAction?: HomeAction
+	// Sensor acquisition time still to consume, in simulated seconds.
+	#homeAcquireRemaining = 0
 	// One-shot latch preventing an aborted or completed automatic flip from immediately restarting.
 	#automaticFlipArmed = true
 
@@ -243,9 +252,8 @@ export class MountSimulator extends DeviceSimulator {
 	// Current deflection of the optical axis by the wind, and the conditions producing it.
 	readonly #windState = windState()
 	#windConfig: WindConfig = IDENTITY_WIND_CONFIG
-	// How far the axes really sat from the home position the last time the mount homed, radians. A home
-	// sensor has hysteresis, so the mount zeroes its encoders a little short of where it did last time
-	// and every subsequent coordinate inherits the difference. This is where index errors come from.
+	// Residual sensor repeatability from the last successful FIND, in radians per axis. GO and SET
+	// retain it; only a new physical index acquisition redraws it.
 	#homeScatterRightAscension: Angle = 0
 	#homeScatterDeclination: Angle = 0
 	// Travel the drive has delivered beyond what the encoders counted, radians of right ascension.
@@ -269,9 +277,11 @@ export class MountSimulator extends DeviceSimulator {
 	// manual motion and guiding all move it, and both the reported coordinate and the boresight are
 	// derived from it.
 	readonly #mechanical: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
-	// Home and park are stored as mechanical poses, since both coordinates and pier side determine the
-	// physical axis configuration the mount returns to.
-	readonly #homeCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
+	// Home keeps the local RA shaft orientation as hour angle in radians, plus declination and pier side.
+	// A fixed physical RA axis follows sidereal time in celestial coordinates even with its motor stopped.
+	#homeHourAngle: Angle = 0
+	#homeDeclination: Angle = PIOVERTWO
+	// Park retains its existing mechanical equatorial coordinate and pier side.
 	readonly #parkCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
 	#homePierSide: PierSide = 'NEITHER'
 	#parkPierSide: PierSide = 'NEITHER'
@@ -501,7 +511,7 @@ export class MountSimulator extends DeviceSimulator {
 
 		// Held constant across the extrapolation window rather than projected forward: over the fraction
 		// of a second a caller extrapolates by, a part-per-million rate error moves nothing measurable.
-		// The same applies to the wind and to the home scatter, which is constant until the next home.
+		// The same applies to the wind and to the home scatter, which is constant until the next FIND.
 		rightAscension += this.#trackingRateOffset + this.#homeScatterRightAscension
 		declination += this.#homeScatterDeclination
 
@@ -533,8 +543,8 @@ export class MountSimulator extends DeviceSimulator {
 	}
 
 	// Right ascension the drive has delivered beyond what the encoders counted, radians. Grows while
-	// tracking with a non-zero rate error and is cleared by a sync, which is what re-registers the
-	// bookkeeping against the sky.
+	// tracking with a non-zero rate error and is cleared by sync or successful FIND, which restore
+	// the controller's reference against the sky or the physical home index.
 	get trackingRateOffset(): Angle {
 		return this.#trackingRateOffset
 	}
@@ -985,8 +995,9 @@ export class MountSimulator extends DeviceSimulator {
 				if (vector.elements.ABORT === true) this.stop()
 				return
 			case 'TELESCOPE_HOME':
-				if (vector.elements.GO === true || vector.elements.FIND === true) this.home()
+				if (vector.elements.FIND === true) this.findHome()
 				else if (vector.elements.SET === true) this.setHome()
+				else if (vector.elements.GO === true) this.home()
 				return
 			case 'TELESCOPE_MOTION_NS':
 				if (vector.elements.MOTION_NORTH === true) this.moveNorth(true)
@@ -1188,6 +1199,8 @@ export class MountSimulator extends DeviceSimulator {
 		this.#clearPulseGuide()
 		this.#takeSlewControl()
 		this.#clearFlipMotion()
+		this.#homeAction = undefined
+		this.#homeAcquireRemaining = 0
 		this.#slewMode = mode
 		this.#slewTarget = target
 		this.#slewTargetPierSide = targetPierSide
@@ -1242,21 +1255,57 @@ export class MountSimulator extends DeviceSimulator {
 		this.#absorbAccumulatedError()
 	}
 
-	// Slews to the configured home position.
+	// Goes to the stored mechanical Home pose and pier side using the current reference, without
+	// acquiring the sensor or changing accumulated drive error. A connected, unparked mount is required.
 	home() {
 		if (!this.isConnected || this.isParked) return
-		const target = { rightAscension: this.#homeCoordinate.rightAscension, declination: this.#homeCoordinate.declination }
+		const target = this.#homeTarget()
 		const targetPierSide = this.#homePierSide
 		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
 		this.#startCoordinateSlew('HOME', target, targetPierSide, changesPierSide, false)
+		this.#homeAction = 'GO'
+		this.#homeAcquireRemaining = 0
 		this.#setHoming(true)
 	}
 
-	// Stores the current mechanical orientation and physical shaft branch as the new home position.
+	// Seeks the stored mechanical Home pose and pier side, then spends 0.5 simulated seconds acquiring
+	// the index. Remains Busy through both phases and recalibrates only after successful acquisition.
+	findHome() {
+		if (!this.isConnected || this.isParked) return
+		const target = this.#homeTarget()
+		const targetPierSide = this.#homePierSide
+		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
+		this.#startCoordinateSlew('HOME', target, targetPierSide, changesPierSide, false)
+		this.#homeAction = 'FIND'
+		this.#homeAcquireRemaining = 0
+		this.#setHoming(true)
+	}
+
+	// Stores the current local RA shaft orientation, mechanical declination, and pier side as Home.
+	// This changes neither the sensor residual nor accumulated tracking-rate drift.
 	setHome() {
-		this.#homeCoordinate.rightAscension = this.#mechanical.rightAscension
-		this.#homeCoordinate.declination = this.#mechanical.declination
-		this.#homePierSide = this.#storedPosePierSide()
+		const pierSide = this.#storedPosePierSide()
+		if (this.#homeAction !== undefined) {
+			this.#abortSlew()
+			this.#refreshSlewingState()
+		}
+		this.#homeHourAngle = normalizePI(this.#siderealTime() - this.#mechanical.rightAscension)
+		this.#homeDeclination = this.#mechanical.declination
+		this.#homePierSide = pierSide
+		this.#setHomeState('Ok')
+	}
+
+	// Converts the fixed Home shaft orientation into mechanical RA/Dec at estimated slew arrival.
+	// Three bounded predictions account for sidereal motion during the slew; the drift is much slower
+	// than every supported slew rate, so each prediction reduces the remaining timing error sharply.
+	#homeTarget(): EquatorialCoordinate {
+		const startTime = this.#utcTime + this.#utcTimeRemainder
+		const target = { rightAscension: normalizeAngle(this.siderealTimeAt(startTime) - this.#homeHourAngle), declination: this.#homeDeclination }
+		for (let prediction = 0; prediction < 3; prediction++) {
+			const duration = this.#coordinateSlewDuration(target, this.#homePierSide)
+			target.rightAscension = normalizeAngle(this.siderealTimeAt(startTime + duration * 1000) - this.#homeHourAngle)
+		}
+		return target
 	}
 
 	// Parks the mount at the configured park position.
@@ -1573,10 +1622,6 @@ export class MountSimulator extends DeviceSimulator {
 				advanceWind(this.#windState, slewSeconds, this.#windConfig, this.#normal)
 			}
 			this.#slewMidpointSample = undefined
-			if (this.#pendingHomeScatter) {
-				this.#pendingHomeScatter = false
-				this.#scatterHome()
-			}
 
 			// Arriving is a moment inside the step, and the trajectory has to say so. Recorded only at the
 			// end of the step, the arrival was left between two samples a whole tick apart and the history
@@ -1600,10 +1645,10 @@ export class MountSimulator extends DeviceSimulator {
 			// remainder alone charged every pulse twice for the part of the step the slew had taken. A
 			// pulse confined to the last tenth of a step arrived at a tenth of its strength, and one that
 			// had already finished before the mount arrived went on moving the axes afterwards.
-			if (settlingSeconds > 0) this.#advanceGuidedMotion(endTime - settlingSeconds * 1000, endTime)
-		} else {
-			this.#advanceGuidedMotion(startTime, endTime)
 		}
+		let freeStartTime = endTime - settlingSeconds * 1000
+		if (this.#homeAcquireRemaining > 0) freeStartTime = this.#advanceHomeAcquire(freeStartTime, endTime)
+		if (freeStartTime < endTime) this.#advanceGuidedMotion(freeStartTime, endTime)
 
 		// Retired only after the interval has been accounted for, so the tail of a pulse is never lost.
 		// Both axes are always visited: short-circuiting the second call would leave its queue growing.
@@ -1619,6 +1664,37 @@ export class MountSimulator extends DeviceSimulator {
 		// Autonomous flips begin after the interval has been fully accounted for, so crossing the threshold
 		// starts a Busy operation for the following tick instead of retroactively consuming elapsed time.
 		this.#updateAutomaticMeridianFlip()
+	}
+
+	// Holds the motors at Home while the sensor latches, then returns the first free-motion time in ms.
+	// Celestial RA drifts with the sky while the stopped worm stays still; wind and settling also evolve.
+	#advanceHomeAcquire(startTime: number, endTime: number) {
+		// An arrival at the step endpoint has no acquisition interval yet. The arrival's prior pier
+		// side must be recorded before any new-side sample at that same timestamp.
+		if (startTime >= endTime) return endTime
+		const duration = Math.min(this.#homeAcquireRemaining, (endTime - startTime) / 1000)
+		const acquisitionTime = startTime + duration * 1000
+		const steps = this.#settlingSteps(duration)
+		for (let step = 1; step <= steps; step++) {
+			const stepSeconds = duration / steps
+			const stepTime = startTime + ((acquisitionTime - startTime) * step) / steps
+			advanceWind(this.#windState, stepSeconds, this.#windConfig, this.#normal)
+			const priorPierSide = this.pierSide
+			this.#setMechanical(this.#mechanical.rightAscension + SIDEREAL_DRIFT_RATE * stepSeconds, this.#mechanical.declination)
+			this.#reconcilePierSideAfterPoleMotion(priorPierSide, 0, stepTime)
+			this.#advanceRingDown(stepSeconds, stepTime)
+			this.#recordBoresightAt(stepTime)
+		}
+		this.#homeAcquireRemaining -= duration
+		if (this.#homeAcquireRemaining <= 1e-12) this.#homeAcquireRemaining = 0
+		if (this.#homeAcquireRemaining === 0) {
+			this.#trackingRateOffset = 0
+			this.#scatterHome()
+			this.#homeAction = undefined
+			this.#setHomeState('Ok')
+			this.#recordBoresightAt(acquisitionTime)
+		}
+		return acquisitionTime
 	}
 
 	// Sub-steps a ring-down of `dtSeconds` is advanced and recorded in, so that a resonance faster than
@@ -1784,7 +1860,7 @@ export class MountSimulator extends DeviceSimulator {
 			// covers exactly PI would otherwise leave the slew Busy. That leftover is not real travel; it
 			// is snapped here and must not become a negative remainder either, or the rest of the step
 			// would run backwards on the clock.
-			remaining = maxStep > 0 && span <= maxStep ? dtSeconds * (1 - span / maxStep) : 0
+			remaining = span === 0 ? dtSeconds : maxStep > 0 && span <= maxStep ? dtSeconds * (1 - span / maxStep) : 0
 			const priorPierSide = this.pierSide
 			if (span > 0 && slewSeconds > 0) {
 				const shaftSampleTime = endTime - (remaining + slewSeconds / 2) * 1000
@@ -1829,13 +1905,14 @@ export class MountSimulator extends DeviceSimulator {
 			this.#clearFlipMotion()
 			this.#arrivalBoresightPierSide = arrivalBoresightPierSide
 			this.#setSlewing(false)
-			this.#setHoming(false)
-
-			// Homing zeroes the encoders on a sensor that does not trip in exactly the same place twice,
-			// so the mount ends up believing it is at the home position while the axes sit a little off
-			// it. Every coordinate derived afterwards inherits that difference, which is where an index
-			// error comes from in the first place. Redrawn on each home, so two homings in a row disagree.
-			this.#pendingHomeScatter = mode === 'HOME'
+			if (mode === 'HOME' && this.#homeAction === 'GO') {
+				this.#homeAction = undefined
+				this.#setHomeState('Ok')
+			} else if (mode === 'HOME' && this.#homeAction === 'FIND') {
+				this.#homeAcquireRemaining = HOME_ACQUIRE_DURATION
+			} else {
+				this.#setHoming(false)
+			}
 
 			if (mode === 'PARK') {
 				this.#setParking(false, true)
@@ -2051,10 +2128,10 @@ export class MountSimulator extends DeviceSimulator {
 		this.notify(this.#wormPhaseVector)
 	}
 
-	// Draws how far the axes really sat from the home position on this homing, in radians.
+	// Draws the new sensor repeatability residual at successful FIND acquisition, in radians.
 	//
 	// Gaussian on each axis with the configured repeatability as its standard deviation. A zero
-	// repeatability makes the sensor perfect and clears any scatter left by an earlier home.
+	// repeatability makes the sensor perfect and clears any scatter left by an earlier FIND.
 	#scatterHome() {
 		const scatter = this.#simulatesMechanics ? this.#mechanics.elements.HOME_SCATTER.value * ASEC2RAD : 0
 
@@ -2245,11 +2322,13 @@ export class MountSimulator extends DeviceSimulator {
 		this.#appliedDeclinationRing = 0
 	}
 
-	// Cancels any goto, flip, home, or park slew without committing a pending pier-side change.
+	// Cancels any goto, flip, home seek/acquisition, or park without committing a pending pier-side change.
 	#abortSlew() {
 		const hadCoordinateSlew = this.#slewTarget !== undefined
 		this.#slewMode = undefined
 		this.#slewTarget = undefined
+		this.#homeAction = undefined
+		this.#homeAcquireRemaining = 0
 		this.#clearFlipMotion()
 		if (hadCoordinateSlew) this.#resetAutomaticFlipHourAngle(this.#utcTime + this.#utcTimeRemainder, false)
 		this.#setHoming(false)
@@ -2275,8 +2354,13 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Updates the homing flag and notifies listeners.
 	#setHoming(value: boolean) {
-		if (this.isHoming === value) return
-		this.#home.state = value ? 'Busy' : 'Idle'
+		this.#setHomeState(value ? 'Busy' : 'Idle')
+	}
+
+	// Publishes the lifecycle of the active INDI home command.
+	#setHomeState(state: 'Idle' | 'Busy' | 'Ok' | 'Alert') {
+		if (this.#home.state === state) return
+		this.#home.state = state
 		this.notify(this.#home)
 	}
 
@@ -2315,11 +2399,12 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Initializes the mount with a realistic pole-pointing home position.
 	#refreshDynamicCoordinates(notify: boolean) {
-		this.#homeCoordinate.rightAscension = this.#siderealTime()
-		this.#parkCoordinate.rightAscension = this.#homeCoordinate.rightAscension
+		this.#homeHourAngle = 0
+		this.#homeDeclination = PIOVERTWO
+		this.#parkCoordinate.rightAscension = this.#siderealTime()
 		this.#homePierSide = 'NEITHER'
 		this.#parkPierSide = 'NEITHER'
-		this.#setMechanical(this.#homeCoordinate.rightAscension, this.#homeCoordinate.declination, notify)
+		this.#setMechanical(this.#parkCoordinate.rightAscension, this.#homeDeclination, notify)
 		this.#absorbAccumulatedError()
 	}
 
