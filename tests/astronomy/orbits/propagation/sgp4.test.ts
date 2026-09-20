@@ -3,7 +3,7 @@ import fs from 'fs/promises'
 import { vector } from '../../../../src/adapters/ephemeris/horizons'
 import type { PositionAndVelocity } from '../../../../src/astronomy/coordinates/astrometry'
 import { itrfToTemeByGmst, temeToItrfByGmst } from '../../../../src/astronomy/coordinates/frame'
-import { type DsInitOptions, internal, type MeanElements, parseTLE, recordFromOMM, recordFromTLE, sgp4 } from '../../../../src/astronomy/orbits/propagation/sgp4'
+import { type DsInitOptions, internal, type MeanElements, parseTLE, recordFromOMM, recordFromTLE, SGP4_WGS72, SGP4_WGS72_OLD, SGP4_WGS84, sgp4, type Sgp4GravityModel } from '../../../../src/astronomy/orbits/propagation/sgp4'
 import { Timescale, timeYMDHMS } from '../../../../src/astronomy/time/time'
 import { DAYMIN } from '../../../../src/core/constants'
 import { fileHandleSource, readLines } from '../../../../src/io/io'
@@ -56,6 +56,87 @@ const VALLADO_CASES = [
 	},
 ] as const
 
+const DEEP_SPACE_TLE = VALLADO_CASES[1].tle
+
+// TEME km / km/s from Python sgp4 2.25 (uv run --with sgp4==2.25), Satrec.twoline2rv(..., WGS72OLD|WGS72|WGS84).
+const GRAVITY_REFERENCES: ReadonlyArray<{
+	title: string
+	tle: ReturnType<typeof parseTLE>
+	gravity: Sgp4GravityModel
+	samples: ReadonlyArray<{ minutes: number; position: readonly [number, number, number]; velocity: readonly [number, number, number] }>
+}> = [
+	{
+		title: 'ISS near-Earth',
+		tle: ISS_TLE,
+		gravity: SGP4_WGS72_OLD,
+		samples: [
+			{ minutes: 0, position: [-3737.794176614203, 2970.4634867700756, 4831.152014481082], velocity: [-6.213956426575407, -3.703552589035793, -2.5222412725450534] },
+			{ minutes: 1440, position: [3643.2209602572975, -3199.1457144614315, -4765.938600323042], velocity: [6.379289789802434, 3.2644105953747644, 2.6890099860863415] },
+			{ minutes: 10080, position: [2999.875528591581, -4527.819934099846, -4088.151691088842], velocity: [6.5572301097308525, 0.8700608091352692, 3.854372125279752] },
+			{ minutes: 43200, position: [1975.9433084145687, 5679.9164415182495, -3172.2630546366936], velocity: [-5.90691555034373, -0.6353871027911963, -4.827236749726999] },
+		],
+	},
+	{
+		title: 'ISS near-Earth',
+		tle: ISS_TLE,
+		gravity: SGP4_WGS72,
+		samples: [
+			{ minutes: 0, position: [-3737.794177725673, 2970.4634876540035, 4831.152015920498], velocity: [-6.213956428421944, -3.7035525901372703, -2.522241273294621] },
+			{ minutes: 1440, position: [3643.2209611699077, -3199.1457153966776, -4765.938601883229], velocity: [6.37928979177511, 3.264410596461616, 2.689009986567801] },
+			{ minutes: 10080, position: [2999.875523440927, -4527.819935390398, -4088.1516968290384], velocity: [6.557230115816404, 0.8700608050379177, 3.8543721203344137] },
+			{ minutes: 43200, position: [1975.9434093512182, 5679.916458100012, -3172.2629663534194], velocity: [-5.906915504752462, -0.6353869790549685, -4.82723682572573] },
+		],
+	},
+	{
+		title: 'ISS near-Earth',
+		tle: ISS_TLE,
+		gravity: SGP4_WGS84,
+		samples: [
+			{ minutes: 0, position: [-3737.790418092595, 2970.475175787871, 4831.165024943218], velocity: [-6.213946083417224, -3.7035407871182873, -2.5222302001427988] },
+			{ minutes: 1440, position: [3643.2560923840606, -3199.1198365721934, -4765.906957316966], velocity: [6.379275636706228, 3.2644324282056845, 2.6890559951784834] },
+			{ minutes: 10080, position: [3000.1101340323353, -4527.809463404448, -4087.9684400028236], velocity: [6.557082971439185, 0.8702323275027644, 3.8546072568024567] },
+			{ minutes: 43200, position: [1975.0362708031573, 5679.668981464336, -3173.2485260672884], velocity: [-5.9074751063670154, -0.636556217272169, -4.826407972816281] },
+		],
+	},
+	{
+		title: 'Vallado SDP4 deep-space',
+		tle: DEEP_SPACE_TLE,
+		gravity: SGP4_WGS72_OLD,
+		samples: [
+			{ minutes: 0, position: [7473.371022692968, 428.9474830016233, 5828.748466090225], velocity: [5.107155389343545, 6.444680302711042, -0.1861332972887838] },
+			{ minutes: 1440, position: [9787.878271086283, 33753.32250917301, -15030.798829620995], velocity: [-1.094251559291602, 0.9235898878648345, -1.5223110008189658] },
+			{ minutes: 10080, position: [-4255.693150348227, 29254.94893152409, -24059.683739189706], velocity: [-1.3765205620842786, -1.336145630565554, -0.14513309463966417] },
+			{ minutes: 43200, position: [2036.934059098947, 25748.788561461366, -19522.407541045537], velocity: [-1.7917270375676497, -0.47756450764146285, -0.8339665928615592] },
+		],
+	},
+	{
+		title: 'Vallado SDP4 deep-space',
+		tle: DEEP_SPACE_TLE,
+		gravity: SGP4_WGS72,
+		samples: [
+			{ minutes: 0, position: [7473.371024914288, 428.9474831243528, 5828.748467826838], velocity: [5.107155390863484, 6.444680304626358, -0.18613329734153358] },
+			{ minutes: 1440, position: [9787.878362555224, 33753.32249666768, -15030.798746254333], velocity: [-1.0942515528493595, 0.9235899056171107, -1.52231100767063] },
+			{ minutes: 10080, position: [-4255.68835347476, 29254.95392098278, -24059.683465035978], velocity: [-1.3765206562081707, -1.3361448854013243, -0.14513369677043328] },
+			{ minutes: 43200, position: [2037.0225334639574, 25748.813350688164, -19522.36727716588], velocity: [-1.791725783091079, -0.47754956278885446, -0.8339778847730721] },
+		],
+	},
+	{
+		title: 'Vallado SDP4 deep-space',
+		tle: DEEP_SPACE_TLE,
+		gravity: SGP4_WGS84,
+		samples: [
+			{ minutes: 0, position: [7473.3599032879365, 428.90099009406805, 5828.770850028464], velocity: [5.10716775131343, 6.444664842035081, -0.18611269941800382] },
+			{ minutes: 1440, position: [9787.757441373433, 33753.339067624205, -15030.91096060269], velocity: [-1.0942645167263871, 0.9235593523204051, -1.5223007481343744] },
+			{ minutes: 10080, position: [-4264.666397349324, 29245.598291853137, -24060.19238963709], velocity: [-1.376347766342412, -1.3375412231458663, -0.14400734259580675] },
+			{ minutes: 43200, position: [1871.2915881897752, 25701.090883540423, -19596.780359371107], velocity: [-1.7939894401805663, -0.5054996709614675, -0.8127996304024315] },
+		],
+	},
+]
+
+function timeFromEpoch(epoch: { day: number; fraction: number; scale: number }, minutes: number) {
+	return { day: epoch.day, fraction: epoch.fraction + minutes / DAYMIN, scale: epoch.scale }
+}
+
 test('parse TLE', () => {
 	expect(ISS_TLE.name).toBe('ISS (ZARYA)')
 	expect(ISS_TLE.satelliteNumber).toBe('25544')
@@ -83,6 +164,56 @@ test('invalid OMM propagation throws', () => {
 	expect(() => sgp4(ISS_TLE.epoch, { ...ISS_OMM, ECCENTRICITY: 1.2 })).toThrow()
 })
 
+test('SGP4 gravity models match Vallado getgravconst source constants', () => {
+	expect(SGP4_WGS72_OLD.name).toBe('wgs72old')
+	expect(SGP4_WGS72_OLD.mu).toBe(398600.79964)
+	expect(SGP4_WGS72_OLD.radius).toBe(6378.135)
+	expect(SGP4_WGS72_OLD.xke).toBe(0.0743669161)
+	expect(SGP4_WGS72_OLD.j2).toBe(0.001082616)
+	expect(SGP4_WGS72_OLD.j3).toBe(-0.00000253881)
+	expect(SGP4_WGS72_OLD.j4).toBe(-0.00000165597)
+	expect(SGP4_WGS72_OLD.tumin).toBeCloseTo(1 / 0.0743669161, 12)
+	expect(SGP4_WGS72_OLD.j3OverJ2).toBeCloseTo(-0.00000253881 / 0.001082616, 12)
+	expect(SGP4_WGS72_OLD.velocityScale).toBeCloseTo((6378.135 * 0.0743669161) / 60, 12)
+
+	expect(SGP4_WGS72.name).toBe('wgs72')
+	expect(SGP4_WGS72.mu).toBe(398600.8)
+	expect(SGP4_WGS72.radius).toBe(6378.135)
+	expect(SGP4_WGS72.j2).toBe(0.001082616)
+	expect(SGP4_WGS72.j3).toBe(-0.00000253881)
+	expect(SGP4_WGS72.j4).toBe(-0.00000165597)
+	expect(SGP4_WGS72.xke).toBeCloseTo(60 / Math.sqrt((6378.135 * 6378.135 * 6378.135) / 398600.8), 15)
+
+	expect(SGP4_WGS84.name).toBe('wgs84')
+	expect(SGP4_WGS84.mu).toBe(398600.5)
+	expect(SGP4_WGS84.radius).toBe(6378.137)
+	expect(SGP4_WGS84.j2).toBe(0.00108262998905)
+	expect(SGP4_WGS84.j3).toBe(-0.00000253215306)
+	expect(SGP4_WGS84.j4).toBe(-0.00000161098761)
+})
+
+test('recordFromTLE and recordFromOMM default to WGS-72 and retain the selected model', () => {
+	expect(recordFromTLE(ISS_TLE).gravity).toBe(SGP4_WGS72)
+	expect(recordFromOMM(ISS_OMM).gravity).toBe(SGP4_WGS72)
+	expect(recordFromTLE(ISS_TLE, SGP4_WGS72_OLD).gravity).toBe(SGP4_WGS72_OLD)
+	expect(recordFromTLE(ISS_TLE, SGP4_WGS84).gravity).toBe(SGP4_WGS84)
+	expect(recordFromOMM(ISS_OMM, 'a', SGP4_WGS84).gravity).toBe(SGP4_WGS84)
+	expect(recordFromOMM(ISS_OMM, 'a').operationmode).toBe('a')
+	expect(recordFromOMM(ISS_OMM, 'i').operationmode).toBe('i')
+})
+
+test('direct sgp4(time, tle|omm) keeps WGS-72 behavior', () => {
+	const fromTle = sgp4(ISS_TLE.epoch, recordFromTLE(ISS_TLE, SGP4_WGS72))
+	const fromOmm = sgp4(ISS_TLE.epoch, recordFromOMM(ISS_OMM, 'i', SGP4_WGS72))
+	const directTle = sgp4(ISS_TLE.epoch, ISS_TLE)
+	const directOmm = sgp4(ISS_TLE.epoch, ISS_OMM)
+
+	expectVector(directTle[0], fromTle[0], 12)
+	expectVector(directTle[1], fromTle[1], 12)
+	expectVector(directOmm[0], fromOmm[0], 12)
+	expectVector(directOmm[1], fromOmm[1], 12)
+})
+
 for (const { title, tle, results } of VALLADO_CASES) {
 	for (const sample of results) {
 		test(`${title} at ${sample.time} min`, () => {
@@ -95,6 +226,59 @@ for (const { title, tle, results } of VALLADO_CASES) {
 		})
 	}
 }
+
+for (const { title, tle, gravity, samples } of GRAVITY_REFERENCES) {
+	test(`${title} ${gravity.name} record stays on that model`, () => {
+		const rec = recordFromTLE(tle, gravity)
+		expect(rec.gravity).toBe(gravity)
+		expect(rec.method === 'n' || rec.method === 'd').toBe(true)
+	})
+
+	for (const sample of samples) {
+		test(`${title} ${gravity.name} at ${sample.minutes} min`, () => {
+			const rec = recordFromTLE(tle, gravity)
+			const state = sgp4(timeFromEpoch(tle.epoch, sample.minutes), rec)
+			expectVector(state[0].map(toKilometer), sample.position, 7)
+			expectVector(state[1].map(toKilometerPerSecond), sample.velocity, 9)
+		})
+	}
+}
+
+test('WGS-72 and WGS-84 do not collapse after propagation', () => {
+	const wgs72 = sgp4(timeFromEpoch(ISS_TLE.epoch, 1440), recordFromTLE(ISS_TLE, SGP4_WGS72))
+	const wgs84 = sgp4(timeFromEpoch(ISS_TLE.epoch, 1440), recordFromTLE(ISS_TLE, SGP4_WGS84))
+	const dx = toKilometer(wgs72[0][0]) - toKilometer(wgs84[0][0])
+	const dy = toKilometer(wgs72[0][1]) - toKilometer(wgs84[0][1])
+	const dz = toKilometer(wgs72[0][2]) - toKilometer(wgs84[0][2])
+	expect(Math.hypot(dx, dy, dz)).toBeGreaterThan(0.01)
+})
+
+test('out-of-order propagation matches independent records for each gravity model', () => {
+	for (const gravity of [SGP4_WGS72_OLD, SGP4_WGS72, SGP4_WGS84]) {
+		const shared = recordFromTLE(DEEP_SPACE_TLE, gravity)
+		const later = sgp4(timeFromEpoch(DEEP_SPACE_TLE.epoch, 10080), shared)
+		const earlier = sgp4(timeFromEpoch(DEEP_SPACE_TLE.epoch, 0), shared)
+		const mid = sgp4(timeFromEpoch(DEEP_SPACE_TLE.epoch, 1440), shared)
+
+		expectVector(earlier[0], sgp4(timeFromEpoch(DEEP_SPACE_TLE.epoch, 0), recordFromTLE(DEEP_SPACE_TLE, gravity))[0], 12)
+		expectVector(mid[0], sgp4(timeFromEpoch(DEEP_SPACE_TLE.epoch, 1440), recordFromTLE(DEEP_SPACE_TLE, gravity))[0], 12)
+		expectVector(later[0], sgp4(timeFromEpoch(DEEP_SPACE_TLE.epoch, 10080), recordFromTLE(DEEP_SPACE_TLE, gravity))[0], 12)
+	}
+})
+
+test('OMM AFSPC and improved modes retain gravity and match WGS-72 at epoch', () => {
+	const improved = recordFromOMM(ISS_OMM, 'i', SGP4_WGS72)
+	const afspc = recordFromOMM(ISS_OMM, 'a', SGP4_WGS72)
+	expect(improved.operationmode).toBe('i')
+	expect(afspc.operationmode).toBe('a')
+	expect(improved.gravity).toBe(SGP4_WGS72)
+	expect(afspc.gravity).toBe(SGP4_WGS72)
+
+	const improvedState = sgp4(ISS_TLE.epoch, improved)
+	const afspcState = sgp4(ISS_TLE.epoch, afspc)
+	expectVector(improvedState[0].map(toKilometer), [-3737.794177725673, 2970.4634876540035, 4831.152015920498], 7)
+	expectVector(afspcState[0].map(toKilometer), [-3737.794177725673, 2970.4634876540035, 4831.152015920498], 7)
+})
 
 test('TEME to ITRF by GMST matches reference rotation', () => {
 	const itrf = temeToItrfByGmst([6400, 0, 0], 10)
