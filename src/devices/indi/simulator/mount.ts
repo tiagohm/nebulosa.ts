@@ -277,9 +277,11 @@ export class MountSimulator extends DeviceSimulator {
 	// manual motion and guiding all move it, and both the reported coordinate and the boresight are
 	// derived from it.
 	readonly #mechanical: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
-	// Home and park are stored as mechanical poses, since both coordinates and pier side determine the
-	// physical axis configuration the mount returns to.
-	readonly #homeCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
+	// Home keeps the local RA shaft orientation as hour angle in radians, plus declination and pier side.
+	// A fixed physical RA axis follows sidereal time in celestial coordinates even with its motor stopped.
+	#homeHourAngle: Angle = 0
+	#homeDeclination: Angle = PIOVERTWO
+	// Park retains its existing mechanical equatorial coordinate and pier side.
 	readonly #parkCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
 	#homePierSide: PierSide = 'NEITHER'
 	#parkPierSide: PierSide = 'NEITHER'
@@ -1257,7 +1259,7 @@ export class MountSimulator extends DeviceSimulator {
 	// acquiring the sensor or changing accumulated drive error. A connected, unparked mount is required.
 	home() {
 		if (!this.isConnected || this.isParked) return
-		const target = { rightAscension: this.#homeCoordinate.rightAscension, declination: this.#homeCoordinate.declination }
+		const target = this.#homeTarget()
 		const targetPierSide = this.#homePierSide
 		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
 		this.#startCoordinateSlew('HOME', target, targetPierSide, changesPierSide, false)
@@ -1270,7 +1272,7 @@ export class MountSimulator extends DeviceSimulator {
 	// the index. Remains Busy through both phases and recalibrates only after successful acquisition.
 	findHome() {
 		if (!this.isConnected || this.isParked) return
-		const target = { rightAscension: this.#homeCoordinate.rightAscension, declination: this.#homeCoordinate.declination }
+		const target = this.#homeTarget()
 		const targetPierSide = this.#homePierSide
 		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
 		this.#startCoordinateSlew('HOME', target, targetPierSide, changesPierSide, false)
@@ -1279,18 +1281,31 @@ export class MountSimulator extends DeviceSimulator {
 		this.#setHoming(true)
 	}
 
-	// Stores the current mechanical orientation and physical shaft branch as Home immediately. This
-	// changes neither the sensor residual nor accumulated tracking-rate drift.
+	// Stores the current local RA shaft orientation, mechanical declination, and pier side as Home.
+	// This changes neither the sensor residual nor accumulated tracking-rate drift.
 	setHome() {
 		const pierSide = this.#storedPosePierSide()
 		if (this.#homeAction !== undefined) {
 			this.#abortSlew()
 			this.#refreshSlewingState()
 		}
-		this.#homeCoordinate.rightAscension = this.#mechanical.rightAscension
-		this.#homeCoordinate.declination = this.#mechanical.declination
+		this.#homeHourAngle = normalizePI(this.#siderealTime() - this.#mechanical.rightAscension)
+		this.#homeDeclination = this.#mechanical.declination
 		this.#homePierSide = pierSide
 		this.#setHomeState('Ok')
+	}
+
+	// Converts the fixed Home shaft orientation into mechanical RA/Dec at estimated slew arrival.
+	// Three bounded predictions account for sidereal motion during the slew; the drift is much slower
+	// than every supported slew rate, so each prediction reduces the remaining timing error sharply.
+	#homeTarget(): EquatorialCoordinate {
+		const startTime = this.#utcTime + this.#utcTimeRemainder
+		const target = { rightAscension: normalizeAngle(this.siderealTimeAt(startTime) - this.#homeHourAngle), declination: this.#homeDeclination }
+		for (let prediction = 0; prediction < 3; prediction++) {
+			const duration = this.#coordinateSlewDuration(target, this.#homePierSide)
+			target.rightAscension = normalizeAngle(this.siderealTimeAt(startTime + duration * 1000) - this.#homeHourAngle)
+		}
+		return target
 	}
 
 	// Parks the mount at the configured park position.
@@ -2384,11 +2399,12 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Initializes the mount with a realistic pole-pointing home position.
 	#refreshDynamicCoordinates(notify: boolean) {
-		this.#homeCoordinate.rightAscension = this.#siderealTime()
-		this.#parkCoordinate.rightAscension = this.#homeCoordinate.rightAscension
+		this.#homeHourAngle = 0
+		this.#homeDeclination = PIOVERTWO
+		this.#parkCoordinate.rightAscension = this.#siderealTime()
 		this.#homePierSide = 'NEITHER'
 		this.#parkPierSide = 'NEITHER'
-		this.#setMechanical(this.#homeCoordinate.rightAscension, this.#homeCoordinate.declination, notify)
+		this.#setMechanical(this.#parkCoordinate.rightAscension, this.#homeDeclination, notify)
 		this.#absorbAccumulatedError()
 	}
 

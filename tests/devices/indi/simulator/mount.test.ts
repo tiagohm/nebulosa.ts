@@ -814,7 +814,8 @@ describe('mount simulator meridian flip', () => {
 			}
 			const homeRightAscension = normalizeAngle(full.simulator.siderealTimeAt(startTime) + hour(1))
 			expect(full.simulator.sampleBoresightTrajectory(acquisitionTime - 1, acquisitionTime - 1, 1, fullSample)).toBe(1)
-			const acquiredRightAscension = normalizeAngle(homeRightAscension + SIDEREAL_DRIFT_RATE * (0.5 - 0.001))
+			const homeHourAngle = normalizePI(full.simulator.siderealTimeAt(startTime) - homeRightAscension)
+			const acquiredRightAscension = normalizeAngle(full.simulator.siderealTimeAt(acquisitionTime - 1) - homeHourAngle)
 			expect(toArcsec(angularDistance(fullSample[0], fullSample[1], acquiredRightAscension, deg(20)))).toBeLessThan(0.05)
 			expect(full.simulator.sampleBoresightTrajectory(acquisitionTime + 1, acquisitionTime + 1, 1, fullSample)).toBe(1)
 			expect(toArcsec(angularDistance(fullSample[0], fullSample[1], homeRightAscension, deg(20)))).toBeGreaterThan(1)
@@ -868,10 +869,13 @@ describe('mount simulator meridian flip', () => {
 			simulator.advance(FAST_FLIP_DURATION)
 			expect(simulator.pierSide).toBe('EAST')
 			simulator.setHome()
+			const savedTime = simulator.utcTime
 			simulator.flipTo(simulator.rightAscension, simulator.declination)
 			simulator.advance(FAST_FLIP_DURATION)
 			expect(simulator.pierSide).toBe('WEST')
-			simulator.setTime({ utc: simulator.utcTime + 1000, offset: 0 })
+			// Put the predicted arrival at the instant Home was saved, so its moving RA target
+			// still requires exactly one physical half-turn and lands on the step boundary.
+			simulator.setTime({ utc: savedTime - FAST_FLIP_DURATION * 1000, offset: 0 })
 			const startTime = simulator.utcTime
 			simulator.findHome()
 			simulator.advance(FAST_FLIP_DURATION)
@@ -2272,14 +2276,16 @@ describe('mount simulator meridian flip', () => {
 				} else {
 					simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
 				}
-				simulator.setTrackingEnabled(true)
+				simulator.setTrackingEnabled(false)
 				simulator.findHome()
 				simulator.advance(FAST_FLIP_DURATION + 1)
 				expect(simulator.isHoming).toBeFalse()
 				expect(simulator.pierSide).toBe(side)
 				expect(simulator.mechanical.declination).toBeCloseTo(target.declination, 12)
-				if (pose === 'saved') expect(normalizePI(simulator.mechanical.rightAscension - target.rightAscension)).toBeCloseTo(SIDEREAL_DRIFT_RATE * 0.5, 12)
-				else expect(Number.isFinite(simulator.mechanical.rightAscension)).toBeTrue()
+				if (pose === 'saved') {
+					const homeHourAngle = normalizePI(lst - target.rightAscension)
+					expect(normalizePI(simulator.siderealTimeAt(simulator.utcTime) - simulator.mechanical.rightAscension - homeHourAngle)).toBeCloseTo(0, 8)
+				} else expect(Number.isFinite(simulator.mechanical.rightAscension)).toBeTrue()
 			} finally {
 				simulator.dispose()
 			}
@@ -4440,6 +4446,68 @@ describe('mount simulator pointing errors', () => {
 			expect(mount.wormPhase).toBe(wormPhase)
 			expect(mount.mechanical.rightAscension - rightAscension).toBeCloseTo(SIDEREAL_DRIFT_RATE * 0.5, 12)
 			expect(toArcsec(normalizePI(mount.siderealTimeAt(mount.utcTime) - mount.mechanical.rightAscension - hourAngle))).toBeCloseTo(0, 2)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('finds the same physical Home after an hour with the drive stopped', () => {
+		const { mount } = makeMount('mount.find.stopped.home')
+		try {
+			mount.setTime({ utc: Date.UTC(2026, 0, 1), offset: 0 })
+			mount.syncTo(hour(5), deg(20))
+			mount.setHome()
+			const homeHourAngle = normalizePI(mount.siderealTimeAt(mount.utcTime) - mount.mechanical.rightAscension)
+			mount.setTrackingEnabled(false)
+			mount.advance(3600)
+			mount.findHome()
+			mount.advance(0.25)
+			expect(mount.isSlewing).toBeFalse()
+			expect(mount.isHoming).toBeTrue()
+			mount.advance(0.3)
+			expect(mount.isHoming).toBeFalse()
+			expect(toArcsec(normalizePI(mount.siderealTimeAt(mount.utcTime) - mount.mechanical.rightAscension - homeHourAngle))).toBeCloseTo(0, 1)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	for (const operation of ['FIND', 'GO'] as const) {
+		test(`${operation} returns to the physical Home after an hour of tracking`, () => {
+			const { mount } = makeMount(`mount.${operation.toLowerCase()}.tracked.home`)
+			try {
+				mount.setTime({ utc: Date.UTC(2026, 0, 1), offset: 0 })
+				mount.syncTo(hour(5), deg(20))
+				mount.setHome()
+				const homeHourAngle = normalizePI(mount.siderealTimeAt(mount.utcTime) - mount.mechanical.rightAscension)
+				mount.setTrackingEnabled(true)
+				mount.advance(3600)
+				mount.setTrackingEnabled(false)
+				if (operation === 'FIND') mount.findHome()
+				else mount.home()
+				mount.advance(1)
+				expect(mount.isSlewing).toBeTrue()
+				mount.advance(10)
+				expect(mount.isHoming).toBeFalse()
+				expect(toArcsec(normalizePI(mount.siderealTimeAt(mount.utcTime) - mount.mechanical.rightAscension - homeHourAngle))).toBeCloseTo(0, 1)
+			} finally {
+				mount.dispose()
+			}
+		})
+	}
+
+	test('recalculates Home RA after a simulated clock change', () => {
+		const { mount } = makeMount('mount.find.clock.home')
+		try {
+			mount.setTime({ utc: Date.UTC(2026, 0, 1), offset: 0 })
+			mount.syncTo(hour(5), deg(20))
+			mount.setHome()
+			const homeHourAngle = normalizePI(mount.siderealTimeAt(mount.utcTime) - mount.mechanical.rightAscension)
+			mount.setTime({ utc: mount.utcTime + 3600_000, offset: 0 })
+			mount.findHome()
+			mount.advance(10)
+			expect(mount.isHoming).toBeFalse()
+			expect(toArcsec(normalizePI(mount.siderealTimeAt(mount.utcTime) - mount.mechanical.rightAscension - homeHourAngle))).toBeCloseTo(0, 1)
 		} finally {
 			mount.dispose()
 		}
