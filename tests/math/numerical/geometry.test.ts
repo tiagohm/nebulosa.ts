@@ -88,6 +88,19 @@ test('finite segment intersects an oblate ellipsoid only between its endpoints',
 	expect(intersectSegmentEllipsoid([2 + 1e-12, 0, 0], [-3, 0, 0], 2, 1).intersection).toBeGreaterThan(0)
 })
 
+test('a surface endpoint stays on the closed segment despite root roundoff', () => {
+	const target: Vec3 = [0.34724346041677584, 0.006061157147473775, -0.984807753012208]
+	const observer: Vec3 = [1.7362173020838791, 0.030305785737368873, -4.92403876506104]
+	const hit = intersectSegmentEllipsoid(observer, target, 2, 1)
+	expect(hit).toEqual({ intersects: true, intersection: 1, tangent: false })
+	const justOutside: Vec3 = [target[0] * (1 + 1e-12), target[1] * (1 + 1e-12), target[2] * (1 + 1e-12)]
+	expect(intersectSegmentEllipsoid(observer, justOutside, 2, 1).intersects).toBeFalse()
+})
+
+test('a segment entirely inside the ellipsoid intersects at its start', () => {
+	expect(intersectSegmentEllipsoid([0, 0, 0], [1, 0, 0], 2, 1)).toEqual({ intersects: true, intersection: 0, tangent: false })
+})
+
 test('ellipsoid tangent and near-limb classifications remain finite', () => {
 	const tangent = intersectSegmentEllipsoid([2, 0, 1], [-2, 0, 1], 2, 1)
 	expect(tangent).toEqual({ intersects: true, intersection: 0.5, tangent: true })

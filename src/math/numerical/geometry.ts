@@ -74,7 +74,7 @@ export interface SphericalMountBasis {
 export interface EllipsoidSegmentIntersection {
 	// Whether the closed segment touches or enters the ellipsoid.
 	readonly intersects: boolean
-	// First contact as a fraction of target minus observer, in [0, 1], when present.
+	// First contact as a fraction of target minus observer, in [0, 1], when present; zero if the observer starts inside.
 	readonly intersection?: number
 	// Whether the contact is a double root within coefficient-scaled roundoff.
 	readonly tangent: boolean
@@ -84,6 +84,7 @@ export interface EllipsoidSegmentIntersection {
 // Coordinates and positive radii share one unit. A zero-length segment has no line of sight.
 // The stable quadratic form preserves the near-observer root for distant targets; the discriminant
 // tolerance is scaled to its terms (64 ulps), so only numerical limb contacts are treated as tangent.
+// Endpoint membership and a roundoff-scale parameter guard keep surface endpoints in the closed segment.
 export function intersectSegmentEllipsoid(observer: Vec3, target: Vec3, equatorialRadius: number, polarRadius: number): EllipsoidSegmentIntersection {
 	const ox = observer[0] / equatorialRadius
 	const oy = observer[1] / equatorialRadius
@@ -95,19 +96,34 @@ export function intersectSegmentEllipsoid(observer: Vec3, target: Vec3, equatori
 	if (a === 0) return { intersects: false, tangent: false }
 	const b = 2 * (ox * dx + oy * dy + oz * dz)
 	const c = ox * ox + oy * oy + oz * oz - 1
+	if (c < 0) return { intersects: true, intersection: 0, tangent: false }
 	const discriminant = b * b - 4 * a * c
 	const tolerance = 64 * Number.EPSILON * (b * b + Math.abs(4 * a * c))
 	if (discriminant < -tolerance) return { intersects: false, tangent: false }
+	let intersection: number
+	let tangent: boolean
 	if (Math.abs(discriminant) <= tolerance) {
-		const intersection = -b / (2 * a)
-		return intersection >= 0 && intersection <= 1 ? { intersects: true, intersection, tangent: true } : { intersects: false, tangent: false }
+		intersection = -b / (2 * a)
+		tangent = true
+	} else {
+		const root = Math.sqrt(discriminant)
+		const q = -0.5 * (b + (b >= 0 ? root : -root))
+		const first = Math.min(q / a, c / q)
+		const second = Math.max(q / a, c / q)
+		intersection = first >= 0 ? first : second
+		tangent = false
 	}
-	const root = Math.sqrt(discriminant)
-	const q = -0.5 * (b + (b >= 0 ? root : -root))
-	const first = Math.min(q / a, c / q)
-	const second = Math.max(q / a, c / q)
-	const intersection = first >= 0 ? first : second
-	return intersection >= 0 && intersection <= 1 ? { intersects: true, intersection, tangent: false } : { intersects: false, tangent: false }
+	if (intersection >= 0 && intersection <= 1) return { intersects: true, intersection, tangent }
+	if (intersection > 1) {
+		const tx = target[0] / equatorialRadius
+		const ty = target[1] / equatorialRadius
+		const tz = target[2] / polarRadius
+		const targetNormSquared = tx * tx + ty * ty + tz * tz
+		if (targetNormSquared <= 1 || (intersection <= 1 + 8 * Number.EPSILON && targetNormSquared - 1 <= 8 * Number.EPSILON * (targetNormSquared + 1))) {
+			return { intersects: true, intersection: 1, tangent }
+		}
+	}
+	return { intersects: false, tangent: false }
 }
 
 // Canonical celestial pole direction (+z), the default mount polar axis.
