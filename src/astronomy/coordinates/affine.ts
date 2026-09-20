@@ -60,7 +60,7 @@ export function affineFromBase<T extends CoordinateFrame>(pv: T, frame: AffineFr
 	const v = matMulVec(r, dv, out?.[1])
 
 	if (frame.dRdtTimesRtAt) {
-		vecPlus(v, matMulVec(frame.dRdtTimesRtAt(time), p), v)
+		vecPlus(v, matMulVec(frame.dRdtTimesRtAt(time, r), p), v)
 	}
 
 	if (out) {
@@ -91,7 +91,7 @@ export function affineToBase<T extends CoordinateFrame>(pv: T, frame: AffineFram
 
 	// Build the drag-corrected velocity from the original position first, since
 	// computing p may overwrite pv[0] when `o` aliases `pv`.
-	const dv = frame.dRdtTimesRtAt ? vecMinus(pv[1], matMulVec(frame.dRdtTimesRtAt(time), pv[0])) : pv[1]
+	const dv = frame.dRdtTimesRtAt ? vecMinus(pv[1], matMulVec(frame.dRdtTimesRtAt(time, r), pv[0])) : pv[1]
 	const v = matTransposeMulVec(r, dv, out?.[1])
 	const originVelocity = frame.originVelocityAt?.(time)
 	if (originVelocity) vecPlus(v, originVelocity, v)
