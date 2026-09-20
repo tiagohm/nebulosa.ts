@@ -1,15 +1,17 @@
-import { EARTH_DRDT_TIMES_RT_MATRIX, ECLIPTIC_B1950_MATRIX, ECLIPTIC_J2000_MATRIX, FK4_MATRIX, FK5_MATRIX, GALACTIC_MATRIX, ICRS_MATRIX, MEAN_EQUATOR_AND_EQUINOX_AT_B1950_MATRIX, SUPERGALACTIC_MATRIX } from '../../core/constants'
-import { type Mat3, matIdentity, matMul, matMulTranspose, matMulVec, type MutMat3, matRotX, matRotZ, matTransposeMulVec } from '../../math/linear-algebra/mat3'
+import { DAYSEC, EARTH_DRDT_TIMES_RT_MATRIX, ECLIPTIC_B1950_MATRIX, ECLIPTIC_J2000_MATRIX, FK4_MATRIX, FK5_MATRIX, GALACTIC_MATRIX, ICRS_MATRIX, MEAN_EQUATOR_AND_EQUINOX_AT_B1950_MATRIX, SUPERGALACTIC_MATRIX } from '../../core/constants'
+import { type Mat3, matFill, matIdentity, matMinus, matMul, matMulScalar, matMulTranspose, matMulVec, type MutMat3, matRotX, matRotZ, matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecMinus, vecPlus } from '../../math/linear-algebra/vec3'
-import { cirsRotationMatrix, gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthRotationMatrix, meanObliquity, pmMatrix, precessionNutationMatrix, type Time, Timescale, timeJulianYear, trueObliquity, tt } from '../time/time'
+import { cirsRotationMatrix, gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthRotationMatrix, meanObliquity, pmMatrix, precessionNutationMatrix, type Time, Timescale, timeJulianYear, timeShift, trueObliquity, tt } from '../time/time'
 import { eraBp06 } from './erfa/erfa'
 
 // Reference-frame orientations and the rotations between them. A `Frame` is defined relative to the base
 // (GCRS/ICRS-oriented) frame by its base->frame rotation matrix at a time, plus an optional angular-
-// velocity operator W = dR/dt·Rᵀ for rotating frames (e.g. ITRS) so full position+velocity states
-// transform correctly. Covers ICRS/FK4/FK5, ecliptic and galactic systems, equator/equinox-of-date,
-// CIRS/TIRS/ITRS/TEME, IAU 2006 precession, and helpers to rotate a position or [p, v] state between any
-// pair. Handles orientation only; origin shifts and apparent-place corrections live in other modules.
+// velocity operator W = dR/dt·Rᵀ so full position+velocity states transform correctly. Earth-fixed
+// frames use the mean-spin operator; slow celestial frames (true/mean equator and ecliptic of date,
+// CIRS) use a numerical derivative of rotationAt. TEME omits W by SGP4 convention. Covers ICRS/FK4/FK5,
+// ecliptic and galactic systems, equator/equinox-of-date, CIRS/TIRS/ITRS/TEME, IAU 2006 precession, and
+// helpers to rotate a position or [p, v] state between any pair. Handles orientation only; origin
+// shifts and apparent-place corrections live in other modules.
 
 // A position vector, or a [position, velocity] state pair, to be rotated between frames.
 export type CoordinateFrame = Vec3 | readonly [Vec3, Vec3]
@@ -25,10 +27,62 @@ export type CoordinateFrameOutput<T extends CoordinateFrame> = T extends Vec3 ? 
 
 // A reference frame defined by its rotation from the base frame, plus an optional rotating-frame term.
 export interface Frame {
-	// Base->frame rotation matrix at the given time.
+	// Instantaneous base->frame orientation at the given time.
 	readonly rotationAt: (time: Time) => Mat3
-	// Optional angular-velocity operator W = dR/dt·Rᵀ (per day), present for frames that rotate with time.
-	readonly dRdtTimesRtAt?: (time: Time) => Mat3
+	// Optional angular-velocity operator W = dR/dt·Rᵀ (per day) required for full
+	// position+velocity transforms of a time-dependent frame:
+	//   v_frame = R v_base + W p_frame
+	// Time-dependent orientation without this operator is valid only when the
+	// frame's velocity convention treats the axes as quasi-inertial (TEME).
+	// The optional `rotation` is R(t) already evaluated by frameAt/frameToBase,
+	// so a numerical derivative can skip a third rotationAt(time) call.
+	readonly dRdtTimesRtAt?: (time: Time, rotation?: Mat3) => Mat3
+}
+
+// Centered-difference step for slow celestial-frame drift, in days.
+// Precession and nutation change on timescales of days to millennia, so a
+// 60 s step keeps R(t+h) − R(t−h) well above roundoff while the O(h²)
+// truncation stays far below AU/day velocity and rad/day angular-rate
+// accuracy. Checked against 30 s and 120 s in frame.test.ts.
+const CELESTIAL_FRAME_DRIFT_STEP = 60 / DAYSEC
+
+// Numerical W = dR/dt · Rᵀ (per day) of an orthonormal `rotationAt`.
+// Differentiates the final matrix so every term rotationAt includes
+// (precession, nutation, obliquity, CIO, frame bias) is present. The
+// optional `rotation` is R(t) already evaluated by frameAt/frameToBase.
+// Projects onto so(3) so a tiny symmetric numerical leftover cannot
+// inject radial scale into transformed velocities. Does not mutate
+// cached rotation matrices.
+function numericalFrameDriftMatrix(rotationAt: (time: Time) => Mat3, time: Time, rotation?: Mat3, step: number = CELESTIAL_FRAME_DRIFT_STEP): Mat3 {
+	const r = rotation ?? rotationAt(time)
+	const rp = rotationAt(timeShift(time, step))
+	const rm = rotationAt(timeShift(time, -step))
+	const d = matMinus(rp, rm)
+	matMulScalar(d, 0.5 / step, d)
+	const a = matMulTranspose(d, r, d)
+	const w01 = 0.5 * (a[1] - a[3])
+	const w02 = 0.5 * (a[2] - a[6])
+	const w12 = 0.5 * (a[5] - a[7])
+	return matFill(a, 0, w01, w02, -w01, 0, w12, -w02, -w12, 0)
+}
+
+// Bias-precession matrix (IAU 2006 rbp) from the base to the mean equator and equinox of date.
+function meanEquatorAndEquinoxOfDateRotation(time: Time) {
+	const t = tt(time)
+	return eraBp06(t.day, t.fraction)[2]
+}
+
+// True ecliptic of date: Rx(true obliquity) · PN.
+function eclipticRotation(time: Time) {
+	const m = matIdentity()
+	return matMul(matRotX(trueObliquity(time), m), precessionNutationMatrix(time), m)
+}
+
+// Mean ecliptic of date: Rx(mean obliquity) · BP.
+function meanEclipticOfDateRotation(time: Time) {
+	const t = tt(time)
+	const m = matRotX(meanObliquity(time))
+	return matMul(m, eraBp06(t.day, t.fraction)[2], m)
 }
 
 // J2000.0 epoch in TT, the reference equinox for FK5 precession.
@@ -83,8 +137,11 @@ export const SUPERGALACTIC: Frame = {
 }
 
 // The dynamical frame of the Earth's true equator and equinox of date.
+// rotationAt is the IAU 2006/2000A precession-nutation matrix; dRdtTimesRtAt
+// is the numerical W = dR/dt·Rᵀ of that complete matrix (per day).
 export const TRUE_EQUATOR_AND_EQUINOX_OF_DATE: Frame = {
-	rotationAt: (time) => precessionNutationMatrix(time),
+	rotationAt: precessionNutationMatrix,
+	dRdtTimesRtAt: (time, rotation) => numericalFrameDriftMatrix(precessionNutationMatrix, time, rotation),
 }
 
 // The International Celestial Reference System (ICRS).
@@ -92,34 +149,29 @@ export const ICRS: Frame = {
 	rotationAt: () => ICRS_MATRIX,
 }
 
-// Ecliptic coordinates at time.
+// Ecliptic coordinates at time (true ecliptic of date).
+// dRdtTimesRtAt is the numerical W of the complete Rx(ε)·PN rotation (per day).
 export const ECLIPTIC: Frame = {
-	rotationAt: (time) => {
-		const m = matIdentity()
-		return matMul(matRotX(trueObliquity(time), m), precessionNutationMatrix(time), m)
-	},
+	rotationAt: eclipticRotation,
+	dRdtTimesRtAt: (time, rotation) => numericalFrameDriftMatrix(eclipticRotation, time, rotation),
 }
 
 // The dynamical frame of the Earth's mean equator and equinox of date
 // (precession only, no nutation), measured from the base via the IAU 2006
 // bias-precession matrix (eraBp06 rbp). Use TRUE_EQUATOR_AND_EQUINOX_OF_DATE
-// when nutation is required.
+// when nutation is required. dRdtTimesRtAt is the numerical W of rbp (per day).
 export const MEAN_EQUATOR_AND_EQUINOX_OF_DATE: Frame = {
-	rotationAt: (time) => {
-		const t = tt(time)
-		return eraBp06(t.day, t.fraction)[2]
-	},
+	rotationAt: meanEquatorAndEquinoxOfDateRotation,
+	dRdtTimesRtAt: (time, rotation) => numericalFrameDriftMatrix(meanEquatorAndEquinoxOfDateRotation, time, rotation),
 }
 
 // Mean ecliptic and equinox of date: the mean equator/equinox of date rotated by
 // the mean obliquity, i.e. precession only and no nutation. This is the mean
-// counterpart of ECLIPTIC (which is the true ecliptic of date).
+// counterpart of ECLIPTIC (which is the true ecliptic of date). dRdtTimesRtAt
+// is the numerical W of the complete Rx(ε0)·BP rotation (per day).
 export const MEAN_ECLIPTIC_OF_DATE: Frame = {
-	rotationAt: (time) => {
-		const t = tt(time)
-		const m = matRotX(meanObliquity(time))
-		return matMul(m, eraBp06(t.day, t.fraction)[2], m)
-	},
+	rotationAt: meanEclipticOfDateRotation,
+	dRdtTimesRtAt: (time, rotation) => numericalFrameDriftMatrix(meanEclipticOfDateRotation, time, rotation),
 }
 
 // The Celestial Intermediate Reference System (CIRS): the geometric, CIO-based
@@ -127,9 +179,10 @@ export const MEAN_ECLIPTIC_OF_DATE: Frame = {
 // (eraC2i06a, cached per Time via cirsRotationMatrix). This is the pure rotation
 // from the base to CIRS and does NOT include aberration, light deflection,
 // parallax, or refraction; for the apparent place use the transforms in
-// astrometry.ts.
+// astrometry.ts. dRdtTimesRtAt is the numerical W of that CIO/CIP rotation (per day).
 export const CIRS: Frame = {
 	rotationAt: cirsRotationMatrix,
+	dRdtTimesRtAt: (time, rotation) => numericalFrameDriftMatrix(cirsRotationMatrix, time, rotation),
 }
 
 // The Terrestrial Intermediate Reference System (TIRS): Earth-fixed apart from
@@ -148,9 +201,14 @@ export const TIRS: Frame = {
 // The True Equator, Mean Equinox (TEME) frame used by the SGP4 satellite model.
 // It shares the true equator of date but uses the mean (not true) equinox, so it
 // differs from TRUE_EQUATOR_AND_EQUINOX_OF_DATE by the equation of the equinoxes
-// (GAST − GMST) about the pole:  base → TEME = Rz(GAST − GMST) · PN. TEME is
-// quasi-inertial (it does not rotate with the Earth) so there is no velocity drag
-// term. Convert an SGP4 state to ITRS with frameToFrame(pv, TEME, ITRS, time) —
+// (GAST − GMST) about the pole:  base → TEME = Rz(GAST − GMST) · PN.
+//
+// rotationAt(time) does change with precession, nutation, and the equation of
+// the equinoxes, but SGP4 velocity is conventionally treated as already
+// expressed on those axes. There is therefore no dRdtTimesRtAt: the absence is
+// the Vallado/AIAA and Skyfield quasi-inertial velocity convention, not a
+// missing implementation. TEME→ITRF then applies the Earth-rotation term via
+// ITRS. Convert an SGP4 state to ITRS with frameToFrame(pv, TEME, ITRS, time) —
 // which reproduces temeToItrf — or to GCRS with frameToFrame(pv, TEME, ICRS, time).
 export const TEME: Frame = {
 	rotationAt: (time) => {
@@ -255,7 +313,7 @@ export function frameAt<T extends CoordinateFrame>(pv: T, frame: Frame, time: Ti
 
 	if (frame.dRdtTimesRtAt) {
 		// p is already the transformed (frame) position, so W · p adds the drag term.
-		vecPlus(v, matMulVec(frame.dRdtTimesRtAt(time), p), v)
+		vecPlus(v, matMulVec(frame.dRdtTimesRtAt(time, r), p), v)
 	}
 
 	if (out) {
@@ -287,7 +345,7 @@ export function frameToBase<T extends CoordinateFrame>(pv: T, frame: Frame, time
 	if (frame.dRdtTimesRtAt) {
 		// Build the drag-corrected velocity from the original position first, since
 		// computing p may overwrite pv[0] when `o` aliases `pv`.
-		const v = vecMinus(pv[1], matMulVec(frame.dRdtTimesRtAt(time), pv[0]), out?.[1])
+		const v = vecMinus(pv[1], matMulVec(frame.dRdtTimesRtAt(time, r), pv[0]), out?.[1])
 		matTransposeMulVec(r, v, v)
 		const p = matTransposeMulVec(r, pv[0], out?.[0])
 
