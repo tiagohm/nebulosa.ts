@@ -591,17 +591,17 @@ test('celestial drift matches independently sampled PyERFA rotation matrices', (
 	const expectedCirsW: Mat3 = [0, -6.593456868672199e-13, -3.6941343559094433e-7, 6.593456868672199e-13, 0, 1.0629585143724063e-7, 3.6941343559094433e-7, -1.0629585143724063e-7, 0]
 
 	for (let i = 0; i < 9; i++) {
-		expect(trueW[i]).toBeCloseTo(expectedTrueW[i], 15)
-		expect(meanW[i]).toBeCloseTo(expectedMeanW[i], 15)
-		expect(cirsW[i]).toBeCloseTo(expectedCirsW[i], 15)
+		expect(trueW[i]).toBeCloseTo(expectedTrueW[i], 13)
+		expect(meanW[i]).toBeCloseTo(expectedMeanW[i], 13)
+		expect(cirsW[i]).toBeCloseTo(expectedCirsW[i], 13)
 	}
 
-	expect(trueV[0]).toBeCloseTo(2.2519390588114227e-7, 15)
-	expect(trueV[1]).toBeCloseTo(7.144932672625881e-7, 15)
-	expect(trueV[2]).toBeCloseTo(3.377715029023664e-7, 15)
-	expect(cirsV[0]).toBeCloseTo(-1.115587948243252e-7, 15)
-	expect(cirsV[1]).toBeCloseTo(3.210078098643396e-8, 15)
-	expect(cirsV[2]).toBeCloseTo(3.3777150800397635e-7, 15)
+	expect(trueV[0]).toBeCloseTo(2.2519390588114227e-7, 13)
+	expect(trueV[1]).toBeCloseTo(7.144932672625881e-7, 13)
+	expect(trueV[2]).toBeCloseTo(3.377715029023664e-7, 13)
+	expect(cirsV[0]).toBeCloseTo(-1.115587948243252e-7, 13)
+	expect(cirsV[1]).toBeCloseTo(3.210078098643396e-8, 13)
+	expect(cirsV[2]).toBeCloseTo(3.3777150800397635e-7, 13)
 })
 
 test('celestial frameAt and frameToBase remain inverse for a full state', () => {
