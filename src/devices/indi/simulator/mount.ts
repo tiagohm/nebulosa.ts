@@ -1654,6 +1654,9 @@ export class MountSimulator extends DeviceSimulator {
 	// Holds the axes at Home while the sensor latches, then returns the first free-motion time in ms.
 	// Wind and settling continue over the consumed simulated seconds; the stopped worm does not turn.
 	#advanceHomeAcquire(startTime: number, endTime: number) {
+		// An arrival at the step endpoint has no acquisition interval yet. The arrival's prior pier
+		// side must be recorded before any new-side sample at that same timestamp.
+		if (startTime >= endTime) return endTime
 		const duration = Math.min(this.#homeAcquireRemaining, (endTime - startTime) / 1000)
 		const acquisitionTime = startTime + duration * 1000
 		const steps = this.#settlingSteps(duration)

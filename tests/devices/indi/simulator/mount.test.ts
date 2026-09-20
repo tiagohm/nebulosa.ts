@@ -773,6 +773,118 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('splits a moving FIND at seek arrival, acquisition, and resumed tracking', () => {
+		const full = makeMeridianFlipMount('mount.find.moving.full')
+		const stepped = makeMeridianFlipMount('mount.find.moving.stepped')
+		try {
+			for (const { client, simulator } of [full, stepped]) {
+				simulator.setTime({ utc: Date.UTC(2026, 0, 1), offset: 0 })
+				const homeRightAscension = normalizeAngle(simulator.siderealTimeAt(simulator.utcTime) + hour(1))
+				simulator.syncTo(homeRightAscension, deg(20))
+				simulator.setHome()
+				simulator.syncTo(normalizeAngle(homeRightAscension + deg(1)), deg(20))
+				client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { MECHANICS: true, TRACKING_RATE: true } })
+				client.sendNumber({ device: simulator.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, HOME_SCATTER: 600 } })
+				client.sendNumber({ device: simulator.name, name: 'MOUNT_TRACKING_RATE', elements: { ...NO_TRACKING_RATE, BIAS: 1000 } })
+				simulator.setTrackingEnabled(true)
+				simulator.findHome()
+			}
+			const startTime = full.simulator.utcTime
+			const seekDuration = deg(1) / FAST_SLEW_SPEED
+			full.simulator.advance(seekDuration + 0.7)
+			stepped.simulator.advance(seekDuration / 2)
+			stepped.simulator.advance(seekDuration / 2 + 0.25)
+			expect(stepped.simulator.isHoming).toBeTrue()
+			stepped.simulator.advance(0.45)
+			expect(full.simulator.isHoming).toBeFalse()
+			expect(stepped.simulator.isHoming).toBeFalse()
+			expect(full.simulator.utcTime).toBe(stepped.simulator.utcTime)
+			expect(full.simulator.mechanical.rightAscension).toBeCloseTo(stepped.simulator.mechanical.rightAscension, 12)
+			expect(full.simulator.mechanical.declination).toBeCloseTo(stepped.simulator.mechanical.declination, 12)
+			expect(full.simulator.boresight.rightAscension).toBeCloseTo(stepped.simulator.boresight.rightAscension, 12)
+			expect(full.simulator.boresight.declination).toBeCloseTo(stepped.simulator.boresight.declination, 12)
+			expect(full.simulator.trackingRateOffset).toBeCloseTo(stepped.simulator.trackingRateOffset, 12)
+			const acquisitionTime = startTime + (seekDuration + 0.5) * 1000
+			const fullSample = new Float64Array(2)
+			const steppedSample = new Float64Array(2)
+			for (const sampleTime of [acquisitionTime - 1, acquisitionTime + 1]) {
+				expect(full.simulator.sampleBoresightTrajectory(sampleTime, sampleTime, 1, fullSample)).toBe(1)
+				expect(stepped.simulator.sampleBoresightTrajectory(sampleTime, sampleTime, 1, steppedSample)).toBe(1)
+				expect(toArcsec(angularDistance(fullSample[0], fullSample[1], steppedSample[0], steppedSample[1]))).toBeCloseTo(0, 5)
+			}
+			const homeRightAscension = normalizeAngle(full.simulator.siderealTimeAt(startTime) + hour(1))
+			expect(full.simulator.sampleBoresightTrajectory(acquisitionTime - 1, acquisitionTime - 1, 1, fullSample)).toBe(1)
+			expect(toArcsec(angularDistance(fullSample[0], fullSample[1], homeRightAscension, deg(20)))).toBeLessThan(0.05)
+			expect(full.simulator.sampleBoresightTrajectory(acquisitionTime + 1, acquisitionTime + 1, 1, fullSample)).toBe(1)
+			expect(toArcsec(angularDistance(fullSample[0], fullSample[1], homeRightAscension, deg(20)))).toBeGreaterThan(1)
+		} finally {
+			full.simulator.dispose()
+			stepped.simulator.dispose()
+		}
+	})
+
+	test('holds the worm while wind and settling evolve during sensor acquisition', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.find.acquire.dynamic')
+		try {
+			const homeRightAscension = normalizeAngle(simulator.siderealTimeAt(simulator.utcTime) + hour(1))
+			simulator.syncTo(homeRightAscension, deg(20))
+			simulator.setHome()
+			simulator.syncTo(normalizeAngle(homeRightAscension + deg(1)), deg(20))
+			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { SETTLING: true, WIND: true, TRACKING_RATE: true } })
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 100, FREQUENCY: 2, DAMPING_RATIO: 0.1 } })
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_WIND', elements: { AMPLITUDE: 10, CORRELATION_TIME: 10 } })
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_TRACKING_RATE', elements: { ...NO_TRACKING_RATE, BIAS: 1000 } })
+			simulator.setTrackingEnabled(true)
+			simulator.findHome()
+			simulator.advance(deg(1) / FAST_SLEW_SPEED + 0.01)
+			expect(simulator.isHoming).toBeTrue()
+			const worm = simulator.wormPhase
+			const mechanical = { ...simulator.mechanical }
+			const boresight = { ...simulator.boresight }
+			simulator.advance(0.1)
+			expect(simulator.isHoming).toBeTrue()
+			expect(simulator.wormPhase).toBe(worm)
+			expect(simulator.trackingRateOffset).toBe(0)
+			expect(angularDistance(simulator.mechanical.rightAscension, simulator.mechanical.declination, mechanical.rightAscension, mechanical.declination)).toBeGreaterThan(0)
+			expect(angularDistance(simulator.boresight.rightAscension, simulator.boresight.declination, boresight.rightAscension, boresight.declination)).toBeGreaterThan(0)
+			simulator.advance(0.39)
+			expect(simulator.isHoming).toBeFalse()
+			expect(simulator.isTracking).toBeTrue()
+		} finally {
+			simulator.dispose()
+		}
+	})
+
+	test('records one pier-side jump when FIND seek ends exactly at a step boundary', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.find.exact.arrival.side')
+		try {
+			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { FLEXURE: true } })
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_FLEXURE', elements: { TUBE_FLEXURE: 0, PIER_WEST_RA: 0, PIER_WEST_DEC: 90 } })
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			simulator.setTrackingEnabled(true)
+			simulator.flipTo(simulator.rightAscension, simulator.declination)
+			simulator.advance(FAST_FLIP_DURATION)
+			expect(simulator.pierSide).toBe('EAST')
+			simulator.setHome()
+			simulator.flipTo(simulator.rightAscension, simulator.declination)
+			simulator.advance(FAST_FLIP_DURATION)
+			expect(simulator.pierSide).toBe('WEST')
+			simulator.setTime({ utc: simulator.utcTime + 1000, offset: 0 })
+			const startTime = simulator.utcTime
+			simulator.findHome()
+			simulator.advance(FAST_FLIP_DURATION)
+			expect(simulator.isHoming).toBeTrue()
+			expect(simulator.isSlewing).toBeFalse()
+			const arrivalTime = startTime + FAST_FLIP_DURATION * 1000
+			const jump = new Float64Array(4)
+			expect(simulator.sampleBoresightTrajectory(arrivalTime, arrivalTime, 2, jump)).toBe(2)
+			expect(toArcsec(jump[3] - jump[1])).toBeCloseTo(90, 3)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('carries declination-shaft momentum through a pier-side flip', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.declination')
 
@@ -4337,9 +4449,15 @@ describe('mount simulator pointing errors', () => {
 
 	test('cancels find home during seek and acquisition without a late sensor redraw', () => {
 		for (const phase of ['seek', 'acquire'] as const) {
-			const { client, mount } = makeMount(`mount.find.abort.${phase}`, 'MECHANICS')
+			const { client, mount } = makeMount(`mount.find.abort.${phase}`, 'MECHANICS', 'TRACKING_RATE')
 			try {
 				client.sendNumber({ device: mount.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, HOME_SCATTER: 600 } })
+				client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { ...NO_TRACKING_RATE, BIAS: 1000 } })
+				mount.setTrackingEnabled(true)
+				mount.advance(600)
+				mount.setTrackingEnabled(false)
+				const drift = mount.trackingRateOffset
+				expect(Math.abs(drift)).toBeGreaterThan(0)
 				if (phase === 'acquire') mount.setHome()
 				mount.findHome()
 				mount.advance(0.25)
@@ -4347,7 +4465,8 @@ describe('mount simulator pointing errors', () => {
 				mount.stop()
 				mount.advance(2)
 				expect(mount.isHoming).toBeFalse()
-				expect(normalizePI(mount.boresight.rightAscension - mount.mechanical.rightAscension)).toBe(0)
+				expect(mount.trackingRateOffset).toBe(drift)
+				expect(normalizePI(mount.boresight.rightAscension - mount.mechanical.rightAscension)).toBeCloseTo(drift, 12)
 				expect(mount.boresight.declination - mount.mechanical.declination).toBe(0)
 			} finally {
 				mount.dispose()
@@ -4361,9 +4480,14 @@ describe('mount simulator pointing errors', () => {
 			['disconnect', 'acquire'],
 			['goto', 'acquire'],
 		] as const) {
-			const { client, mount } = makeMount(`mount.find.superseded.${operation}.${phase}`, 'MECHANICS')
+			const { client, mount } = makeMount(`mount.find.superseded.${operation}.${phase}`, 'MECHANICS', 'TRACKING_RATE')
 			try {
 				client.sendNumber({ device: mount.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, HOME_SCATTER: 600 } })
+				client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { ...NO_TRACKING_RATE, BIAS: 1000 } })
+				mount.setTrackingEnabled(true)
+				mount.advance(600)
+				mount.setTrackingEnabled(false)
+				const drift = mount.trackingRateOffset
 				if (phase === 'acquire') mount.setHome()
 				mount.findHome()
 				mount.advance(0.25)
@@ -4371,7 +4495,8 @@ describe('mount simulator pointing errors', () => {
 				else mount.goTo(hour(6), deg(25))
 				mount.advance(2)
 				expect(mount.isHoming).toBeFalse()
-				expect(normalizePI(mount.boresight.rightAscension - mount.mechanical.rightAscension)).toBe(0)
+				expect(mount.trackingRateOffset).toBe(drift)
+				expect(normalizePI(mount.boresight.rightAscension - mount.mechanical.rightAscension)).toBeCloseTo(drift, 12)
 				expect(mount.boresight.declination - mount.mechanical.declination).toBe(0)
 			} finally {
 				mount.dispose()
