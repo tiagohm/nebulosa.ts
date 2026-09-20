@@ -1,5 +1,4 @@
 const GITHUB_URL = 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/'
-const ASTROMETRY_4100_INDEX_URL = 'https://data.astrometry.net/4100'
 
 const FILES = {
 	'finals2000A.txt': [undefined, 'iers'],
@@ -10,6 +9,7 @@ const FILES = {
 	'de421.bsp': [undefined, 'daf', 'spk'],
 	'moon_pa_de421_1900-2050.bpc': [undefined, 'daf'],
 	'hyg_v42.csv': [undefined, 'hyg'],
+	'hip_main.dat': ['https://cdsarc.cds.unistra.fr/ftp/cats/I/239/hip_main.dat', 'hipparcos'],
 	'indi.log': [undefined, 'indi'],
 	'de440s.bsp': [undefined, 'daf', 'spk'],
 	'65803_Didymos.bsp': [undefined, 'spk'],
@@ -55,21 +55,21 @@ const FILES = {
 	'NGC3372-zlib-16.1.xisf': [undefined, 'xisf'],
 	'NGC3372-zlib+sh-16.1.xisf': [undefined, 'xisf'],
 	'HNSKY_g14.tar': [undefined, 'hnsky'],
-	'index-4119.fits': [`${ASTROMETRY_4100_INDEX_URL}/index-4119.fits`],
-	'index-4118.fits': [`${ASTROMETRY_4100_INDEX_URL}/index-4118.fits`],
-	'index-4117.fits': [`${ASTROMETRY_4100_INDEX_URL}/index-4117.fits`],
-	'index-4116.fits': [`${ASTROMETRY_4100_INDEX_URL}/index-4116.fits`, 'libastrometry'],
-	'index-4115.fits': [`${ASTROMETRY_4100_INDEX_URL}/index-4115.fits`],
-	'index-4114.fits': [`${ASTROMETRY_4100_INDEX_URL}/index-4114.fits`],
-	'index-4113.fits': [`${ASTROMETRY_4100_INDEX_URL}/index-4113.fits`],
-	'index-4112.fits': [`${ASTROMETRY_4100_INDEX_URL}/index-4112.fits`],
-	'index-4111.fits': [`${ASTROMETRY_4100_INDEX_URL}/index-4111.fits`],
+	'index-4119.fits': ['https://data.astrometry.net/4100/index-4119.fits'],
+	'index-4118.fits': ['https://data.astrometry.net/4100/index-4118.fits'],
+	'index-4117.fits': ['https://data.astrometry.net/4100/index-4117.fits'],
+	'index-4116.fits': ['https://data.astrometry.net/4100/index-4116.fits', 'libastrometry'],
+	'index-4115.fits': ['https://data.astrometry.net/4100/index-4115.fits'],
+	'index-4114.fits': ['https://data.astrometry.net/4100/index-4114.fits'],
+	'index-4113.fits': ['https://data.astrometry.net/4100/index-4113.fits'],
+	'index-4112.fits': ['https://data.astrometry.net/4100/index-4112.fits'],
+	'index-4111.fits': ['https://data.astrometry.net/4100/index-4111.fits'],
 } as const
 
 const downloading = new Map<string, Promise<Bun.BunFile>>()
 
 type FileName = keyof typeof FILES
-type FileTag = 'alpaca.client' | 'alpaca.server' | 'astap' | 'csv' | 'daf' | 'fits' | 'hnsky' | 'hyg' | 'iers' | 'image' | 'indi' | 'libastrometry' | 'location' | 'sao' | 'spk' | 'stardetector' | 'starmatching' | 'stellarium' | 'time' | 'xisf'
+type FileTag = 'alpaca.client' | 'alpaca.server' | 'astap' | 'csv' | 'daf' | 'fits' | 'hipparcos' | 'hnsky' | 'hyg' | 'iers' | 'image' | 'indi' | 'libastrometry' | 'location' | 'sao' | 'spk' | 'stardetector' | 'starmatching' | 'stellarium' | 'time' | 'xisf'
 
 export async function download(name: FileName) {
 	const task = downloading.get(name)
@@ -83,7 +83,7 @@ export async function download(name: FileName) {
 	downloading.set(name, promise)
 
 	const file = Bun.file(`data/${name}`)
-	const signal = AbortSignal.timeout(30000)
+	const signal = AbortSignal.timeout(name === 'hip_main.dat' ? 120000 : 30000)
 
 	try {
 		if (!(await file.exists())) {

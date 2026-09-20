@@ -40,7 +40,7 @@ export interface StarCatalogEntry extends Readonly<EquatorialCoordinate> {
 	readonly pmDEC?: Angle // per year
 	// Radial velocity.
 	readonly rv?: Velocity
-	// Parallax.
+	// Measured annual trigonometric parallax in radians; finite negative measurements are preserved.
 	readonly parallax?: Angle
 }
 

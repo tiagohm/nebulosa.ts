@@ -14,7 +14,7 @@ import type { StarCatalogEntry } from './catalog'
 // https://codeberg.org/astronexus/hyg/src/branch/main/data/hyg/CURRENT
 
 // One parsed HYG catalog star with its cross-identifiers and physical parameters.
-export interface HygCatalogEntry extends Required<StarCatalogEntry> {
+export interface HygCatalogEntry extends Required<Omit<StarCatalogEntry, 'parallax'>> {
 	// HYG internal record id.
 	readonly id: number
 	// Hipparcos catalog number (0 if none).
