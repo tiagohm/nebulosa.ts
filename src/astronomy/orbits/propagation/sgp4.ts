@@ -4,16 +4,18 @@ import { kilometer } from '../../../math/units/distance'
 import { kilometerPerSecond } from '../../../math/units/velocity'
 import type { PositionAndVelocity } from '../../coordinates/astrometry'
 import { isLeapYear } from '../../time/temporal'
-import { greenwichMeanSiderealTime, type Time, Timescale, timeSubtract, timeYMDHMS } from '../../time/time'
+import { greenwichMeanSiderealTime, type Time, Timescale, timeSubtract, timeToDate, timeYMDHMS, utc } from '../../time/time'
 
 // SGP4/SDP4 satellite orbit propagator: a TypeScript port of David Vallado's reference C++
-// implementation. Parses TLE and OMM element sets, initializes the near-Earth or deep-space model,
-// and propagates to a given time, returning the TEME-frame position (AU) and velocity (AU/day) via
-// the public sgp4() entry point. Internal subroutines (dpper, dscom, dsInit, dspace, initl) keep
-// Vallado's original names and comments; their scalar option fields mirror that algorithm state.
-// Gravity constants are selectable among Vallado's WGS-72 old, WGS-72, and WGS-84 sets and are
-// bound to each initialized SatRec; WGS-72 remains the default for operational GP/TLE data.
-// This is not a geodetic ellipsoid choice. Angles are radians; mean motion is radians/minute.
+// implementation. Initializes a reusable SatRec from typed SGP4 mean elements, TLE, or OMM,
+// then propagates to a given time, returning the TEME-frame position (AU) and velocity (AU/day)
+// via the public sgp4() entry point. TLE and OMM adapters convert source units and delegate to
+// recordFromSgp4Elements(); they do not construct Vallado's internal sgp4Init() arguments.
+// Internal subroutines (dpper, dscom, dsInit, dspace, initl) keep Vallado's original names and
+// comments; their scalar option fields mirror that algorithm state. Gravity constants are
+// selectable among Vallado's WGS-72 old, WGS-72, and WGS-84 sets and are bound to each
+// initialized SatRec; WGS-72 remains the default for operational GP/TLE data. This is not a
+// geodetic ellipsoid choice. Angles are radians; mean motion is radians/minute.
 
 // Identifier of a Vallado SGP4 gravity-constant set from getgravconst().
 export type Sgp4GravityModelName = 'wgs72old' | 'wgs72' | 'wgs84'
@@ -295,6 +297,47 @@ export interface SatRec {
 
 export type SatRecInit = Pick<SatRec, 'error' | 'satnum' | 'epochyr' | 'ndot' | 'nddot' | 'bstar' | 'inclo' | 'nodeo' | 'ecco' | 'argpo' | 'mo' | 'no' | 'epoch' | 'gravity'>
 
+// SGP4-compatible mean elements used to initialize a SatRec. These are not osculating Keplerian
+// elements; inserting an osculating state here does not retain physical meaning. Distinct from
+// MeanElements, which is the singly-averaged diagnostic output of a propagation step.
+export interface Sgp4ElementSet {
+	// Catalog identifier stored on the record; unused by SGP4 itself. Empty string when omitted.
+	readonly satelliteNumber?: string
+	// Epoch of the mean elements as a normal Time. Converted to UTC internally for Greenwich
+	// sidereal time and for the minutes-from-epoch used during propagation.
+	readonly epoch: Time
+	// Dimensionless SGP4 mean eccentricity.
+	readonly eccentricity: number
+	// SGP4 mean inclination, radians.
+	readonly inclination: Angle
+	// SGP4 mean right ascension of the ascending node, radians.
+	readonly rightAscensionOfAscendingNode: Angle
+	// SGP4 mean argument of perigee, radians.
+	readonly argumentOfPerigee: Angle
+	// SGP4 mean anomaly, radians.
+	readonly meanAnomaly: Angle
+	// Kozai mean motion in radians per minute (SGP4 internal convention). Not revolutions/day;
+	// TLE/OMM adapters convert rev/day at their boundary.
+	readonly meanMotion: number
+	// Ballistic drag coefficient B* in inverse Earth radii of the selected gravity model. Default 0.
+	readonly bstar?: number
+	// First time derivative of mean motion, stored with Vallado/TLE record semantics (the TLE
+	// line-1 value). Core SGP4 propagation does not consume this field. Default 0.
+	readonly meanMotionDot?: number
+	// Second time derivative of mean motion, stored with Vallado/TLE record semantics (the TLE
+	// line-1 value). Core SGP4 propagation does not consume this field. Default 0.
+	readonly meanMotionDdot?: number
+}
+
+// Optional operation mode and gravity-constant set bound when initializing from Sgp4ElementSet.
+export interface Sgp4RecordOptions {
+	// Vallado 'i' improved (default) or 'a' AFSPC operation mode.
+	readonly operationMode?: 'a' | 'i'
+	// Gravity-constant set bound to the record. Defaults to WGS-72, the set used for operational
+	// GP/TLE data; do not swap WGS-84 merely for a later epoch.
+	readonly gravity?: Sgp4GravityModel
+}
+
 // Parses two TLE lines into a validated structured object.
 export function parseTLE(line1: string, line2: string, name?: string): TLE {
 	line1 = line1.trimEnd().padEnd(69, ' ')
@@ -341,33 +384,36 @@ export function parseTLE(line1: string, line2: string, name?: string): TLE {
 	}
 }
 
-// Builds a reusable SGP4 record from parsed TLE elements.
-// `gravity` selects the Vallado constant set bound to the record; WGS-72 is the default used for
-// operational GP/TLE data and must not be swapped for WGS-84 merely for a later epoch.
-export function recordFromTLE(tle: TLE, gravity: Sgp4GravityModel = SGP4_WGS72) {
+// Builds a reusable SGP4 record from typed SGP4-compatible mean elements without TLE or OMM text.
+// `elements.meanMotion` is radians/minute. The epoch is converted to UTC once; gravity and
+// operation mode are bound to the record and reused by every later sgp4() call.
+export function recordFromSgp4Elements(elements: Sgp4ElementSet, options?: Sgp4RecordOptions): SatRec {
+	const gravity = options?.gravity ?? SGP4_WGS72
+	const operationMode = options?.operationMode ?? 'i'
+	const epoch = utc(elements.epoch)
+	const [year] = timeToDate(epoch)
 	const satrec: SatRecInit = {
-		error: 0,
-		satnum: tle.satelliteNumber,
-		epochyr: tle.epochYear,
-		ndot: tle.meanMotionDot,
-		nddot: tle.meanMotionDdot,
-		bstar: tle.bstar,
-		inclo: tle.inclination,
-		nodeo: tle.rightAscensionOfAscendingNode,
-		ecco: tle.eccentricity,
-		argpo: tle.argumentOfPerigee,
-		mo: tle.meanAnomaly,
-		no: tle.meanMotion / XPDOTP,
-		epoch: tle.epoch,
+		error: SatRecError.None,
+		satnum: elements.satelliteNumber ?? '',
+		epochyr: year % 100,
+		ndot: elements.meanMotionDot ?? 0,
+		nddot: elements.meanMotionDdot ?? 0,
+		bstar: elements.bstar ?? 0,
+		inclo: elements.inclination,
+		nodeo: elements.rightAscensionOfAscendingNode,
+		ecco: elements.eccentricity,
+		argpo: elements.argumentOfPerigee,
+		mo: elements.meanAnomaly,
+		no: elements.meanMotion,
+		epoch,
 		gravity,
 	}
 
-	// Initialize the orbit at sgp4epoch
 	sgp4Init(satrec, {
-		opsmode: 'i',
+		opsmode: operationMode,
 		satn: satrec.satnum,
-		epochday: satrec.epoch.day - 2433281,
-		epochfrac: satrec.epoch.fraction - 0.5,
+		epochday: epoch.day - 2433281,
+		epochfrac: epoch.fraction - 0.5,
 		xbstar: satrec.bstar,
 		xecco: satrec.ecco,
 		xargpo: satrec.argpo,
@@ -380,43 +426,51 @@ export function recordFromTLE(tle: TLE, gravity: Sgp4GravityModel = SGP4_WGS72) 
 	return satrec
 }
 
+// Builds a reusable SGP4 record from parsed TLE elements.
+// Converts TLE revolutions/day to radians/minute and delegates to recordFromSgp4Elements().
+// `gravity` selects the Vallado constant set bound to the record; WGS-72 is the default used for
+// operational GP/TLE data and must not be swapped for WGS-84 merely for a later epoch.
+export function recordFromTLE(tle: TLE, gravity: Sgp4GravityModel = SGP4_WGS72): SatRec {
+	return recordFromSgp4Elements(
+		{
+			satelliteNumber: tle.satelliteNumber,
+			epoch: tle.epoch,
+			eccentricity: tle.eccentricity,
+			inclination: tle.inclination,
+			rightAscensionOfAscendingNode: tle.rightAscensionOfAscendingNode,
+			argumentOfPerigee: tle.argumentOfPerigee,
+			meanAnomaly: tle.meanAnomaly,
+			meanMotion: tle.meanMotion / XPDOTP,
+			bstar: tle.bstar,
+			meanMotionDot: tle.meanMotionDot,
+			meanMotionDdot: tle.meanMotionDdot,
+		},
+		{ gravity },
+	)
+}
+
 // Builds a reusable SGP4 record from an OMM object.
-// `opsmode` is Vallado 'i' improved (default) or 'a' AFSPC; `gravity` is the Vallado constant set
-// bound to the record, defaulting to WGS-72.
-export function recordFromOMM(omm: OMM, opsmode: 'a' | 'i' = 'i', gravity: Sgp4GravityModel = SGP4_WGS72) {
+// Converts OMM degrees and revolutions/day at this boundary, then delegates to
+// recordFromSgp4Elements(). `opsmode` is Vallado 'i' improved (default) or 'a' AFSPC; `gravity`
+// is the Vallado constant set bound to the record, defaulting to WGS-72.
+export function recordFromOMM(omm: OMM, opsmode: 'a' | 'i' = 'i', gravity: Sgp4GravityModel = SGP4_WGS72): SatRec {
 	const epoch = parseOmmEpoch(omm.EPOCH)
-	const satrec: SatRecInit = {
-		error: SatRecError.None,
-		satnum: omm.NORAD_CAT_ID.toString(),
-		epochyr: epoch.year % 100,
-		ndot: +omm.MEAN_MOTION_DOT || 0,
-		nddot: +omm.MEAN_MOTION_DDOT || 0,
-		bstar: +omm.BSTAR,
-		inclo: +omm.INCLINATION * DEG2RAD,
-		nodeo: +omm.RA_OF_ASC_NODE * DEG2RAD,
-		ecco: +omm.ECCENTRICITY,
-		argpo: +omm.ARG_OF_PERICENTER * DEG2RAD,
-		mo: +omm.MEAN_ANOMALY * DEG2RAD,
-		no: +omm.MEAN_MOTION / XPDOTP,
-		epoch: epoch.jd,
-		gravity,
-	}
-
-	sgp4Init(satrec, {
-		opsmode,
-		satn: satrec.satnum,
-		epochday: satrec.epoch.day - 2433281,
-		epochfrac: satrec.epoch.fraction - 0.5,
-		xbstar: satrec.bstar,
-		xecco: satrec.ecco,
-		xargpo: satrec.argpo,
-		xinclo: satrec.inclo,
-		xmo: satrec.mo,
-		xno: satrec.no,
-		xnodeo: satrec.nodeo,
-	})
-
-	return satrec
+	return recordFromSgp4Elements(
+		{
+			satelliteNumber: omm.NORAD_CAT_ID.toString(),
+			epoch: epoch.jd,
+			eccentricity: +omm.ECCENTRICITY,
+			inclination: +omm.INCLINATION * DEG2RAD,
+			rightAscensionOfAscendingNode: +omm.RA_OF_ASC_NODE * DEG2RAD,
+			argumentOfPerigee: +omm.ARG_OF_PERICENTER * DEG2RAD,
+			meanAnomaly: +omm.MEAN_ANOMALY * DEG2RAD,
+			meanMotion: +omm.MEAN_MOTION / XPDOTP,
+			bstar: +omm.BSTAR,
+			meanMotionDot: +omm.MEAN_MOTION_DOT || 0,
+			meanMotionDdot: +omm.MEAN_MOTION_DDOT || 0,
+		},
+		{ operationMode: opsmode, gravity },
+	)
 }
 
 // Returns a human-readable explanation for an SGP4 propagation error.

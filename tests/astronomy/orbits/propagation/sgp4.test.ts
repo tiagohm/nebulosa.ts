@@ -3,9 +3,9 @@ import fs from 'fs/promises'
 import { vector } from '../../../../src/adapters/ephemeris/horizons'
 import type { PositionAndVelocity } from '../../../../src/astronomy/coordinates/astrometry'
 import { itrfToTemeByGmst, temeToItrfByGmst } from '../../../../src/astronomy/coordinates/frame'
-import { type DsInitOptions, internal, type MeanElements, parseTLE, recordFromOMM, recordFromTLE, SGP4_WGS72, SGP4_WGS72_OLD, SGP4_WGS84, sgp4, type Sgp4GravityModel } from '../../../../src/astronomy/orbits/propagation/sgp4'
+import { type DsInitOptions, internal, type MeanElements, parseTLE, recordFromOMM, recordFromSgp4Elements, recordFromTLE, SGP4_WGS72, SGP4_WGS72_OLD, SGP4_WGS84, sgp4, type Sgp4ElementSet, type Sgp4GravityModel } from '../../../../src/astronomy/orbits/propagation/sgp4'
 import { Timescale, timeYMDHMS } from '../../../../src/astronomy/time/time'
-import { DAYMIN } from '../../../../src/core/constants'
+import { DAYMIN, DEG2RAD, TAU } from '../../../../src/core/constants'
 import { fileHandleSource, readLines } from '../../../../src/io/io'
 import { toKilometer } from '../../../../src/math/units/distance'
 import { toKilometerPerSecond } from '../../../../src/math/units/velocity'
@@ -264,6 +264,219 @@ test('out-of-order propagation matches independent records for each gravity mode
 		expectVector(mid[0], sgp4(timeFromEpoch(DEEP_SPACE_TLE.epoch, 1440), recordFromTLE(DEEP_SPACE_TLE, gravity))[0], 12)
 		expectVector(later[0], sgp4(timeFromEpoch(DEEP_SPACE_TLE.epoch, 10080), recordFromTLE(DEEP_SPACE_TLE, gravity))[0], 12)
 	}
+})
+
+// TEME km / km/s from Python sgp4 2.25 (uv run --with sgp4==2.25), Satrec.sgp4init(...).
+const VANGUARD_ELEMENTS: Sgp4ElementSet = {
+	satelliteNumber: '5',
+	epoch: timeYMDHMS(2000, 6, 27, 18, 50, 19.733568, Timescale.UTC),
+	bstar: 2.8098e-5,
+	eccentricity: 0.1859667,
+	inclination: 0.5980929187319,
+	rightAscensionOfAscendingNode: 6.0863854713832,
+	argumentOfPerigee: 5.7904160274885,
+	meanAnomaly: 0.3373093125574,
+	meanMotion: 0.0472294454407,
+}
+
+const VANGUARD_SGP4INIT_REFERENCES: ReadonlyArray<{
+	gravity: Sgp4GravityModel
+	samples: ReadonlyArray<{ minutes: number; position: readonly [number, number, number]; velocity: readonly [number, number, number] }>
+}> = [
+	{
+		gravity: SGP4_WGS72,
+		samples: [
+			{ minutes: 0, position: [7022.465292671748, -1400.082967555518, 0.03995155392930132], velocity: [1.893841014512404, 6.405893759206271, 4.534807250352075] },
+			{ minutes: 360, position: [-7154.031202194453, -3783.176824891254, -3536.1941228704954], velocity: [4.741887408844401, -4.151817765450326, -2.0939354249800823] },
+			{ minutes: 720, position: [-7134.593400904925, 6531.686413553321, 3260.271865013512], velocity: [-4.113793027351591, -2.9119220384451396, -2.557327850840796] },
+			{ minutes: 1440, position: [-938.5592405145206, -6268.187488259428, -4294.029247658631], velocity: [7.536105209132254, -0.4271277079236877, 0.9898780790087016] },
+		],
+	},
+	{
+		gravity: SGP4_WGS72_OLD,
+		samples: [
+			{ minutes: 0, position: [7022.465290582603, -1400.0829671408712, 0.03995155266735267], velocity: [1.8938410139503403, 6.405893757301637, 4.534807249005177] },
+			{ minutes: 360, position: [-7154.031200037033, -3783.176823784724, -3536.194121859663], velocity: [4.7418874074557245, -4.151817764210127, -2.0939354243216215] },
+			{ minutes: 720, position: [-7134.59339884685, 6531.686411595035, 3260.271863931667], velocity: [-4.113793026087042, -2.911922037601116, -2.5573278501259677] },
+			{ minutes: 1440, position: [-938.5592400857433, -6268.187486430075, -4294.029246364124], velocity: [7.536105206868517, -0.4271277077409254, 0.9898780789081953] },
+		],
+	},
+	{
+		gravity: SGP4_WGS84,
+		samples: [
+			{ minutes: 0, position: [7022.46647249905, -1400.0665618197968, 0.05106558250547719], velocity: [1.8938310806783247, 6.405894872514698, 4.534806700950402] },
+			{ minutes: 360, position: [-7154.03182987699, -3783.162221292197, -3536.1837281855005], velocity: [4.741886113626152, -4.1518236644334365, -2.093940214860891] },
+			{ minutes: 720, position: [-7134.585277750439, 6531.696404099999, 3260.281688657965], velocity: [-4.113791542631689, -2.9119168825936828, -2.55732342073151] },
+			{ minutes: 1440, position: [-938.549232531635, -6268.1783203679925, -4294.021784866692], velocity: [7.536113288408834, -0.4271212967582206, 0.9898801737232894] },
+		],
+	},
+]
+
+const DEEP_SPACE_ELEMENTS: Sgp4ElementSet = {
+	satelliteNumber: DEEP_SPACE_TLE.satelliteNumber,
+	epoch: DEEP_SPACE_TLE.epoch,
+	bstar: DEEP_SPACE_TLE.bstar,
+	eccentricity: DEEP_SPACE_TLE.eccentricity,
+	inclination: DEEP_SPACE_TLE.inclination,
+	rightAscensionOfAscendingNode: DEEP_SPACE_TLE.rightAscensionOfAscendingNode,
+	argumentOfPerigee: DEEP_SPACE_TLE.argumentOfPerigee,
+	meanAnomaly: DEEP_SPACE_TLE.meanAnomaly,
+	meanMotion: DEEP_SPACE_TLE.meanMotion * (TAU / DAYMIN),
+	meanMotionDot: DEEP_SPACE_TLE.meanMotionDot,
+	meanMotionDdot: DEEP_SPACE_TLE.meanMotionDdot,
+}
+
+// TEME km / km/s from Python sgp4 2.25 Satrec.sgp4init(WGS72, 'i', ...) on the Vallado SDP4 elements.
+const DEEP_SPACE_SGP4INIT_SAMPLES = [
+	{ minutes: 0, position: [7473.371024914194, 428.94748312433273, 5828.748467826845], velocity: [5.107155390863513, 6.444680304626385, -0.1861332973414932] },
+	{ minutes: 360, position: [-3305.22148693903, 32410.84323331267, -24697.16974954456], velocity: [-1.3011373191520739, -1.1513156001942182, -0.2833358225210449] },
+	{ minutes: 1440, position: [9787.878362555179, 33753.3224966677, -15030.798746254339], velocity: [-1.094251552849351, 0.9235899056171147, -1.522311007670631] },
+	{ minutes: 10080, position: [-4255.688353474943, 29254.953920982574, -24059.683465035927], velocity: [-1.3765206562081918, -1.336144885401336, -0.14513369677042212] },
+] as const
+
+function elementsFromTLE(tle: ReturnType<typeof parseTLE>): Sgp4ElementSet {
+	return {
+		satelliteNumber: tle.satelliteNumber,
+		epoch: tle.epoch,
+		eccentricity: tle.eccentricity,
+		inclination: tle.inclination,
+		rightAscensionOfAscendingNode: tle.rightAscensionOfAscendingNode,
+		argumentOfPerigee: tle.argumentOfPerigee,
+		meanAnomaly: tle.meanAnomaly,
+		meanMotion: tle.meanMotion * (TAU / DAYMIN),
+		bstar: tle.bstar,
+		meanMotionDot: tle.meanMotionDot,
+		meanMotionDdot: tle.meanMotionDdot,
+	}
+}
+
+test('recordFromSgp4Elements defaults to WGS-72 improved mode and fills omitted fields', () => {
+	const rec = recordFromSgp4Elements({
+		epoch: VANGUARD_ELEMENTS.epoch,
+		eccentricity: VANGUARD_ELEMENTS.eccentricity,
+		inclination: VANGUARD_ELEMENTS.inclination,
+		rightAscensionOfAscendingNode: VANGUARD_ELEMENTS.rightAscensionOfAscendingNode,
+		argumentOfPerigee: VANGUARD_ELEMENTS.argumentOfPerigee,
+		meanAnomaly: VANGUARD_ELEMENTS.meanAnomaly,
+		meanMotion: VANGUARD_ELEMENTS.meanMotion,
+	})
+
+	expect(rec.satnum).toBe('')
+	expect(rec.bstar).toBe(0)
+	expect(rec.ndot).toBe(0)
+	expect(rec.nddot).toBe(0)
+	expect(rec.operationmode).toBe('i')
+	expect(rec.gravity).toBe(SGP4_WGS72)
+	expect(rec.method).toBe('n')
+	expect(rec.epochyr).toBe(0)
+})
+
+for (const { gravity, samples } of VANGUARD_SGP4INIT_REFERENCES) {
+	test(`Vanguard sgp4init ${gravity.name} record stays on that model`, () => {
+		const rec = recordFromSgp4Elements(VANGUARD_ELEMENTS, { gravity })
+		expect(rec.gravity).toBe(gravity)
+		expect(rec.method).toBe('n')
+		expect(rec.satnum).toBe('5')
+	})
+
+	for (const sample of samples) {
+		test(`Vanguard sgp4init ${gravity.name} at ${sample.minutes} min`, () => {
+			const rec = recordFromSgp4Elements(VANGUARD_ELEMENTS, { gravity })
+			const state = sgp4(timeFromEpoch(VANGUARD_ELEMENTS.epoch, sample.minutes), rec)
+			expectVector(state[0].map(toKilometer), sample.position, 7)
+			expectVector(state[1].map(toKilometerPerSecond), sample.velocity, 9)
+		})
+	}
+}
+
+test('Vanguard sgp4init AFSPC and improved modes both match Python sgp4', () => {
+	for (const operationMode of ['i', 'a'] as const) {
+		const rec = recordFromSgp4Elements(VANGUARD_ELEMENTS, { operationMode, gravity: SGP4_WGS72 })
+		expect(rec.operationmode).toBe(operationMode)
+		const sample = VANGUARD_SGP4INIT_REFERENCES[0].samples[0]
+		const state = sgp4(VANGUARD_ELEMENTS.epoch, rec)
+		expectVector(state[0].map(toKilometer), sample.position, 7)
+		expectVector(state[1].map(toKilometerPerSecond), sample.velocity, 9)
+	}
+})
+
+test('deep-space sgp4init selects SDP4 and matches Python sgp4', () => {
+	const rec = recordFromSgp4Elements(DEEP_SPACE_ELEMENTS, { gravity: SGP4_WGS72 })
+	expect(rec.method).toBe('d')
+	expect(rec.gravity).toBe(SGP4_WGS72)
+
+	for (const sample of DEEP_SPACE_SGP4INIT_SAMPLES) {
+		const state = sgp4(timeFromEpoch(DEEP_SPACE_ELEMENTS.epoch, sample.minutes), rec)
+		expectVector(state[0].map(toKilometer), sample.position, 7)
+		expectVector(state[1].map(toKilometerPerSecond), sample.velocity, 9)
+	}
+})
+
+test('deep-space sgp4init AFSPC mode matches improved Python reference', () => {
+	const rec = recordFromSgp4Elements(DEEP_SPACE_ELEMENTS, { operationMode: 'a', gravity: SGP4_WGS72 })
+	expect(rec.operationmode).toBe('a')
+	expect(rec.method).toBe('d')
+	const sample = DEEP_SPACE_SGP4INIT_SAMPLES[2]
+	const state = sgp4(timeFromEpoch(DEEP_SPACE_ELEMENTS.epoch, sample.minutes), rec)
+	expectVector(state[0].map(toKilometer), sample.position, 7)
+	expectVector(state[1].map(toKilometerPerSecond), sample.velocity, 9)
+})
+
+test('recordFromTLE matches recordFromSgp4Elements on converted TLE fields', () => {
+	for (const tle of [ISS_TLE, DEEP_SPACE_TLE]) {
+		const fromTle = recordFromTLE(tle)
+		const fromElements = recordFromSgp4Elements(elementsFromTLE(tle))
+		expect(fromElements.gravity).toBe(fromTle.gravity)
+		expect(fromElements.operationmode).toBe(fromTle.operationmode)
+		expect(fromElements.method).toBe(fromTle.method)
+
+		for (const minutes of [0, 1440, 10080]) {
+			const time = timeFromEpoch(tle.epoch, minutes)
+			const a = sgp4(time, fromTle)
+			const b = sgp4(time, fromElements)
+			expectVector(a[0], b[0], 12)
+			expectVector(a[1], b[1], 12)
+		}
+	}
+})
+
+test('recordFromOMM matches recordFromSgp4Elements on converted OMM fields', () => {
+	const fromOmm = recordFromOMM(ISS_OMM)
+	const fromElements = recordFromSgp4Elements({
+		satelliteNumber: String(ISS_OMM.NORAD_CAT_ID),
+		epoch: timeYMDHMS(2023, 8, 19, 12, 25, 27.896736, Timescale.UTC),
+		eccentricity: ISS_OMM.ECCENTRICITY,
+		inclination: ISS_OMM.INCLINATION * DEG2RAD,
+		rightAscensionOfAscendingNode: ISS_OMM.RA_OF_ASC_NODE * DEG2RAD,
+		argumentOfPerigee: ISS_OMM.ARG_OF_PERICENTER * DEG2RAD,
+		meanAnomaly: ISS_OMM.MEAN_ANOMALY * DEG2RAD,
+		meanMotion: ISS_OMM.MEAN_MOTION * (TAU / DAYMIN),
+		bstar: ISS_OMM.BSTAR,
+		meanMotionDot: ISS_OMM.MEAN_MOTION_DOT,
+		meanMotionDdot: ISS_OMM.MEAN_MOTION_DDOT,
+	})
+
+	expect(fromElements.gravity).toBe(fromOmm.gravity)
+	expect(fromElements.operationmode).toBe(fromOmm.operationmode)
+	expect(fromElements.method).toBe(fromOmm.method)
+
+	const a = sgp4(ISS_TLE.epoch, fromOmm)
+	const b = sgp4(ISS_TLE.epoch, fromElements)
+	expectVector(a[0], b[0], 12)
+	expectVector(a[1], b[1], 12)
+})
+
+test('out-of-order sgp4init deep-space propagation matches independent records', () => {
+	const shared = recordFromSgp4Elements(DEEP_SPACE_ELEMENTS)
+	const later = sgp4(timeFromEpoch(DEEP_SPACE_ELEMENTS.epoch, 10080), shared)
+	const earlier = sgp4(timeFromEpoch(DEEP_SPACE_ELEMENTS.epoch, 0), shared)
+	const mid = sgp4(timeFromEpoch(DEEP_SPACE_ELEMENTS.epoch, 1440), shared)
+	const again = sgp4(timeFromEpoch(DEEP_SPACE_ELEMENTS.epoch, 1440), shared)
+
+	expectVector(earlier[0], sgp4(timeFromEpoch(DEEP_SPACE_ELEMENTS.epoch, 0), recordFromSgp4Elements(DEEP_SPACE_ELEMENTS))[0], 12)
+	expectVector(mid[0], sgp4(timeFromEpoch(DEEP_SPACE_ELEMENTS.epoch, 1440), recordFromSgp4Elements(DEEP_SPACE_ELEMENTS))[0], 12)
+	expectVector(later[0], sgp4(timeFromEpoch(DEEP_SPACE_ELEMENTS.epoch, 10080), recordFromSgp4Elements(DEEP_SPACE_ELEMENTS))[0], 12)
+	expectVector(again[0], mid[0], 12)
 })
 
 test('OMM AFSPC and improved modes retain gravity and match WGS-72 at epoch', () => {
