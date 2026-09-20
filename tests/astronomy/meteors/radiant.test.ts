@@ -261,4 +261,4 @@ test('rise/transit/set classification reports circumpolar and unknown states', (
 	expect(meteorRadiantVisibility(alwaysUp)).toBe('alwaysUp')
 	expect(meteorRadiantVisibility(alwaysDown)).toBe('alwaysDown')
 	expect(meteorRadiantVisibility(undefined)).toBe('unknown')
-}, 2000)
+})

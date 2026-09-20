@@ -49,7 +49,7 @@ describe.skipIf(SKIP)('rotator simulator', () => {
 		simulator.dispose()
 		expect(manager.has(client, rotator.name)).toBeFalse()
 		expect(manager.properties.length).toBe(0)
-	}, 4000)
+	})
 
 	test('retargets an active slew to the current angle', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -72,7 +72,7 @@ describe.skipIf(SKIP)('rotator simulator', () => {
 		await Bun.sleep(200)
 
 		expect(rotator.angle.value).toBeCloseTo(current, 12)
-	}, 3000)
+	})
 
 	test('normalizes the 360-degree boundary', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -100,5 +100,5 @@ describe.skipIf(SKIP)('rotator simulator', () => {
 		await Bun.sleep(200)
 		expect(rotator.moving).toBeFalse()
 		expect(rotator.angle.value).toBeCloseTo(0, 12)
-	}, 4000)
+	})
 })

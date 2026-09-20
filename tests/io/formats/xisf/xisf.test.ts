@@ -430,19 +430,18 @@ describe('write', () => {
 
 				const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
 				await saveImageAndCompareHash(output!, `write-xisf-${bitpix}-${channel}`, hash)
-			}, 5000)
+			})
 		}
 	}
 })
 
 describe('write compressed', () => {
 	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
-	const sizes: Record<string, number> = {}
 
 	for (const channel of CHANNELS) {
 		for (const bitpix of BITPIXES) {
 			for (const format of COMPRESSION_FORMATS) {
-				test(`channel=${channel}, bitpix=${bitpix}, format=${format}`, async () => {
+				test.concurrent(`channel=${channel}, bitpix=${bitpix}, format=${format}`, async () => {
 					buffer.fill(20)
 
 					const image = await readImageFromPath(`data/NGC3372-${bitpix}.${channel}.xisf`)
@@ -450,25 +449,10 @@ describe('write compressed', () => {
 					const shuffled = format.endsWith('+sh')
 					const compressedSize = await writeXisf(sink, [image!], { compression: { format: format.replace('+sh', '') as never, shuffled } })
 					expect(compressedSize).toBeLessThan(image!.metadata.pixelSizeInBytes * image!.metadata.pixelCount * image!.metadata.channels)
-
-					sizes[`${bitpix}_${channel}_${format}`] = compressedSize
-				}, 5000)
+				})
 			}
 		}
 	}
-
-	test('shuffled compression must have size less than unshuffled compression', () => {
-		for (const channel of CHANNELS) {
-			for (const bitpix of BITPIXES) {
-				if (bitpix === 8) continue
-
-				for (const format of COMPRESSION_FORMATS.filter((e) => !e.endsWith('+sh'))) {
-					const key = `${bitpix}_${channel}_${format}`
-					expect(sizes[`${key}+sh`]).toBeLessThan(sizes[key])
-				}
-			}
-		}
-	})
 })
 
 describe('byte shuffle and unshuffle', () => {

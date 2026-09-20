@@ -239,7 +239,7 @@ test('write/read RICE compressed', async () => {
 	expect(output.metadata.bitpix).toBe(image.metadata.bitpix)
 
 	await saveImageAndCompareHash(output, 'write-fits-rice-16-1', 'c754bf834dc1bb3948ec3cf8b9aca303')
-}, 5000)
+})
 
 test('reads Rice tiles using the spec default ZTILE2 of 1 when the card is omitted', async () => {
 	const width = 8

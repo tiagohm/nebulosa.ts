@@ -352,7 +352,7 @@ test('debayer', async () => {
 	expect(image.header.NAXIS).toBe(3)
 	expect(image.header.NAXIS3).toBe(3)
 	expect(image.metadata.channels).toBe(3)
-}, 5000)
+})
 
 test('debayer RGBG', async () => {
 	const image = await readImageTransformAndSave((i) => stf(debayer(i, 'RGBG') ?? i, 0.05), 'debayer-rgbg', '5e17e6927f823695d26df4758ca870ae', Bitpix.SHORT, 1, 'fit', 'GRBG')
@@ -360,7 +360,7 @@ test('debayer RGBG', async () => {
 	expect(image.header.NAXIS).toBe(3)
 	expect(image.header.NAXIS3).toBe(3)
 	expect(image.metadata.channels).toBe(3)
-}, 5000)
+})
 
 test('bayer', () => {
 	const color: Image = {
@@ -497,14 +497,14 @@ test('grayscale', async () => {
 	expect(image.header.NAXIS3).toBeUndefined()
 	expect(image.metadata.stride).toBe(image.metadata.width)
 	expect(image.metadata.channels).toBe(1)
-}, 5000)
+})
 
 test('red grayscale', () => readImageTransformAndSave((i) => grayscale(i, 'RED'), 'grayscale-red', 'abbe5ae6e4e475b1ddee069d0f37da61'), 5000)
 
 test('convolution identity', () => {
 	const kernel = convolutionKernel(new Int8Array([0, 0, 0, 0, 1, 0, 0, 0, 0]), 3)
 	return readImageTransformAndSave((i) => convolution(i, kernel), 'conv-identity', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
-}, 5000)
+})
 
 test('convolution edges', () => readImageTransformAndSave((i) => edges(i), 'conv-edges', '94c01060591a83869c7cd376d97fb612'), 8000)
 
@@ -523,7 +523,7 @@ test('convolution mean', () => {
 	const b = readImageTransformAndSave((i) => convolution(i, meanConvolutionKernel(5)), 'conv-mean-5', 'b6889d5c03fcc8290e0ef441bc057e8d')
 	const c = readImageTransformAndSave((i) => convolution(i, meanConvolutionKernel(7)), 'conv-mean-7', '5b8d80765c1fd2be99d26384f16089bc')
 	return Promise.all([a, b, c])
-}, 8000)
+})
 
 test('convolution blur 3x3', () => readImageTransformAndSave((i) => blur3x3(i), 'conv-blur-3', 'd483c31324fcc7249450e310f19d20b4'), 8000)
 
@@ -536,7 +536,7 @@ test('convolution blur', () => {
 	const b = readImageTransformAndSave((i) => convolution(i, blurConvolutionKernel(5)), 'conv-blur-5', '1d26004a32af3a8fcec9a7b3972d8002')
 	const c = readImageTransformAndSave((i) => convolution(i, blurConvolutionKernel(7)), 'conv-blur-7', 'db572370d0633b942e8e72398153e131')
 	return Promise.all([a, b, c])
-}, 8000)
+})
 
 test('blur convolution kernel divisor', () => {
 	expect(blurConvolutionKernel(9).divisor).toBe(625)
@@ -575,7 +575,7 @@ test('mmt', () => {
 	}
 
 	return readImageTransformAndSave((i) => autoStf(multiscaleMedianTransform(i, options)), 'mmt', '75f6a6dc50e4890dbc7b8916a87c3974')
-}, 5000)
+})
 
 test('curves transformation - mono', () => readImageTransformAndSave((i) => autoStf(curvesTransformation(i, { curves: [{ channel: 'GRAY', x: [0.007], y: [0.08] }] })), 'ct-mono', '7fd7e8ef10d688a64b905e9671e9503d', undefined, 1))
 
@@ -651,10 +651,10 @@ describe('calibrate', async () => {
 	test('dark 60s', async () => {
 		const calibrated = calibrate(clone(light!), { dark: dark60, flat, bias, darkFlat })
 		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-60', '539f2b3e0c5afb37dc04ce0e0bded4c1')
-	}, 5000)
+	})
 
 	test('dark 15s', async () => {
 		const calibrated = calibrate(clone(light!), { dark: dark15, flat, bias, darkFlat })
 		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-15', 'b72aa07a6c3269a10b72e363acd8cac0')
-	}, 5000)
+	})
 })

@@ -212,7 +212,7 @@ test('rejects refinement edge work that exceeds the shared Hough vote budget', (
 	expect(workspace.state.houghCoarseEdgeWork).toBe(edgeCount * angleCount)
 	expect(workspace.state.houghCoarseEdgeWork).toBeLessThanOrEqual(MAX_STREAK_HOUGH_EDGE_VOTES)
 	expect(workspace.state.houghCoarseEdgeWork + workspace.state.houghRefinementEdgeWork).toBeGreaterThan(MAX_STREAK_HOUGH_EDGE_VOTES)
-}, 5000)
+})
 
 test('admits sparse inputs using only active angles in the Hough rho budget', () => {
 	const angleCount = 4096

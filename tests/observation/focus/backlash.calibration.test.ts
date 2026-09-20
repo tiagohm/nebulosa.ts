@@ -298,7 +298,7 @@ describe.skipIf(SKIP_TIME_CONSUMING)('backlash calibration simulator integration
 		expect(Math.abs(fit.breakpoint! - focuserSimulator.backlashOut)).toBeLessThanOrEqual(100)
 		expect(points[0].value).toBeCloseTo(points[3].value, 6)
 		expect(points.at(-1)!.value).toBeLessThan(points[3].value)
-	}, 5000)
+	})
 
 	test('executes calibration move and measure commands through camera and focuser simulators', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -351,7 +351,7 @@ describe.skipIf(SKIP_TIME_CONSUMING)('backlash calibration simulator integration
 		expect(execution.command.result.increasing.validRunCount).toBeGreaterThanOrEqual(2)
 		expect(execution.command.result.decreasing.validRunCount).toBeGreaterThanOrEqual(2)
 		expect(calibration.result).toBe(execution.command.result)
-	}, 30000)
+	})
 })
 
 describe('backlash run aggregation', () => {

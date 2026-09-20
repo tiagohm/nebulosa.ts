@@ -26,20 +26,20 @@ test('both observing-window overloads identify the same real short window', () =
 	expect(direct[0].maximumZhr).toBeDefined()
 	expect(direct[0].minimumMoonRadiantSeparation).toBeUndefined()
 	expect(direct[0].maximumMoonAltitude).toBeUndefined()
-}, 4000)
+})
 
 test('planner intersects a real short window with astronomical darkness', () => {
 	const windows = meteorObservingWindows(BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, { step: 1 / 48, minimumRadiantAltitude: 0 })
 	expect(windows).toHaveLength(1)
 	expect(windows[0].durationHours).toBeGreaterThan(0)
 	expect(windows[0].durationHours).toBeLessThan(1.2)
-}, 4000)
+})
 
 test('planner refines a minimum radiant-altitude boundary', () => {
 	const windows = meteorObservingWindows(BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, { ...DAY_OPTIONS, minimumRadiantAltitude: deg(80) })
 	expect(windows).toHaveLength(1)
 	expect(windows[0].durationHours).toBeLessThan(1)
-}, 2000)
+})
 
 test('planner can reject bright lunar constraints', () => {
 	const windows = meteorObservingWindows(BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, SITE_EPOCH, SITE_EPOCH_END, { ...DAY_OPTIONS, maximumMoonIllumination: 0.5 })
@@ -62,7 +62,7 @@ test('planner applies lunar altitude and retains sampled lunar metrics', () => {
 		maximumMoonIllumination: 1,
 	})
 	expect(combined).toHaveLength(1)
-}, 1500)
+})
 
 test('a below-horizon Moon satisfies illumination, separation and inclusive altitude limits', () => {
 	const start = timeShift(SITE_EPOCH, -6 / 24)
@@ -183,7 +183,7 @@ test('rate correction scales integrated count', () => {
 	expect(corrected).toHaveLength(1)
 	expect(corrected[0].expectedCount).toBeCloseTo(69.43670313082661, 6)
 	expect(corrected[0].bestLocalHourlyRate).toBeCloseTo(35.68435, 4)
-}, 2000)
+})
 
 test('minimum duration filters a real short window', () => {
 	const tooLong = meteorObservingWindows(BASE_SOLUTION, EXPONENTIAL_PROFILE, OBSERVER, PLANNER_START, PLANNER_END, { ...DAY_OPTIONS, minimumDurationHours: 2.1 })

@@ -691,7 +691,7 @@ describe.skipIf(SKIP)('list network', () => {
 		const result = await list('neos', { like: '2010%', limit: 2 })
 		expect(result.items).toHaveLength(2)
 		expect(result.items[0]?.unpackedPrimaryProvisionalDesignation?.startsWith('2010')).toBe(true)
-	}, 30000)
+	})
 
 	test('impacted and dual-status expose their extra fields', async () => {
 		const impacted = await list('impacted', { limit: 1 })
@@ -705,7 +705,7 @@ describe.skipIf(SKIP)('list network', () => {
 		expect(items).toHaveLength(5)
 		const ids = items.map((item) => item.unpackedPrimaryProvisionalDesignation)
 		expect(new Set(ids).size).toBe(5)
-	}, 30000)
+	})
 })
 
 describe('listAll guards', () => {

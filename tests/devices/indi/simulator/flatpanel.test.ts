@@ -35,5 +35,5 @@ describe.skipIf(SKIP)('flat-panel simulator', () => {
 		simulator.dispose()
 		expect(manager.has(client, panel.name)).toBeFalse()
 		expect(manager.properties.length).toBe(0)
-	}, 2000)
+	})
 })

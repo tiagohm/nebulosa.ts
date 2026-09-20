@@ -44,7 +44,7 @@ test('read', async () => {
 	catalog.addMany(entries)
 
 	expect(catalog.queryCone(parseAngle('05h 35 16.8')!, parseAngle('-05 23 24')!, deg(1))).toHaveLength(54)
-}, 3000)
+})
 
 test.each([16, 65536])(
 	'read stream with %i-byte chunks',

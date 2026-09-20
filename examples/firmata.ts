@@ -20,7 +20,7 @@ const handler: FirmataClientHandler = {
 		console.info(`pin ${pin.id} changed to ${pin.value}`)
 	},
 	textMessage: (client, message) => {
-		console.info(message)
+		if (message) console.info(message)
 	},
 }
 

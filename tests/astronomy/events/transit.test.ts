@@ -54,7 +54,7 @@ test('predicts the four contacts of the 2032-11-13 Mercury transit from Greenwic
 
 	// Total contact I -> IV duration, ~4.44 h, equals the exterior-egress minus exterior-ingress span.
 	expect(transit.duration! / 3600).toBeCloseTo(4.44, 1)
-}, 8000)
+})
 
 test('predicts the four contacts of the 2117-12-11 Venus transit from Tokyo', () => {
 	const observer = observerAt(TOKYO)
@@ -72,7 +72,7 @@ test('predicts the four contacts of the 2117-12-11 Venus transit from Tokyo', ()
 	expect(toDeg(transit.ingressPositionAngle!)).toBeCloseTo(59.81, 1)
 	expect(toDeg(transit.egressPositionAngle!)).toBeCloseTo(328.81, 1)
 	expect(transit.duration! / 3600).toBeCloseTo(5.698, 1)
-}, 15000)
+})
 
 test('reports no transit for a window with no inferior conjunction crossing', () => {
 	const observer = observerAt(GREENWICH)
@@ -80,7 +80,7 @@ test('reports no transit for a window with no inferior conjunction crossing', ()
 	// disk and no transit is reported.
 	const transits = planetaryTransits(mercury, sun, observer, timeYMDHMS(2032, 12, 13, 0, 0, 0, Timescale.UTC), timeYMDHMS(2032, 12, 14, 0, 0, 0, Timescale.UTC), { sunRadius: SUN_RADIUS_AU, planetRadius: MERCURY_RADIUS })
 	expect(transits.length).toBe(0)
-}, 15000)
+})
 
 test('reports no transit at the 2024-06-04 Venus superior conjunction', () => {
 	const observer = observerAt(GREENWICH)
@@ -88,7 +88,7 @@ test('reports no transit at the 2024-06-04 Venus superior conjunction', () => {
 	// which is a solar occultation of Venus, not a transit; the next Venus transit is 2117-12-11.
 	const transits = planetaryTransits(venus, sun, observer, timeYMDHMS(2024, 6, 3, 0, 0, 0, Timescale.UTC), timeYMDHMS(2024, 6, 6, 0, 0, 0, Timescale.UTC), { sunRadius: SUN_RADIUS_AU, planetRadius: VENUS_RADIUS })
 	expect(transits.length).toBe(0)
-}, 30000)
+})
 
 test('reports no transit at the 2026-05-14 Mercury superior conjunction', () => {
 	const observer = observerAt(GREENWICH)
@@ -96,7 +96,7 @@ test('reports no transit at the 2026-05-14 Mercury superior conjunction', () => 
 	// transit.
 	const transits = planetaryTransits(mercury, sun, observer, timeYMDHMS(2026, 5, 13, 0, 0, 0, Timescale.UTC), timeYMDHMS(2026, 5, 16, 0, 0, 0, Timescale.UTC), { sunRadius: SUN_RADIUS_AU, planetRadius: MERCURY_RADIUS })
 	expect(transits.length).toBe(0)
-}, 30000)
+})
 
 test('leaves ingress contacts undefined when the window opens after ingress', () => {
 	const observer = observerAt(GREENWICH)
@@ -110,7 +110,7 @@ test('leaves ingress contacts undefined when the window opens after ingress', ()
 	expect(transit.duration).toBeUndefined()
 	expect(contactError(transit.interiorEgress, 2463549.963249)).toBeLessThan(2)
 	expect(contactError(transit.exteriorEgress, 2463549.964686)).toBeLessThan(2)
-}, 5000)
+})
 
 test('leaves egress contacts undefined when the window closes before egress', () => {
 	const observer = observerAt(GREENWICH)
@@ -125,7 +125,7 @@ test('leaves egress contacts undefined when the window closes before egress', ()
 	expect(transit.duration).toBeUndefined()
 	expect(contactError(transit.exteriorIngress, 2463549.779682)).toBeLessThan(2)
 	expect(contactError(transit.interiorIngress, 2463549.781121)).toBeLessThan(2)
-}, 4000)
+})
 
 test('catches an appulse in the last interval when the window ends just after mid-transit', () => {
 	const observer = observerAt(GREENWICH)
@@ -143,7 +143,7 @@ test('catches an appulse in the last interval when the window ends just after mi
 	expect(transit.exteriorEgress).toBeUndefined()
 	expect(transit.interiorEgress).toBeUndefined()
 	expect(transit.duration).toBeUndefined()
-}, 6000)
+})
 
 test('catches an appulse in the first interval when the window starts just before mid-transit', () => {
 	const observer = observerAt(GREENWICH)
@@ -158,7 +158,7 @@ test('catches an appulse in the first interval when the window starts just befor
 	expect(transit.interiorIngress).toBeUndefined()
 	expect(contactError(transit.interiorEgress, 2463549.963249)).toBeLessThan(2)
 	expect(contactError(transit.exteriorEgress, 2463549.964686)).toBeLessThan(2)
-}, 6000)
+})
 
 test('reports no transit when the window opens after mid-transit', () => {
 	const observer = observerAt(GREENWICH)
@@ -167,7 +167,7 @@ test('reports no transit when the window opens after mid-transit', () => {
 	// ahead. The window must bracket the mid-transit instant.
 	const transits = planetaryTransits(mercury, sun, observer, timeYMDHMS(2032, 11, 13, 9, 30, 0, Timescale.UTC), timeYMDHMS(2032, 11, 13, 12, 0, 0, Timescale.UTC), { sunRadius: SUN_RADIUS_AU, planetRadius: MERCURY_RADIUS })
 	expect(transits.length).toBe(0)
-}, 5000)
+})
 
 test('an empty window yields no transits', () => {
 	const observer = observerAt(GREENWICH)

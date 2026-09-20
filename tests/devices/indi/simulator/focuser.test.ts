@@ -80,7 +80,7 @@ describe.skipIf(SKIP)('focuser simulator', () => {
 		expect(thermometerManager.has(client, focuser.name)).toBeFalse()
 		expect(focuserManager.properties.length).toBe(0)
 		expect(thermometerManager.properties.length).toBe(0)
-	}, 7000)
+	})
 
 	test('simulates asymmetric backlash with persistent partial slack', async () => {
 		using client = new ClientSimulator('focuser', new IndiClientHandlerSet())

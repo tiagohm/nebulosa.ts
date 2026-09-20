@@ -135,7 +135,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 
 		cameraSimulator.dispose()
 		expect(cameraManager.has(client, camera.name)).toBeFalse()
-	}, 5000)
+	})
 
 	test('adds mount FITS headers when snooping a connected mount', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -188,7 +188,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		mountSimulator.dispose()
 		expect(cameraManager.has(client, camera.name)).toBeFalse()
 		expect(mountManager.has(client, mount.name)).toBeFalse()
-	}, 5000)
+	})
 
 	test('rotates on the full sensor before extracting a subframe', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -252,7 +252,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		rotatorSimulator.dispose()
 		expect(cameraManager.has(client, camera.name)).toBeFalse()
 		expect(rotatorManager.has(client, rotator.name)).toBeFalse()
-	}, 5000)
+	})
 
 	test('scales configured flat fields and preserves artifacts through crop and binning', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -355,7 +355,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 
 		cameraSimulator.dispose()
 		expect(cameraManager.has(client, camera.name)).toBeFalse()
-	}, 10000)
+	})
 
 	test('projects catalog provider stars from the active mount pointing', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -402,7 +402,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 			cameraSimulator.dispose()
 			mountSimulator.dispose()
 		}
-	}, 5000)
+	})
 
 	test('displaces the synthetic scene by the configured pointing error', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -522,7 +522,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 			cameraSimulator.dispose()
 			mountSimulator.dispose()
 		}
-	}, 15000)
+	})
 
 	test('keeps stars on the leading edge when the field sweeps during the exposure', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -613,7 +613,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 			cameraSimulator.dispose()
 			mountSimulator.dispose()
 		}
-	}, 15000)
+	})
 
 	test('renders the same frame whether the catalog resolves at once or slowly', async () => {
 		// A CatalogSource is explicitly allowed to be asynchronous and network-backed, and the mount
@@ -685,7 +685,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		// the sidereal drift, so the trail falls on slightly different sub-pixel positions. The failure
 		// this guards against collapsed the peak by orders of magnitude.
 		expect(Math.abs(delayed[2] / immediate[2] - 1)).toBeLessThan(1e-3)
-	}, 20000)
+	})
 
 	test('leaves the seeded star field where it was when the scene margin grows', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -757,7 +757,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 
 		expect(peak).toBeGreaterThan(0.1)
 		expect(moved).toBe(0)
-	}, 15000)
+	})
 
 	test('keeps integrating the mount the exposure began on', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -822,7 +822,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(frame!.header.TELESCOP).toBe(first.name)
 		expect(frame!.header.SITELAT).toBeCloseTo(toDeg(mountA.geographicCoordinate.latitude), 6)
 		expect(frame!.header.SITELONG).toBeCloseTo(toDeg(mountA.geographicCoordinate.longitude), 6)
-	}, 15000)
+	})
 
 	test('integrates the interval the shutter was open, not the one before the frame arrived', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -890,7 +890,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		// one per cent slice of a tick through which the mount is interpolated as having moved evenly.
 		expect(Math.abs(x - (1280 - 1) * 0.5)).toBeLessThan(20)
 		expect(Math.abs(y - (1024 - 1) * 0.5)).toBeLessThan(20)
-	}, 15000)
+	})
 
 	test('waits for the mount to simulate the interval the shutter was open', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -970,7 +970,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 			cameraSimulator.dispose()
 			mountSimulator.dispose()
 		}
-	}, 30000)
+	})
 
 	test('publishes one frame even when the mount never catches up', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -1020,7 +1020,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 			cameraSimulator.dispose()
 			mountSimulator.dispose()
 		}
-	}, 20000)
+	})
 
 	test('queries the catalog at the epoch the mount believes in', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -1087,7 +1087,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		const frame = await readImageFromBuffer(frameReceiver.lastFrame)
 		expect(toArcsec(Math.abs(normalizePI(deg(frame!.header.RA as number) - atMountEpoch)))).toBeLessThan(0.1)
 		expect(toArcsec(Math.abs(deg(frame!.header.DEC as number) - atMountEpochDeclination))).toBeLessThan(0.1)
-	}, 15000)
+	})
 
 	test('centres the catalog on the coordinate the trajectory is measured against', async () => {
 		// The catalog is projected around the reported coordinate and the trajectory offsets are measured
@@ -1162,7 +1162,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		// depends on the noise, and the sensor temperature moves with the wall clock between the two runs.
 		expect(Math.abs(lagging[0] - published[0])).toBeLessThanOrEqual(1)
 		expect(Math.abs(lagging[1] - published[1])).toBeLessThanOrEqual(1)
-	}, 30000)
+	})
 
 	test('keeps its own trajectory when a second exposure starts while the catalog is pending', async () => {
 		// An exposure is marked complete before its frame has been rendered, so a client is free to start
@@ -1236,7 +1236,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		// exposure's offsets under it, so the still field was drawn along the slew the second one covered.
 		expect(overlapped[0]).toBe(alone[0])
 		expect(overlapped[1]).toBe(alone[1])
-	}, 30000)
+	})
 
 	test('conserves flux and trails the stars when the field moves during the exposure', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -1332,7 +1332,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 			cameraSimulator.dispose()
 			mountSimulator.dispose()
 		}
-	}, 30000)
+	})
 
 	test('does not draw the field it left back at the centre of the frame', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -1400,7 +1400,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 			cameraSimulator.dispose()
 			mountSimulator.dispose()
 		}
-	}, 30000)
+	})
 
 	test('renders a defocused annular collimation pattern with anisotropic binning', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -1526,7 +1526,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		const asymmetricEdgeImage = await readImageFromBuffer(frameReceiver.lastFrame)
 		expect(asymmetricEdgeImage).toBeDefined()
 		expect(sumPixels(asymmetricEdgeImage!.raw)).toBeGreaterThan(0)
-	}, 5000)
+	})
 
 	test('renders signed Bahtinov spikes on only the brightest star with anisotropic binning', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -1636,7 +1636,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_STAR_PLOT_FLAGS?.elements.SATURATION_ENABLED.value === true && cameraManager.properties.get(camera)?.SIMULATOR_STAR_PLOT_OPTIONS?.elements.SATURATION_LEVEL.value === 0.1)
 		const saturated = await capture()
 		expect(Math.max(...saturated.raw)).toBeLessThanOrEqual(0.1 + 1 / 65535)
-	}, 10000)
+	})
 
 	test('converges CCD temperature to cooling and ambient targets', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -1661,7 +1661,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		cameraManager.cooler(camera, false)
 		await waitUntil(() => !camera.cooler)
 		await waitUntil(() => camera.temperature === 18, 20000)
-	}, 30000)
+	})
 
 	test('camera sends guiding pulse to mount', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -1733,7 +1733,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(thermometer!.id).not.toBe(camera.id)
 		expect(thermometer!.parentId).toBe(camera.id)
 		expect(JSON.stringify(thermometer)).toContain('parentId')
-	}, 1000)
+	})
 
 	test('uses the non-zero timed-guide duration when the opposite axis is zero', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -1766,7 +1766,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		guideOutputManager.pulseEast(camera, 0)
 		await waitUntil(() => !camera.pulsingWE)
 		expect(camera.pulsingNS).toBeFalse()
-	}, 2000)
+	})
 
 	test('camera uses focuser position', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -1813,7 +1813,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(defocusedSumPixel).toBeGreaterThan(0)
 
 		expect(defocusedSumPixel).toBeLessThan(focusedSumPixel)
-	}, 5000)
+	})
 })
 
 function closeTo(a: number, b: number, tolerance: number) {

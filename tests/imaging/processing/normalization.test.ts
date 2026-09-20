@@ -621,7 +621,7 @@ describe('local normalization', () => {
 		expect(surface.acceptedSamples).toBeLessThanOrEqual(1024)
 		expect(Math.max(...surface.samples.filter((sample) => sample.accepted).map((sample) => sample.value))).toBeCloseTo(0, 12)
 		expect(model.scaleLogRanges[0]![1]).toBeGreaterThan(0.01)
-	}, 5000)
+	})
 
 	test('both clamp ranges contain zero so a null residual reproduces the anchor', () => {
 		const reference = referencePlane()
@@ -1267,7 +1267,7 @@ describe('local normalization', () => {
 		applyLocalNormalizationInPlace(raw, undefined, model)
 
 		expect(raw[targetY * size + targetX]).toBeCloseTo(Math.exp(direct), 12)
-	}, 5000)
+	})
 
 	test('an extreme gridSize is scaled back to a tractable cell count', () => {
 		// One cell per pixel is not a usable ceiling on a real frame: at this gridSize the grid would ask
@@ -1352,7 +1352,7 @@ describe('local normalization', () => {
 
 		expect(tiled.diagnostics[0].acceptedCells).toBe(tiled.diagnostics[0].candidateCells)
 		expect(isLocalNormalizationFallback(tiled)).toBe(false)
-	}, 5000)
+	})
 
 	test('a cell holding one stray pair still retries the alternate phase', () => {
 		const reference = referencePlane()

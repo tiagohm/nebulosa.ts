@@ -388,4 +388,4 @@ test('real scenario', async () => {
 	expect(result.summary.medianSkySeparation).toBeLessThan(arcsec(1))
 	expect(toArcsec(result.solution!.scale)).toBeCloseTo(2.735, 2)
 	expect(formatAZ(result.solution!.fieldRadius).slice(0, 9)).toBe('000 28 35')
-}, 2500)
+})

@@ -158,4 +158,4 @@ test('summarizes five independently rendered frames with one reused workspace', 
 	expect(result.dispersion).toBeLessThan(0.2)
 	expect(result.direction).toBeCloseTo(Math.atan(0.5), 1)
 	expect(result.dispersionExceedsTolerance).toBeFalse()
-}, 5000)
+})

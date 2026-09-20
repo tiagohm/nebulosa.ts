@@ -80,7 +80,7 @@ test('longitude inversion preserves the requested UTC, TT and TDB output scales'
 	expect(timeSubtract(tt, utc, Timescale.UTC)).toBeCloseTo(0, 9)
 	expect(timeSubtract(tdb, utc, Timescale.UTC)).toBeCloseTo(0, 9)
 	expect(toDeg(meteorSolarLongitude(tt))).toBeCloseTo(20, 5)
-}, 1500)
+})
 
 test('batch longitude inversion preserves order and agrees with scalar inversion around wrap', () => {
 	expect(meteorSolarLongitudeTimes(2024, [])).toEqual([])

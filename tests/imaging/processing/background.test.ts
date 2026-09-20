@@ -403,7 +403,7 @@ test('a boxSize larger than the frame does not oversize the sample buffers', () 
 	// Reached the fit stage (a domain error about the surface fit) rather than dying on an oversized
 	// allocation. Every box spans the whole frame, collapsing all samples onto one position.
 	expect((error as Error).message).toContain('surface')
-}, 3000)
+})
 
 test('fits a high-degree surface accurately (Chebyshev conditioning)', () => {
 	const width = 160
@@ -1035,7 +1035,7 @@ test('thin-plate spline preserves a corner light-pollution dome', () => {
 	const background = evaluateBackgroundModel(model, image).raw
 	expect(Math.abs(dome(0, 0) - background[0])).toBeLessThan(0.02)
 	expect(Math.abs(dome(width - 1, height - 1) - background[(height - 1) * width + (width - 1)])).toBeLessThan(0.02)
-}, 4000)
+})
 
 test('thin-plate spline preserves a bright flat-topped object instead of subtracting it', () => {
 	// A saturated flat-topped object (0.8 square) on a flat 0.2 frame. Its boxes have near-zero internal
@@ -1155,7 +1155,7 @@ test('caps thin-plate spline control points on dense grids', () => {
 	// A default-density grid stays under the cap, so every accepted sample is a control point.
 	const normal = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 16, smoothing: 0.05 })
 	expect(normal.surfaces[0].controlPoints!.length).toBe(normal.surfaces[0].acceptedSamples * 2)
-}, 6000)
+})
 
 test('an exact thin-plate spline interpolates every accepted sample past the control-point cap', () => {
 	// With smoothing 0 the spline is an exact interpolant, but a dense grid exceeds the control-point
@@ -1199,7 +1199,7 @@ test('an exact thin-plate spline interpolates every accepted sample past the con
 		maxInterpError = Math.max(maxInterpError, Math.abs(tps(u, v) - sample.value))
 	}
 	expect(maxInterpError).toBeLessThan(1e-9)
-}, 4000)
+})
 
 test('an exact thin-plate spline fits a tiny image with overlapping sample boxes', () => {
 	// On a small dense grid the edge boxes clamp inward to the same window, so several sample boxes share
@@ -1365,7 +1365,7 @@ test('coarse-grid TPS evaluation matches direct evaluation', () => {
 
 	// Bilinear upsampling of the smooth surface stays far below the fit/noise accuracy.
 	expect(maxError).toBeLessThan(1e-3)
-}, 3000)
+})
 
 test('a zero or negligibly-smoothed thin-plate spline is evaluated exactly, without coarsening', () => {
 	// With smoothing 0 — or a value so small the spline still effectively interpolates — evaluation must
@@ -1415,7 +1415,7 @@ test('a zero or negligibly-smoothed thin-plate spline is evaluated exactly, with
 	expect(maxCoarseningError(0)).toBeLessThan(1e-6)
 	expect(maxCoarseningError(1e-12)).toBeLessThan(1e-6)
 	expect(maxCoarseningError(0.05)).toBeGreaterThan(1e-6)
-}, 6000)
+})
 
 test('an extreme gridSize on a fully excluded frame does not exhaust memory', () => {
 	// collectSamples reserves its sample arrays for every CANDIDATE cell, before masking decides how many
@@ -1433,7 +1433,7 @@ test('an extreme gridSize on a fully excluded frame does not exhaust memory', ()
 	const model = fitBackgroundSurface(image, { gridSize: 1_000_000 })
 	expect(model.surfaces[0].samples.length).toBeLessThanOrEqual(128 * 128)
 	expect(model.surfaces[0].samples.length).toBeLessThan(width * height)
-}, 20000)
+})
 
 test('a square RGB degree-six background grid stays under the sample ceiling', () => {
 	const size = 256

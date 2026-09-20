@@ -605,7 +605,7 @@ describe.skipIf(SKIP)('manager', () => {
 		expect(cameraRemoved).toBeTrue()
 		expect(thermometerRemoved).toBeTrue()
 		expect(guideOutputRemoved).toBeTrue()
-	}, 10000)
+	})
 
 	test('mount', async () => {
 		let mountAdded = false
@@ -711,7 +711,7 @@ describe.skipIf(SKIP)('manager', () => {
 		expect(guideOutput).toBeEmpty()
 		expect(mountRemoved).toBeTrue()
 		expect(guideOutputRemoved).toBeTrue()
-	}, 10000)
+	})
 
 	test('wheel', async () => {
 		let wheelAdded = false
@@ -786,7 +786,7 @@ describe.skipIf(SKIP)('manager', () => {
 
 		expect(wheel).toBeEmpty()
 		expect(wheelRemoved).toBeTrue()
-	}, 10000)
+	})
 
 	test('focuser', async () => {
 		let focuserAdded = false
@@ -889,7 +889,7 @@ describe.skipIf(SKIP)('manager', () => {
 		expect(thermometer).toBeEmpty()
 		expect(focuserRemoved).toBeTrue()
 		expect(thermometerRemoved).toBeTrue()
-	}, 10000)
+	})
 
 	test('cover', async () => {
 		let coverAdded = false
@@ -968,7 +968,7 @@ describe.skipIf(SKIP)('manager', () => {
 
 		expect(cover).toBeEmpty()
 		expect(coverRemoved).toBeTrue()
-	}, 10000)
+	})
 
 	test('flat panel', async () => {
 		let flatPanelAdded = false
@@ -1051,7 +1051,7 @@ describe.skipIf(SKIP)('manager', () => {
 
 		expect(flatPanel).toBeEmpty()
 		expect(flatPanelRemoved).toBeTrue()
-	}, 10000)
+	})
 
 	test.skip('power', async () => {
 		let powerAdded = false
@@ -1147,7 +1147,7 @@ describe.skipIf(SKIP)('manager', () => {
 
 		expect(power).toBeEmpty()
 		expect(powerRemoved).toBeTrue()
-	}, 10000)
+	})
 
 	test('rotator', async () => {
 		let rotatorAdded = false
@@ -1227,5 +1227,5 @@ describe.skipIf(SKIP)('manager', () => {
 
 		expect(rotator).toBeEmpty()
 		expect(rotatorRemoved).toBeTrue()
-	}, 10000)
+	})
 })

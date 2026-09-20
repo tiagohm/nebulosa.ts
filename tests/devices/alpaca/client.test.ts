@@ -141,7 +141,7 @@ describe('make fits from image bytes', () => {
 		expectNaxis(image!.header, 2, 1280, 1024, undefined)
 		expectHeader(image!.header)
 		await saveImageAndCompareHash(image!, 'alpaca.8.1', '7a8ffdcd833765af2e783fcce9e5e9af')
-	}, 3000)
+	})
 
 	test('unsigned 16-bit color (bayered)', async () => {
 		const buffer = await Bun.file('data/Sky Simulator.8.3.dat').arrayBuffer()
@@ -150,7 +150,7 @@ describe('make fits from image bytes', () => {
 		expectNaxis(image!.header, 2, 1280, 1024, undefined)
 		expectHeader(image!.header)
 		await saveImageAndCompareHash(debayer(image!, 'RGGB')!, 'alpaca.8.3', '428add70df1895f245a20a5f7f8ca098')
-	}, 3000)
+	})
 
 	for (const bitpix of [8, 16, 32, -32, -64] as const) {
 		for (const channel of [1, 3] as const) {

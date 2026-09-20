@@ -100,7 +100,7 @@ describe('maxAngularStep validation', () => {
 		const fallback = computeLunarEclipseMapGeometry(TOTAL, fastSunMoonPosition, { maxAngularStep: 0 }).lines.moonRiseSet.MAX![0]
 		const byDefault = computeLunarEclipseMapGeometry(TOTAL, fastSunMoonPosition).lines.moonRiseSet.MAX![0]
 		expect(fallback.length).toBe(byDefault.length)
-	}, 4000)
+	})
 
 	// A pathologically small but finite maxAngularStep passes the finite-positive check, yet would derive an
 	// unsafe array length and throw a RangeError; the per-curve point count must be capped instead.
@@ -114,7 +114,7 @@ describe('maxAngularStep validation', () => {
 			expect(Number.isFinite(branch[0].x)).toBe(true)
 			expect(Number.isFinite(branch.at(-1)!.y)).toBe(true)
 		}
-	}, 8000)
+	})
 })
 
 describe('horizon curve geometry', () => {
@@ -149,7 +149,7 @@ describe('horizon curve geometry', () => {
 				expect(topocentricAltitude).toBeCloseTo(0, 3)
 			}
 		}
-	}, 8000)
+	})
 
 	test('sublunar point sees the Moon at the zenith and its antipode below the horizon', () => {
 		for (const event of geometry.events) {
@@ -172,7 +172,7 @@ describe('horizon curve geometry', () => {
 			const point = branch[i]
 			expect(moonAltitudeAt(max.time, point.x, point.y, fastSunMoonPosition)).toBeCloseTo(altOption, 3)
 		}
-	}, 2000)
+	})
 
 	test('negative horizon altitude option lowers the topocentric curve', () => {
 		const altOption: Angle = deg(-2)
@@ -185,7 +185,7 @@ describe('horizon curve geometry', () => {
 			const point = branch[i]
 			expect(moonAltitudeAt(max.time, point.x, point.y, fastSunMoonPosition)).toBeCloseTo(altOption, 3)
 		}
-	}, 2000)
+	})
 })
 
 describe('upper-limb visibility', () => {
@@ -208,7 +208,7 @@ describe('upper-limb visibility', () => {
 				expect(moonAltitudeAt(event.time, point.x, point.y, sunMoonPosition)).toBeCloseTo(-semidiameter, 3)
 			}
 		}
-	}, 8000)
+	})
 })
 
 describe('high declination robustness', () => {

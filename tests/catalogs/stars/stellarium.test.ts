@@ -63,7 +63,7 @@ test('catalog', async () => {
 	}
 
 	expect(catalog.queryCone(parseAngle('18h 02 42.0')!, parseAngle('-22 58 18')!, deg(1)).length).toBeGreaterThanOrEqual(19)
-}, 5000)
+})
 
 test('names', async () => {
 	const handle = await fs.open('data/names.dat')

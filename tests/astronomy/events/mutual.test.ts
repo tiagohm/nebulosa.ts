@@ -33,7 +33,7 @@ test('finds the Europa-Ganymede mutual occultation on 2026-12-05', () => {
 	expect(secondsAfter(occultation.end!, start)).toBeGreaterThan(secondsAfter(occultation.middle, start))
 	expect(secondsAfter(occultation.end!, occultation.start!)).toBeGreaterThan(900)
 	expect(secondsAfter(occultation.end!, occultation.start!)).toBeLessThan(1200)
-}, 5000)
+})
 
 test('finds the Ganymede-shadow mutual eclipses on 2026-12-02', () => {
 	const start = timeYMDHMS(2026, 12, 2, 19, 0, 0, Timescale.UTC)
@@ -55,7 +55,7 @@ test('finds the Ganymede-shadow mutual eclipses on 2026-12-02', () => {
 	expect(events[1].front).toBe('ganymede')
 	expect(events[1].back).toBe('europa')
 	expect(secondsAfter(events[1].middle, start)).toBeGreaterThan(secondsAfter(central.middle, start))
-}, 5000)
+})
 
 test('reports an event that is only underway during the window', () => {
 	// A narrow window starting inside the 2026-12-05 Europa-Ganymede occultation (mid ~19:17:52, ending
@@ -101,7 +101,7 @@ test('finds the Titan-Rhea mutual events in the 2025 Saturn season', () => {
 	// Mid-occultation 2025-03-12 11:34:01 UTC, minutes after the eclipse.
 	expect(secondsAfter(occultation.middle, start)).toBeCloseTo(5641.3, -1)
 	expect(secondsAfter(occultation.middle, eclipse.middle)).toBeGreaterThan(0)
-}, 15000)
+})
 
 test('contacts bracket every event and impact parameters stay in range', () => {
 	const events = galileanMutualEvents(timeYMDHMS(2026, 12, 2, 19, 0, 0, Timescale.UTC), timeYMDHMS(2026, 12, 2, 22, 0, 0, Timescale.UTC))
@@ -113,4 +113,4 @@ test('contacts bracket every event and impact parameters stay in range', () => {
 		if (event.start !== undefined) expect(timeSubtract(event.middle, event.start)).toBeGreaterThan(0)
 		if (event.end !== undefined) expect(timeSubtract(event.end, event.middle)).toBeGreaterThan(0)
 	}
-}, 3000)
+})

@@ -37,5 +37,5 @@ describe.skipIf(SKIP)('cover simulator', () => {
 		simulator.dispose()
 		expect(manager.has(client, cover.name)).toBeFalse()
 		expect(manager.properties.length).toBe(0)
-	}, 3000)
+	})
 })

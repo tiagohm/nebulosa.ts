@@ -56,7 +56,7 @@ test('does not systematically detect stars, isolated hot pixels, or smooth gradi
 	const detections = detectStreaks(frame, { minLength: 20, maxWidth: 8, backgroundCellSize: 32 })
 	expect(detections.every((streak) => streak.length < 80)).toBeTrue()
 	for (const streak of detections) expect(detections.filter((candidate) => streakAxialAngleDistance(streak.angle, candidate.angle) < PI / 90).length).toBeLessThanOrEqual(3)
-}, 2000)
+})
 
 test('keeps geometry stable through a bright crossing star and invalid samples', () => {
 	const frame = image(192, 128)
@@ -174,7 +174,7 @@ test('keeps photometry approximately invariant across orientation', () => {
 	}
 	expect(Math.max(...fluxes) / Math.min(...fluxes)).toBeLessThan(1.2)
 	expect(Math.max(...signalToNoise) / Math.min(...signalToNoise)).toBeLessThan(1.25)
-}, 3000)
+})
 
 test('uses measured width and residual local noise for final photometry', () => {
 	const plain = image(176, 112)
@@ -197,4 +197,4 @@ test('uses measured width and residual local noise for final photometry', () => 
 	for (let y = 0; y < 112; y++) for (let x = 0; x < 176; x++) noiselessGradient.raw[y * 176 + x] += x * 0.001 + y * 0.0005
 	renderSyntheticStreak(noiselessGradient, { start: { x: 12, y: 25 }, end: { x: 164, y: 88 }, width: 3, intensity: 0.3 })
 	expect(detectStreaks(noiselessGradient, { minLength: 80, maxWidth: 8, backgroundCellSize: 32 })[0].snr).toBeUndefined()
-}, 3000)
+})

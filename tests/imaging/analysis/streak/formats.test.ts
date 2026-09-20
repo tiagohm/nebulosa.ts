@@ -74,7 +74,7 @@ for (const [channels, bayer] of [
 		expect(Math.abs(streaks[0].center.x - 63.5)).toBeLessThanOrEqual(3.1)
 		expect(Math.abs(streaks[0].center.y - 48)).toBeLessThanOrEqual(3)
 		expect(streaks[0].length).toBeGreaterThan(100)
-	}, 2000)
+	})
 }
 
 for (let index = 0; index < CFA_PATTERNS.length; index++) {

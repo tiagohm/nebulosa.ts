@@ -90,7 +90,7 @@ describe.skipIf(SKIP)('mount simulator', () => {
 
 		mountSimulator.dispose()
 		expect(mountManager.has(client, mountSimulator.name)).toBeFalse()
-	}, 2000)
+	})
 
 	test('applies tracking drift for disabled, sidereal, king, solar and lunar modes', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -148,7 +148,7 @@ describe.skipIf(SKIP)('mount simulator', () => {
 		await Bun.sleep(200)
 		const lunarDrift = normalizePI(mount.equatorialCoordinate.rightAscension - lunarRightAscension)
 		expect(lunarDrift).toBeGreaterThan(solarDrift * 5)
-	}, 2000)
+	})
 
 	test('supports manual move over time', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -203,7 +203,7 @@ describe.skipIf(SKIP)('mount simulator', () => {
 		await waitUntil(() => !mount.slewing)
 		manualDrift = normalizePI(mount.equatorialCoordinate.declination - manualDeclination)
 		expect(manualDrift).toBeLessThan(-1e-3)
-	}, 2000)
+	})
 
 	test('supports manual pulse guiding over time', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -285,7 +285,7 @@ describe.skipIf(SKIP)('mount simulator', () => {
 		expect(guideOutput!.parentId).toBe(mount.id)
 		expect(mount.parentId).toBeUndefined()
 		expect(JSON.stringify(guideOutput)).toContain('parentId')
-	}, 3000)
+	})
 })
 
 const FAST_SLEW_SPEED = SLEW_RATES.at(-1)!.speed * SLEW_SPEED_FACTOR

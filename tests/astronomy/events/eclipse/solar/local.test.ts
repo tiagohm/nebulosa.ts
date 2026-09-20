@@ -116,7 +116,7 @@ describe('local circumstances', () => {
 		expect(c.visibility.kind).toBe('geometricOnlyBelowHorizon')
 		expect(c.visibility.hasGeometricEclipse).toBe(true)
 		expect(c.visibility.hasObservableEclipse).toBe(false)
-	}, 3000)
+	})
 
 	test('detects an observable culmination sliver between below-horizon contacts', () => {
 		// Mazatlan's eclipse straddles local noon: every contact is below ~73.5 deg, but the Sun climbs to a
@@ -131,7 +131,7 @@ describe('local circumstances', () => {
 		const aboveCulmination = localCircumstances(total2024.pbe, -106.4, 23.25, { horizonAltitude: deg(75) })
 		expect(aboveCulmination.visibility.hasObservableEclipse).toBe(false)
 		expect(aboveCulmination.visibility.kind).toBe('geometricOnlyBelowHorizon')
-	}, 8000)
+	})
 
 	test('the continuous valley check never downgrades a daytime fully-visible eclipse', () => {
 		// Mazatlan's eclipse is a daytime hump (no lower-culmination valley), so the interior-minimum check must

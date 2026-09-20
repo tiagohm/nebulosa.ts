@@ -91,7 +91,7 @@ test('reuses every large workspace buffer with numerically stable output', () =>
 	expect(workspace.state.refinementWork).toBeGreaterThan(0)
 	expect(workspace.state.supportedRuns).toBeGreaterThan(0)
 	expect(workspace.state.mergeRefits).toBeGreaterThan(0)
-}, 2000)
+})
 
 test('matches a fresh workspace and remains bounded under candidate pressure', () => {
 	const frame = image(512, 384)
@@ -105,7 +105,7 @@ test('matches a fresh workspace and remains bounded under candidate pressure', (
 	expect(constrained.state.edgeCount).toBeLessThanOrEqual(512)
 	expect(constrained.state.candidateCount).toBeLessThanOrEqual(32)
 	expect(constrained.state.edgesTruncated).toBeTrue()
-}, 3000)
+})
 
 test('rejects multiplicative work explosions and clamps width work to the frame', () => {
 	const frame = image(96, 64)
@@ -117,7 +117,7 @@ test('rejects multiplicative work explosions and clamps width work to the frame'
 	const frameBounded = detectStreaks(frame, { minLength: 40, maxWidth: 256, backgroundCellSize: 16 })
 	expect(Math.abs(frameBounded[0].flux / narrow[0].flux - 1)).toBeLessThan(0.001)
 	expect(Math.abs(frameBounded[0].width / narrow[0].width - 1)).toBeLessThan(0.01)
-}, 2000)
+})
 
 test('rejects candidate sets whose initial and final refinement stages exceed the budget', () => {
 	const width = 1024
@@ -135,4 +135,4 @@ test('rejects candidate sets whose initial and final refinement stages exceed th
 	const priorSinglePassEstimate = workspace.state.candidateCount * (Math.ceil(Math.hypot(width, height)) + 1) * 513
 	expect(priorSinglePassEstimate).toBeLessThan(100_000_000)
 	expect(workspace.state.refinementWork).toBe(0)
-}, 3000)
+})

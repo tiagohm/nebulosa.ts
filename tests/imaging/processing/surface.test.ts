@@ -453,7 +453,7 @@ describe('thin-plate spline', () => {
 
 		const model = fitOrThrow(samples, 2048, 2048, { model: 'thinPlateSpline', smoothing: 0.5, maxControlPoints: 1_000_000 })
 		expect(model.controlPoints!.length / 2).toBeLessThanOrEqual(SURFACE_MAX_CONTROL_POINTS)
-	}, 3000)
+	})
 
 	test('a cap below the spline minimum is raised to it', () => {
 		const samples = sampleGrid(64, 64, 6, 6, (x, y) => 0.2 + 0.001 * (x + y))
@@ -649,7 +649,7 @@ describe('thin-plate spline', () => {
 		expect(model.samples).toHaveLength(samples.length)
 		expect(model.residual).toBeGreaterThan(0)
 		expect(elapsed).toBeLessThan(15000)
-	}, 20000)
+	})
 })
 
 describe('evaluation', () => {
@@ -712,7 +712,7 @@ describe('evaluation', () => {
 
 		// Far below the documented coarse-grid tolerance, which is a fraction of the local amplitude.
 		expect(worst).toBeLessThan(1e-3)
-	}, 20000)
+	})
 
 	test('the coarse grid holds its tolerance between control points, not just at them', () => {
 		// Bilinear interpolation is furthest from the function it interpolates at the centre of a cell, so
@@ -753,7 +753,7 @@ describe('evaluation', () => {
 
 		// The documented coarse-grid tolerance, now a verified property of the materialization.
 		expect(worst).toBeLessThanOrEqual(0.005)
-	}, 20000)
+	})
 
 	test('an exact spline over a large plane stays bounded instead of stalling', () => {
 		// Direct evaluation of an interpolating spline is O(pixels * controls) and neither factor bounds
@@ -791,7 +791,7 @@ describe('evaluation', () => {
 			for (let x = 0; x < size; x += 37) worst = Math.max(worst, Math.abs(plane[y * size + x] - point.at(x, y)))
 		}
 		expect(worst).toBeLessThanOrEqual(0.005 * (high - low))
-	}, 60000)
+	})
 
 	test('a small fitted domain on a large plane stays bounded', () => {
 		// The mean-spacing step comes from the fitted domain, so controls packed into a tiny corner give a
@@ -835,7 +835,7 @@ describe('evaluation', () => {
 		expect(worst).toBeGreaterThan(0)
 		expect(worst).toBeLessThanOrEqual(0.005 * 1.1 * (high - low))
 		expect(boundaryWorst).toBeLessThanOrEqual(0.005 * 1.1 * (high - low))
-	}, 60000)
+	})
 
 	test('an exact spline under the work budget still interpolates its controls', () => {
 		const size = 200

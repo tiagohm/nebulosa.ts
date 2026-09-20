@@ -130,7 +130,7 @@ describe.skipIf(SKIP)('dome simulator', () => {
 		simulator.dispose()
 		expect(manager.has(client, simulator.name)).toBeFalse()
 		expect(manager.properties.length).toBe(0)
-	}, 15000)
+	})
 
 	test('keeps home and park states exclusive', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -165,7 +165,7 @@ describe.skipIf(SKIP)('dome simulator', () => {
 		manager.home(dome)
 		await waitUntil(() => dome.homing)
 		expect(dome.parking).toBeFalse()
-	}, 10000)
+	})
 
 	test('executes full-turn relative moves', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -196,7 +196,7 @@ describe.skipIf(SKIP)('dome simulator', () => {
 		expect(dome.azimuth.value).toBeGreaterThan(deg(330))
 		manager.stop(dome)
 		await waitUntil(() => !dome.moving)
-	}, 5000)
+	})
 
 	test('persists dome configuration but excludes transient operations', () => {
 		const saved: string[] = []
