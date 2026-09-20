@@ -4363,20 +4363,25 @@ describe('mount simulator pointing errors', () => {
 			}
 
 			const first = homeAndMeasure()
-			expect(Math.abs(first[0])).toBeGreaterThan(0)
-			expect(Math.abs(first[1])).toBeGreaterThan(0)
+			expect(Math.hypot(first[0], first[1])).toBeGreaterThan(1)
+			expect(Math.hypot(first[0], first[1])).toBeLessThan(150)
 
 			// Not repeatable: the sensor does not trip in the same place twice.
 			const second = homeAndMeasure()
 			expect(second[0]).not.toBe(first[0])
 			expect(second[1]).not.toBe(first[1])
+			expect(Math.hypot(second[0], second[1])).toBeGreaterThan(1)
+			expect(Math.hypot(second[0], second[1])).toBeLessThan(150)
 			mount.setHome()
 			expect(mount.isHoming).toBeFalse()
 			expect(toArcsec(normalizePI(mount.boresight.rightAscension - mount.mechanical.rightAscension))).toBe(second[0])
-			mount.home()
-			for (let i = 0; i < 200 && mount.isHoming; i++) mount.advance(1)
-			expect(toArcsec(normalizePI(mount.boresight.rightAscension - mount.mechanical.rightAscension))).toBe(second[0])
-			expect(toArcsec(mount.boresight.declination - mount.mechanical.declination)).toBe(second[1])
+			for (let i = 0; i < 3; i++) {
+				mount.home()
+				for (let step = 0; step < 200 && mount.isHoming; step++) mount.advance(1)
+				expect(mount.isHoming).toBeFalse()
+				expect(toArcsec(normalizePI(mount.boresight.rightAscension - mount.mechanical.rightAscension))).toBe(second[0])
+				expect(toArcsec(mount.boresight.declination - mount.mechanical.declination)).toBe(second[1])
+			}
 
 			// A sync re-registers the bookkeeping, which is exactly what absorbs it.
 			mount.syncTo(hour(5), deg(20))
