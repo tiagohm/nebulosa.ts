@@ -4529,6 +4529,43 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	for (const operation of ['park', 'manual motion'] as const) {
+		test(`${operation} cancels FIND acquisition without late scatter or recalibration`, () => {
+			const { client, mount } = makeMount(`mount.find.superseded.${operation}`, 'MECHANICS', 'TRACKING_RATE')
+			try {
+				client.sendNumber({ device: mount.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, HOME_SCATTER: 600 } })
+				client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { ...NO_TRACKING_RATE, BIAS: 1000 } })
+				mount.setTrackingEnabled(true)
+				mount.advance(600)
+				mount.setTrackingEnabled(false)
+				const drift = mount.trackingRateOffset
+				mount.setHome()
+				if (operation === 'park') mount.setPark()
+				mount.findHome()
+				mount.advance(0.25)
+				expect(mount.isHoming).toBeTrue()
+				const declination = mount.mechanical.declination
+
+				if (operation === 'park') mount.park()
+				else mount.moveNorth(true)
+				expect(mount.isHoming).toBeFalse()
+				if (operation === 'manual motion') {
+					mount.advance(0.1)
+					mount.moveNorth(false)
+				}
+				mount.advance(2)
+				expect(mount.isHoming).toBeFalse()
+				if (operation === 'park') expect(mount.isParked).toBeTrue()
+				else expect(mount.mechanical.declination).toBeGreaterThan(declination)
+				expect(mount.trackingRateOffset).toBe(drift)
+				expect(normalizePI(mount.boresight.rightAscension - mount.mechanical.rightAscension)).toBeCloseTo(drift, 12)
+				expect(mount.boresight.declination - mount.mechanical.declination).toBe(0)
+			} finally {
+				mount.dispose()
+			}
+		})
+	}
+
 	test('does not start FIND while parked', () => {
 		const { mount } = makeMount('mount.find.parked')
 		try {
