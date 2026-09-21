@@ -1,10 +1,11 @@
 import { type Source, readLines } from '../../../io/io'
 
 // Parser and in-memory pool for NAIF text kernels (`KPL/PCK` and `KPL/FK`).
-// Reads `\begindata` assignments into case-insensitive names, applying `=` replace
-// and `+=` append within a file. Values are numbers (Fortran `D` exponents included)
-// or quoted strings; `@` calendar dates are rejected. The pool is an explicit
-// instance so load order stays testable and is never process-global.
+// Reads `\begindata` assignments as an ordered list of `=` replace and `+=` append
+// operations so the pool can apply them against values already loaded from earlier
+// files. Values are numbers (Fortran `D` exponents included) or quoted strings;
+// `@` calendar dates are rejected. The pool is an explicit instance so load order
+// stays testable and is never process-global.
 
 // A scalar stored by a text-kernel assignment: a number, or an unquoted string.
 export type SpiceKernelValue = number | string
@@ -12,14 +13,24 @@ export type SpiceKernelValue = number | string
 // Values of one kernel variable. Scalars are stored as a one-element array.
 export type SpiceKernelValues = readonly SpiceKernelValue[]
 
+// One `=` or `+=` assignment from a text kernel, in file order.
+export interface SpiceKernelAssignment {
+	// Kernel variable name, stored uppercased.
+	readonly name: string
+	// True when the operator was `+=` (append to the pool); false for `=`.
+	readonly append: boolean
+	// Values of this assignment, in listed order.
+	readonly values: SpiceKernelValues
+}
+
 // Byte size of each readLines block when scanning a text kernel.
 const TEXT_KERNEL_CHUNK = 4096
 
 // Loads assignments from a `KPL/PCK` or `KPL/FK` text kernel.
 // The first line must identify the file type. Names are stored uppercased.
-// `=` replaces a name; `+=` appends to the values already collected in this file.
-export async function readTextKernel(source: Source): Promise<Map<string, SpiceKernelValue[]>> {
-	const values = new Map<string, SpiceKernelValue[]>()
+// `=` and `+=` are preserved as ordered operations; the pool applies them.
+export async function readTextKernel(source: Source): Promise<SpiceKernelAssignment[]> {
+	const assignments: SpiceKernelAssignment[] = []
 	const tokens = tokenizeTextKernel(source)
 
 	while (true) {
@@ -56,30 +67,44 @@ export async function readTextKernel(source: Source): Promise<Map<string, SpiceK
 			items = [evaluateKernelToken(first.value)]
 		}
 
-		const key = name.toUpperCase()
-
-		if (equalsToken.value === '+=') {
-			const previous = values.get(key)
-			if (previous) previous.push(...items)
-			else values.set(key, items)
-		} else {
-			values.set(key, items)
-		}
+		assignments.push({
+			name: name.toUpperCase(),
+			append: equalsToken.value === '+=',
+			values: items,
+		})
 	}
 
-	return values
+	return assignments
 }
 
-// Stateful set of loaded text-kernel assignments. Later `load` calls replace
-// any overlapping names and leave unrelated names in place.
+// Stateful set of loaded text-kernel assignments. `=` replaces a name in the pool;
+// `+=` appends to whatever that name already holds, including values from earlier files.
 export class SpiceKernelPool {
 	readonly #values = new Map<string, SpiceKernelValue[]>()
 
-	// Copies every assignment from `values` into the pool, replacing existing names.
-	// Keys are normalized to uppercase; the stored arrays are copies of the input.
-	load(values: ReadonlyMap<string, SpiceKernelValues>): void {
+	// Applies `values` to the pool. An assignment list preserves `=` / `+=`.
+	// A Map is treated as direct assignments (`=`) that replace existing names.
+	load(values: readonly SpiceKernelAssignment[] | ReadonlyMap<string, SpiceKernelValues>): void {
+		if (isAssignmentList(values)) {
+			for (const assignment of values) this.#assign(assignment.name, assignment.values, assignment.append)
+			return
+		}
+
 		for (const [name, items] of values) {
-			this.#values.set(name.toUpperCase(), items.slice())
+			this.#assign(name, items, false)
+		}
+	}
+
+	// Replaces or appends `items` for `name`. The stored array is a copy of the input.
+	#assign(name: string, items: SpiceKernelValues, append: boolean) {
+		const key = name.toUpperCase()
+
+		if (append) {
+			const previous = this.#values.get(key)
+			if (previous) previous.push(...items)
+			else this.#values.set(key, items.slice())
+		} else {
+			this.#values.set(key, items.slice())
 		}
 	}
 
@@ -91,7 +116,7 @@ export class SpiceKernelPool {
 	// Numeric values of `name` in assignment order, or undefined when the name is absent.
 	numbers(name: string): readonly number[] | undefined {
 		const values = this.get(name)
-		if (!values) return undefined
+		if (values === undefined) return undefined
 
 		const numbers: number[] = []
 		for (const value of values) {
@@ -104,7 +129,7 @@ export class SpiceKernelPool {
 	// String values of `name` in assignment order, or undefined when the name is absent.
 	strings(name: string): readonly string[] | undefined {
 		const values = this.get(name)
-		if (!values) return undefined
+		if (values === undefined) return undefined
 
 		const strings: string[] = []
 		for (const value of values) {
@@ -113,6 +138,11 @@ export class SpiceKernelPool {
 
 		return strings
 	}
+}
+
+// Returns true when `values` is an ordered assignment list rather than a name-to-values Map.
+function isAssignmentList(values: unknown): values is readonly SpiceKernelAssignment[] {
+	return Array.isArray(values)
 }
 
 // Yields assignment tokens from every `\begindata` section of a text kernel.

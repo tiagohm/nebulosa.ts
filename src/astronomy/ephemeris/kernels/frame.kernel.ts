@@ -51,8 +51,9 @@ export class SpiceFrames {
 	}
 
 	// Returns the Frame for a SPICE frame name or integer id.
-	// Class-2 chains initialize their PCK segment before the promise resolves so
+	// Class-2 chains initialize PCK metadata before the promise resolves so
 	// rotationAt/dRdtTimesRtAt are then ordinary synchronous Frame methods.
+	// Binary PCK records are decoded on demand; the DAF source must stay open.
 	async frame(nameOrId: string | number): Promise<Frame> {
 		return await this.#resolve(this.#frameId(nameOrId), new Set())
 	}
@@ -109,6 +110,7 @@ export class SpiceFrames {
 	}
 
 	// Builds a class-2 frame from the binary PCK segment whose class id is `classId`.
+	// Only directory words are loaded here; Chebyshev records stay in the DAF.
 	async #class2(id: number, classId: number): Promise<Frame> {
 		const segment = this.#pck?.segment(classId)
 		if (!segment) throw new Error(`missing binary PCK segment for frame ${id}`)

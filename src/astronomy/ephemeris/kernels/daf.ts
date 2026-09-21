@@ -1,4 +1,5 @@
-import { readUntil, type Seekable, type Source } from '../../../io/io'
+import { readSync } from 'fs'
+import { FileHandleSource, readUntil, type Seekable, type Source } from '../../../io/io'
 
 // Reader for NAIF DAF (Double precision Array File) containers, the binary layout underlying SPK
 // ephemeris kernels. Parses the file record (endianness, summary layout, FTP validation string),
@@ -20,7 +21,9 @@ export interface Daf {
 	// All array summaries found in the summary record chain.
 	readonly summaries: Summary[]
 	// Reads the inclusive 1-based double-word range [start, end] from the file.
-	readonly read: (start: number, end: number) => Promise<Float64Array> | Float64Array
+	readonly read: (start: number, end: number) => Promise<Float64Array>
+	// Synchronous counterpart of `read` for consumers that cannot await, such as Frame.rotationAt.
+	readonly readSync: (start: number, end: number) => Float64Array
 }
 
 // Metadata from the DAF file record describing byte order and summary layout.
@@ -63,26 +66,29 @@ export async function readDaf(source: Source & Seekable): Promise<Daf> {
 		const record = readNaifDafRecord(buffer)
 		const summaries = await readSummaries(source, record)
 
-		return {
-			summaries,
-			read: (start, end) => readFloat64Array(source, start, end, record.be),
-		}
+		return makeDaf(source, record, summaries)
 	} else if (format.startsWith('DAF/')) {
 		if (hasFtpValidationString(buffer)) {
 			const be = buffer.toString('ascii', 88, 96).toUpperCase() !== 'LTL-IEEE'
 			const record = readNaifDafRecord(buffer, be)
 			const summaries = await readSummaries(source, record)
 
-			return {
-				summaries,
-				read: (start, end) => readFloat64Array(source, start, end, record.be),
-			}
+			return makeDaf(source, record, summaries)
 		} else {
 			throw new Error('file has been damaged')
 		}
 	}
 
 	throw new Error(`unsupported format: ${format}`)
+}
+
+// Builds a DAF reader with async and sync random access over `source`.
+function makeDaf(source: Source & Seekable, record: DafRecord, summaries: Summary[]): Daf {
+	return {
+		summaries,
+		read: (start, end) => readFloat64Array(source, start, end, record.be),
+		readSync: (start, end) => readFloat64ArraySync(source, start, end, record.be),
+	}
 }
 
 // Reads a contiguous DAF float64 range.
@@ -106,11 +112,66 @@ async function readFloat64Array(source: Source & Seekable, start: number, end: n
 	// Guard against truncated files: a short read would otherwise decode uninitialized memory.
 	if (n !== expected) throw new Error(`unexpected end of DAF file: read ${n} of ${expected} bytes`)
 
-	for (let i = 0, offset = 0; i < length; i++, offset += FLOAT64_BYTES) {
-		data[i] = be ? buffer.readDoubleBE(offset) : buffer.readDoubleLE(offset)
-	}
+	decodeFloat64Words(buffer, data, be)
 
 	return data
+}
+
+// Synchronous counterpart of `readFloat64Array` for Frame methods that cannot await.
+function readFloat64ArraySync(source: Source & Seekable, start: number, end: number, be: boolean): Float64Array {
+	source.seek(FLOAT64_BYTES * (start - 1))
+
+	const length = 1 + end - start
+	const data = new Float64Array(length)
+	const expected = data.byteLength
+
+	if (be !== HOST_LITTLE_ENDIAN) {
+		const n = readUntilSync(source, Buffer.from(data.buffer, data.byteOffset, data.byteLength))
+		if (n !== expected) throw new Error(`unexpected end of DAF file: read ${n} of ${expected} bytes`)
+		return data
+	}
+
+	const buffer = Buffer.allocUnsafe(data.byteLength)
+	const n = readUntilSync(source, buffer)
+	if (n !== expected) throw new Error(`unexpected end of DAF file: read ${n} of ${expected} bytes`)
+
+	decodeFloat64Words(buffer, data, be)
+
+	return data
+}
+
+// Copies `buffer` into `data` using the file's endianness.
+function decodeFloat64Words(buffer: Buffer, data: Float64Array, be: boolean) {
+	for (let i = 0, offset = 0; i < data.length; i++, offset += FLOAT64_BYTES) {
+		data[i] = be ? buffer.readDoubleBE(offset) : buffer.readDoubleLE(offset)
+	}
+}
+
+// Fills `buffer` from `source` without awaiting. File handles use readSync so the fd cursor
+// and the Source position stay aligned; other sources must implement a synchronous `read`.
+function readUntilSync(source: Source & Seekable, buffer: Buffer): number {
+	let offset = 0
+	let remaining = buffer.byteLength
+
+	while (remaining > 0) {
+		let n: number
+
+		if (source instanceof FileHandleSource) {
+			n = readSync(source.handle.fd, buffer, offset, remaining, source.position)
+			if (n > 0) source.position += n
+		} else {
+			const result = source.read(buffer, offset, remaining)
+			if (typeof result !== 'number') throw new Error('DAF source does not support synchronous reads')
+			n = result
+		}
+
+		if (!n) break
+
+		remaining -= n
+		offset += n
+	}
+
+	return buffer.byteLength - remaining
 }
 
 // Checks the FTP validation string without creating temporary slices.

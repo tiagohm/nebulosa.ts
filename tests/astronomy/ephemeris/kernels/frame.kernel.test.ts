@@ -9,9 +9,9 @@ import { readPck } from '../../../../src/astronomy/ephemeris/kernels/pck'
 import { readSpk } from '../../../../src/astronomy/ephemeris/kernels/spk'
 import { readTextKernel, SpiceKernelPool } from '../../../../src/astronomy/ephemeris/kernels/text.kernel'
 import { Timescale, time, timeYMDHMS } from '../../../../src/astronomy/time/time'
-import { AU_KM, DAYSEC, J2000 } from '../../../../src/core/constants'
+import { AU_KM, DAYSEC, J2000, PI } from '../../../../src/core/constants'
 import { fileHandleSource } from '../../../../src/io/io'
-import { type Mat3, matIdentity, matMulVec } from '../../../../src/math/linear-algebra/mat3'
+import { type Mat3, matIdentity, matMul, matMulTranspose, matMulVec, matRotZ } from '../../../../src/math/linear-algebra/mat3'
 import { type MutVec3, vecMinus } from '../../../../src/math/linear-algebra/vec3'
 import { normalizePI, toDeg } from '../../../../src/math/units/angle'
 import { kilometer } from '../../../../src/math/units/distance'
@@ -30,6 +30,7 @@ const T0_MINUS_11150_ME: Mat3 = [0.9994268420493244, 0.03186286343877705, 0.0114
 const T0_PA: Mat3 = [0.7840447406961362, 0.5582359944893811, 0.2713787372716964, -0.6203032939745002, 0.7203957219351799, 0.31024800934393754, -0.02230847532023746, -0.41158544468183367, 0.9110981032001678]
 
 // Loads the lunar FK, text PCK, and DE421 binary PCK into a resolver.
+// Keeps the binary PCK handle open so Type 2 records can be decoded on demand.
 async function lunarFrames() {
 	const pool = new SpiceKernelPool()
 
@@ -39,11 +40,18 @@ async function lunarFrames() {
 	await using tpc = fileHandleSource(await fs.open('data/pck00008.tpc'))
 	pool.load(await readTextKernel(tpc))
 
-	await using bpc = fileHandleSource(await fs.open('data/moon_pa_de421_1900-2050.bpc'))
+	const bpc = fileHandleSource(await fs.open('data/moon_pa_de421_1900-2050.bpc'))
 	const pck = readPck(await readDaf(bpc))
 	for (const segment of pck.segments) await segment.initialize()
 
-	return { pool, frames: new SpiceFrames(pool, pck) }
+	return {
+		pool,
+		pck,
+		frames: new SpiceFrames(pool, pck),
+		async [Symbol.asyncDispose]() {
+			await bpc[Symbol.asyncDispose]()
+		},
+	}
 }
 
 test('J2000 is the identity base frame without a kernel', async () => {
@@ -56,7 +64,8 @@ test('J2000 is the identity base frame without a kernel', async () => {
 })
 
 test('bodyRadii converts BODY301_RADII kilometres to AU', async () => {
-	const { pool } = await lunarFrames()
+	await using lunar = await lunarFrames()
+	const { pool } = lunar
 	const radii = bodyRadii(pool, Naif.MOON)!
 
 	expect(radii.x).toBe(kilometer(1737.4))
@@ -66,7 +75,8 @@ test('bodyRadii converts BODY301_RADII kilometres to AU', async () => {
 })
 
 test('MOON_PA_DE421 matches Skyfield at T0 − 11150 and T0', async () => {
-	const { frames } = await lunarFrames()
+	await using lunar = await lunarFrames()
+	const { frames } = lunar
 	const frame = await frames.frame('MOON_PA_DE421')
 
 	expectNumberArrayToBeCloseTo(frame.rotationAt(time(J2000 - 11150, 0, Timescale.TDB)), T0_MINUS_11150_PA, 15)
@@ -75,14 +85,16 @@ test('MOON_PA_DE421 matches Skyfield at T0 − 11150 and T0', async () => {
 })
 
 test('MOON_ME_DE421 is the ANGLES TK frame relative to MOON_PA_DE421', async () => {
-	const { frames } = await lunarFrames()
+	await using lunar = await lunarFrames()
+	const { frames } = lunar
 	const frame = await frames.frame('MOON_ME_DE421')
 
 	expectNumberArrayToBeCloseTo(frame.rotationAt(time(J2000 - 11150, 0, Timescale.TDB)), T0_MINUS_11150_ME, 15)
 })
 
 test('MOON_PA is an identity alias of MOON_PA_DE421', async () => {
-	const { frames } = await lunarFrames()
+	await using lunar = await lunarFrames()
+	const { frames } = lunar
 	const pa = await frames.frame('MOON_PA')
 	const paDe421 = await frames.frame(31006)
 	const t = time(J2000, 0, Timescale.TDB)
@@ -90,17 +102,57 @@ test('MOON_PA is an identity alias of MOON_PA_DE421', async () => {
 	expectNumberArrayToBeCloseTo(pa.rotationAt(t), paDe421.rotationAt(t), 15)
 })
 
+test('TKFRAME MATRIX applies a non-identity rotation relative to J2000', async () => {
+	const matrix = matRotZ(PI / 2)
+	const pool = new SpiceKernelPool()
+	pool.load([
+		{ name: 'FRAME_TEST_MATRIX', append: false, values: [99001] },
+		{ name: 'FRAME_99001_CLASS', append: false, values: [4] },
+		{ name: 'FRAME_99001_CLASS_ID', append: false, values: [99001] },
+		{ name: 'TKFRAME_99001_SPEC', append: false, values: ['MATRIX'] },
+		{ name: 'TKFRAME_99001_RELATIVE', append: false, values: ['J2000'] },
+		{ name: 'TKFRAME_99001_MATRIX', append: false, values: [...matrix] },
+	])
+
+	const frame = await new SpiceFrames(pool).frame('TEST_MATRIX')
+	expectNumberArrayToBeCloseTo(frame.rotationAt(time(J2000, 0, Timescale.TDB)), matrix, 15)
+	expect(frame.dRdtTimesRtAt).toBeUndefined()
+})
+
+test('TKFRAME MATRIX composes onto MOON_PA_DE421', async () => {
+	await using lunar = await lunarFrames()
+	const { pool, pck, frames } = lunar
+	const matrix = matRotZ(PI / 2)
+	pool.load([
+		{ name: 'FRAME_TEST_MATRIX', append: false, values: [99001] },
+		{ name: 'FRAME_99001_CLASS', append: false, values: [4] },
+		{ name: 'FRAME_99001_CLASS_ID', append: false, values: [99001] },
+		{ name: 'TKFRAME_99001_SPEC', append: false, values: ['MATRIX'] },
+		{ name: 'TKFRAME_99001_RELATIVE', append: false, values: ['MOON_PA_DE421'] },
+		{ name: 'TKFRAME_99001_MATRIX', append: false, values: [...matrix] },
+	])
+
+	const t = time(J2000, 0, Timescale.TDB)
+	const pa = await frames.frame('MOON_PA_DE421')
+	const composed = await new SpiceFrames(pool, pck).frame('TEST_MATRIX')
+
+	expectNumberArrayToBeCloseTo(composed.rotationAt(t), matMul(matrix, pa.rotationAt(t)), 12)
+
+	const w = composed.dRdtTimesRtAt!(t)
+	expectNumberArrayToBeCloseTo(w, matMulTranspose(matMul(matrix, pa.dRdtTimesRtAt!(t)), matrix), 12)
+})
+
 test('unknown frames and missing binary PCK segments fail explicitly', async () => {
 	const empty = new SpiceFrames(new SpiceKernelPool())
-	expect(() => empty.frame('MOON_PA')).toThrow('unknown frame: MOON_PA')
-	expect(() => empty.frame(31006)).toThrow('unknown frame: 31006')
+	expect(empty.frame('MOON_PA')).rejects.toThrow('unknown frame: MOON_PA')
+	expect(empty.frame(31006)).rejects.toThrow('unknown frame: 31006')
 
 	const pool = new SpiceKernelPool()
 	await using fk = fileHandleSource(await fs.open('data/moon_080317.tf'))
 	pool.load(await readTextKernel(fk))
 
 	const frames = new SpiceFrames(pool)
-	expect(() => frames.frame('MOON_PA_DE421')).toThrow('missing binary PCK segment for frame 31006')
+	expect(frames.frame('MOON_PA_DE421')).rejects.toThrow('missing binary PCK segment for frame 31006')
 })
 
 test('cyclic TK chains are rejected', () => {
@@ -135,11 +187,12 @@ test('unsupported frame classes are rejected', () => {
 		]),
 	)
 
-	expect(() => new SpiceFrames(pool).frame('CK')).toThrow('unsupported frame class 3 for frame 3')
+	expect(new SpiceFrames(pool).frame('CK')).rejects.toThrow('unsupported frame class 3 for frame 3')
 })
 
 test('lunar libration at 2019-12-20 11:05 UTC matches Skyfield', async () => {
-	const { frames } = await lunarFrames()
+	await using lunar = await lunarFrames()
+	const { frames } = lunar
 	const moonMe = await frames.frame('MOON_ME_DE421')
 	const t = timeYMDHMS(2019, 12, 20, 11, 5, 0, Timescale.UTC)
 
@@ -157,7 +210,8 @@ test('lunar libration at 2019-12-20 11:05 UTC matches Skyfield', async () => {
 })
 
 test('a rotating lunar state round-trips through frameAt and frameToBase', async () => {
-	const { frames } = await lunarFrames()
+	await using lunar = await lunarFrames()
+	const { frames } = lunar
 	const moonMe = await frames.frame('MOON_ME_DE421')
 	const t = timeYMDHMS(2019, 12, 20, 11, 5, 0, Timescale.UTC)
 	const pv: [MutVec3, MutVec3] = [
@@ -183,7 +237,8 @@ test('a rotating lunar state round-trips through frameAt and frameToBase', async
 })
 
 test('moon_080317.tf sample vector rotates into MOON_PA and MOON_ME', async () => {
-	const { frames } = await lunarFrames()
+	await using lunar = await lunarFrames()
+	const { frames } = lunar
 	const pa = await frames.frame('MOON_PA_DE421')
 	const me = await frames.frame('MOON_ME_DE421')
 	const t = time(J2000, 259056665.1855896 / DAYSEC, Timescale.TDB)
@@ -203,7 +258,8 @@ test('moon_080317.tf sample vector rotates into MOON_PA and MOON_ME', async () =
 })
 
 test('resolved frames are cached by integer id', async () => {
-	const { frames } = await lunarFrames()
+	await using lunar = await lunarFrames()
+	const { frames } = lunar
 	const a = await frames.frame('MOON_ME_DE421')
 	const b = await frames.frame(31007)
 
@@ -211,7 +267,8 @@ test('resolved frames are cached by integer id', async () => {
 })
 
 test('lookup by name is case-insensitive', async () => {
-	const { frames } = await lunarFrames()
+	await using lunar = await lunarFrames()
+	const { frames } = lunar
 	const a = await frames.frame('moon_pa_de421')
 	const b = await frames.frame('MOON_PA_DE421')
 

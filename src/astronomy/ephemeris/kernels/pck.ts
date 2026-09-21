@@ -8,8 +8,9 @@ import type { Daf, Summary } from './daf'
 // stored in DAF files. Type 2 segments hold Chebyshev series for the three Euler
 // angles φ, δ, W of the body-fixed frame relative to the segment's inertial frame
 // (J2000 / NAIF id 1). Angles are radians, epochs are TDB seconds past J2000, and
-// the public Frame rate is W = dR/dt·Rᵀ in radians/day. Record coefficients are
-// loaded once on initialize() so rotationAt/dRdtTimesRtAt stay synchronous.
+// the public Frame rate is W = dR/dt·Rᵀ in radians/day. initialize() loads only
+// INIT/INTLEN/RSIZE/N; each Chebyshev record is read and cached on demand, so the
+// DAF source must remain open while rotationAt/dRdtTimesRtAt are used.
 
 // https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/C/req/pck.html
 
@@ -37,7 +38,7 @@ export interface PckSegment extends Frame {
 	readonly startIndex: number
 	// Last DAF word index of the segment data (1-based).
 	readonly endIndex: number
-	// Loads INIT/INTLEN/RSIZE/N and the segment's coefficient words. Safe to call more than once.
+	// Loads INIT/INTLEN/RSIZE/N. Coefficient records are read later on demand. Safe to call more than once.
 	readonly initialize: () => Promise<void>
 	// Analytic W = dR/dt·Rᵀ (radians/day). Always present for Type 2 PCK.
 	readonly dRdtTimesRtAt: (time: Time, rotation?: Mat3) => Mat3
@@ -183,7 +184,6 @@ export class Type2PckSegment implements PckSegment {
 	#rsize = 0
 	#n = 0
 	#count = 0
-	#data: Float64Array = new Float64Array(0)
 	#lastSeconds = Number.NaN
 	readonly #coefficients = new Map<number, Type2PckCoefficient>()
 	readonly #angles: [number, number, number] = [0, 0, 0]
@@ -205,7 +205,7 @@ export class Type2PckSegment implements PckSegment {
 	// PCK Type 2: Chebyshev Euler angles.
 	readonly type = 2
 
-	// Loads the four metadata words and the coefficient array for this segment.
+	// Loads INIT, INTLEN, RSIZE, and N from the tail of the segment.
 	initialize(): Promise<void> {
 		if (this.#initialized) return Promise.resolve()
 		if (this.#init) return this.#init
@@ -227,16 +227,14 @@ export class Type2PckSegment implements PckSegment {
 		return matClone(this.#w)
 	}
 
-	// Reads INIT, INTLEN, RSIZE, N and every coefficient word of the segment.
+	// Reads INIT, INTLEN, RSIZE, and N from the last four words of the segment.
 	async #load(): Promise<void> {
 		try {
-			this.#data = await this.daf.read(this.startIndex, this.endIndex)
-
-			const n = this.#data.length
-			this.#initialEpoch = this.#data[n - 4]
-			this.#intervalLength = this.#data[n - 3]
-			this.#rsize = Math.trunc(this.#data[n - 2])
-			this.#n = Math.trunc(this.#data[n - 1])
+			const directory = await this.daf.read(this.endIndex - 3, this.endIndex)
+			this.#initialEpoch = directory[0]
+			this.#intervalLength = directory[1]
+			this.#rsize = Math.trunc(directory[2])
+			this.#n = Math.trunc(directory[3])
 			this.#count = Math.trunc((this.#rsize - 2) / 3)
 			this.#initialized = true
 		} catch (error) {
@@ -247,23 +245,17 @@ export class Type2PckSegment implements PckSegment {
 
 	// Evaluates Euler angles and fills #r / #w for `time`, reusing the last result when the epoch is unchanged.
 	#evaluate(time: Time) {
-		if (!this.#initialized) {
-			throw new Error('PCK segment is not initialized')
-		}
+		if (!this.#initialized) throw new Error('PCK segment is not initialized')
 
 		const seconds = pckSeconds(time)
 		if (seconds === this.#lastSeconds) return
 
-		if (!hasSegmentCoverage(this, seconds)) {
-			throw new Error(`cannot find a PCK segment that covers the date: ${seconds}`)
-		}
+		if (!hasSegmentCoverage(this, seconds)) throw new Error(`cannot find a PCK segment that covers the date: ${seconds}`)
 
 		const index = Math.max(0, Math.min(this.#n - 1, Math.floor((seconds - this.#initialEpoch) / this.#intervalLength)))
 		const c = this.#coefficient(index)
 
-		if (!c) {
-			throw new Error(`cannot find a PCK segment that covers the date: ${seconds}`)
-		}
+		if (!c) throw new Error(`cannot find a PCK segment that covers the date: ${seconds}`)
 
 		const s = (seconds - c.mid) / c.radius
 		evaluateChebyshevVectorDerivative(c.phi, c.delta, c.w, s, 1 / c.radius, this.#angles, this.#rates)
@@ -271,27 +263,28 @@ export class Type2PckSegment implements PckSegment {
 		this.#lastSeconds = seconds
 	}
 
-	// Returns a cached view of Chebyshev coefficients for record `index`.
-	#coefficient(index: number): Type2PckCoefficient | undefined {
+	// Returns a cached Chebyshev record, reading that record alone from the DAF on first use.
+	#coefficient(index: number) {
 		const cached = this.#coefficients.get(index)
 		if (cached) return cached
 		if (index < 0 || index >= this.#n) return undefined
 
-		const offset = index * this.#rsize
-		if (offset < 0 || offset + this.#rsize > this.#data.length - 4) return undefined
+		const start = this.startIndex + index * this.#rsize
+		const end = start + this.#rsize - 1
+		if (!(start >= this.startIndex && start < end && end <= this.endIndex - 4)) return undefined
 
-		const mid = this.#data[offset]
-		const radius = this.#data[offset + 1]
+		const words = this.daf.readSync(start, end)
 		const count = this.#count
-		const base = offset + 2
 		const coefficient: Type2PckCoefficient = {
-			mid,
-			radius,
-			phi: this.#data.subarray(base, base + count),
-			delta: this.#data.subarray(base + count, base + 2 * count),
-			w: this.#data.subarray(base + 2 * count, base + 3 * count),
+			mid: words[0],
+			radius: words[1],
+			phi: words.subarray(2, 2 + count),
+			delta: words.subarray(2 + count, 2 + 2 * count),
+			w: words.subarray(2 + 2 * count, 2 + 3 * count),
 		}
+
 		this.#coefficients.set(index, coefficient)
+
 		return coefficient
 	}
 }
@@ -341,6 +334,12 @@ export class MultiplePckSegment implements PckSegment {
 
 		if (segments.length > 1 && segments.some((e) => e.frameClassId !== this.frameClassId)) {
 			throw new Error('one of the segments does not match the frame class id')
+		}
+		if (segments.length > 1 && segments.some((e) => e.inertialFrameId !== this.inertialFrameId)) {
+			throw new Error('one of the segments does not match the inertial frame id')
+		}
+		if (segments.length > 1 && segments.some((e) => e.type !== this.type)) {
+			throw new Error('one of the segments does not match the PCK data type')
 		}
 
 		this.start = segments[0].start

@@ -21,7 +21,8 @@ function dafFrom(values: readonly number[], summaries: Summary[] = []): Daf {
 
 	return {
 		summaries,
-		read: (start: number, end: number) => data.subarray(start - 1, end),
+		read: (start, end) => Promise.resolve(data.subarray(start - 1, end)),
+		readSync: (start, end) => data.subarray(start - 1, end),
 	}
 }
 
@@ -84,6 +85,44 @@ test('rotationAt before initialize is rejected', () => {
 	const segment = new Type2PckSegment(dafFrom([4, 4, 0, 0, 0, 0, 8, 5, 1]), 0, 8, 31006, 1, 1, 9)
 
 	expect(() => segment.rotationAt(tdbSeconds(4))).toThrow('PCK segment is not initialized')
+})
+
+test('type 2 initialize reads only directory words and caches each record', async () => {
+	const reads: [number, number][] = []
+	const data = Float64Array.from([4, 4, 0, 0, 0, 0, 8, 5, 1])
+	const readSync = (start: number, end: number) => {
+		reads.push([start, end])
+		return data.subarray(start - 1, end)
+	}
+	const daf: Daf = {
+		summaries: [],
+		read: (start, end) => Promise.resolve(readSync(start, end)),
+		readSync,
+	}
+	const segment = new Type2PckSegment(daf, 0, 8, 31006, 1, 1, 9)
+
+	await segment.initialize()
+	expect(reads).toEqual([[6, 9]])
+
+	segment.rotationAt(tdbSeconds(4))
+	expect(reads).toEqual([
+		[6, 9],
+		[1, 5],
+	])
+
+	segment.dRdtTimesRtAt(tdbSeconds(4))
+	expect(reads).toEqual([
+		[6, 9],
+		[1, 5],
+	])
+})
+
+test('MultiplePckSegment rejects mixed inertial frame ids', () => {
+	const overlapping = [summary(31006, 0, 20, 2, 1, 9, 1), summary(31006, 10, 20, 2, 10, 18, 2)]
+	expect(() => readPck(dafFrom([4, 4, 0, 0, 0, 0, 8, 5, 1, 15, 5, 0, 0, 0, 10, 10, 5, 1], overlapping))).toThrow('one of the segments does not match the inertial frame id')
+
+	const disjoint = [summary(31006, 0, 10, 2, 1, 9, 1), summary(31006, 10, 20, 2, 10, 18, 2)]
+	expect(() => readPck(dafFrom([4, 4, 0, 0, 0, 0, 8, 5, 1, 15, 5, 0, 0, 0, 10, 10, 5, 1], disjoint))).toThrow('one of the segments does not match the inertial frame id')
 })
 
 test('overlapping segments use the latest matching segment in file order', async () => {
