@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
-import { type Daf, readDaf, type Summary } from '../../../../src/astronomy/ephemeris/kernels/daf'
+import { readDaf, type Summary, type SyncDaf } from '../../../../src/astronomy/ephemeris/kernels/daf'
 import { MultiplePckSegment, readPck, Type2PckSegment } from '../../../../src/astronomy/ephemeris/kernels/pck'
 import { Timescale, time, timeShift, type Time } from '../../../../src/astronomy/time/time'
 import { DAYSEC, J2000, PI } from '../../../../src/core/constants'
@@ -16,12 +16,12 @@ await downloadPerTag('pck')
 const T0_MINUS_11150_PA: Mat3 = [0.9994150897380264, 0.032310270603926675, 0.011203785852719871, -0.034157426811763446, 0.9272642685944782, 0.37284614304233643, 0.0016578894811167893, -0.3730107540024127, 0.9278255379116378]
 
 // Builds a tiny in-memory DAF for deterministic PCK segment tests.
-function dafFrom(values: readonly number[], summaries: Summary[] = []): Daf {
+function dafFrom(values: readonly number[], summaries: Summary[] = []): SyncDaf {
 	const data = Float64Array.from(values)
 
 	return {
 		summaries,
-		read: (start, end) => Promise.resolve(data.subarray(start - 1, end)),
+		read: (start, end) => data.subarray(start - 1, end),
 		readSync: (start, end) => data.subarray(start - 1, end),
 	}
 }
@@ -94,9 +94,9 @@ test('type 2 initialize reads only directory words and caches each record', asyn
 		reads.push([start, end])
 		return data.subarray(start - 1, end)
 	}
-	const daf: Daf = {
+	const daf: SyncDaf = {
 		summaries: [],
-		read: (start, end) => Promise.resolve(readSync(start, end)),
+		read: (start, end) => readSync(start, end),
 		readSync,
 	}
 	const segment = new Type2PckSegment(daf, 0, 8, 31006, 1, 1, 9)

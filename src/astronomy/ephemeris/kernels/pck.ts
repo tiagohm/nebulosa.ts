@@ -2,15 +2,16 @@ import { DAYSEC, J2000 } from '../../../core/constants'
 import { type Mat3, matClone, matFill, matIdentity, type MutMat3, matRotX, matRotZ } from '../../../math/linear-algebra/mat3'
 import type { Frame } from '../../coordinates/frame'
 import { type Time, tdb } from '../../time/time'
-import type { Daf, Summary } from './daf'
+import type { Summary, SyncDaf } from './daf'
 
 // Reader and evaluator for binary PCK (Planetary Constants Kernel) orientation
 // stored in DAF files. Type 2 segments hold Chebyshev series for the three Euler
 // angles φ, δ, W of the body-fixed frame relative to the segment's inertial frame
 // (J2000 / NAIF id 1). Angles are radians, epochs are TDB seconds past J2000, and
 // the public Frame rate is W = dR/dt·Rᵀ in radians/day. initialize() loads only
-// INIT/INTLEN/RSIZE/N; each Chebyshev record is read and cached on demand, so the
-// DAF source must remain open while rotationAt/dRdtTimesRtAt are used.
+// INIT/INTLEN/RSIZE/N; each Chebyshev record is read and cached on demand via
+// SyncDaf.readSync, so the DAF source must remain open while rotationAt /
+// dRdtTimesRtAt are used.
 
 // https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/C/req/pck.html
 
@@ -59,7 +60,7 @@ interface Type2PckCoefficient {
 }
 
 // Reads PCK summaries and builds a reusable frame-class-id segment lookup.
-export function readPck(daf: Daf): Pck {
+export function readPck(daf: SyncDaf): Pck {
 	const segments = new Array<PckSegment>(daf.summaries.length)
 	const groups = new Map<number, PckSegment[]>()
 
@@ -94,7 +95,7 @@ function appendPckSegment(groups: Map<number, PckSegment[]>, segment: PckSegment
 }
 
 // Instantiates the concrete segment reader for a supported PCK data type.
-function makePckSegment(summary: Summary, daf: Daf): PckSegment {
+function makePckSegment(summary: Summary, daf: SyncDaf): PckSegment {
 	const [start, end] = summary.doubles
 	const [frameClassId, inertialFrameId, type, startIndex, endIndex] = summary.ints
 
@@ -193,7 +194,7 @@ export class Type2PckSegment implements PckSegment {
 
 	// Stores immutable metadata and the backing DAF reader for this Chebyshev PCK segment.
 	constructor(
-		readonly daf: Daf,
+		readonly daf: SyncDaf,
 		readonly start: number,
 		readonly end: number,
 		readonly frameClassId: number,

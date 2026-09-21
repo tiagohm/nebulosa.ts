@@ -3,7 +3,8 @@ import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { FitsKeywordReader, FitsKeywordWriter } from '../../src/io/formats/fits/fits'
-import { type Base64Alphabet, base64Sink, base64Source, bufferSink, bufferSource, fileHandleSink, fileHandleSource, GrowableBuffer, rangeHttpSource, readableStreamSource, readLines, readRemaining, readUntil, type Sink, type Source, sourceTransferToSink } from '../../src/io/io'
+// oxfmt-ignore
+import { type Base64Alphabet, base64Sink, base64Source, bufferSink, bufferSource, fileHandleSink, fileHandleSource, GrowableBuffer, isSyncSink, isSyncSource, rangeHttpSource, readableStreamSource, readLines, readRemaining, readUntil, readUntilSync, type Sink, type Source, type SyncSink, type SyncSource, sourceTransferToSink, writeFullySync } from '../../src/io/io'
 
 test('bufferSink', () => {
 	const buffer = Buffer.allocUnsafe(16)
@@ -649,6 +650,188 @@ describe('rangeHttpSource', () => {
 	})
 })
 
+describe('sync source capability', () => {
+	test('bufferSource readSync matches read and shares position', () => {
+		const data = Buffer.from('abcdefghijklmnop')
+		const viaRead = Buffer.alloc(16, 32)
+		const viaSync = Buffer.alloc(16, 32)
+
+		expect(bufferSource(data).read(viaRead)).toBe(16)
+		expect(bufferSource(data).readSync(viaSync)).toBe(16)
+		expect(viaRead).toEqual(viaSync)
+
+		const source = bufferSource(data)
+		const buffer = Buffer.alloc(8, 32)
+
+		expect(source.read(buffer, 0, 4)).toBe(4)
+		expect(buffer.toString('ascii', 0, 4)).toBe('abcd')
+		expect(source.position).toBe(4)
+
+		expect(source.readSync(buffer, 0, 4)).toBe(4)
+		expect(buffer.toString('ascii', 0, 4)).toBe('efgh')
+		expect(source.position).toBe(8)
+
+		source.seek(2)
+		expect(source.readSync(buffer, 1, 3)).toBe(3)
+		expect(buffer.toString('ascii', 1, 4)).toBe('cde')
+		expect(source.position).toBe(5)
+
+		source.seek(16)
+		expect(source.readSync(buffer)).toBe(0)
+		expect(source.position).toBe(16)
+	})
+
+	test('fileHandleSource interleaves async and sync reads on one cursor', async () => {
+		const path = join(tmpdir(), 'io-sync-source.txt')
+		const handle = await fs.open(path, 'w+', 0o666)
+		await using source = fileHandleSource(handle)
+		const buffer = Buffer.alloc(16, 32)
+
+		await handle.write('abcdefghijklmnop', 0, 'ascii')
+
+		expect(await source.read(buffer, 0, 4)).toBe(4)
+		expect(buffer.toString('ascii', 0, 4)).toBe('abcd')
+		expect(source.position).toBe(4)
+
+		expect(source.readSync(buffer, 0, 4)).toBe(4)
+		expect(buffer.toString('ascii', 0, 4)).toBe('efgh')
+		expect(source.position).toBe(8)
+
+		expect(await source.read(buffer, 0, 4)).toBe(4)
+		expect(buffer.toString('ascii', 0, 4)).toBe('ijkl')
+		expect(source.position).toBe(12)
+
+		source.seek(1)
+		expect(source.readSync(buffer, 2, 3)).toBe(3)
+		expect(buffer.toString('ascii', 2, 5)).toBe('bcd')
+		expect(source.position).toBe(4)
+
+		source.seek(16)
+		expect(source.readSync(buffer)).toBe(0)
+		expect(source.position).toBe(16)
+		expect(await source.read(buffer)).toBe(0)
+	})
+
+	test('isSyncSource is true only for sources with readSync', async () => {
+		expect(isSyncSource(bufferSource(Buffer.from('ab')))).toBeTrue()
+
+		const path = join(tmpdir(), 'io-sync-source-guard.txt')
+		const handle = await fs.open(path, 'w+', 0o666)
+		await using source = fileHandleSource(handle)
+		expect(isSyncSource(source)).toBeTrue()
+
+		expect(isSyncSource(rangeHttpSource('https://example.test/data'))).toBeFalse()
+		await using stream = readableStreamSource(new ReadableStream<Uint8Array>({ start: (c) => c.close() }))
+		expect(isSyncSource(stream)).toBeFalse()
+		expect(isSyncSource(base64Source('YWI='))).toBeFalse()
+	})
+})
+
+describe('readUntilSync', () => {
+	test('retries short reads until size, offset, or EOF', () => {
+		const source = new ShortSyncSource(Buffer.from('abcdefghij'), 3)
+		const buffer = Buffer.alloc(16, 32)
+
+		expect(readUntilSync(source, buffer, 8, 2)).toBe(8)
+		expect(buffer.toString('ascii', 2, 10)).toBe('abcdefgh')
+		expect(source.reads).toBe(3)
+		expect(source.position).toBe(8)
+
+		source.reads = 0
+		expect(readUntilSync(source, buffer, 8, 0)).toBe(2)
+		expect(buffer.toString('ascii', 0, 2)).toBe('ij')
+		expect(source.reads).toBe(2)
+		expect(source.position).toBe(10)
+
+		source.reads = 0
+		expect(readUntilSync(source, buffer, 4, 0)).toBe(0)
+		expect(source.reads).toBe(1)
+	})
+})
+
+describe('sync sink capability', () => {
+	test('bufferSink writeSync matches write and shares position', () => {
+		const buffer = Buffer.alloc(16, 32)
+		const sink = bufferSink(buffer)
+
+		expect(sink.writeSync('abcd')).toBe(4)
+		expect(sink.position).toBe(4)
+		expect(sink.write(Buffer.from('efgh'), 0, 4)).toBe(4)
+		expect(sink.position).toBe(8)
+		expect(buffer.toString('ascii', 0, 8)).toBe('abcdefgh')
+
+		sink.seek(2)
+		expect(sink.writeSync('ABCD', 1, 2)).toBe(2)
+		expect(sink.position).toBe(4)
+		expect(buffer.toString('ascii', 0, 8)).toBe('abBCefgh')
+
+		sink.seek(0)
+		expect(sink.writeSync(Buffer.from('xyz'), 1, 1)).toBe(1)
+		expect(buffer.toString('ascii', 0, 1)).toBe('y')
+	})
+
+	test('fileHandleSink interleaves async and sync writes on one cursor', async () => {
+		const path = join(tmpdir(), 'io-sync-sink.txt')
+		const handle = await fs.open(path, 'w+', 0o666)
+		await using sink = fileHandleSink(handle)
+
+		async function read() {
+			const buffer = Buffer.allocUnsafe(16)
+			const ret = await handle.read(buffer, 0, buffer.byteLength, 0)
+			return ret.buffer.subarray(0, ret.bytesRead).toString('ascii')
+		}
+
+		expect(await sink.write('abcd')).toBe(4)
+		expect(sink.position).toBe(4)
+		expect(sink.writeSync('efgh')).toBe(4)
+		expect(sink.position).toBe(8)
+		expect(await sink.write(Buffer.from('ijkl'))).toBe(4)
+		expect(sink.position).toBe(12)
+		expect(sink.writeSync(Buffer.from('mnop'), 0, 4)).toBe(4)
+		expect(sink.position).toBe(16)
+		expect(await read()).toBe('abcdefghijklmnop')
+
+		sink.seek(4)
+		expect(sink.writeSync('ABCD')).toBe(4)
+		expect(sink.position).toBe(8)
+		expect((await read()).slice(0, 8)).toBe('abcdABCD')
+
+		sink.seek(0)
+		expect(sink.writeSync('é', undefined, undefined, 'utf8')).toBe(2)
+		expect(sink.position).toBe(2)
+	})
+
+	test('isSyncSink is true only for sinks with writeSync', async () => {
+		expect(isSyncSink(bufferSink(Buffer.alloc(8)))).toBeTrue()
+
+		const path = join(tmpdir(), 'io-sync-sink-guard.txt')
+		const handle = await fs.open(path, 'w+', 0o666)
+		await using sink = fileHandleSink(handle)
+		expect(isSyncSink(sink)).toBeTrue()
+
+		expect(isSyncSink(base64Sink(bufferSink(Buffer.alloc(32))))).toBeFalse()
+	})
+})
+
+describe('writeFullySync', () => {
+	test('retries short writes until the buffer is consumed', () => {
+		const sink = new LimitedSyncSink(3)
+		const data = Buffer.from('0123456789')
+
+		expect(writeFullySync(sink, data)).toBe(10)
+		expect(sink.toBuffer()).toEqual(data)
+	})
+
+	test('rejects zero, negative, non-integer, and oversized progress', () => {
+		const data = Buffer.from('abcd')
+
+		expect(() => writeFullySync(new InvalidSyncSink(0), data)).toThrow('sink failed to complete write')
+		expect(() => writeFullySync(new InvalidSyncSink(-1), data)).toThrow('sink failed to complete write')
+		expect(() => writeFullySync(new InvalidSyncSink(1.5), data)).toThrow('sink failed to complete write')
+		expect(() => writeFullySync(new InvalidSyncSink(8), data)).toThrow('sink failed to complete write')
+	})
+})
+
 class LimitedSink implements Sink {
 	readonly #chunks: Buffer[] = []
 
@@ -664,6 +847,63 @@ class LimitedSink implements Sink {
 
 	toBuffer() {
 		return Buffer.concat(this.#chunks)
+	}
+}
+
+class ShortSyncSource implements SyncSource {
+	position = 0
+	reads = 0
+
+	constructor(
+		readonly data: Buffer,
+		readonly maxBytes: number,
+	) {}
+
+	read(buffer: Buffer, offset?: number, size?: number) {
+		return this.readSync(buffer, offset, size)
+	}
+
+	readSync(buffer: Buffer, offset = 0, size = buffer.byteLength - offset) {
+		this.reads++
+		const n = Math.min(size, this.maxBytes, this.data.byteLength - this.position)
+		if (!(n > 0)) return 0
+		this.data.copy(buffer, offset, this.position, this.position + n)
+		this.position += n
+		return n
+	}
+}
+
+class LimitedSyncSink implements SyncSink {
+	readonly #chunks: Buffer[] = []
+
+	constructor(readonly maxBytes: number) {}
+
+	write(chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
+		return this.writeSync(chunk, offset, size, encoding)
+	}
+
+	writeSync(chunk: string | Buffer, offset = 0, size?: number, _encoding?: BufferEncoding) {
+		const data = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
+		const n = Math.min(this.maxBytes, size ?? data.byteLength - offset)
+		if (!(n > 0)) return 0
+		this.#chunks.push(Buffer.from(data.subarray(offset, offset + n)))
+		return n
+	}
+
+	toBuffer() {
+		return Buffer.concat(this.#chunks)
+	}
+}
+
+class InvalidSyncSink implements SyncSink {
+	constructor(readonly n: number) {}
+
+	write() {
+		return this.writeSync()
+	}
+
+	writeSync() {
+		return this.n
 	}
 }
 

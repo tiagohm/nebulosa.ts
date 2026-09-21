@@ -18,8 +18,7 @@ function dafFrom(values: readonly number[], summaries: Summary[] = []): Daf {
 
 	return {
 		summaries,
-		read: (start: number, end: number) => Promise.resolve(data.subarray(start - 1, end)),
-		readSync: (start: number, end: number) => data.subarray(start - 1, end),
+		read: (start: number, end: number) => data.subarray(start - 1, end),
 	}
 }
 
