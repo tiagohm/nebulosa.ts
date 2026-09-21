@@ -3,13 +3,15 @@ import { type Mat3, matMulVec, matRotX, matRotZ } from '../../math/linear-algebr
 import { type Vec3, vecLength } from '../../math/linear-algebra/vec3'
 import { clamp } from '../../math/numerical/math'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
-import { precessionNutationMatrix, type Time, timeShift, toJulianDay, tdb } from '../time/time'
+import type { Frame } from '../coordinates/frame'
+import { precessionNutationMatrix, type Time, timeShift, tdb } from '../time/time'
 
 // Body orientation from the IAU WGCCRE rotation elements (phase C1: Sun and planets). The rotation
 // elements give the north-pole direction and the prime-meridian angle as functions of time; from them
-// this module builds the ICRF -> body-fixed rotation and the sub-observer and sub-solar surface points.
-// These are the geometric primitives behind central-meridian longitude, ring-opening angle and solar
-// disk orientation. All angles are radians; the numeric tables live in orientation.data.ts.
+// this module builds the ICRF -> body-fixed rotation, a Frame adapter with analytic W = dR/dt·Rᵀ, and
+// the sub-observer and sub-solar surface points. These are the geometric primitives behind
+// central-meridian longitude, ring-opening angle, solar disk orientation, and non-Earth surface
+// states. All angles are radians; the numeric tables live in orientation.data.ts.
 
 // A single periodic correction added to a pole component or to the prime meridian. The argument is
 // linear in T (Julian centuries TDB from J2000): argument = argConstant + argRate * T.
@@ -70,14 +72,38 @@ function polynomial(coefficients: readonly number[], t: number): number {
 	return value
 }
 
+// Derivative of a polynomial in T by Horner's method, in the same units as the coefficients per unit T.
+function polynomialDerivative(coefficients: readonly number[], t: number): number {
+	let value = 0
+	for (let i = coefficients.length - 1; i >= 1; i--) value = value * t + i * coefficients[i]
+	return value
+}
+
 // Sums the periodic corrections at T (Julian centuries).
 function periodic(terms: readonly PeriodicTerm[] | undefined, t: number): number {
 	if (terms === undefined) return 0
+
 	let sum = 0
+
 	for (const term of terms) {
 		const argument = term.argConstant + term.argRate * t
 		sum += term.amplitude * (term.cosine ? Math.cos(argument) : Math.sin(argument))
 	}
+
+	return sum
+}
+
+// Derivative of the periodic corrections with respect to T (Julian centuries).
+function periodicDerivative(terms: readonly PeriodicTerm[] | undefined, t: number): number {
+	if (terms === undefined) return 0
+
+	let sum = 0
+
+	for (const term of terms) {
+		const argument = term.argConstant + term.argRate * t
+		sum += term.amplitude * term.argRate * (term.cosine ? -Math.sin(argument) : Math.cos(argument))
+	}
+
 	return sum
 }
 
@@ -87,8 +113,8 @@ function periodic(terms: readonly PeriodicTerm[] | undefined, t: number): number
 // The pole right ascension and the prime meridian are wrapped to [0, TAU); the declination is left in
 // [-PI/2, PI/2].
 export function orientation(elements: RotationElements, time: Time): BodyOrientation {
-	const jd = toJulianDay(tdb(time))
-	const d = jd - J2000
+	time = tdb(time)
+	const d = time.day - J2000 + time.fraction
 	const t = d / DAYSPERJC
 
 	const poleRa = polynomial(elements.poleRa, t) + periodic(elements.poleRaTerms, t)
@@ -106,6 +132,44 @@ export function orientation(elements: RotationElements, time: Time): BodyOrienta
 export function bodyFixedMatrix(elements: RotationElements, time: Time): Mat3 {
 	const { poleRa, poleDec, primeMeridian } = orientation(elements, time)
 	return matRotZ(primeMeridian, matRotX(PIOVERTWO - poleDec, matRotZ(PIOVERTWO + poleRa)))
+}
+
+// Analytic W = dR/dt·Rᵀ (radians/day) of the IAU 3-1-3 body-fixed rotation
+// R = Rz(W)·Rx(π/2−δ)·Rz(π/2+α). This is the PCK Type 2 3-1-3 operator under
+// φ = π/2+α and δ_pck = π/2−δ, including polynomial pole rates, the prime-meridian
+// rate, and derivatives of every periodic correction. T is Julian centuries TDB
+// from J2000; rates are per day.
+function bodyFixedDriftMatrix(elements: RotationElements, time: Time): Mat3 {
+	time = tdb(time)
+	const d = time.day - J2000 + time.fraction
+	const t = d / DAYSPERJC
+
+	const poleRaRate = (polynomialDerivative(elements.poleRa, t) + periodicDerivative(elements.poleRaTerms, t)) / DAYSPERJC
+	const poleDecRate = (polynomialDerivative(elements.poleDec, t) + periodicDerivative(elements.poleDecTerms, t)) / DAYSPERJC
+	const primeMeridianRate = elements.rotationRate + periodicDerivative(elements.primeMeridianTerms, t) / DAYSPERJC
+
+	const { poleDec, primeMeridian } = orientation(elements, time)
+	const ca = Math.cos(primeMeridian)
+	const sa = Math.sin(primeMeridian)
+	const sinDec = Math.sin(poleDec)
+	const cosDec = Math.cos(poleDec)
+	const omega0 = primeMeridianRate + sinDec * poleRaRate
+	const omega1 = -ca * poleDecRate + sa * cosDec * poleRaRate
+	const omega2 = -sa * poleDecRate - ca * cosDec * poleRaRate
+
+	return [0, omega0, omega2, -omega0, 0, omega1, -omega2, -omega1, 0]
+}
+
+// Adapts IAU/WGCCRE rotation elements to the Frame contract: rotationAt matches
+// bodyFixedMatrix (ICRF/GCRS-oriented base → body-fixed), and dRdtTimesRtAt is
+// the analytic W = dR/dt·Rᵀ in radians/day. The optional `rotation` argument is
+// ignored; the operator is formed from the same Euler angles and rates as
+// rotationAt, not from a finite difference.
+export function bodyFixedFrame(elements: RotationElements): Frame {
+	return {
+		rotationAt: (time) => bodyFixedMatrix(elements, time),
+		dRdtTimesRtAt: (time) => bodyFixedDriftMatrix(elements, time),
+	}
 }
 
 // Light-time delay in days for a body-observer distance in AU.
