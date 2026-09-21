@@ -155,12 +155,22 @@ test('non-zero elevation is a radial offset along the planetocentric direction',
 	expect(raised[2] / surface[2]).toBeCloseTo((s + 0.25) / s, 14)
 })
 
-test('longitude wrap leaves the Cartesian point unchanged', () => {
-	const a = bodySurfaceLocation(PI, deg(20), 0, UNIT_SPHERE, ICRS).bodyFixed!
-	const b = bodySurfaceLocation(-PI, deg(20), 0, UNIT_SPHERE, ICRS).bodyFixed!
-	const c = bodySurfaceLocation(PI + TAU, deg(20), 0, UNIT_SPHERE, ICRS).bodyFixed!
-	expectNumberArrayToBeCloseTo(a, b, 15)
-	expectNumberArrayToBeCloseTo(a, c, 15)
+test('longitude wrap is normalized and leaves the Cartesian point unchanged', () => {
+	const a = bodySurfaceLocation(PI, deg(20), 0, UNIT_SPHERE, ICRS)
+	const b = bodySurfaceLocation(-PI, deg(20), 0, UNIT_SPHERE, ICRS)
+	const c = bodySurfaceLocation(PI + TAU, deg(20), 0, UNIT_SPHERE, ICRS)
+
+	expect(a.longitude).toBeCloseTo(PI, 15)
+	expect(b.longitude).toBeCloseTo(PI, 15)
+	expect(c.longitude).toBeCloseTo(PI, 15)
+	expectNumberArrayToBeCloseTo(a.bodyFixed, b.bodyFixed!, 15)
+	expectNumberArrayToBeCloseTo(a.bodyFixed, c.bodyFixed!, 15)
+
+	const west = bodySurfaceLocation(deg(-46.8), deg(26.3), 0, UNIT_SPHERE, ICRS)
+	const east = bodySurfaceLocation(deg(313.2), deg(26.3), 0, UNIT_SPHERE, ICRS)
+	expect(west.longitude).toBeCloseTo(east.longitude, 15)
+	expect(west.longitude).toBeCloseTo(deg(313.2), 15)
+	expectNumberArrayToBeCloseTo(west.bodyFixed, east.bodyFixed!, 15)
 })
 
 test('poles remain finite for any longitude', () => {

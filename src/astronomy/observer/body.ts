@@ -1,5 +1,5 @@
 import type { MutVec3, Vec3 } from '../../math/linear-algebra/vec3'
-import type { Angle } from '../../math/units/angle'
+import { type Angle, normalizeAngle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import type { PositionAndVelocity, PositionAndVelocityOverTime } from '../coordinates/astrometry'
 import { frameToBase, type Frame } from '../coordinates/frame'
@@ -25,7 +25,7 @@ export interface BodyShape {
 
 // A crust-fixed point in planetocentric coordinates on `shape`, oriented by `frame`.
 export interface BodySurfaceLocation {
-	// Planetocentric east-positive longitude around body-fixed +Z, in radians.
+	// Planetocentric east-positive longitude around body-fixed +Z, in radians, in [0, TAU).
 	readonly longitude: Angle
 	// Planetocentric latitude from the body-fixed equatorial plane toward +Z, in radians.
 	readonly latitude: Angle
@@ -72,10 +72,11 @@ function bodyFixedPosition(location: BodySurfaceLocation): Vec3 {
 }
 
 // Creates a crust-fixed planetocentric location and caches its body-fixed Cartesian position.
-// Longitude, latitude, elevation, and shape are treated as immutable after construction so the
-// cached point needs no per-call trigonometry.
+// Longitude is stored east-positive in [0, TAU). Latitude, elevation, and shape are stored as
+// given and, with longitude, are treated as immutable after construction so the cached point
+// needs no per-call trigonometry.
 export function bodySurfaceLocation(longitude: Angle, latitude: Angle, elevation: Distance, shape: BodyShape, frame: Frame): BodySurfaceLocation {
-	const location: BodySurfaceLocation = { longitude, latitude, elevation, shape, frame }
+	const location: BodySurfaceLocation = { longitude: normalizeAngle(longitude), latitude, elevation, shape, frame }
 	location.bodyFixed = planetocentricPosition(location)
 	return location
 }
