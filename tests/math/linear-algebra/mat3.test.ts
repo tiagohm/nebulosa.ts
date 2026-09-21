@@ -1,8 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 // oxfmt-ignore
-import { type MutMat3, matClone, matDeterminant, matDivScalar, matFlipX, matFlipY, matFromVec3, matIdentity, matMinus, matMinusScalar, matMul, matMulScalar, matMulTranspose, matMulVec, matPlus, matPlusScalar, matRodriguesRotation, matRotX, matRotY, matRotZ, matToVec3, matTranspose, matTransposeMul, matTransposeMulTranspose, matZero } from '../../../src/math/linear-algebra/mat3'
+import { type MutMat3, matClone, matDeterminant, matDivScalar, matFlipX, matFlipY, matFromVec3, matIdentity, matIsIdentity, matMinus, matMinusScalar, matMul, matMulScalar, matMulTranspose, matMulVec, matPlus, matPlusScalar, matRodriguesRotation, matRotX, matRotY, matRotZ, matToVec3, matTranspose, matTransposeMul, matTransposeMulTranspose, matZero } from '../../../src/math/linear-algebra/mat3'
 import { PI, PIOVERTWO } from '../../../src/core/constants'
 import type { MutVec3 } from '../../../src/math/linear-algebra/vec3'
+
+test('is identity', () => {
+	expect(matIsIdentity(matIdentity())).toBeTrue()
+	expect(matIsIdentity([1, 0, 0, 0.1, 1, 0, 0, 0, 1])).toBeFalse()
+})
 
 test('determinant', () => {
 	expect(matDeterminant([1, 2, 3, 4, 5, 6, 7, 8, 9])).toBe(0)

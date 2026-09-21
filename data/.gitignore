@@ -13,3 +13,5 @@
 *.fits
 *.png
 *.svg
+*.tf
+*.tpc

@@ -28,6 +28,11 @@ export function matIdentity(o?: MutMat3): MutMat3 {
 	else return [1, 0, 0, 0, 1, 0, 0, 0, 1]
 }
 
+// Returns true when `m` is the 3×3 identity.
+export function matIsIdentity(m: Mat3) {
+	return m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 0 && m[4] === 1 && m[5] === 0 && m[6] === 0 && m[7] === 0 && m[8] === 1
+}
+
 // Fills the matrix.
 export function matFill(m: MutMat3, a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) {
 	m[0] = a

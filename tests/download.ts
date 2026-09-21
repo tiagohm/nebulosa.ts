@@ -6,8 +6,10 @@ const FILES = {
 	'apod4.jpg': [undefined, 'astap', 'libastrometry'],
 	'IAU-CSN.tsv': [undefined, 'csv'],
 	'de405.bsp': [undefined, 'daf', 'spk'],
-	'de421.bsp': [undefined, 'daf', 'spk'],
-	'moon_pa_de421_1900-2050.bpc': [undefined, 'daf'],
+	'de421.bsp': [undefined, 'daf', 'spk', 'frame.kernel'],
+	'moon_pa_de421_1900-2050.bpc': [undefined, 'daf', 'pck', 'frame.kernel'],
+	'moon_080317.tf': ['https://naif.jpl.nasa.gov/pub/naif/generic_kernels/fk/satellites/moon_080317.tf', 'frame.kernel', 'text.kernel'],
+	'pck00008.tpc': ['https://naif.jpl.nasa.gov/pub/naif/JUNO/kernels/pck/pck00008.tpc', 'pck', 'frame.kernel', 'text.kernel'],
 	'hyg_v42.csv': [undefined, 'hyg'],
 	'hip_main.dat': ['https://cdsarc.cds.unistra.fr/ftp/cats/I/239/hip_main.dat', 'hipparcos'],
 	'indi.log': [undefined, 'indi'],
@@ -69,7 +71,7 @@ const FILES = {
 const downloading = new Map<string, Promise<Bun.BunFile>>()
 
 type FileName = keyof typeof FILES
-type FileTag = 'alpaca.client' | 'alpaca.server' | 'astap' | 'csv' | 'daf' | 'fits' | 'hipparcos' | 'hnsky' | 'hyg' | 'iers' | 'image' | 'indi' | 'libastrometry' | 'location' | 'sao' | 'spk' | 'stardetector' | 'starmatching' | 'stellarium' | 'time' | 'xisf'
+type FileTag = 'alpaca.client' | 'alpaca.server' | 'astap' | 'csv' | 'daf' | 'fits' | 'frame.kernel' | 'hipparcos' | 'hnsky' | 'hyg' | 'iers' | 'image' | 'indi' | 'libastrometry' | 'location' | 'pck' | 'sao' | 'spk' | 'stardetector' | 'starmatching' | 'stellarium' | 'text.kernel' | 'time' | 'xisf'
 
 export async function download(name: FileName) {
 	const task = downloading.get(name)

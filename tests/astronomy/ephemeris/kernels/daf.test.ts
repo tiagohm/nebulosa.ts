@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readDaf } from '../../../../src/astronomy/ephemeris/kernels/daf'
-import { bufferSource, fileHandleSource } from '../../../../src/io/io'
+import { type AsyncSource, bufferSource, fileHandleSource, type Seekable } from '../../../../src/io/io'
 import { downloadPerTag } from '../../../download'
 
 await downloadPerTag('daf')
@@ -135,3 +135,51 @@ test('DAF/PCK', async () => {
 	expect(daf.summaries[0].doubles).toEqual(new Float64Array([-3.1557168e9, 1.609416e9]))
 	expect(daf.summaries[0].ints).toEqual(new Int32Array([31006, 1, 2, 641, 221284]))
 })
+
+test('DAF from BufferSource exposes readSync over the same range as read', async () => {
+	const daf = await readDaf(bufferSource(await fs.readFile('data/de421.bsp')))
+	const asyncWords = await daf.read(641, 645)
+	const syncWords = daf.readSync(641, 645)
+
+	expect('readSync' in daf).toBeTrue()
+	expect(syncWords).toEqual(asyncWords)
+})
+
+test('DAF from FileHandleSource exposes readSync over the same range as read', async () => {
+	await using source = fileHandleSource(await fs.open('data/de421.bsp'))
+	const daf = await readDaf(source)
+	const asyncWords = await daf.read(641, 645)
+	const syncWords = daf.readSync(641, 645)
+
+	expect('readSync' in daf).toBeTrue()
+	expect(syncWords).toEqual(asyncWords)
+})
+
+test('DAF from an async-only seekable source does not expose readSync', async () => {
+	const daf = await readDaf(new AsyncSeekableSource(await fs.readFile('data/de421.bsp')))
+	const words = await daf.read(641, 645)
+
+	expect('readSync' in daf).toBeFalse()
+	expect(daf.summaries).toHaveLength(15)
+	expect(words).toHaveLength(5)
+})
+
+class AsyncSeekableSource implements AsyncSource, Seekable {
+	position = 0
+
+	constructor(readonly data: Buffer) {}
+
+	seek(position: number) {
+		if (position < 0) return false
+		this.position = position
+		return true
+	}
+
+	read(buffer: Buffer, offset?: number, size?: number) {
+		size = Math.min(size ?? buffer.byteLength - (offset ?? 0), this.data.byteLength - this.position)
+		if (!size) return Promise.resolve(0)
+		size = this.data.copy(buffer, offset, this.position, this.position + size)
+		this.position += size
+		return Promise.resolve(size)
+	}
+}

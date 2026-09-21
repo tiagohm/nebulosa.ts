@@ -1,8 +1,9 @@
-import { readUntil, type Seekable, type Source } from '../../../io/io'
+import { isSyncSource, readUntil, readUntilSync, type AsyncSource, type Seekable, type Source, type SyncSource } from '../../../io/io'
 
 // Reader for NAIF DAF (Double precision Array File) containers, the binary layout underlying SPK
-// ephemeris kernels. Parses the file record (endianness, summary layout, FTP validation string),
-// walks the summary record chain, and exposes a random-access float64 reader. Handles both
+// ephemeris and PCK orientation kernels. Parses the file record (endianness, summary layout, FTP
+// validation string), walks the summary record chain, and exposes a random-access float64 reader.
+// Sync-capable sources also expose `readSync` for consumers that cannot await. Handles both
 // big-endian and little-endian files and validates against truncation.
 
 // One array summary: a named segment with its descriptor doubles and ints.
@@ -21,6 +22,12 @@ export interface Daf {
 	readonly summaries: Summary[]
 	// Reads the inclusive 1-based double-word range [start, end] from the file.
 	readonly read: (start: number, end: number) => Promise<Float64Array> | Float64Array
+}
+
+// A DAF whose random-access reader can run without awaiting.
+export interface SyncDaf extends Daf {
+	// Synchronous counterpart of `read` for consumers that cannot await, such as Frame.rotationAt.
+	readonly readSync: (start: number, end: number) => Float64Array
 }
 
 // Metadata from the DAF file record describing byte order and summary layout.
@@ -52,7 +59,12 @@ const INT32_BYTES = 4
 const HOST_LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1
 
 // https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/C/req/daf.html
-export async function readDaf(source: Source & Seekable): Promise<Daf> {
+// Parses a DAF from a seekable byte source. Initial record and summary parsing is async.
+// Sync-capable sources yield a SyncDaf with `readSync`; other sources yield the generic Daf.
+export function readDaf(source: SyncSource & Seekable): Promise<SyncDaf>
+export function readDaf(source: AsyncSource & Seekable): Promise<Daf>
+export function readDaf(source: Source & Seekable): Promise<Daf | SyncDaf>
+export async function readDaf(source: Source & Seekable): Promise<Daf | SyncDaf> {
 	const buffer = Buffer.allocUnsafe(RECORD_SIZE)
 
 	await readRecord(source, 1, buffer)
@@ -63,26 +75,36 @@ export async function readDaf(source: Source & Seekable): Promise<Daf> {
 		const record = readNaifDafRecord(buffer)
 		const summaries = await readSummaries(source, record)
 
-		return {
-			summaries,
-			read: (start, end) => readFloat64Array(source, start, end, record.be),
-		}
+		return makeDaf(source, record, summaries)
 	} else if (format.startsWith('DAF/')) {
 		if (hasFtpValidationString(buffer)) {
 			const be = buffer.toString('ascii', 88, 96).toUpperCase() !== 'LTL-IEEE'
 			const record = readNaifDafRecord(buffer, be)
 			const summaries = await readSummaries(source, record)
 
-			return {
-				summaries,
-				read: (start, end) => readFloat64Array(source, start, end, record.be),
-			}
+			return makeDaf(source, record, summaries)
 		} else {
 			throw new Error('file has been damaged')
 		}
 	}
 
 	throw new Error(`unsupported format: ${format}`)
+}
+
+// Builds a DAF reader over `source`. Sync-capable sources also expose `readSync`.
+function makeDaf(source: Source & Seekable, record: DafRecord, summaries: Summary[]): Daf | SyncDaf {
+	if (isSyncSource(source)) {
+		return {
+			summaries,
+			read: (start, end) => readFloat64Array(source, start, end, record.be),
+			readSync: (start, end) => readFloat64ArraySync(source, start, end, record.be),
+		}
+	}
+
+	return {
+		summaries,
+		read: (start, end) => readFloat64Array(source, start, end, record.be),
+	}
 }
 
 // Reads a contiguous DAF float64 range.
@@ -106,11 +128,39 @@ async function readFloat64Array(source: Source & Seekable, start: number, end: n
 	// Guard against truncated files: a short read would otherwise decode uninitialized memory.
 	if (n !== expected) throw new Error(`unexpected end of DAF file: read ${n} of ${expected} bytes`)
 
-	for (let i = 0, offset = 0; i < length; i++, offset += FLOAT64_BYTES) {
-		data[i] = be ? buffer.readDoubleBE(offset) : buffer.readDoubleLE(offset)
-	}
+	decodeFloat64Words(buffer, data, be)
 
 	return data
+}
+
+// Synchronous counterpart of `readFloat64Array` for Frame methods that cannot await.
+function readFloat64ArraySync(source: SyncSource & Seekable, start: number, end: number, be: boolean): Float64Array {
+	source.seek(FLOAT64_BYTES * (start - 1))
+
+	const length = 1 + end - start
+	const data = new Float64Array(length)
+	const expected = data.byteLength
+
+	if (be !== HOST_LITTLE_ENDIAN) {
+		const n = readUntilSync(source, Buffer.from(data.buffer, data.byteOffset, data.byteLength))
+		if (n !== expected) throw new Error(`unexpected end of DAF file: read ${n} of ${expected} bytes`)
+		return data
+	}
+
+	const buffer = Buffer.allocUnsafe(data.byteLength)
+	const n = readUntilSync(source, buffer)
+	if (n !== expected) throw new Error(`unexpected end of DAF file: read ${n} of ${expected} bytes`)
+
+	decodeFloat64Words(buffer, data, be)
+
+	return data
+}
+
+// Copies `buffer` into `data` using the file's endianness.
+function decodeFloat64Words(buffer: Buffer, data: Float64Array, be: boolean) {
+	for (let i = 0, offset = 0; i < data.length; i++, offset += FLOAT64_BYTES) {
+		data[i] = be ? buffer.readDoubleBE(offset) : buffer.readDoubleLE(offset)
+	}
 }
 
 // Checks the FTP validation string without creating temporary slices.
