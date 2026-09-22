@@ -2,16 +2,15 @@ import { DAYSEC, J2000 } from '../../../core/constants'
 import { type Mat3, matClone, matFill, matIdentity, type MutMat3, matRotX, matRotZ } from '../../../math/linear-algebra/mat3'
 import type { Frame } from '../../coordinates/frame'
 import { type Time, tdb } from '../../time/time'
-import type { Summary, SyncDaf } from './daf'
+import type { Daf, Summary } from './daf'
 
 // Reader and evaluator for binary PCK (Planetary Constants Kernel) orientation
 // stored in DAF files. Type 2 segments hold Chebyshev series for the three Euler
 // angles φ, δ, W of the body-fixed frame relative to the segment's inertial frame
 // (J2000 / NAIF id 1). Angles are radians, epochs are TDB seconds past J2000, and
 // the public Frame rate is W = dR/dt·Rᵀ in radians/day. initialize() loads only
-// INIT/INTLEN/RSIZE/N; each Chebyshev record is read and cached on demand via
-// SyncDaf.readSync, so the DAF source must remain open while rotationAt /
-// dRdtTimesRtAt are used.
+// INIT/INTLEN/RSIZE/N; each Chebyshev record is read and cached on demand, so the
+// DAF source must support readSync and remain open while rotationAt/dRdtTimesRtAt are used.
 
 // https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/C/req/pck.html
 
@@ -20,17 +19,17 @@ export interface Pck {
 	// All segments in file order.
 	readonly segments: readonly PckSegment[]
 	// Resolves the highest-priority segment group for a PCK frame class id, if present.
-	readonly segment: (frameClassId: number) => PckSegment | undefined
+	readonly segment: (id: number) => PckSegment | undefined
 }
 
-// One PCK segment: orientation of `frameClassId` relative to `inertialFrameId` over [start, end].
+// One PCK segment: orientation of `id` relative to `inertialFrameId` over [start, end].
 export interface PckSegment extends Frame {
 	// Segment coverage start, in ephemeris seconds past J2000 (TDB).
 	readonly start: number
 	// Segment coverage end, in ephemeris seconds past J2000 (TDB).
 	readonly end: number
 	// PCK frame class id stored in the DAF summary (NAIF integer 1).
-	readonly frameClassId: number
+	readonly id: number
 	// Inertial reference-frame id the Euler angles are measured against (NAIF integer 2).
 	readonly inertialFrameId: number
 	// PCK data type (2 is Chebyshev Euler angles).
@@ -59,8 +58,9 @@ interface Type2PckCoefficient {
 	readonly w: Float64Array
 }
 
-// Reads PCK summaries and builds a reusable frame-class-id segment lookup.
-export function readPck(daf: SyncDaf): Pck {
+// Reads PCK summaries and builds a reusable frame-class-id segment lookup. The DAF must support
+// synchronous record reads for subsequent Frame evaluations.
+export function readPck(daf: Daf): Pck {
 	const segments = new Array<PckSegment>(daf.summaries.length)
 	const groups = new Map<number, PckSegment[]>()
 
@@ -72,36 +72,33 @@ export function readPck(daf: SyncDaf): Pck {
 
 	const byClassId = new Map<number, PckSegment>()
 
-	for (const [frameClassId, list] of groups) {
-		byClassId.set(frameClassId, list.length === 1 ? list[0] : new MultiplePckSegment(list))
+	for (const [id, list] of groups) {
+		byClassId.set(id, list.length === 1 ? list[0] : new MultiplePckSegment(list))
 	}
 
-	return {
-		segments,
-		segment: (frameClassId) => byClassId.get(frameClassId),
-	}
+	return { segments, segment: (id) => byClassId.get(id) }
 }
 
 // Appends a segment to its frame-class-id group, preserving file order.
 function appendPckSegment(groups: Map<number, PckSegment[]>, segment: PckSegment) {
-	let list = groups.get(segment.frameClassId)
+	let list = groups.get(segment.id)
 
 	if (!list) {
 		list = []
-		groups.set(segment.frameClassId, list)
+		groups.set(segment.id, list)
 	}
 
 	list.push(segment)
 }
 
 // Instantiates the concrete segment reader for a supported PCK data type.
-function makePckSegment(summary: Summary, daf: SyncDaf): PckSegment {
+function makePckSegment(summary: Summary, daf: Daf): PckSegment {
 	const [start, end] = summary.doubles
-	const [frameClassId, inertialFrameId, type, startIndex, endIndex] = summary.ints
+	const [id, inertialFrameId, type, startIndex, endIndex] = summary.ints
 
 	switch (type) {
 		case 2:
-			return new Type2PckSegment(daf, start, end, frameClassId, inertialFrameId, startIndex, endIndex)
+			return new Type2PckSegment(daf, start, end, id, inertialFrameId, startIndex, endIndex)
 		default:
 			throw new Error(`unsupported PCK data type ${type}`)
 	}
@@ -194,10 +191,10 @@ export class Type2PckSegment implements PckSegment {
 
 	// Stores immutable metadata and the backing DAF reader for this Chebyshev PCK segment.
 	constructor(
-		readonly daf: SyncDaf,
+		readonly daf: Daf,
 		readonly start: number,
 		readonly end: number,
-		readonly frameClassId: number,
+		readonly id: number,
 		readonly inertialFrameId: number,
 		readonly startIndex: number,
 		readonly endIndex: number,
@@ -316,7 +313,7 @@ function pckRotationAndW(phi: number, delta: number, w: number, dphi: number, dd
 export class MultiplePckSegment implements PckSegment {
 	readonly start: number
 	readonly end: number
-	readonly frameClassId: number
+	readonly id: number
 	readonly inertialFrameId: number
 	readonly type: number
 	readonly startIndex: number
@@ -329,11 +326,11 @@ export class MultiplePckSegment implements PckSegment {
 			throw new Error('at least one segment needs to be provided')
 		}
 
-		this.frameClassId = segments[0].frameClassId
+		this.id = segments[0].id
 		this.inertialFrameId = segments[0].inertialFrameId
 		this.type = segments[0].type
 
-		if (segments.length > 1 && segments.some((e) => e.frameClassId !== this.frameClassId)) {
+		if (segments.length > 1 && segments.some((e) => e.id !== this.id)) {
 			throw new Error('one of the segments does not match the frame class id')
 		}
 		if (segments.length > 1 && segments.some((e) => e.inertialFrameId !== this.inertialFrameId)) {
@@ -359,11 +356,9 @@ export class MultiplePckSegment implements PckSegment {
 		this.#segments = segments
 	}
 
-	// Initializes every child segment.
+	// Initializes each child in sequence because they may share the DAF source cursor.
 	async initialize(): Promise<void> {
-		for (const segment of this.#segments) {
-			await segment.initialize()
-		}
+		for (const segment of this.#segments) await segment.initialize()
 	}
 
 	// Selects the highest-priority covering child and returns its rotation.

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readImageFromBuffer, readImageFromPath, readImageFromXisf } from '../../../../src/imaging/model/image'
 import { byteShuffle, byteUnshuffle, isXisf, parseXisfHeader, readXisf, writeXisf, XISF_MAX_HEADER_LENGTH, XISF_SIGNATURE, XisfImageReader, XisfImageWriter } from '../../../../src/io/formats/xisf/xisf'
-import { base64Sink, bufferSink, bufferSource, fileHandleSource } from '../../../../src/io/io'
+import { base64Sink, bufferSink, bufferSource, fileHandleSource, type Seekable, type Sink, type Source } from '../../../../src/io/io'
 import { downloadPerTag } from '../../../download'
 import { BITPIXES, CHANNELS, saveImageAndCompareHash } from '../../../imaging/util'
 
@@ -352,9 +352,12 @@ describe('write', () => {
 		const raw = new Float64Array([0, 0.5, 1])
 		const buffer = Buffer.alloc(4096)
 		const delegate = bufferSink(buffer)
-		const sink = {
+		const sink: Sink = {
 			write(chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
-				const available = typeof chunk === 'string' ? chunk.length - (offset ?? 0) : chunk.byteLength - (offset ?? 0)
+				return this.writeSync(chunk, offset, size, encoding)
+			},
+			writeSync(chunk: string | Buffer, offset: number = 0, size?: number, encoding?: BufferEncoding) {
+				const available = typeof chunk === 'string' ? chunk.length - offset : chunk.byteLength - offset
 				return delegate.write(chunk, offset, Math.min(size ?? available, 7), encoding)
 			},
 		}
@@ -394,9 +397,12 @@ describe('write', () => {
 		const buffer = Buffer.allocUnsafe(width * 2 + 4096)
 		const base = bufferSink(buffer)
 		let largestWrite = 0
-		const sink = {
-			write: (chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) => {
-				largestWrite = Math.max(largestWrite, size ?? chunk.length)
+		const sink: Sink = {
+			write(chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
+				return this.writeSync(chunk, offset, size, encoding)
+			},
+			writeSync(chunk: string | Buffer, offset?: number, size: number = chunk.length, encoding?: BufferEncoding) {
+				largestWrite = Math.max(largestWrite, size)
 				return base.write(chunk, offset, size, encoding)
 			},
 		}
@@ -511,13 +517,16 @@ describe('buffer views', () => {
 		samples.subarray(numberOfPixels).fill(0xffff)
 		const base = bufferSource(block)
 		let largestRead = 0
-		const source = {
+		const source: Source & Seekable = {
 			get position() {
 				return base.position
 			},
 			seek: (position: number) => base.seek(position),
-			read: (buffer: Buffer, offset?: number, size?: number) => {
-				largestRead = Math.max(largestRead, size ?? buffer.byteLength)
+			read(buffer: Buffer, offset?: number, size?: number) {
+				return this.readSync(buffer, offset, size)
+			},
+			readSync(buffer: Buffer, offset?: number, size: number = buffer.byteLength) {
+				largestRead = Math.max(largestRead, size)
 				return base.read(buffer, offset, size)
 			},
 		}

@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { FitsKeywordReader, FitsKeywordWriter } from '../../src/io/formats/fits/fits'
 // oxfmt-ignore
-import { type Base64Alphabet, base64Sink, base64Source, bufferSink, bufferSource, fileHandleSink, fileHandleSource, GrowableBuffer, isSyncSink, isSyncSource, rangeHttpSource, readableStreamSource, readLines, readRemaining, readUntil, readUntilSync, type Sink, type Source, type SyncSink, type SyncSource, sourceTransferToSink, writeFullySync } from '../../src/io/io'
+import { type Base64Alphabet, base64Sink, base64Source, bufferSink, bufferSource, fileHandleSink, fileHandleSource, GrowableBuffer, rangeHttpSource, readableStreamSource, readLines, readRemaining, readUntil, readUntilSync, type Sink, type Source, sourceTransferToSink, writeFullySync } from '../../src/io/io'
 
 test('bufferSink', () => {
 	const buffer = Buffer.allocUnsafe(16)
@@ -173,7 +173,7 @@ describe('sourceTransferToSink', () => {
 	})
 
 	test('stops when the sink accepts no bytes', async () => {
-		const sink: Sink = { write: () => 0 }
+		const sink: Sink = { write: () => 0, writeSync: () => 0 }
 		const n = await sourceTransferToSink(bufferSource(Buffer.from('abc')), sink)
 		expect(n).toBe(0)
 	})
@@ -406,6 +406,10 @@ describe('base64', () => {
 				this.#pos += m
 				return m
 			}
+
+			readSync(buffer: Buffer, offset?: number, size?: number) {
+				return this.read(buffer, offset, size)
+			}
 		}
 
 		for (const chunk of [1, 2, 3, 5, 1023]) {
@@ -415,6 +419,17 @@ describe('base64', () => {
 			expect(n).toBe(raw.byteLength)
 			expect(out.subarray(0, n)).toEqual(raw)
 		}
+	})
+
+	test('readSync decodes groups across buffer refills', () => {
+		const raw = Buffer.allocUnsafe(2000)
+		for (let i = 0; i < raw.byteLength; i++) raw[i] = (i * 7) & 0xff
+		const source = base64Source(bufferSource(Buffer.from(raw.toString('base64'), 'ascii')))
+		const decoded = Buffer.allocUnsafe(raw.byteLength)
+
+		expect(readUntilSync(source, decoded)).toBe(raw.byteLength)
+		expect(decoded).toEqual(raw)
+		expect(source.readSync(decoded)).toBe(0)
 	})
 
 	test('source honors offset when size is omitted', async () => {
@@ -496,6 +511,17 @@ describe('base64', () => {
 		expect(output.subarray(0, sink.encodedSize).toString('ascii')).toBe('YmNkZQ==')
 	})
 
+	test('writeSync encodes through a sink that accepts partial writes', async () => {
+		const target = new LimitedSyncSink(3)
+		const sink = base64Sink(target)
+		const raw = Buffer.from('abcdefg')
+
+		expect(sink.writeSync(raw, 1, 5)).toBe(5)
+		await sink.end()
+		expect(target.toBuffer().toString('ascii')).toBe(raw.subarray(1, 6).toString('base64'))
+		expect(sink.encodedSize).toBe(8)
+	})
+
 	test('fits header', async () => {
 		const writer = new FitsKeywordWriter()
 		const output = Buffer.alloc(2880, 32)
@@ -529,7 +555,7 @@ describe('rangeHttpSource', () => {
 		const restore = mockRangeFetch(Buffer.from('abcdefghijklmnopqrstuvwxyz'))
 
 		try {
-			const source = rangeHttpSource('https://example.test/data')
+			using source = rangeHttpSource('https://example.test/data')
 			const first = Buffer.allocUnsafe(5)
 			const second = Buffer.allocUnsafe(5)
 
@@ -549,7 +575,7 @@ describe('rangeHttpSource', () => {
 		const restore = mockRangeFetch(Buffer.from('abcdefghijklmnopqrstuvwxyz'))
 
 		try {
-			const source = rangeHttpSource('https://example.test/data')
+			using source = rangeHttpSource('https://example.test/data')
 			const output = Buffer.alloc(8, 32)
 
 			expect(await source.read(output, 2, 4)).toBe(4)
@@ -568,7 +594,7 @@ describe('rangeHttpSource', () => {
 		globalThis.fetch = (async (_input, _init) => new Response(data, { status: 200 })) as typeof fetch
 
 		try {
-			const source = rangeHttpSource('https://example.test/data')
+			using source = rangeHttpSource('https://example.test/data')
 			expect(source.seek(10)).toBeTrue()
 			const output = Buffer.alloc(5, 0)
 
@@ -595,7 +621,7 @@ describe('rangeHttpSource', () => {
 		const restore = mockRangeFetch(data, 4096)
 
 		try {
-			const source = rangeHttpSource('https://example.test/data')
+			using source = rangeHttpSource('https://example.test/data')
 			const output = Buffer.allocUnsafe(data.byteLength)
 
 			expect(await source.read(output)).toBe(data.byteLength)
@@ -610,7 +636,7 @@ describe('rangeHttpSource', () => {
 		const restore = mockRangeFetch(Buffer.from('abcdefghijklmnopqrstuvwxyz'))
 
 		try {
-			const source = rangeHttpSource('https://example.test/data')
+			using source = rangeHttpSource('https://example.test/data')
 			const all = Buffer.allocUnsafe(26)
 			expect(await source.read(all)).toBe(26)
 			expect(all.toString('ascii')).toBe('abcdefghijklmnopqrstuvwxyz')
@@ -628,7 +654,7 @@ describe('rangeHttpSource', () => {
 		const restore = mockRangeFetch(data)
 
 		try {
-			const source = rangeHttpSource('https://example.test/data')
+			using source = rangeHttpSource('https://example.test/data')
 			const output = Buffer.alloc(100, 0)
 			expect(await readUntil(source, output, 100)).toBe(26)
 			expect(output.subarray(0, 26)).toEqual(data)
@@ -642,7 +668,7 @@ describe('rangeHttpSource', () => {
 		const restore = mockRangeFetch(data)
 
 		try {
-			const source = rangeHttpSource('https://example.test/data')
+			using source = rangeHttpSource('https://example.test/data')
 			expect(await readRemaining(source)).toEqual(data)
 		} finally {
 			globalThis.fetch = restore
@@ -710,20 +736,6 @@ describe('sync source capability', () => {
 		expect(source.readSync(buffer)).toBe(0)
 		expect(source.position).toBe(16)
 		expect(await source.read(buffer)).toBe(0)
-	})
-
-	test('isSyncSource is true only for sources with readSync', async () => {
-		expect(isSyncSource(bufferSource(Buffer.from('ab')))).toBeTrue()
-
-		const path = join(tmpdir(), 'io-sync-source-guard.txt')
-		const handle = await fs.open(path, 'w+', 0o666)
-		await using source = fileHandleSource(handle)
-		expect(isSyncSource(source)).toBeTrue()
-
-		expect(isSyncSource(rangeHttpSource('https://example.test/data'))).toBeFalse()
-		await using stream = readableStreamSource(new ReadableStream<Uint8Array>({ start: (c) => c.close() }))
-		expect(isSyncSource(stream)).toBeFalse()
-		expect(isSyncSource(base64Source('YWI='))).toBeFalse()
 	})
 })
 
@@ -800,17 +812,6 @@ describe('sync sink capability', () => {
 		expect(sink.writeSync('é', undefined, undefined, 'utf8')).toBe(2)
 		expect(sink.position).toBe(2)
 	})
-
-	test('isSyncSink is true only for sinks with writeSync', async () => {
-		expect(isSyncSink(bufferSink(Buffer.alloc(8)))).toBeTrue()
-
-		const path = join(tmpdir(), 'io-sync-sink-guard.txt')
-		const handle = await fs.open(path, 'w+', 0o666)
-		await using sink = fileHandleSink(handle)
-		expect(isSyncSink(sink)).toBeTrue()
-
-		expect(isSyncSink(base64Sink(bufferSink(Buffer.alloc(32))))).toBeFalse()
-	})
 })
 
 describe('writeFullySync', () => {
@@ -845,12 +846,16 @@ class LimitedSink implements Sink {
 		return n
 	}
 
+	writeSync(chunk: string | Buffer, offset?: number, size?: number) {
+		return this.write(chunk, offset, size)
+	}
+
 	toBuffer() {
 		return Buffer.concat(this.#chunks)
 	}
 }
 
-class ShortSyncSource implements SyncSource {
+class ShortSyncSource implements Source {
 	position = 0
 	reads = 0
 
@@ -873,7 +878,7 @@ class ShortSyncSource implements SyncSource {
 	}
 }
 
-class LimitedSyncSink implements SyncSink {
+class LimitedSyncSink implements Sink {
 	readonly #chunks: Buffer[] = []
 
 	constructor(readonly maxBytes: number) {}
@@ -895,7 +900,7 @@ class LimitedSyncSink implements SyncSink {
 	}
 }
 
-class InvalidSyncSink implements SyncSink {
+class InvalidSyncSink implements Sink {
 	constructor(readonly n: number) {}
 
 	write() {

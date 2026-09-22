@@ -1,9 +1,8 @@
-import { readSync as readFdSync, writeSync as writeFdSync } from 'fs'
+import { readSync, writeSync, closeSync } from 'fs'
 import type { FileHandle } from 'fs/promises'
 
 // Byte-stream I/O abstractions used across the library's readers and writers. Defines the generic
-// `Sink`/`Source` contracts, explicit `AsyncSource`/`SyncSource` and `AsyncSink`/`SyncSink`
-// capabilities, and concrete adapters over Buffers, file handles, readable streams, HTTP range
+// `Sink`/`Source` contracts, and concrete adapters over Buffers, file handles, readable streams, HTTP range
 // requests, and streaming Base64, plus line/region readers, a source-to-sink pump, and a growable
 // write buffer. Sinks and sources are sequential and track a byte `position`; seekable ones support
 // repositioning. File handles share that cursor across sequential async and sync calls. This is a
@@ -45,32 +44,16 @@ export function isSeekable(o: object): o is Seekable {
 	return 'seek' in o && o.seek instanceof Function
 }
 
-// A sequential byte target. Returns the number of source bytes consumed (possibly as a promise);
-// transforming sinks expose encoded-output counts separately.
+// A sequential byte target with async-compatible and synchronous write methods.
 export interface Sink {
 	// Writes `size` bytes of `chunk` starting at `offset`, decoding strings with `encoding`; returns source bytes consumed.
 	readonly write: (chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) => Promise<number> | number
-}
-
-// A sequential byte target whose `write` always returns a promise.
-export interface AsyncSink extends Sink {
-	// Writes `size` bytes of `chunk` starting at `offset`, decoding strings with `encoding`; always returns a promise of source bytes consumed.
-	readonly write: (chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) => Promise<number>
-}
-
-// A sequential byte target that can also write without awaiting.
-export interface SyncSink extends Sink {
 	// Synchronous counterpart of `write`. Shares the same logical cursor. Not safe to call concurrently with `write`.
 	readonly writeSync: (chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) => number
 }
 
-// Runtime type guard for SyncSink. Checks for a `writeSync` function without performing I/O.
-export function isSyncSink(o: object): o is SyncSink {
-	return 'writeSync' in o && o.writeSync instanceof Function
-}
-
 // A seekable sink that writes into a fixed Buffer; supports negative seek offsets (from the end).
-export class BufferSink implements SyncSink, Seekable, Exhaustible {
+export class BufferSink implements Sink, Seekable, Exhaustible {
 	position = 0
 
 	constructor(readonly buffer: Buffer) {}
@@ -87,15 +70,13 @@ export class BufferSink implements SyncSink, Seekable, Exhaustible {
 		return true
 	}
 
-	write(chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
+	write(chunk: string | Buffer, offset: number = 0, size?: number, encoding?: BufferEncoding) {
 		if (size === 0) return 0
 
-		offset ??= 0
-
 		if (typeof chunk === 'string')
-			if (size === undefined && !offset) size = this.buffer.write(chunk, this.position, encoding)
+			if (size === undefined && offset === 0) size = this.buffer.write(chunk, this.position, encoding)
 			else if (size === undefined) size = this.buffer.write(chunk.slice(offset), this.position, encoding)
-			else if (!offset) size = this.buffer.write(chunk.slice(0, size), this.position, encoding)
+			else if (offset === 0) size = this.buffer.write(chunk.slice(0, size), this.position, encoding)
 			else size = this.buffer.write(chunk.slice(offset, offset + size), this.position, encoding)
 		else size = chunk.copy(this.buffer, this.position, offset, offset + (size ?? chunk.byteLength))
 		this.position += size
@@ -112,10 +93,9 @@ export function bufferSink(buffer: Buffer) {
 	return new BufferSink(buffer)
 }
 
-// A seekable sink writing to an fs/promises FileHandle over a shared logical cursor; `write` and
-// `writeSync` may be interleaved sequentially but are not concurrency-safe. Closes the handle on
-// async disposal.
-export class FileHandleSink implements AsyncSink, SyncSink, Seekable, AsyncDisposable {
+// A seekable sink writing to a FileHandle over a shared logical cursor. Sequential async and sync
+// writes may be interleaved. Closes the handle on async or sync disposal.
+export class FileHandleSink implements Sink, AsyncDisposable, Disposable {
 	position = 0
 
 	constructor(readonly handle: FileHandle) {}
@@ -126,34 +106,46 @@ export class FileHandleSink implements AsyncSink, SyncSink, Seekable, AsyncDispo
 		return true
 	}
 
-	async write(chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
+	async write(chunk: string | Buffer, offset: number = 0, size?: number, encoding?: BufferEncoding) {
 		if (size === 0) return 0
 
 		if (typeof chunk === 'string')
-			if (size === undefined && !offset) size = (await this.handle.write(chunk, this.position, encoding)).bytesWritten
+			if (size === undefined && offset === 0) size = (await this.handle.write(chunk, this.position, encoding)).bytesWritten
 			else if (size === undefined) size = (await this.handle.write(chunk.slice(offset), this.position, encoding)).bytesWritten
-			else if (!offset) size = (await this.handle.write(chunk.slice(0, size), this.position, encoding)).bytesWritten
+			else if (offset === 0) size = (await this.handle.write(chunk.slice(0, size), this.position, encoding)).bytesWritten
 			else size = (await this.handle.write(chunk.slice(offset, offset + size), this.position, encoding)).bytesWritten
 		else size = (await this.handle.write(chunk, offset, size, this.position)).bytesWritten
 		this.position += size
 		return size
 	}
 
-	writeSync(chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
+	writeSync(chunk: string | Buffer, offset: number = 0, size?: number, encoding?: BufferEncoding) {
 		if (size === 0) return 0
 
 		if (typeof chunk === 'string')
-			if (size === undefined && !offset) size = writeFdSync(this.handle.fd, chunk, this.position, encoding)
-			else if (size === undefined) size = writeFdSync(this.handle.fd, chunk.slice(offset), this.position, encoding)
-			else if (!offset) size = writeFdSync(this.handle.fd, chunk.slice(0, size), this.position, encoding)
-			else size = writeFdSync(this.handle.fd, chunk.slice(offset, offset + size), this.position, encoding)
-		else size = writeFdSync(this.handle.fd, chunk, offset ?? 0, size ?? chunk.byteLength - (offset ?? 0), this.position)
+			if (size === undefined && offset === 0) size = writeSync(this.handle.fd, chunk, this.position, encoding)
+			else if (size === undefined) size = writeSync(this.handle.fd, chunk.slice(offset), this.position, encoding)
+			else if (offset === 0) size = writeSync(this.handle.fd, chunk.slice(0, size), this.position, encoding)
+			else size = writeSync(this.handle.fd, chunk.slice(offset, offset + size), this.position, encoding)
+		else size = writeSync(this.handle.fd, chunk, offset ?? 0, size ?? chunk.byteLength - (offset ?? 0), this.position)
 		this.position += size
 		return size
 	}
 
-	[Symbol.asyncDispose]() {
-		return this.handle.close()
+	async close() {
+		return await this.handle.close()
+	}
+
+	closeSync() {
+		this.handle.fd >= 0 && closeSync(this.handle.fd)
+	}
+
+	async [Symbol.asyncDispose]() {
+		return await this.close()
+	}
+
+	[Symbol.dispose]() {
+		this.closeSync()
 	}
 }
 
@@ -163,30 +155,16 @@ export function fileHandleSink(handle: FileHandle) {
 }
 
 // A sequential byte source. Returns the number of bytes actually read (0 at end of input).
+// Sources backed by asynchronous transports expose readSync but throw when it is called.
 export interface Source {
 	// Reads up to `size` bytes into `buffer` at `offset`; returns the byte count read (0 when exhausted).
 	readonly read: (buffer: Buffer, offset?: number, size?: number) => Promise<number> | number
-}
-
-// A sequential byte source whose `read` always returns a promise.
-export interface AsyncSource extends Source {
-	// Reads up to `size` bytes into `buffer` at `offset`; always returns a promise of the byte count (0 when exhausted).
-	readonly read: (buffer: Buffer, offset?: number, size?: number) => Promise<number>
-}
-
-// A sequential byte source that can also read without awaiting.
-export interface SyncSource extends Source {
-	// Synchronous counterpart of `read`. Shares the same logical cursor. Not safe to call concurrently with `read`.
+	// Synchronous counterpart of `read` when supported. Shares the logical cursor and cannot run concurrently with `read`.
 	readonly readSync: (buffer: Buffer, offset?: number, size?: number) => number
 }
 
-// Runtime type guard for SyncSource. Checks for a `readSync` function without performing I/O.
-export function isSyncSource(o: object): o is SyncSource {
-	return 'readSync' in o && o.readSync instanceof Function
-}
-
 // A seekable source reading from a fixed Buffer; supports negative seek offsets (from the end).
-export class BufferSource implements SyncSource, Seekable, Exhaustible {
+export class BufferSource implements Source, Seekable, Exhaustible {
 	position = 0
 
 	constructor(readonly buffer: Buffer) {}
@@ -203,9 +181,9 @@ export class BufferSource implements SyncSource, Seekable, Exhaustible {
 		return true
 	}
 
-	read(buffer: Buffer, offset?: number, size?: number) {
-		size = Math.min(size ?? buffer.byteLength - (offset ?? 0), this.buffer.byteLength - this.position)
-		if (!size) return 0
+	read(buffer: Buffer, offset: number = 0, size: number = buffer.byteLength - offset) {
+		size = Math.min(size, this.buffer.byteLength - this.position)
+		if (size <= 0) return 0
 		size = this.buffer.copy(buffer, offset, this.position, this.position + size)
 		this.position += size
 		return size
@@ -221,10 +199,10 @@ export function bufferSource(buffer: Buffer) {
 	return new BufferSource(buffer)
 }
 
-// A seekable source reading from an fs/promises FileHandle over a shared logical cursor; `read`
+// A seekable source reading from a FileHandle over a shared logical cursor; `read`
 // and `readSync` may be interleaved sequentially but are not concurrency-safe. Closes the handle
-// on async disposal.
-export class FileHandleSource implements AsyncSource, SyncSource, Seekable, AsyncDisposable {
+// on async or sync disposal.
+export class FileHandleSource implements Source, AsyncDisposable, Disposable {
 	position = 0
 
 	constructor(readonly handle: FileHandle) {}
@@ -235,25 +213,34 @@ export class FileHandleSource implements AsyncSource, SyncSource, Seekable, Asyn
 		return true
 	}
 
-	async read(buffer: Buffer, offset?: number, size?: number) {
-		const ret = await this.handle.read(buffer, offset ?? 0, size, this.position)
+	async read(buffer: Buffer, offset: number = 0, size: number = buffer.byteLength - offset) {
+		if (size <= 0) return 0
+		const ret = await this.handle.read(buffer, offset, size, this.position)
 		this.position += ret.bytesRead
 		return ret.bytesRead
 	}
 
-	readSync(buffer: Buffer, offset?: number, size?: number) {
-		if (size === 0) return 0
-
-		offset ??= 0
-		size ??= buffer.byteLength - offset
-
-		const n = readFdSync(this.handle.fd, buffer, offset, size, this.position)
+	readSync(buffer: Buffer, offset: number = 0, size: number = buffer.byteLength - offset) {
+		if (size <= 0) return 0
+		const n = readSync(this.handle.fd, buffer, offset, size, this.position)
 		this.position += n
 		return n
 	}
 
-	[Symbol.asyncDispose]() {
-		return this.handle.close()
+	async close() {
+		return await this.handle.close()
+	}
+
+	closeSync() {
+		this.handle.fd >= 0 && closeSync(this.handle.fd)
+	}
+
+	async [Symbol.asyncDispose]() {
+		return await this.close()
+	}
+
+	[Symbol.dispose]() {
+		this.closeSync()
 	}
 }
 
@@ -263,7 +250,7 @@ export function fileHandleSource(handle: FileHandle) {
 }
 
 // A non-seekable source adapting a web ReadableStream of byte chunks; cancels the stream on disposal.
-export class ReadableStreamSource implements AsyncSource, AsyncDisposable {
+export class ReadableStreamSource implements Source, AsyncDisposable {
 	readonly #reader: ReadableStreamDefaultReader<Uint8Array>
 	#buffer?: Buffer
 	#position = 0
@@ -272,10 +259,8 @@ export class ReadableStreamSource implements AsyncSource, AsyncDisposable {
 		this.#reader = stream.getReader()
 	}
 
-	async read(buffer: Buffer, offset?: number, size?: number) {
-		if (size === 0) return 0
-
-		offset ??= 0
+	async read(buffer: Buffer, offset: number = 0, size: number = buffer.byteLength - offset) {
+		if (size <= 0) return 0
 
 		if (!this.#buffer || this.#position >= this.#buffer.byteLength) {
 			while (true) {
@@ -289,16 +274,23 @@ export class ReadableStreamSource implements AsyncSource, AsyncDisposable {
 			}
 		}
 
-		size = Math.min(size ?? buffer.byteLength - offset, this.#buffer.byteLength - this.#position)
-
+		size = Math.min(size, this.#buffer.byteLength - this.#position)
 		size = this.#buffer.copy(buffer, offset, this.#position, this.#position + size)
 		this.#position += size
 		return size
 	}
 
-	[Symbol.asyncDispose]() {
+	readSync(buffer: Buffer, offset?: number, size?: number): never {
+		throw new Error('ReadableStreamSource does not support synchronous read')
+	}
+
+	async close() {
 		this.#reader.releaseLock()
-		return this.stream.cancel()
+		return await this.stream.cancel()
+	}
+
+	async [Symbol.asyncDispose]() {
+		return await this.close()
 	}
 }
 
@@ -306,12 +298,25 @@ export function readableStreamSource(stream: ReadableStream<Uint8Array>) {
 	return new ReadableStreamSource(stream)
 }
 
+export interface RangeHttpSourceOptions {
+	// Maximum duration of one range request in milliseconds; 0 disables the timeout.
+	readonly timeout: number
+}
+
 // A seekable source that fetches byte ranges from an HTTP(S) URL via Range requests, so large remote
 // files can be read incrementally without downloading them whole. Requires a server honoring Range.
-export class RangeHttpSource implements AsyncSource, Seekable {
+export class RangeHttpSource implements Source, Seekable, Disposable {
+	readonly #timeout: number
+	readonly #close = new AbortController()
+
 	position = 0
 
-	constructor(readonly uri: string | URL) {}
+	constructor(
+		readonly uri: string | URL,
+		options?: RangeHttpSourceOptions,
+	) {
+		this.#timeout = options?.timeout ?? 0
+	}
 
 	seek(position: number) {
 		if (position < 0) return false
@@ -319,13 +324,14 @@ export class RangeHttpSource implements AsyncSource, Seekable {
 		return true
 	}
 
-	async read(buffer: Buffer, offset?: number, size?: number) {
-		offset ??= 0
-		size ??= buffer.byteLength - offset
+	async read(buffer: Buffer, offset: number = 0, size: number = buffer.byteLength - offset) {
+		this.#close.signal.throwIfAborted()
 
-		if (size === 0) return 0
+		if (size <= 0) return 0
 
-		const response = await fetch(this.uri, { headers: { 'Accept-Encoding': 'identity', Range: `bytes=${this.position}-${this.position + size - 1}` } })
+		const timeout = this.#timeout > 0 ? AbortSignal.timeout(this.#timeout) : undefined
+		const signal = timeout ? AbortSignal.any([timeout, this.#close.signal]) : this.#close.signal
+		const response = await fetch(this.uri, { headers: { 'Accept-Encoding': 'identity', Range: `bytes=${this.position}-${this.position + size - 1}` }, signal })
 		// RFC 9110: a first-byte-pos at or past the resource length is 416.
 		// Source.read must return 0 at EOF, matching FileHandleSource and BufferSource.
 		if (response.status === 416) return 0
@@ -335,6 +341,7 @@ export class RangeHttpSource implements AsyncSource, Seekable {
 		if (response.status !== 206) throw new Error(`HTTP range request failed with status ${response.status}`)
 
 		let read = 0
+
 		if (size > 0x10000) {
 			if (response.body) {
 				await using source = readableStreamSource(response.body)
@@ -349,12 +356,23 @@ export class RangeHttpSource implements AsyncSource, Seekable {
 		}
 
 		this.position += read
+
 		return read
+	}
+
+	readSync(buffer: Buffer, offset?: number, size?: number): never {
+		throw new Error('RangeHttpSource does not support synchronous read')
+	}
+
+	[Symbol.dispose]() {
+		this.#close.abort()
 	}
 }
 
-export function rangeHttpSource(uri: string | URL) {
-	return new RangeHttpSource(uri)
+// Creates a range source with an optional per-request timeout in milliseconds.
+// Closes on disposal to prevent AbortController memory leaks.
+export function rangeHttpSource(uri: string | URL, options?: RangeHttpSourceOptions) {
+	return new RangeHttpSource(uri, options)
 }
 
 // Selects the standard ('+/') or URL-safe ('-_') Base64 alphabet.
@@ -364,7 +382,7 @@ export type Base64Alphabet = 'base64' | 'base64url'
 // incrementally, tolerating whitespace and either alphabet, and keeps a partial 4-char group across reads;
 // seeks align to 3-byte/4-char group boundaries and discard the intra-group remainder. String seeks skip
 // whitespace; Source-backed seeks use packed 4-char offsets and require an unwrapped encoded stream.
-export class Base64Source implements AsyncSource, Seekable {
+export class Base64Source implements Source, Seekable {
 	readonly #buffer = Buffer.allocUnsafe(1024)
 	readonly #decoded = [-1, -1, -1] // current decoded base64 bytes
 	#bpos = 0 // current position in buffer
@@ -415,10 +433,9 @@ export class Base64Source implements AsyncSource, Seekable {
 		}
 	}
 
-	async read(buffer: Buffer, offset?: number, size?: number) {
-		size ??= buffer.byteLength - (offset ?? 0)
-		offset ??= 0
+	async read(buffer: Buffer, offset: number = 0, size: number = buffer.byteLength - offset) {
 		if (size <= 0) return 0
+
 		let written = 0
 
 		while (written < size) {
@@ -426,6 +443,36 @@ export class Base64Source implements AsyncSource, Seekable {
 			// On true end of input, emit the trailing partial group once, then stop.
 			if (!(this.#state >= 0 && this.#state <= 2) && this.#bpos >= this.#n) {
 				if (!(await this.#fill()) && !this.#flush()) break
+			}
+
+			while (this.#skip > 0) {
+				const d = this.#decode(this.#n)
+				if (d === -1) break
+				this.#skip--
+			}
+
+			while (written < size) {
+				const d = this.#decode(this.#n)
+				if (d === -1) break
+				buffer[offset++] = d
+				written++
+				this.#decodedPosition++
+			}
+		}
+
+		return written
+	}
+
+	readSync(buffer: Buffer, offset: number = 0, size: number = buffer.byteLength - offset) {
+		if (size <= 0) return 0
+
+		let written = 0
+
+		while (written < size) {
+			// Refill only when no decoded byte is pending and the buffer is fully consumed.
+			// On true end of input, emit the trailing partial group once, then stop.
+			if (!(this.#state >= 0 && this.#state <= 2) && this.#bpos >= this.#n) {
+				if (!this.#fillSync() && !this.#flush()) break
 			}
 
 			while (this.#skip > 0) {
@@ -460,6 +507,28 @@ export class Base64Source implements AsyncSource, Seekable {
 			this.#spos = i
 		} else {
 			this.#n = await source.read(this.#buffer)
+		}
+
+		if (!this.#n) return false
+
+		this.#bpos = 0
+		return true
+	}
+
+	#fillSync() {
+		if (this.#bpos < this.#n) return true
+
+		const source = this.source
+
+		if (typeof source === 'string') {
+			let n = 0
+			let i = this.#spos
+			const max = source.length
+			for (; i < max && n < 1024; i++) this.#buffer.writeUInt8(source.charCodeAt(i), n++)
+			this.#n = n
+			this.#spos = i
+		} else {
+			this.#n = source.readSync(this.#buffer)
 		}
 
 		if (!this.#n) return false
@@ -582,7 +651,7 @@ const BASE64_ENCODED_BUFFER_SIZE = 128
 
 // A sink that Base64-encodes written bytes and forwards the encoded text to an underlying Sink.
 // Call end() to emit the final padded group after all input has been written.
-export class Base64Sink implements AsyncSink {
+export class Base64Sink implements Sink {
 	readonly #map: Buffer
 	readonly #buffer = Buffer.allocUnsafe(3)
 	readonly #encoded = Buffer.allocUnsafe(128)
@@ -596,24 +665,30 @@ export class Base64Sink implements AsyncSink {
 		this.#map = Buffer.from(alphabet === 'base64' ? BASE64_ALPHABET : BASE64_URL_SAFE_ALPHABET, 'ascii')
 	}
 
-	async write(chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
-		if (size === 0) return 0
-
+	#makeChunk(chunk: string | Buffer, offset: number, size?: number, encoding?: BufferEncoding) {
 		let data: Buffer
 		let start = 0
 		let end = 0
 
 		if (typeof chunk === 'string') {
-			if (size === undefined && !offset) data = Buffer.from(chunk, encoding)
+			if (size === undefined && offset === 0) data = Buffer.from(chunk, encoding)
 			else if (size === undefined) data = Buffer.from(chunk.slice(offset), encoding)
-			else if (!offset) data = Buffer.from(chunk.slice(0, size), encoding)
+			else if (offset === 0) data = Buffer.from(chunk.slice(0, size), encoding)
 			else data = Buffer.from(chunk.slice(offset, offset + size), encoding)
 			end = data.byteLength
 		} else {
 			data = chunk
-			start = offset ?? 0
+			start = offset
 			end = size === undefined ? data.byteLength : Math.min(start + size, data.byteLength)
 		}
+
+		return [data, start, end] as const
+	}
+
+	async write(chunk: string | Buffer, offset: number = 0, size?: number, encoding?: BufferEncoding) {
+		if (size === 0) return 0
+
+		const [data, start, end] = this.#makeChunk(chunk, offset, size, encoding)
 
 		for (let i = start; i < end; i++) {
 			this.#encode(data[i])
@@ -627,6 +702,30 @@ export class Base64Sink implements AsyncSink {
 
 		if (this.#position > 0) {
 			await writeFully(this.#sink, this.#encoded, this.#position)
+			this.#encodedSize += this.#position
+			this.#position = 0
+		}
+
+		return Math.max(0, end - start)
+	}
+
+	writeSync(chunk: string | Buffer, offset: number = 0, size?: number, encoding?: BufferEncoding) {
+		if (size === 0) return 0
+
+		const [data, start, end] = this.#makeChunk(chunk, offset, size, encoding)
+
+		for (let i = start; i < end; i++) {
+			this.#encode(data[i])
+
+			if (this.#position >= BASE64_ENCODED_BUFFER_SIZE - 1) {
+				writeFullySync(this.#sink, this.#encoded, this.#position)
+				this.#encodedSize += this.#position
+				this.#position = 0
+			}
+		}
+
+		if (this.#position > 0) {
+			writeFullySync(this.#sink, this.#encoded, this.#position)
 			this.#encodedSize += this.#position
 			this.#position = 0
 		}
@@ -705,9 +804,7 @@ export async function readUntil(source: Source, buffer: Buffer, size: number = b
 
 	while (remaining > 0) {
 		const n = await source.read(buffer, offset, remaining)
-
 		if (!n) break
-
 		remaining -= n
 		offset += n
 	}
@@ -716,7 +813,7 @@ export async function readUntil(source: Source, buffer: Buffer, size: number = b
 }
 
 // Synchronous counterpart of `readUntil`. Stops at EOF without allocating.
-export function readUntilSync(source: SyncSource, buffer: Buffer, size: number = buffer.byteLength, offset: number = 0) {
+export function readUntilSync(source: Source, buffer: Buffer, size: number = buffer.byteLength, offset: number = 0) {
 	let remaining = size
 
 	while (remaining > 0) {
@@ -745,7 +842,7 @@ export async function writeFully(sink: Sink, buffer: Buffer, size: number = buff
 }
 
 // Synchronous counterpart of `writeFully`. Throws when the sink stops making progress or reports an invalid byte count.
-export function writeFullySync(sink: SyncSink, buffer: Buffer, size: number = buffer.byteLength, offset: number = 0) {
+export function writeFullySync(sink: Sink, buffer: Buffer, size: number = buffer.byteLength, offset: number = 0) {
 	let remaining = size
 
 	while (remaining > 0) {

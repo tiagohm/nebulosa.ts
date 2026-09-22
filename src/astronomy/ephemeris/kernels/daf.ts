@@ -1,4 +1,4 @@
-import { isSyncSource, readUntil, readUntilSync, type AsyncSource, type Seekable, type Source, type SyncSource } from '../../../io/io'
+import { readUntil, readUntilSync, type Seekable, type Source } from '../../../io/io'
 
 // Reader for NAIF DAF (Double precision Array File) containers, the binary layout underlying SPK
 // ephemeris and PCK orientation kernels. Parses the file record (endianness, summary layout, FTP
@@ -19,13 +19,9 @@ export interface Summary {
 // A parsed DAF file: its segment summaries plus a random-access float64 reader.
 export interface Daf {
 	// All array summaries found in the summary record chain.
-	readonly summaries: Summary[]
+	readonly summaries: readonly Summary[]
 	// Reads the inclusive 1-based double-word range [start, end] from the file.
 	readonly read: (start: number, end: number) => Promise<Float64Array> | Float64Array
-}
-
-// A DAF whose random-access reader can run without awaiting.
-export interface SyncDaf extends Daf {
 	// Synchronous counterpart of `read` for consumers that cannot await, such as Frame.rotationAt.
 	readonly readSync: (start: number, end: number) => Float64Array
 }
@@ -60,11 +56,8 @@ const HOST_LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1
 
 // https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/C/req/daf.html
 // Parses a DAF from a seekable byte source. Initial record and summary parsing is async.
-// Sync-capable sources yield a SyncDaf with `readSync`; other sources yield the generic Daf.
-export function readDaf(source: SyncSource & Seekable): Promise<SyncDaf>
-export function readDaf(source: AsyncSource & Seekable): Promise<Daf>
-export function readDaf(source: Source & Seekable): Promise<Daf | SyncDaf>
-export async function readDaf(source: Source & Seekable): Promise<Daf | SyncDaf> {
+// readSync delegates to the source's synchronous method and requires that method to be supported.
+export async function readDaf(source: Source & Seekable): Promise<Daf> {
 	const buffer = Buffer.allocUnsafe(RECORD_SIZE)
 
 	await readRecord(source, 1, buffer)
@@ -74,14 +67,12 @@ export async function readDaf(source: Source & Seekable): Promise<Daf | SyncDaf>
 	if (format === 'NAIF/DAF') {
 		const record = readNaifDafRecord(buffer)
 		const summaries = await readSummaries(source, record)
-
 		return makeDaf(source, record, summaries)
 	} else if (format.startsWith('DAF/')) {
 		if (hasFtpValidationString(buffer)) {
 			const be = buffer.toString('ascii', 88, 96).toUpperCase() !== 'LTL-IEEE'
 			const record = readNaifDafRecord(buffer, be)
 			const summaries = await readSummaries(source, record)
-
 			return makeDaf(source, record, summaries)
 		} else {
 			throw new Error('file has been damaged')
@@ -91,20 +82,9 @@ export async function readDaf(source: Source & Seekable): Promise<Daf | SyncDaf>
 	throw new Error(`unsupported format: ${format}`)
 }
 
-// Builds a DAF reader over `source`. Sync-capable sources also expose `readSync`.
-function makeDaf(source: Source & Seekable, record: DafRecord, summaries: Summary[]): Daf | SyncDaf {
-	if (isSyncSource(source)) {
-		return {
-			summaries,
-			read: (start, end) => readFloat64Array(source, start, end, record.be),
-			readSync: (start, end) => readFloat64ArraySync(source, start, end, record.be),
-		}
-	}
-
-	return {
-		summaries,
-		read: (start, end) => readFloat64Array(source, start, end, record.be),
-	}
+// Builds a DAF reader over `source`.
+function makeDaf(source: Source & Seekable, record: DafRecord, summaries: readonly Summary[]): Daf {
+	return { summaries, read: (start, end) => readFloat64Array(source, start, end, record.be), readSync: (start, end) => readFloat64ArraySync(source, start, end, record.be) }
 }
 
 // Reads a contiguous DAF float64 range.
@@ -134,7 +114,7 @@ async function readFloat64Array(source: Source & Seekable, start: number, end: n
 }
 
 // Synchronous counterpart of `readFloat64Array` for Frame methods that cannot await.
-function readFloat64ArraySync(source: SyncSource & Seekable, start: number, end: number, be: boolean): Float64Array {
+function readFloat64ArraySync(source: Source & Seekable, start: number, end: number, be: boolean): Float64Array {
 	source.seek(FLOAT64_BYTES * (start - 1))
 
 	const length = 1 + end - start

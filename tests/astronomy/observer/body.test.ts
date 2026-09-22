@@ -90,8 +90,8 @@ async function lunarKernels() {
 		spk,
 		frames: new SpiceFrames(pool, pck),
 		async [Symbol.asyncDispose]() {
-			await bpc[Symbol.asyncDispose]()
-			await bsp[Symbol.asyncDispose]()
+			await bpc.close()
+			await bsp.close()
 		},
 	}
 }

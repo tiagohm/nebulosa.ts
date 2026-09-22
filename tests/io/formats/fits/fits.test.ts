@@ -4,7 +4,7 @@ import { readImageFromBuffer, readImageFromFits, readImageFromPath } from '../..
 import { FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHdu, type FitsHeader, type FitsHeaderCard, FitsImageReader, FitsImageWriter, FitsKeywordReader, FitsKeywordWriter, isFits, readFits, writeFits } from '../../../../src/io/formats/fits/fits'
 import { KEYWORDS } from '../../../../src/io/formats/fits/headers'
 import { computeHduDataSize, declinationKeyword, heightKeyword, observationDateKeyword, rightAscensionKeyword, widthKeyword } from '../../../../src/io/formats/fits/util'
-import { base64Sink, bufferSink, bufferSource, fileHandleSource } from '../../../../src/io/io'
+import { base64Sink, bufferSink, bufferSource, fileHandleSource, type Seekable, type Sink, type Source } from '../../../../src/io/io'
 import { dms, hms } from '../../../../src/math/units/angle'
 import { downloadPerTag } from '../../../download'
 import { BITPIXES, CHANNELS, saveImageAndCompareHash } from '../../../imaging/util'
@@ -42,7 +42,7 @@ test('reads FITS headers one block at a time', async () => {
 
 	const delegate = bufferSource(buffer)
 	let readCount = 0
-	const source = {
+	const source: Source & Seekable = {
 		get position() {
 			return delegate.position
 		},
@@ -50,6 +50,9 @@ test('reads FITS headers one block at a time', async () => {
 			return delegate.seek(position)
 		},
 		read(output: Buffer, outputOffset?: number, size?: number) {
+			return this.readSync(output, outputOffset, size)
+		},
+		readSync(output: Buffer, outputOffset?: number, size?: number) {
 			readCount++
 			return delegate.read(output, outputOffset, size)
 		},
@@ -207,8 +210,11 @@ test('writes Rice-compressed FITS to a non-seekable sink', async () => {
 	const raw = new Float64Array([0, 0.25, 0.5, 1])
 	const storage = Buffer.alloc(FITS_BLOCK_SIZE * 3)
 	const delegate = bufferSink(storage)
-	const sink = {
+	const sink: Sink = {
 		write(chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
+			return this.writeSync(chunk, offset, size, encoding)
+		},
+		writeSync(chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
 			return delegate.write(chunk, offset, size, encoding)
 		},
 	}
@@ -292,7 +298,7 @@ test('reads Rice tiles without staging the complete compressed HDU', async () =>
 	const delegate = bufferSource(file)
 	let largestRead = 0
 	let readCount = 0
-	const source = {
+	const source: Source & Seekable = {
 		get position() {
 			return delegate.position
 		},
@@ -300,8 +306,11 @@ test('reads Rice tiles without staging the complete compressed HDU', async () =>
 			return delegate.seek(position)
 		},
 		read(buffer: Buffer, offset?: number, size?: number) {
+			return this.readSync(buffer, offset, size)
+		},
+		readSync(buffer: Buffer, offset?: number, size: number = buffer.byteLength) {
 			readCount++
-			largestRead = Math.max(largestRead, size ?? buffer.byteLength)
+			largestRead = Math.max(largestRead, size)
 			return delegate.read(buffer, offset, size)
 		},
 	}
@@ -641,9 +650,12 @@ test('completes partial FITS sink writes', async () => {
 	const raw = new Float64Array([0, 0.5, 1])
 	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 2)
 	const delegate = bufferSink(buffer)
-	const sink = {
+	const sink: Sink = {
 		write(chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
-			const available = typeof chunk === 'string' ? chunk.length - (offset ?? 0) : chunk.byteLength - (offset ?? 0)
+			return this.writeSync(chunk, offset, size, encoding)
+		},
+		writeSync(chunk: string | Buffer, offset: number = 0, size?: number, encoding?: BufferEncoding) {
+			const available = typeof chunk === 'string' ? chunk.length - offset : chunk.byteLength - offset
 			return delegate.write(chunk, offset, Math.min(size ?? available, 7), encoding)
 		},
 	}
@@ -682,10 +694,13 @@ test('reads and writes uncompressed FITS images in bounded chunks', async () => 
 	const stored = Buffer.alloc(width * 2)
 	const sinkDelegate = bufferSink(stored)
 	const writeSizes: number[] = []
-	const sink = {
+	const sink: Sink = {
 		write(buffer: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
+			return this.writeSync(buffer, offset, size, encoding)
+		},
+		writeSync(buffer: string | Buffer, offset: number = 0, size: number = buffer.length - offset, encoding?: BufferEncoding) {
 			if (typeof buffer === 'string') throw new Error('unexpected string FITS chunk')
-			writeSizes.push(size ?? buffer.length - (offset ?? 0))
+			writeSizes.push(size)
 			return sinkDelegate.write(buffer, offset, size, encoding)
 		},
 	}
@@ -696,7 +711,7 @@ test('reads and writes uncompressed FITS images in bounded chunks', async () => 
 
 	const sourceDelegate = bufferSource(stored)
 	const readSizes: number[] = []
-	const source = {
+	const source: Source & Seekable = {
 		get position() {
 			return sourceDelegate.position
 		},
@@ -704,7 +719,10 @@ test('reads and writes uncompressed FITS images in bounded chunks', async () => 
 			return sourceDelegate.seek(position)
 		},
 		read(buffer: Buffer, offset?: number, size?: number) {
-			readSizes.push(size ?? buffer.length - (offset ?? 0))
+			return this.readSync(buffer, offset, size)
+		},
+		readSync(buffer: Buffer, offset: number = 0, size: number = buffer.length - offset) {
+			readSizes.push(size)
 			return sourceDelegate.read(buffer, offset, size)
 		},
 	}

@@ -15,11 +15,8 @@ const time = timeYMDHMS(2025, 1, 15, 9, 20, 50, Timescale.TDB)
 // Builds a tiny in-memory DAF for deterministic SPK segment tests.
 function dafFrom(values: readonly number[], summaries: Summary[] = []): Daf {
 	const data = Float64Array.from(values)
-
-	return {
-		summaries,
-		read: (start: number, end: number) => data.subarray(start - 1, end),
-	}
+	const readSync = (start: number, end: number) => data.subarray(start - 1, end)
+	return { summaries, read: readSync, readSync }
 }
 
 // Builds a minimal SPK summary with one segment descriptor.
@@ -178,7 +175,7 @@ test('65803 Didymos', async () => {
 })
 
 test.skip('MAR099', async () => {
-	const source = rangeHttpSource('https://ssd.jpl.nasa.gov/ftp/eph/satellites/bsp/mar099.bsp')
+	using source = rangeHttpSource('https://ssd.jpl.nasa.gov/ftp/eph/satellites/bsp/mar099.bsp')
 	const daf = await readDaf(source)
 	const spk = readSpk(daf)
 	const [p, v] = await spk.segment(4, 401)!.at({ day: 2460947, fraction: 0, scale: 5 })

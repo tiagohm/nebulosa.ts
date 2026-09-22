@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readDaf } from '../../../../src/astronomy/ephemeris/kernels/daf'
-import { type AsyncSource, bufferSource, fileHandleSource, type Seekable } from '../../../../src/io/io'
+import { bufferSource, fileHandleSource, type Source, type Seekable } from '../../../../src/io/io'
 import { downloadPerTag } from '../../../download'
 
 await downloadPerTag('daf')
@@ -41,6 +41,7 @@ test('DAF/SPK', async () => {
 
 	for (const summary of daf.summaries) expect(summary.doubles).toEqual(new Float64Array([-3.1691952e9, 1.6968528e9]))
 
+	expect(daf.summaries[0].name).toBe('DE-0421LE-0421')
 	expect(daf.summaries[0].ints).toEqual(new Int32Array([1, 0, 1, 2, 641, 310404]))
 	expect(daf.summaries[1].ints).toEqual(new Int32Array([2, 0, 1, 2, 310405, 423048]))
 	expect(daf.summaries[2].ints).toEqual(new Int32Array([3, 0, 1, 2, 423049, 567372]))
@@ -56,14 +57,6 @@ test('DAF/SPK', async () => {
 	expect(daf.summaries[12].ints).toEqual(new Int32Array([199, 1, 1, 2, 2098609, 2098620]))
 	expect(daf.summaries[13].ints).toEqual(new Int32Array([299, 2, 1, 2, 2098621, 2098632]))
 	expect(daf.summaries[14].ints).toEqual(new Int32Array([499, 4, 1, 2, 2098633, 2098644]))
-})
-
-test('DAF/SPK from buffer source', async () => {
-	const daf = await readDaf(bufferSource(await fs.readFile('data/de421.bsp')))
-
-	expect(daf.summaries).toHaveLength(15)
-	expect(daf.summaries[0].name).toBe('DE-0421LE-0421')
-	expect(daf.summaries[0].ints).toEqual(new Int32Array([1, 0, 1, 2, 641, 310404]))
 })
 
 test('truncated file record is rejected', async () => {
@@ -137,11 +130,9 @@ test('DAF/PCK', async () => {
 })
 
 test('DAF from BufferSource exposes readSync over the same range as read', async () => {
-	const daf = await readDaf(bufferSource(await fs.readFile('data/de421.bsp')))
+	const daf = await readDaf(bufferSource(await fs.readFile('data/65803_Didymos.bsp')))
 	const asyncWords = await daf.read(641, 645)
 	const syncWords = daf.readSync(641, 645)
-
-	expect('readSync' in daf).toBeTrue()
 	expect(syncWords).toEqual(asyncWords)
 })
 
@@ -150,21 +141,15 @@ test('DAF from FileHandleSource exposes readSync over the same range as read', a
 	const daf = await readDaf(source)
 	const asyncWords = await daf.read(641, 645)
 	const syncWords = daf.readSync(641, 645)
-
-	expect('readSync' in daf).toBeTrue()
 	expect(syncWords).toEqual(asyncWords)
 })
 
-test('DAF from an async-only seekable source does not expose readSync', async () => {
-	const daf = await readDaf(new AsyncSeekableSource(await fs.readFile('data/de421.bsp')))
-	const words = await daf.read(641, 645)
-
-	expect('readSync' in daf).toBeFalse()
-	expect(daf.summaries).toHaveLength(15)
-	expect(words).toHaveLength(5)
+test('DAF from an async-only seekable source rejects', async () => {
+	const daf = await readDaf(new AsyncSeekableSource(await fs.readFile('data/65803_Didymos.bsp')))
+	expect(() => daf.readSync(641, 645)).toThrowError('AsyncSeekableSource does not support synchronous read')
 })
 
-class AsyncSeekableSource implements AsyncSource, Seekable {
+class AsyncSeekableSource implements Source, Seekable {
 	position = 0
 
 	constructor(readonly data: Buffer) {}
@@ -181,5 +166,9 @@ class AsyncSeekableSource implements AsyncSource, Seekable {
 		size = this.data.copy(buffer, offset, this.position, this.position + size)
 		this.position += size
 		return Promise.resolve(size)
+	}
+
+	readSync(buffer: Buffer, offset?: number, size?: number): never {
+		throw new Error('AsyncSeekableSource does not support synchronous read')
 	}
 }

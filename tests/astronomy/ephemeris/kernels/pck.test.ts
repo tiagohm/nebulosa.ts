@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
-import { readDaf, type Summary, type SyncDaf } from '../../../../src/astronomy/ephemeris/kernels/daf'
+import { readDaf, type Daf, type Summary } from '../../../../src/astronomy/ephemeris/kernels/daf'
 import { MultiplePckSegment, readPck, Type2PckSegment } from '../../../../src/astronomy/ephemeris/kernels/pck'
 import { Timescale, time, timeShift, type Time } from '../../../../src/astronomy/time/time'
 import { DAYSEC, J2000, PI } from '../../../../src/core/constants'
@@ -16,22 +16,18 @@ await downloadPerTag('pck')
 const T0_MINUS_11150_PA: Mat3 = [0.9994150897380264, 0.032310270603926675, 0.011203785852719871, -0.034157426811763446, 0.9272642685944782, 0.37284614304233643, 0.0016578894811167893, -0.3730107540024127, 0.9278255379116378]
 
 // Builds a tiny in-memory DAF for deterministic PCK segment tests.
-function dafFrom(values: readonly number[], summaries: Summary[] = []): SyncDaf {
+function dafFrom(values: readonly number[], summaries: readonly Summary[] = []): Daf {
 	const data = Float64Array.from(values)
-
-	return {
-		summaries,
-		read: (start, end) => data.subarray(start - 1, end),
-		readSync: (start, end) => data.subarray(start - 1, end),
-	}
+	const readSync = (start: number, end: number) => data.subarray(start - 1, end)
+	return { summaries, read: readSync, readSync }
 }
 
 // Builds a minimal PCK summary with one Type 2 segment descriptor.
-function summary(frameClassId: number, start: number, end: number, type: number, startIndex: number, endIndex: number, inertialFrameId = 1): Summary {
+function summary(id: number, start: number, end: number, type: number, startIndex: number, endIndex: number, inertialFrameId = 1): Summary {
 	return {
 		name: '',
 		doubles: new Float64Array([start, end]),
-		ints: new Int32Array([frameClassId, inertialFrameId, type, startIndex, endIndex]),
+		ints: new Int32Array([id, inertialFrameId, type, startIndex, endIndex]),
 	}
 }
 
@@ -94,11 +90,7 @@ test('type 2 initialize reads only directory words and caches each record', asyn
 		reads.push([start, end])
 		return data.subarray(start - 1, end)
 	}
-	const daf: SyncDaf = {
-		summaries: [],
-		read: (start, end) => readSync(start, end),
-		readSync,
-	}
+	const daf: Daf = { summaries: [], read: readSync, readSync }
 	const segment = new Type2PckSegment(daf, 0, 8, 31006, 1, 1, 9)
 
 	await segment.initialize()
@@ -134,6 +126,25 @@ test('overlapping segments use the latest matching segment in file order', async
 	expectNumberArrayToBeCloseTo(segment.rotationAt(tdbSeconds(10)), matRotZ(PI / 2), 15)
 })
 
+test('overlapping segments initialize sequentially on a shared DAF cursor', async () => {
+	const data = Float64Array.from([4, 4, 0, 0, 0, 0, 8, 5, 1, 15, 5, 0, 0, PI / 2, 10, 10, 5, 1])
+	let cursor = 0
+	const daf: Daf = {
+		summaries: [summary(31006, 0, 20, 2, 1, 9), summary(31006, 10, 20, 2, 10, 18)],
+		async read(start, end) {
+			cursor = start - 1
+			await Promise.resolve()
+			return data.subarray(cursor, cursor + end - start + 1)
+		},
+		readSync: (start, end) => data.subarray(start - 1, end),
+	}
+	const segment = readPck(daf).segment(31006)!
+	await segment.initialize()
+
+	expectNumberArrayToBeCloseTo(segment.rotationAt(tdbSeconds(5)), matIdentity(), 15)
+	expectNumberArrayToBeCloseTo(segment.rotationAt(tdbSeconds(10)), matRotZ(PI / 2), 15)
+})
+
 test('unsupported PCK types are rejected', () => {
 	expect(() => readPck(dafFrom([], [summary(31006, 0, 8, 3, 1, 9)]))).toThrow('unsupported PCK data type 3')
 	expect(() => readPck(dafFrom([], [summary(31006, 0, 8, 20, 1, 9)]))).toThrow('unsupported PCK data type 20')
@@ -152,14 +163,13 @@ test('MultiplePckSegment rejects an empty list', () => {
 
 test('DAF/PCK moon_pa_de421 descriptor is Type 2', async () => {
 	await using source = fileHandleSource(await fs.open('data/moon_pa_de421_1900-2050.bpc'))
-	const daf = await readDaf(source)
-	const pck = readPck(daf)
+	const pck = readPck(await readDaf(source))
 	const segment = pck.segment(31006)!
 
 	expect(pck.segments).toHaveLength(1)
 	expect(segment.start).toBe(-3.1557168e9)
 	expect(segment.end).toBe(1.609416e9)
-	expect(segment.frameClassId).toBe(31006)
+	expect(segment.id).toBe(31006)
 	expect(segment.inertialFrameId).toBe(1)
 	expect(segment.type).toBe(2)
 	expect(segment.startIndex).toBe(641)
