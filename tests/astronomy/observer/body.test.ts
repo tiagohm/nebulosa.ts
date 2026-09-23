@@ -9,6 +9,8 @@ import { Naif } from '../../../src/astronomy/ephemeris/kernels/naif'
 import { readPck } from '../../../src/astronomy/ephemeris/kernels/pck'
 import { readSpk, type Spk } from '../../../src/astronomy/ephemeris/kernels/spk'
 import { readTextKernel, SpiceKernelPool } from '../../../src/astronomy/ephemeris/kernels/text.kernel'
+import { composeEphemerisPaths, customEphemerisEndpoint, naifEphemerisEndpoint } from '../../../src/astronomy/ephemeris/path'
+import { spkEphemerisPath, bodySurfaceEphemerisPath } from '../../../src/astronomy/ephemeris/path.adapter'
 import { bodyShape, bodySurfaceLocation, bodySurfacePositionAndVelocity, bodySurfaceState, type BodyShape } from '../../../src/astronomy/observer/body'
 import { Timescale, time, timeShift, timeYMDHMS, toJulianDay, type Time } from '../../../src/astronomy/time/time'
 import { DAYSEC, J2000, PI, PIOVERTWO, TAU } from '../../../src/core/constants'
@@ -323,11 +325,18 @@ test('Aristarchus on the Moon matches Skyfield at 2019-12-20 11:05 UTC', async (
 	const bary = aristarchusAt(t)
 	const fromEarth = relativePositionAndVelocity(aristarchusAt, earthAt, t)
 	const [ra, dec, distance] = equatorial(fromEarth[0])
+	const embPath = (await spkEphemerisPath(spk, Naif.SSB, Naif.EMB))!
+	const moonFromEmbPath = (await spkEphemerisPath(spk, Naif.EMB, Naif.MOON))!
+	const barycentricMoonPath = composeEphemerisPaths(embPath, moonFromEmbPath)
+	const lunarSitePath = bodySurfaceEphemerisPath(naifEphemerisEndpoint(Naif.MOON), customEphemerisEndpoint('aristarchus'), aristarchus)
+	const highLevelBary = composeEphemerisPaths(barycentricMoonPath, lunarSitePath).stateAt(t)
 
 	// Skyfield 1.55 / jplephem 2.24, DE421 + moon_080317.tf + pck00008.tpc + moon_pa_de421.
 	expectNumberArrayToBeCloseTo(surface[0], [8.51427072165803e-6, -7.459961004374627e-6, 2.5954893631552345e-6], 15)
 	expectNumberArrayToBeCloseTo(surface[1], [1.331243482886879e-6, 1.8086436095443966e-6, 8.3138209654175e-7], 12)
 	expectNumberArrayToBeCloseTo(bary[0], [0.028569198970199113, 0.9082673240622109, 0.39400481707743673], 11)
+	expectNumberArrayToBeCloseTo(highLevelBary[0], [0.028569198970199113, 0.9082673240622109, 0.39400481707743673], 11)
+	expectNumberArrayToBeCloseTo(highLevelBary[1], bary[1], 12)
 	expectNumberArrayToBeCloseTo(fromEarth[0], [-0.0023814770535562253, -0.0006646492758509703, -3.5358335139401564e-5], 12)
 	expectNumberArrayToBeCloseTo(fromEarth[1], [0.00014880022263391232, -0.0005390682700368948, -0.0002398547452045155], 12)
 	expect(distance).toBeCloseTo(0.0024727397413330603, 12)

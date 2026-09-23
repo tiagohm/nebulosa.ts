@@ -1,17 +1,21 @@
 import { expect, test } from 'bun:test'
+import fs from 'fs/promises'
 import { observerState } from '../../../src/astronomy/coordinates/correction'
 import { frameToFrame, ICRS, TEME } from '../../../src/astronomy/coordinates/frame'
+import { readDaf } from '../../../src/astronomy/ephemeris/kernels/daf'
 import { Naif } from '../../../src/astronomy/ephemeris/kernels/naif'
-import type { Spk, SpkSegment } from '../../../src/astronomy/ephemeris/kernels/spk'
-import { customEphemerisEndpoint, naifEphemerisEndpoint } from '../../../src/astronomy/ephemeris/path'
+import { readSpk, type Spk, type SpkSegment } from '../../../src/astronomy/ephemeris/kernels/spk'
+import { composeEphemerisPaths, customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from '../../../src/astronomy/ephemeris/path'
 import { bodySurfaceEphemerisPath, earthObserverEphemerisPath, sgp4EphemerisPath, spkEphemerisPath } from '../../../src/astronomy/ephemeris/path.adapter'
 import { ephemerisAt } from '../../../src/astronomy/ephemeris/position'
 import { bodySurfaceLocation, bodySurfaceState } from '../../../src/astronomy/observer/body'
 import { geodeticLocation } from '../../../src/astronomy/observer/location'
 import { parseTLE, sgp4 } from '../../../src/astronomy/orbits/propagation/sgp4'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { fileHandleSource } from '../../../src/io/io'
 import { deg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
+import { downloadPerTag } from '../../download'
 
 const TIME = timeYMDHMS(2023, 8, 19, 12, 25, 28, Timescale.UTC)
 
@@ -99,4 +103,48 @@ test('Earth observer and generic surface adapters reuse existing geometry', () =
 	expect(moonSite.center).toBe(moon)
 	expect(moonSite.target).toBe(crater)
 	expect(moonSite.stateAt(TIME)).toEqual(bodySurfaceState(surface, TIME))
+})
+
+test('local DE421 paths remain synchronous after setup and compose EMB-to-Earth/Moon', async () => {
+	await downloadPerTag('frame.kernel')
+	await using source = fileHandleSource(await fs.open('data/de421.bsp'))
+	const spk = readSpk(await readDaf(source))
+	const emb = (await spkEphemerisPath(spk, Naif.SSB, Naif.EMB))!
+	const earth = (await spkEphemerisPath(spk, Naif.EMB, Naif.EARTH))!
+	const moon = (await spkEphemerisPath(spk, Naif.EMB, Naif.MOON))!
+	const t0 = timeYMDHMS(2019, 12, 20, 11, 5, 0, Timescale.UTC)
+	const t1 = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.UTC)
+	for (const time of [t0, t1]) {
+		const embState = (await spk.segment(Naif.SSB, Naif.EMB))!.at(time)
+		const actualEmb = ephemerisAt(emb, time)
+		expect(actualEmb).not.toBeInstanceOf(Promise)
+		for (let axis = 0; axis < 3; axis++) {
+			expect(actualEmb.position[axis]).toBeCloseTo(embState[0][axis], 14)
+			expect(actualEmb.velocity[axis]).toBeCloseTo(embState[1][axis], 14)
+		}
+		for (const relative of [earth, moon]) {
+			const direct = relative.stateAt(time)
+			const composed = composeEphemerisPaths(emb, relative).stateAt(time)
+			for (let axis = 0; axis < 3; axis++) {
+				expect(composed[0][axis]).toBeCloseTo(embState[0][axis] + direct[0][axis], 14)
+				expect(composed[1][axis]).toBeCloseTo(embState[1][axis] + direct[1][axis], 14)
+			}
+		}
+	}
+})
+
+test('Earth observer path composes with a barycentric Earth provider', () => {
+	const earthState: [[number, number, number], [number, number, number]] = [
+		[1, 2, 3],
+		[0.01, 0.02, 0.03],
+	]
+	const earth = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.EARTH), () => earthState)
+	const location = geodeticLocation(deg(-70), deg(-30), meter(2400))
+	const site = earthObserverEphemerisPath(location, customEphemerisEndpoint('site'))
+	const composed = composeEphemerisPaths(earth, site).stateAt(TIME)
+	const expected = observerState(TIME, earthState, location)
+	for (let axis = 0; axis < 3; axis++) {
+		expect(composed[0][axis]).toBeCloseTo(expected[0][axis], 14)
+		expect(composed[1][axis]).toBeCloseTo(expected[1][axis], 14)
+	}
 })

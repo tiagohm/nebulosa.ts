@@ -1,5 +1,8 @@
 import { expect, test } from 'bun:test'
+import { relativePositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
 import { Naif } from '../../../src/astronomy/ephemeris/kernels/naif'
+import { moon } from '../../../src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { earth, mars } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { composeEphemerisPaths, customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, relativeEphemerisPath, reverseEphemerisPath, sameEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from '../../../src/astronomy/ephemeris/path'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 
@@ -76,4 +79,21 @@ test('invalid composition and relative centers fail before sampling', () => {
 		[0, 2, 0],
 		[0, 0, 3],
 	])
+})
+
+test('VSOP relative Earth-to-Mars and ELP barycentric Moon agree with low-level states', () => {
+	const earthPath = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, earth)
+	const marsPath = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.MARS), mars)
+	const moonPath = ephemerisPath(EARTH, MOON, moon)
+	const relativeMars = relativeEphemerisPath(marsPath, earthPath).stateAt(TIME)
+	const expectedMars = relativePositionAndVelocity(mars, earth, TIME)
+	const barycentricMoon = composeEphemerisPaths(earthPath, moonPath).stateAt(TIME)
+	const earthState = earth(TIME)
+	const moonState = moon(TIME)
+	for (let axis = 0; axis < 3; axis++) {
+		expect(relativeMars[0][axis]).toBeCloseTo(expectedMars[0][axis], 13)
+		expect(relativeMars[1][axis]).toBeCloseTo(expectedMars[1][axis], 13)
+		expect(barycentricMoon[0][axis]).toBeCloseTo(earthState[0][axis] + moonState[0][axis], 13)
+		expect(barycentricMoon[1][axis]).toBeCloseTo(earthState[1][axis] + moonState[1][axis], 13)
+	}
 })
