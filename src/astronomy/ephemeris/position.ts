@@ -1,4 +1,5 @@
 import { type Vec3, vecClone, vecDivScalar } from '../../math/linear-algebra/vec3'
+import { normalizeAngle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import { applyApparentDirectionCorrections, type LightDeflectorSnapshot } from '../coordinates/apparent'
 import { DEFAULT_LIGHT_TIME_ITERATIONS, equatorial, frameSphericalPositionAndVelocity, lightTimeSolution, type PositionAndVelocity, sphericalPositionAndVelocity, type SphericalPositionAndVelocity } from '../coordinates/astrometry'
@@ -174,13 +175,21 @@ export function directionPositionInFrame(position: DirectionPosition, frame: Fra
 	return frameAt(position.direction, frame, position.time)
 }
 
+// Converts a base-axis Cartesian position (AU) into right ascension (radians in
+// [0, TAU)), declination (radians), and distance (AU). equatorial() leaves
+// longitude in (-PI, PI].
+function normalizedEquatorial(cartesian: Vec3): SphericalCoordinate {
+	const [rightAscension, declination, distance] = equatorial(cartesian)
+	return [normalizeAngle(rightAscension), declination, distance]
+}
+
 // Converts a base-axis position stage into right ascension (radians in [0, TAU)),
 // declination (radians), and distance (AU). Direction stages use their separately
 // retained astrometric distance; no Cartesian velocity is inferred from them.
 export function equatorialPosition(position: GeometricPosition | DirectionPosition): SphericalCoordinate {
-	if (position.kind === 'geometric') return equatorial(position.position)
+	if (position.kind === 'geometric') return normalizedEquatorial(position.position)
 	const d = position.distance
-	return equatorial([position.direction[0] * d, position.direction[1] * d, position.direction[2] * d])
+	return normalizedEquatorial([position.direction[0] * d, position.direction[1] * d, position.direction[2] * d])
 }
 
 // Converts only a geometric full state into spherical longitude/latitude/distance

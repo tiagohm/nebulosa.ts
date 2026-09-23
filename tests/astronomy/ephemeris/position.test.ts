@@ -6,7 +6,9 @@ import { Naif } from '../../../src/astronomy/ephemeris/kernels/naif'
 import { ephemerisPath, naifEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from '../../../src/astronomy/ephemeris/path'
 import { apparentPosition, directionPositionInFrame, ephemerisAt, equatorialPosition, geometricPositionInFrame, geometricSphericalPositionAndVelocity, observeEphemeris } from '../../../src/astronomy/ephemeris/position'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { PI, TAU } from '../../../src/core/constants'
 import { vecLength } from '../../../src/math/linear-algebra/vec3'
+import { normalizeAngle } from '../../../src/math/units/angle'
 
 const TIME = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TDB)
 const EARTH = naifEphemerisEndpoint(Naif.EARTH)
@@ -158,4 +160,49 @@ test('frame and equatorial helpers preserve stage-specific physical quantities',
 	expect(equatorialPosition(apparent)[2]).toBeCloseTo(astrometric.distance, 14)
 	expect(geometricSphericalPositionAndVelocity(geometric)?.radialVelocity).toBeCloseTo((geometric.position[1] * geometric.velocity[1]) / vecLength(geometric.position), 14)
 	expect(geometricSphericalPositionAndVelocity(geometric, ITRS)?.radialVelocity).toBeCloseTo(geometricSphericalPositionAndVelocity(geometric)?.radialVelocity ?? 0, 8)
+})
+
+test('equatorial position publishes right ascension in [0, TAU)', () => {
+	const geometric = ephemerisAt(
+		ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, () => [
+			[0, -1, 0],
+			[0, 0, 0],
+		]),
+		TIME,
+	)
+	const [rightAscension, declination, distance] = equatorialPosition(geometric)
+	expect(rightAscension).toBeCloseTo((3 * PI) / 2, 14)
+	expect(rightAscension).toBeGreaterThanOrEqual(0)
+	expect(rightAscension).toBeLessThan(TAU)
+	expect(declination).toBeCloseTo(0, 14)
+	expect(distance).toBeCloseTo(1, 14)
+
+	const astrometric = observeEphemeris(
+		ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => [
+			[0, 0, 0],
+			[0, 0, 0],
+		]),
+		ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, () => [
+			[0, -1, 0],
+			[0, 0, 0],
+		]),
+		TIME,
+	)!
+	const apparent = apparentPosition(astrometric, { aberration: false })
+	expect(equatorialPosition(astrometric)[0]).toBeCloseTo((3 * PI) / 2, 12)
+	expect(equatorialPosition(apparent)[0]).toBeCloseTo((3 * PI) / 2, 12)
+
+	const epsilon = 1e-8
+	const nearWrap = equatorialPosition(
+		ephemerisAt(
+			ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, () => [
+				[Math.cos(-epsilon), Math.sin(-epsilon), 0],
+				[0, 0, 0],
+			]),
+			TIME,
+		),
+	)[0]
+	expect(nearWrap).toBeCloseTo(normalizeAngle(-epsilon), 12)
+	expect(nearWrap).toBeGreaterThan(TAU - 1e-6)
+	expect(nearWrap).toBeLessThan(TAU)
 })
