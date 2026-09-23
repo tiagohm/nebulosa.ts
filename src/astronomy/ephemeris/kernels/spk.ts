@@ -23,7 +23,7 @@ export interface Spk {
 	// All segments as [center, target, segment] triples in file order.
 	readonly segments: readonly [number, number, SpkSegment][]
 	// Resolves the segment giving the target's state relative to the center, if present.
-	readonly segment: (center: number, target: number) => SpkSegment | undefined
+	readonly segment: (center: number, target: number) => Promise<SpkSegment | undefined>
 }
 
 // One SPK segment: the state of `target` relative to `center` over [start, end].
@@ -44,9 +44,10 @@ export interface SpkSegment {
 	readonly startIndex: number
 	// Last DAF word index of the segment data (1-based).
 	readonly endIndex: number
-
+	// Loads INIT/INTLEN/RSIZE/N. Coefficient records are read later on demand. Safe to call more than once.
+	readonly initialize: () => Promise<void>
 	// Evaluates the target's position (AU) and velocity (AU/day) at `time`.
-	readonly at: (time: Time) => Promise<PositionAndVelocity>
+	readonly at: (time: Time) => PositionAndVelocity
 }
 
 // Reads SPK summaries and builds a reusable center-target segment lookup.
@@ -67,7 +68,11 @@ export function readSpk(daf: Daf): Spk {
 
 	return {
 		segments,
-		segment: (center, target) => segmentByTarget.get(center)?.get(target),
+		segment: async (center, target) => {
+			const segment = segmentByTarget.get(center)?.get(target)
+			await segment?.initialize()
+			return segment
+		},
 	}
 }
 
@@ -272,6 +277,7 @@ function evaluateChebyshevVectorDerivative(x: Float64Array, y: Float64Array, z: 
 // from analytical theories.
 export class Type2And3Segment implements SpkSegment {
 	#initialized = false
+	#init?: Promise<void>
 	#initialEpoch = 0
 	#intervalLength = 0
 	#rsize = 0
@@ -299,8 +305,8 @@ export class Type2And3Segment implements SpkSegment {
 	}
 
 	// Evaluates position and velocity at the requested epoch.
-	async at(time: Time): Promise<PositionAndVelocity> {
-		await this.#initialize()
+	at(time: Time): PositionAndVelocity {
+		if (!this.#initialized) throw new Error('SPK segment is not initialized')
 
 		const seconds = spkSeconds(time)
 
@@ -309,7 +315,7 @@ export class Type2And3Segment implements SpkSegment {
 		}
 
 		const index = Math.max(0, Math.min(this.#n - 1, Math.floor((seconds - this.#initialEpoch) / this.#intervalLength)))
-		const c = await this.#computeCoefficient(index)
+		const c = this.#computeCoefficient(index)
 
 		if (!c) {
 			throw new Error(`cannot find a segment that covers the date: ${seconds}`)
@@ -337,25 +343,35 @@ export class Type2And3Segment implements SpkSegment {
 	}
 
 	// Loads INIT, INTLEN, RSIZE, and N once from the tail of the segment.
-	async #initialize(): Promise<void> {
-		if (this.#initialized) return
+	initialize(): Promise<void> {
+		if (this.#initialized) return Promise.resolve()
+		if (this.#init) return this.#init
+		this.#init = this.#load()
+		return this.#init
+	}
 
+	async #load() {
 		// INIT: is the initial epoch of the first record, given in ephemeris seconds past J2000.
 		// INTLEN: is the length of the interval covered by each record, in seconds.
 		// RSIZE: is the total size of (number of array elements in) each record.
 		// N: is the number of records contained in the segment.
 
-		const [a, b, c, d] = await this.#daf.read(this.endIndex - 3, this.endIndex)
-		this.#initialEpoch = a
-		this.#intervalLength = b
-		this.#rsize = Math.trunc(c)
-		this.#n = Math.trunc(d)
-		this.#count = Math.trunc((this.#rsize - 2) / (this.#type === 3 ? 6 : 3))
-		this.#initialized = true
+		try {
+			const [a, b, c, d] = await this.#daf.read(this.endIndex - 3, this.endIndex)
+			this.#initialEpoch = a
+			this.#intervalLength = b
+			this.#rsize = Math.trunc(c)
+			this.#n = Math.trunc(d)
+			this.#count = Math.trunc((this.#rsize - 2) / (this.#type === 3 ? 6 : 3))
+			this.#initialized = true
+		} catch (error) {
+			this.#init = undefined
+			throw error
+		}
 	}
 
 	// Reads and caches one Chebyshev record from the segment.
-	async #computeCoefficient(index: number): Promise<Type2And3Coefficient | undefined> {
+	#computeCoefficient(index: number): Type2And3Coefficient | undefined {
 		const cached = this.#coefficients.get(index)
 		if (cached) return cached
 		if (index < 0 || index >= this.#n) return undefined
@@ -364,7 +380,7 @@ export class Type2And3Segment implements SpkSegment {
 		const b = a + this.#rsize - 1
 
 		if (a >= this.startIndex && a < b && b <= this.endIndex - 4) {
-			const coefficients = await this.#daf.read(a, b)
+			const coefficients = this.#daf.readSync(a, b)
 
 			const [mid, radius] = coefficients
 			const x = new Float64Array(this.#count)
@@ -406,12 +422,13 @@ export class Type2And3Segment implements SpkSegment {
 
 // Type 9: Lagrange Interpolation — Unequal Time Steps
 // The SPK Type 9 data type represents a continuous ephemeris using a discrete set of states and
-// a Lagrange interpolation method. The epochs (also called time tags ) associated with the states
+// a Lagrange interpolation method. The epochs (also called time tags) associated with the states
 // need not be evenly spaced. For a request epoch not corresponding to the time tag of some state,
 // the data type defines a state by interpolating each component of a set of states whose epochs are
 // centered near the request epoch.
 export class Type9Segment implements SpkSegment {
 	#initialized = false
+	#init?: Promise<void>
 	#degree = 0
 	#n = 0
 	#stateTable: Float64Array = new Float64Array(0)
@@ -435,8 +452,8 @@ export class Type9Segment implements SpkSegment {
 	}
 
 	// Interpolates one state vector at the requested epoch.
-	async at(time: Time): Promise<PositionAndVelocity> {
-		await this.#initialize()
+	at(time: Time): PositionAndVelocity {
+		if (!this.#initialized) throw new Error('SPK segment is not initialized')
 
 		const seconds = spkSeconds(time)
 		const index = this.#searchEpochIndex(seconds)
@@ -483,17 +500,27 @@ export class Type9Segment implements SpkSegment {
 	}
 
 	// Loads all type 9 states and epochs once.
-	async #initialize(): Promise<void> {
-		if (this.#initialized) return
+	initialize(): Promise<void> {
+		if (this.#initialized) return Promise.resolve()
+		if (this.#init) return this.#init
+		this.#init = this.#load()
+		return this.#init
+	}
 
-		const [a, b] = await this.#daf.read(this.endIndex - 1, this.endIndex)
-		this.#degree = Math.trunc(a)
-		this.#n = Math.trunc(b)
+	async #load() {
+		try {
+			const [a, b] = await this.#daf.read(this.endIndex - 1, this.endIndex)
+			this.#degree = Math.trunc(a)
+			this.#n = Math.trunc(b)
 
-		const stateLength = this.#n * 6
-		this.#stateTable = await this.#daf.read(this.startIndex, this.startIndex + stateLength - 1)
-		this.#epochTable = await this.#daf.read(this.startIndex + stateLength, this.startIndex + stateLength + this.#n - 1)
-		this.#initialized = true
+			const stateLength = this.#n * 6
+			this.#stateTable = await this.#daf.read(this.startIndex, this.startIndex + stateLength - 1)
+			this.#epochTable = await this.#daf.read(this.startIndex + stateLength, this.startIndex + stateLength + this.#n - 1)
+			this.#initialized = true
+		} catch (error) {
+			this.#init = undefined
+			throw error
+		}
 	}
 
 	// Chooses an interpolation window whose center is nearest to the request epoch when the window size is odd.
@@ -544,6 +571,7 @@ interface Type21Coefficient {
 // but type 21 allows use of larger, higher-degree MDAs.
 export class Type21Segment implements SpkSegment {
 	#initialized = false
+	#init?: Promise<void>
 	#n = 0
 	#maxdim = 0
 	#dlsize = 0
@@ -571,12 +599,12 @@ export class Type21Segment implements SpkSegment {
 	}
 
 	// Interpolates one extended MDA record at the requested epoch.
-	async at(time: Time): Promise<PositionAndVelocity> {
-		await this.#initialize()
+	at(time: Time): PositionAndVelocity {
+		if (!this.#initialized) throw new Error('SPK segment is not initialized')
 
 		const seconds = spkSeconds(time)
 		const index = this.#searchCoefficientIndex(seconds)
-		const c = await this.#computeCoefficient(index)
+		const c = this.#computeCoefficient(index)
 
 		if (!c) {
 			throw new Error(`cannot find a segment that covers the date: ${seconds}`)
@@ -663,24 +691,34 @@ export class Type21Segment implements SpkSegment {
 	}
 
 	// Loads the epoch table and interpolation workspace once.
-	async #initialize(): Promise<void> {
-		if (this.#initialized) return
+	initialize(): Promise<void> {
+		if (this.#initialized) return Promise.resolve()
+		if (this.#init) return this.#init
+		this.#init = this.#load()
+		return this.#init
+	}
 
-		const [a, b] = await this.#daf.read(this.endIndex - 1, this.endIndex)
-		this.#maxdim = Math.trunc(a)
-		this.#dlsize = 4 * this.#maxdim + 11
-		this.#n = Math.trunc(b)
+	async #load() {
+		try {
+			const [a, b] = await this.#daf.read(this.endIndex - 1, this.endIndex)
+			this.#maxdim = Math.trunc(a)
+			this.#dlsize = 4 * this.#maxdim + 11
+			this.#n = Math.trunc(b)
 
-		// Epochs for all records in this segment.
-		const start = this.startIndex + this.#n * this.#dlsize
-		this.#epochTable = await this.#daf.read(start, start + this.#n - 1)
+			// Epochs for all records in this segment.
+			const start = this.startIndex + this.#n * this.#dlsize
+			this.#epochTable = await this.#daf.read(start, start + this.#n - 1)
 
-		// Reuse work arrays across calls and size them from MAXDIM instead of a fixed cap.
-		const workspaceSize = this.#maxdim + 3
-		this.#fc = new Float64Array(workspaceSize)
-		this.#wc = new Float64Array(workspaceSize)
-		this.#w = new Float64Array(workspaceSize)
-		this.#initialized = true
+			// Reuse work arrays across calls and size them from MAXDIM instead of a fixed cap.
+			const workspaceSize = this.#maxdim + 3
+			this.#fc = new Float64Array(workspaceSize)
+			this.#wc = new Float64Array(workspaceSize)
+			this.#w = new Float64Array(workspaceSize)
+			this.#initialized = true
+		} catch (error) {
+			this.#init = undefined
+			throw error
+		}
 	}
 
 	// Finds the first record whose final epoch is not less than the request epoch.
@@ -693,12 +731,12 @@ export class Type21Segment implements SpkSegment {
 	}
 
 	// Reads and caches one extended MDA record from the segment.
-	async #computeCoefficient(index: number): Promise<Type21Coefficient | undefined> {
+	#computeCoefficient(index: number): Type21Coefficient | undefined {
 		const cached = this.#coefficients.get(index)
 		if (cached) return cached
 		if (index < 0 || index >= this.#n) return undefined
 
-		const mdaRecord = await this.#daf.read(this.startIndex + index * this.#dlsize, this.startIndex + (index + 1) * this.#dlsize - 1)
+		const mdaRecord = this.#daf.readSync(this.startIndex + index * this.#dlsize, this.startIndex + (index + 1) * this.#dlsize - 1)
 
 		// Reference epoch of record.
 		const tl = mdaRecord[0]
@@ -788,8 +826,13 @@ export class MultipleSpkSegment implements SpkSegment {
 		this.#segments = segments
 	}
 
+	// Initializes each child in sequence because they may share the DAF source cursor.
+	async initialize(): Promise<void> {
+		for (const segment of this.#segments) await segment.initialize()
+	}
+
 	// Selects the highest-priority segment that covers the request epoch.
-	at(time: Time): Promise<PositionAndVelocity> {
+	at(time: Time): PositionAndVelocity {
 		const seconds = spkSeconds(time)
 
 		for (let i = this.#segments.length - 1; i >= 0; i--) {

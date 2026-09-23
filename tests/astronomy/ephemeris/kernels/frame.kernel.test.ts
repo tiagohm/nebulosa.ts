@@ -198,8 +198,8 @@ test('lunar libration at 2019-12-20 11:05 UTC matches Skyfield', async () => {
 
 	await using source = fileHandleSource(await fs.open('data/de421.bsp'))
 	const spk = readSpk(await readDaf(source))
-	const earth = (await spk.segment(Naif.EMB, Naif.EARTH)!.at(t))[0]
-	const moon = (await spk.segment(Naif.EMB, Naif.MOON)!.at(t))[0]
+	const earth = (await spk.segment(Naif.EMB, Naif.EARTH))!.at(t)[0]
+	const moon = (await spk.segment(Naif.EMB, Naif.MOON))!.at(t)[0]
 	const earthFromMoon = vecMinus(earth, moon)
 	const framed = frameAt(earthFromMoon, moonMe, t)
 	const [longitude, latitude] = equatorial(framed)

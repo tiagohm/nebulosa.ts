@@ -98,8 +98,8 @@ async function lunarKernels() {
 
 // Barycentric ICRS state of Earth or the Moon from DE421 (SSB → EMB → target).
 async function barycentricAt(spk: Spk, target: number, t: Time): Promise<PositionAndVelocity> {
-	const emb = await spk.segment(Naif.SSB, Naif.EMB)!.at(t)
-	const rel = await spk.segment(Naif.EMB, target)!.at(t)
+	const emb = (await spk.segment(Naif.SSB, Naif.EMB))!.at(t)
+	const rel = (await spk.segment(Naif.EMB, target))!.at(t)
 	return [vecPlus(emb[0], rel[0]), vecPlus(emb[1], rel[1])]
 }
 

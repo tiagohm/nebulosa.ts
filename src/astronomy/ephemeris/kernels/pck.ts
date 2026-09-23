@@ -207,7 +207,6 @@ export class Type2PckSegment implements PckSegment {
 	initialize(): Promise<void> {
 		if (this.#initialized) return Promise.resolve()
 		if (this.#init) return this.#init
-
 		this.#init = this.#load()
 		return this.#init
 	}
