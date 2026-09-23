@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test'
+import { apparentDirection, SUN_LIGHT_DEFLECTOR_LIMITER, SUN_LIGHT_DEFLECTOR_MASS } from '../../../src/astronomy/coordinates/apparent'
 import { topocentricDirection } from '../../../src/astronomy/coordinates/astrometry'
 import { Naif } from '../../../src/astronomy/ephemeris/kernels/naif'
 import { ephemerisPath, naifEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from '../../../src/astronomy/ephemeris/path'
-import { ephemerisAt, observeEphemeris } from '../../../src/astronomy/ephemeris/position'
+import { apparentPosition, ephemerisAt, observeEphemeris } from '../../../src/astronomy/ephemeris/position'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { vecLength } from '../../../src/math/linear-algebra/vec3'
 
@@ -75,4 +76,52 @@ test('observation rejects moving origins, coincident points, and unbounded work'
 	expect(() => observeEphemeris(observer, earthOrigin, TIME)).toThrow('target ephemeris path must be SSB-centered')
 	expect(observeEphemeris(observer, target, TIME)).toBeUndefined()
 	expect(() => observeEphemeris(observer, target, TIME, { lightTimeIterations: Infinity })).toThrow('lightTimeIterations must be an integer in [0, 16]')
+})
+
+test('apparent stage matches the low-level finite-distance correction pipeline', () => {
+	const observer = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => [
+		[0, 0, 0],
+		[0, 0.01, 0],
+	])
+	const target = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, () => [
+		[1, 0.1, 0],
+		[0, 0, 0],
+	])
+	const sun = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.SUN), () => [
+		[-1, 0, 0],
+		[0, 0, 0],
+	])
+	const deflector = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.JUPITER), () => [
+		[0.5, 0.01, 0],
+		[0, 0.001, 0],
+	])
+	const astrometric = observeEphemeris(observer, target, TIME)!
+	const apparent = apparentPosition(astrometric, { sun, deflectors: [{ mass: SUN_LIGHT_DEFLECTOR_MASS, limiter: SUN_LIGHT_DEFLECTOR_LIMITER, path: deflector }] })
+	const lowLevel = apparentDirection(target.stateAt, observer.stateAt, TIME, { sun: sun.stateAt, deflectors: [{ mass: SUN_LIGHT_DEFLECTOR_MASS, limiter: SUN_LIGHT_DEFLECTOR_LIMITER, state: deflector.stateAt }] })!
+	expect(apparent.kind).toBe('apparent')
+	expect(apparent.center).toBe(EARTH)
+	expect(apparent.target).toBe(MARS)
+	expect(apparent.time).toBe(TIME)
+	expect(apparent.emissionTime).toEqual(astrometric.emissionTime)
+	expect(apparent.distance).toBe(astrometric.distance)
+	expect(apparent.lightTime).toBe(astrometric.lightTime)
+	for (let i = 0; i < 3; i++) expect(apparent.direction[i]).toBeCloseTo(lowLevel.apparent[i], 15)
+	expect(vecLength(apparent.direction)).toBeCloseTo(1, 14)
+	expect(apparentPosition(astrometric, { aberration: false }).direction).toEqual(astrometric.direction)
+})
+
+test('apparent stage requires barycentric Sun and deflectors', () => {
+	const observer = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => [
+		[0, 0, 0],
+		[0, 0, 0],
+	])
+	const target = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, () => [
+		[1, 0, 0],
+		[0, 0, 0],
+	])
+	const astrometric = observeEphemeris(observer, target, TIME)!
+	const nonBarycentric = ephemerisPath(EARTH, MARS, target.stateAt)
+	expect(() => apparentPosition(astrometric)).toThrow('sun barycentric state is required')
+	expect(() => apparentPosition(astrometric, { sun: nonBarycentric })).toThrow('sun ephemeris path must be SSB-centered')
+	expect(() => apparentPosition(astrometric, { aberration: false, deflectors: [{ mass: 1, limiter: 6e-6, path: nonBarycentric }] })).toThrow('light deflector ephemeris path must be SSB-centered')
 })

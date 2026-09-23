@@ -1,5 +1,6 @@
 import { type Vec3, vecClone, vecDivScalar } from '../../math/linear-algebra/vec3'
 import type { Distance } from '../../math/units/distance'
+import { applyApparentDirectionCorrections, type LightDeflectorSnapshot } from '../coordinates/apparent'
 import { DEFAULT_LIGHT_TIME_ITERATIONS, lightTimeSolution } from '../coordinates/astrometry'
 import type { Time } from '../time/time'
 import { type EphemerisEndpoint, type EphemerisPath, sameEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from './path'
@@ -59,6 +60,48 @@ export interface EphemerisObserveOptions {
 	readonly lightTimeIterations?: number
 }
 
+// A body whose gravity bends light from a finite-distance target. Its path
+// must be SSB-centered and is sampled at the observer's reception epoch.
+export interface EphemerisLightDeflector {
+	// Body mass relative to the Sun.
+	readonly mass: number
+	// ERFA near-body limiter, in radians squared / 2.
+	readonly limiter: number
+	// SSB-to-body state provider in AU and AU/day.
+	readonly path: EphemerisPath
+}
+
+// Explicit correction sources for the high-level apparent stage.
+export interface EphemerisApparentOptions {
+	// Apply observer aberration; default true. Requires an SSB-to-Sun path.
+	readonly aberration?: boolean
+	// SSB-to-Sun path used for the aberration potential term.
+	readonly sun?: EphemerisPath
+	// SSB-centered deflectors in photon encounter order; none are implicit.
+	readonly deflectors?: readonly EphemerisLightDeflector[]
+}
+
+// An ICRS/BCRS-oriented apparent unit direction after explicit gravitational
+// deflection and observer aberration. Distance and light time remain astrometric.
+export interface ApparentPosition {
+	// Discriminant for the corrected direction stage.
+	readonly kind: 'apparent'
+	// Observer reception epoch.
+	readonly time: Time
+	// Retarded target emission epoch.
+	readonly emissionTime: Time
+	// Observer endpoint.
+	readonly center: EphemerisEndpoint
+	// Target endpoint.
+	readonly target: EphemerisEndpoint
+	// Corrected unit direction in ICRS/BCRS-oriented axes.
+	readonly direction: Vec3
+	// Astrometric observer-target distance, in AU.
+	readonly distance: Distance
+	// One-way light time, in days.
+	readonly lightTime: number
+}
+
 // Materializes a prepared path at one epoch and owns both returned vectors.
 // No correction or coordinate-frame transform is applied.
 export function ephemerisAt(path: EphemerisPath, time: Time): GeometricPosition {
@@ -90,4 +133,25 @@ export function observeEphemeris(observer: EphemerisPath, target: EphemerisPath,
 		observerVelocity: solution.observerVelocity,
 		targetEmissionPosition: solution.targetEmissionPosition,
 	}
+}
+
+// Applies explicit finite-distance gravitational deflection and observer
+// aberration to an astrometric position. Requires an SSB-centered Sun path when
+// aberration is enabled and SSB-centered paths for every deflector. Snapshots
+// providers before correction; returns an owned direction and retains distance.
+export function apparentPosition(position: AstrometricPosition, options?: EphemerisApparentOptions): ApparentPosition {
+	const aberration = options?.aberration ?? true
+	const sun = options?.sun
+	if (aberration && !sun) throw new Error('sun barycentric state is required when aberration is enabled')
+	if (aberration && sun && !sameEphemerisEndpoint(sun.center, SOLAR_SYSTEM_BARYCENTER)) throw new Error('sun ephemeris path must be SSB-centered')
+	for (const body of options?.deflectors ?? []) {
+		if (!sameEphemerisEndpoint(body.path.center, SOLAR_SYSTEM_BARYCENTER)) throw new Error('light deflector ephemeris path must be SSB-centered')
+	}
+	const deflectors = options?.deflectors?.map((body): LightDeflectorSnapshot => {
+		const [bodyPosition, bodyVelocity] = body.path.stateAt(position.time)
+		return { mass: body.mass, limiter: body.limiter, position: vecClone(bodyPosition), velocity: vecClone(bodyVelocity) }
+	})
+	const sunPosition = aberration && sun ? vecClone(sun.stateAt(position.time)[0]) : undefined
+	const direction = applyApparentDirectionCorrections(position.direction, position.targetEmissionPosition, position.observerPosition, position.observerVelocity, position.lightTime, { aberration, sunPosition, deflectors })
+	return { kind: 'apparent', time: position.time, emissionTime: position.emissionTime, center: position.center, target: position.target, direction, distance: position.distance, lightTime: position.lightTime }
 }
