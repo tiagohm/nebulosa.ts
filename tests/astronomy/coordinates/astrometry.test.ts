@@ -1,17 +1,18 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
-import { cirsToIcrs, cirsToObserved, distance, equatorial, icrsToCirs, icrsToObserved, lightTime, lightTimeSolution, observedToCirs, parallacticAngle, phaseAngle, type PositionAndVelocity, refractedAltitude, relativePositionAndVelocity, separationFrom, topocentricDirection, unrefractedAltitude } from '../../../src/astronomy/coordinates/astrometry'
+import { cirsToIcrs, cirsToObserved, distance, equatorial, icrsToCirs, icrsToObserved, lightTime, lightTimeSolution, observedToCirs, parallacticAngle, phaseAngle, type PositionAndVelocity, type PositionAndVelocityOverTime, refractedAltitude, relativePositionAndVelocity, separationFrom, topocentricDirection, unrefractedAltitude } from '../../../src/astronomy/coordinates/astrometry'
 import { eraEpv00 } from '../../../src/astronomy/coordinates/erfa/earth'
 import { eraEors, eraPnm06a, eraS06, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
-import { tdb, Timescale, timeShift, timeYMDHMS, tt } from '../../../src/astronomy/time/time'
+import { tdb, Timescale, timeShift, timeSubtract, timeYMDHMS, tt } from '../../../src/astronomy/time/time'
 import { PIOVERTWO } from '../../../src/core/constants'
+import { vecZero } from '../../../src/math/linear-algebra/vec3'
 import { deg, toArcsec, toDeg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 
 test('distance is the position vector length in AU', () => {
 	expect(distance([3, 4, 0])).toBeCloseTo(5, 12)
-	expect(distance([0, 0, 0])).toBe(0)
+	expect(distance(vecZero())).toBe(0)
 })
 
 test('light time of one AU is about 499 seconds', () => {
@@ -21,17 +22,14 @@ test('light time of one AU is about 499 seconds', () => {
 
 test('light-time solution preserves reception and final emission snapshots with shared storage', () => {
 	const time = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TDB)
-	const scratch: PositionAndVelocity = [
-		[0, 0, 0],
-		[0, 0, 0],
-	]
-	const observer = () => {
+	const scratch: PositionAndVelocity = [vecZero(), vecZero()]
+	const observer: PositionAndVelocityOverTime = () => {
 		scratch[0][0] = 0.1
 		scratch[1][0] = 0.02
 		return scratch
 	}
-	const target = (sample: typeof time) => {
-		scratch[0][0] = 1 + (sample.day + sample.fraction - time.day - time.fraction) * 0.001
+	const target: PositionAndVelocityOverTime = (sample) => {
+		scratch[0][0] = 1 + timeSubtract(sample, time) * 0.001
 		scratch[1][0] = 0.001
 		return scratch
 	}
@@ -49,17 +47,59 @@ test('light-time solution preserves reception and final emission snapshots with 
 
 test('light-time solution has a bounded iteration count and no direction at coincidence', () => {
 	const time = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TDB)
-	const zero = () =>
-		[
-			[0, 0, 0],
-			[0, 0, 0],
-		] as PositionAndVelocity
+	const zero: PositionAndVelocityOverTime = () => [vecZero(), vecZero()]
 	expect(lightTimeSolution(zero, zero, time, 0)).toBeUndefined()
-	expect(topocentricDirection(zero, zero, time, 0)).toEqual([0, 0, 0])
-	for (const iterations of [-1, 0.5, Infinity, 17]) {
+	expect(topocentricDirection(zero, zero, time, 0)).toEqual(vecZero())
+	for (const iterations of [-1, 0.5, Number.NaN, Infinity, 17] as const) {
 		expect(() => lightTimeSolution(zero, zero, time, iterations)).toThrow('lightTimeIterations must be an integer in [0, 16]')
 		expect(() => topocentricDirection(zero, zero, time, iterations)).toThrow('lightTimeIterations must be an integer in [0, 16]')
 	}
+})
+
+test('light-time iterations, sample counts, and owned snapshots', () => {
+	const time = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TDB)
+	const scratch: PositionAndVelocity = [vecZero(), vecZero()]
+	let observers = 0
+	let targets = 0
+	const observer: PositionAndVelocityOverTime = () => {
+		observers++
+		scratch[0] = [0.1, -0.02, 0.01]
+		scratch[1] = [0.02, 0, 0]
+		return scratch
+	}
+	const target: PositionAndVelocityOverTime = (sample) => {
+		targets++
+		const dt = timeSubtract(sample, time)
+		scratch[0] = [1.2 + dt * 0.01, 0.3, -0.2]
+		scratch[1] = [0.01, 0, 0]
+		return scratch
+	}
+	const reception = lightTimeSolution(target, observer, time, 0)!
+	expect(reception.targetEmissionPosition[0]).toBeCloseTo(1.2, 14)
+	expect(observers).toBe(1)
+	expect(targets).toBe(1)
+	observers = 0
+	targets = 0
+	const refined = lightTimeSolution(target, observer, time, 16)!
+	expect(observers).toBe(1)
+	expect(targets).toBe(17)
+	expect(refined.distance).toBeCloseTo(distance(refined.position), 14)
+	expect(refined.lightTime).toBeCloseTo(lightTime(refined.position), 14)
+	expect(refined.emissionTime).toEqual(timeShift(time, -refined.lightTime))
+	expect(refined.observerPosition).toEqual([0.1, -0.02, 0.01])
+	expect(refined.observerVelocity).toEqual([0.02, 0, 0])
+	scratch[0][0] = 40
+	scratch[1][0] = 40
+	expect(refined.observerPosition[0]).toBeCloseTo(0.1, 14)
+	expect(refined.targetEmissionPosition[0]).toBeLessThan(2)
+	const stationary: PositionAndVelocityOverTime = () => [[2, 0, 0], vecZero()]
+	const origin: PositionAndVelocityOverTime = () => [vecZero(), vecZero()]
+	const once = lightTimeSolution(stationary, origin, time, 1)!
+	const thrice = lightTimeSolution(stationary, origin, time, 3)!
+	const many = lightTimeSolution(stationary, origin, time, 16)!
+	expect(once.distance).toBeCloseTo(2, 14)
+	expect(thrice.lightTime).toBeCloseTo(once.lightTime, 14)
+	expect(many.lightTime).toBeCloseTo(once.lightTime, 14)
 })
 
 test('equatorial recovers spherical coordinates from a cartesian position', () => {
@@ -149,16 +189,14 @@ test('zero pressure disables atmospheric refraction', () => {
 
 test('relativePositionAndVelocity differences the two body states', () => {
 	const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
-	const target = () =>
-		[
-			[3, 4, 5],
-			[6, 7, 8],
-		] as PositionAndVelocity
-	const origin = () =>
-		[
-			[1, 1, 1],
-			[1, 1, 1],
-		] as PositionAndVelocity
+	const target: PositionAndVelocityOverTime = () => [
+		[3, 4, 5],
+		[6, 7, 8],
+	]
+	const origin: PositionAndVelocityOverTime = () => [
+		[1, 1, 1],
+		[1, 1, 1],
+	]
 	const [position, velocity] = relativePositionAndVelocity(target, origin, time)
 	expect(position).toEqual([2, 3, 4])
 	expect(velocity).toEqual([5, 6, 7])
@@ -166,16 +204,8 @@ test('relativePositionAndVelocity differences the two body states', () => {
 
 test('topocentricDirection retards the target by light time', () => {
 	const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
-	const observer = () =>
-		[
-			[0, 0, 0],
-			[0, 0, 0],
-		] as PositionAndVelocity
-	const target = (t: typeof time) =>
-		[
-			[1 + t.fraction, 2, 3],
-			[0, 0, 0],
-		] as PositionAndVelocity
+	const observer: PositionAndVelocityOverTime = () => [vecZero(), vecZero()]
+	const target: PositionAndVelocityOverTime = (t) => [[1 + t.fraction, 2, 3], vecZero()]
 
 	const geometric = topocentricDirection(target, observer, time, 0)
 	const retarded = topocentricDirection(target, observer, time, 1)
@@ -193,7 +223,7 @@ test('phaseAngle is the Sun-body-observer angle at the body', () => {
 	// Observer between the body and the Sun: fully illuminated ("full" phase).
 	expect(phaseAngle([1, 0, 0], [3, 0, 0], [2, 0, 0])).toBeCloseTo(0, 12)
 	// Observer opposite the Sun: "new" phase.
-	expect(toDeg(phaseAngle([1, 0, 0], [2, 0, 0], [0, 0, 0]))).toBeCloseTo(180, 12)
+	expect(toDeg(phaseAngle([1, 0, 0], [2, 0, 0], vecZero()))).toBeCloseTo(180, 12)
 })
 
 test('ICRS and CIRS coordinate transforms round-trip', () => {

@@ -18,6 +18,8 @@ import type { Daf, Summary } from './daf'
 export interface Pck {
 	// All segments in file order.
 	readonly segments: readonly PckSegment[]
+	// Initialize all segments.
+	readonly initialize: () => Promise<void>
 	// Resolves the highest-priority segment group for a PCK frame class id, if present.
 	readonly segment: (id: number) => PckSegment | undefined
 }
@@ -70,13 +72,17 @@ export function readPck(daf: Daf): Pck {
 		appendPckSegment(groups, segment)
 	}
 
-	const byClassId = new Map<number, PckSegment>()
+	const segmentsById = new Map<number, PckSegment>()
 
 	for (const [id, list] of groups) {
-		byClassId.set(id, list.length === 1 ? list[0] : new MultiplePckSegment(list))
+		segmentsById.set(id, list.length === 1 ? list[0] : new MultiplePckSegment(list))
 	}
 
-	return { segments, segment: (id) => byClassId.get(id) }
+	async function initialize() {
+		for (const s of segments) await s.initialize()
+	}
+
+	return { segments, initialize, segment: (id) => segmentsById.get(id) }
 }
 
 // Appends a segment to its frame-class-id group, preserving file order.

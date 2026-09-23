@@ -82,7 +82,7 @@ async function lunarKernels() {
 
 	const bpc = fileHandleSource(await fs.open('data/moon_pa_de421_1900-2050.bpc'))
 	const pck = readPck(await readDaf(bpc))
-	for (const segment of pck.segments) await segment.initialize()
+	await pck.initialize()
 
 	const bsp = fileHandleSource(await fs.open('data/de421.bsp'))
 	const spk = readSpk(await readDaf(bsp))

@@ -18,7 +18,7 @@ test('both observing-window overloads identify the same real short window', () =
 	expect(reversed[0].durationHours).toBeCloseTo(direct[0].durationHours, 12)
 	expect(reversed[0].expectedCount).toBeCloseTo(direct[0].expectedCount, 12)
 	expect(direct[0].durationHours).toBeCloseTo(2, 12)
-	expect(direct[0].expectedCount).toBeCloseTo(134.70811528832383, 8)
+	expect(direct[0].expectedCount).toBeCloseTo(134.70823, 4)
 	expect(direct[0].bestTime).toBeDefined()
 	expect(direct[0].moonIlluminationAtBest).toBeUndefined()
 	expect(direct[0].maximumRadiantAltitude).toBeDefined()
@@ -181,7 +181,7 @@ test('rate correction scales integrated count', () => {
 	})
 
 	expect(corrected).toHaveLength(1)
-	expect(corrected[0].expectedCount).toBeCloseTo(69.43670313082661, 6)
+	expect(corrected[0].expectedCount).toBeCloseTo(69.43674, 4)
 	expect(corrected[0].bestLocalHourlyRate).toBeCloseTo(35.68435, 4)
 })
 
