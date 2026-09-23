@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test'
 import { apparentDirection, SUN_LIGHT_DEFLECTOR_LIMITER, SUN_LIGHT_DEFLECTOR_MASS } from '../../../src/astronomy/coordinates/apparent'
 import { topocentricDirection } from '../../../src/astronomy/coordinates/astrometry'
+import { frameAt, ITRS } from '../../../src/astronomy/coordinates/frame'
 import { Naif } from '../../../src/astronomy/ephemeris/kernels/naif'
 import { ephemerisPath, naifEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from '../../../src/astronomy/ephemeris/path'
-import { apparentPosition, ephemerisAt, observeEphemeris } from '../../../src/astronomy/ephemeris/position'
+import { apparentPosition, directionPositionInFrame, ephemerisAt, equatorialPosition, geometricPositionInFrame, geometricSphericalPositionAndVelocity, observeEphemeris } from '../../../src/astronomy/ephemeris/position'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { vecLength } from '../../../src/math/linear-algebra/vec3'
 
@@ -124,4 +125,37 @@ test('apparent stage requires barycentric Sun and deflectors', () => {
 	expect(() => apparentPosition(astrometric)).toThrow('sun barycentric state is required')
 	expect(() => apparentPosition(astrometric, { sun: nonBarycentric })).toThrow('sun ephemeris path must be SSB-centered')
 	expect(() => apparentPosition(astrometric, { aberration: false, deflectors: [{ mass: 1, limiter: 6e-6, path: nonBarycentric }] })).toThrow('light deflector ephemeris path must be SSB-centered')
+})
+
+test('frame and equatorial helpers preserve stage-specific physical quantities', () => {
+	const observer = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => [
+		[0, 0, 0],
+		[0, 0, 0],
+	])
+	const target = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, () => [
+		[1, 1, 0.5],
+		[0, 0.01, 0],
+	])
+	const geometric = ephemerisAt(target, TIME)
+	const astrometric = observeEphemeris(observer, target, TIME)!
+	const apparent = apparentPosition(astrometric, { aberration: false })
+	const expectedState = frameAt([geometric.position, geometric.velocity] as const, ITRS, TIME)
+	const actualState = geometricPositionInFrame(geometric, ITRS)
+	for (let axis = 0; axis < 3; axis++) {
+		expect(actualState[0][axis]).toBeCloseTo(expectedState[0][axis], 14)
+		expect(actualState[1][axis]).toBeCloseTo(expectedState[1][axis], 14)
+	}
+	const workspace: [[number, number, number], [number, number, number]] = [
+		[0, 0, 0],
+		[0, 0, 0],
+	]
+	expect(geometricPositionInFrame(geometric, ITRS, workspace)).toBe(workspace)
+	const rotated = directionPositionInFrame(astrometric, ITRS)
+	const expectedDirection = frameAt(astrometric.direction, ITRS, TIME)
+	for (let axis = 0; axis < 3; axis++) expect(rotated[axis]).toBeCloseTo(expectedDirection[axis], 14)
+	expect(equatorialPosition(geometric)[2]).toBeCloseTo(vecLength(geometric.position), 14)
+	expect(equatorialPosition(astrometric)[2]).toBeCloseTo(astrometric.distance, 14)
+	expect(equatorialPosition(apparent)[2]).toBeCloseTo(astrometric.distance, 14)
+	expect(geometricSphericalPositionAndVelocity(geometric)?.radialVelocity).toBeCloseTo((geometric.position[1] * geometric.velocity[1]) / vecLength(geometric.position), 14)
+	expect(geometricSphericalPositionAndVelocity(geometric, ITRS)?.radialVelocity).toBeCloseTo(geometricSphericalPositionAndVelocity(geometric)?.radialVelocity ?? 0, 8)
 })

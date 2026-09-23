@@ -1,7 +1,9 @@
 import { type Vec3, vecClone, vecDivScalar } from '../../math/linear-algebra/vec3'
 import type { Distance } from '../../math/units/distance'
 import { applyApparentDirectionCorrections, type LightDeflectorSnapshot } from '../coordinates/apparent'
-import { DEFAULT_LIGHT_TIME_ITERATIONS, lightTimeSolution } from '../coordinates/astrometry'
+import { DEFAULT_LIGHT_TIME_ITERATIONS, equatorial, frameSphericalPositionAndVelocity, lightTimeSolution, type PositionAndVelocity, sphericalPositionAndVelocity, type SphericalPositionAndVelocity } from '../coordinates/astrometry'
+import type { SphericalCoordinate } from '../coordinates/coordinate'
+import { frameAt, type Frame } from '../coordinates/frame'
 import type { Time } from '../time/time'
 import { type EphemerisEndpoint, type EphemerisPath, sameEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from './path'
 
@@ -102,6 +104,9 @@ export interface ApparentPosition {
 	readonly lightTime: number
 }
 
+// Position stages that carry a direction but no physically defined velocity.
+export type DirectionPosition = AstrometricPosition | ApparentPosition
+
 // Materializes a prepared path at one epoch and owns both returned vectors.
 // No correction or coordinate-frame transform is applied.
 export function ephemerisAt(path: EphemerisPath, time: Time): GeometricPosition {
@@ -154,4 +159,35 @@ export function apparentPosition(position: AstrometricPosition, options?: Epheme
 	const sunPosition = aberration && sun ? vecClone(sun.stateAt(position.time)[0]) : undefined
 	const direction = applyApparentDirectionCorrections(position.direction, position.targetEmissionPosition, position.observerPosition, position.observerVelocity, position.lightTime, { aberration, sunPosition, deflectors })
 	return { kind: 'apparent', time: position.time, emissionTime: position.emissionTime, center: position.center, target: position.target, direction, distance: position.distance, lightTime: position.lightTime }
+}
+
+// Rotates a geometric AU/AU-day state from the library base into a frame at its
+// epoch. Rotating frames include the W = dR/dt·Rᵀ velocity term. Writes into
+// `out` when given (which may alias the input vectors); otherwise allocates.
+export function geometricPositionInFrame(position: GeometricPosition, frame: Frame, out?: PositionAndVelocity): PositionAndVelocity {
+	return frameAt([position.position, position.velocity], frame, position.time, out)
+}
+
+// Rotates only the unit direction of an astrometric or apparent stage at its
+// reception epoch. Returns a fresh vector; no velocity or frame-origin shift is inferred.
+export function directionPositionInFrame(position: DirectionPosition, frame: Frame): Vec3 {
+	return frameAt(position.direction, frame, position.time)
+}
+
+// Converts a base-axis position stage into right ascension (radians in [0, TAU)),
+// declination (radians), and distance (AU). Direction stages use their separately
+// retained astrometric distance; no Cartesian velocity is inferred from them.
+export function equatorialPosition(position: GeometricPosition | DirectionPosition): SphericalCoordinate {
+	if (position.kind === 'geometric') return equatorial(position.position)
+	const d = position.distance
+	return equatorial([position.direction[0] * d, position.direction[1] * d, position.direction[2] * d])
+}
+
+// Converts only a geometric full state into spherical longitude/latitude/distance
+// and analytic angular/radial rates. Angles are radians, rates radians/day and
+// AU/day. An optional frame rotates both position and velocity before extraction;
+// returns undefined at zero distance, where the direction is undefined.
+export function geometricSphericalPositionAndVelocity(position: GeometricPosition, frame?: Frame): SphericalPositionAndVelocity | undefined {
+	const state = [position.position, position.velocity] as const
+	return frame ? frameSphericalPositionAndVelocity(state, frame, position.time) : sphericalPositionAndVelocity(state)
 }
