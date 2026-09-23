@@ -1,8 +1,8 @@
 import { DAYSEC, LIGHT_TIME_AU } from '../../core/constants'
 import { type MutVec3, type Vec3, vecClone, vecDistance, vecDivScalar, vecLength } from '../../math/linear-algebra/vec3'
 import type { Distance } from '../../math/units/distance'
-import { type Time, timeShift } from '../time/time'
-import { DEFAULT_LIGHT_TIME_ITERATIONS, lightTime, type PositionAndVelocityOverTime, topocentricDirection, validateLightTimeIterations } from './astrometry'
+import type { Time } from '../time/time'
+import { DEFAULT_LIGHT_TIME_ITERATIONS, lightTimeSolution, type PositionAndVelocityOverTime } from './astrometry'
 import { annualAberration } from './correction'
 import { eraLd, eraLdn, type LdBody } from './erfa/erfa'
 
@@ -46,6 +46,29 @@ export interface LightDeflector {
 	// ERFA-style deflection limiter, in radians^2 / 2. Caps the deflection as the source
 	// approaches the body, reaching zero at coincidence.
 	readonly limiter: number
+}
+
+// An owned barycentric deflector sample at reception: mass in solar masses,
+// limiter in radians squared / 2, position AU, and velocity AU/day.
+export interface LightDeflectorSnapshot {
+	// Mass relative to the Sun.
+	readonly mass: number
+	// ERFA-style near-body deflection limiter, in radians squared / 2.
+	readonly limiter: number
+	// Barycentric position at reception, in AU.
+	readonly position: Vec3
+	// Barycentric velocity at reception, in AU/day.
+	readonly velocity: Vec3
+}
+
+// Explicit correction inputs for an already solved astrometric direction.
+export interface ApparentDirectionCorrections {
+	// Apply observer aberration; default true. Requires sunPosition when enabled.
+	readonly aberration?: boolean
+	// Sun barycentric position at reception, in AU, for the aberration potential.
+	readonly sunPosition?: Vec3
+	// Deflectors in photon encounter order, all sampled at reception.
+	readonly deflectors?: readonly LightDeflectorSnapshot[]
 }
 
 // Optional corrections for apparentDirection. Omitted fields keep the documented defaults.
@@ -94,35 +117,36 @@ export function apparentDirection(target: PositionAndVelocityOverTime, observer:
 	const sun = options?.sun
 	if (aberration && !sun) throw new Error('sun barycentric state is required when aberration is enabled')
 
-	const [observerPosition, observerVelocity] = observer(time)
 	const iterations = options?.lightTimeIterations ?? DEFAULT_LIGHT_TIME_ITERATIONS
-	// Rejects Infinity (unbounded loop), negatives (silent undefined), and fractions
-	// (truncated iteration count) before delegating to topocentricDirection.
-	validateLightTimeIterations(iterations)
-	const astrometricVector = topocentricDirection(target, observer, time, iterations)
-	const distance = vecLength(astrometricVector)
-	if (!(distance > 0)) return undefined
+	const solution = lightTimeSolution(target, observer, time, iterations)
+	if (!solution) return undefined
+	const astrometric = vecDivScalar(solution.position, solution.distance)
+	const deflectors = options?.deflectors?.map((body): LightDeflectorSnapshot => {
+		const [position, velocity] = body.state(time)
+		return { mass: body.mass, limiter: body.limiter, position: vecClone(position), velocity: vecClone(velocity) }
+	})
+	const sunPosition = aberration && sun ? vecClone(sun(time)[0]) : undefined
+	const apparent = applyApparentDirectionCorrections(astrometric, solution.targetEmissionPosition, solution.observerPosition, solution.observerVelocity, solution.lightTime, { aberration, sunPosition, deflectors })
+	return { astrometric, apparent, distance: solution.distance, lightTime: solution.lightTime, emissionTime: solution.emissionTime }
+}
 
-	const tau = lightTime(astrometricVector)
-	const emissionTime = timeShift(time, -tau)
-	const astrometric = vecDivScalar(astrometricVector, distance)
-	let apparent: MutVec3 = vecClone(astrometric)
-
-	const deflectors = options?.deflectors
-	if (deflectors && deflectors.length > 0) {
-		const targetEmission: Vec3 = [observerPosition[0] + astrometricVector[0], observerPosition[1] + astrometricVector[1], observerPosition[2] + astrometricVector[2]]
-		applyFiniteLightDeflection(apparent, targetEmission, observerPosition, time, tau, deflectors)
-	}
-
-	if (aberration && sun) {
-		const sunDistance = vecDistance(observerPosition, sun(time)[0])
+// Applies finite-distance deflection followed by observer aberration to a unit
+// retarded direction in ICRS/BCRS axes. Inputs are snapshots: positions AU,
+// observer velocity AU/day, and light time days. Returns a fresh unit vector;
+// the input direction and snapshots are not mutated.
+export function applyApparentDirectionCorrections(astrometric: Vec3, targetEmissionPosition: Vec3, observerPosition: Vec3, observerVelocity: Vec3, lightTimeDays: number, options: ApparentDirectionCorrections): MutVec3 {
+	const aberration = options.aberration ?? true
+	if (aberration && !options.sunPosition) throw new Error('sun barycentric state is required when aberration is enabled')
+	let apparent = vecClone(astrometric)
+	if (options.deflectors?.length) applyFiniteLightDeflection(apparent, targetEmissionPosition, observerPosition, lightTimeDays, options.deflectors)
+	if (aberration && options.sunPosition) {
+		const sunDistance = vecDistance(observerPosition, options.sunPosition)
 		apparent = annualAberration(apparent, observerVelocity, sunDistance)
 	} else {
 		const len = vecLength(apparent)
 		if (len > 0) vecDivScalar(apparent, len, apparent)
 	}
-
-	return { astrometric, apparent, distance, lightTime: tau, emissionTime }
+	return apparent
 }
 
 // Applies ERFA multi-body light deflection for a star at infinity. `direction` is the
@@ -140,14 +164,15 @@ export function deflectStarlight(direction: Vec3, observerBarycentricPosition: V
 // approach, clipped to the observer-target light time so a deflector beyond the target is
 // evaluated at emission rather than treated as a star-at-infinity mass on the ray. `p` is the
 // current observer -> target direction; `q` is deflector -> target at that retarded epoch.
-function applyFiniteLightDeflection(direction: MutVec3, targetEmission: Vec3, observerPosition: Vec3, time: Time, lightTimeDays: number, deflectors: readonly LightDeflector[]) {
+function applyFiniteLightDeflection(direction: MutVec3, targetEmission: Vec3, observerPosition: Vec3, lightTimeDays: number, deflectors: readonly LightDeflectorSnapshot[]) {
 	const [ox, oy, oz] = observerPosition
 	const [tx, ty, tz] = targetEmission
 	const e: MutVec3 = [0, 0, 0]
 	const q: MutVec3 = [0, 0, 0]
 
 	for (const deflector of deflectors) {
-		const [bp, bv] = deflector.state(time)
+		const bp = deflector.position
+		const bv = deflector.velocity
 		const observerToBodyX = bp[0] - ox
 		const observerToBodyY = bp[1] - oy
 		const observerToBodyZ = bp[2] - oz
