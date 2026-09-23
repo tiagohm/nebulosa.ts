@@ -4,7 +4,7 @@ import { observerState } from '../../../src/astronomy/coordinates/correction'
 import { frameToFrame, ICRS, TEME } from '../../../src/astronomy/coordinates/frame'
 import { readDaf } from '../../../src/astronomy/ephemeris/kernels/daf'
 import { Naif } from '../../../src/astronomy/ephemeris/kernels/naif'
-import { readSpk, type Spk, type SpkSegment } from '../../../src/astronomy/ephemeris/kernels/spk'
+import { readSpk, SPK_FRAME_J2000, type Spk, type SpkSegment } from '../../../src/astronomy/ephemeris/kernels/spk'
 import { composeEphemerisPaths, customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from '../../../src/astronomy/ephemeris/path'
 import { bodySurfaceEphemerisPath, earthObserverEphemerisPath, sgp4EphemerisPath, spkEphemerisPath } from '../../../src/astronomy/ephemeris/path.adapter'
 import { ephemerisAt } from '../../../src/astronomy/ephemeris/position'
@@ -26,6 +26,7 @@ test('SPK adapter waits for the prepared segment and then evaluates synchronousl
 		end: 1,
 		center: Naif.SSB,
 		target: Naif.EARTH,
+		frame: SPK_FRAME_J2000,
 		startIndex: 1,
 		endIndex: 1,
 		initialize: () => {
@@ -62,6 +63,46 @@ test('SPK adapter waits for the prepared segment and then evaluates synchronousl
 		[4, 5, 6],
 	])
 	expect(await spkEphemerisPath(spk, Naif.SSB, Naif.MARS)).toBeUndefined()
+})
+
+test('SPK adapter accepts J2000 and rejects any other reference frame', async () => {
+	// NAIF frame 17 is ECLIPJ2000. Treating it as ICRS would rotate the state by the obliquity.
+	const segmentFor = (frame: number): SpkSegment => ({
+		start: 0,
+		end: 1,
+		center: Naif.SSB,
+		target: Naif.EARTH,
+		frame,
+		startIndex: 1,
+		endIndex: 1,
+		initialize: () => Promise.resolve(),
+		at: () => [
+			[1, 0, 0],
+			[0, 0, 0],
+		],
+	})
+	const spkFor = (frame: number): Spk => {
+		const segment = segmentFor(frame)
+		return {
+			segments: [[Naif.SSB, Naif.EARTH, segment]],
+			segment: (center, target) => Promise.resolve(center === Naif.SSB && target === Naif.EARTH ? segment : undefined),
+		}
+	}
+
+	const path = (await spkEphemerisPath(spkFor(SPK_FRAME_J2000), Naif.SSB, Naif.EARTH))!
+	expect(path.center).toEqual(naifEphemerisEndpoint(Naif.SSB))
+	expect(path.target).toEqual(naifEphemerisEndpoint(Naif.EARTH))
+	expect(path.stateAt(TIME)).toEqual([
+		[1, 0, 0],
+		[0, 0, 0],
+	])
+	let message = ''
+	try {
+		await spkEphemerisPath(spkFor(17), Naif.SSB, Naif.EARTH)
+	} catch (error) {
+		message = error instanceof Error ? error.message : ''
+	}
+	expect(message).toBe('SPK frame 17 is not the library base frame')
 })
 
 test('SGP4 adapter uses a stable NORAD target and full TEME-to-ICRS state conversion', () => {

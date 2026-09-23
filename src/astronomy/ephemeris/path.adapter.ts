@@ -5,7 +5,7 @@ import { type BodySurfaceLocation, bodySurfaceState } from '../observer/body'
 import type { GeographicPosition } from '../observer/location'
 import { type OMM, recordFromOMM, recordFromTLE, type SatRec, sgp4, type TLE } from '../orbits/propagation/sgp4'
 import { Naif } from './kernels/naif'
-import type { Spk } from './kernels/spk'
+import { SPK_FRAME_J2000, type Spk } from './kernels/spk'
 import { customEphemerisEndpoint, type EphemerisEndpoint, type EphemerisPath, ephemerisPath, naifEphemerisEndpoint } from './path'
 
 // Adapters from prepared SPK segments, SGP4 propagation, and surface geometry
@@ -19,11 +19,16 @@ const ZERO_EARTH_STATE: PositionAndVelocity = [
 ]
 
 // Resolves and initializes an SPK segment before returning its synchronous path.
-// Returns undefined when the kernel has no center-to-target segment; local
-// coefficient cache misses can still perform synchronous I/O during evaluation.
+// Returns undefined when the kernel has no center-to-target segment. Throws when
+// the segment frame is not J2000 (NAIF id 1): another frame would be published as
+// library-base ICRS/BCRS axes and rotate every later composition. No implicit
+// frame resolver is consulted. Local coefficient cache misses can still perform
+// synchronous I/O during evaluation.
 export async function spkEphemerisPath(spk: Spk, center: number, target: number): Promise<EphemerisPath | undefined> {
 	const segment = await spk.segment(center, target)
-	return segment ? ephemerisPath(naifEphemerisEndpoint(center), naifEphemerisEndpoint(target), segment.at.bind(segment)) : undefined
+	if (!segment) return undefined
+	if (segment.frame !== SPK_FRAME_J2000) throw new Error(`SPK frame ${segment.frame} is not the library base frame`)
+	return ephemerisPath(naifEphemerisEndpoint(center), naifEphemerisEndpoint(target), segment.at.bind(segment))
 }
 
 // Converts SGP4's Earth-centered TEME AU/AU-day state into library-base axes.
