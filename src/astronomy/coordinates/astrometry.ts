@@ -25,6 +25,41 @@ export type PositionAndVelocity = [MutVec3, MutVec3]
 // Sampler returning the position and velocity of a body at the given time.
 export type PositionAndVelocityOverTime = (time: Time) => PositionAndVelocity
 
+// A fixed-point light-time solution at reception time. All vectors are owned
+// snapshots in BCRS/ICRS axes: positions AU, velocity AU/day, and light time days.
+export interface LightTimeSolution {
+	// Reception epoch at the observer.
+	readonly time: Time
+	// Retarded epoch inferred from the final observer-to-target vector.
+	readonly emissionTime: Time
+	// Observer barycentric position at reception, in AU.
+	readonly observerPosition: Vec3
+	// Observer barycentric velocity at reception, in AU/day.
+	readonly observerVelocity: Vec3
+	// Target barycentric position from the last emission-epoch sample, in AU.
+	readonly targetEmissionPosition: Vec3
+	// Target minus observer vector from the last sample, in AU.
+	readonly position: Vec3
+	// Length of position, in AU.
+	readonly distance: Distance
+	// One-way light time for the final distance, in days.
+	readonly lightTime: number
+}
+
+// Default number of fixed-point refinements for finite-distance targets.
+export const DEFAULT_LIGHT_TIME_ITERATIONS = 3
+
+// Inclusive iteration cap; 16 refinements exceed normal solar-system needs.
+export const MAX_LIGHT_TIME_ITERATIONS = 16
+
+// Validates the bounded fixed-point work budget before sampling providers.
+// Non-integers would silently change loop count; infinity can hang the loop.
+export function validateLightTimeIterations(iterations: number): void {
+	if (!Number.isSafeInteger(iterations) || !(iterations >= 0 && iterations <= MAX_LIGHT_TIME_ITERATIONS)) {
+		throw new Error(`lightTimeIterations must be an integer in [0, ${MAX_LIGHT_TIME_ITERATIONS}]`)
+	}
+}
+
 // Spherical coordinates and first derivatives of a Cartesian position+velocity state,
 // expressed in whatever frame that state is already written in. Angular rates are
 // omitted at an exact Cartesian pole, where the spherical chart is singular.
@@ -165,18 +200,53 @@ export function relativePositionAndVelocity(target: PositionAndVelocityOverTime,
 // freshly allocated non-unit vector whose length is the topocentric distance in AU. Aberration is not applied
 // (it nearly cancels in the differential geometry of two bodies close on the sky, e.g. an occultation or
 // transit), so this is a geometric line of sight, not an apparent place.
+// Iterations must be an integer in [0, 16]; a coincident target returns the zero vector.
 export function topocentricDirection(target: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, time: Time, iterations: number): Vec3 {
-	const [ox, oy, oz] = observer(time)[0]
+	return lightTimeSolution(target, observer, time, iterations)?.position ?? [0, 0, 0]
+}
 
+// Solves retarded target geometry by sampling the observer once at reception and
+// the target at emission, then refining emission by the current one-way light time.
+// Performs iterations + 1 target samples, matching topocentricDirection's historical
+// fixed-point semantics. Returns undefined for coincident observer and target.
+// The target-emission snapshot is from the final sample; emissionTime is based on
+// the final vector, which may differ slightly from that sample's input epoch.
+export function lightTimeSolution(target: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, time: Time, iterations: number): LightTimeSolution | undefined {
+	validateLightTimeIterations(iterations)
+	const [observerPosition, observerVelocity] = observer(time)
+	const [ox, oy, oz] = observerPosition
+	const [ovx, ovy, ovz] = observerVelocity
 	let emission = time
-	let direction: Vec3 = [0, 0, 0]
+	let px = 0
+	let py = 0
+	let pz = 0
+	let tx = 0
+	let ty = 0
+	let tz = 0
 	for (let k = 0; k <= iterations; k++) {
-		const tp = target(emission)[0]
-		direction = [tp[0] - ox, tp[1] - oy, tp[2] - oz]
-		emission = timeShift(time, -lightTime(direction))
+		const targetPosition = target(emission)[0]
+		tx = targetPosition[0]
+		ty = targetPosition[1]
+		tz = targetPosition[2]
+		px = tx - ox
+		py = ty - oy
+		pz = tz - oz
+		emission = timeShift(time, -lightTime([px, py, pz]))
 	}
-
-	return direction
+	const position: Vec3 = [px, py, pz]
+	const distance = vecLength(position)
+	if (!(distance > 0)) return undefined
+	const tau = lightTime(position)
+	return {
+		time,
+		emissionTime: timeShift(time, -tau),
+		observerPosition: [ox, oy, oz],
+		observerVelocity: [ovx, ovy, ovz],
+		targetEmissionPosition: [tx, ty, tz],
+		position,
+		distance,
+		lightTime: tau,
+	}
 }
 
 // Computes the phase angle of a body: the Sun-body-observer angle measured at the

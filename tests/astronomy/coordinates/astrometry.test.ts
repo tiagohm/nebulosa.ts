@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
-import { cirsToIcrs, cirsToObserved, distance, equatorial, icrsToCirs, icrsToObserved, lightTime, observedToCirs, parallacticAngle, phaseAngle, type PositionAndVelocity, refractedAltitude, relativePositionAndVelocity, separationFrom, topocentricDirection, unrefractedAltitude } from '../../../src/astronomy/coordinates/astrometry'
+import { cirsToIcrs, cirsToObserved, distance, equatorial, icrsToCirs, icrsToObserved, lightTime, lightTimeSolution, observedToCirs, parallacticAngle, phaseAngle, type PositionAndVelocity, refractedAltitude, relativePositionAndVelocity, separationFrom, topocentricDirection, unrefractedAltitude } from '../../../src/astronomy/coordinates/astrometry'
 import { eraEpv00 } from '../../../src/astronomy/coordinates/erfa/earth'
 import { eraEors, eraPnm06a, eraS06, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
@@ -17,6 +17,48 @@ test('distance is the position vector length in AU', () => {
 test('light time of one AU is about 499 seconds', () => {
 	// One AU of light travel time is ~0.00577552 days (~499 s).
 	expect(lightTime([1, 0, 0])).toBeCloseTo(0.00577552, 8)
+})
+
+test('light-time solution preserves reception and final emission snapshots with shared storage', () => {
+	const time = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TDB)
+	const scratch: PositionAndVelocity = [
+		[0, 0, 0],
+		[0, 0, 0],
+	]
+	const observer = () => {
+		scratch[0][0] = 0.1
+		scratch[1][0] = 0.02
+		return scratch
+	}
+	const target = (sample: typeof time) => {
+		scratch[0][0] = 1 + (sample.day + sample.fraction - time.day - time.fraction) * 0.001
+		scratch[1][0] = 0.001
+		return scratch
+	}
+	const solution = lightTimeSolution(target, observer, time, 3)!
+	expect(solution.time).toBe(time)
+	expect(solution.observerPosition).toEqual([0.1, 0, 0])
+	expect(solution.observerVelocity).toEqual([0.02, 0, 0])
+	expect(solution.targetEmissionPosition[0]).toBeCloseTo(solution.position[0] + 0.1, 14)
+	expect(solution.distance).toBeCloseTo(solution.position[0], 14)
+	expect(solution.lightTime).toBeCloseTo(lightTime(solution.position), 14)
+	expect(solution.emissionTime).toEqual(timeShift(time, -solution.lightTime))
+	expect(solution.position).toEqual(topocentricDirection(target, observer, time, 3))
+	expect(lightTimeSolution(target, observer, time, 0)!.position[0]).toBeCloseTo(0.9, 14)
+})
+
+test('light-time solution has a bounded iteration count and no direction at coincidence', () => {
+	const time = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TDB)
+	const zero = () =>
+		[
+			[0, 0, 0],
+			[0, 0, 0],
+		] as PositionAndVelocity
+	expect(lightTimeSolution(zero, zero, time, 0)).toBeUndefined()
+	expect(topocentricDirection(zero, zero, time, 0)).toEqual([0, 0, 0])
+	for (const iterations of [-1, 0.5, Infinity, 17]) {
+		expect(() => lightTimeSolution(zero, zero, time, iterations)).toThrow('lightTimeIterations must be an integer in [0, 16]')
+	}
 })
 
 test('equatorial recovers spherical coordinates from a cartesian position', () => {

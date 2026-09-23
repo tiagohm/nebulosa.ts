@@ -2,7 +2,7 @@ import { DAYSEC, LIGHT_TIME_AU } from '../../core/constants'
 import { type MutVec3, type Vec3, vecClone, vecDistance, vecDivScalar, vecLength } from '../../math/linear-algebra/vec3'
 import type { Distance } from '../../math/units/distance'
 import { type Time, timeShift } from '../time/time'
-import { lightTime, type PositionAndVelocityOverTime, topocentricDirection } from './astrometry'
+import { DEFAULT_LIGHT_TIME_ITERATIONS, lightTime, type PositionAndVelocityOverTime, topocentricDirection, validateLightTimeIterations } from './astrometry'
 import { annualAberration } from './correction'
 import { eraLd, eraLdn, type LdBody } from './erfa/erfa'
 
@@ -16,15 +16,6 @@ import { eraLd, eraLdn, type LdBody } from './erfa/erfa'
 
 // Light time for 1 AU, in days. Matches ERFA eraLdn's CR = AULT/DAYSEC.
 const LIGHT_TIME_DAYS_PER_AU = LIGHT_TIME_AU / DAYSEC
-
-// Default fixed-point light-time iterations for finite targets. Zero leaves the geometric
-// same-epoch direction; a few iterations converge to the retarded solution.
-const DEFAULT_LIGHT_TIME_ITERATIONS = 3
-
-// Inclusive upper bound on ApparentDirectionOptions.lightTimeIterations. Solar-System
-// light-time fixed-point iteration already converges at the default of 3; 16 leaves
-// margin without allowing an unbounded or arbitrarily expensive loop.
-const MAX_LIGHT_TIME_ITERATIONS = 16
 
 // Mass of the Sun in solar masses, the unit of LightDeflector.mass.
 // ERFA eraLdn note 4.
@@ -107,9 +98,7 @@ export function apparentDirection(target: PositionAndVelocityOverTime, observer:
 	const iterations = options?.lightTimeIterations ?? DEFAULT_LIGHT_TIME_ITERATIONS
 	// Rejects Infinity (unbounded loop), negatives (silent undefined), and fractions
 	// (truncated iteration count) before delegating to topocentricDirection.
-	if (!Number.isSafeInteger(iterations) || !(iterations >= 0 && iterations <= MAX_LIGHT_TIME_ITERATIONS)) {
-		throw new Error(`lightTimeIterations must be an integer in [0, ${MAX_LIGHT_TIME_ITERATIONS}]`)
-	}
+	validateLightTimeIterations(iterations)
 	const astrometricVector = topocentricDirection(target, observer, time, iterations)
 	const distance = vecLength(astrometricVector)
 	if (!(distance > 0)) return undefined
