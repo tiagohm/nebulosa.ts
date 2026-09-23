@@ -2,7 +2,8 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { JUPITER_LIGHT_DEFLECTOR_LIMITER, JUPITER_LIGHT_DEFLECTOR_MASS, SATURN_LIGHT_DEFLECTOR_LIMITER, SATURN_LIGHT_DEFLECTOR_MASS, SUN_LIGHT_DEFLECTOR_LIMITER, SUN_LIGHT_DEFLECTOR_MASS } from '../../../src/astronomy/coordinates/apparent'
 import { lightTimeSolution, type PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
-import { eraPnm06a } from '../../../src/astronomy/coordinates/erfa/erfa'
+import { annualAberration } from '../../../src/astronomy/coordinates/correction'
+import { eraLd, eraPnm06a } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { CIRS, ECLIPTIC_J2000, frameAt, frameToFrame, GALACTIC, ICRS, ITRS } from '../../../src/astronomy/coordinates/frame'
 import { readDaf } from '../../../src/astronomy/ephemeris/kernels/daf'
 import { bodyRadii, SpiceFrames } from '../../../src/astronomy/ephemeris/kernels/frame.kernel'
@@ -14,13 +15,14 @@ import { moon } from '../../../src/astronomy/ephemeris/models/analytical/elpmpp0
 import { earth as vsopEarth, mars as vsopMars } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { composeEphemerisPaths, customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER, type EphemerisPath } from '../../../src/astronomy/ephemeris/path'
 import { bodySurfaceEphemerisPath, earthObserverEphemerisPath, sgp4EphemerisPath, spkEphemerisPath } from '../../../src/astronomy/ephemeris/path.adapter'
-import { apparentPosition, directionPositionInFrame, equatorialPosition, geometricPositionInFrame, observeEphemeris, type EphemerisApparentOptions, type EphemerisLightDeflector, type GeometricPosition } from '../../../src/astronomy/ephemeris/position'
+import { apparentPosition, directionPositionInFrame, equatorialPosition, geometricPositionInFrame, observeEphemeris, type AstrometricPosition, type EphemerisApparentOptions, type EphemerisLightDeflector, type GeometricPosition } from '../../../src/astronomy/ephemeris/position'
 import { bodyShape, bodySurfaceLocation } from '../../../src/astronomy/observer/body'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
 import { parseTLE } from '../../../src/astronomy/orbits/propagation/sgp4'
 import { tdb, Timescale, timeSubtract, timeYMDHMS, tt, utc, type Time } from '../../../src/astronomy/time/time'
+import { DAYSEC, LIGHT_TIME_AU } from '../../../src/core/constants'
 import { fileHandleSource } from '../../../src/io/io'
-import { type Vec3, vecAngle, vecDot, vecLength, vecMinus, vecPlus } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngle, vecDistance, vecDivScalar, vecDot, vecLength, vecMinus, vecPlus } from '../../../src/math/linear-algebra/vec3'
 import { deg, toArcsec } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 import { downloadPerTag } from '../../download'
@@ -105,6 +107,37 @@ function jupiterDeflector(path: EphemerisPath): EphemerisLightDeflector {
 
 function saturnDeflector(path: EphemerisPath): EphemerisLightDeflector {
 	return { mass: SATURN_LIGHT_DEFLECTOR_MASS, limiter: SATURN_LIGHT_DEFLECTOR_LIMITER, path }
+}
+
+// One finite-source eraLd pass per body, in caller order, then normalized. This is the amplitude
+// oracle for a deflector state. It does not call apparentPosition.
+function finiteSourceDeflection(observed: AstrometricPosition, bodies: readonly { readonly position: Vec3; readonly velocity: Vec3; readonly mass: number; readonly limiter: number }[]): Vec3 {
+	const direction: MutVec3 = [observed.direction[0], observed.direction[1], observed.direction[2]]
+	const lightDaysPerAu = LIGHT_TIME_AU / DAYSEC
+	const [ox, oy, oz] = observed.observerPosition
+	const [tx, ty, tz] = observed.targetEmissionPosition
+
+	for (const body of bodies) {
+		const [bx, by, bz] = body.position
+		const [vx, vy, vz] = body.velocity
+		let delay = (direction[0] * (bx - ox) + direction[1] * (by - oy) + direction[2] * (bz - oz)) * lightDaysPerAu
+		if (!(delay > 0)) delay = 0
+		else if (delay > observed.lightTime) delay = observed.lightTime
+		const cx = bx - delay * vx
+		const cy = by - delay * vy
+		const cz = bz - delay * vz
+		const ex = ox - cx
+		const ey = oy - cy
+		const ez = oz - cz
+		const em = Math.hypot(ex, ey, ez)
+		const qx = tx - cx
+		const qy = ty - cy
+		const qz = tz - cz
+		const qm = Math.hypot(qx, qy, qz)
+		eraLd(body.mass, direction, [qx / qm, qy / qm, qz / qm], [ex / em, ey / em, ez / em], em, body.limiter, direction)
+	}
+
+	return vecDivScalar(direction, vecLength(direction))
 }
 
 async function kernelPaths(file: string): Promise<{ paths: KernelPaths; close: () => Promise<void> }> {
@@ -257,6 +290,31 @@ describe('a WGS84 site matches Skyfield astrometry and the geocenter parallax di
 	}
 })
 
+describe('a surface observer apparent place includes diurnal aberration', () => {
+	const time = referenceEpoch('E1')
+	const site = composeEphemerisPaths(de421.earth, earthObserverEphemerisPath(referenceSite('O1'), customEphemerisEndpoint('O1')))
+
+	for (const name of ['moon', 'mars'] as const) {
+		test(name, () => {
+			const geocentric = observeEphemeris(de421.earth, de421[name], time)!
+			const topocentric = observeEphemeris(site, de421[name], time)!
+			const sunDistance = vecDistance(topocentric.observerPosition, de421.sun.stateAt(time)[0])
+			const diurnal = annualAberration(topocentric.direction, topocentric.observerVelocity, sunDistance)
+			const annualOnly = annualAberration(topocentric.direction, geocentric.observerVelocity, sunDistance)
+			const aberrationOnly = apparentPosition(topocentric, { sun: de421.sun, deflectors: [] })
+			// Skyfield apparent(deflectors=()) still bends light by the Earth unless the target
+			// falls inside the nadir cutoff. Mars at E1 is inside that cutoff, so the match is
+			// aberration only. The Moon still carries 2.5e-10 rad of that deflection.
+			const topocentricTolerance = name === 'moon' ? 1e-9 : 1e-11
+			expect(vecDistance(diurnal, aberrationOnly.direction)).toBeLessThan(1e-12)
+			expect(vecAngle(diurnal, annualOnly)).toBeGreaterThan(1e-7)
+			expect(vecDistance(topocentric.observerVelocity, geocentric.observerVelocity)).toBeGreaterThan(2e-4)
+			expectAngularSeparationBelow(apparentPosition(geocentric, { sun: de421.sun, deflectors: [] }).direction, PIPELINE_REFERENCE.diurnal[name].geocentric, 1e-11)
+			expectAngularSeparationBelow(aberrationOnly.direction, PIPELINE_REFERENCE.diurnal[name].topocentric, topocentricTolerance)
+		})
+	}
+})
+
 describe('the Moon center observes Earth, the Sun, and Mars like Skyfield', () => {
 	const time = referenceEpoch('E1')
 
@@ -310,12 +368,6 @@ test('apparent directions match Skyfield deflector sets and preserve astrometric
 		expectWrappedAngle(astrometricRa, expected.astrometricRa, DIRECTION)
 		expect(Math.abs(astrometricDec - expected.astrometricDec)).toBeLessThanOrEqual(DIRECTION)
 	}
-
-	const mars = observeEphemeris(de421.earth, de421.mars, time)!
-	const sunOnly = apparentPosition(mars, { sun: de421.sun, deflectors: [sunDeflector(de421.sun)] })
-	const bothOrders = [apparentPosition(mars, { sun: de421.sun, deflectors: sets.sunJupiter }), apparentPosition(mars, { sun: de421.sun, deflectors: sets.jupiterThenSun })]
-	expect(vecDot(vecMinus(bothOrders[0].direction, sunOnly.direction), vecMinus(PIPELINE_REFERENCE.apparent.mars.directions.sunJupiter, PIPELINE_REFERENCE.apparent.mars.directions.sun))).toBeGreaterThanOrEqual(0)
-	expect(vecDot(vecMinus(bothOrders[1].direction, bothOrders[0].direction), vecMinus(PIPELINE_REFERENCE.apparent.mars.directions.jupiterThenSun, PIPELINE_REFERENCE.apparent.mars.directions.sunJupiter))).toBeGreaterThanOrEqual(-1)
 })
 
 test('gravitational deflection matches Skyfield and falls off away from the limb', () => {
@@ -335,14 +387,34 @@ test('gravitational deflection matches Skyfield and falls off away from the limb
 		const expected = PIPELINE_REFERENCE.deflection[name]
 		const observed = observeEphemeris(de421.earth, fixedTarget(expected.target, name), time)!
 		const bare = apparentPosition(observed, { sun: de421.sun, deflectors: [] })
-		const bent = apparentPosition(observed, { sun: de421.sun, deflectors: cases[name] })
-		// Jupiter and Saturn use DE421 barycenters and the ERFA masses. Skyfield deflects
-		// with planet centers 599/699, which moves a limb ray by about 15 mas.
-		const bentTolerance = name.startsWith('solar') ? DIRECTION : 1e-7
 		expectAngularSeparationBelow(bare.direction, expected.noDeflection, DIRECTION)
-		expectAngularSeparationBelow(bent.direction, expected.apparent, bentTolerance)
-		shifts[name] = vecAngle(bare.direction, bent.direction)
-		expect(Math.abs(shifts[name] - expected.shiftRad)).toBeLessThanOrEqual(bentTolerance)
+
+		if (name.startsWith('solar')) {
+			const bent = apparentPosition(observed, { sun: de421.sun, deflectors: cases[name] })
+			expectAngularSeparationBelow(bent.direction, expected.apparent, DIRECTION)
+			shifts[name] = vecAngle(bare.direction, bent.direction)
+			expect(Math.abs(shifts[name] - expected.shiftRad)).toBeLessThanOrEqual(DIRECTION)
+			continue
+		}
+
+		// Skyfield's 599/699 centers are not in DE421. The amplitude oracle is eraLd on the
+		// barycenter state this path actually samples. Skyfield only checks the shift direction.
+		const planetary = name.startsWith('jupiter')
+		const body = planetary ? de421.jupiter : de421.saturn
+		const [position, velocity] = body.stateAt(time)
+		const bent = apparentPosition(observed, { aberration: false, deflectors: cases[name] })
+		const manual = finiteSourceDeflection(observed, [
+			{
+				position,
+				velocity,
+				mass: planetary ? JUPITER_LIGHT_DEFLECTOR_MASS : SATURN_LIGHT_DEFLECTOR_MASS,
+				limiter: planetary ? JUPITER_LIGHT_DEFLECTOR_LIMITER : SATURN_LIGHT_DEFLECTOR_LIMITER,
+			},
+		])
+		expect(vecDistance(bent.direction, manual)).toBeLessThan(1e-12)
+		const aberrated = apparentPosition(observed, { sun: de421.sun, deflectors: cases[name] })
+		expect(vecDot(vecMinus(aberrated.direction, bare.direction), vecMinus(expected.apparent, expected.noDeflection))).toBeGreaterThan(0)
+		shifts[name] = vecAngle(apparentPosition(observed, { aberration: false, deflectors: [] }).direction, bent.direction)
 	}
 
 	expect(shifts.solarLimb).toBeGreaterThan(shifts.solar1deg)
@@ -350,8 +422,6 @@ test('gravitational deflection matches Skyfield and falls off away from the limb
 	expect(shifts.jupiterLimb).toBeGreaterThan(shifts.jupiterAway)
 	expect(shifts.saturnNear).toBeGreaterThan(shifts.saturnAway)
 	expect(toArcsec(shifts.solarLimb)).toBeCloseTo(1.75, 2)
-	expect(shifts.jupiterLimb).toBeGreaterThan(PIPELINE_REFERENCE.deflection.jupiterLimb.shiftRad * 0.4)
-	expect(shifts.saturnNear).toBeGreaterThan(PIPELINE_REFERENCE.deflection.saturnNear.shiftRad * 0.25)
 	const mars = observeEphemeris(de421.earth, de421.mars, time)!
 	const finite = apparentPosition(mars, { sun: de421.sun, deflectors: [sunDeflector(de421.sun)] })
 	const finiteBare = apparentPosition(mars, { sun: de421.sun, deflectors: [] })
@@ -410,10 +480,11 @@ describe('SGP4 GCRS and ITRS states match Astropy and Skyfield', () => {
 			const state = path.stateAt(time)
 			expectState(state, sample.astropy, SGP4_POSITION, SGP4_VELOCITY)
 			expectState(state, sample.skyfield, SGP4_POSITION, SGP4_VELOCITY)
-			expectState(frameToFrame(state, ICRS, ITRS, time), sample.astropyItrs, SGP4_POSITION, SGP4_VELOCITY)
-			const positionOnly = frameAt(state[0], ITRS, time)
 			const full = frameToFrame(state, ICRS, ITRS, time)
-			expect(Math.hypot(full[1][0] - positionOnly[0], full[1][1] - positionOnly[1], full[1][2] - positionOnly[2])).toBeGreaterThan(1e-6)
+			expectState(full, sample.astropyItrs, SGP4_POSITION, SGP4_VELOCITY)
+			// Rotation alone leaves the velocity in AU/day. The gap is the W = dR/dt·Rᵀ term.
+			const rotationOnly = frameAt(state, { rotationAt: ITRS.rotationAt }, time)
+			expect(vecDistance(full[1], rotationOnly[1])).toBeGreaterThan(1e-6)
 		})
 	}
 })

@@ -502,6 +502,17 @@ def main() -> None:
 		apparent[name]['astrometricRa'] = float(ra_a.radians) % (2.0 * math.pi)
 		apparent[name]['astrometricDec'] = float(dec_a.radians)
 
+	# deflectors=() still deflects by the Earth for a surface observer. The geocenter does not.
+	print('diurnal apparent')
+	diurnal = {}
+	for name, code in (('moon', 301), ('mars', 4)):
+		geocentric = earth.observe(de421[code])
+		surface = site_at.observe(de421[code])
+		diurnal[name] = {
+			'geocentric': unit(geocentric.apparent(deflectors=()).xyz.au),
+			'topocentric': unit(surface.apparent(deflectors=()).xyz.au),
+		}
+
 	print('deflection geometry')
 	sun_pos = np.asarray(de421[10].at(t1).position.au, dtype=float).reshape(3)
 	jupiter_pos = np.asarray(de421[5].at(t1).position.au, dtype=float).reshape(3)
@@ -628,6 +639,7 @@ def main() -> None:
 		'astropyBarycentric': astropy_bary,
 		'observe': observe,
 		'topocentric': topocentric,
+		'diurnal': diurnal,
 		'apparent': apparent,
 		'deflection': deflection,
 		'earthSite': earth_site,

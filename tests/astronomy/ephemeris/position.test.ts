@@ -289,24 +289,62 @@ test('correction order is light deflection then aberration', () => {
 	expect(chord(inverted, apparent.direction)).toBeGreaterThan(1e-12)
 })
 
-test('deflector order is observable once motion makes the backtrack depend on direction', () => {
-	// Stationary eraLd updates commute. The undeflected ray lies in each observer-mass-target
-	// plane, so the second-order commutator is identically zero. Along-track velocity makes the
-	// light-time backtrack use the direction left by the previous mass, which is the order
-	// apparentPosition has to preserve. The masses and speeds are exaggerated so that chord
-	// clears 1e-10; a Solar-System pair stays below a double ulp.
+test('deflector order follows the caller list, not merely a difference between orders', () => {
+	// Stationary eraLd updates commute, so this pair moves along the ray. The expected
+	// direction is eraLd applied in one order, backtracking each mass with the direction
+	// left by the previous one. A pipeline that reversed the list would match the other order.
 	const observed = observeEphemeris(barycentric(EARTH, stationary(vecZero(), vecZero())), barycentric(MARS, stationary([1, 0, 0])), TIME)!
-	const approaching = barycentric(SUN, stationary([0.3, 0.001, 0], [15, 0, 0]))
-	const receding = barycentric(naifEphemerisEndpoint(Naif.JUPITER), stationary([0.7, -0.001, 0], [-15, 0, 0]))
-	const deflector = (path: ReturnType<typeof barycentric>) => ({ mass: 100, limiter: 1e-18, path })
-	const forward = apparentPosition(observed, { aberration: false, deflectors: [deflector(approaching), deflector(receding)] })
-	const backward = apparentPosition(observed, { aberration: false, deflectors: [deflector(receding), deflector(approaching)] })
-	const separation = Math.hypot(forward.direction[0] - backward.direction[0], forward.direction[1] - backward.direction[1], forward.direction[2] - backward.direction[2])
-	expect(separation).toBeGreaterThan(1e-10)
-	expect(vecLength(forward.direction)).toBeCloseTo(1, 12)
-	expect(vecLength(backward.direction)).toBeCloseTo(1, 12)
-	expect(forward.direction.every(Number.isFinite)).toBe(true)
-	expect(backward.direction.every(Number.isFinite)).toBe(true)
+	const approaching = { position: [0.3, 0.001, 0] as Vec3, velocity: [15, 0, 0] as Vec3, mass: 100, limiter: 1e-18 }
+	const receding = { position: [0.7, -0.001, 0] as Vec3, velocity: [-15, 0, 0] as Vec3, mass: 100, limiter: 1e-18 }
+	const lightDaysPerAu = LIGHT_TIME_AU / DAYSEC
+	const deflectInOrder = (bodies: readonly (typeof approaching)[]) => {
+		const direction: MutVec3 = [observed.direction[0], observed.direction[1], observed.direction[2]]
+		const [ox, oy, oz] = observed.observerPosition
+		const [tx, ty, tz] = observed.targetEmissionPosition
+
+		for (const body of bodies) {
+			const [bx, by, bz] = body.position
+			const [vx, vy, vz] = body.velocity
+			let delay = (direction[0] * (bx - ox) + direction[1] * (by - oy) + direction[2] * (bz - oz)) * lightDaysPerAu
+			if (!(delay > 0)) delay = 0
+			else if (delay > observed.lightTime) delay = observed.lightTime
+			const cx = bx - delay * vx
+			const cy = by - delay * vy
+			const cz = bz - delay * vz
+			const ex = ox - cx
+			const ey = oy - cy
+			const ez = oz - cz
+			const em = Math.hypot(ex, ey, ez)
+			const qx = tx - cx
+			const qy = ty - cy
+			const qz = tz - cz
+			const qm = Math.hypot(qx, qy, qz)
+			eraLd(body.mass, direction, [qx / qm, qy / qm, qz / qm], [ex / em, ey / em, ez / em], em, body.limiter, direction)
+		}
+
+		return vecDivScalar(direction, vecLength(direction))
+	}
+	const pathFor = (body: typeof approaching) => barycentric(body === approaching ? SUN : naifEphemerisEndpoint(Naif.JUPITER), stationary(body.position, body.velocity))
+	const forward = apparentPosition(observed, {
+		aberration: false,
+		deflectors: [
+			{ mass: approaching.mass, limiter: approaching.limiter, path: pathFor(approaching) },
+			{ mass: receding.mass, limiter: receding.limiter, path: pathFor(receding) },
+		],
+	})
+	const backward = apparentPosition(observed, {
+		aberration: false,
+		deflectors: [
+			{ mass: receding.mass, limiter: receding.limiter, path: pathFor(receding) },
+			{ mass: approaching.mass, limiter: approaching.limiter, path: pathFor(approaching) },
+		],
+	})
+	const expectedForward = deflectInOrder([approaching, receding])
+	const expectedBackward = deflectInOrder([receding, approaching])
+	expect(vecDistance(forward.direction, expectedForward)).toBeLessThan(1e-12)
+	expect(vecDistance(backward.direction, expectedBackward)).toBeLessThan(1e-12)
+	expect(vecDistance(forward.direction, expectedBackward)).toBeGreaterThan(1e-10)
+	expect(vecDistance(backward.direction, expectedForward)).toBeGreaterThan(1e-10)
 })
 
 test('singular directions and tiny or huge separations stay finite when defined', () => {
