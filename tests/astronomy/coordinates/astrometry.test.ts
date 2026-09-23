@@ -58,6 +58,7 @@ test('light-time solution has a bounded iteration count and no direction at coin
 	expect(topocentricDirection(zero, zero, time, 0)).toEqual([0, 0, 0])
 	for (const iterations of [-1, 0.5, Infinity, 17]) {
 		expect(() => lightTimeSolution(zero, zero, time, iterations)).toThrow('lightTimeIterations must be an integer in [0, 16]')
+		expect(() => topocentricDirection(zero, zero, time, iterations)).toThrow('lightTimeIterations must be an integer in [0, 16]')
 	}
 })
 

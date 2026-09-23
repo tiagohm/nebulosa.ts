@@ -191,35 +191,40 @@ export function relativePositionAndVelocity(target: PositionAndVelocityOverTime,
 	]
 }
 
-// Topocentric direction from the observer to a body at reception time `time`, light-time corrected.
-//
-// The observer is sampled at `time` (reception); the body is sampled at the retarded emission time
-// `time - tau`, where tau is the light travel time over the current observer-body distance, refined by
-// `iterations` fixed-point steps (0 leaves the geometric, uncorrected direction). `target` and `observer`
-// must share one origin (typically barycentric ICRS); the common origin cancels in the difference. Returns a
-// freshly allocated non-unit vector whose length is the topocentric distance in AU. Aberration is not applied
-// (it nearly cancels in the differential geometry of two bodies close on the sky, e.g. an occultation or
-// transit), so this is a geometric line of sight, not an apparent place.
-// Iterations must be an integer in [0, 16]; a coincident target returns the zero vector.
-export function topocentricDirection(target: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, time: Time, iterations: number): Vec3 {
-	return lightTimeSolution(target, observer, time, iterations)?.position ?? [0, 0, 0]
+// Buffers for the reception and final-emission samples of a light-time solve.
+// Each buffer is overwritten and must not alias the direction output.
+interface LightTimeSnapshots {
+	// Observer barycentric position at reception, in AU.
+	observerPosition: MutVec3
+	// Observer barycentric velocity at reception, in AU/day.
+	observerVelocity: MutVec3
+	// Target barycentric position from the last emission sample, in AU.
+	targetEmissionPosition: MutVec3
 }
 
-// Solves retarded target geometry by sampling the observer once at reception and
-// the target at emission, then refining emission by the current one-way light time.
-// Performs iterations + 1 target samples, matching topocentricDirection's historical
-// fixed-point semantics. Returns undefined for coincident observer and target.
-// The target-emission snapshot is from the final sample; emissionTime is based on
-// the final vector, which may differ slightly from that sample's input epoch.
-export function lightTimeSolution(target: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, time: Time, iterations: number): LightTimeSolution | undefined {
+// Fixed-point light-time solver shared by topocentricDirection and lightTimeSolution.
+// Samples the observer once at reception and the target `iterations` + 1 times.
+// Writes each observer-to-target sample into `out` and leaves the final vector
+// there, in AU. Returns that vector's length in AU. When it is not positive, zeroes
+// `out` and returns undefined.
+// Omitting `snapshots` skips the reception and emission copies. When present, the
+// components are copied before a later provider sample can reuse its storage, and
+// the buffers must not alias `out`. Iterations must be an integer in [0, 16].
+function solveLightTime(target: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, time: Time, iterations: number, out: MutVec3, snapshots?: LightTimeSnapshots): number | undefined {
 	validateLightTimeIterations(iterations)
-	const [observerPosition, observerVelocity] = observer(time)
-	const [ox, oy, oz] = observerPosition
-	const [ovx, ovy, ovz] = observerVelocity
+	const observed = observer(time)
+	const ox = observed[0][0]
+	const oy = observed[0][1]
+	const oz = observed[0][2]
+	let ovx = 0
+	let ovy = 0
+	let ovz = 0
+	if (snapshots) {
+		ovx = observed[1][0]
+		ovy = observed[1][1]
+		ovz = observed[1][2]
+	}
 	let emission = time
-	let px = 0
-	let py = 0
-	let pz = 0
 	let tx = 0
 	let ty = 0
 	let tz = 0
@@ -228,25 +233,65 @@ export function lightTimeSolution(target: PositionAndVelocityOverTime, observer:
 		tx = targetPosition[0]
 		ty = targetPosition[1]
 		tz = targetPosition[2]
-		px = tx - ox
-		py = ty - oy
-		pz = tz - oz
-		emission = timeShift(time, -lightTime([px, py, pz]))
+		out[0] = tx - ox
+		out[1] = ty - oy
+		out[2] = tz - oz
+		emission = timeShift(time, -lightTime(out))
 	}
-	const position: Vec3 = [px, py, pz]
-	const distance = vecLength(position)
-	if (!(distance > 0)) return undefined
+	const distance = vecLength(out)
+	if (!(distance > 0)) {
+		out[0] = 0
+		out[1] = 0
+		out[2] = 0
+		return undefined
+	}
+	if (snapshots) {
+		snapshots.observerPosition[0] = ox
+		snapshots.observerPosition[1] = oy
+		snapshots.observerPosition[2] = oz
+		snapshots.observerVelocity[0] = ovx
+		snapshots.observerVelocity[1] = ovy
+		snapshots.observerVelocity[2] = ovz
+		snapshots.targetEmissionPosition[0] = tx
+		snapshots.targetEmissionPosition[1] = ty
+		snapshots.targetEmissionPosition[2] = tz
+	}
+	return distance
+}
+
+// Topocentric direction from the observer to a body at reception time `time`, light-time corrected.
+//
+// The observer is sampled at `time` (reception); the body is sampled at the retarded emission time
+// `time - tau`, where tau is the light travel time over the current observer-body distance, refined by
+// `iterations` fixed-point steps (0 leaves the geometric, uncorrected direction). `target` and `observer`
+// must share one origin (typically barycentric ICRS); the common origin cancels in the difference. Returns a
+// freshly allocated non-unit vector whose length is the topocentric distance in AU. Aberration is not applied
+// (it nearly cancels in the differential geometry of two bodies close on the sky, e.g. an occultation or
+// transit), so this is a geometric line of sight, not an apparent place. Reception and emission snapshots
+// are not retained.
+// Iterations must be an integer in [0, 16]; a coincident target returns the zero vector.
+export function topocentricDirection(target: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, time: Time, iterations: number): Vec3 {
+	const position: MutVec3 = [0, 0, 0]
+	solveLightTime(target, observer, time, iterations, position)
+	return position
+}
+
+// Solves retarded target geometry by sampling the observer once at reception and
+// the target at emission, then refining emission by the current one-way light time.
+// Performs iterations + 1 target samples, matching topocentricDirection's historical
+// fixed-point semantics. Returns undefined for coincident observer and target.
+// The target-emission snapshot is from the final sample; emissionTime is based on
+// the final vector, which may differ slightly from that sample's input epoch.
+// All returned vectors are owned.
+export function lightTimeSolution(target: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, time: Time, iterations: number): LightTimeSolution | undefined {
+	const position: MutVec3 = [0, 0, 0]
+	const observerPosition: MutVec3 = [0, 0, 0]
+	const observerVelocity: MutVec3 = [0, 0, 0]
+	const targetEmissionPosition: MutVec3 = [0, 0, 0]
+	const distance = solveLightTime(target, observer, time, iterations, position, { observerPosition, observerVelocity, targetEmissionPosition })
+	if (distance === undefined) return undefined
 	const tau = lightTime(position)
-	return {
-		time,
-		emissionTime: timeShift(time, -tau),
-		observerPosition: [ox, oy, oz],
-		observerVelocity: [ovx, ovy, ovz],
-		targetEmissionPosition: [tx, ty, tz],
-		position,
-		distance,
-		lightTime: tau,
-	}
+	return { time, emissionTime: timeShift(time, -tau), observerPosition, observerVelocity, targetEmissionPosition, position, distance, lightTime: tau }
 }
 
 // Computes the phase angle of a body: the Sun-body-observer angle measured at the
