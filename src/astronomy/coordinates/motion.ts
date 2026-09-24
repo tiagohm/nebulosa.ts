@@ -11,6 +11,10 @@ import { eraS2c } from './erfa/erfa'
 // not invent a nearly full-turn rate. The total angular rate is the great-circle rate,
 // hypot(Δlongitude · cos(latitude), Δlatitude) / Δt, using the mean latitude of the two endpoints.
 
+// Dot-product distance from -1 treated as numerically antipodal. Thirty-two double-precision ulps
+// reject only legs within roughly 0.03 arcsecond of π, where the log-map tangent is ill-conditioned.
+const ANTIPODAL_DOT_TOLERANCE = 32 * Number.EPSILON
+
 // One spherical position at a time.
 export interface SphericalMotionSample {
 	// Longitude, or right ascension, in radians.
@@ -102,7 +106,7 @@ function tangentialAcceleration(first: SphericalMotionSample, middle: SphericalM
 	const outgoingY = c[1] - outgoingDot * b[1]
 	const outgoingZ = c[2] - outgoingDot * b[2]
 	const outgoingNorm = Math.hypot(outgoingX, outgoingY, outgoingZ)
-	if ((incomingNorm === 0 && incomingDot < 0) || (outgoingNorm === 0 && outgoingDot < 0)) return undefined
+	if (incomingDot <= -1 + ANTIPODAL_DOT_TOLERANCE || outgoingDot <= -1 + ANTIPODAL_DOT_TOLERANCE) return undefined
 
 	const incomingScale = incomingNorm === 0 ? 0 : Math.atan2(incomingNorm, incomingDot) / (before * incomingNorm)
 	const outgoingScale = outgoingNorm === 0 ? 0 : Math.atan2(outgoingNorm, outgoingDot) / (after * outgoingNorm)

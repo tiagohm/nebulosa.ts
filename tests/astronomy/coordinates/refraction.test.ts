@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { parallacticAngle, unrefractedAltitude } from '../../../src/astronomy/coordinates/astrometry'
 import { atmosphericDispersion, differentialRefraction, refractiveDisplacement } from '../../../src/astronomy/coordinates/refraction'
-import { DEG2RAD, PIOVERTWO } from '../../../src/core/constants'
+import { ARCSEC_PER_RADIAN, DEG2RAD, PIOVERTWO } from '../../../src/core/constants'
 
 test('differential refraction uses the bounded observed-place model and puts blue higher', () => {
 	const altitude = 45 * DEG2RAD
@@ -31,6 +31,10 @@ test('refractive displacement stays finite, positive, and model-consistent near 
 		expect(difference!).toBeFinite()
 		expect(difference!).toBeGreaterThan(0)
 	}
+
+	// PyERFA 2.0.1.5 refco coefficients evaluated with SOFA eraAtioq's bounded correction and an
+	// independent bisection inversion give 646.928433594 arcsec at 1° apparent altitude.
+	expect(refractiveDisplacement(DEG2RAD, 0.55)! * ARCSEC_PER_RADIAN).toBeCloseTo(646.928433594, 9)
 })
 
 test('dispersion length is the band difference and its direction is the parallactic angle', () => {

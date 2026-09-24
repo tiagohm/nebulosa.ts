@@ -159,12 +159,17 @@ function appendCrossing(crossings: HorizonCrossing[], point: HorizontalPathSampl
 // `rise` is the opposite. A path of fewer than two samples has no segment to cross. Each path segment
 // is subdivided at every horizon knot on its short azimuth arc. Within each resulting interval both
 // the path and mask are linear, so its one possible root is solved directly and internal peaks or
-// valleys can produce two crossings in the original segment.
+// valleys can produce two crossings in the original segment. Exact-zero samples and plateaus are
+// classified from the nearest nonzero clearance on both temporal sides.
 export function horizonCrossings(path: readonly HorizontalPathSample[], horizon: readonly HorizonSample[]): readonly HorizonCrossing[] {
 	if (path.length < 2) return []
 	const ordered = path.toSorted((a, b) => a.time - b.time)
 	const prepared = prepareHorizonProfile(horizon)
 	const crossings: HorizonCrossing[] = []
+	let previousPoint: HorizontalPathSample | undefined
+	let previousClearance: number | undefined
+	let lastNonzeroClearance: number | undefined
+	let zeroStart: HorizontalPathSample | undefined
 
 	for (let i = 0; i < ordered.length - 1; i++) {
 		const from = ordered[i]
@@ -173,28 +178,31 @@ export function horizonCrossings(path: readonly HorizontalPathSample[], horizon:
 
 		const fractions = segmentFractions(from, to, prepared)
 		const points = fractions.map((fraction) => pointOnSegment(from, to, fraction))
-		const clearances = points.map((point) => clearance(point, prepared))
 
-		for (let j = 0; j < points.length - 1; j++) {
-			const left = points[j]
-			const right = points[j + 1]
-			const leftClearance = clearances[j]
-			const rightClearance = clearances[j + 1]
-			if (left === undefined || right === undefined || leftClearance === undefined || rightClearance === undefined) continue
+		for (let j = 0; j < points.length; j++) {
+			const point = points[j]
+			if (point === undefined || (previousPoint !== undefined && point.time === previousPoint.time)) continue
+			const currentClearance = clearance(point, prepared)
 
-			if (leftClearance === 0) {
-				const previousClearance = clearances[j - 1]
-				if (previousClearance === undefined || previousClearance > 0 !== rightClearance > 0) {
-					const kind = rightClearance < 0 ? 'set' : rightClearance > 0 ? 'rise' : undefined
-					if (kind !== undefined) appendCrossing(crossings, left, kind)
+			if (currentClearance === 0) {
+				zeroStart ??= point
+			} else if (zeroStart !== undefined) {
+				if (lastNonzeroClearance === undefined || lastNonzeroClearance > 0 !== currentClearance > 0) {
+					appendCrossing(crossings, zeroStart, currentClearance > 0 ? 'rise' : 'set')
 				}
-				continue
+				zeroStart = undefined
+				lastNonzeroClearance = currentClearance
+			} else if (previousPoint !== undefined && previousClearance !== undefined && previousClearance > 0 !== currentClearance > 0) {
+				const fraction = Math.abs(previousClearance) / (Math.abs(previousClearance) + Math.abs(currentClearance))
+				const root = pointOnSegment(previousPoint, point, fraction)
+				appendCrossing(crossings, root, previousClearance > 0 ? 'set' : 'rise')
+				lastNonzeroClearance = currentClearance
+			} else {
+				lastNonzeroClearance = currentClearance
 			}
 
-			if (rightClearance === 0 || leftClearance > 0 === rightClearance > 0) continue
-			const fraction = Math.abs(leftClearance) / (Math.abs(leftClearance) + Math.abs(rightClearance))
-			const root = pointOnSegment(left, right, fraction)
-			appendCrossing(crossings, root, leftClearance > 0 ? 'set' : 'rise')
+			previousPoint = point
+			previousClearance = currentClearance
 		}
 	}
 

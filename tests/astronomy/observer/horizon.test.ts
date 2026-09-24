@@ -111,3 +111,18 @@ test('one path segment is split at every horizon knot', () => {
 	expect(crossings.map((crossing) => crossing.kind)).toEqual(['set', 'rise', 'set', 'rise'])
 	expect(crossings.map((crossing) => crossing.time)).toEqual([0.125, 0.375, 0.625, 0.875])
 })
+
+test('a zero at a shared path sample is classified from both sides', () => {
+	const horizon = [{ azimuth: 0, minimumAltitude: 0 }]
+	const crossingsFor = (altitudes: readonly number[]) =>
+		horizonCrossings(
+			altitudes.map((altitude, time) => ({ time, altitude: altitude * DEG2RAD, azimuth: time })),
+			horizon,
+		).map((crossing) => crossing.kind)
+
+	expect(crossingsFor([10, 0, 10])).toEqual([])
+	expect(crossingsFor([-10, 0, -10])).toEqual([])
+	expect(crossingsFor([10, 0, -10])).toEqual(['set'])
+	expect(crossingsFor([-10, 0, 10])).toEqual(['rise'])
+	expect(crossingsFor([10, 0, 0, 10])).toEqual([])
+})

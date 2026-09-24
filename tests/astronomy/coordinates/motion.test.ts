@@ -71,3 +71,33 @@ test('tangential acceleration supports non-uniform samples and longitude wrap', 
 	])
 	expect(meridian?.angularAccelerationPerDaySquared).toBeCloseTo(0, 12)
 })
+
+test('antipodal legs omit their undefined tangent without rejecting ordinary long legs', () => {
+	const equatorialAntipode = angularMotionOrDifferentialTrackingRate([
+		{ longitude: 0, latitude: 0, timeDays: 0 },
+		{ longitude: Math.PI, latitude: 0, timeDays: 1 },
+		{ longitude: Math.PI + 0.1, latitude: 0, timeDays: 2 },
+	])
+	expect(equatorialAntipode?.angularAccelerationPerDaySquared).toBeUndefined()
+
+	const polarAntipode = angularMotionOrDifferentialTrackingRate([
+		{ longitude: 0, latitude: PIOVERTWO, timeDays: 0 },
+		{ longitude: 0, latitude: -PIOVERTWO, timeDays: 1 },
+		{ longitude: 0, latitude: -PIOVERTWO + 0.1, timeDays: 2 },
+	])
+	expect(polarAntipode?.angularAccelerationPerDaySquared).toBeUndefined()
+
+	const longButDefined = angularMotionOrDifferentialTrackingRate([
+		{ longitude: 0, latitude: 0, timeDays: 0 },
+		{ longitude: Math.PI - 1e-5, latitude: 0, timeDays: 1 },
+		{ longitude: Math.PI - 1e-5 + 0.1, latitude: 0, timeDays: 2 },
+	])
+	expect(longButDefined?.angularAccelerationPerDaySquared).toBeFinite()
+
+	const wrapped = angularMotionOrDifferentialTrackingRate([
+		{ longitude: 359 * DEG2RAD, latitude: 0, timeDays: 0 },
+		{ longitude: 0, latitude: 0, timeDays: 1 },
+		{ longitude: DEG2RAD, latitude: 0, timeDays: 2 },
+	])
+	expect(wrapped?.angularAccelerationPerDaySquared).toBeDefined()
+})
