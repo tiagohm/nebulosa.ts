@@ -5,6 +5,12 @@ import { bitpixInBytes } from '../../io/formats/fits/util'
 import type { Rect, Size } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
 import { meanOf, medianAbsoluteDeviationOf, medianOf } from '../../math/numerical/statistics'
+import type { StreakClass, StreakClassification, StreakClassificationContext, StreakClassifierOptions } from '../analysis/streak/classification.types'
+import { classifyStreaks } from '../analysis/streak/classifier'
+import { detectStreaks } from '../analysis/streak/detector'
+import { createStreakMask, type StreakMask, type StreakMaskOptions } from '../analysis/streak/mask'
+import type { Streak, StreakDetectionOptions } from '../analysis/streak/types'
+import type { StreakDetectionWorkspace } from '../analysis/streak/workspace'
 import { type Image, type ImageRawPrecision, type ImageRawType, makeImageRawTypedArray, shiftCfaPattern } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 import type { SigmaClipCenterMethod, SigmaClipDispersionMethod } from './computation'
@@ -20,6 +26,7 @@ import { measureSubframeQuality, type SubframeQualityMetrics } from './subframe.
 // per-frame acceptance diagnostics, coverage, and combination statistics. Drizzle deposits square
 // drops without resampling, optionally reconstructing CFA as RGB. Means preserve normalized intensity
 // (which may exceed [0,1]); Drizzle sum preserves distributed samples before masking/cropping.
+// Optional source-coordinate streak masks exclude kernel support, normalization pairs and drops.
 
 // Reconstruction following registration; resample preserves the existing interpolation pipeline.
 export type StackingReconstructionMode = 'resample' | 'drizzle' | 'cfaDrizzle'
@@ -73,6 +80,7 @@ export type FrameRejectionReason =
 	| 'no-overlap'
 	| 'insufficient-overlap'
 	| 'normalization-failed'
+	| 'streak-contamination-too-high'
 
 // One input frame: its image, detected stars, and optional identity/weight.
 export interface StackingFrame {
@@ -80,6 +88,56 @@ export interface StackingFrame {
 	readonly stars: readonly DetectedStar[]
 	readonly id?: string | number
 	readonly weight?: number
+	// Precomputed detections in this image's zero-based pixel centers, x right and y down.
+	readonly streaks?: readonly Streak[]
+	// Authoritative source-grid rejection mask, even when streaks or class filters are supplied.
+	readonly streakMask?: StreakMask
+	// Optional classifications in streak order, avoiding duplicate analysis when filtering classes.
+	readonly streakClassifications?: readonly StreakClassification[]
+	// Optional frame-specific evidence used only when classification policy requires classification.
+	readonly streakClassificationContext?: Readonly<StreakClassificationContext>
+}
+
+// Opt-in streak analysis; no detector or classifier runs while disabled.
+export interface StackingStreakOptions {
+	// Defaults to false, including when only precomputed frame masks are present.
+	readonly enabled?: boolean
+	// Detection settings used only when neither a mask nor detections were supplied.
+	readonly detection?: StreakDetectionOptions
+	// Source-pixel dilation and width policy for supplied or detected segments.
+	readonly mask?: StreakMaskOptions
+	// Classes to mask. Absent means every detection; an empty list preserves all classes.
+	readonly classes?: readonly StreakClass[]
+	// Minimum classifier confidence in [0,1], distinct from detector confidence; default zero.
+	readonly minClassificationConfidence?: number
+	// Optional classifier settings; classification runs only when classes or confidence are specified.
+	readonly classification?: StreakClassifierOptions
+	// Reject a whole frame only when its masked fraction exceeds this optional [0,1] threshold.
+	readonly maxMaskedFraction?: number
+	// Caller-owned detector workspace reused synchronously; must fit the detector's analysis plane.
+	readonly workspace?: StreakDetectionWorkspace
+}
+
+// Compact source-grid statistics retained after processing; contains no image or mask buffers.
+export interface FrameStreakDiagnostics {
+	// Number of supplied or detected streaks before class filtering; zero for a mask alone.
+	readonly detectedCount: number
+	// Number of excluded input pixels, counting overlaps once.
+	readonly maskedPixels: number
+	// Excluded fraction of the input image, before interpolation support expansion.
+	readonly maskedFraction: number
+	// Counts before policy filtering, present only when classifications are available.
+	readonly classes?: Readonly<Record<StreakClass, number>>
+}
+
+// Ephemeral source analysis. Live stacking retains only the reference mask for photometric pairing.
+interface PreparedStackingFrame extends StackingFrame {
+	// Mask used by numerical paths; absent when disabled or empty.
+	readonly rejectionMask?: Uint8Array
+	// Compact diagnostics; absent when disabled or the image shape is invalid.
+	readonly streakDiagnostics?: FrameStreakDiagnostics
+	// Whether the explicitly configured contamination limit was exceeded.
+	readonly streakRejected?: boolean
 }
 
 // Selection of the batch reference frame.
@@ -145,6 +203,8 @@ export interface FrameAcceptanceResult {
 	readonly overlapFraction: number
 	readonly quality: StackingFrameQualityMetrics
 	readonly normalization?: FrameNormalizationSummary
+	// Source-frame contamination measurements, unaffected by output cropping or registration.
+	readonly streaks?: FrameStreakDiagnostics
 }
 
 // Pixel bounds of the stacked output (a rectangle with its size).
@@ -211,6 +271,8 @@ export interface StackResult {
 
 // Public stacking configuration; omitted fields use the module defaults.
 export interface StackingOptions {
+	// Optional localized rejection, disabled by default.
+	readonly streaks?: StackingStreakOptions
 	// Defaults to resample. Drizzle supports sum/average/weighted-average and global normalization.
 	readonly reconstructionMode?: StackingReconstructionMode
 	// Ignored in resample, as is interpolationMode in Drizzle.
@@ -254,7 +316,9 @@ export interface StackingOptions {
 }
 
 // StackingOptions with every field resolved to a concrete value.
-interface ResolvedStackingOptions extends Required<Omit<StackingOptions, 'sigmaClip' | 'minMaxRejection' | 'winsorization' | 'percentileClip' | 'batchReference' | 'matchStarsConfig' | 'localNormalization' | 'drizzle'>> {
+interface ResolvedStackingOptions extends Required<Omit<StackingOptions, 'sigmaClip' | 'minMaxRejection' | 'winsorization' | 'percentileClip' | 'batchReference' | 'matchStarsConfig' | 'localNormalization' | 'drizzle' | 'streaks'>> {
+	// Unresolved opt-in analysis settings; ignored unless enabled is true.
+	readonly streaks?: StackingStreakOptions
 	// Drop parameters and numeric-buffer budget, resolved only for Drizzle reconstruction.
 	readonly drizzle: Required<DrizzleStackingOptions>
 	readonly sigmaClip: Required<SigmaClipStackingOptions>
@@ -382,14 +446,53 @@ function resolveStackingOptions(options: StackingOptions = {}): ResolvedStacking
 	}
 }
 
+// Resolves source analysis once. Supplied masks bypass both detection and classification; their
+// dimensions must match the image, otherwise rejection would silently target unrelated pixels.
+// Classification arrays correspond to the full detection list, before filtering by caller policy.
+function prepareStackingFrame(frame: StackingFrame, options: StackingStreakOptions | undefined): PreparedStackingFrame {
+	if (!options?.enabled || !isImageShapeValid(frame.image)) return frame
+	const { width, height } = frame.image.metadata
+	let mask = frame.streakMask
+	const streaks = frame.streaks ?? (mask === undefined ? detectStreaks(frame.image, options.detection, options.workspace) : [])
+	let classifications = frame.streakClassifications
+	let selected = streaks
+	if (mask === undefined && (options.classes !== undefined || options.minClassificationConfidence !== undefined)) {
+		classifications ??= classifyStreaks(streaks, { image: frame.image, stars: frame.stars, ...frame.streakClassificationContext }, options.classification)
+		// A misaligned classification list could preserve a contaminated trail under another's class.
+		if (classifications.length !== streaks.length) throw new RangeError('streak classifications must correspond to the supplied streaks')
+		const classified = classifications
+		selected = streaks.filter((_streak, index) => (options.classes === undefined || options.classes.includes(classified[index].class)) && classified[index].confidence >= (options.minClassificationConfidence ?? 0))
+	}
+	if (mask === undefined && selected.length > 0) mask = createStreakMask(width, height, selected, options.mask)
+	if (mask !== undefined && (mask.width !== width || mask.height !== height || mask.raw.length !== width * height)) throw new RangeError('streak mask must match the source image dimensions')
+	let classes: Record<StreakClass, number> | undefined
+	if (classifications !== undefined) {
+		classes = { meteor: 0, satellite: 0, airplane: 0, movingObject: 0, trackingFailure: 0, opticalArtifact: 0, sensorArtifact: 0, unknown: 0 }
+		for (const classification of classifications) classes[classification.class]++
+	}
+	const diagnostics: FrameStreakDiagnostics = { detectedCount: streaks.length, maskedPixels: mask?.maskedPixels ?? 0, maskedFraction: mask?.maskedFraction ?? 0, classes }
+	// Do not retain classifier evidence or caller-supplied historical images with a live reference.
+	return { image: frame.image, stars: frame.stars, id: frame.id, weight: frame.weight, rejectionMask: mask?.maskedPixels ? mask.raw : undefined, streakDiagnostics: diagnostics, streakRejected: options.maxMaskedFraction !== undefined && diagnostics.maskedFraction > options.maxMaskedFraction }
+}
+
+// Allocates source-grid validity for reference accumulation; rejection bytes exclude all channels.
+function sourceValidity(frame: PreparedStackingFrame): Uint8Array {
+	const valid = fullMask(frame.image.metadata.pixelCount)
+	if (frame.rejectionMask !== undefined) {
+		for (let pixel = 0; pixel < valid.length; pixel++) if (frame.rejectionMask[pixel] !== 0) valid[pixel] = 0
+	}
+	return valid
+}
+
 // Projects stacking registration policy onto the reusable image-registration API.
-function registrationOptions(options: ResolvedStackingOptions, outputRaw?: ImageRawType, validityMask?: Uint8Array) {
+function registrationOptions(options: ResolvedStackingOptions, outputRaw?: ImageRawType, validityMask?: Uint8Array, rejectionMask?: Uint8Array) {
 	return {
 		matchStarsConfig: options.matchStarsConfig,
 		interpolationMode: options.interpolationMode,
 		outputPrecision: options.samplePrecision,
 		outputRaw,
 		validityMask,
+		rejectionMask,
 		acceptance: {
 			minInliers: options.minAcceptedInliers,
 			maxRmsError: options.maxAcceptedTransformError,
@@ -423,7 +526,7 @@ export function isLiveCombinationMethodSupported(method: StackingCombinationMeth
 // Implements live stacking and exposes a batch helper through the same API surface.
 export class LiveStacker {
 	#options: ResolvedStackingOptions = DEFAULT_STACKING_OPTIONS
-	#referenceFrame?: StackingFrame
+	#referenceFrame?: PreparedStackingFrame
 	#referenceIndex = -1
 	#diagnostics: FrameAcceptanceResult[] = []
 	#acceptedFrames = 0
@@ -463,10 +566,21 @@ export class LiveStacker {
 
 	// Adds a single frame to the live stack when the method supports exact incremental updates.
 	add(frame: StackingFrame): FrameAcceptanceResult {
+		const prepared = prepareStackingFrame(frame, this.#options.streaks)
+		const result = this.#add(prepared)
+		if (prepared.streakDiagnostics === undefined) return result
+		const diagnostic = { ...result, streaks: prepared.streakDiagnostics }
+		this.#diagnostics[this.#diagnostics.length - 1] = diagnostic
+		return diagnostic
+	}
+
+	// Accumulates one prepared frame; incoming masks are not stored in the diagnostic history.
+	#add(frame: PreparedStackingFrame): FrameAcceptanceResult {
 		const frameIndex = this.#diagnostics.length
 		const quality = measureSubframeQuality(frame)
 
 		if (!isImageShapeValid(frame.image)) return this.#reject(frameIndex, frame, quality, 'invalid-image-shape')
+		if (frame.streakRejected) return this.#reject(frameIndex, frame, quality, 'streak-contamination-too-high')
 		if (!isLiveCombinationMethodSupported(this.#options.combinationMethod)) return this.#reject(frameIndex, frame, quality, 'combination-method-not-supported-in-live-mode')
 		if (this.#options.reconstructionMode !== 'resample') {
 			const incompatibility = drizzleFrameFailure(frame, this.#options)
@@ -514,7 +628,7 @@ export class LiveStacker {
 		if (this.#referenceFrame.stars.length < this.#options.minAcceptedStars) return this.#reject(frameIndex, frame, quality, 'reference-has-no-stars')
 
 		this.#ensureWorkBuffers(this.#referenceFrame.image.metadata.pixelCount * this.#referenceFrame.image.metadata.channels, this.#referenceFrame.image.raw.BYTES_PER_ELEMENT)
-		const registration = registerImage(this.#referenceFrame, frame, registrationOptions(this.#options, this.#workRaw, this.#workMask))
+		const registration = registerImage(this.#referenceFrame, frame, registrationOptions(this.#options, this.#workRaw, this.#workMask, frame.rejectionMask))
 		if (!registration.success) return this.#reject(frameIndex, frame, quality, stackingRegistrationFailureReason(registration.reason))
 
 		const { raw } = registration.image
@@ -553,7 +667,7 @@ export class LiveStacker {
 	}
 
 	// Initializes the live stack with the first accepted reference frame.
-	#acceptReferenceFrame(frame: StackingFrame, frameIndex: number, quality: StackingFrameQualityMetrics) {
+	#acceptReferenceFrame(frame: PreparedStackingFrame, frameIndex: number, quality: StackingFrameQualityMetrics) {
 		const { channels, pixelCount } = frame.image.metadata
 		this.#referenceFrame = frame
 		this.#referenceIndex = frameIndex
@@ -564,7 +678,7 @@ export class LiveStacker {
 		this.#workRaw = undefined
 		this.#workMask = undefined
 		const weight = resolveFrameWeight(frame, quality, this.#options)
-		accumulateAlignedFrame(channels, frame.image.raw, fullMask(pixelCount), this.#sum, this.#weightSum, this.#coverageMap, this.#options.combinationMethod, weight)
+		accumulateAlignedFrame(channels, frame.image.raw, sourceValidity(frame), this.#sum, this.#weightSum, this.#coverageMap, this.#options.combinationMethod, weight)
 	}
 
 	// Records a structured rejection result. `overlapFraction` defaults to 0 for the failures that happen
@@ -590,11 +704,32 @@ export class LiveStacker {
 // Executes a full batch stack with deterministic diagnostics.
 export function stackFrames(frames: readonly StackingFrame[], options: StackingOptions = {}): StackResult {
 	const resolved = resolveStackingOptions(options)
+	const prepared: readonly PreparedStackingFrame[] = resolved.streaks?.enabled ? frames.map((frame) => prepareStackingFrame(frame, resolved.streaks)) : frames
+	const result = stackPreparedFrames(prepared, resolved)
+	if (!resolved.streaks?.enabled) return result
+	return { ...result, diagnostics: result.diagnostics.map((diagnostic) => Object.assign({}, diagnostic, { streaks: prepared[diagnostic.frameIndex].streakDiagnostics })) }
+}
+
+// Stacks prepared frames without invoking analysis from registration or combination loops.
+function stackPreparedFrames(frames: readonly PreparedStackingFrame[], resolved: ResolvedStackingOptions): StackResult {
 	if (frames.length === 0) return emptyStackResult(resolved, -1, [])
 	const qualities = frames.map(measureSubframeQuality)
 	const referenceIndex = selectReferenceFrameIndex(frames, qualities, resolved)
 	if (resolved.reconstructionMode !== 'resample') return stackDrizzleFrames(frames, qualities, referenceIndex, resolved)
+	if (referenceIndex < 0) {
+		const result = frames.map((frame, frameIndex): FrameAcceptanceResult => ({
+			accepted: false,
+			frameIndex,
+			frameId: frame.id,
+			overlapFraction: 0,
+			quality: qualities[frameIndex],
+			reason: frame.streakRejected ? 'streak-contamination-too-high' : !isImageShapeValid(frame.image) ? 'invalid-image-shape' : 'too-few-stars',
+		}))
+		return emptyStackResult(resolved, -1, result)
+	}
+
 	const referenceFrame = frames[referenceIndex]
+	if (referenceFrame.streakRejected) return emptyStackResult(resolved, referenceIndex, [{ accepted: false, frameIndex: referenceIndex, frameId: referenceFrame.id, overlapFraction: 0, quality: qualities[referenceIndex], reason: 'streak-contamination-too-high' }])
 
 	if (!isImageShapeValid(referenceFrame.image)) {
 		return emptyStackResult(resolved, referenceIndex, [{ accepted: false, frameIndex: referenceIndex, frameId: referenceFrame.id, overlapFraction: 0, quality: qualities[referenceIndex], reason: 'invalid-image-shape' }])
@@ -614,7 +749,7 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 	const weightSum = new Float64Array(pixelCount)
 	const referenceWeight = resolveFrameWeight(referenceFrame, qualities[referenceIndex], resolved)
 	const referenceNormalization = { scales: channelArray(channels, 1), offsets: channelArray(channels, 0), weight: referenceWeight }
-	const referenceValid = fullMask(pixelCount)
+	const referenceValid = sourceValidity(referenceFrame)
 	let acceptedCount = 1
 	incrementCoverage(coverageMap, referenceValid)
 
@@ -632,6 +767,11 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 
 		const frame = frames[i]
 		const quality = qualities[i]
+
+		if (frame.streakRejected) {
+			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction: 0, quality, reason: 'streak-contamination-too-high' })
+			continue
+		}
 
 		if (!isImageShapeValid(frame.image)) {
 			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction: 0, quality, reason: 'invalid-image-shape' })
@@ -653,7 +793,7 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 			continue
 		}
 
-		const registration = registerImage(referenceFrame, frame, registrationOptions(resolved))
+		const registration = registerImage(referenceFrame, frame, registrationOptions(resolved, undefined, undefined, frame.rejectionMask))
 
 		if (!registration.success) {
 			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction: 0, quality, reason: stackingRegistrationFailureReason(registration.reason) })
@@ -724,7 +864,7 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 }
 
 // Selects the reference frame according to the configured batch strategy.
-function selectReferenceFrameIndex(frames: readonly StackingFrame[], qualities: readonly StackingFrameQualityMetrics[], options: ResolvedStackingOptions) {
+function selectReferenceFrameIndex(frames: readonly PreparedStackingFrame[], qualities: readonly StackingFrameQualityMetrics[], options: ResolvedStackingOptions) {
 	if (options.batchReference.mode === 'index') {
 		if (!(options.batchReference.index >= 0) || options.batchReference.index >= frames.length) throw new RangeError(`reference frame index ${options.batchReference.index} is out of range for ${frames.length} frames`)
 		return options.batchReference.index
@@ -735,13 +875,14 @@ function selectReferenceFrameIndex(frames: readonly StackingFrame[], qualities: 
 		let bestScore = -Infinity
 
 		for (let i = 0; i < frames.length; i++) {
+			if (frames[i].streakRejected) continue
 			if (!isImageShapeValid(frames[i].image)) continue
 			if (options.reconstructionMode !== 'resample' && drizzleFrameFailure(frames[i], options) !== undefined) continue
 			if (!options.allowStarlessReference && qualities[i].starCount < options.minAcceptedStars) continue
 
 			const quality = qualities[i]
 			const starPenalty = quality.starCount >= options.minAcceptedStars ? 1 : 0.25
-			const score = quality.qualityScore * starPenalty - quality.estimatedBackground
+			const score = quality.qualityScore * starPenalty * (1 - (frames[i].streakDiagnostics?.maskedFraction ?? 0)) - quality.estimatedBackground
 
 			if (score > bestScore) {
 				bestScore = score
@@ -753,20 +894,21 @@ function selectReferenceFrameIndex(frames: readonly StackingFrame[], qualities: 
 	}
 
 	for (let i = 0; i < frames.length; i++) {
+		if (frames[i].streakRejected) continue
 		if (!isImageShapeValid(frames[i].image)) continue
 		if (options.reconstructionMode !== 'resample' && drizzleFrameFailure(frames[i], options) !== undefined) continue
 		if (!options.allowStarlessReference && qualities[i].starCount < options.minAcceptedStars) continue
 		return i
 	}
 
-	return options.reconstructionMode === 'resample' ? 0 : -1
+	return options.reconstructionMode === 'resample' && !options.streaks?.enabled ? 0 : -1
 }
 
 // Creates a stored aligned batch sample for the reference frame.
-function makeAlignedReference(frame: StackingFrame, index: number, quality: StackingFrameQualityMetrics, normalization: FrameNormalizationSummary, sum: Float64Array, weightSum: Float64Array, method: StackingCombinationMethod): AlignedFrame {
+function makeAlignedReference(frame: PreparedStackingFrame, index: number, quality: StackingFrameQualityMetrics, normalization: FrameNormalizationSummary, sum: Float64Array, weightSum: Float64Array, method: StackingCombinationMethod): AlignedFrame {
 	const { pixelCount, channels } = frame.image.metadata
 	const raw = frame.image.raw
-	const valid = fullMask(pixelCount)
+	const valid = sourceValidity(frame)
 
 	if (method === 'sum' || method === 'average' || method === 'weighted-average') {
 		accumulateAlignedFrame(channels, raw, valid, sum, weightSum, undefined, method, normalization.weight)
@@ -777,7 +919,7 @@ function makeAlignedReference(frame: StackingFrame, index: number, quality: Stac
 
 // Creates an aligned and normalized batch sample against the reference frame grid. Returns undefined
 // when a `reject` local-normalization fallback fired, so the caller can drop the frame.
-function createAlignedFrame(frame: StackingFrame, index: number, quality: StackingFrameQualityMetrics, referenceFrame: StackingFrame, registration: ImageRegistrationSuccess, options: ResolvedStackingOptions): AlignedFrame | undefined {
+function createAlignedFrame(frame: PreparedStackingFrame, index: number, quality: StackingFrameQualityMetrics, referenceFrame: PreparedStackingFrame, registration: ImageRegistrationSuccess, options: ResolvedStackingOptions): AlignedFrame | undefined {
 	const { channels } = referenceFrame.image.metadata
 	const { raw } = registration.image
 	const valid = registration.validityMask
@@ -1018,7 +1160,7 @@ interface ComputedNormalization {
 // In `local` mode the global solution is still computed first and reported as `scales`/`offsets`: it is
 // the anchor the local model corrects around, and it is what a caller inspecting the summary expects to
 // see. A `reject` fallback surfaces here as a `rejected` transform, not as an exception.
-function computeNormalization(alignedRaw: ImageRawType, valid: Uint8Array, frame: StackingFrame, referenceFrame: StackingFrame, quality: StackingFrameQualityMetrics, options: ResolvedStackingOptions): ComputedNormalization {
+function computeNormalization(alignedRaw: ImageRawType, valid: Uint8Array, frame: PreparedStackingFrame, referenceFrame: PreparedStackingFrame, quality: StackingFrameQualityMetrics, options: ResolvedStackingOptions): ComputedNormalization {
 	const weight = resolveFrameWeight(frame, quality, options)
 	const { width, height, channels } = referenceFrame.image.metadata
 
@@ -1026,6 +1168,16 @@ function computeNormalization(alignedRaw: ImageRawType, valid: Uint8Array, frame
 		const scales = channelArray(channels, 1)
 		const offsets = channelArray(channels, 0)
 		return { transform: { kind: 'global', scales, offsets }, summary: { scales, offsets, weight } }
+	}
+
+	// Pairwise fitting excludes reference contamination without removing clean target contributions
+	// at those same positions. The accumulation mask remains owned by the registration output.
+	if (referenceFrame.rejectionMask !== undefined) {
+		valid = valid.slice()
+		for (let pixel = 0; pixel < valid.length; pixel++) if (referenceFrame.rejectionMask[pixel] !== 0) valid[pixel] = 0
+	}
+	if ((frame.rejectionMask !== undefined || referenceFrame.rejectionMask !== undefined) && !valid.includes(1)) {
+		return { transform: { kind: 'rejected', reason: 'no-valid-overlap' }, summary: { scales: channelArray(channels, 1), offsets: channelArray(channels, 0), weight } }
 	}
 
 	if (options.normalizationMode === 'local') {
@@ -1264,8 +1416,9 @@ function identityTransformSummary(): StackingTransformSummary {
 }
 
 // Rejects inconsistent image shapes or CFA routing before registration or reference selection.
-function drizzleFrameFailure(frame: StackingFrame, options: ResolvedStackingOptions): FrameRejectionReason | undefined {
+function drizzleFrameFailure(frame: PreparedStackingFrame, options: ResolvedStackingOptions): FrameRejectionReason | undefined {
 	if (!isImageShapeValid(frame.image)) return 'invalid-image-shape'
+	if (frame.streakRejected) return 'streak-contamination-too-high'
 	if (options.reconstructionMode === 'drizzle' && frame.image.metadata.bayer !== undefined) return 'bayer-image-requires-cfa-drizzle'
 	if (options.reconstructionMode === 'cfaDrizzle' && (frame.image.metadata.channels !== 1 || frame.image.metadata.bayer === undefined)) return 'cfa-image-required'
 	return undefined
@@ -1273,7 +1426,7 @@ function drizzleFrameFailure(frame: StackingFrame, options: ResolvedStackingOpti
 
 // Prepares identity geometry before allocation, then deposits the reference into a private state.
 // Returns undefined for an unrepresentable footprint; allocation errors leave the live owner empty.
-function initializeDrizzleReference(frame: StackingFrame, frameIndex: number, quality: StackingFrameQualityMetrics, options: ResolvedStackingOptions) {
+function initializeDrizzleReference(frame: PreparedStackingFrame, frameIndex: number, quality: StackingFrameQualityMetrics, options: ResolvedStackingOptions) {
 	const { width, height } = frame.image.metadata
 	const { scale, pixfrac, maxMemoryBytes } = options.drizzle
 	const outputWidth = Math.round(width * scale)
@@ -1287,14 +1440,14 @@ function initializeDrizzleReference(frame: StackingFrame, frameIndex: number, qu
 	const sampleBytes = options.samplePrecision === 'auto' ? frame.image.raw.BYTES_PER_ELEMENT : options.samplePrecision / 8
 	const state = createDrizzleAccumulator(width, height, channels, cfa, scale, options.keepPerPixelStatistics || options.cropMode === 'intersection' || options.minimumCoverage > 0, options.keepPerPixelStatistics, sampleBytes, maxMemoryBytes)
 	const normalization = { scales: channelArray(channels, 1), offsets: channelArray(channels, 0), weight: resolveFrameWeight(frame, quality, options) }
-	depositDrizzle(state, frame.image, footprint, normalization.scales, normalization.offsets, options.combinationMethod === 'weighted-average' ? normalization.weight : 1, 1)
+	depositDrizzle(state, frame.image, footprint, normalization.scales, normalization.offsets, options.combinationMethod === 'weighted-average' ? normalization.weight : 1, 1, frame.rejectionMask)
 	const diagnostic: FrameAcceptanceResult = { accepted: true, frameIndex, frameId: frame.id, quality, overlapFraction: 1, transform: identityTransformSummary(), normalization }
 	return { state, diagnostic }
 }
 
 // Registers, checks overlap, normalizes and deposits one target without retaining its pixels.
 // Rejections occur before accumulator mutation. Geometry is forward; photometric pairs use its inverse.
-function addDrizzleFrame(state: DrizzleAccumulator, reference: StackingFrame, frame: StackingFrame, frameIndex: number, quality: StackingFrameQualityMetrics, acceptedFrames: number, options: ResolvedStackingOptions): FrameAcceptanceResult {
+function addDrizzleFrame(state: DrizzleAccumulator, reference: PreparedStackingFrame, frame: PreparedStackingFrame, frameIndex: number, quality: StackingFrameQualityMetrics, acceptedFrames: number, options: ResolvedStackingOptions): FrameAcceptanceResult {
 	let reason = drizzleFrameFailure(frame, options)
 	let overlapFraction = 0
 	let transform: StackingTransformSummary | undefined
@@ -1319,8 +1472,10 @@ function addDrizzleFrame(state: DrizzleAccumulator, reference: StackingFrame, fr
 				else {
 					// Local mode was rejected once in resolveStackingOptions, before any frame was accepted.
 					const mode = options.normalizationMode as 'none' | GlobalNormalizationMode
-					const normalization = { ...drizzleNormalization(state, reference.image, frame.image, toAffineMatrix(registration.transform.inverseTransform), mode, options.colorHandlingMode), weight: resolveFrameWeight(frame, quality, options) }
-					depositDrizzle(state, frame.image, footprint, normalization.scales, normalization.offsets, options.combinationMethod === 'weighted-average' ? normalization.weight : 1, acceptedFrames + 1)
+					const photometry = drizzleNormalization(state, reference.image, frame.image, toAffineMatrix(registration.transform.inverseTransform), mode, options.colorHandlingMode, reference.rejectionMask, frame.rejectionMask)
+					if (photometry === undefined) return { accepted: false, frameIndex, frameId: frame.id, overlapFraction, quality, transform, reason: 'normalization-failed' }
+					const normalization = { ...photometry, weight: resolveFrameWeight(frame, quality, options) }
+					depositDrizzle(state, frame.image, footprint, normalization.scales, normalization.offsets, options.combinationMethod === 'weighted-average' ? normalization.weight : 1, acceptedFrames + 1, frame.rejectionMask)
 					return { accepted: true, frameIndex, frameId: frame.id, overlapFraction, quality, transform, normalization }
 				}
 			}
@@ -1332,7 +1487,7 @@ function addDrizzleFrame(state: DrizzleAccumulator, reference: StackingFrame, fr
 
 // Executes Drizzle batch reference selection/diagnostics with the same primitive operations as live.
 // Targets are processed in input order after the reference; only one pixel accumulator is retained.
-function stackDrizzleFrames(frames: readonly StackingFrame[], qualities: readonly StackingFrameQualityMetrics[], referenceIndex: number, options: ResolvedStackingOptions): StackResult {
+function stackDrizzleFrames(frames: readonly PreparedStackingFrame[], qualities: readonly StackingFrameQualityMetrics[], referenceIndex: number, options: ResolvedStackingOptions): StackResult {
 	if (referenceIndex < 0) {
 		const diagnostics = frames.map((frame, frameIndex): FrameAcceptanceResult => ({ accepted: false, frameIndex, frameId: frame.id, overlapFraction: 0, quality: qualities[frameIndex], reason: drizzleFrameFailure(frame, options) ?? 'too-few-stars' }))
 		return emptyStackResult(options, -1, diagnostics)

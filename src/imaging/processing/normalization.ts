@@ -59,12 +59,16 @@ export interface NormalizationParameters {
 	readonly offset: number
 }
 
-// Per-channel normalization scales/offsets and the resulting frame weight.
-export interface FrameNormalizationSummary {
+// Per-channel normalized frame scales/offsets.
+export interface NormalizedParameters {
 	// Per-channel multiplicative gain. In local mode these are the global anchor gains.
 	readonly scales: readonly number[]
 	// Per-channel additive pedestal. In local mode these are the global anchor offsets.
 	readonly offsets: readonly number[]
+}
+
+// Per-channel normalization scales/offsets and the resulting frame weight.
+export interface FrameNormalizationSummary extends NormalizedParameters {
 	// Combination weight resolved for the frame.
 	readonly weight: number
 	// Local model diagnostics, present only when local normalization ran.
@@ -539,15 +543,17 @@ export function solveGlobalNormalizationPlanes(currentRaw: ImageRawType, valid: 
 }
 
 // Broadcasts per-plane parameters to per-channel scale/offset arrays.
-export function broadcastNormalizationPlanes(planes: readonly NormalizationParameters[], channels: number) {
+export function broadcastNormalizationPlanes(planes: readonly NormalizationParameters[], channels: number): NormalizedParameters {
 	if (planes.length === 1 && channels > 1) return { scales: channelArray(channels, planes[0].scale), offsets: channelArray(channels, planes[0].offset) }
 
 	const scales = new Array<number>(channels)
 	const offsets = new Array<number>(channels)
+
 	for (let channel = 0; channel < channels; channel++) {
 		scales[channel] = planes[channel].scale
 		offsets[channel] = planes[channel].offset
 	}
+
 	return { scales, offsets }
 }
 

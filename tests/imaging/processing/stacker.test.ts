@@ -1,9 +1,14 @@
 import { describe, expect, test } from 'bun:test'
+import type { StreakClassification } from '../../../src/imaging/analysis/streak/classification.types'
+import { createStreakMask, type StreakMask } from '../../../src/imaging/analysis/streak/mask'
+import type { Streak } from '../../../src/imaging/analysis/streak/types'
+import { createStreakDetectionWorkspace } from '../../../src/imaging/analysis/streak/workspace'
 import { readImageFromBuffer } from '../../../src/imaging/model/image'
 import { type CfaPattern, type Image, shiftCfaPattern } from '../../../src/imaging/model/types'
 import { bayer } from '../../../src/imaging/processing/debayer'
 import { LiveStacker, type StackingFrame, type StackingOptions, stackFrames } from '../../../src/imaging/processing/stacker'
 import type { DetectedStar } from '../../../src/imaging/stars/detector'
+import { renderSyntheticStreak } from '../../../src/imaging/synthetic/streak'
 import { Bitpix, writeFits } from '../../../src/io/formats/fits/fits'
 import { bufferSink } from '../../../src/io/io'
 
@@ -25,6 +30,293 @@ const DEFAULT_STACK_OPTIONS = {
 } as const satisfies StackingOptions
 
 const DRIZZLE_OPTIONS = { ...DEFAULT_STACK_OPTIONS, reconstructionMode: 'drizzle', samplePrecision: 64 } as const satisfies StackingOptions
+
+function rejectionMask(width: number, height: number, rejected: (x: number, y: number) => boolean): StreakMask {
+	const raw = new Uint8Array(width * height)
+	let maskedPixels = 0
+	for (let y = 0; y < height; y++)
+		for (let x = 0; x < width; x++)
+			if (rejected(x, y)) {
+				raw[y * width + x] = 1
+				maskedPixels++
+			}
+	return { width, height, raw, maskedPixels, maskedFraction: maskedPixels / raw.length }
+}
+
+function measuredStreak(y: number, start = -4, end = 24): Streak {
+	return { start: { x: start, y }, end: { x: end, y }, center: { x: (start + end) / 2, y }, length: end - start, width: 1, angle: 0, linearity: 1, rmsResidual: 0, coverage: 1, supportPixels: end - start, clippedAtBorder: true, flux: 100, meanSignal: 1, peakSignal: 1, confidence: 1 }
+}
+
+describe('streak masking in stacking', () => {
+	test('automatic detection reuses caller workspace and live diagnostics retain only compact statistics', () => {
+		const image = makeImage(128, 128, 1, 0.1)
+		renderSyntheticStreak(image, { start: { x: 20, y: 64 }, end: { x: 108, y: 64 }, width: 3, intensity: 0.8 })
+		const workspace = createStreakDetectionWorkspace(128, 128)
+		const options = { ...DEFAULT_STACK_OPTIONS, streaks: { enabled: true, detection: { minLength: 30, maxWidth: 8, backgroundCellSize: 32 }, mask: { dilation: 4 }, workspace } } as const
+		const frame = makeFrame(image, makeStars())
+		const batch = stackFrames([frame], options)
+		expect(batch.diagnostics[0].streaks!.detectedCount).toBeGreaterThan(0)
+		expect(batch.validityMask![64 * 128 + 64]).toBe(0)
+		expect(batch.validityMask![30 * 128 + 64]).toBe(1)
+		const live = new LiveStacker(options)
+		for (let i = 0; i < 8; i++) {
+			const diagnostic = live.add(frame)
+			expect(diagnostic.streaks).toEqual(batch.diagnostics[0].streaks)
+			expect(Object.keys(diagnostic.streaks!).sort()).toEqual(['classes', 'detectedCount', 'maskedFraction', 'maskedPixels'])
+		}
+		expect(live.snapshot()!.coverageMap![64 * 128 + 64]).toBe(0)
+		expect(live.snapshot()!.coverageMap![30 * 128 + 64]).toBe(8)
+		live.reset()
+		expect(live.snapshot()).toBeUndefined()
+	})
+
+	test.each(['drizzle', 'cfaDrizzle'] as const)('%s uses masked source coordinates through dithering, weights and crop policies', (reconstructionMode) => {
+		const frames: StackingFrame[] = []
+		for (const [dx, dy] of [
+			[0, 0],
+			[-1, 0],
+			[0, -1],
+			[-1, -1],
+		]) {
+			let source = makeImage(18, 18, reconstructionMode === 'drizzle' ? 3 : 1, (x, y, c) => (x === 8 && y === 8 ? 100 : 0.25 * (c + 1)))
+			if (reconstructionMode === 'cfaDrizzle') source = { ...source, metadata: { ...source.metadata, bayer: 'RGGB' } }
+			frames.push({ ...makeFrame(source, makeStars(dx, dy), 2), streakMask: rejectionMask(18, 18, (x, y) => x === 8 && y === 8) })
+		}
+		for (const cropMode of ['union', 'intersection'] as const) {
+			const options = { ...DEFAULT_STACK_OPTIONS, reconstructionMode, combinationMethod: 'weighted-average', drizzle: { scale: 1, pixfrac: 0.9 }, cropMode, streaks: { enabled: true } } as const
+			const batch = stackFrames(frames, options)
+			const live = new LiveStacker(options)
+			for (const frame of frames) live.add(frame)
+			expect(batch.acceptedFrames).toBe(4)
+			expect(live.snapshot()).toEqual(batch)
+			expect(batch.coverageMap![8 * 18 + 8]).toBe(3)
+			expect(batch.coverageMap![5 * 18 + 5]).toBe(4)
+			expect(batch.validityMask![5 * 18 + 5]).toBe(1)
+			expect(batch.validityMask![8 * 18 + 8]).toBe(cropMode === 'intersection' || reconstructionMode === 'cfaDrizzle' ? 0 : 1)
+			const weights = batch.weightMap!
+			if (reconstructionMode === 'drizzle') {
+				expect(weights.raw[8 * 18 + 8]).toBeCloseTo(6, 10)
+				expect(weights.raw[5 * 18 + 5]).toBeCloseTo(8, 10)
+			} else {
+				expect(weights.raw[(8 * 18 + 8) * 3]).toBe(0)
+				expect(weights.raw[(8 * 18 + 8) * 3 + 1]).toBeCloseTo(4, 10)
+				expect(weights.raw[(8 * 18 + 8) * 3 + 2]).toBeCloseTo(2, 10)
+			}
+			for (const value of batch.finalImage!.raw) expect(value).toBeLessThanOrEqual(0.750001)
+		}
+	})
+
+	test('rejects masks from another image grid before live state changes', () => {
+		const frame = { ...makeFrame(makeImage(18, 18, 1, 0.2), makeStars()), streakMask: rejectionMask(9, 36, () => true) }
+		const live = new LiveStacker({ ...DEFAULT_STACK_OPTIONS, streaks: { enabled: true } })
+		expect(() => live.add(frame)).toThrow('streak mask must match')
+		expect(live.snapshot()).toBeUndefined()
+	})
+
+	test.each(['average', 'weighted-average', 'sigma-clip', 'median'] as const)('%s removes a bright trail from a small stack while retaining clean pixels', (combinationMethod) => {
+		const mask = rejectionMask(18, 18, (_x, y) => y === 8)
+		const clean = { ...makeFrame(makeImage(18, 18, 1, 0.2), makeStars(), 1), streaks: [] }
+		const dirty = {
+			...makeFrame(
+				makeImage(18, 18, 1, (_x, y) => (y === 8 ? 100 : 0.4)),
+				makeStars(),
+				3,
+			),
+			streakMask: mask,
+		}
+		const options = { ...DEFAULT_STACK_OPTIONS, combinationMethod, interpolationMode: 'nearest', streaks: { enabled: true } } as const
+		const result = stackFrames([clean, dirty], options)
+		expect(result.acceptedFrames).toBe(2)
+		expect(result.finalImage!.raw[8 * 18 + 8]).toBeCloseTo(0.2, 6)
+		expect(result.finalImage!.raw[6 * 18 + 8]).toBeCloseTo(combinationMethod === 'weighted-average' ? 0.35 : 0.3, 6)
+		expect(result.coverageMap![8 * 18 + 8]).toBe(1)
+		expect(result.coverageMap![6 * 18 + 8]).toBe(2)
+		expect(result.diagnostics[1].streaks).toMatchObject({ detectedCount: 0, maskedPixels: 18, maskedFraction: 1 / 18 })
+		if (combinationMethod === 'sigma-clip') {
+			const plain = stackFrames([clean, dirty], { ...options, streaks: { enabled: false } })
+			expect(plain.finalImage!.raw[8 * 18 + 8]).toBeGreaterThan(1)
+		}
+	})
+
+	test('overlapping border-clipped detections mask their union and reference holes receive clean target samples', () => {
+		const streaks = [measuredStreak(8, -4, 12), measuredStreak(8, 6, 24)]
+		const image = makeImage(18, 18, 1, (_x, y) => (y === 8 ? 100 : 0.2))
+		const before = image.raw.slice()
+		const reference = { ...makeFrame(image, makeStars()), streaks }
+		const clean = { ...makeFrame(makeImage(18, 18, 1, 0.4), makeStars()), streaks: [] }
+		const result = stackFrames([reference, clean], { ...DEFAULT_STACK_OPTIONS, interpolationMode: 'nearest', streaks: { enabled: true } })
+		expect(result.diagnostics[0].streaks).toMatchObject({ detectedCount: 2, maskedPixels: 18 })
+		expect(result.finalImage!.raw[8 * 18 + 8]).toBeCloseTo(0.4, 6)
+		expect(result.finalImage!.raw[6 * 18 + 8]).toBeCloseTo(0.3, 6)
+		expect(result.coverageMap![8 * 18 + 8]).toBe(1)
+		expect(image.raw).toEqual(before)
+	})
+
+	test.each(['resample', 'drizzle', 'cfaDrizzle'] as const)('%s excludes both reference and target masks from normalization and agrees with live', (reconstructionMode) => {
+		const width = 64
+		const referenceMask = rejectionMask(width, width, (x) => x < 20)
+		const targetMask = rejectionMask(width, width, (x) => x >= 44)
+		const referenceRgb = makeImage(width, width, 3, (x, y, c) => (x < 20 ? 100 : 0.2 + x * 0.002 + y * 0.001 + c * 0.03))
+		const targetRgb = makeImage(width, width, 3, (x, y, c) => (x >= 44 ? 100 : (0.2 + x * 0.002 + y * 0.001 + c * 0.03 - 0.03) / 2))
+		const reference = reconstructionMode === 'cfaDrizzle' ? bayer(referenceRgb, 'RGGB')! : referenceRgb
+		const target = reconstructionMode === 'cfaDrizzle' ? bayer(targetRgb, 'RGGB')! : targetRgb
+		const frames = [
+			{ ...makeFrame(reference, makeStars()), streakMask: referenceMask },
+			{ ...makeFrame(target, makeStars()), streakMask: targetMask },
+		]
+		const options = { ...DEFAULT_STACK_OPTIONS, reconstructionMode, interpolationMode: 'nearest', normalizationMode: 'background-scale', streaks: { enabled: true }, drizzle: { scale: 1 } } as const
+		const batch = stackFrames(frames, options)
+		const live = new LiveStacker(options)
+		for (const frame of frames) live.add(frame)
+		expect(batch.acceptedFrames).toBe(2)
+		for (const scale of batch.diagnostics[1].normalization!.scales) expect(scale).toBeCloseTo(2, 5)
+		for (const offset of batch.diagnostics[1].normalization!.offsets) expect(offset).toBeCloseTo(0.03, 5)
+		expect(live.snapshot()!.diagnostics).toEqual(batch.diagnostics)
+		expect(live.snapshot()!.coverageMap).toEqual(batch.coverageMap)
+		expect(live.snapshot()!.weightMap).toEqual(batch.weightMap)
+		// Undithered CFA samples at scale one cannot provide every color at any output pixel.
+		if (reconstructionMode === 'cfaDrizzle') expect(live.snapshot()!.finalImage).toBeUndefined()
+		else expectRawClose(live.snapshot()!.finalImage!.raw, batch.finalImage!.raw)
+	})
+
+	test('local normalization excludes masked contamination without removing clean target support', () => {
+		const mask = rejectionMask(64, 64, (x) => x < 20)
+		const reference = {
+			...makeFrame(
+				makeImage(64, 64, 1, (x, y) => (x < 20 ? 100 : 0.2 + x * 0.002 + y * 0.001)),
+				makeStars(),
+			),
+			streakMask: mask,
+		}
+		const target = {
+			...makeFrame(
+				makeImage(64, 64, 1, (x, y) => 0.1 + x * 0.002 + y * 0.001),
+				makeStars(),
+			),
+			streaks: [],
+		}
+		const options = { ...DEFAULT_STACK_OPTIONS, normalizationMode: 'local', interpolationMode: 'nearest', localNormalization: { gridSize: 4, minSamplesPerCell: 8 }, streaks: { enabled: true } } as const
+		const result = stackFrames([reference, target], options)
+		expect(result.acceptedFrames).toBe(2)
+		expect(result.diagnostics[1].normalization!.scales[0]).toBeCloseTo(1, 5)
+		expect(result.diagnostics[1].normalization!.offsets[0]).toBeCloseTo(0.1, 5)
+		expect(result.finalImage!.raw[30 * 64 + 10]).toBeCloseTo(0.25, 5)
+		expect(result.coverageMap![30 * 64 + 10]).toBe(1)
+	})
+
+	test.each(['resample', 'drizzle', 'cfaDrizzle'] as const)('%s rejects normalization without shared unmasked support before accumulating', (reconstructionMode) => {
+		let image = makeImage(18, 18, 1, 0.2)
+		if (reconstructionMode === 'cfaDrizzle') image = { ...image, metadata: { ...image.metadata, bayer: 'RGGB' } }
+		const frames = [
+			{ ...makeFrame(image, makeStars()), streakMask: rejectionMask(18, 18, (x) => x < 9) },
+			{ ...makeFrame(image, makeStars()), streakMask: rejectionMask(18, 18, (x) => x >= 9) },
+		]
+		const options = { ...DEFAULT_STACK_OPTIONS, reconstructionMode, interpolationMode: 'nearest', normalizationMode: 'scale', streaks: { enabled: true } } as const
+		const batch = stackFrames(frames, options)
+		const live = new LiveStacker(options)
+		live.add(frames[0])
+		const before = live.snapshot()!
+		expect(live.add(frames[1]).reason).toBe('normalization-failed')
+		expect(batch.diagnostics[1].reason).toBe('normalization-failed')
+		expect(batch.acceptedFrames).toBe(1)
+		expect(live.snapshot()!.coverageMap).toEqual(before.coverageMap)
+		expect(live.snapshot()!.weightMap).toEqual(before.weightMap)
+	})
+
+	test.each(['resample', 'drizzle', 'cfaDrizzle'] as const)('%s rejects excessive contamination only under explicit policy and skips reference candidates', (reconstructionMode) => {
+		let image = makeImage(18, 18, 1, 0.2)
+		if (reconstructionMode === 'cfaDrizzle') image = { ...image, metadata: { ...image.metadata, bayer: 'RGGB' } }
+		const dirty = { ...makeFrame(image, makeStars()), streakMask: rejectionMask(18, 18, (x) => x < 9) }
+		const clean = { ...makeFrame(image, makeStars()), streaks: [] }
+		const options = { ...DEFAULT_STACK_OPTIONS, reconstructionMode, streaks: { enabled: true, maxMaskedFraction: 0.4 } } as const
+		const batch = stackFrames([dirty, clean], options)
+		expect(batch.referenceFrameIndex).toBe(1)
+		expect(batch.diagnostics.find((d) => d.frameIndex === 0)?.reason).toBe('streak-contamination-too-high')
+		expect(stackFrames([dirty], options).acceptedFrames).toBe(0)
+		expect(stackFrames([dirty], { ...options, batchReference: { mode: 'index', index: 0 } }).diagnostics[0].reason).toBe('streak-contamination-too-high')
+		expect(stackFrames([dirty], { ...options, streaks: { enabled: true } }).acceptedFrames).toBe(1)
+		expect(stackFrames([dirty], { ...options, streaks: { enabled: true, maxMaskedFraction: 0.5 } }).acceptedFrames).toBe(1)
+		const live = new LiveStacker(options)
+		expect(live.add(dirty).reason).toBe('streak-contamination-too-high')
+		expect(live.add(clean).accepted).toBe(true)
+		expect(live.snapshot()!.referenceFrameIndex).toBe(1)
+	})
+
+	test('best-quality accounts for contamination only when enabled', () => {
+		const image = makeImage(18, 18, 1, 0.2)
+		const frames = [
+			{ ...makeFrame(image, makeStars()), streakMask: rejectionMask(18, 18, (x) => x < 9) },
+			{ ...makeFrame(image, makeStars()), streaks: [] },
+		]
+		const options = { ...DEFAULT_STACK_OPTIONS, batchReference: { mode: 'best-quality' } } as const
+		expect(stackFrames(frames, options).referenceFrameIndex).toBe(0)
+		expect(stackFrames(frames, { ...options, streaks: { enabled: true } }).referenceFrameIndex).toBe(1)
+	})
+
+	test('selected classes and classifier confidence preserve moving objects and respect authoritative masks', () => {
+		const streaks = [measuredStreak(3), measuredStreak(7), measuredStreak(11), measuredStreak(15)]
+		const streakClassifications: StreakClassification[] = [
+			{ class: 'satellite', confidence: 0.9, alternatives: [], evidence: [] },
+			{ class: 'movingObject', confidence: 0.9, alternatives: [], evidence: [] },
+			{ class: 'unknown', confidence: 0.9, alternatives: [], evidence: [] },
+			{ class: 'satellite', confidence: 0.2, alternatives: [], evidence: [] },
+		]
+		const frame = { ...makeFrame(makeImage(18, 18, 1, 0.5), makeStars()), streaks, streakClassifications }
+		const options = { ...DEFAULT_STACK_OPTIONS, streaks: { enabled: true, classes: ['satellite', 'unknown'], minClassificationConfidence: 0.5 } } as const
+		const result = stackFrames([frame], options)
+		expect(result.validityMask![3 * 18 + 8]).toBe(0)
+		expect(result.validityMask![7 * 18 + 8]).toBe(1)
+		expect(result.validityMask![11 * 18 + 8]).toBe(0)
+		expect(result.validityMask![15 * 18 + 8]).toBe(1)
+		expect(result.diagnostics[0].streaks!.classes).toMatchObject({ satellite: 2, movingObject: 1, unknown: 1 })
+		const authoritative = stackFrames([{ ...frame, streakMask: createStreakMask(18, 18, [streaks[1]]) }], options)
+		expect(authoritative.validityMask![3 * 18 + 8]).toBe(1)
+		expect(authoritative.validityMask![7 * 18 + 8]).toBe(0)
+		expect(authoritative.diagnostics[0].streaks!.detectedCount).toBe(4)
+	})
+
+	test('classifier is optional and unknown detections follow the configured policy', () => {
+		let calls = 0
+		const classification = {
+			providers: [
+				{
+					id: 'count',
+					evaluate: () => {
+						calls++
+						return []
+					},
+				},
+			],
+		}
+		const frame = { ...makeFrame(makeImage(18, 18, 1, 0.2), makeStars()), streaks: [measuredStreak(8)] }
+		const detectorOnly = stackFrames([frame], { ...DEFAULT_STACK_OPTIONS, streaks: { enabled: true, classification } })
+		expect(calls).toBe(0)
+		expect(detectorOnly.diagnostics[0].streaks!.maskedPixels).toBe(18)
+		for (const classes of [['satellite'], ['unknown']] as const) {
+			const result = stackFrames([frame], { ...DEFAULT_STACK_OPTIONS, streaks: { enabled: true, classification, classes } })
+			expect(result.diagnostics[0].streaks!.maskedPixels).toBe(classes[0] === 'unknown' ? 18 : 0)
+		}
+		expect(calls).toBe(2)
+	})
+
+	test('disabled analysis ignores supplied masks and stale detector options exactly in batch and live', () => {
+		for (const reconstructionMode of ['resample', 'drizzle', 'cfaDrizzle'] as const) {
+			let image = makeImage(18, 18, 1, 0.2)
+			if (reconstructionMode === 'cfaDrizzle') image = { ...image, metadata: { ...image.metadata, bayer: 'RGGB' } }
+			const plain = [makeFrame(image, makeStars()), makeFrame(image, makeStars(-0.25, 0.25))]
+			const masked = plain.map((frame) => ({ ...frame, streakMask: rejectionMask(18, 18, () => true) }))
+			const options = { ...DEFAULT_STACK_OPTIONS, reconstructionMode, streaks: { enabled: false, detection: { maxCandidates: Infinity } } } as const
+			expect(stackFrames(masked, options)).toEqual(stackFrames(plain, { ...DEFAULT_STACK_OPTIONS, reconstructionMode }))
+			const livePlain = new LiveStacker(options)
+			const liveMasked = new LiveStacker(options)
+			for (let i = 0; i < 2; i++) {
+				livePlain.add(plain[i])
+				liveMasked.add(masked[i])
+			}
+			expect(liveMasked.snapshot()).toEqual(livePlain.snapshot())
+		}
+	})
+})
 
 describe('Drizzle stacker integration', () => {
 	test('default photometry does not amplify a noisy background after a half-pixel dither', () => {
