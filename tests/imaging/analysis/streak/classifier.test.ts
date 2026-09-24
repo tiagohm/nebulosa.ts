@@ -217,6 +217,37 @@ test('rejects an antipodal prediction before clipping invents an arc', () => {
 	expect(matchPredictedStreakTrack(observed, { start: [0, 0], end: [PI, nearDeclination], ...timing }, exposure)).toBeUndefined()
 })
 
+test('clips the same subarc when the prediction times run backwards', () => {
+	const originRa = 0
+	const originDec = 0
+	const predictedEnd = sphericalDestination(originRa, originDec, PIOVERTWO, deg(10))
+	const earlyEnd = sphericalDestination(originRa, originDec, PIOVERTWO, deg(1))
+	const lateStart = sphericalDestination(originRa, originDec, PIOVERTWO, deg(8))
+	const lateEnd = sphericalDestination(originRa, originDec, PIOVERTWO, deg(9))
+	const startTime = time(2460000, 0, Timescale.UTC)
+	const endTime = time(2460000, 100 / 86400, Timescale.UTC)
+	const exposure = { start: startTime, end: { day: startTime.day, fraction: startTime.fraction + 10 / 86400, scale: startTime.scale } }
+	const early = skyTrack(originRa, originDec, earlyEnd[0], earlyEnd[1])
+	const late = skyTrack(lateStart[0], lateStart[1], lateEnd[0], lateEnd[1])
+	const forward = { start: [originRa, originDec] as const, end: predictedEnd, startTime, endTime }
+	const reversed = { start: predictedEnd, end: [originRa, originDec] as const, startTime: endTime, endTime: startTime }
+
+	const forwardEarly = matchPredictedStreakTrack(early, forward, exposure)
+	const reversedEarly = matchPredictedStreakTrack(early, reversed, exposure)
+	expect(forwardEarly?.score).toBeGreaterThan(0.9)
+	expect(reversedEarly?.overlap).toBeCloseTo(forwardEarly?.overlap ?? Number.NaN, 8)
+	expect(reversedEarly?.orientation).toBeCloseTo(forwardEarly?.orientation ?? Number.NaN, 8)
+	expect(reversedEarly?.crossTrack).toBeCloseTo(forwardEarly?.crossTrack ?? Number.NaN, 8)
+	expect(reversedEarly?.score).toBeCloseTo(forwardEarly?.score ?? Number.NaN, 8)
+
+	const forwardLate = matchPredictedStreakTrack(late, forward, exposure)
+	const reversedLate = matchPredictedStreakTrack(late, reversed, exposure)
+	expect(forwardLate?.score).toBeLessThan(0.05)
+	expect(reversedLate?.overlap).toBeCloseTo(forwardLate?.overlap ?? Number.NaN, 8)
+	expect(reversedLate?.orientation).toBeCloseTo(forwardLate?.orientation ?? Number.NaN, 8)
+	expect(reversedLate?.score).toBeCloseTo(forwardLate?.score ?? Number.NaN, 8)
+})
+
 test('keeps a dashed trail unnamed and ahead of a smooth satellite hypothesis', () => {
 	const frame = image(240, 64)
 	const intervals = []
