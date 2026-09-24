@@ -3,8 +3,9 @@ import type { Streak } from './types'
 // Binary rejection mask for measured streaks. Each masked pixel is the integer center of a
 // received-image pixel whose distance to a segment is within the streak's transverse radius.
 // Painting walks the dominant axis and tests only that column or row's capsule span, so a long
-// diagonal costs about its length times its mask width. The mask is allocated fresh, clips to
-// the frame, and does not read or modify pixel samples.
+// diagonal costs about its length times its mask width. One span record is reused for every
+// column of a streak. The mask is allocated fresh, clips to the frame, and does not read or
+// modify pixel samples.
 
 // Detection-quality cutoff used only when `includeLowConfidence` is false.
 // This is the detector's `Streak.confidence`, not a classification probability.
@@ -86,13 +87,13 @@ function paintAlongDominant(raw: Uint8Array, width: number, height: number, stre
 	const minorCount = alongX ? height : width
 	const first = Math.max(0, Math.floor(Math.min(ax, bx) - radius))
 	const last = Math.min(majorCount - 1, Math.ceil(Math.max(ax, bx) + radius))
+	const span: CapsuleSpan = { low: 0, high: -1 }
 	let added = 0
 
 	for (let major = first; major <= last; major++) {
-		const span = capsuleSpan(major, ax, ay, bx, by, radius)
-		if (!span) continue
-		const minorStart = Math.max(0, Math.floor(span[0]))
-		const minorEnd = Math.min(minorCount - 1, Math.ceil(span[1]))
+		if (!fillCapsuleSpan(span, major, ax, ay, bx, by, radius)) continue
+		const minorStart = Math.max(0, Math.floor(span.low))
+		const minorEnd = Math.min(minorCount - 1, Math.ceil(span.high))
 		for (let minor = minorStart; minor <= minorEnd; minor++) {
 			const x = alongX ? major : minor
 			const y = alongX ? minor : major
@@ -106,15 +107,28 @@ function paintAlongDominant(raw: Uint8Array, width: number, height: number, stre
 	return added
 }
 
-// Transverse bounds of a capsule superset on the line whose dominant coordinate is `major`.
-// Endpoint coordinates are in that frame, in received-image pixels: dominant first, then transverse.
-// The body is the infinite strip of radius `radius` wherever the line can meet the segment, union the
-// endpoint disks. Bounds are expanded by `CAPSULE_SPAN_SLACK` pixels. Undefined means the line misses.
-function capsuleSpan(major: number, ax: number, ay: number, bx: number, by: number, radius: number): readonly [number, number] | undefined {
+// Mutable transverse interval, in received-image pixels. `low > high` means the interval is empty.
+interface CapsuleSpan {
+	// Lower bound, before the frame clamp.
+	low: number
+	// Upper bound, before the frame clamp.
+	high: number
+}
+
+// Writes the transverse capsule superset for dominant coordinate `major` into `span`.
+// Endpoint coordinates are in that frame, in pixels: dominant first, then transverse. The body is the
+// infinite strip of radius `radius` wherever the line can meet the segment, union the endpoint disks.
+// Bounds gain `CAPSULE_SPAN_SLACK` pixels. Returns false when the line misses. `span` is reset and reused.
+function fillCapsuleSpan(span: CapsuleSpan, major: number, ax: number, ay: number, bx: number, by: number, radius: number): boolean {
+	span.low = 0
+	span.high = -1
+
+	absorbDisk(span, major, ax, ay, radius)
+	absorbDisk(span, major, bx, by, radius)
+
 	const dx = bx - ax
 	const dy = by - ay
 	const lengthSquared = dx * dx + dy * dy
-	let span = mergeSpan(diskSpan(major, ax, ay, radius), diskSpan(major, bx, by, radius))
 
 	// The caller scans the longer endpoint delta, so a positive length has a non-zero dominant component.
 	if (lengthSquared > 0 && dx !== 0) {
@@ -125,29 +139,35 @@ function capsuleSpan(major: number, ax: number, ay: number, bx: number, by: numb
 		if (major >= minMajor - bodyReach && major <= maxMajor + bodyReach) {
 			const transverse = ay + ((major - ax) * dy) / dx
 			const half = (radius * length) / Math.abs(dx)
-			span = mergeSpan(span, [transverse - half, transverse + half])
+			absorbInterval(span, transverse - half, transverse + half)
 		}
 	}
 
-	if (!span) return undefined
-	return [span[0] - CAPSULE_SPAN_SLACK, span[1] + CAPSULE_SPAN_SLACK]
+	if (!(span.low <= span.high)) return false
+	span.low -= CAPSULE_SPAN_SLACK
+	span.high += CAPSULE_SPAN_SLACK
+	return true
 }
 
-// Closed interval of a disk on the transverse axis, or undefined when `major` misses the disk.
-// `centerMajor` and `centerMinor` are the disk center in the dominant frame, in pixels.
-function diskSpan(major: number, centerMajor: number, centerMinor: number, radius: number): readonly [number, number] | undefined {
+// Expands `span` by the disk of `radius` centered at (`centerMajor`, `centerMinor`) when `major` meets it.
+function absorbDisk(span: CapsuleSpan, major: number, centerMajor: number, centerMinor: number, radius: number): void {
 	const offset = major - centerMajor
 	const reach = radius * radius - offset * offset
-	if (!(reach >= 0)) return undefined
+	if (!(reach >= 0)) return
 	const half = Math.sqrt(reach)
-	return [centerMinor - half, centerMinor + half]
+	absorbInterval(span, centerMinor - half, centerMinor + half)
 }
 
-// Union of two closed intervals. Either side may be absent.
-function mergeSpan(current: readonly [number, number] | undefined, next: readonly [number, number] | undefined): readonly [number, number] | undefined {
-	if (!next) return current
-	if (!current) return next
-	return [Math.min(current[0], next[0]), Math.max(current[1], next[1])]
+// Expands `span` to include the closed interval `[low, high]`. An empty span adopts that interval.
+function absorbInterval(span: CapsuleSpan, low: number, high: number): void {
+	if (!(span.low <= span.high)) {
+		span.low = low
+		span.high = high
+		return
+	}
+
+	if (low < span.low) span.low = low
+	if (high > span.high) span.high = high
 }
 
 // Euclidean distance from an integer pixel center to the closed segment, in pixels.
