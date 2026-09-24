@@ -145,7 +145,7 @@ test('drops a geometric satellite match whose exposure window misses the predict
 		wcs: header,
 		exposure: 30,
 		startTime,
-		satelliteTracks: [{ id: 'TIMED', start: track.start, end: track.end, startTime: time(2460000, -0.01, Timescale.UTC), endTime: time(2460000, 0.01, Timescale.UTC) }],
+		satelliteTracks: [{ id: 'TIMED', start: track.start, end: track.end, startTime, endTime: time(2460000, 30 / 86400, Timescale.UTC) }],
 	})
 	const missed = classifyStreak(streak, {
 		wcs: header,
@@ -172,6 +172,35 @@ test('drops a geometric satellite match whose exposure window misses the predict
 	expect(fastComparison?.temporalOverlap).toBeCloseTo(1, 6)
 	const partial = matchPredictedStreakTrack(track, { start: track.start, end: track.end, startTime: time(2460000, 20 / 86400, Timescale.UTC), endTime: time(2460000, 40 / 86400, Timescale.UTC) }, { start: startTime, end: { day: startTime.day, fraction: startTime.fraction + 30 / 86400, scale: startTime.scale } })
 	expect(partial?.temporalOverlap).toBeCloseTo(0.5, 6)
+})
+
+test('matches only the predicted arc that occurs during the exposure', () => {
+	const originRa = 0
+	const originDec = 0
+	const predictedEnd = sphericalDestination(originRa, originDec, PIOVERTWO, deg(10))
+	const earlyEnd = sphericalDestination(originRa, originDec, PIOVERTWO, deg(1))
+	const lateStart = sphericalDestination(originRa, originDec, PIOVERTWO, deg(8))
+	const lateEnd = sphericalDestination(originRa, originDec, PIOVERTWO, deg(9))
+	const startTime = time(2460000, 0, Timescale.UTC)
+	const prediction = { start: [originRa, originDec] as const, end: predictedEnd, startTime, endTime: time(2460000, 100 / 86400, Timescale.UTC) }
+	const exposure = { start: startTime, end: { day: startTime.day, fraction: startTime.fraction + 10 / 86400, scale: startTime.scale } }
+
+	const early = matchPredictedStreakTrack(skyTrack(originRa, originDec, earlyEnd[0], earlyEnd[1]), prediction, exposure)
+	expect(early?.crossTrack).toBeLessThan(arcsec(1))
+	expect(early?.overlap).toBeGreaterThan(0.99)
+	expect(early?.temporalOverlap).toBeCloseTo(1, 6)
+	expect(early?.score).toBeGreaterThan(0.9)
+
+	const late = matchPredictedStreakTrack(skyTrack(lateStart[0], lateStart[1], lateEnd[0], lateEnd[1]), prediction, exposure)
+	expect(late?.crossTrack).toBeLessThan(arcsec(1))
+	expect(late?.overlap).toBeLessThan(0.05)
+	expect(late?.temporalOverlap).toBeCloseTo(1, 6)
+	expect(late?.score).toBeLessThan(0.05)
+
+	const disjoint = matchPredictedStreakTrack(skyTrack(originRa, originDec, earlyEnd[0], earlyEnd[1]), prediction, { start: time(2460000, 200 / 86400, Timescale.UTC), end: time(2460000, 210 / 86400, Timescale.UTC) })
+	expect(disjoint?.overlap).toBe(0)
+	expect(disjoint?.temporalOverlap).toBe(0)
+	expect(disjoint?.score).toBe(0)
 })
 
 test('keeps a dashed trail unnamed and ahead of a smooth satellite hypothesis', () => {

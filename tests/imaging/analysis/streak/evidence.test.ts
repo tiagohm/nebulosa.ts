@@ -214,7 +214,7 @@ describe('TrajectoryStreakEvidence', () => {
 			wcs: header,
 			exposure: 30,
 			startTime,
-			movingObjectTracks: [{ id: 'NEO', ...prediction, startTime: time(2460000, -0.01, Timescale.UTC), endTime: time(2460000, 0.01, Timescale.UTC) }],
+			movingObjectTracks: [{ id: 'NEO', ...prediction, startTime, endTime: time(2460000, 30 / 86400, Timescale.UTC) }],
 		})
 		expect(overlapping[0]).toMatchObject({ class: 'movingObject', tier: 'primary', weight: 0.8 })
 		expect(provider.evaluate(streak, { wcs: header, exposure: 30, startTime, satelliteTracks: [{ ...prediction, startTime: time(2460000, 0.4, Timescale.UTC), endTime: time(2460000, 0.5, Timescale.UTC) }] })).toEqual([])
