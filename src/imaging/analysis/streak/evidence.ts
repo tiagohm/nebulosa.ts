@@ -43,6 +43,10 @@ const MIN_TRACKING_STARS = 8
 const MIN_PSF_STARS = 5
 // Largest axial separation, in radians, between a streak and a coherent field angle.
 const TRACK_ALIGNMENT = deg(12)
+// |log(length / medianTrail)| that still counts as the same trail scale.
+const TRAIL_SCALE_AGREE = Math.log(2)
+// |log(length / medianTrail)| at which the streak is no longer the stellar trail population.
+const TRAIL_SCALE_REJECT = Math.log(6)
 // Minimum axial separation, in radians, between two spikes of one optical family.
 const SPIKE_SEPARATION = deg(20)
 // Cross-track residual, in radians, accepted for a radiant association before the score ramps to zero.
@@ -150,11 +154,13 @@ export class FieldCoherenceStreakEvidence implements StreakEvidenceProvider {
 	// Stable provider name.
 	readonly id = 'fieldCoherence'
 
-	// Returns a primary tracking-failure vote when the field shares this streak's axis.
+	// Returns a primary tracking-failure vote only when this streak shares the field axis and trail scale.
 	evaluate(streak: Streak, context: Readonly<StreakClassificationContext>): readonly StreakEvidenceContribution[] {
 		if (context.tracking !== undefined) {
-			const score = trackingSnapshotScore(streak, context)
-			return score > 0 ? [vote('trackingFailure', score, PRIMARY_WEIGHT, 'primary', evidenceItem('trackingField', score, 'field-wide stellar elongation shares this streak axis'))] : []
+			const tracked = trackingSnapshotScore(streak, context)
+			if (tracked === undefined) return []
+			const description = tracked.tier === 'primary' ? 'field-wide stellar elongation shares this streak axis and scale' : 'field is coherently elongated, but the snapshot has no axis for this streak'
+			return [vote('trackingFailure', tracked.score, PRIMARY_WEIGHT, tracked.tier, evidenceItem('trackingField', tracked.score, description))]
 		}
 		const score = starFieldScore(streak, context)
 		return score > 0 ? [vote('trackingFailure', score, PRIMARY_WEIGHT, 'primary', evidenceItem('stellarField', score, 'elongated stars are coherently oriented across the frame'))] : []
@@ -245,12 +251,24 @@ function medianStellarWidth(stars: readonly StreakClassificationStar[] | undefin
 	return (widths[low] + widths[high]) * 0.5
 }
 
-// Positive tracking score when the snapshot is coherent, elongated, and aligned with this streak.
-function trackingSnapshotScore(streak: Streak, context: Readonly<StreakClassificationContext>): number {
+// Field score for one streak. Missing angle stays secondary. A mismatched median trail length emits nothing.
+function trackingSnapshotScore(streak: Streak, context: Readonly<StreakClassificationContext>): { readonly score: number; readonly tier: StreakEvidenceTier } | undefined {
 	const tracking = context.tracking
-	if (tracking === undefined || !(tracking.usableStarCount >= MIN_TRACKING_STARS)) return 0
-	if (tracking.angle !== undefined && streakAxialAngleDistance(streak.angle, tracking.angle) > TRACK_ALIGNMENT) return 0
-	return rising(tracking.elongatedFraction, 0.4, 0.7) * rising(tracking.directionCoherence, 0.65, 0.9)
+	if (tracking === undefined || !(tracking.usableStarCount >= MIN_TRACKING_STARS)) return undefined
+	const field = rising(tracking.elongatedFraction, 0.4, 0.7) * rising(tracking.directionCoherence, 0.65, 0.9)
+	if (!(field > 0)) return undefined
+	if (tracking.angle === undefined) return { score: field, tier: 'secondary' }
+	if (streakAxialAngleDistance(streak.angle, tracking.angle) > TRACK_ALIGNMENT) return undefined
+	const scale = trailScaleScore(streak.length, tracking.medianTrail)
+	if (!(scale > 0)) return undefined
+	return { score: field * scale, tier: 'primary' }
+}
+
+// One when the streak length is within a factor of two of the stellar trail, falling to zero by a factor of six.
+function trailScaleScore(length: number, medianTrail: number | undefined): number {
+	if (medianTrail === undefined) return 1
+	if (!(medianTrail > 0) || !(length > 0)) return 0
+	return falling(Math.abs(Math.log(length / medianTrail)), TRAIL_SCALE_AGREE, TRAIL_SCALE_REJECT)
 }
 
 // Positive tracking score from oriented stars spread over at least three image quadrants.

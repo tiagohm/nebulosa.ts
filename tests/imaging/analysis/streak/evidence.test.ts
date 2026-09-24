@@ -272,7 +272,7 @@ describe('MeteorRadiantStreakEvidence', () => {
 describe('FieldCoherenceStreakEvidence', () => {
 	const provider = new FieldCoherenceStreakEvidence()
 	const aligned = measured({ start: { x: 15, y: 50 }, end: { x: 85, y: 50 } })
-	const snapshot = { starCount: 40, usableStarCount: 30, elongatedFraction: 0.85, directionCoherence: 0.93, angle: 0, medianTrail: 6, score: 0.9 }
+	const snapshot = { starCount: 40, usableStarCount: 30, elongatedFraction: 0.85, directionCoherence: 0.93, angle: 0, medianTrail: 70, score: 0.9 }
 
 	function orientedStars(origins: readonly (readonly [number, number])[], overrides: Partial<StreakClassificationStar> = {}): StreakClassificationStar[] {
 		const stars: StreakClassificationStar[] = []
@@ -288,7 +288,9 @@ describe('FieldCoherenceStreakEvidence', () => {
 		const voted = provider.evaluate(aligned, { tracking: snapshot })
 		expect(voted[0]).toMatchObject({ class: 'trackingFailure', score: 1, weight: 0.8, tier: 'primary' })
 		expect(voted[0]?.evidence[0]?.kind).toBe('trackingField')
-		expect(provider.evaluate(aligned, { tracking: { ...snapshot, angle: undefined } })[0]?.score).toBe(1)
+		expect(provider.evaluate(aligned, { tracking: { ...snapshot, angle: undefined } })[0]).toMatchObject({ score: 1, tier: 'secondary' })
+		expect(provider.evaluate(measured({ start: { x: 10, y: 40 }, end: { x: 210, y: 40 } }), { tracking: { ...snapshot, medianTrail: 6 } })).toEqual([])
+		expect(provider.evaluate(measured({ start: { x: 10, y: 40 }, end: { x: 18, y: 40 } }), { tracking: { ...snapshot, medianTrail: 6 } })[0]).toMatchObject({ score: 1, tier: 'primary' })
 		expect(provider.evaluate(measured({ start: { x: 40, y: 20 }, end: { x: 70, y: 70 }, width: 4 }), { tracking: snapshot })).toEqual([])
 		expect(provider.evaluate(aligned, { tracking: { ...snapshot, angle: deg(13) } })).toEqual([])
 		expect(provider.evaluate(aligned, { tracking: { ...snapshot, usableStarCount: 7 } })).toEqual([])
