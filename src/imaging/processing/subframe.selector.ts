@@ -1,5 +1,6 @@
 import { clamp } from '../../math/numerical/math'
-import { geometricMeanOf, medianAbsoluteDeviationOf, medianOf } from '../../math/numerical/statistics'
+import { geometricMeanOf, medianOf } from '../../math/numerical/statistics'
+import { estimateBackground } from '../analysis/background'
 import type { Image } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 
@@ -184,9 +185,6 @@ export interface SubframeSelection<T extends SubframeInput> {
 	readonly results: readonly SubframeSelectionResult<T>[]
 }
 
-// Maximum sparse samples used for a coarse sky-background estimate.
-const BACKGROUND_SAMPLE_LIMIT = 1024
-
 // Measures deterministic quality metrics from stars and a coarse image background.
 export function measureSubframeQuality(frame: SubframeInput): SubframeQualityMetrics {
 	const { stars } = frame
@@ -196,7 +194,7 @@ export function measureSubframeQuality(frame: SubframeInput): SubframeQualityMet
 	const medianFWHM = finiteMedian(stars, (star) => star.fwhm, Number.EPSILON)
 	const medianEccentricity = finiteMedian(stars, (star) => star.eccentricity)
 	const medianElongation = finiteMedian(stars, (star) => star.elongation, 1)
-	const { background: estimatedBackground, noise } = estimateImageBackground(frame.image)
+	const { background: estimatedBackground, noise } = estimateBackground(frame.image)
 	const qualityScore = starCount > 0 && Number.isFinite(medianHFD) ? clamp((Math.sqrt(starCount) * Math.max(medianSNR, 1)) / Math.max(medianHFD, 0.5), 0, 1e6) : 0
 	const normalizedScore = imageQualityScore({ starCount, medianHFD, medianFWHM, medianEccentricity, medianSNR, estimatedBackground, noise })
 	return { starCount, medianSNR, medianHFD, medianFWHM, medianEccentricity, medianElongation, qualityScore, estimatedBackground, noise, normalizedScore }
@@ -266,27 +264,4 @@ function finiteMedian(stars: readonly DetectedStar[], valueOf: (star: DetectedSt
 	if (count === 0) return undefined
 
 	return medianOf(values.subarray(0, count).sort())
-}
-
-// Estimates coarse sky background from sparse luminance samples across an image.
-function estimateImageBackground(image: Image) {
-	const { raw, metadata } = image
-	const { channels, width, height } = metadata
-	const step = Math.max(1, Math.floor(Math.sqrt((width * height) / BACKGROUND_SAMPLE_LIMIT)))
-	const values: number[] = []
-
-	for (let y = 0; y < height; y += step) {
-		for (let x = 0; x < width; x += step) {
-			const base = (y * width + x) * channels
-			const value = channels === 1 ? raw[base] : 0.2125 * raw[base] + 0.7154 * raw[base + 1] + 0.0721 * raw[base + 2]
-			if (Number.isFinite(value)) values.push(value)
-		}
-	}
-
-	if (values.length === 0) return { background: 0, noise: 0 }
-	const sample = Float64Array.from(values)
-	sample.sort()
-	const background = medianOf(sample)
-	const noise = medianAbsoluteDeviationOf(sample, background, true)
-	return { background, noise: Number.isFinite(noise) ? noise : 0 }
 }

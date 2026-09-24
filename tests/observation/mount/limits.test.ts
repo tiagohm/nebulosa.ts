@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { DEG2RAD, PI } from '../../../src/core/constants'
+import { DEG2RAD, PI, PIOVERTWO, TAU } from '../../../src/core/constants'
 import { evaluateMountLimits } from '../../../src/observation/mount/limits'
 
 test('linear cable wrap and circular azimuth are tested independently', () => {
@@ -12,4 +12,15 @@ test('linear cable wrap and circular azimuth are tested independently', () => {
 	expect(outside.violations.map((violation) => violation.axis)).toEqual(['hourAngle', 'declination', 'altitude', 'azimuth'])
 	expect(evaluateMountLimits({ azimuth: -PI }, { azimuth: [0, 3], azimuthWrap: 'linear' }).accepted).toBeFalse()
 	expect(evaluateMountLimits({}, limits).accepted).toBeTrue()
+})
+
+test('a full-turn circular azimuth range accepts every direction without changing linear ranges', () => {
+	for (const azimuth of [0, PIOVERTWO, PI, 1.5 * PI]) {
+		expect(evaluateMountLimits({ azimuth }, { azimuth: [0, TAU] }).accepted).toBeTrue()
+		expect(evaluateMountLimits({ azimuth }, { azimuth: [-PI, PI] }).accepted).toBeTrue()
+	}
+	expect(evaluateMountLimits({ azimuth: 0 }, { azimuth: [0, 0] }).accepted).toBeTrue()
+	expect(evaluateMountLimits({ azimuth: PIOVERTWO }, { azimuth: [0, 0] }).accepted).toBeFalse()
+	expect(evaluateMountLimits({ azimuth: TAU }, { azimuth: [0, TAU], azimuthWrap: 'linear' }).accepted).toBeTrue()
+	expect(evaluateMountLimits({ azimuth: PIOVERTWO }, { azimuth: [0, 0], azimuthWrap: 'linear' }).accepted).toBeFalse()
 })

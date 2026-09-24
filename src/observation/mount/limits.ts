@@ -1,3 +1,4 @@
+import { TAU } from '../../core/constants'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 
 // Pure checks of an hour angle, declination, altitude, and azimuth against configured mount limits.
@@ -63,6 +64,7 @@ function insideLinear(value: number, range: AxisRange) {
 
 // Circular closed interval on [0, 2π). A minimum above the maximum crosses zero.
 function insideCircular(value: number, range: AxisRange) {
+	if (Math.abs(range[1] - range[0]) >= TAU) return true
 	const probe = normalizeAngle(value)
 	const minimum = normalizeAngle(range[0])
 	const maximum = normalizeAngle(range[1])

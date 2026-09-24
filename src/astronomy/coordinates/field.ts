@@ -16,8 +16,9 @@ const MAX_DEROTATOR_SAMPLES = 100_000
 
 // Field-rotation rate of an alt-az mount and, when a smear budget is supplied, the exposure it allows.
 export interface FieldRotation {
-	// Parallactic-angle rate in radians per SI second. The sign follows cos(azimuth): positive on the
-	// north side of the sky for the usual north-through-east azimuth.
+	// Field-orientation rate in radians per SI second, equal to minus the rate of the parallactic angle
+	// returned by parallacticAngle. The sign follows cos(azimuth): positive on the north side of the
+	// sky for the usual north-through-east azimuth.
 	readonly radiansPerSecond: Angle
 	// The same rate in radians per minute.
 	readonly radiansPerMinute: Angle
@@ -35,7 +36,8 @@ export interface DerotatorSample {
 	readonly angle: Angle
 }
 
-// Field-rotation rate of an alt-az mount, dq/dt = Ω · cos(latitude) · cos(azimuth) / cos(altitude).
+// Field-orientation rate of an alt-az mount, -dq/dt = Ω · cos(latitude) · cos(azimuth) / cos(altitude),
+// where q follows the convention of parallacticAngle.
 // Parameters: latitude, azimuth, and altitude are radians. Azimuth is north through east. Ω is the
 // sidereal rate. Returns undefined at the zenith, where cos(altitude) vanishes and the parallactic
 // angle is undefined. The rate is signed.

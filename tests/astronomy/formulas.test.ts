@@ -101,7 +101,8 @@ test('seeing class, smear, frost, and drive rates follow their planning definiti
 	expect(maxExposureForSmear(15, 20, 1.5)).toBeCloseTo(2, 12)
 	expect(maxExposureForSmear(0, 1, 1)).toBe(Number.POSITIVE_INFINITY)
 	expect(frostPoint(20, 100)).toBeCloseTo(20, 10)
-	expect(frostPoint(-10, 50)).toBeLessThan(-10)
+	// Alduchov & Eskridge ice-relative Magnus coefficients: RH here is with respect to ice.
+	expect(frostPoint(-10, 50)).toBeCloseTo(-17.577582535, 9)
 	expect(dewMargin(20, 100)).toBeCloseTo(0, 10)
 	expect(dewRiskFromMargin(2.5)).toBeCloseTo(0.5, 12)
 	expect(dewRiskFromMargin(5)).toBe(0)

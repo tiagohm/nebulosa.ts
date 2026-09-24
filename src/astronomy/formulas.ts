@@ -421,10 +421,11 @@ export function dewPoint(temperatureCelsius: number, relativeHumidityPercent: nu
 
 // Frost Point. Magnus approximation over ice, using the Alduchov & Eskridge ice coefficients.
 // Parameters: temperatureCelsius is an ambient temperature in degrees Celsius within the Magnus domain
-// [-100, 100], and relativeHumidityPercent is within (0, 100]. The same humidity guard as dewPoint
-// rejects a non-positive humidity before the logarithm. Below freezing this is the temperature at
-// which ice would deposit; at 100% relative humidity it returns the ambient temperature. Above
-// freezing the dew point is the physically relevant condensation temperature.
+// [-100, 100], and relativeHumidityPercent is relative humidity with respect to ice within (0, 100],
+// not the water-relative humidity commonly reported by weather stations. The same humidity guard as
+// dewPoint rejects a non-positive humidity before the logarithm. Below freezing this is the
+// temperature at which ice would deposit; at 100% relative humidity it returns the ambient
+// temperature. Above freezing the dew point is the physically relevant condensation temperature.
 // Returns: frost point in degrees Celsius.
 export function frostPoint(temperatureCelsius: number, relativeHumidityPercent: number) {
 	if (!(relativeHumidityPercent > 0) || !(relativeHumidityPercent <= 100)) throw new RangeError('relative humidity must be within (0, 100]')

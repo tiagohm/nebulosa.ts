@@ -76,6 +76,14 @@ test('geometric mean is stable across wide ranges and defines boundary behavior'
 	expect(geometricMeanOf([])).toBeNaN()
 })
 
+test('geometric mean only reads the requested half-open subrange', () => {
+	expect(geometricMeanOf([1, 4, 9], 1, 3)).toBe(6)
+	expect(geometricMeanOf([-1, 4, 9], 1, 3)).toBe(6)
+	expect(geometricMeanOf([Number.NaN, 4, 9, Number.POSITIVE_INFINITY], 1, 3)).toBe(6)
+	expect(geometricMeanOf([1, 5, 9], 1, 2)).toBe(5)
+	expect(geometricMeanOf(new Float64Array([100, 4, 9, 100]), 1, 3)).toBe(6)
+})
+
 test('rms of', () => {
 	expect(rmsOf([3, 4])).toBeCloseTo(Math.sqrt(12.5), 12)
 	expect(rmsOf([5])).toBe(5)

@@ -517,7 +517,7 @@ export function geometricMeanOf(values: Readonly<NumberArray>, start: number = 0
 	let hasZero = false
 	let hasInfinity = false
 
-	for (let i = 0; i < values.length; i++) {
+	for (let i = start; i < end; i++) {
 		const value = values[i]
 
 		if (!(value >= 0)) return Number.NaN
@@ -538,7 +538,7 @@ export function geometricMeanOf(values: Readonly<NumberArray>, start: number = 0
 
 	if (hasZero) return hasInfinity ? Number.NaN : 0
 	if (hasInfinity) return Number.POSITIVE_INFINITY
-	return Math.exp((sum + compensation) / values.length)
+	return Math.exp((sum + compensation) / n)
 }
 
 // Computes the median value of a sorted numeric array. Input must be ascending-sorted.

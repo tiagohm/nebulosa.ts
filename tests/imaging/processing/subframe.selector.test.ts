@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { estimateBackground } from '../../../src/imaging/analysis/background'
 import type { Image } from '../../../src/imaging/model/types'
 import { imageQualityScore, measureSubframeQuality, selectSubframes } from '../../../src/imaging/processing/subframe.selector'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
@@ -65,5 +66,27 @@ describe('subframe selector', () => {
 		const metrics = measureSubframeQuality({ image: makeImage(), stars: [star({ eccentricity: 0, elongation: 1 })] })
 		expect(metrics.medianEccentricity).toBe(0)
 		expect(metrics.medianElongation).toBe(1)
+	})
+
+	test('uses the shared stride-aware background estimator for padded mono and RGB rows', () => {
+		const mono: Image = {
+			header: {},
+			raw: new Float32Array([0.2, 9, 0.2, 9]),
+			metadata: { width: 1, height: 2, channels: 1, pixelCount: 2, stride: 2, strideInBytes: 8, pixelSizeInBytes: 4, bitpix: Bitpix.FLOAT, bayer: undefined },
+		}
+		const rgb: Image = {
+			header: {},
+			raw: new Float32Array([0.1, 0.2, 0.3, 9, 0.1, 0.2, 0.3, 9]),
+			metadata: { width: 1, height: 2, channels: 3, pixelCount: 2, stride: 4, strideInBytes: 16, pixelSizeInBytes: 4, bitpix: Bitpix.FLOAT, bayer: undefined },
+		}
+
+		for (const image of [mono, rgb]) {
+			const expected = estimateBackground(image)
+			const measured = measureSubframeQuality({ image, stars: [star()] })
+			expect(measured.estimatedBackground).toBeCloseTo(expected.background, 12)
+			expect(measured.noise).toBeCloseTo(expected.noise, 12)
+		}
+
+		expect(selectSubframes([{ image: mono, stars: [star()] }], { maxBackground: 0.3, maxNoise: 0.01 }).results[0]?.accepted).toBeTrue()
 	})
 })

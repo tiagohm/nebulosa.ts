@@ -43,3 +43,31 @@ test('total motion is the exact great-circle arc away from the equator', () => {
 	])
 	expect(motion?.angularRatePerDay).toBeCloseTo(Math.acos(0.75), 12)
 })
+
+test('constant-speed inclined great-circle motion has no tangential acceleration', () => {
+	const inclination = 45 * DEG2RAD
+	const sample = (timeDays: number) => {
+		const x = Math.cos(timeDays)
+		const y = Math.cos(inclination) * Math.sin(timeDays)
+		const z = Math.sin(inclination) * Math.sin(timeDays)
+		return { longitude: Math.atan2(y, x), latitude: Math.asin(z), timeDays }
+	}
+	const motion = angularMotionOrDifferentialTrackingRate([sample(0.5), sample(0.6), sample(0.7)])
+	expect(motion?.angularRatePerDay).toBeCloseTo(1, 12)
+	expect(motion?.angularAccelerationPerDaySquared).toBeCloseTo(0, 12)
+})
+
+test('tangential acceleration supports non-uniform samples and longitude wrap', () => {
+	const sample = (timeDays: number) => ({ longitude: 359.9 * DEG2RAD + 0.5 * timeDays * timeDays, latitude: 0, timeDays })
+	const motion = angularMotionOrDifferentialTrackingRate([sample(0), sample(0.001), sample(0.003)])
+	expect(motion?.longitudeAccelerationPerDaySquared).toBeCloseTo(1, 8)
+	expect(motion?.latitudeAccelerationPerDaySquared).toBeCloseTo(0, 12)
+	expect(motion?.angularAccelerationPerDaySquared).toBeCloseTo(1, 5)
+
+	const meridian = angularMotionOrDifferentialTrackingRate([
+		{ longitude: 0, latitude: -0.1, timeDays: 0 },
+		{ longitude: 0, latitude: 0, timeDays: 0.1 },
+		{ longitude: 0, latitude: 0.1, timeDays: 0.2 },
+	])
+	expect(meridian?.angularAccelerationPerDaySquared).toBeCloseTo(0, 12)
+})

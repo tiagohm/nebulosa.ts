@@ -85,9 +85,16 @@ export function visibilityWindows(targetAt: (time: Time) => Vec3, location: Geog
 
 	const margin = (time: Time) => {
 		let room = Number.POSITIVE_INFINITY
-		if (minimumAltitude !== undefined) room = Math.min(room, altitudeOf(targetAt(time), time, location) - minimumAltitude)
+		let target: Vec3 | undefined
+		if (minimumAltitude !== undefined) {
+			target = targetAt(time)
+			room = Math.min(room, altitudeOf(target, time, location) - minimumAltitude)
+		}
 		if (maximumSunAltitude !== undefined && sunAt !== undefined) room = Math.min(room, maximumSunAltitude - altitudeOf(sunAt(time), time, location))
-		if (minimumMoonSeparation !== undefined && moonAt !== undefined) room = Math.min(room, separationFrom(targetAt(time), moonAt(time)) - minimumMoonSeparation)
+		if (minimumMoonSeparation !== undefined && moonAt !== undefined) {
+			target ??= targetAt(time)
+			room = Math.min(room, separationFrom(target, moonAt(time)) - minimumMoonSeparation)
+		}
 		return room
 	}
 

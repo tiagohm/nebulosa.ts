@@ -52,3 +52,20 @@ test('solar altitude and lunar separation add and remove stretches', () => {
 	expect(() => visibilityWindows(same, SITE, DAY, end, { maximumSunAltitude: 0 })).toThrow('sun direction is required')
 	expect(visibilityWindows(same, SITE, DAY, end, { maximumAirmass: 0.5 })).toEqual([])
 })
+
+test('combined target constraints evaluate the target provider once per margin sample', () => {
+	let targetCalls = 0
+	let moonCalls = 0
+	const target = (): Vec3 => {
+		targetCalls++
+		return [1, 0, 0]
+	}
+	const moon = (): Vec3 => {
+		moonCalls++
+		return [0, 0, 1]
+	}
+	const windows = visibilityWindows(target, SITE, DAY, timeShift(DAY, 0.01), { minimumAltitude: -Math.PI / 2, minimumMoonSeparation: 0 }, { moonAt: moon, step: 0.005 })
+	expect(windows).toHaveLength(1)
+	expect(targetCalls).toBeGreaterThan(0)
+	expect(targetCalls).toBe(moonCalls)
+})

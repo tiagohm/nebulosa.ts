@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
 import { parallacticAngle } from '../../../src/astronomy/coordinates/astrometry'
-import { derotatorAngle, derotatorTrack, fieldRotation } from '../../../src/astronomy/coordinates/field'
+import { derotatorAngle, derotatorTrack, fieldRotation, fieldRotationRate } from '../../../src/astronomy/coordinates/field'
 import { DEG2RAD, PI, PIOVERTWO, SIDEREAL_DRIFT_RATE } from '../../../src/core/constants'
+import { normalizePI } from '../../../src/math/units/angle'
 
 test('field rotation is the sidereal rate on the equator looking due north and is undefined at the zenith', () => {
 	const north = fieldRotation(0, 0, 0, 1, 1000)
@@ -13,6 +14,21 @@ test('field rotation is the sidereal rate on the equator looking due north and i
 	expect(fieldRotation(0, PIOVERTWO, 0)?.radiansPerSecond).toBeCloseTo(0, 12)
 	expect(fieldRotation(0, PI, 0)!.radiansPerSecond).toBeCloseTo(-SIDEREAL_DRIFT_RATE, 12)
 	expect(fieldRotation(0, 0, PIOVERTWO)).toBeUndefined()
+})
+
+test('field-orientation rate is minus the finite-difference parallactic-angle rate', () => {
+	const latitude = 35 * DEG2RAD
+	const declination = 20 * DEG2RAD
+	const hourAngle = 0.4
+	const sineAltitude = Math.sin(latitude) * Math.sin(declination) + Math.cos(latitude) * Math.cos(declination) * Math.cos(hourAngle)
+	const altitude = Math.asin(sineAltitude)
+	const cosineAltitude = Math.cos(altitude)
+	const azimuth = Math.atan2((-Math.cos(declination) * Math.sin(hourAngle)) / cosineAltitude, (Math.sin(declination) - sineAltitude * Math.sin(latitude)) / (cosineAltitude * Math.cos(latitude)))
+	const seconds = 0.1
+	const before = parallacticAngle(hourAngle - SIDEREAL_DRIFT_RATE * seconds, declination, latitude)
+	const after = parallacticAngle(hourAngle + SIDEREAL_DRIFT_RATE * seconds, declination, latitude)
+	const parallacticRate = normalizePI(after - before) / (2 * seconds)
+	expect(fieldRotationRate(latitude, azimuth, altitude)).toBeCloseTo(-parallacticRate, 12)
 })
 
 test('derotator angle cancels the parallactic angle and advances with sidereal hour angle', () => {

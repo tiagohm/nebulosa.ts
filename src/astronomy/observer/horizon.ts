@@ -1,5 +1,6 @@
 import { PIOVERTWO, TAU } from '../../core/constants'
 import type { Writable } from '../../core/types'
+import { NumberComparator } from '../../core/util'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 
 // A local horizon mask: at each azimuth, the minimum altitude a target must clear. Altitudes and
@@ -39,8 +40,8 @@ export interface HorizonCrossing {
 	readonly kind: 'set' | 'rise'
 }
 
-// Sorts a copy by azimuth and, where two samples share an azimuth, keeps the higher minimum altitude.
-function normalizedHorizon(samples: readonly HorizonSample[]) {
+// Prepares a horizon once by sorting normalized azimuths and keeping the higher duplicate altitude.
+function prepareHorizonProfile(samples: readonly HorizonSample[]) {
 	const copy = samples.map((sample) => ({ azimuth: normalizeAngle(sample.azimuth), minimumAltitude: sample.minimumAltitude }))
 	copy.sort((a, b) => a.azimuth - b.azimuth || a.minimumAltitude - b.minimumAltitude)
 	const unique: Writable<HorizonSample>[] = []
@@ -56,39 +57,43 @@ function normalizedHorizon(samples: readonly HorizonSample[]) {
 	return unique
 }
 
-// Minimum altitude of a horizon mask at one azimuth.
-// Parameters: samples are the mask, and may be empty or unordered. azimuth is radians. Returns the
-// linearly interpolated minimum altitude. An empty mask returns −π/2, which clears every real target.
-// A single sample is that altitude at every azimuth. Duplicate azimuths keep the higher altitude.
-export function horizonMinimumAltitude(samples: readonly HorizonSample[], azimuth: Angle): Angle {
-	const horizon = normalizedHorizon(samples)
+// Looks up a minimum altitude in a prepared circular profile using binary search. Azimuth is radians;
+// an empty profile clears the full physical sky and a one-sample profile is constant.
+function preparedMinimumAltitude(horizon: readonly HorizonSample[], azimuth: Angle): Angle {
 	const first = horizon[0]
 	if (first === undefined) return -PIOVERTWO
 	if (horizon.length === 1) return first.minimumAltitude
 
 	const target = normalizeAngle(azimuth)
-	let previous = horizon.at(-1)
-	if (previous === undefined) return first.minimumAltitude
+	let low = 0
+	let high = horizon.length
 
-	for (let i = 0; i < horizon.length; i++) {
-		const next = horizon[i]
-		if (next === undefined) continue
-
-		const start = previous.azimuth
-		const stop = next.azimuth <= start ? next.azimuth + TAU : next.azimuth
-		const probe = target < start ? target + TAU : target
-
-		if (probe >= start && probe <= stop) {
-			const span = stop - start
-			if (!(span > 0)) return Math.max(previous.minimumAltitude, next.minimumAltitude)
-			const fraction = (probe - start) / span
-			return previous.minimumAltitude + (next.minimumAltitude - previous.minimumAltitude) * fraction
-		}
-
-		previous = next
+	while (low < high) {
+		const middle = (low + high) >>> 1
+		const sample = horizon[middle]
+		if (sample !== undefined && sample.azimuth <= target) low = middle + 1
+		else high = middle
 	}
 
-	return first.minimumAltitude
+	const nextIndex = low === horizon.length ? 0 : low
+	const previousIndex = nextIndex === 0 ? horizon.length - 1 : nextIndex - 1
+	const previous = horizon[previousIndex]
+	const next = horizon[nextIndex]
+	if (previous === undefined || next === undefined) return first.minimumAltitude
+	const start = previous.azimuth
+	const stop = next.azimuth <= start ? next.azimuth + TAU : next.azimuth
+	const probe = target < start ? target + TAU : target
+	const span = stop - start
+	if (!(span > 0)) return Math.max(previous.minimumAltitude, next.minimumAltitude)
+	return previous.minimumAltitude + (next.minimumAltitude - previous.minimumAltitude) * ((probe - start) / span)
+}
+
+// Minimum altitude of a horizon mask at one azimuth.
+// Parameters: samples are the mask, and may be empty or unordered. azimuth is radians. Returns the
+// linearly interpolated minimum altitude. An empty mask returns −π/2, which clears every real target.
+// A single sample is that altitude at every azimuth. Duplicate azimuths keep the higher altitude.
+export function horizonMinimumAltitude(samples: readonly HorizonSample[], azimuth: Angle): Angle {
+	return preparedMinimumAltitude(prepareHorizonProfile(samples), azimuth)
 }
 
 // Whether a target at this altitude and azimuth is above the horizon mask.
@@ -112,20 +117,53 @@ function pointOnSegment(from: HorizontalPathSample, to: HorizontalPathSample, fr
 	}
 }
 
-// Clearance of one path sample: altitude minus the mask. Positive means the target is visible.
+// Clearance of one path sample against a prepared mask. Positive means the target is visible.
 function clearance(sample: HorizontalPathSample, horizon: readonly HorizonSample[]) {
-	return sample.altitude - horizonMinimumAltitude(horizon, sample.azimuth)
+	return sample.altitude - preparedMinimumAltitude(horizon, sample.azimuth)
+}
+
+// Fractions at which one short-arc path segment crosses horizon-profile knots. Endpoints are included,
+// sorted, and unique so roots exactly on a knot are considered once.
+function segmentFractions(from: HorizontalPathSample, to: HorizontalPathSample, horizon: readonly HorizonSample[]) {
+	const start = normalizeAngle(from.azimuth)
+	const step = shortAzimuthStep(from.azimuth, to.azimuth)
+	const fractions = [0, 1]
+	if (step === 0) return fractions
+
+	for (let i = 0; i < horizon.length; i++) {
+		const sample = horizon[i]
+		if (sample === undefined) continue
+		for (let turn = -1; turn <= 1; turn++) {
+			const fraction = (sample.azimuth + turn * TAU - start) / step
+			if (fraction > 0 && fraction < 1) fractions.push(fraction)
+		}
+	}
+
+	fractions.sort(NumberComparator)
+	let write = 1
+	for (let read = 1; read < fractions.length; read++) if (fractions[read] !== fractions[write - 1]) fractions[write++] = fractions[read]
+	fractions.length = write
+	return fractions
+}
+
+// Appends a crossing unless the same instant was already emitted by an adjacent subsegment.
+function appendCrossing(crossings: HorizonCrossing[], point: HorizontalPathSample, kind: HorizonCrossing['kind']): void {
+	const previous = crossings.at(-1)
+	if (previous !== undefined && previous.time === point.time) return
+	crossings.push({ time: point.time, altitude: point.altitude, azimuth: normalizeAngle(point.azimuth), kind })
 }
 
 // Crossings of an alt/az path through a horizon mask.
 // Parameters: path is the target's sampled trajectory. horizon is the mask. Returns the crossings in
 // time order. `set` is a positive-to-negative clearance change (the target goes behind the mask) and
-// `rise` is the opposite. A path of fewer than two samples has no segment to cross. The zero of each
-// segment is refined by bisection on the segment fraction, so a mask that bends between the azimuth
-// endpoints is honored rather than a straight clearance line that could miss it.
+// `rise` is the opposite. A path of fewer than two samples has no segment to cross. Each path segment
+// is subdivided at every horizon knot on its short azimuth arc. Within each resulting interval both
+// the path and mask are linear, so its one possible root is solved directly and internal peaks or
+// valleys can produce two crossings in the original segment.
 export function horizonCrossings(path: readonly HorizontalPathSample[], horizon: readonly HorizonSample[]): readonly HorizonCrossing[] {
 	if (path.length < 2) return []
 	const ordered = path.toSorted((a, b) => a.time - b.time)
+	const prepared = prepareHorizonProfile(horizon)
 	const crossings: HorizonCrossing[] = []
 
 	for (let i = 0; i < ordered.length - 1; i++) {
@@ -133,40 +171,31 @@ export function horizonCrossings(path: readonly HorizontalPathSample[], horizon:
 		const to = ordered[i + 1]
 		if (from === undefined || to === undefined || !(to.time > from.time)) continue
 
-		const startClearance = clearance(from, horizon)
-		const endClearance = clearance(to, horizon)
+		const fractions = segmentFractions(from, to, prepared)
+		const points = fractions.map((fraction) => pointOnSegment(from, to, fraction))
+		const clearances = points.map((point) => clearance(point, prepared))
 
-		if (startClearance === 0) {
-			const kind = endClearance < 0 ? 'set' : endClearance > 0 ? 'rise' : undefined
-			if (kind !== undefined) crossings.push({ time: from.time, altitude: from.altitude, azimuth: normalizeAngle(from.azimuth), kind })
-			continue
-		}
+		for (let j = 0; j < points.length - 1; j++) {
+			const left = points[j]
+			const right = points[j + 1]
+			const leftClearance = clearances[j]
+			const rightClearance = clearances[j + 1]
+			if (left === undefined || right === undefined || leftClearance === undefined || rightClearance === undefined) continue
 
-		if ((startClearance > 0 && endClearance > 0) || (startClearance < 0 && endClearance < 0)) continue
-
-		let low = 0
-		let high = 1
-		let lowClearance = startClearance
-
-		for (let step = 0; step < 50; step++) {
-			const mid = (low + high) * 0.5
-			const value = clearance(pointOnSegment(from, to, mid), horizon)
-
-			if (value === 0 || lowClearance === 0) {
-				low = mid
-				break
+			if (leftClearance === 0) {
+				const previousClearance = clearances[j - 1]
+				if (previousClearance === undefined || previousClearance > 0 !== rightClearance > 0) {
+					const kind = rightClearance < 0 ? 'set' : rightClearance > 0 ? 'rise' : undefined
+					if (kind !== undefined) appendCrossing(crossings, left, kind)
+				}
+				continue
 			}
 
-			if (value > 0 === lowClearance > 0) {
-				low = mid
-				lowClearance = value
-			} else {
-				high = mid
-			}
+			if (rightClearance === 0 || leftClearance > 0 === rightClearance > 0) continue
+			const fraction = Math.abs(leftClearance) / (Math.abs(leftClearance) + Math.abs(rightClearance))
+			const root = pointOnSegment(left, right, fraction)
+			appendCrossing(crossings, root, leftClearance > 0 ? 'set' : 'rise')
 		}
-
-		const point = pointOnSegment(from, to, low)
-		crossings.push({ time: point.time, altitude: point.altitude, azimuth: point.azimuth, kind: startClearance > 0 ? 'set' : 'rise' })
 	}
 
 	return crossings

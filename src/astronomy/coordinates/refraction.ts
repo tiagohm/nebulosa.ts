@@ -1,13 +1,12 @@
 import { ARCSEC_PER_RADIAN, PIOVERTWO } from '../../core/constants'
 import type { Angle } from '../../math/units/angle'
-import { DEFAULT_REFRACTION_PARAMETERS, parallacticAngle } from './astrometry'
-import { eraRefco } from './erfa/erfa'
+import { DEFAULT_REFRACTION_PARAMETERS, parallacticAngle, unrefractedAltitude } from './astrometry'
 
-// Wavelength-dependent atmospheric refraction for planning. The displacement follows ERFA's eraRefco
-// model, dZ = A tan Z + B tan³ Z, with Z the apparent zenith distance in radians. Differential
-// refraction and the on-sensor dispersion are the difference of that displacement between two
-// wavelengths. Pressure is hPa, temperature is Celsius, and relative humidity is a fraction in [0, 1].
-// A non-positive altitude is outside the model (it diverges at the horizon) and returns undefined.
+// Wavelength-dependent atmospheric refraction for planning. The displacement uses the same bounded,
+// Newton-corrected ERFA model as the observed-place transforms. Differential refraction and the
+// on-sensor dispersion are the difference of that displacement between two wavelengths. Pressure is
+// hPa, temperature is Celsius, and relative humidity is a fraction in [0, 1]. A non-positive apparent
+// altitude is outside this planning API and returns undefined.
 
 // Ambient conditions for the refraction model. Omitted fields use the standard refraction defaults
 // (1013.25 hPa, 15 °C, 50% relative humidity).
@@ -34,26 +33,22 @@ export interface AtmosphericDispersion {
 	readonly pixels?: number
 }
 
-// Cosine of the zenith distance below which tan Z is treated as singular.
-const HORIZON_COSINE_EPSILON = 1e-12
-
 // Refractive displacement dZ at one wavelength, in radians.
 // Parameters: altitude is the apparent altitude in radians, strictly above the horizon and at most
 // π/2. wavelengthMicrons is the observing wavelength in micrometers. conditions overrides the standard
 // pressure, temperature, and humidity. Returns the amount to add to the apparent zenith distance to
-// recover the unrefracted zenith distance, or undefined on the horizon and below it, where the tan Z
-// model diverges. At the zenith the displacement is zero.
+// recover the unrefracted zenith distance, or undefined on the horizon and below it. The bounded model
+// remains finite and positive at low apparent altitudes. At the zenith the displacement is zero.
 export function refractiveDisplacement(altitude: Angle, wavelengthMicrons: number, conditions?: RefractionConditions): Angle | undefined {
 	if (!(altitude > 0) || altitude > PIOVERTWO) return undefined
-	const zenithDistance = PIOVERTWO - altitude
-	const cosZenith = Math.cos(zenithDistance)
-	if (!(Math.abs(cosZenith) > HORIZON_COSINE_EPSILON)) return undefined
-	const tanZenith = Math.sin(zenithDistance) / cosZenith
-	const pressure = conditions?.pressure ?? DEFAULT_REFRACTION_PARAMETERS.pressure
-	const temperature = conditions?.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature
-	const relativeHumidity = conditions?.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity
-	const [a, b] = eraRefco(pressure, temperature, relativeHumidity, wavelengthMicrons)
-	return a * tanZenith + b * tanZenith * tanZenith * tanZenith
+	if (altitude === PIOVERTWO) return 0
+	const trueAltitude = unrefractedAltitude(altitude, {
+		pressure: conditions?.pressure ?? DEFAULT_REFRACTION_PARAMETERS.pressure,
+		temperature: conditions?.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature,
+		relativeHumidity: conditions?.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity,
+		wl: wavelengthMicrons,
+	})
+	return altitude - trueAltitude
 }
 
 // Differential atmospheric refraction between two wavelengths.

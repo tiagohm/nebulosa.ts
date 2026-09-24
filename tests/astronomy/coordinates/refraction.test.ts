@@ -1,22 +1,36 @@
 import { expect, test } from 'bun:test'
-import { parallacticAngle } from '../../../src/astronomy/coordinates/astrometry'
-import { eraRefco } from '../../../src/astronomy/coordinates/erfa/erfa'
+import { parallacticAngle, unrefractedAltitude } from '../../../src/astronomy/coordinates/astrometry'
 import { atmosphericDispersion, differentialRefraction, refractiveDisplacement } from '../../../src/astronomy/coordinates/refraction'
 import { DEG2RAD, PIOVERTWO } from '../../../src/core/constants'
 
-test('differential refraction matches eraRefco and puts the shorter wavelength higher', () => {
+test('differential refraction uses the bounded observed-place model and puts blue higher', () => {
 	const altitude = 45 * DEG2RAD
-	const zenith = PIOVERTWO - altitude
-	const tanZenith = Math.tan(zenith)
-	const [blueA, blueB] = eraRefco(1013.25, 15, 0.5, 0.45)
-	const [redA, redB] = eraRefco(1013.25, 15, 0.5, 0.65)
-	const expected = (blueA - redA) * tanZenith + (blueB - redB) * tanZenith ** 3
+	const blue = altitude - unrefractedAltitude(altitude, { wl: 0.45 })
+	const red = altitude - unrefractedAltitude(altitude, { wl: 0.65 })
 	const difference = differentialRefraction(altitude, 0.45, 0.65)
 	expect(difference).toBeDefined()
-	expect(difference!).toBeCloseTo(expected, 12)
+	expect(difference!).toBeCloseTo(blue - red, 15)
 	expect(difference!).toBeGreaterThan(0)
 	expect(refractiveDisplacement(PIOVERTWO, 0.55)).toBe(0)
 	expect(differentialRefraction(0, 0.45, 0.65)).toBeUndefined()
+})
+
+test('refractive displacement stays finite, positive, and model-consistent near the horizon', () => {
+	for (const degrees of [45, 20, 10, 5, 3, 2, 1]) {
+		const altitude = degrees * DEG2RAD
+		const displacement = refractiveDisplacement(altitude, 0.55)
+		expect(displacement).toBeDefined()
+		expect(displacement!).toBeFinite()
+		expect(displacement!).toBeGreaterThan(0)
+		expect(displacement!).toBeCloseTo(altitude - unrefractedAltitude(altitude, { wl: 0.55 }), 15)
+	}
+
+	for (const degrees of [5, 3, 2, 1]) {
+		const difference = differentialRefraction(degrees * DEG2RAD, 0.45, 0.65)
+		expect(difference).toBeDefined()
+		expect(difference!).toBeFinite()
+		expect(difference!).toBeGreaterThan(0)
+	}
 })
 
 test('dispersion length is the band difference and its direction is the parallactic angle', () => {

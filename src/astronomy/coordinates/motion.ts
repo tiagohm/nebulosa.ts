@@ -1,6 +1,8 @@
 import { DAYSEC } from '../../core/constants'
+import { vecDot } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizePI } from '../../math/units/angle'
 import { angularDistance, positionAngleBetween } from './coordinate'
+import { eraS2c } from './erfa/erfa'
 
 // Angular velocity and acceleration between spherical positions. Longitude and latitude are radians
 // (right ascension and declination when the sphere is the sky). Time is in days, matching the
@@ -78,6 +80,36 @@ function legRate(from: SphericalMotionSample, to: SphericalMotionSample) {
 	}
 }
 
+// Tangential acceleration of a three-point spherical track at its middle sample. Positions are
+// converted to unit vectors; each adjacent great-circle arc becomes a velocity in the middle tangent
+// plane, and their non-uniform finite difference is the covariant acceleration. This removes radial
+// centripetal acceleration and avoids longitude-chart singularities at the poles. Times are days and
+// the result is rad/day². Antipodal legs have no unique tangent and omit the result.
+function tangentialAcceleration(first: SphericalMotionSample, middle: SphericalMotionSample, last: SphericalMotionSample): number | undefined {
+	const before = middle.timeDays - first.timeDays
+	const after = last.timeDays - middle.timeDays
+	if (!(before > 0) || !(after > 0)) return undefined
+	const a = eraS2c(first.longitude, first.latitude)
+	const b = eraS2c(middle.longitude, middle.latitude)
+	const c = eraS2c(last.longitude, last.latitude)
+	const incomingDot = Math.max(-1, Math.min(1, vecDot(a, b)))
+	const incomingX = incomingDot * b[0] - a[0]
+	const incomingY = incomingDot * b[1] - a[1]
+	const incomingZ = incomingDot * b[2] - a[2]
+	const incomingNorm = Math.hypot(incomingX, incomingY, incomingZ)
+	const outgoingDot = Math.max(-1, Math.min(1, vecDot(b, c)))
+	const outgoingX = c[0] - outgoingDot * b[0]
+	const outgoingY = c[1] - outgoingDot * b[1]
+	const outgoingZ = c[2] - outgoingDot * b[2]
+	const outgoingNorm = Math.hypot(outgoingX, outgoingY, outgoingZ)
+	if ((incomingNorm === 0 && incomingDot < 0) || (outgoingNorm === 0 && outgoingDot < 0)) return undefined
+
+	const incomingScale = incomingNorm === 0 ? 0 : Math.atan2(incomingNorm, incomingDot) / (before * incomingNorm)
+	const outgoingScale = outgoingNorm === 0 ? 0 : Math.atan2(outgoingNorm, outgoingDot) / (after * outgoingNorm)
+	const accelerationScale = 2 / (before + after)
+	return accelerationScale * Math.hypot(outgoingX * outgoingScale - incomingX * incomingScale, outgoingY * outgoingScale - incomingY * incomingScale, outgoingZ * outgoingScale - incomingZ * incomingScale)
+}
+
 // Angular velocity between spherical samples, and acceleration when at least three are supplied.
 // Parameters: samples holds two or more positions. With exactly two, the rate is the secant between
 // them and no acceleration is published. With three or more, the rate is the secant from the earliest
@@ -118,6 +150,6 @@ export function angularMotionOrDifferentialTrackingRate(samples: readonly Spheri
 	if (inward === undefined || outward === undefined) return motion
 	const longitudeAccelerationPerDaySquared = (2 * (outward.longitude - inward.longitude)) / span
 	const latitudeAccelerationPerDaySquared = (2 * (outward.latitude - inward.latitude)) / span
-	const angularAccelerationPerDaySquared = Math.hypot(longitudeAccelerationPerDaySquared * Math.cos(middle.latitude), latitudeAccelerationPerDaySquared)
+	const angularAccelerationPerDaySquared = tangentialAcceleration(first, middle, last)
 	return { ...motion, longitudeAccelerationPerDaySquared, latitudeAccelerationPerDaySquared, angularAccelerationPerDaySquared }
 }

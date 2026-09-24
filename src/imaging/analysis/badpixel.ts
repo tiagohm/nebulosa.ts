@@ -1,4 +1,4 @@
-import { medianBySelectionOf } from '../../math/numerical/statistics'
+import { medianAbsoluteDeviationOf, medianBySelectionOf } from '../../math/numerical/statistics'
 import { grayscaleFromChannel, type Grayscale, type Image, type ImageChannelOrGray } from '../model/types'
 import { estimateBackground } from './background'
 
@@ -13,6 +13,9 @@ import { estimateBackground } from './background'
 export const BAD_PIXEL_HOT = 1
 // Mask value of a cold pixel.
 export const BAD_PIXEL_COLD = 2
+
+// Maximum raw photosites sampled from each Bayer phase for its robust noise estimate.
+const MAX_PHASE_NOISE_SAMPLES = 4096
 
 // Controls for one detection pass.
 export interface BadPixelOptions {
@@ -49,11 +52,48 @@ function phaseStep(image: Image) {
 	return image.metadata.bayer === undefined ? 1 : 2
 }
 
+// Robust normalized-MAD noise for each independent Bayer phase. Sampling is capped per phase and
+// follows the image row stride; non-Bayer input returns the shared background-estimator noise.
+function phaseNoises(image: Image, grayscale: Grayscale): Float64Array {
+	const step = phaseStep(image)
+	if (step === 1) return Float64Array.of(estimateBackground(image).noise)
+
+	const { raw, metadata } = image
+	const { width, height, channels, stride } = metadata
+	const noises = new Float64Array(step * step)
+	const values = new Float64Array(MAX_PHASE_NOISE_SAMPLES)
+	const deviations = new Float64Array(MAX_PHASE_NOISE_SAMPLES)
+
+	for (let originY = 0; originY < step; originY++) {
+		for (let originX = 0; originX < step; originX++) {
+			const phaseWidth = Math.ceil((width - originX) / step)
+			const phaseHeight = Math.ceil((height - originY) / step)
+			const samplingStep = Math.max(1, Math.ceil(Math.sqrt((phaseWidth * phaseHeight) / MAX_PHASE_NOISE_SAMPLES)))
+			let count = 0
+
+			for (let y = originY; y < height && count < values.length; y += step * samplingStep) {
+				for (let x = originX; x < width && count < values.length; x += step * samplingStep) {
+					const value = luminance(raw, y * stride + x * channels, channels, grayscale)
+					if (Number.isFinite(value)) values[count++] = value
+				}
+			}
+
+			if (count === 0) continue
+			const median = medianBySelectionOf(values, count)
+			const noise = medianAbsoluteDeviationOf(values, median, true, count, deviations)
+			noises[originY * step + originX] = Number.isFinite(noise) ? noise : 0
+		}
+	}
+
+	return noises
+}
+
 // Detects isolated hot and cold pixels and returns a mask.
 // Parameters: image is the frame, and it is not modified. options sets the sigma thresholds and the
 // neighborhood radius. A pixel needs at least four finite neighbors; corners of a radius-1 window are
 // therefore left clean. Returns the mask and the two counts. A zero sigma disables that class. The
-// noise is the robust frame noise, so a smooth gradient, which sits on its local median, is not flagged.
+// noise is the robust frame noise, or the same-phase noise for a Bayer mosaic, so color-phase
+// pedestals do not hide defects. A smooth gradient, which sits on its local median, is not flagged.
 export function detectBadPixels(image: Image, options?: BadPixelOptions): BadPixelMap {
 	const { raw, metadata } = image
 	const { width, height, channels, stride } = metadata
@@ -63,7 +103,7 @@ export function detectBadPixels(image: Image, options?: BadPixelOptions): BadPix
 	const radius = Math.max(1, Math.trunc(options?.radius ?? 1))
 	const grayscale = grayscaleFromChannel(options?.channel)
 	const step = phaseStep(image)
-	const noise = estimateBackground(image).noise
+	const noises = phaseNoises(image, grayscale)
 	const values = new Float64Array((radius * 2 + 1) * (radius * 2 + 1))
 
 	let hot = 0
@@ -71,6 +111,7 @@ export function detectBadPixels(image: Image, options?: BadPixelOptions): BadPix
 
 	for (let originY = 0; originY < step; originY++) {
 		for (let originX = 0; originX < step; originX++) {
+			const noise = noises[originY * step + originX]
 			for (let y = originY; y < height; y += step) {
 				for (let x = originX; x < width; x += step) {
 					const value = luminance(raw, y * stride + x * channels, channels, grayscale)
