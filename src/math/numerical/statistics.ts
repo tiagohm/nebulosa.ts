@@ -477,18 +477,18 @@ export function maxOf(a: Readonly<NumberArray>): readonly [number, number] {
 	return index < 0 ? [Number.NaN, -1] : [value, index]
 }
 
-// Computes the mean value of an numeric array.
+// Computes the mean value of an numeric array between start and end exclusive indexes.
 // If the array is empty, it returns NaN.
 // Uses Neumaier compensated summation so the mean stays accurate for large or wide-ranging inputs.
-export function meanOf(a: Readonly<NumberArray>) {
-	const n = a.length
-	if (n === 0) return Number.NaN
-	if (n === 1) return a[0]
+export function meanOf(a: Readonly<NumberArray>, start: number = 0, end: number = a.length) {
+	const n = end - start
+	if (n <= 0) return Number.NaN
+	if (n === 1) return a[start]
 
 	let sum = 0
 	let compensation = 0
 
-	for (let i = 0; i < n; i++) {
+	for (let i = start; i < end; i++) {
 		const value = a[i]
 		const t = sum + value
 		compensation += Math.abs(sum) >= Math.abs(value) ? sum - t + value : value - t + sum

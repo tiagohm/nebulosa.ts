@@ -58,6 +58,7 @@ test('mean of', () => {
 	expect(meanOf([])).toBeNaN()
 	// Compensated summation recovers the small terms that naive summation drops.
 	expect(meanOf([1e16, 1, -1e16, 1])).toBe(0.5)
+	expect(meanOf([2, 1e16, 1, -1e16, 1, 2], 1, 5)).toBe(0.5)
 })
 
 test('rms of', () => {
