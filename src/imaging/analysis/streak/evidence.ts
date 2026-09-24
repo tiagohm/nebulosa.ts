@@ -1,7 +1,7 @@
 import { associateMeteorTrack } from '../../../astronomy/meteors/trajectory'
 import type { MeteorTrack } from '../../../astronomy/meteors/types'
 import { DAYSEC, PIOVERTWO } from '../../../core/constants'
-import { meanOf } from '../../../math/numerical/statistics'
+import { meanOf, medianBySelectionOf } from '../../../math/numerical/statistics'
 import { deg } from '../../../math/units/angle'
 import type { Image } from '../../model/types'
 import { type CelestialStreakTrack, celestialStreakTrack, matchPredictedStreakTrack, type PredictedTrackWindow } from './celestial'
@@ -149,12 +149,14 @@ export class MeteorRadiantStreakEvidence implements StreakEvidenceProvider {
 	}
 }
 
-// Votes for field-wide tracking. A snapshot is authoritative; otherwise oriented stars must cover the frame.
+// Votes for field-wide tracking. A snapshot is authoritative. Otherwise only elongated stars count toward
+// coverage, and a primary vote also requires their measured trail length to match this streak.
 export class FieldCoherenceStreakEvidence implements StreakEvidenceProvider {
 	// Stable provider name.
 	readonly id = 'fieldCoherence'
 
 	// Returns a primary tracking-failure vote only when this streak shares the field axis and trail scale.
+	// Star trails without a measured length stay secondary and cannot name the class.
 	evaluate(streak: Streak, context: Readonly<StreakClassificationContext>): readonly StreakEvidenceContribution[] {
 		if (context.tracking !== undefined) {
 			const tracked = trackingSnapshotScore(streak, context)
@@ -162,8 +164,10 @@ export class FieldCoherenceStreakEvidence implements StreakEvidenceProvider {
 			const description = tracked.tier === 'primary' ? 'field-wide stellar elongation shares this streak axis and scale' : 'field is coherently elongated, but the snapshot has no axis for this streak'
 			return [vote('trackingFailure', tracked.score, PRIMARY_WEIGHT, tracked.tier, evidenceItem('trackingField', tracked.score, description))]
 		}
-		const score = starFieldScore(streak, context)
-		return score > 0 ? [vote('trackingFailure', score, PRIMARY_WEIGHT, 'primary', evidenceItem('stellarField', score, 'elongated stars are coherently oriented across the frame'))] : []
+		const field = starFieldScore(streak, context)
+		if (field === undefined) return []
+		const description = field.tier === 'primary' ? 'elongated stars share this streak axis and scale across the frame' : 'elongated stars are coherently oriented across the frame, but they have no measured trail length'
+		return [vote('trackingFailure', field.score, PRIMARY_WEIGHT, field.tier, evidenceItem('stellarField', field.score, description))]
 	}
 }
 
@@ -271,11 +275,13 @@ function trailScaleScore(length: number, medianTrail: number | undefined): numbe
 	return falling(Math.abs(Math.log(length / medianTrail)), TRAIL_SCALE_AGREE, TRAIL_SCALE_REJECT)
 }
 
-// Positive tracking score from oriented stars spread over at least three image quadrants.
-function starFieldScore(streak: Streak, context: Readonly<StreakClassificationContext>): number {
+// Tracking score from elongated stars spread over at least three image quadrants.
+// Round stars do not fill a quadrant. A primary result also requires at least `MIN_FIELD_STARS` measured
+// trail lengths whose median matches this streak. Without those lengths the field stays secondary.
+function starFieldScore(streak: Streak, context: Readonly<StreakClassificationContext>): { readonly score: number; readonly tier: StreakEvidenceTier } | undefined {
 	const stars = context.stars
 	const size = frameSize(context.image)
-	if (stars === undefined || size === undefined) return 0
+	if (stars === undefined || size === undefined) return undefined
 
 	let usable = 0
 	let elongated = 0
@@ -283,15 +289,16 @@ function starFieldScore(streak: Streak, context: Readonly<StreakClassificationCo
 	let sine = 0
 	let weight = 0
 	const quadrants = [false, false, false, false]
+	const trailLengths: number[] = []
 
 	for (let index = 0; index < stars.length; index++) {
 		const star = stars[index]
 		if (!(star.snr >= FIELD_STAR_SNR)) continue
 		usable++
-		const quadrant = (star.x >= size.width * 0.5 ? 1 : 0) + (star.y >= size.height * 0.5 ? 2 : 0)
-		quadrants[quadrant] = true
 		if (!((star.elongation ?? 1) >= ELONGATED_STAR) || star.theta === undefined) continue
 		elongated++
+		quadrants[(star.x >= size.width * 0.5 ? 1 : 0) + (star.y >= size.height * 0.5 ? 2 : 0)] = true
+		if (star.trailLength !== undefined && star.trailLength > 0) trailLengths.push(star.trailLength)
 		const sampleWeight = Math.min(star.snr, 50)
 		cosine += sampleWeight * Math.cos(2 * star.theta)
 		sine += sampleWeight * Math.sin(2 * star.theta)
@@ -300,10 +307,22 @@ function starFieldScore(streak: Streak, context: Readonly<StreakClassificationCo
 
 	let occupied = 0
 	for (let index = 0; index < quadrants.length; index++) if (quadrants[index]) occupied++
-	if (!(usable >= MIN_FIELD_STARS) || !(elongated >= MIN_FIELD_STARS) || !(weight > 0) || occupied < 3) return 0
+	if (!(usable >= MIN_FIELD_STARS) || !(elongated >= MIN_FIELD_STARS) || !(weight > 0) || occupied < 3) return undefined
 	const angle = normalizeStreakAngle(0.5 * Math.atan2(sine / weight, cosine / weight))
-	if (streakAxialAngleDistance(streak.angle, angle) > TRACK_ALIGNMENT) return 0
-	return rising(elongated / usable, 0.4, 0.7) * rising(Math.min(1, Math.hypot(cosine / weight, sine / weight)), 0.65, 0.9)
+	if (streakAxialAngleDistance(streak.angle, angle) > TRACK_ALIGNMENT) return undefined
+	const field = rising(elongated / usable, 0.4, 0.7) * rising(Math.min(1, Math.hypot(cosine / weight, sine / weight)), 0.65, 0.9)
+	if (!(field > 0)) return undefined
+	const medianTrail = medianTrailLength(trailLengths)
+	if (medianTrail === undefined) return { score: field, tier: 'secondary' }
+	const scale = trailScaleScore(streak.length, medianTrail)
+	if (!(scale > 0)) return undefined
+	return { score: field * scale, tier: 'primary' }
+}
+
+// Median of the supplied trail lengths, in pixels. Undefined until `MIN_FIELD_STARS` lengths are present.
+function medianTrailLength(lengths: number[]): number | undefined {
+	if (lengths.length < MIN_FIELD_STARS) return undefined
+	return medianBySelectionOf(lengths)
 }
 
 // Indexes of bright stars whose centers lie on the measured segment.
@@ -359,14 +378,16 @@ function sensorLineScore(streak: Streak, context: Readonly<StreakClassificationC
 // True when the endpoints reach both borders of the streak's axis, within its width or residual.
 function reachesOppositeBorders(streak: Streak, horizontal: boolean, width: number, height: number): boolean {
 	const tolerance = Math.max(streak.width, streak.rmsResidual, 1)
+
 	if (horizontal) {
 		const minX = Math.min(streak.start.x, streak.end.x)
 		const maxX = Math.max(streak.start.x, streak.end.x)
 		return minX <= tolerance && maxX >= width - 1 - tolerance
+	} else {
+		const minY = Math.min(streak.start.y, streak.end.y)
+		const maxY = Math.max(streak.start.y, streak.end.y)
+		return minY <= tolerance && maxY >= height - 1 - tolerance
 	}
-	const minY = Math.min(streak.start.y, streak.end.y)
-	const maxY = Math.max(streak.start.y, streak.end.y)
-	return minY <= tolerance && maxY >= height - 1 - tolerance
 }
 
 // Score when at least one earlier frame repeats this sensor locus. Motion between frames scores zero.

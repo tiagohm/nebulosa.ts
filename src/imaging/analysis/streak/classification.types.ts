@@ -91,10 +91,12 @@ export interface MeteorRadiantCandidate extends MeteorRadiant {
 	readonly id?: string | number
 }
 
-// Star measurement plus the optional major-axis angle needed for field coherence.
+// Star measurement plus the optional major-axis angle and trail length needed for field coherence.
 export interface StreakClassificationStar extends DetectedStar {
 	// Major-axis orientation in received-image radians in [0, π). `theta` and `theta + π` are the same axis.
 	readonly theta?: Angle
+	// Measured major-axis trail length, in received-image pixels. Elongation and FWHM are not converted into this length.
+	readonly trailLength?: number
 }
 
 // Field-wide tracking snapshot consumed as primary evidence.

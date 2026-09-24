@@ -92,7 +92,7 @@ function trailedStars(): StreakClassificationStar[] {
 	const stars: StreakClassificationStar[] = []
 	for (const x of [18, 72]) {
 		for (const y of [18, 72]) {
-			for (let offset = 0; offset < 4; offset++) stars.push(star(x + offset, y + offset, { hfd: 5, fwhm: 4, elongation: 2.2, eccentricity: 0.8, theta: 0 }))
+			for (let offset = 0; offset < 4; offset++) stars.push(star(x + offset, y + offset, { hfd: 5, fwhm: 4, elongation: 2.2, eccentricity: 0.8, theta: 0, trailLength: 70 }))
 		}
 	}
 	return stars
@@ -309,10 +309,31 @@ test('names tracking failure only for a coherent field aligned with the streak',
 	const oneQuadrant: StreakClassificationStar[] = []
 	for (let index = 0; index < source.length; index++) {
 		const item = source[index]
-		oneQuadrant.push({ x: item.x > 50 ? item.x - 50 : item.x, y: item.y > 50 ? item.y - 50 : item.y, hfd: item.hfd, fwhm: item.fwhm, snr: item.snr, flux: item.flux, elongation: item.elongation, eccentricity: item.eccentricity, theta: item.theta })
+		oneQuadrant.push({ x: item.x > 50 ? item.x - 50 : item.x, y: item.y > 50 ? item.y - 50 : item.y, hfd: item.hfd, fwhm: item.fwhm, snr: item.snr, flux: item.flux, elongation: item.elongation, eccentricity: item.eccentricity, theta: item.theta, trailLength: item.trailLength })
 	}
 	expect(classifyStreak(aligned, { image: frame, stars: oneQuadrant }).class).not.toBe('trackingFailure')
 	expect(classifyStreak(measured({ start: { x: 50, y: 20 }, end: { x: 50, y: 60 }, width: 4 }), { image: frame, stars: trailedStars() }).class).not.toBe('trackingFailure')
+})
+
+test('names tracking failure from stars only for a field-wide trail of the same scale', () => {
+	const frame = image(100, 100)
+	const aligned = measured({ start: { x: 15, y: 50 }, end: { x: 85, y: 50 } })
+	const source = trailedStars()
+	const unscaled: StreakClassificationStar[] = []
+	const shortTrails: StreakClassificationStar[] = []
+	for (let index = 0; index < source.length; index++) {
+		const item = source[index]
+		unscaled.push({ x: item.x, y: item.y, hfd: item.hfd, fwhm: item.fwhm, snr: item.snr, flux: item.flux, elongation: item.elongation, eccentricity: item.eccentricity, theta: item.theta })
+		shortTrails.push({ x: item.x, y: item.y, hfd: item.hfd, fwhm: item.fwhm, snr: item.snr, flux: item.flux, elongation: item.elongation, eccentricity: item.eccentricity, theta: item.theta, trailLength: 6 })
+	}
+	expect(classifyStreak(aligned, { image: frame, stars: source }).class).toBe('trackingFailure')
+	expect(classifyStreak(aligned, { image: frame, stars: unscaled }).class).not.toBe('trackingFailure')
+	expect(classifyStreak(measured({ start: { x: 10, y: 40 }, end: { x: 210, y: 40 } }), { image: frame, stars: shortTrails }).class).not.toBe('trackingFailure')
+
+	const local: StreakClassificationStar[] = []
+	for (let index = 0; index < 12; index++) local.push(star(10 + index, 12, { elongation: 2.2, theta: 0, trailLength: 70 }))
+	local.push(star(80, 12), star(12, 80), star(80, 80))
+	expect(classifyStreak(aligned, { image: frame, stars: local }).class).not.toBe('trackingFailure')
 })
 
 test('does not treat a parallel train of long trails as tracking failure', () => {

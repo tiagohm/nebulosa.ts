@@ -277,7 +277,7 @@ describe('FieldCoherenceStreakEvidence', () => {
 	function orientedStars(origins: readonly (readonly [number, number])[], overrides: Partial<StreakClassificationStar> = {}): StreakClassificationStar[] {
 		const stars: StreakClassificationStar[] = []
 		for (let origin = 0; origin < origins.length; origin++) {
-			for (let offset = 0; offset < 4; offset++) stars.push(star(origins[origin][0] + offset, origins[origin][1], { elongation: 2.2, theta: 0, ...overrides }))
+			for (let offset = 0; offset < 4; offset++) stars.push(star(origins[origin][0] + offset, origins[origin][1], { elongation: 2.2, theta: 0, trailLength: 70, ...overrides }))
 		}
 		return stars
 	}
@@ -364,6 +364,43 @@ describe('FieldCoherenceStreakEvidence', () => {
 				),
 			}),
 		).toEqual([])
+	})
+
+	test('withholds a primary vote when elongated stars are local or a different length', () => {
+		const frame = image(100, 100)
+		const local = orientedStars([
+			[10, 10],
+			[18, 14],
+			[26, 18],
+		])
+		local.push(star(80, 20), star(20, 80), star(80, 80))
+		expect(provider.evaluate(aligned, { image: frame, stars: local })).toEqual([])
+		expect(
+			provider.evaluate(measured({ start: { x: 10, y: 40 }, end: { x: 210, y: 40 } }), {
+				image: frame,
+				stars: orientedStars(
+					[
+						[18, 18],
+						[72, 18],
+						[18, 72],
+					],
+					{ trailLength: 6 },
+				),
+			}),
+		).toEqual([])
+		const unscaled = provider.evaluate(aligned, {
+			image: frame,
+			stars: orientedStars(
+				[
+					[18, 18],
+					[72, 18],
+					[18, 72],
+				],
+				{ trailLength: undefined },
+			),
+		})
+		expect(unscaled[0]).toMatchObject({ class: 'trackingFailure', score: 1, weight: 0.8, tier: 'secondary' })
+		expect(unscaled[0]?.evidence[0]?.kind).toBe('stellarField')
 	})
 })
 
