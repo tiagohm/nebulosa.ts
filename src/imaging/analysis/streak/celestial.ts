@@ -26,9 +26,9 @@ const CROSS_TRACK_REJECT = deg(1.5)
 const OVERLAP_LOW = 0.35
 // Along-track overlap fraction that saturates the overlap score.
 const OVERLAP_HIGH = 0.85
-// Axial position-angle error, in radians, that still counts as aligned.
+// Angle between undirected great-circle planes, in radians, that still counts as the same plane.
 const ORIENTATION_EXCELLENT = deg(8)
-// Axial position-angle error, in radians, beyond which the orientation score is zero.
+// Plane angle, in radians, beyond which the orientation score is zero.
 const ORIENTATION_REJECT = deg(30)
 
 // Sky segment derived from the two streak endpoints.
@@ -57,9 +57,9 @@ export interface CelestialTrackComparison {
 	readonly crossTrack: Angle
 	// Fraction of the observed along-track span that lies inside the predicted arc, in [0, 1].
 	readonly overlap: number
-	// Smallest undirected position-angle difference, in [0, π/2].
+	// Angle between the undirected great-circle planes, in [0, π/2]. Reversing either arc leaves it unchanged.
 	readonly orientation: Angle
-	// Fraction of the exposure window inside the predicted time span, when both spans exist.
+	// Intersection of the exposure and the prediction divided by the shorter window, in [0, 1], when both spans share a timescale.
 	readonly temporalOverlap?: number
 	// Product of the geometric scores and, when times were compared, the temporal overlap. In [0, 1].
 	readonly score: number
