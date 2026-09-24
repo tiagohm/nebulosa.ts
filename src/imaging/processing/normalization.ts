@@ -286,7 +286,7 @@ export const DEFAULT_LOCAL_NORMALIZATION_OPTIONS: Required<LocalNormalizationOpt
 export const NORMALIZATION_SAMPLE_LIMIT = 8192
 
 // Minimum global pairs trusted for percentile spans. Underfilled lattices retry the dense scan;
-// mask-aware stacking also uses this floor, capped by the available geometric overlap for small fields.
+// mask-aware stacking also uses this floor, capped by pre-mask finite support for small or sparse fields.
 export const MIN_GLOBAL_NORMALIZATION_SAMPLES = 32
 
 // Upper bound on grid cells, over all axes combined. Every cell carries several `Float64Array` entries

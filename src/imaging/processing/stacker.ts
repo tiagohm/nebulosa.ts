@@ -100,8 +100,8 @@ export interface StackingFrame {
 
 // Opt-in streak analysis; no detector or classifier runs while disabled.
 // Mask-aware normalization rejects insufficient finite support with normalization-failed, independently
-// of maxMaskedFraction. The floor is 32 pairs per fitted plane, capped by geometric overlap for resample
-// and pre-mask finite correspondences for Drizzle/CFA so complete small overlaps remain usable.
+// of maxMaskedFraction. The floor is 32 pairs per fitted plane, capped by pre-mask finite
+// correspondences so complete small or sparse overlaps remain usable in every reconstruction mode.
 export interface StackingStreakOptions {
 	// Defaults to false, including when only precomputed frame masks are present.
 	readonly enabled?: boolean
@@ -488,7 +488,7 @@ function sourceValidity(frame: PreparedStackingFrame): Uint8Array {
 }
 
 // Projects stacking registration policy onto the reusable image-registration API.
-function registrationOptions(options: ResolvedStackingOptions, outputRaw?: ImageRawType, validityMask?: Uint8Array, rejectionMask?: Uint8Array) {
+function registrationOptions(options: ResolvedStackingOptions, outputRaw?: ImageRawType, validityMask?: Uint8Array, rejectionMask?: Uint8Array, referenceRejectionMask?: Uint8Array) {
 	return {
 		matchStarsConfig: options.matchStarsConfig,
 		interpolationMode: options.interpolationMode,
@@ -496,6 +496,7 @@ function registrationOptions(options: ResolvedStackingOptions, outputRaw?: Image
 		outputRaw,
 		validityMask,
 		rejectionMask,
+		finitePairSupport: options.normalizationMode !== 'none' && (rejectionMask !== undefined || referenceRejectionMask !== undefined) ? { limit: MIN_GLOBAL_NORMALIZATION_SAMPLES, luminance: options.colorHandlingMode === 'luminance' } : undefined,
 		acceptance: {
 			minInliers: options.minAcceptedInliers,
 			maxRmsError: options.maxAcceptedTransformError,
@@ -631,7 +632,7 @@ export class LiveStacker {
 		if (this.#referenceFrame.stars.length < this.#options.minAcceptedStars) return this.#reject(frameIndex, frame, quality, 'reference-has-no-stars')
 
 		this.#ensureWorkBuffers(this.#referenceFrame.image.metadata.pixelCount * this.#referenceFrame.image.metadata.channels, this.#referenceFrame.image.raw.BYTES_PER_ELEMENT)
-		const registration = registerImage(this.#referenceFrame, frame, registrationOptions(this.#options, this.#workRaw, this.#workMask, frame.rejectionMask))
+		const registration = registerImage(this.#referenceFrame, frame, registrationOptions(this.#options, this.#workRaw, this.#workMask, frame.rejectionMask, this.#referenceFrame.rejectionMask))
 		if (!registration.success) return this.#reject(frameIndex, frame, quality, stackingRegistrationFailureReason(registration.reason))
 
 		const { raw } = registration.image
@@ -640,7 +641,7 @@ export class LiveStacker {
 		if (overlapFraction <= 0) return this.#reject(frameIndex, frame, quality, 'no-overlap')
 		if (overlapFraction < this.#options.minOverlapFraction) return this.#reject(frameIndex, frame, quality, 'insufficient-overlap', overlapFraction, registration.transform.summary)
 
-		const normalization = computeNormalization(raw, valid, registration.coveredPixels, frame, this.#referenceFrame, quality, this.#options)
+		const normalization = computeNormalization(raw, valid, registration.finitePairCounts, frame, this.#referenceFrame, quality, this.#options)
 		if (normalization.transform.kind === 'rejected') return this.#reject(frameIndex, frame, quality, 'normalization-failed', overlapFraction, registration.transform.summary)
 		applyNormalizationInPlace(raw, valid, frame.image.metadata.channels, normalization.transform)
 		accumulateAlignedFrame(this.#referenceFrame.image.metadata.channels, raw, valid, this.#sum!, this.#weightSum!, this.#coverageMap, this.#options.combinationMethod, normalization.summary.weight)
@@ -796,7 +797,7 @@ function stackPreparedFrames(frames: readonly PreparedStackingFrame[], resolved:
 			continue
 		}
 
-		const registration = registerImage(referenceFrame, frame, registrationOptions(resolved, undefined, undefined, frame.rejectionMask))
+		const registration = registerImage(referenceFrame, frame, registrationOptions(resolved, undefined, undefined, frame.rejectionMask, referenceFrame.rejectionMask))
 
 		if (!registration.success) {
 			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction: 0, quality, reason: stackingRegistrationFailureReason(registration.reason) })
@@ -927,7 +928,7 @@ function createAlignedFrame(frame: PreparedStackingFrame, index: number, quality
 	const { raw } = registration.image
 	const valid = registration.validityMask
 	const coveredPixels = registration.coveredPixels
-	const normalization = computeNormalization(raw, valid, coveredPixels, frame, referenceFrame, quality, options)
+	const normalization = computeNormalization(raw, valid, registration.finitePairCounts, frame, referenceFrame, quality, options)
 	if (normalization.transform.kind === 'rejected') return undefined
 	applyNormalizationInPlace(raw, valid, channels, normalization.transform)
 	return { raw, valid, weight: normalization.summary.weight, coveredPixels, index, id: frame.id, quality, normalization: normalization.summary, transform: registration.transform.summary }
@@ -1163,9 +1164,9 @@ interface ComputedNormalization {
 // In `local` mode the global solution is still computed first and reported as `scales`/`offsets`: it is
 // the anchor the local model corrects around, and it is what a caller inspecting the summary expects to
 // see. A `reject` fallback surfaces here as a `rejected` transform, not as an exception.
-// With streak masks, every fitted plane needs at least 32 finite pairs, capped by coveredPixels
-// (geometric output support before masking) so a smaller field can still use all available pixels.
-function computeNormalization(alignedRaw: ImageRawType, valid: Uint8Array, coveredPixels: number, frame: PreparedStackingFrame, referenceFrame: PreparedStackingFrame, quality: StackingFrameQualityMetrics, options: ResolvedStackingOptions): ComputedNormalization {
+// With streak masks, availableSamples holds pre-mask finite pairs per fitted plane, capped at 32
+// during registration. Each plane must retain that support and contain at least one usable pair.
+function computeNormalization(alignedRaw: ImageRawType, valid: Uint8Array, availableSamples: readonly number[] | undefined, frame: PreparedStackingFrame, referenceFrame: PreparedStackingFrame, quality: StackingFrameQualityMetrics, options: ResolvedStackingOptions): ComputedNormalization {
 	const weight = resolveFrameWeight(frame, quality, options)
 	const { width, height, channels } = referenceFrame.image.metadata
 
@@ -1181,14 +1182,13 @@ function computeNormalization(alignedRaw: ImageRawType, valid: Uint8Array, cover
 		valid = valid.slice()
 		for (let pixel = 0; pixel < valid.length; pixel++) if (referenceFrame.rejectionMask[pixel] !== 0) valid[pixel] = 0
 	}
-	const sampleCounts = frame.rejectionMask !== undefined || referenceFrame.rejectionMask !== undefined ? [] : undefined
-	const minimumSamples = Math.min(MIN_GLOBAL_NORMALIZATION_SAMPLES, coveredPixels)
+	const sampleCounts = availableSamples === undefined ? undefined : []
 
 	if (options.normalizationMode === 'local') {
 		const model = fitLocalNormalizationRaw(referenceFrame.image.raw, alignedRaw, width, height, channels, options.colorHandlingMode, valid, options.localNormalization, sampleCounts)
 		const { scales, offsets } = broadcastNormalizationPlanes(model.global, channels)
 		const summary: FrameNormalizationSummary = { scales, offsets, weight, local: localNormalizationSummary(model) }
-		if (sampleCounts?.some((count) => count < minimumSamples)) return { transform: { kind: 'rejected', reason: 'insufficient-global-samples' }, summary }
+		if (availableSamples !== undefined && sampleCounts?.some((count, plane) => count === 0 || count < availableSamples[plane])) return { transform: { kind: 'rejected', reason: 'insufficient-global-samples' }, summary }
 
 		if (options.localNormalization.fallback === 'reject' && isLocalNormalizationFallback(model)) {
 			return { transform: { kind: 'rejected', reason: localNormalizationFailureReason(model) ?? 'surface-fit-failed' }, summary }
@@ -1199,7 +1199,7 @@ function computeNormalization(alignedRaw: ImageRawType, valid: Uint8Array, cover
 
 	const planes = solveGlobalNormalizationPlanes(alignedRaw, valid, referenceFrame.image.raw, channels, width, height, options.normalizationMode, options.colorHandlingMode, sampleCounts)
 	const { scales, offsets } = broadcastNormalizationPlanes(planes, channels)
-	if (sampleCounts?.some((count) => count < minimumSamples)) return { transform: { kind: 'rejected', reason: 'insufficient-global-samples' }, summary: { scales, offsets, weight } }
+	if (availableSamples !== undefined && sampleCounts?.some((count, plane) => count === 0 || count < availableSamples[plane])) return { transform: { kind: 'rejected', reason: 'insufficient-global-samples' }, summary: { scales, offsets, weight } }
 	return { transform: { kind: 'global', scales, offsets }, summary: { scales, offsets, weight } }
 }
 

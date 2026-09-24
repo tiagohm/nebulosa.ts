@@ -48,6 +48,86 @@ function measuredStreak(y: number, start = -4, end = 24): Streak {
 }
 
 describe('streak masking in stacking', () => {
+	test('resample uses separate pre-mask floors for sparse RGB planes and their shared luminance', () => {
+		const reference = {
+			...makeFrame(
+				makeImage(64, 64, 3, (x, y, c) => (y === 30 && x >= 10 && x < (c === 1 ? 30 : 50) ? 0.4 + x * 0.002 : Number.NaN)),
+				makeStars(),
+			),
+			streaks: [],
+		}
+		const target = {
+			...makeFrame(
+				makeImage(64, 64, 3, (x, y, c) => (y === 30 && x >= 10 && x < (c === 2 ? 20 : 50) ? 0.2 + x * 0.001 : Number.NaN)),
+				makeStars(),
+			),
+			streaks: [],
+		}
+		for (const colorHandlingMode of ['per-channel', 'luminance'] as const) {
+			for (const normalizationMode of ['scale', 'background-scale', 'percentile', 'local'] as const) {
+				for (const maskedReference of [true, false]) {
+					// Pre-mask counts are 40/20/10, or 10 shared luminance pairs. Losing only red
+					// leaves its 32-pair floor intact; losing green does not affect luminance here.
+					for (const maskedX of [55, 35, 25, 15]) {
+						const mask = rejectionMask(64, 64, (x, y) => x === maskedX && y === 30)
+						const frames = [
+							{ ...reference, streakMask: maskedReference ? mask : undefined },
+							{ ...target, streakMask: maskedReference ? undefined : mask },
+						]
+						const options = { ...DEFAULT_STACK_OPTIONS, normalizationMode, colorHandlingMode, interpolationMode: 'nearest', streaks: { enabled: true } } as const
+						const batch = stackFrames(frames, options)
+						const live = new LiveStacker(options)
+						live.add(frames[0])
+						const diagnostic = live.add(frames[1])
+						const accepted = maskedX >= 35 || (maskedX === 25 && colorHandlingMode === 'luminance')
+						expect(diagnostic.accepted).toBe(accepted)
+						expect(batch.diagnostics[1]).toEqual(diagnostic)
+						if (!accepted) expect(diagnostic.reason).toBe('normalization-failed')
+					}
+				}
+			}
+		}
+	})
+
+	test.each(['resample', 'drizzle'] as const)('%s preserves sparse finite support with an irrelevant mask but rejects lost pairs', (reconstructionMode) => {
+		const referenceImage = makeImage(64, 64, 1, (x, y) => (y === 30 && x >= 20 && x < 40 ? 2 * (0.2 + x * 0.01) + 0.1 : Number.NaN))
+		const targetImage = makeImage(64, 64, 1, (x, y) => (y === 30 && x >= 20 && x < 40 ? 0.2 + x * 0.01 : Number.NaN))
+		for (const normalizationMode of ['background-scale', ...(reconstructionMode === 'resample' ? (['local'] as const) : [])] as const) {
+			const options = { ...DEFAULT_STACK_OPTIONS, reconstructionMode, normalizationMode, interpolationMode: 'nearest', streaks: { enabled: true } } as const
+			const reference = { ...makeFrame(referenceImage, makeStars()), streaks: [] }
+			const target = { ...makeFrame(targetImage, makeStars()), streaks: [] }
+			const baseline = stackFrames([reference, target], options)
+			expect(baseline.acceptedFrames).toBe(2)
+			for (const maskedReference of [true, false]) {
+				for (const removeFinite of [false, true]) {
+					const mask = rejectionMask(64, 64, (x, y) => (removeFinite ? x === 25 && y === 30 : x === 0 && y === 0))
+					const frames = [
+						{ ...reference, streakMask: maskedReference ? mask : undefined },
+						{ ...target, streakMask: maskedReference ? undefined : mask },
+					]
+					const batch = stackFrames(frames, options)
+					const live = new LiveStacker(options)
+					live.add(frames[0])
+					const before = live.snapshot()!
+					const diagnostic = live.add(frames[1])
+					expect(diagnostic.accepted).toBe(!removeFinite)
+					expect(batch.diagnostics[1]).toEqual(diagnostic)
+					if (removeFinite) {
+						expect(diagnostic.reason).toBe('normalization-failed')
+						const afterRaw = live.snapshot()!.finalImage!.raw
+						for (let i = 0; i < afterRaw.length; i++) expect(Object.is(afterRaw[i], before.finalImage!.raw[i])).toBeTrue()
+						expect(live.snapshot()!.coverageMap).toEqual(before.coverageMap)
+						expect(live.snapshot()!.weightMap).toEqual(before.weightMap)
+					} else {
+						expect(diagnostic.normalization).toEqual(baseline.diagnostics[1].normalization)
+						expect(diagnostic.normalization!.scales[0]).toBeCloseTo(2, 5)
+						expect(diagnostic.normalization!.offsets[0]).toBeCloseTo(0.1, 5)
+					}
+				}
+			}
+		}
+	})
+
 	test.each(['resample', 'drizzle'] as const)('%s accepts 32 shared finite pairs but rejects 31 in every fitted plane', (reconstructionMode) => {
 		const mask = rejectionMask(64, 64, (x, y) => y !== 30 || x < 16 || x >= 48)
 		const reference = {
