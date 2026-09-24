@@ -95,8 +95,10 @@ describe('image warp', () => {
 			for (const transform of [IDENTITY, { ...IDENTITY, tx: 0.37, ty: -0.21 }, { m00: 0.9 * Math.cos(0.2), m01: -0.9 * Math.sin(0.2), m10: 0.9 * Math.sin(0.2), m11: 0.9 * Math.cos(0.2), tx: 1, ty: -1 }]) {
 				const plain = warpImage(source, reference, transform, { interpolationMode })
 				const masked = warpImage(source, reference, transform, { interpolationMode, rejectionMask })
-				expect(masked.coveredPixels).toBeLessThan(plain.coveredPixels)
-				expect(masked.coveredPixels).toBeGreaterThan(100)
+				expect(masked.coveredPixels).toBe(plain.coveredPixels)
+				expect(masked.validPixels).toBeLessThan(plain.validPixels)
+				expect(masked.validPixels).toBeGreaterThan(100)
+				expect(masked.validPixels).toBe(masked.validityMask.reduce((sum, valid) => sum + valid, 0))
 				for (let p = 0; p < rejectionMask.length; p++) {
 					if (plain.validityMask[p] && Math.abs(plain.image.raw[p * 3] - 0.25) > 1e-5) expect(masked.validityMask[p]).toBe(0)
 					for (let c = 0; c < 3; c++) expect(masked.image.raw[p * 3 + c]).toBeCloseTo(masked.validityMask[p] ? 0.25 : 0, 6)
@@ -113,7 +115,8 @@ describe('image warp', () => {
 			const outputRaw = new Float32Array(25).fill(99)
 			const validityMask = new Uint8Array(25).fill(1)
 			const result = warpImage(source, source, IDENTITY, { interpolationMode, rejectionMask, outputRaw, validityMask })
-			expect(result.coveredPixels).toBe(24)
+			expect(result.coveredPixels).toBe(25)
+			expect(result.validPixels).toBe(24)
 			expect(result.image.raw).toBe(outputRaw)
 			expect(outputRaw[12]).toBe(0)
 			expect(validityMask[12]).toBe(0)

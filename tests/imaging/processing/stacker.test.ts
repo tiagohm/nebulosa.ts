@@ -48,6 +48,33 @@ function measuredStreak(y: number, start = -4, end = 24): Streak {
 }
 
 describe('streak masking in stacking', () => {
+	test('geometric overlap stays independent of heavy masking in batch and live reconstruction', () => {
+		const reference = { ...makeFrame(makeImage(20, 20, 1, 0.2), makeStars()), streaks: [] }
+		const target = { ...makeFrame(makeImage(20, 20, 1, 0.4), makeStars()), streakMask: rejectionMask(20, 20, (x) => x !== 10) }
+		for (const reconstructionMode of ['resample', 'drizzle'] as const) {
+			const options = { ...DEFAULT_STACK_OPTIONS, reconstructionMode, interpolationMode: 'nearest', minOverlapFraction: 0.1, drizzle: { scale: 1 }, streaks: { enabled: true } } as const
+			const batch = stackFrames([reference, target], options)
+			const live = new LiveStacker(options)
+			live.add(reference)
+			const diagnostic = live.add(target)
+			expect(diagnostic.accepted).toBeTrue()
+			expect(diagnostic.overlapFraction).toBeCloseTo(1, 12)
+			expect(batch.diagnostics[1]).toEqual(diagnostic)
+			expect(batch.acceptedFrames).toBe(2)
+			expect(live.snapshot()!.coverageMap).toEqual(batch.coverageMap)
+			for (let y = 1; y < 19; y++) {
+				expect(batch.coverageMap![y * 20 + 10]).toBe(2)
+				expect(batch.coverageMap![y * 20 + 5]).toBe(1)
+				expect(batch.finalImage!.raw[y * 20 + 10]).toBeCloseTo(0.3, 6)
+			}
+			const limited = { ...options, streaks: { enabled: true, maxMaskedFraction: 0.9 } }
+			expect(stackFrames([reference, target], limited).diagnostics[1].reason).toBe('streak-contamination-too-high')
+			const limitedLive = new LiveStacker(limited)
+			limitedLive.add(reference)
+			expect(limitedLive.add(target).reason).toBe('streak-contamination-too-high')
+		}
+	})
+
 	test('automatic detection reuses caller workspace and live diagnostics retain only compact statistics', () => {
 		const image = makeImage(128, 128, 1, 0.1)
 		renderSyntheticStreak(image, { start: { x: 20, y: 64 }, end: { x: 108, y: 64 }, width: 3, intensity: 0.8 })
