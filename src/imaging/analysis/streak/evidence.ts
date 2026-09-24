@@ -344,15 +344,29 @@ function starOnStreak(star: StreakClassificationStar, streak: Streak): boolean {
 	return Math.hypot(star.x - closestX, star.y - closestY) <= tolerance
 }
 
-// Score for one thin row or column that spans its image axis. A short or diagonal trail scores zero.
+// Score for one thin row or column that reaches both opposite sensor borders. A short, interior, or diagonal trail scores zero.
 function sensorLineScore(streak: Streak, context: Readonly<StreakClassificationContext>): number {
 	const size = frameSize(context.image)
 	if (size === undefined) return 0
 	const toHorizontal = streakAxialAngleDistance(streak.angle, 0)
 	const toVertical = streakAxialAngleDistance(streak.angle, PIOVERTWO)
 	const horizontal = toHorizontal <= toVertical
+	if (!reachesOppositeBorders(streak, horizontal, size.width, size.height)) return 0
 	const span = streak.length / (horizontal ? size.width : size.height)
 	return falling(Math.min(toHorizontal, toVertical), deg(0.4), deg(2)) * falling(streak.width, 1.5, 3.5) * rising(span, 0.75, 0.92) * rising(streak.linearity, 0.9, 0.98) * rising(streak.coverage, 0.85, 0.97)
+}
+
+// True when the endpoints reach both borders of the streak's axis, within its width or residual.
+function reachesOppositeBorders(streak: Streak, horizontal: boolean, width: number, height: number): boolean {
+	const tolerance = Math.max(streak.width, streak.rmsResidual, 1)
+	if (horizontal) {
+		const minX = Math.min(streak.start.x, streak.end.x)
+		const maxX = Math.max(streak.start.x, streak.end.x)
+		return minX <= tolerance && maxX >= width - 1 - tolerance
+	}
+	const minY = Math.min(streak.start.y, streak.end.y)
+	const maxY = Math.max(streak.start.y, streak.end.y)
+	return minY <= tolerance && maxY >= height - 1 - tolerance
 }
 
 // Score when at least one earlier frame repeats this sensor locus. Motion between frames scores zero.

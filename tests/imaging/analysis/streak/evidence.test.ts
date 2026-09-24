@@ -420,6 +420,15 @@ describe('SensorStreakEvidence', () => {
 		expect(provider.evaluate(measured({ start: { x: 10, y: 20 }, end: { x: 40, y: 20 }, width: 1.1 }), { image: image(200, 200) })).toEqual([])
 		expect(provider.evaluate(measured({ start: { x: 20, y: 20 }, end: { x: 90, y: 90 }, width: 1.1 }), { image: image(120, 120) })).toEqual([])
 		expect(provider.evaluate(measured({ start: { x: 40, y: 1 }, end: { x: 40, y: 99 }, width: 4 }), { image: image(80, 100) })).toEqual([])
+
+		const fullRow = measured({ start: { x: 0, y: 500 }, end: { x: 999, y: 500 }, width: 1, linearity: 0.99, coverage: 0.99, rmsResidual: 0.1 })
+		expect(provider.evaluate(fullRow, { image: image(1000, 1000) })[0]?.score).toBe(1)
+		const interior = measured({ start: { x: 40, y: 500 }, end: { x: 960, y: 500 }, width: 1, linearity: 0.99, coverage: 0.99, rmsResidual: 0.1, clippedAtBorder: false })
+		expect(provider.evaluate(interior, { image: image(1000, 1000) })).toEqual([])
+		const fullColumn = measured({ start: { x: 500, y: 0 }, end: { x: 500, y: 999 }, width: 1, linearity: 0.99, coverage: 0.99, rmsResidual: 0.1 })
+		expect(provider.evaluate(fullColumn, { image: image(1000, 1000) })[0]?.score).toBe(1)
+		const oneBorder = measured({ start: { x: 0, y: 500 }, end: { x: 500, y: 500 }, width: 1, linearity: 0.99, coverage: 0.99, rmsResidual: 0.1, clippedAtBorder: true })
+		expect(provider.evaluate(oneBorder, { image: image(1000, 1000) })).toEqual([])
 	})
 
 	test('counts repeated loci by frame and rejects a shifted or poorly overlapping line', () => {
