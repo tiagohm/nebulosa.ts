@@ -1,6 +1,6 @@
 import { tanUnproject } from '../../../astrometry/wcs/fits.wcs'
 import { meteorRadiantVector } from '../../../astronomy/meteors/radiant'
-import { meteorTrackGreatCircle, meteorTrackLength, meteorTrackPositionAngle } from '../../../astronomy/meteors/trajectory'
+import { meteorTrackGreatCircle, meteorTrackLength, meteorTrackPoint, meteorTrackPositionAngle } from '../../../astronomy/meteors/trajectory'
 import type { MeteorRadiant, MeteorTrack } from '../../../astronomy/meteors/types'
 import type { Time } from '../../../astronomy/time/time'
 import type { FitsHeader } from '../../../io/formats/fits/fits'
@@ -105,8 +105,12 @@ export function celestialStreakTrack(streak: Streak, wcs: FitsHeader): Celestial
 // use only the predicted sub-arc inside the intersection. A prediction contained in the exposure keeps its whole
 // arc and a temporal score of one. An exposure contained in a longer prediction keeps only the arc that occurs
 // during the exposure, so a later piece of the same plane does not match. A disjoint window scores zero.
-// Returns undefined for a degenerate prediction or for an observed point that falls on the predicted pole.
+// Returns undefined for a degenerate or antipodal prediction, before time clipping, or for an observed point that falls on the predicted pole.
 export function matchPredictedStreakTrack(observed: CelestialStreakTrack, predicted: Readonly<PredictedStreakTrack>, exposure?: Readonly<PredictedTrackWindow>): CelestialTrackComparison | undefined {
+	// An antipodal pair has no unique plane. Interpolating it first would invent an orthogonal arc and then score that arc.
+	const original = meteorTrack(predicted.start, predicted.end)
+	if (meteorTrackGreatCircle(original) === undefined || meteorTrackLength(original) === undefined) return undefined
+
 	const visibility = predictedVisibility(exposure, predicted)
 
 	if (visibility !== undefined && !(visibility.temporalOverlap > 0)) {
@@ -123,8 +127,11 @@ export function matchPredictedStreakTrack(observed: CelestialStreakTrack, predic
 		const high = Math.max(visibility.startFraction, visibility.endFraction)
 
 		if (low > 0 || high < 1) {
-			start = sphericalInterpolate(predicted.start[0], predicted.start[1], predicted.end[0], predicted.end[1], low)
-			end = sphericalInterpolate(predicted.start[0], predicted.start[1], predicted.end[0], predicted.end[1], high)
+			const clippedStart = meteorTrackPoint(original, low)
+			const clippedEnd = meteorTrackPoint(original, high)
+			if (clippedStart === undefined || clippedEnd === undefined) return undefined
+			start = [clippedStart.rightAscension, clippedStart.declination]
+			end = [clippedEnd.rightAscension, clippedEnd.declination]
 		}
 	}
 

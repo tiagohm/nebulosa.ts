@@ -203,6 +203,20 @@ test('matches only the predicted arc that occurs during the exposure', () => {
 	expect(disjoint?.score).toBe(0)
 })
 
+test('rejects an antipodal prediction before clipping invents an arc', () => {
+	const startTime = time(2460000, 0, Timescale.UTC)
+	const exposure = { start: startTime, end: { day: startTime.day, fraction: startTime.fraction + 10 / 86400, scale: startTime.scale } }
+	const observed = skyTrack(0, deg(-18), 0, deg(-16))
+	const timing = { startTime, endTime: time(2460000, 100 / 86400, Timescale.UTC) }
+	expect(matchPredictedStreakTrack(observed, { start: [0, 0], end: [PI, 0], ...timing }, exposure)).toBeUndefined()
+	expect(matchPredictedStreakTrack(observed, { start: [0, 0], end: [PI, 0] })).toBeUndefined()
+
+	// Inside meteorTrackGreatCircle's dot-product tolerance of 1e-15 around an antipode.
+	const nearDeclination = 1e-9
+	expect(meteorTrackGreatCircle({ start: { rightAscension: 0, declination: 0 }, end: { rightAscension: PI, declination: nearDeclination } })).toBeUndefined()
+	expect(matchPredictedStreakTrack(observed, { start: [0, 0], end: [PI, nearDeclination], ...timing }, exposure)).toBeUndefined()
+})
+
 test('keeps a dashed trail unnamed and ahead of a smooth satellite hypothesis', () => {
 	const frame = image(240, 64)
 	const intervals = []
