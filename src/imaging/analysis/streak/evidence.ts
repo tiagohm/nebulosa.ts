@@ -161,7 +161,8 @@ export class FieldCoherenceStreakEvidence implements StreakEvidenceProvider {
 		if (context.tracking !== undefined) {
 			const tracked = trackingSnapshotScore(streak, context)
 			if (tracked === undefined) return []
-			const description = tracked.tier === 'primary' ? 'field-wide stellar elongation shares this streak axis and scale' : 'field is coherently elongated, but the snapshot has no axis for this streak'
+			let description = 'field-wide stellar elongation shares this streak axis and scale'
+			if (tracked.tier !== 'primary') description = context.tracking.angle === undefined ? 'field is coherently elongated, but the snapshot has no axis for this streak' : 'field is coherently elongated, but the snapshot has no trail scale for this streak'
 			return [vote('trackingFailure', tracked.score, PRIMARY_WEIGHT, tracked.tier, evidenceItem('trackingField', tracked.score, description))]
 		}
 		const field = starFieldScore(streak, context)
@@ -255,7 +256,7 @@ function medianStellarWidth(stars: readonly StreakClassificationStar[] | undefin
 	return (widths[low] + widths[high]) * 0.5
 }
 
-// Field score for one streak. Missing angle stays secondary. A mismatched median trail length emits nothing.
+// Field score for one streak. A missing angle or median trail length stays secondary. A mismatched angle or scale emits nothing.
 function trackingSnapshotScore(streak: Streak, context: Readonly<StreakClassificationContext>): { readonly score: number; readonly tier: StreakEvidenceTier } | undefined {
 	const tracking = context.tracking
 	if (tracking === undefined || !(tracking.usableStarCount >= MIN_TRACKING_STARS)) return undefined
@@ -263,14 +264,15 @@ function trackingSnapshotScore(streak: Streak, context: Readonly<StreakClassific
 	if (!(field > 0)) return undefined
 	if (tracking.angle === undefined) return { score: field, tier: 'secondary' }
 	if (streakAxialAngleDistance(streak.angle, tracking.angle) > TRACK_ALIGNMENT) return undefined
+	if (tracking.medianTrail === undefined) return { score: field, tier: 'secondary' }
 	const scale = trailScaleScore(streak.length, tracking.medianTrail)
 	if (!(scale > 0)) return undefined
 	return { score: field * scale, tier: 'primary' }
 }
 
-// One when the streak length is within a factor of two of the stellar trail, falling to zero by a factor of six.
-function trailScaleScore(length: number, medianTrail: number | undefined): number {
-	if (medianTrail === undefined) return 1
+// One when `length` is within a factor of two of `medianTrail`, falling to zero by a factor of six.
+// A non-positive median or length scores zero. Callers keep a missing median as secondary evidence.
+function trailScaleScore(length: number, medianTrail: number): number {
 	if (!(medianTrail > 0) || !(length > 0)) return 0
 	return falling(Math.abs(Math.log(length / medianTrail)), TRAIL_SCALE_AGREE, TRAIL_SCALE_REJECT)
 }

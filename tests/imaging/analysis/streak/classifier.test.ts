@@ -312,6 +312,7 @@ test('names tracking failure only for a coherent field aligned with the streak',
 	const snapshot = { starCount: 40, usableStarCount: 30, elongatedFraction: 0.85, directionCoherence: 0.93, angle: 0 as Angle, medianTrail: 70, score: 0.9 }
 	expect(classifyStreak(aligned, { tracking: snapshot }).class).toBe('trackingFailure')
 	expect(classifyStreak(aligned, { tracking: { ...snapshot, angle: undefined } }).class).not.toBe('trackingFailure')
+	expect(classifyStreak(measured({ start: { x: 10, y: 40 }, end: { x: 210, y: 40 } }), { tracking: { ...snapshot, medianTrail: undefined } }).class).toBe('unknown')
 	expect(classifyStreak(measured({ start: { x: 10, y: 40 }, end: { x: 210, y: 40 } }), { tracking: { ...snapshot, medianTrail: 6 } }).class).not.toBe('trackingFailure')
 	expect(classifyStreak(measured({ start: { x: 10, y: 40 }, end: { x: 18, y: 40 } }), { tracking: { ...snapshot, medianTrail: 6 } }).class).toBe('trackingFailure')
 	expect(classifyStreak(measured({ start: { x: 40, y: 20 }, end: { x: 70, y: 70 }, width: 4 }), { tracking: snapshot }).class).not.toBe('trackingFailure')
