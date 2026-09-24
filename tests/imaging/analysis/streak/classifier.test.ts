@@ -136,6 +136,22 @@ test('drops a geometric satellite match whose exposure window misses the predict
 	expect(overlapping.class).toBe('satellite')
 	expect(missed.class).not.toBe('satellite')
 	expect(matchPredictedStreakTrack(track, { start: track.start, end: track.end })?.score).toBeGreaterThan(0.9)
+
+	const fast = classifyStreak(streak, {
+		wcs: header,
+		exposure: 30,
+		startTime,
+		satelliteTracks: [{ id: 'FAST', start: track.start, end: track.end, startTime: time(2460000, 10 / 86400, Timescale.UTC), endTime: time(2460000, 11 / 86400, Timescale.UTC) }],
+	})
+	expect(fast.class).toBe('satellite')
+	const fastComparison = matchPredictedStreakTrack(
+		track,
+		{ start: track.start, end: track.end, startTime: time(2460000, 10 / 86400, Timescale.UTC), endTime: time(2460000, 11 / 86400, Timescale.UTC) },
+		{ start: startTime, end: { day: startTime.day, fraction: startTime.fraction + 30 / 86400, scale: startTime.scale } },
+	)
+	expect(fastComparison?.temporalOverlap).toBeCloseTo(1, 6)
+	const partial = matchPredictedStreakTrack(track, { start: track.start, end: track.end, startTime: time(2460000, 20 / 86400, Timescale.UTC), endTime: time(2460000, 40 / 86400, Timescale.UTC) }, { start: startTime, end: { day: startTime.day, fraction: startTime.fraction + 30 / 86400, scale: startTime.scale } })
+	expect(partial?.temporalOverlap).toBeCloseTo(0.5, 6)
 })
 
 test('keeps a dashed trail unnamed and ahead of a smooth satellite hypothesis', () => {

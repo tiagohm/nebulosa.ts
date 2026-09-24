@@ -102,6 +102,7 @@ export function celestialStreakTrack(streak: Streak, wcs: FitsHeader): Celestial
 // Compares one observed arc with one predicted arc.
 // Direction is ignored because a still-image streak has no arrow; a reversed prediction matches the same axis.
 // When both the exposure and the prediction carry times of one timescale, a disjoint window forces the score to zero.
+// A prediction contained in the exposure, or an exposure contained in the prediction, keeps a temporal score of one.
 // Returns undefined for a degenerate prediction or for an observed point that falls on the predicted pole.
 export function matchPredictedStreakTrack(observed: CelestialStreakTrack, predicted: Readonly<PredictedStreakTrack>, exposure?: Readonly<PredictedTrackWindow>): CelestialTrackComparison | undefined {
 	const predictedTrack = meteorTrack(predicted.start, predicted.end)
@@ -166,8 +167,10 @@ function pointResidual(point: Vec3, pole: Vec3): Angle {
 	return Math.asin(Math.abs(Math.min(1, Math.max(-1, vecDot(point, pole)))))
 }
 
-// Returns the fraction of the exposure overlapped by the prediction, or undefined when either span is incomplete.
-// Distinct timescales are ignored rather than converted.
+// Scores whether the predicted interval occurs during the exposure, or undefined when either span is incomplete.
+// The score is the intersection divided by the shorter window, so a fast transit fully inside a long exposure
+// scores one, as does an exposure fully inside a longer predicted pass. A partial overlap stays proportional
+// to that shorter window. Disjoint windows score zero. Distinct timescales are ignored rather than converted.
 function temporalOverlap(exposure: Readonly<PredictedTrackWindow> | undefined, predicted: Readonly<PredictedStreakTrack>): number | undefined {
 	if (exposure?.start === undefined || exposure.end === undefined || predicted.startTime === undefined || predicted.endTime === undefined) return undefined
 
@@ -185,9 +188,11 @@ function temporalOverlap(exposure: Readonly<PredictedTrackWindow> | undefined, p
 		predictedEnd = swap
 	}
 
-	const duration = exposureEnd - exposureStart
-	if (!(duration > 0)) return undefined
+	const exposureDuration = exposureEnd - exposureStart
+	const predictedDuration = predictedEnd - predictedStart
+	if (!(exposureDuration > 0) || !(predictedDuration > 0)) return undefined
 
 	const overlap = Math.min(exposureEnd, predictedEnd) - Math.max(exposureStart, predictedStart)
-	return Math.min(1, Math.max(0, overlap / duration))
+	if (!(overlap > 0)) return 0
+	return Math.min(1, overlap / Math.min(exposureDuration, predictedDuration))
 }
