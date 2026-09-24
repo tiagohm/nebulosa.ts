@@ -1,6 +1,7 @@
+import { hourAngle } from '../../astronomy/events/hourangle'
 import { PIOVERTWO } from '../../core/constants'
 import type { PierSide } from '../../devices/indi/device'
-import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
+import { type Angle, normalizeAngle } from '../../math/units/angle'
 
 // Pure, side-effect-free meridian-flip decision engine for German equatorial mounts. Given a policy
 // (hour-angle prepare/flip/latest thresholds and expected pier sides), a runtime telemetry snapshot,
@@ -214,7 +215,7 @@ export function computeLocalSiderealTime(greenwichSiderealTime: Angle, longitude
 export function computeHourAngle(localSiderealTime: Angle, rightAscension: Angle): Angle {
 	validateFiniteAngle(localSiderealTime, 'localSiderealTime')
 	validateFiniteAngle(rightAscension, 'rightAscension')
-	return normalizePI(localSiderealTime - rightAscension)
+	return hourAngle(localSiderealTime, rightAscension)
 }
 
 // Creates the initial persisted lifecycle state for one Meridian Flip cycle.

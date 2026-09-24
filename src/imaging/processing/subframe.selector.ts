@@ -1,5 +1,5 @@
 import { clamp } from '../../math/numerical/math'
-import { medianOf } from '../../math/numerical/statistics'
+import { geometricMeanOf, medianAbsoluteDeviationOf, medianOf } from '../../math/numerical/statistics'
 import type { Image } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 
@@ -28,10 +28,14 @@ export interface SubframeQualityMetrics {
 	readonly medianEccentricity?: number
 	// Median finite major/minor axis ratio, at least 1.
 	readonly medianElongation?: number
-	// Combined quality score used for weighting and reference selection.
+	// Combined quality score used for weighting and reference selection. Unbounded; stacking still uses it.
 	readonly qualityScore: number
 	// Estimated sky background level, normally in the image's sample scale.
 	readonly estimatedBackground: number
+	// Robust noise of the sparse background samples, as a normalized MAD. Zero when they do not scatter.
+	readonly noise: number
+	// Quality on 0..1 from star count, sharpness, eccentricity, SNR, background, and noise.
+	readonly normalizedScore: number
 }
 
 // Optional thresholds applied independently to subframe quality metrics.
@@ -48,10 +52,117 @@ export interface SubframeSelectionOptions {
 	readonly maxMedianEccentricity?: number
 	// Maximum median major/minor axis ratio.
 	readonly maxMedianElongation?: number
+	// Maximum estimated background, in the image's sample scale.
+	readonly maxBackground?: number
+	// Maximum robust background noise.
+	readonly maxNoise?: number
+	// Minimum normalized score, on 0..1.
+	readonly minNormalizedScore?: number
 }
 
 // Stable reasons for rejecting a subframe.
-export type SubframeRejectionReason = 'too-few-stars' | 'median-snr-too-low' | 'median-hfd-too-high' | 'median-hfd-unavailable' | 'median-fwhm-too-high' | 'median-fwhm-unavailable' | 'median-eccentricity-too-high' | 'median-eccentricity-unavailable' | 'median-elongation-too-high' | 'median-elongation-unavailable'
+export type SubframeRejectionReason =
+	| 'too-few-stars'
+	| 'median-snr-too-low'
+	| 'median-hfd-too-high'
+	| 'median-hfd-unavailable'
+	| 'median-fwhm-too-high'
+	| 'median-fwhm-unavailable'
+	| 'median-eccentricity-too-high'
+	| 'median-eccentricity-unavailable'
+	| 'median-elongation-too-high'
+	| 'median-elongation-unavailable'
+	| 'background-too-high'
+	| 'noise-too-high'
+	| 'normalized-score-too-low'
+
+// Defaults of the 0..1 frame score. Sharpness uses HFD when it is finite and FWHM otherwise, with the
+// same pixel thresholds. Background and noise are penalties on the normalized sample scale.
+export const DEFAULT_IMAGE_QUALITY = {
+	// Star count at which the star factor saturates.
+	starCount: 100,
+	// HFD or FWHM, in pixels, at and below which sharpness saturates.
+	targetPixels: 2,
+	// HFD or FWHM, in pixels, at and above which sharpness is zero.
+	maximumPixels: 8,
+	// Eccentricity at and above which the shape factor is zero.
+	maximumEccentricity: 0.8,
+	// Median SNR at which the SNR factor saturates.
+	signalToNoise: 50,
+	// Background at and above which the background factor is zero.
+	maximumBackground: 0.5,
+	// Noise at and above which the noise factor is zero.
+	maximumNoise: 0.05,
+} as const
+
+// Overrides for imageQualityScore. Every field is optional and falls back to DEFAULT_IMAGE_QUALITY.
+export interface ImageQualityOptions {
+	// Star count at which the star factor saturates.
+	readonly starCount?: number
+	// Sharpness width, in pixels, at and below which the factor saturates.
+	readonly targetPixels?: number
+	// Sharpness width, in pixels, at and above which the factor is zero.
+	readonly maximumPixels?: number
+	// Eccentricity at and above which the shape factor is zero.
+	readonly maximumEccentricity?: number
+	// Median SNR at which the SNR factor saturates.
+	readonly signalToNoise?: number
+	// Background at and above which the background factor is zero.
+	readonly maximumBackground?: number
+	// Noise at and above which the noise factor is zero.
+	readonly maximumNoise?: number
+	// 1 returns 0..1. 100 returns a percentage. Defaults to 1.
+	readonly scale?: 1 | 100
+}
+
+// Quantities imageQualityScore reads. Missing optional metrics are left out of the mean.
+export interface ImageQualityInput {
+	// Number of detected stars.
+	readonly starCount: number
+	// Median HFD in pixels.
+	readonly medianHFD?: number
+	// Median FWHM in pixels, used when HFD is missing or not finite.
+	readonly medianFWHM?: number
+	// Median eccentricity from 0 toward 1.
+	readonly medianEccentricity?: number
+	// Median stellar SNR.
+	readonly medianSNR?: number
+	// Sky background in the image's sample scale.
+	readonly estimatedBackground?: number
+	// Robust sky noise in the same scale.
+	readonly noise?: number
+}
+
+// Linear factor that is 1 at and below `good` and 0 at and above `bad`.
+function fallingFactor(value: number, good: number, bad: number) {
+	if (!(bad > good)) return value <= good ? 1 : 0
+	return clamp((bad - value) / (bad - good), 0, 1)
+}
+
+// Frame quality on 0..1, or 0..100 when requested.
+// Parameters: input carries the aggregate measurements. options overrides the saturation points of
+// each factor. The score is the geometric mean of star count, sharpness, eccentricity, SNR,
+// background, and noise, omitting any factor whose measurement is absent. Star count and SNR saturate
+// upward. Sharpness, eccentricity, background, and noise get worse as they grow. Zero stars score zero.
+export function imageQualityScore(input: ImageQualityInput, options: ImageQualityOptions = {}): number {
+	const starCount = options.starCount ?? DEFAULT_IMAGE_QUALITY.starCount
+	const targetPixels = options.targetPixels ?? DEFAULT_IMAGE_QUALITY.targetPixels
+	const maximumPixels = options.maximumPixels ?? DEFAULT_IMAGE_QUALITY.maximumPixels
+	const maximumEccentricity = options.maximumEccentricity ?? DEFAULT_IMAGE_QUALITY.maximumEccentricity
+	const signalToNoise = options.signalToNoise ?? DEFAULT_IMAGE_QUALITY.signalToNoise
+	const maximumBackground = options.maximumBackground ?? DEFAULT_IMAGE_QUALITY.maximumBackground
+	const maximumNoise = options.maximumNoise ?? DEFAULT_IMAGE_QUALITY.maximumNoise
+	const factors = [starCount > 0 ? clamp(input.starCount / starCount, 0, 1) : 0]
+	const sharpness = input.medianHFD !== undefined && Number.isFinite(input.medianHFD) ? input.medianHFD : input.medianFWHM
+	if (sharpness !== undefined && Number.isFinite(sharpness)) factors.push(fallingFactor(sharpness, targetPixels, maximumPixels))
+	if (input.medianEccentricity !== undefined && Number.isFinite(input.medianEccentricity)) factors.push(fallingFactor(input.medianEccentricity, 0, maximumEccentricity))
+	if (input.medianSNR !== undefined && Number.isFinite(input.medianSNR)) factors.push(signalToNoise > 0 ? clamp(input.medianSNR / signalToNoise, 0, 1) : 0)
+	if (input.estimatedBackground !== undefined && Number.isFinite(input.estimatedBackground)) factors.push(fallingFactor(input.estimatedBackground, 0, maximumBackground))
+	if (input.noise !== undefined && Number.isFinite(input.noise)) factors.push(fallingFactor(input.noise, 0, maximumNoise))
+
+	const score = geometricMeanOf(factors)
+	return options.scale === 100 ? score * 100 : score
+}
 
 // Selection diagnostic for one input frame.
 export interface SubframeSelectionResult<T extends SubframeInput> {
@@ -85,9 +196,10 @@ export function measureSubframeQuality(frame: SubframeInput): SubframeQualityMet
 	const medianFWHM = finiteMedian(stars, (star) => star.fwhm, Number.EPSILON)
 	const medianEccentricity = finiteMedian(stars, (star) => star.eccentricity)
 	const medianElongation = finiteMedian(stars, (star) => star.elongation, 1)
-	const estimatedBackground = estimateImageBackground(frame.image)
+	const { background: estimatedBackground, noise } = estimateImageBackground(frame.image)
 	const qualityScore = starCount > 0 && Number.isFinite(medianHFD) ? clamp((Math.sqrt(starCount) * Math.max(medianSNR, 1)) / Math.max(medianHFD, 0.5), 0, 1e6) : 0
-	return { starCount, medianSNR, medianHFD, medianFWHM, medianEccentricity, medianElongation, qualityScore, estimatedBackground }
+	const normalizedScore = imageQualityScore({ starCount, medianHFD, medianFWHM, medianEccentricity, medianSNR, estimatedBackground, noise })
+	return { starCount, medianSNR, medianHFD, medianFWHM, medianEccentricity, medianElongation, qualityScore, estimatedBackground, noise, normalizedScore }
 }
 
 // Classifies frames against explicitly supplied thresholds without modifying their order or contents.
@@ -133,6 +245,10 @@ function rejectionReasons(metrics: SubframeQualityMetrics, options: SubframeSele
 		else if (metrics.medianElongation > options.maxMedianElongation) reasons.push('median-elongation-too-high')
 	}
 
+	if (options.maxBackground !== undefined && metrics.estimatedBackground > options.maxBackground) reasons.push('background-too-high')
+	if (options.maxNoise !== undefined && metrics.noise > options.maxNoise) reasons.push('noise-too-high')
+	if (options.minNormalizedScore !== undefined && metrics.normalizedScore < options.minNormalizedScore) reasons.push('normalized-score-too-low')
+
 	return reasons
 }
 
@@ -167,8 +283,10 @@ function estimateImageBackground(image: Image) {
 		}
 	}
 
-	if (values.length === 0) return 0
+	if (values.length === 0) return { background: 0, noise: 0 }
 	const sample = Float64Array.from(values)
 	sample.sort()
-	return medianOf(sample)
+	const background = medianOf(sample)
+	const noise = medianAbsoluteDeviationOf(sample, background, true)
+	return { background, noise: Number.isFinite(noise) ? noise : 0 }
 }

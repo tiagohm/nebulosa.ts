@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Image } from '../../../src/imaging/model/types'
-import { measureSubframeQuality, selectSubframes } from '../../../src/imaging/processing/subframe.selector'
+import { imageQualityScore, measureSubframeQuality, selectSubframes } from '../../../src/imaging/processing/subframe.selector'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 
 // Builds a minimal image used only for deterministic background measurement.
@@ -43,6 +43,22 @@ describe('subframe selector', () => {
 
 		const selection = selectSubframes([frame], { maxMedianFWHM: 3, maxMedianEccentricity: 0.5, maxMedianElongation: 1.5 })
 		expect(selection.results[0].reasons).toEqual(['median-fwhm-unavailable', 'median-eccentricity-unavailable', 'median-elongation-unavailable'])
+	})
+
+	test('scores a clean sharp field at one and rejects background, noise, and a low score', () => {
+		expect(imageQualityScore({ starCount: 100, medianHFD: 2, medianEccentricity: 0, medianSNR: 50, estimatedBackground: 0, noise: 0 })).toBeCloseTo(1, 12)
+		expect(imageQualityScore({ starCount: 0 })).toBe(0)
+		expect(imageQualityScore({ starCount: 100, medianHFD: 2, medianEccentricity: 0, medianSNR: 50, estimatedBackground: 0, noise: 0 }, { scale: 100 })).toBeCloseTo(100, 8)
+		const sharp = imageQualityScore({ starCount: 100, medianHFD: 2, medianEccentricity: 0.1, medianSNR: 50 })
+		const trailed = imageQualityScore({ starCount: 100, medianHFD: 2, medianEccentricity: 0.6, medianSNR: 50 })
+		expect(trailed).toBeLessThan(sharp)
+
+		const frame = { image: makeImage(0.2), stars: [star()] }
+		expect(selectSubframes([frame], { maxBackground: 0.05 }).results[0]?.reasons).toEqual(['background-too-high'])
+		expect(selectSubframes([frame], { minNormalizedScore: 1 }).results[0]?.reasons).toEqual(['normalized-score-too-low'])
+		const pair = new Float32Array([0, 1])
+		const noisyImage = { ...makeImage(), raw: pair, metadata: { ...makeImage().metadata, width: 2, pixelCount: 2, stride: 2, strideInBytes: 8 } }
+		expect(selectSubframes([{ image: noisyImage, stars: [star()] }], { maxNoise: 0.01 }).results[0]?.reasons).toContain('noise-too-high')
 	})
 
 	test('treats round stars as valid zero eccentricity measurements', () => {

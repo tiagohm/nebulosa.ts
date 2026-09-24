@@ -1,7 +1,7 @@
 import { validatePositiveFinite, validatePositiveInteger } from '../../core/validation'
 import { robustLinearLeastSquares, type RobustLinearLeastSquaresResult } from '../../math/numerical/least.squares'
 import { goldenSectionSearch } from '../../math/numerical/optimization'
-import { medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, percentileOf, STANDARD_DEVIATION_SCALE } from '../../math/numerical/statistics'
+import { geometricMeanOf, medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, percentileOf, STANDARD_DEVIATION_SCALE } from '../../math/numerical/statistics'
 import type { BacklashCompensation, BacklashCompensationMode } from './backlash'
 
 // Deterministic focuser-backlash calibration from caller-supplied positions and scalar measurements.
@@ -602,16 +602,6 @@ function fitPreloadSlope(points: readonly BacklashProbePoint[], minimumPoints: n
 	}
 }
 
-// Returns the geometric mean of bounded quality components.
-function geometricMean(values: readonly number[]) {
-	let logarithm = 0
-	for (let i = 0; i < values.length; i++) {
-		if (!Number.isFinite(values[i]) || values[i] <= 0) return 0
-		logarithm += Math.log(Math.min(1, values[i]))
-	}
-	return Math.min(1, Math.max(0, Math.exp(logarithm / values.length)))
-}
-
 // Scores one direction without allowing invalid runs to contribute fit diagnostics.
 function directionConfidence(result: BacklashDirectionResult, scale: number) {
 	const valid = result.runs.filter((run) => run.valid)
@@ -628,10 +618,10 @@ function directionConfidence(result: BacklashDirectionResult, scale: number) {
 
 	const coverage = result.validRunCount / result.totalRunCount
 	const dispersionScore = 1 / (1 + result.dispersion / scale)
-	const fitScore = 1 / (1 + medianOf(nrmse.sort()))
+	const fitScore = 1 / (1 + medianBySelectionOf(nrmse))
 	const uncertaintyScore = 1 / (1 + result.uncertainty / scale)
-	const slopeScore = medianOf(slopeAgreement.sort())
-	return geometricMean([coverage, dispersionScore, fitScore, uncertaintyScore, slopeScore])
+	const slopeScore = medianBySelectionOf(slopeAgreement)
+	return geometricMeanOf([coverage, dispersionScore, fitScore, uncertaintyScore, slopeScore])
 }
 
 // Synchronous command/event state machine for repeated two-direction backlash calibration.

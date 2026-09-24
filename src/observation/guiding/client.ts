@@ -894,7 +894,7 @@ export class GuiderClient {
 		return this.#dither.mode
 	}
 
-	// Selects the dither pattern (PHD2 random or spiral) and restarts the spiral generator.
+	// Selects the dither pattern and restarts its sequence. Random and spiral match PHD2; golden and grid are local patterns.
 	setDitherMode(mode: DitherMode) {
 		this.#dither.setMode(mode)
 		this.emitEvent('GuideParamChange', { Name: 'DitherMode', Value: mode })

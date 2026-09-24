@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { TAU } from '../../../src/core/constants'
 // oxfmt-ignore
-import { Histogram, chiSquareCdf, chiSquareQuantile, fDistributionSurvival, geometricMedian, logGamma, maxOf, meanOf, medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, minOf, pearsonCorrelationOf, percentileOf, regularizedGammaP, regularizedIncompleteBeta, rmsOf, standardDeviationOf } from '../../../src/math/numerical/statistics'
+import { Histogram, chiSquareCdf, chiSquareQuantile, fDistributionSurvival, geometricMeanOf, geometricMedian, logGamma, maxOf, meanOf, medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, minOf, pearsonCorrelationOf, percentileOf, regularizedGammaP, regularizedIncompleteBeta, rmsOf, standardDeviationOf } from '../../../src/math/numerical/statistics'
 
 test('distribution functions match closed-form and SciPy 1.18.1 references', () => {
 	expect(logGamma(5)).toBeCloseTo(Math.log(24), 14)
@@ -59,6 +59,21 @@ test('mean of', () => {
 	// Compensated summation recovers the small terms that naive summation drops.
 	expect(meanOf([1e16, 1, -1e16, 1])).toBe(0.5)
 	expect(meanOf([2, 1e16, 1, -1e16, 1, 2], 1, 5)).toBe(0.5)
+})
+
+test('geometric mean is stable across wide ranges and defines boundary behavior', () => {
+	expect(geometricMeanOf([1, 4])).toBe(2)
+	const wide = new Float64Array([1e-300, 1e300])
+	expect(geometricMeanOf(wide)).toBeCloseTo(1, 14)
+	expect(wide).toEqual(new Float64Array([1e-300, 1e300]))
+	expect(geometricMeanOf([Math.exp(700), 1, Math.exp(-700)])).toBeCloseTo(1, 14)
+	expect(geometricMeanOf([5])).toBe(5)
+	expect(geometricMeanOf([0, 4])).toBe(0)
+	expect(geometricMeanOf([Number.POSITIVE_INFINITY, 4])).toBe(Number.POSITIVE_INFINITY)
+	expect(geometricMeanOf([0, Number.POSITIVE_INFINITY])).toBeNaN()
+	expect(geometricMeanOf([-1, 1])).toBeNaN()
+	expect(geometricMeanOf([Number.NaN, 1])).toBeNaN()
+	expect(geometricMeanOf([])).toBeNaN()
 })
 
 test('rms of', () => {

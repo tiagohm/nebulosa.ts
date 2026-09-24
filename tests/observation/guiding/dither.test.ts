@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { PI } from '../../../src/core/constants'
 import { mulberry32, type Random } from '../../../src/math/numerical/random'
 import { DitherGenerator } from '../../../src/observation/guiding/dither'
 
@@ -150,6 +151,8 @@ describe('mode', () => {
 	test('defaults to random and honors the constructor option', () => {
 		expect(new DitherGenerator().mode).toBe('random')
 		expect(new DitherGenerator({ mode: 'spiral' }).mode).toBe('spiral')
+		expect(new DitherGenerator({ mode: 'golden' }).mode).toBe('golden')
+		expect(new DitherGenerator({ mode: 'grid' }).mode).toBe('grid')
 	})
 
 	test('restarts the spiral even when the mode is unchanged', () => {
@@ -173,5 +176,22 @@ describe('mode', () => {
 		generator.setMode('spiral')
 
 		expect(step(generator, 1)).toEqual([0, 1])
+	})
+})
+
+describe('golden and grid', () => {
+	test('the first golden sample sits at one radius on the golden angle', () => {
+		const generator = new DitherGenerator({ mode: 'golden' })
+		const theta = PI * (3 - Math.sqrt(5))
+		expect(step(generator, 4)).toEqual([4 * Math.cos(theta), 4 * Math.sin(theta)])
+		expect(generator.next(4, true).declination).toBe(0)
+	})
+
+	test('the grid walks the Chebyshev ring around the origin and holds declination for RA-only', () => {
+		const generator = new DitherGenerator({ mode: 'grid' })
+		expect(step(generator, 2)).toEqual([-2, -2])
+		expect(step(generator, 2)).toEqual([2, 0])
+		const raOnly = new DitherGenerator({ mode: 'grid' })
+		expect(raOnly.next(2, true)).toEqual({ rightAscension: -2, declination: 0 })
 	})
 })

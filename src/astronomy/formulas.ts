@@ -1,13 +1,15 @@
-import { ARCSEC_PER_RADIAN, DEG2RAD, PIOVERTWO, RAD2DEG, SIDEREAL_RATE } from '../core/constants'
+import { ARCSEC_PER_RADIAN, DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, RAD2DEG, SIDEREAL_DRIFT_RATE, SIDEREAL_RATE, TAU } from '../core/constants'
+import type { TrackMode } from '../devices/indi/device'
 import type { Angle } from '../math/units/angle'
 import type { Distance } from '../math/units/distance'
 
 // Observation-planning formulas for telescopes, cameras, and imaging: optics (magnification, focal
 // length/ratio, resolving limits, exit pupil, fields of view), sampling and pixel scale, exposure and
-// SNR/dynamic-range estimates, star-trail limits, airmass/extinction/refraction, dew point, and target
-// magnitudes. These are first-order planning estimates, not high-precision physical models. Units are
-// stated per function (mm, microns, arcseconds, electrons, radians, Celsius). Callers outside a
-// documented domain get the mathematical result, which may be non-finite.
+// SNR/dynamic-range estimates, star-trail and arbitrary-rate smear limits, sidereal/solar/lunar/King
+// tracking rates, airmass/extinction/refraction, dew and frost point, and target magnitudes. These are
+// first-order planning estimates, not high-precision physical models. Units are stated per function
+// (mm, microns, arcseconds, electrons, radians, Celsius). Callers outside a documented domain get the
+// mathematical result, which may be non-finite.
 
 // Arcseconds per radian divided by 1000: converts (pixel size in microns / focal length in mm) to arcsec/pixel.
 const ARCSECONDS_PER_PIXEL_FACTOR = ARCSEC_PER_RADIAN / 1000
@@ -17,6 +19,15 @@ const MAX_EXPOSURE_COSINE_EPSILON = 1e-12
 // Magnus formula coefficients for the dew-point approximation over water (dimensionless a, b in °C).
 const MAGNUS_A_WATER = 17.625
 const MAGNUS_B_CELSIUS = 243.04
+// Magnus coefficients for the frost-point approximation over ice, the Alduchov & Eskridge (1996) pair
+// that matches the water coefficients above. Dimensionless a, b in °C.
+const MAGNUS_A_ICE = 22.587
+const MAGNUS_B_ICE_CELSIUS = 273.86
+// Dew-risk margin, in °C, at which the risk falls to zero. A margin of zero is saturated air.
+const DEW_RISK_CLEAR_MARGIN_CELSIUS = 5
+// Conventional average King rate is the sidereal rate reduced by one part in 3600 (~15.0369 arcsec/s).
+// This is the fixed drive rate used by equatorial mounts, not the hour-angle-dependent King formula.
+const KING_SIDEREAL_FACTOR = 1 - 1 / 3600
 // Inclusive Celsius bounds of the Magnus relation as this project uses it. The coefficients above are
 // fitted to atmospheric conditions, and the a*T/(b+T) term diverges at -243.04 °C: merely staying above
 // that singularity is not enough, because approaching it makes the term unbounded and the inverse
@@ -138,6 +149,29 @@ export function samplingRatio(seeingArcsec: number, arcsecPerPixel: number) {
 	return seeingArcsec / arcsecPerPixel
 }
 
+// FWHM in arcseconds implied by a measured stellar FWHM in pixels and the image scale.
+// Parameters: fwhmPixels is a positive width in pixels, and arcsecPerPixel is a positive image scale.
+// Returns: seeing in arcseconds. This is the inverse of samplingRatio when the seeing is quoted as a FWHM.
+export function fwhmPixelsToSeeing(fwhmPixels: number, arcsecPerPixel: number) {
+	return fwhmPixels * arcsecPerPixel
+}
+
+// Sampling class of a stellar FWHM measured in pixels.
+// Below 2 pixels the image is undersampled (the seeing disk is narrower than the Nyquist limit of a
+// typical stellar profile). The closed interval [2, 3] is the usual imaging target. Above 3 pixels the
+// image is oversampled. Parameters: fwhmPixels is the stellar FWHM in pixels, from samplingRatio or a
+// direct measurement. Returns one of the three classes.
+export type FWHMSamplingKind = 'undersampled' | 'optimal' | 'oversampled'
+
+// Classifies a stellar FWHM in pixels as undersampled, optimal, or oversampled.
+// Parameters: fwhmPixels is the full width at half maximum in pixels. The optimal band is the closed
+// interval [2, 3]. Returns the sampling class.
+export function classifyFWHMSampling(pixels: number): FWHMSamplingKind {
+	if (pixels < 2) return 'undersampled'
+	if (pixels <= 3) return 'optimal'
+	return 'oversampled'
+}
+
 // Recommended Focal Length. Planning formula F = 206.265 * pixel_size_microns * sampling / seeing_arcsec.
 // Parameters: pixelSizeMicrons is positive, targetSampling is positive and dimensionless, and seeingArcsec is positive.
 // Returns: recommended focal length in millimeters.
@@ -239,6 +273,25 @@ export function maxExposureBeforeTrail(trailLimitPixels: number, imageScaleArcse
 	const cosine = Math.cos(declination)
 	if (!(cosine > MAX_EXPOSURE_COSINE_EPSILON)) throw new RangeError('declination is too close to the celestial pole')
 	return (trailLimitPixels * imageScaleArcsecPerPixel) / (SIDEREAL_RATE * cosine)
+}
+
+// Exposure smear of an arbitrary angular rate. Planning formula pixels = |rate| * t / image_scale.
+// Parameters: angularRateArcsecPerSecond is a signed rate in arcseconds per SI second (the sign is
+// ignored; smear is a length), exposureSeconds is non-negative, and arcsecPerPixel is the image scale.
+// Returns: displacement in pixels. A zero rate produces no smear. This is the general case of
+// starTrailLength, which hard-wires the sidereal rate at a declination.
+export function exposureSmearPixels(angularRateArcsecPerSecond: number, exposureSeconds: number, arcsecPerPixel: number) {
+	return (Math.abs(angularRateArcsecPerSecond) * exposureSeconds) / arcsecPerPixel
+}
+
+// Maximum exposure that keeps an arbitrary angular rate inside a pixel smear budget.
+// Parameters: angularRateArcsecPerSecond is a signed rate in arcseconds per SI second, smearLimitPixels
+// is a non-negative pixel budget, and arcsecPerPixel is the image scale. Returns the exposure in
+// seconds. A zero rate never smears, so the limit is +Infinity.
+export function maxExposureForSmear(angularRateArcsecPerSecond: number, smearLimitPixels: number, arcsecPerPixel: number) {
+	const rate = Math.abs(angularRateArcsecPerSecond)
+	if (rate === 0) return Number.POSITIVE_INFINITY
+	return (Math.abs(smearLimitPixels) * arcsecPerPixel) / rate
 }
 
 // Signal-to-Noise Ratio. Planning formula SNR = S / sqrt(S + n_pix * (B + D + RN^2)).
@@ -366,6 +419,45 @@ export function dewPoint(temperatureCelsius: number, relativeHumidityPercent: nu
 	return (MAGNUS_B_CELSIUS * alpha) / (MAGNUS_A_WATER - alpha)
 }
 
+// Frost Point. Magnus approximation over ice, using the Alduchov & Eskridge ice coefficients.
+// Parameters: temperatureCelsius is an ambient temperature in degrees Celsius within the Magnus domain
+// [-100, 100], and relativeHumidityPercent is within (0, 100]. The same humidity guard as dewPoint
+// rejects a non-positive humidity before the logarithm. Below freezing this is the temperature at
+// which ice would deposit; at 100% relative humidity it returns the ambient temperature. Above
+// freezing the dew point is the physically relevant condensation temperature.
+// Returns: frost point in degrees Celsius.
+export function frostPoint(temperatureCelsius: number, relativeHumidityPercent: number) {
+	if (!(relativeHumidityPercent > 0) || !(relativeHumidityPercent <= 100)) throw new RangeError('relative humidity must be within (0, 100]')
+	const alpha = (MAGNUS_A_ICE * temperatureCelsius) / (MAGNUS_B_ICE_CELSIUS + temperatureCelsius) + Math.log(relativeHumidityPercent / 100)
+	return (MAGNUS_B_ICE_CELSIUS * alpha) / (MAGNUS_A_ICE - alpha)
+}
+
+// Dew margin T - Tdew, in degrees Celsius. Positive means the air can cool before saturation.
+// Parameters: temperatureCelsius and relativeHumidityPercent follow dewPoint. Returns the margin in
+// degrees Celsius. A non-positive humidity is rejected by dewPoint.
+export function dewMargin(temperatureCelsius: number, relativeHumidityPercent: number) {
+	return temperatureCelsius - dewPoint(temperatureCelsius, relativeHumidityPercent)
+}
+
+// Dew risk from a temperature margin T - Tdew, on a 0..1 scale.
+// Parameters: marginCelsius is the dew margin in degrees Celsius, and clearMarginCelsius is the margin
+// that counts as no risk (default 5 °C). Returns 1 at and below a zero margin, 0 at and above the clear
+// margin, and a linear ramp between them.
+export function dewRiskFromMargin(marginCelsius: number, clearMarginCelsius: number = DEW_RISK_CLEAR_MARGIN_CELSIUS) {
+	if (!(clearMarginCelsius > 0)) return !(marginCelsius > 0) ? 1 : 0
+	if (!(marginCelsius < clearMarginCelsius)) return 0
+	if (!(marginCelsius > 0)) return 1
+	return 1 - marginCelsius / clearMarginCelsius
+}
+
+// Dew risk of an ambient reading, on a 0..1 scale. Combines dewMargin and dewRiskFromMargin.
+// Parameters: temperatureCelsius and relativeHumidityPercent follow dewPoint, and clearMarginCelsius is
+// the margin in degrees Celsius that counts as no risk. Returns the 0..1 risk. A non-positive humidity
+// is rejected by dewPoint.
+export function dewRisk(temperatureCelsius: number, relativeHumidityPercent: number, clearMarginCelsius: number = DEW_RISK_CLEAR_MARGIN_CELSIUS) {
+	return dewRiskFromMargin(dewMargin(temperatureCelsius, relativeHumidityPercent), clearMarginCelsius)
+}
+
 // Relative Humidity. Inverse of the Magnus dew-point approximation, RH = 100 * exp(alpha_dew - alpha_temperature).
 // Parameters: temperatureCelsius and dewPointCelsius are in degrees Celsius, both within the Magnus domain
 // [-100, 100]. Outside it the exponent is unbounded and the result may overflow to Infinity; use
@@ -430,4 +522,49 @@ export function cometMagnitudeEstimate(absoluteMagnitudeH: number, delta: Distan
 // Returns: estimated apparent magnitude.
 export function asteroidMagnitudeEstimate(absoluteMagnitudeH: number, heliocentricDistance: Distance, delta: Distance, phaseCorrectionMagnitude: number) {
 	return absoluteMagnitudeH + 5 * Math.log10(heliocentricDistance * delta) + phaseCorrectionMagnitude
+}
+
+// Unit of a tracking-rate conversion. A sidereal multiplier of 1 is the sidereal rate.
+export type TrackingRateUnit = 'radiansPerSecond' | 'arcsecPerSecond' | 'siderealMultiplier'
+
+// One drive rate expressed in radians per SI second, arcseconds per SI second, and as a multiplier of
+// the sidereal rate.
+export interface TrackingRate {
+	// Drive rate in radians per SI second.
+	readonly radiansPerSecond: number
+	// Drive rate in arcseconds per SI second. Numerically equal to degrees per hour.
+	readonly arcsecPerSecond: number
+	// Rate divided by the sidereal rate. Sidereal itself is 1.
+	readonly siderealMultiplier: number
+}
+
+// Mean solar drive rate in arcseconds per SI second: exactly one turn per mean solar day.
+const SOLAR_ARCSEC_PER_SECOND = (TAU * ARCSEC_PER_RADIAN) / DAYSEC
+// Moon's mean motion in arcseconds per SI second, from the sidereal month.
+const LUNAR_MOTION_ARCSEC_PER_SECOND = (TAU * ARCSEC_PER_RADIAN) / (MOON_SIDEREAL_DAYS * DAYSEC)
+
+// Builds the three unit views of an arcsecond-per-second drive rate.
+function trackingRateFromArcsecPerSecond(arcsecPerSecond: number): TrackingRate {
+	return { radiansPerSecond: arcsecPerSecond / ARCSEC_PER_RADIAN, arcsecPerSecond, siderealMultiplier: arcsecPerSecond / SIDEREAL_RATE }
+}
+
+// Sidereal, solar, lunar, or King drive rate.
+// Parameters: name selects the rate. Returns radians per SI second, arcseconds per SI second, and the
+// sidereal multiplier. Lunar is the mean rate implied by MOON_SIDEREAL_DAYS; the instantaneous
+// topocentric lunar rate is an ephemeris difference, not this constant.
+export function trackingRate(mode: Exclude<TrackMode, 'CUSTOM'>): TrackingRate {
+	if (mode === 'SOLAR') return trackingRateFromArcsecPerSecond(SOLAR_ARCSEC_PER_SECOND)
+	if (mode === 'LUNAR') return trackingRateFromArcsecPerSecond(SIDEREAL_RATE - LUNAR_MOTION_ARCSEC_PER_SECOND)
+	if (mode === 'KING') return trackingRateFromArcsecPerSecond(SIDEREAL_RATE * KING_SIDEREAL_FACTOR)
+	return trackingRateFromArcsecPerSecond(SIDEREAL_RATE)
+}
+
+// Converts a drive rate between radians per SI second, arcseconds per SI second, and a sidereal multiplier.
+// Parameters: value is the rate in `from`. A sidereal multiplier of 1 equals SIDEREAL_DRIFT_RATE radians
+// per second and SIDEREAL_RATE arcseconds per second. Returns the same rate in `to`.
+export function convertTrackingRate(value: number, from: TrackingRateUnit, to: TrackingRateUnit) {
+	const radiansPerSecond = from === 'radiansPerSecond' ? value : from === 'arcsecPerSecond' ? value / ARCSEC_PER_RADIAN : value * SIDEREAL_DRIFT_RATE
+	if (to === 'radiansPerSecond') return radiansPerSecond
+	if (to === 'arcsecPerSecond') return radiansPerSecond * ARCSEC_PER_RADIAN
+	return radiansPerSecond / SIDEREAL_DRIFT_RATE
 }

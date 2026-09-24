@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
-import { asteroidMagnitudeEstimate, airmass, airmassKastenYoung, airyDiskInPixels, airyDiskSize, altitudeAtTransit, atmosphericExtinction, atmosphericRefraction, cometMagnitudeEstimate, criticalFocusZone, dawesLimit, dewPoint, dynamicRange, dynamicRangeInStops, effectiveApertureWithObstruction, exitPupil, exitPupilFromApertureAndMagnification, exitPupilFromEyepieceAndFocalRatio, eyepieceTrueFovViaFieldStop, eyepieceView, focalLength, focalRatio, guidingErrorInPixels, hourAngleAtAltitude, lightGraspRatio, isMagnusDomain, limitingMagnitude, MAGNUS_MAX_CELSIUS, MAGNUS_MIN_CELSIUS, magnification, maxExposureBeforeTrail, mosaicPanelCount, objectAngularDiameter, obstructionRatio, periodicErrorInPixels, pixelScale, plateScale, rayleighLimit, recommendedFocalLength, relativeHumidity, requiredSubframeCount, samplingRatio, saturationTime, sensorDiagonalFov, sensorFieldOfView, signalToNoiseRatio, skyLimitedExposure, stackingMagnitudeGain, stackingSnrGain, starTrailLength, subframeCount, surfaceBrightness, totalIntegrationTime } from '../../src/astronomy/formulas'
-import { DEG2RAD, PIOVERTWO, RAD2DEG } from '../../src/core/constants'
+import { asteroidMagnitudeEstimate, airmass, airmassKastenYoung, airyDiskInPixels, airyDiskSize, altitudeAtTransit, atmosphericExtinction, atmosphericRefraction, classifyFWHMSampling, cometMagnitudeEstimate, convertTrackingRate, criticalFocusZone, dawesLimit, dewMargin, dewPoint, dewRisk, dewRiskFromMargin, dynamicRange, dynamicRangeInStops, effectiveApertureWithObstruction, exitPupil, exitPupilFromApertureAndMagnification, exitPupilFromEyepieceAndFocalRatio, exposureSmearPixels, eyepieceTrueFovViaFieldStop, eyepieceView, focalLength, focalRatio, frostPoint, fwhmPixelsToSeeing, guidingErrorInPixels, hourAngleAtAltitude, lightGraspRatio, isMagnusDomain, limitingMagnitude, MAGNUS_MAX_CELSIUS, MAGNUS_MIN_CELSIUS, magnification, maxExposureBeforeTrail, maxExposureForSmear, mosaicPanelCount, objectAngularDiameter, obstructionRatio, periodicErrorInPixels, pixelScale, plateScale, rayleighLimit, recommendedFocalLength, relativeHumidity, requiredSubframeCount, samplingRatio, saturationTime, sensorDiagonalFov, sensorFieldOfView, signalToNoiseRatio, skyLimitedExposure, stackingMagnitudeGain, stackingSnrGain, starTrailLength, subframeCount, surfaceBrightness, totalIntegrationTime, trackingRate } from '../../src/astronomy/formulas'
+import { DEG2RAD, PIOVERTWO, RAD2DEG, SIDEREAL_RATE } from '../../src/core/constants'
 
 test('visual astronomy and optical planning formulas return expected values', () => {
 	expect(focalLength(200, 5)).toBe(1000)
@@ -89,6 +89,39 @@ test('hour angle at altitude gives a six-hour arc for a body on the celestial eq
 	// A declination-zero body is up exactly half the day at any latitude: H = 90 deg.
 	expect(hourAngleAtAltitude(0, 45 * DEG2RAD, 0)).toBeCloseTo(PIOVERTWO, 12)
 	expect(hourAngleAtAltitude(0, 0, 0)).toBeCloseTo(PIOVERTWO, 12)
+})
+
+test('seeing class, smear, frost, and drive rates follow their planning definitions', () => {
+	expect(fwhmPixelsToSeeing(2, 1.2)).toBeCloseTo(2.4, 12)
+	expect(classifyFWHMSampling(1.5)).toBe('undersampled')
+	expect(classifyFWHMSampling(2)).toBe('optimal')
+	expect(classifyFWHMSampling(3)).toBe('optimal')
+	expect(classifyFWHMSampling(3.1)).toBe('oversampled')
+	expect(exposureSmearPixels(-15, 2, 1.5)).toBeCloseTo(20, 12)
+	expect(maxExposureForSmear(15, 20, 1.5)).toBeCloseTo(2, 12)
+	expect(maxExposureForSmear(0, 1, 1)).toBe(Number.POSITIVE_INFINITY)
+	expect(frostPoint(20, 100)).toBeCloseTo(20, 10)
+	expect(frostPoint(-10, 50)).toBeLessThan(-10)
+	expect(dewMargin(20, 100)).toBeCloseTo(0, 10)
+	expect(dewRiskFromMargin(2.5)).toBeCloseTo(0.5, 12)
+	expect(dewRiskFromMargin(5)).toBe(0)
+	expect(dewRiskFromMargin(0)).toBe(1)
+	expect(dewRisk(20, 100)).toBe(1)
+	expect(dewRisk(20, 60)).toBe(0)
+
+	const sidereal = trackingRate('SIDEREAL')
+	const solar = trackingRate('SOLAR')
+	const lunar = trackingRate('LUNAR')
+	const king = trackingRate('KING')
+	expect(sidereal.arcsecPerSecond).toBeCloseTo(SIDEREAL_RATE, 12)
+	expect(sidereal.siderealMultiplier).toBeCloseTo(1, 12)
+	expect(solar.arcsecPerSecond).toBeCloseTo(15, 10)
+	expect(lunar.arcsecPerSecond).toBeLessThan(solar.arcsecPerSecond)
+	expect(king.arcsecPerSecond).toBeLessThan(sidereal.arcsecPerSecond)
+	expect(king.arcsecPerSecond).toBeGreaterThan(solar.arcsecPerSecond)
+	expect(convertTrackingRate(1, 'siderealMultiplier', 'arcsecPerSecond')).toBeCloseTo(SIDEREAL_RATE, 8)
+	expect(convertTrackingRate(SIDEREAL_RATE, 'arcsecPerSecond', 'siderealMultiplier')).toBeCloseTo(1, 8)
+	expect(convertTrackingRate(sidereal.radiansPerSecond, 'radiansPerSecond', 'arcsecPerSecond')).toBeCloseTo(SIDEREAL_RATE, 8)
 })
 
 test('hour angle at altitude matches the standard semidiurnal arc', () => {

@@ -3,7 +3,8 @@ import type { Point } from './geometry'
 import type { NumberArray } from './math'
 
 // Distribution and descriptive statistics over numeric samples and histogram bins, including robust
-// scalar estimators and an unweighted 2D geometric median. Distribution arguments are dimensionless.
+// scalar estimators, a logarithmically stable geometric mean, and an unweighted 2D geometric median.
+// Distribution arguments are dimensionless.
 // Sample statistics retain the input units; variance uses squared units. Most scalar reducers return
 // NaN for empty input. Selection-based medians rearrange their input prefix; geometric medians preserve
 // paired coordinates and allocate scratch buffers. Histogram caches descriptors of bin counts,
@@ -496,6 +497,48 @@ export function meanOf(a: Readonly<NumberArray>, start: number = 0, end: number 
 	}
 
 	return (sum + compensation) / n
+}
+
+// Computes the geometric mean of non-negative values without forming their product.
+// Positive finite values are accumulated as logarithms with Neumaier compensation, avoiding
+// intermediate overflow and underflow across wide dynamic ranges. A zero makes the result zero and
+// positive infinity makes it infinite; their indeterminate combination, negative values, NaN, and
+// empty input return NaN. The input is preserved.
+export function geometricMeanOf(values: Readonly<NumberArray>, start: number = 0, end: number = values.length) {
+	const n = end - start
+	if (n <= 0) return Number.NaN
+	if (n === 1) {
+		const value = values[start]
+		return !(value >= 0) ? Number.NaN : value
+	}
+
+	let sum = 0
+	let compensation = 0
+	let hasZero = false
+	let hasInfinity = false
+
+	for (let i = 0; i < values.length; i++) {
+		const value = values[i]
+
+		if (!(value >= 0)) return Number.NaN
+		if (value === 0) {
+			hasZero = true
+			continue
+		}
+		if (value === Number.POSITIVE_INFINITY) {
+			hasInfinity = true
+			continue
+		}
+
+		const logarithm = Math.log(value)
+		const next = sum + logarithm
+		compensation += Math.abs(sum) >= Math.abs(logarithm) ? sum - next + logarithm : logarithm - next + sum
+		sum = next
+	}
+
+	if (hasZero) return hasInfinity ? Number.NaN : 0
+	if (hasInfinity) return Number.POSITIVE_INFINITY
+	return Math.exp((sum + compensation) / values.length)
 }
 
 // Computes the median value of a sorted numeric array. Input must be ascending-sorted.
