@@ -1,7 +1,8 @@
 import { associateMeteorTrack } from '../../../astronomy/meteors/trajectory'
 import type { MeteorTrack } from '../../../astronomy/meteors/types'
 import { DAYSEC, PIOVERTWO } from '../../../core/constants'
-import { meanOf, medianBySelectionOf } from '../../../math/numerical/statistics'
+import type { NumberArray } from '../../../math/numerical/math'
+import { meanOf, medianBySelectionOf, standardDeviationOf } from '../../../math/numerical/statistics'
 import { deg } from '../../../math/units/angle'
 import type { Image } from '../../model/types'
 import { type CelestialStreakTrack, celestialStreakTrack, matchPredictedStreakTrack, type PredictedTrackWindow } from './celestial'
@@ -609,17 +610,8 @@ function flareScore(values: Float64Array): number {
 }
 
 // Coefficient of variation. A non-positive mean is treated as unstructured.
-function variation(values: ArrayLike<number>): number {
-	let mean = 0
-	for (let index = 0; index < values.length; index++) mean += values[index]
-	mean /= values.length
-	if (!(Math.abs(mean) > 1e-6)) return 1
-	let variance = 0
-	for (let index = 0; index < values.length; index++) {
-		const delta = values[index] - mean
-		variance += delta * delta
-	}
-	return Math.sqrt(variance / values.length) / Math.abs(mean)
+function variation(values: Readonly<NumberArray>): number {
+	return standardDeviationOf(values) / meanOf(values)
 }
 
 // One class vote with a single diagnostic.
