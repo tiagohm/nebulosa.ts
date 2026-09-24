@@ -1,11 +1,35 @@
 import { type AffineTransform, invertTransform, matchStars, type SimilarityTransform, type StarMatchingConfig, type StarMatchingResult } from '../../astrometry/matching/star.matching'
 import { Bitpix } from '../../io/formats/fits/fits'
 import { bitpixInBytes } from '../../io/formats/fits/util'
-import type { Image, ImageRawPrecision, ImageRawType } from '../model/types'
+import { DEFAULT_GRAYSCALE, type Image, type ImageRawPrecision, type ImageRawType } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 
 // Star-based image registration and resampling. Registration maps target pixels onto a reference
 // image grid without normalizing or combining samples. Transform translations and residuals are pixels.
+// Optional source rejection masks invalidate the complete interpolation support without renormalization.
+// Optional finite-pair counts describe pre-mask photometric support without a second warped image.
+
+// Bounded counting of finite reference/warped pairs before source rejection, using output precision.
+export interface FinitePairSupportOptions {
+	// Positive integer ceiling per plane; counting stops once every plane reaches it.
+	readonly limit: number
+	// Count one BT.709 luminance plane for RGB instead of individual channels; defaults to false.
+	readonly luminance?: boolean
+}
+
+// Per-warp counting state; only counts and pendingPlanes mutate, with no per-pixel allocation.
+interface WarpPairSupport {
+	// Unmodified reference pixels, on the output grid with matching channels.
+	readonly referenceRaw: ImageRawType
+	// One capped count per channel or one for RGB luminance.
+	readonly counts: number[]
+	// Positive count ceiling shared by every plane.
+	readonly limit: number
+	// Whether matching RGB samples are reduced to BT.709 luminance.
+	readonly luminance: boolean
+	// Number of planes still below the ceiling.
+	pendingPlanes: number
+}
 
 // Resampling kernel used when warping an image onto a reference grid.
 export type ImageInterpolationMode = 'nearest' | 'bilinear' | 'bicubic'
@@ -38,6 +62,8 @@ export interface ImageRegistrationAcceptanceOptions {
 
 // Options controlling matching, validation, interpolation, and output storage.
 export interface ImageRegistrationOptions {
+	// Optional pre-mask finite-pair counts against the reference, returned with the warped image.
+	readonly finitePairSupport?: FinitePairSupportOptions
 	// Star-matching configuration forwarded to matchStars.
 	readonly matchStarsConfig?: StarMatchingConfig
 	// Resampling kernel. Defaults to bilinear.
@@ -48,12 +74,17 @@ export interface ImageRegistrationOptions {
 	readonly outputRaw?: ImageRawType
 	// Optional reusable one-byte-per-pixel coverage buffer.
 	readonly validityMask?: Uint8Array
+	// Source-grid rejection bytes (nonzero excludes all channels). Must match the source pixel count.
+	// Any rejected kernel tap invalidates the output; remaining taps are never renormalized.
+	readonly rejectionMask?: Uint8Array
 	// Optional criteria that reject a match before pixels are warped.
 	readonly acceptance?: ImageRegistrationAcceptanceOptions
 }
 
 // Options controlling a direct image warp.
 export interface WarpImageOptions {
+	// Optional pre-mask finite-pair counts against the reference, returned with the warped image.
+	readonly finitePairSupport?: FinitePairSupportOptions
 	// Resampling kernel. Defaults to bilinear.
 	readonly interpolationMode?: ImageInterpolationMode
 	// Floating-point output storage. When omitted, preserves source.raw storage.
@@ -62,6 +93,8 @@ export interface WarpImageOptions {
 	readonly outputRaw?: ImageRawType
 	// Optional reusable one-byte-per-pixel coverage buffer.
 	readonly validityMask?: Uint8Array
+	// Source-grid rejection bytes, one per pixel; nonzero invalidates every channel's kernel support.
+	readonly rejectionMask?: Uint8Array
 }
 
 // Geometric summary of a transform mapping target coordinates onto reference coordinates.
@@ -100,12 +133,17 @@ export interface ImageRegistrationTransform {
 
 // Image samples resampled to the reference grid and their coverage mask.
 export interface WarpedImage {
+	// Fresh per-plane finite-pair counts before rejection, capped at finitePairSupport.limit.
+	// Undefined unless requested; geometry and finite interpolated/reference values both constrain support.
+	readonly finitePairCounts?: readonly number[]
 	// Fresh image on the reference coordinate grid.
 	readonly image: Image
-	// One byte per output pixel; one means the source covered that pixel.
+	// One byte per output pixel; one means the source covered it with unmasked interpolation support.
 	readonly validityMask: Uint8Array
-	// Number of covered output pixels.
+	// Number of output centers inside the source domain, independent of rejection masks.
 	readonly coveredPixels: number
+	// Number of output pixels with unmasked interpolation support, matching validityMask.
+	readonly validPixels: number
 }
 
 // Registration failure categories that callers can handle without exceptions.
@@ -175,8 +213,11 @@ export function warpImage(source: Image, reference: Image, inverseTransform: Sim
 	const sampleCount = pixelCount * channels
 	const raw = options.outputRaw?.length === sampleCount ? options.outputRaw : createRaw(source.raw, sampleCount, options.outputPrecision ?? 'auto')
 	const validityMask = options.validityMask?.length === pixelCount ? options.validityMask : new Uint8Array(pixelCount)
-	const coveredPixels = warpIntoReference(source, inverseTransform, width, height, options.interpolationMode ?? 'bilinear', raw, validityMask)
-	return { image: buildImage(raw, reference), validityMask, coveredPixels }
+	const luminance = options.finitePairSupport?.luminance === true && channels === 3
+	const planes = luminance ? 1 : channels
+	const pairSupport: WarpPairSupport | undefined = options.finitePairSupport === undefined ? undefined : { referenceRaw: reference.raw, counts: new Array<number>(planes).fill(0), limit: options.finitePairSupport.limit, luminance, pendingPlanes: planes }
+	const { coveredPixels, validPixels } = warpIntoReference(source, inverseTransform, width, height, options.interpolationMode ?? 'bilinear', raw, validityMask, options.rejectionMask, pairSupport)
+	return { image: buildImage(raw, reference), validityMask, coveredPixels, validPixels, finitePairCounts: pairSupport?.counts }
 }
 
 // Converts a successful star-match model into a forward target-to-reference transform and summary.
@@ -209,8 +250,10 @@ function transformWithinBounds(summary: ImageTransformSummary, bounds: ImageRegi
 	return true
 }
 
-// Resamples source into caller-provided output buffers on the reference grid.
-function warpIntoReference(image: Image, inverseTransform: SimilarityTransform | AffineTransform, outWidth: number, outHeight: number, interpolation: ImageInterpolationMode, outRaw: ImageRawType, outMask: Uint8Array) {
+// Resamples source into caller-provided output buffers and counts geometric/usable support in one pass.
+// While pair counts are underfilled, rejected outputs are also interpolated, counted, then cleared.
+// Once all floors are met, rejected kernels skip sample reads again; validity never includes them.
+function warpIntoReference(image: Image, inverseTransform: SimilarityTransform | AffineTransform, outWidth: number, outHeight: number, interpolation: ImageInterpolationMode, outRaw: ImageRawType, outMask: Uint8Array, rejectionMask?: Uint8Array, pairSupport?: WarpPairSupport) {
 	const matrix = toAffineMatrix(inverseTransform)
 	const { raw, metadata } = image
 	const { width, height, channels } = metadata
@@ -219,23 +262,32 @@ function warpIntoReference(image: Image, inverseTransform: SimilarityTransform |
 	outRaw.fill(0)
 	outMask.fill(0)
 	let coveredPixels = 0
+	let validPixels = 0
 
 	if (interpolation === 'nearest') {
 		for (let y = 0, pixel = 0, outIndex = 0; y < outHeight; y++) {
 			let sourceX = matrix.m01 * y + matrix.tx
 			let sourceY = matrix.m11 * y + matrix.ty
 			for (let x = 0; x < outWidth; x++, pixel++, outIndex += channels) {
-				if (sourceX >= 0 && sourceY >= 0 && sourceX <= widthMinus1 && sourceY <= heightMinus1) {
+				const covered = sourceX >= 0 && sourceY >= 0 && sourceX <= widthMinus1 && sourceY <= heightMinus1
+				if (covered) coveredPixels++
+				const rejected = covered && rejectionMask !== undefined && isInterpolationSupportRejected(rejectionMask, width, height, sourceX, sourceY, interpolation)
+				if (covered && (!rejected || (pairSupport !== undefined && pairSupport.pendingPlanes > 0))) {
 					const base = (Math.round(sourceY) * width + Math.round(sourceX)) * channels
 					for (let channel = 0; channel < channels; channel++) outRaw[outIndex + channel] = raw[base + channel]
-					outMask[pixel] = 1
-					coveredPixels++
+					if (pairSupport !== undefined && pairSupport.pendingPlanes > 0) countWarpFinitePairs(outRaw, outIndex, channels, pairSupport)
+					if (rejected) {
+						for (let channel = 0; channel < channels; channel++) outRaw[outIndex + channel] = 0
+					} else {
+						outMask[pixel] = 1
+						validPixels++
+					}
 				}
 				sourceX += matrix.m00
 				sourceY += matrix.m10
 			}
 		}
-		return coveredPixels
+		return { coveredPixels, validPixels }
 	}
 
 	if (interpolation === 'bilinear') {
@@ -243,7 +295,10 @@ function warpIntoReference(image: Image, inverseTransform: SimilarityTransform |
 			let sourceX = matrix.m01 * y + matrix.tx
 			let sourceY = matrix.m11 * y + matrix.ty
 			for (let x = 0; x < outWidth; x++, pixel++, outIndex += channels) {
-				if (sourceX >= 0 && sourceY >= 0 && sourceX <= widthMinus1 && sourceY <= heightMinus1) {
+				const covered = sourceX >= 0 && sourceY >= 0 && sourceX <= widthMinus1 && sourceY <= heightMinus1
+				if (covered) coveredPixels++
+				const rejected = covered && rejectionMask !== undefined && isInterpolationSupportRejected(rejectionMask, width, height, sourceX, sourceY, interpolation)
+				if (covered && (!rejected || (pairSupport !== undefined && pairSupport.pendingPlanes > 0))) {
 					const x0 = Math.floor(sourceX)
 					const y0 = Math.floor(sourceY)
 					const x1 = Math.min(x0 + 1, widthMinus1)
@@ -259,14 +314,19 @@ function warpIntoReference(image: Image, inverseTransform: SimilarityTransform |
 					const base01 = (y1 * width + x0) * channels
 					const base11 = (y1 * width + x1) * channels
 					for (let channel = 0; channel < channels; channel++) outRaw[outIndex + channel] = raw[base00 + channel] * w00 + raw[base10 + channel] * w10 + raw[base01 + channel] * w01 + raw[base11 + channel] * w11
-					outMask[pixel] = 1
-					coveredPixels++
+					if (pairSupport !== undefined && pairSupport.pendingPlanes > 0) countWarpFinitePairs(outRaw, outIndex, channels, pairSupport)
+					if (rejected) {
+						for (let channel = 0; channel < channels; channel++) outRaw[outIndex + channel] = 0
+					} else {
+						outMask[pixel] = 1
+						validPixels++
+					}
 				}
 				sourceX += matrix.m00
 				sourceY += matrix.m10
 			}
 		}
-		return coveredPixels
+		return { coveredPixels, validPixels }
 	}
 
 	const rowStride = width * channels
@@ -274,7 +334,10 @@ function warpIntoReference(image: Image, inverseTransform: SimilarityTransform |
 		let sourceX = matrix.m01 * y + matrix.tx
 		let sourceY = matrix.m11 * y + matrix.ty
 		for (let x = 0; x < outWidth; x++, pixel++, outIndex += channels) {
-			if (sourceX >= 0 && sourceY >= 0 && sourceX <= widthMinus1 && sourceY <= heightMinus1) {
+			const covered = sourceX >= 0 && sourceY >= 0 && sourceX <= widthMinus1 && sourceY <= heightMinus1
+			if (covered) coveredPixels++
+			const rejected = covered && rejectionMask !== undefined && isInterpolationSupportRejected(rejectionMask, width, height, sourceX, sourceY, interpolation)
+			if (covered && (!rejected || (pairSupport !== undefined && pairSupport.pendingPlanes > 0))) {
 				const x1 = Math.floor(sourceX)
 				const y1 = Math.floor(sourceY)
 				const x0 = x1 > 0 ? x1 - 1 : 0
@@ -312,14 +375,55 @@ function warpIntoReference(image: Image, inverseTransform: SimilarityTransform |
 					const row3 = raw[baseY3 + baseX0 + channel] * wx0 + raw[baseY3 + baseX1 + channel] * wx1 + raw[baseY3 + baseX2 + channel] * wx2 + raw[baseY3 + baseX3 + channel] * wx3
 					outRaw[outIndex + channel] = row0 * wy0 + row1 * wy1 + row2 * wy2 + row3 * wy3
 				}
-				outMask[pixel] = 1
-				coveredPixels++
+				if (pairSupport !== undefined && pairSupport.pendingPlanes > 0) countWarpFinitePairs(outRaw, outIndex, channels, pairSupport)
+				if (rejected) {
+					for (let channel = 0; channel < channels; channel++) outRaw[outIndex + channel] = 0
+				} else {
+					outMask[pixel] = 1
+					validPixels++
+				}
 			}
 			sourceX += matrix.m00
 			sourceY += matrix.m10
 		}
 	}
-	return coveredPixels
+	return { coveredPixels, validPixels }
+}
+
+// Counts finite pairs at a covered output base index, using the stored interpolation precision and
+// the same BT.709 reduction as normalization. Mutates only capped counts and the pending-plane total.
+function countWarpFinitePairs(raw: ImageRawType, base: number, channels: number, support: WarpPairSupport) {
+	const { referenceRaw, counts, limit, luminance } = support
+
+	if (luminance) {
+		const { red, green, blue } = DEFAULT_GRAYSCALE
+		const current = red * raw[base] + green * raw[base + 1] + blue * raw[base + 2]
+		const reference = red * referenceRaw[base] + green * referenceRaw[base + 1] + blue * referenceRaw[base + 2]
+		if (Number.isFinite(current) && Number.isFinite(reference) && ++counts[0] >= limit) support.pendingPlanes--
+	} else {
+		for (let channel = 0; channel < channels; channel++) {
+			if (counts[channel] < limit && Number.isFinite(raw[base + channel]) && Number.isFinite(referenceRaw[base + channel]) && ++counts[channel] >= limit) support.pendingPlanes--
+		}
+	}
+}
+
+// Tests nonzero kernel support at source-center coordinates without allocating or reading samples.
+// Fractional bicubic coordinates require four clamped taps per axis; integer axes need only one.
+function isInterpolationSupportRejected(mask: Uint8Array, width: number, height: number, x: number, y: number, interpolation: ImageInterpolationMode) {
+	if (interpolation === 'nearest') return mask[Math.round(y) * width + Math.round(x)] !== 0
+	const x0 = Math.floor(x)
+	const y0 = Math.floor(y)
+	const radius = interpolation === 'bicubic' ? 1 : 0
+	const left = x === x0 ? x0 : Math.max(0, x0 - radius)
+	const right = x === x0 ? x0 : Math.min(width - 1, x0 + 1 + radius)
+	const top = y === y0 ? y0 : Math.max(0, y0 - radius)
+	const bottom = y === y0 ? y0 : Math.min(height - 1, y0 + 1 + radius)
+	for (let sy = top; sy <= bottom; sy++) {
+		for (let sx = left; sx <= right; sx++) {
+			if (mask[sy * width + sx] !== 0) return true
+		}
+	}
+	return false
 }
 
 // Converts a pixel similarity (including reflection) to an affine matrix; an affine input is returned

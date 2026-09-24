@@ -59,12 +59,16 @@ export interface NormalizationParameters {
 	readonly offset: number
 }
 
-// Per-channel normalization scales/offsets and the resulting frame weight.
-export interface FrameNormalizationSummary {
+// Per-channel normalized frame scales/offsets.
+export interface NormalizedParameters {
 	// Per-channel multiplicative gain. In local mode these are the global anchor gains.
 	readonly scales: readonly number[]
 	// Per-channel additive pedestal. In local mode these are the global anchor offsets.
 	readonly offsets: readonly number[]
+}
+
+// Per-channel normalization scales/offsets and the resulting frame weight.
+export interface FrameNormalizationSummary extends NormalizedParameters {
 	// Combination weight resolved for the frame.
 	readonly weight: number
 	// Local model diagnostics, present only when local normalization ran.
@@ -281,9 +285,9 @@ export const DEFAULT_LOCAL_NORMALIZATION_OPTIONS: Required<LocalNormalizationOpt
 // Maximum pixels sampled when estimating the global normalization scale/offset.
 export const NORMALIZATION_SAMPLE_LIMIT = 8192
 
-// Minimum strided global samples trusted for percentile spans. A handful of lattice hits can identify
-// overlap but not a robust lower/upper quantile pair, so those planes retry with the bounded dense scan.
-const MIN_GLOBAL_NORMALIZATION_LATTICE_SAMPLES = 32
+// Minimum global pairs trusted for percentile spans. Underfilled lattices retry the dense scan;
+// mask-aware stacking also uses this floor, capped by pre-mask finite support for small or sparse fields.
+export const MIN_GLOBAL_NORMALIZATION_SAMPLES = 32
 
 // Upper bound on grid cells, over all axes combined. Every cell carries several `Float64Array` entries
 // per plane plus its coordinates, mask, and support value, and each accepted cell also becomes a surface
@@ -379,7 +383,7 @@ function collectNormalizationSamples(currentRaw: ImageRawType, valid: Readonly<U
 	// it. A few lattice hits are not enough either: they prove overlap but cannot estimate the quantile
 	// span. Each plane is judged on its own; one channel finding samples says nothing about another.
 	let underfilled = false
-	for (const plane of lattice.reference) if (plane.length < MIN_GLOBAL_NORMALIZATION_LATTICE_SAMPLES) underfilled = true
+	for (const plane of lattice.reference) if (plane.length < MIN_GLOBAL_NORMALIZATION_SAMPLES) underfilled = true
 	if (!underfilled) return lattice
 
 	// Striding over the valid pixels themselves is what no mask geometry can defeat. Only the planes that
@@ -390,7 +394,7 @@ function collectNormalizationSamples(currentRaw: ImageRawType, valid: Readonly<U
 	const dense = scanNormalizationSamples(currentRaw, valid, referenceRaw, channels, width, height, colorMode, 1, denseKeepEvery)
 
 	for (let plane = 0; plane < lattice.reference.length; plane++) {
-		if (lattice.reference[plane].length >= MIN_GLOBAL_NORMALIZATION_LATTICE_SAMPLES) continue
+		if (lattice.reference[plane].length >= MIN_GLOBAL_NORMALIZATION_SAMPLES) continue
 		if (dense.reference[plane].length <= lattice.reference[plane].length) continue
 		lattice.reference[plane] = dense.reference[plane]
 		lattice.current[plane] = dense.current[plane]
@@ -530,24 +534,32 @@ export function solveGlobalNormalization(reference: readonly number[], current: 
 }
 
 // Solves the global normalization for every fitted plane. Planes without usable overlap get identity.
-export function solveGlobalNormalizationPlanes(currentRaw: ImageRawType, valid: Readonly<Uint8Array> | undefined, referenceRaw: ImageRawType, channels: number, width: number, height: number, mode: GlobalNormalizationMode, colorMode: NormalizationColorMode): NormalizationParameters[] {
+// Optional sampleCounts is resized/overwritten with finite pairs actually fitted after dense fallback,
+// one count per plane (one for RGB luminance), without rescanning either input. Inputs are not mutated.
+export function solveGlobalNormalizationPlanes(currentRaw: ImageRawType, valid: Readonly<Uint8Array> | undefined, referenceRaw: ImageRawType, channels: number, width: number, height: number, mode: GlobalNormalizationMode, colorMode: NormalizationColorMode, sampleCounts?: number[]): NormalizationParameters[] {
 	const overlap = collectNormalizationSamples(currentRaw, valid, referenceRaw, channels, width, height, colorMode)
 	const planes = overlap.reference.length
 	const out = new Array<NormalizationParameters>(planes)
-	for (let plane = 0; plane < planes; plane++) out[plane] = solveGlobalNormalization(overlap.reference[plane], overlap.current[plane], mode)
+	if (sampleCounts !== undefined) sampleCounts.length = planes
+	for (let plane = 0; plane < planes; plane++) {
+		if (sampleCounts !== undefined) sampleCounts[plane] = overlap.reference[plane].length
+		out[plane] = solveGlobalNormalization(overlap.reference[plane], overlap.current[plane], mode)
+	}
 	return out
 }
 
 // Broadcasts per-plane parameters to per-channel scale/offset arrays.
-export function broadcastNormalizationPlanes(planes: readonly NormalizationParameters[], channels: number) {
+export function broadcastNormalizationPlanes(planes: readonly NormalizationParameters[], channels: number): NormalizedParameters {
 	if (planes.length === 1 && channels > 1) return { scales: channelArray(channels, planes[0].scale), offsets: channelArray(channels, planes[0].offset) }
 
 	const scales = new Array<number>(channels)
 	const offsets = new Array<number>(channels)
+
 	for (let channel = 0; channel < channels; channel++) {
 		scales[channel] = planes[channel].scale
 		offsets[channel] = planes[channel].offset
 	}
+
 	return { scales, offsets }
 }
 
@@ -1089,7 +1101,18 @@ function sampleSupport(grid: LocalNormalizationSupportGrid, x: number, y: number
 
 // Fits the local normalization model directly on raw pixel buffers already sharing the reference grid.
 // `referenceRaw` is only read. Nothing is validated: both buffers must have the same geometry.
-export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw: ImageRawType, width: number, height: number, channels: number, colorMode: NormalizationColorMode, valid: Readonly<Uint8Array> | undefined, options: Required<LocalNormalizationOptions>): LocalNormalizationModel {
+// Optional globalSampleCounts receives per-plane finite sample counts from the global anchor fit.
+export function fitLocalNormalizationRaw(
+	referenceRaw: ImageRawType,
+	currentRaw: ImageRawType,
+	width: number,
+	height: number,
+	channels: number,
+	colorMode: NormalizationColorMode,
+	valid: Readonly<Uint8Array> | undefined,
+	options: Required<LocalNormalizationOptions>,
+	globalSampleCounts?: number[],
+): LocalNormalizationModel {
 	const { estimator, maxSamplesPerCell, minSamplesPerCell, minValidFraction, dynamicRangeSigma, surfaceModel, offsetDegree, scaleDegree, smoothing, scaleSignificance, rejectionSigma, rejectionIterations, relativeScaleRange, evaluationStepFraction, fallback } = options
 	const luminance = colorMode === 'luminance' && channels === 3
 	const effectiveColorMode: NormalizationColorMode = luminance ? 'luminance' : 'per-channel'
@@ -1098,7 +1121,7 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 	const minCellsPerAxis = Math.max(offsetDegree, scaleDegree) + 1
 	const maxCells = Math.max(minCellsPerAxis * minCellsPerAxis, Math.floor(MAX_LOCAL_NORMALIZATION_CELLS / Math.max(1, planes)))
 
-	const global = solveGlobalNormalizationPlanes(currentRaw, valid, referenceRaw, channels, width, height, estimator, effectiveColorMode)
+	const global = solveGlobalNormalizationPlanes(currentRaw, valid, referenceRaw, channels, width, height, estimator, effectiveColorMode, globalSampleCounts)
 	const grid = buildLocalGrid(width, height, options.gridSize, options.boxSize, minCellsPerAxis, maxCells)
 	const { columns, rows, cellW, cellH } = grid
 	const cellCount = columns * rows
@@ -1570,14 +1593,14 @@ function collectPivots(referenceRaw: ImageRawType, currentRaw: ImageRawType, val
 	// A handful of values is as unsafe as none because the lower quantile can collapse onto one
 	// unrepresentative pixel and couple the offset field around the wrong level.
 	let underfilled = false
-	for (const plane of values) if (plane.length < MIN_GLOBAL_NORMALIZATION_LATTICE_SAMPLES) underfilled = true
+	for (const plane of values) if (plane.length < MIN_GLOBAL_NORMALIZATION_SAMPLES) underfilled = true
 
 	if (underfilled) {
 		const colorMode = luminance ? 'luminance' : 'per-channel'
 		const denseKeepEvery = normalizationKeepEveryByPlane(countNormalizationPairs(currentRaw, valid, referenceRaw, channels, width, height, colorMode))
 		const dense = scanPivotValues(referenceRaw, currentRaw, valid, channels, width, height, planes, luminance, 1, denseKeepEvery)
 		for (let plane = 0; plane < planes; plane++) {
-			if (values[plane].length >= MIN_GLOBAL_NORMALIZATION_LATTICE_SAMPLES) continue
+			if (values[plane].length >= MIN_GLOBAL_NORMALIZATION_SAMPLES) continue
 			if (dense[plane].length > values[plane].length) values[plane] = dense[plane]
 		}
 	}

@@ -1,6 +1,6 @@
 import type { AffineTransform } from '../../astrometry/matching/star.matching'
 import { cfaChannelAt, DEFAULT_GRAYSCALE, type Image } from '../model/types'
-import { broadcastNormalizationPlanes, type GlobalNormalizationMode, NORMALIZATION_SAMPLE_LIMIT, type NormalizationColorMode, type NormalizationParameters, solveGlobalNormalization } from './normalization'
+import { broadcastNormalizationPlanes, type GlobalNormalizationMode, MIN_GLOBAL_NORMALIZATION_SAMPLES, NORMALIZATION_SAMPLE_LIMIT, type NormalizationColorMode, type NormalizationParameters, type NormalizedParameters, solveGlobalNormalization } from './normalization'
 
 // Forward square-drop reconstruction in zero-based pixel centers, x right/y down. S stores
 // fractional sample sums and W their dimensionless denominators. Means preserve intensity; sums
@@ -230,7 +230,8 @@ export function drizzleDropArea(footprint: DrizzleFootprint, dx: number, dy: num
 // Deposits an accepted frame into state, applying channel scale/offset at source reads. weight is
 // positive (1 for sum/average); generation is acceptedFrames+1. Counts are updated once per frame.
 // CFA routes photosites to RGB without interpolation. No allocation per sample or contribution.
-export function depositDrizzle(state: DrizzleAccumulator, image: Image, footprint: DrizzleFootprint, scales: readonly number[], offsets: readonly number[], weight: number, generation: number) {
+// Optional source-grid rejection bytes exclude samples before flux, weights or CFA routing are read.
+export function depositDrizzle(state: DrizzleAccumulator, image: Image, footprint: DrizzleFootprint, scales: readonly number[], offsets: readonly number[], weight: number, generation: number, rejectionMask?: Uint8Array) {
 	// Count overflow cannot be repaired by resetting stamps; fail before any accumulator mutation.
 	if (!(generation <= 0xffffffff)) throw new RangeError('Drizzle frame coverage exceeds Uint32 capacity')
 
@@ -250,6 +251,7 @@ export function depositDrizzle(state: DrizzleAccumulator, image: Image, footprin
 				cx = m00 * x + m01 * y + tx
 				cy = m10 * x + m11 * y + ty
 			}
+			if (rejectionMask !== undefined && rejectionMask[y * width + x] !== 0) continue
 
 			const left = Math.max(0, Math.floor(cx - halfWidth + 0.5))
 			const right = Math.min(state.width - 1, Math.ceil(cx + halfWidth + 0.5) - 1)
@@ -294,7 +296,8 @@ export function depositDrizzle(state: DrizzleAccumulator, image: Image, footprin
 // interpret its reduced variance as a photometric gain. Correspondences are approximate within half
 // a pixel per axis, or one pixel on a CFA phase grid. Luminance mixes co-located RGB using BT.709.
 // Returns NaN outside support; no extrapolation, allocation, or pixel-buffer mutation occurs.
-function normalizationSample(image: Image, x: number, y: number, plane: number, luminance: boolean, phases: readonly number[] | undefined) {
+// A rejected nearest sample returns NaN, including its original CFA phase; no replacement is chosen.
+function normalizationSample(image: Image, x: number, y: number, plane: number, luminance: boolean, phases: readonly number[] | undefined, rejectionMask?: Uint8Array) {
 	const { width, height, channels } = image.metadata
 	if (!(x >= 0 && y >= 0 && x <= width - 1 && y <= height - 1)) return Number.NaN
 
@@ -314,7 +317,7 @@ function normalizationSample(image: Image, x: number, y: number, plane: number, 
 			const distance = (sx - x) ** 2 + (sy - y) ** 2
 			if (distance < nearest) {
 				nearest = distance
-				sample = image.raw[sy * width + sx]
+				sample = rejectionMask !== undefined && rejectionMask[sy * width + sx] !== 0 ? Number.NaN : image.raw[sy * width + sx]
 			}
 		}
 
@@ -322,6 +325,7 @@ function normalizationSample(image: Image, x: number, y: number, plane: number, 
 	}
 
 	const base = (Math.round(y) * width + Math.round(x)) * channels
+	if (rejectionMask !== undefined && rejectionMask[base / channels] !== 0) return Number.NaN
 	if (!luminance) return image.raw[base + plane]
 	return image.raw[base] * DEFAULT_GRAYSCALE.red + image.raw[base + 1] * DEFAULT_GRAYSCALE.green + image.raw[base + 2] * DEFAULT_GRAYSCALE.blue
 }
@@ -329,7 +333,10 @@ function normalizationSample(image: Image, x: number, y: number, plane: number, 
 // Fits global photometry from bounded, spatially distributed reference/target sky pairs. inverse maps
 // original reference centers to target centers; mode none bypasses collection. CFA always fits RGB.
 // Reuses state sample containers; sparse overlap falls back to two deterministic full-reference scans.
-export function drizzleNormalization(state: DrizzleAccumulator, reference: Image, target: Image, inverse: AffineTransform, mode: 'none' | GlobalNormalizationMode, colorMode: NormalizationColorMode): ReturnType<typeof broadcastNormalizationPlanes> {
+// Mask-aware implementation; optional masks must match their respective image pixel counts.
+// Masked fits require 32 finite pairs per plane, or all pre-mask finite pairs if fewer exist.
+// Returns undefined before deposition when any plane falls below this floor, including empty support.
+export function drizzleNormalization(state: DrizzleAccumulator, reference: Image, target: Image, inverse: AffineTransform, mode: 'none' | GlobalNormalizationMode, colorMode: NormalizationColorMode, referenceMask?: Uint8Array, targetMask?: Uint8Array): NormalizedParameters | undefined {
 	const channels = state.channels
 	if (mode === 'none') return { scales: new Array<number>(channels).fill(1), offsets: new Array<number>(channels).fill(0) }
 	const cfa = state.weightChannels === 3
@@ -345,17 +352,19 @@ export function drizzleNormalization(state: DrizzleAccumulator, reference: Image
 	const ref = state.referenceSamples
 	const cur = state.currentSamples
 	const { m00, m01, m10, m11, tx, ty } = inverse
+	const masked = referenceMask !== undefined || targetMask !== undefined
 
 	for (let plane = 0; plane < planes; plane++) {
 		ref.length = cur.length = 0
+		let available = 0
 
 		for (let j = 0; j < ny; j++) {
 			const y = Math.floor(((j + 0.5) * height) / ny)
 
 			for (let i = 0; i < nx; i++) {
 				const x = Math.floor(((i + 0.5) * width) / nx)
-				const a = normalizationSample(reference, x, y, plane, luminance, refPhases)
-				const b = normalizationSample(target, m00 * x + m01 * y + tx, m10 * x + m11 * y + ty, plane, luminance, curPhases)
+				const a = normalizationSample(reference, x, y, plane, luminance, refPhases, referenceMask)
+				const b = normalizationSample(target, m00 * x + m01 * y + tx, m10 * x + m11 * y + ty, plane, luminance, curPhases, targetMask)
 
 				if (Number.isFinite(a) && Number.isFinite(b)) {
 					ref.push(a)
@@ -364,7 +373,7 @@ export function drizzleNormalization(state: DrizzleAccumulator, reference: Image
 			}
 		}
 
-		if (ref.length < 32) {
+		if (ref.length < MIN_GLOBAL_NORMALIZATION_SAMPLES) {
 			ref.length = cur.length = 0
 			let total = 0
 
@@ -375,8 +384,15 @@ export function drizzleNormalization(state: DrizzleAccumulator, reference: Image
 
 				for (let y = 0; y < height; y++) {
 					for (let x = 0; x < width; x++) {
-						const a = normalizationSample(reference, x, y, plane, luminance, refPhases)
-						const b = normalizationSample(target, m00 * x + m01 * y + tx, m10 * x + m11 * y + ty, plane, luminance, curPhases)
+						// Count pre-mask finite support during the existing dense pass, stopping at the
+						// robust floor. This preserves small fields and sparse finite geometric overlaps.
+						if (masked && pass === 0 && available < MIN_GLOBAL_NORMALIZATION_SAMPLES) {
+							const a = normalizationSample(reference, x, y, plane, luminance, refPhases)
+							const b = normalizationSample(target, m00 * x + m01 * y + tx, m10 * x + m11 * y + ty, plane, luminance, curPhases)
+							if (Number.isFinite(a) && Number.isFinite(b)) available++
+						}
+						const a = normalizationSample(reference, x, y, plane, luminance, refPhases, referenceMask)
+						const b = normalizationSample(target, m00 * x + m01 * y + tx, m10 * x + m11 * y + ty, plane, luminance, curPhases, targetMask)
 
 						if (!Number.isFinite(a) || !Number.isFinite(b)) continue
 
@@ -392,6 +408,11 @@ export function drizzleNormalization(state: DrizzleAccumulator, reference: Image
 
 				if (pass === 0) total = rank
 			}
+		}
+
+		if (masked && (ref.length === 0 || ref.length < Math.min(MIN_GLOBAL_NORMALIZATION_SAMPLES, available))) {
+			ref.length = cur.length = 0
+			return undefined
 		}
 
 		parameters.push(solveGlobalNormalization(ref, cur, mode))

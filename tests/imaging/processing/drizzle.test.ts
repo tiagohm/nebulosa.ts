@@ -19,6 +19,52 @@ function state(width = 10, height = 10, channels = 1, cfa = false, scale = 1, co
 }
 
 describe('Drizzle areas', () => {
+	test('CFA normalization requires enough shared finite correspondences in each color', () => {
+		const reference = image(64, 64, 1, (x, y) => 0.2 + x * 0.002 + y * 0.001, 'RGGB')
+		const target = image(64, 64, 1, (x, y) => (0.2 + x * 0.002 + y * 0.001) / 2, 'RGGB')
+		const s = state(64, 64, 3, true)
+		const mask = new Uint8Array(64 * 64)
+		for (let y = 0; y < 64; y += 2) for (let x = 0; x < 64; x += 2) mask[y * 64 + x] = y === 30 && x >= 16 && x < 32 ? 0 : 1
+		// Each of these eight interior red photosites supplies four reference-center correspondences.
+		for (const maskedReference of [true, false]) {
+			const refMask = maskedReference ? mask : undefined
+			const curMask = maskedReference ? undefined : mask
+			const enough = drizzleNormalization(s, reference, target, IDENTITY, 'scale', 'per-channel', refMask, curMask)
+			expect(enough).toBeDefined()
+			for (const scale of enough!.scales) expect(scale).toBeCloseTo(2, 12)
+			mask[30 * 64 + 16] = 1
+			expect(drizzleNormalization(s, reference, target, IDENTITY, 'scale', 'per-channel', refMask, curMask)).toBeUndefined()
+			expect(s.referenceSamples).toHaveLength(0)
+			expect(s.currentSamples).toHaveLength(0)
+			mask[30 * 64 + 16] = 0
+		}
+	})
+
+	test('masked photosites deposit neither signal nor weight for mono, RGB and every CFA phase', () => {
+		for (const pattern of [undefined, ...PATTERNS]) {
+			for (const channels of pattern === undefined ? [1, 3] : [1]) {
+				const input = image(4, 4, channels, (x, y) => (x === 1 && y === 1 ? 1000 : 0.4), pattern)
+				const s = state(4, 4, pattern === undefined ? channels : 3, pattern !== undefined, 2)
+				const mask = new Uint8Array(16)
+				mask[5] = 1
+				const footprint = prepareDrizzleFootprint(IDENTITY, 2, 2, 1, 4, 4)!
+				depositDrizzle(s, input, footprint, [1, 1, 1], [0, 0, 0], 2, 1, mask)
+				let weight = 0
+				let sum = 0
+				for (const value of s.weights) weight += value
+				for (const value of s.sum) sum += value
+				expect(weight).toBeCloseTo(30, 12)
+				expect(sum).toBeCloseTo(12 * channels, 12)
+				for (let y = 2; y <= 3; y++)
+					for (let x = 2; x <= 3; x++) {
+						const p = y * 8 + x
+						expect(s.coverage![p]).toBe(0)
+						for (let c = 0; c < s.weightChannels; c++) expect(s.weights[p * s.weightChannels + c]).toBe(0)
+					}
+			}
+		}
+	})
+
 	test('analytic rectangle fractions, edge contact, and a diamond triangle', () => {
 		const polygon = new Float64Array(16)
 		const clipped = new Float64Array(16)
@@ -202,7 +248,7 @@ describe('Drizzle sparse normalization', () => {
 		const sky = (x: number, y: number, c: number) => 0.1 + c * 0.1 + x * 0.01 + y * 0.003
 		const reference = image(32, 23, 3, sky)
 		const target = image(19, 23, 3, (x, y, c) => (sky(x + 7, y, c) - (mode === 'scale' ? 0 : 0.07)) / [2, 3, 4][c])
-		const result = drizzleNormalization(s, reference, target, { ...IDENTITY, tx: -7 }, mode, 'per-channel')
+		const result = drizzleNormalization(s, reference, target, { ...IDENTITY, tx: -7 }, mode, 'per-channel')!
 		for (let c = 0; c < 3; c++) {
 			expect(result.scales[c]).toBeCloseTo([2, 3, 4][c], 10)
 			expect(result.offsets[c]).toBeCloseTo(mode === 'scale' ? 0 : 0.07, 10)
@@ -217,7 +263,7 @@ describe('Drizzle sparse normalization', () => {
 		const sky = (x: number, y: number, c: number) => 0.1 + c * 0.1 + x * 0.01 + y * 0.003
 		const reference = image(45, 33, 1, (x, y) => sky(x, y, cfaChannelAt(pattern, x, y)), pattern)
 		const target = image(45, 33, 1, (x, y) => (sky(x, y, cfaChannelAt(other, x, y)) - 0.04) / 2, other)
-		const result = drizzleNormalization(s, reference, target, IDENTITY, 'background-scale', 'per-channel')
+		const result = drizzleNormalization(s, reference, target, IDENTITY, 'background-scale', 'per-channel')!
 		for (let c = 0; c < 3; c++) {
 			// Different CFA origins cannot supply the same original color sample at the same sky
 			// position. Bound the fitted intensity error by this ramp's variation across one CFA cell,
@@ -254,7 +300,7 @@ describe('Drizzle sparse normalization', () => {
 
 		for (const shift of [0, 0.5, 1]) {
 			for (const colorMode of ['per-channel', 'luminance'] as const) {
-				const result = drizzleNormalization(s, reference, target, { ...IDENTITY, tx: shift, ty: shift }, mode, colorMode)
+				const result = drizzleNormalization(s, reference, target, { ...IDENTITY, tx: shift, ty: shift }, mode, colorMode)!
 				// Finite Gaussian quantiles have sampling error; interpolation previously inflated
 				// the half-pixel gain toward 3.4 instead of the known raw-sample gain of 1.7.
 				for (const scale of result.scales) expect(Math.abs(scale / 1.7 - 1)).toBeLessThan(0.08)
@@ -267,7 +313,7 @@ describe('Drizzle sparse normalization', () => {
 		const reference = image(4, 4, 3, () => 0.6)
 		const target = image(4, 4, 3, () => 0.2)
 		expect(drizzleNormalization(s, reference, target, IDENTITY, 'none', 'per-channel')).toEqual({ scales: [1, 1, 1], offsets: [0, 0, 0] })
-		const result = drizzleNormalization(s, reference, target, IDENTITY, 'percentile', 'luminance')
+		const result = drizzleNormalization(s, reference, target, IDENTITY, 'percentile', 'luminance')!
 		expect(result.scales).toEqual([1, 1, 1])
 		for (const offset of result.offsets) expect(offset).toBeCloseTo(0.4, 12)
 		expect(drizzleNormalization(s, reference, target, { ...IDENTITY, tx: 100 }, 'scale', 'per-channel')).toEqual({ scales: [1, 1, 1], offsets: [0, 0, 0] })
@@ -282,7 +328,7 @@ describe('Drizzle sparse normalization', () => {
 			const s = state(w, h)
 			const reference = image(w, h, 1, () => 0.6)
 			const target = image(1, 1, 1, () => 0.3)
-			const result = drizzleNormalization(s, reference, target, IDENTITY, 'scale', 'per-channel')
+			const result = drizzleNormalization(s, reference, target, IDENTITY, 'scale', 'per-channel')!
 			expect(result.scales[0]).toBeCloseTo(2, 12)
 		}
 	})

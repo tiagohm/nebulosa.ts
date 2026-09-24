@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { AffineTransform } from '../../../src/astrometry/matching/star.matching'
-import type { Image, ImageRawPrecision } from '../../../src/imaging/model/types'
+import { DEFAULT_GRAYSCALE, type Image, type ImageRawPrecision } from '../../../src/imaging/model/types'
 import { registerImage, registerStars, warpImage } from '../../../src/imaging/processing/registration'
 import type { DetectedStar } from '../../../src/imaging/stars/detector'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
@@ -86,6 +86,84 @@ describe('image registration', () => {
 })
 
 describe('image warp', () => {
+	test('counts pre-mask finite pairs with the actual kernel, geometry, precision and fitted planes', () => {
+		const reference = makeImage(12, 10, 3, (x, y, c) => ((x + y * 2 + c) % 7 === 0 ? Number.NaN : 0.4), 64)
+		const source = makeImage(10, 12, 3, (x, y, c) => ((x * 2 + y + c) % 17 === 0 ? Number.NaN : x === 4 && y === 5 ? 1e40 : 0.2 + c * 0.1), 64)
+		const rejectionMask = new Uint8Array(120)
+		for (let p = 0; p < rejectionMask.length; p++) rejectionMask[p] = p % 3 === 0 ? 1 : 0
+		const { red, green, blue } = DEFAULT_GRAYSCALE
+		for (const interpolationMode of ['nearest', 'bilinear', 'bicubic'] as const) {
+			for (const inverse of [IDENTITY, { ...IDENTITY, tx: 0.37, ty: -0.21 }]) {
+				for (const outputPrecision of [32, 64] as const) {
+					const plain = warpImage(source, reference, inverse, { interpolationMode, outputPrecision })
+					const masked = warpImage(source, reference, inverse, { interpolationMode, outputPrecision, rejectionMask })
+					expect(plain.finitePairCounts).toBeUndefined()
+					for (const luminance of [false, true]) {
+						const expected = new Array<number>(luminance ? 1 : 3).fill(0)
+						for (let p = 0; p < plain.validityMask.length; p++) {
+							if (!plain.validityMask[p]) continue
+							const b = p * 3
+							if (luminance) {
+								const r = red * reference.raw[b] + green * reference.raw[b + 1] + blue * reference.raw[b + 2]
+								const c = red * plain.image.raw[b] + green * plain.image.raw[b + 1] + blue * plain.image.raw[b + 2]
+								if (Number.isFinite(r) && Number.isFinite(c)) expected[0]++
+							} else {
+								for (let c = 0; c < 3; c++) if (Number.isFinite(reference.raw[b + c]) && Number.isFinite(plain.image.raw[b + c])) expected[c]++
+							}
+						}
+						for (const limit of [3, 32, 1000]) {
+							const counted = warpImage(source, reference, inverse, { interpolationMode, outputPrecision, rejectionMask, finitePairSupport: { limit, luminance }, outputRaw: masked.image.raw, validityMask: masked.validityMask })
+							expect(counted.finitePairCounts).toEqual(expected.map((count) => Math.min(count, limit)))
+							expect(counted.coveredPixels).toBe(plain.coveredPixels)
+							const independent = warpImage(source, reference, inverse, { interpolationMode, outputPrecision, rejectionMask })
+							expect(counted.validityMask).toEqual(independent.validityMask)
+							expect(counted.validPixels).toBe(independent.validPixels)
+							for (let i = 0; i < counted.image.raw.length; i++) expect(Object.is(counted.image.raw[i], independent.image.raw[i])).toBeTrue()
+						}
+					}
+				}
+			}
+		}
+	})
+
+	test('rejects masked kernel support under translation, rotation and scale without leaking signal', () => {
+		const reference = makeImage(18, 18, 3, () => 0)
+		const source = makeImage(18, 18, 3, (x, y, c) => (x === 8 && y === 8 ? 1000 * (c + 1) : 0.25))
+		const rejectionMask = new Uint8Array(18 * 18)
+		rejectionMask[8 * 18 + 8] = 1
+		for (const interpolationMode of ['nearest', 'bilinear', 'bicubic'] as const) {
+			for (const transform of [IDENTITY, { ...IDENTITY, tx: 0.37, ty: -0.21 }, { m00: 0.9 * Math.cos(0.2), m01: -0.9 * Math.sin(0.2), m10: 0.9 * Math.sin(0.2), m11: 0.9 * Math.cos(0.2), tx: 1, ty: -1 }]) {
+				const plain = warpImage(source, reference, transform, { interpolationMode })
+				const masked = warpImage(source, reference, transform, { interpolationMode, rejectionMask })
+				expect(masked.coveredPixels).toBe(plain.coveredPixels)
+				expect(masked.validPixels).toBeLessThan(plain.validPixels)
+				expect(masked.validPixels).toBeGreaterThan(100)
+				expect(masked.validPixels).toBe(masked.validityMask.reduce((sum, valid) => sum + valid, 0))
+				for (let p = 0; p < rejectionMask.length; p++) {
+					if (plain.validityMask[p] && Math.abs(plain.image.raw[p * 3] - 0.25) > 1e-5) expect(masked.validityMask[p]).toBe(0)
+					for (let c = 0; c < 3; c++) expect(masked.image.raw[p * 3 + c]).toBeCloseTo(masked.validityMask[p] ? 0.25 : 0, 6)
+				}
+			}
+		}
+	})
+
+	test('masked warps clear reused output buffers and preserve noncontributing integer taps', () => {
+		const source = makeImage(5, 5, 1, () => 0.5)
+		const rejectionMask = new Uint8Array(25)
+		rejectionMask[12] = 1
+		for (const interpolationMode of ['nearest', 'bilinear', 'bicubic'] as const) {
+			const outputRaw = new Float32Array(25).fill(99)
+			const validityMask = new Uint8Array(25).fill(1)
+			const result = warpImage(source, source, IDENTITY, { interpolationMode, rejectionMask, outputRaw, validityMask })
+			expect(result.coveredPixels).toBe(25)
+			expect(result.validPixels).toBe(24)
+			expect(result.image.raw).toBe(outputRaw)
+			expect(outputRaw[12]).toBe(0)
+			expect(validityMask[12]).toBe(0)
+			expect(outputRaw[11]).toBe(0.5)
+		}
+	})
+
 	test('keeps exact samples for nearest and bicubic identity warps', () => {
 		const source = makeImage(3, 2, 3, (x, y, channel) => 100 * channel + 10 * y + x)
 		const reference = makeImage(3, 2, 3, () => 0)
