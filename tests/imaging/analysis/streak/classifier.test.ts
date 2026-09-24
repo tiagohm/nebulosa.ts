@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test'
 import { tanUnproject } from '../../../../src/astrometry/wcs/fits.wcs'
+import { meteorRadiantVector } from '../../../../src/astronomy/meteors/radiant'
+import { meteorTrackGreatCircle, meteorTrackLength, meteorTrackPositionAngle } from '../../../../src/astronomy/meteors/trajectory'
 import { time, Timescale } from '../../../../src/astronomy/time/time'
-import { PI, TAU } from '../../../../src/core/constants'
+import { PI, PIOVERTWO, TAU } from '../../../../src/core/constants'
 import { type CelestialStreakTrack, celestialStreakTrack, matchPredictedStreakTrack } from '../../../../src/imaging/analysis/streak/celestial'
 import type { StreakClass, StreakClassification, StreakClassificationContext, StreakClassificationStar, StreakEvidenceProvider } from '../../../../src/imaging/analysis/streak/classification.types'
 import { classifyStreak, classifyStreaks } from '../../../../src/imaging/analysis/streak/classifier'
@@ -57,6 +59,24 @@ function evidenceScore(result: StreakClassification, kind: string): number {
 
 function skyStreak(): Streak {
 	return measured({ start: { x: 29.5, y: 49.5 }, end: { x: 69.5, y: 49.5 } })
+}
+
+function skyTrack(startRa: number, startDec: number, endRa: number, endDec: number): CelestialStreakTrack {
+	const track = { start: { rightAscension: normalizeAngle(startRa), declination: startDec }, end: { rightAscension: normalizeAngle(endRa), declination: endDec } }
+	const length = meteorTrackLength(track)
+	const normal = meteorTrackGreatCircle(track)
+	if (length === undefined || normal === undefined) throw new Error('degenerate high-declination fixture')
+	const positionAngle = meteorTrackPositionAngle(track.start, track.end)
+	return {
+		start: [track.start.rightAscension, track.start.declination],
+		end: [track.end.rightAscension, track.end.declination],
+		startVector: meteorRadiantVector(track.start),
+		endVector: meteorRadiantVector(track.end),
+		length,
+		positionAngle,
+		axialPositionAngle: normalizeStreakAngle(positionAngle),
+		normal: [normal[0], normal[1], normal[2]],
+	}
 }
 
 function outwardRadiant(track: CelestialStreakTrack, id = 'PER') {
@@ -360,6 +380,23 @@ test('preserves input order and lets a caller replace the providers', () => {
 	expect(forced.confidence).toBe(1)
 	expect(forced.evidence.map((item) => item.kind)).toEqual(['test-provider'])
 	expect(classifyStreaks([], {}, { providers: [] })).toEqual([])
+})
+
+test('matches a high-declination subarc of the same great circle', () => {
+	const originRa = 0
+	const originDec = deg(70)
+	const predictedEnd = sphericalDestination(originRa, originDec, PIOVERTWO, deg(30))
+	const observedStart = sphericalDestination(originRa, originDec, PIOVERTWO, deg(15))
+	const observedEnd = sphericalDestination(originRa, originDec, PIOVERTWO, deg(20))
+	const observed = skyTrack(observedStart[0], observedStart[1], observedEnd[0], observedEnd[1])
+	const forward = matchPredictedStreakTrack(observed, { start: [originRa, originDec], end: predictedEnd })
+	const reversed = matchPredictedStreakTrack(observed, { start: predictedEnd, end: [originRa, originDec] })
+	for (const comparison of [forward, reversed]) {
+		expect(comparison?.crossTrack).toBeLessThan(arcsec(1))
+		expect(comparison?.overlap).toBeGreaterThan(0.99)
+		expect(comparison?.orientation).toBeLessThan(arcsec(1))
+		expect(comparison?.score).toBeGreaterThan(0.9)
+	}
 })
 
 test('reports a direct cross-track residual below an arcsecond for identical arcs', () => {

@@ -8,7 +8,7 @@ import { type Vec3, vecCross, vecDot, vecNormalize } from '../../../math/linear-
 import { sphericalInterpolate } from '../../../math/numerical/geometry'
 import { type Angle, arcsec, deg, normalizeAngle } from '../../../math/units/angle'
 import { falling, rising, type PredictedStreakTrack } from './classification.types'
-import { normalizeStreakAngle, streakAxialAngleDistance } from './geometry'
+import { normalizeStreakAngle } from './geometry'
 import type { Streak } from './types'
 
 // Equatorial track of one measured streak and its comparison with a caller-supplied prediction.
@@ -127,7 +127,7 @@ export function matchPredictedStreakTrack(observed: CelestialStreakTrack, predic
 	const overlap = overlapLength / observedSpan
 	const midpoint = sphericalInterpolate(observed.start[0], observed.start[1], observed.end[0], observed.end[1], 0.5)
 	const crossTrack = (pointResidual(observed.startVector, pole) + pointResidual(observed.endVector, pole) + pointResidual(meteorRadiantVector({ rightAscension: midpoint[0], declination: midpoint[1] }), pole)) / 3
-	const orientation = streakAxialAngleDistance(observed.axialPositionAngle, normalizeStreakAngle(meteorTrackPositionAngle(predictedTrack.start, predictedTrack.end)))
+	const orientation = greatCirclePlaneAngle(observed.normal, pole)
 	const temporal = temporalOverlap(exposure, predicted)
 	const geometry = falling(crossTrack, CROSS_TRACK_EXCELLENT, CROSS_TRACK_REJECT) * rising(overlap, OVERLAP_LOW, OVERLAP_HIGH) * falling(orientation, ORIENTATION_EXCELLENT, ORIENTATION_REJECT)
 	return { crossTrack, overlap, orientation, temporalOverlap: temporal, score: geometry * (temporal ?? 1) }
@@ -160,6 +160,12 @@ function alongTrack(point: Vec3, pole: Vec3, origin: Vec3, tangent: Vec3): numbe
 	if (!(length > 1e-15)) return undefined
 	const inverse = 1 / length
 	return Math.atan2(x * inverse * tangent[0] + y * inverse * tangent[1] + z * inverse * tangent[2], x * inverse * origin[0] + y * inverse * origin[1] + z * inverse * origin[2])
+}
+
+// Angle between two undirected great-circle planes, in [0, π/2]. Endpoint reversal flips a pole, so the absolute dot product keeps that reversal on the same axis.
+function greatCirclePlaneAngle(observedNormal: Vec3, predictedPole: Vec3): Angle {
+	const cosine = Math.abs(vecDot(observedNormal, predictedPole))
+	return Math.acos(Math.min(1, Math.max(0, cosine)))
 }
 
 // Absolute angular distance from a unit vector to a great-circle plane, in radians.
