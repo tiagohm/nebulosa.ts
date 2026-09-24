@@ -2,13 +2,18 @@ import type { Streak } from './types'
 
 // Binary rejection mask for measured streaks. Each masked pixel is the integer center of a
 // received-image pixel whose distance to a segment is within the streak's transverse radius.
-// The mask is allocated fresh, clips to the frame, and does not read or modify pixel samples.
+// Painting walks the dominant axis and tests only that column or row's capsule span, so a long
+// diagonal costs about its length times its mask width. The mask is allocated fresh, clips to
+// the frame, and does not read or modify pixel samples.
 
 // Detection-quality cutoff used only when `includeLowConfidence` is false.
 // This is the detector's `Streak.confidence`, not a classification probability.
 export const STREAK_MASK_LOW_CONFIDENCE = 0.5
 // Largest accepted mask, in pixels. Larger products are rejected before allocation.
 const MAX_STREAK_MASK_PIXELS = 268435456
+// Extra pixels around the analytic capsule. Rounding in the span must not drop a center that
+// the distance test would keep; the distance test still rejects every center outside the radius.
+const CAPSULE_SPAN_SLACK = 1
 
 // Controls how far around each measured segment the mask extends.
 export interface StreakMaskOptions {
@@ -59,22 +64,39 @@ export function createStreakMask(width: number, height: number, streaks: readonl
 }
 
 // Paints one capsule and returns how many previously clear pixels it sets.
+// The scan axis is whichever endpoint delta is larger. A zero-length streak is a disk.
+// Pixels already set by an earlier streak stay set and are not counted again.
 function paintStreak(raw: Uint8Array, width: number, height: number, streak: Streak, radius: number): number {
 	if (!(radius > 0)) return 0
-	const minX = Math.min(streak.start.x, streak.end.x)
-	const maxX = Math.max(streak.start.x, streak.end.x)
-	const minY = Math.min(streak.start.y, streak.end.y)
-	const maxY = Math.max(streak.start.y, streak.end.y)
-	const left = Math.max(0, Math.floor(minX - radius))
-	const top = Math.max(0, Math.floor(minY - radius))
-	const right = Math.min(width - 1, Math.ceil(maxX + radius))
-	const bottom = Math.min(height - 1, Math.ceil(maxY + radius))
+	const dx = streak.end.x - streak.start.x
+	const dy = streak.end.y - streak.start.y
+	return paintAlongDominant(raw, width, height, streak, radius, Math.abs(dx) >= Math.abs(dy))
+}
+
+// Walks integer positions on the dominant axis and fills the transverse capsule interval.
+// `alongX` is true when the segment runs at least as far in x as in y, including a point streak.
+// `radius` is in received-image pixels. A center is written only when its distance to the closed
+// segment is within that radius, so the span is a superset and the predicate stays exact.
+function paintAlongDominant(raw: Uint8Array, width: number, height: number, streak: Streak, radius: number, alongX: boolean): number {
+	const ax = alongX ? streak.start.x : streak.start.y
+	const ay = alongX ? streak.start.y : streak.start.x
+	const bx = alongX ? streak.end.x : streak.end.y
+	const by = alongX ? streak.end.y : streak.end.x
+	const majorCount = alongX ? width : height
+	const minorCount = alongX ? height : width
+	const first = Math.max(0, Math.floor(Math.min(ax, bx) - radius))
+	const last = Math.min(majorCount - 1, Math.ceil(Math.max(ax, bx) + radius))
 	let added = 0
 
-	for (let y = top; y <= bottom; y++) {
-		const row = y * width
-		for (let x = left; x <= right; x++) {
-			const index = row + x
+	for (let major = first; major <= last; major++) {
+		const span = capsuleSpan(major, ax, ay, bx, by, radius)
+		if (!span) continue
+		const minorStart = Math.max(0, Math.floor(span[0]))
+		const minorEnd = Math.min(minorCount - 1, Math.ceil(span[1]))
+		for (let minor = minorStart; minor <= minorEnd; minor++) {
+			const x = alongX ? major : minor
+			const y = alongX ? minor : major
+			const index = y * width + x
 			if (raw[index] === 1 || distanceToSegment(x, y, streak) > radius) continue
 			raw[index] = 1
 			added++
@@ -82,6 +104,50 @@ function paintStreak(raw: Uint8Array, width: number, height: number, streak: Str
 	}
 
 	return added
+}
+
+// Transverse bounds of a capsule superset on the line whose dominant coordinate is `major`.
+// Endpoint coordinates are in that frame, in received-image pixels: dominant first, then transverse.
+// The body is the infinite strip of radius `radius` wherever the line can meet the segment, union the
+// endpoint disks. Bounds are expanded by `CAPSULE_SPAN_SLACK` pixels. Undefined means the line misses.
+function capsuleSpan(major: number, ax: number, ay: number, bx: number, by: number, radius: number): readonly [number, number] | undefined {
+	const dx = bx - ax
+	const dy = by - ay
+	const lengthSquared = dx * dx + dy * dy
+	let span = mergeSpan(diskSpan(major, ax, ay, radius), diskSpan(major, bx, by, radius))
+
+	// The caller scans the longer endpoint delta, so a positive length has a non-zero dominant component.
+	if (lengthSquared > 0 && dx !== 0) {
+		const length = Math.sqrt(lengthSquared)
+		const bodyReach = (radius * Math.abs(dy)) / length + CAPSULE_SPAN_SLACK
+		const minMajor = Math.min(ax, bx)
+		const maxMajor = Math.max(ax, bx)
+		if (major >= minMajor - bodyReach && major <= maxMajor + bodyReach) {
+			const transverse = ay + ((major - ax) * dy) / dx
+			const half = (radius * length) / Math.abs(dx)
+			span = mergeSpan(span, [transverse - half, transverse + half])
+		}
+	}
+
+	if (!span) return undefined
+	return [span[0] - CAPSULE_SPAN_SLACK, span[1] + CAPSULE_SPAN_SLACK]
+}
+
+// Closed interval of a disk on the transverse axis, or undefined when `major` misses the disk.
+// `centerMajor` and `centerMinor` are the disk center in the dominant frame, in pixels.
+function diskSpan(major: number, centerMajor: number, centerMinor: number, radius: number): readonly [number, number] | undefined {
+	const offset = major - centerMajor
+	const reach = radius * radius - offset * offset
+	if (!(reach >= 0)) return undefined
+	const half = Math.sqrt(reach)
+	return [centerMinor - half, centerMinor + half]
+}
+
+// Union of two closed intervals. Either side may be absent.
+function mergeSpan(current: readonly [number, number] | undefined, next: readonly [number, number] | undefined): readonly [number, number] | undefined {
+	if (!next) return current
+	if (!current) return next
+	return [Math.min(current[0], next[0]), Math.max(current[1], next[1])]
 }
 
 // Euclidean distance from an integer pixel center to the closed segment, in pixels.
