@@ -914,7 +914,7 @@ function combineValues(method: StackingCombinationMethod, values: Float64Array, 
 function combineMinMaxAverage(values: Float64Array, count: number, lowReject: number, highReject: number) {
 	const start = Math.min(lowReject, Math.max(0, count - 1))
 	const end = Math.max(start, count - Math.min(highReject, Math.max(0, count - start - 1)))
-	if (end <= start) return meanOf(values.subarray(0, count))
+	if (end <= start) return meanOf(values, 0, count)
 	let sum = 0
 	for (let i = start; i < end; i++) sum += values[i]
 	return sum / (end - start)
@@ -922,7 +922,7 @@ function combineMinMaxAverage(values: Float64Array, count: number, lowReject: nu
 
 // Computes a winsorized mean with percentile clamping.
 function combineWinsorizedMean(values: Float64Array, count: number, lower: number, upper: number) {
-	if (count <= 2) return meanOf(values.subarray(0, count))
+	if (count <= 2) return meanOf(values, 0, count)
 	const low = percentileSorted(values, count, lower)
 	const high = percentileSorted(values, count, Math.max(lower, upper))
 	let sum = 0
@@ -932,7 +932,7 @@ function combineWinsorizedMean(values: Float64Array, count: number, lower: numbe
 
 // Computes a percentile-clipped average.
 function combinePercentileClipAverage(values: Float64Array, count: number, lower: number, upper: number) {
-	if (count <= 2) return meanOf(values.subarray(0, count))
+	if (count <= 2) return meanOf(values, 0, count)
 	const low = percentileSorted(values, count, lower)
 	const high = percentileSorted(values, count, Math.max(lower, upper))
 	let sum = 0
@@ -945,13 +945,13 @@ function combinePercentileClipAverage(values: Float64Array, count: number, lower
 		kept++
 	}
 
-	return kept > 0 ? sum / kept : meanOf(values.subarray(0, count))
+	return kept > 0 ? sum / kept : meanOf(values, 0, count)
 }
 
 // Computes a conservative sigma-clipped average for one sample vector.
 // `madScratch` is reused across pixels and iterations when dispersion is MAD; omitted, a temporary array is allocated.
 function combineSigmaClip(values: Float64Array, count: number, options: Required<SigmaClipStackingOptions>, madScratch?: Float64Array) {
-	if (count <= 2) return meanOf(values.subarray(0, count))
+	if (count <= 2) return meanOf(values, 0, count)
 	let active = count
 
 	for (let iteration = 0; iteration < options.maxIterations; iteration++) {
@@ -986,7 +986,7 @@ function combineSigmaClip(values: Float64Array, count: number, options: Required
 		active = kept
 	}
 
-	return meanOf(values.subarray(0, active))
+	return meanOf(values, 0, active)
 }
 
 // How a frame's pixels are transformed before combination. Kept separate from the retained summary so
