@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { apparentDirection, deflectStarlight, JUPITER_LIGHT_DEFLECTOR_LIMITER, JUPITER_LIGHT_DEFLECTOR_MASS, SATURN_LIGHT_DEFLECTOR_LIMITER, SATURN_LIGHT_DEFLECTOR_MASS, SUN_LIGHT_DEFLECTOR_LIMITER, SUN_LIGHT_DEFLECTOR_MASS } from '../../../src/astronomy/coordinates/apparent'
+import { apparentDirection, applyApparentDirectionCorrections, deflectStarlight, JUPITER_LIGHT_DEFLECTOR_LIMITER, JUPITER_LIGHT_DEFLECTOR_MASS, SATURN_LIGHT_DEFLECTOR_LIMITER, SATURN_LIGHT_DEFLECTOR_MASS, SUN_LIGHT_DEFLECTOR_LIMITER, SUN_LIGHT_DEFLECTOR_MASS } from '../../../src/astronomy/coordinates/apparent'
 import { lightTime, type PositionAndVelocityOverTime, topocentricDirection } from '../../../src/astronomy/coordinates/astrometry'
 import { annualAberration, observerState } from '../../../src/astronomy/coordinates/correction'
 import { eraEpv00 } from '../../../src/astronomy/coordinates/erfa/earth'
@@ -39,6 +39,24 @@ test('zero light-time iterations reproduce the geometric same-epoch direction', 
 	expect(place.astrometric[1]).toBeCloseTo(geometric[1] / vecLength(geometric), 15)
 	expect(place.astrometric[2]).toBeCloseTo(geometric[2] / vecLength(geometric), 15)
 	expect(place.distance).toBeCloseTo(vecLength(geometric), 15)
+})
+
+test('snapshot correction matches provider pipeline without mutating its inputs', () => {
+	const observer = constantPv([0, 0, 0], [0, 0.01, 0])
+	const target = constantPv([1, 0.1, 0])
+	const sun = constantPv([-1, 0, 0])
+	const body = constantPv([0.5, 0.01, 0], [0, 0.001, 0])
+	const deflector = { mass: SUN_LIGHT_DEFLECTOR_MASS, limiter: SUN_LIGHT_DEFLECTOR_LIMITER, state: body }
+	const lowLevel = apparentDirection(target, observer, TIME, { sun, deflectors: [deflector] })!
+	const astrometric = vecClone(lowLevel.astrometric)
+	const corrected = applyApparentDirectionCorrections(astrometric, [1, 0.1, 0], [0, 0, 0], [0, 0.01, 0], lowLevel.lightTime, {
+		sunPosition: [-1, 0, 0],
+		deflectors: [{ mass: deflector.mass, limiter: deflector.limiter, position: [0.5, 0.01, 0], velocity: [0, 0.001, 0] }],
+	})
+	for (let i = 0; i < 3; i++) {
+		expect(corrected[i]).toBeCloseTo(lowLevel.apparent[i], 15)
+		expect(astrometric[i]).toBeCloseTo(lowLevel.astrometric[i], 15)
+	}
 })
 
 test('light-time convergence matches topocentricDirection and is internally consistent', () => {

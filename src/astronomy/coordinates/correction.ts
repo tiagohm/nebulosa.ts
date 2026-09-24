@@ -1,6 +1,6 @@
-import { ANGVEL, DAYSEC, SPEED_OF_LIGHT_AU_DAY } from '../../core/constants'
+import { EARTH_ANGULAR_VELOCITY_VECTOR, SPEED_OF_LIGHT_AU_DAY } from '../../core/constants'
 import { matTransposeMulVec } from '../../math/linear-algebra/mat3'
-import { type MutVec3, type Vec3, vecCross, vecDot, vecPlus } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecClone, vecCross, vecDivScalar, vecDot, vecPlus } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import type { Velocity } from '../../math/units/velocity'
@@ -16,9 +16,6 @@ import { itrs } from './itrs'
 // light-travel-time correction for barycentric/heliocentric date (BJD/HJD). Positions are AU, velocities
 // AU/day, in ICRS/BCRS axes. The corrections are first-order (Newtonian), not fully relativistic.
 
-// Earth's nominal rotation rate in rad/day (ANGVEL is rad/s).
-const ANGVEL_PER_DAY = ANGVEL * DAYSEC
-
 // Computes the observer position (AU) and velocity (AU/day) in BCRS/ICRS axes,
 // referred to the solar-system barycenter ('barycentric') or the Sun's center
 // ('heliocentric').
@@ -33,16 +30,15 @@ const ANGVEL_PER_DAY = ANGVEL * DAYSEC
 // where R = `gcrsToItrsRotationMatrix` maps GCRS->ITRS, so R^T maps ITRS->GCRS,
 // and omega_itrs ~ (0, 0, ANGVEL_PER_DAY) is the Earth rotation vector in ITRS.
 // Returns freshly allocated vectors; the input `time` cache is not mutated.
-export function observerState(time: Time, earth: PositionAndVelocity, location: GeographicPosition | undefined = time.location): readonly [pos: Vec3, vel: Vec3] {
-	if (!location) return earth
-
+export function observerState(time: Time, earth: PositionAndVelocity, location: GeographicPosition | undefined = time.location): PositionAndVelocity {
+	if (location === undefined) return earth
 	const r = gcrsToItrsRotationMatrix(time)
 	// Observer offset and Earth rotation vector, rotated from ITRS into GCRS.
 	const rGcrs = matTransposeMulVec(r, itrs(location))
-	const omegaGcrs = matTransposeMulVec(r, [0, 0, ANGVEL_PER_DAY] as MutVec3)
-	const diurnal = vecCross(omegaGcrs, rGcrs)
-
-	return [vecPlus(earth[0], rGcrs), vecPlus(earth[1], diurnal)]
+	const w = vecClone(EARTH_ANGULAR_VELOCITY_VECTOR)
+	const omegaGcrs = matTransposeMulVec(r, w, w)
+	const diurnal = vecCross(omegaGcrs, rGcrs, omegaGcrs)
+	return [vecPlus(earth[0], rGcrs, rGcrs), vecPlus(earth[1], diurnal, diurnal)]
 }
 
 // Applies stellar aberration to a natural source direction, returning the proper
@@ -58,11 +54,9 @@ export function observerState(time: Time, earth: PositionAndVelocity, location: 
 // the model. The internal Lorentz factor bm1 = sqrt(1 - |v/c|^2) is derived from
 // the velocity, so the caller supplies physical quantities only.
 export function annualAberration(direction: Vec3, observerVelocity: Vec3, sunDistance: Distance): MutVec3 {
-	const vx = observerVelocity[0] / SPEED_OF_LIGHT_AU_DAY
-	const vy = observerVelocity[1] / SPEED_OF_LIGHT_AU_DAY
-	const vz = observerVelocity[2] / SPEED_OF_LIGHT_AU_DAY
-	const bm1 = Math.sqrt(1 - (vx * vx + vy * vy + vz * vz))
-	return eraAb(direction, [vx, vy, vz], sunDistance, bm1)
+	const v = vecDivScalar(observerVelocity, SPEED_OF_LIGHT_AU_DAY)
+	const bm1 = Math.sqrt(1 - vecDot(v, v))
+	return eraAb(direction, v, sunDistance, bm1, v)
 }
 
 // Computes the barycentric/heliocentric radial-velocity correction (AU/day)

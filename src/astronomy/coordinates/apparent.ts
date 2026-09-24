@@ -1,8 +1,8 @@
 import { DAYSEC, LIGHT_TIME_AU } from '../../core/constants'
-import { type MutVec3, type Vec3, vecClone, vecDistance, vecDivScalar, vecLength } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecClone, vecDistance, vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalizeMut } from '../../math/linear-algebra/vec3'
 import type { Distance } from '../../math/units/distance'
-import { type Time, timeShift } from '../time/time'
-import { lightTime, type PositionAndVelocityOverTime, topocentricDirection } from './astrometry'
+import type { Time } from '../time/time'
+import { DEFAULT_LIGHT_TIME_ITERATIONS, lightTimeSolution, type PositionAndVelocityOverTime } from './astrometry'
 import { annualAberration } from './correction'
 import { eraLd, eraLdn, type LdBody } from './erfa/erfa'
 
@@ -16,15 +16,6 @@ import { eraLd, eraLdn, type LdBody } from './erfa/erfa'
 
 // Light time for 1 AU, in days. Matches ERFA eraLdn's CR = AULT/DAYSEC.
 const LIGHT_TIME_DAYS_PER_AU = LIGHT_TIME_AU / DAYSEC
-
-// Default fixed-point light-time iterations for finite targets. Zero leaves the geometric
-// same-epoch direction; a few iterations converge to the retarded solution.
-const DEFAULT_LIGHT_TIME_ITERATIONS = 3
-
-// Inclusive upper bound on ApparentDirectionOptions.lightTimeIterations. Solar-System
-// light-time fixed-point iteration already converges at the default of 3; 16 leaves
-// margin without allowing an unbounded or arbitrarily expensive loop.
-const MAX_LIGHT_TIME_ITERATIONS = 16
 
 // Mass of the Sun in solar masses, the unit of LightDeflector.mass.
 // ERFA eraLdn note 4.
@@ -55,6 +46,29 @@ export interface LightDeflector {
 	// ERFA-style deflection limiter, in radians^2 / 2. Caps the deflection as the source
 	// approaches the body, reaching zero at coincidence.
 	readonly limiter: number
+}
+
+// An owned barycentric deflector sample at reception: mass in solar masses,
+// limiter in radians squared / 2, position AU, and velocity AU/day.
+export interface LightDeflectorSnapshot {
+	// Mass relative to the Sun.
+	readonly mass: number
+	// ERFA-style near-body deflection limiter, in radians squared / 2.
+	readonly limiter: number
+	// Barycentric position at reception, in AU.
+	readonly position: Vec3
+	// Barycentric velocity at reception, in AU/day.
+	readonly velocity: Vec3
+}
+
+// Explicit correction inputs for an already solved astrometric direction.
+export interface ApparentDirectionCorrections {
+	// Apply observer aberration; default true. Requires sunPosition when enabled.
+	readonly aberration?: boolean
+	// Sun barycentric position at reception, in AU, for the aberration potential.
+	readonly sunPosition?: Vec3
+	// Deflectors in photon encounter order, all sampled at reception.
+	readonly deflectors?: readonly LightDeflectorSnapshot[]
 }
 
 // Optional corrections for apparentDirection. Omitted fields keep the documented defaults.
@@ -103,37 +117,39 @@ export function apparentDirection(target: PositionAndVelocityOverTime, observer:
 	const sun = options?.sun
 	if (aberration && !sun) throw new Error('sun barycentric state is required when aberration is enabled')
 
-	const [observerPosition, observerVelocity] = observer(time)
 	const iterations = options?.lightTimeIterations ?? DEFAULT_LIGHT_TIME_ITERATIONS
-	// Rejects Infinity (unbounded loop), negatives (silent undefined), and fractions
-	// (truncated iteration count) before delegating to topocentricDirection.
-	if (!Number.isSafeInteger(iterations) || !(iterations >= 0 && iterations <= MAX_LIGHT_TIME_ITERATIONS)) {
-		throw new Error(`lightTimeIterations must be an integer in [0, ${MAX_LIGHT_TIME_ITERATIONS}]`)
-	}
-	const astrometricVector = topocentricDirection(target, observer, time, iterations)
-	const distance = vecLength(astrometricVector)
-	if (!(distance > 0)) return undefined
+	const solution = lightTimeSolution(target, observer, time, iterations)
+	if (!solution) return undefined
 
-	const tau = lightTime(astrometricVector)
-	const emissionTime = timeShift(time, -tau)
-	const astrometric = vecDivScalar(astrometricVector, distance)
-	let apparent: MutVec3 = vecClone(astrometric)
+	const astrometric = vecDivScalar(solution.position, solution.distance)
+	const deflectors = options?.deflectors?.map((body): LightDeflectorSnapshot => {
+		const [position, velocity] = body.state(time)
+		return { mass: body.mass, limiter: body.limiter, position, velocity }
+	})
+	const sunPosition = aberration && sun ? vecClone(sun(time)[0]) : undefined
+	const apparent = applyApparentDirectionCorrections(astrometric, solution.targetEmissionPosition, solution.observerPosition, solution.observerVelocity, solution.lightTime, { aberration, sunPosition, deflectors })
+	return { astrometric, apparent, distance: solution.distance, lightTime: solution.lightTime, emissionTime: solution.emissionTime }
+}
 
-	const deflectors = options?.deflectors
-	if (deflectors && deflectors.length > 0) {
-		const targetEmission: Vec3 = [observerPosition[0] + astrometricVector[0], observerPosition[1] + astrometricVector[1], observerPosition[2] + astrometricVector[2]]
-		applyFiniteLightDeflection(apparent, targetEmission, observerPosition, time, tau, deflectors)
-	}
+// Applies finite-distance deflection followed by observer aberration to a unit
+// retarded direction in ICRS/BCRS axes. Inputs are snapshots: positions AU,
+// observer velocity AU/day, and light time days. Returns a fresh unit vector;
+// the input direction and snapshots are not mutated.
+export function applyApparentDirectionCorrections(astrometric: Vec3, targetEmissionPosition: Vec3, observerPosition: Vec3, observerVelocity: Vec3, lightTimeDays: number, options: ApparentDirectionCorrections): MutVec3 {
+	const aberration = options.aberration ?? true
+	if (aberration && options.sunPosition === undefined) throw new Error('sun barycentric state is required when aberration is enabled')
 
-	if (aberration && sun) {
-		const sunDistance = vecDistance(observerPosition, sun(time)[0])
+	let apparent = vecClone(astrometric)
+	if (options.deflectors?.length) applyFiniteLightDeflection(apparent, targetEmissionPosition, observerPosition, lightTimeDays, options.deflectors)
+
+	if (aberration && options.sunPosition !== undefined) {
+		const sunDistance = vecDistance(observerPosition, options.sunPosition)
 		apparent = annualAberration(apparent, observerVelocity, sunDistance)
 	} else {
-		const len = vecLength(apparent)
-		if (len > 0) vecDivScalar(apparent, len, apparent)
+		vecNormalizeMut(apparent)
 	}
 
-	return { astrometric, apparent, distance, lightTime: tau, emissionTime }
+	return apparent
 }
 
 // Applies ERFA multi-body light deflection for a star at infinity. `direction` is the
@@ -151,40 +167,33 @@ export function deflectStarlight(direction: Vec3, observerBarycentricPosition: V
 // approach, clipped to the observer-target light time so a deflector beyond the target is
 // evaluated at emission rather than treated as a star-at-infinity mass on the ray. `p` is the
 // current observer -> target direction; `q` is deflector -> target at that retarded epoch.
-function applyFiniteLightDeflection(direction: MutVec3, targetEmission: Vec3, observerPosition: Vec3, time: Time, lightTimeDays: number, deflectors: readonly LightDeflector[]) {
-	const [ox, oy, oz] = observerPosition
-	const [tx, ty, tz] = targetEmission
+function applyFiniteLightDeflection(direction: MutVec3, targetEmission: Vec3, observerPosition: Vec3, lightTimeDays: number, deflectors: readonly LightDeflectorSnapshot[]) {
+	const op = observerPosition
+	const te = targetEmission
 	const e: MutVec3 = [0, 0, 0]
 	const q: MutVec3 = [0, 0, 0]
 
 	for (const deflector of deflectors) {
-		const [bp, bv] = deflector.state(time)
-		const observerToBodyX = bp[0] - ox
-		const observerToBodyY = bp[1] - oy
-		const observerToBodyZ = bp[2] - oz
+		const bp = deflector.position
+		const bv = deflector.velocity
+		const observerToBody = vecMinus(bp, op)
 
 		// Time since the photon passed closest to the body, in days. Negative means the body
 		// lies behind the observer along the incoming ray and is not backtracked.
-		let delay = (direction[0] * observerToBodyX + direction[1] * observerToBodyY + direction[2] * observerToBodyZ) * LIGHT_TIME_DAYS_PER_AU
+		let delay = vecDot(direction, observerToBody) * LIGHT_TIME_DAYS_PER_AU
 		if (!(delay > 0)) delay = 0
 		else if (delay > lightTimeDays) delay = lightTimeDays
 
 		// Linear backtrack of the body to the closest-approach epoch, as in ERFA eraLdn.
-		const bcx = bp[0] - delay * bv[0]
-		const bcy = bp[1] - delay * bv[1]
-		const bcz = bp[2] - delay * bv[2]
+		vecMinus(bp, vecMulScalar(bv, delay, e), e)
 
-		e[0] = ox - bcx
-		e[1] = oy - bcy
-		e[2] = oz - bcz
-		const em = Math.hypot(e[0], e[1], e[2])
-		if (!(em > 0)) continue
-
-		q[0] = tx - bcx
-		q[1] = ty - bcy
-		q[2] = tz - bcz
-		const qm = Math.hypot(q[0], q[1], q[2])
+		vecMinus(te, e, q)
+		const qm = vecLength(q)
 		if (!(qm > 0)) continue
+
+		vecMinus(op, e, e)
+		const em = vecLength(e)
+		if (!(em > 0)) continue
 
 		vecDivScalar(e, em, e)
 		vecDivScalar(q, qm, q)

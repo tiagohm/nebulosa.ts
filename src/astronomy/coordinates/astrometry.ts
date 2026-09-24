@@ -1,5 +1,5 @@
 import { AU_M, DAYSEC, ELLIPSOID_PARAMETERS, PIOVERTWO, SPEED_OF_LIGHT } from '../../core/constants'
-import { type MutVec3, type Vec3, vecAngle, vecLength } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngle, vecLength, vecMinus } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import type { Pressure } from '../../math/units/pressure'
@@ -24,6 +24,41 @@ export type PositionAndVelocity = [MutVec3, MutVec3]
 
 // Sampler returning the position and velocity of a body at the given time.
 export type PositionAndVelocityOverTime = (time: Time) => PositionAndVelocity
+
+// A fixed-point light-time solution at reception time. All vectors are owned
+// snapshots in BCRS/ICRS axes: positions AU, velocity AU/day, and light time days.
+export interface LightTimeSolution {
+	// Reception epoch at the observer.
+	readonly time: Time
+	// Retarded epoch inferred from the final observer-to-target vector.
+	readonly emissionTime: Time
+	// Observer barycentric position at reception, in AU.
+	readonly observerPosition: Vec3
+	// Observer barycentric velocity at reception, in AU/day.
+	readonly observerVelocity: Vec3
+	// Target barycentric position from the last emission-epoch sample, in AU.
+	readonly targetEmissionPosition: Vec3
+	// Target minus observer vector from the last sample, in AU.
+	readonly position: Vec3
+	// Length of position, in AU.
+	readonly distance: Distance
+	// One-way light time for the final distance, in days.
+	readonly lightTime: number
+}
+
+// Default number of fixed-point refinements for finite-distance targets.
+export const DEFAULT_LIGHT_TIME_ITERATIONS = 3
+
+// Inclusive iteration cap; 16 refinements exceed normal solar-system needs.
+export const MAX_LIGHT_TIME_ITERATIONS = 16
+
+// Validates the bounded fixed-point work budget before sampling providers.
+// Non-integers would silently change loop count; infinity can hang the loop.
+export function validateLightTimeIterations(iterations: number): void {
+	if (!Number.isSafeInteger(iterations) || !(iterations >= 0 && iterations <= MAX_LIGHT_TIME_ITERATIONS)) {
+		throw new Error(`lightTimeIterations must be an integer in [0, ${MAX_LIGHT_TIME_ITERATIONS}]`)
+	}
+}
 
 // Spherical coordinates and first derivatives of a Cartesian position+velocity state,
 // expressed in whatever frame that state is already written in. Angular rates are
@@ -156,6 +191,82 @@ export function relativePositionAndVelocity(target: PositionAndVelocityOverTime,
 	]
 }
 
+// Buffers for the reception and final-emission samples of a light-time solve.
+// Each buffer is overwritten and must not alias the direction output.
+interface LightTimeSnapshots {
+	// Observer barycentric position at reception, in AU.
+	observerPosition: MutVec3
+	// Observer barycentric velocity at reception, in AU/day.
+	observerVelocity: MutVec3
+	// Target barycentric position from the last emission sample, in AU.
+	targetEmissionPosition: MutVec3
+}
+
+// Fixed-point light-time solver shared by topocentricDirection and lightTimeSolution.
+// Samples the observer once at reception and the target `iterations` + 1 times.
+// Writes each observer-to-target sample into `out` and leaves the final vector
+// there, in AU. Returns that vector's length in AU. When it is not positive, zeroes
+// `out` and returns undefined.
+// Omitting `snapshots` skips the reception and emission copies. When present, the
+// components are copied before a later provider sample can reuse its storage, and
+// the buffers must not alias `out`. Iterations must be an integer in [0, 16].
+function solveLightTime(target: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, time: Time, iterations: number, out: MutVec3, snapshots?: LightTimeSnapshots): number | undefined {
+	validateLightTimeIterations(iterations)
+	const observed = observer(time)
+	const ox = observed[0][0]
+	const oy = observed[0][1]
+	const oz = observed[0][2]
+
+	let ovx = 0
+	let ovy = 0
+	let ovz = 0
+
+	if (snapshots !== undefined) {
+		ovx = observed[1][0]
+		ovy = observed[1][1]
+		ovz = observed[1][2]
+	}
+
+	let emission = time
+	let tx = 0
+	let ty = 0
+	let tz = 0
+
+	for (let k = 0; k <= iterations; k++) {
+		const targetPosition = target(emission)[0]
+		tx = targetPosition[0]
+		ty = targetPosition[1]
+		tz = targetPosition[2]
+		out[0] = tx - ox
+		out[1] = ty - oy
+		out[2] = tz - oz
+		emission = timeShift(time, -lightTime(out))
+	}
+
+	const distance = vecLength(out)
+
+	if (!(distance > 0)) {
+		out[0] = 0
+		out[1] = 0
+		out[2] = 0
+		return undefined
+	}
+
+	if (snapshots !== undefined) {
+		snapshots.observerPosition[0] = ox
+		snapshots.observerPosition[1] = oy
+		snapshots.observerPosition[2] = oz
+		snapshots.observerVelocity[0] = ovx
+		snapshots.observerVelocity[1] = ovy
+		snapshots.observerVelocity[2] = ovz
+		snapshots.targetEmissionPosition[0] = tx
+		snapshots.targetEmissionPosition[1] = ty
+		snapshots.targetEmissionPosition[2] = tz
+	}
+
+	return distance
+}
+
 // Topocentric direction from the observer to a body at reception time `time`, light-time corrected.
 //
 // The observer is sampled at `time` (reception); the body is sampled at the retarded emission time
@@ -164,19 +275,30 @@ export function relativePositionAndVelocity(target: PositionAndVelocityOverTime,
 // must share one origin (typically barycentric ICRS); the common origin cancels in the difference. Returns a
 // freshly allocated non-unit vector whose length is the topocentric distance in AU. Aberration is not applied
 // (it nearly cancels in the differential geometry of two bodies close on the sky, e.g. an occultation or
-// transit), so this is a geometric line of sight, not an apparent place.
-export function topocentricDirection(target: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, time: Time, iterations: number): Vec3 {
-	const [ox, oy, oz] = observer(time)[0]
+// transit), so this is a geometric line of sight, not an apparent place. Reception and emission snapshots
+// are not retained.
+// Iterations must be an integer in [0, 16]; a coincident target returns the zero vector.
+export function topocentricDirection(target: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, time: Time, iterations: number, out: MutVec3 = [0, 0, 0]): Vec3 {
+	solveLightTime(target, observer, time, iterations, out)
+	return out
+}
 
-	let emission = time
-	let direction: Vec3 = [0, 0, 0]
-	for (let k = 0; k <= iterations; k++) {
-		const tp = target(emission)[0]
-		direction = [tp[0] - ox, tp[1] - oy, tp[2] - oz]
-		emission = timeShift(time, -lightTime(direction))
-	}
-
-	return direction
+// Solves retarded target geometry by sampling the observer once at reception and
+// the target at emission, then refining emission by the current one-way light time.
+// Performs iterations + 1 target samples, matching topocentricDirection's historical
+// fixed-point semantics. Returns undefined for coincident observer and target.
+// The target-emission snapshot is from the final sample; emissionTime is based on
+// the final vector, which may differ slightly from that sample's input epoch.
+// All returned vectors are owned.
+export function lightTimeSolution(target: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, time: Time, iterations: number): LightTimeSolution | undefined {
+	const position: MutVec3 = [0, 0, 0]
+	const observerPosition: MutVec3 = [0, 0, 0]
+	const observerVelocity: MutVec3 = [0, 0, 0]
+	const targetEmissionPosition: MutVec3 = [0, 0, 0]
+	const distance = solveLightTime(target, observer, time, iterations, position, { observerPosition, observerVelocity, targetEmissionPosition })
+	if (distance === undefined) return undefined
+	const tau = lightTime(position)
+	return { time, emissionTime: timeShift(time, -tau), observerPosition, observerVelocity, targetEmissionPosition, position, distance, lightTime: tau }
 }
 
 // Computes the phase angle of a body: the Sun-body-observer angle measured at the
@@ -185,9 +307,7 @@ export function topocentricDirection(target: PositionAndVelocityOverTime, observ
 // only depends on the directions from the body toward the Sun and toward the
 // observer, so any common origin and any consistent length unit work.
 export function phaseAngle(body: CartesianCoordinate, sun: CartesianCoordinate, observer: CartesianCoordinate): Angle {
-	const toSun: Vec3 = [sun[0] - body[0], sun[1] - body[1], sun[2] - body[2]]
-	const toObserver: Vec3 = [observer[0] - body[0], observer[1] - body[1], observer[2] - body[2]]
-	return vecAngle(toSun, toObserver)
+	return vecAngle(vecMinus(sun, body), vecMinus(observer, body))
 }
 
 // Computes CIRS coordinates from ICRS cartesian/spherical coordinates (assuming zero parallax and proper motion).

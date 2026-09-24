@@ -6,9 +6,10 @@ import type { Daf, Summary } from './daf'
 
 // Reader and evaluator for SPK (Spacecraft and Planet Kernel) ephemerides stored in DAF files.
 // Builds a center->target segment lookup and decodes the supported binary data types (2/3
-// Chebyshev, 9 Lagrange, 21 extended modified difference arrays), returning BCRS-frame position
-// (AU) and velocity (AU/day) at a requested time. Records are cached per segment; epochs are
-// handled as ephemeris seconds past J2000 (TDB).
+// Chebyshev, 9 Lagrange, 21 extended modified difference arrays). Positions are AU and
+// velocities AU/day, expressed in the segment's NAIF reference frame with no rotation applied.
+// Frame 1 (J2000) is the orientation ephemeris paths accept as the library base. Records are
+// cached per segment; epochs are ephemeris seconds past J2000 (TDB).
 
 // https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/FORTRAN/req/spk.html
 // https://naif.jpl.nasa.gov/pub/naif/misc/toolkit_docs_N0067/C/req/spk.html
@@ -17,6 +18,11 @@ import type { Daf, Summary } from './daf'
 const KM_TO_AU = 1 / AU_KM
 // Kilometers per second to AU per day.
 const KM_PER_SECOND_TO_AU_PER_DAY = DAYSEC / AU_KM
+
+// NAIF frame code for J2000. An SPK reference-frame component (summary.ints[2],
+// NAIF integer 3) equal to this value is the orientation ephemeris paths accept
+// as the library ICRS/BCRS base. The reader does not rotate any other frame.
+export const SPK_FRAME_J2000 = 1
 
 // A parsed SPK file: all segments plus a center/target segment lookup.
 export interface Spk {
@@ -38,7 +44,9 @@ export interface SpkSegment {
 	readonly center: number
 	// NAIF code of the target body.
 	readonly target: number
-	// readonly frame: number
+	// NAIF reference-frame id. `at` returns vectors in this frame.
+	// SPK_FRAME_J2000 is J2000; any other id is not rotated here.
+	readonly frame: number
 	// readonly type: number
 	// First DAF word index of the segment data (1-based).
 	readonly startIndex: number
@@ -46,7 +54,7 @@ export interface SpkSegment {
 	readonly endIndex: number
 	// Loads INIT/INTLEN/RSIZE/N. Coefficient records are read later on demand. Safe to call more than once.
 	readonly initialize: () => Promise<void>
-	// Evaluates the target's position (AU) and velocity (AU/day) at `time`.
+	// Evaluates position (AU) and velocity (AU/day) at `time` in `frame`. No rotation is applied.
 	readonly at: (time: Time) => PositionAndVelocity
 }
 
@@ -146,11 +154,11 @@ function makeSegment(summary: Summary, daf: Daf): SpkSegment {
 	switch (type) {
 		case 2:
 		case 3:
-			return new Type2And3Segment(daf, start, end, center, target, type, startIndex, endIndex)
+			return new Type2And3Segment(daf, start, end, center, target, frame, type, startIndex, endIndex)
 		case 9:
-			return new Type9Segment(daf, start, end, center, target, startIndex, endIndex)
+			return new Type9Segment(daf, start, end, center, target, frame, startIndex, endIndex)
 		case 21:
-			return new Type21Segment(daf, start, end, center, target, startIndex, endIndex)
+			return new Type21Segment(daf, start, end, center, target, frame, startIndex, endIndex)
 	}
 
 	throw new Error('only binary SPK data types 2, 3, 9 and 21 are supported')
@@ -295,7 +303,7 @@ export class Type2And3Segment implements SpkSegment {
 		readonly end: number,
 		readonly center: number,
 		readonly target: number,
-		// readonly frame: number,
+		readonly frame: number,
 		type: number,
 		readonly startIndex: number,
 		readonly endIndex: number,
@@ -443,7 +451,7 @@ export class Type9Segment implements SpkSegment {
 		readonly end: number,
 		readonly center: number,
 		readonly target: number,
-		// readonly frame: number,
+		readonly frame: number,
 		// readonly type: number,
 		readonly startIndex: number,
 		readonly endIndex: number,
@@ -590,7 +598,7 @@ export class Type21Segment implements SpkSegment {
 		readonly end: number,
 		readonly center: number,
 		readonly target: number,
-		// readonly frame: number,
+		readonly frame: number,
 		// readonly type: number,
 		readonly startIndex: number,
 		readonly endIndex: number,
@@ -791,6 +799,7 @@ export class MultipleSpkSegment implements SpkSegment {
 	readonly end: number
 	readonly center: number
 	readonly target: number
+	readonly frame: number
 	readonly startIndex: number
 	readonly endIndex: number
 
@@ -804,9 +813,15 @@ export class MultipleSpkSegment implements SpkSegment {
 
 		this.center = segments[0].center
 		this.target = segments[0].target
+		this.frame = segments[0].frame
 
 		if (segments.length > 1 && segments.some((e) => e.center !== this.center || e.target !== this.target)) {
 			throw new Error('one of the segments does not match the center or target')
+		}
+		// A merged segment exposes one frame. Mixed frames would make `at` return
+		// differently oriented vectors depending on the epoch.
+		if (segments.length > 1 && segments.some((e) => e.frame !== this.frame)) {
+			throw new Error('one of the segments does not match the reference frame')
 		}
 
 		this.start = segments[0].start
@@ -826,7 +841,7 @@ export class MultipleSpkSegment implements SpkSegment {
 		this.#segments = segments
 	}
 
-	// Initializes each child in sequence because they may share the DAF source cursor.
+	// Initializes each segment in sequence.
 	async initialize(): Promise<void> {
 		for (const segment of this.#segments) await segment.initialize()
 	}

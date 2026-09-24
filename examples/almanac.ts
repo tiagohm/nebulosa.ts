@@ -17,7 +17,7 @@ import { planetMagnitude, type Planet } from '../src/astronomy/bodies/photometry
 import { spaceMotion, star } from '../src/astronomy/bodies/star'
 import { carringtonRotationNumber, equationOfTime, nearestSolarEclipse, season } from '../src/astronomy/bodies/sun'
 // oxfmt-ignore
-import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, phaseAngle, refractedAltitude, relativePositionAndVelocity, separationFrom, unrefractedAltitude, type PositionAndVelocity, type PositionAndVelocityOverTime } from '../src/astronomy/coordinates/astrometry'
+import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, phaseAngle, refractedAltitude, relativePositionAndVelocity, separationFrom, unrefractedAltitude, type PositionAndVelocityOverTime } from '../src/astronomy/coordinates/astrometry'
 import { angularDistance, eclipticToEquatorial, equatorialFromJ2000, equatorialToEcliptic, equatorialToGalatic, equatorialToHorizontal, galacticToEquatorial, horizontalToEquatorial, zenith } from '../src/astronomy/coordinates/coordinate'
 import { annualAberration, observerState, radialVelocityCorrection } from '../src/astronomy/coordinates/correction'
 import { eraAnpm, eraC2s, eraLd, eraLdSun, eraPmpx, eraS2c, eraSeps, eraStarpm, eraStarpv } from '../src/astronomy/coordinates/erfa/erfa'
@@ -59,7 +59,7 @@ import { Matrix } from '../src/math/linear-algebra/matrix'
 import { Timescale, dut1 as dut1FromTime, earthRotationAngle, equationOfEquinoxes, greenwichApparentSiderealTime, greenwichMeanSiderealTime, nutationAngles, pmAngles, pmMatrix, tai, taiMinusUtc, tcb, tdb, timeBesselianYear, timeJulianYear, timeMJD, timeShift, timeSubtract, timeToDate, timeUnix, timeYMDHMS, toJulianDay, toJulianEpoch, tt, ut1, utc, type Time } from '../src/astronomy/time/time'
 import { formatTemporal, temporalFromTime } from '../src/astronomy/time/temporal'
 import { AU_KM, DAYSEC, DAYSPERSY, DAYSPERTY, EARTH_RADIUS_KM, GM_EARTH, GM_EARTH_KM3_S2, GM_SUN_PITJEVA_2005, PI, PIOVERTWO, SPEED_OF_LIGHT_AU_DAY, SUN_RADIUS_AU, TAU } from '../src/core/constants'
-import { type Vec3, vecAngle, vecCross, vecLatitude, vecLength, vecLongitude, vecMinus, vecMulScalar, vecNormalize } from '../src/math/linear-algebra/vec3'
+import { type Vec3, vecAngle, vecCross, vecLatitude, vecLength, vecLongitude, vecMinus, vecMulScalar, vecNormalize, vecPlus } from '../src/math/linear-algebra/vec3'
 import { sphericalDestination, sphericalInterpolate, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../src/math/numerical/geometry'
 import { type Angle, arcsec, deg, formatAZ, formatHMS, formatSignedDMS, hms, hour, normalizeAngle, normalizePI, toArcsec, toDeg, toHour } from '../src/math/units/angle'
 import { kilometer, toKilometer } from '../src/math/units/distance'
@@ -1449,15 +1449,12 @@ function lunarEclipseMoonAltitude() {
 function asteroidOccultationPrediction() {
 	const orbit = asteroidKeplerOrbit()
 	// Barycentric samplers sharing one origin: asteroid = Sun + heliocentric state; observer = topocentric.
-	const target = (time: Time): PositionAndVelocity => {
+	const target: PositionAndVelocityOverTime = (time) => {
 		const [sp, sv] = sun(time)
 		const [hp, hv] = orbit.at(time)
-		return [
-			[sp[0] + hp[0], sp[1] + hp[1], sp[2] + hp[2]],
-			[sv[0] + hv[0], sv[1] + hv[1], sv[2] + hv[2]],
-		]
+		return [vecPlus(sp, hp), vecPlus(sv, hv)]
 	}
-	const observer = (time: Time): PositionAndVelocity => observerState(time, earth(time), SITE) as PositionAndVelocity
+	const observer: PositionAndVelocityOverTime = (time) => observerState(time, earth(time), SITE)
 	const anchor = timeShift(NOW, 0.5)
 	// Star on the asteroid's geometric line of sight at the anchor; screening without light time keeps the
 	// synthetic star consistent, so the demonstration yields a real hit. Real use passes a catalog star with
@@ -1478,7 +1475,7 @@ function asteroidOccultationPrediction() {
 // Screens one planetary transit from SITE and prints its circumstances (existence, exterior contacts, chord
 // depth, and contact position angles).
 function reportTransit(label: string, planet: PositionAndVelocityOverTime, planetRadiusKm: number, start: Time, stop: Time) {
-	const observer = (time: Time): PositionAndVelocity => observerState(time, earth(time), SITE) as PositionAndVelocity
+	const observer: PositionAndVelocityOverTime = (time) => observerState(time, earth(time), SITE)
 	const [transit] = planetaryTransits(planet, sun, observer, start, stop, { sunRadius: SUN_RADIUS_AU, planetRadius: kilometer(planetRadiusKm) })
 	if (transit === undefined) return console.info(`${label}: no transit visible from the site in the window.`)
 	const contact = (t?: Time) => (t ? formatTemporal(temporalFromTime(utc(t))) : 'outside window')

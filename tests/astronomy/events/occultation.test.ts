@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import type { PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
+import type { PositionAndVelocity, PositionAndVelocityOverTime } from '../../../src/astronomy/coordinates/astrometry'
 import { observerState } from '../../../src/astronomy/coordinates/correction'
 import { earth, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { occultationCandidates } from '../../../src/astronomy/events/occultation'
@@ -8,7 +8,7 @@ import { KeplerOrbit } from '../../../src/astronomy/orbits/asteroid'
 import { type Time, Timescale, time, timeShift, timeSubtract } from '../../../src/astronomy/time/time'
 import { AU_M, DAYSEC, GM_SUN_PITJEVA_2005, ONE_SECOND, SPEED_OF_LIGHT } from '../../../src/core/constants'
 import { matIdentity } from '../../../src/math/linear-algebra/mat3'
-import type { Vec3 } from '../../../src/math/linear-algebra/vec3'
+import { vecZero, type Vec3 } from '../../../src/math/linear-algebra/vec3'
 import { deg, toArcsec } from '../../../src/math/units/angle'
 import { kilometer, toKilometer } from '../../../src/math/units/distance'
 
@@ -123,14 +123,14 @@ test('with light time disabled, never samples the observer or body outside the r
 	// stop, so bounded/interpolated samplers stay valid over exactly [start, stop] when light time is off.
 	const start = timeShift(CROSSING, -1 * ONE_SECOND)
 	const stop = timeShift(CROSSING, 19 * ONE_SECOND)
-	const guard = (t: Time): PositionAndVelocity => {
+	const guard: PositionAndVelocityOverTime = (t) => {
 		if (timeSubtract(t, start) < 0 || timeSubtract(stop, t) < 0) throw new Error('sampled outside the window')
 		return [
 			[0, 0, 0],
 			[0, 0, 0],
 		]
 	}
-	const guardedBody = (t: Time): PositionAndVelocity => {
+	const guardedBody: PositionAndVelocityOverTime = (t) => {
 		if (timeSubtract(t, start) < 0 || timeSubtract(stop, t) < 0) throw new Error('sampled outside the window')
 		return driftingBody(t)
 	}
@@ -150,15 +150,12 @@ test('with default light time, samples the observer only in-window but the targe
 	let observerMinFromStart = Number.POSITIVE_INFINITY
 	let observerMaxFromStop = Number.NEGATIVE_INFINITY
 	let targetMinFromStart = Number.POSITIVE_INFINITY
-	const trackedObserver = (t: Time): PositionAndVelocity => {
+	const trackedObserver: PositionAndVelocityOverTime = (t) => {
 		observerMinFromStart = Math.min(observerMinFromStart, timeSubtract(t, start))
 		observerMaxFromStop = Math.max(observerMaxFromStop, timeSubtract(t, stop))
-		return [
-			[0, 0, 0],
-			[0, 0, 0],
-		]
+		return [vecZero(), vecZero()]
 	}
-	const trackedBody = (t: Time): PositionAndVelocity => {
+	const trackedBody: PositionAndVelocityOverTime = (t) => {
 		targetMinFromStart = Math.min(targetMinFromStart, timeSubtract(t, start))
 		return driftingBody(t)
 	}
@@ -201,7 +198,7 @@ test('finds a real topocentric appulse of Ceres against its own line of sight', 
 	const site = geodeticLocation(deg(-46.633), deg(-23.55), kilometer(0.76), Ellipsoid.WGS84)
 
 	// Barycentric samplers sharing one origin: Ceres = Sun + heliocentric state; observer = topocentric.
-	const target = (t: Time): PositionAndVelocity => {
+	const target: PositionAndVelocityOverTime = (t) => {
 		const [sp, sv] = sun(t)
 		const [hp, hv] = orbit.at(t)
 		return [
@@ -209,7 +206,7 @@ test('finds a real topocentric appulse of Ceres against its own line of sight', 
 			[sv[0] + hv[0], sv[1] + hv[1], sv[2] + hv[2]],
 		]
 	}
-	const observer = (t: Time): PositionAndVelocity => observerState(t, earth(t), site) as PositionAndVelocity
+	const observer: PositionAndVelocityOverTime = (t) => observerState(t, earth(t), site)
 
 	// Anchor a star exactly on Ceres's geometric topocentric direction at a chosen instant, so an appulse of
 	// separation ~0 must exist there. Building the star and screening both without light time keeps them

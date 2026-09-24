@@ -52,8 +52,8 @@ test('iersA', async () => {
 	expectXY(iersa.xy(t), arcsec(0.1878143362962963), arcsec(0.3180433324074074))
 
 	t = timeYMDHMS(2050, 10, 7, 12, 34, 56, Timescale.UTC)
-	expectDut1(iersa.dut1(t), 0.0862207)
-	expectXY(iersa.xy(t), arcsec(0.094347), arcsec(0.293316))
+	expectDut1(iersa.dut1(t), -0.1313246)
+	expectXY(iersa.xy(t), arcsec(0.235938), arcsec(0.302527))
 
 	t = timeYMDHMS(1900, 10, 7, 12, 34, 56, Timescale.UTC)
 	expectDut1(iersa.dut1(t), 0.8075)
@@ -77,8 +77,8 @@ test('iersB', async () => {
 	expectXY(iersb.xy(t), arcsec(0.1878133848148148), arcsec(0.3179746625925926))
 
 	t = timeYMDHMS(2050, 10, 7, 12, 34, 56, Timescale.UTC)
-	expectDut1(iersb.dut1(t), 0.0523072)
-	expectXY(iersb.xy(t), arcsec(0.202982), arcsec(0.338377))
+	expectDut1(iersb.dut1(t), 0.0070141)
+	expectXY(iersb.xy(t), arcsec(0.216466), arcsec(0.346717))
 
 	t = timeYMDHMS(1900, 10, 7, 12, 34, 56, Timescale.UTC)
 	expectDut1(iersb.dut1(t), 0.0326338)

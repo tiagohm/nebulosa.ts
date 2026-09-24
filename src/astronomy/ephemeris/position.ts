@@ -1,0 +1,202 @@
+import { type Vec3, vecDivScalar } from '../../math/linear-algebra/vec3'
+import { normalizeAngle } from '../../math/units/angle'
+import type { Distance } from '../../math/units/distance'
+import { applyApparentDirectionCorrections, type LightDeflectorSnapshot } from '../coordinates/apparent'
+import { DEFAULT_LIGHT_TIME_ITERATIONS, equatorial, frameSphericalPositionAndVelocity, lightTimeSolution, type PositionAndVelocity, sphericalPositionAndVelocity, type SphericalPositionAndVelocity } from '../coordinates/astrometry'
+import type { SphericalCoordinate } from '../coordinates/coordinate'
+import { frameAt, type Frame } from '../coordinates/frame'
+import type { Time } from '../time/time'
+import { type EphemerisEndpoint, type EphemerisPath, sameEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from './path'
+
+// Owned geometric and retarded astrometric positions from prepared synchronous
+// ephemeris paths. Vectors use ICRS/BCRS-oriented axes, positions AU, velocities
+// AU/day, and light time days. No implicit ephemeris or frame conversion occurs.
+
+// A same-epoch target state relative to its declared center.
+export interface GeometricPosition {
+	// Discriminant for the uncorrected Cartesian stage.
+	readonly kind: 'geometric'
+	// Evaluation epoch.
+	readonly time: Time
+	// Origin of position and velocity.
+	readonly center: EphemerisEndpoint
+	// Body or point represented by the state.
+	readonly target: EphemerisEndpoint
+	// Center-to-target position, in AU.
+	readonly position: Vec3
+	// Center-to-target velocity, in AU/day.
+	readonly velocity: Vec3
+}
+
+// A retarded observer-to-target state before gravitational deflection or aberration.
+// The target is sampled at emission; the observer is sampled at reception.
+export interface AstrometricPosition {
+	// Discriminant for the light-time-corrected direction stage.
+	readonly kind: 'astrometric'
+	// Reception epoch at the observer.
+	readonly time: Time
+	// Emission epoch inferred from the final light-time vector.
+	readonly emissionTime: Time
+	// Observer endpoint, represented by an SSB-centered path.
+	readonly center: EphemerisEndpoint
+	// Target endpoint, represented by an SSB-centered path.
+	readonly target: EphemerisEndpoint
+	// Retarded observer-to-target vector, in AU.
+	readonly position: Vec3
+	// Unit direction toward the retarded target in ICRS/BCRS-oriented axes.
+	readonly direction: Vec3
+	// Retarded observer-target distance, in AU.
+	readonly distance: Distance
+	// One-way light time of that distance, in days.
+	readonly lightTime: number
+	// Observer barycentric position at reception, in AU.
+	readonly observerPosition: Vec3
+	// Observer barycentric velocity at reception, in AU/day.
+	readonly observerVelocity: Vec3
+	// Target barycentric position from the last emission sample, in AU.
+	readonly targetEmissionPosition: Vec3
+}
+
+// Options for the bounded fixed-point retarded observation.
+export interface EphemerisObserveOptions {
+	// Number of refinements, an integer in [0, 16]; default 3.
+	readonly lightTimeIterations?: number
+}
+
+// A body whose gravity bends light from a finite-distance target. Its path
+// must be SSB-centered and is sampled at the observer's reception epoch.
+export interface EphemerisLightDeflector {
+	// Body mass relative to the Sun.
+	readonly mass: number
+	// ERFA near-body limiter, in radians squared / 2.
+	readonly limiter: number
+	// SSB-to-body state provider in AU and AU/day.
+	readonly path: EphemerisPath
+}
+
+// Explicit correction sources for the high-level apparent stage.
+export interface EphemerisApparentOptions {
+	// Apply observer aberration; default true. Requires an SSB-to-Sun path.
+	readonly aberration?: boolean
+	// SSB-to-Sun path used for the aberration potential term.
+	readonly sun?: EphemerisPath
+	// SSB-centered deflectors in photon encounter order; none are implicit.
+	readonly deflectors?: readonly EphemerisLightDeflector[]
+}
+
+// An ICRS/BCRS-oriented apparent unit direction after explicit gravitational
+// deflection and observer aberration. Distance and light time remain astrometric.
+export interface ApparentPosition {
+	// Discriminant for the corrected direction stage.
+	readonly kind: 'apparent'
+	// Observer reception epoch.
+	readonly time: Time
+	// Retarded target emission epoch.
+	readonly emissionTime: Time
+	// Observer endpoint.
+	readonly center: EphemerisEndpoint
+	// Target endpoint.
+	readonly target: EphemerisEndpoint
+	// Corrected unit direction in ICRS/BCRS-oriented axes.
+	readonly direction: Vec3
+	// Astrometric observer-target distance, in AU.
+	readonly distance: Distance
+	// One-way light time, in days.
+	readonly lightTime: number
+}
+
+// Position stages that carry a direction but no physically defined velocity.
+export type DirectionPosition = AstrometricPosition | ApparentPosition
+
+// Materializes a prepared path at one epoch and owns both returned vectors.
+// No correction or coordinate-frame transform is applied.
+export function ephemerisAt(path: EphemerisPath, time: Time): GeometricPosition {
+	const [position, velocity] = path.stateAt(time)
+	return { kind: 'geometric', time, center: path.center, target: path.target, position, velocity }
+}
+
+// Observes an SSB-centered target from an SSB-centered observer. The two paths
+// must use barycentric coordinates because moving-center states cannot be retarded
+// independently without changing the observer's reception-time origin. Returns
+// undefined for coincident points, which have no direction. All vectors are owned.
+export function observeEphemeris(observer: EphemerisPath, target: EphemerisPath, time: Time, options?: EphemerisObserveOptions): AstrometricPosition | undefined {
+	if (!sameEphemerisEndpoint(observer.center, SOLAR_SYSTEM_BARYCENTER)) throw new Error('observer ephemeris path must be SSB-centered')
+	if (!sameEphemerisEndpoint(target.center, SOLAR_SYSTEM_BARYCENTER)) throw new Error('target ephemeris path must be SSB-centered')
+	const iterations = options?.lightTimeIterations ?? DEFAULT_LIGHT_TIME_ITERATIONS
+	const solution = lightTimeSolution(target.stateAt, observer.stateAt, time, iterations)
+	if (solution === undefined) return undefined
+	return {
+		kind: 'astrometric',
+		time,
+		emissionTime: solution.emissionTime,
+		center: observer.target,
+		target: target.target,
+		position: solution.position,
+		direction: vecDivScalar(solution.position, solution.distance),
+		distance: solution.distance,
+		lightTime: solution.lightTime,
+		observerPosition: solution.observerPosition,
+		observerVelocity: solution.observerVelocity,
+		targetEmissionPosition: solution.targetEmissionPosition,
+	}
+}
+
+// Applies explicit finite-distance gravitational deflection and observer
+// aberration to an astrometric position. Requires an SSB-centered Sun path when
+// aberration is enabled and SSB-centered paths for every deflector. Snapshots
+// providers before correction; returns an owned direction and retains distance.
+export function apparentPosition(position: AstrometricPosition, options?: EphemerisApparentOptions): ApparentPosition {
+	const aberration = options?.aberration ?? true
+	const sun = options?.sun
+	if (aberration && !sun) throw new Error('sun barycentric state is required when aberration is enabled')
+	if (aberration && sun && !sameEphemerisEndpoint(sun.center, SOLAR_SYSTEM_BARYCENTER)) throw new Error('sun ephemeris path must be SSB-centered')
+	for (const body of options?.deflectors ?? []) {
+		if (!sameEphemerisEndpoint(body.path.center, SOLAR_SYSTEM_BARYCENTER)) throw new Error('light deflector ephemeris path must be SSB-centered')
+	}
+	const deflectors = options?.deflectors?.map((body): LightDeflectorSnapshot => {
+		const pv = body.path.stateAt(position.time)
+		return { mass: body.mass, limiter: body.limiter, position: pv[0], velocity: pv[1] }
+	})
+	const sunPosition = aberration && sun ? sun.stateAt(position.time)[0] : undefined
+	const direction = applyApparentDirectionCorrections(position.direction, position.targetEmissionPosition, position.observerPosition, position.observerVelocity, position.lightTime, { aberration, sunPosition, deflectors })
+	return { kind: 'apparent', time: position.time, emissionTime: position.emissionTime, center: position.center, target: position.target, direction, distance: position.distance, lightTime: position.lightTime }
+}
+
+// Rotates a geometric AU/AU-day state from the library base into a frame at its
+// epoch. Rotating frames include the W = dR/dt·Rᵀ velocity term. Writes into
+// `out` when given (which may alias the input vectors); otherwise allocates.
+export function geometricPositionInFrame(position: GeometricPosition, frame: Frame, out?: PositionAndVelocity): PositionAndVelocity {
+	return frameAt([position.position, position.velocity], frame, position.time, out)
+}
+
+// Rotates only the unit direction of an astrometric or apparent stage at its
+// reception epoch. Returns a fresh vector; no velocity or frame-origin shift is inferred.
+export function directionPositionInFrame(position: DirectionPosition, frame: Frame): Vec3 {
+	return frameAt(position.direction, frame, position.time)
+}
+
+// Converts a base-axis Cartesian position (AU) into right ascension (radians in
+// [0, TAU)), declination (radians), and distance (AU). equatorial() leaves
+// longitude in (-PI, PI].
+function normalizedEquatorial(cartesian: Vec3): SphericalCoordinate {
+	const [rightAscension, declination, distance] = equatorial(cartesian)
+	return [normalizeAngle(rightAscension), declination, distance]
+}
+
+// Converts a base-axis position stage into right ascension (radians in [0, TAU)),
+// declination (radians), and distance (AU). Direction stages use their separately
+// retained astrometric distance; no Cartesian velocity is inferred from them.
+export function equatorialPosition(position: GeometricPosition | DirectionPosition): SphericalCoordinate {
+	if (position.kind === 'geometric') return normalizedEquatorial(position.position)
+	const d = position.distance
+	return normalizedEquatorial([position.direction[0] * d, position.direction[1] * d, position.direction[2] * d])
+}
+
+// Converts only a geometric full state into spherical longitude/latitude/distance
+// and analytic angular/radial rates. Angles are radians, rates radians/day and
+// AU/day. An optional frame rotates both position and velocity before extraction;
+// returns undefined at zero distance, where the direction is undefined.
+export function geometricSphericalPositionAndVelocity(position: GeometricPosition, frame?: Frame): SphericalPositionAndVelocity | undefined {
+	const state = [position.position, position.velocity] as const
+	return frame ? frameSphericalPositionAndVelocity(state, frame, position.time) : sphericalPositionAndVelocity(state)
+}

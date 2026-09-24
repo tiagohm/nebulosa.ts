@@ -1,5 +1,5 @@
 import { DAYSEC, ONE_SECOND } from '../../core/constants'
-import type { Vec3 } from '../../math/linear-algebra/vec3'
+import { vecLength, type Vec3 } from '../../math/linear-algebra/vec3'
 import { clamp } from '../../math/numerical/math'
 import { brentMinimize } from '../../math/numerical/optimization'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
@@ -100,8 +100,8 @@ function transitGeometry(planet: PositionAndVelocityOverTime, sun: PositionAndVe
 	const planetDirection = topocentricDirection(planet, observer, time, iterations)
 	const sunDirection = topocentricDirection(sun, observer, time, iterations)
 	const separation = separationFrom(planetDirection, sunDirection)
-	const sunDistance = Math.hypot(sunDirection[0], sunDirection[1], sunDirection[2])
-	const planetDistance = Math.hypot(planetDirection[0], planetDirection[1], planetDirection[2])
+	const sunDistance = vecLength(sunDirection)
+	const planetDistance = vecLength(planetDirection)
 	const sunAngularRadius = Math.asin(clamp(sunRadius / sunDistance, 0, 1))
 	const planetAngularRadius = Math.asin(clamp(planetRadius / planetDistance, 0, 1))
 	return { planetDirection, sunDirection, sunDistance, planetDistance, separation, sunAngularRadius, planetAngularRadius }

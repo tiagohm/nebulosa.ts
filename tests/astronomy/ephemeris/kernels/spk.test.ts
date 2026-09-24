@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { type Daf, readDaf, type Summary } from '../../../../src/astronomy/ephemeris/kernels/daf'
 import { Naif } from '../../../../src/astronomy/ephemeris/kernels/naif'
-import { readSpk, Type2And3Segment, Type9Segment } from '../../../../src/astronomy/ephemeris/kernels/spk'
+import { MultipleSpkSegment, readSpk, SPK_FRAME_J2000, Type21Segment, Type2And3Segment, Type9Segment } from '../../../../src/astronomy/ephemeris/kernels/spk'
 import { Timescale, timeYMDHMS } from '../../../../src/astronomy/time/time'
 import { AU_KM, DAYSEC, J2000 } from '../../../../src/core/constants'
 import { fileHandleSource, rangeHttpSource } from '../../../../src/io/io'
@@ -20,16 +20,16 @@ function dafFrom(values: readonly number[], summaries: Summary[] = []): Daf {
 }
 
 // Builds a minimal SPK summary with one segment descriptor.
-function summary(center: number, target: number, start: number, end: number, type: number, startIndex: number, endIndex: number): Summary {
+function summary(center: number, target: number, start: number, end: number, type: number, startIndex: number, endIndex: number, frame = SPK_FRAME_J2000): Summary {
 	return {
 		name: '',
 		doubles: new Float64Array([start, end]),
-		ints: new Int32Array([target, center, 1, type, startIndex, endIndex]),
+		ints: new Int32Array([target, center, frame, type, startIndex, endIndex]),
 	}
 }
 
 test('type 2 segment includes the final endpoint', async () => {
-	const segment = new Type2And3Segment(dafFrom([4, 4, 1, 2, 3, 4, 5, 6, 0, 8, 8, 1]), 0, 8, 0, 1, 2, 1, 12)
+	const segment = new Type2And3Segment(dafFrom([4, 4, 1, 2, 3, 4, 5, 6, 0, 8, 8, 1]), 0, 8, 0, 1, SPK_FRAME_J2000, 2, 1, 12)
 	await segment.initialize()
 	const [p, v] = segment.at({ day: J2000, fraction: 8 / DAYSEC, scale: Timescale.TDB })
 
@@ -42,7 +42,7 @@ test('type 2 segment includes the final endpoint', async () => {
 })
 
 test('type 3 segment evaluates velocity from the stored velocity coefficients', async () => {
-	const segment = new Type2And3Segment(dafFrom([4, 4, 10, 2, 20, 3, 30, 4, 100, 0, 200, 0, 300, 0, 0, 8, 14, 1]), 0, 8, 0, 1, 3, 1, 18)
+	const segment = new Type2And3Segment(dafFrom([4, 4, 10, 2, 20, 3, 30, 4, 100, 0, 200, 0, 300, 0, 0, 8, 14, 1]), 0, 8, 0, 1, SPK_FRAME_J2000, 3, 1, 18)
 	await segment.initialize()
 	const [p, v] = segment.at({ day: J2000, fraction: 4 / DAYSEC, scale: Timescale.TDB })
 
@@ -55,7 +55,7 @@ test('type 3 segment evaluates velocity from the stored velocity coefficients', 
 })
 
 test('type 9 odd interpolation window is centered on the closest epoch', async () => {
-	const segment = new Type9Segment(dafFrom([0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 216, 0, 0, 0, 0, 0, 0, 2, 4, 6, 2, 4]), 0, 6, 0, 1, 1, 30)
+	const segment = new Type9Segment(dafFrom([0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 216, 0, 0, 0, 0, 0, 0, 2, 4, 6, 2, 4]), 0, 6, 0, 1, SPK_FRAME_J2000, 1, 30)
 	await segment.initialize()
 	const [p, v] = segment.at({ day: J2000, fraction: 2.1 / DAYSEC, scale: Timescale.TDB })
 
@@ -69,7 +69,9 @@ test('type 9 odd interpolation window is centered on the closest epoch', async (
 
 test('overlapping segments use the latest matching segment in file order', async () => {
 	const spk = readSpk(dafFrom([10, 10, 1, 0, 0, 0, 20, 5, 1, 10, 10, 2, 0, 0, 0, 20, 5, 1], [summary(0, 1, 0, 20, 2, 1, 9), summary(0, 1, 10, 20, 2, 10, 18)]))
-	const [earlyPosition, earlyVelocity] = (await spk.segment(0, 1))!.at({ day: J2000, fraction: 5 / DAYSEC, scale: Timescale.TDB })
+	const merged = (await spk.segment(0, 1))!
+	expect(merged.frame).toBe(SPK_FRAME_J2000)
+	const [earlyPosition, earlyVelocity] = merged.at({ day: J2000, fraction: 5 / DAYSEC, scale: Timescale.TDB })
 	const [p, v] = (await spk.segment(0, 1))!.at({ day: J2000, fraction: 10 / DAYSEC, scale: Timescale.TDB })
 
 	expect(earlyPosition[0]).toBeCloseTo(1 / AU_KM, 15)
@@ -84,6 +86,24 @@ test('overlapping segments use the latest matching segment in file order', async
 	expect(v[0]).toBeCloseTo(0, 15)
 	expect(v[1]).toBeCloseTo(0, 15)
 	expect(v[2]).toBeCloseTo(0, 15)
+})
+
+test('segments retain the descriptor reference frame', () => {
+	// NAIF frame 17 is ECLIPJ2000, distinct from J2000 (frame 1).
+	const ecliptic = 17
+	const type2 = new Type2And3Segment(dafFrom([]), 0, 1, Naif.SSB, Naif.EARTH, ecliptic, 2, 1, 1)
+	const type9 = new Type9Segment(dafFrom([]), 0, 1, Naif.SSB, Naif.EARTH, ecliptic, 1, 1)
+	const type21 = new Type21Segment(dafFrom([]), 0, 1, Naif.SSB, Naif.EARTH, ecliptic, 1, 1)
+	expect(type2.frame).toBe(ecliptic)
+	expect(type9.frame).toBe(ecliptic)
+	expect(type21.frame).toBe(ecliptic)
+	const merged = new MultipleSpkSegment([type2, new Type2And3Segment(dafFrom([]), 2, 3, Naif.SSB, Naif.EARTH, ecliptic, 2, 1, 1)])
+	expect(merged.frame).toBe(ecliptic)
+	expect(() => new MultipleSpkSegment([type2, new Type2And3Segment(dafFrom([]), 2, 3, Naif.SSB, Naif.EARTH, SPK_FRAME_J2000, 2, 1, 1)])).toThrow('one of the segments does not match the reference frame')
+
+	const spk = readSpk(dafFrom([], [summary(Naif.SSB, Naif.EARTH, 0, 20, 2, 1, 9, ecliptic)]))
+	expect(spk.segments[0][2].frame).toBe(ecliptic)
+	expect(() => readSpk(dafFrom([], [summary(Naif.SSB, Naif.EARTH, 0, 10, 2, 1, 2, ecliptic), summary(Naif.SSB, Naif.EARTH, 10, 20, 2, 3, 4, SPK_FRAME_J2000)]))).toThrow('one of the segments does not match the reference frame')
 })
 
 test('segment lookup returns undefined for an unknown center/target pair', async () => {
