@@ -1,3 +1,4 @@
+import { vecZero } from '../../math/linear-algebra/vec3'
 import type { PositionAndVelocity } from '../coordinates/astrometry'
 import { observerState } from '../coordinates/correction'
 import { frameToFrame, ICRS, TEME } from '../coordinates/frame'
@@ -13,10 +14,7 @@ import { customEphemerisEndpoint, type EphemerisEndpoint, type EphemerisPath, ep
 // axes. SPK lookup and initialization remain asynchronous preparation only.
 
 // Geocentric zero state for extracting the site offset from observerState.
-const ZERO_EARTH_STATE: PositionAndVelocity = [
-	[0, 0, 0],
-	[0, 0, 0],
-]
+const ZERO_EARTH_STATE: PositionAndVelocity = [vecZero(), vecZero()]
 
 // Resolves and initializes an SPK segment before returning its synchronous path.
 // Returns undefined when the kernel has no center-to-target segment. Throws when
@@ -44,13 +42,8 @@ export function sgp4EphemerisPath(source: TLE | OMM | SatRec, target?: Ephemeris
 // Creates an Earth-center-to-site path using observerState's ITRS-to-GCRS
 // position and diurnal velocity, in AU and AU/day. The target identifies the site.
 export function earthObserverEphemerisPath(location: GeographicPosition, target: EphemerisEndpoint): EphemerisPath {
-	return ephemerisPath(naifEphemerisEndpoint(Naif.EARTH), target, (time) => {
-		const [position, velocity] = observerState(time, ZERO_EARTH_STATE, location)
-		return [
-			[position[0], position[1], position[2]],
-			[velocity[0], velocity[1], velocity[2]],
-		]
-	})
+	// ZERO_EARTH_STATE is never mutated because location is never undefined.
+	return ephemerisPath(naifEphemerisEndpoint(Naif.EARTH), target, (time) => observerState(time, ZERO_EARTH_STATE, location))
 }
 
 // Creates a body-center-to-surface-site path in library-base axes. The

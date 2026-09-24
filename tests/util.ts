@@ -1,8 +1,13 @@
 import { expect } from 'bun:test'
+import { TAU } from '../src/core/constants'
 import type { Camera } from '../src/devices/indi/device'
 import type { DeviceHandler } from '../src/devices/indi/manager/device'
 import type { PropertyState, BlobEncoding } from '../src/devices/indi/types'
+import { type Vec3, vecAngle } from '../src/math/linear-algebra/vec3'
 import type { NumberArray } from '../src/math/numerical/math'
+import { normalizeAngle } from '../src/math/units/angle'
+
+// Feature flags
 
 export function isNetworkTestSkipped() {
 	return Bun.env.RUN_NETWORK_TEST !== 'true'
@@ -45,11 +50,32 @@ export async function waitUntil(predicate: () => boolean, timeout: number = 5000
 	}
 }
 
+// Matchers
+
 export function expectNumberArrayToBeCloseTo(a: Readonly<NumberArray> | undefined | null, b: Readonly<NumberArray>, numDigits: number) {
 	if (Object.is(a, b)) return
 	if (a === undefined || a === null) return
 	expect(a.length).toBeGreaterThanOrEqual(b.length)
 	for (let i = 0; i < b.length; i++) expect(a[i]).toBeCloseTo(b[i], numDigits)
+}
+
+export function expectNumberArrayToBeCloseToTolerance(a: Readonly<NumberArray> | undefined | null, b: Readonly<NumberArray>, tolerance: number) {
+	if (Object.is(a, b)) return
+	if (a === undefined || a === null) return
+	expect(a.length).toBeGreaterThanOrEqual(b.length)
+	for (let i = 0; i < b.length; i++) {
+		const delta = Math.abs(a[i] - b[i])
+		expect(delta).toBeLessThanOrEqual(tolerance)
+	}
+}
+
+export function expectAngularSeparationBelow(actual: Vec3, expected: Vec3, maxRadians: number) {
+	expect(vecAngle(actual, expected)).toBeLessThanOrEqual(maxRadians)
+}
+
+export function expectWrappedAngle(actual: number, expected: number, tolerance: number) {
+	const delta = Math.abs(normalizeAngle(actual - expected))
+	expect(Math.min(delta, TAU - delta)).toBeLessThanOrEqual(tolerance)
 }
 
 // Collects image BLOBs published by a simulated camera.

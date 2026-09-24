@@ -44,7 +44,7 @@ export interface SpkSegment {
 	readonly center: number
 	// NAIF code of the target body.
 	readonly target: number
-	// NAIF reference-frame id (summary.ints[2]). `at` returns vectors in this frame.
+	// NAIF reference-frame id. `at` returns vectors in this frame.
 	// SPK_FRAME_J2000 is J2000; any other id is not rotated here.
 	readonly frame: number
 	// readonly type: number
@@ -841,7 +841,7 @@ export class MultipleSpkSegment implements SpkSegment {
 		this.#segments = segments
 	}
 
-	// Initializes each child in sequence because they may share the DAF source cursor.
+	// Initializes each segment in sequence.
 	async initialize(): Promise<void> {
 		for (const segment of this.#segments) await segment.initialize()
 	}

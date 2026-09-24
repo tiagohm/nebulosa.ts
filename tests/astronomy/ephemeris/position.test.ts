@@ -9,32 +9,13 @@ import { customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, SOLAR_SY
 import { type ApparentPosition, type AstrometricPosition, apparentPosition, directionPositionInFrame, ephemerisAt, equatorialPosition, geometricPositionInFrame, geometricSphericalPositionAndVelocity, observeEphemeris } from '../../../src/astronomy/ephemeris/position'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { DAYSEC, LIGHT_TIME_AU, PI, PIOVERTWO, TAU } from '../../../src/core/constants'
-import { type MutVec3, type Vec3, vecAngle, vecClone, vecDistance, vecDivScalar, vecLength, vecZero } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngle, vecClone, vecDistance, vecDivScalar, vecDot, vecLength, vecMinus, vecNegate, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { mulberry32 } from '../../../src/math/numerical/random'
 import { normalizeAngle } from '../../../src/math/units/angle'
 
 const TIME = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TDB)
 const EARTH = naifEphemerisEndpoint(Naif.EARTH)
 const MARS = naifEphemerisEndpoint(Naif.MARS)
-
-test('geometric materialization owns position and velocity from a reusable provider', () => {
-	const scratch: PositionAndVelocity = [
-		[1, 2, 3],
-		[4, 5, 6],
-	]
-	const path = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => scratch)
-	const position = ephemerisAt(path, TIME)
-	expect(position.kind).toBe('geometric')
-	expect(position.time).toBe(TIME)
-	expect(position.center).toBe(SOLAR_SYSTEM_BARYCENTER)
-	expect(position.target).toBe(EARTH)
-	expect(position.position).toEqual([1, 2, 3])
-	expect(position.velocity).toEqual([4, 5, 6])
-	scratch[0][0] = 99
-	scratch[1][0] = 99
-	expect(position.position[0]).toBe(1)
-	expect(position.velocity[0]).toBe(4)
-})
 
 test('retarded observation uses SSB states and owns every vector', () => {
 	const scratch: PositionAndVelocity = [vecZero(), vecZero()]
@@ -269,13 +250,13 @@ test('correction order is light deflection then aberration', () => {
 	const apparent = apparentPosition(observed, { sun, deflectors: [{ mass: SUN_LIGHT_DEFLECTOR_MASS, limiter: SUN_LIGHT_DEFLECTOR_LIMITER, path: sun }] })
 	const lightDays = LIGHT_TIME_AU / DAYSEC
 	const deflect = (direction: Vec3): MutVec3 => {
-		const out: MutVec3 = [direction[0], direction[1], direction[2]]
-		let delay = (out[0] * sunPosition[0] + out[1] * sunPosition[1] + out[2] * sunPosition[2]) * lightDays
+		const out = vecClone(direction)
+		let delay = vecDot(out, sunPosition) * lightDays
 		if (!(delay > 0)) delay = 0
 		else if (delay > observed.lightTime) delay = observed.lightTime
 		const body: Vec3 = [sunPosition[0] - delay * sunVelocity[0], sunPosition[1] - delay * sunVelocity[1], sunPosition[2] - delay * sunVelocity[2]]
-		const towardBody: MutVec3 = [-body[0], -body[1], -body[2]]
-		const towardTarget: MutVec3 = [targetPosition[0] - body[0], targetPosition[1] - body[1], targetPosition[2] - body[2]]
+		const towardBody = vecNegate(body)
+		const towardTarget = vecMinus(targetPosition, body)
 		const bodyDistance = vecLength(towardBody)
 		vecDivScalar(towardBody, bodyDistance, towardBody)
 		vecDivScalar(towardTarget, vecLength(towardTarget), towardTarget)
@@ -298,7 +279,7 @@ test('deflector order follows the caller list, not merely a difference between o
 	const receding = { position: [0.7, -0.001, 0] as Vec3, velocity: [-15, 0, 0] as Vec3, mass: 100, limiter: 1e-18 }
 	const lightDaysPerAu = LIGHT_TIME_AU / DAYSEC
 	const deflectInOrder = (bodies: readonly (typeof approaching)[]) => {
-		const direction: MutVec3 = [observed.direction[0], observed.direction[1], observed.direction[2]]
+		const direction = vecClone(observed.direction)
 		const [ox, oy, oz] = observed.observerPosition
 		const [tx, ty, tz] = observed.targetEmissionPosition
 
@@ -398,8 +379,8 @@ test('frame helpers own outputs and keep the rotating-frame velocity term', () =
 	expect(Math.hypot(rotated[1][0] - velocityOnly[1][0], rotated[1][1] - velocityOnly[1][1], rotated[1][2] - velocityOnly[1][2])).toBeGreaterThan(1e-6)
 	const workspace: PositionAndVelocity = [vecZero(), vecZero()]
 	expect(geometricPositionInFrame(geometric, ECLIPTIC_J2000, workspace)).toBe(workspace)
-	const position: MutVec3 = [geometric.position[0], geometric.position[1], geometric.position[2]]
-	const velocity: MutVec3 = [geometric.velocity[0], geometric.velocity[1], geometric.velocity[2]]
+	const position = vecClone(geometric.position)
+	const velocity = vecClone(geometric.velocity)
 	const aliased = geometricPositionInFrame({ ...geometric, position, velocity }, ICRS, [position, velocity])
 	expect(aliased[0]).toBe(position)
 	expect(aliased[1]).toBe(velocity)

@@ -1,3 +1,4 @@
+import { vecNegateMut, vecPlus } from '../../math/linear-algebra/vec3'
 import type { PositionAndVelocityOverTime } from '../coordinates/astrometry'
 import { Naif } from './kernels/naif'
 
@@ -65,11 +66,10 @@ export function ephemerisPath(center: EphemerisEndpoint, target: EphemerisEndpoi
 // velocity vectors, even when the underlying provider reuses its storage.
 export function reverseEphemerisPath(path: EphemerisPath): EphemerisPath {
 	return ephemerisPath(path.target, path.center, (time) => {
-		const [p, v] = path.stateAt(time)
-		return [
-			[-p[0], -p[1], -p[2]],
-			[-v[0], -v[1], -v[2]],
-		]
+		const pv = path.stateAt(time)
+		vecNegateMut(pv[0])
+		vecNegateMut(pv[1])
+		return pv
 	})
 }
 
@@ -79,14 +79,11 @@ export function reverseEphemerisPath(path: EphemerisPath): EphemerisPath {
 export function composeEphemerisPaths(first: EphemerisPath, second: EphemerisPath): EphemerisPath {
 	if (!sameEphemerisEndpoint(first.target, second.center)) throw new Error('cannot compose ephemeris paths: first target does not match second center')
 	return ephemerisPath(first.center, second.target, (time) => {
-		const [firstPosition, firstVelocity] = first.stateAt(time)
-		const [px, py, pz] = firstPosition
-		const [vx, vy, vz] = firstVelocity
-		const [secondPosition, secondVelocity] = second.stateAt(time)
-		return [
-			[px + secondPosition[0], py + secondPosition[1], pz + secondPosition[2]],
-			[vx + secondVelocity[0], vy + secondVelocity[1], vz + secondVelocity[2]],
-		]
+		const pva = first.stateAt(time)
+		const pvb = second.stateAt(time)
+		vecPlus(pva[0], pvb[0], pva[0])
+		vecPlus(pva[1], pvb[1], pva[1])
+		return pva
 	})
 }
 

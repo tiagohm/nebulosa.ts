@@ -183,7 +183,7 @@ export const ONE_ATM = 1013.25
 // Sidereal rate in arcseconds per mean solar second.
 export const SIDEREAL_RATE = 1296000 / SIDEREAL_DAYSEC // 360° = 1296000 arcseconds
 
-// Earth's angular velocity in radians per day.
+// Earth's nominal rotation rate in rad/day.
 export const ANGVEL_PER_DAY = DAYSEC * ANGVEL
 export const EARTH_ANGULAR_VELOCITY_VECTOR = [0, 0, ANGVEL_PER_DAY] as const
 // Earth rotation operator dR/dt * R^T for the GCRS->ITRS spin about Z, in radians per day. Applied to an

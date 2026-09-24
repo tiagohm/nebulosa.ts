@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import type { PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
+import type { PositionAndVelocityOverTime } from '../../../src/astronomy/coordinates/astrometry'
 import { observerState } from '../../../src/astronomy/coordinates/correction'
 import { earth, mercury, sun, venus } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { planetaryTransits } from '../../../src/astronomy/events/transit'
@@ -18,8 +18,8 @@ const GREENWICH = geodeticLocation(deg(-0.0015), deg(51.4779), kilometer(0.047),
 const TOKYO = geodeticLocation(deg(139.6503), deg(35.6762), kilometer(0.04), Ellipsoid.WGS84)
 
 // Barycentric topocentric observer at `site` (Earth centre plus the diurnal offset).
-function observerAt(site: typeof GREENWICH): (time: Time) => PositionAndVelocity {
-	return (time: Time) => observerState(time, earth(time), site) as PositionAndVelocity
+function observerAt(site: typeof GREENWICH): PositionAndVelocityOverTime {
+	return (time: Time) => observerState(time, earth(time), site)
 }
 
 // Offset of a contact from a Skyfield reference instant, in seconds. The reference is DE440 with astrometric

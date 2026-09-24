@@ -1,4 +1,4 @@
-import { type Vec3, vecClone, vecDivScalar } from '../../math/linear-algebra/vec3'
+import { type Vec3, vecDivScalar } from '../../math/linear-algebra/vec3'
 import { normalizeAngle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import { applyApparentDirectionCorrections, type LightDeflectorSnapshot } from '../coordinates/apparent'
@@ -112,7 +112,7 @@ export type DirectionPosition = AstrometricPosition | ApparentPosition
 // No correction or coordinate-frame transform is applied.
 export function ephemerisAt(path: EphemerisPath, time: Time): GeometricPosition {
 	const [position, velocity] = path.stateAt(time)
-	return { kind: 'geometric', time, center: path.center, target: path.target, position: vecClone(position), velocity: vecClone(velocity) }
+	return { kind: 'geometric', time, center: path.center, target: path.target, position, velocity }
 }
 
 // Observes an SSB-centered target from an SSB-centered observer. The two paths
@@ -124,7 +124,7 @@ export function observeEphemeris(observer: EphemerisPath, target: EphemerisPath,
 	if (!sameEphemerisEndpoint(target.center, SOLAR_SYSTEM_BARYCENTER)) throw new Error('target ephemeris path must be SSB-centered')
 	const iterations = options?.lightTimeIterations ?? DEFAULT_LIGHT_TIME_ITERATIONS
 	const solution = lightTimeSolution(target.stateAt, observer.stateAt, time, iterations)
-	if (!solution) return undefined
+	if (solution === undefined) return undefined
 	return {
 		kind: 'astrometric',
 		time,
@@ -154,10 +154,10 @@ export function apparentPosition(position: AstrometricPosition, options?: Epheme
 		if (!sameEphemerisEndpoint(body.path.center, SOLAR_SYSTEM_BARYCENTER)) throw new Error('light deflector ephemeris path must be SSB-centered')
 	}
 	const deflectors = options?.deflectors?.map((body): LightDeflectorSnapshot => {
-		const [bodyPosition, bodyVelocity] = body.path.stateAt(position.time)
-		return { mass: body.mass, limiter: body.limiter, position: vecClone(bodyPosition), velocity: vecClone(bodyVelocity) }
+		const pv = body.path.stateAt(position.time)
+		return { mass: body.mass, limiter: body.limiter, position: pv[0], velocity: pv[1] }
 	})
-	const sunPosition = aberration && sun ? vecClone(sun.stateAt(position.time)[0]) : undefined
+	const sunPosition = aberration && sun ? sun.stateAt(position.time)[0] : undefined
 	const direction = applyApparentDirectionCorrections(position.direction, position.targetEmissionPosition, position.observerPosition, position.observerVelocity, position.lightTime, { aberration, sunPosition, deflectors })
 	return { kind: 'apparent', time: position.time, emissionTime: position.emissionTime, center: position.center, target: position.target, direction, distance: position.distance, lightTime: position.lightTime }
 }

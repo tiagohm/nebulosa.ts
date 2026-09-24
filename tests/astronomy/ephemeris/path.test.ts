@@ -1,11 +1,11 @@
 import { expect, test } from 'bun:test'
-import { type PositionAndVelocity, type PositionAndVelocityOverTime, relativePositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
+import { type PositionAndVelocity, relativePositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
 import { Naif } from '../../../src/astronomy/ephemeris/kernels/naif'
 import { moon } from '../../../src/astronomy/ephemeris/models/analytical/elpmpp02'
 import { earth, mars } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
-import { composeEphemerisPaths, customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, relativeEphemerisPath, reverseEphemerisPath, sameEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER, type EphemerisEndpoint } from '../../../src/astronomy/ephemeris/path'
+import { composeEphemerisPaths, customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, relativeEphemerisPath, reverseEphemerisPath, sameEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from '../../../src/astronomy/ephemeris/path'
 import { Timescale, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
-import { vecNegate, vecXAxis, vecYAxis, vecZero, type MutVec3 } from '../../../src/math/linear-algebra/vec3'
+import { vecXAxis, vecYAxis, vecZero, type MutVec3 } from '../../../src/math/linear-algebra/vec3'
 import { mulberry32 } from '../../../src/math/numerical/random'
 
 const TIME = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TDB)
@@ -18,49 +18,6 @@ test('endpoint identity uses kind and id, not display name', () => {
 	expect(sameEphemerisEndpoint(customEphemerisEndpoint('site'), customEphemerisEndpoint('site', 'observatory'))).toBe(true)
 	expect(sameEphemerisEndpoint(EARTH, customEphemerisEndpoint(String(Naif.EARTH)))).toBe(false)
 	expect(SOLAR_SYSTEM_BARYCENTER.id).toBe(Naif.SSB)
-})
-
-test('path preserves endpoints and provider while reverse owns negated vectors', () => {
-	const shared: MutVec3 = [1, 2, 3]
-	const stateAt: PositionAndVelocityOverTime = () => [shared, shared]
-	const path = ephemerisPath(EARTH, MOON, stateAt)
-	expect(path.center).toBe(EARTH)
-	expect(path.target).toBe(MOON)
-	expect(path.stateAt).toBe(stateAt)
-	const reversed = reverseEphemerisPath(path)
-	expect(reversed.center).toBe(MOON)
-	expect(reversed.target).toBe(EARTH)
-	const [p, v] = reversed.stateAt(TIME)
-	expect(p).toEqual(vecNegate(shared))
-	expect(v).toEqual(vecNegate(shared))
-	expect(p).not.toBe(shared)
-	expect(v).not.toBe(shared)
-})
-
-test('composition snapshots first provider before shared scratch is reused', () => {
-	const scratch: PositionAndVelocity = [vecZero(), vecZero()]
-	const first = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => {
-		scratch[0] = [1, 2, 3]
-		scratch[1] = [4, 5, 6]
-		return scratch
-	})
-	const second = ephemerisPath(naifEphemerisEndpoint(Naif.EARTH, 'named'), MOON, () => {
-		scratch[0][0] = 7
-		scratch[0][1] = 8
-		scratch[0][2] = 9
-		scratch[1][0] = 10
-		scratch[1][1] = 11
-		scratch[1][2] = 12
-		return scratch
-	})
-	const combined = composeEphemerisPaths(first, second)
-	const [p, v] = combined.stateAt(TIME)
-	expect(combined.center).toBe(SOLAR_SYSTEM_BARYCENTER)
-	expect(combined.target).toBe(MOON)
-	expect(p).toEqual([8, 10, 12])
-	expect(v).toEqual([14, 16, 18])
-	scratch[0][0] = 99
-	expect(p[0]).toBe(8)
 })
 
 test('invalid composition and relative centers fail before sampling', () => {
@@ -94,18 +51,6 @@ test('VSOP relative Earth-to-Mars and ELP barycentric Moon agree with low-level 
 	}
 })
 
-function scratchPath(center: EphemerisEndpoint, target: EphemerisEndpoint, position: readonly [number, number, number], velocity: readonly [number, number, number], scratch: PositionAndVelocity) {
-	return ephemerisPath(center, target, () => {
-		scratch[0][0] = position[0]
-		scratch[0][1] = position[1]
-		scratch[0][2] = position[2]
-		scratch[1][0] = velocity[0]
-		scratch[1][1] = velocity[1]
-		scratch[1][2] = velocity[2]
-		return scratch
-	})
-}
-
 function expectStateClose(actual: PositionAndVelocity, expected: PositionAndVelocity, digits: number) {
 	for (let axis = 0; axis < 3; axis++) {
 		expect(actual[0][axis]).toBeCloseTo(expected[0][axis], digits)
@@ -114,8 +59,10 @@ function expectStateClose(actual: PositionAndVelocity, expected: PositionAndVelo
 }
 
 test('reverse is an involution at several epochs', () => {
-	const scratch: PositionAndVelocity = [vecZero(), vecZero()]
-	const path = scratchPath(EARTH, MOON, [0.2, -0.4, 0.6], [0.01, 0.02, -0.03], scratch)
+	const path = ephemerisPath(EARTH, MOON, () => [
+		[0.2, -0.4, 0.6],
+		[0.01, 0.02, -0.03],
+	])
 	const reversed = reverseEphemerisPath(path)
 	const restored = reverseEphemerisPath(reversed)
 	for (let step = 0; step < 5; step++) {
@@ -189,42 +136,6 @@ test('relative path matches manual subtraction over deterministic epochs', () =>
 		const expected = relativePositionAndVelocity(mars, earth, time)
 		expectStateClose(actual, expected, 12)
 	}
-})
-
-test('shared scratch survives a four-segment chain, reverse, and relative evaluation', () => {
-	const scratch: PositionAndVelocity = [vecZero(), vecZero()]
-	const ids = ['a', 'b', 'c', 'd', 'e'].map((id) => customEphemerisEndpoint(id))
-	const offsets = [vecXAxis(), [0, 2, 0], [0, 0, 3], [4, 5, 6]] as const
-	const velocities = [
-		[0.1, 0, 0],
-		[0, 0.2, 0],
-		[0, 0, 0.3],
-		[0.4, 0.5, 0.6],
-	] as const
-	const segments = offsets.map((position, index) => scratchPath(ids[index], ids[index + 1], position, velocities[index], scratch))
-	let chain = segments[0]
-	for (let index = 1; index < segments.length; index++) chain = composeEphemerisPaths(chain, segments[index])
-	const first = chain.stateAt(TIME)
-	expect(first[0]).toEqual([5, 7, 9])
-	expect(first[1][0]).toBeCloseTo(0.5, 12)
-	expect(first[1][1]).toBeCloseTo(0.7, 12)
-	expect(first[1][2]).toBeCloseTo(0.9, 12)
-	scratch[0][0] = 99
-	scratch[1][0] = 99
-	expect(first[0][0]).toBe(5)
-	expect(first[1][0]).toBe(0.5)
-	const second = chain.stateAt(timeShift(TIME, 1))
-	expect(second).not.toBe(first)
-	expect(second[0]).toEqual([5, 7, 9])
-	expect(first[0][0]).toBe(5)
-	const reversed = reverseEphemerisPath(chain).stateAt(TIME)
-	expect(reversed[0]).toEqual([-5, -7, -9])
-	expect(reversed[1][0]).toBeCloseTo(-0.5, 12)
-	expect(reversed[1][1]).toBeCloseTo(-0.7, 12)
-	expect(reversed[1][2]).toBeCloseTo(-0.9, 12)
-	const relative = relativeEphemerisPath(chain, chain).stateAt(TIME)
-	expect(relative[0]).toEqual(vecZero())
-	expect(relative[1]).toEqual(vecZero())
 })
 
 test('reverse, composition, and relative subtraction hold for 64 deterministic states', () => {

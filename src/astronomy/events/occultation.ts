@@ -1,5 +1,5 @@
 import { DAYSEC, ONE_SECOND } from '../../core/constants'
-import type { Vec3 } from '../../math/linear-algebra/vec3'
+import { vecLength, type MutVec3, type Vec3 } from '../../math/linear-algebra/vec3'
 import { clamp } from '../../math/numerical/math'
 import { brentMinimize } from '../../math/numerical/optimization'
 import type { Angle } from '../../math/units/angle'
@@ -120,7 +120,10 @@ function boundaryMinimum(separationAt: (time: Time) => number, from: Time, to: T
 // that much before `start`; set `lightTimeIterations` to 0 to keep the target strictly in-window too. This
 // lets an `observer` backed by bounded or interpolated states stay valid over exactly the requested window.
 export function occultationCandidates(target: PositionAndVelocityOverTime, star: Vec3, observer: PositionAndVelocityOverTime, start: Time, stop: Time, { radius = 0, maxSeparation = Number.POSITIVE_INFINITY, lightTimeIterations = 2, step = DEFAULT_STEP, tolerance }: OccultationOptions = {}): OccultationCandidate[] {
-	const separationAt = (time: Time) => separationFrom(topocentricDirection(target, observer, time, lightTimeIterations), star)
+	const v0: MutVec3 = [0, 0, 0]
+	const v1: MutVec3 = [0, 0, 0]
+
+	const separationAt = (time: Time) => separationFrom(topocentricDirection(target, observer, time, lightTimeIterations, v0), star)
 	const span = timeSubtract(stop, start)
 	if (span <= 0) return []
 
@@ -159,8 +162,8 @@ export function occultationCandidates(target: PositionAndVelocityOverTime, star:
 		if (separation > maxSeparation) continue
 
 		// Topocentric distance and angular radius of the disk at the refined appulse instant.
-		const direction = topocentricDirection(target, observer, minimum.time, lightTimeIterations)
-		const distance = Math.hypot(direction[0], direction[1], direction[2])
+		const direction = topocentricDirection(target, observer, minimum.time, lightTimeIterations, v0)
+		const distance = vecLength(direction)
 		const angularRadius = Math.asin(clamp(radius / distance, 0, 1))
 
 		// Apparent angular speed by finite difference of the topocentric direction (star fixed), rad/day. The
@@ -169,8 +172,8 @@ export function occultationCandidates(target: PositionAndVelocityOverTime, star:
 		const beforeTime = timeSubtract(minimum.time, start) >= DERIVATIVE_STEP ? timeShift(minimum.time, -DERIVATIVE_STEP) : start
 		const afterTime = timeSubtract(stop, minimum.time) >= DERIVATIVE_STEP ? timeShift(minimum.time, DERIVATIVE_STEP) : stop
 		const stencil = timeSubtract(afterTime, beforeTime)
-		const beforeDir = topocentricDirection(target, observer, beforeTime, lightTimeIterations)
-		const afterDir = topocentricDirection(target, observer, afterTime, lightTimeIterations)
+		const beforeDir = topocentricDirection(target, observer, beforeTime, lightTimeIterations, v0)
+		const afterDir = topocentricDirection(target, observer, afterTime, lightTimeIterations, v1)
 		const relativeAngularSpeed = stencil > 0 ? separationFrom(beforeDir, afterDir) / stencil : 0
 
 		const occultation = separation <= angularRadius

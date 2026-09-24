@@ -361,7 +361,7 @@ export class MultiplePckSegment implements PckSegment {
 		this.#segments = segments
 	}
 
-	// Initializes each child in sequence because they may share the DAF source cursor.
+	// Initializes each segment in sequence.
 	async initialize(): Promise<void> {
 		for (const segment of this.#segments) await segment.initialize()
 	}

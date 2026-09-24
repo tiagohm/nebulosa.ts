@@ -1,5 +1,5 @@
 import { DAYSEC, LIGHT_TIME_AU } from '../../core/constants'
-import { type MutVec3, type Vec3, vecClone, vecDistance, vecDivScalar, vecLength } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecClone, vecDistance, vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalizeMut } from '../../math/linear-algebra/vec3'
 import type { Distance } from '../../math/units/distance'
 import type { Time } from '../time/time'
 import { DEFAULT_LIGHT_TIME_ITERATIONS, lightTimeSolution, type PositionAndVelocityOverTime } from './astrometry'
@@ -120,10 +120,11 @@ export function apparentDirection(target: PositionAndVelocityOverTime, observer:
 	const iterations = options?.lightTimeIterations ?? DEFAULT_LIGHT_TIME_ITERATIONS
 	const solution = lightTimeSolution(target, observer, time, iterations)
 	if (!solution) return undefined
+
 	const astrometric = vecDivScalar(solution.position, solution.distance)
 	const deflectors = options?.deflectors?.map((body): LightDeflectorSnapshot => {
 		const [position, velocity] = body.state(time)
-		return { mass: body.mass, limiter: body.limiter, position: vecClone(position), velocity: vecClone(velocity) }
+		return { mass: body.mass, limiter: body.limiter, position, velocity }
 	})
 	const sunPosition = aberration && sun ? vecClone(sun(time)[0]) : undefined
 	const apparent = applyApparentDirectionCorrections(astrometric, solution.targetEmissionPosition, solution.observerPosition, solution.observerVelocity, solution.lightTime, { aberration, sunPosition, deflectors })
@@ -136,16 +137,18 @@ export function apparentDirection(target: PositionAndVelocityOverTime, observer:
 // the input direction and snapshots are not mutated.
 export function applyApparentDirectionCorrections(astrometric: Vec3, targetEmissionPosition: Vec3, observerPosition: Vec3, observerVelocity: Vec3, lightTimeDays: number, options: ApparentDirectionCorrections): MutVec3 {
 	const aberration = options.aberration ?? true
-	if (aberration && !options.sunPosition) throw new Error('sun barycentric state is required when aberration is enabled')
+	if (aberration && options.sunPosition === undefined) throw new Error('sun barycentric state is required when aberration is enabled')
+
 	let apparent = vecClone(astrometric)
 	if (options.deflectors?.length) applyFiniteLightDeflection(apparent, targetEmissionPosition, observerPosition, lightTimeDays, options.deflectors)
-	if (aberration && options.sunPosition) {
+
+	if (aberration && options.sunPosition !== undefined) {
 		const sunDistance = vecDistance(observerPosition, options.sunPosition)
 		apparent = annualAberration(apparent, observerVelocity, sunDistance)
 	} else {
-		const len = vecLength(apparent)
-		if (len > 0) vecDivScalar(apparent, len, apparent)
+		vecNormalizeMut(apparent)
 	}
+
 	return apparent
 }
 
@@ -165,40 +168,32 @@ export function deflectStarlight(direction: Vec3, observerBarycentricPosition: V
 // evaluated at emission rather than treated as a star-at-infinity mass on the ray. `p` is the
 // current observer -> target direction; `q` is deflector -> target at that retarded epoch.
 function applyFiniteLightDeflection(direction: MutVec3, targetEmission: Vec3, observerPosition: Vec3, lightTimeDays: number, deflectors: readonly LightDeflectorSnapshot[]) {
-	const [ox, oy, oz] = observerPosition
-	const [tx, ty, tz] = targetEmission
+	const op = observerPosition
+	const te = targetEmission
 	const e: MutVec3 = [0, 0, 0]
 	const q: MutVec3 = [0, 0, 0]
 
 	for (const deflector of deflectors) {
 		const bp = deflector.position
 		const bv = deflector.velocity
-		const observerToBodyX = bp[0] - ox
-		const observerToBodyY = bp[1] - oy
-		const observerToBodyZ = bp[2] - oz
+		const observerToBody = vecMinus(bp, op)
 
 		// Time since the photon passed closest to the body, in days. Negative means the body
 		// lies behind the observer along the incoming ray and is not backtracked.
-		let delay = (direction[0] * observerToBodyX + direction[1] * observerToBodyY + direction[2] * observerToBodyZ) * LIGHT_TIME_DAYS_PER_AU
+		let delay = vecDot(direction, observerToBody) * LIGHT_TIME_DAYS_PER_AU
 		if (!(delay > 0)) delay = 0
 		else if (delay > lightTimeDays) delay = lightTimeDays
 
 		// Linear backtrack of the body to the closest-approach epoch, as in ERFA eraLdn.
-		const bcx = bp[0] - delay * bv[0]
-		const bcy = bp[1] - delay * bv[1]
-		const bcz = bp[2] - delay * bv[2]
+		vecMinus(bp, vecMulScalar(bv, delay, e), e)
 
-		e[0] = ox - bcx
-		e[1] = oy - bcy
-		e[2] = oz - bcz
-		const em = Math.hypot(e[0], e[1], e[2])
-		if (!(em > 0)) continue
-
-		q[0] = tx - bcx
-		q[1] = ty - bcy
-		q[2] = tz - bcz
-		const qm = Math.hypot(q[0], q[1], q[2])
+		vecMinus(te, e, q)
+		const qm = vecLength(q)
 		if (!(qm > 0)) continue
+
+		vecMinus(op, e, e)
+		const em = vecLength(e)
+		if (!(em > 0)) continue
 
 		vecDivScalar(e, em, e)
 		vecDivScalar(q, qm, q)

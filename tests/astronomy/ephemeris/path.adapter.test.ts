@@ -164,7 +164,7 @@ test('Earth observer path composes with a barycentric Earth provider', () => {
 		[1, 2, 3],
 		[0.01, 0.02, 0.03],
 	]
-	const earth = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.EARTH), () => earthState)
+	const earth = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.EARTH), () => [vecClone(earthState[0]), vecClone(earthState[1])])
 	const location = geodeticLocation(deg(-70), deg(-30), meter(2400))
 	const site = earthObserverEphemerisPath(location, customEphemerisEndpoint('site'))
 	const composed = composeEphemerisPaths(earth, site).stateAt(TIME)

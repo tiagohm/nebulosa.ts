@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { JUPITER_LIGHT_DEFLECTOR_LIMITER, JUPITER_LIGHT_DEFLECTOR_MASS, SATURN_LIGHT_DEFLECTOR_LIMITER, SATURN_LIGHT_DEFLECTOR_MASS, SUN_LIGHT_DEFLECTOR_LIMITER, SUN_LIGHT_DEFLECTOR_MASS } from '../../../src/astronomy/coordinates/apparent'
-import { lightTimeSolution, type PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
+import { lightTimeSolution, type PositionAndVelocity, type PositionAndVelocityOverTime } from '../../../src/astronomy/coordinates/astrometry'
 import { annualAberration } from '../../../src/astronomy/coordinates/correction'
 import { eraLd, eraPnm06a } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { CIRS, ECLIPTIC_J2000, frameAt, frameToFrame, GALACTIC, ICRS, ITRS } from '../../../src/astronomy/coordinates/frame'
@@ -22,12 +22,12 @@ import { parseTLE } from '../../../src/astronomy/orbits/propagation/sgp4'
 import { tdb, Timescale, timeSubtract, timeYMDHMS, tt, utc, type Time } from '../../../src/astronomy/time/time'
 import { DAYSEC, LIGHT_TIME_AU } from '../../../src/core/constants'
 import { fileHandleSource } from '../../../src/io/io'
-import { type MutVec3, type Vec3, vecAngle, vecDistance, vecDivScalar, vecDot, vecLength, vecMinus, vecPlus } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngle, vecClone, vecDistance, vecDivScalar, vecDot, vecLength, vecMinus, vecPlus } from '../../../src/math/linear-algebra/vec3'
 import { deg, toArcsec } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 import { downloadPerTag } from '../../download'
+import { expectAngularSeparationBelow, expectNumberArrayToBeCloseToTolerance, expectWrappedAngle } from '../../util'
 import { PIPELINE_REFERENCE } from './pipeline.reference'
-import { expectAngularSeparationBelow, expectVecClose, expectWrappedAngle } from './pipeline.util'
 
 await Promise.all([downloadPerTag('spk'), downloadPerTag('frame.kernel')])
 
@@ -81,8 +81,8 @@ function referenceSite(name: keyof typeof PIPELINE_REFERENCE.observers) {
 }
 
 function expectState(actual: readonly [readonly number[], readonly number[]], expected: State, positionTolerance: number, velocityTolerance: number) {
-	expectVecClose(actual[0], expected.position, positionTolerance)
-	expectVecClose(actual[1], expected.velocity, velocityTolerance)
+	expectNumberArrayToBeCloseToTolerance(actual[0], expected.position, positionTolerance)
+	expectNumberArrayToBeCloseToTolerance(actual[1], expected.velocity, velocityTolerance)
 }
 
 function unit(vector: readonly [number, number, number]): Vec3 {
@@ -240,13 +240,13 @@ describe('geocentric light time matches Skyfield and tightens with iteration', (
 		test(name, () => {
 			const expected = PIPELINE_REFERENCE.observe[name]
 			const observed = observeEphemeris(de421.earth, de421[name], time)!
-			expectVecClose(observed.position, expected.position, DISTANCE)
+			expectNumberArrayToBeCloseToTolerance(observed.position, expected.position, DISTANCE)
 			expect(Math.abs(observed.distance - expected.distance)).toBeLessThanOrEqual(DISTANCE)
 			expect(Math.abs(observed.lightTime - expected.lightTime)).toBeLessThanOrEqual(LIGHT_TIME)
 			expect(Math.abs(tdb(observed.emissionTime).day + tdb(observed.emissionTime).fraction - expected.emissionJd)).toBeLessThanOrEqual(LIGHT_TIME)
-			expectVecClose(observed.observerPosition, expected.observerPosition, SPK_POSITION)
-			expectVecClose(observed.observerVelocity, expected.observerVelocity, SPK_VELOCITY)
-			expectVecClose(observed.targetEmissionPosition, expected.targetEmissionPosition, EMISSION_POSITION)
+			expectNumberArrayToBeCloseToTolerance(observed.observerPosition, expected.observerPosition, SPK_POSITION)
+			expectNumberArrayToBeCloseToTolerance(observed.observerVelocity, expected.observerVelocity, SPK_VELOCITY)
+			expectNumberArrayToBeCloseToTolerance(observed.targetEmissionPosition, expected.targetEmissionPosition, EMISSION_POSITION)
 			expectAngularSeparationBelow(observed.direction, unit(expected.position), DIRECTION)
 			const [rightAscension, declination, distance] = equatorialPosition(observed)
 			expectWrappedAngle(rightAscension, expected.ra, DIRECTION)
@@ -325,8 +325,8 @@ describe('the Moon center observes Earth, the Sun, and Mars like Skyfield', () =
 			expectAngularSeparationBelow(observed.direction, unit(expected.position), DIRECTION)
 			expect(Math.abs(observed.distance - expected.distance)).toBeLessThanOrEqual(DISTANCE)
 			expect(Math.abs(observed.lightTime - expected.lightTime)).toBeLessThanOrEqual(LIGHT_TIME)
-			expectVecClose(observed.observerPosition, expected.observerPosition, SPK_POSITION)
-			expectVecClose(observed.targetEmissionPosition, expected.targetEmissionPosition, EMISSION_POSITION)
+			expectNumberArrayToBeCloseToTolerance(observed.observerPosition, expected.observerPosition, SPK_POSITION)
+			expectNumberArrayToBeCloseToTolerance(observed.targetEmissionPosition, expected.targetEmissionPosition, EMISSION_POSITION)
 		})
 	}
 })
@@ -504,8 +504,8 @@ test('frame directions and the high-level spherical state match the external sub
 	expectAngularSeparationBelow(frameAt(vector, ITRS, time), PIPELINE_REFERENCE.frames.itrs, 1e-10)
 	const geometric: GeometricPosition = { kind: 'geometric', time, center: SOLAR_SYSTEM_BARYCENTER, target: naifEphemerisEndpoint(Naif.MARS_BARYCENTER), position: [0.8, -0.4, 0.3], velocity: [0.012, -0.007, 0.004] }
 	const spherical = geometricPositionInFrame(geometric, ICRS)
-	expectVecClose(spherical[0], geometric.position, 1e-15)
-	expectVecClose(spherical[1], geometric.velocity, 1e-15)
+	expectNumberArrayToBeCloseToTolerance(spherical[0], geometric.position, 1e-15)
+	expectNumberArrayToBeCloseToTolerance(spherical[1], geometric.velocity, 1e-15)
 })
 
 describe('analytic light time matches an independent Newton solution', () => {
@@ -517,17 +517,14 @@ describe('analytic light time matches an independent Newton solution', () => {
 				[item.observer[0], item.observer[1], item.observer[2]],
 				[item.observerVelocity[0], item.observerVelocity[1], item.observerVelocity[2]],
 			]
-			const target = (sample: Time): PositionAndVelocity => {
-				const dt = sample.day - time.day + (sample.fraction - time.fraction)
-				return [
-					[item.targetPosition[0] + item.targetVelocity[0] * dt, item.targetPosition[1] + item.targetVelocity[1] * dt, item.targetPosition[2] + item.targetVelocity[2] * dt],
-					[item.targetVelocity[0], item.targetVelocity[1], item.targetVelocity[2]],
-				]
+			const target: PositionAndVelocityOverTime = (sample) => {
+				const dt = timeSubtract(sample, time)
+				return [[item.targetPosition[0] + item.targetVelocity[0] * dt, item.targetPosition[1] + item.targetVelocity[1] * dt, item.targetPosition[2] + item.targetVelocity[2] * dt], vecClone(item.targetVelocity)]
 			}
 			const solution = lightTimeSolution(target, observer, time, 8)!
 			expect(Math.abs(solution.lightTime - item.lightTime)).toBeLessThanOrEqual(1e-12)
-			expectVecClose(solution.position, item.position, 1e-12)
-			expectVecClose(solution.targetEmissionPosition, item.emissionPosition, 1e-12)
+			expectNumberArrayToBeCloseToTolerance(solution.position, item.position, 1e-12)
+			expectNumberArrayToBeCloseToTolerance(solution.targetEmissionPosition, item.emissionPosition, 1e-12)
 			expect(solution.distance).toBeGreaterThan(0)
 		})
 	}
