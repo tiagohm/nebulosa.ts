@@ -19,6 +19,27 @@ function state(width = 10, height = 10, channels = 1, cfa = false, scale = 1, co
 }
 
 describe('Drizzle areas', () => {
+	test('CFA normalization requires enough shared finite correspondences in each color', () => {
+		const reference = image(64, 64, 1, (x, y) => 0.2 + x * 0.002 + y * 0.001, 'RGGB')
+		const target = image(64, 64, 1, (x, y) => (0.2 + x * 0.002 + y * 0.001) / 2, 'RGGB')
+		const s = state(64, 64, 3, true)
+		const mask = new Uint8Array(64 * 64)
+		for (let y = 0; y < 64; y += 2) for (let x = 0; x < 64; x += 2) mask[y * 64 + x] = y === 30 && x >= 16 && x < 32 ? 0 : 1
+		// Each of these eight interior red photosites supplies four reference-center correspondences.
+		for (const maskedReference of [true, false]) {
+			const refMask = maskedReference ? mask : undefined
+			const curMask = maskedReference ? undefined : mask
+			const enough = drizzleNormalization(s, reference, target, IDENTITY, 'scale', 'per-channel', refMask, curMask)
+			expect(enough).toBeDefined()
+			for (const scale of enough!.scales) expect(scale).toBeCloseTo(2, 12)
+			mask[30 * 64 + 16] = 1
+			expect(drizzleNormalization(s, reference, target, IDENTITY, 'scale', 'per-channel', refMask, curMask)).toBeUndefined()
+			expect(s.referenceSamples).toHaveLength(0)
+			expect(s.currentSamples).toHaveLength(0)
+			mask[30 * 64 + 16] = 0
+		}
+	})
+
 	test('masked photosites deposit neither signal nor weight for mono, RGB and every CFA phase', () => {
 		for (const pattern of [undefined, ...PATTERNS]) {
 			for (const channels of pattern === undefined ? [1, 3] : [1]) {

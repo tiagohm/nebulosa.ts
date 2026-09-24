@@ -16,7 +16,7 @@ import type { DetectedStar } from '../stars/detector'
 import type { SigmaClipCenterMethod, SigmaClipDispersionMethod } from './computation'
 import { createDrizzleAccumulator, depositDrizzle, type DrizzleAccumulator, drizzleNormalization, drizzleOverlap, prepareDrizzleFootprint } from './drizzle'
 // oxfmt-ignore
-import { applyGlobalNormalizationInPlace, applyLocalNormalizationInPlace, broadcastNormalizationPlanes, DEFAULT_LOCAL_NORMALIZATION_OPTIONS, type FrameNormalizationSummary, fitLocalNormalizationRaw, type GlobalNormalizationMode, isLocalNormalizationFallback, type LocalNormalizationFallbackReason, type LocalNormalizationModel, type LocalNormalizationOptions, localNormalizationFailureReason, localNormalizationSummary, type NormalizationColorMode, resolveLocalNormalizationOptions, solveGlobalNormalizationPlanes } from './normalization'
+import { applyGlobalNormalizationInPlace, applyLocalNormalizationInPlace, broadcastNormalizationPlanes, DEFAULT_LOCAL_NORMALIZATION_OPTIONS, type FrameNormalizationSummary, fitLocalNormalizationRaw, type GlobalNormalizationMode, isLocalNormalizationFallback, type LocalNormalizationFallbackReason, type LocalNormalizationModel, type LocalNormalizationOptions, localNormalizationFailureReason, localNormalizationSummary, MIN_GLOBAL_NORMALIZATION_SAMPLES, type NormalizationColorMode, resolveLocalNormalizationOptions, solveGlobalNormalizationPlanes } from './normalization'
 import { type ImageInterpolationMode, type ImageRegistrationFailureReason, type ImageRegistrationSuccess, registerImage, registerStars, toAffineMatrix } from './registration'
 import { measureSubframeQuality, type SubframeQualityMetrics } from './subframe.selector'
 
@@ -99,6 +99,9 @@ export interface StackingFrame {
 }
 
 // Opt-in streak analysis; no detector or classifier runs while disabled.
+// Mask-aware normalization rejects insufficient finite support with normalization-failed, independently
+// of maxMaskedFraction. The floor is 32 pairs per fitted plane, capped by geometric overlap for resample
+// and pre-mask finite correspondences for Drizzle/CFA so complete small overlaps remain usable.
 export interface StackingStreakOptions {
 	// Defaults to false, including when only precomputed frame masks are present.
 	readonly enabled?: boolean
@@ -637,7 +640,7 @@ export class LiveStacker {
 		if (overlapFraction <= 0) return this.#reject(frameIndex, frame, quality, 'no-overlap')
 		if (overlapFraction < this.#options.minOverlapFraction) return this.#reject(frameIndex, frame, quality, 'insufficient-overlap', overlapFraction, registration.transform.summary)
 
-		const normalization = computeNormalization(raw, valid, frame, this.#referenceFrame, quality, this.#options)
+		const normalization = computeNormalization(raw, valid, registration.coveredPixels, frame, this.#referenceFrame, quality, this.#options)
 		if (normalization.transform.kind === 'rejected') return this.#reject(frameIndex, frame, quality, 'normalization-failed', overlapFraction, registration.transform.summary)
 		applyNormalizationInPlace(raw, valid, frame.image.metadata.channels, normalization.transform)
 		accumulateAlignedFrame(this.#referenceFrame.image.metadata.channels, raw, valid, this.#sum!, this.#weightSum!, this.#coverageMap, this.#options.combinationMethod, normalization.summary.weight)
@@ -924,7 +927,7 @@ function createAlignedFrame(frame: PreparedStackingFrame, index: number, quality
 	const { raw } = registration.image
 	const valid = registration.validityMask
 	const coveredPixels = registration.coveredPixels
-	const normalization = computeNormalization(raw, valid, frame, referenceFrame, quality, options)
+	const normalization = computeNormalization(raw, valid, coveredPixels, frame, referenceFrame, quality, options)
 	if (normalization.transform.kind === 'rejected') return undefined
 	applyNormalizationInPlace(raw, valid, channels, normalization.transform)
 	return { raw, valid, weight: normalization.summary.weight, coveredPixels, index, id: frame.id, quality, normalization: normalization.summary, transform: registration.transform.summary }
@@ -1146,7 +1149,7 @@ type NormalizationTransform =
 	  }
 	| {
 			readonly kind: 'rejected'
-			readonly reason: LocalNormalizationFallbackReason
+			readonly reason: LocalNormalizationFallbackReason | 'insufficient-global-samples'
 	  }
 
 // The transform to apply plus the compact summary to retain for the frame.
@@ -1160,7 +1163,9 @@ interface ComputedNormalization {
 // In `local` mode the global solution is still computed first and reported as `scales`/`offsets`: it is
 // the anchor the local model corrects around, and it is what a caller inspecting the summary expects to
 // see. A `reject` fallback surfaces here as a `rejected` transform, not as an exception.
-function computeNormalization(alignedRaw: ImageRawType, valid: Uint8Array, frame: PreparedStackingFrame, referenceFrame: PreparedStackingFrame, quality: StackingFrameQualityMetrics, options: ResolvedStackingOptions): ComputedNormalization {
+// With streak masks, every fitted plane needs at least 32 finite pairs, capped by coveredPixels
+// (geometric output support before masking) so a smaller field can still use all available pixels.
+function computeNormalization(alignedRaw: ImageRawType, valid: Uint8Array, coveredPixels: number, frame: PreparedStackingFrame, referenceFrame: PreparedStackingFrame, quality: StackingFrameQualityMetrics, options: ResolvedStackingOptions): ComputedNormalization {
 	const weight = resolveFrameWeight(frame, quality, options)
 	const { width, height, channels } = referenceFrame.image.metadata
 
@@ -1176,14 +1181,14 @@ function computeNormalization(alignedRaw: ImageRawType, valid: Uint8Array, frame
 		valid = valid.slice()
 		for (let pixel = 0; pixel < valid.length; pixel++) if (referenceFrame.rejectionMask[pixel] !== 0) valid[pixel] = 0
 	}
-	if ((frame.rejectionMask !== undefined || referenceFrame.rejectionMask !== undefined) && !valid.includes(1)) {
-		return { transform: { kind: 'rejected', reason: 'no-valid-overlap' }, summary: { scales: channelArray(channels, 1), offsets: channelArray(channels, 0), weight } }
-	}
+	const sampleCounts = frame.rejectionMask !== undefined || referenceFrame.rejectionMask !== undefined ? [] : undefined
+	const minimumSamples = Math.min(MIN_GLOBAL_NORMALIZATION_SAMPLES, coveredPixels)
 
 	if (options.normalizationMode === 'local') {
-		const model = fitLocalNormalizationRaw(referenceFrame.image.raw, alignedRaw, width, height, channels, options.colorHandlingMode, valid, options.localNormalization)
+		const model = fitLocalNormalizationRaw(referenceFrame.image.raw, alignedRaw, width, height, channels, options.colorHandlingMode, valid, options.localNormalization, sampleCounts)
 		const { scales, offsets } = broadcastNormalizationPlanes(model.global, channels)
 		const summary: FrameNormalizationSummary = { scales, offsets, weight, local: localNormalizationSummary(model) }
+		if (sampleCounts?.some((count) => count < minimumSamples)) return { transform: { kind: 'rejected', reason: 'insufficient-global-samples' }, summary }
 
 		if (options.localNormalization.fallback === 'reject' && isLocalNormalizationFallback(model)) {
 			return { transform: { kind: 'rejected', reason: localNormalizationFailureReason(model) ?? 'surface-fit-failed' }, summary }
@@ -1192,8 +1197,9 @@ function computeNormalization(alignedRaw: ImageRawType, valid: Uint8Array, frame
 		return { transform: { kind: 'local', model }, summary }
 	}
 
-	const planes = solveGlobalNormalizationPlanes(alignedRaw, valid, referenceFrame.image.raw, channels, width, height, options.normalizationMode, options.colorHandlingMode)
+	const planes = solveGlobalNormalizationPlanes(alignedRaw, valid, referenceFrame.image.raw, channels, width, height, options.normalizationMode, options.colorHandlingMode, sampleCounts)
 	const { scales, offsets } = broadcastNormalizationPlanes(planes, channels)
+	if (sampleCounts?.some((count) => count < minimumSamples)) return { transform: { kind: 'rejected', reason: 'insufficient-global-samples' }, summary: { scales, offsets, weight } }
 	return { transform: { kind: 'global', scales, offsets }, summary: { scales, offsets, weight } }
 }
 

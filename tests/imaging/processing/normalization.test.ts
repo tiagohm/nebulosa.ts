@@ -144,6 +144,19 @@ function applyAnchor(raw: Float64Array, scale: number, offset: number) {
 }
 
 describe('global normalization', () => {
+	test('sample counts report finite paired support per fitted plane and resize the output', () => {
+		const reference = new Float64Array(12).fill(0.4)
+		const current = new Float64Array(12).fill(0.2)
+		reference[4] = Number.NaN
+		current[8] = Number.NaN
+		const valid = new Uint8Array([1, 1, 1, 0])
+		const counts = [99, 99, 99, 99]
+		solveGlobalNormalizationPlanes(current, valid, reference, 3, 4, 1, 'scale', 'per-channel', counts)
+		expect(counts).toEqual([3, 2, 2])
+		solveGlobalNormalizationPlanes(current, valid, reference, 3, 4, 1, 'scale', 'luminance', counts)
+		expect(counts).toEqual([1])
+	})
+
 	test('identity for empty distributions', () => {
 		expect(solveGlobalNormalization([], [], 'background-scale')).toEqual({ scale: 1, offset: 0 })
 		expect(solveGlobalNormalization([1, 2], [], 'scale')).toEqual({ scale: 1, offset: 0 })
@@ -228,8 +241,10 @@ describe('global normalization', () => {
 			}
 		}
 
-		const solved = solveGlobalNormalizationPlanes(current, undefined, reference, 1, size, size, 'background-scale', 'per-channel')
+		const sampleCounts: number[] = []
+		const solved = solveGlobalNormalizationPlanes(current, undefined, reference, 1, size, size, 'background-scale', 'per-channel', sampleCounts)
 
+		expect(sampleCounts).toEqual([100])
 		expect(solved[0].scale).toBeGreaterThan(1.8)
 		expect(solved[0].scale).toBeLessThan(2.1)
 	})

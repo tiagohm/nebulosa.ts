@@ -48,6 +48,91 @@ function measuredStreak(y: number, start = -4, end = 24): Streak {
 }
 
 describe('streak masking in stacking', () => {
+	test.each(['resample', 'drizzle'] as const)('%s accepts 32 shared finite pairs but rejects 31 in every fitted plane', (reconstructionMode) => {
+		const mask = rejectionMask(64, 64, (x, y) => y !== 30 || x < 16 || x >= 48)
+		const reference = {
+			...makeFrame(
+				makeImage(64, 64, 3, (x, y, c) => 0.2 + x * 0.002 + y * 0.001 + c * 0.03),
+				makeStars(),
+			),
+			streakMask: mask,
+		}
+		for (const colorHandlingMode of ['per-channel', 'luminance'] as const) {
+			for (const normalizationMode of ['scale', 'background-scale', 'percentile', ...(reconstructionMode === 'resample' ? (['local'] as const) : [])] as const) {
+				const targetImage = makeImage(64, 64, 3, (x, y, c) => (0.2 + x * 0.002 + y * 0.001 + c * 0.03) / 2)
+				const target = { ...makeFrame(targetImage, makeStars()), streaks: [] }
+				const options = { ...DEFAULT_STACK_OPTIONS, reconstructionMode, normalizationMode, colorHandlingMode, interpolationMode: 'nearest', streaks: { enabled: true } } as const
+				const enough = stackFrames([reference, target], options)
+				expect(enough.acceptedFrames).toBe(2)
+				for (const scale of enough.diagnostics[1].normalization!.scales) expect(scale).toBeCloseTo(2, 5)
+				// Only blue loses a finite pair; red and green still have all 32.
+				targetImage.raw[(30 * 64 + 32) * 3 + 2] = Number.NaN
+				const tooFew = stackFrames([reference, target], options)
+				expect(tooFew.diagnostics[1].reason).toBe('normalization-failed')
+			}
+		}
+	})
+
+	test.each(['resample', 'drizzle', 'cfaDrizzle'] as const)('%s preserves small geometric overlaps when masking removes no paired samples', (reconstructionMode) => {
+		let referenceImage = makeImage(4, 4, 1, (x, y) => 0.2 + x * 0.02 + y * 0.01)
+		let targetImage = makeImage(8, 8, 1, (x, y) => (0.2 + x * 0.02 + y * 0.01) / 2)
+		if (reconstructionMode === 'cfaDrizzle') {
+			referenceImage = { ...referenceImage, metadata: { ...referenceImage.metadata, bayer: 'RGGB' } }
+			targetImage = { ...targetImage, metadata: { ...targetImage.metadata, bayer: 'RGGB' } }
+		}
+		const stars = makeStars().map((star) => Object.assign({}, star, { x: star.x / 5, y: star.y / 5 }))
+		const reference = { ...makeFrame(referenceImage, stars), streaks: [] }
+		const target = { ...makeFrame(targetImage, stars), streaks: [], streakMask: rejectionMask(8, 8, (x) => x >= 6) }
+		const options = {
+			...DEFAULT_STACK_OPTIONS,
+			reconstructionMode,
+			normalizationMode: 'scale',
+			interpolationMode: 'nearest',
+			matchStarsConfig: { ...DEFAULT_STACK_OPTIONS.matchStarsConfig, dedupeDistance: 0.1, minPatternSide: 0.5, initialMatchRadius: 0.2, finalMatchRadius: 0.1 },
+			streaks: { enabled: true },
+		} as const
+		const batch = stackFrames([reference, target], options)
+		const live = new LiveStacker(options)
+		live.add(reference)
+		expect(live.add(target)).toMatchObject({ accepted: true })
+		expect(batch.acceptedFrames).toBe(2)
+		expect(live.snapshot()!.diagnostics).toEqual(batch.diagnostics)
+		for (const scale of batch.diagnostics[1].normalization!.scales) expect(scale).toBeCloseTo(2, 6)
+	})
+
+	test.each(['resample', 'drizzle', 'cfaDrizzle'] as const)('%s rejects insufficient finite normalization support without changing the accumulators', (reconstructionMode) => {
+		let referenceImage = makeImage(64, 64, 1, (x, y) => 0.2 + x * 0.002 + y * 0.001)
+		let targetImage = makeImage(64, 64, 1, (x, y) => (0.2 + x * 0.002 + y * 0.001) / 2)
+		if (reconstructionMode === 'cfaDrizzle') {
+			referenceImage = { ...referenceImage, metadata: { ...referenceImage.metadata, bayer: 'RGGB' } }
+			targetImage = { ...targetImage, metadata: { ...targetImage.metadata, bayer: 'RGGB' } }
+		}
+		const mask = rejectionMask(64, 64, (x, y) => !(x >= 30 && x < 32 && y >= 30 && y < 32))
+		for (const maskedFrame of ['reference', 'target'] as const) {
+			const frames = [
+				{ ...makeFrame(referenceImage, makeStars()), streaks: [], streakMask: maskedFrame === 'reference' ? mask : undefined },
+				{ ...makeFrame(targetImage, makeStars()), streaks: [], streakMask: maskedFrame === 'target' ? mask : undefined },
+			]
+			for (const normalizationMode of ['scale', 'background-scale', 'percentile', ...(reconstructionMode === 'resample' ? (['local'] as const) : [])] as const) {
+				const options = { ...DEFAULT_STACK_OPTIONS, reconstructionMode, normalizationMode, interpolationMode: 'nearest', streaks: { enabled: true } } as const
+				const live = new LiveStacker(options)
+				live.add(frames[0])
+				const before = live.snapshot()!
+				expect(live.add(frames[1]).reason).toBe('normalization-failed')
+				const after = live.snapshot()!
+				expect(after.acceptedFrames).toBe(1)
+				expect(after.finalImage).toEqual(before.finalImage)
+				expect(after.coverageMap).toEqual(before.coverageMap)
+				expect(after.weightMap).toEqual(before.weightMap)
+				const batch = stackFrames(frames, options)
+				expect(batch.diagnostics[1].reason).toBe('normalization-failed')
+				expect(batch.acceptedFrames).toBe(1)
+				expect(batch.coverageMap).toEqual(before.coverageMap)
+				expect(batch.weightMap).toEqual(before.weightMap)
+			}
+		}
+	})
+
 	test('geometric overlap stays independent of heavy masking in batch and live reconstruction', () => {
 		const reference = { ...makeFrame(makeImage(20, 20, 1, 0.2), makeStars()), streaks: [] }
 		const target = { ...makeFrame(makeImage(20, 20, 1, 0.4), makeStars()), streakMask: rejectionMask(20, 20, (x) => x !== 10) }
