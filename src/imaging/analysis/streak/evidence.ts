@@ -115,12 +115,12 @@ export class TrajectoryStreakEvidence implements StreakEvidenceProvider {
 	}
 }
 
-// Votes from shower-radiant geometry. A compatible great circle and outward direction are primary; a miss is recorded and does not cancel a tapered sporadic.
+// Votes from shower-radiant geometry. A single frame has no motion arrow, so only the great-circle residual is primary. A miss is recorded and does not cancel a tapered sporadic.
 export class MeteorRadiantStreakEvidence implements StreakEvidenceProvider {
 	// Stable provider name.
 	readonly id = 'meteorRadiant'
 
-	// Returns a primary meteor vote for the best compatible radiant, or incompatible evidence when none match.
+	// Returns a primary meteor vote for the best great-circle match, or incompatible evidence when none match.
 	evaluate(streak: Streak, context: Readonly<StreakClassificationContext>): readonly StreakEvidenceContribution[] {
 		const radiants = context.meteorRadiants
 		if (context.wcs === undefined || radiants === undefined || radiants.length === 0) return []
@@ -132,16 +132,16 @@ export class MeteorRadiantStreakEvidence implements StreakEvidenceProvider {
 
 		for (let index = 0; index < radiants.length; index++) {
 			const radiant = radiants[index]
-			const association = associateMeteorTrack(radiant, track, { maximumCrossTrackError: RADIANT_GATE })
+			const association = associateMeteorTrack(radiant, track, { maximumCrossTrackError: RADIANT_GATE, requireDirectionCompatibility: false })
 			const geometry = falling(association.crossTrackError, deg(0.2), RADIANT_GATE)
-			const match = { geometry, id: radiant.id, compatible: association.compatible && association.directionCompatible }
+			const match = { geometry, id: radiant.id, compatible: association.compatible }
 			if (match.compatible && (best === undefined || match.geometry > best.geometry)) best = match
 			if (nearest === undefined || match.geometry > nearest.geometry) nearest = match
 		}
 
-		if (best !== undefined) return [vote('meteor', best.geometry, PRIMARY_WEIGHT, 'primary', evidenceItem('meteorRadiant', best.geometry, 'trail lies on the radiant great circle and moves away from it', best.id))]
+		if (best !== undefined) return [vote('meteor', best.geometry, PRIMARY_WEIGHT, 'primary', evidenceItem('meteorRadiant', best.geometry, 'trail lies on the radiant great circle', best.id))]
 		if (nearest === undefined) return []
-		return [vote('meteor', 0, 0, 'secondary', evidenceItem('meteorRadiantIncompatible', nearest.geometry, 'no supplied radiant matches the trail plane and outward direction', nearest.id))]
+		return [vote('meteor', 0, 0, 'secondary', evidenceItem('meteorRadiantIncompatible', nearest.geometry, 'no supplied radiant lies on the trail great circle', nearest.id))]
 	}
 }
 

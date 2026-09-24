@@ -183,23 +183,24 @@ test('ranks a tapered or flared trail as a meteor without naming it from brightn
 	expect(evidenceScore(flared, 'intensityPeriodic')).toBe(0)
 })
 
-test('names a meteor from a compatible radiant and rejects the opposite direction', () => {
+test('names a meteor from either extension of the great circle', () => {
 	const header = tanWcs()
 	const streak = skyStreak()
 	const track = celestialStreakTrack(streak, header)!
-	const compatible = classifyStreak(streak, { wcs: header, meteorRadiants: [outwardRadiant(track)] })
-	expect(compatible.class).toBe('meteor')
-	expect(compatible.confidence).toBeGreaterThan(0.7)
-	expect(compatible.evidence.find((item) => item.kind === 'meteorRadiant')?.id).toBe('PER')
+	const outward = classifyStreak(streak, { wcs: header, meteorRadiants: [outwardRadiant(track)] })
+	expect(outward.class).toBe('meteor')
+	expect(outward.confidence).toBeGreaterThan(0.7)
+	expect(outward.evidence.find((item) => item.kind === 'meteorRadiant')?.id).toBe('PER')
 
 	const [rightAscension, declination] = sphericalDestination(track.end[0], track.end[1], track.positionAngle, deg(5))
-	const inward = classifyStreak(streak, { wcs: header, meteorRadiants: [{ id: 'IN', rightAscension, declination }] })
-	expect(inward.class).not.toBe('meteor')
-	expect(evidenceScore(inward, 'meteorRadiantIncompatible')).toBeGreaterThan(0.5)
+	const opposite = classifyStreak(streak, { wcs: header, meteorRadiants: [{ id: 'OPP', rightAscension, declination }] })
+	expect(opposite.class).toBe('meteor')
+	expect(opposite.confidence).toBeGreaterThan(0.7)
+	expect(opposite.evidence.find((item) => item.kind === 'meteorRadiant')?.id).toBe('OPP')
 
 	const offset = classifyStreak(streak, { wcs: header, meteorRadiants: [{ rightAscension: track.start[0], declination: track.start[1] + deg(30) }] })
 	expect(offset.class).not.toBe('meteor')
-	expect(score(offset, 'meteor')).toBeLessThan(score(compatible, 'meteor'))
+	expect(score(offset, 'meteor')).toBeLessThan(score(outward, 'meteor'))
 })
 
 test('associates a high-declination trail with a radiant on its great circle', () => {

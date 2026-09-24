@@ -238,7 +238,7 @@ describe('MeteorRadiantStreakEvidence', () => {
 	const track = celestialStreakTrack(streak, header)!
 	const outward = sphericalDestination(track.start[0], track.start[1], normalizeAngle(track.positionAngle + PI), deg(5))
 
-	test('selects the closest compatible radiant and records a directional miss without a vote weight', () => {
+	test('accepts both great-circle extensions and records an off-plane radiant without weight', () => {
 		expect(provider.id).toBe('meteorRadiant')
 		expect(provider.evaluate(streak, {})).toEqual([])
 		expect(provider.evaluate(streak, { wcs: header, meteorRadiants: [] })).toEqual([])
@@ -257,11 +257,15 @@ describe('MeteorRadiantStreakEvidence', () => {
 		expect(compatible[0]?.evidence[0]).toMatchObject({ kind: 'meteorRadiant', id: 'PER' })
 
 		const inward = sphericalDestination(track.end[0], track.end[1], track.positionAngle, deg(5))
-		const rejected = provider.evaluate(streak, { wcs: header, meteorRadiants: [{ id: 'IN', rightAscension: inward[0], declination: inward[1] }] })
-		expect(rejected[0]).toMatchObject({ class: 'meteor', score: 0, weight: 0, tier: 'secondary' })
-		expect(rejected[0]?.evidence[0]?.kind).toBe('meteorRadiantIncompatible')
-		expect(rejected[0]?.evidence[0]?.score).toBeGreaterThan(0.5)
-		expect(rejected[0]?.evidence[0]?.id).toBe('IN')
+		const opposite = provider.evaluate(streak, { wcs: header, meteorRadiants: [{ id: 'OPP', rightAscension: inward[0], declination: inward[1] }] })
+		expect(opposite[0]).toMatchObject({ class: 'meteor', weight: 0.8, tier: 'primary' })
+		expect(opposite[0]?.score).toBeGreaterThan(0.95)
+		expect(opposite[0]?.evidence[0]).toMatchObject({ kind: 'meteorRadiant', id: 'OPP' })
+
+		const offset = provider.evaluate(streak, { wcs: header, meteorRadiants: [{ id: 'OFF', rightAscension: track.start[0], declination: track.start[1] + deg(30) }] })
+		expect(offset[0]).toMatchObject({ class: 'meteor', score: 0, weight: 0, tier: 'secondary' })
+		expect(offset[0]?.evidence[0]?.kind).toBe('meteorRadiantIncompatible')
+		expect(offset[0]?.evidence[0]?.id).toBe('OFF')
 	})
 })
 
