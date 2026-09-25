@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { TAU } from '../../../../src/core/constants'
 import type { AberrationPhysicalScale } from '../../../../src/imaging/analysis/aberration/physical'
 import { inspectAberrationFocusScan, type AberrationFocusFrame } from '../../../../src/imaging/analysis/aberration/scan'
+import { buildFocusSurfaceMap } from '../../../../src/imaging/analysis/aberration/surface'
 import type { StarProfile } from '../../../../src/imaging/stars/profile'
 import { gaussian, mulberry32 } from '../../../../src/math/numerical/random'
 import { fitFocusSurface, type FocusSurfaceCoefficients } from '../../../../src/math/numerical/surface.fit'
@@ -219,6 +220,30 @@ test('inspects a regional profiles-only focus scan', () => {
 	expect(result.tilt?.physical).toBeUndefined()
 	expect(result.findings.find((finding) => finding.kind === 'sensorTiltPattern')?.limitations).toContain('missingPhysicalScale')
 	expect(result.frames.every((frame) => frame.inspection?.findings.every((finding) => finding.kind !== 'sensorTiltPattern'))).toBeTrue()
+})
+
+test('generates maps only on request using the unchanged scan surface', () => {
+	const frames = [80, 90, 100, 110, 120].map(frame)
+	const baseline = inspectAberrationFocusScan(frames)
+	expect(baseline.surface?.success).toBeTrue()
+	expect(baseline.map).toBeUndefined()
+	for (const resolution of [{}, { columns: 4, rows: 3 }, { columns: 1, rows: 1 }]) {
+		const result = inspectAberrationFocusScan(frames, { map: resolution })
+		expect(result.surface).toEqual(baseline.surface)
+		expect(result.surface?.success).toBeTrue()
+		if (!result.surface?.success) return
+		expect(result.map).toEqual(buildFocusSurfaceMap(result.surface, resolution))
+	}
+})
+
+test('omits a requested map when the scan surface fails or is unavailable', () => {
+	const frames = [80, 90, 100, 110, 120].map(frame)
+	const result = inspectAberrationFocusScan(frames, { surface: { minimumSamples: 100 }, map: {} })
+	expect(result.surface?.success).toBeFalse()
+	expect(result.map).toBeUndefined()
+	const empty = inspectAberrationFocusScan([], { map: {} })
+	expect(empty.surface).toBeUndefined()
+	expect(empty.map).toBeUndefined()
 })
 
 test('separates tilt from substantial full quadratic curvature by default', () => {
