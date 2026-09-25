@@ -1,4 +1,4 @@
-import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters, refractedAltitude } from '../../astronomy/coordinates/astrometry'
+import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters } from '../../astronomy/coordinates/astrometry'
 import type { HorizontalCoordinate } from '../../astronomy/coordinates/coordinate'
 import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import { applyEquatorialPointingError, polarAlignmentPointingModel } from '../../astronomy/coordinates/pointing'
@@ -8,7 +8,7 @@ import { DAYSEC, PI, SIDEREAL_DRIFT_RATE } from '../../core/constants'
 import { matMulVec, matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecCross, vecDivScalarMut, vecDot, vecLength, vecMinus, vecNegateMut, vecNormalizeMut, vecPlane, vecRotateByRodrigues } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizePI } from '../../math/units/angle'
-import { applyMountAdjustment, transportEarthFixed } from './polaralignment.util'
+import { applyMountAdjustment, polarAlignmentReferenceAltitude, transportEarthFixed } from './polaralignment.util'
 
 // Three-point polar alignment from timestamped ICRF/J2000 plate solves. The mechanical axis is
 // fixed to the Earth between base adjustments; samples are transported to a common epoch before
@@ -25,7 +25,8 @@ export interface ThreePointPolarAlignmentResult extends Readonly<HorizontalCoord
 	readonly time: Time
 	// Mount-pole azimuth error relative to the true pole (radians); positive sense per hemisphere.
 	readonly azimuthError: Angle
-	// Mount-pole altitude error relative to the refracted celestial-pole altitude (radians).
+	// Signed difference of observed mount-pole and target altitudes (radians), reversed in the south.
+	// Both altitudes include the selected refraction; false gives the geometric DARV convention.
 	readonly altitudeError: Angle
 	// Unit direction of the above-horizon mechanical pole in ICRF at `time`.
 	readonly pole: Vec3
@@ -40,12 +41,6 @@ export interface ThreePointPolarAlignmentResult extends Readonly<HorizontalCoord
 // vecNormalize and become a fake equatorial direction in cirsToObserved.
 const DEGENERATE_POLE_NORMAL = 1e-14
 
-// Altitude (radians) of the true celestial pole as the alignment target: the absolute latitude,
-// optionally raised by atmospheric refraction so it matches the observed pole position.
-function referencePoleAltitude(location: GeographicPosition, refraction: RefractionParameters | false) {
-	return refraction === false ? Math.abs(location.latitude) : refractedAltitude(Math.abs(location.latitude), refraction)
-}
-
 // Converts an ICRF mount-pole direction to observed azimuth/altitude and signed polar-alignment
 // errors at `time`. `pole` is a unit vector; the returned `pole` aliases it. `azimuthAdjustment`
 // and `altitudeAdjustment` are the last inferred knob deltas in radians, and stay 0 on the
@@ -53,7 +48,7 @@ function referencePoleAltitude(location: GeographicPosition, refraction: Refract
 function observedPolarAlignment(pole: Vec3, time: Time, refraction: RefractionParameters | false, location: GeographicPosition, azimuthAdjustment: Angle = 0, altitudeAdjustment: Angle = 0): ThreePointPolarAlignmentResult {
 	const isNorthern = location.latitude >= 0
 	const { azimuth, altitude } = cirsToObserved(matMulVec(cirsRotationMatrix(time), pole), time, refraction, location)
-	const latitude = referencePoleAltitude(location, refraction)
+	const latitude = polarAlignmentReferenceAltitude(location.latitude, refraction)
 	const azimuthError = isNorthern ? normalizePI(azimuth) : normalizePI(azimuth + PI)
 	const altitudeError = isNorthern ? altitude - latitude : latitude - altitude
 	return { time, azimuth, altitude, pole, azimuthError, altitudeError, azimuthAdjustment, altitudeAdjustment }

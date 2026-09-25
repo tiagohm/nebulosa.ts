@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, refractedAltitude } from '../../../src/astronomy/coordinates/astrometry'
+import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters, refractedAltitude } from '../../../src/astronomy/coordinates/astrometry'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { geodeticLocation, localSiderealTime } from '../../../src/astronomy/observer/location'
 import { cirsRotationMatrix, gcrsToItrsRotationMatrix, type Time, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
@@ -8,7 +8,53 @@ import { vecAngle, vecRotateByRodrigues } from '../../../src/math/linear-algebra
 import { arcmin, deg, hour, normalizePI, parseAngle, toArcmin, toArcsec, toDeg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 import { mountAdjustmentAxes, polarAlignmentError, ThreePointPolarAlignment, threePointPolarAlignmentAfterAdjustment, threePointPolarAlignmentError } from '../../../src/observation/alignment/polaralignment'
-import { applyMountAdjustment, celestialPoleVector } from '../../../src/observation/alignment/polaralignment.util'
+import { applyMountAdjustment, celestialPoleVector, convertPolarAlignmentAltitudeError, polarAlignmentReferenceAltitude } from '../../../src/observation/alignment/polaralignment.util'
+
+describe('polar altitude error references', () => {
+	const atmospheres: readonly (RefractionParameters | false)[] = [false, DEFAULT_REFRACTION_PARAMETERS, { pressure: 750, temperature: -5, relativeHumidity: 0.3, wl: 0.6 }, { pressure: 0 }]
+
+	for (const latitude of [-60, -30, -3, 0, 3, 30, 60].map(deg)) {
+		test(`converts both pole altitudes and round-trips at latitude ${latitude}`, () => {
+			for (const atmosphere of atmospheres) {
+				expect(polarAlignmentReferenceAltitude(latitude, atmosphere)).toBe(atmosphere === false ? Math.abs(latitude) : refractedAltitude(Math.abs(latitude), atmosphere))
+				for (const error of [-arcmin(30), 0, arcmin(30)]) {
+					const displayed = convertPolarAlignmentAltitudeError(error, latitude, false, atmosphere)
+					expect(Number.isFinite(displayed)).toBe(true)
+					expect(convertPolarAlignmentAltitudeError(displayed, latitude, atmosphere, false)).toBeCloseTo(error, 13)
+					if (atmosphere === false) expect(displayed).toBe(error)
+				}
+			}
+			const error = arcmin(5)
+			const defaultDisplay = convertPolarAlignmentAltitudeError(error, latitude)
+			const customDisplay = convertPolarAlignmentAltitudeError(defaultDisplay, latitude, DEFAULT_REFRACTION_PARAMETERS, atmospheres[2])
+			expect(customDisplay).toBeCloseTo(convertPolarAlignmentAltitudeError(error, latitude, false, atmospheres[2]), 13)
+		})
+
+		test(`matches the three-point displayed altitude at latitude ${latitude}`, () => {
+			const time = timeYMDHMS(2025, 1, 1, 0, 0, 0)
+			const location = geodeticLocation(deg(-45), latitude, meter(800))
+			time.location = location
+			const { upAxis, eastAxis } = mountAdjustmentAxes(time, location)
+			for (const error of [-arcmin(30), 0, arcmin(30)]) {
+				const pole = applyMountAdjustment(celestialPoleVector(time, location, false), upAxis, eastAxis, arcmin(3), error)
+				const points = [0, 0.8, 1.6].map((angle) => {
+					const [ra, dec] = eraC2s(...vecRotateByRodrigues([1, 0, 0], pole, angle))
+					return [ra, dec, time] as const
+				})
+				const geometric = threePointPolarAlignmentError(points[0], points[1], points[2], false, location)
+				expect(geometric).not.toBeFalse()
+				if (!geometric) continue
+				for (const atmosphere of atmospheres) {
+					const observed = threePointPolarAlignmentError(points[0], points[1], points[2], atmosphere, location)
+					expect(observed).not.toBeFalse()
+					if (!observed) continue
+					const converted = convertPolarAlignmentAltitudeError(geometric.altitudeError, latitude, false, atmosphere)
+					expect(Math.abs(toArcsec(converted - observed.altitudeError))).toBeLessThan(0.00001)
+				}
+			}
+		})
+	}
+})
 
 test('matches Ralph Pass two-star polar alignment reference example', () => {
 	const latitude = deg(42 + 40 / 60)
