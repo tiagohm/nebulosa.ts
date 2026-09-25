@@ -1,5 +1,5 @@
 import { validatePositiveInteger } from '../../../core/validation'
-import { evaluateFocusSurface, type FocusSurfaceFitSuccess } from '../../../math/numerical/surface.fit'
+import { evaluateFocusSurface, type FocusSurfaceCoefficients, type FocusSurfaceFitSuccess } from '../../../math/numerical/surface.fit'
 
 // Samples an existing best-focus surface at normalized sensor cell centers, rightward/downward in -0.5..0.5.
 // Allocates a numeric map without mutating or refitting the surface; all focus quantities retain the scan's focuser unit.
@@ -78,6 +78,7 @@ export function buildFocusSurfaceMap(surface: FocusSurfaceFitSuccess, options: F
 		for (let column = 0; column < columns; column++) {
 			const u = -0.5 + (column + 0.5) / columns
 			const focus = evaluateFocusSurface(surface.coefficients, u, v)
+			const offsetFromCenter = focusSurfaceOffsetFromCenter(surface.coefficients, u, v)
 			let uncertainty: number | undefined
 			if (covariance !== undefined && basis !== undefined) {
 				basis[0] = 1
@@ -95,11 +96,16 @@ export function buildFocusSurfaceMap(surface: FocusSurfaceFitSuccess, options: F
 				}
 				uncertainty = Math.sqrt(Math.max(0, variance))
 			}
-			cells[row * columns + column] = { column, row, u, v, focus, offsetFromCenter: focus - centerFocus, uncertainty }
+			cells[row * columns + column] = { column, row, u, v, focus, offsetFromCenter, uncertainty }
 			minimumFocus = Math.min(minimumFocus, focus)
 			maximumFocus = Math.max(maximumFocus, focus)
 		}
 	}
 
 	return { columns, rows, cells, centerFocus, minimumFocus, maximumFocus, range: maximumFocus - minimumFocus, confidence: surface.confidence }
+}
+
+// Evaluates spatial focus change directly, avoiding cancellation against the absolute focuser zero point.
+function focusSurfaceOffsetFromCenter(surface: FocusSurfaceCoefficients, u: number, v: number): number {
+	return surface.ax * u + surface.ay * v + surface.qxx * u * u + surface.qxy * u * v + surface.qyy * v * v
 }

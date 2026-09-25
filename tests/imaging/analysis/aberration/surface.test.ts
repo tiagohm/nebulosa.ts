@@ -35,10 +35,35 @@ test('samples a plane at row-major cell centers on a non-square even grid', () =
 		expect(cell.v).toBe(-0.5 + (Math.floor(i / 4) + 0.5) / 2)
 		expect(cell.focus).toBe(evaluateFocusSurface(surface.coefficients, cell.u, cell.v))
 		expect(cell.focus).toBeCloseTo(100 + 10 * cell.u - 20 * cell.v, 10)
-		expect(cell.offsetFromCenter).toBe(cell.focus - map.centerFocus)
+		expect(cell.offsetFromCenter).toBeCloseTo(cell.focus - map.centerFocus, 10)
 		expect(cell.offsetFromCenter).toBeCloseTo(10 * cell.u - 20 * cell.v, 10)
 	}
 	expect(surface).toEqual(before)
+})
+
+test('preserves center-relative offsets when the absolute focuser zero is large', () => {
+	const surface = fit()
+	const coefficients = { c: 100, ax: 10, ay: -4, qxx: 3, qxy: 2, qyy: -1 }
+	const smallZero = { ...surface, coefficients }
+	const largeZero = { ...surface, coefficients: { ...coefficients, c: 1e16 } }
+	const smallMap = buildFocusSurfaceMap(smallZero, { columns: 32, rows: 32 })
+	const largeMap = buildFocusSurfaceMap(largeZero, { columns: 32, rows: 32 })
+
+	for (let i = 0; i < smallMap.cells.length; i++) {
+		const { u, v } = smallMap.cells[i]
+		const expected = 10 * u - 4 * v + 3 * u * u + 2 * u * v - v * v
+		expect(smallMap.cells[i].offsetFromCenter).toBeCloseTo(expected, 12)
+		expect(largeMap.cells[i].offsetFromCenter).toBe(smallMap.cells[i].offsetFromCenter)
+	}
+
+	const centerAdjacentCell = largeMap.cells[16 * 32 + 16]
+	expect(centerAdjacentCell.u).toBe(0.015625)
+	expect(centerAdjacentCell.focus).toBe(largeMap.centerFocus)
+	const largePlane = { ...surface, coefficients: { c: 1e16, ax: 10, ay: 0, qxx: 0, qxy: 0, qyy: 0 } }
+	const planeMap = buildFocusSurfaceMap(largePlane, { columns: 32, rows: 1 })
+	const adjacentColumn = planeMap.cells[16]
+	expect(adjacentColumn.focus).toBe(planeMap.centerFocus)
+	expect(adjacentColumn.offsetFromCenter).toBe(0.15625)
 })
 
 test('samples full quadratic curvature, mixed terms and sampled extrema', () => {
