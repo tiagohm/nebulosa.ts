@@ -6,6 +6,8 @@ import { darvGeometryFactors, type DarvExposureMode } from './polaralignment.dar
 // Inverse, small-angle DARV geometry. Stellar north drift is radians per SI second; polar errors
 // are radians in the three-point convention, relative to the geometric pole. Inputs are unchanged.
 // A single component assumes the other is negligible; a joint fit requires independent hour angles.
+// Use convertPolarAlignmentAltitudeError from polaralignment.util for a refracted display;
+// it converts both mount-pole and target altitudes without changing these geometric solutions.
 
 // Minimum dimensionless sensitivity accepted for a single component (at most 100-fold amplification).
 const MIN_GEOMETRY_FACTOR = 0.01

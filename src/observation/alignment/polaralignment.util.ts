@@ -8,8 +8,8 @@ import { type Vec3, vecAngleUnit, vecCross, vecDot, vecLength, vecNormalize, vec
 import type { Angle } from '../../math/units/angle'
 
 // Shared polar-alignment geometry in the inertial frame used by plate solutions. The module locates
-// the refracted observing target, applies the two physical mount-base rotations, and decomposes a
-// spherical error into signed mechanical tangent components. All angles are radians and returned
+// the refracted observing target, converts altitude-error references, applies mount-base rotations,
+// and decomposes a spherical error into signed mechanical tangent components. All angles are radians and returned
 // vectors are newly allocated unit vectors.
 
 // Minimum usable vector or tangent-axis length for public polar-alignment geometry.
@@ -31,13 +31,61 @@ export interface PolarAlignmentErrorComponents {
 	readonly altitude: Angle
 }
 
+// Returns the above-horizon celestial-pole target altitude in radians for geographic latitude
+// in [-PI/2, PI/2]. False selects the geometric pole; otherwise uses the shared atmospheric model.
+export function polarAlignmentReferenceAltitude(latitude: Angle, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS): Angle {
+	const altitude = Math.abs(latitude)
+	return refraction === false ? altitude : refractedAltitude(altitude, refraction)
+}
+
+// Converts a signed altitude error (radians) between geometric (false) and refracted references.
+// Latitude is geographic radians; positive error raises the pole in the north and lowers it in
+// the south, using the northern convention at zero latitude. Defaults convert geometric DARV
+// errors to the three-point display's default atmosphere. Swap from/to for the inverse conversion.
+// Both the mount-pole altitude and target are refracted, not just the target. Matches the three-point
+// display's ERFA vector refraction and refractedAltitude target (including their near-horizon
+// approximation difference); does not model time-dependent frames, polar motion or drift
+// caused by changing refraction during a DARV exposure. Intended for small alignment errors and
+// terrestrial atmospheric parameters. Inversion uses at most 12 fixed-point steps with a 2e-15 rad
+// stopping tolerance. Inputs are unchanged and the returned value is a scalar angle.
+export function convertPolarAlignmentAltitudeError(error: Angle, latitude: Angle, from: RefractionParameters | false = false, to: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS): Angle {
+	if (from === to) return error
+	const sign = latitude >= 0 ? 1 : -1
+	const sourceAltitude = polarAlignmentReferenceAltitude(latitude, from) + sign * error
+	let geometricAltitude = sourceAltitude
+	if (from !== false) {
+		for (let i = 0; i < 12; i++) {
+			const correction = sourceAltitude - observedPoleAltitude(geometricAltitude, from)
+			geometricAltitude += correction
+			if (Math.abs(correction) <= 2e-15) break
+		}
+	}
+	const altitude = to === false ? geometricAltitude : observedPoleAltitude(geometricAltitude, to)
+	return sign * (altitude - polarAlignmentReferenceAltitude(latitude, to))
+}
+
+// Refracts a geometric mount-pole altitude in radians using eraAtioq's vector update. The scalar
+// refractedAltitude supplies its Newton-corrected angle, but adding that angle alone differs from
+// the observed vector near the capped horizon. Preserves the same r/z floors without changing the
+// shared target-altitude approximation or requiring a time/location astrometry context.
+function observedPoleAltitude(altitude: Angle, refraction: RefractionParameters): Angle {
+	const correction = refractedAltitude(altitude, refraction) - altitude
+	const cos = Math.cos(altitude)
+	const sin = Math.sin(altitude)
+	const r = Math.max(1e-6, cos)
+	const z = Math.max(0.05, sin)
+	const cosCorrection = 1 - (correction * correction) / 2
+	const horizontal = cos * (cosCorrection - (correction * z) / r)
+	const vertical = cosCorrection * sin + correction * r
+	return Math.atan2(vertical, Math.abs(horizontal))
+}
+
 // Computes the celestial-pole direction in the inertial J2000/ICRS frame used by plate solutions.
 // `location` is geodetic and angles are radians. Refraction changes the observed target altitude;
 // passing `false` selects the geometric pole. The returned vector is normalized and newly allocated.
 export function celestialPoleVector(time: Time, location: GeographicPosition = time.location!, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS): Vec3 {
 	const azimuth = location.latitude >= 0 ? 0 : PI
-	const trueAltitude = Math.abs(location.latitude)
-	const altitude = refraction === false ? trueAltitude : refractedAltitude(trueAltitude, refraction)
+	const altitude = polarAlignmentReferenceAltitude(location.latitude, refraction)
 	const [rightAscension, declination] = observedToCirs(azimuth, altitude, time, refraction, location)
 	return vecNormalizeMut(matTransposeMulVec(cirsRotationMatrix(time), eraS2c(rightAscension, declination)))
 }

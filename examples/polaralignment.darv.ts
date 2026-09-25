@@ -5,6 +5,7 @@ import { COARSE_DARV_EXPOSURE_PRESET, estimateDarvExposure } from '../src/observ
 import { analyzeDarvImage } from '../src/observation/alignment/polaralignment.darv.analysis'
 import { solveDarvPolarError } from '../src/observation/alignment/polaralignment.darv.solve'
 import { DarvMatrixTransform } from '../src/observation/alignment/polaralignment.darv.transform'
+import { convertPolarAlignmentAltitudeError } from '../src/observation/alignment/polaralignment.util'
 
 // Run with bun run examples/polaralignment.darv.ts. This offline example renders two exposures;
 // real applications supply captured Image objects, actual timing and the current sky transform.
@@ -54,10 +55,12 @@ for (const [hourAngle, separation] of [
 }
 
 const solution = solveDarvPolarError(observations)
-if (solution.status === 'ok') console.info('Polar errors (arcmin)', { azimuth: toArcmin(solution.azimuthError), altitude: toArcmin(solution.altitudeError), conditionNumber: solution.conditionNumber })
-else console.info('Joint solution inconclusive', solution.reason)
+if (solution.status === 'ok') {
+	const displayedAltitudeError = convertPolarAlignmentAltitudeError(solution.altitudeError, latitude)
+	console.info('Polar errors (arcmin)', { azimuth: toArcmin(solution.azimuthError), altitude: toArcmin(solution.altitudeError), displayedAltitude: toArcmin(displayedAltitudeError), conditionNumber: solution.conditionNumber })
+} else console.info('Joint solution inconclusive', solution.reason)
 
-// Errors refer to the geometric pole, with the three-point alignment signs. For a refracted target,
-// subtract sign(latitude) × pole-refraction from altitudeError (use +1 at zero latitude).
+// The solver remains geometric. displayedAltitude uses the default three-point atmosphere;
+// pass explicit from/to refraction parameters (or false for geometric) to convert either way.
 // Equal-time images without a start marker retain unsigned drift and directionUnresolved. A merged
 // retrace returns an unresolvedSeparation upper limit; neither result authorizes a signed adjustment.
