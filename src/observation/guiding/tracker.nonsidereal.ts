@@ -1,20 +1,22 @@
 import type { EquatorialCoordinate } from '../../astronomy/coordinates/coordinate'
 import type { EphemerisInterpolator } from '../../astronomy/ephemeris/interpolation/ephemeris'
-import { timeShift, toJulianDay, tt, type Time } from '../../astronomy/time/time'
+import { timeShift, timeSubtract, Timescale, toJulianDay, tt, type Time } from '../../astronomy/time/time'
 import { DAYSEC, PI, ASEC2RAD } from '../../core/constants'
 import { normalizeAngle, type Angle } from '../../math/units/angle'
+import type { TrackingRateEstimator } from './nonsidereal.rate'
+import type { TrackingRateController } from './nonsidereal.rate.controller'
 import type { GuideTracker, GuideTrackerContext, GuideTrackerFrame, GuideTrackerResult } from './tracker'
 
 // Synchronous non-sidereal contracts and numerical helpers. Positions are equatorial RA/DEC in
 // radians, time validity is inclusive JD TT, angular offsets are local east/north radians, and image
 // offsets are pixels in the same origin and axis directions as GuideTrackerResult.targetOffset.
 
-// Runtime states for a non-sidereal source. `rateDegraded` still permits safe absolute-position
-// offsets; `limitReached` and `faulted` do not.
+// Runtime states for a non-sidereal source. `armed` also waits for a local image fit;
+// `rateDegraded` permits safe absolute-position offsets, while `limitReached` and `faulted` do not.
 export type NonSiderealState = 'disabled' | 'armed' | 'active' | 'rateDegraded' | 'limitReached' | 'faulted'
 
 // Machine-readable reasons for refusing a non-sidereal position or derivative.
-export type NonSiderealFailureCode = 'outsideValidity' | 'invalidPosition' | 'invalidTime' | 'invalidTransform' | 'antipodal' | 'angularLimit' | 'pixelLimit' | 'outOfOrder' | 'providerError' | 'rateUnavailable' | 'rateLimit'
+export type NonSiderealFailureCode = 'outsideValidity' | 'invalidPosition' | 'invalidTime' | 'invalidTransform' | 'antipodal' | 'angularLimit' | 'pixelLimit' | 'outOfOrder' | 'providerError' | 'rateUnavailable' | 'rateLimit' | 'motionUnavailable'
 
 // A synchronous position source. RA is normalized to [0, TAU), DEC is in [-PI/2, PI/2], and the
 // supplied output object is mutated and returned. Providers must not perform I/O or return a Promise.
@@ -25,6 +27,42 @@ export interface NonSiderealEphemeris {
 	readonly validTime?: readonly [number, number]
 	// Optional generation used to invalidate derivative/transform caches after a source update.
 	readonly generation?: number | (() => number)
+}
+
+// Local motion relative to one fixed east/north tangent-plane anchor. Position is fitted directly
+// from observations, never accumulated from earlier rate commands; all components are radians or
+// their per-second derivatives in the same astronomical frame.
+export interface NonSiderealMotion {
+	// Fitted east/north position relative to the provider's fixed anchor, in radians.
+	readonly offset: readonly [Angle, Angle]
+	// Current east/north angular velocity, in radians per second, when resolved.
+	readonly rate?: readonly [Angle, Angle]
+	// Current east/north angular acceleration, in radians per second squared, when resolved.
+	readonly acceleration?: readonly [Angle, Angle]
+	// Relative fit confidence in [0, 1], when provided by the source.
+	readonly confidence?: number
+	// True when the source can no longer support this prediction; the tracker suspends it.
+	readonly stale?: boolean
+}
+
+// Synchronous image-derived motion source. `motion()` returns undefined before convergence or
+// beyond its prediction horizon. `reset()` clears image observations after a target or transform change.
+export interface NonSiderealMotionProvider {
+	// Evaluates one directly fitted local position and its derivatives at astronomical `time`.
+	readonly motion: (time: Time) => NonSiderealMotion | undefined
+	// Clears observations tied to the previous target or camera orientation.
+	readonly reset: () => void
+	// Optional generation that changes when the provider is reset externally.
+	readonly generation?: number | (() => number)
+}
+
+// Ephemeris feed-forward plus image residual feedback; the estimator must contain ephemeris-
+// assisted samples in the same tangent frame. Neither component modifies absolute positions.
+export interface NonSiderealRateFeedback {
+	// Fits observed minus ephemeris east/north offsets at exposure midpoints.
+	readonly estimator: TrackingRateEstimator
+	// Bounds the residual rate added to the ephemeris derivative.
+	readonly controller: TrackingRateController
 }
 
 // A synchronous transformation from a local celestial offset to image pixels. The provider owns
@@ -126,7 +164,7 @@ export interface NonSiderealTrackerDiagnostic {
 	readonly state: NonSiderealState
 	// Stable failure or degraded-quality reason, when applicable.
 	readonly reason?: NonSiderealFailureCode | 'rateUnavailable'
-	// Current absolute position, in RA/DEC radians.
+	// Current ephemeris position, in RA/DEC radians; absent for a local fitted source.
 	readonly position?: EquatorialCoordinate
 	// Current position time in the provider's Time representation.
 	readonly captureTime?: Time
@@ -136,10 +174,20 @@ export interface NonSiderealTrackerDiagnostic {
 	readonly targetOffset?: readonly [number, number]
 	// Angular separation from the anchor, in radians.
 	readonly separation?: Angle
-	// Finite-difference angular rate, in radians per second.
+	// Uncorrected ephemeris derivative or local fitted angular rate, in radians per second.
 	readonly rate?: readonly [Angle, Angle]
-	// Finite-difference angular acceleration, in radians per second squared.
+	// Ephemeris-derived or locally fitted angular acceleration, in radians per second squared.
 	readonly acceleration?: readonly [Angle, Angle]
+	// Effective sky-plane rate after bounded residual feedback, in radians per second.
+	readonly effectiveRate?: readonly [Angle, Angle]
+	// Bounded image residual added to the raw rate, in radians per second.
+	readonly rateCorrection?: readonly [Angle, Angle]
+	// Confidence of the accepted residual feedback, or zero when rejected.
+	readonly rateConfidence?: number
+	// Whether feedback clipping, slew limiting, deadband, or rejection altered the rate.
+	readonly rateLimited?: boolean
+	// Confidence of a local fitted motion source, when supplied.
+	readonly motionConfidence?: number
 	// Step used by the derivative estimate, in seconds.
 	readonly derivativeStep?: number
 	// Age of the derivative sample relative to this frame, in seconds.
@@ -170,7 +218,7 @@ export interface NonSiderealTrackerOptions {
 	readonly geometry?: NonSiderealGeometryOptions
 	// Finite-difference step and validity-window controls.
 	readonly derivative?: NonSiderealDerivativeOptions
-	// Optional maximum angular velocity in radians per second.
+	// Optional maximum raw or feedback-corrected angular velocity in radians per second.
 	readonly maxRate?: Angle
 	// Optional maximum angular acceleration in radians per second squared.
 	readonly maxAcceleration?: Angle
@@ -313,6 +361,10 @@ export function nonSiderealEphemerisFromInterpolator(interpolator: EphemerisInte
 	return new InterpolatedNonSiderealEphemeris(interpolator)
 }
 
+// Captured source position used to turn an absolute ephemeris or fixed-plane local fit into a
+// target-relative image offset without integrating rate commands between frames.
+type NonSiderealAnchor = { readonly kind: 'ephemeris'; readonly time: Time; readonly position: EquatorialCoordinate } | { readonly kind: 'local'; readonly time: Time; readonly offset: readonly [Angle, Angle] }
+
 // Persistent decorator that combines a synchronous non-sidereal target offset with a base image
 // tracker. The base tracker owns detection, identity, staged state, and commit timing.
 // The integration owns arming, state observation, and lock-shift coordination. When used with a
@@ -323,11 +375,15 @@ export function nonSiderealEphemerisFromInterpolator(interpolator: EphemerisInte
 // drift. Frame diagnostics remain in nonSiderealTrackingOf().
 export class NonSiderealTracker implements GuideTracker {
 	#ephemeris?: NonSiderealEphemeris
+	#motionProvider?: NonSiderealMotionProvider
+	#rateFeedback?: NonSiderealRateFeedback
 	#transform?: NonSiderealImageTransform
+	#sourceGeneration?: number
+	#transformGeneration?: number
 	// Calibration validity survives temporal resets and changes only with explicit configuration.
 	#transformInvalidated = false
-	#anchor?: { readonly time: Time; readonly position: EquatorialCoordinate }
-	#lastCapture?: { readonly julianDay: number; readonly monotonic?: number }
+	#anchor?: NonSiderealAnchor
+	#lastCapture?: { readonly time: Time; readonly julianDay: number; readonly monotonic?: number }
 	#failureReason?: NonSiderealFailureCode | 'rateUnavailable'
 	#state: NonSiderealState = 'disabled'
 	#lastResult?: NonSiderealTrackerResult
@@ -348,11 +404,23 @@ export class NonSiderealTracker implements GuideTracker {
 		return this.#lastResult
 	}
 
-	// Configures a synchronous source and image transform, clears the previous anchor, and arms the
-	// decorator. Provider and transform execution begins only after a guided lock exists.
-	arm(ephemeris: NonSiderealEphemeris, transform: NonSiderealImageTransform) {
-		this.#ephemeris = ephemeris
+	// Configures an ephemeris or fitted local motion source with a transform. Optional residual
+	// feedback applies only to ephemeris rates; source evaluation begins after guided lock.
+	arm(source: NonSiderealEphemeris, transform: NonSiderealImageTransform, feedback?: NonSiderealRateFeedback): void
+	arm(source: NonSiderealMotionProvider, transform: NonSiderealImageTransform): void
+	arm(source: NonSiderealEphemeris | NonSiderealMotionProvider, transform: NonSiderealImageTransform, feedback?: NonSiderealRateFeedback) {
+		if ('motion' in source) {
+			this.#motionProvider = source
+			this.#ephemeris = undefined
+		} else {
+			this.#ephemeris = source
+			this.#motionProvider = undefined
+		}
+
+		this.#rateFeedback = this.#ephemeris === undefined ? undefined : feedback
 		this.#transform = transform
+		this.#sourceGeneration = nonSiderealGenerationOf(source)
+		this.#transformGeneration = nonSiderealGenerationOf(transform)
 		this.#transformInvalidated = false
 		this.#anchor = undefined
 		this.#lastCapture = undefined
@@ -361,35 +429,44 @@ export class NonSiderealTracker implements GuideTracker {
 		this.#state = 'armed'
 	}
 
-	// Captures a fresh celestial anchor while preserving the configured source and transform. The
-	// optional position avoids a second provider call when the caller already owns a valid sample.
+	// Captures a fresh ephemeris or local tangent anchor while preserving the source and transform.
+	// Optional `position` avoids an ephemeris call; local sources use their fitted position instead.
+	// Changing an ephemeris anchor clears residual observations in the former tangent frame.
 	// An invalidated calibration remains faulted until a replacement transform is supplied.
 	reanchor(time: Time, position?: EquatorialCoordinate) {
-		if (this.#ephemeris === undefined || this.#transform === undefined) throw new NonSiderealError('providerError', 'non-sidereal tracker is not armed')
-		const snapshot = position === undefined ? this.#positionAt(time) : { ...position }
+		if ((this.#ephemeris === undefined && this.#motionProvider === undefined) || this.#transform === undefined) throw new NonSiderealError('providerError', 'non-sidereal tracker is not armed')
+		const anchor: NonSiderealAnchor = this.#motionProvider === undefined ? { kind: 'ephemeris', time, position: position === undefined ? this.#positionAt(time) : { ...position } } : { kind: 'local', time, offset: this.#motionAt(time).offset }
 		const julianDay = this.#julianDayOf(time)
-		this.#anchor = { time, position: snapshot }
-		this.#lastCapture = { julianDay }
+		// A changed celestial anchor changes the frame of every stored ephemeris residual.
+		if (this.#anchor !== undefined && this.#ephemeris !== undefined) this.#rateFeedback?.estimator.reset()
+		this.#anchor = anchor
+		this.#lastCapture = { time, julianDay }
+		this.#rateFeedback?.controller.reset()
 		this.#failureReason = this.#transformInvalidated ? 'invalidTransform' : undefined
 		this.#state = this.#transformInvalidated ? 'faulted' : 'active'
 	}
 
-	// Clears temporal state and the base tracker while preserving a configured source for the next
-	// visual lock. An invalidated calibration remains faulted; otherwise a configured source returns
-	// to armed and an unconfigured source returns to disabled.
+	// Clears temporal state, image fits, and filtered feedback while preserving the configured source
+	// for the next visual lock. Calibration faults survive until a replacement is supplied.
 	reset() {
 		this.baseTracker.reset()
+		this.#resetImageMotion()
 		this.#anchor = undefined
 		this.#lastCapture = undefined
 		this.#failureReason = this.#transformInvalidated ? 'invalidTransform' : undefined
 		this.#lastResult = undefined
-		this.#state = this.#transformInvalidated ? 'faulted' : this.#ephemeris === undefined || this.#transform === undefined ? 'disabled' : 'armed'
+		this.#state = this.#transformInvalidated ? 'faulted' : (this.#ephemeris === undefined && this.#motionProvider === undefined) || this.#transform === undefined ? 'disabled' : 'armed'
 	}
 
 	// Disables non-sidereal control and removes its source, transform, anchor, and diagnostics.
 	clear() {
+		this.#resetImageMotion()
 		this.#ephemeris = undefined
+		this.#motionProvider = undefined
+		this.#rateFeedback = undefined
 		this.#transform = undefined
+		this.#sourceGeneration = undefined
+		this.#transformGeneration = undefined
 		this.#transformInvalidated = false
 		this.#anchor = undefined
 		this.#lastCapture = undefined
@@ -398,20 +475,31 @@ export class NonSiderealTracker implements GuideTracker {
 		this.#state = 'disabled'
 	}
 
-	// Invalidates a captured calibration transform unless its replacement is supplied, retaining the
-	// celestial anchor but failing closed so a meridian flip cannot reuse stale image signs.
+	// Invalidates old image fits and feedback on a camera transform change. Ephemeris anchors remain
+	// authoritative; local fitted anchors are dropped so old camera signs cannot drive the target.
 	onCalibrationChanged(transform?: NonSiderealImageTransform) {
+		this.#resetImageMotion()
+
+		if (this.#motionProvider !== undefined) {
+			this.#anchor = undefined
+			this.#lastCapture = undefined
+		}
+
 		if (transform !== undefined) {
 			this.#transform = transform
+			this.#transformGeneration = nonSiderealGenerationOf(transform)
 			this.#transformInvalidated = false
+
 			if (this.#state !== 'disabled') {
 				this.#failureReason = undefined
 				this.#state = this.#anchor === undefined ? 'armed' : 'active'
 			}
+
 			return
 		}
 
 		if (this.#state !== 'disabled') {
+			this.#transformGeneration = this.#transform === undefined ? undefined : nonSiderealGenerationOf(this.#transform)
 			this.#transformInvalidated = true
 			this.#failureReason = 'invalidTransform'
 			this.#state = 'faulted'
@@ -434,25 +522,53 @@ export class NonSiderealTracker implements GuideTracker {
 		this.baseTracker.commit?.()
 	}
 
-	// Tracks the base frame first, then adds an absolute-position offset after a guided lock is
-	// established, including lost-lock recovery. Calibration and initial acquisition skip ephemeris
-	// calls; persistent faults suppress measurements until explicit recovery.
+	// Tracks the base frame first, then adds an ephemeris or fitted local offset after guided lock.
+	// Missing local fits leave acquisition armed; stale fitted motion and persistent faults suppress
+	// measurements until reset or reanchor. Pre-lock frames never evaluate the motion source.
 	track(frame: GuideTrackerFrame, context: GuideTrackerContext): NonSiderealTrackerResult {
 		const baseResult = this.baseTracker.track(frame, context)
 		// Keep the disabled and pre-lock paths observationally transparent: existing clients may
 		// retain the exact base result object for overlays and telemetry.
-		if (this.#ephemeris === undefined || this.#transform === undefined) return baseResult as NonSiderealTrackerResult
+		if ((this.#ephemeris === undefined && this.#motionProvider === undefined) || this.#transform === undefined) return baseResult as NonSiderealTrackerResult
 		if (context.phase !== 'guiding' && context.phase !== 'lostLock') return baseResult as NonSiderealTrackerResult
 		if (this.#state === 'faulted' || this.#state === 'limitReached') return this.#failure(baseResult, frame, this.#failureReason ?? 'providerError', 'non-sidereal tracker requires reset, clear, or reanchor after a fault')
 		if (this.#anchor === undefined && (context.phase !== 'guiding' || context.lockEstablished !== true)) return baseResult as NonSiderealTrackerResult
 
-		if (frame.captureTime === undefined) return this.#failure(baseResult, frame, 'invalidTime', 'non-sidereal guiding requires an astronomical capture time')
+		const captureTime = frame.captureTime
+		if (captureTime === undefined) return this.#failure(baseResult, frame, 'invalidTime', 'non-sidereal guiding requires an astronomical capture time')
 
 		let julianDay: number
 		try {
-			julianDay = this.#julianDayOf(frame.captureTime)
+			julianDay = this.#julianDayOf(captureTime)
 		} catch {
 			return this.#failure(baseResult, frame, 'invalidTime', 'non-sidereal capture time is not finite')
+		}
+
+		try {
+			if (nonSiderealGenerationOf(this.#transform) !== this.#transformGeneration) {
+				this.onCalibrationChanged()
+				return this.#failure(baseResult, frame, 'invalidTransform', 'non-sidereal image transform generation changed without a replacement')
+			}
+
+			const source = this.#motionProvider ?? this.#ephemeris
+
+			if (source !== undefined) {
+				const generation = nonSiderealGenerationOf(source)
+
+				if (generation !== this.#sourceGeneration) {
+					this.#sourceGeneration = generation
+					this.#rateFeedback?.estimator.reset()
+					this.#rateFeedback?.controller.reset()
+
+					if (this.#motionProvider !== undefined) {
+						this.#anchor = undefined
+						this.#lastCapture = undefined
+						this.#state = 'armed'
+					}
+				}
+			}
+		} catch (error) {
+			return this.#failure(baseResult, frame, 'providerError', error instanceof Error ? error.message : 'non-sidereal generation check failed')
 		}
 
 		const hasCurrentMonotonic = frame.captureMonotonic !== undefined && Number.isFinite(frame.captureMonotonic)
@@ -462,35 +578,46 @@ export class NonSiderealTracker implements GuideTracker {
 
 		if (this.#anchor === undefined) {
 			try {
-				this.reanchor(frame.captureTime)
+				this.reanchor(captureTime)
 			} catch (error) {
+				if (this.#motionProvider !== undefined && error instanceof NonSiderealError && error.code === 'motionUnavailable') {
+					this.#rememberCapture(frame, julianDay, captureTime)
+					this.#state = 'armed'
+					return this.#publish(this.#result(baseResult, { state: 'armed', reason: 'motionUnavailable', captureTime, frameId: frame.frameId }))
+				}
+
 				return this.#failure(baseResult, frame, error instanceof NonSiderealError ? error.code : 'providerError', error instanceof Error ? error.message : 'non-sidereal anchor failed')
 			}
 
-			this.#rememberCapture(frame, julianDay)
+			this.#rememberCapture(frame, julianDay, captureTime)
 			const baseOffset = baseResult.targetOffset ?? [0, 0]
-			return this.#publish(this.#result(baseResult, { state: 'active', targetOffset: [baseOffset[0], baseOffset[1]], captureTime: frame.captureTime, frameId: frame.frameId }))
+			return this.#publish(this.#result(baseResult, { state: 'active', targetOffset: [baseOffset[0], baseOffset[1]], captureTime, frameId: frame.frameId }))
 		}
 
-		this.#rememberCapture(frame, julianDay)
+		const previousTime = this.#lastCapture?.time ?? captureTime
+		this.#rememberCapture(frame, julianDay, captureTime)
 
-		let position: EquatorialCoordinate
-		try {
-			position = this.#positionAt(frame.captureTime)
-		} catch (error) {
-			return this.#failure(baseResult, frame, error instanceof NonSiderealError ? error.code : 'providerError', error instanceof Error ? error.message : 'non-sidereal position failed')
-		}
-
+		let position: EquatorialCoordinate | undefined
+		let motion: NonSiderealMotion | undefined
 		let angularOffset: NonSiderealAngularOffset
+
 		try {
-			angularOffset = nonSiderealAngularOffset(this.#anchor.position, position, this.options.geometry)
+			if (this.#motionProvider !== undefined) {
+				if (this.#anchor.kind !== 'local') throw new NonSiderealError('providerError', 'local motion anchor is unavailable')
+				motion = this.#motionAt(captureTime)
+				angularOffset = this.#localAngularOffset(this.#anchor.offset, motion.offset)
+			} else {
+				if (this.#anchor.kind !== 'ephemeris') throw new NonSiderealError('providerError', 'ephemeris anchor is unavailable')
+				position = this.#positionAt(captureTime)
+				angularOffset = nonSiderealAngularOffset(this.#anchor.position, position, this.options.geometry)
+			}
 		} catch (error) {
-			return this.#failure(baseResult, frame, error instanceof NonSiderealError ? error.code : 'providerError', error instanceof Error ? error.message : 'non-sidereal angular geometry failed', position)
+			return this.#failure(baseResult, frame, error instanceof NonSiderealError ? error.code : 'providerError', error instanceof Error ? error.message : 'non-sidereal motion failed', position)
 		}
 
 		let targetOffset: readonly [number, number]
 		try {
-			const transformed = this.#transform.offsetToImage([angularOffset.east, angularOffset.north], frame.captureTime, frame)
+			const transformed = this.#transform.offsetToImage([angularOffset.east, angularOffset.north], captureTime, frame)
 			if (transformed === undefined || !Number.isFinite(transformed[0]) || !Number.isFinite(transformed[1])) throw new NonSiderealError('invalidTransform', 'non-sidereal transform returned a non-finite offset')
 			const baseOffset = baseResult.targetOffset ?? [0, 0]
 			targetOffset = [baseOffset[0] + transformed[0], baseOffset[1] + transformed[1]]
@@ -499,8 +626,37 @@ export class NonSiderealTracker implements GuideTracker {
 			return this.#failure(baseResult, frame, error instanceof NonSiderealError ? error.code : 'invalidTransform', error instanceof Error ? error.message : 'non-sidereal transform failed', position, angularOffset)
 		}
 
-		const derivative = estimateNonSiderealDerivative(this.#ephemeris, frame.captureTime, this.options.derivative)
-		if (this.options.maxRate !== undefined && derivative.rate !== undefined && Math.hypot(derivative.rate[0], derivative.rate[1]) > this.options.maxRate) {
+		let derivative: NonSiderealDerivative
+		if (motion !== undefined) {
+			derivative = { available: motion.rate !== undefined, rate: motion.rate, acceleration: motion.acceleration, oneSided: false, reason: motion.rate === undefined ? 'rateUnavailable' : undefined }
+		} else if (this.#ephemeris !== undefined) {
+			derivative = estimateNonSiderealDerivative(this.#ephemeris, captureTime, this.options.derivative)
+		} else {
+			return this.#failure(baseResult, frame, 'providerError', 'non-sidereal motion source is unavailable', position, angularOffset)
+		}
+
+		let effectiveRate = derivative.rate
+		let rateCorrection: readonly [Angle, Angle] | undefined
+		let rateConfidence: number | undefined
+		let rateLimited: boolean | undefined
+		if (this.#rateFeedback !== undefined && derivative.rate !== undefined) {
+			try {
+				const estimated = this.#rateFeedback.estimator.estimate(captureTime)
+				const elapsedSeconds = timeSubtract(captureTime, previousTime, Timescale.TT) * DAYSEC
+				const command = this.#rateFeedback.controller.update(derivative.rate, estimated?.source === 'ephemerisAssisted' ? estimated : undefined, elapsedSeconds)
+				if (command === undefined) return this.#failure(baseResult, frame, 'providerError', 'non-sidereal feedback could not produce a finite rate', position, angularOffset, derivative)
+				effectiveRate = command.rate
+				rateCorrection = command.correction
+				rateConfidence = command.confidence
+				rateLimited = command.limited
+			} catch (error) {
+				return this.#failure(baseResult, frame, 'providerError', error instanceof Error ? error.message : 'non-sidereal feedback failed', position, angularOffset, derivative)
+			}
+		} else if (this.#rateFeedback !== undefined) {
+			this.#rateFeedback.controller.reset()
+		}
+
+		if (this.options.maxRate !== undefined && ((derivative.rate !== undefined && Math.hypot(derivative.rate[0], derivative.rate[1]) > this.options.maxRate) || (effectiveRate !== undefined && Math.hypot(effectiveRate[0], effectiveRate[1]) > this.options.maxRate))) {
 			return this.#failure(baseResult, frame, 'rateLimit', 'non-sidereal angular rate exceeded its configured limit', position, angularOffset, derivative)
 		}
 		if (this.options.maxAcceleration !== undefined && derivative.acceleration !== undefined && Math.hypot(derivative.acceleration[0], derivative.acceleration[1]) > this.options.maxAcceleration) {
@@ -515,13 +671,19 @@ export class NonSiderealTracker implements GuideTracker {
 				state,
 				reason: derivative.available ? undefined : 'rateUnavailable',
 				position,
-				captureTime: frame.captureTime,
+				captureTime,
 				angularOffset: [angularOffset.east, angularOffset.north],
 				targetOffset,
 				separation: angularOffset.separation,
 				rate: derivative.rate,
 				acceleration: derivative.acceleration,
+				effectiveRate,
+				rateCorrection,
+				rateConfidence,
+				rateLimited,
+				motionConfidence: motion?.confidence,
 				derivativeStep: derivative.step,
+				transformGeneration: this.#transformGeneration,
 				frameId: frame.frameId,
 			}),
 		)
@@ -541,6 +703,7 @@ export class NonSiderealTracker implements GuideTracker {
 	// Produces a safe failure result: the visual measurement cannot feed the sideral controller and
 	// no previous target offset is reused after a provider, time, or transform failure.
 	#failure(baseResult: GuideTrackerResult, frame: GuideTrackerFrame, reason: NonSiderealFailureCode | 'rateUnavailable', message: string, position?: EquatorialCoordinate, angularOffset?: NonSiderealAngularOffset, derivative?: NonSiderealDerivative): NonSiderealTrackerResult {
+		this.#rateFeedback?.controller.reset()
 		this.#failureReason = reason
 		this.#state = reason === 'rateUnavailable' ? 'rateDegraded' : reason === 'angularLimit' || reason === 'pixelLimit' ? 'limitReached' : 'faulted'
 		return this.#publish({
@@ -564,6 +727,50 @@ export class NonSiderealTracker implements GuideTracker {
 		})
 	}
 
+	// Clears observations tied to the previous image orientation and filtered residual rate.
+	#resetImageMotion() {
+		this.#motionProvider?.reset()
+		this.#rateFeedback?.estimator.reset()
+		this.#rateFeedback?.controller.reset()
+		const source = this.#motionProvider ?? this.#ephemeris
+		this.#sourceGeneration = source === undefined ? undefined : nonSiderealGenerationOf(source)
+	}
+
+	// Reads one fresh local fit and copies its small tuples; throws a typed failure when unavailable.
+	#motionAt(time: Time): NonSiderealMotion {
+		if (this.#motionProvider === undefined) throw new NonSiderealError('providerError', 'local motion provider is not armed')
+
+		let motion: NonSiderealMotion | undefined
+		try {
+			motion = this.#motionProvider.motion(time)
+		} catch (error) {
+			if (error instanceof NonSiderealError) throw error
+			throw new NonSiderealError('providerError', error instanceof Error ? error.message : 'local motion provider failed')
+		}
+
+		if (motion === undefined || motion.stale) throw new NonSiderealError('motionUnavailable', 'local motion is not fresh or within its prediction horizon')
+		if (!Number.isFinite(motion.offset[0]) || !Number.isFinite(motion.offset[1]) || (motion.rate !== undefined && (!Number.isFinite(motion.rate[0]) || !Number.isFinite(motion.rate[1]))) || (motion.acceleration !== undefined && (!Number.isFinite(motion.acceleration[0]) || !Number.isFinite(motion.acceleration[1]))))
+			throw new NonSiderealError('invalidPosition', 'local motion contains a non-finite component')
+		if (motion.confidence !== undefined && !(motion.confidence >= 0 && motion.confidence <= 1)) throw new NonSiderealError('invalidPosition', 'local motion confidence is outside [0, 1]')
+
+		return {
+			offset: [motion.offset[0], motion.offset[1]],
+			rate: motion.rate === undefined ? undefined : [motion.rate[0], motion.rate[1]],
+			acceleration: motion.acceleration === undefined ? undefined : [motion.acceleration[0], motion.acceleration[1]],
+			confidence: motion.confidence,
+		}
+	}
+
+	// Subtracts two offsets in one fixed local tangent plane and enforces the angular envelope.
+	#localAngularOffset(anchor: readonly [Angle, Angle], current: readonly [Angle, Angle]): NonSiderealAngularOffset {
+		const east = current[0] - anchor[0]
+		const north = current[1] - anchor[1]
+		const separation = Math.hypot(east, north)
+		const maxSeparation = this.options.geometry?.maxAngularSeparation ?? DEFAULT_NONSIDEREAL_MAX_ANGULAR_SEPARATION
+		if (!(maxSeparation > 0 && maxSeparation < PI) || separation > maxSeparation) throw new NonSiderealError('angularLimit', `non-sidereal local separation exceeds ${maxSeparation} radians`)
+		return { east, north, separation }
+	}
+
 	// Evaluates and validates one absolute ephemeris position without retaining provider scratch.
 	#positionAt(time: Time): EquatorialCoordinate {
 		if (this.#ephemeris === undefined) throw new NonSiderealError('providerError', 'non-sidereal tracker is not armed')
@@ -584,9 +791,9 @@ export class NonSiderealTracker implements GuideTracker {
 		return julianDay
 	}
 
-	// Records frame ordering after the current frame has passed the duplicate/out-of-order check.
-	#rememberCapture(frame: GuideTrackerFrame, julianDay: number) {
-		this.#lastCapture = { julianDay, monotonic: frame.captureMonotonic !== undefined && Number.isFinite(frame.captureMonotonic) ? frame.captureMonotonic : undefined }
+	// Records frame ordering and astronomical time after the current frame passes the order check.
+	#rememberCapture(frame: GuideTrackerFrame, julianDay: number, time: Time) {
+		this.#lastCapture = { time, julianDay, monotonic: frame.captureMonotonic !== undefined && Number.isFinite(frame.captureMonotonic) ? frame.captureMonotonic : undefined }
 	}
 }
 

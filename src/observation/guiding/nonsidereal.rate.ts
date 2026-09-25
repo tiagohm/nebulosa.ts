@@ -3,7 +3,7 @@ import { type Time, timeSubtract, Timescale, tt, toJulianDay } from '../../astro
 import { ASEC2RAD, DAYSEC } from '../../core/constants'
 import { medianBySelectionOf } from '../../math/numerical/statistics'
 import type { Angle } from '../../math/units/angle'
-import { nonSiderealAngularOffset } from './tracker.nonsidereal'
+import { nonSiderealAngularOffset, type NonSiderealMotion, type NonSiderealMotionProvider } from './tracker.nonsidereal'
 
 // Image-assisted non-sidereal motion estimation. Sky offsets use the anchor's local east/north
 // tangent plane in radians; rates use radians/second and accelerations use radians/second².
@@ -104,6 +104,7 @@ interface AxisFit {
 export class TrackingRateEstimator {
 	readonly #options: Required<TrackingRateEstimatorOptions>
 	readonly #samples: StoredSample[] = []
+	#generation = 0
 	#ephemerisAssisted?: boolean
 	#lastTime?: Time
 
@@ -126,6 +127,11 @@ export class TrackingRateEstimator {
 			minimumAccelerationSpanSeconds: options?.minimumAccelerationSpanSeconds ?? 120,
 			minimumAccelerationImprovement: options?.minimumAccelerationImprovement ?? 0.2,
 		}
+	}
+
+	// Changes only when observations are cleared, allowing an armed tracker to discard its old anchor.
+	get generation() {
+		return this.#generation
 	}
 
 	// Adds `sample` at its astronomical time and east/north offset. Returns false for non-finite data,
@@ -241,6 +247,34 @@ export class TrackingRateEstimator {
 		this.#samples.length = 0
 		this.#ephemerisAssisted = undefined
 		this.#lastTime = undefined
+		this.#generation++
+	}
+}
+
+// Adapts a fresh ephemeris-free fit to the tracker's local motion contract. The estimator owns the
+// fixed tangent anchor and prediction horizon; `reset()` invalidates fits after target or camera changes.
+export class EstimatorNonSiderealMotionProvider implements NonSiderealMotionProvider {
+	// Creates a source from `estimator`, accepting fits at or above `minimumConfidence` in [0, 1].
+	constructor(
+		readonly estimator: TrackingRateEstimator,
+		readonly minimumConfidence = 0.5,
+	) {}
+
+	// Returns a directly fitted local offset/rate at `time`, or undefined until a fresh fit is supported.
+	motion(time: Time): NonSiderealMotion | undefined {
+		const estimate = this.estimator.estimate(time)
+		if (estimate === undefined || estimate.stale || estimate.source !== 'measured' || estimate.position === undefined || !(estimate.confidence >= this.minimumConfidence)) return undefined
+		return { offset: [estimate.position[0], estimate.position[1]], rate: [estimate.rate[0], estimate.rate[1]], acceleration: estimate.acceleration, confidence: estimate.confidence }
+	}
+
+	// Exposes estimator resets so the tracker can discard a previously captured local anchor.
+	get generation() {
+		return this.estimator.generation
+	}
+
+	// Drops all image observations tied to the previous target or camera transform.
+	reset() {
+		this.estimator.reset()
 	}
 }
 
