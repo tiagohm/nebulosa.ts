@@ -50,7 +50,7 @@ export class TrackingRateController {
 	}
 
 	// Adds a fresh residual `estimate` to the `feedForward` east/north rate over `elapsedSeconds`.
-	// Returns undefined for a non-finite feed-forward rate; absent, stale, or low-confidence estimates clear correction immediately.
+	// Rejected estimates slew the stored correction toward zero; `reset()` clears it immediately. A non-finite feed-forward rate returns undefined.
 	update(feedForward: readonly [Angle, Angle], estimate: TrackingRateEstimate | undefined, elapsedSeconds: number): TrackingRateCommand | undefined {
 		if (!Number.isFinite(feedForward[0]) || !Number.isFinite(feedForward[1])) {
 			this.reset()
@@ -58,25 +58,31 @@ export class TrackingRateController {
 		}
 
 		const usable = estimate !== undefined && !estimate.stale && estimate.confidence >= this.#options.minimumConfidence && estimate.confidence <= 1 && Number.isFinite(estimate.rate[0]) && Number.isFinite(estimate.rate[1])
-		if (!usable || !(elapsedSeconds > 0) || !Number.isFinite(elapsedSeconds)) {
-			const limited = estimate !== undefined || !(elapsedSeconds > 0) || !Number.isFinite(elapsedSeconds)
-			this.#correction = [0, 0]
-			return { rate: [feedForward[0], feedForward[1]], correction: [0, 0], confidence: 0, limited }
+		const confidence = usable ? estimate.confidence : 0
+		if (!(elapsedSeconds > 0) || !Number.isFinite(elapsedSeconds)) {
+			return {
+				rate: [feedForward[0] + this.#correction[0], feedForward[1] + this.#correction[1]],
+				correction: [this.#correction[0], this.#correction[1]],
+				confidence,
+				limited: true,
+			}
 		}
 
-		const desired = estimate.rate
-		const desiredMagnitude = Math.hypot(desired[0], desired[1])
+		let limited = !usable
+		let target: readonly [number, number] = [0, 0]
+		if (usable) {
+			const desired = estimate.rate
+			const desiredMagnitude = Math.hypot(desired[0], desired[1])
+			target = desired
 
-		let limited = false
-		let target: readonly [number, number] = desired
-
-		if (desiredMagnitude <= this.#options.deadband) {
-			target = [0, 0]
-			limited = desiredMagnitude > 0
-		} else if (desiredMagnitude > this.#options.maximumCorrection) {
-			const ratio = this.#options.maximumCorrection / desiredMagnitude
-			target = [desired[0] * ratio, desired[1] * ratio]
-			limited = true
+			if (desiredMagnitude <= this.#options.deadband) {
+				target = [0, 0]
+				limited ||= desiredMagnitude > 0
+			} else if (desiredMagnitude > this.#options.maximumCorrection) {
+				const ratio = this.#options.maximumCorrection / desiredMagnitude
+				target = [desired[0] * ratio, desired[1] * ratio]
+				limited = true
+			}
 		}
 
 		const tau = this.#options.smoothingTimeConstantSeconds
@@ -99,7 +105,7 @@ export class TrackingRateController {
 		return {
 			rate: [feedForward[0] + nextEast, feedForward[1] + nextNorth],
 			correction: [this.#correction[0], this.#correction[1]],
-			confidence: estimate.confidence,
+			confidence,
 			limited,
 		}
 	}

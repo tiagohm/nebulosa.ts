@@ -312,14 +312,16 @@ export interface TrackingStreakMeasurement {
 	readonly axisPixels: readonly [number, number]
 	// Exposure duration in seconds.
 	readonly exposureSeconds: number
+	// Whether the measured trail belongs to the moving target or to a background star.
+	readonly role: 'target' | 'backgroundStar'
 	// Direction along the measured axis; omitted for the inherently ambiguous single-image case.
 	readonly direction?: -1 | 1
 	// Relative confidence in [0, 1].
 	readonly confidence?: number
 }
 
-// Converts the streak displacement vector divided by exposure duration into east/north radians/second.
-// `time` is its exposure midpoint; unsigned or invalid streak evidence returns undefined.
+// Converts the observed streak displacement into target east/north radians/second.
+// Background-star drift is negated after the image transform; unsigned or invalid evidence returns undefined.
 export function trackingRateFromStreak(time: Time, streak: TrackingStreakMeasurement, transform: TrackingImageTransform): TrackingRateEstimate | undefined {
 	if (streak.direction === undefined || !(streak.exposureSeconds > 0) || !Number.isFinite(streak.exposureSeconds) || !Number.isFinite(streak.axisPixels[0]) || !Number.isFinite(streak.axisPixels[1])) return undefined
 	if (streak.confidence !== undefined && !(streak.confidence >= 0 && streak.confidence <= 1)) return undefined
@@ -328,7 +330,8 @@ export function trackingRateFromStreak(time: Time, streak: TrackingStreakMeasure
 	const sky = transform.pixelDeltaToSky(signed, time)
 	if (sky === undefined || !Number.isFinite(sky[0]) || !Number.isFinite(sky[1])) return undefined
 
-	const rate = [sky[0] / streak.exposureSeconds, sky[1] / streak.exposureSeconds] as const
+	const targetDirection = streak.role === 'target' ? 1 : -1
+	const rate = [(targetDirection * sky[0]) / streak.exposureSeconds, (targetDirection * sky[1]) / streak.exposureSeconds] as const
 	if (!Number.isFinite(rate[0]) || !Number.isFinite(rate[1])) return undefined
 
 	return {
@@ -356,7 +359,7 @@ interface FitSample {
 // Fits `axis` around `center` in scaled TT seconds. Optional `quadratic` adds acceleration; `threshold` is radians.
 function fitAxis(samples: readonly StoredSample[], axis: 0 | 1, center: Time, scale: number, quadratic: boolean, threshold: number): AxisFit | undefined {
 	const count = quadratic ? 3 : 2
-	let uncertaintyScale = 1
+	let uncertaintyScale = Infinity
 
 	for (const sample of samples) {
 		const uncertainty = sample.uncertainty?.[axis]
@@ -365,7 +368,7 @@ function fitAxis(samples: readonly StoredSample[], axis: 0 | 1, center: Time, sc
 
 	const points: FitSample[] = samples.map((sample) => {
 		const sigma = sample.uncertainty?.[axis]
-		const relativeUncertainty = uncertaintyScale / (sigma ?? 1)
+		const relativeUncertainty = sigma === undefined ? 1 : uncertaintyScale / sigma
 		return { x: (timeSubtract(sample.time, center, Timescale.TT) * DAYSEC) / scale, value: sample.offset[axis], weight: sample.confidence * relativeUncertainty * relativeUncertainty }
 	})
 
