@@ -1,3 +1,4 @@
+import { polarAlignmentPointingModel } from '../../astronomy/coordinates/pointing'
 import { pixelScale } from '../../astronomy/formulas'
 import { SIDEREAL_RATE } from '../../core/constants'
 import type { Angle } from '../../math/units/angle'
@@ -119,9 +120,26 @@ export interface DarvExposureEstimate {
 // Which is the geometric reason drift alignment asks for a star near the meridian to set azimuth and
 // one near the eastern or western horizon to set altitude.
 function computeDarvGeometryFactor(mode: DarvExposureMode, latitude: Angle, hourAngle: Angle) {
-	if (mode === 'azimuth') return Math.abs(Math.cos(latitude) * Math.cos(hourAngle))
-	if (mode === 'altitude') return Math.abs(Math.sin(hourAngle))
+	const factors = darvGeometryFactors(latitude, hourAngle)
+	if (mode === 'azimuth') return Math.abs(factors[0])
+	if (mode === 'altitude') return Math.abs(factors[1])
 	throw new TypeError('DARV exposure mode must be azimuth or altitude')
+}
+
+// Signed [azimuth, altitude] coefficients converting polar errors in radians to stellar north drift
+// divided by the sidereal rate. Latitude and west-positive hour angle are radians, evaluated at the
+// exposure midpoint. The shared pointing model gives BORESIGHT Δδ = MA sin H + ME cos H;
+// a fixed star moves oppositely in the image, hence -(MA cos H - ME sin H). Its polar coefficients
+// already encode the ThreePointPolarAlignmentResult convention, including southern altitude sign.
+// No refraction is included: altitude errors refer to the geometric pole. Valid for small errors
+// (tested through one degree at mid-latitudes, with up to one arcminute linearization error), short
+// exposures, and no DEC guiding or atmospheric drift. Accuracy degrades near geographic poles.
+export function darvGeometryFactors(latitude: Angle, hourAngle: Angle): readonly [number, number] {
+	const azimuth = polarAlignmentPointingModel(1, 0, latitude)
+	const altitude = polarAlignmentPointingModel(0, 1, latitude)
+	const cos = Math.cos(hourAngle)
+	const sin = Math.sin(hourAngle)
+	return [-(azimuth.polarAzimuthError * cos - azimuth.polarAltitudeError * sin), -(altitude.polarAzimuthError * cos - altitude.polarAltitudeError * sin)]
 }
 
 // Usable RA trail speed magnitude (arcsec/s) = sidereal rate × guide multiple × |cos(declination)|.
