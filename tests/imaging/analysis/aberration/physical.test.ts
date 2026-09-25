@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { analyzePhysicalCurvature, analyzePhysicalTilt, criticalFocusZone, estimateBackfocusCorrection, measureFocusFieldOffset } from '../../../../src/imaging/analysis/aberration/physical'
+import { analyzePhysicalCurvature, analyzePhysicalTilt, criticalFocusZone, estimateBackfocusCorrection, estimatePhysicalSensorTilt, measureFocusFieldOffset } from '../../../../src/imaging/analysis/aberration/physical'
 
 // Converts normalized focus-plane slopes with explicit physical scale and preserves displacement sign.
 test('converts focus-plane gradients into physical tilt', () => {
@@ -18,6 +18,39 @@ test('maps pure physical tilt gradients to their rotation axes', () => {
 	expect(alongX.y).toBeCloseTo(-Math.atan(0.1), 12)
 	expect(alongY.x).toBeCloseTo(Math.atan(0.05), 12)
 	expect(alongY.y).toBe(-0)
+})
+
+test.each([0.2, -0.2])('propagates correlated gradient covariance with displacement %p', (focusDisplacement) => {
+	const tilt = estimatePhysicalSensorTilt({ gradientX: 3, gradientY: -4, effect: 7 }, 101, 201, { pixelSize: 0.01, focusDisplacement }, { x: 0.2, y: 0.3, covarianceXY: 0.04 })
+	// Physical spans are 1 and 2; |sx| = 0.6, |sy| = 0.4, with a deliberately non-diagonal covariance.
+	const derivativeX = 0.1 / 1.16
+	const derivativeY = -0.2 / 1.36
+	const magnitude = Math.sqrt(0.52)
+	const derivativeAX = 0.12 / (magnitude * 1.52)
+	const derivativeAY = -0.04 / (magnitude * 1.52)
+	expect(tilt.uncertaintyX).toBeCloseTo(derivativeX * 0.3, 14)
+	expect(tilt.uncertaintyY).toBeCloseTo(-derivativeY * 0.2, 14)
+	expect(tilt.covarianceXY).toBeCloseTo(derivativeX * derivativeY * 0.04, 14)
+	expect(tilt.uncertaintyMagnitude).toBeCloseTo(Math.sqrt(derivativeAX ** 2 * 0.04 + derivativeAY ** 2 * 0.09 + 2 * derivativeAX * derivativeAY * 0.04), 14)
+	expect(tilt.x).toBeCloseTo(Math.atan(-2 * focusDisplacement), 14)
+	expect(tilt.y).toBeCloseTo(Math.atan(-3 * focusDisplacement), 14)
+})
+
+test.each([0, 1e-12])('keeps component covariance but omits magnitude uncertainty near zero tilt %p', (gradient) => {
+	const tilt = estimatePhysicalSensorTilt({ gradientX: gradient, gradientY: -gradient, effect: 2 * gradient }, 101, 201, { pixelSize: 0.01, focusDisplacement: 0.1 }, { x: 0.2, y: 0.3, covarianceXY: 0.04 })
+	expect(tilt.uncertaintyX).toBeCloseTo(0.015, 14)
+	expect(tilt.uncertaintyY).toBeCloseTo(0.02, 14)
+	expect(tilt.covarianceXY).toBeCloseTo(-0.0002, 14)
+	expect(tilt.uncertaintyMagnitude).toBeUndefined()
+})
+
+test('does not invent physical uncertainty without gradient covariance', () => {
+	const tilt = estimatePhysicalSensorTilt({ gradientX: 3, gradientY: -4, effect: 7 }, 101, 201, { pixelSize: 0.01, focusDisplacement: 0.1 })
+	expect(tilt.x).toBeCloseTo(Math.atan(-0.2), 14)
+	expect(tilt.uncertaintyX).toBeUndefined()
+	expect(tilt.uncertaintyY).toBeUndefined()
+	expect(tilt.covarianceXY).toBeUndefined()
+	expect(tilt.uncertaintyMagnitude).toBeUndefined()
 })
 
 // Converts anisotropic normalized curvature independently along physical sensor axes.

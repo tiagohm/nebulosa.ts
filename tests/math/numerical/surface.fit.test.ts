@@ -85,6 +85,114 @@ test('rejects a gross robust outlier', () => {
 	expect(result.warnings).toContainEqual({ code: 'robustOutliers', values: { rejectedCount: 1 } })
 })
 
+test('publishes caller-weight covariance on robustly retained support', () => {
+	// Radially symmetric weights make ax/ay orthogonal to the intercept and to each other.
+	// Curved residuals induce fractional IRLS weights; a central outlier is excluded without breaking symmetry.
+	const samples = grid().map(({ u, v }) => ({ u, v, focus: u === 0 && v === 0 ? 1000 : 100 + 4 * u - 2 * v + 0.8 * (u * u + v * v), weight: 1 + 4 * (u * u + v * v) }))
+	const result = fitFocusSurface(samples, { model: 'plane' })
+	expect(result.success).toBeTrue()
+	if (!result.success) return
+	expect(result.rejectedIndices).toEqual([12])
+	let weightedSse = 0
+	let informationX = 0
+	let informationY = 0
+	for (let i = 0; i < samples.length; i++) {
+		if (!result.used[i]) continue
+		const sample = samples[i]
+		weightedSse += sample.weight * result.residuals[i] ** 2
+		informationX += sample.weight * sample.u * sample.u
+		informationY += sample.weight * sample.v * sample.v
+	}
+	const variance = weightedSse / result.degreesOfFreedom
+	expect(variance).toBeGreaterThan(0)
+	expect(result.covariance?.[4]).toBeCloseTo(variance / informationX, 12)
+	expect(result.covariance?.[8]).toBeCloseTo(variance / informationY, 12)
+	expect(result.covariance?.[5]).toBeCloseTo(0, 12)
+})
+
+test.each(['plane', 'radialQuadratic', 'quadratic'] as const)('preserves absolute measurement uncertainties in an exact %s fit', (model) => {
+	for (const uncertainty of [1, 2]) {
+		const samples = grid().map((point) => {
+			const u = point.u * 0.8
+			const v = point.v * 0.8
+			return { u, v, focus: 100 + 10 * u - 4 * v, uncertainty }
+		})
+		const result = fitFocusSurface(samples, { model })
+		expect(result.success).toBeTrue()
+		if (!result.success) continue
+		expect(result.used.every(Boolean)).toBeTrue()
+		expect(result.rms).toBeLessThan(1e-10)
+		// Symmetry decouples ax/ay from all other columns; sum(u²) = sum(v²) = 2.
+		const columns = model === 'plane' ? 3 : model === 'radialQuadratic' ? 4 : 6
+		expect(result.covariance?.[columns + 1]).toBeCloseTo(0.5 * uncertainty ** 2, 12)
+		expect(result.covariance?.[2 * columns + 2]).toBeCloseTo(0.5 * uncertainty ** 2, 12)
+		expect(Math.sqrt(result.covariance![columns + 1])).toBeCloseTo(Math.SQRT1_2 * uncertainty, 12)
+	}
+})
+
+test.each([0.01, 100])('keeps the absolute covariance floor with residual amplitude %p', (amplitude) => {
+	const samples = grid().map((point) => {
+		const u = point.u * 0.8
+		const v = point.v * 0.8
+		return { u, v, focus: 100 + 10 * u - 4 * v + amplitude * (u * u + v * v), uncertainty: 1 }
+	})
+	const result = fitFocusSurface(samples, { model: 'plane', sigmaClip: 1e6 })
+	expect(result.success).toBeTrue()
+	if (!result.success) return
+	expect(result.used.every(Boolean)).toBeTrue()
+	const reducedChiSquared = result.residuals.reduce((sum, residual) => sum + residual * residual, 0) / result.degreesOfFreedom
+	if (amplitude < 1) expect(reducedChiSquared).toBeLessThan(1)
+	else expect(reducedChiSquared).toBeGreaterThan(1)
+	expect(result.covariance?.[4]).toBeCloseTo(0.5 * Math.max(1, reducedChiSquared), 10)
+	expect(result.covariance?.[8]).toBeCloseTo(0.5 * Math.max(1, reducedChiSquared), 10)
+})
+
+test('explicit relative weights override absolute uncertainties', () => {
+	const samples = grid().map(({ u, v }) => ({ u, v, focus: 100 + 10 * u - 4 * v, uncertainty: 2, weight: 1 }))
+	const result = fitFocusSurface(samples, { model: 'plane' })
+	expect(result.success).toBeTrue()
+	if (!result.success) return
+	expect(result.covariance).toBeDefined()
+	expect(result.covariance?.[4]).toBeCloseTo(0, 20)
+	expect(result.covariance?.[8]).toBeCloseTo(0, 20)
+})
+
+test.each([{}, { weight: 1 }, { uncertainty: 2, weight: 1 }])('omits covariance when retained uncertainty scales are mixed with %p', (relativeSample) => {
+	const samples: FocusSurfaceSample[] = grid().map(({ u, v }) => ({ u, v, focus: 100 + 10 * u - 4 * v, uncertainty: 1 }))
+	samples[12] = { u: 0, v: 0, focus: 100, ...relativeSample }
+	const result = fitFocusSurface(samples, { model: 'plane' })
+	expect(result.success).toBeTrue()
+	if (!result.success) return
+	expect(result.coefficients.ax).toBeCloseTo(10, 10)
+	expect(result.covariance).toBeUndefined()
+	expect(result.warnings).toContainEqual({ code: 'uncertaintyUnavailable' })
+})
+
+test('only retained samples determine absolute covariance support', () => {
+	const samples: FocusSurfaceSample[] = grid().map(({ u, v }) => ({ u, v, focus: 100 + 10 * u - 4 * v, uncertainty: 1 }))
+	samples[12] = { u: 0, v: 0, focus: 1000, weight: 1 }
+	const result = fitFocusSurface(samples, { model: 'plane' })
+	expect(result.success).toBeTrue()
+	if (!result.success) return
+	expect(result.rejectedIndices).toEqual([12])
+	// Removing the central sample leaves sum(u²) = sum(v²) = 25/8 unchanged.
+	expect(result.covariance?.[4]).toBeCloseTo(8 / 25, 12)
+	expect(result.covariance?.[8]).toBeCloseTo(8 / 25, 12)
+})
+
+test('preserves relative-weight covariance under a common weight rescaling', () => {
+	const fits = [1, 100].map((weight) =>
+		fitFocusSurface(
+			grid().map(({ u, v }) => ({ u, v, focus: 100 + 10 * u - 4 * v + 0.1 * (u * u + v * v), weight })),
+			{ model: 'plane', sigmaClip: 1e6 },
+		),
+	)
+	expect(fits.every((fit) => fit.success)).toBeTrue()
+	if (!fits[0].success || !fits[1].success) return
+	expect(fits[0].covariance?.[4]).toBeGreaterThan(0)
+	for (let i = 0; i < 9; i++) expect(fits[0].covariance?.[i]).toBeCloseTo(fits[1].covariance![i], 12)
+})
+
 // Fails explicitly instead of publishing a regularized-looking plane for collinear sensor samples.
 test('rejects rank-deficient surface geometry', () => {
 	const samples: FocusSurfaceSample[] = [

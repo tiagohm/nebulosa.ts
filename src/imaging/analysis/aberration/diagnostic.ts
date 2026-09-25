@@ -1,12 +1,12 @@
 import { PI, PIOVERTWO } from '../../../core/constants'
 import { clamp } from '../../../math/numerical/math'
 import { fDistributionSurvival, pearsonCorrelationOf } from '../../../math/numerical/statistics'
-import type { FocusCurvatureAnalysis, FocusPlaneAnalysis, FocusSurfaceFitResult, FocusSurfaceModel, FocusSurfaceSample } from '../../../math/numerical/surface.fit'
+import type { FocusCurvatureAnalysis, FocusPlaneAnalysis, FocusSurfaceFitResult } from '../../../math/numerical/surface.fit'
 import type { Angle } from '../../../math/units/angle'
 import type { FocusFieldOffset } from './physical'
 import type { AberrationFinding, AberrationInspectionQuality, AberrationLimitationCode, AberrationRegionResult, AberrationStar } from './types'
 
-// Conservative evidence-based single-frame aberration findings without mechanical conclusions.
+// Conservative single-frame and covariance-qualified focus-scan findings without mechanical source attribution.
 
 // Minimum oriented samples required for directional quick findings.
 const MINIMUM_ORIENTATION_SAMPLES = 5
@@ -85,7 +85,9 @@ export function diagnoseSingleFrameAberration(stars: readonly AberrationStar[], 
 }
 
 // Evaluates uncertainty-qualified patterns from a completed regional focus scan.
-export function diagnoseFocusScan(surface: FocusSurfaceFitResult | undefined, plane: FocusPlaneAnalysis | undefined, curvature: FocusCurvatureAnalysis | undefined, fieldOffset: FocusFieldOffset | undefined, backfocusCalibrated: boolean = false): AberrationFinding[] {
+// Surface and derivatives must describe the same fit; absent support returns inconclusive findings.
+// Field offset uses focuser units; backfocusCalibrated permits spacing findings, and physicalTiltAvailable removes the scale limitation.
+export function diagnoseFocusScan(surface: FocusSurfaceFitResult | undefined, plane: FocusPlaneAnalysis | undefined, curvature: FocusCurvatureAnalysis | undefined, fieldOffset: FocusFieldOffset | undefined, backfocusCalibrated: boolean = false, physicalTiltAvailable: boolean = false): AberrationFinding[] {
 	if (!surface?.success || plane === undefined || curvature === undefined) {
 		return [{ kind: 'inconclusive', likelihood: 1, confidence: 0, evidence: [], limitations: ['modelUncertaintyUnavailable'] }]
 	}
@@ -96,7 +98,7 @@ export function diagnoseFocusScan(surface: FocusSurfaceFitResult | undefined, pl
 	const findings: AberrationFinding[] = []
 	const columns = surface.model === 'plane' ? 3 : surface.model === 'radialQuadratic' ? 4 : 6
 	const degreesOfFreedom = surface.degreesOfFreedom
-	const covariance = retainedCovariance(surface, columns)
+	const covariance = surface.covariance
 	if (!(degreesOfFreedom > 0) || covariance === undefined || covariance.length !== columns * columns) {
 		return [{ kind: 'inconclusive', likelihood: 1, confidence: surface.confidence, evidence: [{ code: 'surfaceConditionNumber', value: surface.conditionNumber, confidence: surface.confidence }], limitations: ['modelUncertaintyUnavailable'] }]
 	}
@@ -114,7 +116,7 @@ export function diagnoseFocusScan(surface: FocusSurfaceFitResult | undefined, pl
 					{ code: 'planeEffect', value: plane.effect, confidence: surface.confidence },
 					{ code: 'planePValue', value: pValue, reference: SIGNIFICANCE_ALPHA, confidence: surface.confidence },
 				],
-				limitations: ['missingPhysicalScale'],
+				limitations: physicalTiltAvailable ? [] : ['missingPhysicalScale'],
 			})
 		}
 	}
@@ -233,87 +235,6 @@ function zeroSubmatrixWald(values: readonly number[]): number {
 	for (let i = 0; i < values.length; i++) maxAbs = Math.max(maxAbs, Math.abs(values[i]))
 	// Roundoff-sized coefficients on an exact interpolant are not a physical signal.
 	return maxAbs > 1e-8 * Math.max(1, maxAbs) ? Number.POSITIVE_INFINITY : 0
-}
-
-// OLS covariance on robustly retained samples using caller weights, not fractional IRLS weights.
-function retainedCovariance(surface: FocusSurfaceFitResult & { readonly success: true }, columns: number): Float64Array | undefined {
-	if (!(surface.degreesOfFreedom > 0)) return undefined
-	const normal = new Float64Array(columns * columns)
-	let weightedSse = 0
-	for (let row = 0; row < surface.samples.length; row++) {
-		if (!surface.used[row]) continue
-		const sample = surface.samples[row]
-		const weight = retainedSampleWeight(sample)
-		const residual = surface.residuals[row]
-		weightedSse += weight * residual * residual
-		const design = retainedDesignRow(sample.u, sample.v, surface.model)
-		for (let i = 0; i < columns; i++) {
-			const left = design[i] * weight
-			for (let j = 0; j < columns; j++) normal[i * columns + j] += left * design[j]
-		}
-	}
-	const inverse = invertSquareMatrix(normal, columns)
-	if (inverse === undefined) return undefined
-	const variance = weightedSse / surface.degreesOfFreedom
-	if (!Number.isFinite(variance) || variance < 0) return undefined
-	for (let i = 0; i < inverse.length; i++) inverse[i] *= variance
-	return inverse
-}
-
-// Caller statistical weight used to retain a sample after robust rejection.
-function retainedSampleWeight(sample: FocusSurfaceSample): number {
-	return sample.weight ?? (sample.uncertainty === undefined ? 1 : 1 / (sample.uncertainty * sample.uncertainty))
-}
-
-// Design row matching the focus-surface model column order used by the published covariance.
-function retainedDesignRow(u: number, v: number, model: FocusSurfaceModel): Float64Array {
-	return model === 'plane' ? new Float64Array([1, u, v]) : model === 'radialQuadratic' ? new Float64Array([1, u, v, u * u + v * v]) : new Float64Array([1, u, v, u * u, u * v, v * v])
-}
-
-// Inverts a small dense square matrix by partial-pivot Gauss-Jordan elimination.
-function invertSquareMatrix(source: Readonly<Float64Array>, size: number): Float64Array | undefined {
-	const width = size * 2
-	const augmented = new Float64Array(size * width)
-	for (let row = 0; row < size; row++) {
-		for (let column = 0; column < size; column++) augmented[row * width + column] = source[row * size + column]
-		augmented[row * width + size + row] = 1
-	}
-
-	for (let column = 0; column < size; column++) {
-		let pivot = column
-		let maximum = Math.abs(augmented[pivot * width + column])
-		for (let row = column + 1; row < size; row++) {
-			const candidate = Math.abs(augmented[row * width + column])
-			if (candidate > maximum) {
-				maximum = candidate
-				pivot = row
-			}
-		}
-		if (!(maximum > Number.EPSILON) || !Number.isFinite(maximum)) return undefined
-
-		if (pivot !== column) {
-			for (let index = 0; index < width; index++) {
-				const temporary = augmented[column * width + index]
-				augmented[column * width + index] = augmented[pivot * width + index]
-				augmented[pivot * width + index] = temporary
-			}
-		}
-
-		const divisor = augmented[column * width + column]
-		for (let index = 0; index < width; index++) augmented[column * width + index] /= divisor
-		for (let row = 0; row < size; row++) {
-			if (row === column) continue
-			const factor = augmented[row * width + column]
-			if (factor === 0) continue
-			for (let index = 0; index < width; index++) augmented[row * width + index] -= factor * augmented[column * width + index]
-		}
-	}
-
-	const inverse = new Float64Array(size * size)
-	for (let row = 0; row < size; row++) {
-		for (let column = 0; column < size; column++) inverse[row * size + column] = augmented[row * width + size + column]
-	}
-	return inverse
 }
 
 // Estimates a conservative curvature-effect uncertainty from quadratic coefficient covariance.
