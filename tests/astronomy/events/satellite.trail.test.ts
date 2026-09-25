@@ -5,8 +5,8 @@ import { earthObserverEphemerisPath, sgp4EphemerisPath } from '../../../src/astr
 import { ephemerisAt, equatorialPosition } from '../../../src/astronomy/ephemeris/position'
 import { predictSatelliteTrails, sensorTrails, type SatelliteTrailPredictionOptions, type SensorField } from '../../../src/astronomy/events/satellite.trail'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
-import { parseTLE, recordFromTLE } from '../../../src/astronomy/orbits/propagation/sgp4'
-import { type Time, Timescale, timeShift, timeSubtract, tt, utc } from '../../../src/astronomy/time/time'
+import { parseTLE, recordFromSgp4Elements, recordFromTLE, type SatRec } from '../../../src/astronomy/orbits/propagation/sgp4'
+import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS, tt, utc } from '../../../src/astronomy/time/time'
 import { ARCSEC_PER_RADIAN, DAYSEC, DEG2RAD, PIOVERTWO, TAU } from '../../../src/core/constants'
 
 // Fixed ISS fixture shared with satellite.test.ts; WGS84 site, longitude east-positive, sea level.
@@ -103,6 +103,58 @@ test('ISS topocentric direction agrees with a frozen Skyfield reference', () => 
 	const trail = predict(3332, 3332.01)[0]
 	expect(angularDistance(trail.entry.rightAscension, trail.entry.declination, 2.821619372202283, -0.8419514025782707) * ARCSEC_PER_RADIAN).toBeLessThan(3)
 })
+
+// Reuse the Vallado SDP4 TLE and synthetic low-inclination resonant elements from sgp4.test.ts.
+// The Vallado case is nonresonant; the second case also exercises dspace's persistent integrator.
+for (const [name, prepared, resonance] of [
+	['Vallado deep-space', recordFromTLE(parseTLE('1 11801U          80230.29629788  .01431103  00000-0  14311-1        ', '2 11801  46.7916 230.4354 7318036  47.4722  10.4117  2.28537848      ')), 0],
+	['half-day resonant deep-space', recordFromSgp4Elements({ satelliteNumber: '99999', epoch: timeYMDHMS(2023, 8, 19, 12, 25, 27.896736, Timescale.UTC), eccentricity: 0.72, inclination: 0.1, rightAscensionOfAscendingNode: 0, argumentOfPerigee: 4.7, meanAnomaly: 0.2, meanMotion: 0.00873 }), 2],
+] as const) {
+	test(`${name} adaptive trails agree with independent propagation and preserve the record`, () => {
+		const record = { ...prepared }
+		const epoch = tt(record.epoch)
+		const observer = earthObserverEphemerisPath(SITE, customEphemerisEndpoint('deep-space-test-site'))
+		const directionAt = (time: Time) => equatorialPosition(ephemerisAt(relativeEphemerisPath(sgp4EphemerisPath({ ...prepared }), observer), time))
+		// Straddle the 1440-minute integrator boundary: evaluating stop before midpoint/left children
+		// forces dspace to revisit times before its cached atime. Warm the caller's record even later.
+		const middle = timeShift(epoch, 1)
+		const start = timeShift(middle, -120 / DAYSEC)
+		const stop = timeShift(middle, 120 / DAYSEC)
+		const [ra, dec] = directionAt(middle)
+		expect(record.method).toBe('d')
+		expect(record.irez).toBe(resonance)
+		sgp4EphemerisPath(record).stateAt(timeShift(epoch, 7))
+		if (resonance !== 0) expect(record.atime).toBeGreaterThan(1440)
+		const snapshot = { ...record }
+		const run = (satrec: SatRec) => predictSatelliteTrails(satrec, SITE, ra, dec, FIELD, start, stop, { maxStep: 30 })
+		const trails = run(record)
+		expect(trails).toHaveLength(1)
+		expect(run(record)).toEqual(trails)
+		expect(run({ ...prepared })).toEqual(trails)
+		expect(record).toEqual(snapshot)
+
+		// A uniform reference has no shared propagation state: every instant gets a fresh SatRec.
+		const track = Array.from({ length: 961 }, (_, index) => {
+			const time = index * 0.25
+			const [rightAscension, declination] = directionAt(timeShift(start, time / DAYSEC))
+			return { time, rightAscension, declination }
+		})
+		const reference = sensorTrails(ra, dec, FIELD, track)
+		expect(reference).toHaveLength(1)
+		const trail = trails[0]
+		expect(timeSubtract(trail.entry.time, start) * DAYSEC).toBeGreaterThan(0)
+		expect(timeSubtract(trail.entry.time, middle)).toBeLessThan(0)
+		expect(timeSubtract(trail.exit.time, middle)).toBeGreaterThan(0)
+		expect(timeSubtract(stop, trail.exit.time)).toBeGreaterThan(0)
+		for (const endpoint of ['entry', 'exit'] as const) {
+			const point = trail[endpoint]
+			const [pointRA, pointDec] = directionAt(point.time)
+			expect(Math.abs(timeSubtract(point.time, start) * DAYSEC - reference[0][endpoint].time)).toBeLessThan(0.02)
+			expect(angularDistance(pointRA, pointDec, point.rightAscension, point.declination) * ARCSEC_PER_RADIAN).toBeLessThan(0.1)
+		}
+		expect(Math.abs(trail.length - reference[0].length) * ARCSEC_PER_RADIAN).toBeLessThan(0.1)
+	})
+}
 
 test('displaced field misses and empty or reversed intervals return no visits', () => {
 	const [ra, dec] = coordinates(3332)
