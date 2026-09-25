@@ -8,6 +8,7 @@ import { fitAberrationFocusCurve, type AberrationFocusCurveOptions, type Aberrat
 import { estimatePhysicalSensorTilt, measureFocusFieldOffset, type AberrationPhysicalScale, type BackfocusCalibration, type FocusFieldOffset, type FocusGradientUncertainty, type PhysicalSensorTiltEstimate } from './physical'
 import { assignAberrationRegion } from './region'
 import { inspectAberration, inspectAberrationProfiles, type InspectAberrationOptions } from './single'
+import { buildFocusSurfaceMap, type FocusSurfaceMap, type FocusSurfaceMapOptions } from './surface'
 import type { AberrationFinding, AberrationInspectionResult, AberrationRegionDefinition, AberrationRegionOptions, AberrationWarning } from './types'
 
 // Completed focus-scan analysis from sensor regions and optional registered stars, with quantitative best-focus tilt.
@@ -126,6 +127,8 @@ export interface AberrationFocusScanOptions {
 	readonly curve?: AberrationFocusCurveOptions
 	// Surface options for successful minima; defaults to a full quadratic to separate tilt from curvature.
 	readonly surface?: FocusSurfaceFitOptions
+	// Optional sampled focus-surface map resolution; omitted by default to avoid map allocation.
+	readonly map?: FocusSurfaceMapOptions
 	// Optional effective pixel pitch and signed focal-plane displacement in one length unit for physical tilt.
 	// Both pixelSize and focusDisplacement are required for conversion; invalid complete scale throws RangeError.
 	readonly physicalScale?: AberrationPhysicalScale
@@ -205,6 +208,8 @@ export interface AberrationFocusScanResult {
 	// Sources are never combined: regional aggregates and their constituent tracks are correlated measurements.
 	// Sample sourceIndex addresses regions first, then tracks at an offset of regions.length.
 	readonly surface?: FocusSurfaceFitResult
+	// Model-sampled map only when requested and the fitted surface succeeds.
+	readonly map?: FocusSurfaceMap
 	// Planar derivative when a focus surface succeeds.
 	readonly plane?: FocusPlaneAnalysis
 	// Quantitative linear tilt for a successful surface, even when covariance or physical calibration is unavailable.
@@ -301,6 +306,7 @@ export function inspectAberrationFocusScan(frames: readonly AberrationFocusFrame
 	// Let the fitter enforce model rank, minimum support, conditioning, and robust acceptance before choosing a source.
 	const trackSurface = trackSamples.length > 0 ? fitFocusSurface(trackSamples, options.surface) : undefined
 	const surface = trackSurface?.success ? trackSurface : regionSamples.length > 0 ? fitFocusSurface(regionSamples, options.surface) : trackSurface
+	const map = options.map !== undefined && surface?.success ? buildFocusSurfaceMap(surface, options.map) : undefined
 	const plane = surface?.success ? analyzeFocusPlane(surface.coefficients) : undefined
 	const curvature = surface?.success ? analyzeFocusCurvature(surface.coefficients) : undefined
 	const gradientUncertainty = surface?.success ? focusGradientUncertainty(surface) : undefined
@@ -318,7 +324,7 @@ export function inspectAberrationFocusScan(frames: readonly AberrationFocusFrame
 	const breakdown = confidenceBreakdown(frameResults, regions, surface, metric, tracking?.quality)
 	const confidence = breakdown.total
 
-	return { width, height, frames: frameResults, regions, tracks: tracking?.tracks, surface, plane, tilt, curvature, fieldOffset, findings, quality: { inputFrameCount: frames.length, usedFrameCount, rejectedFrameCount: frames.length - usedFrameCount, confidence, breakdown, warnings } }
+	return { width, height, frames: frameResults, regions, tracks: tracking?.tracks, surface, map, plane, tilt, curvature, fieldOffset, findings, quality: { inputFrameCount: frames.length, usedFrameCount, rejectedFrameCount: frames.length - usedFrameCount, confidence, breakdown, warnings } }
 }
 
 // Extracts the ax/ay block from a successful surface's row-major model covariance without mutating it.
