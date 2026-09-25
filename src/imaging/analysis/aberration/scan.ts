@@ -201,7 +201,9 @@ export interface AberrationFocusScanResult {
 	readonly regions: readonly AberrationRegionFocusResult[]
 	// Registered per-star curves when tracking was requested.
 	readonly tracks?: readonly AberrationStarTrack[]
-	// Surface fit from successful regional minima when enough regions support it.
+	// Surface fit from successful track minima when they support the requested model; otherwise from regional minima only.
+	// Sources are never combined: regional aggregates and their constituent tracks are correlated measurements.
+	// Sample sourceIndex addresses regions first, then tracks at an offset of regions.length.
 	readonly surface?: FocusSurfaceFitResult
 	// Planar derivative when a focus surface succeeds.
 	readonly plane?: FocusPlaneAnalysis
@@ -283,19 +285,22 @@ export function inspectAberrationFocusScan(frames: readonly AberrationFocusFrame
 		}
 	}
 	const regions = regionalCurves(frameResults, metric, options.curve)
-	const surfaceSamples = []
+	const regionSamples = []
 	for (let i = 0; i < regions.length; i++) {
 		const region = regions[i]
 		if (region.bestFocus === undefined) continue
-		surfaceSamples.push({ u: region.u, v: region.v, focus: region.bestFocus, uncertainty: region.uncertainty !== undefined && region.uncertainty > 0 ? region.uncertainty : undefined, sourceIndex: i })
+		regionSamples.push({ u: region.u, v: region.v, focus: region.bestFocus, uncertainty: region.uncertainty !== undefined && region.uncertainty > 0 ? region.uncertainty : undefined, sourceIndex: i })
 	}
+	const trackSamples = []
 	if (tracking)
 		for (let i = 0; i < tracking.tracks.length; i++) {
 			const track = tracking.tracks[i]
 			if (!track.curve?.success) continue
-			surfaceSamples.push({ u: track.u, v: track.v, focus: track.curve.minimum.x, uncertainty: track.curve.uncertainty !== undefined && track.curve.uncertainty > 0 ? track.curve.uncertainty : undefined, sourceIndex: regions.length + i })
+			trackSamples.push({ u: track.u, v: track.v, focus: track.curve.minimum.x, uncertainty: track.curve.uncertainty !== undefined && track.curve.uncertainty > 0 ? track.curve.uncertainty : undefined, sourceIndex: regions.length + i })
 		}
-	const surface = surfaceSamples.length > 0 ? fitFocusSurface(surfaceSamples, options.surface) : undefined
+	// Let the fitter enforce model rank, minimum support, conditioning, and robust acceptance before choosing a source.
+	const trackSurface = trackSamples.length > 0 ? fitFocusSurface(trackSamples, options.surface) : undefined
+	const surface = trackSurface?.success ? trackSurface : regionSamples.length > 0 ? fitFocusSurface(regionSamples, options.surface) : trackSurface
 	const plane = surface?.success ? analyzeFocusPlane(surface.coefficients) : undefined
 	const curvature = surface?.success ? analyzeFocusCurvature(surface.coefficients) : undefined
 	const gradientUncertainty = surface?.success ? focusGradientUncertainty(surface) : undefined

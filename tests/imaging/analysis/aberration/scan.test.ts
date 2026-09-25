@@ -4,7 +4,7 @@ import type { AberrationPhysicalScale } from '../../../../src/imaging/analysis/a
 import { inspectAberrationFocusScan, type AberrationFocusFrame } from '../../../../src/imaging/analysis/aberration/scan'
 import type { StarProfile } from '../../../../src/imaging/stars/profile'
 import { gaussian, mulberry32 } from '../../../../src/math/numerical/random'
-import type { FocusSurfaceCoefficients } from '../../../../src/math/numerical/surface.fit'
+import { fitFocusSurface, type FocusSurfaceCoefficients } from '../../../../src/math/numerical/surface.fit'
 
 // Creates a valid synthetic moments profile at a normalized sensor location.
 function profile(u: number, v: number, value: number): StarProfile {
@@ -459,6 +459,98 @@ test('builds registered per-star tracks and curves', () => {
 	expect(result.quality.breakdown.registrationQuality).toBeDefined()
 	expect(result.tracks).toHaveLength(6)
 	expect(result.tracks?.every((track) => track.points.length === 7 && track.curve?.success)).toBeTrue()
+})
+
+test.each(['plane', 'quadratic'] as const)('uses independent track minima only for the %s surface', (model) => {
+	const frames = [80, 90, 95, 100, 105, 110, 120].map((position) => {
+		const frame = trackingFrame(position)
+		// Finite curve residuals avoid zero/roundoff-only uncertainties in the otherwise exact synthetic scan.
+		return Object.assign({}, frame, { profiles: frame.profiles.map((star) => Object.assign({}, star, { hfd: star.hfd! + 0.001 * Math.cos(position) })) })
+	})
+	const options = {
+		inspection: { minimumStars: 1, minimumStarsPerRegion: 1 },
+		regions: { layout: 'grid', columns: 3, rows: 3 },
+		curve: { sigmaClip: 1e6 },
+		surface: { model, sigmaClip: 1e6 },
+		physicalScale: { pixelSize: 0.004, focusDisplacement: 0.001 },
+	} as const
+	const regional = inspectAberrationFocusScan(frames, options)
+	const tracked = inspectAberrationFocusScan(frames, { ...options, tracking: { minimumFrames: 5, maximumResidual: 0.5, registration: { acceptance: { minInliers: 3, maxRmsError: 0.5 } } } })
+	expect(regional.regions.filter((region) => region.curve.success)).toHaveLength(6)
+	expect(tracked.tracks).toHaveLength(6)
+	expect(regional.surface).toMatchObject({ success: true })
+	expect(tracked.surface?.success).toBeTrue()
+	if (!regional.surface?.success || !tracked.surface?.success) return
+	expect(tracked.surface.samples).toHaveLength(6)
+	expect(tracked.surface.degreesOfFreedom).toBe(regional.surface.degreesOfFreedom)
+	expect(tracked.surface.samples.every((sample) => sample.sourceIndex! >= tracked.regions.length)).toBeTrue()
+	const expected = fitFocusSurface(
+		tracked.tracks!.map((track) => {
+			if (!track.curve?.success) throw new Error('expected a successful track curve')
+			return { u: track.u, v: track.v, focus: track.curve.minimum.x, uncertainty: track.curve.uncertainty! > 0 ? track.curve.uncertainty : undefined }
+		}),
+		options.surface,
+	)
+	expect(expected.success).toBeTrue()
+	if (!expected.success) return
+	expect(tracked.surface.covariance).toEqual(expected.covariance)
+	expect(tracked.surface.coefficients).toEqual(expected.coefficients)
+	if (model === 'plane') {
+		expect(expected.covariance).toBeDefined()
+		expect(tracked.tilt?.gradientUncertainty?.x).toBeCloseTo(Math.sqrt(expected.covariance![4]), 12)
+		expect(tracked.tilt?.gradientUncertainty?.y).toBeCloseTo(Math.sqrt(expected.covariance![8]), 12)
+	}
+	if (model === 'quadratic') {
+		for (const result of [regional, tracked]) {
+			expect(result.surface?.success && result.surface.degreesOfFreedom).toBe(0)
+			expect(result.surface?.success && result.surface.covariance).toBeUndefined()
+			expect(result.tilt?.significant).toBeFalse()
+			expect(result.tilt?.gradientUncertainty).toBeUndefined()
+			expect(result.tilt?.physical?.uncertaintyX).toBeUndefined()
+			expect(result.tilt?.physical?.uncertaintyY).toBeUndefined()
+			expect(result.tilt?.physical?.uncertaintyMagnitude).toBeUndefined()
+		}
+	}
+})
+
+test('falls back to regional minima when no tracks meet minimum frame support', () => {
+	const frames = [80, 90, 95, 100, 105, 110, 120].map(trackingFrame)
+	const options = { inspection: { minimumStars: 1, minimumStarsPerRegion: 1 }, regions: { layout: 'grid', columns: 3, rows: 3 }, surface: { model: 'plane' } } as const
+	const regional = inspectAberrationFocusScan(frames, options)
+	const tracked = inspectAberrationFocusScan(frames, { ...options, tracking: { minimumFrames: 8, registration: { acceptance: { minInliers: 3, maxRmsError: 0.5 } } } })
+	expect(tracked.tracks).toHaveLength(0)
+	expect(tracked.surface).toEqual(regional.surface)
+	expect(tracked.fieldOffset).toEqual(regional.fieldOffset)
+})
+
+test('falls back to regions when nonempty tracks cannot support the requested quadratic', () => {
+	const frames = [80, 90, 95, 100, 105, 110, 120].map((position) => {
+		const frame = trackingFrame(position)
+		return Object.assign({}, frame, { profiles: frame.profiles.map((star, index) => Object.assign({}, star, { flux: index < 5 ? star.flux : undefined, hfd: star.hfd! + 0.001 * Math.cos(position) })) })
+	})
+	const options = { inspection: { minimumStars: 1, minimumStarsPerRegion: 1 }, regions: { layout: 'grid', columns: 3, rows: 3 }, curve: { sigmaClip: 1e6 }, surface: { model: 'quadratic', sigmaClip: 1e6 } } as const
+	const regional = inspectAberrationFocusScan(frames, options)
+	const tracked = inspectAberrationFocusScan(frames, { ...options, tracking: { minimumFrames: 5, registration: { matchStarsConfig: { minStars: 3, minInliers: 3 }, acceptance: { minInliers: 3, maxRmsError: 0.5 } } } })
+	expect(tracked.quality.usedFrameCount).toBe(7)
+	expect(tracked.tracks).toHaveLength(5)
+	expect(tracked.tracks?.every((track) => track.curve?.success)).toBeTrue()
+	expect(regional.surface?.success).toBeTrue()
+	expect(tracked.surface).toEqual(regional.surface)
+	expect(tracked.surface?.samples).toHaveLength(6)
+	expect(tracked.tilt?.significant).toBeFalse()
+})
+
+test('does not pool insufficient sources to satisfy minimum surface support', () => {
+	const result = inspectAberrationFocusScan([80, 90, 95, 100, 105, 110, 120].map(trackingFrame), {
+		inspection: { minimumStars: 1, minimumStarsPerRegion: 1 },
+		regions: { layout: 'grid', columns: 3, rows: 3 },
+		tracking: { minimumFrames: 5, registration: { acceptance: { minInliers: 3, maxRmsError: 0.5 } } },
+		surface: { model: 'plane', minimumSamples: 7 },
+	})
+	expect(result.tracks).toHaveLength(6)
+	expect(result.surface).toMatchObject({ success: false, reason: 'insufficientSamples' })
+	expect(result.surface?.samples).toHaveLength(6)
+	expect(result.tilt).toBeUndefined()
 })
 
 // Keeps FWHM-only profiles eligible for registration when HFD was not measured.
