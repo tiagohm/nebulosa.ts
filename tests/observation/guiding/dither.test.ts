@@ -177,6 +177,41 @@ describe('mode', () => {
 
 		expect(step(generator, 1)).toEqual([0, 1])
 	})
+
+	test('keeps consuming the injected random stream after strategy replacement', () => {
+		const { random, count } = scriptedRandom([0, 0.25, 0.5, 0.75])
+		const generator = new DitherGenerator({ random })
+
+		expect(generator.next(2)).toEqual({ rightAscension: -2, declination: -1 })
+		generator.setMode('spiral')
+		generator.setMode('random')
+
+		expect(generator.next(2)).toEqual({ rightAscension: 0, declination: 1 })
+		expect(count()).toBe(4)
+	})
+
+	test('does not retain inactive golden or grid sequence state', () => {
+		for (const mode of ['golden', 'grid'] as const) {
+			const generator = new DitherGenerator({ mode })
+			const first = generator.next(2)
+			generator.next(2)
+			generator.setMode('random')
+			generator.setMode(mode)
+
+			expect(generator.next(2)).toEqual(first)
+		}
+	})
+
+	test('replaces and restarts every stateful strategy when its mode is selected again', () => {
+		for (const mode of ['spiral', 'golden', 'grid'] as const) {
+			const generator = new DitherGenerator({ mode })
+			const first = generator.next(3)
+			generator.next(3)
+			generator.setMode(mode)
+
+			expect(generator.next(3)).toEqual(first)
+		}
+	})
 })
 
 describe('golden and grid', () => {
