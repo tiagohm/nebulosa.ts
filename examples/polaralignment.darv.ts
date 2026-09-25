@@ -38,7 +38,7 @@ for (const [hourAngle, separation] of [
 		image,
 		exposure,
 		legDuration,
-		firstDirection: 'east', // Stellar displacement; a westward mount slew moves the star east.
+		firstDirection: 'west', // Commanded mount slew; the star moves east in the image's sky plane.
 		starts: [start], // Capture metadata or a previous frame identifies which outer endpoint is first.
 		transform,
 		geometry: { latitude, hourAngle, mode: hourAngle === 0 ? 'azimuth' : 'altitude' },

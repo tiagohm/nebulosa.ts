@@ -57,7 +57,7 @@ function capture(drift = 0.15, outbound = 100, inbound = 100, dwell = 0, angle =
 		outboundDuration: outbound,
 		returnDuration: inbound,
 		turnaroundDuration: dwell,
-		firstDirection: 'east',
+		firstDirection: 'west',
 		starts: [start],
 		transform: new DarvMatrixTransform([cos * SCALE, sin * SCALE, -sin * parity * SCALE, cos * parity * SCALE]),
 		streaks: [segment(start, turn), segment(returnStart, end)],
@@ -120,6 +120,8 @@ describe('DARV trail measurements', () => {
 		expect(result.status).toBe('partial')
 		expect(result.trails[0].driftMagnitude).toBe(0)
 		expect(result.trails[0].uncertainty).toBeGreaterThan(0)
+		expect(result.trails[0].start).toEqual(input.starts![0])
+		expect(result.trails[0].turn).toEqual(input.streaks![0].end)
 		expect(result.drift).toBeUndefined()
 		expect(result.diagnostics).toContain('unresolvedSeparation')
 	})
@@ -172,14 +174,16 @@ describe('DARV trail measurements', () => {
 		expect(analyzeDarvImage({ ...capture(), streaks: [] }).diagnostics).toContain('noStreaks')
 	})
 
-	test('westbound outbound motion and reversed detector endpoint order preserve celestial sign', () => {
-		const input = capture(-0.15)
-		const reflect = (point: Readonly<Point>) => ({ x: 300 - point.x, y: point.y })
-		const streaks = input.streaks!.map((streak) => segment(reflect(streak.end), reflect(streak.start)))
-		const result = analyzeDarvImage({ ...input, streaks, starts: input.starts!.map(reflect), firstDirection: 'west' })
-		expect(result.status).toBe('ok')
-		expect(result.drift!).toBeCloseTo(-0.15 * SCALE, 13)
-	})
+	for (const parity of [-1, 1]) {
+		test(`eastward mount command gives westward stellar motion with parity ${parity}`, () => {
+			const input = capture(-0.15, 100, 100, 0, 0, parity)
+			const reflect = (point: Readonly<Point>) => ({ x: 300 - point.x, y: point.y })
+			const streaks = input.streaks!.map((streak) => segment(reflect(streak.end), reflect(streak.start)))
+			const result = analyzeDarvImage({ ...input, streaks, starts: input.starts!.map(reflect), firstDirection: 'east' })
+			expect(result.status).toBe('ok')
+			expect(result.drift!).toBeCloseTo(-0.15 * SCALE, 13)
+		})
+	}
 
 	test('component conversion is available only for signed, sensitive geometry', () => {
 		const input = { ...capture(), geometry: { latitude: 0.5, hourAngle: 0, mode: 'azimuth' as const } }
@@ -397,7 +401,7 @@ describe('DARV image extraction', () => {
 		const end = { x: 40, y: 120 }
 		renderSyntheticStreak(frame, { start, end: turn, width: 2, intensity: 0.4 })
 		renderSyntheticStreak(frame, { start: turn, end, width: 2, intensity: 0.4 })
-		const result = analyzeDarvImage({ image: frame, exposure: 200, legDuration: 100, firstDirection: 'east', starts: [start], transform: new DarvMatrixTransform([SCALE, 0, 0, SCALE]) })
+		const result = analyzeDarvImage({ image: frame, exposure: 200, legDuration: 100, firstDirection: 'west', starts: [start], transform: new DarvMatrixTransform([SCALE, 0, 0, SCALE]) })
 		expect(result.status).toBe('ok')
 		expect(result.trails).toHaveLength(1)
 		expect(Math.abs(result.drift! / (0.25 * SCALE) - 1)).toBeLessThan(0.05)
@@ -465,5 +469,5 @@ function physicalCapture(azimuth: number, altitude: number, latitude: number, ho
 		state = (1664525 * state + 1013904223) >>> 0
 		frame.raw[i] += (state / 2 ** 32 - 0.5) * 0.003
 	}
-	return { image: frame, exposure, legDuration: leg, starts: [start], firstDirection: 'east', transform: new DarvMatrixTransform([cos * scale, sin * scale, -sin * parity * scale, cos * parity * scale]), detection: { maxWidth: 6, minLength: 50 } }
+	return { image: frame, exposure, legDuration: leg, starts: [start], firstDirection: 'west', transform: new DarvMatrixTransform([cos * scale, sin * scale, -sin * parity * scale, cos * parity * scale]), detection: { maxWidth: 6, minLength: 50 } }
 }

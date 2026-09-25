@@ -23,8 +23,8 @@ const MIN_LEG_LENGTH = 12
 // Minimum accepted measured detection SNR when the generic detector resolves background noise.
 const MIN_SNR = 5
 
-// Direction of the outbound STAR displacement on the image's oriented sky, not a motor command.
-// A mount slew towards east moves a fixed star west; callers must make that conversion explicitly.
+// Commanded outbound RA slew direction of the mount. The analyzer converts it to the opposite
+// apparent stellar displacement: an eastward mount slew moves a fixed star west in the sky plane.
 export type DarvRaDirection = 'east' | 'west'
 
 // Reasons for a partial or inconclusive reduction; useful trails can accompany diagnostics.
@@ -111,7 +111,7 @@ export interface DarvAnalysisInput {
 	readonly returnDuration?: number
 	// Actual stationary-RA turnaround duration, seconds; defaults to exposure minus both legs.
 	readonly turnaroundDuration?: number
-	// First stellar RA direction; together with a transform identifies the turn side, but equal-time
+	// First commanded mount RA direction; with a transform identifies the turn side, but equal-time
 	// exposures still need a start marker to distinguish the two close outer endpoints.
 	readonly firstDirection?: DarvRaDirection
 	// Exposure-start positions from capture metadata or a previous frame, in source pixels. Each
@@ -322,7 +322,7 @@ function measureDarvPair(first: Streak, second: Streak, input: Readonly<DarvAnal
 	let far2 = second.start
 
 	if (transform && input.firstDirection) {
-		const sign = input.firstDirection === 'east' ? 1 : -1
+		const sign = input.firstDirection === 'east' ? -1 : 1
 		if (transform.imageOffsetToSky(near1.x - far1.x, near1.y - far1.y)[0] * sign < 0) [near1, far1] = [far1, near1]
 		if (transform.imageOffsetToSky(near2.x - far2.x, near2.y - far2.y)[0] * sign < 0) [near2, far2] = [far2, near2]
 	} else {
@@ -578,7 +578,7 @@ function measureUnresolvedRetrace(streak: Streak, input: Readonly<DarvAnalysisIn
 	const y = transform.imageOffsetToSky(0, streak.width)
 	const resolution = Math.hypot(x[1], y[1])
 	if (Math.abs(offset[1]) > resolution) return undefined
-	const reverse = input.firstDirection && offset[0] * (input.firstDirection === 'east' ? 1 : -1) < 0
+	const reverse = input.firstDirection && offset[0] * (input.firstDirection === 'east' ? -1 : 1) < 0
 	const start = reverse ? streak.end : streak.start
 	const turn = reverse ? streak.start : streak.end
 
