@@ -117,7 +117,8 @@ export interface DarvAnalysisInput {
 	// Exposure-start positions from capture metadata or a previous frame, in source pixels. Each
 	// marker must distinguish one outer endpoint within max(3 px, twice its FWHM).
 	readonly starts?: readonly Readonly<Point>[]
-	// Current oriented angular transform. Without one, only unsigned pixel drift is published.
+	// Current oriented angular transform, evaluated locally at each trail. Unavailable local
+	// mappings retain that trail's unsigned pixel drift without affecting other trails.
 	readonly transform?: DarvImageTransform
 	// Precomputed generic detections; skips detection and uses their existing robust fits unchanged.
 	readonly streaks?: readonly Streak[]
@@ -136,7 +137,8 @@ export interface DarvImageAnalysisResult {
 	readonly trails: readonly DarvTrailMeasurement[]
 	// Signed north drift in radians/second, from usable, time-oriented trails only.
 	readonly drift?: number
-	// Robust unsigned aggregate in driftUnit, available without temporal orientation.
+	// Robust unsigned aggregate in driftUnit, available without temporal orientation. Uses angular
+	// trails when any are usable; otherwise pixel trails. Different units are never combined.
 	readonly driftMagnitude?: number
 	// Units of driftMagnitude; signed drift and driftScatter are always radians/second.
 	readonly driftUnit: 'radiansPerSecond' | 'pixelsPerSecond'
@@ -184,11 +186,6 @@ export function analyzeDarvImage(input: Readonly<DarvAnalysisInput>): DarvImageA
 	const trails: DarvTrailMeasurement[] = []
 	const timing = resolveDarvTiming(input)
 	if (!timing) return { status: 'inconclusive', trails, driftUnit: input.transform ? 'radiansPerSecond' : 'pixelsPerSecond', inliers: 0, confidence: 0, diagnostics: ['invalidTiming'] }
-
-	if (input.transform && !localDarvTransform(input.transform, { x: (input.image.metadata.width - 1) / 2, y: (input.image.metadata.height - 1) / 2 })) {
-		diagnostics.add('geometryDegenerate')
-		input = { ...input, transform: undefined }
-	}
 
 	if (!input.transform) diagnostics.add('missingAngularTransform')
 
@@ -259,10 +256,12 @@ export function analyzeDarvImage(input: Readonly<DarvAnalysisInput>): DarvImageA
 	}
 
 	const usable = trails.filter((trail) => !trail.clipped && !trail.unresolved)
+	const angular = usable.filter((trail) => trail.driftUnit === 'radiansPerSecond')
 	const signed = usable.filter((trail) => trail.drift !== undefined)
 	const aggregate = aggregateDarvTrails(signed, true)
-	const unsigned = aggregateDarvTrails(usable, false)
-	if (aggregate.count < signed.length || unsigned.count < usable.length) diagnostics.add('outlierTrails')
+	const unsignedTrails = angular.length > 0 ? angular : usable
+	const unsigned = aggregateDarvTrails(unsignedTrails, false)
+	if (aggregate.count < signed.length || unsigned.count < unsignedTrails.length) diagnostics.add('outlierTrails')
 	const component = aggregate.mean === undefined || !input.geometry ? undefined : estimateDarvPolarErrorComponent({ ...input.geometry, drift: aggregate.mean }, input.geometry.mode)
 	if (component?.status === 'inconclusive') diagnostics.add('geometryDegenerate')
 
@@ -271,7 +270,7 @@ export function analyzeDarvImage(input: Readonly<DarvAnalysisInput>): DarvImageA
 		trails,
 		drift: aggregate.mean,
 		driftMagnitude: unsigned.mean,
-		driftUnit: input.transform ? 'radiansPerSecond' : 'pixelsPerSecond',
+		driftUnit: unsignedTrails[0]?.driftUnit ?? trails[0]?.driftUnit ?? (input.transform ? 'radiansPerSecond' : 'pixelsPerSecond'),
 		driftScatter: aggregate.scatter,
 		inliers: aggregate.count,
 		confidence: aggregate.confidence,
@@ -313,7 +312,7 @@ function measureDarvPair(first: Streak, second: Streak, input: Readonly<DarvAnal
 
 	if (input.transform && transform === undefined) {
 		diagnostics.add('geometryDegenerate')
-		return undefined
+		diagnostics.add('missingAngularTransform')
 	}
 
 	let near1 = first.end

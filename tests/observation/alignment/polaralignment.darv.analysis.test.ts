@@ -11,10 +11,21 @@ import { arcmin, arcsec, deg } from '../../../src/math/units/angle'
 import { darvGeometryFactors } from '../../../src/observation/alignment/polaralignment.darv'
 import { analyzeDarvImage, type DarvAnalysisInput } from '../../../src/observation/alignment/polaralignment.darv.analysis'
 import { estimateDarvPolarErrorComponent, solveDarvPolarError } from '../../../src/observation/alignment/polaralignment.darv.solve'
-import { DarvCalibrationTransform, DarvMatrixTransform, DarvWcsTransform } from '../../../src/observation/alignment/polaralignment.darv.transform'
+import { DarvCalibrationTransform, type DarvImageTransform, DarvMatrixTransform, DarvWcsTransform } from '../../../src/observation/alignment/polaralignment.darv.transform'
 import { applyMountAdjustment } from '../../../src/observation/alignment/polaralignment.util'
 
 const SCALE = arcsec(1)
+
+class RegionalTransform implements DarvImageTransform {
+	constructor(
+		readonly boundary: number,
+		readonly below = true,
+	) {}
+
+	imageOffsetToSky(dx: number, dy: number, origin?: Readonly<Point>): readonly [number, number] | undefined {
+		return origin && origin.y >= this.boundary === this.below ? [dx * SCALE, dy * SCALE] : undefined
+	}
+}
 
 function image(width = 256, height = 192): Image {
 	return { raw: new Float32Array(width * height).fill(0.1), header: {}, metadata: { width, height, channels: 1, stride: width, pixelCount: width * height, strideInBytes: width * 4, pixelSizeInBytes: 4, bitpix: -32, bayer: undefined } }
@@ -137,6 +148,50 @@ describe('DARV trail measurements', () => {
 		expect(result.driftUnit).toBe('pixelsPerSecond')
 		expect(result.diagnostics).toContain('missingAngularTransform')
 	})
+
+	test('a locally unavailable transform retains pixel geometry even when the frame center is valid', () => {
+		const result = analyzeDarvImage({ ...capture(), transform: new RegionalTransform(100) })
+		expect(result.status).toBe('partial')
+		expect(result.trails).toHaveLength(1)
+		expect(result.trails[0].outbound.length).toBeCloseTo(Math.hypot(100, 15), 10)
+		expect(result.trails[0].closure).toEqual([0, 30])
+		expect(result.trails[0].driftUnit).toBe('pixelsPerSecond')
+		expect(result.driftMagnitude!).toBeCloseTo(0.15, 10)
+		expect(result.driftUnit).toBe('pixelsPerSecond')
+		expect(result.drift).toBeUndefined()
+		expect(result.diagnostics).toContain('geometryDegenerate')
+		expect(result.diagnostics).toContain('missingAngularTransform')
+	})
+
+	test('a valid local transform is used even when the frame center is unavailable', () => {
+		const result = analyzeDarvImage({ ...capture(), transform: new RegionalTransform(100, false) })
+		expect(result.status).toBe('ok')
+		expect(result.drift!).toBeCloseTo(0.15 * SCALE, 13)
+		expect(result.driftUnit).toBe('radiansPerSecond')
+		expect(result.diagnostics).toEqual([])
+	})
+
+	for (const oriented of [false, true]) {
+		test(`mixed local transform availability never mixes drift units, oriented ${oriented}`, () => {
+			const pixel = capture(0.25)
+			const angular = capture(0.15)
+			const shift = (point: Readonly<Point>) => ({ x: point.x, y: point.y + 150 })
+			const result = analyzeDarvImage({
+				...pixel,
+				starts: oriented ? [...pixel.starts!, ...angular.starts!.map(shift)] : undefined,
+				streaks: [...pixel.streaks!, ...angular.streaks!.map((streak) => segment(shift(streak.start), shift(streak.end)))],
+				transform: new RegionalTransform(150),
+			})
+			expect(result.trails).toHaveLength(2)
+			expect(result.trails.map((trail) => trail.driftUnit)).toEqual(['pixelsPerSecond', 'radiansPerSecond'])
+			expect(result.driftMagnitude!).toBeCloseTo(0.15 * SCALE, 13)
+			expect(result.driftUnit).toBe('radiansPerSecond')
+			expect(result.inliers).toBe(oriented ? 1 : 0)
+			if (oriented) expect(result.drift!).toBeCloseTo(0.15 * SCALE, 13)
+			else expect(result.drift).toBeUndefined()
+			expect(result.diagnostics).not.toContain('outlierTrails')
+		})
+	}
 
 	test('perfect retrace is retained with a resolution limit instead of a signed zero', () => {
 		const input = capture(0)
