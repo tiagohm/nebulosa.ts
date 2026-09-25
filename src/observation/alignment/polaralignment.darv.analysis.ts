@@ -146,7 +146,9 @@ export interface DarvImageAnalysisResult {
 	readonly driftScatter?: number
 	// Number of trails contributing to the signed aggregate.
 	readonly inliers: number
-	// Mean capped fit quality multiplied by the usable-trail fraction, in [0, 1].
+	// Fit quality in [0, 1] from the signed aggregate when available, otherwise the unsigned one.
+	// Mean capped quality of retained trails times their fraction of the selected aggregate's input;
+	// zero when no usable measurement remains. Missing direction alone does not reduce fit quality.
 	readonly confidence: number
 	// Structured reasons for unavailable or rejected information.
 	readonly diagnostics: readonly DarvAnalysisFailureReason[]
@@ -273,7 +275,7 @@ export function analyzeDarvImage(input: Readonly<DarvAnalysisInput>): DarvImageA
 		driftUnit: unsignedTrails[0]?.driftUnit ?? trails[0]?.driftUnit ?? (input.transform ? 'radiansPerSecond' : 'pixelsPerSecond'),
 		driftScatter: aggregate.scatter,
 		inliers: aggregate.count,
-		confidence: aggregate.confidence,
+		confidence: aggregate.mean !== undefined ? aggregate.confidence : unsigned.confidence,
 		diagnostics: Array.from(diagnostics),
 		component,
 	}

@@ -115,6 +115,8 @@ describe('DARV trail measurements', () => {
 		expect(result.drift).toBeUndefined()
 		expect(result.driftMagnitude!).toBeCloseTo(0.15 * SCALE, 13)
 		expect(result.diagnostics).toContain('directionUnresolved')
+		expect(result.confidence).toBeGreaterThan(0)
+		expect(result.confidence).toBeCloseTo(result.trails[0].confidence, 13)
 	})
 
 	for (const inbound of [114, 116])
@@ -147,6 +149,8 @@ describe('DARV trail measurements', () => {
 		expect(result.driftMagnitude!).toBeCloseTo(0.15, 10)
 		expect(result.driftUnit).toBe('pixelsPerSecond')
 		expect(result.diagnostics).toContain('missingAngularTransform')
+		expect(result.confidence).toBeGreaterThan(0)
+		expect(result.confidence).toBeCloseTo(result.trails[0].confidence, 13)
 	})
 
 	test('a locally unavailable transform retains pixel geometry even when the frame center is valid', () => {
@@ -161,6 +165,8 @@ describe('DARV trail measurements', () => {
 		expect(result.drift).toBeUndefined()
 		expect(result.diagnostics).toContain('geometryDegenerate')
 		expect(result.diagnostics).toContain('missingAngularTransform')
+		expect(result.confidence).toBeGreaterThan(0)
+		expect(result.confidence).toBeCloseTo(result.trails[0].confidence, 13)
 	})
 
 	test('a valid local transform is used even when the frame center is unavailable', () => {
@@ -203,6 +209,7 @@ describe('DARV trail measurements', () => {
 		expect(result.trails[0].turn).toEqual(input.streaks![0].end)
 		expect(result.drift).toBeUndefined()
 		expect(result.diagnostics).toContain('unresolvedSeparation')
+		expect(result.confidence).toBe(0)
 	})
 
 	test('clipped, saturated, short and weak trails do not contribute signed drift', () => {
@@ -216,6 +223,7 @@ describe('DARV trail measurements', () => {
 			const result = analyzeDarvImage({ ...input, streaks: input.streaks!.map((streak) => Object.assign({}, streak, override)) })
 			expect(result.drift).toBeUndefined()
 			expect(result.diagnostics).toContain(reason)
+			expect(result.confidence).toBe(0)
 		}
 	})
 
@@ -242,6 +250,10 @@ describe('DARV trail measurements', () => {
 		expect(result.inliers).toBe(4)
 		expect(result.drift!).toBeCloseTo(0.15 * SCALE, 13)
 		expect(result.diagnostics).toContain('outlierTrails')
+		expect(result.confidence).toBeCloseTo((result.trails[0].confidence * 4) / 5, 13)
+		const unsigned = analyzeDarvImage({ ...capture(), image: image(256, 640), streaks, starts: undefined })
+		expect(unsigned.status).toBe('partial')
+		expect(unsigned.confidence).toBeCloseTo(unsigned.trails[0].confidence, 13)
 	})
 
 	test('inconsistent shutter timing is explicit', () => {
@@ -250,7 +262,16 @@ describe('DARV trail measurements', () => {
 	})
 
 	test('empty supplied detections skip image detection', () => {
-		expect(analyzeDarvImage({ ...capture(), streaks: [] }).diagnostics).toContain('noStreaks')
+		const result = analyzeDarvImage({ ...capture(), streaks: [] })
+		expect(result.diagnostics).toContain('noStreaks')
+		expect(result.confidence).toBe(0)
+	})
+
+	test('incompatible legs have no usable measurement confidence', () => {
+		const result = analyzeDarvImage({ ...capture(), streaks: [segment({ x: 20, y: 20 }, { x: 120, y: 35 }), segment({ x: 20, y: 160 }, { x: 120, y: 145 })] })
+		expect(result.diagnostics).toContain('noCompatibleLegPair')
+		expect(result.trails).toHaveLength(0)
+		expect(result.confidence).toBe(0)
 	})
 
 	for (const parity of [-1, 1]) {
@@ -445,6 +466,7 @@ describe('DARV image extraction', () => {
 		const result = analyzeDarvImage({ ...capture(), image: frame, streaks: undefined, detection: { maxCandidates: 32 } })
 		expect(result.drift).toBeUndefined()
 		expect(result.trails).toHaveLength(0)
+		expect(result.confidence).toBe(0)
 	})
 
 	test('saturated rendered trails are excluded using the supplied sensor threshold', () => {
