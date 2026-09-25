@@ -5,6 +5,7 @@ import { robustLinearLeastSquares } from './least.squares'
 import type { NumberArray } from './math'
 
 // Robust fitting of normalized two-dimensional focus surfaces for imaging analyses.
+// Allocates fits without mutating samples; covariance preserves absolute focus uncertainties when supplied consistently.
 
 // Supported focus-surface parameterizations in normalized sensor coordinates.
 export type FocusSurfaceModel = 'plane' | 'radialQuadratic' | 'quadratic'
@@ -31,9 +32,10 @@ export interface FocusSurfaceSample {
 	readonly v: number
 	// Best-focus position in the caller's focus-position unit.
 	readonly focus: number
-	// Optional positive relative statistical weight.
+	// Optional positive relative statistical weight; overrides uncertainty for this sample.
 	readonly weight?: number
-	// Optional positive focus uncertainty in the same unit as `focus`.
+	// Optional positive absolute standard uncertainty in focus units, used as inverse-variance weight unless overridden.
+	// Mixing absolute uncertainties and relative/unweighted samples in retained support makes covariance unavailable.
 	readonly uncertainty?: number
 	// Optional source identity preserved by callers across fitting stages.
 	readonly sourceIndex?: number
@@ -115,6 +117,8 @@ export interface FocusSurfaceFitSuccess {
 	readonly residuals: Float64Array
 	// Row-major coefficient covariance in model order [c, ax, ay, ...quadratic terms], when estimable.
 	// Uses caller weights on robustly retained samples, avoiding fractional IRLS shrinkage of residual variance.
+	// With absolute uncertainties on every retained sample: inverse normal matrix times max(1, reduced chi-squared).
+	// With only relative/default weights: residual-variance scaling. Mixed scales or no residual degrees of freedom omit covariance.
 	readonly covariance?: Float64Array
 	// Number of robustly used samples minus model parameter count.
 	readonly degreesOfFreedom: number
@@ -195,11 +199,14 @@ export function fitFocusSurface(samples: readonly FocusSurfaceSample[], options:
 	const used = new Array<boolean>(samples.length)
 	const rejectedIndices: number[] = []
 	let usedCount = 0
+	let absoluteUncertaintyCount = 0
 	for (let i = 0; i < samples.length; i++) {
 		const retained = fit.weights[i] > baseWeights[i] * MINIMUM_RETAINED_WEIGHT
 		used[i] = retained
-		if (retained) usedCount++
-		else rejectedIndices.push(i)
+		if (retained) {
+			usedCount++
+			if (samples[i].weight === undefined && samples[i].uncertainty !== undefined) absoluteUncertaintyCount++
+		} else rejectedIndices.push(i)
 	}
 
 	if (usedCount < minimumSamples) return failure(model, samples, used, 'excessiveRejection', fit.conditionNumber)
@@ -211,7 +218,9 @@ export function fitFocusSurface(samples: readonly FocusSurfaceSample[], options:
 	const warnings: FocusSurfaceFitWarning[] = []
 	if (rejectedIndices.length > 0) warnings.push({ code: 'robustOutliers', values: { rejectedCount: rejectedIndices.length } })
 
-	const covariance = degreesOfFreedom > 0 ? covarianceFor(design, residuals, baseWeights, used, parameterCount, degreesOfFreedom) : undefined
+	const absoluteUncertainties = absoluteUncertaintyCount === usedCount
+	const consistentUncertaintyScale = absoluteUncertainties || absoluteUncertaintyCount === 0
+	const covariance = degreesOfFreedom > 0 && consistentUncertaintyScale ? covarianceFor(design, residuals, baseWeights, used, parameterCount, degreesOfFreedom, absoluteUncertainties) : undefined
 	if (degreesOfFreedom > 0 && covariance === undefined) warnings.push({ code: 'uncertaintyUnavailable' })
 
 	const support = Math.min(1, usedCount / minimumSamples)
@@ -382,8 +391,10 @@ function rmsFor(residuals: Readonly<Float64Array>, used: readonly boolean[]): nu
 }
 
 // Estimates coefficient covariance using caller weights and residual variance on robustly retained samples.
-// Design rows follow model column order; residuals use focus units. Allocates a matrix, or returns undefined if singular.
-function covarianceFor(design: readonly Float64Array[], residuals: Readonly<Float64Array>, weights: Readonly<NumberArray>, used: readonly boolean[], parameters: number, degreesOfFreedom: number): Float64Array | undefined {
+// Design rows follow model column order; residuals use focus units, used selects support, and degreesOfFreedom must be positive.
+// For absolute inverse-variance weights, reduced chi-squared may inflate but never shrink the supplied uncertainty floor.
+// Otherwise estimates the unknown relative-weight variance scale. Allocates a parameters-square matrix, or returns undefined if singular.
+function covarianceFor(design: readonly Float64Array[], residuals: Readonly<Float64Array>, weights: Readonly<NumberArray>, used: readonly boolean[], parameters: number, degreesOfFreedom: number, absoluteUncertainties: boolean): Float64Array | undefined {
 	const normal = new Float64Array(parameters * parameters)
 	let weightedSse = 0
 
@@ -401,7 +412,8 @@ function covarianceFor(design: readonly Float64Array[], residuals: Readonly<Floa
 	if (inverse === undefined) return undefined
 	const variance = weightedSse / degreesOfFreedom
 	if (!(variance >= 0) || !Number.isFinite(variance)) return undefined
-	for (let i = 0; i < inverse.length; i++) inverse[i] *= variance
+	const scale = absoluteUncertainties ? Math.max(1, variance) : variance
+	for (let i = 0; i < inverse.length; i++) inverse[i] *= scale
 	return inverse
 }
 

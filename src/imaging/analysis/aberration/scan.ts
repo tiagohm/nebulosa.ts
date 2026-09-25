@@ -145,7 +145,7 @@ export interface SensorTiltEstimate {
 	readonly conditionNumber: number
 	// Same Wald/F decision as sensorTiltPattern; false without covariance or sufficient statistical support.
 	readonly significant: boolean
-	// Standard coefficient uncertainties and covariance, absent without residual degrees of freedom.
+	// Standard coefficient uncertainties and covariance, absent without residual degrees of freedom or consistent uncertainty scales.
 	readonly gradientUncertainty?: FocusGradientUncertainty
 	// Optional physical angles and propagated uncertainties, conditional on exact caller calibration.
 	readonly physical?: PhysicalSensorTiltEstimate

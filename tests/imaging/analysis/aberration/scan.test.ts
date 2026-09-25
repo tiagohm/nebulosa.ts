@@ -36,7 +36,8 @@ function frame(position: number): { readonly position: number; readonly profiles
 	for (const v of [-0.4, 0, 0.4]) {
 		for (const u of [-0.4, 0, 0.4]) {
 			const bestFocus = 100 + 10 * u - 4 * v
-			const value = 2 + ((position - bestFocus) * (position - bestFocus)) / 25
+			// A tiny temporal residual keeps curve uncertainties measurable instead of mixing exact zeros with roundoff.
+			const value = 2 + ((position - bestFocus) * (position - bestFocus)) / 25 + 1e-9 * Math.cos(position)
 			for (let sample = 0; sample < 3; sample++) profiles.push(profile(u, v, value))
 		}
 	}
@@ -56,7 +57,7 @@ function surfaceFrames(surface: FocusSurfaceCoefficients, size: number = 5, nois
 	return [60, 70, 80, 90, 100, 110, 120, 130, 140].map((position) => {
 		const profiles: StarProfile[] = []
 		for (const star of stars) {
-			const value = 2 + (position - star.focus) ** 2 / 100
+			const value = 2 + (position - star.focus) ** 2 / 100 + 1e-9 * Math.cos(position)
 			for (let sample = 0; sample < 3; sample++) profiles.push({ ...profile(star.u, star.v, value), y: (star.v + 0.5) * 200 })
 		}
 		return { position, profiles, width: 101, height: 201 }
@@ -190,7 +191,7 @@ function realFocusSweepFrame(position: number): AberrationFocusFrame {
 // Fits fixed-sensor regional curves and recovers their planar best-focus surface without registration.
 test('inspects a regional profiles-only focus scan', () => {
 	const frames = [80, 90, 95, 100, 105, 110, 120].map(frame)
-	const result = inspectAberrationFocusScan(frames, { regions: { layout: 'grid', columns: 3, rows: 3 }, curve: { minimumPoints: 5 }, surface: { model: 'plane' } })
+	const result = inspectAberrationFocusScan(frames, { regions: { layout: 'grid', columns: 3, rows: 3 }, curve: { minimumPoints: 5, sigmaClip: 1e6 }, surface: { model: 'plane' } })
 
 	expect(result.width).toBe(101)
 	expect(result.height).toBe(101)
@@ -376,6 +377,51 @@ test('reduces tilt uncertainty with more independent regions at equivalent noise
 	expect(estimates[1].tilt!.gradientUncertainty!.x).toBeLessThan(estimates[0].tilt!.gradientUncertainty!.x)
 	expect(estimates[1].tilt!.gradientUncertainty!.y).toBeLessThan(estimates[0].tilt!.gradientUncertainty!.y)
 	expect(estimates[1].tilt!.physical!.uncertaintyMagnitude!).toBeLessThan(estimates[0].tilt!.physical!.uncertaintyMagnitude!)
+})
+
+test('preserves regional focus uncertainties on a clean plane and qualifies tilt by signal strength', () => {
+	const results = [0.001, 0.1].map((noiseAmplitude) => {
+		// Two symmetric fourth-difference stencils are orthogonal to the quadratic focus design.
+		// They leave each minimum unchanged while providing finite focus-curve residual variance.
+		const noise = [1, -4, 6, -4, 2, -4, 6, -4, 1]
+		const frames = [60, 70, 80, 90, 100, 110, 120, 130, 140].map((position, index) => {
+			const profiles: StarProfile[] = []
+			for (const v of [-0.4, -0.2, 0, 0.2, 0.4]) {
+				for (const u of [-0.4, -0.2, 0, 0.2, 0.4]) {
+					const bestFocus = 100 + 0.05 * u - 0.02 * v
+					const value = 2 + (position - bestFocus) ** 2 / 100 + noiseAmplitude * noise[index]
+					// Constant within-region dispersion gives every focus position the same statistical weight.
+					for (const offset of [-0.05, 0, 0.05]) profiles.push(profile(u, v, value + offset))
+				}
+			}
+			return { position, profiles, width: 101, height: 101 }
+		})
+		return inspectAberrationFocusScan(frames, {
+			regions: { layout: 'grid', columns: 5, rows: 5 },
+			curve: { sigmaClip: 1e6 },
+			surface: { model: 'plane' },
+			physicalScale: { pixelSize: 0.004, focusDisplacement: 0.001 },
+		})
+	})
+	for (const result of results) {
+		expect(result.surface?.success).toBeTrue()
+		if (!result.surface?.success) continue
+		expect(result.surface.rms).toBeLessThan(1e-8)
+		expect(result.regions.every((region) => region.uncertainty !== undefined && region.uncertainty > 0)).toBeTrue()
+		expect(result.tilt?.plane.gradientX).toBeCloseTo(0.05, 8)
+		expect(result.tilt?.plane.gradientY).toBeCloseTo(-0.02, 8)
+		// For independent samples with sigma >= sigmaMin, Var(ax) >= sigmaMin² / sum(u²).
+		const minimumUncertainty = Math.min(...result.regions.map((region) => region.uncertainty!))
+		expect(result.tilt!.gradientUncertainty!.x).toBeGreaterThanOrEqual((minimumUncertainty / Math.sqrt(2)) * (1 - 1e-10))
+		expect(result.tilt!.gradientUncertainty!.y).toBeGreaterThanOrEqual((minimumUncertainty / Math.sqrt(2)) * (1 - 1e-10))
+		expect(result.tilt!.physical!.uncertaintyX!).toBeGreaterThan(0)
+		expect(result.tilt!.physical!.uncertaintyY!).toBeGreaterThan(0)
+		expect(result.tilt!.physical!.uncertaintyMagnitude!).toBeGreaterThan(0)
+	}
+	expect(results[0].tilt?.significant).toBeTrue()
+	expect(results[1].tilt?.significant).toBeFalse()
+	expect(results[1].findings.some((finding) => finding.kind === 'sensorTiltPattern')).toBeFalse()
+	expect(results[1].tilt!.gradientUncertainty!.x / results[0].tilt!.gradientUncertainty!.x).toBeCloseTo(100, 6)
 })
 
 // Rejects a frame that has selected profiles but no usable value for the requested metric.
