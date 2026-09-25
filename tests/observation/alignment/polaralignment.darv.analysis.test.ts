@@ -106,6 +106,30 @@ describe('DARV trail measurements', () => {
 		expect(result.diagnostics).toContain('directionUnresolved')
 	})
 
+	for (const inbound of [114, 116])
+		for (const dwell of [0, 30])
+			for (const angular of [false, true]) {
+				test(`segment ordering is immaterial for 100/${inbound}s legs, ${dwell}s dwell, angular ${angular}`, () => {
+					const original = capture(0.15, 100, inbound, dwell)
+					const input = { ...original, starts: undefined, transform: angular ? original.transform : undefined }
+					const forward = analyzeDarvImage(input)
+					const reverse = analyzeDarvImage({ ...input, streaks: input.streaks!.toReversed() })
+					expect(forward.trails).toHaveLength(1)
+					expect(reverse.status).toBe(forward.status)
+					expect(reverse.drift).toBe(forward.drift)
+					expect(reverse.driftMagnitude!).toBeCloseTo(forward.driftMagnitude!, 13)
+					expect(reverse.trails[0].directionResolved).toBe(forward.trails[0].directionResolved)
+					expect(reverse.diagnostics).toEqual(forward.diagnostics)
+					if (inbound === 116) {
+						expect(forward.trails[0].directionResolved).toBe(true)
+						expect(forward.driftMagnitude!).toBeCloseTo(0.15 * (angular ? SCALE : 1), 13)
+					} else {
+						expect(forward.trails[0].directionResolved).toBe(false)
+						expect(forward.drift).toBeUndefined()
+					}
+				})
+			}
+
 	test('missing transform preserves unsigned transverse pixel geometry', () => {
 		const result = analyzeDarvImage({ ...capture(0.15, 100, 100, 0, 0.71, -1), transform: undefined })
 		expect(result.drift).toBeUndefined()

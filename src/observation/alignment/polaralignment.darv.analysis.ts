@@ -377,8 +377,6 @@ function measureDarvPair(first: Streak, second: Streak, input: Readonly<DarvAnal
 		near1 = near2 = turn
 	}
 
-	let length1 = Math.hypot(near1.x - far1.x, near1.y - far1.y)
-	let length2 = Math.hypot(near2.x - far2.x, near2.y - far2.y)
 	let resolved = false
 	let swap = false
 
@@ -393,27 +391,36 @@ function measureDarvPair(first: Streak, second: Streak, input: Readonly<DarvAnal
 		}
 	}
 
-	if (!resolved && Math.abs(timing.outbound - timing.inbound) > 0.15 * Math.max(timing.outbound, timing.inbound)) {
-		const same = Math.abs(length1 / timing.outbound - length2 / timing.inbound)
-		const reversed = Math.abs(length2 / timing.outbound - length1 / timing.inbound)
+	const forward = resolved && swap ? undefined : measureDarvAssignment(first, second, far1, near1, near2, far2, timing, transform)
+	const reverse = resolved && !swap ? undefined : measureDarvAssignment(second, first, far2, near2, near1, far1, timing, transform)
+	if (!forward) return reverse
+	if (!reverse) return forward
 
-		if (Math.abs(same - reversed) > tolerance / Math.min(timing.outbound, timing.inbound)) {
-			resolved = true
-			swap = reversed < same
-		}
+	// Both temporal assignments satisfy the motion model. Retain only an unsigned estimate when
+	// their magnitudes agree within three combined resolution limits, never the detector's order.
+	const difference = Math.abs(forward.driftMagnitude - reverse.driftMagnitude)
+	if (difference > 3 * Math.hypot(forward.uncertainty, reverse.uncertainty)) {
+		diagnostics.add('ambiguousTrails')
+		return undefined
 	}
+	const canonical = far1.x < far2.x || (far1.x === far2.x && far1.y <= far2.y) ? forward : reverse
+	return {
+		...canonical,
+		directionResolved: false,
+		drift: undefined,
+		driftMagnitude: (forward.driftMagnitude + reverse.driftMagnitude) / 2,
+		uncertainty: Math.max(forward.uncertainty, reverse.uncertainty) + difference / 2,
+	}
+}
 
-	if (swap) {
-		const previous = { far1, near1, length1, first }
-		far1 = far2
-		far2 = previous.far1
-		near1 = near2
-		near2 = previous.near1
-		length1 = length2
-		length2 = previous.length1
-		first = second
-		second = previous.first
-	}
+// Tests one temporal assignment of two fitted streaks and their outer/turn endpoints in pixels.
+// Timing is in seconds; the optional frozen Jacobian selects angular rather than pixel drift.
+// Returns a fresh measurement only when slew speed, dwell closure and celestial RA agree.
+function measureDarvAssignment(first: Streak, second: Streak, far1: Readonly<Point>, near1: Readonly<Point>, near2: Readonly<Point>, far2: Readonly<Point>, timing: DarvTiming, transform: DarvMatrixTransform | undefined): DarvTrailMeasurement | undefined {
+	const width = Math.max(first.width, second.width)
+	const tolerance = Math.max(3, 2 * width)
+	const length1 = Math.hypot(near1.x - far1.x, near1.y - far1.y)
+	const length2 = Math.hypot(near2.x - far2.x, near2.y - far2.y)
 
 	const speed1 = length1 / timing.outbound
 	const speed2 = length2 / timing.inbound
@@ -445,8 +452,8 @@ function measureDarvPair(first: Streak, second: Streak, input: Readonly<DarvAnal
 		outbound: darvLeg(far1, near1, first),
 		inbound: darvLeg(near2, far2, second),
 		closure: [far2.x - far1.x, far2.y - far1.y],
-		directionResolved: resolved,
-		drift: resolved ? north : undefined,
+		directionResolved: true,
+		drift: north,
 		driftMagnitude: magnitude,
 		driftUnit: transform ? 'radiansPerSecond' : 'pixelsPerSecond',
 		uncertainty: skyX === undefined || skyY === undefined ? resolution : Math.hypot(skyX, skyY),
