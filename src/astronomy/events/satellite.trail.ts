@@ -1,9 +1,17 @@
-import { ARCSEC_PER_RADIAN } from '../../core/constants'
+import { ARCSEC_PER_RADIAN, DAYSEC } from '../../core/constants'
+import { validatePositiveFinite, validatePositiveInteger } from '../../core/validation'
+import { type Vec3, vecAngle, vecNormalize, vecPlus } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 import { angularDistance, positionAngleBetween } from '../coordinates/coordinate'
+import { customEphemerisEndpoint, relativeEphemerisPath } from '../ephemeris/path'
+import { earthObserverEphemerisPath, sgp4EphemerisPath } from '../ephemeris/path.adapter'
+import { ephemerisAt, equatorialPosition } from '../ephemeris/position'
+import type { GeographicPosition } from '../observer/location'
+import type { SatRec } from '../orbits/propagation/sgp4'
+import { type Time, Timescale, timeShift, timeSubtract, tt } from '../time/time'
 
-// Geometry of a known track across a rectangular sensor. The caller supplies the bore-sight and the
-// track as equatorial samples over the exposure; this module does not propagate a satellite. The
+// Geometry of a known track across a rectangular sensor, with adaptive geometric topocentric SGP4
+// prediction or caller-supplied equatorial samples. Results allocate geometry only, without images. The
 // sensor is a gnomonic rectangle: half-width and half-height are tan of half the field, so a 1° field
 // is the tangent of 0.5° on the plane. Position angle rotates sensor +Y from celestial north toward
 // east, and sensor +X is 90° from that toward the east, matching the mosaic planner. Angles are radians.
@@ -60,6 +68,126 @@ export interface SensorTrail {
 export interface SensorTrailOptions {
 	// Image scale in arcseconds per pixel. When set, each trail also carries lengthPixels.
 	readonly arcsecPerPixel?: number
+}
+
+// One predicted geometric topocentric point in library-base ICRS-oriented axes.
+export interface SatelliteTrailPredictionPoint {
+	// Evaluation instant, in TT (including exposure-clipped endpoints).
+	readonly time: Time
+	// Right ascension in radians, in [0, TAU).
+	readonly rightAscension: Angle
+	// Declination in radians, in [-PI/2, PI/2].
+	readonly declination: Angle
+	// Dimensionless gnomonic X, centered on the sensor, positive toward sensor +X.
+	readonly sensorX: number
+	// Dimensionless gnomonic Y, centered on the sensor, positive toward sensor +Y.
+	readonly sensorY: number
+}
+
+// One continuous sensor visit, represented by its entry-to-exit chord.
+export interface SatelliteTrailPrediction {
+	// First on-sensor instant, clipped to the exposure start when already inside.
+	readonly entry: SatelliteTrailPredictionPoint
+	// Last on-sensor instant, clipped to the exposure stop when still inside.
+	readonly exit: SatelliteTrailPredictionPoint
+	// Great-circle entry-to-exit chord length in radians, not integrated curved arc length.
+	readonly length: Angle
+	// Entry-to-exit position angle, north toward east, in radians in [0, TAU).
+	readonly positionAngle: Angle
+	// Chord length in pixels, present only when arcsecPerPixel is supplied.
+	readonly lengthPixels?: number
+}
+
+// Bounded adaptive sampling controls for satellite exposure prediction.
+export interface SatelliteTrailPredictionOptions extends SensorTrailOptions {
+	// Maximum accepted sampling span in SI seconds; positive, default 1 second.
+	readonly maxStep?: number
+	// Maximum midpoint angular interpolation residual in radians; positive, default 0.1 arcsecond.
+	// This is a local error estimate, not a certified bound between samples or on grazing-contact time.
+	readonly maxInterpolationError?: Angle
+	// Maximum propagated instants, including endpoints and refinement probes; positive integer,
+	// default 65537. Exhaustion throws RangeError instead of returning an undersampled prediction.
+	readonly maxSamples?: number
+}
+
+// Cached sample in seconds from the TT exposure start; direction is an owned unit vector.
+interface SatelliteTrailSample extends SensorTrackSample {
+	// Same-epoch observer-to-satellite direction in library-base ICRS-oriented axes.
+	readonly direction: Vec3
+}
+
+// Predicts all sampled sensor visits of a prepared satellite from a geographic Earth site during
+// [start, stop]. The field center is geometric equatorial RA/Dec in library-base ICRS-oriented axes,
+// in radians; field uses the same axes and sensor rotation as sensorTrails. Width/height are in (0, PI).
+// No light time, aberration, refraction, occultation, illumination, or pointing correction is applied.
+// Sampling uses uniform TT seconds and spherical midpoint residuals, also checking the wrapped
+// RA/Dec interpolation used by sensorTrails near poles. Tighten the tolerance for very small fields
+// or grazing contacts, and maxStep for fast motion. Accepted midpoints are retained in the track.
+// Returns newly allocated Time-valued chords in chronological order; empty/reversed windows return [].
+// The SatRec is shallow-copied to isolate SGP4's mutable propagation cache. Shared adaptive endpoints
+// retain their evaluations, so each instant is propagated once. Work/storage are bounded by maxSamples;
+// throws on budget exhaustion, time-resolution exhaustion, or propagation failure.
+export function predictSatelliteTrails(satrec: SatRec, location: GeographicPosition, centerRightAscension: Angle, centerDeclination: Angle, field: SensorField, start: Time, stop: Time, options: SatelliteTrailPredictionOptions = {}): readonly SatelliteTrailPrediction[] {
+	const origin = tt(start)
+	const duration = timeSubtract(stop, origin, Timescale.TT) * DAYSEC
+	if (!(duration > 0)) return []
+
+	// Invalid controls could prevent refinement from terminating or disable its allocation bound.
+	const maxStep = validatePositiveFinite(options.maxStep ?? 1)
+	const maxError = validatePositiveFinite(options.maxInterpolationError ?? 0.1 / ARCSEC_PER_RADIAN)
+	const maxSamples = validatePositiveInteger(options.maxSamples ?? 65537)
+	const path = relativeEphemerisPath(sgp4EphemerisPath({ ...satrec }), earthObserverEphemerisPath(location, customEphemerisEndpoint('satellite-trail-observer')))
+	const sensorRadius = Math.hypot(Math.tan(field.width / 2), Math.tan(field.height / 2))
+	let evaluations = 0
+
+	// Samples an uncached instant in TT seconds; the tree retains and shares this owned result.
+	const evaluate = (seconds: number): SatelliteTrailSample => {
+		if (evaluations >= maxSamples) throw new RangeError('satellite trail sample budget exhausted')
+		evaluations++
+		const position = ephemerisAt(path, timeShift(origin, seconds / DAYSEC))
+		const [rightAscension, declination] = equatorialPosition(position)
+		return { time: seconds, rightAscension, declination, direction: vecNormalize(position.position) }
+	}
+
+	// sensorTrails treats a nonprojectable endpoint as a path break. Refine such a segment until
+	// its forward endpoint is beyond the sensor's circumscribed circle, so clipping sees the exit.
+	const crossesProjectionBoundary = (from: SensorTrackSample, to: SensorTrackSample) => {
+		const a = tangentPlane(from.rightAscension, from.declination, centerRightAscension, centerDeclination)
+		const b = tangentPlane(to.rightAscension, to.declination, centerRightAscension, centerDeclination)
+		if ((a === undefined) === (b === undefined)) return false
+		const forward = a ?? b!
+		return Math.hypot(forward.east, forward.north) <= sensorRadius
+	}
+
+	const first = evaluate(0)
+	const last = evaluate(duration)
+	const track: SensorTrackSample[] = [first]
+	const pending: [SatelliteTrailSample, SatelliteTrailSample][] = [[first, last]]
+
+	while (pending.length > 0) {
+		const [from, to] = pending.pop()!
+		const middleTime = from.time + (to.time - from.time) * 0.5
+		if (!(middleTime > from.time && middleTime < to.time)) throw new RangeError('satellite trail refinement exhausted time resolution')
+		const middle = evaluate(middleTime)
+		const sphericalMiddle = vecPlus(from.direction, to.direction)
+		const sphericalError = vecAngle(middle.direction, sphericalMiddle)
+		const coordinateError = angularDistance(middle.rightAscension, middle.declination, from.rightAscension + normalizePI(to.rightAscension - from.rightAscension) * 0.5, (from.declination + to.declination) * 0.5)
+
+		// Wide/antipodal arcs have an ambiguous spherical midpoint and must be split first.
+		if (to.time - from.time > maxStep || vecAngle(from.direction, to.direction) > Math.PI / 2 || sphericalError > maxError || coordinateError > maxError || crossesProjectionBoundary(from, middle) || crossesProjectionBoundary(middle, to)) {
+			pending.push([middle, to], [from, middle])
+		} else {
+			track.push(middle, to)
+		}
+	}
+
+	// Converts clipping's relative seconds back to uniform TT without losing Julian-date precision.
+	const point = (value: SensorTrailPoint): SatelliteTrailPredictionPoint => ({ ...value, time: timeShift(origin, value.time / DAYSEC) })
+	const predictions: SatelliteTrailPrediction[] = []
+	for (const trail of sensorTrails(centerRightAscension, centerDeclination, field, track, options)) {
+		predictions.push({ ...trail, entry: point(trail.entry), exit: point(trail.exit) })
+	}
+	return predictions
 }
 
 // East/north gnomonic coordinates, or undefined when the point is not on the forward hemisphere.
