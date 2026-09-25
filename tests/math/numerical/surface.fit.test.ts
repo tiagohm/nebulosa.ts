@@ -85,6 +85,31 @@ test('rejects a gross robust outlier', () => {
 	expect(result.warnings).toContainEqual({ code: 'robustOutliers', values: { rejectedCount: 1 } })
 })
 
+test('publishes caller-weight covariance on robustly retained support', () => {
+	// Radially symmetric weights make ax/ay orthogonal to the intercept and to each other.
+	// Curved residuals induce fractional IRLS weights; a central outlier is excluded without breaking symmetry.
+	const samples = grid().map(({ u, v }) => ({ u, v, focus: u === 0 && v === 0 ? 1000 : 100 + 4 * u - 2 * v + 0.8 * (u * u + v * v), weight: 1 + 4 * (u * u + v * v) }))
+	const result = fitFocusSurface(samples, { model: 'plane' })
+	expect(result.success).toBeTrue()
+	if (!result.success) return
+	expect(result.rejectedIndices).toEqual([12])
+	let weightedSse = 0
+	let informationX = 0
+	let informationY = 0
+	for (let i = 0; i < samples.length; i++) {
+		if (!result.used[i]) continue
+		const sample = samples[i]
+		weightedSse += sample.weight * result.residuals[i] ** 2
+		informationX += sample.weight * sample.u * sample.u
+		informationY += sample.weight * sample.v * sample.v
+	}
+	const variance = weightedSse / result.degreesOfFreedom
+	expect(variance).toBeGreaterThan(0)
+	expect(result.covariance?.[4]).toBeCloseTo(variance / informationX, 12)
+	expect(result.covariance?.[8]).toBeCloseTo(variance / informationY, 12)
+	expect(result.covariance?.[5]).toBeCloseTo(0, 12)
+})
+
 // Fails explicitly instead of publishing a regularized-looking plane for collinear sensor samples.
 test('rejects rank-deficient surface geometry', () => {
 	const samples: FocusSurfaceSample[] = [

@@ -1,6 +1,10 @@
 import { expect, test } from 'bun:test'
+import { TAU } from '../../../../src/core/constants'
+import type { AberrationPhysicalScale } from '../../../../src/imaging/analysis/aberration/physical'
 import { inspectAberrationFocusScan, type AberrationFocusFrame } from '../../../../src/imaging/analysis/aberration/scan'
 import type { StarProfile } from '../../../../src/imaging/stars/profile'
+import { gaussian, mulberry32 } from '../../../../src/math/numerical/random'
+import type { FocusSurfaceCoefficients } from '../../../../src/math/numerical/surface.fit'
 
 // Creates a valid synthetic moments profile at a normalized sensor location.
 function profile(u: number, v: number, value: number): StarProfile {
@@ -37,6 +41,26 @@ function frame(position: number): { readonly position: number; readonly profiles
 		}
 	}
 	return { position, profiles, width: 101, height: 101 }
+}
+
+function surfaceFrames(surface: FocusSurfaceCoefficients, size: number = 5, noise: number = 0): AberrationFocusFrame[] {
+	const random = gaussian(mulberry32(180), noise)
+	const stars: { u: number; v: number; focus: number }[] = []
+	for (let row = 0; row < size; row++) {
+		const v = (row + 0.5) / size - 0.5
+		for (let column = 0; column < size; column++) {
+			const u = (column + 0.5) / size - 0.5
+			stars.push({ u, v, focus: surface.c + surface.ax * u + surface.ay * v + surface.qxx * u * u + surface.qxy * u * v + surface.qyy * v * v + random() })
+		}
+	}
+	return [60, 70, 80, 90, 100, 110, 120, 130, 140].map((position) => {
+		const profiles: StarProfile[] = []
+		for (const star of stars) {
+			const value = 2 + (position - star.focus) ** 2 / 100
+			for (let sample = 0; sample < 3; sample++) profiles.push({ ...profile(star.u, star.v, value), y: (star.v + 0.5) * 200 })
+		}
+		return { position, profiles, width: 101, height: 201 }
+	})
 }
 
 // Creates uniquely positioned stars with a small frame-to-frame dither for registration-track tests.
@@ -184,6 +208,174 @@ test('inspects a regional profiles-only focus scan', () => {
 	expect(result.plane?.effect).toBeCloseTo(14, 6)
 	expect(result.findings.some((finding) => finding.kind === 'sensorTiltPattern')).toBeTrue()
 	expect(result.findings.some((finding) => finding.kind === 'backfocusMismatch')).toBeFalse()
+	expect(result.tilt?.plane).toBe(result.plane)
+	expect(result.tilt?.plane.gradientX).toBeCloseTo(10, 6)
+	expect(result.tilt?.plane.gradientY).toBeCloseTo(-4, 6)
+	expect(result.tilt?.plane.direction).toBeCloseTo(TAU + Math.atan2(-4, 10), 6)
+	expect(result.tilt?.confidence).toBe(result.surface.confidence)
+	expect(result.tilt?.conditionNumber).toBe(result.surface.conditionNumber)
+	expect(result.tilt?.significant).toBeTrue()
+	expect(result.tilt?.physical).toBeUndefined()
+	expect(result.findings.find((finding) => finding.kind === 'sensorTiltPattern')?.limitations).toContain('missingPhysicalScale')
+	expect(result.frames.every((frame) => frame.inspection?.findings.every((finding) => finding.kind !== 'sensorTiltPattern'))).toBeTrue()
+})
+
+test('separates tilt from substantial full quadratic curvature by default', () => {
+	const injected = { c: 100, ax: 10, ay: -4, qxx: 50, qxy: -20, qyy: 30 }
+	const result = inspectAberrationFocusScan(surfaceFrames(injected), { regions: { layout: 'grid', columns: 5, rows: 5 } })
+	expect(result.surface?.success).toBeTrue()
+	if (!result.surface?.success) return
+	expect(result.surface.model).toBe('quadratic')
+	for (const key of ['c', 'ax', 'ay', 'qxx', 'qxy', 'qyy'] as const) expect(result.surface.coefficients[key]).toBeCloseTo(injected[key], 6)
+	expect(result.tilt?.plane.gradientX).toBeCloseTo(injected.ax, 6)
+	expect(result.tilt?.plane.gradientY).toBeCloseTo(injected.ay, 6)
+	expect(result.tilt?.plane.effect).toBeCloseTo(14, 6)
+	expect(result.tilt?.significant).toBeTrue()
+	expect(result.findings.some((finding) => finding.kind === 'fieldCurvature')).toBeTrue()
+})
+
+test('does not interpret symmetric field curvature as tilt', () => {
+	const result = inspectAberrationFocusScan(surfaceFrames({ c: 100, ax: 0, ay: 0, qxx: 50, qxy: 0, qyy: 30 }), {
+		regions: { layout: 'grid', columns: 5, rows: 5 },
+		physicalScale: { pixelSize: 0.01, focusDisplacement: 0.1 },
+	})
+	expect(result.surface?.success).toBeTrue()
+	expect(result.tilt?.plane.effect).toBeCloseTo(0, 6)
+	expect(result.tilt?.significant).toBeFalse()
+	expect(result.tilt?.physical?.magnitude).toBeCloseTo(0, 6)
+	expect(result.tilt?.physical?.uncertaintyMagnitude).toBeUndefined()
+	expect(result.findings.some((finding) => finding.kind === 'sensorTiltPattern')).toBeFalse()
+	expect(result.findings.some((finding) => finding.kind === 'fieldCurvature')).toBeTrue()
+})
+
+test.each([0.01, -0.01])('converts scan tilt with signed physical displacement %p', (focusDisplacement) => {
+	const result = inspectAberrationFocusScan(surfaceFrames({ c: 100, ax: 10, ay: -4, qxx: 0, qxy: 0, qyy: 0 }), {
+		regions: { layout: 'grid', columns: 5, rows: 5 },
+		physicalScale: { pixelSize: 0.004, focusDisplacement },
+	})
+	expect(result.tilt?.physical?.x).toBeCloseTo(Math.atan((-4 * focusDisplacement) / 0.8), 10)
+	expect(result.tilt?.physical?.y).toBeCloseTo(Math.atan((-10 * focusDisplacement) / 0.4), 10)
+	expect(result.tilt?.physical?.magnitude).toBeCloseTo(Math.atan(Math.hypot((10 * focusDisplacement) / 0.4, (-4 * focusDisplacement) / 0.8)), 10)
+	expect(result.tilt?.significant).toBeTrue()
+	expect(result.findings.find((finding) => finding.kind === 'sensorTiltPattern')?.limitations).toEqual([])
+})
+
+test.each(['plane', 'radialQuadratic', 'quadratic'] as const)('propagates the fitted %s covariance through scan tilt', (model) => {
+	const frames = surfaceFrames({ c: 100, ax: 10, ay: -4, qxx: 0, qxy: 0, qyy: 0 }, 5, 0.1)
+	const result = inspectAberrationFocusScan(frames, {
+		regions: { layout: 'grid', columns: 5, rows: 5 },
+		surface: { model },
+		physicalScale: { pixelSize: 0.01, focusDisplacement: -0.2 },
+	})
+	expect(result.surface?.success).toBeTrue()
+	if (!result.surface?.success) return
+	const covariance = result.surface.covariance!
+	const tilt = result.tilt!
+	const uncertainty = tilt.gradientUncertainty!
+	const physical = tilt.physical!
+	const columns = model === 'plane' ? 3 : model === 'radialQuadratic' ? 4 : 6
+	expect(covariance.every(Number.isFinite)).toBeTrue()
+	expect(uncertainty.x).toBeGreaterThan(0)
+	expect(uncertainty.y).toBeGreaterThan(0)
+	expect(uncertainty.x ** 2).toBeCloseTo(covariance[columns + 1], 12)
+	expect(uncertainty.y ** 2).toBeCloseTo(covariance[2 * columns + 2], 12)
+	expect(uncertainty.covarianceXY).toBe(covariance[columns + 2])
+	const sx = -0.2 * tilt.plane.gradientX
+	const sy = -0.1 * tilt.plane.gradientY
+	const dx = -0.1 / (1 + sy * sy)
+	const dy = 0.2 / (1 + sx * sx)
+	const norm = Math.hypot(sx, sy)
+	const da = (-0.2 * sx) / (norm * (1 + norm * norm))
+	const db = (-0.1 * sy) / (norm * (1 + norm * norm))
+	expect(physical.uncertaintyX).toBeCloseTo(Math.abs(dx) * uncertainty.y, 12)
+	expect(physical.uncertaintyY).toBeCloseTo(Math.abs(dy) * uncertainty.x, 12)
+	expect(physical.covarianceXY).toBeCloseTo(dx * dy * uncertainty.covarianceXY, 12)
+	expect(physical.uncertaintyMagnitude).toBeCloseTo(Math.sqrt(da * da * covariance[columns + 1] + db * db * covariance[2 * columns + 2] + 2 * da * db * covariance[columns + 2]), 12)
+	expect(tilt.significant).toBe(result.findings.some((finding) => finding.kind === 'sensorTiltPattern'))
+})
+
+test('preserves physical tilt when pixel spans and effective pitch change with binning', () => {
+	const frames = surfaceFrames({ c: 100, ax: 10, ay: -4, qxx: 30, qxy: 10, qyy: 20 }, 5, 0.1)
+	const binned = frames.map((frame) => Object.assign({}, frame, { width: 51, height: 101, profiles: frame.profiles!.map((star) => Object.assign({}, star, { x: star.x / 2, y: star.y / 2 })) }))
+	const options = { regions: { layout: 'grid', columns: 5, rows: 5 } } as const
+	const native = inspectAberrationFocusScan(frames, { ...options, physicalScale: { pixelSize: 0.004, focusDisplacement: 0.001 } })
+	const resampled = inspectAberrationFocusScan(binned, { ...options, physicalScale: { pixelSize: 0.008, focusDisplacement: 0.001 } })
+	expect(native.tilt?.physical).toBeDefined()
+	expect(resampled.tilt?.physical).toEqual(native.tilt?.physical)
+})
+
+test.each([{}, { pixelSize: 0.004 }, { focusDisplacement: 0.001 }])('keeps normalized tilt without complete physical scale %p', (physicalScale) => {
+	const result = inspectAberrationFocusScan([80, 90, 95, 100, 105, 110, 120].map(frame), { surface: { model: 'plane' }, physicalScale, regions: { layout: 'grid', columns: 3, rows: 3 } })
+	expect(result.tilt?.plane.effect).toBeCloseTo(14, 6)
+	expect(result.tilt?.physical).toBeUndefined()
+	expect(result.findings.find((finding) => finding.kind === 'sensorTiltPattern')?.limitations).toContain('missingPhysicalScale')
+})
+
+test.each<AberrationPhysicalScale>([
+	{ pixelSize: 0, focusDisplacement: 1 },
+	{ pixelSize: -0.004, focusDisplacement: 1 },
+	{ pixelSize: Number.NaN, focusDisplacement: 1 },
+	{ pixelSize: Number.POSITIVE_INFINITY, focusDisplacement: 1 },
+	{ pixelSize: 0.004, focusDisplacement: 0 },
+	{ pixelSize: 0.004, focusDisplacement: Number.NaN },
+	{ pixelSize: 0.004, focusDisplacement: Number.POSITIVE_INFINITY },
+])('rejects invalid complete physical scale %p', (physicalScale) => {
+	expect(() => inspectAberrationFocusScan([80, 90, 95, 100, 105, 110, 120].map(frame), { physicalScale, regions: { layout: 'grid', columns: 3, rows: 3 } })).toThrow(RangeError)
+})
+
+test('keeps a minimally supported numeric tilt inconclusive without covariance', () => {
+	const frames = [80, 90, 95, 100, 105, 110, 120].map((position) => {
+		const source = frame(position)
+		return Object.assign({}, source, { profiles: source.profiles.filter((_, index) => index < 6 || index >= 24) })
+	})
+	const result = inspectAberrationFocusScan(frames, { regions: { layout: 'grid', columns: 3, rows: 3 }, surface: { model: 'plane' }, physicalScale: { pixelSize: 0.004, focusDisplacement: 0.001 } })
+	expect(result.surface?.success).toBeTrue()
+	if (!result.surface?.success) return
+	expect(result.surface.degreesOfFreedom).toBe(0)
+	expect(result.tilt?.plane.effect).toBeCloseTo(14, 6)
+	expect(result.tilt?.significant).toBeFalse()
+	expect(result.tilt?.gradientUncertainty).toBeUndefined()
+	expect(result.tilt?.physical?.magnitude).toBeGreaterThan(0)
+	expect(result.tilt?.physical?.uncertaintyX).toBeUndefined()
+	expect(result.tilt?.physical?.uncertaintyY).toBeUndefined()
+	expect(result.tilt?.physical?.uncertaintyMagnitude).toBeUndefined()
+	expect(result.findings[0].limitations).toContain('modelUncertaintyUnavailable')
+})
+
+test('omits tilt without a reliable focus surface', () => {
+	const empty = inspectAberrationFocusScan([])
+	expect(empty.tilt).toBeUndefined()
+	const incomplete = inspectAberrationFocusScan([frame(100)])
+	expect(incomplete.tilt).toBeUndefined()
+	const frames = [80, 90, 95, 100, 105, 110, 120].map((position) => {
+		const source = frame(position)
+		return Object.assign({}, source, { profiles: source.profiles.filter((star) => star.y === 50) })
+	})
+	for (const model of ['plane', 'quadratic'] as const) {
+		const result = inspectAberrationFocusScan(frames, { surface: { model }, regions: { layout: 'grid', columns: 3, rows: 3 } })
+		expect(result.surface?.success).toBeFalse()
+		if (result.surface?.success) continue
+		expect(result.surface?.reason).toBe(model === 'plane' ? 'rankDeficient' : 'insufficientSamples')
+		expect(result.tilt).toBeUndefined()
+	}
+})
+
+test('reduces tilt uncertainty with more independent regions at equivalent noise', () => {
+	const injected = { c: 100, ax: 10, ay: -4, qxx: 0, qxy: 0, qyy: 0 }
+	const estimates = [5, 9].map((size) =>
+		inspectAberrationFocusScan(surfaceFrames(injected, size, 0.1), {
+			regions: { layout: 'grid', columns: size, rows: size },
+			physicalScale: { pixelSize: 0.004, focusDisplacement: 0.001 },
+		}),
+	)
+	for (const estimate of estimates) {
+		expect(estimate.surface?.success).toBeTrue()
+		expect(estimate.tilt?.gradientUncertainty?.x).toBeGreaterThan(0)
+		expect(estimate.tilt?.gradientUncertainty?.y).toBeGreaterThan(0)
+	}
+	expect(estimates[1].tilt!.gradientUncertainty!.x).toBeLessThan(estimates[0].tilt!.gradientUncertainty!.x)
+	expect(estimates[1].tilt!.gradientUncertainty!.y).toBeLessThan(estimates[0].tilt!.gradientUncertainty!.y)
+	expect(estimates[1].tilt!.physical!.uncertaintyMagnitude!).toBeLessThan(estimates[0].tilt!.physical!.uncertaintyMagnitude!)
 })
 
 // Rejects a frame that has selected profiles but no usable value for the requested metric.

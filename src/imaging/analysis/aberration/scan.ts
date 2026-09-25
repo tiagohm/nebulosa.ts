@@ -1,16 +1,18 @@
-import { analyzeFocusCurvature, analyzeFocusPlane, fitFocusSurface, type FocusCurvatureAnalysis, type FocusPlaneAnalysis, type FocusSurfaceFitOptions, type FocusSurfaceFitResult } from '../../../math/numerical/surface.fit'
+import { analyzeFocusCurvature, analyzeFocusPlane, fitFocusSurface, type FocusCurvatureAnalysis, type FocusPlaneAnalysis, type FocusSurfaceFitOptions, type FocusSurfaceFitResult, type FocusSurfaceFitSuccess } from '../../../math/numerical/surface.fit'
 import type { Image } from '../../model/types'
 import { registerStars, type ImageRegistrationOptions } from '../../processing/registration'
 import type { DetectedStar } from '../../stars/detector'
 import type { StarProfile } from '../../stars/profile'
 import { diagnoseFocusScan } from './diagnostic'
 import { fitAberrationFocusCurve, type AberrationFocusCurveOptions, type AberrationFocusCurveResult, type AberrationFocusMetric } from './focus'
-import { measureFocusFieldOffset, type BackfocusCalibration, type FocusFieldOffset } from './physical'
+import { estimatePhysicalSensorTilt, measureFocusFieldOffset, type AberrationPhysicalScale, type BackfocusCalibration, type FocusFieldOffset, type FocusGradientUncertainty, type PhysicalSensorTiltEstimate } from './physical'
 import { assignAberrationRegion } from './region'
 import { inspectAberration, inspectAberrationProfiles, type InspectAberrationOptions } from './single'
 import type { AberrationFinding, AberrationInspectionResult, AberrationRegionDefinition, AberrationRegionOptions, AberrationWarning } from './types'
 
-// Sensor-fixed regional focus-scan analysis without image registration or persistent star tracks.
+// Completed focus-scan analysis from sensor regions and optional registered stars, with quantitative best-focus tilt.
+// Normalized coordinates span -0.5..0.5 rightward/downward; gradients use focuser units, optional physical angles use radians.
+// Allocates results without mutating input frames; a tilted best-focus surface does not identify its mechanical source.
 
 // One captured focus-scan frame, supplied as an image or pre-measured profiles with explicit dimensions.
 export interface AberrationFocusFrame {
@@ -112,7 +114,7 @@ export interface AberrationTrackingOptions {
 	readonly registration?: Pick<ImageRegistrationOptions, 'matchStarsConfig' | 'acceptance'>
 }
 
-// Configures a sensor-fixed regional focus scan; tracking and registration are intentionally absent.
+// Configures a sensor-fixed regional focus scan with optional registered star tracks and physical tilt calibration.
 export interface AberrationFocusScanOptions {
 	// Single-frame profile and selection configuration.
 	readonly inspection?: Omit<InspectAberrationOptions, 'profiles' | 'regions'>
@@ -122,12 +124,31 @@ export interface AberrationFocusScanOptions {
 	readonly regions?: AberrationRegionOptions
 	// Robust regional curve-fitting options.
 	readonly curve?: AberrationFocusCurveOptions
-	// Focus-surface fitting options applied to successful regional minima.
+	// Surface options for successful minima; defaults to a full quadratic to separate tilt from curvature.
 	readonly surface?: FocusSurfaceFitOptions
+	// Optional effective pixel pitch and signed focal-plane displacement in one length unit for physical tilt.
+	// Both pixelSize and focusDisplacement are required for conversion; invalid complete scale throws RangeError.
+	readonly physicalScale?: AberrationPhysicalScale
 	// Optional optical-spacing calibration that permits backfocus findings.
 	readonly backfocusCalibration?: BackfocusCalibration
 	// Optional registration settings that enable per-star tracks.
 	readonly tracking?: AberrationTrackingOptions
+}
+
+// Quantitative tilt of a scan's fitted best-focus surface relative to the sensor, without mechanical source attribution.
+export interface SensorTiltEstimate {
+	// Linear gradient and peak-to-peak effect in focuser units; direction increases rightward/downward in [0, TAU).
+	readonly plane: FocusPlaneAnalysis
+	// Surface support/conditioning confidence in 0..1, not a probability of mechanical sensor tilt.
+	readonly confidence: number
+	// Condition number of the fitted surface's weighted design matrix.
+	readonly conditionNumber: number
+	// Same Wald/F decision as sensorTiltPattern; false without covariance or sufficient statistical support.
+	readonly significant: boolean
+	// Standard coefficient uncertainties and covariance, absent without residual degrees of freedom.
+	readonly gradientUncertainty?: FocusGradientUncertainty
+	// Optional physical angles and propagated uncertainties, conditional on exact caller calibration.
+	readonly physical?: PhysicalSensorTiltEstimate
 }
 
 // Summarizes focus-scan support and all non-fatal scan-wide warnings.
@@ -184,6 +205,8 @@ export interface AberrationFocusScanResult {
 	readonly surface?: FocusSurfaceFitResult
 	// Planar derivative when a focus surface succeeds.
 	readonly plane?: FocusPlaneAnalysis
+	// Quantitative linear tilt for a successful surface, even when covariance or physical calibration is unavailable.
+	readonly tilt?: SensorTiltEstimate
 	// Curvature derivative when a focus surface succeeds.
 	readonly curvature?: FocusCurvatureAnalysis
 	// Robust peripheral-minus-central best-focus offset when both supports are present.
@@ -211,6 +234,8 @@ interface RegionObservation {
 }
 
 // Inspects a completed scan in fixed sensor coordinates, then fits regional curves and a best-focus surface.
+// Frames supply images or profiles with matching pixel dimensions; options select metrics, models, and optional calibration.
+// Returns newly allocated diagnostics; failed surfaces omit tilt. Invalid complete physical scale throws only on conversion.
 export function inspectAberrationFocusScan(frames: readonly AberrationFocusFrame[], options: AberrationFocusScanOptions = {}): AberrationFocusScanResult {
 	const metric = options.metric ?? 'hfd'
 	const inspectionOptions = { ...options.inspection, regions: options.regions }
@@ -273,9 +298,14 @@ export function inspectAberrationFocusScan(frames: readonly AberrationFocusFrame
 	const surface = surfaceSamples.length > 0 ? fitFocusSurface(surfaceSamples, options.surface) : undefined
 	const plane = surface?.success ? analyzeFocusPlane(surface.coefficients) : undefined
 	const curvature = surface?.success ? analyzeFocusCurvature(surface.coefficients) : undefined
+	const gradientUncertainty = surface?.success ? focusGradientUncertainty(surface) : undefined
+	const scale = options.physicalScale
+	const physical =
+		plane !== undefined && width !== undefined && height !== undefined && scale?.pixelSize !== undefined && scale.focusDisplacement !== undefined ? estimatePhysicalSensorTilt(plane, width, height, { pixelSize: scale.pixelSize, focusDisplacement: scale.focusDisplacement }, gradientUncertainty) : undefined
 	const fieldOffset = measureFocusFieldOffset(regions)
 	const backfocusCalibrated = options.backfocusCalibration !== undefined && Number.isFinite(options.backfocusCalibration.response) && options.backfocusCalibration.response !== 0
-	const findings = diagnoseFocusScan(surface, plane, curvature, fieldOffset, backfocusCalibrated)
+	const findings = diagnoseFocusScan(surface, plane, curvature, fieldOffset, backfocusCalibrated, physical !== undefined)
+	const tilt: SensorTiltEstimate | undefined = surface?.success && plane !== undefined ? { plane, confidence: surface.confidence, conditionNumber: surface.conditionNumber, significant: findings.some((finding) => finding.kind === 'sensorTiltPattern'), gradientUncertainty, physical } : undefined
 	const warnings: AberrationWarning[] = []
 	if (usedFrameCount === 0) warnings.push({ code: 'noUsableFrames' })
 	if (surface && !surface.success) warnings.push({ code: 'surfaceFitFailed' })
@@ -283,7 +313,16 @@ export function inspectAberrationFocusScan(frames: readonly AberrationFocusFrame
 	const breakdown = confidenceBreakdown(frameResults, regions, surface, metric, tracking?.quality)
 	const confidence = breakdown.total
 
-	return { width, height, frames: frameResults, regions, tracks: tracking?.tracks, surface, plane, curvature, fieldOffset, findings, quality: { inputFrameCount: frames.length, usedFrameCount, rejectedFrameCount: frames.length - usedFrameCount, confidence, breakdown, warnings } }
+	return { width, height, frames: frameResults, regions, tracks: tracking?.tracks, surface, plane, tilt, curvature, fieldOffset, findings, quality: { inputFrameCount: frames.length, usedFrameCount, rejectedFrameCount: frames.length - usedFrameCount, confidence, breakdown, warnings } }
+}
+
+// Extracts the ax/ay block from a successful surface's row-major model covariance without mutating it.
+// Returns standard uncertainties in focuser units and XY covariance in squared units, or undefined without covariance.
+function focusGradientUncertainty(surface: FocusSurfaceFitSuccess): FocusGradientUncertainty | undefined {
+	const covariance = surface.covariance
+	if (covariance === undefined) return undefined
+	const columns = surface.model === 'plane' ? 3 : surface.model === 'radialQuadratic' ? 4 : 6
+	return { x: Math.sqrt(Math.max(0, covariance[columns + 1])), y: Math.sqrt(Math.max(0, covariance[2 * columns + 2])), covarianceXY: covariance[columns + 2] }
 }
 
 // Computes independent support and model-quality components plus their applicable geometric mean.

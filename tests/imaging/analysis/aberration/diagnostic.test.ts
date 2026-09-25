@@ -191,6 +191,19 @@ test('reports sensor tilt from an exact planar 3x3 quadratic fit', () => {
 	expect(findings.some((finding) => finding.kind === 'fieldCurvature')).toBeFalse()
 })
 
+test('uses the published surface covariance for the tilt decision', () => {
+	const { fit, findings } = scanFindings(
+		focusGrid(5, (u, v) => 100 + 20 * u - 8 * v),
+		'plane',
+	)
+	expect(fit.success).toBeTrue()
+	if (!fit.success) return
+	expect(findings.some((finding) => finding.kind === 'sensorTiltPattern')).toBeTrue()
+	const covariance = new Float64Array([1e6, 0, 0, 0, 1e6, 0, 0, 0, 1e6])
+	const uncertain = diagnoseFocusScan({ ...fit, covariance }, analyzeFocusPlane(fit.coefficients), analyzeFocusCurvature(fit.coefficients), undefined)
+	expect(uncertain.some((finding) => finding.kind === 'sensorTiltPattern')).toBeFalse()
+})
+
 // Overdetermined noiseless bowl must remain detectable after the Wald/F gate.
 test('reports field curvature from an exact quadratic bowl', () => {
 	const samples: FocusSurfaceSample[] = []

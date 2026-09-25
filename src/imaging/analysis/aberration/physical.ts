@@ -1,13 +1,14 @@
 import { medianBySelectionOf } from '../../../math/numerical/statistics'
 import type { FocusPlaneAnalysis, FocusSurfaceCoefficients } from '../../../math/numerical/surface.fit'
+import type { Angle } from '../../../math/units/angle'
 
 // Physical conversions and calibrated focus-field corrections for completed aberration scans.
 
 // Consistent physical scales supplied by the caller for optional physical interpretation.
 export interface AberrationPhysicalScale {
-	// Sensor distance per pixel in the caller's physical length unit.
+	// Effective sensor distance per scan pixel in the caller's physical length unit, including binning/subsampling.
 	readonly pixelSize?: number
-	// Effective focal-plane displacement per focuser-position unit in the same physical length unit.
+	// Signed focal-plane displacement per focuser-position unit in the same physical length unit; non-zero for tilt.
 	readonly focusDisplacement?: number
 	// Optical focal ratio for diffraction CFZ calculations.
 	readonly focalRatio?: number
@@ -23,6 +24,28 @@ export interface PhysicalTiltAnalysis {
 	readonly y: number
 	// Combined plane tilt in radians.
 	readonly magnitude: number
+}
+
+// Linear best-focus coefficient uncertainty on normalized sensor coordinates, increasing rightward/downward.
+export interface FocusGradientUncertainty {
+	// Standard uncertainty of the X gradient in focuser-position units per normalized sensor width.
+	readonly x: number
+	// Standard uncertainty of the Y gradient in focuser-position units per normalized sensor height.
+	readonly y: number
+	// Covariance of X/Y gradients in squared focuser-position units.
+	readonly covarianceXY: number
+}
+
+// Physical tilt of the best-focus surface relative to the sensor; does not identify a mechanical cause.
+export interface PhysicalSensorTiltEstimate extends PhysicalTiltAnalysis {
+	// Standard uncertainty of rotation around sensor X in radians, absent without gradient covariance.
+	readonly uncertaintyX?: Angle
+	// Standard uncertainty of rotation around sensor Y in radians, absent without gradient covariance.
+	readonly uncertaintyY?: Angle
+	// Covariance of the X/Y rotations in radians squared, absent without gradient covariance.
+	readonly covarianceXY?: number
+	// First-order magnitude uncertainty in radians, omitted without covariance or near zero slope.
+	readonly uncertaintyMagnitude?: Angle
 }
 
 // Principal physical focal-surface curvatures and finite radii under the small-slope approximation.
@@ -91,6 +114,37 @@ export function analyzePhysicalTilt(plane: FocusPlaneAnalysis, width: number, he
 	const slopeX = (plane.gradientX * scale.focusDisplacement) / ((width - 1) * scale.pixelSize)
 	const slopeY = (plane.gradientY * scale.focusDisplacement) / ((height - 1) * scale.pixelSize)
 	return { x: Math.atan(slopeY), y: Math.atan(-slopeX), magnitude: Math.atan(Math.hypot(slopeX, slopeY)) }
+}
+
+// Converts a scan plane and optional positive-semidefinite gradient covariance into physical angles and standard uncertainties.
+// Width/height are pixel counts > 1; physical spans are (count - 1) * effective pixelSize, matching normalized coordinates.
+// Scale uses one length unit and signed focus displacement; invalid scale throws as in analyzePhysicalTilt.
+// Uses the analytic atan Jacobian with exact calibration; calibration uncertainty is not included. Allocates a fresh result.
+// Magnitude uncertainty is omitted for slope norm <= sqrt(machine epsilon), where the direction is numerically unresolved.
+export function estimatePhysicalSensorTilt(plane: FocusPlaneAnalysis, width: number, height: number, scale: Required<Pick<AberrationPhysicalScale, 'pixelSize' | 'focusDisplacement'>>, uncertainty?: FocusGradientUncertainty): PhysicalSensorTiltEstimate {
+	const physical = analyzePhysicalTilt(plane, width, height, scale)
+	if (uncertainty === undefined) return physical
+	const factorX = scale.focusDisplacement / ((width - 1) * scale.pixelSize)
+	const factorY = scale.focusDisplacement / ((height - 1) * scale.pixelSize)
+	const slopeX = plane.gradientX * factorX
+	const slopeY = plane.gradientY * factorY
+	const derivativeX = factorY / (1 + slopeY * slopeY)
+	const derivativeY = -factorX / (1 + slopeX * slopeX)
+	const magnitude = Math.hypot(slopeX, slopeY)
+	let uncertaintyMagnitude: Angle | undefined
+	if (magnitude > Math.sqrt(Number.EPSILON)) {
+		const derivativeAX = ((slopeX / magnitude) * factorX) / (1 + magnitude * magnitude)
+		const derivativeAY = ((slopeY / magnitude) * factorY) / (1 + magnitude * magnitude)
+		const variance = (derivativeAX * uncertainty.x) ** 2 + (derivativeAY * uncertainty.y) ** 2 + 2 * derivativeAX * derivativeAY * uncertainty.covarianceXY
+		uncertaintyMagnitude = Math.sqrt(Math.max(0, variance))
+	}
+	return {
+		...physical,
+		uncertaintyX: Math.abs(derivativeX) * uncertainty.y,
+		uncertaintyY: Math.abs(derivativeY) * uncertainty.x,
+		covarianceXY: derivativeX * derivativeY * uncertainty.covarianceXY,
+		uncertaintyMagnitude,
+	}
 }
 
 // Converts normalized quadratic coefficients into physical principal curvatures and approximate radii.

@@ -113,7 +113,8 @@ export interface FocusSurfaceFitSuccess {
 	readonly used: readonly boolean[]
 	// Focus-minus-prediction residuals in the input order and focus unit.
 	readonly residuals: Float64Array
-	// Coefficient covariance in the selected model's design-column order, when estimable.
+	// Row-major coefficient covariance in model order [c, ax, ay, ...quadratic terms], when estimable.
+	// Uses caller weights on robustly retained samples, avoiding fractional IRLS shrinkage of residual variance.
 	readonly covariance?: Float64Array
 	// Number of robustly used samples minus model parameter count.
 	readonly degreesOfFreedom: number
@@ -210,7 +211,7 @@ export function fitFocusSurface(samples: readonly FocusSurfaceSample[], options:
 	const warnings: FocusSurfaceFitWarning[] = []
 	if (rejectedIndices.length > 0) warnings.push({ code: 'robustOutliers', values: { rejectedCount: rejectedIndices.length } })
 
-	const covariance = degreesOfFreedom > 0 ? covarianceFor(design, residuals, fit.weights, used, parameterCount, degreesOfFreedom) : undefined
+	const covariance = degreesOfFreedom > 0 ? covarianceFor(design, residuals, baseWeights, used, parameterCount, degreesOfFreedom) : undefined
 	if (degreesOfFreedom > 0 && covariance === undefined) warnings.push({ code: 'uncertaintyUnavailable' })
 
 	const support = Math.min(1, usedCount / minimumSamples)
@@ -380,7 +381,8 @@ function rmsFor(residuals: Readonly<Float64Array>, used: readonly boolean[]): nu
 	return count > 0 ? Math.sqrt(sum / count) : 0
 }
 
-// Estimates model-coefficient covariance from the final weighted normal matrix and residual variance.
+// Estimates coefficient covariance using caller weights and residual variance on robustly retained samples.
+// Design rows follow model column order; residuals use focus units. Allocates a matrix, or returns undefined if singular.
 function covarianceFor(design: readonly Float64Array[], residuals: Readonly<Float64Array>, weights: Readonly<NumberArray>, used: readonly boolean[], parameters: number, degreesOfFreedom: number): Float64Array | undefined {
 	const normal = new Float64Array(parameters * parameters)
 	let weightedSse = 0
@@ -398,6 +400,7 @@ function covarianceFor(design: readonly Float64Array[], residuals: Readonly<Floa
 	const inverse = invertSquareMatrix(normal, parameters)
 	if (inverse === undefined) return undefined
 	const variance = weightedSse / degreesOfFreedom
+	if (!(variance >= 0) || !Number.isFinite(variance)) return undefined
 	for (let i = 0; i < inverse.length; i++) inverse[i] *= variance
 	return inverse
 }

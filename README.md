@@ -63,10 +63,6 @@ Nebulosa is a Bun-first, ESM-only TypeScript toolkit for numerical astronomy, as
 
 - [Bun](https://bun.com) — the sole runtime for the library and its tests.
 
-## Documentation
-
-The API reference is maintained separately. For runnable integrations, see the Alpaca, PHD2, LX200, Firmata, and almanac examples in [`examples`](./examples).
-
 ## Development
 
 ```sh
