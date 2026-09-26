@@ -13,4 +13,26 @@ describe('ESP8266 board', () => {
 			expect(board.isPinPWM(pin)).toBeFalse()
 		}
 	})
+
+	test('classifies shared bus, UART and analog pins without assigning them to the wrong capability', () => {
+		expect(board.isPinTwoWire(ESP8266.SDA)).toBeTrue()
+		expect(board.isPinTwoWire(ESP8266.SCL)).toBeTrue()
+		expect(board.isPinSPI(ESP8266.SDA)).toBeFalse()
+		for (const pin of [ESP8266.SS, ESP8266.MOSI, ESP8266.MISO, ESP8266.SCK]) {
+			expect(board.isPinSPI(pin)).toBeTrue()
+			expect(board.isPinTwoWire(pin)).toBeFalse()
+		}
+		expect(board.isPinSerial(ESP8266.RX)).toBeTrue()
+		expect(board.isPinSerial(ESP8266.TX)).toBeTrue()
+		expect(board.isPinSerial(ESP8266.SDA)).toBeFalse()
+		expect(board.isPinAnalog(ESP8266.A0)).toBeTrue()
+		expect(board.isPinDigital(ESP8266.A0)).toBeFalse()
+		expect(board.pinToAnalog(ESP8266.A0)).toBe(0)
+	})
+
+	test('limits servo capability to the first nine GPIOs', () => {
+		expect(board.isPinServo(ESP8266.D2)).toBeTrue()
+		expect(board.isPinServo(ESP8266.D5)).toBeFalse()
+		expect(board.isPinServo(ESP8266.A0)).toBeFalse()
+	})
 })

@@ -82,6 +82,40 @@ test('DS18B20 configures one-wire reads and emits temperature updates', async ()
 	expect(client.handlers.size).toBe(0)
 })
 
+test('DS18B20 waits for a matching ROM search reply before measuring', async () => {
+	const client = new MockFirmataClient()
+	const otherClient = new MockFirmataClient()
+	using ds18b20 = new DS18B20(client as never, 6, 1000, { resolution: 9 })
+	const address = Buffer.from([DS18B20.FAMILY_CODE, 0x1a, 0xbc, 0x4d, 0x2f, 0x00, 0x00, 0xc1])
+	const selectedAddress = Buffer.from(address)
+
+	ds18b20.start()
+	expect(client.messages).toEqual([
+		['oneWireConfig', 6, 'normal'],
+		['oneWireSearch', 6, 'all'],
+	])
+
+	ds18b20.oneWireSearchReply(otherClient as never, 6, [address], false)
+	ds18b20.oneWireSearchReply(client as never, 7, [address], false)
+	ds18b20.oneWireSearchReply(client as never, 6, [address], true)
+	ds18b20.oneWireSearchReply(client as never, 6, [Buffer.from([0x10, 1, 2, 3, 4, 5, 6, 7])], false)
+	expect(client.messages).toHaveLength(2)
+
+	ds18b20.oneWireSearchReply(client as never, 6, [address], false)
+	address[1] = 0xff
+	ds18b20.oneWireSearchReply(client as never, 6, [selectedAddress], false)
+	expect(client.messages.slice(2)).toEqual([
+		['oneWireWrite', 6, Buffer.from([DS18B20.WRITE_SCRATCHPAD_CMD, DS18B20.DEFAULT_TH, DS18B20.DEFAULT_TL, 0x1f]), selectedAddress],
+		['oneWireWrite', 6, Buffer.from(DS18B20.CONVERT_T_CMD), selectedAddress],
+	])
+
+	await Bun.sleep(110)
+	const readMessage = client.messages[4] as readonly ['oneWireWriteAndRead', number, Buffer, number, Buffer | undefined, number]
+	expect(readMessage).toEqual(['oneWireWriteAndRead', 6, Buffer.from(DS18B20.READ_SCRATCHPAD_CMD), DS18B20.SCRATCHPAD_SIZE, selectedAddress, 0x4000])
+	ds18b20.oneWireReadReply(client as never, 6, readMessage[5], createDS18B20Scratchpad(-10.5))
+	expect(ds18b20.temperature).toBeCloseTo(-10.5, 6)
+})
+
 test('DS18B20 cancels a conversion when stopped and restarts cleanly', async () => {
 	const client = new MockFirmataClient()
 	const address = Buffer.from([DS18B20.FAMILY_CODE, 0x1a, 0xbc, 0x4d, 0x2f, 0x00, 0x00, 0xc1])

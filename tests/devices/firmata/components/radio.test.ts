@@ -96,6 +96,35 @@ test('KT0803L configures the transmitter and updates register-backed settings', 
 	expect(client.messages.at(-1)).toEqual(['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG0B, 0x84])])
 })
 
+test('KT0803L updates audio controls after startup without losing other register flags', () => {
+	const client = new MockFirmataClient()
+	using transmitter = new KT0803L(client as never)
+	transmitter.start()
+	client.messages.length = 0
+
+	transmitter.preEmphasis = 50
+	transmitter.pilotToneHigh = true
+	transmitter.stereo = false
+	transmitter.automaticLevelControl = true
+	transmitter.automaticPowerDown = true
+	transmitter.powerAmplifierBias = false
+	transmitter.deviation = 112.5
+	transmitter.audioEnhancement = true
+
+	expect(client.messages).toEqual([
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG02, 0x41])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG02, 0x45])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG04, 0x44])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG04, 0xc4])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG0B, 0x04])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG0E, 0x00])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG17, 0x40])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG17, 0x60])],
+	])
+	transmitter.audioEnhancement = true
+	expect(client.messages).toHaveLength(8)
+})
+
 test('TEA5767 tunes frequency steps and wraps within the configured band', () => {
 	using tuner = new TEA5767(undefined as never)
 
@@ -161,6 +190,31 @@ test('TEA5767 configures the tuner and writes frequency and mute changes', () =>
 	expect(client.messages.at(-1)).toEqual(['write', TEA5767.ADDRESS, Buffer.from([0x31, 0xa7, 0xd0, 0x5e, 0x00])])
 })
 
+test('TEA5767 applies live noise controls and refreshes status after oscillator changes', () => {
+	const client = new MockFirmataClient()
+	using tuner = new TEA5767(client as never)
+	tuner.start()
+	client.messages.length = 0
+
+	tuner.softMute = false
+	tuner.highCutControl = false
+	tuner.stereoNoiseCancelling = false
+	tuner.highSideInjection = false
+
+	expect(client.messages).toEqual([
+		['write', TEA5767.ADDRESS, Buffer.from([0x29, 0xd5, 0xd0, 0x16, 0x00])],
+		['write', TEA5767.ADDRESS, Buffer.from([0x29, 0xd5, 0xd0, 0x12, 0x00])],
+		['write', TEA5767.ADDRESS, Buffer.from([0x29, 0xd5, 0xd0, 0x10, 0x00])],
+		// Low-side injection also changes the PLL word for the same station frequency.
+		['write', TEA5767.ADDRESS, Buffer.from([0x29, 0x9e, 0xc0, 0x10, 0x00])],
+		['read', TEA5767.ADDRESS, -1, 5, false, 7, 'stop'],
+	])
+	expect(tuner.softMute).toBeFalse()
+	expect(tuner.highCutControl).toBeFalse()
+	expect(tuner.stereoNoiseCancelling).toBeFalse()
+	expect(tuner.highSideInjection).toBeFalse()
+})
+
 test('TEA5767 seeks to the next station and updates stereo, rssi and station state', () => {
 	const client = new MockFirmataClient()
 	using tuner = new TEA5767(client as never, TEA5767.ADDRESS, 1000, { frequency: 100.9 })
@@ -189,6 +243,24 @@ test('TEA5767 seeks to the next station and updates stereo, rssi and station sta
 	expect(tuner.station).toBeTrue()
 	expect(updates).toBe(1)
 	expect(client.messages.at(-1)).toEqual(['write', TEA5767.ADDRESS, Buffer.from([0x30, 0x51, 0xd0, 0x1e, 0x00])])
+})
+
+test('TEA5767 reports seek failure at the band limit when wrapping is disabled', () => {
+	const client = new MockFirmataClient()
+	using tuner = new TEA5767(client as never, TEA5767.ADDRESS, 1000, { frequency: 108 })
+	let updates = 0
+	tuner.addListener(() => updates++)
+	tuner.start()
+	client.messages.length = 0
+
+	tuner.seek('up', false)
+
+	expect(tuner.frequency).toBe(108)
+	expect(tuner.seekFailed).toBeTrue()
+	expect(tuner.station).toBeFalse()
+	expect(updates).toBe(1)
+	expect(client.messages).toHaveLength(1)
+	expect(client.messages[0]?.[0]).toBe('write')
 })
 
 test('RDA5807 tunes frequency steps and wraps within the configured band', () => {
@@ -270,6 +342,30 @@ test('RDA5807 configures the tuner and writes frequency and volume changes', () 
 	tuner.stop()
 	expect(client.handlers.size).toBe(0)
 	expect(client.messages.at(-1)).toEqual(['write', RDA5807.ADDRESS, Buffer.from([RDA5807.CONTROL_REG, 0xc0, 0x00])])
+})
+
+test('RDA5807 preserves control bits while stereo, bass and output impedance change', () => {
+	const client = new MockFirmataClient()
+	using tuner = new RDA5807(client as never)
+	tuner.start()
+	client.messages.length = 0
+
+	tuner.stereo = false
+	tuner.bassBoost = true
+	tuner.audioOutputHighZ = true
+	tuner.stereo = true
+
+	expect(client.messages).toEqual([
+		['write', RDA5807.ADDRESS, Buffer.from([RDA5807.CONTROL_REG, 0xe0, 0x01])],
+		['read', RDA5807.ADDRESS, RDA5807.STATUS_REG, 4, false, 7, 'stop'],
+		['write', RDA5807.ADDRESS, Buffer.from([RDA5807.CONTROL_REG, 0xf0, 0x01])],
+		['write', RDA5807.ADDRESS, Buffer.from([RDA5807.CONTROL_REG, 0x70, 0x01])],
+		['write', RDA5807.ADDRESS, Buffer.from([RDA5807.CONTROL_REG, 0x50, 0x01])],
+		['read', RDA5807.ADDRESS, RDA5807.STATUS_REG, 4, false, 7, 'stop'],
+	])
+	expect(tuner.stereo).toBeTrue()
+	expect(tuner.bassBoost).toBeTrue()
+	expect(tuner.audioOutputHighZ).toBeTrue()
 })
 
 test('RDA5807 applies stereo mode, bass boost, high-z output and east europe 50-65 MHz mode', () => {

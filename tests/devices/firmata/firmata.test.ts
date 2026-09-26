@@ -3,6 +3,7 @@ import { ESP8266 } from '../../../src/devices/firmata/board'
 import { FirmataClient } from '../../../src/devices/firmata/client'
 import { FirmataClientOverTcp } from '../../../src/devices/firmata/client.tcp'
 import { encodePacked7Bit, decodePacked7Bit } from '../../../src/devices/firmata/codecs/numeric'
+import { MAX_FIRMATA_BUFFER_SIZE } from '../../../src/devices/firmata/protocol'
 import { type FirmataClientHandler, type Transport, PinMode, type AnalogMapping, type Pin } from '../../../src/devices/firmata/types'
 
 describe('command decoding', () => {
@@ -131,6 +132,18 @@ describe('command decoding', () => {
 		const buffer = result[0] as Buffer
 		expect(buffer[0]).toBe(1)
 		expect(buffer.toString('utf-16le', 1, 7)).toBe('ABC')
+	})
+
+	test('discards an oversized SysEx frame until its terminator and parses the next message', () => {
+		client.processByte(0xf0)
+		client.processByte(1)
+		client.process(Buffer.alloc(MAX_FIRMATA_BUFFER_SIZE))
+		client.process(Buffer.from([0xf9, 1, 2]))
+		expect(result).toEqual([])
+
+		client.processByte(0xf7)
+		client.process(Buffer.from([0xf9, 3, 4]))
+		expect(result).toEqual([3, 4])
 	})
 
 	test('two-wire message', () => {
@@ -412,6 +425,16 @@ describe('command encoding', () => {
 		expect(messages[0]).toEqual(Buffer.from([0xf0, 0x73, 0x25, 9, ...encodePacked7Bit(payload), 0xf7]))
 	})
 
+	test('one-wire reset and write-then-read wrappers encode their bus operations', () => {
+		const address = Buffer.from([1, 2, 3, 4, 5, 6, 7, 8])
+		client.oneWireReset(3)
+		const correlationId = client.oneWireWriteAndRead(3, Buffer.from([0xbe]), 9, address, 0x1234)
+
+		expect(correlationId).toBe(0x1234)
+		expect(messages[0]).toEqual(Buffer.from([0xf0, 0x73, 0x01, 3, 0xf7]))
+		expect(messages[1]).toEqual(Buffer.from([0xf0, 0x73, 0x2d, 3, ...encodePacked7Bit(Buffer.from([...address, 9, 0, 0x34, 0x12, 0xbe])), 0xf7]))
+	})
+
 	test('one-wire command validates skip/address combination and address length', () => {
 		expect(() => client.oneWireCommand(1, { skip: true, address: Buffer.alloc(8) })).toThrow(RangeError)
 		expect(() => client.oneWireCommand(1, { address: Buffer.alloc(7) })).toThrow(RangeError)
@@ -442,6 +465,17 @@ describe('command encoding', () => {
 		expect(first).toBe(firstCorrelationId)
 		expect(second).toBe(secondCorrelationId)
 		expect(secondCorrelationId).toBe((firstCorrelationId + 1) & 0xffff)
+	})
+
+	test('explicit and invalid one-wire reads do not consume the automatic correlation id', () => {
+		const first = client.oneWireRead(4, 1)
+		expect(client.oneWireRead(4, 1, undefined, 0x1234)).toBe(0x1234)
+		expect(() => client.oneWireCommand(4, { skip: true, address: Buffer.alloc(8), bytesToRead: 1 })).toThrow(RangeError)
+		const second = client.oneWireRead(4, 1)
+
+		if (first === undefined) throw new Error('Expected a correlation ID for the first read')
+		expect(second).toBe((first + 1) & 0xffff)
+		expect(messages).toHaveLength(3)
 	})
 })
 
