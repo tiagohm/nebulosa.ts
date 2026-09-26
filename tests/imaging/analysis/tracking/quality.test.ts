@@ -1,14 +1,14 @@
 import { expect, test } from 'bun:test'
 import { PI } from '../../../../src/core/constants'
+import { detectStreaks } from '../../../../src/imaging/analysis/streak/detector'
 import type { Streak } from '../../../../src/imaging/analysis/streak/types'
 import { measureTrackingQuality } from '../../../../src/imaging/analysis/tracking/quality'
 import type { Image } from '../../../../src/imaging/model/types'
-import { type DetectedStar, detectStars } from '../../../../src/imaging/stars/detector'
+import { STAR_SIGNAL_RADIUS, type DetectedStar, detectStars } from '../../../../src/imaging/stars/detector'
+import { renderSyntheticStreak } from '../../../../src/imaging/synthetic/streak'
 import { deg } from '../../../../src/math/units/angle'
 
-function image(): Image {
-	const width = 100
-	const height = 100
+function image(width: number = 100, height: number = 100): Image {
 	return { raw: new Float32Array(width * height), header: {}, metadata: { width, height, channels: 1, stride: width, pixelCount: width * height, strideInBytes: width * 4, pixelSizeInBytes: 4, bitpix: -32, bayer: undefined } }
 }
 
@@ -121,6 +121,39 @@ test('distributed stellar streaks preserve the evidence of a severe tracking fai
 	expect(sparseResult.usableStarCount).toBe(8)
 	expect(sparseResult.diagnostics.quadrantCoverage).toBe(1)
 	expect(sparseResult.score).toBeGreaterThan(0.9)
+})
+
+test('detector-measured long stellar trails retain field evidence despite aperture-truncated moments', () => {
+	const frame = image(256, 256)
+	frame.raw.fill(0.1)
+	for (const y of [35, 95, 155, 215]) {
+		for (const x of [35, 95, 155, 215]) {
+			renderSyntheticStreak(frame, { start: { x: x - 19, y }, end: { x: x + 19, y }, width: 3, intensity: 0.8 })
+		}
+	}
+
+	const stars = detectStars(frame)
+	const streaks = detectStreaks(frame, { minLength: 30, maxWidth: 8, backgroundCellSize: 32 })
+	const baseline = measureTrackingQuality(frame, stars)
+	const measured = measureTrackingQuality(frame, stars, {}, { streaks })
+	expect(stars.length).toBeGreaterThanOrEqual(16)
+	expect(streaks.length).toBeGreaterThan(0)
+	expect(baseline.score).toBeGreaterThan(0.6)
+	expect(baseline.medianTrail).toBeLessThan(2 * STAR_SIGNAL_RADIUS)
+	expect(streaks.some((sample) => sample.length > 2 * baseline.medianTrail!)).toBeTrue()
+	expect(measured.usableStarCount).toBeGreaterThanOrEqual(0.75 * baseline.usableStarCount)
+	expect(measured.score).toBeGreaterThanOrEqual(0.75 * baseline.score)
+})
+
+test('an isolated aligned streak crossing a round star or scale outlier is not stellar tracking', () => {
+	const frame = image()
+	for (const outlierTrail of [0, 10]) {
+		const stars = [...field(3, 0), star(50, 50, outlierTrail, 0)]
+		const result = measureTrackingQuality(frame, stars, {}, { streaks: [streak(30, 70, 50)] })
+		expect(result.usableStarCount).toBe(16)
+		expect(result.diagnostics.isolatedStreakCount).toBe(1)
+		expect(result.score).toBeGreaterThan(0.9)
+	}
 })
 
 test('median, p90 and maximum trail are invariant to star order', () => {

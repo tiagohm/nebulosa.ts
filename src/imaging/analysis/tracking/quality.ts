@@ -2,7 +2,7 @@ import { tanUnproject } from '../../../astrometry/wcs/fits.wcs'
 import { PI } from '../../../core/constants'
 import { medianBySelectionOf, percentileBySelectionOf } from '../../../math/numerical/statistics'
 import type { Image } from '../../model/types'
-import type { DetectedStar } from '../../stars/detector'
+import { STAR_SIGNAL_RADIUS, type DetectedStar } from '../../stars/detector'
 import { streakAxialAngleDistance } from '../streak/geometry'
 import type { Streak } from '../streak/types'
 import type { TrackingQuality, TrackingQualityContext, TrackingQualityOptions, TrackingSkyQuality } from './types'
@@ -22,7 +22,7 @@ const STREAK_STAR_MARGIN = 2
 // Minimum field score and maximum axial separation for recognizing measured stellar streaks.
 const STELLAR_STREAK_FIELD_SCORE = 0.6
 const STELLAR_STREAK_ALIGNMENT = PI / 15
-// Maximum ratio of a stellar streak's length to the field's median variance-derived trail proxy.
+// Maximum ratio between local moment proxies, also applied to full trails within the aperture.
 const STELLAR_STREAK_SCALE_RATIO = 2
 
 // Returns whether a star center falls inside a measured streak corridor, including its PSF margin.
@@ -37,8 +37,9 @@ function overlapsStreak(star: DetectedStar, streak: Streak): boolean {
 	return x * x + y * y <= radius * radius
 }
 
-// Marks streaks that agree with a strong stellar field's axis and trail scale. A lone matching
-// detection may be a stellar trail, so it is retained even when the long-streak detector finds few.
+// Marks streaks associated with an elongated star in a strong, aligned stellar field. The local
+// moment proxy cannot bound a full streak longer than the star detector's fixed aperture diameter.
+// A lone matching detection may be stellar, even when the long-streak detector finds few.
 // The preliminary measurement omits streak rejection, preventing a stellar trail from erasing itself.
 function fieldCompatibleStreaks(image: Image, stars: readonly DetectedStar[], options: Readonly<TrackingQualityOptions>, streaks: readonly Streak[], streakCount: number): Uint8Array {
 	const members = new Uint8Array(streakCount)
@@ -50,8 +51,30 @@ function fieldCompatibleStreaks(image: Image, stars: readonly DetectedStar[], op
 
 	for (let i = 0; i < streakCount; i++) {
 		const streak = streaks[i]
-		if (streakAxialAngleDistance(streak.angle, angle) > STELLAR_STREAK_ALIGNMENT || !(streak.length >= trail / STELLAR_STREAK_SCALE_RATIO && streak.length <= trail * STELLAR_STREAK_SCALE_RATIO)) continue
-		members[i] = 1
+		if (streakAxialAngleDistance(streak.angle, angle) > STELLAR_STREAK_ALIGNMENT || !(streak.length >= trail / STELLAR_STREAK_SCALE_RATIO)) continue
+		if (streak.length <= 2 * STAR_SIGNAL_RADIUS && !(streak.length <= trail * STELLAR_STREAK_SCALE_RATIO)) continue
+
+		for (const star of stars) {
+			const major = star.majorVariance
+			const minor = star.minorVariance
+			if (!(star.snr >= (options.minSNR ?? 2)) || major === undefined || minor === undefined || star.theta === undefined || !Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(star.theta) || !(major >= minor && minor > 0)) continue
+			const localTrail = Math.sqrt(12 * (major - minor))
+			const crossWidth = GAUSSIAN_FWHM_FACTOR * Math.sqrt(minor)
+			if (localTrail < (options.minTrail ?? 0.75) || localTrail < (options.minTrailToCrossWidth ?? 0.25) * crossWidth || !(localTrail >= trail / STELLAR_STREAK_SCALE_RATIO && localTrail <= trail * STELLAR_STREAK_SCALE_RATIO)) continue
+			if (streakAxialAngleDistance(star.theta, angle) > STELLAR_STREAK_ALIGNMENT || !overlapsStreak(star, streak)) continue
+			if (options.saturationLevel !== undefined) {
+				const x = Math.round(star.x)
+				const y = Math.round(star.y)
+				if (x >= 0 && x < image.metadata.width && y >= 0 && y < image.metadata.height) {
+					const offset = y * image.metadata.stride + x * image.metadata.channels
+					let saturated = false
+					for (let channel = 0; channel < image.metadata.channels; channel++) if (image.raw[offset + channel] >= options.saturationLevel) saturated = true
+					if (saturated) continue
+				}
+			}
+			members[i] = 1
+			break
+		}
 	}
 
 	return members

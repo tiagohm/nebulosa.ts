@@ -60,8 +60,8 @@ type MeasuredStarPhotometry = readonly [number, number, number, number, number |
 // Empty photometry returned when the aperture is invalid or has no positive flux.
 const EMPTY_STAR_PHOTOMETRY = [0, 0, 0, 0, undefined, undefined, 0, 0, undefined, undefined, undefined] as const satisfies MeasuredStarPhotometry
 
-// Aperture radius (pixels) over which a star's signal flux is integrated.
-const STAR_SIGNAL_RADIUS = 4
+// Aperture radius (pixels) over which a detected star's signal flux and shape moments are measured.
+export const STAR_SIGNAL_RADIUS = 4
 // Inner radius (pixels) of the background-estimation annulus.
 const STAR_BACKGROUND_INNER_RADIUS = 5
 // Outer radius (pixels) of the background-estimation annulus.
