@@ -916,6 +916,9 @@ const REQUEST_FIRMWARE_DATA = new Uint8Array([START_SYSEX, REPORT_FIRMWARE, END_
 const REQUEST_PIN_CAPABILITY_DATA = new Uint8Array([START_SYSEX, CAPABILITY_QUERY, END_SYSEX])
 const REQUEST_ANALOG_MAPPING_DATA = new Uint8Array([START_SYSEX, ANALOG_MAPPING_QUERY, END_SYSEX])
 
+// Expected reply in the metadata handshake; idle also permits standalone metadata queries.
+type InitializationPhase = 'idle' | 'firmware' | 'capabilities' | 'pinStates' | 'analogMapping' | 'ready'
+
 // High-level Firmata client over a Transport. Drives the startup handshake (firmware → pin capabilities →
 // per-pin state → analog mapping → ready), tracks pin state, and encodes outgoing commands. The encode-
 // side command methods (request*, pinMode, digitalWrite, twoWire*, oneWire*) are self-describing wrappers
@@ -926,10 +929,11 @@ export class FirmataClient implements Disposable {
 	readonly #transport: Transport
 	readonly #board: Board
 
-	#initializing = true
+	#initializationPhase: InitializationPhase = 'idle'
 	#maxTwoWireDelay = 0
 	#oneWireCorrelationId = 0
 	#spiRequestId = 0
+	// SPI reply encoding survives a transport reconnect, but is invalidated by an explicit board reset.
 	readonly #spiPackedBySelector = new Map<number, boolean>()
 	readonly #pinStateRequestQueue: number[] = []
 	readonly #pinMap = new Map<number, Pin>()
@@ -947,7 +951,10 @@ export class FirmataClient implements Disposable {
 			//
 		},
 		firmwareMessage: (client: FirmataClient, major: number, minor: number, name: string) => {
-			this.#initializing && this.requestPinCapability()
+			if (this.#initializationPhase === 'firmware' || this.#initializationPhase === 'idle') {
+				this.#initializationPhase = 'capabilities'
+				this.requestPinCapability()
+			}
 		},
 		systemReset: (client: FirmataClient) => {
 			//
@@ -965,28 +972,37 @@ export class FirmataClient implements Disposable {
 			}
 		},
 		pinCapability: (client: FirmataClient, id: number, modes: Set<PinMode>, resolutions: ReadonlyMap<PinMode, number>) => {
+			if (this.#initializationPhase !== 'capabilities' && this.#initializationPhase !== 'idle' && this.#initializationPhase !== 'ready') return
 			this.#pinMap.set(id, { id, modes, resolutions, mode: PinMode.UNSUPPORTED, value: 0 })
 
 			// if the pin supports some modes, we will ask for its current mode and value.
 			if (modes.size > 0) this.#pinStateRequestQueue.push(id)
 		},
 		pinCapabilitiesFinished: (client: FirmataClient) => {
-			if (this.#pinStateRequestQueue.length > 0) {
+			if (this.#initializationPhase === 'capabilities') {
+				if (this.#pinStateRequestQueue.length > 0) {
+					this.#initializationPhase = 'pinStates'
+					this.requestPinState(this.#pinStateRequestQueue.shift()!)
+				} else {
+					this.#initializationPhase = 'analogMapping'
+					this.requestAnalogMapping()
+				}
+			} else if ((this.#initializationPhase === 'idle' || this.#initializationPhase === 'ready') && this.#pinStateRequestQueue.length > 0) {
 				this.requestPinState(this.#pinStateRequestQueue.shift()!)
-			} else if (this.#initializing) {
-				this.requestAnalogMapping()
 			}
 		},
 		analogMapping: (client: FirmataClient, mapping: AnalogMapping) => {
+			if (this.#initializationPhase !== 'analogMapping' && this.#initializationPhase !== 'idle' && this.#initializationPhase !== 'ready') return
 			Object.assign(this.#analogPins, mapping)
 
-			if (this.#initializing) {
-				this.#initializing = false
+			if (this.#initializationPhase === 'analogMapping') {
+				this.#initializationPhase = 'ready'
 				this.#initialization.resolve(true)
 				this.#fsm.ready()
 			}
 		},
 		pinState: (client: FirmataClient, id: number, mode: PinMode, value: number) => {
+			if (this.#initializationPhase !== 'pinStates' && this.#initializationPhase !== 'idle' && this.#initializationPhase !== 'ready') return
 			const pin = this.#pinMap.get(id)
 
 			if (pin) {
@@ -995,7 +1011,8 @@ export class FirmataClient implements Disposable {
 
 				if (this.#pinStateRequestQueue.length > 0) {
 					this.requestPinState(this.#pinStateRequestQueue.shift()!)
-				} else if (this.#initializing) {
+				} else if (this.#initializationPhase === 'pinStates') {
+					this.#initializationPhase = 'analogMapping'
 					this.requestAnalogMapping()
 				}
 			}
@@ -1076,13 +1093,13 @@ export class FirmataClient implements Disposable {
 		return this.#initialization.promise
 	}
 
-	// Clears local board metadata, I2C, SPI and MultiStepper session state and the parser, then rearms the
-	// handshake; pending initialization resolves false. The board receives no reset command.
+	// Clears local board metadata and parser state, then waits for fresh firmware metadata; pending
+	// initialization resolves false. No board reset is sent, so I2C and SPI configuration is retained.
 	reset() {
 		// Re-arm the one-shot initialization gate so a subsequent (re)connect handshake runs the full
 		// firmware/capability/analog-mapping sequence and emits ready again, and ensureInitializationIsDone
 		// resolves freshly. Without this a reconnect on the same client would never become ready.
-		this.#initializing = true
+		this.#initializationPhase = 'firmware'
 		// Settle the outgoing promise before replacing it: a caller awaiting ensureInitializationIsDone(0)
 		// has no rescue timer, so without this it would be orphaned forever instead of observing the reset.
 		this.#initialization.resolve(false)
@@ -1093,9 +1110,7 @@ export class FirmataClient implements Disposable {
 		this.#pinStateRequestQueue.length = 0
 		this.#pinMap.clear()
 		this.#analogPins = {}
-		this.#maxTwoWireDelay = 0
 		this.#spiRequestId = 0
-		this.#spiPackedBySelector.clear()
 		this.#fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 	}
 
@@ -1107,6 +1122,7 @@ export class FirmataClient implements Disposable {
 
 	// Requests firmware name and version; this starts the client's readiness handshake.
 	requestFirmware() {
+		if (this.#initializationPhase === 'idle') this.#initializationPhase = 'firmware'
 		this.send(REQUEST_FIRMWARE_DATA)
 	}
 
@@ -1115,11 +1131,12 @@ export class FirmataClient implements Disposable {
 		this.send(new Uint8Array([REPORT_VERSION]))
 	}
 
-	// Resets the board, invalidates cached configuration, and requests fresh firmware metadata
-	// to restart the readiness handshake. `reset()` alone only clears local state.
+	// Resets the board, invalidates pin metadata and SPI reply configuration, and requests fresh
+	// firmware metadata to restart the readiness handshake. The firmware retains I2C read delay.
 	sendSystemReset() {
 		this.send(new Uint8Array([SYSTEM_RESET]))
 		this.reset()
+		this.#spiPackedBySelector.clear()
 		this.requestFirmware()
 	}
 
@@ -1253,7 +1270,7 @@ export class FirmataClient implements Disposable {
 	}
 
 	// Configures an eight-bit SPI device from channel, device ID, clock and CS options;
-	// remembers its reply packing until reset or `spiEnd`.
+	// remembers its reply packing until `sendSystemReset` or `spiEnd`.
 	spiConfig(options: SpiDeviceOptions) {
 		if (options.controlCs && options.csPin === undefined) throw new RangeError('SPI firmware-controlled chip select requires a CS pin')
 		const selector = spiSelector(options.channel, options.deviceId)
@@ -1475,8 +1492,7 @@ export class FirmataClient implements Disposable {
 	// their order for later absolute targets. At most ten motors fit a group.
 	multiStepperConfig(group: number, devices: readonly number[]) {
 		const size = devices.length
-		// The firmware indexes five groups and ten motor slots without checking IDs;
-		// MultiStepper itself stores at most ten motors.
+		// Keep host commands within the firmware's five groups and ten motor slots.
 		if (!(Number.isInteger(group) && group >= 0 && group < 5 && size > 0 && size <= 10 && devices.every((device) => Number.isInteger(device) && device >= 0 && device < 10))) throw new RangeError('MultiStepper requires group 0-4 and 1-10 motor IDs in 0-9')
 		this.#sendSysex(ACCELSTEPPER_DATA, [0x20, group, ...devices])
 	}

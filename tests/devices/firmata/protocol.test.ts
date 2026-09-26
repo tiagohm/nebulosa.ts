@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { ESP8266 } from '../../../src/devices/firmata/board'
 import { decodeStepperFloat, encodeStepperFloat } from '../../../src/devices/firmata/codecs/numeric'
 import { FirmataClient, type FirmataClientHandler, PinMode, type StepperConfig, type Transport } from '../../../src/devices/firmata/firmata'
@@ -9,7 +9,7 @@ const transport: Transport = {
 	flush: () => {},
 	close: () => {},
 }
-const client = new FirmataClient(transport, new ESP8266())
+let client: FirmataClient
 const events: unknown[] = []
 const handler: FirmataClientHandler = {
 	pinCapability: (_, id, modes, resolutions) => events.push([id, [...modes], [...resolutions]]),
@@ -26,12 +26,16 @@ const handler: FirmataClientHandler = {
 	schedulerTask: (_, reply) => events.push(['task', reply]),
 	frequencyReport: (_, report) => events.push(['frequency', report]),
 }
-client.addHandler(handler)
+
+beforeEach(() => {
+	client = new FirmataClient(transport, new ESP8266())
+	client.addHandler(handler)
+})
 
 afterEach(() => {
+	client.disconnect()
 	sent.length = 0
 	events.length = 0
-	client.reset()
 })
 
 function receive(command: number, payload: readonly number[]) {
@@ -103,9 +107,79 @@ describe('core and capability', () => {
 		resetClient.spiTransfer(0, 1, Buffer.from([0x80, 1]))
 		expect(writes.at(-1)).toEqual(Buffer.from([0xf0, 0x68, 2, 8, 0, 1, 2, 0, 1, 1, 0, 0xf7]))
 		resetClient.twoWireConfig(10)
-		expect(writes.at(-1)).toEqual(Buffer.from([0xf0, 0x78, 10, 0, 0xf7]))
+		expect(writes.at(-1)).toEqual(Buffer.from([0xf0, 0x78, 44, 2, 0xf7]))
 		resetClient.multiStepperConfig(0, [1])
 		resetClient.multiStepperMoveTo(0, [100])
+	})
+
+	test('a pre-reset analog mapping reply cannot finish the new handshake', async () => {
+		let readyCount = 0
+		client.addHandler({ ready: () => readyCount++ })
+		client.requestFirmware()
+		receive(0x79, [2, 3])
+		receive(0x6c, [0x7f])
+		receive(0x6a, [0x7f])
+		expect(readyCount).toBe(1)
+
+		client.requestAnalogMapping()
+		client.sendSystemReset()
+		const initialization = client.ensureInitializationIsDone(0)
+		let settled = false
+		void initialization.then(() => {
+			settled = true
+		})
+		receive(0x6a, [0]) // reply to the request sent before SYSTEM_RESET
+		await Promise.resolve()
+		expect(settled).toBeFalse()
+		expect(readyCount).toBe(1)
+		expect(client.pinCount).toBe(0)
+		expect(sent.at(-1)).toEqual(Buffer.from([0xf0, 0x79, 0xf7]))
+
+		receive(0x79, [2, 3])
+		expect(sent.at(-1)).toEqual(Buffer.from([0xf0, 0x6b, 0xf7]))
+		receive(0x6c, [PinMode.ANALOG, 10, 0x7f])
+		expect(sent.at(-1)).toEqual(Buffer.from([0xf0, 0x6d, 0, 0xf7]))
+		receive(0x6e, [0, PinMode.ANALOG, 7])
+		expect(sent.at(-1)).toEqual(Buffer.from([0xf0, 0x69, 0xf7]))
+		expect(readyCount).toBe(1)
+		receive(0x6a, [0])
+		expect(await initialization).toBeTrue()
+		expect(readyCount).toBe(2)
+		expect(client.pinAt(0)?.value).toBe(7)
+	})
+
+	test('reset during capability discovery ignores replies from the previous handshake', async () => {
+		let readyCount = 0
+		client.addHandler({ ready: () => readyCount++ })
+		client.requestFirmware()
+		receive(0x79, [2, 3])
+		const previousInitialization = client.ensureInitializationIsDone(0)
+		client.sendSystemReset()
+		expect(await previousInitialization).toBeFalse()
+		const initialization = client.ensureInitializationIsDone(0)
+
+		receive(0x6c, [PinMode.ANALOG, 10, 0x7f])
+		receive(0x6a, [0])
+		expect(client.pinCount).toBe(0)
+		expect(readyCount).toBe(0)
+		expect(sent.at(-1)).toEqual(Buffer.from([0xf0, 0x79, 0xf7]))
+
+		receive(0x79, [2, 3])
+		receive(0x6c, [0x7f])
+		receive(0x6a, [0x7f])
+		expect(await initialization).toBeTrue()
+		expect(readyCount).toBe(1)
+		expect(client.pinCount).toBe(1)
+	})
+
+	test('a local transport reset retains I2C delay and SPI reply encoding', () => {
+		client.twoWireConfig(300)
+		client.spiConfig({ channel: 0, deviceId: 1, packed: true })
+		client.close()
+		client.twoWireConfig(10)
+		expect(sent.at(-1)).toEqual(Buffer.from([0xf0, 0x78, 44, 2, 0xf7]))
+		client.spiTransfer(0, 1, Buffer.from([0x80, 1]))
+		expect(sent.at(-1)).toEqual(Buffer.from([0xf0, 0x68, 2, 8, 0, 1, 2, 0, 3, 0, 0xf7]))
 	})
 
 	test('supports unsigned 32-bit extended analog and analog channels above 15', () => {
