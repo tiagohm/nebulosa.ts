@@ -587,8 +587,8 @@ export function standardDeviationOf(a: Readonly<NumberArray>, count: number = a.
 // Computes a percentile from an ascending-sorted numeric array using linear interpolation between ranks.
 // `percentile` is a fraction in [0, 1]; values outside that range are clamped to the first/last element.
 // Returns NaN for an empty array.
-export function percentileOf(values: Readonly<NumberArray>, percentile: number) {
-	const n = values.length
+export function percentileOf(values: Readonly<NumberArray>, percentile: number, count: number = values.length) {
+	const n = count
 	if (n === 0) return Number.NaN
 	if (n === 1 || percentile <= 0) return values[0]
 	if (percentile >= 1) return values[n - 1]

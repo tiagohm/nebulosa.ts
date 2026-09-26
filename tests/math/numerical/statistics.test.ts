@@ -306,6 +306,7 @@ test('percentile of', () => {
 	expect(percentileOf(new Float64Array([10, 20, 30, 40]), 1)).toBe(40)
 	expect(percentileOf(new Float64Array([10, 20, 30, 40]), -1)).toBe(10)
 	expect(percentileOf(new Float64Array([10, 20, 30, 40]), 2)).toBe(40)
+	expect(percentileOf(new Float64Array([10, 20, 30, 40, 50]), 0.5, 4)).toBe(25)
 	expect(percentileOf(new Float64Array(), 0.5)).toBeNaN()
 })
 

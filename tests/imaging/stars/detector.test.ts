@@ -204,8 +204,11 @@ test('detect stars measures round and elongated shapes from central moments', ()
 	expect(elongated).toBeDefined()
 	expect(round.eccentricity).toBeLessThan(0.1)
 	expect(round.elongation).toBeCloseTo(1, 1)
+	expect(round.majorVariance).toBeCloseTo(round.minorVariance!, 1)
 	expect(elongated.eccentricity).toBeGreaterThan(0.5)
 	expect(elongated.elongation).toBeGreaterThan(1.5)
+	expect(elongated.majorVariance).toBeGreaterThan(elongated.minorVariance!)
+	expect(elongated.theta).toBeCloseTo(0, 1)
 })
 
 test('detect stars keeps a faint field when a few stars are much brighter', () => {
