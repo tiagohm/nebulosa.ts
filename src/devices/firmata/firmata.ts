@@ -1,8 +1,15 @@
 import type { NumberArray } from '../../math/numerical/math'
+import { decodePacked7Bit, decodeUnsigned7, encodePacked7Bit, encodeSigned32, encodeStepperFloat, encodeStepperPosition, encodeUnsigned7 } from './codecs/numeric'
+import { decodeDhtReport, decodeEncoderPositions, decodeFrequencyReport, decodeSchedulerReply, decodeSerialReply, decodeStepperReply, decodeSystemVariableReply, type DhtReport, type EncoderPosition, type FrequencyReport, type SchedulerTaskReply, type StepperPosition, type SystemVariableReply } from './codecs/replies'
+import { decodeSpiReply, encodeSpiConfig, encodeSpiWords, spiSelector, type SpiChannel, type SpiDeviceOptions, type SpiReply } from './codecs/spi'
 
-// Firmata protocol implementation: a byte-stream state machine (FSM) that parses incoming Firmata/sysex
-// messages, and a FirmataClient that encodes outgoing commands (pin control, I2C/two-wire, 1-Wire) over a
-// pluggable transport. Mirrors the reference protocol; 7-bit packing helpers handle the wire encoding.
+export { decodePacked7Bit, encodePacked7Bit } from './codecs/numeric'
+export type { DhtReport, EncoderPosition, FrequencyReport, SchedulerTaskReply, StepperPosition, SystemVariableReply } from './codecs/replies'
+export type { SpiChannel, SpiDataMode, SpiDeviceOptions, SpiReply } from './codecs/spi'
+
+// Firmata protocol implementation: a byte-stream state machine that parses incoming Firmata and sysex
+// messages, and a FirmataClient that encodes pin, bus, motion, sensor, timing, and system commands over a
+// pluggable transport. Protocol codecs own the 7-bit wire formats and allocate decoded reply values.
 // https://github.com/firmata/protocol/blob/master/protocol.md
 
 // Mapping from analog channel index to its underlying pin id, as reported by the board.
@@ -43,58 +50,165 @@ export interface OneWireCommandOptions {
 
 // Byte-stream transport abstraction (TCP, serial, etc.) used to send/receive Firmata bytes.
 export interface Transport {
+	// Writes `data` to the board; byte offset and length select a source-buffer slice.
 	readonly write: (data: string | Bun.BufferSource, byteOffset?: number, byteLength?: number) => void
+	// Flushes bytes queued by `write` to the underlying connection.
 	readonly flush: () => void
+	// Closes the underlying connection and releases its resources.
 	readonly close: () => void
 }
 
 // Board capability description: pin-classification predicates and per-mode channel-index conversions.
 export interface Board {
+	// Human-readable board model name.
 	readonly name: string
+	// Whether physical `pin` drives a board LED.
 	readonly isPinLED: (pin: number) => boolean
+	// Whether physical `pin` supports digital input or output.
 	readonly isPinDigital: (pin: number) => boolean
+	// Whether physical `pin` supports an analog input channel.
 	readonly isPinAnalog: (pin: number) => boolean
+	// Whether physical `pin` supports pulse-width-modulated output.
 	readonly isPinPWM: (pin: number) => boolean
+	// Whether physical `pin` supports servo output.
 	readonly isPinServo: (pin: number) => boolean
+	// Whether physical `pin` belongs to an I2C bus.
 	readonly isPinTwoWire: (pin: number) => boolean
+	// Whether physical `pin` belongs to an SPI bus.
 	readonly isPinSPI: (pin: number) => boolean
+	// Whether physical `pin` belongs to a hardware UART.
 	readonly isPinSerial: (pin: number) => boolean
+	// Converts physical `pin` to its digital channel number.
 	readonly pinToDigital: (pin: number) => number
+	// Converts physical `pin` to its analog input channel number.
 	readonly pinToAnalog: (pin: number) => number
+	// Converts physical `pin` to its PWM output identifier.
 	readonly pinToPWM: (pin: number) => number
+	// Converts physical `pin` to its servo output identifier.
 	readonly pinToServo: (pin: number) => number
 }
 
 // Runtime state of one board pin: its id, supported modes, current mode, and last value.
 export interface Pin {
+	// Physical pin identifier reported by the board, starting at zero.
 	readonly id: number
+	// Supported pin modes discovered from the capability response.
 	readonly modes: Set<PinMode>
+	// Resolution or feature-specific capability value for each supported mode.
+	readonly resolutions: ReadonlyMap<PinMode, number>
+	// Current mode reported by the board or assigned by `pinMode`.
 	mode: PinMode
+	// Last raw value reported by the board, in that mode's units.
 	value: number
 }
+
+// Serial 1.0 hardware ports 0-7 and software ports 8-15.
+export type SerialPort = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
+
+// DHT sensor variants supported by the Firmata DHT feature.
+export type DhtModel = 'dht11' | 'dht22'
+
+// Shared AccelStepper pins and optional enable/inversion controls.
+interface StepperConfigBase {
+	// Motor number, 0-9.
+	readonly device: number
+	// Step-size exponent; 0 means full steps, 1 half steps, and so on up to 7.
+	readonly stepType?: number
+	// First motor or step pin, 0-127.
+	readonly pin1: number
+	// Second motor or direction pin, 0-127.
+	readonly pin2: number
+	// Optional driver-enable pin, 0-127.
+	readonly enablePin?: number
+	// Pin-inversion mask: bits 0-3 motor pins, bit 4 enable pin.
+	readonly invertPins?: number
+}
+
+// AccelStepper interface choice with its exact number of required motor pins.
+export type StepperConfig = StepperConfigBase &
+	(
+		| {
+				// Driver or two-wire motor requiring only pin1 and pin2.
+				readonly interface: 'driver' | 'twoWire'
+		  }
+		| {
+				// Three-wire motor requiring one additional physical pin.
+				readonly interface: 'threeWire'
+				// Third motor pin, 0-127.
+				readonly pin3: number
+		  }
+		| {
+				// Four-wire motor requiring two additional physical pins.
+				readonly interface: 'fourWire'
+				// Third motor pin, 0-127.
+				readonly pin3: number
+				// Fourth motor pin, 0-127.
+				readonly pin4: number
+		  }
+	)
 
 // Optional callbacks for Firmata events. Every method is optional so handlers subscribe only to the
 // messages they care about; each receives the originating client. Mirrors the protocol message set.
 export interface FirmataClientHandler {
+	// Called once after the firmware, capability, pin-state and analog-mapping handshake.
 	readonly ready?: (client: FirmataClient) => void
+	// Updated cached pin state after a reported value changes; `pin` aliases client state.
 	readonly pinChange?: (client: FirmataClient, pin: Pin) => void
 
+	// Unrecognized SysEx bytes including the feature ID; data aliases parser scratch storage.
 	readonly customMessage?: (client: FirmataClient, data: Buffer) => void
+	// Protocol major and minor version from REPORT_VERSION.
 	readonly version?: (client: FirmataClient, major: number, minor: number) => void
+	// Firmware major/minor version and decoded name from REPORT_FIRMWARE.
 	readonly firmwareMessage?: (client: FirmataClient, major: number, minor: number, name: string) => void
+	// SYSTEM_RESET notification received from the board.
 	readonly systemReset?: (client: FirmataClient) => void
+	// Unrecognized command byte encountered by the parser outside a SysEx frame.
 	readonly error?: (client: FirmataClient, command: number) => void
+	// Digital pin ID and latest logic level (zero or one).
 	readonly digitalMessage?: (client: FirmataClient, id: number, value: number) => void
+	// Analog channel number and latest unsigned sample in the board's ADC units.
 	readonly analogMessage?: (client: FirmataClient, port: number, value: number) => void
-	readonly pinCapability?: (client: FirmataClient, id: number, modes: Set<PinMode>) => void
+	// Pin ID, supported mode set and per-mode resolution or feature-specific capability.
+	readonly pinCapability?: (client: FirmataClient, id: number, modes: Set<PinMode>, resolutions: ReadonlyMap<PinMode, number>) => void
+	// End of the per-pin capability response, after the final pin event.
 	readonly pinCapabilitiesFinished?: (client: FirmataClient) => void
+	// Analog-channel-to-pin mapping discovered from ANALOG_MAPPING_RESPONSE.
 	readonly analogMapping?: (client: FirmataClient, mapping: AnalogMapping) => void
+	// Pin ID, current mode and raw signed/unsigned state value returned by PIN_STATE_RESPONSE.
 	readonly pinState?: (client: FirmataClient, id: number, mode: PinMode, value: number) => void
+	// UTF-8 text decoded from STRING_DATA.
 	readonly textMessage?: (client: FirmataClient, message: string) => void
+	// I2C device address, register number and newly allocated reply bytes.
 	readonly twoWireMessage?: (client: FirmataClient, address: number, register: number, data: Buffer) => void
+	// 1-Wire pin, ROM addresses and whether this was an alarm search.
 	readonly oneWireSearchReply?: (client: FirmataClient, pin: number, addresses: readonly Buffer[], alarms: boolean) => void
+	// 1-Wire pin, read correlation ID and returned data bytes.
 	readonly oneWireReadReply?: (client: FirmataClient, pin: number, correlationId: number, data: Buffer) => void
+	// Current sampling interval in milliseconds after a 0x7c query.
+	readonly samplingIntervalReply?: (client: FirmataClient, milliseconds: number) => void
+	// System-variable query/set result and firmware status.
+	readonly systemVariableReply?: (client: FirmataClient, reply: SystemVariableReply) => void
+	// SPI reply with device and request identifiers for asynchronous correlation.
+	readonly spiReply?: (client: FirmataClient, reply: SpiReply) => void
+	// Bytes received from a Serial 1.0 hardware/software port.
+	readonly serialReply?: (client: FirmataClient, port: SerialPort, data: Buffer) => void
+	// Single or batched encoder positions in reported order.
+	readonly encoderPositions?: (client: FirmataClient, positions: readonly EncoderPosition[]) => void
+	// Motor position after a query or completed move.
+	readonly stepperPosition?: (client: FirmataClient, report: StepperPosition) => void
+	// Completion notification for a coordinated MultiStepper group.
+	readonly multiStepperComplete?: (client: FirmataClient, group: number) => void
+	// DHT temperature in degrees Celsius and humidity in percent.
+	readonly dhtReport?: (client: FirmataClient, report: DhtReport) => void
+	// Identifiers of all currently registered scheduler tasks.
+	readonly schedulerTasks?: (client: FirmataClient, ids: readonly number[]) => void
+	// Scheduler task query or execution error.
+	readonly schedulerTask?: (client: FirmataClient, reply: SchedulerTaskReply) => void
+	// Raw timestamp in milliseconds and accumulated edge count, both unsigned 32-bit.
+	readonly frequencyReport?: (client: FirmataClient, report: FrequencyReport) => void
 
+	// Transport closure; the client resets its local handshake state after notification.
 	readonly close?: (client: FirmataClient) => void
 }
 
@@ -103,8 +217,8 @@ export interface FirmataFsmState {
 	readonly process: (byte: number, fsm: FirmataFsm) => void
 }
 
-// Firmata pin modes (values match the protocol). Extended modes follow the standard set; UNSUPPORTED and
-// IGNORED are sentinel values from capability reports.
+// Firmata pin modes (values match the protocol). Unknown future numeric modes retain their value;
+// UNSUPPORTED and IGNORED are explicit sentinels.
 export enum PinMode {
 	INPUT,
 	OUTPUT,
@@ -123,6 +237,7 @@ export enum PinMode {
 	SONAR,
 	TONE,
 	DHT,
+	FREQUENCY,
 	UNSUPPORTED = 126,
 	IGNORED = 127,
 }
@@ -135,12 +250,12 @@ export const DEFAULT_ONE_WIRE_COMMAND_OPTIONS: OneWireCommandOptions = {
 
 // PROTOCOL
 
-// Maps a raw protocol mode byte to a PinMode, folding the ignore sentinel and out-of-range values to
-// IGNORED/UNSUPPORTED respectively.
+// Maps a raw protocol mode byte to a PinMode while preserving future numeric mode IDs.
 function resolvePinMode(mode: number): PinMode {
 	if (mode === PIN_MODE_IGNORE) return PinMode.IGNORED
-	else if (mode >= TOTAL_PIN_MODES) return PinMode.UNSUPPORTED
-	else return mode
+	if (mode === PinMode.UNSUPPORTED) return PinMode.UNSUPPORTED
+	// Keep unknown future modes by numeric identity so their resolution survives discovery.
+	return mode
 }
 
 // Thin adapter feeding an incoming byte buffer into the parser FSM one byte at a time.
@@ -181,11 +296,19 @@ const END_SYSEX = 0xf7
 const RESERVED_COMMAND = 0x00
 const SERIAL_MESSAGE = 0x60
 const ENCODER_DATA = 0x61
+// AccelStepper and MultiStepper command/reply family.
+const ACCELSTEPPER_DATA = 0x62
+// Report an analog sample wider than the standard 14-bit command.
+const EXTENDED_REPORT_ANALOG = 0x64
+// Query or set a typed firmware system variable.
+const SYSTEM_VARIABLE = 0x66
+// Configure and exchange SPI words with selected devices.
+const SPI_DATA = 0x68
 const SERVO_CONFIG = 0x70
 const STRING_DATA = 0x71
-const STEPPER_DATA = 0x72
 const ONE_WIRE_DATA = 0x73
-const SHIFT_DATA = 0x75
+// Attach, detach and report DHT humidity/temperature sensors.
+const DHTSENSOR_DATA = 0x74
 const TWO_WIRE_REQUEST = 0x76
 const TWO_WIRE_REPLY = 0x77
 const TWO_WIRE_CONFIG = 0x78
@@ -199,6 +322,10 @@ const ANALOG_MAPPING_RESPONSE = 0x6a
 const REPORT_FIRMWARE = 0x79
 const SAMPLING_INTERVAL = 0x7a
 const SCHEDULER_DATA = 0x7b
+// Query the current firmware sampling interval.
+const SAMPLING_INTERVAL_QUERY = 0x7c
+// Configure and report raw frequency counter samples.
+const FREQUENCY_COMMAND = 0x7d
 const SYSEX_NON_REALTIME = 0x7e
 const SYSEX_REALTIME = 0x7f
 
@@ -216,7 +343,6 @@ const PIN_MODE_ENCODER = 0x09
 const PIN_MODE_SERIAL = 0x0a
 const PIN_MODE_PULLUP = 0x0b
 const PIN_MODE_IGNORE = 0x7f
-const TOTAL_PIN_MODES = 16
 
 const TWO_WIRE_WRITE = 0x00
 const TWO_WIRE_READ = 0x08
@@ -254,38 +380,6 @@ export function decodeByteAs7Bit(input: Readonly<NumberArray> | Buffer, offset: 
 export function encodeByteAs7Bit(data: number, output: NumberArray | Buffer, offset: number = 0) {
 	output[offset++] = data & 0x7f
 	output[offset] = (data >>> 7) & 1
-}
-
-// Unpacks a densely packed 7-bit byte stream (8 data bytes per 7 wire bytes) back into raw bytes.
-export function decodePacked7Bit(input: Readonly<NumberArray> | Buffer, offset: number = 0, length: number = input.length - offset) {
-	const output = Buffer.alloc(Math.floor(Math.max(0, length) * 0.875))
-
-	for (let i = 0; i < output.length; i++) {
-		const bitOffset = i << 3
-		const p = Math.floor(bitOffset / 7)
-		const s = bitOffset % 7
-		const lo = input[offset + p] ?? 0
-		const hi = input[offset + p + 1] ?? 0
-		output[i] = ((lo >>> s) | (hi << (7 - s))) & 0xff
-	}
-
-	return output
-}
-
-// Packs raw bytes into the dense 7-bit wire encoding (inverse of decodePacked7Bit).
-export function encodePacked7Bit(input: Readonly<NumberArray> | Buffer, offset: number = 0, length: number = input.length - offset) {
-	const output = Buffer.alloc(Math.ceil((Math.max(0, length) << 3) / 7))
-
-	for (let i = 0; i < length; i++) {
-		const value = input[offset + i] & 0xff
-		const bitOffset = i << 3
-		const p = Math.floor(bitOffset / 7)
-		const s = bitOffset % 7
-		output[p] |= (value << s) & 0x7f
-		if (p + 1 < output.length) output[p + 1] |= (value >>> (7 - s)) & 0x7f
-	}
-
-	return output
 }
 
 // Parses the two-byte protocol version (major, minor) and emits a version event.
@@ -334,14 +428,7 @@ const PARSING_FIRMWARE_MESSAGE_STATE = new ParsingFirmwareMessageState()
 class ParsingExtendedAnalogMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
-			const portId = fsm.read(0)
-			let value = fsm.read(1)
-
-			for (let i = 2; i < fsm.offset; i++) {
-				value = value | (fsm.read(i) << (7 * (i - 1)))
-			}
-
-			fsm.analogMessage(portId, value)
+			if (fsm.offset >= 2 && fsm.offset <= 6) fsm.analogMessage(fsm.read(0), decodeUnsigned7(fsm.buffer, 1, fsm.offset - 1))
 			fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 		} else {
 			fsm.write(b)
@@ -362,13 +449,15 @@ class ParsingCapabilityResponseState implements FirmataFsmState {
 			const pin = fsm.offset === 0 ? 0 : fsm.read(0)
 
 			const modes = new Set<PinMode>()
+			const resolutions = new Map<PinMode, number>()
 
-			for (let i = 1; i < fsm.offset; i += 2) {
-				// Every second byte contains mode's resolution of pin.
-				modes.add(resolvePinMode(fsm.read(i)))
+			for (let i = 1; i + 1 < fsm.offset; i += 2) {
+				const mode = resolvePinMode(fsm.read(i))
+				modes.add(mode)
+				resolutions.set(mode, fsm.read(i + 1))
 			}
 
-			fsm.pinCapability(pin, modes)
+			if (fsm.offset === 0 || fsm.offset % 2 === 1) fsm.pinCapability(pin, modes, resolutions)
 			fsm.transitTo(this)
 			fsm.write(pin + 1) // next pin at byte 0
 		} else {
@@ -406,13 +495,7 @@ const PARSING_ANALOG_MAPPING_STATE = new ParsingAnalogMappingState()
 class PinStateParsingState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
-			let value = 0
-
-			for (let i = 2; i < fsm.offset; i++) {
-				value = value | (fsm.read(i) << ((i - 2) * 7))
-			}
-
-			fsm.pinState(fsm.read(0), resolvePinMode(fsm.read(1)), value)
+			if (fsm.offset >= 2 && fsm.offset <= 7) fsm.pinState(fsm.read(0), resolvePinMode(fsm.read(1)), decodeUnsigned7(fsm.buffer, 2, fsm.offset - 2))
 			fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 		} else {
 			fsm.write(b)
@@ -496,6 +579,28 @@ class ParsingOneWireMessageState implements FirmataFsmState {
 
 const PARSING_ONE_WIRE_MESSAGE_STATE = new ParsingOneWireMessageState()
 
+// Buffers one optional-feature payload and dispatches it only after a complete SysEx frame.
+class ParsingFeatureSysexMessageState implements FirmataFsmState {
+	constructor(readonly command: number) {}
+
+	process(b: number, fsm: FirmataFsm) {
+		if (b === END_SYSEX) {
+			fsm.featureReply(this.command, fsm.buffer)
+			fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
+		} else if (b >= 128) {
+			// SysEx data must be seven-bit. A new command also recovers from a
+			// missing terminator without swallowing the next frame.
+			fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
+			WAITING_FOR_MESSAGE_STATE.process(b, fsm)
+		} else {
+			fsm.write(b)
+		}
+	}
+}
+
+// Shared parsers for optional SysEx feature replies, keyed by their command byte.
+const FEATURE_STATES = new Map<number, FirmataFsmState>([SYSTEM_VARIABLE, SPI_DATA, SERIAL_MESSAGE, ENCODER_DATA, ACCELSTEPPER_DATA, DHTSENSOR_DATA, SAMPLING_INTERVAL, SCHEDULER_DATA, FREQUENCY_COMMAND].map((command) => [command, new ParsingFeatureSysexMessageState(command)]))
+
 // Dispatches the first byte after START_SYSEX to the matching sub-parser state, falling back to the
 // custom-sysex parser for unknown commands.
 class ParsingSysexMessageState implements FirmataFsmState {
@@ -510,6 +615,7 @@ class ParsingSysexMessageState implements FirmataFsmState {
 		else if (b === STRING_DATA) next = PARSING_STRING_MESSAGE_STATE
 		else if (b === TWO_WIRE_REPLY) next = PARSING_TWO_WIRE_MESSAGE_STATE
 		else if (b === ONE_WIRE_DATA) next = PARSING_ONE_WIRE_MESSAGE_STATE
+		else next = FEATURE_STATES.get(b)
 
 		if (!next) {
 			const state = PARSING_CUSTOM_SYSEX_MESSAGE_STATE
@@ -725,8 +831,8 @@ export class FirmataFsm {
 		for (const handler of this.#handlers) handler.analogMessage?.(this.client, port, value)
 	}
 
-	pinCapability(id: number, modes: Set<PinMode>) {
-		for (const handler of this.#handlers) handler.pinCapability?.(this.client, id, modes)
+	pinCapability(id: number, modes: Set<PinMode>, resolutions: ReadonlyMap<PinMode, number>) {
+		for (const handler of this.#handlers) handler.pinCapability?.(this.client, id, modes, resolutions)
 	}
 
 	pinCapabilitiesFinished() {
@@ -755,6 +861,39 @@ export class FirmataFsm {
 
 	oneWireReadReply(pin: number, correlationId: number, data: Buffer) {
 		for (const handler of this.#handlers) handler.oneWireReadReply?.(this.client, pin, correlationId, data)
+	}
+
+	// Validates optional-feature reply framing and broadcasts a typed event when complete.
+	featureReply(command: number, payload: Buffer) {
+		if (command === SAMPLING_INTERVAL) {
+			if (payload.length === 2) for (const handler of this.#handlers) handler.samplingIntervalReply?.(this.client, decodeUnsigned7(payload, 0, 2))
+		} else if (command === SYSTEM_VARIABLE) {
+			const reply = decodeSystemVariableReply(payload)
+			if (reply) for (const handler of this.#handlers) handler.systemVariableReply?.(this.client, reply)
+		} else if (command === SPI_DATA) {
+			const reply = this.client.parseSpiReply(payload)
+			if (reply) for (const handler of this.#handlers) handler.spiReply?.(this.client, reply)
+		} else if (command === SERIAL_MESSAGE) {
+			const reply = decodeSerialReply(payload)
+			if (reply) for (const handler of this.#handlers) handler.serialReply?.(this.client, reply.port as SerialPort, reply.data)
+		} else if (command === ENCODER_DATA) {
+			const positions = decodeEncoderPositions(payload)
+			if (positions) for (const handler of this.#handlers) handler.encoderPositions?.(this.client, positions)
+		} else if (command === ACCELSTEPPER_DATA) {
+			const reply = decodeStepperReply(payload)
+			if (reply && 'group' in reply) for (const handler of this.#handlers) handler.multiStepperComplete?.(this.client, reply.group)
+			else if (reply) for (const handler of this.#handlers) handler.stepperPosition?.(this.client, reply)
+		} else if (command === DHTSENSOR_DATA) {
+			const reply = decodeDhtReport(payload)
+			if (reply) for (const handler of this.#handlers) handler.dhtReport?.(this.client, reply)
+		} else if (command === SCHEDULER_DATA) {
+			const reply = decodeSchedulerReply(payload)
+			if (reply && 'ids' in reply) for (const handler of this.#handlers) handler.schedulerTasks?.(this.client, reply.ids)
+			else if (reply) for (const handler of this.#handlers) handler.schedulerTask?.(this.client, reply)
+		} else if (command === FREQUENCY_COMMAND) {
+			const reply = decodeFrequencyReport(payload)
+			if (reply) for (const handler of this.#handlers) handler.frequencyReport?.(this.client, reply)
+		}
 	}
 
 	close() {
@@ -786,6 +925,8 @@ export class FirmataClient implements Disposable {
 	#initializing = true
 	#maxTwoWireDelay = 0
 	#oneWireCorrelationId = 0
+	#spiRequestId = 0
+	readonly #spiPackedBySelector = new Map<number, boolean>()
 
 	readonly #pinStateRequestQueue: number[] = []
 	readonly #pinMap = new Map<number, Pin>()
@@ -820,8 +961,8 @@ export class FirmataClient implements Disposable {
 				this.#fsm.pinChange(pin)
 			}
 		},
-		pinCapability: (client: FirmataClient, id: number, modes: Set<PinMode>) => {
-			this.#pinMap.set(id, { id, modes, mode: PinMode.UNSUPPORTED, value: 0 })
+		pinCapability: (client: FirmataClient, id: number, modes: Set<PinMode>, resolutions: ReadonlyMap<PinMode, number>) => {
+			this.#pinMap.set(id, { id, modes, resolutions, mode: PinMode.UNSUPPORTED, value: 0 })
 
 			// if the pin supports some modes, we will ask for its current mode and value.
 			if (modes.size > 0) this.#pinStateRequestQueue.push(id)
@@ -870,6 +1011,7 @@ export class FirmataClient implements Disposable {
 		},
 	}
 
+	// Binds a byte-stream transport and board pin map; no I/O occurs until a request is sent.
 	constructor(transport: Transport, board: Board) {
 		this.#transport = transport
 		this.#board = board
@@ -878,6 +1020,7 @@ export class FirmataClient implements Disposable {
 		this.addHandler(this.#handler)
 	}
 
+	// Closes the transport and releases local parser/session state.
 	[Symbol.dispose]() {
 		this.disconnect()
 	}
@@ -887,21 +1030,22 @@ export class FirmataClient implements Disposable {
 		return this.#pinMap.size
 	}
 
-	// Iterator over the known pins.
+	// Live iterator over cached pins; pin objects may mutate after reports arrive.
 	get pins(): MapIterator<Readonly<Pin>> {
 		return this.#pinMap.values()
 	}
 
-	// Returns the pin state for an id, or undefined if unknown.
+	// Returns cached state for physical pin `id`, or undefined before discovery.
 	pinAt(id: number): Readonly<Pin> | undefined {
 		return this.#pinMap.get(id)
 	}
 
-	// Registers/unregisters an external event handler.
+	// Registers an external event handler; duplicate registrations are ignored.
 	addHandler(handler: FirmataClientHandler) {
 		this.#fsm.addHandler(handler)
 	}
 
+	// Stops delivering future events to `handler`.
 	removeHandler(handler: FirmataClientHandler) {
 		this.#fsm.removeHandler(handler)
 	}
@@ -912,11 +1056,12 @@ export class FirmataClient implements Disposable {
 		this.reset()
 	}
 
-	// Feeds received bytes into the parser.
+	// Feeds a received byte chunk into the parser; complete messages emit handler callbacks.
 	process(data: Buffer) {
 		this.#parser.process(data)
 	}
 
+	// Feeds one incoming transport byte to the parser.
 	processByte(b: number) {
 		this.#parser.processByte(b)
 	}
@@ -928,6 +1073,8 @@ export class FirmataClient implements Disposable {
 		return this.#initialization.promise
 	}
 
+	// Clears local board metadata, SPI correlation state and the parser, then rearms the
+	// handshake; pending initialization resolves false. The board receives no reset command.
 	reset() {
 		// Re-arm the one-shot initialization gate so a subsequent (re)connect handshake runs the full
 		// firmware/capability/analog-mapping sequence and emits ready again, and ensureInitializationIsDone
@@ -943,30 +1090,67 @@ export class FirmataClient implements Disposable {
 		this.#pinStateRequestQueue.length = 0
 		this.#pinMap.clear()
 		this.#analogPins = {}
+		this.#spiRequestId = 0
+		this.#spiPackedBySelector.clear()
 		this.#fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 	}
 
+	// Writes a framed message or source-buffer slice to the transport and flushes it.
 	send(message: string | Bun.BufferSource, byteOffset?: number, byteLength?: number) {
 		this.#transport.write(message, byteOffset, byteLength)
 		this.#transport.flush()
 	}
 
+	// Requests firmware name and version; this starts the client's readiness handshake.
 	requestFirmware() {
 		this.send(REQUEST_FIRMWARE_DATA)
 	}
 
+	// Requests the two-byte Firmata protocol version; the result arrives through `version`.
+	requestProtocolVersion() {
+		this.send(new Uint8Array([REPORT_VERSION]))
+	}
+
+	// Sends a reset to the board; `reset()` only clears this client's local session state.
+	sendSystemReset() {
+		this.send(new Uint8Array([SYSTEM_RESET]))
+	}
+
+	// Frames a feature `command` and its already 7-bit-safe `payload`, allocating
+	// one outbound buffer before writing and flushing it.
+	#sendSysex(command: number, payload: readonly number[]) {
+		const message = new Uint8Array(payload.length + 3)
+		message[0] = START_SYSEX
+		message[1] = command
+		message.set(payload, 2)
+		message[message.length - 1] = END_SYSEX
+		this.send(message)
+	}
+
+	// Sends UTF-8 `message` text using STRING_DATA's two-seven-bit-byte-per-octet layout.
+	sendString(message: string) {
+		const bytes = Buffer.from(message, 'utf8')
+		const payload: number[] = []
+		for (const byte of bytes) payload.push(byte & 0x7f, byte >>> 7)
+		this.#sendSysex(STRING_DATA, payload)
+	}
+
+	// Requests supported modes and their resolution for every physical pin.
 	requestPinCapability() {
 		this.send(REQUEST_PIN_CAPABILITY_DATA)
 	}
 
+	// Requests current mode and raw value for physical pin `pinId`.
 	requestPinState(pinId: number) {
 		this.send(new Uint8Array([START_SYSEX, PIN_STATE_QUERY, pinId, END_SYSEX]))
 	}
 
+	// Requests the board's analog-channel-to-physical-pin map.
 	requestAnalogMapping() {
 		this.send(REQUEST_ANALOG_MAPPING_DATA)
 	}
 
+	// Enables or disables all 16 standard eight-pin digital reporting ports.
 	requestDigitalReport(enable: boolean) {
 		const message = new Uint8Array(32)
 
@@ -978,10 +1162,12 @@ export class FirmataClient implements Disposable {
 		this.send(message)
 	}
 
+	// Enables or disables reports for the eight-pin digital port containing `pin`.
 	requestDigitalPinReport(pin: number, enable: boolean) {
 		this.send(new Uint8Array([REPORT_DIGITAL | ((this.#board.pinToDigital(pin) >> 3) & 0x0f), enable ? 1 : 0]))
 	}
 
+	// Enables or disables reporting for all 16 standard analog channels.
 	requestAnalogReport(enable: boolean) {
 		const message = new Uint8Array(32)
 
@@ -993,10 +1179,15 @@ export class FirmataClient implements Disposable {
 		this.send(message)
 	}
 
+	// Enables or disables reporting for physical `pin`'s analog channel; channels
+	// above 15 use EXTENDED_REPORT_ANALOG and return samples through `analogMessage`.
 	requestAnalogPinReport(pin: number, enable: boolean) {
-		this.send(new Uint8Array([REPORT_ANALOG | this.#board.pinToAnalog(pin), enable ? 1 : 0]))
+		const channel = this.#board.pinToAnalog(pin)
+		if (channel < 16) this.send(new Uint8Array([REPORT_ANALOG | channel, enable ? 1 : 0]))
+		else this.#sendSysex(EXTENDED_REPORT_ANALOG, [channel, enable ? 1 : 0])
 	}
 
+	// Sets physical `pin` to `mode` and updates its cached mode immediately.
 	pinMode(pin: number, mode: PinMode) {
 		const state = this.#pinMap.get(pin)
 		if (state) state.mode = mode
@@ -1004,26 +1195,20 @@ export class FirmataClient implements Disposable {
 		this.send(new Uint8Array([SET_PIN_MODE, pin, mode]))
 	}
 
+	// Drives a physical digital pin low for zero/false or high for any other value.
 	digitalWrite(pin: number, value: boolean | number) {
 		this.send(new Uint8Array([SET_DIGITAL_PIN_VALUE, pin, value ? 1 : 0]))
 	}
 
-	// Writes a PWM/analog value using the extended-analog sysex, choosing the shortest 7-bit encoding for
-	// the value (clamped to 28 bits).
+	// Writes `value` to physical PWM/servo `pin`, saturated to unsigned 32 bits,
+	// using the shortest extended-analog encoding of up to five 7-bit bytes.
 	analogWrite(pin: number, value: number) {
-		const data = Math.max(0, Math.min(0x0fffffff, Math.trunc(value)))
-
-		if (data < 0x80) {
-			this.send(new Uint8Array([START_SYSEX, EXTENDED_ANALOG, this.#board.pinToPWM(pin), data, END_SYSEX]))
-		} else if (data < 0x4000) {
-			this.send(new Uint8Array([START_SYSEX, EXTENDED_ANALOG, this.#board.pinToPWM(pin), data & 0x7f, (data >>> 7) & 0x7f, END_SYSEX]))
-		} else if (data < 0x200000) {
-			this.send(new Uint8Array([START_SYSEX, EXTENDED_ANALOG, this.#board.pinToPWM(pin), data & 0x7f, (data >>> 7) & 0x7f, (data >>> 14) & 0x7f, END_SYSEX]))
-		} else {
-			this.send(new Uint8Array([START_SYSEX, EXTENDED_ANALOG, this.#board.pinToPWM(pin), data & 0x7f, (data >>> 7) & 0x7f, (data >>> 14) & 0x7f, (data >>> 21) & 0x7f, END_SYSEX]))
-		}
+		const data = Math.max(0, Math.min(0xffffffff, Math.trunc(value)))
+		const bytes = data === 0 ? 1 : Math.ceil((Math.floor(Math.log2(data)) + 1) / 7)
+		this.#sendSysex(EXTENDED_ANALOG, [this.#board.pinToPWM(pin), ...encodeUnsigned7(data, bytes)])
 	}
 
+	// Sets the shared analog/I2C sampling interval in milliseconds, clamped to 1-16383.
 	samplingInterval(milliseconds: number) {
 		const message = new Uint8Array([START_SYSEX, SAMPLING_INTERVAL, 0, 0, END_SYSEX])
 		// The interval is a 14-bit field (LSB+MSB, both 7-bit); encodeByteAs7Bit only keeps 8 bits.
@@ -1031,6 +1216,337 @@ export class FirmataClient implements Disposable {
 		this.send(message)
 	}
 
+	// Requests the board's sampling interval in milliseconds.
+	querySamplingInterval() {
+		this.#sendSysex(SAMPLING_INTERVAL_QUERY, [])
+	}
+
+	// Queries signed int32 variable `id` (0-16383) for physical `pin`, or the whole
+	// board when `pin` is omitted; the reply arrives through `systemVariableReply`.
+	querySystemVariable(id: number, pin?: number) {
+		this.#sendSysex(SYSTEM_VARIABLE, [0, 1, 0, ...encodeUnsigned7(id, 2), pin ?? 127])
+	}
+
+	// Sets signed int32 variable `id` (0-16383) to `value` for physical `pin`, or
+	// the whole board when omitted; firmware reports the resulting status.
+	setSystemVariable(id: number, value: number, pin?: number) {
+		this.#sendSysex(SYSTEM_VARIABLE, [1, 1, 0, ...encodeUnsigned7(id, 2), pin ?? 127, ...encodeSigned32(value)])
+	}
+
+	// Configures physical servo `pin` with minimum and maximum pulse widths in
+	// microseconds (0-16383); attach/detach uses `pinMode`.
+	servoConfig(pin: number, minPulseMicroseconds: number, maxPulseMicroseconds: number) {
+		this.#sendSysex(SERVO_CONFIG, [pin, ...encodeUnsigned7(minPulseMicroseconds, 2), ...encodeUnsigned7(maxPulseMicroseconds, 2)])
+	}
+
+	// Starts SPI `channel` (0-7); the bundled ESP8266 firmware accepts channel zero.
+	spiBegin(channel: SpiChannel = 0) {
+		this.#sendSysex(SPI_DATA, [0, channel])
+	}
+
+	// Configures an eight-bit SPI device from channel, device ID, clock and CS options;
+	// remembers its reply packing until reset or `spiEnd`.
+	spiConfig(options: SpiDeviceOptions) {
+		if (options.controlCs && options.csPin === undefined) throw new RangeError('SPI firmware-controlled chip select requires a CS pin')
+		const selector = spiSelector(options.channel, options.deviceId)
+		this.#sendSysex(SPI_DATA, encodeSpiConfig(options))
+		this.#spiPackedBySelector.set(selector, options.packed ?? false)
+	}
+
+	// Releases SPI `channel` and forgets device reply encoding for that channel.
+	spiEnd(channel: SpiChannel = 0) {
+		this.#sendSysex(SPI_DATA, [6, channel])
+		for (const selector of this.#spiPackedBySelector.keys()) if ((selector & 7) === channel) this.#spiPackedBySelector.delete(selector)
+	}
+
+	// Allocates one 7-bit SPI request ID, wrapping from 127 to zero.
+	#nextSpiRequestId(): number {
+		const id = this.#spiRequestId
+		this.#spiRequestId = (id + 1) & 127
+		return id
+	}
+
+	// Sends `data` words (or a numeric read count) to a channel/device with the
+	// chosen command. `deselectCs=false` keeps CS active; returns a 7-bit request ID.
+	#spiData(command: 2 | 3 | 4 | 7, channel: SpiChannel, deviceId: number, data: Readonly<NumberArray> | Buffer | number, deselectCs: boolean): number {
+		if (typeof data !== 'number' && data.length > 127) throw new RangeError('SPI transfer exceeds the 127-word protocol limit')
+		const selector = spiSelector(channel, deviceId)
+		const id = this.#nextSpiRequestId()
+		const payload = typeof data === 'number' ? [command, selector, id, deselectCs ? 1 : 0, data] : encodeSpiWords(command, selector, id, data, this.#spiPackedBySelector.get(selector) ?? false, deselectCs)
+		this.#sendSysex(SPI_DATA, payload)
+		return id
+	}
+
+	// Exchanges eight-bit `data` words with a channel/device. Deselects CS by
+	// default and returns the request ID echoed by `spiReply`.
+	spiTransfer(channel: SpiChannel, deviceId: number, data: Readonly<NumberArray> | Buffer, deselectCs: boolean = true): number {
+		return this.#spiData(2, channel, deviceId, data, deselectCs)
+	}
+
+	// Writes eight-bit `data` to a channel/device without a reply; optionally
+	// keeps CS active and returns the allocated request ID.
+	spiWrite(channel: SpiChannel, deviceId: number, data: Readonly<NumberArray> | Buffer, deselectCs: boolean = true): number {
+		return this.#spiData(3, channel, deviceId, data, deselectCs)
+	}
+
+	// Writes eight-bit `data` to a channel/device, optionally keeping CS active;
+	// returns the request ID echoed by an empty acknowledgement reply.
+	spiWriteAck(channel: SpiChannel, deviceId: number, data: Readonly<NumberArray> | Buffer, deselectCs: boolean = true): number {
+		return this.#spiData(7, channel, deviceId, data, deselectCs)
+	}
+
+	// Reads `words` eight-bit values from a channel/device by clocking zeroes.
+	// At most 64 words protect the bundled firmware's stack buffer; returns a
+	// request ID, and deselects CS unless `deselectCs` is false.
+	spiRead(channel: SpiChannel, deviceId: number, words: number, deselectCs: boolean = true): number {
+		// The bundled firmware's read path writes into a 64-byte stack buffer.
+		if (!(Number.isInteger(words) && words >= 0 && words <= 64)) throw new RangeError('SPI read length must be 0-64 words')
+		return this.#spiData(4, channel, deviceId, words, deselectCs)
+	}
+
+	// Decodes a complete SPI reply payload after 0x68 using its device's last
+	// configured packing; returns undefined for malformed payloads.
+	parseSpiReply(payload: Buffer): SpiReply | undefined {
+		return decodeSpiReply(payload, this.#spiPackedBySelector.get(payload[1]) ?? false)
+	}
+
+	// Returns physical RX/TX pins for hardware `port` from serial capability
+	// resolution (RX=2n, TX=2n+1); software ports return an empty object.
+	serialPins(port: SerialPort): { rx?: number; tx?: number } {
+		const pins: { rx?: number; tx?: number } = {}
+		if (port >= 8) return pins
+		for (const pin of this.#pinMap.values()) {
+			const resolution = pin.resolutions.get(PinMode.SERIAL)
+			if (resolution === port * 2) pins.rx = pin.id
+			else if (resolution === port * 2 + 1) pins.tx = pin.id
+		}
+		return pins
+	}
+
+	// Configures a Serial 1.0 hardware/software `port` at `baud` bits/second.
+	// Optional RX/TX pins are inferred from capabilities when available, and must
+	// be supplied together if only one can be inferred.
+	serialConfig(port: SerialPort, baud: number, rxPin?: number, txPin?: number) {
+		const discovered = this.serialPins(port)
+		const rx = rxPin ?? discovered.rx
+		const tx = txPin ?? discovered.tx
+		if ((rx === undefined) !== (tx === undefined)) throw new RangeError('Serial RX and TX pins must be configured together')
+		const payload = [0x10 | port, ...encodeUnsigned7(baud, 3)]
+		if (rx !== undefined && tx !== undefined) payload.push(rx, tx)
+		this.#sendSysex(SERIAL_MESSAGE, payload)
+	}
+
+	// Writes raw `data` bytes to a Serial 1.0 `port` using 7-bit pairs.
+	serialWrite(port: SerialPort, data: Readonly<NumberArray> | Buffer) {
+		const payload = [0x20 | port]
+		for (const byte of data) payload.push(byte & 127, byte >>> 7)
+		this.#sendSysex(SERIAL_MESSAGE, payload)
+	}
+
+	// Starts continuous reads from `port`, limiting each report to `maxBytes` raw
+	// bytes; zero reads all currently available bytes.
+	serialStartRead(port: SerialPort, maxBytes: number = 0) {
+		this.#sendSysex(SERIAL_MESSAGE, [0x30 | port, 0, ...encodeUnsigned7(maxBytes, 2)])
+	}
+
+	// Stops continuous reads from Serial 1.0 `port` without closing it.
+	serialStopRead(port: SerialPort) {
+		this.#sendSysex(SERIAL_MESSAGE, [0x30 | port, 1])
+	}
+
+	// Closes Serial 1.0 `port`; reconfiguration is required before reuse.
+	serialClose(port: SerialPort) {
+		this.#sendSysex(SERIAL_MESSAGE, [0x50 | port])
+	}
+
+	// Flushes Serial 1.0 `port` according to the board's serial implementation.
+	serialFlush(port: SerialPort) {
+		this.#sendSysex(SERIAL_MESSAGE, [0x60 | port])
+	}
+
+	// Selects `port` as the active software serial listener.
+	serialListen(port: SerialPort) {
+		this.#sendSysex(SERIAL_MESSAGE, [0x70 | port])
+	}
+
+	// Attaches encoder `id` to digital `pinA` and `pinB`; reports use step counts.
+	encoderAttach(id: number, pinA: number, pinB: number) {
+		this.#sendSysex(ENCODER_DATA, [0, id, pinA, pinB])
+	}
+
+	// Detaches encoder `id` from its pins.
+	encoderDetach(id: number) {
+		this.#sendSysex(ENCODER_DATA, [5, id])
+	}
+
+	// Requests encoder `id`'s signed position in steps.
+	encoderReport(id: number) {
+		this.#sendSysex(ENCODER_DATA, [1, id])
+	}
+
+	// Requests all encoder positions in one reply.
+	encoderReportAll() {
+		this.#sendSysex(ENCODER_DATA, [2])
+	}
+
+	// Sets encoder `id`'s current position to zero steps.
+	encoderReset(id: number) {
+		this.#sendSysex(ENCODER_DATA, [3, id])
+	}
+
+	// Enables or disables automatic position reports for all attached encoders at
+	// the board sampling interval.
+	encoderAutoReport(enable: boolean) {
+		this.#sendSysex(ENCODER_DATA, [4, enable ? 1 : 0])
+	}
+
+	// Configures an AccelStepper motor from `options`; required motor pins follow
+	// its driver/two-/three-/four-wire interface, followed by optional enable and inversion pins.
+	stepperConfig(options: StepperConfig) {
+		const wireCount = options.interface === 'driver' ? 1 : options.interface === 'twoWire' ? 2 : options.interface === 'threeWire' ? 3 : 4
+		const control = (wireCount << 4) | ((options.stepType ?? 0) << 1) | (options.enablePin === undefined ? 0 : 1)
+		const payload = [0, options.device, control, options.pin1, options.pin2]
+		if (options.interface === 'threeWire' || options.interface === 'fourWire') payload.push(options.pin3)
+		if (options.interface === 'fourWire') payload.push(options.pin4)
+		if (options.enablePin !== undefined) payload.push(options.enablePin)
+		if (options.invertPins !== undefined) payload.push(options.invertPins)
+		this.#sendSysex(ACCELSTEPPER_DATA, payload)
+	}
+
+	// Makes motor `device`'s current position zero steps without moving it.
+	stepperZero(device: number) {
+		this.#sendSysex(ACCELSTEPPER_DATA, [1, device])
+	}
+
+	// Moves motor `device` by signed `steps` from its current position; the
+	// firmware's sign-magnitude format supports -2147483647 through 2147483647.
+	stepperMove(device: number, steps: number) {
+		this.#sendSysex(ACCELSTEPPER_DATA, [2, device, ...encodeStepperPosition(steps)])
+	}
+
+	// Moves motor `device` to signed `position` steps from its zero position;
+	// the sign-magnitude format supports -2147483647 through 2147483647.
+	stepperMoveTo(device: number, position: number) {
+		this.#sendSysex(ACCELSTEPPER_DATA, [3, device, ...encodeStepperPosition(position)])
+	}
+
+	// Energizes or disables motor `device` through its configured enable pin.
+	stepperEnable(device: number, enable: boolean) {
+		this.#sendSysex(ACCELSTEPPER_DATA, [4, device, enable ? 1 : 0])
+	}
+
+	// Stops motor `device`; the firmware later reports its completed position.
+	stepperStop(device: number) {
+		this.#sendSysex(ACCELSTEPPER_DATA, [5, device])
+	}
+
+	// Requests motor `device`'s signed position in steps.
+	stepperReportPosition(device: number) {
+		this.#sendSysex(ACCELSTEPPER_DATA, [6, device])
+	}
+
+	// Sets motor `device`'s acceleration in steps/second² using the protocol's
+	// 23-bit decimal float (roughly seven significant digits).
+	stepperSetAcceleration(device: number, acceleration: number) {
+		this.#sendSysex(ACCELSTEPPER_DATA, [8, device, ...encodeStepperFloat(acceleration)])
+	}
+
+	// Sets motor `device`'s `speed` in steps/second (maximum while acceleration
+	// is enabled), using the protocol's 23-bit decimal float.
+	stepperSetMaxSpeed(device: number, speed: number) {
+		this.#sendSysex(ACCELSTEPPER_DATA, [9, device, ...encodeStepperFloat(speed)])
+	}
+
+	// Configures MultiStepper `group` (0-4) from `devices` (motor IDs 0-9) in
+	// the same order that later absolute target positions are supplied.
+	multiStepperConfig(group: number, devices: readonly number[]) {
+		this.#sendSysex(ACCELSTEPPER_DATA, [0x20, group, ...devices])
+	}
+
+	// Coordinates `group` to absolute signed `positions` in configured motor
+	// order; one position in steps is required per motor.
+	multiStepperMoveTo(group: number, positions: readonly number[]) {
+		const payload = [0x21, group]
+		for (const position of positions) payload.push(...encodeStepperPosition(position))
+		this.#sendSysex(ACCELSTEPPER_DATA, payload)
+	}
+
+	// Immediately stops every motor in MultiStepper `group` (0-4).
+	multiStepperStop(group: number) {
+		this.#sendSysex(ACCELSTEPPER_DATA, [0x23, group])
+	}
+
+	// Attaches `model` DHT11 or DHT22 to physical `pin`. `samplingMilliseconds`
+	// controls reporting; blocking reads are opt-in because they stall the board
+	// for roughly 18 ms.
+	dhtAttach(pin: number, model: DhtModel, samplingMilliseconds: number = 500, blocking: boolean = false) {
+		this.#sendSysex(DHTSENSOR_DATA, [model === 'dht11' ? 1 : 2, pin, blocking ? 1 : 0, ...encodeUnsigned7(samplingMilliseconds, 2)])
+	}
+
+	// Detaches the DHT sensor on physical `pin`.
+	dhtDetach(pin: number) {
+		this.#sendSysex(DHTSENSOR_DATA, [3, pin])
+	}
+
+	// Creates scheduler task `id` (0-127) with `length` bytes of message storage.
+	schedulerCreate(id: number, length: number) {
+		this.#sendSysex(SCHEDULER_DATA, [0, id, ...encodeUnsigned7(length, 2)])
+	}
+
+	// Deletes scheduler task `id` and its stored messages.
+	schedulerDelete(id: number) {
+		this.#sendSysex(SCHEDULER_DATA, [1, id])
+	}
+
+	// Appends raw Firmata `message` bytes to scheduler task `id` using dense
+	// seven-bit packing; the task's declared capacity must accommodate them.
+	schedulerAdd(id: number, message: Readonly<NumberArray> | Buffer) {
+		this.#sendSysex(SCHEDULER_DATA, [2, id, ...encodePacked7Bit(message)])
+	}
+
+	// Delays the currently executing scheduler task by unsigned `milliseconds`.
+	schedulerDelay(milliseconds: number) {
+		this.#sendSysex(SCHEDULER_DATA, [3, ...encodeUnsigned7(milliseconds, 5)])
+	}
+
+	// Schedules task `id` to execute after unsigned `milliseconds`.
+	schedulerSchedule(id: number, milliseconds: number) {
+		this.#sendSysex(SCHEDULER_DATA, [4, id, ...encodeUnsigned7(milliseconds, 5)])
+	}
+
+	// Requests all currently registered task identifiers.
+	schedulerQueryAll() {
+		this.#sendSysex(SCHEDULER_DATA, [5])
+	}
+
+	// Requests task `id`'s delay, byte capacity, insertion position and messages.
+	schedulerQuery(id: number) {
+		this.#sendSysex(SCHEDULER_DATA, [6, id])
+	}
+
+	// Clears all scheduler tasks and pending executions.
+	schedulerReset() {
+		this.#sendSysex(SCHEDULER_DATA, [7])
+	}
+
+	// Enables raw edge-count reports for physical `pin` at `samplingMilliseconds`
+	// intervals. Interrupt `mode` is LOW=1, HIGH=2, RISING=3, FALLING=4 or CHANGE=5.
+	frequencyQuery(pin: number, mode: 1 | 2 | 3 | 4 | 5, samplingMilliseconds: number) {
+		this.#sendSysex(FREQUENCY_COMMAND, [1, pin, mode, ...encodeUnsigned7(samplingMilliseconds, 2)])
+	}
+
+	// Disables frequency reporting on physical `pin`, or all pins when omitted.
+	frequencyClear(pin: number = 127) {
+		this.#sendSysex(FREQUENCY_COMMAND, [0, pin])
+	}
+
+	// Sets physical `pin`'s edge debounce interval in `microseconds`.
+	frequencyFilter(pin: number, microseconds: number) {
+		this.#sendSysex(FREQUENCY_COMMAND, [3, pin, ...encodeUnsigned7(microseconds, 5)])
+	}
+
+	// Configures the I2C read delay in microseconds; retains the greatest requested
+	// delay for this client so multiple peripherals do not shorten each other's timing.
 	twoWireConfig(delayInMicroseconds: number) {
 		this.#maxTwoWireDelay = Math.max(this.#maxTwoWireDelay, delayInMicroseconds)
 		const message = new Uint8Array([START_SYSEX, TWO_WIRE_CONFIG, 0, 0, END_SYSEX])
@@ -1039,8 +1555,9 @@ export class FirmataClient implements Disposable {
 		this.send(message)
 	}
 
-	// Sends one I2C transaction. Packs the address, the operation/address-mode/auto-restart flags into the
-	// control byte, and any payload as 7-bit pairs. Underlies twoWireRead/Write/Stop.
+	// Sends one I2C transaction to `address` with 7- or 10-bit addressing. The
+	// operation flag selects write, one-shot/continuous read or stop; `data` is raw
+	// bytes, and `autoRestart` controls bus release after a read.
 	twoWireReadWrite(address: number, operationMode: TwoWireOperationMode, data?: Readonly<NumberArray> | Buffer, addressMode: TwoWireAddressMode = 7, autoRestart: TwoWireAutoRestartMode = 'stop') {
 		const message = Buffer.alloc(5 + (data !== undefined ? data.length * 2 : 0))
 
@@ -1060,15 +1577,20 @@ export class FirmataClient implements Disposable {
 		this.send(message)
 	}
 
+	// Reads `bytesToRead` bytes from an I2C device, optionally selecting `register`
+	// (-1 omits it). `continuous` repeats reads until stopped; address width and bus
+	// release are controlled by `addressMode` and `autoRestart`.
 	twoWireRead(address: number, register: number, bytesToRead: number, continuous: boolean = false, addressMode: TwoWireAddressMode = 7, autoRestart: TwoWireAutoRestartMode = 'stop') {
 		const data = new Uint8Array(register >= 0 ? [register, bytesToRead] : [bytesToRead])
 		this.twoWireReadWrite(address, continuous ? 'readContinuously' : 'read', data, addressMode, autoRestart)
 	}
 
+	// Writes raw `data` bytes to a 7- or 10-bit I2C device address.
 	twoWireWrite(address: number, data?: Readonly<NumberArray> | Buffer, addressMode: TwoWireAddressMode = 7) {
 		this.twoWireReadWrite(address, 'write', data, addressMode)
 	}
 
+	// Stops a continuous read from the addressed 7- or 10-bit I2C device.
 	twoWireStop(address: number, addressMode: TwoWireAddressMode = 7) {
 		this.twoWireReadWrite(address, 'stop', undefined, addressMode)
 	}
@@ -1080,10 +1602,12 @@ export class FirmataClient implements Disposable {
 		return correlationId
 	}
 
+	// Configures a physical 1-Wire pin for external or parasitic device power.
 	oneWireConfig(pin: number, powerMode: OneWirePowerMode = 'normal') {
 		this.send(new Uint8Array([START_SYSEX, ONE_WIRE_DATA, ONE_WIRE_CONFIG_REQUEST, pin, powerMode === 'parasitic' ? 0 : 1, END_SYSEX]))
 	}
 
+	// Searches all or alarm-signalling ROM addresses on physical 1-Wire `pin`.
 	oneWireSearch(pin: number, mode: OneWireSearchMode = 'all') {
 		this.send(new Uint8Array([START_SYSEX, ONE_WIRE_DATA, mode === 'alarms' ? ONE_WIRE_SEARCH_ALARMS_REQUEST : ONE_WIRE_SEARCH_REQUEST, pin, END_SYSEX]))
 	}
@@ -1157,18 +1681,25 @@ export class FirmataClient implements Disposable {
 		return readCorrelationId
 	}
 
+	// Issues a bus reset on physical 1-Wire `pin`.
 	oneWireReset(pin: number) {
 		this.oneWireCommand(pin, { reset: true })
 	}
 
+	// Resets the 1-Wire bus and writes `data`, selecting an optional eight-byte ROM
+	// address or broadcasting with SKIP ROM when `address` is omitted.
 	oneWireWrite(pin: number, data: Readonly<NumberArray> | Buffer, address?: Readonly<NumberArray> | Buffer) {
 		this.oneWireCommand(pin, { reset: true, skip: address === undefined, address, data })
 	}
 
+	// Resets the 1-Wire bus and reads `bytesToRead` bytes from an optional ROM;
+	// returns the supplied or generated 16-bit correlation ID for the reply.
 	oneWireRead(pin: number, bytesToRead: number, address?: Readonly<NumberArray> | Buffer, correlationId?: number) {
 		return this.oneWireCommand(pin, { reset: true, skip: address === undefined, address, bytesToRead, correlationId })
 	}
 
+	// Writes `data` then reads `bytesToRead` bytes from an optional 1-Wire ROM;
+	// returns the supplied or generated 16-bit correlation ID for the reply.
 	oneWireWriteAndRead(pin: number, data: Readonly<NumberArray> | Buffer, bytesToRead: number, address?: Readonly<NumberArray> | Buffer, correlationId?: number) {
 		return this.oneWireCommand(pin, { reset: true, skip: address === undefined, address, bytesToRead, correlationId, data })
 	}

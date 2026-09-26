@@ -780,11 +780,11 @@ test('LM35 configures analog reporting and emits temperature updates', () => {
 		['analogReport', 2, true],
 	])
 
-	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 51.15 })
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), resolutions: new Map(), mode: PinMode.ANALOG, value: 51.15 })
 	expect(lm35.temperature).toBeCloseTo(25, 6)
 	expect(updates).toBe(1)
 
-	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 51.15 })
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), resolutions: new Map(), mode: PinMode.ANALOG, value: 51.15 })
 	expect(updates).toBe(1)
 
 	lm35.stop()
@@ -806,20 +806,20 @@ test('peripheral fires on the first completed read even when the value equals th
 
 	// First sample reads 0 -> temperature stays at its default 0, but the first completed read must
 	// still notify so a consumer can settle its initial state (e.g. a DS18B20 reading exactly 0 C).
-	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), resolutions: new Map(), mode: PinMode.ANALOG, value: 0 })
 	expect(lm35.temperature).toBe(0)
 	expect(updates).toBe(1)
 	expect(lm35.initialized).toBeTrue()
 
 	// A subsequent identical sample does not fire again.
-	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), resolutions: new Map(), mode: PinMode.ANALOG, value: 0 })
 	expect(updates).toBe(1)
 
 	// Detaching the last listener resets the first-sample signal so a new consumer is notified again.
 	lm35.removeListener(listener)
 	expect(lm35.initialized).toBeFalse()
 	lm35.addListener(listener)
-	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), resolutions: new Map(), mode: PinMode.ANALOG, value: 0 })
 	expect(updates).toBe(2)
 })
 
@@ -883,14 +883,14 @@ test('re-adding an already-registered listener does not re-arm its first read', 
 	const listener = () => updates++
 
 	lm35.addListener(listener)
-	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), resolutions: new Map(), mode: PinMode.ANALOG, value: 0 })
 	expect(updates).toBe(1)
 	expect(lm35.initialized).toBeTrue()
 
 	// Adding the same listener again must not owe it another first read.
 	lm35.addListener(listener)
 	expect(lm35.initialized).toBeTrue()
-	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), resolutions: new Map(), mode: PinMode.ANALOG, value: 0 })
 	expect(updates).toBe(1)
 })
 
@@ -904,7 +904,7 @@ test('a listener attached after the peripheral is initialized still receives a f
 	const listenerB = () => b++
 
 	lm35.addListener(listenerA)
-	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), resolutions: new Map(), mode: PinMode.ANALOG, value: 0 })
 	expect(a).toBe(1)
 	expect(lm35.initialized).toBeTrue()
 
@@ -912,13 +912,13 @@ test('a listener attached after the peripheral is initialized still receives a f
 	// (unchanged), but B must still receive its first read; A must not be re-fired.
 	lm35.addListener(listenerB)
 	expect(lm35.initialized).toBeFalse()
-	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), resolutions: new Map(), mode: PinMode.ANALOG, value: 0 })
 	expect(b).toBe(1)
 	expect(a).toBe(1)
 	expect(lm35.initialized).toBeTrue()
 
 	// A real change fires both listeners.
-	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 51.15 })
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), resolutions: new Map(), mode: PinMode.ANALOG, value: 51.15 })
 	expect(a).toBe(2)
 	expect(b).toBe(2)
 })
@@ -948,11 +948,11 @@ test('TEMT6000 configures analog reporting and emits lux updates', () => {
 		['analogReport', 3, true],
 	])
 
-	temt6000.pinChange(client as never, { id: 3, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 1023 })
+	temt6000.pinChange(client as never, { id: 3, modes: new Set([PinMode.ANALOG]), resolutions: new Map(), mode: PinMode.ANALOG, value: 1023 })
 	expect(temt6000.lux).toBeCloseTo(1000, 6)
 	expect(updates).toBe(1)
 
-	temt6000.pinChange(client as never, { id: 3, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 1023 })
+	temt6000.pinChange(client as never, { id: 3, modes: new Set([PinMode.ANALOG]), resolutions: new Map(), mode: PinMode.ANALOG, value: 1023 })
 	expect(updates).toBe(1)
 
 	temt6000.stop()
@@ -985,11 +985,11 @@ test('ACS712 configures analog reporting and emits current updates', () => {
 		['analogReport', 4, true],
 	])
 
-	acs712.pinChange(client as never, { id: 4, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 549.351 })
+	acs712.pinChange(client as never, { id: 4, modes: new Set([PinMode.ANALOG]), resolutions: new Map(), mode: PinMode.ANALOG, value: 549.351 })
 	expect(acs712.current).toBeCloseTo(1, 3)
 	expect(updates).toBe(1)
 
-	acs712.pinChange(client as never, { id: 4, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 549.351 })
+	acs712.pinChange(client as never, { id: 4, modes: new Set([PinMode.ANALOG]), resolutions: new Map(), mode: PinMode.ANALOG, value: 549.351 })
 	expect(updates).toBe(1)
 
 	acs712.stop()

@@ -9,6 +9,7 @@
 #define ENABLE_DIGITAL
 #define ENABLE_ANALOG
 #define ENABLE_I2C
+#define ENABLE_SPI
 #define ENABLE_ONE_WIRE
 // #define HIGH_OUTPUT_ON_POWERING_UP
 
@@ -35,7 +36,6 @@ I2CFirmata i2c;
 #endif
 
 #ifdef ENABLE_SPI
-#include <Wire.h>
 #include <SpiFirmata.h>
 SpiFirmata spi;
 #endif
