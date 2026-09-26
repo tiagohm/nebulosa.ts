@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
-import { angularDistance, angularDistanceHaversine, eclipticJ2000ToEquatorial, eclipticToEquatorial, equatorEcliptic, equatorialFromJ2000, equatorialToEcliptic, equatorialToEclipticJ2000, equatorialToGalatic, equatorialToHorizontal, equatorialToJ2000, galacticToEquatorial, horizontalToEquatorial, meridianEcliptic, meridianEquator, positionAngleBetween, zenith } from '../../../src/astronomy/coordinates/coordinate'
+import { angularDistance, angularDistanceHaversine, eclipticJ2000ToEquatorial, eclipticToEquatorial, equatorEcliptic, equatorialFromJ2000, equatorialToEcliptic, equatorialToEclipticJ2000, equatorialToGalactic, equatorialToHorizontal, equatorialToJ2000, galacticToEquatorial, horizontalToEquatorial, meridianEcliptic, meridianEquator, positionAngleBetween, zenith } from '../../../src/astronomy/coordinates/coordinate'
 import { localSiderealTime } from '../../../src/astronomy/observer/location'
 import { timeNormalize, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { PI, PIOVERTWO, TAU } from '../../../src/core/constants'
@@ -61,14 +61,14 @@ test('ecliptic to equatorial', () => {
 	expect(formatDEC(declination)).toBe('-22 38 20.70')
 })
 
-test('equatorial to galatic', () => {
-	const [longitude, latitude] = equatorialToGalatic(...SIRIUS_J2000)
+test('equatorial to galactic', () => {
+	const [longitude, latitude] = equatorialToGalactic(...SIRIUS_J2000)
 
 	expect(formatDEC(normalizeAngle(longitude))).toBe('+227 14 20.56')
 	expect(formatDEC(latitude)).toBe('-08 53 35.22')
 })
 
-test('galatic to equatorial', () => {
+test('galactic to equatorial', () => {
 	const [rightAscension, declination] = galacticToEquatorial(parseAngle('+227 14 20.56')!, parseAngle('-08 53 35.22')!)
 
 	expect(formatRA(rightAscension)).toBe('06 45 09.22')

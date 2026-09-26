@@ -165,7 +165,7 @@ export function galacticToEquatorial(longitude: Angle, latitude: Angle): [Angle,
 }
 
 // Converts J2000 equatorial coordinates to J2000 Galactic coordinates.
-export function equatorialToGalatic(rightAscension: Angle, declination: Angle): [Angle, Angle] {
+export function equatorialToGalactic(rightAscension: Angle, declination: Angle): [Angle, Angle] {
 	return eraC2s(...matMulVec(GALACTIC_MATRIX, eraS2c(rightAscension, declination)))
 }
 

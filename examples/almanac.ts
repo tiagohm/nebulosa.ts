@@ -18,7 +18,7 @@ import { spaceMotion, star } from '../src/astronomy/bodies/star'
 import { carringtonRotationNumber, equationOfTime, nearestSolarEclipse, season } from '../src/astronomy/bodies/sun'
 // oxfmt-ignore
 import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, phaseAngle, refractedAltitude, relativePositionAndVelocity, separationFrom, unrefractedAltitude, type PositionAndVelocityOverTime } from '../src/astronomy/coordinates/astrometry'
-import { angularDistance, eclipticToEquatorial, equatorialFromJ2000, equatorialToEcliptic, equatorialToGalatic, equatorialToHorizontal, galacticToEquatorial, horizontalToEquatorial, zenith } from '../src/astronomy/coordinates/coordinate'
+import { angularDistance, eclipticToEquatorial, equatorialFromJ2000, equatorialToEcliptic, equatorialToGalactic, equatorialToHorizontal, galacticToEquatorial, horizontalToEquatorial, zenith } from '../src/astronomy/coordinates/coordinate'
 import { annualAberration, observerState, radialVelocityCorrection } from '../src/astronomy/coordinates/correction'
 import { eraAnpm, eraC2s, eraLd, eraLdSun, eraPmpx, eraS2c, eraSeps, eraStarpm, eraStarpv } from '../src/astronomy/coordinates/erfa/erfa'
 import { precessFk5FromJ2000 } from '../src/astronomy/coordinates/fk5'
@@ -256,7 +256,7 @@ function fk5ToIcrsTransformation() {
 
 // ICRS to Galactic Transformation.
 function icrsToGalactic() {
-	const [l, b] = equatorialToGalatic(SIRIUS_RA, SIRIUS_DEC)
+	const [l, b] = equatorialToGalactic(SIRIUS_RA, SIRIUS_DEC)
 	console.info('Galactic l/b (deg):', toDeg(l), toDeg(b))
 }
 
