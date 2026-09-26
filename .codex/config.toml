@@ -1,7 +1,7 @@
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 project_doc_max_bytes = 65536
-model = "gpt-6-luna"
+model = "gpt-6-sol"
 model_reasoning_effort = "xhigh"
 
 [mcp_servers.codebase-memory-mcp.tools.index_repository]
