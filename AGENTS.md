@@ -61,6 +61,7 @@ Use `rg` first for string literals, errors, configuration, documentation, genera
 - `tests/`: mirrors `src/`; shared helpers remain at the tests root.
 - `data/`: large fixture-backed FITS, XISF, SPK, catalog, and Earth-orientation data.
 - `examples/` and `scripts/`: runnable integrations and maintenance utilities that import directly from `src/`.
+- `docs/`: Just the Docs site published with GitHub Pages. Keep Ruby and Bundler inside this directory, and follow `docs/AGENTS.md`.
 - `main.ts`: package placeholder, not the implementation surface. Reusable code belongs in `src/`.
 
 Preserve these boundaries:
@@ -80,6 +81,10 @@ Project layout conventions:
 - Use direct relative imports without `.ts` extensions. Do not add a barrel or broad `export *` surface unless an aggregated entry point is the task.
 - Reuse existing math, time, image, catalog, coordinate, and I/O modules before creating helpers.
 - Do not rewrite, format, or regenerate `src/**/*.data.ts` unless explicitly requested.
+
+## Public Documentation
+
+Public documentation lives under `docs/`. For changes affecting public APIs, observable behavior, scientific interpretation, units, frames, conventions, supported workflows, accuracy, or limitations, determine documentation impact and update the relevant documentation in the same change. Follow `docs/AGENTS.md`.
 
 ## Tooling
 

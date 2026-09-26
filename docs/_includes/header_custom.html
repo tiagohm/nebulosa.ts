@@ -1,0 +1,52 @@
+<div class="theme-toggle">
+	<button type="button" id="theme-toggle" class="theme-toggle-button" data-theme-target="nebulosa-light" aria-label="Switch to light theme" title="Switch to light theme">
+		<svg class="theme-toggle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+			<g class="theme-toggle-icon-sun" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round">
+				<circle cx="12" cy="12" r="4"></circle>
+				<path d="M12 3v2.2M12 18.8V21M4.8 4.8l1.6 1.6M17.6 17.6l1.6 1.6M3 12h2.2M18.8 12H21M4.8 19.2l1.6-1.6M17.6 6.4l1.6-1.6"></path>
+			</g>
+			<path class="theme-toggle-icon-moon" fill="currentColor" d="M15.5 3.5a7.5 7.5 0 1 0 5 12.2 6.2 6.2 0 0 1-5-12.2z"></path>
+		</svg>
+		<span class="theme-toggle-label">Light</span>
+	</button>
+</div>
+<script>
+	(() => {
+		const storageKey = 'theme';
+		const button = document.getElementById('theme-toggle');
+		const label = button.querySelector('.theme-toggle-label');
+
+		/* jtd.getTheme() keeps the text after the last hyphen of the active
+     stylesheet. The configured default is just-the-docs-default.css, the
+     light asset parses as "light", and the dark asset parses as "dark". */
+		const currentScheme = () => (jtd.getTheme() === 'light' ? 'nebulosa-light' : 'nebulosa-dark');
+
+		const persist = (theme) => {
+			try {
+				localStorage.setItem(storageKey, theme);
+			} catch {
+				/* Keep the choice for this page view when storage is unavailable. */
+			}
+		};
+
+		const render = (theme) => {
+			const toLight = theme !== 'nebulosa-light';
+			const text = toLight ? 'Switch to light theme' : 'Switch to dark theme';
+
+			button.dataset.themeTarget = toLight ? 'nebulosa-light' : 'nebulosa-dark';
+			button.setAttribute('aria-label', text);
+			button.title = text;
+			label.textContent = toLight ? 'Light' : 'Dark';
+		};
+
+		render(currentScheme());
+
+		button.addEventListener('click', () => {
+			const next = currentScheme() === 'nebulosa-light' ? 'nebulosa-dark' : 'nebulosa-light';
+
+			jtd.setTheme(next);
+			persist(next);
+			render(next);
+		});
+	})();
+</script>

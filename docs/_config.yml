@@ -1,0 +1,71 @@
+title: Nebulosa
+description: TypeScript toolkit for numerical astronomy, astrophotography, astrometry, and observatory control
+
+theme: just-the-docs
+
+url: 'https://tiagohm.github.io'
+
+# The Pages workflow passes the project base path with --baseurl.
+# Do not hardcode baseurl here.
+
+color_scheme: nebulosa-dark
+
+nav_enabled: true
+nav_sort: case_insensitive
+
+search_enabled: true
+search:
+    heading_level: 2
+    previews: 3
+    preview_words_before: 5
+    preview_words_after: 10
+    rel_url: true
+    button: false
+    focus_shortcut_key: 'k'
+
+heading_anchors: true
+enable_copy_code_button: true
+
+back_to_top: true
+back_to_top_text: 'Back to top'
+
+aux_links:
+    'GitHub':
+        - 'https://github.com/tiagohm/nebulosa.ts'
+
+aux_links_new_tab: true
+
+gh_edit_link: true
+gh_edit_link_text: 'Edit this page on GitHub'
+gh_edit_repository: 'https://github.com/tiagohm/nebulosa.ts'
+gh_edit_branch: 'main'
+gh_edit_source: 'docs'
+gh_edit_view_mode: 'edit'
+
+defaults:
+    - scope:
+          path: ''
+      values:
+          layout: default
+
+exclude:
+    - '_templates'
+    - 'AGENTS.md'
+
+callouts:
+    note:
+        title: Note
+        color: blue
+    important:
+        title: Important
+        color: purple
+    warning:
+        title: Warning
+        color: yellow
+    accuracy:
+        title: Accuracy
+        color: green
+
+sass:
+    quiet_deps: true # https://github.com/just-the-docs/just-the-docs/issues/1541
+    silence_deprecations: ['import'] # https://github.com/just-the-docs/just-the-docs/issues/1607

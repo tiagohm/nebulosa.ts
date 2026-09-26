@@ -1,0 +1,13 @@
+// Nebulosa dark scheme. Starts from the theme dark scheme, then replaces
+// the accent, the active-navigation feedback color, and the sidebar/code
+// surfaces. Accent hues match nebulosa-light.
+
+@import './color_schemes/dark';
+
+$nebulosa-scheme-is-dark: true;
+
+$link-color: $nebulosa-accent-dark;
+$btn-primary-color: $nebulosa-accent-dark-strong;
+$sidebar-color: #1c2230;
+$feedback-color: darken($sidebar-color, 4%);
+$code-background-color: #10131a;

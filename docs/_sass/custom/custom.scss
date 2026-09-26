@@ -1,0 +1,79 @@
+// Emitted after the theme. Keep this limited to the theme toggle and to
+// callout titles on the dark scheme.
+
+.theme-toggle {
+	display: flex;
+	flex: 0 0 auto;
+	align-items: center;
+	padding: 0.5rem 1rem 0.75rem;
+}
+
+.theme-toggle-button {
+	display: inline-flex;
+	gap: 0.35rem;
+	align-items: center;
+	height: 2rem;
+	padding: 0 0.7rem;
+	font: inherit;
+	font-size: 0.8125rem;
+	line-height: 1;
+	color: inherit;
+	cursor: pointer;
+	background: transparent;
+	border: 1px solid currentColor;
+	border-radius: 4px;
+
+	&:focus {
+		outline: 2px solid currentColor;
+		outline-offset: 2px;
+	}
+
+	&:focus:not(:focus-visible) {
+		outline: none;
+	}
+}
+
+.theme-toggle-icon {
+	width: 1rem;
+	height: 1rem;
+	flex: 0 0 auto;
+}
+
+.theme-toggle-button[data-theme-target='nebulosa-light'] .theme-toggle-icon-moon {
+	display: none;
+}
+
+.theme-toggle-button[data-theme-target='nebulosa-dark'] .theme-toggle-icon-sun {
+	display: none;
+}
+
+@include mq(md) {
+	.theme-toggle {
+		height: 100%;
+		padding: 0 0.75rem;
+	}
+}
+
+// The theme's loud callout palette is selected only when the scheme name is
+// exactly "dark". nebulosa-dark otherwise inherits the light-surface title
+// colors, which fail on this background.
+@if $nebulosa-scheme-is-dark {
+	$nebulosa-callout-titles: (
+		'note': #8ec0ff,
+		'important': #c4b5fd,
+		'warning': #ffeb82,
+		'accuracy': #41d693,
+	);
+
+	@each $name, $color in $nebulosa-callout-titles {
+		p.#{$name},
+		blockquote.#{$name} {
+			border-color: $color;
+
+			&::before,
+			> .#{$name}-title {
+				color: $color;
+			}
+		}
+	}
+}

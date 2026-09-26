@@ -1,0 +1,9 @@
+// Shared Nebulosa accents. Color schemes map the same hues onto light and
+// dark surfaces. This file is for variables and functions only.
+
+$nebulosa-accent-light: #0c6480;
+$nebulosa-accent-light-strong: #0a556c;
+$nebulosa-accent-dark: #8ad4ea;
+$nebulosa-accent-dark-strong: #0f6a84;
+
+$nebulosa-scheme-is-dark: false !default;

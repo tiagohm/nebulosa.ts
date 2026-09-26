@@ -1,0 +1,8 @@
+// Nebulosa light scheme. The theme already imports the default light scheme
+// before this file. Accent hues match nebulosa-dark; surfaces stay light.
+
+$link-color: $nebulosa-accent-light;
+$btn-primary-color: $nebulosa-accent-light-strong;
+$sidebar-color: #f2f6f8;
+$feedback-color: darken($sidebar-color, 4%);
+$code-background-color: #f4f8f9;

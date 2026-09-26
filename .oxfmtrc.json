@@ -1,6 +1,6 @@
 {
 	"$schema": "./node_modules/oxfmt/configuration_schema.json",
-	"ignorePatterns": ["*.data.ts", "*.js"],
+	"ignorePatterns": ["*.data.ts", "*.js", "docs/assets/**/*.scss"],
 	"semi": false,
 	"singleQuote": true,
 	"useTabs": true,
@@ -9,5 +9,14 @@
 	"insertFinalNewline": true,
 	"sortImports": {
 		"newlinesBetween": false
-	}
+	},
+	"overrides": [
+		{
+			"files": ["docs/**"],
+			"options": {
+				// The theme compresses HTML onto single lines, so semicolon is required.
+				"semi": true
+			}
+		}
+	]
 }

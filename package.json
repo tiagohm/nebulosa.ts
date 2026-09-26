@@ -11,7 +11,9 @@
 		"fmt": "oxfmt",
 		"fmt:check": "oxfmt --check",
 		"index": "bun run scripts/codebase.index.ts",
-		"review": "bun run scripts/review/review.ts"
+		"review": "bun run scripts/review/review.ts",
+		"docs:serve": "cd docs && bundle exec jekyll serve --livereload",
+		"docs:build": "cd docs && bundle exec jekyll build"
 	},
 	"devDependencies": {
 		"oxfmt": "latest",
