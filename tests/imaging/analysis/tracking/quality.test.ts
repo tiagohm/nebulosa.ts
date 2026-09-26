@@ -123,6 +123,28 @@ test('distributed stellar streaks preserve the evidence of a severe tracking fai
 	expect(sparseResult.score).toBeGreaterThan(0.9)
 })
 
+test('stellar streaks preserve a coherent field at the minimum star count', () => {
+	const frame = image()
+	const stars = [star(15, 15, 5, 0), star(35, 15, 5, 0), star(65, 65, 5, 0), star(85, 85, 5, 0), star(15, 65, 5, 0)]
+	const stellarStreaks = stars.map((sample) => streak(sample.x - 7.5, sample.x + 7.5, sample.y))
+	const baseline = measureTrackingQuality(frame, stars)
+	const measured = measureTrackingQuality(frame, stars, {}, { streaks: stellarStreaks })
+	expect(baseline.diagnostics.quadrantCoverage).toBe(0.5)
+	expect(baseline.score).toBeGreaterThan(0.6)
+	expect(measured.usableStarCount).toBe(5)
+	expect(measured.score).toBeCloseTo(baseline.score, 12)
+	const fourStars = stars.slice(0, 4)
+	const customOptions = { minElongatedStars: 4 }
+	const customBaseline = measureTrackingQuality(frame, fourStars, customOptions)
+	const customMeasured = measureTrackingQuality(frame, fourStars, customOptions, { streaks: stellarStreaks.slice(0, 4) })
+	expect(customBaseline.score).toBeGreaterThan(0.6)
+	expect(customMeasured.usableStarCount).toBe(4)
+	expect(customMeasured.score).toBeCloseTo(customBaseline.score, 12)
+
+	const crossingTwoStars = measureTrackingQuality(frame, stars, {}, { streaks: [streak(10, 40, 15)] })
+	expect(crossingTwoStars.score).toBe(0)
+})
+
 test('detector-measured long stellar trails retain field evidence despite aperture-truncated moments', () => {
 	const frame = image(256, 256)
 	frame.raw.fill(0.1)

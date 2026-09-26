@@ -35,11 +35,16 @@ function overlapsStreak(star: DetectedStar, streak: Streak): boolean {
 	return x * x + y * y <= radius * radius
 }
 
+const EMPTY_TRACKING_QUALITY_OPTIONS: Readonly<TrackingQualityOptions> = {}
+const EMPTY_TRACKING_QUALITY_CONTEXT: Readonly<TrackingQualityContext> = {}
+
 // Marks streaks associated with an elongated star only when stars outside that streak independently
 // support a strong, aligned field. This prevents one external streak from validating the stars it
 // elongated. The local moment proxy cannot bound a full streak beyond the detector's fixed aperture.
 function fieldCompatibleStreaks(image: Image, stars: readonly DetectedStar[], options: Readonly<TrackingQualityOptions>, streaks: readonly Streak[], streakCount: number): Uint8Array {
 	const members = new Uint8Array(streakCount)
+	// A candidate can restore at most one significant star after independent support is established.
+	const independentMinimum = Math.max(1, (options.minElongatedStars ?? 5) - 1)
 	for (let i = 0; i < streakCount; i++) {
 		const streak = streaks[i]
 		const independentStars: DetectedStar[] = []
@@ -49,7 +54,7 @@ function fieldCompatibleStreaks(image: Image, stars: readonly DetectedStar[], op
 			else independentStars.push(star)
 		}
 		if (associatedStars.length === 0) continue
-		const field = measureTrackingQuality(image, independentStars, options)
+		const field = measureTrackingQualityCore(image, independentStars, options, EMPTY_TRACKING_QUALITY_CONTEXT, independentMinimum, 1)
 		const angle = field.angle
 		const trail = field.medianTrail
 		if (!(field.score >= STELLAR_STREAK_FIELD_SCORE) || angle === undefined || trail === undefined || !(trail > 0)) continue
@@ -130,11 +135,17 @@ function skyQuality(image: Image, angle: number, trail: number, context: Readonl
 // Measures one completed frame. Shape inputs use squared pixels and axial radians; the image is
 // read only for dimensions and an optional saturation sample. Missing shape fields are skipped.
 // Work is linear in stars plus streaks because the optional streak pass is capped at 32 detections.
-export function measureTrackingQuality(image: Image, stars: readonly DetectedStar[], options: Readonly<TrackingQualityOptions> = {}, context: Readonly<TrackingQualityContext> = {}): TrackingQuality {
+export function measureTrackingQuality(image: Image, stars: readonly DetectedStar[], options: Readonly<TrackingQualityOptions> = EMPTY_TRACKING_QUALITY_OPTIONS, context: Readonly<TrackingQualityContext> = EMPTY_TRACKING_QUALITY_CONTEXT): TrackingQuality {
+	return measureTrackingQualityCore(image, stars, options, context, options.minElongatedStars ?? 5, 2)
+}
+
+// Computes field statistics with the required significant-star count and stars per supported
+// quadrant. Candidate calls permit one later-validated stellar contribution without weakening the
+// final public threshold; neither the image nor its star detections are mutated.
+function measureTrackingQualityCore(image: Image, stars: readonly DetectedStar[], options: Readonly<TrackingQualityOptions>, context: Readonly<TrackingQualityContext>, minElongatedStars: number, minStarsPerQuadrant: number): TrackingQuality {
 	const minSNR = options.minSNR ?? 2
 	const minTrail = options.minTrail ?? 0.75
 	const minTrailToCrossWidth = options.minTrailToCrossWidth ?? 0.25
-	const minElongatedStars = options.minElongatedStars ?? 5
 	const streaks = context.streaks ?? []
 	const streakCount = Math.min(streaks.length, MAX_TRACKING_STREAKS)
 	const stellarStreaks = fieldCompatibleStreaks(image, stars, options, streaks, streakCount)
@@ -249,7 +260,7 @@ export function measureTrackingQuality(image: Image, stars: readonly DetectedSta
 	const medianTrail = acceptedCount > 0 ? medianBySelectionOf(acceptedTrails, acceptedCount) : undefined
 	const p90Trail = acceptedCount > 0 ? percentileBySelectionOf(acceptedTrails, 0.9, acceptedCount) : undefined
 	let coveredQuadrants = 0
-	for (const count of quadrantCounts) if (count >= 2) coveredQuadrants++
+	for (const count of quadrantCounts) if (count >= minStarsPerQuadrant) coveredQuadrants++
 	const quadrantCoverage = coveredQuadrants / 4
 	const elongatedFraction = usableStarCount > 0 ? elongatedCount / usableStarCount : 0
 	const angleDispersion = acceptedCount > 0 ? 0.5 * Math.sqrt(-2 * Math.log(Math.max(directionCoherence, Number.EPSILON))) : undefined
