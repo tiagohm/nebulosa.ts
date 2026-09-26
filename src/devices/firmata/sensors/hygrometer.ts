@@ -1,5 +1,5 @@
 import { CRC } from '../../../io/crc'
-import type { FirmataClient } from '../firmata'
+import type { FirmataClient } from '../client'
 import { DEFAULT_POLLING_INTERVAL, type Hygrometer, PeripheralBase, type Thermometer } from '../peripheral'
 
 // I2C humidity+temperature sensor drivers over Firmata: AM2320 (Modbus-style holding registers with a

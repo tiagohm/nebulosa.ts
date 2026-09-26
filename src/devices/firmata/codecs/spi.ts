@@ -66,6 +66,18 @@ export function encodeSpiWords(command: 2 | 3 | 4 | 7, selector: number, request
 	return output
 }
 
+// Validates that a transfer fits the ESP8266 firmware's 64-byte incoming frame.
+export function validateSpiTransferSize(data: Readonly<NumberArray> | Buffer, packed: boolean): void {
+	// The feature ID and five command fields leave at most 58 encoded data bytes.
+	const encodedLength = packed ? Math.ceil((data.length * 8) / 7) : data.length * 2
+	if (!(data.length > 0 && 6 + encodedLength <= 64)) throw new RangeError('SPI transfer must fit the ESP8266 64-byte input frame')
+}
+
+// Validates the firmware's fixed 64-byte stack buffer for zero-clocked reads.
+export function validateSpiReadWords(words: number): void {
+	if (!(Number.isInteger(words) && words >= 0 && words <= 64)) throw new RangeError('SPI read length must be 0-64 words')
+}
+
 // Decodes one complete SPI_REPLY payload, or ignores malformed lengths and unknown framing.
 export function decodeSpiReply(payload: Buffer, packed: boolean): SpiReply | undefined {
 	if (payload.length < 4 || payload[0] !== 5) return undefined

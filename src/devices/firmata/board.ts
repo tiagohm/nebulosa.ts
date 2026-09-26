@@ -1,4 +1,4 @@
-import type { Board } from './firmata'
+import type { Board } from './types'
 
 // Board pin map and capability predicates for the ESP8266, implementing the Firmata Board interface.
 // Static constants map silkscreen labels (D0..D10, A0, bus pins) to the firmware's GPIO numbers; the

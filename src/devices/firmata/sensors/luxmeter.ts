@@ -1,4 +1,4 @@
-import type { FirmataClient } from '../firmata'
+import type { FirmataClient } from '../client'
 import { ADCPeripheral, DEFAULT_POLLING_INTERVAL, type Luxmeter, PeripheralBase } from '../peripheral'
 
 // Ambient-light (lux) sensor drivers over Firmata: the I2C BH1750, TSL2561, and MAX44009, plus the

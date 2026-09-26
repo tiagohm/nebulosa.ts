@@ -1,6 +1,7 @@
-import { clamp } from '../../math/numerical/math'
-import { type FirmataClient, PinMode } from './firmata'
-import { DEFAULT_POLLING_INTERVAL, type IOExpander, PeripheralBase } from './peripheral'
+import { clamp } from '../../../math/numerical/math'
+import type { FirmataClient } from '../client'
+import { DEFAULT_POLLING_INTERVAL, type IOExpander, PeripheralBase } from '../peripheral'
+import { PinMode } from '../types'
 
 // Driver for the PCF8574 8-bit I2C I/O expander over Firmata. The chip is quasi-bidirectional: a pin is
 // "input" by writing it high (released) and read back, "output" by driving it low/high. This class

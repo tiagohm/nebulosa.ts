@@ -1,5 +1,5 @@
 import { clamp } from '../../../math/numerical/math'
-import type { FirmataClient } from '../firmata'
+import type { FirmataClient } from '../client'
 import { PeripheralBase } from '../peripheral'
 
 // Driver for the MCP4725 12-bit I2C DAC over Firmata. Writes the analog output code with the fast-mode

@@ -1,7 +1,8 @@
 import { CRC } from '../../../io/crc'
 import type { NumberArray } from '../../../math/numerical/math'
-import type { FirmataClient, OneWirePowerMode } from '../firmata'
+import type { FirmataClient } from '../client'
 import { ADCPeripheral, DEFAULT_POLLING_INTERVAL, PeripheralBase, type Thermometer } from '../peripheral'
+import type { OneWirePowerMode } from '../types'
 
 // Thermometer drivers: the LM35 analog temperature sensor (read on an ADC pin) and the DS18B20 1-Wire
 // digital sensor (addressed/searched on the bus, with selectable resolution and CRC-validated readout).

@@ -1,6 +1,6 @@
 import { fromPressure } from '../../../math/units/distance'
 import { pascal } from '../../../math/units/pressure'
-import type { FirmataClient } from '../firmata'
+import type { FirmataClient } from '../client'
 import { type Altimeter, type Barometer, DEFAULT_POLLING_INTERVAL, PeripheralBase, type Thermometer } from '../peripheral'
 
 // Barometric pressure sensor drivers over I2C: BMP180 and BMP280. Both read the chip's factory

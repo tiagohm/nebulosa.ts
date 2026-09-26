@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { ESP8266 } from '../../../src/devices/firmata/board'
+import { FirmataClient } from '../../../src/devices/firmata/client'
 import { decodeStepperFloat, encodeStepperFloat } from '../../../src/devices/firmata/codecs/numeric'
-import { FirmataClient, type FirmataClientHandler, PinMode, type StepperConfig, type Transport } from '../../../src/devices/firmata/firmata'
+import { PinMode, type FirmataClientHandler, type StepperConfig, type Transport } from '../../../src/devices/firmata/types'
 
 const sent: Buffer[] = []
 const transport: Transport = {

@@ -1,5 +1,6 @@
-import { type FirmataClient, PinMode } from '../firmata'
+import type { FirmataClient } from '../client'
 import { type Display, type IOExpander, PeripheralBase } from '../peripheral'
+import { PinMode } from '../types'
 
 // Driver for an HD44780 character LCD wired through an I2C I/O expander backpack (e.g. PCF8574). Drives
 // the controller in 4-bit mode following the standard LiquidCrystal power-on sequence and command set,

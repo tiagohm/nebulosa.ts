@@ -93,3 +93,20 @@ export function encodePacked7Bit(input: Readonly<NumberArray> | Buffer, offset: 
 	}
 	return output
 }
+
+// Decodes one byte from the two-7-bit-bytes layout (LSB nibble then MSB bit) at `offset`.
+export function decodeByteAs7Bit(input: Readonly<NumberArray> | Buffer, offset: number) {
+	return (input[offset] & 0x7f) | ((input[offset + 1] & 0x01) << 7)
+}
+
+// Encodes one byte as two 7-bit bytes (low 7 bits, then bit 7) into `output` at `offset`.
+export function encodeByteAs7Bit(data: number, output: NumberArray | Buffer, offset: number = 0) {
+	output[offset++] = data & 0x7f
+	output[offset] = (data >>> 7) & 1
+}
+
+// Writes a 14-bit value as two 7-bit bytes.
+export function writeValueAsTwo7bitBytes(data: Uint8Array, offset: number, value: number) {
+	data[offset] = value & 0x7f
+	data[offset + 1] = (value >> 7) & 0x7f
+}
