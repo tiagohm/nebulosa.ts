@@ -4,25 +4,23 @@ import { heightKeyword, numericKeyword, widthKeyword } from '../../io/formats/fi
 import { type Angle, deg } from '../../math/units/angle'
 import { cdMatrix } from '../wcs/fits.wcs'
 
-// Shared plate-solving contract: the common PlateSolver function signature, the request/result shapes
-// used by every solver backend (ASTAP, astrometry.net), and plateSolutionFrom, which distills a solved
-// FITS WCS header into a compact PlateSolution (center, scale, field size, orientation, parity). Angles
-// are radians.
+// Shared plate-solution shapes. plateSolutionFrom distills a solved FITS WCS header into a compact
+// PlateSolution (center, scale, field size, orientation, parity). ASTAP, nova.astrometry.net, local
+// solve-field, and libastrometry each have their own async entry point and hint rules; they are not
+// implementations of one function type. Angles are radians.
 
 // Image handedness relative to the sky: NORMAL keeps east-left, FLIPPED is mirror-imaged.
 export type Parity = 'NORMAL' | 'FLIPPED'
 
-// Common solver signature: takes an input image path, optional hints, and an abort signal, and returns
-// a solution or undefined when solving fails.
-export type PlateSolver = (input: string, options?: PlateSolveOptions, signal?: AbortSignal) => PlateSolution | undefined
-
-// Optional hints passed to a solver to constrain and speed up the search.
+// Optional hints a backend may use to constrain the search. Each solver decides which fields it
+// sends and whether a radius requires a center. See the backend function for that rule.
 export interface PlateSolveOptions {
 	// Search-center right ascension hint (radians).
 	rightAscension?: Angle
 	// Search-center declination hint (radians).
 	declination?: Angle
-	// Search radius around the center hint (radians).
+	// Search-radius hint (radians). ASTAP may use this without a center. nova sends it independently
+	// of RA/Dec. Local solve-field and libastrometry apply a window only when RA, Dec, and radius are all set.
 	radius?: Angle
 	// Image downsampling factor applied before solving.
 	downsample?: number

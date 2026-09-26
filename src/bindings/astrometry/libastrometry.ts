@@ -143,9 +143,11 @@ export class AstrometryNet implements Disposable {
 		this.#load()
 	}
 
-	// Runs a plate solve. `width`/`height` are the image dimensions in pixels; pixel coordinates in
-	// `input` are 0-based and shifted to the solver's 1-based field on load. Returns undefined when there
-	// are no usable indexes, fewer than 3 stars, or the solver fails. Honors `signal` cancellation.
+	// Runs a plate solve. Async. Does not detect stars: `input` is already measured, 0-based, and shifted
+	// to the solver's 1-based field on load. `width`/`height` are image pixels. Needs the native library,
+	// at least one index, and at least three stars. An RA/Dec window is applied only when radius, right
+	// ascension, and declination are all set. Returns undefined when indexes, stars, or the match are
+	// missing. An aborted `signal` throws. A bad index throws from index load.
 	async solve(input: AstrometryNetInput, width: number, height: number, options: AstrometryNetSolveOptions, signal?: AbortSignal): Promise<PlateSolution | undefined> {
 		this.#assertOpen()
 		this.#reset()
@@ -311,7 +313,8 @@ export class AstrometryNet implements Disposable {
 	}
 }
 
-// Convenience one-shot solve: creates a disposable solver, runs it, and frees it automatically.
+// One-shot native solve with the same contract as AstrometryNet.solve: detected stars, image size,
+// indexes, and the all-or-nothing RA/Dec/radius hint. Creates a disposable solver and frees it.
 export async function libAstrometryNetPlateSolve(input: AstrometryNetInput, width: number, height: number, options: AstrometryNetSolveOptions, signal?: AbortSignal): Promise<PlateSolution | undefined> {
 	using solver = new AstrometryNet()
 	return await solver.solve(input, width, height, options, signal)

@@ -313,6 +313,7 @@ export function eraEpj2jd(epj: number): [number, number] {
 
 // Approximate heliocentric position and velocity of Mercury, Venus,
 // EMB, Mars, Jupiter, Saturn, Uranus or Neptune, in J2000.0 axes.
+// Low-precision reference series, not an SPK or VSOP87E ephemeris.
 // Returns the ERFA status (-1 invalid planet, 1 remote date, 2 no convergence)
 // and position/velocity in AU and AU/day.
 export function eraPlan94(tdb1: number, tdb2: number, np: number): readonly [MutVec3, MutVec3] {

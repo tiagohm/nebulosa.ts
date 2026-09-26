@@ -13,7 +13,9 @@ import { eraGst06a, eraS2p } from '../../../coordinates/erfa/erfa'
 import type { CylindricalProjection, ProjectionOptions } from '../../../projections/projection'
 import { timeAtJulianDay, timeShift, timeSubtract, toJulianDay, tt, type Time } from '../../../time/time'
 
-// Solar eclipse map geometry engine. The module is layered as:
+// Solar eclipse Besselian map geometry from caller-supplied Sun and Moon positions. Complementary to
+// nearestSolarEclipse, which only classifies a nearby eclipse; this module does not search for one.
+// The module is layered as:
 //   A. Besselian elements (polynomial fit, instant elements, evaluation).
 //   B. Projection and Earth geometry (fundamental plane -> geographic).
 //   C. Contacts and central endpoints (P1..P4, U1..U4, C1/C2, MAX).

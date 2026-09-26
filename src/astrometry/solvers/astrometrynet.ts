@@ -172,10 +172,12 @@ export function wcsFile(jobId: number, options: RequiredOnly<Omit<RequestOptions
 	return requestBlob(`${options.apiUrl || NOVA_ASTROMETRY_NET_URL}/wcs_file/${jobId}`, 'GET', undefined, signal ?? options.signal)
 }
 
-// End-to-end nova solve: logs in (unless a session is supplied), uploads the image, polls the
-// submission/job until a job succeeds or the timeout aborts, then parses the downloaded WCS into a
-// PlateSolution. Returns undefined on failure, timeout, or job failure. A caller AbortSignal still
-// throws; only the solve timeout is mapped to undefined.
+// End-to-end nova solve. Async. Input is a path (URL upload) or a Blob (multipart). Star detection
+// runs on the service. Requires network access and an API session. center RA, Dec, and radius are
+// uploaded independently when each is set; a radius does not require a center. Logs in unless a
+// session is supplied, polls the submission/job, then parses the downloaded WCS into a PlateSolution.
+// Returns undefined on failure, timeout, or job failure. A caller AbortSignal still throws; only the
+// solve timeout is mapped to undefined.
 export async function novaAstrometryNetPlateSolve(input: string | Blob, options?: Omit<Upload<never>, 'input'>, signal?: AbortSignal): Promise<PlateSolution | undefined> {
 	const timeout = AbortSignal.timeout(options?.timeout || 300000)
 	// Bound every HTTP call and the inter-poll wait by the solve timeout, plus the caller's signal.
@@ -231,11 +233,11 @@ export async function novaAstrometryNetPlateSolve(input: string | Blob, options?
 
 // https://astrometry.net/doc/readme.html
 
-// Plate-solves an image with the local `solve-field` CLI into a temporary directory, optionally
-// constrained by an RA/Dec/radius and FOV hint, then parses the produced .wcs into a PlateSolution.
-// The temp directory is removed on success, failure, timeout, or abort. Returns undefined when
-// solving fails. --ra/--dec/--radius are emitted only when the caller supplies all three; a radius
-// alone is not a north-polar window.
+// Plate-solves a file with the local `solve-field` CLI. Async. Does not accept a Blob. Star detection
+// is inside solve-field. Requires `executable` and the solver's local indexes. Writes a temp directory
+// that is removed on success, failure, timeout, or abort. Returns undefined when no WCS is produced.
+// An aborted signal rejects from the spawned process. --ra/--dec/--radius are emitted only when the
+// caller supplies all three; a radius alone is not a window. `fov` of 0 leaves scale to the solver.
 export async function localAstrometryNetPlateSolve(input: string, options: RequiredOnly<LocalAstrometryNetPlateSolveOptions, 'executable'>, signal?: AbortSignal) {
 	const timeout = options.timeout ?? 0
 	const downsample = Math.max(1, options.downsample ?? 2)

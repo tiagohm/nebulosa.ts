@@ -13,10 +13,12 @@ import { starMomentShape } from './shape'
 // response to find candidate peaks, then measures each star's flux, SNR, half-flux diameter (HFD),
 // and FWHM via integral-image aperture/annulus photometry. The published (x, y) is the flux-weighted
 // centroid around that peak, not the integer local-max pixel, so sub-pixel motion is visible to
-// guiders. Coordinates are pixels; intensities use the normalized [0, 1] pixel scale. Also provides
-// utilities to merge close detections and to drop pairs that would share a guiding search box.
+// guiders. Centroids are zero-based image coordinates: origin at the upper-left sample, +X right,
+// +Y down. Intensities use the normalized processing scale, which is not a permanent [0, 1] clamp.
+// Also provides utilities to merge close detections and to drop pairs that would share a guiding search box.
 
-// A detected star: flux-weighted centroid in pixels plus measured photometry.
+// A detected star: flux-weighted centroid plus measured photometry.
+// x and y are zero-based, +X right, +Y down.
 export interface DetectedStar extends Readonly<Point> {
 	// Half-flux diameter, pixels.
 	readonly hfd: number

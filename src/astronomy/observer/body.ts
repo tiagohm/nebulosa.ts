@@ -85,7 +85,8 @@ export function bodySurfaceLocation(longitude: Angle, latitude: Angle, elevation
 //
 // The cached body-fixed Cartesian position is treated as the stationary state [r_fixed, 0] and
 // transformed with frameToBase, so a rotating Frame contributes v = Rᵀ (ω × r_fixed) through
-// W = dR/dt·Rᵀ rather than a finite-difference of positions. Pass `out` to reuse a state pair;
+// W = dR/dt·Rᵀ rather than a finite-difference of positions. A frame that omits dRdtTimesRtAt
+// contributes no rotational surface velocity. Pass `out` to reuse a state pair;
 // `out` may alias a previous return from this function. The result is relative to the body
 // center, in the library base (GCRS/ICRS-oriented) axes.
 export function bodySurfaceState(location: BodySurfaceLocation, time: Time, out?: PositionAndVelocity): PositionAndVelocity {

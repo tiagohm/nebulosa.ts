@@ -41,8 +41,9 @@ import type { MutVec3 } from '../../../math/linear-algebra/vec3'
 import type { PositionAndVelocity } from '../astrometry'
 
 // Port of ERFA's eraEpv00: the simplified VSOP2000-based Earth heliocentric and barycentric position
-// and velocity in the BCRS. The bulk of this file is the harmonic coefficient tables documented in the
-// header above (amplitude/phase/frequency triplets per term); the function evaluating them is at the end.
+// and velocity in the BCRS. This is an approximate reference ephemeris, not a JPL/SPK kernel.
+// The bulk of this file is the harmonic coefficient tables documented in the header above
+// (amplitude/phase/frequency triplets per term); the function evaluating them is at the end.
 
 // Sun-to-Earth, T^0, X
 const E0X = [

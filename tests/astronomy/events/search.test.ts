@@ -61,6 +61,38 @@ test('searchRoots reports an exact sample zero at either closed endpoint without
 	expect(timeSubtract(interior[0], EPOCH)).toBeCloseTo(0.5, 12)
 })
 
+test('searchRoots misses two roots that share one coarse step until the step is reduced', () => {
+	const stop = timeYMDHMS(2026, 1, 2, 0, 0, 0, Timescale.UTC) // EPOCH + 1 day
+	// Roots at 0.2 and 0.4 day. Both endpoints are positive, so one coarse step sees no sign change.
+	const pair = (time: Time) => {
+		const x = timeSubtract(time, EPOCH)
+		return (x - 0.2) * (x - 0.4)
+	}
+
+	expect(searchRoots(pair, EPOCH, stop, { step: 1 })).toHaveLength(0)
+
+	const isolated = searchRoots(pair, EPOCH, stop, { step: 0.15 })
+	expect(isolated).toHaveLength(2)
+	expect(timeSubtract(isolated[0], EPOCH)).toBeCloseTo(0.2, 6)
+	expect(timeSubtract(isolated[1], EPOCH)).toBeCloseTo(0.4, 6)
+})
+
+test('a wrapped angular objective can add a false bracket that the unwrapped objective does not have', () => {
+	const stop = timeYMDHMS(2026, 1, 2, 0, 0, 0, Timescale.UTC) // EPOCH + 1 day
+	// Sawtooth in [0, 1) minus 0.5. The true zero is at 0.5 day. The jump back through zero at 1 day
+	// is a discontinuity, and a sample pair that straddles it is reported as another root.
+	const wrapped = (time: Time) => {
+		const day = timeSubtract(time, EPOCH)
+		return day - Math.floor(day) - 0.5
+	}
+	expect(searchRoots(wrapped, EPOCH, stop, { step: 0.25 }).length).toBeGreaterThan(1)
+
+	const unwrapped = (time: Time) => timeSubtract(time, EPOCH) - 0.5
+	const roots = searchRoots(unwrapped, EPOCH, stop, { step: 0.25 })
+	expect(roots).toHaveLength(1)
+	expect(timeSubtract(roots[0], EPOCH)).toBeCloseTo(0.5, 6)
+})
+
 test('searchExtrema locates the maximum and minimum of the sinusoid', () => {
 	const stop = timeYMDHMS(2026, 1, 2, 0, 0, 0, Timescale.UTC) // EPOCH + 1 day
 	const extrema = searchExtrema(sine, EPOCH, stop)

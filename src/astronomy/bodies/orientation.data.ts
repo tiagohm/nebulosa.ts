@@ -8,10 +8,10 @@ import type { PeriodicTerm, RotationElements } from './orientation'
 // optional periodic corrections whose arguments are linear in T. Angles are stored in radians.
 //
 // Provenance and precision: the linear pole/W models reproduce the bodies to ~0.1 deg over the modern
-// era. The Jupiter pole periodic terms (Ja..Je) and the Neptune term (N) are included because they are
-// part of the standard model; Mercury's small periodic W terms (arguments linear in d, ~0.01 deg) and
-// the Mars 2015 periodic refinements are intentionally omitted and noted on those entries. The Moon is
-// not included here (its ~13 periodic terms are deferred to a later phase).
+// era. Sun, planet, and Moon tables are included. Jupiter's pole periodic terms (Ja..Je), Neptune's
+// term (N), and the Moon's periodic model are part of those tables. Mercury's small periodic W terms
+// (arguments linear in d, ~0.01 deg) and the Mars 2015 periodic refinements are intentionally omitted
+// and noted on those entries.
 
 // Jupiter pole auxiliary angles Ja..Je (rate in rad per Julian century), shared by the RA and Dec
 // periodic corrections.

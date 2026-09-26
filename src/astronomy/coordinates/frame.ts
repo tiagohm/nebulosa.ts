@@ -29,11 +29,13 @@ export type CoordinateFrameOutput<T extends CoordinateFrame> = T extends Vec3 ? 
 export interface Frame {
 	// Instantaneous base->frame orientation at the given time.
 	readonly rotationAt: (time: Time) => Mat3
-	// Optional angular-velocity operator W = dR/dt·Rᵀ (per day) required for full
-	// position+velocity transforms of a time-dependent frame:
+	// Optional angular-velocity operator W = dR/dt·Rᵀ (per day), the rotational
+	// transport term of a full state:
 	//   v_frame = R v_base + W p_frame
-	// Time-dependent orientation without this operator is valid only when the
-	// frame's velocity convention treats the axes as quasi-inertial (TEME).
+	// Absence means the axes contribute no rotational transport: velocity is only
+	// the instantaneous rotation R v_base. Omit it for a time-independent rotation
+	// or a deliberate quasi-inertial convention such as TEME. A custom frame whose
+	// rotationAt changes with time, and that will transform velocities, must supply it.
 	// The optional `rotation` is R(t) already evaluated by frameAt/frameToBase,
 	// so a numerical derivative can skip a third rotationAt(time) call.
 	readonly dRdtTimesRtAt?: (time: Time, rotation?: Mat3) => Mat3
@@ -241,7 +243,7 @@ export const ITRS: Frame = {
 	dRdtTimesRtAt: () => EARTH_DRDT_TIMES_RT_MATRIX,
 }
 
-// Like ITRS, but the velocity drag term uses the exact instantaneous
+// Like ITRS, but the rotational-transport term uses the exact instantaneous
 // Earth-rotation matrix (dR/dt · Rᵀ at time) instead of the constant mean-rate
 // approximation EARTH_DRDT_TIMES_RT_MATRIX. This captures the small precession,
 // nutation, and polar-motion rate contributions at the cost of three extra
@@ -312,7 +314,7 @@ export function frameAt<T extends CoordinateFrame>(pv: T, frame: Frame, time: Ti
 	const v = matMulVec(r, pv[1], out?.[1])
 
 	if (frame.dRdtTimesRtAt) {
-		// p is already the transformed (frame) position, so W · p adds the drag term.
+		// p is already the transformed (frame) position, so W · p adds rotational transport.
 		vecPlus(v, matMulVec(frame.dRdtTimesRtAt(time, r), p), v)
 	}
 
@@ -330,7 +332,7 @@ export function frameAt<T extends CoordinateFrame>(pv: T, frame: Frame, time: Ti
 // to avoid allocation; `o` may alias `pv` for an in-place transform.
 //
 // For position:  p_base = Rᵀ · p_frame.
-// For a rotating frame (R = R(t)) the velocity must undo the drag term first:
+// For a rotating frame (R = R(t)) the velocity must undo the rotational transport first:
 //   v_frame = R · v_base + (dR/dt) · p_base = R · v_base + W · p_frame,
 //   so v_base = Rᵀ · (v_frame − W · p_frame),  with W = dRdtTimesRtAt.
 export function frameToBase<T extends CoordinateFrame>(pv: T, frame: Frame, time: Time, o?: CoordinateFrameOutput<T>): CoordinateFrameOutput<T> {
@@ -343,7 +345,7 @@ export function frameToBase<T extends CoordinateFrame>(pv: T, frame: Frame, time
 	const out = o as [MutVec3, MutVec3] | undefined
 
 	if (frame.dRdtTimesRtAt) {
-		// Build the drag-corrected velocity from the original position first, since
+		// Build the transport-corrected velocity from the original position first, since
 		// computing p may overwrite pv[0] when `o` aliases `pv`.
 		const v = vecMinus(pv[1], matMulVec(frame.dRdtTimesRtAt(time, r), pv[0]), out?.[1])
 		matTransposeMulVec(r, v, v)

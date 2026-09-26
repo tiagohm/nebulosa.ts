@@ -7,9 +7,10 @@ import type { ImageAnalysisPlane } from '../plane'
 import type { RobustReservoir } from '../robust'
 
 // Contracts for one complete, isolated defocused annulus in a linear normalized image and for
-// caller-grouped measurement sequences. Pixel centers are integer coordinates, X right and Y down.
-// Results own their storage in the received image frame, ignoring sensor header origins. These
-// measure apparent geometry and never diagnose optical collimation itself.
+// caller-grouped measurement sequences. This is a defocused annular-geometry diagnostic intended
+// to support collimation workflows. It does not independently infer or certify telescope collimation.
+// Pixel centers are integer coordinates, X right and Y down. Results own their storage in the
+// received image frame, ignoring sensor header origins.
 
 // Explicit selection of one annulus with external background; the image is never mutated.
 export interface CollimationAnalysisInput {

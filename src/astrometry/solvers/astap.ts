@@ -94,10 +94,11 @@ export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0
 	return []
 }
 
-// Plate-solves an image with ASTAP, optionally constrained by an RA/Dec/radius hint and FOV, then
-// parses the emitted WCS .ini into a PlateSolution. Returns undefined when ASTAP fails to solve.
+// Plate-solves a file with the local ASTAP executable, then parses the emitted WCS .ini into a
+// PlateSolution. Async. Star detection is astapDetectStars, not part of this call. Returns undefined
+// when ASTAP exits non-zero or writes no WCS. An aborted signal rejects from the spawned process.
 // RA/Dec are sent only when both are provided (hours and south-polar-distance). A radius without a
-// center is `-r` only, so ASTAP can use the FITS header instead of RA=0h, Dec=0°.
+// center is `-r` only, so ASTAP can use the FITS header instead of RA=0h, Dec=0°. Requires the ASTAP binary.
 export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, timeout = 300000, rightAscension, declination, radius, executable, sip = true }: AstapPlateSolveOptions = {}, signal?: AbortSignal) {
 	fov = Math.max(0, Math.min(toDeg(fov), 360)) // Specify 0 for auto
 	const name = Bun.randomUUIDv7()

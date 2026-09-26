@@ -122,10 +122,12 @@ export const SCHWARZSCHILD_RADIUS_OF_THE_SUN = 1.974125743363687131156424e-8
 // Speed of light (AU per day).
 export const SPEED_OF_LIGHT_AU_DAY = (SPEED_OF_LIGHT * DAYSEC) / AU_M
 
-// Earth radius in km
+// Equatorial reference radius, 6378.135 km, the same scale as the WGS72 equatorial radius below.
+// Spherical eclipse, parallax, and occulting-disk calculations use this value. It is not the
+// semi-major axis of the geodetic ellipsoid selected by ELLIPSOID_PARAMETERS.
 export const EARTH_RADIUS_KM = 6378.135
 
-// Earth equatorial radius in AU, used both as the ITRS scale and as the occulting-disk radius.
+// EARTH_RADIUS_KM in AU. Same equatorial reference radius, not a geodetic ellipsoid radius.
 export const EARTH_RADIUS_AU = EARTH_RADIUS_KM / AU_KM
 
 // Solar photospheric radius in km (IAU 2015 nominal radius).

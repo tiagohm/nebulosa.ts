@@ -11,6 +11,7 @@ import { time, Timescale } from '../time/time'
 import * as vsop87e from './models/analytical/vsop87e'
 
 // Port of Meeus-based algorithms, grouped into namespaces mirroring the source chapters. Angles are radians, distances AU.
+// These are reference chapter algorithms for direct use and comparison. They are not the high-level event, frame, or ephemeris paths.
 
 const { sin, cos, tan, asin, acos, atan, atan2, sinh, asinh, sqrt, cbrt, hypot, log10, abs, trunc, floor, min, max, round, SQRT2 } = Math
 
@@ -18,6 +19,8 @@ const { sin, cos, tan, asin, acos, atan, atan2, sinh, asinh, sqrt, cbrt, hypot, 
 
 export type Coord = readonly [Angle, Angle, Distance?]
 
+// Equatorial radius assumed by these Meeus routines, 6378.137 km. Intentionally distinct from
+// core EARTH_RADIUS_KM (6378.135 km, WGS72 equatorial reference) and from ELLIPSOID_PARAMETERS.
 export const EARTH_RADIUS_KM = 6378.137 // km
 export const EARTH_RADIUS = EARTH_RADIUS_KM / AU_KM // au
 

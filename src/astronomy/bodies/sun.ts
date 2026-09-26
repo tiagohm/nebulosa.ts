@@ -155,7 +155,9 @@ export function solarSaros(time: Time) {
 	return (((s % 223) + 223) % 223) + 1
 }
 
-// Computes the nearest (previous or next) solar eclipse for a given time
+// Nearest previous or next solar eclipse from the Meeus lunation/gamma series. Classifies the event
+// (type, magnitude, gamma) at a global level. It does not build Besselian elements, a ground track,
+// or local contacts; those are computeSolarEclipseMapGeometry and the local-circumstance functions.
 export function nearestSolarEclipse(time: Time, next: boolean): Readonly<SolarEclipse> {
 	const t = tt(time)
 	const jd = toJulianDay(t)

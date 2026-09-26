@@ -7,9 +7,10 @@ import { COLLIMATION_EDGE_REASON, collimationCoverage, type CollimationEdges, co
 import { type PreparedCollimation, prepareCollimation, refineCollimationBackground } from './preprocess'
 import type { CollimationAnalysis, CollimationAnalysisInput, CollimationAnalysisOptions, CollimationAssessment, CollimationBoundaryFit, CollimationDiagnostic, CollimationFailureReason, CollimationGeometry, CollimationPhotometry, CollimationQuality, CollimationStability } from './types'
 
-// Apparent two-ellipse geometry of one complete defocused annulus in a linear image. Native CFA
-// coordinates are transformed back exactly once. Fits and twelve paired angular deletions allocate
-// independent outputs; workspace buffers never escape. This is not an optical collimation diagnosis.
+// Defocused annular-geometry diagnostic intended to support collimation workflows. It measures
+// apparent boundaries, center offset, and brightness asymmetry. It does not independently infer
+// or certify telescope collimation. Native CFA coordinates are transformed back exactly once.
+// Fits and twelve paired angular deletions allocate independent outputs; workspace buffers never escape.
 
 // Strict dimensionless containment margin, safely above rounding in the normalized continuous solve.
 const CONTAINMENT_MARGIN = 1e-10
