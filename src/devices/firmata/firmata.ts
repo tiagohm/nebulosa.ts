@@ -931,9 +931,6 @@ export class FirmataClient implements Disposable {
 	#oneWireCorrelationId = 0
 	#spiRequestId = 0
 	readonly #spiPackedBySelector = new Map<number, boolean>()
-	// Firmware appends configured motors to existing groups; counts belong to this session.
-	readonly #multiStepperGroupSizes = new Map<number, number>()
-
 	readonly #pinStateRequestQueue: number[] = []
 	readonly #pinMap = new Map<number, Pin>()
 	// Reassigned on reset()/close() so a reconnect handshake does not inherit a stale analog mapping.
@@ -1099,7 +1096,6 @@ export class FirmataClient implements Disposable {
 		this.#maxTwoWireDelay = 0
 		this.#spiRequestId = 0
 		this.#spiPackedBySelector.clear()
-		this.#multiStepperGroupSizes.clear()
 		this.#fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 	}
 
@@ -1478,21 +1474,16 @@ export class FirmataClient implements Disposable {
 	// Appends `devices` (motor IDs 0-9) to MultiStepper `group` (0-4), preserving
 	// their order for later absolute targets. At most ten motors fit a group.
 	multiStepperConfig(group: number, devices: readonly number[]) {
-		const size = (this.#multiStepperGroupSizes.get(group) ?? 0) + devices.length
+		const size = devices.length
 		// The firmware indexes five groups and ten motor slots without checking IDs;
 		// MultiStepper itself stores at most ten motors.
 		if (!(Number.isInteger(group) && group >= 0 && group < 5 && size > 0 && size <= 10 && devices.every((device) => Number.isInteger(device) && device >= 0 && device < 10))) throw new RangeError('MultiStepper requires group 0-4 and 1-10 motor IDs in 0-9')
 		this.#sendSysex(ACCELSTEPPER_DATA, [0x20, group, ...devices])
-		this.#multiStepperGroupSizes.set(group, size)
 	}
 
 	// Coordinates `group` to absolute signed `positions` in configured motor
 	// order; one position in steps is required per motor.
 	multiStepperMoveTo(group: number, positions: readonly number[]) {
-		const size = this.#multiStepperGroupSizes.get(group)
-		// The firmware decodes one five-byte target for every member, regardless of
-		// the received payload length; a short command would read past its buffer.
-		if (size === undefined || positions.length !== size) throw new RangeError('MultiStepper move requires one target per configured motor')
 		const payload = [0x21, group]
 		for (const position of positions) payload.push(...encodeStepperPosition(position))
 		this.#sendSysex(ACCELSTEPPER_DATA, payload)

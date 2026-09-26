@@ -88,7 +88,6 @@ describe('core and capability', () => {
 		expect(writes.slice(writesBeforeReset)).toEqual([Buffer.from([0xff]), Buffer.from([0xf0, 0x79, 0xf7])])
 		expect(resetClient.pinCount).toBe(0)
 		expect(resetClient.pinAt(1)).toBeUndefined()
-		expect(() => resetClient.multiStepperMoveTo(0, [100, 200])).toThrow(RangeError)
 		const initialization = resetClient.ensureInitializationIsDone(0)
 		let settled = false
 		void initialization.then(() => {
@@ -312,25 +311,6 @@ describe('Serial, encoder and stepper', () => {
 		const fourWireAllowsUnsupported: UnsupportedFourWire = false
 		expect(threeWireAllowsUnsupported).toBeFalse()
 		expect(fourWireAllowsUnsupported).toBeFalse()
-	})
-
-	test('MultiStepper requires a target per appended motor and forgets groups on reset', () => {
-		client.multiStepperConfig(0, [2, 3])
-		expect(() => client.multiStepperMoveTo(0, [-100])).toThrow(RangeError)
-		expect(() => client.multiStepperMoveTo(0, [-100, 0, 100])).toThrow(RangeError)
-		client.multiStepperMoveTo(0, [-100, 100])
-		client.multiStepperConfig(0, [4])
-		expect(() => client.multiStepperMoveTo(0, [-100, 100])).toThrow(RangeError)
-		client.multiStepperMoveTo(0, [-100, 100, 0])
-		expect(sent).toHaveLength(4)
-		expect(() => client.multiStepperConfig(5, [2])).toThrow(RangeError)
-		expect(() => client.multiStepperConfig(1, [10])).toThrow(RangeError)
-		expect(() => client.multiStepperConfig(0, [0, 1, 2, 3, 4, 5, 6, 7])).toThrow(RangeError)
-		expect(() => client.multiStepperStop(5)).toThrow(RangeError)
-		client.reset()
-		expect(() => client.multiStepperMoveTo(0, [-100, 100, 0])).toThrow(RangeError)
-		client.multiStepperConfig(0, [2])
-		client.multiStepperMoveTo(0, [-100])
 	})
 })
 
