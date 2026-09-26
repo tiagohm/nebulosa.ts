@@ -112,8 +112,6 @@ export type DhtModel = 'dht11' | 'dht22'
 interface StepperConfigBase {
 	// Motor number, 0-9.
 	readonly device: number
-	// Step-size exponent; 0 means full steps, 1 half steps, and so on up to 7.
-	readonly stepType?: number
 	// First motor or step pin, 0-127.
 	readonly pin1: number
 	// Second motor or direction pin, 0-127.
@@ -130,16 +128,22 @@ export type StepperConfig = StepperConfigBase &
 		| {
 				// Driver or two-wire motor requiring only pin1 and pin2.
 				readonly interface: 'driver' | 'twoWire'
+				// These interfaces do not select a step size in the bundled firmware.
+				readonly stepType?: never
 		  }
 		| {
 				// Three-wire motor requiring one additional physical pin.
 				readonly interface: 'threeWire'
+				// Whole (0) or half (1) steps; other values have no firmware constructor.
+				readonly stepType?: 0 | 1
 				// Third motor pin, 0-127.
 				readonly pin3: number
 		  }
 		| {
 				// Four-wire motor requiring two additional physical pins.
 				readonly interface: 'fourWire'
+				// Whole (0) or half (1) steps; other values have no firmware constructor.
+				readonly stepType?: 0 | 1
 				// Third motor pin, 0-127.
 				readonly pin3: number
 				// Fourth motor pin, 0-127.
@@ -927,6 +931,8 @@ export class FirmataClient implements Disposable {
 	#oneWireCorrelationId = 0
 	#spiRequestId = 0
 	readonly #spiPackedBySelector = new Map<number, boolean>()
+	// Firmware appends configured motors to existing groups; counts belong to this session.
+	readonly #multiStepperGroupSizes = new Map<number, number>()
 
 	readonly #pinStateRequestQueue: number[] = []
 	readonly #pinMap = new Map<number, Pin>()
@@ -1073,7 +1079,7 @@ export class FirmataClient implements Disposable {
 		return this.#initialization.promise
 	}
 
-	// Clears local board metadata, SPI correlation state and the parser, then rearms the
+	// Clears local board metadata, SPI and MultiStepper session state and the parser, then rearms the
 	// handshake; pending initialization resolves false. The board receives no reset command.
 	reset() {
 		// Re-arm the one-shot initialization gate so a subsequent (re)connect handshake runs the full
@@ -1092,6 +1098,7 @@ export class FirmataClient implements Disposable {
 		this.#analogPins = {}
 		this.#spiRequestId = 0
 		this.#spiPackedBySelector.clear()
+		this.#multiStepperGroupSizes.clear()
 		this.#fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 	}
 
@@ -1223,8 +1230,9 @@ export class FirmataClient implements Disposable {
 
 	// Queries signed int32 variable `id` (0-16383) for physical `pin`, or the whole
 	// board when `pin` is omitted; the reply arrives through `systemVariableReply`.
+	// The bundled firmware requires a five-byte zero value even for reads.
 	querySystemVariable(id: number, pin?: number) {
-		this.#sendSysex(SYSTEM_VARIABLE, [0, 1, 0, ...encodeUnsigned7(id, 2), pin ?? 127])
+		this.#sendSysex(SYSTEM_VARIABLE, [0, 1, 0, ...encodeUnsigned7(id, 2), pin ?? 127, 0, 0, 0, 0, 0])
 	}
 
 	// Sets signed int32 variable `id` (0-16383) to `value` for physical `pin`, or
@@ -1269,10 +1277,16 @@ export class FirmataClient implements Disposable {
 	// Sends `data` words (or a numeric read count) to a channel/device with the
 	// chosen command. `deselectCs=false` keeps CS active; returns a 7-bit request ID.
 	#spiData(command: 2 | 3 | 4 | 7, channel: SpiChannel, deviceId: number, data: Readonly<NumberArray> | Buffer | number, deselectCs: boolean): number {
-		if (typeof data !== 'number' && data.length > 127) throw new RangeError('SPI transfer exceeds the 127-word protocol limit')
 		const selector = spiSelector(channel, deviceId)
+		const packed = this.#spiPackedBySelector.get(selector) ?? false
+		if (typeof data !== 'number') {
+			// ESP8266 MAX_DATA_BYTES is 64; the feature ID and five command fields
+			// leave at most 58 encoded data bytes before the parser drops the frame.
+			const encodedLength = packed ? Math.ceil((data.length * 8) / 7) : data.length * 2
+			if (!(data.length > 0 && 6 + encodedLength <= 64)) throw new RangeError('SPI transfer must fit the ESP8266 64-byte input frame')
+		}
 		const id = this.#nextSpiRequestId()
-		const payload = typeof data === 'number' ? [command, selector, id, deselectCs ? 1 : 0, data] : encodeSpiWords(command, selector, id, data, this.#spiPackedBySelector.get(selector) ?? false, deselectCs)
+		const payload = typeof data === 'number' ? [command, selector, id, deselectCs ? 1 : 0, data] : encodeSpiWords(command, selector, id, data, packed, deselectCs)
 		this.#sendSysex(SPI_DATA, payload)
 		return id
 	}
@@ -1409,7 +1423,8 @@ export class FirmataClient implements Disposable {
 		if (options.interface === 'threeWire' || options.interface === 'fourWire') payload.push(options.pin3)
 		if (options.interface === 'fourWire') payload.push(options.pin4)
 		if (options.enablePin !== undefined) payload.push(options.enablePin)
-		if (options.invertPins !== undefined) payload.push(options.invertPins)
+		// This fork reads the inversion slot even when omitted, so send zero explicitly.
+		payload.push(options.invertPins ?? 0)
 		this.#sendSysex(ACCELSTEPPER_DATA, payload)
 	}
 
@@ -1457,15 +1472,24 @@ export class FirmataClient implements Disposable {
 		this.#sendSysex(ACCELSTEPPER_DATA, [9, device, ...encodeStepperFloat(speed)])
 	}
 
-	// Configures MultiStepper `group` (0-4) from `devices` (motor IDs 0-9) in
-	// the same order that later absolute target positions are supplied.
+	// Appends `devices` (motor IDs 0-9) to MultiStepper `group` (0-4), preserving
+	// their order for later absolute targets. At most ten motors fit a group.
 	multiStepperConfig(group: number, devices: readonly number[]) {
+		const size = (this.#multiStepperGroupSizes.get(group) ?? 0) + devices.length
+		// The firmware indexes five groups and ten motor slots without checking IDs;
+		// MultiStepper itself stores at most ten motors.
+		if (!(Number.isInteger(group) && group >= 0 && group < 5 && size > 0 && size <= 10 && devices.every((device) => Number.isInteger(device) && device >= 0 && device < 10))) throw new RangeError('MultiStepper requires group 0-4 and 1-10 motor IDs in 0-9')
 		this.#sendSysex(ACCELSTEPPER_DATA, [0x20, group, ...devices])
+		this.#multiStepperGroupSizes.set(group, size)
 	}
 
 	// Coordinates `group` to absolute signed `positions` in configured motor
 	// order; one position in steps is required per motor.
 	multiStepperMoveTo(group: number, positions: readonly number[]) {
+		const size = this.#multiStepperGroupSizes.get(group)
+		// The firmware decodes one five-byte target for every member, regardless of
+		// the received payload length; a short command would read past its buffer.
+		if (size === undefined || positions.length !== size) throw new RangeError('MultiStepper move requires one target per configured motor')
 		const payload = [0x21, group]
 		for (const position of positions) payload.push(...encodeStepperPosition(position))
 		this.#sendSysex(ACCELSTEPPER_DATA, payload)
@@ -1473,6 +1497,7 @@ export class FirmataClient implements Disposable {
 
 	// Immediately stops every motor in MultiStepper `group` (0-4).
 	multiStepperStop(group: number) {
+		if (!(Number.isInteger(group) && group >= 0 && group < 5)) throw new RangeError('MultiStepper group must be 0-4')
 		this.#sendSysex(ACCELSTEPPER_DATA, [0x23, group])
 	}
 
@@ -1504,13 +1529,17 @@ export class FirmataClient implements Disposable {
 		this.#sendSysex(SCHEDULER_DATA, [2, id, ...encodePacked7Bit(message)])
 	}
 
-	// Delays the currently executing scheduler task by unsigned `milliseconds`.
+	// Delays the currently executing scheduler task by 0..2147483647 milliseconds;
+	// larger wire values become negative signed `long` delays in the firmware.
 	schedulerDelay(milliseconds: number) {
+		if (!(Number.isInteger(milliseconds) && milliseconds >= 0 && milliseconds <= 0x7fffffff)) throw new RangeError('Scheduler delay must be 0-2147483647 milliseconds')
 		this.#sendSysex(SCHEDULER_DATA, [3, ...encodeUnsigned7(milliseconds, 5)])
 	}
 
-	// Schedules task `id` to execute after unsigned `milliseconds`.
+	// Schedules task `id` after 0..2147483647 milliseconds, the positive signed
+	// `long` range decoded by the reference firmware.
 	schedulerSchedule(id: number, milliseconds: number) {
+		if (!(Number.isInteger(milliseconds) && milliseconds >= 0 && milliseconds <= 0x7fffffff)) throw new RangeError('Scheduler delay must be 0-2147483647 milliseconds')
 		this.#sendSysex(SCHEDULER_DATA, [4, id, ...encodeUnsigned7(milliseconds, 5)])
 	}
 

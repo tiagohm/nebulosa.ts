@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { ESP8266 } from '../../../src/devices/firmata/board'
 import { decodeStepperFloat, encodeStepperFloat } from '../../../src/devices/firmata/codecs/numeric'
-import { FirmataClient, type FirmataClientHandler, PinMode, type Transport } from '../../../src/devices/firmata/firmata'
+import { FirmataClient, type FirmataClientHandler, PinMode, type StepperConfig, type Transport } from '../../../src/devices/firmata/firmata'
 
 const sent: Buffer[] = []
 const transport: Transport = {
@@ -80,12 +80,13 @@ describe('core and capability', () => {
 	test('encodes system-variable query/set and decodes signed replies and errors', () => {
 		client.querySystemVariable(101, 4)
 		client.setSystemVariable(101, -1, 4)
-		expect(sent).toEqual([Buffer.from([0xf0, 0x66, 0, 1, 0, 101, 0, 4, 0xf7]), Buffer.from([0xf0, 0x66, 1, 1, 0, 101, 0, 4, 127, 127, 127, 127, 15, 0xf7])])
+		client.querySystemVariable(1)
+		expect(sent).toEqual([Buffer.from([0xf0, 0x66, 0, 1, 0, 101, 0, 4, 0, 0, 0, 0, 0, 0xf7]), Buffer.from([0xf0, 0x66, 1, 1, 0, 101, 0, 4, 127, 127, 127, 127, 15, 0xf7]), Buffer.from([0xf0, 0x66, 0, 1, 0, 1, 0, 127, 0, 0, 0, 0, 0, 0xf7])])
 		receive(0x66, [1, 1, 0, 101, 0, 4, 127, 127, 127, 127, 15])
-		receive(0x66, [0, 1, 4, 101, 0, 127])
+		receive(0x66, [0, 1, 4, 101, 0, 127, 0, 0, 0, 0, 0])
 		expect(events).toEqual([
 			['variable', { operation: 1, dataType: 1, status: 0, id: 101, pin: 4, value: -1 }],
-			['variable', { operation: 0, dataType: 1, status: 4, id: 101, pin: undefined, value: undefined }],
+			['variable', { operation: 0, dataType: 1, status: 4, id: 101, pin: undefined, value: 0 }],
 		])
 	})
 
@@ -135,6 +136,24 @@ describe('SPI', () => {
 		expect(() => client.spiConfig({ channel: 0, deviceId: 1, controlCs: true })).toThrow(RangeError)
 		client.reset()
 		expect(client.spiRead(0, 1, 1)).toBe(0)
+	})
+
+	test('limits transfer frames to the ESP8266 input buffer', () => {
+		client.spiConfig({ channel: 0, deviceId: 1 })
+		expect(client.spiTransfer(0, 1, Buffer.alloc(29))).toBe(0)
+		expect(client.spiWrite(0, 1, Buffer.alloc(29))).toBe(1)
+		expect(client.spiWriteAck(0, 1, Buffer.alloc(29))).toBe(2)
+		expect(sent[1].length).toBe(66)
+		for (const write of [(data: Buffer) => client.spiTransfer(0, 1, data), (data: Buffer) => client.spiWrite(0, 1, data), (data: Buffer) => client.spiWriteAck(0, 1, data)]) {
+			expect(() => write(Buffer.alloc(30))).toThrow(RangeError)
+			expect(() => write(Buffer.alloc(0))).toThrow(RangeError)
+		}
+		client.spiConfig({ channel: 0, deviceId: 1, packed: true })
+		expect(client.spiTransfer(0, 1, Buffer.alloc(50))).toBe(3)
+		expect(sent.at(-1)?.length).toBe(66)
+		expect(() => client.spiTransfer(0, 1, Buffer.alloc(51))).toThrow(RangeError)
+		expect(client.spiRead(0, 1, 64)).toBe(4)
+		expect(sent.at(-1)).toEqual(Buffer.from([0xf0, 0x68, 4, 8, 4, 1, 64, 0xf7]))
 	})
 })
 
@@ -206,7 +225,7 @@ describe('Serial, encoder and stepper', () => {
 		client.multiStepperConfig(0, [2, 3])
 		client.multiStepperMoveTo(0, [-1, 0])
 		client.multiStepperStop(0)
-		expect(sent[0]).toEqual(Buffer.from([0xf0, 0x62, 0, 2, 0x11, 4, 5, 6, 0xf7]))
+		expect(sent[0]).toEqual(Buffer.from([0xf0, 0x62, 0, 2, 0x11, 4, 5, 6, 0, 0xf7]))
 		expect(sent[1]).toEqual(Buffer.from([0xf0, 0x62, 1, 2, 0xf7]))
 		expect(sent[2]).toEqual(Buffer.from([0xf0, 0x62, 2, 2, 1, 0, 0, 0, 8, 0xf7]))
 		expect(sent[3]).toEqual(Buffer.from([0xf0, 0x62, 3, 2, 127, 127, 127, 127, 7, 0xf7]))
@@ -226,6 +245,48 @@ describe('Serial, encoder and stepper', () => {
 			['multi', 0],
 		])
 	})
+
+	test('stepper configurations always include inversion and limit 3/4-wire step size', () => {
+		client.stepperConfig({ device: 0, interface: 'driver', pin1: 2, pin2: 3 })
+		client.stepperConfig({ device: 1, interface: 'twoWire', pin1: 2, pin2: 3, enablePin: 6 })
+		client.stepperConfig({ device: 2, interface: 'threeWire', stepType: 0, pin1: 2, pin2: 3, pin3: 4 })
+		client.stepperConfig({ device: 3, interface: 'threeWire', stepType: 1, pin1: 2, pin2: 3, pin3: 4 })
+		client.stepperConfig({ device: 4, interface: 'fourWire', stepType: 0, pin1: 2, pin2: 3, pin3: 4, pin4: 5 })
+		client.stepperConfig({ device: 5, interface: 'fourWire', stepType: 1, pin1: 2, pin2: 3, pin3: 4, pin4: 5, invertPins: 0x13 })
+		expect(sent).toEqual([
+			Buffer.from([0xf0, 0x62, 0, 0, 0x10, 2, 3, 0, 0xf7]),
+			Buffer.from([0xf0, 0x62, 0, 1, 0x21, 2, 3, 6, 0, 0xf7]),
+			Buffer.from([0xf0, 0x62, 0, 2, 0x30, 2, 3, 4, 0, 0xf7]),
+			Buffer.from([0xf0, 0x62, 0, 3, 0x32, 2, 3, 4, 0, 0xf7]),
+			Buffer.from([0xf0, 0x62, 0, 4, 0x40, 2, 3, 4, 5, 0, 0xf7]),
+			Buffer.from([0xf0, 0x62, 0, 5, 0x42, 2, 3, 4, 5, 0x13, 0xf7]),
+		])
+		type UnsupportedThreeWire = { interface: 'threeWire'; stepType: 2; device: number; pin1: number; pin2: number; pin3: number } extends StepperConfig ? true : false
+		type UnsupportedFourWire = { interface: 'fourWire'; stepType: 7; device: number; pin1: number; pin2: number; pin3: number; pin4: number } extends StepperConfig ? true : false
+		const threeWireAllowsUnsupported: UnsupportedThreeWire = false
+		const fourWireAllowsUnsupported: UnsupportedFourWire = false
+		expect(threeWireAllowsUnsupported).toBeFalse()
+		expect(fourWireAllowsUnsupported).toBeFalse()
+	})
+
+	test('MultiStepper requires a target per appended motor and forgets groups on reset', () => {
+		client.multiStepperConfig(0, [2, 3])
+		expect(() => client.multiStepperMoveTo(0, [-100])).toThrow(RangeError)
+		expect(() => client.multiStepperMoveTo(0, [-100, 0, 100])).toThrow(RangeError)
+		client.multiStepperMoveTo(0, [-100, 100])
+		client.multiStepperConfig(0, [4])
+		expect(() => client.multiStepperMoveTo(0, [-100, 100])).toThrow(RangeError)
+		client.multiStepperMoveTo(0, [-100, 100, 0])
+		expect(sent).toHaveLength(4)
+		expect(() => client.multiStepperConfig(5, [2])).toThrow(RangeError)
+		expect(() => client.multiStepperConfig(1, [10])).toThrow(RangeError)
+		expect(() => client.multiStepperConfig(0, [0, 1, 2, 3, 4, 5, 6, 7])).toThrow(RangeError)
+		expect(() => client.multiStepperStop(5)).toThrow(RangeError)
+		client.reset()
+		expect(() => client.multiStepperMoveTo(0, [-100, 100, 0])).toThrow(RangeError)
+		client.multiStepperConfig(0, [2])
+		client.multiStepperMoveTo(0, [-100])
+	})
 })
 
 describe('DHT, scheduler and frequency', () => {
@@ -243,8 +304,11 @@ describe('DHT, scheduler and frequency', () => {
 	test('scheduler task commands, packed data and replies', () => {
 		client.schedulerCreate(3, 300)
 		client.schedulerAdd(3, Buffer.from([0xff, 0x01]))
-		client.schedulerDelay(0xffffffff)
-		client.schedulerSchedule(3, 0x80000000)
+		client.schedulerDelay(0x7fffffff)
+		client.schedulerSchedule(3, 0x7fffffff)
+		expect(() => client.schedulerDelay(-1)).toThrow(RangeError)
+		expect(() => client.schedulerDelay(0x80000000)).toThrow(RangeError)
+		expect(() => client.schedulerSchedule(3, 0x80000000)).toThrow(RangeError)
 		client.schedulerQueryAll()
 		client.schedulerQuery(3)
 		client.schedulerDelete(3)
@@ -252,8 +316,8 @@ describe('DHT, scheduler and frequency', () => {
 		expect(sent).toEqual([
 			Buffer.from([0xf0, 0x7b, 0, 3, 44, 2, 0xf7]),
 			Buffer.from([0xf0, 0x7b, 2, 3, 127, 3, 0, 0xf7]),
-			Buffer.from([0xf0, 0x7b, 3, 127, 127, 127, 127, 15, 0xf7]),
-			Buffer.from([0xf0, 0x7b, 4, 3, 0, 0, 0, 0, 8, 0xf7]),
+			Buffer.from([0xf0, 0x7b, 3, 127, 127, 127, 127, 7, 0xf7]),
+			Buffer.from([0xf0, 0x7b, 4, 3, 127, 127, 127, 127, 7, 0xf7]),
 			Buffer.from([0xf0, 0x7b, 5, 0xf7]),
 			Buffer.from([0xf0, 0x7b, 6, 3, 0xf7]),
 			Buffer.from([0xf0, 0x7b, 1, 3, 0xf7]),
