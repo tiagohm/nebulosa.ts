@@ -406,9 +406,13 @@ export class NonSiderealTracker implements GuideTracker {
 
 	// Configures an ephemeris or fitted local motion source with a transform. Optional residual
 	// feedback applies only to ephemeris rates; source evaluation begins after guided lock.
+	// Re-arming clears image observations and feedback from the previous target; a first arm may
+	// use observations already supplied to its motion source.
 	arm(source: NonSiderealEphemeris, transform: NonSiderealImageTransform, feedback?: NonSiderealRateFeedback): void
 	arm(source: NonSiderealMotionProvider, transform: NonSiderealImageTransform): void
 	arm(source: NonSiderealEphemeris | NonSiderealMotionProvider, transform: NonSiderealImageTransform, feedback?: NonSiderealRateFeedback) {
+		if (this.#ephemeris !== undefined || this.#motionProvider !== undefined) this.#resetImageMotion()
+
 		if ('motion' in source) {
 			this.#motionProvider = source
 			this.#ephemeris = undefined

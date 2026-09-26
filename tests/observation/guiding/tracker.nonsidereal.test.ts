@@ -176,6 +176,33 @@ describe('NonSiderealTracker decorator', () => {
 		expect(recovered.targetOffset?.[0]).toBeCloseTo(23, 5)
 	})
 
+	test('preserves prefilled local samples on first arm but drops them when re-armed for a new target', () => {
+		const estimator = new TrackingRateEstimator()
+		const provider = new EstimatorNonSiderealMotionProvider(estimator)
+		for (const seconds of [0, 10, 20, 30, 40]) {
+			expect(estimator.add({ time: instant(seconds), offset: [4e-6 * seconds, 0], source: 'targetAstrometry' })).toBeTrue()
+		}
+
+		const tracker = new NonSiderealTracker(baseStub(baseResult()))
+		const transform = { offsetToImage: ([east, north]: readonly [number, number]) => [east * 1e6, north * 1e6] as const }
+		tracker.arm(provider, transform)
+		expect(tracker.track(trackerFrame(40), guideContext(true)).nonSidereal.state).toBe('active')
+		expect(tracker.track(trackerFrame(50), guideContext(true)).targetOffset?.[0]).toBeCloseTo(43, 5)
+
+		tracker.arm(provider, transform)
+		expect(estimator.estimate(instant(50))).toBeUndefined()
+		const waiting = tracker.track(trackerFrame(60), guideContext(true))
+		expect(waiting.nonSidereal.state).toBe('armed')
+		expect(waiting.nonSidereal.reason).toBe('motionUnavailable')
+		expect(waiting.targetOffset).toEqual([3, 4])
+
+		for (const seconds of [60, 70, 80, 90, 100]) {
+			expect(estimator.add({ time: instant(seconds), offset: [-2e-6 * (seconds - 60), 0], source: 'targetAstrometry' })).toBeTrue()
+		}
+		expect(tracker.track(trackerFrame(100), guideContext(true)).nonSidereal.state).toBe('active')
+		expect(tracker.track(trackerFrame(110), guideContext(true)).targetOffset?.[0]).toBeCloseTo(-17, 5)
+	})
+
 	test('adds bounded ephemeris residual feedback without changing the absolute target offset', () => {
 		const ephemerisRate = 1e-6
 		const residualRate = 0.5e-6
@@ -213,6 +240,31 @@ describe('NonSiderealTracker decorator', () => {
 		expect(estimator.estimate(instant(120))).toBeDefined()
 		tracker.reanchor(instant(125))
 		expect(estimator.estimate(instant(125))).toBeUndefined()
+	})
+
+	test('drops old residual samples and filtered correction when re-armed with the same feedback', () => {
+		const estimator = new TrackingRateEstimator()
+		const controller = new TrackingRateController({ deadband: 0, maximumCorrection: 1e-6, maximumRateChangePerUpdate: 1e-6, smoothingTimeConstantSeconds: 0 })
+		const feedback = { estimator, controller }
+		const transform = { offsetToImage: ([east, north]: readonly [number, number]) => [east * 1e6, north * 1e6] as const }
+		const tracker = new NonSiderealTracker(baseStub(baseResult()))
+		tracker.arm(linearEphemeris(1e-6, 0), transform, feedback)
+		tracker.track(trackerFrame(0), guideContext(true))
+		for (const seconds of [0, 10, 20, 30, 40]) {
+			const ephemerisOffset = [1e-6 * seconds, 0] as const
+			expect(estimator.add({ time: instant(seconds), offset: [1.5e-6 * seconds, 0], ephemerisOffset, source: 'targetAstrometry' })).toBeTrue()
+		}
+		const corrected = tracker.track(trackerFrame(40), guideContext(true))
+		expect(corrected.nonSidereal.rateCorrection?.[0]).toBeCloseTo(0.5e-6, 10)
+
+		tracker.arm(linearEphemeris(-1e-6, 0), transform, feedback)
+		expect(estimator.estimate(instant(40))).toBeUndefined()
+		expect(tracker.track(trackerFrame(60), guideContext(true)).nonSidereal.state).toBe('active')
+		const nextTarget = tracker.track(trackerFrame(70), guideContext(true))
+		expect(nextTarget.nonSidereal.rateCorrection).toEqual([0, 0])
+		expect(nextTarget.nonSidereal.rateConfidence).toBe(0)
+		expect(nextTarget.nonSidereal.effectiveRate?.[0]).toBeCloseTo(-1e-6, 10)
+		expect(nextTarget.targetOffset?.[0]).toBeCloseTo(-7, 4)
 	})
 
 	test('preserves the celestial anchor when an ephemeris generation changes', () => {
