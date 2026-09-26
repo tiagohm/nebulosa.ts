@@ -9,6 +9,7 @@ import type { StreakClass, StreakClassification, StreakClassificationContext, St
 import { classifyStreak, classifyStreaks } from '../../../../src/imaging/analysis/streak/classifier'
 import { normalizeStreakAngle } from '../../../../src/imaging/analysis/streak/geometry'
 import type { Streak } from '../../../../src/imaging/analysis/streak/types'
+import { measureTrackingQuality } from '../../../../src/imaging/analysis/tracking/quality'
 import type { Image } from '../../../../src/imaging/model/types'
 import { renderSyntheticStreak } from '../../../../src/imaging/synthetic/streak'
 import type { FitsHeader } from '../../../../src/io/formats/fits/fits'
@@ -359,6 +360,23 @@ test('names tracking failure only for a coherent field aligned with the streak',
 	}
 	expect(classifyStreak(aligned, { image: frame, stars: oneQuadrant }).class).not.toBe('trackingFailure')
 	expect(classifyStreak(measured({ start: { x: 50, y: 20 }, end: { x: 50, y: 60 }, width: 4 }), { image: frame, stars: trailedStars() }).class).not.toBe('trackingFailure')
+})
+
+test('tracking snapshots retain their spatial safeguards in streak classification', () => {
+	const frame = image(100, 100)
+	const observed = measured({ start: { x: 15, y: 20 }, end: { x: 35, y: 20 } })
+	const local = Array.from({ length: 12 }, (_, index) => star(12 + (index % 4) * 8, 12 + Math.floor(index / 4) * 8, { majorVariance: 1 + (20 * 20) / 12, minorVariance: 1, theta: 0 }))
+	const localQuality = measureTrackingQuality(frame, local)
+	expect(localQuality.diagnostics.quadrantCoverage).toBe(0.25)
+	expect(localQuality.diagnostics.opticalPatternSuspected).toBe(true)
+	expect(classifyStreak(observed, { tracking: localQuality }).class).not.toBe('trackingFailure')
+
+	const distributed: StreakClassificationStar[] = []
+	for (const y of [18, 32, 68, 82]) for (const x of [18, 32, 68, 82]) distributed.push(star(x, y, { majorVariance: 1 + (20 * 20) / 12, minorVariance: 1, theta: 0 }))
+	const fieldQuality = measureTrackingQuality(frame, distributed)
+	expect(fieldQuality.diagnostics.quadrantCoverage).toBe(1)
+	expect(fieldQuality.score).toBeGreaterThan(0.9)
+	expect(classifyStreak(observed, { tracking: fieldQuality }).class).toBe('trackingFailure')
 })
 
 test('names tracking failure from stars only for a field-wide trail of the same scale', () => {

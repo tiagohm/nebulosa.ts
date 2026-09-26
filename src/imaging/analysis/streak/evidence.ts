@@ -257,11 +257,12 @@ function medianStellarWidth(stars: readonly StreakClassificationStar[] | undefin
 	return (widths[low] + widths[high]) * 0.5
 }
 
-// Field score for one streak. A missing angle or median trail length stays secondary. A mismatched angle or scale emits nothing.
+// Field score for one streak. The snapshot's spatially guarded score limits every vote; a missing
+// angle or median trail length stays secondary, and a mismatched angle or scale emits nothing.
 function trackingSnapshotScore(streak: Streak, context: Readonly<StreakClassificationContext>): { readonly score: number; readonly tier: StreakEvidenceTier } | undefined {
 	const tracking = context.tracking
 	if (tracking === undefined || !(tracking.usableStarCount >= MIN_TRACKING_STARS)) return undefined
-	const field = rising(tracking.elongatedFraction, 0.4, 0.7) * rising(tracking.directionCoherence, 0.65, 0.9)
+	const field = rising(tracking.elongatedFraction, 0.4, 0.7) * rising(tracking.directionCoherence, 0.65, 0.9) * tracking.score
 	if (!(field > 0)) return undefined
 	if (tracking.angle === undefined) return { score: field, tier: 'secondary' }
 	if (streakAxialAngleDistance(streak.angle, tracking.angle) > TRACK_ALIGNMENT) return undefined

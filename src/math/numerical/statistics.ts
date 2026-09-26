@@ -587,8 +587,8 @@ export function standardDeviationOf(a: Readonly<NumberArray>, count: number = a.
 // Computes a percentile from an ascending-sorted numeric array using linear interpolation between ranks.
 // `percentile` is a fraction in [0, 1]; values outside that range are clamped to the first/last element.
 // Returns NaN for an empty array.
-export function percentileOf(values: Readonly<NumberArray>, percentile: number) {
-	const n = values.length
+export function percentileOf(values: Readonly<NumberArray>, percentile: number, count: number = values.length) {
+	const n = count
 	if (n === 0) return Number.NaN
 	if (n === 1 || percentile <= 0) return values[0]
 	if (percentile >= 1) return values[n - 1]
@@ -598,6 +598,25 @@ export function percentileOf(values: Readonly<NumberArray>, percentile: number) 
 	const upper = Math.ceil(index)
 	const t = index - lower
 	return values[lower] + (values[upper] - values[lower]) * t
+}
+
+// Computes an interpolated percentile of the mutable prefix [0, count) by selection, without a full
+// sort. Rearranges that prefix in place and leaves the suffix untouched. `percentile` is a fraction
+// in [0, 1], clamped to the endpoint ranks outside that range; count must select a valid prefix.
+// Returns NaN when count is zero.
+export function percentileBySelectionOf(values: Float64Array, percentile: number, count: number = values.length): number {
+	const n = count
+	if (n === 0) return Number.NaN
+	if (n === 1) return values[0]
+	if (percentile <= 0) return quickSelect(values, count, 0)
+	if (percentile >= 1) return quickSelect(values, count, n - 1)
+	const rank = percentile * (n - 1)
+	const lower = Math.floor(rank)
+	const upper = Math.ceil(rank)
+	const low = quickSelect(values, n, lower)
+	if (lower === upper) return low
+	const high = quickSelect(values, n, upper)
+	return low + (high - low) * (rank - lower)
 }
 
 // Computes the root-mean-square of a numeric array.

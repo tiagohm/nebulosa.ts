@@ -1,6 +1,7 @@
 import type { Point, Rect } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
 import { medianBySelectionOf, STANDARD_DEVIATION_SCALE } from '../../math/numerical/statistics'
+import type { Angle } from '../../math/units/angle'
 import type { Image } from '../model/types'
 import { clone } from '../processing/arithmetic'
 import { debayer } from '../processing/debayer'
@@ -25,6 +26,11 @@ export interface DetectedStar extends Readonly<Point> {
 	readonly eccentricity?: number
 	// Major/minor axis ratio, at least 1, when estimable.
 	readonly elongation?: number
+	// Major and minor central second moments, in squared image pixels, when estimable.
+	readonly majorVariance?: number
+	readonly minorVariance?: number
+	// Major-axis orientation in [0, PI), clockwise from +X because image Y grows downward.
+	readonly theta?: Angle
 	// Signal-to-noise ratio.
 	readonly snr: number
 	// Integrated flux above background.
@@ -48,14 +54,14 @@ type IntegralImages = readonly [Float64Array, Float64Array, number] // sum, sumS
 // Measured photometry of one star as [flux, snr, hfd, fwhm].
 export type StarPhotometry = readonly [number, number, number, number] // flux, snr, hfd, fwhm
 // Internal photometry plus shape and the flux-weighted centroid as
-// [flux, snr, hfd, fwhm, eccentricity, elongation, centroidX, centroidY].
-type MeasuredStarPhotometry = readonly [number, number, number, number, number | undefined, number | undefined, number, number]
+// [flux, snr, hfd, fwhm, eccentricity, elongation, centroidX, centroidY, majorVariance, minorVariance, theta].
+type MeasuredStarPhotometry = readonly [number, number, number, number, number | undefined, number | undefined, number, number, number | undefined, number | undefined, Angle | undefined]
 
 // Empty photometry returned when the aperture is invalid or has no positive flux.
-const EMPTY_STAR_PHOTOMETRY = [0, 0, 0, 0, undefined, undefined, 0, 0] as const satisfies MeasuredStarPhotometry
+const EMPTY_STAR_PHOTOMETRY = [0, 0, 0, 0, undefined, undefined, 0, 0, undefined, undefined, undefined] as const satisfies MeasuredStarPhotometry
 
-// Aperture radius (pixels) over which a star's signal flux is integrated.
-const STAR_SIGNAL_RADIUS = 4
+// Aperture radius (pixels) over which a detected star's signal flux and shape moments are measured.
+export const STAR_SIGNAL_RADIUS = 4
 // Inner radius (pixels) of the background-estimation annulus.
 const STAR_BACKGROUND_INNER_RADIUS = 5
 // Outer radius (pixels) of the background-estimation annulus.
@@ -244,12 +250,12 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 			// Validate each candidate against the original image so ranking uses measured photometry instead of only convolution response.
 			const photometry = measureStarPhotometryAroundPeak(original, width, height, stride, x, y, minSNR)
 			if (photometry === undefined) continue
-			const [flux, snr, hfd, fwhm, eccentricity, elongation, centroidX, centroidY] = photometry
+			const [flux, snr, hfd, fwhm, eccentricity, elongation, centroidX, centroidY, majorVariance, minorVariance, theta] = photometry
 
 			// Ranks detections by measured signal so real stars survive capacity limits better than noise artifacts.
 			const rank = flux * snr
 
-			stars.add(centroidX, centroidY, rank, flux, snr, hfd, fwhm, eccentricity, elongation)
+			stars.add(centroidX, centroidY, rank, flux, snr, hfd, fwhm, eccentricity, elongation, majorVariance, minorVariance, theta)
 		}
 	}
 
@@ -267,8 +273,8 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 	let i = 0
 	const res = new Array<DetectedStar>(stars.size)
 
-	for (const { x, y, flux = 0, snr = 0, hfd = 0, fwhm = 0, eccentricity, elongation } of stars) {
-		res[i++] = { x, y, flux, hfd, fwhm, snr, eccentricity, elongation }
+	for (const { x, y, flux = 0, snr = 0, hfd = 0, fwhm = 0, eccentricity, elongation, majorVariance, minorVariance, theta } of stars) {
+		res[i++] = { x, y, flux, hfd, fwhm, snr, eccentricity, elongation, majorVariance, minorVariance, theta }
 	}
 
 	res.sort((left, right) => right.flux - left.flux)
@@ -435,8 +441,8 @@ function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: numb
 		}
 	}
 
-	const { eccentricity, elongation } = starMomentShape(momentXX / flux, momentXY / flux, momentYY / flux)
-	return [flux, snr, hfd, fwhm, eccentricity, elongation, centroidX, centroidY]
+	const { eccentricity, elongation, majorVariance, minorVariance, theta } = starMomentShape(momentXX / flux, momentXY / flux, momentYY / flux)
+	return [flux, snr, hfd, fwhm, eccentricity, elongation, centroidX, centroidY, majorVariance, minorVariance, theta]
 }
 
 // Builds summed-area tables for fast local mean and variance queries.
@@ -589,6 +595,11 @@ interface Star {
 	readonly eccentricity?: number
 	// Major/minor axis ratio, when computed.
 	readonly elongation?: number
+	// Major and minor central second moments, in squared image pixels.
+	readonly majorVariance?: number
+	readonly minorVariance?: number
+	// Major-axis orientation in [0, PI), clockwise in image coordinates.
+	readonly theta?: Angle
 	// Next node in the list.
 	next?: this
 	// Previous node in the list.
@@ -609,8 +620,8 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 	}
 
 	// Appends a star at the tail (brightest end).
-	addLast(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number, eccentricity?: number, elongation?: number) {
-		const star: Star = { x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation }
+	addLast(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number, eccentricity?: number, elongation?: number, majorVariance?: number, minorVariance?: number, theta?: Angle) {
+		const star: Star = { x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation, majorVariance, minorVariance, theta }
 
 		if (!this.#head) {
 			this.#head = star
@@ -625,8 +636,8 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 	}
 
 	// Prepends a star at the head (dimmest end).
-	addFirst(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number, eccentricity?: number, elongation?: number) {
-		const star: Star = { x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation }
+	addFirst(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number, eccentricity?: number, elongation?: number, majorVariance?: number, minorVariance?: number, theta?: Angle) {
+		const star: Star = { x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation, majorVariance, minorVariance, theta }
 
 		if (!this.#head) {
 			this.#head = star
@@ -642,13 +653,13 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 
 	// Inserts a star keeping the list sorted by ascending height, searching from the nearer end, and
 	// evicts the dimmest star (head) when the capacity is exceeded.
-	add(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number, eccentricity?: number, elongation?: number) {
+	add(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number, eccentricity?: number, elongation?: number, majorVariance?: number, minorVariance?: number, theta?: Angle) {
 		if (!this.#head || h <= this.#head.h) {
-			if (this.size < this.capacity) this.addFirst(x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation)
+			if (this.size < this.capacity) this.addFirst(x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation, majorVariance, minorVariance, theta)
 		} else if (!this.#tail || h >= this.#tail.h) {
-			this.addLast(x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation)
+			this.addLast(x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation, majorVariance, minorVariance, theta)
 		} else {
-			const star: Star = { x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation }
+			const star: Star = { x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation, majorVariance, minorVariance, theta }
 			const headDistance = h - this.#head.h
 			const tailDistance = this.#tail.h - h
 
