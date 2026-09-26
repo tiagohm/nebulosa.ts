@@ -59,9 +59,54 @@ describe('core and capability', () => {
 		client.sendSystemReset()
 		client.sendString('é')
 		client.querySamplingInterval()
-		expect(sent).toEqual([Buffer.from([0xf9]), Buffer.from([0xff]), Buffer.from([0xf0, 0x71, 0x43, 1, 0x29, 1, 0xf7]), Buffer.from([0xf0, 0x7c, 0xf7])])
+		expect(sent).toEqual([Buffer.from([0xf9]), Buffer.from([0xff]), Buffer.from([0xf0, 0x79, 0xf7]), Buffer.from([0xf0, 0x71, 0x43, 1, 0x29, 1, 0xf7]), Buffer.from([0xf0, 0x7c, 0xf7])])
 		receive(0x7a, [0x68, 7])
 		expect(events).toEqual([['sampling', 1000]])
+	})
+
+	test('system reset invalidates board configuration and repeats the readiness handshake', async () => {
+		const writes: Buffer[] = []
+		using resetClient = new FirmataClient({ write: (data) => writes.push(Buffer.from(data as Uint8Array)), flush: () => {}, close: () => {} }, new ESP8266())
+		const readyPinCounts: number[] = []
+		resetClient.addHandler({ ready: () => readyPinCounts.push(resetClient.pinCount) })
+		const reply = (command: number, payload: readonly number[]) => resetClient.process(Buffer.from([0xf0, command, ...payload, 0xf7]))
+		const handshake = (pins: number) => {
+			reply(0x79, [2, 3])
+			reply(0x6c, new Array(pins).fill(0x7f))
+			reply(0x6a, new Array(pins).fill(0x7f))
+		}
+
+		resetClient.requestFirmware()
+		handshake(2)
+		expect(await resetClient.ensureInitializationIsDone(0)).toBeTrue()
+		resetClient.spiConfig({ channel: 0, deviceId: 1, packed: true })
+		resetClient.multiStepperConfig(0, [1, 2])
+		resetClient.twoWireConfig(300)
+		const writesBeforeReset = writes.length
+
+		resetClient.sendSystemReset()
+		expect(writes.slice(writesBeforeReset)).toEqual([Buffer.from([0xff]), Buffer.from([0xf0, 0x79, 0xf7])])
+		expect(resetClient.pinCount).toBe(0)
+		expect(resetClient.pinAt(1)).toBeUndefined()
+		expect(() => resetClient.multiStepperMoveTo(0, [100, 200])).toThrow(RangeError)
+		const initialization = resetClient.ensureInitializationIsDone(0)
+		let settled = false
+		void initialization.then(() => {
+			settled = true
+		})
+		await Promise.resolve()
+		expect(settled).toBeFalse()
+
+		handshake(1)
+		expect(await initialization).toBeTrue()
+		expect(readyPinCounts).toEqual([2, 1])
+		expect(resetClient.pinAt(1)).toBeUndefined()
+		resetClient.spiTransfer(0, 1, Buffer.from([0x80, 1]))
+		expect(writes.at(-1)).toEqual(Buffer.from([0xf0, 0x68, 2, 8, 0, 1, 2, 0, 1, 1, 0, 0xf7]))
+		resetClient.twoWireConfig(10)
+		expect(writes.at(-1)).toEqual(Buffer.from([0xf0, 0x78, 10, 0, 0xf7]))
+		resetClient.multiStepperConfig(0, [1])
+		resetClient.multiStepperMoveTo(0, [100])
 	})
 
 	test('supports unsigned 32-bit extended analog and analog channels above 15', () => {
@@ -225,7 +270,7 @@ describe('Serial, encoder and stepper', () => {
 		client.multiStepperConfig(0, [2, 3])
 		client.multiStepperMoveTo(0, [-1, 0])
 		client.multiStepperStop(0)
-		expect(sent[0]).toEqual(Buffer.from([0xf0, 0x62, 0, 2, 0x11, 4, 5, 6, 0, 0xf7]))
+		expect(sent[0]).toEqual(Buffer.from([0xf0, 0x62, 0, 2, 0x11, 4, 5, 6, 0xf7]))
 		expect(sent[1]).toEqual(Buffer.from([0xf0, 0x62, 1, 2, 0xf7]))
 		expect(sent[2]).toEqual(Buffer.from([0xf0, 0x62, 2, 2, 1, 0, 0, 0, 8, 0xf7]))
 		expect(sent[3]).toEqual(Buffer.from([0xf0, 0x62, 3, 2, 127, 127, 127, 127, 7, 0xf7]))
@@ -246,7 +291,7 @@ describe('Serial, encoder and stepper', () => {
 		])
 	})
 
-	test('stepper configurations always include inversion and limit 3/4-wire step size', () => {
+	test('stepper configurations omit optional inversion and limit 3/4-wire step size', () => {
 		client.stepperConfig({ device: 0, interface: 'driver', pin1: 2, pin2: 3 })
 		client.stepperConfig({ device: 1, interface: 'twoWire', pin1: 2, pin2: 3, enablePin: 6 })
 		client.stepperConfig({ device: 2, interface: 'threeWire', stepType: 0, pin1: 2, pin2: 3, pin3: 4 })
@@ -254,11 +299,11 @@ describe('Serial, encoder and stepper', () => {
 		client.stepperConfig({ device: 4, interface: 'fourWire', stepType: 0, pin1: 2, pin2: 3, pin3: 4, pin4: 5 })
 		client.stepperConfig({ device: 5, interface: 'fourWire', stepType: 1, pin1: 2, pin2: 3, pin3: 4, pin4: 5, invertPins: 0x13 })
 		expect(sent).toEqual([
-			Buffer.from([0xf0, 0x62, 0, 0, 0x10, 2, 3, 0, 0xf7]),
-			Buffer.from([0xf0, 0x62, 0, 1, 0x21, 2, 3, 6, 0, 0xf7]),
-			Buffer.from([0xf0, 0x62, 0, 2, 0x30, 2, 3, 4, 0, 0xf7]),
-			Buffer.from([0xf0, 0x62, 0, 3, 0x32, 2, 3, 4, 0, 0xf7]),
-			Buffer.from([0xf0, 0x62, 0, 4, 0x40, 2, 3, 4, 5, 0, 0xf7]),
+			Buffer.from([0xf0, 0x62, 0, 0, 0x10, 2, 3, 0xf7]),
+			Buffer.from([0xf0, 0x62, 0, 1, 0x21, 2, 3, 6, 0xf7]),
+			Buffer.from([0xf0, 0x62, 0, 2, 0x30, 2, 3, 4, 0xf7]),
+			Buffer.from([0xf0, 0x62, 0, 3, 0x32, 2, 3, 4, 0xf7]),
+			Buffer.from([0xf0, 0x62, 0, 4, 0x40, 2, 3, 4, 5, 0xf7]),
 			Buffer.from([0xf0, 0x62, 0, 5, 0x42, 2, 3, 4, 5, 0x13, 0xf7]),
 		])
 		type UnsupportedThreeWire = { interface: 'threeWire'; stepType: 2; device: number; pin1: number; pin2: number; pin3: number } extends StepperConfig ? true : false

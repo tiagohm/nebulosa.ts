@@ -1079,7 +1079,7 @@ export class FirmataClient implements Disposable {
 		return this.#initialization.promise
 	}
 
-	// Clears local board metadata, SPI and MultiStepper session state and the parser, then rearms the
+	// Clears local board metadata, I2C, SPI and MultiStepper session state and the parser, then rearms the
 	// handshake; pending initialization resolves false. The board receives no reset command.
 	reset() {
 		// Re-arm the one-shot initialization gate so a subsequent (re)connect handshake runs the full
@@ -1096,6 +1096,7 @@ export class FirmataClient implements Disposable {
 		this.#pinStateRequestQueue.length = 0
 		this.#pinMap.clear()
 		this.#analogPins = {}
+		this.#maxTwoWireDelay = 0
 		this.#spiRequestId = 0
 		this.#spiPackedBySelector.clear()
 		this.#multiStepperGroupSizes.clear()
@@ -1118,9 +1119,12 @@ export class FirmataClient implements Disposable {
 		this.send(new Uint8Array([REPORT_VERSION]))
 	}
 
-	// Sends a reset to the board; `reset()` only clears this client's local session state.
+	// Resets the board, invalidates cached configuration, and requests fresh firmware metadata
+	// to restart the readiness handshake. `reset()` alone only clears local state.
 	sendSystemReset() {
 		this.send(new Uint8Array([SYSTEM_RESET]))
+		this.reset()
+		this.requestFirmware()
 	}
 
 	// Frames a feature `command` and its already 7-bit-safe `payload`, allocating
@@ -1423,8 +1427,7 @@ export class FirmataClient implements Disposable {
 		if (options.interface === 'threeWire' || options.interface === 'fourWire') payload.push(options.pin3)
 		if (options.interface === 'fourWire') payload.push(options.pin4)
 		if (options.enablePin !== undefined) payload.push(options.enablePin)
-		// This fork reads the inversion slot even when omitted, so send zero explicitly.
-		payload.push(options.invertPins ?? 0)
+		if (options.invertPins !== undefined) payload.push(options.invertPins)
 		this.#sendSysex(ACCELSTEPPER_DATA, payload)
 	}
 
