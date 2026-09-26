@@ -145,6 +145,32 @@ test('detector-measured long stellar trails retain field evidence despite apertu
 	expect(measured.score).toBeGreaterThanOrEqual(0.75 * baseline.score)
 })
 
+test('one external streak cannot validate the field from stars it crosses', () => {
+	const frame = image()
+	frame.raw.fill(0.1)
+	function roundStar(x: number, y: number): void {
+		for (let py = Math.floor(y - 5); py <= Math.ceil(y + 5); py++) {
+			for (let px = Math.floor(x - 5); px <= Math.ceil(x + 5); px++) {
+				frame.raw[py * frame.metadata.stride + px] += 0.25 * Math.exp((-0.5 * ((px - x) ** 2 + (py - y) ** 2)) / 1.2 ** 2)
+			}
+		}
+	}
+	for (const x of [12, 25, 38, 52, 62, 72, 82, 92]) roundStar(x, 0.6 * x + 10)
+	roundStar(15, 85)
+	roundStar(85, 15)
+	renderSyntheticStreak(frame, { start: { x: 10, y: 16 }, end: { x: 94, y: 66.4 }, width: 3, intensity: 0.5 })
+
+	const stars = detectStars(frame)
+	const streaks = detectStreaks(frame, { minLength: 50, maxWidth: 8, backgroundCellSize: 24, maxStreaks: 1 })
+	const baseline = measureTrackingQuality(frame, stars)
+	const measured = measureTrackingQuality(frame, stars, {}, { streaks })
+	expect(stars.length).toBeGreaterThanOrEqual(8)
+	expect(streaks).toHaveLength(1)
+	expect(baseline.score).toBeGreaterThan(0.8)
+	expect(measured.usableStarCount).toBeLessThan(baseline.usableStarCount)
+	expect(measured.score).toBeLessThan(0.1)
+})
+
 test('an isolated aligned streak crossing a round star or scale outlier is not stellar tracking', () => {
 	const frame = image()
 	for (const outlierTrail of [0, 10]) {

@@ -37,24 +37,28 @@ function overlapsStreak(star: DetectedStar, streak: Streak): boolean {
 	return x * x + y * y <= radius * radius
 }
 
-// Marks streaks associated with an elongated star in a strong, aligned stellar field. The local
-// moment proxy cannot bound a full streak longer than the star detector's fixed aperture diameter.
-// A lone matching detection may be stellar, even when the long-streak detector finds few.
-// The preliminary measurement omits streak rejection, preventing a stellar trail from erasing itself.
+// Marks streaks associated with an elongated star only when stars outside that streak independently
+// support a strong, aligned field. This prevents one external streak from validating the stars it
+// elongated. The local moment proxy cannot bound a full streak beyond the detector's fixed aperture.
 function fieldCompatibleStreaks(image: Image, stars: readonly DetectedStar[], options: Readonly<TrackingQualityOptions>, streaks: readonly Streak[], streakCount: number): Uint8Array {
 	const members = new Uint8Array(streakCount)
-	if (streakCount === 0) return members
-	const field = measureTrackingQuality(image, stars, options)
-	const angle = field.angle
-	const trail = field.medianTrail
-	if (!(field.score >= STELLAR_STREAK_FIELD_SCORE) || angle === undefined || trail === undefined || !(trail > 0)) return members
-
 	for (let i = 0; i < streakCount; i++) {
 		const streak = streaks[i]
+		const independentStars: DetectedStar[] = []
+		const associatedStars: DetectedStar[] = []
+		for (const star of stars) {
+			if (overlapsStreak(star, streak)) associatedStars.push(star)
+			else independentStars.push(star)
+		}
+		if (associatedStars.length === 0) continue
+		const field = measureTrackingQuality(image, independentStars, options)
+		const angle = field.angle
+		const trail = field.medianTrail
+		if (!(field.score >= STELLAR_STREAK_FIELD_SCORE) || angle === undefined || trail === undefined || !(trail > 0)) continue
 		if (streakAxialAngleDistance(streak.angle, angle) > STELLAR_STREAK_ALIGNMENT || !(streak.length >= trail / STELLAR_STREAK_SCALE_RATIO)) continue
 		if (streak.length <= 2 * STAR_SIGNAL_RADIUS && !(streak.length <= trail * STELLAR_STREAK_SCALE_RATIO)) continue
 
-		for (const star of stars) {
+		for (const star of associatedStars) {
 			const major = star.majorVariance
 			const minor = star.minorVariance
 			if (!(star.snr >= (options.minSNR ?? 2)) || major === undefined || minor === undefined || star.theta === undefined || !Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(star.theta) || !(major >= minor && minor > 0)) continue
