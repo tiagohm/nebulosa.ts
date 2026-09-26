@@ -171,6 +171,22 @@ test('one external streak cannot validate the field from stars it crosses', () =
 	expect(measured.score).toBeLessThan(0.1)
 })
 
+test('stars whose shape apertures intersect a streak cannot support its independent field', () => {
+	const frame = image()
+	const angle = Math.atan(0.6)
+	// The old 3 px center corridor misses this offset, while the 4 px shape aperture includes it.
+	const offset = 3.5
+	const nearStars = [12, 25, 38, 55, 60, 72, 82, 92].map((x) => star(x - offset * Math.sin(angle), 0.6 * x + 10 + offset * Math.cos(angle), 5, angle))
+	const stars = [...nearStars, star(45, 37, 5, angle)]
+	const candidate: Streak = { ...streak(10, 94, 16), end: { x: 94, y: 66.4 }, center: { x: 52, y: 41.2 }, length: Math.hypot(84, 50.4), angle }
+	const baseline = measureTrackingQuality(frame, stars)
+	const measured = measureTrackingQuality(frame, stars, {}, { streaks: [candidate] })
+	expect(baseline.diagnostics.quadrantCoverage).toBe(0.75)
+	expect(baseline.score).toBeGreaterThan(0.9)
+	expect(measured.usableStarCount).toBe(0)
+	expect(measured.score).toBe(0)
+})
+
 test('an isolated aligned streak crossing a round star or scale outlier is not stellar tracking', () => {
 	const frame = image()
 	for (const outlierTrail of [0, 10]) {

@@ -17,15 +17,13 @@ import type { TrackingQuality, TrackingQualityContext, TrackingQualityOptions, T
 const MAX_TRACKING_STREAKS = 32
 // Gaussian FWHM divided by sigma, used to report the minor-axis cross width in pixels.
 const GAUSSIAN_FWHM_FACTOR = 2 * Math.sqrt(2 * Math.LN2)
-// A star can be contaminated within this many additional pixels of a streak's measured half-width.
-const STREAK_STAR_MARGIN = 2
 // Minimum field score and maximum axial separation for recognizing measured stellar streaks.
 const STELLAR_STREAK_FIELD_SCORE = 0.6
 const STELLAR_STREAK_ALIGNMENT = PI / 15
 // Maximum ratio between local moment proxies, also applied to full trails within the aperture.
 const STELLAR_STREAK_SCALE_RATIO = 2
 
-// Returns whether a star center falls inside a measured streak corridor, including its PSF margin.
+// Returns whether the star's shape aperture intersects the streak's measured half-width corridor.
 function overlapsStreak(star: DetectedStar, streak: Streak): boolean {
 	const dx = streak.end.x - streak.start.x
 	const dy = streak.end.y - streak.start.y
@@ -33,7 +31,7 @@ function overlapsStreak(star: DetectedStar, streak: Streak): boolean {
 	const fraction = squaredLength > 0 ? Math.max(0, Math.min(1, ((star.x - streak.start.x) * dx + (star.y - streak.start.y) * dy) / squaredLength)) : 0
 	const x = streak.start.x + fraction * dx - star.x
 	const y = streak.start.y + fraction * dy - star.y
-	const radius = Math.max(0, streak.width * 0.5) + STREAK_STAR_MARGIN
+	const radius = STAR_SIGNAL_RADIUS + Math.max(0, streak.width * 0.5)
 	return x * x + y * y <= radius * radius
 }
 
