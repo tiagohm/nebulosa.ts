@@ -53,7 +53,7 @@ export interface TrackingQualityDiagnostics {
 	readonly rejectedStars: number
 	// Heuristic flag for substantial elongation with weak alignment or limited field coverage.
 	readonly opticalPatternSuspected: boolean
-	// Among the first 32 streaks, those overlapping fewer than three supplied stellar detections.
+	// Among the first 32 streaks, external trails overlapping fewer than three stellar detections.
 	readonly isolatedStreakCount: number
 }
 

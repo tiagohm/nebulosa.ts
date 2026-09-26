@@ -1,8 +1,9 @@
 import { tanUnproject } from '../../../astrometry/wcs/fits.wcs'
 import { PI } from '../../../core/constants'
-import { medianBySelectionOf, percentileOf } from '../../../math/numerical/statistics'
+import { medianBySelectionOf, percentileBySelectionOf } from '../../../math/numerical/statistics'
 import type { Image } from '../../model/types'
 import type { DetectedStar } from '../../stars/detector'
+import { streakAxialAngleDistance } from '../streak/geometry'
 import type { Streak } from '../streak/types'
 import type { TrackingQuality, TrackingQualityContext, TrackingQualityOptions, TrackingSkyQuality } from './types'
 
@@ -18,6 +19,11 @@ const MAX_TRACKING_STREAKS = 32
 const GAUSSIAN_FWHM_FACTOR = 2 * Math.sqrt(2 * Math.LN2)
 // A star can be contaminated within this many additional pixels of a streak's measured half-width.
 const STREAK_STAR_MARGIN = 2
+// Minimum field score and maximum axial separation for recognizing measured stellar streaks.
+const STELLAR_STREAK_FIELD_SCORE = 0.6
+const STELLAR_STREAK_ALIGNMENT = PI / 15
+// Maximum ratio of a stellar streak's length to the field's median variance-derived trail proxy.
+const STELLAR_STREAK_SCALE_RATIO = 2
 
 // Returns whether a star center falls inside a measured streak corridor, including its PSF margin.
 function overlapsStreak(star: DetectedStar, streak: Streak): boolean {
@@ -29,6 +35,26 @@ function overlapsStreak(star: DetectedStar, streak: Streak): boolean {
 	const y = streak.start.y + fraction * dy - star.y
 	const radius = Math.max(0, streak.width * 0.5) + STREAK_STAR_MARGIN
 	return x * x + y * y <= radius * radius
+}
+
+// Marks streaks that agree with a strong stellar field's axis and trail scale. A lone matching
+// detection may be a stellar trail, so it is retained even when the long-streak detector finds few.
+// The preliminary measurement omits streak rejection, preventing a stellar trail from erasing itself.
+function fieldCompatibleStreaks(image: Image, stars: readonly DetectedStar[], options: Readonly<TrackingQualityOptions>, streaks: readonly Streak[], streakCount: number): Uint8Array {
+	const members = new Uint8Array(streakCount)
+	if (streakCount === 0) return members
+	const field = measureTrackingQuality(image, stars, options)
+	const angle = field.angle
+	const trail = field.medianTrail
+	if (!(field.score >= STELLAR_STREAK_FIELD_SCORE) || angle === undefined || trail === undefined || !(trail > 0)) return members
+
+	for (let i = 0; i < streakCount; i++) {
+		const streak = streaks[i]
+		if (streakAxialAngleDistance(streak.angle, angle) > STELLAR_STREAK_ALIGNMENT || !(streak.length >= trail / STELLAR_STREAK_SCALE_RATIO && streak.length <= trail * STELLAR_STREAK_SCALE_RATIO)) continue
+		members[i] = 1
+	}
+
+	return members
 }
 
 // Converts the positive image-axis direction to a local east/north sky vector at the image center.
@@ -86,6 +112,7 @@ export function measureTrackingQuality(image: Image, stars: readonly DetectedSta
 	const minElongatedStars = options.minElongatedStars ?? 5
 	const streaks = context.streaks ?? []
 	const streakCount = Math.min(streaks.length, MAX_TRACKING_STREAKS)
+	const stellarStreaks = fieldCompatibleStreaks(image, stars, options, streaks, streakCount)
 	const streakSupport = new Uint8Array(streakCount)
 	const n = stars.length
 	const candidateTrails = new Float64Array(n)
@@ -104,7 +131,7 @@ export function measureTrackingQuality(image: Image, stars: readonly DetectedSta
 		for (let i = 0; i < streakCount; i++) {
 			if (!overlapsStreak(star, streaks[i])) continue
 			if (streakSupport[i] < 3) streakSupport[i]++
-			contaminated = true
+			if (!stellarStreaks[i]) contaminated = true
 		}
 
 		if (contaminated) continue
@@ -145,7 +172,7 @@ export function measureTrackingQuality(image: Image, stars: readonly DetectedSta
 	}
 
 	let isolatedStreakCount = 0
-	for (let i = 0; i < streakCount; i++) if (streakSupport[i] < 3) isolatedStreakCount++
+	for (let i = 0; i < streakCount; i++) if (!stellarStreaks[i] && streakSupport[i] < 3) isolatedStreakCount++
 	const medianCrossWidth = usableStarCount > 0 ? medianBySelectionOf(crossWidths, usableStarCount) : undefined
 	const rawMedian = candidateCount > 0 ? medianBySelectionOf(candidateTrails.slice(0, candidateCount)) : 0
 	const deviations = new Float64Array(candidateCount)
@@ -195,7 +222,7 @@ export function measureTrackingQuality(image: Image, stars: readonly DetectedSta
 	let angle = acceptedCount >= 2 && directionCoherence > 0.2 ? 0.5 * Math.atan2(acceptedSine, acceptedCosine) : undefined
 	if (angle !== undefined && angle < 0) angle += PI
 	const medianTrail = acceptedCount > 0 ? medianBySelectionOf(acceptedTrails, acceptedCount) : undefined
-	const p90Trail = acceptedCount > 0 ? percentileOf(acceptedTrails, 0.9, acceptedCount) : undefined
+	const p90Trail = acceptedCount > 0 ? percentileBySelectionOf(acceptedTrails, 0.9, acceptedCount) : undefined
 	let coveredQuadrants = 0
 	for (const count of quadrantCounts) if (count >= 2) coveredQuadrants++
 	const quadrantCoverage = coveredQuadrants / 4

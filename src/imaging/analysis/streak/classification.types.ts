@@ -114,7 +114,7 @@ export interface StreakTrackingQuality {
 	readonly angle?: Angle
 	// Representative stellar trail length, in received-image pixels, when defined.
 	readonly medianTrail?: number
-	// Tracking measurement's own bounded score. Retained for callers; classification uses the fields above.
+	// Tracking measurement's bounded field-wide score, including spatial safeguards; scales classification evidence.
 	readonly score: number
 }
 

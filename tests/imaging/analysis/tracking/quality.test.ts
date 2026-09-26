@@ -96,8 +96,51 @@ test('a strong outlier, a crossing streak and poor SNR do not dominate a tracked
 	const round = measureTrackingQuality(frame, [...field(0, 0), star(50, 50, 40, 0)], {}, { streaks: [streak(45, 55, 50)] })
 	expect(round.score).toBe(0)
 	expect(round.elongatedFraction).toBe(0)
+	expect(round.usableStarCount).toBe(16)
+	expect(round.diagnostics.isolatedStreakCount).toBe(1)
 	const isolated = measureTrackingQuality(frame, [...field(0, 0), star(50, 50, 40, 0)])
 	expect(isolated.score).toBe(0)
+})
+
+test('distributed stellar streaks preserve the evidence of a severe tracking failure', () => {
+	const frame = image()
+	const stars = field(15, 0)
+	const stellarStreaks = stars.map((sample) => streak(sample.x - 7.5, sample.x + 7.5, sample.y))
+	const baseline = measureTrackingQuality(frame, stars)
+	const measured = measureTrackingQuality(frame, stars, {}, { streaks: stellarStreaks })
+	expect(baseline.score).toBeGreaterThan(0.9)
+	expect(measured.usableStarCount).toBe(16)
+	expect(measured.elongatedFraction).toBe(1)
+	expect(measured.directionCoherence).toBeCloseTo(1, 12)
+	expect(measured.diagnostics.quadrantCoverage).toBe(1)
+	expect(measured.diagnostics.isolatedStreakCount).toBe(0)
+	expect(measured.score).toBeCloseTo(baseline.score, 12)
+	const sparse = [stars[0], stars[1], stars[2], stars[3], stars[8], stars[9], stars[10], stars[11]]
+	const fewDetectedStreaks = [sparse[0], sparse[2], sparse[4], sparse[6]].map((sample) => streak(sample.x - 7.5, sample.x + 7.5, sample.y))
+	const sparseResult = measureTrackingQuality(frame, sparse, {}, { streaks: fewDetectedStreaks })
+	expect(sparseResult.usableStarCount).toBe(8)
+	expect(sparseResult.diagnostics.quadrantCoverage).toBe(1)
+	expect(sparseResult.score).toBeGreaterThan(0.9)
+})
+
+test('median, p90 and maximum trail are invariant to star order', () => {
+	const frame = image()
+	const stars = field(0, 0).map((sample, index) => star(sample.x, sample.y, 2 + index * 0.1, 0))
+	const lengths = stars.map((sample) => Math.sqrt(12 * (sample.majorVariance! - sample.minorVariance!))).sort((left, right) => left - right)
+	const p90Rank = 0.9 * (lengths.length - 1)
+	const lower = Math.floor(p90Rank)
+	const expectedP90 = lengths[lower] + (lengths[lower + 1] - lengths[lower]) * (p90Rank - lower)
+	const first = measureTrackingQuality(frame, stars)
+	const reversed = measureTrackingQuality(frame, stars.toReversed())
+	const permuted = measureTrackingQuality(
+		frame,
+		stars.map((_, index) => stars[(index * 5) % stars.length]),
+	)
+	for (const result of [first, reversed, permuted]) {
+		expect(result.medianTrail).toBeCloseTo(2.75, 12)
+		expect(result.p90Trail).toBeCloseTo(expectedP90, 12)
+		expect(result.maxTrail).toBeCloseTo(3.5, 12)
+	}
 })
 
 test('measured detector moments distinguish a trailed raster from a round raster', () => {

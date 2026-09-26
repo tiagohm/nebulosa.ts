@@ -600,6 +600,25 @@ export function percentileOf(values: Readonly<NumberArray>, percentile: number, 
 	return values[lower] + (values[upper] - values[lower]) * t
 }
 
+// Computes an interpolated percentile of the mutable prefix [0, count) by selection, without a full
+// sort. Rearranges that prefix in place and leaves the suffix untouched. `percentile` is a fraction
+// in [0, 1], clamped to the endpoint ranks outside that range; count must select a valid prefix.
+// Returns NaN when count is zero.
+export function percentileBySelectionOf(values: Float64Array, percentile: number, count: number = values.length): number {
+	const n = count
+	if (n === 0) return Number.NaN
+	if (n === 1) return values[0]
+	if (percentile <= 0) return quickSelect(values, count, 0)
+	if (percentile >= 1) return quickSelect(values, count, n - 1)
+	const rank = percentile * (n - 1)
+	const lower = Math.floor(rank)
+	const upper = Math.ceil(rank)
+	const low = quickSelect(values, n, lower)
+	if (lower === upper) return low
+	const high = quickSelect(values, n, upper)
+	return low + (high - low) * (rank - lower)
+}
+
 // Computes the root-mean-square of a numeric array.
 // If the array is empty, it returns NaN, consistent with the other reducers.
 export function rmsOf(values: Readonly<NumberArray>) {

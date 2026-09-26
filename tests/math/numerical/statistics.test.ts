@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { TAU } from '../../../src/core/constants'
 // oxfmt-ignore
-import { Histogram, chiSquareCdf, chiSquareQuantile, fDistributionSurvival, geometricMeanOf, geometricMedian, logGamma, maxOf, meanOf, medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, minOf, pearsonCorrelationOf, percentileOf, regularizedGammaP, regularizedIncompleteBeta, rmsOf, standardDeviationOf } from '../../../src/math/numerical/statistics'
+import { Histogram, chiSquareCdf, chiSquareQuantile, fDistributionSurvival, geometricMeanOf, geometricMedian, logGamma, maxOf, meanOf, medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, minOf, pearsonCorrelationOf, percentileBySelectionOf, percentileOf, regularizedGammaP, regularizedIncompleteBeta, rmsOf, standardDeviationOf } from '../../../src/math/numerical/statistics'
 
 test('distribution functions match closed-form and SciPy 1.18.1 references', () => {
 	expect(logGamma(5)).toBeCloseTo(Math.log(24), 14)
@@ -308,6 +308,17 @@ test('percentile of', () => {
 	expect(percentileOf(new Float64Array([10, 20, 30, 40]), 2)).toBe(40)
 	expect(percentileOf(new Float64Array([10, 20, 30, 40, 50]), 0.5, 4)).toBe(25)
 	expect(percentileOf(new Float64Array(), 0.5)).toBeNaN()
+})
+
+test('percentile by selection of', () => {
+	expect(percentileBySelectionOf(new Float64Array([40, 10, 30, 20]), 0)).toBe(10)
+	expect(percentileBySelectionOf(new Float64Array([40, 10, 30, 20]), 0.25)).toBe(17.5)
+	expect(percentileBySelectionOf(new Float64Array([40, 10, 30, 20]), 0.5)).toBe(25)
+	expect(percentileBySelectionOf(new Float64Array([40, 10, 30, 20]), 1)).toBe(40)
+	expect(percentileBySelectionOf(new Float64Array([40, 10, 30, 20]), -1)).toBe(10)
+	expect(percentileBySelectionOf(new Float64Array([40, 10, 30, 20]), 2)).toBe(40)
+	expect(percentileBySelectionOf(new Float64Array([40, 10, 30, 20, 50]), 0.5, 4)).toBe(25)
+	expect(percentileBySelectionOf(new Float64Array(), 0.5)).toBeNaN()
 })
 
 // Verifies all cached histogram statistics against expected values.
