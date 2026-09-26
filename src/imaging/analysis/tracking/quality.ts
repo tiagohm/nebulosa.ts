@@ -38,37 +38,41 @@ function overlapsStreak(star: DetectedStar, streak: Streak): boolean {
 const EMPTY_TRACKING_QUALITY_OPTIONS: Readonly<TrackingQualityOptions> = {}
 const EMPTY_TRACKING_QUALITY_CONTEXT: Readonly<TrackingQualityContext> = {}
 
-// Marks streaks associated with an elongated star only when stars outside that streak independently
-// support a strong, aligned field. This prevents one external streak from validating the stars it
-// elongated. The local moment proxy cannot bound a full streak beyond the detector's fixed aperture.
-function fieldCompatibleStreaks(image: Image, stars: readonly DetectedStar[], options: Readonly<TrackingQualityOptions>, streaks: readonly Streak[], streakCount: number): Uint8Array {
+// Returns one bit per compatible star/streak pair and a per-streak membership flag. A field that
+// already meets the public threshold may preserve multiple stars along a merged stellar streak;
+// relaxed support restores only one. Local moments cannot bound a full detector-truncated streak.
+function fieldCompatibleStreaks(image: Image, stars: readonly DetectedStar[], options: Readonly<TrackingQualityOptions>, streaks: readonly Streak[], streakCount: number): readonly [Uint32Array, Uint8Array] {
+	const starMasks = new Uint32Array(stars.length)
 	const members = new Uint8Array(streakCount)
-	// A candidate can restore at most one significant star after independent support is established.
-	const independentMinimum = Math.max(1, (options.minElongatedStars ?? 5) - 1)
+	const minElongatedStars = options.minElongatedStars ?? 5
+	const independentMinimum = Math.max(1, minElongatedStars - 1)
 	for (let i = 0; i < streakCount; i++) {
 		const streak = streaks[i]
 		const independentStars: DetectedStar[] = []
-		const associatedStars: DetectedStar[] = []
-		for (const star of stars) {
-			if (overlapsStreak(star, streak)) associatedStars.push(star)
-			else independentStars.push(star)
+		const associatedIndices: number[] = []
+		for (let starIndex = 0; starIndex < stars.length; starIndex++) {
+			if (overlapsStreak(stars[starIndex], streak)) associatedIndices.push(starIndex)
+			else independentStars.push(stars[starIndex])
 		}
-		if (associatedStars.length === 0) continue
-		const field = measureTrackingQualityCore(image, independentStars, options, EMPTY_TRACKING_QUALITY_CONTEXT, independentMinimum, 1)
+		if (associatedIndices.length === 0) continue
+		const fullField = independentStars.length >= minElongatedStars ? measureTrackingQualityCore(image, independentStars, options, EMPTY_TRACKING_QUALITY_CONTEXT, minElongatedStars, 2) : undefined
+		const fullySupported = fullField !== undefined && fullField.score >= STELLAR_STREAK_FIELD_SCORE
+		const field = fullySupported ? fullField : measureTrackingQualityCore(image, independentStars, options, EMPTY_TRACKING_QUALITY_CONTEXT, independentMinimum, 1)
 		const angle = field.angle
 		const trail = field.medianTrail
 		if (!(field.score >= STELLAR_STREAK_FIELD_SCORE) || angle === undefined || trail === undefined || !(trail > 0)) continue
 		if (streakAxialAngleDistance(streak.angle, angle) > STELLAR_STREAK_ALIGNMENT || !(streak.length >= trail / STELLAR_STREAK_SCALE_RATIO)) continue
 		if (streak.length <= 2 * STAR_SIGNAL_RADIUS && !(streak.length <= trail * STELLAR_STREAK_SCALE_RATIO)) continue
 
-		for (const star of associatedStars) {
+		for (const starIndex of associatedIndices) {
+			const star = stars[starIndex]
 			const major = star.majorVariance
 			const minor = star.minorVariance
 			if (!(star.snr >= (options.minSNR ?? 2)) || major === undefined || minor === undefined || star.theta === undefined || !Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(star.theta) || !(major >= minor && minor > 0)) continue
 			const localTrail = Math.sqrt(12 * (major - minor))
 			const crossWidth = GAUSSIAN_FWHM_FACTOR * Math.sqrt(minor)
 			if (localTrail < (options.minTrail ?? 0.75) || localTrail < (options.minTrailToCrossWidth ?? 0.25) * crossWidth || !(localTrail >= trail / STELLAR_STREAK_SCALE_RATIO && localTrail <= trail * STELLAR_STREAK_SCALE_RATIO)) continue
-			if (streakAxialAngleDistance(star.theta, angle) > STELLAR_STREAK_ALIGNMENT || !overlapsStreak(star, streak)) continue
+			if (streakAxialAngleDistance(star.theta, angle) > STELLAR_STREAK_ALIGNMENT) continue
 			if (options.saturationLevel !== undefined) {
 				const x = Math.round(star.x)
 				const y = Math.round(star.y)
@@ -79,12 +83,13 @@ function fieldCompatibleStreaks(image: Image, stars: readonly DetectedStar[], op
 					if (saturated) continue
 				}
 			}
+			starMasks[starIndex] |= 1 << i
 			members[i] = 1
-			break
+			if (!fullySupported) break
 		}
 	}
 
-	return members
+	return [starMasks, members]
 }
 
 // Converts the positive image-axis direction to a local east/north sky vector at the image center.
@@ -148,7 +153,7 @@ function measureTrackingQualityCore(image: Image, stars: readonly DetectedStar[]
 	const minTrailToCrossWidth = options.minTrailToCrossWidth ?? 0.25
 	const streaks = context.streaks ?? []
 	const streakCount = Math.min(streaks.length, MAX_TRACKING_STREAKS)
-	const stellarStreaks = fieldCompatibleStreaks(image, stars, options, streaks, streakCount)
+	const [stellarStarMasks, stellarStreaks] = fieldCompatibleStreaks(image, stars, options, streaks, streakCount)
 	const streakSupport = new Uint8Array(streakCount)
 	const n = stars.length
 	const candidateTrails = new Float64Array(n)
@@ -162,12 +167,13 @@ function measureTrackingQualityCore(image: Image, stars: readonly DetectedStar[]
 	let centralUsableCount = 0
 	let candidateCount = 0
 
-	for (const star of stars) {
+	for (let starIndex = 0; starIndex < n; starIndex++) {
+		const star = stars[starIndex]
 		let contaminated = false
 		for (let i = 0; i < streakCount; i++) {
 			if (!overlapsStreak(star, streaks[i])) continue
 			if (streakSupport[i] < 3) streakSupport[i]++
-			if (!stellarStreaks[i]) contaminated = true
+			if ((stellarStarMasks[starIndex] & (1 << i)) === 0) contaminated = true
 		}
 
 		if (contaminated) continue

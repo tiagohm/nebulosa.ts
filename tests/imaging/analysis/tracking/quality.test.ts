@@ -145,6 +145,19 @@ test('stellar streaks preserve a coherent field at the minimum star count', () =
 	expect(crossingTwoStars.score).toBe(0)
 })
 
+test('one streak crossing two stars cannot add two contributions to a sparse field', () => {
+	const frame = image()
+	const independent = [star(15, 15, 5, 0), star(35, 15, 5, 0), star(65, 15, 5, 0), star(15, 65, 5, 0)]
+	const stars = [...independent, star(65, 65, 5, 0), star(85, 65, 5, 0)]
+	const candidate = streak(58, 92, 65)
+	expect(measureTrackingQuality(frame, independent).score).toBe(0)
+	expect(measureTrackingQuality(frame, stars).score).toBeCloseTo(2 / 3, 12)
+	const measured = measureTrackingQuality(frame, stars, {}, { streaks: [candidate] })
+	expect(measured.usableStarCount).toBe(5)
+	expect(measured.diagnostics.quadrantCoverage).toBe(0.25)
+	expect(measured.score).toBeCloseTo(1 / 3, 12)
+})
+
 test('detector-measured long stellar trails retain field evidence despite aperture-truncated moments', () => {
 	const frame = image(256, 256)
 	frame.raw.fill(0.1)
