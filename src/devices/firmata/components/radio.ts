@@ -1,5 +1,5 @@
 import { clamp } from '../../../math/numerical/math'
-import type { FirmataClient } from '../firmata'
+import type { FirmataClient } from '../client'
 import { DEFAULT_POLLING_INTERVAL, PeripheralBase, type RadioTransmitter, type RadioTuner, type RadioTunerSeekDirection } from '../peripheral'
 
 // FM radio chip drivers over I2C: the TEA5767 and RDA5807 receivers (tuning, seek, mute, RSSI/stereo

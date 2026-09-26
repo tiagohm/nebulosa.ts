@@ -1,14 +1,15 @@
 // oxlint-disable no-constant-condition
 
 import { ESP8266 } from '../src/devices/firmata/board'
+import { FirmataClientOverTcp } from '../src/devices/firmata/client.tcp'
 import { HD44780 } from '../src/devices/firmata/components/display'
+import { PCF8574 } from '../src/devices/firmata/components/io'
 import { KT0803L, RDA5807, TEA5767 } from '../src/devices/firmata/components/radio'
-import { type FirmataClientHandler, FirmataClientOverTcp } from '../src/devices/firmata/firmata'
-import { PCF8574 } from '../src/devices/firmata/io'
 import type { Accelerometer, Altimeter, Ammeter, Barometer, Gyroscope, Hygrometer, Luxmeter, Magnetometer, RadioTransmitter, RadioTuner, Thermometer } from '../src/devices/firmata/peripheral'
 import { BMP180, BMP180Mode, BMP280 } from '../src/devices/firmata/sensors/barometer'
 import { AM2320, SHT21 } from '../src/devices/firmata/sensors/hygrometer'
 import { DS18B20, LM35 } from '../src/devices/firmata/sensors/thermometer'
+import type { FirmataClientHandler } from '../src/devices/firmata/types'
 import { toMeter } from '../src/math/units/distance'
 
 const handler: FirmataClientHandler = {

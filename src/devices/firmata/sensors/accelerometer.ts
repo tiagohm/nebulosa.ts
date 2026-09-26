@@ -1,5 +1,5 @@
 import { DEG2RAD, G } from '../../../core/constants'
-import type { FirmataClient } from '../firmata'
+import type { FirmataClient } from '../client'
 import { type Accelerometer, DEFAULT_POLLING_INTERVAL, type Gyroscope, PeripheralBase } from '../peripheral'
 
 // Driver for the MPU6050 6-axis IMU over I2C: configures the accelerometer/gyroscope full-scale ranges,

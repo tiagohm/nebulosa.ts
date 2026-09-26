@@ -1,4 +1,4 @@
-import type { FirmataClient } from '../firmata'
+import type { FirmataClient } from '../client'
 import { DEFAULT_POLLING_INTERVAL, type Magnetometer, PeripheralBase } from '../peripheral'
 
 // Driver for the HMC5883L 3-axis magnetometer over I2C: sets sample averaging, output rate, and gain,

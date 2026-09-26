@@ -2,7 +2,8 @@ import type { Angle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import type { Pressure } from '../../math/units/pressure'
 import type { Temperature } from '../../math/units/temperature'
-import { type FirmataClient, type FirmataClientHandler, type Pin, PinMode } from './firmata'
+import type { FirmataClient } from './client'
+import { PinMode, type FirmataClientHandler, type Pin } from './types'
 
 // Peripheral abstractions for Firmata-attached hardware: the common Peripheral contract, sensor/actuator
 // interfaces (thermometer, barometer, radio, RTC, display, I/O expander, etc.) with their measurement

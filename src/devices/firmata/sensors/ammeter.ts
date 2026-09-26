@@ -1,4 +1,4 @@
-import type { FirmataClient } from '../firmata'
+import type { FirmataClient } from '../client'
 import { ADCPeripheral, type Ammeter } from '../peripheral'
 
 // Driver for the ACS712 Hall-effect current sensor read on an analog pin. Converts the ADC sample to

@@ -2,8 +2,9 @@ import { toMeter } from '../../../math/units/distance'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleSetNumberVector, handleSetSwitchVector, type IndiClientHandler } from '../../indi/client'
 import { type Client, DeviceInterfaceType } from '../../indi/device'
 import { type DefNumberVector, type EnableBlob, type GetProperties, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type SetNumberVector, selectOnSwitch } from '../../indi/types'
-import type { FirmataClient, FirmataClientHandler } from '../firmata'
+import type { FirmataClient } from '../client'
 import type { Accelerometer, Altimeter, Ammeter, Barometer, Gyroscope, Hygrometer, ListenablePeripheral, Luxmeter, Magnetometer, Peripheral, PeripheralListener, RealTimeClock, Thermometer } from '../peripheral'
+import type { FirmataClientHandler } from '../types'
 
 // Fixed adapter identifier published in DRIVER_INFO.DRIVER_EXEC for every virtual device.
 const DRIVER_EXEC = 'FirmataIndiClient'

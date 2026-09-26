@@ -1,4 +1,4 @@
-import type { FirmataClient } from '../firmata'
+import type { FirmataClient } from '../client'
 import { PeripheralBase, type RealTimeClock } from '../peripheral'
 
 // Real-time clock drivers over I2C: the DS3231 (with a century bit) and the DS1307. Both poll the BCD
