@@ -76,6 +76,8 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 [Sky Projections]({% link astronomy/coordinates-and-observers/sky-projections.md %}) maps spherical sky or geographic coordinates to planar charts.
 
+[Projected Paths and Polygons]({% link astronomy/coordinates-and-observers/projected-paths-and-polygons.md %}) prepares drawable chart segments across map seams and projection gaps.
+
 [HEALPix]({% link astronomy/coordinates-and-observers/healpix.md %}) groups equatorial directions into pixels and searches an in-memory spatial index.
 
 ## Observation and Planning

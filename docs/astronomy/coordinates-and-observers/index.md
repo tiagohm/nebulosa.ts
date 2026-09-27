@@ -59,4 +59,6 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 
 [Sky Projections]({% link astronomy/coordinates-and-observers/sky-projections.md %}) maps sky or geographic angles to a plane and splits chart paths at wraps and discontinuities.
 
+[Projected Paths and Polygons]({% link astronomy/coordinates-and-observers/projected-paths-and-polygons.md %}) densifies and splits chart tracks and rings at projection seams and gaps.
+
 [HEALPix]({% link astronomy/coordinates-and-observers/healpix.md %}) partitions equatorial directions into pixels and queries an in-memory spatial index.
