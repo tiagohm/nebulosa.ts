@@ -71,3 +71,7 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Sky Projections]({% link astronomy/coordinates-and-observers/sky-projections.md %}) maps spherical sky or geographic coordinates to planar charts.
 
 [HEALPix]({% link astronomy/coordinates-and-observers/healpix.md %}) groups equatorial directions into pixels and searches an in-memory spatial index.
+
+## Observation and Planning
+
+[Observation Scores]({% link observation/observation-scores.md %}) combines supplied target geometry, twilight, Moon interference, and duration into a planning score.

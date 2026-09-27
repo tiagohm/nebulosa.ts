@@ -12,4 +12,6 @@ Nebulosa is a Bun-first, ESM-only TypeScript toolkit for numerical astronomy, as
 
 [Astronomy]({% link astronomy/index.md %}) documents the library capabilities, starting with [Astronomical Time Scales]({% link astronomy/time-and-earth-orientation/astronomical-time-scales.md %}).
 
+[Observation]({% link observation/index.md %}) documents scores and workflows for planning observations.
+
 [View the project on GitHub](https://github.com/tiagohm/nebulosa.ts)
