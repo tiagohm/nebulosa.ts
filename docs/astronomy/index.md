@@ -165,3 +165,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Precession]({% link astronomy/meeus-precession.md %}) rotates chapter-style sky coordinates and orbital elements between Julian epochs.
 
 [Meeus Nutation and Obliquity]({% link astronomy/meeus-nutation-and-obliquity.md %}) evaluates chapter-style nutation angles and mean obliquity.
+
+[Meeus Apparent Place of a Star]({% link astronomy/meeus-apparent-place-of-a-star.md %}) reduces a mean stellar position with Meeus precession, nutation, and annual aberration.
