@@ -67,3 +67,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Solar Eclipse Search and Classification]({% link astronomy/solar-eclipse-search-and-classification.md %}) finds and classifies a nearby eclipse using Meeus's lunation and shadow-axis series.
 
 [Lunar Parallax and Semidiameter]({% link astronomy/lunar-parallax-and-semidiameter.md %}) computes the Moon's horizontal parallax and angular size for Earth-centered or site-specific geometry.
+
+[Lunar Phase and Lunation]({% link astronomy/lunar-phase-and-lunation.md %}) numbers lunar cycles, finds principal phase instants, and labels a full-Moon cycle by lunar Saros series.

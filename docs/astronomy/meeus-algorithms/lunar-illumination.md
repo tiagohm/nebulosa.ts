@@ -51,7 +51,7 @@ For the distance-aware forms, the two distances may use **any one consistent uni
 
 ## Accuracy and limits
 
-These methods describe geocentric disk illumination. They do not search for a new Moon, first quarter, full Moon, or last quarter time; `nearestLunarPhase` in `src/astronomy/bodies/moon.ts` is a separate event API. The fraction is geometric and does not model lunar surface reflectance, shadows from eclipses, or a particular observer's atmosphere. The chapter examples establish sample values rather than a uniform accuracy bound over all dates.
+These methods describe geocentric disk illumination. They do not search for a new Moon, first quarter, full Moon, or last quarter time; [Lunar Phase and Lunation]({% link astronomy/lunar-phase-and-lunation.md %}) covers that separate event API. The fraction is geometric and does not model lunar surface reflectance, shadows from eclipses, or a particular observer's atmosphere. The chapter examples establish sample values rather than a uniform accuracy bound over all dates.
 
 ## Related topics
 
