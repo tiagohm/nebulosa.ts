@@ -187,3 +187,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Keplerian Elements]({% link astronomy/meeus-keplerian-elements.md %}) solves chapter-style Kepler equations and evaluates fixed solar-orbit elements.
 
 [Meeus Geocentric Planet Positions]({% link astronomy/meeus-geocentric-planet-positions.md %}) explains the heliocentric planet coordinates that feed Meeus geocentric reductions.
+
+[Meeus Apsis and Node Passages]({% link astronomy/meeus-apsis-and-node-passages.md %}) estimates planetary apsides and fixed-orbit node crossing times.
