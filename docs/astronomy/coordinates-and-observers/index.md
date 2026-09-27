@@ -16,3 +16,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [Affine Origin Frames]({% link astronomy/coordinates-and-observers/affine-origin-frames.md %}) combines a frame rotation with an origin position and velocity for absolute states, including heliocentric ecliptic coordinates.
 
 [Galactocentric Frame]({% link astronomy/coordinates-and-observers/galactocentric-frame.md %}) places absolute Sun-relative positions on axes centered at the Galactic center.
+
+[Local Standard of Rest Frames]({% link astronomy/coordinates-and-observers/local-standard-of-rest-frames.md %}) applies conventional solar-motion offsets to Cartesian velocities in ICRS or Galactic axes.
