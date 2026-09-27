@@ -43,7 +43,7 @@ const site = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400), Ellipso
 time.location = site;
 
 const earthTime = tdb(time);
-const [heliocentricEarth, barycentricEarth] = eraEpv00(earthTime.day, earthTime.fraction);
+const [barycentricEarth, heliocentricEarth] = eraEpv00(earthTime.day, earthTime.fraction);
 const icrs = [deg(120), deg(-30)] as const;
 
 const direct = icrsToObserved(icrs, time, barycentricEarth, heliocentricEarth[0], false, site);

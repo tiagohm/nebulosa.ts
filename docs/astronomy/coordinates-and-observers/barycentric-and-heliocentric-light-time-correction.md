@@ -35,7 +35,7 @@ import { meter } from '../src/math/units/distance';
 const observed = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.UTC);
 const site = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2_400));
 const observedTdb = tdb(observed);
-const [, barycentricEarth] = eraEpv00(observedTdb.day, observedTdb.fraction);
+const [barycentricEarth] = eraEpv00(observedTdb.day, observedTdb.fraction);
 const correctionDays = lightTravelTime(hour(5.5), deg(-5), observed, barycentricEarth, site);
 const barycentricTdb = timeShift(observedTdb, correctionDays);
 console.log(toJulianDay(barycentricTdb));

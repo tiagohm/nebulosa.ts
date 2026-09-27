@@ -35,7 +35,7 @@ import { toKilometerPerSecond } from '../src/math/units/velocity';
 const time = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.UTC);
 const site = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2_400));
 const date = tdb(time);
-const [, barycentricEarth] = eraEpv00(date.day, date.fraction);
+const [barycentricEarth] = eraEpv00(date.day, date.fraction);
 const correctionAuPerDay = radialVelocityCorrection(hour(5.5), deg(-5), time, barycentricEarth, site);
 const correctionKmPerSecond = toKilometerPerSecond(correctionAuPerDay);
 console.log(correctionKmPerSecond);
