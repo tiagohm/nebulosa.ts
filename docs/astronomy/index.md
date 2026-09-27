@@ -51,3 +51,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Equatorial Ephemeris Interpolation]({% link astronomy/equatorial-ephemeris-interpolation.md %}) fits sampled right ascension and declination over time.
 
 [Astrometric Sample-Grid Interpolation]({% link astronomy/astrometric-sample-grid-interpolation.md %}) evaluates sky directions between sampled image pixels.
+
+[IAU Body Orientation]({% link astronomy/iau-body-orientation.md %}) evaluates cartographic pole and prime-meridian models and builds body-fixed frames.
