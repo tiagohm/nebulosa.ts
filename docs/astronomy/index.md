@@ -205,3 +205,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Mars Disk]({% link astronomy/meeus-mars-disk.md %}) describes the pole, central meridian, size, and illumination of Mars's apparent disk.
 
 [Meeus Jupiter Disk]({% link astronomy/meeus-jupiter-disk.md %}) documents System I and II central meridians and Jupiter's apparent pole angle.
+
+[Meeus Galilean Satellite Positions]({% link astronomy/meeus-galilean-satellite-positions.md %}) projects Jupiter's four large moons with the chapter approximation or E5 terms.
