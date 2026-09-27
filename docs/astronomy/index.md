@@ -185,3 +185,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Equation of Time]({% link astronomy/meeus-equation-of-time.md %}) calculates the Meeus apparent-minus-mean solar-time angle.
 
 [Meeus Keplerian Elements]({% link astronomy/meeus-keplerian-elements.md %}) solves chapter-style Kepler equations and evaluates fixed solar-orbit elements.
+
+[Meeus Geocentric Planet Positions]({% link astronomy/meeus-geocentric-planet-positions.md %}) explains the heliocentric planet coordinates that feed Meeus geocentric reductions.
