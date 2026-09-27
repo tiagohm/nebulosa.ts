@@ -20,3 +20,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [Local Standard of Rest Frames]({% link astronomy/coordinates-and-observers/local-standard-of-rest-frames.md %}) applies conventional solar-motion offsets to Cartesian velocities in ICRS or Galactic axes.
 
 [Spherical Coordinate Conversions]({% link astronomy/coordinates-and-observers/spherical-coordinate-conversions.md %}) converts sky angles between equatorial, ecliptic, and Galactic axes and measures separations and position angles.
+
+[Angular Motion]({% link astronomy/coordinates-and-observers/angular-motion.md %}) derives angular and radial rates from Cartesian states or sampled sky positions.
