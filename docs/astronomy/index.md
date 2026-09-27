@@ -145,3 +145,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Martian Satellite Theory (MARSSAT)]({% link astronomy/martian-satellite-theory-marssat.md %}) evaluates analytical Mars-centered states for Phobos and Deimos.
 
 [Pluto Short Analytical Theory]({% link astronomy/pluto-short-analytical-theory.md %}) estimates Pluto's heliocentric position from a short periodic series.
+
+[Equatorial Ephemeris Interpolation]({% link astronomy/equatorial-ephemeris-interpolation.md %}) fits sampled right ascension and declination over time.
