@@ -90,6 +90,7 @@ The transformations depend on the supplied Earth state, site, and orientation da
 - [Astronomical Time Scales]({% link astronomy/time-and-earth-orientation/astronomical-time-scales.md %}) explains the TT and UT1 conversions.
 - [Earth Orientation Parameters]({% link astronomy/time-and-earth-orientation/earth-orientation-parameters.md %}) supplies measured DUT1 and polar motion.
 - [Apparent Direction]({% link astronomy/coordinates-and-observers/apparent-direction.md %}) handles finite target light time separately from this stellar observed-place chain.
+- [Refractive Displacement]({% link astronomy/coordinates-and-observers/refractive-displacement.md %}) gives the altitude lift at a selected wavelength.
 
 ## References
 

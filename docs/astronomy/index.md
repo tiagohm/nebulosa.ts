@@ -45,3 +45,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Annual Aberration]({% link astronomy/coordinates-and-observers/annual-aberration.md %}) corrects a source direction for the observer's velocity.
 
 [Topocentric Observed Place]({% link astronomy/coordinates-and-observers/topocentric-observed-place.md %}) converts stellar directions to observed azimuth, altitude, and equatorial angles.
+
+[Refractive Displacement]({% link astronomy/coordinates-and-observers/refractive-displacement.md %}) computes the altitude shift from atmospheric refraction at one wavelength.

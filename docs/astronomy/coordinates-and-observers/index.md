@@ -32,3 +32,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [Annual Aberration]({% link astronomy/coordinates-and-observers/annual-aberration.md %}) shifts a natural direction using the observer's barycentric velocity.
 
 [Topocentric Observed Place]({% link astronomy/coordinates-and-observers/topocentric-observed-place.md %}) converts stellar ICRS or CIRS directions to local observed angles with optional refraction.
+
+[Refractive Displacement]({% link astronomy/coordinates-and-observers/refractive-displacement.md %}) computes the atmospheric lift at one wavelength and converts between true and apparent altitude.
