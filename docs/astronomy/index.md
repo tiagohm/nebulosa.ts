@@ -27,3 +27,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Celestial and Terrestrial Reference Frames]({% link astronomy/coordinates-and-observers/celestial-and-terrestrial-reference-frames.md %}) rotates vectors and position–velocity states among celestial and Earth-fixed axes without shifting their origins.
 
 [Affine Origin Frames]({% link astronomy/coordinates-and-observers/affine-origin-frames.md %}) translates absolute states between origins while rotating their axes.
+
+[Galactocentric Frame]({% link astronomy/coordinates-and-observers/galactocentric-frame.md %}) expresses Sun-relative positions around the Galactic center with configurable geometry.

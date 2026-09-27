@@ -14,3 +14,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [Celestial and Terrestrial Reference Frames]({% link astronomy/coordinates-and-observers/celestial-and-terrestrial-reference-frames.md %}) rotates vectors and position–velocity states among celestial, intermediate, and Earth-fixed axes without shifting their origins.
 
 [Affine Origin Frames]({% link astronomy/coordinates-and-observers/affine-origin-frames.md %}) combines a frame rotation with an origin position and velocity for absolute states, including heliocentric ecliptic coordinates.
+
+[Galactocentric Frame]({% link astronomy/coordinates-and-observers/galactocentric-frame.md %}) places absolute Sun-relative positions on axes centered at the Galactic center.
