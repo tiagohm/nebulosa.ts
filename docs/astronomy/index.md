@@ -171,3 +171,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Parallactic Angle]({% link astronomy/meeus-parallactic-angle.md %}) evaluates chapter-style parallactic and horizon-intersection angles.
 
 [Meeus Topocentric Parallax]({% link astronomy/meeus-topocentric-parallax.md %}) shifts a geocentric Meeus body position to an observer using Earth parallax factors.
+
+[Meeus Refraction Formulas]({% link astronomy/meeus-refraction-formulas.md %}) provides chapter-style scalar corrections between true and apparent altitude.
