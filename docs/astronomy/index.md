@@ -183,3 +183,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Equinoxes and Solstices]({% link astronomy/meeus-equinoxes-and-solstices.md %}) estimates season boundaries from Meeus tables or a VSOP87E solar-longitude refinement.
 
 [Meeus Equation of Time]({% link astronomy/meeus-equation-of-time.md %}) calculates the Meeus apparent-minus-mean solar-time angle.
+
+[Meeus Keplerian Elements]({% link astronomy/meeus-keplerian-elements.md %}) solves chapter-style Kepler equations and evaluates fixed solar-orbit elements.
