@@ -157,3 +157,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Easter Dates]({% link astronomy/meeus-easter-dates.md %}) calculates Easter Sunday in the Gregorian or Julian calendar.
 
 [Meeus Sidereal Time]({% link astronomy/meeus-sidereal-time.md %}) evaluates chapter-style Greenwich sidereal time in seconds of time.
+
+[Meeus Globe Ellipsoid]({% link astronomy/meeus-globe-ellipsoid.md %}) computes chapter-style Earth radii, parallax factors, and surface distances.
