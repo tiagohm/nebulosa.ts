@@ -163,3 +163,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Coordinate Transforms]({% link astronomy/meeus-coordinate-transforms.md %}) converts chapter-style ecliptic, equatorial, horizontal, and B1950 Galactic angles.
 
 [Meeus Precession]({% link astronomy/meeus-precession.md %}) rotates chapter-style sky coordinates and orbital elements between Julian epochs.
+
+[Meeus Nutation and Obliquity]({% link astronomy/meeus-nutation-and-obliquity.md %}) evaluates chapter-style nutation angles and mean obliquity.
