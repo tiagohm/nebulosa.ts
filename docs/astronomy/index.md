@@ -99,3 +99,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Planetary Disk Transits]({% link astronomy/planetary-disk-transits.md %}) predicts site-specific Mercury or Venus contacts across the Sun's disk.
 
 [Stellar and Asteroidal Occultations]({% link astronomy/stellar-and-asteroidal-occultations.md %}) screens site-specific star and finite-body appulses for disk coverage.
+
+[Earth Occultation of a Finite Target]({% link astronomy/earth-occultation-of-a-finite-target.md %}) tests whether the solid Earth blocks a finite observer-to-target segment.
