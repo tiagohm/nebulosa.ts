@@ -125,3 +125,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Solar Eclipse Besselian Geometry]({% link astronomy/solar-eclipse-besselian-geometry.md %}) fits elements and maps the shadow's contacts, limits, and central line.
 
 [Local Lunar Eclipse Circumstances]({% link astronomy/local-lunar-eclipse-circumstances.md %}) classifies a lunar eclipse's visibility and local Moon geometry at one site.
+
+[Lunar Eclipse Visibility Map]({% link astronomy/lunar-eclipse-visibility-map.md %}) maps the Moon's horizon at each global eclipse contact.
