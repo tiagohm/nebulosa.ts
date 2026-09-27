@@ -97,3 +97,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Time-Domain Extrema Search]({% link astronomy/time-domain-extrema-search.md %}) locates sampled local minima and maxima of a time-dependent scalar.
 
 [Planetary Disk Transits]({% link astronomy/planetary-disk-transits.md %}) predicts site-specific Mercury or Venus contacts across the Sun's disk.
+
+[Stellar and Asteroidal Occultations]({% link astronomy/stellar-and-asteroidal-occultations.md %}) screens site-specific star and finite-body appulses for disk coverage.
