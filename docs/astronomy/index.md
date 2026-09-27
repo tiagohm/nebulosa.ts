@@ -193,3 +193,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Planetary Phenomena]({% link astronomy/meeus-planetary-phenomena.md %}) estimates chapter-table conjunctions, oppositions, Mercury elongations, and a Mars station.
 
 [Meeus Conjunction Interpolation]({% link astronomy/meeus-conjunction-interpolation.md %}) locates coordinate conjunctions from five supplied position samples.
+
+[Meeus Alignment Geometry]({% link astronomy/meeus-alignment-geometry.md %}) measures separations, dates sampled great-circle crossings, and encloses compact triples.
