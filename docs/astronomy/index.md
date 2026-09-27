@@ -93,3 +93,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Observing Visibility Windows]({% link astronomy/observing-visibility-windows.md %}) intersects target altitude, airmass, Sun-altitude, and Moon-separation limits.
 
 [Time-Domain Event Search]({% link astronomy/time-domain-event-search.md %}) brackets and refines zero crossings of a continuous time-dependent scalar.
+
+[Time-Domain Extrema Search]({% link astronomy/time-domain-extrema-search.md %}) locates sampled local minima and maxima of a time-dependent scalar.
