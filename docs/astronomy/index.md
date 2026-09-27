@@ -63,3 +63,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Season Instants and Equation of Time]({% link astronomy/season-instants-and-equation-of-time.md %}) estimates TT season boundaries and apparent-minus-mean solar time.
 
 [Solar Saros Index]({% link astronomy/solar-saros-index.md %}) labels a modeled lunation with its van den Bergh solar Saros series.
+
+[Solar Eclipse Search and Classification]({% link astronomy/solar-eclipse-search-and-classification.md %}) finds and classifies a nearby eclipse using Meeus's lunation and shadow-axis series.
