@@ -4,7 +4,7 @@ layout: default
 parent: Coordinates and Observers
 grand_parent: Astronomy
 nav_order: 50
-description: Converts equatorial, ecliptic, and Galactic angles and computes sky separation, position angle, and local reference directions.
+description: Converts equatorial, ecliptic, and Galactic angles and constructs local reference directions.
 
 doc_kind: topic
 
@@ -12,9 +12,6 @@ sources:
     - src/astronomy/coordinates/coordinate.ts
 
 api:
-    - angularDistance
-    - angularDistanceHaversine
-    - positionAngleBetween
     - equatorialFromJ2000
     - equatorialToJ2000
     - equatorialToEcliptic
@@ -31,12 +28,12 @@ api:
 
 # Spherical Coordinate Conversions
 
-These functions convert angular positions among equatorial, ecliptic, and Galactic axes, or measure separation and position angle on the sky. Angle inputs and outputs are **radians**. Supply conversion inputs on the named source axes; compare two directions only when they share a reference frame and origin. The transforms rotate directions and do not add parallax, aberration, deflection, or refraction.
+These functions convert angular positions among equatorial, ecliptic, and Galactic axes and construct local reference directions. Angle inputs and outputs are **radians**. Supply conversion inputs on the named source axes. The transforms rotate directions and do not add parallax, aberration, deflection, or refraction.
 
 ## Basic usage
 
 ```ts
-import { angularDistance, equatorialFromJ2000, equatorialToEcliptic, equatorialToGalactic, positionAngleBetween } from '../src/astronomy/coordinates/coordinate';
+import { equatorialFromJ2000, equatorialToEcliptic, equatorialToGalactic } from '../src/astronomy/coordinates/coordinate';
 import { timeYMDHMS, Timescale } from '../src/astronomy/time/time';
 import { deg, normalizeAngle } from '../src/math/units/angle';
 
@@ -46,8 +43,7 @@ const [raOfDate, decOfDate] = equatorialFromJ2000(...j2000, instant);
 const [eclipticLongitude, eclipticLatitude] = equatorialToEcliptic(raOfDate, decOfDate, instant);
 const [galacticLongitude, galacticLatitude] = equatorialToGalactic(...j2000);
 const displayedGalacticLongitude = normalizeAngle(galacticLongitude);
-const separation = angularDistance(0, 0, deg(90), 0); // π/2 radians
-const positionAngle = positionAngleBetween(0, 0, deg(90), 0); // east: π/2 radians
+console.log({ eclipticLongitude, eclipticLatitude, displayedGalacticLongitude, galacticLatitude });
 ```
 
 `equatorialFromJ2000` uses the precession-nutation matrix at `instant`; `equatorialToEcliptic` then rotates the resulting equator-of-date angles by the **true obliquity of that date**. The Galactic conversion instead uses the fixed J2000 matrix and the original J2000 angles. Use `normalizeAngle` when a nonnegative longitude is needed for display or indexing.
@@ -65,10 +61,6 @@ Each result is a two-element `[longitude, latitude]` pair, or `[rightAscension, 
 
 The date-dependent functions accept a `Time` on any supported scale and use the required TT conversion. Omitting `time` selects the current UTC clock via `timeNow(true)`; pass an explicit instant for reproducible results. Their results can also depend on the selected `Time` orientation providers.
 
-## Sky geometry
-
-`angularDistance(ra0, dec0, ra1, dec1)` returns separation in `[0, π]` using an `atan2` formulation that preserves small separations. `angularDistanceHaversine` is an alternative that clamps the haversine value before `asin`. Both operate on two directions in the **same** equatorial frame. `positionAngleBetween` returns the direction of the second point as seen from the first, measured from celestial north through east and normalized to `[0, 2π)`. If its two `atan2` terms are exactly zero, it returns `0`; the position angle is geometrically undefined for coincident points and can be sensitive near antipodes or poles.
-
 ## Local reference directions
 
 These helpers return `[rightAscension, declination]` in the true equator-of-date frame. Longitude is the observer's east-positive terrestrial longitude; `zenith` uses the supplied observer latitude as its declination (geodetic latitude for an ellipsoid-normal zenith). Local apparent sidereal time (LAST) supplies the right ascension.
@@ -85,4 +77,6 @@ These are angular directions, not topocentric apparent positions; the functions 
 ## Related topics
 
 - [Celestial and Terrestrial Reference Frames]({% link astronomy/coordinates-and-observers/celestial-and-terrestrial-reference-frames.md %}) rotates Cartesian vectors and transports full velocities between frames.
-- [Earth Rotation and Orientation]({% link astronomy/time-and-earth-orientation/earth-rotation-and-orientation.md %}) supplies precession-nutation, sidereal time, and true obliquity.
+- [Precession, Nutation, and Obliquity]({% link astronomy/time-and-earth-orientation/precession-nutation-and-obliquity.md %}) supplies the date-dependent equator and ecliptic orientation.
+- [Sidereal Time and Earth Rotation Angle]({% link astronomy/time-and-earth-orientation/sidereal-time-and-earth-rotation-angle.md %}) supplies GAST for local reference directions.
+- [Angular Separation and Position Angle]({% link astronomy/coordinates-and-observers/angular-separation-and-position-angle.md %}) compares directions after they are placed on matching axes.

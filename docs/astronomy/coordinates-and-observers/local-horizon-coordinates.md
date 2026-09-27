@@ -48,5 +48,5 @@ The inverse round-trips regular directions to floating-point precision, includin
 
 ## Related topics
 
-- [Spherical Coordinate Conversions]({% link astronomy/coordinates-and-observers/spherical-coordinate-conversions.md %}) covers equatorial, ecliptic, and Galactic axes and angular separation.
+- [Spherical Coordinate Conversions]({% link astronomy/coordinates-and-observers/spherical-coordinate-conversions.md %}) covers equatorial, ecliptic, and Galactic axes.
 - [Refractive Displacement]({% link astronomy/coordinates-and-observers/refractive-displacement.md %}) adds an atmospheric altitude correction when that model is appropriate.

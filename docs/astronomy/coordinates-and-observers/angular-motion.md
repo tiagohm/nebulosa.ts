@@ -82,5 +82,6 @@ Longitude unwrapping chooses the shorter difference in `(−π, π]`. If the tru
 
 ## Related topics
 
-- [Spherical Coordinate Conversions]({% link astronomy/coordinates-and-observers/spherical-coordinate-conversions.md %}) defines longitude, latitude, sky separation, and position angle.
+- [Spherical Coordinate Conversions]({% link astronomy/coordinates-and-observers/spherical-coordinate-conversions.md %}) converts angular positions among celestial axes.
+- [Angular Separation and Position Angle]({% link astronomy/coordinates-and-observers/angular-separation-and-position-angle.md %}) measures distance and bearing between sampled directions.
 - [Celestial and Terrestrial Reference Frames]({% link astronomy/coordinates-and-observers/celestial-and-terrestrial-reference-frames.md %}) explains the frame-rate term included before spherical rates are evaluated.

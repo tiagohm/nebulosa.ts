@@ -36,7 +36,7 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 [Local Standard of Rest Frames]({% link astronomy/coordinates-and-observers/local-standard-of-rest-frames.md %}) applies conventional solar-motion offsets to velocities.
 
-[Spherical Coordinate Conversions]({% link astronomy/coordinates-and-observers/spherical-coordinate-conversions.md %}) converts sky angles and measures separation and position angle.
+[Spherical Coordinate Conversions]({% link astronomy/coordinates-and-observers/spherical-coordinate-conversions.md %}) converts directions between equatorial, ecliptic, and Galactic angular coordinates.
 
 [Angular Separation and Position Angle]({% link astronomy/coordinates-and-observers/angular-separation-and-position-angle.md %}) measures distance and bearing between two equatorial sky directions.
 
