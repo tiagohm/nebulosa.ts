@@ -117,3 +117,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Satellite Visual Magnitude]({% link astronomy/satellite-visual-magnitude.md %}) estimates brightness from standard magnitude, phase geometry, range, and shadow state.
 
 [Satellite Conjunctions]({% link astronomy/satellite-conjunctions.md %}) searches physical closest approaches between two SGP4 satellites.
+
+[Satellite Trail Prediction]({% link astronomy/satellite-trail-prediction.md %}) finds geometric satellite chords across a rectangular sensor.
