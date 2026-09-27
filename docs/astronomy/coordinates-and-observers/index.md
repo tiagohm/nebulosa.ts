@@ -36,3 +36,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [Refractive Displacement]({% link astronomy/coordinates-and-observers/refractive-displacement.md %}) computes the atmospheric lift at one wavelength and converts between true and apparent altitude.
 
 [Differential Refraction and Atmospheric Dispersion]({% link astronomy/coordinates-and-observers/differential-refraction-and-atmospheric-dispersion.md %}) predicts chromatic separation on the sky and optionally on an image sensor.
+
+[Constellations]({% link astronomy/coordinates-and-observers/constellations.md %}) labels an equatorial direction with its IAU sky region using B1875 boundaries.

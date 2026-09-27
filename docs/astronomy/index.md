@@ -49,3 +49,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Refractive Displacement]({% link astronomy/coordinates-and-observers/refractive-displacement.md %}) computes the altitude shift from atmospheric refraction at one wavelength.
 
 [Differential Refraction and Atmospheric Dispersion]({% link astronomy/coordinates-and-observers/differential-refraction-and-atmospheric-dispersion.md %}) predicts wavelength-dependent angular and pixel separation.
+
+[Constellations]({% link astronomy/coordinates-and-observers/constellations.md %}) finds the IAU sky region containing an equatorial direction.
