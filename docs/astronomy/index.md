@@ -221,3 +221,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Angular semidiameters]({% link astronomy/angular-semidiameters.md %}) estimates the apparent radii of planets, the Sun, Moon, and asteroids.
 
 [Stellar magnitude arithmetic]({% link astronomy/stellar-magnitude-arithmetic.md %}) combines stellar magnitudes, compares brightness, and applies the distance modulus.
+
+[Binary-star apparent orbit]({% link astronomy/binary-star-apparent-orbit.md %}) projects visual-binary elements to position angle and angular separation.
