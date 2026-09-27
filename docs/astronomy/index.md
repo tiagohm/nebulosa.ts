@@ -121,3 +121,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Satellite Trail Prediction]({% link astronomy/satellite-trail-prediction.md %}) finds geometric satellite chords across a rectangular sensor.
 
 [Local Solar Eclipse Circumstances]({% link astronomy/local-solar-eclipse-circumstances.md %}) resolves contacts, visibility, and diagram geometry for one observing site.
+
+[Solar Eclipse Besselian Geometry]({% link astronomy/solar-eclipse-besselian-geometry.md %}) fits elements and maps the shadow's contacts, limits, and central line.
