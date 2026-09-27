@@ -155,3 +155,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Calendar]({% link astronomy/meeus-calendar.md %}) converts chapter-style calendar labels, Julian days, and modeled TT dates.
 
 [Meeus Easter Dates]({% link astronomy/meeus-easter-dates.md %}) calculates Easter Sunday in the Gregorian or Julian calendar.
+
+[Meeus Sidereal Time]({% link astronomy/meeus-sidereal-time.md %}) evaluates chapter-style Greenwich sidereal time in seconds of time.
