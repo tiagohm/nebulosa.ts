@@ -80,6 +80,8 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 [HEALPix]({% link astronomy/coordinates-and-observers/healpix.md %}) groups equatorial directions into pixels and searches an in-memory spatial index.
 
+[Radial Velocity Correction]({% link astronomy/coordinates-and-observers/radial-velocity-correction.md %}) computes the observer-motion term to add to a measured stellar radial velocity.
+
 ## Observation and Planning
 
 [Observation Scores]({% link observation/observation-scores.md %}) combines supplied target geometry, twilight, Moon interference, and duration into a planning score.

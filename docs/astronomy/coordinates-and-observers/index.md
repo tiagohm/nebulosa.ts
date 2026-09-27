@@ -62,3 +62,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [Projected Paths and Polygons]({% link astronomy/coordinates-and-observers/projected-paths-and-polygons.md %}) densifies and splits chart tracks and rings at projection seams and gaps.
 
 [HEALPix]({% link astronomy/coordinates-and-observers/healpix.md %}) partitions equatorial directions into pixels and queries an in-memory spatial index.
+
+[Radial Velocity Correction]({% link astronomy/coordinates-and-observers/radial-velocity-correction.md %}) projects observer motion toward an ICRS source for barycentric or heliocentric spectroscopy.
