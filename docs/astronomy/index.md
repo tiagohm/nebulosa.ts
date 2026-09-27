@@ -217,3 +217,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Lunar Illumination]({% link astronomy/meeus-lunar-illumination.md %}) estimates geocentric lunar phase angle and lit disk fraction.
 
 [Lunar libration and surface lighting]({% link astronomy/lunar-libration-and-surface-lighting.md %}) gives Meeus geocentric libration, subsolar coordinates, and sunlight at lunar sites.
+
+[Angular semidiameters]({% link astronomy/angular-semidiameters.md %}) estimates the apparent radii of planets, the Sun, Moon, and asteroids.
