@@ -39,3 +39,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Apparent Direction]({% link astronomy/coordinates-and-observers/apparent-direction.md %}) computes finite-target astrometric and apparent directions from supplied barycentric states.
 
 [Light-Time Solution]({% link astronomy/coordinates-and-observers/light-time-solution.md %}) solves light travel time between moving states and returns the retarded geometric vector.
+
+[Starlight Deflection]({% link astronomy/coordinates-and-observers/starlight-deflection.md %}) models gravitational bending from supplied Solar System bodies.

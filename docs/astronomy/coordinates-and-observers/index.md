@@ -26,3 +26,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [Apparent Direction]({% link astronomy/coordinates-and-observers/apparent-direction.md %}) computes light-time-corrected astrometric and apparent directions from supplied barycentric states.
 
 [Light-Time Solution]({% link astronomy/coordinates-and-observers/light-time-solution.md %}) solves finite light travel time and returns the geometric observer-to-target vector.
+
+[Starlight Deflection]({% link astronomy/coordinates-and-observers/starlight-deflection.md %}) applies gravitational bending from supplied Solar System bodies to finite or stellar directions.
