@@ -211,3 +211,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Saturnian Satellite Positions]({% link astronomy/meeus-saturnian-satellite-positions.md %}) projects eight Saturnian moons with the chapter 46 Dourneau model.
 
 [Saturn ring geometry]({% link astronomy/saturn-ring-geometry.md %}) gives Saturn's geocentric ring opening, pole angle, and projected outer-ring size.
+
+[Meeus Lunar Position]({% link astronomy/meeus-lunar-position.md %}) evaluates chapter 47 geocentric lunar coordinates, distance, and orbital longitudes.
