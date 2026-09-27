@@ -175,3 +175,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Refraction Formulas]({% link astronomy/meeus-refraction-formulas.md %}) provides chapter-style scalar corrections between true and apparent altitude.
 
 [Meeus Approximate Rise, Transit, and Set]({% link astronomy/meeus-approximate-rise-transit-and-set.md %}) estimates one UT1 day's crossings and upper transit from apparent positions.
+
+[Meeus Solar Day Clock]({% link astronomy/meeus-solar-day-clock.md %}) estimates solar noon, limb events, twilight, and golden-hour boundaries for a UT1 day.
