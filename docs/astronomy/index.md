@@ -201,3 +201,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Planetary Magnitudes]({% link astronomy/meeus-planetary-magnitudes.md %}) estimates visual brightness from distances, phase, and Saturn-ring geometry.
 
 [Solar disk physical ephemeris]({% link astronomy/solar-disk-physical-ephemeris.md %}) computes solar-disk orientation and approximate Carrington rotation starts.
+
+[Meeus Mars Disk]({% link astronomy/meeus-mars-disk.md %}) describes the pole, central meridian, size, and illumination of Mars's apparent disk.
