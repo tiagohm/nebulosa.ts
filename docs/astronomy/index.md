@@ -69,3 +69,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Lunar Parallax and Semidiameter]({% link astronomy/lunar-parallax-and-semidiameter.md %}) computes the Moon's horizontal parallax and angular size for Earth-centered or site-specific geometry.
 
 [Lunar Phase and Lunation]({% link astronomy/lunar-phase-and-lunation.md %}) numbers lunar cycles, finds principal phase instants, and labels a full-Moon cycle by lunar Saros series.
+
+[Lunar Eclipse Search]({% link astronomy/lunar-eclipse-search.md %}) estimates a nearby lunar eclipse's global TT contacts and shadow geometry.
