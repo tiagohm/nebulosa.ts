@@ -109,3 +109,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Great Red Spot Transits]({% link astronomy/great-red-spot-transits.md %}) searches for System II spot-longitude crossings on Jupiter's near-side central meridian.
 
 [Satellite Look Angles]({% link astronomy/satellite-look-angles.md %}) projects an SGP4 satellite onto a geographic observer's horizon at one instant.
+
+[Satellite Passes]({% link astronomy/satellite-passes.md %}) finds complete geometric rise, culmination, and set events for an SGP4 satellite.
