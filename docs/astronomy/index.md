@@ -149,3 +149,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Equatorial Ephemeris Interpolation]({% link astronomy/equatorial-ephemeris-interpolation.md %}) fits sampled right ascension and declination over time.
 
 [Astrometric Sample-Grid Interpolation]({% link astronomy/astrometric-sample-grid-interpolation.md %}) evaluates sky directions between sampled image pixels.
+
+[Meeus Numerical Helpers]({% link astronomy/meeus-numerical-helpers.md %}) supplies chapter-style interpolation, fitting, iteration, and shared formulas.
