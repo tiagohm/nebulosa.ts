@@ -10,13 +10,10 @@ doc_kind: topic
 
 sources:
     - src/astronomy/ephemeris/meeus.ts
-    - src/astronomy/bodies/sun.ts
     - src/astronomy/bodies/moon.ts
 
 api:
     - Semidiameter
-    - sunSemidiameter
-    - sunParallax
     - moonSemidiameter
     - moonParallax
     - moonTopocentricSemidiameter
@@ -57,7 +54,7 @@ For an asteroid, `Semidiameter.asteroidDiameter(H, A)` estimates **physical diam
 
 ## Solar and lunar geometry
 
-`sunSemidiameter(distance)` uses the same `959.63″ / distance` coefficient as `Semidiameter.SUN`. `sunParallax(distance)` instead gives the Sun's equatorial horizontal parallax using `8.794143″ / distance`. Parallax is the observer displacement angle, not the Sun's angular radius.
+`sunSemidiameter(distance)` uses the same `959.63″ / distance` coefficient as `Semidiameter.SUN`. The separate [Solar Parallax and Semidiameter]({% link astronomy/solar-parallax-and-semidiameter.md %}) topic explains it alongside the Sun's horizontal parallax.
 
 `moonSemidiameter(distance)` uses the chapter 55 coefficient `358473400 arcseconds · km` divided by the distance in kilometers. `moonParallax(distance)` computes the **equatorial horizontal parallax** as `asin(Earth equatorial radius / distance)`. Both take **geocentric** Earth–Moon distance in AU. `crescentWidth(semidiameter, illuminatedFraction)` returns the first-order width `2 · semidiameter · illuminatedFraction` in radians, with the illuminated fraction between zero and one.
 
