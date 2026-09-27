@@ -113,3 +113,7 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Transit Altitude and Hour Angle]({% link astronomy/observing-formulas/transit-altitude-and-hour-angle.md %}) estimates a fixed-declination target's culmination altitude and altitude-crossing hour angle.
 
 [Angular Size and Planning Magnitudes]({% link astronomy/observing-formulas/angular-size-and-planning-magnitudes.md %}) estimates apparent size, mean surface brightness, and simple comet and asteroid magnitudes.
+
+## Algorithms
+
+[ERFA / SOFA Algorithms]({% link astronomy/erfa-sofa-algorithms.md %}) exposes low-level numerical recipes for time, Earth orientation, astrometry, and geodesy.
