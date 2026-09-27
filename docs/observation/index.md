@@ -13,3 +13,5 @@ Evaluate observing conditions and target suitability before scheduling or contro
 [Observation Scores]({% link observation/observation-scores.md %}) ranks a target from supplied altitude, sky conditions, and available time.
 
 [Weather Quality]({% link observation/weather-quality.md %}) scores the available cloud, humidity, wind, dew-margin, and rain readings.
+
+[Mount Tracking Rates]({% link observation/mount-tracking-rates.md %}) provides nominal equatorial drive rates and unit conversions.

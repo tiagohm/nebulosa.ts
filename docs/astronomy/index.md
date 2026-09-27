@@ -86,6 +86,8 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 [Weather Quality]({% link observation/weather-quality.md %}) combines available weather readings into an imaging-planning score.
 
+[Mount Tracking Rates]({% link observation/mount-tracking-rates.md %}) provides nominal equatorial drive rates and conversions among rate units.
+
 ## Imaging
 
 [Telescope Optical Estimates]({% link imaging/telescope-optical-estimates.md %}) estimates magnification, resolving limits, light collection, and eyepiece field.
