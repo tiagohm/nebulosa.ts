@@ -13,7 +13,7 @@ export const TIME_FORMAT = 'HH:mm:ss.SSS'
 // Default combined date-time pattern.
 export const DATE_TIME_FORMAT = 'YYYY-MM-DD HH:mm:ss.SSS'
 // The trailing `Z` is a literal UTC designator, not an offset token: the pattern language has no
-// timezone field. Always format with `timezone = 0`, otherwise the rendered wall-clock time is
+// timezone field. Keep the default `timezone = 0`, otherwise the rendered wall-clock time is
 // shifted into the given offset while still being tagged `Z`, mislabeling local time as UTC.
 export const ISO8601_FORMAT = 'YYYY-MM-DDTHH:mm:ss.SSSZ'
 
@@ -320,8 +320,8 @@ export function parseTemporal(input: string, pattern: string): Temporal {
 // Local timezone offset from UTC in minutes (east-positive), captured once at module load.
 export const TIMEZONE = -new Date().getTimezoneOffset()
 
-// Formats a UTC timestamp using a fixed-width pattern.
-export function formatTemporalFromPattern(temporal: Temporal | ReturnType<typeof temporalToDate>, pattern: string, timezone: number = TIMEZONE) {
+// Formats a UTC timestamp using a fixed-width pattern, with an optional offset in minutes east of UTC.
+export function formatTemporalFromPattern(temporal: Temporal | ReturnType<typeof temporalToDate>, pattern: string, timezone: number = 0) {
 	const tokens = tokenizePattern(pattern)
 	const output: string[] = []
 
