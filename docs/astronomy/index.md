@@ -95,3 +95,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Time-Domain Event Search]({% link astronomy/time-domain-event-search.md %}) brackets and refines zero crossings of a continuous time-dependent scalar.
 
 [Time-Domain Extrema Search]({% link astronomy/time-domain-extrema-search.md %}) locates sampled local minima and maxima of a time-dependent scalar.
+
+[Planetary Disk Transits]({% link astronomy/planetary-disk-transits.md %}) predicts site-specific Mercury or Venus contacts across the Sun's disk.
