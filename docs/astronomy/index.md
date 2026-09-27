@@ -103,3 +103,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Earth Occultation of a Finite Target]({% link astronomy/earth-occultation-of-a-finite-target.md %}) tests whether the solid Earth blocks a finite observer-to-target segment.
 
 [Mutual Planetary-Satellite Events]({% link astronomy/mutual-planetary-satellite-events.md %}) finds moon-on-moon occultations and eclipses in the Jovian and Saturnian systems.
+
+[Jupiter Central Meridian]({% link astronomy/jupiter-central-meridian.md %}) reports the west-positive disk-center longitude in Systems I, II, or III.
