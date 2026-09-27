@@ -197,3 +197,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Alignment Geometry]({% link astronomy/meeus-alignment-geometry.md %}) measures separations, dates sampled great-circle crossings, and encloses compact triples.
 
 [Meeus Illuminated Fraction]({% link astronomy/meeus-illuminated-fraction.md %}) computes planetary phase angles, lit disk fractions, and bright-limb direction.
+
+[Meeus Planetary Magnitudes]({% link astronomy/meeus-planetary-magnitudes.md %}) estimates visual brightness from distances, phase, and Saturn-ring geometry.
