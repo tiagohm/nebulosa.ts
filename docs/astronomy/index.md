@@ -61,3 +61,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Carrington Rotation]({% link astronomy/carrington-rotation.md %}) assigns a mean synodic solar-rotation index to a Julian day.
 
 [Season Instants and Equation of Time]({% link astronomy/season-instants-and-equation-of-time.md %}) estimates TT season boundaries and apparent-minus-mean solar time.
+
+[Solar Saros Index]({% link astronomy/solar-saros-index.md %}) labels a modeled lunation with its van den Bergh solar Saros series.
