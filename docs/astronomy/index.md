@@ -87,3 +87,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Twilight and Darkness Windows]({% link astronomy/twilight-and-darkness-windows.md %}) finds civil, nautical, and astronomical night segments with optional lunar limits.
 
 [Hour-angle Windows]({% link astronomy/hour-angle-windows.md %}) computes fixed-target meridian offsets and future intervals inside signed hour-angle bounds.
+
+[Heliacal Events]({% link astronomy/heliacal-events.md %}) finds classical first and last visibility dates from a solar-depression criterion.
