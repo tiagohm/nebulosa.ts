@@ -13,6 +13,7 @@ sources:
 
 api:
     - ProjectionPolylineOptions
+    - LongitudeWrapMode
     - projectPolyline
     - projectPolygon
 ---

@@ -4,7 +4,7 @@ layout: default
 parent: Coordinates and Observers
 grand_parent: Astronomy
 nav_order: 230
-description: Projects spherical sky or geographic angles to a plane, inverts supported points, and splits projected paths at wraps and discontinuities.
+description: Projects spherical sky or geographic angles to azimuthal and cylindrical map planes and inverts supported points.
 
 doc_kind: topic
 
@@ -14,7 +14,6 @@ sources:
 api:
     - Projection
     - ProjectionOptions
-    - ProjectionPolylineOptions
     - LongitudeWrapMode
     - RaAxisDirection
     - YAxisDirection
@@ -44,33 +43,28 @@ api:
     - PlateCarree
     - WEB_MERCATOR_MAX_LATITUDE
     - projectMany
-    - projectPolyline
-    - projectPolygon
 ---
 
 # Sky Projections
 
-The `Projection` interface maps spherical longitude and latitude, or equatorial right ascension and declination, to planar `{ x, y }` coordinates and back. Choose a projection for the map or chart geometry you need, then use its `project` and `unproject` methods. The path helpers project batches and split lines at map seams or unsupported regions.
+The `Projection` interface maps spherical longitude and latitude, or equatorial right ascension and declination, to planar `{ x, y }` coordinates and back. Choose a projection for the map or chart geometry you need, then use its `project` and `unproject` methods. `projectMany` projects a batch of independent points.
 
 ## Basic usage
 
 ```ts
-import { Gnomonic, PlateCarree, projectPolyline } from '../src/astronomy/projections/projection';
+import { Gnomonic, PlateCarree } from '../src/astronomy/projections/projection';
 import { deg } from '../src/math/units/angle';
 
 const chart = new Gnomonic(deg(120), deg(-30), { raAxisDirection: 'west', scale: 100 });
-const pixel = chart.project(deg(121), deg(-29.5));
-if (pixel !== undefined) {
-	const recovered = chart.unproject(pixel.x, pixel.y);
-	console.log(pixel, recovered);
+const projected = chart.project(deg(121), deg(-29.5));
+if (projected !== undefined) {
+	const recovered = chart.unproject(projected.x, projected.y);
+	console.log(projected, recovered);
 }
 
 const map = new PlateCarree();
-const segments = projectPolyline(map, [
-	{ x: deg(170), y: deg(10) },
-	{ x: deg(-170), y: deg(12) },
-]);
-console.log(segments.length); // split at the longitude wrap
+const mapped = map.project(deg(170), deg(10));
+console.log(mapped);
 ```
 
 Input `longitude`/`latitude` and inverse output `x`/`y` are **radians**. For sky charts, treat longitude as right ascension and latitude as declination only when those angles already share the intended frame and epoch; projection does not reduce a coordinate. Forward output is in planar units set by `radius × scale`, both defaulting to `1`. With those defaults, the output is a normalized map coordinate, not a distance or a pixel unless the caller chooses a matching scale.
@@ -95,15 +89,14 @@ For applicable projection paths, constructor options are defaults and per-call o
 
 For cylindrical projections, `centralMeridian` defaults to zero and `longitudeWrapMode` defaults to `'pi'`; `'tau'` uses `[0, 2π)`, while `'none'` leaves the longitude delta unwrapped. The `-π` and `+π` seam values can remain distinct in `'pi'` mode. Azimuthal projections instead use their constructor center and normalize inverse longitude to `[0, 2π)`; `centralMeridian` and `longitudeWrapMode` are not their centering or output-wrap controls. `maxLatitude` and `clampLatitude` apply where a cylindrical class calls the shared latitude conditioner; Web Mercator enables clamping in its constructor. `eccentricity`, `flattening`, and `sphericalOnly` select the ellipsoid model for `EllipsoidalMercator`, rather than changing every projection family.
 
-## Batches and map seams
+## Batch projection
 
 `projectMany(projection, points, options?, out?)` projects an array whose input points store `{ x: longitude, y: latitude }` in radians. It returns the supplied `out` array when successful, growing it as needed, or `undefined` at the first unsupported point. Earlier elements may already have been written on failure, and a reused `out` longer than the input is not shortened.
 
-`projectPolyline(projection, points, options?)` returns an array of projected line segments. It can densify source segments with `maxSegmentRadians`, split at a longitude gap with `splitLongitudeGap` (default `π`), and split at a planar jump with `discontinuityThreshold`; it also breaks a line when `project` returns `undefined`. Densification interpolates the shortest longitude arc and latitude linearly. A split separates returned segments; it does not insert an exact seam intersection. `projectPolygon(projection, rings, options?)` applies that same operation to each ring and returns the segments grouped by input ring. Close a ring explicitly in the input if its closing edge must be projected.
-
-These helpers perform geometric mapping only. They do not model time, atmospheric refraction, coordinate precession, or WCS distortion.
+`projectMany` treats each point independently. For a connected line or polygon ring that crosses a map seam or projection boundary, use [Projected Paths and Polygons]({% link astronomy/coordinates-and-observers/projected-paths-and-polygons.md %}) to obtain drawable segments. Projection itself does not model time, atmospheric refraction, coordinate precession, or WCS distortion.
 
 ## Related topics
 
 - [Spherical Coordinate Conversions]({% link astronomy/coordinates-and-observers/spherical-coordinate-conversions.md %}) prepares longitude and latitude in the needed celestial axes.
 - [Constellations]({% link astronomy/coordinates-and-observers/constellations.md %}) can label sky directions before drawing them on a chart.
+- [Projected Paths and Polygons]({% link astronomy/coordinates-and-observers/projected-paths-and-polygons.md %}) handles connected map geometry across seams and gaps.
