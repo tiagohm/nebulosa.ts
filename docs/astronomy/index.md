@@ -65,3 +65,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Solar Saros Index]({% link astronomy/solar-saros-index.md %}) labels a modeled lunation with its van den Bergh solar Saros series.
 
 [Solar Eclipse Search and Classification]({% link astronomy/solar-eclipse-search-and-classification.md %}) finds and classifies a nearby eclipse using Meeus's lunation and shadow-axis series.
+
+[Lunar Parallax and Semidiameter]({% link astronomy/lunar-parallax-and-semidiameter.md %}) computes the Moon's horizontal parallax and angular size for Earth-centered or site-specific geometry.
