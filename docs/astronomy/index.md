@@ -91,3 +91,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Heliacal Events]({% link astronomy/heliacal-events.md %}) finds classical first and last visibility dates from a solar-depression criterion.
 
 [Observing Visibility Windows]({% link astronomy/observing-visibility-windows.md %}) intersects target altitude, airmass, Sun-altitude, and Moon-separation limits.
+
+[Time-Domain Event Search]({% link astronomy/time-domain-event-search.md %}) brackets and refines zero crossings of a continuous time-dependent scalar.
