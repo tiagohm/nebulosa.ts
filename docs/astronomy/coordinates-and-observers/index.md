@@ -38,3 +38,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [Differential Refraction and Atmospheric Dispersion]({% link astronomy/coordinates-and-observers/differential-refraction-and-atmospheric-dispersion.md %}) predicts chromatic separation on the sky and optionally on an image sensor.
 
 [Constellations]({% link astronomy/coordinates-and-observers/constellations.md %}) labels an equatorial direction with its IAU sky region using B1875 boundaries.
+
+[Geographic Observer]({% link astronomy/coordinates-and-observers/geographic-observer.md %}) defines a geodetic Earth site and computes its ITRS position, local sidereal time, and parallax factors.

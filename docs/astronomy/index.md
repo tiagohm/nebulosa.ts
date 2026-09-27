@@ -51,3 +51,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Differential Refraction and Atmospheric Dispersion]({% link astronomy/coordinates-and-observers/differential-refraction-and-atmospheric-dispersion.md %}) predicts wavelength-dependent angular and pixel separation.
 
 [Constellations]({% link astronomy/coordinates-and-observers/constellations.md %}) finds the IAU sky region containing an equatorial direction.
+
+[Geographic Observer]({% link astronomy/coordinates-and-observers/geographic-observer.md %}) creates a geodetic site for Earth-fixed position, sidereal time, and topocentric geometry.
