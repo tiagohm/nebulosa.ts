@@ -56,3 +56,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [Alt-Az Field Rotation]({% link astronomy/coordinates-and-observers/alt-az-field-rotation.md %}) estimates sensor field rotation, smear-limited exposures, and derotator commands.
 
 [Sky Projections]({% link astronomy/coordinates-and-observers/sky-projections.md %}) maps sky or geographic angles to a plane and splits chart paths at wraps and discontinuities.
+
+[HEALPix]({% link astronomy/coordinates-and-observers/healpix.md %}) partitions equatorial directions into pixels and queries an in-memory spatial index.

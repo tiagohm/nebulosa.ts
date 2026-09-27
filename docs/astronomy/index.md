@@ -69,3 +69,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Alt-Az Field Rotation]({% link astronomy/coordinates-and-observers/alt-az-field-rotation.md %}) calculates geometric field rotation and derotator angles for an alt-az mount.
 
 [Sky Projections]({% link astronomy/coordinates-and-observers/sky-projections.md %}) maps spherical sky or geographic coordinates to planar charts.
+
+[HEALPix]({% link astronomy/coordinates-and-observers/healpix.md %}) groups equatorial directions into pixels and searches an in-memory spatial index.
