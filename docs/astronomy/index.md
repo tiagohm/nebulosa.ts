@@ -75,3 +75,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Lunar Apsides and Nodes]({% link astronomy/lunar-apsides-and-nodes.md %}) estimates perigee, apogee, and node passages, and evaluates the mean ascending-node longitude.
 
 [Lunar Declination Extrema and Standstills]({% link astronomy/lunar-declination-extrema-and-standstills.md %}) finds monthly declination peaks and the major or minor extrema of a nodal cycle.
+
+[Stellar Space Motion]({% link astronomy/stellar-space-motion.md %}) turns catalog astrometry into a BCRS state and propagates its position to another epoch.
