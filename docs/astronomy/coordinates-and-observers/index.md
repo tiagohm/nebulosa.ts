@@ -40,3 +40,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [Constellations]({% link astronomy/coordinates-and-observers/constellations.md %}) labels an equatorial direction with its IAU sky region using B1875 boundaries.
 
 [Geographic Observer]({% link astronomy/coordinates-and-observers/geographic-observer.md %}) defines a geodetic Earth site and computes its ITRS position, local sidereal time, and parallax factors.
+
+[Geographic Sub-point]({% link astronomy/coordinates-and-observers/geographic-sub-point.md %}) converts a geocentric GCRS position to geodetic longitude, latitude, and ellipsoidal height.

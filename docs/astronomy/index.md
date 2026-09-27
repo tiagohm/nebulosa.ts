@@ -53,3 +53,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Constellations]({% link astronomy/coordinates-and-observers/constellations.md %}) finds the IAU sky region containing an equatorial direction.
 
 [Geographic Observer]({% link astronomy/coordinates-and-observers/geographic-observer.md %}) creates a geodetic site for Earth-fixed position, sidereal time, and topocentric geometry.
+
+[Geographic Sub-point]({% link astronomy/coordinates-and-observers/geographic-sub-point.md %}) finds the geodetic location beneath an Earth-centered GCRS position.

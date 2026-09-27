@@ -1878,9 +1878,8 @@ function satelliteRiseCulminationSet() {
 // Satellite Ground Track: sub-satellite geographic point.
 function satelliteGroundTrack() {
 	const [p] = sgp4(SAT_TIME, recordFromTLE(ISS_TLE))
-	const ecef = temeToItrf(p, SAT_TIME)
-	// subpoint expects a geocentric vector in Earth radii.
-	const sub = subpoint([toKilometer(ecef[0]) / EARTH_RADIUS_KM, toKilometer(ecef[1]) / EARTH_RADIUS_KM, toKilometer(ecef[2]) / EARTH_RADIUS_KM], SAT_TIME)
+	const gcrs = frameToFrame(p, TEME, ICRS, SAT_TIME)
+	const sub = subpoint(gcrs, SAT_TIME)
 	console.info('ISS sub-point lon/lat (deg):', toDeg(sub.longitude), toDeg(sub.latitude))
 }
 
