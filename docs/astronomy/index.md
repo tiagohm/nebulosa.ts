@@ -101,3 +101,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Airmass and Extinction]({% link astronomy/observing-formulas/airmass-and-extinction.md %}) estimates line-of-sight airmass, atmospheric magnitude loss, and a simple refraction correction.
 
 [Dew Point and Frost]({% link astronomy/observing-formulas/dew-point-and-frost.md %}) estimates condensation temperatures, dew margin, and dew risk from ambient conditions.
+
+[Transit Altitude and Hour Angle]({% link astronomy/observing-formulas/transit-altitude-and-hour-angle.md %}) estimates a fixed-declination target's culmination altitude and altitude-crossing hour angle.
