@@ -16,6 +16,8 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 [Sidereal Time and Earth Rotation Angle]({% link astronomy/time-and-earth-orientation/sidereal-time-and-earth-rotation-angle.md %}) evaluates equinox-based sidereal angles and CIO-based Earth rotation.
 
+[Precession, Nutation, and Obliquity]({% link astronomy/time-and-earth-orientation/precession-nutation-and-obliquity.md %}) evaluates the celestial equator and ecliptic orientations of date.
+
 [Earth Rotation and Orientation]({% link astronomy/time-and-earth-orientation/earth-rotation-and-orientation.md %}) evaluates sidereal angles and the Earth's celestial-to-terrestrial orientation at that instant.
 
 [Civil UTC Timestamps]({% link astronomy/time-and-earth-orientation/civil-utc-timestamps.md %}) handles calendar arithmetic and formatting on Unix-millisecond UTC timestamps.
