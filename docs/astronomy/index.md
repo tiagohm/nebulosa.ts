@@ -38,6 +38,8 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 [Spherical Coordinate Conversions]({% link astronomy/coordinates-and-observers/spherical-coordinate-conversions.md %}) converts sky angles and measures separation and position angle.
 
+[Angular Separation and Position Angle]({% link astronomy/coordinates-and-observers/angular-separation-and-position-angle.md %}) measures distance and bearing between two equatorial sky directions.
+
 [Angular Motion]({% link astronomy/coordinates-and-observers/angular-motion.md %}) derives direction rates, radial velocity, and sampled tracking rates.
 
 [Apparent Direction]({% link astronomy/coordinates-and-observers/apparent-direction.md %}) computes finite-target astrometric and apparent directions from supplied barycentric states.

@@ -21,6 +21,8 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 
 [Spherical Coordinate Conversions]({% link astronomy/coordinates-and-observers/spherical-coordinate-conversions.md %}) converts sky angles between equatorial, ecliptic, and Galactic axes and measures separations and position angles.
 
+[Angular Separation and Position Angle]({% link astronomy/coordinates-and-observers/angular-separation-and-position-angle.md %}) measures great-circle distance and north-through-east bearing between sky directions.
+
 [Angular Motion]({% link astronomy/coordinates-and-observers/angular-motion.md %}) derives angular and radial rates from Cartesian states or sampled sky positions.
 
 [Apparent Direction]({% link astronomy/coordinates-and-observers/apparent-direction.md %}) computes light-time-corrected astrometric and apparent directions from supplied barycentric states.
