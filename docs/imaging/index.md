@@ -11,3 +11,5 @@ description: Optical, sensor, exposure, and image-processing capabilities.
 Plan telescope and camera combinations, then work with captured or synthetic images.
 
 [Telescope Optical Estimates]({% link imaging/telescope-optical-estimates.md %}) compares focal length, resolving limits, light collection, eyepieces, and obstruction.
+
+[Image Scale and Sampling]({% link imaging/image-scale-and-sampling.md %}) relates pixel size and focal length to angular sampling and sensor field.

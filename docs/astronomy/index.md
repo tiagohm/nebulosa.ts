@@ -89,3 +89,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 ## Imaging
 
 [Telescope Optical Estimates]({% link imaging/telescope-optical-estimates.md %}) estimates magnification, resolving limits, light collection, and eyepiece field.
+
+[Image Scale and Sampling]({% link imaging/image-scale-and-sampling.md %}) estimates arcseconds per pixel, sensor field, diffraction size, and mosaic coverage.
