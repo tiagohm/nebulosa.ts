@@ -85,3 +85,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Rise, Transit, and Set]({% link astronomy/rise-transit-and-set.md %}) searches a geocentric direction for horizon crossings and upper culmination in a selected window.
 
 [Twilight and Darkness Windows]({% link astronomy/twilight-and-darkness-windows.md %}) finds civil, nautical, and astronomical night segments with optional lunar limits.
+
+[Hour-angle Windows]({% link astronomy/hour-angle-windows.md %}) computes fixed-target meridian offsets and future intervals inside signed hour-angle bounds.
