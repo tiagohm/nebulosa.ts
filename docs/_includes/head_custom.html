@@ -4,7 +4,9 @@
 			const theme = localStorage.getItem('theme');
 
 			if (theme === 'nebulosa-dark' || theme === 'nebulosa-light') {
-				jtd.setTheme(theme);
+				if (jtd.getTheme() !== theme) {
+					jtd.setTheme(theme);
+				}
 			}
 		} catch {
 			/* Keep the configured dark default when storage is unavailable. */

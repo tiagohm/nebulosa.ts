@@ -121,6 +121,16 @@ Then choose one action:
 4. Add or update a Recipe when the change is a workflow across existing topics.
 5. Leave documentation unchanged for an internal refactor that does not change a public or scientific contract.
 
+### Documentation correctness
+
+For scientific or technical documentation, verify material claims against the current implementation before publishing them. In particular, explicitly check signs and directions, units and conversions, coordinate frames and origins, epochs and time scales, defaults, concrete numerical values, validity and accuracy statements, mutation or allocation semantics, protocol boundaries, and failure or fallback behavior.
+
+A production comment, old document, issue, plan, or symbol name is supporting evidence, not authority over executable behavior.
+
+When a claim depends on control flow or delegation, inspect the relevant call path and supported input variants rather than only the public function body. Do not write an absolute claim such as "always", "never", "only", "does not", "same", or "equivalent" unless the current implementation supports that wording for the documented domain.
+
+Follow the detailed claim-verification and final-review rules in `docs/AGENTS.md`.
+
 ### Documentation verification
 
 For changes under `docs/`:
@@ -131,7 +141,7 @@ bun run docs:build
 git diff --check
 ```
 
-Prefer `bun run fmt -- <explicit paths>` when the worktree contains unrelated edits. When a documentation example depends on a library API changed in the same work, also run the closest library tests. Pure prose does not require the full TypeScript suite.
+Prefer `bun run fmt -- <explicit paths>` when the worktree contains unrelated edits. When a documentation example depends on a library API changed in the same work, also run the closest library tests. Pure prose does not require the full TypeScript suite. The site build checks structure and Jekyll syntax. It does not prove a scientific, mathematical, protocol, or numerical claim.
 
 ## Tooling
 
@@ -316,7 +326,7 @@ Before accepting a performance-sensitive change, verify complexity, allocation b
 
 Verification is proportional to the change, but the touched area must have zero introduced TypeScript errors, passing relevant tests, and no obvious correctness or performance regression.
 
-- Changes under `docs/`: `bun run fmt:check`, `bun run docs:build`, and `git diff --check`. Prefer `bun run fmt -- <explicit paths>` when unrelated edits are present. Pure prose does not require the TypeScript suite. When an example depends on a library API changed in the same work, also run the closest library tests.
+- Changes under `docs/`: `bun run fmt:check`, `bun run docs:build`, and `git diff --check`. Prefer `bun run fmt -- <explicit paths>` when unrelated edits are present. Pure prose does not require the TypeScript suite. When an example depends on a library API changed in the same work, also run the closest library tests. Verify material technical claims under `docs/AGENTS.md` before the build. The site build does not prove those claims.
 - Other documentation-only changes: format-check the touched files, validate referenced paths and commands, and run `git diff --check`.
 - TypeScript changes: run the closest targeted tests, `bun run lint`, `bun run fmt:check`, and `git diff --check`.
 - Cross-cutting shared primitives, test infrastructure, broad refactors, or high-risk numerical, or runtime changes: also run `bun test --only-failures --bail --timeout 30000 --parallel --changed`.

@@ -16,7 +16,125 @@ current source implementation
 → existing documentation
 ```
 
-Existing documentation does not override code. When code and an older page disagree, correct the page. For scientific provenance, use the standard, paper, or reference implementation already identified by the current code. When more external checking is required, prefer the standard or official implementation for that domain.
+Existing documentation does not override code. When code and an older page disagree, correct the page.
+
+Production comments are evidence, not authority. When a comment describes behavior that can be checked from executable code or tests, verify that behavior before repeating the comment in public documentation. Do not propagate a stale comment merely because it is adjacent to the implementation.
+
+Issues, implementation plans, prompts, reviews, and design descriptions are context only. They do not establish current behavior.
+
+For scientific provenance, use the standard, paper, or reference implementation already identified by the current code. When more external checking is required, prefer the standard or official implementation for that domain.
+
+A page title, a public type name, or a self-evident signature does not need the claim checks in the following verification sections.
+
+## Technical claim verification
+
+Do not write a non-obvious technical claim from memory, from a symbol name, or from a superficial reading of one function.
+
+Before publishing a material claim about any of the following, trace it to current code and, when practical, to a relevant test, executable example, or authoritative reference:
+
+- sign or direction of an offset, error, correction, derivative, axis, or rate;
+- units or unit conversion;
+- coordinate frame, origin, handedness, axis direction, or orientation;
+- epoch, equinox, calendar convention, or time scale;
+- angle wrapping or normalization;
+- default value or implicit fallback;
+- mutation, aliasing, cache behavior, or allocation;
+- clamping, extrapolation, interpolation, or normalization;
+- failure, `undefined`, exception, timeout, cancellation, or fallback behavior;
+- precision, tolerance, validity interval, approximation, or accuracy;
+- protocol representation versus public or library representation;
+- whether a function uses, bypasses, delegates to, or depends on another model, table, provider, backend, or conversion.
+
+The wording in the page must not be stronger than the evidence.
+
+If behavior is conditional on the input scale, frame, backend, options, device state, provider, or configuration, document the condition instead of describing the behavior as universal.
+
+### Signs and directed relationships
+
+For a derived relationship such as `A − B`, write the relationship explicitly while verifying it.
+
+For example, if a concrete instant shows:
+
+```text
+GPS = 00:00:00
+TAI = 00:00:19
+```
+
+then verify separately that:
+
+```text
+TAI − GPS = +19 s
+GPS − TAI = −19 s
+```
+
+A correct numeric example does not prove that the prose names the subtraction in the correct direction.
+
+Apply the same check to altitude or azimuth errors, east/west and north/south corrections, mount and polar-alignment signs, radial velocities, frame angular velocities, protocol offsets, clock offsets, image coordinate directions, and positive or negative rotation conventions.
+
+## Behavioral call-path verification
+
+When documenting what a public API does or does not use, inspect the full relevant call path rather than only the public function body. A trivial getter or constant whose body is the whole contract does not need a deeper trace.
+
+Trace delegation far enough to determine whether behavior changes with input type, input time scale, coordinate frame, backend, provider override, options, device capability, state, protocol adapter, or cache state.
+
+Do not claim that an API "does not use", "ignores", "bypasses", "always", "never", "only", "directly", or "cannot" do something unless that statement is true for every supported path covered by the documentation.
+
+If only the final stage of an operation has a property, state that narrowly.
+
+```text
+Incorrect:
+timeToUnix does not use the leap-second table.
+
+Correct:
+timeToUnix first converts non-UTC inputs to UTC; that conversion can use the
+leap-second table. The final UTC-to-counter mapping treats the UTC day as
+86400 seconds.
+```
+
+For a wrapper, dispatcher, manager, or adapter, inspect the implementation it delegates to before describing the wrapper's semantics.
+
+## Absolute and equivalence wording
+
+Treat these words as high-risk technical claims: always, never, only, all, none, same, identical, equivalent, exact, directly, does not, cannot.
+
+Before using one, check the supported domain and the non-default paths. Prefer a condition when the behavior depends on one: "For UTC input…", "With the default provider…", "When `location` is unset…", "On the manager-facing API…", "For the tabulated interval…".
+
+Use an absolute statement when the implementation establishes it for the documented domain.
+
+## High-risk claims
+
+For a claim about sign or direction, unit conversion, coordinate frame or origin, epoch or time scale, a protocol-to-public conversion, claimed numerical accuracy, or a scientific validity interval, prefer two forms of evidence when both are available:
+
+```text
+implementation + test
+implementation + authoritative reference
+implementation + independently executed example
+```
+
+If only one trustworthy form exists, state the claim conservatively. Do not imply a stronger accuracy, provenance, or universality than that evidence supports. Do not change source behavior merely to make a documentation claim easier to verify.
+
+## Representation boundaries
+
+Whenever data crosses a representation boundary, verify the contract on both sides before documenting it.
+
+```text
+public API ↔ protocol
+public API ↔ external service
+raw image ↔ processing image
+catalog or file format ↔ normalized object
+UTC, TAI, TT, and the other scales ↔ external timestamp representation
+native binding ↔ TypeScript API
+```
+
+For each material conversion, determine the incoming representation, the outgoing representation, the units, the frame or coordinate convention, the normalization, the precision loss, and the sentinel or failure representation. Do not infer one side from the other.
+
+## Defaults and overrides
+
+When an API supports a default model, provider, or backend plus overrides, document them separately.
+
+Verify which default is actually selected, where it is resolved, whether an override is copied or shared, whether cached results depend on the provider identity, and whether the override applies to every call path or only some of them.
+
+Do not describe default behavior as unconditional behavior when a public override can change it. Use wording such as "With the default provider…", "Unless `providers.dut1` is supplied…", or "The manager normalizes the backend value before exposing it…".
 
 ## Page kinds
 
@@ -98,7 +216,7 @@ Required on every topic: `title`, `layout`, `parent`, `nav_order`, `description`
 
 `sources` lists the primary implementation files that define the public capability. Include a coefficient or data file only when it materially defines that contract. Do not list transitive dependencies. Update the list when ownership moves.
 
-`api` lists the primary exported symbols whose user-facing behavior the page documents. Do not list every helper in the implementation file. Update the list when exports are renamed, removed, or moved.
+`api` is a documentation-ownership index, not an export inventory. Include a public symbol when a future change to that symbol's user-facing contract should normally cause this page to be reconsidered. Do not include a symbol solely because the page mentions it once, it is a transitive helper, it lives in a listed source file, or a test uses it incidentally. A topic may own many symbols when they form one coherent public capability, and every entry needs that ownership reason. Update the list when exports are renamed, removed, or moved.
 
 Concept pages use `doc_kind: concept`. Recipe pages use `doc_kind: recipe`. Add `sources` and `api` on those pages when specific modules or exports define the contract being stated. Category pages do not use `doc_kind`.
 
@@ -185,23 +303,56 @@ The first example is the smallest useful call sequence. Name later examples by u
 
 When an example depends on a library API changed in the same work, run the closest library tests or otherwise check the example against that API.
 
+### Concrete numerical results
+
+Every concrete numerical result shown in public documentation must be verified against the current implementation.
+
+Prefer, in order:
+
+1. a value already asserted by a current test;
+2. an existing runnable example;
+3. a small Bun snippet executed against the current source;
+4. an authoritative external reference when the documentation is explicitly describing an external standard or reference value.
+
+Do not copy a numeric value from an old page, issue, inventory, comment, or plan without checking it.
+
+When documenting a scientific relationship involving a sign, unit, frame, epoch, or time scale, verify both the numerical result and the prose interpretation of that result. A numerically correct example can still have an incorrectly described sign, direction, frame, or scale.
+
+### Example execution
+
+When a documentation snippet is intended to be executable and does not require external hardware or credentials, run it, or reduce it to a testable equivalent, before finishing the page.
+
+For a hardware, network, or external-service example that cannot be run locally, verify that every imported symbol exists, that argument order and types match the current API, that units and conversions match the current public contract, that async work and cleanup follow the implementation, and that the snippet does not imply an unsupported state transition.
+
+Do not make a snippet appear executable when essential setup has been omitted. Mark an intentionally partial snippet as partial.
+
 ## Mutation and allocation
 
 When mutation or allocation changes how the caller must use the API, state it in this form:
 
 ```markdown
-**Mutation:** in place
-**Allocation:** returns the same image; no new pixel buffer
+**Mutation:** in place\
+**Allocation:** returns the same image; no new pixel buffer\
 **Sample range:** values are not clamped
 ```
 
 ```markdown
-**Mutation:** none
-**Allocation:** allocates a new vector unless `out` is supplied
+**Mutation:** none\
+**Allocation:** allocates a new vector unless `out` is supplied\
 **Aliasing:** `out` may alias an input
 ```
 
 Omit the block when allocation is irrelevant to ordinary use. Say whether the return aliases `out`, and whether a fresh value is allocated when `out` is omitted.
+
+Note the `\` appended, it is used to break the line.
+
+### Mutation, caching, and serialization
+
+When documenting mutation, caching, aliasing, cloning, or serialization, verify the actual object-property behavior.
+
+Check, when relevant, whether the input object is mutated, whether the returned object is the same reference, whether buffers or arrays are shared, whether cache objects are shared, which properties are enumerable, what `JSON.stringify` retains, and what `structuredClone` retains or rejects.
+
+Do not infer serialization behavior from TypeScript interfaces.
 
 ## Domain contracts
 
@@ -225,11 +376,27 @@ State machine and lifecycle, caller responsibilities, required measurements or c
 
 ### Devices
 
-Connection lifecycle, capability discovery, state changes, manager units versus library units, asynchronous completion, timeout and cancellation, reconnect behavior, missing capabilities, and simulator differences.
+Document connection lifecycle, capability discovery, state changes, public manager/library-facing units, asynchronous completion, timeout and cancellation, reconnect behavior, missing capabilities, and simulator differences.
+
+When a device is reachable through more than one backend, describe the public manager contract independently from the backend-specific wire representation.
 
 ### Protocols
 
-Library-facing units, wire-facing units, framing and encoding, request/reply or event model, correlation, protocol limits, firmware or server capabilities, and disconnect/reconnect semantics. Keep protocol units out of shared manager pages when the manager already converts them.
+Distinguish these layers when they exist:
+
+1. public/library-facing API;
+2. adapter or client internal representation;
+3. protocol/wire representation.
+
+Document units and conventions at the layer where they are exposed.
+
+State library-facing units, wire-facing units, framing and encoding, request/reply or event model, correlation, protocol limits, firmware or server capabilities, and disconnect/reconnect semantics.
+
+Do not describe protocol units as manager or library units merely because the adapter receives or stores those values internally.
+
+When a manager normalizes a protocol value into the library convention, the manager page documents the library convention and the protocol page documents the conversion boundary.
+
+Boundary differences that require explicit verification include radians versus degrees, right ascension in radians versus protocol hours, AU/day versus a backend velocity unit, milliseconds versus seconds, normalized image samples versus source DN, and enum or state names versus protocol numeric codes.
 
 ### I/O and data formats
 
@@ -340,6 +507,72 @@ Put a generic warning in `warning` or `important`. Reserve `accuracy` for a scie
 This analytical model is valid for the documented interval and loses the short-period terms retained by the kernel ephemeris.
 ```
 
+### Accuracy claims
+
+Do not convert implementation provenance into an accuracy claim without evidence.
+
+"Uses ERFA `eraDtDb`" is a provenance or model statement. "Accurate to X" is an accuracy statement and needs support for X.
+
+When quoting an accuracy, a validity interval, or an error bound, determine whether it belongs to the original algorithm, this implementation, a particular input domain, or a test fixture. State that scope. Do not transfer an upstream bound to a modified implementation unless the implementation still satisfies the assumptions behind that bound.
+
+## Scientific documentation sanity check
+
+Before finishing a scientific, numerical, astrometric, imaging, or protocol topic, re-read the page for:
+
+1. units and conversions;
+2. signs and directions;
+3. frames, origins, handedness, epochs, equinoxes, and time scales;
+4. defaults, providers, fallback paths, and non-default inputs;
+5. concrete numerical values;
+6. validity and accuracy claims;
+7. mutation, aliasing, caching, and allocation when material;
+8. protocol or external-service boundaries;
+9. absolute wording such as "always", "never", "only", "same", "equivalent", "does not", and "directly".
+
+For each non-trivial statement in those categories, confirm that the exact wording is supported by the current implementation and its relevant evidence. This is a correctness pass, not a prose or style pass.
+
+## Final adversarial documentation review
+
+After writing a new topic, or materially changing a scientific or technical topic, perform a separate correctness pass whose goal is to falsify the page. Do not merely proofread it.
+
+Actively try to find a counterexample:
+
+- for every "always", "never", "only", "same", "equivalent", "does not", or "directly", test whether a non-default input changes the statement;
+- reverse every directed offset or error and confirm which subtraction or sign the code implements;
+- inspect non-default scales, frames, providers, options, backends, and device states that could alter the behavior;
+- verify every concrete numeric result;
+- confirm that units shown in tables belong to the public API layer being documented;
+- confirm that an accuracy or validity statement applies to the implementation, not merely to one fixture, example, or upstream algorithm;
+- confirm that failure and fallback language covers the actual branches;
+- confirm that a source comment used as evidence still matches executable code.
+
+If a sentence is broader than the evidence, narrow it. If a claim cannot be verified, remove it or explicitly state the uncertainty. Do not fill the gap from memory.
+
+### Scratch verification for complex topics
+
+For a complex scientific or protocol page, keep a temporary scratch checklist while authoring. Record the claim, the evidence, and whether it was verified. An example row is "TAI − GPS = +19 s at the GPS epoch", evidenced by `timeGPS` plus a test or snippet.
+
+This checklist is working material. Do not publish it and do not commit it unless the task specifically requires a provenance artifact.
+
+## Authoring workflow
+
+For a new topic or a substantial technical update:
+
+1. identify the canonical topic and page;
+2. read the primary `sources`;
+3. inspect the relevant tests and examples;
+4. identify the public `api` ownership;
+5. write the minimal reader-facing explanation;
+6. verify material technical claims as they are introduced;
+7. execute or otherwise validate concrete examples and values;
+8. inspect relevant non-default call paths;
+9. perform the scientific sanity check;
+10. perform the adversarial correctness pass;
+11. run the targeted implementation checks that support new concrete claims;
+12. run `bun run fmt:check`, `bun run docs:build`, and `git diff --check`.
+
+Do not postpone a technical check until after the whole page is written when the claim can be checked immediately. Ordinary low-risk prose does not need the two-evidence or call-path procedure.
+
 ## Site toolchain
 
 From the repository root:
@@ -356,6 +589,10 @@ The theme compresses HTML onto single lines. Inline scripts in `_includes/` must
 Generated output stays out of git: `_site/`, `.sass-cache/`, `.jekyll-cache/`, `.jekyll-metadata`, `.bundle/`, and `vendor/`.
 
 The default scheme is `nebulosa-dark`. The toggle persists only `nebulosa-dark` or `nebulosa-light` under the `theme` key. `jtd.getTheme()` returns the text after the last hyphen, so only the parsed value `light` selects `nebulosa-light`. Loud callout title colors in the theme apply to the scheme name `dark`; `nebulosa-dark` supplies its own callout title colors.
+
+Before the site build, run the targeted code, test, or snippet checks needed to support new concrete technical claims.
+
+`bun run docs:build` verifies the documentation site structure and Jekyll syntax. It does not prove that a scientific, mathematical, protocol, or numerical claim is correct.
 
 For a docs change, run:
 
