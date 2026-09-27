@@ -43,7 +43,7 @@ The named events correspond to solar longitudes **0°** (March equinox), **90°*
 
 ## Accuracy and limits
 
-The tabulated season polynomials are defined for the stated −1000 to 3000 year span. The VSOP87E refinement can evaluate other years, but its starting polynomial and solar model do not carry a documented uniform accuracy guarantee outside that interval. Neither path applies a terrestrial observing site or atmospheric refraction. For a `Time`-valued season instant in a higher-level workflow, use the library's `season` function; its representation and reduction contract are separate from these numeric JDE helpers.
+The tabulated season polynomials are defined for the stated −1000 to 3000 year span. The VSOP87E refinement can evaluate other years, but its starting polynomial and solar model do not carry a documented uniform accuracy guarantee outside that interval. Neither path applies a terrestrial observing site or atmospheric refraction. For a `Time`-valued season instant in a higher-level workflow, use the [`season` function]({% link astronomy/season-instants-and-equation-of-time.md %}); its representation and reduction contract are separate from these numeric JDE helpers.
 
 ## Related topics
 

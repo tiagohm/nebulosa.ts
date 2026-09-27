@@ -39,7 +39,7 @@ The sign is **apparent solar time minus mean solar time**. A positive result mea
 
 `eSmart(jde)` evaluates the shorter eccentricity-and-obliquity approximation without a VSOP87E solar-position evaluation. It returns an angle in radians with the same sign convention; the function does **not** normalize the result. `Sunrise.Sunrise` uses this shorter value to estimate solar noon and the surrounding events. The two formulas agree closely in the chapter test case, but the tests do not establish a uniform difference or accuracy bound across epochs.
 
-The `equationOfTime(time, apparentSunRightAscension)` function in `src/astronomy/bodies/sun.ts` has a different input contract: it takes a `Time` and an apparent solar right ascension of date, then combines Greenwich apparent sidereal time with the UT1 day fraction. Select that function when those time-scale and coordinate inputs are already part of the workflow.
+The [Season Instants and Equation of Time]({% link astronomy/season-instants-and-equation-of-time.md %}) topic documents the separate `equationOfTime(time, apparentSunRightAscension)` contract. It takes a `Time` and an apparent solar right ascension of date, then combines Greenwich apparent sidereal time with the UT1 day fraction. Select that function when those time-scale and coordinate inputs are already part of the workflow.
 
 ## Related topics
 
