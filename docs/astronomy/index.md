@@ -143,3 +143,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Uranian Satellite Theory (GUST86)]({% link astronomy/uranian-satellite-theory-gust86.md %}) evaluates analytical Uranus-centered states for five major moons.
 
 [Martian Satellite Theory (MARSSAT)]({% link astronomy/martian-satellite-theory-marssat.md %}) evaluates analytical Mars-centered states for Phobos and Deimos.
+
+[Pluto Short Analytical Theory]({% link astronomy/pluto-short-analytical-theory.md %}) estimates Pluto's heliocentric position from a short periodic series.
