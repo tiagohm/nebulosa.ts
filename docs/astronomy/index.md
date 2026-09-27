@@ -125,3 +125,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [DAF and SPK Kernels]({% link astronomy/daf-and-spk-kernels.md %}) opens NAIF binary kernels and evaluates supported center-to-target SPK segments.
 
 [Binary PCK Rotation]({% link astronomy/binary-pck-rotation.md %}) evaluates a kernel-defined body-fixed rotation and its angular rate.
+
+[SPICE Text Kernels and Frames]({% link astronomy/spice-text-kernels-and-frames.md %}) loads text kernel constants for body radii and planetary frame resolution.
