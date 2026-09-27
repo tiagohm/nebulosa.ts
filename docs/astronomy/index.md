@@ -189,3 +189,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Geocentric Planet Positions]({% link astronomy/meeus-geocentric-planet-positions.md %}) explains the heliocentric planet coordinates that feed Meeus geocentric reductions.
 
 [Meeus Apsis and Node Passages]({% link astronomy/meeus-apsis-and-node-passages.md %}) estimates planetary apsides and fixed-orbit node crossing times.
+
+[Meeus Planetary Phenomena]({% link astronomy/meeus-planetary-phenomena.md %}) estimates chapter-table conjunctions, oppositions, Mercury elongations, and a Mars station.
