@@ -113,3 +113,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Satellite Passes]({% link astronomy/satellite-passes.md %}) finds complete geometric rise, culmination, and set events for an SGP4 satellite.
 
 [Satellite Eclipses]({% link astronomy/satellite-eclipses.md %}) classifies satellite sunlight and searches intervals inside Earth's umbra or penumbra.
+
+[Satellite Visual Magnitude]({% link astronomy/satellite-visual-magnitude.md %}) estimates brightness from standard magnitude, phase geometry, range, and shadow state.
