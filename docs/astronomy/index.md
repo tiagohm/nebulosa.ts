@@ -85,3 +85,7 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Observation Scores]({% link observation/observation-scores.md %}) combines supplied target geometry, twilight, Moon interference, and duration into a planning score.
 
 [Weather Quality]({% link observation/weather-quality.md %}) combines available weather readings into an imaging-planning score.
+
+## Imaging
+
+[Telescope Optical Estimates]({% link imaging/telescope-optical-estimates.md %}) estimates magnification, resolving limits, light collection, and eyepiece field.
