@@ -64,3 +64,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [HEALPix]({% link astronomy/coordinates-and-observers/healpix.md %}) partitions equatorial directions into pixels and queries an in-memory spatial index.
 
 [Radial Velocity Correction]({% link astronomy/coordinates-and-observers/radial-velocity-correction.md %}) projects observer motion toward an ICRS source for barycentric or heliocentric spectroscopy.
+
+[Barycentric and Heliocentric Light-Time Correction]({% link astronomy/coordinates-and-observers/barycentric-and-heliocentric-light-time-correction.md %}) shifts an observed time toward a solar-system reference origin.

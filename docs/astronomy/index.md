@@ -82,6 +82,8 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 [Radial Velocity Correction]({% link astronomy/coordinates-and-observers/radial-velocity-correction.md %}) computes the observer-motion term to add to a measured stellar radial velocity.
 
+[Barycentric and Heliocentric Light-Time Correction]({% link astronomy/coordinates-and-observers/barycentric-and-heliocentric-light-time-correction.md %}) shifts a TDB observation date by its geometric path-length offset.
+
 ## Observation and Planning
 
 [Observation Scores]({% link observation/observation-scores.md %}) combines supplied target geometry, twilight, Moon interference, and duration into a planning score.
