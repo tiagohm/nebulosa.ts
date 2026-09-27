@@ -129,3 +129,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [SPICE Text Kernels and Frames]({% link astronomy/spice-text-kernels-and-frames.md %}) loads text kernel constants for body radii and planetary frame resolution.
 
 [Ephemeris Paths and Observed Positions]({% link astronomy/ephemeris-paths-and-observed-positions.md %}) composes states and distinguishes geometric, light-time, and apparent stages.
+
+[Ephemeris Path Adapters]({% link astronomy/ephemeris-path-adapters.md %}) creates compatible paths from SPK, SGP4, and surface-state providers.
