@@ -203,3 +203,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Solar disk physical ephemeris]({% link astronomy/solar-disk-physical-ephemeris.md %}) computes solar-disk orientation and approximate Carrington rotation starts.
 
 [Meeus Mars Disk]({% link astronomy/meeus-mars-disk.md %}) describes the pole, central meridian, size, and illumination of Mars's apparent disk.
+
+[Meeus Jupiter Disk]({% link astronomy/meeus-jupiter-disk.md %}) documents System I and II central meridians and Jupiter's apparent pole angle.
