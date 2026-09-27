@@ -169,3 +169,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Apparent Place of a Star]({% link astronomy/meeus-apparent-place-of-a-star.md %}) reduces a mean stellar position with Meeus precession, nutation, and annual aberration.
 
 [Meeus Parallactic Angle]({% link astronomy/meeus-parallactic-angle.md %}) evaluates chapter-style parallactic and horizon-intersection angles.
+
+[Meeus Topocentric Parallax]({% link astronomy/meeus-topocentric-parallax.md %}) shifts a geocentric Meeus body position to an observer using Earth parallax factors.
