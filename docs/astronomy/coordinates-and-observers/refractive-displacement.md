@@ -66,6 +66,7 @@ The coefficient calculation selects its optical branch for wavelengths at or bel
 ## Related topics
 
 - [Topocentric Observed Place]({% link astronomy/coordinates-and-observers/topocentric-observed-place.md %}) applies the same refraction model while converting sky directions at a site.
+- [Differential Refraction and Atmospheric Dispersion]({% link astronomy/coordinates-and-observers/differential-refraction-and-atmospheric-dispersion.md %}) compares two wavelengths and can express their separation in pixels.
 
 ## References
 

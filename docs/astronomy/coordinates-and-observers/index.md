@@ -34,3 +34,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [Topocentric Observed Place]({% link astronomy/coordinates-and-observers/topocentric-observed-place.md %}) converts stellar ICRS or CIRS directions to local observed angles with optional refraction.
 
 [Refractive Displacement]({% link astronomy/coordinates-and-observers/refractive-displacement.md %}) computes the atmospheric lift at one wavelength and converts between true and apparent altitude.
+
+[Differential Refraction and Atmospheric Dispersion]({% link astronomy/coordinates-and-observers/differential-refraction-and-atmospheric-dispersion.md %}) predicts chromatic separation on the sky and optionally on an image sensor.
