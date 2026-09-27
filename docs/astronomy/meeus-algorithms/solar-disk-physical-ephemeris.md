@@ -46,7 +46,7 @@ The implementation combines the chapter's fixed solar-axis inclination and rotat
 
 ## Carrington rotation starts
 
-`cycle(c)` takes an **integer Carrington rotation number** and returns its estimated start as a TT JDE. It uses the chapter's mean synodic period of `27.2752316` days plus periodic terms. It does not search a solar ephemeris for an observed crossing. The neighboring `carringtonRotationNumber(time)` function in `src/astronomy/bodies/sun.ts` takes a `Time` and returns a rounded rotation index from a simpler synodic-period expression; it is a different operation and uses a different epoch constant.
+`cycle(c)` takes an **integer Carrington rotation number** and returns its estimated start as a TT JDE. It uses the chapter's mean synodic period of `27.2752316` days plus periodic terms. It does not search a solar ephemeris for an observed crossing. The neighboring [Carrington Rotation]({% link astronomy/carrington-rotation.md %}) topic covers `carringtonRotationNumber(time)`, which returns a rounded rotation index from a simpler synodic-period expression with a different epoch constant.
 
 ## Accuracy and limits
 

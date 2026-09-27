@@ -57,3 +57,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Sub-Observer and Sub-Solar Points]({% link astronomy/sub-observer-and-sub-solar-points.md %}) projects the observer and Sun onto a rotating body and measures its pole angle.
 
 [Solar Parallax and Semidiameter]({% link astronomy/solar-parallax-and-semidiameter.md %}) scales solar horizontal parallax and angular radius from a Sun-observer distance.
+
+[Carrington Rotation]({% link astronomy/carrington-rotation.md %}) assigns a mean synodic solar-rotation index to a Julian day.
