@@ -89,3 +89,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Hour-angle Windows]({% link astronomy/hour-angle-windows.md %}) computes fixed-target meridian offsets and future intervals inside signed hour-angle bounds.
 
 [Heliacal Events]({% link astronomy/heliacal-events.md %}) finds classical first and last visibility dates from a solar-depression criterion.
+
+[Observing Visibility Windows]({% link astronomy/observing-visibility-windows.md %}) intersects target altitude, airmass, Sun-altitude, and Moon-separation limits.
