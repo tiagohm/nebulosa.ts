@@ -131,3 +131,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Ephemeris Paths and Observed Positions]({% link astronomy/ephemeris-paths-and-observed-positions.md %}) composes states and distinguishes geometric, light-time, and apparent stages.
 
 [Ephemeris Path Adapters]({% link astronomy/ephemeris-path-adapters.md %}) creates compatible paths from SPK, SGP4, and surface-state providers.
+
+[VSOP87E Planetary Theory]({% link astronomy/vsop87e-planetary-theory.md %}) evaluates analytical barycentric states for the Sun and eight planets.
