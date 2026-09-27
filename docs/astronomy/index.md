@@ -213,3 +213,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Saturn ring geometry]({% link astronomy/saturn-ring-geometry.md %}) gives Saturn's geocentric ring opening, pole angle, and projected outer-ring size.
 
 [Meeus Lunar Position]({% link astronomy/meeus-lunar-position.md %}) evaluates chapter 47 geocentric lunar coordinates, distance, and orbital longitudes.
+
+[Meeus Lunar Illumination]({% link astronomy/meeus-lunar-illumination.md %}) estimates geocentric lunar phase angle and lit disk fraction.
