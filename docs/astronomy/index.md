@@ -105,3 +105,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Mutual Planetary-Satellite Events]({% link astronomy/mutual-planetary-satellite-events.md %}) finds moon-on-moon occultations and eclipses in the Jovian and Saturnian systems.
 
 [Jupiter Central Meridian]({% link astronomy/jupiter-central-meridian.md %}) reports the west-positive disk-center longitude in Systems I, II, or III.
+
+[Great Red Spot Transits]({% link astronomy/great-red-spot-transits.md %}) searches for System II spot-longitude crossings on Jupiter's near-side central meridian.
