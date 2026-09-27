@@ -84,7 +84,54 @@ Project layout conventions:
 
 ## Public Documentation
 
-Public documentation lives under `docs/`. For changes affecting public APIs, observable behavior, scientific interpretation, units, frames, conventions, supported workflows, accuracy, or limitations, determine documentation impact and update the relevant documentation in the same change. Follow `docs/AGENTS.md`.
+Public documentation lives under `docs/`. The site has three page kinds:
+
+- **Concepts** hold canonical conventions shared by more than one capability.
+- **Topics** document one user-visible capability, or a closely related family.
+- **Recipes** document workflows that combine several topics.
+
+`API Reference` stays reserved for a future mechanical symbol index. A topic documents the entry points a caller needs to use the capability correctly. It does not list every export. Writing rules, front matter, navigation, and examples are in `docs/AGENTS.md`.
+
+### Documentation impact
+
+Update documentation in the same change when it changes any of the following:
+
+- a public API or its observable behavior;
+- units, frames, reference systems, or time scales;
+- sign, wrap, origin, or axis conventions;
+- accepted inputs or returned outputs;
+- the model, algorithm, or accuracy;
+- failure or undefined behavior;
+- mutation or allocation semantics;
+- protocol or device lifecycle;
+- a supported workflow;
+- an externally visible limitation.
+
+Before creating a page, search documentation that already exists:
+
+1. changed source paths, matched against topic front-matter `sources`;
+2. changed exported symbols, matched against topic front-matter `api`;
+3. titles and page text, when the capability is not found by path or symbol.
+
+Then choose one action:
+
+1. Update the topic that already owns the capability.
+2. Create a topic only when the change adds a distinct user-facing capability, or a reader would reasonably look for it on its own.
+3. Update a Concept when the change modifies a convention shared by several topics.
+4. Add or update a Recipe when the change is a workflow across existing topics.
+5. Leave documentation unchanged for an internal refactor that does not change a public or scientific contract.
+
+### Documentation verification
+
+For changes under `docs/`:
+
+```sh
+bun run fmt:check
+bun run docs:build
+git diff --check
+```
+
+Prefer `bun run fmt -- <explicit paths>` when the worktree contains unrelated edits. When a documentation example depends on a library API changed in the same work, also run the closest library tests. Pure prose does not require the full TypeScript suite.
 
 ## Tooling
 
@@ -269,7 +316,8 @@ Before accepting a performance-sensitive change, verify complexity, allocation b
 
 Verification is proportional to the change, but the touched area must have zero introduced TypeScript errors, passing relevant tests, and no obvious correctness or performance regression.
 
-- Documentation-only changes: format-check the touched files, validate referenced paths and commands, and run `git diff --check`.
+- Changes under `docs/`: `bun run fmt:check`, `bun run docs:build`, and `git diff --check`. Prefer `bun run fmt -- <explicit paths>` when unrelated edits are present. Pure prose does not require the TypeScript suite. When an example depends on a library API changed in the same work, also run the closest library tests.
+- Other documentation-only changes: format-check the touched files, validate referenced paths and commands, and run `git diff --check`.
 - TypeScript changes: run the closest targeted tests, `bun run lint`, `bun run fmt:check`, and `git diff --check`.
 - Cross-cutting shared primitives, test infrastructure, broad refactors, or high-risk numerical, or runtime changes: also run `bun test --only-failures --bail --timeout 30000 --parallel --changed`.
 - Native-binding changes: run the relevant native-backed tests and state any platform/library limitation.
