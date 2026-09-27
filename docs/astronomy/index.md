@@ -57,3 +57,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Geographic Sub-point]({% link astronomy/coordinates-and-observers/geographic-sub-point.md %}) finds the geodetic location beneath an Earth-centered GCRS position.
 
 [Location GCRS Frame]({% link astronomy/coordinates-and-observers/location-gcrs-frame.md %}) orients vectors and states on a site's north, east, and up axes.
+
+[Local Horizon Coordinates]({% link astronomy/coordinates-and-observers/local-horizon-coordinates.md %}) computes geometric azimuth and altitude from equatorial angles and local sidereal time.

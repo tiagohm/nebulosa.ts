@@ -44,3 +44,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [Geographic Sub-point]({% link astronomy/coordinates-and-observers/geographic-sub-point.md %}) converts a geocentric GCRS position to geodetic longitude, latitude, and ellipsoidal height.
 
 [Location GCRS Frame]({% link astronomy/coordinates-and-observers/location-gcrs-frame.md %}) rotates GCRS-oriented vectors and states into local north, east, and up axes.
+
+[Local Horizon Coordinates]({% link astronomy/coordinates-and-observers/local-horizon-coordinates.md %}) converts equatorial angles to geometric azimuth and altitude using a supplied local sidereal angle.
