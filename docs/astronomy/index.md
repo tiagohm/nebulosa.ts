@@ -219,3 +219,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Lunar libration and surface lighting]({% link astronomy/lunar-libration-and-surface-lighting.md %}) gives Meeus geocentric libration, subsolar coordinates, and sunlight at lunar sites.
 
 [Angular semidiameters]({% link astronomy/angular-semidiameters.md %}) estimates the apparent radii of planets, the Sun, Moon, and asteroids.
+
+[Stellar magnitude arithmetic]({% link astronomy/stellar-magnitude-arithmetic.md %}) combines stellar magnitudes, compares brightness, and applies the distance modulus.
