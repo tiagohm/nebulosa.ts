@@ -1,0 +1,14 @@
+---
+title: Coordinates and Observers
+layout: default
+parent: Astronomy
+nav_order: 20
+has_children: true
+description: Coordinate frames, transformations, and observer geometry for astronomical vectors and states.
+---
+
+# Coordinates and Observers
+
+Choose the axes and origin needed to express a position, direction, or velocity, and apply the matching transformation.
+
+[Celestial and Terrestrial Reference Frames]({% link astronomy/coordinates-and-observers/celestial-and-terrestrial-reference-frames.md %}) rotates vectors and position–velocity states among celestial, intermediate, and Earth-fixed axes without shifting their origins.

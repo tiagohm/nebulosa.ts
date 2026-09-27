@@ -21,3 +21,7 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Delta T]({% link astronomy/time-and-earth-orientation/delta-t.md %}) estimates TT − UT1 from a decimal calendar year.
 
 [Earth Orientation Parameters]({% link astronomy/time-and-earth-orientation/earth-orientation-parameters.md %}) loads IERS DUT1 and polar-motion data used by time and frame calculations.
+
+## Coordinates and Observers
+
+[Celestial and Terrestrial Reference Frames]({% link astronomy/coordinates-and-observers/celestial-and-terrestrial-reference-frames.md %}) rotates vectors and position–velocity states among celestial and Earth-fixed axes without shifting their origins.
