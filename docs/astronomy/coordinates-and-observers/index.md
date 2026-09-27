@@ -66,3 +66,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [Radial Velocity Correction]({% link astronomy/coordinates-and-observers/radial-velocity-correction.md %}) projects observer motion toward an ICRS source for barycentric or heliocentric spectroscopy.
 
 [Barycentric and Heliocentric Light-Time Correction]({% link astronomy/coordinates-and-observers/barycentric-and-heliocentric-light-time-correction.md %}) shifts an observed time toward a solar-system reference origin.
+
+[Planetary Surface Locations]({% link astronomy/coordinates-and-observers/planetary-surface-locations.md %}) builds a body-fixed site and evaluates its inertial surface state.

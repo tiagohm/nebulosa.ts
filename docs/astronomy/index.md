@@ -84,6 +84,8 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 [Barycentric and Heliocentric Light-Time Correction]({% link astronomy/coordinates-and-observers/barycentric-and-heliocentric-light-time-correction.md %}) shifts a TDB observation date by its geometric path-length offset.
 
+[Planetary Surface Locations]({% link astronomy/coordinates-and-observers/planetary-surface-locations.md %}) locates a point on a tri-axial body and evaluates its rotational position and velocity.
+
 ## Observation and Planning
 
 [Observation Scores]({% link observation/observation-scores.md %}) combines supplied target geometry, twilight, Moon interference, and duration into a planning score.
