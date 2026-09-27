@@ -223,3 +223,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Stellar magnitude arithmetic]({% link astronomy/stellar-magnitude-arithmetic.md %}) combines stellar magnitudes, compares brightness, and applies the distance modulus.
 
 [Binary-star apparent orbit]({% link astronomy/binary-star-apparent-orbit.md %}) projects visual-binary elements to position angle and angular separation.
+
+[Sundial geometry]({% link astronomy/sundial-geometry.md %}) lays out sampled hour lines for general, equatorial, horizontal, and vertical sundials.
