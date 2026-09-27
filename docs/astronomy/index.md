@@ -67,3 +67,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Equatorial Mount Geometric Pointing Errors]({% link astronomy/coordinates-and-observers/equatorial-mount-geometric-pointing-errors.md %}) applies equatorial mount coefficients and tube flexure to pointing coordinates.
 
 [Alt-Az Field Rotation]({% link astronomy/coordinates-and-observers/alt-az-field-rotation.md %}) calculates geometric field rotation and derotator angles for an alt-az mount.
+
+[Sky Projections]({% link astronomy/coordinates-and-observers/sky-projections.md %}) maps spherical sky or geographic coordinates to planar charts.
