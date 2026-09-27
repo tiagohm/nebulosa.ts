@@ -119,3 +119,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Satellite Conjunctions]({% link astronomy/satellite-conjunctions.md %}) searches physical closest approaches between two SGP4 satellites.
 
 [Satellite Trail Prediction]({% link astronomy/satellite-trail-prediction.md %}) finds geometric satellite chords across a rectangular sensor.
+
+[Local Solar Eclipse Circumstances]({% link astronomy/local-solar-eclipse-circumstances.md %}) resolves contacts, visibility, and diagram geometry for one observing site.
