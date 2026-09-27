@@ -95,3 +95,7 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Exposure and Noise Estimates]({% link imaging/exposure-and-noise-estimates.md %}) estimates SNR, dynamic range, saturation, and frame counts from supplied sensor and sky values.
 
 [Trailing and Smear Limits]({% link imaging/trailing-and-smear-limits.md %}) estimates pixel drift and blur-limited exposure durations.
+
+## Observing Formulas
+
+[Airmass and Extinction]({% link astronomy/observing-formulas/airmass-and-extinction.md %}) estimates line-of-sight airmass, atmospheric magnitude loss, and a simple refraction correction.
