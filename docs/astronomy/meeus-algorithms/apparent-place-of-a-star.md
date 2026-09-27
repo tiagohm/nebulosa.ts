@@ -51,7 +51,7 @@ Here `jde` is a numeric **TT Julian ephemeris day**, unlike the Julian-year `epo
 
 These are first-order angular corrections. The RA formulas divide by cos(declination), so use coordinates away from the celestial poles; `eclipticAberration` similarly divides by cos(latitude) and requires coordinates away from the ecliptic poles. The functions do not guard those singular regions or establish a uniform accuracy bound. Their returned coordinates do not include a terrestrial observer's location, parallax, or atmospheric refraction.
 
-For an observed catalog star at a site, use the library's stellar observed-place path, which handles a different reduction model and observer geometry. `Apparent` is a Meeus calculation rather than an ERFA observed-place reduction.
+For an observed catalog star at a site, use [Observed Catalog Star]({% link astronomy/observed-catalog-star.md %}), which handles a different reduction model and observer geometry. `Apparent` is a Meeus calculation rather than an ERFA observed-place reduction.
 
 ## Related topics
 
