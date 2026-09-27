@@ -153,3 +153,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Numerical Helpers]({% link astronomy/meeus-numerical-helpers.md %}) supplies chapter-style interpolation, fitting, iteration, and shared formulas.
 
 [Meeus Calendar]({% link astronomy/meeus-calendar.md %}) converts chapter-style calendar labels, Julian days, and modeled TT dates.
+
+[Meeus Easter Dates]({% link astronomy/meeus-easter-dates.md %}) calculates Easter Sunday in the Gregorian or Julian calendar.
