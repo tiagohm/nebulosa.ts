@@ -63,3 +63,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Local ENU and Taki Frames]({% link astronomy/coordinates-and-observers/local-enu-and-taki-frames.md %}) rotates horizontal, equatorial, and mount-local vectors through ENU axes.
 
 [Local Horizon Mask]({% link astronomy/coordinates-and-observers/local-horizon-mask.md %}) interpolates local obstructions and finds sampled path crossings.
+
+[Equatorial Mount Geometric Pointing Errors]({% link astronomy/coordinates-and-observers/equatorial-mount-geometric-pointing-errors.md %}) applies equatorial mount coefficients and tube flexure to pointing coordinates.

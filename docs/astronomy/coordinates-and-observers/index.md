@@ -50,3 +50,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [Local ENU and Taki Frames]({% link astronomy/coordinates-and-observers/local-enu-and-taki-frames.md %}) expresses horizontal, equatorial, and mount-local directions as ENU vectors.
 
 [Local Horizon Mask]({% link astronomy/coordinates-and-observers/local-horizon-mask.md %}) checks a sampled sky path against a circular minimum-altitude profile.
+
+[Equatorial Mount Geometric Pointing Errors]({% link astronomy/coordinates-and-observers/equatorial-mount-geometric-pointing-errors.md %}) predicts optical-axis offsets from mount geometry and tube flexure.
