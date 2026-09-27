@@ -48,3 +48,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [Local Horizon Coordinates]({% link astronomy/coordinates-and-observers/local-horizon-coordinates.md %}) converts equatorial angles to geometric azimuth and altitude using a supplied local sidereal angle.
 
 [Local ENU and Taki Frames]({% link astronomy/coordinates-and-observers/local-enu-and-taki-frames.md %}) expresses horizontal, equatorial, and mount-local directions as ENU vectors.
+
+[Local Horizon Mask]({% link astronomy/coordinates-and-observers/local-horizon-mask.md %}) checks a sampled sky path against a circular minimum-altitude profile.
