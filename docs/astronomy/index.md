@@ -133,3 +133,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Ephemeris Path Adapters]({% link astronomy/ephemeris-path-adapters.md %}) creates compatible paths from SPK, SGP4, and surface-state providers.
 
 [VSOP87E Planetary Theory]({% link astronomy/vsop87e-planetary-theory.md %}) evaluates analytical barycentric states for the Sun and eight planets.
+
+[ELP/MPP02 Lunar Theory]({% link astronomy/elp-mpp02-lunar-theory.md %}) evaluates the Moon's analytical geocentric state and velocity.
