@@ -199,3 +199,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Illuminated Fraction]({% link astronomy/meeus-illuminated-fraction.md %}) computes planetary phase angles, lit disk fractions, and bright-limb direction.
 
 [Meeus Planetary Magnitudes]({% link astronomy/meeus-planetary-magnitudes.md %}) estimates visual brightness from distances, phase, and Saturn-ring geometry.
+
+[Solar disk physical ephemeris]({% link astronomy/solar-disk-physical-ephemeris.md %}) computes solar-disk orientation and approximate Carrington rotation starts.
