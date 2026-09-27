@@ -24,3 +24,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [Angular Motion]({% link astronomy/coordinates-and-observers/angular-motion.md %}) derives angular and radial rates from Cartesian states or sampled sky positions.
 
 [Apparent Direction]({% link astronomy/coordinates-and-observers/apparent-direction.md %}) computes light-time-corrected astrometric and apparent directions from supplied barycentric states.
+
+[Light-Time Solution]({% link astronomy/coordinates-and-observers/light-time-solution.md %}) solves finite light travel time and returns the geometric observer-to-target vector.

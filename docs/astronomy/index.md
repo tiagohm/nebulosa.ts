@@ -37,3 +37,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Angular Motion]({% link astronomy/coordinates-and-observers/angular-motion.md %}) derives direction rates, radial velocity, and sampled tracking rates.
 
 [Apparent Direction]({% link astronomy/coordinates-and-observers/apparent-direction.md %}) computes finite-target astrometric and apparent directions from supplied barycentric states.
+
+[Light-Time Solution]({% link astronomy/coordinates-and-observers/light-time-solution.md %}) solves light travel time between moving states and returns the retarded geometric vector.
