@@ -123,3 +123,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Low-Precision Lunar Ephemeris]({% link astronomy/low-precision-lunar-ephemeris.md %}) provides an approximate geocentric lunar state in GCRS-oriented axes.
 
 [DAF and SPK Kernels]({% link astronomy/daf-and-spk-kernels.md %}) opens NAIF binary kernels and evaluates supported center-to-target SPK segments.
+
+[Binary PCK Rotation]({% link astronomy/binary-pck-rotation.md %}) evaluates a kernel-defined body-fixed rotation and its angular rate.
