@@ -173,3 +173,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Topocentric Parallax]({% link astronomy/meeus-topocentric-parallax.md %}) shifts a geocentric Meeus body position to an observer using Earth parallax factors.
 
 [Meeus Refraction Formulas]({% link astronomy/meeus-refraction-formulas.md %}) provides chapter-style scalar corrections between true and apparent altitude.
+
+[Meeus Approximate Rise, Transit, and Set]({% link astronomy/meeus-approximate-rise-transit-and-set.md %}) estimates one UT1 day's crossings and upper transit from apparent positions.
