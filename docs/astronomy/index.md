@@ -191,3 +191,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Apsis and Node Passages]({% link astronomy/meeus-apsis-and-node-passages.md %}) estimates planetary apsides and fixed-orbit node crossing times.
 
 [Meeus Planetary Phenomena]({% link astronomy/meeus-planetary-phenomena.md %}) estimates chapter-table conjunctions, oppositions, Mercury elongations, and a Mars station.
+
+[Meeus Conjunction Interpolation]({% link astronomy/meeus-conjunction-interpolation.md %}) locates coordinate conjunctions from five supplied position samples.
