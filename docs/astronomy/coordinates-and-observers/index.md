@@ -30,3 +30,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [Starlight Deflection]({% link astronomy/coordinates-and-observers/starlight-deflection.md %}) applies gravitational bending from supplied Solar System bodies to finite or stellar directions.
 
 [Annual Aberration]({% link astronomy/coordinates-and-observers/annual-aberration.md %}) shifts a natural direction using the observer's barycentric velocity.
+
+[Topocentric Observed Place]({% link astronomy/coordinates-and-observers/topocentric-observed-place.md %}) converts stellar ICRS or CIRS directions to local observed angles with optional refraction.
