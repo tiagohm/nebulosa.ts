@@ -161,3 +161,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Globe Ellipsoid]({% link astronomy/meeus-globe-ellipsoid.md %}) computes chapter-style Earth radii, parallax factors, and surface distances.
 
 [Meeus Coordinate Transforms]({% link astronomy/meeus-coordinate-transforms.md %}) converts chapter-style ecliptic, equatorial, horizontal, and B1950 Galactic angles.
+
+[Meeus Precession]({% link astronomy/meeus-precession.md %}) rotates chapter-style sky coordinates and orbital elements between Julian epochs.
