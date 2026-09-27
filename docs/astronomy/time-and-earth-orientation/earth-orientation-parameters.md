@@ -79,7 +79,7 @@ An edge value far outside a bulletin's dates can be stale, even though it is fin
 ## Related topics
 
 - [Astronomical Time Scales]({% link astronomy/time-and-earth-orientation/astronomical-time-scales.md %}) uses DUT1 for UTC and UT1 conversion.
-- [Earth Rotation and Orientation]({% link astronomy/time-and-earth-orientation/earth-rotation-and-orientation.md %}) uses UT1 and polar motion in sidereal angles and terrestrial matrices.
+- [Earth Rotation and Orientation]({% link astronomy/time-and-earth-orientation/earth-rotation-and-orientation.md %}) uses UT1 and polar motion in the terrestrial rotation matrix.
 - [Delta T]({% link astronomy/time-and-earth-orientation/delta-t.md %}) estimates TT − UT1 independently of these measured offsets.
 
 ## References

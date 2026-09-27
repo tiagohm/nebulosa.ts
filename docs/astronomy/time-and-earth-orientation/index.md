@@ -17,7 +17,7 @@ Instants on the astronomical timescales, and the Earth orientation those instant
 
 [Precession, Nutation, and Obliquity]({% link astronomy/time-and-earth-orientation/precession-nutation-and-obliquity.md %}) orients the equator and ecliptic of date in equinox or CIO axes.
 
-[Earth Rotation and Orientation]({% link astronomy/time-and-earth-orientation/earth-rotation-and-orientation.md %}) computes sidereal angles, precession and nutation, polar motion, and celestial-to-terrestrial rotations for that instant.
+[Earth Rotation and Orientation]({% link astronomy/time-and-earth-orientation/earth-rotation-and-orientation.md %}) combines celestial rotation and polar motion into Earth-fixed orientation and instantaneous spin.
 
 [Civil UTC Timestamps]({% link astronomy/time-and-earth-orientation/civil-utc-timestamps.md %}) provides Unix-millisecond calendar arithmetic and timestamp formatting for logs and applications.
 

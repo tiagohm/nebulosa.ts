@@ -62,7 +62,7 @@ The Espenak–Meeus source presents its polynomials for −1999 through +3000. T
 ## Related topics
 
 - [Astronomical Time Scales]({% link astronomy/time-and-earth-orientation/astronomical-time-scales.md %}) represents instants on TT, UT1, UTC, and the other scales.
-- [Earth Rotation and Orientation]({% link astronomy/time-and-earth-orientation/earth-rotation-and-orientation.md %}) uses UT1 for rotation angles and TT for precession and nutation.
+- [Sidereal Time and Earth Rotation Angle]({% link astronomy/time-and-earth-orientation/sidereal-time-and-earth-rotation-angle.md %}) uses UT1 for Earth rotation and TT for its celestial model.
 
 ## References
 

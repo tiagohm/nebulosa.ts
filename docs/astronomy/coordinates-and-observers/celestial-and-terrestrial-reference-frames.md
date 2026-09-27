@@ -111,7 +111,7 @@ Date-dependent frames use the time conversions and orientation providers selecte
 
 ## Related topics
 
-- [Earth Rotation and Orientation]({% link astronomy/time-and-earth-orientation/earth-rotation-and-orientation.md %}) defines the time-dependent orientation matrices and sidereal angles used here.
+- [Earth Rotation and Orientation]({% link astronomy/time-and-earth-orientation/earth-rotation-and-orientation.md %}) defines the Earth-fixed orientation and instantaneous rotation used here.
 - [Astronomical Time Scales]({% link astronomy/time-and-earth-orientation/astronomical-time-scales.md %}) describes `Time`, UTC, UT1, and TT.
 - [Earth Orientation Parameters]({% link astronomy/time-and-earth-orientation/earth-orientation-parameters.md %}) supplies the measured DUT1 and polar motion needed by terrestrial axes.
 

@@ -4,116 +4,66 @@ layout: default
 parent: Time and Earth Orientation
 grand_parent: Astronomy
 nav_order: 20
-description: Computes sidereal angles, precession and nutation, polar motion, and celestial-to-terrestrial rotations for an astronomical instant.
+description: Combines celestial rotation and polar motion into GCRS-to-ITRS orientation and instantaneous terrestrial spin.
 
 doc_kind: topic
 
 sources:
     - src/astronomy/time/time.ts
-    - src/astronomy/coordinates/erfa/erfa.ts
 
 api:
-    - greenwichApparentSiderealTime
-    - greenwichMeanSiderealTime
-    - equationOfEquinoxes
-    - earthRotationAngle
-    - meanObliquity
-    - trueObliquity
-    - nutationAngles
-    - precessionMatrix
-    - precessionNutationMatrix
-    - cirsRotationMatrix
-    - equationOfOrigins
     - pmAngles
     - pmMatrix
     - gcrsToItrsRotationMatrix
-    - trueEclipticRotation
     - instantaneousEarthRotationMatrix
     - instantaneousEarthAngularVelocity
     - PolarMotion
     - NO_POLAR_MOTION
+    - TIME_PROVIDERS
 ---
 
 # Earth Rotation and Orientation
 
-These functions evaluate the orientation of the Earth at a `Time`: Greenwich sidereal angles, precession and nutation, polar motion, and rotations between celestial and terrestrial axes. Use them when a direction or geocentric position needs an Earth-fixed orientation, or when an observing calculation needs an Earth-rotation angle.
-
-## Background
-
-Earth rotation is measured on UT1; precession, nutation, and obliquity are evaluated on TT. Each function accepts a `Time` on any supported scale and performs the required conversions. With the default providers, the angles and celestial matrices use the IAU 2006/2000A models implemented by ERFA routines in this repository.
-
-`greenwichMeanSiderealTime` (GMST) refers to the mean equinox, while `greenwichApparentSiderealTime` (GAST) refers to the true equinox. `equationOfEquinoxes` is **GAST − GMST**, normalized to (−π, π]. `earthRotationAngle` (ERA) is the CIO-based rotation angle, so it is not interchangeable with GAST in an equinox-based matrix.
-
-With the default providers, GAST, GMST, and ERA are normalized to [0, 2π). A custom provider can return a different range.
-
-The equinox-based `precessionNutationMatrix` and CIO-based `cirsRotationMatrix` use different right-ascension origins. Choose the matrix that matches the next coordinate operation. In particular, `gcrsToItrsRotationMatrix` assembles an equinox-based rotation from precession-nutation, GAST, and polar motion.
+These functions orient geocentric GCRS vectors on Earth-fixed ITRS axes at a `Time`. The full rotation combines celestial precession-nutation, Greenwich apparent sidereal time, and polar motion. The instantaneous rotation helpers provide a rate for velocity transport at the same instant.
 
 ## Basic usage
 
 ```ts
-import { earthRotationAngle, equationOfEquinoxes, gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, timeYMDHMS, Timescale } from '../src/astronomy/time/time';
+import { gcrsToItrsRotationMatrix, instantaneousEarthAngularVelocity, pmAngles, timeYMDHMS, Timescale } from '../src/astronomy/time/time';
 import { matMulVec, matTransposeMulVec } from '../src/math/linear-algebra/mat3';
 
 const instant = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC);
-const gast = greenwichApparentSiderealTime(instant); // radians
-const era = earthRotationAngle(instant); // radians
-const equinoxCorrection = equationOfEquinoxes(instant); // GAST − GMST, radians
-
 const rotation = gcrsToItrsRotationMatrix(instant);
-const itrsDirection = matMulVec(rotation, [1, 0, 0]); // unitless GCRS direction → ITRS
-const gcrsDirection = matTransposeMulVec(rotation, itrsDirection); // inverse rotation
+const itrsDirection = matMulVec(rotation, [1, 0, 0]);
+const gcrsDirection = matTransposeMulVec(rotation, itrsDirection);
+const [sPrime, x, y] = pmAngles(instant);
+const spin = instantaneousEarthAngularVelocity(instant);
+console.log({ itrsDirection, gcrsDirection, sPrime, x, y, spin });
 ```
 
-The matrix rotates a geocentric vector without translating its origin. It preserves the input's distance unit; the example uses a unitless direction. `gast`, `era`, and `equinoxCorrection` are separate angles with different reference origins.
+`rotation` is a flat, row-major 3 × 3 matrix acting on column vectors. It rotates a geocentric position or direction without changing its origin or distance unit. `pmAngles(time, pm?)` returns `[s′, x, y]` in radians: the TIO locator and polar-motion coordinates. `pmMatrix(time, pm?)` builds the associated polar-motion rotation. The `s′` model uses TT; the selected polar-motion function receives the supplied `Time`. `gcrsToItrsRotationMatrix` combines the equinox-based precession-nutation matrix, GAST, and the selected polar-motion matrix.
 
-## API
+## Polar-motion providers
 
-All angles are radians. The returned `Mat3` values are flat, row-major 3 × 3 matrices acting on column vectors through `matMulVec`. The model descriptions below apply to the default providers; `Time.providers` can replace calculations where an override is available.
+`PolarMotion` is a function `(time: Time) => [x, y]`. When `pm` is passed to `pmAngles` or `pmMatrix`, it selects that function. Otherwise they use `time.providers?.pm`, then `TIME_PROVIDERS.pm`. The default function reads the shared IERS tables; before an appropriate bulletin is loaded, its `x` and `y` are zero, which is a fallback rather than a measurement. `NO_POLAR_MOTION` explicitly supplies `[0, 0]`; it does not suppress the modeled TIO locator `s′`.
 
-| Function                              | Result and interpretation                                                                                                     |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `greenwichApparentSiderealTime(time)` | GAST from UT1 and TT.                                                                                                         |
-| `greenwichMeanSiderealTime(time)`     | GMST from UT1 and TT.                                                                                                         |
-| `equationOfEquinoxes(time)`           | Signed GAST − GMST in (−π, π].                                                                                                |
-| `earthRotationAngle(time)`            | ERA from UT1.                                                                                                                 |
-| `meanObliquity(time)`                 | Mean ecliptic obliquity from TT.                                                                                              |
-| `nutationAngles(time)`                | `[Δψ, Δε]`: nutation in longitude and obliquity from TT.                                                                      |
-| `trueObliquity(time)`                 | Mean obliquity + Δε.                                                                                                          |
-| `precessionMatrix(time)`              | GCRS-to-mean-equator-and-equinox-of-date bias-precession matrix from TT.                                                      |
-| `precessionNutationMatrix(time)`      | Equinox-based GCRS-to-true-equator-and-equinox matrix, including frame bias.                                                  |
-| `cirsRotationMatrix(time)`            | CIO-based GCRS-to-CIRS matrix from TT.                                                                                        |
-| `trueEclipticRotation(time)`          | GCRS-to-true-ecliptic-of-date rotation, using true obliquity and the precession-nutation matrix.                              |
-| `equationOfOrigins(time)`             | A **matrix**, constructed as `matRotZ(GAST − ERA) · precessionNutationMatrix(time)`; it is not the equation-of-origins angle. |
-| `pmAngles(time, pm?)`                 | `[s′, x, y]`: TIO locator and polar-motion angles. `s′` uses TT; the selected `pm` receives the supplied `Time`.              |
-| `pmMatrix(time, pm?)`                 | Polar-motion matrix built from `[s′, x, y]`.                                                                                  |
-| `gcrsToItrsRotationMatrix(time)`      | GCRS-to-ITRS rotation including precession-nutation, GAST, and polar motion.                                                  |
+`TIME_PROVIDERS` also holds the default celestial orientation and sidereal providers used by the full rotation. `Time.providers` can override applicable stages. Cached polar-motion values distinguish the selected polar-motion function. Other derived values are cached on the `Time`; use a fresh `Time` after changing providers or loading different IERS data. Treat returned cached matrices and angle tuples as read-only because mutation affects later reads of that `Time`.
 
-`pm` is a `PolarMotion` function `(time: Time) => [x, y]`. `NO_POLAR_MOTION` supplies `[0, 0]`; it does not suppress the TIO locator `s′`. When `pm` is omitted, `pmAngles` and `pmMatrix` choose `time.providers?.pm`, then `TIME_PROVIDERS.pm`. Their caches distinguish the selected polar-motion function.
+## Instantaneous rotation rate
 
-### Rotation rate
+Let `R` be `gcrsToItrsRotationMatrix(time)`. `instantaneousEarthRotationMatrix(time)` estimates `W = (dR/dt) · Rᵀ` from a centered ±1-second difference. Its matrix elements are per day of the input `Time` scale. Multiplying `W` by an ITRS position gives the rotating-frame velocity term in the position's distance unit per day.
 
-`instantaneousEarthRotationMatrix(time)` returns `W = (dR/dt) · Rᵀ`, where `R` is `gcrsToItrsRotationMatrix(time)`. It estimates the derivative with a centered difference at ±1/86400 day in the input `Time` scale, so its elements are per day of that scale. Multiplying `W` by an ITRS position gives the rotating-frame velocity term in the position's distance unit per day.
+`instantaneousEarthAngularVelocity(time)` extracts an ITRS vector in radians per day from the antisymmetric part of `W`. For current dates with the default models, its dominant `z` component is positive. With the row-major matrix convention here, `W · r ≈ −ω × r` for smooth orientation models; finite differencing can leave a small symmetric part. Use `W` when computing the rotating-frame velocity term.
 
-`instantaneousEarthAngularVelocity(time)` extracts the Earth-rotation vector in ITRS, in radians per day of the input scale. For current dates with the default models, its dominant `z` component is positive. With the row-major matrix convention used here, `W · r ≈ −ω × r` for smooth orientation models; the difference is the symmetric part introduced by the finite difference. Use `W` when the desired quantity is the rotating-frame velocity term.
+## Accuracy and limits
 
-## Providers and cached results
+The default celestial rotation uses the bundled ERFA IAU 2006/2000A implementation. Earth-fixed accuracy also depends on the selected UT1 − UTC and polar-motion data. Without current Earth-orientation parameters, the default UT1 − UTC and polar-motion values fall back to zero; no measured-orientation accuracy follows from that result.
 
-`Time.providers` can replace GAST, GMST, ERA, obliquity, nutation, precession, precession-nutation, the TIO locator, the polar-motion function, and the polar-motion matrix. Unspecified fields use `TIME_PROVIDERS`. The default orientation providers call ERFA `eraGst06a`, `eraGmst06`, `eraEra00`, `eraObl06`, `eraNut06a`, `eraPmat06`, `eraPnm06a`, `eraSp00`, and `eraPom00`. `cirsRotationMatrix` calls `eraC2i06a` on TT directly; overriding `pnm` does not replace that CIRS calculation.
-
-The default polar-motion function reads the shared IERS tables. Before a bulletin is loaded, its `x` and `y` are zero, and the default UT1 − UTC offset is zero. Thus an unloaded table provides a model fallback, not a measured Earth orientation. Load the needed Earth-orientation data and set provider overrides before evaluating the rotation. Derived values are cached on the `Time`; use a fresh `Time` after changing providers or loading different IERS data.
-
-## Accuracy and limitations
-
-{: .accuracy }
-With the default providers, the celestial models are the bundled ERFA IAU 2006/2000A implementations. The orientation also depends on the supplied UT1 − UTC and polar-motion data. No overall accuracy bound is assigned here to an orientation computed without current Earth-orientation parameters.
-
-{: .important }
-`gcrsToItrsRotationMatrix` returns a cached matrix. Treat it and the other cached matrices and angle tuples as read-only; mutating one changes later results read from the same `Time`.
+The position rotation alone does not transport a full position–velocity state. Use the frame transformation API when the source or destination axes rotate and the velocity term matters.
 
 ## Related topics
 
-- [Astronomical Time Scales]({% link astronomy/time-and-earth-orientation/astronomical-time-scales.md %}) explains `Time`, UT1, TT, and provider storage.
-
-## References
-
-- The bundled ERFA/SOFA routines `eraGst06a`, `eraGmst06`, `eraEra00`, `eraPnm06a`, `eraC2i06a`, and `eraC2teqx` implement the orientation models and matrix composition described here.
+- [Sidereal Time and Earth Rotation Angle]({% link astronomy/time-and-earth-orientation/sidereal-time-and-earth-rotation-angle.md %}) explains GAST, GMST, and ERA.
+- [Precession, Nutation, and Obliquity]({% link astronomy/time-and-earth-orientation/precession-nutation-and-obliquity.md %}) supplies the celestial orientation.
+- [Earth Orientation Parameters]({% link astronomy/time-and-earth-orientation/earth-orientation-parameters.md %}) loads the IERS data for UT1 − UTC and polar motion.
+- [Celestial and Terrestrial Reference Frames]({% link astronomy/coordinates-and-observers/celestial-and-terrestrial-reference-frames.md %}) transports vectors and full states.
