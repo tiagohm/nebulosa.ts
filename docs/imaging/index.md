@@ -15,3 +15,5 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 [Image Scale and Sampling]({% link imaging/image-scale-and-sampling.md %}) relates pixel size and focal length to angular sampling and sensor field.
 
 [Exposure and Noise Estimates]({% link imaging/exposure-and-noise-estimates.md %}) estimates electron-budget SNR, stacking gain, dynamic range, and frame counts.
+
+[Trailing and Smear Limits]({% link imaging/trailing-and-smear-limits.md %}) converts angular motion into pixel blur and exposure limits.
