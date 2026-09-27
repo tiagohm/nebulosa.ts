@@ -151,3 +151,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Astrometric Sample-Grid Interpolation]({% link astronomy/astrometric-sample-grid-interpolation.md %}) evaluates sky directions between sampled image pixels.
 
 [Meeus Numerical Helpers]({% link astronomy/meeus-numerical-helpers.md %}) supplies chapter-style interpolation, fitting, iteration, and shared formulas.
+
+[Meeus Calendar]({% link astronomy/meeus-calendar.md %}) converts chapter-style calendar labels, Julian days, and modeled TT dates.
