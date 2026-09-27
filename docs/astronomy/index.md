@@ -53,3 +53,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Astrometric Sample-Grid Interpolation]({% link astronomy/astrometric-sample-grid-interpolation.md %}) evaluates sky directions between sampled image pixels.
 
 [IAU Body Orientation]({% link astronomy/iau-body-orientation.md %}) evaluates cartographic pole and prime-meridian models and builds body-fixed frames.
+
+[Sub-Observer and Sub-Solar Points]({% link astronomy/sub-observer-and-sub-solar-points.md %}) projects the observer and Sun onto a rotating body and measures its pole angle.
