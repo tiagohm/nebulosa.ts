@@ -135,3 +135,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [VSOP87E Planetary Theory]({% link astronomy/vsop87e-planetary-theory.md %}) evaluates analytical barycentric states for the Sun and eight planets.
 
 [ELP/MPP02 Lunar Theory]({% link astronomy/elp-mpp02-lunar-theory.md %}) evaluates the Moon's analytical geocentric state and velocity.
+
+[Galilean Satellite Theory (L1.2)]({% link astronomy/galilean-satellite-theory-l12.md %}) evaluates analytical Jupiter-centered states for the four Galilean moons.
