@@ -75,3 +75,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 ## Observation and Planning
 
 [Observation Scores]({% link observation/observation-scores.md %}) combines supplied target geometry, twilight, Moon interference, and duration into a planning score.
+
+[Weather Quality]({% link observation/weather-quality.md %}) combines available weather readings into an imaging-planning score.
