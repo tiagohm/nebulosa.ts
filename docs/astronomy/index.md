@@ -159,3 +159,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Sidereal Time]({% link astronomy/meeus-sidereal-time.md %}) evaluates chapter-style Greenwich sidereal time in seconds of time.
 
 [Meeus Globe Ellipsoid]({% link astronomy/meeus-globe-ellipsoid.md %}) computes chapter-style Earth radii, parallax factors, and surface distances.
+
+[Meeus Coordinate Transforms]({% link astronomy/meeus-coordinate-transforms.md %}) converts chapter-style ecliptic, equatorial, horizontal, and B1950 Galactic angles.
