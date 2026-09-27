@@ -103,3 +103,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Dew Point and Frost]({% link astronomy/observing-formulas/dew-point-and-frost.md %}) estimates condensation temperatures, dew margin, and dew risk from ambient conditions.
 
 [Transit Altitude and Hour Angle]({% link astronomy/observing-formulas/transit-altitude-and-hour-angle.md %}) estimates a fixed-declination target's culmination altitude and altitude-crossing hour angle.
+
+[Angular Size and Planning Magnitudes]({% link astronomy/observing-formulas/angular-size-and-planning-magnitudes.md %}) estimates apparent size, mean surface brightness, and simple comet and asteroid magnitudes.

@@ -16,3 +16,5 @@ Use compact estimates for atmospheric conditions and target geometry when planni
 [Dew Point and Frost]({% link astronomy/observing-formulas/dew-point-and-frost.md %}) estimates condensation temperatures and a dew-risk score from ambient conditions.
 
 [Transit Altitude and Hour Angle]({% link astronomy/observing-formulas/transit-altitude-and-hour-angle.md %}) estimates culmination altitude and geometric altitude crossings.
+
+[Angular Size and Planning Magnitudes]({% link astronomy/observing-formulas/angular-size-and-planning-magnitudes.md %}) estimates apparent size, mean surface brightness, and simple small-body magnitudes.
