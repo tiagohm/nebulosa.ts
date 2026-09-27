@@ -28,3 +28,5 @@ Choose the axes and origin needed to express a position, direction, or velocity,
 [Light-Time Solution]({% link astronomy/coordinates-and-observers/light-time-solution.md %}) solves finite light travel time and returns the geometric observer-to-target vector.
 
 [Starlight Deflection]({% link astronomy/coordinates-and-observers/starlight-deflection.md %}) applies gravitational bending from supplied Solar System bodies to finite or stellar directions.
+
+[Annual Aberration]({% link astronomy/coordinates-and-observers/annual-aberration.md %}) shifts a natural direction using the observer's barycentric velocity.

@@ -41,3 +41,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Light-Time Solution]({% link astronomy/coordinates-and-observers/light-time-solution.md %}) solves light travel time between moving states and returns the retarded geometric vector.
 
 [Starlight Deflection]({% link astronomy/coordinates-and-observers/starlight-deflection.md %}) models gravitational bending from supplied Solar System bodies.
+
+[Annual Aberration]({% link astronomy/coordinates-and-observers/annual-aberration.md %}) corrects a source direction for the observer's velocity.

@@ -82,3 +82,4 @@ The default `aberration: true` requires `sun`; omitting it throws. Set `aberrati
 - [Celestial and Terrestrial Reference Frames]({% link astronomy/coordinates-and-observers/celestial-and-terrestrial-reference-frames.md %}) covers rotations into other reference axes.
 - [Spherical Coordinate Conversions]({% link astronomy/coordinates-and-observers/spherical-coordinate-conversions.md %}) converts a Cartesian direction to sky angles.
 - [Starlight Deflection]({% link astronomy/coordinates-and-observers/starlight-deflection.md %}) explains finite-source and star-at-infinity bending by supplied bodies.
+- [Annual Aberration]({% link astronomy/coordinates-and-observers/annual-aberration.md %}) explains the velocity-dependent final correction.

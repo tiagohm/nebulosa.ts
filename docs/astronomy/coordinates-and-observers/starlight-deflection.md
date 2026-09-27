@@ -88,6 +88,7 @@ The limiter sets a lower bound on the denominator of the single-body deflection 
 
 - [Apparent Direction]({% link astronomy/coordinates-and-observers/apparent-direction.md %}) combines light time, finite-source deflection, and aberration.
 - [Light-Time Solution]({% link astronomy/coordinates-and-observers/light-time-solution.md %}) supplies the retarded target geometry before deflection.
+- [Annual Aberration]({% link astronomy/coordinates-and-observers/annual-aberration.md %}) applies the observer-velocity correction after deflection.
 
 ## References
 
