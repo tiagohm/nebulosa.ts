@@ -177,3 +177,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Approximate Rise, Transit, and Set]({% link astronomy/meeus-approximate-rise-transit-and-set.md %}) estimates one UT1 day's crossings and upper transit from apparent positions.
 
 [Meeus Solar Day Clock]({% link astronomy/meeus-solar-day-clock.md %}) estimates solar noon, limb events, twilight, and golden-hour boundaries for a UT1 day.
+
+[Meeus Solar Coordinates]({% link astronomy/meeus-solar-coordinates.md %}) evaluates short and VSOP87E geocentric solar positions and vectors.
