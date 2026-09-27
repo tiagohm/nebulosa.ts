@@ -73,3 +73,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Lunar Eclipse Search]({% link astronomy/lunar-eclipse-search.md %}) estimates a nearby lunar eclipse's global TT contacts and shadow geometry.
 
 [Lunar Apsides and Nodes]({% link astronomy/lunar-apsides-and-nodes.md %}) estimates perigee, apogee, and node passages, and evaluates the mean ascending-node longitude.
+
+[Lunar Declination Extrema and Standstills]({% link astronomy/lunar-declination-extrema-and-standstills.md %}) finds monthly declination peaks and the major or minor extrema of a nodal cycle.
