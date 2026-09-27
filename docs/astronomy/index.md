@@ -215,3 +215,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Lunar Position]({% link astronomy/meeus-lunar-position.md %}) evaluates chapter 47 geocentric lunar coordinates, distance, and orbital longitudes.
 
 [Meeus Lunar Illumination]({% link astronomy/meeus-lunar-illumination.md %}) estimates geocentric lunar phase angle and lit disk fraction.
+
+[Lunar libration and surface lighting]({% link astronomy/lunar-libration-and-surface-lighting.md %}) gives Meeus geocentric libration, subsolar coordinates, and sunlight at lunar sites.
