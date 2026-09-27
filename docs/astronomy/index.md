@@ -167,3 +167,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Meeus Nutation and Obliquity]({% link astronomy/meeus-nutation-and-obliquity.md %}) evaluates chapter-style nutation angles and mean obliquity.
 
 [Meeus Apparent Place of a Star]({% link astronomy/meeus-apparent-place-of-a-star.md %}) reduces a mean stellar position with Meeus precession, nutation, and annual aberration.
+
+[Meeus Parallactic Angle]({% link astronomy/meeus-parallactic-angle.md %}) evaluates chapter-style parallactic and horizon-intersection angles.
