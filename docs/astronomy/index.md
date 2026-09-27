@@ -79,3 +79,5 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 [Stellar Space Motion]({% link astronomy/stellar-space-motion.md %}) turns catalog astrometry into a BCRS state and propagates its position to another epoch.
 
 [Observed Catalog Star]({% link astronomy/observed-catalog-star.md %}) reduces catalog position and motion to observed equatorial and horizon angles for a site.
+
+[Planetary Apparent Magnitudes (Mallama and Hilton)]({% link astronomy/planetary-apparent-magnitudes-mallama-and-hilton.md %}) estimates visual brightness from geometric Sun, planet, and observer vectors.

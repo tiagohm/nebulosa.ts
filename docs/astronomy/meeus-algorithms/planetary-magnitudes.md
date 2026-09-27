@@ -49,7 +49,7 @@ For Saturn, `SaturnRing.ring(jde)` supplies `B` and `deltaU` as the **first and 
 
 ## Accuracy and limits
 
-These are historical empirical visual-magnitude relations. The implementation does not provide an accuracy interval, observational error model, or wavelength-specific flux. The older and `*84` formulas have different coefficients and, for Jupiter, different input contracts. They are a separate model from the vector-based **Mallama and Hilton** planetary apparent-magnitude calculations elsewhere in the library; do not mix their outputs as if they shared one calibration.
+These are historical empirical visual-magnitude relations. The implementation does not provide an accuracy interval, observational error model, or wavelength-specific flux. The older and `*84` formulas have different coefficients and, for Jupiter, different input contracts. They are a separate model from the vector-based [Planetary Apparent Magnitudes (Mallama and Hilton)]({% link astronomy/planetary-apparent-magnitudes-mallama-and-hilton.md %}) calculations; do not mix their outputs as if they shared one calibration.
 
 For a phase angle or illuminated fraction from scalar geometry, see [Meeus Illuminated Fraction]({% link astronomy/meeus-algorithms/illuminated-fraction.md %}). The phase angle is in radians when passed here; its illuminated fraction is a different, dimensionless quantity.
 
