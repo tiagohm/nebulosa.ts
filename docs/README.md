@@ -1,14 +1,58 @@
+Welcome. Nebulosa is a Bun-first, ESM-only TypeScript toolkit for numerical astronomy, astrophotography, imaging, I/O, and observatory control.
+
 # 🚀 Installation
 
-Edit your `package.json`:
+Nebulosa runs on [Bun](https://bun.com). Install it from the Git repository; Bun fetches that repository directly. Imports use the path under `nebulosa/src/` and omit the `.ts` extension.
+
+## Requirements
+
+Install [Bun](https://bun.com/docs/installation), then add Nebulosa to a project that imports ESM.
+
+## Add the package
+
+```sh
+bun add --trust github:tiagohm/nebulosa.ts
+```
+
+`--trust` records `nebulosa` in `trustedDependencies`. Bun runs lifecycle scripts only for packages named there, and the postinstall is what fetches the native libraries. The command writes:
 
 ```json
 {
 	"dependencies": {
 		"nebulosa": "github:tiagohm/nebulosa.ts"
-	}
+	},
+	"trustedDependencies": ["nebulosa"]
 }
 ```
+
+Append `#` and a commit or tag to stay on one revision:
+
+```sh
+bun add --trust github:tiagohm/nebulosa.ts#<commit>
+```
+
+## Import a module
+
+```ts
+import { formatHMS, hour } from 'nebulosa/src/math/units/angle'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+// 2026-06-29 00:00:00 UTC, stored as a two-part Julian Date.
+const instant = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
+
+console.log(formatHMS(hour(12), false)) // 12:00:00
+console.log(instant.day + instant.fraction) // 2461220.5
+```
+
+## Native libraries
+
+The postinstall script saves these shared libraries under `native/` when the file is absent:
+
+- `libwcs.shared` — WCSLIB, for FITS WCS pixel and sky transforms
+- `libturbojpeg.shared` — TurboJPEG, for JPEG compression and decompression
+- `libastrometry.shared` — Astrometry.net, for local plate solving
+
+They come from [`tiagohm/nebulosa.data`](https://github.com/tiagohm/nebulosa.data), under `native/<platform>-<arch>/`. A file that is already present is left as it is. If a download fails, delete the matching `native/*.shared` file and run `bun install` again. The rest of the install still completes, and the modules that need that library stay unavailable until the file is there.
 
 # 📄 Documentation
 
@@ -32,11 +76,11 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Apparent Direction
 
-### Astrometric sample-grid interpolation
+### Astrometric Sample-Grid Interpolation
 
 ### Astronomical Time Scales
 
-### B-plane
+### B-Plane
 
 ### Barycentric and Heliocentric Light-Time Correction
 
@@ -50,7 +94,7 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Constellations
 
-### Covariance and sky-plane uncertainty
+### Covariance and Sky-Plane Uncertainty
 
 ### DAF and SPK Kernels
 
@@ -58,23 +102,23 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Dew Point and Frost
 
-### Differential orbit correction
+### Differential Orbit Correction
 
 ### Differential Refraction and Atmospheric Dispersion
 
-### Earth occultation of a finite target
+### Earth Occultation of a Finite Target
 
 ### Earth Orientation Parameters
 
 ### Earth Rotation and Orientation
 
-### ELP/MPP02 lunar theory
+### ELP/MPP02 Lunar Theory
 
 ### Ephemeris Path Adapters
 
-### Ephemeris paths and observed positions
+### Ephemeris Paths and Observed Positions
 
-### Equatorial ephemeris interpolation
+### Equatorial Ephemeris Interpolation
 
 ### Equatorial Mount Geometric Pointing Errors
 
@@ -92,17 +136,17 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### HEALPix
 
-### Heliacal events
+### Heliacal Events
 
-### Hour-angle windows
+### Hour-Angle Windows
 
 ### IAU Body Orientation
 
-### Initial orbit determination
+### Initial Orbit Determination
 
 ### Jupiter Central Meridian
 
-### Keplerian orbits and asteroid / comet propagation
+### Keplerian Orbits and Asteroid / Comet Propagation
 
 ### Light-Time Solution
 
@@ -126,11 +170,11 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Lunar Declination Extrema and Standstills
 
-### Lunar eclipse local circumstances
+### Lunar Eclipse Local Circumstances
 
 ### Lunar Eclipse Search
 
-### Lunar eclipse visibility map
+### Lunar Eclipse Visibility Map
 
 ### Lunar Parallax and Semidiameter
 
@@ -158,23 +202,23 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Meteor Visual Rates
 
-### Minimum orbit intersection distance
+### Minimum Orbit Intersection Distance
 
-### MPCORB parsing
+### MPCORB Parsing
 
-### Mutual planetary-satellite events
+### Mutual Planetary-Satellite Events
 
 ### Observed Catalog Star
 
-### Observing visibility windows
+### Observing Visibility Windows
 
-### Planetary apparent magnitudes (Mallama and Hilton)
+### Planetary Apparent Magnitudes (Mallama and Hilton)
 
-### Planetary disk transits
+### Planetary Disk Transits
 
 ### Planetary Surface Locations
 
-### Pluto short analytical theory
+### Pluto Short Analytical Theory
 
 ### Precession, Nutation, and Obliquity
 
@@ -184,7 +228,7 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Refractive Displacement
 
-### Rise, transit, and set
+### Rise, Transit, and Set
 
 ### Satellite Conjunctions
 
@@ -194,7 +238,7 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Satellite Passes
 
-### Satellite trail prediction
+### Satellite Trail Prediction
 
 ### Satellite Visual Magnitude
 
@@ -222,7 +266,7 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Starlight Deflection
 
-### Stellar and asteroidal occultations
+### Stellar and Asteroidal Occultations
 
 ### Stellar Space Motion
 
@@ -236,11 +280,11 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Transit Altitude and Hour Angle
 
-### Twilight and darkness windows
+### Twilight and Darkness Windows
 
 ### Uranian Satellite Theory (GUST86)
 
-### VSOP87E planetary theory
+### VSOP87E Planetary Theory
 
 ## 📐 Astrometry
 
@@ -272,13 +316,13 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Aberration Inspector
 
-### Arcsinh stretch
+### Arcsinh Stretch
 
 ### Automatic Background Extraction
 
 ### Background Estimate
 
-### Background neutralization
+### Background Neutralization
 
 ### Bahtinov Chromatic Comparison
 
@@ -290,7 +334,7 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Collimation Sequence Summary
 
-### Cosmetic correction
+### Cosmetic Correction
 
 ### Critical Focus Zone
 
@@ -302,7 +346,7 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Defocused Annular Geometry Analysis
 
-### Drizzle integration
+### Drizzle Integration
 
 ### Elliptical Moffat Fitting
 
@@ -324,13 +368,13 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Frame Saturation
 
-### Geometric image operations
+### Geometric Image Operations
 
 ### Global Image Normalization
 
 ### Image Arithmetic
 
-### Image calibration
+### Image Calibration
 
 ### Image Convolution
 
@@ -338,7 +382,7 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Image Scale and Sampling
 
-### Image stacking
+### Image Stacking
 
 ### Image Statistics
 
@@ -354,7 +398,7 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Photon Transfer and Read Noise
 
-### PSF filter
+### PSF Filter
 
 ### Scalar Surface Fitting
 
@@ -364,7 +408,7 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### SCNR
 
-### Screen transfer function
+### Screen Transfer Function
 
 ### Sensor Characterization
 
@@ -390,9 +434,9 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Streak Classification
 
-### Streak-aware stacking
+### Streak-Aware Stacking
 
-### Subframe selector
+### Subframe Selector
 
 ### Synthetic Bahtinov Spikes
 
@@ -410,7 +454,7 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Telescope Optical Estimates
 
-### Tone mapping
+### Tone Mapping
 
 ### Tracking Quality
 
