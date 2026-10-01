@@ -4,11 +4,11 @@
 
 # Nebulosa
 
-> Elegant astronomy for TypeScript
+> Elegant, precise astronomy for TypeScript
 
-- ESM-only TypeScript
-- Zero dependencies
-- Astronomy, astrometry, imaging, observatory and numerical
+- Astronomy, astrometry, imaging, and observatory control
+- Bun-first, ESM-only
+- No runtime dependencies
 
 [GitHub](https://github.com/tiagohm/nebulosa.ts/)
-[Get Started](#installation)
+[Get Started](#-installation)
