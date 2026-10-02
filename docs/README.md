@@ -14,7 +14,7 @@ Install [Bun](https://bun.com/docs/installation), then add Nebulosa to a project
 bun add --trust github:tiagohm/nebulosa.ts
 ```
 
-`--trust` records `nebulosa` in `trustedDependencies`. Bun runs lifecycle scripts only for packages named there, and the postinstall is what fetches the native libraries. The command writes:
+`--trust` records `nebulosa` in `trustedDependencies`. Bun runs lifecycle scripts only for packages named there, and the postinstall extracts the native libraries shipped with the package. The command writes:
 
 ```json
 {
@@ -46,13 +46,11 @@ console.log(instant.day + instant.fraction) // 2461220.5
 
 ## Native libraries
 
-The postinstall script saves these shared libraries under `native/` when the file is absent:
+The postinstall script extracts the shared libraries for this platform from zips shipped in `native/`:
 
-- `libwcs.shared` — WCSLIB, for FITS WCS pixel and sky transforms
-- `libturbojpeg.shared` — TurboJPEG, for JPEG compression and decompression
-- `libastrometry.shared` — Astrometry.net, for local plate solving
-
-They come from [`tiagohm/nebulosa.data`](https://github.com/tiagohm/nebulosa.data), under `native/<platform>-<arch>/`. A file that is already present is left as it is. If a download fails, delete the matching `native/*.shared` file and run `bun install` again. The rest of the install still completes, and the modules that need that library stay unavailable until the file is there.
+- `libwcs.shared` — WCSLIB, for FITS WCS pixel and sky transforms, from `libwcs-<platform>-<arch>.zip`
+- `libturbojpeg.shared` — TurboJPEG, for JPEG compression and decompression, from `libturbojpeg-<platform>-<arch>.zip`
+- `libastrometry.shared` — Astrometry.net, for local plate solving, from `libastrometry-<platform>-<arch>.zip`
 
 # 📄 Documentation
 
