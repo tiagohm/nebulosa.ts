@@ -15,12 +15,9 @@
 		"docs:serve": "docsify serve ./docs"
 	},
 	"devDependencies": {
+		"@types/bun": "latest",
 		"oxfmt": "latest",
 		"oxlint": "latest",
 		"oxlint-tsgolint": "latest"
-	},
-	"peerDependencies": {
-		"@types/bun": "latest",
-		"typescript": "latest"
 	}
 }
