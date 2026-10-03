@@ -1,56 +1,9 @@
-import { readSync, writeSync, closeSync } from 'fs'
-import type { FileHandle } from 'fs/promises'
+import { isSeekable, type Exhaustible, type Seekable, type Sink, type Source } from './types'
 
-// Byte-stream I/O abstractions used across the library's readers and writers. Defines the generic
-// `Sink`/`Source` contracts, and concrete adapters over Buffers, file handles, readable streams, HTTP range
-// requests, and streaming Base64, plus line/region readers, a source-to-sink pump, and a growable
-// write buffer. Sinks and sources are sequential and track a byte `position`; seekable ones support
-// repositioning. File handles share that cursor across sequential async and sync calls. This is a
-// Bun/Node runtime module: it uses Buffer, fetch, fs, and fs/promises.
-
-// A target that can flush buffered output.
-export interface Flushable {
-	// Flushes any buffered bytes to the underlying target.
-	readonly flush: () => void
-}
-
-// Runtime type guard for Flushable.
-export function isFlushable(o: object): o is Flushable {
-	return 'flush' in o && o.flush instanceof Function
-}
-
-// A stream that reports when no more data remains.
-export interface Exhaustible {
-	// True once the stream has been fully consumed.
-	readonly exhausted: boolean
-}
-
-// Runtime type guard for Exhaustible.
-export function isExhaustible(o: object): o is Exhaustible {
-	return 'exhausted' in o && typeof o.exhausted === 'boolean'
-}
-
-// A stream whose read/write cursor can be repositioned.
-export interface Seekable {
-	// Current byte offset of the cursor.
-	readonly position: number
-
-	// Moves the cursor to `position` (negative offsets count from the end where supported); returns false if rejected.
-	readonly seek: (position: number) => boolean
-}
-
-// Runtime type guard for Seekable.
-export function isSeekable(o: object): o is Seekable {
-	return 'seek' in o && o.seek instanceof Function
-}
-
-// A sequential byte target with async-compatible and synchronous write methods.
-export interface Sink {
-	// Writes `size` bytes of `chunk` starting at `offset`, decoding strings with `encoding`; returns source bytes consumed.
-	readonly write: (chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) => Promise<number> | number
-	// Synchronous counterpart of `write`. Shares the same logical cursor. Not safe to call concurrently with `write`.
-	readonly writeSync: (chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) => number
-}
+// Byte-stream adapters for Buffers, readable streams, HTTP range requests, and streaming Base64.
+// Provides read/write helpers, line decoding, source-to-sink transfer, and a growable write buffer.
+// Seekable adapters track byte positions and support repositioning. This Bun/Node runtime module
+// uses Buffer and fetch; shared contracts and file-handle adapters live in separate modules.
 
 // A seekable sink that writes into a fixed Buffer; supports negative seek offsets (from the end).
 export class BufferSink implements Sink, Seekable, Exhaustible {
@@ -93,76 +46,6 @@ export function bufferSink(buffer: Buffer) {
 	return new BufferSink(buffer)
 }
 
-// A seekable sink writing to a FileHandle over a shared logical cursor. Sequential async and sync
-// writes may be interleaved. Closes the handle on async or sync disposal.
-export class FileHandleSink implements Sink, AsyncDisposable, Disposable {
-	position = 0
-
-	constructor(readonly handle: FileHandle) {}
-
-	seek(position: number) {
-		if (position < 0) return false
-		this.position = position
-		return true
-	}
-
-	async write(chunk: string | Buffer, offset: number = 0, size?: number, encoding?: BufferEncoding) {
-		if (size === 0) return 0
-
-		if (typeof chunk === 'string')
-			if (size === undefined && offset === 0) size = (await this.handle.write(chunk, this.position, encoding)).bytesWritten
-			else if (size === undefined) size = (await this.handle.write(chunk.slice(offset), this.position, encoding)).bytesWritten
-			else if (offset === 0) size = (await this.handle.write(chunk.slice(0, size), this.position, encoding)).bytesWritten
-			else size = (await this.handle.write(chunk.slice(offset, offset + size), this.position, encoding)).bytesWritten
-		else size = (await this.handle.write(chunk, offset, size, this.position)).bytesWritten
-		this.position += size
-		return size
-	}
-
-	writeSync(chunk: string | Buffer, offset: number = 0, size?: number, encoding?: BufferEncoding) {
-		if (size === 0) return 0
-
-		if (typeof chunk === 'string')
-			if (size === undefined && offset === 0) size = writeSync(this.handle.fd, chunk, this.position, encoding)
-			else if (size === undefined) size = writeSync(this.handle.fd, chunk.slice(offset), this.position, encoding)
-			else if (offset === 0) size = writeSync(this.handle.fd, chunk.slice(0, size), this.position, encoding)
-			else size = writeSync(this.handle.fd, chunk.slice(offset, offset + size), this.position, encoding)
-		else size = writeSync(this.handle.fd, chunk, offset ?? 0, size ?? chunk.byteLength - (offset ?? 0), this.position)
-		this.position += size
-		return size
-	}
-
-	async close() {
-		return await this.handle.close()
-	}
-
-	closeSync() {
-		this.handle.fd >= 0 && closeSync(this.handle.fd)
-	}
-
-	async [Symbol.asyncDispose]() {
-		return await this.close()
-	}
-
-	[Symbol.dispose]() {
-		this.closeSync()
-	}
-}
-
-// Create a seekable sink from FileHandle.
-export function fileHandleSink(handle: FileHandle) {
-	return new FileHandleSink(handle)
-}
-
-// A sequential byte source. Returns the number of bytes actually read (0 at end of input).
-// Sources backed by asynchronous transports expose readSync but throw when it is called.
-export interface Source {
-	// Reads up to `size` bytes into `buffer` at `offset`; returns the byte count read (0 when exhausted).
-	readonly read: (buffer: Buffer, offset?: number, size?: number) => Promise<number> | number
-	// Synchronous counterpart of `read` when supported. Shares the logical cursor and cannot run concurrently with `read`.
-	readonly readSync: (buffer: Buffer, offset?: number, size?: number) => number
-}
-
 // A seekable source reading from a fixed Buffer; supports negative seek offsets (from the end).
 export class BufferSource implements Source, Seekable, Exhaustible {
 	position = 0
@@ -197,56 +80,6 @@ export class BufferSource implements Source, Seekable, Exhaustible {
 // Create a seekable source from Buffer.
 export function bufferSource(buffer: Buffer) {
 	return new BufferSource(buffer)
-}
-
-// A seekable source reading from a FileHandle over a shared logical cursor; `read`
-// and `readSync` may be interleaved sequentially but are not concurrency-safe. Closes the handle
-// on async or sync disposal.
-export class FileHandleSource implements Source, AsyncDisposable, Disposable {
-	position = 0
-
-	constructor(readonly handle: FileHandle) {}
-
-	seek(position: number) {
-		if (position < 0) return false
-		this.position = position
-		return true
-	}
-
-	async read(buffer: Buffer, offset: number = 0, size: number = buffer.byteLength - offset) {
-		if (size <= 0) return 0
-		const ret = await this.handle.read(buffer, offset, size, this.position)
-		this.position += ret.bytesRead
-		return ret.bytesRead
-	}
-
-	readSync(buffer: Buffer, offset: number = 0, size: number = buffer.byteLength - offset) {
-		if (size <= 0) return 0
-		const n = readSync(this.handle.fd, buffer, offset, size, this.position)
-		this.position += n
-		return n
-	}
-
-	async close() {
-		return await this.handle.close()
-	}
-
-	closeSync() {
-		this.handle.fd >= 0 && closeSync(this.handle.fd)
-	}
-
-	async [Symbol.asyncDispose]() {
-		return await this.close()
-	}
-
-	[Symbol.dispose]() {
-		this.closeSync()
-	}
-}
-
-// Create a seekable source from FileHandle.
-export function fileHandleSource(handle: FileHandle) {
-	return new FileHandleSource(handle)
 }
 
 // A non-seekable source adapting a web ReadableStream of byte chunks; cancels the stream on disposal.

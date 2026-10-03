@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readImageFromBuffer, readImageFromPath, readImageFromXisf } from '../../../../src/imaging/model/image'
+import { fileHandleSource } from '../../../../src/io/file'
 import { byteShuffle, byteUnshuffle, isXisf, parseXisfHeader, readXisf, writeXisf, XISF_MAX_HEADER_LENGTH, XISF_SIGNATURE, XisfImageReader, XisfImageWriter } from '../../../../src/io/formats/xisf/xisf'
-import { base64Sink, bufferSink, bufferSource, fileHandleSource, type Seekable, type Sink, type Source } from '../../../../src/io/io'
+import { base64Sink, bufferSink, bufferSource } from '../../../../src/io/io'
+import type { Sink, Source, Seekable } from '../../../../src/io/types'
 import { downloadPerTag } from '../../../download'
 import { BITPIXES, CHANNELS, saveImageAndCompareHash } from '../../../imaging/util'
 

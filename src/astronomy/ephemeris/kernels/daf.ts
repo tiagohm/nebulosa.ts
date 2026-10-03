@@ -1,4 +1,5 @@
-import { readUntil, readUntilSync, type Seekable, type Source } from '../../../io/io'
+import { readUntil, readUntilSync } from '../../../io/io'
+import type { Seekable, Source } from '../../../io/types'
 
 // Reader for NAIF DAF (Double precision Array File) containers, the binary layout underlying SPK
 // ephemeris and PCK orientation kernels. Parses the file record (endianness, summary layout, FTP

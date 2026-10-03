@@ -1,5 +1,6 @@
 import { HealpixIndex, type HealpixIndexOptions } from '../../astronomy/sky/spatial/healpix'
-import { readUntil, type Source } from '../../io/io'
+import { readUntil } from '../../io/io'
+import type { Source } from '../../io/types'
 import type { StarCatalogEntry } from './catalog'
 
 // Streaming reader and HEALPix-indexed catalog for the SAO star catalog binary format. Parses the

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { HygCatalog, type HygCatalogEntry, readHygCatalog } from '../../../src/catalogs/stars/hyg'
-import { fileHandleSource } from '../../../src/io/io'
+import { fileHandleSource } from '../../../src/io/file'
 import { deg, formatDEC, formatRA, parseAngle, toMas } from '../../../src/math/units/angle'
 import { toKilometerPerSecond } from '../../../src/math/units/velocity'
 import { downloadPerTag } from '../../download'

@@ -5,7 +5,8 @@ import { Naif } from '../../../../src/astronomy/ephemeris/kernels/naif'
 import { MultipleSpkSegment, readSpk, SPK_FRAME_J2000, Type21Segment, Type2And3Segment, Type9Segment } from '../../../../src/astronomy/ephemeris/kernels/spk'
 import { Timescale, timeYMDHMS } from '../../../../src/astronomy/time/time'
 import { AU_KM, DAYSEC, J2000 } from '../../../../src/core/constants'
-import { fileHandleSource, rangeHttpSource } from '../../../../src/io/io'
+import { fileHandleSource } from '../../../../src/io/file'
+import { rangeHttpSource } from '../../../../src/io/io'
 import { downloadPerTag } from '../../../download'
 
 await downloadPerTag('spk')

@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readDaf } from '../../../../src/astronomy/ephemeris/kernels/daf'
-import { bufferSource, fileHandleSource, type Source, type Seekable } from '../../../../src/io/io'
+import { fileHandleSource } from '../../../../src/io/file'
+import { bufferSource } from '../../../../src/io/io'
+import type { Source, Seekable } from '../../../../src/io/types'
 import { downloadPerTag } from '../../../download'
 
 await downloadPerTag('daf')

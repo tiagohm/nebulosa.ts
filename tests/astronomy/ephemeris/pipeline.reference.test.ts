@@ -21,7 +21,7 @@ import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/loc
 import { parseTLE } from '../../../src/astronomy/orbits/propagation/sgp4'
 import { tdb, Timescale, timeSubtract, timeYMDHMS, tt, utc, type Time } from '../../../src/astronomy/time/time'
 import { DAYSEC, LIGHT_TIME_AU } from '../../../src/core/constants'
-import { fileHandleSource } from '../../../src/io/io'
+import { fileHandleSource } from '../../../src/io/file'
 import { type MutVec3, type Vec3, vecAngle, vecClone, vecDistance, vecDivScalar, vecDot, vecLength, vecMinus, vecPlus } from '../../../src/math/linear-algebra/vec3'
 import { deg, toArcsec } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'

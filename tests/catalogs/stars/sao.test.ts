@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readSaoCatalog, SaoCatalog, type SaoCatalogEntry } from '../../../src/catalogs/stars/sao'
-import { bufferSource, fileHandleSource, readableStreamSource } from '../../../src/io/io'
+import { fileHandleSource } from '../../../src/io/file'
+import { bufferSource, readableStreamSource } from '../../../src/io/io'
 import { deg, formatDEC, formatRA, parseAngle, toMas } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
 

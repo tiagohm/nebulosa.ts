@@ -2,9 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { fileHandleSink, fileHandleSource } from '../../src/io/file'
 import { FitsKeywordReader, FitsKeywordWriter } from '../../src/io/formats/fits/fits'
-// oxfmt-ignore
-import { type Base64Alphabet, base64Sink, base64Source, bufferSink, bufferSource, fileHandleSink, fileHandleSource, GrowableBuffer, rangeHttpSource, readableStreamSource, readLines, readRemaining, readUntil, readUntilSync, type Sink, type Source, sourceTransferToSink, writeFullySync } from '../../src/io/io'
+import { type Base64Alphabet, base64Sink, base64Source, bufferSink, bufferSource, GrowableBuffer, rangeHttpSource, readableStreamSource, readLines, readRemaining, readUntil, readUntilSync, sourceTransferToSink, writeFullySync } from '../../src/io/io'
+import type { Sink, Source } from '../../src/io/types'
 
 test('bufferSink', () => {
 	const buffer = Buffer.allocUnsafe(16)

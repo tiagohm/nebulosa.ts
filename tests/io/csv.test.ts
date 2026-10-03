@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { type CsvRow, type ReadCsvStreamOptions, readCsv, readCsvStream, TSV_DELIMITER } from '../../src/io/csv'
-import { bufferSource, fileHandleSource } from '../../src/io/io'
+import { fileHandleSource } from '../../src/io/file'
+import { bufferSource } from '../../src/io/io'
 import { downloadPerTag } from '../download'
 
 await downloadPerTag('csv')

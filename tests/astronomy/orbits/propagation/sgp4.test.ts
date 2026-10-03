@@ -6,7 +6,8 @@ import { itrfToTemeByGmst, temeToItrfByGmst } from '../../../../src/astronomy/co
 import { type DsInitOptions, internal, type MeanElements, parseTLE, recordFromOMM, recordFromSgp4Elements, recordFromTLE, SGP4_WGS72, SGP4_WGS72_OLD, SGP4_WGS84, sgp4, type Sgp4ElementSet, type Sgp4GravityModel } from '../../../../src/astronomy/orbits/propagation/sgp4'
 import { Timescale, timeYMDHMS, tt } from '../../../../src/astronomy/time/time'
 import { DAYMIN, DEG2RAD, TAU } from '../../../../src/core/constants'
-import { fileHandleSource, readLines } from '../../../../src/io/io'
+import { fileHandleSource } from '../../../../src/io/file'
+import { readLines } from '../../../../src/io/io'
 import { toKilometer } from '../../../../src/math/units/distance'
 import { toKilometerPerSecond } from '../../../../src/math/units/velocity'
 

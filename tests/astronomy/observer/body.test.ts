@@ -14,7 +14,7 @@ import { spkEphemerisPath, bodySurfaceEphemerisPath } from '../../../src/astrono
 import { bodyShape, bodySurfaceLocation, bodySurfacePositionAndVelocity, bodySurfaceState, type BodyShape } from '../../../src/astronomy/observer/body'
 import { Timescale, time, timeShift, timeYMDHMS, toJulianDay, type Time } from '../../../src/astronomy/time/time'
 import { DAYSEC, J2000, PI, PIOVERTWO, TAU } from '../../../src/core/constants'
-import { fileHandleSource } from '../../../src/io/io'
+import { fileHandleSource } from '../../../src/io/file'
 import { type Mat3, matIdentity, matMinus, matMulScalar, matMulTranspose, matRotX, matRotZ } from '../../../src/math/linear-algebra/mat3'
 import { type MutVec3, vecCross, vecLength, vecPlus } from '../../../src/math/linear-algebra/vec3'
 import { deg, normalizeAngle, toDeg } from '../../../src/math/units/angle'

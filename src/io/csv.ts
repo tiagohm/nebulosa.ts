@@ -1,4 +1,4 @@
-import type { Source } from './io'
+import type { Source } from './types'
 
 // CSV/TSV parsing with configurable delimiters, comment markers, and quoting. `CsvLineParser` parses one
 // logical line into columns (handling quoted fields with escaped doubled quotes and embedded newlines);

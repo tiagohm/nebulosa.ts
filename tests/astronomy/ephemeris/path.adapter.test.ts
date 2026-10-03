@@ -14,7 +14,7 @@ import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/loc
 import { parseTLE, recordFromTLE, SGP4_WGS72, SGP4_WGS84, sgp4 } from '../../../src/astronomy/orbits/propagation/sgp4'
 import { Timescale, timeFromEpoch, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { DAYSEC, J2000, TAU, WGS84_RADIUS } from '../../../src/core/constants'
-import { fileHandleSource } from '../../../src/io/io'
+import { fileHandleSource } from '../../../src/io/file'
 import { vecAngle, vecClone, vecLength, vecXAxis, vecYAxis, vecZAxis, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'

@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readTextKernel, SpiceKernelPool } from '../../../../src/astronomy/ephemeris/kernels/text.kernel'
-import { bufferSource, fileHandleSource } from '../../../../src/io/io'
+import { fileHandleSource } from '../../../../src/io/file'
+import { bufferSource } from '../../../../src/io/io'
 import { downloadPerTag } from '../../../download'
 
 await downloadPerTag('text.kernel')

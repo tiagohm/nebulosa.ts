@@ -1,6 +1,6 @@
 import { HealpixIndex, type HealpixIndexOptions } from '../../astronomy/sky/spatial/healpix'
 import { readCsvStream, type CsvRow } from '../../io/csv'
-import type { Source } from '../../io/io'
+import type { Source } from '../../io/types'
 import { deg, mas, type Angle } from '../../math/units/angle'
 import type { StarCatalogEntry } from './catalog'
 

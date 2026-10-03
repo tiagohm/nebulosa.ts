@@ -5,7 +5,8 @@ import type { Writable } from '../../../core/types'
 import { validatePositiveInteger } from '../../../core/validation'
 import type { Image, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
 import { clamp, type NumberArray } from '../../../math/numerical/math'
-import { isSeekable, readUntil, type Seekable, type Sink, type Source, writeFully } from '../../io'
+import { readUntil, writeFully } from '../../io'
+import { type Source, type Seekable, type Sink, isSeekable } from '../../types'
 
 // FITS container reading and writing: parses an HDU list (header keyword cards plus data segment
 // offsets/sizes) from a seekable source and writes image HDUs back, including optional Rice tile

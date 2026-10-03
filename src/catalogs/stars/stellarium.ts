@@ -1,5 +1,5 @@
 import { HealpixIndex, type HealpixIndexOptions } from '../../astronomy/sky/spatial/healpix'
-import type { Source } from '../../io/io'
+import type { Source } from '../../io/types'
 import { deg, mas, type Angle } from '../../math/units/angle'
 import { parsec, type Distance } from '../../math/units/distance'
 import type { StarCatalogEntry } from './catalog'

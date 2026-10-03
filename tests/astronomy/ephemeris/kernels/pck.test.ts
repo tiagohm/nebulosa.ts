@@ -4,7 +4,7 @@ import { readDaf, type Daf, type Summary } from '../../../../src/astronomy/ephem
 import { MultiplePckSegment, readPck, Type2PckSegment } from '../../../../src/astronomy/ephemeris/kernels/pck'
 import { Timescale, time, timeShift, type Time } from '../../../../src/astronomy/time/time'
 import { DAYSEC, J2000, PI } from '../../../../src/core/constants'
-import { fileHandleSource } from '../../../../src/io/io'
+import { fileHandleSource } from '../../../../src/io/file'
 import { type Mat3, type MutMat3, matDeterminant, matIdentity, matMinus, matMulScalar, matMulTranspose, matRotX, matRotZ } from '../../../../src/math/linear-algebra/mat3'
 import { downloadPerTag } from '../../../download'
 import { expectNumberArrayToBeCloseTo } from '../../../util'

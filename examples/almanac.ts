@@ -52,7 +52,7 @@ import { parseTLE, recordFromTLE, sgp4 } from '../src/astronomy/orbits/propagati
 import { HealpixIndex } from '../src/astronomy/sky/spatial/healpix'
 import { deltaT } from '../src/astronomy/time/deltat'
 import { iersab, iersb } from '../src/astronomy/time/iers'
-import { fileHandleSource } from '../src/io/io'
+import { fileHandleSource } from '../src/io/file'
 import { matIdentity } from '../src/math/linear-algebra/mat3'
 import { Matrix } from '../src/math/linear-algebra/matrix'
 // oxfmt-ignore

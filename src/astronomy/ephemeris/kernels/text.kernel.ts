@@ -1,4 +1,5 @@
-import { type Source, readLines } from '../../../io/io'
+import { readLines } from '../../../io/io'
+import type { Source } from '../../../io/types'
 
 // Parser and in-memory pool for NAIF text kernels (`KPL/PCK` and `KPL/FK`).
 // Reads `\begindata` assignments as an ordered list of `=` replace and `+=` append

@@ -1,11 +1,13 @@
 import type { PathLike } from 'fs'
-import fs, { type FileHandle } from 'fs/promises'
+import { type FileHandle, open } from 'fs/promises'
 import { isJpeg, Jpeg, type PixelFormat } from '../../bindings/imaging/libturbojpeg'
 import { type Bitpix, type Fits, type FitsHdu, FitsImageReader, readFits, writeFits } from '../../io/formats/fits/fits'
 // oxfmt-ignore
 import { bitpixInBytes, cfaPatternKeyword, heightKeyword, isCompressedImageHeader, isRiceCompressedImageHeader, numberOfAxesKeyword, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, widthKeyword } from '../../io/formats/fits/util'
+import { fileHandleSource } from '../../io/file'
 import { readXisf, writeXisf, type Xisf, type XisfImage, XisfImageReader, type XisfWriteFormat } from '../../io/formats/xisf/xisf'
-import { bufferSink, bufferSource, fileHandleSource, readRemaining, readUntil, type Seekable, type Sink, type Source } from '../../io/io'
+import { bufferSink, bufferSource, readRemaining, readUntil } from '../../io/io'
+import type { Source, Seekable, Sink } from '../../io/types'
 import { clamp } from '../../math/numerical/math'
 import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, makeImageRawTypedArray, type DigitalImage, type DigitalImageReadOptions, type Image, type ImageFormat, type ImageRawPrecision, type ImageRawType, type ImageReadOptions, type ImageSampleScale, type NormalizedImageReadOptions, type WriteImageToFormatOptions } from './types'
 
@@ -253,7 +255,7 @@ export function readImageFromPath(path: PathLike, raw?: ImageRawType | ImageRawP
 export function readImageFromPath(path: PathLike, options: ImageReadOptions): Promise<Image | DigitalImage | undefined>
 
 export async function readImageFromPath(path: PathLike, argument: ImageReadArgument = 'auto'): Promise<Image | DigitalImage | undefined> {
-	await using handle = await fs.open(path, 'r')
+	await using handle = await open(path, 'r')
 	return await readImageFromFileHandle(handle, argument as ImageReadOptions)
 }
 
