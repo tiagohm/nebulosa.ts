@@ -66,19 +66,27 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Alt-Az Field Rotation
 
-### Angular Motion
+### Angular Diameter Estimates
 
 ### Angular Separation and Position Angle
-
-### Angular Size and Planning Magnitudes
 
 ### Annual Aberration
 
 ### Apparent Direction
 
+### Approximate Atmospheric Refraction
+
+### Asteroid and Comet Magnitude Estimates
+
+### Asteroid and Comet Orbit Construction
+
 ### Astrometric Sample-Grid Interpolation
 
-### Astronomical Time Scales
+### Astronomical Time Arithmetic
+
+### Astronomical Time Representation and Epochs
+
+### Astronomical Time-Scale Conversion
 
 ### B-Plane
 
@@ -94,9 +102,7 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Constellations
 
-### Covariance and Sky-Plane Uncertainty
-
-### DAF and SPK Kernels
+### DAF Binary Containers
 
 ### Delta T
 
@@ -110,13 +116,13 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Earth Orientation Parameters
 
-### Earth Rotation and Orientation
-
 ### ELP/MPP02 Lunar Theory
+
+### Ephemeris Observed Positions
 
 ### Ephemeris Path Adapters
 
-### Ephemeris Paths and Observed Positions
+### Ephemeris Path Composition
 
 ### Equatorial Ephemeris Interpolation
 
@@ -128,37 +134,59 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Galilean Satellite Theory (L1.2)
 
+### Gauss Angles-Only Orbit Determination
+
+### GCRS to ITRS Rotation
+
 ### Geographic Observer
 
 ### Geographic Sub-point
 
+### Gibbs Orbit Determination
+
 ### Great Red Spot Transits
 
-### HEALPix
+### Greatest Solar Eclipse Circumstances
+
+### HEALPix Object Index
+
+### HEALPix Pixelization and Covers
 
 ### Heliacal Events
+
+### Herrick-Gibbs Orbit Determination
 
 ### Hour-Angle Windows
 
 ### IAU Body Orientation
 
-### Initial Orbit Determination
+### Instantaneous Earth Spin
 
 ### Jupiter Central Meridian
 
-### Keplerian Orbits and Asteroid / Comet Propagation
+### Kepler Anomalies and Periapsis Timing
 
 ### Light-Time Solution
 
-### Local ENU and Taki Frames
+### Local ENU Frames
 
 ### Local Horizon Coordinates
 
 ### Local Horizon Mask
 
+### Local Lunar Eclipse Search
+
+### Local Lunar Eclipse View Geometry
+
 ### Local Solar Eclipse Circumstances
 
+### Local Solar Eclipse Search
+
+### Local Solar Eclipse View Geometry
+
 ### Local Standard of Rest Frames
+
+### Local Taki Frames
 
 ### Location GCRS Frame
 
@@ -172,9 +200,11 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Lunar Eclipse Local Circumstances
 
+### Lunar Eclipse Map SVG Paths
+
 ### Lunar Eclipse Search
 
-### Lunar Eclipse Visibility Map
+### Lunar Eclipse Visibility Geometry
 
 ### Lunar Parallax and Semidiameter
 
@@ -188,13 +218,15 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Meteor Observing Windows
 
+### Meteor Orbit Reconstruction
+
+### Meteor Orbit Similarity
+
 ### Meteor Radiants
 
 ### Meteor Shower State
 
 ### Meteor Solar Longitude
-
-### Meteor Stream Orbits
 
 ### Meteor Track Association
 
@@ -208,9 +240,17 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Mutual Planetary-Satellite Events
 
+### Nutation and Celestial Orientation
+
+### Obliquity and Ecliptic Orientation
+
 ### Observed Catalog Star
 
 ### Observing Visibility Windows
+
+### Orbit Covariance Propagation
+
+### Osculating Orbital Elements
 
 ### Planetary Apparent Magnitudes (Mallama and Hilton)
 
@@ -220,7 +260,9 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Pluto Short Analytical Theory
 
-### Precession, Nutation, and Obliquity
+### Polar Motion
+
+### Precession Matrices
 
 ### Projected Paths and Polygons
 
@@ -229,6 +271,8 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 ### Refractive Displacement
 
 ### Rise, Transit, and Set
+
+### Sampled Angular Motion
 
 ### Satellite Conjunctions
 
@@ -246,13 +290,19 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Season Instants and Equation of Time
 
-### SGP4/SDP4
+### SGP4/SDP4 Propagation
 
 ### Sidereal Time and Earth Rotation Angle
 
 ### Sky Projections
 
-### Solar Eclipse Besselian Geometry
+### Sky-Plane Uncertainty Ellipses
+
+### Solar Eclipse Besselian Elements
+
+### Solar Eclipse Ground-Track Geometry
+
+### Solar Eclipse Map SVG Paths
 
 ### Solar Eclipse Search and Classification
 
@@ -262,7 +312,15 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Spherical Coordinate Conversions
 
-### SPICE Text Kernels and Frames
+### Spherical State Rates
+
+### SPICE Body Radii
+
+### SPICE Frame Resolution
+
+### SPICE Text Kernel Pools
+
+### SPK State Kernels
 
 ### Starlight Deflection
 
@@ -272,27 +330,43 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Sub-Observer and Sub-Solar Points
 
+### Surface Brightness Estimates
+
 ### Time-Domain Event Search
 
 ### Time-Domain Extrema Search
+
+### TLE, OMM, and SGP4 Record Construction
 
 ### Topocentric Observed Place
 
 ### Transit Altitude and Hour Angle
 
+### Tube Flexure Pointing Error
+
 ### Twilight and Darkness Windows
+
+### Two-Body Kepler Propagation
 
 ### Uranian Satellite Theory (GUST86)
 
 ### VSOP87E Planetary Theory
 
+### Zenith and Celestial Circle Intersections
+
 ## 📐 Astrometry
 
 ### ASTAP Plate Solving
 
+### ASTAP Star Detection
+
 ### Astrometry.net Index Selection
 
 ### Catalog Crossmatching
+
+### FITS TAN and SIP Coordinate Mapping
+
+### FITS WCS Geometry Updates
 
 ### Local Astrometry.net Plate Solving
 
@@ -308,8 +382,6 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### WCSLIB Equatorial Projection
 
-### World Coordinate System and FITS WCS
-
 ## 🖼️ Imaging
 
 Plan telescope and camera combinations, then work with captured or synthetic images.
@@ -319,6 +391,8 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 ### Arcsinh Stretch
 
 ### Automatic Background Extraction
+
+### Backfocus Correction Estimates
 
 ### Background Estimate
 
@@ -330,11 +404,15 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Bahtinov Overlay Geometry
 
+### Bounded Robust Sampling
+
 ### Celestial Streak Tracks
 
 ### Collimation Sequence Summary
 
 ### Cosmetic Correction
+
+### Critical Focus Planning Estimate
 
 ### Critical Focus Zone
 
@@ -346,15 +424,15 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Defocused Annular Geometry Analysis
 
+### Diffraction and Seeing Sampling
+
+### Display Stretch Parameter Estimation
+
 ### Drizzle Integration
 
 ### Elliptical Moffat Fitting
 
-### Exposure and Noise Estimates
-
 ### FFT Image Filter
-
-### Field Curvature and Backfocus
 
 ### Flat Exposure Estimate
 
@@ -364,23 +442,31 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Focus Curve Fitting
 
+### Focus Field Curvature
+
 ### Focus Surface Analysis
 
 ### Frame Saturation
 
-### Geometric Image Operations
-
 ### Global Image Normalization
+
+### Grayscale Image Conversion
+
+### Image Analysis Planes
 
 ### Image Arithmetic
 
 ### Image Calibration
 
+### Image Cloning and Copying
+
 ### Image Convolution
 
-### Image Planes and Robust Sampling
+### Image Intensity Inversion
 
-### Image Scale and Sampling
+### Image Mirroring
+
+### Image Scale and Field of View
 
 ### Image Stacking
 
@@ -398,7 +484,11 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Photon Transfer and Read Noise
 
+### Pixel Sigma Clipping and Background Levels
+
 ### PSF Filter
+
+### Saturation and Sky-Limited Exposure Estimates
 
 ### Scalar Surface Fitting
 
@@ -412,15 +502,21 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Sensor Characterization
 
-### Sensor Fixed Pattern and Defects
+### Sensor Fixed-Pattern Noise
 
 ### Sensor Linearity
 
 ### Sensor Operating-Point Series
 
+### Sensor Stack Defects
+
 ### Sensor Tilt Estimator
 
+### Signal-to-Noise and Dynamic Range Estimates
+
 ### Single-Frame Bad-Pixel Map
+
+### Stacking Gain and Integration Budgets
 
 ### Star Detection
 
@@ -498,6 +594,8 @@ Evaluate observing conditions and target suitability before scheduling or contro
 
 ### Local Pointing Residuals
 
+### Meridian Flip Lifecycle
+
 ### Meridian Flip Planning
 
 ### Mosaic Framing
@@ -523,6 +621,8 @@ Evaluate observing conditions and target suitability before scheduling or contro
 ### Taki Mount Geometry
 
 ### Three-Point Polar Alignment
+
+### Tracking Rate Correction
 
 ### Tracking Rate Estimation
 
@@ -550,9 +650,13 @@ Evaluate observing conditions and target suitability before scheduling or contro
 
 ## 🖲️ Devices
 
-### ASCOM Alpaca Client
+### ASCOM Alpaca Device Adapter
 
-### ASCOM Alpaca Discovery
+### ASCOM Alpaca Discovery Client
+
+### ASCOM Alpaca Discovery Server
+
+### ASCOM Alpaca REST API
 
 ### ASCOM Alpaca Server
 
@@ -560,11 +664,19 @@ Evaluate observing conditions and target suitability before scheduling or contro
 
 ### Firmata Ammeter
 
+### Firmata Analog Thermometer
+
 ### Firmata Barometer and Altimeter
 
 ### Firmata Character Display
 
 ### Firmata DAC
+
+### Firmata Digital Thermometer
+
+### Firmata FM Receivers
+
+### Firmata FM Transmitter
 
 ### Firmata Hygrometer
 
@@ -576,11 +688,7 @@ Evaluate observing conditions and target suitability before scheduling or contro
 
 ### Firmata Peripheral Base
 
-### Firmata Radio
-
 ### Firmata Real-Time Clock
-
-### Firmata Thermometer Chips
 
 ### Firmata-to-INDI Bridge
 
@@ -644,11 +752,21 @@ Evaluate observing conditions and target suitability before scheduling or contro
 
 ### Close Approach Data
 
+### Gaia DR3 Star Catalog
+
+### HiPS Survey Discovery
+
 ### HiPS2FITS Cutouts
 
 ### IAU Meteor Data Center catalog
 
-### JPL Horizons client
+### JPL Horizons Observer Tables
+
+### JPL Horizons Orbital Elements
+
+### JPL Horizons SPK Downloads
+
+### JPL Horizons State Vectors
 
 ### JPL Small-Body Lookup
 
@@ -656,13 +774,25 @@ Evaluate observing conditions and target suitability before scheduling or contro
 
 ### MPC1992 Codec
 
-### SIMBAD TAP
+### SIMBAD Object Types
+
+### SIMBAD Star Catalog
+
+### SIMBAD TAP Queries
 
 ### Small-Body Identification
 
-### VizieR / Gaia TAP
+### VizieR TAP Queries
 
 ## 💾 I/O and Data Formats
+
+### Buffer Byte I/O
+
+### Byte Reading, Writing, and Transfer
+
+### Byte Shuffling
+
+### Byte-Stream Contracts
 
 ### CRC Checksums
 
@@ -670,55 +800,107 @@ Evaluate observing conditions and target suitability before scheduling or contro
 
 ### Deflate Compression
 
-### FITS Image I/O
+### File-Handle Byte I/O
+
+### FITS Containers and HDUs
+
+### FITS Header Cards and Metadata
+
+### FITS Pixel I/O and Rice Tiles
 
 ### FITS Rice Compression
 
+### Growable Binary Buffers
+
+### HTTP Range Byte Sources
+
 ### JPEG via TurboJPEG
 
-### Streaming byte I/O
+### ReadableStream Byte Sources
 
-### XISF Image I/O
+### Streaming Base64
+
+### Streaming Text Lines
+
+### XISF Containers and Metadata
+
+### XISF Pixel I/O and Compression
 
 ### XML Parsing
 
 ## 🔢 Numerical
 
-### Angle Units
+### 2D Vectors
 
-### Dense Matrix Algebra
+### 2x2 Matrices
 
-### Derivative-Free Optimization
+### 3D Vectors
+
+### 3x3 Matrices
+
+### Angle Parsing and Formatting
+
+### Angle Units and Wrapping
+
+### Barometric Pressure and Altitude
+
+### Dense Linear System Solvers
+
+### Dense Matrix Operations
 
 ### Descriptive Statistics
 
 ### Distance Units
 
+### Ellipse Containment Geometry
+
 ### Ellipse Fitting
+
+### Exponential and Power Regression
+
+### Great-Circle Geometry
+
+### Histogram Analysis
+
+### Hyperbolic Regression
+
+### Linear and Trend Regression
 
 ### Linear Least Squares
 
+### Multivariate Minimization
+
+### Nonlinear Least Squares
+
+### Polynomial and Chebyshev Regression
+
 ### Pressure Units
 
-### Regression
+### Probability Distribution Functions
+
+### Random Distributions and Shuffling
 
 ### Rigid Transforms
 
+### Scalar Minimization
+
+### Scalar Root Finding
+
 ### Seeded Random Sources
 
-### Shared Spherical Geometry
+### Spherical Mount Bases
+
+### Spherical Tangent Planes
 
 ### Splines and Interpolation
 
 ### Temperature Units
 
-### Vectors and Fixed Matrices
-
 ### Velocity Units
 
 ## 💻 Protocols
 
-### Firmata Client and Protocol
+### Firmata Board Client
 
 ### Firmata DHT
 
@@ -737,6 +919,8 @@ Evaluate observing conditions and target suitability before scheduling or contro
 ### Firmata SPI
 
 ### Firmata Stepper
+
+### Firmata Wire Protocol
 
 ### LX200 Telescope Protocol
 
