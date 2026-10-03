@@ -1,8 +1,8 @@
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 project_doc_max_bytes = 65536
-model = "gpt-6-sol"
-model_reasoning_effort = "xhigh"
+model = "gpt-6.1-sol"
+model_reasoning_effort = "high"
 
 [mcp_servers.codebase-memory-mcp.tools.index_repository]
 approval_mode = "approve"
