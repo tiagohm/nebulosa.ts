@@ -6,7 +6,7 @@ Nebulosa runs on [Bun](https://bun.com). Install it from the Git repository; Bun
 
 ## Requirements
 
-Install [Bun](https://bun.com/docs/installation), then add Nebulosa to a project that imports ESM.
+- Install [Bun](https://bun.com/docs/installation).
 
 ## Add the package
 
@@ -46,11 +46,13 @@ console.log(instant.day + instant.fraction) // 2461220.5
 
 ## Native libraries
 
-The postinstall script extracts the shared libraries for this platform from zips shipped in `native/`:
+The [postinstall](https://github.com/tiagohm/nebulosa.ts/blob/main/postinstall.ts) script extracts the shared libraries for this platform from zips shipped in `native/`:
 
-- `libwcs.shared` — WCSLIB, for FITS WCS pixel and sky transforms, from `libwcs-<platform>-<arch>.zip`
-- `libturbojpeg.shared` — TurboJPEG, for JPEG compression and decompression, from `libturbojpeg-<platform>-<arch>.zip`
-- `libastrometry.shared` — Astrometry.net, for local plate solving, from `libastrometry-<platform>-<arch>.zip`
+- `libwcs.shared` — [WCSLIB](https://www.atnf.csiro.au/computing/software/wcs/), for FITS WCS pixel and sky transforms, from `libwcs-<platform>-<arch>.zip`
+- `libturbojpeg.shared` — [TurboJPEG](https://github.com/libjpeg-turbo/libjpeg-turbo), for JPEG compression and decompression, from `libturbojpeg-<platform>-<arch>.zip`
+- `libastrometry.shared` — [fork of Astrometry.net](https://github.com/tiagohm/astrometry.net), for local plate solving, from `libastrometry-<platform>-<arch>.zip`
+
+The native libraries are built at [nebulosa.native](https://github.com/tiagohm/nebulosa.native) repository.
 
 # 📄 Documentation
 
