@@ -6,6 +6,7 @@ on:
         paths:
             - 'src/**.ts'
             - 'tests/**.ts'
+            - 'native/**.zip'
             - 'main.ts'
             - 'types.d.ts'
             - 'postinstall.ts'
@@ -21,6 +22,7 @@ on:
         paths:
             - 'src/**.ts'
             - 'tests/**.ts'
+            - 'native/**.zip'
             - 'main.ts'
             - 'types.d.ts'
             - 'postinstall.ts'
