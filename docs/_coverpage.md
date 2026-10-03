@@ -8,7 +8,7 @@
 
 - Astronomy, astrometry, imaging, and observatory control
 - Bun-first, ESM-only
-- No runtime dependencies
+- Zero dependencies
 
 [GitHub](https://github.com/tiagohm/nebulosa.ts/)
 [Get Started](#-installation)
