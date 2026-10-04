@@ -1605,6 +1605,45 @@ gibbs(r1, r1, r3, GM_SUN_PITJEVA_2005) // RangeError: gibbs input is invalid: AN
 
 ### Heliacal Events
 
+As the Sun moves along the ecliptic, a fixed star or planet cycles through four classical visibility transitions each year. The heliacal rising is the first morning it is seen rising in the east just before dawn, after months lost in the Sun's glare; the famous Sothic rising of Sirius is one. The acronychal rising is the last evening it is seen rising at dusk. The heliacal setting is the last evening it is seen setting in the west after dusk, before it is lost in the glare. The cosmical setting is the first morning it is seen setting in the west before dawn.
+
+`heliacalPhases(body, sun, location, start, stop, options?)` finds them with an arc-of-vision model. Each day it finds the object's rise and set, then asks whether the Sun is at least `arcusVisionis` below the geometric horizon at that instant. A brighter object needs a smaller depression than a fainter one, so the arc of vision stands in for the object's brightness and the sky: `options.arcusVisionis` (radians) defaults to 11°, the classical value for a first-magnitude star, and a larger value pushes first visibility later and last visibility earlier. `options.horizon` is the horizon altitude of the crossing (default `STANDARD_HORIZON`), and `options.step` and `options.tolerance` tune the daily rise/set search. `body` and `sun` return geocentric J2000/ICRS directions at a time and `location` is the observer. The result is a chronological list of `{ kind, time, arcusVisionis }`, where `time` is the object's rise or set on the transition day (UTC-based `Time`) and `arcusVisionis` is the Sun depression realized there, in radians. The window must span a full year and should start near the object's conjunction with the Sun so that each season's boundary falls inside it; only transitions inside the window are returned, and a circumpolar or never-rising object returns none. The model is geometric and has no sky-brightness or extinction model, so it is suited to calendar-scale dating. It scans day by day and is not fast: expect seconds for a year.
+
+```ts
+import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { heliacalPhases } from 'nebulosa/src/astronomy/events/heliacal'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { type Time, Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg, hour, toDeg } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+const athens = geodeticLocation(deg(23.7275), deg(37.9838), meter(100))
+const sirius = eraS2c(hour(6.7525), deg(-16.7161)) // fixed ICRS direction
+const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0])
+
+// One year starting near Sirius's conjunction with the Sun.
+const start = timeYMDHMS(2025, 6, 20, 0, 0, 0, Timescale.UTC)
+const stop = timeYMDHMS(2026, 6, 20, 0, 0, 0, Timescale.UTC)
+
+for (const phase of heliacalPhases(() => sirius, sunAt, athens, start, stop)) {
+	console.log(phase.kind, timeToDate(phase.time).slice(0, 5), toDeg(phase.arcusVisionis))
+}
+// heliacalRising [2025, 8, 12, 2, 39] 11.28 — UTC, degrees of Sun depression
+// cosmicalSetting [2025, 12, 17, 4, 35] 11.40
+// acronychalRising [2026, 1, 14, 16, 26] 11.34
+// heliacalSetting [2026, 5, 18, 18, 34] 11.48
+
+// A fainter object (or a worse sky) needs a smaller depression to count as visible: 8°.
+const lenient = heliacalPhases(() => sirius, sunAt, athens, start, stop, { arcusVisionis: deg(8) })
+
+console.log(lenient[0].kind, timeToDate(lenient[0].time).slice(0, 5)) // heliacalRising [2025, 8, 9, 2, 51] — 3 days earlier
+
+// A circumpolar object has no phases.
+console.log(heliacalPhases(() => eraS2c(0, deg(89)), sunAt, athens, start, timeYMDHMS(2025, 7, 20, 0, 0, 0, Timescale.UTC))) // []
+```
+
 ### Herrick-Gibbs Orbit Determination
 
 The Herrick-Gibbs method is the short-arc counterpart of Gibbs: for three positions that are close together in time and angle, it estimates the middle velocity from a Taylor-series expansion that also uses the three epochs. It stays accurate where the classical Gibbs method becomes ill-conditioned because the points are nearly colinear. Like Gibbs, it needs positions relative to the central body, not angles.
@@ -1641,6 +1680,31 @@ herrickGibbs(r3, r2, r1, t3, t2, t1, GM_SUN_PITJEVA_2005, { throwOnInvalid: true
 ```
 
 ### Hour-Angle Windows
+
+The hour angle of a target is local sidereal time minus its right ascension: zero on the meridian, negative east of it, positive west. A fixed-right-ascension target's hour angle advances at the sidereal rate, so how long it stays within hour-angle limits, such as a mount's tracking range or the span around the meridian where the airmass is low, is simple geometry. These functions ignore the target's own motion.
+
+`hourAngle(localSiderealTime, rightAscension)` returns `LST − RA` in radians, normalized to `(−π, π]`. `timeUntilMeridian(hourAngle)` returns the SI seconds until the target next stands on the meridian: 0 if it is on it now, and a full circuit minus the elapsed part for a target already west. `hourAngleWindows(hourAngle, minimum, maximum, durationSeconds)` returns the future stretches `{ startSeconds, endSeconds }`, measured from the epoch of the supplied hour angle, during which the signed hour angle lies in `[minimum, maximum]`. When `minimum > maximum` the interval crosses the ±π cut, for example from +160° through 12 h to −160°, and the pieces split by the cut are joined. An empty or non-positive duration, or `minimum == maximum`, returns `[]`, and a duration over 100000 sidereal days throws a `RangeError`. All angles are radians.
+
+```ts
+import { hourAngle, hourAngleWindows, timeUntilMeridian } from 'nebulosa/src/astronomy/events/hourangle'
+import { deg, hour, toDeg } from 'nebulosa/src/math/units/angle'
+
+// LST 20 h, RA 18 h: 2 hours of sidereal time west of the meridian.
+console.log(toDeg(hourAngle(hour(20), hour(18)))) // 30 — degrees
+
+// East of the meridian by 30°: the target transits in about 2 hours; west by 30°: a sidereal day minus 2 hours.
+console.log(timeUntilMeridian(deg(-30)) / 3600) // 1.9945 — hours
+console.log(timeUntilMeridian(deg(30)) / 3600) // 21.9399 — hours
+console.log(timeUntilMeridian(0)) // 0 — seconds, on the meridian
+
+// Starting at hour angle -100°, the target is within ±60° of the meridian from 9574 s to 38295 s.
+console.log(hourAngleWindows(deg(-100), deg(-60), deg(60), 86400)) // [{ startSeconds: 9573.8, endSeconds: 38295.2 }]
+
+// A window that crosses the ±180° cut (below the pole): from 160° through 180° to -160°.
+console.log(hourAngleWindows(deg(170), deg(160), deg(-160), 86400)) // [{ 0, 7180.3 }, { 83770.6, 86400 }] — two visits in a day
+
+console.log(hourAngleWindows(0, deg(10), deg(20), 0)) // [] — no duration
+```
 
 ### IAU Body Orientation
 
@@ -1796,6 +1860,43 @@ console.log(toDeg(equatorialToHorizontal(lst, latitude, latitude, lst)[1])) // 9
 ```
 
 ### Local Horizon Mask
+
+A real observing site rarely has a flat, clear horizon: trees, buildings, and hills hide the sky below some altitude that depends on azimuth. A horizon mask records that as a list of azimuths with the minimum altitude a target must reach there to be seen. Between samples the minimum altitude is interpolated linearly around the circle, so the segment from the last azimuth back to the first is included.
+
+A mask is an array of `HorizonSample`s, `{ azimuth, minimumAltitude }` in radians with azimuth north through east. It may be empty (nothing is hidden), unordered, or have repeated azimuths (the higher altitude is kept); a single sample applies at every azimuth. `horizonMinimumAltitude(samples, azimuth)` returns the interpolated minimum altitude at an azimuth, or −π/2 for an empty mask. `isAboveHorizon(samples, altitude, azimuth)` is true when the altitude is at least that. `horizonCrossings(path, horizon)` finds where a sampled path crosses behind or out from behind the mask. A path is an array of `{ time, altitude, azimuth }` samples, with time in any uniform unit (the crossing keeps it) and angles in radians, sorted by time or not. It returns the `HorizonCrossing`s in time order as `{ time, altitude, azimuth, kind }`, where `kind` is `'set'` when the target goes behind the mask and `'rise'` when it emerges. Each path segment is split at the mask's azimuth samples so that a peak or valley inside it still gives its crossings; the samples must be dense enough that each step is the short azimuth arc. A path of fewer than two samples has no crossings. To make a path from an ephemeris, sample the altitude and azimuth of the target (see Local Horizon Coordinates).
+
+```ts
+import { horizonCrossings, horizonMinimumAltitude, isAboveHorizon, type HorizonSample, type HorizontalPathSample } from 'nebulosa/src/astronomy/observer/horizon'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+// Obstructions every 90° of azimuth: 10° to the north, 25° to the east, 5° to the south, 15° to the west.
+const mask: HorizonSample[] = [
+	{ azimuth: deg(0), minimumAltitude: deg(10) },
+	{ azimuth: deg(90), minimumAltitude: deg(25) },
+	{ azimuth: deg(180), minimumAltitude: deg(5) },
+	{ azimuth: deg(270), minimumAltitude: deg(15) },
+]
+
+// Linear interpolation on the circle, including the wrap from 270° back to 0°.
+console.log(toDeg(horizonMinimumAltitude(mask, deg(45)))) // 17.5 — degrees
+console.log(toDeg(horizonMinimumAltitude(mask, deg(315)))) // 12.5 — degrees
+console.log(toDeg(horizonMinimumAltitude([], deg(45)))) // -90 — an empty mask hides nothing
+
+console.log(isAboveHorizon(mask, deg(20), deg(45))) // true — 20° is above the 17.5° there
+console.log(isAboveHorizon(mask, deg(15), deg(60))) // false — the mask is about 20° at that azimuth
+
+// A target rising in the east-northeast: 10° of altitude and 20° of azimuth per time unit.
+const rising: HorizontalPathSample[] = [0, 1, 2, 3, 4, 5, 6].map((i) => ({ time: i, altitude: deg(5 + 10 * i), azimuth: deg(60 + 20 * i) }))
+
+for (const crossing of horizonCrossings(rising, mask)) console.log(crossing.kind, crossing.time, toDeg(crossing.altitude), toDeg(crossing.azimuth))
+// rise 1.846 23.46 96.92 — emerges from behind the mask at 23.5° altitude, azimuth 97°
+
+// A setting target that drops behind the southwest mask.
+const setting: HorizontalPathSample[] = [0, 1, 2, 3].map((i) => ({ time: 10 * i, altitude: deg(40 - 12 * i), azimuth: deg(200 + 10 * i) }))
+
+for (const crossing of horizonCrossings(setting, mask)) console.log(crossing.kind, crossing.time, toDeg(crossing.altitude), toDeg(crossing.azimuth))
+// set 25 10 225 — behind the mask at time 25, altitude 10°, azimuth 225°
+```
 
 ### Local Lunar Eclipse Search
 
@@ -2069,6 +2170,47 @@ console.log(trueEclipticRotation(time).slice(6, 9)) // [0.0000054, -0.39772, 0.9
 
 ### Observing Visibility Windows
 
+A target is observable when several conditions hold together: it is high enough, the sky is dark enough, and it is far enough from the Sun and the Moon. `visibilityWindows` turns a set of such constraints into the time intervals where all are met, using the constraint-interval search (see Time-Constraint Intervals).
+
+`visibilityWindows(targetAt, location, start, end, constraints?, sources?)` returns chronological `{ start, end }` intervals inside the window. `targetAt` returns the ICRS-oriented direction of the target at a time, and `location` is the observer. `constraints` selects the limits, all optional and combined: `minimumAltitude` (the target's geometric altitude), `maximumAirmass` (Kasten–Young; converted to a minimum altitude, and the stricter of the two is used, while an airmass below 1 gives no windows), `maximumSunAltitude`, `minimumSunSeparation`, and `minimumMoonSeparation`, all angles in radians. `sources` provides `sunAt` (needed for any solar limit) and `moonAt` (needed for the Moon separation) as direction callbacks, plus the search `step` and `tolerance` in days. A solar or lunar constraint without its callback throws a `RangeError`, since dropping it would report the target as visible without checking that body. An empty constraint set returns the whole window, and a window of zero or negative length returns `[]`. No origin or correction is applied: pass directions in matching frames and corrections, with the topocentric parallax included in the providers if you want it. The step must resolve every crossing of each constraint.
+
+```ts
+import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { visibilityWindows } from 'nebulosa/src/astronomy/events/visibility'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { type Time, Timescale, timeShift, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+const site = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400)) // La Silla
+const start = timeYMDHMS(2025, 9, 28, 0, 0, 0, Timescale.UTC)
+const end = timeShift(start, 1)
+
+const star = eraS2c(hour(5.919), deg(7.407)) // fixed direction
+const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0])
+const moonAt = (time: Time) => moon(time)[0]
+
+const fmt = (intervals: readonly { start: Time; end: Time }[]) => intervals.map((i) => [timeToDate(i.start).slice(0, 5), timeToDate(i.end).slice(0, 5)])
+
+// Above 30° while the Sun is below -18°.
+const dark = visibilityWindows(() => star, site, start, end, { minimumAltitude: deg(30), maximumSunAltitude: deg(-18) }, { sunAt })
+
+console.log(fmt(dark)) // [[[2025, 9, 28, 6, 52], [2025, 9, 28, 9, 5]]] — UTC
+
+// An airmass cap of 2 (altitude about 30°), the Sun below -12° and at least 30° from the Moon.
+const strict = visibilityWindows(() => star, site, start, end, { maximumAirmass: 2, maximumSunAltitude: deg(-12), minimumMoonSeparation: deg(30) }, { sunAt, moonAt })
+
+console.log(fmt(strict)) // [[[2025, 9, 28, 6, 52], [2025, 9, 28, 9, 33]]]
+
+console.log(visibilityWindows(() => star, site, start, end).length) // 1 — no constraints: the whole window
+console.log(visibilityWindows(() => star, site, start, end, { maximumAirmass: 0.9 })) // [] — airmass below 1 is impossible
+
+visibilityWindows(() => star, site, start, end, { maximumSunAltitude: 0 }) // RangeError: sun direction is required when a solar limit is set
+```
+
 ### Orbit Covariance Propagation
 
 An orbit fit gives a state and a 6×6 covariance at the fit epoch, and the uncertainty grows as the orbit is propagated away from it. To first order the covariance maps linearly through the state-transition matrix `Φ = ∂state(t)/∂state(epoch)`, so `C(t) = Φ C₀ Φᵀ`. `Φ` is obtained here by central finite differences of the two-body propagation, which reuses `KeplerOrbit`. The linear-Gaussian model is valid while the uncertainty stays small, over short to medium arcs; very poorly constrained orbits need nonlinear methods.
@@ -2305,6 +2447,48 @@ console.log(refractiveDisplacement(0, 0.55)) // undefined — on the horizon
 ```
 
 ### Rise, Transit, and Set
+
+A body rises when its altitude crosses a horizon value going up, sets when it crosses going down, and transits when it reaches its highest altitude on the meridian. The almanac convention measures the crossing against a horizon altitude that folds in refraction and the body's apparent size, instead of the geometric zero: `STANDARD_HORIZON` (−34′) is for a point source such as a star or planet, `SUN_HORIZON` (−50′) for the Sun's upper limb, and `CIVIL_TWILIGHT`, `NAUTICAL_TWILIGHT`, and `ASTRONOMICAL_TWILIGHT` (−6°, −12°, −18°) for the Sun's depression angle.
+
+`riseTransitSet(directionAt, location, time, options?)` searches a window starting at `time` (one day by default, `options.window` in days) and returns `{ rise?, transit?, set?, transitAltitude, alwaysUp, alwaysDown }`. `directionAt` returns the J2000/ICRS geocentric direction toward the body at a time (only its direction is used), `location` is a geodetic observer, and `options.horizon` (radians, default `STANDARD_HORIZON`) is the crossing altitude. The altitude is geocentric and geometric, with precession and nutation applied but no aberration or parallax, so for the Moon raise the horizon by its horizontal parallax to match almanac values. The transit is the altitude maximum and is reported even below the horizon; `transitAltitude` is in radians. When the body never crosses the horizon, `rise` and `set` are `undefined` and exactly one of `alwaysUp` and `alwaysDown` is true. `options.step` and `options.tolerance` are the search step and tolerance in days (defaults 1/24 and 1e-6). A body that rises and sets once per window gives one of each, but a window that starts mid-day can place the set before the rise: choose the start time (for example, the local midnight) accordingly. `altitudeOf(direction, time, location)` gives the geometric altitude of a direction in radians. The search is built on Time-Domain Event Search and Time-Domain Extrema Search.
+
+```ts
+import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { altitudeOf, riseTransitSet, STANDARD_HORIZON, SUN_HORIZON } from 'nebulosa/src/astronomy/events/horizon'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { type Time, Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg, hour, toDeg } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+const site = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400)) // La Silla
+const start = timeYMDHMS(2025, 9, 28, 0, 0, 0, Timescale.UTC)
+
+// The Sun: geocentric ICRS direction, measured against the upper-limb horizon.
+const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0])
+const sunEvents = riseTransitSet(sunAt, site, start, { horizon: SUN_HORIZON })
+
+console.log(timeToDate(sunEvents.rise!).slice(0, 5)) // [2025, 9, 28, 10, 24] — UTC
+console.log(timeToDate(sunEvents.transit!).slice(0, 5)) // [2025, 9, 28, 16, 33]
+console.log(timeToDate(sunEvents.set!).slice(0, 5)) // [2025, 9, 28, 22, 42]
+console.log(toDeg(sunEvents.transitAltitude)) // 63.05 — degrees
+
+// A fixed star (RA 5.919 h, Dec +7.407°): a constant direction.
+const star = eraS2c(hour(5.919), deg(7.407))
+const starEvents = riseTransitSet(() => star, site, start, { horizon: STANDARD_HORIZON })
+
+console.log(timeToDate(starEvents.transit!).slice(0, 5), toDeg(starEvents.transitAltitude)) // [2025, 9, 28, 10, 9] 53.33
+
+// Altitude of a direction at one instant.
+console.log(toDeg(altitudeOf(star, start, site))) // -56.39 — degrees, well below the horizon at 00:00 UTC
+
+// A circumpolar star at latitude +80°: never sets. A southern one never rises.
+const arctic = geodeticLocation(0, deg(80), 0)
+
+console.log(riseTransitSet(() => eraS2c(0, deg(85)), arctic, start).alwaysUp) // true
+console.log(riseTransitSet(() => eraS2c(0, deg(-60)), arctic, start).alwaysDown) // true
+```
 
 ### Sampled Angular Motion
 
@@ -2837,9 +3021,80 @@ console.log(temeToItrfByGmst(teme, greenwichMeanSiderealTime(tle.epoch))[0].map(
 
 ### Time-Constraint Intervals
 
+Many questions about a target are "when are all of these true at once": the target is above 30° altitude, the Sun is below −18°, the Moon is far away. Each condition can be written as a continuous scalar margin that is non-negative while the condition holds, so the answer is the set of time intervals where every margin is at least zero.
+
+`searchIntervals(margins, start, stop, options?)` takes an array of functions of `Time`, each returning a margin, and returns the chronological `TimeInterval`s (`{ start, end }`) clipped to the window where all are non-negative. The margins are sampled together at each coarse step so you can share a geometry evaluation; the sign changes of each are refined independently with Brent's method, and the pieces between the refined crossings are kept when every margin is non-negative at their midpoint, with adjacent pieces joined. An empty array accepts the whole window, and a window of zero or negative length returns `[]`. `options.step` is the coarse step in days (default 1/24) and `options.tolerance` the refinement tolerance in days (default 1e-6, about 0.09 s). The step must resolve every crossing: a tangency, or an interval shorter than one step, can be missed. A step too small to advance the window throws a `RangeError`. For single crossings or extrema use Time-Domain Event Search and Time-Domain Extrema Search.
+
+```ts
+import { searchIntervals } from 'nebulosa/src/astronomy/events/search'
+import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { TAU } from 'nebulosa/src/core/constants'
+
+const start = timeYMDHMS(2025, 9, 1, 0, 0, 0, Timescale.TT)
+const days = (time: Time) => timeSubtract(time, start)
+
+// Two margins over three days: sin(2πd) >= 0 (the first half of each day) and 0.75 - frac(d) >= 0.
+const intervals = searchIntervals([(time) => Math.sin(TAU * days(time)), (time) => 0.75 - (days(time) % 1)], start, timeShift(start, 3), { step: 0.05 })
+
+console.log(intervals.map((i) => [days(i.start), days(i.end)])) // [[0, 0.5], [1, 1.5], [2, 2.5]] — days from the start
+
+// No margins: the whole window. A margin that is never non-negative: nothing.
+console.log(searchIntervals([], start, timeShift(start, 1)).map((i) => [days(i.start), days(i.end)])) // [[0, 1]]
+console.log(searchIntervals([() => -1], start, timeShift(start, 1))) // []
+```
+
 ### Time-Domain Event Search
 
+Many almanac events are instants where some quantity crosses a value: sunrise is where the Sun's altitude crosses zero, a conjunction where an angular difference crosses zero, a station where a rate crosses zero. Writing the quantity minus the target as a continuous function of time turns the event into a root of that function.
+
+`searchRoots(f, start, stop, options?)` samples `f(time)` from `start` to `stop` at a coarse step, finds each sign change between consecutive samples, and refines it with Brent's method, returning the root instants in chronological order. A sample that is exactly zero is reported, and not double-counted. `options.step` is the coarse step in days (default 1/24, suitable for diurnal events) and must be finer than the spacing of the roots, since two roots inside one step are missed; `options.tolerance` is the refinement tolerance in days (default 1e-6, about 0.09 s). A window of zero or negative length returns `[]`, and a step too small to advance the window throws a `RangeError`. `f` must be continuous over the window. A quantity that wraps (right ascension, longitude, hour angle) must be unwrapped by the caller, for example with `normalizePI` around the target, or the jump at the seam looks like a crossing. This is the foundation of the higher-level event finders in this module, such as Rise, Transit, and Set and Planetary Oppositions.
+
+```ts
+import { searchRoots } from 'nebulosa/src/astronomy/events/search'
+import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { TAU } from 'nebulosa/src/core/constants'
+
+const start = timeYMDHMS(2025, 9, 1, 0, 0, 0, Timescale.TT)
+
+// A quantity that crosses zero every half day.
+const f = (time: Time) => Math.sin(TAU * timeSubtract(time, start))
+
+// Window of 2.2 days, scanned every 0.1 day.
+const roots = searchRoots(f, start, timeShift(start, 2.2), { step: 0.1 })
+
+console.log(roots.map((time) => timeSubtract(time, start))) // [0, 0.5, 1, 1.5, 2] — days from the start (within about 1e-15)
+
+// A function that never changes sign has no roots.
+console.log(searchRoots(() => 1, start, timeShift(start, 30))) // []
+
+// A window of zero or negative length is empty.
+console.log(searchRoots(f, timeShift(start, 1), start)) // []
+```
+
 ### Time-Domain Extrema Search
+
+Maxima and minima mark events such as greatest elongation, perihelion and aphelion, the Moon's perigee and apogee, and transit (the maximum altitude). They are the points where a scalar function of time has a local extremum, which a root search cannot find because the function does not change sign there.
+
+`searchExtrema(f, start, stop, options?)` samples `f(time)` at a coarse step and, for each triple of consecutive samples whose middle value is strictly lower or strictly higher than both neighbours, refines the extremum with Brent's minimizer (a maximum minimizes the negated function). It returns chronological `TimeExtremum`s of `{ time, value, kind }`, where `kind` is `'minimum'` or `'maximum'` and `value` is the refined function value, not its negation. `options.step` (days, default 1/24) must be fine enough that the neighbouring samples sit on each side of the extremum, and `options.tolerance` (days, default 1e-6) is the refinement tolerance. An extremum flatter than a step, or sitting on the window's first or last sample, is not reported. A window of zero or negative length returns `[]` and a step too small to advance throws a `RangeError`. `f` must be continuous over the window, with wrapping quantities unwrapped by the caller.
+
+```ts
+import { searchExtrema } from 'nebulosa/src/astronomy/events/search'
+import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { type Time, Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+
+const start = timeYMDHMS(2025, 9, 1, 0, 0, 0, Timescale.TT)
+const stop = timeYMDHMS(2025, 10, 1, 0, 0, 0, Timescale.TT)
+
+// The geocentric Moon-Earth distance (AU): its minimum is perigee and its maximum is apogee.
+const distance = (time: Time) => Math.hypot(...moon(time)[0])
+
+for (const extremum of searchExtrema(distance, start, stop, { step: 0.25 })) {
+	console.log(extremum.kind, timeToDate(extremum.time).slice(0, 5), toKilometer(extremum.value))
+}
+// minimum [2025, 9, 10, 12, 10] 364777 — perigee, TT, km
+// maximum [2025, 9, 26, 9, 47] 405548 — apogee, TT, km
+```
 
 ### TLE, OMM, and SGP4 Record Construction
 
@@ -2958,6 +3213,36 @@ console.log(toDeg(refractedAltitude(deg(10), { pressure: 700, temperature: -5 })
 
 ### Transit Altitude and Hour Angle
 
+For a target of known declination, the geometry of the diurnal circle gives two quick planning numbers without any time scale or ephemeris: the altitude at upper transit, which is the highest the target gets, and the hour angle at which it crosses a chosen altitude, which sets the time it spends above that altitude. Both assume a fixed declination and ignore refraction unless you fold it into the target altitude.
+
+`altitudeAtTransit(latitude, declination)` returns `90° − |latitude − declination|` in radians, the altitude of the upper culmination; it is negative when the target never clears the horizon. `hourAngleAtAltitude(declination, latitude, targetAltitude)` returns the non-negative hour angle `H` in radians at which the body crosses `targetAltitude`, from `cos H = (sin h − sin φ sin δ) / (cos φ cos δ)`. The body is at that altitude at hour angle `−H` (rising, east of the meridian) and `+H` (setting, west), so the time above it is `2H` of hour angle. For rise and set use a small negative altitude that folds in refraction and semidiameter, such as −34′ for a point source. It returns `undefined` when the body never reaches that altitude (it stays above it, as circumpolar targets do, or stays below), and at the geographic poles, where the formula degenerates. All angles are radians. For actual rise, transit, and set instants from an ephemeris, see Rise, Transit, and Set.
+
+```ts
+import { altitudeAtTransit, hourAngleAtAltitude } from 'nebulosa/src/astronomy/formulas'
+import { deg, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+
+const latitude = deg(-29.2563)
+const declination = deg(7.407)
+
+// Highest altitude of a target at declination +7.407° seen from latitude -29.2563°.
+console.log(toDeg(altitudeAtTransit(latitude, declination))) // 53.34 — degrees
+
+// A declination past the pole side culminates below the horizon from the opposite hemisphere.
+console.log(toDeg(altitudeAtTransit(deg(80), deg(-85)))) // -75 — degrees, never visible
+
+// Hour angle at the horizon with -34' of refraction: the target is up between -H and +H.
+const h = hourAngleAtAltitude(declination, latitude, deg(-34 / 60))!
+
+console.log(toDeg(h)) // 86.48 — degrees
+console.log(toHour(h)) // 5.7654 — hours, so it rises about 5.77 h of sidereal time before transit
+
+// Circumpolar at latitude +80° for declination +85°: never reaches the horizon.
+console.log(hourAngleAtAltitude(deg(85), deg(80), 0)) // undefined
+
+// At the equator, a body on the celestial equator crosses the horizon at H = 90°.
+console.log(toDeg(hourAngleAtAltitude(0, 0, 0)!)) // 90
+```
+
 ### Tube Flexure Pointing Error
 
 Gravity bends the telescope tube, so the optical axis sags away from the zenith by an amount that grows toward the horizon. The sag is `flexure · sin z`, with `z` the zenith distance and `flexure` the droop at the horizon, and it acts along the vertical. Converting a vertical displacement to equatorial coordinates uses the parallactic angle `q`:
@@ -2994,6 +3279,46 @@ console.log(tubeFlexureError(0, latitude, latitude, flexure)) // [0, -0]
 ```
 
 ### Twilight and Darkness Windows
+
+Twilight is the interval around sunrise and sunset when the Sun is below the horizon but still lights the sky, and it is classified by how far the Sun's center is below the geometric horizon: civil below −6°, nautical below −12°, and astronomical below −18°, when the sky is dark enough for faint-object work. Dark time for deep-sky imaging usually also asks for the Moon to be down or faint.
+
+`darknessWindows(sunAt, location, start, end, options?)` returns four lists of `{ start, end }` intervals clipped to the window: `civil`, `nautical`, and `astronomical` (Sun altitude below −6°, −12°, and −18°) and `dark`, which is the astronomical night, further restricted by the Moon when asked. `sunAt` returns the J2000/ICRS geocentric direction of the Sun at a time, `location` is the observer, and `start` and `end` bound the search. The Sun's altitude is geometric and geocentric, as in Rise, Transit, and Set. `options.moonAt` (a Moon direction callback) keeps only the time when the Moon's altitude is at or below `options.maximumMoonAltitude` (radians, default the horizon); `options.moonIlluminationAt` with `options.maximumMoonIllumination` keeps only times when the illuminated fraction, in `[0, 1]`, is at most the limit. A lunar altitude limit without `moonAt`, or an illumination limit without `moonIlluminationAt`, throws a `RangeError` rather than being ignored. `options.step` and `options.tolerance` are the search step and tolerance in days; the step must resolve every crossing. A single night can give two intervals when the window spans an evening and the next morning, and the first and last intervals are clipped at the window edges. It is built on Time-Constraint Intervals.
+
+```ts
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { darknessWindows } from 'nebulosa/src/astronomy/events/darkness'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { type Time, Timescale, timeShift, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+const site = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400)) // La Silla
+const start = timeYMDHMS(2025, 9, 28, 0, 0, 0, Timescale.UTC)
+const end = timeShift(start, 1)
+
+// Geocentric ICRS directions to the Sun and the Moon.
+const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0])
+const moonAt = (time: Time) => moon(time)[0]
+
+const fmt = (intervals: readonly { start: Time; end: Time }[]) => intervals.map((i) => [timeToDate(i.start).slice(0, 5), timeToDate(i.end).slice(0, 5)])
+
+const windows = darknessWindows(sunAt, site, start, end)
+
+console.log(fmt(windows.civil)) // [[[2025, 9, 28, 0, 0], [2025, 9, 28, 10, 1]], [[2025, 9, 28, 23, 6], [2025, 9, 29, 0, 0]]] — UTC
+console.log(fmt(windows.nautical)) // [[..0:00, ..9:33], [..23:34, ..0:00]]
+console.log(fmt(windows.astronomical)) // [[[2025, 9, 28, 0, 1], [2025, 9, 28, 9, 5]]]
+console.log(fmt(windows.dark)) // same as astronomical without a Moon
+
+// Require the Moon below the horizon as well.
+console.log(fmt(darknessWindows(sunAt, site, start, end, { moonAt }).dark)) // [[[2025, 9, 28, 4, 15], [2025, 9, 28, 9, 5]]]
+
+// Or allow it up to 10° above the horizon.
+console.log(fmt(darknessWindows(sunAt, site, start, end, { moonAt, maximumMoonAltitude: deg(10) }).dark)) // [[[2025, 9, 28, 3, 21], [2025, 9, 28, 9, 5]]]
+
+darknessWindows(sunAt, site, start, end, { maximumMoonAltitude: 0 }) // RangeError: moon direction is required when a lunar altitude limit is set
+```
 
 ### Two-Body Kepler Propagation
 
