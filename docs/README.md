@@ -3200,6 +3200,44 @@ packDate(2025, 13, 1) // RangeError: invalid packed date value "13"
 
 ### Mutual Planetary-Satellite Events
 
+The satellites of a giant planet occult and eclipse each other when the Earth (or the Sun) crosses the planet's equatorial plane, a season that comes around once per planetary year: about every six years for Jupiter and about every fifteen for Saturn, so most windows return nothing. A **mutual occultation** is one moon passing in front of another as seen from Earth, and a **mutual eclipse** is one moon casting its shadow on another. `galileanMutualEvents(start, stop, options?)` covers Io, Europa, Ganymede and Callisto with the L1.2 theory, and `saturnianMutualEvents(start, stop, options?)` the seven main moons of Saturn (Mimas, Enceladus, Tethys, Dione, Rhea, Titan and Iapetus) with TASS 1.7; Hyperion is omitted. All pairs are screened for both kinds of event and the result is chronological.
+
+This is the detection layer only: it reports the times, the pair and how central the event is, and it has no light curve, no obscured-area fraction and no magnitude drop. Satellite positions are added to the VSOP87E planet position, so every body shares one barycentric frame. Occultations use the apparent geocentric directions of the two moons, each corrected for its own light time. Eclipses are evaluated from the heliocentric shadow geometry (the shadowed moon must lie behind the caster, and the contact limit is the penumbral radius plus the moon's radius) and are reported at the instant they are seen from Earth. `options` is a `TimeSearchOptions`: `step` (days, default 10 minutes) must be shorter than the width of a conjunction, and `tolerance` is the refinement tolerance.
+
+Each `MutualEvent` has the `kind`, the `front` moon (the nearer one for an occultation, the caster for an eclipse), the `back` moon, the instants of the first contact (`start`), of maximum obscuration (`middle`) and of the last contact (`end`), and the `impactParameter` in `[0, 1)`: the minimum separation divided by the contact limit, zero for a central event and close to one for a grazing one. `start` or `end` is `undefined` when the event is already underway at the start of the window or still underway at its end; the window is padded internally so events that overlap its edges are not lost.
+
+```ts
+import { galileanMutualEvents, saturnianMutualEvents } from 'nebulosa/src/astronomy/events/mutual'
+import { type Time, Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
+
+const format = (time: Time) => timeToDate(utc(time)).slice(0, 6).join('-')
+
+// Jupiter's mutual-event season of 2026-2027. On 2026-12-02 Ganymede casts its shadow on Callisto and on Europa.
+const start = timeYMDHMS(2026, 12, 2, 19, 0, 0, Timescale.UTC)
+const stop = timeYMDHMS(2026, 12, 2, 22, 0, 0, Timescale.UTC)
+
+for (const event of galileanMutualEvents(start, stop)) {
+	console.log(event.kind, event.front, event.back, format(event.start!), format(event.middle), format(event.end!), event.impactParameter)
+}
+// eclipse ganymede callisto 2026-12-2-20-45-18 2026-12-2-20-51-58 2026-12-2-20-58-38 0.0294 — almost central
+// eclipse ganymede europa 2026-12-2-21-43-51 2026-12-2-21-47-32 2026-12-2-21-51-12 0.3122
+
+// Europa passes in front of Ganymede on 2026-12-05. A window that opens in the middle of the event leaves `start` undefined.
+const occultations = galileanMutualEvents(timeYMDHMS(2026, 12, 5, 19, 20, 0, Timescale.UTC), timeYMDHMS(2026, 12, 5, 19, 30, 0, Timescale.UTC))
+console.log(occultations.map((event) => [event.kind, event.front, event.back, event.start, format(event.middle), format(event.end!), event.impactParameter]))
+// [['occultation', 'europa', 'ganymede', undefined, '2026-12-5-19-17-51', '2026-12-5-19-26-47', 0.3236]]
+
+// Outside a season there is nothing to report.
+console.log(galileanMutualEvents(timeYMDHMS(2024, 1, 1, 0, 0, 0, Timescale.UTC), timeYMDHMS(2024, 1, 2, 0, 0, 0, Timescale.UTC)).length) // 0
+
+// Saturn, shortly after the ring-plane crossing of 2025: Titan eclipses Rhea, and occults it a few minutes later.
+for (const event of saturnianMutualEvents(timeYMDHMS(2025, 3, 12, 10, 0, 0, Timescale.UTC), timeYMDHMS(2025, 3, 12, 13, 0, 0, Timescale.UTC))) {
+	console.log(event.kind, event.front, event.back, format(event.middle), event.impactParameter)
+}
+// eclipse titan rhea 2025-3-12-11-27-26 0.8338
+// occultation titan rhea 2025-3-12-11-34-1 0.2453
+```
+
 ### Nutation and Celestial Orientation
 
 Nutation is the short-period wobble of the Earth's pole on top of precession, expressed as two small angles: `Δψ`, the nutation in longitude, and `Δε`, the nutation in obliquity. Together with precession and the frame bias they orient the true equator and equinox of date, or the CIO-based Celestial Intermediate frame, relative to GCRS.
@@ -4196,6 +4234,75 @@ console.log(toDeg(culmination.azimuth), toDeg(culmination.altitude)) // 132.91 3
 
 ### Satellite Trail Prediction
 
+`predictSatelliteTrails` answers the astrophotographer's question: will a satellite cross my frame during an exposure, where, and how long will the streak be? Given the SGP4 record, the observer, the equatorial center of the field, the rectangular `SensorField` and the exposure interval, it returns one `SatelliteTrailPrediction` for each continuous visit to the sensor: the `entry` and `exit` points (a TT `Time`, right ascension, declination and the gnomonic `sensorX`/`sensorY` on the sensor plane), the great-circle chord `length` (radians), the `positionAngle` of the chord from entry to exit (north through east, `[0, 2π)`) and, when `options.arcsecPerPixel` is given, `lengthPixels`. A satellite already inside the field at the start, or still inside at the end, is clipped to the exposure.
+
+The prediction is geometric and topocentric: the observer is a site on the Earth, and no light time, aberration, refraction, illumination or pointing correction is applied. Directions and the field center are in the library's ICRS-oriented axes, in radians. The sensor is a gnomonic rectangle: `width` and `height` are angular sizes in `(0, π)` radians, and the sensor `+Y` axis is rotated from celestial north toward east by `positionAngle` (default 0), with `+X` 90° further toward east. The length is the chord between entry and exit, not the integrated arc, which is a good approximation for the short crossings of a single exposure.
+
+The track is sampled adaptively in uniform TT seconds. A span is bisected until its midpoint residual against the spherical and the right-ascension/declination interpolation is below `options.maxInterpolationError` (default 0.1 arcsecond), and until it is no wider than `options.maxStep` seconds (default 1). That is a local error estimate, not a bound on the time of a grazing contact. `options.maxSamples` (default 65537) bounds the number of propagated instants, and exhausting it throws a `RangeError` instead of returning an undersampled prediction. A reversed or empty window returns `[]`. The `SatRec` is copied internally, so the caller's record is not modified.
+
+```ts
+import { predictSatelliteTrails } from 'nebulosa/src/astronomy/events/satellite.trail'
+import { customEphemerisEndpoint, relativeEphemerisPath } from 'nebulosa/src/astronomy/ephemeris/path'
+import { earthObserverEphemerisPath, sgp4EphemerisPath } from 'nebulosa/src/astronomy/ephemeris/path.adapter'
+import { ephemerisAt, equatorialPosition } from 'nebulosa/src/astronomy/ephemeris/position'
+import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { type Time, timeShift, timeToDate, tt, utc } from 'nebulosa/src/astronomy/time/time'
+import { deg, toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
+
+const tle = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25544  51.6442  21.4611 0001363  85.7790 274.3535 15.49180547 25697', 'ISS')
+const iss = recordFromTLE(tle)
+const site = geodeticLocation(deg(-46.6361), deg(-23.5475), 0, Ellipsoid.WGS84) // São Paulo
+const epoch = tt(tle.epoch)
+const at = (seconds: number) => timeShift(epoch, seconds / 86400) // seconds after the TLE epoch
+const format = (time: Time) => timeToDate(utc(time)).slice(0, 6).join('-')
+
+// Point the camera where the ISS will be 3332 s after the epoch, near its culmination.
+const path = relativeEphemerisPath(sgp4EphemerisPath({ ...iss }), earthObserverEphemerisPath(site, customEphemerisEndpoint('site')))
+const [rightAscension, declination] = equatorialPosition(ephemerisAt(path, at(3332)))
+console.log(toDeg(rightAscension), toDeg(declination)) // 161.664 −48.236
+
+// A 0.1° square field, rotated by 0.7 rad, observed with a 4 s exposure and an image scale of 2"/pixel.
+const field = { width: deg(0.1), height: deg(0.1), positionAngle: 0.7 }
+const trails = predictSatelliteTrails(iss, site, rightAscension, declination, field, at(3330), at(3334), { arcsecPerPixel: 2 })
+
+console.log(trails.length) // 1
+const [trail] = trails
+console.log(format(trail.entry.time), format(trail.exit.time)) // 2020-11-25-14-4-31 2020-11-25-14-4-32 — the crossing lasts 0.23 s
+console.log(toArcsec(trail.length), trail.lengthPixels) // 471.80 235.90
+console.log(toDeg(trail.positionAngle)) // 179.84
+console.log(trail.entry.sensorX, trail.entry.sensorY) // −0.00073938 0.00087266
+console.log(trail.exit.sensorX, trail.exit.sensorY) // 0.00073905 −0.00087266
+
+// An exposure ten seconds later no longer catches the satellite.
+console.log(predictSatelliteTrails(iss, site, rightAscension, declination, field, at(3340), at(3344)).length) // 0
+```
+
+`sensorTrails(centerRightAscension, centerDeclination, field, track, options?)` is the geometry alone, for a track the caller already has: `SensorTrackSample`s of `time` (any uniform unit), `rightAscension` and `declination` (radians). The samples are sorted by time, the track is interpolated linearly in right ascension (taking the shortest way around) and declination between them, and each continuous visit to the rectangle is clipped with a Liang-Barsky test. A sample on the far hemisphere of the field center is a break in the path. The result is empty for a track that misses the sensor, for fewer than two samples, or for a non-positive field. The times of the entry and exit are in the unit of the samples.
+
+```ts
+import { sensorTrails } from 'nebulosa/src/astronomy/events/satellite.trail'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+// A straight equatorial track from right ascension −1° to +1° across a 1° field centered on (0, 0).
+const trails = sensorTrails(
+	0,
+	0,
+	{ width: deg(1), height: deg(1) },
+	[
+		{ time: 0, rightAscension: -deg(1), declination: 0 },
+		{ time: 1, rightAscension: deg(1), declination: 0 },
+	],
+	{ arcsecPerPixel: 2 },
+)
+
+const [trail] = trails
+console.log(trail.entry.time, trail.exit.time) // 0.25 0.75 — it is on the sensor for half of the track
+console.log(toDeg(trail.entry.rightAscension), toDeg(trail.exit.rightAscension)) // 359.5 0.5
+console.log(toDeg(trail.length), toDeg(trail.positionAngle)) // 1 90 — due east
+console.log(trail.lengthPixels) // 1800
+```
+
 ### Satellite Visibility Intervals
 
 `satelliteVisibleIntervals(satrec, location, sunAt, start, stop, options)` finds the periods in which a satellite is actually worth watching from a site. An interval is an unbroken stretch of time throughout which **all** the criteria hold: the geometric altitude is at least `minimumAltitude`, the apparent magnitude is at most `maximumMagnitude`, the Sun is at most `maximumSunAltitude` above the observer's horizon, and the satellite is outside the Earth's umbra. All four options are required, because there are no subjective brightness or twilight defaults, and `standardMagnitude` is the empirical value of the satellite (see the visual-magnitude topic). Angles are in radians.
@@ -4790,6 +4897,94 @@ console.log(toArcsec(vecAngle(direction, deflected))) // 0.00407 — arcseconds 
 ```
 
 ### Stellar and Asteroidal Occultations
+
+A body (an asteroid, or the Moon treated as a sphere) occults a star when its disk passes in front of it as seen from one observer. `occultationCandidates` answers that per-site question directly, without projecting the shadow onto the Earth: over a window it samples the topocentric angular separation between the body and the star, finds each separation minimum (the **appulse**) with the shared extrema search, refines it, and reports it as an `OccultationCandidate`. The appulse is an occultation (`occultation: true`) when the minimum separation does not exceed the angular radius of the disk, `asin(radius / distance)`, with the star treated as a point.
+
+`target` and `observer` are samplers of position and velocity (`PositionAndVelocityOverTime`) in the same origin and frame, normally barycentric ICRS; the topocentric observer state, for example from `observerState`, is what includes the diurnal parallax, which decides which sites see the event. `star` is the ICRS direction to the star, and does not need to be a unit vector; fold proper motion and parallax into it first, as the track is only as wide as the body. Light time to the body is iterated `options.lightTimeIterations` times (default 2, enough for interplanetary distances; 0 gives the geometric position), which samples the `target` before `start` by up to the light travel time, while the observer is only sampled inside the window. Annual and diurnal aberration are omitted because they shift the star and the body almost equally and cancel in the differential separation. The accuracy is set by the ephemeris of the body and the astrometry of the star, not by this geometry.
+
+`options.radius` is the physical radius of the body in AU (default 0, which makes every appulse a near miss), `options.maxSeparation` (radians) discards wider appulses, and `options.step` (default 60 s) must be finer than the approach one wants to catch; it is capped at a quarter of the window, so a short window is still sampled. The candidate carries the `separation` and `angularRadius` (radians), the topocentric `distance` (AU), the `relativeAngularSpeed` (radians/day) and, for a true occultation, the `duration` in seconds: the chord across the disk at that impact parameter divided by the speed. Candidates are chronological.
+
+The first example is a synthetic encounter whose result has a closed form: a body 2 AU away drifts transversely at 2·10⁻⁴ AU/day past a star on the +x axis, with a miss distance of 10⁻⁶ AU, and the observer is fixed at the origin.
+
+```ts
+import { type PositionAndVelocity, type PositionAndVelocityOverTime, zeroPositionAndVelocity } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { occultationCandidates } from 'nebulosa/src/astronomy/events/occultation'
+import { Timescale, time, timeShift, timeSubtract, type Time } from 'nebulosa/src/astronomy/time/time'
+import { DAYSEC } from 'nebulosa/src/core/constants'
+import { toArcsec } from 'nebulosa/src/math/units/angle'
+
+const crossing: Time = time(2461200.5, 0, Timescale.TDB)
+
+// The body is on the +x line of sight at `crossing` and drifts along z.
+const target: PositionAndVelocityOverTime = (t: Time): PositionAndVelocity => [
+	[2, 1e-6, 2e-4 * timeSubtract(t, crossing)],
+	[0, 0, 2e-4],
+]
+const observer: PositionAndVelocityOverTime = () => zeroPositionAndVelocity()
+
+const start = timeShift(crossing, -0.02)
+const stop = timeShift(crossing, 0.02)
+
+// Geometric position (no light time) and a body of radius 3·10⁻⁶ AU, about 449 km.
+const [appulse] = occultationCandidates(target, [1, 0, 0], observer, start, stop, { radius: 3e-6, lightTimeIterations: 0 })
+
+console.log(appulse.occultation) // true
+console.log(timeSubtract(appulse.time, crossing) * DAYSEC) // ≈ 0 — seconds from the crossing
+console.log(toArcsec(appulse.separation)) // 0.1031 — the miss distance over the range
+console.log(toArcsec(appulse.angularRadius)) // 0.3094
+console.log(appulse.distance) // 2
+console.log(appulse.relativeAngularSpeed) // 0.0001 — radians/day
+console.log(appulse.duration) // 2443.8 — seconds
+
+// A zero radius reports the same appulse as a near miss, and maxSeparation filters it out.
+const [point] = occultationCandidates(target, [1, 0, 0], observer, start, stop, { lightTimeIterations: 0 })
+console.log(point.occultation, point.duration) // false undefined
+console.log(occultationCandidates(target, [1, 0, 0], observer, start, stop, { lightTimeIterations: 0, maxSeparation: 1e-7 }).length) // 0
+```
+
+The second example uses a real orbit. Ceres, from its JPL Horizons heliocentric state at JD 2461200.5 TDB, is moved to the barycentric frame with the VSOP87E Sun, and the observer is São Paulo with the Earth's barycentric state. To keep the example self-contained, the star is placed exactly on the geometric topocentric direction of Ceres at a chosen instant, so an occultation is guaranteed there; it does not predict a real event.
+
+```ts
+import { type PositionAndVelocityOverTime } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { observerState } from 'nebulosa/src/astronomy/coordinates/correction'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { occultationCandidates } from 'nebulosa/src/astronomy/events/occultation'
+import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { KeplerOrbit } from 'nebulosa/src/astronomy/orbits/asteroid'
+import { Timescale, time, timeShift, timeSubtract, type Time } from 'nebulosa/src/astronomy/time/time'
+import { AU_KM, DAYSEC, GM_SUN_PITJEVA_2005 } from 'nebulosa/src/core/constants'
+import { matIdentity } from 'nebulosa/src/math/linear-algebra/mat3'
+import { deg, toArcsec } from 'nebulosa/src/math/units/angle'
+import { kilometer, toKilometer } from 'nebulosa/src/math/units/distance'
+
+const epoch: Time = time(2461200.5, 0, Timescale.TDB)
+const orbit = new KeplerOrbit([1.414905393343522, 2.2479053286939, 7.722476360317566e-1], [-9.08092698547858e-3, 3.499459682146027e-3, 3.499457832664595e-3], epoch, GM_SUN_PITJEVA_2005, matIdentity())
+const site = geodeticLocation(deg(-46.633), deg(-23.55), kilometer(0.76), Ellipsoid.WGS84)
+
+// Barycentric samplers: Ceres is the Sun plus its heliocentric state, and the observer is the topocentric one.
+const target: PositionAndVelocityOverTime = (t) => {
+	const [sunPosition, sunVelocity] = sun(t)
+	const [position, velocity] = orbit.at(t)
+	return [
+		[sunPosition[0] + position[0], sunPosition[1] + position[1], sunPosition[2] + position[2]],
+		[sunVelocity[0] + velocity[0], sunVelocity[1] + velocity[1], sunVelocity[2] + velocity[2]],
+	]
+}
+const observer: PositionAndVelocityOverTime = (t) => observerState(t, earth(t), site)
+
+const anchor = timeShift(epoch, 0.3)
+const [targetPosition] = target(anchor)
+const [observerPosition] = observer(anchor)
+const star: [number, number, number] = [targetPosition[0] - observerPosition[0], targetPosition[1] - observerPosition[1], targetPosition[2] - observerPosition[2]]
+
+const candidates = occultationCandidates(target, star, observer, timeShift(anchor, -0.05), timeShift(anchor, 0.05), { radius: 469 / AU_KM, lightTimeIterations: 0, step: 300 / DAYSEC })
+const appulse = candidates.find((candidate) => Math.abs(timeSubtract(candidate.time, anchor)) < 0.01)!
+
+console.log(appulse.occultation) // true
+console.log(toArcsec(appulse.separation)) // 0.00026
+console.log(toKilometer(appulse.distance)) // 559365738 — km
+console.log(toArcsec(appulse.relativeAngularSpeed) / DAYSEC) // 0.0171 — arcsec/s
+```
 
 ### Stellar Space Motion
 
