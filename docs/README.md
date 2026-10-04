@@ -349,11 +349,114 @@ console.log(cometMagnitudeEstimate(8, 0.5, 1.2, 10)) // 7.2867 — apparent magn
 
 ### Astronomical Time Arithmetic
 
+Differences and offsets between instants are only meaningful inside one time scale. UTC has leap seconds, so a UTC "day" can be 86401 s long, while TAI and TT run uniformly.
+
+`timeSubtract(a, b, scale?)` returns `a − b` in days after converting both instants to `scale`, which defaults to the scale of `a`. In UTC the difference counts civil days on the quasi-Julian-Date axis and ignores a leap second; pass `Timescale.TAI` or `Timescale.TT` for elapsed physical time. `timeShift(time, days)` returns a new `Time` in the same scale, moved by a number of days, and keeps the `providers` and `location` of the original. `timeAtJulianDay(reference, jd)` builds the instant at an absolute Julian Date (days) in the scale of `reference`, with the same providers and location. Neither carries the cache over, so derived values are recomputed for the new instant.
+
+```ts
+import { Timescale, timeAtJulianDay, timeShift, timeSubtract, timeToDate, timeYMD, timeYMDHMS, tt } from 'nebulosa/src/astronomy/time/time'
+
+const newYear = timeYMD(2017, 1, 1)
+const eve = timeYMD(2016, 12, 31) // a leap second was inserted at the end of this day
+
+console.log(timeSubtract(newYear, eve)) // 1 — days, UTC quasi-JD (leap second not counted)
+console.log(timeSubtract(newYear, eve, Timescale.TAI) * 86400) // 86401 — elapsed SI seconds
+
+// Move by a number of days (1/24 = one hour). The scale is preserved.
+console.log(timeToDate(timeShift(timeYMDHMS(2026, 6, 29, 0, 0, 0), 1 / 24))) // [2026, 6, 29, 1, 0, 0, 0]
+
+// Instant at an absolute Julian Date, in the scale of the reference (TT here).
+const instant = timeAtJulianDay(tt(timeYMDHMS(2026, 6, 29)), 2461221.25)
+
+console.log(instant.scale === Timescale.TT) // true
+console.log(timeToDate(instant)) // [2026, 6, 29, 18, 0, 0, 0] — TT clock reading
+```
+
 ### Astronomical Time Representation and Epochs
+
+A `Time` is an instant stored as an integer Julian Date `day`, a `fraction` of a day in `[−0.5, 0.5)`, and a `Timescale` tag (`UT1`, `UTC`, `TAI`, `TT`, `TCG`, `TDB`, `TCB`). The two-part form keeps full double precision: JD 2461220.5 is stored as day 2461221 and fraction −0.5, because the fraction is measured from the nearest integer day. Read it as `day + fraction` with `toJulianDay`.
+
+`time` and `timeNormalize` build and normalize an instant from any day and fraction without losing precision; the scale defaults to `UTC`. Other constructors express the same instant from an epoch convention: `timeMJD` from a Modified Julian Date, `timeJulianYear` and `timeBesselianYear` from epoch years such as J2000.0 or B1950.0 (default scale `TT`), `timeFromEpoch` from a count of units after a reference instant, and `timeGPS` from GPS seconds (a `TAI` instant). `toJulianEpoch` is the inverse of `timeJulianYear`, computed from the instant in TT. The tag only labels the instant; converting between scales is a separate step, see Astronomical Time-Scale Conversion, and calendar construction is under Civil UTC Timestamps.
+
+```ts
+import { time, timeBesselianYear, timeFromEpoch, timeGPS, timeJulianYear, timeMJD, timeNormalize, Timescale, toJulianDay, toJulianEpoch } from 'nebulosa/src/astronomy/time/time'
+
+// day: integer Julian Date. fraction: days. Normalized so the fraction is within [-0.5, 0.5).
+const t = time(2451545, 0.25)
+
+console.log(t.day, t.fraction) // 2451545 0.25 — UTC by default
+console.log(timeNormalize(2451545.75, 0.5).day) // 2451546 — carries the whole days; the fraction is 0.25
+
+console.log(toJulianDay(timeMJD(51544.5))) // 2451545 — J2000.0 as a JD (UTC scale label)
+console.log(timeJulianYear(2000).scale === Timescale.TT) // true — epoch years default to TT
+console.log(toJulianDay(timeBesselianYear(1950))) // 2433282.42346 — B1950.0 as a JD in TT
+console.log(toJulianEpoch(timeJulianYear(2026.5))) // 2026.5 — Julian epoch year
+
+// 1.5 days after JD 2451545.0, labeled TAI.
+console.log(toJulianDay(timeFromEpoch(86400 * 1.5, 86400, 2451545, 0, Timescale.TAI))) // 2451546.5
+
+// GPS time zero is 1980-01-06 00:00:00 UTC, as a TAI instant.
+console.log(toJulianDay(timeGPS(0))) // 2444244.50022 — TAI
+```
 
 ### Astronomical Time-Scale Conversion
 
+A `Time` is converted between scales by a function per target: `utc`, `ut1`, `tai`, `tt`, `tcg`, `tdb`, and `tcb`, or generically by `timeConvert(time, scale)`. Each returns the same object when the instant is already in that scale, and otherwise a new `Time` whose conversions are memoized on the instant. The chain goes through TAI: UTC to TAI adds the leap-second count, TAI to TT adds 32.184 s, and TDB differs from TT by a periodic term of under 2 ms.
+
+The offsets come from replaceable providers. UT1 needs UT1−UTC from the IERS Earth orientation tables; if the tables are not loaded the offset is 0 (see Earth Orientation Parameters). `taiMinusUtc`, `dut1`, `ut1MinusTai`, and `tdbMinusTt` return those offsets in seconds. `tdbMinusTt` is the ERFA model, which also adds a topocentric term when `time.location` is set; assign `time.providers` (for example `{ dut1: () => 0.123 }`) to override a provider for that instant, ideally with `Object.defineProperty(time, 'providers', { value, enumerable: false, writable: true })` so it survives `structuredClone`.
+
+```ts
+import { dut1, tai, taiMinusUtc, tcb, tcg, tdb, tdbMinusTt, timeConvert, timeToDate, timeYMDHMS, Timescale, toJulianDay, tt, ut1, utc } from 'nebulosa/src/astronomy/time/time'
+
+// 2026-06-29 00:00:00 UTC.
+const instant = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
+
+const terrestrial = tt(instant)
+
+console.log(toJulianDay(terrestrial) - toJulianDay(instant)) // 0.000800741 — days, i.e. 69.184 s = 37 s + 32.184 s
+console.log(timeToDate(terrestrial)) // [2026, 6, 29, 0, 1, 9, 183] — TT clock reading
+console.log(taiMinusUtc(instant)) // 37 — seconds, leap seconds in force
+
+console.log(tt(instant) === tt(instant)) // true — the conversion is cached on the instant
+console.log(utc(terrestrial).day === instant.day) // true — round trip returns the original UTC instant
+
+// Other targets.
+const sameInstant = [tai(instant), tdb(instant), tcg(instant), tcb(instant), ut1(instant), timeConvert(instant, Timescale.TT)]
+
+console.log(sameInstant.map((t) => Timescale[t.scale])) // ['TAI', 'TDB', 'TCG', 'TCB', 'UT1', 'TT']
+console.log(tdbMinusTt(terrestrial)) // 0.000174 — seconds, TDB - TT
+console.log(dut1(instant)) // 0 — seconds, UT1 - UTC (0 when no IERS data is loaded)
+```
+
 ### B-Plane
+
+During a flyby the small body moves relative to the planet on an approximately two-body hyperbola. The B-plane is the plane through the planet's center perpendicular to the incoming asymptote `S`, and the B-vector runs from the center to where the asymptote pierces it. Its length, the impact parameter, is the perpendicular miss distance of the undeflected path; it exceeds the real closest-approach distance because of gravitational focusing. Its components on the `T` and `R` axes (`bt`, `br`) are the standard coordinates for flyby targeting, gravity assists, and impact and keyhole analysis.
+
+`closeApproachBPlane` takes the planetocentric state of the body (body minus planet, in AU and AU/day) near the encounter, where the two-body approximation holds, and forms the osculating hyperbola. `options.mu` is the planet's gravitational parameter in AU³/day² (default Earth's). `options.pole` sets the reference pole for the axes `T = S × pole` and `R = S × T` (default `[0, 0, 1]`, the equator for an ICRF state); use the ecliptic pole for the ecliptic convention. The orbit must be hyperbolic: a bound relative orbit throws an `Error`. A head-on radial encounter is valid and returns zero impact parameter.
+
+```ts
+import { closeApproachBPlane } from 'nebulosa/src/astronomy/orbits/bplane'
+import { kilometer, toKilometer } from 'nebulosa/src/math/units/distance'
+import { kilometerPerSecond, toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+// Body minus Earth, inbound at about 300000 km: position in AU, velocity in AU/day.
+const position = [kilometer(-300000), kilometer(40000), kilometer(10000)] as const
+const velocity = [kilometerPerSecond(12), kilometerPerSecond(-1), kilometerPerSecond(0.5)] as const
+
+const bplane = closeApproachBPlane(position, velocity)
+
+console.log(toKilometer(bplane.impactParameter)) // 27288 — km, |B|
+console.log(toKilometer(bplane.bt), toKilometer(bplane.br)) // -15086 -22739 — km, B-vector on T and R
+console.log(toKilometerPerSecond(bplane.vInfinity)) // 11.94 — km/s, hyperbolic excess speed
+console.log(toKilometer(bplane.periapsisDistance)) // 24636 — km, closest approach (smaller than |B|)
+console.log(bplane.sHat) // [0.9957, -0.0827, 0.0418] — incoming asymptote direction
+// bplane.tHat, bplane.rHat complete the right-handed (S, T, R) frame; bplane.bVector is B in AU.
+
+// Same encounter on the ecliptic convention: pass the ecliptic pole in the state's axes.
+const ecliptic = closeApproachBPlane(position, velocity, { pole: [0, -0.3978, 0.9175] })
+
+console.log(toKilometer(ecliptic.bt), toKilometer(ecliptic.br)) // -22880 -14871 — km
+```
 
 ### Barycentric and Heliocentric Light-Time Correction
 
@@ -396,7 +499,80 @@ console.log(velocity) // [-0.017353, -0.002531, -0.001185] — AU/day
 
 ### Binary PCK Rotation
 
+A binary PCK (Planetary Constants Kernel) stores the orientation of a body-fixed frame, such as the Moon's principal-axes frame, as Chebyshev series for three Euler angles `φ`, `δ`, `W` against an inertial frame (J2000, NAIF id 1). The rotation is `R = Rz(W) · Rx(δ) · Rz(φ)`, from the inertial frame to the body-fixed frame, and the angular-rate operator `W = dR/dt · Rᵀ` comes from the same polynomials, in radians per day. Only Chebyshev Type 2 segments are supported; any other data type throws on load.
+
+`readPck(daf)` builds a `Pck` from an already-opened DAF (see DAF Binary Containers). `await pck.initialize()` loads the segment directories; Chebyshev records are then read on demand and cached, so the DAF source must support synchronous reads and stay open while you evaluate. `pck.segment(id)` returns the segment for a PCK frame class id (for example 31006 for the DE421 lunar principal axes), or `undefined`; several segments with the same id are merged, and overlapping coverage resolves to the latest in file order. A segment is a `Frame`, so it works with the frame functions (`frameAt`, `frameToFrame`) as well as directly through `rotationAt(time)` and `dRdtTimesRtAt(time)`, each returning a copy. The time may be in any scale and is converted to TDB; a time outside the segment's coverage throws an `Error`, and calling `rotationAt` before `initialize` throws too. For IAU analytical rotation models see IAU Body Orientation.
+
+```ts
+import fs from 'fs/promises'
+import { readDaf } from 'nebulosa/src/astronomy/ephemeris/kernels/daf'
+import { readPck } from 'nebulosa/src/astronomy/ephemeris/kernels/pck'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { fileHandleSource } from 'nebulosa/src/io/file'
+
+// Lunar principal-axes orientation from the DE421 binary PCK.
+await using source = fileHandleSource(await fs.open('data/moon_pa_de421_1900-2050.bpc'))
+const pck = readPck(await readDaf(source))
+
+await pck.initialize()
+
+const moon = pck.segment(31006)!
+
+console.log(moon.inertialFrameId) // 1 — J2000 inertial frame
+console.log(moon.start, moon.end) // -3155716800 1609416000 — coverage, TDB seconds past J2000
+
+const time = timeYMDHMS(2026, 6, 29, 12, 0, 0, Timescale.TDB)
+
+// Inertial -> Moon principal-axes rotation, row-major 3x3.
+console.log(moon.rotationAt(time)) // [-0.04874, 0.92578, 0.37490, -0.99873, -0.04988, -0.00666, 0.01254, -0.37475, 0.92704]
+
+// Angular-rate operator W = dR/dt · Rᵀ, radians per day (antisymmetric).
+console.log(moon.dRdtTimesRtAt(time)) // [0, 0.22998, -0.0000071, -0.22998, 0, -0.00021533, 0.0000071, 0.00021533, 0]
+
+console.log(pck.segment(1)) // undefined — no segment for that frame class id
+```
+
 ### Body-Surface Solar Illumination
+
+On a rotating body, the local Sun altitude at a surface point is the angle between the Sun direction and the local horizontal plane, which is perpendicular to the reference ellipsoid's normal at that point. It changes as the body rotates, and sunrise and sunset are the times it crosses a chosen horizon altitude.
+
+`bodySurfaceSolarAltitude(location, sunAt, time)` returns the altitude of the Sun's center in radians. `bodySurfaceSunEvents(location, sunAt, start, stop, options)` returns the chronological sunrise and sunset crossings in a window, each with its refined `time`, `kind` (`'sunrise'` while the altitude rises, `'sunset'` while it falls), and the `altitude` there. `options.horizon` is the altitude in radians that defines the crossing (default 0, the geometric horizon); `options.step` and `options.tolerance` are the coarse scan step and refinement tolerance in days (defaults one hour and about 0.09 s). The step must be small enough that no two crossings share a step. Tangential touches are omitted, so an empty list can mean polar day or night.
+
+`location` is a `BodySurfaceLocation` (see Planetary Surface Locations), whose frame orients the rotating body. `sunAt` is a function of `Time` returning the body-center-to-Sun vector in the library's base axes. It is treated as parallel across the body, so there is no terrain, refraction, solar radius, or surface parallax, and the altitude refers to the solar center. The scan evaluates `sunAt` slightly beyond the window edges to classify each root.
+
+```ts
+import { bodyFixedFrame, MOON_ROTATION } from 'nebulosa/src/astronomy/bodies/orientation'
+import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { bodySurfaceSolarAltitude, bodySurfaceSunEvents } from 'nebulosa/src/astronomy/events/surface'
+import { bodyShape, bodySurfaceLocation } from 'nebulosa/src/astronomy/observer/body'
+import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { kilometer } from 'nebulosa/src/math/units/distance'
+
+const epoch = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TT)
+
+// Copernicus crater on the Moon: 20.08° W, 9.62° N, on a sphere of radius 1737.4 km.
+const radius = kilometer(1737.4)
+const location = bodySurfaceLocation(deg(-20.08), deg(9.62), 0, bodyShape([radius, radius, radius]), bodyFixedFrame(MOON_ROTATION))
+
+// Moon-center to Sun, in base axes (geometric, no light time).
+const sunAt = (time: Time) => vecMinus(vecMinus(sun(time)[0], earth(time)[0]), moon(time)[0])
+
+console.log(toDeg(bodySurfaceSolarAltitude(location, sunAt, epoch))) // -43.87 — degrees, the Sun is below the horizon
+console.log(toDeg(bodySurfaceSolarAltitude(location, sunAt, timeShift(epoch, 10)))) // 73.52 — degrees, local day
+
+const events = bodySurfaceSunEvents(location, sunAt, epoch, timeShift(epoch, 32), { step: 0.5 })
+
+console.log(events.map((e) => e.kind)) // ['sunrise', 'sunset']
+console.log(events.map((e) => timeSubtract(e.time, epoch))) // [3.674, 18.492] — days after the epoch
+
+// Sunrise/sunset at 5° solar altitude instead of 0°.
+const high = bodySurfaceSunEvents(location, sunAt, epoch, timeShift(epoch, 32), { step: 0.5, horizon: deg(5) })
+
+console.log(high.map((e) => timeSubtract(e.time, epoch))) // [4.091, 18.075] — days, a shorter day
+```
 
 ### Carrington Rotation
 
@@ -415,7 +591,81 @@ console.log(rotation) // 2302 — Carrington rotation number
 
 ### Celestial and Terrestrial Reference Frames
 
+A reference frame here is an orientation of the axes, defined relative to a common base (ICRS/GCRS-oriented) by a base-to-frame rotation matrix at a time. Fixed frames never change: ICRS, FK4, FK5, Galactic, Supergalactic, the B1950 equatorial and ecliptic, and the J2000 ecliptic. Dynamical frames depend on time: the mean and true equator and equinox of date, the mean and true ecliptic of date, and the Celestial Intermediate Reference System (CIRS). Earth-fixed frames add the planet's rotation: TIRS, and ITRS (TIRS plus polar motion). TEME, the SGP4 frame, is also provided.
+
+A rotating frame also needs the term `W = dR/dt · Rᵀ`, so that a full state transforms as `v_frame = R · v_base + W · p_frame`. Dynamical frames derive it numerically, ITRS and TIRS use the mean Earth spin, and a frame without `dRdtTimesRtAt` adds no transport (time-independent frames and TEME). Frames only rotate: they do not shift the origin (see Affine Origin Frames) and do not apply aberration, deflection, or refraction (see Apparent Direction).
+
+`frameAt(pv, frame, time)` rotates a position (a `Vec3`) or a `[position, velocity]` state from the base into a frame, `frameToBase` is its exact inverse, and `frameToFrame(pv, from, to, time)` goes through the base. `frameRotationAt` returns the single matrix `R_to · R_fromᵀ` for repeated use on positions or on inertial pairs, but it does not include `W`. The named wrappers (`galactic`, `supergalactic`, `fk4`, `fk5`, `icrs`, `eclipticJ2000`, `eclipticB1950`, `meanEquatorAndEquinoxAtB1950` take no time; `ecliptic`, `meanEclipticOfDate`, `meanEquatorAndEquinoxOfDate`, `trueEquatorAndEquinoxOfDate`, `cirs`, `tirs`, `teme`, `itrs`, `itrsInstantaneous` take a `Time`) call `frameAt` with the matching frame constant. `icrsToFk5` and `fk5ToIcrs` apply only the constant frame bias. Units are whatever the input carries: pass AU and AU/day for states. Every function accepts an optional output `o`: the result is written there and the return aliases it, and `o` may be the input itself.
+
+```ts
+import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { ecliptic, frameAt, frameRotationAt, frameToBase, frameToFrame, galactic, GALACTIC, ICRS, ITRS, ECLIPTIC_J2000 } from 'nebulosa/src/astronomy/coordinates/frame'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { matMulVec } from 'nebulosa/src/math/linear-algebra/mat3'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+
+const time = timeYMDHMS(2026, 6, 29, 12, 0, 0, Timescale.UTC)
+
+// Unit direction for RA 10 h, Dec +20° in ICRS.
+const direction = eraS2c(hour(10), deg(20))
+
+// Time-independent frame wrapper: ICRS -> Galactic Cartesian axes.
+console.log(galactic(direction)) // [-0.5312, -0.3556, 0.7690]
+
+// Generic: frame -> frame. Equivalent to rotating ICRS to the J2000 ecliptic.
+console.log(frameToFrame(direction, ICRS, ECLIPTIC_J2000)) // unit vector in ecliptic J2000 axes
+
+// Time-dependent: the ecliptic of date (true ecliptic at `time`).
+console.log(ecliptic(direction, time)) // unit vector in ecliptic-of-date axes
+
+// Inverse back to the base frame.
+console.log(frameToBase(galactic(direction), GALACTIC, time)) // [-0.8138, 0.4698, 0.3420] — the original direction
+
+// A state: AU and AU/day, here a point fixed in the ICRS frame at 1 AU on +x.
+const state = [
+	[1, 0, 0],
+	[0, 0, 0],
+] as const
+
+// In ITRS the point is not at rest: Earth's spin adds W · p to the velocity.
+const [position, velocity] = frameAt(state, ITRS, time)
+
+console.log(position) // [-0.1261, -0.9920, 0.0026] — AU, Earth-fixed axes
+console.log(velocity) // [-6.250, 0.7946, 0] — AU/day
+
+// One matrix for many vectors at one instant (positions only; no W term).
+const rotation = frameRotationAt(ICRS, GALACTIC, time)
+
+console.log(matMulVec(rotation, direction)) // [-0.5312, -0.3556, 0.7690] — same as galactic(direction)
+```
+
 ### Civil UTC Timestamps
+
+Civil time is a calendar date and clock reading in UTC, and Unix time counts seconds since 1970-01-01 00:00:00 UTC. UTC includes leap seconds, so a civil day can last 86401 s and the clock can read 23:59:60. The library keeps this exact when you build or read UTC instants.
+
+`timeYMDHMS` builds an instant from year, month, day, hour, minute, and second (fractional allowed); `timeYMD` takes a day fraction instead of a clock. For UTC the day length is 86400 s plus the day's leap second, so 23:59:60 stays on its civil date. For any other scale the day is 86400 s. `timeToDate` reads an instant back as `[year, month, day, hour, minute, second, millisecond]`, in the clock of the instant's own scale, and inverts the leap-second stretch for UTC. `timeUnix` and `timeNow` build UTC instants from Unix seconds and the system clock; `fast: true` skips the compensated normalization. `timeToUnix` and `timeToUnixMillis` convert any instant to UTC first. Unix time here is monotonic at 86400 s per UTC day and does not follow POSIX's jump back on leap-second days, so it can differ from strict POSIX by up to 1 s.
+
+```ts
+import { timeNow, timeToDate, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+// Defaults: month = 1, day = 1, clock = 00:00:00, scale = UTC.
+const instant = timeYMDHMS(2026, 6, 29, 12, 30, 15.25)
+
+console.log(timeToDate(instant)) // [2026, 6, 29, 12, 30, 15, 250] — UTC; the last field is truncated milliseconds
+console.log(timeToDate(timeYMD(2026, 6, 29, 0.75))) // [2026, 6, 29, 18, 0, 0, 0] — 0.75 of the civil day
+
+// Unix seconds since 1970-01-01 00:00:00 UTC.
+console.log(timeToDate(timeUnix(946684800))) // [2000, 1, 1, 0, 0, 0, 0]
+console.log(timeToUnix(timeYMDHMS(2000, 1, 1))) // 946684800 — seconds
+console.log(timeToUnixMillis(timeYMDHMS(2000, 1, 1, 0, 0, 1.5))) // 946684801500 — milliseconds
+
+// A positive leap second: 2016-12-31 23:59:60.
+console.log(timeToDate(timeYMDHMS(2016, 12, 31, 23, 59, 60.5))) // [2016, 12, 31, 23, 59, 60, 500]
+
+// Current instant, UTC. The value depends on the system clock.
+const now = timeNow()
+console.log(timeToDate(now)) // current UTC date and time
+```
 
 ### Constellations
 
@@ -443,6 +693,37 @@ console.log(constellation(hour(5.5), deg(-5), false)) // ORI
 ```
 
 ### DAF Binary Containers
+
+DAF (Double precision Array File) is the NAIF binary container underneath SPK ephemeris kernels and binary PCK orientation kernels. A file is a sequence of 1024-byte records holding a header, a chain of segment summaries, and the numeric data, as 64-bit floats in either byte order. Each summary describes one segment: a trimmed name, a few doubles (for SPK and PCK these are the start and end epochs, in TDB seconds past J2000), and integers (ids, data type, and the first and last data word).
+
+`readDaf(source)` parses the header and the summary chain from a seekable byte source and returns a `Daf` without reading the data. It handles big- and little-endian files, and throws an `Error` for an unsupported format, a damaged file, or a truncated one. `daf.summaries` lists the segments. `daf.read(start, end)` returns the inclusive, 1-based range of double-words as a `Float64Array`, either a promise or an array depending on the source. `daf.readSync` does the same synchronously and requires a source that supports synchronous reads; kernel frames use it because `rotationAt` cannot await. The container only exposes bytes: interpret the segments with Binary PCK Rotation or SPK State Kernels.
+
+```ts
+import fs from 'fs/promises'
+import { readDaf } from 'nebulosa/src/astronomy/ephemeris/kernels/daf'
+import { fileHandleSource } from 'nebulosa/src/io/file'
+
+// The source must be seekable and stay open while you read from the Daf.
+await using source = fileHandleSource(await fs.open('data/moon_pa_de421_1900-2050.bpc'))
+const daf = await readDaf(source)
+
+console.log(daf.summaries.length) // 1 — one segment in this kernel
+
+const [summary] = daf.summaries
+
+console.log(summary.name) // de421.nio
+console.log(summary.doubles) // [-3155716800, 1609416000] — start and end epochs, TDB seconds past J2000
+console.log(summary.ints) // [31006, 1, 2, 641, 221284] — frame id, inertial frame id, data type, first and last double-word
+
+// Words 641 to 644 of the segment data: a 1-based, inclusive range.
+const words = await daf.read(summary.ints[3], summary.ints[3] + 3)
+
+console.log(words.length) // 4
+
+const same = daf.readSync(summary.ints[3], summary.ints[3] + 3)
+
+console.log(same.length) // 4 — synchronous counterpart of read
+```
 
 ### Delta T
 
@@ -495,6 +776,39 @@ console.log(isMagnusDomain(150)) // false — outside [-100, 100] °C
 ### Earth Occultation of a Finite Target
 
 ### Earth Orientation Parameters
+
+The Earth does not rotate uniformly, and its rotation axis wanders slightly inside the crust. The IERS publishes the irregularities as daily Earth orientation parameters: `UT1 − UTC` in seconds and the polar-motion coordinates `x`, `y` in arcseconds. They are needed for UT1, sidereal time, and the GCRS to ITRS rotation, so they are the data behind precise Earth-fixed work and topocentric coordinates.
+
+The library has no built-in tables. You load one of two IERS files into a shared provider, and the time module reads them automatically: `iersa` takes the IERS Bulletin A `finals2000A` file (rapid and predicted values extending into the future) and `iersb` the IERS EOP 14 C04 `eopc04` series (final values). `dut1(time)` and `xy(time)` use the combined provider, which prefers C04 wherever it covers the date and otherwise falls back to Bulletin A. Values are linearly interpolated between daily samples, with the leap-second jump removed from `UT1 − UTC` so it stays continuous through a leap-second day; outside the table they clamp to the nearest edge. With nothing loaded they return 0 and 0, which silently turns UT1 into UTC, so load a table before computing UT1-dependent results. `covers(time)` reports whether a table spans an instant, `distance(time)` how many days it lies outside, and `clear()` discards a table. Polar motion `xy` is in radians; the loaded tables are stored in arcseconds.
+
+`load` accepts a byte `Source` (such as `readableStreamSource` or a `fileHandleSource`) or an array of file lines. To use other data for a single instant or the whole process, replace the providers described in Astronomical Time-Scale Conversion instead.
+
+```ts
+import { dut1, iersa, iersb, xy } from 'nebulosa/src/astronomy/time/iers'
+import { dut1 as dut1FromTime, Timescale, timeYMDHMS, ut1 } from 'nebulosa/src/astronomy/time/time'
+import { readableStreamSource } from 'nebulosa/src/io/io'
+import { toArcsec } from 'nebulosa/src/math/units/angle'
+
+const time = timeYMDHMS(2020, 10, 7, 12, 34, 56, Timescale.UTC)
+
+console.log(dut1FromTime(time)) // 0 — nothing loaded yet, so UT1 equals UTC
+
+// IERS Bulletin A (finals2000A). Use iersb with eopc04 for the final C04 series.
+await using source = readableStreamSource(Bun.file('data/finals2000A.txt').stream())
+await iersa.load(source)
+
+// A fresh instant, since the offset is cached on an instant once computed.
+const later = timeYMDHMS(2020, 10, 7, 12, 34, 56, Timescale.UTC)
+
+console.log(dut1(later)) // -0.17181 — seconds, UT1 - UTC
+console.log(dut1FromTime(later)) // -0.17181 — the time module now sees it
+console.log(xy(later).map(toArcsec)) // [0.18781, 0.31804] — arcseconds, polar motion x and y
+
+console.log(iersa.covers(later)) // true
+console.log(iersb.covers(later)) // false — C04 not loaded
+
+console.log(ut1(later).scale === Timescale.UT1) // true — now offset by UT1 - UTC from UTC
+```
 
 ### Elliptic Elements to Rectangular State
 
