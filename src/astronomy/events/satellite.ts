@@ -1,16 +1,18 @@
 import { AU_KM, DAYSEC, EARTH_RADIUS_AU, ONE_SECOND, SUN_RADIUS_AU } from '../../core/constants'
 import type { Writable } from '../../core/types'
-import type { Vec3 } from '../../math/linear-algebra/vec3'
+import { type Vec3, vecCross, vecDot, vecLength, vecMinus, vecZero } from '../../math/linear-algebra/vec3'
 import { clamp } from '../../math/numerical/math'
 import { brentMinimize } from '../../math/numerical/optimization'
-import { type Angle, normalizeAngle } from '../../math/units/angle'
+import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
+import type { PositionAndVelocity } from '../coordinates/astrometry'
+import { observerState } from '../coordinates/correction'
 import { frameToFrame, ICRS, ITRS, TEME, temeToItrf } from '../coordinates/frame'
 import { itrs } from '../coordinates/itrs'
-import type { GeographicPosition } from '../observer/location'
+import { Ellipsoid, geocentricLocation, type GeographicCoordinate, type GeographicPosition } from '../observer/location'
 import { sgp4, type SatRec } from '../orbits/propagation/sgp4'
 import { type Time, timeShift, timeSubtract } from '../time/time'
-import { searchExtrema, searchRoots, type TimeSearchOptions } from './search'
+import { searchExtrema, searchIntervals, searchRoots, type TimeSearchOptions } from './search'
 
 // Ground-station and shadow events for an SGP4 satellite, layered on the SGP4 propagator, the observer
 // transforms and the time-domain event scanner. Two families of events are provided: topocentric passes
@@ -18,6 +20,9 @@ import { searchExtrema, searchRoots, type TimeSearchOptions } from './search'
 // configurable horizon) and Earth-shadow events (the sunlit/penumbra/umbra illumination state and the
 // umbra or penumbra entry/exit crossings that bound each eclipse). All angles are radians, distances AU
 // and durations seconds.
+// Tracking rates use an observer-relative inertial state (AU/day and radians/day), and visible
+// intervals combine altitude, umbra, empirical magnitude and observer solar altitude throughout
+// each interval. The footprint is explicitly a spherical ideal-horizon approximation.
 //
 // Look angles are computed entirely in the Earth-fixed ITRS frame: the satellite is propagated in TEME,
 // rotated to ITRS, and differenced against the observer's ITRS position; the topocentric vector is then
@@ -29,6 +34,9 @@ import { searchExtrema, searchRoots, type TimeSearchOptions } from './search'
 // Default coarse sampling step for the satellite scanners: 30 s. Fine enough to bracket every low-Earth
 // pass and every shadow crossing without missing a short grazing pass between two samples.
 const DEFAULT_STEP = 30 * ONE_SECOND
+
+// Geocentric Earth rest state, used to obtain the observer's inertial position/diurnal velocity.
+const ZERO_EARTH_STATE: PositionAndVelocity = [vecZero(), vecZero()]
 
 // Topocentric look angles of a satellite as seen by a ground observer.
 export interface SatelliteLookAngles {
@@ -94,13 +102,16 @@ export interface SatelliteEclipseOptions extends TimeSearchOptions {
 // the azimuth runs North-through-East, and the range is the observer-to-satellite slant distance in AU.
 export function satelliteLookAngles(satrec: SatRec, location: GeographicPosition, time: Time): SatelliteLookAngles {
 	const teme = sgp4(time, satrec)[0]
-	const [sx, sy, sz] = temeToItrf(teme, time)
-	const [ox, oy, oz] = itrs(location)
+	return lookAngles(temeToItrf(teme, time), location)
+}
+
+// Resolves an Earth-fixed geocentric satellite position (AU) onto a ground site's geodetic horizon.
+// Allocates the three look-angle quantities without computing velocities.
+function lookAngles(s: Vec3, location: GeographicPosition): SatelliteLookAngles {
+	const o = itrs(location)
 
 	// Topocentric vector in Earth-fixed axes.
-	const dx = sx - ox
-	const dy = sy - oy
-	const dz = sz - oz
+	const [dx, dy, dz] = vecMinus(s, o)
 
 	const sinLat = Math.sin(location.latitude)
 	const cosLat = Math.cos(location.latitude)
@@ -112,7 +123,7 @@ export function satelliteLookAngles(satrec: SatRec, location: GeographicPosition
 	const east = -sinLon * dx + cosLon * dy
 	const up = cosLat * cosLon * dx + cosLat * sinLon * dy + sinLat * dz
 
-	const range = Math.sqrt(dx * dx + dy * dy + dz * dz)
+	const range = Math.hypot(dx, dy, dz)
 	const altitude = Math.asin(clamp(up / range, -1, 1))
 	// Azimuth is measured from North (= -South) through East.
 	const azimuth = normalizeAngle(Math.atan2(east, -south))
@@ -170,6 +181,16 @@ function satelliteGeocentric(satrec: SatRec, time: Time): Vec3 {
 	return frameToFrame(sgp4(time, satrec)[0], TEME, ICRS, time)
 }
 
+// Satellite-view angular geometry of the Sun and Earth's spherical reference limb.
+interface ShadowGeometry {
+	// Sun angular radius in radians.
+	readonly sunApparentRadius: Angle
+	// Earth angular radius in radians.
+	readonly earthApparentRadius: Angle
+	// Sun-Earth-center separation as seen from the satellite, radians in [0, PI].
+	readonly separation: Angle
+}
+
 // Apparent angular radii and separation used by the conical shadow model, evaluated from a satellite and
 // Sun geocentric position pair (AU).
 //
@@ -178,7 +199,7 @@ function satelliteGeocentric(satrec: SatRec, time: Time): Vec3 {
 // direction. The umbra margin is `separation - (earthApparentRadius - sunApparentRadius)` (negative deep
 // inside the total-shadow cone) and the penumbra margin is `separation - (earthApparentRadius +
 // sunApparentRadius)` (negative once the solar disk is partly obscured).
-function shadowGeometry(satellite: Vec3, sun: Vec3): { sunApparentRadius: Angle; earthApparentRadius: Angle; separation: Angle } {
+function shadowGeometry(satellite: Vec3, sun: Vec3): ShadowGeometry {
 	const rMag = Math.sqrt(satellite[0] * satellite[0] + satellite[1] * satellite[1] + satellite[2] * satellite[2])
 
 	// Vector from the satellite to the Sun and from the satellite to the Earth centre.
@@ -212,8 +233,12 @@ function shadowGeometry(satellite: Vec3, sun: Vec3): { sunApparentRadius: Angle;
 // exceeds the Sun's, so an annular geometry never occurs; when it would (very distant orbits where the
 // Earth appears smaller than the Sun) the state is reported as 'penumbra'.
 function classifyShadow(satellite: Vec3, sun: Vec3): SatelliteShadowState {
-	const { sunApparentRadius, earthApparentRadius, separation } = shadowGeometry(satellite, sun)
+	return classifyShadowGeometry(shadowGeometry(satellite, sun))
+}
 
+// Classifies precomputed angular-radius geometry, sharing the shadow calculation with photometry
+// and interval margins. Returns umbra only when the Earth's disk fully covers the solar disk.
+function classifyShadowGeometry({ sunApparentRadius, earthApparentRadius, separation }: ShadowGeometry): SatelliteShadowState {
 	if (separation >= sunApparentRadius + earthApparentRadius) return 'sunlit'
 	if (earthApparentRadius > sunApparentRadius && separation <= earthApparentRadius - sunApparentRadius) return 'umbra'
 	return 'penumbra'
@@ -314,7 +339,13 @@ export function satelliteMagnitude(satrec: SatRec, location: GeographicPosition,
 	// Observer geocentric position rotated from the Earth-fixed ITRS into the same ICRS frame as the
 	// satellite and the Sun, so the phase angle and range are formed from a consistent triple.
 	const observer = frameToFrame(itrs(location), ITRS, ICRS, time)
+	return magnitudeGeometry(satellite, sun, observer, standardMagnitude)
+}
 
+// Resolves standard-magnitude photometry from same-epoch geocentric base-frame positions in AU.
+// Standard magnitude is empirical at 1000 km and half illumination; inputs are not mutated.
+// shadow optionally supplies an already computed state; otherwise conical geometry is evaluated.
+function magnitudeGeometry(satellite: Vec3, sun: Vec3, observer: Vec3, standardMagnitude: number, shadow: SatelliteShadowState = classifyShadow(satellite, sun)): SatelliteMagnitude {
 	// Directions from the satellite to the observer and to the Sun.
 	const ox = observer[0] - satellite[0]
 	const oy = observer[1] - satellite[1]
@@ -338,9 +369,163 @@ export function satelliteMagnitude(satrec: SatRec, location: GeographicPosition,
 	const rangeKm = range * AU_KM
 	const magnitude = standardMagnitude + STANDARD_MAGNITUDE_OFFSET + 2.5 * Math.log10((rangeKm * rangeKm) / fractionIlluminated)
 
-	const illuminated = classifyShadow(satellite, sun) !== 'umbra'
+	const illuminated = shadow !== 'umbra'
 
 	return { magnitude, phaseAngle, range, illuminated }
+}
+
+// Topocentric geometry plus analytic inertial tracking rates.
+export interface SatelliteTrackingState extends SatelliteLookAngles {
+	// Slant range derivative in AU/day; positive when receding.
+	readonly rangeRate: number
+	// Speed of the line of sight in inertial axes, radians/day, non-negative.
+	// This is not an azimuth/altitude derivative in the rotating horizon frame.
+	readonly angularRate: number
+}
+
+// Computes geometric azimuth/altitude/range and analytic rates for satrec, location and time.
+// SGP4 TEME position/velocity is rotated to base axes and the observer's geocentric position and
+// diurnal velocity subtracted, consistently with sgp4EphemerisPath/earthObserverEphemerisPath.
+// rangeRate = r.v/|r| and angularRate = |r cross v|/|r|^2, AU/day and radians/day.
+// No refraction/light time is applied; SGP4 should be used only near the supplied TLE epoch.
+export function satelliteTrackingState(satrec: SatRec, location: GeographicPosition, time: Time): SatelliteTrackingState {
+	const state = frameToFrame(sgp4(time, satrec), TEME, ICRS, time)
+	const observer = observerState(time, ZERO_EARTH_STATE, location)
+	const position = vecMinus(state[0], observer[0])
+	const velocity = vecMinus(state[1], observer[1])
+	const range = vecLength(position)
+	const angles = lookAngles(frameToFrame(state[0], ICRS, ITRS, time), location)
+	return { ...angles, rangeRate: vecDot(position, velocity) / range, angularRate: vecLength(vecCross(position, velocity)) / (range * range) }
+}
+
+// Geographic location beneath the satellite, using SGP4 TEME -> ITRS and the chosen ellipsoid.
+// Longitude is east-positive (-PI, PI], latitude geodetic radians, elevation AU above ellipsoid.
+// The default matches existing geographic-position APIs (IERS2010); no vector normalization is used.
+// Propagation is meaningful only near satrec's epoch. Returns a newly allocated position record.
+export function satelliteSubpoint(satrec: SatRec, time: Time, ellipsoid: Ellipsoid = Ellipsoid.IERS2010): GeographicPosition {
+	const [x, y, z] = temeToItrf(sgp4(time, satrec)[0], time)
+	const point = geocentricLocation(x, y, z, ellipsoid)
+	return { ...point, longitude: normalizePI(point.longitude) }
+}
+
+// Ideal coverage cap on a caller-selected spherical Earth, with no terrain/refraction/elevation mask.
+export interface SatelliteGroundFootprint {
+	// Spherical subpoint: east-positive longitude and geocentric latitude in radians, elevation AU.
+	readonly subpoint: Readonly<GeographicCoordinate>
+	// Height above the reference sphere in AU.
+	readonly altitude: Distance
+	// Radius of the reference sphere in AU.
+	readonly referenceRadius: Distance
+	// Geocentric half-angle to the geometric horizon in radians.
+	readonly halfAngle: Angle
+	// Arc length on the sphere from subpoint to horizon in AU.
+	readonly surfaceRadius: Distance
+}
+
+// Computes an ideal spherical footprint for satrec at time above referenceRadius (AU, defaults to
+// EARTH_RADIUS_AU). Requires satellite radius >= referenceRadius. Uses a stable atan2 horizon angle
+// and reports spherical latitude, not ellipsoidal geodetic latitude. No terrain, atmosphere, or
+// minimum elevation mask. Returns an allocated record; SGP4 is valid only near satrec's epoch.
+export function satelliteGroundFootprint(satrec: SatRec, time: Time, referenceRadius: Distance = EARTH_RADIUS_AU): SatelliteGroundFootprint {
+	const [x, y, z] = temeToItrf(sgp4(time, satrec)[0], time)
+	const radius = Math.hypot(x, y, z)
+	const altitude = radius - referenceRadius
+	const halfAngle = Math.atan2(Math.sqrt(Math.max(0, altitude * (radius + referenceRadius))), referenceRadius)
+	return { subpoint: { longitude: normalizePI(Math.atan2(y, x)), latitude: Math.atan2(z, Math.hypot(x, y)), elevation: altitude }, altitude, referenceRadius, halfAngle, surfaceRadius: referenceRadius * halfAngle }
+}
+
+// Signed Sun elevation above the SGP4 orbital plane at time, radians in [-PI/2, PI/2].
+// sunAt returns geocentric Sun base-frame position in AU. The TEME angular momentum r cross v
+// is rotated to ICRS; positive beta means Sun lies on its +normal side. No ephemeris is selected.
+// SGP4 propagation should remain near satrec's epoch. The input provider is not mutated.
+export function satelliteBetaAngle(satrec: SatRec, sunAt: (time: Time) => Vec3, time: Time): Angle {
+	const [position, velocity] = sgp4(time, satrec)
+	const normal = frameToFrame(vecCross(position, velocity), TEME, ICRS, time)
+	const solar = sunAt(time)
+	return Math.asin(clamp(vecDot(normal, solar) / (vecLength(normal) * vecLength(solar)), -1, 1))
+}
+
+// Explicit observing criteria plus scanner settings; no subjective brightness/twilight defaults.
+export interface SatelliteVisibilityOptions extends TimeSearchOptions {
+	// Empirical standard magnitude at 1000 km and half illumination.
+	readonly standardMagnitude: number
+	// Minimum geometric satellite altitude above the observer horizon, radians.
+	readonly minimumAltitude: Angle
+	// Largest (faintest) permitted apparent visual magnitude.
+	readonly maximumMagnitude: number
+	// Largest permitted geometric observer-relative solar altitude, radians.
+	readonly maximumSunAltitude: Angle
+}
+
+// Circumstances at an endpoint or altitude maximum of a visible interval.
+export interface SatelliteVisibilityEvent extends SatellitePassEvent {
+	// Empirical apparent visual magnitude at this epoch.
+	readonly magnitude: number
+	// Observer-relative geometric solar altitude, radians.
+	readonly sunAltitude: Angle
+	// Conical Earth-shadow state at this epoch; endpoints can sit on an umbra boundary.
+	readonly shadow: SatelliteShadowState
+}
+
+// A contiguous interval satisfying all observing criteria, clipped to the supplied window.
+export interface SatelliteVisibleInterval {
+	// First accepted epoch and its circumstances, possibly clipped to window start.
+	readonly start: SatelliteVisibilityEvent
+	// Last accepted epoch and its circumstances, possibly clipped to window stop.
+	readonly end: SatelliteVisibilityEvent
+	// Greatest altitude inside this accepted interval, including its endpoints.
+	readonly culmination: SatelliteVisibilityEvent
+}
+
+// Finds intervals throughout which satellite altitude >= minimumAltitude, magnitude <=
+// maximumMagnitude, Sun altitude <= maximumSunAltitude, and the satellite is outside the umbra.
+// sunAt supplies same-epoch geocentric Sun positions in AU/base axes. satrec/location and start/stop
+// specify the satellite, observer and window, which should lie near the TLE epoch. Uses the shared
+// independent-margin interval scanner; options.step (default 30 s) must resolve each crossing.
+// No refraction, extinction, flares, terrain, or penumbral attenuation is modelled. Partial passes
+// at window boundaries are retained. Returns only endpoints/altitude peaks, not dense tracks.
+export function satelliteVisibleIntervals(satrec: SatRec, location: GeographicPosition, sunAt: (time: Time) => Vec3, start: Time, stop: Time, options: SatelliteVisibilityOptions): SatelliteVisibleInterval[] {
+	const scanOptions = { step: options.step ?? DEFAULT_STEP, tolerance: options.tolerance }
+	const satellite = vecZero()
+	const observer = vecZero()
+	const fixed = vecZero()
+	let cached: { event: SatelliteVisibilityEvent; umbraMargin: number } | undefined
+	const circumstancesAt = (time: Time) => {
+		if (cached && timeSubtract(time, cached.event.time) === 0) return cached
+		frameToFrame(sgp4(time, satrec)[0], TEME, ICRS, time, satellite)
+		const solar = sunAt(time)
+		frameToFrame(itrs(location), ITRS, ICRS, time, observer)
+		const shadow = shadowGeometry(satellite, solar)
+		const state = classifyShadowGeometry(shadow)
+		const magnitude = magnitudeGeometry(satellite, solar, observer, options.standardMagnitude, state)
+		const angles = lookAngles(frameToFrame(satellite, ICRS, ITRS, time, fixed), location)
+		const sunAltitude = lookAngles(frameToFrame(solar, ICRS, ITRS, time, fixed), location).altitude
+		const umbraMargin = shadow.earthApparentRadius > shadow.sunApparentRadius ? shadow.separation - (shadow.earthApparentRadius - shadow.sunApparentRadius) : 1
+		cached = { event: { time, ...angles, magnitude: magnitude.magnitude, sunAltitude, shadow: state }, umbraMargin }
+		return cached
+	}
+	const intervals = searchIntervals(
+		[
+			(time) => circumstancesAt(time).event.altitude - options.minimumAltitude,
+			(time) => circumstancesAt(time).umbraMargin,
+			// Zero illuminated fraction has infinite magnitude. A bounded monotone margin preserves
+			// its brightness crossing while keeping Brent's endpoints finite at exact new phase.
+			(time) => Math.tanh(options.maximumMagnitude - circumstancesAt(time).event.magnitude),
+			(time) => options.maximumSunAltitude - circumstancesAt(time).event.sunAltitude,
+		],
+		start,
+		stop,
+		scanOptions,
+	)
+	return intervals.map((interval) => {
+		const first = circumstancesAt(interval.start).event
+		const last = circumstancesAt(interval.end).event
+		let culmination = first.altitude > last.altitude ? first : last
+		for (const peak of searchExtrema((time) => circumstancesAt(time).event.altitude, interval.start, interval.end, scanOptions)) {
+			if (peak.kind === 'maximum' && peak.value > culmination.altitude) culmination = circumstancesAt(peak.time).event
+		}
+		return { start: first, end: last, culmination }
+	})
 }
 
 // A close approach between two satellites: the time of closest approach and the geometry there.

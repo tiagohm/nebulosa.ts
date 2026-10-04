@@ -1,4 +1,4 @@
-import type { MutVec3, Vec3 } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecNormalizeMut } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import type { PositionAndVelocity, PositionAndVelocityOverTime } from '../coordinates/astrometry'
@@ -12,6 +12,7 @@ import type { Time } from '../time/time'
 // Frame.dRdtTimesRtAt; composing with a body-center ephemeris yields a normal
 // PositionAndVelocityOverTime. Angles are radians, distances AU, velocities AU/day. Elevation is a
 // radial offset along the planetocentric direction, not a planetographic/geodetic height.
+// Reference-surface normals use the ellipsoid gradient in body-fixed axes, ignoring radial relief.
 
 // Zero body-fixed velocity of a crust-fixed point. frameToBase reads it and writes the inertial
 // velocity into a separate output, so this shared rest vector is not mutated.
@@ -79,6 +80,20 @@ export function bodySurfaceLocation(longitude: Angle, latitude: Angle, elevation
 	const location: BodySurfaceLocation = { longitude: normalizeAngle(longitude), latitude, elevation, shape, frame }
 	location.bodyFixed = planetocentricPosition(location)
 	return location
+}
+
+// Unit outward normal of the reference ellipsoid at location's planetocentric longitude/latitude,
+// in body-fixed axes. Elevation is ignored: this is the vertical of the reference surface, not relief.
+// Scales by the smallest semi-axis before squaring to avoid overflow from AU inverse squares.
+// Mutates and returns out when supplied, otherwise allocates a vector; does not mutate location.
+export function bodySurfaceNormal(location: BodySurfaceLocation, out: MutVec3 = [0, 0, 0]): MutVec3 {
+	const [a, b, c] = location.shape.radii
+	const scale = Math.min(a, b, c)
+	const cosLat = Math.cos(location.latitude)
+	out[0] = cosLat * Math.cos(location.longitude) * (scale / a) ** 2
+	out[1] = cosLat * Math.sin(location.longitude) * (scale / b) ** 2
+	out[2] = Math.sin(location.latitude) * (scale / c) ** 2
+	return vecNormalizeMut(out)
 }
 
 // Body-relative inertial position (AU) and rotational velocity (AU/day) of a crust-fixed point.

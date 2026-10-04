@@ -12,6 +12,33 @@ const TIME = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TDB)
 const EARTH = naifEphemerisEndpoint(Naif.EARTH)
 const MOON = naifEphemerisEndpoint(Naif.MOON)
 
+test('relative/composed paths snapshot providers sharing storage and never mutate borrowed states', () => {
+	const shared: PositionAndVelocity = [
+		[0, 0, 0],
+		[0, 0, 0],
+	]
+	const origin = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => {
+		shared[0][0] = 3
+		shared[1][0] = 0.3
+		return shared
+	})
+	const target = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MOON, () => {
+		shared[0][0] = 5
+		shared[1][0] = 0.5
+		return shared
+	})
+	const reversed = reverseEphemerisPath(origin).stateAt(TIME)
+	expect(reversed[0][0]).toBe(-3)
+	expect(shared[0][0]).toBe(3)
+	const path = relativeEphemerisPath(target, origin)
+	const first = path.stateAt(TIME)
+	expect(first[0][0]).toBe(2)
+	expect(first[1][0]).toBeCloseTo(0.2, 15)
+	path.stateAt(timeShift(TIME, 1))
+	expect(first[0][0]).toBe(2)
+	expect(shared[0][0]).toBe(5)
+})
+
 test('endpoint identity uses kind and id, not display name', () => {
 	expect(sameEphemerisEndpoint(EARTH, naifEphemerisEndpoint(Naif.EARTH, 'Earth'))).toBe(true)
 	expect(sameEphemerisEndpoint(EARTH, MOON)).toBe(false)

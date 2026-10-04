@@ -1,5 +1,5 @@
-import { vecNegateMut, vecPlus } from '../../math/linear-algebra/vec3'
-import type { PositionAndVelocityOverTime } from '../coordinates/astrometry'
+import { vecNegate, vecPlus, vecZero } from '../../math/linear-algebra/vec3'
+import type { PositionAndVelocity, PositionAndVelocityOverTime } from '../coordinates/astrometry'
 import { Naif } from './kernels/naif'
 
 // Synchronous center-to-target ephemeris paths in library-base ICRS/BCRS-oriented axes.
@@ -64,32 +64,35 @@ export function ephemerisPath(center: EphemerisEndpoint, target: EphemerisEndpoi
 
 // Reverses a center-to-target path. Each evaluation returns fresh position and
 // velocity vectors, even when the underlying provider reuses its storage.
-export function reverseEphemerisPath(path: EphemerisPath): EphemerisPath {
+export function reverseEphemerisPath(path: EphemerisPath, scratch?: PositionAndVelocity): EphemerisPath {
+	scratch ??= [vecZero(), vecZero()]
 	return ephemerisPath(path.target, path.center, (time) => {
 		const pv = path.stateAt(time)
-		vecNegateMut(pv[0])
-		vecNegateMut(pv[1])
-		return pv
+		vecNegate(pv[0], scratch[0])
+		vecNegate(pv[1], scratch[1])
+		return scratch
 	})
 }
 
 // Adds first center->middle and second middle->target at the same epoch.
 // Throws for mismatched endpoints, which would yield plausible but invalid geometry.
 // Snapshots the first state before calling the second provider, then returns owned vectors.
-export function composeEphemerisPaths(first: EphemerisPath, second: EphemerisPath): EphemerisPath {
+export function composeEphemerisPaths(first: EphemerisPath, second: EphemerisPath, scratch?: PositionAndVelocity): EphemerisPath {
 	if (!sameEphemerisEndpoint(first.target, second.center)) throw new Error('cannot compose ephemeris paths: first target does not match second center')
+	scratch ??= [vecZero(), vecZero()]
 	return ephemerisPath(first.center, second.target, (time) => {
 		const pva = first.stateAt(time)
 		const pvb = second.stateAt(time)
-		vecPlus(pva[0], pvb[0], pva[0])
-		vecPlus(pva[1], pvb[1], pva[1])
-		return pva
+		vecPlus(pva[0], pvb[0], scratch[0])
+		vecPlus(pva[1], pvb[1], scratch[1])
+		return scratch
 	})
 }
 
 // Forms origin.target -> target.target from two paths sharing one center.
 // Both states are sampled at the same epoch; no light-time correction is applied.
-export function relativeEphemerisPath(target: EphemerisPath, origin: EphemerisPath): EphemerisPath {
+export function relativeEphemerisPath(target: EphemerisPath, origin: EphemerisPath, scratch?: PositionAndVelocity): EphemerisPath {
 	if (!sameEphemerisEndpoint(target.center, origin.center)) throw new Error('cannot form relative ephemeris path: centers do not match')
-	return composeEphemerisPaths(reverseEphemerisPath(origin), target)
+	scratch ??= [vecZero(), vecZero()]
+	return composeEphemerisPaths(reverseEphemerisPath(origin, scratch), target, scratch)
 }

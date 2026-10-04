@@ -25,6 +25,12 @@ export type PositionAndVelocity = [MutVec3, MutVec3]
 // Sampler returning the position and velocity of a body at the given time.
 export type PositionAndVelocityOverTime = (time: Time) => PositionAndVelocity
 
+// Observer-to-body position in AU in library-base inertial axes at the requested epoch.
+export type PositionOverTime = (time: Time) => MutVec3
+
+// Observer-to-body velocity in AU/day in library-base inertial axes at the requested epoch.
+export type VelocityOverTime = (time: Time) => MutVec3
+
 // A fixed-point light-time solution at reception time. All vectors are owned
 // snapshots in BCRS/ICRS axes: positions AU, velocity AU/day, and light time days.
 export interface LightTimeSolution {
