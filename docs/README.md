@@ -876,6 +876,39 @@ console.log(timeToDate(utc(season(2026, 'winter'))).slice(0, 6)) // [2026, 12, 2
 
 ### Galactocentric Frame
 
+The Galactocentric frame is Cartesian with its origin at the Galactic center, x pointing from the Sun toward the center (so the Sun sits near x = −8.1 kpc), and z toward the north Galactic pole. The Sun is slightly above the Galactic midplane, which the frame accounts for by tilting about y by `asin(zSun / distance)`. The construction mirrors Astropy: rotate ICRS so x points at the center, apply an optional roll about that line, then the Sun-height tilt.
+
+`galactocentricFrame(params?)` returns an `AffineFrame` for use with `affineFromBase`, `affineToBase`, and `affineToAffine` (see Affine Origin Frames). Parameters are `galcen` (ICRS right ascension and declination of the center, radians), `galcenDistance` (Sun to center, AU), `zSun` (Sun height above the midplane, positive toward the north pole, AU), and `roll` (extra roll about the Sun-center line, radians). `GALACTOCENTRIC_DEFAULTS` holds the Astropy "latest" values: center at (266.4051°, −28.936175°), 8.122 kpc, 20.8 pc, roll 0. The frame is constant in time and has no origin velocity, so velocities are rotated but receive no solar-motion offset. It needs absolute positions with a real distance, never normalized directions.
+
+```ts
+import { affineFromBase, affineToBase, galactocentricFrame, GALACTOCENTRIC_DEFAULTS } from 'nebulosa/src/astronomy/coordinates/affine'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { ONE_KILOPARSEC } from 'nebulosa/src/core/constants'
+
+const time = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.UTC) // the frame does not depend on time
+
+// Astropy defaults. Pass { ...GALACTOCENTRIC_DEFAULTS, galcenDistance: ... } to change one parameter.
+const frame = galactocentricFrame()
+
+// ICRS position in AU (here 1, 2, 3 kpc along the ICRS axes) -> Galactocentric Cartesian, AU.
+const [x, y, z] = affineFromBase([1 * ONE_KILOPARSEC, 2 * ONE_KILOPARSEC, 3 * ONE_KILOPARSEC], frame, time)
+
+console.log(x / ONE_KILOPARSEC, y / ONE_KILOPARSEC, z / ONE_KILOPARSEC) // -11.3749 1.8454 0.1333 — kpc
+
+// The Sun (the ICRS origin) is 8.122 kpc from the center and 20.8 pc above the midplane.
+const [sx, , sz] = affineFromBase([0, 0, 0], frame, time)
+
+console.log(sx / ONE_KILOPARSEC, sz / ONE_KILOPARSEC) // -8.12197 0.0208 — kpc
+
+// Exact inverse: Galactocentric -> ICRS.
+console.log(affineToBase([x, y, z], frame, time)) // the original ICRS position, 1, 2, 3 kpc expressed in AU
+
+// A different Sun-center distance, in AU.
+const far = galactocentricFrame({ ...GALACTOCENTRIC_DEFAULTS, galcenDistance: 8.2 * ONE_KILOPARSEC })
+
+console.log(affineFromBase([0, 0, 0], far, time)[0] / ONE_KILOPARSEC) // -8.19997 — kpc
+```
+
 ### Galilean Satellite Theory (L1.2)
 
 ### Gauss Angles-Only Orbit Determination
@@ -884,7 +917,61 @@ console.log(timeToDate(utc(season(2026, 'winter'))).slice(0, 6)) // [2026, 12, 2
 
 ### Geographic Observer
 
+An observer on the Earth is a point on a reference ellipsoid: geodetic latitude (north-positive), longitude (east-positive), and height above the ellipsoid. The library supports GRS80, WGS72, WGS84, and IERS2010 ellipsoids, with IERS2010 as the default. Angles are radians and elevation is in AU, so convert heights with `meter`.
+
+`geodeticLocation(longitude, latitude, elevation, ellipsoid?)` builds a `GeographicPosition` from geodetic coordinates, and `geocentricLocation(x, y, z, ellipsoid?)` from an Earth-centered Cartesian (ITRS) position in AU. Note the argument order: longitude comes before latitude. The returned object caches derived geometry on itself, so reuse one instance per site. `localSiderealTime(time, location?, mean?, tio?)` is the sidereal time at the site: apparent by default (`mean = true` gives mean), using the observer's longitude from a location or from a plain angle, and `location` defaults to `time.location`. `tio: true` also applies polar motion and the TIO locator, and `'sp'` applies only the TIO locator; the default applies neither. `polarRadius(ellipsoid)` is the ellipsoid's polar semi-axis, and `rhoCosPhi` and `rhoSinPhi` are the geocentric parallax terms `ρ·cos φ′` and `ρ·sin φ′` (in Earth equatorial radii) used for topocentric parallax. UT1, hence sidereal time, uses the loaded Earth orientation data; see Earth Orientation Parameters.
+
+```ts
+import { Ellipsoid, geocentricLocation, geodeticLocation, localSiderealTime, polarRadius, rhoCosPhi, rhoSinPhi } from 'nebulosa/src/astronomy/observer/location'
+import { itrs } from 'nebulosa/src/astronomy/coordinates/itrs'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+import { meter, toKilometer, toMeter } from 'nebulosa/src/math/units/distance'
+
+// longitude, latitude, elevation (all radians and AU). La Silla Observatory.
+const site = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
+
+// The same site from ITRS Cartesian coordinates, in AU.
+const xyz = itrs(site)
+const fromXyz = geocentricLocation(xyz[0], xyz[1], xyz[2])
+
+console.log(toDeg(fromXyz.longitude), toDeg(fromXyz.latitude), toMeter(fromXyz.elevation)) // -70.7313 -29.2563 2400 — degrees, meters
+
+const time = timeYMDHMS(2026, 6, 29, 4, 0, 0, Timescale.UTC)
+
+console.log(toHour(localSiderealTime(time, site))) // 17.7685 — hours, apparent
+console.log(toHour(localSiderealTime(time, site.longitude, true))) // 17.7683 — hours, mean, from a plain longitude
+console.log(toHour(localSiderealTime({ ...time, location: site }))) // 17.7685 — hours, location taken from time.location
+
+// Parallax terms and polar radius.
+const ellipsoid = Ellipsoid.WGS84
+const mid = geodeticLocation(deg(10), deg(45), 0, ellipsoid)
+
+console.log(rhoCosPhi(mid), rhoSinPhi(mid)) // 0.70829 0.70355 — Earth radii
+console.log(toKilometer(polarRadius(ellipsoid))) // 6356.752 — km
+```
+
 ### Geographic Sub-point
+
+The sub-point of a celestial position is the point on the Earth's surface directly beneath it: the geodetic longitude and latitude where the local vertical through the position meets the ellipsoid, plus the height above the ellipsoid. It is how you place a satellite, the Moon, or any geocentric vector on a map.
+
+`subpoint(geocentric, time, ellipsoid?)` takes a geocentric position in GCRS/ICRS-oriented axes (AU), rotates it into ITRS at `time` with the full Earth orientation, and converts it to geodetic coordinates on the ellipsoid (IERS2010 by default). The result is a `GeographicPosition` with longitude wrapped to `(−π, π]` (east-positive), latitude, `elevation` in AU above the ellipsoid, and the ITRS vector cached as `itrs`. Earth rotation, so UT1, comes from the loaded Earth orientation data (see Earth Orientation Parameters). For satellites tracked with SGP4 see Satellite Sub-point; for sub-points on other bodies see Sub-Observer and Sub-Solar Points.
+
+```ts
+import { subpoint } from 'nebulosa/src/astronomy/observer/location'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+
+const time = timeYMDHMS(2026, 6, 29, 4, 0, 0, Timescale.UTC)
+
+// Geocentric position in AU, GCRS axes (about 10 600 km above the surface).
+const point = subpoint([1e-4, 2e-5, 5e-5], time)
+
+console.log(toDeg(point.longitude)) // 34.41 — degrees east
+console.log(toDeg(point.latitude)) // 26.32 — degrees north
+console.log(toKilometer(point.elevation)) // 10617 — km above the ellipsoid
+```
 
 ### Gibbs Orbit Determination
 
@@ -912,9 +999,92 @@ console.log(timeToDate(utc(season(2026, 'winter'))).slice(0, 6)) // [2026, 12, 2
 
 ### Light-Time Solution
 
+Light takes time to cross the Solar System, so a body seen at time `t` is where it was at the earlier emission time `t − τ`, with `τ = distance / c`. Because the distance depends on that earlier position, the solution is found by fixed-point iteration: sample the observer at reception, sample the target at the retarded epoch, recompute the distance, and repeat. Three iterations are enough for Solar-System bodies.
+
+`lightTimeSolution(target, observer, time, iterations)` returns the retarded geometry, or `undefined` when target and observer coincide. `target` and `observer` are functions of `Time` returning a barycentric `[position (AU), velocity (AU/day)]` that share one origin, typically ICRS/BCRS; the observer is sampled once at reception and the target `iterations + 1` times. `iterations` must be an integer in `[0, 16]` (0 is the uncorrected geometric direction) or an `Error` is thrown; `DEFAULT_LIGHT_TIME_ITERATIONS` is 3. The result is an owned snapshot: `position` (target minus observer, AU), `distance` (AU), `lightTime` (days), `emissionTime`, the observer's position and velocity at reception, and the target's position at emission. `topocentricDirection` returns only the observer-to-target vector, a freshly allocated non-unit vector whose length is the distance in AU; its optional `out` receives the result and is returned. Neither applies aberration or deflection, so the vector is a geometric line of sight and not an apparent place; for that use Apparent Direction. `lightTime(p)` converts a position's length to days of light travel.
+
+```ts
+import { DEFAULT_LIGHT_TIME_ITERATIONS, lightTime, lightTimeSolution, topocentricDirection } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+const time = timeYMDHMS(2026, 6, 29, 4, 0, 0, Timescale.UTC)
+
+// Synthetic barycentric providers: [position (AU), velocity (AU/day)].
+const observer = () =>
+	[
+		[1, 0, 0],
+		[0, 0.0172, 0],
+	] as const
+const target = () =>
+	[
+		[1.5, 4.5, 0.5],
+		[0, 0, 0],
+	] as const
+
+const solution = lightTimeSolution(target, observer, time, DEFAULT_LIGHT_TIME_ITERATIONS)
+
+console.log(solution?.position) // [0.5, 4.5, 0.5] — AU, target minus observer
+console.log(solution?.distance) // 4.5552 — AU
+console.log(solution?.lightTime) // 0.026309 — days
+// solution?.emissionTime is time - lightTime; observerPosition, observerVelocity and
+// targetEmissionPosition are the reception and emission samples.
+
+const direction = topocentricDirection(target, observer, time, DEFAULT_LIGHT_TIME_ITERATIONS)
+
+console.log(direction) // [0.5, 4.5, 0.5] — AU, not normalized
+console.log(lightTime(direction)) // 0.026309 — days of light travel
+
+console.log(
+	lightTimeSolution(
+		() =>
+			[
+				[1, 0, 0],
+				[0, 0, 0],
+			] as const,
+		observer,
+		time,
+		3,
+	),
+) // undefined — coincident
+```
+
 ### Local ENU Frames
 
 ### Local Horizon Coordinates
+
+The horizontal system describes where a source appears for an observer: azimuth measured from north through east, and altitude above the local horizon. Converting from equatorial coordinates needs the local hour angle `H = LST − RA`, where LST is the local apparent sidereal time, and the observer's latitude.
+
+`equatorialToHorizontal(ra, dec, latitude, lst)` returns `[azimuth, altitude]` and `horizontalToEquatorial(azimuth, altitude, latitude, lst)` returns `[ra, dec]`. All angles are radians; `ra` and `dec` are in the equatorial frame of date (the same equator as the sidereal time), `latitude` is geodetic, `lst` is the local apparent sidereal time (use `localSiderealTime`), azimuth comes back in `[0, 2π)`, and the right ascension returned by the inverse is wrapped to `[0, 2π)`. The conversion is pure trigonometry: it applies no refraction, aberration, or parallax, and at the zenith or a pole the azimuth is arbitrary but finite. For a refracted, topocentric place with ERFA corrections see Topocentric Observed Place.
+
+```ts
+import { equatorialToHorizontal, horizontalToEquatorial } from 'nebulosa/src/astronomy/coordinates/coordinate'
+import { localSiderealTime } from 'nebulosa/src/astronomy/observer/location'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, hour, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+
+const time = timeYMDHMS(2026, 6, 29, 4, 0, 0, Timescale.UTC)
+const longitude = deg(-70.7313) // east-positive
+const latitude = deg(-29.2563)
+
+// Local apparent sidereal time at the observer's longitude (radians).
+const lst = localSiderealTime(time, longitude)
+
+console.log(toHour(lst)) // 17.768 — hours
+
+// Equatorial of date: RA 16 h, Dec -26°.
+const [azimuth, altitude] = equatorialToHorizontal(hour(16), deg(-26), latitude, lst)
+
+console.log(toDeg(azimuth)) // 271.51 — degrees, north through east (west)
+console.log(toDeg(altitude)) // 66.32 — degrees
+
+// Inverse: recovers the equatorial coordinates.
+const [ra, dec] = horizontalToEquatorial(azimuth, altitude, latitude, lst)
+
+console.log(toHour(ra), toDeg(dec)) // 16 -26 — hours, degrees
+
+// A body at declination equal to the latitude and transiting is at the zenith.
+console.log(toDeg(equatorialToHorizontal(lst, latitude, latitude, lst)[1])) // 90 — degrees
+```
 
 ### Local Horizon Mask
 
@@ -930,9 +1100,71 @@ console.log(timeToDate(utc(season(2026, 'winter'))).slice(0, 6)) // [2026, 12, 2
 
 ### Local Standard of Rest Frames
 
+The Local Standard of Rest (LSR) is the reference frame in which the average motion of nearby stars is zero. Velocities relative to the Sun, in ICRS, are converted to it by adding the Sun's peculiar motion. Only velocities change: LSR frames have the ICRS origin, so positions are unchanged, apart from the Galactic variant, which also rotates the axes.
+
+`lsrFrame(solarVelocity?)` is the standard LSR. `solarVelocity` is the Sun's peculiar velocity relative to the LSR in Galactic Cartesian (U, V, W), AU/day, and defaults to `LSR_DEFAULT_SOLAR_VELOCITY` = (11.1, 12.24, 7.25) km/s (Schönrich, Binney and Dehnen 2010). `lsrdFrame()` is the dynamical LSR with the Delhaye (1965) motion (9, 12, 7) km/s. `lsrkFrame()` is the kinematic LSR with the solar-apex motion of about 20 km/s defined in ICRS axes. `galacticLsrFrame(solarVelocity?)` is the LSR expressed in Galactic axes: positions are rotated into Galactic Cartesian and velocities gain the same offset as `lsrFrame`. All four return an `AffineFrame` for `affineFromBase`, `affineToBase`, and `affineToAffine`; see Affine Origin Frames. Pass full `[position, velocity]` states in AU and AU/day (`kilometerPerSecond` converts km/s).
+
+```ts
+import { affineFromBase, galacticLsrFrame, lsrdFrame, lsrFrame, lsrkFrame } from 'nebulosa/src/astronomy/coordinates/affine'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { ONE_PARSEC } from 'nebulosa/src/core/constants'
+import { kilometerPerSecond, toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+const time = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.UTC)
+
+// ICRS state: position 100, 200, 50 pc (in AU); velocity 10, -20, 5 km/s (in AU/day).
+const state = [
+	[100 * ONE_PARSEC, 200 * ONE_PARSEC, 50 * ONE_PARSEC],
+	[kilometerPerSecond(10), kilometerPerSecond(-20), kilometerPerSecond(5)],
+] as const
+
+const [position, velocity] = affineFromBase(state, lsrFrame(), time)
+
+console.log(position.map((x) => x / ONE_PARSEC)) // [100, 200, 50] — pc, unchanged
+console.log(velocity.map(toKilometerPerSecond)) // [9.148, -36.576, 12.078] — km/s, ICRS velocity plus the Sun's motion
+
+console.log(affineFromBase(state, lsrdFrame(), time)[1].map(toKilometerPerSecond)) // [9.362, -34.585, 12.801] — km/s, dynamical
+console.log(affineFromBase(state, lsrkFrame(), time)[1].map(toKilometerPerSecond)) // [10.290, -37.317, 15.001] — km/s, kinematic
+
+// The same offset in Galactic axes: position rotated, velocity offset as for lsrFrame.
+const [galacticPosition, galacticVelocity] = affineFromBase(state, galacticLsrFrame(), time)
+
+console.log(galacticPosition.map((x) => x / ONE_PARSEC)) // [-204.37, -2.206, -103.58] — pc, Galactic axes
+console.log(galacticVelocity.map(toKilometerPerSecond)) // [25.601, 29.813, 4.815] — km/s
+```
+
 ### Local Taki Frames
 
 ### Location GCRS Frame
+
+`gcrs(location)` builds a `Frame` whose axes are the local altazimuth axes of a site, expressed relative to the geocentric celestial frame: it rotates a geocentric (GCRS/ICRS-oriented) vector by the Earth's orientation at the instant (precession, nutation, rotation, polar motion) and then into the site's local altazimuth axes. The frame rotates with the Earth, so a full `[position, velocity]` state also receives the rotating-frame term from the instantaneous Earth angular velocity.
+
+Use it with the frame functions (`frameAt`, `frameToFrame`, see Celestial and Terrestrial Reference Frames) to express geocentric vectors in a site's horizon axes. `gcrsRotationAt(location, time)` returns just the 3×3 rotation, as a fresh matrix, and does not mutate the cached GCRS-to-ITRS matrix of the time. This is geometry only, with no refraction, aberration, or origin shift: a geocentric vector stays geocentric, so subtract the observer's position first for topocentric directions, or use Topocentric Observed Place for a full observed place.
+
+```ts
+import { frameAt } from 'nebulosa/src/astronomy/coordinates/frame'
+import { gcrs, gcrsRotationAt, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+const site = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
+const time = timeYMDHMS(2026, 6, 29, 4, 0, 0, Timescale.UTC)
+const frame = gcrs(site)
+
+// A unit direction (RA 200°, Dec 30°) in the site's local axes.
+const direction = [Math.cos(deg(30)) * Math.cos(deg(200)), Math.cos(deg(30)) * Math.sin(deg(200)), Math.sin(deg(30))] as const
+
+console.log(frameAt(direction, frame, time)) // [0.6053, -0.7936, 0.0618] — local-axes components
+
+// A state: the Earth's rotation adds the transport term to the velocity.
+const [position, velocity] = frameAt([direction, [0, 0, 0]] as const, frame, time)
+
+console.log(position) // [0.6053, -0.7936, 0.0618]
+console.log(velocity) // [-2.4435, -2.2038, -4.3621] — per day, from the rotating frame
+
+console.log(gcrsRotationAt(site, time)) // 3x3 row-major rotation, the matrix applied by frameAt
+```
 
 ### Low-Precision Earth Ephemeris
 
@@ -1077,6 +1309,36 @@ console.log(toKilometerPerSecond(radialVelocityCorrection(hour(5.5), deg(-5), ti
 
 ### Sampled Angular Motion
 
+The angular motion of a moving target on the sky, such as a comet, asteroid, or satellite, can be estimated from a few sampled positions. Two samples give a constant rate. Three or more also give an acceleration, which captures the curvature of the track and sets how a mount should track a body whose rate changes.
+
+`angularMotionOrDifferentialTrackingRate(samples)` takes samples of `{ longitude, latitude, timeDays }`, with longitude and latitude (right ascension and declination) in radians and time in days; only differences in time matter and the samples may be unordered. It returns `undefined` for fewer than two samples or when the endpoints share a time. The rate is the secant from the earliest to the latest sample, with the longitude difference unwrapped to `(−π, π]` so a sample crossing 0 h does not invent a full-turn rate. The result gives `longitudeRatePerDay` and `latitudeRatePerDay` (coordinate rates; longitude is not multiplied by `cos(latitude)`), the great-circle `angularRatePerDay`, the same three per SI second, and the `positionAngle` of travel (north through east, `[0, 2π)`). With three or more samples it adds the longitude, latitude, and tangential accelerations in radians per day squared. The tangential acceleration is omitted when a leg is antipodal.
+
+```ts
+import { angularMotionOrDifferentialTrackingRate } from 'nebulosa/src/astronomy/coordinates/motion'
+import { arcsec, deg, hour, toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
+
+// Positions at 0 h and 1 h (time in days): RA +30" and Dec -10" in the hour.
+const samples = [
+	{ longitude: hour(10), latitude: deg(20), timeDays: 0 },
+	{ longitude: hour(10) + arcsec(30), latitude: deg(20) - arcsec(10), timeDays: 1 / 24 },
+]
+
+const motion = angularMotionOrDifferentialTrackingRate(samples)
+
+console.log(toArcsec(motion!.longitudeRatePerSecond)) // 0.00833 — arcsec/s in RA
+console.log(toArcsec(motion!.angularRatePerSecond)) // 0.00831 — arcsec/s on the sky
+console.log(toDeg(motion!.positionAngle)) // 109.53 — degrees, mostly east and slightly south
+
+// A third sample adds the acceleration of a curved track.
+const curved = angularMotionOrDifferentialTrackingRate([...samples, { longitude: hour(10) + arcsec(70), latitude: deg(20) - arcsec(30), timeDays: 2 / 24 }])
+
+console.log(curved?.angularRatePerDay) // 0.0042061 — radians/day
+console.log(curved?.angularAccelerationPerDaySquared) // 0.03832 — radians/day²
+console.log(curved?.longitudeAccelerationPerDaySquared) // 0.027925 — radians/day²
+
+console.log(angularMotionOrDifferentialTrackingRate([samples[0]])) // undefined — a single sample has no rate
+```
+
 ### Satellite Conjunctions
 
 ### Satellite Eclipses
@@ -1137,7 +1399,90 @@ console.log(toArcsec(sunSemidiameter(0.98329))) // 975.94 — arcseconds, near p
 
 ### Spherical Coordinate Conversions
 
+The same direction on the sky can be written in several spherical systems. Equatorial uses right ascension and declination, ecliptic uses longitude and latitude relative to the plane of the Earth's orbit, and Galactic uses longitude and latitude relative to the plane of the Milky Way. Converting between them is a fixed rotation (J2000 systems) or a time-dependent one (systems "of date", which depend on precession, nutation, and obliquity).
+
+Each function takes and returns radians as a `[longitude-like, latitude-like]` pair. The J2000 pairs (`equatorialToEclipticJ2000`, `eclipticJ2000ToEquatorial`, `equatorialToGalactic`, `galacticToEquatorial`) need no time. The "of date" ones take a `Time` and default to the current instant: `equatorialToEcliptic` and `eclipticToEquatorial` rotate about the equator-of-date by the true obliquity, and `equatorialFromJ2000` and `equatorialToJ2000` apply or remove the IAU 2006/2000A precession-nutation. Longitudes and right ascensions come back in `(−π, π]`, not wrapped to `[0, 2π)`; wrap with `normalizeAngle` when you need that. These are directions only: for positions or states and the other frames, see Celestial and Terrestrial Reference Frames, and for the horizontal system see Local Horizon Coordinates.
+
+```ts
+import { eclipticJ2000ToEquatorial, eclipticToEquatorial, equatorialFromJ2000, equatorialToEcliptic, equatorialToEclipticJ2000, equatorialToGalactic, equatorialToJ2000, galacticToEquatorial } from 'nebulosa/src/astronomy/coordinates/coordinate'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, hour, toDeg } from 'nebulosa/src/math/units/angle'
+
+const time = timeYMDHMS(2026, 6, 29, 4, 0, 0, Timescale.UTC)
+
+// J2000 equatorial RA 10 h, Dec +20° -> J2000 ecliptic.
+const [lambda, beta] = equatorialToEclipticJ2000(hour(10), deg(20))
+
+console.log(toDeg(lambda), toDeg(beta)) // 145.128 7.2907 — degrees
+console.log(eclipticJ2000ToEquatorial(lambda, beta).map(toDeg)) // [150, 20] — degrees, round trip
+
+// Ecliptic of date (true obliquity at `time`), then back.
+console.log(equatorialToEcliptic(hour(10), deg(20), time).map(toDeg)) // [145.1281, 7.2915] — degrees
+
+// Position of the Galactic center region in Galactic coordinates (J2000).
+console.log(equatorialToGalactic(hour(17.7611), deg(-28.9362)).map(toDeg)) // [0.0052, -0.0086] — degrees
+console.log(galacticToEquatorial(0, 0).map(toDeg)) // [-93.595, -28.936] — degrees; add 360 for RA = 266.405
+
+// J2000 -> equatorial coordinates of date (precession and nutation), and back.
+const [ra, dec] = equatorialFromJ2000(hour(10), deg(20), time)
+
+console.log(toDeg(ra), toDeg(dec)) // 150.369 19.872 — degrees
+console.log(equatorialToJ2000(ra, dec, time).map(toDeg)) // [150, 20] — degrees
+```
+
 ### Spherical State Rates
+
+A Cartesian position and velocity can be rewritten as spherical coordinates and their first derivatives: longitude, latitude, distance, the two angular rates, and the radial speed. This gives the apparent motion of a body on the sky, or its rate in any frame the state is already written in.
+
+`sphericalPositionAndVelocity(pv)` takes a `[position (AU), velocity (AU/day)]` state and returns longitude (radians, `[0, 2π)`), latitude (radians), `distance` (AU), `longitudeRate` and `latitudeRate` (radians per day), and `radialVelocity` (AU/day, positive when receding). It returns `undefined` for the zero position. At an exact Cartesian pole (`x = y = 0`) the longitude is 0 and both angular rates are omitted (`undefined`), because the chart is singular; near the pole the true, possibly large, rate is returned. `longitudeRate` is the rate of the coordinate itself, not multiplied by `cos(latitude)`. `frameSphericalPositionAndVelocity(pv, frame, time, out?)` first transforms the state into `frame` (including the rotating-frame term `W · p`), then converts it, so a point fixed in ITRS has near-zero Earth-fixed rates. `out` is an optional workspace for the transformed state and may alias `pv`. For plain angle conversions without rates, see Spherical Coordinate Conversions.
+
+```ts
+import { frameSphericalPositionAndVelocity, sphericalPositionAndVelocity } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { ITRS } from 'nebulosa/src/astronomy/coordinates/frame'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+// Position in AU and velocity in AU/day, in whatever frame the state is already in.
+const state = [
+	[1, 1, 1],
+	[0.01, -0.02, 0.03],
+] as const
+
+const spherical = sphericalPositionAndVelocity(state)
+
+console.log(spherical?.longitude) // 0.7854 — radians
+console.log(spherical?.latitude) // 0.6155 — radians
+console.log(spherical?.distance) // 1.7321 — AU
+console.log(spherical?.longitudeRate) // -0.015 — radians/day
+console.log(spherical?.latitudeRate) // 0.016499 — radians/day
+console.log(spherical?.radialVelocity) // 0.011547 — AU/day
+
+console.log(
+	sphericalPositionAndVelocity([
+		[0, 0, 2],
+		[0.1, 0, 0.3],
+	] as const),
+) // longitude 0, latitude PI/2, rates undefined, radialVelocity 0.3
+console.log(
+	sphericalPositionAndVelocity([
+		[0, 0, 0],
+		[0, 0, 0],
+	] as const),
+) // undefined
+
+// An inertial point at rest sweeps across the Earth-fixed sky at Earth's spin rate.
+const time = timeYMDHMS(2026, 6, 29, 4, 0, 0, Timescale.UTC)
+
+console.log(
+	frameSphericalPositionAndVelocity(
+		[
+			[1, 0, 0],
+			[0, 0, 0],
+		] as const,
+		ITRS,
+		time,
+	)?.longitudeRate,
+) // -6.3004 — radians/day
+```
 
 ### SPICE Body Radii
 
@@ -1185,6 +1530,51 @@ console.log(toArcsec(vecAngle(direction, deflected))) // 0.00407 — arcseconds 
 
 ### Topocentric Observed Place
 
+The observed place of a source is where an observer on the Earth's surface sees it: azimuth and altitude after the Earth's motion, rotation, polar motion, and optionally atmospheric refraction. It is computed with the ERFA astrometry pipeline: the observer's context (location, Earth state, Earth orientation, atmosphere) is set up once, the ICRS direction is corrected for light deflection and aberration, and the result is rotated into the local horizon frame with refraction applied.
+
+`icrsToObserved(icrs, time, ebpv, ehp, refraction, location)` does the full chain. `icrs` is a Cartesian vector or `[ra, dec]` in radians, assumed to have no parallax or proper motion. `ebpv` is the Earth's barycentric `[position, velocity]` (AU, AU/day) and `ehp` its heliocentric position (defaults to `ebpv[0]`). `refraction` is `{ pressure (hPa), temperature (°C), relativeHumidity (0..1), wl (µm) }` with missing fields from `DEFAULT_REFRACTION_PARAMETERS` (1013.25 hPa, 15 °C, 0.5, 0.55 µm), or `false` to disable it; zero pressure also disables it. `location` is a geodetic position and defaults to `time.location`, which throws if missing. The result is an `Observed` with `azimuth` (north through east, radians), `altitude` (radians, negative below the horizon), `hourAngle`, topocentric `rightAscension` and `declination`, and `equationOfOrigins`. The stages are available separately: `icrsToCirs` and `cirsToIcrs` (geocentric, from the Earth state only), and `cirsToObserved` and `observedToCirs` (from the site and the atmosphere). They take and return `[ra, dec]` in radians (a Cartesian vector is accepted as input). Each accepts a precomputed ERFA `astrom` as the last argument to reuse across many calls. `refractedAltitude(altitude, refraction?)` and `unrefractedAltitude(apparent, refraction?)` apply only the refraction step of the same bounded model, in radians, and are inverses of each other.
+
+UT1 and polar motion come from the loaded Earth orientation data; without it UT1 equals UTC, so the outputs below are good to a few arcseconds (see Earth Orientation Parameters). For a quick refraction estimate without pressure or temperature, see Approximate Atmospheric Refraction.
+
+```ts
+import { cirsToObserved, icrsToCirs, icrsToObserved, observedToCirs, refractedAltitude, unrefractedAltitude } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { eraEpv00 } from 'nebulosa/src/astronomy/coordinates/erfa/earth'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { tdb, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, hour, toDeg } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+const location = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400)) // longitude, latitude, elevation
+const time = timeYMDHMS(2026, 6, 29, 4, 0, 0, Timescale.UTC)
+
+// Earth's [heliocentric, barycentric] state at the TDB instant.
+const t = tdb(time)
+const [heliocentric, barycentric] = eraEpv00(t.day, t.fraction)
+
+// ICRS RA 16 h, Dec -26°, with the default refraction.
+const star = [hour(16), deg(-26)] as const
+const observed = icrsToObserved(star, time, barycentric, heliocentric[0], undefined, location)
+
+console.log(toDeg(observed.azimuth)) // 271.54 — degrees, north through east (west)
+console.log(toDeg(observed.altitude)) // 66.71 — degrees, refracted
+console.log(toDeg(observed.hourAngle)) // 26.11 — degrees, positive west
+
+// Without refraction the altitude is the geometric one.
+console.log(toDeg(icrsToObserved(star, time, barycentric, heliocentric[0], false, location).altitude)) // 66.70 — degrees
+
+// Stage by stage: ICRS -> CIRS -> observed, and back. The altitude matches the one-step result above.
+const cirs = icrsToCirs(star, time, barycentric, heliocentric[0])
+
+console.log(cirs.map(toDeg)) // [240.0674, -26.0767] — degrees
+console.log(toDeg(cirsToObserved(cirs, time, undefined, location).altitude)) // 66.71 — degrees
+console.log(observedToCirs(observed.azimuth, observed.altitude, time, undefined, location).map(toDeg)) // [240.0674, -26.0767] — degrees
+
+// Refraction alone: true altitude 10° -> apparent, and back.
+console.log(toDeg(refractedAltitude(deg(10)))) // 10.0861 — degrees
+console.log(toDeg(unrefractedAltitude(refractedAltitude(deg(10))))) // 10.0000 — degrees
+console.log(toDeg(refractedAltitude(deg(10), { pressure: 700, temperature: -5 }))) // 10.0642 — degrees, thinner and colder air
+```
+
 ### Transit Altitude and Hour Angle
 
 ### Tube Flexure Pointing Error
@@ -1198,6 +1588,25 @@ console.log(toArcsec(vecAngle(direction, deflected))) // 0.00407 — arcseconds 
 ### VSOP87E Planetary Theory
 
 ### Zenith and Celestial Circle Intersections
+
+Some points on the sky are defined by the observer's meridian rather than by a catalog position: the zenith, the point where the local meridian crosses the celestial equator, and the point where it crosses the ecliptic. They are expressed as equatorial coordinates of date, and their right ascension is always the local apparent sidereal time.
+
+`zenith(longitude, latitude, time?)` returns `[lst, latitude]`. `meridianEquator(longitude, time?)` returns `[lst, 0]`. `meridianEcliptic(longitude, time?)` returns `[lst, declination]` where the declination solves `tan(dec) = sin(ra) · tan(ε)` with the true obliquity of date. `equatorEcliptic(longitude, time?)` returns whichever equinox node (RA 0 or π, declination 0) lies within a quarter turn of the meridian. Angles are radians, longitude is east-positive, and `time` defaults to the current instant. Convert to azimuth and altitude with Local Horizon Coordinates when needed.
+
+```ts
+import { equatorEcliptic, meridianEcliptic, meridianEquator, zenith } from 'nebulosa/src/astronomy/coordinates/coordinate'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+const time = timeYMDHMS(2026, 6, 29, 4, 0, 0, Timescale.UTC)
+const longitude = deg(-70.7313)
+const latitude = deg(-29.2563)
+
+console.log(zenith(longitude, latitude, time).map(toDeg)) // [266.527, -29.256] — degrees, RA = LST and Dec = latitude
+console.log(meridianEquator(longitude, time).map(toDeg)) // [266.527, 0] — degrees
+console.log(meridianEcliptic(longitude, time).map(toDeg)) // [266.527, -23.399] — degrees
+console.log(equatorEcliptic(longitude, time).map(toDeg)) // [180, 0] — degrees, the nearer equinox node
+```
 
 ## 📐 Astrometry
 
