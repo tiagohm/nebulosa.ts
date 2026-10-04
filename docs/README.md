@@ -122,19 +122,224 @@ All three functions accept an optional `o` argument: the result is written there
 
 ### Airmass and Extinction
 
+Airmass is the optical path length through the atmosphere relative to the zenith path. It is 1 at the zenith and grows quickly near the horizon, where the simple `sec(z)` form stops being a good approximation. Atmospheric extinction is the magnitude loss `k · X`, where `k` is the extinction coefficient in magnitudes per airmass and `X` the airmass.
+
+Use these for planning and photometric estimates, not for precise reduction. `airmass` is `sec(z)` from the zenith distance and is only reasonable well above the horizon. `airmassKastenYoung` takes the altitude instead and stays usable near the horizon; it is clamped to a minimum of 1 because the published fit dips slightly below 1 at the zenith. Both are dimensionless and ignore pressure, temperature, and altitude of the site.
+
+```ts
+import { airmass, airmassKastenYoung, atmosphericExtinction } from 'nebulosa/src/astronomy/formulas'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+// sec(z). z: zenith distance in radians.
+console.log(airmass(deg(60))) // 2.0 — dimensionless airmass
+
+// Kasten-Young. altitude: radians above the horizon, in (0, PI/2].
+console.log(airmassKastenYoung(deg(30))) // 1.9943 — dimensionless
+console.log(airmassKastenYoung(deg(10))) // 5.5860 — dimensionless
+
+// Magnitude loss = k * X. k: mag/airmass. X: airmass, must be >= 1 (throws RangeError otherwise).
+console.log(atmosphericExtinction(0.2, airmassKastenYoung(deg(30)))) // 0.3989 — magnitudes lost
+```
+
 ### Alt-Az Field Rotation
+
+An alt-az mount keeps the optical axis on the target but not the sky orientation: the field turns about the optical axis at a rate that depends on latitude, azimuth, and altitude, and diverges at the zenith. The rate is `Ω · cos(latitude) · cos(azimuth) / cos(altitude)`, with `Ω` the sidereal rate. It equals minus the rate of the parallactic angle, and a rotator holds the sky orientation by commanding `offset − parallactic angle`.
+
+Use `fieldRotationRate` for the signed rate, `fieldRotation` when you also want the longest exposure that keeps a point at a given sensor radius inside a smear budget, and `derotatorAngle` or `derotatorTrack` to command an instrument rotator. Angles are radians, azimuth is measured north through east, and rates are radians per SI second. The rate functions return `undefined` at the zenith. Nothing here moves hardware; the derotator track follows the sidereal hour angle only and ignores the target's own motion.
+
+```ts
+import { derotatorAngle, derotatorTrack, fieldRotation, fieldRotationRate } from 'nebulosa/src/astronomy/coordinates/field'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+
+// latitude 45°, azimuth 30°, altitude 40° (radians).
+console.log(fieldRotationRate(deg(45), deg(30), deg(40))) // 5.829e-5 — rad/s, signed
+
+// Adds the exposure limit: smear budget of 1 pixel at 2000 px from the rotation center.
+const rotation = fieldRotation(deg(45), deg(30), deg(40), 1, 2000)
+
+console.log(rotation?.radiansPerMinute) // 0.0034976 — rad/min
+console.log(rotation?.maxExposureSeconds) // 8.58 — seconds; Infinity if the field is not rotating
+console.log(fieldRotation(deg(45), deg(30), deg(90))) // undefined — zenith
+
+// Derotator command: hour angle (positive west), declination, latitude, optional mechanical offset.
+console.log(derotatorAngle(hour(2), deg(20), deg(45))) // -0.6606 — radians in (-PI, PI]
+console.log(derotatorAngle(hour(2), deg(20), deg(45), deg(10))) // -0.4860 — with a 10° offset
+
+// Samples every 300 s over 600 s starting at the given hour angle.
+const track = derotatorTrack(hour(2), deg(20), deg(45), 600, 300)
+
+console.log(track.map((s) => s.angle)) // [-0.6606, -0.6757, -0.6899] — radians at 0, 300, 600 s
+```
+
+Both `derotatorTrack` limits throw a `RangeError`: a non-positive step, or a step so fine that the track would exceed 100000 samples. A zero duration returns a single sample.
 
 ### Angular Size and Surface Brightness Estimates
 
+Angular diameter is the angle an object of a given size subtends at a given distance, `2 · atan(d / 2D)`. Surface brightness spreads an integrated magnitude over an area in square arcseconds, `m + 2.5 · log10(A)`, so a larger object of the same total magnitude is fainter per unit area.
+
+These are planning helpers for sizing a target in the frame or judging how hard an extended object is to see. The surface brightness is a mean over the area you supply, not a measured profile.
+
+```ts
+import { objectAngularDiameter, surfaceBrightness } from 'nebulosa/src/astronomy/formulas'
+import { toArcmin } from 'nebulosa/src/math/units/angle'
+
+// Diameter and distance must be in the same length unit (here km: Sun and 1 AU).
+const theta = objectAngularDiameter(1391400, 149597870.7)
+
+console.log(theta) // 0.0093009 — angular diameter in radians
+console.log(toArcmin(theta)) // 31.974 — arcminutes
+
+// Total magnitude 10 spread over 3600 arcsec² (one square arcminute).
+console.log(surfaceBrightness(10, 3600)) // 18.8908 — mag/arcsec²
+```
+
 ### Angular Separation and Position Angle
+
+Two sky positions are separated by the great-circle angle between them, and the position angle says in which direction one lies from the other, measured from celestial north toward east: 0° is north, 90° east, 180° south, 270° west.
+
+`angularDistance` uses an `atan2` form that keeps tiny separations accurate, so prefer it; `angularDistanceHaversine` gives the same quantity with a less stable formulation. `positionAngleBetween` is the position angle of the second point as seen from the first, wrapped to `[0, 2π)`, and 0 when the points coincide. `separationFrom` is the angle between two Cartesian direction vectors instead of equatorial coordinates. All angles are radians.
+
+```ts
+import { angularDistance, angularDistanceHaversine, positionAngleBetween } from 'nebulosa/src/astronomy/coordinates/coordinate'
+import { separationFrom } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+// Right ascension and declination of point 0 and point 1 (radians).
+const separation = angularDistance(deg(10), deg(20), deg(10), deg(21))
+
+console.log(toDeg(separation)) // 1.0 — degrees
+console.log(toDeg(angularDistanceHaversine(deg(10), deg(20), deg(10), deg(21)))) // 1.0 — same quantity
+
+// Point 1 is directly north of point 0.
+console.log(toDeg(positionAngleBetween(deg(10), deg(20), deg(10), deg(21)))) // 0 — north
+console.log(toDeg(positionAngleBetween(deg(10), deg(20), deg(11), deg(20)))) // 89.83 — nearly east
+console.log(toDeg(positionAngleBetween(deg(10), deg(20), deg(9), deg(20)))) // 270.17 — nearly west
+
+// Direction vectors (need not be unit length for the angle).
+console.log(toDeg(separationFrom([1, 0, 0], [0, 1, 0]))) // 90 — degrees
+```
 
 ### Annual Aberration
 
+Aberration is the apparent shift of a source toward the direction the observer is moving, caused by the observer's velocity relative to the speed of light. For the Earth's orbital speed (about 30 km/s) the shift reaches about 20.5″; the diurnal term from the Earth's rotation is much smaller.
+
+`annualAberration` applies the ERFA special-relativistic model (`eraAb`) to a unit direction in ICRS/BCRS axes and returns a fresh unit vector. It is the complete aberration correction for whatever velocity you pass: use the Earth's barycentric velocity for the annual term, or the observer's full barycentric velocity (geocenter plus diurnal rotation) for annual plus diurnal. `sunDistance` only feeds the tiny light-bending term inside the ERFA model. For a full astrometric-to-apparent chain with deflection and ordering handled for you, see Apparent Direction.
+
+```ts
+import { annualAberration } from 'nebulosa/src/astronomy/coordinates/correction'
+import { kilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+// direction: unit vector toward the source (ICRS/BCRS axes).
+// observerVelocity: AU/day, barycentric. sunDistance: observer-Sun distance in AU.
+const apparent = annualAberration([1, 0, 0], [0, kilometerPerSecond(29.78), 0], 1)
+
+console.log(apparent) // [0.99999999507, 0.0000993354, 0] — unit vector, tilted toward +y, the velocity direction
+
+// A zero velocity leaves the direction unchanged.
+console.log(annualAberration([1, 0, 0], [0, 0, 0], 1)) // [1, 0, 0]
+```
+
 ### Apparent Direction
+
+The apparent direction of a Solar-System target is where an observer sees it in barycentric ICRS/BCRS axes. It is built in a fixed order: solve light time to get the astrometric direction, bend the ray by the gravity of any bodies you list, then apply the observer's aberration. Precession, nutation, Earth rotation, horizontal conversion, and refraction are not applied, and there is no hidden ephemeris: the target, observer, Sun, and every deflector are state providers you supply.
+
+`apparentDirection` runs the whole chain from providers. Each provider is a function of `Time` returning a barycentric `[position (AU), velocity (AU/day)]`. Aberration is on by default and then requires `sun`, which supplies the observer-Sun distance; without it the call throws. Deflection happens only for the bodies in `deflectors` (the Sun is not implied), in the order the photon meets them; `SUN_LIGHT_DEFLECTOR_MASS` and `SUN_LIGHT_DEFLECTOR_LIMITER` (with the Jupiter and Saturn equivalents) hold the ERFA constants. `lightTimeIterations` is an integer in `[0, 16]` (default 3). It returns `undefined` when the retarded observer-target vector is zero. For a star at infinity use Starlight Deflection instead, since this path assumes a finite-distance source.
+
+```ts
+import { apparentDirection, SUN_LIGHT_DEFLECTOR_LIMITER, SUN_LIGHT_DEFLECTOR_MASS } from 'nebulosa/src/astronomy/coordinates/apparent'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+const time = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.TDB)
+
+// Synthetic providers: barycentric [position (AU), velocity (AU/day)]. Use ephemeris lookups in practice.
+const sun = () =>
+	[
+		[0, 0, 0],
+		[0, 0, 0],
+	] as const
+const observer = () =>
+	[
+		[1, 0, 0],
+		[0, 0.0172, 0],
+	] as const
+const target = () =>
+	[
+		[1.5, 4.5, 0.5],
+		[0, 0, 0],
+	] as const
+
+const result = apparentDirection(target, observer, time, { sun })
+
+console.log(result?.astrometric) // [0.109764, 0.987878, 0.109764] — unit direction after light time
+console.log(result?.apparent) // [0.109753, 0.987881, 0.109753] — unit direction after aberration
+console.log(result?.distance) // 4.5552 — AU at the retarded solution
+console.log(result?.lightTime) // 0.026309 — days
+// result?.emissionTime is the retarded emission Time (time - lightTime).
+
+// Add solar deflection; deflectors are listed in photon encounter order.
+const deflected = apparentDirection(target, observer, time, {
+	sun,
+	deflectors: [{ mass: SUN_LIGHT_DEFLECTOR_MASS, limiter: SUN_LIGHT_DEFLECTOR_LIMITER, state: sun }],
+})
+
+console.log(deflected?.apparent) // direction shifted by about 0.0029″ relative to the previous apparent one
+```
+
+When you already hold snapshots, `applyApparentDirectionCorrections` applies only the deflection and aberration stages to an astrometric unit direction. Its arguments are the astrometric direction, the target emission position (AU), the observer position (AU) and velocity (AU/day), the light time in days, and `{ aberration, sunPosition, deflectors }` where each deflector is a snapshot with `mass`, `limiter`, `position`, and `velocity`. It returns a fresh unit vector.
+
+```ts
+import { applyApparentDirectionCorrections } from 'nebulosa/src/astronomy/coordinates/apparent'
+
+const apparent = applyApparentDirectionCorrections(
+	result!.astrometric, // unit direction after light time
+	[1.5, 4.5, 0.5], // target position at emission, AU
+	[1, 0, 0], // observer position at reception, AU
+	[0, 0.0172, 0], // observer velocity, AU/day
+	result!.lightTime, // days
+	{ sunPosition: [0, 0, 0] }, // aberration is on by default and needs the Sun position
+)
+
+console.log(apparent) // [0.109753, 0.987881, 0.109753] — same as result.apparent
+```
 
 ### Approximate Atmospheric Refraction
 
+Refraction bends starlight so an object appears higher than its geometric position, by about 1′ at 45° altitude and several arcminutes near the horizon. `atmosphericRefraction` uses Sæmundsson's formula (Meeus, ch. 16) as a standard-atmosphere planning estimate.
+
+The input is the true (airless) altitude, and the result is the amount to add to it to get the apparent altitude. It is not Bennett's apparent-altitude formula and takes no pressure or temperature, so do not use it when pressure, temperature, humidity, or wavelength matter; see Refractive Displacement for that. Valid for altitudes above the horizon.
+
+```ts
+import { atmosphericRefraction } from 'nebulosa/src/astronomy/formulas'
+import { arcmin, deg } from 'nebulosa/src/math/units/angle'
+
+// altitude: true geometric altitude in radians, in (0, PI/2].
+const r = atmosphericRefraction(deg(10))
+
+console.log(r) // 5.4077 — refraction in arcminutes (not radians)
+console.log(atmosphericRefraction(deg(45))) // 1.0127 — arcminutes
+
+// Apparent altitude = true altitude + refraction (converted to radians).
+const apparent = deg(10) + arcmin(r)
+
+console.log(apparent) // 0.17611 — apparent altitude in radians
+```
+
 ### Asteroid and Comet Magnitude Estimates
+
+Apparent magnitude grows with the distances to the Sun and to the observer. Asteroids follow `m = H + 5·log10(r·Δ) + φ`, where `H` is the absolute magnitude and `φ` is a phase correction you supply. Comets follow `m = H + 5·log10(Δ) + k·log10(r)`, where `k` is an activity coefficient you supply.
+
+These are quick planning formulas, not the Mallama and Hilton planetary model, and they do not compute the phase angle or the phase function for you; use Planetary Apparent Magnitudes (Mallama and Hilton) for planets. Distances are positive and in AU.
+
+```ts
+import { asteroidMagnitudeEstimate, cometMagnitudeEstimate } from 'nebulosa/src/astronomy/formulas'
+
+// H: absolute magnitude. r: heliocentric distance (AU). delta: geocentric distance (AU).
+// phase: magnitude correction already computed by the caller.
+console.log(asteroidMagnitudeEstimate(12, 1.5, 0.8, 0.3)) // 12.696 — apparent magnitude
+
+// H: total absolute magnitude. delta, r: AU. k: activity coefficient.
+console.log(cometMagnitudeEstimate(8, 0.5, 1.2, 10)) // 7.2867 — apparent magnitude
+```
 
 ### Asteroid and Comet Orbit Construction
 
@@ -169,6 +374,30 @@ All three functions accept an optional `o` argument: the result is written there
 ### Delta T
 
 ### Dew Point and Frost
+
+The dew point is the temperature at which air saturates and water condenses on a surface; the frost point is the same for deposition of ice. Both come from the Magnus approximation. The margin `T − Tdew` says how far the air is from saturation, and optics that cool below the dew point collect dew.
+
+`dewPoint` and `frostPoint` take the ambient temperature in °C within `[-100, 100]` and a relative humidity in percent within `(0, 100]`, and throw a `RangeError` for any other humidity. `frostPoint` expects the humidity relative to ice, not the water-relative value weather stations report; above freezing the dew point is the relevant temperature. `relativeHumidity` is the inverse of `dewPoint` (it may exceed 100 for supersaturated input). `isMagnusDomain` tests a temperature before calling, since outside the domain results can be non-finite.
+
+```ts
+import { dewMargin, dewPoint, dewRisk, dewRiskFromMargin, frostPoint, isMagnusDomain, relativeHumidity } from 'nebulosa/src/astronomy/formulas'
+
+// temperature: °C. humidity: percent over water, in (0, 100].
+const td = dewPoint(20, 60)
+
+console.log(td) // 12.0 — dew point in °C
+console.log(relativeHumidity(20, td)) // 60 — percent, inverse of dewPoint
+console.log(frostPoint(-10, 50)) // -17.58 — °C, humidity relative to ice
+
+console.log(dewMargin(20, 60)) // 8.0 — °C above the dew point (T - Tdew)
+
+// Risk on a 0..1 scale: 1 at margin <= 0, linearly down to 0 at the clear margin (default 5 °C).
+console.log(dewRiskFromMargin(2.5)) // 0.5
+console.log(dewRisk(20, 60)) // 0 — margin of 8 °C is beyond the default clear margin
+console.log(dewRisk(10, 90, 10)) // 0.8435 — margin of 1.57 °C against a 10 °C clear margin
+
+console.log(isMagnusDomain(150)) // false — outside [-100, 100] °C
+```
 
 ### Differential Orbit Correction
 
