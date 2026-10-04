@@ -1,8 +1,8 @@
+import { vecFill, vecZero } from 'nebulosa/src/math/linear-algebra/vec3'
 import { DAYSPERJY, TAU } from '../../../../core/constants'
 import { matMulVec } from '../../../../math/linear-algebra/mat3'
-import type { MutVec3 } from '../../../../math/linear-algebra/vec3'
 import { pmod } from '../../../../math/numerical/math'
-import type { PositionAndVelocity, PositionAndVelocityMut } from '../../../coordinates/astrometry'
+import type { PositionAndVelocityMut } from '../../../coordinates/astrometry'
 import { type Time, tt } from '../../../time/time'
 
 // L1.2 theory of the galilan satellites,
@@ -639,23 +639,23 @@ const CHEBYSHEV = [
 const J2000 = [0.9994327730319685, 0.030395736820722188, -0.01449935766698494, -0.033676879155137895, 0.9020579145791894, -0.43029918261067407, -3.689877119128493e-10, 0.43054339842595357, 0.9025698765590566] as const
 
 // Computes the position and velocity of Io at given time using the L1 theory
-export function io(time: Time) {
-	return compute(time, 0)
+export function io(time: Time, out?: PositionAndVelocityMut) {
+	return compute(time, 0, out)
 }
 
 // Computes the position and velocity of Europa at given time using the L1 theory
-export function europa(time: Time) {
-	return compute(time, 1)
+export function europa(time: Time, out?: PositionAndVelocityMut) {
+	return compute(time, 1, out)
 }
 
 // Computes the position and velocity of Ganymede at given time using the L1 theory
-export function ganymede(time: Time) {
-	return compute(time, 2)
+export function ganymede(time: Time, out?: PositionAndVelocityMut) {
+	return compute(time, 2, out)
 }
 
 // Computes the position and velocity of Callisto at given time using the L1 theory
-export function callisto(time: Time) {
-	return compute(time, 3)
+export function callisto(time: Time, out?: PositionAndVelocityMut) {
+	return compute(time, 3, out)
 }
 
 // Adds the official L1.2 degree-8 Chebyshev long-period corrections to L, k, h, q, p in `elem`.
@@ -685,7 +685,7 @@ function applyLongPeriodChebyshev(t: number, index: number, elem: Float64Array) 
 // series, degree-8 Chebyshev polynomials correct L, k, h, q, p for very long-period terms inside
 // the theory's validity window. Solves Kepler's equation to a 1e-12 tolerance. Returned vectors
 // alias the internal conversion buffers.
-export function compute(time: Time, index: number): PositionAndVelocityMut {
+export function compute(time: Time, index: number, out?: PositionAndVelocityMut): PositionAndVelocityMut {
 	time = tt(time)
 	const t = time.day - 2433282 + (time.fraction - 0.5)
 	const elem = new Float64Array(6)
@@ -747,11 +747,14 @@ export function compute(time: Time, index: number): PositionAndVelocityMut {
 	const q2 = 1 - 2 * q * q
 	const pq = 2 * p * q
 
-	const pxyz: MutVec3 = [x1 * p2 + y1 * pq, x1 * pq + y1 * q2, (q * y1 - x1 * p) * f2]
-	const vxyz: MutVec3 = [vx1 * p2 + vy1 * pq, vx1 * pq + vy1 * q2, (q * vy1 - vx1 * p) * f2]
+	const pxyz = out?.[0] ?? vecZero()
+	const vxyz = out?.[1] ?? vecZero()
+
+	vecFill(pxyz, x1 * p2 + y1 * pq, x1 * pq + y1 * q2, (q * y1 - x1 * p) * f2)
+	vecFill(vxyz, vx1 * p2 + vy1 * pq, vx1 * pq + vy1 * q2, (q * vy1 - vx1 * p) * f2)
 
 	matMulVec(J2000, pxyz, pxyz)
 	matMulVec(J2000, vxyz, vxyz)
 
-	return [pxyz, vxyz]
+	return out ?? [pxyz, vxyz]
 }

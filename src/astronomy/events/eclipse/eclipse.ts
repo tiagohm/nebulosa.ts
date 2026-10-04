@@ -1,11 +1,11 @@
 import { AU_KM, DAYSEC, DEG2RAD, EARTH_RADIUS_KM, LIGHT_TIME_AU, PI, SPEED_OF_LIGHT_AU_DAY, TAU, WGS84_FLATTENING } from '../../../core/constants'
 import { matMulVec } from '../../../math/linear-algebra/mat3'
-import { vecDivScalar, vecDot, vecMinus, vecLength, vecMulScalar } from '../../../math/linear-algebra/vec3'
+import { vecDivScalar, vecDot, vecMinus, vecLength, vecMulScalar, vecClone } from '../../../math/linear-algebra/vec3'
 import type { Point } from '../../../math/numerical/geometry'
 import { clamp } from '../../../math/numerical/math'
 import { type RootFindingOptions, bisection, brentRoot } from '../../../math/numerical/optimization'
 import { normalizeAngle, normalizePI, type Angle } from '../../../math/units/angle'
-import type { PositionAndVelocity, PositionAndVelocityMut, PositionAndVelocityOverTime } from '../../coordinates/astrometry'
+import { zeroPositionAndVelocity, type PositionAndVelocityMut, type PositionAndVelocityOverTime } from '../../coordinates/astrometry'
 import type { EquatorialCoordinate } from '../../coordinates/coordinate'
 import { eraEpv00 } from '../../coordinates/erfa/earth'
 import { eraAb, eraP2s, eraEpj } from '../../coordinates/erfa/erfa'
@@ -175,22 +175,25 @@ export function computeSunMoonPositionAt(time: Time, sun: PositionAndVelocityOve
 	}
 }
 
+const EARTH_BH_SCRATCH: [PositionAndVelocityMut, PositionAndVelocityMut] = [zeroPositionAndVelocity(), zeroPositionAndVelocity()]
+
 // Barycentric Earth position and velocity (AU, AU/day) from the VSOP-based eraEpv00 at TT.
-function earth(time: Time) {
+function earth(time: Time): PositionAndVelocityMut {
 	const { day, fraction } = tt(time)
-	return eraEpv00(day, fraction)[0]
+	const [p, v] = eraEpv00(day, fraction, EARTH_BH_SCRATCH)[0]
+	return [vecClone(p), vecClone(v)]
 }
 
 // Barycentric Sun position and velocity (AU, AU/day): Earth barycentric minus heliocentric, at TT.
 function sun(time: Time): PositionAndVelocityMut {
 	const { day, fraction } = tt(time)
-	const [pvb, pvh] = eraEpv00(day, fraction)
+	const [pvb, pvh] = eraEpv00(day, fraction, EARTH_BH_SCRATCH)
 	return [vecMinus(pvb[0], pvh[0]), vecMinus(pvb[1], pvh[1])]
 }
 
 // Geocentric Moon position and velocity (AU, AU/day) from the ERFA Meeus theory eraMoon98.
 function moon(time: Time) {
-	return eraMoon98(time.day, time.fraction) as PositionAndVelocity
+	return eraMoon98(time.day, time.fraction)
 }
 
 // Apparent Sun/Moon position provider from the analytical ERFA/Meeus ephemerides (significantly faster).

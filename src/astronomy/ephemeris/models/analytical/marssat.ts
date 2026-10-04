@@ -2,6 +2,7 @@
 // (adjustement from 1877 to 2005, Version 1.0)
 // by Valery Lainey can be obtained from Valery Lainey:
 
+import type { PositionAndVelocityMut } from 'nebulosa/src/astronomy/coordinates/astrometry'
 import { DAYSPERJC, DEG2RAD } from '../../../../core/constants'
 import { matMulVec } from '../../../../math/linear-algebra/mat3'
 import { type Time, tt } from '../../../time/time'
@@ -294,18 +295,18 @@ const DOME = -0.1061 * DEG2RAD
 const DINC = 0.0609 * DEG2RAD
 
 // Computes the position and velocity of Phobos at given time using the MARSSAT model
-export function phobos(time: Time) {
-	return marssat(time, 0)
+export function phobos(time: Time, out?: PositionAndVelocityMut) {
+	return marssat(time, 0, out)
 }
 
 // Computes the position and velocity of Deimos at given time using the MARSSAT model
-export function deimos(time: Time) {
-	return marssat(time, 1)
+export function deimos(time: Time, out?: PositionAndVelocityMut) {
+	return marssat(time, 1, out)
 }
 
 // Computes the equatorial position (AU) and velocity (AU/day) of a Martian satellite using MARSSAT.
 // `index` selects the body (0 Phobos, 1 Deimos). Returned vectors alias the internal conversion buffers.
-export function marssat(time: Time, index: number) {
+export function marssat(time: Time, index: number, out?: PositionAndVelocityMut) {
 	time = tt(time)
 	const t = time.day - (2451545 - 6491.5) + time.fraction
 
@@ -329,7 +330,7 @@ export function marssat(time: Time, index: number) {
 
 	elem[1] += (body.l + body.acc * t) * t
 
-	const pv = ellipticToRectangularA(body.mu, elem, 0)
+	const pv = ellipticToRectangularA(body.mu, elem, 0, out)
 
 	const k = (t - 6491.5) / DAYSPERJC
 	const ome = OME0 + DOME * k

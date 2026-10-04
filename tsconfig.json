@@ -20,7 +20,7 @@
 		"incremental": false,
 		"types": ["bun"],
 		"paths": {
-			"nebulosa/src/*": ["./src/*"],
+			"nebulosa/src/*": ["./src/*"]
 		}
 	}
 }

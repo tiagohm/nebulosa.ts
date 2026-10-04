@@ -12,7 +12,7 @@
 		"fmt:check": "oxfmt --check",
 		"index": "bun run scripts/codebase.index.ts",
 		"review": "bun run scripts/review/review.ts",
-		"docs:serve": "docsify serve ./docs"
+		"docs": "docsify serve ./docs"
 	},
 	"devDependencies": {
 		"@types/bun": "latest",

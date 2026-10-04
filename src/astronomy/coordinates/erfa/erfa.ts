@@ -1972,7 +1972,7 @@ export function eraStarpv(ra: Angle, dec: Angle, pmRa: Angle, pmDec: Angle, para
 }
 
 // Convert position+velocity from spherical to cartesian coordinates.
-export function eraS2pv(theta: Angle, phi: Angle, r: Distance, td: Angle, pd: Angle, rd: Velocity) {
+export function eraS2pv(theta: Angle, phi: Angle, r: Distance, td: Angle, pd: Angle, rd: Velocity, out?: PositionAndVelocityMut): PositionAndVelocityMut {
 	const st = Math.sin(theta)
 	const ct = Math.cos(theta)
 	const sp = Math.sin(phi)
@@ -1983,9 +1983,13 @@ export function eraS2pv(theta: Angle, phi: Angle, r: Distance, td: Angle, pd: An
 	const rpd = r * pd
 	const w = rpd * sp - cp * rd
 
-	const p: MutVec3 = [x, y, r * sp]
-	const v: MutVec3 = [-y * td - w * ct, x * td - w * st, rpd * cp + sp * rd]
-	return [p, v] as const
+	const p = out?.[0] ?? vecZero()
+	const v = out?.[1] ?? vecZero()
+
+	vecFill(p, x, y, r * sp)
+	vecFill(v, -y * td - w * ct, x * td - w * st, rpd * cp + sp * rd)
+
+	return out ?? [p, v]
 }
 
 // NOT PRESENT IN ERFA!

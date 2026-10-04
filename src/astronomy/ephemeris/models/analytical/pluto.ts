@@ -1,5 +1,6 @@
 // https://github.com/Stellarium/stellarium/blob/v25.3/src/core/planetsephems/pluto.c
 
+import { vecFill, vecZero, type MutVec3 } from 'nebulosa/src/math/linear-algebra/vec3'
 import { COS_OBL_J2000, DAYSPERJC, DEG2RAD, SIN_OBL_J2000 } from '../../../../core/constants'
 import { type Time, tt } from '../../../time/time'
 
@@ -205,7 +206,7 @@ const RADIUS = [
 // This function is accurate to within 0.07" in longitude, 0.02" in latitude
 // and 0.000006 AU in radius.
 // Note: This function is not valid outside the period of 1885-2099.
-export function pluto(time: Time, frame?: ReferenceFrame) {
+export function pluto(time: Time, frame?: ReferenceFrame, out?: MutVec3) {
 	time = tt(time)
 	// Julian centuries since J2000
 	const t = (time.day - 2451545 + time.fraction) / DAYSPERJC
@@ -235,7 +236,11 @@ export function pluto(time: Time, frame?: ReferenceFrame) {
 	const B = DEG2RAD * (-3.908239 + sLat)
 	const R = 40.7241346 + sRad
 
-	if (frame === 'eclipticJ2000') return [L, B, R]
+	out ??= vecZero()
+
+	if (frame === 'eclipticJ2000') {
+		return vecFill(out, L, B, R)
+	}
 
 	const sl = Math.sin(L)
 	const cl = Math.cos(L)
@@ -250,5 +255,5 @@ export function pluto(time: Time, frame?: ReferenceFrame) {
 	// const p = eraS2p(L, B, R)
 	// return matTransposeMulVec(ECLIPTIC_J2000_MATRIX, p, p)
 
-	return [x, y, z] as const
+	return vecFill(out, x, y, z)
 }

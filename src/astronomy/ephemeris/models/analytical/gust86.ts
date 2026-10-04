@@ -312,34 +312,34 @@ const MIRANDA: Gust87Body = {
 const BODIES = [ARIEL, UMBRIEL, TITANIA, OBERON, MIRANDA] as const
 
 // Computes the position and velocity of Ariel at given time
-export function ariel(time: Time) {
-	return gust86(time, 0)
+export function ariel(time: Time, out?: PositionAndVelocityMut) {
+	return gust86(time, 0, out)
 }
 
 // Computes the position and velocity of Umbriel at given time
-export function umbriel(time: Time) {
-	return gust86(time, 1)
+export function umbriel(time: Time, out?: PositionAndVelocityMut) {
+	return gust86(time, 1, out)
 }
 
 // Computes the position and velocity of Titania at given time
-export function titania(time: Time) {
-	return gust86(time, 2)
+export function titania(time: Time, out?: PositionAndVelocityMut) {
+	return gust86(time, 2, out)
 }
 
 // Computes the position and velocity of Oberon at given time
-export function oberon(time: Time) {
-	return gust86(time, 3)
+export function oberon(time: Time, out?: PositionAndVelocityMut) {
+	return gust86(time, 3, out)
 }
 
 // Computes the position and velocity of Miranda at given time
-export function miranda(time: Time) {
-	return gust86(time, 4)
+export function miranda(time: Time, out?: PositionAndVelocityMut) {
+	return gust86(time, 4, out)
 }
 
 // Computes the J2000-equatorial position (AU) and velocity (AU/day) of a Uranian satellite at the
 // given time using GUST86. `index` selects the body (0 Ariel, 1 Umbriel, 2 Titania, 3 Oberon,
 // 4 Miranda). Returned vectors alias the internal conversion buffers.
-export function gust86(time: Time, index: number): PositionAndVelocityMut {
+export function gust86(time: Time, index: number, out?: PositionAndVelocityMut): PositionAndVelocityMut {
 	time = tt(time)
 	const td = time.day - 2444239.5 + time.fraction
 
@@ -358,7 +358,7 @@ export function gust86(time: Time, index: number): PositionAndVelocityMut {
 
 	body.compute(td, elem, an, ae, ai)
 
-	const pv = ellipticToRectangularN(body.rmu, elem, 0)
+	const pv = ellipticToRectangularN(body.rmu, elem, 0, out)
 	matMulVec(J2000, pv[0], pv[0])
 	matMulVec(J2000, pv[1], pv[1])
 	return pv

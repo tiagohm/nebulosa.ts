@@ -37,7 +37,6 @@
 //      s2z      SSB-to-Sun          2              z
 
 import { DAYSPERJY, J2000 } from '../../../core/constants'
-import type { MutVec3 } from '../../../math/linear-algebra/vec3'
 import type { PositionAndVelocityMut } from '../astrometry'
 
 // Port of ERFA's eraEpv00: the simplified VSOP2000-based Earth heliocentric and barycentric position
@@ -505,7 +504,7 @@ const AM23 = -0.397776982902
 const AM32 = 0.397776982902
 const AM33 = 0.917482137087
 
-// Earth position and velocity, heliocentric and barycentric, with
+// Earth position and velocity, barycentric and heliocentric, with
 // respect to the Barycentric Celestial Reference System.
 // The vectors are oriented with respect to the BCRS.  The time unit
 // is one day in TDB.
@@ -513,15 +512,15 @@ const AM33 = 0.917482137087
 // VSOP2000 (X. Moisson, P. Bretagnon, 2001, Celes. Mechanics &
 // Dyn. Astron., 80, 3/4, 205-213) and is an adaptation of original
 // Fortran code supplied by P. Bretagnon (private comm., 2000).
-export function eraEpv00(tdb1: number, tdb2: number): readonly [PositionAndVelocityMut, PositionAndVelocityMut] {
+export function eraEpv00(tdb1: number, tdb2: number, out?: readonly [bary: PositionAndVelocityMut, helio: PositionAndVelocityMut]): readonly [bary: PositionAndVelocityMut, helio: PositionAndVelocityMut] {
 	// Time since reference epoch, Julian years.
 	const t = (tdb1 - J2000 + tdb2) / DAYSPERJY
 	const t2 = t * t
 
-	const ph: MutVec3 = [0, 0, 0]
-	const vh: MutVec3 = [0, 0, 0]
-	const pb: MutVec3 = [0, 0, 0]
-	const vb: MutVec3 = [0, 0, 0]
+	const pb = out?.[0][0] ?? [0, 0, 0]
+	const vb = out?.[0][1] ?? [0, 0, 0]
+	const ph = out?.[1][0] ?? [0, 0, 0]
+	const vh = out?.[1][1] ?? [0, 0, 0]
 
 	// X then Y then Z.
 	for (let i = 0; i < 3; i++) {
@@ -651,8 +650,10 @@ export function eraEpv00(tdb1: number, tdb2: number): readonly [PositionAndVeloc
 	vb[1] = AM21 * x + AM22 * y + AM23 * z
 	vb[2] = AM32 * y + AM33 * z
 
-	return [
-		[pb, vb],
-		[ph, vh],
-	]
+	return (
+		out ?? [
+			[pb, vb],
+			[ph, vh],
+		]
+	)
 }

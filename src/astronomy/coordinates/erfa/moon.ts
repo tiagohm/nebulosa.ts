@@ -1,6 +1,7 @@
 import { AU_M, DAYSPERJC, DEG2RAD, J2000 } from '../../../core/constants'
 import { matMulVec, matRotX, matRotZ } from '../../../math/linear-algebra/mat3'
 import { normalizeAngle } from '../../../math/units/angle'
+import type { PositionAndVelocityMut } from '../astrometry'
 import { eraPfw06, eraS2pv } from './erfa'
 
 // Port of ERFA's eraMoon98: the approximate geocentric position and velocity of the Moon (ICRS-aligned)
@@ -210,7 +211,7 @@ const TB = [
 ] as const
 
 // Approximate geocentric position and velocity of the Moon.
-export function eraMoon98(tt1: number, tt2: number) {
+export function eraMoon98(tt1: number, tt2: number, out?: PositionAndVelocityMut): PositionAndVelocityMut {
 	// Centuries since J2000.0
 	const T = (tt1 - J2000 + tt2) / DAYSPERJC
 
@@ -351,7 +352,7 @@ export function eraMoon98(tt1: number, tt2: number) {
 	DB = (VDB * DEG2RAD) / DAYSPERJC
 
 	// Longitude, latitude to x, y, z (au)
-	const PV = eraS2pv(EL, B, R, DEL, DB, DR)
+	const PV = eraS2pv(EL, B, R, DEL, DB, DR, out)
 
 	// IAU 2006 Fukushima-Williams bias+precession angles.
 	const [gamb, phib, psib] = eraPfw06(tt1, tt2)

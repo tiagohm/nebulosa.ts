@@ -1,6 +1,5 @@
 import { ASEC2RAD, AU_KM, DAYSPERJC, DEG2RAD, J2000 } from '../../../../core/constants'
 import { matMulVec } from '../../../../math/linear-algebra/mat3'
-import type { MutVec3 } from '../../../../math/linear-algebra/vec3'
 import type { PositionAndVelocityMut } from '../../../coordinates/astrometry'
 import { type Time, tt } from '../../../time/time'
 import { ELPMPP02_MAIN, ELPMPP02_PERT } from './elpmpp02.data'
@@ -70,14 +69,14 @@ const RA0 = 384747.961370173 / 384747.980674318
 const REFERENCE_FRAME = [1, 0.00000044036, -0.000000190919, -0.000000479966, 0.917482137087, -0.397776982902, 0, 0.397776982902, 0.917482137087] as const
 
 // Geocentric cartesian position & velocity of Moon.
-export function moon(time: Time): PositionAndVelocityMut {
+export function moon(time: Time, out?: PositionAndVelocityMut): PositionAndVelocityMut {
 	const { day, fraction } = tt(time)
 	const t = [1, 0, 0, 0, 0]
 	t[1] = (day - J2000 + fraction) / DAYSPERJC
 	for (let i = 2; i <= 4; i++) t[i] = t[i - 1] * t[1]
 
-	const p: MutVec3 = [0, 0, 0]
-	const v: MutVec3 = [0, 0, 0]
+	const p = out?.[0] ?? [0, 0, 0]
+	const v = out?.[1] ?? [0, 0, 0]
 
 	for (let iv = 0; iv <= 2; iv++) {
 		const [cmpb, fmpb] = ELPMPP02_MAIN[iv]
@@ -165,5 +164,5 @@ export function moon(time: Time): PositionAndVelocityMut {
 	matMulVec(REFERENCE_FRAME, p, p)
 	matMulVec(REFERENCE_FRAME, v, v)
 
-	return [p, v] as const
+	return out ?? [p, v]
 }
