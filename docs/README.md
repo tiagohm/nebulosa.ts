@@ -854,6 +854,54 @@ console.log(isMagnusDomain(150)) // false — outside [-100, 100] °C
 
 ### Differential Orbit Correction
 
+Differential correction refines an approximate orbit so that it reproduces a set of astrometric observations. Starting from a state guess at an epoch, the six Cartesian parameters (position and velocity) are adjusted to minimize the weighted squared difference between the observed and predicted right ascension and declination, using a Levenberg-Marquardt least-squares loop with a finite-difference Jacobian. It is a two-body fit around the Sun: it models no planetary perturbations, so it suits short arcs and modest accuracy.
+
+`fitOrbit(observations, epoch, position, velocity, options?)` needs at least 3 observations (6 parameters) and throws an `Error` otherwise or when the model cannot be evaluated. An observation is `{ time, rightAscension, declination, observerPosition, raErr?, decErr? }` with angles in radians in the same inertial frame as the state, and `observerPosition` the observer's position at the observation time in that frame and unit system (AU, heliocentric for a heliocentric state). `raErr` and `decErr` are 1-σ uncertainties in radians (default 1″), and the right-ascension residual is weighted by `cos(dec)`. The initial state is the `position` and `velocity` guess in AU and AU/day at `epoch`. Useful `options` are `mu` (gravitational parameter, default the Sun's), `maxIterations` (default 50), `computeCovariance` (default true), and the convergence tolerances `tolerance`, `parameterTolerance`, and `gradientTolerance`. The result has the fitted `state`, the `orbit` as a `KeplerOrbit` in the input frame, the 6×6 parameter `covariance` (ordered `x, y, z, vx, vy, vz`; absent when not requested or too ill-conditioned), `residuals` (normalized in σ units and angular in radians), `chi2`, `reducedChi2` (NaN when there are no degrees of freedom), `rms` (radians), the accepted `iterations`, and `converged`. The covariance is scaled by the reduced χ², and feeds Orbit Covariance Propagation.
+
+```ts
+import { KeplerOrbit } from 'nebulosa/src/astronomy/orbits/asteroid'
+import { fitOrbit, type OrbitFitObservation } from 'nebulosa/src/astronomy/orbits/fit'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { Timescale, time } from 'nebulosa/src/astronomy/time/time'
+import { GM_SUN_PITJEVA_2005 } from 'nebulosa/src/core/constants'
+import { matIdentity } from 'nebulosa/src/math/linear-algebra/mat3'
+import { arcsec, toArcsec } from 'nebulosa/src/math/units/angle'
+import { vecLength, vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+
+// A "true" orbit (Vesta's heliocentric equatorial state at 2025-04-21 12:00 TDB) used to synthesize observations.
+const position = [-1.70317472297052, -1.333843040283118, -0.3086709149679688] as const
+const velocity = [0.007882762615954012, -0.008079478592200335, -0.004254433056153772] as const
+const epoch = time(2460787, 0, Timescale.TDB)
+const truth = new KeplerOrbit(position, velocity, epoch, GM_SUN_PITJEVA_2005, matIdentity())
+
+// Ten weekly observations seen from the Earth (heliocentric), each off by a fraction of an arcsecond.
+const observations: OrbitFitObservation[] = [0, 7, 14, 21, 28, 35, 42, 49, 56, 63].map((days, k) => {
+	const t = time(2460787 + days, 0, Timescale.TDB)
+	const observer = vecMinus(earth(t)[0], sun(t)[0])
+	const p = truth.at(t)[0]
+	const x = p[0] - observer[0]
+	const y = p[1] - observer[1]
+	const z = p[2] - observer[2]
+	const declination = Math.asin(z / vecLength([x, y, z])) + arcsec(k % 3 ? 0.3 : -0.3)
+	const rightAscension = Math.atan2(y, x) + arcsec(k % 2 ? 0.4 : -0.4) / Math.cos(declination)
+
+	return { time: t, rightAscension: (rightAscension + 2 * Math.PI) % (2 * Math.PI), declination, observerPosition: observer, raErr: arcsec(0.5), decErr: arcsec(0.5) }
+})
+
+// A starting guess off by about 0.1% in every component.
+const fit = fitOrbit(observations, epoch, [position[0] * 1.001, position[1] * 0.999, position[2] * 1.002], [velocity[0] * 1.003, velocity[1] * 0.997, velocity[2] * 1.001])
+
+console.log(fit.converged, fit.iterations) // true 8
+console.log(fit.reducedChi2) // 0.642 — about 1, consistent with the 0.5" uncertainties
+console.log(toArcsec(fit.rms)) // 0.474 — arcseconds, RMS angular residual
+console.log(fit.state.position) // [-1.70314, -1.33381, -0.30867] — AU, within 5e-5 AU of the true state
+console.log(fit.orbit.semiMajorAxis) // 2.3614 — AU
+console.log(Math.sqrt(fit.covariance!.get(0, 0))) // 0.0000412 — AU, 1-sigma uncertainty of x
+
+// Without the covariance, and with an iteration cap.
+console.log(fitOrbit(observations, epoch, position, velocity, { computeCovariance: false, maxIterations: 20 }).covariance) // undefined
+```
+
 ### Differential Refraction and Atmospheric Dispersion
 
 Refraction depends on wavelength: blue light is bent more than red, so the image of a star is stretched into a short spectrum along the vertical, with the blue end toward the zenith. The effect grows toward the horizon and matters for broadband imaging, guiding, and spectroscopy.
@@ -1376,6 +1424,59 @@ console.log(io(time(2451545, 0, Timescale.TT))[0]) // [0.0026720, 0.00076440, 0.
 
 ### Gauss Angles-Only Orbit Determination
 
+Gauss's method is the classical way to get a first orbit from just three observations of angles. Three right ascensions and declinations, with the observer's position at each time, fix the unknown distances through an eighth-degree polynomial in the middle range. It then reconstructs the three position vectors and recovers the middle velocity with Gibbs or Herrick-Gibbs. The result is a rough state meant to seed a least-squares refinement such as Differential Orbit Correction, not a final orbit.
+
+`gauss(obs1, obs2, obs3, options)` takes three `GaussObservation`s, `{ time, rightAscension, declination, observer }`, with angles in radians in an inertial frame and `observer` the observer's position in the same frame, in the length unit of `options.mu` (AU and `GM_SUN_PITJEVA_2005` for a heliocentric orbit with the observer at the Earth). The times must strictly increase, or a `RangeError` is thrown; a degenerate line-of-sight geometry also throws. Positive roots of the range polynomial are bracketed and refined, the observer-collocated root is rejected, and the surviving candidates are scored by how well their two-body orbit reprojects onto the lines of sight. `options.method` forces `'gibbs'` or `'herrick-gibbs'` for the velocity; by default it is chosen from the arc, and Herrick-Gibbs is used only for short arcs (a span of at most 5 days and 5° on the sky). Other options are `minPositiveRho`, `maxIterations`, and `tolerance`. The result gives the middle `state` (`r`, `v`), the reconstructed `positions` (`r1`, `r2`, `r3`), the topocentric `ranges`, and `diagnostics` (the chosen root, all candidate roots, the angular separations, the velocity method, and a list of `warnings`). Inspect the warnings, for example `MULTIPLE_POSITIVE_ROOTS` or `SMALL_ANGULAR_SEPARATION`, before trusting the state.
+
+```ts
+import { KeplerOrbit } from 'nebulosa/src/astronomy/orbits/asteroid'
+import { gauss, type GaussObservation } from 'nebulosa/src/astronomy/orbits/determination/gauss'
+import { Timescale, timeShift, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { DAYSPERJY, GM_SUN_PITJEVA_2005, TAU } from 'nebulosa/src/core/constants'
+import { matIdentity } from 'nebulosa/src/math/linear-algebra/mat3'
+import { vecDistance, vecLength } from 'nebulosa/src/math/linear-algebra/vec3'
+import { normalizeAngle } from 'nebulosa/src/math/units/angle'
+
+const epoch = timeYMDHMS(2026, 1, 1, 0, 0, 0, Timescale.TT)
+
+// A "true" asteroid orbit to synthesize observations: a = 1.9 AU, e = 0.18, in the observer's inertial axes.
+const orbit = KeplerOrbit.trueAnomaly(1.9, 0.18, 0.12, 0.8, 1.1, 0.35, epoch, GM_SUN_PITJEVA_2005, matIdentity())
+
+// A simple observer on a 1 AU circular orbit.
+const observerAt = (days: number): [number, number, number] => {
+	const angle = (TAU * days) / DAYSPERJY + 0.4
+	return [Math.cos(angle), Math.sin(angle), 0.04 * Math.sin(2 * angle)]
+}
+
+// Noise-free right ascension and declination of the orbit as seen from the observer.
+const observe = (days: number): GaussObservation => {
+	const time = timeShift(epoch, days)
+	const observer = observerAt(days)
+	const [px, py, pz] = orbit.at(time)[0]
+	const x = px - observer[0]
+	const y = py - observer[1]
+	const z = pz - observer[2]
+
+	return { time, rightAscension: normalizeAngle(Math.atan2(y, x)), declination: Math.asin(z / Math.hypot(x, y, z)), observer }
+}
+
+// Three observations 4 days apart; mu in AU^3/day^2.
+const result = gauss(observe(-4), observe(0), observe(4), { mu: GM_SUN_PITJEVA_2005 })
+
+const truth = orbit.at(epoch)
+
+console.log(result.state.r) // [-1.01276, 1.25652, 0.19315] — AU, heliocentric, at the middle epoch
+console.log(result.state.v) // [-0.011825, -0.0085827, 0.00030193] — AU/day
+console.log(vecDistance(result.state.r, truth[0])) // 0.000188 — AU from the true position
+console.log(vecDistance(result.state.v, truth[1]) / vecLength(truth[1])) // 0.00033 — relative velocity error
+console.log(result.ranges.rho2) // 2.1257 — AU, observer-to-target distance
+console.log(result.diagnostics.methodForVelocity) // gibbs — chosen from the geometry
+console.log(result.diagnostics.warnings) // ['MULTIPLE_POSITIVE_ROOTS']
+
+// Times that do not increase throw.
+gauss(observe(0), observe(-4), observe(4), { mu: GM_SUN_PITJEVA_2005 }) // RangeError: gauss requires strictly increasing observation times
+```
+
 ### GCRS to ITRS Rotation
 
 The geocentric celestial frame (GCRS, ICRS-oriented and non-rotating) and the Earth-fixed ITRS are related by Earth orientation: frame bias, precession, and nutation, then the Earth's rotation by the Greenwich apparent sidereal time, then polar motion. `gcrsToItrsRotationMatrix(time)` returns that single 3×3 matrix, which takes a GCRS vector to ITRS (`v_itrs = R · v_gcrs`) and whose transpose goes back.
@@ -1460,6 +1561,40 @@ console.log(toKilometer(point.elevation)) // 10617 — km above the ellipsoid
 
 ### Gibbs Orbit Determination
 
+The Gibbs method finds the velocity of a body at the middle of three position vectors, assuming two-body motion and no time information: the three position vectors, which must lie in one plane, determine the orbit's plane, shape, and the velocity at the middle point. It is the classical choice when the points are widely separated in angle, and it needs positions relative to the central body, not raw right ascension and declination (for those use Gauss Angles-Only Orbit Determination, and for closely spaced points with known times use Herrick-Gibbs Orbit Determination).
+
+`gibbs(r1, r2, r3, mu, options?)` takes three position vectors and the gravitational parameter in consistent units (AU and AU³/day² give AU/day). It returns `{ r, v, diagnostics }`: `r` is a copy of `r2`, `v` the middle velocity, and `diagnostics` holds the coplanarity error, the angles between the positions, the norms of the positions and auxiliary vectors, a `reliability` of `'good'`, `'warning'`, or `'bad'`, and a list of `warnings`. The default thresholds flag positions closer than 1° or farther apart than 60° and poor coplanarity. A rejected solution throws a `RangeError`, unless `options.allowUnreliable` is true, in which case it returns a `'bad'` result with a `NaN` velocity. Other options are `coplanarityTolerance`, `minAngularSeparation`, `maxAngularSeparation` (radians), `degeneracyTolerance`, and `minPositionNorm`.
+
+```ts
+import { KeplerOrbit } from 'nebulosa/src/astronomy/orbits/asteroid'
+import { gibbs } from 'nebulosa/src/astronomy/orbits/determination/gibbs'
+import { Timescale, timeShift, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { GM_SUN_PITJEVA_2005 } from 'nebulosa/src/core/constants'
+import { matIdentity } from 'nebulosa/src/math/linear-algebra/mat3'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const epoch = timeYMDHMS(2026, 1, 1, 0, 0, 0, Timescale.TT)
+const orbit = KeplerOrbit.trueAnomaly(1.9, 0.18, 0.12, 0.8, 1.1, 0.35, epoch, GM_SUN_PITJEVA_2005, matIdentity())
+
+// Heliocentric positions 15 days before, at, and 15 days after the epoch.
+const r1 = orbit.at(timeShift(epoch, -15))[0]
+const r2 = orbit.at(epoch)[0]
+const r3 = orbit.at(timeShift(epoch, 15))[0]
+
+const { r, v, diagnostics } = gibbs(r1, r2, r3, GM_SUN_PITJEVA_2005)
+
+console.log(r) // [-1.01258, 1.25644, 0.19314] — AU, the middle position
+console.log(v) // [-0.011823, -0.0085783, 0.00030201] — AU/day, equal to the true velocity to about 1e-14 relative
+console.log(diagnostics.reliability) // good
+console.log(toDeg(diagnostics.angle12)) // 7.76 — degrees between the first two positions
+console.log(diagnostics.warnings) // []
+
+// Duplicate positions are degenerate: this returns a bad result instead of throwing.
+console.log(gibbs(r1, r1, r3, GM_SUN_PITJEVA_2005, { allowUnreliable: true }).v) // [NaN, NaN, NaN]
+
+gibbs(r1, r1, r3, GM_SUN_PITJEVA_2005) // RangeError: gibbs input is invalid: ANGULAR_SEPARATION_TOO_SMALL, ...
+```
+
 ### Great Red Spot Transits
 
 ### Greatest Solar Eclipse Circumstances
@@ -1471,6 +1606,39 @@ console.log(toKilometer(point.elevation)) // 10617 — km above the ellipsoid
 ### Heliacal Events
 
 ### Herrick-Gibbs Orbit Determination
+
+The Herrick-Gibbs method is the short-arc counterpart of Gibbs: for three positions that are close together in time and angle, it estimates the middle velocity from a Taylor-series expansion that also uses the three epochs. It stays accurate where the classical Gibbs method becomes ill-conditioned because the points are nearly colinear. Like Gibbs, it needs positions relative to the central body, not angles.
+
+`herrickGibbs(r1, r2, r3, t1, t2, t3, mu, options?)` takes the three positions, their epochs as `Time` instants, and `mu`. Time differences are taken with `timeSubtract` in days (in `options.timescale`, defaulting to the scale of `t2`), so `mu` must be in position-unit³/day² and the velocity comes out in position-unit/day. It returns `{ r, v, diagnostics }` with `r` a copy of `r2`, `v` the middle velocity, and `diagnostics` giving the time intervals `dt21`, `dt32`, `dt31` (days), the angles, the coplanarity error, a `reliable` flag, and the `warnings`. The default checks treat spacings under about 0.1 ms as singular and flag spans over 5 days and separations over 5° as outside the usual regime. An unreliable geometry returns a `NaN` velocity with the warnings, or throws an `Error` if `options.throwOnInvalid` is true. Other options are `minTimeInterval`, `maxTimeInterval` (days), `minPositionNorm`, `minAngularSeparation`, `maxAngularSeparation` (radians), `coplanarityTolerance`, and `minCrossNormRatio`. Inspect the diagnostics before using the state as a seed for a fit.
+
+```ts
+import { KeplerOrbit } from 'nebulosa/src/astronomy/orbits/asteroid'
+import { herrickGibbs } from 'nebulosa/src/astronomy/orbits/determination/herrickgibbs'
+import { Timescale, timeShift, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { GM_SUN_PITJEVA_2005 } from 'nebulosa/src/core/constants'
+import { matIdentity } from 'nebulosa/src/math/linear-algebra/mat3'
+
+const epoch = timeYMDHMS(2026, 1, 1, 0, 0, 0, Timescale.TT)
+const orbit = KeplerOrbit.trueAnomaly(1.9, 0.18, 0.12, 0.8, 1.1, 0.35, epoch, GM_SUN_PITJEVA_2005, matIdentity())
+
+// Heliocentric positions 2 days before, at, and 3 days after the epoch.
+const [t1, t2, t3] = [timeShift(epoch, -2), epoch, timeShift(epoch, 3)]
+const [r1, r2, r3] = [orbit.at(t1)[0], orbit.at(t2)[0], orbit.at(t3)[0]]
+
+const { r, v, diagnostics } = herrickGibbs(r1, r2, r3, t1, t2, t3, GM_SUN_PITJEVA_2005)
+
+console.log(r) // [-1.01258, 1.25644, 0.19314] — AU, the middle position
+console.log(v) // [-0.011823, -0.0085783, 0.00030201] — AU/day, within 1e-8 of the true velocity (relative)
+console.log(diagnostics.dt21, diagnostics.dt32, diagnostics.dt31) // 2 3 5 — days
+console.log(diagnostics.reliable, diagnostics.warnings) // true []
+
+// Epochs that do not increase are rejected: NaN velocity and a warning list.
+const bad = herrickGibbs(r3, r2, r1, t3, t2, t1, GM_SUN_PITJEVA_2005)
+
+console.log(bad.diagnostics.reliable, bad.diagnostics.warnings) // false ['NON_INCREASING_TIME', 'TIME_INTERVAL_TOO_SMALL']
+
+herrickGibbs(r3, r2, r1, t3, t2, t1, GM_SUN_PITJEVA_2005, { throwOnInvalid: true }) // Error: herrick-gibbs input is unreliable: NON_INCREASING_TIME, TIME_INTERVAL_TOO_SMALL
+```
 
 ### Hour-Angle Windows
 
@@ -1783,6 +1951,40 @@ console.log(marssat(time, 0)[0]) // [-0.000038291, 0.000030662, 0.000038326] —
 
 ### Minimum Orbit Intersection Distance
 
+The MOID is the smallest distance between two orbits as geometric curves, minimized independently over the position on each. It does not depend on where either body is, only on the shapes and orientations of the orbits. An Earth MOID below 0.05 AU is the standard screen for potentially hazardous asteroids: a close approach is geometrically possible, though it need not happen.
+
+`moid(first, second, options?)` takes two `KeplerOrbit`s in the same reference frame and returns `{ distance, trueAnomaly1, trueAnomaly2 }`: the distance in AU and the true anomalies (radians, `[0, 2π)`) where the closest points lie on each orbit. Epoch and mean anomaly are irrelevant. Both orbits must be bound (`e < 1`), or an `Error` is thrown. The search samples both orbits on a grid, finds the local minima of the distance, and refines each by Newton's method; the smallest is the answer. `options.samples` is the grid size per orbit (default 180, 2° apart) and can be raised when the closest-approach valley is narrow, and `options.tolerance` is the refinement tolerance in radians (default 1e-10). Swapping the two orbits gives the same distance. The MOID is a property of osculating orbits at one epoch; it does not predict an encounter.
+
+```ts
+import { KeplerOrbit } from 'nebulosa/src/astronomy/orbits/asteroid'
+import { moid } from 'nebulosa/src/astronomy/orbits/moid'
+import { Timescale, time } from 'nebulosa/src/astronomy/time/time'
+import { GM_SUN_PITJEVA_2005 } from 'nebulosa/src/core/constants'
+import { matIdentity } from 'nebulosa/src/math/linear-algebra/mat3'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+
+// Heliocentric ICRF equatorial states at JD 2461200.5 TDB (JPL Horizons): AU and AU/day.
+const epoch = time(2461200.5, 0, Timescale.TDB)
+const orbit = (position: readonly [number, number, number], velocity: readonly [number, number, number]) => new KeplerOrbit(position, velocity, epoch, GM_SUN_PITJEVA_2005, matIdentity())
+
+const earth = orbit([-0.2139643995461386, -0.910369590875501, -0.3946284477233859], [0.01653870730744617, -0.003392349872193463, -0.001471244370548932])
+const apophis = orbit([-0.9239966398806005, 0.5636773710014709, 0.1861766030828077], [-0.008138789687781776, -0.01148145591898846, -0.004471286309082429])
+const eros = orbit([-1.158993982497945, -0.5306759952015061, -0.5107638781319018], [0.004824359618549828, -0.01280096500658081, -0.006396039805884967])
+
+const result = moid(apophis, earth)
+
+console.log(result.distance) // 0.00010792 — AU
+console.log(toKilometer(result.distance)) // 16144 — km, a potentially hazardous geometry
+console.log(toDeg(result.trueAnomaly1), toDeg(result.trueAnomaly2)) // 233.48 99.645 — degrees on Apophis and on Earth
+
+console.log(moid(eros, earth).distance) // 0.14880 — AU
+console.log(moid(earth, apophis).distance) // 0.00010792 — AU, argument order does not matter
+
+// A finer grid and tolerance for a narrow valley.
+console.log(moid(apophis, earth, { samples: 360, tolerance: 1e-12 }).distance) // 0.00010792 — AU
+```
+
 ### MPCORB Parsing
 
 The Minor Planet Center distributes osculating orbits in fixed-width text files: MPCORB lines for asteroids and CometEls lines for comets. These functions turn one line into a structured record with angles already converted to radians and distances in AU, ready to build a `KeplerOrbit` (see Asteroid and Comet Orbit Construction).
@@ -1868,6 +2070,51 @@ console.log(trueEclipticRotation(time).slice(6, 9)) // [0.0000054, -0.39772, 0.9
 ### Observing Visibility Windows
 
 ### Orbit Covariance Propagation
+
+An orbit fit gives a state and a 6×6 covariance at the fit epoch, and the uncertainty grows as the orbit is propagated away from it. To first order the covariance maps linearly through the state-transition matrix `Φ = ∂state(t)/∂state(epoch)`, so `C(t) = Φ C₀ Φᵀ`. `Φ` is obtained here by central finite differences of the two-body propagation, which reuses `KeplerOrbit`. The linear-Gaussian model is valid while the uncertainty stays small, over short to medium arcs; very poorly constrained orbits need nonlinear methods.
+
+`stateTransitionMatrix(orbit, time, options?)` returns the 6×6 `Φ` (a `Matrix`), with `time` at the epoch giving the identity. `propagateStateCovariance(orbit, covariance, time, options?)` returns `Φ C Φᵀ`; it throws an `Error` unless `covariance` is 6×6. State ordering is `[x, y, z, vx, vy, vz]`, positions in AU and velocities in AU/day, in the frame of the orbit's `position` and `velocity` (not its output `rotation`). The top-left 3×3 block of the result is the position covariance used by Sky-Plane Uncertainty Ellipses. `options.relativeStep` (default 1e-6), `positionFloor` (1e-9 AU), and `velocityFloor` (1e-11 AU/day) control the finite-difference steps. Take the covariance from `fitOrbit` (see Differential Orbit Correction).
+
+```ts
+import { KeplerOrbit } from 'nebulosa/src/astronomy/orbits/asteroid'
+import { propagateStateCovariance, stateTransitionMatrix } from 'nebulosa/src/astronomy/orbits/covariance'
+import { Timescale, time } from 'nebulosa/src/astronomy/time/time'
+import { GM_SUN_PITJEVA_2005 } from 'nebulosa/src/core/constants'
+import { matIdentity } from 'nebulosa/src/math/linear-algebra/mat3'
+import { Matrix } from 'nebulosa/src/math/linear-algebra/matrix'
+
+// Vesta's heliocentric equatorial state at 2025-04-21 12:00 TDB (AU, AU/day), kept in its input axes.
+const position = [-1.70317472297052, -1.333843040283118, -0.3086709149679688] as const
+const velocity = [0.007882762615954012, -0.008079478592200335, -0.004254433056153772] as const
+const epoch = time(2460787, 0, Timescale.TDB)
+const orbit = new KeplerOrbit(position, velocity, epoch, GM_SUN_PITJEVA_2005, matIdentity())
+
+// An uncorrelated epoch covariance: 4e-5 AU in each position component, 1e-8 AU/day in each velocity component.
+// In practice take it from fitOrbit (see Differential Orbit Correction).
+const covariance = new Matrix(6, 6)
+
+for (let i = 0; i < 3; i++) {
+	covariance.set(i, i, 4e-5 ** 2)
+	covariance.set(i + 3, i + 3, 1e-8 ** 2)
+}
+
+const later = time(2460787 + 365, 0, Timescale.TDB) // one year after the epoch
+
+const phi = stateTransitionMatrix(orbit, later)
+
+console.log(phi.rows, phi.cols) // 6 6
+console.log(phi.get(0, 0)) // -0.1377 — d x(later) / d x(epoch)
+console.log(phi.get(0, 3)) // 240.55 — d x(later) / d vx(epoch), in days
+
+const propagated = propagateStateCovariance(orbit, covariance, later)
+
+console.log(Math.sqrt(propagated.get(0, 0))) // 0.0000073 — AU, 1-sigma x a year later
+console.log(Math.sqrt(propagated.get(1, 1))) // 0.000184 — AU, 1-sigma y, where the error has grown
+console.log(Math.sqrt(propagated.get(2, 2))) // 0.0000755 — AU, 1-sigma z
+
+// At the epoch itself the covariance is unchanged.
+console.log(propagateStateCovariance(orbit, covariance, epoch).get(0, 0) / covariance.get(0, 0)) // 1
+```
 
 ### Osculating Orbital Elements
 
@@ -2143,6 +2390,45 @@ console.log(tass17(time, 5)[0]) // [0.0078347, 0.0010775, -0.00076689] — AU
 
 ### SGP4/SDP4 Propagation
 
+SGP4 and SDP4 are the standard analytical models for Earth satellites. They propagate mean orbital elements from a two-line element set (TLE) or an Orbit Mean-Elements Message (OMM), including secular gravity terms (J2, J3, J4), atmospheric drag through the `B*` coefficient, and, for deep-space orbits with periods of 225 minutes or more, lunar-solar perturbations and resonance. SGP4 is used for near-Earth objects and SDP4 for deep space, and the library selects between them automatically. The elements are mean elements fitted to observations: they must be propagated with this model, not treated as osculating elements, and accuracy degrades with distance from the epoch, typically over days.
+
+`sgp4(time, source, meanElements?)` returns `[position (AU), velocity (AU/day)]` in the TEME frame for any `Time`, which is a fresh pair. `source` is a parsed `TLE`, an `OMM`, or a prepared `SatRec`. With a `TLE` or `OMM` the record is built on every call with the WGS-72 constants, so for repeated propagation build a `SatRec` once (see TLE, OMM, and SGP4 Record Construction) and pass that. The elapsed time since the epoch is measured in UTC. If you pass a `meanElements` object, it is filled with the singly averaged elements at that time (`am` in Earth radii, `em`, `im`, `Om`, `om`, `mm` in radians, `nm` in radians per minute). The call throws an `Error` explaining the failure when the model cannot propagate, such as a decayed orbit or an out-of-range eccentricity; `satelliteRecordErrorMessage(error)` gives the text for a `SatRecError` code, and `record.error` holds the last one. TEME is not a fixed Earth frame: convert it with `temeToItrf` (see TEME and ITRF Conversion), or wrap it as a path (see Ephemeris Path Adapters). Velocities and positions are TEME and use the quasi-inertial convention of SGP4.
+
+```ts
+import { parseTLE, recordFromTLE, SatRecError, satelliteRecordErrorMessage, sgp4, SGP4_WGS84, type MeanElements } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { timeShift } from 'nebulosa/src/astronomy/time/time'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+import { toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+const tle = parseTLE('1 25544U 98067A   23231.51768399  .00014050  00000+0  25837-3 0  9996', '2 25544  51.6415  14.7889 0003559 325.3396 149.4637 15.49477580411611', 'ISS (ZARYA)')
+
+// At the TLE epoch: TEME position in AU and velocity in AU/day.
+const [position, velocity] = sgp4(tle.epoch, tle)
+
+console.log(position.map(toKilometer)) // [-3737.79, 2970.46, 4831.15] — km, TEME
+console.log(velocity.map(toKilometerPerSecond)) // [-6.2140, -3.7036, -2.5222] — km/s
+
+// One day after the epoch.
+console.log(sgp4(timeShift(tle.epoch, 1), tle)[0].map(toKilometer)) // [3643.22, -3199.15, -4765.94] — km
+
+// A prepared record avoids rebuilding it; it also exposes the SGP4 mode and the gravity model.
+const record = recordFromTLE(tle)
+
+console.log(record.method, record.gravity.name, record.error) // n wgs72 0 — near-Earth SGP4, WGS-72 constants, no error
+
+// Singly averaged mean elements at that instant, filled into the optional third argument.
+const mean = {} as MeanElements
+
+sgp4(tle.epoch, record, mean)
+
+console.log(mean.am, mean.em, mean.nm) // 1.0657 0.0003559 0.067601 — Earth radii, dimensionless, radians/minute
+
+// WGS-84 constants bind to a record; the default for operational TLEs is WGS-72.
+console.log(sgp4(timeShift(tle.epoch, 1), recordFromTLE(tle, SGP4_WGS84))[0].map(toKilometer)) // [3643.26, -3199.12, -4765.91] — km
+
+console.log(satelliteRecordErrorMessage(SatRecError.Decayed)) // the orbit has decayed below the Earth surface model
+```
+
 ### Sidereal Time and Earth Rotation Angle
 
 Sidereal time is the hour angle of the equinox: it measures how far the Earth has turned relative to the stars, and it equals the right ascension currently on the local meridian. The Earth rotation angle (ERA) measures the same rotation relative to the Celestial Intermediate Origin instead of the equinox. Greenwich mean sidereal time (GMST) uses the mean equinox; apparent sidereal time (GAST) uses the true equinox, so GAST − GMST is the equation of the equinoxes, an arcsecond-scale nutation term.
@@ -2165,6 +2451,39 @@ console.log(toDeg(earthRotationAngle(time))) // 276.752 — degrees
 ### Sky Projections
 
 ### Sky-Plane Uncertainty Ellipses
+
+An orbit's position uncertainty is a 3D ellipsoid, but an observer sees only its projection on the plane of the sky. That projection is an error ellipse around the predicted position, which tells you how large a field must be to catch the object. The linear position spread is divided by the distance to give angles, and the ellipse axes are the eigenvalues of the 2×2 covariance along East (increasing right ascension) and North (increasing declination).
+
+`ephemerisUncertaintyEllipse(covariance, geocentric, options?)` takes a covariance whose top-left 3×3 block is the position covariance (a full 6×6 state covariance from Orbit Covariance Propagation is fine) and the observer-to-object vector `geocentric` in AU, in the same frame, usually ICRF equatorial. The vector's direction sets the tangent plane and its length converts the spread to angles; it must be non-zero or an `Error` is thrown. The observer's own position is treated as errorless. It returns `semiMajor` and `semiMinor` in radians on the sky and `positionAngle` of the major axis (radians, north through east, in `[0, π)`). `options.sigma` scales the axes (default 1 for the 1-σ ellipse, 3 for 3-σ). Near a celestial pole the position angle is arbitrary but the shape is still correct.
+
+```ts
+import { ephemerisUncertaintyEllipse } from 'nebulosa/src/astronomy/orbits/covariance'
+import { Matrix } from 'nebulosa/src/math/linear-algebra/matrix'
+import { toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
+
+// A position covariance in AU^2: sigma x = 1e-4, y = 5e-5, z = 2e-5 AU, with a 0.5 x-y correlation.
+const covariance = new Matrix(3, 3)
+
+covariance.set(0, 0, 1e-4 ** 2)
+covariance.set(1, 1, 5e-5 ** 2)
+covariance.set(2, 2, 2e-5 ** 2)
+covariance.set(0, 1, 0.5 * 1e-4 * 5e-5)
+covariance.set(1, 0, 0.5 * 1e-4 * 5e-5)
+
+// Observer-to-object vector in the same frame (AU, ICRF equatorial), 2.62 AU long.
+const geocentric = [2.1, -1.2, -1.0] as const
+
+const ellipse = ephemerisUncertaintyEllipse(covariance, geocentric)
+
+console.log(toArcsec(ellipse.semiMajor)) // 6.60 — arcseconds, 1-sigma along the major axis
+console.log(toArcsec(ellipse.semiMinor)) // 2.10 — arcseconds, 1-sigma across it
+console.log(toDeg(ellipse.positionAngle)) // 73.5 — degrees, major axis from north through east
+
+// The 3-sigma ellipse.
+console.log(toArcsec(ephemerisUncertaintyEllipse(covariance, geocentric, { sigma: 3 }).semiMajor)) // 19.8 — arcseconds
+
+ephemerisUncertaintyEllipse(covariance, [0, 0, 0]) // Error: geocentric direction must be a non-zero vector to define a sky-plane ellipse
+```
 
 ### Solar Eclipse Besselian Elements
 
@@ -2479,6 +2798,43 @@ console.log(toArcsec(vecAngle(direction, deflected))) // 0.00407 — arcseconds 
 
 ### TEME and ITRF Conversion
 
+SGP4 outputs positions in TEME, the True Equator, Mean Equinox frame: an Earth-centered frame close to inertial that does not rotate with the Earth. To place a satellite over the ground you convert to ITRF, the Earth-fixed frame, by a rotation about the pole through the Greenwich mean sidereal time, optionally followed by polar motion. A velocity in the Earth-fixed frame also gains the term from the Earth's rotation, so an inertially fixed point appears to move.
+
+`temeToItrf(pv, time, polarMotion?)` and `itrfToTeme(pv, time, polarMotion?)` convert a position `Vec3` or a `[position, velocity]` state at a `Time`, using GMST at that time. `polarMotion` is true by default and applies the polar-motion matrix from the loaded Earth orientation data (see Earth Orientation Parameters); pass `false` to skip it. `temeToItrfByGmst(pv, gmst, polarMotion?)` and `itrfToTemeByGmst(pv, gmst, polarMotion?)` take the sidereal angle in radians and an optional polar-motion `Mat3` instead, for callers that already have them. A position input returns a position and a state returns a state, both fresh, in the units of the input (AU and AU/day for SGP4 output). The conversion uses the mean Earth spin rate for the velocity term. Both directions are exact inverses of each other, and `frameToFrame(pv, TEME, ITRS, time)` gives the same result through the general frame machinery (see Celestial and Terrestrial Reference Frames). UT1, and so GMST, comes from the loaded Earth orientation data; without it UT1 equals UTC, which moves a low-orbit position by up to about 0.5 km.
+
+```ts
+import { itrfToTemeByGmst, itrfToTeme, temeToItrf, temeToItrfByGmst } from 'nebulosa/src/astronomy/coordinates/frame'
+import { parseTLE, sgp4 } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { greenwichMeanSiderealTime } from 'nebulosa/src/astronomy/time/time'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+import { toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+// A pure geometric rotation about the pole by 10 rad of sidereal angle: a point on +x.
+console.log(temeToItrfByGmst([6400, 0, 0], 10)) // [-5370.06, 3481.74, 0] — same unit as the input
+
+// And the inverse.
+console.log(itrfToTemeByGmst([5555, 3000, 0], 100)) // [6309.28, -225.904, 0]
+
+// A satellite: the ISS at its TLE epoch, converted from TEME to the Earth-fixed frame.
+const tle = parseTLE('1 25544U 98067A   23231.51768399  .00014050  00000+0  25837-3 0  9996', '2 25544  51.6415  14.7889 0003559 325.3396 149.4637 15.49477580411611')
+const teme = sgp4(tle.epoch, tle)
+
+// Position and velocity (AU, AU/day). Output values below assume no Earth orientation data (UT1 = UTC).
+const [position, velocity] = temeToItrf(teme, tle.epoch)
+
+console.log(position.map(toKilometer)) // [4662.27, -1028.59, 4831.15] — km, ITRF
+console.log(velocity.map(toKilometerPerSecond)) // [3.8830, 5.7151, -2.5222] — km/s, relative to the rotating Earth
+
+// A position alone, and without polar motion.
+console.log(temeToItrf(teme[0], tle.epoch, false).map(toKilometer)) // [4662.27, -1028.59, 4831.15] — km
+
+// Back to TEME.
+console.log(itrfToTeme([position, velocity], tle.epoch)[0].map(toKilometer)) // [-3737.79, 2970.46, 4831.15] — km, the SGP4 state
+
+// With a sidereal angle you already have, e.g. GMST from the library.
+console.log(temeToItrfByGmst(teme, greenwichMeanSiderealTime(tle.epoch))[0].map(toKilometer)) // [4662.27, -1028.59, 4831.15] — km
+```
+
 ### Time-Constraint Intervals
 
 ### Time-Domain Event Search
@@ -2486,6 +2842,72 @@ console.log(toArcsec(vecAngle(direction, deflected))) // 0.00407 — arcseconds 
 ### Time-Domain Extrema Search
 
 ### TLE, OMM, and SGP4 Record Construction
+
+Satellite orbital data comes as a two-line element set (TLE), a text format used by NORAD and Space-Track, or as an Orbit Mean-Elements Message (OMM), a JSON or XML form with the same mean elements, used by CelesTrak and Space-Track. To propagate either with SGP4, the elements are converted once into a `SatRec` record that holds the initialized model state. Reusing that record for many propagation times is much cheaper than rebuilding it for each call (see SGP4/SDP4 Propagation).
+
+`parseTLE(line1, line2, name?)` parses a TLE into a structured `TLE` with the epoch as a UTC `Time` and angles in radians; `meanMotion` stays in revolutions per day as published, `bstar` is in inverse Earth radii, and the eccentricity is read from its implied decimal point. It checks only that line 1 starts with `1` and line 2 with `2`; it does not validate the checksums. `recordFromTLE(tle, gravity?)` and `recordFromOMM(omm, opsmode?, gravity?)` build the record from a parsed TLE or an OMM object, converting revolutions per day to radians per minute and degrees to radians at that boundary. An OMM epoch must be ISO-8601 (`YYYY-MM-DDThh:mm:ss[.sss]`, with an optional `Z`), or an `Error` is thrown; numeric fields may be numbers or strings. `recordFromSgp4Elements(elements, options?)` builds a record directly from typed mean elements (`epoch`, `eccentricity`, angles in radians, `meanMotion` in radians per minute, optional `bstar` and `satelliteNumber`) when you have neither text format; these must be SGP4 mean elements, not osculating ones. `gravity` selects the constant set bound to the record: `SGP4_WGS72` (the default and the one operational data was generated with), `SGP4_WGS72_OLD`, or `SGP4_WGS84`. `opsmode` or `options.operationMode` is `'i'` (improved, the default) or `'a'` (the legacy AFSPC mode). The record reports `method` as `'n'` for near-Earth or `'d'` for deep space.
+
+```ts
+import { parseTLE, recordFromOMM, recordFromSgp4Elements, recordFromTLE, sgp4, SGP4_WGS84, type OMM } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { timeToDate } from 'nebulosa/src/astronomy/time/time'
+import { DAYMIN, DEG2RAD, TAU } from 'nebulosa/src/core/constants'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+// A TLE, as published: two lines and an optional name.
+const tle = parseTLE('1 25544U 98067A   23231.51768399  .00014050  00000+0  25837-3 0  9996', '2 25544  51.6415  14.7889 0003559 325.3396 149.4637 15.49477580411611', 'ISS (ZARYA)')
+
+console.log(tle.satelliteNumber, tle.epochYear, tle.epochDays) // 25544 23 231.51768399
+console.log(timeToDate(tle.epoch)) // [2023, 8, 19, 12, 25, 27, 896] — UTC
+console.log(toDeg(tle.inclination), tle.eccentricity, tle.meanMotion) // 51.6415 0.0003559 15.4947758 — degrees, -, rev/day
+console.log(tle.bstar) // 0.00025837 — inverse Earth radii
+
+// A reusable record; propagate it as often as needed.
+const record = recordFromTLE(tle)
+
+console.log(record.satnum, record.method) // 25544 n
+
+// The same orbit from an OMM (numbers or strings); CelesTrak and Space-Track JSON use these field names.
+const omm: OMM = {
+	OBJECT_NAME: 'ISS (ZARYA)',
+	OBJECT_ID: '1998-067A',
+	EPOCH: '2023-08-19T12:25:27.896736',
+	MEAN_MOTION: 15.4947758, // rev/day
+	ECCENTRICITY: 0.0003559,
+	INCLINATION: 51.6415, // degrees
+	RA_OF_ASC_NODE: 14.7889,
+	ARG_OF_PERICENTER: 325.3396,
+	MEAN_ANOMALY: 149.4637,
+	EPHEMERIS_TYPE: 0,
+	NORAD_CAT_ID: 25544,
+	ELEMENT_SET_NO: 999,
+	REV_AT_EPOCH: 41161,
+	BSTAR: 0.00025837,
+	MEAN_MOTION_DOT: 0.0001405,
+	MEAN_MOTION_DDOT: 0,
+}
+
+console.log(sgp4(tle.epoch, recordFromOMM(omm))[0].map(toKilometer)) // [-3737.79, 2970.46, 4831.15] — km, matches the TLE record
+
+// Directly from typed mean elements: angles in radians and the mean motion in radians per minute.
+const direct = recordFromSgp4Elements({
+	satelliteNumber: '25544',
+	epoch: tle.epoch,
+	eccentricity: 0.0003559,
+	inclination: 51.6415 * DEG2RAD,
+	rightAscensionOfAscendingNode: 14.7889 * DEG2RAD,
+	argumentOfPerigee: 325.3396 * DEG2RAD,
+	meanAnomaly: 149.4637 * DEG2RAD,
+	meanMotion: (15.4947758 * TAU) / DAYMIN,
+	bstar: 0.00025837,
+})
+
+console.log(sgp4(tle.epoch, direct)[0].map(toKilometer)) // [-3737.79, 2970.46, 4831.15] — km
+
+// A different gravity model, and a malformed input.
+console.log(recordFromTLE(tle, SGP4_WGS84).gravity.name) // wgs84
+parseTLE('2 1', '2 2') // Error: TLE line 1 must start with "1"
+```
 
 ### Topocentric Observed Place
 
