@@ -1744,8 +1744,6 @@ coordToPixel(63, 0, 0) // Error: invalid HEALPix NSIDE: 63. Expected a power of 
 
 ### Heliacal Events
 
-### Heliacal Events
-
 As the Sun moves along the ecliptic, a fixed star or planet cycles through four classical visibility transitions each year. The heliacal rising is the first morning it is seen rising in the east just before dawn, after months lost in the Sun's glare; the famous Sothic rising of Sirius is one. The acronychal rising is the last evening it is seen rising at dusk. The heliacal setting is the last evening it is seen setting in the west after dusk, before it is lost in the glare. The cosmical setting is the first morning it is seen setting in the west before dawn.
 
 `heliacalPhases(body, sun, location, start, stop, options?)` finds them with an arc-of-vision model. Each day it finds the object's rise and set, then asks whether the Sun is at least `arcusVisionis` below the geometric horizon at that instant. A brighter object needs a smaller depression than a fainter one, so the arc of vision stands in for the object's brightness and the sky: `options.arcusVisionis` (radians) defaults to 11°, the classical value for a first-magnitude star, and a larger value pushes first visibility later and last visibility earlier. `options.horizon` is the horizon altitude of the crossing (default `STANDARD_HORIZON`), and `options.step` and `options.tolerance` tune the daily rise/set search. `body` and `sun` return geocentric J2000/ICRS directions at a time and `location` is the observer. The result is a chronological list of `{ kind, time, arcusVisionis }`, where `time` is the object's rise or set on the transition day (UTC-based `Time`) and `arcusVisionis` is the Sun depression realized there, in radians. The window must span a full year and should start near the object's conjunction with the Sun so that each season's boundary falls inside it; only transitions inside the window are returned, and a circumpolar or never-rising object returns none. The model is geometric and has no sky-brightness or extinction model, so it is suited to calendar-scale dating. It scans day by day and is not fast: expect seconds for a year.
@@ -2500,23 +2498,631 @@ console.log(marssat(time, 0)[0]) // [-0.000038291, 0.000030662, 0.000038326] —
 
 ### Meteor Activity Profiles
 
+Meteor activity is described in two independent ways. A catalog solution carries a support interval (`MeteorSolarLongitudeInterval`), which only says where the shower is active. The ZHR curve itself is explicit, caller-supplied data: a `MeteorActivityProfile` that is either `exponential` (one peak with separate rise and decay slopes), `sampled` (PCHIP-interpolated ZHR samples) or `multiPeak` (a sum of exponential components). All longitudes are geocentric solar longitudes in radians, and every interval advances in increasing longitude, so a window such as 350°–20° wraps through 0.
+
+The exponential slopes are the base-10 decay per degree of solar longitude, as they are published: `ZHR = peak · 10^(−slope · |Δλ in degrees|)`, with `slopeBefore` used before the maximum and `slopeAfter` after it. A profile returns zero outside its support. Sampled profiles must have strictly increasing sample longitudes within the support, otherwise the first evaluation throws an `Error`. Global maxima are cached per profile object, so profiles should be treated as immutable.
+
+```ts
+import {
+	integrateMeteorZhr,
+	isMeteorShowerActive,
+	meteorActivityFraction,
+	meteorActivityIntervalsAboveFraction,
+	meteorActivityMaximumSolarLongitude,
+	meteorActivityMaximumZhr,
+	meteorActivityPhase,
+	meteorActivityProgress,
+	meteorActivityZhr,
+	meteorExponentialZhr,
+	meteorSolarLongitudeForwardDelta,
+} from 'nebulosa/src/astronomy/meteors/activity'
+import type { MeteorActivityProfile, MeteorExponentialActivityProfile } from 'nebulosa/src/astronomy/meteors/types'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+const exponential: MeteorExponentialActivityProfile = { type: 'exponential', support: { start: deg(90), end: deg(110) }, solarLongitude: deg(100), zhr: 120, slopeBefore: 0.1, slopeAfter: 0.2 }
+
+// Support membership: undefined means that no interval was published.
+console.log(isMeteorShowerActive(exponential.support, deg(95))) // true
+console.log(isMeteorShowerActive(exponential.support, deg(120))) // false
+console.log(isMeteorShowerActive(undefined, deg(95))) // undefined
+console.log(isMeteorShowerActive({ start: 0, end: 0, fullCircle: true }, deg(95))) // true
+
+// ZHR in meteors per hour. 120 · 10^(−0.1 · 5) = 37.95 five degrees before the maximum.
+console.log(meteorActivityZhr(exponential, deg(100))) // 120
+console.log(meteorExponentialZhr(exponential, deg(95))) // 37.947
+console.log(meteorActivityZhr(exponential, deg(105))) // 12 — 120 · 10^(−0.2 · 5)
+console.log(meteorActivityZhr(exponential, deg(120))) // 0 — outside the support
+
+console.log(meteorActivityProgress(exponential.support, deg(95))) // 0.25 — a quarter of the way through the support
+console.log(meteorActivityProgress(exponential.support, deg(120))) // undefined — inactive
+console.log(meteorActivityPhase(exponential, deg(95))) // { active: true, progress: 0.25, deltaFromMaximum: −0.0873 } — radians
+
+// Global maximum and relative intensity in [0, 1].
+console.log(toDeg(meteorActivityMaximumSolarLongitude(exponential)!)) // 100
+console.log(meteorActivityMaximumZhr(exponential)) // 120
+console.log(meteorActivityFraction(exponential, deg(95))) // 0.3162
+
+// Forward circular displacement in [0, 2π).
+console.log(toDeg(meteorSolarLongitudeForwardDelta(deg(350), deg(10)))) // 20
+
+// Circular intervals where the profile is at least half of its peak: 96.99° to 101.51°.
+const half = meteorActivityIntervalsAboveFraction(exponential, 0.5)
+console.log(half.map((interval) => [toDeg(interval.start), toDeg(interval.end)])) // [[96.990, 101.505]]
+
+// ZHR integrated over time, in ZHR·hours (meteors seen by an ideal observer). The solar longitude
+// is computed at each Simpson sample; `options.step` is the panel width in days (default 1/24).
+const quadrantids: MeteorActivityProfile = { type: 'exponential', support: { start: deg(280), end: deg(286) }, solarLongitude: deg(283), zhr: 110, slopeBefore: 0.2, slopeAfter: 0.2 }
+const start = timeYMDHMS(2024, 1, 3, 12, 0, 0, Timescale.UTC)
+const end = timeYMDHMS(2024, 1, 4, 12, 0, 0, Timescale.UTC)
+console.log(integrateMeteorZhr(quadrantids, start, end)) // 2302.26
+```
+
+A multi-peak profile adds its components, so its maximum can lie between the component peaks and `meteorActivityPhase` reports the progress of the strongest component. A sampled profile is zero before its first and after its last sample. `meteorActivityIntervalsAboveFraction(profile, 0)` returns one `fullCircle` interval, positive fractions return one interval per disconnected run, and `options.samples` (default 1440, minimum 32) sets the scan resolution before the edges are refined by bisection.
+
+```ts
+import { meteorActivityIntervalsAboveFraction, meteorActivityMaximumSolarLongitude, meteorActivityMaximumZhr, meteorActivityPhase, meteorActivityZhr, isMeteorShowerActivityYearLimited, meteorShowerActivityYearApplies } from 'nebulosa/src/astronomy/meteors/activity'
+import type { MeteorActivityProfile, MeteorShowerActivity } from 'nebulosa/src/astronomy/meteors/types'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+const multiPeak: MeteorActivityProfile = {
+	type: 'multiPeak',
+	components: [
+		{ type: 'exponential', support: { start: deg(90), end: deg(110) }, solarLongitude: deg(100), zhr: 120, slopeBefore: 0.1, slopeAfter: 0.2 },
+		{ type: 'exponential', support: { start: deg(100), end: deg(130) }, solarLongitude: deg(115), zhr: 60, slopeBefore: 0.1, slopeAfter: 0.2 },
+	],
+}
+
+console.log(meteorActivityZhr(multiPeak, deg(105))) // 18 — 12 from the first component plus 6 from the second
+console.log(toDeg(meteorActivityMaximumSolarLongitude(multiPeak)!)) // 100
+console.log(meteorActivityMaximumZhr(multiPeak)) // 121.90
+console.log(meteorActivityIntervalsAboveFraction(multiPeak, 0.5).map((interval) => [toDeg(interval.start), toDeg(interval.end)])) // [[97.058, 101.570]]
+
+const sampled: MeteorActivityProfile = {
+	type: 'sampled',
+	support: { start: deg(90), end: deg(110) },
+	samples: [
+		{ solarLongitude: deg(92), zhr: 10 },
+		{ solarLongitude: deg(100), zhr: 100 },
+		{ solarLongitude: deg(108), zhr: 20 },
+	],
+}
+
+console.log(meteorActivityZhr(sampled, deg(96))) // 76.875 — PCHIP between the first two samples
+console.log(meteorActivityZhr(sampled, deg(91))) // 0 — before the first sample
+console.log(meteorActivityPhase(sampled, deg(96)).active) // true
+
+// Year-limited labels (a dated observation or an outburst) only apply in their civil UTC years.
+const outburst: MeteorShowerActivity = { kind: 'yearSpecific', source: '2024', years: { start: 2024, end: 2024 } }
+console.log(isMeteorShowerActivityYearLimited(outburst)) // true
+console.log(meteorShowerActivityYearApplies(outburst, 2024)) // true
+console.log(meteorShowerActivityYearApplies(outburst, 2025)) // false
+console.log(isMeteorShowerActivityYearLimited({ kind: 'annual', source: 'annual' })) // false
+```
+
 ### Meteor Observing Windows
+
+`meteorObservingWindows` plans when a shower can be observed from a site. It intersects the activity support (catalog interval and profile), solar darkness, a minimum radiant altitude and, only when requested, lunar constraints. Every boundary is refined by root search, and the surviving windows are integrated for their expected count and **ordered by expected count, most productive first**, not chronologically. The solution and the explicit `MeteorActivityProfile` can be passed in either order.
+
+The default constraints are a Sun at most 18° below the horizon (`maximumSolarAltitude`, radians, default `deg(-18)`) and a radiant above the geometric horizon (`minimumRadiantAltitude`, 0). Altitudes are geometric, so a window opens when the radiant crosses 0° of geometric altitude, a few minutes after the refracted rise reported by the rise/transit/set finder. Lunar constraints are opt-in: `maximumMoonAltitude`, `minimumMoonRadiantSeparation` and `maximumMoonIllumination` (the last two apply only while the Moon is above the horizon). Nothing penalizes the rate for moonlight or clouds unless `rateCorrection(time, conditions)` is supplied; it returns a multiplier in the local rate. The rate model uses `limitingMagnitude` (default 6.5), `populationIndex` (2), `obstructionCorrection` (1) and `altitudeExponent` (1). `step` is the scan resolution in days (default 1/24, reduced automatically for narrow supports), `tolerance` the root tolerance, and `minimumDurationHours` drops short slivers. A dated outburst outside its years yields no windows unless `extrapolateYearLimitedActivity` is set. A non-positive span returns `[]`.
+
+```ts
+import { meteorObservingWindows } from 'nebulosa/src/astronomy/meteors/planner'
+import type { MeteorActivityProfile, MeteorShowerSolution } from 'nebulosa/src/astronomy/meteors/types'
+import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { type Time, Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+// Illustrative values close to the Quadrantids; they are not read from a catalog.
+const solution: MeteorShowerSolution = { activity: { kind: 'annual', source: 'annual' }, activityInterval: { start: deg(280), end: deg(286) }, referenceSolarLongitude: deg(283.16), rightAscension: deg(230.1), declination: deg(48.5) }
+const profile: MeteorActivityProfile = { type: 'exponential', support: { start: deg(280), end: deg(286) }, solarLongitude: deg(283.16), zhr: 110, slopeBefore: 0.2, slopeAfter: 0.2 }
+
+const observer = geodeticLocation(deg(-8), deg(40), meter(100), Ellipsoid.WGS84) // longitude, latitude, height
+const start = timeYMDHMS(2024, 1, 3, 12, 0, 0, Timescale.UTC)
+const end = timeYMDHMS(2024, 1, 5, 12, 0, 0, Timescale.UTC)
+const format = (time: Time) => timeToDate(utc(time)).slice(0, 6).join('-')
+
+// Dark-sky windows over two days for a limiting magnitude of 6.0, ignoring windows shorter than 30 minutes.
+const windows = meteorObservingWindows(solution, profile, observer, start, end, { limitingMagnitude: 6, populationIndex: 2.1, minimumDurationHours: 0.5 })
+
+for (const window of windows) {
+	console.log(format(window.start), format(window.end), window.durationHours, window.expectedCount, format(window.bestTime!), window.bestLocalHourlyRate, toDeg(window.maximumRadiantAltitude!))
+}
+// 2024-1-3-22-17-0 2024-1-4-6-17-2 8.001 220.09 2024-1-4-6-17-2 62.10 60.05
+// 2024-1-4-22-13-4 2024-1-5-6-17-9 8.068 172.89 2024-1-5-6-17-9 43.86 60.72
+// 2024-1-3-18-55-50 2024-1-3-19-45-26 0.827 1.11 2024-1-3-18-55-50 2.69 2.69
+// 2024-1-4-18-56-37 2024-1-4-19-41-30 0.748 0.98 2024-1-4-18-56-37 2.61 2.38
+
+// Opt-in lunar constraints and a higher radiant. The window also reports the Moon at its best instant.
+const [best] = meteorObservingWindows(profile, solution, observer, start, end, { limitingMagnitude: 6, populationIndex: 2.1, minimumDurationHours: 1, minimumRadiantAltitude: deg(20), minimumMoonRadiantSeparation: deg(30), maximumMoonIllumination: 0.4 })
+console.log(format(best.start), format(best.end), best.durationHours, best.expectedCount) // 2024-1-5-4-51-49 2024-1-5-6-17-9 1.422 58.23
+console.log(best.moonIlluminationAtBest, toDeg(best.minimumMoonRadiantSeparation!), toDeg(best.maximumMoonAltitude!)) // 0.3943 63.31 37.58
+console.log(best.maximumZhr, best.maximumActivityFraction) // 74.92 0.6811
+```
+
+The conditions at one instant (Sun, Moon, radiant) are available directly, which is what a `rateCorrection` callback receives. `meteorObservingConditionsAt(radiant, observer, time, context?)` returns the geometric altitudes of the Sun and Moon, the lunar illuminated fraction, the Moon-radiant separation and the horizontal radiant. `meteorObservationContext(time, observer?)` prepares the shared solar longitude and local sidereal time, while `meteorSunDirection` and `meteorMoonDirection` return the geocentric equatorial J2000 vectors (AU) and `meteorMoonIllumination` the illuminated fraction from them.
+
+```ts
+import { meteorMoonDirection, meteorMoonIllumination, meteorObservationContext, meteorObservingConditionsAt, meteorSunDirection } from 'nebulosa/src/astronomy/meteors/observation'
+import type { MeteorRadiant } from 'nebulosa/src/astronomy/meteors/types'
+import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+const observer = geodeticLocation(deg(-8), deg(40), meter(100), Ellipsoid.WGS84)
+const time = timeYMDHMS(2024, 1, 4, 3, 0, 0, Timescale.UTC)
+const radiant: MeteorRadiant = { rightAscension: deg(230.1), declination: deg(48.5) }
+
+const conditions = meteorObservingConditionsAt(radiant, observer, time)
+console.log(toDeg(conditions.sunAltitude), toDeg(conditions.moonAltitude)) // −55.22 24.83
+console.log(conditions.moonIllumination, toDeg(conditions.moonRadiantSeparation)) // 0.5034 62.45
+console.log(toDeg(conditions.radiant.altitude), toDeg(conditions.radiant.azimuth)) // 28.70 49.18
+
+const context = meteorObservationContext(time, observer)
+console.log(toDeg(context.solarLongitude), context.localSiderealTime) // 282.896 2.4475 — degrees, radians
+
+const sun = meteorSunDirection(time)
+const moon = meteorMoonDirection(time)
+console.log(sun) // [0.21945, −0.87944, −0.38123] — AU
+console.log(moon) // [−0.0026157, −0.00055206, −0.00020355] — AU
+console.log(meteorMoonIllumination(sun, moon)) // 0.5034
+```
 
 ### Meteor Orbit Reconstruction
 
+A meteor's heliocentric orbit follows from where it comes from and how fast it hits the Earth. The geocentric radiant (equatorial J2000, radians) gives the direction of the incoming velocity, and the asymptotic geocentric speed `Vg` (AU/day) its magnitude. The heliocentric velocity is the Earth's heliocentric velocity minus `Vg` along the radiant direction, and the position is the Earth's position, since the meteoroid meets the Earth. States are heliocentric in the **ecliptic J2000** frame, with the Earth taken from VSOP87E. The speed must already be free of the Earth's gravity, the zenith attraction and the observer's rotation; see the trajectory-correction topic for those corrections.
+
+`meteorHeliocentricState(radiant, geocentricSpeed, time)` returns the state together with the Earth state used. `meteorOrbitFromRadiant(radiant, geocentricSpeed, time, mu?)` wraps it in a `KeplerOrbit` whose elements are in the same ecliptic frame as the stream elements of the IAU Meteor Data Center, with the Sun's GM from Pitjeva (2005) by default. A result with `eccentricity ≥ 1` is an unbound (hyperbolic) orbit, which is the signature of an inconsistent radiant or speed rather than of an interstellar meteoroid unless the measurement is accurate enough to say so.
+
+```ts
+import { meteorHeliocentricState, meteorOrbitFromRadiant } from 'nebulosa/src/astronomy/meteors/orbit'
+import type { MeteorRadiant } from 'nebulosa/src/astronomy/meteors/types'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { kilometerPerSecond, toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+// A Geminid-like radiant, with the typical speed of 33.8 km/s.
+const radiant: MeteorRadiant = { rightAscension: deg(112.5), declination: deg(32.3) }
+const speed = kilometerPerSecond(33.8)
+const time = timeYMDHMS(2023, 12, 14, 12, 0, 0, Timescale.UTC)
+
+const state = meteorHeliocentricState(radiant, speed, time)
+console.log(state.position) // [0.13883, 0.97458, −0.0000523] — AU, the Earth position
+console.log(state.velocity) // [−0.011005, −0.015776, −0.0035064] — AU/day
+console.log(toKilometerPerSecond(Math.hypot(...state.velocity))) // 33.853 — km/s, heliocentric speed
+console.log(state.earthVelocity) // [−0.017320, 0.0023603, 8.7e-8] — AU/day
+
+const orbit = meteorOrbitFromRadiant(radiant, speed, time)
+console.log(orbit.semiMajorAxis) // 1.3517 — AU
+console.log(orbit.eccentricity) // 0.88773
+console.log(toDeg(orbit.inclination)) // 22.02
+console.log(orbit.periapsisDistance) // 0.15176 — AU
+console.log(toDeg(orbit.argumentOfPeriapsis)) // 323.01
+console.log(toDeg(orbit.longitudeOfAscendingNode)) // 261.88
+```
+
+The inverse question is where a stream with known elements meets the Earth. `meteorStreamOrbitNodeEncounters(stream, time, mu?)` takes the complete elements `q`, `e`, `ω`, `Ω` and `i` (a `MeteorCompleteStreamOrbit`, with no epoch or mean anomaly) and evaluates the two geometric nodes of the orbit. For each node it returns the candidate geocentric radiant (equatorial J2000), the relative geocentric speed there (AU/day) and the Earth-node distance (AU) at `time`. No node is selected for the caller: a node is a real encounter only when the Earth is near it, so the distance has to be compared with a physical limit chosen by the caller. A node that does not exist (`1 + e·cos ν ≤ 0`) is skipped, and `q ≤ 0` or `e < 0` gives an empty list.
+
+```ts
+import { meteorStreamOrbitNodeEncounters } from 'nebulosa/src/astronomy/meteors/orbit'
+import type { MeteorCompleteStreamOrbit } from 'nebulosa/src/astronomy/meteors/types'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+const stream: MeteorCompleteStreamOrbit = { perihelionDistance: 0.14, eccentricity: 0.89, argumentOfPerihelion: deg(324.3), longitudeOfAscendingNode: deg(261.2), inclination: deg(22.9) }
+const time = timeYMDHMS(2023, 12, 14, 12, 0, 0, Timescale.UTC)
+
+for (const encounter of meteorStreamOrbitNodeEncounters(stream, time)) {
+	console.log(encounter.node, toDeg(encounter.radiant.rightAscension), toDeg(encounter.radiant.declination), toKilometerPerSecond(encounter.geocentricSpeed), encounter.earthNodeDistance)
+}
+// ascending 152.94 −7.239 131.53 1.138 — the Earth is 1.14 AU from this node
+// descending 112.16 32.615 33.912 0.0322 — 0.032 AU away: the shower radiant and speed
+```
+
 ### Meteor Orbit Similarity
+
+Whether two meteors, or a meteor and a parent body, share an orbit is decided with a dimensionless distance between orbits: the smaller the value, the more similar the orbits, and a shower association is usually declared below a threshold chosen for the criterion and the sample. Three classic criteria are available, all taking `MeteorComparableOrbit` objects in the same ecliptic J2000 frame: perihelion distance `q` (AU), eccentricity `e`, inclination `i`, longitude of the ascending node `Ω` and argument of perihelion `ω` (radians).
+
+- `meteorDSouthworthHawkins` is the `D_SH` of Southworth and Hawkins: `D² = (q₂ − q₁)² + (e₂ − e₁)² + (2 sin(I/2))² + (ē · 2 sin(Π/2))²`, where `I` is the angle between the orbital planes and `Π` the longitude-of-perihelion separation measured from the mutual node.
+- `meteorDDrummond` is `D_D`, which normalizes the `q` and `e` differences by their sums and uses the angle between the perihelion directions instead of `Π`.
+- `meteorDJopek` is the hybrid `D_J`: `e` is not normalized, `q` is normalized by the sum and the angular terms are those of `D_SH`.
+
+The three values are not on the same scale and must not be compared with each other's thresholds. A criterion returns `undefined` when the geometry is singular: a non-positive or non-finite `q` or `e`, an inclination of exactly 0 or π (the node is undefined), or the mutual-node orientation becoming singular. `meteorComparableOrbitFromKepler` converts a `KeplerOrbit` into that shape and returns `undefined` for the same singular orbits. Identical orbits have a distance of 0 and the criteria are symmetric.
+
+```ts
+import { meteorComparableOrbitFromKepler, meteorDDrummond, meteorDJopek, meteorDSouthworthHawkins, meteorOrbitFromRadiant } from 'nebulosa/src/astronomy/meteors/orbit'
+import type { MeteorComparableOrbit } from 'nebulosa/src/astronomy/meteors/types'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg } from 'nebulosa/src/math/units/angle'
+import { kilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+// Orbit reconstructed from a Geminid-like radiant and speed.
+const time = timeYMDHMS(2023, 12, 14, 12, 0, 0, Timescale.UTC)
+const measured = meteorComparableOrbitFromKepler(meteorOrbitFromRadiant({ rightAscension: deg(112.5), declination: deg(32.3) }, kilometerPerSecond(33.8), time))!
+console.log(measured) // { perihelionDistance: 0.15176, eccentricity: 0.88773, inclination: 0.38440, longitudeOfAscendingNode: 4.5708, argumentOfPerihelion: 5.6376 } — AU, radians
+
+// Mean orbit of the stream, with the same elements.
+const stream: MeteorComparableOrbit = { perihelionDistance: 0.14, eccentricity: 0.89, inclination: deg(22.9), longitudeOfAscendingNode: deg(261.2), argumentOfPerihelion: deg(324.3) }
+
+console.log(meteorDSouthworthHawkins(measured, stream)) // 0.02240
+console.log(meteorDDrummond(measured, stream)) // 0.04080
+console.log(meteorDJopek(measured, stream)) // 0.04459
+console.log(meteorDSouthworthHawkins(stream, stream)) // 0
+
+// A very different orbit is far apart, while a coplanar orbit (i = 0) has no node and no result.
+console.log(meteorDSouthworthHawkins(measured, { ...stream, perihelionDistance: 1, eccentricity: 0.5, inclination: deg(100) })) // 1.566
+console.log(meteorDJopek({ ...stream, inclination: 0 }, stream)) // undefined
+```
 
 ### Meteor Radiants
 
+A meteor radiant is the point of the sky from which the shower's meteors appear to diverge. Catalog radiants are geocentric, in equatorial J2000 coordinates (`MeteorRadiant`: right ascension normalized to `[0, 2π)` and declination, both in radians), and can drift during the activity period. A drift is declared with its unit basis: `solarLongitude` rates are radians per radian of solar longitude, `day` rates are radians per day. The radiant moves linearly away from the catalog reference longitude (`referenceSolarLongitude`), and the result reports `extrapolated: true` whenever it was evaluated away from that reference. A radiant that is missing, a drift without a reference longitude, a declination that would cross a pole, or a displacement beyond the allowed limit gives `undefined`.
+
+`MeteorRadiantOptions` controls the extrapolation: `extrapolate: false` accepts only the exact reference, `maxExtrapolationSolarLongitude` (default π, radians) limits a longitude drift, and `maxExtrapolationDays` (default 366) limits a daily drift. A daily drift is anchored to the nearest annual occurrence of the reference longitude, so `solarLongitudeSearch` can tune that inversion.
+
+```ts
+import { meteorRadiantDegrees, meteorRadiantJ2000, meteorRadiantPath, meteorRadiantPathBetween, meteorRadiantPathSegmentsBetween, meteorRadiantVector } from 'nebulosa/src/astronomy/meteors/radiant'
+import { meteorComputationContext } from 'nebulosa/src/astronomy/meteors/solar'
+import type { MeteorShowerSolution } from 'nebulosa/src/astronomy/meteors/types'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+// Illustrative values close to the Quadrantids; they are not read from a catalog.
+const base: MeteorShowerSolution = { activity: { kind: 'annual', source: 'annual' }, activityInterval: { start: deg(280), end: deg(286) }, referenceSolarLongitude: deg(283.16), rightAscension: deg(230.1), declination: deg(48.5) }
+const longitudeDrift: MeteorShowerSolution = { ...base, radiantDrift: { basis: 'solarLongitude', rightAscensionRate: 1, declinationRate: -0.2 } }
+const dailyDrift: MeteorShowerSolution = { ...base, radiantDrift: { basis: 'day', rightAscensionRate: deg(1), declinationRate: deg(-0.25) } }
+
+const time = timeYMDHMS(2024, 1, 4, 5, 0, 0, Timescale.UTC)
+const context = meteorComputationContext(time) // solar longitude 282.98°
+
+const fixed = meteorRadiantJ2000(base, context)
+console.log(toDeg(fixed!.radiant.rightAscension), toDeg(fixed!.radiant.declination), fixed!.extrapolated) // 230.1 48.5 false
+
+const drifting = meteorRadiantJ2000(longitudeDrift, context)
+console.log(toDeg(drifting!.radiant.rightAscension), toDeg(drifting!.radiant.declination), drifting!.extrapolated) // 229.921 48.536 true
+
+const daily = meteorRadiantJ2000(dailyDrift, context)
+console.log(toDeg(daily!.radiant.rightAscension), toDeg(daily!.radiant.declination), daily!.extrapolated) // 229.924 48.544 true
+
+console.log(meteorRadiantJ2000(longitudeDrift, context, { extrapolate: false })) // undefined — not at the reference longitude
+
+// Samples over a forward interval of solar longitude (radians), endpoint included. A daily drift needs
+// absolute times and throws here.
+const path = meteorRadiantPath(longitudeDrift, deg(282), deg(284), deg(1))
+console.log(path.map((point) => [toDeg(point.solarLongitude), toDeg(point.rightAscension), toDeg(point.declination)])) // [[282, 228.94, 48.732], [283, 229.94, 48.532], [284, 230.94, 48.332]]
+
+// The same for absolute times: `step` is in days (default 1). Segments split the path wherever the model
+// is unavailable, so a polyline cannot bridge the gap.
+const start = timeYMDHMS(2024, 1, 3, 0, 0, 0, Timescale.UTC)
+const end = timeYMDHMS(2024, 1, 5, 0, 0, 0, Timescale.UTC)
+const timed = meteorRadiantPathBetween(dailyDrift, start, end)
+console.log(timed.map((point) => [toDeg(point.solarLongitude), toDeg(point.rightAscension), toDeg(point.declination)])) // [[281.749, 228.716, 48.846], [282.768, 229.716, 48.596], [283.788, 230.716, 48.346]]
+console.log(meteorRadiantPathSegmentsBetween(dailyDrift, start, end).map((segment) => segment.length)) // [3]
+
+// Unit vector in equatorial J2000, and a radiant built from degrees.
+console.log(meteorRadiantVector({ rightAscension: deg(90), declination: 0 })) // [6.1e-17, 1, 0]
+console.log(meteorRadiantDegrees(-90, 10)) // { rightAscension: 4.7124, declination: 0.17453 } — radians
+```
+
+Local circumstances are geometric: the radiant is precessed and nutated to the true equator of date, then rotated to the horizon with the apparent sidereal time of the observer, and no refraction is applied. Azimuth is measured north through east. `meteorRadiantMaximumAltitude` scans a bounded interval at `options.step` (days, default 1/24) and refines around the best sample, returning `undefined` when the radiant never rises. `meteorRadiantRiseTransitSet` uses the shared horizon event finder over `options.window` days (default 1) and the standard horizon altitude of the finder, so its rise and set instants are not the instants of the geometric altitude crossing zero. `meteorRadiantVisibility` classifies that result as `alwaysUp`, `alwaysDown`, `risesAndSets`, `risesOnly`, `setsOnly` or `unknown`.
+
+```ts
+import { meteorRadiantHorizontal, meteorRadiantMaximumAltitude, meteorRadiantOfDate, meteorRadiantRiseTransitSet, meteorRadiantVisibility } from 'nebulosa/src/astronomy/meteors/radiant'
+import type { MeteorRadiant, MeteorShowerSolution } from 'nebulosa/src/astronomy/meteors/types'
+import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+const solution: MeteorShowerSolution = { activity: { kind: 'annual', source: 'annual' }, referenceSolarLongitude: deg(283.16), rightAscension: deg(230.1), declination: deg(48.5) }
+const radiant: MeteorRadiant = { rightAscension: deg(230.1), declination: deg(48.5) }
+const observer = geodeticLocation(deg(-8), deg(40), meter(100), Ellipsoid.WGS84) // longitude, latitude, height
+const time = timeYMDHMS(2024, 1, 4, 5, 0, 0, Timescale.UTC)
+
+const ofDate = meteorRadiantOfDate(radiant, time)
+console.log(toDeg(ofDate.rightAscension), toDeg(ofDate.declination)) // 230.292 48.413
+
+const horizontal = meteorRadiantHorizontal(radiant, observer, time)
+console.log(toDeg(horizontal.azimuth), toDeg(horizontal.altitude)) // 57.973 47.321
+
+const start = timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.UTC)
+const end = timeYMDHMS(2024, 1, 5, 0, 0, 0, Timescale.UTC)
+const highest = meteorRadiantMaximumAltitude(solution, observer, start, end)
+console.log(highest && [timeToDate(utc(highest.time)), toDeg(highest.altitude), toDeg(highest.azimuth)]) // [[2024, 1, 4, 8, 59, 15, 651], 81.587, 360] — at the transit, due north of the zenith
+
+const events = meteorRadiantRiseTransitSet(solution, observer, start)
+console.log(events && timeToDate(utc(events.rise!))) // [2024, 1, 4, 21, 57, 57, 299]
+console.log(meteorRadiantVisibility(events)) // risesAndSets
+console.log(meteorRadiantVisibility(undefined)) // unknown
+```
+
 ### Meteor Shower State
+
+`meteorShowerState` gathers everything a planner needs about one shower solution at one instant: whether it is active, its ZHR and relative activity, the radiant in J2000 and of date, the local horizontal radiant, and the Sun and Moon circumstances. The common values (solar longitude, sidereal time, Sun and Moon vectors and altitudes, lunar illumination) are computed once in a `MeteorShowerComputationContext` and shared by any number of solutions, so a batch of showers costs one ephemeris evaluation, not one per shower.
+
+`meteorShowerComputationContext(time, observer?, options?)` prepares the context. Without an observer there is no local sidereal time and no altitudes, and the state has no `horizontal`, `sunAltitude` or `moonAltitude`. `includeHorizontal`, `includeSun` and `includeMoon` switch the optional groups off; the Moon vector is the most expensive and is evaluated by default, so a caller that does not need lunar quantities should pass `includeMoon: false`. All altitudes are geometric, without refraction.
+
+`meteorShowerState(solution, context, options?)` never mutates the context. `active` is the conjunction of every known support: the catalog interval and the profile support. It is `undefined` when neither exists and `false` for a dated observation or outburst outside its civil years, unless `extrapolateYearLimitedActivity` is set. `zhr` and `activityFraction` need `options.profile`; pass `activityMaximumZhr` when calling repeatedly to skip the global-peak search of the profile. The radiant options (`extrapolate`, `maxExtrapolationDays`, ...) are those of the radiant evaluation, `radiantExtrapolated` tells whether the drift was applied away from its reference, and `includeRadiantOfDate: false` skips the precession and nutation of the radiant when only J2000 is needed.
+
+```ts
+import { meteorShowerComputationContext, meteorShowerState, meteorShowerStates } from 'nebulosa/src/astronomy/meteors/state'
+import type { MeteorActivityProfile, MeteorShowerSolution } from 'nebulosa/src/astronomy/meteors/types'
+import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+// Illustrative values close to the Quadrantids and Geminids; they are not read from a catalog.
+const quadrantids: MeteorShowerSolution = { activity: { kind: 'annual', source: 'annual' }, activityInterval: { start: deg(280), end: deg(286) }, referenceSolarLongitude: deg(283.16), rightAscension: deg(230.1), declination: deg(48.5) }
+const geminids: MeteorShowerSolution = { activity: { kind: 'annual', source: 'annual' }, activityInterval: { start: deg(250), end: deg(270) }, referenceSolarLongitude: deg(262), rightAscension: deg(112.5), declination: deg(32.3) }
+const profile: MeteorActivityProfile = { type: 'exponential', support: { start: deg(280), end: deg(286) }, solarLongitude: deg(283.16), zhr: 110, slopeBefore: 0.2, slopeAfter: 0.2 }
+
+const observer = geodeticLocation(deg(-8), deg(40), meter(100), Ellipsoid.WGS84) // longitude, latitude, height
+const time = timeYMDHMS(2024, 1, 4, 5, 0, 0, Timescale.UTC)
+const context = meteorShowerComputationContext(time, observer)
+
+const state = meteorShowerState(quadrantids, context, { profile })
+console.log(toDeg(state.solarLongitude)) // 282.981
+console.log(state.active, state.zhr, state.activityFraction) // true 101.28 0.9207
+console.log(state.radiantExtrapolated) // false — no drift is declared
+console.log(toDeg(state.horizontal!.azimuth), toDeg(state.horizontal!.altitude)) // 57.973 47.321
+console.log(toDeg(state.moonSeparation!), toDeg(state.moonAltitude!), state.moonIllumination) // 62.46 40.39 0.4955
+console.log(toDeg(state.sunAltitude!)) // −32.53
+
+// A batch shares the same context; each input carries its own optional profile.
+const states = meteorShowerStates([{ solution: quadrantids, profile }, { solution: geminids }], context)
+console.log(states.map((value) => [value.active, value.zhr, value.activityFraction])) // [[true, 101.28, 0.9207], [false, undefined, undefined]]
+
+// Without an observer there is no local geometry.
+const geocentric = meteorShowerComputationContext(time)
+console.log(meteorShowerState(quadrantids, geocentric, { profile, includeMoon: false }).horizontal) // undefined
+```
 
 ### Meteor Solar Longitude
 
+Meteor catalogs locate a shower by the Sun's ecliptic longitude, not by calendar date. The meteor modules compute it as the geometric geocentric longitude in the **J2000 ecliptic**, from the VSOP87E Sun and Earth positions, with no light-time, aberration or precession to the date. Because the frame is fixed at J2000, longitude 0° is reached about eight hours after the 2024 March equinox, not at it. Longitudes are in radians and normalized to `[0, 2π)`.
+
+Converting a longitude to a time is limited to one civil UTC year: `timeAtMeteorSolarLongitude(year, longitude, options?)` returns the first occurrence in that year and throws an `Error` if the longitude does not occur in it. The result is in UTC unless `options.scale` selects another scale. `meteorSolarLongitudeTimes` solves several longitudes with the same shared setup and preserves their order. `options` also accepts the root-search `step` and `tolerance`.
+
+```ts
+import { meteorComputationContext, meteorSolarLongitude, meteorSolarLongitudeDelta, meteorSolarLongitudeForwardDelta, meteorSolarLongitudeTimes, meteorSolarRelativeState, meteorSolarState, timeAtMeteorSolarLongitude } from 'nebulosa/src/astronomy/meteors/solar'
+import { Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+const time = timeYMDHMS(2024, 1, 4, 0, 0, 0, Timescale.UTC)
+
+console.log(toDeg(meteorSolarLongitude(time))) // 282.768 — degrees
+
+// One shared Sun/Earth evaluation: longitude plus the geocentric equatorial J2000 Sun vector (AU).
+const state = meteorSolarState(time)
+console.log(toDeg(state.solarLongitude)) // 282.768
+console.log(state.sun) // [0.21732, −0.87988, −0.38142]
+
+// Signed shortest displacement in [−π, π) and forward displacement in [0, 2π).
+console.log(toDeg(meteorSolarLongitudeDelta(deg(5), deg(355)))) // 10
+console.log(toDeg(meteorSolarLongitudeForwardDelta(deg(350), deg(10)))) // 20
+console.log(toDeg(meteorSolarLongitudeForwardDelta(deg(10), deg(350)))) // 340
+
+// Time at which the longitude 283° is reached in 2024: 2024-01-04 05:27:22 UTC.
+console.log(timeToDate(utc(timeAtMeteorSolarLongitude(2024, deg(283))))) // [2024, 1, 4, 5, 27, 22, 227]
+
+// Several longitudes at once, in input order. J2000 longitudes 0°, 90°, 180° and 270°.
+const times = meteorSolarLongitudeTimes(2024, [0, deg(90), deg(180), deg(270)])
+console.log(times.map((value) => timeToDate(utc(value)).slice(0, 6))) // [[2024, 3, 20, 11, 6, 42], [2024, 6, 21, 5, 17, 2], [2024, 9, 22, 21, 2, 45], [2024, 12, 21, 17, 25, 31]]
+
+// Minimal context shared by batch calculations: time and solar longitude (no observer, so no sidereal time).
+const context = meteorComputationContext(time)
+console.log(toDeg(context.solarLongitude), context.localSiderealTime) // 282.768 undefined
+
+// Geocentric Sun position and velocity in the ecliptic J2000 frame: AU and AU/day.
+const [position, velocity] = meteorSolarRelativeState(time)
+console.log(position) // [0.21732, −0.95899, 0.0000523]
+console.log(velocity) // [0.017060, 0.0038608, −9.13e-7]
+```
+
+`meteorShowerDates(solution, year, options?)` turns the support interval and the reference longitude of a catalog solution into instants: `start`, `reference` and `end`. The reference is the mean activity longitude of the catalog and is not a ZHR maximum. `maximum` is filled only when `options.profile` supplies an explicit profile, because the catalog alone does not define one. An interval that wraps through the new year gets its `end` in the following year, and a full-circle interval ends one year after its start. A dated observation or outburst outside its years returns `{}` unless `options.extrapolateYearLimitedActivity` is set.
+
+```ts
+import { meteorShowerDates } from 'nebulosa/src/astronomy/meteors/solar'
+import type { MeteorShowerSolution } from 'nebulosa/src/astronomy/meteors/types'
+import { timeToDate, utc } from 'nebulosa/src/astronomy/time/time'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+const solution: MeteorShowerSolution = { activity: { kind: 'annual', source: 'annual' }, activityInterval: { start: deg(280), end: deg(286) }, referenceSolarLongitude: deg(283) }
+
+const dates = meteorShowerDates(solution, 2024, { profile: { type: 'exponential', support: { start: deg(280), end: deg(286) }, solarLongitude: deg(283.2), zhr: 110, slopeBefore: 0.2, slopeAfter: 0.2 } })
+
+console.log(timeToDate(utc(dates.start!))) // [2024, 1, 1, 6, 48, 21, 800]
+console.log(timeToDate(utc(dates.reference!))) // [2024, 1, 4, 5, 27, 22, 227]
+console.log(timeToDate(utc(dates.end!))) // [2024, 1, 7, 4, 5, 28, 442]
+console.log(timeToDate(utc(dates.maximum!))) // [2024, 1, 4, 10, 9, 56, 97]
+```
+
 ### Meteor Track Association
+
+A single observed meteor can be tested against a shower by geometry: its trail, extended backwards, must pass through the radiant. A `MeteorTrack` is the great-circle arc between two equatorial J2000 points (`start` and `end` in the direction of motion, radians). Only the J2000 frame is supported. The helpers return `undefined` for a degenerate track, one whose two ends coincide or are antipodal and therefore do not define a plane.
+
+`meteorTrackGreatCircle` returns the unit pole of the trail's great circle, `meteorTrackLength` the arc length (radians) and `meteorTrackPoint(track, fraction)` the point at `fraction` of the way along the short arc, with `0` the start and `1` the end. `meteorTrackPositionAngle(start, end)` is the direction of the trail at its start, east of celestial north, in `[0, 2π)`. `meteorRadiantTrackResidual` is the angular distance of a radiant from that great-circle plane (the cross-track error, radians), and `meteorTrackDirectionCompatible` tells whether the meteor moves away from the radiant, as a real shower member must, by comparing the radiant's distances to the two ends.
+
+`associateMeteorTrack(radiant, track, options?)` combines these into one decision. `compatible` requires a non-degenerate track, direction compatibility (unless `requireDirectionCompatibility` is `false`), and each of `maximumCrossTrackError` and `maximumRadiantDistance` (radians) that is set; a threshold that is not set is not applied. `radiantDistance` is the angular distance from the radiant to the start of the trail. It is a geometric screen and does not use the speed or the radiant error, so the thresholds belong to the caller.
+
+```ts
+import { associateMeteorTrack, meteorRadiantTrackResidual, meteorTrackDirectionCompatible, meteorTrackGreatCircle, meteorTrackLength, meteorTrackPoint, meteorTrackPositionAngle } from 'nebulosa/src/astronomy/meteors/trajectory'
+import type { MeteorRadiant, MeteorTrack } from 'nebulosa/src/astronomy/meteors/types'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+const track: MeteorTrack = { start: { rightAscension: deg(220), declination: deg(55) }, end: { rightAscension: deg(228), declination: deg(48) } }
+const radiant: MeteorRadiant = { rightAscension: deg(214.2), declination: deg(61.7) }
+
+console.log(meteorTrackGreatCircle(track)) // [0.89389, −0.26973, 0.35807] — unit pole
+console.log(toDeg(meteorTrackLength(track)!)) // 8.58
+console.log(toDeg(meteorTrackPositionAngle(track.start, track.end))) // 141.37
+console.log(meteorTrackPoint(track, 0.5)) // { rightAscension: 3.9149, declination: 0.90003 } — radians
+
+console.log(toDeg(meteorRadiantTrackResidual(radiant, track)!)) // 2.10
+console.log(meteorTrackDirectionCompatible(radiant, track)) // true — the meteor moves away from the radiant
+
+const association = associateMeteorTrack(radiant, track, { maximumCrossTrackError: deg(5), maximumRadiantDistance: deg(30) })
+console.log(association.compatible, toDeg(association.crossTrackError), toDeg(association.radiantDistance), association.directionCompatible) // true 2.10 7.35 true
+
+// The same trail travelling the other way moves towards the radiant, so it is rejected.
+const reversed: MeteorTrack = { start: track.end, end: track.start }
+console.log(associateMeteorTrack(radiant, reversed).compatible) // false
+console.log(associateMeteorTrack(radiant, reversed, { requireDirectionCompatibility: false }).compatible) // true
+
+// A degenerate track has no plane.
+console.log(meteorTrackPoint({ start: track.start, end: track.start }, 0.5)) // undefined
+console.log(associateMeteorTrack(radiant, { start: track.start, end: track.start }).compatible) // false
+```
 
 ### Meteor Trajectory Correction
 
+The direction in which a meteor is seen is not the direction in which it approached the Earth. The Earth's gravity bends the path and speeds the meteoroid up (zenith attraction), and an observer on the rotating Earth adds a velocity of their own. The functions here correct between the geocentric radiant (equatorial J2000, the one of a catalog) and the apparent local radiant. Speeds are AU/day and distances AU. Atmospheric drag is not modeled, and the entry altitude is measured from an explicit reference ellipsoid (default `Ellipsoid.IERS2010`).
+
+The entry speed follows from energy conservation: `v² = Vg² + 2·GM/r`, with `Vg` the asymptotic geocentric speed and `r` the geocentric distance of the entry point. `meteorGeocentricRadius(latitude, entryAltitude?, ellipsoid?)` gives that distance for a geodetic latitude and height, and `meteorSpeedAtGeodeticAltitude` combines both steps. Schiaparelli's zenith attraction `Δz` is the angle by which the apparent zenith angle `z` of the entry is smaller than the geocentric one: `z_geocentric = z + Δz`, with `Δz = 2·atan((v − Vg)·tan(z/2) / (v + Vg))`. The inverse is solved by bisection, which is stable at the zenith and near the horizon, and returns `undefined` for a geocentric zenith angle outside `[0, π/2]`.
+
+```ts
+import { apparentZenithAngleFromGeocentric, geocentricZenithAngleFromApparent, meteorGeocentricRadius, meteorSpeedAtDistance, meteorSpeedAtGeodeticAltitude, meteorZenithAttraction } from 'nebulosa/src/astronomy/meteors/trajectory'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { kilometer, toKilometer } from 'nebulosa/src/math/units/distance'
+import { kilometerPerSecond, toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+const speed = kilometerPerSecond(41) // asymptotic geocentric speed Vg
+const latitude = deg(40)
+const altitude = kilometer(100) // height of the entry point above the ellipsoid
+
+const radius = meteorGeocentricRadius(latitude, altitude)
+console.log(toKilometer(radius)) // 6469.34 — from the center of the Earth
+
+const entrySpeed = meteorSpeedAtGeodeticAltitude(speed, latitude, altitude)
+console.log(toKilometerPerSecond(entrySpeed)) // 42.476
+console.log(toKilometerPerSecond(meteorSpeedAtDistance(speed, radius))) // 42.476
+
+// An apparent zenith angle of 60° corresponds to a geocentric zenith angle 1.17° larger.
+console.log(toDeg(meteorZenithAttraction(deg(60), speed, entrySpeed))) // 1.170
+console.log(toDeg(geocentricZenithAngleFromApparent(deg(60), speed, entrySpeed))) // 61.170
+console.log(toDeg(apparentZenithAngleFromGeocentric(deg(60), speed, entrySpeed)!)) // 58.857
+console.log(apparentZenithAngleFromGeocentric(deg(100), speed, entrySpeed)) // undefined — below the horizon
+```
+
+`apparentMeteorRadiantHorizontal(radiant, observer, time, options)` takes a geocentric J2000 radiant and returns where it appears for the observer, with the attraction applied to the geometric altitude; the azimuth is unchanged, since the correction acts along the vertical. It returns `undefined` when the geometric radiant is not above the horizon. `geocentricMeteorRadiantFromHorizontal` is the inverse, from an apparent horizontal position (azimuth north through east, altitude, radians) back to the catalog frame, with `undefined` for a non-positive altitude. Both need `options.geocentricSpeed` and `options.entryAltitude`, and refraction is not part of either. In the example, the 41 km/s radiant at an altitude of 47.32° is seen 0.78° higher at 48.10°.
+
+```ts
+import { apparentMeteorRadiantHorizontal, geocentricMeteorRadiantFromHorizontal } from 'nebulosa/src/astronomy/meteors/trajectory'
+import { meteorRadiantHorizontal } from 'nebulosa/src/astronomy/meteors/radiant'
+import type { MeteorRadiant } from 'nebulosa/src/astronomy/meteors/types'
+import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { kilometer, meter } from 'nebulosa/src/math/units/distance'
+import { kilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+const observer = geodeticLocation(deg(-8), deg(40), meter(100), Ellipsoid.WGS84)
+const time = timeYMDHMS(2024, 1, 4, 5, 0, 0, Timescale.UTC)
+const radiant: MeteorRadiant = { rightAscension: deg(230.1), declination: deg(48.5) }
+const options = { geocentricSpeed: kilometerPerSecond(41), entryAltitude: kilometer(100) }
+
+const geometric = meteorRadiantHorizontal(radiant, observer, time)
+console.log(toDeg(geometric.azimuth), toDeg(geometric.altitude)) // 57.973 47.321
+
+const apparent = apparentMeteorRadiantHorizontal(radiant, observer, time, options)!
+console.log(toDeg(apparent.azimuth), toDeg(apparent.altitude)) // 57.973 48.097
+console.log(toDeg(apparent.rightAscension), toDeg(apparent.declination)) // 228.951 48.657 — J2000
+
+// The inverse recovers the catalog radiant.
+const recovered = geocentricMeteorRadiantFromHorizontal(apparent, observer, time, options)!
+console.log(toDeg(recovered.rightAscension), toDeg(recovered.declination)) // 230.1 48.5
+```
+
+The rotation of the Earth shifts the radiant too. `meteorObserverRotationVelocity(observer, time)` is the velocity of the observer in the GCRS (AU/day), from the ITRS position and the instantaneous angular velocity of the Earth, and has no gravity term. `meteorRadiantWithEarthRotation(radiant, geocentricSpeed, observer, time)` subtracts it from the incoming geocentric velocity and returns the corrected radiant in the same frame, or `undefined` for a zero relative speed. The correction is of the order of the ratio between the rotation speed (up to 0.465 km/s) and the meteor speed, which is a fraction of a degree for fast meteors and larger for slow ones.
+
+```ts
+import { meteorObserverRotationVelocity, meteorRadiantWithEarthRotation } from 'nebulosa/src/astronomy/meteors/trajectory'
+import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+import { kilometerPerSecond, toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+const observer = geodeticLocation(deg(-8), deg(40), meter(100), Ellipsoid.WGS84)
+const time = timeYMDHMS(2024, 1, 4, 5, 0, 0, Timescale.UTC)
+
+const velocity = meteorObserverRotationVelocity(observer, time)
+console.log(velocity) // [−0.000035756, −0.00020294, 8.98e-8] — AU/day
+console.log(toKilometerPerSecond(Math.hypot(...velocity))) // 0.3568
+
+const radiant = meteorRadiantWithEarthRotation({ rightAscension: deg(230.1), declination: deg(48.5) }, kilometerPerSecond(41), observer, time)!
+console.log(toDeg(radiant.rightAscension), toDeg(radiant.declination)) // 230.471 48.177
+```
+
 ### Meteor Visual Rates
+
+Visual meteor counts are converted to the zenithal hourly rate (ZHR), the rate an ideal observer would see with the radiant at the zenith under a limiting magnitude of 6.5. The correction is `ZHR = N · F · r^(6.5 − lm) / (T · sin(h)^γ)`: `N` is the count, `F` the obstruction correction (`F ≥ 1`), `r` the population index, `lm` the limiting magnitude, `T` the effective observing time in hours, `h` the geometric radiant altitude (radians) and `γ` the altitude exponent (default 1). An observation with a non-positive effective time or a radiant at or below the horizon yields a ZHR of zero rather than `Infinity`. The local rate returned by `meteorLocalHourlyRate` is the inverse relation: the idealized rate a given ZHR produces under the same conditions, with no lunar or weather penalty.
+
+```ts
+import { combineMeteorVisualObservations, meteorLocalHourlyRate, meteorVisualRate, meteorZhrFromObservation } from 'nebulosa/src/astronomy/meteors/observation'
+import type { MeteorVisualObservation } from 'nebulosa/src/astronomy/meteors/types'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+const observation: MeteorVisualObservation = { count: 25, effectiveTime: 1.5, limitingMagnitude: 6.0, populationIndex: 2.2, obstructionCorrection: 1.1, radiantAltitude: deg(40) }
+
+console.log(meteorZhrFromObservation(observation)) // 42.30 — meteors per hour
+console.log(meteorLocalHourlyRate(100, observation)) // 39.40 — local meteors per hour that a ZHR of 100 produces
+
+// Both values with the observation retained for provenance.
+const rate = meteorVisualRate(observation)
+console.log(rate.zhr, rate.localHourlyRate) // 42.30 16.67
+
+// Observations are combined by exposure, not by averaging their ZHR: total count over corrected time.
+const second: MeteorVisualObservation = { ...observation, count: 10, effectiveTime: 1, radiantAltitude: deg(60) }
+console.log(combineMeteorVisualObservations([observation, second])) // 31.20 — ZHR
+```
+
+The population index `r` is the factor by which the counts grow for each magnitude step fainter, `N(m + Δm) / N(m) = r^Δm`. It converts to the meteor mass index as `s = 1 + 2.3 · log10(r)`. `meteorPopulationIndexFromMagnitudeBins` estimates `r` from counts per magnitude class by a linear regression of `ln N` against magnitude. Bins are weighted by their Poisson count by default (`weighted: false` gives equal weights), bins with a zero count are skipped, and fewer than two usable bins return `undefined`. A bin with a non-finite magnitude or a negative or non-finite count throws an `Error`.
+
+```ts
+import { meteorMagnitudeRatio, meteorMassIndex, meteorPopulationIndex, meteorPopulationIndexFromMagnitudeBins } from 'nebulosa/src/astronomy/meteors/observation'
+
+console.log(meteorMagnitudeRatio(2.5, 1)) // 2.5 — one magnitude fainter has 2.5 times more meteors
+console.log(meteorMassIndex(2.5)) // 1.9153
+console.log(meteorPopulationIndex(meteorMassIndex(2.5))) // 2.5
+
+const bins = [
+	{ magnitude: 1, count: 4 },
+	{ magnitude: 2, count: 10 },
+	{ magnitude: 3, count: 26 },
+	{ magnitude: 4, count: 62 },
+]
+
+console.log(meteorPopulationIndexFromMagnitudeBins(bins)) // 2.474 — Poisson-weighted
+console.log(meteorPopulationIndexFromMagnitudeBins(bins, { weighted: false })) // 2.504
+```
+
+Counts are Poisson-distributed, so `meteorGarwoodInterval(count, confidence = 0.95)` gives the exact two-sided confidence interval of the expected count from chi-square quantiles; zero counts have a lower bound of 0. `meteorGarwoodZhr` scales that interval through the linear ZHR correction of one observation. `integrateMeteorExpectedCount` integrates the expected number of meteors seen by one observer over a time window, from a profile and an explicit observing model, with Simpson's rule (trapezoids for an odd number of panels). `radiantAltitude` (or `radiant`) supplies the radiant altitude over time and defaults to the horizon, which gives zero. `rateCorrection` is the only place where weather, coverage or lunar losses can enter, and `step` is the panel width in days (default 1/24).
+
+```ts
+import { integrateMeteorExpectedCount, meteorGarwoodInterval, meteorGarwoodZhr } from 'nebulosa/src/astronomy/meteors/observation'
+import type { MeteorVisualObservation } from 'nebulosa/src/astronomy/meteors/types'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+console.log(meteorGarwoodInterval(25)) // { lower: 16.18, upper: 36.90 } — 95% interval of a count of 25
+console.log(meteorGarwoodInterval(0)) // { lower: 0, upper: 3.689 }
+
+const observation: MeteorVisualObservation = { count: 25, effectiveTime: 1.5, limitingMagnitude: 6.0, populationIndex: 2.2, obstructionCorrection: 1.1, radiantAltitude: deg(40) }
+console.log(meteorGarwoodZhr(observation)) // { lower: 27.38, upper: 62.45 } — ZHR
+
+const profile = { type: 'exponential', support: { start: deg(280), end: deg(286) }, solarLongitude: deg(283), zhr: 110, slopeBefore: 0.2, slopeAfter: 0.2 } as const
+const start = timeYMDHMS(2024, 1, 4, 2, 0, 0, Timescale.UTC)
+const end = timeYMDHMS(2024, 1, 4, 4, 0, 0, Timescale.UTC)
+
+// Two hours with a constant 45° radiant altitude, limiting magnitude 6.5 and 20% losses to clouds.
+const count = integrateMeteorExpectedCount(profile, start, end, { limitingMagnitude: 6.5, populationIndex: 2.1, obstructionCorrection: 1, radiantAltitude: () => deg(45), rateCorrection: () => 0.8 })
+console.log(count) // 118.62 — meteors
+```
 
 ### Minimum Orbit Intersection Distance
 
