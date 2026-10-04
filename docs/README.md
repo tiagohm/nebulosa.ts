@@ -773,6 +773,31 @@ console.log(isMagnusDomain(150)) // false — outside [-100, 100] °C
 
 ### Differential Refraction and Atmospheric Dispersion
 
+Refraction depends on wavelength: blue light is bent more than red, so the image of a star is stretched into a short spectrum along the vertical, with the blue end toward the zenith. The effect grows toward the horizon and matters for broadband imaging, guiding, and spectroscopy.
+
+`differentialRefraction(altitude, wavelengthAMicrons, wavelengthBMicrons, conditions?)` returns the signed difference in radians between the refractive displacements at the two wavelengths, in the order given: it is positive when A is the bluer one. `atmosphericDispersion(altitude, blueMicrons, redMicrons, conditions?)` returns the length of the dispersion for a spectral window, whatever the order of the two edges. `altitude` is the apparent altitude in radians; both functions return `undefined` on the horizon and below it. `conditions` takes `pressure` (hPa), `temperature` (°C), and `relativeHumidity` (fraction 0..1), with standard defaults, and `atmosphericDispersion` also accepts extra fields: `hourAngle`, `declination`, and `latitude` (radians), which together orient the dispersion, and `arcsecPerPixel`, which adds its length in pixels. The result has `angle` (radians, never negative), `arcseconds`, optionally `positionAngle` (the parallactic angle, north through east, where the shorter wavelength lies toward the zenith), and optionally `pixels`. For one wavelength, see Refractive Displacement.
+
+```ts
+import { atmosphericDispersion, differentialRefraction } from 'nebulosa/src/astronomy/coordinates/refraction'
+import { deg, hour, toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
+
+// Blue (0.45 µm) minus red (0.65 µm) at apparent altitude 45°; the sign follows the argument order.
+console.log(toArcsec(differentialRefraction(deg(45), 0.45, 0.65)!)) // 0.8669 — arcseconds, positive
+console.log(toArcsec(differentialRefraction(deg(45), 0.65, 0.45)!)) // -0.8669 — arcseconds
+console.log(toArcsec(differentialRefraction(deg(10), 0.45, 0.65)!)) // 4.7616 — arcseconds, larger lower down
+
+// A 0.4-0.7 µm band at altitude 40°, with orientation and a 1.5"/pixel image scale.
+const dispersion = atmosphericDispersion(deg(40), 0.4, 0.7, { hourAngle: hour(2), declination: deg(20), latitude: deg(-30), arcsecPerPixel: 1.5 })
+
+console.log(dispersion?.arcseconds) // 1.7036 — arcseconds
+console.log(toDeg(dispersion!.positionAngle!)) // 149.2 — degrees, parallactic angle: blue end toward the zenith
+console.log(dispersion?.pixels) // 1.1357 — pixels
+
+// Without the geometry or image scale only the length is returned.
+console.log(atmosphericDispersion(deg(40), 0.7, 0.4)?.arcseconds) // 1.7036 — arcseconds, edge order does not matter
+console.log(atmosphericDispersion(0, 0.4, 0.7)) // undefined — on the horizon
+```
+
 ### Earth Occultation of a Finite Target
 
 ### Earth Orientation Parameters
@@ -812,13 +837,219 @@ console.log(ut1(later).scale === Timescale.UT1) // true — now offset by UT1 - 
 
 ### Elliptic Elements to Rectangular State
 
+The analytical satellite theories describe each orbit by slowly varying elliptic elements and need a position and velocity from them. The element set used is equinoctial-style, which stays well defined for small eccentricity and inclination: mean longitude `L = Ω + ω + M`, `K = e·cos(Ω + ω)`, `H = e·sin(Ω + ω)`, `Q = sin(i/2)·cos Ω`, and `P = sin(i/2)·sin Ω`. Kepler's equation is solved in these variables by Newton's method, which converges in a few steps for eccentricity below 1 and stops at a safety cap otherwise.
+
+The solvers take an element array `[a or n, L, K, H, Q, P]` and a time offset `dt` from the elements' epoch, in days, with `L`, `K`, `H`, `Q`, `P` in radians and dimensionless. Position is in AU and velocity in AU/day, in the frame the elements are referred to. `ellipticToRectangularA(mu, elem, dt)` takes the semi-major axis in `elem[0]` (AU) and derives the mean motion from the gravitational parameter `mu` (AU³/day²). `ellipticToRectangularN(mu, elem, dt)` takes the mean motion in `elem[0]` (radians/day) and derives the semi-major axis. `ellipticToRectangular(a, n, elem, dt)` is the shared core when you already have both, and ignores `elem[0]`. Each returns `[position, velocity]`, allocating a pair unless you pass an `out` state, which is filled and returned. The orbit must be elliptic (`K² + H² < 1`); for hyperbolic or parabolic orbits see Two-Body Kepler Propagation.
+
+```ts
+import { ellipticToRectangular, ellipticToRectangularA, ellipticToRectangularN } from 'nebulosa/src/astronomy/ephemeris/ephemeris'
+import { GM_SUN_PITJEVA_2005, TAU } from 'nebulosa/src/core/constants'
+
+const mu = GM_SUN_PITJEVA_2005 // AU³/day²
+const a = 1 // AU
+const n = Math.sqrt(mu / a ** 3) // radians/day, a period of 365.26 days
+
+// Circular, equatorial orbit (K = H = Q = P = 0) starting at L = 0 on +x.
+const elements = [a, 0, 0, 0, 0, 0]
+
+// Quarter of an orbit later: dt in days.
+const [position, velocity] = ellipticToRectangularA(mu, elements, TAU / n / 4)
+
+console.log(position) // [0, 1, 0] — AU
+console.log(velocity) // [-0.017202, 0, 0] — AU/day, counter-clockwise
+
+// Same orbit with the mean motion given instead of a.
+console.log(ellipticToRectangularN(mu, [n, 0, 0, 0, 0, 0], TAU / n / 4)[0]) // [0, 1, 0] — AU
+
+// Both a and n given, at the epoch.
+console.log(ellipticToRectangular(a, n, elements, 0)) // [[1, 0, 0], [0, 0.017202, 0]]
+
+// An eccentric, inclined orbit: build the equinoctial set from e, i, Ω, ω and M.
+const e = 0.2
+const i = 0.4
+const node = 0.3
+const periapsis = Math.PI / 2
+const L = node + periapsis + 0.5
+const K = e * Math.cos(node + periapsis)
+const H = e * Math.sin(node + periapsis)
+const Q = Math.sin(i / 2) * Math.cos(node)
+const P = Math.sin(i / 2) * Math.sin(node)
+
+console.log(ellipticToRectangularA(mu, [a, L, K, H, Q, P], 10)[0]) // [-0.81474, 0.21432, 0.18836] — AU
+```
+
 ### ELP/MPP02 Lunar Theory
+
+ELP/MPP02 is an analytical theory of the Moon's motion. It sums large tables of periodic terms, the main problem plus planetary and other perturbations, for the Moon's ecliptic longitude, latitude, and distance, and ties the result to the ICRF equatorial frame. It needs no data files and works over a wide range of dates, which makes it a good default Moon ephemeris when an SPK kernel is not at hand.
+
+`moon(time)` returns the geocentric position in AU and velocity in AU/day, in ICRF equatorial axes. The time is converted to TT internally, so any scale works. The returned pair is freshly allocated on each call. It is geocentric: add it to the Earth's barycentric state to get a barycentric Moon (see Ephemeris Path Composition), and for a high-precision lunar ephemeris use an SPK kernel instead (see SPK State Kernels).
+
+```ts
+import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+
+const time = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.TT)
+
+const [position, velocity] = moon(time)
+
+console.log(position) // [-0.00052834, -0.0023152, -0.0012725] — AU, geocentric ICRF
+console.log(velocity) // [0.00055235, -0.000087550, -0.000035530] — AU/day
+console.log(toKilometer(Math.hypot(...position))) // 403051 — km, Earth-Moon distance
+```
 
 ### Ephemeris Observed Positions
 
+Observing a body from another moves through stages, each a distinct kind of position. A geometric position is the same-epoch center-to-target state. An astrometric position is the retarded one: the target is sampled at emission time and the observer at reception, so light time is accounted for. An apparent position then adds the deflection of light by Solar-System bodies and the observer's aberration. Each stage is an owned snapshot tagged with a `kind`, in ICRS/BCRS-oriented axes, positions in AU, velocities in AU/day, and light time in days.
+
+`ephemerisAt(path, time)` materializes a path (see Ephemeris Path Composition) as an owned `GeometricPosition` with `position` and `velocity` copies. `observeEphemeris(observer, target, time, options?)` returns the `AstrometricPosition`: the retarded observer-to-target `position`, its unit `direction`, `distance`, `lightTime`, `emissionTime`, and the observer and target snapshots. Both paths must be barycentric (center `SOLAR_SYSTEM_BARYCENTER`), or it throws, and `options.lightTimeIterations` is an integer in `[0, 16]` (default 3). It returns `undefined` for coincident points. `apparentPosition(position, options?)` applies the corrections to that astrometric position and returns an `ApparentPosition`: aberration is on by default and then requires `options.sun`, a barycentric Sun path, or it throws, and `options.deflectors` lists barycentric `{ mass, limiter, path }` bodies in photon encounter order (none are implicit). Distance and light time stay astrometric. This is the path-based counterpart of `apparentDirection` from Apparent Direction.
+
+The remaining functions convert a stage. `equatorialPosition(position)` returns `[ra, dec, distance]`, with right ascension in `[0, 2π)` and declination in radians, distance in AU. `directionPositionInFrame(position, frame)` rotates the direction of an astrometric or apparent stage into a frame at its epoch, and `geometricPositionInFrame(position, frame)` rotates a geometric state, including the rotating-frame term. `geometricSphericalPositionAndVelocity(position, frame?)` gives the spherical coordinates and rates of a geometric state (see Spherical State Rates), or `undefined` at zero distance. The optional `out` arguments receive the result and are returned. No precession, nutation, or refraction is applied here: for an observed place use Topocentric Observed Place.
+
+```ts
+import { Naif } from 'nebulosa/src/astronomy/ephemeris/kernels/naif'
+import { earth, mars, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { ephemerisPath, naifEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from 'nebulosa/src/astronomy/ephemeris/path'
+import { apparentPosition, directionPositionInFrame, ephemerisAt, equatorialPosition, geometricSphericalPositionAndVelocity, observeEphemeris } from 'nebulosa/src/astronomy/ephemeris/position'
+import { ECLIPTIC_J2000 } from 'nebulosa/src/astronomy/coordinates/frame'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toDeg, toHour } from 'nebulosa/src/math/units/angle'
+
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.TDB)
+
+// Barycentric paths from VSOP87E: Earth is the observer, Mars the target, the Sun feeds the aberration term.
+const earthPath = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.EARTH, 'Earth'), earth)
+const marsPath = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(499, 'Mars'), mars)
+const sunPath = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.SUN, 'Sun'), sun)
+
+// Geometric: Earth's owned barycentric state at one epoch.
+const geometric = ephemerisAt(earthPath, time)
+
+console.log(geometric.position) // [0.12079, -0.93081, -0.40337] — AU
+console.log(geometric.velocity) // [0.016799, 0.0018474, 0.00080029] — AU/day
+
+// Astrometric: Mars as seen from Earth, with light time.
+const astrometric = observeEphemeris(earthPath, marsPath, time)!
+
+console.log(astrometric.distance) // 2.1124 — AU
+console.log(astrometric.lightTime) // 0.012200 — days, about 17.6 minutes
+console.log(astrometric.direction) // [0.50353, 0.79494, 0.33843] — unit vector
+
+// Apparent: adds aberration (the Sun path is required) and no deflection.
+const apparent = apparentPosition(astrometric, { sun: sunPath })
+
+console.log(apparent.direction) // [0.50360, 0.79490, 0.33841] — shifted by aberration
+
+const [ra, dec, distance] = equatorialPosition(apparent)
+
+console.log(toHour(ra), toDeg(dec), distance) // 3.8430 19.780 2.1124 — hours, degrees, AU (ICRS, not of date)
+
+// Ecliptic J2000 axes for the same apparent direction.
+console.log(directionPositionInFrame(apparent, ECLIPTIC_J2000)) // [0.50360, 0.86392, -0.0057048]
+
+// Spherical coordinates and rates of Earth's own barycentric state.
+console.log(geometricSphericalPositionAndVelocity(geometric)?.longitudeRate) // 0.018003 — radians/day
+```
+
 ### Ephemeris Path Adapters
 
+Adapters turn the library's other state sources into ephemeris paths, so they can be composed and observed uniformly (see Ephemeris Path Composition): a JPL SPK segment, an SGP4 satellite, a ground site on the Earth, and a site on another body's surface. All paths are synchronous, in AU and AU/day, in ICRS/BCRS-oriented axes.
+
+`spkEphemerisPath(spk, center, target)` is asynchronous only to prepare: it resolves and initializes the segment, then returns a synchronous path. It returns `undefined` when the kernel has no segment for that center and target, and throws if the segment's frame is not J2000 (NAIF id 1), because any other frame would be published as ICRS axes. Evaluating can still read the file when a needed coefficient record is not cached, so keep the DAF source open. `sgp4EphemerisPath(source, target?)` takes a TLE, an OMM, or a prepared SGP4 record and returns an Earth-to-satellite path, converting SGP4's TEME state to ICRS; the default target is the custom endpoint `norad:<number>`. `earthObserverEphemerisPath(location, target)` is Earth center to a geodetic site, including the diurnal velocity. `bodySurfaceEphemerisPath(body, target, location)` is body center to a `BodySurfaceLocation`, including the body's rotational velocity; you supply the center and site endpoints.
+
+```ts
+import fs from 'fs/promises'
+import { bodyFixedFrame, MOON_ROTATION } from 'nebulosa/src/astronomy/bodies/orientation'
+import { readDaf } from 'nebulosa/src/astronomy/ephemeris/kernels/daf'
+import { Naif } from 'nebulosa/src/astronomy/ephemeris/kernels/naif'
+import { readSpk } from 'nebulosa/src/astronomy/ephemeris/kernels/spk'
+import { composeEphemerisPaths, customEphemerisEndpoint, naifEphemerisEndpoint } from 'nebulosa/src/astronomy/ephemeris/path'
+import { bodySurfaceEphemerisPath, earthObserverEphemerisPath, sgp4EphemerisPath, spkEphemerisPath } from 'nebulosa/src/astronomy/ephemeris/path.adapter'
+import { bodyShape, bodySurfaceLocation } from 'nebulosa/src/astronomy/observer/body'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { parseTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { fileHandleSource } from 'nebulosa/src/io/file'
+import { deg } from 'nebulosa/src/math/units/angle'
+import { kilometer, meter, toKilometer } from 'nebulosa/src/math/units/distance'
+
+const time = timeYMDHMS(2023, 8, 19, 12, 25, 28, Timescale.UTC)
+
+// SPK: barycenter -> Earth-Moon barycenter and Earth-Moon barycenter -> Earth, from DE421.
+await using source = fileHandleSource(await fs.open('data/de421.bsp'))
+const spk = readSpk(await readDaf(source))
+const emb = (await spkEphemerisPath(spk, Naif.SSB, Naif.EMB))!
+const earth = (await spkEphemerisPath(spk, Naif.EMB, Naif.EARTH))!
+
+console.log(composeEphemerisPaths(emb, earth).stateAt(time)[0]) // [0.83020, -0.52161, -0.22589] — AU, barycentric
+console.log(await spkEphemerisPath(spk, Naif.SSB, 12345)) // undefined — no such segment
+
+// SGP4: Earth -> ISS from a TLE, target id norad:25544.
+const tle = parseTLE('1 25544U 98067A   23231.51768399  .00014050  00000+0  25837-3 0  9996', '2 25544  51.6415  14.7889 0003559 325.3396 149.4637 15.49477580411611')
+const iss = sgp4EphemerisPath(tle)
+
+console.log(iss.target.id) // norad:25544
+console.log(iss.stateAt(time)[0].map(toKilometer)) // [-3712, 2990, 4839] — km, geocentric ICRS
+
+// Earth center -> observatory, including Earth's rotation velocity.
+const site = customEphemerisEndpoint('lasilla', 'La Silla')
+const observatory = earthObserverEphemerisPath(geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400)), site)
+
+console.log(observatory.stateAt(time)[0].map(toKilometer)) // [678, 5529, -3102] — km, geocentric ICRS
+
+// Moon center -> Copernicus crater on a 1737.4 km sphere.
+const radius = kilometer(1737.4)
+const surface = bodySurfaceLocation(deg(-20.08), deg(9.62), 0, bodyShape([radius, radius, radius]), bodyFixedFrame(MOON_ROTATION))
+const crater = bodySurfaceEphemerisPath(naifEphemerisEndpoint(Naif.MOON, 'Moon'), customEphemerisEndpoint('copernicus', 'Copernicus'), surface)
+
+console.log(crater.stateAt(time)[0].map(toKilometer)) // [1639, -565, 107] — km, 1737.4 km from the Moon's center
+```
+
 ### Ephemeris Path Composition
+
+An ephemeris path is a prepared, synchronous state provider from a center to a target: a function of `Time` returning `[position (AU), velocity (AU/day)]` in ICRS/BCRS-oriented axes, tagged with its two endpoints. Paths can be chained or subtracted like vectors between points: Earth to Moon added to the barycenter to Earth gives the barycenter to Moon, and two paths from the same center give the target relative to any other body.
+
+An endpoint is either a NAIF body code (`naifEphemerisEndpoint`) or a caller-defined string identifier (`customEphemerisEndpoint`); the optional name is only a label, and identity is the kind plus the id (`sameEphemerisEndpoint`). `SOLAR_SYSTEM_BARYCENTER` is the barycenter endpoint that observation functions require as the origin. `ephemerisPath(center, target, stateAt)` wraps any provider. `reverseEphemerisPath(path)` swaps center and target and negates the state. `composeEphemerisPaths(first, second)` returns center-to-target by adding `first` (center to middle) and `second` (middle to target) at the same epoch, and throws if `first.target` is not `second.center`. `relativeEphemerisPath(target, origin)` returns origin-to-target from two paths with the same center, and throws if the centers differ. No light-time correction is applied by any of them: use Ephemeris Observed Positions for that.
+
+The state vectors that `stateAt` returns are borrowed: each path reuses its own storage, so a later call overwrites an earlier result. Copy the state, or use `ephemerisAt` (see Ephemeris Observed Positions), to keep one. Reversed, composed, and relative paths write into a scratch state; pass your own as the last argument to control it, but it must not alias the source storage.
+
+```ts
+import { Naif } from 'nebulosa/src/astronomy/ephemeris/kernels/naif'
+import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { composeEphemerisPaths, customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, relativeEphemerisPath, reverseEphemerisPath, sameEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from 'nebulosa/src/astronomy/ephemeris/path'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.TDB)
+
+const EARTH = naifEphemerisEndpoint(Naif.EARTH, 'Earth')
+const MOON = naifEphemerisEndpoint(Naif.MOON, 'Moon')
+const SUN = naifEphemerisEndpoint(Naif.SUN, 'Sun')
+
+// Barycenter -> Earth and barycenter -> Sun from VSOP87E (barycentric), Earth -> Moon from ELP/MPP02 (geocentric).
+const earthPath = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, earth)
+const sunPath = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, SUN, sun)
+const moonFromEarth = ephemerisPath(EARTH, MOON, moon)
+
+// Barycenter -> Moon = (barycenter -> Earth) + (Earth -> Moon).
+const moonPath = composeEphemerisPaths(earthPath, moonFromEarth)
+
+console.log(moonPath.target.name) // Moon
+console.log(moonPath.stateAt(time)[0]) // [0.12060, -0.93320, -0.40464] — AU, barycentric ICRS
+
+// Earth -> barycenter, the reverse of the first path.
+console.log(reverseEphemerisPath(earthPath).stateAt(time)[0]) // [-0.12079, 0.93081, 0.40337] — AU
+
+// Earth -> Sun, from the two barycentric paths.
+console.log(relativeEphemerisPath(sunPath, earthPath).stateAt(time)[0]) // [-0.12263, 0.92586, 0.40134] — AU
+
+// Endpoint identity ignores the display name, and kinds never mix.
+console.log(sameEphemerisEndpoint(EARTH, naifEphemerisEndpoint(399))) // true
+console.log(sameEphemerisEndpoint(EARTH, customEphemerisEndpoint('399'))) // false
+
+// Mismatched endpoints throw instead of giving plausible but invalid geometry.
+composeEphemerisPaths(earthPath, sunPath) // Error: cannot compose ephemeris paths: first target does not match second center
+```
 
 ### Equation of Time
 
@@ -984,6 +1215,34 @@ console.log(affineFromBase([0, 0, 0], far, time)[0] / ONE_KILOPARSEC) // -8.1999
 ```
 
 ### Galilean Satellite Theory (L1.2)
+
+L1.2 (Lainey, Vienne, and Duriez) is the IMCCE analytical theory of the four Galilean satellites. For each body, trigonometric series give equinoctial elements (semi-major axis, mean longitude, and the eccentricity and inclination vectors), degree-8 Chebyshev polynomials add the official long-period corrections, and Kepler's equation is solved for the position. The result is rotated into the J2000 equatorial frame.
+
+`io`, `europa`, `ganymede`, and `callisto` take a `Time` (any scale; converted to TT) and return the Jovicentric position in AU and velocity in AU/day, in J2000 equatorial axes. `compute(time, index)` is the shared function behind them, with `index` 0 for Io through 3 for Callisto. The long-period corrections are applied only inside the theory's validity window of about the years 1140 to 2760; outside it they are omitted, matching the official approximate-ephemeris path. The returned vectors alias internal buffers, so copy them before computing another state. Add the result to Jupiter's barycentric state for an inertial position; for the Great Red Spot and the central meridian see Jupiter Central Meridian.
+
+```ts
+import { callisto, compute, europa, ganymede, io } from 'nebulosa/src/astronomy/ephemeris/models/analytical/l12'
+import { Timescale, time, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+
+const instant = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.TT)
+
+const [position, velocity] = io(instant)
+
+console.log(position) // [-0.0028234, -0.000024337, -0.000055447] — AU, Jovicentric
+console.log(velocity) // [0.00020049, -0.0090228, -0.0042977] — AU/day
+console.log(toKilometer(Math.hypot(...position))) // 422475 — km, close to Io's orbital radius
+
+console.log(europa(instant)[0]) // [0.0024260, 0.0033655, 0.0016436] — AU
+console.log(callisto(instant)[0]) // [-0.010959, -0.0056894, -0.0028438] — AU
+
+// compute(time, index): the same as ganymede(time) for index 2.
+console.log(compute(instant, 2)[0]) // [-0.00050927, -0.0064253, -0.0030895] — AU
+console.log(ganymede(instant)[0]) // [-0.00050927, -0.0064253, -0.0030895] — AU
+
+// The IMCCE reference epoch, JD 2451545.0 TT (TestL1.2.res).
+console.log(io(time(2451545, 0, Timescale.TT))[0]) // [0.0026720, 0.00076440, 0.00040873] — AU
+```
 
 ### Gauss Angles-Only Orbit Determination
 
@@ -1309,6 +1568,30 @@ console.log(gcrsRotationAt(site, time)) // 3x3 row-major rotation, the matrix ap
 
 ### Martian Satellite Theory (MARSSAT)
 
+MARSSAT (Lainey) is an analytical theory of Phobos and Deimos fitted to observations from 1877 to 2005. Trigonometric series perturb each satellite's equinoctial elements, which are converted to rectangular coordinates and rotated through the slowly precessing Laplace-plane node and inclination into the equatorial frame.
+
+`phobos` and `deimos` take a `Time` (any scale; converted to TT) and return the Marscentric position in AU and velocity in AU/day, in equatorial axes. `marssat(time, index)` is the shared function, with `index` 0 for Phobos and 1 for Deimos. The returned vectors alias internal buffers, so copy them before computing another state. Add the result to Mars's barycentric state for an inertial position. Phobos orbits within about 9400 km of the planet's center and Deimos within about 23500 km.
+
+```ts
+import { deimos, marssat, phobos } from 'nebulosa/src/astronomy/ephemeris/models/analytical/marssat'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+
+const time = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.TT)
+
+const [position, velocity] = phobos(time)
+
+console.log(position) // [-0.000038291, 0.000030662, 0.000038326] — AU, Marscentric
+console.log(velocity) // [-0.00078355, -0.00096404, -0.000038947] — AU/day
+console.log(toKilometer(Math.hypot(...position))) // 9313 — km
+
+console.log(deimos(time)[0]) // [-0.000053312, 0.00011828, 0.000087980] — AU
+console.log(toKilometer(Math.hypot(...deimos(time)[0]))) // 23451 — km
+
+// marssat(time, index): index 0 is Phobos.
+console.log(marssat(time, 0)[0]) // [-0.000038291, 0.000030662, 0.000038326] — AU
+```
+
 ### Meeus Algorithms
 
 ### Meteor Activity Profiles
@@ -1405,6 +1688,30 @@ console.log(trueEclipticRotation(time).slice(6, 9)) // [0.0000054, -0.39772, 0.9
 
 ### Pluto Short Analytical Theory
 
+Pluto's orbit is strongly perturbed by Neptune's 3:2 resonance, so a simple Kepler orbit is a poor model. Meeus (Astronomical Algorithms, chapter 37) gives a short theory that fits the heliocentric longitude, latitude, and radius with 43 periodic terms in the mean longitudes of Jupiter, Saturn, and Pluto. Its stated accuracy is 0.07″ in longitude, 0.02″ in latitude, and 0.000006 AU in radius, and it is valid only for 1885 to 2099.
+
+`pluto(time, frame?)` returns Pluto's heliocentric position in AU as a Cartesian `[x, y, z]` in the ICRF equatorial frame by default. Unlike the planet theories it returns a position only, with no velocity. With `frame = 'eclipticJ2000'` it returns the underlying spherical coordinates `[longitude, latitude, radius]` instead (radians, radians, AU), referred to the J2000 ecliptic, not Cartesian ecliptic coordinates. The time is converted to TT. Outside 1885 to 2099 the result is not meaningful; use an SPK kernel (see SPK State Kernels) there. For barycentric Pluto, add the Sun's barycentric state.
+
+```ts
+import { pluto } from 'nebulosa/src/astronomy/ephemeris/models/analytical/pluto'
+import { Timescale, time, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const instant = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.TT)
+
+console.log(pluto(instant)) // [18.971, -26.376, -13.945] — AU, heliocentric ICRF equatorial
+
+// Spherical J2000 ecliptic: longitude, latitude, radius.
+const [longitude, latitude, radius] = pluto(instant, 'eclipticJ2000')
+
+console.log(toDeg(longitude), toDeg(latitude), radius) // 302.53 -3.7346 35.356 — degrees, degrees, AU
+
+// Meeus example 37.a, JD 2448908.5 TT.
+const [lon, lat, r] = pluto(time(2448908, 0.5, Timescale.TT), 'eclipticJ2000')
+
+console.log(toDeg(lon), toDeg(lat), r) // 232.74071 14.58782 29.711111 — degrees, degrees, AU
+```
+
 ### Polar Motion
 
 Polar motion is the slow drift of the Earth's rotation pole relative to the crust, described by two angles `x` and `y` of a few tenths of an arcsecond, plus the tiny TIO locator `s′`. It tilts the Earth-fixed frame slightly and matters for precise Earth-fixed positions and topocentric work.
@@ -1494,6 +1801,27 @@ console.log(toKilometerPerSecond(radialVelocityCorrection(hour(5.5), deg(-5), ti
 
 ### Refractive Displacement
 
+The atmosphere bends light, so a source appears higher than its geometric position. The displacement depends on the apparent altitude, the pressure, temperature, and humidity, and the observing wavelength. It is about a minute of arc at 45° and grows to roughly 10′ at 1°.
+
+`refractiveDisplacement(altitude, wavelengthMicrons, conditions?)` returns the displacement in radians at one wavelength, using the same bounded, Newton-corrected ERFA model as the observed-place transforms (see Topocentric Observed Place). `altitude` is the apparent altitude in radians, strictly above the horizon, and at most π/2. The result is the amount by which the apparent altitude exceeds the unrefracted (geometric) altitude, so it is positive, finite at low altitude, and exactly 0 at the zenith. It returns `undefined` at or below the horizon, where this planning API does not apply. `conditions` is `{ pressure (hPa), temperature (°C), relativeHumidity (fraction 0..1) }` with the standard defaults (1013.25 hPa, 15 °C, 0.5) for omitted fields; a pressure of 0 gives 0. For a quick Sæmundsson estimate without wavelength or weather, see Approximate Atmospheric Refraction. For the difference between two wavelengths, see Differential Refraction and Atmospheric Dispersion.
+
+```ts
+import { refractiveDisplacement } from 'nebulosa/src/astronomy/coordinates/refraction'
+import { deg, toArcsec } from 'nebulosa/src/math/units/angle'
+
+// Apparent altitude 45°, wavelength 0.55 µm (green), standard conditions.
+console.log(toArcsec(refractiveDisplacement(deg(45), 0.55)!)) // 57.11 — arcseconds
+
+console.log(toArcsec(refractiveDisplacement(deg(10), 0.55)!)) // 312.31 — arcseconds
+console.log(toArcsec(refractiveDisplacement(deg(1), 0.55)!)) // 646.93 — arcseconds, near the horizon
+
+// Thinner, colder air refracts less.
+console.log(toArcsec(refractiveDisplacement(deg(10), 0.55, { pressure: 700, temperature: -5 })!)) // 232.47 — arcseconds
+
+console.log(refractiveDisplacement(deg(90), 0.55)) // 0 — zenith
+console.log(refractiveDisplacement(0, 0.55)) // undefined — on the horizon
+```
+
 ### Rise, Transit, and Set
 
 ### Sampled Angular Motion
@@ -1551,6 +1879,32 @@ console.log(angularMotionOrDifferentialTrackingRate([samples[0]])) // undefined 
 ### Satellite Visual Magnitude
 
 ### Saturnian Satellite Theory (TASS1.7)
+
+TASS 1.7 (Vienne and Duriez) is the IMCCE analytical theory of the eight major Saturnian satellites, including Hyperion. The shared satellite mean longitudes are evaluated first; each body's equinoctial element series is then summed using integer combinations of those longitudes, converted to rectangular coordinates, and rotated into the J2000 equatorial frame.
+
+`mimas`, `enceladus`, `tethys`, `dione`, `rhea`, `titan`, `iapetus`, and `hyperion` take a `Time` (any scale; converted to TT) and return the Saturnicentric position in AU and velocity in AU/day, in J2000 equatorial axes. `tass17(time, index)` is the shared function, with `index` 0 for Mimas through 7 for Hyperion. The returned vectors alias internal buffers, so copy them before computing another state. Add the result to Saturn's barycentric state for an inertial position.
+
+```ts
+import { enceladus, hyperion, iapetus, mimas, tass17, titan } from 'nebulosa/src/astronomy/ephemeris/models/analytical/tass17'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+
+const time = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.TT)
+
+const [position, velocity] = titan(time)
+
+console.log(position) // [0.0078347, 0.0010775, -0.00076689] — AU, Saturnicentric
+console.log(velocity) // [-0.00043573, 0.0032733, -0.00018113] — AU/day
+console.log(toKilometer(Math.hypot(...position))) // 1188636 — km, close to Titan's orbital radius
+
+console.log(toKilometer(Math.hypot(...mimas(time)[0]))) // 184379 — km
+console.log(toKilometer(Math.hypot(...enceladus(time)[0]))) // 237189 — km
+console.log(toKilometer(Math.hypot(...iapetus(time)[0]))) // 3475592 — km
+console.log(toKilometer(Math.hypot(...hyperion(time)[0]))) // 1556482 — km
+
+// tass17(time, index): index 5 is Titan. The other wrappers are tethys, dione and rhea.
+console.log(tass17(time, 5)[0]) // [0.0078347, 0.0010775, -0.00076689] — AU
+```
 
 ### SGP4/SDP4 Propagation
 
@@ -1824,7 +2178,63 @@ console.log(tubeFlexureError(0, latitude, latitude, flexure)) // [0, -0]
 
 ### Uranian Satellite Theory (GUST86)
 
+GUST86 (Laskar and Jacobson) is the analytical theory of the five major Uranian satellites. Each body builds equinoctial elements from shared fundamental arguments (mean longitude, eccentricity and inclination phasors), converts them to rectangular coordinates, and rotates the result into the J2000 equatorial frame.
+
+`ariel`, `umbriel`, `titania`, `oberon`, and `miranda` take a `Time` (any scale; converted to TT) and return the Uranicentric position in AU and velocity in AU/day, in J2000 equatorial axes. `gust86(time, index)` is the shared function, with `index` 0 for Ariel, 1 Umbriel, 2 Titania, 3 Oberon, and 4 Miranda. The returned vectors alias internal buffers, so copy them before computing another state. Add the result to Uranus's barycentric state for an inertial position.
+
+```ts
+import { ariel, gust86, miranda, oberon, titania, umbriel } from 'nebulosa/src/astronomy/ephemeris/models/analytical/gust86'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+
+const time = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.TT)
+
+const [position, velocity] = ariel(time)
+
+console.log(position) // [-0.0011777, 0.00035847, -0.00033843] — AU, Uranicentric
+console.log(velocity) // [-0.0010278, -0.00058557, 0.0029526] — AU/day
+console.log(toKilometer(Math.hypot(...position))) // 190990 — km
+
+console.log(toKilometer(Math.hypot(...miranda(time)[0]))) // 129996 — km
+console.log(toKilometer(Math.hypot(...umbriel(time)[0]))) // 266023 — km
+console.log(toKilometer(Math.hypot(...titania(time)[0]))) // 435595 — km
+console.log(toKilometer(Math.hypot(...oberon(time)[0]))) // 583551 — km
+
+// gust86(time, index): index 0 is Ariel.
+console.log(gust86(time, 0)[0]) // [-0.0011777, 0.00035847, -0.00033843] — AU
+```
+
 ### VSOP87E Planetary Theory
+
+VSOP87 is the Bretagnon and Francou analytical theory of the motion of the Sun and the eight planets. Version E gives barycentric rectangular coordinates: for each body a table of periodic terms (amplitude, phase, frequency) per power of time and per coordinate is summed, and its time derivative gives the velocity. It needs no data files, and it is accurate enough for planning, finders, and most apparent-place work, though not a substitute for a numerically integrated JPL kernel when sub-arcsecond planetary astrometry is needed.
+
+`sun`, `mercury`, `venus`, `earth`, `mars`, `jupiter`, `saturn`, `uranus`, and `neptune` share one signature: `body(time, frame?, out?)`. They return `[position (AU), velocity (AU/day)]` with the origin at the solar-system barycenter. The time is converted to TT. `frame` is `'icrf'` (the default, ICRF equatorial axes) or `'eclipticJ2000'` (the theory's native dynamical ecliptic and equinox of J2000); both keep the barycentric origin. By default a fresh pair is returned; with `out` the result is written there and the return value aliases it. Pluto is not part of VSOP87: see Pluto Short Analytical Theory. For a Moon state see ELP/MPP02 Lunar Theory, which is geocentric.
+
+```ts
+import { zeroPositionAndVelocity } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { earth, jupiter, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+const time = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.TT)
+
+// Earth, barycentric, ICRF equatorial axes (the defaults).
+const [position, velocity] = earth(time)
+
+console.log(position) // [0.99399, 0.079296, 0.034528] — AU
+console.log(velocity) // [-0.0018575, 0.015660, 0.0067880] — AU/day
+
+// The same position in the dynamical ecliptic and equinox of J2000.
+console.log(earth(time, 'eclipticJ2000')[0]) // [0.99399, 0.086487, 0.00013679] — AU
+
+// The Sun and Jupiter, barycentric.
+console.log(sun(time)[0]) // [-0.0037637, -0.0051097, -0.0020576] — AU
+console.log(jupiter(time)[0]) // [-1.0007, 4.6557, 2.0200] — AU
+
+// Reusing an output state: it is overwritten and returned.
+const out = zeroPositionAndVelocity()
+
+console.log(earth(time, 'icrf', out) === out) // true
+```
 
 ### Zenith and Celestial Circle Intersections
 
