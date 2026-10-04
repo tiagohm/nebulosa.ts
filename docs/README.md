@@ -62,6 +62,64 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Affine Origin Frames
 
+A rotation-only `Frame` changes the axes but keeps the origin. An affine frame also moves the origin: a position is first shifted by the origin position `O`, then rotated by `R`, and a velocity is shifted by the origin velocity `Ȯ`. If the frame rotates with time (`dRdtTimesRtAt`), the velocity gains the extra drift term `W · p`.
+
+```text
+p_frame = R · (p − O)
+v_frame = R · (v − Ȯ) + W · p_frame
+```
+
+Use these functions to move absolute positions (AU) or full `[position, velocity]` states (AU, AU/day) between frames whose origins differ, such as barycentric ICRS and a Sun-centered ecliptic. Inputs and outputs of the base side are in ICRS/BCRS axes. Never pass a normalized direction: subtracting an origin from a unit vector is meaningless, so use a plain `Frame` conversion for directions. `originAt` and `originVelocityAt` are optional, so every plain `Frame` is already a valid `AffineFrame`; with no origin the result equals the rotation-only conversion.
+
+`BARYCENTRIC_ECLIPTIC` is `ECLIPTIC_J2000` used as an `AffineFrame` (same origin as the base). `heliocentricEclipticFrame` has the same orientation with the origin at the Sun; the Sun's barycentric state is supplied by the caller, so this module imports no ephemeris. The Galactic-center and Local Standard of Rest origins are covered by Galactocentric Frame and Local Standard of Rest Frames.
+
+```ts
+import { affineFromBase, affineToAffine, affineToBase, BARYCENTRIC_ECLIPTIC, heliocentricEclipticFrame } from 'nebulosa/src/astronomy/coordinates/affine'
+import type { PositionAndVelocity } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { ICRS } from 'nebulosa/src/astronomy/coordinates/frame'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+const time = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.UTC)
+
+// Sun's barycentric [position (AU), velocity (AU/day)] in ICRS at `time`.
+// Synthetic constants here; pass a real ephemeris lookup in practice.
+const helio = heliocentricEclipticFrame(() => [
+	[0.004, -0.007, -0.003],
+	[0.0000035, 0.0000045, 0.000002],
+])
+
+// Barycentric ICRS state: position in AU, velocity in AU/day.
+const state: PositionAndVelocity = [
+	[1.2, 0.3, -0.5],
+	[0.002, -0.001, 0.0008],
+]
+
+// Base (ICRS) -> heliocentric ecliptic J2000. A full state returns [p, v].
+const [p, v] = affineFromBase(state, helio, time)
+
+console.log(p) // [1.196, 0.083972, -0.578106] — AU, Sun-centered ecliptic axes
+console.log(v) // [0.0019965, -0.000604, 0.001132] — AU/day
+
+// A bare position (length 3) transforms only the position.
+console.log(affineFromBase([1.2, 0.3, -0.5], helio, time)) // [1.196, 0.083972, -0.578106] — AU
+
+// With BARYCENTRIC_ECLIPTIC only the axes rotate; the origin stays at the base origin.
+console.log(affineFromBase(state, BARYCENTRIC_ECLIPTIC, time)[0]) // [1.2, 0.076356, -0.578074] — AU
+
+// Exact inverse: frame -> base (ICRS).
+const back = affineToBase([p, v], helio, time)
+
+console.log(back[0]) // [1.2, 0.3, -0.5] — AU, original position
+console.log(back[1]) // [0.002, -0.001, 0.0008] — AU/day, original velocity
+
+// Between any two affine frames (a plain Frame such as ICRS is accepted); goes through the base.
+const same = affineToAffine(state, ICRS, helio, time)
+
+console.log(same[0]) // [1.196, 0.083972, -0.578106] — AU, same as affineFromBase above
+```
+
+All three functions accept an optional `o` argument: the result is written there and the return value aliases it. `o` may be the input itself for an in-place transform. Without `o`, a fresh vector or state is allocated.
+
 ### Airmass and Extinction
 
 ### Alt-Az Field Rotation
