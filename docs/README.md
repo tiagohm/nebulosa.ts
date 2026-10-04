@@ -430,6 +430,47 @@ console.log(seam.pixelToSky(5, 5).map(toDeg)) // [359.95, 0] — degrees
 
 ### Astronomical State Ownership
 
+Position and velocity states are plain pairs of three-component arrays, `[position (AU), velocity (AU/day)]`, in ICRS/BCRS axes, and the types say who may write them. `PositionAndVelocity` is `readonly [Vec3, Vec3]`: a state you may read but do not own. `PositionAndVelocityMut` is `[MutVec3, MutVec3]`: a workspace or result you may write, whose position and velocity are distinct arrays. `readonly` is only a promise of the type; it does not mean the storage is a snapshot, and its lifetime belongs to whoever produced it. The same split applies to the samplers: `PositionAndVelocityOverTime` (and the position-only `PositionOverTime` and velocity-only `VelocityOverTime`) return a borrowed state that the provider may overwrite on its next call, so copy it before keeping it, and two independent providers must not share output storage. The `…Mut` samplers promise only a writable type, not a snapshot.
+
+`zeroPositionAndVelocity()` allocates a fresh writable zero state, never shared with another call. `relativePositionAndVelocity(target, origin, time)` samples both providers at the same instant and returns the geometric difference `target − origin` as a new `PositionAndVelocityMut`, with no light time and no aberration; with the Sun as origin it gives a heliocentric state, with the Earth a geocentric one. Functions that take an optional `out` (such as `eraEpv00` and `eraMoon98`) write into it and return it, so passing the same workspace twice makes the first result alias the second. Light-time results (`lightTimeSolution`) are the opposite: owned snapshots, safe to keep.
+
+```ts
+import { type PositionAndVelocity, type PositionAndVelocityOverTime, relativePositionAndVelocity, zeroPositionAndVelocity } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+const time = timeYMDHMS(2026, 6, 29, 4, 0, 0, Timescale.UTC)
+
+// A heliocentric Earth state: Earth (VSOP87E, barycentric) minus the Sun.
+const [position, velocity] = relativePositionAndVelocity(earth, sun, time)
+console.log(position) // [0.12544, −0.92555, −0.40121] AU
+console.log(velocity) // [0.016787, 0.0018891, 0.00081848] AU/day
+console.log(Math.hypot(...position)) // 1.0165 — AU
+
+// A fresh workspace each time; the position and velocity arrays are distinct.
+const a = zeroPositionAndVelocity()
+const b = zeroPositionAndVelocity()
+console.log(a, a[0] === b[0], a[0] === a[1]) // [[0, 0, 0], [0, 0, 0]] false false
+
+// Any function of Time returning a state is a provider. A fixed point at 1 AU on +x:
+const fixed: PositionAndVelocityOverTime = (): PositionAndVelocity => [
+	[1, 0, 0],
+	[0, 0, 0],
+]
+console.log(relativePositionAndVelocity(fixed, () => zeroPositionAndVelocity(), time)) // [[1, 0, 0], [0, 0, 0]]
+
+// A borrowed state must be copied before the provider is called again.
+let shared: [number, number, number] = [0, 0, 0]
+const reusing: PositionAndVelocityOverTime = (t) => {
+	shared[0] = t.day // overwritten on every call
+	return [shared, [0, 0, 0]]
+}
+const first = reusing(time)
+const kept: [number, number, number] = [...first[0]] // owned copy
+reusing({ ...time, day: 0 })
+console.log(first[0][0] === kept[0]) // false — the borrowed state changed under us
+```
+
 ### Astronomical Time Arithmetic
 
 Differences and offsets between instants are only meaningful inside one time scale. UTC has leap seconds, so a UTC "day" can be 86401 s long, while TAI and TT run uniformly.
@@ -1649,6 +1690,35 @@ for (const time of greatRedSpotTransits(deg(50), jupiterToEarth, start, stop)) c
 
 ### Greatest Solar Eclipse Circumstances
 
+The greatest eclipse and the point of greatest duration are the two places of the Earth that the usual eclipse tables list: the point where the shadow axis passes closest to the Earth's center, and the point on the central line where totality or annularity lasts longest. They are generally not the same place. Both functions take the `PolynomialBesselianElements` of Solar Eclipse Besselian Elements and return a `SolarEclipseExtremeCircumstances`, which describes the Sun at that point: the `longitude` (east-positive, in `[−π, π]`) and the geodetic `latitude`, in radians, the TT `time`, `deltaT` (TT − UT1, seconds), the geometric `sunAltitude` and the `sunAzimuth` (from north through east, in `[0, 2π)`), in radians, and, only for a point on the central line, `pathWidthKm`, `centralDuration` (seconds) and `kind` (`'total'` or `'annular'`).
+
+`computeGreatestEclipseCircumstances(pbe)` is the greatest eclipse. For a central eclipse it is the central point at that instant; for a partial or non-central one it is the limb point nearest the axis, and `pathWidthKm`, `centralDuration` and `kind` are `undefined`. It returns `undefined` only when the point cannot be projected. `computeGreatestDurationCircumstances(pbe)` scans the central line over the contact window (128 samples, refined with a Brent minimization) and returns `undefined` for an eclipse without a central line.
+
+```ts
+import { nearestSolarEclipse } from 'nebulosa/src/astronomy/bodies/sun'
+import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { computeGreatestDurationCircumstances, computeGreatestEclipseCircumstances } from 'nebulosa/src/astronomy/events/eclipse/solar/local'
+import { computePolynomialBesselianElements } from 'nebulosa/src/astronomy/events/eclipse/solar/map'
+import { Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+// The total solar eclipse of 8 April 2024.
+const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 4, 1, 0, 0, 0, Timescale.UTC), true)
+const pbe = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
+
+const greatest = computeGreatestEclipseCircumstances(pbe)!
+console.log(toDeg(greatest.longitude), toDeg(greatest.latitude)) // -104.05 25.40
+console.log(timeToDate(utc(greatest.time)).slice(0, 6).join('-'), greatest.deltaT) // 2024-4-8-18-17-46 74.03057366821392
+console.log(toDeg(greatest.sunAltitude), toDeg(greatest.sunAzimuth)) // 69.78 150.02
+console.log(greatest.pathWidthKm, greatest.centralDuration, greatest.kind) // 187.87109375 269.8845148086548 total
+
+// The greatest duration is on the central line too, but about 0.5° to the north-east.
+const longest = computeGreatestDurationCircumstances(pbe)!
+console.log(toDeg(longest.longitude), toDeg(longest.latitude)) // -103.53 25.94
+console.log(timeToDate(utc(longest.time)).slice(0, 6).join('-')) // 2024-4-8-18-19-39
+console.log(longest.pathWidthKm, longest.centralDuration, longest.kind) // 187.78076171875 269.9222132563591 total
+```
+
 ### HEALPix Object Index
 
 A HEALPix index is an in-memory spatial index: objects with sky positions are bucketed by the HEALPix pixel that contains them, so a region query only examines the few buckets that the region touches instead of every object. It is the structure behind fast cone, box, and polygon searches on a large list of stars or targets (see HEALPix Pixelization and Covers for the pixel scheme itself). It also implements the star-catalog query interface used by the catalog modules.
@@ -2138,13 +2208,250 @@ for (const crossing of horizonCrossings(setting, mask)) console.log(crossing.kin
 
 ### Local Lunar Eclipse Search
 
+`listLocalLunarEclipses(longitude, latitude, startTime, endTime, sunMoonPosition, options?)` returns the lunar eclipses of a time window that can be seen from a site, in chronological order. Because a lunar eclipse is global, the only local test is whether the Moon is above the horizon during some part of the penumbral phase, including a moonrise or moonset in the middle of the eclipse. `longitude` is east-positive and `latitude` is geodetic, both in radians. `startTime` and `endTime` can be in any time scale; they are compared in TT with the instant of greatest eclipse, and the window is open at `startTime` and closed at `endTime`. A reversed window returns an empty list.
+
+Each `LocalLunarEclipseListEntry` has the `eclipse` as returned by `nearestLunarEclipse` (the global circumstances) and the `circumstances` computed for the site, so the caller does not recompute them (see Lunar Eclipse Local Circumstances). The eclipses come from the Meeus series of `nearestLunarEclipse`, one per step, and an eclipse for which the Moon never reaches the horizon (`geometricOnlyBelowHorizon`) is omitted. `options` are those of `computeLocalLunarEclipseCircumstances`: `horizonAltitude` (radians, default 0) and `altitudeSamples` of the altitude scan.
+
+```ts
+import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { listLocalLunarEclipses } from 'nebulosa/src/astronomy/events/eclipse/lunar/local'
+import { Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+const start = timeYMDHMS(2025, 1, 1, 0, 0, 0, Timescale.UTC)
+const stop = timeYMDHMS(2028, 1, 1, 0, 0, 0, Timescale.UTC)
+
+// São Paulo. Five eclipses are visible from the site in these three years; that of 7 September 2025 is not.
+for (const { eclipse, circumstances } of listLocalLunarEclipses(deg(-46.6333), deg(-23.55), start, stop, sunMoonPosition)) {
+	console.log(timeToDate(utc(eclipse.maximalTime)).slice(0, 5).join('-'), eclipse.type, circumstances.visibility.kind, circumstances.details.observableDuration)
+}
+// 2025-3-14-6-59 TOTAL totalVisible 18767.62
+// 2026-3-3-11-34 TOTAL penumbralOnlyVisible 598.84
+// 2026-8-28-4-13 PARTIAL completelyVisible 20144.43
+// 2027-2-20-23-13 PENUMBRAL penumbralOnlyVisible 12885.95
+// 2027-8-17-7-14 PENUMBRAL completelyVisible 12990.18
+
+// With a 20° horizon the eclipse of 3 March 2026, which is only seen near the horizon, disappears.
+console.log(listLocalLunarEclipses(deg(-46.6333), deg(-23.55), start, stop, sunMoonPosition, { horizonAltitude: deg(20) }).length) // 4
+
+// A reversed window is empty.
+console.log(listLocalLunarEclipses(deg(-46.6333), deg(-23.55), stop, start, sunMoonPosition).length) // 0
+```
+
 ### Local Lunar Eclipse View Geometry
+
+The local view of a lunar eclipse is the diagram that shows where the Moon crosses the Earth's shadow as seen from a site: the penumbra and umbra as two concentric circles, the Moon's disk at each contact, the path of its center, and the horizon. `computeLocalLunarEclipseViewGeometry(circumstances, eclipse, options?)` builds it as plain shapes in SVG pixels (no text, labels or markup), from the `events` of `computeLocalLunarEclipseCircumstances` (see Lunar Eclipse Local Circumstances) and the `LunarEclipse`. Only the `events` property of the circumstances is read, so any object with that shape works. The diagram is a schematic of the Moon plane: the shadow center is fixed at the center of the view, the Moon is placed by the contact's shadow-axis distance and its position angle, and the scale is `options.umbraRadiusPx` pixels for the umbra radius (the penumbra and the Moon follow in proportion, with the Moon radius from `MOON_RADIUS_EARTH_RADII`). The horizon offset uses a mean angular size of an Earth radius at the Moon, so it is schematic and meant for judging which side of the horizon a disk is on.
+
+`options` are all optional: `width` and `height` (pixels, default 300), `selectedEvent` (the contact drawn as the primary disk, default `'MAX'`), `orientationMode` (`'zenith'`, the default, puts the local zenith up; `'north'` puts celestial north up), `handedness` (`'eastRight'`, the default, puts east on the right; `'eastLeft'` mirrors it), `umbraRadiusPx` (default 70), `includeGhostDisks` (draw the other contacts, default true), `includeHorizon` (draw the horizon, default true), `horizonBandPaddingPx` (default 4) and `horizonAltitude` (radians, default 0): pass the value used for the circumstances so that a disk is above the line exactly when its event is `observable`. If the requested contact does not exist for the eclipse type, `MAX` is used, then the first existing contact; `selectedEvent` of the result is the contact actually drawn, `undefined` when there are no events, and `requestedEvent` the one asked for.
+
+The result has the size, the orientation, the radius of the umbra and the list of `shapes` in painter order: the `horizonBand` polygon (the below-horizon region), the `trajectoryPath` through the existing contacts in chronological order, the `ghostMoonDisk` circles, the `moonDisk` of the primary contact, the `penumbra` and `umbra` circles (each with `cx`, `cy` and `r`), and finally the `horizonLine`. A `circle` has `role`, `cx`, `cy` and `r` (and `event` for the Moon disks), a `line` has `x1`, `y1`, `x2`, `y2`, a `path` has the data `d`, and a `polygon` has `points`. SVG `y` grows downward.
+
+```ts
+import { nearestLunarEclipse } from 'nebulosa/src/astronomy/bodies/moon'
+import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { computeLocalLunarEclipseCircumstances, computeLocalLunarEclipseViewGeometry } from 'nebulosa/src/astronomy/events/eclipse/lunar/local'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+// The total lunar eclipse of 7 September 2025, seen from Perth.
+const eclipse = nearestLunarEclipse(timeYMDHMS(2025, 9, 1, 0, 0, 0, Timescale.UTC), true)
+const circumstances = computeLocalLunarEclipseCircumstances(eclipse, deg(115.86), deg(-31.95), sunMoonPosition)
+
+const view = computeLocalLunarEclipseViewGeometry(circumstances, eclipse)
+console.log(view.width, view.height, view.orientationMode, view.selectedEvent, view.umbraRadiusPx) // 300 300 zenith MAX 70
+console.log(view.shapes.map((shape) => `${shape.kind}:${shape.role}`).join(' '))
+// polygon:horizonBand path:trajectoryPath circle:ghostMoonDisk ×6 circle:moonDisk circle:penumbra circle:umbra line:horizonLine
+
+for (const shape of view.shapes) {
+	if (shape.kind === 'circle' && (shape.role === 'moonDisk' || shape.role === 'penumbra' || shape.role === 'umbra')) console.log(shape.role, shape.event, shape.cx.toFixed(2), shape.cy.toFixed(2), shape.r.toFixed(2))
+}
+// moonDisk MAX 156.10 124.81 25.61
+// penumbra undefined 150.00 150.00 120.32
+// umbra undefined 150.00 150.00 70.00
+
+const trajectory = view.shapes.find((shape) => shape.kind === 'path')!
+console.log(trajectory.d) // M295.56 160.44L245.58 147.49L191.22 133.52L156.1 124.81L121.38 116.07L67.12 102.33L17.07 89.8
+
+// The start of totality, in the sky-north orientation, east to the left, without the other disks.
+const north = computeLocalLunarEclipseViewGeometry(circumstances, eclipse, { selectedEvent: 'U2', orientationMode: 'north', handedness: 'eastLeft', includeGhostDisks: false })
+console.log(north.shapes.map((shape) => `${shape.kind}:${shape.role}`).join(' ')) // polygon:horizonBand path:trajectoryPath circle:moonDisk circle:penumbra circle:umbra line:horizonLine
+
+// A penumbral eclipse has only P1, MAX and P4; asking for U2 falls back to MAX.
+const penumbral = nearestLunarEclipse(timeYMDHMS(2027, 2, 1, 0, 0, 0, Timescale.UTC), true)
+const events = computeLocalLunarEclipseCircumstances(penumbral, 0, 0, sunMoonPosition)
+const fallback = computeLocalLunarEclipseViewGeometry(events, penumbral, { selectedEvent: 'U2' })
+console.log(penumbral.type, fallback.requestedEvent, fallback.selectedEvent) // PENUMBRAL U2 MAX
+
+// With no events there are only the two shadow circles.
+const empty = computeLocalLunarEclipseViewGeometry({ events: {} }, eclipse)
+console.log(
+	empty.selectedEvent,
+	empty.shapes.map((shape) => shape.role),
+) // undefined ['penumbra', 'umbra']
+```
 
 ### Local Solar Eclipse Circumstances
 
+The local circumstances of a solar eclipse are what an observer at one place sees: the contacts, the magnitude, the durations, the Sun's altitude and the position angles at each contact, and a classification of how visible the eclipse is. `computeLocalSolarEclipseCircumstances(pbe, longitude, latitude, options?)` resolves all of it for a geodetic site (`longitude` east-positive and `latitude`, in radians) from the `PolynomialBesselianElements` of Solar Eclipse Besselian Elements. The shadow is evaluated on the fundamental plane (Earth radii) from the cubic fit, which is valid for about ±3 h around `time0`, and the contacts are searched in a window that is widened up to 5 h when a contact is missed. The site is treated geometrically: every contact is computed even with the Sun below the horizon, and only the `observable` flag reflects the horizon.
+
+`options.horizonAltitude` (radians, default 0) is the altitude of the apparent horizon, and an event is observable when the Sun's center is at or above it. `options.sunMoonPosition` is the provider used to build the elements (such as `sunMoonPosition`), which is strongly preferred: with it the altitude, the position angles and the apparent diameters are computed from the real Sun and Moon, and without it the altitude is a Besselian approximation and the angles are undefined.
+
+The result has `location`, `visibility`, `details` and `events`. `events` has `C1` and `C4` (the start and end of the partial phase), `MAX` (the local maximum) and, only when the maximum is central, `C2` and `C3` (the start and end of the total or annular phase); a missing contact is `undefined`. A `LocalSolarEclipseEvent` has its `kind`, a `description`, the TT `time` and `jd`, the `sunAltitude` (radians), the `positionAngle` of the contact point on the solar limb (from celestial north toward east) and the `zenithAngle` of the same point from the zenith, both in `[0, 2π)`, the `visibility` (`'aboveHorizon'` or `'belowHorizon'`) and `observable` flags, the local `magnitude` (fraction of the solar diameter covered; above 1 only during a total eclipse), the Moon/Sun `moonSunDiameterRatio` and the `centralPhaseKind`. At a total `C2` and `C3` the position angle is that of the far limb, opposite to the Moon's center direction.
+
+`details` has the maximum magnitude and diameter ratio, `partialPhaseDuration` (C4 − C1) and `centralPhaseDuration` (C3 − C2) in seconds, and `shadowPathWidthKm`, the width of the central shadow chord through the observer, which is `undefined` outside the central path. `visibility` has `kind`, one of `'notVisible'`, `'geometricOnlyBelowHorizon'`, `'partiallyVisible'`, `'completelyVisible'`, `'centralPhaseVisible'` or `'partialOnlyVisible'`, the `text` of it, the flags `hasGeometricEclipse`, `hasObservableEclipse` and `hasCentralPhase`, the `centralPhaseKind` (`'none'`, `'total'` or `'annular'`), `sunMotion` (`'rising'`, `'setting'` or `'none'`) and `completeness`, which says whether all the expected contacts were resolved.
+
+The lower-level functions are exported too. `computeLocalFundamentalState(pbe, longitude, latitude, time, state?)` is the geometry at one instant (the observer coordinates `ksi`, `eta` and `zeta` and the axis offsets `u` and `v` on the fundamental plane, the `distance` between them, the local cone radii `L1` and `L2`, and the magnitude); it fills and returns `state` when it is given, to avoid an allocation in a loop. `findLocalMaximumTime(pbe, longitude, latitude, fromJd, toJd, stepDays)` and `findLocalContactRoots(pbe, longitude, latitude, fromJd, toJd, stepDays, fn)` find the Julian Day of the magnitude maximum and all the zeros of a function of the state. `computeLocalEclipseEvents` is the `events` of the result, `computeLocalShadowPathWidthKm` the path width at an instant, `computeSolarAngularRadius(distance)` the apparent radius (radians) of the Sun from its distance in Earth radii, and `computeSeparationSolarRadii(state)` the Sun–Moon center separation in solar radii. `localVisibilityText(kind)` gives the English text of a visibility kind.
+
+```ts
+import { nearestSolarEclipse } from 'nebulosa/src/astronomy/bodies/sun'
+import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { computeLocalEclipseEvents, computeLocalFundamentalState, computeLocalShadowPathWidthKm, computeLocalSolarEclipseCircumstances, computeSeparationSolarRadii, computeSolarAngularRadius, findLocalContactRoots, findLocalMaximumTime, localVisibilityText } from 'nebulosa/src/astronomy/events/eclipse/solar/local'
+import { computePolynomialBesselianElements } from 'nebulosa/src/astronomy/events/eclipse/solar/map'
+import { Timescale, timeToDate, timeYMDHMS, toJulianDay, utc } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+// The total solar eclipse of 8 April 2024, seen from Dallas.
+const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 4, 1, 0, 0, 0, Timescale.UTC), true)
+const pbe = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
+const longitude = deg(-96.797)
+const latitude = deg(32.776)
+
+const circumstances = computeLocalSolarEclipseCircumstances(pbe, longitude, latitude, { sunMoonPosition })
+console.log(circumstances.visibility.kind, circumstances.visibility.text) // completelyVisible Entire eclipse visible
+console.log(circumstances.visibility.centralPhaseKind, circumstances.visibility.sunMotion) // total setting
+console.log(circumstances.details.maximalMagnitude, circumstances.details.moonSunDiameterRatio) // 1.0154 1.0562
+console.log(circumstances.details.partialPhaseDuration, circumstances.details.centralPhaseDuration, circumstances.details.shadowPathWidthKm) // 9560.84 234.98 172.49
+
+for (const event of Object.values(circumstances.events)) {
+	console.log(event.kind, timeToDate(utc(event.time)).slice(0, 6).join('-'), toDeg(event.sunAltitude).toFixed(2), toDeg(event.positionAngle!).toFixed(1), event.magnitude.toFixed(4), event.description)
+}
+// C1 2024-4-8-17-23-22 60.57 226.2 -0.0000 Beginning of partial phase
+// C2 2024-4-8-18-40-44 64.67 20.3 1.0000 Beginning of total phase
+// MAX 2024-4-8-18-42-41 64.62 137.3 1.0154 Local maximum
+// C3 2024-4-8-18-44-39 64.56 254.2 1.0000 End of total phase
+// C4 2024-4-8-20-2-43 56.75 49.2 0.0000 End of partial phase
+
+// New York is outside the path: no C2 and C3, and a partial magnitude of 0.91.
+const partial = computeLocalSolarEclipseCircumstances(pbe, deg(-74.006), deg(40.713), { sunMoonPosition })
+console.log(partial.visibility.kind, partial.events.C2, partial.events.MAX!.magnitude) // completelyVisible undefined 0.9103
+
+// A site far away has no eclipse at all.
+const far = computeLocalSolarEclipseCircumstances(pbe, deg(110), deg(-30), { sunMoonPosition })
+console.log(far.visibility.kind, far.visibility.hasGeometricEclipse, far.events.MAX) // notVisible false undefined
+
+// With a horizon at 70° the Sun is never high enough: the eclipse occurs but cannot be observed.
+const raised = computeLocalSolarEclipseCircumstances(pbe, longitude, latitude, { sunMoonPosition, horizonAltitude: deg(70) })
+console.log(raised.visibility.kind, raised.events.MAX!.observable, raised.events.MAX!.visibility) // geometricOnlyBelowHorizon false belowHorizon
+
+// The same events as a separate call, and the width of the shadow at the local maximum.
+console.log(Object.keys(computeLocalEclipseEvents(pbe, longitude, latitude, { sunMoonPosition }))) // [ 'C1', 'C2', 'MAX', 'C3', 'C4' ]
+console.log(computeLocalShadowPathWidthKm(pbe, longitude, latitude, circumstances.events.MAX!.jd)) // 172.490234375
+
+// The geometry at the instant of the global maximum.
+const state = computeLocalFundamentalState(pbe, longitude, latitude, eclipse.maximalTime)
+console.log(state.distance, state.L1, state.L2, state.magnitude, state.centralPhaseKind) // 0.16549 0.53151 -0.014559 0.70803 none
+console.log(computeSeparationSolarRadii(state)) // 0.64026
+
+// The local maximum and the partial contacts, found directly.
+const jd = toJulianDay(eclipse.maximalTime)
+console.log(findLocalMaximumTime(pbe, longitude, latitude, jd - 0.1, jd + 0.1, 60 / 86400)) // 2460409.2804498803
+console.log(findLocalContactRoots(pbe, longitude, latitude, jd - 0.1, jd + 0.1, 60 / 86400, (s) => s.distance - s.L1)) // [ 2460409.2253655596, 2460409.3360234406 ]
+
+// The apparent solar radius at 1 AU (23455 Earth radii), and the visibility text of each kind.
+console.log(computeSolarAngularRadius(23455), computeSolarAngularRadius()) // 0.0046504696 0.0046524175 — the mean radius, 959.63″
+console.log(localVisibilityText('centralPhaseVisible')) // Central phase visible
+```
+
 ### Local Solar Eclipse Search
 
+`listLocalSolarEclipses(longitude, latitude, startTime, endTime, sunMoonPosition)` lists the solar eclipses whose greatest eclipse falls in `(startTime, endTime]` and whose shadow reaches a site (`longitude` east-positive and geodetic `latitude`, in radians). It walks the eclipses with `nearestSolarEclipse` (the global search of Solar Eclipse Search and Classification), builds the Besselian elements of each one once, and keeps the eclipse when the local magnitude is above zero at some time, so the filter is purely geometric: an eclipse is included even when the Sun is below the horizon at the site. `sunMoonPosition` is the required provider of the Sun and Moon positions that the elements are fitted to (such as `sunMoonPosition`). The result is ordered earliest first, and is empty when `endTime` is before `startTime`.
+
+Each `LocalSolarEclipseListEntry` has the `eclipse` (the global circumstances, a `SolarEclipse` with its type, magnitude and `maximalTime`), the `elements` (the `PolynomialBesselianElements`, ready for `computeLocalSolarEclipseCircumstances` of Local Solar Eclipse Circumstances, which then does not refit them) and `state`, the `LocalFundamentalState` at the local maximum, whose `magnitude` is the local magnitude. The cost is dominated by the Besselian fit of each global eclipse, which is why the elements are returned: refining the eclipses of an entry list is cheap.
+
+```ts
+import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { computeLocalSolarEclipseCircumstances, listLocalSolarEclipses } from 'nebulosa/src/astronomy/events/eclipse/solar/local'
+import { Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+// The solar eclipses seen from Dallas between 2023 and 2026.
+const longitude = deg(-96.797)
+const latitude = deg(32.776)
+const start = timeYMDHMS(2023, 1, 1, 0, 0, 0, Timescale.UTC)
+const end = timeYMDHMS(2026, 12, 31, 0, 0, 0, Timescale.UTC)
+
+const entries = listLocalSolarEclipses(longitude, latitude, start, end, sunMoonPosition)
+console.log(entries.length) // 3
+
+for (const { eclipse, elements, state } of entries) {
+	const local = computeLocalSolarEclipseCircumstances(elements, longitude, latitude, { sunMoonPosition })
+	console.log(timeToDate(utc(eclipse.maximalTime)).slice(0, 3).join('-'), eclipse.type, eclipse.magnitude.toFixed(3), local.visibility.kind, local.details.maximalMagnitude!.toFixed(3), state.magnitude.toFixed(3))
+}
+// 2023-10-14 annular 0.952 completelyVisible 0.862 0.862
+// 2024-4-8 total 1.055 completelyVisible 1.015 1.015
+// 2025-3-29 partial 0.935 geometricOnlyBelowHorizon 0.617 0.617
+
+// An empty range, or one whose end precedes its start, gives an empty list.
+console.log(listLocalSolarEclipses(longitude, latitude, end, start, sunMoonPosition).length) // 0
+```
+
 ### Local Solar Eclipse View Geometry
+
+The local view of a solar eclipse is the diagram of the Sun with the Moon in front of it, as the observer sees it: the solar disk at the center, the Moon's disk offset by the local separation of the centers, and the horizon. `computeLocalSolarEclipseViewGeometry(circumstances, options?)` builds it as plain shapes in SVG pixels (no text, labels or markup) from the `events` of `computeLocalSolarEclipseCircumstances` (Local Solar Eclipse Circumstances); only the `events` property is read, so any object with that shape works. The Sun is the unit of the diagram: the Moon is placed by the separation of the centers in solar radii, scaled to `solarRadiusPx`, and the lunar radius follows from the Moon/Sun diameter ratio of the event.
+
+`options` are all optional: `width` and `height` (SVG pixels, default 450 and 160), `selectedEvent` (the contact drawn as the primary state, default `'MAX'`), `orientationMode` (`'zenith'`, the default, draws the local zenith up; `'north'` draws celestial north up and rotates the horizon by the parallactic angle of the Sun), `handedness` (`'eastRight'`, the default, puts celestial east on the right; `'eastLeft'` mirrors it, as in the naked-eye view), `solarRadiusPx` (default 34), `includeGhostDisks` (draw the Moon at the other contacts, default true), `includeHorizon` (draw the horizon, default true) and `horizonBandPaddingPx`. If the requested contact does not exist at the site, `MAX` is used, then the first existing one; `selectedEvent` of the result is the contact actually drawn (`undefined` when there are no events) and `requestedEvent` the one asked for.
+
+The result has the size, `orientationMode`, `solarRadiusPx` and the list of `shapes`: `ghostMoonDisk` circles (one per other contact, each with its `event` tag), the `sunDisk` and `moonDisk` of the primary contact, the `horizonBand` polygon (the below-horizon region, with `points`) and the `horizonLine`. A circle has `role`, `cx`, `cy` and `r`, a line `x1`, `y1`, `x2` and `y2`. SVG `y` grows downward. The horizon is placed from the Sun's altitude: at the usual altitude of an eclipse it is far below the Sun, outside the diagram, and it enters the view only when the Sun is low.
+
+`computeLocalViewDiskPair(event, options, frameEvent?)` returns the `sun` and `moon` circles of one event, in the frame of `frameEvent` (the event itself when omitted), and `buildLocalViewHorizonGeometry(event, options)` the `horizonBand` and `horizonLine` of one event; they are the pieces of the function above, and take a full `LocalSolarEclipseViewOptions`.
+
+```ts
+import { nearestSolarEclipse } from 'nebulosa/src/astronomy/bodies/sun'
+import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { buildLocalViewHorizonGeometry, computeLocalSolarEclipseCircumstances, computeLocalSolarEclipseViewGeometry, computeLocalViewDiskPair } from 'nebulosa/src/astronomy/events/eclipse/solar/local'
+import { computePolynomialBesselianElements } from 'nebulosa/src/astronomy/events/eclipse/solar/map'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+// The total solar eclipse of 8 April 2024, seen from Dallas.
+const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 4, 1, 0, 0, 0, Timescale.UTC), true)
+const pbe = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
+const circumstances = computeLocalSolarEclipseCircumstances(pbe, deg(-96.797), deg(32.776), { sunMoonPosition })
+
+const view = computeLocalSolarEclipseViewGeometry(circumstances)
+console.log(view.width, view.height, view.orientationMode, view.requestedEvent, view.selectedEvent, view.solarRadiusPx) // 450 160 zenith MAX MAX 34
+console.log(view.shapes.map((shape) => `${shape.kind}:${shape.role}`).join(' '))
+// circle:ghostMoonDisk ×4 circle:sunDisk circle:moonDisk polygon:horizonBand line:horizonLine
+
+for (const shape of view.shapes) {
+	if (shape.kind === 'circle') console.log(shape.role, shape.event, shape.cx.toFixed(2), shape.cy.toFixed(2), shape.r.toFixed(2))
+}
+// ghostMoonDisk C1 180.57 133.97 35.90
+// ghostMoonDisk C2 224.55 81.86 35.91
+// ghostMoonDisk C3 226.77 79.27 35.91
+// ghostMoonDisk C4 272.12 28.42 35.86
+// sunDisk MAX 225.00 80.00 34.00
+// moonDisk MAX 225.66 80.56 35.91 — the Moon is 5.6% larger than the Sun and almost centered
+
+// Totality begins: the sky-north orientation, east to the left, with no ghosts and no horizon.
+const north = computeLocalSolarEclipseViewGeometry(circumstances, { selectedEvent: 'C2', orientationMode: 'north', handedness: 'eastLeft', includeGhostDisks: false, includeHorizon: false })
+console.log(north.shapes.map((shape) => `${shape.kind}:${shape.role}`).join(' '), north.selectedEvent) // circle:sunDisk circle:moonDisk C2
+
+// A site outside the path has no C2: asking for it falls back to the maximum.
+const partial = computeLocalSolarEclipseCircumstances(pbe, deg(-74.006), deg(40.713), { sunMoonPosition })
+const fallback = computeLocalSolarEclipseViewGeometry(partial, { selectedEvent: 'C2' })
+console.log(fallback.requestedEvent, fallback.selectedEvent) // C2 MAX
+
+// With no events there is nothing to draw.
+const empty = computeLocalSolarEclipseViewGeometry({ events: {} })
+console.log(empty.selectedEvent, empty.shapes.length) // undefined 0
+
+// The pieces: the disks of the start of totality in the frame of the maximum, and its horizon.
+const options = { width: 450, height: 160, selectedEvent: 'MAX', orientationMode: 'zenith', solarRadiusPx: 34, includeGhostDisks: true, includeHorizon: true } as const
+const pair = computeLocalViewDiskPair(circumstances.events.C2!, options, circumstances.events.MAX!)
+console.log(pair.sun.cx, pair.sun.cy, pair.moon.cx.toFixed(2), pair.moon.cy.toFixed(2), pair.moon.r.toFixed(2)) // 225 80 224.55 81.86 35.91
+console.log(buildLocalViewHorizonGeometry(circumstances.events.MAX!, options).map((shape) => `${shape.kind}:${shape.role}`)) // [ 'polygon:horizonBand', 'line:horizonLine' ]
+```
 
 ### Local Standard of Rest Frames
 
@@ -2243,7 +2550,51 @@ console.log(gcrsRotationAt(site, time)) // 3x3 row-major rotation, the matrix ap
 
 ### Low-Precision Earth Ephemeris
 
+`eraEpv00(tdb1, tdb2, out?)` is the ERFA port of Bretagnon's simplified VSOP2000 model of the Earth. It returns two `PositionAndVelocityMut` states, in this order: the barycentric one, relative to the Solar System barycenter, and the heliocentric one, relative to the Sun. Positions are in AU, velocities in AU/day, in BCRS-oriented axes (the analytical model is rotated onto DE405). It is a harmonic series, not a JPL kernel, so it is approximate and fast, and it is best used where the full precision of VSOP87E or an SPK kernel is not needed, for example in the aberration and light-deflection terms of the apparent-place pipeline.
+
+The date is a two-part TDB Julian date, `tdb1 + tdb2`, with any split (`tdb1` is often `2400000.5` or `2451545` and `tdb2` the remainder). Time in the series is Julian years from J2000. Pass an `out` pair `[barycentric, heliocentric]` of `PositionAndVelocityMut` to avoid allocation: it is filled, returned, and aliased by the result.
+
+```ts
+import { eraEpv00 } from 'nebulosa/src/astronomy/coordinates/erfa/earth'
+import { zeroPositionAndVelocity } from 'nebulosa/src/astronomy/coordinates/astrometry'
+
+// The SOFA test epoch: JD 2400000.5 + 53411.52501161 TDB.
+const [barycentric, heliocentric] = eraEpv00(2400000.5, 53411.52501161)
+console.log(barycentric[0]) // [−0.77141, 0.55984, 0.24260] AU
+console.log(barycentric[1]) // [−0.010919, −0.012465, −0.0054048] AU/day
+console.log(heliocentric[0]) // [−0.77572, 0.55981, 0.24270] AU
+console.log(Math.hypot(...barycentric[0]), Math.hypot(...heliocentric[0])) // 0.98354 0.98693 — AU
+
+// The Sun-to-barycenter offset is the difference between the two (about 0.004 AU here).
+console.log(barycentric[0][0] - heliocentric[0][0]) // 0.0043134
+
+// A reusable workspace: the returned pair is the one passed in.
+const out = [zeroPositionAndVelocity(), zeroPositionAndVelocity()] as const
+console.log(eraEpv00(2451545, 0, out) === out) // true
+```
+
 ### Low-Precision Lunar Ephemeris
+
+`eraMoon98(tt1, tt2, out?)` is the ERFA port of the low-precision lunar theory, an ELP-based series with the additive terms of Meeus' _Astronomical Algorithms_: the Moon's geocentric position and velocity from a short series in the mean arguments of the lunar orbit. The date is a two-part Terrestrial Time Julian date `tt1 + tt2`. The result is a `PositionAndVelocityMut` in AU and AU/day, aligned with ICRS (the series is rotated through the IAU 2006 precession and frame bias), so it is the geocentric vector to the Moon with no light time and no aberration. It is an approximation intended for eclipse screening and similar uses where the precision of a JPL kernel is not needed.
+
+The optional `out` receives the result and is returned. The returned object is aliased to `out`, and a fresh state is allocated when it is omitted.
+
+```ts
+import { eraMoon98 } from 'nebulosa/src/astronomy/coordinates/erfa/moon'
+import { zeroPositionAndVelocity } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { AU_KM, DAYSEC } from 'nebulosa/src/core/constants'
+
+// The SOFA test epoch: JD 2400000.5 + 43999.9 TT.
+const [position, velocity] = eraMoon98(2400000.5, 43999.9)
+console.log(position) // [−0.0026013, 0.00061398, 0.00026408] AU
+console.log(velocity) // [−0.00012443, −0.00052191, −0.00017161] AU/day
+console.log(Math.hypot(...position) * AU_KM) // 401787.8 — km, geocentric distance
+console.log((Math.hypot(...velocity) * AU_KM) / DAYSEC) // 0.97535 — km/s
+
+// Reuse a workspace.
+const out = zeroPositionAndVelocity()
+console.log(eraMoon98(2451545, 0, out) === out) // true
+```
 
 ### Lunar Apsides
 
@@ -2312,7 +2663,103 @@ console.log(timeToDate(nearestLunarStandstill(timeYMDHMS(2025, 4, 1, 0, 0, 0, Ti
 
 ### Lunar Eclipse Local Circumstances
 
+A lunar eclipse happens on the Moon, so its contact instants (P1, U1, U2, MAX, U3, U4, P4) are the same for every observer. What changes with the site is whether the Moon is above the horizon at each contact and during the phases, the Moon's altitude and azimuth, and the orientation of the contact point on the lunar limb. `computeLocalLunarEclipseCircumstances(eclipse, longitude, latitude, sunMoonPosition, options?)` computes those local circumstances from a `LunarEclipse` (see Lunar Eclipse Search) and a Sun/Moon position provider such as `sunMoonPosition`, the analytical ERFA/Meeus ephemeris. `longitude` is east-positive and `latitude` is geodetic, both in radians. It does not rebuild the global geometry.
+
+The result has a `location`, a `visibility`, the `details` and the `events`. Each entry of `events` is keyed by contact kind and exists only for the contacts that the eclipse type has (three for a penumbral eclipse, five for a partial one, seven for a total one). An event carries its TT `time` and Julian Day `jd`, the topocentric `altitude` and `azimuth` of the Moon's center (diurnal parallax is applied, refraction is not; azimuth from north through east), an `observable` flag (`altitude` at or above the horizon), the `positionAngle` of the contact point on the lunar limb (north through east, `[0, 2π)`, the P angle of the contact tables), the `zenithAngle` of the same point measured from the local zenith (the Z angle), and the `umbralMagnitude` and `penumbralMagnitude` at that instant. At the internal contacts U2 and U3 of a total eclipse the contact point is on the far side of the disk from the shadow center, so P is rotated by π there. The umbral magnitude is 0 at U1/U4, 1 at U2/U3, and negative when the Moon is wholly outside the umbra (at P1/P4).
+
+`visibility.kind` is one of `'notVisible'`, `'penumbralOnlyVisible'`, `'partialVisible'`, `'totalVisible'`, `'completelyVisible'` or `'geometricOnlyBelowHorizon'`, with `visibility.text` as a description and the flags `hasGeometricEclipse` and `hasObservableEclipse`. The classification does not rely only on the contacts: the altitude is also sampled across the penumbral interval, so a Moon that rises or sets in the middle of the eclipse is reported as visible for the part that is above the horizon, and `completelyVisible` requires the Moon to stay above the horizon for the whole of P1 to P4. `details` has the durations of the phases in seconds (`penumbralPhaseDuration`, and `partialPhaseDuration` and `totalPhaseDuration` when they exist), the maximal magnitudes (`maximalUmbralMagnitude` is `undefined` for a penumbral eclipse), and `observableDuration`, the time in seconds the Moon is above the horizon between P1 and P4.
+
+`options.horizonAltitude` (radians, default 0) is the altitude the Moon must reach to count as observable, for example a raised horizon, and `options.altitudeSamples` (default 48 across the penumbral phase) sets the sampling of the altitude scan; a stretch above the horizon that is shorter than one sample can be missed at a coarse sampling. `moonAltitudeAt(time, longitude, latitude, sunMoonPosition)` gives the topocentric altitude of the Moon's center at one instant, in radians, and `localLunarVisibilityText(kind)` returns the description of a classification.
+
+```ts
+import { nearestLunarEclipse } from 'nebulosa/src/astronomy/bodies/moon'
+import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { computeLocalLunarEclipseCircumstances, localLunarVisibilityText, moonAltitudeAt } from 'nebulosa/src/astronomy/events/eclipse/lunar/local'
+import { Timescale, timeToDate, timeYMDHMS, utc, type Time } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+const format = (time: Time) => timeToDate(utc(time)).slice(0, 6).join('-')
+
+// The total lunar eclipse of 7 September 2025.
+const eclipse = nearestLunarEclipse(timeYMDHMS(2025, 9, 1, 0, 0, 0, Timescale.UTC), true)
+
+// Perth (115.86°E, 31.95°S): the Moon is high in the sky during the whole eclipse.
+const perth = computeLocalLunarEclipseCircumstances(eclipse, deg(115.86), deg(-31.95), sunMoonPosition)
+console.log(perth.visibility.kind, perth.visibility.text) // completelyVisible Entire eclipse visible
+console.log(perth.details.totalPhaseDuration, perth.details.observableDuration) // 4887.64 19477.89 — seconds
+
+const max = perth.events.MAX!
+console.log(format(max.time), max.observable) // 2025-9-7-18-12-2 true
+console.log(toDeg(max.altitude), toDeg(max.azimuth)) // 51.72 307.32
+console.log(toDeg(max.positionAngle), toDeg(max.zenithAngle)) // 330.93 193.62 — the P and Z angles of the contact point
+console.log(max.umbralMagnitude, max.penumbralMagnitude) // 1.3606 2.3430
+
+// São Paulo: the Moon is below the horizon during every contact, so the eclipse is only geometric.
+const saoPaulo = computeLocalLunarEclipseCircumstances(eclipse, deg(-46.6333), deg(-23.55), sunMoonPosition)
+console.log(saoPaulo.visibility.kind, saoPaulo.details.observableDuration) // geometricOnlyBelowHorizon 0
+console.log(toDeg(saoPaulo.events.MAX!.altitude)) // -36.44
+console.log(toDeg(moonAltitudeAt(eclipse.maximalTime, deg(-46.6333), deg(-23.55), sunMoonPosition))) // -36.44
+
+// Greenwich: the Moon rises during the eclipse, so the last part of totality and the last partial phase are seen.
+const greenwich = computeLocalLunarEclipseCircumstances(eclipse, 0, deg(51.48), sunMoonPosition)
+console.log(greenwich.visibility.kind, greenwich.details.observableDuration) // totalVisible 8332.34
+console.log(
+	Object.entries(greenwich.events)
+		.map(([kind, event]) => `${kind}:${event.observable}`)
+		.join(' '),
+) // P1:false U1:false U2:false MAX:false U3:true U4:true P4:true
+
+// With a 10° horizon the same site keeps only the last partial phase.
+const raised = computeLocalLunarEclipseCircumstances(eclipse, 0, deg(51.48), sunMoonPosition, { horizonAltitude: deg(10), altitudeSamples: 96 })
+console.log(raised.visibility.kind) // partialVisible
+
+console.log(localLunarVisibilityText('penumbralOnlyVisible')) // Only the penumbral phase visible
+```
+
 ### Lunar Eclipse Map SVG Paths
+
+`lunarEclipseMapToSvgPaths(geometry, projection, options?)` turns the geometry of Lunar Eclipse Visibility Geometry into SVG path data: one string for the moonrise/moonset curve of each contact, and the projected sublunar point of each contact. `projection` is any `CylindricalProjection` (for example `PlateCarree`), and the geometry itself is never modified. The curves are projected and split at the antimeridian only here, so a ring that crosses it becomes two subpaths (`M…` commands) instead of a line across the whole map.
+
+The result has `moonRiseSet`, with one string per contact `P1`, `U1`, `U2`, `MAX`, `U3`, `U4` and `P4` (an empty string for a contact that the eclipse does not have, for example `U2` of a penumbral eclipse), and `sublunarPoints`, the projected sublunar point of each existing contact (a missing key for a contact that does not exist or that falls outside the projection). The coordinates are those of the projection: with `PlateCarree`, `x` is the longitude and `y` the latitude, multiplied by the projection `scale`, with north up. SVG `y` grows downward, so pass `yAxisDirection: 'southUp'` in the projection options to get SVG axes, and `centralMeridian` to center the map on another longitude.
+
+`options.precision` is the number of decimals of the path coordinates (default 2), and `options.projectionOptions` are applied to the curves and to the sublunar points, on top of those of the projection. With `options.fill` the strings are closed region polygons instead of open curves, for shading: `options.fillRegion` selects the `'belowHorizon'` (default, the region where the Moon is down) or `'aboveHorizon'` side, and the paths must be rendered with `fill-rule="evenodd"`, because the complement of a cap that does not enclose a pole is the map rectangle with the cap punched out. The fill assumes a cylindrical projection over the full longitude range that can show the ±90° latitude edges (such as `PlateCarree`); when the cap encloses a pole, as it usually does, the region is closed along that pole's edge of the map, and when it encloses neither pole (a near-equatorial eclipse, with the declination smaller than the parallax) the cap ring is filled directly.
+
+```ts
+import { nearestLunarEclipse } from 'nebulosa/src/astronomy/bodies/moon'
+import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { computeLunarEclipseMapGeometry, lunarEclipseMapToSvgPaths } from 'nebulosa/src/astronomy/events/eclipse/lunar/map'
+import { PlateCarree } from 'nebulosa/src/astronomy/projections/projection'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+// The total lunar eclipse of 7 September 2025, on a map 100 pixels per radian wide, SVG axes (y down).
+const eclipse = nearestLunarEclipse(timeYMDHMS(2025, 9, 1, 0, 0, 0, Timescale.UTC), true)
+const geometry = computeLunarEclipseMapGeometry(eclipse, sunMoonPosition)
+const projection = new PlateCarree(0, { scale: 100, yAxisDirection: 'southUp' })
+
+const paths = lunarEclipseMapToSvgPaths(geometry, projection)
+console.log(paths.sublunarPoints.MAX) // { x: 151.17, y: 10.47 } — greatest eclipse, the Moon is at the zenith there
+console.log(paths.moonRiseSet.MAX.slice(0, 59)) // M151.17 -144.88L165.41 -144.76L179.1 -144.39L191.82 -143.81
+console.log(
+	Object.entries(paths.moonRiseSet)
+		.map(([kind, d]) => `${kind}:${d.match(/M/g)?.length}`)
+		.join(' '),
+) // P1:2 U1:2 U2:2 MAX:2 U3:2 U4:2 P4:2 — every ring is split once at the antimeridian
+
+// A closed region polygon for shading, with coordinates of one decimal place.
+const filled = lunarEclipseMapToSvgPaths(geometry, projection, { fill: true, precision: 1 })
+console.log(filled.moonRiseSet.MAX.slice(0, 44), filled.moonRiseSet.MAX.endsWith('Z')) // M-314.1 66.1L-313.8 67.8L-313.6 69.6L-313.3 true
+console.log(lunarEclipseMapToSvgPaths(geometry, projection, { fill: true, fillRegion: 'aboveHorizon' }).moonRiseSet.MAX.length > 0) // true
+
+// A map centered on 90°E: the sublunar point at greatest eclipse (86.6°E) is now close to the center, at x = -5.91.
+const shifted = lunarEclipseMapToSvgPaths(geometry, new PlateCarree(0, { scale: 100 }), { projectionOptions: { centralMeridian: deg(90) } })
+console.log(shifted.sublunarPoints.MAX) // { x: -5.91, y: -10.47 } — north up, so y is the latitude
+
+// A penumbral eclipse has no umbral contacts: their paths are empty.
+const penumbral = nearestLunarEclipse(timeYMDHMS(2027, 2, 1, 0, 0, 0, Timescale.UTC), true)
+const empty = lunarEclipseMapToSvgPaths(computeLunarEclipseMapGeometry(penumbral, sunMoonPosition), projection)
+console.log(Object.keys(empty.sublunarPoints), empty.moonRiseSet.U1 === '') // ['P1', 'MAX', 'P4'] true
+```
 
 ### Lunar Eclipse Search
 
@@ -2349,6 +2796,61 @@ console.log(penumbral.type, penumbral.firstContactUmbraTime.day, penumbral.sdPar
 ```
 
 ### Lunar Eclipse Visibility Geometry
+
+A map of a lunar eclipse cannot show a shadow on the ground, because the shadow falls on the Moon. What a map can show is where on the Earth the Moon is up. For each contact of the eclipse, the boundary between the hemisphere that sees the Moon above the horizon and the one that does not is a small circle centered on the sublunar point, the place where the Moon is at the zenith (latitude equal to the Moon's declination, longitude equal to its right ascension minus Greenwich apparent sidereal time). `computeLunarEclipseMapGeometry(eclipse, sunMoonPosition, options?)` computes those circles, and `lunarEclipseEvents(eclipse)` returns the contacts that the eclipse has. Projecting the curves to a map is the subject of Lunar Eclipse Map SVG Paths.
+
+`lunarEclipseEvents` returns the existing contacts in chronological order as `LunarEclipseContact`s, each with its `kind` (`'P1'`, `'U1'`, `'U2'`, `'MAX'`, `'U3'`, `'U4'` or `'P4'`), its TT `time` and its Julian Day `jd`: P1, MAX and P4 for a penumbral eclipse, adding U1 and U4 for a partial one, and U2 and U3 for a total one. The radius of the circle is not the geocentric 90° of the horizon: the observer is on the surface, so the Moon seen on the horizon is lower in the sky than its geocentric direction by the lunar parallax, and the circle radius is `π/2 − h0 − asin(cos h0 / d)`, with `h0` the horizon altitude and `d` the Moon distance in Earth radii (about 0.95° smaller than the bare 90°). The observer is treated as spherical, with a geocentric radius of one equatorial Earth radius.
+
+`computeLunarEclipseMapGeometry` returns the `eclipse`, the `events` and `lines.moonRiseSet`. Each `LunarEclipseMapEvent` adds the apparent geocentric Moon `rightAscension` and `declination`, the `gast` (all in radians), the `distance` (Earth equatorial radii), the effective `horizonAltitude` (radians) of that contact, and the `sublunar` point as an `EclipseGeoPoint`, whose `x` is the east-positive longitude in `[−π, π]` and `y` the latitude, in radians. `lines.moonRiseSet` has one curve per existing contact (`P1` to `P4`): a curve is a list of branches of `EclipseGeoPoint`s (one closed ring here, with its first point repeated at the end) that is still in geographic coordinates and is not split at the antimeridian yet.
+
+`options.maxAngularStep` (radians, default 1°) is the target spacing of the points along the circle, `options.horizonAltitude` (radians, default 0) is the altitude of the visibility horizon for the Moon's center, `options.refraction` (default false) lowers that horizon by the standard 34′ of refraction at the horizon, and `options.limbVisibility` is `'center'` (default) to mark where the Moon's center is on the horizon or `'upperLimb'` to mark where its upper limb is, which lowers the horizon by the Moon's apparent semidiameter at that contact. `MOON_RADIUS_EARTH_RADII` is the lunar radius in equatorial Earth radii, 0.2725076, and the sampler is a `SunMoonProvider` such as `sunMoonPosition`.
+
+```ts
+import { nearestLunarEclipse } from 'nebulosa/src/astronomy/bodies/moon'
+import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { computeLunarEclipseMapGeometry, lunarEclipseEvents, MOON_RADIUS_EARTH_RADII } from 'nebulosa/src/astronomy/events/eclipse/lunar/map'
+import { Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+// The total lunar eclipse of 7 September 2025.
+const eclipse = nearestLunarEclipse(timeYMDHMS(2025, 9, 1, 0, 0, 0, Timescale.UTC), true)
+
+for (const contact of lunarEclipseEvents(eclipse)) console.log(contact.kind, timeToDate(utc(contact.time)).slice(0, 6).join('-'), contact.jd)
+// P1 2025-9-7-15-29-43 2460926.1464
+// U1 2025-9-7-16-28-1 2460926.1869
+// U2 2025-9-7-17-31-18 2460926.2309
+// MAX 2025-9-7-18-12-2 2460926.2592
+// U3 2025-9-7-18-52-45 2460926.2874
+// U4 2025-9-7-19-56-3 2460926.3314
+// P4 2025-9-7-20-54-21 2460926.3719
+
+const geometry = computeLunarEclipseMapGeometry(eclipse, sunMoonPosition)
+
+const max = geometry.events.find((event) => event.kind === 'MAX')!
+console.log(toDeg(max.rightAscension), toDeg(max.declination), toDeg(max.gast)) // -13.33 -6.00 260.06 — the right ascension is 346.67° (−13.33°)
+console.log(max.distance, max.horizonAltitude) // 57.958 0
+console.log(toDeg(max.sublunar.x), toDeg(max.sublunar.y)) // 86.61 -6.00 — the Moon is at the zenith there at greatest eclipse
+
+// One closed ring of 361 points at 1° spacing; the first and the last coincide.
+const [ring] = geometry.lines.moonRiseSet.MAX!
+console.log(ring.length, ring[0].x === ring[360].x && ring[0].y === ring[360].y) // 361 true
+console.log(ring[0], ring[0].jd === max.jd) // { x: 1.5117, y: 1.4488, jd: 2460926.2592 } true — due north of the sublunar point, 89.0° away
+
+// Coarser spacing, the horizon lowered by refraction and the upper limb instead of the center.
+const coarse = computeLunarEclipseMapGeometry(eclipse, sunMoonPosition, { maxAngularStep: deg(10) })
+console.log(coarse.lines.moonRiseSet.MAX![0].length) // 37
+
+const refracted = computeLunarEclipseMapGeometry(eclipse, sunMoonPosition, { refraction: true })
+console.log(toDeg(refracted.events[3].horizonAltitude)) // -0.5667 — 34′
+
+const limb = computeLunarEclipseMapGeometry(eclipse, sunMoonPosition, { limbVisibility: 'upperLimb' })
+console.log(toDeg(limb.events[3].horizonAltitude)) // -0.2694 — the semidiameter of the Moon at that distance
+
+const raised = computeLunarEclipseMapGeometry(eclipse, sunMoonPosition, { horizonAltitude: deg(10) })
+console.log(raised.events[3].horizonAltitude) // 0.1745
+
+console.log(MOON_RADIUS_EARTH_RADII) // 0.2725076
+```
 
 ### Lunar Libration Extrema
 
@@ -4542,9 +5044,177 @@ ephemerisUncertaintyEllipse(covariance, [0, 0, 0]) // Error: geocentric directio
 
 ### Solar Eclipse Besselian Elements
 
+The Besselian elements describe a solar eclipse in the fundamental plane, the plane through the Earth's center perpendicular to the Moon's shadow axis. `x` and `y` are the coordinates of the shadow axis in that plane, `d` and `mu` are the declination of the axis and the Greenwich hour angle of its direction (radians), `l1` and `l2` are the radii of the penumbral and umbral cones in the fundamental plane (`l2` is negative for a total eclipse, positive for an annular one), and `tanF1` and `tanF2` are the tangents of the half-angles of those cones. `x`, `y`, `l1` and `l2` are in equatorial Earth radii. Every other solar eclipse routine of the library (the ground track, the local circumstances) is built on them.
+
+`computePolynomialBesselianElements(maximumTime, sunMoonPosition)` samples the Sun and Moon at five instants spaced by `1/24` day around the `time0` of the eclipse (the maximum rounded to the nearest hour) and fits a cubic in `t`, the time in hours since `time0`, for each of `x`, `y`, `l1`, `l2`, `d` and `mu`. The result is a `PolynomialBesselianElements` with `time0`, `maximumTime`, `deltaT` (TT − UT1, seconds), `deltaTLongitudeCorrection` (radians, 0 here), `step` (days), the four-coefficient arrays (in increasing powers of `t`) and the constants `tanF1` and `tanF2`. `evaluateBesselian(pbe, time)` evaluates the polynomials at a `Time` and returns the instantaneous `InstantBesselianElements`, adding the time derivatives `dx` and `dy` (Earth radii per hour). `besselianSampleAtJulianDay(pbe, jd)` does the same for a TT Julian Day and also returns the `jd`, and `instantBesselianFromSunMoon(time, sunMoonPosition)` computes the elements directly from the Sun and Moon positions at one instant, without the polynomial, which is useful to check the fit.
+
+The polynomials are extrapolated outside the fitted window, so results more than a few hours from `time0` are unreliable. `SUN_RADIUS_EARTH_RADII`, `MOON_RADIUS_PENUMBRA_EARTH_RADII` and `MOON_RADIUS_UMBRA_EARTH_RADII` are the solar radius and the two lunar radii (NASA/Espenak convention; the first is the solar radius and the others the Espenak `k1` and `k2` constants) in equatorial Earth radii.
+
+```ts
+import { nearestSolarEclipse } from 'nebulosa/src/astronomy/bodies/sun'
+import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { besselianSampleAtJulianDay, computePolynomialBesselianElements, evaluateBesselian, instantBesselianFromSunMoon, MOON_RADIUS_PENUMBRA_EARTH_RADII, MOON_RADIUS_UMBRA_EARTH_RADII, SUN_RADIUS_EARTH_RADII } from 'nebulosa/src/astronomy/events/eclipse/solar/map'
+import { Timescale, timeShift, timeYMDHMS, toJulianDay } from 'nebulosa/src/astronomy/time/time'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+// The total solar eclipse of 8 April 2024.
+const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 4, 1, 0, 0, 0, Timescale.UTC), true)
+const pbe = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
+
+console.log(pbe.time0.fraction, pbe.step, pbe.deltaT, pbe.deltaTLongitudeCorrection) // 0.25 0.041666666666666664 74.0306 0
+console.log(pbe.tanF1, pbe.tanF2) // 0.0046663658 0.0046431178
+console.log(pbe.x) // [-0.3188609437, 0.5117079966, 3.2949e-5, -8.4194e-6]
+console.log(pbe.l2) // [-0.01037827013, 6.1747e-5, -1.2692e-5, 2.0632e-9]
+
+// The elements at the instant of greatest eclipse.
+const maximum = evaluateBesselian(pbe, eclipse.maximalTime)
+console.log(maximum.x, maximum.y) // -0.157500055 0.305084134
+console.log(maximum.l1, maximum.l2) // 0.53572629 -0.01036006
+console.log(toDeg(maximum.d), toDeg(maximum.mu)) // 7.59086 94.01317
+console.log(maximum.dx, maximum.dy) // 0.51172626 0.2709267
+console.log(Math.hypot(maximum.x, maximum.y)) // 0.34334 — the axis passes inside the Earth's limb
+
+// The same through a Julian Day, and straight from the Sun and Moon positions.
+const sample = besselianSampleAtJulianDay(pbe, toJulianDay(eclipse.maximalTime))
+console.log(sample.x, sample.y) // -0.157500055 0.305084134
+const exact = instantBesselianFromSunMoon(timeShift(eclipse.maximalTime, 0), sunMoonPosition(eclipse.maximalTime))
+console.log(exact.x, exact.y, exact.l2) // -0.1575000315 0.3050841577 -0.01036006
+
+console.log(SUN_RADIUS_EARTH_RADII, MOON_RADIUS_PENUMBRA_EARTH_RADII, MOON_RADIUS_UMBRA_EARTH_RADII) // 109.076370706 0.272488 0.272281
+```
+
 ### Solar Eclipse Ground-Track Geometry
 
+The ground track of a solar eclipse is made of curves on the Earth's surface that follow from the Besselian elements of Solar Eclipse Besselian Elements: the central line of totality or annularity, its northern and southern limits, the northern and southern limits of the partial eclipse, the sunrise and sunset curves, and the named contact points. `computeSolarEclipseMapGeometry(eclipse, pbe, options?)` computes all of them in geographic coordinates (an `EclipseGeoPoint`, with `x` the east-positive longitude and `y` the latitude, in radians, plus the TT Julian Day `jd` of the instant when the shadow is there), and they are projected to a map by Solar Eclipse Map SVG Paths.
+
+The result has `points`, a `SolarEclipseContactPoints` with the contacts `P1`–`P4` (penumbra against the limb), `U1`–`U4` (umbra against the limb), `C1` and `C2` (the ends of the central line), `MAX` (greatest eclipse) and `N1`, `N2`, `S1`, `S2` (the ends of the northern and southern limits of the partial eclipse), each one present only when it exists, and `lines`: `centerLine` (a single branch, empty for a partial or non-central eclipse), `umbraNorth` and `umbraSouth`, `penumbraNorth` and `penumbraSouth` (lists of branches, so that a fold that the solver could not follow is never joined by a straight line) and `riseSetCurves`. Points of the central line are tagged with their `kind`, `'total'` or `'annular'`, and `splitCentralLineByKind(centerLine, pbe?)` splits the line into the `total` and `annular` runs, which is what a hybrid eclipse needs; with `pbe` the exact instant where the umbral radius is zero is solved and shared as the seam of the two runs.
+
+`options.longitudeStep` and `options.maxAngularStep` (radians, default 1° each) are the longitude scan step and the maximum spacing of the points along a curve, `options.includeRiseSetCurves` (default `false`) adds the sunrise and sunset curves, which are the slowest part, and `options.riseSetStep` (seconds, default 30) is their time step. `options.refractionMode` is `'empirical'` (default), which lifts the observer near the horizon with an empirical refraction factor so that the extremes of the partial limits match the published refracted references, or `'none'` for the purely geometric solution. The two modes must not be mixed in one map. The cost grows quickly as the steps shrink: the default steps are the accurate setting, and coarse ones are only for previews.
+
+The lower-level routines are exported too. `findMaximumPoint(pbe)` is the greatest eclipse point, `findPenumbraContactPoints(pbe)` and `findUmbraContactPoints(pbe)` return the `P` and `U` contacts, and `findCentralLineExtremePoint(pbe, begin)` the `C1` (`begin` true) or `C2` point. `centralAxisIntersectsEarth(pbe)` tells whether the shadow axis pierces the ellipsoid, which is when `centerLine`, `C1` and `C2` exist. `centralLineKind(pbe, jd)` is the local character of the central line at an instant. `findEclipseCurvePoint(pbe, longitude, initialLatitude, i, G, refractionMode?)` solves a point at a longitude (`i` is `0` for the central line and `+1` or `−1` for the northern or southern limit, `G` is `1` for the totality limit and `0` for the partial limit), and `findCurvePoints(pbe, i, G, options?)` traces a whole family. `computeRiseSetCurves(pbe, P1, P4, optionalContacts?, options?)` builds the sunrise and sunset curves from the contacts, `projectFundamentalPoint(sample, x, y)` converts a point of the fundamental plane to the geographic coordinates of the surface point under it (`undefined` outside the Earth's limb), `projectClosestEarthLimbPoint(sample, x, y)` gives the nearest point of the limb instead, and `solarAltitudeAtPoint(pbe, point)` is the geometric altitude of the Sun in radians at a point and its instant.
+
+```ts
+import { nearestSolarEclipse } from 'nebulosa/src/astronomy/bodies/sun'
+import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import {
+	besselianSampleAtJulianDay,
+	centralAxisIntersectsEarth,
+	centralLineKind,
+	computePolynomialBesselianElements,
+	computeSolarEclipseMapGeometry,
+	findCentralLineExtremePoint,
+	findCurvePoints,
+	findMaximumPoint,
+	findPenumbraContactPoints,
+	findUmbraContactPoints,
+	projectClosestEarthLimbPoint,
+	projectFundamentalPoint,
+	solarAltitudeAtPoint,
+	splitCentralLineByKind,
+} from 'nebulosa/src/astronomy/events/eclipse/solar/map'
+import { Timescale, timeYMDHMS, toJulianDay } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+// The total solar eclipse of 8 April 2024.
+const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 4, 1, 0, 0, 0, Timescale.UTC), true)
+const pbe = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
+
+// A preview-quality map: 5° longitude scan and 2° spacing of the points.
+const geometry = computeSolarEclipseMapGeometry(eclipse, pbe, { longitudeStep: deg(5), maxAngularStep: deg(2) })
+console.log(Object.keys(geometry.points).join(' ')) // P1 P2 P3 P4 MAX U1 U2 U3 U4 C1 C2 N1 N2 S1 S2
+
+const { lines } = geometry
+console.log(
+	lines.centerLine.length,
+	lines.umbraNorth.map((branch) => branch.length),
+	lines.umbraSouth.map((branch) => branch.length),
+) // 89 [ 89 ] [ 87 ]
+console.log(
+	lines.penumbraNorth.map((branch) => branch.length),
+	lines.penumbraSouth.map((branch) => branch.length),
+	lines.riseSetCurves.length,
+) // [ 242 ] [ 99 ] 0
+
+// The central line, from C1 to C2; its first point is at (−158.5°, −7.8°), where the axis first touches the Earth.
+const [first] = lines.centerLine
+console.log(toDeg(first.x), toDeg(first.y), first.kind) // -158.53 -7.81 total
+
+// The greatest eclipse point and the contact points, with their longitude and latitude in degrees.
+const max = geometry.points.MAX!
+console.log(toDeg(max.x), toDeg(max.y)) // -104.05 25.40
+console.log(toDeg(geometry.points.P1!.x), toDeg(geometry.points.P1!.y)) // -143.12 -14.92
+console.log(toDeg(geometry.points.U2!.x), toDeg(geometry.points.U2!.y)) // -158.74 -7.17
+console.log(toDeg(geometry.points.C2!.x), toDeg(geometry.points.C2!.y)) // -19.78 47.63
+
+// The sunrise and sunset curves are optional and slower; a 10 minute step is enough for a preview.
+const withRiseSet = computeSolarEclipseMapGeometry(eclipse, pbe, { longitudeStep: deg(5), maxAngularStep: deg(2), includeRiseSetCurves: true, riseSetStep: 600 })
+console.log(withRiseSet.lines.riseSetCurves.map((branch) => branch.length)) // [ 113, 139, 98, 138 ]
+
+// The purely geometric solution, without the empirical refraction lift of the partial limits.
+const geometric = computeSolarEclipseMapGeometry(eclipse, pbe, { longitudeStep: deg(5), maxAngularStep: deg(2), refractionMode: 'none' })
+console.log(toDeg(geometric.points.N1!.x), toDeg(geometric.points.N1!.y)) // -177.04 33.54
+
+// The central line of a total eclipse has one run of one kind, and a hybrid one would have both.
+const kinds = splitCentralLineByKind(lines.centerLine, pbe)
+console.log(kinds.total.length, kinds.annular.length) // 1 0 — runs of each kind
+
+// The lower-level routines.
+console.log(centralAxisIntersectsEarth(pbe), centralLineKind(pbe, toJulianDay(eclipse.maximalTime))) // true total
+console.log(findMaximumPoint(pbe)!.jd, findCentralLineExtremePoint(pbe, true)!.jd) // 2460409.2631 2460409.1953
+console.log(Object.keys(findPenumbraContactPoints(pbe)).join(' '), Object.keys(findUmbraContactPoints(pbe)).join(' ')) // P1 P2 P3 P4 U1 U2 U3 U4
+
+const northLimit = findCurvePoints(pbe, 1, 1, { longitudeStep: deg(5), maxAngularStep: deg(2) })
+console.log(northLimit.length) // 90
+
+// The fundamental plane point of the axis at greatest eclipse is on the Earth; a point outside the limb is not.
+const sample = besselianSampleAtJulianDay(pbe, toJulianDay(eclipse.maximalTime))
+const under = projectFundamentalPoint(sample, sample.x, sample.y)!
+console.log(toDeg(under.x), toDeg(under.y)) // -104.05 25.40
+console.log(projectFundamentalPoint(sample, 2, 0)) // undefined
+console.log(projectClosestEarthLimbPoint(sample, 2, 0)) // the { x: -0.07004, y: 0, jd: 2460409.2631 } — the nearest limb point, in radians
+console.log(toDeg(solarAltitudeAtPoint(pbe, under))) // 69.78
+```
+
 ### Solar Eclipse Map SVG Paths
+
+`solarEclipseMapToSvgPaths(geometry, projection, options?)` turns the geometry of Solar Eclipse Ground-Track Geometry into SVG path data, one string per curve, plus the projected position of each named point. `projection` is any `CylindricalProjection` (for example `PlateCarree`), and the geometry is never modified. The curves are projected, and split at the antimeridian, only here: a curve that crosses it becomes several subpaths (`M…` commands) and no connector is ever drawn across the map. Each branch of a penumbral limit is its own subpath, so the arcs of a fold that the solver could not follow are drawn as separate arcs.
+
+The result has the strings `centerLine`, `umbraNorth`, `umbraSouth`, `penumbraNorth`, `penumbraSouth` and `riseSetCurves` (an empty string for a curve that the eclipse does not have, such as the rise and set curves when they were not computed), and `points`, the projected `P1`–`P4`, `U1`–`U4`, `C1`, `C2`, `MAX`, `N1`, `N2`, `S1` and `S2` that exist and fall inside the projection. The coordinates are those of the projection: with `PlateCarree`, `x` is the longitude and `y` the latitude, in radians multiplied by the projection `scale`, with north up. SVG `y` grows downward, so pass `yAxisDirection: 'southUp'` to the projection to get SVG axes, and `centralMeridian` in `options.projectionOptions` to center the map on another longitude. `options.precision` is the number of decimals of the path coordinates (default 2); the projected `points` are not rounded.
+
+```ts
+import { nearestSolarEclipse } from 'nebulosa/src/astronomy/bodies/sun'
+import { sunMoonPosition } from 'nebulosa/src/astronomy/events/eclipse/eclipse'
+import { computePolynomialBesselianElements, computeSolarEclipseMapGeometry, solarEclipseMapToSvgPaths } from 'nebulosa/src/astronomy/events/eclipse/solar/map'
+import { PlateCarree } from 'nebulosa/src/astronomy/projections/projection'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+// The total solar eclipse of 8 April 2024, as a preview-quality geometry.
+const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 4, 1, 0, 0, 0, Timescale.UTC), true)
+const pbe = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
+const geometry = computeSolarEclipseMapGeometry(eclipse, pbe, { longitudeStep: deg(5), maxAngularStep: deg(2) })
+
+// A map 100 pixels per radian wide, SVG axes (y down).
+const paths = solarEclipseMapToSvgPaths(geometry, new PlateCarree(0, { scale: 100, yAxisDirection: 'southUp' }))
+console.log(paths.points.MAX) // { x: -181.5986, y: -44.3387 } — greatest eclipse, not rounded by the precision
+console.log(paths.points.C1) // { x: -276.6948, y: 13.6315 }
+console.log(paths.centerLine.slice(0, 60)) // M-276.69 13.63L-273.61 13.2L-270.53 12.7L-268.34 12.31L-266.
+console.log(paths.umbraNorth.slice(0, 20), (paths.penumbraNorth.match(/M/g) ?? []).length) // M-277.05 12.52L-270.
+
+// The partial limit crosses the antimeridian, so it is two subpaths; the rise and set curves are empty here.
+console.log(paths.penumbraNorth.slice(0, 50)) // M125.75 -145.88L130.9 -151.49L132.48 -151.99L134.39 -152.47L
+console.log(paths.riseSetCurves === '') // true
+
+// With the rise and set curves computed, they become four subpaths.
+const withRiseSet = computeSolarEclipseMapGeometry(eclipse, pbe, { longitudeStep: deg(5), maxAngularStep: deg(2), includeRiseSetCurves: true, riseSetStep: 600 })
+const curves = solarEclipseMapToSvgPaths(withRiseSet, new PlateCarree(0, { scale: 100, yAxisDirection: 'southUp' }))
+console.log((curves.riseSetCurves.match(/M/g) ?? []).length) // 4
+
+// A map centered on 100°W with integer coordinates and north up: the maximum is at x = -7.
+const centered = solarEclipseMapToSvgPaths(geometry, new PlateCarree(0, { scale: 100 }), { precision: 0, projectionOptions: { centralMeridian: deg(-100) } })
+console.log(centered.points.MAX) // { x: -7.0657, y: 44.3387 } — the points keep full precision
+console.log(centered.centerLine.slice(0, 30)) // M-102 -14L-99 -13L-96 -13L-94 -12L-92 -12L
+```
 
 ### Solar Eclipse Search and Classification
 
