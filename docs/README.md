@@ -2249,13 +2249,106 @@ console.log(gcrsRotationAt(site, time)) // 3x3 row-major rotation, the matrix ap
 
 ### Lunar Apsides
 
+The Moon's orbit is an ellipse, so its distance from the Earth changes each month between perigee, the closest point, and apogee, the farthest. They vary from month to month, with perigee distances from about 356,400 km to 370,400 km and apogee from 404,000 km to 406,700 km. A full Moon at perigee is the popular supermoon.
+
+`nearestLunarApsis(time, apsis, next)` finds the previous or next perigee or apogee by Meeus's chapter 50 series with its periodic corrections. `apsis` is `'PERIGEE'` or `'APOGEE'`, and `next` selects the first event strictly after `time` when true, or the last one at or before it when false. It returns `[instant, distance, diameter]`: a fresh TT `Time`, the geocentric Earth-Moon distance in AU, and the Moon's apparent angular diameter in radians. `nearestMeanLunarApsis(time, apsis, next)` gives only the mean apsis instant, without the periodic corrections, as a fresh TT `Time`; it can differ from the true one by up to about a day. Results are accurate to a few minutes in time near the modern epoch. All times are TT: convert with `utc` for a civil clock time. The distance converts to a parallax with `moonParallax` (see Lunar Parallax and Semidiameter).
+
+```ts
+import { nearestLunarApsis, nearestMeanLunarApsis } from 'nebulosa/src/astronomy/bodies/moon'
+import { Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toArcsec } from 'nebulosa/src/math/units/angle'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+
+const start = timeYMDHMS(2026, 1, 1, 0, 0, 0, Timescale.UTC)
+
+// The next perigee after the start.
+const [time, distance, diameter] = nearestLunarApsis(start, 'PERIGEE', true)
+
+console.log(timeToDate(time).slice(0, 5)) // [2026, 1, 1, 21, 44] — TT
+console.log(toKilometer(distance)) // 360347 — km
+console.log(toArcsec(diameter)) // 1989.6 — arcseconds, the Moon's apparent diameter
+
+// The next apogee, and the previous one counted from just after it.
+const [apogee, apogeeDistance] = nearestLunarApsis(start, 'APOGEE', true)
+
+console.log(timeToDate(apogee).slice(0, 5), toKilometer(apogeeDistance)) // [2026, 1, 13, 20, 48] 405436
+console.log(timeToDate(nearestLunarApsis(timeYMDHMS(2026, 1, 13, 20, 50, 0, Timescale.TT), 'APOGEE', false)[0]).slice(0, 5)) // [2026, 1, 13, 20, 48] — the same event
+
+// The next mean perigee after the start, without the periodic corrections: it can be hours away from the true one.
+console.log(timeToDate(nearestMeanLunarApsis(start, 'PERIGEE', true)).slice(0, 5)) // [2026, 1, 28, 1, 3] — TT
+```
+
 ### Lunar Declination Extrema and Standstills
+
+The Moon's declination swings between a northern and a southern maximum every month, about 13.7 days apart. The size of the swing changes over the 18.6-year cycle of the lunar nodes: at a major lunar standstill the monthly extremes reach about ±28.6° (the obliquity plus the Moon's orbital inclination), and at a minor standstill only about ±18.3° (the obliquity minus the inclination). The standstills matter for the rising and setting azimuths of the Moon, and in archaeoastronomy.
+
+`nearestMaxDeclination(time, declination, next)` finds the previous or next monthly extreme, with `declination` `'NORTH'` or `'SOUTH'`, from Meeus's chapter 52 series. It returns `[instant, declination]`: a fresh TT `Time` and the geocentric declination in radians, positive for a northern maximum and negative for a southern one. `nearestLunarStandstill(time, standstill, declination, next)` finds the previous or next major or minor standstill (`'MAJOR'` or `'MINOR'`) for one hemisphere, as the extreme monthly maximum of the 18.6-year envelope, and returns the same pair; query each hemisphere separately, since the northern and southern ones fall a couple of weeks apart. `next` selects strictly after `time` when true, and at or before it when false. The declination is the mean geocentric value of a truncated series, accurate to a few arcminutes with times good to about 20 minutes, and applies neither nutation nor topocentric parallax.
+
+```ts
+import { nearestLunarStandstill, nearestMaxDeclination } from 'nebulosa/src/astronomy/bodies/moon'
+import { Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const start = timeYMDHMS(2025, 3, 1, 0, 0, 0, Timescale.UTC)
+
+// The next northern and southern monthly maxima.
+const [north, northDeclination] = nearestMaxDeclination(start, 'NORTH', true)
+const [south, southDeclination] = nearestMaxDeclination(start, 'SOUTH', true)
+
+console.log(timeToDate(north).slice(0, 5), toDeg(northDeclination)) // [2025, 3, 7, 15, 57] 28.71 — TT, degrees
+console.log(timeToDate(south).slice(0, 5), toDeg(southDeclination)) // [2025, 3, 22, 6, 48] -28.72
+
+// The major standstill of the current cycle: the largest monthly maximum, near +28.7°.
+const [major, majorDeclination] = nearestLunarStandstill(timeYMDHMS(2024, 1, 1, 0, 0, 0, Timescale.UTC), 'MAJOR', 'NORTH', true)
+
+console.log(timeToDate(major).slice(0, 5), toDeg(majorDeclination)) // [2025, 3, 7, 15, 57] 28.71
+
+// The minor standstill of the 2015 cycle: the smallest monthly maximum, near +18.1°.
+const [minor, minorDeclination] = nearestLunarStandstill(timeYMDHMS(2014, 1, 1, 0, 0, 0, Timescale.UTC), 'MINOR', 'NORTH', true)
+
+console.log(timeToDate(minor).slice(0, 5), toDeg(minorDeclination)) // [2015, 10, 3, 23, 55] 18.14
+
+// The next major standstill, one nodal cycle later.
+console.log(timeToDate(nearestLunarStandstill(timeYMDHMS(2025, 4, 1, 0, 0, 0, Timescale.UTC), 'MAJOR', 'NORTH', true)[0]).slice(0, 5)) // [2043, 9, 25, 14, 43]
+```
 
 ### Lunar Eclipse Local Circumstances
 
 ### Lunar Eclipse Map SVG Paths
 
 ### Lunar Eclipse Search
+
+A lunar eclipse happens when the Moon passes through the Earth's shadow at full moon: totally if it enters the dark umbra completely, partially if only a part, and as a penumbral eclipse if it passes only through the faint outer shadow. An eclipse is seen from everywhere the Moon is above the horizon, and the circumstances do not depend on the observer: they are the instants of the contacts and the eclipse magnitude. For the view from a given site see Local Lunar Eclipse Search.
+
+`nearestLunarEclipse(time, next)` finds the previous or next lunar eclipse with Meeus's chapter 54 method. `next` selects the first eclipse strictly after `time` when true, and the last at or before it when false. It returns a `LunarEclipse` with the Meeus `lunation` index and the `type` (`'TOTAL'`, `'PARTIAL'`, or `'PENUMBRAL'`). All times are TT `Time`s: `maximalTime` (greatest eclipse), `firstContactPenumbraTime` (P1), `firstContactUmbraTime` (U1), `totalBeginTime` (U2), `totalEndTime` (U3), `lastContactUmbraTime` (U4), and `lastContactPenumbraTime` (P4). The contacts that do not exist for the type (no umbral phase for a penumbral eclipse, no totality unless total) are the sentinel `Time` whose `day` is 0. Also `magnitude` (the umbral magnitude, or the penumbral one for a penumbral eclipse), `gamma` (the least distance of the Moon's center from the shadow axis, in equatorial Earth radii, signed by the side of the axis), the shadow radii `sigma` (umbra) and `rho` (penumbra) in Earth radii, and the half-durations `sdPenumbra`, `sdPartial`, and `sdTotal` in days, which are `NaN` when the phase does not occur. Convert the times with `utc` for civil UTC.
+
+```ts
+import { nearestLunarEclipse } from 'nebulosa/src/astronomy/bodies/moon'
+import { Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
+
+const fmt = (time: ReturnType<typeof nearestLunarEclipse>['maximalTime']) => timeToDate(utc(time)).slice(0, 5)
+
+// The first lunar eclipse after 1 September 2025: the total eclipse of 7 September.
+const eclipse = nearestLunarEclipse(timeYMDHMS(2025, 9, 1, 0, 0, 0, Timescale.UTC), true)
+
+console.log(eclipse.type) // TOTAL
+console.log(fmt(eclipse.firstContactPenumbraTime)) // [2025, 9, 7, 15, 29] — P1, UTC
+console.log(fmt(eclipse.firstContactUmbraTime)) // [2025, 9, 7, 16, 28] — U1
+console.log(fmt(eclipse.totalBeginTime)) // [2025, 9, 7, 17, 31] — U2
+console.log(fmt(eclipse.maximalTime)) // [2025, 9, 7, 18, 12] — greatest eclipse
+console.log(fmt(eclipse.totalEndTime)) // [2025, 9, 7, 18, 52] — U3
+console.log(fmt(eclipse.lastContactUmbraTime)) // [2025, 9, 7, 19, 56] — U4
+console.log(fmt(eclipse.lastContactPenumbraTime)) // [2025, 9, 7, 20, 54] — P4
+
+console.log(eclipse.magnitude) // 1.3606 — umbral magnitude
+console.log(eclipse.gamma) // -0.2758 — Earth radii, the Moon passes south of the shadow axis' center
+console.log(eclipse.sdTotal * 1440) // 40.7 — minutes, half the duration of totality (81 min in total)
+
+// A penumbral eclipse has no umbral contacts: their day is 0, and the umbral durations are NaN.
+const penumbral = nearestLunarEclipse(timeYMDHMS(1973, 6, 1, 0, 0, 0, Timescale.UTC), true)
+
+console.log(penumbral.type, penumbral.firstContactUmbraTime.day, penumbral.sdPartial) // PENUMBRAL 0 NaN
+```
 
 ### Lunar Eclipse Visibility Geometry
 
@@ -2288,11 +2381,94 @@ for (const e of lunarLibrationExtrema(moonToObserver, start, stop, { step: 0.25 
 
 ### Lunar Parallax and Semidiameter
 
+The Moon is close enough that its position and size depend on where you stand. Its equatorial horizontal parallax is the angle that the Earth's equatorial radius subtends at the Moon, about 57′ (0.95°), and its semidiameter is the angular radius of the disk, about 15.5′ to 16.7′. Both scale inversely with the distance, and the topocentric semidiameter grows slightly when the Moon is high, because the observer is then closer to it than the Earth's center is.
+
+`moonParallax(distance)` returns the horizontal parallax in radians from the geocentric distance in AU, using the Earth's equatorial radius of 6378.135 km; the distance must exceed that radius. `moonSemidiameter(distance)` returns the geocentric semidiameter in radians from the distance in AU (Meeus, chapter 55, with the small-angle coefficient `358473400″·km`). `moonTopocentricSemidiameter(distance, declination, hourAngle, rhoSinPhi, rhoCosPhi)` gives the topocentric semidiameter in radians with the rigorous Meeus formula; `declination` and the west-positive `hourAngle` are in radians, and `rhoSinPhi` and `rhoCosPhi` are the observer's geocentric parallax constants in Earth radii (see Geographic Observer). `moonTopocentricSemidiameterApprox(distance, altitude)` is the first-order version from the true altitude in radians, accurate to a few parts in 100000. `crescentWidth(semidiameter, illuminatedFraction)` is the width of the illuminated crescent in radians, `2 · semidiameter · fraction`, a first-order estimate that suits a thin crescent. For the Sun see Solar Parallax and Semidiameter.
+
+```ts
+import { crescentWidth, moonParallax, moonSemidiameter, moonTopocentricSemidiameter, moonTopocentricSemidiameterApprox } from 'nebulosa/src/astronomy/bodies/moon'
+import { deg, toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
+import { kilometer } from 'nebulosa/src/math/units/distance'
+
+const distance = kilometer(384400) // the mean Earth-Moon distance, in AU
+
+console.log(toDeg(moonParallax(distance))) // 0.9507 — degrees
+console.log(toDeg(moonParallax(kilometer(368409.7)))) // 0.99199 — degrees, near perigee (Meeus 47.a)
+
+console.log(toArcsec(moonSemidiameter(distance))) // 932.55 — arcseconds
+console.log(toArcsec(moonSemidiameter(kilometer(368409.7)))) // 973.03 — arcseconds
+
+// The topocentric semidiameter, with the Moon overhead: the observer is 1 Earth radius closer.
+console.log(toArcsec(moonTopocentricSemidiameterApprox(distance, deg(90)))) // 948.03 — arcseconds
+console.log(toArcsec(moonTopocentricSemidiameterApprox(distance, 0))) // 932.55 — arcseconds, on the horizon
+console.log(toArcsec(moonTopocentricSemidiameter(distance, deg(-20), deg(30), 0.5, 0.8))) // 939.95 — arcseconds, rigorous
+
+// Width of the illuminated crescent when 10% of the disk is lit.
+console.log(toArcsec(crescentWidth(moonSemidiameter(distance), 0.1))) // 186.51 — arcseconds
+```
+
 ### Lunar Phase and Lunation
+
+The Moon cycles through its phases every synodic month, 29.53 days: new, first quarter, full, and last quarter. A lunation is one such cycle, numbered consecutively from a conventional starting point, and different calendars and almanacs use different starting points.
+
+`nearestLunarPhase(time, phase, next)` finds the previous or next principal phase with Meeus's chapter 49 series. `phase` is `'NEW'`, `'FIRST_QUARTER'`, `'FULL'`, or `'LAST_QUARTER'`, and `next` selects the first phase strictly after `time` when true, or the last at or before it when false. It returns a fresh `Time` in TT, with the periodic terms applied; convert it with `utc` for a civil time. `lunation(time, system?)` returns the integer lunation number of the cycle containing `time`. The default `'BROWN'` is the Brown numbering; `'MEEUS'` is the Meeus index, which is 0 for the new moon of 6 January 2000, and `'GOLDSTINE'`, `'HEBREW'`, `'ISLAMIC'`, and `'THAI'` are the other conventions. Each differs from the Meeus index only by a constant offset (for Brown, 953). For the day-by-day illuminated fraction see Meeus Algorithms.
+
+```ts
+import { lunation, nearestLunarPhase } from 'nebulosa/src/astronomy/bodies/moon'
+import { Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
+
+const time = timeYMDHMS(2025, 9, 28, 0, 0, 0, Timescale.UTC)
+
+const fmt = (instant: ReturnType<typeof nearestLunarPhase>) => timeToDate(utc(instant)).slice(0, 5)
+
+console.log(fmt(nearestLunarPhase(time, 'NEW', true))) // [2025, 10, 21, 12, 25] — UTC
+console.log(fmt(nearestLunarPhase(time, 'FIRST_QUARTER', true))) // [2025, 9, 29, 23, 53]
+console.log(fmt(nearestLunarPhase(time, 'FULL', true))) // [2025, 10, 7, 3, 47]
+console.log(fmt(nearestLunarPhase(time, 'LAST_QUARTER', true))) // [2025, 10, 13, 18, 12]
+
+// The previous full moon.
+console.log(fmt(nearestLunarPhase(time, 'FULL', false))) // [2025, 9, 7, 18, 8]
+
+// Lunation numbers: Brown (default), Meeus, and two calendar conventions.
+console.log(lunation(time)) // 1271 — Brown lunation number
+console.log(lunation(time, 'MEEUS')) // 318 — lunations since the new moon of 6 January 2000
+console.log(lunation(time, 'HEBREW'), lunation(time, 'ISLAMIC')) // 71552 17356
+```
 
 ### Lunar Nodes
 
+The lunar nodes are the two points where the Moon's orbit crosses the ecliptic: the ascending node, where it passes from south to north, and the descending node, where it passes north to south. Eclipses can happen only when a new or full moon falls near a node. The nodes move westward along the ecliptic, completing a turn in 18.6 years, which sets the cycle of the lunar standstills (see Lunar Declination Extrema and Standstills).
+
+`nearestLunarNode(time, direction, next)` finds the previous or next passage through the ecliptic with Meeus's chapter 51 series. `direction` is `'ASCENDING'` or `'DESCENDING'`, and `next` selects strictly after `time` when true, and at or before it when false. It returns a fresh TT `Time` from a truncated series with minute-level accuracy near the modern epoch. `moonMeanAscendingNode(time)` returns the longitude of the mean ascending node in the mean ecliptic and equinox of date, in radians in `[0, 2π)`, from Meeus's equation 47.7 without the periodic terms of the true node.
+
+```ts
+import { moonMeanAscendingNode, nearestLunarNode } from 'nebulosa/src/astronomy/bodies/moon'
+import { Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const time = timeYMDHMS(2025, 9, 28, 0, 0, 0, Timescale.UTC)
+
+console.log(timeToDate(nearestLunarNode(time, 'ASCENDING', true)).slice(0, 5)) // [2025, 10, 5, 9, 21] — TT
+console.log(timeToDate(nearestLunarNode(time, 'DESCENDING', true)).slice(0, 5)) // [2025, 10, 18, 4, 34]
+console.log(timeToDate(nearestLunarNode(time, 'ASCENDING', false)).slice(0, 5)) // [2025, 9, 7, 23, 8] — the previous ascending passage
+
+// Mean ascending node longitude, in degrees.
+console.log(toDeg(moonMeanAscendingNode(time))) // 347.20
+console.log(toDeg(moonMeanAscendingNode(timeYMDHMS(2025, 1, 29, 0, 0, 0, Timescale.TT)))) // 0.0147 — the node was at 0° (the vernal equinox) in January 2025
+```
+
 ### Lunar Saros Index
+
+A saros is a period of about 6585.3 days (18 years 11 days) after which the Sun, Moon, and node return to nearly the same geometry, so a lunar eclipse is followed by a similar one. Eclipses are grouped into numbered saros series. `lunarSaros(time)` returns the saros series number, from 1 to 223, for the lunation that contains `time`, counting from the full moon of 18 January 2003 (series 192), and advancing by 38 (modulo 223) per lunation. It is a numbering of the lunation, not a test that an eclipse occurs: not every lunation belongs to a series that produces one, so check with Lunar Eclipse Search. For the solar series see Solar Saros Index.
+
+```ts
+import { lunarSaros } from 'nebulosa/src/astronomy/bodies/moon'
+import { timeYMD } from 'nebulosa/src/astronomy/time/time'
+
+console.log(lunarSaros(timeYMD(2025, 9, 7))) // 128 — the total lunar eclipse of 7 September 2025
+console.log(lunarSaros(timeYMD(2016, 8, 18))) // 109
+console.log(lunarSaros(timeYMD(2026, 3, 3))) // 133 — the total lunar eclipse of 3 March 2026
+```
 
 ### Martian Satellite Theory (MARSSAT)
 
@@ -2626,6 +2802,40 @@ console.log(tisserandParameter(vesta.semiMajorAxis, vesta.eccentricity, vesta.in
 ```
 
 ### Planetary Apparent Magnitudes (Mallama and Hilton)
+
+The apparent magnitude of a planet depends on how far it is from the Sun and from the observer, `5·log10(r·Δ)`, and on how much of its lit face we see, which is set by the phase angle (the Sun-planet-observer angle). Each planet adds its own brightness term: Saturn's brightness includes the rings and depends on how open they are, Uranus's depends on its polar aspect, and Neptune brightens slowly with time. The model of Mallama and Hilton (2018), used for the Astronomical Almanac, gives visual magnitudes from these.
+
+`planetMagnitude(planet, sunToPlanet, observerToPlanet, options?)` takes the planet name (`'mercury'`, `'venus'`, `'earth'`, `'mars'`, `'jupiter'`, `'saturn'`, `'uranus'`, or `'neptune'`) and two vectors in AU in any one consistent frame: from the Sun to the planet and from the observer to the planet. The distances and phase angle follow from them, so geometric vectors give consistent results. It returns the magnitude, or `NaN` where the model is undefined: Saturn with its rings beyond a 6.5° phase angle, or Neptune beyond 1.9° before the year 2000. `options.year` is the Julian year of the observation, which feeds Neptune's secular term (default 2000), and `options.rings` (default true) includes Saturn's rings. The Mars rotation and season correction, up to ±0.06 mag, is not modelled. A smaller number is brighter.
+
+```ts
+import { type Planet, planetMagnitude } from 'nebulosa/src/astronomy/bodies/photometry'
+import { earth, jupiter, mars, mercury, neptune, saturn, sun, uranus, venus } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { Timescale, timeYMDHMS, toJulianEpoch } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
+const year = toJulianEpoch(time)
+
+// Vectors in the barycentric ICRS frame, in AU: Sun to planet and observer (the Earth's center) to planet.
+const magnitude = (planet: typeof venus, name: Planet) => planetMagnitude(name, vecMinus(planet(time)[0], sun(time)[0]), vecMinus(planet(time)[0], earth(time)[0]), { year })
+
+console.log(magnitude(mercury, 'mercury')) // 1.831
+console.log(magnitude(venus, 'venus')) // -4.059
+console.log(magnitude(mars, 'mars')) // 1.304
+console.log(magnitude(jupiter, 'jupiter')) // -1.812
+console.log(magnitude(saturn, 'saturn')) // 0.783 — with the rings
+console.log(magnitude(uranus, 'uranus')) // 5.811
+console.log(magnitude(neptune, 'neptune')) // 7.765 — year 2026.49
+
+// Saturn's globe alone, without the rings.
+console.log(planetMagnitude('saturn', vecMinus(saturn(time)[0], sun(time)[0]), vecMinus(saturn(time)[0], earth(time)[0]), { rings: false })) // 0.846
+
+// A planet at zero phase angle: Sun, planet and observer on one line, 5 AU and 4 AU away.
+console.log(planetMagnitude('jupiter', [5, 0, 0], [4, 0, 0])) // -2.890 — base magnitude plus 5·log10(20)
+
+// Saturn with rings beyond a 6.5° phase angle is outside the model.
+console.log(planetMagnitude('saturn', [10, 0, 0], [10 * Math.cos(0.17), 10 * Math.sin(0.17), 0])) // NaN
+```
 
 ### Planetary Closest Approaches
 
@@ -3329,6 +3539,41 @@ ephemerisUncertaintyEllipse(covariance, [0, 0, 0]) // Error: geocentric directio
 
 ### Solar Eclipse Search and Classification
 
+A solar eclipse happens at new moon when the Moon's shadow reaches the Earth. It is total when the Moon's umbra reaches the surface (the Moon looks larger than the Sun), annular when only the antumbra does (the Moon looks smaller, leaving a ring), hybrid when the eclipse is annular in part of its track and total in another, and partial when only the penumbra touches the Earth. This topic gives the global classification of each eclipse; for the ground path and the view from a site, see Solar Eclipse Besselian Elements and the local solar eclipse topics.
+
+`nearestSolarEclipse(time, next)` finds the previous or next solar eclipse with Meeus's chapter 54 series. `next` selects the first eclipse strictly after `time` when true, and the last at or before it when false. It returns a `SolarEclipse` with the Meeus `lunation` index, `maximalTime` (the instant of greatest eclipse, a TT `Time`), `type` (`'total'`, `'annular'`, `'hybrid'`, or `'partial'`), `magnitude` (at greatest eclipse: the Moon-to-Sun apparent-diameter ratio for a central eclipse, and the fraction of the Sun's diameter covered otherwise), `gamma` (the least distance of the shadow axis from the Earth's center, in equatorial Earth radii, signed by the side), the umbral radius `u` and the penumbral radius `p` in the fundamental plane in Earth radii, and `central`, which is false for the rare eclipse whose axis misses the Earth's center but touches its limb, and for partial ones. A negative `u` is a total eclipse and a positive one an annular or hybrid one. It does not give Besselian elements, a track, or local contacts, and the series is accurate to about a minute in time. Convert the TT time with `utc` for civil time.
+
+```ts
+import { nearestSolarEclipse } from 'nebulosa/src/astronomy/bodies/sun'
+import { Timescale, timeToDate, timeYMDHMS, utc } from 'nebulosa/src/astronomy/time/time'
+
+// The first solar eclipse after 1 April 2024: the total eclipse of 8 April.
+const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 4, 1, 0, 0, 0, Timescale.UTC), true)
+
+console.log(eclipse.type, eclipse.central) // total true
+console.log(timeToDate(utc(eclipse.maximalTime)).slice(0, 6)) // [2024, 4, 8, 18, 17, 46] — UTC
+console.log(eclipse.magnitude) // 1.0553 — the Moon is 5.5% larger than the Sun
+console.log(eclipse.gamma) // 0.3437 — Earth radii, the axis passes north of the center
+console.log(eclipse.u, eclipse.p) // -0.0102 0.5359 — negative u: the umbra reaches the surface
+
+// The annular, hybrid, and partial cases.
+for (const [year, month, day] of [
+	[2023, 9, 1],
+	[2023, 4, 1],
+	[2025, 3, 1],
+] as const) {
+	const next = nearestSolarEclipse(timeYMDHMS(year, month, day, 0, 0, 0, Timescale.UTC), true)
+
+	console.log(next.type, timeToDate(utc(next.maximalTime)).slice(0, 5), next.magnitude)
+}
+// annular [2023, 10, 14, 17, 59] 0.9519
+// hybrid [2023, 4, 20, 4, 16] 1.0128
+// partial [2025, 3, 29, 10, 48] 0.9348
+
+// The previous eclipse, counted from the afternoon of 8 April 2024: the same event.
+console.log(nearestSolarEclipse(timeYMDHMS(2024, 4, 8, 19, 0, 0, Timescale.UTC), false).type) // total
+```
+
 ### Solar Parallax and Semidiameter
 
 The Sun's horizontal parallax is the angle the Earth's equatorial radius subtends at the Sun, and its semidiameter is the angular radius of the solar disk. Both scale inversely with the Earth-Sun distance, so they grow when the Earth is closer to the Sun.
@@ -3346,6 +3591,22 @@ console.log(toArcsec(sunSemidiameter(0.98329))) // 975.94 — arcseconds, near p
 ```
 
 ### Solar Saros Index
+
+A saros is a period of about 6585.3 days (18 years 11 days) after which the Sun, Moon, and lunar node return to nearly the same geometry, so a solar eclipse is followed by a similar one about 120° of longitude to the west. Solar eclipses are grouped into numbered saros series, with number 1 to 223 in the van den Bergh catalog. `solarSaros(time)` returns the saros series number of the lunation that contains `time`, using the Kluepfel formula on the Meeus lunation index. It is a numbering of the lunation, not a test that an eclipse occurs: use `nearestSolarEclipse` (see Solar Eclipse Search and Classification) to find the eclipse itself, and pass its maximal time here to get its series. For the lunar series see Lunar Saros Index.
+
+```ts
+import { nearestSolarEclipse, solarSaros } from 'nebulosa/src/astronomy/bodies/sun'
+import { Timescale, timeYMD, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+console.log(solarSaros(timeYMD(2024, 4, 8))) // 139 — the total eclipse of 8 April 2024
+console.log(solarSaros(timeYMD(2017, 8, 21))) // 145 — the "Great American" total eclipse of 21 August 2017
+console.log(solarSaros(timeYMD(1999, 8, 11))) // 145 — the same series, one saros (18 years) earlier
+
+// The series of the next eclipse, from its time of greatest eclipse.
+const eclipse = nearestSolarEclipse(timeYMDHMS(2025, 3, 1, 0, 0, 0, Timescale.UTC), true)
+
+console.log(solarSaros(eclipse.maximalTime)) // 149 — the partial eclipse of 29 March 2025
+```
 
 ### Spherical Coordinate Conversions
 
