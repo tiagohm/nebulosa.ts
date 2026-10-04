@@ -3,7 +3,7 @@ import type { Writable } from '../../core/types'
 import type { Vec3 } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 import type { Velocity } from '../../math/units/velocity'
-import { DEFAULT_REFRACTION_PARAMETERS, type Observed, type PositionAndVelocity, type RefractionParameters } from '../coordinates/astrometry'
+import { DEFAULT_REFRACTION_PARAMETERS, type Observed, type PositionAndVelocity, type PositionAndVelocityMut, type RefractionParameters } from '../coordinates/astrometry'
 import type { EquatorialCoordinate } from '../coordinates/coordinate'
 import { eraAtco13, eraStarpm, eraStarpmpv, eraStarpv } from '../coordinates/erfa/erfa'
 import { pmAngles, type Time, Timescale, timeJulianYear, tt, ut1 } from '../time/time'
@@ -34,7 +34,7 @@ export interface Star extends Readonly<EquatorialCoordinate> {
 }
 
 // A Star carrying its computed BCRS position+velocity tuple and the epoch they refer to.
-export type StarPositionAndVelocity = (Star & PositionAndVelocity) & {
+export type StarPositionAndVelocity = (Star & PositionAndVelocityMut) & {
 	// Reference epoch of the catalog data and the position/velocity.
 	readonly epoch: Time
 }
@@ -59,7 +59,7 @@ export function star(ra: Angle, dec: Angle, pmRA: Angle = 0, pmDEC: Angle = 0, p
 }
 
 // Computes the BCRS position and velocity of a star at time applying space motion.
-export function spaceMotion(star: StarPositionAndVelocity, time: Time): PositionAndVelocity {
+export function spaceMotion(star: StarPositionAndVelocity, time: Time): PositionAndVelocityMut {
 	// Use TT instead of TDB for speed without any significant impact on accuracy
 	const e = tt(star.epoch)
 	const a = tt(time)
@@ -75,7 +75,7 @@ export function spaceMotion(star: StarPositionAndVelocity, time: Time): Position
 // The catalog data is assumed to be referenced to J2000.0; a star carrying a
 // different epoch is propagated to J2000.0 first so the internal proper-motion
 // baseline stays consistent.
-export function observeStar<T extends Star | StarPositionAndVelocity>(star: T, time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], refraction?: RefractionParameters | false): ObservedStar<T> {
+export function observeStar<T extends Star | StarPositionAndVelocity>(star: T, time: Time, ebpv: PositionAndVelocity, ehp: Vec3 = ebpv[0], refraction?: RefractionParameters | false): ObservedStar<T> {
 	if (!time.location) throw new Error('time.location is required')
 	const a = tt(time)
 	const b = ut1(time)

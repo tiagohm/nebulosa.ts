@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { type PositionAndVelocity, relativePositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
+import { type PositionAndVelocity, type PositionAndVelocityMut, relativePositionAndVelocity, zeroPositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
 import { Naif } from '../../../src/astronomy/ephemeris/kernels/naif'
 import { moon } from '../../../src/astronomy/ephemeris/models/analytical/elpmpp02'
 import { earth, mars } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
@@ -13,7 +13,7 @@ const EARTH = naifEphemerisEndpoint(Naif.EARTH)
 const MOON = naifEphemerisEndpoint(Naif.MOON)
 
 test('reverse owns reusable output and never mutates the source singleton', () => {
-	const source: PositionAndVelocity = [
+	const source: PositionAndVelocityMut = [
 		[1, 2, 3],
 		[0.1, 0.2, 0.3],
 	]
@@ -39,7 +39,7 @@ test('composition owns reusable output without mutating either provider singleto
 		[1, 2, 3],
 		[0.1, 0.2, 0.3],
 	]
-	const secondScratch: PositionAndVelocity = [
+	const secondScratch: PositionAndVelocityMut = [
 		[4, 5, 6],
 		[0.4, 0.5, 0.6],
 	]
@@ -73,8 +73,8 @@ test('composition owns reusable output without mutating either provider singleto
 })
 
 test('relative paths subtract time-varying provider-local singletons without mutating them', () => {
-	const originScratch: PositionAndVelocity = [vecZero(), vecZero()]
-	const targetScratch: PositionAndVelocity = [vecZero(), vecZero()]
+	const originScratch = zeroPositionAndVelocity()
+	const targetScratch = zeroPositionAndVelocity()
 	const origin = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, (time) => {
 		originScratch[0][0] = 3 + timeSubtract(time, TIME)
 		originScratch[1][0] = 1

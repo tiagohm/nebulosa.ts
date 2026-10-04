@@ -1,7 +1,7 @@
 import { COS_OBL_J2000, DAYSPERJM, J2000, SIN_OBL_J2000 } from '../../../../core/constants'
 import { matMulVec } from '../../../../math/linear-algebra/mat3'
-import type { MutVec3 } from '../../../../math/linear-algebra/vec3'
-import type { PositionAndVelocity } from '../../../coordinates/astrometry'
+import { vecZero } from '../../../../math/linear-algebra/vec3'
+import type { PositionAndVelocityMut } from '../../../coordinates/astrometry'
 import { type Time, tt } from '../../../time/time'
 import { VSOP87E_EARTH_DATA, VSOP87E_JUPITER_DATA, VSOP87E_MARS_DATA, VSOP87E_MERCURY_DATA, VSOP87E_NEPTUNE_DATA, VSOP87E_SATURN_DATA, VSOP87E_SUN_DATA, VSOP87E_URANUS_DATA, VSOP87E_VENUS_DATA } from './vsop87e.data'
 
@@ -16,58 +16,67 @@ import { VSOP87E_EARTH_DATA, VSOP87E_JUPITER_DATA, VSOP87E_MARS_DATA, VSOP87E_ME
 // Output axes: ICRF equatorial, or dynamical ecliptic and equinox J2000; both have a barycentric origin.
 export type ReferenceFrame = 'icrf' | 'eclipticJ2000'
 
-// Computes fresh barycentric position (AU) and velocity (AU/day) vectors of the Sun at `time`,
+// Computes barycentric position (AU) and velocity (AU/day) vectors of the Sun at `time`,
 // evaluated in TT and expressed in `frame` (ICRF equatorial by default).
-export function sun(time: Time, frame: ReferenceFrame = 'icrf'): PositionAndVelocity {
-	return compute(time, VSOP87E_SUN_DATA, frame)
+// Overwrites and returns out when supplied; otherwise allocates two distinct vectors.
+export function sun(time: Time, frame: ReferenceFrame = 'icrf', out?: PositionAndVelocityMut) {
+	return compute(time, VSOP87E_SUN_DATA, frame, out)
 }
 
-// Computes fresh barycentric position (AU) and velocity (AU/day) vectors of Mercury at `time`,
+// Computes barycentric position (AU) and velocity (AU/day) vectors of Mercury at `time`,
 // evaluated in TT and expressed in `frame` (ICRF equatorial by default).
-export function mercury(time: Time, frame: ReferenceFrame = 'icrf'): PositionAndVelocity {
-	return compute(time, VSOP87E_MERCURY_DATA, frame)
+// Overwrites and returns out when supplied; otherwise allocates two distinct vectors.
+export function mercury(time: Time, frame: ReferenceFrame = 'icrf', out?: PositionAndVelocityMut) {
+	return compute(time, VSOP87E_MERCURY_DATA, frame, out)
 }
 
-// Computes fresh barycentric position (AU) and velocity (AU/day) vectors of Venus at `time`,
+// Computes barycentric position (AU) and velocity (AU/day) vectors of Venus at `time`,
 // evaluated in TT and expressed in `frame` (ICRF equatorial by default).
-export function venus(time: Time, frame: ReferenceFrame = 'icrf'): PositionAndVelocity {
-	return compute(time, VSOP87E_VENUS_DATA, frame)
+// Overwrites and returns out when supplied; otherwise allocates two distinct vectors.
+export function venus(time: Time, frame: ReferenceFrame = 'icrf', out?: PositionAndVelocityMut) {
+	return compute(time, VSOP87E_VENUS_DATA, frame, out)
 }
 
-// Computes fresh barycentric position (AU) and velocity (AU/day) vectors of Earth at `time`,
+// Computes barycentric position (AU) and velocity (AU/day) vectors of Earth at `time`,
 // evaluated in TT and expressed in `frame` (ICRF equatorial by default).
-export function earth(time: Time, frame: ReferenceFrame = 'icrf'): PositionAndVelocity {
-	return compute(time, VSOP87E_EARTH_DATA, frame)
+// Overwrites and returns out when supplied; otherwise allocates two distinct vectors.
+export function earth(time: Time, frame: ReferenceFrame = 'icrf', out?: PositionAndVelocityMut) {
+	return compute(time, VSOP87E_EARTH_DATA, frame, out)
 }
 
-// Computes fresh barycentric position (AU) and velocity (AU/day) vectors of Mars at `time`,
+// Computes barycentric position (AU) and velocity (AU/day) vectors of Mars at `time`,
 // evaluated in TT and expressed in `frame` (ICRF equatorial by default).
-export function mars(time: Time, frame: ReferenceFrame = 'icrf'): PositionAndVelocity {
-	return compute(time, VSOP87E_MARS_DATA, frame)
+// Overwrites and returns out when supplied; otherwise allocates two distinct vectors.
+export function mars(time: Time, frame: ReferenceFrame = 'icrf', out?: PositionAndVelocityMut) {
+	return compute(time, VSOP87E_MARS_DATA, frame, out)
 }
 
-// Computes fresh barycentric position (AU) and velocity (AU/day) vectors of Jupiter at `time`,
+// Computes barycentric position (AU) and velocity (AU/day) vectors of Jupiter at `time`,
 // evaluated in TT and expressed in `frame` (ICRF equatorial by default).
-export function jupiter(time: Time, frame: ReferenceFrame = 'icrf'): PositionAndVelocity {
-	return compute(time, VSOP87E_JUPITER_DATA, frame)
+// Overwrites and returns out when supplied; otherwise allocates two distinct vectors.
+export function jupiter(time: Time, frame: ReferenceFrame = 'icrf', out?: PositionAndVelocityMut) {
+	return compute(time, VSOP87E_JUPITER_DATA, frame, out)
 }
 
-// Computes fresh barycentric position (AU) and velocity (AU/day) vectors of Saturn at `time`,
+// Computes barycentric position (AU) and velocity (AU/day) vectors of Saturn at `time`,
 // evaluated in TT and expressed in `frame` (ICRF equatorial by default).
-export function saturn(time: Time, frame: ReferenceFrame = 'icrf'): PositionAndVelocity {
-	return compute(time, VSOP87E_SATURN_DATA, frame)
+// Overwrites and returns out when supplied; otherwise allocates two distinct vectors.
+export function saturn(time: Time, frame: ReferenceFrame = 'icrf', out?: PositionAndVelocityMut) {
+	return compute(time, VSOP87E_SATURN_DATA, frame, out)
 }
 
-// Computes fresh barycentric position (AU) and velocity (AU/day) vectors of Uranus at `time`,
+// Computes barycentric position (AU) and velocity (AU/day) vectors of Uranus at `time`,
 // evaluated in TT and expressed in `frame` (ICRF equatorial by default).
-export function uranus(time: Time, frame: ReferenceFrame = 'icrf'): PositionAndVelocity {
-	return compute(time, VSOP87E_URANUS_DATA, frame)
+// Overwrites and returns out when supplied; otherwise allocates two distinct vectors.
+export function uranus(time: Time, frame: ReferenceFrame = 'icrf', out?: PositionAndVelocityMut) {
+	return compute(time, VSOP87E_URANUS_DATA, frame, out)
 }
 
-// Computes fresh barycentric position (AU) and velocity (AU/day) vectors of Neptune at `time`,
+// Computes barycentric position (AU) and velocity (AU/day) vectors of Neptune at `time`,
 // evaluated in TT and expressed in `frame` (ICRF equatorial by default).
-export function neptune(time: Time, frame: ReferenceFrame = 'icrf'): PositionAndVelocity {
-	return compute(time, VSOP87E_NEPTUNE_DATA, frame)
+// Overwrites and returns out when supplied; otherwise allocates two distinct vectors.
+export function neptune(time: Time, frame: ReferenceFrame = 'icrf', out?: PositionAndVelocityMut) {
+	return compute(time, VSOP87E_NEPTUNE_DATA, frame, out)
 }
 
 // The coordinates of the main version VSOP87 and of the version A, B, and E are
@@ -96,9 +105,10 @@ const SINQ = -0.000000251521337759624621
 const REFERENCE_FRAME_MATRIX = [COSQ, -SINQ * COS_OBL_J2000, SINQ * SIN_OBL_J2000, SINQ, COSQ * COS_OBL_J2000, -COSQ * SIN_OBL_J2000, 0, SIN_OBL_J2000, COS_OBL_J2000] as const
 
 // Sums the VSOP87E series in `data` (indexed [power][coordinate] -> flat amplitude/phase/frequency
-// triples) at `time` in TT and forms the analytic velocity. Returns fresh barycentric position (AU)
-// and velocity (AU/day) vectors in `frame`, rotating the native ecliptic vectors only for ICRF output.
-function compute(time: Time, data: readonly number[][][], frame: ReferenceFrame): PositionAndVelocity {
+// triples) at `time` in TT and forms the analytic velocity. Returns barycentric position (AU)
+// and velocity (AU/day) in `frame`, rotating the native ecliptic vectors only for ICRF output.
+// Overwrites and returns out when supplied; otherwise allocates two distinct vectors.
+function compute(time: Time, data: readonly number[][][], frame: ReferenceFrame, out?: PositionAndVelocityMut): PositionAndVelocityMut {
 	const t = tt(time)
 
 	const m = new Float64Array(6)
@@ -106,10 +116,12 @@ function compute(time: Time, data: readonly number[][][], frame: ReferenceFrame)
 	m[1] = (t.day - J2000 + t.fraction) / DAYSPERJM
 	for (let i = 2; i <= 5; i++) m[i] = m[i - 1] * m[1]
 
-	const p: MutVec3 = [0, 0, 0]
-	const v: MutVec3 = [0, 0, 0]
+	const p = out?.[0] ?? vecZero()
+	const v = out?.[1] ?? vecZero()
 
 	for (let k = 0; k <= 2; k++) {
+		p[k] = 0
+		v[k] = 0
 		for (let e = 0; e <= 5; e++) {
 			let psum = 0
 
@@ -133,7 +145,10 @@ function compute(time: Time, data: readonly number[][][], frame: ReferenceFrame)
 		v[k] /= DAYSPERJM
 	}
 
-	if (frame === 'eclipticJ2000') return [p, v]
+	if (frame === 'icrf') {
+		matMulVec(REFERENCE_FRAME_MATRIX, p, p)
+		matMulVec(REFERENCE_FRAME_MATRIX, v, v)
+	}
 
-	return [matMulVec(REFERENCE_FRAME_MATRIX, p, p), matMulVec(REFERENCE_FRAME_MATRIX, v, v)]
+	return out ?? [p, v]
 }

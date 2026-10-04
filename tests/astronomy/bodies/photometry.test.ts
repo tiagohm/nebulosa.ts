@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
 import { planetMagnitude } from '../../../src/astronomy/bodies/photometry'
-import type { PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
+import type { PositionAndVelocityOverTime } from '../../../src/astronomy/coordinates/astrometry'
 import { earth, jupiter, mars, mercury, neptune, saturn, sun, uranus, venus } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
-import { Timescale, type Time, timeYMDHMS, toJulianEpoch } from '../../../src/astronomy/time/time'
+import { Timescale, timeYMDHMS, toJulianEpoch } from '../../../src/astronomy/time/time'
 import { type Vec3, vecMinus } from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
 
@@ -11,12 +11,12 @@ const NOW = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
 const YEAR = toJulianEpoch(NOW)
 
 // Sun -> planet vector at NOW.
-function sunToPlanet(body: (time: Time) => PositionAndVelocity) {
+function sunToPlanet(body: PositionAndVelocityOverTime) {
 	return vecMinus(body(NOW)[0], sun(NOW)[0])
 }
 
 // Earth -> planet vector at NOW.
-function earthToPlanet(body: (time: Time) => PositionAndVelocity) {
+function earthToPlanet(body: PositionAndVelocityOverTime) {
 	return vecMinus(body(NOW)[0], earth(NOW)[0])
 }
 

@@ -2,6 +2,7 @@ import { TAU } from '../../core/constants'
 import type { Vec3 } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import { JUPITER_ROTATION, JUPITER_SYSTEM_I, JUPITER_SYSTEM_II, type RotationElements, subObserverPoint } from '../bodies/orientation'
+import type { PositionOverTime } from '../coordinates/astrometry'
 import type { Time } from '../time/time'
 import { searchRoots, type TimeSearchOptions } from './search'
 
@@ -47,7 +48,7 @@ export function jupiterCentralMeridian(system: JovianSystem, time: Time, jupiter
 // anti-transits, where cos(centralMeridian - grsLongitude) < 0, are discarded. The coarse `step` must
 // stay well under half a rotation so consecutive zeros fall in separate brackets; it defaults to the
 // scanner's one hour, which is ample.
-export function greatRedSpotTransits(grsLongitude: Angle, jupiterToObserverAt: (time: Time) => Vec3, start: Time, stop: Time, options?: TimeSearchOptions): Time[] {
+export function greatRedSpotTransits(grsLongitude: Angle, jupiterToObserverAt: PositionOverTime, start: Time, stop: Time, options?: TimeSearchOptions): Time[] {
 	const crossings = searchRoots((time) => Math.sin(jupiterCentralMeridian('II', time, jupiterToObserverAt(time)) - grsLongitude), start, stop, options)
 	// Keep the transits (spot facing the observer); drop the anti-transits on the far side.
 	return crossings.filter((time) => Math.cos(jupiterCentralMeridian('II', time, jupiterToObserverAt(time)) - grsLongitude) > 0)

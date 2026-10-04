@@ -1,6 +1,7 @@
 import { AU_KM, SPEED_OF_LIGHT_AU_DAY, SUN_RADIUS_AU } from '../../core/constants'
 import { type Vec3, vecAngle, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalize, vecPlus } from '../../math/linear-algebra/vec3'
 import { brentRoot } from '../../math/numerical/optimization'
+import type { PositionAndVelocityOverTime } from '../coordinates/astrometry'
 import { callisto, europa, ganymede, io } from '../ephemeris/models/analytical/l12'
 import { dione, enceladus, iapetus, mimas, rhea, tethys, titan } from '../ephemeris/models/analytical/tass17'
 import { earth, jupiter, saturn, sun } from '../ephemeris/models/analytical/vsop87e'
@@ -34,7 +35,7 @@ export type MutualEventKind = 'occultation' | 'eclipse'
 // One satellite's ephemeris and physical radius.
 interface MoonData {
 	// Planetocentric position+velocity (AU, J2000 equatorial) from the satellite theory.
-	readonly ephemeris: (time: Time) => readonly [Vec3, Vec3]
+	readonly ephemeris: PositionAndVelocityOverTime
 	// Mean physical radius in AU.
 	readonly radius: number
 }
@@ -42,7 +43,7 @@ interface MoonData {
 // A planet and its moon set for the mutual-event finder.
 interface MutualSystem<M extends string> {
 	// Barycentric position of the planet (AU, ICRF) from VSOP87E.
-	readonly planet: (time: Time) => readonly [Vec3, Vec3]
+	readonly planet: PositionAndVelocityOverTime
 	// Ephemeris and radius of each moon.
 	readonly moons: Record<M, MoonData>
 	// The moons in orbital order, enumerated pairwise.

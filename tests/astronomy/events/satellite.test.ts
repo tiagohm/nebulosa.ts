@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { equatorial } from '../../../src/astronomy/coordinates/astrometry'
+import { equatorial, type PositionOverTime } from '../../../src/astronomy/coordinates/astrometry'
 import { eraNut06a, eraPnm06a, eraS2p } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { frameToFrame, ICRS, TEME } from '../../../src/astronomy/coordinates/frame'
 import { linearInterpolator, type EphemerisPoint } from '../../../src/astronomy/ephemeris/interpolation/ephemeris'
@@ -53,7 +53,7 @@ function sunAt(time: Time): MutVec3 {
 // two to three orders of magnitude cheaper than the raw provider while staying well under a
 // milliarcsecond over the window; query times outside [start, stop] are clamped to the nearest edge.
 // `sunAt` must return the geocentric Sun position (AU, ICRS), e.g. `sun(t)[0] - earth(t)[0]`.
-function cachedSun(sunAt: (time: Time) => Vec3, start: Time, stop: Time) {
+function cachedSun(sunAt: PositionOverTime, start: Time, stop: Time) {
 	const span = timeSubtract(stop, start)
 	// Default coarse Sun-sampling step: 30 minutes, in days.
 	const segments = Math.max(1, Math.ceil(span / (1800 * ONE_SECOND)))

@@ -1,6 +1,6 @@
 import { DEG2RAD, ONE_SECOND } from '../../core/constants'
-import type { Vec3 } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
+import type { PositionOverTime } from '../coordinates/astrometry'
 import type { GeographicPosition } from '../observer/location'
 import { type Time, timeShift, timeSubtract } from '../time/time'
 import { altitudeOf, riseTransitSet, STANDARD_HORIZON } from './horizon'
@@ -81,9 +81,8 @@ const ABSENT: CrossingSample = { visible: false, depression: 0 }
 // sunset) and measures the Sun's depression there. Returns undefined when the crossing does not exist.
 //
 // `sun` is the geocentric J2000/ICRS Sun direction sampler; `crossing` is the object's rise or set instant.
-function classifyCrossing(sun: (time: Time) => Vec3, location: GeographicPosition, crossing: Time | undefined, arcusVisionis: Angle): { morning: boolean; sample: CrossingSample } | undefined {
+function classifyCrossing(sun: PositionOverTime, location: GeographicPosition, crossing: Time | undefined, arcusVisionis: Angle): { morning: boolean; sample: CrossingSample } | undefined {
 	if (crossing === undefined) return undefined
-
 	const altitude = altitudeOf(sun(crossing), crossing, location)
 	// Sun ascending one second later means dawn (morning); descending means dusk (evening).
 	const later = timeShift(crossing, ONE_SECOND)
@@ -128,7 +127,7 @@ function HeliacalPhaseComparator(a: HeliacalPhase, b: HeliacalPhase) {
 // first visible day; the evening-rise and evening-set seasons yield the acronychal rising and heliacal
 // setting at their last visible day. Only the phenomena whose transition falls inside the window are
 // returned; results are chronological. A circumpolar or never-rising object returns none.
-export function heliacalPhases(body: (time: Time) => Vec3, sun: (time: Time) => Vec3, location: GeographicPosition, start: Time, stop: Time, { arcusVisionis = DEFAULT_ARCUS_VISIONIS, horizon = STANDARD_HORIZON, step, tolerance }: HeliacalPhaseOptions = {}): HeliacalPhase[] {
+export function heliacalPhases(body: PositionOverTime, sun: PositionOverTime, location: GeographicPosition, start: Time, stop: Time, { arcusVisionis = DEFAULT_ARCUS_VISIONIS, horizon = STANDARD_HORIZON, step, tolerance }: HeliacalPhaseOptions = {}): HeliacalPhase[] {
 	const span = timeSubtract(stop, start)
 	if (span <= 0) return []
 

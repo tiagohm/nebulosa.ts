@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
-import { cirsToIcrs, cirsToObserved, distance, equatorial, icrsToCirs, icrsToObserved, lightTime, lightTimeSolution, observedToCirs, parallacticAngle, phaseAngle, type PositionAndVelocity, type PositionAndVelocityOverTime, type PositionOverTime, refractedAltitude, relativePositionAndVelocity, separationFrom, topocentricDirection, unrefractedAltitude } from '../../../src/astronomy/coordinates/astrometry'
+import { cirsToIcrs, cirsToObserved, distance, equatorial, icrsToCirs, icrsToObserved, lightTime, lightTimeSolution, observedToCirs, parallacticAngle, phaseAngle, type PositionAndVelocity, type PositionAndVelocityMut, type PositionAndVelocityOverTime, type PositionOverTime, refractedAltitude, relativePositionAndVelocity, separationFrom, topocentricDirection, unrefractedAltitude, zeroPositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
 import { eraEpv00 } from '../../../src/astronomy/coordinates/erfa/earth'
 import { eraEors, eraPnm06a, eraS06, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
@@ -13,6 +13,28 @@ import { meter } from '../../../src/math/units/distance'
 test('distance is the position vector length in AU', () => {
 	expect(distance([3, 4, 0])).toBeCloseTo(5, 12)
 	expect(distance(vecZero())).toBe(0)
+})
+
+test('zero states allocate independent mutable position and velocity buffers', () => {
+	const first = zeroPositionAndVelocity()
+	const second = zeroPositionAndVelocity()
+	const view: PositionAndVelocity = first
+	expect(first).toEqual([
+		[0, 0, 0],
+		[0, 0, 0],
+	])
+	expect(first).not.toBe(second)
+	expect(first[0]).not.toBe(first[1])
+	expect(first[0]).not.toBe(second[0])
+	expect(first[1]).not.toBe(second[1])
+	first[0][0] = 1
+	first[1][1] = 2
+	expect(view[0][0]).toBe(1)
+	expect(view[1][1]).toBe(2)
+	expect(second).toEqual([
+		[0, 0, 0],
+		[0, 0, 0],
+	])
 })
 
 test('light time of one AU is about 499 seconds', () => {
@@ -45,8 +67,8 @@ test('position providers borrow their own independent singleton storage', () => 
 
 test('light-time solution preserves reception and final emission snapshots with provider-local storage', () => {
 	const time = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TDB)
-	const observerScratch: PositionAndVelocity = [vecZero(), vecZero()]
-	const targetScratch: PositionAndVelocity = [vecZero(), vecZero()]
+	const observerScratch = zeroPositionAndVelocity()
+	const targetScratch = zeroPositionAndVelocity()
 	const observer: PositionAndVelocityOverTime = () => {
 		observerScratch[0][0] = 0.1
 		observerScratch[1][0] = 0.02
@@ -82,11 +104,11 @@ test('light-time solution has a bounded iteration count and no direction at coin
 
 test('light-time iterations, sample counts, and owned snapshots', () => {
 	const time = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TDB)
-	const observerScratch: PositionAndVelocity = [
+	const observerScratch: PositionAndVelocityMut = [
 		[0.1, -0.02, 0.01],
 		[0.02, 0, 0],
 	]
-	const targetScratch: PositionAndVelocity = [
+	const targetScratch: PositionAndVelocityMut = [
 		[0, 0.3, -0.2],
 		[0.01, 0, 0],
 	]

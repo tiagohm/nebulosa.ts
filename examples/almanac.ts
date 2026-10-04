@@ -17,7 +17,7 @@ import { planetMagnitude, type Planet } from '../src/astronomy/bodies/photometry
 import { spaceMotion, star } from '../src/astronomy/bodies/star'
 import { carringtonRotationNumber, equationOfTime, nearestSolarEclipse, season } from '../src/astronomy/bodies/sun'
 // oxfmt-ignore
-import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, phaseAngle, refractedAltitude, relativePositionAndVelocity, separationFrom, unrefractedAltitude, type PositionAndVelocityOverTime } from '../src/astronomy/coordinates/astrometry'
+import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, phaseAngle, refractedAltitude, relativePositionAndVelocity, separationFrom, unrefractedAltitude, type PositionAndVelocityOverTime, type PositionOverTime } from '../src/astronomy/coordinates/astrometry'
 import { angularDistance, eclipticToEquatorial, equatorialFromJ2000, equatorialToEcliptic, equatorialToGalactic, equatorialToHorizontal, galacticToEquatorial, horizontalToEquatorial, zenith } from '../src/astronomy/coordinates/coordinate'
 import { annualAberration, observerState, radialVelocityCorrection } from '../src/astronomy/coordinates/correction'
 import { eraAnpm, eraC2s, eraLd, eraLdSun, eraPmpx, eraS2c, eraSeps, eraStarpm, eraStarpv } from '../src/astronomy/coordinates/erfa/erfa'
@@ -105,10 +105,11 @@ const TOPOCENTRIC_SUN_PATH = relativeEphemerisPath(GEOCENTRIC_SUN_PATH, OBSERVER
 const MOON_TO_SUN_PATH = relativeEphemerisPath(GEOCENTRIC_SUN_PATH, MOON_PATH)
 
 // Builds a geometric geocentric position provider once for repeated event samples.
-function planetAt(body: PositionAndVelocityOverTime, id: number) {
+function planetAt(body: PositionAndVelocityOverTime, id: number): PositionOverTime {
 	const path = relativeEphemerisPath(ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(id), body), EARTH_PATH)
-	return (time: Time) => path.stateAt(time)[0]
+	return (time) => path.stateAt(time)[0]
 }
+
 const VENUS_AT = planetAt(venus, Naif.VENUS)
 const MARS_AT = planetAt(mars, Naif.MARS)
 // Explicit demonstration window; each API accepts arbitrary start/stop.
@@ -869,7 +870,7 @@ function saturnRingOrientation() {
 // greatRedSpotTransits finds when the spot (at its observed System II longitude, supplied by the caller
 // from the ALPO/JUPOS bulletins) crosses it.
 function jupiterGreatRedSpotTransit() {
-	const jupiterToObserver = (time: Time) => vecMinus(earth(time)[0], jupiter(time)[0])
+	const jupiterToObserver: PositionOverTime = (time) => vecMinus(earth(time)[0], jupiter(time)[0])
 	const grsLongitude = deg(52) // observed System II longitude of the Great Red Spot
 	const cm = toDeg(jupiterCentralMeridian('II', NOW, jupiterToObserver(NOW)))
 	const [next] = greatRedSpotTransits(grsLongitude, jupiterToObserver, NOW, timeShift(NOW, 1))

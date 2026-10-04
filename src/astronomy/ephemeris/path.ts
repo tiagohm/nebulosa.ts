@@ -1,5 +1,5 @@
-import { vecNegate, vecPlus, vecZero } from '../../math/linear-algebra/vec3'
-import type { PositionAndVelocity, PositionAndVelocityOverTime } from '../coordinates/astrometry'
+import { vecNegate, vecPlus } from '../../math/linear-algebra/vec3'
+import { zeroPositionAndVelocity, type PositionAndVelocityMut, type PositionAndVelocityOverTime } from '../coordinates/astrometry'
 import { Naif } from './kernels/naif'
 
 // Synchronous center-to-target ephemeris paths in library-base ICRS/BCRS-oriented axes.
@@ -66,8 +66,8 @@ export function ephemerisPath(center: EphemerisEndpoint, target: EphemerisEndpoi
 // Reverses a center-to-target path without mutating the source provider. The returned
 // path reuses scratch (or an allocated workspace), which must not alias source storage.
 // A later evaluation may overwrite its state; retain it with ephemerisAt() or a copy.
-export function reverseEphemerisPath(path: EphemerisPath, scratch?: PositionAndVelocity): EphemerisPath {
-	scratch ??= [vecZero(), vecZero()]
+export function reverseEphemerisPath(path: EphemerisPath, scratch?: PositionAndVelocityMut): EphemerisPath {
+	scratch ??= zeroPositionAndVelocity()
 	return ephemerisPath(path.target, path.center, (time) => {
 		const pv = path.stateAt(time)
 		vecNegate(pv[0], scratch[0])
@@ -80,9 +80,9 @@ export function reverseEphemerisPath(path: EphemerisPath, scratch?: PositionAndV
 // Throws for mismatched endpoints, which would yield plausible but invalid geometry.
 // Neither source is mutated. The returned path reuses scratch (or an allocated workspace),
 // which must not alias source storage. Retain a state with ephemerisAt() or a copy.
-export function composeEphemerisPaths(first: EphemerisPath, second: EphemerisPath, scratch?: PositionAndVelocity): EphemerisPath {
+export function composeEphemerisPaths(first: EphemerisPath, second: EphemerisPath, scratch?: PositionAndVelocityMut): EphemerisPath {
 	if (!sameEphemerisEndpoint(first.target, second.center)) throw new Error('cannot compose ephemeris paths: first target does not match second center')
-	scratch ??= [vecZero(), vecZero()]
+	scratch ??= zeroPositionAndVelocity()
 	return ephemerisPath(first.center, second.target, (time) => {
 		const pva = first.stateAt(time)
 		const pvb = second.stateAt(time)
@@ -96,8 +96,8 @@ export function composeEphemerisPaths(first: EphemerisPath, second: EphemerisPat
 // Both states are sampled at the same epoch; no light-time correction is applied.
 // Source storage is not mutated. The returned path reuses scratch (or an allocated
 // workspace), which must not alias either source. Retain it with ephemerisAt() or a copy.
-export function relativeEphemerisPath(target: EphemerisPath, origin: EphemerisPath, scratch?: PositionAndVelocity): EphemerisPath {
+export function relativeEphemerisPath(target: EphemerisPath, origin: EphemerisPath, scratch?: PositionAndVelocityMut): EphemerisPath {
 	if (!sameEphemerisEndpoint(target.center, origin.center)) throw new Error('cannot form relative ephemeris path: centers do not match')
-	scratch ??= [vecZero(), vecZero()]
+	scratch ??= zeroPositionAndVelocity()
 	return composeEphemerisPaths(reverseEphemerisPath(origin, scratch), target, scratch)
 }

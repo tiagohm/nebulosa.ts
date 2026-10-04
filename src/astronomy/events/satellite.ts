@@ -6,7 +6,7 @@ import { clamp } from '../../math/numerical/math'
 import { brentMinimize } from '../../math/numerical/optimization'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
-import type { PositionAndVelocity } from '../coordinates/astrometry'
+import { zeroPositionAndVelocity, type PositionOverTime } from '../coordinates/astrometry'
 import { observerState } from '../coordinates/correction'
 import { frameToFrame, ICRS, ITRS, TEME, temeToItrf } from '../coordinates/frame'
 import { itrs } from '../coordinates/itrs'
@@ -37,7 +37,7 @@ import { searchExtrema, searchIntervals, searchRoots, type TimeSearchOptions } f
 const DEFAULT_STEP = 30 * ONE_SECOND
 
 // Geocentric Earth rest state, used to obtain the observer's inertial position/diurnal velocity.
-const ZERO_EARTH_STATE: PositionAndVelocity = [vecZero(), vecZero()]
+const ZERO_EARTH_STATE = zeroPositionAndVelocity()
 
 // Topocentric look angles of a satellite as seen by a ground observer.
 export interface SatelliteLookAngles {
@@ -249,12 +249,12 @@ function classifyShadowGeometry({ sunApparentRadius, earthApparentRadius, separa
 //
 // `sunAt` returns the geocentric Sun position (AU, ICRS) at a time, e.g. `sun(t)[0] - earth(t)[0]` from
 // the VSOP87E ephemeris. See classifyShadow for the umbra/penumbra/sunlit definition.
-export function satelliteShadowState(satrec: SatRec, sunAt: (time: Time) => Vec3, time: Time): SatelliteShadowState {
+export function satelliteShadowState(satrec: SatRec, sunAt: PositionOverTime, time: Time): SatelliteShadowState {
 	return classifyShadow(satelliteGeocentric(satrec, time), sunAt(time))
 }
 
 // True when the satellite's solar disk is unobscured by the Earth at an instant. See satelliteShadowState.
-export function isSatelliteSunlit(satrec: SatRec, sunAt: (time: Time) => Vec3, time: Time): boolean {
+export function isSatelliteSunlit(satrec: SatRec, sunAt: PositionOverTime, time: Time): boolean {
 	return satelliteShadowState(satrec, sunAt, time) === 'sunlit'
 }
 
@@ -267,7 +267,7 @@ export function isSatelliteSunlit(satrec: SatRec, sunAt: (time: Time) => Vec3, t
 // already in shadow at the start of the window the first interval has no `entry` (its duration is clipped
 // to the window start); if it is still in shadow at the end the last interval has no `exit` (clipped to
 // the window end). `sunAt` returns the geocentric Sun position (AU, ICRS) at a time.
-export function satelliteEclipses(satrec: SatRec, sunAt: (time: Time) => Vec3, start: Time, stop: Time, { boundary = 'umbra', step = DEFAULT_STEP, tolerance }: SatelliteEclipseOptions = {}): SatelliteEclipse[] {
+export function satelliteEclipses(satrec: SatRec, sunAt: PositionOverTime, start: Time, stop: Time, { boundary = 'umbra', step = DEFAULT_STEP, tolerance }: SatelliteEclipseOptions = {}): SatelliteEclipse[] {
 	const marginAt = (time: Time) => {
 		const { sunApparentRadius, earthApparentRadius, separation } = shadowGeometry(satelliteGeocentric(satrec, time), sunAt(time))
 		return boundary === 'umbra' ? separation - (earthApparentRadius - sunApparentRadius) : separation - (earthApparentRadius + sunApparentRadius)
@@ -334,7 +334,7 @@ const STANDARD_MAGNITUDE_OFFSET = -15.75
 // position (AU, ICRS) at a time. The reported magnitude is only meaningful while `illuminated` is true;
 // inside the Earth's umbra the satellite is dark. Refraction, atmospheric extinction near the horizon
 // and specular flares are not modelled.
-export function satelliteMagnitude(satrec: SatRec, location: GeographicPosition, sunAt: (time: Time) => Vec3, time: Time, standardMagnitude: number): SatelliteMagnitude {
+export function satelliteMagnitude(satrec: SatRec, location: GeographicPosition, sunAt: PositionOverTime, time: Time, standardMagnitude: number): SatelliteMagnitude {
 	const satellite = satelliteGeocentric(satrec, time)
 	const sun = sunAt(time)
 	// Observer geocentric position rotated from the Earth-fixed ITRS into the same ICRS frame as the
@@ -443,7 +443,7 @@ export function satelliteGroundFootprint(satrec: SatRec, time: Time, referenceRa
 // sunAt returns geocentric Sun base-frame position in AU. The TEME angular momentum r cross v
 // is rotated to ICRS; positive beta means Sun lies on its +normal side. No ephemeris is selected.
 // SGP4 propagation should remain near satrec's epoch. The input provider is not mutated.
-export function satelliteBetaAngle(satrec: SatRec, sunAt: (time: Time) => Vec3, time: Time): Angle {
+export function satelliteBetaAngle(satrec: SatRec, sunAt: PositionOverTime, time: Time): Angle {
 	const [position, velocity] = sgp4(time, satrec)
 	const normal = frameToFrame(vecCross(position, velocity), TEME, ICRS, time)
 	const solar = sunAt(time)
@@ -489,7 +489,7 @@ export interface SatelliteVisibleInterval {
 // independent-margin interval scanner; options.step (default 30 s) must resolve each crossing.
 // No refraction, extinction, flares, terrain, or penumbral attenuation is modelled. Partial passes
 // at window boundaries are retained. Returns only endpoints/altitude peaks, not dense tracks.
-export function satelliteVisibleIntervals(satrec: SatRec, location: GeographicPosition, sunAt: (time: Time) => Vec3, start: Time, stop: Time, options: SatelliteVisibilityOptions): SatelliteVisibleInterval[] {
+export function satelliteVisibleIntervals(satrec: SatRec, location: GeographicPosition, sunAt: PositionOverTime, start: Time, stop: Time, options: SatelliteVisibilityOptions): SatelliteVisibleInterval[] {
 	const scanOptions = { step: options.step ?? DEFAULT_STEP, tolerance: options.tolerance }
 	const satellite = vecZero()
 	const observer = vecZero()

@@ -1,5 +1,5 @@
 import { AU_M, DAYSEC, ELLIPSOID_PARAMETERS, PIOVERTWO, SPEED_OF_LIGHT } from '../../core/constants'
-import { type MutVec3, type Vec3, vecAngle, vecLength, vecMinus } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngle, vecLength, vecMinus, vecZero } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import type { Pressure } from '../../math/units/pressure'
@@ -20,17 +20,45 @@ import { frameAt, type Frame } from './frame'
 // share ERFA's bounded refraction model so forward/inverse round trips stay consistent.
 
 // Barycentric/heliocentric position (AU) and velocity (AU/day) pair, in ICRS/BCRS axes.
-export type PositionAndVelocity = [MutVec3, MutVec3]
+// Readonly access does not imply owned storage; lifetime is defined by its producer.
+export type PositionAndVelocity = readonly [Vec3, Vec3]
+
+// Mutable barycentric/heliocentric position (AU) and velocity (AU/day) pair, in ICRS/BCRS axes.
+// Used for writable results and output workspaces; position and velocity storage must be distinct.
+export type PositionAndVelocityMut = [MutVec3, MutVec3]
 
 // Sampler returning the position (AU) and velocity (AU/day) at the given time.
-// The returned state is borrowed and must not be mutated. A provider may reuse its
-// own storage on the next call; independent providers must not share mutable storage.
+// The state is borrowed/read-only and may be overwritten by the next call to the
+// same provider. Copy before retaining it; independent providers must not share mutable storage.
 export type PositionAndVelocityOverTime = (time: Time) => PositionAndVelocity
 
+// Mutable sampler returning the position (AU) and velocity (AU/day) at the given time.
+// Ownership and lifetime are defined by the provider; mutable typing alone does not promise a snapshot.
+export type PositionAndVelocityOverTimeMut = (time: Time) => PositionAndVelocityMut
+
 // Observer-to-body position in AU in library-base inertial axes at the requested epoch.
-// The returned vector is borrowed/read-only and may be overwritten by the next call
-// to the same provider. Independent providers must not share mutable output storage.
+// The vector is borrowed/read-only and may be overwritten by the next call to the
+// same provider. Independent providers must not share mutable output storage.
 export type PositionOverTime = (time: Time) => Vec3
+
+// Mutable observer-to-body position in AU in library-base inertial axes at the requested epoch.
+// Ownership and lifetime are defined by the provider; mutable typing alone does not promise a snapshot.
+export type PositionOverTimeMut = (time: Time) => MutVec3
+
+// Observer-to-body velocity in AU/day in library-base inertial axes at the requested epoch.
+// The vector is borrowed/read-only and may be overwritten by the next call to the
+// same provider. Independent providers must not share mutable output storage.
+export type VelocityOverTime = (time: Time) => Vec3
+
+// Mutable observer-to-body velocity in AU/day in library-base inertial axes at the requested epoch.
+// Ownership and lifetime are defined by the provider; mutable typing alone does not promise a snapshot.
+export type VelocityOverTimeMut = (time: Time) => MutVec3
+
+// Allocates a writable zero state in AU and AU/day with two distinct vectors.
+// Neither the pair nor its vectors share storage with another call.
+export function zeroPositionAndVelocity(): PositionAndVelocityMut {
+	return [vecZero(), vecZero()]
+}
 
 // A fixed-point light-time solution at reception time. All vectors are owned
 // snapshots in BCRS/ICRS axes: positions AU, velocity AU/day, and light time days.
@@ -141,7 +169,7 @@ export function equatorial(p: CartesianCoordinate): SphericalCoordinate {
 // direction. At an exact Cartesian pole (x = y = 0, z ≠ 0) longitude uses the
 // conventional atan2(0, 0) value 0 and both angular rates are omitted; near a pole
 // the true (possibly large) longitude rate is returned rather than clipped.
-export function sphericalPositionAndVelocity(pv: readonly [Vec3, Vec3]): SphericalPositionAndVelocity | undefined {
+export function sphericalPositionAndVelocity(pv: PositionAndVelocity): SphericalPositionAndVelocity | undefined {
 	const [x, y, z] = pv[0]
 	const [vx, vy, vz] = pv[1]
 	const rho2 = x * x + y * y
@@ -167,7 +195,7 @@ export function sphericalPositionAndVelocity(pv: readonly [Vec3, Vec3]): Spheric
 // rotating-frame drag term W = dR/dt·Rᵀ) is applied before the spherical rates
 // are formed, so an ITRS-rest state has near-zero Earth-fixed angular rates.
 // Pass `out` to reuse a transformed-state workspace; it may alias `pv`.
-export function frameSphericalPositionAndVelocity(pv: readonly [Vec3, Vec3], frame: Frame, time: Time, out?: PositionAndVelocity): SphericalPositionAndVelocity | undefined {
+export function frameSphericalPositionAndVelocity(pv: PositionAndVelocity, frame: Frame, time: Time, out?: PositionAndVelocityMut): SphericalPositionAndVelocity | undefined {
 	return sphericalPositionAndVelocity(frameAt(pv, frame, time, out))
 }
 
@@ -189,7 +217,7 @@ export function separationFrom(a: CartesianCoordinate, b: CartesianCoordinate): 
 // geocentric states (origin = Earth) or any body-to-body vector. The returned
 // vectors are freshly allocated; pass the resulting position to icrsToObserved or
 // equatorial as needed.
-export function relativePositionAndVelocity(target: PositionAndVelocityOverTime, origin: PositionAndVelocityOverTime, time: Time): PositionAndVelocity {
+export function relativePositionAndVelocity(target: PositionAndVelocityOverTime, origin: PositionAndVelocityOverTime, time: Time): PositionAndVelocityMut {
 	const [tp, tv] = target(time)
 	const [op, ov] = origin(time)
 	return [
@@ -318,7 +346,7 @@ export function phaseAngle(body: CartesianCoordinate, sun: CartesianCoordinate, 
 }
 
 // Computes CIRS coordinates from ICRS cartesian/spherical coordinates (assuming zero parallax and proper motion).
-export function icrsToCirs(icrs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
+export function icrsToCirs(icrs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: PositionAndVelocity, ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
 	const a = tt(time)
 
 	astrom ??= eraApci13(a.day, a.fraction, ebpv, ehp)
@@ -328,7 +356,7 @@ export function icrsToCirs(icrs: Vec3 | readonly [Angle, Angle], time: Time, ebp
 }
 
 // Computes ICRS coordinates from CIRS cartesian/spherical coordinates.
-export function cirsToIcrs(cirs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
+export function cirsToIcrs(cirs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: PositionAndVelocity, ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
 	const a = tt(time)
 
 	astrom ??= eraApci13(a.day, a.fraction, ebpv, ehp)
@@ -381,7 +409,7 @@ export function observedToCirs(azimuth: Angle, altitude: Angle, time: Time, refr
 	return eraAtoiq('A', azimuth, PIOVERTWO - altitude, astrom)
 }
 
-export function icrsToObserved(icrs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, location: GeographicCoordinate = time.location!, astrom?: EraAstrom): Observed {
+export function icrsToObserved(icrs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: PositionAndVelocity, ehp: Vec3 = ebpv[0], refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, location: GeographicCoordinate = time.location!, astrom?: EraAstrom): Observed {
 	if (!astrom) {
 		const a = tt(time)
 		const b = ut1(time)

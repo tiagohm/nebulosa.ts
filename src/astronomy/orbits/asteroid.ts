@@ -4,7 +4,7 @@ import { type Mat3, matMulVec, matTranspose } from '../../math/linear-algebra/ma
 import { type MutVec3, type Vec3, vecAngle, vecCross, vecCrossLength, vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalize, vecPlus } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
-import type { PositionAndVelocity } from '../coordinates/astrometry'
+import type { PositionAndVelocity, PositionAndVelocityMut } from '../coordinates/astrometry'
 import type { CartesianCoordinate } from '../coordinates/coordinate'
 import { type Time, Timescale, tdb, time, timeSubtract, timeYMD } from '../time/time'
 import { type MPCOrbit, type MPCOrbitComet, unpackDate } from './mpcorb'
@@ -355,7 +355,7 @@ export function trueAnomalyParabolic(p: Distance, mu: number, M: Angle): Angle {
 // Computes the state vectors from orbital elements.
 // Based on equations from this document:
 // https://web.archive.org/web/*/http://ccar.colorado.edu/asen5070/handouts/kep2cart_2002.doc
-function computePositionAndVelocityFromOrbitalElements(p: Distance, e: number, i: Angle, om: Angle, w: Angle, v: Angle, mu: number): PositionAndVelocity {
+function computePositionAndVelocityFromOrbitalElements(p: Distance, e: number, i: Angle, om: Angle, w: Angle, v: Angle, mu: number): PositionAndVelocityMut {
 	// Hyperbolic true anomaly cannot exceed the asymptote 2*atan(sqrt((e+1)/(e-1))), equal to
 	// acos(-1/e) in exact arithmetic. Compare against the atan form so a value produced by
 	// trueAnomalyHyperbolic, whose tanh saturates, is not rejected by a 1e-14 acos rounding gap.
@@ -445,7 +445,7 @@ function propagationKepler(x: number, f: number, br0: number, b2rv: number, bq: 
  * @param t1 `Time` to propagate to.
  * @param mu Gravitational parameter in units that match the other arguments.
  */
-function propagate(position: CartesianCoordinate, velocity: CartesianCoordinate, t0: Time, t1: Time, mu: number | PropagationParameters): PositionAndVelocity {
+function propagate(position: CartesianCoordinate, velocity: CartesianCoordinate, t0: Time, t1: Time, mu: number | PropagationParameters): PositionAndVelocityMut {
 	const { f, maxc, br0, b2rv, bq, qovr0 } = typeof mu === 'number' ? propagationParameters(position, velocity, mu) : mu
 
 	let bound: number

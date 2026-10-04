@@ -5,7 +5,7 @@ import type { Point } from '../../../math/numerical/geometry'
 import { clamp } from '../../../math/numerical/math'
 import { type RootFindingOptions, bisection, brentRoot } from '../../../math/numerical/optimization'
 import { normalizeAngle, normalizePI, type Angle } from '../../../math/units/angle'
-import type { PositionAndVelocity, PositionAndVelocityOverTime } from '../../coordinates/astrometry'
+import type { PositionAndVelocity, PositionAndVelocityMut, PositionAndVelocityOverTime } from '../../coordinates/astrometry'
 import type { EquatorialCoordinate } from '../../coordinates/coordinate'
 import { eraEpv00 } from '../../coordinates/erfa/earth'
 import { eraAb, eraP2s, eraEpj } from '../../coordinates/erfa/erfa'
@@ -182,7 +182,7 @@ function earth(time: Time) {
 }
 
 // Barycentric Sun position and velocity (AU, AU/day): Earth barycentric minus heliocentric, at TT.
-function sun(time: Time): PositionAndVelocity {
+function sun(time: Time): PositionAndVelocityMut {
 	const { day, fraction } = tt(time)
 	const [pvb, pvh] = eraEpv00(day, fraction)
 	return [vecMinus(pvb[0], pvh[0]), vecMinus(pvb[1], pvh[1])]

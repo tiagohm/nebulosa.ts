@@ -2,7 +2,7 @@ import { DAYMIN, DEG2RAD, PI, TAU } from '../../../core/constants'
 import type { Angle } from '../../../math/units/angle'
 import { kilometer } from '../../../math/units/distance'
 import { kilometerPerSecond } from '../../../math/units/velocity'
-import type { PositionAndVelocity } from '../../coordinates/astrometry'
+import type { PositionAndVelocityMut } from '../../coordinates/astrometry'
 import { isLeapYear } from '../../time/temporal'
 import { greenwichMeanSiderealTime, type Time, Timescale, timeSubtract, timeToDate, timeYMDHMS, utc } from '../../time/time'
 
@@ -485,7 +485,7 @@ export function satelliteRecordErrorMessage(error: SatRecError) {
 
 // Propagates a TLE, OMM, or precomputed SGP4 record to a Julian day in TEME.
 // Direct TLE/OMM arguments use the WGS-72 constant set; pass a SatRec to propagate with another model.
-export function sgp4(time: Time, source: TLE | OMM | SatRec, meanElements?: MeanElements): PositionAndVelocity {
+export function sgp4(time: Time, source: TLE | OMM | SatRec, meanElements?: MeanElements): PositionAndVelocityMut {
 	const satrec = isSatRec(source) ? source : isTLE(source) ? recordFromTLE(source) : recordFromOMM(source)
 	const result = sgp4Propagate(satrec, timeSubtract(time, satrec.epoch, Timescale.UTC) * DAYMIN, meanElements)
 

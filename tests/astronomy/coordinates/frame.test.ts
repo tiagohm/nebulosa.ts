@@ -1,13 +1,33 @@
 import { expect, test } from 'bun:test'
-import type { PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
+import { zeroPositionAndVelocity, type PositionAndVelocity, type PositionAndVelocityMut } from '../../../src/astronomy/coordinates/astrometry'
 import { eraC2s, eraNut06a, eraPmat06, eraPnm06a, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 // oxfmt-ignore
 import { CIRS, cirs, ECLIPTIC, ecliptic, ECLIPTIC_B1950, eclipticB1950, ECLIPTIC_J2000, eclipticJ2000, FK4, fk4, FK5, fk5, fk5Frame, fk5ToIcrs, type Frame, frameAt, frameRotationAt, frameToBase, frameToFrame, GALACTIC, galactic, ICRS, icrs, icrsToFk5, ITRS, itrs, ITRS_INSTANTANEOUS, itrsInstantaneous, itrfToTeme, itrfToTemeByGmst, MEAN_ECLIPTIC_OF_DATE, meanEclipticOfDate, MEAN_EQUATOR_AND_EQUINOX_AT_B1950, meanEquatorAndEquinoxAtB1950, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, meanEquatorAndEquinoxOfDate, precessionMatrixCapitaine, supergalactic, SUPERGALACTIC, TEME, teme, temeToItrf, temeToItrfByGmst, TIRS, tirs, TRUE_EQUATOR_AND_EQUINOX_OF_DATE, trueEquatorAndEquinoxOfDate } from '../../../src/astronomy/coordinates/frame'
 import { type Time, type TimeProviders, Timescale, timeJulianYear, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { ANGVEL_PER_DAY, DAYSEC, EARTH_DRDT_TIMES_RT_MATRIX } from '../../../src/core/constants'
 import { type Mat3, matMinus, matMul, matMulScalar, matMulTranspose, matMulVec, matRotX, matRotZ } from '../../../src/math/linear-algebra/mat3'
-import { type MutVec3, type Vec3, vecDot, vecMinus, vecMulScalar } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecDot, vecMinus, vecMulScalar, vecXAxis, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { formatAZ, normalizeAngle, parseAngle } from '../../../src/math/units/angle'
+
+test('frame transforms accept deeply readonly states without mutating their input', () => {
+	const input: PositionAndVelocity = Object.freeze([Object.freeze([0.4, -0.6, 0.3] as const), Object.freeze([1e-4, 2e-4, -3e-4] as const)] as const)
+	const expected = frameAt(input, ITRS, TIME)
+	const out = zeroPositionAndVelocity()
+	expect(frameAt(input, ITRS, TIME, out)).toBe(out)
+	for (let axis = 0; axis < 3; axis++) {
+		expect(out[0][axis]).toBeCloseTo(expected[0][axis], 14)
+		expect(out[1][axis]).toBeCloseTo(expected[1][axis], 14)
+	}
+	expect(frameToBase(expected, ITRS, TIME, out)).toBe(out)
+	for (let axis = 0; axis < 3; axis++) {
+		expect(out[0][axis]).toBeCloseTo(input[0][axis], 14)
+		expect(out[1][axis]).toBeCloseTo(input[1][axis], 14)
+	}
+	expect(input).toEqual([
+		[0.4, -0.6, 0.3],
+		[1e-4, 2e-4, -3e-4],
+	])
+})
 
 test('precession matrix capitaine', () => {
 	const a = timeYMDHMS(2014, 10, 7, 12, 0, 0, Timescale.TT)
@@ -156,10 +176,7 @@ test('teme<->itrf state round trip with polar motion', () => {
 
 test('teme to itrf adds the earth-rotation velocity term', () => {
 	// With zero TEME velocity the ITRF velocity is purely the rotating-frame term (dR/dt R^T) r = -(omega x r).
-	const state: PositionAndVelocity = [
-		[7000, 1000, -2000],
-		[0, 0, 0],
-	]
+	const state: PositionAndVelocity = [[7000, 1000, -2000], vecZero()]
 	const [pPef, vPef] = temeToItrfByGmst(state, 1.234)
 
 	expect(vPef[0]).toBeCloseTo(ANGVEL_PER_DAY * pPef[1], 9)
@@ -264,10 +281,7 @@ test('frameAt and frameToBase write into an output parameter', () => {
 	expect(written).toBe(outVec)
 	for (let i = 0; i < 3; i++) expect(outVec[i]).toBeCloseTo(fresh[i], 15)
 
-	const outState: PositionAndVelocity = [
-		[0, 0, 0],
-		[0, 0, 0],
-	]
+	const outState = zeroPositionAndVelocity()
 	const freshState = frameAt(state, ITRS, TIME)
 	const writtenState = frameAt(state, ITRS, TIME, outState)
 	expect(writtenState).toBe(outState)
@@ -276,10 +290,7 @@ test('frameAt and frameToBase write into an output parameter', () => {
 		expect(outState[1][i]).toBeCloseTo(freshState[1][i], 15)
 	}
 
-	const baseOut: PositionAndVelocity = [
-		[0, 0, 0],
-		[0, 0, 0],
-	]
+	const baseOut = zeroPositionAndVelocity()
 	const frameState = frameAt(state, ITRS, TIME)
 	const baseFresh = frameToBase(frameState, ITRS, TIME)
 	const baseWritten = frameToBase(frameState, ITRS, TIME, baseOut)
@@ -295,7 +306,7 @@ test('frameToFrame supports an in-place state transform through a rotating frame
 		[0.4, -0.6, 0.3],
 		[1e-4, 2e-4, -3e-4],
 	]
-	const inPlace: PositionAndVelocity = [[...original[0]], [...original[1]]]
+	const inPlace: PositionAndVelocityMut = [[...original[0]], [...original[1]]]
 	const expected = frameToFrame(original, ICRS, ITRS, TIME)
 	const result = frameToFrame(inPlace, ICRS, ITRS, TIME, inPlace)
 	expect(result).toBe(inPlace)
@@ -363,20 +374,14 @@ test('ITRS_INSTANTANEOUS matches ITRS closely but uses the exact drift term', ()
 test('TIRS applies the earth-rotation velocity term', () => {
 	// TIRS is Earth-fixed apart from polar motion, so a crust-fixed ITRS rest
 	// state must have near-zero TIRS velocity (only polar-motion rate remains).
-	const itrsRest: PositionAndVelocity = [
-		[1, 0, 0],
-		[0, 0, 0],
-	]
+	const itrsRest: PositionAndVelocity = [vecXAxis(), vecZero()]
 	const gcrs = frameToFrame(itrsRest, ITRS, ICRS, TIME)
 	const tirsFromItrs = frameToFrame(gcrs, ICRS, TIRS, TIME)
 	// Without W the TIRS speed would be ~ω|r|; polar-motion residual is ~1e-6 relative.
 	expect(Math.hypot(...tirsFromItrs[1])).toBeLessThan(1e-3 * ANGVEL_PER_DAY)
 
 	// A GCRS rest state in TIRS is the rotating-frame drag W · p.
-	const gcrsRest: PositionAndVelocity = [
-		[1, 0, 0],
-		[0, 0, 0],
-	]
+	const gcrsRest: PositionAndVelocity = [vecXAxis(), vecZero()]
 	const tirsFromGcrs = frameAt(gcrsRest, TIRS, TIME)
 	expect(tirsFromGcrs[1][0]).toBeCloseTo(ANGVEL_PER_DAY * tirsFromGcrs[0][1], 12)
 	expect(tirsFromGcrs[1][1]).toBeCloseTo(-ANGVEL_PER_DAY * tirsFromGcrs[0][0], 12)

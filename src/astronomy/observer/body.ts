@@ -1,7 +1,8 @@
-import { type MutVec3, type Vec3, vecNormalizeMut } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecNormalizeMut, vecZero } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
-import type { PositionAndVelocity, PositionAndVelocityOverTime } from '../coordinates/astrometry'
+import { zeroPositionAndVelocity, type PositionAndVelocityMut, type PositionAndVelocityOverTime, type PositionAndVelocityOverTimeMut } from '../coordinates/astrometry'
+import type { CartesianCoordinate } from '../coordinates/coordinate'
 import { frameToBase, type Frame } from '../coordinates/frame'
 import type { Time } from '../time/time'
 
@@ -16,12 +17,12 @@ import type { Time } from '../time/time'
 
 // Zero body-fixed velocity of a crust-fixed point. frameToBase reads it and writes the inertial
 // velocity into a separate output, so this shared rest vector is not mutated.
-const BODY_FIXED_REST: Vec3 = [0, 0, 0]
+const BODY_FIXED_REST = vecZero()
 
 // Reference tri-axial ellipsoid in a body-fixed frame.
 export interface BodyShape {
 	// Semi-axes along body-fixed +X, +Y and +Z, in AU.
-	readonly radii: readonly [Distance, Distance, Distance]
+	readonly radii: CartesianCoordinate
 }
 
 // A crust-fixed point in planetocentric coordinates on `shape`, oriented by `frame`.
@@ -104,7 +105,7 @@ export function bodySurfaceNormal(location: BodySurfaceLocation, out: MutVec3 = 
 // contributes no rotational surface velocity. Pass `out` to reuse a state pair;
 // `out` may alias a previous return from this function. The result is relative to the body
 // center, in the library base (GCRS/ICRS-oriented) axes.
-export function bodySurfaceState(location: BodySurfaceLocation, time: Time, out?: PositionAndVelocity): PositionAndVelocity {
+export function bodySurfaceState(location: BodySurfaceLocation, time: Time, out?: PositionAndVelocityMut): PositionAndVelocityMut {
 	return frameToBase([bodyFixedPosition(location), BODY_FIXED_REST], location.frame, time, out)
 }
 
@@ -114,11 +115,8 @@ export function bodySurfaceState(location: BodySurfaceLocation, time: Time, out?
 // barycentric ICRS/BCRS axes, so the surface point can be passed anywhere a body ephemeris is
 // already accepted. Each call allocates a fresh state pair; the body-fixed point stays cached
 // on `location`.
-export function bodySurfacePositionAndVelocity(body: PositionAndVelocityOverTime, location: BodySurfaceLocation): PositionAndVelocityOverTime {
-	const surface: PositionAndVelocity = [
-		[0, 0, 0],
-		[0, 0, 0],
-	]
+export function bodySurfacePositionAndVelocity(body: PositionAndVelocityOverTime, location: BodySurfaceLocation): PositionAndVelocityOverTimeMut {
+	const surface = zeroPositionAndVelocity()
 
 	return (time) => {
 		const [bp, bv] = body(time)

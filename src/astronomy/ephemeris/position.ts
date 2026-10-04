@@ -1,8 +1,8 @@
-import { type Vec3, vecClone, vecDivScalar } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecClone, vecDivScalar, vecFill, vecZero } from '../../math/linear-algebra/vec3'
 import { normalizeAngle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import { applyApparentDirectionCorrections, type LightDeflectorSnapshot } from '../coordinates/apparent'
-import { DEFAULT_LIGHT_TIME_ITERATIONS, equatorial, frameSphericalPositionAndVelocity, lightTimeSolution, type PositionAndVelocity, sphericalPositionAndVelocity, type SphericalPositionAndVelocity } from '../coordinates/astrometry'
+import { DEFAULT_LIGHT_TIME_ITERATIONS, equatorial, frameSphericalPositionAndVelocity, lightTimeSolution, type PositionAndVelocityMut, sphericalPositionAndVelocity, type SphericalPositionAndVelocity } from '../coordinates/astrometry'
 import type { SphericalCoordinate } from '../coordinates/coordinate'
 import { frameAt, type Frame } from '../coordinates/frame'
 import type { Time } from '../time/time'
@@ -165,31 +165,37 @@ export function apparentPosition(position: AstrometricPosition, options?: Epheme
 // Rotates a geometric AU/AU-day state from the library base into a frame at its
 // epoch. Rotating frames include the W = dR/dt·Rᵀ velocity term. Writes into
 // `out` when given (which may alias the input vectors); otherwise allocates.
-export function geometricPositionInFrame(position: GeometricPosition, frame: Frame, out?: PositionAndVelocity): PositionAndVelocity {
+export function geometricPositionInFrame(position: GeometricPosition, frame: Frame, out?: PositionAndVelocityMut): PositionAndVelocityMut {
 	return frameAt([position.position, position.velocity], frame, position.time, out)
 }
 
 // Rotates only the unit direction of an astrometric or apparent stage at its
-// reception epoch. Returns a fresh vector; no velocity or frame-origin shift is inferred.
-export function directionPositionInFrame(position: DirectionPosition, frame: Frame): Vec3 {
-	return frameAt(position.direction, frame, position.time)
+// reception epoch. Writes into and returns out when supplied (it may alias a writable
+// input direction); otherwise allocates. No velocity or frame-origin shift is inferred.
+export function directionPositionInFrame(position: DirectionPosition, frame: Frame, out?: MutVec3): Vec3 {
+	return frameAt(position.direction, frame, position.time, out)
 }
 
 // Converts a base-axis Cartesian position (AU) into right ascension (radians in
 // [0, TAU)), declination (radians), and distance (AU). equatorial() leaves
-// longitude in (-PI, PI].
-function normalizedEquatorial(cartesian: Vec3): SphericalCoordinate {
+// longitude in (-PI, PI]. Overwrites and returns out, which may alias cartesian;
+// allocates a fresh vector when out is omitted.
+function normalizedEquatorial(cartesian: Vec3, out: MutVec3 = vecZero()): SphericalCoordinate {
 	const [rightAscension, declination, distance] = equatorial(cartesian)
-	return [normalizeAngle(rightAscension), declination, distance]
+	return vecFill(out, normalizeAngle(rightAscension), declination, distance)
 }
 
 // Converts a base-axis position stage into right ascension (radians in [0, TAU)),
 // declination (radians), and distance (AU). Direction stages use their separately
 // retained astrometric distance; no Cartesian velocity is inferred from them.
-export function equatorialPosition(position: GeometricPosition | DirectionPosition): SphericalCoordinate {
-	if (position.kind === 'geometric') return normalizedEquatorial(position.position)
+// Writes into and returns out when supplied (it may alias a writable position or
+// direction vector); otherwise allocates a fresh vector.
+export function equatorialPosition(position: GeometricPosition | DirectionPosition, out?: MutVec3): SphericalCoordinate {
+	if (position.kind === 'geometric') return normalizedEquatorial(position.position, out)
 	const d = position.distance
-	return normalizedEquatorial([position.direction[0] * d, position.direction[1] * d, position.direction[2] * d])
+	out ??= vecZero()
+	vecFill(out, position.direction[0] * d, position.direction[1] * d, position.direction[2] * d)
+	return normalizedEquatorial(out, out)
 }
 
 // Converts only a geometric full state into spherical longitude/latitude/distance

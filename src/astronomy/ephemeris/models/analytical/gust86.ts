@@ -1,7 +1,7 @@
 import { DAYSPERJY, DEG2RAD } from '../../../../core/constants'
 import { matMulVec } from '../../../../math/linear-algebra/mat3'
 import type { NumberArray } from '../../../../math/numerical/math'
-import type { PositionAndVelocity } from '../../../coordinates/astrometry'
+import type { PositionAndVelocityMut } from '../../../coordinates/astrometry'
 import { type Time, tt } from '../../../time/time'
 import { ellipticToRectangularN } from '../../ephemeris'
 
@@ -339,7 +339,7 @@ export function miranda(time: Time) {
 // Computes the J2000-equatorial position (AU) and velocity (AU/day) of a Uranian satellite at the
 // given time using GUST86. `index` selects the body (0 Ariel, 1 Umbriel, 2 Titania, 3 Oberon,
 // 4 Miranda). Returned vectors alias the internal conversion buffers.
-export function gust86(time: Time, index: number): PositionAndVelocity {
+export function gust86(time: Time, index: number): PositionAndVelocityMut {
 	time = tt(time)
 	const td = time.day - 2444239.5 + time.fraction
 

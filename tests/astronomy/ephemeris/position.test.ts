@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { SUN_LIGHT_DEFLECTOR_LIMITER, SUN_LIGHT_DEFLECTOR_MASS, apparentDirection } from '../../../src/astronomy/coordinates/apparent'
-import { topocentricDirection, type PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
+import { topocentricDirection, zeroPositionAndVelocity, type PositionAndVelocity, type PositionAndVelocityMut } from '../../../src/astronomy/coordinates/astrometry'
 import { annualAberration } from '../../../src/astronomy/coordinates/correction'
 import { eraLd } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { CIRS, ECLIPTIC_J2000, GALACTIC, ICRS, ITRS, frameAt, frameToBase } from '../../../src/astronomy/coordinates/frame'
@@ -18,7 +18,7 @@ const EARTH = naifEphemerisEndpoint(Naif.EARTH)
 const MARS = naifEphemerisEndpoint(Naif.MARS)
 
 test('ephemerisAt snapshots provider-local singleton storage', () => {
-	const scratch: PositionAndVelocity = [vecZero(), vecZero()]
+	const scratch = zeroPositionAndVelocity()
 	const path = ephemerisPath(EARTH, MARS, (time) => {
 		scratch[0][0] = timeSubtract(time, TIME)
 		scratch[1][0] = 2 * timeSubtract(time, TIME)
@@ -39,12 +39,34 @@ test('ephemerisAt snapshots provider-local singleton storage', () => {
 	expect(second.velocity[0]).toBe(4)
 })
 
+test('equatorial outputs reuse one buffer for every position stage and support in-place conversion', () => {
+	const target = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, () => [[0.8, -0.4, 0.3], vecZero()])
+	const observer = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => [vecZero(), vecZero()])
+	const geometric = ephemerisAt(target, TIME)
+	const astrometric = observeEphemeris(observer, target, TIME)!
+	const apparent = apparentPosition(astrometric, { aberration: false })
+	const out: MutVec3 = [9, 9, 9]
+	for (const position of [geometric, astrometric, apparent]) {
+		const input = position.kind === 'geometric' ? position.position : position.direction
+		const original = vecClone(input)
+		const expected = equatorialPosition(position)
+		const actual = equatorialPosition(position, out)
+		expect(actual).toBe(out)
+		for (let axis = 0; axis < 3; axis++) expect(actual[axis]).toBeCloseTo(expected[axis], 14)
+		expect(input).toEqual(original)
+		const inPlace = vecClone(input)
+		const aliased = position.kind === 'geometric' ? { ...position, position: inPlace } : { ...position, direction: inPlace }
+		expect(equatorialPosition(aliased, inPlace)).toBe(inPlace)
+		for (let axis = 0; axis < 3; axis++) expect(inPlace[axis]).toBeCloseTo(expected[axis], 14)
+	}
+})
+
 test('retarded observation uses SSB states and owns every vector', () => {
-	const observerScratch: PositionAndVelocity = [
+	const observerScratch: PositionAndVelocityMut = [
 		[0.1, 0, 0],
 		[0.01, 0, 0],
 	]
-	const targetScratch: PositionAndVelocity = [
+	const targetScratch: PositionAndVelocityMut = [
 		[0, 0.5, 0],
 		[0.001, 0, 0],
 	]
@@ -128,7 +150,7 @@ test('frame and equatorial helpers preserve stage-specific physical quantities',
 		expect(actualState[0][axis]).toBeCloseTo(expectedState[0][axis], 14)
 		expect(actualState[1][axis]).toBeCloseTo(expectedState[1][axis], 14)
 	}
-	const workspace: PositionAndVelocity = [vecZero(), vecZero()]
+	const workspace = zeroPositionAndVelocity()
 	expect(geometricPositionInFrame(geometric, ITRS, workspace)).toBe(workspace)
 	const rotated = directionPositionInFrame(astrometric, ITRS)
 	const expectedDirection = frameAt(astrometric.direction, ITRS, TIME)
@@ -218,7 +240,7 @@ test('observation is SSB-only, unit, and has no public velocity', () => {
 })
 
 test('deflector snapshots, ordering inputs, and the absence of a hidden ephemeris', () => {
-	const sunScratch: PositionAndVelocity = [
+	const sunScratch: PositionAndVelocityMut = [
 		[-1, 0.1, 0],
 		[0, 0.001, 0],
 	]
@@ -388,6 +410,12 @@ test('frame helpers own outputs and keep the rotating-frame velocity term', () =
 		const expected = frameAt(observed.direction, frame, TIME)
 		expect(directed).not.toBe(observed.direction)
 		for (let axis = 0; axis < 3; axis++) expect(directed[axis]).toBeCloseTo(expected[axis], 14)
+		const out = vecZero()
+		expect(directionPositionInFrame(observed, frame, out)).toBe(out)
+		for (let axis = 0; axis < 3; axis++) expect(out[axis]).toBeCloseTo(expected[axis], 14)
+		const inPlace = vecClone(observed.direction)
+		expect(directionPositionInFrame({ ...observed, direction: inPlace }, frame, inPlace)).toBe(inPlace)
+		for (let axis = 0; axis < 3; axis++) expect(inPlace[axis]).toBeCloseTo(expected[axis], 14)
 	}
 	expect(observed.direction[0]).toBe(original[0])
 	expect(observed.direction[1]).toBe(original[1])
@@ -402,7 +430,7 @@ test('frame helpers own outputs and keep the rotating-frame velocity term', () =
 	for (let axis = 0; axis < 3; axis++) expect(rotated[0][axis]).toBeCloseTo(rotationOnly[axis], 14)
 	const velocityOnly = frameAt([geometric.position, geometric.velocity] as const, { rotationAt: ITRS.rotationAt }, TIME)
 	expect(Math.hypot(rotated[1][0] - velocityOnly[1][0], rotated[1][1] - velocityOnly[1][1], rotated[1][2] - velocityOnly[1][2])).toBeGreaterThan(1e-6)
-	const workspace: PositionAndVelocity = [vecZero(), vecZero()]
+	const workspace = zeroPositionAndVelocity()
 	expect(geometricPositionInFrame(geometric, ECLIPTIC_J2000, workspace)).toBe(workspace)
 	const position = vecClone(geometric.position)
 	const velocity = vecClone(geometric.velocity)

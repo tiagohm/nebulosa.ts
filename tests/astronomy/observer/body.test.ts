@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { bodyFixedFrame, bodyFixedMatrix, JUPITER_ROTATION, MOON_ROTATION } from '../../../src/astronomy/bodies/orientation'
-import { equatorial, relativePositionAndVelocity, type PositionAndVelocity, type PositionAndVelocityOverTime } from '../../../src/astronomy/coordinates/astrometry'
+import { equatorial, relativePositionAndVelocity, type PositionAndVelocity, type PositionAndVelocityMut, type PositionAndVelocityOverTime } from '../../../src/astronomy/coordinates/astrometry'
 import { frameAt, frameToBase, ICRS, type Frame } from '../../../src/astronomy/coordinates/frame'
 import { readDaf } from '../../../src/astronomy/ephemeris/kernels/daf'
 import { bodyRadii, SpiceFrames } from '../../../src/astronomy/ephemeris/kernels/frame.kernel'
@@ -232,7 +232,7 @@ test('body-fixed state round-trips through frameToBase and frameAt', () => {
 
 test('reusable output aliases the supplied state pair', () => {
 	const loc = bodySurfaceLocation(deg(5), deg(8), 0, UNIT_SPHERE, zSpin(0.4))
-	const out: PositionAndVelocity = [
+	const out: PositionAndVelocityMut = [
 		[1, 2, 3],
 		[4, 5, 6],
 	]

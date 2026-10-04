@@ -2,7 +2,7 @@ import { DEG2RAD, ONE_SECOND } from '../../core/constants'
 import type { Vec3 } from '../../math/linear-algebra/vec3'
 import { brentMinimize, brentRoot } from '../../math/numerical/optimization'
 import type { Angle } from '../../math/units/angle'
-import { equatorial } from '../coordinates/astrometry'
+import { equatorial, type PositionOverTime } from '../coordinates/astrometry'
 import { equatorialFromJ2000, equatorialToHorizontal } from '../coordinates/coordinate'
 import { type GeographicPosition, localSiderealTime } from '../observer/location'
 import { type Time, timeShift, timeSubtract } from '../time/time'
@@ -82,7 +82,7 @@ export function altitudeOf(direction: Vec3, time: Time, location: GeographicPosi
 // that culmination. When the body never crosses the horizon, rise and set are undefined and exactly one of
 // alwaysUp/alwaysDown is set. transit is still reported (as the culmination instant) even below the
 // horizon, so callers can distinguish the geometry from the visibility.
-export function riseTransitSet(directionAt: (time: Time) => Vec3, location: GeographicPosition, time: Time, { horizon = STANDARD_HORIZON, window = 1, step, tolerance }: RiseTransitSetOptions = {}): RiseTransitSet {
+export function riseTransitSet(directionAt: PositionOverTime, location: GeographicPosition, time: Time, { horizon = STANDARD_HORIZON, window = 1, step, tolerance }: RiseTransitSetOptions = {}): RiseTransitSet {
 	const stop = timeShift(time, window)
 	const altAt = (t: Time) => altitudeOf(directionAt(t), t, location)
 

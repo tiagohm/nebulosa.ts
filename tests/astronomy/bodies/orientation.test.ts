@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test'
 import { bodyFixedMatrix, JUPITER_ROTATION, MARS_ROTATION, MOON_ROTATION, orientation, positionAngleOfPole, SATURN_ROTATION, subObserverPoint, subSolarPoint, SUN_ROTATION, VENUS_ROTATION } from '../../../src/astronomy/bodies/orientation'
+import type { PositionAndVelocityOverTime } from '../../../src/astronomy/coordinates/astrometry'
 import { moon } from '../../../src/astronomy/ephemeris/models/analytical/elpmpp02'
 import { earth, jupiter, mars, saturn, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
-import { Timescale, type Time, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { Timescale, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { matMulVec } from '../../../src/math/linear-algebra/mat3'
 import { vecMinus, vecMulScalar, type Vec3 } from '../../../src/math/linear-algebra/vec3'
 import { normalizeAngle, toDeg } from '../../../src/math/units/angle'
@@ -12,12 +13,12 @@ const J2000_TT = timeYMDHMS(2000, 1, 1, 12, 0, 0, Timescale.TT)
 const NOW = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
 
 // Vector from a body centre to the Earth (ICRF, AU) at NOW.
-function toEarth(body: (time: Time) => readonly [Vec3, Vec3]) {
+function toEarth(body: PositionAndVelocityOverTime) {
 	return vecMinus(earth(NOW)[0], body(NOW)[0])
 }
 
 // Vector from a body centre to the Sun (ICRF, AU) at NOW.
-function toSun(body: (time: Time) => readonly [Vec3, Vec3]) {
+function toSun(body: PositionAndVelocityOverTime) {
 	return vecMinus(sun(NOW)[0], body(NOW)[0])
 }
 
