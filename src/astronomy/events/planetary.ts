@@ -10,7 +10,8 @@ import { searchExtrema, searchRoots, type TimeSearchOptions } from './search'
 
 // Planetary events from explicit observer-relative ICRS-oriented vectors. Angles are radians,
 // ranges AU, and search steps days. Providers select geometric, astrometric, or apparent corrections;
-// these finders add none. Providers may reuse buffers, including storage shared with other providers.
+// these finders add none. Each provider may reuse its own borrowed/read-only buffer;
+// independent providers must not share mutable output storage.
 // Coarse steps must resolve the events; extrema on window endpoints are excluded by searchExtrema.
 
 // Resolved solar elongation event.
@@ -59,7 +60,7 @@ export interface PlanetaryClosestApproach {
 	readonly distance: Distance
 }
 
-// Snapshots target components before sampling Sun, preserving providers with shared mutable storage.
+// Copies borrowed target and Sun vectors into the supplied reusable workspaces without mutating them.
 function directionsAt(targetAt: PositionOverTime, sunAt: PositionOverTime, time: Time, target: MutVec3, solar: MutVec3) {
 	const p = targetAt(time)
 	vecFill(target, p[0], p[1], p[2])
@@ -116,7 +117,7 @@ export function planetaryStations(targetAt: PositionOverTime, start: Time, stop:
 
 // Finds elongation maxima inside start/stop and labels east/west of the Sun. Intended for inner
 // planets; targetAt and sunAt share observer, inertial basis, and correction stage. No synodic span
-// is selected. Returns chronological records; buffers are snapshotted before the other provider runs.
+// is selected. Returns chronological records without mutating either provider's borrowed storage.
 export function planetaryGreatestElongations(targetAt: PositionOverTime, sunAt: PositionOverTime, start: Time, stop: Time, options: TimeSearchOptions = {}): PlanetaryDirectionalEvent[] {
 	return elongationExtrema(targetAt, sunAt, start, stop, 'maximum', options).map((event) => {
 		const { time, elongation } = event

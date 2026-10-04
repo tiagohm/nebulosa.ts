@@ -7,7 +7,7 @@ import { visibilityWindows } from '../../../src/astronomy/events/visibility'
 import { airmassKastenYoung } from '../../../src/astronomy/formulas'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
 import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
-import { vecMinus, vecXAxis, vecYAxis } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, vecMinus, vecXAxis, vecYAxis } from '../../../src/math/linear-algebra/vec3'
 import { deg, hms } from '../../../src/math/units/angle'
 import { kilometer } from '../../../src/math/units/distance'
 
@@ -45,7 +45,9 @@ test('solar avoidance requires a source and keeps a single snapshot per provider
 	const target = () => TARGET
 	const SOLAR = vecYAxis()
 	const solar = () => SOLAR
-	expect(visibilityWindows(target, SITE, DAY, end, { minimumSunSeparation: deg(80), minimumMoonSeparation: deg(80) }, { sunAt: solar, moonAt: solar })).toHaveLength(1)
+	const MOON = vecYAxis()
+	const lunar = () => MOON
+	expect(visibilityWindows(target, SITE, DAY, end, { minimumSunSeparation: deg(80), minimumMoonSeparation: deg(80) }, { sunAt: solar, moonAt: lunar })).toHaveLength(1)
 	expect(visibilityWindows(target, SITE, DAY, end, { minimumSunSeparation: deg(100) }, { sunAt: solar })).toEqual([])
 })
 
@@ -64,7 +66,7 @@ test('solar altitude and lunar separation add and remove stretches', () => {
 	expect(visibilityWindows(same, SITE, DAY, end, { maximumAirmass: 0.5 })).toEqual([])
 })
 
-test('combined target constraints evaluate the target provider once per margin sample', () => {
+test('combined target constraints evaluate the target provider once per epoch', () => {
 	let targetCalls = 0
 	let moonCalls = 0
 	const target: PositionOverTime = () => {
@@ -79,4 +81,52 @@ test('combined target constraints evaluate the target provider once per margin s
 	expect(windows).toHaveLength(1)
 	expect(targetCalls).toBeGreaterThan(0)
 	expect(targetCalls).toBe(moonCalls)
+})
+
+test('independent constraints find a hidden overlap with provider-local singletons', () => {
+	const targetScratch: MutVec3 = [0, 0, 0]
+	const sunScratch: MutVec3 = [0, 0, 0]
+	const moonScratch: MutVec3 = [0, 0, 0]
+	let targetCalls = 0
+	let sunCalls = 0
+	let moonCalls = 0
+	const epochs: number[] = []
+	const target: PositionOverTime = (time) => {
+		targetCalls++
+		epochs.push(timeSubtract(time, DAY))
+		targetScratch[0] = 1
+		return targetScratch
+	}
+	const solar: PositionOverTime = (time) => {
+		sunCalls++
+		const angle = 0.5 + timeSubtract(time, DAY) - 0.2
+		sunScratch[0] = Math.cos(angle)
+		sunScratch[1] = Math.sin(angle)
+		return sunScratch
+	}
+	const lunar: PositionOverTime = (time) => {
+		moonCalls++
+		const angle = 0.5 + 0.4 - timeSubtract(time, DAY)
+		moonScratch[0] = Math.cos(angle)
+		moonScratch[1] = Math.sin(angle)
+		return moonScratch
+	}
+	const end = timeShift(DAY, 0.5)
+	const windows = visibilityWindows(target, SITE, DAY, end, { minimumSunSeparation: 0.5, minimumMoonSeparation: 0.5 }, { sunAt: solar, moonAt: lunar, step: 0.5, tolerance: 1e-9 })
+	expect(windows).toHaveLength(1)
+	expect(timeSubtract(windows[0].start, DAY)).toBeCloseTo(0.2, 8)
+	expect(timeSubtract(windows[0].end, DAY)).toBeCloseTo(0.4, 8)
+	expect(targetCalls).toBe(sunCalls)
+	expect(targetCalls).toBe(moonCalls)
+	// Consecutive margins at the same epoch reuse the cache, including refined midpoints.
+	for (let i = 1; i < epochs.length; i++) expect(epochs[i]).not.toBe(epochs[i - 1])
+	expect(target(DAY)).toBe(target(end))
+	expect(solar(DAY)).toBe(solar(end))
+	expect(lunar(DAY)).toBe(lunar(end))
+	expect(targetScratch).not.toBe(sunScratch)
+	expect(targetScratch).not.toBe(moonScratch)
+	expect(sunScratch).not.toBe(moonScratch)
+	expect(targetScratch).toEqual([1, 0, 0])
+	expect(sunScratch).toEqual([Math.cos(0.8), Math.sin(0.8), 0])
+	expect(moonScratch).toEqual([Math.cos(0.4), Math.sin(0.4), 0])
 })

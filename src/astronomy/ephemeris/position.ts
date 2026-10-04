@@ -1,4 +1,4 @@
-import { type Vec3, vecDivScalar } from '../../math/linear-algebra/vec3'
+import { type Vec3, vecClone, vecDivScalar } from '../../math/linear-algebra/vec3'
 import { normalizeAngle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import { applyApparentDirectionCorrections, type LightDeflectorSnapshot } from '../coordinates/apparent'
@@ -112,7 +112,7 @@ export type DirectionPosition = AstrometricPosition | ApparentPosition
 // No correction or coordinate-frame transform is applied.
 export function ephemerisAt(path: EphemerisPath, time: Time): GeometricPosition {
 	const [position, velocity] = path.stateAt(time)
-	return { kind: 'geometric', time, center: path.center, target: path.target, position, velocity }
+	return { kind: 'geometric', time, center: path.center, target: path.target, position: vecClone(position), velocity: vecClone(velocity) }
 }
 
 // Observes an SSB-centered target from an SSB-centered observer. The two paths

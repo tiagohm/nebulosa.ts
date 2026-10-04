@@ -7,7 +7,7 @@ import { CIRS, ECLIPTIC_J2000, GALACTIC, ICRS, ITRS, frameAt, frameToBase } from
 import { Naif } from '../../../src/astronomy/ephemeris/kernels/naif'
 import { customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from '../../../src/astronomy/ephemeris/path'
 import { type ApparentPosition, type AstrometricPosition, apparentPosition, directionPositionInFrame, ephemerisAt, equatorialPosition, geometricPositionInFrame, geometricSphericalPositionAndVelocity, observeEphemeris } from '../../../src/astronomy/ephemeris/position'
-import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { DAYSEC, LIGHT_TIME_AU, PI, PIOVERTWO, TAU } from '../../../src/core/constants'
 import { type MutVec3, type Vec3, vecAngle, vecClone, vecDistance, vecDivScalar, vecDot, vecLength, vecMinus, vecNegate, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { mulberry32 } from '../../../src/math/numerical/random'
@@ -17,17 +17,41 @@ const TIME = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TDB)
 const EARTH = naifEphemerisEndpoint(Naif.EARTH)
 const MARS = naifEphemerisEndpoint(Naif.MARS)
 
-test('retarded observation uses SSB states and owns every vector', () => {
+test('ephemerisAt snapshots provider-local singleton storage', () => {
 	const scratch: PositionAndVelocity = [vecZero(), vecZero()]
-	const observer = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => {
-		scratch[0] = [0.1, 0, 0]
-		scratch[1] = [0.01, 0, 0]
+	const path = ephemerisPath(EARTH, MARS, (time) => {
+		scratch[0][0] = timeSubtract(time, TIME)
+		scratch[1][0] = 2 * timeSubtract(time, TIME)
 		return scratch
 	})
+	const first = ephemerisAt(path, timeShift(TIME, 1))
+	const second = ephemerisAt(path, timeShift(TIME, 2))
+	expect(first.position[0]).toBe(1)
+	expect(first.velocity[0]).toBe(2)
+	expect(second.position[0]).toBe(2)
+	expect(second.velocity[0]).toBe(4)
+	expect(first.position).not.toBe(scratch[0])
+	expect(first.velocity).not.toBe(scratch[1])
+	expect(first.position).not.toBe(second.position)
+	expect(first.velocity).not.toBe(second.velocity)
+	scratch[0][0] = scratch[1][0] = 99
+	expect(second.position[0]).toBe(2)
+	expect(second.velocity[0]).toBe(4)
+})
+
+test('retarded observation uses SSB states and owns every vector', () => {
+	const observerScratch: PositionAndVelocity = [
+		[0.1, 0, 0],
+		[0.01, 0, 0],
+	]
+	const targetScratch: PositionAndVelocity = [
+		[0, 0.5, 0],
+		[0.001, 0, 0],
+	]
+	const observer = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => observerScratch)
 	const target = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, (time) => {
-		scratch[0] = [1 + (time.fraction - TIME.fraction) * 0.001, 0.5, 0]
-		scratch[1] = [0.001, 0, 0]
-		return scratch
+		targetScratch[0][0] = 1 + (time.fraction - TIME.fraction) * 0.001
+		return targetScratch
 	})
 	const position = observeEphemeris(observer, target, TIME)!
 	expect(position.kind).toBe('astrometric')
@@ -39,8 +63,8 @@ test('retarded observation uses SSB states and owns every vector', () => {
 	expect(position.observerPosition).toEqual([0.1, 0, 0])
 	expect(position.observerVelocity).toEqual([0.01, 0, 0])
 	expect(position.targetEmissionPosition[0]).toBeCloseTo(position.position[0] + 0.1, 14)
-	scratch[0][0] = 99
-	scratch[1][0] = 99
+	observerScratch[0][0] = observerScratch[1][0] = 99
+	targetScratch[0][0] = targetScratch[1][0] = 99
 	expect(position.position[0]).toBeLessThan(2)
 	expect(position.observerVelocity[0]).toBe(0.01)
 	expect(position.targetEmissionPosition[0]).toBeLessThan(2)
@@ -194,26 +218,27 @@ test('observation is SSB-only, unit, and has no public velocity', () => {
 })
 
 test('deflector snapshots, ordering inputs, and the absence of a hidden ephemeris', () => {
-	const scratch: PositionAndVelocity = [vecZero(), vecZero()]
+	const sunScratch: PositionAndVelocity = [
+		[-1, 0.1, 0],
+		[0, 0.001, 0],
+	]
+	const deflectorScratch: PositionAndVelocity = [
+		[0.4, 0.02, 0],
+		[0, 0.002, 0],
+	]
 	let sunCalls = 0
 	const sun = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, SUN, () => {
 		sunCalls++
-		scratch[0] = [-1, 0.1, 0]
-		scratch[1] = [0, 0.001, 0]
-		return scratch
+		return sunScratch
 	})
-	const deflector = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.JUPITER), () => {
-		scratch[0] = [0.4, 0.02, 0]
-		scratch[1] = [0, 0.002, 0]
-		return scratch
-	})
+	const deflector = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.JUPITER), () => deflectorScratch)
 	const observed = observeEphemeris(barycentric(EARTH, stationary(vecZero(), [0, 0.017, 0])), barycentric(MARS, stationary([1, 0.05, 0.01])), TIME)!
 	const withoutDeflection = apparentPosition(observed, { sun, deflectors: [] })
 	const withSun = apparentPosition(observed, { sun, deflectors: [{ mass: SUN_LIGHT_DEFLECTOR_MASS, limiter: SUN_LIGHT_DEFLECTOR_LIMITER, path: sun }] })
 	expect(vecAngle(withoutDeflection.direction, observed.direction)).toBeGreaterThan(1e-6)
 	expect(vecAngle(withSun.direction, withoutDeflection.direction)).toBeGreaterThan(1e-12)
-	scratch[0][0] = 50
-	scratch[1][0] = 50
+	sunScratch[0][0] = 50
+	sunScratch[1][0] = 50
 	const again = apparentPosition(observed, { sun, deflectors: [{ mass: SUN_LIGHT_DEFLECTOR_MASS, limiter: SUN_LIGHT_DEFLECTOR_LIMITER, path: deflector }] })
 	expect(again.direction.every(Number.isFinite)).toBe(true)
 	expect(vecLength(again.direction)).toBeCloseTo(1, 12)

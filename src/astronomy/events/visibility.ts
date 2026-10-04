@@ -1,5 +1,4 @@
 import { PIOVERTWO } from '../../core/constants'
-import { vecZero } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 import { separationFrom, type PositionOverTime } from '../coordinates/astrometry'
 import { airmassKastenYoung } from '../formulas'
@@ -10,8 +9,10 @@ import { searchIntervals, type TimeSearchOptions } from './search'
 
 // Intervals in which a target clears a set of observing constraints at once: a minimum altitude, a
 // maximum Kasten–Young airmass, a maximum solar altitude, and minimum angular separations from the
-// Sun and Moon. The target, Sun, and Moon are J2000 direction callbacks. Constraints that are omitted are not
-// applied. A constraint that names the Sun or the Moon without the matching callback is rejected,
+// Sun and Moon. The target, Sun, and Moon use ICRS-oriented direction callbacks. No origin or
+// correction-stage transformations are applied: callers choose matching origins and corrections,
+// including topocentric parallax when desired. Each provider may reuse its own borrowed storage.
+// Omitted constraints are not applied. A constraint naming the Sun or Moon without its callback is rejected,
 // because dropping it would report the target as visible when that body was never checked.
 
 // One stretch during which every requested constraint holds.
@@ -39,10 +40,10 @@ export interface VisibilityConstraints {
 	readonly maximumAirmass?: number
 	// Maximum geometric altitude of the Sun.
 	readonly maximumSunAltitude?: Angle
-	// Minimum great-circle target-Sun separation in radians, at the supplied correction stage.
+	// Minimum great-circle target-Sun separation in radians, at the supplied origin/correction stage.
 	readonly minimumSunSeparation?: Angle
-	// Minimum great-circle separation between the target and the Moon, in radians. Both directions are
-	// the supplied geometric vectors, so lunar topocentric parallax is not applied.
+	// Minimum great-circle target-Moon separation in radians, at the supplied origin/correction stage.
+	// Topocentric parallax is included when supplied by the providers; none is added here.
 	readonly minimumMoonSeparation?: Angle
 }
 
@@ -67,7 +68,9 @@ function altitudeForAirmass(maximumAirmass: number): Angle | undefined {
 // Parameters: targetAt is the J2000 direction of the target. location is the observer. start and end
 // bound the search. constraints selects the limits; an empty constraint set makes the whole window
 // one interval. sources supplies the Sun and the Moon and the root-finder step. Returns the
-// chronological stretches inside the window.
+// chronological stretches inside the window. Each constraint is scanned independently; provider
+// evaluations and scalar geometry are cached for one epoch. The coarse step must resolve every
+// crossing of each constraint; no origin or correction-stage conversion is performed.
 export function visibilityWindows(targetAt: PositionOverTime, location: GeographicPosition, start: Time, end: Time, constraints: VisibilityConstraints = {}, sources: VisibilitySources = {}): readonly VisibilityInterval[] {
 	if (!(timeSubtract(end, start) > 0)) return []
 	if ((constraints.maximumSunAltitude !== undefined || constraints.minimumSunSeparation !== undefined) && sources.sunAt === undefined) throw new RangeError('sun direction is required when a solar limit is set')
@@ -86,18 +89,49 @@ export function visibilityWindows(targetAt: PositionOverTime, location: Geograph
 	const minimumMoonSeparation = constraints.minimumMoonSeparation
 	const minimumSunSeparation = constraints.minimumSunSeparation
 	const needsTarget = minimumAltitude !== undefined || minimumSunSeparation !== undefined || minimumMoonSeparation !== undefined
-	let target = vecZero()
+	const needsSun = maximumSunAltitude !== undefined || minimumSunSeparation !== undefined
+	const targetAltitudeLimit = minimumAltitude
+	let epoch = Number.NaN
+	let targetAltitude = 0
+	let solarAltitude = 0
+	let solarSeparation = 0
+	let lunarSeparation = 0
 
-	const margin = (time: Time) => {
-		let room = Number.POSITIVE_INFINITY
-		// Providers may share mutable buffers; keep the target before sampling Sun or Moon.
-		if (needsTarget) target = targetAt(time)
-		if (minimumAltitude !== undefined) room = Math.min(room, altitudeOf(target, time, location) - minimumAltitude)
-		if (maximumSunAltitude !== undefined && sunAt !== undefined) room = Math.min(room, maximumSunAltitude - altitudeOf(sunAt(time), time, location))
-		if (minimumSunSeparation !== undefined && sunAt !== undefined) room = Math.min(room, separationFrom(target, sunAt(time)) - minimumSunSeparation)
-		if (minimumMoonSeparation !== undefined && moonAt !== undefined) room = Math.min(room, separationFrom(target, moonAt(time)) - minimumMoonSeparation)
-		return room
+	// All provider calls are centralized here, so each borrowed vector remains valid until
+	// its scalar geometry is computed. Cache only the current epoch, keeping memory bounded.
+	const evaluate = (time: Time) => {
+		const offset = timeSubtract(time, start)
+		if (offset === epoch) return
+		const target = needsTarget ? targetAt(time) : undefined
+		const solar = needsSun ? sunAt?.(time) : undefined
+		const lunar = minimumMoonSeparation !== undefined ? moonAt?.(time) : undefined
+		if (targetAltitudeLimit !== undefined && target !== undefined) targetAltitude = altitudeOf(target, time, location)
+		if (maximumSunAltitude !== undefined && solar !== undefined) solarAltitude = altitudeOf(solar, time, location)
+		if (minimumSunSeparation !== undefined && target !== undefined && solar !== undefined) solarSeparation = separationFrom(target, solar)
+		if (minimumMoonSeparation !== undefined && target !== undefined && lunar !== undefined) lunarSeparation = separationFrom(target, lunar)
+		epoch = offset
 	}
 
-	return searchIntervals([margin], start, end, sources)
+	const margins: ((time: Time) => number)[] = []
+	if (targetAltitudeLimit !== undefined)
+		margins.push((time) => {
+			evaluate(time)
+			return targetAltitude - targetAltitudeLimit
+		})
+	if (maximumSunAltitude !== undefined)
+		margins.push((time) => {
+			evaluate(time)
+			return maximumSunAltitude - solarAltitude
+		})
+	if (minimumSunSeparation !== undefined)
+		margins.push((time) => {
+			evaluate(time)
+			return solarSeparation - minimumSunSeparation
+		})
+	if (minimumMoonSeparation !== undefined)
+		margins.push((time) => {
+			evaluate(time)
+			return lunarSeparation - minimumMoonSeparation
+		})
+	return searchIntervals(margins, start, end, sources)
 }

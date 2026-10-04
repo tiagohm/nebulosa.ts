@@ -8,13 +8,13 @@ import { bodyShape, bodySurfaceLocation, bodySurfaceNormal } from '../../../src/
 import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { PIOVERFOUR, PIOVERTWO, TAU } from '../../../src/core/constants'
 import { matRotZ } from '../../../src/math/linear-algebra/mat3'
-import { type MutVec3, type Vec3, vecMinus } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, vecMinus, vecXAxis } from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
 import { kilometer } from '../../../src/math/units/distance'
 
 const EPOCH = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TT)
 const SPHERE = bodyShape([1, 1, 1])
-const SOLAR = (): Vec3 => [1, 0, 0]
+const SOLAR = () => vecXAxis()
 const ROTATING: Frame = { rotationAt: (time) => matRotZ(TAU * timeSubtract(time, EPOCH)) }
 
 test('sphere equator, poles, near poles and longitude wrap have analytic solar altitudes', () => {

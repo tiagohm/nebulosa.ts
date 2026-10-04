@@ -4,7 +4,7 @@ import { Naif } from '../../../src/astronomy/ephemeris/kernels/naif'
 import { moon } from '../../../src/astronomy/ephemeris/models/analytical/elpmpp02'
 import { earth, mars } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { composeEphemerisPaths, customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, relativeEphemerisPath, reverseEphemerisPath, sameEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from '../../../src/astronomy/ephemeris/path'
-import { Timescale, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { vecXAxis, vecYAxis, vecZero, type MutVec3 } from '../../../src/math/linear-algebra/vec3'
 import { mulberry32 } from '../../../src/math/numerical/random'
 
@@ -12,31 +12,102 @@ const TIME = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TDB)
 const EARTH = naifEphemerisEndpoint(Naif.EARTH)
 const MOON = naifEphemerisEndpoint(Naif.MOON)
 
-test('relative/composed paths snapshot providers sharing storage and never mutate borrowed states', () => {
-	const shared: PositionAndVelocity = [
-		[0, 0, 0],
-		[0, 0, 0],
+test('reverse owns reusable output and never mutates the source singleton', () => {
+	const source: PositionAndVelocity = [
+		[1, 2, 3],
+		[0.1, 0.2, 0.3],
 	]
-	const origin = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => {
-		shared[0][0] = 3
-		shared[1][0] = 0.3
-		return shared
-	})
-	const target = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MOON, () => {
-		shared[0][0] = 5
-		shared[1][0] = 0.5
-		return shared
-	})
-	const reversed = reverseEphemerisPath(origin).stateAt(TIME)
-	expect(reversed[0][0]).toBe(-3)
-	expect(shared[0][0]).toBe(3)
-	const path = relativeEphemerisPath(target, origin)
+	const path = reverseEphemerisPath(ephemerisPath(EARTH, MOON, () => source))
 	const first = path.stateAt(TIME)
-	expect(first[0][0]).toBe(2)
-	expect(first[1][0]).toBeCloseTo(0.2, 15)
-	path.stateAt(timeShift(TIME, 1))
-	expect(first[0][0]).toBe(2)
-	expect(shared[0][0]).toBe(5)
+	expect(first).toEqual([
+		[-1, -2, -3],
+		[-0.1, -0.2, -0.3],
+	])
+	expect(source).toEqual([
+		[1, 2, 3],
+		[0.1, 0.2, 0.3],
+	])
+	for (const vector of first) for (const borrowed of source) expect(vector).not.toBe(borrowed)
+	source[0][0] = 4
+	expect(path.stateAt(timeShift(TIME, 1))).toBe(first)
+	expect(first[0][0]).toBe(-4)
+	expect(source[0][0]).toBe(4)
+})
+
+test('composition owns reusable output without mutating either provider singleton', () => {
+	const firstScratch: PositionAndVelocity = [
+		[1, 2, 3],
+		[0.1, 0.2, 0.3],
+	]
+	const secondScratch: PositionAndVelocity = [
+		[4, 5, 6],
+		[0.4, 0.5, 0.6],
+	]
+	const first = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => firstScratch)
+	const second = ephemerisPath(EARTH, MOON, () => secondScratch)
+	const path = composeEphemerisPaths(first, second)
+	const state = path.stateAt(TIME)
+	expectStateClose(
+		state,
+		[
+			[5, 7, 9],
+			[0.5, 0.7, 0.9],
+		],
+		14,
+	)
+	expect(first.stateAt(TIME)).toBe(first.stateAt(timeShift(TIME, 1)))
+	expect(second.stateAt(TIME)).toBe(second.stateAt(timeShift(TIME, 1)))
+	expect(firstScratch).not.toBe(secondScratch)
+	expect(firstScratch).toEqual([
+		[1, 2, 3],
+		[0.1, 0.2, 0.3],
+	])
+	expect(secondScratch).toEqual([
+		[4, 5, 6],
+		[0.4, 0.5, 0.6],
+	])
+	for (const vector of state) for (const borrowed of [...firstScratch, ...secondScratch]) expect(vector).not.toBe(borrowed)
+	secondScratch[0][0] = 7
+	expect(path.stateAt(timeShift(TIME, 1))).toBe(state)
+	expect(state[0][0]).toBe(8)
+})
+
+test('relative paths subtract time-varying provider-local singletons without mutating them', () => {
+	const originScratch: PositionAndVelocity = [vecZero(), vecZero()]
+	const targetScratch: PositionAndVelocity = [vecZero(), vecZero()]
+	const origin = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, (time) => {
+		originScratch[0][0] = 3 + timeSubtract(time, TIME)
+		originScratch[1][0] = 1
+		return originScratch
+	})
+	const target = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MOON, (time) => {
+		targetScratch[0][0] = 5 + 2 * timeSubtract(time, TIME)
+		targetScratch[1][0] = 2
+		return targetScratch
+	})
+	const path = relativeEphemerisPath(target, origin)
+	const output = path.stateAt(TIME)
+	for (const offset of [0, 1, 2]) {
+		const time = timeShift(TIME, offset)
+		const state = path.stateAt(time)
+		expect(state).toBe(output)
+		expect(state).toEqual([
+			[2 + offset, 0, 0],
+			[1, 0, 0],
+		])
+		expect(originScratch).toEqual([
+			[3 + offset, 0, 0],
+			[1, 0, 0],
+		])
+		expect(targetScratch).toEqual([
+			[5 + 2 * offset, 0, 0],
+			[2, 0, 0],
+		])
+		for (const vector of state) for (const borrowed of [...originScratch, ...targetScratch]) expect(vector).not.toBe(borrowed)
+	}
+	expect(origin.stateAt(TIME)).toBe(origin.stateAt(timeShift(TIME, 1)))
+	expect(target.stateAt(TIME)).toBe(target.stateAt(timeShift(TIME, 1)))
+	expect(originScratch).not.toBe(targetScratch)
 })
 
 test('endpoint identity uses kind and id, not display name', () => {

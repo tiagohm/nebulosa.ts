@@ -1129,9 +1129,9 @@ function lunarSubObserverPoint() {
 	console.info('Lunar sub-observer (east lon, lat deg):', toDeg(obs.longitude).toFixed(2), toDeg(obs.latitude).toFixed(2))
 }
 
-// Nearest mean lunar node passages from the analytic Meeus API.
+// Nearest analytic lunar node passages through the mean ecliptic of date (Meeus).
 function lunarAscendingAndDescendingNodes() {
-	console.info('Next mean lunar nodes:', nearestLunarNode(NOW, 'ASCENDING', true), nearestLunarNode(NOW, 'DESCENDING', true))
+	console.info('Next analytic lunar node passages:', nearestLunarNode(NOW, 'ASCENDING', true), nearestLunarNode(NOW, 'DESCENDING', true))
 }
 
 // Lunar Perigee and Apogee.

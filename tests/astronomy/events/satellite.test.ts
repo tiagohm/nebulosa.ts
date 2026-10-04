@@ -337,6 +337,14 @@ test('spherical footprint satisfies tangent-horizon and surface-arc invariants',
 	expect(Number.isFinite(surface.surfaceRadius)).toBe(true)
 })
 
+test('spherical footprint rejects impossible reference-sphere geometry', () => {
+	for (const referenceRadius of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+		expect(() => satelliteGroundFootprint(ISS, EPOCH, referenceRadius)).toThrow()
+	}
+	const radius = vecLength(sgp4(EPOCH, ISS)[0])
+	expect(() => satelliteGroundFootprint(ISS, EPOCH, radius * 1.001)).toThrow('satellite radius must be at least the reference radius')
+})
+
 test('observer-relative satellite Sun/Moon avoidance paths agree with independent geometric angles', () => {
 	// Skyfield 1.55/DE421 same-epoch geometric vectors: sat-site, Sun-Earth-site, Moon-Earth-site.
 	const observer = earthObserverEphemerisPath(SITE, customEphemerisEndpoint('test-site'))

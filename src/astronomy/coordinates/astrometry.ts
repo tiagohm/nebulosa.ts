@@ -22,14 +22,15 @@ import { frameAt, type Frame } from './frame'
 // Barycentric/heliocentric position (AU) and velocity (AU/day) pair, in ICRS/BCRS axes.
 export type PositionAndVelocity = [MutVec3, MutVec3]
 
-// Sampler returning the position and velocity of a body at the given time.
+// Sampler returning the position (AU) and velocity (AU/day) at the given time.
+// The returned state is borrowed and must not be mutated. A provider may reuse its
+// own storage on the next call; independent providers must not share mutable storage.
 export type PositionAndVelocityOverTime = (time: Time) => PositionAndVelocity
 
 // Observer-to-body position in AU in library-base inertial axes at the requested epoch.
-export type PositionOverTime = (time: Time) => MutVec3
-
-// Observer-to-body velocity in AU/day in library-base inertial axes at the requested epoch.
-export type VelocityOverTime = (time: Time) => MutVec3
+// The returned vector is borrowed/read-only and may be overwritten by the next call
+// to the same provider. Independent providers must not share mutable output storage.
+export type PositionOverTime = (time: Time) => Vec3
 
 // A fixed-point light-time solution at reception time. All vectors are owned
 // snapshots in BCRS/ICRS axes: positions AU, velocity AU/day, and light time days.

@@ -3,8 +3,8 @@ import type { PositionAndVelocity, PositionAndVelocityOverTime } from '../coordi
 import { Naif } from './kernels/naif'
 
 // Synchronous center-to-target ephemeris paths in library-base ICRS/BCRS-oriented axes.
-// Positions are AU and velocities AU/day. Providers may reuse storage; composed paths
-// snapshot each input before sampling another provider and return owned vectors.
+// Positions are AU and velocities AU/day. Each provider may reuse its own borrowed
+// storage between calls. Use ephemerisAt() or copy the state to retain an owned snapshot.
 
 // A NAIF body identifier; name is descriptive metadata, not identity.
 export interface NaifEphemerisEndpoint {
@@ -28,7 +28,8 @@ export interface CustomEphemerisEndpoint {
 export type EphemerisEndpoint = NaifEphemerisEndpoint | CustomEphemerisEndpoint
 
 // A prepared synchronous state provider from center to target. The provider's
-// vectors are in AU and AU/day; callers must not assume it returns owned storage.
+// vectors are in AU and AU/day and are borrowed/read-only. A later call may overwrite
+// them; independent providers must not share mutable output storage.
 export interface EphemerisPath {
 	// Origin of the returned position and velocity.
 	readonly center: EphemerisEndpoint
@@ -62,8 +63,9 @@ export function ephemerisPath(center: EphemerisEndpoint, target: EphemerisEndpoi
 	return { center, target, stateAt }
 }
 
-// Reverses a center-to-target path. Each evaluation returns fresh position and
-// velocity vectors, even when the underlying provider reuses its storage.
+// Reverses a center-to-target path without mutating the source provider. The returned
+// path reuses scratch (or an allocated workspace), which must not alias source storage.
+// A later evaluation may overwrite its state; retain it with ephemerisAt() or a copy.
 export function reverseEphemerisPath(path: EphemerisPath, scratch?: PositionAndVelocity): EphemerisPath {
 	scratch ??= [vecZero(), vecZero()]
 	return ephemerisPath(path.target, path.center, (time) => {
@@ -76,7 +78,8 @@ export function reverseEphemerisPath(path: EphemerisPath, scratch?: PositionAndV
 
 // Adds first center->middle and second middle->target at the same epoch.
 // Throws for mismatched endpoints, which would yield plausible but invalid geometry.
-// Snapshots the first state before calling the second provider, then returns owned vectors.
+// Neither source is mutated. The returned path reuses scratch (or an allocated workspace),
+// which must not alias source storage. Retain a state with ephemerisAt() or a copy.
 export function composeEphemerisPaths(first: EphemerisPath, second: EphemerisPath, scratch?: PositionAndVelocity): EphemerisPath {
 	if (!sameEphemerisEndpoint(first.target, second.center)) throw new Error('cannot compose ephemeris paths: first target does not match second center')
 	scratch ??= [vecZero(), vecZero()]
@@ -91,6 +94,8 @@ export function composeEphemerisPaths(first: EphemerisPath, second: EphemerisPat
 
 // Forms origin.target -> target.target from two paths sharing one center.
 // Both states are sampled at the same epoch; no light-time correction is applied.
+// Source storage is not mutated. The returned path reuses scratch (or an allocated
+// workspace), which must not alias either source. Retain it with ephemerisAt() or a copy.
 export function relativeEphemerisPath(target: EphemerisPath, origin: EphemerisPath, scratch?: PositionAndVelocity): EphemerisPath {
 	if (!sameEphemerisEndpoint(target.center, origin.center)) throw new Error('cannot form relative ephemeris path: centers do not match')
 	scratch ??= [vecZero(), vecZero()]

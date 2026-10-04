@@ -5,7 +5,7 @@ import { earth, mars, sun, venus } from '../../../src/astronomy/ephemeris/models
 import { planetaryClosestApproaches, planetaryConjunctions, planetaryGreatestElongations, planetaryInnerConjunctions, planetaryOppositions, planetaryQuadratures, planetaryStations } from '../../../src/astronomy/events/planetary'
 import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { PI } from '../../../src/core/constants'
-import { type MutVec3, vecMinus } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, vecClone, vecMinus } from '../../../src/math/linear-algebra/vec3'
 import { deg, toDeg } from '../../../src/math/units/angle'
 
 // Skyfield 1.55 / JPL DE421, scipy 1.16.2 bounded scalar minimization and brentq.
@@ -39,6 +39,35 @@ test('Venus east/west greatest elongations agree with geometric DE421 references
 	}
 })
 
+test('greatest elongations agree for allocating and provider-local singleton vectors', () => {
+	const targetScratch: MutVec3 = [0, 0, 0]
+	const sunScratch: MutVec3 = [1, 0, 0]
+	const target = (time: Time) => {
+		const angle = 0.6 - (timeSubtract(time, EPOCH) - 0.5) ** 2
+		targetScratch[0] = 2 * Math.cos(angle)
+		targetScratch[1] = 2 * Math.sin(angle)
+		return targetScratch
+	}
+	const solar = () => sunScratch
+	const end = timeShift(EPOCH, 1)
+	const expected = planetaryGreatestElongations(
+		(time) => vecClone(target(time)),
+		() => vecClone(solar()),
+		EPOCH,
+		end,
+		{ step: 0.1 },
+	)
+	const actual = planetaryGreatestElongations(target, solar, EPOCH, end, { step: 0.1 })
+	expect(actual).toHaveLength(1)
+	expect(timeSubtract(actual[0].time, expected[0].time)).toBeCloseTo(0, 10)
+	expect(actual[0].elongation).toBeCloseTo(expected[0].elongation, 12)
+	expect(actual[0].kind).toBe(expected[0].kind)
+	expect(target(EPOCH)).toBe(target(end))
+	expect(solar()).toBe(solar())
+	expect(targetScratch).not.toBe(sunScratch)
+	expect(sunScratch).toEqual([1, 0, 0])
+})
+
 test('inner conjunction classification uses the actual observer-Sun range', () => {
 	const inferior = planetaryInnerConjunctions(VENUS, SUN, EPOCH, STOP, OPTIONS)
 	expect(inferior).toHaveLength(1)
@@ -48,25 +77,23 @@ test('inner conjunction classification uses the actual observer-Sun range', () =
 	expect(superior).toHaveLength(1)
 	expect(superior[0].kind).toBe('superior')
 	expectEpoch(superior[0].time, 450.548503648)
-	// Same angular minimum, with both bodies farther than 1 AU. Shared provider storage must
-	// be snapshotted before calling the Sun provider, whose range is 3 AU rather than 1 AU.
-	const shared: MutVec3 = [0, 0, 0]
+	// Both bodies are farther than 1 AU, with a separate reusable buffer per provider.
+	const targetScratch: MutVec3 = [0, 0, 0]
+	const sunScratch: MutVec3 = [3, 0, 0]
 	const target = (time: Time) => {
 		const angle = (timeSubtract(time, EPOCH) - 0.5) ** 2 + 0.1
-		shared[0] = 2 * Math.cos(angle)
-		shared[1] = 2 * Math.sin(angle)
-		shared[2] = 0
-		return shared
+		targetScratch[0] = 2 * Math.cos(angle)
+		targetScratch[1] = 2 * Math.sin(angle)
+		return targetScratch
 	}
-	const solar = () => {
-		shared[0] = 3
-		shared[1] = shared[2] = 0
-		return shared
-	}
+	const solar = () => sunScratch
 	const classified = planetaryInnerConjunctions(target, solar, EPOCH, timeShift(EPOCH, 1), { step: 0.1 })
 	expect(classified).toHaveLength(1)
 	expect(classified[0].kind).toBe('inferior')
 	expect(timeSubtract(classified[0].time, EPOCH)).toBeCloseTo(0.5, 5)
+	expect(target(EPOCH)).toBe(target(timeShift(EPOCH, 1)))
+	expect(targetScratch).not.toBe(solar())
+	expect(sunScratch).toEqual([3, 0, 0])
 })
 
 test('Mars opposition and closest range agree with independent DE421 extrema', () => {

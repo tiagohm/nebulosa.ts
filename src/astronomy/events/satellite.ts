@@ -1,5 +1,6 @@
 import { AU_KM, DAYSEC, EARTH_RADIUS_AU, ONE_SECOND, SUN_RADIUS_AU } from '../../core/constants'
 import type { Writable } from '../../core/types'
+import { validatePositiveFinite } from '../../core/validation'
 import { type Vec3, vecCross, vecDot, vecLength, vecMinus, vecZero } from '../../math/linear-algebra/vec3'
 import { clamp } from '../../math/numerical/math'
 import { brentMinimize } from '../../math/numerical/optimization'
@@ -423,12 +424,16 @@ export interface SatelliteGroundFootprint {
 }
 
 // Computes an ideal spherical footprint for satrec at time above referenceRadius (AU, defaults to
-// EARTH_RADIUS_AU). Requires satellite radius >= referenceRadius. Uses a stable atan2 horizon angle
+// EARTH_RADIUS_AU). Throws unless referenceRadius is positive/finite and no greater than the
+// satellite radius: an interior point has no external tangent horizon. Uses a stable atan2 horizon angle
 // and reports spherical latitude, not ellipsoidal geodetic latitude. No terrain, atmosphere, or
 // minimum elevation mask. Returns an allocated record; SGP4 is valid only near satrec's epoch.
 export function satelliteGroundFootprint(satrec: SatRec, time: Time, referenceRadius: Distance = EARTH_RADIUS_AU): SatelliteGroundFootprint {
+	// A nonphysical sphere would otherwise yield a plausible but impossible coverage cap.
+	validatePositiveFinite(referenceRadius)
 	const [x, y, z] = temeToItrf(sgp4(time, satrec)[0], time)
 	const radius = Math.hypot(x, y, z)
+	if (!(radius >= referenceRadius)) throw new RangeError('satellite radius must be at least the reference radius')
 	const altitude = radius - referenceRadius
 	const halfAngle = Math.atan2(Math.sqrt(Math.max(0, altitude * (radius + referenceRadius))), referenceRadius)
 	return { subpoint: { longitude: normalizePI(Math.atan2(y, x)), latitude: Math.atan2(z, Math.hypot(x, y)), elevation: altitude }, altitude, referenceRadius, halfAngle, surfaceRadius: referenceRadius * halfAngle }
