@@ -357,11 +357,61 @@ console.log(cometMagnitudeEstimate(8, 0.5, 1.2, 10)) // 7.2867 — apparent magn
 
 ### Barycentric and Heliocentric Light-Time Correction
 
+Light from a distant source reaches the Earth earlier or later than it would reach the Solar-System barycenter (BJD) or the Sun's center (HJD), depending on where the observer sits along the line of sight. The light-travel-time correction is `(r_obs · n) / c`, with `r_obs` the observer's position relative to the chosen center and `n` the unit direction to the source. Timing work such as eclipse or pulsar timing adds it to the observed time.
+
+`lightTravelTime` returns that correction in days, positive when the observer lies on the source's side of the center. You choose the reference center through the Earth state you pass: a barycentric Earth state gives the barycentric correction and a heliocentric one the heliocentric correction. The correction is first-order and not fully relativistic. `observerState` builds the observer's `[position (AU), velocity (AU/day)]` that both this and Radial Velocity Correction use: it adds the site's topocentric offset and diurnal rotation to the Earth state, or returns a copy of the Earth state when no location is given. `location` defaults to `time.location`. Source direction is ICRS right ascension and declination in radians.
+
+```ts
+import { lightTravelTime, observerState } from 'nebulosa/src/astronomy/coordinates/correction'
+import { eraEpv00 } from 'nebulosa/src/astronomy/coordinates/erfa/earth'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { tdb, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+// La Silla Observatory: longitude, latitude, elevation.
+const location = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
+const time = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.UTC)
+
+// Earth's [heliocentric, barycentric] state (AU, AU/day) at the TDB instant.
+const t = tdb(time)
+const [heliocentric, barycentric] = eraEpv00(t.day, t.fraction)
+
+// Source at RA 5.5 h, Dec -5°.
+const ra = hour(5.5)
+const dec = deg(-5)
+
+const bjd = lightTravelTime(ra, dec, time, barycentric, location)
+
+console.log(bjd * 86400) // 410.68 — seconds to add for the barycentric reference
+console.log(lightTravelTime(ra, dec, time, heliocentric, location) * 86400) // 413.66 — seconds, heliocentric reference
+console.log(lightTravelTime(ra, dec, time, barycentric) * 86400) // 410.67 — seconds, geocentric observer (no site)
+
+// Observer state used internally: Earth state plus the site's offset and diurnal velocity.
+const [position, velocity] = observerState(time, barycentric, location)
+
+console.log(position) // [-0.16633, 0.88918, 0.38543] — AU, barycentric ICRS axes
+console.log(velocity) // [-0.017353, -0.002531, -0.001185] — AU/day
+```
+
 ### Binary PCK Rotation
 
 ### Body-Surface Solar Illumination
 
 ### Carrington Rotation
+
+The Carrington system numbers the Sun's rotations by a fixed synodic period of about 27.2753 days, as seen from Earth, counted from a conventional epoch in 1853. Solar maps and datasets are usually labeled by Carrington rotation number.
+
+`carringtonRotationNumber` returns the integer rotation number whose span contains the given `Time`. It is a linear count with that fixed period; it does not compute the central meridian longitude within the rotation.
+
+```ts
+import { carringtonRotationNumber } from 'nebulosa/src/astronomy/bodies/sun'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+const rotation = carringtonRotationNumber(timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.UTC))
+
+console.log(rotation) // 2302 — Carrington rotation number
+```
 
 ### Celestial and Terrestrial Reference Frames
 
@@ -369,9 +419,48 @@ console.log(cometMagnitudeEstimate(8, 0.5, 1.2, 10)) // 7.2867 — apparent magn
 
 ### Constellations
 
+The IAU divides the sky into 88 constellations with boundaries defined along lines of constant right ascension and declination in the B1875 equinox. `constellation` finds the one containing a position: it precesses the position to B1875, then looks it up in the Delporte boundary table.
+
+`ra` and `dec` are in radians. `equinox` is the epoch of the input coordinates as a `Time`, and defaults to J2000; pass `false` when the coordinates are already referred to B1875 to skip precession. The result is the three-letter uppercase key, which indexes `CONSTELLATIONS` for the display name, mixed-case IAU abbreviation, Latin genitive, and a short description.
+
+```ts
+import { constellation, CONSTELLATIONS } from 'nebulosa/src/astronomy/coordinates/constellation'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+
+// J2000 right ascension 5h30m, declination -5°.
+const key = constellation(hour(5.5), deg(-5))
+
+console.log(key) // ORI
+console.log(CONSTELLATIONS[key].name) // Orion
+console.log(CONSTELLATIONS[key].iau) // Ori
+console.log(CONSTELLATIONS[key].genitive) // Orionis
+
+console.log(constellation(hour(0.7122), deg(41.269))) // AND — M31 region
+console.log(constellation(0, deg(-90))) // OCT — south celestial pole
+
+// Coordinates already on the B1875 equinox: no precession is applied.
+console.log(constellation(hour(5.5), deg(-5), false)) // ORI
+```
+
 ### DAF Binary Containers
 
 ### Delta T
+
+Delta T is `TT − UT1`: the gap between the uniform Terrestrial Time scale and Earth-rotation time. It changes irregularly because the Earth's rotation does, so past values come from historical records and future values are extrapolations.
+
+`deltaT` takes a decimal calendar year and returns seconds, picking one model per era: the Stephenson, Morrison and Hohenkerk 2016 parabola before the S15 spline's start (year −720), the S15 cubic spline from there to 2019, and the Espenak and Meeus 2006 expressions after 2019. A step of about 1.8 s exists at 2019, where observations hand over to forward prediction, so values after 2019 are model predictions rather than measurements. `deltaTByEspenakMeeus2006` is that polynomial model alone and stays finite for any year. `s15` returns the spline segment covering a year; call its `compute` with the year.
+
+```ts
+import { deltaT, deltaTByEspenakMeeus2006, s15 } from 'nebulosa/src/astronomy/time/deltat'
+
+// year: decimal calendar year, e.g. 2000.5 is mid-2000.
+console.log(deltaT(2000)) // 63.81 — seconds, from the S15 spline
+console.log(deltaT(1900)) // -1.98 — seconds
+console.log(deltaT(2100)) // 202.74 — seconds, predicted
+
+console.log(deltaTByEspenakMeeus2006(2000)) // 63.86 — seconds, Espenak-Meeus polynomial only
+console.log(s15(2000).compute(2000)) // 63.81 — seconds, same as deltaT(2000)
+```
 
 ### Dew Point and Frost
 
@@ -419,11 +508,53 @@ console.log(isMagnusDomain(150)) // false — outside [-100, 100] °C
 
 ### Equation of Time
 
+The equation of time is the difference between apparent solar time (a sundial) and mean solar time (a clock). Here it is the hour-angle difference, apparent Sun minus mean Sun, and it stays within roughly ±16 minutes over a year, positive when the sundial is ahead of the clock.
+
+`equationOfTime` returns it in radians, wrapped to `[−π, π]`; multiply degrees by 4 to get minutes of time. The caller supplies `apparentSunRightAscension`, which must be referred to the true equator and equinox of date, the same reference as Greenwich apparent sidereal time. Passing an ICRS/J2000 right ascension adds a spurious precession term of about 50″ per year, so precess and nutate the Sun direction first, for example with `equatorialFromJ2000`. Keeping the right ascension as an argument leaves the function independent of the ephemeris model.
+
+```ts
+import { equationOfTime } from 'nebulosa/src/astronomy/bodies/sun'
+import { equatorial } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { equatorialFromJ2000 } from 'nebulosa/src/astronomy/coordinates/coordinate'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const time = timeYMDHMS(2026, 11, 3, 12, 0, 0, Timescale.UTC)
+
+// Geocentric ICRS direction to the Sun, then its right ascension of date.
+const [ra, dec] = equatorial(vecMinus(sun(time)[0], earth(time)[0]))
+const [raOfDate] = equatorialFromJ2000(ra, dec, time)
+
+const minutes = toDeg(equationOfTime(time, raOfDate)) * 4
+
+console.log(minutes) // 16.42 — minutes of time; the sundial is ahead of the clock
+```
+
 ### Equatorial Ephemeris Interpolation
 
 ### Equatorial Mount Geometric Pointing Errors
 
 ### Equinoxes and Solstices
+
+The astronomical seasons begin at the two equinoxes and two solstices, the instants when the Sun's apparent ecliptic longitude is 0°, 90°, 180°, and 270°. Here `spring`, `summer`, `autumn`, and `winter` name the starts of the northern-hemisphere seasons: the March equinox, June solstice, September equinox, and December solstice.
+
+`season` uses Meeus' method and is valid for years 1000 to 3000. The instant comes back in dynamical time: the returned `Time` is tagged TT, so convert it with `utc` for a civil clock time, which moves it earlier by Delta T (about a minute in the 2020s).
+
+```ts
+import { season } from 'nebulosa/src/astronomy/bodies/sun'
+import { timeToDate, utc } from 'nebulosa/src/astronomy/time/time'
+
+// year: calendar year. name: 'spring' | 'summer' | 'autumn' | 'winter'.
+const june = season(2026, 'summer')
+
+console.log(june.scale) // 3 — Timescale.TT, not UTC
+console.log(timeToDate(utc(june)).slice(0, 6)) // [2026, 6, 21, 8, 24, 55] — civil UTC
+console.log(timeToDate(utc(season(2026, 'spring'))).slice(0, 6)) // [2026, 3, 20, 14, 45, 35]
+console.log(timeToDate(utc(season(2026, 'autumn'))).slice(0, 6)) // [2026, 9, 23, 0, 5, 30]
+console.log(timeToDate(utc(season(2026, 'winter'))).slice(0, 6)) // [2026, 12, 21, 20, 50, 13]
+```
 
 ### ERFA / SOFA Algorithms
 
@@ -585,7 +716,46 @@ console.log(isMagnusDomain(150)) // false — outside [-100, 100] °C
 
 ### Radial Doppler Shift
 
+The Doppler shift is the change in a received frequency caused by motion along the line of sight: a receding source is redshifted, an approaching one blueshifted. `radialDopplerShift` is the classical first-order shift `−(rangeRate / c) · f`, which assumes `|rangeRate| ≪ c` and ignores relativistic and transverse terms. It suits radio tracking of satellites and spacecraft, not high-velocity sources.
+
+`rangeRate` is the receiver-to-source range derivative in AU/day, positive when receding. The result is in the unit of `carrierFrequency`, negative for receding (a redshift).
+
+```ts
+import { radialDopplerShift } from 'nebulosa/src/astronomy/formulas'
+import { kilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+// rangeRate: AU/day (kilometerPerSecond converts km/s). carrierFrequency: Hz.
+console.log(radialDopplerShift(kilometerPerSecond(7), 145.8e6)) // -3404.4 — Hz, receding source
+console.log(radialDopplerShift(kilometerPerSecond(-7), 145.8e6)) // 3404.4 — Hz, approaching source
+```
+
 ### Radial Velocity Correction
+
+A measured radial velocity includes the observer's own motion. The correction projects the observer's velocity onto the line of sight so the measurement can be referred to the solar-system barycenter or to the Sun: `rv_referred = rv_topocentric + correction`. A positive correction means the observer is moving toward the source.
+
+`radialVelocityCorrection` returns that value in AU/day for an ICRS direction (right ascension and declination in radians). The reference center follows the Earth state you pass, barycentric or heliocentric, and `location` adds the site's diurnal rotation; omit it for a geocentric correction. It is a first-order Newtonian projection and does not use the source's own velocity. Use `kilometerPerSecond` and `toKilometerPerSecond` to convert. For the timing counterpart, see Barycentric and Heliocentric Light-Time Correction.
+
+```ts
+import { radialVelocityCorrection } from 'nebulosa/src/astronomy/coordinates/correction'
+import { eraEpv00 } from 'nebulosa/src/astronomy/coordinates/erfa/earth'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { tdb, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+import { toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+const location = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
+const time = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.UTC)
+const t = tdb(time)
+const [heliocentric, barycentric] = eraEpv00(t.day, t.fraction)
+
+// Source at RA 5.5 h, Dec -5°. Earth state sets the reference center.
+const correction = radialVelocityCorrection(hour(5.5), deg(-5), time, barycentric, location)
+
+console.log(toKilometerPerSecond(correction)) // -8.056 — km/s, barycentric
+console.log(toKilometerPerSecond(radialVelocityCorrection(hour(5.5), deg(-5), time, heliocentric, location))) // -8.061 — km/s, heliocentric
+console.log(toKilometerPerSecond(radialVelocityCorrection(hour(5.5), deg(-5), time, barycentric))) // -8.381 — km/s, geocentric (no diurnal term)
+```
 
 ### Refractive Displacement
 
@@ -635,6 +805,20 @@ console.log(isMagnusDomain(150)) // false — outside [-100, 100] °C
 
 ### Solar Parallax and Semidiameter
 
+The Sun's horizontal parallax is the angle the Earth's equatorial radius subtends at the Sun, and its semidiameter is the angular radius of the solar disk. Both scale inversely with the Earth-Sun distance, so they grow when the Earth is closer to the Sun.
+
+`sunParallax` and `sunSemidiameter` take the distance in AU and return radians, using 8.794143″ and 959.63″ at 1 AU. They are Sun-specific; for the Moon see Lunar Parallax and Semidiameter.
+
+```ts
+import { sunParallax, sunSemidiameter } from 'nebulosa/src/astronomy/bodies/sun'
+import { toArcsec } from 'nebulosa/src/math/units/angle'
+
+// distance: Earth-Sun distance in AU.
+console.log(toArcsec(sunParallax(1))) // 8.794 — arcseconds
+console.log(toArcsec(sunSemidiameter(1))) // 959.63 — arcseconds
+console.log(toArcsec(sunSemidiameter(0.98329))) // 975.94 — arcseconds, near perihelion
+```
+
 ### Solar Saros Index
 
 ### Spherical Coordinate Conversions
@@ -650,6 +834,24 @@ console.log(isMagnusDomain(150)) // false — outside [-100, 100] °C
 ### SPK State Kernels
 
 ### Starlight Deflection
+
+The Sun and, to a much smaller degree, Jupiter and Saturn bend passing light, shifting a star's apparent position. `deflectStarlight` applies the ERFA multi-body model (`eraLdn`) to the observer-to-star direction of a star treated as infinitely distant and returns the deflected direction.
+
+Use it for stars and other very distant sources. It must not be used for finite-distance Solar-System targets, which need a deflector-to-source geometry; `apparentDirection` handles those. Inputs are a unit direction in ICRS/BCRS axes, the observer's barycentric position in AU, and a list of snapshot bodies at the observation epoch: `bm` the mass in solar masses, `dl` the deflection limiter in radians²/2, and `p` and `v` the barycentric position (AU) and velocity (AU/day). The result is a freshly allocated unit direction and the input is not mutated. The ERFA constants for the Sun, Jupiter, and Saturn are exported from the Apparent Direction module.
+
+```ts
+import { deflectStarlight, SUN_LIGHT_DEFLECTOR_LIMITER, SUN_LIGHT_DEFLECTOR_MASS } from 'nebulosa/src/astronomy/coordinates/apparent'
+import { vecAngle } from 'nebulosa/src/math/linear-algebra/vec3'
+import { toArcsec } from 'nebulosa/src/math/units/angle'
+
+const sun = { bm: SUN_LIGHT_DEFLECTOR_MASS, dl: SUN_LIGHT_DEFLECTOR_LIMITER, p: [0, 0, 0], v: [0, 0, 0] } as const
+
+// Observer at 1 AU on +x, looking along +z, 90° from the Sun.
+const direction = [0, 0, 1] as const
+const deflected = deflectStarlight(direction, [1, 0, 0], [sun])
+
+console.log(toArcsec(vecAngle(direction, deflected))) // 0.00407 — arcseconds of deflection at 90° from the Sun
+```
 
 ### Stellar and Asteroidal Occultations
 
