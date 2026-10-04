@@ -38,7 +38,7 @@
 
 import { DAYSPERJY, J2000 } from '../../../core/constants'
 import type { MutVec3 } from '../../../math/linear-algebra/vec3'
-import type { PositionAndVelocity } from '../astrometry'
+import type { PositionAndVelocityMut } from '../astrometry'
 
 // Port of ERFA's eraEpv00: the simplified VSOP2000-based Earth heliocentric and barycentric position
 // and velocity in the BCRS. This is an approximate reference ephemeris, not a JPL/SPK kernel.
@@ -513,7 +513,7 @@ const AM33 = 0.917482137087
 // VSOP2000 (X. Moisson, P. Bretagnon, 2001, Celes. Mechanics &
 // Dyn. Astron., 80, 3/4, 205-213) and is an adaptation of original
 // Fortran code supplied by P. Bretagnon (private comm., 2000).
-export function eraEpv00(tdb1: number, tdb2: number): readonly [PositionAndVelocity, PositionAndVelocity] {
+export function eraEpv00(tdb1: number, tdb2: number): readonly [PositionAndVelocityMut, PositionAndVelocityMut] {
 	// Time since reference epoch, Julian years.
 	const t = (tdb1 - J2000 + tdb2) / DAYSPERJY
 	const t2 = t * t

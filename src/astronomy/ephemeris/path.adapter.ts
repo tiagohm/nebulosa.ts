@@ -1,5 +1,5 @@
 import { vecZero } from '../../math/linear-algebra/vec3'
-import type { PositionAndVelocity } from '../coordinates/astrometry'
+import { zeroPositionAndVelocity, type PositionAndVelocity } from '../coordinates/astrometry'
 import { observerState } from '../coordinates/correction'
 import { frameToFrame, ICRS, TEME } from '../coordinates/frame'
 import { type BodySurfaceLocation, bodySurfaceState } from '../observer/body'
@@ -14,7 +14,7 @@ import { customEphemerisEndpoint, type EphemerisEndpoint, type EphemerisPath, ep
 // axes. SPK lookup and initialization remain asynchronous preparation only.
 
 // Geocentric zero state for extracting the site offset from observerState.
-const ZERO_EARTH_STATE: PositionAndVelocity = [vecZero(), vecZero()]
+const ZERO_EARTH_STATE = zeroPositionAndVelocity()
 
 // Resolves and initializes an SPK segment before returning its synchronous path.
 // Returns undefined when the kernel has no center-to-target segment. Throws when

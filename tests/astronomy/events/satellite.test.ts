@@ -1,17 +1,22 @@
 import { expect, test } from 'bun:test'
-import { equatorial } from '../../../src/astronomy/coordinates/astrometry'
-import { eraS2p } from '../../../src/astronomy/coordinates/erfa/erfa'
+import { equatorial, type PositionOverTime } from '../../../src/astronomy/coordinates/astrometry'
+import { eraNut06a, eraPnm06a, eraS2p } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { frameToFrame, ICRS, TEME } from '../../../src/astronomy/coordinates/frame'
 import { linearInterpolator, type EphemerisPoint } from '../../../src/astronomy/ephemeris/interpolation/ephemeris'
+import { Naif } from '../../../src/astronomy/ephemeris/kernels/naif'
+import { moon } from '../../../src/astronomy/ephemeris/models/analytical/elpmpp02'
 import { earth, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
+import { customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, relativeEphemerisPath } from '../../../src/astronomy/ephemeris/path'
+import { earthObserverEphemerisPath, sgp4EphemerisPath } from '../../../src/astronomy/ephemeris/path.adapter'
 import { earthOccultation } from '../../../src/astronomy/events/occultation.earth'
-import { isSatelliteSunlit, satelliteConjunctions, satelliteEclipses, satelliteLookAngles, satelliteMagnitude, satellitePasses, satelliteShadowState } from '../../../src/astronomy/events/satellite'
+import { isSatelliteSunlit, satelliteBetaAngle, satelliteConjunctions, satelliteEclipses, satelliteGroundFootprint, satelliteLookAngles, satelliteMagnitude, satellitePasses, satelliteShadowState, satelliteSubpoint, satelliteTrackingState, satelliteVisibleIntervals } from '../../../src/astronomy/events/satellite'
+import { radialDopplerShift } from '../../../src/astronomy/formulas'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
 import { parseTLE, recordFromTLE, sgp4 } from '../../../src/astronomy/orbits/propagation/sgp4'
 import { gcrsToItrsRotationMatrix, type Time, Timescale, timeShift, timeSubtract, tt } from '../../../src/astronomy/time/time'
-import { AU_KM, DAYSEC, ELLIPSOID_PARAMETERS, ONE_SECOND } from '../../../src/core/constants'
+import { AU_KM, DAYSEC, EARTH_RADIUS_AU, ELLIPSOID_PARAMETERS, ONE_SECOND, SPEED_OF_LIGHT_AU_DAY } from '../../../src/core/constants'
 import { matTransposeMulVec } from '../../../src/math/linear-algebra/mat3'
-import { type Vec3, vecAngle, vecLength, vecMinus } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngle, vecLength, vecMinus } from '../../../src/math/linear-algebra/vec3'
 import { clamp } from '../../../src/math/numerical/math'
 import { linearSpline } from '../../../src/math/numerical/spline'
 import { deg, toArcsec, toDeg, type Angle } from '../../../src/math/units/angle'
@@ -34,7 +39,7 @@ const COMPANION = recordFromTLE(parseTLE('1 25545U 98067A   20330.54791667  .000
 const SITE = geodeticLocation(deg(-46.6361), deg(-23.5475), 0)
 
 // Geocentric ICRS Sun direction (AU) from VSOP87E, the illumination-state light source.
-function sunAt(time: Time): Vec3 {
+function sunAt(time: Time): MutVec3 {
 	return vecMinus(sun(time)[0], earth(time)[0])
 }
 
@@ -48,7 +53,7 @@ function sunAt(time: Time): Vec3 {
 // two to three orders of magnitude cheaper than the raw provider while staying well under a
 // milliarcsecond over the window; query times outside [start, stop] are clamped to the nearest edge.
 // `sunAt` must return the geocentric Sun position (AU, ICRS), e.g. `sun(t)[0] - earth(t)[0]`.
-function cachedSun(sunAt: (time: Time) => Vec3, start: Time, stop: Time) {
+function cachedSun(sunAt: PositionOverTime, start: Time, stop: Time) {
 	const span = timeSubtract(stop, start)
 	// Default coarse Sun-sampling step: 30 minutes, in days.
 	const segments = Math.max(1, Math.ceil(span / (1800 * ONE_SECOND)))
@@ -266,4 +271,193 @@ test('the threshold rejects the more distant approach', () => {
 	const conjunctions = satelliteConjunctions(ISS, COMPANION, EPOCH, timeShift(EPOCH, 100 / 1440), { threshold: 735 / AU_KM })
 	expect(conjunctions.length).toBe(1)
 	expect(conjunctions[0].distance * AU_KM).toBeCloseTo(734.698, 0)
+})
+
+test('analytic topocentric tracking rates agree with Skyfield and change sign at closest range', () => {
+	// Skyfield 1.55, same ISS TLE and WGS84 site, (satellite-site).at(t) ICRS state;
+	// r.v/|r| in km/s and |r cross v|/|r|^2 in radians/day, no light time/refraction.
+	for (const [minutes, rangeRate, angularRate] of [
+		[0, 1.653125289874, 52.288947090571],
+		[55, -2.04340647306, 779.974209665535],
+		[56, 1.817975201335, 793.751657884409],
+	] as const) {
+		const time = timeShift(EPOCH, minutes / 1440)
+		// Skyfield's fixture omits polar motion. Match that convention and use continuous
+		// orientation instead of the daily matrix cache in setup, which changes rates by
+		// ~0.1 m/s and ~0.01 rad/day during this high-curvature, nearby pass.
+		time.providers = { pnm: (epoch) => eraPnm06a(epoch.day, epoch.fraction), nut: (epoch) => eraNut06a(epoch.day, epoch.fraction), pm: () => [0, 0] }
+		const tracking = satelliteTrackingState(ISS, SITE, time)
+		expect(Math.abs((tracking.rangeRate * AU_KM) / DAYSEC - rangeRate)).toBeLessThan(0.00003)
+		expect(Math.abs(tracking.angularRate - angularRate)).toBeLessThan(0.005)
+		const angles = satelliteLookAngles(ISS, SITE, time)
+		expect(tracking.range).toBeCloseTo(angles.range, 14)
+		expect(tracking.azimuth).toBeCloseTo(angles.azimuth, 12)
+		expect(tracking.altitude).toBeCloseTo(angles.altitude, 12)
+	}
+	const approaching = satelliteTrackingState(ISS, SITE, timeShift(EPOCH, 55 / 1440)).rangeRate
+	const receding = satelliteTrackingState(ISS, SITE, timeShift(EPOCH, 56 / 1440)).rangeRate
+	expect(approaching).toBeLessThan(0)
+	expect(receding).toBeGreaterThan(0)
+	expect(radialDopplerShift(approaching, 145.8e6)).toBeGreaterThan(0)
+	expect(radialDopplerShift(receding, 145.8e6)).toBeLessThan(0)
+	expect(radialDopplerShift(0, 145.8e6)).toBeCloseTo(0, 12)
+	expect(radialDopplerShift(SPEED_OF_LIGHT_AU_DAY * 1e-5, 1e9)).toBeCloseTo(-10000, 9)
+	expect(radialDopplerShift(approaching, 291.6e6)).toBeCloseTo(2 * radialDopplerShift(approaching, 145.8e6), 10)
+})
+
+test('subpoint and signed beta angle agree with independent Skyfield geocentric geometry', () => {
+	// Skyfield 1.55 WGS84 geographic_position_of(satellite.at(t)); DE421 geometric Sun
+	// and satellite.at(t) ICRS angular momentum. Same TLE epoch and 55 minutes later.
+	for (const [minutes, longitude, latitude, height, beta] of [
+		[0, 119.283205080416, 0.014255032401, 419.791575524997, 14.620657417759],
+		[55, -52.4547929759, -25.695418374253, 427.043574797101, 14.72582825463],
+	] as const) {
+		const time = timeShift(EPOCH, minutes / 1440)
+		const point = satelliteSubpoint(ISS, time, Ellipsoid.WGS84)
+		expect(Math.abs(toDeg(point.longitude) - longitude)).toBeLessThan(0.0002)
+		expect(Math.abs(toDeg(point.latitude) - latitude)).toBeLessThan(0.0002)
+		expect(Math.abs(point.elevation * AU_KM - height)).toBeLessThan(0.002)
+		expect(Math.abs(toDeg(satelliteBetaAngle(ISS, sunAt, time)) - beta)).toBeLessThan(0.002)
+		const positive = satelliteBetaAngle(ISS, sunAt, time)
+		expect(satelliteBetaAngle(ISS, (epoch) => [-sunAt(epoch)[0], -sunAt(epoch)[1], -sunAt(epoch)[2]], time)).toBeCloseTo(-positive, 10)
+	}
+})
+
+test('spherical footprint satisfies tangent-horizon and surface-arc invariants', () => {
+	const radius = vecLength(sgp4(EPOCH, ISS)[0])
+	const footprint = satelliteGroundFootprint(ISS, EPOCH)
+	expect(footprint.altitude).toBeCloseTo(radius - EARTH_RADIUS_AU, 14)
+	expect(Math.cos(footprint.halfAngle)).toBeCloseTo(EARTH_RADIUS_AU / radius, 12)
+	expect(footprint.surfaceRadius).toBeCloseTo(EARTH_RADIUS_AU * footprint.halfAngle, 14)
+	expect(footprint.subpoint.elevation).toBe(footprint.altitude)
+	const smaller = satelliteGroundFootprint(ISS, EPOCH, EARTH_RADIUS_AU * 0.9)
+	expect(smaller.halfAngle).toBeGreaterThan(footprint.halfAngle)
+	const surface = satelliteGroundFootprint(ISS, EPOCH, radius)
+	expect(surface.halfAngle).toBeCloseTo(0, 6)
+	expect(Number.isFinite(surface.surfaceRadius)).toBe(true)
+})
+
+test('spherical footprint rejects impossible reference-sphere geometry', () => {
+	for (const referenceRadius of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+		expect(() => satelliteGroundFootprint(ISS, EPOCH, referenceRadius)).toThrow()
+	}
+	const radius = vecLength(sgp4(EPOCH, ISS)[0])
+	expect(() => satelliteGroundFootprint(ISS, EPOCH, radius * 1.001)).toThrow('satellite radius must be at least the reference radius')
+})
+
+test('observer-relative satellite Sun/Moon avoidance paths agree with independent geometric angles', () => {
+	// Skyfield 1.55/DE421 same-epoch geometric vectors: sat-site, Sun-Earth-site, Moon-Earth-site.
+	const observer = earthObserverEphemerisPath(SITE, customEphemerisEndpoint('test-site'))
+	const target = relativeEphemerisPath(sgp4EphemerisPath(ISS), observer)
+	const solar = relativeEphemerisPath(
+		ephemerisPath(naifEphemerisEndpoint(Naif.EARTH), naifEphemerisEndpoint(Naif.SUN), (time) => [sunAt(time), [0, 0, 0]]),
+		observer,
+	)
+	const lunar = relativeEphemerisPath(ephemerisPath(naifEphemerisEndpoint(Naif.EARTH), naifEphemerisEndpoint(Naif.MOON), moon), observer)
+	for (const [minutes, sunAngle, moonAngle] of [
+		[0, 146.307284369162, 19.182739360911],
+		[55, 71.377547286393, 137.418253056552],
+	] as const) {
+		const time = timeShift(EPOCH, minutes / 1440)
+		const satellite = target.stateAt(time)[0]
+		expect(Math.abs(toDeg(vecAngle(satellite, solar.stateAt(time)[0])) - sunAngle)).toBeLessThan(0.002)
+		expect(Math.abs(toDeg(vecAngle(satellite, lunar.stateAt(time)[0])) - moonAngle)).toBeLessThan(0.002)
+	}
+})
+
+// Permissive solar/magnitude ceilings isolate individual interval boundaries; the empirical
+// magnitude and altitude remain explicit and are tightened by the tests below.
+const VISIBLE_OPTIONS = { standardMagnitude: -1.8, minimumAltitude: 0, maximumMagnitude: 100, maximumSunAltitude: Math.PI / 2, step: 10 * ONE_SECOND, tolerance: 1e-8 }
+
+test('visible intervals clip minimum altitude, magnitude and partial-window boundaries', () => {
+	const start = timeShift(EPOCH, 49 / 1440)
+	const stop = timeShift(EPOCH, 62 / 1440)
+	const [baseline] = satelliteVisibleIntervals(ISS, SITE, CACHED_SUN, start, stop, VISIBLE_OPTIONS)
+	expect(minutesAfterEpoch(baseline.start.time)).toBeCloseTo(50.25, 1)
+	expect(minutesAfterEpoch(baseline.end.time)).toBeCloseTo(60.8975, 2)
+	const raised = satelliteVisibleIntervals(ISS, SITE, CACHED_SUN, start, stop, { ...VISIBLE_OPTIONS, minimumAltitude: deg(20) })
+	expect(raised).toHaveLength(1)
+	// Skyfield 1.55/DE421, scipy 1.16.2 brentq on independent geometric altitude and
+	// Molczan/McCants photometry: minutes from the TLE epoch. 0.01 min covers EOP residuals.
+	expect(Math.abs(minutesAfterEpoch(raised[0].start.time) - 53.8371535)).toBeLessThan(0.01)
+	expect(Math.abs(minutesAfterEpoch(raised[0].end.time) - 57.250611816)).toBeLessThan(0.01)
+	expect(raised[0].start.altitude).toBeCloseTo(deg(20), 6)
+	expect(raised[0].end.altitude).toBeCloseTo(deg(20), 6)
+	expect(timeSubtract(raised[0].start.time, baseline.start.time)).toBeGreaterThan(0)
+	expect(timeSubtract(raised[0].end.time, baseline.end.time)).toBeLessThan(0)
+	const bright = satelliteVisibleIntervals(ISS, SITE, CACHED_SUN, start, stop, { ...VISIBLE_OPTIONS, maximumMagnitude: -1.5 })
+	expect(bright).toHaveLength(1)
+	expect(Math.abs(minutesAfterEpoch(bright[0].start.time) - 53.74115791)).toBeLessThan(0.01)
+	expect(Math.abs(minutesAfterEpoch(bright[0].end.time) - 56.808878143)).toBeLessThan(0.01)
+	expect(bright[0].start.magnitude).toBeCloseTo(-1.5, 5)
+	expect(bright[0].end.magnitude).toBeCloseTo(-1.5, 5)
+	expect(timeSubtract(bright[0].start.time, baseline.start.time)).toBeGreaterThan(0)
+	expect(timeSubtract(bright[0].end.time, baseline.end.time)).toBeLessThan(0)
+	// Bright culmination does not make the faint rise/set eligible.
+	expect(bright[0].culmination.magnitude).toBeLessThan(-1.5)
+	expect(baseline.start.magnitude).toBeGreaterThan(-1.5)
+	const clippedStart = timeShift(EPOCH, 55 / 1440)
+	const clippedStop = timeShift(EPOCH, 56 / 1440)
+	const partial = satelliteVisibleIntervals(ISS, SITE, CACHED_SUN, clippedStart, clippedStop, VISIBLE_OPTIONS)
+	expect(partial).toHaveLength(1)
+	expect(timeSubtract(partial[0].start.time, clippedStart)).toBeCloseTo(0, 12)
+	expect(timeSubtract(partial[0].end.time, clippedStop)).toBeCloseTo(0, 12)
+})
+
+test('observer solar altitude clips an interval and daylight rejects a bright sunlit culmination', () => {
+	const start = timeShift(EPOCH, 49 / 1440)
+	const stop = timeShift(EPOCH, 62 / 1440)
+	const [baseline] = satelliteVisibleIntervals(ISS, SITE, CACHED_SUN, start, stop, VISIBLE_OPTIONS)
+	const ceiling = deg(78.3)
+	const intervals = satelliteVisibleIntervals(ISS, SITE, CACHED_SUN, start, stop, { ...VISIBLE_OPTIONS, maximumSunAltitude: ceiling })
+	expect(intervals).toHaveLength(1)
+	// Independent Skyfield 1.55/DE421 geometric Sun-Earth-site direction and ITRS
+	// geodetic vertical, scipy 1.16.2 root: 55.448906317 min; no apparent corrections.
+	expect(Math.abs(minutesAfterEpoch(intervals[0].end.time) - 55.448906317)).toBeLessThan(0.02)
+	expect(intervals[0].end.sunAltitude).toBeCloseTo(ceiling, 6)
+	expect(timeSubtract(intervals[0].end.time, baseline.end.time)).toBeLessThan(0)
+	expect(timeSubtract(intervals[0].start.time, baseline.start.time)).toBeCloseTo(0, 8)
+	expect(baseline.culmination.shadow).toBe('sunlit')
+	expect(baseline.culmination.magnitude).toBeLessThan(3.5)
+	expect(satelliteVisibleIntervals(ISS, SITE, CACHED_SUN, start, stop, { ...VISIBLE_OPTIONS, maximumSunAltitude: deg(-6), maximumMagnitude: 3.5 })).toEqual([])
+})
+
+test('a zero-flux solar alignment splits visibility without passing infinite margins to Brent', () => {
+	const aligned = timeShift(EPOCH, 55 / 1440)
+	const observer = earthObserverEphemerisPath(SITE, customEphemerisEndpoint('alignment-site')).stateAt(aligned)[0]
+	const satellite = sgp4EphemerisPath(ISS).stateAt(aligned)[0]
+	// A fixed AU-scale Sun behind the satellite from this observer gives phase PI at the
+	// central sample: magnitude tends to +Infinity, but the neighboring track is illuminated.
+	const solar: Vec3 = [satellite[0] + 200000 * (satellite[0] - observer[0]), satellite[1] + 200000 * (satellite[1] - observer[1]), satellite[2] + 200000 * (satellite[2] - observer[2])]
+	const sunAt = () => solar
+	expect(satelliteMagnitude(ISS, SITE, sunAt, aligned, -1.8).magnitude).toBe(Number.POSITIVE_INFINITY)
+	const intervals = satelliteVisibleIntervals(ISS, SITE, sunAt, timeShift(EPOCH, 54.5 / 1440), timeShift(EPOCH, 55.5 / 1440), { ...VISIBLE_OPTIONS, maximumMagnitude: 3.5, step: 15 * ONE_SECOND, tolerance: 1e-10 })
+	expect(intervals).toHaveLength(2)
+	expect(timeSubtract(intervals[0].end.time, aligned)).toBeLessThan(0)
+	expect(timeSubtract(intervals[1].start.time, aligned)).toBeGreaterThan(0)
+	expect(intervals[0].end.magnitude).toBeCloseTo(3.5, 5)
+	expect(intervals[1].start.magnitude).toBeCloseTo(3.5, 5)
+})
+
+test('umbra entry cuts a pass whose culmination is illuminated', () => {
+	const start = timeShift(EPOCH, 542 / 1440)
+	const stop = timeShift(EPOCH, 555 / 1440)
+	const intervals = satelliteVisibleIntervals(ISS, SITE, CACHED_SUN, start, stop, VISIBLE_OPTIONS)
+	expect(intervals).toHaveLength(1)
+	const interval = intervals[0]
+	expect(minutesAfterEpoch(interval.start.time)).toBeCloseTo(543.037, 2)
+	expect(minutesAfterEpoch(interval.end.time)).toBeGreaterThan(550)
+	expect(minutesAfterEpoch(interval.end.time)).toBeLessThan(552)
+	// Skyfield 1.55/DE421 plus independent conical angular-radius geometry, scipy 1.16.2:
+	// Earth sphere 6378.1366 km, Sun 695700 km; umbra entry 551.090764289 min.
+	expect(Math.abs(minutesAfterEpoch(interval.end.time) - 551.090764289)).toBeLessThan(0.02)
+	expect(interval.end.altitude).toBeGreaterThan(0)
+	expect(interval.culmination.shadow).not.toBe('umbra')
+	expect(satelliteShadowState(ISS, CACHED_SUN, timeShift(interval.end.time, -ONE_SECOND))).not.toBe('umbra')
+	expect(satelliteShadowState(ISS, CACHED_SUN, timeShift(interval.end.time, ONE_SECOND))).toBe('umbra')
+	for (let i = 1; i < 10; i++) {
+		const time = timeShift(interval.start.time, (timeSubtract(interval.end.time, interval.start.time) * i) / 10)
+		expect(satelliteLookAngles(ISS, SITE, time).altitude).toBeGreaterThan(0)
+		expect(satelliteMagnitude(ISS, SITE, CACHED_SUN, time, -1.8).illuminated).toBe(true)
+	}
 })

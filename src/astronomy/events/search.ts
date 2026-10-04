@@ -1,3 +1,5 @@
+import { NumberComparator } from '../../core/util'
+import { validateFinite } from '../../core/validation'
 import { brentMinimize, brentRoot } from '../../math/numerical/optimization'
 import { type Time, timeShift, timeSubtract } from '../time/time'
 
@@ -36,6 +38,23 @@ const DEFAULT_STEP = 1 / 24
 // Default Brent refinement tolerance: ~0.09 s, in days.
 const DEFAULT_TOLERANCE = 1e-6
 
+// Checks finite span/step before scanning to prevent endless loops on infinite windows or a step
+// too small to advance floating-point offsets. Non-positive spans/steps retain the empty-result contract.
+function scanSpan(start: Time, stop: Time, step: number) {
+	const span = validateFinite(timeSubtract(stop, start))
+	validateFinite(step)
+	if (span > 0 && step > 0 && !(span + step > span)) throw new RangeError('search step is too small to advance the window')
+	return span
+}
+
+// Refines one coarse sign crossing of f, whose argument is a day offset. An exact right-end
+// zero is retained; a non-crossing returns undefined. Shared by roots and interval scanning.
+function crossingOffset(f: (offset: number) => number, left: number, right: number, before: number, after: number, tolerance: number) {
+	if (after === 0) return right
+	if ((before < 0 && after > 0) || (before > 0 && after < 0)) return brentRoot(f, left, right, { tolerance }).root
+	return undefined
+}
+
 // Finds every instant where f changes sign over [start, stop].
 //
 // f is sampled at the coarse step from start to stop; each sign change between consecutive samples is
@@ -44,7 +63,7 @@ const DEFAULT_TOLERANCE = 1e-6
 // so step must be finer than the spacing between roots. Endpoints that evaluate to exactly zero are
 // reported; a root at an interior sample is not double-counted.
 export function searchRoots(f: (time: Time) => number, start: Time, stop: Time, { step = DEFAULT_STEP, tolerance = DEFAULT_TOLERANCE }: TimeSearchOptions = {}): Time[] {
-	const span = timeSubtract(stop, start)
+	const span = scanSpan(start, stop, step)
 	if (span <= 0 || step <= 0) return []
 
 	const g = (x: number) => f(timeShift(start, x))
@@ -58,13 +77,8 @@ export function searchRoots(f: (time: Time) => number, start: Time, stop: Time, 
 		const x1 = Math.min(x0 + step, span)
 		const f1 = g(x1)
 
-		if (f1 === 0) {
-			// Exact sample zeros, including stop. The loop never retests f0 === 0, so this is not a duplicate.
-			roots.push(timeShift(start, x1))
-		} else if ((f0 < 0 && f1 > 0) || (f0 > 0 && f1 < 0)) {
-			const root = brentRoot(g, x0, x1, { tolerance })
-			roots.push(timeShift(start, root.root))
-		}
+		const crossing = crossingOffset(g, x0, x1, f0, f1, tolerance)
+		if (crossing !== undefined) roots.push(timeShift(start, crossing))
 
 		x0 = x1
 		f0 = f1
@@ -81,7 +95,7 @@ export function searchRoots(f: (time: Time) => number, start: Time, stop: Time, 
 // the refined objective value. Extrema flatter than one coarse step, or sitting on the window
 // endpoints, are not detected.
 export function searchExtrema(f: (time: Time) => number, start: Time, stop: Time, { step = DEFAULT_STEP, tolerance = DEFAULT_TOLERANCE }: TimeSearchOptions = {}): TimeExtremum[] {
-	const span = timeSubtract(stop, start)
+	const span = scanSpan(start, stop, step)
 	if (span <= 0 || step <= 0) return []
 
 	const g = (x: number) => f(timeShift(start, x))
@@ -111,4 +125,81 @@ export function searchExtrema(f: (time: Time) => number, start: Time, stop: Time
 	}
 
 	return extrema
+}
+
+// A continuous interval clipped to the caller's search window.
+export interface TimeInterval {
+	// First epoch, inclusive at zero margins.
+	readonly start: Time
+	// Last epoch, inclusive at zero margins.
+	readonly end: Time
+}
+
+// Finds intervals where all supplied continuous scalar margins are non-negative over start/stop.
+// Each margin's sign changes are refined independently, so one cannot hide another's roots.
+// All margins share each coarse epoch, allowing callers to share one geometry evaluation. Only
+// two scalar samples per margin are retained; refined roots reuse the same primitive as searchRoots.
+// Roots partition the window; midpoint classification selects the interiors and joins adjacent
+// accepted pieces. Coarse step must resolve every sign crossing; tangencies and intervals shorter
+// than a step can be missed. An empty set of margins accepts the whole positive-length window.
+// Returns chronological intervals, without retaining a dense sampled track.
+export function searchIntervals(margins: readonly ((time: Time) => number)[], start: Time, stop: Time, options: TimeSearchOptions = {}): TimeInterval[] {
+	const { step = DEFAULT_STEP, tolerance = DEFAULT_TOLERANCE } = options
+	const span = scanSpan(start, stop, step)
+	if (!(span > 0) || !(step > 0)) return []
+	if (margins.length === 0) return [{ start: timeShift(start, 0), end: timeShift(start, span) }]
+
+	const offsets = [0, span]
+	const objectives = margins.map((margin) => (offset: number) => margin(timeShift(start, offset)))
+	const first = timeShift(start, 0)
+
+	let before = new Float64Array(margins.length)
+	let after = new Float64Array(margins.length)
+	for (let i = 0; i < margins.length; i++) before[i] = margins[i](first)
+	let left = 0
+
+	while (left < span) {
+		const right = Math.min(left + step, span)
+		const epoch = timeShift(start, right)
+
+		for (let i = 0; i < margins.length; i++) after[i] = margins[i](epoch)
+		for (let i = 0; i < margins.length; i++) {
+			const crossing = crossingOffset(objectives[i], left, right, before[i], after[i], tolerance)
+			if (crossing !== undefined) offsets.push(crossing)
+		}
+
+		const swap = before
+		before = after
+		after = swap
+		left = right
+	}
+
+	offsets.sort(NumberComparator)
+	const intervals: TimeInterval[] = []
+	let previousEnd = -1
+
+	for (let i = 1; i < offsets.length; i++) {
+		const left = offsets[i - 1]
+		const right = offsets[i]
+		if (!(right > left)) continue
+
+		const middle = timeShift(start, (left + right) / 2)
+		let accepted = true
+
+		for (const margin of margins) {
+			if (!(margin(middle) >= 0)) {
+				accepted = false
+				break
+			}
+		}
+
+		if (!accepted) continue
+
+		const end = timeShift(start, right)
+		if (previousEnd === left) intervals[intervals.length - 1] = { start: intervals.at(-1)!.start, end }
+		else intervals.push({ start: timeShift(start, left), end })
+		previousEnd = right
+	}
+
+	return intervals
 }

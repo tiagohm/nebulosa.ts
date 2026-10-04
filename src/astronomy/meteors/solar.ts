@@ -1,7 +1,7 @@
 import { DAYSPERTY, ECLIPTIC_J2000_MATRIX, TAU } from '../../core/constants'
 import { matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { normalizeAngle, normalizePI, type Angle } from '../../math/units/angle'
-import { relativePositionAndVelocity, type PositionAndVelocity } from '../coordinates/astrometry'
+import { relativePositionAndVelocity, type PositionAndVelocityMut } from '../coordinates/astrometry'
 import { earth, sun } from '../ephemeris/models/analytical/vsop87e'
 import { searchRoots } from '../events/search'
 import { Timescale, type Time, timeConvert, timeShift, timeSubtract, timeYMD } from '../time/time'
@@ -115,14 +115,14 @@ function convertScale(time: Time, scale: Timescale | undefined): Time {
 }
 
 // Keep the imported relative-state primitive part of the module's documented calculation seam.
-export function meteorSolarRelativeState(time: Time): PositionAndVelocity {
+export function meteorSolarRelativeState(time: Time): PositionAndVelocityMut {
 	return relativePositionAndVelocity(solarSun, solarEarth, time)
 }
 
-function solarSun(time: Time): PositionAndVelocity {
+function solarSun(time: Time) {
 	return sun(time, 'eclipticJ2000')
 }
 
-function solarEarth(time: Time): PositionAndVelocity {
+function solarEarth(time: Time) {
 	return earth(time, 'eclipticJ2000')
 }

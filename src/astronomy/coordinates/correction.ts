@@ -6,7 +6,7 @@ import type { Distance } from '../../math/units/distance'
 import type { Velocity } from '../../math/units/velocity'
 import type { GeographicPosition } from '../observer/location'
 import { gcrsToItrsRotationMatrix, type Time } from '../time/time'
-import type { PositionAndVelocity } from './astrometry'
+import type { PositionAndVelocity, PositionAndVelocityMut } from './astrometry'
 import { eraAb, eraS2c } from './erfa/erfa'
 import { itrs } from './itrs'
 
@@ -30,8 +30,8 @@ import { itrs } from './itrs'
 // where R = `gcrsToItrsRotationMatrix` maps GCRS->ITRS, so R^T maps ITRS->GCRS,
 // and omega_itrs ~ (0, 0, ANGVEL_PER_DAY) is the Earth rotation vector in ITRS.
 // Returns freshly allocated vectors; the input `time` cache is not mutated.
-export function observerState(time: Time, earth: PositionAndVelocity, location: GeographicPosition | undefined = time.location): PositionAndVelocity {
-	if (location === undefined) return earth
+export function observerState(time: Time, earth: PositionAndVelocity, location: GeographicPosition | undefined = time.location): PositionAndVelocityMut {
+	if (location === undefined) return [vecClone(earth[0]), vecClone(earth[1])]
 	const r = gcrsToItrsRotationMatrix(time)
 	// Observer offset and Earth rotation vector, rotated from ITRS into GCRS.
 	const rGcrs = matTransposeMulVec(r, itrs(location))

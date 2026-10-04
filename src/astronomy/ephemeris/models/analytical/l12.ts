@@ -2,7 +2,7 @@ import { DAYSPERJY, TAU } from '../../../../core/constants'
 import { matMulVec } from '../../../../math/linear-algebra/mat3'
 import type { MutVec3 } from '../../../../math/linear-algebra/vec3'
 import { pmod } from '../../../../math/numerical/math'
-import type { PositionAndVelocity } from '../../../coordinates/astrometry'
+import type { PositionAndVelocity, PositionAndVelocityMut } from '../../../coordinates/astrometry'
 import { type Time, tt } from '../../../time/time'
 
 // L1.2 theory of the galilan satellites,
@@ -685,7 +685,7 @@ function applyLongPeriodChebyshev(t: number, index: number, elem: Float64Array) 
 // series, degree-8 Chebyshev polynomials correct L, k, h, q, p for very long-period terms inside
 // the theory's validity window. Solves Kepler's equation to a 1e-12 tolerance. Returned vectors
 // alias the internal conversion buffers.
-export function compute(time: Time, index: number): PositionAndVelocity {
+export function compute(time: Time, index: number): PositionAndVelocityMut {
 	time = tt(time)
 	const t = time.day - 2433282 + (time.fraction - 0.5)
 	const elem = new Float64Array(6)

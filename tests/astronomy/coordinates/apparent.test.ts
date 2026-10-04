@@ -8,7 +8,7 @@ import { geodeticLocation } from '../../../src/astronomy/observer/location'
 import { tdb, Timescale, timeShift, timeYMDHMS, toJulianDay } from '../../../src/astronomy/time/time'
 import { SPEED_OF_LIGHT_AU_DAY, SUN_RADIUS_AU } from '../../../src/core/constants'
 import { matMulVec } from '../../../src/math/linear-algebra/mat3'
-import { type Vec3, vecAngle, vecClone, vecLength, vecNormalize } from '../../../src/math/linear-algebra/vec3'
+import { type Vec3, vecAngle, vecClone, vecLength, vecNormalize, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { arcsec, deg, toArcsec } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 import { kilometerPerSecond } from '../../../src/math/units/velocity'
@@ -27,10 +27,7 @@ function farTarget(observerPosition: Vec3, direction: Vec3, distance = 1e9): Pos
 
 test('zero light-time iterations reproduce the geometric same-epoch direction', () => {
 	const observer = constantPv([0, 0, 0])
-	const target: PositionAndVelocityOverTime = (t) => [
-		[1 + t.fraction, 2, 3],
-		[0, 0, 0],
-	]
+	const target: PositionAndVelocityOverTime = (t) => [[1 + t.fraction, 2, 3], vecZero()]
 
 	const place = apparentDirection(target, observer, TIME, { lightTimeIterations: 0, aberration: false })!
 	const geometric = topocentricDirection(target, observer, TIME, 0)

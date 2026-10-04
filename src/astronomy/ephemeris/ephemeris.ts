@@ -2,7 +2,7 @@ import { TAU } from '../../core/constants'
 import { type NumberArray, pmod } from '../../math/numerical/math'
 import type { Angle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
-import type { PositionAndVelocity } from '../coordinates/astrometry'
+import type { PositionAndVelocityMut } from '../coordinates/astrometry'
 
 // Conversion from elliptic orbital elements to rectangular position and velocity, used by the
 // analytical satellite/planet theories. The shared solver takes the equinoctial-style element
@@ -32,7 +32,7 @@ import type { PositionAndVelocity } from '../coordinates/astrometry'
 // M = mean anomaly
 // i = inclination
 // e = eccentricity
-export function ellipticToRectangular(a: Distance, n: Angle, elem: Readonly<NumberArray>, dt: number, o?: PositionAndVelocity): PositionAndVelocity {
+export function ellipticToRectangular(a: Distance, n: Angle, elem: Readonly<NumberArray>, dt: number, out?: PositionAndVelocityMut): PositionAndVelocityMut {
 	const L = pmod(elem[1] + n * dt, TAU)
 	// solve Keplers equation
 	//    x = L - elem[2]*sin(x) + elem[3]*cos(x)
@@ -79,8 +79,8 @@ export function ellipticToRectangular(a: Distance, n: Angle, elem: Readonly<Numb
 	const rtq = 1 - elem_4q - elem_4q
 	const rdg = 2 * elem[5] * elem[4]
 
-	const p = o?.[0] ?? [0, 0, 0]
-	const v = o?.[1] ?? [0, 0, 0]
+	const p = out?.[0] ?? [0, 0, 0]
+	const v = out?.[1] ?? [0, 0, 0]
 
 	p[0] = x1 * rtp + y1 * rdg
 	p[1] = x1 * rdg + y1 * rtq
@@ -95,21 +95,21 @@ export function ellipticToRectangular(a: Distance, n: Angle, elem: Readonly<Numb
 	v[1] = vx1 * rdg + vy1 * rtq
 	v[2] = (-vx1 * elem[5] + vy1 * elem[4]) * dwho
 
-	return o ?? [p, v]
+	return out ?? [p, v]
 }
 
 // Variant where elem[0] is the mean motion n (rad/day); derives the semi-major axis
 // from mu = G*(m1+m2) via a = cbrt(mu/n^2). Optionally writes into `o`, which is returned.
-export function ellipticToRectangularN(mu: number, elem: Readonly<NumberArray>, dt: number, o?: PositionAndVelocity) {
+export function ellipticToRectangularN(mu: number, elem: Readonly<NumberArray>, dt: number, out?: PositionAndVelocityMut) {
 	const n = elem[0]
 	const a = Math.cbrt(mu / (n * n))
-	return ellipticToRectangular(a, n, elem, dt, o)
+	return ellipticToRectangular(a, n, elem, dt, out)
 }
 
 // Variant where elem[0] is the semi-major axis a (AU); derives the mean motion
 // from mu = G*(m1+m2) via n = sqrt(mu/a^3). Optionally writes into `o`, which is returned.
-export function ellipticToRectangularA(mu: number, elem: Readonly<NumberArray>, dt: number, o?: PositionAndVelocity) {
+export function ellipticToRectangularA(mu: number, elem: Readonly<NumberArray>, dt: number, out?: PositionAndVelocityMut) {
 	const a = elem[0]
 	const n = Math.sqrt(mu / (a * a * a)) // mean motion
-	return ellipticToRectangular(a, n, elem, dt, o)
+	return ellipticToRectangular(a, n, elem, dt, out)
 }

@@ -5,7 +5,7 @@ import type { Angle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import { kilometerPerSecond } from '../../math/units/velocity'
 import type { Time } from '../time/time'
-import type { PositionAndVelocity } from './astrometry'
+import type { PositionAndVelocityMut, PositionAndVelocityOverTime, PositionOverTime, VelocityOverTime } from './astrometry'
 import { eraS2p } from './erfa/erfa'
 import { ECLIPTIC_J2000, type CoordinateFrame, type CoordinateFrameOutput, type Frame } from './frame'
 
@@ -26,10 +26,10 @@ import { ECLIPTIC_J2000, type CoordinateFrame, type CoordinateFrameOutput, type 
 export interface AffineFrame extends Frame {
 	// Position of this frame's origin, expressed in the base frame, in AU. Absent
 	// means the origin coincides with the base origin (no translation).
-	readonly originAt?: (time: Time) => Vec3
+	readonly originAt?: PositionOverTime
 	// Velocity of this frame's origin in the base frame, in AU/day. Absent means a
 	// fixed origin (no velocity offset). Used by frames such as the LSR.
-	readonly originVelocityAt?: (time: Time) => Vec3
+	readonly originVelocityAt?: VelocityOverTime
 }
 
 // Applies an affine transform (base -> frame) to a position or full state at
@@ -49,7 +49,7 @@ export function affineFromBase<T extends CoordinateFrame>(pv: T, frame: AffineFr
 		return matMulVec(r, pv, o as MutVec3 | undefined) as never
 	}
 
-	const out = o as PositionAndVelocity | undefined
+	const out = o as PositionAndVelocityMut | undefined
 	const originVelocity = frame.originVelocityAt?.(time)
 	// Subtract the origin offsets first; these produce fresh vectors, so writing p
 	// into out[0] afterwards is safe even when `o` aliases `pv`.
@@ -87,7 +87,7 @@ export function affineToBase<T extends CoordinateFrame>(pv: T, frame: AffineFram
 		return (origin ? vecPlus(p, origin, p) : p) as never
 	}
 
-	const out = o as PositionAndVelocity | undefined
+	const out = o as PositionAndVelocityMut | undefined
 
 	// Build the drag-corrected velocity from the original position first, since
 	// computing p may overwrite pv[0] when `o` aliases `pv`.
@@ -128,7 +128,7 @@ export const BARYCENTRIC_ECLIPTIC: AffineFrame = ECLIPTIC_J2000
 // so this module stays in the coordinates layer without importing ephemerides;
 // `sunAt` must return the Sun's barycentric position (AU) and velocity (AU/day)
 // in the base (ICRS/BCRS) frame at time.
-export function heliocentricEclipticFrame(sunAt: (time: Time) => readonly [Vec3, Vec3]): AffineFrame {
+export function heliocentricEclipticFrame(sunAt: PositionAndVelocityOverTime): AffineFrame {
 	return {
 		rotationAt: ECLIPTIC_J2000.rotationAt,
 		originAt: (time) => sunAt(time)[0],

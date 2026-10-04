@@ -1,10 +1,10 @@
-import { vecNegateMut, vecPlus } from '../../math/linear-algebra/vec3'
-import type { PositionAndVelocityOverTime } from '../coordinates/astrometry'
+import { vecNegate, vecPlus } from '../../math/linear-algebra/vec3'
+import { zeroPositionAndVelocity, type PositionAndVelocityMut, type PositionAndVelocityOverTime } from '../coordinates/astrometry'
 import { Naif } from './kernels/naif'
 
 // Synchronous center-to-target ephemeris paths in library-base ICRS/BCRS-oriented axes.
-// Positions are AU and velocities AU/day. Providers may reuse storage; composed paths
-// snapshot each input before sampling another provider and return owned vectors.
+// Positions are AU and velocities AU/day. Each provider may reuse its own borrowed
+// storage between calls. Use ephemerisAt() or copy the state to retain an owned snapshot.
 
 // A NAIF body identifier; name is descriptive metadata, not identity.
 export interface NaifEphemerisEndpoint {
@@ -28,7 +28,8 @@ export interface CustomEphemerisEndpoint {
 export type EphemerisEndpoint = NaifEphemerisEndpoint | CustomEphemerisEndpoint
 
 // A prepared synchronous state provider from center to target. The provider's
-// vectors are in AU and AU/day; callers must not assume it returns owned storage.
+// vectors are in AU and AU/day and are borrowed/read-only. A later call may overwrite
+// them; independent providers must not share mutable output storage.
 export interface EphemerisPath {
 	// Origin of the returned position and velocity.
 	readonly center: EphemerisEndpoint
@@ -62,34 +63,41 @@ export function ephemerisPath(center: EphemerisEndpoint, target: EphemerisEndpoi
 	return { center, target, stateAt }
 }
 
-// Reverses a center-to-target path. Each evaluation returns fresh position and
-// velocity vectors, even when the underlying provider reuses its storage.
-export function reverseEphemerisPath(path: EphemerisPath): EphemerisPath {
+// Reverses a center-to-target path without mutating the source provider. The returned
+// path reuses scratch (or an allocated workspace), which must not alias source storage.
+// A later evaluation may overwrite its state; retain it with ephemerisAt() or a copy.
+export function reverseEphemerisPath(path: EphemerisPath, scratch?: PositionAndVelocityMut): EphemerisPath {
+	scratch ??= zeroPositionAndVelocity()
 	return ephemerisPath(path.target, path.center, (time) => {
 		const pv = path.stateAt(time)
-		vecNegateMut(pv[0])
-		vecNegateMut(pv[1])
-		return pv
+		vecNegate(pv[0], scratch[0])
+		vecNegate(pv[1], scratch[1])
+		return scratch
 	})
 }
 
 // Adds first center->middle and second middle->target at the same epoch.
 // Throws for mismatched endpoints, which would yield plausible but invalid geometry.
-// Snapshots the first state before calling the second provider, then returns owned vectors.
-export function composeEphemerisPaths(first: EphemerisPath, second: EphemerisPath): EphemerisPath {
+// Neither source is mutated. The returned path reuses scratch (or an allocated workspace),
+// which must not alias source storage. Retain a state with ephemerisAt() or a copy.
+export function composeEphemerisPaths(first: EphemerisPath, second: EphemerisPath, scratch?: PositionAndVelocityMut): EphemerisPath {
 	if (!sameEphemerisEndpoint(first.target, second.center)) throw new Error('cannot compose ephemeris paths: first target does not match second center')
+	scratch ??= zeroPositionAndVelocity()
 	return ephemerisPath(first.center, second.target, (time) => {
 		const pva = first.stateAt(time)
 		const pvb = second.stateAt(time)
-		vecPlus(pva[0], pvb[0], pva[0])
-		vecPlus(pva[1], pvb[1], pva[1])
-		return pva
+		vecPlus(pva[0], pvb[0], scratch[0])
+		vecPlus(pva[1], pvb[1], scratch[1])
+		return scratch
 	})
 }
 
 // Forms origin.target -> target.target from two paths sharing one center.
 // Both states are sampled at the same epoch; no light-time correction is applied.
-export function relativeEphemerisPath(target: EphemerisPath, origin: EphemerisPath): EphemerisPath {
+// Source storage is not mutated. The returned path reuses scratch (or an allocated
+// workspace), which must not alias either source. Retain it with ephemerisAt() or a copy.
+export function relativeEphemerisPath(target: EphemerisPath, origin: EphemerisPath, scratch?: PositionAndVelocityMut): EphemerisPath {
 	if (!sameEphemerisEndpoint(target.center, origin.center)) throw new Error('cannot form relative ephemeris path: centers do not match')
-	return composeEphemerisPaths(reverseEphemerisPath(origin), target)
+	scratch ??= zeroPositionAndVelocity()
+	return composeEphemerisPaths(reverseEphemerisPath(origin, scratch), target, scratch)
 }

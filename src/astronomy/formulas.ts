@@ -1,4 +1,4 @@
-import { ARCSEC_PER_RADIAN, DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, RAD2DEG, SIDEREAL_DRIFT_RATE, SIDEREAL_RATE, TAU } from '../core/constants'
+import { ARCSEC_PER_RADIAN, DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, RAD2DEG, SIDEREAL_DRIFT_RATE, SIDEREAL_RATE, SPEED_OF_LIGHT_AU_DAY, TAU } from '../core/constants'
 import type { TrackMode } from '../devices/indi/device'
 import type { Angle } from '../math/units/angle'
 import type { Distance } from '../math/units/distance'
@@ -13,6 +13,13 @@ import type { Distance } from '../math/units/distance'
 
 // Arcseconds per radian divided by 1000: converts (pixel size in microns / focal length in mm) to arcsec/pixel.
 const ARCSECONDS_PER_PIXEL_FACTOR = ARCSEC_PER_RADIAN / 1000
+
+// Classical first-order radial Doppler shift in the same frequency unit as carrierFrequency.
+// rangeRate is receiver-to-source range derivative in AU/day, positive when receding; the shift
+// is then negative (redshift). Assumes |rangeRate| << c and ignores relativistic/transverse terms.
+export function radialDopplerShift(rangeRate: number, carrierFrequency: number) {
+	return -(rangeRate / SPEED_OF_LIGHT_AU_DAY) * carrierFrequency
+}
 // Cosine magnitude below this is treated as a pole: max-exposure's 1/cos(δ) and the hour-angle
 // denominator cos(φ)cos(δ) are both degenerate in IEEE-754 at ±π/2 (Math.cos(π/2) is ~6e-17, not 0).
 const MAX_EXPOSURE_COSINE_EPSILON = 1e-12

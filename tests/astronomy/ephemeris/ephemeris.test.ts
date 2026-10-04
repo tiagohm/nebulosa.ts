@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import type { PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
+import type { PositionAndVelocityMut } from '../../../src/astronomy/coordinates/astrometry'
 import { ellipticToRectangular, ellipticToRectangularA, ellipticToRectangularN } from '../../../src/astronomy/ephemeris/ephemeris'
 import { PI, TAU } from '../../../src/core/constants'
 
@@ -71,7 +71,7 @@ test('the N and A entry points reconstruct the same a and n', () => {
 })
 
 test('writes into and returns the provided output buffer', () => {
-	const o: PositionAndVelocity = [
+	const o: PositionAndVelocityMut = [
 		[9, 9, 9],
 		[9, 9, 9],
 	]
@@ -83,7 +83,7 @@ test('writes into and returns the provided output buffer', () => {
 })
 
 test('wrapper entry points also write into the provided output buffer', () => {
-	const o: PositionAndVelocity = [
+	const o: PositionAndVelocityMut = [
 		[9, 9, 9],
 		[9, 9, 9],
 	]

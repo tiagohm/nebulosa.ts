@@ -2,6 +2,7 @@ import { DAYSEC, EARTH_DRDT_TIMES_RT_MATRIX, ECLIPTIC_B1950_MATRIX, ECLIPTIC_J20
 import { type Mat3, matFill, matIdentity, matMinus, matMul, matMulScalar, matMulTranspose, matMulVec, type MutMat3, matRotX, matRotZ, matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecMinus, vecPlus } from '../../math/linear-algebra/vec3'
 import { cirsRotationMatrix, gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthRotationMatrix, meanObliquity, pmMatrix, precessionNutationMatrix, type Time, Timescale, timeJulianYear, timeShift, trueObliquity, tt } from '../time/time'
+import type { PositionAndVelocity, PositionAndVelocityMut } from './astrometry'
 import { eraBp06 } from './erfa/erfa'
 
 // Reference-frame orientations and the rotations between them. A `Frame` is defined relative to the base
@@ -14,16 +15,16 @@ import { eraBp06 } from './erfa/erfa'
 // shifts and apparent-place corrections live in other modules.
 
 // A position vector, or a [position, velocity] state pair, to be rotated between frames.
-export type CoordinateFrame = Vec3 | readonly [Vec3, Vec3]
+export type CoordinateFrame = Vec3 | PositionAndVelocity
 
 // Mutable form of CoordinateFrame.
-export type MutCoordinateFrame = MutVec3 | readonly [MutVec3, MutVec3]
+export type MutCoordinateFrame = MutVec3 | PositionAndVelocityMut
 
 // Input type matching the shape (vector vs state) of a CoordinateFrame T.
-export type CoordinateFrameInput<T extends CoordinateFrame> = T extends Vec3 ? Vec3 : readonly [Vec3, Vec3]
+export type CoordinateFrameInput<T extends CoordinateFrame> = T extends Vec3 ? Vec3 : PositionAndVelocity
 
 // Mutable output type matching the shape (vector vs state) of a CoordinateFrame T.
-export type CoordinateFrameOutput<T extends CoordinateFrame> = T extends Vec3 ? MutVec3 : [MutVec3, MutVec3]
+export type CoordinateFrameOutput<T extends CoordinateFrame> = T extends Vec3 ? MutVec3 : PositionAndVelocityMut
 
 // A reference frame defined by its rotation from the base frame, plus an optional rotating-frame term.
 export interface Frame {
@@ -309,7 +310,7 @@ export function frameAt<T extends CoordinateFrame>(pv: T, frame: Frame, time: Ti
 		return matMulVec(r, pv, o as MutVec3 | undefined) as never
 	}
 
-	const out = o as [MutVec3, MutVec3] | undefined
+	const out = o as PositionAndVelocityMut | undefined
 	const p = matMulVec(r, pv[0], out?.[0])
 	const v = matMulVec(r, pv[1], out?.[1])
 
@@ -342,7 +343,7 @@ export function frameToBase<T extends CoordinateFrame>(pv: T, frame: Frame, time
 		return matTransposeMulVec(r, pv, o as MutVec3 | undefined) as never
 	}
 
-	const out = o as [MutVec3, MutVec3] | undefined
+	const out = o as PositionAndVelocityMut | undefined
 
 	if (frame.dRdtTimesRtAt) {
 		// Build the transport-corrected velocity from the original position first, since

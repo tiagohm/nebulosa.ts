@@ -22,7 +22,7 @@ import { parseTLE } from '../../../src/astronomy/orbits/propagation/sgp4'
 import { tdb, Timescale, timeSubtract, timeYMDHMS, tt, utc, type Time } from '../../../src/astronomy/time/time'
 import { DAYSEC, LIGHT_TIME_AU } from '../../../src/core/constants'
 import { fileHandleSource } from '../../../src/io/file'
-import { type MutVec3, type Vec3, vecAngle, vecClone, vecDistance, vecDivScalar, vecDot, vecLength, vecMinus, vecPlus } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngle, vecClone, vecDistance, vecDivScalar, vecDot, vecLength, vecMinus, vecPlus, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { deg, toArcsec } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 import { downloadPerTag } from '../../download'
@@ -54,7 +54,7 @@ const ANALYTICAL_MODEL_ENVELOPE = 2e-5
 const ISS_LINE1 = '1 25544U 98067A   23231.51768399  .00014050  00000+0  25837-3 0  9996'
 const ISS_LINE2 = '2 25544  51.6415  14.7889 0003559 325.3396 149.4637 15.49477580411611'
 
-type State = { readonly position: readonly [number, number, number]; readonly velocity: readonly [number, number, number] }
+type State = { readonly position: Vec3; readonly velocity: Vec3 }
 
 type KernelPaths = {
 	emb: EphemerisPath
@@ -85,16 +85,13 @@ function expectState(actual: readonly [readonly number[], readonly number[]], ex
 	expectNumberArrayToBeCloseToTolerance(actual[1], expected.velocity, velocityTolerance)
 }
 
-function unit(vector: readonly [number, number, number]): Vec3 {
+function unit(vector: Vec3): Vec3 {
 	const scale = 1 / Math.hypot(vector[0], vector[1], vector[2])
 	return [vector[0] * scale, vector[1] * scale, vector[2] * scale]
 }
 
-function fixedTarget(position: readonly [number, number, number], id: string) {
-	return ephemerisPath(SOLAR_SYSTEM_BARYCENTER, customEphemerisEndpoint(id), () => [
-		[position[0], position[1], position[2]],
-		[0, 0, 0],
-	])
+function fixedTarget(position: Vec3, id: string) {
+	return ephemerisPath(SOLAR_SYSTEM_BARYCENTER, customEphemerisEndpoint(id), () => [vecClone(position), vecZero()])
 }
 
 function sunDeflector(path: EphemerisPath): EphemerisLightDeflector {

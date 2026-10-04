@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
-import { searchExtrema, searchRoots } from '../../../src/astronomy/events/search'
-import { Timescale, type Time, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { searchExtrema, searchIntervals, searchRoots } from '../../../src/astronomy/events/search'
+import { Timescale, type Time, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { TAU } from '../../../src/core/constants'
 
 // Reference epoch; the analytic objectives below are expressed in days elapsed from it.
@@ -105,4 +105,30 @@ test('searchExtrema locates the maximum and minimum of the sinusoid', () => {
 	expect(extrema[1].kind).toBe('minimum')
 	expect(timeSubtract(extrema[1].time, EPOCH)).toBeCloseTo(0.75, 8)
 	expect(extrema[1].value).toBeCloseTo(-1, 9)
+})
+
+test('independent constraints locate an interval even when their combined endpoint margins are negative', () => {
+	const intervals = searchIntervals([(time) => timeSubtract(time, EPOCH) - 0.2, (time) => 0.4 - timeSubtract(time, EPOCH)], EPOCH, timeShift(EPOCH, 1), { step: 0.5 })
+	expect(intervals).toHaveLength(1)
+	expect(timeSubtract(intervals[0].start, EPOCH)).toBeCloseTo(0.2, 7)
+	expect(timeSubtract(intervals[0].end, EPOCH)).toBeCloseTo(0.4, 7)
+})
+
+test('intervals clip boundaries, join accepted pieces, and ignore isolated grazing touches', () => {
+	const stop = timeShift(EPOCH, 1)
+	const intervals = searchIntervals([(time) => (timeSubtract(time, EPOCH) - 0.5) ** 2], EPOCH, stop, { step: 0.25 })
+	expect(intervals).toHaveLength(1)
+	expect(timeSubtract(intervals[0].start, EPOCH)).toBeCloseTo(0, 12)
+	expect(timeSubtract(intervals[0].end, EPOCH)).toBeCloseTo(1, 12)
+	expect(searchIntervals([(time) => -((timeSubtract(time, EPOCH) - 0.5) ** 2)], EPOCH, stop, { step: 0.25 })).toEqual([])
+	expect(searchIntervals([], EPOCH, stop)).toHaveLength(1)
+	expect(searchIntervals([], stop, EPOCH)).toEqual([])
+})
+
+test('scanners reject infinite work and steps that cannot advance an offset', () => {
+	const stop = timeShift(EPOCH, 1)
+	for (const scan of [searchRoots, searchExtrema]) {
+		expect(() => scan(sine, EPOCH, stop, { step: Number.MIN_VALUE })).toThrow('too small')
+		expect(() => scan(sine, EPOCH, { ...stop, day: Number.POSITIVE_INFINITY })).toThrow('finite')
+	}
 })

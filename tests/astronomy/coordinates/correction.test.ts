@@ -29,11 +29,20 @@ test('radial velocity correction equals the observer speed along its own directi
 	expect(radialVelocityCorrection(ra + PI, -dec, TIME, BARYCENTRIC, LOCATION)).toBeCloseTo(-speed, 12)
 })
 
-// Without a location the geocenter is used, so observerState returns the Earth
-// state itself; adding a site shifts the position by about one Earth radius.
+// Without a location the geocenter is used, so observerState returns the copy of Earth
+// state; adding a site shifts the position by about one Earth radius.
 test('observerState falls back to the geocenter when no location is given', () => {
 	const geocentric = observerState(TIME, BARYCENTRIC, undefined)
-	expect(geocentric).toBe(BARYCENTRIC)
+	expect(geocentric).toEqual(BARYCENTRIC)
+	expect(geocentric).not.toBe(BARYCENTRIC)
+	expect(geocentric[0]).not.toBe(BARYCENTRIC[0])
+	expect(geocentric[1]).not.toBe(BARYCENTRIC[1])
+	const initialPosition = BARYCENTRIC[0][0]
+	const initialVelocity = BARYCENTRIC[1][0]
+	geocentric[0][0] = 99
+	geocentric[1][0] = 99
+	expect(BARYCENTRIC[0][0]).toBe(initialPosition)
+	expect(BARYCENTRIC[1][0]).toBe(initialVelocity)
 
 	const topocentric = observerState(TIME, BARYCENTRIC, LOCATION)
 	expect(topocentric[0]).not.toBe(BARYCENTRIC[0])

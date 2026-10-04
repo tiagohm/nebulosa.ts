@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { vector } from '../../../../../src/adapters/ephemeris/horizons'
+import { zeroPositionAndVelocity } from '../../../../../src/astronomy/coordinates/astrometry'
 import { earth, jupiter, mars, mercury, neptune, saturn, sun, uranus, venus } from '../../../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { time, Timescale, timeShift } from '../../../../../src/astronomy/time/time'
 
@@ -20,6 +21,26 @@ const ECLIPTIC_CASES = [
 	['uranus', uranus, [-6.4778956413, -17.8463318322, 0.0176898373], [0.0036668409, -0.0015250649, -0.0000533417]],
 	['neptune', neptune, [1.5196434117, 29.8318114919, -0.6492437025], [-0.0031531984, 0.0001800719, 0.0000689285]],
 ] as const
+
+test.each(ECLIPTIC_CASES)('%s overwrites and reuses nonzero output vectors across frames and epochs', (_, body) => {
+	const out = zeroPositionAndVelocity()
+	const [position, velocity] = out
+	position[0] = 123
+	velocity[2] = -456
+	for (const frame of ['eclipticJ2000', 'icrf'] as const) {
+		for (const epoch of [TIME, TIME, timeShift(TIME, 30)]) {
+			const expected = body(epoch, frame)
+			const actual = body(epoch, frame, out)
+			expect(actual).toBe(out)
+			expect(actual[0]).toBe(position)
+			expect(actual[1]).toBe(velocity)
+			for (let axis = 0; axis < 3; axis++) {
+				expect(position[axis]).toBeCloseTo(expected[0][axis], 13)
+				expect(velocity[axis]).toBeCloseTo(expected[1][axis], 13)
+			}
+		}
+	}
+})
 
 // NASA JPL Horizons.
 const ICRF_CASES = [

@@ -11,37 +11,48 @@
 
 import fs from 'fs/promises'
 import { matchStars } from '../src/astrometry/matching/star.matching'
-import { crescentWidth, moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase, nearestLunarStandstill } from '../src/astronomy/bodies/moon'
-import { JUPITER_ROTATION, MARS_ROTATION, MOON_ROTATION, positionAngleOfPole, SATURN_ROTATION, subObserverPoint as bodySubObserver, subSolarPoint as bodySubSolar, SUN_ROTATION } from '../src/astronomy/bodies/orientation'
+import { crescentWidth, moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase, nearestLunarNode, nearestLunarStandstill } from '../src/astronomy/bodies/moon'
+import { bodyFixedFrame, JUPITER_ROTATION, MARS_ROTATION, MOON_ROTATION, positionAngleOfPole, SATURN_ROTATION, subObserverPoint as bodySubObserver, subSolarPoint as bodySubSolar, SUN_ROTATION } from '../src/astronomy/bodies/orientation'
 import { planetMagnitude, type Planet } from '../src/astronomy/bodies/photometry'
 import { spaceMotion, star } from '../src/astronomy/bodies/star'
 import { carringtonRotationNumber, equationOfTime, nearestSolarEclipse, season } from '../src/astronomy/bodies/sun'
 // oxfmt-ignore
-import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, phaseAngle, refractedAltitude, relativePositionAndVelocity, separationFrom, unrefractedAltitude, type PositionAndVelocityOverTime } from '../src/astronomy/coordinates/astrometry'
+import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, phaseAngle, refractedAltitude, relativePositionAndVelocity, separationFrom, unrefractedAltitude, type PositionAndVelocityOverTime, type PositionOverTime } from '../src/astronomy/coordinates/astrometry'
 import { angularDistance, eclipticToEquatorial, equatorialFromJ2000, equatorialToEcliptic, equatorialToGalactic, equatorialToHorizontal, galacticToEquatorial, horizontalToEquatorial, zenith } from '../src/astronomy/coordinates/coordinate'
 import { annualAberration, observerState, radialVelocityCorrection } from '../src/astronomy/coordinates/correction'
 import { eraAnpm, eraC2s, eraLd, eraLdSun, eraPmpx, eraS2c, eraSeps, eraStarpm, eraStarpv } from '../src/astronomy/coordinates/erfa/erfa'
 import { precessFk5FromJ2000 } from '../src/astronomy/coordinates/fk5'
-import { GALACTIC, ICRS, SUPERGALACTIC, TEME, fk5ToIcrs, frameToFrame, icrsToFk5, temeToItrf } from '../src/astronomy/coordinates/frame'
+import { GALACTIC, SUPERGALACTIC, fk5ToIcrs, frameToFrame, icrsToFk5 } from '../src/astronomy/coordinates/frame'
 import { icrs as icrsVector } from '../src/astronomy/coordinates/icrs'
 import { itrs } from '../src/astronomy/coordinates/itrs'
+import { Naif } from '../src/astronomy/ephemeris/kernels/naif'
 import { Base as Meeus } from '../src/astronomy/ephemeris/meeus'
 import { moon as moonGeocentric } from '../src/astronomy/ephemeris/models/analytical/elpmpp02'
 import { earth, jupiter, mars, mercury, saturn, sun, venus } from '../src/astronomy/ephemeris/models/analytical/vsop87e'
+import { customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, relativeEphemerisPath, SOLAR_SYSTEM_BARYCENTER } from '../src/astronomy/ephemeris/path'
+import { earthObserverEphemerisPath, sgp4EphemerisPath } from '../src/astronomy/ephemeris/path.adapter'
+import { darknessWindows } from '../src/astronomy/events/darkness'
 import { sunMoonPosition } from '../src/astronomy/events/eclipse/eclipse'
 import { computeLocalLunarEclipseCircumstances } from '../src/astronomy/events/eclipse/lunar/local'
 import { computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances } from '../src/astronomy/events/eclipse/solar/local'
 import { computePolynomialBesselianElements } from '../src/astronomy/events/eclipse/solar/map'
 import { heliacalPhases } from '../src/astronomy/events/heliacal'
-import { ASTRONOMICAL_TWILIGHT, CIVIL_TWILIGHT, NAUTICAL_TWILIGHT, riseTransitSet, STANDARD_HORIZON, SUN_HORIZON } from '../src/astronomy/events/horizon'
+import { ASTRONOMICAL_TWILIGHT, CIVIL_TWILIGHT, NAUTICAL_TWILIGHT, altitudeOf, riseTransitSet, STANDARD_HORIZON, SUN_HORIZON } from '../src/astronomy/events/horizon'
+import { hourAngle, hourAngleWindows } from '../src/astronomy/events/hourangle'
 import { greatRedSpotTransits, jupiterCentralMeridian } from '../src/astronomy/events/jupiter'
+import { lunarLibrationExtrema } from '../src/astronomy/events/lunar'
 import { galileanMutualEvents, saturnianMutualEvents } from '../src/astronomy/events/mutual'
 import { occultationCandidates } from '../src/astronomy/events/occultation'
-import { satelliteConjunctions, satelliteEclipses, satelliteLookAngles, satelliteMagnitude, satellitePasses, satelliteShadowState } from '../src/astronomy/events/satellite'
-import { searchExtrema, searchRoots } from '../src/astronomy/events/search'
+import { planetaryClosestApproaches, planetaryConjunctions, planetaryGreatestElongations, planetaryInnerConjunctions, planetaryOppositions, planetaryQuadratures, planetaryStations } from '../src/astronomy/events/planetary'
+// oxfmt-ignore
+import { satelliteBetaAngle as computeSatelliteBetaAngle, satelliteGroundFootprint as computeSatelliteGroundFootprint, satelliteSubpoint, satelliteTrackingState, satelliteVisibleIntervals, satelliteConjunctions, satelliteEclipses, satelliteMagnitude, satellitePasses, satelliteShadowState } from '../src/astronomy/events/satellite'
+import { searchExtrema } from '../src/astronomy/events/search'
+import { bodySurfaceSunEvents } from '../src/astronomy/events/surface'
 import { planetaryTransits } from '../src/astronomy/events/transit'
-import { airmass, airmassKastenYoung, altitudeAtTransit, asteroidMagnitudeEstimate, atmosphericRefraction, cometMagnitudeEstimate, objectAngularDiameter } from '../src/astronomy/formulas'
-import { Ellipsoid, geodeticLocation, localSiderealTime, subpoint } from '../src/astronomy/observer/location'
+import { visibilityWindows } from '../src/astronomy/events/visibility'
+import { airmass, airmassKastenYoung, altitudeAtTransit, asteroidMagnitudeEstimate, atmosphericRefraction, cometMagnitudeEstimate, objectAngularDiameter, radialDopplerShift } from '../src/astronomy/formulas'
+import { bodyShape, bodySurfaceLocation } from '../src/astronomy/observer/body'
+import { Ellipsoid, geodeticLocation, localSiderealTime } from '../src/astronomy/observer/location'
 import { KeplerOrbit, asteroid, comet, eccentricAnomalyFromMean, meanMotion, period, tisserandParameter, trueAnomalyClosed, trueAnomalyHyperbolic } from '../src/astronomy/orbits/asteroid'
 import { closeApproachBPlane as computeBPlane } from '../src/astronomy/orbits/bplane'
 import { ephemerisUncertaintyEllipse as skyUncertaintyEllipse, propagateStateCovariance } from '../src/astronomy/orbits/covariance'
@@ -58,7 +69,7 @@ import { Matrix } from '../src/math/linear-algebra/matrix'
 // oxfmt-ignore
 import { Timescale, dut1 as dut1FromTime, earthRotationAngle, equationOfEquinoxes, greenwichApparentSiderealTime, greenwichMeanSiderealTime, nutationAngles, pmAngles, pmMatrix, tai, taiMinusUtc, tcb, tdb, timeBesselianYear, timeJulianYear, timeMJD, timeShift, timeSubtract, timeToDate, timeUnix, timeYMDHMS, toJulianDay, toJulianEpoch, tt, ut1, utc, type Time } from '../src/astronomy/time/time'
 import { formatTemporal, temporalFromTime } from '../src/astronomy/time/temporal'
-import { AU_KM, DAYSEC, DAYSPERSY, DAYSPERTY, EARTH_RADIUS_KM, GM_EARTH, GM_EARTH_KM3_S2, GM_SUN_PITJEVA_2005, PI, PIOVERTWO, SPEED_OF_LIGHT_AU_DAY, SUN_RADIUS_AU, TAU } from '../src/core/constants'
+import { AU_KM, DAYSEC, DAYSPERSY, DAYSPERTY, EARTH_RADIUS_KM, GM_EARTH, GM_EARTH_KM3_S2, GM_SUN_PITJEVA_2005, PI, PIOVERTWO, SUN_RADIUS_AU, TAU } from '../src/core/constants'
 import { type Vec3, vecAngle, vecCross, vecLatitude, vecLength, vecLongitude, vecMinus, vecMulScalar, vecNormalize, vecPlus } from '../src/math/linear-algebra/vec3'
 import { sphericalDestination, sphericalInterpolate, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../src/math/numerical/geometry'
 import { type Angle, arcsec, deg, formatAZ, formatHMS, formatSignedDMS, hms, hour, normalizeAngle, normalizePI, toArcsec, toDeg, toHour } from '../src/math/units/angle'
@@ -74,7 +85,7 @@ await iersb.load(source)
 // Shared reference instant (UTC) used by most demonstrations.
 const NOW = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
 
-// Shared observer: a mid-northern site (longitude east-positive, latitude, elevation).
+// Shared observer: a southern site (longitude east-positive, latitude, elevation).
 const SITE = geodeticLocation(deg(-46.633), deg(-23.55), kilometer(0.76), Ellipsoid.WGS84)
 NOW.location = SITE
 
@@ -82,6 +93,27 @@ NOW.location = SITE
 const SIRIUS_RA = hms(6, 45, 8.917)
 const SIRIUS_DEC = deg(-16.716116)
 const SIRIUS_ICRF = icrsVector(SIRIUS_RA, SIRIUS_DEC)
+
+// Prepared same-epoch paths: explicit origins, ICRS axes, geometric corrections.
+const EARTH_PATH = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.EARTH), earth)
+const SUN_PATH = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.SUN), sun)
+const GEOCENTRIC_SUN_PATH = relativeEphemerisPath(SUN_PATH, EARTH_PATH)
+const MOON_PATH = ephemerisPath(naifEphemerisEndpoint(Naif.EARTH), naifEphemerisEndpoint(Naif.MOON), moonGeocentric)
+const OBSERVER_PATH = earthObserverEphemerisPath(SITE, customEphemerisEndpoint('saoPaulo'))
+const TOPOCENTRIC_MOON_PATH = relativeEphemerisPath(MOON_PATH, OBSERVER_PATH)
+const TOPOCENTRIC_SUN_PATH = relativeEphemerisPath(GEOCENTRIC_SUN_PATH, OBSERVER_PATH)
+const MOON_TO_SUN_PATH = relativeEphemerisPath(GEOCENTRIC_SUN_PATH, MOON_PATH)
+
+// Builds a geometric geocentric position provider once for repeated event samples.
+function planetAt(body: PositionAndVelocityOverTime, id: number): PositionOverTime {
+	const path = relativeEphemerisPath(ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(id), body), EARTH_PATH)
+	return (time) => path.stateAt(time)[0]
+}
+
+const VENUS_AT = planetAt(venus, Naif.VENUS)
+const MARS_AT = planetAt(mars, Naif.MARS)
+// Explicit demonstration window; each API accepts arbitrary start/stop.
+const PLANET_STOP = timeYMDHMS(2028, 1, 1, 0, 0, 0, Timescale.UTC)
 
 // ##### Time and Earth Orientation #####
 
@@ -650,10 +682,10 @@ function topocentricBodyState() {
 	console.info('Mars topocentric distance (AU):', vecLength(topo))
 }
 
-// Apparent Planet Position: geocentric apparent RA/DEC.
-function apparentPlanetPosition() {
+// Geometric Planet Position: same-epoch geocentric RA/DEC, without light time or aberration.
+function geometricPlanetPosition() {
 	const eq = vectorToEquatorial(geocentricDirection(jupiter))
-	console.info('Jupiter apparent RA/DEC:', formatHMS(normalizeAngle(eq[0])), formatSignedDMS(eq[1]))
+	console.info('Jupiter geometric geocentric RA/DEC:', formatHMS(normalizeAngle(eq[0])), formatSignedDMS(eq[1]))
 }
 
 // Planet Altitude and Azimuth.
@@ -678,11 +710,6 @@ function planetaryPhaseAngle() {
 // Sun-planet-Earth angle at the planet (radians).
 function planetPhaseAngle(body: PositionAndVelocityOverTime, time: Time = NOW) {
 	return phaseAngle(body(time)[0], sun(time)[0], earth(time)[0])
-}
-
-// Sun-Earth-body elongation (radians) as a function of time, for the event scanners.
-function elongationAt(body: PositionAndVelocityOverTime, time: Time) {
-	return separationFrom(geocentricSun(time), geocentricDirection(body, time))
 }
 
 // Planetary Illuminated Fraction: from the phase angle (Meeus).
@@ -727,89 +754,63 @@ function planetaryEclipticLatitude() {
 	console.info('Mars ecliptic latitude (deg):', toDeg(lat))
 }
 
-// Planetary Apparent Motion: daily change in geocentric RA/DEC (finite difference).
-function planetaryApparentMotion() {
+// Planetary Geometric Motion: daily change in geocentric RA/DEC (finite difference).
+function planetaryGeometricMotion() {
 	const a = vectorToEquatorial(geocentricDirection(mars, NOW))
 	const tomorrow = timeYMDHMS(2026, 6, 30, 0, 0, 0, Timescale.UTC)
 	const b = vectorToEquatorial(geocentricDirection(mars, tomorrow))
 	console.info('Mars daily motion ΔRA, ΔDEC (arcsec/day):', toArcsec(eraAnpm(b[0] - a[0])), toArcsec(b[1] - a[1]))
 }
 
-// Planetary Stationary Point: the apparent geocentric RA rate changes sign. The daily
-// RA change (wrap-safe via eraAnpm) is scanned over the next ~14 months and the sign
-// changes are refined with searchRoots.
+// Planetary Stationary Point: wrap-safe centered ecliptic-longitude rate, geometric providers.
 function planetaryStationaryPoint() {
-	const half = 0.5 // central-difference half-step (days)
-	const raRate = (time: Time) => {
-		const before = vectorToEquatorial(geocentricDirection(mars, timeShift(time, -half)))[0]
-		const after = vectorToEquatorial(geocentricDirection(mars, timeShift(time, half)))[0]
-		return eraAnpm(after - before)
-	}
-	const stationary = searchRoots(raRate, NOW, timeShift(NOW, 420), { step: 5 })
-	console.info('Mars stationary points (local):', stationary.length > 0 ? stationary.map((t) => formatTemporal(temporalFromTime(utc(t)))).join(', ') : 'none in the next 420 days')
+	const events = planetaryStations(MARS_AT, NOW, PLANET_STOP, { step: 5, derivativeHalfStep: 0.05 })
+	console.info('Mars ecliptic stations:', events.map((e) => `${e.kind} @ ${formatTemporal(temporalFromTime(utc(e.time)))}`).join('; '))
 }
 
-// Planetary Greatest Elongation: the maxima of the Sun-Earth-planet elongation over a
-// synodic period, found with searchExtrema (for the inner planets).
+// Planetary Greatest Elongation: east/west maxima in an explicit date window.
 function planetaryGreatestElongation() {
-	const maxima = searchExtrema((time) => elongationAt(venus, time), NOW, timeShift(NOW, 584), { step: 5 }).filter((e) => e.kind === 'maximum')
-	console.info('Venus greatest elongations:', maxima.map((e) => `${toDeg(e.value).toFixed(1)}deg @ ${formatTemporal(temporalFromTime(utc(e.time)))}`).join('; ') || 'none in the next synodic period')
+	const events = planetaryGreatestElongations(VENUS_AT, geocentricSun, NOW, PLANET_STOP, { step: 5 })
+	console.info('Venus greatest elongations:', events.map((e) => `${e.kind} ${toDeg(e.elongation).toFixed(1)}deg @ ${formatTemporal(temporalFromTime(utc(e.time)))}`).join('; '))
 }
 
 // Planetary Opposition / Conjunction: opposition is the elongation maximum (~180deg)
 // for an outer planet, conjunction its minimum; both are extrema of the elongation.
 function planetaryOpposition() {
-	const opposition = searchExtrema((time) => elongationAt(mars, time), NOW, timeShift(NOW, 800), { step: 5 }).find((e) => e.kind === 'maximum')
-	console.info('Mars opposition (local):', opposition ? `${formatTemporal(temporalFromTime(utc(opposition.time)))} (elongation ${toDeg(opposition.value).toFixed(1)}deg)` : 'none in the next synodic period')
+	console.info('Mars oppositions:', planetaryOppositions(MARS_AT, geocentricSun, NOW, PLANET_STOP, { step: 5 }))
 }
 
 function planetaryConjunction() {
-	const conjunction = searchExtrema((time) => elongationAt(mars, time), NOW, timeShift(NOW, 800), { step: 5 }).find((e) => e.kind === 'minimum')
-	console.info('Mars conjunction (local):', conjunction ? `${formatTemporal(temporalFromTime(utc(conjunction.time)))} (elongation ${toDeg(conjunction.value).toFixed(1)}deg)` : 'none in the next synodic period')
+	console.info('Mars conjunctions:', planetaryConjunctions(MARS_AT, geocentricSun, NOW, PLANET_STOP, { step: 5 }))
 }
 
-// Planetary Quadrature: the instants an outer planet's Sun-Earth-planet elongation passes through 90deg,
-// found by root-finding elongationAt - PI/2 over a synodic period. Each crossing is labelled east or west
-// from the sign of the geocentric ecliptic longitude difference planet - Sun: a planet east of the Sun is
-// at east (evening) quadrature, one west of it at west (morning) quadrature.
+// Planetary Quadrature: 90-degree separation crossings, labelled east/west.
 function planetaryQuadrature() {
-	const quadratures = searchRoots((time) => elongationAt(mars, time) - PIOVERTWO, NOW, timeShift(NOW, 800), { step: 5 })
-	if (quadratures.length === 0) return console.info('Mars quadratures: none in the next synodic period.')
-	const labelled = quadratures.map((time) => {
-		const planetEq = vectorToEquatorial(geocentricDirection(mars, time))
-		const [planetLon] = equatorialToEcliptic(planetEq[0], planetEq[1], time)
-		const sunEq = sunEquatorial(time)
-		const [sunLon] = equatorialToEcliptic(sunEq[0], sunEq[1], time)
-		const side = normalizePI(planetLon - sunLon) > 0 ? 'east' : 'west'
-		return `${side} ${formatTemporal(temporalFromTime(utc(time)))}`
-	})
-	console.info('Mars quadratures (local):', labelled.join('; '))
+	console.info('Mars quadratures:', planetaryQuadratures(MARS_AT, geocentricSun, NOW, PLANET_STOP, { step: 5 }))
 }
 
-// Planetary Closest Geocentric Approach: the minimum of the geocentric distance over a synodic period,
-// reached near opposition for an outer planet. The largest apparent disk is the same extremum reexpressed,
-// since the apparent diameter is the physical diameter over that minimum distance; it is reported here from
-// objectAngularDiameter at the closest-approach instant rather than scanned separately.
+// Planetary Closest Approach: range minima; angular diameter remains a separate calculation.
 function planetaryClosestApproach() {
-	const MARS_DIAMETER_KM = 6779
-	const minimum = searchExtrema((time) => vectorDistance(geocentricDirection(mars, time)), NOW, timeShift(NOW, 800), { step: 5 }).find((e) => e.kind === 'minimum')
-	if (minimum === undefined) return console.info('Mars closest approach: no distance minimum in the next synodic period.')
-	const diameter = objectAngularDiameter(MARS_DIAMETER_KM, toKilometer(minimum.value))
-	console.info('Mars closest approach (local):', formatTemporal(temporalFromTime(utc(minimum.time))), `distance ${minimum.value.toFixed(4)} AU, apparent diameter ${toArcsec(diameter).toFixed(1)} arcsec`)
+	const minimum = planetaryClosestApproaches(MARS_AT, NOW, PLANET_STOP, { step: 5 })[0]
+	if (!minimum) return console.info('No Mars range minimum in the window.')
+	const diameter = objectAngularDiameter(6779, toKilometer(minimum.distance))
+	console.info('Mars closest approach:', minimum.time, minimum.distance, 'AU; diameter (arcsec):', toArcsec(diameter))
 }
 
 // Inferior / Superior Conjunction (inner planets): the elongation minima, classified by
 // whether the planet is nearer than the Sun (inferior) or beyond it (superior).
 function inferiorConjunction() {
-	const minima = searchExtrema((time) => elongationAt(venus, time), NOW, timeShift(NOW, 584), { step: 5 }).filter((e) => e.kind === 'minimum')
-	const inferior = minima.find((e) => vectorDistance(geocentricDirection(venus, e.time)) < 1)
-	console.info('Venus inferior conjunction (local):', inferior ? formatTemporal(temporalFromTime(utc(inferior.time))) : 'none in the next synodic period')
+	console.info(
+		'Venus inferior conjunction:',
+		planetaryInnerConjunctions(VENUS_AT, geocentricSun, NOW, PLANET_STOP, { step: 5 }).find((e) => e.kind === 'inferior'),
+	)
 }
 
 function superiorConjunction() {
-	const minima = searchExtrema((time) => elongationAt(venus, time), NOW, timeShift(NOW, 584), { step: 5 }).filter((e) => e.kind === 'minimum')
-	const superior = minima.find((e) => vectorDistance(geocentricDirection(venus, e.time)) > 1)
-	console.info('Venus superior conjunction (local):', superior ? formatTemporal(temporalFromTime(utc(superior.time))) : 'none in the next synodic period')
+	console.info(
+		'Venus superior conjunction:',
+		planetaryInnerConjunctions(VENUS_AT, geocentricSun, NOW, PLANET_STOP, { step: 5 }).find((e) => e.kind === 'superior'),
+	)
 }
 
 // Perihelion and Aphelion: osculating apsis distances from the heliocentric state.
@@ -869,7 +870,7 @@ function saturnRingOrientation() {
 // greatRedSpotTransits finds when the spot (at its observed System II longitude, supplied by the caller
 // from the ALPO/JUPOS bulletins) crosses it.
 function jupiterGreatRedSpotTransit() {
-	const jupiterToObserver = (time: Time) => vecMinus(earth(time)[0], jupiter(time)[0])
+	const jupiterToObserver: PositionOverTime = (time) => vecMinus(earth(time)[0], jupiter(time)[0])
 	const grsLongitude = deg(52) // observed System II longitude of the Great Red Spot
 	const cm = toDeg(jupiterCentralMeridian('II', NOW, jupiterToObserver(NOW)))
 	const [next] = greatRedSpotTransits(grsLongitude, jupiterToObserver, NOW, timeShift(NOW, 1))
@@ -880,28 +881,28 @@ function jupiterGreatRedSpotTransit() {
 
 // Geocentric direction toward the Sun (AU).
 function geocentricSun(time: Time = NOW) {
-	return vecMinus(sun(time)[0], earth(time)[0])
+	return GEOCENTRIC_SUN_PATH.stateAt(time)[0]
 }
 
-// Apparent geocentric equatorial coordinates of the Sun.
+// Same-epoch geometric geocentric equatorial coordinates of the Sun.
 function sunEquatorial(time: Time = NOW) {
 	return vectorToEquatorial(geocentricSun(time))
 }
 
-// Apparent geocentric equatorial coordinates of the Moon.
+// Same-epoch geometric geocentric equatorial coordinates of the Moon.
 function moonEquatorial(time: Time = NOW) {
 	return vectorToEquatorial(moonGeocentric(time)[0])
 }
 
 // ##### Sun and Moon #####
 
-// Apparent Solar Position: geocentric apparent RA/DEC of the Sun.
-function apparentSolarPosition() {
+// Geometric Solar Position: same-epoch geocentric RA/DEC without apparent corrections.
+function geometricSolarPosition() {
 	const eq = sunEquatorial()
-	console.info('Sun apparent RA/DEC:', formatHMS(normalizeAngle(eq[0])), formatSignedDMS(eq[1]))
+	console.info('Sun geometric RA/DEC:', formatHMS(normalizeAngle(eq[0])), formatSignedDMS(eq[1]))
 }
 
-// Solar Altitude and Azimuth (topocentric horizon coordinates).
+// Solar Altitude and Azimuth (geocentric geometric horizon coordinates).
 function solarAltitudeAndAzimuth() {
 	const eq = sunEquatorial()
 	const lst = localSiderealTime(NOW, SITE, false)
@@ -998,14 +999,11 @@ function lunarGeocentricPosition() {
 	console.info('Moon RA/DEC:', formatHMS(normalizeAngle(eq[0])), formatSignedDMS(eq[1]), 'distance (km):', toKilometer(vecLength(moonGeocentric(NOW)[0])))
 }
 
-// Lunar Topocentric Position: geocentric coordinates corrected for parallax in altitude.
+// Lunar Topocentric Position: observer-relative Moon path, with exact origin subtraction.
 function lunarTopocentricPosition() {
-	const eq = moonEquatorial()
-	const lst = localSiderealTime(NOW, SITE, false)
-	const [az, geoAlt] = equatorialToHorizontal(eq[0], eq[1], SITE.latitude, normalizeAngle(lst - eq[0]) + eq[0])
-	const parallax = moonParallax(vecLength(moonGeocentric(NOW)[0]))
-	const topoAlt = geoAlt - parallax * Math.cos(geoAlt)
-	console.info('Moon topocentric Az/Alt:', formatAZ(az), formatSignedDMS(topoAlt))
+	const direction = TOPOCENTRIC_MOON_PATH.stateAt(NOW)[0]
+	const eq = vectorToEquatorial(direction)
+	console.info('Moon geometric topocentric RA/DEC:', formatHMS(normalizeAngle(eq[0])), formatSignedDMS(eq[1]), 'altitude:', formatSignedDMS(altitudeOf(direction, NOW, SITE)))
 }
 
 // Lunar Altitude and Azimuth (geocentric horizon coordinates).
@@ -1081,7 +1079,7 @@ function moonToEarth(time: Time = NOW) {
 
 // Geocentric direction from the Moon centre to the Sun (AU).
 function moonToSun(time: Time = NOW) {
-	return vecMinus(geocentricSun(time), moonGeocentric(time)[0])
+	return MOON_TO_SUN_PATH.stateAt(time)[0]
 }
 
 // Lunar Libration: the selenographic longitude/latitude of the sub-Earth point (the
@@ -1094,20 +1092,9 @@ function lunarLibration() {
 	console.info('Lunar libration l, b, P (deg):', toDeg(normalizePI(disk.longitude)).toFixed(2), toDeg(disk.latitude).toFixed(2), toDeg(p).toFixed(2))
 }
 
-// Lunar Libration Extremes: the greatest tilts of the disc over a month, when a limb is best presented.
-// searchExtrema scans the sub-Earth libration in longitude l and latitude b separately; l is wrapped to
-// -PI..PI first so the small (+/-8deg) swing stays continuous across the 0/TAU seam and does not fool the
-// extremum finder. The longitude maxima/minima expose the east/west limbs, the latitude ones the north/
-// south limbs.
+// Lunar Libration Extremes: independent signed longitude/latitude extrema, in chronological order.
 function lunarLibrationExtremes() {
-	const stop = timeShift(NOW, 28)
-	const librationLongitude = (time: Time) => normalizePI(bodySubObserver(MOON_ROTATION, time, moonToEarth(time)).longitude)
-	const librationLatitude = (time: Time) => bodySubObserver(MOON_ROTATION, time, moonToEarth(time)).latitude
-	const describe = (e: { value: Angle; time: Time }) => `${toDeg(e.value).toFixed(2)}deg @ ${formatTemporal(temporalFromTime(utc(e.time)))}`
-	const lonExtrema = searchExtrema(librationLongitude, NOW, stop, { step: 1 })
-	const latExtrema = searchExtrema(librationLatitude, NOW, stop, { step: 1 })
-	console.info('Lunar libration longitude extremes (l):', lonExtrema.map(describe).join('; ') || 'none in the month')
-	console.info('Lunar libration latitude extremes (b):', latExtrema.map(describe).join('; ') || 'none in the month')
+	console.info('Lunar libration extrema:', lunarLibrationExtrema(moonToEarth, NOW, timeShift(NOW, 32), { step: 0.5 }))
 }
 
 // Lunar Colongitude: the selenographic colongitude of the Sun, 90deg minus the
@@ -1125,28 +1112,11 @@ function lunarTerminatorPosition() {
 	console.info('Lunar morning terminator selenographic longitude (deg):', toDeg(normalizeAngle(deg(90) - sub.longitude)).toFixed(2))
 }
 
-// Lunar Sunrise and Sunset at a Selenographic Point: the Sun's elevation above the local horizon at a
-// surface feature crosses zero once upward (sunrise, the morning terminator reaching the feature) and once
-// downward (sunset) per synodic month. The elevation is the sub-solar-point formula on a sphere,
-// sin(alt) = sin(phi) sin(b) + cos(phi) cos(b) cos(lambda - l), where (l, b) is the sub-solar selenographic
-// longitude/latitude from bodySubSolar and (lambda, phi) the feature's. The zero crossings are root-found
-// over a lunation and labelled by the elevation's slope. Shown for the crater Copernicus (~9.62N, 20.08W;
-// west longitude is negative in the east-positive selenographic convention).
+// Copernicus sunrise/set: rotating Moon reference surface, east-positive longitude, no terrain/refraction.
 function lunarSunriseSunsetAtFeature() {
-	const featureLon = deg(-20.08)
-	const featureLat = deg(9.62)
-	const sinLat = Math.sin(featureLat)
-	const cosLat = Math.cos(featureLat)
-	const solarAltitude = (time: Time) => {
-		const sub = bodySubSolar(MOON_ROTATION, time, moonToEarth(time), moonToSun(time))
-		// Clamp guards asin against rounding just outside [-1, 1] near grazing illumination.
-		const sinAlt = sinLat * Math.sin(sub.latitude) + cosLat * Math.cos(sub.latitude) * Math.cos(featureLon - sub.longitude)
-		return Math.asin(Math.max(-1, Math.min(1, sinAlt)))
-	}
-	const crossings = searchRoots(solarAltitude, NOW, timeShift(NOW, 30), { step: 1 })
-	if (crossings.length === 0) return console.info('Copernicus sunrise/sunset: no terminator crossing in the next lunation.')
-	const labelled = crossings.map((time) => `${solarAltitude(timeShift(time, 0.05)) > solarAltitude(time) ? 'sunrise' : 'sunset'} ${formatTemporal(temporalFromTime(utc(time)))}`)
-	console.info('Copernicus lunar sunrise/sunset (local):', labelled.join('; '))
+	const radius = kilometer(1737.4)
+	const copernicus = bodySurfaceLocation(deg(-20.08), deg(9.62), 0, bodyShape([radius, radius, radius]), bodyFixedFrame(MOON_ROTATION))
+	console.info('Copernicus sunrise/set:', bodySurfaceSunEvents(copernicus, moonToSun, NOW, timeShift(NOW, 32), { step: 0.5 }))
 }
 
 // Lunar Sub-Solar / Sub-Observer Point (selenographic east longitude, latitude).
@@ -1160,16 +1130,9 @@ function lunarSubObserverPoint() {
 	console.info('Lunar sub-observer (east lon, lat deg):', toDeg(obs.longitude).toFixed(2), toDeg(obs.latitude).toFixed(2))
 }
 
-// Lunar Ascending and Descending Nodes: a node passage is where the Moon's geocentric
-// ecliptic latitude crosses zero; ascending when the latitude is increasing.
+// Nearest analytic lunar node passages through the mean ecliptic of date (Meeus).
 function lunarAscendingAndDescendingNodes() {
-	const eclipticLatitude = (time: Time) => {
-		const eq = vectorToEquatorial(moonGeocentric(time)[0])
-		return equatorialToEcliptic(eq[0], eq[1], time)[1]
-	}
-	const nodes = searchRoots(eclipticLatitude, NOW, timeShift(NOW, 30), { step: 0.5 })
-	const labelled = nodes.map((t) => `${eclipticLatitude(timeShift(t, 0.01)) > eclipticLatitude(t) ? 'ascending' : 'descending'} ${formatTemporal(temporalFromTime(utc(t)))}`)
-	console.info('Lunar node passages (local):', labelled.join('; ') || 'none in the next 30 days')
+	console.info('Next analytic lunar node passages:', nearestLunarNode(NOW, 'ASCENDING', true), nearestLunarNode(NOW, 'DESCENDING', true))
 }
 
 // Lunar Perigee and Apogee.
@@ -1287,57 +1250,51 @@ function civilTwilight() {
 // Night Darkness Intervals: the fully-dark span between this evening's astronomical
 // dusk and the next morning's astronomical dawn.
 function nightDarknessIntervals() {
-	const dusk = riseTransitSet(geocentricSun, SITE, NOW, { horizon: ASTRONOMICAL_TWILIGHT }).set
-	const dawn = riseTransitSet(geocentricSun, SITE, timeShift(NOW, 1), { horizon: ASTRONOMICAL_TWILIGHT }).rise
-	if (dusk && dawn) console.info('Astronomical night (local):', formatTemporal(temporalFromTime(utc(dusk))), '->', formatTemporal(temporalFromTime(utc(dawn))), `(${(timeSubtract(tt(dawn), tt(dusk)) * 24).toFixed(2)} h)`)
-	else console.info('No astronomical night in the window (twilight all night).')
+	console.info('Astronomical darkness:', darknessWindows(geocentricSun, SITE, NOW, timeShift(NOW, 1)).astronomical)
 }
 
-// Moonless Observation Windows: the dark window intersected with the Moon-down
-// interval. Both rise/set pairs come from the same finder.
+// Moonless intervals: astronomical darkness intersected with explicit lunar altitude/illumination limits.
 function moonlessObservationWindows() {
-	const dusk = riseTransitSet(geocentricSun, SITE, NOW, { horizon: ASTRONOMICAL_TWILIGHT }).set
-	const moon = riseTransitSet((time) => moonGeocentric(time)[0], SITE, NOW, { horizon: STANDARD_HORIZON })
-	const moonSet = moon.set ? formatTemporal(temporalFromTime(utc(moon.set))) : moon.alwaysUp ? 'Moon up all day' : 'Moon down all day'
-	console.info('Astronomical dusk (local):', dusk ? formatTemporal(temporalFromTime(utc(dusk))) : 'none', '; Moon set (local):', moonSet)
+	console.info('Moonless darkness:', darknessWindows(geocentricSun, SITE, NOW, timeShift(NOW, 1), { moonAt: (time) => TOPOCENTRIC_MOON_PATH.stateAt(time)[0], maximumMoonAltitude: 0, moonIlluminationAt: (time) => Meeus.illuminated(computeLunarPhaseAngle(time)), maximumMoonIllumination: 0.25 }).dark)
 }
 
-// Target Above Altitude Window: the time a target stays above a chosen altitude,
-// found by using that altitude as the rise/set horizon.
+// Target altitude intervals from visibilityWindows.
 function targetAboveAltitudeWindow() {
-	const rts = riseTransitSet(() => SIRIUS_ICRF, SITE, NOW, { horizon: deg(30) })
-	if (rts.rise && rts.set) console.info('Sirius time above 30deg (hours):', (timeSubtract(tt(rts.set), tt(rts.rise)) * 24).toFixed(2))
-	else console.info('Sirius above 30deg:', rts.alwaysUp ? 'all day' : 'never')
+	console.info(
+		'Sirius above 30deg:',
+		visibilityWindows(() => SIRIUS_ICRF, SITE, NOW, timeShift(NOW, 1), { minimumAltitude: deg(30) }),
+	)
 }
 
-// Target Meridian Window.
-// NOTE: the centered meridian window is +/- a chosen hour angle around the upper
-// transit (LST = RA); shown here as the LST range for +/-1h.
+// Fixed-RA meridian +/-1 hour windows, using the sidereal drift model.
 function targetMeridianWindow() {
-	console.info('Meridian +/-1h window LST:', formatHMS(normalizeAngle(SIRIUS_RA - hour(1))), '..', formatHMS(normalizeAngle(SIRIUS_RA + hour(1))))
+	const [rightAscension] = equatorialFromJ2000(SIRIUS_RA, SIRIUS_DEC, NOW)
+	const ha = hourAngle(localSiderealTime(NOW, SITE), rightAscension)
+	console.info('Sirius meridian +/-1h windows (seconds from NOW):', hourAngleWindows(ha, -hour(1), hour(1), DAYSEC))
 }
 
-// Target Moon Separation Window.
-// NOTE: no dedicated helper; a window would scan the night with searchRoots and
-// bracket where the separation exceeds a threshold. Here the current separation is
-// shown.
+// Target-Moon avoidance intervals during astronomical darkness.
 function targetMoonSeparationWindow() {
-	const sep = separationFrom(SIRIUS_ICRF, moonGeocentric(NOW)[0])
-	console.info('Current target-Moon separation (deg):', toDeg(sep))
+	console.info(
+		'Sirius Moon avoidance windows:',
+		visibilityWindows(() => SIRIUS_ICRF, SITE, NOW, timeShift(NOW, 1), { minimumMoonSeparation: deg(30), maximumSunAltitude: ASTRONOMICAL_TWILIGHT }, { moonAt: (time) => TOPOCENTRIC_MOON_PATH.stateAt(time)[0], sunAt: geocentricSun }),
+	)
 }
 
-// Target Sun Separation Window.
+// Target-Sun avoidance intervals during astronomical darkness.
 function targetSunSeparationWindow() {
-	const sep = separationFrom(SIRIUS_ICRF, geocentricSun())
-	console.info('Current target-Sun separation (deg):', toDeg(sep))
+	console.info(
+		'Sirius Sun avoidance windows:',
+		visibilityWindows(() => SIRIUS_ICRF, SITE, NOW, timeShift(NOW, 1), { minimumSunSeparation: deg(30), maximumSunAltitude: ASTRONOMICAL_TWILIGHT }, { sunAt: geocentricSun }),
+	)
 }
 
-// Target Airmass Window: the time a target spends below an airmass limit follows from
-// the matching altitude threshold (airmass ~2 at altitude 30deg).
+// Target intervals below an explicit Kasten-Young airmass ceiling.
 function targetAirmassWindow() {
-	const rts = riseTransitSet(() => SIRIUS_ICRF, SITE, NOW, { horizon: deg(30) })
-	if (rts.rise && rts.set) console.info('Sirius time below airmass ~2 (hours):', (timeSubtract(tt(rts.set), tt(rts.rise)) * 24).toFixed(2))
-	else console.info('Sirius below airmass ~2:', rts.alwaysUp ? 'all day' : 'never')
+	console.info(
+		'Sirius airmass <= 2:',
+		visibilityWindows(() => SIRIUS_ICRF, SITE, NOW, timeShift(NOW, 1), { maximumAirmass: 2 }),
+	)
 }
 
 // Heliacal Rising / Setting, Acronychal Rising, Cosmical Setting: heliacalPhases scans the year for the four
@@ -1694,8 +1651,8 @@ function cometKeplerOrbit() {
 	return comet(0.586, 0.967, deg(162.26), deg(58.42), deg(111.33), timeJulianYear(1994, Timescale.TT))
 }
 
-// Apparent Comet Position (geocentric apparent RA/DEC of a sample comet).
-function apparentCometPosition() {
+// Geometric Comet Position (same-epoch geocentric RA/DEC of a sample comet).
+function geometricCometPosition() {
 	const geocentric = vecMinus(cometKeplerOrbit().at(NOW)[0], vecMinus(earth(NOW)[0], sun(NOW)[0]))
 	const eq = vectorToEquatorial(geocentric)
 	console.info('Comet geocentric RA/DEC:', formatHMS(normalizeAngle(eq[0])), formatSignedDMS(eq[1]))
@@ -1847,6 +1804,9 @@ function closeApproachBPlane() {
 // satellite demonstrations evaluate at the TLE's own epoch (SAT_TIME).
 const ISS_TLE = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25544  51.6442  21.4611 0001363  85.7790 274.3535 15.49180547 25697', 'ISS (ZARYA)')
 const SAT_TIME = ISS_TLE.epoch
+const ISS_RECORD = recordFromTLE(ISS_TLE)
+const SATELLITE_PATH = sgp4EphemerisPath(ISS_RECORD)
+const TOPOCENTRIC_SATELLITE_PATH = relativeEphemerisPath(SATELLITE_PATH, OBSERVER_PATH)
 
 // TLE Propagation: TEME position (AU -> km) and velocity (AU/day -> km/s) at the epoch.
 function tlePropagation() {
@@ -1854,11 +1814,10 @@ function tlePropagation() {
 	console.info('ISS TEME position (km):', p.map(toKilometer), 'velocity (km/s):', v.map(toKilometerPerSecond))
 }
 
-// Satellite Topocentric Position: TEME -> ITRF (Earth-fixed) geocentric vector.
+// Satellite Topocentric Position: ground-observer-relative inertial state.
 function satelliteTopocentricPosition() {
-	const [p] = sgp4(SAT_TIME, recordFromTLE(ISS_TLE))
-	const ecef = temeToItrf(p, SAT_TIME)
-	console.info('ISS ECEF position (km):', ecef.map(toKilometer))
+	const [p, v] = TOPOCENTRIC_SATELLITE_PATH.stateAt(SAT_TIME)
+	console.info('ISS observer-relative ICRS position (km):', p.map(toKilometer), 'velocity (km/s):', v.map(toKilometerPerSecond))
 }
 
 // Satellite Pass Prediction / Rise, Culmination, Set: satellitePasses brackets the topocentric-altitude
@@ -1877,11 +1836,8 @@ function satelliteRiseCulminationSet() {
 
 // Satellite Ground Track: sub-satellite geographic point.
 function satelliteGroundTrack() {
-	const [p] = sgp4(SAT_TIME, recordFromTLE(ISS_TLE))
-	const ecef = temeToItrf(p, SAT_TIME)
-	// subpoint expects a geocentric vector in Earth radii.
-	const sub = subpoint([toKilometer(ecef[0]) / EARTH_RADIUS_KM, toKilometer(ecef[1]) / EARTH_RADIUS_KM, toKilometer(ecef[2]) / EARTH_RADIUS_KM], SAT_TIME)
-	console.info('ISS sub-point lon/lat (deg):', toDeg(sub.longitude), toDeg(sub.latitude))
+	const sub = satelliteSubpoint(ISS_RECORD, SAT_TIME)
+	console.info('ISS subpoint lon/lat (deg):', toDeg(sub.longitude), toDeg(sub.latitude), 'elevation (km):', toKilometer(sub.elevation))
 }
 
 // Satellite Illumination State: satelliteShadowState classifies the satellite against the Earth's
@@ -1898,13 +1854,9 @@ function satelliteShadowEntryAndExit() {
 	console.info('ISS umbra entry:', formatTemporal(temporalFromTime(eclipse.entry!)), 'exit:', formatTemporal(temporalFromTime(eclipse.exit!)))
 }
 
-// Satellite Angular Speed: topocentric angular rate (finite difference).
+// Satellite Angular Speed: analytic observer-relative inertial rate.
 function satelliteAngularSpeed() {
-	const rec = recordFromTLE(ISS_TLE)
-	const a = temeToItrf(sgp4(SAT_TIME, rec)[0], SAT_TIME)
-	const t2 = timeShift(SAT_TIME, 1 / DAYSEC)
-	const b = temeToItrf(sgp4(t2, rec)[0], t2)
-	console.info('ISS angular speed (deg/s):', toDeg(vecAngle(a, b)))
+	console.info('ISS topocentric angular speed (deg/s):', toDeg(satelliteTrackingState(ISS_RECORD, SITE, SAT_TIME).angularRate) / DAYSEC)
 }
 
 // Satellite Visual Magnitude Estimate: satelliteMagnitude applies the Molczan/McCants standard-magnitude
@@ -1921,13 +1873,13 @@ function satelliteVisualMagnitudeEstimate() {
 // Satellite Sun / Lunar Avoidance Angle: separation between the satellite and the
 // Sun or Moon as seen from the observer.
 function satelliteSunAvoidanceAngle() {
-	const p = sgp4(SAT_TIME, recordFromTLE(ISS_TLE))[0]
-	console.info('Satellite-Sun separation (deg):', toDeg(separationFrom(p, geocentricSun(SAT_TIME))))
+	const p = TOPOCENTRIC_SATELLITE_PATH.stateAt(SAT_TIME)[0]
+	console.info('Satellite-Sun separation from observer (deg):', toDeg(separationFrom(p, TOPOCENTRIC_SUN_PATH.stateAt(SAT_TIME)[0])))
 }
 
 function satelliteLunarAvoidanceAngle() {
-	const p = sgp4(SAT_TIME, recordFromTLE(ISS_TLE))[0]
-	console.info('Satellite-Moon separation (deg):', toDeg(separationFrom(p, moonGeocentric(SAT_TIME)[0])))
+	const p = TOPOCENTRIC_SATELLITE_PATH.stateAt(SAT_TIME)[0]
+	console.info('Satellite-Moon separation from observer (deg):', toDeg(separationFrom(p, TOPOCENTRIC_MOON_PATH.stateAt(SAT_TIME)[0])))
 }
 
 // Satellite Conjunction Screening: satelliteConjunctions propagates both objects and refines the minima
@@ -1958,24 +1910,14 @@ function satelliteEclipseDuration() {
 // angle is 90deg minus the Sun-normal angle, so it is positive when the Sun is on the +h side of the plane
 // and near +/-90deg for a Sun-synchronous, permanently-lit geometry.
 function satelliteBetaAngle() {
-	const [p, v] = sgp4(SAT_TIME, recordFromTLE(ISS_TLE))
-	const normal = frameToFrame(vecCross(p, v), TEME, ICRS, SAT_TIME)
-	const beta = PIOVERTWO - vecAngle(geocentricSun(SAT_TIME), normal)
-	console.info('ISS beta angle (deg):', toDeg(beta).toFixed(2))
+	console.info('ISS beta angle (deg):', toDeg(computeSatelliteBetaAngle(ISS_RECORD, geocentricSun, SAT_TIME)))
 }
 
-// Satellite Range-Rate and Doppler: the line-of-sight closing speed and the frequency shift it induces on
-// a downlink. The slant range from satelliteLookAngles is differenced over one second (a central-scale
-// finite difference is unnecessary here) to give the range-rate in AU/day; a negative value means the pass
-// is approaching. The classical Doppler shift of a received carrier is -(range-rate / c) * f, evaluated in
-// AU/day with SPEED_OF_LIGHT_AU_DAY so no unit conversion is needed before scaling by the frequency.
+// Analytic topocentric range rate and classical first-order Doppler shift at an explicit carrier.
 function satelliteRangeRateAndDoppler() {
-	const rec = recordFromTLE(ISS_TLE)
-	const dt = 1 / DAYSEC // one second expressed in days
-	const rangeRate = (satelliteLookAngles(rec, SITE, timeShift(SAT_TIME, dt)).range - satelliteLookAngles(rec, SITE, SAT_TIME).range) / dt
-	const DOWNLINK_MHZ = 145.8 // ISS VHF voice downlink
-	const dopplerKHz = (-rangeRate / SPEED_OF_LIGHT_AU_DAY) * DOWNLINK_MHZ * 1000
-	console.info('ISS range-rate (km/s):', toKilometerPerSecond(rangeRate).toFixed(3), 'Doppler at 145.8 MHz (kHz):', dopplerKHz.toFixed(2))
+	const { rangeRate } = satelliteTrackingState(ISS_RECORD, SITE, SAT_TIME)
+	const frequencyHz = 145.8e6
+	console.info('ISS range rate (km/s):', toKilometerPerSecond(rangeRate), 'Doppler (Hz):', radialDopplerShift(rangeRate, frequencyHz))
 }
 
 // Satellite Ground Footprint: the circle of the Earth's surface within the satellite's geometric horizon.
@@ -1983,29 +1925,14 @@ function satelliteRangeRateAndDoppler() {
 // sub-point to the horizon is lambda = acos(Re / (Re + h)); the footprint radius along the surface is
 // Re * lambda. This is the ideal-horizon coverage cap (no terrain or minimum-elevation mask).
 function satelliteGroundFootprint() {
-	const [p] = sgp4(SAT_TIME, recordFromTLE(ISS_TLE))
-	const geocentricRadiusKm = toKilometer(vecLength(p))
-	const lambda = Math.acos(EARTH_RADIUS_KM / geocentricRadiusKm)
-	console.info('ISS altitude (km):', (geocentricRadiusKm - EARTH_RADIUS_KM).toFixed(1), 'coverage half-angle (deg):', toDeg(lambda).toFixed(2), 'footprint radius (km):', (EARTH_RADIUS_KM * lambda).toFixed(0))
+	const footprint = computeSatelliteGroundFootprint(ISS_RECORD, SAT_TIME)
+	console.info('ISS spherical footprint:', 'altitude (km):', toKilometer(footprint.altitude), 'half-angle (deg):', toDeg(footprint.halfAngle), 'surface radius (km):', toKilometer(footprint.surfaceRadius))
 }
 
-// Visible Pass Prediction: the practical "when can I actually see it" question, composing the three
-// primitives. satellitePasses brackets the passes that clear a minimum culmination altitude (the
-// minAltitude horizon), then each pass is screened at its culmination with satelliteMagnitude, which
-// reports both whether the satellite is sunlit (out of the Earth's umbra) and its apparent magnitude.
-// Only sunlit passes at or brighter than a magnitude limit are kept. A full naked-eye prediction would
-// also require the observer to be in darkness (Sun sufficiently below the horizon); that gate reuses the
-// twilight machinery shown earlier and is left out here to keep the demonstration focused.
+// Visible satellite intervals satisfying every criterion throughout, including observer darkness.
 function visiblePassPrediction() {
-	const rec = recordFromTLE(ISS_TLE)
-	const minAltitude = deg(20) // ignore low passes lost in horizon murk
-	const magnitudeLimit = 3.5 // roughly the naked-eye limit under suburban skies
-	const passes = satellitePasses(rec, SITE, SAT_TIME, timeShift(SAT_TIME, 1), { minAltitude })
-	const visible = passes.map((pass) => ({ pass, mag: satelliteMagnitude(rec, SITE, geocentricSun, pass.culmination.time, -1.8) })).filter(({ mag }) => mag.illuminated && mag.magnitude <= magnitudeLimit)
-	if (visible.length === 0) return console.info('Visible passes: none above 20deg, sunlit and brighter than', magnitudeLimit, 'in the next day.')
-	for (const { pass, mag } of visible) {
-		console.info('Visible ISS pass (local):', formatTemporal(temporalFromTime(utc(pass.culmination.time))), `culmination ${toDeg(pass.culmination.altitude).toFixed(0)}deg, magnitude ${mag.magnitude.toFixed(1)}`)
-	}
+	const visible = satelliteVisibleIntervals(ISS_RECORD, SITE, geocentricSun, SAT_TIME, timeShift(SAT_TIME, 1), { standardMagnitude: -1.8, minimumAltitude: deg(20), maximumMagnitude: 3.5, maximumSunAltitude: deg(-6) })
+	console.info('ISS visible intervals (altitude, umbra, brightness, observer darkness):', visible)
 }
 
 function run() {
@@ -2093,7 +2020,7 @@ function run() {
 	heliocentricBodyState()
 	geocentricBodyState()
 	topocentricBodyState()
-	apparentPlanetPosition()
+	geometricPlanetPosition()
 	planetAltitudeAndAzimuth()
 	planetaryElongation()
 	planetaryPhaseAngle()
@@ -2103,7 +2030,7 @@ function run() {
 	planetaryHeliocentricLongitude()
 	planetaryGeocentricLongitude()
 	planetaryEclipticLatitude()
-	planetaryApparentMotion()
+	planetaryGeometricMotion()
 	planetaryStationaryPoint()
 	planetaryGreatestElongation()
 	planetaryOpposition()
@@ -2122,7 +2049,7 @@ function run() {
 	jupiterGreatRedSpotTransit()
 
 	// Sun and Moon
-	apparentSolarPosition()
+	geometricSolarPosition()
 	solarAltitudeAndAzimuth()
 	solarEquationOfTime()
 	solarDeclination()
@@ -2219,7 +2146,7 @@ function run() {
 	osculatingElements()
 	heliocentricMinorBodyPosition()
 	geocentricMinorBodyPosition()
-	apparentCometPosition()
+	geometricCometPosition()
 	cometSolarElongation()
 	cometMagnitudeEstimation()
 	asteroidPhaseAngle()

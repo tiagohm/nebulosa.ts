@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import type { PositionAndVelocity, PositionAndVelocityOverTime } from '../../../src/astronomy/coordinates/astrometry'
+import { zeroPositionAndVelocity, type PositionAndVelocity, type PositionAndVelocityOverTime } from '../../../src/astronomy/coordinates/astrometry'
 import { observerState } from '../../../src/astronomy/coordinates/correction'
 import { earth, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { occultationCandidates } from '../../../src/astronomy/events/occultation'
@@ -26,10 +26,7 @@ const BODY_RADIUS = 3e-6 // physical radius (~449 km), AU
 
 // Observer pinned at the shared origin (zero position and velocity).
 function fixedObserver(): PositionAndVelocity {
-	return [
-		[0, 0, 0],
-		[0, 0, 0],
-	]
+	return zeroPositionAndVelocity()
 }
 
 // Body at [RANGE, IMPACT, CROSS_RATE * dt]: on the +x line of sight at CROSSING, drifting in z.

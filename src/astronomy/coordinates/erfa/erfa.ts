@@ -1,12 +1,13 @@
 import { ASEC2RAD, DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, DAYSPERTY, ELB, ELG, J2000, LIGHT_TIME_AU, MILLIASEC2RAD, MJD0, MJD1977, PI, PIOVERTWO, SCHWARZSCHILD_RADIUS_OF_THE_SUN, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI, TURNAS, WGS84_FLATTENING, WGS84_RADIUS } from '../../../core/constants'
 import { type Mat3, type MutMat3, matClone, matCopy, matIdentity, matMul, matMulTranspose, matMulVec, matRotX, matRotY, matRotZ, matTransposeMulVec } from '../../../math/linear-algebra/mat3'
-import { type MutVec3, type Vec3, vecClone, vecCross, vecDivScalar, vecDot, vecFill, vecLength, vecMinus, vecMulScalar, vecNormalize, vecNormalizeMut, vecPlus } from '../../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecClone, vecCross, vecDivScalar, vecDot, vecFill, vecLength, vecMinus, vecMulScalar, vecNormalize, vecNormalizeMut, vecPlus, vecZero } from '../../../math/linear-algebra/vec3'
 import { pmod, roundToNearestWholeNumber, type NumberArray } from '../../../math/numerical/math'
 import { type Angle, arcsec, deg, normalizeAngle, secondsOfTime, toArcsec } from '../../../math/units/angle'
 import { type Distance, toKilometer } from '../../../math/units/distance'
 import type { Pressure } from '../../../math/units/pressure'
 import type { Temperature } from '../../../math/units/temperature'
 import { kilometerPerSecond, toKilometerPerSecond, type Velocity } from '../../../math/units/velocity'
+import type { PositionAndVelocity, PositionAndVelocityMut } from '../astrometry'
 import { FAIRHEAD, FK4_FK5, IAU2000_EECT, IAU2000_S, IAU2006_S, NUT00A_LS, NUT00A_PL, NUT00B_LS, NUT80_X, PLAN94, VONDRAK_ECLIPTIC, VONDRAK_ECLIPTIC_POLYNOMIAL, VONDRAK_EQUATOR, VONDRAK_EQUATOR_POLYNOMIAL, XY06 } from './erfa.data'
 
 const DBL_EPSILON = 2.220446049250313e-16
@@ -322,10 +323,7 @@ export function eraPlan94(tdb1: number, tdb2: number, np: number): readonly [Mut
 	const sineObliquity = 0.3977771559319137
 	const cosineObliquity = 0.9174820620691818
 
-	const pv: readonly [MutVec3, MutVec3] = [
-		[0, 0, 0],
-		[0, 0, 0],
-	]
+	const pv: PositionAndVelocityMut = [vecZero(), vecZero()]
 
 	// Time: Julian millennia since J2000.0.
 	const t = (tdb1 - J2000 + tdb2) / DAYSPERJM
@@ -419,11 +417,8 @@ export function eraPlan94(tdb1: number, tdb2: number, np: number): readonly [Mut
 }
 
 // Converts the Seidelmann 6-space FK4/FK5 transformation matrix into a position/velocity vector.
-function fkCatalogTransform(pv: readonly [Vec3, Vec3], matrix: typeof FK4_FK5.forward | typeof FK4_FK5.inverse): readonly [MutVec3, MutVec3] {
-	const transformed: readonly [MutVec3, MutVec3] = [
-		[0, 0, 0],
-		[0, 0, 0],
-	]
+function fkCatalogTransform(pv: PositionAndVelocity, matrix: typeof FK4_FK5.forward | typeof FK4_FK5.inverse): readonly [MutVec3, MutVec3] {
+	const transformed: PositionAndVelocityMut = [vecZero(), vecZero()]
 
 	for (let i = 0; i < 2; i++) {
 		for (let j = 0; j < 3; j++) {
@@ -1995,7 +1990,7 @@ export function eraS2pv(theta: Angle, phi: Angle, r: Distance, td: Angle, pd: An
 
 // NOT PRESENT IN ERFA!
 // Update star position+velocity vector for space motion.
-export function eraStarpmpv(pv1: readonly [Vec3, Vec3], ep1a: number, ep1b: number, ep2a: number, ep2b: number) {
+export function eraStarpmpv(pv1: PositionAndVelocity, ep1a: number, ep1b: number, ep2a: number, ep2b: number) {
 	// Light time when observed (days).
 	const tl1 = vecLength(pv1[0]) / SPEED_OF_LIGHT_AU_DAY
 
@@ -2382,7 +2377,7 @@ export function eraC2tcio(rc2i: Mat3, era: Angle, rpom: Mat3, o?: MutMat3) {
 // parameters for transformations between ICRS and geocentric CIRS
 // coordinates. The caller supplies the date, and ERFA models are used
 // to predict the Earth ephemeris and CIP/CIO.
-export function eraApci13(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
+export function eraApci13(tdb1: number, tdb2: number, ebpv: PositionAndVelocity, ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
 	// Form the equinox based BPN matrix, IAU 2006/2000A.
 	const r = eraPnm06a(tdb1, tdb2)
 
@@ -2406,7 +2401,7 @@ export function eraApci13(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3
 // parameters for transformations between ICRS and geocentric CIRS
 // coordinates. The Earth ephemeris and CIP/CIO are supplied by the caller.
 // TT can be used instead of TDB without any significant impact on accuracy.
-export function eraApci(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3, x: Angle, y: Angle, s: Angle, astrom?: EraAstrom) {
+export function eraApci(tdb1: number, tdb2: number, ebpv: PositionAndVelocity, ehp: Vec3, x: Angle, y: Angle, s: Angle, astrom?: EraAstrom) {
 	// Star-independent astrometry parameters for geocenter.
 	astrom = eraApcg(tdb1, tdb2, ebpv, ehp, astrom)
 
@@ -2425,7 +2420,7 @@ const ZERO_PV = [
 // parameters for transformations between ICRS and GCRS coordinates.
 // The Earth ephemeris is supplied by the caller.
 // TT can be used instead of TDB without any significant impact on accuracy.
-export function eraApcg(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3, astrom?: EraAstrom) {
+export function eraApcg(tdb1: number, tdb2: number, ebpv: PositionAndVelocity, ehp: Vec3, astrom?: EraAstrom) {
 	// Compute the star-independent astrometry parameters.
 	return eraApcs(tdb1, tdb2, ZERO_PV, ebpv, ehp, astrom)
 }
@@ -2434,7 +2429,7 @@ export function eraApcg(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3],
 // prepare star-independent astrometry parameters for transformations
 // between ICRS and GCRS. The Earth ephemeris is supplied by the caller.
 // TT can be used instead of TDB without any significant impact on accuracy.
-export function eraApcs(tdb1: number, tdb2: number, pv: readonly [Vec3, Vec3], ebpv: readonly [Vec3, Vec3], ehp: Vec3, astrom?: EraAstrom) {
+export function eraApcs(tdb1: number, tdb2: number, pv: PositionAndVelocity, ebpv: PositionAndVelocity, ehp: Vec3, astrom?: EraAstrom) {
 	astrom ??= eraAstrom()
 
 	// Time since reference epoch, years (for proper motion calculation).
@@ -2539,7 +2534,7 @@ export function eraAtciqz(rc: Angle, dc: Angle, astrom: EraAstrom) {
 export function eraApco(
 	tdb1: number,
 	tdb2: number,
-	ebpv: readonly [Vec3, Vec3],
+	ebpv: PositionAndVelocity,
 	ehp: Vec3,
 	x: number,
 	y: number,
@@ -2659,7 +2654,7 @@ export function eraApco13(
 	tc: Temperature,
 	rh: number,
 	wl: number,
-	ebpv: readonly [Vec3, Vec3],
+	ebpv: PositionAndVelocity,
 	ehp: Vec3,
 	radius: Distance = WGS84_RADIUS,
 	flattening: number = WGS84_FLATTENING,
@@ -3045,7 +3040,7 @@ export function eraAticq(ri: Angle, di: Angle, astrom: EraAstrom) {
 }
 
 // Transform ICRS star data, epoch J2000.0, to CIRS.
-export function eraAtci13(tdb1: number, tdb2: number, rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distance, rv: Velocity, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
+export function eraAtci13(tdb1: number, tdb2: number, rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distance, rv: Velocity, ebpv: PositionAndVelocity, ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
 	astrom = eraApci13(tdb1, tdb2, ebpv, ehp, astrom)
 	return [...eraAtciq(rc, dc, pr, pd, px, rv, astrom), astrom] as const
 }
@@ -3092,7 +3087,7 @@ export function eraAtco13(
 	tc: Temperature,
 	rh: number,
 	wl: number,
-	ebpv: readonly [Vec3, Vec3],
+	ebpv: PositionAndVelocity,
 	ehp: Vec3,
 	radius: Distance = WGS84_RADIUS,
 	flattening: number = WGS84_FLATTENING,
@@ -3129,7 +3124,7 @@ export function eraAtoc13(
 	tc: Temperature,
 	rh: number,
 	wl: number,
-	ebpv: readonly [Vec3, Vec3],
+	ebpv: PositionAndVelocity,
 	ehp: Vec3,
 	radius: Distance = WGS84_RADIUS,
 	flattening: number = WGS84_FLATTENING,
@@ -3230,14 +3225,14 @@ export function eraAticqn(ri: Angle, di: Angle, astrom: EraAstrom, bodies: LdBod
 // Transform CIRS right ascension and declination into ICRS astrometric
 // coordinates, preparing geocentric astrometry from caller-supplied
 // Earth ephemerides.
-export function eraAtic13(ri: Angle, di: Angle, tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
+export function eraAtic13(ri: Angle, di: Angle, tdb1: number, tdb2: number, ebpv: PositionAndVelocity, ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
 	astrom = eraApci13(tdb1, tdb2, ebpv, ehp, astrom)
 	return [...eraAticq(ri, di, astrom), astrom] as const
 }
 
 // Transform an ICRS catalog entry into ICRS astrometric coordinates,
 // preparing geocentric astrometry from caller-supplied Earth ephemerides.
-export function eraAtcc13(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distance, rv: Velocity, tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
+export function eraAtcc13(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distance, rv: Velocity, tdb1: number, tdb2: number, ebpv: PositionAndVelocity, ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
 	astrom = eraApci13(tdb1, tdb2, ebpv, ehp, astrom)
 	return eraAtccq(rc, dc, pr, pd, px, rv, astrom)
 }

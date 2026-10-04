@@ -1,6 +1,6 @@
 import { AU_KM, DAYSEC, J2000 } from '../../../core/constants'
 import type { MutVec3 } from '../../../math/linear-algebra/vec3'
-import type { PositionAndVelocity } from '../../coordinates/astrometry'
+import type { PositionAndVelocity, PositionAndVelocityMut } from '../../coordinates/astrometry'
 import { type Time, tdb } from '../../time/time'
 import type { Daf, Summary } from './daf'
 
@@ -55,7 +55,7 @@ export interface SpkSegment {
 	// Loads INIT/INTLEN/RSIZE/N. Coefficient records are read later on demand. Safe to call more than once.
 	readonly initialize: () => Promise<void>
 	// Evaluates position (AU) and velocity (AU/day) at `time` in `frame`. No rotation is applied.
-	readonly at: (time: Time) => PositionAndVelocity
+	readonly at: (time: Time) => PositionAndVelocityMut
 }
 
 // Reads SPK summaries and builds a reusable center-target segment lookup.
@@ -221,7 +221,7 @@ function evaluateChebyshevVector(x: Float64Array, y: Float64Array, z: Float64Arr
 }
 
 // Evaluates a 3D Chebyshev position series and its first derivative in one pass.
-function evaluateChebyshevVectorDerivative(x: Float64Array, y: Float64Array, z: Float64Array, s: number, velocityScale: number, position: MutVec3, velocity: MutVec3): PositionAndVelocity {
+function evaluateChebyshevVectorDerivative(x: Float64Array, y: Float64Array, z: Float64Array, s: number, velocityScale: number, position: MutVec3, velocity: MutVec3): PositionAndVelocityMut {
 	const ss = 2 * s
 	let x0 = 0
 	let y0 = 0
@@ -313,7 +313,7 @@ export class Type2And3Segment implements SpkSegment {
 	}
 
 	// Evaluates position and velocity at the requested epoch.
-	at(time: Time): PositionAndVelocity {
+	at(time: Time): PositionAndVelocityMut {
 		if (!this.#initialized) throw new Error('SPK segment is not initialized')
 
 		const seconds = spkSeconds(time)
@@ -460,7 +460,7 @@ export class Type9Segment implements SpkSegment {
 	}
 
 	// Interpolates one state vector at the requested epoch.
-	at(time: Time): PositionAndVelocity {
+	at(time: Time): PositionAndVelocityMut {
 		if (!this.#initialized) throw new Error('SPK segment is not initialized')
 
 		const seconds = spkSeconds(time)
@@ -607,7 +607,7 @@ export class Type21Segment implements SpkSegment {
 	}
 
 	// Interpolates one extended MDA record at the requested epoch.
-	at(time: Time): PositionAndVelocity {
+	at(time: Time): PositionAndVelocityMut {
 		if (!this.#initialized) throw new Error('SPK segment is not initialized')
 
 		const seconds = spkSeconds(time)
@@ -847,7 +847,7 @@ export class MultipleSpkSegment implements SpkSegment {
 	}
 
 	// Selects the highest-priority segment that covers the request epoch.
-	at(time: Time): PositionAndVelocity {
+	at(time: Time): PositionAndVelocityMut {
 		const seconds = spkSeconds(time)
 
 		for (let i = this.#segments.length - 1; i >= 0; i--) {

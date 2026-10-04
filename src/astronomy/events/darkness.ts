@@ -1,9 +1,9 @@
-import type { Vec3 } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
+import type { PositionOverTime } from '../coordinates/astrometry'
 import type { GeographicPosition } from '../observer/location'
-import { type Time, timeShift, timeSubtract } from '../time/time'
+import type { Time } from '../time/time'
 import { ASTRONOMICAL_TWILIGHT, altitudeOf, CIVIL_TWILIGHT, NAUTICAL_TWILIGHT } from './horizon'
-import { searchRoots, type TimeSearchOptions } from './search'
+import { searchIntervals, type TimeSearchOptions } from './search'
 
 // Civil, nautical, and astronomical darkness, plus the part of astronomical night that also satisfies
 // an optional lunar limit. Each interval is a stretch where the Sun's geometric altitude stays below
@@ -37,7 +37,7 @@ export interface DarknessWindows {
 export interface DarknessOptions extends TimeSearchOptions {
 	// J2000 direction of the Moon. When set, dark intervals also require the Moon to sit at or below
 	// maximumMoonAltitude.
-	readonly moonAt?: (time: Time) => Vec3
+	readonly moonAt?: PositionOverTime
 	// Maximum geometric lunar altitude, in radians. Defaults to the horizon (0) when moonAt is set.
 	readonly maximumMoonAltitude?: Angle
 	// Illuminated fraction of the Moon, from 0 to 1, at a time.
@@ -55,20 +55,7 @@ function intervalsBelow(value: (time: Time) => number, limit: number, start: Tim
 // Finds the stretches on which margin is non-negative. A zero margin is the boundary and is kept as
 // an endpoint; the interior test uses the midpoint, so an exactly grazing touch does not become a stretch.
 function positiveIntervals(margin: (time: Time) => number, start: Time, end: Time, options: TimeSearchOptions): DarknessInterval[] {
-	if (!(timeSubtract(end, start) > 0)) return []
-	const roots = searchRoots(margin, start, end, options)
-	const bounds = [start, ...roots, end]
-	const intervals: DarknessInterval[] = []
-
-	for (let i = 0; i < bounds.length - 1; i++) {
-		const left = bounds[i]
-		const right = bounds[i + 1]
-		if (left === undefined || right === undefined || !(timeSubtract(right, left) > 0)) continue
-		const middle = timeShift(left, timeSubtract(right, left) * 0.5)
-		if (margin(middle) >= 0) intervals.push({ start: left, end: right })
-	}
-
-	return intervals
+	return searchIntervals([margin], start, end, options)
 }
 
 // Intersects every base interval with the times at which margin is non-negative.
@@ -97,7 +84,7 @@ function intersect(base: readonly DarknessInterval[], margin: (time: Time) => nu
 // astronomical. A lunar altitude ceiling without moonAt, or an illumination ceiling without
 // moonIlluminationAt, cannot be evaluated and is rejected rather than ignored. Illumination alone,
 // without a ceiling, is not a constraint.
-export function darknessWindows(sunAt: (time: Time) => Vec3, location: GeographicPosition, start: Time, end: Time, options: DarknessOptions = {}): DarknessWindows {
+export function darknessWindows(sunAt: PositionOverTime, location: GeographicPosition, start: Time, end: Time, options: DarknessOptions = {}): DarknessWindows {
 	if (options.maximumMoonAltitude !== undefined && options.moonAt === undefined) throw new RangeError('moon direction is required when a lunar altitude limit is set')
 	if (options.maximumMoonIllumination !== undefined && options.moonIlluminationAt === undefined) throw new RangeError('moon illumination is required when an illumination limit is set')
 

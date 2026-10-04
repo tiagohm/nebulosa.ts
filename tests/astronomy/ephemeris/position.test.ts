@@ -1,13 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import { SUN_LIGHT_DEFLECTOR_LIMITER, SUN_LIGHT_DEFLECTOR_MASS, apparentDirection } from '../../../src/astronomy/coordinates/apparent'
-import { topocentricDirection, type PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
+import { topocentricDirection, zeroPositionAndVelocity, type PositionAndVelocity, type PositionAndVelocityMut } from '../../../src/astronomy/coordinates/astrometry'
 import { annualAberration } from '../../../src/astronomy/coordinates/correction'
 import { eraLd } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { CIRS, ECLIPTIC_J2000, GALACTIC, ICRS, ITRS, frameAt, frameToBase } from '../../../src/astronomy/coordinates/frame'
 import { Naif } from '../../../src/astronomy/ephemeris/kernels/naif'
 import { customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from '../../../src/astronomy/ephemeris/path'
 import { type ApparentPosition, type AstrometricPosition, apparentPosition, directionPositionInFrame, ephemerisAt, equatorialPosition, geometricPositionInFrame, geometricSphericalPositionAndVelocity, observeEphemeris } from '../../../src/astronomy/ephemeris/position'
-import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { Timescale, timeShift, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { DAYSEC, LIGHT_TIME_AU, PI, PIOVERTWO, TAU } from '../../../src/core/constants'
 import { type MutVec3, type Vec3, vecAngle, vecClone, vecDistance, vecDivScalar, vecDot, vecLength, vecMinus, vecNegate, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { mulberry32 } from '../../../src/math/numerical/random'
@@ -17,17 +17,63 @@ const TIME = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TDB)
 const EARTH = naifEphemerisEndpoint(Naif.EARTH)
 const MARS = naifEphemerisEndpoint(Naif.MARS)
 
-test('retarded observation uses SSB states and owns every vector', () => {
-	const scratch: PositionAndVelocity = [vecZero(), vecZero()]
-	const observer = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => {
-		scratch[0] = [0.1, 0, 0]
-		scratch[1] = [0.01, 0, 0]
+test('ephemerisAt snapshots provider-local singleton storage', () => {
+	const scratch = zeroPositionAndVelocity()
+	const path = ephemerisPath(EARTH, MARS, (time) => {
+		scratch[0][0] = timeSubtract(time, TIME)
+		scratch[1][0] = 2 * timeSubtract(time, TIME)
 		return scratch
 	})
+	const first = ephemerisAt(path, timeShift(TIME, 1))
+	const second = ephemerisAt(path, timeShift(TIME, 2))
+	expect(first.position[0]).toBe(1)
+	expect(first.velocity[0]).toBe(2)
+	expect(second.position[0]).toBe(2)
+	expect(second.velocity[0]).toBe(4)
+	expect(first.position).not.toBe(scratch[0])
+	expect(first.velocity).not.toBe(scratch[1])
+	expect(first.position).not.toBe(second.position)
+	expect(first.velocity).not.toBe(second.velocity)
+	scratch[0][0] = scratch[1][0] = 99
+	expect(second.position[0]).toBe(2)
+	expect(second.velocity[0]).toBe(4)
+})
+
+test('equatorial outputs reuse one buffer for every position stage and support in-place conversion', () => {
+	const target = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, () => [[0.8, -0.4, 0.3], vecZero()])
+	const observer = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => [vecZero(), vecZero()])
+	const geometric = ephemerisAt(target, TIME)
+	const astrometric = observeEphemeris(observer, target, TIME)!
+	const apparent = apparentPosition(astrometric, { aberration: false })
+	const out: MutVec3 = [9, 9, 9]
+	for (const position of [geometric, astrometric, apparent]) {
+		const input = position.kind === 'geometric' ? position.position : position.direction
+		const original = vecClone(input)
+		const expected = equatorialPosition(position)
+		const actual = equatorialPosition(position, out)
+		expect(actual).toBe(out)
+		for (let axis = 0; axis < 3; axis++) expect(actual[axis]).toBeCloseTo(expected[axis], 14)
+		expect(input).toEqual(original)
+		const inPlace = vecClone(input)
+		const aliased = position.kind === 'geometric' ? { ...position, position: inPlace } : { ...position, direction: inPlace }
+		expect(equatorialPosition(aliased, inPlace)).toBe(inPlace)
+		for (let axis = 0; axis < 3; axis++) expect(inPlace[axis]).toBeCloseTo(expected[axis], 14)
+	}
+})
+
+test('retarded observation uses SSB states and owns every vector', () => {
+	const observerScratch: PositionAndVelocityMut = [
+		[0.1, 0, 0],
+		[0.01, 0, 0],
+	]
+	const targetScratch: PositionAndVelocityMut = [
+		[0, 0.5, 0],
+		[0.001, 0, 0],
+	]
+	const observer = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, EARTH, () => observerScratch)
 	const target = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, MARS, (time) => {
-		scratch[0] = [1 + (time.fraction - TIME.fraction) * 0.001, 0.5, 0]
-		scratch[1] = [0.001, 0, 0]
-		return scratch
+		targetScratch[0][0] = 1 + (time.fraction - TIME.fraction) * 0.001
+		return targetScratch
 	})
 	const position = observeEphemeris(observer, target, TIME)!
 	expect(position.kind).toBe('astrometric')
@@ -39,8 +85,8 @@ test('retarded observation uses SSB states and owns every vector', () => {
 	expect(position.observerPosition).toEqual([0.1, 0, 0])
 	expect(position.observerVelocity).toEqual([0.01, 0, 0])
 	expect(position.targetEmissionPosition[0]).toBeCloseTo(position.position[0] + 0.1, 14)
-	scratch[0][0] = 99
-	scratch[1][0] = 99
+	observerScratch[0][0] = observerScratch[1][0] = 99
+	targetScratch[0][0] = targetScratch[1][0] = 99
 	expect(position.position[0]).toBeLessThan(2)
 	expect(position.observerVelocity[0]).toBe(0.01)
 	expect(position.targetEmissionPosition[0]).toBeLessThan(2)
@@ -104,7 +150,7 @@ test('frame and equatorial helpers preserve stage-specific physical quantities',
 		expect(actualState[0][axis]).toBeCloseTo(expectedState[0][axis], 14)
 		expect(actualState[1][axis]).toBeCloseTo(expectedState[1][axis], 14)
 	}
-	const workspace: PositionAndVelocity = [vecZero(), vecZero()]
+	const workspace = zeroPositionAndVelocity()
 	expect(geometricPositionInFrame(geometric, ITRS, workspace)).toBe(workspace)
 	const rotated = directionPositionInFrame(astrometric, ITRS)
 	const expectedDirection = frameAt(astrometric.direction, ITRS, TIME)
@@ -194,26 +240,27 @@ test('observation is SSB-only, unit, and has no public velocity', () => {
 })
 
 test('deflector snapshots, ordering inputs, and the absence of a hidden ephemeris', () => {
-	const scratch: PositionAndVelocity = [vecZero(), vecZero()]
+	const sunScratch: PositionAndVelocityMut = [
+		[-1, 0.1, 0],
+		[0, 0.001, 0],
+	]
+	const deflectorScratch: PositionAndVelocity = [
+		[0.4, 0.02, 0],
+		[0, 0.002, 0],
+	]
 	let sunCalls = 0
 	const sun = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, SUN, () => {
 		sunCalls++
-		scratch[0] = [-1, 0.1, 0]
-		scratch[1] = [0, 0.001, 0]
-		return scratch
+		return sunScratch
 	})
-	const deflector = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.JUPITER), () => {
-		scratch[0] = [0.4, 0.02, 0]
-		scratch[1] = [0, 0.002, 0]
-		return scratch
-	})
+	const deflector = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.JUPITER), () => deflectorScratch)
 	const observed = observeEphemeris(barycentric(EARTH, stationary(vecZero(), [0, 0.017, 0])), barycentric(MARS, stationary([1, 0.05, 0.01])), TIME)!
 	const withoutDeflection = apparentPosition(observed, { sun, deflectors: [] })
 	const withSun = apparentPosition(observed, { sun, deflectors: [{ mass: SUN_LIGHT_DEFLECTOR_MASS, limiter: SUN_LIGHT_DEFLECTOR_LIMITER, path: sun }] })
 	expect(vecAngle(withoutDeflection.direction, observed.direction)).toBeGreaterThan(1e-6)
 	expect(vecAngle(withSun.direction, withoutDeflection.direction)).toBeGreaterThan(1e-12)
-	scratch[0][0] = 50
-	scratch[1][0] = 50
+	sunScratch[0][0] = 50
+	sunScratch[1][0] = 50
 	const again = apparentPosition(observed, { sun, deflectors: [{ mass: SUN_LIGHT_DEFLECTOR_MASS, limiter: SUN_LIGHT_DEFLECTOR_LIMITER, path: deflector }] })
 	expect(again.direction.every(Number.isFinite)).toBe(true)
 	expect(vecLength(again.direction)).toBeCloseTo(1, 12)
@@ -363,6 +410,12 @@ test('frame helpers own outputs and keep the rotating-frame velocity term', () =
 		const expected = frameAt(observed.direction, frame, TIME)
 		expect(directed).not.toBe(observed.direction)
 		for (let axis = 0; axis < 3; axis++) expect(directed[axis]).toBeCloseTo(expected[axis], 14)
+		const out = vecZero()
+		expect(directionPositionInFrame(observed, frame, out)).toBe(out)
+		for (let axis = 0; axis < 3; axis++) expect(out[axis]).toBeCloseTo(expected[axis], 14)
+		const inPlace = vecClone(observed.direction)
+		expect(directionPositionInFrame({ ...observed, direction: inPlace }, frame, inPlace)).toBe(inPlace)
+		for (let axis = 0; axis < 3; axis++) expect(inPlace[axis]).toBeCloseTo(expected[axis], 14)
 	}
 	expect(observed.direction[0]).toBe(original[0])
 	expect(observed.direction[1]).toBe(original[1])
@@ -377,7 +430,7 @@ test('frame helpers own outputs and keep the rotating-frame velocity term', () =
 	for (let axis = 0; axis < 3; axis++) expect(rotated[0][axis]).toBeCloseTo(rotationOnly[axis], 14)
 	const velocityOnly = frameAt([geometric.position, geometric.velocity] as const, { rotationAt: ITRS.rotationAt }, TIME)
 	expect(Math.hypot(rotated[1][0] - velocityOnly[1][0], rotated[1][1] - velocityOnly[1][1], rotated[1][2] - velocityOnly[1][2])).toBeGreaterThan(1e-6)
-	const workspace: PositionAndVelocity = [vecZero(), vecZero()]
+	const workspace = zeroPositionAndVelocity()
 	expect(geometricPositionInFrame(geometric, ECLIPTIC_J2000, workspace)).toBe(workspace)
 	const position = vecClone(geometric.position)
 	const velocity = vecClone(geometric.velocity)

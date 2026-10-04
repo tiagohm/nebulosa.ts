@@ -1,7 +1,8 @@
-import type { MutVec3, Vec3 } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecNormalizeMut, vecZero } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
-import type { PositionAndVelocity, PositionAndVelocityOverTime } from '../coordinates/astrometry'
+import { zeroPositionAndVelocity, type PositionAndVelocityMut, type PositionAndVelocityOverTime, type PositionAndVelocityOverTimeMut } from '../coordinates/astrometry'
+import type { CartesianCoordinate } from '../coordinates/coordinate'
 import { frameToBase, type Frame } from '../coordinates/frame'
 import type { Time } from '../time/time'
 
@@ -12,15 +13,16 @@ import type { Time } from '../time/time'
 // Frame.dRdtTimesRtAt; composing with a body-center ephemeris yields a normal
 // PositionAndVelocityOverTime. Angles are radians, distances AU, velocities AU/day. Elevation is a
 // radial offset along the planetocentric direction, not a planetographic/geodetic height.
+// Reference-surface normals use the ellipsoid gradient in body-fixed axes, ignoring radial relief.
 
 // Zero body-fixed velocity of a crust-fixed point. frameToBase reads it and writes the inertial
 // velocity into a separate output, so this shared rest vector is not mutated.
-const BODY_FIXED_REST: Vec3 = [0, 0, 0]
+const BODY_FIXED_REST = vecZero()
 
 // Reference tri-axial ellipsoid in a body-fixed frame.
 export interface BodyShape {
 	// Semi-axes along body-fixed +X, +Y and +Z, in AU.
-	readonly radii: readonly [Distance, Distance, Distance]
+	readonly radii: CartesianCoordinate
 }
 
 // A crust-fixed point in planetocentric coordinates on `shape`, oriented by `frame`.
@@ -81,6 +83,20 @@ export function bodySurfaceLocation(longitude: Angle, latitude: Angle, elevation
 	return location
 }
 
+// Unit outward normal of the reference ellipsoid at location's planetocentric longitude/latitude,
+// in body-fixed axes. Elevation is ignored: this is the vertical of the reference surface, not relief.
+// Scales by the smallest semi-axis before squaring to avoid overflow from AU inverse squares.
+// Mutates and returns out when supplied, otherwise allocates a vector; does not mutate location.
+export function bodySurfaceNormal(location: BodySurfaceLocation, out: MutVec3 = [0, 0, 0]): MutVec3 {
+	const [a, b, c] = location.shape.radii
+	const scale = Math.min(a, b, c)
+	const cosLat = Math.cos(location.latitude)
+	out[0] = cosLat * Math.cos(location.longitude) * (scale / a) ** 2
+	out[1] = cosLat * Math.sin(location.longitude) * (scale / b) ** 2
+	out[2] = Math.sin(location.latitude) * (scale / c) ** 2
+	return vecNormalizeMut(out)
+}
+
 // Body-relative inertial position (AU) and rotational velocity (AU/day) of a crust-fixed point.
 //
 // The cached body-fixed Cartesian position is treated as the stationary state [r_fixed, 0] and
@@ -89,7 +105,7 @@ export function bodySurfaceLocation(longitude: Angle, latitude: Angle, elevation
 // contributes no rotational surface velocity. Pass `out` to reuse a state pair;
 // `out` may alias a previous return from this function. The result is relative to the body
 // center, in the library base (GCRS/ICRS-oriented) axes.
-export function bodySurfaceState(location: BodySurfaceLocation, time: Time, out?: PositionAndVelocity): PositionAndVelocity {
+export function bodySurfaceState(location: BodySurfaceLocation, time: Time, out?: PositionAndVelocityMut): PositionAndVelocityMut {
 	return frameToBase([bodyFixedPosition(location), BODY_FIXED_REST], location.frame, time, out)
 }
 
@@ -99,11 +115,8 @@ export function bodySurfaceState(location: BodySurfaceLocation, time: Time, out?
 // barycentric ICRS/BCRS axes, so the surface point can be passed anywhere a body ephemeris is
 // already accepted. Each call allocates a fresh state pair; the body-fixed point stays cached
 // on `location`.
-export function bodySurfacePositionAndVelocity(body: PositionAndVelocityOverTime, location: BodySurfaceLocation): PositionAndVelocityOverTime {
-	const surface: PositionAndVelocity = [
-		[0, 0, 0],
-		[0, 0, 0],
-	]
+export function bodySurfacePositionAndVelocity(body: PositionAndVelocityOverTime, location: BodySurfaceLocation): PositionAndVelocityOverTimeMut {
+	const surface = zeroPositionAndVelocity()
 
 	return (time) => {
 		const [bp, bv] = body(time)
