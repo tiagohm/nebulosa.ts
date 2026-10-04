@@ -850,6 +850,50 @@ console.log(minutes) // 16.42 — minutes of time; the sundial is ahead of the c
 
 ### Equatorial Mount Geometric Pointing Errors
 
+An equatorial mount that is not perfectly built or aligned points slightly away from where its axes say it points. The model here is the six basic geometric terms of TPoint: index offsets in hour angle and declination (`IH`, `ID`), collimation or cone error (`CH`), non-perpendicularity of the polar and declination axes (`NP`), and polar-axis misalignment in azimuth (`MA`) and elevation (`ME`). The error at a mechanical orientation is
+
+```text
+ΔH = IH + CH·sec δ + NP·tan δ − MA·cos H·tan δ + ME·sin H·tan δ
+Δδ = ID + MA·sin H + ME·cos H
+```
+
+`equatorialPointingError(hourAngle, declination, model)` returns `[ΔH, Δδ]` in radians, the amount to add to the mechanical hour angle and declination to get where the optical axis really points. `applyEquatorialPointingError(ra, dec, lst, model)` does that for right ascension and declination: with `H = LST − RA` it returns `[RA − ΔH, dec + Δδ]`, with the right ascension wrapped to `[0, 2π)` and the declination left unwrapped. The model is an `EquatorialPointingModel` whose six coefficients (`indexHourAngle`, `indexDeclination`, `coneError`, `axisNonPerpendicularity`, `polarAzimuthError`, `polarAltitudeError`) are radians that default to zero in `IDENTITY_EQUATORIAL_POINTING_MODEL`; `isIdentityEquatorialPointingModel` tests for it so callers can skip the work. `polarAlignmentPointingModel(azimuthError, altitudeError, latitude)` builds the model of a mount whose polar axis is misaligned by knob errors, with `MA = azimuth·cos(latitude)`, `ME = −altitude`, and a constant hour-angle term `azimuth·sin(latitude)` kept in `indexHourAngle`. Positive `altitudeError` means the polar axis points above the true pole.
+
+The `sec δ` and `tan δ` terms diverge at the pole, so `equatorialPointingError` clamps the declination to `MAX_POINTING_DECLINATION` (89.9°) and the hour-angle term it returns grows large there without meaning an on-sky error of that size. Within that limit of the pole `applyEquatorialPointingError` applies the same terms as a great-circle offset instead, which is well defined at the pole and can cross it. Pass an optional last argument `o` to receive the result in place; the return value aliases it. Add tube flexure separately with Tube Flexure Pointing Error.
+
+```ts
+import { applyEquatorialPointingError, equatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, polarAlignmentPointingModel } from 'nebulosa/src/astronomy/coordinates/pointing'
+import { arcsec, deg, hour, toArcsec, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+
+const model: EquatorialPointingModel = {
+	...IDENTITY_EQUATORIAL_POINTING_MODEL,
+	indexHourAngle: arcsec(30), // IH
+	indexDeclination: arcsec(-45), // ID
+	coneError: arcsec(120), // CH
+	axisNonPerpendicularity: arcsec(90), // NP
+	polarAzimuthError: arcsec(60), // MA
+	polarAltitudeError: arcsec(-60), // ME
+}
+
+// Error at hour angle 3 h, declination +45° (radians in, radians out).
+const [deltaHourAngle, deltaDeclination] = equatorialPointingError(hour(3), deg(45), model)
+
+console.log(toArcsec(deltaHourAngle)) // 204.85 — arcseconds in hour angle
+console.log(toArcsec(deltaDeclination)) // -45 — arcseconds in declination
+
+// Where the optical axis actually points when the mount reads RA 10 h, Dec +45° at LST 13 h.
+const [ra, dec] = applyEquatorialPointingError(hour(10), deg(45), hour(13), model)
+
+console.log(toHour(ra), toDeg(dec)) // 9.9962 44.9875 — hours, degrees
+
+// A mount with a polar axis 120" off in azimuth and 300" too low, at latitude +40°.
+const polar = polarAlignmentPointingModel(arcsec(120), arcsec(-300), deg(40))
+
+console.log(toArcsec(polar.polarAzimuthError)) // 91.93 — MA = azimuth · cos(latitude)
+console.log(toArcsec(polar.polarAltitudeError)) // 300 — ME = -altitude
+console.log(toArcsec(polar.indexHourAngle)) // 77.13 — azimuth · sin(latitude)
+```
+
 ### Equinoxes and Solstices
 
 The astronomical seasons begin at the two equinoxes and two solstices, the instants when the Sun's apparent ecliptic longitude is 0°, 90°, 180°, and 270°. Here `spring`, `summer`, `autumn`, and `winter` name the starts of the northern-hemisphere seasons: the March equinox, June solstice, September equinox, and December solstice.
@@ -873,6 +917,36 @@ console.log(timeToDate(utc(season(2026, 'winter'))).slice(0, 6)) // [2026, 12, 2
 ### ERFA / SOFA Algorithms
 
 ### FK5 Precession and ICRS Frame Bias
+
+FK5 is the J2000 mean-equator-and-equinox catalog frame. ICRS differs from it by a small constant frame bias of a few tens of milliarcseconds, and FK5 positions at another equinox differ by precession. Both are rotations, so they preserve the length of a vector.
+
+`fk5(ra, dec, distance?)` builds an FK5 Cartesian vector from spherical coordinates (radians; distance in AU, defaulting to 1 kpc when only the direction matters), and `icrs(ra, dec, distance?)` does the same for ICRS. `precessFk5(p, from, to, o?)` rotates an FK5 vector from the equinox `from` to the equinox `to` with the IAU 2006 precession (Capitaine), and `precessFk5FromJ2000` and `precessFk5ToJ2000` are the J2000 shortcuts. The equinox arguments are `Time` instants interpreted in TT. The optional `o` receives the result and is returned. `icrsToFk5` and `fk5ToIcrs` apply only the constant bias, so precess to J2000 first when the FK5 position is at another equinox. `fk5Frame(equinox)` returns the FK5 equinox-of-date `Frame` relative to ICRS for use with the frame functions; it includes the bias as well as the precession, so it differs slightly from `precessFk5FromJ2000` alone.
+
+```ts
+import { fk5, precessFk5FromJ2000, precessFk5ToJ2000 } from 'nebulosa/src/astronomy/coordinates/fk5'
+import { fk5ToIcrs, icrsToFk5 } from 'nebulosa/src/astronomy/coordinates/frame'
+import { icrs } from 'nebulosa/src/astronomy/coordinates/icrs'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecAngle } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg, toArcsec } from 'nebulosa/src/math/units/angle'
+
+// RA 10.625°, Dec +41.2° at distance 1 (AU here; any length unit works for a unit vector).
+const position = fk5(deg(10.625), deg(41.2), 1)
+
+console.log(position) // [0.73951, 0.13873, 0.65869] — FK5 J2000 Cartesian
+
+// Equinox of 1975.0 (TT).
+const equinox = timeYMDHMS(1975, 1, 1, 12, 0, 0, Timescale.TT)
+
+console.log(precessFk5FromJ2000(position, equinox)) // [0.74188, 0.13459, 0.65689] — mean place at the 1975 equinox
+console.log(precessFk5ToJ2000(position, equinox)) // [0.73713, 0.14286, 0.66048] — treating the input as a 1975 place
+
+// The frame bias moves the direction by a few tens of milliarcseconds, at most.
+const direction = icrs(deg(10.625), deg(41.2), 1)
+
+console.log(toArcsec(vecAngle(direction, icrsToFk5(direction)))) // 0.0317 — arcseconds for this direction
+console.log(toArcsec(vecAngle(position, fk5ToIcrs(position)))) // 0.0317 — arcseconds, the inverse rotation
+```
 
 ### Galactocentric Frame
 
@@ -914,6 +988,28 @@ console.log(affineFromBase([0, 0, 0], far, time)[0] / ONE_KILOPARSEC) // -8.1999
 ### Gauss Angles-Only Orbit Determination
 
 ### GCRS to ITRS Rotation
+
+The geocentric celestial frame (GCRS, ICRS-oriented and non-rotating) and the Earth-fixed ITRS are related by Earth orientation: frame bias, precession, and nutation, then the Earth's rotation by the Greenwich apparent sidereal time, then polar motion. `gcrsToItrsRotationMatrix(time)` returns that single 3×3 matrix, which takes a GCRS vector to ITRS (`v_itrs = R · v_gcrs`) and whose transpose goes back.
+
+It is the same rotation the `ITRS` frame uses (see Celestial and Terrestrial Reference Frames), so prefer the frame functions when you also need velocities. The matrix is cached on the `Time` and shared, so treat it as read-only and copy before changing it. It depends on UT1 and polar motion, which come from the loaded Earth orientation data; without it they are 0 (see Earth Orientation Parameters).
+
+```ts
+import { gcrsToItrsRotationMatrix, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { matMulVec, matTransposeMulVec } from 'nebulosa/src/math/linear-algebra/mat3'
+
+// A UT1 instant, so the example does not depend on loaded Earth orientation data.
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UT1)
+
+const rotation = gcrsToItrsRotationMatrix(time)
+
+console.log(rotation.slice(0, 3)) // [0.11758, -0.99306, -0.00028] — first row, row-major
+
+const gcrs = [1, 0, 0] as const
+const itrs = matMulVec(rotation, gcrs)
+
+console.log(itrs) // [0.11758, 0.99306, 0.00259] — the same direction in Earth-fixed axes
+console.log(matTransposeMulVec(rotation, itrs)) // [1, 0, 0] — back to GCRS
+```
 
 ### Geographic Observer
 
@@ -992,6 +1088,25 @@ console.log(toKilometer(point.elevation)) // 10617 — km above the ellipsoid
 ### IAU Body Orientation
 
 ### Instantaneous Earth Spin
+
+When a state is moved between the inertial and Earth-fixed frames, its velocity picks up a rotating-frame term `W · p`, with `W = dR/dt · Rᵀ` for the GCRS to ITRS rotation `R`. The `ITRS` frame uses a constant mean spin rate for it. The instantaneous versions evaluate the real rate, including the small contributions of precession, nutation, and polar motion, by central differences over ±1 second.
+
+`instantaneousEarthRotationMatrix(time)` returns the antisymmetric operator `W` in radians per day, and `instantaneousEarthAngularVelocity(time)` the Earth's angular-velocity vector `ω` in ITRS axes, in radians per day, positive along +z (toward the celestial pole). Both are cached on the `Time`. Use them when velocity accuracy at the level of precession or polar-motion rates matters; otherwise the cheaper mean-rate `ITRS` is enough. To apply the exact term to a state, use the `ITRS_INSTANTANEOUS` frame or `itrsInstantaneous` from Celestial and Terrestrial Reference Frames.
+
+```ts
+import { instantaneousEarthAngularVelocity, instantaneousEarthRotationMatrix, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+// A UT1 instant, so the example does not depend on loaded Earth orientation data.
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UT1)
+
+// W = dR/dt · Rᵀ, radians per day, antisymmetric.
+const w = instantaneousEarthRotationMatrix(time)
+
+console.log(w[1], w[3]) // 6.3004 -6.3004 — the dominant spin term, about 2π × 1.0027379 per day
+
+// ω in ITRS axes, radians per day.
+console.log(instantaneousEarthAngularVelocity(time)) // [-5.2e-7, 6.9e-8, 6.30039] — mostly along +z
+```
 
 ### Jupiter Central Meridian
 
@@ -1224,7 +1339,43 @@ console.log(gcrsRotationAt(site, time)) // 3x3 row-major rotation, the matrix ap
 
 ### Nutation and Celestial Orientation
 
+Nutation is the short-period wobble of the Earth's pole on top of precession, expressed as two small angles: `Δψ`, the nutation in longitude, and `Δε`, the nutation in obliquity. Together with precession and the frame bias they orient the true equator and equinox of date, or the CIO-based Celestial Intermediate frame, relative to GCRS.
+
+`nutationAngles(time)` returns `[Δψ, Δε]` in radians from the IAU 2000A model (adjusted for IAU 2006). `cirsRotationMatrix(time)` returns the GCRS to CIRS matrix (frame bias, precession, and nutation, with right ascension on the Celestial Intermediate Origin), which is the right companion for `cirsToObserved` and `observedToCirs`; the equinox-based `precessionNutationMatrix` would offset right ascension by the equation of the origins, about 50″ per year since J2000. `equationOfOrigins(time)` returns the related matrix `Rz(GAST − ERA) · PN`, which agrees with the CIRS matrix to about 1e-9. All are cached on the `Time` and shared, so treat them as read-only. See Precession Matrices for the equinox-based matrices.
+
+```ts
+import { cirsRotationMatrix, equationOfOrigins, nutationAngles, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toArcsec } from 'nebulosa/src/math/units/angle'
+
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.TT)
+
+const [deltaPsi, deltaEpsilon] = nutationAngles(time)
+
+console.log(toArcsec(deltaPsi)) // 8.046 — arcseconds, nutation in longitude
+console.log(toArcsec(deltaEpsilon)) // 7.477 — arcseconds, nutation in obliquity
+
+console.log(cirsRotationMatrix(time).slice(0, 3)) // [0.9999966, -4.8e-9, -0.0025894] — first row, GCRS to CIRS
+console.log(equationOfOrigins(time).slice(0, 3)) // [0.9999966, -4.8e-9, -0.0025894] — the same to about 1e-9
+```
+
 ### Obliquity and Ecliptic Orientation
+
+The obliquity of the ecliptic is the tilt of the ecliptic plane relative to the Earth's equator, about 23.44°. The mean obliquity follows precession only; the true obliquity adds the nutation in obliquity `Δε`. The ecliptic frame of date is the equator frame of date tilted about the x axis by the obliquity.
+
+`meanObliquity(time)` and `trueObliquity(time)` return radians. `trueEclipticRotation(time)` returns a fresh matrix that takes a GCRS vector to the true ecliptic of date (`Rx(true obliquity)` times the precession-nutation matrix), the same orientation as the `ECLIPTIC` frame. For converting spherical coordinates see Spherical Coordinate Conversions.
+
+```ts
+import { meanObliquity, trueEclipticRotation, trueObliquity, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.TT)
+
+console.log(toDeg(meanObliquity(time))) // 23.43583 — degrees
+console.log(toDeg(trueObliquity(time))) // 23.43791 — degrees, mean plus nutation in obliquity
+
+// GCRS -> true ecliptic of date; the z row carries sin/cos of the obliquity.
+console.log(trueEclipticRotation(time).slice(6, 9)) // [0.0000054, -0.39772, 0.91751]
+```
 
 ### Observed Catalog Star
 
@@ -1256,7 +1407,45 @@ console.log(gcrsRotationAt(site, time)) // 3x3 row-major rotation, the matrix ap
 
 ### Polar Motion
 
+Polar motion is the slow drift of the Earth's rotation pole relative to the crust, described by two angles `x` and `y` of a few tenths of an arcsecond, plus the tiny TIO locator `s′`. It tilts the Earth-fixed frame slightly and matters for precise Earth-fixed positions and topocentric work.
+
+`pmAngles(time, pm?)` returns `[s′, x, y]` in radians and `pmMatrix(time, pm?)` the 3×3 polar-motion rotation built from them. A `PolarMotion` provider is a function of `Time` returning `[x, y]` in radians. Without `pm`, the provider assigned to the `Time` (`time.providers.pm`) is used, then the default from the loaded IERS tables, which gives `[0, 0]` when nothing is loaded (see Earth Orientation Parameters). Pass `pm` to override it for one call; `NO_POLAR_MOTION` is the provider that disables polar motion. The results are cached on the `Time` per provider.
+
+```ts
+import { NO_POLAR_MOTION, pmAngles, pmMatrix, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { arcsec, toArcsec } from 'nebulosa/src/math/units/angle'
+
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UT1)
+
+// A custom provider: x = 0.19", y = 0.32" (radians).
+const provider = () => [arcsec(0.19), arcsec(0.32)] as [number, number]
+
+console.log(pmAngles(time, provider).map(toArcsec)) // [-0.0000125, 0.19, 0.32] — arcseconds: s', x, y
+console.log(pmMatrix(time, provider).slice(0, 3)) // [1, -5.9e-11, 9.2e-7] — first row of the rotation
+console.log(pmAngles(time, NO_POLAR_MOTION).map(toArcsec)) // [-0.0000125, 0, 0] — only the TIO locator remains
+```
+
 ### Precession Matrices
+
+Precession is the slow, steady motion of the Earth's rotation axis (a 26,000-year cycle) that moves the equator and equinox of date relative to the fixed GCRS axes. Nutation adds the short-period wobble on top. Both rotate GCRS vectors into the equator-and-equinox frame of date.
+
+`precessionMatrix(time)` is the IAU 2006 precession matrix including the frame bias, taking a GCRS vector to the mean equator and equinox of date. `precessionNutationMatrix(time)` adds nutation and gives the true equator and equinox of date (see Nutation and Celestial Orientation). Both are cached on the `Time`, so treat them as read-only. `precessionMatrixCapitaine(from, to)` is the precession between two equinoxes, as a fresh matrix that takes a vector at `from` to `to`; the FK5 helpers in FK5 Precession and ICRS Frame Bias use it. Times are converted to TT internally.
+
+```ts
+import { precessionMatrixCapitaine } from 'nebulosa/src/astronomy/coordinates/frame'
+import { precessionMatrix, precessionNutationMatrix, Timescale, timeJulianYear, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.TT)
+
+// GCRS -> mean equator and equinox of date (frame bias + precession).
+console.log(precessionMatrix(time).slice(0, 3)) // [0.99997914, -0.0059238, -0.0025737] — first row
+
+// GCRS -> true equator and equinox of date (adds nutation).
+console.log(precessionNutationMatrix(time).slice(0, 3)) // [0.99997889, -0.0059596, -0.0025892] — first row
+
+// Precession only, between equinoxes J2000.0 and J2026.5 (both TT).
+console.log(precessionMatrixCapitaine(timeJulianYear(2000), timeJulianYear(2026.5)).slice(0, 3)) // [0.99997913, -0.0059259, -0.0025747]
+```
 
 ### Projected Paths and Polygons
 
@@ -1366,6 +1555,23 @@ console.log(angularMotionOrDifferentialTrackingRate([samples[0]])) // undefined 
 ### SGP4/SDP4 Propagation
 
 ### Sidereal Time and Earth Rotation Angle
+
+Sidereal time is the hour angle of the equinox: it measures how far the Earth has turned relative to the stars, and it equals the right ascension currently on the local meridian. The Earth rotation angle (ERA) measures the same rotation relative to the Celestial Intermediate Origin instead of the equinox. Greenwich mean sidereal time (GMST) uses the mean equinox; apparent sidereal time (GAST) uses the true equinox, so GAST − GMST is the equation of the equinoxes, an arcsecond-scale nutation term.
+
+`greenwichMeanSiderealTime`, `greenwichApparentSiderealTime`, and `earthRotationAngle` take a `Time` and return radians; `equationOfEquinoxes` returns GAST − GMST in radians, wrapped to `[−π, π]` so it stays signed. All depend on UT1, so they use the loaded Earth orientation data; without it UT1 equals UTC and the angle is off by up to about 0.9 s of rotation (see Earth Orientation Parameters). The IAU 2006/2000A ERFA models are the defaults and can be replaced per instant with `time.providers`. For local sidereal time at a site, see Geographic Observer.
+
+```ts
+import { earthRotationAngle, equationOfEquinoxes, greenwichApparentSiderealTime, greenwichMeanSiderealTime, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toArcsec, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+
+// A UT1 instant, so the example does not depend on loaded Earth orientation data.
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UT1)
+
+console.log(toHour(greenwichMeanSiderealTime(time))) // 18.4728 — hours
+console.log(toHour(greenwichApparentSiderealTime(time))) // 18.4729 — hours
+console.log(toArcsec(equationOfEquinoxes(time))) // 7.381 — arcseconds, GAST - GMST
+console.log(toDeg(earthRotationAngle(time))) // 276.752 — degrees
+```
 
 ### Sky Projections
 
@@ -1578,6 +1784,39 @@ console.log(toDeg(refractedAltitude(deg(10), { pressure: 700, temperature: -5 })
 ### Transit Altitude and Hour Angle
 
 ### Tube Flexure Pointing Error
+
+Gravity bends the telescope tube, so the optical axis sags away from the zenith by an amount that grows toward the horizon. The sag is `flexure · sin z`, with `z` the zenith distance and `flexure` the droop at the horizon, and it acts along the vertical. Converting a vertical displacement to equatorial coordinates uses the parallactic angle `q`:
+
+```text
+Δδ = −flexure·sin z·cos q
+ΔH = +flexure·sin z·sin q / cos δ
+```
+
+This is the TF term of the TPoint model and is a property of gravity, not of the mount's axes, so it is kept apart from the geometric terms of Equatorial Mount Geometric Pointing Errors.
+
+`tubeFlexureError(hourAngle, declination, latitude, flexure)` returns `[ΔH, Δδ]` in radians on the same convention as `equatorialPointingError`, so the two can be summed away from the poles. `applyTubeFlexureError(ra, dec, lst, latitude, flexure)` returns the direction the axis really points, `[RA − ΔH, dec + Δδ]`, with the right ascension wrapped to `[0, 2π)`. All angles are radians. A zero `flexure` returns exactly `[0, 0]` (or the input). The `cos δ` division uses a declination clamped to 89.9°; within that of the pole `applyTubeFlexureError` applies the droop as a great-circle offset, so the east-west part is kept. An optional last argument `o` receives the result and is returned.
+
+```ts
+import { applyTubeFlexureError, tubeFlexureError } from 'nebulosa/src/astronomy/coordinates/pointing'
+import { arcsec, deg, hour, toArcsec, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+
+const latitude = deg(-29.2563)
+const flexure = arcsec(120) // droop at the horizon
+
+// Hour angle 3 h, declination -20°.
+const [deltaHourAngle, deltaDeclination] = tubeFlexureError(hour(3), deg(-20), latitude, flexure)
+
+console.log(toArcsec(deltaHourAngle)) // 78.78 — arcseconds in hour angle
+console.log(toArcsec(deltaDeclination)) // 29.79 — arcseconds in declination
+
+// Apply to RA 10 h, Dec -20° at LST 13 h (hour angle 3 h).
+const [ra, dec] = applyTubeFlexureError(hour(10), deg(-20), hour(13), latitude, flexure)
+
+console.log(toHour(ra), toDeg(dec)) // 9.99854 -19.99173 — hours, degrees
+
+// At the zenith there is no sag.
+console.log(tubeFlexureError(0, latitude, latitude, flexure)) // [0, -0]
+```
 
 ### Twilight and Darkness Windows
 
