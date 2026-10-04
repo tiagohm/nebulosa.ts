@@ -931,6 +931,31 @@ console.log(atmosphericDispersion(0, 0.4, 0.7)) // undefined — on the horizon
 
 ### Earth Occultation of a Finite Target
 
+A satellite or spacecraft can be hidden behind the solid Earth as seen from another one. The question is whether the straight segment from an observer to a target at a finite distance touches the Earth's reference ellipsoid, and where. This is a geometric test only: there is no atmosphere, terrain, or shadow of the Sun, so it says nothing about visibility under illumination.
+
+`earthOccultation(observer, target, time, ellipsoid?)` takes the observer and target positions as geocentric vectors in AU, in the same GCRS/ICRS-oriented axes at the same reception time, and `ellipsoid` (default `Ellipsoid.IERS2010`). It rotates both into ITRS and tests the closed segment against the ellipsoid. It returns `{ occulted, intersection?, tangent }`: `occulted` is true when the segment touches or enters the ellipsoid, `intersection` is the first contact as a fraction `t` in `[0, 1]` along `observer + t · (target − observer)`, and `tangent` marks a graze within numerical tolerance. The observer must be outside the solid Earth. A surface contact counts as an occultation.
+
+```ts
+import { earthOccultation } from 'nebulosa/src/astronomy/events/occultation.earth'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { kilometer } from 'nebulosa/src/math/units/distance'
+
+const time = timeYMDHMS(2025, 9, 28, 0, 0, 0, Timescale.UTC)
+
+// An observer 7000 km from the center on +x, and a target 40000 km on the opposite side: Earth is in the way.
+const behind = earthOccultation([kilometer(7000), 0, 0], [kilometer(-40000), 0, 0], time)
+
+console.log(behind.occulted) // true
+console.log(behind.intersection) // 0.01323 — fraction of the segment: about 622 km from the observer, at the surface
+console.log(behind.tangent) // false
+
+// Same side: the segment moves away from the Earth.
+console.log(earthOccultation([kilometer(7000), 0, 0], [kilometer(40000), 0, 0], time).occulted) // false
+
+// A segment that passes at 7000 km from the center never touches the 6378 km equatorial radius.
+console.log(earthOccultation([kilometer(7000), 0, 0], [kilometer(7000), kilometer(30000), 0], time).occulted) // false
+```
+
 ### Earth Orientation Parameters
 
 The Earth does not rotate uniformly, and its rotation axis wanders slightly inside the crust. The IERS publishes the irregularities as daily Earth orientation parameters: `UT1 − UTC` in seconds and the polar-motion coordinates `x`, `y` in arcseconds. They are needed for UT1, sidereal time, and the GCRS to ITRS rotation, so they are the data behind precise Earth-fixed work and topocentric coordinates.
@@ -1597,6 +1622,31 @@ gibbs(r1, r1, r3, GM_SUN_PITJEVA_2005) // RangeError: gibbs input is invalid: AN
 
 ### Great Red Spot Transits
 
+The Great Red Spot is a long-lived storm at a drifting System II longitude. It is best seen when it crosses Jupiter's central meridian, which happens once per System II rotation, about every 9 h 56 m. Its position is an observed quantity, so you give the current System II longitude, from an observer bulletin such as ALPO or JUPOS. It drifts by under a degree per month, so one value is adequate for a prediction window of a few weeks.
+
+`greatRedSpotTransits(grsLongitude, jupiterToObserverAt, start, stop, options?)` returns the transit instants in the window as `Time`s in chronological order. `grsLongitude` is the System II longitude, positive west, in radians. `jupiterToObserverAt` returns the Jupiter-to-observer vector (AU, ICRF) at a time, as for `jupiterCentralMeridian` (see Jupiter Central Meridian). A transit is where the System II central meridian equals the spot's longitude with the spot on the near side; the anti-transits half a rotation later are discarded. `options.step` and `options.tolerance` are in days; the step must stay well under half a rotation, and its default of one hour is ample. The times keep the scale of `start`.
+
+```ts
+import { earth, jupiter } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { greatRedSpotTransits } from 'nebulosa/src/astronomy/events/jupiter'
+import { type Time, Timescale, timeSubtract, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+const jupiterToEarth = (time: Time) => vecMinus(earth(time)[0], jupiter(time)[0])
+
+const start = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
+const stop = timeYMDHMS(2026, 7, 1, 0, 0, 0, Timescale.UTC)
+
+// A spot at System II longitude 50° (west-positive).
+for (const time of greatRedSpotTransits(deg(50), jupiterToEarth, start, stop)) console.log(timeToDate(time).slice(0, 6), timeSubtract(time, start) * 24)
+// [2026, 6, 29, 2, 15, 15] 2.2543 — hours after the start, UTC
+// [2026, 6, 29, 12, 11, 6] 12.1850
+// [2026, 6, 29, 22, 6, 56] 22.1158
+// [2026, 6, 30, 8, 2, 47] 32.0465
+// [2026, 6, 30, 17, 58, 38] 41.9773 — five transits in 48 hours, about 9.93 hours apart
+```
+
 ### Greatest Solar Eclipse Circumstances
 
 ### HEALPix Object Index
@@ -1730,6 +1780,27 @@ console.log(instantaneousEarthAngularVelocity(time)) // [-5.2e-7, 6.9e-8, 6.3003
 ```
 
 ### Jupiter Central Meridian
+
+The central meridian of Jupiter is the line of longitude that crosses the middle of the disk as the observer sees it, and its longitude tells you which part of the planet faces you. Because Jupiter is a gas giant, there are three conventional rotation systems. System I covers the equatorial jet and System II the temperate latitudes, where the Great Red Spot lies; System III is the magnetic or radio system tied to the interior. Longitudes in Systems I and II are the ones almanacs and observers quote for features on the disk, and they are measured positive to the west.
+
+`jupiterCentralMeridian(system, time, jupiterToObserver)` returns the central-meridian longitude in radians in `[0, 2π)` for `'I'`, `'II'`, or `'III'`. `jupiterToObserver` is the vector from Jupiter's center to the observer in AU, in ICRF axes, for example `earth − jupiter` for a geocentric view; its length sets the light-time delay and its direction the sub-observer point. The longitude increases with time as the planet rotates (System II turns every 9 h 55 m), and it agrees with published System I and II longitudes to about 0.001°. Apply it to a feature at a known longitude to see when it faces you, or use Great Red Spot Transits for the transit instants of a single longitude.
+
+```ts
+import { earth, jupiter } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { jupiterCentralMeridian } from 'nebulosa/src/astronomy/events/jupiter'
+import { type Time, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+// Vector from Jupiter's center to a geocentric observer, in AU and ICRF axes.
+const jupiterToEarth = (time: Time) => vecMinus(earth(time)[0], jupiter(time)[0])
+
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
+
+console.log(toDeg(jupiterCentralMeridian('I', time, jupiterToEarth(time)))) // 15.82 — degrees, System I (equatorial)
+console.log(toDeg(jupiterCentralMeridian('II', time, jupiterToEarth(time)))) // 328.28 — degrees, System II (temperate)
+console.log(toDeg(jupiterCentralMeridian('III', time, jupiterToEarth(time)))) // 264.39 — degrees, System III (magnetic)
+```
 
 ### Kepler Anomalies and Periapsis Timing
 
@@ -1993,6 +2064,31 @@ console.log(gcrsRotationAt(site, time)) // 3x3 row-major rotation, the matrix ap
 ### Lunar Eclipse Visibility Geometry
 
 ### Lunar Libration Extrema
+
+The Moon always shows nearly the same face to the Earth, but it seems to nod and sway by a few degrees. Optical libration makes this: the sub-Earth point on the lunar surface wanders in longitude (an east-west sway from the eccentric orbit, up to about 8°) and in latitude (a north-south nod from the tilt of the lunar equator, up to about 7°). Knowing when each reaches an extreme tells you when the limb regions are best seen.
+
+`lunarLibrationExtrema(moonToObserverAt, start, stop, options?)` returns the local extrema of both angles as chronological `{ axis, kind, time, angle }`. `axis` is `'longitude'` (east-positive) or `'latitude'` (north-positive) of the sub-observer point, `kind` is `'minimum'` or `'maximum'`, and `angle` is the signed libration in radians. `moonToObserverAt` returns the Moon-center-to-observer vector in AU in ICRF axes, which also sets the light delay; the orientation is the IAU lunar rotation model evaluated one light time earlier. Extrema on the first or last sample of the window are excluded. The longitude must stay away from the ±π cut, which holds for terrestrial observers, and `options.step` and `options.tolerance` are in days (the step must resolve the extrema; a few hours suit a lunar month).
+
+```ts
+import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { lunarLibrationExtrema } from 'nebulosa/src/astronomy/events/lunar'
+import { type Time, Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecNegate } from 'nebulosa/src/math/linear-algebra/vec3'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+// Moon center to a geocentric observer: the negative of the geocentric Moon vector (AU).
+const moonToObserver = (time: Time) => vecNegate(moon(time)[0])
+
+const start = timeYMDHMS(2025, 9, 1, 0, 0, 0, Timescale.UTC)
+const stop = timeYMDHMS(2025, 10, 1, 0, 0, 0, Timescale.UTC)
+
+for (const e of lunarLibrationExtrema(moonToObserver, start, stop, { step: 0.25 })) console.log(e.axis, e.kind, timeToDate(e.time).slice(0, 5), toDeg(e.angle))
+// latitude maximum [2025, 9, 1, 3, 3] 6.85 — UTC, degrees
+// longitude minimum [2025, 9, 4, 16, 43] -5.68
+// latitude minimum [2025, 9, 14, 4, 23] -6.80
+// longitude maximum [2025, 9, 17, 21, 52] 5.97
+// latitude maximum [2025, 9, 28, 9, 53] 6.83
+```
 
 ### Lunar Parallax and Semidiameter
 
@@ -2296,17 +2392,193 @@ console.log(tisserandParameter(vesta.semiMajorAxis, vesta.eccentricity, vesta.in
 
 ### Planetary Closest Approaches
 
+A planet's distance from the observer is not constant: for Mars it swings from about 0.4 AU at a favorable opposition to over 2.5 AU near conjunction. A closest approach is a local minimum of that distance.
+
+`planetaryClosestApproaches(targetAt, start, stop, options?)` returns the local minima of the observer-target distance in the window as chronological `{ time, distance }`, with `distance` in AU. `targetAt` is a function of `Time` returning the observer-to-target vector in ICRS-oriented axes (AU), so the same function serves geocentric, topocentric, or heliocentric distances. No correction is added: choose geometric, astrometric, or apparent vectors yourself. The search is the extremum scan of Time-Domain Extrema Search with `options.step` and `options.tolerance` (days; the step must resolve the event), and a minimum sitting at the first or last sample of the window is not reported. The physical or angular diameter is a separate calculation.
+
+```ts
+import { earth, mars, venus } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { planetaryClosestApproaches } from 'nebulosa/src/astronomy/events/planetary'
+import { type Time, Timescale, timeShift, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+
+const start = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TT)
+const stop = timeShift(start, 366)
+
+// Geocentric geometric vectors (AU) of Mars and Venus.
+const marsAt = (time: Time) => vecMinus(mars(time)[0], earth(time)[0])
+const venusAt = (time: Time) => vecMinus(venus(time)[0], earth(time)[0])
+
+for (const approach of planetaryClosestApproaches(marsAt, start, stop, { step: 2 })) console.log(timeToDate(approach.time).slice(0, 5), approach.distance)
+// [2020, 10, 6, 14, 19] 0.4149 — Mars, TT, AU
+
+console.log(planetaryClosestApproaches(venusAt, start, stop, { step: 2 }).map((a) => [timeToDate(a.time).slice(0, 5), a.distance])) // [[[2020, 6, 3, 17, 0], 0.2886]] — Venus, near inferior conjunction
+```
+
 ### Planetary Conjunctions
+
+A conjunction is when a planet and the Sun have the same ecliptic longitude as seen from the observer, so the planet is lost in the Sun's glare. In practice the planet is rarely exactly on the Sun's disk, because of the inclination of its orbit, so the event is taken as the local minimum of the angular separation, which is reported as it is. For an inner planet there are two kinds: inferior conjunction, between the Earth and the Sun, and superior conjunction, beyond the Sun.
+
+`planetaryConjunctions(targetAt, sunAt, start, stop, options?)` returns the separation minima in the window as chronological `{ time, elongation }`, with `elongation` the actual target-Sun separation in radians. `planetaryInnerConjunctions` returns the same events as `{ time, elongation, kind }`, where `kind` is `'inferior'` when the target is closer to the observer than the Sun and `'superior'` otherwise; use it for Mercury and Venus. Both providers, `targetAt` and `sunAt`, return the observer-relative ICRS-oriented vector at a time, in AU, and must share the observer and correction stage. `options.step` and `options.tolerance` are in days. For the outer planets conjunction is the minimum of the same quantity; their opposition is in Planetary Oppositions.
+
+```ts
+import { earth, sun, venus } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { planetaryConjunctions, planetaryInnerConjunctions } from 'nebulosa/src/astronomy/events/planetary'
+import { type Time, Timescale, timeShift, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const start = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TT)
+const stop = timeShift(start, 366)
+
+const venusAt = (time: Time) => vecMinus(venus(time)[0], earth(time)[0])
+const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0])
+
+const [conjunction] = planetaryConjunctions(venusAt, sunAt, start, stop, { step: 2 })
+
+console.log(timeToDate(conjunction.time).slice(0, 5)) // [2020, 6, 3, 18, 43] — TT
+console.log(toDeg(conjunction.elongation)) // 0.482 — degrees, Venus passes 0.48° from the Sun's center
+
+const [inner] = planetaryInnerConjunctions(venusAt, sunAt, start, stop, { step: 2 })
+
+console.log(inner.kind) // inferior — Venus is nearer the Earth than the Sun
+```
 
 ### Planetary Disk Transits
 
+A transit is a planet's disk crossing the Sun's disk, possible only for Mercury and Venus at inferior conjunction when their orbits are aligned with the Earth's. Seen from a given site it is a chord across the solar disk, with four contacts: exterior ingress (I, the disk first touches the limb), interior ingress (II, the disk is wholly inside), interior egress (III), and exterior egress (IV). Because the planet is much closer than the Sun, its parallax shifts the contact times by minutes from site to site.
+
+`planetaryTransits(planet, sun, observer, start, stop, options)` predicts the transits seen from one observer in the window. `planet`, `sun`, and `observer` are functions of `Time` returning barycentric `[position, velocity]` states (AU, AU/day); the observer is a topocentric state, for example from `observerState` (see Barycentric and Heliocentric Light-Time Correction). `options.sunRadius` and `options.planetRadius` are the physical radii in AU and are required, since they set the angular disks. `options.step` is the coarse step in days (default 2 minutes, capped so the window has at least four intervals), `options.tolerance` the refinement tolerance, and `options.lightTimeIterations` the light-time iterations (default 2). Each `PlanetaryTransit` has the mid-transit `time` (least separation of the centers), `minSeparation` (the impact parameter, radians), the two angular radii, `full` (whether the planet is ever wholly inside the disk, false for a grazing transit), the four contacts (`exteriorIngress`, `interiorIngress`, `interiorEgress`, `exteriorEgress`), the position angles of the first and last contact on the Sun's limb (north through east, radians), and `duration` in seconds from I to IV. Contacts outside the search window are `undefined`, as is the duration, and a grazing transit has no interior contacts. Times keep the scale of `start`. Aberration is omitted because it cancels in the difference, and light bending near the limb is not modelled, so contacts are good to about a second or two.
+
+```ts
+import { observerState } from 'nebulosa/src/astronomy/coordinates/correction'
+import { earth, mercury, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { planetaryTransits } from 'nebulosa/src/astronomy/events/transit'
+import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { type Time, Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { SUN_RADIUS_AU } from 'nebulosa/src/core/constants'
+import { deg, toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
+import { kilometer } from 'nebulosa/src/math/units/distance'
+
+// Greenwich, as a topocentric observer: the Earth's state plus the site offset.
+const greenwich = geodeticLocation(deg(-0.0015), deg(51.4779), kilometer(0.047), Ellipsoid.WGS84)
+const observer = (time: Time) => observerState(time, earth(time), greenwich)
+
+// The 13 November 2032 transit of Mercury.
+const [transit] = planetaryTransits(mercury, sun, observer, timeYMDHMS(2032, 11, 13, 5, 0, 0, Timescale.UTC), timeYMDHMS(2032, 11, 13, 12, 0, 0, Timescale.UTC), { sunRadius: SUN_RADIUS_AU, planetRadius: kilometer(2439.7) })
+
+console.log(transit.full) // true
+console.log(timeToDate(transit.exteriorIngress!).slice(0, 6)) // [2032, 11, 13, 6, 41, 35] — contact I, UTC
+console.log(timeToDate(transit.interiorIngress!).slice(0, 6)) // [2032, 11, 13, 6, 43, 39] — contact II
+console.log(timeToDate(transit.time).slice(0, 6)) // [2032, 11, 13, 8, 54, 48] — mid-transit
+console.log(timeToDate(transit.interiorEgress!).slice(0, 6)) // [2032, 11, 13, 11, 5, 55] — contact III
+console.log(timeToDate(transit.exteriorEgress!).slice(0, 6)) // [2032, 11, 13, 11, 7, 59] — contact IV
+
+console.log(toArcsec(transit.minSeparation)) // 569.4 — arcseconds, impact parameter
+console.log(toArcsec(transit.sunAngularRadius), toArcsec(transit.planetAngularRadius)) // 969.4 4.97 — arcseconds
+console.log(toDeg(transit.ingressPositionAngle!), toDeg(transit.egressPositionAngle!)) // 77.78 329.23 — degrees, north through east
+console.log(transit.duration! / 3600) // 4.44 — hours from I to IV
+
+// A window with no transit returns an empty list.
+console.log(planetaryTransits(mercury, sun, observer, timeYMDHMS(2032, 12, 13, 0, 0, 0, Timescale.UTC), timeYMDHMS(2032, 12, 14, 0, 0, 0, Timescale.UTC), { sunRadius: SUN_RADIUS_AU, planetRadius: kilometer(2439.7) })) // []
+```
+
 ### Planetary Greatest Elongations
+
+An inner planet never strays far from the Sun in the sky. Its elongation, the angular separation from the Sun, rises to a maximum and falls again over each synodic period, and that maximum is the greatest elongation: about 28° for Mercury and 47° for Venus, at their best for observing. It happens east of the Sun in the evening sky and west of it in the morning sky.
+
+`planetaryGreatestElongations(targetAt, sunAt, start, stop, options?)` returns the elongation maxima in the window as chronological `{ time, elongation, kind }`, with `elongation` in radians in `[0, π]` and `kind` `'east'` or `'west'` from the sign of the ecliptic-longitude difference of date, correct across the 0/2π seam. `targetAt` and `sunAt` return the observer-relative ICRS-oriented vectors at a time and must share the observer, axes, and correction stage. No synodic span is chosen for you, so set `start` and `stop` to cover what you want, and `options.step` and `options.tolerance` (days) must resolve the maxima. It is intended for inner planets: for an outer planet use Planetary Oppositions and Planetary Quadratures.
+
+```ts
+import { earth, sun, venus } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { planetaryGreatestElongations } from 'nebulosa/src/astronomy/events/planetary'
+import { type Time, Timescale, timeShift, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const start = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TT)
+const stop = timeShift(start, 366)
+
+const venusAt = (time: Time) => vecMinus(venus(time)[0], earth(time)[0])
+const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0])
+
+for (const event of planetaryGreatestElongations(venusAt, sunAt, start, stop, { step: 2 })) console.log(timeToDate(event.time).slice(0, 5), toDeg(event.elongation), event.kind)
+// [2020, 3, 24, 21, 59] 46.08 east — evening star, TT
+// [2020, 8, 13, 0, 0] 45.79 west — morning star
+```
 
 ### Planetary Oppositions
 
+An outer planet is in opposition when it lies opposite the Sun in the sky, so it is up all night, at its closest and brightest. Because planetary orbits are inclined, the elongation reaches its maximum near, but rarely exactly at, 180°, so the event is taken as the maximum of the separation on the far side of quadrature.
+
+`planetaryOppositions(targetAt, sunAt, start, stop, options?)` returns chronological `{ time, elongation }`, with `elongation` in radians, the separation maxima over 90° in the window. `targetAt` and `sunAt` return the observer-relative ICRS-oriented vectors at a time (AU) with the same observer, axes, and correction stage. The reported elongation need not reach π. `options.step` and `options.tolerance` are in days, and a maximum at the first or last sample is missed. For the closest distance, which can differ by days, use Planetary Closest Approaches.
+
+```ts
+import { earth, mars, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { planetaryOppositions } from 'nebulosa/src/astronomy/events/planetary'
+import { type Time, Timescale, timeShift, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const start = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TT)
+const stop = timeShift(start, 366)
+
+const marsAt = (time: Time) => vecMinus(mars(time)[0], earth(time)[0])
+const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0])
+
+const [opposition] = planetaryOppositions(marsAt, sunAt, start, stop, { step: 2 })
+
+console.log(timeToDate(opposition.time).slice(0, 5)) // [2020, 10, 14, 2, 2] — TT
+console.log(toDeg(opposition.elongation)) // 177.0 — degrees: Mars is 3° off the exact opposite direction
+```
+
 ### Planetary Quadratures
 
+A planet is at quadrature when it is 90° from the Sun as seen from the observer. For an outer planet it marks the half-lit phase and the boundary between the morning and evening halves of its apparition. East quadrature has the planet east of the Sun, in the evening sky, and west quadrature has it west, in the morning sky.
+
+`planetaryQuadratures(targetAt, sunAt, start, stop, options?)` returns the instants the separation crosses 90° as chronological `{ time, elongation, kind }`, where `elongation` is the resolved separation in radians (close to π/2) and `kind` is `'east'` or `'west'` from the ecliptic-longitude difference, safe across the 0/2π seam. `targetAt` and `sunAt` return observer-relative ICRS-oriented vectors at a time, sharing the observer, axes, and correction stage. `options.step` and `options.tolerance` (days) must resolve the crossings.
+
+```ts
+import { earth, mars, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { planetaryQuadratures } from 'nebulosa/src/astronomy/events/planetary'
+import { type Time, Timescale, timeShift, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const start = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TT)
+const stop = timeShift(start, 366)
+
+const marsAt = (time: Time) => vecMinus(mars(time)[0], earth(time)[0])
+const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0])
+
+for (const event of planetaryQuadratures(marsAt, sunAt, start, stop, { step: 2 })) console.log(timeToDate(event.time).slice(0, 5), toDeg(event.elongation), event.kind)
+// [2020, 6, 6, 19, 2] 90 west — Mars in the morning sky, TT
+```
+
 ### Planetary Stations
+
+Seen from the Earth, a planet normally drifts eastward among the stars, direct motion, but around opposition (for an outer planet) or inferior conjunction (for an inner one) it appears to reverse for weeks: retrograde motion. The station is the moment its ecliptic longitude stops changing and the motion reverses, from direct to retrograde and back.
+
+`planetaryStations(targetAt, start, stop, options?)` returns the stations in the window as chronological `{ time, kind, longitude }`, where `kind` is `'directToRetrograde'` or `'retrogradeToDirect'` and `longitude` is the signed true ecliptic longitude of date at the station in radians, in `(−π, π]`. It is the root of the longitude rate, estimated by a centered difference of the ecliptic longitude of date (precession and nutation applied, so the orientation must vary smoothly with time). `targetAt` returns the observer-relative ICRS-oriented vector (AU), `options.derivativeHalfStep` is the half-step of that difference in days (default 0.5, must be positive and finite, and the providers must cover the window extended by twice that), and `options.step` and `options.tolerance` are the search step and tolerance in days. A tangential zero rate that does not change sign is not a station. A non-positive `derivativeHalfStep` throws a `RangeError`.
+
+```ts
+import { earth, mars } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { planetaryStations } from 'nebulosa/src/astronomy/events/planetary'
+import { type Time, Timescale, timeShift, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const start = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TT)
+const stop = timeShift(start, 366)
+
+const marsAt = (time: Time) => vecMinus(mars(time)[0], earth(time)[0])
+
+for (const station of planetaryStations(marsAt, start, stop, { step: 2 })) console.log(station.kind, timeToDate(station.time).slice(0, 5), toDeg(station.longitude))
+// directToRetrograde [2020, 9, 9, 22, 19] 28.14 — TT, ecliptic longitude in degrees
+// retrogradeToDirect [2020, 11, 14, 0, 32] 15.23
+
+planetaryStations(marsAt, start, stop, { derivativeHalfStep: 0 }) // RangeError: value must be positive
+```
 
 ### Planetary Surface Locations
 
