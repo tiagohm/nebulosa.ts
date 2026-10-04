@@ -1651,7 +1651,98 @@ for (const time of greatRedSpotTransits(deg(50), jupiterToEarth, start, stop)) c
 
 ### HEALPix Object Index
 
+A HEALPix index is an in-memory spatial index: objects with sky positions are bucketed by the HEALPix pixel that contains them, so a region query only examines the few buckets that the region touches instead of every object. It is the structure behind fast cone, box, and polygon searches on a large list of stars or targets (see HEALPix Pixelization and Covers for the pixel scheme itself). It also implements the star-catalog query interface used by the catalog modules.
+
+`new HealpixIndex<M>({ nside, ordering? })` creates an empty index; `nside` is a power of two from 1 to 2²⁴ (a higher value gives smaller pixels and fewer objects per bucket), and `ordering` is `'nested'` (the default) or `'ring'`. `index.add(id, rightAscension, declination, metadata?)` inserts an object, or moves and updates it when the `id` (a number, string, or bigint) already exists; `addMany(objects)` validates the whole batch first and inserts `{ id, rightAscension, declination, metadata? }` records. `get(id)`, `update(id, ra, dec, metadata?)` (undefined for an unknown id), `remove(id)` (a boolean), `clear()`, and `size` manage the contents. Right ascension and declination are in radians, and right ascension is wrapped to `[0, 2π)`. Entries are objects with `id`, `rightAscension`, `declination`, `metadata`, and cached `pixel` and unit `vector`. The queries `queryCone(ra, dec, radius)`, `queryBox(minRA, maxRA, minDEC, maxDEC)`, `queryTriangle(a, b, c)`, and `queryPolygon(vertices)` return arrays of the matching entries, where vertices are `[rightAscension, declination]` pairs and a polygon must be convex; a box whose right ascension range wraps through 0 is split automatically. `queryRegion(query)` and `streamRegion(query)` take a catalog query object (`kind` of `'cone'`, `'triangle'`, `'box'`, or `'polygon'`) and return an array or a generator. `coordToPixel`, `pixelToCenter`, and `pixelToBoundary` on the index use its nside and ordering. A radius outside `[0, π]` throws.
+
+```ts
+import { HealpixIndex } from 'nebulosa/src/astronomy/sky/spatial/healpix'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+
+// A resolution of NSIDE 64 gives pixels about 0.92° across.
+const index = new HealpixIndex<{ name: string }>({ nside: 64 })
+
+index.add('a', hour(10), deg(20), { name: 'A' })
+index.add(2, hour(10) + deg(0.5), deg(20.2)) // numeric ids work, and metadata is optional
+index.add(3n, hour(11), deg(-30), { name: 'C' })
+
+console.log(index.size) // 3
+console.log(index.get('a')?.metadata) // { name: 'A' }
+console.log(index.coordToPixel(hour(10), deg(20))) // 4455 — nested pixel index
+
+// Region queries return entries.
+console.log(index.queryCone(hour(10), deg(20), deg(1)).map((entry) => entry.id)) // ['a', 2]
+console.log(index.queryBox(hour(9.9), hour(10.2), deg(19), deg(21)).map((entry) => entry.id)) // ['a', 2]
+console.log(
+	index
+		.queryPolygon([
+			[hour(9.9), deg(19)],
+			[hour(10.3), deg(19)],
+			[hour(10.3), deg(21)],
+			[hour(9.9), deg(21)],
+		])
+		.map((entry) => entry.id),
+) // ['a', 2]
+
+// Moving an object updates its bucket; removing returns whether it existed.
+index.update('a', hour(12), deg(0))
+
+console.log(index.queryCone(hour(10), deg(20), deg(1)).map((entry) => entry.id)) // [2]
+console.log(index.remove(2), index.remove(2)) // true false
+
+// A box that wraps through RA = 0 is handled.
+index.addMany([
+	{ id: 'x', rightAscension: 0, declination: 0 },
+	{ id: 'y', rightAscension: deg(359.9), declination: deg(0.1) },
+])
+
+console.log(index.queryBox(deg(359), deg(1), deg(-1), deg(1)).map((entry) => entry.id)) // ['x', 'y']
+```
+
 ### HEALPix Pixelization and Covers
+
+HEALPix divides the sphere into 12 base faces, each split into `NSIDE × NSIDE` pixels, for `12 · NSIDE²` equal-area pixels in total; `NSIDE` must be a power of two, up to 2²⁴. Pixels can be numbered in two orderings: nested, a hierarchy in which a pixel's index contains its parent's, which suits multi-resolution work, and ring, which numbers pixels along rings of constant latitude. A cover is the set of pixels that intersects a region, used to prune a catalog search.
+
+`coordToPixel(nside, ra, dec, ordering?)` returns the pixel containing a position, with angles in radians and `ordering` `'nested'` by default. `pixelToCenter(nside, pixel, ordering?)` returns the pixel's `[ra, dec]` center, and `pixelToBoundary(nside, pixel, ordering?)` the four corner `[ra, dec]` pairs. `nestedToRing(nside, pixel)` and `ringToNested(nside, pixel)` convert indices. `circleToPixels(nside, ra, dec, radius, options?)`, `triangleToPixels(nside, a, b, c, options?)`, and `polygonToPixels(nside, vertices, options?)` return the conservative cover of a cone (radius in `[0, π]`), a spherical triangle, or a convex polygon, where vertices are `[ra, dec]` pairs; the cover can include pixels that only touch the region, never fewer, and is in nested ordering unless `options.ordering` is `'ring'`. `options.targetNside` computes the cover at a different resolution and `options.maxDepth` limits the recursion. An `NSIDE` that is not a power of two, a pixel out of range, or an invalid radius throws an `Error`. For a ready-made object index built on these, see HEALPix Object Index.
+
+```ts
+import { circleToPixels, coordToPixel, nestedToRing, pixelToBoundary, pixelToCenter, polygonToPixels, ringToNested, triangleToPixels } from 'nebulosa/src/astronomy/sky/spatial/healpix'
+import { deg, hour, toDeg } from 'nebulosa/src/math/units/angle'
+
+const nside = 64 // 12 · 64² = 49152 pixels of about 0.84 square degrees
+
+// The pixel under RA 10 h, Dec +20°, in nested and ring ordering.
+const nested = coordToPixel(nside, hour(10), deg(20))
+const ring = coordToPixel(nside, hour(10), deg(20), 'ring')
+
+console.log(nested, ring) // 4455 16107
+console.log(nestedToRing(nside, nested), ringToNested(nside, ring)) // 16107 4455 — the two orderings convert exactly
+
+// Its center and four corners, in radians.
+console.log(pixelToCenter(nside, nested).map(toDeg)) // [150.47, 20.106] — degrees
+console.log(pixelToBoundary(nside, nested).map((corner) => corner.map(toDeg))) // [[150.47, 19.47], [151.17, 20.11], [150.47, 20.74], [149.77, 20.11]]
+
+// Conservative covers: pixels that intersect the region.
+console.log(circleToPixels(nside, hour(10), deg(20), deg(1)).length) // 21 — pixels for a 1° radius cone, including the one above
+
+console.log(triangleToPixels(nside, [hour(10), deg(20)], [hour(10) + deg(2), deg(20)], [hour(10), deg(22)]).length) // 20
+console.log(
+	polygonToPixels(nside, [
+		[hour(10), deg(20)],
+		[hour(10) + deg(2), deg(20)],
+		[hour(10) + deg(2), deg(22)],
+		[hour(10), deg(22)],
+	]).length,
+) // 25
+
+// The same cone in ring ordering, and at a finer resolution.
+console.log(circleToPixels(nside, hour(10), deg(20), deg(1), { ordering: 'ring' }).length) // 21
+console.log(circleToPixels(nside, hour(10), deg(20), deg(1), { targetNside: 256 }).length) // 111
+
+coordToPixel(63, 0, 0) // Error: invalid HEALPix NSIDE: 63. Expected a power of two in [1, 16777216]
+```
+
+### Heliacal Events
 
 ### Heliacal Events
 
@@ -1757,6 +1848,48 @@ console.log(hourAngleWindows(0, deg(10), deg(20), 0)) // [] — no duration
 ```
 
 ### IAU Body Orientation
+
+The IAU Working Group on Cartographic Coordinates and Rotational Elements publishes how each body is oriented in space: the right ascension and declination of its north pole as polynomials in time, and the angle of its prime meridian, which grows linearly with time plus small periodic corrections. From those the body-fixed frame follows, with +Z along the north pole and +X toward the prime meridian. It is the geometry behind the central meridian, ring tilt, solar disk orientation, and surface points on other bodies.
+
+The library holds the rotation elements as `RotationElements` constants: `SUN_ROTATION`, `MERCURY_ROTATION`, `VENUS_ROTATION`, `EARTH_ROTATION`, `MARS_ROTATION`, `JUPITER_ROTATION` (System III), `JUPITER_SYSTEM_I`, `JUPITER_SYSTEM_II`, `SATURN_ROTATION`, `URANUS_ROTATION`, `NEPTUNE_ROTATION`, and `MOON_ROTATION`. They reproduce the bodies to about 0.1° over the modern era; a few minor periodic terms of Mercury and Mars are omitted. `orientation(elements, time)` returns `{ poleRa, poleDec, primeMeridian }` in radians, with the right ascension and the prime meridian wrapped to `[0, 2π)`, evaluated at TDB. `bodyFixedMatrix(elements, time)` returns the 3×3 rotation that takes an ICRF vector to body-fixed axes (the 3-1-3 sequence `Rz(W) · Rx(π/2 − δ) · Rz(π/2 + α)`). `bodyFixedFrame(elements)` wraps it as a `Frame` with the analytic angular-rate operator `W = dR/dt · Rᵀ` in radians per day, so it works with the frame functions (see Celestial and Terrestrial Reference Frames) and with surface locations (see Planetary Surface Locations). For the points beneath an observer or the Sun, see Sub-Observer and Sub-Solar Points.
+
+```ts
+import { bodyFixedFrame, bodyFixedMatrix, orientation } from 'nebulosa/src/astronomy/bodies/orientation'
+import { MARS_ROTATION, MOON_ROTATION } from 'nebulosa/src/astronomy/bodies/orientation.data'
+import { frameAt } from 'nebulosa/src/astronomy/coordinates/frame'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
+
+// Mars: pole direction and prime meridian angle.
+const mars = orientation(MARS_ROTATION, time)
+
+console.log(toDeg(mars.poleRa), toDeg(mars.poleDec)) // 317.65 52.87 — degrees, ICRF north pole
+console.log(toDeg(mars.primeMeridian)) // 72.29 — degrees
+
+console.log(toDeg(orientation(MOON_ROTATION, time).primeMeridian)) // 84.41 — degrees
+
+// ICRF -> Mars body-fixed rotation; the first row is the prime-meridian axis expressed in ICRF.
+console.log(bodyFixedMatrix(MARS_ROTATION, time).slice(0, 3)) // [-0.3563, 0.7365, 0.5750]
+
+// The same orientation as a Frame, with the rotation-rate operator.
+const frame = bodyFixedFrame(MARS_ROTATION)
+
+console.log(frame.dRdtTimesRtAt!(time).slice(0, 3)) // [0, 6.124, 3.7e-8] — radians/day, Mars rotates 6.124 rad/day
+
+// A point fixed in ICRF seen in Mars's body-fixed axes: position [1, 0, 0] and zero velocity.
+console.log(
+	frameAt(
+		[
+			[1, 0, 0],
+			[0, 0, 0],
+		] as const,
+		frame,
+		time,
+	),
+) // [[-0.3563, -0.8210, 0.4461], [-5.028, 2.182, ~0]]
+```
 
 ### Instantaneous Earth Spin
 
@@ -1894,6 +2027,42 @@ console.log(
 
 ### Local ENU Frames
 
+East-North-Up (ENU) is the local Cartesian frame of an observer: +x points east, +y north, and +z toward the zenith, all tangent to the ellipsoid at the site. Azimuth, measured from north through east, and altitude are its spherical angles. ENU vectors are convenient for mount and horizon geometry because a direction needs no spherical formulas, only a rotation from equatorial axes.
+
+`horizontalToEnuVector(azimuth, altitude, out?)` returns the unit ENU direction for an azimuth and altitude in radians, and `enuVectorToHorizontal(vector)` inverts it, returning `{ azimuth, altitude }` with azimuth wrapped to `[0, 2π)`, or 0 at the zenith and nadir, where it is undefined. A zero vector throws a `RangeError`. `equatorialToEnuMatrix(latitude, lst, out?)` returns the 3×3 rotation taking an apparent equatorial vector (as from `eraS2c(rightAscension, declination)`, with the equator of date) to ENU for a geodetic latitude and a local apparent sidereal time, both in radians. `enuToEquatorialMatrix` is its exact transpose. The matrices are pure rotations: they apply no refraction, aberration, or parallax, and the optional `out` argument receives the result and is returned. For plain azimuth and altitude from right ascension and declination, Local Horizon Coordinates is shorter; use these matrices when you already work with vectors, or need many conversions at one instant (build the matrix once).
+
+```ts
+import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { enuToEquatorialMatrix, enuVectorToHorizontal, equatorialToEnuMatrix, horizontalToEnuVector } from 'nebulosa/src/astronomy/coordinates/frame.local'
+import { matMulVec } from 'nebulosa/src/math/linear-algebra/mat3'
+import { deg, hour, toDeg } from 'nebulosa/src/math/units/angle'
+
+const latitude = deg(-29.2563)
+const lst = hour(17.7685) // local apparent sidereal time
+
+// An apparent equatorial direction (RA 16 h, Dec -26°) rotated into ENU.
+const equatorial = eraS2c(hour(16), deg(-26))
+const enu = matMulVec(equatorialToEnuMatrix(latitude, lst), equatorial)
+
+console.log(enu) // [-0.4014, 0.01056, 0.9158] — east, north, up
+
+const { azimuth, altitude } = enuVectorToHorizontal(enu)
+
+console.log(toDeg(azimuth), toDeg(altitude)) // 271.51 66.32 — degrees, north through east
+
+// The reverse: azimuth and altitude to a unit ENU vector, and back to equatorial.
+console.log(horizontalToEnuVector(azimuth, altitude)) // [-0.4014, 0.01056, 0.9158]
+console.log(matMulVec(enuToEquatorialMatrix(latitude, lst), enu)) // [-0.4494, -0.7784, -0.4384] — equal to the original equatorial vector
+
+// Cardinal directions: north, east, south, and zenith.
+console.log(horizontalToEnuVector(0, 0)) // [0, 1, 0]
+console.log(horizontalToEnuVector(deg(90), 0)) // [1, 0, 0]
+console.log(horizontalToEnuVector(deg(180), 0)) // [0, -1, 0]
+console.log(enuVectorToHorizontal([0, 0, 1])) // { azimuth: 0, altitude: 1.5708 } — the azimuth is arbitrary at the zenith
+
+enuVectorToHorizontal([0, 0, 0]) // RangeError: vector must be non-zero
+```
+
 ### Local Horizon Coordinates
 
 The horizontal system describes where a source appears for an observer: azimuth measured from north through east, and altitude above the local horizon. Converting from equatorial coordinates needs the local hour angle `H = LST − RA`, where LST is the local apparent sidereal time, and the observer's latitude.
@@ -2015,6 +2184,33 @@ console.log(galacticVelocity.map(toKilometerPerSecond)) // [25.601, 29.813, 4.81
 ```
 
 ### Local Taki Frames
+
+The Taki frame is a local equatorial frame used for polar-aligned mounts and pointing models. Its axes are fixed to the observer's meridian and the celestial pole: +x points to the meridian toward the south, +y east, and +z toward the north celestial pole. A direction with west-positive hour angle `H` and declination `δ` is `[cos δ cos H, −cos δ sin H, sin δ]` in it, so the hour angle appears as a polar longitude of `−H`. Unlike the apparent equatorial frame, it does not depend on the sidereal time: it rotates with the Earth, and the target moves through it as the hour angle advances.
+
+`takiToEnuMatrix(latitude, out?)` returns the 3×3 rotation taking a Taki vector to East-North-Up (see Local ENU Frames), and `enuToTakiMatrix(latitude, out?)` is its exact transpose. `latitude` is geodetic, in radians, and `out` receives the result and is returned. These are pure rotations with no refraction or place corrections; at a pole (`latitude = ±π/2`) the Taki frame degenerates into the ENU axes.
+
+```ts
+import { enuToTakiMatrix, takiToEnuMatrix } from 'nebulosa/src/astronomy/coordinates/frame.local'
+import { matMulVec } from 'nebulosa/src/math/linear-algebra/mat3'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+
+const latitude = deg(-29.2563)
+
+// A target at RA 16 h, Dec -26° when the local sidereal time is 17.7685 h: hour angle +1.7685 h, west of the meridian.
+const hourAngle = hour(17.7685) - hour(16)
+const declination = deg(-26)
+const taki = [Math.cos(declination) * Math.cos(hourAngle), -Math.cos(declination) * Math.sin(hourAngle), Math.sin(declination)] as const
+
+console.log(taki) // [0.8042, -0.4014, -0.4384] — meridian-south, east, north pole
+
+// To ENU: the same direction as horizontalToEnuVector(azimuth 271.51°, altitude 66.32°).
+const enu = matMulVec(takiToEnuMatrix(latitude), taki)
+
+console.log(enu) // [-0.4014, 0.01056, 0.9158] — east, north, up
+
+// And back.
+console.log(matMulVec(enuToTakiMatrix(latitude), enu)) // [0.8042, -0.4014, -0.4384]
+```
 
 ### Location GCRS Frame
 
@@ -2263,6 +2459,47 @@ console.log(trueEclipticRotation(time).slice(6, 9)) // [0.0000054, -0.39772, 0.9
 ```
 
 ### Observed Catalog Star
+
+The observed place of a catalog star is where an observer on the Earth's surface sees it at a given instant: catalog position and proper motion carried to the date, parallax, light deflection, aberration, precession and nutation, Earth rotation, polar motion, and optionally atmospheric refraction. It is the end of the astrometric chain for a star, one call that gives azimuth, altitude, hour angle, and the apparent right ascension and declination, which is what a mount needs in order to point.
+
+`observeStar(star, time, ebpv, ehp?, refraction?)` takes a `Star` or `StarPositionAndVelocity` (from `star()`, see Stellar Space Motion), the `Time`, the Earth's barycentric `[position, velocity]` in AU and AU/day as `ebpv`, and the Earth's heliocentric position `ehp` (defaulting to `ebpv[0]`). `time.location` is required, as a geodetic site, or it throws an `Error`. `refraction` is `{ pressure (hPa), temperature (°C), relativeHumidity (0..1), wl (µm) }` with defaults for omitted fields, or `false` to disable refraction; leave it `undefined` for the defaults. The result is an `ObservedStar`: the original `star`, `azimuth` (north through east), `altitude` (negative below the horizon), `hourAngle`, the observed `rightAscension` and `declination`, and `equationOfOrigins`, all in radians. The catalog data is taken as referred to J2000.0 and a star with another epoch is propagated to J2000.0 first. UT1 and polar motion come from the loaded Earth orientation data (see Earth Orientation Parameters); the outputs below assume none is loaded. For positions with other body types see Topocentric Observed Place.
+
+```ts
+import { observeStar, star } from 'nebulosa/src/astronomy/bodies/star'
+import { eraEpv00 } from 'nebulosa/src/astronomy/coordinates/erfa/earth'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { tdb, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { arcsec, deg, hour, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+import { kilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+// Barnard's Star, as in Stellar Space Motion.
+const declination = deg(4.693391)
+const mas = (value: number) => arcsec(value / 1000)
+const barnard = star(hour(17 + 57 / 60 + 48.4997 / 3600), declination, mas(-797.84) / Math.cos(declination), mas(10328.12), mas(546.98), kilometerPerSecond(-110.51))
+
+// La Silla, and the time carries the location.
+const time = timeYMDHMS(2025, 7, 1, 3, 0, 0, Timescale.UTC)
+
+time.location = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
+
+// The Earth's [heliocentric, barycentric] state at that TDB instant.
+const [heliocentric, barycentric] = eraEpv00(tdb(time).day, tdb(time).fraction)
+
+const observed = observeStar(barnard, time, barycentric, heliocentric[0])
+
+console.log(toDeg(observed.azimuth), toDeg(observed.altitude)) // 27.05 52.65 — degrees, north through east
+console.log(toDeg(observed.hourAngle)) // -16.07 — degrees, east of the meridian
+console.log(toHour(observed.rightAscension), toDeg(observed.declination)) // 17.9624 4.7527 — observed (CIRS) place, hours and degrees
+console.log(observed.star === barnard) // true
+
+// Without refraction, and with a thinner, colder atmosphere.
+console.log(toDeg(observeStar(barnard, time, barycentric, heliocentric[0], false).altitude)) // 52.64 — degrees
+console.log(toDeg(observeStar(barnard, time, barycentric, heliocentric[0], { pressure: 700, temperature: 0 }).altitude)) // 52.65 — degrees
+
+// A missing location is rejected.
+observeStar(barnard, timeYMDHMS(2025, 7, 1, 3, 0, 0, Timescale.UTC), barycentric, heliocentric[0]) // Error: time.location is required
+```
 
 ### Observing Visibility Windows
 
@@ -2582,6 +2819,49 @@ planetaryStations(marsAt, start, stop, { derivativeHalfStep: 0 }) // RangeError:
 
 ### Planetary Surface Locations
 
+A point on the surface of another body is described by planetocentric east longitude, latitude from the body's equatorial plane, and elevation above a reference triaxial ellipsoid, in the body-fixed frame. Moving it to the inertial frame needs the body's orientation (see IAU Body Orientation, or a SPICE or PCK frame) and carries the rotational velocity of the surface. The result composes with a body-center ephemeris, so the crater or landing site works anywhere a body ephemeris does (see Ephemeris Path Adapters). Elevation here is a radial offset along the planetocentric direction, not a planetographic or geodetic height, and the surface normal is that of the reference ellipsoid, ignoring relief.
+
+`bodyShape(radii)` builds the ellipsoid from three semi-axes in AU, along body-fixed X, Y, and Z, as an array or as an `{ x, y, z }` record such as the SPICE body radii (see SPICE Body Radii). `bodySurfaceLocation(longitude, latitude, elevation, shape, frame)` builds a `BodySurfaceLocation`, with the angles in radians (longitude wrapped to `[0, 2π)`), `elevation` in AU, and `frame` the body-fixed `Frame`; it caches the body-fixed Cartesian point. `bodySurfaceNormal(location, out?)` returns the unit outward normal of the reference ellipsoid in body-fixed axes, written into `out` when given. `bodySurfaceState(location, time, out?)` returns the location's `[position, velocity]` relative to the body center in the library's base axes (AU, AU/day), including the velocity from the frame's rotation; a frame without `dRdtTimesRtAt` adds none. `bodySurfacePositionAndVelocity(body, location)` returns a state sampler that adds that to a body ephemeris, so it behaves like any body in the library. The solar altitude at such a location is in Body-Surface Solar Illumination.
+
+```ts
+import { bodyFixedFrame } from 'nebulosa/src/astronomy/bodies/orientation'
+import { MARS_ROTATION } from 'nebulosa/src/astronomy/bodies/orientation.data'
+import { mars } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { bodyShape, bodySurfaceLocation, bodySurfaceNormal, bodySurfacePositionAndVelocity, bodySurfaceState } from 'nebulosa/src/astronomy/observer/body'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { kilometer, toKilometer } from 'nebulosa/src/math/units/distance'
+
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
+
+// Mars as an oblate ellipsoid: 3396.2 km equatorial and 3376.2 km polar radii.
+const shape = bodyShape([kilometer(3396.2), kilometer(3396.2), kilometer(3376.2)])
+
+// 18° N, 135° W (225° E), at the reference surface, in the IAU body-fixed frame.
+const location = bodySurfaceLocation(deg(-135), deg(18), 0, shape, bodyFixedFrame(MARS_ROTATION))
+
+console.log(toDeg(location.longitude)) // 225 — degrees east, wrapped
+console.log(location.bodyFixed!.map(toKilometer)) // [-2282.64, -2282.64, 1048.89] — km, body-fixed axes
+console.log(bodySurfaceNormal(location)) // [-0.6717, -0.6717, 0.3123] — unit outward normal of the ellipsoid
+
+// Its state relative to Mars's center in ICRF axes, with the velocity from Mars's rotation.
+const [position, velocity] = bodySurfaceState(location, time)
+
+console.log(position.map(toKilometer)) // [3155.32, -873.54, -895.52] — km
+console.log(velocity) // [0.0000434, 0.0001193, 0.0000366] — AU/day, about 0.23 km/s
+
+// Added to Mars's barycentric ephemeris, it becomes an ordinary barycentric body.
+const site = bodySurfacePositionAndVelocity(mars, location)
+
+console.log(site(time)[0]) // [1.18438, 0.74857, 0.31160] — AU, close to Mars's own position
+console.log(mars(time)[0]) // [1.18435, 0.74858, 0.31160] — AU
+
+// A point 21.9 km above the reference surface is that much farther from the center.
+const summit = bodySurfaceLocation(deg(-135), deg(18), kilometer(21.9), shape, bodyFixedFrame(MARS_ROTATION))
+
+console.log(Math.hypot(...summit.bodyFixed!.map(toKilometer))) // 3416.17 — km from the center
+```
+
 ### Pluto Short Analytical Theory
 
 Pluto's orbit is strongly perturbed by Neptune's 3:2 resonance, so a simple Kepler orbit is a poor model. Meeus (Astronomical Algorithms, chapter 37) gives a short theory that fits the heliocentric longitude, latitude, and radius with 43 periodic terms in the mean longitudes of Jupiter, Saturn, and Pluto. Its stated accuracy is 0.07″ in longitude, 0.02″ in latitude, and 0.000006 AU in radius, and it is valid only for 1885 to 2099.
@@ -2651,6 +2931,61 @@ console.log(precessionMatrixCapitaine(timeJulianYear(2000), timeJulianYear(2026.
 ```
 
 ### Projected Paths and Polygons
+
+A path across the sky or a map, such as a satellite ground track or an eclipse limit, becomes a set of lines when projected. Where it crosses the antimeridian, or runs off the visible hemisphere or into a singularity, the projected line must be cut rather than drawn straight across the map. These helpers do the cutting.
+
+`projectMany(projection, points, options?, out?)` projects an array of spherical `{ x: longitude, y: latitude }` points in radians into planar points, filling `out`; it returns `undefined` if any point is outside the projection's domain. `projectPolyline(projection, points, options?)` returns an array of planar polylines, splitting the path where the longitude jumps by more than `splitLongitudeGap` (default π, an antimeridian crossing), where a point is not projectable (such as the far side of an orthographic view), and where consecutive projected points are farther apart than `discontinuityThreshold` (planar units). `maxSegmentRadians` first densifies long segments along the shorter longitude path, so a long great-circle-like step is split correctly and shows its curvature. The `ProjectionPolylineOptions` extend the projection options (central meridian, scale, wrap mode, and so on). `projectPolygon(projection, rings, options?)` applies the same to each ring of a polygon and returns the resulting pieces per ring; a ring that crosses the antimeridian comes back in several pieces that the caller closes or fills as needed. An empty input returns `[]`.
+
+```ts
+import { Orthographic, PlateCarree, projectMany, projectPolygon, projectPolyline } from 'nebulosa/src/astronomy/projections/projection'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+const map = new PlateCarree()
+
+// Project a few points: x = longitude, y = latitude.
+console.log(
+	projectMany(map, [
+		{ x: 0, y: 0 },
+		{ x: deg(10), y: deg(20) },
+	]),
+) // [{ x: 0, y: 0 }, { x: 0.1745, y: 0.3491 }]
+
+// A track crossing the 180° meridian is cut into two lines instead of one line across the map.
+const track = [170, 175, -175, -170].map((longitude) => ({ x: deg(longitude), y: deg(10) }))
+const lines = projectPolyline(map, track)
+
+console.log(lines.length) // 2
+console.log(lines.map((line) => line.map((p) => [toDeg(p.x), toDeg(p.y)]))) // [[[170, 10], [175, 10]], [[-175, 10], [-170, 10]]]
+
+// Densify long segments: a 90° step becomes four points, each at most 30° apart.
+console.log(
+	projectPolyline(
+		map,
+		[
+			{ x: 0, y: 0 },
+			{ x: deg(90), y: 0 },
+		],
+		{ maxSegmentRadians: deg(30) },
+	)[0].length,
+) // 4
+
+// Points on the far side of an orthographic globe are dropped; the visible part remains one line.
+const globe = new Orthographic(0, 0)
+const equator = [0, 40, 80, 120, 160].map((longitude) => ({ x: deg(longitude), y: 0 }))
+
+console.log(projectPolyline(globe, equator).map((line) => line.length)) // [3]
+
+// A polygon ring crossing the antimeridian comes back in pieces: one entry per ring, each a list of lines.
+const ring = [
+	{ x: deg(170), y: deg(10) },
+	{ x: deg(-170), y: deg(10) },
+	{ x: deg(-170), y: deg(20) },
+	{ x: deg(170), y: deg(20) },
+	{ x: deg(170), y: deg(10) },
+]
+
+console.log(projectPolygon(map, [ring]).map((pieces) => pieces.map((piece) => piece.length))) // [[1, 2, 2]]
+```
 
 ### Radial Doppler Shift
 
@@ -2905,6 +3240,51 @@ console.log(toDeg(earthRotationAngle(time))) // 276.752 — degrees
 ```
 
 ### Sky Projections
+
+A map projection flattens the celestial or terrestrial sphere onto a plane, trading shape, area, or distance fidelity. This module provides forward and inverse projections between spherical coordinates (longitude and latitude, or right ascension and declination, in radians) and planar x/y, with shared options for the plane transform. Azimuthal projections are tangent at a chosen center and suit fields of view and all-sky charts; cylindrical ones map the whole sphere and suit sky maps and world maps.
+
+Every projection implements `project(longitude, latitude, out?, options?)`, which returns a `Point` `{ x, y }` or `undefined` when the point is outside the projection's domain (for example the far side of a gnomonic or orthographic view, or a pole in Mercator), and `unproject(x, y, out?, options?)`, which returns `{ x: longitude, y: latitude }` or `undefined`. The optional `out` point is filled and returned. Azimuthal projections are constructed with `(centerLongitude, centerLatitude, options?)`: `Gnomonic` (great circles are straight lines, less than a hemisphere), `Stereographic` (conformal), `Orthographic` (a globe seen from infinity, one hemisphere), `LambertAzimuthalEqualArea` (area-preserving), and `AzimuthalEquidistant` (true distances from the center). Cylindrical projections take `options` (some also a standard parallel): `Mercator`, `WebMercator` (clamped to ±85.05° so the map is square), `EllipsoidalMercator`, `Miller`, `CentralCylindrical`, `CylindricalEqualArea(standardParallel, latitudeOfOrigin, options)` with the `LambertCylindricalEqualArea`, `Behrmann`, `GallPeters`, `HoboDyer`, `Balthasart`, and `TrystanEdwards` presets, `CylindricalStereographic(standardParallel, options)` with the `Gall` and `Braun` presets, and `CylindricalEquidistant(standardParallel, latitudeOfOrigin, options)` with `PlateCarree(latitudeOfOrigin, options)`.
+
+The shared `ProjectionOptions` set the planar transform and conventions: `centralMeridian` (radians), `scale` and `radius` (planar units per radian, multiplied), `falseEasting` and `falseNorthing`, `raAxisDirection` (`'east'`, the default, or `'west'` for a sky chart with right ascension increasing to the left), `yAxisDirection` (`'northUp'`, the default, or `'southUp'`), `longitudeWrapMode` (`'pi'` for `(−π, π]`, `'tau'` for `[0, 2π)`, or `'none'`), `clampLatitude` and `maxLatitude` (radians), and for the ellipsoidal Mercator `eccentricity` or `flattening`. Options on the constructor are defaults, and options passed to a call override them. By default the plane is in units of the sphere radius, that is, radians for small angles; set `scale` to get arcseconds, pixels, or meters. A malformed option such as an invalid standard parallel or flattening throws a `TypeError`. To project paths and polygons that cross the antimeridian, see Projected Paths and Polygons.
+
+```ts
+import { AzimuthalEquidistant, Gnomonic, LambertCylindricalEqualArea, Mercator, Orthographic, PlateCarree, Stereographic, WebMercator, WEB_MERCATOR_MAX_LATITUDE } from 'nebulosa/src/astronomy/projections/projection'
+import { deg, hour, toDeg } from 'nebulosa/src/math/units/angle'
+
+// A tangent projection centered on RA 10 h, Dec +20°, projecting a point 2° east in RA and 3° north in Dec.
+const center = [hour(10), deg(20)] as const
+const gnomonic = new Gnomonic(center[0], center[1])
+const point = gnomonic.project(hour(10) + deg(2), deg(23))!
+
+console.log(point) // { x: 0.032186, y: 0.052628 } — tangent-plane units (radians for small offsets)
+
+const back = gnomonic.unproject(point.x, point.y)!
+
+console.log(toDeg(back.x), toDeg(back.y)) // 152 23 — degrees of RA and Dec, the inverse
+
+// The other azimuthal projections of the same point differ at the 1e-5 level here.
+console.log(new Stereographic(center[0], center[1]).project(hour(10) + deg(2), deg(23))) // { x: 0.032156, y: 0.052578 }
+console.log(new Orthographic(center[0], center[1]).project(hour(10) + deg(2), deg(23))) // { x: 0.032125, y: 0.052528 }
+console.log(new AzimuthalEquidistant(center[0], center[1]).project(hour(10) + deg(2), deg(23))) // { x: 0.032145, y: 0.052561 }
+
+// A point on the far side is outside the gnomonic and orthographic domain.
+console.log(gnomonic.project(hour(22), deg(-20))) // undefined
+
+// A scale turns plane units into arcseconds, with RA increasing to the left as on a sky chart.
+const chart = new Gnomonic(center[0], center[1], { scale: 206264.806, raAxisDirection: 'west' })
+
+console.log(chart.project(hour(10) + deg(2), deg(23))) // { x: -6638.9, y: 10855.2 } — arcseconds
+
+// Cylindrical: Mercator of 30° E, 45° N, and the equal-area and plate carree variants.
+console.log(new Mercator().project(deg(30), deg(45))) // { x: 0.5236, y: 0.8814 }
+console.log(new LambertCylindricalEqualArea().project(deg(30), deg(45))) // { x: 0.5236, y: 0.7071 }
+console.log(new PlateCarree().project(deg(30), deg(45))) // { x: 0.5236, y: 0.7854 } — x = longitude, y = latitude
+
+// The poles diverge in Mercator: undefined, or clamped by WebMercator at the square-map limit.
+console.log(new Mercator().project(0, deg(90))) // undefined
+console.log(toDeg(WEB_MERCATOR_MAX_LATITUDE)) // 85.05 — degrees
+console.log(new WebMercator().project(0, deg(90))) // { x: 0, y: 3.1416 }
+```
 
 ### Sky-Plane Uncertainty Ellipses
 
@@ -3250,7 +3630,74 @@ console.log(toArcsec(vecAngle(direction, deflected))) // 0.00407 — arcseconds 
 
 ### Stellar Space Motion
 
+Stars move. A catalog gives a star's position at a reference epoch together with its proper motion (the yearly drift across the sky), its parallax (which sets its distance), and its radial velocity (toward or away from us). From those, the star's position and velocity in the barycentric celestial frame can be built and then propagated to another epoch, which matters for nearby, fast stars: Barnard's Star moves more than 10″ per year. The propagation here is a linear space-motion model, not a perturbed orbit.
+
+`star(ra, dec, pmRA?, pmDEC?, parallax?, rv?, epoch?)` returns a `StarPositionAndVelocity`: the catalog values plus the BCRS `[position (AU), velocity (AU/day)]` pair. `ra` and `dec` are radians at `epoch`, which defaults to J2000.0 (TDB). `pmRA` is the proper motion in right ascension as `dα/dt` in radians per year, which is the catalog value `μα*` divided by `cos(dec)`, not `μα*` itself; `pmDEC` is in radians per year, `parallax` in radians, and `rv` in AU/day, positive when receding (`kilometerPerSecond` converts km/s). A zero parallax places the star at a very large distance and a zero proper motion and radial velocity make it fixed. `spaceMotion(star, time, out?)` returns the star's position and velocity propagated to `time`, writing into `out` when given (it is returned). The position is the space-motion-corrected one; the velocity is the constant catalog velocity. The angular position at that time is `equatorial(position)`. For the place an observer sees, with aberration and refraction, see Observed Catalog Star.
+
+```ts
+import { equatorial } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { spaceMotion, star } from 'nebulosa/src/astronomy/bodies/star'
+import { Timescale, timeJulianYear } from 'nebulosa/src/astronomy/time/time'
+import { arcsec, deg, hour, normalizeAngle, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+import { kilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+// Barnard's Star at J2000.0: RA 17 h 57 m 48.5 s, Dec +4.693391°, mu_alpha* -797.84 mas/yr, mu_delta +10328.12 mas/yr,
+// parallax 546.98 mas, radial velocity -110.51 km/s.
+const declination = deg(4.693391)
+const mas = (value: number) => arcsec(value / 1000)
+
+const barnard = star(hour(17 + 57 / 60 + 48.4997 / 3600), declination, mas(-797.84) / Math.cos(declination), mas(10328.12), mas(546.98), kilometerPerSecond(-110.51))
+
+console.log(barnard[0]) // [-3594.0, -375815.9, 30855.5] — AU, barycentric ICRS: about 376500 AU, 5.95 light-years
+console.log(barnard[1]) // [-0.003343, 0.06787, 0.04628] — AU/day
+
+// Propagate to J2025.0 and read the angular position.
+const [position] = spaceMotion(barnard, timeJulianYear(2025, Timescale.TDB))
+const [ra, dec] = equatorial(position)
+
+console.log(toHour(normalizeAngle(ra)), toDeg(dec)) // 17.9631 4.7652 — the star has moved about 4.3' north in 25 years
+
+// A star with no proper motion stays where the catalog puts it.
+const fixed = star(hour(10), deg(20))
+
+console.log(spaceMotion(fixed, timeJulianYear(2025, Timescale.TDB))[0]) // the same vector as fixed[0]
+```
+
 ### Sub-Observer and Sub-Solar Points
+
+The sub-observer point is the spot on a body's surface directly beneath the observer, the center of the disk as seen; its longitude is the central meridian. The sub-solar point is the spot directly beneath the Sun. Their latitudes are the tilt of the pole toward the observer or the Sun, and the longitude difference is the phase geometry. The orientation is evaluated one light time earlier, since the body turned while the light was in flight, which matters for fast rotators like Jupiter, whose prime meridian advances about 18° over the light time.
+
+`subObserverPoint(elements, time, bodyToObserver)` returns `{ longitude, latitude }` in radians, planetocentric and east-positive, with longitude in `[0, 2π)`. `bodyToObserver` is the vector from the body's center to the observer in AU, in ICRF axes: its length sets the light-time delay and its direction sets the point. `subSolarPoint(elements, time, bodyToObserver, bodyToSun)` takes the same and the body-to-Sun vector, whose small change over the light time is neglected, and returns the point beneath the Sun as the observer sees it. For west-positive (planetographic) longitudes of a prograde body use `2π − longitude`, as `jupiterCentralMeridian` does. `positionAngleOfPole(elements, time, bodyToObserver)` returns the position angle of the body's north pole on the sky, measured at the disk center from celestial north toward east, in `(−π, π]`; for the Sun it is the classical P angle. It is referred to the true equator and equinox of date and neglects aberration of the disk-center direction. The rotation elements come from IAU Body Orientation.
+
+```ts
+import { positionAngleOfPole, subObserverPoint, subSolarPoint } from 'nebulosa/src/astronomy/bodies/orientation'
+import { MARS_ROTATION, SUN_ROTATION } from 'nebulosa/src/astronomy/bodies/orientation.data'
+import { earth, mars, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { type Time, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
+
+// Vectors from Mars's center to a geocentric observer and to the Sun, in AU and ICRF axes.
+const marsToEarth = (t: Time) => vecMinus(earth(t)[0], mars(t)[0])
+const marsToSun = (t: Time) => vecMinus(sun(t)[0], mars(t)[0])
+
+const observer = subObserverPoint(MARS_ROTATION, time, marsToEarth(time))
+const solar = subSolarPoint(MARS_ROTATION, time, marsToEarth(time), marsToSun(time))
+
+console.log(toDeg(observer.longitude), toDeg(observer.latitude)) // 131.85 -9.86 — degrees, east longitude and latitude
+console.log(360 - toDeg(observer.longitude)) // 228.15 — degrees west, the central meridian
+console.log(toDeg(solar.longitude), toDeg(solar.latitude)) // 107.57 -19.17 — degrees: the Sun is 19° south of Mars's equator
+
+console.log(toDeg(positionAngleOfPole(MARS_ROTATION, time, marsToEarth(time)))) // -36.98 — degrees, tilt of the Martian axis on the sky
+
+// The Sun: P angle and B0, the heliographic latitude of the disk center.
+const sunToEarth = (t: Time) => vecMinus(earth(t)[0], sun(t)[0])
+
+console.log(toDeg(positionAngleOfPole(SUN_ROTATION, time, sunToEarth(time)))) // -3.61 — degrees, the P angle
+console.log(toDeg(subObserverPoint(SUN_ROTATION, time, sunToEarth(time)).latitude)) // 2.62 — degrees, B0
+```
 
 ### TEME and ITRF Conversion
 
