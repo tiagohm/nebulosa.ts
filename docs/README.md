@@ -290,6 +290,7 @@ When you already hold snapshots, `applyApparentDirectionCorrections` applies onl
 ```ts
 import { applyApparentDirectionCorrections } from 'nebulosa/src/astronomy/coordinates/apparent'
 
+// `result` is the apparentDirection result computed in the previous snippet.
 const apparent = applyApparentDirectionCorrections(
 	result!.astrometric, // unit direction after light time
 	[1.5, 4.5, 0.5], // target position at emission, AU
@@ -343,7 +344,89 @@ console.log(cometMagnitudeEstimate(8, 0.5, 1.2, 10)) // 7.2867 — apparent magn
 
 ### Asteroid and Comet Orbit Construction
 
+A small body's orbit is described by classical elements referred to a plane and an epoch. Asteroids are normally given by the semi-major axis, eccentricity, inclination, longitude of the ascending node, argument of perihelion, and mean anomaly at an epoch. Comets, whose eccentricity can be 1 or more, are given by perihelion distance (or the semi-latus rectum) and the time of perihelion passage instead. Both become a `KeplerOrbit`, a two-body orbit around the Sun whose state vector the library can propagate (see Two-Body Kepler Propagation).
+
+`asteroid(a, e, i, om, w, M, epoch)` takes `a` in AU, the angles in radians (`om` the ascending node, `w` the argument of perihelion, `M` the mean anomaly at `epoch`), and `epoch` as a `Time`. `comet(p, e, i, om, w, epoch)` takes the semi-latus rectum `p` in AU and `epoch` as the time of perihelion. `mpcAsteroid(record)` and `mpcComet(record)` build them from parsed MPC records (see MPCORB Parsing), taking the epoch in TT. The elements are heliocentric and referred to the ecliptic and equinox of J2000, and by default the orbit's gravitational parameter is the Sun's (`GM_SUN_PITJEVA_2005`). `orbit.position` and `orbit.velocity` hold the state at the epoch in that ecliptic frame, while `orbit.at(time)` returns a state rotated to equatorial J2000 (see Two-Body Kepler Propagation). For finer control, `KeplerOrbit.meanAnomaly(p, e, i, om, w, M, epoch, mu?, rotation?)`, `KeplerOrbit.trueAnomaly(p, e, i, om, w, v, epoch, mu?, rotation?)`, and `KeplerOrbit.periapsis(p, e, i, om, w, epoch, mu?, rotation?)` build an orbit from the semi-latus rectum, with a different `mu` or output `rotation` if needed, and `new KeplerOrbit(position, velocity, epoch, mu?, rotation?)` builds one from a state. A hyperbolic orbit (`e > 1`) has a negative semi-major axis, and a state with zero angular momentum throws an `Error` ("motion is not conical").
+
+```ts
+import { asteroid, comet, KeplerOrbit, mpcAsteroid, mpcComet } from 'nebulosa/src/astronomy/orbits/asteroid'
+import { mpcorb, mpcorbComet } from 'nebulosa/src/astronomy/orbits/mpcorb'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+const epoch = timeYMDHMS(2025, 5, 5, 0, 0, 0, Timescale.TT)
+
+// (1) Ceres from classical elements: a (AU), e, i, node, argument of perihelion, mean anomaly (radians).
+const ceres = asteroid(2.7660512, 0.0794013, deg(10.5878), deg(80.25221), deg(73.27343), deg(188.70269), epoch)
+
+console.log(ceres.position) // [2.7711, -0.96407, -0.54103] — AU, ecliptic J2000 at the epoch
+console.log(ceres.periodInDays / 365.25) // 4.600 — years
+
+// A comet from the semi-latus rectum p = q(1 + e) and the perihelion time.
+const halley = comet(0.583972 * (1 + 0.967311), 0.967311, deg(162.2146), deg(59.6368), deg(112.547), timeYMDHMS(2061, 8, 31, 19, 50, 18, Timescale.TT))
+
+console.log(halley.periapsisDistance, halley.eccentricity) // 0.583972 0.967311
+console.log(halley.periodInDays / 365.25) // 75.5 — years
+
+// From MPC records: an MPCORB line for an asteroid, a CometEls line for a comet.
+const line = '00001    3.34  0.15 K2555 188.70269   73.27343   80.25221   10.58780  0.0794013  0.21424651   2.7660512  0 E2024-V47  7330 125 1801-2024 0.80 M-v 30k MPCLINUX   4000      (1) Ceres              20241101'
+
+console.log(mpcAsteroid(mpcorb(line)!).position) // [2.7711, -0.96407, -0.54103] — same orbit, epoch K2555 = 2025-05-05
+
+const cometLine = '0001P         2061 08 31.8266  0.583972  0.967311  112.5470   59.6368  162.2146  20250501   4.0  6.0  1P/Halley                                                 98, 1083'
+
+console.log(mpcComet(mpcorbComet(cometLine)!).semiMajorAxis) // 17.864 — AU
+
+// A hyperbolic orbit (e = 1.5): negative semi-major axis, infinite period.
+const hyperbolic = KeplerOrbit.meanAnomaly(1.5, 1.5, deg(10), deg(20), deg(30), 0.5, epoch)
+
+console.log(hyperbolic.semiMajorAxis, hyperbolic.periodInDays) // -1.2 Infinity
+
+// An orbit from the state at perihelion: position [q, 0, 0] for p = 1, e = 0.2, i = 0.
+console.log(KeplerOrbit.periapsis(1, 0.2, 0, 0, 0, epoch).position) // [0.83333, 0, 0] — AU
+
+console.log(toDeg(KeplerOrbit.trueAnomaly(1, 0.2, 0, 0, 0, Math.PI / 2, epoch).trueAnomaly)) // 90 — degrees
+```
+
 ### Astrometric Sample-Grid Interpolation
+
+A plate-solved image gives the sky position of every pixel through the WCS, but evaluating it for each mouse movement is slow. `AstrometricInterpolator` precomputes the right ascension and declination on a coarse, regular grid of pixels once, and then answers pixel-to-sky queries with a cheap local interpolation. Samples are stored as Cartesian unit vectors, so interpolating never crosses the 0/2π right ascension seam, and the interpolated vector is renormalized before it is converted back to RA and Dec.
+
+`new AstrometricInterpolator(raGrid, decGrid, width, height, stepX, stepY, options?)` takes the right ascension and declination grids in radians, row-major with `width × height` entries each, and the pixel spacing between adjacent samples (`stepX`, `stepY`, in image pixels). It throws an `Error` when the grid lengths disagree with `width × height`, and a `TypeError` when a sample is not finite. `options.interpolation` is the local kernel: `'nearest'`, `'bilinear'`, `'catmullRom'` (the default, bicubic), or `'cubicConvolution'` (Keys, with `options.cubicTension`, default −0.5 which equals Catmull-Rom). `pixelToSky(x, y, out?)` returns `[ra, dec]` in radians, with right ascension in `[0, 2π)`, writing into `out` when given. Queries are clamped to the sampled extent, so it never extrapolates beyond the grid. This is an interpolation of a precomputed grid, not a plate solution: for the WCS itself see Plate Solution.
+
+```ts
+import { AstrometricInterpolator } from 'nebulosa/src/astronomy/ephemeris/interpolation/astrometric'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+// A 4 x 4 grid: RA grows by 1° per column, Dec by 1° per row, samples every 10 px in x and 20 px in y.
+const width = 4
+const height = 4
+const ra = new Float64Array(width * height)
+const dec = new Float64Array(width * height)
+
+for (let row = 0; row < height; row++) {
+	for (let col = 0; col < width; col++) {
+		ra[row * width + col] = deg(10 + col)
+		dec[row * width + col] = deg(-5 + row)
+	}
+}
+
+const interpolator = new AstrometricInterpolator(ra, dec, width, height, 10, 20, { interpolation: 'bilinear' })
+
+// Pixel (15, 30) is the center of a grid cell.
+console.log(interpolator.pixelToSky(15, 30).map(toDeg)) // [11.5, -3.5] — degrees (bilinear is off by about 1e-4° in Dec due to the sphere)
+
+// The default bicubic Catmull-Rom kernel.
+console.log(new AstrometricInterpolator(ra, dec, width, height, 10, 20).pixelToSky(15, 30).map(toDeg)) // [11.5, -3.5] — degrees
+
+// Queries outside the grid clamp to its edge.
+console.log(interpolator.pixelToSky(-100, 1000).map(toDeg)) // [10, -2] — degrees, the nearest corner sample
+
+// Across the 0/360° seam: the samples 359.9°, 0°, 0.1° interpolate to 359.95°, not through 180°.
+const seam = new AstrometricInterpolator(new Float64Array([deg(359.9), 0, deg(0.1), deg(359.9), 0, deg(0.1)]), new Float64Array(6), 3, 2, 10, 10, { interpolation: 'bilinear' })
+
+console.log(seam.pixelToSky(5, 5).map(toDeg)) // [359.95, 0] — degrees
+```
 
 ### Astronomical State Ownership
 
@@ -1079,6 +1162,53 @@ console.log(minutes) // 16.42 — minutes of time; the sundial is ahead of the c
 
 ### Equatorial Ephemeris Interpolation
 
+A precomputed ephemeris, such as a table of apparent right ascension and declination from an external service, gives positions at discrete times. An interpolator turns those samples into a continuous function of time, from which you read positions at any instant inside the span, or resample a denser table. It works on topocentric or apparent equatorial samples, with right ascension unwrapped before fitting so the 0/2π seam causes no jump.
+
+Three factories share the `EphemerisInterpolator` interface: `linearInterpolator(points, options?)`, `splineInterpolator(points, type?, options?)`, and `chebyshevInterpolator(points, degree?, options?)`. A point is `{ time, rightAscension, declination }` with angles in radians and the `Time` in any scale (converted to TT); points may arrive unordered. A spline needs 3 samples, with `type` one of `'naturalCubic'` (default), `'cubicHermite'`, `'pchip'`, `'akima'`, or `'catmullRom'`. A Chebyshev fit is a least-squares polynomial of `degree` over the whole interval (default `min(12, samples − 1)`) that needs `degree + 1` samples and is unsafe to extrapolate. `options.outOfRange` is `'clamp'` (default, returns the first or last sample's position), `'extrapolate'`, or `'throw'` (a `RangeError`); `options.computeRmsError` fills `diagnostics` with fit residuals in radians; `options.allowDuplicateTimes` lets repeated times overwrite instead of throwing. `compute(time)` returns a fresh `[ra, dec]` in radians with right ascension in `[0, 2π)`; `computeInto(time, out)` writes into `out`, which is returned; `resample(times)` returns `EphemerisPoint`s. `startTime`, `endTime` (TT Julian Date), `sampleCount`, and `strategy` describe the fit. The interpolator object also implements `update(points)` to rebuild it from new samples; cast it to `UpdatableEphemerisInterpolator` to call it. For a pixel grid rather than a time series, see Astrometric Sample-Grid Interpolation.
+
+```ts
+import { chebyshevInterpolator, type EphemerisPoint, linearInterpolator, splineInterpolator, type UpdatableEphemerisInterpolator } from 'nebulosa/src/astronomy/ephemeris/interpolation/ephemeris'
+import { Timescale, time, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, hour, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+
+const start = timeYMDHMS(2025, 9, 28, 0, 0, 0, Timescale.TT)
+const at = (days: number) => time(start.day, start.fraction + days, Timescale.TT)
+
+// Daily samples over 4 days: RA drifts east and speeds up, Dec decreases.
+const points: EphemerisPoint[] = [0, 1, 2, 3, 4].map((d) => ({ time: at(d), rightAscension: hour(10) + deg(0.5) * d + deg(0.02) * d * d, declination: deg(20) - deg(0.1) * d }))
+
+const linear = linearInterpolator(points)
+const [ra, dec] = linear.compute(at(1.5))
+
+console.log(toHour(ra), toDeg(dec)) // 10.0533 19.85 — hours, degrees
+
+console.log(toHour(splineInterpolator(points).compute(at(1.5))[0])) // 10.0530 — hours, natural cubic spline
+console.log(toHour(splineInterpolator(points, 'pchip').compute(at(1.5))[0])) // 10.0530 — hours, monotone PCHIP
+
+// A degree-4 Chebyshev fit reproduces this polynomial track; residuals are reported on request.
+const chebyshev = chebyshevInterpolator(points, 4, { computeRmsError: true })
+
+console.log(toHour(chebyshev.compute(at(1.5))[0])) // 10.0530 — hours
+console.log(chebyshev.diagnostics?.maxAbsRA) // 0 — radians, within the fit's rounding
+
+// Outside the span: clamped by default, optionally extrapolated or rejected.
+console.log(linear.compute(at(6)).map(toDeg)) // [152.32, 19.6] — degrees, the last sample
+console.log(linearInterpolator(points, { outOfRange: 'extrapolate' }).compute(at(5)).map(toDeg)) // [152.96, 19.5] — degrees
+linearInterpolator(points, { outOfRange: 'throw' }).compute(at(9)) // RangeError: interpolation time is outside the sample range
+
+// A denser table.
+console.log(
+	splineInterpolator(points)
+		.resample([at(0.5), at(2.5)])
+		.map((p) => toDeg(p.declination)),
+) // [19.95, 19.75] — degrees
+
+// Rebuild in place from new samples.
+;(linear as UpdatableEphemerisInterpolator).update(points.slice(0, 2))
+
+console.log(linear.sampleCount) // 2
+```
+
 ### Equatorial Mount Geometric Pointing Errors
 
 An equatorial mount that is not perfectly built or aligned points slightly away from where its axes say it points. The model here is the six basic geometric terms of TPoint: index offsets in hour angle and declination (`IH`, `ID`), collimation or cone error (`CH`), non-perpendicularity of the polar and declination axes (`NP`), and polar-axis misalignment in azimuth (`MA`) and elevation (`ME`). The error at a mechanical orientation is
@@ -1371,6 +1501,43 @@ console.log(instantaneousEarthAngularVelocity(time)) // [-5.2e-7, 6.9e-8, 6.3003
 
 ### Kepler Anomalies and Periapsis Timing
 
+The position of a body on its orbit is measured by three angles. The true anomaly `v` is the actual angle from periapsis, the eccentric anomaly `E` is an auxiliary angle (the hyperbolic anomaly for open orbits), and the mean anomaly `M` grows linearly with time. Kepler's equation relates them: `M = E − e·sin E` for an ellipse and `M = e·sinh H − H` for a hyperbola. Going from `M` to `E` requires solving it iteratively, and from there the time since periapsis follows from the mean motion.
+
+`meanAnomaly(E, e, norm?)` gives `M` from `E`: wrapped to `[0, 2π)` for an ellipse, and for a hyperbola signed and wrapped to `[−π, π]` only when `norm` is true. `eccentricAnomalyFromMean(M, e)` inverts it with Newton's method and returns the eccentric (or hyperbolic) anomaly, and throws an `Error` if it does not converge. `eccentricAnomaly(v, e)` gives `E` from the true anomaly. `trueAnomalyClosed(e, E)` and `trueAnomalyHyperbolic(e, H)` give `v` from `E` or `H`, and `trueAnomalyParabolic(p, mu, M)` does so for a parabola from the semi-latus rectum `p` (AU), `mu` (AU³/day²), and the parabolic mean anomaly. For `e = 1`, `eccentricAnomaly`, `eccentricAnomalyFromMean`, and `meanAnomaly` return 0, since the parabola uses `v` directly. `timeSincePeriapsis(M, n, v, p, mu)` returns the days since periapsis, `M / n` for any orbit with a usable mean motion `n` (radians/day), and Barker's equation from `v` and `p` when `n` is essentially zero. All angles are radians. The same quantities are available as properties of an orbit (see Osculating Orbital Elements).
+
+```ts
+import { eccentricAnomaly, eccentricAnomalyFromMean, meanAnomaly, meanMotion, timeSincePeriapsis, trueAnomalyClosed, trueAnomalyHyperbolic, trueAnomalyParabolic } from 'nebulosa/src/astronomy/orbits/asteroid'
+import { GM_SUN_PITJEVA_2005 } from 'nebulosa/src/core/constants'
+
+// An ellipse with e = 0.3 at eccentric anomaly E = 0.7 rad.
+const e = 0.3
+const M = meanAnomaly(0.7, e)
+const v = trueAnomalyClosed(e, 0.7)
+
+console.log(M) // 0.50673 — radians, E - e·sin(E)
+console.log(v) // 0.92321 — radians, true anomaly
+console.log(eccentricAnomaly(v, e)) // 0.7 — back to E
+console.log(eccentricAnomalyFromMean(M, e)) // 0.7 — Kepler's equation solved for E
+console.log(eccentricAnomalyFromMean(0.5, 0.99)) // 1.4865 — a near-parabolic ellipse still converges
+
+// Hyperbola with e = 1.5 and hyperbolic anomaly H = 4.
+const vh = trueAnomalyHyperbolic(1.5, 4)
+
+console.log(vh) // 2.2729 — radians
+console.log(eccentricAnomaly(vh, 1.5)) // 4 — back to H
+console.log(meanAnomaly(4, 1.5)) // 36.935 — radians, e·sinh(H) - H, not wrapped
+console.log(meanAnomaly(4, 1.5, true)) // -0.76424 — radians, wrapped to [-PI, PI]
+
+// Parabola: semi-latus rectum 2 AU, solar mu.
+console.log(trueAnomalyParabolic(2, GM_SUN_PITJEVA_2005, 0.1)) // 0.53831 — radians
+console.log(trueAnomalyParabolic(2, GM_SUN_PITJEVA_2005, -0.1)) // -0.53831 — radians, before periapsis
+
+// Time since periapsis for a 1 AU, e = 0.3 ellipse.
+const n = meanMotion(1, GM_SUN_PITJEVA_2005) // 0.017202 — radians/day
+
+console.log(timeSincePeriapsis(M, n, v, 1 * (1 - e * e), GM_SUN_PITJEVA_2005)) // 29.458 — days
+```
+
 ### Light-Time Solution
 
 Light takes time to cross the Solar System, so a body seen at time `t` is where it was at the earlier emission time `t − τ`, with `τ = distance / c`. Because the distance depends on that earlier position, the solution is found by fixed-point iteration: sample the observer at reception, sample the target at the retarded epoch, recompute the distance, and repeat. Three iterations are enough for Solar-System bodies.
@@ -1618,6 +1785,42 @@ console.log(marssat(time, 0)[0]) // [-0.000038291, 0.000030662, 0.000038326] —
 
 ### MPCORB Parsing
 
+The Minor Planet Center distributes osculating orbits in fixed-width text files: MPCORB lines for asteroids and CometEls lines for comets. These functions turn one line into a structured record with angles already converted to radians and distances in AU, ready to build a `KeplerOrbit` (see Asteroid and Comet Orbit Construction).
+
+`mpcorb(line)` parses an MPCORB asteroid line into an `MPCOrbit`: packed designation, absolute magnitude `H` and slope `G`, the packed epoch, mean anomaly, argument of perihelion, node, inclination (radians), eccentricity, mean daily motion (degrees/day, as published), semi-major axis (AU), and the orbit quality and bookkeeping fields. `mpcorbComet(line)` parses a CometEls line into an `MPCOrbitComet`: optional periodic number, orbit type (`P`, `C`, `D`, `X`, `A`, or `I`), perihelion date and distance (AU), eccentricity, angles in radians, and the magnitude parameters. Both return `undefined` for an empty line, and read fixed columns without checking their ranges. The epoch of an asteroid line is a five-character packed date: `unpackDate(packed)` returns `[year, month, day]` and `packDate(year, month, day)` is its inverse, and both throw a `RangeError` on malformed or out-of-range input.
+
+```ts
+import { mpcorb, mpcorbComet, packDate, unpackDate } from 'nebulosa/src/astronomy/orbits/mpcorb'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const line = '00001    3.34  0.15 K2555 188.70269   73.27343   80.25221   10.58780  0.0794013  0.21424651   2.7660512  0 E2024-V47  7330 125 1801-2024 0.80 M-v 30k MPCLINUX   4000      (1) Ceres              20241101'
+
+const ceres = mpcorb(line)!
+
+console.log(ceres.designation) // (1) Ceres
+console.log(ceres.magnitudeH, ceres.magnitudeG) // 3.34 0.15
+console.log(ceres.epochPacked, unpackDate(ceres.epochPacked)) // K2555 [2025, 5, 5]
+console.log(toDeg(ceres.meanAnomaly)) // 188.70269 — degrees, stored in radians
+console.log(ceres.eccentricity, ceres.semiMajorAxis) // 0.0794013 2.7660512 — AU
+console.log(ceres.meanDailyMotion) // 0.21424651 — degrees/day
+
+const cometLine = '0001P         2061 08 31.8266  0.583972  0.967311  112.5470   59.6368  162.2146  20250501   4.0  6.0  1P/Halley                                                 98, 1083'
+
+const halley = mpcorbComet(cometLine)!
+
+console.log(halley.number, halley.orbitType, halley.designation) // 1 P 1P/Halley
+console.log(halley.perihelionYear, halley.perihelionMonth, halley.perihelionDay, halley.perihelionDayFraction) // 2061 8 31 0.8266
+console.log(halley.perihelionDistance, halley.eccentricity) // 0.583972 0.967311
+console.log(toDeg(halley.inclination)) // 162.2146 — degrees
+
+console.log(mpcorb('')) // undefined
+
+// Packed dates: century letter, two digits, month and day in base 32.
+console.log(packDate(2024, 11, 1)) // K24B1
+console.log(unpackDate('J9611')) // [1996, 1, 1]
+packDate(2025, 13, 1) // RangeError: invalid packed date value "13"
+```
+
 ### Mutual Planetary-Satellite Events
 
 ### Nutation and Celestial Orientation
@@ -1667,6 +1870,38 @@ console.log(trueEclipticRotation(time).slice(6, 9)) // [0.0000054, -0.39772, 0.9
 ### Orbit Covariance Propagation
 
 ### Osculating Orbital Elements
+
+The osculating elements of a body are the Keplerian elements of the two-body orbit that matches its position and velocity at one instant. They describe the orbit it would follow if every perturbation vanished at that moment, and they drift as perturbations act, so they are tied to an epoch. A `KeplerOrbit` built from a heliocentric state exposes the full set as lazily computed properties (see Asteroid and Comet Orbit Construction for the other ways to build one).
+
+`new KeplerOrbit(position, velocity, epoch, mu?, rotation?)` takes the state in AU and AU/day, an epoch, a gravitational parameter (default the Sun's, AU³/day²), and an output rotation used only by propagation. Distances are AU, angles radians in `[0, 2π)` unless noted, and rates per day. The properties are `semiMajorAxis` (negative for hyperbolas, `Infinity` for parabolas), `semiMinorAxis`, `semiLatusRectum`, `eccentricity`, `eccentricityVector` (toward periapsis), `inclination`, `longitudeOfAscendingNode`, `argumentOfPeriapsis`, `longitudeOfPeriapsis`, `trueAnomaly`, `eccentricAnomaly`, `meanAnomaly`, `meanLongitude`, `trueLongitude`, `argumentOfLatitude`, `nodeVector`, `meanMotionPerDay`, `periodInDays` and `apoapsisDistance` (both `Infinity` for open orbits), `periapsisDistance`, and `periapsisTime`, a TDB `Time`. Circular or equatorial orbits have no node or periapsis, so the node and argument of periapsis fall back to 0 there. The free functions with the same names (for example `semiLatusRectum`, `eccentricityVector`, `inclination`) take the primitive inputs the property uses, and `tisserandParameter(a, e, i, perturberSemiMajorAxis)` classifies a small body relative to a planet: above 3 is typically asteroidal, between 2 and 3 a Jupiter-family comet, and below 2 a Halley-type or nearly isotropic orbit. The elements refer to the frame the state is in, so a state in equatorial axes gives elements relative to the equator.
+
+```ts
+import { KeplerOrbit, tisserandParameter } from 'nebulosa/src/astronomy/orbits/asteroid'
+import { Timescale, time, timeToDate } from 'nebulosa/src/astronomy/time/time'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+// Heliocentric state of Vesta from JPL Horizons, 2025-04-21 12:00 TDB: AU and AU/day.
+const position = [-1.70317472297052, -1.333843040283118, -0.3086709149679688] as const
+const velocity = [0.007882762615954012, -0.008079478592200335, -0.004254433056153772] as const
+const vesta = new KeplerOrbit(position, velocity, time(2460787, 0, Timescale.TDB))
+
+console.log(vesta.semiMajorAxis, vesta.eccentricity) // 2.3614 0.090099 — AU
+console.log(toDeg(vesta.inclination)) // 22.768 — degrees (equatorial axes, since the state is)
+console.log(toDeg(vesta.longitudeOfAscendingNode)) // 18.192 — degrees
+console.log(toDeg(vesta.argumentOfPeriapsis)) // 238.53 — degrees
+console.log(toDeg(vesta.meanAnomaly), toDeg(vesta.trueAnomaly)) // 328.78 322.87 — degrees
+
+console.log(vesta.periapsisDistance, vesta.apoapsisDistance) // 2.1486 2.5741 — AU
+console.log(vesta.periodInDays) // 1325.4 — days
+console.log(vesta.meanMotionPerDay) // 0.0047406 — radians/day
+console.log(timeToDate(vesta.periapsisTime).slice(0, 3)) // [2021, 12, 28] — last perihelion passage (TDB)
+
+console.log(vesta.eccentricityVector) // [-0.022557, -0.082003, -0.029741] — toward periapsis
+console.log(vesta.nodeVector) // [0.95002, 0.31220, 0] — unit vector toward the ascending node
+
+// Tisserand parameter relative to Jupiter (a = 5.2044 AU); more than 3 means asteroidal.
+console.log(tisserandParameter(vesta.semiMajorAxis, vesta.eccentricity, vesta.inclination, 5.2044)) // 3.4411
+```
 
 ### Planetary Apparent Magnitudes (Mallama and Hilton)
 
@@ -2046,11 +2281,175 @@ console.log(
 
 ### SPICE Body Radii
 
+NAIF text PCK kernels list a body's triaxial reference ellipsoid as `BODY{id}_RADII`, three numbers in kilometers: the x, y, and z semi-axes in the body-fixed frame, usually the two equatorial radii and the polar radius. `bodyRadii(pool, body)` reads that variable for a NAIF body id from a loaded kernel pool (see SPICE Text Kernel Pools) and returns `{ x, y, z }` converted to AU, or `undefined` when the variable is missing or has fewer than three numbers. The result feeds `bodyShape` for surface locations (see Planetary Surface Locations).
+
+```ts
+import fs from 'fs/promises'
+import { bodyRadii } from 'nebulosa/src/astronomy/ephemeris/kernels/frame.kernel'
+import { Naif } from 'nebulosa/src/astronomy/ephemeris/kernels/naif'
+import { readTextKernel, SpiceKernelPool } from 'nebulosa/src/astronomy/ephemeris/kernels/text.kernel'
+import { fileHandleSource } from 'nebulosa/src/io/file'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+
+// A text PCK with the BODY{id}_RADII values.
+const pool = new SpiceKernelPool()
+
+await using tpc = fileHandleSource(await fs.open('data/pck00008.tpc'))
+pool.load(await readTextKernel(tpc))
+
+const moon = bodyRadii(pool, Naif.MOON)!
+
+console.log(toKilometer(moon.x), toKilometer(moon.y), toKilometer(moon.z)) // 1737.4 1737.4 1737.4 — km, from AU
+
+const earth = bodyRadii(pool, Naif.EARTH)!
+
+console.log(toKilometer(earth.x), toKilometer(earth.z)) // 6378.14 6356.75 — km, equatorial and polar
+
+console.log(bodyRadii(pool, 999999)) // undefined — no radii loaded for that body
+```
+
 ### SPICE Frame Resolution
+
+A SPICE frame is defined by kernels: a frame kernel (`KPL/FK`) gives each frame a name and an id and says how it is built, either from a binary PCK orientation (class 2) or as a fixed offset relative to another frame (class 4, a constant `MATRIX` or `ANGLES` rotation). `SpiceFrames` resolves a frame name or id from a loaded text-kernel pool, and a binary PCK when class-2 frames are needed, into a library `Frame`, which maps the base (ICRS/J2000) axes to the body-fixed axes, with the angular-rate operator when the frame rotates (see Celestial and Terrestrial Reference Frames).
+
+`new SpiceFrames(pool, pck?)` binds the resolver to a `SpiceKernelPool` and an optional `Pck` from `readPck` (see Binary PCK Rotation). `await frames.frame(nameOrId)` returns the `Frame` for a SPICE name (such as `'MOON_PA_DE421'`) or an integer id, and caches it. `J2000` (id 1) is built in as the identity base. A class-2 frame needs the binary PCK segment loaded and initialized, and the DAF source must stay open while you evaluate the frame. A class-4 frame chains onto its relative frame, so `MOON_PA` resolves through `MOON_PA_DE421` here. The call throws an `Error` for an unknown name or id, a missing PCK segment, an unsupported frame class (class 1 inertial frames and others) or `TKFRAME` specification, and a cyclic frame definition. The result integrates with `frameAt`, `frameToFrame`, and the other frame functions, and with `bodySurfaceLocation`.
+
+```ts
+import fs from 'fs/promises'
+import { frameAt } from 'nebulosa/src/astronomy/coordinates/frame'
+import { readDaf } from 'nebulosa/src/astronomy/ephemeris/kernels/daf'
+import { SpiceFrames } from 'nebulosa/src/astronomy/ephemeris/kernels/frame.kernel'
+import { readPck } from 'nebulosa/src/astronomy/ephemeris/kernels/pck'
+import { readTextKernel, SpiceKernelPool } from 'nebulosa/src/astronomy/ephemeris/kernels/text.kernel'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { fileHandleSource } from 'nebulosa/src/io/file'
+
+// Frame kernel (names and ids) and the binary PCK that holds the lunar orientation.
+const pool = new SpiceKernelPool()
+
+await using fk = fileHandleSource(await fs.open('data/moon_080317.tf'))
+pool.load(await readTextKernel(fk))
+
+await using bpc = fileHandleSource(await fs.open('data/moon_pa_de421_1900-2050.bpc'))
+const pck = readPck(await readDaf(bpc))
+
+await pck.initialize()
+
+const frames = new SpiceFrames(pool, pck)
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.TDB)
+
+// Principal axes (class 2, from the binary PCK) and the mean-Earth frame fixed to it (class 4).
+const principal = await frames.frame('MOON_PA_DE421')
+const meanEarth = await frames.frame('MOON_ME_DE421')
+
+console.log(principal.rotationAt(time).slice(0, 3)) // [0.06618, 0.92539, 0.37319] — first row, J2000 to principal axes
+console.log(meanEarth.rotationAt(time).slice(0, 3)) // [0.06651, 0.92523, 0.37353] — first row, J2000 to mean-Earth axes
+
+// The alias MOON_PA and the integer id resolve to the same frame.
+console.log((await frames.frame('MOON_PA')).rotationAt(time).slice(0, 3)) // [0.06618, 0.92539, 0.37319]
+console.log((await frames.frame(31006)) === principal) // true
+
+// A state at rest in the J2000 frame, seen in the body-fixed frame (position, velocity in AU and AU/day).
+console.log(
+	frameAt(
+		[
+			[1, 0, 0],
+			[0, 0, 0],
+		] as const,
+		principal,
+		time,
+	),
+) // [[0.06618, -0.99773, 0.01264], [-0.22946, -0.015222, -0.00021406]]
+
+// J2000 is the identity base and has no angular-rate operator.
+console.log((await frames.frame('J2000')).dRdtTimesRtAt) // undefined
+```
 
 ### SPICE Text Kernel Pools
 
+NAIF text kernels (`KPL/PCK` and `KPL/FK`) store constants as `name = value` assignments between `\begindata` and `\begintext` markers: body radii, frame definitions, and the like. A value is a number (Fortran `D` exponents allowed), a quoted string, or a parenthesized list. An assignment either replaces a name (`=`) or appends to it (`+=`), so load order matters when several kernels set the same name.
+
+`readTextKernel(source)` parses a text kernel into an ordered list of assignments, each `{ name, append, values }` with the name uppercased. The first line must be `KPL/PCK` or `KPL/FK`, and the call throws an `Error` for a malformed assignment, an unterminated list or string, a non-numeric value, or an `@` calendar date, which is not supported. `SpiceKernelPool` is an explicit, non-global pool: `pool.load(assignments)` applies `=` and `+=` in order against what earlier files already set (a `Map` of names to values is treated as plain `=` assignments), `pool.get(name)` returns the values or `undefined`, and `pool.numbers(name)` and `pool.strings(name)` return only the numeric or string values. Names are case-insensitive on lookup. Use the pool with SPICE Frame Resolution and SPICE Body Radii.
+
+```ts
+import { readTextKernel, SpiceKernelPool } from 'nebulosa/src/astronomy/ephemeris/kernels/text.kernel'
+import { bufferSource } from 'nebulosa/src/io/io'
+
+const text = `KPL/PCK
+
+\\begindata
+  BODY301_RADII = ( 1737.4 1737.4 1737.4 )
+  FRAME_31000_NAME = 'MOON_PA'
+  ITEMS = ( 1 2 )
+  ITEMS += ( 3 )
+  GM = ( 3.9860043543609598D+05 )
+\\begintext
+`
+
+// Ordered assignments; the second ITEMS has append = true.
+const assignments = await readTextKernel(bufferSource(Buffer.from(text, 'ascii')))
+
+console.log(assignments.length) // 5
+
+const pool = new SpiceKernelPool()
+
+pool.load(assignments)
+
+console.log(pool.get('items')) // [1, 2, 3] — `=` then `+=`, name matched case-insensitively
+console.log(pool.numbers('BODY301_RADII')) // [1737.4, 1737.4, 1737.4] — kilometers in the file
+console.log(pool.strings('FRAME_31000_NAME')) // ['MOON_PA']
+console.log(pool.get('GM')) // [398600.435436096] — the D exponent is converted
+console.log(pool.get('MISSING')) // undefined
+
+// A later load replaces a name with `=`.
+pool.load(new Map([['ITEMS', [9]]]))
+
+console.log(pool.get('ITEMS')) // [9]
+```
+
 ### SPK State Kernels
+
+An SPK (Spacecraft and Planet Kernel) is a NAIF binary file of ephemerides: for a set of target bodies, the position and velocity relative to a center body over a time span, stored as numerically fitted segments inside a DAF container (see DAF Binary Containers). JPL planetary ephemerides such as DE421 and DE440 and small-body files such as the Didymos kernel are SPKs. Bodies are identified by NAIF integer codes (the `Naif` enum covers the barycenters, planets, major satellites, and some asteroids), and a chain of segments links bodies, for example the solar-system barycenter to the Earth-Moon barycenter to the Earth.
+
+`readSpk(daf)` builds an `Spk` from an opened DAF. `spk.segments` lists every segment as `[center, target, segment]` in file order, and `await spk.segment(center, target)` returns the segment giving the target relative to the center, initialized and ready, or `undefined` when none exists. Overlapping segments for the same pair are merged, and the one latest in file order wins where they overlap. `segment.at(time)` returns `[position (AU), velocity (AU/day)]` as a fresh pair, with the time converted to TDB; it throws when the time is outside the segment's coverage. `segment.start` and `segment.end` are the coverage in TDB seconds past J2000 and `segment.frame` is the NAIF frame id. Chebyshev types 2 and 3, Lagrange type 9, and extended modified-difference type 21 are decoded; no rotation is applied, so a state is in the segment's own frame, and the J2000 frame (id 1, `SPK_FRAME_J2000`) is the one that matches the library axes. Coefficient records are read from the file when needed, so keep the DAF source open. To use segments with the rest of the library, wrap them with `spkEphemerisPath` (see Ephemeris Path Adapters). The helpers `extendedPermanentAsteroidNumber`, `extendedPrimaryBodyOfPermanentAsteroidNumber`, and `extendedSatelliteOfPermanentAsteroidNumber` build the NAIF codes JPL assigns to numbered asteroids and their satellites; the `original*` and `extendedProvisional*` ones cover the other numbering schemes.
+
+```ts
+import fs from 'fs/promises'
+import { readDaf } from 'nebulosa/src/astronomy/ephemeris/kernels/daf'
+import { extendedPermanentAsteroidNumber, extendedPrimaryBodyOfPermanentAsteroidNumber, Naif } from 'nebulosa/src/astronomy/ephemeris/kernels/naif'
+import { readSpk } from 'nebulosa/src/astronomy/ephemeris/kernels/spk'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { fileHandleSource } from 'nebulosa/src/io/file'
+
+await using source = fileHandleSource(await fs.open('data/de440s.bsp'))
+const spk = readSpk(await readDaf(source))
+
+console.log(spk.segments.length) // 14 — segments in DE440s
+
+// Earth-Moon barycenter relative to the solar-system barycenter, at one TDB instant.
+const segment = (await spk.segment(Naif.SSB, Naif.EMB))!
+const time = timeYMDHMS(2025, 1, 15, 9, 20, 50, Timescale.TDB)
+
+const [position, velocity] = segment.at(time)
+
+console.log(segment.frame) // 1 — J2000
+console.log(position) // [-0.42340, 0.81246, 0.35239] — AU
+console.log(velocity) // [-0.015849, -0.0067662, -0.0029331] — AU/day
+
+// The Moon relative to the Earth-Moon barycenter, from another segment.
+const moon = (await spk.segment(Naif.EMB, Naif.MOON))!
+
+console.log(moon.at(time)[0]) // [-0.0017378, 0.0016515, 0.00089348] — AU
+
+console.log(await spk.segment(7, 9)) // undefined — no segment for that pair
+
+// A time outside the coverage throws.
+segment.at(timeYMDHMS(2300, 1, 1, 0, 0, 0, Timescale.TDB)) // Error: cannot find a segment that covers the date
+
+// NAIF codes for asteroid 65803 (Didymos).
+console.log(extendedPermanentAsteroidNumber(65803)) // 20065803
+console.log(extendedPrimaryBodyOfPermanentAsteroidNumber(65803)) // 920065803 — the system, equal to Naif.DIDYMOS
+```
 
 ### Starlight Deflection
 
@@ -2175,6 +2574,52 @@ console.log(tubeFlexureError(0, latitude, latitude, flexure)) // [0, -0]
 ### Twilight and Darkness Windows
 
 ### Two-Body Kepler Propagation
+
+Propagating a state under the Sun's gravity alone is the two-body problem: given a position and velocity at one epoch, the state at any other time follows from Kepler's laws, with no perturbations from planets. The library solves it with universal variables and Stumpff functions, a single formulation that holds for elliptic, parabolic, and hyperbolic orbits, forward or backward in time. It suits asteroids and comets over short spans or at moderate accuracy; it is not a substitute for a numerically integrated ephemeris over long intervals (see SPK State Kernels).
+
+`orbit.at(time)` returns `[position (AU), velocity (AU/day)]` at any `Time`, as a fresh pair, propagating from the orbit's epoch. The elapsed time is measured in TT. The state is rotated by the orbit's `rotation`, by default from heliocentric ecliptic J2000 into equatorial J2000; pass `matIdentity()` as the rotation when building the orbit to keep the input axes. `orbit.positionAtTrueAnomaly(v)` returns the point on the orbit at a true anomaly `v` (radians), a purely geometric curve that is independent of the epoch and rotated like `at`. Propagating to the epoch reproduces the input state, and one period later returns to it for a bound orbit. The call throws an `Error` for a state with no angular momentum (`motion is not conical`) or an interval beyond the representable range. `stumpff(x)` exposes the four Stumpff functions `c0` to `c3` of the universal-variable method at one argument, as `[c0, c1, c2, c3]`; an optional second argument receives them.
+
+```ts
+import { comet, KeplerOrbit, stumpff } from 'nebulosa/src/astronomy/orbits/asteroid'
+import { Timescale, time, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { GM_SUN_PITJEVA_2005 } from 'nebulosa/src/core/constants'
+import { matIdentity } from 'nebulosa/src/math/linear-algebra/mat3'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+// Vesta's heliocentric state at 2025-04-21 12:00 TDB (AU, AU/day), kept in the input axes with an identity rotation.
+const position = [-1.70317472297052, -1.333843040283118, -0.3086709149679688] as const
+const velocity = [0.007882762615954012, -0.008079478592200335, -0.004254433056153772] as const
+const epoch = time(2460787, 0, Timescale.TDB)
+const orbit = new KeplerOrbit(position, velocity, epoch, GM_SUN_PITJEVA_2005, matIdentity())
+
+// One year later (365 days).
+const [p, v] = orbit.at(time(2460787 + 365, 0, Timescale.TDB))
+
+console.log(p) // [2.0377, -0.86910, -0.61354] — AU
+console.log(v) // [0.0059944, 0.0093565, 0.0029453] — AU/day
+
+// Backward in time works too.
+console.log(orbit.at(time(2460787 - 365, 0, Timescale.TDB))[0]) // [-1.1587, 2.0111, 0.95372] — AU
+
+// One period later, a bound orbit returns to its starting point.
+console.log(orbit.at(time(2460787 + orbit.periodInDays, 0, Timescale.TDB))[0]) // [-1.7032, -1.3338, -0.30867] — AU
+
+// The orbit as a curve: perihelion and aphelion, independent of the epoch.
+console.log(orbit.positionAtTrueAnomaly(0)) // [-0.53792, -1.9555, -0.70925] — AU, 2.1486 AU from the Sun
+
+// Default rotation: the orbit is propagated in ecliptic axes and returned in equatorial J2000.
+const halley = comet(0.5839719999999998 * 1.967311, 0.967311, deg(162.2146), deg(59.6368), deg(112.547), timeYMDHMS(2061, 8, 31, 19, 50, 18, Timescale.TT))
+
+console.log(halley.at(timeYMDHMS(2025, 4, 21, 12, 0, 0, Timescale.TT))[0]) // [-19.630, 29.058, 1.8353] — AU, equatorial J2000
+
+// A hyperbolic orbit (e = 1.5) keeps flying outward.
+const hyperbolic = KeplerOrbit.meanAnomaly(1.5, 1.5, deg(10), deg(20), deg(30), 0, epoch)
+
+console.log(hyperbolic.at(time(2460787 + 100, 0, Timescale.TDB))[0]) // [-2.2033, 0.80822, 0.67784] — AU
+
+// Stumpff functions c0..c3 at x = 0.5.
+console.log(stumpff(0.5)) // [0.76024, 0.91873, 0.47951, 0.16255]
+```
 
 ### Uranian Satellite Theory (GUST86)
 
