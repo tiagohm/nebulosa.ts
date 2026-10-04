@@ -3947,25 +3947,321 @@ console.log(angularMotionOrDifferentialTrackingRate([samples[0]])) // undefined 
 
 ### Satellite Conjunctions
 
+`satelliteConjunctions(a, b, start, stop, options?)` screens two satellites for close approaches. Both are propagated with SGP4 in the shared TEME frame, so their separation is the direct difference of the two position vectors and needs no frame conversion. The squared separation is sampled every `options.step` (default 30 s), its local minima are bracketed by the shared extrema search and refined with Brent's minimizer, and each one is reported as a `SatelliteConjunction`: the `time` of closest approach, the true `distance` (AU) and the `relativeSpeed` (AU/day) at that instant. Only minima at or below `options.threshold` (AU, default no limit) are returned, in chronological order.
+
+This is a geometric screen of the SGP4 states, not a collision probability: it has no covariance and no uncertainty on the element sets. SGP4 is only valid near each TLE epoch, so `start` and `stop` should stay within a few days of the epochs of both objects. The step must be finer than the approach one wants to catch, because a deep and brief minimum between two coarse samples can be missed, which matters for close approaches at high relative speed.
+
+The example uses a synthetic companion, the ISS elements with the ascending node shifted by +10°. The two orbital planes then cross and the separation has two minima per revolution; they are not a real close approach.
+
+```ts
+import { satelliteConjunctions } from 'nebulosa/src/astronomy/events/satellite'
+import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { type Time, timeShift, timeToDate, utc } from 'nebulosa/src/astronomy/time/time'
+import { AU_KM, DAYSEC } from 'nebulosa/src/core/constants'
+import { kilometer, toKilometer } from 'nebulosa/src/math/units/distance'
+
+const tle = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25544  51.6442  21.4611 0001363  85.7790 274.3535 15.49180547 25697', 'ISS')
+const iss = recordFromTLE(tle)
+const companion = recordFromTLE(parseTLE('1 25545U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25545  51.6442  31.4611 0001363  85.7790 274.3535 15.49180547 25697', 'COMPANION'))
+const format = (time: Time) => timeToDate(utc(time)).slice(0, 6).join('-')
+
+const stop = timeShift(tle.epoch, 0.25) // six hours after the epoch
+
+const all = satelliteConjunctions(iss, companion, tle.epoch, stop)
+console.log(all.length) // 8
+
+for (const conjunction of all.slice(0, 2)) {
+	console.log(format(conjunction.time), toKilometer(conjunction.distance), (conjunction.relativeSpeed * AU_KM) / DAYSEC)
+}
+// 2020-11-25-13-32-11 734.70 1.3359 — time, km, km/s
+// 2020-11-25-14-18-38 736.17 1.3332
+
+// Keep only approaches closer than 735 km.
+console.log(satelliteConjunctions(iss, companion, tle.epoch, stop, { threshold: kilometer(735) }).length) // 4
+```
+
 ### Satellite Eclipses
+
+A satellite in low orbit spends part of each revolution in the shadow of the Earth. The shadow model is conical, in the geocentric ICRS frame, using the apparent angular radii of the Sun and of the Earth's spherical limb as seen from the satellite: the satellite is in **umbra** when the Earth's disk fully covers the Sun's, in **penumbra** when it covers it partially, and **sunlit** otherwise. The Earth is treated as a sphere of radius `EARTH_RADIUS_AU`, and no refraction by the atmosphere is modeled.
+
+Both functions take a `sunAt` provider that returns the geocentric Sun position (AU, ICRS) at a time, for example the VSOP87E Sun minus the Earth. `satelliteShadowState(satrec, sunAt, time)` classifies one instant and `isSatelliteSunlit` is true only for `sunlit`, so penumbra counts as not sunlit. `satelliteEclipses(satrec, sunAt, start, stop, options?)` finds the interval during which the satellite is inside the selected boundary, `options.boundary` being `'umbra'` (the default, total eclipse) or `'penumbra'` (any partial obscuration). The signed margin to the boundary is sampled every `options.step` (default 30 s) and its zero crossings give the entries and exits. When the window starts inside the shadow, the first eclipse has no `entry`, and when it ends inside, the last one has no `exit`; in both cases the `duration` (seconds) is clipped to the window. Providing a cheap `sunAt` matters, because it is called at every sample.
+
+```ts
+import { isSatelliteSunlit, satelliteEclipses, satelliteShadowState } from 'nebulosa/src/astronomy/events/satellite'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { type Time, timeShift, timeToDate, utc } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+
+const tle = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25544  51.6442  21.4611 0001363  85.7790 274.3535 15.49180547 25697', 'ISS')
+const iss = recordFromTLE(tle)
+const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0]) // geocentric ICRS, AU
+const format = (time: Time) => timeToDate(utc(time)).slice(0, 6).join('-')
+
+console.log(satelliteShadowState(iss, sunAt, tle.epoch)) // umbra
+console.log(isSatelliteSunlit(iss, sunAt, tle.epoch)) // false
+
+// Six hours after the epoch. The window starts inside the umbra, so the first eclipse has no entry.
+const stop = timeShift(tle.epoch, 0.25)
+for (const eclipse of satelliteEclipses(iss, sunAt, tle.epoch, stop)) {
+	console.log(eclipse.entry && format(eclipse.entry), eclipse.exit && format(eclipse.exit), eclipse.duration)
+}
+// undefined 2020-11-25-13-37-45 1725.2 — seconds, clipped to the window start
+// 2020-11-25-14-35-12 2020-11-25-15-10-43 2130.3
+// 2020-11-25-16-8-11 2020-11-25-16-43-40 2129.6
+// 2020-11-25-17-41-9 2020-11-25-18-16-38 2128.9
+
+// The penumbra boundary is crossed slightly earlier and later, since it includes the partial shadow.
+const penumbra = satelliteEclipses(iss, sunAt, tle.epoch, stop, { boundary: 'penumbra' })
+console.log(penumbra.map((eclipse) => eclipse.duration)) // [1733.9, 2147.6, 2147.0, 2146.3]
+```
 
 ### Satellite Look Angles
 
+`satelliteLookAngles(satrec, location, time)` gives where a satellite appears for a ground observer: azimuth, altitude and slant range. The satellite is propagated with SGP4 in the TEME frame, rotated to the Earth-fixed ITRS frame and differenced against the observer's ITRS position; the topocentric vector is then resolved onto the local south-east-zenith axes of the geodetic vertical. Azimuth is measured from north through east, in `[0, 2π)`. Altitude is geometric, in `[−π/2, π/2]`, with no refraction, and a negative value means the satellite is below the horizon. The range is the observer-to-satellite distance in AU. No light time or aberration is applied.
+
+The `SatRec` comes from `recordFromTLE(parseTLE(line1, line2, name))` and the observer from `geodeticLocation(longitude, latitude, height)`. SGP4 is only meaningful near the epoch of the element set, so queries should stay within a few days of it.
+
+```ts
+import { satelliteLookAngles } from 'nebulosa/src/astronomy/events/satellite'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { timeShift } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+
+const tle = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25544  51.6442  21.4611 0001363  85.7790 274.3535 15.49180547 25697', 'ISS')
+const iss = recordFromTLE(tle)
+const site = geodeticLocation(deg(-46.6361), deg(-23.5475), 0) // São Paulo: longitude, latitude (radians), height (AU)
+
+// At the TLE epoch, 2020-11-25 13:09:00 UTC, the ISS is on the other side of the Earth.
+const epoch = satelliteLookAngles(iss, site, tle.epoch)
+console.log(toDeg(epoch.azimuth), toDeg(epoch.altitude), toKilometer(epoch.range)) // 148.014 −75.888 12806.5
+
+// One hour later the ISS is 3.4° above the horizon of the site.
+const later = satelliteLookAngles(iss, site, timeShift(tle.epoch, 1 / 24))
+console.log(toDeg(later.azimuth), toDeg(later.altitude), toKilometer(later.range)) // 153.318 3.433 2033.7
+```
+
 ### Satellite Ground Footprint
+
+`satelliteGroundFootprint(satrec, time, referenceRadius?)` computes the ideal coverage cap of a satellite: the part of the Earth from which it is above the geometric horizon. It is an explicit spherical approximation. The Earth is a sphere of radius `referenceRadius` (AU, default `EARTH_RADIUS_AU`), so the subpoint latitude is **spherical** (geocentric), not the geodetic latitude of `satelliteSubpoint`, and terrain, refraction and any elevation mask are ignored. The horizon half-angle is `atan2(√(h·(r + R)), R)`, with `r` the satellite's geocentric radius, `R` the reference radius and `h = r − R` the height, computed with `atan2` so that it stays stable at low height.
+
+The result has the `subpoint` (east-positive longitude in `(−π, π]`, geocentric latitude, and elevation, radians and AU), the `altitude` above the sphere (AU), the `referenceRadius`, the `halfAngle` of the cap (radians, measured at the Earth's center) and the `surfaceRadius`, the arc length from the subpoint to the horizon over the sphere (AU). The function throws an `Error` when `referenceRadius` is not positive and finite, and a `RangeError` when the satellite is inside the sphere, since an interior point has no tangent horizon. SGP4 is only meaningful near the TLE epoch.
+
+```ts
+import { satelliteGroundFootprint } from 'nebulosa/src/astronomy/events/satellite'
+import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+import { kilometer, toKilometer } from 'nebulosa/src/math/units/distance'
+
+const tle = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25544  51.6442  21.4611 0001363  85.7790 274.3535 15.49180547 25697', 'ISS')
+const iss = recordFromTLE(tle)
+
+const footprint = satelliteGroundFootprint(iss, tle.epoch)
+console.log(toDeg(footprint.subpoint.longitude), toDeg(footprint.subpoint.latitude)) // 119.282 0.01417
+console.log(toKilometer(footprint.altitude), toKilometer(footprint.referenceRadius)) // 419.79 6378.135
+console.log(toDeg(footprint.halfAngle)) // 20.24
+console.log(toKilometer(footprint.surfaceRadius)) // 2253.2 — arc length on the sphere
+
+// A smaller reference sphere, of mean radius 6371 km, gives a slightly larger cap.
+const mean = satelliteGroundFootprint(iss, tle.epoch, kilometer(6371))
+console.log(toDeg(mean.halfAngle), toKilometer(mean.surfaceRadius)) // 20.414 2269.9
+```
 
 ### Satellite Orbit Beta Angle
 
+The beta angle of an orbit is the elevation of the Sun above the orbital plane. It controls how long the satellite spends in sunlight: at a beta angle of 0° the Sun lies in the orbital plane and a low orbit crosses the Earth's shadow on every revolution, while a high beta angle shortens or removes the eclipses. It also drives the thermal and power conditions of the spacecraft.
+
+`satelliteBetaAngle(satrec, sunAt, time)` takes the orbit normal from the SGP4 angular momentum `r × v`, rotates it from TEME to the geocentric ICRS axes and returns `asin(n̂·ŝ)`, in radians in `[−π/2, π/2]`. The sign is positive when the Sun lies on the `+n` side of the plane, that is, on the side of the orbital angular momentum. `sunAt` returns the geocentric Sun position (AU, ICRS) at a time and is not mutated. The beta angle is that of the osculating orbit at `time`, so it drifts slowly with the node precession, and SGP4 should be used only near the epoch of the element set.
+
+```ts
+import { satelliteBetaAngle } from 'nebulosa/src/astronomy/events/satellite'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { type Time, timeShift } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+
+const tle = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25544  51.6442  21.4611 0001363  85.7790 274.3535 15.49180547 25697', 'ISS')
+const iss = recordFromTLE(tle)
+const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0]) // geocentric ICRS, AU
+
+console.log(toDeg(satelliteBetaAngle(iss, sunAt, tle.epoch))) // 14.62
+console.log(toDeg(satelliteBetaAngle(iss, sunAt, timeShift(tle.epoch, 1)))) // 17.81 — one day later
+```
+
 ### Satellite Passes
+
+`satellitePasses(satrec, location, start, stop, options?)` lists the passes of a satellite over a ground site in a time window. The geometric altitude is sampled every `options.step` (default 30 s) and its crossings of the horizon are located with the shared root finder. Each rising crossing is paired with the next setting one, and the culmination is the altitude maximum between them, refined with Brent's minimizer on the negated altitude. A pass is returned only when both its rise and its set lie inside the window: a pass already in progress at `start`, or still in progress at `stop`, is skipped. Passes are chronological.
+
+Every event (`rise`, `culmination`, `set`) is a `SatellitePassEvent`: the `time` plus the azimuth (north through east, radians), the geometric altitude (radians, no refraction) and the slant range (AU) at that instant. `options.minAltitude` (radians, default 0) replaces the ideal horizon, which models a local obstruction or a minimum-elevation constraint. `options.step` must be shorter than the shortest pass that matters, otherwise a brief grazing pass between two samples can be missed, and `options.tolerance` is the root and extremum tolerance.
+
+```ts
+import { satellitePasses } from 'nebulosa/src/astronomy/events/satellite'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { type Time, timeShift, timeToDate, utc } from 'nebulosa/src/astronomy/time/time'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+
+const tle = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25544  51.6442  21.4611 0001363  85.7790 274.3535 15.49180547 25697', 'ISS')
+const iss = recordFromTLE(tle)
+const site = geodeticLocation(deg(-46.6361), deg(-23.5475), 0) // São Paulo
+const format = (time: Time) => timeToDate(utc(time)).slice(0, 6).join('-')
+
+const start = tle.epoch
+const stop = timeShift(start, 1) // one day after the epoch
+
+// Every pass above the ideal horizon.
+console.log(satellitePasses(iss, site, start, stop).length) // 6
+
+// Passes that reach at least 10° of altitude.
+for (const pass of satellitePasses(iss, site, start, stop, { minAltitude: deg(10) })) {
+	console.log(format(pass.rise.time), toDeg(pass.rise.azimuth), toDeg(pass.rise.altitude))
+	console.log(format(pass.culmination.time), toDeg(pass.culmination.altitude), toKilometer(pass.culmination.range))
+	console.log(format(pass.set.time), toDeg(pass.set.azimuth), toDeg(pass.set.altitude))
+}
+// 2020-11-25-14-1-27 291.92 10.00 — rise: azimuth and altitude in degrees, at the 10° limit
+// 2020-11-25-14-4-32 32.06 749.5 — culmination: altitude in degrees, range in km
+// 2020-11-25-14-7-38 160.63 10.00 — set
+// 2020-11-25-22-14-13 203.75 10.00
+// 2020-11-25-22-17-27 38.78 651.8
+// 2020-11-25-22-20-38 62.08 10.00
+```
 
 ### Satellite Sub-point
 
+`satelliteSubpoint(satrec, time, ellipsoid?)` returns the point of the Earth's surface directly beneath the satellite. SGP4 gives the position in TEME, which is rotated to the Earth-fixed ITRS frame and converted to geodetic coordinates on the chosen ellipsoid (default `Ellipsoid.IERS2010`, like the other geographic-position APIs). The returned `GeographicPosition` has east-positive `longitude` in `(−π, π]` and geodetic `latitude`, both in radians, and `elevation`, the height above the ellipsoid in AU. It is a new object on every call. Propagation is only meaningful near the epoch of the element set.
+
+```ts
+import { satelliteSubpoint } from 'nebulosa/src/astronomy/events/satellite'
+import { Ellipsoid } from 'nebulosa/src/astronomy/observer/location'
+import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { timeShift } from 'nebulosa/src/astronomy/time/time'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+
+const tle = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25544  51.6442  21.4611 0001363  85.7790 274.3535 15.49180547 25697', 'ISS')
+const iss = recordFromTLE(tle)
+
+const subpoint = satelliteSubpoint(iss, tle.epoch)
+console.log(toDeg(subpoint.longitude), toDeg(subpoint.latitude), toKilometer(subpoint.elevation)) // 119.282 0.01425 419.79
+
+// Another instant, 1.5 hours later, and another ellipsoid: the geodetic latitude and the height barely change.
+const time = timeShift(tle.epoch, 0.0625)
+console.log(toDeg(satelliteSubpoint(iss, time).latitude), toKilometer(satelliteSubpoint(iss, time).elevation)) // −8.802 421.536
+const wgs84 = satelliteSubpoint(iss, time, Ellipsoid.WGS84)
+console.log(toDeg(wgs84.latitude), toKilometer(wgs84.elevation)) // −8.802 421.535
+```
+
 ### Satellite Tracking Rates
+
+`satelliteTrackingState(satrec, location, time)` adds the rates that a tracking mount or a Doppler correction needs to the look angles. The SGP4 position and velocity are rotated from TEME to the geocentric inertial axes, the observer's geocentric position and diurnal velocity are subtracted, and the rates follow analytically from the observer-relative vectors `r` and `v`: `rangeRate = r·v / |r|` and `angularRate = |r × v| / |r|²`. The result extends the look angles (`azimuth` north through east in `[0, 2π)`, geometric `altitude`, `range` in AU) with:
+
+- `rangeRate`, the derivative of the slant range in AU/day, positive when the satellite is receding. It is the input of a Doppler shift.
+- `angularRate`, the speed of the line of sight in **inertial** axes, in radians/day and never negative. It is not the derivative of azimuth or altitude, which are measured in the rotating horizon frame, so it is the rate at which a fixed-star-referenced mount has to move.
+
+No refraction or light time is applied, and SGP4 is only meaningful near the TLE epoch.
+
+```ts
+import { satellitePasses, satelliteTrackingState } from 'nebulosa/src/astronomy/events/satellite'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { timeShift } from 'nebulosa/src/astronomy/time/time'
+import { AU_KM, DAYSEC } from 'nebulosa/src/core/constants'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+
+const tle = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25544  51.6442  21.4611 0001363  85.7790 274.3535 15.49180547 25697', 'ISS')
+const iss = recordFromTLE(tle)
+const site = geodeticLocation(deg(-46.6361), deg(-23.5475), 0) // São Paulo
+
+const [, pass] = satellitePasses(iss, site, tle.epoch, timeShift(tle.epoch, 1), { minAltitude: deg(10) })
+
+// At the rise, 10° above the horizon, the ISS approaches quickly and moves slowly on the sky.
+const rise = satelliteTrackingState(iss, site, pass.rise.time)
+console.log(toKilometer(rise.range)) // 1519.06
+console.log((rise.rangeRate * AU_KM) / DAYSEC) // −6.365 — km/s, approaching
+console.log(toDeg(rise.angularRate) / DAYSEC) // 0.1390 — degrees/s
+
+// At the culmination the range is at its minimum, so the range rate is close to zero, while the
+// line of sight moves fastest.
+const culmination = satelliteTrackingState(iss, site, pass.culmination.time)
+console.log(toKilometer(culmination.range)) // 651.76
+console.log((culmination.rangeRate * AU_KM) / DAYSEC) // −0.0244 — km/s
+console.log(toDeg(culmination.angularRate) / DAYSEC) // 0.6468 — degrees/s
+console.log(toDeg(culmination.azimuth), toDeg(culmination.altitude)) // 132.91 38.78
+```
 
 ### Satellite Trail Prediction
 
 ### Satellite Visibility Intervals
 
+`satelliteVisibleIntervals(satrec, location, sunAt, start, stop, options)` finds the periods in which a satellite is actually worth watching from a site. An interval is an unbroken stretch of time throughout which **all** the criteria hold: the geometric altitude is at least `minimumAltitude`, the apparent magnitude is at most `maximumMagnitude`, the Sun is at most `maximumSunAltitude` above the observer's horizon, and the satellite is outside the Earth's umbra. All four options are required, because there are no subjective brightness or twilight defaults, and `standardMagnitude` is the empirical value of the satellite (see the visual-magnitude topic). Angles are in radians.
+
+The four margins are scanned independently every `options.step` (default 30 s), and the boundaries are refined by root finding, so each crossing must be resolved by the step. Intervals that touch the window edges are kept and clipped. The result has only the endpoints and the altitude maximum of each interval, as `SatelliteVisibilityEvent`s: the pass event (`time`, `azimuth`, `altitude`, `range`) plus the `magnitude`, the observer's `sunAltitude` and the `shadow` state. An interval can end on an umbra boundary, so its last event can report `umbra`. Refraction, extinction, flares, terrain and penumbral dimming are not modeled. `sunAt` returns the geocentric Sun position (AU, ICRS).
+
+```ts
+import { satelliteVisibleIntervals } from 'nebulosa/src/astronomy/events/satellite'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { type Time, timeShift, timeToDate, utc } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+const tle = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25544  51.6442  21.4611 0001363  85.7790 274.3535 15.49180547 25697', 'ISS')
+const iss = recordFromTLE(tle)
+const site = geodeticLocation(deg(-46.6361), deg(-23.5475), 0) // São Paulo
+const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0]) // geocentric ICRS, AU
+const format = (time: Time) => timeToDate(utc(time)).slice(0, 6).join('-')
+
+// Higher than 10°, brighter than magnitude 3, with the Sun more than 6° below the horizon.
+const intervals = satelliteVisibleIntervals(iss, site, sunAt, tle.epoch, timeShift(tle.epoch, 1), { standardMagnitude: -1.8, minimumAltitude: deg(10), maximumMagnitude: 3, maximumSunAltitude: deg(-6) })
+
+console.log(intervals.length) // 1
+
+const [interval] = intervals
+console.log(format(interval.start.time), interval.start.magnitude, interval.start.shadow) // 2020-11-25-22-14-13 0.5436 sunlit
+console.log(format(interval.end.time), interval.end.shadow) // 2020-11-25-22-20-5 umbra — it fades into the Earth's shadow
+console.log(toDeg(interval.culmination.altitude), interval.culmination.magnitude, toDeg(interval.culmination.sunAltitude)) // 38.78 −3.057 −9.358
+```
+
 ### Satellite Visual Magnitude
+
+`satelliteMagnitude(satrec, location, sunAt, time, standardMagnitude)` estimates the apparent visual magnitude of a satellite for a ground observer with the standard-magnitude model of Molczan and McCants: `m = m_std − 15.75 + 2.5·log10(range_km² / f)`, where `f = (1 + cos φ) / 2` is the illuminated fraction of a diffuse sphere and `φ` is the Sun-satellite-observer phase angle. The standard magnitude `m_std` is an empirical constant of each object: its brightness at a range of 1000 km and half illumination (phase angle 90°); about −1.8 is the value usually quoted for the ISS. Smaller magnitudes are brighter.
+
+The result carries the geometry it was computed from: `phaseAngle` (radians, zero at full phase and π at a thin crescent), the slant `range` (AU) and `illuminated`. A satellite inside the Earth's umbra reflects no sunlight, so the magnitude is only meaningful while `illuminated` is true. Penumbra counts as illuminated. The model has no atmospheric extinction near the horizon, no refraction, no specular flares and no dependence on the orientation of the satellite, so it is a planning estimate rather than a photometric prediction. `sunAt` returns the geocentric Sun position (AU, ICRS).
+
+```ts
+import { satelliteMagnitude, satellitePasses } from 'nebulosa/src/astronomy/events/satellite'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
+import { type Time, timeShift } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
+
+const tle = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25544  51.6442  21.4611 0001363  85.7790 274.3535 15.49180547 25697', 'ISS')
+const iss = recordFromTLE(tle)
+const site = geodeticLocation(deg(-46.6361), deg(-23.5475), 0) // São Paulo
+const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0]) // geocentric ICRS, AU
+const standardMagnitude = -1.8
+
+// At the TLE epoch the ISS is in the umbra: the value is not meaningful.
+const dark = satelliteMagnitude(iss, site, sunAt, tle.epoch, standardMagnitude)
+console.log(dark.illuminated) // false
+
+// At the culmination of the second pass of the day the ISS is sunlit, 38.8° above the horizon.
+const [, pass] = satellitePasses(iss, site, tle.epoch, timeShift(tle.epoch, 1), { minAltitude: deg(10) })
+const bright = satelliteMagnitude(iss, site, sunAt, pass.culmination.time, standardMagnitude)
+console.log(bright.magnitude) // −3.057
+console.log(toDeg(bright.phaseAngle)) // 69.20
+console.log(toKilometer(bright.range)) // 651.76
+console.log(bright.illuminated) // true
+```
 
 ### Saturnian Satellite Theory (TASS1.7)
 
