@@ -66,7 +66,7 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Alt-Az Field Rotation
 
-### Angular Diameter Estimates
+### Angular Size and Surface Brightness Estimates
 
 ### Angular Separation and Position Angle
 
@@ -82,6 +82,8 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Astrometric Sample-Grid Interpolation
 
+### Astronomical State Ownership
+
 ### Astronomical Time Arithmetic
 
 ### Astronomical Time Representation and Epochs
@@ -93,6 +95,8 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 ### Barycentric and Heliocentric Light-Time Correction
 
 ### Binary PCK Rotation
+
+### Body-Surface Solar Illumination
 
 ### Carrington Rotation
 
@@ -116,6 +120,8 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Earth Orientation Parameters
 
+### Elliptic Elements to Rectangular State
+
 ### ELP/MPP02 Lunar Theory
 
 ### Ephemeris Observed Positions
@@ -124,11 +130,17 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Ephemeris Path Composition
 
+### Equation of Time
+
 ### Equatorial Ephemeris Interpolation
 
 ### Equatorial Mount Geometric Pointing Errors
 
+### Equinoxes and Solstices
+
 ### ERFA / SOFA Algorithms
+
+### FK5 Precession and ICRS Frame Bias
 
 ### Galactocentric Frame
 
@@ -194,7 +206,7 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Low-Precision Lunar Ephemeris
 
-### Lunar Apsides and Nodes
+### Lunar Apsides
 
 ### Lunar Declination Extrema and Standstills
 
@@ -206,9 +218,15 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Lunar Eclipse Visibility Geometry
 
+### Lunar Libration Extrema
+
 ### Lunar Parallax and Semidiameter
 
 ### Lunar Phase and Lunation
+
+### Lunar Nodes
+
+### Lunar Saros Index
 
 ### Martian Satellite Theory (MARSSAT)
 
@@ -254,7 +272,19 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Planetary Apparent Magnitudes (Mallama and Hilton)
 
+### Planetary Closest Approaches
+
+### Planetary Conjunctions
+
 ### Planetary Disk Transits
+
+### Planetary Greatest Elongations
+
+### Planetary Oppositions
+
+### Planetary Quadratures
+
+### Planetary Stations
 
 ### Planetary Surface Locations
 
@@ -265,6 +295,8 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 ### Precession Matrices
 
 ### Projected Paths and Polygons
+
+### Radial Doppler Shift
 
 ### Radial Velocity Correction
 
@@ -280,15 +312,23 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Satellite Look Angles
 
+### Satellite Ground Footprint
+
+### Satellite Orbit Beta Angle
+
 ### Satellite Passes
 
+### Satellite Sub-point
+
+### Satellite Tracking Rates
+
 ### Satellite Trail Prediction
+
+### Satellite Visibility Intervals
 
 ### Satellite Visual Magnitude
 
 ### Saturnian Satellite Theory (TASS1.7)
-
-### Season Instants and Equation of Time
 
 ### SGP4/SDP4 Propagation
 
@@ -330,7 +370,9 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 
 ### Sub-Observer and Sub-Solar Points
 
-### Surface Brightness Estimates
+### TEME and ITRF Conversion
+
+### Time-Constraint Intervals
 
 ### Time-Domain Event Search
 
@@ -373,6 +415,8 @@ Times, coordinates, ephemerides, and events for bodies and observers.
 ### Native libastrometry Plate Solving
 
 ### Nova Astrometry.net Plate Solving
+
+### Planar Similarity and Affine Transforms
 
 ### Plate Solution
 
@@ -432,6 +476,8 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Elliptical Moffat Fitting
 
+### Eyepiece Magnification and Exit Pupil
+
 ### FFT Image Filter
 
 ### Flat Exposure Estimate
@@ -488,8 +534,6 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### PSF Filter
 
-### Saturation and Sky-Limited Exposure Estimates
-
 ### Scalar Surface Fitting
 
 ### Scientific Image Loading and Export
@@ -516,8 +560,6 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Single-Frame Bad-Pixel Map
 
-### Stacking Gain and Integration Budgets
-
 ### Star Detection
 
 ### Star List Registration
@@ -534,6 +576,8 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Subframe Selector
 
+### Sub-Exposure and Integration Planning
+
 ### Synthetic Bahtinov Spikes
 
 ### Synthetic Defocused Collimation Patterns
@@ -548,7 +592,7 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Synthetic Straight Streaks
 
-### Telescope Optical Estimates
+### Telescope Resolution and Light Grasp
 
 ### Tone Mapping
 
@@ -722,6 +766,8 @@ Evaluate observing conditions and target suitability before scheduling or contro
 
 ### INDI Guide Output
 
+### INDI Mount Alignment Subsystem
+
 ### INDI Mount Control
 
 ### INDI Mount Simulator
@@ -844,6 +890,8 @@ Evaluate observing conditions and target suitability before scheduling or contro
 
 ### Barometric Pressure and Altitude
 
+### Clamping and Tolerant Equality
+
 ### Dense Linear System Solvers
 
 ### Dense Matrix Operations
@@ -856,6 +904,8 @@ Evaluate observing conditions and target suitability before scheduling or contro
 
 ### Ellipse Fitting
 
+### Error-Free Floating-Point Arithmetic
+
 ### Exponential and Power Regression
 
 ### Great-Circle Geometry
@@ -864,13 +914,21 @@ Evaluate observing conditions and target suitability before scheduling or contro
 
 ### Hyperbolic Regression
 
-### Linear and Trend Regression
+### Line Intersection with Spheres and Ellipsoids
 
 ### Linear Least Squares
 
+### Linear Regression
+
 ### Multivariate Minimization
 
+### Modulo and Integer Division
+
 ### Nonlinear Least Squares
+
+### Number Array Type and Detection
+
+### Planar Points and Rectangles
 
 ### Polynomial and Chebyshev Regression
 
@@ -878,9 +936,15 @@ Evaluate observing conditions and target suitability before scheduling or contro
 
 ### Probability Distribution Functions
 
+### Quickselect Order Statistics
+
 ### Random Distributions and Shuffling
 
 ### Rigid Transforms
+
+### Rounding and Integer Conversion
+
+### Scalar Interpolation and Remapping
 
 ### Scalar Minimization
 
@@ -892,9 +956,13 @@ Evaluate observing conditions and target suitability before scheduling or contro
 
 ### Spherical Tangent Planes
 
+### Spherical Triangles and Polygons
+
 ### Splines and Interpolation
 
 ### Temperature Units
+
+### Trend-Line Regression
 
 ### Velocity Units
 
