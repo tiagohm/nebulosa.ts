@@ -7227,6 +7227,99 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Aberration Inspector
 
+`imaging/analysis/aberration/single` inspects the optical quality over the field of one frame from the profiles of its stars (the measurement of each star is in Star Profile). `inspectAberration(image, options?)` detects the stars and measures their profiles, and `inspectAberrationProfiles(width, height, profiles, options?)` takes the profiles already measured (the `profiles` option of the first does the same), which is how a caller reuses a measurement or builds a test. The result has one `AberrationStar` for each profile in the input order (with its normalized position `u` and `v` in `-0.5..0.5`, the weight, whether it was `selected` and the `selectionReasons` and metric `rejections` that explain why not), the `regions` with the median HFD, FWHM, eccentricity and elongation and the axial orientation of each one, the `vectors` of the regions with a coherent orientation (in image pixels, the angle in `[0, PI)`, clockwise because Y grows downward), the `quality` (the counts, the warnings and a confidence in 0..1) and the `findings`. A finding is a qualified pattern (`fieldDegradation`, `singleFrameFocusGradient`, `uniformElongation`, `radialElongation`, `tangentialElongation`, `insufficientData` or `inconclusive`) with a likelihood, a confidence, numeric evidence and the `limitations` that must accompany it. They describe a pattern in one frame and do not name a mechanical cause: a tilt, a curvature or a collimation error cannot be told apart from a single frame, which is the job of the focus scan (see Focus Surface Analysis and Sensor Tilt Estimator). The selection takes the stars per cell of a balancing grid (`selection`, 3 by 3 with at most 20 stars per cell and 200 in all by default) after rejecting the saturated, clipped and blended ones and those below `minimumSNR`, `sigmaClip` rejects the regional outliers of each metric, `maximumEccentricityForSize` leaves the elongated stars out of the HFD and FWHM, and fewer than `minimumStars` selected stars (10 by default) or fewer than two occupied regions are reported as warnings and as an `insufficientData` finding. The regions are a generated layout (`createAberrationRegions`) or custom normalized rectangles, and the result is only as good as the profiles: the false stars of the detector and the profile are not filtered here.
+
+```ts
+import { assignAberrationRegion, buildAberrationField, createAberrationRegions, summarizeAberrationRegions } from 'nebulosa/src/imaging/analysis/aberration/region'
+import { inspectAberrationProfiles } from 'nebulosa/src/imaging/analysis/aberration/single'
+import type { StarProfile } from 'nebulosa/src/imaging/stars/profile'
+
+const width = 1000
+const height = 800
+
+// A deterministic generator keeps the example repeatable.
+let seed = 7
+const random = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296
+
+// A field of 160 measured stars whose size grows with the distance to the center (a field curvature pattern) and whose long axis points along the radius.
+const profiles: StarProfile[] = []
+
+for (let i = 0; i < 160; i++) {
+	const x = 20 + random() * (width - 40)
+	const y = 20 + random() * (height - 40)
+	const r = Math.hypot((x - width / 2) / (width / 2), (y - height / 2) / (height / 2))
+	const hfd = 3 + 2.5 * r * r + (random() - 0.5) * 0.2
+	const eccentricity = 0.1 + 0.4 * r
+	const elongation = 1 / Math.sqrt(1 - eccentricity * eccentricity)
+	const theta = (Math.atan2(y - height / 2, x - width / 2) + Math.PI) % Math.PI
+	profiles.push({ x, y, valid: true, flux: 5000, snr: 60, hfd, fwhm: hfd * 0.9, major: hfd * 0.9 * Math.sqrt(elongation), minor: (hfd * 0.9) / Math.sqrt(elongation), eccentricity, elongation, theta, quality: 1, model: 'moments', flags: [] })
+}
+
+const result = inspectAberrationProfiles(width, height, profiles)
+
+// The support of the inspection: the counts, the confidence and the warnings.
+console.log(result.quality) // 160 detected and profiled, 150 selected (the 10 over the quota of 20 per cell are left out), 9 occupied regions, a confidence of 1 and no warnings
+
+// The regions in layout order (r<row>c<column>): the median HFD in pixels and the usable count of each one, which grow toward the corners.
+console.log(result.regions.map((region) => [region.id, region.medianHFD?.toFixed(2), region.usedStarCountByMetric.hfd])) // r0c0 5.61 (11 stars), r0c1 4.32 (20), r0c2 5.04 (20), r1c0 4.59 (13), r1c1 3.16 (16), r1c2 4.07 (17), r2c0 5.19 (15), r2c1 3.74 (18), r2c2 5.23 (20): the center is the smallest and the corners the largest
+
+// The findings with their kind, likelihood and limitations.
+console.log(result.findings.map((finding) => [finding.kind, finding.likelihood.toFixed(2), finding.confidence.toFixed(2), finding.limitations])) // fieldDegradation (likelihood 1.00, confidence 1.00) and radialElongation (0.95, 1.00), both with the limitation singleFrameOnly
+
+// The vector samples of the regions with a coherent orientation (the center of the region in pixels and the axial angle in radians).
+console.log(result.vectors.slice(0, 3)) // the top-left region at (166.5, 133.2) with theta 0.587, magnitude 1.164, coherence 0.927 and 11 stars; the top-middle one at (499.5, 133.2) with theta 1.412 (the long axis follows the radius), 1.087, 0.841 and 20 stars; the top-right one at (832.5, 133.2) with 2.496, 1.124, 0.912 and 20 stars
+
+// One star: the normalized position, the weight and whether it was selected.
+console.log(result.stars[0].u.toFixed(3), result.stars[0].v.toFixed(3), result.stars[0].weight.toFixed(3), result.stars[0].selected, result.stars[0].selectionReasons) // -0.251 0.394 0.764 true [] (left of the center and below it, selected)
+
+// The selection rejects the saturated, the clipped, the blended and the faint stars and keeps the reason of each one; sigma clipping excludes an outlier of a metric only.
+const flawed = [...profiles]
+flawed[0] = { ...profiles[0], flags: ['saturated'] }
+flawed[1] = { ...profiles[1], snr: 4 }
+const k = result.stars.findIndex((star, i) => star.selected && i > 2)
+flawed[k] = { ...profiles[k], hfd: 40 }
+const inspected = inspectAberrationProfiles(width, height, flawed, { minimumSNR: 10, sigmaClip: 3 })
+console.log(
+	inspected.stars.slice(0, 2).map((star) => [star.selected, star.selectionReasons]),
+	inspected.stars[k].selected,
+	inspected.stars[k].rejections,
+) // the saturated star is not selected (saturated) and the faint one is not selected (belowMinimumSNR); the star of 40 pixels is still selected and only its HFD is excluded as an outlier (hfd: outlier)
+
+// Too few stars: the result says so instead of publishing a pattern.
+const sparse = inspectAberrationProfiles(width, height, profiles.slice(0, 6))
+console.log(
+	sparse.findings.map((finding) => finding.kind),
+	sparse.quality.warnings,
+) // [ 'insufficientData' ] with the warnings insufficientStars (6 selected, 10 needed) and insufficientCoverage (0 occupied regions)
+
+// The layouts: a 3 by 3 grid (the default), the center and the four corners, the center and the four edges, and the octagonal one.
+for (const layout of ['grid', 'centerAndCorners', 'centerAndEdges', 'octagonal'] as const)
+	console.log(
+		layout,
+		createAberrationRegions({ layout }).map((region) => region.id),
+	) // grid has r0c0 to r2c2, centerAndCorners has topLeft, topRight, center, bottomLeft and bottomRight, centerAndEdges has top, left, center, right and bottom, and octagonal has the four corners and the four edges
+
+// A bigger grid with a margin of 5 percent of the sensor, and a custom pair of rectangles in normalized coordinates (-0.5..0.5, Y downward).
+console.log(createAberrationRegions({ columns: 4, rows: 2, margin: 0.05 }).length) // 8
+const halves = createAberrationRegions({
+	regions: [
+		{ id: 'left', left: -0.5, top: -0.5, right: 0, bottom: 0.5 },
+		{ id: 'right', left: 0, top: -0.5, right: 0.5, bottom: 0.5 },
+	],
+})
+console.log(halves.map((region) => region.id)) // [ 'left', 'right' ]
+
+// The index of the region of a normalized position, or -1 outside all of them.
+console.log(assignAberrationRegion(-0.25, 0, halves), assignAberrationRegion(0.25, 0, halves), assignAberrationRegion(0.7, 0, halves)) // 0 1 -1 (left, right and outside)
+
+// The regional summaries of the selected stars for the two halves, and the same with the stricter options of the summary.
+const summaries = summarizeAberrationRegions(result.stars, halves, { minimumStars: 5 })
+console.log(summaries.map((region) => [region.id, region.inputStarCount, region.medianHFD?.toFixed(2), region.deviationHFD?.toFixed(2), region.confidence.toFixed(2)])) // left: 74 input stars, a median HFD of 4.54, a deviation of 1.16 and a confidence of 0.81; right: 86 stars, 4.39, 1.05 and 0.80 (the input count includes the stars that were not selected, the median does not)
+
+// A regular field of one metric for a heatmap (no interpolation): the median of each cell, its count and its confidence.
+console.log(buildAberrationField(result.stars, 'hfd', { columns: 3, rows: 3 }).map((cell) => [cell.column, cell.row, cell.value?.toFixed(2), cell.count])) // the 3 by 3 medians in row order, 5.61, 4.32, 5.04 / 4.59, 3.16, 4.07 / 5.19, 3.74, 5.23, with 11 to 20 stars each, equal to the regions of the inspection
+```
+
 ### Arcsinh Stretch
 
 `arcsinhStretch(image, options?)` applies the PixInsight-style arcsinh stretch to the normalized 0..1 buffer of an `Image`, in place, and returns the same image. A mono image is stretched per sample. An RGB image is stretched through its luminance (the mean of the three channels, or the weights of `rgbWorkingSpace` when `useRgbWorkingSpace` is set), and the three channels are multiplied by the same factor, so the color ratios above the black point are kept. `stretchFactor` (1 or more, 1 by default) sets the strength and `blackPoint` (0..1, 0 by default) is clipped to 0 and the remaining range is renormalized to 0..1 before the stretch. With `protectHighlights` the pixels that exceed 1 after the stretch are not clipped per channel: the whole image is divided by the largest value, so the ratios survive at the cost of a darker image. Non-finite options fall back to the defaults, and a stretch factor of 1 with a black point of 0 returns the image untouched (`DEFAULT_ARCSINH_STRETCH_OPTIONS`). The image is not validated: it must be a mono or interleaved RGB buffer in 0..1.
@@ -7360,6 +7453,47 @@ try {
 
 ### Backfocus Correction Estimates
 
+`imaging/analysis/aberration/physical` turns the best-focus positions of the regions of a focus scan into a spacing correction for a flattener or a reducer. `measureFocusFieldOffset(samples)` takes samples with a normalized position `u` and `v` (`-0.5..0.5`, Y downward), the `bestFocus` of the region in focuser units (a sample without a finite one is skipped) and a `confidence`, and returns a `FocusFieldOffset`: the median best focus of the samples within a radius of 0.2 of the center (`center`), the median of those at a radius of 0.45 or more (`edge`), their difference `centerToEdge` (the periphery minus the center, in the same focuser units) and a confidence in 0..1 (the sum of the confidences of the samples that were used, divided by the number of samples that were given, so the samples between the two radii lower it). It returns `undefined` when the center or the periphery has no usable sample. `estimateBackfocusCorrection(offset, calibration)` converts that offset into a spacing correction with `correction = -centerToEdge / response`, where `response` is the calibrated change of the offset per unit of added optical spacing (in focuser units per unit of length, measured by the user, for instance by moving the spacing by a known amount and repeating the scan). The result is in the unit of the calibration and has its sign convention: the correction is the spacing change that, to first order, brings the offset to zero. The function throws a `RangeError` when the offset is not finite or the response is zero or not finite. Nothing here knows the optical design: the response is a calibration of one train, the offset mixes the curvature of the field with the tilt of the sensor (a tilt makes the center-to-edge difference depend on which edge is sampled), and a linear response is assumed. The scan that produces the samples is in Sensor Tilt Estimator and the curvature is in Focus Field Curvature.
+
+```ts
+import { estimateBackfocusCorrection, measureFocusFieldOffset } from 'nebulosa/src/imaging/analysis/aberration/physical'
+
+// Best-focus positions of nine regions of a 3 by 3 grid (focuser steps): the center and the edge regions are 4500 and 4560 steps.
+const samples = [
+	{ u: 0, v: 0, bestFocus: 4500, confidence: 0.9 },
+	{ u: -0.45, v: -0.45, bestFocus: 4562, confidence: 0.8 },
+	{ u: 0.45, v: -0.45, bestFocus: 4558, confidence: 0.8 },
+	{ u: -0.45, v: 0.45, bestFocus: 4561, confidence: 0.8 },
+	{ u: 0.45, v: 0.45, bestFocus: 4559, confidence: 0.8 },
+	{ u: 0.1, v: 0.1, bestFocus: 4502, confidence: 0.9 },
+]
+
+// The offset of the periphery from the center, the two medians and the confidence (the support of the used samples over all of them).
+const offset = measureFocusFieldOffset(samples)!
+console.log(offset) // { centerToEdge: 59, center: 4501, edge: 4560, confidence: 0.833 } (the median of the two center samples, 4500 and 4502, and of the four corners)
+
+// A sample between the radii (0.2 to 0.45) is ignored and lowers the confidence; one without a best focus is skipped.
+console.log(measureFocusFieldOffset([...samples, { u: 0.3, v: 0, bestFocus: 4530, confidence: 1 }, { u: 0.4, v: 0.4, confidence: 0.5 }])) // the same offset with the confidence lowered to 0.625: the sample at a radius of 0.3 is ignored and the one without a best focus is skipped, but both count in the denominator
+
+// Without a center or without a periphery there is nothing to compare.
+console.log(measureFocusFieldOffset(samples.filter((sample) => Math.hypot(sample.u, sample.v) > 0.2)), measureFocusFieldOffset(samples.filter((sample) => Math.hypot(sample.u, sample.v) <= 0.2))) // undefined and undefined (no center sample, then no peripheral one)
+
+// A calibration of 80 steps of offset for each 1 mm of added spacing: the spacing correction in millimeters, negative of the offset over the response.
+console.log(estimateBackfocusCorrection(offset, { response: 80 })) // { correction: -0.7375 } millimeters: the spacing should be reduced by 0.7375 mm for this calibration sign
+
+// A response of the opposite sign gives the opposite correction, and a zero offset needs none.
+console.log(estimateBackfocusCorrection(offset, { response: -80 }).correction, estimateBackfocusCorrection({ ...offset, centerToEdge: 0 }, { response: 80 }).correction) // 0.7375 and -0 (the zero offset needs no correction, and the sign of the zero is the negative one of the formula)
+
+// A zero response or a non-finite offset is an error.
+for (const test of [() => estimateBackfocusCorrection(offset, { response: 0 }), () => estimateBackfocusCorrection({ ...offset, centerToEdge: Number.NaN }, { response: 80 })]) {
+	try {
+		test()
+	} catch (e) {
+		console.log((e as Error).message) // both fail with 'finite non-zero calibration response is required'
+	}
+}
+```
+
 ### Background Estimate
 
 `estimateBackground(image)` returns a robust `{ background, noise, snr }` of one frame, for a quick quality check that does not need star detection. The frame is split into a grid of at most 8 by 8 cells (fewer for a frame that is smaller than 8 pixels on a side), a regular lattice of at most `floor(4096 / cells)` pixels is read in each cell, and the `background` is the median of the cell medians, in the sample scale of the image. `noise` is the normalized median absolute deviation (scaled to a Gaussian standard deviation) of all the sampled pixels about the background, and `snr` is the median of the brightest cell minus the background, in units of that noise: 0 when the excess is not positive, and `Infinity` when it is positive and the noise is 0. At most 4096 pixels are examined, so the cost does not grow with the frame and the result is a deterministic approximation; a star smaller than the lattice step can be missed. A color image is read through its BT.709 luminance, a raw CFA mosaic is read as raw photosite values (the colors of the pattern are not separated, so a strongly colored mosaic widens the noise), non-finite samples are skipped, and an empty frame returns zeros. Because the background is a median of cells, a nebula or a gradient that covers most of the frame raises it.
@@ -7465,6 +7599,107 @@ try {
 ### Bahtinov Chromatic Comparison
 
 ### Bahtinov Focus Analysis
+
+`analyzeBahtinov(input, workspace, options?)` in `imaging/analysis/bahtinov/bahtinov` measures the focus error of a star seen through a Bahtinov mask: the three diffraction spikes are found in a region of the image, fitted as lines and the signed distance from the central spike to the intersection of the two external ones is the error, in pixels. The `input` has the normalized `image` (mono, RGB or CFA, never mutated), the required approximate star `center` in full-image pixel centers, and either an explicit half-open `area` (`{ left, top, right, bottom }`) or a square `size` in pixels (the default is a region built by `resolveBahtinovArea` around the center and kept inside the image), plus an optional `expected` prior (`centralNormalAngle`, `externalNormalAngles` and `maximumAngleDelta`, all in radians) that only ranks candidates that are already supported. `createBahtinovWorkspace(width, height, options?)` in `imaging/analysis/bahtinov/preprocess` allocates the reusable buffers for a region of at most that size (at least 16 pixels per side is required, and the `angleStep` and `distanceStep` of the Hough grid and the `maximumRidgePoints` can be set, and `precision` is 32 or 64 bits); a workspace is not safe to use for two analyses at once. The pipeline is: extract the plane (`plane`: `auto` for mono, BT.709 luminance or the two greens of a CFA, or one channel), estimate the background and mask the saturated core, build a difference-of-Gaussians ridge response, vote the ridge points in a Hough accumulator, refine each candidate line by a robust fit, choose a central spike and two external ones whose bisector agrees with the central one and compute the geometry. The result is a union. On `success` it has the `area` used, the `reference` (the intersection of the external lines in the image), `centralLine` and `externalLines` (each with its normal-form `normalAngle` and `distance`, `strength`, `signalToNoise`, `fwhm`, `coverage`, `balance`, `residual`, `covariance` and the visible `segment`), the signed `error` in pixels (the projection of the reference on the central normal minus the distance of the central line, so positive when the central line is on the negative side of the reference along its normal, which is the sign that `plotBahtinovSpikes` draws), the `absoluteError`, a `focusProximity` (1 at zero error and 0.5 at the tolerance), the `uncertainty` of the error when it can be estimated, the `focusState` (`focused` when the error plus `focusSigma` times the uncertainty is within `focusTolerance`, `defocused` when the error minus that is beyond it, both only when the uncertainty is at most `maximumUncertainty` and the `confidence` at least `minimumConfidence`, and `indeterminate` otherwise), the `confidence` (an evidence score, not a probability), its `quality` components and the `warnings` (such as `patternCropped`). A failure has a `reason` (`unsupportedPlane`, `insufficientArea`, `lowSignal`, `insufficientSupport`, `patternNotFound`, `ambiguousPattern`, `saturated` or `illConditioned`) and the same kind of warnings, without made-up lines. Structural errors (a center outside the image, an area out of bounds or an option that does not match the workspace grid) throw a `RangeError`. `DEFAULT_BAHTINOV_ANALYSIS_OPTIONS` holds the defaults of every option (a tolerance of 0.25 pixel, a maximum uncertainty of 0.5 pixel, a minimum confidence of 0.2 and a minimum signal-to-noise of 3, among others). The measure is geometric: it does not know the focuser, so the sign and the scale of the error to a focuser move are a calibration of the user, and the mask must be one of three spikes that agree with the bisector rule. The geometry helpers in `imaging/analysis/bahtinov/geometry` are exported for tests and tools and work on normal-form lines `{ normalAngle, distance }` (the line `x cos(a) + y sin(a) = distance`). The stages are exported too: `preprocessBahtinov`, `detectBahtinovHoughCandidates` and `validateBahtinovHoughOptions` (the Hough grid), `fitBahtinovLine` and `fitBahtinovLines`, and `bahtinovLineSaturationRetention`. The color comparison is in Bahtinov Chromatic Comparison, the drawing of the result is in Bahtinov Overlay Geometry and the synthetic pattern is in Synthetic Bahtinov Spikes.
+
+```ts
+import { analyzeBahtinov } from 'nebulosa/src/imaging/analysis/bahtinov/bahtinov'
+import { bahtinovAxialAngleDistance, bahtinovAxialBisectors, bahtinovFocusProximity, bahtinovGlobalLineDistance, canonicalizeBahtinovLine, clipBahtinovLineToArea, computeBahtinovFocusGeometry, intersectBahtinovLines } from 'nebulosa/src/imaging/analysis/bahtinov/geometry'
+import { createBahtinovWorkspace, resolveBahtinovArea } from 'nebulosa/src/imaging/analysis/bahtinov/preprocess'
+import { DEFAULT_BAHTINOV_ANALYSIS_OPTIONS, type BahtinovAnalysisOptions } from 'nebulosa/src/imaging/analysis/bahtinov/types'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+import { plotBahtinovSpikes } from 'nebulosa/src/imaging/stars/bahtinov'
+
+const width = 200
+const height = 200
+let seed = 5
+const random = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967295
+
+// A mono image of a flat pedestal of 0.05 with a little noise and a Bahtinov pattern whose central spike is `error` pixels off.
+function render(error: number, flux: number = 40): Image {
+	const raw = new Float64Array(width * height)
+	for (let i = 0; i < raw.length; i++) raw[i] = 0.05 + (random() - 0.5) * 0.004
+	plotBahtinovSpikes(raw, width, height, 1, 100, 100, flux, error, undefined, { halfLength: 80 })
+	return { header: {}, raw, metadata: { width, height, channels: 1, pixelCount: width * height, stride: width, strideInBytes: width * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+}
+
+// A workspace for a region of up to 160 by 160 pixels, reused by every analysis below.
+const workspace = createBahtinovWorkspace(160, 160)
+const center = { x: 100, y: 100 }
+
+// A pattern drawn 1.5 pixels off: the signed error, its uncertainty, the state, the confidence and the warnings.
+const result = analyzeBahtinov({ image: render(1.5), center, size: 160 }, workspace)
+if (result.success) console.log(result.area, result.reference, result.error.toFixed(3), result.absoluteError.toFixed(3), result.focusProximity.toFixed(3), result.uncertainty?.toFixed(3), result.focusState, result.confidence.toFixed(3), result.warnings) // area { left: 21, top: 21, right: 181, bottom: 181 }, reference (100.055, 99.991), error 1.674 (the drawn 1.5 is read 0.17 pixel high with this noise), absolute error 1.674, proximity 0.130, uncertainty 0.059, defocused, confidence 0.784, one patternCropped warning with coverage 0.75 (the 160 pixel region cuts the 80 pixel spikes)
+
+// The three fitted lines: normal angles in radians (the central one at 0 and the externals at 15 degrees), strength, signal-to-noise and the evidence of the fit.
+if (result.success) for (const line of [result.centralLine, ...result.externalLines]) console.log(line.normalAngle.toFixed(4), line.distance.toFixed(2), line.signalToNoise.toFixed(1), line.fwhm.toFixed(2), line.coverage.toFixed(3), line.balance.toFixed(3), line.residual.toFixed(3), line.segment) // central 0.0002 rad, distance 98.40, SNR 96.4, FWHM 2.78 px, coverage 0.962, balance 0.980, residual 0.619; externals 0.2616 rad (15.0 degrees, distance 122.51, SNR 87.3, FWHM 2.52) and 2.8796 rad (165.0 degrees, distance -70.74, SNR 86.5, FWHM 2.51), each with a segment clipped to the region from y = 21 to y = 180
+if (result.success) console.log(result.quality) // signal 0.966, lineStrength 0.916, lineCoverage 0.918, lineBalance 0.969, lineFit 0.646, angularSymmetry 0.992, intersectionCondition 0.500 (the sine of the 30 degrees between the externals), saturationRetention 1, cropCoverage 0.75, candidateSeparation 0.461
+
+// The sign and the state follow the offset: an error of zero, of 0.1 pixel, of -3 pixels and of 6 pixels.
+for (const error of [0, 0.1, -3, 6]) {
+	const r = analyzeBahtinov({ image: render(error), center, size: 160 }, workspace)
+	if (r.success) console.log(error, r.error.toFixed(3), r.focusProximity.toFixed(3), r.focusState) // errors read 0.062 (drawn 0), 0.034 (drawn 0.1), -3.202 (drawn -3) and 5.954 (drawn 6) pixels: the sign follows the drawn offset, proximity falls from 0.80 to 0.04 and the states are focused, focused, defocused, defocused; a fraction of a pixel is within the noise of the measurement
+}
+
+// The state is focused when the error plus focusSigma times its uncertainty is within the tolerance, defocused when the error minus that is beyond it and indeterminate in between or when the confidence or the uncertainty fail their limits: the same 0.33 pixel measurement with the default tolerance (indeterminate), with a tolerance of 0.5 (focused) and with an impossible confidence (indeterminate).
+const near = render(0.4)
+for (const options of [{}, { focusTolerance: 0.5 }, { focusTolerance: 0.5, minimumConfidence: 0.99 }] as BahtinovAnalysisOptions[]) {
+	const r = analyzeBahtinov({ image: near, center, size: 160 }, workspace, options)
+	if (r.success) console.log(r.error.toFixed(3), r.focusState, r.focusProximity.toFixed(3)) // -0.328 indeterminate 0.433 for the defaults, -0.328 focused 0.604 with a tolerance of 0.5, and -0.328 indeterminate 0.604 with a minimum confidence of 0.99 (the 0.4 pixel drawn offset is read as -0.328 in this noisy render)
+}
+
+// An explicit area instead of a size, and the resolved area for a center near the edge (kept inside the image).
+const explicit = analyzeBahtinov({ image: near, center, area: { left: 30, top: 30, right: 170, bottom: 170 } }, workspace)
+console.log(explicit.success ? explicit.area : explicit.reason, resolveBahtinovArea({ image: near, center: { x: 10, y: 190 }, size: 100 })) // area { left: 30, top: 30, right: 170, bottom: 170 } as given, and { left: 0, top: 100, right: 100, bottom: 200 } for a center at (10, 190) with size 100
+
+// The expected mask angles (radians) are a prior: the right ones give the same measurement, and ones that no candidate agrees with (within the maximum delta) leave no pattern.
+const mask = { centralNormalAngle: 0, externalNormalAngles: [Math.PI / 12, (Math.PI * 11) / 12] as const }
+const agreeing = analyzeBahtinov({ image: near, center, size: 160, expected: mask }, workspace)
+const disagreeing = analyzeBahtinov({ image: near, center, size: 160, expected: { centralNormalAngle: 1, externalNormalAngles: [1.3, 0.7], maximumAngleDelta: 0.05 } }, workspace)
+console.log(agreeing.success ? agreeing.error.toFixed(3) : agreeing.reason, disagreeing.success ? disagreeing.warnings.map((w) => w.code) : disagreeing.reason) // -0.328 for the right mask, and patternNotFound when the expected angles (central 1 rad, externals 1.3 and 0.7 rad) differ from every candidate by more than 0.05 rad
+
+// The failures keep the reason without any geometry: no pattern at all, a pattern too faint to be supported, a saturated one (the flux is far above the saturation level) and a plane that a mono image does not have.
+const failures = [
+	analyzeBahtinov({ image: render(0, 1e-9), center, size: 160 }, workspace),
+	analyzeBahtinov({ image: render(0.4, 1), center, size: 160 }, workspace),
+	analyzeBahtinov({ image: render(0.4, 40000), center, size: 160 }, workspace),
+	analyzeBahtinov({ image: near, center, size: 160 }, workspace, { plane: 'red' }),
+]
+console.log(failures.map((r) => (r.success ? 'success' : [r.reason, r.warnings.length]))) // [patternNotFound, 0], [insufficientSupport, 0], [saturated, 0], [unsupportedPlane, 0]
+
+// The structural errors throw: a center outside the image and a workspace smaller than the region.
+for (const test of [() => analyzeBahtinov({ image: near, center: { x: 300, y: 100 }, size: 160 }, workspace), () => analyzeBahtinov({ image: near, center, size: 190 }, workspace), () => createBahtinovWorkspace(4, 4)]) {
+	try {
+		test()
+	} catch (e) {
+		console.log((e as Error).message) // Bahtinov center must be finite and inside the image pixel-center domain, Bahtinov workspace is smaller than the resolved ROI, width must be an integer at least 16
+	}
+}
+
+// The defaults of the options.
+console.log(DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.focusTolerance, DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.maximumUncertainty, DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.minimumConfidence, DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.minimumSignalToNoise, DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.transform) // 0.25 0.5 0.2 3 sqrt
+
+// Geometry: a normal angle outside [0, PI) is folded back and the distance changes sign with it.
+console.log(canonicalizeBahtinovLine(-Math.PI / 4, 10), canonicalizeBahtinovLine(Math.PI, 5)) // { normalAngle: 2.356 (3 PI / 4), distance: -10 } and { normalAngle: 0, distance: -5 }
+
+// The axial separation of two normals (0 to PI / 2) and the two bisectors, which are PI / 2 apart.
+console.log(bahtinovAxialAngleDistance(0.1, Math.PI - 0.1), bahtinovAxialBisectors(Math.PI / 12, (Math.PI * 11) / 12)) // 0.2 (the normals 0.1 and PI - 0.1 are 0.2 rad apart axially), bisectors [0, PI / 2]
+
+// Two lines meet at a point with the determinant of their normals and its absolute value as the condition; parallel lines have no intersection.
+console.log(intersectBahtinovLines({ normalAngle: 0, distance: 100 }, { normalAngle: Math.PI / 2, distance: 40 }), intersectBahtinovLines({ normalAngle: 0, distance: 1 }, { normalAngle: 0, distance: 2 })) // point (100, 40) with determinant 1 and condition 1 for perpendicular lines, and undefined for the parallel ones
+
+// The distance in the full image of a vertical line that is 20 pixels from the left edge of a region starting at (30, 20).
+console.log(bahtinovGlobalLineDistance(20, 0, { left: 30, top: 20, right: 190, bottom: 180 })) // 50
+
+// The visible segment of a line in a region (pixel centers: the right and bottom edges are exclusive), and none when it misses.
+console.log(clipBahtinovLineToArea({ normalAngle: 0, distance: 100 }, { left: 20, top: 20, right: 180, bottom: 180 }), clipBahtinovLineToArea({ normalAngle: 0, distance: 300 }, { left: 20, top: 20, right: 180, bottom: 180 })) // the segment from (100, 20) to (100, 179) for the line x = 100, and undefined for x = 300
+
+// The proximity is 1 at zero, 0.5 at the tolerance and falls with the error.
+console.log([0, 0.125, 0.25, 0.5, 2].map((e) => bahtinovFocusProximity(e, 0.25).toFixed(3))) // 1.000, 0.667, 0.500, 0.333, 0.111
+
+// The focus geometry of one central and two external lines: the reference point, the signed error and the condition of the external intersection.
+console.log(computeBahtinovFocusGeometry({ normalAngle: 0, distance: 101.5 }, { normalAngle: Math.PI / 12, distance: 100 * (Math.cos(Math.PI / 12) + Math.sin(Math.PI / 12)) }, { normalAngle: (Math.PI * 11) / 12, distance: 100 * (Math.cos((Math.PI * 11) / 12) + Math.sin((Math.PI * 11) / 12)) }, 0.25)) // reference (100, 100), error -1.5, absolute error 1.5, proximity 0.143, intersection condition 0.500 (the central line at 101.5 is 1.5 pixels beyond the reference along +X)
+```
 
 ### Bahtinov Overlay Geometry
 
@@ -7698,7 +7933,46 @@ try {
 
 ### Critical Focus Planning Estimate
 
+`criticalFocusZone(wavelengthMicrons, focalRatioN)` in `astronomy/formulas` is the planning rule `4.88 * wavelength * N^2`: the width in micrometers of the range of focuser travel over which a telescope of focal ratio `N` stays in focus at a given wavelength (about 0.55 micrometers for visual or luminance light). It depends only on the focal ratio, not on the aperture or the focal length, so a faster telescope has a much narrower zone: it scales with the square of `N`. The result is an optical depth of focus, not a focuser setting, and it says nothing about the seeing, the sensor, the field curvature or the mechanical slop of the focuser (compare it with the measured step size of the focuser and its backlash, see Focuser Backlash Calibration). Neither input is validated. The same name is exported by `imaging/analysis/aberration/physical`, with a different convention and signature (a semi-amplitude in the caller's unit, see Critical Focus Zone): do not mix the two.
+
+```ts
+import { criticalFocusZone } from 'nebulosa/src/astronomy/formulas'
+
+// An f/5 telescope in green light (0.55 micrometers): the zone in micrometers.
+console.log(criticalFocusZone(0.55, 5)) // 67.1 micrometers
+
+// The same wavelength at f/2 and f/10: the zone follows N squared, 25 times wider at f/10 than at f/2.
+console.log(criticalFocusZone(0.55, 2), criticalFocusZone(0.55, 10), criticalFocusZone(0.55, 10) / criticalFocusZone(0.55, 2)) // 10.736, 268.4 and a ratio of 25 micrometers
+
+// The wavelength scales it linearly: blue (0.45), green (0.55) and near infrared (0.85) light at f/4.
+console.log([0.45, 0.55, 0.85].map((wavelength) => criticalFocusZone(wavelength, 4).toFixed(2))) // 35.14, 42.94 and 66.37 micrometers
+```
+
 ### Critical Focus Zone
+
+`criticalFocusZone(options)` in `imaging/analysis/aberration/physical` returns the permitted focus displacement on one side of best focus, a semi-amplitude, in one consistent length unit chosen by the caller. The default `diffraction` criterion is `wavelength * focalRatio^2` (the wavelength must be in the unit that the caller wants back, so a wavelength in micrometers gives micrometers) and the `callerProvided` criterion returns a tolerance given explicitly, for the cases where the camera, the seeing or the manual of the instrument fixes it. Both return `{ tolerance, criterion }`. The function throws a `RangeError` when a value that the chosen criterion needs is missing, not finite or not positive. It is a tolerance to compare with the physical focus offsets of the focus scan (a tilt or a curvature in `focusDisplacement` units, see Backfocus Correction Estimates and Sensor Tilt Estimator): it does not know the sensor, the seeing or the pixel size. The planning formula with the factor 4.88 and a full width is in Critical Focus Planning Estimate, and it is not the same convention.
+
+```ts
+import { criticalFocusZone } from 'nebulosa/src/imaging/analysis/aberration/physical'
+
+// The diffraction convention for an f/5 telescope at 0.55 micrometers: a semi-amplitude in micrometers (the default criterion).
+console.log(criticalFocusZone({ focalRatio: 5, wavelength: 0.55 })) // { tolerance: 13.75, criterion: 'diffraction' }, in micrometers
+
+// The same value written with the criterion, and in millimeters when the wavelength is in millimeters (0.00055 mm).
+console.log(criticalFocusZone({ criterion: 'diffraction', focalRatio: 5, wavelength: 0.00055 })) // { tolerance: 0.01375, criterion: 'diffraction' }, in millimeters
+
+// An explicit tolerance of 15 micrometers, returned unchanged.
+console.log(criticalFocusZone({ criterion: 'callerProvided', tolerance: 15 })) // { tolerance: 15, criterion: 'callerProvided' }
+
+// A missing, zero or non-finite value is an error, whichever criterion needs it.
+for (const options of [{ focalRatio: 5 }, { focalRatio: 0, wavelength: 0.55 }, { criterion: 'callerProvided' as const }, { criterion: 'callerProvided' as const, tolerance: Number.NaN }]) {
+	try {
+		criticalFocusZone(options)
+	} catch (e) {
+		console.log((e as Error).message) // the first two (no wavelength, a zero focal ratio) fail with 'finite positive focal ratio and wavelength are required' and the last two (no tolerance, a NaN tolerance) with 'a finite positive caller-provided tolerance is required'
+	}
+}
+```
 
 ### Curves
 
@@ -8150,9 +8424,176 @@ try {
 
 ### Focus Curve Fitting
 
+`fitAberrationFocusCurve(points, options?)` in `imaging/analysis/aberration/focus` fits the size of the stars against the focuser position (the V-shaped or parabolic curve of a focus run) and returns the position of best focus. The points are `{ position, value, weight?, starCount? }`: the focuser position in the caller's unit and a positive HFD or FWHM in pixels (the aggregated value of one frame or of one region of a frame, see Aberration Inspector), with an optional positive weight. Models: `quadratic` (the default, a robust parabola, the minimum at its vertex), `hyperbolic` (the usual hyperbola of a defocused star, whose minimum is the value at its center), `trendLines` (two straight lines fitted to the two sides of the V, which cross at the minimum) and `auto`, which fits all of them and keeps the one with the lowest penalized error over the points that all of them retained. The fits are robust (Tukey weights, `sigmaClip` is the tuning constant and `maxIterations` the cap), and a point whose final weight is negligible is flagged `false` in `used` and counted in a `robustOutliers` warning. The result is a discriminated union: on `success` it has the `model`, the `minimum` (`x` is the best focus in the position unit and `y` the curve value there, in pixels), the `uncertainty` of the position (only for the quadratic, and only with positive residual degrees of freedom), the `rms` and `r2` over the used points, the `conditionNumber`, a bounded `confidence` and the warnings (such as `minimumNearRangeEdge`). On failure it has a `reason`: `invalidInput` (a non-finite or non-positive value, a position or a weight, or all positions equal), `insufficientPoints` (fewer than `minimumPoints`, never fewer than five), `insufficientSides` (fewer than `minimumPointsPerSide`, 2 by default, on either side of the minimum), `nonConvex` (no minimum), `minimumOutsideRange` (the minimum is outside the sampled positions, unless `requireMinimumInsideRange` is false), `illConditioned`, `nonConvergent` and `excessiveRejection`. The minimum of a model is the minimum of that model: the quadratic is biased on a V-shaped curve (it gives 4535 for a hyperbola centered at 4540 in the example) and the crossing of the two lines can be lower than every measured value. The metric must be the same for all the points and the curve is only meaningful when the points bracket the minimum. How a result enters a focus surface is in Focus Surface Analysis.
+
+```ts
+import { fitAberrationFocusCurve, type AberrationFocusPoint } from 'nebulosa/src/imaging/analysis/aberration/focus'
+
+// Eleven HFD measurements (pixels) every 100 steps across a hyperbolic curve whose best focus is 4540 steps, with a floor of 2.2 pixels.
+const points: AberrationFocusPoint[] = Array.from({ length: 11 }, (_, i) => {
+	const position = 4000 + i * 100
+	return { position, value: Math.sqrt(2.2 ** 2 + (0.01 * (position - 4540)) ** 2) }
+})
+
+// Each model on the same data: the hyperbola recovers the curve it was drawn from, the quadratic is slightly off and the trend lines cross below the data.
+for (const model of ['quadratic', 'hyperbolic', 'trendLines'] as const) {
+	const fit = fitAberrationFocusCurve(points, { model })
+	if (fit.success) console.log(model, fit.minimum.x.toFixed(1), fit.minimum.y.toFixed(3), fit.uncertainty?.toFixed(2), fit.rms.toExponential(2), fit.r2.toFixed(4), fit.confidence.toFixed(3)) // quadratic: 4535.1 steps, a minimum of 2.405 pixels, an uncertainty of 6.28 steps, an rms of 0.143 pixels, an r2 of 0.9851 and a confidence of 0.947; hyperbolic: 4540.0, 2.200, no uncertainty, an rms of 4.4e-16 (the data are exactly a hyperbola), an r2 of 1 and 0.892; trendLines: 4539.2, 1.680 (below every measured value), no uncertainty, 0.148, 0.9840 and 0.931
+}
+
+// The automatic mode keeps the best model by its penalized error: the hyperbola for this curve, and the parabola for a true parabola.
+const parabola = points.map((point) => ({ ...point, value: 2 + 3 * ((point.position - 4500) / 400) ** 2 }))
+for (const data of [points, parabola]) {
+	const fit = fitAberrationFocusCurve(data, { model: 'auto' })
+	if (fit.success) console.log(fit.model, fit.minimum.x.toFixed(1)) // auto keeps hyperbolic with 4540.0 for the first data and quadratic with 4500.0 for the parabola
+}
+
+// One bad point (a measurement that is 6 pixels too large) is rejected by the robust weights: the point is flagged, a warning explains why, and the minimum is hardly moved.
+const outlier = points.map((point, i) => (i === 3 ? { ...point, value: point.value + 6 } : point))
+const robust = fitAberrationFocusCurve(outlier, { model: 'hyperbolic' })
+if (robust.success)
+	console.log(
+		robust.minimum.x.toFixed(1),
+		robust.used.indexOf(false),
+		robust.warnings.map((warning) => warning.code),
+	) // 4540.0, the flagged index is 3 and the warning is robustOutliers
+
+// The weights of the points count in the fit: the five first points with a tenth of the weight move the quadratic minimum.
+const weighted = fitAberrationFocusCurve(points.map((point, i) => ({ ...point, weight: i < 5 ? 0.1 : 1 })))
+if (weighted.success) console.log(weighted.minimum.x.toFixed(1)) // 4528.7 against 4535.1 without the weights
+
+// The failures: too few points, a minimum beyond the sampled range, an inverted curve, one side with too few points and an invalid value.
+const reasons = [
+	fitAberrationFocusCurve(points.slice(0, 4)),
+	fitAberrationFocusCurve(points.slice(0, 6)),
+	fitAberrationFocusCurve(points.map((point) => ({ ...point, value: 8 - point.value }))),
+	fitAberrationFocusCurve(points, { minimumPointsPerSide: 7 }),
+	fitAberrationFocusCurve(points.map((point) => ({ ...point, value: -1 }))),
+].map((fit) => (fit.success ? 'success' : fit.reason))
+console.log(reasons) // [ 'insufficientPoints', 'minimumOutsideRange', 'nonConvex', 'insufficientSides', 'invalidInput' ]
+
+// The V is almost at the first position, so only one point lies below the minimum: the hyperbola reports insufficientSides and the quadratic reports nonConvergent.
+for (const model of ['quadratic', 'hyperbolic'] as const) {
+	const edge = fitAberrationFocusCurve(
+		points.map((point) => ({ ...point, value: Math.sqrt(2.2 ** 2 + (0.01 * (point.position - 4020)) ** 2) })),
+		{ model },
+	)
+	console.log(model, edge.success ? 'success' : edge.reason) // quadratic reports nonConvergent and hyperbolic reports insufficientSides
+}
+```
+
 ### Focus Field Curvature
 
+The quadratic part of a focus surface is the curvature of the field: how much the best focus changes from the center to the edges (the surface and its fit are in Focus Surface Analysis). `analyzeFocusCurvature(coefficients)` in `math/numerical/surface.fit` takes the coefficients `{ c, ax, ay, qxx, qxy, qyy }` of the surface in normalized sensor coordinates and the focuser unit and returns a `FocusCurvatureAnalysis` of the quadratic terms alone (`c`, `ax` and `ay` are not used, except for the stationary point). The Hessian is `[[2 qxx, qxy], [qxy, 2 qyy]]` and `principalX` and `principalY` are its two eigenvalues, `qxx + qyy` plus and minus `hypot(qxx - qyy, qxy)`: the larger and the smaller principal curvature in focus units per normalized unit squared (a round bowl `qxx = qyy = q` has both equal to `2 q`). A positive value means that the best focus grows from the center to the edge in that direction, a negative one that it falls. `orientation` is the axial direction of the larger one in `[0, PI)` and `anisotropy` the relative separation of the two in 0..1, both `undefined` for a round bowl; `centerToEdge` is `(qxx + qyy) / 4`, the mean corner focus minus the center focus due to the curvature alone; `effect` is the peak-to-peak range of the curvature alone over the sensor, found analytically; and `stationaryPoint` is the point where the full surface (with the gradient) has its minimum or maximum, `undefined` when the Hessian is singular (a pure trough, or a plane). `analyzePhysicalCurvature(coefficients, width, height, scale)` in `imaging/analysis/aberration/physical` converts the curvature into a physical one, in the inverse of the caller's length unit, with `scale = { pixelSize, focusDisplacement }`: `pixelSize` is the effective sensor pixel pitch (binning included) in the same length unit and `focusDisplacement` is the signed displacement of the focal plane for one unit of the focuser. It returns the two principal curvatures `principalX` and `principalY` and their radii `radiusX` and `radiusY` (the reciprocals, `undefined` near zero, finite for a curved focal surface and positive or negative with the sign of the curvature) in the small-slope approximation. It throws a `RangeError` when the dimensions are not integers larger than one, when the pixel size is not positive and finite, when the displacement is zero or not finite, or when a coefficient is not finite. The curvature of an optical train is a property of the design (a flattener or a reducer corrects it) and of the spacing, and the result does not separate it from a mechanical effect; the scale is the caller's calibration and its error is not propagated.
+
+```ts
+import { analyzePhysicalCurvature } from 'nebulosa/src/imaging/analysis/aberration/physical'
+import { analyzeFocusCurvature } from 'nebulosa/src/math/numerical/surface.fit'
+
+// A bowl-shaped field: the best focus is 200 steps farther at the corners of the sensor than at the center, in both directions.
+const bowl = { c: 4500, ax: 0, ay: 0, qxx: 200, qxy: 0, qyy: 200 }
+console.log(analyzeFocusCurvature(bowl)) // a stationary point at the center, principalX and principalY of 400 (twice the 200 of each coefficient), no orientation and no anisotropy, a centerToEdge of 100 steps and an effect of 100 steps
+
+// The same bowl with a tilt of 60 steps along X: the stationary point moves off the center and the curvature terms are the same.
+console.log(analyzeFocusCurvature({ ...bowl, ax: 60 })) // the same curvature terms and a stationary point at (-0.15, 0), since -ax / (2 qxx) = -60 / 400
+
+// An astigmatic field: more curvature along X than along Y, and a mixed term that turns the axes.
+console.log(analyzeFocusCurvature({ c: 4500, ax: 0, ay: 0, qxx: 260, qxy: 80, qyy: 140 })) // principalX 544.22 and principalY 255.78, an orientation of 0.294 rad, an anisotropy of 0.530, a centerToEdge of 100 and an effect of 120 steps, with the stationary point at the center
+
+// A saddle (opposite signs) and a trough (curved in one direction only): the effect and the stationary point change.
+console.log(analyzeFocusCurvature({ c: 4500, ax: 0, ay: 0, qxx: 150, qxy: 0, qyy: -150 })) // a saddle: principalX 300 and principalY -300, an orientation of 0, an anisotropy of 1, a centerToEdge of 0 (the corners cancel) and an effect of 75 steps
+console.log(analyzeFocusCurvature({ c: 4500, ax: 0, ay: 0, qxx: 150, qxy: 0, qyy: 0 })) // a trough: principalX 300 and principalY 0, an anisotropy of 1, a centerToEdge and an effect of 37.5 steps and no stationary point (the Hessian is singular)
+
+// A plane has no curvature at all.
+console.log(analyzeFocusCurvature({ c: 4500, ax: 40, ay: 20, qxx: 0, qxy: 0, qyy: 0 })) // all zero, with no orientation, anisotropy or stationary point
+
+// The physical curvature of the bowl on a 4000 by 3000 sensor of 0.004 mm pixels where one focuser step moves the focal plane by 0.001 mm: curvatures in 1/mm, radii in mm.
+const physical = analyzePhysicalCurvature(bowl, 4000, 3000, { pixelSize: 0.004, focusDisplacement: 0.001 })
+console.log(physical) // principalX 0.002780 and principalY 0.001563 per mm, with radii of 359.76 and 639.68 mm (the larger curvature is along the short side of the sensor)
+
+// On a 3000 by 3000 sensor the same bowl is round and its radius is the one of the short side above, and a flat field has no radius.
+console.log(analyzePhysicalCurvature(bowl, 3000, 3000, { pixelSize: 0.004, focusDisplacement: 0.001 }).radiusX, analyzePhysicalCurvature({ ...bowl, qxx: 0, qyy: 0 }, 4000, 3000, { pixelSize: 0.004, focusDisplacement: 0.001 })) // 359.76 for the square sensor, and zero curvatures with undefined radii for the flat field
+
+// A zero displacement (an uncalibrated focuser) or a one-pixel sensor is an error.
+for (const test of [() => analyzePhysicalCurvature(bowl, 4000, 3000, { pixelSize: 0.004, focusDisplacement: 0 }), () => analyzePhysicalCurvature(bowl, 1, 3000, { pixelSize: 0.004, focusDisplacement: 0.001 })]) {
+	try {
+		test()
+	} catch (e) {
+		console.log((e as Error).message) // both fail with 'finite sensor dimensions, pixel size, and non-zero focus displacement are required'
+	}
+}
+```
+
 ### Focus Surface Analysis
+
+`math/numerical/surface.fit` fits the best-focus position as a surface over the sensor, from the best focus of several regions (the minimum of each regional curve, see Focus Curve Fitting). Positions are normalized sensor coordinates, `u` and `v` in `-0.5..0.5`, with `u` to the right and `v` downward, and the surface is `z(u, v) = c + ax*u + ay*v + qxx*u^2 + qxy*u*v + qyy*v^2` in the focuser unit of the samples (`FocusSurfaceCoefficients`). `fitFocusSurface(samples, options?)` takes samples `{ u, v, focus, weight?, uncertainty?, sourceIndex? }` (a weight is relative and overrides the uncertainty, an absolute standard uncertainty in focus units is used as an inverse-variance weight) and returns a discriminated result. The model is `quadratic` (all six coefficients, the default), `radialQuadratic` (`c`, `ax`, `ay` and one radial term `qxx = qyy`, `qxy = 0`) or `plane` (the three first only); the fit is robust (Tukey weights with `sigmaClip` as the tuning constant and `maxIterations` the cap), needs at least as many samples as the parameters (`minimumSamples`) and rejects a design whose condition number is above `maxConditionNumber`. On `success` it has the `coefficients` in the common six-coefficient form, the `used` flags, the `residuals` (focus minus prediction, in the input order), the row-major `covariance` of the coefficients in the order `[c, ax, ay, ...quadratic terms]` when it can be estimated (not with mixed absolute and relative weights, nor without residual degrees of freedom), the `degreesOfFreedom`, the `rejectedIndices`, the `rms`, the `conditionNumber`, a bounded `confidence` and the warnings. On failure it has a `reason` (`insufficientSamples`, `invalidInput`, `rankDeficient`, `illConditioned`, `nonConvergent` or `excessiveRejection`). `evaluateFocusSurface(coefficients, u, v)` is the value of a surface at a point (it throws a `RangeError` for a non-finite coefficient or coordinate). `analyzeFocusPlane(coefficients)` returns the planar part: the gradients, the `direction` of increasing best focus in `[0, TAU)` (`undefined` for a flat plane) and the `effect`, which is `|ax| + |ay|`, the peak-to-peak focus change of the plane between opposite corners of the sensor. `focusSurfaceEffect(coefficients)` is the full range of the surface over the sensor square, including a stationary point inside the sensor or on an edge. `buildFocusSurfaceMap(fit, options?)` samples a successful fit at the centers of a regular grid of `columns` by `rows` cells (32 by 32 by default, at most 65536 cells, or it throws a `RangeError`): each cell has `u`, `v`, the predicted `focus`, its `offsetFromCenter` and, when there is a covariance, the standard `uncertainty` of the model prediction (which does not include the noise of a new measurement). The map is a sampling of the model: its extrema describe the returned cells and are not the analytic ones, which `focusSurfaceEffect` finds. A surface says where the focus is best, not why (a tilt, a curvature and a decentered element look the same): the physical interpretation is in Sensor Tilt Estimator, Focus Field Curvature and Backfocus Correction Estimates.
+
+```ts
+import { buildFocusSurfaceMap } from 'nebulosa/src/imaging/analysis/aberration/surface'
+import { analyzeFocusPlane, evaluateFocusSurface, fitFocusSurface, focusSurfaceEffect, type FocusSurfaceSample } from 'nebulosa/src/math/numerical/surface.fit'
+
+// A best-focus surface, in focuser steps: 4500 at the center, a tilt of 120 steps along X and 60 along Y and a curvature of 200 steps at the corners, as measured on a 5 by 5 grid of regions.
+const truth = { c: 4500, ax: 120, ay: 60, qxx: 200, qxy: 0, qyy: 200 }
+const samples: FocusSurfaceSample[] = []
+
+for (let row = 0; row < 5; row++) {
+	for (let column = 0; column < 5; column++) {
+		const u = -0.4 + column * 0.2
+		const v = -0.4 + row * 0.2
+		samples.push({ u, v, focus: evaluateFocusSurface(truth, u, v) + Math.sin(7 * row + 3 * column), uncertainty: 4 })
+	}
+}
+
+// The full quadratic: the coefficients, the residual scatter and the support of the fit.
+const fit = fitFocusSurface(samples)
+if (fit.success) console.log(fit.model, fit.coefficients, fit.rms.toFixed(3), fit.degreesOfFreedom, fit.rejectedIndices, fit.conditionNumber.toFixed(2), fit.confidence.toFixed(3), fit.warnings) // quadratic with c 4499.90, ax 119.90, ay 60.22, qxx 203.56, qxy 1.06 and qyy 198.97 (the surface it was drawn from has 4500, 120, 60, 200, 0 and 200), an rms of 0.619 steps, 19 degrees of freedom, no rejected sample, a condition number of 15.28, a confidence of 0.882 and no warnings
+
+// The covariance has 6 by 6 entries in the order of the coefficients; its diagonal gives the standard uncertainty of each one.
+if (fit.success && fit.covariance) console.log([0, 7, 14, 21, 28, 35].map((i) => Math.sqrt(fit.covariance![i]).toFixed(2))) // 1.57, 2.83, 2.83, 11.95, 10.00 and 11.95 steps (the curvature terms are the least constrained)
+
+// The simpler models: the plane has three coefficients (the curvature goes to the residuals) and the radial one has a single curvature.
+for (const model of ['plane', 'radialQuadratic'] as const) {
+	const simpler = fitFocusSurface(samples, { model })
+	if (simpler.success) console.log(model, simpler.coefficients, simpler.rms.toFixed(2)) // plane: c 4531.89, ax 119.88, ay 60.08 and an rms of 19.06 steps, the curvature left in the residuals; radialQuadratic: c 4499.89, ax 119.91, ay 60.22, qxx = qyy = 201.30 and an rms of 0.66 steps
+}
+
+// The surface at a point (the center, and the bottom-right corner of the sensor).
+if (fit.success) console.log(evaluateFocusSurface(fit.coefficients, 0, 0).toFixed(2), evaluateFocusSurface(fit.coefficients, 0.5, 0.5).toFixed(2)) // 4499.90 at the center and 4690.86 at the bottom-right corner
+
+// The planar part: gradients in steps per sensor width and height, the direction in radians (clockwise from +X in image coordinates) and the corner-to-corner effect.
+if (fit.success) console.log(analyzeFocusPlane(fit.coefficients)) // gradientX 119.90, gradientY 60.22, direction 0.465 rad and an effect of 180.12 steps
+
+// The full range of the surface over the sensor (it includes the curvature), and a flat plane has no direction.
+if (fit.success) console.log(focusSurfaceEffect(fit.coefficients).toFixed(2), analyzeFocusPlane({ c: 4500, ax: 0, ay: 0, qxx: 0, qxy: 0, qyy: 0 })) // 213.13 steps, and { gradientX: 0, gradientY: 0, direction: undefined, effect: 0 } for the flat plane
+
+// A 3 by 3 map of the model: the center cell is exactly the center of the sensor, and the uncertainty is that of the model prediction.
+if (fit.success) {
+	const map = buildFocusSurfaceMap(fit, { columns: 3, rows: 3 })
+	console.log(map.centerFocus.toFixed(2), map.minimumFocus.toFixed(2), map.maximumFocus.toFixed(2), map.range.toFixed(2), map.confidence.toFixed(3)) // center 4499.90, minimum 4482.55, maximum 4604.78, a range of 122.23 steps and the confidence 0.882 of the fit (the grid of cell centers does not reach the corners, so its range is smaller than the 213.13 of the whole sensor)
+	console.log(map.cells.map((cell) => [cell.column, cell.row, cell.focus.toFixed(1), cell.offsetFromCenter.toFixed(1), cell.uncertainty?.toFixed(2)])) // the cells in row order from (0, 0): 4484.7 (offset -15.2, uncertainty 1.98), 4501.9 (2.0, 1.61), 4564.4 (64.5, 1.98) / 4482.5 (-17.4, 1.61), 4499.9 (0.0, 1.57), 4562.5 (62.6, 1.61) / 4524.6 (24.7, 1.98), 4542.1 (42.2, 1.61), 4604.8 (104.9, 1.98), all in steps
+}
+
+// Outliers are rejected by the robust weights: a region with a best focus 400 steps off is flagged and the coefficients hardly change.
+const withOutlier = samples.map((sample, i) => (i === 7 ? { ...sample, focus: sample.focus + 400 } : sample))
+const robust = fitFocusSurface(withOutlier)
+if (robust.success)
+	console.log(
+		robust.rejectedIndices,
+		robust.coefficients.ax.toFixed(1),
+		robust.warnings.map((warning) => warning.code),
+	) // [ 7 ] is rejected, ax stays at 119.9 and the warning is robustOutliers
+
+// Too few samples for the model, or invalid ones, are reported with a reason instead of a surface.
+const failures = [fitFocusSurface(samples.slice(0, 4)), fitFocusSurface([...samples.slice(0, 8), { u: Number.NaN, v: 0, focus: 1 }]), fitFocusSurface(samples.slice(0, 8).map((sample) => ({ ...sample, v: 0 })))]
+console.log(failures.map((result) => (result.success ? 'success' : result.reason))) // [ 'insufficientSamples', 'invalidInput', 'rankDeficient' ] (the last one has every region on the same row, so the Y terms cannot be determined)
+
+// A huge map is refused before it allocates anything.
+try {
+	if (fit.success) buildFocusSurfaceMap(fit, { columns: 300, rows: 300 })
+} catch (e) {
+	console.log((e as Error).message) // focus surface map must contain at most 65536 cells
+}
+```
 
 ### Frame Saturation
 
@@ -10188,6 +10629,82 @@ for (const run of [() => measureSensorDefects(dark, { ...flat, exposure: 20 }), 
 
 ### Sensor Tilt Estimator
 
+The tilt of the best-focus surface relative to the sensor is the linear part of the focus surface (see Focus Surface Analysis). `analyzePhysicalTilt(plane, width, height, scale)` in `imaging/analysis/aberration/physical` converts the gradients `ax` and `ay` of a `FocusPlaneAnalysis` (focuser units per normalized sensor width and height) into physical small-angle rotations in radians: `scale.pixelSize` is the effective pixel pitch (binning included) and `scale.focusDisplacement` the signed displacement of the focal plane per focuser unit, both in one length unit (the slope is `gradient * focusDisplacement / ((size - 1) * pixelSize)`). It returns `x`, the right-handed rotation around the sensor X axis (from the Y slope), `y`, the rotation around the Y axis (from minus the X slope) and the combined `magnitude`. `estimatePhysicalSensorTilt(plane, width, height, scale, uncertainty?)` returns the same and, when the covariance of the two gradients is given (`{ x, y, covarianceXY }`, in focuser units and squared units), also the first-order standard uncertainties `uncertaintyX` and `uncertaintyY`, their covariance and `uncertaintyMagnitude` (omitted when the slope is numerically zero, because its direction is not resolved). Both throw a `RangeError` for dimensions that are not integers larger than one, a pixel size that is not positive and finite, or a displacement that is zero or not finite. The scale is taken as exact: the uncertainty of the calibration is not included. A tilted best-focus surface is not a diagnosis: the same plane comes from the tilt of the sensor, of the focuser or of a field lens, so the angles are a measurement of the surface, not of a part. `inspectAberrationFocusScan(frames, options?)` in `imaging/analysis/aberration/scan` produces the plane from a focus run and returns everything of this family in one result. A frame is `{ position, image }` or `{ position, profiles, width, height }` (an optional `id` is kept) and all frames must have the same dimensions. Each frame is inspected over the same fixed regions (`regions`, the 3 by 3 grid by default, with the `inspection` options), the `metric` (`hfd` or `fwhm`) of each region is fitted against the position (`curve` options, see Focus Curve Fitting) and the minima are fitted as a focus surface (`surface` options, a full quadratic by default so that the tilt and the curvature are separated). The result has one `frames` entry per input (status `used` or `rejected` with the reasons, and the single-frame `inspection`), the `regions` with their curve and `bestFocus`, the `surface`, the optional `map` (`map` options), the `plane`, the `curvature`, the `fieldOffset` (see Backfocus Correction Estimates), the `tilt` (`plane`, the `confidence` and `conditionNumber` of the fit, whether it is `significant`, the `gradientUncertainty` and, when `physicalScale` was given, the `physical` angles with uncertainties), the `findings` and the `quality` of the scan with a `breakdown` of the confidence. `tracking` registers the stars of the frames and fits a curve for each star, which gives many more samples for the surface than the regions do. The findings come from `diagnoseFocusScan(surface, plane, curvature, fieldOffset, backfocusCalibrated?, physicalTiltAvailable?)`, which is exported: `sensorTiltPattern` (a Wald and F test of the two gradients), `fieldCurvature` and `astigmaticCurvature` (the quadratic terms), `backfocusMismatch` (a center-to-edge offset against the curvature uncertainty, only with a `backfocusCalibration`) or `inconclusive`. A test is published only at about 3 sigma (a two-sided probability of 0.0027), with at least four residual degrees of freedom and a tighter tail when samples were rejected, so a surface fit from few regions never reports a pattern, and a pattern needs `missingPhysicalScale` in its limitations until a scale is given. A scan needs frames that bracket the best focus of every region (and enough stars in each), and the physical scale and its sign are a calibration of the user.
+
+```ts
+import { analyzePhysicalTilt, estimatePhysicalSensorTilt } from 'nebulosa/src/imaging/analysis/aberration/physical'
+import { inspectAberrationFocusScan, type AberrationFocusFrame } from 'nebulosa/src/imaging/analysis/aberration/scan'
+import type { StarProfile } from 'nebulosa/src/imaging/stars/profile'
+
+const scale = { pixelSize: 0.004, focusDisplacement: 0.001 } // mm per pixel and mm per focuser step
+
+// A plane with a gradient of 120 steps along X and 60 along Y across the sensor, on a 4000 by 3000 sensor: the tilt in radians.
+const plane = { gradientX: 120, gradientY: 60, direction: 0.4636, effect: 180 }
+console.log(analyzePhysicalTilt(plane, 4000, 3000, scale)) // { x: 0.005002, y: -0.007502, magnitude: 0.009016 } radians (a rotation around X from the Y slope and around Y from minus the X slope)
+
+// With the covariance of the two gradients (standard uncertainties of 10 steps and a covariance of 20 steps squared) the angles get their uncertainties.
+console.log(estimatePhysicalSensorTilt(plane, 4000, 3000, scale, { x: 10, y: 10, covarianceXY: 20 })) // the same angles with uncertaintyX 0.000834, uncertaintyY 0.000625, covarianceXY -1.04e-7 and uncertaintyMagnitude 0.000762 radians
+
+// A flat plane has zero tilt, and a negative displacement (the focuser moves the other way) flips the sign of the angles.
+console.log(analyzePhysicalTilt({ gradientX: 0, gradientY: 0, effect: 0 }, 4000, 3000, scale).magnitude, analyzePhysicalTilt(plane, 4000, 3000, { ...scale, focusDisplacement: -0.001 }).x) // 0 and -0.005002 (the sign of the x angle flips with the sign of the displacement)
+
+// A zero displacement is an uncalibrated focuser.
+try {
+	analyzePhysicalTilt(plane, 4000, 3000, { ...scale, focusDisplacement: 0 })
+} catch (e) {
+	console.log((e as Error).message) // finite sensor dimensions, pixel size, and non-zero focus displacement are required
+}
+
+// A synthetic scan: 11 frames every 100 steps of 160 stars on a 1000 by 800 sensor, whose best focus is a tilted plane (4500 steps at the center, 120 along X and 60 along Y).
+const width = 1000
+const height = 800
+let seed = 11
+const random = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296
+const stars = Array.from({ length: 160 }, () => ({ x: 30 + random() * 940, y: 30 + random() * 740 }))
+const frames: AberrationFocusFrame[] = []
+
+for (let position = 4000; position <= 5000; position += 100) {
+	const profiles: StarProfile[] = stars.map(({ x, y }) => {
+		const best = 4500 + 120 * (x / (width - 1) - 0.5) + 60 * (y / (height - 1) - 0.5)
+		const hfd = Math.sqrt(2.5 ** 2 + (0.012 * (position - best)) ** 2)
+		return { x, y, valid: true, flux: 5000, snr: 60, hfd, fwhm: hfd * 0.9, eccentricity: 0.1, elongation: 1.01, theta: 0.5, quality: 1, model: 'moments', flags: [] }
+	})
+	frames.push({ position, profiles, width, height })
+}
+
+// The scan over a 4 by 4 grid of regions with the physical scale: the plane, the tilt of the surface and its findings. The regional curves use the hyperbolic model, which matches the shape of these stars (the default quadratic is biased toward the middle of the sampled range on a V-shaped curve and would lower the gradients).
+const options = { regions: { columns: 4, rows: 4 }, curve: { model: 'hyperbolic' } } as const
+const scan = inspectAberrationFocusScan(frames, { ...options, physicalScale: scale })
+console.log(scan.quality.usedFrameCount, scan.quality.confidence.toFixed(3), scan.regions.filter((region) => region.bestFocus !== undefined).length) // 11 used frames, a confidence of 0.855 and 15 of the 16 regions with a best focus (one region, the left one of the bottom row, has none)
+console.log(scan.plane) // gradientX 122.80, gradientY 62.51, direction 0.471 rad and an effect of 185.31 steps, close to the 120 and 60 of the plane that was drawn
+console.log(scan.tilt?.significant, scan.tilt?.gradientUncertainty, scan.tilt?.physical) // true, with gradient uncertainties of 2.32 and 2.34 steps and a covariance of -1.19; the physical angles are x 0.019556, y -0.030721, a magnitude of 0.036410 and uncertainties of 0.000731, 0.000581 and 0.000556 radians
+console.log(scan.findings.map((finding) => [finding.kind, finding.likelihood.toFixed(3), finding.limitations])) // one finding, sensorTiltPattern, with a likelihood of 1.000 and no limitations (the physical scale was given)
+
+// The best focus of the first regions in focuser steps (the uncertainty of a regional curve exists only for the quadratic model, so it is absent here).
+console.log(scan.regions.slice(0, 4).map((region) => [region.region.id, region.bestFocus?.toFixed(1), region.uncertainty])) // r0c0 4427.8, r0c1 4466.1, r0c2 4493.5 and r0c3 4520.2 steps, with an undefined uncertainty
+
+// Without the physical scale the tilt is still found in focuser units, but the pattern keeps the missingPhysicalScale limitation.
+const unscaled = inspectAberrationFocusScan(frames, options)
+console.log(
+	unscaled.tilt?.physical,
+	unscaled.findings.map((finding) => [finding.kind, finding.limitations]),
+) // no physical tilt, and the same sensorTiltPattern with the limitation missingPhysicalScale
+
+// With a 3 by 3 grid only nine regions fit six coefficients, leaving too few degrees of freedom to publish a test.
+const coarse = inspectAberrationFocusScan(frames, { curve: { model: 'hyperbolic' } })
+console.log(
+	coarse.findings.map((finding) => finding.kind),
+	coarse.tilt?.significant,
+) // [ 'inconclusive' ] and false: the 3 by 3 grid has at most 9 samples for 6 coefficients, below the 4 residual degrees of freedom that a test needs
+
+// A frame at another size or without a source is rejected and kept in order with its reason; the scan goes on with the others.
+const bad = inspectAberrationFocusScan([...frames, { position: 5100, profiles: [], width: 640, height: 480 }, { position: 5200 }], options)
+console.log(
+	bad.frames.slice(-2).map((frame) => [frame.status, frame.rejectionReasons]),
+	bad.quality.rejectedFrameCount,
+) // the 640 by 480 frame is [ 'rejected', [ 'inconsistentDimensions' ] ] and the frame without a source is [ 'rejected', [ 'invalidInput' ] ], and 2 frames were rejected
+```
+
 ### Signal-to-Noise and Dynamic Range Estimates
 
 `astronomy/formulas` has the CCD equation and the related camera figures, in accumulated electrons, for planning an exposure (the measured counterparts are in Photon Transfer and Read Noise). `signalToNoiseRatio(signalElectrons, pixelCount, backgroundElectronsPerPixel, darkCurrentElectronsPerPixel, readNoiseElectrons)` is `S / sqrt(S + n (B + D + RN^2))`: the shot noise of the signal, plus for each of the `pixelCount` pixels of the measurement aperture the background and the dark electrons accumulated during the exposure (not rates) and the read noise squared (electrons RMS); it throws a `RangeError` when the noise variance is not positive. The model has no flat-field or calibration noise, no scintillation, no quantization noise, and no gain: the inputs must already be electrons, not ADU. `stackingSnrGain(frameCount)` is `sqrt(N)` and `stackingMagnitudeGain(frameCount)` is `1.25 log10(N)`, the gain of `N` equal frames in the signal-to-noise ratio and in the limiting magnitude (it is the ideal gain of a sky- or shot-noise limited stack, the read noise adds as `N` reads, and it does not account for the rejection of a bad frame or a changing sky). `dynamicRange(fullWellElectrons, readNoiseElectrons)` is the ratio of the full well to the read noise and `dynamicRangeInStops(fullWellElectrons, readNoiseElectrons)` is its base-2 logarithm, the usual figure of a single exposure (a camera whose gain is lower than the one at the full well is limited by the converter instead, which this does not see). `saturationTime(fullWellElectrons, signalRateElectronsPerSecond)` is the exposure in seconds that fills the well at a constant rate, and `skyLimitedExposure(readNoiseElectrons, skyRateElectronsPerSecond)` is the rule of thumb `10 RN^2 / sky` for the exposure at which the sky shot noise starts to dominate the read noise (the accumulated sky is about ten times the read variance, so its noise is about three times the read noise), also in seconds. Without a validated input they return what the formula produces (a zero or negative rate gives an infinite or negative time).
@@ -11036,6 +11553,68 @@ console.log([60, 120, 300, 600].map((t) => requiredSubframeCount(7200, t))) // [
 ```
 
 ### Synthetic Bahtinov Spikes
+
+`plotBahtinovSpikes(raw, width, height, channels, x, y, flux, error, colorIndex?, options?)` in `imaging/stars/bahtinov` adds the three diffraction spikes of a Bahtinov mask to an existing buffer, for tests and for simulators. `raw` is a mono or interleaved RGB buffer (`channels` 1 or 3, at least `width * height * channels` samples) and is mutated additively: nothing is generated for the background, the noise, the core of the star, the clipping or the saturation, which the caller adds. `(x, y)` is the intersection of the two external spikes in pixel centers, `flux` the nominal integrated signal of the whole pattern (split among the spikes by `strengths`) and `error` the signed offset in pixels of the central spike from that intersection along its normal, which is the sign convention that `analyzeBahtinov` recovers (see Bahtinov Focus Analysis). `colorIndex` (a B-V color index) weights the three channels of an RGB buffer. The options are `normalAngles` (the normals of the three spikes in radians, `[PI / 12, 0, 11 * PI / 12]` by default, so the external spikes cross at 15 degrees from the central one), `central` (which of the three receives the error, 1 by default), `spike` (render only one of them), `fwhm` (the transverse width in pixels, 2 by default), `halfLength` (60 pixels) and `taperLength` (12 pixels, the fade at each end), `strengths` (relative, `[1, 1, 1]`), `gain`, `cutoffSigma` (the transverse Gaussian cutoff, 4 sigma) and `gammaCompensation` (for the color weights, or `false`). It returns `true` when something was drawn and `false` when nothing was, because the flux or the position is not finite (or the flux is not positive) or the support falls entirely outside the image. It throws a `RangeError` for a size that is not a positive integer, a short buffer, a non-finite error or an invalid option, before it changes any sample. The image is drawn with a Gaussian across each spike and so the pattern is an idealization: no diffraction orders, no star core and no dependence on the mask geometry beyond the angles.
+
+```ts
+import { plotBahtinovSpikes } from 'nebulosa/src/imaging/stars/bahtinov'
+
+const width = 200
+const height = 200
+
+// A mono buffer with a flat pedestal of 0.05: the default three spikes crossing at the center, with the central spike 1.5 pixels off.
+const mono = new Float64Array(width * height).fill(0.05)
+console.log(plotBahtinovSpikes(mono, width, height, 1, 100, 100, 40, 1.5), mono.reduce((a, b) => a + b, 0) - 0.05 * width * height) // true 40.0 (the sum of the added signal is the flux, 39.999999998...)
+
+// The central spike has a normal along X, so it is a vertical line at x = 100 - 1.5 = 98.5: along the row y = 60 the pedestal peaks at x = 98 and 99 and falls off on both sides, and a corner far from every spike keeps the pedestal.
+console.log(
+	[95, 97, 98, 99, 100, 103].map((x) => mono[60 * width + x].toFixed(4)),
+	mono[5 * width + 5].toFixed(4),
+) // [ 0.0500, 0.0622, 0.0988, 0.0988, 0.0622, 0.0500 ] 0.0500 (a peak of 0.0988 at x = 98 and 99, either side of 98.5, and the pedestal unchanged far away)
+
+// The spikes are additive: drawing again doubles the pattern, and a gain of 3 scales the flux of a drawing by three.
+const twice = new Float64Array(width * height)
+plotBahtinovSpikes(twice, width, height, 1, 100, 100, 40, 0)
+const once = twice[60 * width + 100]
+plotBahtinovSpikes(twice, width, height, 1, 100, 100, 40, 0)
+const tripled = new Float64Array(width * height)
+plotBahtinovSpikes(tripled, width, height, 1, 100, 100, 40, 0, undefined, { gain: 3 })
+console.log((twice[60 * width + 100] / once).toFixed(3), (tripled[60 * width + 100] / once).toFixed(3)) // 2.000 3.000
+
+// One spike at a time, and the strengths of the three: the central one alone with half the flux of the others.
+const single = new Float32Array(width * height)
+console.log(plotBahtinovSpikes(single, width, height, 1, 100, 100, 40, 0, undefined, { spike: 1, halfLength: 50, fwhm: 3 })) // true
+const weighted = new Float32Array(width * height)
+plotBahtinovSpikes(weighted, width, height, 1, 100, 100, 40, 0, undefined, { strengths: [1, 0.5, 1] })
+const even = new Float32Array(width * height)
+plotBahtinovSpikes(even, width, height, 1, 100, 100, 40, 0)
+console.log(weighted[60 * width + 100].toFixed(4), even[60 * width + 100].toFixed(4), single[60 * width + 100].toFixed(4), single[60 * width + 90].toFixed(4)) // 0.0348 0.0580 0.0439 0.0000 (half the central strength gives 0.6 of the even value, 0.0348 against 0.0580, because the shares are normalized to 2.5 instead of 3; the single spike at full flux gives 0.0439 on its line and nothing 10 pixels away)
+
+// Other angles (for example the mask turned by 90 degrees): the normals of the three spikes in radians.
+const turned = new Float64Array(width * height)
+plotBahtinovSpikes(turned, width, height, 1, 100, 100, 40, 0, undefined, { normalAngles: [Math.PI / 12 + Math.PI / 2, Math.PI / 2, (Math.PI * 11) / 12 + Math.PI / 2] })
+console.log(turned[60 * width + 100].toFixed(4), turned[100 * width + 60].toFixed(4), once.toFixed(4)) // 0.0000 0.0580 0.0580 (the turned mask has its central spike horizontal: nothing at (100, 60) and the same 0.0580 at (60, 100) as the default pattern has at (100, 60))
+
+// An RGB buffer: the color index decides the channel weights (a blue star, B-V -0.2, and a red one, 1.8).
+const rgb = new Float32Array(width * height * 3)
+plotBahtinovSpikes(rgb, width, height, 3, 100, 100, 40, 0, -0.2)
+const redder = new Float32Array(width * height * 3)
+plotBahtinovSpikes(redder, width, height, 3, 100, 100, 40, 0, 1.8)
+const at = (buffer: Float32Array) => [0, 1, 2].map((c) => buffer[(60 * width + 100) * 3 + c].toFixed(4))
+console.log(at(rgb), at(redder)) // [ 0.0157, 0.0178, 0.0245 ] [ 0.0299, 0.0181, 0.0100 ] (red, green and blue: the blue star is strongest in blue and the red one in red)
+
+// Nothing is drawn for a non-positive or non-finite flux, a non-finite position or a pattern entirely off the image.
+console.log(plotBahtinovSpikes(mono, width, height, 1, 100, 100, 0, 0), plotBahtinovSpikes(mono, width, height, 1, Number.NaN, 100, 40, 0), plotBahtinovSpikes(mono, width, height, 1, 1000, 1000, 40, 0)) // false false false
+
+// Invalid input throws before any sample changes.
+for (const test of [() => plotBahtinovSpikes(mono, 0, height, 1, 100, 100, 40, 0), () => plotBahtinovSpikes(mono, width, height, 3, 100, 100, 40, 0), () => plotBahtinovSpikes(mono, width, height, 1, 100, 100, 40, Number.NaN), () => plotBahtinovSpikes(mono, width, height, 1, 100, 100, 40, 0, undefined, { fwhm: -1 })]) {
+	try {
+		test()
+	} catch (e) {
+		console.log((e as Error).message) // width must be a positive integer, buffer length mismatch: expected 120000, received 40000, error must be finite, fwhm must be finite and positive
+	}
+}
+```
 
 ### Synthetic Defocused Collimation Patterns
 
