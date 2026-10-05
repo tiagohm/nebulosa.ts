@@ -15823,6 +15823,90 @@ forced.stop()
 
 ### Firmata Character Display
 
+`HD44780` drives a Hitachi HD44780 character LCD (16x2, 20x4, and similar) through an I2C I/O expander backpack, which is the usual PCF8574 module (see Firmata IO Expander). The display is run in 4-bit mode following the LiquidCrystal power-on sequence, and every command or character is translated into expander port writes with the enable pulse that latches each nibble. The constructor takes the `expander` (any `IOExpander`; a started or unstarted `PCF8574`), the `HD44780Options` pin map and, optionally, the `client` (the expander client by default). `DEFAULT_HD44780_OPTIONS` is the common backpack wiring: RS on pin 0, RW on 1, enable on 2, backlight on 3, data lines D4..D7 on 4..7, backlight on and active high; `backlightPolarity: false` is for a backpack that lights the backlight with a low level, and `rwPin`/`backlightPin` are optional lines.
+
+`begin(columns, rows, charsize?)` configures the used pins as outputs, starts the expander, runs the initialisation (a blocking wait of about 60 ms in total, with `Bun.sleepSync`, so call it once at start-up) and sets the display on, cursor and blink off, left-to-right text. It takes 1 to 4 rows and any positive column count, with `'5x8'` or `'5x10'` dots (the latter only affects one-line displays), and the row offsets are the standard DDRAM layout (0x00, 0x40, then the column count and 0x40 plus it for rows 3 and 4, as on the 20x4 modules). Every other method needs `begin()` first. `start()` and `stop()` start and stop the expander.
+
+The operations mirror the Arduino LiquidCrystal API: `clear()`, `home()` (both wait the 2 ms the controller needs), `setCursor(column, row)` (a row beyond the last is clamped to it), `display()`/`noDisplay()`, `cursor()`/`noCursor()`, `blink()`/`noBlink()`, `scrollDisplayLeft()`/`scrollDisplayRight()`, `leftToRight()`/`rightToLeft()`, `autoscroll()`/`noAutoscroll()`, `backlight()`/`noBacklight()` (these two only touch the backlight bit and may be used before `begin()`), `createChar(location, charmap)` (eight 5x8 glyphs, location 0..7 taken modulo 8, one byte per row using the low five bits) and the writers `write(byte)` (one raw byte, returns 1) and `print(value)` (a string or a value converted with `String`; each character is masked to 8 bits, so only the characters of the controller character set, ASCII and the ROM extensions, display properly, and text is not wrapped between lines, so position it with `setCursor`). Every call issues I2C writes through the expander and returns after queuing them, and a display that is not connected simply does not answer: nothing is read back from it.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { DEFAULT_HD44780_OPTIONS, HD44780 } from 'nebulosa/src/devices/firmata/components/display'
+import { PCF8574 } from 'nebulosa/src/devices/firmata/components/io'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+
+// The expander port bytes that were written since the last call (the read requests are skipped).
+const ports = () =>
+	sent
+		.splice(0)
+		.map((hex) => Buffer.from(hex, 'hex'))
+		.filter((frame) => frame[1] === 0x76 && frame[3] === 0x00 && frame.length === 7)
+		.map((frame) => (frame[4] | (frame[5] << 7)).toString(16).padStart(2, '0'))
+
+console.log(DEFAULT_HD44780_OPTIONS) // { rsPin: 0, rwPin: 1, enablePin: 2, backlightPin: 3, data4Pin: 4, data5Pin: 5, data6Pin: 6, data7Pin: 7, backlight: true, backlightPolarity: true }
+
+// A 16x2 module on a PCF8574 backpack at 0x27 (polling disabled): begin() runs the 4-bit initialisation sequence.
+const expander = new PCF8574(client, 0x27, 0)
+const lcd = new HD44780(expander)
+lcd.begin(16, 2)
+const init = ports()
+console.log(init.length, init.slice(0, 7), init.slice(-6)) // 34 [ "08", "38", "3c", "38", "3c", "38", "3c" ] [ "08", "0c", "08", "68", "6c", "68" ]
+
+// Print "A" (0x41) at the first cell: the high nibble then the low one, each with RS set and the enable pulse (bit 2).
+lcd.setCursor(0, 0)
+ports()
+console.log(lcd.print('A'), ports()) // 1 [ "49", "4d", "49", "19", "1d", "19" ]
+
+// The second row starts at DDRAM address 0x40: the command 0xc0 as two nibbles.
+lcd.setCursor(0, 1)
+console.log(ports()) // [ "c8", "cc", "c8", "08", "0c", "08" ]
+
+// A custom glyph in slot 0 (a heart, 5x8) and its use with write().
+lcd.createChar(0, [0x00, 0x0a, 0x1f, 0x1f, 0x1f, 0x0e, 0x04, 0x00])
+lcd.setCursor(3, 0)
+ports()
+console.log(lcd.write(0), ports()) // 1 [ "09", "0d", "09", "0d", "09" ]
+
+// Display control: the commands are the control register 0x08 plus the display (4), cursor (2) and blink (1) flags.
+lcd.cursor()
+lcd.blink()
+lcd.noDisplay()
+lcd.display()
+lcd.noBlink()
+lcd.noCursor()
+console.log(ports().length) // 36
+
+// The backlight only changes bit 3 of the last port byte.
+lcd.noBacklight()
+console.log(ports()) // [ "c0" ]
+lcd.backlight()
+console.log(ports()) // [ "c8" ]
+
+// Text flow, shifts and clearing.
+lcd.rightToLeft()
+lcd.leftToRight()
+lcd.autoscroll()
+lcd.noAutoscroll()
+lcd.scrollDisplayLeft()
+lcd.scrollDisplayRight()
+lcd.home()
+lcd.clear()
+console.log(ports().length) // 48
+lcd.stop()
+
+// A 20x4 module, 5x10 dots requested (ignored for more than one row) and a backpack that lights the backlight with a low level.
+const wide = new HD44780(new PCF8574(client, 0x27, 0), { backlightPolarity: false })
+wide.begin(20, 4, '5x10')
+wide.setCursor(0, 2)
+ports()
+wide.setCursor(0, 3)
+console.log(ports()) // [ "d0", "d4", "d0", "40", "44", "40" ] (0xd4 is the DDRAM address 0x54 of the fourth row on 20 columns)
+wide.stop()
+```
+
 ### Firmata DAC
 
 `MCP4725` drives the Microchip MCP4725 12-bit I2C digital-to-analog converter. The constructor takes the `client`, the I2C `address` (`MCP4725.ADDRESS` 0x62 or `ALTERNATIVE_ADDRESS` 0x63, selected by the A0 pin of the board) and `MCP4725Options` with the initial `value` (the 12-bit code, 0 to 4095, rounded and clamped to that range) and the `powerDownMode` (`'normal'` for an active output, or `'1k'`, `'100k'` and `'500k'` for the output pulled to ground through that resistor); `DEFAULT_MCP4725_OPTIONS` is code 0 in normal mode. The output voltage is `value / 4095 * Vdd` and the converter is only a writer: nothing is ever read back from the chip.
@@ -15928,7 +16012,179 @@ single.stop()
 
 ### Firmata FM Receivers
 
+`TEA5767` (NXP) and `RDA5807` (RDA Microelectronics) are I2C FM broadcast receivers that implement `RadioTuner`. All frequencies on the public API are in MHz and are snapped to the tuning grid of the chip: 100 kHz for the TEA5767 and the configured channel spacing for the RDA5807. Both expose `frequency` (read/write), `frequencyUp()` and `frequencyDown()` (one grid step, wrapping at the band edge), `stereo` (whether stereo decoding is allowed and, once the chip reports it, whether the current reception is stereo), `muted` with `mute()` and `unmute()`, `rssi` (0 to 127), `station` (whether the tuned channel looks like a real station), `seek(direction?, wrap?)`, `seekFailed` and the `volume` accessors, and notify listeners when the tuned frequency, stereo, signal or station state changes (see Firmata Peripheral Base). The state read from the chip is refreshed by a status request at `start()` and then on a timer of at least 100 ms (`DEFAULT_POLLING_INTERVAL` by default); the values are those of the last reply, so after a change they are stale until the next status frame arrives. The `rssi` is an uncalibrated scale (a linear mapping of the chip level) and the receivers have no audio output available to the host: the sound leaves through the analog pins of the module.
+
+`TEA5767(client, address?, pollingInterval?, options?)` uses `TEA5767.ADDRESS` (0x60) and `TEA5767Options`: `frequency` (87.5 MHz), `muted`, `band` (`'usEurope'`, 87.5 to 108 MHz, or `'japan'`, 76 to 91 MHz), `stereo`, `softMute`, `highCutControl`, `stereoNoiseCancelling`, `highSideInjection` (the local oscillator side), `referenceClock` (32768, 6500000 or 13000000 Hz), `deEmphasis` (50 or 75 µs), `searchStopLevel` (`'low'`, `'mid'`, `'high'`) and `wrap` (`DEFAULT_TEA5767_OPTIONS`). Every change is sent as a five-byte write frame with the 14-bit PLL word `4 * (f ± 225 kHz) / reference divider`, and the status read is a five-byte frame (ready and band-limit flags, the PLL word, the stereo flag and IF counter, and a 4-bit level). A frame is a station when the IF counter is between `IF_VALID_MIN` (0x29) and `IF_VALID_MAX` (0x7f), the level is scaled to `rssi = round(level * 127 / 15)`, and `stop()` puts the chip in standby. `seek()` is implemented by the driver: it tunes upward or downward 100 kHz at a time with the chip search mode, accepting the first ready frame that is a station and not at the band limit, and ends with `seekFailed` set when the band edge is reached without one (after at most one wrap when `wrap` is true). The chip has no volume control, so `volume` is always 100 and `volumeUp()`/`volumeDown()` do nothing; the four feature flags are accessors that rewrite the frame.
+
+`RDA5807(client, address?, pollingInterval?, options?)` uses `RDA5807.ADDRESS` (0x11, the direct-access address) and `RDA5807Options`: `frequency` (87 MHz), `volume` (0 to 100, mapped onto the 16 chip steps, so values are quantised to multiples of about 6.7), `muted`, `band` (`'usEurope'` 87 to 108 MHz, `'japanWide'` 76 to 91, `'world'` 76 to 108 and `'eastEurope'`), `eastEuropeMode` (`'65_76'` or `'50_65'` MHz), `stereo`, `bassBoost`, `audioOutputHighZ`, `spacing` (25, 50, 100 or 200 kHz), `seekThreshold` (0 to 15 RSSI threshold of the hardware seek) and `wrap` (`DEFAULT_RDA5807_OPTIONS`). Registers are 16-bit and written as register, high byte, low byte (control 0x02, tuning 0x03, audio 0x05, and 0x06/0x07 for the east-Europe band); the status read asks for the four bytes of registers 0x0A and 0x0B (seek/tune complete, seek-fail, stereo and the channel index in 0x0A; RSSI, station and ready flags in 0x0B) and the frequency is `band start + channel * spacing`. Unlike the TEA5767 the seek is done by the chip: `seek()` clears stale seek state, sets the seek, direction and wrap-mode bits and the driver finishes it when a status frame reports seek/tune complete, applying the reported channel and the seek-failed flag; during the seek the previous values are kept. `volume` has the accessors and steps `volumeUp()`/`volumeDown()` (one chip step), and `bassBoost`, `audioOutputHighZ` and `muted` are accessors that rewrite the control register. `stop()` clears the enable bit and any pending read. Both `seek()` methods need the peripheral to be started.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { DEFAULT_RDA5807_OPTIONS, DEFAULT_TEA5767_OPTIONS, RDA5807, TEA5767 } from 'nebulosa/src/devices/firmata/components/radio'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+// The wire form of a registerless reply (TEA5767) and of a register reply (RDA5807).
+const wire = (address: number, register: number, data: number[]) => client.process(Buffer.from([0xf0, 0x77, address, 0, register & 0x7f, register >> 7, ...data.flatMap((byte) => [byte & 0x7f, byte >> 7]), 0xf7]))
+
+console.log(TEA5767.ADDRESS, RDA5807.ADDRESS) // 96 17
+console.log(DEFAULT_TEA5767_OPTIONS) // { frequency: 87.5, muted: false, band: "usEurope", stereo: true, softMute: true, highCutControl: true, stereoNoiseCancelling: true, highSideInjection: true, referenceClock: 32768, deEmphasis: 50, searchStopLevel: "mid", wrap: true }
+console.log(DEFAULT_RDA5807_OPTIONS) // { frequency: 87, volume: 100, muted: false, band: "usEurope", stereo: true, bassBoost: false, audioOutputHighZ: false, eastEuropeMode: "65_76", spacing: 100, seekThreshold: 8, wrap: true }
+
+// TEA5767: start() writes the five-byte frame for 87.5 MHz and asks for a status frame.
+const tea = new TEA5767(client)
+tea.addListener((device) => console.log('TEA5767', device.frequency, device.stereo, device.rssi, device.station))
+tea.start()
+console.log(out()) // [ "f0780000f7", "f07660002900550150011e000000f7", "f07660080500f7" ]
+
+// A status frame for 98.5 MHz (PLL 12051 = 0x2f13): ready, stereo, IF counter 0x35 (a station) and level 9.
+wire(TEA5767.ADDRESS, 0x3fff, [0x80 | 0x2f, 0x13, 0x80 | 0x35, 9 << 4, 0])
+console.log(tea.frequency, tea.stereo, tea.rssi, tea.station, tea.samples) // 98.5 true 76 true 1 (the listener printed the same values)
+
+// Seek up: the driver tunes one step (98.6 MHz) with the search bit set; a station is found at 101.1 MHz (PLL 12369 = 0x3051).
+tea.seek('up')
+console.log(out()) // [ "f07660006f01200050011e000000f7", "f07660080500f7" ]
+wire(TEA5767.ADDRESS, 0x3fff, [0x80 | 0x30, 0x51, 0x80 | 0x35, 12 << 4, 0])
+console.log(tea.frequency, tea.rssi, tea.seekFailed) // 101.1 102 false (the listener printed 101.1 true 102 true)
+out()
+
+// Grid steps, mono, mute and the feature flags each rewrite the frame.
+tea.frequency = 100.05
+console.log(tea.frequency, out().length) // 100.1 2
+tea.frequencyUp()
+tea.frequencyDown()
+tea.stereo = false
+tea.mute()
+tea.softMute = false
+tea.highCutControl = false
+tea.stereoNoiseCancelling = false
+tea.highSideInjection = false
+console.log(tea.frequency, tea.stereo, tea.muted, tea.softMute, tea.highCutControl, tea.stereoNoiseCancelling, tea.highSideInjection, tea.volume) // 100.1 false true false false false false 100
+tea.volumeUp()
+tea.stop()
+console.log(out().length) // 13
+
+// The Japanese band, a 13 MHz clock, 75 us de-emphasis and a low search threshold.
+const japan = new TEA5767(client, TEA5767.ADDRESS, 1000, { frequency: 80, band: 'japan', referenceClock: 13000000, deEmphasis: 75, searchStopLevel: 'low', wrap: false })
+japan.start()
+console.log(japan.frequency, out()) // 80 [ "f0780000f7", "f07660001900120030012e004000f7", "f07660080500f7" ]
+japan.stop()
+out()
+
+// RDA5807: start() writes the control (0x02), audio (0x05) and tuning (0x03) registers, then asks for registers 0x0a and 0x0b.
+const rda = new RDA5807(client)
+rda.addListener((device) => console.log('RDA5807', device.frequency, device.stereo, device.rssi, device.station, device.seekFailed))
+rda.start()
+console.log(out()) // [ "f0780000f7", "f0761100020040010100f7", "f0761100050008000f01f7", "f0761100030000001000f7", "f07611080a000400f7" ]
+
+// Channel 115 is 98.5 MHz at 100 kHz spacing: seek/tune complete, stereo, RSSI 60, station and ready.
+wire(RDA5807.ADDRESS, 0x0a, [0x44, 0x73, 0x79, 0x80])
+console.log(rda.frequency, rda.stereo, rda.rssi, rda.station, rda.volume) // 98.5 true 60 true 100 (the listener printed 98.5 true 60 true false)
+
+// Hardware seek up (the chip clears the old seek state first), completed by a status that reports channel 140 (101 MHz).
+rda.seek('up')
+console.log(out()) // [ "f0761100020040010100f7", "f076110003001c004001f7", "f0761100020043010100f7", "f07611080a000400f7" ]
+wire(RDA5807.ADDRESS, 0x0a, [0x40 | 0x04, 140, 0x71, 0x80])
+console.log(rda.frequency, rda.rssi, rda.seekFailed, out()) // 101 56 false [ "f0761100020040010100f7" ] (the listener printed 101 true 56 true false)
+
+// Volume in 16 steps, then the audio flags, and a step in the 100 kHz grid.
+rda.volume = 50
+rda.volumeUp()
+rda.bassBoost = true
+rda.audioOutputHighZ = true
+rda.mute()
+rda.stereo = false
+console.log(rda.volume, rda.bassBoost, rda.audioOutputHighZ, rda.muted, rda.stereo) // 60 true true true false
+rda.frequency = 104.3
+rda.frequencyUp()
+console.log(rda.frequency) // 104.4
+rda.stop()
+out()
+
+// The east-Europe band 50-65 MHz with a 50 kHz spacing, started muted at half volume.
+const east = new RDA5807(client, RDA5807.ADDRESS, 1000, { frequency: 60, band: 'eastEurope', eastEuropeMode: '50_65', spacing: 50, muted: true, volume: 50, seekThreshold: 4 })
+east.start()
+console.log(east.frequency, east.volume, out()) // 60 53 [ "f0780000f7", "f0761100020000010100f7", "f0761100050004000801f7", "f0761100060060000000f7", "f0761100070040000200f7", "f0761100030032001e00f7", "f07611080a000400f7" ]
+east.stop()
+```
+
 ### Firmata FM Transmitter
+
+`KT0803L` drives the KT Micro KT0803L FM stereo transmitter over I2C and implements `RadioTransmitter`. It is a write-only device: the driver keeps the configuration, writes the registers on `start()` and on each change, and never reads anything back, so nothing confirms that the chip received a write. Frequencies are in MHz on the public API, with 50 kHz channels between 70 and 108 MHz (the register channel number is `MHz * 20`, `MIN_CHANNEL` 1400 to `MAX_CHANNEL` 2160); a requested value is rounded to the nearest channel and clamped to that range. Transmitting is regulated by law in most places, so the output power, the frequency and the use of the transmitter must comply with the local rules.
+
+The constructor takes the `client`, the I2C `address` (`KT0803L.ADDRESS`, 0x3E) and `KT0803LOptions`: `frequency` (89.7 MHz), `muted`, `stereo`, `gain` (the audio PGA in dB, integer steps from -15 to 12), `transmitPower` (the RFGAIN code of the datasheet, 0 to 15, 15 being the highest output; the code is not a calibrated power), `bassBoost` (0, 5, 11 or 17 dB, snapped to the nearest), `preEmphasis` (50 or 75 µs), `pilotToneHigh`, `automaticLevelControl`, `automaticPowerDown` (power down on silence), `powerAmplifierBias`, `deviation` (75 or 112.5 kHz) and `audioEnhancement`; `DEFAULT_KT0803L_OPTIONS` holds the defaults. `start()` registers the handler, enables I2C and writes the whole configuration while holding the chip in standby (registers 0x0B, 0x10, 0x04, 0x0E, 0x17, 0x13, then the frequency registers 0x01, 0x02, 0x00) before releasing the standby with a final write to 0x0B; `stop()` writes the standby bit and detaches. Every property is an accessor: setting a different value rewrites the registers that carry it (only when started) and notifies the listeners (see Firmata Peripheral Base), and setting the current value does nothing. `frequencyUp()` and `frequencyDown()` move one 50 kHz channel and wrap at the band edges, and `mute()` and `unmute()` set `muted`. Each register write is a two-byte `[register, value]` I2C write, and the channel is split across registers 0x00, 0x01 and 0x02.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { DEFAULT_KT0803L_OPTIONS, KT0803L } from 'nebulosa/src/devices/firmata/components/radio'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+
+// The register writes as register:value pairs in hexadecimal (the I2C configuration frame is skipped).
+const writes = () =>
+	sent
+		.splice(0)
+		.map((hex) => Buffer.from(hex, 'hex'))
+		.filter((frame) => frame[1] === 0x76 && frame.length === 9)
+		.map((frame) => `${(frame[4] | (frame[5] << 7)).toString(16)}:${(frame[6] | (frame[7] << 7)).toString(16)}`)
+
+console.log(KT0803L.ADDRESS, KT0803L.MIN_CHANNEL, KT0803L.MAX_CHANNEL, DEFAULT_KT0803L_OPTIONS) // 62 1400 2160 { frequency: 89.7, muted: false, stereo: true, gain: 0, transmitPower: 15, bassBoost: 0, preEmphasis: 75, pilotToneHigh: false, automaticLevelControl: false, automaticPowerDown: false, powerAmplifierBias: true, deviation: 75, audioEnhancement: false }
+
+// The defaults: 89.7 MHz (channel 1794), stereo, full RF gain code.
+const transmitter = new KT0803L(client)
+transmitter.addListener((device) => console.log('KT0803L', device.frequency, device.muted, device.gain))
+transmitter.start()
+console.log(writes()) // [ "b:80", "10:a9", "4:4", "e:2", "17:0", "13:80", "1:c3", "2:40", "0:81", "b:0" ]
+
+// Frequency: a different value rewrites the three channel registers; the same value is ignored. Values snap to 50 kHz.
+transmitter.frequency = 100.1
+transmitter.frequency = 100.1
+console.log(transmitter.frequency, writes()) // 100.1 [ "1:c3", "2:40", "0:e9" ] (the listener printed once)
+transmitter.frequencyUp()
+transmitter.frequencyDown()
+console.log(transmitter.frequency) // 100.1 (the listener printed 100.15 and then 100.1)
+writes()
+
+// Audio: mute, mono, +6 dB of gain, the strongest bass boost and the 50 us pre-emphasis.
+transmitter.mute()
+transmitter.stereo = false
+transmitter.gain = 6
+transmitter.bassBoost = 17
+transmitter.preEmphasis = 50
+console.log(transmitter.muted, transmitter.stereo, transmitter.gain, transmitter.bassBoost, transmitter.preEmphasis, writes()) // true false 6 17 50 [ "2:48", "4:44", "1:f3", "4:54", "4:57", "2:49" ] (the listener printed once per change)
+transmitter.unmute()
+
+// RF and chip options: a lower RFGAIN code, the pilot tone, level control, power-down, PA bias, deviation and enhancement.
+transmitter.transmitPower = 8
+transmitter.pilotToneHigh = true
+transmitter.automaticLevelControl = true
+transmitter.automaticPowerDown = true
+transmitter.powerAmplifierBias = false
+transmitter.deviation = 112.5
+transmitter.audioEnhancement = true
+console.log(transmitter.transmitPower, transmitter.pilotToneHigh, transmitter.automaticLevelControl, transmitter.automaticPowerDown, transmitter.powerAmplifierBias, transmitter.deviation, transmitter.audioEnhancement, writes()) // 8 true true true false 112.5 true [ "2:41", "13:0", "1:33", "2:41", "2:45", "4:d7", "b:4", "e:0", "17:40", "17:60" ]
+
+// stop() puts the chip in standby; later changes are only staged.
+transmitter.stop()
+console.log(writes()) // [ "b:84" ]
+transmitter.frequency = 91.5
+console.log(transmitter.frequency, writes()) // 91.5 [] (the listener still printed)
+
+// A transmitter built with options: the band edges wrap with the up and down steps.
+const edge = new KT0803L(client, KT0803L.ADDRESS, { frequency: 108, stereo: false, gain: -15, transmitPower: 0, preEmphasis: 50, deviation: 112.5 })
+edge.start()
+console.log(writes()) // [ "b:80", "10:a9", "4:74", "e:2", "17:40", "13:0", "1:1c", "2:1", "0:38", "b:0" ]
+edge.frequencyUp()
+console.log(edge.frequency) // 70
+edge.frequencyDown()
+console.log(edge.frequency) // 108
+edge.stop()
+```
 
 ### Firmata Hygrometer
 
@@ -16333,17 +16589,375 @@ ds1307.stop()
 
 ### Firmata-to-INDI Bridge
 
+`FirmataIndiClient` is a local, network-free implementation of the INDI `Client` contract that exposes Firmata peripherals as virtual INDI devices. It has no XML and no sensor logic of its own: `createPeripheral(peripheral)` inspects the peripheral and publishes standard INDI properties through an `IndiClientHandler`, so the same consumers that work with an INDI server (device managers, weather and auxiliary views) can use a board attached over Firmata. The type is `'FIRMATA'` and the `id` is the MD5 of `name:FIRMATA`.
+
+The constructor takes the `FirmataClient`, a non-empty `name` and `FirmataIndiClientOptions`: `handler` (the consumer of every INDI event), `connectionTimeout` (milliseconds a connect waits for the board to become ready, 5000 by default; a non-positive value fails at once when the board is not ready) and `reportInterval` (milliseconds between the republications of the weather vector, 60000 by default; a non-positive value disables them). `ready` is true once the board finished its initialization, and `whenReady(cancel?)` resolves true when it is ready, or false after the timeout, on a reset or close, or when the optional `cancel` promise settles first. A board reset or a transport close disconnects every connected device (they stay registered) and a later ready makes them connectable again; after a close the next ready re-announces the registered devices.
+
+`createPeripheral()` chooses the device from the interfaces the peripheral implements. A real-time clock becomes an auxiliary device with a writable `TIME` number vector (`YEAR`, `MONTH`, `DAY`, `DAY_OF_WEEK`, `HOUR`, `MINUTE`, `SECOND`, `MILLISECOND`) and a momentary `TIME_SYNC` switch. Sensors become read-only measurement vectors: `WEATHER_PARAMETERS` with `WEATHER_TEMPERATURE` (°C), `WEATHER_HUMIDITY` (%) and `WEATHER_PRESSURE` (hPa, at the sensor altitude, not reduced to sea level) for whichever of the three the peripheral reports, `ALTITUDE` (metres, converted from the library distance), `CURRENT` (A), `ILLUMINANCE` (lx), `ACCELERATION` (m/s²), `ANGULAR_VELOCITY` (rad/s) and `MAGNETIC_FIELD` (G). A device that reports at least one weather quantity advertises the Weather and Auxiliary interfaces, any other one only Auxiliary. The call returns the virtual device and announces `DRIVER_INFO` and `CONNECTION`, the vectors of the sensor appearing when it connects. A peripheral without a supported interface, a name that is empty or already used, the same peripheral twice, or a peripheral of a different `FirmataClient` are refused, and so is any registration after `dispose()`.
+
+The lifecycle is driven by the usual INDI commands. `sendSwitch({ device, name: 'CONNECTION', elements: { CONNECT: true } })` waits for readiness (the connection is Busy meanwhile), attaches the listener, publishes every measurement vector Busy, starts the peripheral and finally sets the connection Idle; a vector settles to Idle with its first real reading, so a value that is not yet known is never presented as a measurement. Later readings publish a `setNumberVector` only when an element changed, except the weather vector, which is also republished every `reportInterval` (when new samples arrived) so its consumers can tell the sensor is alive. A reading outside the declared range of the vector is ignored and the vector keeps its last valid values. `DISCONNECT` removes the vectors and stops the peripheral, a disconnect during a connect cancels it, and a connection that fails leaves `CONNECTION` in the Alert state. `getProperties({ device?, name? })` replays the definitions (the measurements only while connected), `sendText` and `sendNumber` are ignored by the sensors, and `enableBlob` does nothing. On a clock, `sendNumber` for `TIME` writes the given fields (the others keep the current values, and an incomplete write before the first reading is ignored; the day of the week is computed), publishing the accepted values at once, and `TIME_SYNC` writes the host clock. `dispose()` (also `Symbol.dispose`) tears every device down, deletes their properties, detaches from the Firmata client and calls `handler.close(client, false)` once; a device's own `dispose()` removes only that device and frees its name.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { FirmataIndiClient } from 'nebulosa/src/devices/firmata/adapters/indi.client'
+import { DS3231 } from 'nebulosa/src/devices/firmata/components/rtc'
+import { SHT21 } from 'nebulosa/src/devices/firmata/sensors/hygrometer'
+
+const sent: string[] = []
+const firmata = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+
+// The wire form of an I2C reply: the register as two 7-bit bytes and each data byte as two 7-bit bytes.
+const reply = (address: number, register: number, data: number[]) => firmata.process(Buffer.from([0xf0, 0x77, address, 0, register & 0x7f, register >> 7, ...data.flatMap((byte) => [byte & 0x7f, byte >> 7]), 0xf7]))
+
+// A handler that prints a line per event.
+const handler = {
+	defTextVector: (_: unknown, v: { device: string; name: string }) => console.log('defText', v.device, v.name),
+	defSwitchVector: (_: unknown, v: { device: string; name: string }) => console.log('defSwitch', v.device, v.name),
+	defNumberVector: (_: unknown, v: { device: string; name: string; state: string }) => console.log('defNumber', v.device, v.name, v.state),
+	setNumberVector: (_: unknown, v: { device: string; name: string; state: string; elements: Record<string, { value: number }> }) =>
+		console.log(
+			'setNumber',
+			v.device,
+			v.name,
+			v.state,
+			Object.entries(v.elements)
+				.map(([name, e]) => `${name}=${e.value}`)
+				.join(' '),
+		),
+	setSwitchVector: (_: unknown, v: { device: string; name: string; state: string }) => console.log('setSwitch', v.device, v.name, v.state),
+	delProperty: (_: unknown, v: { device: string; name?: string }) => console.log('del', v.device, v.name),
+	close: (_: unknown, server: boolean) => console.log('close', server),
+}
+
+// The Firmata board finishes its initialization when it reports its firmware, its capabilities and its analog mapping.
+const bridge = new FirmataIndiClient(firmata, 'esp8266', { handler, connectionTimeout: 1000, reportInterval: 0 })
+console.log(bridge.type, bridge.id, bridge.description, bridge.ready) // FIRMATA 0691d06ace17eb66a69f943d62dd9204 Firmata Client (esp8266) false
+firmata.process(Buffer.from([0xf0, 0x79, 2, 5, 0x41, 0, 0xf7]))
+firmata.process(Buffer.from([0xf0, 0x6c, 0x7f, 0xf7]))
+firmata.process(Buffer.from([0xf0, 0x6a, 0x7f, 0xf7]))
+console.log(bridge.ready, await bridge.whenReady()) // true true
+
+// A weather sensor: the SHT21 becomes a Weather and Auxiliary device.
+const sht21 = new SHT21(firmata)
+const weather = bridge.createPeripheral(sht21)
+console.log(
+	weather.name,
+	weather.isConnected,
+	weather.measurements.map((m) => m.vector.name),
+) // SHT21 false [ 'WEATHER_PARAMETERS' ]
+
+// Connect through the INDI command: the vector is defined Busy and settles to Idle with the first reading.
+bridge.sendSwitch({ device: 'SHT21', name: 'CONNECTION', elements: { CONNECT: true, DISCONNECT: false } })
+await Bun.sleep(20)
+console.log(weather.isConnected) // true
+
+// Raw temperature 0x6666 is about 23.43 C and raw humidity 0x7ccc is about 54.94 %.
+reply(SHT21.ADDRESS, 0xe3, [0x66, 0x66])
+reply(SHT21.ADDRESS, 0xe5, [0x7c, 0xcc])
+
+// getProperties replays the definitions of one device, or of every device when it is omitted.
+bridge.getProperties({ device: 'SHT21', name: 'WEATHER_PARAMETERS' })
+bridge.getProperties()
+
+// Text and number commands are ignored by a sensor and BLOBs are not produced.
+bridge.sendText({ device: 'SHT21', name: 'DRIVER_INFO', elements: {} })
+bridge.sendNumber({ device: 'SHT21', name: 'WEATHER_PARAMETERS', elements: {} })
+bridge.enableBlob({ device: 'SHT21', value: 'Never' })
+
+// Disconnect removes the measurement vectors and stops the peripheral.
+bridge.sendSwitch({ device: 'SHT21', name: 'CONNECTION', elements: { CONNECT: false, DISCONNECT: true } })
+console.log(weather.isConnected) // false
+
+// A real-time clock: TIME is writable and TIME_SYNC writes the host clock. A DS3231 reply is 7 BCD registers.
+const ds3231 = new DS3231(firmata)
+const clock = bridge.createPeripheral(ds3231)
+await clock.connect()
+console.log(clock.isConnected) // true
+
+// 2026-10-05 (a Monday) 13:45:30 as BCD: seconds, minutes, hours, weekday (Sunday is 1), day, month, year.
+reply(DS3231.ADDRESS, 0x00, [0x30, 0x45, 0x13, 0x02, 0x05, 0x10, 0x26])
+
+// A partial write keeps the other fields; the day of the week is computed from the date (0 is Sunday).
+bridge.sendNumber({ device: 'DS3231', name: 'TIME', elements: { HOUR: 22, MINUTE: 10 } })
+bridge.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 2027, MONTH: 3, DAY: 14, HOUR: 1, MINUTE: 59, SECOND: 0 } })
+bridge.sendSwitch({ device: 'DS3231', name: 'TIME_SYNC', elements: { SYNC: true } })
+await clock.connect()
+clock.disconnect()
+
+// A device can be disposed alone, which frees its name; the client disposes the rest and closes once.
+clock.dispose()
+bridge.dispose()
+bridge.dispose()
+console.log(bridge.ready) // false
+```
+
 ### INDI Camera Control
 
 ### INDI Camera Simulator
 
 ### INDI Client Simulator
 
+The simulator backend runs INDI devices inside the process, with no server and no network, so that the device managers (and everything built on them: the camera, the mount, guiding and focusing algorithms) can be exercised deterministically. `ClientSimulator(id, handler, description?)` is a `Client` of type `'SIMULATOR'`: it keeps the registered `DeviceSimulator` objects by name and routes the manager commands (`sendText`, `sendNumber`, `sendSwitch` and `enableBlob`) to the device with the addressed name, ignoring unknown names. `getProperties` does nothing because a simulator pushes its definitions by itself, `get(name)` returns a registered simulator, `register()` and `unregister()` are used by the devices on construction and disposal, and `Symbol.dispose` disposes every simulator (so `using client = new ClientSimulator(...)` cleans up). Every simulated device (the individual ones are documented in their own topics) is constructed with its `name`, the client, optional `DeviceSimulatorOptions` and optionally its own `handler` (the client handler by default).
+
+All the simulators share the `DeviceSimulator` base. Constructing one registers it and defines `DRIVER_INFO` (with the `DRIVER_INTERFACE` bit mask, `DRIVER_EXEC` and `DRIVER_NAME`), `CONNECTION` (initially disconnected), `ACTIVE_DEVICES` (the snooped mount, focuser, filter wheel and rotator names, writable with `sendText`) and `CONFIG` (momentary `LOAD` and `SAVE` switches); the managers create the device from `DRIVER_INFO`. `connect()` selects `CONNECT`, defines the device properties and starts loading the saved ones, `disconnect()` deletes the properties and `dispose()` disconnects, deletes the whole device and unregisters it; `isConnected` reports the switch. Persistence is optional and entirely in the hands of the caller through `DeviceSimulatorOptions`: `save(name, properties)` receives the vectors that are saved (the transient ones are excluded) when `CONFIG.SAVE` is sent or `saveProperties()` is called, and `load(name)` returns the vectors to apply when the device connects or `CONFIG.LOAD` is sent (`loadProperties()` is asynchronous), applying only the element values that changed and notifying them. `CONFIG` is Busy while a load is pending, then Ok, or Alert when the hook fails; a load that is overtaken by a disconnect, a dispose or a newer request is discarded.
+
+`nebulosa/src/devices/indi/simulator/util` holds the helpers the simulators share: `sendDefinition` (the right `def*` event for a vector), `applyTextVectorValues`, `applyNumberVectorValues` (clamped to the element range, ignoring non-finite values), `applyExclusiveSwitchValues` (a OneOfMany vector) and `applyMultiSwitchValues`, each returning whether something changed; `wrapRotatorAngle` (degrees to [0, 360)), `shortestRotatorDelta` (signed degrees in (-180, 180]), `clampDeclination` (radians), and `pointingOffsetInPixels` and `boresightOffsetInPixels` (the displacement in unbinned pixels that a pointing error induces in a star field, from the positions and the pixel scale in radians per pixel; they write into `o`, return false and leave it untouched when no offset applies, and the second one first takes both directions of date to J2000). `nebulosa/src/devices/indi/simulator/constants` has the shared limits and timings (for example `TICK_INTERVAL_MS`, the 100 ms simulation tick, `COVER_MOVE_TIME_MS`, `FILTER_WHEEL_MOVE_TIME_MS`, `PANEL_MAX_INTENSITY`, the `SLEW_RATES` and the camera sensor geometry), and `nebulosa/src/devices/indi/simulator/types` the shared contracts, such as `SimulatorProperty`, `CatalogSource` and `MountPointingState`.
+
+```ts
+import { timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { FlatPanelManager } from 'nebulosa/src/devices/indi/manager/flatpanel'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { COVER_MOVE_TIME_MS, FILTER_WHEEL_SLOT_NAMES, PANEL_MAX_INTENSITY, SLEW_RATES, TICK_INTERVAL_MS } from 'nebulosa/src/devices/indi/simulator/constants'
+import { FlatPanelSimulator } from 'nebulosa/src/devices/indi/simulator/flatpanel'
+import type { SimulatorProperty } from 'nebulosa/src/devices/indi/simulator/types'
+import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorValues, applyTextVectorValues, boresightOffsetInPixels, clampDeclination, pointingOffsetInPixels, sendDefinition, shortestRotatorDelta, wrapRotatorAngle } from 'nebulosa/src/devices/indi/simulator/util'
+import { makeNumberVector, makeSwitchVector, makeTextVector } from 'nebulosa/src/devices/indi/types'
+import { arcsec, deg } from 'nebulosa/src/math/units/angle'
+
+console.log(TICK_INTERVAL_MS, COVER_MOVE_TIME_MS, PANEL_MAX_INTENSITY, FILTER_WHEEL_SLOT_NAMES, SLEW_RATES.length) // 100 500 255 ['L', 'R', 'G', 'B', 'Ha', 'SII', 'OIII', 'Dark'] 7
+
+// The persistence hooks keep the saved vectors in a map (a real application would write a file).
+const storage = new Map<string, readonly SimulatorProperty[]>()
+const options = { save: (name: string, properties: readonly SimulatorProperty[]) => storage.set(name, structuredClone(properties)), load: (name: string) => storage.get(name) ?? [] }
+
+// The handler set feeds the flat panel manager and logs the property events of the simulator.
+const handlers = new IndiClientHandlerSet()
+const manager = new FlatPanelManager()
+handlers.add(manager)
+handlers.add({ vector: (_, v, tag) => v.name !== 'DRIVER_INFO' && console.log(tag, v.device, v.name, v.state) })
+
+using client = new ClientSimulator('simulator', handlers, 'My simulator')
+const simulator = new FlatPanelSimulator('Flat Panel Simulator', client, options)
+console.log(client.type, client.id, client.description, client.get('Flat Panel Simulator') === simulator, client.get('Unknown'), simulator.isConnected) // SIMULATOR simulator My simulator true undefined false
+
+// The manager created the device from DRIVER_INFO. Connecting defines the properties of the panel.
+const panel = manager.get(client, simulator.name)!
+client.sendSwitch({ device: simulator.name, name: 'CONNECTION', elements: { CONNECT: true } })
+console.log(simulator.isConnected, panel.connected, panel.intensity.max) // true true 255
+
+// The snooped devices are plain text, and commands to an unknown device are ignored.
+client.sendText({ device: simulator.name, name: 'ACTIVE_DEVICES', elements: { ACTIVE_TELESCOPE: 'Telescope Simulator' } })
+client.sendNumber({ device: 'Unknown', name: 'FLAT_LIGHT_INTENSITY', elements: { FLAT_LIGHT_INTENSITY_VALUE: 10 } })
+client.getProperties()
+client.enableBlob({ device: simulator.name, value: 'Also' })
+
+// CONFIG: save the intensity, change it, then load it again (the load is asynchronous and applies only the saved values that changed).
+manager.intensity(panel, 200)
+client.sendSwitch({ device: simulator.name, name: 'CONFIG', elements: { SAVE: true } })
+console.log(
+	storage.has(simulator.name),
+	storage.get(simulator.name)?.map((p) => p.name),
+) // true ['FLAT_LIGHT_CONTROL', 'FLAT_LIGHT_INTENSITY']
+manager.intensity(panel, 20)
+console.log(panel.intensity.value) // 20
+client.sendSwitch({ device: simulator.name, name: 'CONFIG', elements: { LOAD: true } })
+await Bun.sleep(50)
+console.log(panel.intensity.value) // 200
+
+// saveProperties() and loadProperties() are also available directly.
+manager.intensity(panel, 90)
+simulator.saveProperties()
+manager.intensity(panel, 0)
+await simulator.loadProperties()
+console.log(panel.intensity.value) // 90
+
+// Disconnect deletes the properties and dispose removes the device from the manager and the client.
+simulator.disconnect()
+console.log(simulator.isConnected, panel.connected, manager.properties.length) // false false 1
+simulator.dispose()
+console.log(manager.has(client, simulator.name), client.get(simulator.name)) // false undefined
+
+// The vector helpers of the simulators: each returns whether something changed.
+const numbers = makeNumberVector('Device', 'LEVEL', 'Level', 'Main Control', 'rw', ['A', 'A', 5, 0, 10, 1, '%.0f'], ['B', 'B', 0, 0, 10, 1, '%.0f'])
+console.log(applyNumberVectorValues(numbers, { A: 50, B: Number.NaN }), numbers.elements.A.value, numbers.elements.B.value) // true 10 0
+const texts = makeTextVector('Device', 'NAMES', 'Names', 'Main Control', 'rw', ['A', 'A', 'x'])
+console.log(applyTextVectorValues(texts, { A: 'y' }), applyTextVectorValues(texts, { A: 'y' }), texts.elements.A.value) // true false y
+const exclusive = makeSwitchVector('Device', 'MODE', 'Mode', 'Main Control', 'OneOfMany', 'rw', ['ON', 'On', false], ['OFF', 'Off', true])
+console.log(applyExclusiveSwitchValues(exclusive, { ON: true }), exclusive.elements.ON.value, exclusive.elements.OFF.value) // true true false
+const multiple = makeSwitchVector('Device', 'FLAGS', 'Flags', 'Main Control', 'AnyOfMany', 'rw', ['X', 'X', false], ['Y', 'Y', false])
+console.log(applyMultiSwitchValues(multiple, { X: true, Y: true }), multiple.elements.X.value, multiple.elements.Y.value) // true true true
+sendDefinition(client, handlers, numbers)
+
+// Rotator angles in degrees and declinations in radians.
+console.log(wrapRotatorAngle(-30), wrapRotatorAngle(725), shortestRotatorDelta(10, 350), shortestRotatorDelta(350, 10), clampDeclination(deg(100))) // 330 5 20 -20 1.5707963267948966
+
+// A boresight 20 arcsec east of the nominal centre displaces the field by about 20 / 2 = 10 pixels at 2 arcsec per pixel, along +x for an eastward offset and +y for a northward one.
+const offset = { x: 0, y: 0 }
+console.log(pointingOffsetInPixels(deg(10), deg(20), deg(10) + arcsec(20) / Math.cos(deg(20)), deg(20), arcsec(2), offset), offset) // true { x: 10.00000003, y: -0.000176 }
+console.log(pointingOffsetInPixels(deg(10), deg(20), deg(10), deg(20), arcsec(2), offset)) // false
+console.log(boresightOffsetInPixels(deg(10), deg(20), deg(10), deg(20) + arcsec(20), arcsec(2), timeYMDHMS(2026, 10, 5, 12), offset), offset) // true { x: -0.00433, y: 9.9999991 }
+```
+
 ### INDI Cover
+
+`CoverManager` turns the INDI properties of a dust cap or a telescope cover into a `Cover` device (a `Parkable`, `DewHeater` device of type `'cover'`) and sends the commands to it. It is an `IndiClientHandler`, so it is added to the handler of the client and keeps a `DeviceManager` of covers (`get`, `list`, `connect`, `disconnect`, `simulation` and the other base members are described in INDI Protocol Client). The cover is created from `DRIVER_INFO` when the driver announces the cover interface, and it is parkable through the standard `CAP_PARK` vector: `canPark` is true while the permission of that vector is not read-only, `parking` follows the Busy state, and `parked` is the `PARK` switch. `canAbort` appears with the `CAP_ABORT` vector.
+
+The commands are `park(cover)` (closes the cover, sending `PARK`), `unpark(cover)` (opens it, sending `UNPARK`) and `stop(cover)` (sends `ABORT`); each one is ignored while the cover is not connected or does not have the capability. A command only requests the movement: the device changes after the driver reports the new state, so a caller waits for `parked`, `parking` or `connected` to change. The dew heater of the cover is documented in INDI Dew Heater.
+
+The devices below use the in-process simulator (see INDI Cover Simulator), so the snippet runs without hardware; with a real INDI server only the client changes. The `Bun.sleep` based wait is a local helper.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { CoverManager } from 'nebulosa/src/devices/indi/manager/cover'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { CoverSimulator } from 'nebulosa/src/devices/indi/simulator/cover'
+
+// Waits until a condition is true, polling every 10 ms.
+async function waitUntil(condition: () => boolean, timeout: number = 5000) {
+	const start = performance.now()
+	while (!condition() && performance.now() - start < timeout) await Bun.sleep(10)
+}
+
+const handler = new IndiClientHandlerSet()
+const manager = new CoverManager()
+handler.add(manager)
+
+using client = new ClientSimulator('cover', handler)
+using simulator = new CoverSimulator('Dust Cap Simulator', client)
+
+// The cover exists as soon as the driver info arrives. It is usable after the connection.
+const cover = manager.get(client, simulator.name)!
+console.log(cover.name, cover.type, cover.connected, manager.list(client).size) // Dust Cap Simulator cover false 1
+manager.connect(cover)
+await waitUntil(() => cover.connected)
+console.log(cover.connected, cover.canPark, cover.canAbort, cover.parked, cover.parking) // true true true false false
+
+// park() closes the cover. It is Busy (parking) for the duration of the movement.
+manager.park(cover)
+await waitUntil(() => cover.parking)
+console.log(cover.parking, cover.parked) // true false
+await waitUntil(() => cover.parked)
+console.log(cover.parking, cover.parked) // false true
+
+// unpark() opens it again.
+manager.unpark(cover)
+await waitUntil(() => !cover.parked && !cover.parking)
+console.log(cover.parking, cover.parked) // false false
+
+// stop() aborts a movement that is in progress.
+manager.park(cover)
+await waitUntil(() => cover.parking)
+manager.stop(cover)
+await Bun.sleep(100)
+console.log(cover.parking, cover.parked) // false false
+
+manager.disconnect(cover)
+await waitUntil(() => !cover.connected)
+console.log(cover.connected) // false
+```
 
 ### INDI Cover Simulator
 
+`CoverSimulator(name, client, options?)` simulates a dust cap or a telescope cover as an INDI device. On connection it defines `CAP_PARK` (`PARK`, `UNPARK`) and `CAP_ABORT` (`ABORT`); a park or an unpark makes `CAP_PARK` Busy for `COVER_MOVE_TIME_MS` (500 ms) and then Idle with the final switch, so a client sees the same sequence as with a real driver. `ABORT` stops the movement in progress, leaving the switches as they were and the property Alert. The simulator can also be driven directly: `park()` and `unpark()` do what the switches do, and `stop(alert?)` cancels the movement in progress (with `alert` false the property returns to Idle). The cover starts unparked, and the shared connection and configuration behaviour is described in INDI Client Simulator.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { CoverManager } from 'nebulosa/src/devices/indi/manager/cover'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { COVER_MOVE_TIME_MS } from 'nebulosa/src/devices/indi/simulator/constants'
+import { CoverSimulator } from 'nebulosa/src/devices/indi/simulator/cover'
+
+const handler = new IndiClientHandlerSet()
+const manager = new CoverManager()
+handler.add(manager)
+
+// Prints the state of the park vector each time it changes.
+handler.add({
+	setSwitchVector: (_, v) => v.name === 'CAP_PARK' && console.log('CAP_PARK', v.state, v.elements.PARK.value),
+})
+
+using client = new ClientSimulator('cover', handler)
+using simulator = new CoverSimulator('Dust Cap Simulator', client)
+const cover = manager.get(client, simulator.name)!
+manager.connect(cover)
+await Bun.sleep(50)
+console.log(COVER_MOVE_TIME_MS, cover.connected, cover.parked) // 500 true false
+
+// Through the INDI vector: Busy during the movement, then Idle.
+client.sendSwitch({ device: simulator.name, name: 'CAP_PARK', elements: { PARK: true } })
+await Bun.sleep(COVER_MOVE_TIME_MS + 100)
+console.log(cover.parked) // true
+
+// Directly on the simulator.
+simulator.unpark()
+await Bun.sleep(COVER_MOVE_TIME_MS + 100)
+console.log(cover.parked) // false
+
+// stop() cancels a movement in progress (the Alert state is the default).
+simulator.park()
+await Bun.sleep(100)
+simulator.stop()
+await Bun.sleep(COVER_MOVE_TIME_MS)
+console.log(cover.parked, cover.parking) // false false
+
+// The ABORT switch does the same.
+simulator.park()
+await Bun.sleep(100)
+client.sendSwitch({ device: simulator.name, name: 'CAP_ABORT', elements: { ABORT: true } })
+await Bun.sleep(COVER_MOVE_TIME_MS)
+console.log(cover.parked, cover.parking) // false false
+
+// stop(false) returns the property to Idle.
+simulator.park()
+await Bun.sleep(100)
+simulator.stop(false)
+await Bun.sleep(COVER_MOVE_TIME_MS)
+console.log(cover.parked, cover.parking) // false false
+```
+
 ### INDI Dew Heater
+
+`DewHeaterManager(provider)` adds a dew heater to a device that exposes the `Heater` number vector, which is how the WandererCover V4 EC publishes its heater channel. The `provider` is the manager of the parent device (here the `CoverManager`, which resolves a device by client and name): when the vector is defined and the parent is a known device, the manager marks the parent with `hasDewHeater` and creates a `'dewHeater'` proxy device over it, sharing the parent state. `dutyCycle` is a `MinMaxValueProperty` (`value`, `min`, `max`) updated from the `Heater` element, with the unit and range the driver declares (150 at most on that cover), on both the proxy and the parent. `dutyCycle(heater, value)` writes the element of the vector and accepts either the proxy or the parent device. Deleting the vector (or the whole device) resets the capability and the duty cycle, and removes the proxy; a command sent after that is ignored.
+
+A simulator does not publish the vector, so the snippet defines it by hand, the way the driver would, through the handler. The `ClientSimulator` receives the commands and passes them to the cover simulator, which ignores a vector it does not know, so the printed lines are the state of the managers.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { CoverManager } from 'nebulosa/src/devices/indi/manager/cover'
+import { DewHeaterManager } from 'nebulosa/src/devices/indi/manager/dewheater'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { CoverSimulator } from 'nebulosa/src/devices/indi/simulator/cover'
+import { makeNumberVector } from 'nebulosa/src/devices/indi/types'
+
+const handler = new IndiClientHandlerSet()
+const covers = new CoverManager()
+const heaters = new DewHeaterManager(covers)
+handler.add(covers)
+handler.add(heaters)
+
+using client = new ClientSimulator('cover', handler)
+using simulator = new CoverSimulator('Wanderer Cover', client)
+const cover = covers.get(client, simulator.name)!
+covers.connect(cover)
+await Bun.sleep(50)
+
+// Records what the client sends, to show the commands.
+const sendNumber = client.sendNumber.bind(client)
+client.sendNumber = (vector) => (console.log('sendNumber', vector.name, vector.elements), sendNumber(vector))
+
+// The driver defines the heater channel, 0 to 150, currently at 50.
+const heater = makeNumberVector(simulator.name, 'Heater', 'Heater', 'Main Control', 'rw', ['Heater', 'Heater', 50, 0, 150, 1, '%g'])
+handler.numberVector(client, heater, 'defNumberVector')
+
+const dewHeater = heaters.get(client, simulator.name)!
+console.log(dewHeater.type, dewHeater.hasDewHeater, cover.hasDewHeater, dewHeater.dutyCycle.value, dewHeater.dutyCycle.min, dewHeater.dutyCycle.max) // dewHeater true true 50 0 150
+
+// The command goes to the parent device by name, whichever of the two is given.
+heaters.dutyCycle(cover, 75)
+heaters.dutyCycle(dewHeater, 100)
+
+// The new value from the driver reaches both devices.
+heater.elements.Heater.value = 100
+handler.numberVector(client, heater, 'setNumberVector')
+console.log(dewHeater.dutyCycle.value, cover.dutyCycle.value) // 100 100
+
+// Deleting the property removes the capability and the proxy.
+handler.delProperty(client, { device: simulator.name, name: 'Heater' })
+console.log(heaters.get(client, simulator.name), cover.hasDewHeater, cover.dutyCycle.value) // undefined false 0
+heaters.dutyCycle(cover, 25)
+```
 
 ### INDI Dome and Roof
 
@@ -16351,11 +16965,183 @@ ds1307.stop()
 
 ### INDI Filter Wheel
 
+`WheelManager` builds a `Wheel` device from the INDI filter-wheel properties and controls it. `count` is the number of slots (the maximum of `FILTER_SLOT_VALUE`), `position` the current slot, 0-based (the INDI value is 1-based and the manager converts both ways), `moving` is true while `FILTER_SLOT` is Busy, `names` the labels of the slots from `FILTER_NAME` and `canSetNames` whether that vector is writable. `moveTo(wheel, slot)` requests a 0-based slot and `slots(wheel, names)` renames them, one name per slot in order; both are ignored while the wheel is not connected, and a slot outside the wheel is left to the driver.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { WheelManager } from 'nebulosa/src/devices/indi/manager/wheel'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { WheelSimulator } from 'nebulosa/src/devices/indi/simulator/wheel'
+
+// Waits until a condition is true, polling every 10 ms.
+async function waitUntil(condition: () => boolean, timeout: number = 5000) {
+	const start = performance.now()
+	while (!condition() && performance.now() - start < timeout) await Bun.sleep(10)
+}
+
+const handler = new IndiClientHandlerSet()
+const manager = new WheelManager()
+handler.add(manager)
+
+using client = new ClientSimulator('wheel', handler)
+using simulator = new WheelSimulator('Filter Wheel Simulator', client)
+
+const wheel = manager.get(client, simulator.name)!
+manager.connect(wheel)
+await waitUntil(() => wheel.connected)
+console.log(wheel.type, wheel.count, wheel.position, wheel.names, wheel.canSetNames, wheel.moving) // wheel 8 0 ['L', 'R', 'G', 'B', 'Ha', 'SII', 'OIII', 'Dark'] true false
+
+// Move to the fourth slot (index 3). The wheel is moving until it arrives.
+manager.moveTo(wheel, 3)
+await waitUntil(() => wheel.moving)
+console.log(wheel.moving) // true
+await waitUntil(() => !wheel.moving)
+console.log(wheel.position, wheel.names[wheel.position]) // 3 B
+
+// Rename the slots, in order.
+manager.slots(wheel, ['Luminance', 'Red', 'Green', 'Blue', 'Ha', 'SII', 'OIII', 'Dark'])
+await Bun.sleep(50)
+console.log(wheel.names) // ['Luminance', 'Red', 'Green', 'Blue', 'Ha', 'SII', 'OIII', 'Dark']
+
+manager.moveTo(wheel, 0)
+await waitUntil(() => wheel.moving)
+await waitUntil(() => !wheel.moving)
+console.log(wheel.position, wheel.names[wheel.position]) // 0 Luminance
+
+manager.disconnect(wheel)
+await waitUntil(() => !wheel.connected)
+console.log(wheel.connected) // false
+```
+
 ### INDI Filter Wheel Simulator
+
+`WheelSimulator(name, client, options?)` simulates a filter wheel with `FILTER_WHEEL_SLOT_NAMES.length` (8) slots named `L`, `R`, `G`, `B`, `Ha`, `SII`, `OIII` and `Dark`. On connection it defines `FILTER_SLOT` (`FILTER_SLOT_VALUE`, 1 to 8, initially 1) and `FILTER_NAME` (`FILTER_SLOT_NAME_1` to `FILTER_SLOT_NAME_8`). A move takes `FILTER_WHEEL_MOVE_TIME_MS` (250 ms) per slot travelled, with a lower bound of 150 ms, and keeps `FILTER_SLOT` Busy meanwhile; a requested slot is rounded and clamped to the wheel. `moveTo(slot)` does what writing the vector does, with a 1-based slot, and renaming the slots is a plain text write to `FILTER_NAME` that is applied at once. A request for the slot where the wheel already is only cancels a move in progress.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { WheelManager } from 'nebulosa/src/devices/indi/manager/wheel'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { FILTER_WHEEL_MOVE_TIME_MS, FILTER_WHEEL_SLOT_NAMES } from 'nebulosa/src/devices/indi/simulator/constants'
+import { WheelSimulator } from 'nebulosa/src/devices/indi/simulator/wheel'
+
+const handler = new IndiClientHandlerSet()
+const manager = new WheelManager()
+handler.add(manager)
+
+// Prints every state of the slot vector.
+handler.add({ setNumberVector: (_, v) => v.name === 'FILTER_SLOT' && console.log('FILTER_SLOT', v.state, v.elements.FILTER_SLOT_VALUE.value) })
+
+using client = new ClientSimulator('wheel', handler)
+using simulator = new WheelSimulator('Filter Wheel Simulator', client)
+const wheel = manager.get(client, simulator.name)!
+manager.connect(wheel)
+await Bun.sleep(50)
+console.log(FILTER_WHEEL_MOVE_TIME_MS, FILTER_WHEEL_SLOT_NAMES.length, wheel.count, wheel.position, wheel.names) // 250 8 8 0 ['L', 'R', 'G', 'B', 'Ha', 'SII', 'OIII', 'Dark']
+
+// The simulator is driven with a 1-based slot, directly or through the vector.
+simulator.moveTo(5)
+await Bun.sleep(FILTER_WHEEL_MOVE_TIME_MS * 8)
+console.log(wheel.position, wheel.names[wheel.position]) // 4 Ha
+
+client.sendNumber({ device: simulator.name, name: 'FILTER_SLOT', elements: { FILTER_SLOT_VALUE: 2 } })
+await Bun.sleep(FILTER_WHEEL_MOVE_TIME_MS * 8)
+console.log(wheel.position, wheel.names[wheel.position]) // 1 R
+
+// A slot above the last one is clamped to it.
+simulator.moveTo(20)
+await Bun.sleep(FILTER_WHEEL_MOVE_TIME_MS * 8)
+console.log(wheel.position, wheel.names[wheel.position]) // 7 Dark
+
+// Renaming a slot.
+client.sendText({ device: simulator.name, name: 'FILTER_NAME', elements: { FILTER_SLOT_NAME_1: 'Luminance' } })
+console.log(wheel.names[0]) // Luminance
+```
 
 ### INDI Flat Panel
 
+`FlatPanelManager` builds a `FlatPanel` device from the INDI light-box properties and controls it. The panel has `enabled` (the light is on, from the `FLAT_LIGHT_CONTROL` switch `FLAT_LIGHT_ON`) and `intensity`, a `MinMaxValueProperty` with `value`, `min` and `max` taken from `FLAT_LIGHT_INTENSITY` (`FLAT_LIGHT_INTENSITY_VALUE`). The commands are `enable(panel)` and `disable(panel)` (the light switches), `toggle(panel)` (the opposite of the current state) and `intensity(panel, value)`, which sends the value as is and leaves its limits to the driver; every command is ignored while the panel is not connected. The commands only request the change, which is seen on the device once the driver reports it. The cover that often comes with a flat panel is documented in INDI Cover.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { FlatPanelManager } from 'nebulosa/src/devices/indi/manager/flatpanel'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { FlatPanelSimulator } from 'nebulosa/src/devices/indi/simulator/flatpanel'
+
+// Waits until a condition is true, polling every 10 ms.
+async function waitUntil(condition: () => boolean, timeout: number = 5000) {
+	const start = performance.now()
+	while (!condition() && performance.now() - start < timeout) await Bun.sleep(10)
+}
+
+const handler = new IndiClientHandlerSet()
+const manager = new FlatPanelManager()
+handler.add(manager)
+
+using client = new ClientSimulator('panel', handler)
+using simulator = new FlatPanelSimulator('Flat Panel Simulator', client)
+
+const panel = manager.get(client, simulator.name)!
+manager.connect(panel)
+await waitUntil(() => panel.connected)
+console.log(panel.type, panel.connected, panel.enabled, panel.intensity.value, panel.intensity.min, panel.intensity.max) // flatPanel true false 0 0 255
+
+// Set the brightness first, then switch the light on.
+manager.intensity(panel, 128)
+manager.enable(panel)
+await Bun.sleep(50)
+console.log(panel.enabled, panel.intensity.value) // true 128
+
+manager.disable(panel)
+await Bun.sleep(50)
+console.log(panel.enabled) // false
+
+// toggle() inverts the current state.
+manager.toggle(panel)
+await Bun.sleep(50)
+console.log(panel.enabled) // true
+manager.toggle(panel)
+await Bun.sleep(50)
+console.log(panel.enabled) // false
+
+manager.disconnect(panel)
+await waitUntil(() => !panel.connected)
+console.log(panel.connected) // false
+```
+
 ### INDI Flat Panel Simulator
+
+`FlatPanelSimulator(name, client, options?)` simulates a light box. On connection it defines `FLAT_LIGHT_CONTROL` (`FLAT_LIGHT_ON` and `FLAT_LIGHT_OFF`, a OneOfMany switch that starts off) and `FLAT_LIGHT_INTENSITY` (`FLAT_LIGHT_INTENSITY_VALUE`, from 0 to `PANEL_MAX_INTENSITY`, 255, in steps of 1, initially 0). The changes are immediate: there is no motion, so both vectors stay Idle. A requested intensity is clamped to the range of the element, and the light switch and the intensity are independent (the light can be on with intensity 0). Both vectors are kept by `CONFIG` (see INDI Client Simulator), so the saved intensity and light state come back on the next connection.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { FlatPanelManager } from 'nebulosa/src/devices/indi/manager/flatpanel'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { PANEL_MAX_INTENSITY } from 'nebulosa/src/devices/indi/simulator/constants'
+import { FlatPanelSimulator } from 'nebulosa/src/devices/indi/simulator/flatpanel'
+
+const handler = new IndiClientHandlerSet()
+const manager = new FlatPanelManager()
+handler.add(manager)
+
+using client = new ClientSimulator('panel', handler)
+using simulator = new FlatPanelSimulator('Flat Panel Simulator', client)
+const panel = manager.get(client, simulator.name)!
+manager.connect(panel)
+await Bun.sleep(50)
+console.log(PANEL_MAX_INTENSITY, panel.enabled, panel.intensity.value, panel.intensity.max) // 255 false 0 255
+
+// The INDI vectors are written directly, as a client of a real driver would do.
+client.sendSwitch({ device: simulator.name, name: 'FLAT_LIGHT_CONTROL', elements: { FLAT_LIGHT_ON: true } })
+client.sendNumber({ device: simulator.name, name: 'FLAT_LIGHT_INTENSITY', elements: { FLAT_LIGHT_INTENSITY_VALUE: 100 } })
+console.log(panel.enabled, panel.intensity.value) // true 100
+
+// An intensity above the maximum is clamped.
+client.sendNumber({ device: simulator.name, name: 'FLAT_LIGHT_INTENSITY', elements: { FLAT_LIGHT_INTENSITY_VALUE: 1000 } })
+console.log(panel.intensity.value) // 255
+
+client.sendSwitch({ device: simulator.name, name: 'FLAT_LIGHT_CONTROL', elements: { FLAT_LIGHT_OFF: true } })
+console.log(panel.enabled, panel.intensity.value) // false 255
+```
 
 ### INDI Focuser Control
 
@@ -16373,6 +17159,129 @@ ds1307.stop()
 
 ### INDI Protocol Client
 
+The INDI layer has three pieces that every INDI topic below builds on: the protocol types and vector builders (`nebulosa/src/devices/indi/types`), the backend-agnostic device model (`nebulosa/src/devices/indi/device`) and `IndiClient`, the TCP client that talks XML to an `indiserver`. A device announces itself with `def*Vector` messages (text, number, switch, light or BLOB), updates it with `set*Vector` and withdraws it with `delProperty`; a client asks for definitions with `getProperties`, chooses the BLOB delivery with `enableBlob` and requests changes with `sendText`, `sendNumber` and `sendSwitch`. The same `Client` contract (`type`, `id`, `description`, `getProperties`, `enableBlob`, `sendText`, `sendNumber`, `sendSwitch` and `Symbol.dispose`) is implemented by the Alpaca and Firmata adapters and by the in-process simulator, which is why the device managers work with all of them. Numbers on the wire may be decimal or sexagesimal (`12:30:36`, `-5 30`), and are parsed as a plain scalar without any angle conversion.
+
+`IndiClient(options?)` takes `IndiClientOptions` with an optional `handler` (an `IndiClientHandler`). `connect(hostname, port?, options?)` (port `DEFAULT_INDI_PORT`, 7624) opens the socket, sends a `getProperties` request, and resolves true; it resolves false when already connected or connecting. The `id` is the MD5 of `address:port:INDI`, `remoteHost`, `remotePort`, `remoteIp` and `localPort` describe the endpoint, `connected` tells whether a socket exists and `description` becomes `INDI Client at address:port`. Received bytes go through `parse(data)`, which splits the XML stream (a message may arrive in any number of chunks) and calls the handler; the parsing of a vector is skipped when no callback of the handler could receive it. The `send*`, `getProperties` and `enableBlob` methods serialize XML with the attributes and text escaped and do nothing while disconnected; switches are sent as `On` and `Off`. `close()` drops the connection without notifying; when the peer or the server closes it, the handler's `close(client, server)` is called (`server` is true when the server ended the connection). The client logs connection events with `console`, and `Symbol.dispose` is `close()`.
+
+`IndiClientHandler` has one optional callback per message (`message`, `delProperty` and `close`) and, for each of the five vector kinds, the definition (`defTextVector`...), the update (`setTextVector`...) and the kind-level callbacks that receive both with the tag (`textVector`, `numberVector`, `switchVector`, `lightVector`, `blobVector`), plus the generic `defVector`, `setVector` and `vector`. `IndiClientHandlerSet` is a `Set` of handlers that is itself a handler and forwards every callback to its members. The `handleDefTextVector`, `handleDefNumberVector`, `handleDefSwitchVector`, `handleDefLightVector`, `handleDefBlobVector` and the matching `handleSet*Vector` functions call the specific, kind-level and generic callbacks in that order for one message, `handleDefVector` and `handleSetVector` only the generic ones, and `handleDelProperty(client, handler, ...vectors)` the deletion callback for each; the backends use them so that a handler sees the same events whatever their source.
+
+The builders create typed vectors with the Idle state and a 60 s timeout: `makeSwitchVector(device, name, label, group, rule, permission, ...[name, label, value])` (the rule is `'OneOfMany'`, `'AtMostOne'` or `'AnyOfMany'`), `makeNumberVector(..., permission, ...[name, label, value, min, max, step, format])`, `makeTextVector`, `makeLightVector(device, name, label, group, ...[name, label, state])` and `makeBlobVector`. `findOnSwitch(vector)` lists the names of the elements that are on (for a definition, an update or a command) and `selectOnSwitch(vector, name)` turns one on, clearing the others in a `'OneOfMany'` vector, returning whether something changed and doing nothing in an `'AtMostOne'` vector.
+
+The device model holds what the managers produce: `DeviceType`, the `Device` identity (`id`, `hardwareId`, `type`, `interfaces`, `name`, `connected`, `driver` and `client`) and one interface per kind of device (`Camera`, `Mount`, `Dome`, `Wheel`, `Focuser`, `Rotator`, `Cover`, `FlatPanel`, `Power`, `Weather`, `Thermometer`, `SafetyMonitor`, `GuideOutput`, `DewHeater`, `GPS`), each with a `DEFAULT_*` template that seeds a disconnected device, and the guards `isCamera`, `isMount`, `isFocuser`, `isWheel`, `isCover`, `isFlatPanel`, `isRotator`, `isDome`, `isPower`, `isWeather`, `isThermometer`, `isSafetyMonitor`, `isGuideOutput`, `isDewHeater`, `isGPS` and `isSubDevice`. Angles are radians, and temperatures are degrees Celsius. `DeviceInterfaceType` is the INDI `DRIVER_INTERFACE` bit mask; `isInterfaceType(mask, bit)` tests a bit and `findDeviceTypes(mask)` lists the device types a mask advertises. `expectedPierSide(rightAscension, declination, lst)` gives the pier side a German equatorial mount would use (`'NEITHER'` at a pole) and `meridianTimeIn(rightAscension, lst)` the seconds until the next upper transit.
+
+```ts
+import { DEFAULT_INDI_PORT, handleDefNumberVector, handleDefSwitchVector, handleDelProperty, handleSetNumberVector, IndiClient, IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { DEFAULT_CAMERA, DEFAULT_MOUNT, DeviceInterfaceType, expectedPierSide, findDeviceTypes, isCamera, isGuideOutput, isInterfaceType, isMount, isThermometer, meridianTimeIn } from 'nebulosa/src/devices/indi/device'
+import { findOnSwitch, makeBlobVector, makeLightVector, makeNumberVector, makeSwitchVector, makeTextVector, selectOnSwitch } from 'nebulosa/src/devices/indi/types'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+
+// The vector builders: a connection switch, a text, a number, a light and a BLOB vector.
+const connection = makeSwitchVector('CCD Simulator', 'CONNECTION', 'Connection', 'Main Control', 'OneOfMany', 'rw', ['CONNECT', 'Connect', false], ['DISCONNECT', 'Disconnect', true])
+const info = makeTextVector('CCD Simulator', 'DRIVER_INFO', 'Driver Info', 'General Info', 'ro', ['DRIVER_EXEC', 'Exec', 'indi_simulator_ccd'], ['DRIVER_VERSION', 'Version', '1.0'])
+const exposure = makeNumberVector('CCD Simulator', 'CCD_EXPOSURE', 'Expose', 'Main Control', 'rw', ['CCD_EXPOSURE_VALUE', 'Duration (s)', 1, 0.001, 3600, 0.001, '%5.2f'])
+const status = makeLightVector('CCD Simulator', 'STATUS', 'Status', 'Main Control', ['READY', 'Ready', 'Ok'])
+const image = makeBlobVector('CCD Simulator', 'CCD1', 'Image Data', 'Image Info', 'ro', ['CCD1', 'Image'])
+console.log(connection.rule, connection.state, connection.timeout, info.elements.DRIVER_EXEC.value, exposure.elements.CCD_EXPOSURE_VALUE.max, status.elements.READY.value, image.elements.CCD1.format) // OneOfMany Idle 60 indi_simulator_ccd 3600 Ok fits
+
+// Switch helpers: find the elements that are on and select one (a OneOfMany vector clears the other).
+console.log(findOnSwitch(connection)) // [ 'DISCONNECT' ]
+console.log(selectOnSwitch(connection, 'CONNECT'), selectOnSwitch(connection, 'CONNECT'), findOnSwitch(connection)) // true false [ 'CONNECT' ]
+const momentary = makeSwitchVector('CCD Simulator', 'CONFIG', 'Config', 'Main Control', 'AtMostOne', 'rw', ['SAVE', 'Save', false])
+console.log(selectOnSwitch(momentary, 'SAVE'), findOnSwitch({ device: 'CCD Simulator', name: 'CONFIG', elements: { SAVE: true, LOAD: false } })) // false [ 'SAVE' ]
+
+// A handler set fans the same events out to several consumers, and the handleXXX helpers call the callbacks of a handler in order.
+const calls: string[] = []
+const handlers = new IndiClientHandlerSet()
+handlers.add({ defNumberVector: (_, v) => calls.push(`a:def:${v.name}`), numberVector: (_, v, tag) => calls.push(`a:${tag}`), vector: (_, v, tag) => calls.push(`a:vector:${tag}`) })
+handlers.add({ setNumberVector: (_, v) => calls.push(`b:set:${v.name}`), delProperty: (_, v) => calls.push(`b:del:${v.name}`), close: (_, server) => calls.push(`b:close:${server}`) })
+const local = new IndiClient({ handler: handlers })
+handleDefNumberVector(local, handlers, exposure)
+handleSetNumberVector(local, handlers, exposure)
+handleDefSwitchVector(local, handlers, connection)
+handleDelProperty(local, handlers, exposure)
+handlers.close(local, true)
+console.log(calls) // [ 'a:def:CCD_EXPOSURE', 'a:defNumberVector', 'a:vector:defNumberVector', 'b:set:CCD_EXPOSURE', 'a:setNumberVector', 'a:vector:setNumberVector', 'a:vector:defSwitchVector', 'b:del:CCD_EXPOSURE', 'b:close:true' ]
+
+// A local indiserver mock that records what the client sends and answers a getProperties request with a definition.
+const received: string[] = []
+const server = Bun.listen({
+	hostname: '127.0.0.1',
+	port: 0,
+	socket: {
+		data: (socket, data) => {
+			const text = data.toString()
+			received.push(text)
+			if (text.startsWith('<getProperties'))
+				socket.write('<defNumberVector device="CCD Simulator" name="CCD_EXPOSURE" label="Expose" group="Main Control" state="Idle" perm="rw" timeout="60"><defNumber name="CCD_EXPOSURE_VALUE" label="Duration" format="%5.2f" min="0.001" max="3600" step="0.001">1</defNumber></defNumberVector>')
+		},
+	},
+})
+
+const events: string[] = []
+const client = new IndiClient({
+	handler: {
+		defNumberVector: (_, v) => events.push(`def ${v.device}/${v.name} ${v.state} ${v.permission} ${JSON.stringify(v.elements.CCD_EXPOSURE_VALUE)}`),
+		setNumberVector: (_, v) => events.push(`set ${v.name} ${v.state} ${v.elements.CCD_EXPOSURE_VALUE?.value}`),
+		setSwitchVector: (_, v) =>
+			events.push(
+				`set ${v.name} ${Object.entries(v.elements)
+					.map(([name, e]) => `${name}=${e.value}`)
+					.join(',')}`,
+			),
+		setTextVector: (_, v) => events.push(`set ${v.name} ${v.elements.NAME.value}`),
+		defLightVector: (_, v) => events.push(`def ${v.name} ${v.elements.READY.value}`),
+		setBlobVector: (_, v) => events.push(`set ${v.name} ${v.elements.CCD1.format} ${v.elements.CCD1.size} ${v.elements.CCD1.value?.toString()}`),
+		message: (_, m) => events.push(`message ${m.device} ${m.message}`),
+		delProperty: (_, m) => events.push(`del ${m.device} ${m.name}`),
+		close: (_, serverClosed) => events.push(`close ${serverClosed}`),
+	},
+})
+
+console.log(DEFAULT_INDI_PORT, client.connected, client.id) // 7624 false undefined
+console.log(await client.connect('127.0.0.1', server.port), await client.connect('127.0.0.1', server.port)) // true false (the client logs 'connection open' with console.info)
+await Bun.sleep(100)
+console.log(client.connected, client.remoteHost, client.remotePort === server.port, client.remoteIp, client.description === `INDI Client at 127.0.0.1:${server.port}`, client.id.length) // true 127.0.0.1 true 127.0.0.1 true 32
+console.log(received[0], events[0]) // <getProperties version="1.7"></getProperties> def CCD Simulator/CCD_EXPOSURE Idle rw {"name":"CCD_EXPOSURE_VALUE","label":"Duration","format":"%5.2f","min":0.001,"max":3600,"step":0.001,"value":1}
+
+// The commands are serialized as XML: switches as On/Off, and the special characters of the text are escaped.
+client.getProperties({ device: 'CCD Simulator', name: 'CCD_EXPOSURE' })
+client.enableBlob({ device: 'CCD Simulator', value: 'Also' })
+client.sendNumber({ device: 'CCD Simulator', name: 'CCD_EXPOSURE', elements: { CCD_EXPOSURE_VALUE: 2.5 } })
+client.sendSwitch({ device: 'CCD Simulator', name: 'CONNECTION', elements: { CONNECT: true, DISCONNECT: false } })
+client.sendText({ device: 'CCD Simulator', name: 'ACTIVE_DEVICES', elements: { ACTIVE_TELESCOPE: 'Mount & <Guider>' } })
+await Bun.sleep(100)
+console.log(received.slice(1).join('')) // <getProperties version="1.7" device="CCD Simulator" name="CCD_EXPOSURE"></getProperties><enableBLOB device="CCD Simulator">Also</enableBLOB><newNumberVector device="CCD Simulator" name="CCD_EXPOSURE"><oneNumber name="CCD_EXPOSURE_VALUE">2.5</oneNumber></newNumberVector><newSwitchVector device="CCD Simulator" name="CONNECTION"><oneSwitch name="CONNECT">On</oneSwitch><oneSwitch name="DISCONNECT">Off</oneSwitch></newSwitchVector><newTextVector device="CCD Simulator" name="ACTIVE_DEVICES"><oneText name="ACTIVE_TELESCOPE">Mount &amp; &lt;Guider&gt;</oneText></newTextVector>
+
+// The XML stream is parsed in any chunking: here a set vector of each kind, a message and a deletion split in the middle of a tag.
+const xml = Buffer.from(
+	'<setNumberVector device="CCD Simulator" name="CCD_EXPOSURE" state="Busy"><oneNumber name="CCD_EXPOSURE_VALUE">0:30:00</oneNumber></setNumberVector>' +
+		'<setSwitchVector device="CCD Simulator" name="CONNECTION" state="Ok"><oneSwitch name="CONNECT">On</oneSwitch><oneSwitch name="DISCONNECT">Off</oneSwitch></setSwitchVector>' +
+		'<setTextVector device="CCD Simulator" name="NAME" state="Ok"><oneText name="NAME">Camera and Co</oneText></setTextVector>' +
+		'<defLightVector device="CCD Simulator" name="STATUS" state="Ok"><defLight name="READY" label="Ready">Ok</defLight></defLightVector>' +
+		'<setBLOBVector device="CCD Simulator" name="CCD1" state="Ok"><oneBLOB name="CCD1" size="5" format=".fits">hello</oneBLOB></setBLOBVector>' +
+		'<message device="CCD Simulator" message="Exposure complete"/>' +
+		'<delProperty device="CCD Simulator" name="CCD_EXPOSURE"/>',
+)
+client.parse(xml.subarray(0, 60))
+client.parse(xml.subarray(60, 200))
+client.parse(xml.subarray(200))
+console.log(events.slice(1)) // [ 'def CCD Simulator/CCD_EXPOSURE Idle rw {...}', 'set CCD_EXPOSURE Busy 0.5', 'set CONNECTION CONNECT=true,DISCONNECT=false', 'set NAME Camera and Co', 'def STATUS Ok', 'set CCD1 .fits 5 hello', 'message CCD Simulator Exposure complete', 'del CCD Simulator CCD_EXPOSURE' ] (the first event is the definition received on connect, and 0:30:00 is parsed as 0.5)
+
+// close() drops the connection without notifying the handler.
+client.close()
+console.log(client.connected, client.remoteHost) // false 127.0.0.1
+server.stop(true)
+
+// The device model: the interface bit mask, the guards and the default templates.
+const mask = DeviceInterfaceType.CCD | DeviceInterfaceType.GUIDER | DeviceInterfaceType.FILTER
+console.log(mask, isInterfaceType(mask, DeviceInterfaceType.CCD), isInterfaceType(mask, DeviceInterfaceType.TELESCOPE), findDeviceTypes(mask), findDeviceTypes(DeviceInterfaceType.TELESCOPE | DeviceInterfaceType.DOME | DeviceInterfaceType.WEATHER)) // 22 true false [ 'camera', 'wheel' ] [ 'mount', 'dome', 'weather' ]
+console.log(isCamera(DEFAULT_CAMERA), isMount(DEFAULT_CAMERA), isGuideOutput(DEFAULT_CAMERA), isThermometer(DEFAULT_CAMERA), isMount(DEFAULT_MOUNT), DEFAULT_MOUNT.connected, DEFAULT_MOUNT.trackMode, DEFAULT_MOUNT.mountType) // true false true true true false SIDEREAL EQ_GEM
+
+// Pier side and time to the meridian for a target at 3h of right ascension and +20 degrees, with the local sidereal time at 1h and at 5h.
+console.log(expectedPierSide(hour(3), deg(20), hour(1)), expectedPierSide(hour(3), deg(20), hour(5)), expectedPierSide(hour(3), deg(90), hour(1))) // WEST EAST NEITHER
+console.log(meridianTimeIn(hour(3), hour(1)), meridianTimeIn(hour(3), hour(5))) // 7180.340875 78983.749625 (seconds, about 2 h and 21.9 h)
+```
+
 ### INDI Rotator
 
 ### INDI Rotator Simulator
@@ -16382,6 +17291,43 @@ ds1307.stop()
 ### INDI Safety Simulator
 
 ### INDI Thermometer
+
+`ThermometerManager(provider)` exposes the temperature sensor of a camera or a focuser as an independent `Thermometer` device. The `provider` resolves the parent by client, name and type (`'camera'` for `CCD_TEMPERATURE` and `'focuser'` for `FOCUS_TEMPERATURE`), so it is usually a small object that asks the camera manager and the focuser manager. When the temperature vector is defined for a known parent, the manager marks it with `hasThermometer` and creates a `'thermometer'` proxy device over it; the proxy shares the connection state of the parent and its `temperature` (°C) follows the vector (`TEMPERATURE` for a focuser and `CCD_TEMPERATURE_VALUE` for a camera). The manager keeps the temperature at whole degrees, reporting a change only when that integer changes, on the proxy and on the parent alike. Deleting the vector resets the temperature and the capability and removes the proxy. The manager has no commands, since the sensors are read-only.
+
+The focuser simulator publishes `FOCUS_TEMPERATURE` (see INDI Focuser Simulator), so the snippet uses it as the parent.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { FocuserManager } from 'nebulosa/src/devices/indi/manager/focuser'
+import { ThermometerManager } from 'nebulosa/src/devices/indi/manager/thermometer'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { FocuserSimulator } from 'nebulosa/src/devices/indi/simulator/focuser'
+
+const handler = new IndiClientHandlerSet()
+const focusers = new FocuserManager()
+const thermometers = new ThermometerManager({ get: (client, name) => focusers.get(client, name) })
+handler.add(focusers)
+handler.add(thermometers)
+
+using client = new ClientSimulator('focuser', handler)
+using simulator = new FocuserSimulator('Focuser Simulator', client)
+const focuser = focusers.get(client, simulator.name)!
+focusers.connect(focuser)
+await Bun.sleep(100)
+
+// The proxy exists once the temperature vector has been defined.
+const thermometer = thermometers.get(client, simulator.name)!
+console.log(thermometer.type, thermometer.hasThermometer, focuser.hasThermometer, thermometer.connected, thermometer.temperature, focuser.temperature) // thermometer true true true 18 18
+
+// A new reading from the driver, in degrees Celsius. The value is kept at whole degrees.
+handler.numberVector(client, { device: simulator.name, name: 'FOCUS_TEMPERATURE', permission: 'ro', state: 'Ok', elements: { TEMPERATURE: { name: 'TEMPERATURE', format: '%6.2f', min: -50, max: 70, step: 0.1, value: 12.6 } } }, 'setNumberVector')
+console.log(thermometer.temperature, focuser.temperature) // 13 13
+
+// Disconnecting the parent deletes the property and removes the proxy.
+focusers.disconnect(focuser)
+await Bun.sleep(100)
+console.log(thermometers.get(client, simulator.name), focuser.hasThermometer) // undefined false
+```
 
 ### INDI Weather
 
