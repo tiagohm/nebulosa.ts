@@ -16269,6 +16269,30 @@ console.log(toMeter(fromPressure(pressureFrom(meter(5000), 10), 10))) // 4999.99
 
 ### Clamping and Tolerant Equality
 
+`clamp(value, min, max)` limits a value to the inclusive range `[min, max]` (it expects `min <= max`) and maps a `NaN` value to `min`, so a corrupted reading never leaves the range as `NaN`. `isNearlyEqual(a, b, relativeTolerance?, absoluteTolerance?)` tells whether two numbers are equal within a tolerance that is the larger of the absolute tolerance and `max(|a|, |b|) · relativeTolerance`; both default to `Number.EPSILON` (about 2.2e-16), which only forgives rounding errors of a few ulps near 1, so pick tolerances that match the scale and the conditioning of the data. Identical values are equal (including two infinities of the same sign), and when either operand is `NaN` or only one is infinite the result is `false`. The two tolerances answer different questions: the relative one scales with the magnitude of the operands and the absolute one protects comparisons close to zero, where a relative tolerance would require an exact match.
+
+```ts
+import { clamp, isNearlyEqual } from 'nebulosa/src/math/numerical/math'
+
+// Inside, below and above the range, and NaN.
+console.log(clamp(5, 0, 10), clamp(-3, 0, 10), clamp(12, 0, 10)) // 5 0 10
+console.log(clamp(Number.NaN, 0, 10)) // 0
+console.log(clamp(Math.PI, -Math.PI, Math.PI)) // 3.141592653589793
+
+// The classic floating-point sum, and a mismatch beyond the default tolerance.
+console.log(0.1 + 0.2 === 0.3, isNearlyEqual(0.1 + 0.2, 0.3)) // false true
+console.log(isNearlyEqual(1, 1.0001)) // false
+
+// Relative tolerance (1 ppm) for large values and an absolute one near zero.
+console.log(isNearlyEqual(1000000, 1000000.5, 1e-6)) // true
+console.log(isNearlyEqual(1e-12, 0, 1e-6)) // false
+console.log(isNearlyEqual(1e-12, 0, 1e-6, 1e-9)) // true
+
+// Identical infinities are equal, and an infinity never matches a finite value.
+console.log(isNearlyEqual(Infinity, Infinity), isNearlyEqual(Infinity, 1e308)) // true false
+console.log(isNearlyEqual(Number.NaN, Number.NaN)) // false
+```
+
 ### Dense Linear System Solvers
 
 Three solvers cover dense systems `A·x = b`. `LuDecomposition` factorizes a square matrix once with partial row pivoting and then offers `determinant` (the product of the U pivots with the sign of the row swaps), `isSingular` (true when any pivot is exactly zero), `invert(o?)` (writes into `o` or allocates a matrix) and `solve(b)` (returns a `Float64Array`), so several right-hand sides can reuse one factorization; both `invert` and `solve` throw for a singular matrix. By default the factorization works on a clone, and `new LuDecomposition(matrix, true)` factorizes in place, which saves the copy but destroys the contents of `matrix` and makes the factors alias its data. `QrDecomposition` uses Householder reflections for a matrix with at least as many rows as columns: `isFullRank` tells whether every diagonal entry of R is non-zero and `solve(b)`, with `b` of length `rows`, returns the solution of a square system or the least-squares solution (minimum `‖A·x − b‖`) of a tall one as a `Float64Array` of length `cols`, throwing when the matrix is rank deficient; it also accepts the `destructive` flag as the second constructor argument. QR is the more stable choice for least squares than the normal equations and LU. `gaussianElimination(A, b, o?)` is a standalone Gaussian elimination with partial pivoting for a square `A`; it mutates `A.data` and `b` in place (pass copies to keep them), writes the solution into `o` (which may be `b` itself) or into a new array, and fills the result with `NaN` for a singular matrix instead of throwing. All three work in double precision, so the accuracy of the result depends on the conditioning of `A`.
@@ -16392,6 +16416,45 @@ console.log(
 
 ### Descriptive Statistics
 
+The reducers work on any `NumberArray` and keep the units of the samples (the variance would be in squared units); most of them return `NaN` for an empty input. `minOf` and `maxOf` return `[value, index]` and skip `NaN` entries (`[NaN, -1]` when nothing is left). `meanOf(a, start?, end?)` averages the half-open index range with Neumaier compensated summation, and `geometricMeanOf(values, start?, end?)` accumulates logarithms so a wide dynamic range does not overflow: a zero makes the result zero and negative values give `NaN`. `rmsOf` is the root mean square and `standardDeviationOf(a, count?)` the population standard deviation (divided by `n`, not `n - 1`) of the first `count` values. `medianOf(sorted, count?)` and `percentileOf(sorted, fraction, count?)` need an ascending-sorted array (the percentile is a fraction in [0, 1], clamped, with linear interpolation between ranks); for unsorted data use the selection variants of Quickselect Order Statistics. `medianAbsoluteDeviationOf(a, median, normalized, count?, scratch?)` is the median of the absolute deviations from the given `median`, multiplied by `STANDARD_DEVIATION_SCALE` (1.4826, the ratio that makes it estimate the standard deviation of a normal distribution) when `normalized` is true; a `Float64Array` `scratch` of at least `count` entries, which must not alias the input, avoids the temporary allocation. `pearsonCorrelationOf(a, b)` is the correlation coefficient over the common prefix of two arrays, 0 when either has no variance. `geometricMedian(x, y, count?)` approximates the point that minimizes the sum of Euclidean distances to paired coordinates (both axes in the same unit) by a bounded Weiszfeld iteration with Newton steps, returns a fresh `{ x, y }` and is more robust to outliers than the centroid, but yields `undefined` for empty input or when it does not converge in 512 iterations.
+
+```ts
+import { geometricMeanOf, geometricMedian, maxOf, meanOf, medianAbsoluteDeviationOf, medianOf, minOf, pearsonCorrelationOf, percentileOf, rmsOf, STANDARD_DEVIATION_SCALE, standardDeviationOf } from 'nebulosa/src/math/numerical/statistics'
+
+const data = [2, 4, 4, 4, 5, 5, 7, 9]
+
+// Extremes with their indexes (NaN entries are skipped), and the means.
+console.log(minOf(data), maxOf(data)) // [ 2, 0 ] [ 9, 7 ]
+console.log(minOf([3, Number.NaN, 1])) // [ 1, 2 ]
+console.log(meanOf(data), meanOf(data, 2, 5)) // 5 4.333333333333333
+console.log(geometricMeanOf([1, 10, 100])) // 10.000000000000002
+console.log(geometricMeanOf([1e-200, 1e200, 1e-200, 1e200])) // 1
+
+// Spread: population standard deviation and the root mean square.
+console.log(standardDeviationOf(data), standardDeviationOf(data, 4)) // 2 0.8660254037844386
+console.log(rmsOf([3, 4])) // 3.5355339059327378
+
+// Order statistics of a sorted array.
+console.log(medianOf(data), medianOf(data, 3)) // 4.5 4
+console.log(percentileOf(data, 0.5), percentileOf(data, 0.9), percentileOf(data, 2)) // 4.5 7.6 9
+
+// The median absolute deviation, raw and scaled to a standard deviation; a spurious value barely moves it.
+console.log(medianAbsoluteDeviationOf(data, 4.5, false)) // 0.5
+console.log(medianAbsoluteDeviationOf(data, 4.5, true), 0.5 * STANDARD_DEVIATION_SCALE) // 0.741301109252801 0.741301109252801
+const dirty = [...data, 1000]
+console.log(medianAbsoluteDeviationOf(dirty, 5, true, dirty.length, new Float64Array(dirty.length))) // 1.482602218505602
+console.log(standardDeviationOf(dirty)) // 312.7040173536883 (the standard deviation is dragged by the outlier)
+
+// Correlation of a line and of its reverse.
+console.log(pearsonCorrelationOf([1, 2, 3, 4], [2, 4, 6, 8]), pearsonCorrelationOf([1, 2, 3, 4], [8, 6, 4, 2])) // 1 -1
+
+// The geometric median ignores a far outlier much more than the mean does.
+const px = [0, 1, 0, 1, 100]
+const py = [0, 0, 1, 1, 100]
+console.log(geometricMedian(px, py)) // { x: 0.7886751345947797, y: 0.7886751345947796 } (near the cluster, not at 20.4)
+console.log(meanOf(px), meanOf(py)) // 20.4 20.4
+```
+
 ### Distance Units
 
 A `Distance` is a plain number in astronomical units (AU, the IAU 2012 value of 149597870700 m), and this module converts to and from other length units. `meter`, `kilometer`, `lightYear` and `parsec` build a distance in AU from the given unit, and `toMeter`, `toKilometer`, `toLightYear` and `toParsec` convert back. The light year is the distance light travels in one Julian year (365.25 days of 86400 s) and the parsec is the library constant `ONE_PARSEC`. `fromPressure(pressure, temperature?)` estimates the pressure altitude, returned as a distance, from a pressure in millibar (hPa) and a temperature in degrees Celsius (15 by default), using the barometric formula with the constant tropospheric lapse rate of the 1976 US Standard Atmosphere; it is the inverse of the pressure helpers described in Barometric Pressure and Altitude and is only an approximation of the real atmosphere. Conversions are single multiplications or divisions, so values round trip up to floating-point precision.
@@ -16425,6 +16488,31 @@ console.log(toMeter(fromPressure(700, 5))) // about 2907.6
 ### Ellipse Fitting
 
 ### Error-Free Floating-Point Arithmetic
+
+These helpers return a floating-point result together with its exact rounding error, the building blocks of compensated (Kahan or Neumaier style) and double-double arithmetic. `twoSum(a, b, out?)` returns `[sum, error]` with `sum = a + b` rounded as usual and `error` the exact amount lost, so `sum + error` equals `a + b` exactly; it holds for any finite operands, with no ordering requirement. `twoProduct(a, b, out?)` returns `[product, error]` using Dekker splitting, where `product + error` equals the exact product as long as the splitting and the product do not overflow or underflow (finite operands whose splitting and product stay within the double range). `split(a)` breaks a double into a high and a low half (`[high, low]`, with `high + low === a`) whose products with other halves are exact, using the constant 2²⁷ + 1. Both `twoSum` and `twoProduct` write into the optional `out` array (a plain array or a typed array) and return it, and allocate a new two-element array when it is omitted; reusing one `out` in a loop avoids the allocation. The results are in the units of the operands and carry no accuracy claim beyond the error-free identities above.
+
+```ts
+import { split, twoProduct, twoSum } from 'nebulosa/src/math/numerical/math'
+
+// 0.1 + 0.2 is not exactly 0.3 in binary; the error term holds what the sum lost.
+console.log(twoSum(0.1, 0.2)) // [ 0.30000000000000004, -2.7755575615628914e-17 ]
+
+// A big plus a small value: the small one survives in the error term.
+console.log(twoSum(1e16, 1.25)) // [ 10000000000000002, -0.75 ] (the sum rounds to the even neighbor, and the error is -0.75)
+
+// Reusing one output array.
+const out = new Float64Array(2)
+console.log(twoSum(1, 1e-20, out) === out, out) // true Float64Array(2) [ 1, 1e-20 ]
+
+// The product error of 0.1 * 0.1, and of values with exact products.
+console.log(twoProduct(0.1, 0.1)) // [ 0.010000000000000002, -8.326672684688674e-19 ]
+console.log(twoProduct(3, 4)) // [ 12, 0 ]
+console.log(twoProduct(1 + 2 ** -30, 1 + 2 ** -30, out) === out, out) // true Float64Array(2) [ 1.0000000018626451, 8.673617379884035e-19 ]
+
+// The two halves of a double add back to it.
+const [high, low] = split(Math.PI)
+console.log(high, low, high + low === Math.PI) // 3.1415926814079285 -2.781813535079891e-8 true
+```
 
 ### Exponential and Power Regression
 
@@ -16495,6 +16583,44 @@ console.log(sphericalGreatCirclePole([1, 0, 0], [2, 0, 0])) // [ 0, 0, 0 ]
 ```
 
 ### Histogram Analysis
+
+`Histogram` computes lazily cached descriptive statistics from an array of bin counts, as built from an image or a star-profile histogram: `new Histogram(bins, max, maxSq?)` takes the counts (the index is the intensity bin and the value the number of samples), `max` the largest bin index used to normalize positions onto 0..1 (a `max` of 0 leaves positions as bin indexes), and `maxSq` (default `max²`) to normalize the variance. Each statistic is computed on first access and kept, so changing the bins afterwards requires `reset()` (all statistics) or `reset(key)` (one) before reading again. The positions are normalized: `mean`, `median`, `quantile(p)` (probability in [0, 1], linear interpolation inside the bin) and `cdf(position)` (the cumulative fraction up to a normalized position) describe the distribution, `variance` and `standardDeviation` its spread (normalized by `maxSq`), `skewness` the standardized third moment and `kurtosis` the excess kurtosis (fourth moment minus 3, 0 for a normal shape), the last two in bin units and 0 for a constant distribution. `mode`, `minimum` and `maximum` return `[position, count]` of the most populated, the first populated and the last populated bin, `count` returns `[total, largest bin count]` and `entropy` the Shannon entropy in bits. An empty histogram gives 0 for the statistics, and the bins are read as they are, never copied.
+
+```ts
+import { Histogram } from 'nebulosa/src/math/numerical/statistics'
+
+// A histogram of 8 bins (indexes 0..7, so max = 7) with a peak at bin 3.
+const bins = [1, 4, 10, 20, 10, 4, 1, 0]
+const h = new Histogram(bins, 7)
+
+console.log(h.count) // [ 50, 20 ] (total samples, largest bin)
+console.log(h.mode) // [ 0.42857142857142855, 20 ] (bin 3 of 7)
+console.log(h.minimum, h.maximum) // [ 0, 1 ] [ 0.8571428571428571, 1 ]
+
+// Position statistics, normalized by 7.
+console.log(h.mean) // 0.42857142857142855
+console.log(h.median) // 0.5
+console.log(h.quantile(0.25), h.quantile(0.75)) // 0.39285714285714285 0.6071428571428571
+console.log(h.cdf(3 / 7), h.cdf(1)) // 0.3 1
+
+// Spread, shape and information.
+console.log(h.variance, h.standardDeviation) // 0.02857142857142857 0.1690308509457033
+console.log(h.skewness, h.kurtosis) // 0 0.16326530612244916
+console.log(h.entropy) // 2.2663137138648346
+
+// Cached values are reused until reset; after editing the bins, reset one statistic or all of them.
+const bins2 = new Uint32Array(bins)
+const h2 = new Histogram(bins2, 7)
+console.log(h2.mean) // 0.42857142857142855
+bins2[7] = 50
+h2.reset('mean')
+h2.reset('count')
+console.log(h2.mean) // 0.7142857142857143 (the bin 7 with 50 counts moved the mean)
+h2.reset()
+
+// Without normalization (max = 0) positions are bin indexes.
+console.log(new Histogram(bins, 0).mean, new Histogram(bins, 0).mode) // 3 [ 3, 20 ]
+```
 
 ### Hyperbolic Regression
 
@@ -16599,9 +16725,60 @@ console.log(intersect(up, simpleLinearRegression([0, 1, 2], [3, 5, 7]))) // unde
 
 ### Modulo and Integer Division
 
+The JavaScript `%` keeps the sign of the dividend, which is wrong for wrapping angles, indices and times; these helpers use the Euclidean convention instead. `pmod(num, other)` returns the remainder in [0, |other|) (so `-1` modulo `360` is `359`), where the sign of `other` is ignored, a tiny negative residual that would round up to the modulus becomes 0, and the result is never `-0`. `amod(num, other)` is the variant whose result lies in (0, |other|], so an exact multiple gives the modulus and not 0 (the convention of 1-based cycles, such as day-of-year or hour 24). `divmod(num, other)` returns `[quotient, remainder]` as a read-only pair such that `quotient * other + remainder = num`, with the remainder from `pmod` and an integer quotient. `floorDiv(x, y)` is `Math.floor(x / y)` and rounds toward minus infinity, unlike truncating integer division. All of them work on doubles, so they accept fractional operands (for example angles in radians modulo `TAU`), and a zero `other` gives `NaN`.
+
+```ts
+import { amod, divmod, floorDiv, pmod } from 'nebulosa/src/math/numerical/math'
+
+// The JavaScript remainder keeps the sign; pmod wraps into [0, 360).
+console.log(-1 % 360, pmod(-1, 360)) // -1 359
+console.log(pmod(725, 360), pmod(360, 360)) // 5 0
+console.log(pmod(-30, -360)) // 330 (the sign of the divisor is ignored)
+console.log(pmod(-0.25, 1)) // 0.75
+
+// amod returns the modulus instead of 0 at an exact multiple.
+console.log(amod(24, 24), amod(25, 24), amod(0, 24), amod(-1, 24)) // 24 1 24 23
+
+// Quotient and remainder together.
+console.log(divmod(725, 360)) // [ 2, 5 ]
+console.log(divmod(-1, 360)) // [ -1, 359 ]
+console.log(divmod(10.5, 2)) // [ 5, 0.5 ]
+
+// Floor division rounds toward minus infinity.
+console.log(floorDiv(7, 2), floorDiv(-7, 2), Math.trunc(-7 / 2)) // 3 -4 -3
+console.log(floorDiv(1, 0.3)) // 3
+```
+
 ### Nonlinear Least Squares
 
 ### Number Array Type and Detection
+
+`NumberArray` is the union of the contiguous numeric storages accepted by the array helpers of the library: `Float64Array`, `Float32Array`, `Float16Array`, `Int32Array`, `Uint32Array`, `Int16Array`, `Uint16Array`, `Int8Array`, `Uint8Array`, `Uint8ClampedArray` and plain `number[]`. Code that must work for images, histograms and fits alike takes this type and reads by index, so the caller keeps the compact typed array. `isNumberArray(value)` is the type guard that identifies one of these from an `unknown` input without copying or mutating it. Typed arrays are recognized by their class; a plain array matches when it is empty or its first element is a number, so a mixed array whose later elements are not numbers is not detected, and `BigInt64Array`, `DataView` and `ArrayBuffer` are not number arrays. It is the check used to accept either a numeric degree or a list of powers in the polynomial regression.
+
+```ts
+import { isNumberArray } from 'nebulosa/src/math/numerical/array'
+import type { NumberArray } from 'nebulosa/src/math/numerical/math'
+
+// A function that accepts every storage type through the union.
+function sum(values: Readonly<NumberArray>) {
+	let total = 0
+	for (let i = 0; i < values.length; i++) total += values[i]
+	return total
+}
+
+console.log(sum([1, 2, 3]), sum(new Float32Array([0.5, 0.25])), sum(new Uint16Array([65535, 1]))) // 6 0.75 65536
+
+// Typed arrays and plain arrays of numbers are detected, including an empty array.
+console.log(isNumberArray(new Float64Array(3)), isNumberArray(new Uint8ClampedArray(2)), isNumberArray([1, 2, 3]), isNumberArray([])) // true true true true
+
+// Other values are not number arrays.
+console.log(isNumberArray(3), isNumberArray('abc'), isNumberArray(['a', 'b']), isNumberArray(undefined)) // false false false false
+console.log(isNumberArray(new BigInt64Array(2)), isNumberArray(new ArrayBuffer(8)), isNumberArray(new DataView(new ArrayBuffer(8)))) // false false false
+
+// Narrowing an unknown input.
+const input: unknown = new Int16Array([1, -2, 3])
+if (isNumberArray(input)) console.log(sum(input)) // 2
+```
 
 ### Planar Points and Rectangles
 
@@ -16693,7 +16870,73 @@ console.log(toAtm(500)) // 0.4934616333580064
 
 ### Probability Distribution Functions
 
+These are the special functions behind the goodness-of-fit tests, all dimensionless and implemented without external dependencies. `logGamma(x)` is the natural logarithm of the gamma function for a positive finite `x` (a Lanczos approximation, `NaN` for non-positive or non-finite inputs); `regularizedGammaP(shape, x)` is the regularized lower incomplete gamma function `P(a, x)` for a positive `shape` and `x` in [0, ∞] (series expansion below `shape + 1` and a continued fraction above, with an iteration cap of 1000 and a relative tolerance of 3e-15, 0 for a non-positive `x` and `NaN` for an invalid shape); `regularizedIncompleteBeta(x, a, b)` is `I_x(a, b)` for positive shapes, with the boundary values at and outside 0 and 1. On top of them, `chiSquareCdf(value, degreesOfFreedom)` is the chi-square cumulative distribution for a non-negative statistic, `chiSquareQuantile(probability, degreesOfFreedom)` its inverse found by bisection (0 at probability 0 and `Infinity` at probability 1) and `fDistributionSurvival(value, numeratorDof, denominatorDof)` the upper-tail probability `P(F >= value)`, the p-value of an F test, which returns 1 (the conservative answer) for an invalid statistic or degrees of freedom. A small p-value means that the statistic is unlikely under the null hypothesis, and the accuracy is that of the iterative algorithms above, which has not been compared against a published bound here.
+
+```ts
+import { chiSquareCdf, chiSquareQuantile, fDistributionSurvival, logGamma, regularizedGammaP, regularizedIncompleteBeta } from 'nebulosa/src/math/numerical/statistics'
+
+// ln Γ(x): Γ(1) = Γ(2) = 1, Γ(5) = 24, Γ(0.5) = √π.
+console.log(logGamma(1), logGamma(2)) // -8.881784197001252e-16 0 (the first is zero up to roundoff)
+console.log(logGamma(5), Math.log(24)) // 3.178053830347944 3.1780538303479458
+console.log(logGamma(0.5), Math.log(Math.sqrt(Math.PI))) // 0.5723649429246995 0.5723649429247
+
+// P(1, x) = 1 - exp(-x) and P(a, 0) = 0.
+console.log(regularizedGammaP(1, 2), 1 - Math.exp(-2)) // 0.8646647167633872 0.8646647167633873
+console.log(regularizedGammaP(3, 5)) // 0.8753479805169191
+console.log(regularizedGammaP(2, 0), regularizedGammaP(2, Infinity)) // 0 1
+
+// I_x(1, 1) = x and I_0.5(a, a) = 0.5 by symmetry.
+console.log(regularizedIncompleteBeta(0.3, 1, 1)) // 0.3000000000000005 (0.3 up to roundoff)
+console.log(regularizedIncompleteBeta(0.5, 4, 4)) // 0.4999999999999978 (0.5 up to roundoff)
+console.log(regularizedIncompleteBeta(0.2, 2, 5)) // 0.3446400000000017
+
+// Chi-square: the 95% quantile for 1 degree of freedom is 3.841, and the CDF inverts it.
+console.log(chiSquareCdf(3.841458820694124, 1)) // 0.95
+console.log(chiSquareQuantile(0.95, 1)) // 3.841458820694112
+console.log(chiSquareQuantile(0.95, 10)) // 18.30703805327515
+console.log(chiSquareQuantile(0, 4), chiSquareQuantile(1, 4)) // 0 Infinity
+
+// The p-value of an F statistic of 4 with 5 and 10 degrees of freedom, and of 1.
+console.log(fDistributionSurvival(4, 5, 10)) // 0.029675295222078662
+console.log(fDistributionSurvival(1, 5, 10)) // 0.4651194265377996
+console.log(fDistributionSurvival(0, 5, 10)) // 1
+```
+
 ### Quickselect Order Statistics
+
+Selection finds an order statistic in linear expected time without sorting the whole array, which matters for the per-pixel medians and the percentiles of large images. `quickSelect(values, count, k)` returns the value that would be at the zero-based rank `k` if the first `count` entries of `values` were sorted ascending, with `NaN` ordered after every number; it rearranges that prefix in place (the order of the prefix is lost, the suffix beyond `count` is untouched) and uses no scratch memory. `count` must be an integer in `[1, values.length]` and `k` an integer in `[0, count)`, otherwise a `RangeError` is thrown. `medianBySelectionOf(values, count?)` is the median of the first `count` entries (all by default) found by selection, with the mean of the two middle values for an even count computed without overflow; it returns `NaN` for an empty prefix and for tiny prefixes it just sorts them. `percentileBySelectionOf(values, percentile, count?)` is the interpolated percentile of the prefix, where `percentile` is a fraction in [0, 1] (clamped to the end ranks outside it), computed on a `Float64Array`. All three destroy the order of the prefix, so pass a copy when the original order is needed; the sorted-input counterparts (`medianOf`, `percentileOf`) are described in Descriptive Statistics.
+
+```ts
+import { quickSelect } from 'nebulosa/src/math/numerical/array'
+import { medianBySelectionOf, percentileBySelectionOf } from 'nebulosa/src/math/numerical/statistics'
+
+const data = [9, 1, 8, 2, 7, 3, 6, 4, 5]
+
+// The smallest, the median and the largest value, each found on a fresh copy.
+console.log(quickSelect([...data], data.length, 0)) // 1
+console.log(quickSelect([...data], data.length, 4)) // 5
+console.log(quickSelect([...data], data.length, 8)) // 9
+
+// Only the first 5 entries take part (9, 1, 8, 2, 7), and the prefix is rearranged in place.
+const prefix = [...data]
+console.log(quickSelect(prefix, 5, 2)) // 7
+console.log(prefix) // [ 1, 2, 7, 8, 9, 3, 6, 4, 5 ] (only the first five entries were rearranged)
+
+// NaN counts as the largest value.
+console.log(quickSelect([3, Number.NaN, 1, 2], 4, 2), quickSelect([3, Number.NaN, 1, 2], 4, 3)) // 3 NaN
+
+// Medians: odd and even counts, a prefix, and the empty prefix.
+console.log(medianBySelectionOf([...data])) // 5
+console.log(medianBySelectionOf(new Float64Array([4, 1, 3, 2]))) // 2.5
+console.log(medianBySelectionOf([...data], 4)) // 5
+console.log(medianBySelectionOf([...data], 0)) // NaN
+
+// Percentiles with linear interpolation between ranks.
+console.log(percentileBySelectionOf(new Float64Array(data), 0.5)) // 5
+console.log(percentileBySelectionOf(new Float64Array(data), 0.25)) // 3
+console.log(percentileBySelectionOf(new Float64Array(data), 0.9)) // 8.2
+console.log(percentileBySelectionOf(new Float64Array(data), 1.5)) // 9
+```
 
 ### Random Distributions and Shuffling
 
@@ -16701,7 +16944,59 @@ console.log(toAtm(500)) // 0.4934616333580064
 
 ### Rounding and Integer Conversion
 
+`roundToNearestWholeNumber(a)` rounds to the nearest integer with ties going away from zero (`Math.round` sends `-2.5` to `-2`; this sends it to `-3`), leaves non-finite values unchanged, and returns values at or above 2⁵² untouched because they are already integral, avoiding the spurious change that adding 0.5 would cause there. `roundToNthDecimal(a, n)` rounds to `n` decimal places (`n` is truncated to an integer, and a negative `n` rounds to tens, hundreds and so on), with ties away from zero and an epsilon-tolerant test for a half, so a decimal tie that binary representation pushes slightly below one half, like `1.005`, is still treated as a tie (the tolerance stops mattering beyond about 2⁴⁵ of scaled magnitude); a value whose scaled form overflows is returned unscaled. `modf(n)` splits a number into the truncated integer part and the absolute value of the fraction as a read-only `[integer, fraction]` pair (the integer carries the sign). `signed8(num)` and `signed16(num)` interpret the low 8 or 16 bits of an integer as a two's-complement signed value, which converts raw bytes and words read from a device or a file.
+
+```ts
+import { modf, roundToNearestWholeNumber, roundToNthDecimal, signed16, signed8 } from 'nebulosa/src/math/numerical/math'
+
+// Ties go away from zero, unlike Math.round.
+console.log(roundToNearestWholeNumber(-2.5)) // -3 (Math.round gives -2)
+console.log(roundToNearestWholeNumber(2.5), roundToNearestWholeNumber(2.4), roundToNearestWholeNumber(-2.6)) // 3 2 -3
+console.log(roundToNearestWholeNumber(0.49), roundToNearestWholeNumber(Number.MAX_SAFE_INTEGER)) // 0 9007199254740991
+
+// Decimal places, including the representation-error ties.
+console.log(roundToNthDecimal(1.005, 2)) // 1.01
+console.log(roundToNthDecimal(2.675, 2)) // 2.68
+console.log(roundToNthDecimal(-1.005, 2)) // -1.01
+console.log(roundToNthDecimal(3.14159, 3)) // 3.142
+console.log(roundToNthDecimal(1234.5, -2)) // 1200
+console.log(roundToNthDecimal(7.5, 0)) // 8
+
+// The integer and fractional parts.
+console.log(modf(3.75)) // [ 3, 0.75 ]
+console.log(modf(-3.75)) // [ -3, 0.75 ]
+
+// Two's-complement conversion of raw bytes and words.
+console.log(signed8(0xff), signed8(0x80), signed8(0x7f)) // -1 -128 127
+console.log(signed16(0xffff), signed16(0x8000), signed16(0x1234)) // -1 -32768 4660
+```
+
 ### Scalar Interpolation and Remapping
+
+These scalar helpers move values between linear ranges. `lerp(a, b, t)` returns `a + (b - a)·t`, so `t = 0` gives `a`, `t = 1` gives `b` and values outside [0, 1] extrapolate. `inverseLerp(a, b, value)` is its inverse, the fraction `t` at which `value` lies between `a` and `b` (unclamped), and returns 0 for a degenerate span `a === b`. `remap(value, inputMin, inputMax, outputMin, outputMax)` converts a value from one linear range to another (unclamped, and the output minimum for a degenerate input range), which maps an ADU range to a display range or a position to an angle. `smoothstep(edge0, edge1, value)` clamps the fraction of `value` between the two edges to [0, 1] and applies the cubic Hermite curve `3t² - 2t³`, which is 0 at the first edge, 1 at the second and has zero slope at both. `fract(value)` is the fractional part in [0, 1) (`value - floor(value)`, so `-0.25` gives `0.75`), unlike `modf`, whose fraction is the absolute value of the remainder after truncation (see Rounding and Integer Conversion). Nothing here clamps except `smoothstep`, and every function is plain floating-point arithmetic on any unit.
+
+```ts
+import { fract, inverseLerp, lerp, remap, smoothstep } from 'nebulosa/src/math/numerical/math'
+
+// Interpolation between 10 and 20, and extrapolation beyond the ends.
+console.log(lerp(10, 20, 0), lerp(10, 20, 0.25), lerp(10, 20, 1)) // 10 12.5 20
+console.log(lerp(10, 20, 1.5), lerp(10, 20, -0.5)) // 25 5
+
+// The inverse: where is 12.5 between 10 and 20, and what for a degenerate span.
+console.log(inverseLerp(10, 20, 12.5), inverseLerp(10, 20, 30)) // 0.25 2
+console.log(inverseLerp(5, 5, 7)) // 0
+
+// A 16-bit ADU value mapped to a 0..1 display range, and a position mapped to an angle in degrees.
+console.log(remap(32768, 0, 65535, 0, 1)) // 0.5000076295109483
+console.log(remap(25, 0, 100, -90, 90)) // -45
+console.log(remap(5, 3, 3, 10, 20)) // 10
+
+// A smooth step between two edges: 0, the midpoint, 1, and beyond the edges.
+console.log(smoothstep(0, 10, -5), smoothstep(0, 10, 2.5), smoothstep(0, 10, 5), smoothstep(0, 10, 15)) // 0 0.15625 0.5 1
+
+// The fractional part in [0, 1).
+console.log(fract(3.75), fract(-0.25), fract(5)) // 0.75 0.75 0
+```
 
 ### Scalar Minimization
 
