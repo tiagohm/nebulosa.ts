@@ -17612,25 +17612,567 @@ console.log(toKilometerPerSecond(kilometerPerSecond(29.78))) // 29.7800000000000
 
 ### Firmata Board Client
 
+`FirmataClient` is the command side of the protocol. It owns a `Transport` (anything with `write`, `flush` and `close`), a `Board` description and the cached state of every pin, parses incoming bytes (see Firmata Wire Protocol) and drives the startup handshake: firmware report, pin capabilities, the current mode and value of each capable pin, and the analog-channel mapping, after which the `ready` handler fires and `ensureInitializationIsDone(timeout)` resolves `true` (it resolves `false` after `timeout` milliseconds, or never when the timeout is 0 and the board is silent, or when the client is reset first). Nothing is sent until a request is made, so `requestFirmware()` starts the handshake, and replies must be passed to `process(bytes)` (a TCP or serial driver does that on every received chunk). `pinCount`, `pins` and `pinAt(id)` expose the live cached pins (id, supported modes with their resolutions, current mode and last raw value); `pinMode(pin, mode)` updates the cache immediately and sends the change. The output commands are `digitalWrite`, `analogWrite` (PWM or servo angle, saturated to unsigned 32 bits and sent with the shortest extended encoding), `servoConfig` (pulse widths in microseconds), `samplingInterval` (milliseconds, clamped to 1-16383) with `querySamplingInterval`, `querySystemVariable`/`setSystemVariable` (signed int32 variables, optionally per pin), `sendString` and `requestProtocolVersion`. Reporting is switched on with `requestDigitalReport`, `requestDigitalPinReport`, `requestAnalogReport` and `requestAnalogPinReport`. `sendSystemReset()` resets the board, drops the cached pins and restarts the handshake, while `reset()` only clears local state (no board reset is sent, so the I2C and SPI configuration is retained), `disconnect()` closes the transport and resets, and the client is `Disposable`. `addHandler`/`removeHandler` manage `FirmataClientHandler` objects whose callbacks are all optional; handler callbacks run in registration order, and the objects they receive alias live client state. The `Board` interface classifies the physical pins; `ESP8266` implements it with the Wemos D1 labels (`D0`-`D10`, `A0`, `SDA`, `SCL`, `RX`, `TX`, `SS`, `MOSI`, `MISO`, `SCK`, `LED_BUILTIN`) as static GPIO numbers and instance predicates (`isPinDigital`, `isPinPWM`, `isPinServo`, `isPinTwoWire`, `isPinSPI`, `isPinSerial`, `isPinAnalog`, `isPinLED`) and converters (`pinToDigital`, `pinToAnalog`, `pinToPWM`, `pinToServo`). `FirmataClientOverTcp(board)` is the same client over a Bun TCP socket: `connect(hostname, port, options?)` opens the socket and requests the firmware, returning `false` when it is already connected, `close()` drops the socket, and a socket that closes or fails emits the `close` handler and resets the client so that a new `connect` handshakes again.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
+import { PinMode } from 'nebulosa/src/devices/firmata/types'
+
+// The ESP8266 board: Wemos D1 labels map to GPIO numbers.
+console.log(ESP8266.D1, ESP8266.D2, ESP8266.A0, ESP8266.LED_BUILTIN, ESP8266.SDA, ESP8266.SCL) // 5 4 17 2 4 5
+const board = new ESP8266()
+console.log(board.name, board.isPinDigital(ESP8266.D5), board.isPinAnalog(ESP8266.A0), board.isPinTwoWire(ESP8266.SDA), board.isPinSPI(ESP8266.MOSI), board.isPinSerial(ESP8266.TX), board.isPinLED(ESP8266.LED_BUILTIN)) // ESP8266 true true true true true true
+console.log(board.isPinPWM(ESP8266.D6), board.isPinServo(ESP8266.D1), board.isPinDigital(ESP8266.A0), board.pinToAnalog(ESP8266.A0), board.pinToDigital(5), board.pinToPWM(12), board.pinToServo(4)) // true true false 0 5 12 4
+
+// A transport that records the frames the client sends and answers the handshake like a tiny board with
+// three pins (pin 1 is analog channel 0). Replies are delivered asynchronously, as a real link would do.
+const sent: string[] = []
+const hex = (data: Uint8Array) => Buffer.from(data).toString('hex')
+const replies: Record<number, number[]> = {
+	0x79: [0xf0, 0x79, 2, 7, 0x42, 0, 0xf7], // firmware 2.7 "B"
+	0x6b: [0xf0, 0x6c, 0, 1, 1, 1, 127, 0, 1, 1, 1, 2, 10, 127, 127, 0xf7], // capabilities of pins 0, 1 and 2
+	0x69: [0xf0, 0x6a, 127, 0, 127, 0xf7], // analog mapping
+}
+const transport = {
+	write: (data: string | Bun.BufferSource) => {
+		const frame = Buffer.from(data as Uint8Array)
+		sent.push(hex(frame))
+		if (frame[0] !== 0xf0) return
+		const reply = frame[1] === 0x6d ? [0xf0, 0x6e, frame[2], frame[2] === 1 ? 0 : 1, frame[2] === 1 ? 5 : 0, 0xf7] : replies[frame[1]]
+		if (reply) queueMicrotask(() => client.process(Buffer.from(reply)))
+	},
+	flush: () => {},
+	close: () => sent.push('closed'),
+}
+const client = new FirmataClient(transport, board)
+client.addHandler({ ready: () => console.log('ready, pins:', client.pinCount) })
+
+client.requestFirmware()
+console.log(await client.ensureInitializationIsDone(1000)) // true
+console.log(sent.splice(0)) // [ "f079f7", "f06bf7", "f06d00f7", "f06d01f7", "f069f7" ] (firmware, capabilities, state of pins 0 and 1, analog mapping) (the queries of the handshake)
+
+// Cached pins: modes with resolutions, the current mode and the last value.
+console.log(client.pinAt(1)) // { id: 1, modes: Set(3) { 0, 1, 2 }, resolutions: Map(3) { 0: 1, 1: 1, 2: 10 }, mode: 0, value: 5 }
+console.log([...client.pins].map((pin) => [pin.id, pin.mode, pin.modes.size])) // [ [ 0, 1, 2 ], [ 1, 0, 3 ], [ 2, 126, 0 ] ] (pin 2 has no modes: its mode is UNSUPPORTED = 126)
+console.log(client.pinAt(7)) // undefined
+
+// Pin modes and digital/analog outputs, as frames.
+client.pinMode(0, PinMode.OUTPUT)
+client.digitalWrite(0, true)
+client.digitalWrite(0, 0)
+client.analogWrite(2, 1023)
+client.analogWrite(2, 300000)
+console.log(client.pinAt(0)?.mode, sent.splice(0)) // 1 [ "f40001", "f50001", "f50000", "f06f027f07f7", "f06f02602712f7" ]
+
+// Reporting.
+client.requestAnalogPinReport(ESP8266.A0, true)
+client.requestDigitalPinReport(9, true)
+client.requestAnalogReport(false)
+client.requestDigitalReport(true)
+console.log(
+	sent.splice(0).map((frame) => frame.length / 2),
+	'bytes',
+) // [ 2, 2, 32, 32 ] bytes
+
+// Sampling interval, servo pulse range, strings, version, system variables.
+client.samplingInterval(100)
+client.samplingInterval(100000)
+client.querySamplingInterval()
+client.servoConfig(5, 544, 2400)
+client.sendString('Hi')
+client.requestProtocolVersion()
+client.querySystemVariable(3)
+client.setSystemVariable(3, -5, 4)
+console.log(sent.splice(0)) // [ "f07a6400f7", "f07a7f7ff7", "f07cf7", "f0700520046012f7", "f07148006900f7", "f9", "f06600010003007f0000000000f7", "f0660101000300047b7f7f7f0ff7" ]
+
+// Handlers can be removed, and a reset clears the pins and the handshake without telling the board.
+const handler = { pinChange: () => {} }
+client.addHandler(handler)
+client.removeHandler(handler)
+client.reset()
+console.log(client.pinCount, sent) // 0 []
+client.sendSystemReset()
+console.log(sent.splice(0)) // [ "ff", "f079f7" ] (reset, then a new firmware query)
+console.log(await client.ensureInitializationIsDone(1000)) // true
+client.disconnect()
+console.log(sent) // [ "f06bf7", "f06d00f7", "f06d01f7", "f069f7", "closed" ] (the handshake queries again, then the transport closes)
+
+// Over TCP: a local mock board answers the same queries. connect() starts the handshake itself.
+const answers: Record<number, number[]> = { ...replies }
+const server = Bun.listen({
+	hostname: '127.0.0.1',
+	port: 0,
+	socket: {
+		data: (socket, data) => {
+			const reply = data[1] === 0x6d ? [0xf0, 0x6e, data[2], 1, 0, 0xf7] : answers[data[1]]
+			if (data[0] === 0xf0 && reply) socket.write(Buffer.from(reply))
+		},
+	},
+})
+const tcp = new FirmataClientOverTcp(new ESP8266())
+console.log(await tcp.connect('127.0.0.1', server.port), await tcp.connect('127.0.0.1', server.port)) // true false (the second call finds it connected)
+console.log(await tcp.ensureInitializationIsDone(2000), tcp.pinCount) // true 3
+tcp.close()
+tcp.reset()
+server.stop(true)
+```
+
 ### Firmata DHT
+
+The DHT feature reads DHT11 and DHT22 (AM2302) temperature and humidity sensors on a digital pin. `dhtAttach(pin, model, samplingMilliseconds?, blocking?)` registers a `'dht11'` or `'dht22'` on the pin and starts periodic reports every `samplingMilliseconds` (500 by default, at most 16383); `blocking` lets the firmware wait for the sensor, which stalls the board for about 18 ms per reading and is therefore opt-in. `dhtDetach(pin)` stops the reports. Each reading arrives in `dhtReport(client, report)` as a `DhtReport` with the `pin`, `temperature` in degrees Celsius (a signed 14-bit value, so negative temperatures work) and `humidity` in percent, both already divided by ten from the wire encoding. `encodeDhtAttach(pin, model, samplingMilliseconds, blocking)` returns the attach payload. A DHT11 resolves whole degrees and a DHT22 tenths, but the report always carries tenths.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { encodeDhtAttach } from 'nebulosa/src/devices/firmata/codecs/dht'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+// A DHT22 on D4 reporting every second, a DHT11 on D3 at the default 500 ms with blocking reads, then detach both.
+client.dhtAttach(ESP8266.D4, 'dht22', 1000)
+client.dhtAttach(ESP8266.D3, 'dht11', undefined, true)
+client.dhtDetach(ESP8266.D4)
+client.dhtDetach(ESP8266.D3)
+console.log(out()) // [ "f0740202006807f7", "f0740100017403f7", "f0740302f7", "f0740300f7" ]
+console.log(encodeDhtAttach(2, 'dht22', 2000, false)) // [ 2, 2, 0, 80, 15 ]
+
+// Reports: 21.5 C and 48.2 % (raw 215 and 482), then -3.4 C (raw 14-bit two's complement of -34) and 80 %.
+const split = (value: number) => [value & 0x7f, (value >> 7) & 0x7f]
+client.addHandler({ dhtReport: (_, report) => console.log(report) })
+client.process(Buffer.from([0xf0, 0x74, 0, 2, ...split(215), ...split(482), 0xf7])) // { pin: 2, temperature: 21.5, humidity: 48.2 }
+client.process(Buffer.from([0xf0, 0x74, 0, 2, ...split(0x4000 - 34), ...split(800), 0xf7])) // { pin: 2, temperature: -3.4, humidity: 80 }
+```
 
 ### Firmata Encoders
 
+The encoder feature counts the quadrature pulses of up to 64 incremental rotary encoders on the board (ids 0-63), each on two digital pins. `encoderAttach(id, pinA, pinB)` starts counting and `encoderDetach(id)` stops it; `encoderReport(id)` asks for one signed position, `encoderReportAll()` for all attached encoders in one reply, `encoderReset(id)` sets the position of one encoder to zero and `encoderAutoReport(enable)` switches periodic reports of all attached encoders on or off (they come at the board sampling interval, see Firmata Board Client). Positions are signed step counts of the quadrature decoder, not shaft angles; convert with the pulses per revolution of the encoder. Every reply, single or batched, reaches `encoderPositions(client, positions)` as an array of `EncoderPosition` (`id`, signed `position` and `negative`, the direction flag of the report); the magnitude is carried in 28 bits.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+// Two encoders: 0 on D5/D6 and 1 on D7/D8.
+client.encoderAttach(0, ESP8266.D5, ESP8266.D6)
+client.encoderAttach(1, ESP8266.D7, ESP8266.D8)
+console.log(out()) // [ "f06100000e0cf7", "f06100010d0ff7" ]
+
+// Reports and management.
+client.encoderReport(0)
+client.encoderReportAll()
+client.encoderAutoReport(true)
+client.encoderReset(0)
+client.encoderAutoReport(false)
+client.encoderDetach(1)
+console.log(out()) // [ "f0610100f7", "f06102f7", "f0610401f7", "f0610300f7", "f0610400f7", "f0610501f7" ]
+
+// Replies: each position is 5 bytes (id with the 0x40 sign flag, then 28 bits in four 7-bit bytes).
+client.addHandler({ encoderPositions: (_, positions) => console.log(positions) })
+client.process(Buffer.from([0xf0, 0x61, 0, 0x2c, 0x02, 0, 0, 0xf7])) // [ { id: 0, position: 300, negative: false } ] (position 300)
+client.process(Buffer.from([0xf0, 0x61, 0, 0x2c, 0x02, 0, 0, 0x41, 0x05, 0, 0, 0, 0xf7])) // [ { id: 0, position: 300, negative: false }, { id: 1, position: -5, negative: true } ] (a batch: 300 and -5)
+```
+
 ### Firmata Frequency Measurement
+
+The frequency feature counts the edges seen by a digital pin and reports the raw counters, so the host derives the frequency itself. `frequencyQuery(pin, mode, samplingMilliseconds)` starts reports for `pin` every `samplingMilliseconds`, counting on the interrupt `mode` (1 LOW, 2 HIGH, 3 RISING, 4 FALLING, 5 CHANGE), `frequencyFilter(pin, microseconds)` sets a debounce interval that ignores edges closer than that, and `frequencyClear(pin?)` stops the reports of one pin, or of all pins when none is given. A report reaches `frequencyReport(client, report)` as a `FrequencyReport` with the `pin`, the board `timestamp` in milliseconds and the accumulated edge `ticks`, both unsigned 32-bit counters that wrap around at 2^32. Hertz follow from two consecutive reports: `(ticks2 - ticks1) / (timestamp2 - timestamp1) * 1000` for RISING or FALLING counting, halved for CHANGE (two edges per cycle), and the subtraction must be done modulo 2^32 so a rollover does not produce a negative interval. `encodeFrequencyQuery` and `encodeFrequencyFilter` return the payloads.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { encodeFrequencyFilter, encodeFrequencyQuery } from 'nebulosa/src/devices/firmata/codecs/frequency'
+import { encodeUnsigned7 } from 'nebulosa/src/devices/firmata/codecs/numeric'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+// Count rising edges on D5 every 500 ms, ignore edges closer than 100 microseconds, then stop D5 and finally every pin.
+client.frequencyQuery(ESP8266.D5, 3, 500)
+client.frequencyFilter(ESP8266.D5, 100)
+client.frequencyClear(ESP8266.D5)
+client.frequencyClear()
+console.log(out()) // [ "f07d010e037403f7", "f07d030e6400000000f7", "f07d000ef7", "f07d007ff7" ]
+console.log(encodeFrequencyQuery(5, 5, 1000), encodeFrequencyFilter(5, 250)) // [ 1, 5, 5, 104, 7 ] [ 3, 5, 122, 1, 0, 0, 0 ]
+
+// Two reports half a second apart: 1500 more rising edges, so the signal is 3 kHz.
+const reports: { timestamp: number; ticks: number }[] = []
+client.addHandler({ frequencyReport: (_, report) => reports.push(report) })
+client.process(Buffer.from([0xf0, 0x7d, 2, 14, ...encodeUnsigned7(10000, 5), ...encodeUnsigned7(4000, 5), 0xf7]))
+client.process(Buffer.from([0xf0, 0x7d, 2, 14, ...encodeUnsigned7(10500, 5), ...encodeUnsigned7(5500, 5), 0xf7]))
+const [a, b] = reports
+console.log(reports) // [ { pin: 14, timestamp: 10000, ticks: 4000 }, { pin: 14, timestamp: 10500, ticks: 5500 } ]
+console.log(((b.ticks - a.ticks) / (b.timestamp - a.timestamp)) * 1000) // 3000
+```
 
 ### Firmata I2C
 
+The I2C feature of a `FirmataClient` reads and writes devices on the board's two-wire bus (the SDA and SCL pins of the board, `ESP8266.D2` and `ESP8266.D1`; set them to `PinMode.I2C` first). `twoWireConfig(delay)` sets the read delay in microseconds; the client remembers the largest delay ever requested, so several peripherals sharing one client cannot shorten each other's timing, and a smaller request resends the larger value. `twoWireWrite(address, data?, addressMode?)` writes raw bytes, `twoWireRead(address, register, bytesToRead, continuous?, addressMode?, autoRestart?)` reads once (or repeatedly until `twoWireStop(address, addressMode?)` when `continuous` is true), with a negative `register` omitting the register byte, and `twoWireReadWrite(address, operationMode, data?, addressMode?, autoRestart?)` is the general form with the operation `'write'`, `'read'`, `'readContinuously'` or `'stop'`. `addressMode` is 7 (default) or 10 bits, and `autoRestart` `'restart'` keeps the bus with a repeated start after a read instead of releasing it (`'stop'`, the default). The data bytes travel as two 7-bit bytes each. The reply of a read is a `twoWireMessage(client, address, register, data)` handler call with a fresh `Buffer`, and the continuous reads repeat at the board sampling interval. `encodeTwoWireConfig(delay)` and `encodeTwoWireReadWrite(...)` are the codecs behind them and build one complete SysEx frame without sending it. The 14-bit delay field carries at most 16383 microseconds.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { encodeTwoWireConfig, encodeTwoWireReadWrite } from 'nebulosa/src/devices/firmata/codecs/twowire'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+// The read delay keeps the largest value ever requested.
+client.twoWireConfig(100)
+client.twoWireConfig(50)
+client.twoWireConfig(300)
+console.log(out()) // [ "f0786400f7", "f0786400f7", "f0782c02f7" ]
+
+// Write 0x01 0xff to the device at 0x40, then read two bytes from its register 0x02.
+client.twoWireWrite(0x40, [0x01, 0xff])
+client.twoWireRead(0x40, 0x02, 2)
+console.log(out()) // [ "f076400001007f01f7", "f076400802000200f7" ]
+
+// Without a register, continuous reads, a repeated start, and a stop.
+client.twoWireRead(0x40, -1, 1)
+client.twoWireRead(0x40, 0x02, 6, true)
+client.twoWireRead(0x40, 0x02, 6, false, 7, 'restart')
+client.twoWireStop(0x40)
+console.log(out()) // [ "f07640080100f7", "f076401002000600f7", "f076404802000600f7", "f0764018f7" ]
+
+// Ten-bit addressing sets bit 5, and the three high address bits go in the second byte.
+client.twoWireWrite(0x2a5, [0x10], 10)
+client.twoWireReadWrite(0x2a5, 'read', [0x00, 0x04], 10, 'restart')
+client.twoWireReadWrite(0x40, 'write')
+console.log(out()) // [ "f07625251000f7", "f076256d00000400f7", "f0764000f7" ]
+
+// The codecs build the frames without a client.
+console.log(Buffer.from(encodeTwoWireConfig(1000)).toString('hex')) // f0786807f7
+console.log(encodeTwoWireReadWrite(0x40, 'readContinuously', [0x02, 0x06]).toString('hex')) // f076401002000600f7
+
+// A reply: device 0x40, register 0x02 and the two bytes 0x12 0x34 (each as two 7-bit bytes).
+client.addHandler({ twoWireMessage: (_, address, register, data) => console.log(address.toString(16), register, data) })
+client.process(Buffer.from([0xf0, 0x77, 0x40, 0, 0x02, 0, 0x12, 0, 0x34, 0, 0xf7])) // 40 2 <Buffer 12 34>
+client.process(Buffer.from([0xf0, 0x77, 0x40, 0, 0x00, 0, 0x7f, 1, 0xf7])) // 40 0 <Buffer ff> (one byte: 0xff)
+```
+
 ### Firmata One-Wire
+
+The 1-Wire feature talks to Dallas/Maxim devices (the DS18B20 thermometer, for instance) on one board pin set to `PinMode.ONE_WIRE`. `oneWireConfig(pin, powerMode?)` selects `'normal'` (external power, the default) or `'parasitic'` power. `oneWireSearch(pin, mode?)` asks the board for the 8-byte ROM addresses of all devices (`'all'`, the default) or only those signalling an alarm (`'alarms'`), and the answer arrives through the `oneWireSearchReply(client, pin, addresses, alarms)` handler. `oneWireWrite`, `oneWireRead` and `oneWireWriteAndRead` each reset the bus first and then address one device by its ROM `address` (8 bytes) or all of them with SKIP ROM when no address is given; the two reads return a 16-bit correlation ID (supplied or taken from a per-client counter) that comes back in `oneWireReadReply(client, pin, correlationId, data)`, which is how several outstanding reads are told apart. `oneWireReset(pin)` only resets the bus, and `oneWireCommand(pin, options)` builds any combination from `OneWireCommandOptions` (`reset`, `skip`, `address`, `bytesToRead`, `correlationId`, `delay` in milliseconds before the read, and `data`), returning the correlation ID when a read was requested; asking for SKIP ROM together with a specific address, or an address that is not 8 bytes, is rejected. `encodeOneWireConfig`, `encodeOneWireSearch` and `encodeOneWireCommand` are the codecs and return complete frames. Payloads are densely packed (seven raw bytes in eight wire bytes), and the requested read length is limited to 65535 bytes.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { encodePacked7Bit } from 'nebulosa/src/devices/firmata/codecs/numeric'
+import { encodeOneWireCommand, encodeOneWireConfig, encodeOneWireSearch } from 'nebulosa/src/devices/firmata/codecs/onewire'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+client.oneWireConfig(ESP8266.D4)
+client.oneWireConfig(ESP8266.D4, 'parasitic')
+client.oneWireSearch(ESP8266.D4)
+client.oneWireSearch(ESP8266.D4, 'alarms')
+console.log(out()) // [ "f073410201f7", "f073410200f7", "f0734002f7", "f0734402f7" ]
+
+// A DS18B20: start a conversion on all devices (SKIP ROM), then read its scratchpad by ROM address.
+const rom = [0x28, 0xff, 0x64, 0x1e, 0x0f, 0x16, 0x03, 0x4b]
+client.oneWireReset(ESP8266.D4)
+client.oneWireWrite(ESP8266.D4, [0x44])
+console.log(out()) // [ "f0730102f7", "f07323024400f7" ]
+client.oneWireWrite(ESP8266.D4, [0xbe], rom)
+console.log(client.oneWireRead(ESP8266.D4, 9, rom), client.oneWireRead(ESP8266.D4, 2), client.oneWireWriteAndRead(ESP8266.D4, [0xbe], 9, rom)) // 0 1 2
+console.log(out()) // [ "f0732502287e1373714145014b7c02f7", "f0730d02287e1373714145014b1200000000f7", "f0730b020200040000f7", "f0732d02287e1373714145014b12001000402ff7" ]
+console.log(client.oneWireRead(ESP8266.D4, 9, rom, 0x1234)) // 4660 (an explicit ID does not advance the counter)
+console.log(out()) // [ "f0730d02287e1373714145014b1200202302f7" ]
+
+// The general command, with a delay before the read.
+console.log(client.oneWireCommand(ESP8266.D4, { reset: true, skip: true, data: [0x44], bytesToRead: 1, delay: 750 })) // 3
+console.log(out()) // [ "f0733b0201000c00605d0000000801f7" ]
+
+// The codecs build the frames without a client; the correlation cursor is passed in and returned.
+console.log(Buffer.from(encodeOneWireConfig(2, 'normal')).toString('hex'), Buffer.from(encodeOneWireSearch(2, 'all')).toString('hex')) // f073410201f7 f0734002f7
+const { message, readCorrelationId, nextCorrelationId } = encodeOneWireCommand(2, { reset: true, address: rom, bytesToRead: 9 }, 7)
+console.log(message.toString('hex'), readCorrelationId, nextCorrelationId) // f0730d02287e1373714145014b1200380000f7 7 8
+
+// Replies: a search with two ROM addresses, and a read answered with its correlation ID and two data bytes.
+client.addHandler({
+	oneWireSearchReply: (_, pin, addresses, alarms) =>
+		console.log(
+			pin,
+			addresses.map((address) => address.toString('hex')),
+			alarms,
+		),
+	oneWireReadReply: (_, pin, id, data) => console.log(pin, id.toString(16), data),
+})
+const roms = encodePacked7Bit([...rom, ...rom.map((byte) => byte ^ 0xff)])
+client.process(Buffer.from([0xf0, 0x73, 0x42, 4, ...roms, 0xf7])) // 4 [ "28ff641e0f16034b", "d7009be1f0e9fcb4" ] false
+client.process(Buffer.from([0xf0, 0x73, 0x45, 4, ...encodePacked7Bit(rom), 0xf7])) // 4 [ "28ff641e0f16034b" ] true (an alarm search)
+client.process(Buffer.from([0xf0, 0x73, 0x43, 4, ...encodePacked7Bit([0x34, 0x12, 0x91, 0x01]), 0xf7])) // 4 1234 <Buffer 91 01> (temperature scratchpad bytes 0x91 0x01)
+```
 
 ### Firmata Scheduler
 
+The scheduler feature stores a short list of Firmata messages on the board and runs them later, so a sequence keeps its timing even when the link is slow. A task is created with `schedulerCreate(id, length)` (id 0-127, `length` the bytes to reserve), filled with `schedulerAdd(id, message)` (raw Firmata bytes, such as a `digitalWrite` frame, appended to the task; the message travels densely packed) and started with `schedulerSchedule(id, milliseconds)` to run after that delay. `schedulerDelay(milliseconds)` adds a wait step to the task being filled (a 32-bit delay) instead of a message. `schedulerDelete(id)` removes a task, `schedulerReset()` removes all of them, `schedulerQueryAll()` asks for the registered task ids and `schedulerQuery(id)` for the details of one. Replies reach `schedulerTasks(client, ids)` for the inventory and `schedulerTask(client, reply)` for one task: a `SchedulerTaskReply` with `found` false carries only `id` and `error`, while a found task adds `time` (milliseconds until it runs), `length` (reserved bytes), `position` (bytes already stored) and `data` (the stored message bytes, as a fresh `Buffer`); `error` is true when the board reports a task execution error instead of a query answer. `encodeSchedulerAdd`, `encodeSchedulerDelay` and `encodeSchedulerSchedule` return the payloads.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { encodePacked7Bit } from 'nebulosa/src/devices/firmata/codecs/numeric'
+import { encodeSchedulerAdd, encodeSchedulerDelay, encodeSchedulerSchedule } from 'nebulosa/src/devices/firmata/codecs/scheduler'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+// Pulse the built-in LED: on, wait 500 ms, off. The task is 10 bytes long and starts in 2 seconds.
+client.schedulerCreate(1, 10)
+client.schedulerAdd(1, [0xf5, ESP8266.LED_BUILTIN, 0])
+client.schedulerDelay(500)
+client.schedulerAdd(1, [0xf5, ESP8266.LED_BUILTIN, 1])
+client.schedulerSchedule(1, 2000)
+console.log(out()) // [ "f07b00010a00f7", "f07b020175050000f7", "f07b037403000000f7", "f07b020175050400f7", "f07b0401500f000000f7" ]
+
+// Inventory, details, delete and reset.
+client.schedulerQueryAll()
+client.schedulerQuery(1)
+client.schedulerDelete(1)
+client.schedulerReset()
+console.log(out()) // [ "f07b05f7", "f07b0601f7", "f07b0101f7", "f07b07f7" ]
+
+// The payload codecs.
+console.log(encodeSchedulerAdd(1, [0xf5, 2, 0]), encodeSchedulerDelay(500), encodeSchedulerSchedule(1, 2000)) // [ 2, 1, 117, 5, 0, 0 ] [ 3, 116, 3, 0, 0, 0 ] [ 4, 1, 80, 15, 0, 0, 0 ]
+
+// Replies: the ids, a found task (time, length and position as little-endian words, then the data), and a missing one.
+client.addHandler({
+	schedulerTasks: (_, ids) => console.log('ids', ids),
+	schedulerTask: (_, reply) => console.log(reply),
+})
+client.process(Buffer.from([0xf0, 0x7b, 9, 1, 5, 0xf7])) // ids [ 1, 5 ]
+const task = Buffer.from([2000 & 0xff, 2000 >> 8, 0, 0, 10, 0, 3, 0, 0xf5, 2, 0])
+client.process(Buffer.from([0xf0, 0x7b, 0x0a, 1, ...encodePacked7Bit(task), 0xf7])) // { id: 1, found: true, time: 2000, length: 10, position: 3, data: <Buffer f5 02 00>, error: false }
+client.process(Buffer.from([0xf0, 0x7b, 0x0a, 9, 0xf7])) // { id: 9, found: false, error: false }
+```
+
 ### Firmata Serial
+
+The Serial 1.0 feature bridges the board's UARTs to the host. Ports 0-7 are hardware serial ports and 8-15 software ones. `serialConfig(port, baud, rxPin?, txPin?)` opens a port at `baud` bits per second; for a hardware port the RX and TX pins are looked up from the SERIAL resolutions of the discovered capabilities (RX is resolution `2n` and TX `2n + 1` for port `n`) when they are not given, and `serialPins(port)` returns that lookup (software ports return an empty object, so their pins must be given, and both pins are sent together or not at all). `serialWrite(port, data)` sends raw bytes, `serialStartRead(port, maxBytes?)` starts continuous reads limited to `maxBytes` per report (0 reads whatever is available) and `serialStopRead(port)` stops them without closing the port, `serialListen(port)` selects the active software-serial listener, `serialFlush(port)` flushes it and `serialClose(port)` closes it (configure it again before reuse). Received bytes arrive in the `serialReply(client, port, data)` handler. `encodeSerialConfig(port, baud, rx?, tx?)` and `encodeSerialWrite(port, data)` build the payload that follows the feature ID, each data byte as two 7-bit bytes, and `decodeSerialReply` (see Firmata Wire Protocol) decodes the replies.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { encodeSerialConfig, encodeSerialWrite } from 'nebulosa/src/devices/firmata/codecs/serial'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+// Capabilities of a tiny board: pin 1 is RX and pin 2 is TX of hardware port 1 (SERIAL mode 10, resolutions 2 and 3).
+client.process(Buffer.from([0xf0, 0x6c, 127, 10, 2, 127, 10, 3, 127, 0xf7]))
+out()
+console.log(client.serialPins(1), client.serialPins(0), client.serialPins(9)) // { rx: 1, tx: 2 } {} {}
+
+// Open port 1 at 9600 bit/s: the pins are inferred. Software port 8 needs its pins.
+client.serialConfig(1, 9600)
+client.serialConfig(8, 57600, 4, 5)
+console.log(out()) // [ "f06011004b000102f7", "f060180042030405f7" ]
+
+// Write bytes, start and stop reading, listen, flush and close.
+client.serialWrite(1, Buffer.from('AT\r\n'))
+client.serialStartRead(1)
+client.serialStartRead(1, 32)
+client.serialStopRead(1)
+client.serialListen(8)
+client.serialFlush(1)
+client.serialClose(1)
+console.log(out()) // [ "f06021410054000d000a00f7", "f06031000000f7", "f06031002000f7", "f0603101f7", "f06078f7", "f06061f7", "f06051f7" ]
+
+// The payload codecs, without a client.
+console.log(encodeSerialConfig(0, 115200), encodeSerialConfig(8, 9600, 12, 14)) // [ 16, 0, 4, 7 ] [ 24, 0, 75, 0, 12, 14 ]
+console.log(encodeSerialWrite(2, [0x41, 0xff])) // [ 34, 65, 0, 127, 1 ]
+
+// Received bytes, as two 7-bit bytes each: "Hi\n" from port 1.
+client.addHandler({ serialReply: (_, port, data) => console.log(port, data.toString().trim()) })
+client.process(Buffer.from([0xf0, 0x60, 0x41, 72, 0, 105, 0, 10, 0, 0xf7])) // 1 Hi
+```
 
 ### Firmata SPI
 
+The SPI feature drives devices on the board's SPI bus (`ESP8266.SCK`, `MISO`, `MOSI` and `SS`). `spiBegin(channel?)` starts a channel (0-7; the bundled ESP8266 firmware accepts only channel 0) and `spiEnd(channel?)` releases it and forgets the reply packing of its devices. `spiConfig(options)` configures one device of a channel (`deviceId` 0-15): `bitOrder` (`'msb'` by default), `dataMode` (SPI mode 0-3), `maxSpeed` in hertz (0 for the firmware default), `wordSize` (0 or 8 bits), the chip-select pin `csPin` with `controlCs` (the firmware drives it, the default when a pin is given) and `csActiveHigh`, and `packed` for dense 7-bit data instead of two bytes per word; a firmware-controlled chip select without a pin is rejected. The transfer methods send eight-bit words and return a 7-bit request ID (it wraps from 127 to 0) that is echoed by the reply: `spiTransfer(channel, deviceId, data, deselectCs?)` writes and reads back, `spiWrite` writes without a reply, `spiWriteAck` writes and gets an empty acknowledgement and `spiRead(channel, deviceId, words, deselectCs?)` clocks zeroes to read `words` values (at most 64). `deselectCs = false` keeps the chip select asserted for a following transfer. A transfer must fit the ESP8266 64-byte input frame (about 29 words unpacked, 52 packed) and be non-empty. Replies reach the `spiReply(client, reply)` handler as an `SpiReply` with `channel`, `deviceId`, `requestId` and a fresh `data` `Buffer`, decoded with the packing remembered from `spiConfig`; `parseSpiReply(payload)` does it by hand. `spiSelector(channel, deviceId)`, `encodeSpiConfig`, `encodeSpiWords` and `decodeSpiReply` are the exported codecs, with `validateSpiTransferSize` and `validateSpiReadWords` enforcing the size limits above.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { decodeSpiReply, encodeSpiConfig, encodeSpiWords, spiSelector } from 'nebulosa/src/devices/firmata/codecs/spi'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+// Start channel 0 and configure device 1 (mode 0, MSB first, 1 MHz) with the board driving GPIO 15 as chip select.
+client.spiBegin()
+client.spiConfig({ channel: 0, deviceId: 1, dataMode: 0, bitOrder: 'msb', maxSpeed: 1000000, csPin: ESP8266.D8 })
+console.log(out()) // [ "f0680000f7", "f06801080140043d000000010ff7" ]
+
+// Transfers return request IDs 0, 1, 2 and 3.
+console.log(client.spiTransfer(0, 1, [0x9f, 0x00, 0x00]), client.spiWrite(0, 1, Buffer.from([0x06])), client.spiWriteAck(0, 1, [0x01, 0x02], false), client.spiRead(0, 1, 4)) // 0 1 2 3
+console.log(out()) // [ "f06802080001031f0100000000f7", "f06803080101010600f7", "f068070802000201000200f7", "f0680408030104f7" ]
+
+// The selector combines the device and the channel, and the config codec shows the layout of the payload.
+console.log(spiSelector(0, 1), spiSelector(3, 15)) // 8 123
+console.log(encodeSpiConfig({ channel: 0, deviceId: 1, dataMode: 3, bitOrder: 'lsb', maxSpeed: 8000000, wordSize: 8, controlCs: true, csActiveHigh: true, csPin: 15, packed: true })) // [ 1, 8, 14, 0, 36, 104, 3, 0, 8, 3, 15 ]
+console.log(encodeSpiWords(2, spiSelector(0, 1), 9, [0xa5, 0x01], false, true), encodeSpiWords(2, spiSelector(0, 1), 9, [0xa5, 0x01], true, true)) // [ 2, 8, 9, 1, 2, 37, 1, 1, 0 ] [ 2, 8, 9, 1, 2, 37, 3, 0 ]
+
+// A reply for device 1: request 0 returned the bytes 0xef 0x40 0x18.
+client.addHandler({ spiReply: (_, reply) => console.log(reply.channel, reply.deviceId, reply.requestId, reply.data) })
+client.process(Buffer.from([0xf0, 0x68, 5, 0x08, 0, 3, 0x6f, 1, 0x40, 0, 0x18, 0, 0xf7])) // 0 1 0 <Buffer ef 40 18>
+console.log(decodeSpiReply(Buffer.from([5, 0x08, 0, 3, 0x6f, 1, 0x40, 0, 0x18, 0]), false)) // { channel: 0, deviceId: 1, requestId: 0, data: <Buffer ef 40 18> }
+console.log(client.parseSpiReply(Buffer.from([5, 0x08, 1, 1, 0x7f, 1]))) // { channel: 0, deviceId: 1, requestId: 1, data: <Buffer ff> }
+
+// A device configured as packed has its replies decoded from dense 7-bit bytes (the first handler still runs too).
+client.spiConfig({ channel: 0, deviceId: 2, packed: true })
+client.addHandler({ spiReply: (_, reply) => console.log('packed', reply.deviceId, reply.data) })
+client.process(Buffer.from([0xf0, 0x68, 5, 0x10, 2, 3, 0x6f, 0x50, 0x01, 0x00, 0xf7])) // 0 2 2 <Buffer 6f 68 00>
+packed 2 <Buffer 6f 68 00>
+
+// Release the channel.
+client.spiEnd()
+console.log(out().slice(-1)) // [ "f0680600f7" ]
+```
+
 ### Firmata Stepper
 
+The stepper feature drives up to ten AccelStepper motors (numbered 0-9) with acceleration profiles computed on the board, and groups of motors (MultiStepper) that arrive at their targets together. `stepperConfig(options)` declares a motor with `device`, `interface` (`'driver'` and `'twoWire'` need `pin1` and `pin2`, `'threeWire'` adds `pin3` and `'fourWire'` adds `pin3` and `pin4`), the optional `enablePin`, an `invertPins` mask (bits 0-3 for the motor pins and bit 4 for the enable pin) and, for three- and four-wire motors, `stepType` 0 (whole steps) or 1 (half steps); a missing extra pin or a step type on a driver is rejected. `stepperMove(device, steps)` moves relative to the current position and `stepperMoveTo(device, position)` to an absolute one, both in motor steps, `stepperZero` makes the current position zero, `stepperStop` decelerates and stops, `stepperEnable` toggles the enable pin, `stepperSetMaxSpeed(device, speed)` is in steps per second, `stepperSetAcceleration(device, acceleration)` in steps per second squared (floats, in a compact custom encoding), and `stepperReportPosition` requests the position. Replies reach `stepperPosition(client, report)` with `device`, signed `position` and `complete` (true for a finished move, also after a stop, false for a requested report). `multiStepperConfig(group, devices)` creates a group (0-4, one to ten motors), `multiStepperMoveTo(group, positions)` gives one absolute target per member, in the order of the group, and `multiStepperStop(group)` stops them; the end of a group move arrives through `multiStepperComplete(client, group)`. `encodeStepperConfig`, `encodeMultiStepperConfig`, `encodeMultiStepperMoveTo` and `encodeMultiStepperStop` return the payloads.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { encodeMultiStepperConfig, encodeMultiStepperMoveTo, encodeMultiStepperStop, encodeStepperConfig } from 'nebulosa/src/devices/firmata/codecs/stepper'
+import { encodeStepperPosition } from 'nebulosa/src/devices/firmata/codecs/numeric'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+// A step/direction driver (a common A4988 setup) on D1 and D2 with an enable pin on D5, and a four-wire motor.
+client.stepperConfig({ device: 0, interface: 'driver', pin1: ESP8266.D1, pin2: ESP8266.D2, enablePin: ESP8266.D5 })
+client.stepperConfig({ device: 1, interface: 'fourWire', pin1: 12, pin2: 13, pin3: 14, pin4: 15, stepType: 1 })
+client.stepperConfig({ device: 2, interface: 'threeWire', pin1: 4, pin2: 5, pin3: 6 })
+client.stepperConfig({ device: 3, interface: 'twoWire', pin1: 7, pin2: 8, invertPins: 0b00011 })
+console.log(out()) // [ "f06200001105040ef7", "f0620001420c0d0e0ff7", "f062000230040506f7", "f062000320070803f7" ]
+
+// Motion: speed in steps/s, acceleration in steps/s^2, then a relative move, an absolute one and a stop.
+client.stepperSetMaxSpeed(0, 1500.5)
+client.stepperSetAcceleration(0, 400)
+client.stepperEnable(0, true)
+client.stepperMove(0, -1000)
+client.stepperMoveTo(0, 20000)
+client.stepperZero(0)
+client.stepperReportPosition(0)
+client.stepperStop(0)
+client.stepperEnable(0, false)
+console.log(out()) // [ "f0620900544a5b20f7", "f06208000012741df7", "f062040001f7", "f06202006807000008f7", "f0620300201c010000f7", "f0620100f7", "f0620600f7", "f0620500f7", "f062040000f7" ]
+
+// Groups: members and targets (one per member, in order), then a stop.
+client.multiStepperConfig(1, [0, 1])
+client.multiStepperMoveTo(1, [1000, -500])
+client.multiStepperStop(1)
+console.log(out()) // [ "f06220010001f7", "f062210168070000007403000008f7", "f0622301f7" ]
+
+// The payload codecs.
+console.log(encodeStepperConfig({ device: 0, interface: 'driver', pin1: 5, pin2: 4 })) // [ 0, 0, 16, 5, 4 ]
+console.log(encodeMultiStepperConfig(1, [0, 1]), encodeMultiStepperMoveTo(1, [1000, -500]), encodeMultiStepperStop(1)) // [ 32, 1, 0, 1 ] [ 33, 1, 104, 7, 0, 0, 0, 116, 3, 0, 0, 8 ] [ 35, 1 ]
+
+// Replies: a requested position report, a move-complete event and the end of a group move.
+client.addHandler({
+	stepperPosition: (_, report) => console.log(report),
+	multiStepperComplete: (_, group) => console.log('group', group, 'done'),
+})
+client.process(Buffer.from([0xf0, 0x62, 0x06, 0, ...encodeStepperPosition(-1000), 0xf7])) // { device: 0, position: -1000, complete: false }
+client.process(Buffer.from([0xf0, 0x62, 0x0a, 0, ...encodeStepperPosition(20000), 0xf7])) // { device: 0, position: 20000, complete: true }
+client.process(Buffer.from([0xf0, 0x62, 0x24, 1, 0xf7])) // group 1 done
+```
+
 ### Firmata Wire Protocol
+
+Firmata is a byte protocol: a one-byte command (the standard digital, analog, report-version and reset messages), or a SysEx frame `START_SYSEX (0xf0)`, a feature ID, a payload of 7-bit bytes and `END_SYSEX (0xf7)`. `src/devices/firmata/protocol` exports every command ID, operation bit and bound as a named constant (for instance `DIGITAL_MESSAGE`, `SET_PIN_MODE`, `CAPABILITY_QUERY`, `TWO_WIRE_REQUEST`, `SCHEDULER_DATA`, the `ONE_WIRE_*` request bits and `MIN_SAMPLING_INTERVAL`/`MAX_SAMPLING_INTERVAL`). Because a wire byte only carries seven data bits, `codecs/numeric` provides the encoders and decoders the other codecs build on: unsigned integers least-significant group first (`encodeUnsigned7`, `decodeUnsigned7`), signed 32-bit variables (`encodeSigned32`, `decodeSigned32`), AccelStepper positions as a sign-magnitude value (`encodeStepperPosition`, `decodeStepperPosition`; -2³¹ is not representable) and speeds as the firmware's decimal float with a 23-bit significand (`encodeStepperFloat`, `decodeStepperFloat`, which keep about seven significant digits), dense packing of seven raw bytes into eight wire bytes (`encodePacked7Bit`, `decodePacked7Bit`), one byte as two 7-bit bytes (`encodeByteAs7Bit`, `decodeByteAs7Bit`) and a 14-bit value as two bytes (`writeValueAsTwo7bitBytes`). `codecs/replies` decodes the payloads that follow the feature ID of the optional replies (`decodeSystemVariableReply`, `decodeSerialReply`, `decodeEncoderPositions`, `decodeStepperReply`, `decodeDhtReport`, `decodeSchedulerReply` and `decodeFrequencyReport`); each returns `undefined` for a truncated or foreign payload and a fresh object otherwise. Incoming bytes are normally decoded by the parser of a `FirmataClient` (see Firmata Board Client): `client.process(bytes)` accepts any chunking, including a message split between chunks, and calls the matching callback of every registered handler. Unknown SysEx frames arrive as `customMessage`, and a byte that starts no known message arrives as `error`. SysEx frames larger than the parser buffer (1 MiB) are discarded, and the 14-bit analog and sampling-interval fields cap those values at 16383.
+
+```ts
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { decodeDhtReport, decodeEncoderPositions, decodeFrequencyReport, decodeSchedulerReply, decodeSerialReply, decodeStepperReply, decodeSystemVariableReply } from 'nebulosa/src/devices/firmata/codecs/replies'
+import { decodeByteAs7Bit, decodePacked7Bit, decodeSigned32, decodeStepperFloat, decodeStepperPosition, decodeUnsigned7, encodeByteAs7Bit, encodePacked7Bit, encodeSigned32, encodeStepperFloat, encodeStepperPosition, encodeUnsigned7, writeValueAsTwo7bitBytes } from 'nebulosa/src/devices/firmata/codecs/numeric'
+import * as Firmata from 'nebulosa/src/devices/firmata/protocol'
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+
+// A few command IDs and bounds, in hexadecimal.
+console.log(Firmata.START_SYSEX.toString(16), Firmata.END_SYSEX.toString(16), Firmata.SET_PIN_MODE.toString(16), Firmata.CAPABILITY_QUERY.toString(16)) // f0 f7 f4 6b
+console.log(Firmata.MIN_SAMPLING_INTERVAL, Firmata.MAX_SAMPLING_INTERVAL, Firmata.INITIAL_FIRMATA_BUFFER_SIZE, Firmata.MAX_FIRMATA_BUFFER_SIZE) // 1 16383 256 1048576
+
+// Unsigned values, 7 bits per byte, least-significant group first.
+console.log(encodeUnsigned7(300, 2), decodeUnsigned7(Uint8Array.of(44, 2), 0, 2)) // [ 44, 2 ] 300
+console.log(encodeUnsigned7(4294967295, 5)) // [ 127, 127, 127, 127, 15 ]
+
+// Signed 32-bit variables use the two's-complement bit pattern over five bytes.
+console.log(encodeSigned32(-2), decodeSigned32(Uint8Array.from(encodeSigned32(-2)), 0)) // [ 126, 127, 127, 127, 15 ] -2
+console.log(decodeSigned32(Uint8Array.from(encodeSigned32(123456)), 0)) // 123456
+
+// Stepper positions are sign-magnitude, and speeds a decimal float.
+console.log(encodeStepperPosition(1000), encodeStepperPosition(-1000)) // [ 104, 7, 0, 0, 0 ] [ 104, 7, 0, 0, 8 ]
+console.log(decodeStepperPosition(Uint8Array.from(encodeStepperPosition(-123456)), 0)) // -123456
+console.log(encodeStepperFloat(1500.5), decodeStepperFloat(Uint8Array.from(encodeStepperFloat(1500.5)), 0)) // [ 84, 74, 91, 32 ] 1500.5
+console.log(encodeStepperFloat(0), decodeStepperFloat(Uint8Array.from(encodeStepperFloat(-0.25)), 0)) // [ 0, 0, 0, 0 ] -0.25
+
+// Dense packing: seven raw bytes occupy eight wire bytes, all below 0x80.
+const packed = encodePacked7Bit([0xff, 0x00, 0xa5, 0x5a, 0x01, 0x80, 0x7f])
+console.log(packed, decodePacked7Bit(packed)) // <Buffer 7f 01 14 55 15 00 60 3f> <Buffer ff 00 a5 5a 01 80 7f>
+
+// A byte as two 7-bit bytes, and a 14-bit value written into a buffer.
+const pair = [0, 0]
+encodeByteAs7Bit(0xc3, pair)
+console.log(pair, decodeByteAs7Bit(pair, 0)) // [ 67, 1 ] 195
+const field = new Uint8Array(4)
+writeValueAsTwo7bitBytes(field, 1, 1000)
+console.log(field) // Uint8Array(4) [ 0, 104, 7, 0 ]
+
+// Reply decoders take the payload after the feature ID and return undefined for foreign payloads.
+console.log(decodeDhtReport(Buffer.from([0, 5, 0x13, 0x02, 0x1a, 0x03]))) // { pin: 5, temperature: 27.5, humidity: 41 } (pin 5, 27.5 °C, 41.0 %)
+console.log(decodeFrequencyReport(Buffer.from([2, 14, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]))) // { pin: 14, timestamp: 128, ticks: 0 }
+console.log(decodeStepperReply(Buffer.from([0x0a, 2, 100, 0, 0, 0, 0]))) // { device: 2, position: 100, complete: true }
+console.log(decodeStepperReply(Buffer.from([0x24, 1]))) // { group: 1 } (a completed MultiStepper group)
+console.log(decodeEncoderPositions(Buffer.from([0x41, 10, 0, 0, 0, 3, 5, 0, 0, 0]))) // [ { id: 1, position: -10, negative: true }, { id: 3, position: 5, negative: false } ]
+console.log(decodeSerialReply(Buffer.from([0x41, 72, 0, 105, 0]))) // { port: 1, data: <Buffer 48 69> }
+console.log(decodeSchedulerReply(Buffer.from([9, 1, 4, 7]))) // { ids: [ 1, 4, 7 ] }
+console.log(decodeSchedulerReply(Buffer.from([10, 5]))) // { id: 5, found: false, error: false }
+console.log(decodeSystemVariableReply(Buffer.from([0, 1, 0, 3, 0, 127, 94, 7, 0, 0, 0]))) // { operation: 0, dataType: 1, status: 0, id: 3, pin: undefined, value: 990 }
+
+// The parser of a client turns raw bytes into handler events. Chunking does not matter.
+const board = new ESP8266()
+const client = new FirmataClient({ write() {}, flush() {}, close() {} }, board)
+client.addHandler({
+	version: (_, major, minor) => console.log('version', major, minor),
+	firmwareMessage: (_, major, minor, name) => console.log('firmware', major, minor, name),
+	digitalMessage: (_, id, value) => (value ? console.log('digital high', id) : undefined),
+	analogMessage: (_, port, value) => console.log('analog', port, value),
+	textMessage: (_, text) => console.log('text', text),
+	customMessage: (_, data) => console.log('custom', data),
+	samplingIntervalReply: (_, ms) => console.log('sampling', ms),
+	systemReset: () => console.log('reset'),
+})
+
+client.process(Buffer.from([0xf9, 2, 5])) // version 2 5
+client.process(Buffer.from([0xf0, 0x79, 2, 7, 0x53, 0, 0x74, 0, 0xf7])) // firmware 2 7 St
+client.process(Buffer.from([0x90 | 1, 0b0000101, 0])) // digital high 8, then digital high 10
+client.process(Buffer.from([0xe0 | 3, 0x7f, 0x07])) // analog 3 1023
+client.process(Buffer.from([0xf0, 0x71, 0x4f, 0, 0x4b, 0, 0xf7])) // text OK
+client.process(Buffer.from([0xf0, 0x50, 1, 2, 3, 0xf7])) // custom <Buffer 50 01 02 03> (an unknown SysEx feature; the first byte is the feature ID)
+client.process(Buffer.from([0xf0, 0x7a, 100, 0, 0xf7])) // sampling 100
+client.process(Buffer.from([0xff])) // reset
+for (const byte of [0xe0 | 2, 0x00]) client.processByte(byte)
+client.process(Buffer.from([0x01])) // analog 2 128 (one message split over three chunks)
+```
 
 ### LX200 Telescope Protocol
 
