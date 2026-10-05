@@ -6468,11 +6468,206 @@ console.log(equatorEcliptic(longitude, time).map(toDeg)) // [180, 0] — degrees
 
 ### ASTAP Plate Solving
 
+`astapPlateSolve(input, options?, signal?)` solves an image with the local ASTAP command-line program and returns a `PlateSolution` (see Plate Solution), or `undefined` when ASTAP exits with an error or writes no WCS. It spawns `astap` with `-wcs`, reads the WCS file that ASTAP writes to the temporary directory, builds the solution from it with `plateSolutionFrom`, and always deletes the temporary files. It needs the ASTAP binary and one of its star databases, which are not part of the library; the default executable is `C:\Program Files\astap\astap.exe` on Windows and `astap` on the `PATH` elsewhere, and `options.executable` overrides it. `input` is a path to a FITS or image file readable by ASTAP.
+
+The options extend `PlateSolveOptions`. `rightAscension` and `declination` (radians) are sent only when both are given, and replace the position in the FITS header; `radius` (radians, rounded up to whole degrees and limited to 0–180) is the search radius, 180° when omitted. When a radius is given without a center, ASTAP takes the center from the FITS header. `fov` (radians) is the field-of-view hint, where 0, the default, lets ASTAP find it. `downsample` is the integer downsampling factor (0 is automatic), `timeout` is in milliseconds (default 300000, 5 minutes) and `sip` (default true) asks for the SIP distortion terms, although the current ASTAP versions may not write them. An aborted `signal` stops ASTAP and the call returns `undefined`.
+
+```ts
+import { astapPlateSolve } from 'nebulosa/src/astrometry/solvers/astap'
+import { deg, hour, toArcmin, toArcsec, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+
+// A solve with hints for the center, the search radius and the field of view.
+const solution = await astapPlateSolve('data/NGC3372--32.1.fit', { rightAscension: hour(10.7345), declination: deg(-59.6022), radius: deg(4), fov: deg(0.54) })
+
+if (solution) {
+	console.log(toHour(solution.rightAscension), toDeg(solution.declination)) // 10.7345062 -59.6019829
+	console.log(toDeg(solution.orientation), toArcsec(solution.scale), solution.parity) // 110.1218553 2.7361834 NORMAL
+	console.log(toArcmin(solution.width), toArcmin(solution.height), toArcmin(solution.radius)) // 47.2839347 32.2001423 28.6034073
+	console.log(solution.widthInPixels, solution.heightInPixels, solution.CTYPE1, solution.CRPIX1) // 1037 706 RA---TAN 519
+}
+
+// A blind solve with a radius only: ASTAP takes the center from the FITS header, and SIP is turned off.
+const blind = await astapPlateSolve('data/NGC3372--32.1.fit', { radius: deg(10), sip: false, timeout: 60000 })
+console.log(blind && [toDeg(blind.rightAscension), toDeg(blind.declination), blind.CTYPE1]) // [ 161.0175934, -59.6019821, 'RA---TAN' ]
+
+// It can be cancelled: the process is stopped and the result is undefined.
+const controller = new AbortController()
+setTimeout(() => controller.abort(), 200)
+console.log(await astapPlateSolve('data/NGC3372--32.1.fit', { fov: deg(0.54) }, controller.signal)) // undefined
+```
+
 ### ASTAP Star Detection
+
+`astapDetectStars(input, options?, signal?)` detects the stars of an image with the `-extract` mode of the local ASTAP program and returns them as `DetectedStar` records (`x`, `y`, `hfd`, `snr`, `flux`), the same shape as the built-in detector of the library. It runs `astap` on `input` (a path to a FITS or image file), parses the CSV that ASTAP writes next to the input and deletes it. The ASTAP binary is required (default `C:\Program Files\astap\astap.exe` on Windows, `astap` on the `PATH` elsewhere, or `options.executable`).
+
+The pixel coordinates are converted from the 1-based pixels of ASTAP to 0-based array indices. `minSNR` is the minimum signal-to-noise ratio passed to ASTAP (default 0), `maxStars` keeps only the brightest stars by SNR (0, the default, keeps all) and `timeout` is in milliseconds (default 300000). Failures do not throw: a missing input file, an ASTAP error or an empty list of stars give an empty array after a message on the console, and an aborted `signal` stops ASTAP and also gives an empty array.
+
+```ts
+import { astapDetectStars } from 'nebulosa/src/astrometry/solvers/astap'
+
+// The five stars with the highest SNR of an image (file of the repository).
+const stars = await astapDetectStars('data/apod4.jpg', { maxStars: 5 })
+console.log(stars.length) // 5
+console.log(stars[0]) // { x: 464.9656, y: 119.9062, hfd: 7.5315, snr: 295, flux: 3022214 }
+
+// A filter on the signal-to-noise ratio, and a time limit.
+const bright = await astapDetectStars('data/apod4.jpg', { minSNR: 30, timeout: 60000 })
+console.log(bright.every((star) => star.hfd > 0 && star.flux > 0)) // true
+
+// A missing file gives an empty list.
+console.log(await astapDetectStars('data/missing.fit')) // []
+```
 
 ### Astrometry.net Index Selection
 
+An astrometry.net solver needs index files, each of which stores star quads whose diameters fall in a narrow interval, and a field is solvable when the indexes hold quads of roughly 10 % to 100 % of the image size. `selectAstrometryIndexes(request)` computes the minimum practical set of index files for a camera and telescope, so that a downloader can fetch only what the solver will use. It is a pure computation: it never reads the filesystem or the network, and it only returns descriptors.
+
+The request is `focalLength` (millimeters, including reducers and extenders), `pixelPitch` (micrometers, including binning), `width` and `height` (pixels), and optionally `center` (an `EquatorialCoordinate` in radians, in the frame of the index catalog), `pointingUncertainty` (radians, default 0), `safetyMargin` (radians, default 0.25°), `minQuadFraction` (default 0.10) and `maxQuadFraction` (default 1.00) of the largest image axis. The plan holds the `pixelScale` (radians per pixel at the center), the sensor size in millimeters, the rectilinear `fieldWidth` and `fieldHeight`, `largestFieldDimension` (the largest axis, not the diagonal), `fieldCornerRadius`, the interval of quad diameters it requires, the `coverage` against the manifest (`'complete'`, `'partial'` or `'none'`, with the supported minimum and maximum), the selected `scales` and the `files`. The inputs must be finite and positive, and the selector throws for an invalid request.
+
+The manifest has 20 scales, numbered 0 to 19: the 5200 series (5200 to 5206, quads from 2′ to 22′) is tiled in HEALPix XY tiles at resolution 2 (48 tiles per scale), and the 4100 series (4107 to 4119, from 22′ to 2000′) is all-sky with one file per scale. A file is `index-5202-00.fits` for a tile and `index-4107.fits` for an all-sky scale. Without a `center` every tile of each selected tiled scale is included (reason `'no-field-center'`); with a `center` only the tiles that intersect the search disc are kept (reason `'tile-intersects-search-disc'`), where the radius of the disc is the corner radius of the field plus the pointing uncertainty plus the safety margin, limited to π. The tile numbers are the HEALPix XY identifiers of astrometry.net, which are not the RING or NESTED numbers of standard HEALPix.
+
+`coordinateToTile(rightAscension, declination, resolution)` gives the tile id of a position, `distanceToTile(tileId, resolution, rightAscension, declination)` the angular distance (radians) from a position to a tile, which is zero inside it, and `tileIntersectsDisc(tileId, resolution, rightAscension, declination, radius)` whether a disc of that radius touches the tile. `ASTROMETRY_INDEX_MANIFEST` is the list of scales, with `scale`, `family`, `indexNumber`, the minimum and maximum quad diameters in radians and, for the tiled families, `tileResolution`.
+
+```ts
+import { ASTROMETRY_INDEX_MANIFEST, coordinateToTile, distanceToTile, selectAstrometryIndexes, tileIntersectsDisc } from 'nebulosa/src/astrometry/solvers/astrometrynet.index'
+import { deg, hour, toArcmin, toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
+
+// The scales of the manifest, with the quad diameters in arcminutes.
+console.log(ASTROMETRY_INDEX_MANIFEST.length) // 20
+console.log(ASTROMETRY_INDEX_MANIFEST.map((s) => `${s.indexNumber}:${toArcmin(s.minimumQuadDiameter).toFixed(1)}-${toArcmin(s.maximumQuadDiameter).toFixed(1)}`).join(' '))
+// 5200:2.0-2.8 5201:2.8-4.0 5202:4.0-5.6 5203:5.6-8.0 5204:8.0-11.0 5205:11.0-16.0 5206:16.0-22.0 4107:22.0-30.0 4108:30.0-42.0 4109:42.0-60.0 4110:60.0-85.0 4111:85.0-120.0 4112:120.0-170.0 4113:170.0-240.0 4114:240.0-340.0 4115:340.0-480.0 4116:480.0-680.0 4117:680.0-1000.0 4118:1000.0-1400.0 4119:1400.0-2000.0
+
+// A 1000 mm telescope with a 3.76 µm camera of 4144 × 2822 pixels, with no position known.
+const plan = selectAstrometryIndexes({ focalLength: 1000, pixelPitch: 3.76, width: 4144, height: 2822 })
+console.log(toArcsec(plan.pixelScale), plan.sensorWidth, plan.sensorHeight) // 0.7755557 15.58144 10.61072
+console.log(toDeg(plan.fieldWidth), toDeg(plan.fieldHeight), toDeg(plan.fieldCornerRadius)) // 0.8927327 0.6079438 0.5400318
+console.log(toArcmin(plan.minimumRequiredQuadDiameter), toArcmin(plan.maximumRequiredQuadDiameter), plan.coverage.status) // 5.3563961 53.5639614 complete
+console.log(plan.scales.map((s) => s.indexNumber)) // [ 5202, 5203, 5204, 5205, 5206, 4107, 4108, 4109 ]
+console.log(plan.files.length, plan.files[0].filename, plan.files[0].reason) // 243 index-5202-00.fits no-field-center
+
+// The same camera pointed near the Carina Nebula, with 1° of pointing error: only the tiles near the field are needed.
+const center = { rightAscension: hour(10.7345), declination: deg(-59.6022) }
+const near = selectAstrometryIndexes({ focalLength: 1000, pixelPitch: 3.76, width: 4144, height: 2822, center, pointingUncertainty: deg(1), safetyMargin: deg(0.25) })
+console.log(toDeg(near.tileSearchRadius!), near.files.length) // 1.7900318 13
+console.log(near.files.map((f) => f.filename).join(' ')) // index-5202-36.fits index-5202-38.fits index-5203-36.fits ... index-4107.fits index-4108.fits index-4109.fits
+
+// The tiles themselves: the tile of the position, its distance (0 inside) and the intersection with a small disc.
+const tile = coordinateToTile(center.rightAscension, center.declination, 2)
+console.log(tile, distanceToTile(tile, 2, center.rightAscension, center.declination), tileIntersectsDisc(tile, 2, center.rightAscension, center.declination, 0.01)) // 38 0 true
+
+// A 50 mm lens needs quads larger than the manifest holds for part of the interval, so the coverage is partial.
+const wide = selectAstrometryIndexes({ focalLength: 50, pixelPitch: 5, width: 6000, height: 4000 })
+console.log(
+	wide.coverage.status,
+	wide.scales.map((s) => s.indexNumber),
+	wide.files.length,
+) // partial [ 4113, 4114, 4115, 4116, 4117, 4118, 4119 ] 7
+
+// A very long focal length gives a field so small that no scale reaches it.
+const tiny = selectAstrometryIndexes({ focalLength: 8000, pixelPitch: 2.4, width: 1000, height: 1000, minQuadFraction: 0.2, maxQuadFraction: 0.8 })
+console.log(tiny.coverage.status, tiny.scales.length, tiny.files.length) // none 0 0
+```
+
 ### Catalog Crossmatching
+
+`crossMatchStars(detectedStars, catalog, options)` pairs detected image stars with the stars of a `StarCatalog` and recovers an approximate plate solution without a WCS. It queries a cone of the catalog around an approximate pointing, projects the catalog stars on a gnomonic plane (see Sky Projections) centered there, fits the detections to them with the geometric matcher of Star Pattern Matching and then moves the projection center to the fitted image center, repeating until the center moves less than 1″ or the iterations run out. It resolves to a `StarCrossmatchResult` and never throws for a failed match: `success` is false and `failureReason` says `'no detected stars'`, `'no catalog stars in query region'` or `'no geometric catalog match found'`.
+
+The options are `centerRA` and `centerDEC` (radians, the approximate center of the field, with a declination in [−π/2, π/2]), `radius` (radians, the cone radius, below π/2) and `camera`, with `width` and `height` in pixels and optionally `pixelSize` (micrometers) and `focalLength` (millimeters), which give the nominal scale; without them the scale comes from the cone footprint. The cone has to cover the field and the pointing error. `refinementIterations` (default 2), `centerTolerance` (radians, default 1″), `maxCatalogStars` (the brightest kept, default and minimum 6), `projectionPaddingFactor` (the margin outside the frame, as a fraction of the larger image side) and `matchingConfig` (a `StarMatchingConfig` of the matcher) are tuning knobs. Image coordinates have the origin at the top-left corner with y increasing downward; the detections need `x`, `y` and `flux`, which orders them from the brightest, and the catalog entries need a position (a magnitude, when there is one, orders the catalog the same way).
+
+The `solution` holds the image-center `rightAscension` and `declination`, the `scale` (radians per pixel), the `rotation` (radians), `mirrored` (parity) and `fieldRadius` (half the diagonal, radians). It is a similarity fit on a tangent plane, not a WCS with distortion, so it is a starting point for a refined solve. `matches` has one record per detection, in input order, with `status` (`'matched'` or `'unmatched'`), the `catalogStar` and `catalogIndex` of the cone query, the `residual` in pixels and the `skySeparation` in radians. `summary` counts the detected, matched, unmatched, catalog, projected and inlier stars and gives the mean and median residual and separation, `catalogStars` is the query result and `starMatch` is the matcher result of the best attempt.
+
+```ts
+import { crossMatchStars } from 'nebulosa/src/astrometry/matching/star.crossmatching'
+import { Gnomonic } from 'nebulosa/src/astronomy/projections/projection'
+import type { StarCatalog, StarCatalogEntry } from 'nebulosa/src/catalogs/stars/catalog'
+import type { DetectedStar } from 'nebulosa/src/imaging/stars/detector'
+import { sphericalSeparation } from 'nebulosa/src/math/numerical/geometry'
+import { arcsec, deg, hour, toArcsec, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+
+// A catalog held in memory; the crossmatcher only calls queryCone.
+class ListCatalog implements StarCatalog {
+	constructor(readonly stars: readonly StarCatalogEntry[]) {}
+
+	queryCone(ra: number, dec: number, radius: number) {
+		return this.stars.filter((star) => sphericalSeparation(ra, dec, star.rightAscension, star.declination) <= radius)
+	}
+
+	queryRegion() {
+		return this.stars
+	}
+
+	queryTriangle() {
+		return this.stars
+	}
+
+	queryBox() {
+		return this.stars
+	}
+
+	queryPolygon() {
+		return this.stars
+	}
+
+	*streamRegion() {
+		yield* this.stars
+	}
+}
+
+// A 1600 × 1200 image of 2″/pixel centered at RA 5.5 h, Dec −5°, north up, with 16 stars at these pixel offsets from the center.
+const width = 1600
+const height = 1200
+const scale = arcsec(2)
+const center = { rightAscension: hour(5.5), declination: deg(-5) }
+const plane = new Gnomonic(center.rightAscension, center.declination)
+const offsets = [
+	[-500, -300],
+	[-420, 250],
+	[-300, -80],
+	[-150, 330],
+	[-60, -380],
+	[0, 40],
+	[90, -220],
+	[180, 300],
+	[260, -60],
+	[340, 200],
+	[420, -330],
+	[510, 60],
+	[-210, -250],
+	[150, 110],
+	[-380, 10],
+	[300, -290],
+]
+const catalog: StarCatalogEntry[] = []
+const detected: DetectedStar[] = []
+
+offsets.forEach(([dx, dy], i) => {
+	const sky = plane.unproject(dx * scale, -dy * scale)!
+	catalog.push({ rightAscension: sky.x, declination: sky.y, magnitude: 9 + i * 0.2 })
+	detected.push({ x: width / 2 + dx, y: height / 2 + dy, flux: 5000 - i * 100, snr: 40, hfd: 2.5 })
+})
+
+// The pointing is 20″ off in RA and 15″ off in Dec, and the cone has a 1° radius.
+const result = await crossMatchStars(detected, new ListCatalog(catalog), { centerRA: center.rightAscension + arcsec(20), centerDEC: center.declination - arcsec(15), radius: deg(1), camera: { width, height, pixelSize: 3.76, focalLength: 387 } })
+console.log(result.success, result.failureReason) // true undefined
+
+const solution = result.solution!
+console.log(toHour(solution.rightAscension).toFixed(6), toDeg(solution.declination).toFixed(6)) // 5.500000 -5.000000
+console.log(toArcsec(solution.scale).toFixed(6), toDeg(solution.rotation).toFixed(6), solution.mirrored, toDeg(solution.fieldRadius).toFixed(4)) // 2.000000 0.000000 false 0.5556
+
+console.log(result.summary.totalDetected, result.summary.matchedCount, result.summary.catalogCount, result.summary.projectedCatalogCount, result.summary.inlierCount) // 16 16 16 16 16
+console.log(result.summary.medianResidual! < 1e-6, result.summary.medianSkySeparation! < 1e-12) // true true (exact synthetic data)
+
+const first = result.matches[0]
+console.log(first.status, first.detectedIndex, first.catalogIndex, first.residual! < 1e-6, first.skySeparation! < 1e-12) // matched 0 0 true true
+console.log(result.catalogStars.length, result.starMatch!.inlierCount) // 16 16
+
+// The failures resolve with success false.
+const noStars = await crossMatchStars([], new ListCatalog(catalog), { centerRA: center.rightAscension, centerDEC: center.declination, radius: deg(1), camera: { width, height } })
+console.log(noStars.success, noStars.failureReason) // false no detected stars
+
+const noCatalog = await crossMatchStars(detected, new ListCatalog([]), { centerRA: center.rightAscension, centerDEC: center.declination, radius: deg(1), camera: { width, height } })
+console.log(noCatalog.success, noCatalog.failureReason) // false no catalog stars in query region
+```
 
 ### FITS TAN and SIP Coordinate Mapping
 
@@ -6480,17 +6675,287 @@ console.log(equatorEcliptic(longitude, time).map(toDeg)) // [180, 0] — degrees
 
 ### Local Astrometry.net Plate Solving
 
+`localAstrometryNetPlateSolve(input, options, signal?)` solves an image with the `solve-field` command-line program of the astrometry.net package and returns a `PlateSolution` (see Plate Solution), or `undefined` when `solve-field` exits with an error or writes no WCS. `input` is a path (a Blob is not accepted), `options.executable` is required (the path or name of `solve-field`), and the program needs its own index files (see Astrometry.net Index Selection). Star detection happens inside `solve-field`. The call writes its output to a temporary directory that is always removed, and it builds the solution from the WCS file with `plateSolutionFrom`.
+
+The command line is fixed except for the hints: `--overwrite --crpix-center --no-verify --no-plots --skip-solved --no-remove-lines --uniformize 0`, `--downsample` (the `downsample` option, default 2, at least 1) and `--cpulimit` (the `timeout` in whole seconds when it is at least 1000 ms, otherwise 300). The scale comes from `fov` (radians): when it is positive the scale is limited to between 0.7 and 1.3 times the field width in degrees (`--scale-units degwidth`), and with `fov` 0 or omitted `--guess-scale` is used. The position window (`--ra`, `--dec`, `--radius`) is sent only when `rightAscension`, `declination` and `radius` are all given, the radius rounded up to whole degrees and limited to 0–180; a radius alone or a center alone is ignored. The spawned process is killed after `timeout` milliseconds (default 300000), and an aborted `signal` stops it.
+
+```ts
+import { localAstrometryNetPlateSolve } from 'nebulosa/src/astrometry/solvers/astrometrynet'
+import { deg, toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
+
+// Not run here: it needs solve-field and its index files.
+async function solve() {
+	// A blind solve: the scale is guessed and the sky is not constrained.
+	const blind = await localAstrometryNetPlateSolve('image.fits', { executable: 'solve-field' })
+
+	// A solve with a field of view of 1° (scale between 0.7° and 1.3°) inside a 2.2° radius, which becomes 3° around RA 10°, Dec +20°.
+	const hinted = await localAstrometryNetPlateSolve('image.fits', { executable: 'solve-field', fov: deg(1), rightAscension: deg(10), declination: deg(20), radius: deg(2.2), downsample: 4, timeout: 90000 })
+
+	if (hinted) console.log(toDeg(hinted.rightAscension), toDeg(hinted.declination), toArcsec(hinted.scale), hinted.parity)
+
+	return blind
+}
+
+// The command line of each call above, observed by replacing solve-field with a program that records its arguments and fails:
+// --out nebulosa --overwrite --dir <temporary directory> --cpulimit 300 --crpix-center --downsample 2 --no-verify --no-plots --skip-solved --no-remove-lines --uniformize 0 --guess-scale image.fits
+// --out nebulosa --overwrite --dir <temporary directory> --cpulimit 90 --crpix-center --downsample 4 --no-verify --no-plots --skip-solved --no-remove-lines --uniformize 0 --scale-units degwidth --scale-low 0.7 --scale-high 1.3 --ra 10 --dec 20 --radius 3 image.fits
+// A failing program gives undefined, and a center without a radius sends no window at all.
+console.log(typeof solve) // function
+```
+
 ### Native libastrometry Plate Solving
+
+`libAstrometryNetPlateSolve(stars, width, height, options, signal?)` solves an image through the astrometry.net solver compiled as `native/libastrometry.shared` and loaded with `bun:ffi`, so no external program is spawned. It does not detect stars: `stars` are already measured sources (`x` and `y` in pixels, 0-based with the origin at the top-left pixel, and `flux`, which orders the field from the brightest), typically from `detectStars`, and `width` and `height` are the image size in pixels. The result is a `PlateSolution` (see Plate Solution), or `undefined` when no index file is found, there are fewer than three stars or the field does not match. An aborted `signal` throws, and a damaged index throws while it is loaded. The library must exist for the platform (`load()` fails otherwise), and the solver runs synchronously inside the native call, so a blind solve against many indexes blocks the thread for as long as it takes.
+
+`options.indexes` is required: a path, a directory scanned recursively for `index-*.fit`, `.fits` or `.fits.fz` files, or a list of them (see Astrometry.net Index Selection to choose them). The search is narrowed with `fov` (radians, the width of the field, which gives a scale of `fov / width`), `scale` (radians per pixel, which wins over `fov`) and `scaleError` (fractional, default 0.3), or with explicit `scaleLow` and `scaleHigh`. A position window needs `rightAscension`, `declination` and `radius` together (radians, the radius limited to 0–180°) and is ignored otherwise. `parity` is `'NORMAL'`, `'FLIPPED'`, `'BOTH'` or 0, 1, 2. `tweakOrder` is the SIP order (default 2, `false` disables the refinement and gives a plain TAN solution), `crpixCenter` and `crpix` set the reference pixel, and `verifyPixelSigma`, `codeTolerance`, `logOddsToKeep` (natural log, default `Math.log(1e9)`, as in `solve-field`), `maxQuads` and `maxMatches` tune the matching. The star options of `detectStars` are accepted in the same object, and `maxStars` limits the field.
+
+`AstrometryNet` is the class behind the function: it owns one native solver, which is released by `dispose()` or `using`, and `solve` (same arguments) can be called again on the same instance. `open()` creates a fresh handle of the library, `load()` returns the cached one and `unload()` forgets it, and `astrometryNetIndexFiles(indexes)` resolves the index input to a sorted, deduplicated list of existing paths, skipping the ones that are missing.
+
+```ts
+import { AstrometryNet, astrometryNetIndexFiles, libAstrometryNetPlateSolve } from 'nebulosa/src/bindings/astrometry/libastrometry'
+import { readImageFromJpeg } from 'nebulosa/src/imaging/model/image'
+import { detectStars } from 'nebulosa/src/imaging/stars/detector'
+import { deg, toArcsec, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+
+// 719 × 507 JPEG of the northern sky, with the 4116 index (quads from 480′ to 680′).
+const image = readImageFromJpeg(Buffer.from(await Bun.file('data/apod4.jpg').arrayBuffer()), undefined, 'GRAY')!
+const stars = detectStars(image, { maxStars: 500 })
+console.log(stars.length, image.metadata.width, image.metadata.height) // 488 719 507
+
+// Index files from a directory, skipping the path that does not exist.
+console.log(await astrometryNetIndexFiles(['data', 'missing'])) // [ "data\\index-4116.fits" ] (on Windows; the directory is scanned for index-*.fits)
+
+// A hinted solve: a field of 34° wide, ±20 % on the scale, SIP order 2.
+const solution = await libAstrometryNetPlateSolve(stars, image.metadata.width, image.metadata.height, { indexes: 'data/index-4116.fits', fov: deg(34), scaleError: 0.2, tweakOrder: 2, maxStars: 500 })
+
+if (solution) {
+	console.log(toHour(solution.rightAscension), toDeg(solution.declination)) // 12.4786264 56.7123822 (hours, degrees, J2000)
+	console.log(toArcsec(solution.scale), toDeg(solution.orientation), toDeg(solution.width)) // 170.856082 58.502268 34.092733
+	console.log(solution.parity, solution.CTYPE1) // NORMAL RA---TAN-SIP
+}
+
+// The class, reused for several solves and released at the end of the scope.
+using solver = new AstrometryNet()
+
+// Fewer than 3 stars, an index path that does not exist, and a position window on the wrong part of the sky: all of them give undefined.
+console.log(await solver.solve(stars.slice(0, 2), 719, 507, { indexes: 'data/index-4116.fits' })) // undefined
+console.log(await solver.solve(stars, 719, 507, { indexes: 'nowhere' })) // undefined
+console.log(await solver.solve(stars, 719, 507, { indexes: 'data/index-4116.fits', rightAscension: deg(10), declination: deg(-80), radius: deg(5), fov: deg(34) })) // undefined
+```
 
 ### Nova Astrometry.net Plate Solving
 
+`novaAstrometryNetPlateSolve(input, options?, signal?)` solves an image with the web service nova.astrometry.net and returns a `PlateSolution` (see Plate Solution), or `undefined` on a failure, a failed job or a timeout. `input` is a URL (sent with `url_upload`) or a `Blob` (multipart `upload`). The call logs in (unless `options.session` is given), uploads, polls the submission and then the job, downloads the WCS file and builds the solution with `plateSolutionFrom`. It needs the network and, for anything beyond the anonymous key, `options.apiKey`; the image is sent to a third-party service, as a private submission with no permission for commercial use or modification unless `publiclyVisible`, `allowCommercialUse` and `allowModifications` say otherwise. The poll waits 15 seconds between rounds. `options.timeout` (milliseconds, default 300000) bounds the whole solve and maps to `undefined`; an aborted `signal` throws.
+
+The hints are those of `Upload`. The sky window is `rightAscension`, `declination` and `radius` (radians, sent in degrees), each sent when set, and a radius does not need a center. The scale is `scaleUnits` (`'degwidth'` by default, `'arcminwidth'` or `'arcsecperpix'`) with `scaleLower` and `scaleUpper` (radians, converted to the units; with `'degwidth'` and no bounds the service defaults of 0.1 and 180 are sent, and with the other units a missing bound is omitted), or, with `scaleType: 'ev'`, `scaleEstimated` and the fractional `scaleError`. `downsample` is at least 1 (default 2), `tweakOrder` is the SIP order (default 2), `crpixCenter` (default true) puts the reference pixel at the center and `parity` is 0 (normal), 1 (flipped) or 2 (try both, the default).
+
+The steps are exported so that a solve can be driven by hand: `login(options?, signal?)` returns a `Session` (`status` and `session`), `upload(upload, signal?)` returns a `Submission` (`status`, `subid`), `submissionStatus(submission, { session, apiUrl? }, signal?)` returns the `jobs` slots (an entry is `null` until the job exists), `jobStatus(jobId, { session, apiUrl? }, signal?)` returns the `status` (`'solving'`, `'success'` or `'failure'`) and `wcsFile(jobId, { session, apiUrl? }, signal?)` returns the WCS FITS as a `Blob`. Each of them returns `undefined` for a non-OK response. `NOVA_ASTROMETRY_NET_URL` and `NOVA_ASTROMETRY_NET_ANONYMOUS_API_KEY` are the defaults of `apiUrl` and `apiKey`. The end-to-end function passes `apiUrl` to the login and the upload only, and the polling and the download use the default URL, so drive the steps by hand to talk to another server.
+
+```ts
+import { jobStatus, login, NOVA_ASTROMETRY_NET_ANONYMOUS_API_KEY, NOVA_ASTROMETRY_NET_URL, novaAstrometryNetPlateSolve, submissionStatus, upload, wcsFile } from 'nebulosa/src/astrometry/solvers/astrometrynet'
+import { deg, toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
+
+console.log(NOVA_ASTROMETRY_NET_URL, NOVA_ASTROMETRY_NET_ANONYMOUS_API_KEY) // https://nova.astrometry.net XXXXXXXX
+
+// Not run here: it uploads an image to the public service.
+async function solve(file: Blob) {
+	// An image from a URL, with a 1° search radius, and then a Blob.
+	const fromUrl = await novaAstrometryNetPlateSolve('https://example.com/image.jpg', { radius: deg(1), timeout: 120000 })
+	const fromBlob = await novaAstrometryNetPlateSolve(file, { scaleUnits: 'arcsecperpix', scaleLower: deg(1 / 3600), scaleUpper: deg(3 / 3600), parity: 0 })
+
+	if (fromUrl) console.log(toDeg(fromUrl.rightAscension), toDeg(fromUrl.declination), toArcsec(fromUrl.scale))
+
+	// The steps by hand against a server of your own.
+	const apiUrl = 'http://localhost:8080'
+	const session = await login({ apiUrl })
+	const submission = await upload({ input: file, session, apiUrl, downsample: 4, tweakOrder: 3 })
+	const status = await submissionStatus(submission!, { session, apiUrl })
+	const jobId = status?.jobs.find((id) => typeof id === 'number')
+	const job = jobId === undefined ? undefined : await jobStatus(jobId, { session, apiUrl })
+	const wcs = job?.status === 'success' ? await wcsFile(jobId!, { session, apiUrl }) : undefined
+
+	return [fromBlob, wcs]
+}
+
+// The JSON request that upload sent in a run against a local server of the same shape, with a URL, a center and a scale in arcsec/pixel:
+// POST /api/url_upload {"session":"abc","url":"https://example.com/image.jpg","allow_commercial_use":"n","allow_modifications":"n","publicly_visible":"n","scale_units":"arcsecperpix","scale_lower":1,"scale_upper":3,"scale_type":"ul","center_ra":350,"center_dec":20,"radius":2,"downsample_factor":2,"tweak_order":2,"crpix_center":true,"parity":0}
+console.log(typeof solve) // function
+```
+
 ### Planar Similarity and Affine Transforms
 
+The 2D transforms of the star matcher (see Star Pattern Matching) are plain objects in image pixels. A `SimilarityTransform` has `a`, `b`, `tx`, `ty` and `mirrored`: with `a = scale·cos(rotation)` and `b = scale·sin(rotation)` the forward map is `x' = a·x − b·y + tx`, `y' = b·x + a·y + ty`, and a mirrored transform flips the sign of the y-row rotation, `x' = a·x + b·y + tx`, `y' = b·x − a·y + ty`. An `AffineTransform` has `m00`, `m01`, `tx`, `m10`, `m11` and `ty`: `x' = m00·x + m01·y + tx`, `y' = m10·x + m11·y + ty`. The scale is `√(a² + b²)` and the rotation `atan2(b, a)` in radians, in the pixel frame of the points.
+
+The fits take two lists of matched points of the same length, `current` (the source) and `reference` (the target), and find the least-squares transform that sends the first to the second. `fitSimilarityTransform(current, reference, mirrored?, weights?)` needs 2 or more pairs, fits the mirrored branch when `mirrored` is true (default false) and accepts optional per-pair `weights`; `fitAffineTransform(current, reference, weights?)` needs 3 or more pairs and gives the full affine map, with shear. Both return `undefined` when the lists differ in length or are too short, and collinear or coincident points give a degenerate fit, so the caller must provide a spread of points.
+
+`applySimilarityTransformToPoint(x, y, transform)` and `applyAffineTransformToPoint(x, y, transform)` map one point to a new `{ x, y }`, `applyTransformToPoint(x, y, transform)` chooses by the shape of the transform (a `mirrored` key means a similarity) and `applyTransformToStars(stars, transform)` returns a new array in which every item keeps its other fields and has the new position. The inversions `invertSimilarityTransform`, `invertAffineTransform` and `invertTransform` return the transform that goes back, or `undefined` when it is singular: a zero scale for a similarity and a determinant below 1e-12 in absolute value for an affine.
+
+```ts
+import { applyAffineTransformToPoint, applySimilarityTransformToPoint, applyTransformToPoint, applyTransformToStars, fitAffineTransform, fitSimilarityTransform, invertAffineTransform, invertSimilarityTransform, invertTransform } from 'nebulosa/src/astrometry/matching/star.matching'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+// Eight reference points, and the points rotated by 10°, scaled by 1.05 and shifted by (30, -20).
+const reference = [
+	[100, 120],
+	[420, 80],
+	[760, 200],
+	[240, 400],
+	[520, 360],
+	[880, 520],
+	[150, 700],
+	[460, 640],
+].map(([x, y]) => ({ x, y }))
+const c = Math.cos(deg(10)) * 1.05
+const s = Math.sin(deg(10)) * 1.05
+const current = reference.map(({ x, y }) => ({ x: c * x - s * y + 30, y: s * x + c * y - 20 }))
+
+// The similarity from reference to current: a = 1.05·cos(10°), b = 1.05·sin(10°).
+const similarity = fitSimilarityTransform(reference, current)!
+console.log(similarity.a.toFixed(6), similarity.b.toFixed(6), similarity.tx.toFixed(4), similarity.ty.toFixed(4), similarity.mirrored) // 1.034048 0.182331 30.0000 -20.0000 false
+console.log(Math.hypot(similarity.a, similarity.b).toFixed(6), toDeg(Math.atan2(similarity.b, similarity.a)).toFixed(4)) // 1.050000 10.0000
+
+// The same points with weights, and with the mirrored branch for a frame flipped in x.
+console.log(fitSimilarityTransform(reference, current, false, [1, 2, 3, 4, 5, 6, 7, 8])!.a.toFixed(6)) // 1.034048
+const flipped = current.map(({ x, y }) => ({ x: 1200 - x, y }))
+const mirrored = fitSimilarityTransform(reference, flipped, true)!
+console.log(mirrored.a.toFixed(6), mirrored.b.toFixed(6), mirrored.tx.toFixed(4), mirrored.mirrored) // -1.034048 0.182331 1170.0000 true
+
+// The affine fit recovers a pure similarity as m00 = m11 = a, m01 = -b, m10 = b.
+const affine = fitAffineTransform(reference, current)!
+console.log(affine.m00.toFixed(6), affine.m01.toFixed(6), affine.m10.toFixed(6), affine.m11.toFixed(6), affine.tx.toFixed(4), affine.ty.toFixed(4)) // 1.034048 -0.182331 0.182331 1.034048 30.0000 -20.0000
+
+// Applying the transforms to a point and to stars.
+console.log(applySimilarityTransformToPoint(100, 120, similarity)) // { x: 111.5251..., y: 122.3188... }
+console.log(applyAffineTransformToPoint(100, 120, affine)) // { x: 111.5251..., y: 122.3188... }
+console.log(applyTransformToPoint(1, 2, similarity), applyTransformToPoint(1, 2, affine)) // { x: 30.6693..., y: -17.7495... } twice (the same point)
+console.log(applyTransformToStars([{ x: 100, y: 120, flux: 9000 }], similarity)) // [ { x: 111.5251..., y: 122.3188..., flux: 9000 } ]
+
+// The inverses, which bring the point back.
+const inverse = invertSimilarityTransform(similarity)!
+console.log(applySimilarityTransformToPoint(111.52514368024852, 122.3188355345657, inverse)) // { x: 100, y: 120 } (to rounding)
+console.log(invertAffineTransform(affine)!.m00.toFixed(6), invertTransform(similarity)!.mirrored) // 0.937912 false
+
+// Not enough points, a zero scale and a singular matrix give undefined.
+console.log(fitSimilarityTransform([{ x: 0, y: 0 }], [{ x: 1, y: 1 }]), fitAffineTransform(reference.slice(0, 2), current.slice(0, 2))) // undefined undefined
+console.log(invertSimilarityTransform({ a: 0, b: 0, tx: 1, ty: 1, mirrored: false }), invertTransform({ m00: 1, m01: 2, tx: 0, m10: 2, m11: 4, ty: 0 })) // undefined undefined
+```
+
 ### Plate Solution
+
+A plate solution is the summary of where an image points, as every solver of the library returns it. `plateSolutionFrom(header)` distills the WCS keywords of a FITS header into a `PlateSolution` and returns `undefined` when the header cannot define one: no `CRVAL1`/`CRVAL2`, or a CD matrix that is singular or not finite. The solution is the whole `FitsHeader` (so the WCS keywords, `CTYPE1`, `CRPIX1` and the SIP terms stay available) plus the derived fields: `rightAscension` and `declination` (the reference point `CRVAL1`/`CRVAL2`, radians), `orientation` (field rotation from the CD matrix, radians), `scale` (radians per pixel), `width`, `height` and `radius` (the field size and the half-diagonal, radians), `parity` and the image size in pixels (`widthInPixels` and `heightInPixels`, from `NAXIS1` and `NAXIS2`).
+
+The CD matrix comes from `cdMatrix` (see FITS TAN and SIP Coordinate Mapping), so `CD`, `PC` with `CDELT` and `CROTA2` headers are all accepted. The `scale` is the square root of the absolute determinant of the CD matrix, the geometric mean of the two pixel scales, so it stays meaningful for non-square or sheared pixels; `width` and `height` use the length of each CD column times the image size. `parity` is `'NORMAL'` when the determinant of the CD matrix is not negative and `'FLIPPED'` otherwise, and the `orientation` is measured from the second axis in either case. The reference point is the reference of the WCS, not necessarily the image center.
+
+`EMPTY_PLATE_SOLUTION` is a zeroed solution that serves as a neutral value before a solve, `Parity` is `'NORMAL' | 'FLIPPED'` and `PlateSolveOptions` are the hints that the solvers accept (`rightAscension`, `declination`, `radius`, `downsample`, `timeout`); each solver decides which of them it uses (see ASTAP Plate Solving, Local Astrometry.net Plate Solving, Nova Astrometry.net Plate Solving and Native libastrometry Plate Solving).
+
+```ts
+import { EMPTY_PLATE_SOLUTION, plateSolutionFrom } from 'nebulosa/src/astrometry/solvers/platesolver'
+import { toArcmin, toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
+
+// A header with a CD matrix: 1.8″ pixels, a 1000 × 800 image around RA 83.8221°, Dec −5.3911°.
+const header = { NAXIS1: 1000, NAXIS2: 800, CRVAL1: 83.8221, CRVAL2: -5.3911, CD1_1: -0.0005, CD1_2: 0, CD2_1: 0, CD2_2: 0.0005 }
+const solution = plateSolutionFrom(header)!
+console.log(toDeg(solution.rightAscension), toDeg(solution.declination)) // 83.8221 -5.3911
+console.log(toArcsec(solution.scale), toArcmin(solution.width), toArcmin(solution.height), toArcmin(solution.radius)) // 1.8 30 24 19.2093727
+console.log(toDeg(solution.orientation), solution.parity) // 180 FLIPPED — a negative determinant
+console.log(solution.widthInPixels, solution.heightInPixels) // 1000 800
+
+// Inverting one axis flips the parity.
+const mirrored = plateSolutionFrom({ ...header, CD1_1: 0.0005 })!
+console.log(mirrored.parity, toDeg(mirrored.orientation)) // NORMAL 0
+
+// The classic CDELT/CROTA2 form is accepted too: the rotation is −150° here.
+console.log(toDeg(plateSolutionFrom({ CRVAL1: 10, CRVAL2: 20, CDELT1: -0.001, CDELT2: 0.001, CROTA2: 30, NAXIS1: 100, NAXIS2: 50 })!.orientation)) // -150
+
+// No reference point or a singular matrix gives undefined.
+console.log(plateSolutionFrom({ NAXIS1: 10, NAXIS2: 10 })) // undefined
+console.log(plateSolutionFrom({ ...header, CD1_1: 0, CD2_2: 0 })) // undefined
+
+// The neutral value.
+console.log(EMPTY_PLATE_SOLUTION.parity, EMPTY_PLATE_SOLUTION.scale, EMPTY_PLATE_SOLUTION.widthInPixels) // NORMAL 0 0
+```
 
 ### SIP Distortion Fitting
 
 ### Star Pattern Matching
+
+`matchStars(referenceStars, currentStars, config?)` registers two lists of detected stars without knowing which star is which. It ranks the stars of each list by quality (`snr · √flux / hfd`), drops duplicates closer than `dedupeDistance`, keeps the best `maxStars` and builds local triangles from the nearest neighbors of each star. A triangle is reduced to a descriptor that does not change with scale or rotation, `[shortest/longest, middle/longest, area ratio]`, plus its chirality (a mirrored field flips it). Triangles with close descriptors vote for star pairs, the best hypotheses are scored on the whole frame and refined with outlier clipping, and the result is a similarity transform (rotation, uniform scale, optional mirror and translation), or an affine one when it fits materially better. It is deterministic and meant for tens to a few hundred stars with a scale ratio between 0.8 and 1.2 by default.
+
+The transform maps the `currentStars` into the frame of the `referenceStars`, in pixels, so a scale below 1 means that the current frame is the larger one. The stars need `x`, `y`, `flux`, `snr` and `hfd` (stars with a non-positive one of the last three are ignored) and the pixel origin and axis directions only have to be the same in both lists. The result has `success`, `model`, `similarity` (the transform plus its `scale` and `rotation` in radians) or `affine`, the `matches` (`currentIndex`, `referenceIndex` into the input arrays and the `residual` in pixels), `inlierCount`, `rmsError`, `medianError`, `score` and, on a failure, `failureReason`: `'too few usable reference stars'`, `'too few usable current stars'` (fewer than `minStars`, default 6) or `'too few stable local patterns'`, with others for the later stages. A failure is a result, not an exception. The limits are a triangle-only matcher, a bound on the scale and rotation, and the quality of the field: nearly collinear or symmetric fields give few stable patterns.
+
+`config` is a `StarMatchingConfig`; the defaults are `maxStars` 96, `minStars` 6, `allowMirror` true, `initialMatchRadius` 10 px, `finalMatchRadius` 2.5 px, `minScaleRatio` 0.8, `maxScaleRatio` 1.2, `maxRotation` null (any), `ransacIterations` 96, `minInliers` 6, `maxResidual` 3 px, `useWeightedFit` true, `refineIterations` 4, `descriptorTolerance` 0.025, `localNeighborCount` 7, `preferCompactPatterns` true, `modelPreference` `'similarity'`, `allowAffineFallback` true, `dedupeDistance` 2 px, `minPatternSide` 6 px, `minPatternAreaRatio` 0.015, `symmetricPatternTolerance` 0.018, `maxPatternMatchesPerPattern` 4 and `maxHypotheses` 128. Partial configs are merged with the defaults. `buildTrianglePatterns(stars, config?)` returns the triangle patterns of one list (`starIndices`, which are positions in the ranked and deduplicated list and not in the input, `descriptor`, `chirality`, the centroid, `maxRadius`, `areaScore`, `compactness` and `qualityScore`), and `canonicalTrianglePattern(points, indices, config?)` canonicalizes a single triangle, returning `undefined` for a degenerate one. The transforms are in Planar Similarity and Affine Transforms.
+
+```ts
+import { buildTrianglePatterns, canonicalTrianglePattern, matchStars } from 'nebulosa/src/astrometry/matching/star.matching'
+import type { DetectedStar } from 'nebulosa/src/imaging/stars/detector'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+// 15 reference stars, and the same field rotated by 10°, scaled by 1.05 and shifted by (30, -20) pixels, plus a faint extra star.
+const positions = [
+	[100, 120],
+	[420, 80],
+	[760, 200],
+	[240, 400],
+	[520, 360],
+	[880, 520],
+	[150, 700],
+	[460, 640],
+	[700, 760],
+	[980, 300],
+	[320, 880],
+	[830, 900],
+	[600, 500],
+	[50, 450],
+	[990, 700],
+]
+const reference: DetectedStar[] = positions.map(([x, y], i) => ({ x, y, flux: 9000 - i * 300, snr: 50 - i, hfd: 2 + (i % 3) * 0.2 }))
+const c = Math.cos(deg(10)) * 1.05
+const s = Math.sin(deg(10)) * 1.05
+const current: DetectedStar[] = reference.map((star) => ({ ...star, x: c * star.x - s * star.y + 30, y: s * star.x + c * star.y - 20 }))
+current.push({ x: 500, y: 500, flux: 400, snr: 8, hfd: 3 })
+
+const match = matchStars(reference, current)
+console.log(match.success, match.model, match.inlierCount, match.failureReason) // true similarity 15 undefined
+console.log(match.similarity!.scale.toFixed(6), toDeg(match.similarity!.rotation).toFixed(4), match.similarity!.mirrored) // 0.952381 -10.0000 false (1 / 1.05, back to the reference)
+console.log(match.rmsError! < 1e-9, match.matches[0].currentIndex, match.matches[0].referenceIndex, match.matches.length) // true 0 0 15 (the extra star is not matched)
+
+// A mirrored current frame is found, unless the mirror is not allowed.
+const mirrored = current.map((star) => ({ ...star, x: 1200 - star.x }))
+console.log(matchStars(reference, mirrored).similarity!.mirrored, matchStars(reference, mirrored, { allowMirror: false }).success) // true false
+
+// A rotation limit of 5° rejects the 10° field.
+console.log(matchStars(reference, current, { maxRotation: deg(5) }).success) // false
+
+// Too few stars.
+console.log(matchStars(reference.slice(0, 4), current).failureReason) // too few usable reference stars
+console.log(matchStars(reference, current.slice(0, 4)).failureReason) // too few usable current stars
+
+// The triangle patterns of the reference list, and one canonical triangle.
+const patterns = buildTrianglePatterns(reference)
+console.log(
+	patterns.length,
+	patterns[0].starIndices,
+	patterns[0].descriptor.map((v) => v.toFixed(4)),
+	patterns[0].chirality,
+) // 165 [ 0, 1, 2 ] [ "0.8526", "0.8784", "0.7062" ] -1
+
+const triangle = canonicalTrianglePattern([reference[0], reference[1], reference[3]], [0, 1, 3])!
+console.log(
+	triangle.starIndices,
+	triangle.descriptor.map((v) => v.toFixed(4)),
+	triangle.chirality,
+) // [ 0, 3, 1 ] [ "0.8526", "0.8784", "0.7062" ] -1
+console.log(
+	canonicalTrianglePattern(
+		[
+			{ x: 0, y: 0 },
+			{ x: 10, y: 0 },
+			{ x: 20, y: 0 },
+		],
+		[0, 1, 2],
+	),
+) // undefined (collinear)
+```
 
 ### WCSLIB Equatorial Projection
 
