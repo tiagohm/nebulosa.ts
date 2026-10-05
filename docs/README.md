@@ -15234,6 +15234,95 @@ await fs.rm(root, { recursive: true, force: true })
 
 ### ASCOM Alpaca Device Adapter
 
+`devices/alpaca/client` is the consuming side of Alpaca: `AlpacaClient` connects to a remote Alpaca server and presents its devices to the application as if they came from an INDI server, so the same managers (camera, mount, focuser, wheel, cover, flat panel, rotator, dome, safety monitor and weather) work unchanged (see ASCOM Alpaca REST API for the HTTP layer it uses and ASCOM Alpaca Server for the other direction). It implements the INDI `Client` contract: `type` is `'ALPACA'`, `id` is the MD5 of the URL, and `remoteHost` and `remotePort` come from the URL (80 or 443 when it has no port). The constructor takes the server `url`, the `AlpacaClientOptions` and a `DeviceProvider`, and the options have the `handler` that receives the synthesized INDI property events (an ordinary INDI client handler, so the managers are fed through it), a `poolingInterval` in milliseconds (spelled as in the code, with a minimum and default of 1000) and an optional `schedulePoll` to replace the timer. `start()` reads the configured devices from the management API, wraps each supported one, publishes its properties and starts the polling timer: it returns `true` when it started, and `false` when it already runs, when the server has no device or when it cannot be reached. A device is published under the INDI name `<DeviceName> (<Type> <DeviceNumber>)`, for example `Mount Simulator (Mount 0)`, because an Alpaca station that implements several interfaces lists the same name once per type, so a multi-interface driver arrives as one device per interface. Everything a device reports comes from polling, so a property changes at most once per interval, and a capability (such as the ability to slew or to move a focuser) shows up only after the first polls that follow the connection, so wait for it before commanding. `getProperties` replays the definitions, `sendText`, `sendNumber` and `sendSwitch` route an INDI command to the addressed device and turn it into REST calls, and `enableBlob` does nothing since images are always downloaded as ImageBytes. `stop(server?)` stops the polling, closes and forgets every device, and notifies the handler's `close` (the optional flag tells it the stop came from the server side); it can start again later, and `Symbol.dispose` calls it. Device types without a wrapper (switch and video) are skipped. `makeFitsFromImageBytes(data, time?, camera?, mount?, wheel?, focuser?, rotator?, lastExposureDuration?)` is the conversion used by the camera wrapper: it turns the bytes of an Alpaca ImageBytes download into an in-memory FITS (a new big-endian buffer with planar channels, `data` is not modified), stamping the header from the connected devices that are passed (the mount coordinates are converted from the date `time` to J2000, the exposure duration is in seconds) and ignoring the disconnected ones. It accepts mono and RGB images with 8-bit, signed or unsigned 16/32-bit integer and 32/64-bit float samples; it rejects other encodings (64-bit integers included), inconsistent dimensions, truncated pixels and an error response by throwing, since the data comes from the network. Polling and image download run over plain HTTP, and the date keywords are taken from the clock when the conversion runs.
+
+```ts
+import { AlpacaClient, makeFitsFromImageBytes } from 'nebulosa/src/devices/alpaca/client'
+import { AlpacaServer, makeImageBytesFromFits } from 'nebulosa/src/devices/alpaca/server'
+import { timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { DEFAULT_CAMERA, DEFAULT_MOUNT } from 'nebulosa/src/devices/indi/device'
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { FocuserManager } from 'nebulosa/src/devices/indi/manager/focuser'
+import { MountManager } from 'nebulosa/src/devices/indi/manager/mount'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { FocuserSimulator } from 'nebulosa/src/devices/indi/simulator/focuser'
+import { MountSimulator } from 'nebulosa/src/devices/indi/simulator/mount'
+import { deg, hour, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+
+// The remote side: a simulated INDI mount and focuser exposed by an Alpaca server on the loopback.
+const serverHandler = new IndiClientHandlerSet()
+const serverMount = new MountManager()
+const serverFocuser = new FocuserManager()
+serverHandler.add(serverMount)
+serverHandler.add(serverFocuser)
+using simulator = new ClientSimulator('sim', serverHandler)
+using mountSimulator = new MountSimulator('Mount Simulator', simulator)
+using focuserSimulator = new FocuserSimulator('Focuser Simulator', simulator)
+const server = new AlpacaServer({ mount: serverMount, focuser: serverFocuser, deviceNumberProvider: () => 0 })
+server.start('127.0.0.1', 0)
+
+// The local side: managers fed by the Alpaca client through its handler, and a provider that resolves the devices it creates.
+const handler = new IndiClientHandlerSet()
+const mountManager = new MountManager()
+const focuserManager = new FocuserManager()
+handler.add(mountManager)
+handler.add(focuserManager)
+const added: string[] = []
+mountManager.addHandler({ added: (device) => added.push(`${device.type} ${device.name}`), updated: () => {}, removed: () => {} })
+focuserManager.addHandler({ added: (device) => added.push(`${device.type} ${device.name}`), updated: () => {}, removed: () => {} })
+const provider = { get: (client: never, name: string) => mountManager.get(client, name) ?? focuserManager.get(client, name) }
+
+// The client identity, then start: the first call polls and publishes the devices, a second one while it runs does nothing and returns false.
+const client = new AlpacaClient(`http://127.0.0.1:${server.port}`, { handler, poolingInterval: 1000 }, provider)
+console.log(client.type, client.remoteHost, client.remotePort === server.port) // ALPACA 127.0.0.1 true
+console.log(await client.start(), await client.start()) // true false
+await Bun.sleep(1500)
+console.log(added) // [ 'mount Mount Simulator (Mount 0)', 'focuser Focuser Simulator (Focuser 0)' ]
+
+// Both devices are published, disconnected. Connecting through the managers becomes a REST call, and the capabilities appear after a few polls.
+const mount = mountManager.get(client, 'Mount Simulator (Mount 0)')!
+const focuser = focuserManager.get(client, 'Focuser Simulator (Focuser 0)')!
+console.log(mount.connected, focuser.connected) // false false
+mountManager.connect(mount)
+focuserManager.connect(focuser)
+await Bun.sleep(6000)
+console.log(mount.connected, focuser.connected, focuser.position.value, mount.canGoTo, focuser.canAbsoluteMove) // true true 50000 true true
+
+// A focuser move and a mount sync (radians in the INDI model, hours and degrees on the wire) are visible after the next polls.
+focuserManager.moveTo(focuser, 51000)
+mountManager.syncTo(mount, hour(5), deg(20))
+await Bun.sleep(5000)
+console.log(focuser.position.value, focuser.moving) // 51000 false
+console.log(toHour(mount.equatorialCoordinate.rightAscension), toDeg(mount.equatorialCoordinate.declination)) // 5.001... 20
+
+// Stopping closes and forgets the devices (the handler of the managers sees them removed).
+client.stop()
+server.stop()
+
+// The ImageBytes of a 16-bit FITS image, converted back to FITS without devices (a one-block header, so 2880 bytes less than the source file, which carries more cards), where nothing is stamped but the image layout.
+const imageBytes = makeImageBytesFromFits(Buffer.from(await Bun.file('data/NGC3372-16.1.fit').arrayBuffer()))
+const data = imageBytes.buffer.slice(imageBytes.byteOffset, imageBytes.byteOffset + imageBytes.byteLength) as ArrayBuffer
+console.log(makeFitsFromImageBytes(data).length) // 1468800
+
+// With a connected camera and mount, a time for the JNOW to J2000 conversion and a 30 s exposure, the header carries them: the mount is at 10h, -59 degrees of date.
+const fits = makeFitsFromImageBytes(data, timeYMDHMS(2026, 2, 18, 12, 0, 0), { ...DEFAULT_CAMERA, name: 'Camera', connected: true }, { ...DEFAULT_MOUNT, name: 'Mount', connected: true, equatorialCoordinate: { rightAscension: hour(10), declination: deg(-59) } }, undefined, undefined, undefined, 30)
+const cards = Array.from({ length: 36 }, (_, i) =>
+	fits
+		.subarray(i * 80, i * 80 + 80)
+		.toString('latin1')
+		.trimEnd(),
+)
+console.log(cards.filter((card) => /^(BITPIX|NAXIS1|INSTRUME|TELESCOP|EXPTIME|OBJCTRA|OBJCTDEC|EQUINOX)/.test(card)))
+// [ 'BITPIX  =                   16 / Bits per data element',
+//   'NAXIS1  =                 1037 / Fastest changing axis',
+//   "INSTRUME= 'Camera  '           / Name of instrument",
+//   "TELESCOP= 'Mount   '           / Name of telescope / observatory",
+//   'EXPTIME =                   30 / Duration of exposure in seconds',
+//   "OBJCTRA = '09 59 09.29'        / Right Ascension of object being imaged",
+//   "OBJCTDEC= '-58 52 28.92'       / Declination of object being imaged",
+//   'EQUINOX =                 2000 / Equinox of celestial coordinate system' ]
+```
+
 ### ASCOM Alpaca Discovery Client
 
 `AlpacaDiscoveryClient` is the probing side of the Alpaca Discovery v1 protocol (see ASCOM Alpaca Discovery Server for the responder): it opens a UDP socket, sends the probe `alpacadiscovery1` to the IPv4 broadcast address of every local interface (or, for IPv6, to the discovery multicast group through each external interface, and to `::1` for the internal one), parses each response `{"AlpacaPort":N}` defensively (a number or a canonical integer string from 1 to 65535 is accepted and anything else is dropped) and calls the callback once per response with an `AlpacaDeviceServer`: the `address` of the sender (an IPv6 address keeps its `%zone` suffix), the announced `port` and the `devices`, the configured devices read from `GET /management/v1/configureddevices` of that server through `AlpacaManagementApi` (see ASCOM Alpaca REST API), or an empty list when the fetch is turned off, fails or is skipped (a link-local address with a zone cannot be used in a URL, so it is never fetched). `discovery(onDiscovery, options?)` starts the exchange and returns a promise of `true`, or of `false` at once if one is already running. The `AlpacaDiscoveryOptions` are the `family` (`IPv4` by default, or `IPv6`), the destination `port` (32227), the local `host` (`0.0.0.0` for IPv4 and `::` for IPv6), the `timeout` in milliseconds of the listen window (15000 by default, 0 keeps it open until `close`), `fetch` (true by default) and `wait`: with it the promise resolves only after the window closes, otherwise it resolves once the probes are sent and the callback keeps being called during the window. A server that answers with several ports is reported once per port, and the same server can be reported again when it answers a probe of more than one interface. `close()` stops the timer, closes the socket and resolves a pending wait; the client is `Disposable`, so `using` closes it at the end of the scope, and it can run again after it closes. A failed send is logged and closes it; the network is not guaranteed to deliver the probes, so a discovery that finds nothing is not proof that there are no servers.
@@ -15332,7 +15421,197 @@ filtered.stop()
 
 ### ASCOM Alpaca REST API
 
+`devices/alpaca/api` is a thin typed HTTP client of the ASCOM Alpaca REST API: one class per device type, a method per Alpaca property or operation (a one-line mapping onto a shared request helper) and the values passed through unchanged, so the units are those of the ASCOM specification (right ascension in hours, declination, azimuth, altitude and position angles in degrees, exposure and pulse durations in seconds and milliseconds as the member says, temperatures in Celsius, pressure in hPa, and so on; the conversion from the library radians is done by the adapter and the server, see ASCOM Alpaca Device Adapter and ASCOM Alpaca Server). `AlpacaApi(url)` bundles one instance of each class on the same base URL: `management`, `telescope`, `camera`, `filterWheel`, `focuser`, `coverCalibrator`, `rotator`, `dome`, `safetyMonitor` and `observingConditions`, and the classes can also be built alone with the server URL (the device classes append `/api/v1/<type>/` to it). Every device member takes the zero-based device number `id` first and returns a `Promise<AlpacaRequestResult<T>>`: `{ ok: true, value }` or `{ ok: false, errorNumber?, errorMessage }`, and it never throws for a failure of the call. The distinction matters: the `errorNumber` 1024 (`MethodOrPropertyNotImplemented`) means that the driver does not have that optional member, a permanent capability fact that is not logged, whereas a transport error (no `errorNumber`), a status other than 2xx, an empty body, `ValueNotSet` (1026) or `NotConnected` (1031) are transient and logged to the console. A GET sends its parameters, when it has any, as a query string and a PUT sends a form body, with booleans encoded as `True` and `False` and the `ClientID` of the process and a `ClientTransactionID` of zero appended; a successful PUT of an operation returns the `Value` of the envelope, which is `undefined` for the operations that return nothing. `AlpacaManagementApi.configuredDevices()` lists `AlpacaConfiguredDevice` rows (`DeviceName`, `DeviceType`, converted to lower case to match `AlpacaDeviceType`, `DeviceNumber` and `UniqueID`). `AlpacaDeviceApi` is the base of the device classes with `isConnected(id)`, `connect(id)` and `disconnect(id)` (the PUT of `Connected`, with `true` as the value of a response that carries none) and `deviceState(id)`, the operational state as a list of name and value pairs. The enumerated parameters and results (`AlpacaCameraState`, `AlpacaCameraSensorType`, `AlpacaGuideDirection` with north, south, east and west as 0 to 3, `AlpacaTelescopeAxis`, `AlpacaTelescopeTrackingRate`, `AlpacaTelescopePierSide`, `AlpacaTelescopeAlignmentMode`, `AlpacaTelescopeEquatorialCoordinateType` and `AlpacaDomeShutterState`) come from `devices/alpaca/types`, and the property setters, the operations and the capability queries follow one naming pattern: `getX` and `setX` for a property (`isX` for a boolean one, with `setX` taking the same name as the Alpaca parameter), `canX` for a capability and a verb for an operation. `AlpacaCameraApi.getImageArray(id)` is the only member that is not a plain envelope: it asks for the binary `application/imagebytes` encoding, checks the 44-byte metadata header (version 1, a zero error number and a data start within the buffer) and returns the whole response as an `ArrayBuffer`; the decoding of the dimensions and of the pixels (see the `ImageBytesMetadata` layout of `devices/alpaca/types`) is left to the caller. Alpaca addresses members by a lower-case name and does not validate a parameter in the client: an out-of-range value is answered by the driver. The calls are single requests with no retry, timeout or session, a long operation is polled through its state (`isSlewing`, `getCameraState`, `isImageReady`, ...) and the asynchronous slew members return as soon as the mount accepts the command.
+
+```ts
+import { AlpacaApi } from 'nebulosa/src/devices/alpaca/api'
+import { AlpacaCameraState, AlpacaGuideDirection, AlpacaTelescopeAxis, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate, type AlpacaRequestResult } from 'nebulosa/src/devices/alpaca/types'
+
+// A local stand-in for an Alpaca server: it stores the value of every PUT by member, answers a GET with the stored value (or 0), lists one camera in the management API and records each request without the client id, to show how the calls reach the wire.
+const values = new Map<string, unknown>([
+	['camera/0/connected', false],
+	['camera/0/camerastate', AlpacaCameraState.IDLE],
+	['camera/0/cameraxsize', 4144],
+	['camera/0/binx', 1],
+	['camera/0/cooleron', false],
+	['telescope/0/tracking', false],
+	['telescope/0/axisrates', [{ Minimum: 0, Maximum: 4 }]],
+	['observingconditions/0/temperature', 12.5],
+])
+const wire: string[] = []
+
+const server = Bun.serve({
+	hostname: '127.0.0.1',
+	port: 0,
+	async fetch(request) {
+		const url = new URL(request.url)
+		const envelope = (Value: unknown) => Response.json({ Value, ClientTransactionID: 0, ServerTransactionID: 1, ErrorNumber: 0, ErrorMessage: '' })
+		if (url.pathname.startsWith('/management')) return envelope([{ DeviceName: 'Simulated Camera', DeviceType: 'Camera', DeviceNumber: 0, UniqueID: 'abc-1' }])
+
+		const [, , , type, id, member] = url.pathname.split('/')
+		const key = `${type}/${id}/${member}`
+
+		if (request.method === 'PUT') {
+			const form = new URLSearchParams(await request.text())
+			form.delete('ClientID')
+			wire.push(`PUT ${key} ${form}`)
+			const first = [...form][0]
+			if (first) values.set(key, first[1] === 'True' ? true : first[1] === 'False' ? false : Number(first[1]))
+			return envelope(null)
+		}
+
+		url.searchParams.delete('ClientID')
+		wire.push(`GET ${key} ${url.searchParams}`)
+		return envelope(values.get(key) ?? 0)
+	},
+})
+
+const value = <T>(result: AlpacaRequestResult<T>) => (result as { readonly value: T }).value
+
+// The aggregate client: one wrapper per device type on the same server, and the management listing with the type in lower case.
+const api = new AlpacaApi(`http://127.0.0.1:${server.port}`)
+console.log(Object.keys(api).join(' ')) // url management telescope camera filterWheel focuser coverCalibrator rotator dome safetyMonitor observingConditions
+console.log(value(await api.management.configuredDevices())) // [ { DeviceName: 'Simulated Camera', DeviceType: 'camera', DeviceNumber: 0, UniqueID: 'abc-1' } ]
+
+// The result of a call: ok and the value. The connection members (the same on every device type) go through the PUT of Connected, and an operation that returns nothing has a default value (true for the connection and the exposure start, undefined for a guide pulse).
+console.log(await api.camera.isConnected(0), await api.camera.connect(0), await api.camera.isConnected(0)) // { ok: true, value: false } { ok: true, value: true } { ok: true, value: true }
+console.log(value(await api.camera.disconnect(0))) // true
+
+// Camera properties, with their set and get: the state is an AlpacaCameraState (0 is idle), a binning is a PUT of BinX, and a boolean property is encoded as True or False.
+console.log(value(await api.camera.getCameraState(0)) === AlpacaCameraState.IDLE, value(await api.camera.getCameraXSize(0))) // true 4144
+await api.camera.setBinX(0, 2)
+await api.camera.setCoolerOn(0, true)
+console.log(value(await api.camera.getBinX(0)), value(await api.camera.isCoolerOn(0))) // 2 true
+
+// Camera operations: a 1.5 s light exposure and a guide pulse of 500 ms to the east (the enum value 2).
+console.log(value(await api.camera.startExposure(0, 1.5, true)), value(await api.camera.pulseGuide(0, AlpacaGuideDirection.EAST, 500))) // true undefined
+
+// Telescope: an asynchronous slew with the coordinates in hours and degrees, a move of the primary axis at 2 degrees per second, the lunar tracking rate, the west side of the pier, the tracking switch and the rates of one axis (a query parameter of a GET).
+await api.telescope.slewToCoordinatesAsync(0, 5.5, -20)
+await api.telescope.moveAxis(0, AlpacaTelescopeAxis.PRIMARY, 2)
+await api.telescope.setTrackingRate(0, AlpacaTelescopeTrackingRate.LUNAR)
+await api.telescope.setSideOfPier(0, AlpacaTelescopePierSide.WEST)
+await api.telescope.setTracking(0, true)
+console.log(value(await api.telescope.isTracking(0)), value(await api.telescope.getAxisRates(0, AlpacaTelescopeAxis.PRIMARY))) // true [ { Minimum: 0, Maximum: 4 } ]
+
+// The observing conditions: a sensor reading in degrees Celsius, and two members with a named GET parameter: the description of a sensor and the age of the latest update of any sensor (the default name is empty). They are only listed in the wire log below, since the stand-in server has no text for them.
+console.log(value(await api.observingConditions.getTemperature(0))) // 12.5
+await api.observingConditions.sensorDescription(0, 'Temperature')
+await api.observingConditions.timeSinceLastUpdate(0)
+
+// An operation with no parameter has an empty form, and the UTC date is sent as a string, with the encoding of the form.
+await api.telescope.park(0)
+await api.telescope.setUtcDate(0, '2026-07-12T02:00:00')
+
+// What reached the server for some of the calls: the method, the device path with the lower-case member and the parameters (a PUT carries the ClientTransactionID, which is 0, and an operation with no parameter has an empty form).
+console.log(wire.filter((line) => /startexposure|moveaxis|axisrates|sensordescription|park|utcdate/.test(line)).join(' | '))
+// PUT camera/0/startexposure Duration=1.5&Light=True&ClientTransactionID=0 | PUT telescope/0/moveaxis Axis=0&Rate=2&ClientTransactionID=0 | GET telescope/0/axisrates Axis=0 | GET observingconditions/0/sensordescription SensorName=Temperature&ClientTransactionID=0 | PUT telescope/0/park (empty form) | PUT telescope/0/utcdate UTCDate=2026-07-12T02%3A00%3A00&ClientTransactionID=0
+
+server.stop()
+```
+
+The members of each class, besides the ones used above (all take the device `id` first and return the Alpaca unit of the property):
+
+- `AlpacaSafetyMonitorApi`: `isSafe`.
+- `AlpacaObservingConditionsApi`: `getAveragePeriod`, `setAveragePeriod`, `getCloudCover`, `getDewPoint`, `getHumidity`, `getPressure`, `getRainRate`, `getSkyBrightness`, `getSkyQuality`, `getSkyTemperature`, `getStarFWHM`, `getTemperature`, `getWindDirection`, `getWindGust`, `getWindSpeed`, `refresh`, `sensorDescription` and `timeSinceLastUpdate`.
+- `AlpacaCameraApi`: `getBayerOffsetX` and `getBayerOffsetY`, `getBinX`, `setBinX`, `getBinY`, `setBinY`, `getCameraState`, `getCameraXSize` and `getCameraYSize`, the capabilities `canAbortExposure`, `canAsymmetricBin`, `canFastReadout`, `canGetCoolerPower`, `canPulseGuide`, `canSetCcdTemperature` and `canStopExposure`, `getCcdTemperature`, `isCoolerOn`, `setCoolerOn`, `getCoolerPower`, `getElectronsPerAdu`, `getExposureMax`, `getExposureMin` and `getExposureResolution`, `isFastReadout`, `setFastReadout`, `getFullwellCapacity`, `getGain`, `setGain`, `getGainMax`, `getGainMin` and `getGains`, `hasShutter`, `getHeatSinkTemperature`, `getImageArray`, `isImageReady`, `isPulseGuiding`, `getLastExposureDuration` and `getLastExposureStartTime`, `getMaxAdu`, `getMaxBinX` and `getMaxBinY`, `getNumX`, `setNumX`, `getNumY`, `setNumY`, `getOffset`, `setOffset`, `getOffsetMax`, `getOffsetMin` and `getOffsets`, `getPercentCompleted`, `getPixelSizeX` and `getPixelSizeY`, `getReadoutMode`, `setReadoutMode` and `getReadoutModes`, `getSensorName` and `getSensorType`, `getSetCcdTemperature` and `setSetCcdTemperature`, `getStartX`, `setStartX`, `getStartY`, `setStartY`, `getSubExposureDuration`, `setSubExposureDuration`, `abortExposure`, `pulseGuide`, `startExposure` and `stopExposure`.
+- `AlpacaTelescopeApi`: `getAlignmentMode`, `getAltitude`, `getAzimuth`, `getApertureArea` and `getApertureDiameter`, `isAtHome` and `isAtPark`, the capabilities `canFindHome`, `canPark`, `canPulseGuide`, `canSetDeclinationRate`, `canSetGuideRates`, `canSetPark`, `canSetSideOfPier`, `canSetRightAscensionRate`, `canSetTracking`, `canSlew`, `canSlewAltaz`, `canSlewAltazAsync`, `canSlewAsync`, `canSync`, `canSyncAltaz`, `canUnpark` and `canMoveAxis`, `getDeclination`, `getRightAscension`, `getDeclinationRate`, `setDeclinationRate`, `getRightAscensionRate` and `setRightAscensionRate`, `getDoesRefraction` and `setDoesRefraction`, `getEquatorialSystem`, `getFocalLength`, `getGuideRateDeclination`, `setGuideRateDeclination`, `getGuideRateRightAscension` and `setGuideRateRightAscension`, `isPulseGuiding`, `getSideOfPier`, `setSideOfPier` and `getDestinationSideOfPier`, `getSiderealTime`, `getSiteElevation`, `setSiteElevation`, `getSiteLatitude`, `setSiteLatitude`, `getSiteLongitude` and `setSiteLongitude`, `isSlewing`, `getSlewSettleTime` and `setSlewSettleTime`, `getTargetDeclination`, `setTargetDeclination`, `getTargetRightAscension` and `setTargetRightAscension`, `isTracking`, `setTracking`, `getTrackingRate`, `setTrackingRate` and `getTrackingRates`, `getUtcDate` and `setUtcDate`, `getAxisRates`, and the operations `abortSlew`, `findHome`, `moveAxis`, `park`, `pulseGuide`, `setPark`, `slewToAltaz`, `slewToAltazAsync`, `slewToCoordinates`, `slewToCoordinatesAsync`, `slewToTarget`, `slewToTargetAsync`, `syncToAltaz`, `syncToCoordinates`, `syncToTarget` and `unpark`.
+- `AlpacaFilterWheelApi`: `getFocusOffsets`, `getNames`, `getPosition` and `setPosition`.
+- `AlpacaFocuserApi`: `isAbsolute`, `isMoving`, `getMaxIncrement`, `getMaxStep`, `getPosition`, `getStepSize`, `isTemperatureCompensation`, `setTemperatureCompensation`, `isTemperatureCompensationAvailable`, `getTemperature`, `halt` and `move`.
+- `AlpacaCoverCalibratorApi`: `getBrightness`, `getCalibratorState`, `getCoverState`, `isChanging`, `isMoving`, `getMaxBrightness`, `off`, `on`, `close`, `halt` and `open`.
+- `AlpacaRotatorApi`: `canReverse`, `getMechanicalPosition`, `getPosition`, `isMoving`, `isReverse`, `setReverse`, `getStepSize`, `getTargetPosition`, `halt`, `move`, `moveAbsolute`, `moveMechanical` and `sync`.
+- `AlpacaDomeApi`: `getAltitude`, `getAzimuth`, `isAtHome`, `isAtPark`, the capabilities `canFindHome`, `canPark`, `canSetAltitude`, `canSetAzimuth`, `canSetPark`, `canSetShutter`, `canSlave` and `canSyncAzimuth`, `getShutterStatus`, `isSlaved`, `setSlaved`, `isSlewing`, `abortSlew`, `closeShutter`, `openShutter`, `findHome`, `park`, `setPark`, `slewToAltitude`, `slewToAzimuth` and `syncToAzimuth`.
+
 ### ASCOM Alpaca Server
+
+`AlpacaServer` exposes the INDI devices tracked by the application's device managers through the ASCOM Alpaca REST API, so an external Alpaca client can control them (see ASCOM Alpaca REST API for the client side and ASCOM Alpaca Discovery Server for announcing its port). The `AlpacaServerOptions` carry the identity strings (`name`, `version`, `manufacturer`, reported by the management description with the defaults `Nebulosa`, `1.0.0` and `Tiago Melo`), the managers to expose (`camera`, `mount`, `focuser`, `wheel`, `rotator`, `dome`, `flatPanel`, `cover`, `guideOutput`, `safetyMonitor` and `weather`, at least one of the device ones is required, and the server only sees the devices its managers know about, so the managers must be fed by an INDI client), a `deviceNumberProvider` and a `handler`. A device type maps to an Alpaca type (camera, telescope, focuser, filterwheel, rotator, dome, covercalibrator for both covers and flat panels, safetymonitor and observingconditions) and receives an Alpaca device number: by default a stable 16-bit hash of the type and the device name, so the number survives restarts, or whatever the `deviceNumberProvider(device, type)` returns, which must be unique within a type. The `handler` gets `deviceAdded(server, device, configuredDevice)` and `deviceRemoved(...)` for every registration. Values are converted to the Alpaca units at the boundary (the mount reports right ascension in hours and declination in degrees, while the INDI side keeps radians), PUT arguments are read from the form-encoded body and GET arguments from the query string, a connect request waits for the device (30 s at most) and an exposure is delivered as `application/imagebytes` when the client asks for it. Only the interfaces listed above exist. It listens on plain HTTP without authentication, so bind it to a trusted interface. `start(hostname?, port?, options?)` serves the `routes` with `Bun.serve` (`0.0.0.0` and an ephemeral port by default, the `options` being the other Bun serve options) and calls `listen()`, and returns `false` if it already runs; `listen()` subscribes to the managers, registers the devices that already exist and starts a 30 s tick that refreshes the mount time and sidereal time; `unlisten()` unsubscribes, forgets every registered device and stops the tick, leaving the HTTP server up; `stop()` closes the HTTP server and calls `unlisten()`. `port` is the bound port (`-1` while stopped), `host` the bound address and `running` the state of the HTTP server. `configuredDevices()` returns the deduplicated set of `AlpacaConfiguredDevice` (registering any device not yet known) and is what `/management/v1/configureddevices` serves. `makeImageBytesFromFits(source)` converts the bytes of an in-memory FITS image to the Alpaca ImageBytes layout (a 44-byte metadata header, 48 for 64-bit samples, then the pixels in column-major order with the unsigned bias applied, always declaring a 32-bit integer source type as some clients require): it swaps the byte order of `source` in place during the conversion and restores it before returning. The server logs device events and requests with `console`, and the fallback route for an unknown path logs the request and answers 404.
+
+```ts
+import { AlpacaApi } from 'nebulosa/src/devices/alpaca/api'
+import { AlpacaServer, makeImageBytesFromFits } from 'nebulosa/src/devices/alpaca/server'
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { FocuserManager } from 'nebulosa/src/devices/indi/manager/focuser'
+import { MountManager } from 'nebulosa/src/devices/indi/manager/mount'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { FocuserSimulator } from 'nebulosa/src/devices/indi/simulator/focuser'
+import { MountSimulator } from 'nebulosa/src/devices/indi/simulator/mount'
+
+// Managers fed by a simulated INDI client with a mount and a focuser.
+const handler = new IndiClientHandlerSet()
+const mountManager = new MountManager()
+const focuserManager = new FocuserManager()
+handler.add(mountManager)
+handler.add(focuserManager)
+using client = new ClientSimulator('sim', handler)
+using mountSimulator = new MountSimulator('Mount Simulator', client)
+using focuserSimulator = new FocuserSimulator('Focuser Simulator', client)
+
+// A server with its own identity, device numbers (0 for the one device of each type) and a handler that records the registrations.
+const registered: string[] = []
+const server = new AlpacaServer({
+	name: 'My Server',
+	manufacturer: 'Me',
+	version: '2.0',
+	mount: mountManager,
+	focuser: focuserManager,
+	deviceNumberProvider: () => 0,
+	handler: { deviceAdded: (_, device, configured) => registered.push(`${device.name}:${configured.DeviceType}`) },
+})
+
+// Stopped: not running, no port and no host. start binds an ephemeral port of the loopback and registers the devices; a second call does nothing and returns false.
+console.log(server.running, server.port, server.host) // false -1 undefined
+console.log(server.start('127.0.0.1', 0), server.start()) // true false
+console.log(server.running, server.port > 0, server.host) // true true 127.0.0.1
+console.log(registered) // [ 'Mount Simulator:telescope', 'Focuser Simulator:focuser' ]
+
+// The configured devices, as served by the management endpoint, and the size of the route table.
+console.log(server.configuredDevices()) // Set of { DeviceName: 'Mount Simulator', DeviceNumber: 0, UniqueID: '9ee5b6b0...', DeviceType: 'telescope' } and { DeviceName: 'Focuser Simulator', DeviceNumber: 0, UniqueID: '9c4c635f...', DeviceType: 'focuser' }
+console.log(Object.keys(server.routes).length) // 210
+
+// The management endpoints through plain HTTP: the supported API versions and the identity.
+const url = `http://127.0.0.1:${server.port}`
+console.log((await (await fetch(`${url}/management/apiversions`)).json()).Value) // [ 1 ]
+console.log((await (await fetch(`${url}/management/v1/description`)).json()).Value) // { ServerName: 'My Server', Manufacturer: 'Me', ManufacturerVersion: '2.0', Location: 'None' }
+
+// The device endpoints through the typed client: connect both devices, sync the mount (hours and degrees) and read the coordinates back, which come from the simulated mount a moment later.
+const api = new AlpacaApi(url)
+console.log((await api.management.configuredDevices()).ok) // true
+console.log(await api.telescope.isConnected(0)) // { ok: true, value: false }
+await api.telescope.connect(0)
+await api.focuser.connect(0)
+await api.telescope.syncToCoordinates(0, 5, 20)
+await Bun.sleep(300)
+console.log(await api.telescope.getRightAscension(0)) // { ok: true, value: 5.00005... } hours
+console.log(await api.telescope.getDeclination(0)) // { ok: true, value: 20 } degrees
+
+// An asynchronous slew reports that it is slewing and, once it ends, the new position.
+await api.telescope.slewToCoordinatesAsync(0, 6, 30)
+await Bun.sleep(300)
+console.log(await api.telescope.isSlewing(0)) // { ok: true, value: true }
+await Bun.sleep(8000)
+console.log(await api.telescope.isSlewing(0)) // { ok: true, value: false }
+console.log(await api.telescope.getRightAscension(0)) // { ok: true, value: 6.0008... } hours
+
+// The focuser moves to an absolute position in steps.
+console.log(await api.focuser.getPosition(0), await api.focuser.getMaxStep(0)) // { ok: true, value: 50000 } { ok: true, value: 100000 }
+await api.focuser.move(0, 51000)
+await Bun.sleep(1500)
+console.log(await api.focuser.getPosition(0)) // { ok: true, value: 51000 }
+console.log(await api.focuser.isMoving(0)) // { ok: true, value: false }
+
+// unlisten forgets the devices but keeps the HTTP server; stop closes it.
+server.unlisten()
+console.log(server.running, server.configuredDevices().size) // true 2
+server.stop()
+console.log(server.running, server.port, server.host) // false -1 undefined
+
+// The ImageBytes encoding of a 16-bit FITS image: version 1, no error, data offset 44, source type Int32 (2), transmitted type UInt16 (8), rank 2 and the 1037x706 dimensions.
+const bytes = makeImageBytesFromFits(Buffer.from(await Bun.file('data/NGC3372-16.1.fit').arrayBuffer()))
+console.log(
+	bytes.byteLength,
+	[0, 4, 16, 20, 24, 28, 32, 36, 40].map((offset) => bytes.readInt32LE(offset)),
+) // 1464288 [ 1, 0, 44, 2, 8, 2, 1037, 706, 0 ]
+```
 
 ### Firmata Accelerometer
 
@@ -15508,9 +15787,183 @@ filtered.stop()
 
 ### 2D Vectors
 
+`math/linear-algebra/vec2` has the two-component vector helpers: a `Vec2` is a readonly `[x, y]` tuple of plain numbers in whatever unit the caller uses, and a `MutVec2` is its mutable form (see 3D Vectors for the three-component counterpart). Angles are radians. The helpers that build a vector take an optional output `o`: when given, the result is written into it (it may be one of the inputs) and returned, so the return aliases `o`; when omitted, a new vector is allocated. The `...Mut` variants (`vec2NegateMut`, `vec2NormalizeMut`, `vec2RotMut`, `vec2DivScalarMut`) work in place, `vec2Fill` and `vec2FillWith` overwrite a vector, and `vec2Clone`, `vec2Zero`, `vec2XAxis` and `vec2YAxis` create new ones. `vec2Dot`, `vec2Cross` (the z component of the 3D cross product, positive when `b` is counterclockwise from `a`), `vec2CrossLength` (its absolute value), `vec2Length` and `vec2Distance` return numbers. `vec2Angle` is the unsigned angle between two vectors in [0, π] (0 when either is the zero vector) computed with a stable `atan2` formulation, `vec2Longitude` the polar angle from the +x axis normalized to [0, 2π), and `vec2Rot` rotates counterclockwise around the origin. `vec2Normalize` returns the vector unchanged (a copy) when its length is zero instead of producing NaN. The scalar forms (`vec2PlusScalar`, `vec2MinusScalar`, `vec2MulScalar`, `vec2DivScalar`) apply to both components and the element-wise forms (`vec2Plus`, `vec2Minus`, `vec2Mul`, `vec2Div`) pair them.
+
+```ts
+import {
+	vec2Angle,
+	vec2Clone,
+	vec2Cross,
+	vec2CrossLength,
+	vec2Distance,
+	vec2Div,
+	vec2DivScalar,
+	vec2DivScalarMut,
+	vec2Dot,
+	vec2Fill,
+	vec2FillWith,
+	vec2Length,
+	vec2Longitude,
+	vec2Minus,
+	vec2MinusScalar,
+	vec2Mul,
+	vec2MulScalar,
+	vec2Negate,
+	vec2NegateMut,
+	vec2Normalize,
+	vec2NormalizeMut,
+	vec2Plus,
+	vec2PlusScalar,
+	vec2Rot,
+	vec2RotMut,
+	vec2XAxis,
+	vec2YAxis,
+	vec2Zero,
+	type MutVec2,
+} from 'nebulosa/src/math/linear-algebra/vec2'
+
+// Constructors: zero, the axes, a clone (an independent copy) and the in-place fills.
+console.log(vec2Zero(), vec2XAxis(), vec2YAxis()) // [ 0, 0 ] [ 1, 0 ] [ 0, 1 ]
+const a: MutVec2 = [3, 4]
+const copy = vec2Clone(a)
+vec2Fill(copy, 1, 2)
+console.log(a, copy) // [ 3, 4 ] [ 1, 2 ]
+console.log(vec2FillWith(copy, 7)) // [ 7, 7 ]
+
+// Scalars: length, distance, dot, cross, the absolute cross and the angle between two vectors (radians).
+const b: MutVec2 = [0, 2]
+console.log(vec2Length(a), vec2Distance(a, b)) // 5 3.605551275463989
+console.log(vec2Dot(a, b), vec2Cross(a, b), vec2CrossLength(b, a)) // 8 6 6
+console.log(vec2Angle([1, 0], [0, 1]), vec2Angle([1, 0], [-1, 0]), vec2Angle([1, 0], [0, 0])) // 1.5707963267948966 3.141592653589793 0
+console.log(vec2Longitude([0, -1])) // 4.71238898038469 (3π/2)
+
+// Arithmetic with a scalar and element-wise; the result is a new vector unless an output is given, which is returned.
+console.log(vec2PlusScalar(a, 1), vec2MinusScalar(a, 1), vec2MulScalar(a, 2), vec2DivScalar(a, 2)) // [ 4, 5 ] [ 2, 3 ] [ 6, 8 ] [ 1.5, 2 ]
+console.log(vec2Plus(a, b), vec2Minus(a, b), vec2Mul(a, b), vec2Div(a, [2, 4])) // [ 3, 6 ] [ 3, 2 ] [ 0, 8 ] [ 1.5, 1 ]
+const out: MutVec2 = [0, 0]
+console.log(vec2Plus(a, b, out) === out, out) // true [ 3, 6 ]
+console.log(vec2Plus(out, b, out), out) // [ 3, 8 ] [ 3, 8 ]
+
+// Negation and normalization: the zero vector stays zero.
+console.log(vec2Negate(a), vec2Normalize(a), vec2Normalize([0, 0])) // [ -3, -4 ] [ 0.6, 0.8 ] [ 0, 0 ]
+
+// A quarter-turn rotation counterclockwise around the origin (floating-point residue in the 0 component).
+console.log(vec2Rot([1, 0], Math.PI / 2)) // [ 6.123233995736766e-17, 1 ]
+
+// The in-place variants change their argument and return it.
+const m: MutVec2 = [3, 4]
+console.log(vec2NormalizeMut(m), m) // [ 0.6, 0.8 ] [ 0.6, 0.8 ]
+console.log(vec2NegateMut(m)) // [ -0.6, -0.8 ]
+console.log(vec2DivScalarMut(m, 2)) // [ -0.3, -0.4 ]
+console.log(vec2RotMut(m, Math.PI)) // [ 0.30000000000000004, 0.39999999999999997 ]
+```
+
 ### 2x2 Matrices
 
 ### 3D Vectors
+
+`math/linear-algebra/vec3` has the three-component vector helpers: a `Vec3` is a readonly `[x, y, z]` tuple of plain numbers in the caller's unit and a `MutVec3` its mutable form (see 2D Vectors for the planar counterpart); names start with `vec` and angles are radians. As in the 2D module, the helpers that build a vector take an optional output `o`, written and returned (aliasing it, and it may be an input) when given and allocated when omitted, and the `...Mut` variants work in place. `vecDot`, `vecCross`, `vecCrossLength` (the length of the cross product without allocating), `vecTripleProduct(a, b, c)` (a · (b × c), the signed volume), `vecLength` and `vecDistance` are the basic products and norms. `vecAngle` is the unsigned angle between two vectors in [0, π] by a stable `atan2` formulation (0 for a zero vector), and `vecAngleUnit` is the faster form for unit vectors. The spherical extractions assume the usual right-handed frame: `vecLongitude` is the azimuth in the xy plane normalized to [0, 2π), `vecLatitude` the angle above the xy plane in [-π/2, π/2] and `vecPolarAngle` the colatitude from +z in [0, π]; all are stable at the poles and do not need a unit vector. `vecRotX`, `vecRotY` and `vecRotZ` rotate by the right-hand rule around an axis (counterclockwise seen from the positive axis), and `vecRotateByRodrigues(v, axis, angle)` rotates around any axis, normalizing it internally and returning a copy of `v` when the axis is zero. `vecPlane(a, b, c)` returns the unnormalized normal of the plane through three points, `(b - a) × (c - a)`, and `vecPositionAngle(a, b)` the position angle of `b` seen from `a` on the sphere, in (-π, π] counterclockwise from the direction of the pole (north) through east. `vecNormalize` returns the vector unchanged when its length is zero, and the scalar and element-wise arithmetic mirrors the 2D set.
+
+```ts
+import {
+	type MutVec3,
+	vecAngle,
+	vecAngleUnit,
+	vecClone,
+	vecCross,
+	vecCrossLength,
+	vecDistance,
+	vecDiv,
+	vecDivScalar,
+	vecDivScalarMut,
+	vecDot,
+	vecFill,
+	vecFillWith,
+	vecLatitude,
+	vecLength,
+	vecLongitude,
+	vecMinus,
+	vecMinusScalar,
+	vecMul,
+	vecMulScalar,
+	vecNegate,
+	vecNegateMut,
+	vecNormalize,
+	vecNormalizeMut,
+	vecPlane,
+	vecPlus,
+	vecPlusScalar,
+	vecPolarAngle,
+	vecPositionAngle,
+	vecRotateByRodrigues,
+	vecRotX,
+	vecRotXMut,
+	vecRotY,
+	vecRotYMut,
+	vecRotZ,
+	vecRotZMut,
+	vecTripleProduct,
+	vecXAxis,
+	vecYAxis,
+	vecZAxis,
+	vecZero,
+} from 'nebulosa/src/math/linear-algebra/vec3'
+
+// Constructors, a clone and the in-place fills.
+console.log(vecZero(), vecXAxis(), vecYAxis(), vecZAxis()) // [ 0, 0, 0 ] [ 1, 0, 0 ] [ 0, 1, 0 ] [ 0, 0, 1 ]
+const a: MutVec3 = [1, 2, 2]
+const copy = vecClone(a)
+vecFill(copy, 4, 5, 6)
+console.log(a, copy) // [ 1, 2, 2 ] [ 4, 5, 6 ]
+console.log(vecFillWith(copy, 7)) // [ 7, 7, 7 ]
+
+// Products and norms.
+const x = vecXAxis()
+const y = vecYAxis()
+const z = vecZAxis()
+console.log(vecLength(a), vecDistance(a, vecZero())) // 3 3
+console.log(vecDot(x, y), vecDot(a, a)) // 0 9
+console.log(vecCross(x, y), vecCrossLength(x, y), vecCross(y, x)) // [ 0, 0, 1 ] 1 [ 0, 0, -1 ]
+console.log(vecTripleProduct(x, y, z), vecTripleProduct(y, x, z)) // 1 -1
+
+// Angles between vectors (radians): orthogonal, opposite and a zero vector, for general and unit vectors.
+console.log(vecAngle(x, y), vecAngle(x, vecNegate(x)), vecAngle(x, vecZero())) // 1.5707963267948966 3.141592653589793 0
+console.log(vecAngleUnit(x, y)) // 1.5707963267948966
+
+// Spherical extractions: the vector (1, 1, 1) has longitude 45°, latitude about 35.26° and colatitude about 54.74°.
+const d: MutVec3 = [1, 1, 1]
+console.log(vecLongitude(d), vecLatitude(d), vecPolarAngle(d)) // 0.7853981633974483 0.6154797086703873 0.9553166181245093
+console.log(vecLongitude([0, -1, 0])) // 4.71238898038469 (3π/2)
+
+// Arithmetic with a scalar and element-wise; a new vector unless an output is given, which is returned.
+console.log(vecPlusScalar(a, 1), vecMinusScalar(a, 1), vecMulScalar(a, 2), vecDivScalar(a, 2)) // [ 2, 3, 3 ] [ 0, 1, 1 ] [ 2, 4, 4 ] [ 0.5, 1, 1 ]
+console.log(vecPlus(a, d), vecMinus(a, d), vecMul(a, d), vecDiv(a, [1, 2, 4])) // [ 2, 3, 3 ] [ 0, 1, 1 ] [ 1, 2, 2 ] [ 1, 1, 0.5 ]
+const out: MutVec3 = [0, 0, 0]
+console.log(vecPlus(a, d, out) === out, out) // true [ 2, 3, 3 ]
+
+// Negation and normalization: the zero vector stays zero.
+console.log(vecNegate(a), vecNormalize(a), vecNormalize(vecZero())) // [ -1, -2, -2 ] [ 0.3333333333333333, 0.6666666666666666, 0.6666666666666666 ] [ 0, 0, 0 ]
+
+// Rotations by the right-hand rule: a quarter turn of x around z gives y, of y around x gives z and of z around y gives x (residues of order 1e-16 in the zero components).
+console.log(vecRotZ(x, Math.PI / 2)) // [ 6.123233995736766e-17, 1, 0 ]
+console.log(vecRotX(y, Math.PI / 2)) // [ 0, 6.123233995736766e-17, 1 ]
+console.log(vecRotY(z, Math.PI / 2)) // [ 1, 0, 6.123233995736766e-17 ]
+console.log(vecRotateByRodrigues(x, [0, 0, 5], Math.PI / 2)) // [ 6.123233995736766e-17, 1, 0 ]
+console.log(vecRotateByRodrigues(x, vecZero(), Math.PI / 2)) // [ 1, 0, 0 ]
+
+// The normal of the plane through three points (unnormalized) and the position angle of a point seen from another.
+console.log(vecPlane([0, 0, 0], [2, 0, 0], [0, 3, 0])) // [ 0, 0, 6 ]
+console.log(vecPositionAngle([1, 0, 0], [1, 0.1, 0]), vecPositionAngle([1, 0, 0], [1, 0, 0.1])) // 1.5707963267948966 0
+
+// The in-place variants change their argument and return it.
+const m: MutVec3 = [2, 0, 0]
+console.log(vecNormalizeMut(m)) // [ 1, 0, 0 ]
+console.log(vecNegateMut(m)) // [ -1, -0, -0 ]
+console.log(vecDivScalarMut(m, 2)) // [ -0.5, -0, -0 ]
+console.log(vecRotZMut(m, Math.PI)) // [ 0.5, -6.123233995736766e-17, -0 ]
+console.log(vecRotXMut(m, Math.PI)) // [ 0.5, 6.123233995736766e-17, -7.498798913309288e-33 ]
+console.log(m === vecRotYMut(m, Math.PI)) // true
+```
 
 ### 3x3 Matrices
 
@@ -15519,6 +15972,33 @@ filtered.stop()
 ### Angle Units and Wrapping
 
 ### Barometric Pressure and Altitude
+
+Two functions convert between an altitude and the standard-atmosphere pressure (see Distance Units for the `Distance` type, in AU, and Pressure Units for the pressure in hPa). `pressureFrom(altitude, temperature?)` gives the pressure at an `altitude` above sea level with the two-layer barometric model: a power law with a constant lapse rate of -6.5 K/m up to 11 km (the troposphere) and an isothermal exponential layer above it. `temperature` is the temperature at sea level in Celsius (15 °C by default), not the temperature at the altitude. `fromPressure(pressure, temperature?)` is the approximate inverse, the pressure altitude with a constant tropospheric lapse rate and the same constants and sea-level temperature: it round-trips with `pressureFrom` inside the troposphere, and it is not meant for the stratosphere, where `pressureFrom` switches model. Both use the dry-air constants of the 1976 standard atmosphere, so they ignore humidity, weather and the real temperature profile: use them to estimate a pressure for refraction when no measurement is available.
+
+```ts
+import { fromPressure, kilometer, meter, toMeter } from 'nebulosa/src/math/units/distance'
+import { pressureFrom } from 'nebulosa/src/math/units/pressure'
+
+// The pressure (hPa) at some altitudes with the default sea-level temperature of 15 °C: sea level, 2 km, 5 km, the tropopause and the stratosphere.
+console.log(pressureFrom(meter(0))) // 1013.25
+console.log(pressureFrom(meter(2000))) // 794.9521551053907
+console.log(pressureFrom(kilometer(5))) // 540.1991210376206
+console.log(pressureFrom(kilometer(11))) // 226.3206397346292
+console.log(pressureFrom(kilometer(15))) // 120.44570862423203
+
+// The sea-level temperature changes the pressure at altitude, but not at sea level.
+console.log(pressureFrom(meter(2000), -10)) // 776.3762985062622
+console.log(pressureFrom(meter(0), 25)) // 1013.25
+
+// The pressure altitude (meters) of some pressures: the standard sea-level pressure, 800 hPa and the colder sea-level temperature of 0 °C.
+console.log(toMeter(fromPressure(1013.25))) // 0
+console.log(toMeter(fromPressure(800))) // 1948.9891722205734
+console.log(toMeter(fromPressure(800, 0))) // 1847.5321616937347
+
+// It inverts pressureFrom in the troposphere, at the same sea-level temperature.
+console.log(toMeter(fromPressure(pressureFrom(meter(2000))))) // 2000.0000000000023
+console.log(toMeter(fromPressure(pressureFrom(meter(5000), 10), 10))) // 4999.999999999996
+```
 
 ### Clamping and Tolerant Equality
 
@@ -15540,11 +16020,76 @@ filtered.stop()
 
 ### Great-Circle Geometry
 
+These functions work on points of the unit sphere given as longitude and latitude in radians (the convention of equatorial coordinates, longitude increasing east and latitude positive north), and return angles in radians. `sphericalSeparation(lonA, latA, lonB, latB)` is the angular distance of the great-circle arc between two points, in [0, π], computed with an `atan2` formulation that stays accurate for tiny separations and for antipodal points. `sphericalPositionAngle(lonA, latA, lonB, latB)` is the position angle of the second point seen from the first, measured east of north and normalized to [0, 2π): 0 is north and π/2 is east. `sphericalDestination(lon, lat, positionAngle, distance)` goes the other way: the point reached by moving `distance` along `positionAngle` on a great circle, returned as a `[longitude, latitude]` tuple with the longitude in [0, 2π) and the latitude in [-π/2, π/2]. `sphericalInterpolate(lonA, latA, lonB, latB, fraction)` returns the `[longitude, latitude]` point at a `fraction` of the arc from the first point (0) to the second (1) along the great circle at constant angular speed (the longitude is in [0, 2π)); coincident points return the first point, and antipodal points, where the circle is not unique, follow a deterministic one. `sphericalGreatCirclePole(a, b, out?)` is the unit normal of the plane through the origin and two directions (their normalized cross product `a × b`), or the zero vector when they are parallel or opposite; the vectors are in the same frame as the longitude and latitude, with x toward longitude 0 and z toward the north pole, and when `out` is given it is overwritten and returned.
+
+```ts
+import { sphericalDestination, sphericalGreatCirclePole, sphericalInterpolate, sphericalPositionAngle, sphericalSeparation } from 'nebulosa/src/math/numerical/geometry'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+// The separation (radians) between points: a quarter of the equator, pole to pole and the same point.
+console.log(sphericalSeparation(0, 0, deg(90), 0)) // 1.5707963267948966
+console.log(sphericalSeparation(0, deg(90), 1, deg(-90))) // 3.141592653589793
+console.log(sphericalSeparation(deg(10), deg(20), deg(10), deg(20))) // 0
+
+// The position angle of the second point seen from the first: north, east, south and west of (0, 0).
+console.log(sphericalPositionAngle(0, 0, 0, deg(10))) // 0
+console.log(sphericalPositionAngle(0, 0, deg(10), 0)) // 1.5707963267948966
+console.log(sphericalPositionAngle(0, 0, 0, deg(-10))) // 3.141592653589793
+console.log(sphericalPositionAngle(0, 0, deg(-10), 0)) // 4.71238898038469
+
+// The destination after 10° north and 10° east of (0, 0), and 20° north from latitude 80° (it crosses the pole, so the longitude flips by 180°).
+console.log(sphericalDestination(0, 0, 0, deg(10))) // [ 0, 0.17453292519943295 ]
+console.log(sphericalDestination(0, 0, deg(90), deg(10))) // [ 0.17453292519943295, 1.0632884247878856e-17 ]
+console.log(sphericalDestination(0, deg(80), 0, deg(20))) // [ 3.141592653589793, 1.396263401595464 ]
+
+// The points along the equator arc between longitudes 0° and 90°: the start, the middle and the end, and the point halfway to the antipode (which takes a deterministic orthogonal arc, here over the south pole).
+console.log(sphericalInterpolate(0, 0, deg(90), 0, 0)) // [ 0, 0 ]
+console.log(sphericalInterpolate(0, 0, deg(90), 0, 0.5)) // [ 0.7853981633974483, 0 ]
+console.log(sphericalInterpolate(0, 0, deg(90), 0, 1)) // [ 1.5707963267948966, 0 ]
+console.log(sphericalInterpolate(0, 0, deg(180), 0, 0.5)) // [ 0, -1.5707963267948966 ]
+
+// The pole of the circle through two directions: +z for x and y, and the zero vector when the directions are parallel.
+console.log(sphericalGreatCirclePole([1, 0, 0], [0, 1, 0])) // [ 0, 0, 1 ]
+console.log(sphericalGreatCirclePole([1, 0, 0], [2, 0, 0])) // [ 0, 0, 0 ]
+```
+
 ### Histogram Analysis
 
 ### Hyperbolic Regression
 
 ### Line Intersection with Spheres and Ellipsoids
+
+Two functions intersect a line of sight with a round body, in any single distance unit (the same for every coordinate and radius). `intersectLineAndSphere(endpoint, center, radius)` takes the line through the origin along `endpoint` (any non-zero length, normalized internally) and a sphere with the given `center` and `radius`, and returns the signed distances `[near, far]` from the origin to the two intersections along the unit direction (a negative value is behind the origin, and the two are equal for a tangent line), or `false` when the line misses the sphere or `endpoint` is the zero vector. `intersectSegmentEllipsoid(observer, target, equatorialRadius, polarRadius)` intersects the closed segment from `observer` to `target` with the oblate ellipsoid centered at the origin with its polar axis along z (`x²/a² + y²/a² + z²/b² = 1`) and returns an `EllipsoidSegmentIntersection`: `intersects` tells whether the segment touches or enters the surface, `intersection` is the first contact as a fraction of `target - observer` in [0, 1] (0 when the observer is already inside; absent when there is no intersection), and `tangent` is true when the contact is a double root, a grazing limb contact within the roundoff of the quadratic (64 ulps of its terms). A zero-length segment has no line of sight and does not intersect, an endpoint on the surface belongs to the segment, and the quadratic is solved in a stable form that keeps the near root accurate for a distant target.
+
+```ts
+import { intersectLineAndSphere, intersectSegmentEllipsoid } from 'nebulosa/src/math/numerical/geometry'
+
+// A line along +z through a unit sphere centered at (0, 0, 5): it enters at 4 and leaves at 6, whatever the length of the direction.
+console.log(intersectLineAndSphere([0, 0, 10], [0, 0, 5], 1)) // [ 4, 6 ]
+console.log(intersectLineAndSphere([0, 0, 1], [0, 0, 5], 1)) // [ 4, 6 ]
+
+// A sphere behind the origin gives negative distances, and a line that only grazes the sphere has equal distances.
+console.log(intersectLineAndSphere([0, 0, 1], [0, 0, -5], 1)) // [ -6, -4 ]
+console.log(intersectLineAndSphere([0, 0, 1], [0, 1, 5], 1)) // [ 5, 5 ]
+
+// A line that misses the sphere, and the zero direction, give false.
+console.log(intersectLineAndSphere([0, 0, 1], [0, 3, 5], 1)) // false
+console.log(intersectLineAndSphere([0, 0, 0], [0, 0, 5], 1)) // false
+
+// A segment through an ellipsoid with a = 1 and b = 0.9: it reaches the surface at z = 0.9, which is 45.5% of the way from z = 10 to z = -10.
+console.log(intersectSegmentEllipsoid([0, 0, 10], [0, 0, -10], 1, 0.9)) // { intersects: true, intersection: 0.45499999999999996, tangent: false }
+
+// A segment that stops before the surface does not touch it, and one that starts inside returns 0.
+console.log(intersectSegmentEllipsoid([0, 0, 10], [0, 0, 5], 1, 0.9)) // { intersects: false, tangent: false }
+console.log(intersectSegmentEllipsoid([0, 0, 0], [0, 0, 5], 1, 0.9)) // { intersects: true, intersection: 0, tangent: false }
+
+// Across the equator from x = 2 to x = -2 the contact is a quarter of the way, and a segment that grazes the limb at x = 1 is flagged as tangent at its middle.
+console.log(intersectSegmentEllipsoid([2, 0, 0], [-2, 0, 0], 1, 0.9)) // { intersects: true, intersection: 0.25, tangent: false }
+console.log(intersectSegmentEllipsoid([1, -2, 0], [1, 2, 0], 1, 0.9)) // { intersects: true, intersection: 0.5, tangent: true }
+
+// A zero-length segment has no line of sight, even on the surface.
+console.log(intersectSegmentEllipsoid([1, 0, 0], [1, 0, 0], 1, 0.9)) // { intersects: false, tangent: false }
+```
 
 ### Linear Least Squares
 
@@ -15560,9 +16105,55 @@ filtered.stop()
 
 ### Planar Points and Rectangles
 
+`math/numerical/geometry` starts with the planar types: `Point<T>` (`x`, `y`), `Size<T>` (`width`, `height`) and `Rect<T>` (`left`, `top`, `right`, `bottom`, the four edges), generic in the component type (number by default) and unitless, so the caller decides whether they are pixels, millimeters or tangent-plane offsets. `fillPoint(out, x, y)` writes the coordinates into `out` and returns it, or returns a new point when `out` is `undefined`. `midPoint(a, b)` returns a new point halfway between two points, and `euclideanSquaredDistance` and `euclideanDistance` the squared and plain distance in the points' own unit. `rectIntersection(a, b, out?)` returns the overlap of two axis-aligned rectangles, or `undefined` when they do not overlap: rectangles that only share an edge or a corner do not overlap (the test is strict), a rectangle with reversed edges (`right < left` or `bottom < top`) is treated as if its edges were sorted, and the result is always normalized (`left <= right`, `top <= bottom`). When `out` is given it is written and returned (it must not be one of the inputs, because the edges are read while it is written), and a new rectangle is allocated otherwise.
+
+```ts
+import { euclideanDistance, euclideanSquaredDistance, fillPoint, midPoint, type Point, type Rect, rectIntersection } from 'nebulosa/src/math/numerical/geometry'
+
+// A new point, or an existing one overwritten and returned.
+const point: Point = { x: 0, y: 0 }
+console.log(fillPoint(undefined, 1, 2)) // { x: 1, y: 2 }
+console.log(fillPoint(point, 3, 4) === point, point) // true { x: 3, y: 4 }
+
+// The midpoint and the distance between two points (the squared one avoids the square root).
+console.log(midPoint({ x: 0, y: 0 }, { x: 4, y: 2 })) // { x: 2, y: 1 }
+console.log(euclideanSquaredDistance({ x: 0, y: 0 }, { x: 3, y: 4 })) // 25
+console.log(euclideanDistance({ x: 0, y: 0 }, { x: 3, y: 4 })) // 5
+
+// The overlap of two rectangles, which is a new rectangle.
+const a: Rect = { left: 0, top: 0, right: 10, bottom: 10 }
+console.log(rectIntersection(a, { left: 5, top: 4, right: 20, bottom: 8 })) // { left: 5, right: 10, top: 4, bottom: 8 }
+
+// A reversed rectangle (right < left, bottom < top) gives the same normalized overlap.
+console.log(rectIntersection({ left: 10, top: 10, right: 0, bottom: 0 }, { left: 5, top: 4, right: 20, bottom: 8 })) // { left: 5, right: 10, top: 4, bottom: 8 }
+
+// Rectangles that only touch along an edge do not overlap.
+console.log(rectIntersection(a, { left: 10, top: 0, right: 20, bottom: 10 })) // undefined
+
+// With an output rectangle, the result is written into it and returned.
+const out: Rect = { left: 0, top: 0, right: 0, bottom: 0 }
+console.log(rectIntersection(a, { left: 5, top: 5, right: 15, bottom: 15 }, out) === out, out) // true { left: 5, top: 5, right: 10, bottom: 10 }
+```
+
 ### Polynomial and Chebyshev Regression
 
 ### Pressure Units
+
+`math/units/pressure` keeps a pressure as a plain number in hPa, which is the same as millibar (the `Pressure` type), the unit used for atmospheric pressure everywhere in the library. `pascal(value)` and `atm(value)` build a `Pressure` from pascals and from standard atmospheres (1 atm is 1013.25 hPa, the `ONE_ATM` constant), and `toPascal(pressure)` and `toAtm(pressure)` convert a `Pressure` back. The conversions are plain multiplications and divisions, with no validation of the sign. The module also has the altitude-to-pressure model `pressureFrom`, described in Barometric Pressure and Altitude.
+
+```ts
+import { atm, pascal, toAtm, toPascal } from 'nebulosa/src/math/units/pressure'
+
+// From pascals and atmospheres to hPa: one standard atmosphere is 101325 Pa.
+console.log(pascal(101325)) // 1013.25
+console.log(atm(1)) // 1013.25
+console.log(atm(0.5)) // 506.625
+
+// From hPa to pascals and atmospheres.
+console.log(toPascal(1013.25)) // 101325
+console.log(toAtm(1013.25)) // 1
+console.log(toAtm(500)) // 0.4934616333580064
+```
 
 ### Probability Distribution Functions
 
@@ -15584,17 +16175,162 @@ filtered.stop()
 
 ### Spherical Mount Bases
 
+These helpers describe the frame of an equatorial mount around a pointing direction for a polar axis that may be misaligned (see Spherical Tangent Planes for the sky frame they build on). Directions and axes are unit vectors and angles are radians. `sphericalMountPolarAxisVector(latitude, azimuthError?, altitudeError?, out?)` gives the unit vector of the mount's polar axis built from a site `latitude`: its azimuth is the `azimuthError` (normalized to [0, 2π), and π plus the error for a southern latitude, where the axis points at the south pole) and its altitude is the absolute latitude plus the `altitudeError` (minus it for a southern latitude), the vector being the one of that azimuth and altitude (x toward azimuth 0, y toward azimuth 90° and z up, as `eraS2c` builds it); both errors default to 0. `sphericalMountBasis(origin, polarAxis?, out?, basis?)` returns a `SphericalMountBasis` for the pointing `origin` and the `polarAxis` (+z by default, and +z again for a zero axis; both normalized): the unit `origin` and `polarAxis`, the `declinationAxis` (`origin × polarAxis` normalized), the `hourAngleTangent` (`polarAxis × origin` normalized, the direction of increasing hour angle motion around the polar axis) and the `declinationTangent` (`declinationAxis × origin` normalized, the direction of increasing declination). When the pointing is within 1e-14 of the polar axis the declination axis is undefined, so it reuses the sky tangent basis (`basis` is its optional scratch storage); a zero `origin` returns a canonical frame (declination axis -y, hour angle tangent +y, declination tangent -x). `sphericalMountDeclinationAxisVector(origin, polarAxis?, out?, basis?)` returns only the declination axis, with the same fallbacks, and without building the rest of the frame. The functions that take an `out` write into it and return it, and allocate when it is omitted.
+
+```ts
+import { sphericalMountBasis, sphericalMountDeclinationAxisVector, sphericalMountPolarAxisVector } from 'nebulosa/src/math/numerical/geometry'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+// The polar axis of a southern site (latitude -23°) with no error, and of a northern one (40°) with and without 1° of azimuth and 0.5° of altitude error.
+console.log(sphericalMountPolarAxisVector(deg(-23))) // [ -0.9205048534524404, 1.1272933223801346e-16, 0.39073112848927377 ]
+console.log(sphericalMountPolarAxisVector(deg(40), 0, 0)) // [ 0.766044443118978, 0, 0.6427876096865393 ]
+console.log(sphericalMountPolarAxisVector(deg(40), deg(1), deg(0.5))) // [ 0.760290152088361, 0.013270913968986765, 0.6494480483301837 ]
+
+// The basis for a mount pointing at (1, 0, 0) with the polar axis at +z: the declination axis is -y, the hour angle motion goes along +y and the declination motion along +z.
+console.log(sphericalMountBasis([1, 0, 0]))
+// { origin: [ 1, 0, 0 ], polarAxis: [ 0, 0, 1 ], declinationAxis: [ 0, -1, 0 ], hourAngleTangent: [ 0, 1, 0 ], declinationTangent: [ -0, 0, 1 ] }
+
+// With the misaligned polar axis from above the tangents tilt with it.
+console.log(sphericalMountBasis([1, 0, 0], sphericalMountPolarAxisVector(deg(40), deg(1), deg(0.5))))
+// { origin: [ 1, 0, 0 ], polarAxis: [ 0.760290152088361, 0.013270913968986765, 0.6494480483301837 ], declinationAxis: [ 0, -0.9997912882691165, 0.020429877659461807 ], hourAngleTangent: [ 0, 0.9997912882691165, -0.020429877659461807 ], declinationTangent: [ -0, 0.020429877659461807, 0.9997912882691165 ] }
+
+// Pointing at the pole itself has no unique declination axis, so the sky tangent basis is used.
+console.log(sphericalMountBasis([0, 0, 1]))
+// { origin: [ 0, 0, 1 ], polarAxis: [ 0, 0, 1 ], declinationAxis: [ -0, -1, -0 ], hourAngleTangent: [ 0, 1, 0 ], declinationTangent: [ -1, 0, 0 ] }
+
+// Only the declination axis, for pointings at (1, 0, 0), (0, 1, 0), the pole and the zero vector.
+console.log(sphericalMountDeclinationAxisVector([1, 0, 0])) // [ 0, -1, 0 ]
+console.log(sphericalMountDeclinationAxisVector([0, 1, 0])) // [ 1, 0, 0 ]
+console.log(sphericalMountDeclinationAxisVector([0, 0, 1])) // [ -0, -1, -0 ]
+console.log(sphericalMountDeclinationAxisVector([0, 0, 0])) // [ 0, -1, 0 ]
+```
+
 ### Spherical Tangent Planes
 
+These functions build the local frame of the sky around a direction and the gnomonic (tangent-plane) projection on it, in a right-handed frame with x toward longitude 0 on the equator, y toward longitude 90° and z toward the north pole; directions are unit vectors, angles are radians and the tangent-plane offsets are dimensionless (the tangent of the angular offset, so 1 is 45°). A `SphericalTangentBasis` holds the unit `origin` direction and the unit tangent vectors `east` (toward increasing longitude) and `north` (toward increasing latitude). `sphericalCoordinateBasis(longitude, latitude, out?)` builds it exactly from the spherical coordinates, and `sphericalTangentBasis(origin, out?)` from a vector (normalized internally, so any non-zero length works): away from the poles `east` is the normalized `pole × origin` and `north` is `origin × east`; at the poles (within 1e-14) the longitude is undefined and it uses a deterministic meridian (`east` is +y and `north` is -x at the north pole and +x at the south pole), and a zero origin returns a zero `origin` with the canonical `east = +x` and `north = +y`. The functions below accept an optional `basis` argument (it is used as the scratch storage of `sphericalTangentBasis`, so passing the same object around the same origin avoids allocating it, though the basis is still recomputed). `sphericalDirectionVector(origin, positionAngle, out?, basis?)` is the unit tangent vector at `origin` in the direction of the position angle (east of north), `sphericalPoleVector` the unit normal of the great circle that leaves `origin` in that direction, and `sphericalOffsetVector(origin, positionAngle, distance, out?, basis?)` the unit vector reached after an angular `distance` (radians) along it. `sphericalProjectTangentPlane(direction, origin, out?, basis?)` projects a direction onto the plane tangent at `origin`, returning `{ x, y, denominator }` (`x` toward east, `y` toward north, `denominator` the cosine of the angular distance times the length of `direction`) or `false` for a direction on the far hemisphere (`denominator <= 0`), where the projection does not exist. `sphericalUnprojectTangentPlane(x, y, origin, out?, basis?)` is the inverse and returns a unit vector. Every function that takes an `out` writes into it and returns it, and allocates a new object when it is omitted.
+
+```ts
+import { sphericalCoordinateBasis, sphericalDirectionVector, sphericalOffsetVector, sphericalPoleVector, sphericalProjectTangentPlane, sphericalTangentBasis, sphericalUnprojectTangentPlane, type SphericalTangentOffset } from 'nebulosa/src/math/numerical/geometry'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+// The basis from coordinates (longitude 45°, latitude 30°) and from a vector, with the origin normalized.
+console.log(sphericalCoordinateBasis(deg(45), deg(30)))
+// { origin: [ 0.6123724356957946, 0.6123724356957946, 0.49999999999999994 ], east: [ -0.7071067811865476, 0.7071067811865476, 0 ], north: [ -0.35355339059327373, -0.35355339059327373, 0.8660254037844387 ] }
+console.log(sphericalTangentBasis([1, 1, 1]))
+// { origin: [ 0.5773502691896258, 0.5773502691896258, 0.5773502691896258 ], east: [ -0.7071067811865476, 0.7071067811865476, 0 ], north: [ -0.4082482904638631, -0.4082482904638631, 0.8164965809277261 ] }
+
+// At the north pole the basis follows the deterministic meridian; the zero vector gets the canonical axes.
+console.log(sphericalTangentBasis([0, 0, 1]))
+// { origin: [ 0, 0, 1 ], east: [ 0, 1, 0 ], north: [ -1, 0, 0 ] }
+console.log(sphericalTangentBasis([0, 0, 0]))
+// { origin: [ 0, 0, 0 ], east: [ 1, 0, 0 ], north: [ 0, 1, 0 ] }
+
+// At (1, 0, 0) (longitude 0, latitude 0) the position angle 0 points north (+z) and 90° points east (+y), and the pole vectors are the normals of those circles.
+console.log(sphericalDirectionVector([1, 0, 0], 0)) // [ 0, 0, 1 ]
+console.log(sphericalDirectionVector([1, 0, 0], deg(90))) // [ 0, 1, 6.123233995736766e-17 ]
+console.log(sphericalPoleVector([1, 0, 0], 0)) // [ 0, -1, 0 ]
+console.log(sphericalPoleVector([1, 0, 0], deg(90))) // [ 0, -6.123233995736766e-17, 1 ]
+
+// Moving 10° north and 10° east.
+console.log(sphericalOffsetVector([1, 0, 0], 0, deg(10))) // [ 0.9848077530122081, 0, 0.17364817766693036 ]
+console.log(sphericalOffsetVector([1, 0, 0], deg(90), deg(10))) // [ 0.9848077530122081, 0.17364817766693036, 1.0632884247878858e-17 ]
+
+// A direction 1° north of the origin projects to the tangent of 1° on the y axis; a direction on the far hemisphere does not project.
+console.log(sphericalProjectTangentPlane([Math.cos(deg(1)), 0, Math.sin(deg(1))], [1, 0, 0])) // { x: 0, y: 0.017455064928217585, denominator: 0.9998476951563913 }
+console.log(sphericalProjectTangentPlane([-1, 0, 0], [1, 0, 0])) // false
+
+// A reused output and basis for several calls around the same origin; the unprojection gives a unit vector.
+const basis = sphericalTangentBasis([1, 0, 0])
+const offset: SphericalTangentOffset = { x: 0, y: 0, denominator: 0 }
+console.log(sphericalProjectTangentPlane([1, 0.01, 0.02], [1, 0, 0], offset, basis) === offset, offset) // true { x: 0.01, y: 0.02, denominator: 1 }
+console.log(sphericalUnprojectTangentPlane(0.01, 0.02, [1, 0, 0], undefined, basis)) // [ 0.9997500937109545, 0.009997500937109546, 0.01999500187421909 ]
+```
+
 ### Spherical Triangles and Polygons
+
+These functions measure spherical triangles and polygons on the unit sphere. Vertices are `(longitude, latitude)` pairs in radians (six arguments for the triangle functions, and `[longitude, latitude]` tuples for the polygon), areas are solid angles in steradians (multiply by R² for a sphere of radius R; the whole sphere is 4π) and angles are in radians. `sphericalTriangleArea` is the area of the triangle whose sides are the great-circle arcs between the three vertices, computed with L'Huilier's theorem from the side lengths so that small triangles keep their precision (the angle-sum form of the spherical excess loses it); the result does not depend on the order or the winding of the vertices and is clamped at zero for collinear or coincident vertices. `sphericalTriangleAngles` returns the interior angles `[A, B, C]` at the three vertices from the side lengths (the spherical law of cosines, clamped into the valid range), whose sum is π plus the area, and an angle whose adjacent sides collapse is 0. `sphericalPolygonArea(vertices)` sums the triangles of a fan from the first vertex, so the polygon must be simple (no self-intersections) and star-shaped as seen from its first vertex, with the vertices in boundary order and the polygon closed implicitly; fewer than three vertices give 0. The sides are the shorter great-circle arcs, so a triangle or a polygon larger than a hemisphere, or with antipodal vertices, is not meaningful here.
+
+```ts
+import { sphericalPolygonArea, sphericalTriangleAngles, sphericalTriangleArea } from 'nebulosa/src/math/numerical/geometry'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+// The octant of the sphere with vertices on the +x, +y and +z axes has an area of 4π/8 and three right angles.
+console.log(sphericalTriangleArea(0, 0, deg(90), 0, 0, deg(90))) // 1.5707963267948966
+console.log(sphericalTriangleAngles(0, 0, deg(90), 0, 0, deg(90))) // [ 1.5707963267948966, 1.5707963267948966, 1.5707963267948966 ]
+
+// A small triangle of 1° legs is almost planar: the area is close to half of 1° x 1° in steradians (about 1.52e-4), with the right angle at the first vertex and the others close to 45°.
+console.log(sphericalTriangleArea(0, 0, deg(1), 0, 0, deg(1))) // 0.0001523164425802842
+console.log(sphericalTriangleAngles(0, 0, deg(1), 0, 0, deg(1))) // [ 1.5707963267952612, 0.7854743216187712, 0.7854743216187712 ]
+
+// Three points on the equator enclose nothing.
+console.log(sphericalTriangleArea(0, 0, deg(1), 0, deg(2), 0)) // 0
+
+// A polygon: the same octant as a three-vertex polygon, a square of 1° sides (about 1° x 1° in steradians, 3.05e-4) and a list with too few vertices.
+console.log(
+	sphericalPolygonArea([
+		[0, 0],
+		[deg(90), 0],
+		[deg(90), deg(90)],
+	]),
+) // 1.5707963267948966
+console.log(
+	sphericalPolygonArea([
+		[0, 0],
+		[deg(1), 0],
+		[deg(1), deg(1)],
+		[0, deg(1)],
+	]),
+) // 0.00030460968486220195
+console.log(
+	sphericalPolygonArea([
+		[0, 0],
+		[1, 1],
+	]),
+) // 0
+```
 
 ### Splines and Interpolation
 
 ### Temperature Units
 
+`math/units/temperature` keeps a temperature as a plain number in degrees Celsius (the `Temperature` type), the unit used everywhere in the library. `fahrenheit(value)` and `kelvin(value)` build a `Temperature` from a value in that scale (the result is in Celsius), and `toFahrenheit(temperature)` and `toKelvin(temperature)` convert a `Temperature` back. The conversions are the exact linear formulas, so they apply no clamping and do not check the absolute zero, and the floating-point arithmetic leaves the usual rounding residue (`kelvin(300)` is not exactly 26.85).
+
+```ts
+import { fahrenheit, kelvin, toFahrenheit, toKelvin } from 'nebulosa/src/math/units/temperature'
+
+// From a scale to Celsius: the boiling point of water in Fahrenheit, the scale crossing at -40 and the absolute zero in Kelvin.
+console.log(fahrenheit(212)) // 100
+console.log(fahrenheit(-40)) // -40
+console.log(kelvin(0)) // -273.15
+console.log(kelvin(300)) // 26.850000000000023 (26.85 up to rounding)
+
+// From Celsius to a scale.
+console.log(toFahrenheit(100)) // 212
+console.log(toFahrenheit(20)) // 68
+console.log(toKelvin(15)) // 288.15
+console.log(toKelvin(-273.15)) // 0
+```
+
 ### Trend-Line Regression
 
 ### Velocity Units
+
+`math/units/velocity` keeps a velocity as a plain number in AU/day (the `Velocity` type), the unit of the ephemeris and orbit code. `kilometerPerSecond(value)` and `meterPerSecond(value)` build a `Velocity` from a speed in those units, and `toKilometerPerSecond(velocity)` and `toMeterPerSecond(velocity)` convert it back; the factor is the number of seconds in a day over the astronomical unit in kilometers or meters, so the round trip returns the input up to floating-point rounding. They are scalar conversions of a speed, so a velocity vector is converted component by component.
+
+```ts
+import { kilometerPerSecond, meterPerSecond, toKilometerPerSecond, toMeterPerSecond } from 'nebulosa/src/math/units/velocity'
+
+// From a speed to AU/day: the mean orbital speed of the Earth is about 30 km/s, and 1 m/s is a tiny fraction of an AU per day.
+console.log(kilometerPerSecond(30)) // 0.017326449820919812 AU/day
+console.log(meterPerSecond(1)) // 5.775483273639937e-7 AU/day
+
+// From AU/day to a speed.
+console.log(toKilometerPerSecond(0.0172)) // 29.781057593055554 km/s
+console.log(toMeterPerSecond(1)) // 1731456.8368055555 m/s
+
+// The round trip returns the input up to rounding.
+console.log(toKilometerPerSecond(kilometerPerSecond(29.78))) // 29.780000000000005
+```
 
 ## 💻 Protocols
 
