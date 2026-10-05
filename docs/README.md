@@ -17145,9 +17145,222 @@ console.log(panel.enabled, panel.intensity.value) // false 255
 
 ### INDI Focuser Control
 
+`FocuserManager` builds a `Focuser` device from the INDI focuser properties and controls it. The state is `position` (a `MinMaxValueProperty` in steps, from `ABS_FOCUS_POSITION`), `moving` (true while the absolute or the relative vector is Busy), `reversed`, and the capability flags `canAbsoluteMove`, `canRelativeMove`, `canSync`, `canAbort` and `canReverse`, each set when the driver defines the matching vector; `hasThermometer` and `temperature` are managed by the thermometer manager (see INDI Thermometer). A flag is cleared when the driver deletes its vector.
+
+The commands are `moveTo(focuser, position)` (absolute, in steps), `moveIn(focuser, steps)` and `moveOut(focuser, steps)` (relative: the motion direction is selected first and the step count is then written), `syncTo(focuser, position)` (redefines the current position without moving), `reverse(focuser, enabled)` and `stop(focuser)`. Each command is ignored when the corresponding capability is missing, and the limits of a move are left to the driver. A command only requests the change, which is seen on the device when the driver reports it.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { FocuserManager } from 'nebulosa/src/devices/indi/manager/focuser'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { FocuserSimulator } from 'nebulosa/src/devices/indi/simulator/focuser'
+
+// Waits until a condition is true, polling every 10 ms.
+async function waitUntil(condition: () => boolean, timeout: number = 5000) {
+	const start = performance.now()
+	while (!condition() && performance.now() - start < timeout) await Bun.sleep(10)
+}
+
+const handler = new IndiClientHandlerSet()
+const manager = new FocuserManager()
+handler.add(manager)
+
+using client = new ClientSimulator('focuser', handler)
+using simulator = new FocuserSimulator('Focuser Simulator', client)
+
+const focuser = manager.get(client, simulator.name)!
+manager.connect(focuser)
+await waitUntil(() => focuser.connected)
+console.log(focuser.type, focuser.position.value, focuser.position.min, focuser.position.max, focuser.moving) // focuser 50000 0 100000 false
+console.log(focuser.canAbsoluteMove, focuser.canRelativeMove, focuser.canSync, focuser.canAbort, focuser.canReverse) // true true true true true
+
+// Absolute move, in steps.
+manager.moveTo(focuser, 52000)
+await waitUntil(() => focuser.moving)
+console.log(focuser.moving) // true
+await waitUntil(() => !focuser.moving)
+console.log(focuser.position.value) // 52000
+
+// Relative moves: inward decreases the position and outward increases it.
+manager.moveIn(focuser, 1000)
+await waitUntil(() => focuser.moving)
+await waitUntil(() => !focuser.moving)
+console.log(focuser.position.value) // 51000
+manager.moveOut(focuser, 500)
+await waitUntil(() => focuser.moving)
+await waitUntil(() => !focuser.moving)
+console.log(focuser.position.value) // 51500
+
+// Reverse inverts the direction of the relative moves.
+manager.reverse(focuser, true)
+await Bun.sleep(50)
+console.log(focuser.reversed) // true
+manager.moveOut(focuser, 500)
+await waitUntil(() => focuser.moving)
+await waitUntil(() => !focuser.moving)
+console.log(focuser.position.value) // 51000
+manager.reverse(focuser, false)
+await Bun.sleep(50)
+
+// Sync redefines the position without moving.
+manager.syncTo(focuser, 30000)
+await Bun.sleep(50)
+console.log(focuser.position.value) // 30000
+
+// stop() aborts a move in progress.
+manager.moveTo(focuser, 90000)
+await waitUntil(() => focuser.moving)
+await Bun.sleep(200)
+manager.stop(focuser)
+await waitUntil(() => !focuser.moving)
+console.log(focuser.moving, focuser.position.value > 30000 && focuser.position.value < 90000) // false true
+
+manager.disconnect(focuser)
+await waitUntil(() => !focuser.connected)
+console.log(focuser.connected) // false
+```
+
 ### INDI Focuser Simulator
 
+`FocuserSimulator(name, client, options?)` simulates an absolute focuser with a position between 0 and `FOCUSER_MAX_POSITION` (100000 steps), initially `FOCUSER_INITIAL_POSITION` (50000), moving at `FOCUSER_MOVE_RATE` (20000 steps per second) in ticks of `TICK_INTERVAL_MS`. On connection it defines `ABS_FOCUS_POSITION`, `REL_FOCUS_POSITION`, `FOCUS_MOTION` (inward or outward, outward by default), `FOCUS_ABORT_MOTION`, `FOCUS_REVERSE_MOTION`, `FOCUS_SYNC`, `FOCUS_TEMPERATURE`, `FOCUS_TEMPERATURE_COMPENSATION` and the simulator-only `SIMULATOR_BACKLASH` vector. The absolute and relative vectors are Busy during a move. A target is clamped to the range, a relative move uses the selected direction (inverted when the motion is reversed) and is clamped as well, a move to the current position only stops, and a sync is applied immediately.
+
+The temperature is a sinusoid of 4 °C of amplitude and 40 s of period around the ambient temperature of the camera simulator, updated when it changes by at least 0.1 °C. With the temperature compensation enabled and no move in progress, the simulator nudges the focus by -250 steps per °C of drift (truncated to whole steps) once the temperature has moved by at least 0.05 °C since the last adjustment, which is a simple model and not a calibrated focuser.
+
+The `backlashIn` and `backlashOut` options (or the `SIMULATOR_BACKLASH` vector) model lost motion in steps: the reported `position` is the motor position, while `effectivePosition` is the optical position, which only follows the motor after the slack of a direction reversal has been consumed in the corresponding direction. `stop(alert?)` aborts the move (Alert by default, Idle with `false`). `position`, `isMoving`, `temperature` and `isTemperatureCompensationEnabled` are read accessors. `moveTo`, `moveRelative` and `syncTo` are the direct form of the vectors; `FOCUS_MOTION`, `FOCUS_REVERSE_MOTION` and the backlash are not saved by `CONFIG`.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { FocuserManager } from 'nebulosa/src/devices/indi/manager/focuser'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { FOCUSER_INITIAL_POSITION, FOCUSER_MAX_POSITION, FOCUSER_MOVE_RATE } from 'nebulosa/src/devices/indi/simulator/constants'
+import { FocuserSimulator } from 'nebulosa/src/devices/indi/simulator/focuser'
+
+// Waits until a condition is true, polling every 10 ms.
+async function waitUntil(condition: () => boolean, timeout: number = 5000) {
+	const start = performance.now()
+	while (!condition() && performance.now() - start < timeout) await Bun.sleep(10)
+}
+
+const handler = new IndiClientHandlerSet()
+const manager = new FocuserManager()
+handler.add(manager)
+
+using client = new ClientSimulator('focuser', handler)
+
+// A focuser with 100 steps of backlash on the inward direction and 50 on the outward one.
+using simulator = new FocuserSimulator('Focuser Simulator', client, { backlashIn: 100, backlashOut: 50 })
+const focuser = manager.get(client, simulator.name)!
+manager.connect(focuser)
+await waitUntil(() => focuser.connected)
+console.log(FOCUSER_MAX_POSITION, FOCUSER_INITIAL_POSITION, FOCUSER_MOVE_RATE, simulator.position, simulator.effectivePosition, simulator.backlashIn, simulator.backlashOut) // 100000 50000 20000 50000 50000 100 50
+
+// Absolute move of 5000 steps takes about 0.25 s at 20000 steps per second.
+simulator.moveTo(55000)
+await waitUntil(() => simulator.isMoving)
+console.log(simulator.isMoving) // true
+await waitUntil(() => !simulator.isMoving)
+console.log(simulator.position, simulator.effectivePosition) // 55000 55000
+
+// Reversing the direction first consumes the backlash: the optical position lags the motor by 100 steps.
+simulator.moveRelative(1000)
+await waitUntil(() => simulator.isMoving)
+await waitUntil(() => !simulator.isMoving)
+console.log(simulator.position, simulator.effectivePosition) // 56000 56000
+client.sendSwitch({ device: simulator.name, name: 'FOCUS_MOTION', elements: { FOCUS_INWARD: true } })
+simulator.moveRelative(1000)
+await waitUntil(() => simulator.isMoving)
+await waitUntil(() => !simulator.isMoving)
+console.log(simulator.position, simulator.effectivePosition) // 55000 55100
+
+// Sync is immediate, and the vector form works as the manager does.
+simulator.syncTo(40000)
+console.log(simulator.position, simulator.effectivePosition, simulator.isMoving) // 40000 40000 false
+client.sendNumber({ device: simulator.name, name: 'ABS_FOCUS_POSITION', elements: { FOCUS_ABSOLUTE_POSITION: 1000000 } })
+await waitUntil(() => simulator.isMoving)
+simulator.stop()
+console.log(simulator.isMoving) // false
+
+// The temperature (degrees Celsius) and its compensation.
+console.log(simulator.temperature, simulator.isTemperatureCompensationEnabled) // 18.253043286223207 false
+client.sendSwitch({ device: simulator.name, name: 'FOCUS_TEMPERATURE_COMPENSATION', elements: { INDI_ENABLED: true } })
+console.log(simulator.isTemperatureCompensationEnabled) // true
+
+// The backlash can be changed with its vector.
+client.sendNumber({ device: simulator.name, name: 'SIMULATOR_BACKLASH', elements: { BACKLASH_IN: 0, BACKLASH_OUT: 0 } })
+console.log(simulator.backlashIn, simulator.backlashOut) // 0 0
+```
+
 ### INDI Guide Output
+
+`GuideOutputManager(provider)` exposes the pulse-guiding of a mount or of a camera (the ST-4 port) as a `GuideOutput` device. The `provider` resolves the parent by client, name and type (`'mount'` first, then `'camera'`), usually the mount manager; when the driver defines `TELESCOPE_TIMED_GUIDE_NS` or `TELESCOPE_TIMED_GUIDE_WE` for a known parent, the manager marks the parent with `canPulseGuide` and creates a `'guideOutput'` proxy over it. `pulsingNS` and `pulsingWE` follow the Busy state of each timed-guide vector, `pulsing` is true when either one is, and `GUIDE_RATE` (when present) sets `hasGuideRate`, `canSetGuideRate` (the vector is writable) and `guideRate` (`rightAscension` from `GUIDE_RATE_WE` and `declination` from `GUIDE_RATE_NS`, as published by the driver; INDI mounts publish a fraction of the sidereal rate). The state is mirrored on the proxy and on the parent. Deleting a timed-guide vector clears the capability only when the other axis is not available either, and the proxy is removed with its last property.
+
+The commands are `pulseNorth`, `pulseSouth`, `pulseWest` and `pulseEast` (`duration` in milliseconds, with the opposite direction of the same axis set to zero), `pulse(device, direction, duration)` (the same by `GuideDirection`, `'NORTH'`, `'SOUTH'`, `'WEST'` or `'EAST'`) and `guideRate(device, rightAscension, declination)`. The pulses are ignored without `canPulseGuide`, and the guide rate without `canSetGuideRate`; either the proxy or the parent can be given. A pulse is only a request: `pulsing` turns true when the driver reports the vector Busy, and false when the pulse is finished.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { GuideOutputManager } from 'nebulosa/src/devices/indi/manager/guideoutput'
+import { MountManager } from 'nebulosa/src/devices/indi/manager/mount'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { MountSimulator } from 'nebulosa/src/devices/indi/simulator/mount'
+
+// Waits until a condition is true, polling every 10 ms.
+async function waitUntil(condition: () => boolean, timeout: number = 5000) {
+	const start = performance.now()
+	while (!condition() && performance.now() - start < timeout) await Bun.sleep(10)
+}
+
+const handler = new IndiClientHandlerSet()
+const mounts = new MountManager()
+const guides = new GuideOutputManager(mounts)
+handler.add(mounts)
+handler.add(guides)
+
+using client = new ClientSimulator('mount', handler)
+using simulator = new MountSimulator('Mount Simulator', client)
+const mount = mounts.get(client, simulator.name)!
+mounts.connect(mount)
+await waitUntil(() => mount.connected)
+
+// The proxy exists once the timed-guide vectors have been defined, and the parent shares the capability.
+const guide = guides.get(client, simulator.name)!
+console.log(guide.type, guide.canPulseGuide, mount.canPulseGuide, guide.hasGuideRate, guide.canSetGuideRate, guide.pulsing) // guideOutput true true true true false
+console.log(guide.guideRate) // { rightAscension: 0.5, declination: 0.5 }
+
+// A 500 ms pulse to the north, then to the east. pulsing follows the Busy state.
+guides.pulseNorth(guide, 500)
+await waitUntil(() => guide.pulsing)
+console.log(guide.pulsing, guide.pulsingNS, guide.pulsingWE) // true true false
+await waitUntil(() => !guide.pulsing)
+guides.pulseEast(guide, 300)
+await waitUntil(() => guide.pulsing)
+console.log(guide.pulsing, guide.pulsingNS, guide.pulsingWE) // true false true
+await waitUntil(() => !guide.pulsing)
+
+// The remaining directions, and the form by direction name.
+guides.pulseSouth(mount, 200)
+await waitUntil(() => guide.pulsing)
+await waitUntil(() => !guide.pulsing)
+guides.pulseWest(mount, 200)
+await waitUntil(() => guide.pulsing)
+await waitUntil(() => !guide.pulsing)
+guides.pulse(guide, 'NORTH', 100)
+await waitUntil(() => guide.pulsing)
+await waitUntil(() => !guide.pulsing)
+guides.pulse(guide, 'SOUTH', 100)
+await waitUntil(() => guide.pulsing)
+await waitUntil(() => !guide.pulsing)
+guides.pulse(guide, 'WEST', 100)
+await waitUntil(() => guide.pulsing)
+await waitUntil(() => !guide.pulsing)
+guides.pulse(guide, 'EAST', 100)
+await waitUntil(() => guide.pulsing)
+await waitUntil(() => !guide.pulsing)
+
+// The guide rate, as the driver publishes it.
+guides.guideRate(guide, 0.3, 0.4)
+await Bun.sleep(50)
+console.log(guide.guideRate, mount.guideRate) // { rightAscension: 0.3, declination: 0.4 } { rightAscension: 0.3, declination: 0.4 }
+```
 
 ### INDI Mount Alignment Subsystem
 
@@ -17156,6 +17369,75 @@ console.log(panel.enabled, panel.intensity.value) // false 255
 ### INDI Mount Simulator
 
 ### INDI Power Channels
+
+`PowerManager` builds a `Power` device from the INDI Power interface (a power box or a distribution unit) and controls its channels. The device has the aggregate `voltage` (V), `current` (A) and `power` (W) as `MinMaxValueProperty` objects from `POWER_SENSORS`, `hasPowerCycle` from `POWER_CYCLE`, and one list of `PowerChannel` objects per kind of channel: `dc` (`POWER_CHANNELS`, with the current of each one from `POWER_CURRENTS`), `dew` (`DEW_CHANNELS`, with the duty cycle from `DEW_DUTY_CYCLES`), `autoDew` (`AUTO_DEW_CONTROL`), `variableVoltage` (`VARIABLE_CHANNELS`, with the voltage from `VARIABLE_VOLTAGES`) and `usb` (`USB_PORTS`). A channel has its `type`, the element `name` of the driver, its `label` (from the `*_LABELS` text vectors), `enabled`, and `value`, `min`, `max` and `step` for the quantity it carries. The lists follow the vectors: new elements are appended and removed ones trimmed, and a deleted vector empties the list. A DC channel current has no model field for the dew currents, since a dew value is a duty cycle.
+
+The commands address an element by the name of the channel, so the vectors of one kind must use the same element names for the same channel, as the snippet does. They are `toggle(power, channel, enabled)` (the switch vector of the kind of the channel), `voltage(power, channel, volts)` (variable-voltage channels only) and `dutyCycle(power, channel, percent)` (dew channels only); the limits of the values are left to the driver. No simulator publishes the Power interface, so the snippet is the driver side: it announces the device with a hand-made `DRIVER_INFO`, defines the vectors and prints the commands sent by a recording client.
+
+```ts
+import { type Client, DeviceInterfaceType } from 'nebulosa/src/devices/indi/device'
+import { PowerManager } from 'nebulosa/src/devices/indi/manager/power'
+import { makeNumberVector, makeSwitchVector, makeTextVector } from 'nebulosa/src/devices/indi/types'
+
+// A client that only prints the commands.
+const client: Client = {
+	type: 'INDI',
+	id: 'power',
+	description: 'Power box',
+	getProperties() {},
+	enableBlob() {},
+	sendText() {},
+	sendNumber: (vector) => console.log('number', vector.name, vector.elements),
+	sendSwitch: (vector) => console.log('switch', vector.name, vector.elements),
+	[Symbol.dispose]() {},
+}
+
+const manager = new PowerManager()
+const device = 'Power Box'
+
+// The driver announces itself with the Power interface bit, in the DRIVER_INFO text vector.
+const info = makeTextVector(device, 'DRIVER_INFO', 'Driver Info', 'General Info', 'ro', ['DRIVER_INTERFACE', 'Interface', `${DeviceInterfaceType.POWER}`], ['DRIVER_EXEC', 'Exec', 'power'], ['DRIVER_VERSION', 'Version', '1.0'], ['DRIVER_NAME', 'Name', 'Power Box'])
+manager.textVector(client, info, 'defTextVector')
+const power = manager.get(client, device)!
+console.log(power.type, power.name, power.dc.length, power.hasPowerCycle) // power Power Box 0 false
+
+// Vectors defined by the driver: two DC outputs, a dew heater, a variable output, a USB port and the sensors.
+manager.switchVector(client, makeSwitchVector(device, 'POWER_CHANNELS', 'Power', 'Main Control', 'AnyOfMany', 'rw', ['POWER_CHANNEL_1', 'Channel 1', true], ['POWER_CHANNEL_2', 'Channel 2', false]), 'defSwitchVector')
+manager.numberVector(client, makeNumberVector(device, 'POWER_CURRENTS', 'Currents', 'Main Control', 'ro', ['POWER_CHANNEL_1', 'Current 1', 1.2, 0, 10, 0.01, '%.2f'], ['POWER_CHANNEL_2', 'Current 2', 0, 0, 10, 0.01, '%.2f']), 'defNumberVector')
+manager.textVector(client, makeTextVector(device, 'POWER_LABELS', 'Labels', 'Main Control', 'rw', ['POWER_CHANNEL_1', 'Label 1', 'Camera'], ['POWER_CHANNEL_2', 'Label 2', 'Mount']), 'defTextVector')
+manager.switchVector(client, makeSwitchVector(device, 'DEW_CHANNELS', 'Dew', 'Main Control', 'AnyOfMany', 'rw', ['DEW_CHANNEL_1', 'Dew 1', false]), 'defSwitchVector')
+manager.numberVector(client, makeNumberVector(device, 'DEW_DUTY_CYCLES', 'Dew', 'Main Control', 'rw', ['DEW_CHANNEL_1', 'Dew 1', 20, 0, 100, 1, '%.0f']), 'defNumberVector')
+manager.switchVector(client, makeSwitchVector(device, 'AUTO_DEW_CONTROL', 'Auto dew', 'Main Control', 'AnyOfMany', 'rw', ['AUTO_DEW_ENABLED', 'Auto dew', false]), 'defSwitchVector')
+manager.switchVector(client, makeSwitchVector(device, 'VARIABLE_CHANNELS', 'Variable', 'Main Control', 'AnyOfMany', 'rw', ['VARIABLE_CHANNEL_1', 'Variable 1', true]), 'defSwitchVector')
+manager.numberVector(client, makeNumberVector(device, 'VARIABLE_VOLTAGES', 'Voltages', 'Main Control', 'rw', ['VARIABLE_CHANNEL_1', 'Variable 1', 9, 3, 12, 1, '%.0f']), 'defNumberVector')
+manager.switchVector(client, makeSwitchVector(device, 'USB_PORTS', 'USB', 'Main Control', 'AnyOfMany', 'rw', ['USB_PORT_1', 'USB 1', true]), 'defSwitchVector')
+manager.switchVector(client, makeSwitchVector(device, 'POWER_CYCLE', 'Power cycle', 'Main Control', 'AtMostOne', 'rw', ['POWER_CYCLE_ALL', 'All', false]), 'defSwitchVector')
+manager.numberVector(client, makeNumberVector(device, 'POWER_SENSORS', 'Sensors', 'Main Control', 'ro', ['SENSOR_VOLTAGE', 'Voltage', 12.1, 0, 30, 0.1, '%.1f'], ['SENSOR_CURRENT', 'Current', 1.2, 0, 20, 0.01, '%.2f'], ['SENSOR_POWER', 'Power', 14.5, 0, 600, 0.1, '%.1f']), 'defNumberVector')
+
+console.log(power.voltage.value, power.current.value, power.power.value, power.hasPowerCycle) // 12.1 1.2 14.5 true
+console.log(power.dc.map((e) => `${e.name} ${e.label} enabled=${e.enabled} value=${e.value}`)) // ['POWER_CHANNEL_1 Camera enabled=true value=1.2', 'POWER_CHANNEL_2 Mount enabled=false value=0']
+console.log(power.dew[0].name, power.dew[0].enabled, power.dew[0].value, power.dew[0].min, power.dew[0].max) // DEW_CHANNEL_1 false 20 0 100
+console.log(power.autoDew[0].name, power.autoDew[0].enabled, power.variableVoltage[0].value, power.variableVoltage[0].max, power.usb[0].enabled) // AUTO_DEW_ENABLED false 9 12 true
+
+// Toggle a channel of any kind. The switch vector is chosen by its kind.
+manager.toggle(power, power.dc[1], true)
+manager.toggle(power, power.dew[0], true)
+manager.toggle(power, power.autoDew[0], true)
+manager.toggle(power, power.variableVoltage[0], false)
+manager.toggle(power, power.usb[0], false)
+
+// Values: the duty cycle of a dew channel and the voltage of a variable channel.
+manager.dutyCycle(power, power.dew[0], 75)
+manager.voltage(power, power.variableVoltage[0], 12)
+
+// A set vector from the driver updates the channel.
+manager.switchVector(client, makeSwitchVector(device, 'POWER_CHANNELS', 'Power', 'Main Control', 'AnyOfMany', 'rw', ['POWER_CHANNEL_1', 'Channel 1', true], ['POWER_CHANNEL_2', 'Channel 2', true]), 'setSwitchVector')
+console.log(power.dc.map((e) => e.enabled)) // [true, true]
+
+// Deleting a vector empties the list.
+manager.delProperty(client, { device, name: 'USB_PORTS' })
+console.log(power.usb.length) // 0
+```
 
 ### INDI Protocol Client
 
@@ -17284,11 +17566,213 @@ console.log(meridianTimeIn(hour(3), hour(1)), meridianTimeIn(hour(3), hour(5))) 
 
 ### INDI Rotator
 
+`RotatorManager` builds a `Rotator` device from the INDI rotator properties and controls it. The state is `angle` (a `MinMaxValueProperty` in degrees, from `ABS_ROTATOR_ANGLE`), `moving` (true while either the angle or the home vector is Busy), `reversed` and `hasBacklashCompensation`, plus the capability flags `canSync`, `canHome`, `canReverse` and `canAbort`, each set when the driver defines the vector and cleared when it deletes it.
+
+The commands are `moveTo(rotator, angle)` (absolute, degrees), `syncTo(rotator, angle)` (redefines the current angle without moving), `home(rotator)`, `reverse(rotator, enabled)` and `stop(rotator)`. All but `moveTo` are ignored when the capability is missing; the range and the wrapping of the angle are left to the driver.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { RotatorManager } from 'nebulosa/src/devices/indi/manager/rotator'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { RotatorSimulator } from 'nebulosa/src/devices/indi/simulator/rotator'
+
+// Waits until a condition is true, polling every 10 ms.
+async function waitUntil(condition: () => boolean, timeout: number = 5000) {
+	const start = performance.now()
+	while (!condition() && performance.now() - start < timeout) await Bun.sleep(10)
+}
+
+const handler = new IndiClientHandlerSet()
+const manager = new RotatorManager()
+handler.add(manager)
+
+using client = new ClientSimulator('rotator', handler)
+using simulator = new RotatorSimulator('Rotator Simulator', client)
+
+const rotator = manager.get(client, simulator.name)!
+manager.connect(rotator)
+await waitUntil(() => rotator.connected)
+console.log(rotator.type, rotator.angle.value, rotator.angle.min, rotator.angle.max, rotator.moving) // rotator 0 0 360 false
+console.log(rotator.canSync, rotator.canHome, rotator.canReverse, rotator.canAbort, rotator.hasBacklashCompensation) // true true true true false
+
+// Move to 45 degrees.
+manager.moveTo(rotator, 45)
+await waitUntil(() => rotator.moving)
+console.log(rotator.moving) // true
+await waitUntil(() => !rotator.moving)
+console.log(rotator.angle.value) // 45
+
+// Sync redefines the angle without moving.
+manager.syncTo(rotator, 100)
+await Bun.sleep(50)
+console.log(rotator.angle.value, rotator.moving) // 100 false
+
+// Home returns to 0 degrees by the shortest path.
+manager.home(rotator)
+await waitUntil(() => rotator.moving)
+await waitUntil(() => !rotator.moving)
+console.log(rotator.angle.value) // 0
+
+// Reverse is a flag of the driver.
+manager.reverse(rotator, true)
+await Bun.sleep(50)
+console.log(rotator.reversed) // true
+manager.reverse(rotator, false)
+
+// stop() aborts a rotation in progress.
+manager.moveTo(rotator, 180)
+await waitUntil(() => rotator.moving)
+await Bun.sleep(300)
+manager.stop(rotator)
+await waitUntil(() => !rotator.moving)
+console.log(rotator.moving, rotator.angle.value > 0 && rotator.angle.value < 180) // false true
+
+manager.disconnect(rotator)
+await waitUntil(() => !rotator.connected)
+console.log(rotator.connected) // false
+```
+
 ### INDI Rotator Simulator
+
+`RotatorSimulator(name, client, options?)` simulates a field rotator with an angle from 0 to 360 degrees (step 0.01), turning at `ROTATOR_MOVE_RATE` (90 degrees per second) in ticks of `TICK_INTERVAL_MS`. On connection it defines `ABS_ROTATOR_ANGLE` (the goto), `SYNC_ROTATOR_ANGLE`, `ROTATOR_HOME`, `ROTATOR_ABORT_MOTION`, `ROTATOR_REVERSE` and `ROTATOR_BACKLASH_TOGGLE` (both just flags: the reverse and backlash switches do not change the simulated motion). A target is clamped to the range and wrapped to [0, 360), and the rotator takes the shortest way round, so a move from 350 to 10 degrees crosses zero and does not travel 340 degrees. The angle vector is Busy during a move, and `ROTATOR_HOME` is Busy only when the move is a home. `moveTo`, `syncTo`, `home` and `stop(alert?)` are the direct form of the vectors (a stop is Alert by default, and Idle with `false`); a goto to the current angle only stops. `angle` and `isMoving` are read accessors.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { RotatorManager } from 'nebulosa/src/devices/indi/manager/rotator'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { ROTATOR_MOVE_RATE } from 'nebulosa/src/devices/indi/simulator/constants'
+import { RotatorSimulator } from 'nebulosa/src/devices/indi/simulator/rotator'
+
+// Waits until a condition is true, polling every 10 ms.
+async function waitUntil(condition: () => boolean, timeout: number = 5000) {
+	const start = performance.now()
+	while (!condition() && performance.now() - start < timeout) await Bun.sleep(10)
+}
+
+const handler = new IndiClientHandlerSet()
+const manager = new RotatorManager()
+handler.add(manager)
+
+using client = new ClientSimulator('rotator', handler)
+using simulator = new RotatorSimulator('Rotator Simulator', client)
+const rotator = manager.get(client, simulator.name)!
+manager.connect(rotator)
+await waitUntil(() => rotator.connected)
+console.log(ROTATOR_MOVE_RATE, simulator.angle, simulator.isMoving) // 90 0 false
+
+// Sync to 350 degrees, then go to 10: the shortest path crosses 0 and takes 20 / 90 s.
+simulator.syncTo(350)
+console.log(simulator.angle) // 350
+simulator.moveTo(10)
+await waitUntil(() => simulator.isMoving)
+await waitUntil(() => !simulator.isMoving)
+console.log(simulator.angle) // 10
+
+// A target above the range is clamped to 360, which is the same direction as 0.
+simulator.moveTo(400)
+await waitUntil(() => !simulator.isMoving)
+console.log(simulator.angle) // 0
+
+// Through the INDI vectors, the manager sees the same states.
+client.sendNumber({ device: simulator.name, name: 'ABS_ROTATOR_ANGLE', elements: { ANGLE: 90 } })
+await waitUntil(() => rotator.moving)
+await waitUntil(() => !rotator.moving)
+console.log(rotator.angle.value) // 90
+client.sendSwitch({ device: simulator.name, name: 'ROTATOR_HOME', elements: { HOME: true } })
+await waitUntil(() => !simulator.isMoving && simulator.angle === 0)
+console.log(simulator.angle) // 0
+
+// stop() aborts, leaving the angle at the point reached.
+simulator.moveTo(180)
+await waitUntil(() => simulator.isMoving)
+await Bun.sleep(200)
+simulator.stop()
+console.log(simulator.isMoving, simulator.angle > 0 && simulator.angle < 180) // false true
+```
 
 ### INDI Safety Monitor
 
+`SafetyMonitorManager(provider)` exposes the `SAFETY_STATUS` light vector as a `SafetyMonitor` device whose `safe` flag is true only when the state is Ok; Idle, Busy and Alert (and an unknown or deleted status) are all unsafe, so the flag fails closed. For a device that is already a primary device of another manager (a dome, a mount, a weather station) the manager creates a `'safetyMonitor'` proxy over the parent, once the parent has reported its status, and changes to `safe` are reported on the proxy and on the parent. A standalone device is created only when the driver announces the Auxiliary interface (or when the client is an Alpaca one), because a status without a parent and without that identity cannot be classified. The `provider` resolves the parent devices and must cover the managers of the primary devices without resolving this manager itself. Deleting the vector makes the device unsafe, and a closed client drops the managed devices and the state cached for them. The manager has no commands; it is a passive reader.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { SafetyMonitorManager } from 'nebulosa/src/devices/indi/manager/safetymonitor'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { SafetyMonitorSimulator } from 'nebulosa/src/devices/indi/simulator/safetymonitor'
+
+// Waits until a condition is true, polling every 10 ms.
+async function waitUntil(condition: () => boolean, timeout: number = 5000) {
+	const start = performance.now()
+	while (!condition() && performance.now() - start < timeout) await Bun.sleep(10)
+}
+
+const handler = new IndiClientHandlerSet()
+
+// There are no primary devices here, so the provider never finds a parent and the monitor is a standalone one.
+const manager = new SafetyMonitorManager({ get: () => undefined })
+handler.add(manager)
+handler.add({ lightVector: (_, v) => console.log('SAFETY_STATUS', v.state) })
+
+using client = new ClientSimulator('safety', handler)
+using simulator = new SafetyMonitorSimulator('Safety Monitor Simulator', client)
+
+const monitor = manager.get(client, simulator.name)!
+console.log(monitor.type, monitor.connected, monitor.safe) // safetyMonitor false false
+manager.connect(monitor)
+await waitUntil(() => monitor.connected)
+
+// The simulator starts with an unknown condition, which is not safe.
+console.log(monitor.connected, monitor.safe) // true false
+
+simulator.setSafe(true)
+await Bun.sleep(50)
+console.log(monitor.safe) // true
+
+simulator.setSafe(false)
+await Bun.sleep(50)
+console.log(monitor.safe) // false
+
+manager.disconnect(monitor)
+await waitUntil(() => !monitor.connected)
+console.log(monitor.connected, monitor.safe) // false false
+```
+
 ### INDI Safety Simulator
+
+`SafetyMonitorSimulator(name, client, options?)` simulates an Auxiliary INDI driver with a passive `SAFETY_STATUS` light vector (the element `SAFETY`) and the simulator-only `SIMULATOR_SAFETY` switch (OneOfMany) that selects the condition: `SAFE` (status Ok), `UNSAFE` (Alert), `WARNING` (Busy) and `UNKNOWN` (Idle, the initial condition). Only Ok means safe for the managers. The light is read-only for a client; to change the condition a test or an interactive session writes `SIMULATOR_SAFETY`, or calls `setSafe(safe)` for the safe and unsafe conditions. The condition is saved by `CONFIG` and the light is rebuilt from it when the properties are loaded (see INDI Client Simulator). A light vector is emitted only when the aggregate condition changes. The simulator has no numeric controls.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { SafetyMonitorManager } from 'nebulosa/src/devices/indi/manager/safetymonitor'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { SafetyMonitorSimulator } from 'nebulosa/src/devices/indi/simulator/safetymonitor'
+
+const handler = new IndiClientHandlerSet()
+const manager = new SafetyMonitorManager({ get: () => undefined })
+handler.add(manager)
+
+using client = new ClientSimulator('safety', handler)
+using simulator = new SafetyMonitorSimulator('Safety Monitor Simulator', client)
+const monitor = manager.get(client, simulator.name)!
+manager.connect(monitor)
+await Bun.sleep(100)
+console.log(monitor.connected, monitor.safe) // true false
+
+// The four conditions of the simulator switch, and the resulting flag.
+for (const condition of ['SAFE', 'WARNING', 'UNSAFE', 'UNKNOWN']) {
+	client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_SAFETY', elements: { [condition]: true } })
+	await Bun.sleep(20)
+	console.log(condition, monitor.safe) // SAFE true, WARNING false, UNSAFE false, UNKNOWN false
+}
+
+// setSafe() is the direct form of SAFE and UNSAFE.
+simulator.setSafe(true)
+await Bun.sleep(20)
+console.log(monitor.safe) // true
+simulator.setSafe(false)
+await Bun.sleep(20)
+console.log(monitor.safe) // false
+```
 
 ### INDI Thermometer
 
@@ -17331,7 +17815,113 @@ console.log(thermometers.get(client, simulator.name), focuser.hasThermometer) //
 
 ### INDI Weather
 
+`WeatherManager` builds a `Weather` device from the INDI Weather interface (the same model serves the ASCOM ObservingConditions of the Alpaca backend) and reflects `WEATHER_PARAMETERS` onto typed sensor fields. INDI does not standardize the names of the parameters, so `WEATHER_SENSORS` maps the thirteen sensors to their INDI element names (and the usual aliases of the OpenWeatherMap, weatherradio and Weather Meta drivers) and to their ASCOM names: `cloudCover` (%), `dewPoint` (°C), `humidity` (%), `pressure` (hPa, at the station altitude), `rainRate` (mm/h), `skyBrightness` (lx), `skyQuality` (mag/arcsec²), `skyTemperature` (°C), `starFWHM` (arcsec), `temperature` (°C), `windDirection` (radians in [0, 2π), converted from the degrees of the driver), `windGust` and `windSpeed` (m/s). A sensor the driver does not publish stays `undefined`; the temperature also sets `hasThermometer`. The minimum and maximum of a parameter are the alarm thresholds of the driver and not a display range, so a reading outside them is kept as it is. A definition published Busy only declares the parameters and stores no value, an Alert or Busy update stores the values but does not count as a new observation, and a definition that no longer declares a sensor removes it. Elements that are not mapped remain in the raw properties only.
+
+The driver controls are `setUpdatePeriod(weather, seconds)` (from `WEATHER_UPDATE`, whose value, minimum and maximum are in `updatePeriod`), `setAveragePeriod(weather, hours)` (`WEATHER_AVERAGE_PERIOD`, with 0 for an instantaneous reading) and `refresh(weather)` (the `WEATHER_REFRESH` switch); each returns whether the driver has the writable property and sends nothing when it does not. The freshness of each sensor is tracked per report, even when the value repeats: `updatedAt(weather, sensor)` and `lastUpdatedAt(weather)` give the epoch milliseconds of the report of a sensor or of the latest one, and `elapsedSince(weather, sensor)` and `lastElapsedSince(weather)` the milliseconds since then, measured with the monotonic clock so that a change of the system clock cannot make an age negative; all four are `undefined` before a report.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { WEATHER_SENSORS, WeatherManager } from 'nebulosa/src/devices/indi/manager/weather'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { WeatherSimulator } from 'nebulosa/src/devices/indi/simulator/weather'
+
+// Waits until a condition is true, polling every 10 ms.
+async function waitUntil(condition: () => boolean, timeout: number = 5000) {
+	const start = performance.now()
+	while (!condition() && performance.now() - start < timeout) await Bun.sleep(10)
+}
+
+console.log(WEATHER_SENSORS.map((e) => e.field).join(' ')) // cloudCover dewPoint humidity pressure rainRate skyBrightness skyQuality skyTemperature starFWHM temperature windDirection windGust windSpeed
+console.log(WEATHER_SENSORS.find((e) => e.field === 'windDirection')) // { field: 'windDirection', ascom: 'WindDirection', indi: 'WEATHER_WIND_DIRECTION', aliases: [], degrees: true, min: 0, max: 360, step: 0.1, format: '%.1f' }
+
+const handler = new IndiClientHandlerSet()
+const manager = new WeatherManager()
+handler.add(manager)
+
+using client = new ClientSimulator('weather', handler)
+using simulator = new WeatherSimulator('Weather Simulator', client)
+
+const weather = manager.get(client, simulator.name)!
+console.log(weather.type, weather.connected, manager.lastUpdatedAt(weather), manager.elapsedSince(weather, 'temperature')) // weather false undefined undefined
+manager.connect(weather)
+await waitUntil(() => weather.connected)
+
+// The readings of the simulator: degrees Celsius, percent, hPa, m/s. The wind direction is in radians.
+console.log(weather.temperature, weather.humidity, weather.dewPoint, weather.pressure, weather.cloudCover, weather.rainRate) // 16.8 52 6.9 1013.2 15 0
+console.log(weather.windSpeed, weather.windGust, weather.windDirection, weather.skyQuality, weather.skyTemperature, weather.starFWHM, weather.skyBrightness) // 2.6 4.2 2.356194490192345 21.3 -22.4 2.4 0.002
+console.log(weather.hasThermometer, weather.updatePeriod?.value, weather.updatePeriod?.min, weather.updatePeriod?.max) // true 60 1 3600
+
+// A reading changes, and its freshness is stamped.
+simulator.setParameter('WEATHER_TEMPERATURE', 10.5)
+await Bun.sleep(100)
+console.log(weather.temperature, manager.updatedAt(weather, 'temperature') !== undefined, manager.lastUpdatedAt(weather) !== undefined, manager.updatedAt(weather, 'windSpeed') !== undefined) // 10.5 true true true
+const age = manager.elapsedSince(weather, 'temperature')!
+console.log(age >= 100 && age < 1000, manager.lastElapsedSince(weather)! < 1000) // true true
+
+// Driver controls: each returns whether the driver has the property. This one has no averaging.
+console.log(manager.setUpdatePeriod(weather, 30)) // true
+await Bun.sleep(50)
+console.log(weather.updatePeriod?.value) // 30
+console.log(manager.setAveragePeriod(weather, 1)) // false
+console.log(manager.refresh(weather)) // true
+
+manager.disconnect(weather)
+await waitUntil(() => !weather.connected)
+console.log(weather.connected) // false
+```
+
 ### INDI Weather Simulator
+
+`WeatherSimulator(name, client, options?)` simulates a weather station deterministically: nothing is random. On connection it defines `WEATHER_PARAMETERS` (read-only, the public readings), `WEATHER_UPDATE` (the re-read period, `PERIOD` from `WEATHER_MIN_UPDATE_PERIOD` 1 s to `WEATHER_MAX_UPDATE_PERIOD` 3600 s, 60 s by default, stored but not scheduled: the simulator has no timer), the momentary `WEATHER_REFRESH`, `WEATHER_STATUS` (one light per sensor, all Ok) and the writable simulator-only `SIMULATOR_WEATHER`, which has the same elements as the parameters and is their source: writing a control copies it to the public readings at once. The initial readings are mutually consistent, 16.8 °C at 52 % of humidity with a dew point of 6.9 °C, 1013.2 hPa, 15 % of clouds, no rain, wind of 2.6 m/s with gusts of 4.2 m/s from 135°, a sky of 21.3 mag/arcsec² at -22.4 °C, a star FWHM of 2.4 arcsec and a sky brightness of 0.002 lx. The ranges advertised by the vectors are only plausible bounds of the simulator.
+
+`setParameter(name, value)` writes one control by its INDI element name (for example `WEATHER_TEMPERATURE`), clamped to the range of the element, and returns whether a value changed (an unknown name and a non-finite value change nothing). `refresh()` re-emits the readings even when none changed, as a driver does when asked to read its hardware again; the `WEATHER_REFRESH` switch does the same and then returns to Off. The controls are saved by `CONFIG` and the public readings are rebuilt from them on load (see INDI Client Simulator). After a disconnect the controls still accept values but the vectors are not published until the next connection.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { WeatherManager } from 'nebulosa/src/devices/indi/manager/weather'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { WEATHER_DEFAULT_UPDATE_PERIOD, WEATHER_MAX_UPDATE_PERIOD, WEATHER_MIN_UPDATE_PERIOD } from 'nebulosa/src/devices/indi/simulator/constants'
+import { WeatherSimulator } from 'nebulosa/src/devices/indi/simulator/weather'
+
+const handler = new IndiClientHandlerSet()
+const manager = new WeatherManager()
+handler.add(manager)
+
+using client = new ClientSimulator('weather', handler)
+using simulator = new WeatherSimulator('Weather Simulator', client)
+const weather = manager.get(client, simulator.name)!
+manager.connect(weather)
+await Bun.sleep(100)
+console.log(WEATHER_DEFAULT_UPDATE_PERIOD, WEATHER_MIN_UPDATE_PERIOD, WEATHER_MAX_UPDATE_PERIOD, weather.temperature, weather.humidity) // 60 1 3600 16.8 52
+
+// One sensor by its INDI element name. The return value tells if a value changed.
+console.log(simulator.setParameter('WEATHER_TEMPERATURE', 5), simulator.setParameter('WEATHER_TEMPERATURE', 5), simulator.setParameter('WEATHER_UNKNOWN', 5)) // true false false
+await Bun.sleep(50)
+console.log(weather.temperature) // 5
+
+// A value outside the range of the element is clamped.
+simulator.setParameter('WEATHER_HUMIDITY', 150)
+await Bun.sleep(50)
+console.log(weather.humidity) // 100
+
+// The same through the INDI control vector, with several sensors at once.
+client.sendNumber({ device: simulator.name, name: 'SIMULATOR_WEATHER', elements: { WEATHER_WIND_SPEED: 12, WEATHER_WIND_GUST: 20, WEATHER_RAIN_HOUR: 1.5 } })
+await Bun.sleep(50)
+console.log(weather.windSpeed, weather.windGust, weather.rainRate) // 12 20 1.5
+
+// The update period is written through its own vector and clamped.
+client.sendNumber({ device: simulator.name, name: 'WEATHER_UPDATE', elements: { PERIOD: 10000 } })
+await Bun.sleep(50)
+console.log(weather.updatePeriod?.value) // 3600
+
+// A refresh publishes again even without a change, which counts as a new report of each sensor.
+const before = manager.lastUpdatedAt(weather)!
+await Bun.sleep(20)
+simulator.refresh()
+await Bun.sleep(50)
+console.log(manager.lastUpdatedAt(weather)! > before) // true
+client.sendSwitch({ device: simulator.name, name: 'WEATHER_REFRESH', elements: { REFRESH: true } })
+```
 
 ## 🌐 External Services
 
