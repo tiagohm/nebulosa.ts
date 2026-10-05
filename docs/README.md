@@ -7811,7 +7811,138 @@ console.log(debayer(rgb), debayer({ ...gradient, metadata: { ...gradient.metadat
 
 ### Display Stretch Parameter Estimation
 
+`adf(image, options?)` estimates the parameters of an automatic screen stretch from the statistics of the image, following the Adaptive Display Function of the XISF specification, and returns the readonly tuple `[midtone, shadow, highlight]`, each in `0..1`, which are the arguments that `stf(image, midtone, shadow, highlight)` takes (see Screen Transfer Function for applying them); `adf` itself never changes the image. It takes the median and the normalized median absolute deviation of the selected channel (see Image Statistics, whose `HistogramOptions` `channel`, `area`, `transform` and `bits` it accepts), so they are histogram estimates at `bits` (16 by default). The two other options are `meanBackground` (0.25), the brightness the median should have after the stretch, and `clippingPoint` (-2.8), in units of the deviation from the median, where the shadows are clipped: `shadow = median + clippingPoint * mad`, clamped to `0..1`, and `highlight` stays at 1. For an image whose median is above 0.5 (inverted, or a bright frame) the roles are mirrored: the highlight is `median - clippingPoint * mad`, the shadow is 0 and the midtone balances the distance from the median to the highlight. The midtone is the midtones transfer function parameter that maps the shifted median `median - shadow` to `meanBackground`. A flat image (a deviation of about half a histogram bin or less) is not clipped, so the shadow is 0 and the highlight 1, and a median at the shadow gives a midtone of 0. A color image is analysed through its grayscale reduction unless a `channel` is given, so one triple serves the three channels (a linked stretch); an unlinked one is made by calling `adf` once per channel. The result depends on the median and the deviation being representative of the sky: a frame mostly covered by a nebula or by a gradient will be stretched for that, not for the sky.
+
+```ts
+import { adf, DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS } from 'nebulosa/src/imaging/processing/computation'
+import { stf } from 'nebulosa/src/imaging/processing/stf'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+let seed = 11
+const noise = () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return (seed / 0xffffffff - 0.5) * 0.01
+}
+
+const width = 64
+const height = 64
+const make = (sky: number, channels = 1): Image => {
+	const raw = new Float64Array(width * height * channels)
+	for (let i = 0; i < raw.length; i++) raw[i] = sky + 0.002 * (i % channels) + noise()
+	for (let i = 0; i < 30; i++) for (let c = 0; c < channels; c++) raw[((i * 131) % (width * height)) * channels + c] = 0.8
+	return { header: {}, raw, metadata: { width, height, channels, pixelCount: width * height, stride: width * channels, strideInBytes: width * channels * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+}
+
+// A linear frame with a faint sky of 0.02: the shadow is clipped below the sky and the midtone is small.
+const linear = make(0.02)
+const [midtone, shadow, highlight] = adf(linear)
+console.log(midtone, shadow, highlight) // 0.030151130889316067 0.00986671781462254 1
+
+// The parameters feed the screen transfer function; with a clipping point of 0 the shadow is the median, which after the stretch is about the target mean background (0.25).
+const stretched = stf(make(0.02), midtone, shadow, highlight)
+console.log(adf(stretched, { clippingPoint: 0 })[1], DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS.meanBackground, DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS.clippingPoint) // 0.25071335927367056 0.25 -2.8
+
+// A brighter target and a gentler clipping point.
+console.log(adf(linear, { meanBackground: 0.4 })) // [0.015306316825680247, 0.00986671781462254, 1]
+console.log(adf(linear, { clippingPoint: -1 })) // [0.010909229144399018, 0.016460208568928752, 1]
+
+// A color image: the grayscale reduction, or one triple per channel.
+const color = make(0.03, 3)
+console.log(adf(color)) // [0.021960445873236433, 0.024481519465304448, 1]
+console.log(adf(color, { channel: 'RED' }), adf(color, { channel: 'BLUE' })) // [0.0305717071754168, 0.019795018741361983, 1] [0.03077983331903655, 0.023554426299520027, 1]
+
+// A region of interest, and a lower bit depth (the sky quantized to 8 bits).
+console.log(adf(linear, { area: { left: 0, top: 0, right: 31, bottom: 31 } })) // [0.029344775884260453, 0.010172769079713583, 1]
+console.log(adf(linear, { bits: 8 })) // [0.031201350584742656, 0.009502325774924833, 1]
+
+// An inverted (bright) frame mirrors the roles of the shadow and the highlight.
+console.log(adf(make(0.7))) // [0.9688568108727716, 0, 0.7107156084472682]
+
+// A flat image is not clipped.
+const flat = make(0.3)
+flat.raw.fill(0.3)
+console.log(adf(flat)) // [0.5624999999999999, 0, 1]
+```
+
 ### Drizzle Integration
+
+Drizzle reconstructs a frame onto a finer output grid by depositing each input pixel as a shrunken square drop, whose area overlapping every output cell is the weight of its contribution, instead of interpolating the frame; this avoids the correlated noise of resampling and, with a dithered stack, recovers resolution (the algorithm of Fruchter and Hook, arXiv astro-ph/9808087). The module `imaging/processing/drizzle` has the primitives, which `stackFrames` and `LiveStacker` use for their `'drizzle'` and `'cfaDrizzle'` reconstruction (see Image Stacking and Live Stacking, which take `drizzle: { scale, pixfrac, maxMemoryBytes }`). Coordinates are zero-based pixel centers, x to the right and y down. `createDrizzleAccumulator(width, height, channels, cfa, scale, countCoverage, exposeMaps, sampleBytes, maxMemoryBytes)` allocates the fixed output grid (the reference size times `scale`, rounded, so the effective `scaleX` and `scaleY` can differ slightly from `scale`) with `sum`, the Float64 sums of the deposited samples, and `weights`, the dimensionless denominators; the mean of a pixel is `sum / weights`. `channels` is 1 or 3; `cfa` routes the photosites of a raw mosaic to RGB without interpolation and keeps one denominator for each color; `countCoverage` adds the per-frame `coverage` counts. The allocation is checked against `maxMemoryBytes` (the peak of `drizzleMemoryBytes(pixels, channels, weightChannels, countCoverage, exposeMaps, sampleBytes)`, in bytes, which includes one result of `sampleBytes` 4 or 8) and a `RangeError` is thrown before anything is allocated.
+
+`prepareDrizzleFootprint(transform, scaleX, scaleY, pixfrac, width, height)` composes the affine transform from the input to the reference (in the sense of `AffineTransform`, `x' = m00 x + m01 y + tx`) with the output scale and returns the `DrizzleFootprint` of a drop of side `pixfrac` input pixels (in `(0, 1]`: 1 covers the whole pixel, a smaller value shrinks the drop and sharpens the result at the cost of needing more dithered frames to fill the grid), or `undefined` when the drop collapses (a singular transform, or a drop much smaller than the coordinates that it is added to, where it would be a point). `drizzleDropArea(footprint, dx, dy, polygon, clipped)` is the area (in output pixels) of the intersection of the drop, centered at `(dx, dy)` from an output cell center, with that cell, bounded by `0..1`, where `polygon` and `clipped` are Float64Array scratch buffers of 16 values that it overwrites; `drizzleOverlap(transform, width, height, referenceWidth, referenceHeight, polygon, clipped)` is the fraction `0..1` of the reference area that the whole transformed frame covers, which a stacker uses to reject a frame that barely overlaps. `depositDrizzle(state, image, footprint, scales, offsets, weight, generation, rejectionMask?)` adds a frame to the accumulator: a sample `v` is deposited as `v * scale + offset` per channel (the photometric normalization, with `scales` and `offsets` of one entry per channel), each drop adds `weight * area / footprint.area` to the cells that it covers, `generation` (1 for the first frame, at most 2^32 - 1, a `RangeError` otherwise) stamps the coverage so that each cell is counted once per frame, and a nonzero byte of the source-grid `rejectionMask` excludes that sample entirely. `drizzleNormalization(state, reference, target, inverse, mode, colorMode, referenceMask?, targetMask?)` fits the scales and offsets (`NormalizedParameters`) of a target against the reference from a bounded grid of the original, not interpolated, samples (so that the noise reduction of interpolation is not mistaken for a gain): `inverse` maps the reference to the target, `mode` is `'none'` (scale 1, offset 0) or a global estimator of Global Image Normalization, and, when a mask is given, the result is `undefined` if a plane keeps less than 32 usable pairs (or fewer than all the finite pairs that exist, when the field is smaller); without masks and with no overlapping pair the identity is returned.
+
+```ts
+import { createDrizzleAccumulator, depositDrizzle, drizzleDropArea, drizzleMemoryBytes, drizzleNormalization, drizzleOverlap, prepareDrizzleFootprint } from 'nebulosa/src/imaging/processing/drizzle'
+import type { AffineTransform } from 'nebulosa/src/astrometry/matching/star.matching'
+import type { CfaPattern, Image } from 'nebulosa/src/imaging/model/types'
+
+const identity: AffineTransform = { m00: 1, m01: 0, tx: 0, m10: 0, m11: 1, ty: 0 }
+
+const make = (width: number, height: number, channels: number, value: (x: number, y: number, c: number) => number, bayer?: CfaPattern): Image => {
+	const raw = new Float64Array(width * height * channels)
+	for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) for (let c = 0; c < channels; c++) raw[(y * width + x) * channels + c] = value(x, y, c)
+	return { header: {}, raw, metadata: { width, height, channels, pixelCount: width * height, stride: width * channels, strideInBytes: width * channels * 8, pixelSizeInBytes: 8, bitpix: -64, bayer } }
+}
+
+// The memory of a 4x4 mono frame at 2x with coverage maps (bytes), and a grid that does not fit the budget.
+console.log(drizzleMemoryBytes(8 * 8, 1, 1, true, false, 8)) // 789568
+try {
+	createDrizzleAccumulator(100000, 100000, 3, false, 2, false, false, 8, 2 ** 30)
+} catch (e) {
+	console.log((e as Error).message) // Drizzle grid exceeds the numeric buffer memory budget or safe allocation length
+}
+
+// The area of a drop over an output cell: full, a quarter (shifted by half a pixel on each axis), and none.
+const polygon = new Float64Array(16)
+const clipped = new Float64Array(16)
+const whole = prepareDrizzleFootprint(identity, 1, 1, 1, 4, 4)!
+console.log(whole.area, whole.axisAligned, drizzleDropArea(whole, 0, 0, polygon, clipped), drizzleDropArea(whole, 0.5, 0.5, polygon, clipped), drizzleDropArea(whole, 1, 0, polygon, clipped)) // 1 true 1 0.25 0
+
+// A rotated drop is clipped as a polygon: a 45 degree rotation keeps the area of the drop (1) but only 0.83 of it falls in the cell.
+const turned = prepareDrizzleFootprint({ m00: Math.SQRT1_2, m01: -Math.SQRT1_2, tx: 0, m10: Math.SQRT1_2, m11: Math.SQRT1_2, ty: 0 }, 1, 1, 1, 4, 4)!
+console.log(turned.axisAligned, turned.area, drizzleDropArea(turned, 0, 0, polygon, clipped)) // false 1.0000000000000002 0.8284271247461902
+
+// A smaller pixfrac shrinks the drop, and a collapsed transform has no footprint.
+console.log(prepareDrizzleFootprint(identity, 2, 2, 0.5, 4, 4)?.area, prepareDrizzleFootprint({ ...identity, m00: 0, m11: 0 }, 1, 1, 1, 4, 4)) // 1 undefined
+
+// The overlap of a frame shifted by 2 pixels (of 4) over the reference, and of one that is outside it.
+console.log(drizzleOverlap({ ...identity, tx: 2 }, 4, 4, 4, 4, polygon, clipped), drizzleOverlap({ ...identity, tx: 20 }, 4, 4, 4, 4, polygon, clipped)) // 0.5 0
+
+// Two frames of a 4x4 mono image at 2x: a point source of 1 on a sky of 0.1, the second frame dithered by half a pixel.
+const frame = make(4, 4, 1, (x, y) => (x === 1 && y === 1 ? 1 : 0.1))
+const state = createDrizzleAccumulator(4, 4, 1, false, 2, true, false, 8, 2 ** 30)
+console.log(state.width, state.height, state.scaleX, state.weightChannels, state.sum.length) // 8 8 2 1 64
+depositDrizzle(state, frame, prepareDrizzleFootprint(identity, 2, 2, 1, 4, 4)!, [1], [0], 1, 1)
+depositDrizzle(state, frame, prepareDrizzleFootprint({ ...identity, tx: 0.5 }, 2, 2, 1, 4, 4)!, [1], [0], 1, 2)
+const mean = (x: number, y: number) => state.sum[y * state.width + x] / state.weights[y * state.width + x]
+console.log(mean(2, 2), mean(5, 2), mean(7, 7), state.coverage![2 * 8 + 2], state.coverage![2 * 8 + 7], state.weights[2 * 8 + 2]) // 0.55 0.1 0.1 2 2 0.5
+
+// A rejected pixel deposits neither flux nor weight, and a scale and offset are applied to each sample (here 2x + 0.5).
+const rejected = createDrizzleAccumulator(4, 4, 1, false, 1, false, false, 8, 2 ** 30)
+const mask = new Uint8Array(16)
+mask[5] = 1
+depositDrizzle(rejected, frame, prepareDrizzleFootprint(identity, 1, 1, 1, 4, 4)!, [2], [0.5], 1, 1, mask)
+console.log(rejected.weights[5], rejected.sum[0] / rejected.weights[0]) // 0 0.7
+
+// A color mosaic: each photosite goes to its own color, without interpolation (RGGB, a flat 0.4): output pixel (3, 3) is the blue photosite (1, 1), with 0.4 * 0.25 of weight.
+const mosaic = make(4, 4, 1, () => 0.4, 'RGGB')
+const color = createDrizzleAccumulator(4, 4, 3, true, 2, false, false, 8, 2 ** 30)
+depositDrizzle(color, mosaic, prepareDrizzleFootprint(identity, 2, 2, 1, 4, 4)!, [1, 1, 1], [0, 0, 0], 1, 1)
+console.log(color.weightChannels, color.weights.length, color.sum[(3 * 8 + 3) * 3], color.sum[(3 * 8 + 3) * 3 + 1], color.sum[(3 * 8 + 3) * 3 + 2]) // 3 192 0 0 0.1
+
+// The photometric fit of a frame with half the signal plus an offset: the gain-only estimator (no offset) gives 1.87, not 2; none is the identity; with no overlapping pair and no mask the identity is returned.
+const reference = make(64, 64, 1, (x, y) => 0.2 + 0.002 * x + 0.001 * y)
+const faint = make(64, 64, 1, (x, y) => 0.5 * (0.2 + 0.002 * x + 0.001 * y) + 0.01)
+const fit = drizzleNormalization(createDrizzleAccumulator(64, 64, 1, false, 1, false, false, 8, 2 ** 30), reference, faint, identity, 'scale', 'per-channel')
+console.log(fit?.scales, fit?.offsets) // [1.8728139904610492] [0]
+console.log(drizzleNormalization(state, reference, faint, identity, 'none', 'per-channel')) // { scales: [1], offsets: [0] }
+console.log(drizzleNormalization(createDrizzleAccumulator(64, 64, 1, false, 1, false, false, 8, 2 ** 30), reference, faint, { ...identity, tx: 1000 }, 'scale', 'per-channel')) // { scales: [1], offsets: [0] }
+
+try {
+	depositDrizzle(state, frame, prepareDrizzleFootprint(identity, 2, 2, 1, 4, 4)!, [1], [0], 1, 2 ** 32)
+} catch (e) {
+	console.log((e as Error).message) // Drizzle frame coverage exceeds Uint32 capacity
+}
+```
 
 ### Elliptical Moffat Fitting
 
@@ -8430,7 +8561,175 @@ console.log(
 
 ### Image Stacking
 
+`stackFrames(frames, options?)` registers a list of frames to a reference, normalizes and weights them, and combines the aligned pixels into one image, with a diagnostic for each frame; the same options drive `LiveStacker` (see Live Stacking) and the `drizzle` reconstruction (see Drizzle Integration). Each `StackingFrame` has the `image` (see Image Model and Types, a normalized `Image`; a raw CFA mosaic needs the `'cfaDrizzle'` reconstruction), its detected `stars` (`DetectedStar`, in zero-based pixel centers, x right and y down, from Star Detection) and optionally an `id`, a `weight` and the streak masks of Streak-Aware Stacking. The registration is a star match (see Star List Registration) that fits an identity, similarity or affine model to the stars of a frame against those of the reference, and then warps the frame onto the reference grid (see Image Warp) with the `interpolationMode` (`'bilinear'` by default). The result is a `StackResult`: the `finalImage` (undefined when no frame is usable; a clone of the reference header, rewritten for the output size, and the storage class of the reference in resampling), the `acceptedFrames`, `rejectedFrames` and `referenceFrameIndex` (-1 for an empty list), the `diagnostics` (a `FrameAcceptanceResult` per input frame, in order), the `statistics` of the combination (the effective methods and modes, `acceptedWeightSum`, `liveExact`), the `effectiveCropBounds` (an inclusive rectangle on the reference grid), and, with `keepPerPixelStatistics` (the default), the `coverageMap` (the number of frames that contribute to each pixel), the `validityMask` and, for drizzle, the `weightMap`. A frame that is not accepted has a `reason`: `'invalid-image-shape'`, `'channel-mismatch'`, `'too-few-stars'` (fewer than `minAcceptedStars`, 6), `'reference-has-no-stars'`, `'match-failed'`, `'invalid-transform'`, `'transform-error-too-high'` (a registration RMS above `maxAcceptedTransformError`, 2.5 px), `'transform-out-of-bounds'` (outside `maxTranslation`, `maxRotation`, `minScale`, `maxScale` or `maxShear`), `'no-overlap'`, `'insufficient-overlap'` (below `minOverlapFraction`, 0.1), `'normalization-failed'` and `'streak-contamination-too-high'`; an accepted frame has the fitted `transform` (`model`, translation in pixels, scale, `rotation` in radians, `shear`, `mirrored`, `inlierCount` and `rmsError` in pixels), its `overlapFraction` with the reference, its `quality` (see Subframe Selector) and its `normalization` (`scales`, `offsets` and the `weight`).
+
+The reference is the first accepted frame (`batchReference.mode` `'first-accepted'`), the one with the best quality score (`'best-quality'`) or the frame at `batchReference.index` (`'index'`); the other frames are registered to it. Before the combination each frame is normalized to the reference with `normalizationMode`: `'none'`, a global estimator (`'scale'`, `'background-scale'`, the default, or `'percentile'`; see Global Image Normalization) or `'local'` (see Local Image Normalization, with its `localNormalization` options), with `colorHandlingMode` (`'per-channel'`, or a shared `'luminance'` fit). The weight of a frame for `'weighted-average'` comes from `weightingMode`: `'none'` (1, or the `weight` of the frame), `'snr'`, `'inverse-hfd'`, `'stars'` or `'quality'`, all from the quality metrics of the frame, with the supplied `weight` multiplying it. The `combinationMethod` is `'sum'`, `'average'` (the default), `'weighted-average'`, which can be accumulated frame by frame and are therefore also what live stacking and drizzle support, and the methods that keep every sample of a pixel to reject outliers: `'median'`, `'sigma-clip'` (the `sigmaClip` options `sigmaLower` and `sigmaUpper` of 3, `maxIterations` 3, and the `centerMethod` `'median'` and `dispersionMethod` `'mad'`, see Pixel Sigma Clipping and Background Levels), `'min-max-average'` (`minMaxRejection.low` and `.high`, 1 each, samples discarded at each end), `'winsorized-mean'` (`winsorization` `lower` 0.1 and `upper` 0.9 as fractions of the sorted samples, which are clamped to those percentiles instead of removed) and `'percentile-clip-average'` (`percentileClip`, the same fractions, with the samples outside rejected). These need memory for the whole aligned stack (the frames, in the sample precision of `samplePrecision`, `'auto'` for that of the reference). The `sum` is not normalized to 0..1 and a mean of normalized frames can exceed 1. `cropMode` is `'union'` (the whole reference grid, with the pixels that no frame covers marked invalid) or `'intersection'` (the rectangle that every frame covers, which crops the image and shifts the header), and `minimumCoverage` is the minimum number of frames that a pixel needs to be valid. `allowStarlessReference` (true) accepts a reference without stars, which then cannot register any other frame. The frames are registered and warped one after the other and the combination runs once at the end, so a long stack of large frames is a long synchronous task.
+
+```ts
+import { stackFrames } from 'nebulosa/src/imaging/processing/stacker'
+import type { StackingFrame } from 'nebulosa/src/imaging/processing/stacker'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+import type { DetectedStar } from 'nebulosa/src/imaging/stars/detector'
+
+// A field of 14 Gaussian stars (sigma 1.5 pixels, so an HFD of about 3.5) on a sky of 0.1 with a small deterministic noise.
+let seed = 3
+const random = () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return seed / 0xffffffff
+}
+
+const width = 96
+const height = 96
+const layout = Array.from({ length: 14 }, () => ({ x: 12 + random() * 72, y: 12 + random() * 72, flux: 0.3 + random() * 0.6 }))
+
+// A frame of the field shifted by (dx, dy) pixels; the detections are the exact star positions.
+const frame = (dx: number, dy: number, noise = 0.004, hfd = 3.5, sky = 0.1): StackingFrame => {
+	const raw = new Float64Array(width * height)
+	for (let i = 0; i < raw.length; i++) raw[i] = sky + (random() - 0.5) * noise
+	const stars: DetectedStar[] = []
+	for (const star of layout) {
+		const cx = star.x + dx
+		const cy = star.y + dy
+		for (let y = Math.max(0, Math.floor(cy) - 6); y <= Math.min(height - 1, Math.floor(cy) + 6); y++) for (let x = Math.max(0, Math.floor(cx) - 6); x <= Math.min(width - 1, Math.floor(cx) + 6); x++) raw[y * width + x] += star.flux * Math.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * 1.5 ** 2))
+		stars.push({ x: cx, y: cy, hfd, fwhm: hfd, snr: 50, flux: star.flux * 14 })
+	}
+	const image: Image = { header: {}, raw, metadata: { width, height, channels: 1, pixelCount: width * height, stride: width, strideInBytes: width * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+	return { image, stars, id: `${dx},${dy}` }
+}
+
+// Five frames dithered by whole pixels, the third with a cosmic ray of 5 on the sky pixel that maps to the output pixel (50, 50).
+const frames = [frame(0, 0), frame(3, -2), frame(-4, 5), frame(2, 2), frame(-1, -3)]
+frames[2].image.raw[55 * width + 46] = 5
+const at = (image: Image | undefined, x = 50, y = 50) => image?.raw[y * width + x].toFixed(4)
+
+// The default stack: the first frame is the reference and the others are registered to it by translations of the dithers (negated).
+const stack = stackFrames(frames)
+console.log(stack.acceptedFrames, stack.rejectedFrames, stack.referenceFrameIndex, stack.finalImage?.metadata.width, stack.statistics.method, stack.statistics.normalizationMode, stack.statistics.acceptedWeightSum) // 5 0 0 96 average background-scale 5
+console.log(stack.diagnostics.map((d) => [d.accepted, d.transform?.model, d.transform?.translationX, d.transform?.translationY, d.transform?.inlierCount, d.overlapFraction.toFixed(3)])) // [[true, "identity", 0, 0, 0, "1.000"], [true, "similarity", -3, 2, 14, "0.939"], [true, "similarity", 4, -5, 14, "0.908"], [true, "similarity", -2, -2, 14, "0.959"], [true, "similarity", 1, 3, 14, "0.959"]]
+console.log(stack.diagnostics[1].transform?.rmsError, stack.diagnostics[1].normalization?.scales, stack.diagnostics[1].normalization?.offsets, stack.diagnostics[1].quality.starCount, stack.diagnostics[1].quality.medianHFD) // 9.4950266995548e-16 [0.9904749206507728] [0.0009339218422435708] 14 3.5
+console.log(stack.effectiveCropBounds, Array.from(new Set(stack.coverageMap!)), stack.validityMask?.length) // { left: 0, top: 0, right: 95, bottom: 95, width: 96, height: 96 } [2, 3, 4, 5] 9216
+
+// The combination methods at the pixel with the cosmic ray: the sum and the means carry it, the median and the clipping methods remove it, and the winsorized mean, which only clamps to percentiles of five samples, keeps most of it.
+for (const combinationMethod of ['sum', 'average', 'weighted-average', 'median', 'sigma-clip', 'min-max-average', 'winsorized-mean', 'percentile-clip-average'] as const) {
+	const result = stackFrames(frames, { combinationMethod })
+	console.log(combinationMethod, at(result.finalImage), result.statistics.liveExact) // sum 5.3604 true / average 1.0721 true / weighted-average 1.0721 true / median 0.0997 false / sigma-clip 0.0998 false / min-max-average 0.0999 false / winsorized-mean 0.6832 false / percentile-clip-average 0.0999 false
+}
+
+// The options of each rejection method: a one-sided clip, two samples rejected at the high end, and narrower percentiles (the winsorized mean still carries part of the ray).
+console.log(
+	at(stackFrames(frames, { combinationMethod: 'sigma-clip', sigmaClip: { sigmaLower: 3, sigmaUpper: 0.5, maxIterations: 5, centerMethod: 'mean', dispersionMethod: 'std' } }).finalImage),
+	at(stackFrames(frames, { combinationMethod: 'min-max-average', minMaxRejection: { low: 0, high: 2 } }).finalImage),
+	at(stackFrames(frames, { combinationMethod: 'winsorized-mean', winsorization: { lower: 0.2, upper: 0.8 } }).finalImage),
+	at(stackFrames(frames, { combinationMethod: 'percentile-clip-average', percentileClip: { lower: 0.2, upper: 0.8 } }).finalImage),
+) // 0.0992 0.0995 0.2944 0.0999
+
+// Weights with a blurrier fourth frame (the weights come from the detections and the image, so the SNR and star count modes, which read the supplied detections, are the same here), and an explicit weight.
+const uneven = [frame(0, 0), frame(3, -2), frame(-4, 5), frame(2, 2, 0.05, 6), frame(-1, -3)]
+for (const weightingMode of ['snr', 'inverse-hfd', 'stars', 'quality'] as const)
+	console.log(
+		weightingMode,
+		stackFrames(uneven, { combinationMethod: 'weighted-average', weightingMode }).diagnostics.map((d) => d.normalization?.weight.toFixed(3)),
+	) // snr [4.000 x5] / inverse-hfd [0.714, 0.714, 0.714, 0.417, 0.714] / stars [2.333 x5] / quality [5.345, 5.345, 5.345, 3.118, 5.345]
+console.log(
+	stackFrames([frames[0], { ...frames[1], weight: 3 }], { combinationMethod: 'weighted-average' }).diagnostics.map((d) => d.normalization?.weight),
+	stackFrames([frames[0], { ...frames[1], weight: 3 }], { combinationMethod: 'weighted-average' }).statistics.acceptedWeightSum,
+) // [1, 3] 4
+
+// The reference frame, and the crop: the intersection of the dithered frames is smaller than the union.
+console.log(stackFrames(frames, { batchReference: { mode: 'index', index: 2 } }).referenceFrameIndex, stackFrames(frames, { batchReference: { mode: 'best-quality' } }).referenceFrameIndex, stackFrames(uneven, { batchReference: { mode: 'best-quality' } }).referenceFrameIndex) // 2 4 1
+const intersection = stackFrames(frames, { cropMode: 'intersection' })
+console.log(intersection.finalImage?.metadata.width, intersection.finalImage?.metadata.height, intersection.effectiveCropBounds, intersection.coverageMap?.length) // 89 88 { left: 4, top: 3, right: 92, bottom: 90, width: 89, height: 88 } 9216
+console.log(
+	stackFrames(frames, { minimumCoverage: 5 }).validityMask?.reduce((a, b) => a + b, 0),
+	stack.validityMask?.reduce((a, b) => a + b, 0),
+) // 7832 9216
+
+// The normalization modes, per frame offset, when a frame has another sky level (+0.05) and a gain of 1.5.
+const lit = frame(3, -2)
+for (let i = 0; i < lit.image.raw.length; i++) lit.image.raw[i] = lit.image.raw[i] * 1.5 + 0.05
+for (const normalizationMode of ['none', 'scale', 'background-scale', 'percentile', 'local'] as const) {
+	const result = stackFrames([frames[0], lit, frames[3]], { normalizationMode })
+	console.log(normalizationMode, result.diagnostics[1].normalization?.scales[0].toFixed(3), result.diagnostics[1].normalization?.offsets[0].toFixed(4), at(result.finalImage, 5, 5)) // none 1.000 0.0000 0.1317 / scale 0.500 0.0000 0.0988 / background-scale 0.665 -0.0330 0.0987 / percentile 0.641 -0.0282 0.0987 / local 0.665 -0.0330 0.0987
+}
+
+// Frames that are not accepted: too few stars, a frame that does not overlap, a frame whose metadata does not match its buffer, and an empty list.
+const sparse = { ...frames[1], stars: frames[1].stars.slice(0, 3) }
+const mismatched = { ...frames[1], image: { ...frames[1].image, metadata: { ...frames[1].image.metadata, channels: 3 } } }
+console.log(stackFrames([frames[0], sparse, frame(200, 0), mismatched]).diagnostics.map((d) => d.reason)) // [undefined, "too-few-stars", "no-overlap", "invalid-image-shape"]
+console.log(stackFrames([frames[0], sparse], { minAcceptedStars: 3, minAcceptedInliers: 3 }).diagnostics[1].reason, stackFrames([frames[0], frames[1]], { maxTranslation: 2 }).diagnostics[1].reason, stackFrames([frames[0], frames[1]], { minOverlapFraction: 0.99 }).diagnostics[1].reason) // match-failed transform-out-of-bounds insufficient-overlap
+const empty = stackFrames([])
+console.log(empty.finalImage, empty.acceptedFrames, empty.referenceFrameIndex) // undefined 0 -1
+
+// Sample precision, without the per-pixel maps: the resampled stack keeps the storage class of the reference, and drizzle follows the option.
+const lean = stackFrames(frames, { samplePrecision: 32, keepPerPixelStatistics: false })
+console.log(lean.finalImage?.raw.constructor.name, lean.coverageMap, lean.weightMap, stackFrames(frames, { reconstructionMode: 'drizzle', samplePrecision: 32 }).finalImage?.raw.constructor.name) // Float64Array undefined undefined Float32Array
+
+// The drizzle reconstruction at 2x with 70 percent drops: the output grid, its parameters and the denominator map.
+const drizzled = stackFrames(frames, { reconstructionMode: 'drizzle', drizzle: { scale: 2, pixfrac: 0.7 } })
+console.log(drizzled.finalImage?.metadata.width, drizzled.statistics.drizzle, drizzled.weightMap?.channels, drizzled.weightMap?.raw.length) // 192 { scale: 2, pixfrac: 0.7, outputWidth: 192, outputHeight: 192 } 1 36864
+
+try {
+	stackFrames(frames, { reconstructionMode: 'drizzle', combinationMethod: 'median' })
+} catch (e) {
+	console.log((e as Error).message) // Drizzle requires sum, average or weighted-average and global normalization
+}
+```
+
 ### Image Statistics
+
+The statistics of `imaging/processing/computation` read the normalized `[0, 1]` samples of an `Image` through a histogram of `2^bits` bins (16 bits by default, a `RangeError` for a depth outside 1..24), so every value is quantized to a bin and the median, the mean and the dispersions are histogram estimates, not exact order statistics of the floating-point samples (for the sample-exact quantiles see Descriptive Statistics). All the functions share the `HistogramOptions`: the `channel` (`'RED'`, `'GREEN'`, `'BLUE'`, a grayscale weighting or `'GRAY'`, which is the default luminance reduction of a color image), an `area` (an inclusive rectangle of pixels, `left`, `top`, `right`, `bottom`, with the omitted edges and the out-of-range ones clamped to the image), a `transform` applied to each sample before binning (`(value, flatIndex) => value`), the `bits`, which can also be a caller-owned bin buffer (it is cleared and reused), and a `sigmaClip` mask of one byte per pixel whose nonzero entries are left out (see Pixel Sigma Clipping and Background Levels; a mask of another length is a `RangeError`). `histogram(image, options?)` returns the `Histogram` (with `mean`, `median`, `standardDeviation`, `mode`, `count` and `quantile` as in Histogram Analysis, all normalized to 0..1, except `mode`, as `[value, count]`, and `count`, as `[total samples, samples of the fullest bin]`), `median(image, options?)` its median, and `medianAbsoluteDeviation(image, center, normalized?, options?)` the median of the absolute deviations from `center`, which is multiplied by 1.4826 (the Gaussian consistency factor) when `normalized` is true so that it is comparable to a standard deviation. The display auto-stretch `adf` is built on these (see Display Stretch Parameter Estimation), and the clipped estimators of the sky on top of them. A quantity that is interpolated within a bin, like the median, is exact only to the width of a bin (`2^-bits`).
+
+```ts
+import { histogram, median, medianAbsoluteDeviation } from 'nebulosa/src/imaging/processing/computation'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A 64x64 RGB sky of 0.2 (red), 0.25 (green) and 0.3 (blue) with a small deterministic noise and 40 bright stars of 0.9.
+let seed = 5
+const noise = () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return (seed / 0xffffffff - 0.5) * 0.02
+}
+
+const width = 64
+const height = 64
+const raw = new Float64Array(width * height * 3)
+for (let i = 0; i < width * height; i++) for (let c = 0; c < 3; c++) raw[i * 3 + c] = 0.2 + 0.05 * c + noise()
+for (let i = 0; i < 40; i++) for (let c = 0; c < 3; c++) raw[((i * 97) % (width * height)) * 3 + c] = 0.9
+const image: Image = { header: {}, raw, metadata: { width, height, channels: 3, pixelCount: width * height, stride: width * 3, strideInBytes: width * 24, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+
+// The histogram of the grayscale reduction: the counts as [total, fullest bin], the normalized mean, median and deviation, and the mode as [value, count].
+const gray = histogram(image)
+console.log(gray.count, gray.mean, gray.median, gray.standardDeviation, gray.mode) // [4096, 40] 0.24934514357785917 0.24308893466595458 0.06475386004659921 [0.8999923704890517, 40]
+console.log(gray.quantile(0.25), gray.quantile(0.75)) // 0.2394816292275665 0.2465857938506142
+
+// The median of one channel, and at 8 bits (the sky is quantized to a bin of 1/255).
+console.log(median(image, { channel: 'RED' }), median(image, { channel: 'BLUE' }), median(image, { channel: 'GREEN', bits: 8 })) // 0.19996100472181957 0.3001907377737087 0.2500270048139016
+
+// A region of interest (inclusive) and a transform applied before binning (here, a square root).
+console.log(median(image, { channel: 'GREEN', area: { left: 0, top: 0, right: 31, bottom: 31 } }), median(image, { channel: 'GREEN', transform: (value) => Math.sqrt(value) })) // 0.24972915236133364 0.4999872841484194
+
+// The median absolute deviation about the median, raw and normalized to a standard deviation; a reusable bin buffer.
+const m = median(image, { channel: 'RED' })
+console.log(medianAbsoluteDeviation(image, m, false, { channel: 'RED' }), medianAbsoluteDeviation(image, m, true, { channel: 'RED' })) // 0.005002779321845469 0.0074171317212620436
+const bins = new Int32Array(2 ** 12)
+console.log(
+	median(image, { channel: 'RED', bits: bins }),
+	bins.reduce((a, b) => a + b, 0),
+) // 0.19994526546250682 4096
+
+// A mask of rejected pixels excludes them from the statistics (here the first row).
+const mask = new Uint8Array(width * height)
+mask.fill(1, 0, width)
+console.log(histogram(image, { channel: 'RED', sigmaClip: mask }).count, histogram(image, { channel: 'RED' }).count) // [4032, 39] [4096, 40]
+
+for (const run of [() => histogram(image, { bits: 30 }), () => histogram(image, { sigmaClip: new Uint8Array(3) })]) {
+	try {
+		run()
+	} catch (e) {
+		console.log((e as Error).message) // histogram bits must be between 1 and 24 / sigmaClip must have length 4096
+	}
+}
+```
 
 ### Image Warp
 
@@ -8502,6 +8801,98 @@ console.log(warpImage(source, reference, half).finitePairCounts) // undefined
 ```
 
 ### Live Stacking
+
+`LiveStacker` builds a stack one frame at a time, as they arrive from the camera, and can return the current result at any moment, with a memory that depends on the frame size and not on the number of frames. It takes the same `StackingOptions` as `stackFrames` (see Image Stacking for the registration, normalization, weighting and the diagnostics) but it only supports the combinations that can be accumulated exactly: the `'sum'`, `'average'` and `'weighted-average'` methods, which keep a sum and a weight per pixel, with the resampling or the drizzle reconstruction (see Drizzle Integration). A frame added with another method is rejected with `'combination-method-not-supported-in-live-mode'`, and `isLiveCombinationMethodSupported(method)` tells whether a method qualifies. `add(frame)` registers the `StackingFrame` to the reference, normalizes it, accumulates it and returns its `FrameAcceptanceResult` (accepted or not, with the `reason`, the fitted `transform`, the `overlapFraction`, the `quality` and the `normalization`; the pixels of the frame are not retained). The first frame that is accepted is the reference (a frame with fewer stars than `minAcceptedStars` is refused when `allowStarlessReference` is false); there is no choice among frames, so `batchReference` has no effect and `cropMode` applies when a snapshot is taken. `snapshot()` returns the current `StackResult` (`undefined` before the first accepted frame) built from copies of the accumulators, so the stack can go on after it and a snapshot is not changed by later frames; it costs a pass over the image, which is the price of every preview. `reset()` forgets the frames, the reference and the diagnostics, and `initialize(options?)` does that with new options (the constructor calls it). The stacker is not safe to call from two places at once: `add` is a synchronous, CPU-bound call, so a long session on large frames is better run away from a UI thread, and the order of the frames is the order of the calls.
+
+```ts
+import { isLiveCombinationMethodSupported, LiveStacker } from 'nebulosa/src/imaging/processing/stacker'
+import type { StackingFrame } from 'nebulosa/src/imaging/processing/stacker'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+import type { DetectedStar } from 'nebulosa/src/imaging/stars/detector'
+
+// A field of 14 Gaussian stars (sigma 1.5 pixels) on a sky of 0.1 with a small deterministic noise.
+let seed = 3
+const random = () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return seed / 0xffffffff
+}
+
+const width = 96
+const height = 96
+const layout = Array.from({ length: 14 }, () => ({ x: 12 + random() * 72, y: 12 + random() * 72, flux: 0.3 + random() * 0.6 }))
+
+// A frame of the field shifted by (dx, dy) pixels; the detections are the exact star positions.
+const frame = (dx: number, dy: number, stars = layout.length): StackingFrame => {
+	const raw = new Float64Array(width * height)
+	for (let i = 0; i < raw.length; i++) raw[i] = 0.1 + (random() - 0.5) * 0.004
+	const detected: DetectedStar[] = []
+	for (const star of layout) {
+		const cx = star.x + dx
+		const cy = star.y + dy
+		for (let y = Math.max(0, Math.floor(cy) - 6); y <= Math.min(height - 1, Math.floor(cy) + 6); y++) for (let x = Math.max(0, Math.floor(cx) - 6); x <= Math.min(width - 1, Math.floor(cx) + 6); x++) raw[y * width + x] += star.flux * Math.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * 1.5 ** 2))
+		detected.push({ x: cx, y: cy, hfd: 3.5, fwhm: 3.5, snr: 50, flux: star.flux * 14 })
+	}
+	const image: Image = { header: {}, raw, metadata: { width, height, channels: 1, pixelCount: width * height, stride: width, strideInBytes: width * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+	return { image, stars: detected.slice(0, stars), id: `${dx},${dy}` }
+}
+
+console.log(isLiveCombinationMethodSupported('average'), isLiveCombinationMethodSupported('weighted-average'), isLiveCombinationMethodSupported('sum'), isLiveCombinationMethodSupported('median'), isLiveCombinationMethodSupported('sigma-clip')) // true true true false false
+
+// Nothing to show before the first accepted frame.
+const live = new LiveStacker()
+console.log(live.snapshot()) // undefined
+
+// Frames arrive one by one; the first is the reference and a snapshot is available after each.
+const dithers: [number, number][] = [
+	[0, 0],
+	[3, -2],
+	[-4, 5],
+	[2, 2],
+	[-1, -3],
+]
+for (const [dx, dy] of dithers) {
+	const result = live.add(frame(dx, dy))
+	const snapshot = live.snapshot()!
+	console.log(result.frameIndex, result.accepted, result.transform?.model, result.transform?.translationX, result.transform?.translationY, result.overlapFraction.toFixed(3), snapshot.acceptedFrames, Math.max(...snapshot.coverageMap!)) // 0 true identity 0 0 1.000 1 1 / 1 true similarity -3 2 0.939 2 2 / 2 true similarity 4 -5 0.908 3 3 / 3 true similarity -2 -2 0.959 4 4 / 4 true similarity 1 3 0.959 5 5
+}
+
+// The snapshot is a copy: a new frame does not change a previous one, and a rejected frame is in the diagnostics.
+const before = live.snapshot()!
+console.log(live.add(frame(200, 0)).reason, live.add(frame(1, 1, 3)).reason) // no-overlap too-few-stars
+const after = live.snapshot()!
+console.log(before.acceptedFrames, after.acceptedFrames, after.rejectedFrames, after.diagnostics.length, after.finalImage?.raw === before.finalImage?.raw, after.statistics.liveExact, after.statistics.acceptedWeightSum) // 5 5 2 7 false true 5
+live.add(frame(-2, 4))
+console.log(before.acceptedFrames, live.snapshot()?.acceptedFrames, before.finalImage?.raw[50 * width + 50].toFixed(5), live.snapshot()?.finalImage?.raw[50 * width + 50].toFixed(5)) // 5 6 0.09973 0.09967
+
+// Options: the weighted average with a frame weight, the sum, and the intersection crop (the dithered frames cover less than the union).
+const weighted = new LiveStacker({ combinationMethod: 'weighted-average' })
+weighted.add(frame(0, 0))
+weighted.add({ ...frame(3, -2), weight: 3 })
+console.log(
+	weighted.snapshot()?.statistics.acceptedWeightSum,
+	weighted.snapshot()?.diagnostics.map((d) => d.normalization?.weight),
+) // 4 [1, 3]
+const summed = new LiveStacker({ combinationMethod: 'sum', normalizationMode: 'none', cropMode: 'intersection' })
+for (const [dx, dy] of dithers) summed.add(frame(dx, dy))
+const sum = summed.snapshot()!
+console.log(sum.finalImage?.metadata.width, sum.finalImage?.metadata.height, sum.effectiveCropBounds, sum.finalImage?.raw[0].toFixed(3)) // 89 88 { left: 4, top: 3, right: 92, bottom: 90, width: 89, height: 88 } 0.504
+
+// A method that cannot be accumulated is refused for every frame, and the stack stays empty.
+const median = new LiveStacker({ combinationMethod: 'median' })
+console.log(median.add(frame(0, 0)).reason, median.snapshot()) // combination-method-not-supported-in-live-mode undefined
+
+// The drizzle reconstruction on a live stack: the grid is that of the reference times the scale.
+const drizzle = new LiveStacker({ reconstructionMode: 'drizzle', drizzle: { scale: 2, pixfrac: 0.8 } })
+for (const [dx, dy] of dithers) drizzle.add(frame(dx, dy))
+const drizzled = drizzle.snapshot()!
+console.log(drizzled.finalImage?.metadata.width, drizzled.statistics.drizzle, drizzled.acceptedFrames, drizzled.weightMap?.raw.length) // 192 { scale: 2, pixfrac: 0.8, outputWidth: 192, outputHeight: 192 } 5 36864
+
+// Reset forgets everything, and initialize also changes the options (here, a starless reference is no longer accepted).
+live.reset()
+console.log(live.snapshot(), live.add(frame(0, 0)).accepted, live.snapshot()?.acceptedFrames) // undefined true 1
+live.initialize({ allowStarlessReference: false })
+console.log(live.add(frame(0, 0, 2)).reason, live.snapshot(), live.add(frame(0, 0)).accepted) // too-few-stars undefined true
+```
 
 ### Local Image Normalization
 
@@ -8802,6 +9193,56 @@ try {
 
 ### Pixel Sigma Clipping and Background Levels
 
+`sigmaClip(image, options?)` iteratively rejects the pixels outside `[center - sigmaLower dispersion, center + sigmaUpper dispersion]` and returns a mask of one byte per pixel (1 is rejected; a color pixel is rejected as a whole when its grayscale value is), computed from the histogram statistics of Image Statistics (whose `channel`, `area`, `transform` and `bits` options it accepts). The `centerMethod` is `'mean'` (the default) or `'median'`, the `dispersionMethod` `'std'` (the default) or `'mad'` (normalized), `sigmaLower` and `sigmaUpper` default to 3, the iteration stops when nothing is rejected, when the center and the dispersion change by less than `tolerance` (1e-3, relative) or after `maxIterations` (5; a non-finite value is a `RangeError`), and a dispersion of zero stops it too. An optional `mask` seeds the rejection (its length must be the pixel count, a `RangeError` otherwise) and is modified in place and returned, and an `area` limits both the sampling and the rejection to a rectangle, leaving the mask untouched outside it. The mean and standard deviation case is computed directly from the samples, the other cases through histograms. A mean and standard deviation clip is itself pulled by the outliers it is meant to reject, so for a sky with bright stars the median and MAD pair converges to the sky with fewer iterations. `estimateBackground(image, options?)` is the median of the pixels that survive a median and MAD clipping (the options are those of `sigmaClip` without the two methods), the level of the sky in the sample scale of the image; `estimateBackgroundUsingMode(image, options?)` is the empirical mode approximation `2.5 median - 1.5 mean` of the whole histogram, with no clipping, which is biased when many pixels are bright and is only meaningful for a unimodal sky. They are different from the quick grid estimator of Background Estimate, which samples at most 4096 pixels and also returns the noise, and from the model of Automatic Background Extraction. Rejected pixels stay in the mask for the next call, so a mask can be reused to measure the same sky in another statistic.
+
+```ts
+import { estimateBackground, estimateBackgroundUsingMode, median, sigmaClip } from 'nebulosa/src/imaging/processing/computation'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A 64x64 RGB sky of 0.2 (red), 0.25 (green) and 0.3 (blue) with a small deterministic noise and 40 bright stars of 0.9.
+let seed = 5
+const noise = () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return (seed / 0xffffffff - 0.5) * 0.02
+}
+
+const width = 64
+const height = 64
+const raw = new Float64Array(width * height * 3)
+for (let i = 0; i < width * height; i++) for (let c = 0; c < 3; c++) raw[i * 3 + c] = 0.2 + 0.05 * c + noise()
+for (let i = 0; i < 40; i++) for (let c = 0; c < 3; c++) raw[((i * 97) % (width * height)) * 3 + c] = 0.9
+const image: Image = { header: {}, raw, metadata: { width, height, channels: 3, pixelCount: width * height, stride: width * 3, strideInBytes: width * 24, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+const count = (mask: Uint8Array | Int8Array) => mask.reduce((a, b) => a + b, 0)
+
+// Sigma clipping removes the stars: the default mean/std, the median/MAD variant with asymmetric limits, and a clip in a region only.
+console.log(count(sigmaClip(image, { channel: 'RED' }))) // 40
+console.log(count(sigmaClip(image, { channel: 'RED', centerMethod: 'median', dispersionMethod: 'mad', sigmaLower: 5, sigmaUpper: 2 }))) // 40
+console.log(count(sigmaClip(image, { channel: 'RED', area: { left: 0, top: 0, right: 31, bottom: 63 } }))) // 20
+
+// A tight clip rejects part of the sky as well (3632 of 4096 pixels at one sigma), while a single iteration is already enough to remove the stars here.
+console.log(count(sigmaClip(image, { channel: 'RED', sigmaLower: 1, sigmaUpper: 1 })), count(sigmaClip(image, { channel: 'RED', maxIterations: 1 }))) // 3632 40
+
+// A seed mask is kept and returned, and the clipped pixels are excluded from a later histogram.
+const seeded = new Uint8Array(width * height)
+seeded[0] = 1
+console.log(sigmaClip(image, { channel: 'RED', mask: seeded }) === seeded, seeded[0], median(image, { channel: 'RED', sigmaClip: seeded })) // true 1 0.1998535133897917
+
+// The background of one channel from the clipped median, and with a tighter clip; a color image uses its grayscale.
+console.log(estimateBackground(image, { channel: 'RED' }), estimateBackground(image, { channel: 'RED', sigmaLower: 2, sigmaUpper: 2 })) // 0.1998535133897917 0.1998535133897917
+console.log(estimateBackground(image), estimateBackground(image, { channel: 'BLUE', bits: 10 })) // 0.2430151827267872 0.3001081508288097
+
+// The empirical mode: the stars raise the mean, so it falls below the median.
+console.log(estimateBackgroundUsingMode(image, { channel: 'RED' }), estimateBackgroundUsingMode(image, { channel: 'GREEN', bits: 10 })) // 0.18978342214229782 0.24134470347208936
+
+for (const run of [() => sigmaClip(image, { maxIterations: Number.POSITIVE_INFINITY }), () => sigmaClip(image, { mask: new Uint8Array(3) }), () => estimateBackground(image, { bits: 0 })]) {
+	try {
+		run()
+	} catch (e) {
+		console.log((e as Error).message) // maxIterations must be finite / mask must have length 4096 / histogram bits must be between 1 and 24
+	}
+}
+```
+
 ### PSF Filter
 
 `psf(image)` applies the point-spread-function matched filter of the KStars internal guider: a fixed 9x9 stencil (radius 4 pixels) that responds to a star-sized peak and rejects a flat background. The stencil is the sum of rings around the pixel with the weights of KStars (1 for the center, 0.678 for the four nearest neighbours, down to 0.02 for the outermost ring) minus a constant outer weight that makes the sum of all the weights zero, so a uniform region gives 0 (up to rounding) and the result is not a brightness image: it is positive on a star, around zero on the sky and negative next to bright structure. The image is modified in place and the same object is returned; each channel of an RGB image is filtered on its own, the four-pixel border keeps the original values (the stencil does not fit there), and an image smaller than 9x9 is returned unchanged. The image must be a dense mono or interleaved RGB intensity image: a raw CFA mosaic, a stride or buffer that does not agree with the geometry, or a channel count other than 1 or 3 throws an `Error`, because a mosaic has to be converted to a coherent intensity image first. The work is linear in the number of samples, with a sliding sum for the 81 values and a small row buffer.
@@ -8850,6 +9291,103 @@ try {
 ```
 
 ### Scalar Surface Fitting
+
+`imaging/processing/surface` fits a smooth scalar surface `z(x, y)` to scattered, weighted samples over a `width` x `height` pixel plane, which is the engine under the background, flat-field and gradient models of the imaging pipeline (see Automatic Background Extraction). `fitScalarSurface(samples, width, height, options?)` takes `SurfaceSample`s (`x` and `y` in pixels, `value` in the unit of the quantity, and an optional least-squares `weight` in `(0, 1]`) and returns a result union: `{ ok: true, model }` or `{ ok: false, reason }`, never an exception, with the `reason` being `'too-few-samples'`, `'degenerate-layout'` (the samples lie on a line or a thin strip), `'rank-deficient'`, `'unstable-magnitude'` (the coefficients dwarf the values) or `'singular-system'`. The samples are expected to be finite and inside the domain, and nothing is validated. Coordinates are normalized to `[-1, 1]` over the `domain` (the full frame, `0..width-1` and `0..height-1`, by default; restrict it to the bounding box of a partially covered frame so that a band does not collapse one axis).
+
+The `'polynomial'` model (the default) is a tensor Chebyshev basis of total `degree` (4 by default, clamped to 1..6, with `(degree + 1)(degree + 2) / 2` terms that need that many accepted samples) fitted by weighted least squares through a QR decomposition, with optional iterative rejection of the residual outliers: `rejection.mode` is `'none'`, `'symmetric'` or `'asymmetric'`, `low` and `high` are the sigma multiples below and above the surface (3 by default), and `iterations` is the number of fit, reject and refit passes (0 fits once); more than 32768 samples are fitted through a bounded subset. The `'thinPlateSpline'` model is a smoothing spline with an affine part, one weight per control point, `smoothing` (0.1 by default; 0 interpolates every sample, and coincident samples are then dropped, while with a positive value they are averaged) and at most `maxControlPoints` of them (clamped to 3..1024, because the dense system costs `O(k^3)`); it never rejects by residual, because a flexible surface would read the structure that it is meant to model as outliers. The model carries `coefficients` (and the normalized `controlPoints` of the spline), `acceptedSamples`, `rejectedSamples`, `residual` (the normalized MAD of the final residuals, in the unit of the values) and every input `samples` with an `accepted` flag.
+
+The surface is evaluated row by row for a regular grid, with `createSurfaceColumnTable(degree, domain, count, x0?, xStep?)` (the Chebyshev basis of the columns, which depends only on the geometry and the degree and can be shared by every surface of the same degree and domain) and `createScalarSurfaceEvaluator(model, table)` whose `fillRow(y, output, offset, stride)` writes `count` values; `evaluateScalarSurfaceInto(model, output, offset?, stride?, table?)` writes the whole plane in row-major order (the stride lets it fill one channel of an interleaved buffer); and `createScalarSurfacePointEvaluator(model)` returns `at(x, y)` for scattered, fractional positions, which is slower per point for a regular grid. The surface is only meaningful inside the area spanned by the samples; far from them a high-degree polynomial or the affine tail of a spline extrapolates freely.
+
+```ts
+import { createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, evaluateScalarSurfaceInto, fitScalarSurface } from 'nebulosa/src/imaging/processing/surface'
+import type { SurfaceSample } from 'nebulosa/src/imaging/processing/surface'
+
+// A 64x48 plane of a smooth gradient z = 0.2 + 0.004 x + 0.002 y + 1e-5 x y, sampled on a 8x6 grid.
+const width = 64
+const height = 48
+const truth = (x: number, y: number) => 0.2 + 0.004 * x + 0.002 * y + 1e-5 * x * y
+const samples: SurfaceSample[] = []
+for (let y = 4; y < height; y += 8) for (let x = 4; x < width; x += 8) samples.push({ x, y, value: truth(x, y) })
+
+// The default polynomial of degree 4 reproduces a smooth surface; the residual is the normalized MAD of the fit.
+const fit = fitScalarSurface(samples, width, height)
+if (fit.ok) {
+	console.log(fit.model.type, fit.model.degree, fit.model.coefficients.length, fit.model.acceptedSamples, fit.model.rejectedSamples, fit.model.residual) // polynomial 4 15 48 0 8.23e-17
+	console.log(fit.model.domain, fit.model.samples[0]) // { x0: 0, y0: 0, x1: 63, y1: 47 } { x: 4, y: 4, value: 0.22416, weight: 1, accepted: true }
+}
+
+// A low degree and a plane (degree 1) of the same samples.
+const plane = fitScalarSurface(samples, width, height, { degree: 1 })
+console.log(plane.ok && plane.model.coefficients.length, plane.ok && plane.model.residual) // 3 0.0018977
+
+// A sample with a weight, and a cosmic-ray outlier rejected by the symmetric sigma clipping (the outlier is flagged, not accepted).
+const dirty = [...samples, { x: 30, y: 20, value: 5, weight: 1 }]
+const clipped = fitScalarSurface(dirty, width, height, { degree: 2, rejection: { mode: 'symmetric', low: 3, high: 3, iterations: 3 } })
+console.log(clipped.ok && [clipped.model.acceptedSamples, clipped.model.rejectedSamples], clipped.ok && clipped.model.samples.at(-1)?.accepted) // [ 48, 1 ] false
+const unclipped = fitScalarSurface(dirty, width, height, { degree: 2 })
+console.log(unclipped.ok && unclipped.model.rejectedSamples, unclipped.ok && unclipped.model.residual) // 0 0.16879
+
+// Asymmetric rejection: only a bright outlier is rejected (a high sigma of 3 and a loose 'low' of 50 keep the dark side).
+const asymmetric = fitScalarSurface(dirty, width, height, { degree: 2, rejection: { mode: 'asymmetric', low: 50, high: 3, iterations: 3 } })
+console.log(asymmetric.ok && asymmetric.model.rejectedSamples) // 1
+
+// The thin-plate spline interpolates exactly with no smoothing, and smooths with a positive value.
+const exact = fitScalarSurface(samples, width, height, { model: 'thinPlateSpline', smoothing: 0 })
+const smooth = fitScalarSurface(samples, width, height, { model: 'thinPlateSpline', smoothing: 0.1, maxControlPoints: 20 })
+console.log(exact.ok && [exact.model.coefficients.length, exact.model.controlPoints?.length, exact.model.acceptedSamples]) // [ 51, 96, 48 ]
+console.log(smooth.ok && [smooth.model.coefficients.length, smooth.model.acceptedSamples, smooth.model.rejectedSamples]) // [ 19, 16, 32 ]
+
+// A point evaluator for scattered positions (fractional pixels): the truth, the polynomial and the spline.
+if (fit.ok && exact.ok) {
+	const polynomialAt = createScalarSurfacePointEvaluator(fit.model).at
+	const splineAt = createScalarSurfacePointEvaluator(exact.model).at
+	console.log(truth(20.5, 13.25), polynomialAt(20.5, 13.25), splineAt(20.5, 13.25)) // 0.31121625 0.31121625 0.311211 (the spline is exact only at the samples)
+	console.log(splineAt(4, 4), samples[0].value) // 0.22416 0.22416
+}
+
+// A whole plane into a Float64Array, and into one channel of an interleaved 3-channel Float32Array (stride 3, offset 1).
+if (fit.ok) {
+	const plane = new Float64Array(width * height)
+	evaluateScalarSurfaceInto(fit.model, plane)
+	console.log(plane[0], plane[width * 10 + 20], truth(20, 10)) // 0.2 0.302 0.302
+
+	const interleaved = new Float32Array(width * height * 3)
+	evaluateScalarSurfaceInto(fit.model, interleaved, 1, 3)
+	console.log(interleaved[0], interleaved[1], interleaved[(width * 10 + 20) * 3 + 1]) // 0 0.2 0.302 (Float32)
+
+	// A shared column table and a row evaluator: the row y = 10 of the same surface.
+	const table = createSurfaceColumnTable(fit.model.degree, fit.model.domain, width)
+	const evaluator = createScalarSurfaceEvaluator(fit.model, table)
+	const row = new Float64Array(evaluator.count)
+	evaluator.fillRow(10, row, 0, 1)
+	console.log(table.count, table.degree, table.chebyshev.length, evaluator.count, row[20], plane[width * 10 + 20]) // 64 4 320 64 0.302 0.302
+}
+
+// A band of samples fits against the whole frame and against its own bounding box as the domain (here both succeed; the domain only changes the conditioning).
+const band: SurfaceSample[] = []
+for (let y = 20; y < 24; y++) for (let x = 0; x < width; x += 6) band.push({ x, y, value: truth(x, y) })
+console.log(fitScalarSurface(band, width, height, { degree: 2 }).ok, fitScalarSurface(band, width, height, { degree: 2, domain: { x0: 0, y0: 20, x1: 63, y1: 23 } }).ok) // true true
+
+// The failure reasons: too few samples for the terms, collinear samples, a spline with fewer than 3 points.
+console.log(fitScalarSurface(samples.slice(0, 5), width, height, { degree: 4 })) // { ok: false, reason: 'too-few-samples' }
+console.log(
+	fitScalarSurface(
+		Array.from({ length: 20 }, (_, i) => ({ x: i, y: i, value: i })),
+		width,
+		height,
+		{ degree: 2 },
+	),
+) // { ok: false, reason: 'degenerate-layout' }
+console.log(fitScalarSurface(samples.slice(0, 2), width, height, { model: 'thinPlateSpline' })) // { ok: false, reason: 'too-few-samples' }
+console.log(
+	fitScalarSurface(
+		Array.from({ length: 20 }, (_, i) => ({ x: i, y: 10, value: i })),
+		width,
+		height,
+		{ model: 'thinPlateSpline' },
+	),
+) // { ok: false, reason: 'degenerate-layout' }
+```
 
 ### Scientific Image Loading and Export
 
@@ -9565,6 +10103,106 @@ console.log(detectBadPixels(color, { channel: 'GREEN' }).hot, detectBadPixels(co
 
 ### Star List Registration
 
+`imaging/processing/registration` turns the star correspondences of Star Pattern Matching into a validated frame-to-frame transform and, optionally, a resampled image. `registerStars(reference, target, options?)` runs `matchStars` between two `DetectedStar` lists (with `matchStarsConfig`), checks the match against the optional `acceptance` limits and returns `{ success: true, match, transform }` or `{ success: false, reason, match? }` without touching pixels, with the `reason` being `'match-failed'` (no confident match, or fewer than `minInliers`), `'transform-error-too-high'` (the inlier RMS above `maxRmsError`, pixels), `'invalid-transform'` (a singular transform) or `'transform-out-of-bounds'` (outside `maxTranslation` in pixels, `maxRotation` in radians, `minScale` and `maxScale`, or `maxShear`). The `transform` has the target-to-reference `transform` (a similarity or an affine, in the sense of `x' = m00 x + m01 y + tx`), its `inverseTransform` (reference to target, which is what resampling needs) and a `summary` (`model`, `translationX` and `translationY` in pixels, `scaleX` and `scaleY`, `rotation` in radians, `shear`, `mirrored`, `inlierCount` and `rmsError` in pixels). A frame shifted by `(+3, -2)` in the sky therefore has the translation `(-3, +2)`. The stars must share the pixel origin and axis directions; a mirrored field is accepted only when the matcher is allowed to (`allowMirror`, true by default).
+
+`registerImage(reference, target, options?)` takes two `ImageRegistrationInput`s (the `image` and its `stars`), validates the shapes (`'invalid-reference-image'`, `'invalid-target-image'`, `'channel-mismatch'`), registers the stars and warps the target onto the reference grid, adding to the success the `image` (a fresh `Image` on the reference grid), the `validityMask` (one byte per output pixel, 1 where the source covered it with an unmasked interpolation support), `coveredPixels` (output centers inside the source), `validPixels` and, when `finitePairSupport: { limit, luminance? }` asks for it, the `finitePairCounts` of the finite reference and warped pairs, capped at `limit`, which the photometric normalization of the stacker uses. `warpImage(source, reference, inverseTransform, options?)` is the resampling alone, from an inverse transform (reference to source) with the options `interpolationMode` (`'nearest'`, `'bilinear'`, the default, or `'bicubic'`), `outputPrecision` (32, 64 or `'auto'`; the storage of the source is kept when omitted), the reusable `outputRaw` and `validityMask` buffers, and a source-grid `rejectionMask` whose nonzero bytes invalidate the whole interpolation support of every output pixel that touches them (without renormalizing the remaining taps). The output has the geometry of the reference, so the pixels outside the source are 0 with a zero mask. `toAffineMatrix(transform)` converts a similarity (including its parity flip) to the affine matrix that maps the same pixel centers, and returns an affine unchanged.
+
+```ts
+import { registerImage, registerStars, toAffineMatrix, warpImage } from 'nebulosa/src/imaging/processing/registration'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+import type { DetectedStar } from 'nebulosa/src/imaging/stars/detector'
+
+// 24 stars of a deterministic field in a 96x96 frame (quality varies so that the matcher can rank them).
+let seed = 7
+const random = () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return seed / 0xffffffff
+}
+
+const width = 96
+const height = 96
+const layout = Array.from({ length: 24 }, () => ({ x: 10 + random() * 76, y: 10 + random() * 76, flux: 0.3 + random() * 0.6 }))
+
+// The stars of the field as seen by a frame shifted by (dx, dy) pixels and rotated by `angle` radians about the center.
+const observe = (dx: number, dy: number, angle = 0): DetectedStar[] => {
+	const c = Math.cos(angle)
+	const s = Math.sin(angle)
+	return layout.map((star) => {
+		const rx = star.x - 48
+		const ry = star.y - 48
+		return { x: 48 + c * rx - s * ry + dx, y: 48 + s * rx + c * ry + dy, hfd: 3.5, fwhm: 3.5, snr: 20 + star.flux * 60, flux: star.flux * 100 }
+	})
+}
+
+// A frame with the stars drawn as Gaussians (sigma 1.5 pixels) on a sky of 0.1.
+const render = (stars: readonly DetectedStar[], channels = 1): Image => {
+	const raw = new Float64Array(width * height * channels)
+	for (let i = 0; i < width * height * channels; i++) raw[i] = 0.1
+	for (const star of stars)
+		for (let y = Math.max(0, Math.floor(star.y) - 6); y <= Math.min(height - 1, Math.floor(star.y) + 6); y++)
+			for (let x = Math.max(0, Math.floor(star.x) - 6); x <= Math.min(width - 1, Math.floor(star.x) + 6); x++) for (let c = 0; c < channels; c++) raw[(y * width + x) * channels + c] += (star.flux / 100) * Math.exp(-((x - star.x) ** 2 + (y - star.y) ** 2) / (2 * 1.5 ** 2))
+	return { header: {}, raw, metadata: { width, height, channels, pixelCount: width * height, stride: width * channels, strideInBytes: width * channels * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+}
+
+// The stars alone: a frame shifted by (3, -2) pixels gives the target-to-reference translation (-3, 2).
+const referenceStars = observe(0, 0)
+const shifted = registerStars(referenceStars, observe(3, -2))
+if (shifted.success) {
+	const { summary } = shifted.transform
+	console.log(summary.model, summary.translationX.toFixed(2), summary.translationY.toFixed(2), summary.scaleX.toFixed(4), summary.rotation.toFixed(4), summary.mirrored, summary.inlierCount, summary.rmsError.toFixed(4)) // similarity -3.00 2.00 1.0000 -0.0000 false 24 0.0000
+	console.log(shifted.match.matches.length, shifted.match.success, 'a' in shifted.transform.transform, 'm00' in shifted.transform.inverseTransform) // 24 true true false (both transforms are similarities here, with a, b, tx, ty and mirrored)
+}
+
+// A rotation of 0.05 rad and the acceptance limits that bound it.
+const rotated = observe(1, 1, 0.05)
+const turned = registerStars(referenceStars, rotated)
+console.log(turned.success && turned.transform.summary.rotation.toFixed(4)) // -0.0500 (the target is rotated by +0.05 rad, so the transform undoes it)
+console.log(registerStars(referenceStars, rotated, { acceptance: { maxRotation: 0.01 } })) // { success: false, reason: 'transform-out-of-bounds', match: { success: true, inlierCount: 24, ... } }
+console.log(registerStars(referenceStars, observe(8, 0), { acceptance: { maxTranslation: 4 } })) // { success: false, reason: 'transform-out-of-bounds', match: { success: true, inlierCount: 24, ... } } (the translation is 8 pixels)
+console.log(registerStars(referenceStars, observe(3, -2), { acceptance: { minInliers: 40 } }).success, registerStars(referenceStars, observe(3, -2), { acceptance: { maxRmsError: 1e-9 } }).success) // false true
+
+// Too few stars for a match, and a matcher configuration (the minimum of usable stars).
+console.log(registerStars(referenceStars, observe(3, -2).slice(0, 3))) // { success: false, reason: 'match-failed', match: { success: false, matches: [], inlierCount: 0, score: 0, failureReason: 'too few usable current stars' } }
+console.log(registerStars(referenceStars, observe(3, -2).slice(0, 10), { matchStarsConfig: { minStars: 4, minInliers: 4 } }).success) // true
+
+// Registering and warping a frame: the stars land back on the reference positions, and the covered area shrinks with the shift.
+const reference = { image: render(referenceStars), stars: referenceStars }
+const target = { image: render(observe(3, -2)), stars: observe(3, -2) }
+const registered = registerImage(reference, target)
+if (registered.success) {
+	console.log(registered.image.metadata.width, registered.image.raw.length, registered.coveredPixels, registered.validPixels, registered.validityMask.length, registered.finitePairCounts) // 96 9216 8742 8742 9216 undefined
+	const p = Math.round(referenceStars[0].y) * width + Math.round(referenceStars[0].x)
+	console.log(reference.image.raw[p].toFixed(3), registered.image.raw[p].toFixed(3), registered.image.raw[0], registered.validityMask[0], registered.validityMask[p]) // 0.738 0.738 0 0 1
+}
+
+// Finite-pair counts for the photometric fit (capped), precision and interpolation options.
+const counted = registerImage(reference, target, { finitePairSupport: { limit: 500 }, interpolationMode: 'bicubic', outputPrecision: 32 })
+console.log(counted.success && [counted.finitePairCounts, counted.image.raw.constructor.name]) // [ [ 500 ], 'Float32Array' ]
+console.log(registerImage(reference, { image: render(observe(0, 0), 3), stars: referenceStars })) // { success: false, reason: 'channel-mismatch' }
+console.log(registerImage({ image: { ...reference.image, raw: new Float64Array(3) }, stars: referenceStars }, target)) // { success: false, reason: 'invalid-reference-image' }
+
+// The direct warp from an inverse transform (reference to source): a pure shift of 2.5 pixels with the three interpolation modes.
+const inverse = { m00: 1, m01: 0, tx: 2.5, m10: 0, m11: 1, ty: 0 }
+for (const mode of ['nearest', 'bilinear', 'bicubic'] as const) {
+	const warped = warpImage(reference.image, reference.image, inverse, { interpolationMode: mode })
+	console.log(mode, warped.validPixels, warped.coveredPixels, warped.image.raw[40 * width + 40].toFixed(4)) // nearest 8928 8928 0.1036; bilinear 8928 8928 0.1137; bicubic 8928 8928 0.1090
+}
+
+// A source rejection mask invalidates the support of the pixels that touch it, and reusable buffers are filled in place.
+const rejection = new Uint8Array(width * height)
+rejection[40 * width + 42] = 1
+const outputRaw = new Float64Array(width * height)
+const validityMask = new Uint8Array(width * height)
+const masked = warpImage(reference.image, reference.image, inverse, { rejectionMask: rejection, outputRaw, validityMask })
+const open = warpImage(reference.image, reference.image, inverse)
+console.log(masked.image.raw === outputRaw, masked.validityMask === validityMask, open.validPixels, masked.validPixels, masked.coveredPixels) // true true 8928 8926 8928
+
+// The affine matrix of a similarity (rotation by 90 degrees, scale 2, a mirror and a shift) and of an affine (returned as it is).
+console.log(toAffineMatrix({ a: 0, b: 2, tx: 5, ty: -1, mirrored: false })) // { m00: 0, m01: -2, tx: 5, m10: 2, m11: 0, ty: -1 }
+console.log(toAffineMatrix({ a: 0, b: 2, tx: 5, ty: -1, mirrored: true })) // { m00: 0, m01: 2, tx: 5, m10: 2, m11: -0, ty: -1 }
+console.log(toAffineMatrix(inverse) === inverse) // true
+```
+
 ### Star Profile Measurement
 
 ### Star Shape Statistics
@@ -9575,7 +10213,159 @@ console.log(detectBadPixels(color, { channel: 'GREEN' }).hot, detectBadPixels(co
 
 ### Streak-Aware Stacking
 
+Streak-aware stacking keeps a satellite or meteor trail out of the integration instead of relying on the pixel rejection of the combination method alone (see Image Stacking, where a median or a sigma clip needs enough frames to outvote a trail). It is opt-in: `streaks: { enabled: true, ... }` in the `StackingOptions` of `stackFrames` and `LiveStacker` (see Live Stacking), and no detector or classifier runs while it is disabled, even when a frame carries a mask. For every frame the stacker obtains the source-grid mask in this order: the authoritative `streakMask` of the `StackingFrame` (a `StreakMask` of Straight Streak Detection, which must have the size of the image, or a `RangeError`), else the `streaks` already detected for that frame, else the result of `detectStreaks` with `streaks.detection` (and the reusable `workspace`); the detections are rasterized by `createStreakMask` with the `streaks.mask` policy (`dilation` and `widthScale`, in pixels, and `includeLowConfidence`) and when `classes` or `minClassificationConfidence` are set, only the streaks of those classes (see Streak Classification, with `streakClassifications` or the `streakClassificationContext` of the frame to avoid repeating the analysis, and `streaks.classification`) with at least that classifier confidence are masked (an empty `classes` list masks nothing). The masked pixels are excluded from the combination, from the interpolation support of the resampling (every output pixel whose kernel touches one is invalid), from the drizzle drops and from the pairs of the photometric normalization, which needs at least 32 pairs per plane (or all the finite pairs of a smaller overlap) or the frame fails with `'normalization-failed'`; the remaining samples are not renormalized. `maxMaskedFraction` (`0..1`) rejects a whole frame as `'streak-contamination-too-high'` when its masked fraction is larger (and a frame is never rejected otherwise), the reference is chosen among the frames that were not rejected, with a score that drops with the masked fraction, and each `FrameAcceptanceResult` carries `streaks`, a compact `FrameStreakDiagnostics` (`detectedCount`, `maskedPixels`, `maskedFraction` of the source image and, when the streaks were classified, the `classes` counts). The masking is in the source frame, before the registration, so it does not depend on the crop mode or on the transform. A frame that supplies neither a mask nor its streaks is analyzed by the detector, which can also report chains of bright stars (use its thresholds), and a trail that the detector misses, or that is fainter than the noise, is not removed.
+
+```ts
+import { stackFrames } from 'nebulosa/src/imaging/processing/stacker'
+import type { StackingFrame } from 'nebulosa/src/imaging/processing/stacker'
+import { createStreakMask } from 'nebulosa/src/imaging/analysis/streak/mask'
+import { renderSyntheticStreak } from 'nebulosa/src/imaging/synthetic/streak'
+import type { Streak } from 'nebulosa/src/imaging/analysis/streak/types'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+import type { DetectedStar } from 'nebulosa/src/imaging/stars/detector'
+
+// A field of 14 Gaussian stars (sigma 1.5 pixels) on a sky of 0.1 with a small deterministic noise, as in Image Stacking.
+let seed = 3
+const random = () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return seed / 0xffffffff
+}
+
+const width = 96
+const height = 96
+const layout = Array.from({ length: 14 }, () => ({ x: 12 + random() * 72, y: 12 + random() * 72, flux: 0.3 + random() * 0.6 }))
+
+// A frame of the field shifted by (dx, dy) pixels; a trail from (x0, y0) to (x1, y1) of the given intensity is added when asked.
+const frame = (dx: number, dy: number, trail?: { x0: number; y0: number; x1: number; y1: number; intensity: number }): StackingFrame => {
+	const raw = new Float64Array(width * height)
+	for (let i = 0; i < raw.length; i++) raw[i] = 0.1 + (random() - 0.5) * 0.004
+	const stars: DetectedStar[] = []
+	for (const star of layout) {
+		const cx = star.x + dx
+		const cy = star.y + dy
+		for (let y = Math.max(0, Math.floor(cy) - 6); y <= Math.min(height - 1, Math.floor(cy) + 6); y++) for (let x = Math.max(0, Math.floor(cx) - 6); x <= Math.min(width - 1, Math.floor(cx) + 6); x++) raw[y * width + x] += star.flux * Math.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * 1.5 ** 2))
+		stars.push({ x: cx, y: cy, hfd: 3.5, fwhm: 3.5, snr: 50, flux: star.flux * 14 })
+	}
+	const image: Image = { header: {}, raw, metadata: { width, height, channels: 1, pixelCount: width * height, stride: width, strideInBytes: width * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+	if (trail) renderSyntheticStreak(image, { start: { x: trail.x0, y: trail.y0 }, end: { x: trail.x1, y: trail.y1 }, width: 3, intensity: trail.intensity })
+	return { image, stars, id: `${dx},${dy}` }
+}
+
+// The measured description of the trail above, as a detector would report it (a horizontal 3 pixel wide trail at y = 48).
+const streak: Streak = { start: { x: 5, y: 48 }, end: { x: 90, y: 48 }, center: { x: 47.5, y: 48 }, length: 85, width: 3, angle: 0, linearity: 1, rmsResidual: 0.2, coverage: 1, supportPixels: 255, clippedAtBorder: false, flux: 40, meanSignal: 0.3, peakSignal: 0.5, snr: 40, confidence: 0.9 }
+const trail = { x0: 5, y0: 48, x1: 90, y1: 48, intensity: 0.5 }
+
+// Five dithered frames; the third has a bright trail across it. Without the option the average keeps one fifth of the trail.
+const dithers: [number, number][] = [
+	[0, 0],
+	[3, -2],
+	[-4, 5],
+	[2, 2],
+	[-1, -3],
+]
+const build = () => dithers.map(([dx, dy], i) => frame(dx, dy, i === 2 ? trail : undefined))
+// Frames that declare their streaks (none, but the third) so that the detector does not run on them.
+const declared = (extra: Partial<StackingFrame> = {}) => build().map((f, i) => ({ ...f, streaks: i === 2 ? [streak] : [], ...(i === 2 ? extra : {}) }))
+// The trail crosses the reference at y = 43 (the third frame is shifted by (-4, 5)).
+const at = (r: { finalImage?: Image }) => r.finalImage?.raw[43 * width + 50].toFixed(4)
+const plain = stackFrames(build(), { combinationMethod: 'average' })
+console.log(plain.acceptedFrames, at(plain), plain.diagnostics[2].streaks) // 5 0.1930 undefined
+
+// The same stack with the precomputed streak: the masked pixels are excluded and the average there comes from the other frames.
+const masked = stackFrames(declared(), { combinationMethod: 'average', streaks: { enabled: true } })
+console.log(masked.acceptedFrames, at(masked), masked.diagnostics[2].streaks) // 5 0.1005 { detectedCount: 1, maskedPixels: 264, maskedFraction: 0.0286, classes: undefined } (the average at the trail is back to the sky)
+console.log(masked.diagnostics[0].streaks) // { detectedCount: 0, maskedPixels: 0, maskedFraction: 0, classes: undefined }
+
+// The mask policy: a larger dilation and width scale cover more pixels.
+const wide = stackFrames(declared(), { streaks: { enabled: true, mask: { dilation: 3, widthScale: 2 } } })
+console.log(wide.diagnostics[2].streaks?.maskedPixels, createStreakMask(width, height, [streak], { dilation: 3, widthScale: 2 }).maskedPixels) // 1216 1216
+
+// An authoritative frame mask is used as it is, even with streaks supplied; a mask of another size is an error.
+const mask = createStreakMask(width, height, [streak])
+const withMask = stackFrames(declared({ streakMask: mask, streaks: [] }), { streaks: { enabled: true } })
+console.log(withMask.diagnostics[2].streaks, mask.maskedPixels === withMask.diagnostics[2].streaks?.maskedPixels) // { detectedCount: 0, maskedPixels: 264, maskedFraction: 0.0286, classes: undefined } true
+try {
+	stackFrames([{ ...frame(0, 0), streakMask: createStreakMask(10, 10, [streak]) }, frame(3, -2)], { streaks: { enabled: true } })
+} catch (e) {
+	console.log((e as Error).message) // streak mask must match the source image dimensions
+}
+
+// Detection on demand (when neither a mask nor streaks were supplied), with the detector options; the thresholds keep the chains of bright stars of this field from being taken as trails.
+const detected = stackFrames(build(), { streaks: { enabled: true, detection: { minLength: 40, minLinearity: 0.95, minSNR: 20 } } })
+console.log(
+	detected.diagnostics.map((d) => d.streaks?.detectedCount),
+	detected.diagnostics.map((d) => d.streaks?.maskedPixels),
+) // [ 0, 0, 1, 0, 0 ] [ 0, 0, 1105, 0, 0 ]
+
+// Rejecting a frame by its contamination: the masked fraction of the third frame is above the threshold.
+const limited = stackFrames(declared(), { streaks: { enabled: true, maxMaskedFraction: 0.01 } })
+console.log(limited.acceptedFrames, limited.rejectedFrames, limited.diagnostics[2].accepted, limited.diagnostics[2].reason, limited.diagnostics[2].streaks?.maskedFraction.toFixed(4)) // 4 1 false streak-contamination-too-high 0.0286
+
+// The option is off by default, even when frames carry masks.
+const off = stackFrames(declared({ streakMask: mask }))
+console.log(off.diagnostics[2].streaks) // undefined
+```
+
 ### Subframe Selector
+
+`imaging/processing/subframe.selector` measures the quality of a light frame from its detected stars and a coarse sky estimate, and classifies a collection of frames against explicit thresholds before stacking. Nothing is rejected by default: a frame is refused only by a threshold that the caller sets, and the selection never reorders or changes the frames. A `SubframeInput` is an `Image` and its `DetectedStar`s (see Star Detection), in the pixel coordinates of that image; every width is in pixels and the shape metrics are dimensionless. `measureSubframeQuality(frame)` returns the `SubframeQualityMetrics`: `starCount`, the medians of the finite `snr`, `hfd`, `fwhm`, `eccentricity` and `elongation` of the stars (the median HFD is `Infinity` and the SNR is 0 when the stars do not supply them; the optional ones are `undefined`), the sky `estimatedBackground` and the robust `noise` of the sparse background samples (the quick estimator of Background Estimate, in the sample scale of the image), a `qualityScore` and a `normalizedScore`. The `qualityScore` is `sqrt(starCount) * max(medianSNR, 1) / max(medianHFD, 0.5)` clamped to `0..1e6`, unbounded above and used to weight and to choose a reference in the stacker (see Image Stacking); the `normalizedScore` is `imageQualityScore` of the same measurements, on `0..1`.
+
+`imageQualityScore(input, options?)` is the geometric mean of up to six factors, each on `0..1`: the star count (saturating at `starCount`, 100 by default), the sharpness (the median HFD, or the FWHM when the HFD is not finite, falling from 1 at `targetPixels`, 2 by default, to 0 at `maximumPixels`, 8), the eccentricity (1 for a round star and 0 at `maximumEccentricity`, 0.8), the SNR (saturating at `signalToNoise`, 50), the background (0 at `maximumBackground`, 0.5) and the noise (0 at `maximumNoise`, 0.05); the defaults are in `DEFAULT_IMAGE_QUALITY`, a factor whose measurement is absent is left out of the mean, no stars score 0, and `scale: 100` returns a percentage. A single bad factor drags the geometric mean down hard, and the thresholds are tuned for normalized samples and for the pixel scale of the camera, so adjust them to the setup. `selectSubframes(frames, options?)` measures each frame and returns `{ accepted, results }`, where `accepted` holds the passing inputs in their original order and `results` has one entry for every input with its `metrics`, `accepted` and the `reasons` (every failed threshold, in a fixed order). The thresholds of `SubframeSelectionOptions` are `minStars`, `minMedianSNR`, `maxMedianHFD`, `maxMedianFWHM`, `maxMedianEccentricity`, `maxMedianElongation`, `maxBackground`, `maxNoise` and `minNormalizedScore`, and a maximum on a metric that the stars do not provide is rejected as `'median-hfd-unavailable'`, `'median-fwhm-unavailable'`, `'median-eccentricity-unavailable'` or `'median-elongation-unavailable'` instead of being skipped.
+
+```ts
+import { DEFAULT_IMAGE_QUALITY, imageQualityScore, measureSubframeQuality, selectSubframes } from 'nebulosa/src/imaging/processing/subframe.selector'
+import type { SubframeInput } from 'nebulosa/src/imaging/processing/subframe.selector'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+import type { DetectedStar } from 'nebulosa/src/imaging/stars/detector'
+
+// A 64x64 sky of a given level with a small deterministic noise, as an Image.
+let seed = 11
+const random = () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return seed / 0xffffffff
+}
+
+const sky = (level: number, noise: number): Image => {
+	const raw = new Float64Array(64 * 64)
+	for (let i = 0; i < raw.length; i++) raw[i] = level + (random() - 0.5) * noise
+	return { header: {}, raw, metadata: { width: 64, height: 64, channels: 1, pixelCount: 4096, stride: 64, strideInBytes: 512, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+}
+
+// A star list of a given count, HFD, SNR and, optionally, eccentricity and elongation.
+const stars = (count: number, hfd: number, snr: number, shape?: { eccentricity: number; elongation: number }): DetectedStar[] => Array.from({ length: count }, (_, i) => ({ x: 4 + i, y: 4 + i, hfd, fwhm: hfd * 1.05, snr, flux: 100, ...shape }))
+
+const good: SubframeInput = { image: sky(0.1, 0.004), stars: stars(120, 2.5, 60, { eccentricity: 0.2, elongation: 1.05 }) }
+const blurred: SubframeInput = { image: sky(0.1, 0.004), stars: stars(120, 6.5, 30, { eccentricity: 0.3, elongation: 1.1 }) }
+const bright: SubframeInput = { image: sky(0.6, 0.004), stars: stars(120, 2.5, 60, { eccentricity: 0.2, elongation: 1.05 }) }
+const sparse: SubframeInput = { image: sky(0.1, 0.004), stars: stars(4, 2.5, 60) }
+const empty: SubframeInput = { image: sky(0.1, 0.004), stars: [] }
+
+// The metrics of a good frame: the star count, the medians, the sky and the two scores.
+const m = measureSubframeQuality(good)
+console.log(m.starCount, m.medianSNR, m.medianHFD, m.medianFWHM, m.medianEccentricity, m.medianElongation) // 120 60 2.5 2.625 0.2 1.05
+console.log(m.estimatedBackground, m.noise, m.qualityScore, m.normalizedScore) // 0.10001 0.00146 262.9 0.9007
+
+// No stars: HFD is infinite, SNR is 0 and both scores are 0; the optional medians are undefined.
+console.log(measureSubframeQuality(empty)) // { starCount: 0, medianSNR: 0, medianHFD: Infinity, medianFWHM: undefined, qualityScore: 0, normalizedScore: 0, ... }
+console.log(measureSubframeQuality(sparse).medianEccentricity, measureSubframeQuality(blurred).qualityScore, measureSubframeQuality(blurred).normalizedScore) // undefined 50.56 0.6461
+
+// The score of a set of measurements: the defaults, a percentage, a narrower sharpness range and a missing metric (omitted from the mean).
+console.log(DEFAULT_IMAGE_QUALITY) // { starCount: 100, targetPixels: 2, maximumPixels: 8, maximumEccentricity: 0.8, signalToNoise: 50, maximumBackground: 0.5, maximumNoise: 0.05 }
+console.log(imageQualityScore({ starCount: 100, medianHFD: 2, medianEccentricity: 0, medianSNR: 50, estimatedBackground: 0, noise: 0 })) // 1
+console.log(imageQualityScore({ starCount: 50, medianHFD: 5, medianSNR: 25 }), imageQualityScore({ starCount: 50, medianHFD: 5, medianSNR: 25 }, { scale: 100 })) // 0.5 50
+console.log(imageQualityScore({ starCount: 50, medianHFD: Infinity, medianFWHM: 5 }), imageQualityScore({ starCount: 50, medianHFD: 5 }, { targetPixels: 1, maximumPixels: 5 }), imageQualityScore({ starCount: 0 })) // 0.5 0 0
+
+// Selecting frames: no thresholds accepts all; the reasons list every failed threshold in a fixed order.
+const frames = [good, blurred, bright, sparse, empty]
+console.log(selectSubframes(frames).accepted.length) // 5
+const selection = selectSubframes(frames, { minStars: 20, minMedianSNR: 40, maxMedianHFD: 4, maxBackground: 0.3, minNormalizedScore: 0.5 })
+console.log(selection.accepted.length, selection.accepted[0] === good) // 1 true
+for (const r of selection.results) console.log(r.accepted, r.reasons.join(', ')) // per frame: true; false median-snr-too-low, median-hfd-too-high; false background-too-high, normalized-score-too-low; false too-few-stars, normalized-score-too-low; false too-few-stars, median-snr-too-low, median-hfd-unavailable, normalized-score-too-low
+
+// The shape thresholds, and a maximum on a metric that the stars do not supply (the sparse frame has no eccentricity or elongation).
+const shape = selectSubframes([good, sparse], { maxMedianFWHM: 3, maxMedianEccentricity: 0.1, maxMedianElongation: 1.01, maxNoise: 0.0001 })
+for (const r of shape.results) console.log(r.accepted, r.reasons.join(', ')) // per frame: false median-eccentricity-too-high, median-elongation-too-high, noise-too-high; false median-eccentricity-unavailable, median-elongation-unavailable, noise-too-high
+```
 
 ### Sub-Exposure and Integration Planning
 
