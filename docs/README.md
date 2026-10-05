@@ -7282,9 +7282,139 @@ console.log(approximateArcsinhStretchParameters(0.1, 0.02, 0.9)) // { stretchFac
 
 ### Automatic Background Extraction
 
+`automaticBackgroundExtraction(image, options?)` models the smooth sky background of a normalized 0..1 `Image` (a gradient, light pollution or vignetting) and removes it. It is the composition of three steps that are also exported: `fitBackgroundSurface(image, options?)` fits the model without touching the pixels and returns a `BackgroundModel`, `evaluateBackgroundModel(model, image)` materializes it as a fresh image with the shape of `image` (the pixels of `image` are not read), and `applyBackground(image, background, options?)` removes it in place and returns the per-channel `{ min, max }` of the corrected values before clipping. The result of the orchestrator has the corrected `image` (the same object, modified, unless `correction` is `'none'`), the `background` image and one entry in `channels` per image channel with the coefficients, the accepted and rejected sample counts, the robust `residual` dispersion, the `samples` of the grid and the pre-clip `outputMin` and `outputMax`.
+
+The fit samples a grid of `gridSize` boxes along the longer axis (2 to 128, 24 by default) with the median of each box of `boxSize` pixels (half a cell by default), discards the boxes whose dispersion is too high (`tolerance`), and fits a weighted surface to the others, rejecting iteratively the samples above the surface by `rejectionHigh` robust sigmas (2.5), those below by `rejectionLow` (4), for `rejectionIterations` rounds (2). The `model` is a Chebyshev `'polynomial'` of `degree` 1 to 6 (4 by default), good for smooth gradients and vignetting, or a smoothing `'thinPlateSpline'` (`smoothing` 0.1, 0 interpolates every sample) that follows irregular backgrounds at a higher cost. An RGB image is fitted per channel (`'perChannel'`, the default) or with one shared surface on the luminance (`colorMode: 'luminance'`). The correction is `'subtract'` (additive, the default), `'divide'` (multiplicative, with a guard near zero) or `'none'`, and the level `targetBackground` (0..1, the mean of the model by default) is restored afterwards. Out-of-range values are handled by `clipping`: `'truncate'` (the default), `'rescale'` or `'rescaleAsNeeded'`. An `Error` is thrown when a channel has fewer clean samples than the polynomial needs or when the `exclusionMask` does not have `width * height` entries; the box median does not model extended nebulosity, so an object that fills most of the frame is absorbed by the background unless it is excluded.
+
+`backgroundExclusionMaskFromStars(width, height, stars, options?)` builds a `Uint8Array` mask (1 is excluded) with a disk around each detected star, of radius `max(minRadius, radiusScale * hfd)` pixels (4 and 1.5 by default), to pass as `exclusionMask`. `DEFAULT_BACKGROUND_EXTRACTION_OPTIONS` holds the defaults.
+
+```ts
+import { applyBackground, automaticBackgroundExtraction, backgroundExclusionMaskFromStars, DEFAULT_BACKGROUND_EXTRACTION_OPTIONS, evaluateBackgroundModel, fitBackgroundSurface } from 'nebulosa/src/imaging/processing/background'
+import type { DetectedStar } from 'nebulosa/src/imaging/stars/detector'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A 96x64 frame: a sky of 0.10, a linear gradient up to +0.20 along x and two Gaussian stars.
+const width = 96
+const height = 64
+const stars = [
+	{ x: 30, y: 20, hfd: 3, snr: 50, flux: 100 },
+	{ x: 70, y: 44, hfd: 3, snr: 50, flux: 100 },
+] satisfies DetectedStar[]
+const frame = (): Image => {
+	const raw = new Float64Array(width * height)
+	for (let y = 0, i = 0; y < height; y++) for (let x = 0; x < width; x++, i++) raw[i] = 0.1 + (0.2 * x) / (width - 1) + stars.reduce((sum, s) => sum + 0.5 * Math.exp(-((x - s.x) ** 2 + (y - s.y) ** 2) / 4), 0)
+	return {
+		header: { SIMPLE: true, BITPIX: -64, NAXIS: 2, NAXIS1: width, NAXIS2: height },
+		metadata: { width, height, channels: 1, pixelCount: width * height, stride: width, strideInBytes: width * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined },
+		raw,
+	}
+}
+
+const round = (value: number) => Number(value.toFixed(4))
+const row = (image: Image, y: number, xs: number[]) => xs.map((x) => round(image.raw[y * width + x]))
+
+// The columns before the correction: the gradient is 0.10 at the left edge and 0.30 at the right.
+console.log(row(frame(), 5, [0, 24, 48, 72, 95])) // [ 0.1, 0.1505, 0.2011, 0.2516, 0.3 ]
+
+// The default correction subtracts the model and restores its mean level (about 0.2), so the sky becomes flat.
+const result = automaticBackgroundExtraction(frame())
+console.log(row(result.image, 5, [0, 24, 48, 72, 95])) // [ 0.2, 0.2, 0.2, 0.2, 0.2 ]
+console.log(row(result.background, 5, [0, 24, 48, 72, 95])) // [ 0.1, 0.1505, 0.2011, 0.2516, 0.3 ] (the model follows the gradient)
+console.log(result.channels.length, result.channels[0].acceptedSamples, result.channels[0].rejectedSamples, round(result.channels[0].residual)) // 1 325 59 0 (the residual of this noiseless frame is below 0.00005)
+console.log(round(result.channels[0].outputMin!), round(result.channels[0].outputMax!), result.channels[0].samples.length, result.channels[0].samples.filter((s) => s.accepted).length) // 0.2 0.7 384 325 (outputMax is the star peak; 384 grid samples, 325 accepted)
+
+// The star pixels stay above the sky (the star at (30, 20) peaks 0.5 above it).
+console.log(round(result.image.raw[20 * width + 30] - result.image.raw[20 * width + 40])) // 0.5
+
+// Fit, evaluate and apply as separate steps, with a fixed pedestal and a mask that keeps the stars out of the samples.
+const mask = backgroundExclusionMaskFromStars(width, height, stars)
+console.log(mask.reduce((sum, v) => sum + v, 0)) // 138
+const image = frame()
+const model = fitBackgroundSurface(image, { degree: 2, gridSize: 16, exclusionMask: mask })
+console.log(model.type, model.colorMode, model.degree, model.channelCount, model.surfaces[0].coefficients.length) // polynomial perChannel 2 1 6 (a degree 2 surface has 6 coefficients)
+const background = evaluateBackgroundModel(model, image)
+const ranges = applyBackground(image, background, { correction: 'subtract', targetBackground: 0.1, clipping: 'truncate' })
+console.log(
+	row(image, 5, [0, 24, 48, 72, 95]),
+	ranges.map((r) => [round(r.min), round(r.max)]),
+) // [ 0.1, 0.1, 0.1, 0.1, 0.1 ] [ [ 0.1, 0.6 ] ]
+
+// A multiplicative correction, a thin-plate spline and the 'none' correction, which leaves the image untouched.
+const divided = automaticBackgroundExtraction(frame(), { correction: 'divide', targetBackground: 0.2 })
+console.log(row(divided.image, 5, [0, 24, 48, 72, 95])) // [ 0.2, 0.2, 0.2, 0.2, 0.2 ]
+const spline = automaticBackgroundExtraction(frame(), { model: 'thinPlateSpline', smoothing: 1, gridSize: 12 })
+console.log(row(spline.image, 5, [0, 24, 48, 72, 95]), spline.channels[0].coefficients.length) // [ 0.2001, 0.2, 0.2, 0.2001, 0.2001 ] 87 (3 affine terms and 84 control points)
+const original = frame()
+const kept = automaticBackgroundExtraction(original, { correction: 'none' })
+console.log(kept.image === original, kept.channels[0].outputMin, row(kept.image, 5, [0, 95])) // true undefined [ 0.1, 0.3 ]
+
+console.log(DEFAULT_BACKGROUND_EXTRACTION_OPTIONS) // { gridSize: 24, boxSize: 0, model: 'polynomial', colorMode: 'perChannel', degree: 4, smoothing: 0.1, tolerance: 3, rejectionHigh: 2.5, rejectionLow: 4, rejectionIterations: 2, correction: 'subtract', clipping: 'truncate' }
+
+// A mask of the wrong length is rejected.
+try {
+	fitBackgroundSurface(frame(), { exclusionMask: new Uint8Array(10) })
+} catch (e) {
+	console.log((e as Error).message) // exclusionMask length must be 6144 (width*height), got 10
+}
+```
+
 ### Backfocus Correction Estimates
 
 ### Background Estimate
+
+`estimateBackground(image)` returns a robust `{ background, noise, snr }` of one frame, for a quick quality check that does not need star detection. The frame is split into a grid of at most 8 by 8 cells (fewer for a frame that is smaller than 8 pixels on a side), a regular lattice of at most `floor(4096 / cells)` pixels is read in each cell, and the `background` is the median of the cell medians, in the sample scale of the image. `noise` is the normalized median absolute deviation (scaled to a Gaussian standard deviation) of all the sampled pixels about the background, and `snr` is the median of the brightest cell minus the background, in units of that noise: 0 when the excess is not positive, and `Infinity` when it is positive and the noise is 0. At most 4096 pixels are examined, so the cost does not grow with the frame and the result is a deterministic approximation; a star smaller than the lattice step can be missed. A color image is read through its BT.709 luminance, a raw CFA mosaic is read as raw photosite values (the colors of the pattern are not separated, so a strongly colored mosaic widens the noise), non-finite samples are skipped, and an empty frame returns zeros. Because the background is a median of cells, a nebula or a gradient that covers most of the frame raises it.
+
+```ts
+import { estimateBackground } from 'nebulosa/src/imaging/analysis/background'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A deterministic generator of roughly Gaussian noise (the sum of four uniforms, standard deviation 0.01).
+let seed = 12345
+const noise = () => {
+	let sum = 0
+	for (let i = 0; i < 4; i++) {
+		seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+		sum += seed / 4294967296
+	}
+	return ((sum - 2) / Math.sqrt(4 / 12)) * 0.01
+}
+
+const frame = (width: number, height: number, channels: 1 | 3, value: (x: number, y: number) => number): Image => {
+	const raw = new Float32Array(width * height * channels)
+	for (let y = 0, i = 0; y < height; y++) for (let x = 0; x < width; x++) for (let c = 0; c < channels; c++, i++) raw[i] = value(x, y) + noise()
+	return {
+		header: { SIMPLE: true, BITPIX: -32, NAXIS: channels === 1 ? 2 : 3, NAXIS1: width, NAXIS2: height },
+		metadata: { width, height, channels, pixelCount: width * height, stride: width * channels, strideInBytes: width * channels * 4, pixelSizeInBytes: 4, bitpix: -32, bayer: undefined },
+		raw,
+	}
+}
+
+const round = (value: number) => Number(value.toFixed(4))
+const show = (image: Image) => {
+	const { background, noise, snr } = estimateBackground(image)
+	return [round(background), round(noise), round(snr)]
+}
+
+// A flat sky of 0.2 with a noise of about 0.01: the background and noise are recovered and no cell stands out much.
+console.log(show(frame(400, 300, 1, () => 0.2))) // [ 0.1998, 0.0107, 0.463 ]
+
+// A bright nebula in one corner makes the brightest cell stand out, while the background stays at the sky level.
+console.log(show(frame(400, 300, 1, (x, y) => 0.2 + (x > 300 && y < 75 ? 0.3 : 0)))) // [ 0.1998, 0.0112, 26.9899 ]
+
+// A gradient of 0.1 across the frame raises the noise, because the samples scatter about the median.
+console.log(show(frame(400, 300, 1, (x) => 0.2 + (0.1 * x) / 399))) // [ 0.2487, 0.0368, 1.3086 ]
+
+// An RGB frame goes through its luminance, a tiny frame is estimated from all its pixels and an empty one returns zeros.
+console.log(show(frame(200, 150, 3, () => 0.2)), show(frame(4, 3, 1, () => 0.5))) // [ 0.2001, 0.0077, 0.4345 ] [ 0.5005, 0.0075, 2.3394 ]
+console.log(estimateBackground({ ...frame(1, 1, 1, () => 0), metadata: { ...frame(1, 1, 1, () => 0).metadata, width: 0 } })) // { background: 0, noise: 0, snr: 0 }
+
+// A perfectly flat frame has no noise: the excess is not positive, and a single hot cell with no noise gives an infinite ratio.
+const flat = frame(80, 80, 1, () => 0.25)
+flat.raw.fill(0.25)
+console.log(estimateBackground(flat)) // { background: 0.25, noise: 0, snr: 0 }
+flat.raw.fill(0.9, 0, 10 * 80)
+console.log(estimateBackground(flat)) // { background: 0.25, noise: 0, snr: Infinity }
+```
 
 ### Background Neutralization
 
@@ -7340,11 +7470,153 @@ try {
 
 ### Bounded Robust Sampling
 
+`RobustReservoir` is the fixed-memory sampler that the analysis modules use to take the median, the median absolute deviation and a robust standard deviation of an image of any size. `new RobustReservoir(populationCapacity)` allocates room for `min(populationCapacity, ROBUST_SAMPLE_CAPACITY)` values (65536, at least 1) and throws a `RangeError` when the capacity is not a non-negative safe integer. `push(value)` considers one value and ignores non-finite ones: the first values are stored exactly, and once the reservoir is full each new value replaces a random retained one with the probability of a uniform reservoir, drawn from a deterministic xorshift generator that `reset()` restores, so the same sequence always gives the same sample. `seenCount` counts every finite value considered, `retainedCount` those that are kept and `approximate` tells whether the retained values are a sample (more values seen than retained). `median()` returns the median of the retained values and `mad(normalized?, scratch?)` their median absolute deviation (`normalized` multiplies it by the Gaussian factor 1.4826), `madAround(center, normalized?, scratch?)` computes it around a median that is already known, and `robustStandardDeviation()` is the population standard deviation after the samples more than five normalized MADs from the median are dropped. All return `NaN` when nothing has been pushed. The values are reordered by the selection of the median, which is not a problem for the statistics but means the reservoir does not preserve the order of arrival. The scratch passed to `mad` or `madAround` must hold every retained value (a `RangeError` otherwise). Once the reservoir is full the statistics are estimates from at most 65536 values, so they differ slightly from the exact ones.
+
+```ts
+import { ROBUST_SAMPLE_CAPACITY, RobustReservoir } from 'nebulosa/src/imaging/analysis/robust'
+
+// A small population is kept exactly.
+const small = new RobustReservoir(8)
+for (const value of [5, 1, 4, 2, 3, Number.NaN, Number.POSITIVE_INFINITY]) small.push(value)
+console.log(small.seenCount, small.retainedCount, small.approximate, small.median()) // 5 5 false 3 (the NaN and the Infinity are ignored)
+console.log(small.mad(), small.mad(true), small.madAround(3), small.robustStandardDeviation()) // 1 1.482602218505602 1 1.4142135623730951
+
+// Outliers: the median and the MAD ignore them, and the robust standard deviation drops what is beyond five MADs.
+const outliers = new RobustReservoir(16)
+for (const value of [10, 11, 9, 10, 12, 8, 10, 11, 9, 1000]) outliers.push(value)
+console.log(outliers.median(), outliers.mad(true), outliers.robustStandardDeviation()) // 10 1.482602218505602 1.154700538379252 (the 1000 is dropped by the standard deviation)
+
+// A caller-owned scratch buffer avoids the allocation of the MAD.
+const scratch = new Float64Array(16)
+console.log(outliers.mad(false, scratch)) // 1
+try {
+	outliers.mad(false, new Float64Array(2))
+} catch (e) {
+	console.log((e as Error).message) // robust MAD scratch must hold every retained sample
+}
+
+// A large population is sampled: the capacity is bounded, the result is approximate and reproducible.
+const large = new RobustReservoir(1_000_000)
+for (let i = 0; i < 300_000; i++) large.push(i % 1000)
+console.log(ROBUST_SAMPLE_CAPACITY, large.seenCount, large.retainedCount, large.approximate, large.median()) // 65536 300000 65536 true 500
+
+large.reset()
+console.log(large.seenCount, large.retainedCount, large.median()) // 0 0 NaN
+for (let i = 0; i < 300_000; i++) large.push(i % 1000)
+console.log(large.median()) // 500 (the same after the reset)
+
+// The capacity of the storage and the invalid arguments.
+console.log(new RobustReservoir(0).retainedCount, new RobustReservoir(10).approximate) // 0 false
+try {
+	new RobustReservoir(-1)
+} catch (e) {
+	console.log((e as Error).message) // robust reservoir population capacity must be a non-negative safe integer
+}
+```
+
 ### Celestial Streak Tracks
 
 ### Collimation Sequence Summary
 
 ### Cosmetic Correction
+
+`cosmeticCorrection(image, options?)` finds isolated sensor defects (hot, cold or dead pixels, and known bad pixels, columns and rows) in a normalized 0..1 `Image` and replaces each one with the median of its neighbourhood, in place. It returns `{ image, corrected, hot, cold, dark, defect }`: the same image and the number of samples replaced in total and by each detector (a sample counts for the first detector that flags it, in the order defect, dark, hot, cold, so the four counts add up to `corrected`). Every channel is processed on its own, and the repair value is always taken from the original plane, so one repair does not feed another.
+
+There are three detectors. The automatic one flags a pixel that is more than `hotSigma` (3 by default) noise units above, or `coldSigma` (3) below, the median of the window of radius `windowRadius` (1, a 3x3 window), where the noise is the normalized MAD of the channel (its standard deviation when the MAD is 0), and only if it is isolated: when an immediate neighbour is itself elevated, the pixel is considered part of a real source and is kept, which protects the peak of a star whose profile spills into the adjacent pixels. A star confined to one pixel cannot be told from a hot pixel in a single frame; pass `protect`, a mask of `width * height` entries whose nonzero pixels are never touched by the automatic detector (an `Error` is thrown for a mask of another length). A value of 0 for `hotSigma` or `coldSigma` turns that side off. The master-dark detector (`masterDark`, which must have the same width, height and channels, otherwise it is ignored) flags the pixels of the dark that are above its median by `darkHotSigma` (5) noise units, and the `defects` map (`pixels` as `[x, y]` pairs, `columns` and `rows`, 0-based, out-of-range entries ignored) is repaired unconditionally; both ignore the isolation test and the protection mask. `amount` (0..1, 1 by default) blends the repair with the original value, and 0 changes nothing.
+
+On a CFA mosaic (a single channel with `metadata.bayer`) the neighbourhood and the statistics are computed per color phase, at a stride of 2 pixels, so that the alternating colors of a uniform scene are not taken for defects. The method repairs single pixels and thin lines, not clusters, and a window radius larger than the defect cluster is needed to fill a cluster; the repair is a median, so it does not recover the detail that was under the pixel. `DEFAULT_COSMETIC_CORRECTION_OPTIONS` holds the numeric defaults.
+
+```ts
+import { cosmeticCorrection, DEFAULT_COSMETIC_CORRECTION_OPTIONS } from 'nebulosa/src/imaging/processing/cosmetic'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A deterministic noise (sum of four uniforms, standard deviation 0.01) over a sky of 0.2.
+let seed = 777
+const noise = () => {
+	let sum = 0
+	for (let i = 0; i < 4; i++) {
+		seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+		sum += seed / 4294967296
+	}
+	return ((sum - 2) / Math.sqrt(4 / 12)) * 0.01
+}
+
+const size = 32
+const make = (sky: number, extra: (x: number, y: number) => number = () => 0): Image => {
+	const raw = new Float32Array(size * size)
+	for (let y = 0, i = 0; y < size; y++) for (let x = 0; x < size; x++, i++) raw[i] = sky + noise() + extra(x, y)
+	return {
+		header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: size, NAXIS2: size },
+		metadata: { width: size, height: size, channels: 1, pixelCount: size * size, stride: size, strideInBytes: size * 4, pixelSizeInBytes: 4, bitpix: -32, bayer: undefined },
+		raw,
+	}
+}
+
+// A star with a 2-pixel sigma at (25, 25) over the sky; the defects are added by hand afterwards.
+const star = (x: number, y: number) => 0.5 * Math.exp(-((x - 25) ** 2 + (y - 25) ** 2) / 8)
+const frame = () => {
+	seed = 777
+	const image = make(0.2, star)
+	image.raw[10 * size + 10] = 0.9 // a hot pixel at (10, 10)
+	image.raw[12 * size + 20] = 0 // a dead pixel at (20, 12)
+	return image
+}
+const at = (image: Image, x: number, y: number) => Number(image.raw[y * size + x].toFixed(4))
+
+// The defaults repair the hot and the dead pixel with the median of their 3x3 neighbourhood and leave the star alone.
+const image = frame()
+const peak = at(image, 25, 25)
+const result = cosmeticCorrection(image)
+console.log(result.corrected, result.hot, result.cold, result.dark, result.defect) // 2 1 1 0 0 (a hot and a cold pixel)
+console.log(at(image, 10, 10), at(image, 20, 12), at(image, 25, 25) === peak, result.image === image) // 0.2095 0.2022 true true (the repaired values are the neighbourhood medians)
+
+// Only the hot side, and a half-strength repair that blends the median with the original value.
+console.log(cosmeticCorrection(frame(), { coldSigma: 0 }).cold) // 0
+const half = frame()
+cosmeticCorrection(half, { amount: 0.5 })
+console.log(at(half, 10, 10)) // 0.5547 (halfway between the original 0.9 and the median)
+
+// A known bad column and bad pixels are repaired unconditionally, even where there is no outlier to detect.
+const mapped = frame()
+mapped.raw.fill(0.7, 5 * size + 3, 5 * size + 4)
+const withMap = cosmeticCorrection(mapped, {
+	hotSigma: 0,
+	coldSigma: 0,
+	defects: {
+		pixels: [
+			[3, 5],
+			[999, 0],
+		],
+		columns: [8],
+		rows: [],
+	},
+})
+console.log(withMap.corrected, withMap.defect, at(mapped, 3, 5)) // 33 33 0.2031 (the 32 pixels of the column and the pixel; the out-of-range entry is ignored)
+
+// A master dark with a fixed hot pixel at (3, 3), which is only 0.05 above the sky in the light frame, with the automatic detector off.
+seed = 4242
+const masterDark = make(0.05, (x, y) => (x === 3 && y === 3 ? 0.4 : 0))
+const dark = frame()
+dark.raw[3 * size + 3] += 0.05
+const withDark = cosmeticCorrection(dark, { hotSigma: 0, coldSigma: 0, masterDark })
+console.log(withDark.dark, withDark.corrected, at(dark, 3, 3)) // 1 1 0.1986
+
+// A mask protects a one-pixel star from the automatic detector.
+const protect = new Uint8Array(size * size)
+protect[10 * size + 10] = 1
+const protectedResult = cosmeticCorrection(frame(), { protect })
+console.log(protectedResult.hot, protectedResult.cold) // 0 1 (the hot pixel is protected, the dead one is not)
+
+// An amount of 0 changes nothing, and so do thresholds of 0 with no other detector.
+console.log(cosmeticCorrection(frame(), { amount: 0 }).corrected, cosmeticCorrection(frame(), { hotSigma: 0, coldSigma: 0 }).corrected) // 0 0
+console.log(DEFAULT_COSMETIC_CORRECTION_OPTIONS) // { hotSigma: 3, coldSigma: 3, windowRadius: 1, amount: 1, darkHotSigma: 5 }
+
+try {
+	cosmeticCorrection(frame(), { protect: new Uint8Array(10) })
+} catch (e) {
+	console.log((e as Error).message) // protect mask length must be 1024 (width*height), got 10
+}
+```
 
 ### Critical Focus Planning Estimate
 
@@ -7423,6 +7695,77 @@ for (const curve of [
 ```
 
 ### Dark Current
+
+`measureSensorDarkCurrent(darks, conversionGain, options?)` estimates the dark current of a sensor, in electrons per pixel per second, from dark frames taken at several exposure times. `darks` is a list of `SensorFrameSet` (`frames` with at least two `DigitalImage` taken under identical conditions, the `exposure` in seconds, and optionally `temperature` or `operatingPoint.temperature` in degrees Celsius); `conversionGain` is the conversion gain in electrons per DN (the `conversion` of the photon transfer fit, see Photon Transfer and Read Noise). The frames must be undebayered single-channel digital-number images (`sampleScale: 'digital'`, as read with that option in Scientific Image Loading and Export), all with the same geometry. Consecutive frames of a set are paired (1 with 2, 3 with 4, an odd last frame is not used), each pair gives a mean and a temporal variance, the pairs with the same exposure are aggregated, and at least three distinct exposures are required (a `RangeError` otherwise, as for a non-finite or non-positive gain, an exposure that is negative or not finite, or frames of different shapes).
+
+Two independent weighted regressions against the exposure, with an unknown intercept (the bias level and the read noise), give the result. `mean` is the slope of the mean signal times the gain, clamped to 0 (a negative slope is noise). `variance` is the slope of the temporal variance times the gain squared, because the shot noise of the accumulated dark electrons adds a variance equal to their number, and is `undefined` when that slope is not positive; the two estimates should agree for a clean sensor, and a disagreement suggests a bad gain or a non-Poisson contribution. `meanFit` and `varianceFit` report each regression (`r`, `r2`, `rss`, `rmsd`, `pointCount`, `weighted` and the standard errors of the slope and the intercept), `temperature` is the mean of the recorded temperatures when there are any, and `ampGlow` is a map of the slope per tile of `options.tile` (64 by 64 output pixels by default): `current` per tile, its `median`, `maximum`, `excess` (maximum minus median) and `ratio` (maximum over median when the median is positive), which exposes localized amplifier glow without allocating a full-resolution map. The other `options` are those of paired measurements: an inclusive-exclusive `area`, the `plane` of a CFA mosaic (`'red'`, `'green1'`, `'green2'` or `'blue'`, required for a mosaic, together with an integer `cfaOffset` for the tile analysis; `'mono'` otherwise), a known `digitalClip` in DN and a `mask` of `width * height` bytes whose nonzero entries are skipped. The model is linear in the exposure, so it does not hold at an exposure where the pixels clip or the dark signal is not linear, and the regression on the variance needs frames whose noise is not dominated by quantization.
+
+```ts
+import { measureSensorDarkCurrent } from 'nebulosa/src/imaging/analysis/sensor/dark'
+import type { SensorFrameSet } from 'nebulosa/src/imaging/analysis/sensor/types'
+import type { DigitalImage } from 'nebulosa/src/imaging/model/types'
+
+// A 4x4 digital image, optionally a RGGB mosaic.
+const digital = (raw: Float64Array, bayer?: 'RGGB'): DigitalImage => ({
+	header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 4, NAXIS2: 4, BAYERPAT: bayer },
+	raw,
+	metadata: { width: 4, height: 4, channels: 1, pixelCount: 16, pixelSizeInBytes: 2, strideInBytes: 8, stride: 4, bitpix: 16, bayer },
+	sampleScale: 'digital',
+	digitalRange: [0, 65535],
+	quantizationStep: 1,
+})
+
+// A pair with an exact mean and temporal variance (DN and DN squared): the frames differ by +-sqrt(2 variance) / 2 about the mean.
+const pair = (mean: number, variance: number, bayer?: 'RGGB'): [DigitalImage, DigitalImage] => {
+	const difference = Math.sqrt(2 * variance)
+	const first = new Float64Array(16)
+	const second = new Float64Array(16)
+	for (let i = 0; i < 16; i++) {
+		const signed = (i & 1) === 0 ? difference : -difference
+		first[i] = mean + signed / 2
+		second[i] = mean - signed / 2
+	}
+	return [digital(first, bayer), digital(second, bayer)]
+}
+
+// A dark current of 5 DN/s with a conversion gain of 2 e-/DN is 10 e-/pixel/s from the mean slope;
+// the variance grows by 2.5 DN^2/s, which times the gain squared (4) is also 10 e-/pixel/s.
+const darks: SensorFrameSet[] = [0, 10, 20, 40, 80, 120].map((exposure) => ({ frames: pair(100 + 5 * exposure, 4 + 2.5 * exposure), exposure, temperature: -10 }))
+const result = measureSensorDarkCurrent(darks, 2, { tile: { width: 2, height: 2 } })
+console.log(result.mean, result.variance, result.temperature) // 10 9.99999999999994 -10
+console.log(result.meanFit.r2, result.meanFit.pointCount, result.meanFit.weighted, result.varianceFit?.r2) // 1 6 true 1
+console.log(result.ampGlow?.columns, result.ampGlow?.rows, result.ampGlow?.median, result.ampGlow?.maximum, result.ampGlow?.excess, result.ampGlow?.ratio) // 2 2 10 10 0 1
+
+// A constant mean gives no dark current, and the variance slope is then not positive.
+const constant: SensorFrameSet[] = [0, 10, 20].map((exposure) => ({ frames: pair(100, 4), exposure }))
+const flat = measureSensorDarkCurrent(constant, 2)
+console.log(flat.mean, flat.variance, flat.varianceFit, flat.temperature) // 0 undefined undefined undefined
+
+// Localized amp glow: the upper right quadrant warms four times faster than the rest, and the tiles show it.
+const glow: SensorFrameSet[] = [0, 10, 20, 40].map((exposure) => {
+	const frames = pair(0, 4)
+	for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) for (const frame of frames) frame.raw[y * 4 + x] += 100 + (x >= 2 && y < 2 ? 20 : 5) * exposure
+	return { frames, exposure }
+})
+const glowing = measureSensorDarkCurrent(glow, 2, { tile: { width: 2, height: 2 } })
+console.log(Array.from(glowing.ampGlow!.current), glowing.ampGlow!.median, glowing.ampGlow!.ratio) // [ 10, 40, 10, 10 ] 10 4
+
+// A region of interest and a mask restrict the samples (the frames are uniform, so the result does not change), and a mosaic needs its plane.
+const masked = new Uint8Array(16)
+masked[5] = 1
+console.log(measureSensorDarkCurrent(darks, 2, { area: { left: 0, top: 0, right: 4, bottom: 2 }, mask: masked, tile: { width: 4, height: 2 } }).mean) // 10
+const mosaics: SensorFrameSet[] = [0, 10, 20, 40].map((exposure) => ({ frames: pair(100 + 3 * exposure, 4 + exposure, 'RGGB'), exposure }))
+console.log(measureSensorDarkCurrent(mosaics, 2, { plane: 'green1', cfaOffset: [0, 0], tile: { width: 4, height: 4 } }).mean) // 6
+
+// Errors: fewer than three exposures, and a CFA mosaic without a plane.
+for (const run of [() => measureSensorDarkCurrent(darks.slice(0, 2), 2), () => measureSensorDarkCurrent(mosaics, 2), () => measureSensorDarkCurrent(darks, 0)]) {
+	try {
+		run()
+	} catch (e) {
+		console.log((e as Error).message) // dark-current regression requires at least three distinct exposure times, then a CFA image requires an explicit color sensor plane, then dark-current conversion gain must be finite and positive
+	}
+}
+```
 
 ### Debayering
 
@@ -7558,6 +7901,57 @@ try {
 ### Focus Surface Analysis
 
 ### Frame Saturation
+
+`analyzeSaturation(image, options?)` counts the saturated pixels of a frame without modifying it. A pixel is saturated when any of its channels is at or above `options.level` (1 by default, the top of the normalized scale; for a camera whose full well is reached below the digital maximum, pass the clipping level in the same scale as the samples). The result has the `saturatedPixels`, the `fraction` of the frame (0 for an empty one), a row-major `mask` of `width * height` bytes where 1 marks a saturated pixel, and `saturatedStars`, the number of positions in `options.stars` (objects with `x` and `y` centroids in pixels, origin at the top left) whose nearest pixel is saturated; a star outside the frame is not counted. The star test examines only that one pixel, not the flux of the star, so a star that is saturated in a pixel beside its centroid is not counted. A raw CFA mosaic is analyzed as it is, photosite by photosite, so a saturated pixel of one color is a pixel of the mask; an image that is already stretched will have its own clipping.
+
+```ts
+import { analyzeSaturation } from 'nebulosa/src/imaging/analysis/saturation'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A 6x4 mono frame with a saturated 2x2 core at (2..3, 1..2) and one pixel at 0.97.
+const frame = (): Image => {
+	const raw = new Float32Array(24).fill(0.2)
+	for (const [x, y] of [
+		[2, 1],
+		[3, 1],
+		[2, 2],
+		[3, 2],
+	])
+		raw[y * 6 + x] = 1
+	raw[0] = 0.97
+	return {
+		header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: 6, NAXIS2: 4 },
+		metadata: { width: 6, height: 4, channels: 1, pixelCount: 24, stride: 6, strideInBytes: 24, pixelSizeInBytes: 4, bitpix: -32, bayer: undefined },
+		raw,
+	}
+}
+
+const result = analyzeSaturation(frame())
+console.log(result.saturatedPixels, result.fraction, result.saturatedStars) // 4 0.16666666666666666 0
+console.log(result.mask) // Uint8Array(24) [ 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0 ]
+
+// A lower level takes the 0.97 pixel too, and the stars are tested at their nearest pixel.
+const stars = [
+	{ x: 2.4, y: 1.6 },
+	{ x: 0, y: 0 },
+	{ x: 5, y: 3 },
+	{ x: -1, y: 0 },
+	{ x: 10, y: 10 },
+]
+console.log(analyzeSaturation(frame(), { stars }).saturatedStars, analyzeSaturation(frame(), { level: 0.95, stars }).saturatedStars) // 1 2 (only the star at (2.4, 1.6) at the default level, and the one at (0, 0) too at 0.95)
+console.log(analyzeSaturation(frame(), { level: 0.95 }).saturatedPixels) // 5
+
+// An RGB pixel is saturated when any channel reaches the level.
+const rgb: Image = {
+	header: { SIMPLE: true, BITPIX: -32, NAXIS: 3, NAXIS1: 2, NAXIS2: 1, NAXIS3: 3 },
+	metadata: { width: 2, height: 1, channels: 3, pixelCount: 2, stride: 6, strideInBytes: 24, pixelSizeInBytes: 4, bitpix: -32, bayer: undefined },
+	raw: new Float32Array([0.5, 1, 0.5, 0.5, 0.5, 0.5]),
+}
+console.log(analyzeSaturation(rgb).saturatedPixels, analyzeSaturation(rgb).mask) // 1 Uint8Array(2) [ 1, 0 ]
+
+// The frame is not modified, and a frame with no saturated pixel gives zeros.
+console.log(frame().raw[2 * 6 + 2], analyzeSaturation({ ...frame(), raw: new Float32Array(24).fill(0.5) }).saturatedPixels) // 1 0
+```
 
 ### Global Image Normalization
 
@@ -7878,6 +8272,84 @@ console.log(
 
 ### Photon Transfer and Read Noise
 
+The temporal part of the sensor characterization works on pairs of frames in digital numbers (DN). Two frames taken under the same conditions differ only by their temporal noise, so `measureSensorPair(first, second, options?)` reduces a pair to a `SensorPairStatistics`: the `mean` of the two frame means (DN), the temporal `variance` (DN squared, the population variance of the difference divided by 2, which cancels the fixed pattern), the signed `drift` between the frame means, the `sampleCount` of finite unmasked samples, the `rejectedCount`, and the `saturatedCount` and `clippedFraction` of the samples at or above the optional `digitalClip`. The frames must be `DigitalImage` values (see Scientific Image Loading and Export), undebayered single-channel and with the same geometry, and `options` selects an inclusive-exclusive integer `area`, the `plane` of a CFA mosaic (`'red'`, `'green1'`, `'green2'` or `'blue'`, with the integer `cfaOffset` of the origin; `'mono'` otherwise) and a `mask` of `width * height` bytes whose nonzero entries are skipped. `aggregateSensorPairs(pairs)` combines independent pair reports weighted by their sample counts and adds the `pairCount` and the scatter between pairs (`meanScatter` in DN squared, `varianceScatter` in DN to the fourth power).
+
+`measureSensorReadNoise(pairs, conversionGain?, quantizationStep?)` turns the pairs of short dark or bias frames into a `SensorReadNoise`: the RMS noise in DN (`digital`), the `deviation` of the per-pair RMS, and, when the `conversionGain` (electrons per DN) is positive, `totalElectrons` (including the quantization noise) and, when the `quantizationStep` (DN) is also given, `sensorElectrons` after removing the uniform quantization noise `step^2 / 12`. `fitPhotonTransferGain(points, range?)` fits the photon transfer curve (variance against signal, with a free intercept) to the valid, unclipped `PhotonTransferPoint` values whose signal lies in the fraction `range` of the largest valid signal (`[0.05, 0.7]` by default, a `RangeError` for a range that is not increasing within 0..1), and returns `[points, gain]`: the points annotated with `selectedForGainFit` and the `fitRejectionReasons` (`'invalidPoint'`, `'nonPositiveSignal'`, `'nonPositiveVariance'`, `'clipped'`, `'outsideFitRange'`, `'insufficientSamples'`), and a `SensorGain` with the `system` gain in DN per electron (the slope), the `conversion` gain in electrons per DN (its inverse), the `intercept` in DN squared, the weighted regression report `fit` and the signal `range` that was fitted, or `undefined` when fewer than two points are selected, they all have the same signal or the slope is not positive. This is the shot-noise model, in which the variance of a Poisson signal in DN is the signal times the system gain, so it does not hold for a sensor that is not linear or whose variance includes a pixel-response non-uniformity that was not removed.
+
+`characterizeSensorTemporal(bias, flats, options?)` runs the whole chain for one plane and returns `{ bias, photonTransfer, gain, readNoise }`. `bias` is a `SensorFrameSet` of the shortest exposures and `flats` a list of `SensorFlatFrameSet` at increasing illumination, each optionally with its own `darkFrames` at the same exposure (otherwise the bias pair aggregate is the reference). Each flat gives a point with the dark-corrected `signal` and `variance`, the `snr`, the clipped fraction and a `stimulus` (the `photons` when every level has them, otherwise the exposure times the relative `intensity`), the points are sorted by signal, and the read noise is taken from the bias pairs with the gain found. Every set needs at least one complete pair, a frame of another size or CFA pattern is rejected with a `RangeError`, and an odd last frame of a set is not used. The options are those of a pair plus `gainRange`. All the numbers returned are finite or omitted.
+
+```ts
+import { aggregateSensorPairs, measureSensorPair } from 'nebulosa/src/imaging/analysis/sensor/pair'
+import { characterizeSensorTemporal, fitPhotonTransferGain, measureSensorReadNoise } from 'nebulosa/src/imaging/analysis/sensor/ptc'
+import type { SensorFlatFrameSet, SensorFrameSet } from 'nebulosa/src/imaging/analysis/sensor/types'
+import type { DigitalImage } from 'nebulosa/src/imaging/model/types'
+
+const digital = (raw: Float64Array): DigitalImage => ({
+	header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 4, NAXIS2: 4 },
+	raw,
+	metadata: { width: 4, height: 4, channels: 1, pixelCount: 16, pixelSizeInBytes: 2, strideInBytes: 8, stride: 4, bitpix: 16, bayer: undefined },
+	sampleScale: 'digital',
+	digitalRange: [0, 65535],
+	quantizationStep: 1,
+})
+
+// A pair with an exact mean and temporal variance: the frames differ by +-sqrt(2 variance) / 2 about the mean.
+const pair = (mean: number, variance: number): [DigitalImage, DigitalImage] => {
+	const difference = Math.sqrt(2 * variance)
+	const first = new Float64Array(16)
+	const second = new Float64Array(16)
+	for (let i = 0; i < 16; i++) {
+		const signed = (i & 1) === 0 ? difference : -difference
+		first[i] = mean + signed / 2
+		second[i] = mean - signed / 2
+	}
+	return [digital(first), digital(second)]
+}
+
+// One pair: its mean, temporal variance, drift (the second frame is 2 DN brighter) and the clipped fraction at a clip of 1002 DN.
+const [a, b] = pair(1000, 4)
+b.raw.forEach((value, i) => (b.raw[i] = value + 2))
+const one = measureSensorPair(a, b, { digitalClip: 1002 })
+console.log(one.mean, one.variance, one.drift, one.sampleCount, one.saturatedCount, one.clippedFraction) // 1001 4 -2 16 8 0.5 (the variance prints as 4.000000000000065)
+
+// A mask and a region of interest reduce the samples, and the aggregate of two pairs weights them by their sample counts.
+const mask = new Uint8Array(16)
+mask[0] = 1
+const masked = measureSensorPair(...pair(1000, 4), { mask, area: { left: 0, top: 0, right: 4, bottom: 2 } })
+console.log(masked.sampleCount, masked.rejectedCount) // 7 1
+const total = aggregateSensorPairs([measureSensorPair(...pair(1000, 4)), measureSensorPair(...pair(1002, 6))])
+console.log(total.mean, total.variance, total.pairCount, total.meanScatter, total.varianceScatter) // 1001 5 2 1 1 (rounded: the variance prints as 4.999999999999901)
+
+// Read noise from bias pairs: 2 DN RMS, 4 electrons at 2 e-/DN, and 3.96 after the quantization noise of a 1 DN step.
+const biasPairs = [measureSensorPair(...pair(1000, 4)), measureSensorPair(...pair(1000, 4))]
+console.log(measureSensorReadNoise(biasPairs)) // { digital: 2, totalElectrons: undefined, sensorElectrons: undefined, pairCount: 2, deviation: 0 } (2.000000000000016 DN)
+console.log(measureSensorReadNoise(biasPairs, 2, 1)) // { digital: 2, totalElectrons: 4, sensorElectrons: 3.958, pairCount: 2, deviation: 0 }
+
+// A photon transfer set: the variance is 4 DN^2 of read noise plus 0.5 DN per DN of signal, so the system gain is 0.5 DN/e- and the conversion gain 2 e-/DN.
+const bias: SensorFrameSet = { frames: pair(1000, 4), exposure: 0 }
+const flats: SensorFlatFrameSet[] = [100, 400, 800, 1600, 3200, 6400].map((signal, level) => ({ frames: pair(1000 + signal, 4 + 0.5 * signal), darkFrames: pair(1000, 4), exposure: level + 1 }))
+const result = characterizeSensorTemporal(bias, flats, { digitalClip: 60000 })
+console.log(result.gain?.system, result.gain?.conversion, result.gain?.intercept, result.gain?.range, result.gain?.fit.r2) // 0.5 2 0 [ 400, 3200 ] 1 (the intercept prints as 3.5e-12 DN^2: the read noise is not in it because the dark pair variance is subtracted)
+console.log(result.bias, result.readNoise) // { mean: 1000, drift: 0, sampleCount: 16 } { digital: 2, totalElectrons: 4, sensorElectrons: 3.958, pairCount: 1, deviation: 0 }
+console.log(result.photonTransfer.map((point) => [point.signal, point.variance, point.selectedForGainFit, point.fitRejectionReasons.join('|')])) // [ [ 100, 50, false, 'outsideFitRange' ], [ 400, 200, true, '' ], [ 800, 400, true, '' ], [ 1600, 800, true, '' ], [ 3200, 1600, true, '' ], [ 6400, 3200, false, 'outsideFitRange' ] ]
+console.log(result.photonTransfer[2].snr, result.photonTransfer[2].stimulus) // 39.80 3 (the stimulus is the exposure of the level, as the levels have no photons)
+
+// The gain fit alone, with a narrower range that rejects the faint and bright levels.
+const [points, gain] = fitPhotonTransferGain(result.photonTransfer, [0.1, 0.3])
+console.log(
+	points.map((point) => point.selectedForGainFit),
+	gain?.system,
+) // [ false, false, true, true, false, false ] 0.5
+
+// With a single usable level the gain is undefined, and an invalid range is rejected.
+console.log(fitPhotonTransferGain(result.photonTransfer.slice(0, 1))[1])
+try {
+	fitPhotonTransferGain(result.photonTransfer, [0.5, 0.2])
+} catch (e) {
+	console.log((e as Error).message) // gain range must be an increasing fraction within 0..1
+}
+```
+
 ### Pixel Sigma Clipping and Background Levels
 
 ### PSF Filter
@@ -8180,11 +8652,258 @@ try {
 
 ### Sensor Characterization
 
+`characterizeSensor(input, options?)` is the entry point of the EMVA-inspired sensor characterization: from the digital frames acquired at one operating point of a camera it returns the gain, read noise, saturation and dynamic range, linearity, quantum efficiency, dark current and the spatial noise and defects, one result per plane (`'mono'`, or `'red'`, `'green1'`, `'green2'` and `'blue'` for an undebayered CFA mosaic), and never throws for a data problem: recoverable failures become entries of `diagnostics`. The `input` has the expected `operatingPoint` (gain, offset, temperature in degrees Celsius, readout mode, binning, sensor origin and so on, all optional, merged with those of the frame sets and compared with a temperature tolerance), the `bias` frame set (at least two frames at the shortest exposure), the `flats` (`SensorFlatFrameSet` at increasing illumination, each with an exposure in seconds, optionally the `photons` per pixel and `wavelength` in nanometres of a calibrated source and `darkFrames` at the same exposure), the optional `darks` at several exposures for the dark current (three distinct exposures at least), and the optional `spatial` pair of a `dark` and a `flat` stack of the same exposure for the fixed-pattern noise and the defects. Every frame is a single-channel `DigitalImage` (see Scientific Image Loading and Export); the stages are described in Photon Transfer and Read Noise, Sensor Linearity, Dark Current, Sensor Fixed-Pattern Noise and Sensor Stack Defects.
+
+The result has the `operatingPoint` that was merged, the `acquisition` summary (width, height, the `roi` as an inclusive-exclusive rectangle, the counts of bias frames, flat levels and dark levels and the `[minimum, maximum]` temperatures) and the `planes`, each with `bias`, `gain` (`system` in DN per electron and `conversion` in electrons per DN), `readNoise`, `saturation`, `dynamicRange`, `linearity`, `photonTransfer` (the points, each with its `saturationFraction`), `responsivity`, `quantumEfficiency`, `darkCurrent`, `dsnu`, `prnu` and `defects`. A field is `undefined` when its stage could not run (for example the dark current without darks, or any electron quantity when the gain fit failed). A diagnostic has a `severity` (`'info'`, `'warning'` or `'error'`), a stable `code`, a `message` and, where it applies, the `plane` and the zero-based `level`; they report too few levels (`insufficientBiasFrames`, `insufficientFlatLevels` with nine recommended, `insufficientDarkLevels` with six recommended, `insufficientSpatialFrames` with 100 recommended), a mixed geometry, CFA pattern or operating point, a temperature drift above the tolerance, and the quality of the fits: a gain fit with r2 below 0.98 or a residual above 3 percent of the fitted span, no saturation found, a mean linearity error above 1 percent, a dark current from the mean and from the variance that differ by more than half, an amp glow of more than 1.5 times the median tile, a clipped level (more than 1 percent of the samples) and a response that falls, a missing wavelength or a quantum efficiency outside 0..1. A structural error (frames that are not single-channel digital images, of different sizes or CFA patterns, an exposure that is not finite and non-negative, an unknown CFA origin) returns no planes. A mosaic needs an integer sensor origin in the operating point or consistent Bayer offsets in the frames, and binned mosaics are rejected.
+
+`options` adds an `area` (an inclusive-exclusive rectangle), the `planes` to analyze, a known `digitalClip` in DN (the lowest upper bound declared by the frames when omitted), the fractional `gainRange` and `linearityRange`, the `temperatureTolerance` in degrees Celsius (0.5), the `rejectionSigma` for defects (5), the `spatialDetrend` for the PRNU, the `maps` to retain (`'none'`, `'defects'` or `'all'`), the caller-owned `spatialBuffers` and the `tile` size; `DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS` has the defaults. A non-finite clip, a negative or non-finite temperature tolerance and a non-positive rejection sigma throw a `RangeError`. The analysis is synchronous and the frames are not modified, but it reads every pixel of every frame, so a full-resolution characterization is a long task that is better run away from a UI thread.
+
+```ts
+import { characterizeSensor } from 'nebulosa/src/imaging/analysis/sensor/characterization'
+import { DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS } from 'nebulosa/src/imaging/analysis/sensor/types'
+import type { SensorFlatFrameSet, SensorFrameSet } from 'nebulosa/src/imaging/analysis/sensor/types'
+import type { DigitalImage } from 'nebulosa/src/imaging/model/types'
+
+const digital = (raw: Float64Array): DigitalImage => ({
+	header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 4, NAXIS2: 4 },
+	raw,
+	metadata: { width: 4, height: 4, channels: 1, pixelCount: 16, pixelSizeInBytes: 2, strideInBytes: 8, stride: 4, bitpix: 16, bayer: undefined },
+	sampleScale: 'digital',
+	digitalRange: [0, 65535],
+	quantizationStep: 1,
+})
+
+// A pair with an exact mean and temporal variance (the frames differ by +-sqrt(2 variance) / 2).
+const pair = (mean: number, variance: number): [DigitalImage, DigitalImage] => {
+	const difference = Math.sqrt(2 * variance)
+	const first = new Float64Array(16)
+	const second = new Float64Array(16)
+	for (let i = 0; i < 16; i++) {
+		const signed = (i & 1) === 0 ? difference : -difference
+		first[i] = mean + signed / 2
+		second[i] = mean - signed / 2
+	}
+	return [digital(first), digital(second)]
+}
+
+// A camera with a system gain of 0.5 DN/e-, a read noise of 2 DN, a pedestal of 1000 DN and a dark current of 5 DN/s.
+const bias: SensorFrameSet = { frames: pair(1000, 4), exposure: 0 }
+const flats: SensorFlatFrameSet[] = [100, 200, 400, 800, 1200, 1600, 2400, 3200, 4800, 6400].map((signal, i) => ({ frames: pair(1000 + signal, 4 + 0.5 * signal), darkFrames: pair(1000, 4), exposure: i + 1, photons: signal * 4, wavelength: 550 }))
+const darks: SensorFrameSet[] = [0, 10, 20, 40, 80, 120].map((exposure) => ({ frames: pair(1000 + 5 * exposure, 4 + 2.5 * exposure), exposure, temperature: -10 }))
+
+const result = characterizeSensor({ operatingPoint: { gain: 100, temperature: -10 }, bias, flats, darks }, { digitalClip: 65535, tile: { width: 2, height: 2 } })
+const [mono] = result.planes
+console.log(result.planes.length, mono.plane, result.acquisition) // 1 mono, a 4x4 roi (0, 0, 4, 4), 2 bias frames, 10 flat levels, 6 dark levels, temperatures [-10, -10]
+console.log(mono.gain?.system, mono.gain?.conversion, mono.readNoise.digital, mono.readNoise.sensorElectrons) // 0.5 2 2 3.958 (DN/e-, e-/DN, DN, e-)
+console.log(mono.saturation?.method, mono.saturation?.signal, mono.saturation?.capacity) // digitalRange 64535 129070 (the clip at 65535 is the only evidence, so the capacity is in electrons)
+console.log(mono.dynamicRange?.practical.stops, mono.linearity?.error, mono.responsivity, mono.quantumEfficiency) // 14.98 stops, 0 (linear), 0.25 DN/photon, 0.5 (quantum efficiency)
+console.log(mono.darkCurrent?.mean, mono.darkCurrent?.variance, mono.darkCurrent?.temperature, mono.dsnu, mono.defects) // 10 e-/pixel/s from the mean, 10 from the variance, -10 degrees Celsius, no spatial results
+console.log(result.operatingPoint, result.diagnostics) // the declared gain and temperature, and no diagnostics ([])
+
+// Fewer levels and no darks: the diagnostics say what is short, and the stages that cannot run are omitted.
+const short = characterizeSensor({ operatingPoint: {}, bias, flats: flats.slice(0, 4) })
+console.log(
+	short.planes[0].darkCurrent,
+	short.diagnostics.map((d) => `${d.severity} ${d.code}`),
+) // undefined, warning insufficientFlatLevels and warning poorLinearityFit
+
+// A structural problem returns no plane: a single bias frame.
+const broken = characterizeSensor({ operatingPoint: {}, bias: { frames: [bias.frames[0]] as unknown as SensorFrameSet['frames'], exposure: 0 }, flats })
+console.log(broken.planes.length, broken.diagnostics) // 0 planes and the error insufficientBiasFrames
+
+// A frame set that contradicts the declared operating point (a temperature 10 degrees away).
+const mixed = characterizeSensor({ operatingPoint: { temperature: 0 }, bias: { ...bias, temperature: 10 }, flats })
+console.log(
+	mixed.planes.length,
+	mixed.diagnostics.map((d) => d.code),
+) // 0 planes and mixedOperatingPoint
+
+console.log(DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS) // gainRange [0.05, 0.7], linearityRange [0.05, 0.95], temperatureTolerance 0.5, rejectionSigma 5, spatialDetrend 'emvaHighpass', maps 'none'
+
+try {
+	characterizeSensor({ operatingPoint: {}, bias, flats }, { rejectionSigma: 0 })
+} catch (e) {
+	console.log((e as Error).message) // sensor rejection sigma must be finite and positive
+}
+```
+
 ### Sensor Fixed-Pattern Noise
 
 ### Sensor Linearity
 
+`measureSensorLinearity(points, flats, saturation, gain, range?)` checks how linear the response of one sensor plane is, from the dark-corrected photon transfer points of `characterizeSensorTemporal` (see Photon Transfer and Read Noise, where `points` come from the `photonTransfer` field) and the flat sets that produced them (`flats[point.level]` supplies the exposure, the relative `intensity`, the incident `photons` per pixel and the `wavelength` in nanometres). It keeps the valid, unclipped points whose signal lies in the fraction `range` of the saturation signal (`[0.05, 0.95]` by default; the saturation signal of `saturation` when it is given, the largest valid unclipped signal otherwise; a `RangeError` for a range that is not increasing within 0..1) and fits `signal = slope * input + intercept` by weighted least squares with inverse-square weights, so the residuals are minimized in relative terms across the interval. The input is the incident photons per pixel when every selected level has them, otherwise exposure times intensity (the intensity is 1 when absent). The result is `{ linearity, responsivity, quantumEfficiency, quantumEfficiencyUnavailable }`, all omitted when fewer than two points are usable or the slope is not positive. `linearity` has the `slope` (DN per input unit), the `intercept` (DN), the signed relative residuals `minimum` and `maximum` (as fractions, for example 0.01 is 1 percent), their `rms` and mean absolute `error`, the selected `points` (`input`, `measured`, `predicted` and the relative `error`, in ascending input order) and the regression report `fit`. `responsivity` is the slope in DN per photon when all the levels are photon calibrated, and `quantumEfficiency` is the responsivity divided by the system gain of `gain` (DN per electron, so electrons per photon) when all the levels also share one wavelength; it is only reported when it falls within 0..1, otherwise `quantumEfficiencyUnavailable` says `'missingSpectralCalibration'` (no common wavelength) or `'outOfRange'`. The relative residual measures non-linearity only within the selected range, so a response that bends below the range or above it is not seen, and the quantum efficiency depends on the calibration of the photon counts as much as on the sensor.
+
+`detectSensorSaturation(points, gain?, digitalSignalLimit?)` finds the output saturation of the plane and returns a `SensorSaturation` or `undefined`: the dark-corrected `signal` in DN, the `capacity` in electrons (signal times the conversion gain, when a gain is given), the `index` of the level and the `method` and `confidence` of the evidence, in order of precedence: `'unclippedLevel'` (0.95: the level before the first one with more than 1 percent of the pixels at the digital clip), `'variance'` (0.75: the level at the maximum of the variance, when a later level has a variance below 90 percent of it, the collapse of the photon transfer curve at saturation), `'response'` (0.65: the level before the response slope drops below a quarter of the previous one), `'plateau'` (0.5: the signal stops growing at the last levels) and `'digitalRange'` (0.2: the `digitalSignalLimit` in DN, when nothing else is found). The confidence is a heuristic rank of the evidence, not a probability, and the capacity is the charge observed at the output saturation, not a claim about the physical full well.
+
+`computeSensorDynamicRange(saturation, readNoise)` returns the `practical` dynamic range (capacity divided by the total read noise in electrons) and the `emva` one (capacity divided by the absolute sensitivity threshold `sqrt(noise^2 + 1/4) + 1/2`), each as a `ratio`, the base-2 `stops` and the amplitude `decibels` (20 log10 of the ratio), or `undefined` when the capacity or the total noise in electrons is missing or not positive.
+
+```ts
+import { measureSensorLinearity } from 'nebulosa/src/imaging/analysis/sensor/linearity'
+import { characterizeSensorTemporal } from 'nebulosa/src/imaging/analysis/sensor/ptc'
+import { computeSensorDynamicRange, detectSensorSaturation } from 'nebulosa/src/imaging/analysis/sensor/saturation'
+import type { SensorFlatFrameSet, SensorFrameSet } from 'nebulosa/src/imaging/analysis/sensor/types'
+import type { DigitalImage } from 'nebulosa/src/imaging/model/types'
+
+const digital = (raw: Float64Array): DigitalImage => ({
+	header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 4, NAXIS2: 4 },
+	raw,
+	metadata: { width: 4, height: 4, channels: 1, pixelCount: 16, pixelSizeInBytes: 2, strideInBytes: 8, stride: 4, bitpix: 16, bayer: undefined },
+	sampleScale: 'digital',
+	digitalRange: [0, 65535],
+	quantizationStep: 1,
+})
+
+// A pair with an exact mean and temporal variance (the frames differ by +-sqrt(2 variance) / 2).
+const pair = (mean: number, variance: number): [DigitalImage, DigitalImage] => {
+	const difference = Math.sqrt(2 * variance)
+	const first = new Float64Array(16)
+	const second = new Float64Array(16)
+	for (let i = 0; i < 16; i++) {
+		const signed = (i & 1) === 0 ? difference : -difference
+		first[i] = mean + signed / 2
+		second[i] = mean - signed / 2
+	}
+	return [digital(first), digital(second)]
+}
+
+// Six levels of a sensor with a system gain of 0.5 DN/e-, a quantum efficiency of 0.5 (so 0.25 DN per photon) and a read noise of 2 DN,
+// with the photons per pixel and the wavelength of a 550 nm source known; the response is linear.
+const bias: SensorFrameSet = { frames: pair(1000, 4), exposure: 0 }
+const levels = [100, 400, 800, 1600, 3200, 6400]
+const flats: SensorFlatFrameSet[] = levels.map((signal, i) => ({ frames: pair(1000 + signal, 4 + 0.5 * signal), darkFrames: pair(1000, 4), exposure: i + 1, photons: signal * 4, wavelength: 550 }))
+const { photonTransfer, gain, readNoise } = characterizeSensorTemporal(bias, flats)
+
+const response = measureSensorLinearity(photonTransfer, flats, undefined, gain)
+console.log(response.linearity?.slope, response.linearity?.intercept, response.linearity?.points.length) // 0.25 0 4 (the 400, 800, 1600 and 3200 DN levels are inside 5 to 95 percent of the largest signal)
+console.log(response.linearity?.minimum, response.linearity?.maximum, response.linearity?.rms, response.linearity?.fit.r2) // 0 0 0 1
+console.log(response.responsivity, response.quantumEfficiency, response.quantumEfficiencyUnavailable) // 0.25 0.5 undefined (0.25 DN per photon, divided by the system gain of 0.5 DN/e-)
+
+// Without the photon calibration the input is the exposure times the intensity: only the slope has other units and no efficiency is reported.
+const relative = measureSensorLinearity(
+	photonTransfer,
+	flats.map(({ photons, wavelength, ...rest }) => rest),
+	undefined,
+	gain,
+)
+console.log(
+	relative.linearity?.points.map((point) => point.input),
+	relative.responsivity,
+	relative.quantumEfficiency,
+) // [ 2, 3, 4, 5 ] undefined undefined (the exposures of the selected levels)
+
+// A compressed response: the last level is 5 percent low, and the range [0.05, 0.95] keeps it in the fit.
+const bent: SensorFlatFrameSet[] = flats.map((flat, i) => (i === 4 ? { ...flat, frames: pair(1000 + 3040, 4 + 0.5 * 3040), darkFrames: pair(1000, 4) } : flat))
+const bentPoints = characterizeSensorTemporal(bias, bent).photonTransfer
+const nonLinear = measureSensorLinearity(bentPoints, bent, undefined, gain).linearity
+console.log(nonLinear?.minimum, nonLinear?.maximum, nonLinear?.rms, nonLinear?.error) // -0.0237 0.0224 0.0179 0.0166
+console.log(measureSensorLinearity(bentPoints, bent, undefined, gain, [0.05, 0.3]).linearity?.rms) // 0 (the three faintest levels are still on the line)
+
+// A quantum efficiency above 1 (a photon count that is too low) is reported as out of range.
+const miscounted = measureSensorLinearity(
+	photonTransfer,
+	flats.map((flat) => ({ ...flat, photons: flat.photons! / 4 })),
+	undefined,
+	gain,
+)
+console.log(miscounted.responsivity, miscounted.quantumEfficiency, miscounted.quantumEfficiencyUnavailable) // 1 undefined 'outOfRange' (a responsivity of 1 DN per photon would be a quantum efficiency of 2)
+
+// The saturation: a clipped level, a variance collapse and a response that stops growing.
+const point = (signal: number, variance: number, clippedFraction = 0) => ({ ...photonTransfer[0], signal, variance, clippedFraction })
+const rising = [point(100, 50), point(400, 200), point(800, 400), point(1600, 800)]
+console.log(detectSensorSaturation([...rising, point(3000, 1500, 0.5)], gain)) // { signal: 1600, capacity: 3200, index: 0, method: 'unclippedLevel', confidence: 0.95 } (the index is 0 because the synthetic points all reuse the first level)
+console.log(
+	detectSensorSaturation(
+		[...rising, point(2000, 100)].map((p, i) => ({ ...p, exposure: i + 1, stimulus: undefined })),
+		gain,
+	),
+) // { signal: 1600, capacity: 3200, index: 0, method: 'variance', confidence: 0.75 }
+console.log(detectSensorSaturation(rising, gain, 4095)?.method, detectSensorSaturation(rising, gain)) // digitalRange undefined
+
+// The dynamic range from the capacity and the total read noise in electrons.
+const saturation = detectSensorSaturation([...rising, point(3000, 1500, 0.5)], gain)!
+console.log(computeSensorDynamicRange(saturation, readNoise)) // { practical: { ratio: 800, stops: 9.644, decibels: 58.06 }, emva: { ratio: 706.2, stops: 9.464, decibels: 56.98 } }
+console.log(computeSensorDynamicRange(saturation, { digital: 2, pairCount: 1, deviation: 0 })) // undefined (no noise in electrons)
+
+try {
+	measureSensorLinearity(photonTransfer, flats, undefined, gain, [0.9, 0.1])
+} catch (e) {
+	console.log((e as Error).message) // linearity range must be an increasing fraction within 0..1
+}
+```
+
 ### Sensor Operating-Point Series
+
+`characterizeSensorSeries(profiles, options?)` compares the `SensorCharacterization` results of the same camera at several configured gain settings (see Sensor Characterization) and, when the measured system gain crosses one DN per electron, interpolates the configured gain where it happens, which is the usual "unity gain" setting of a CMOS camera. The result is a `SensorProfileSeries` with the `profiles` sorted by configured gain, an optional `unityGain` (`configuredGain`, in the units of the device setting, and the `lower` and `upper` operating points that bracket it, equal for an exact measured point) and the `diagnostics`, whose `code` is one of `'insufficientProfiles'`, `'incompatibleProfiles'`, `'invalidConfiguredGain'`, `'ambiguousPlane'`, `'missingPlaneGain'`, `'nonMonotonicGainSeries'`, `'regimeChangeDetected'` and `'unityGainNotBracketed'`. Every profile needs a finite and unique `operatingPoint.gain`; they must share the camera, offset, readout mode, bit depth, binning, sensor origin, size, image dimensions and region of interest, and their temperatures (when recorded, and recorded for all or none) must span no more than `temperatureTolerance` degrees Celsius (0.5 by default). The `plane` of the comparison defaults to `'mono'` or to the only plane that every profile has, and the measured system gain (DN per electron) of that plane must be valid and strictly monotonic in the configured gain.
+
+The unity gain is only interpolated, never extrapolated: the measured points must bracket 1, and the interpolation is linear between the two points around the crossing. It is refused with `'regimeChangeDetected'` when the slope there differs from the slope of an adjacent interval by more than `regimeSlopeRatio` (5 by default, a `RangeError` for a value that is not finite and greater than one; a `temperatureTolerance` that is negative or not finite is also a `RangeError`), as cameras that switch to a high conversion gain mode at some setting have a step that a straight line cannot describe. The estimate is therefore as good as the measured gains and the assumption of a smooth curve between two points, and it is not a substitute for measuring the profile at the interpolated setting.
+
+```ts
+import { characterizeSensor } from 'nebulosa/src/imaging/analysis/sensor/characterization'
+import { characterizeSensorSeries } from 'nebulosa/src/imaging/analysis/sensor/series'
+import type { SensorFlatFrameSet } from 'nebulosa/src/imaging/analysis/sensor/types'
+import type { DigitalImage } from 'nebulosa/src/imaging/model/types'
+
+const digital = (raw: Float64Array): DigitalImage => ({
+	header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 4, NAXIS2: 4 },
+	raw,
+	metadata: { width: 4, height: 4, channels: 1, pixelCount: 16, pixelSizeInBytes: 2, strideInBytes: 8, stride: 4, bitpix: 16, bayer: undefined },
+	sampleScale: 'digital',
+	digitalRange: [0, 65535],
+	quantizationStep: 1,
+})
+
+// A pair with an exact mean and temporal variance (DN and DN squared).
+const pair = (mean: number, variance: number): [DigitalImage, DigitalImage] => {
+	const difference = Math.sqrt(2 * variance)
+	const first = new Float64Array(16)
+	const second = new Float64Array(16)
+	for (let i = 0; i < 16; i++) {
+		const signed = (i & 1) === 0 ? difference : -difference
+		first[i] = mean + signed / 2
+		second[i] = mean - signed / 2
+	}
+	return [digital(first), digital(second)]
+}
+
+// The profile of a camera set to the configured gain with the given system gain in DN/e-.
+function profile(configured: number, system: number, temperature = -10) {
+	const flats: SensorFlatFrameSet[] = [100, 200, 400, 800, 1200, 1600, 2400, 3200, 4800, 6400].map((signal, i) => ({ frames: pair(1000 + signal, 4 + system * signal), darkFrames: pair(1000, 4), exposure: i + 1 }))
+	return characterizeSensor({ operatingPoint: { gain: configured, offset: 10, temperature }, bias: { frames: pair(1000, 4), exposure: 0 }, flats }, { digitalClip: 65535 })
+}
+
+// The measured system gain rises from 0.5 to 1.25 DN/e- with the configured gain, so unity is between 100 and 200.
+const profiles = [profile(200, 1.25), profile(0, 0.5), profile(100, 0.8)]
+console.log(profiles.map((p) => p.planes[0].gain?.system)) // [1.25, 0.5, 0.8] (the fitted DN/e- of the profiles, in the order given)
+const series = characterizeSensorSeries(profiles)
+console.log(
+	series.profiles.map((p) => p.operatingPoint.gain),
+	series.diagnostics,
+) // [0, 100, 200] and no diagnostics (sorted by configured gain)
+console.log(series.unityGain?.configuredGain, series.unityGain?.lower.gain, series.unityGain?.upper.gain) // 144.4 (between the settings 100 and 200)
+
+// A measured gain that is exactly 1 returns that operating point as lower and upper; the fitted gains carry rounding error, so here the crossing is interpolated.
+const exact = characterizeSensorSeries([profile(0, 0.5), profile(100, 1), profile(200, 2)])
+console.log(exact.unityGain?.configuredGain, exact.unityGain?.lower === exact.unityGain?.upper) // 100.00000000000104 false
+
+// Points that do not bracket one DN/e- are not extrapolated.
+console.log(characterizeSensorSeries([profile(0, 0.5), profile(100, 0.8)]).diagnostics.map((d) => d.code)) // ['unityGainNotBracketed']
+
+// A slope change across the bracket is a regime change: the curve is flat and then jumps.
+console.log(characterizeSensorSeries([profile(0, 0.5), profile(100, 0.55), profile(200, 1.5)]).diagnostics.map((d) => d.code)) // ['regimeChangeDetected']
+console.log(characterizeSensorSeries([profile(0, 0.5), profile(100, 0.55), profile(200, 1.5)], { regimeSlopeRatio: 50 }).unityGain?.configuredGain) // 147.4 (interpolated once the slope limit is relaxed)
+
+// Incompatible acquisitions, duplicated gains, a non-monotonic curve and an empty list.
+console.log(characterizeSensorSeries([profile(0, 0.5), profile(100, 0.8, 10)]).diagnostics.map((d) => d.code)) // ['incompatibleProfiles']
+console.log(characterizeSensorSeries([profile(0, 0.5), profile(0, 0.8)]).diagnostics.map((d) => d.code)) // ['invalidConfiguredGain']
+console.log(characterizeSensorSeries([profile(0, 0.5), profile(100, 0.8), profile(200, 0.6)]).diagnostics.map((d) => d.code)) // ['nonMonotonicGainSeries']
+console.log(characterizeSensorSeries([]).diagnostics.map((d) => d.code)) // ['insufficientProfiles']
+
+try {
+	characterizeSensorSeries(profiles, { regimeSlopeRatio: 1 })
+} catch (e) {
+	console.log((e as Error).message) // series regime slope ratio must be finite and greater than one
+}
+```
 
 ### Sensor Stack Defects
 
