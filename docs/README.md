@@ -12492,9 +12492,209 @@ console.log(round(custom.imageScale), round(custom.raVelocity), round(custom.dri
 
 ### DARV Image Analysis
 
+`observation/alignment/polaralignment.darv.analysis` reduces one DARV frame to a north drift of the stars: it finds the two legs of every star (the outbound and the return trails of the RA slew), pairs them, measures how far the return leg lies from the outbound one across the direction of the trail, and turns that into a drift in radians per second with a median/MAD aggregate of the stars. Image positions are zero-based pixel centers with +X to the right and +Y down, times are seconds and the sky offsets are east and north radians. `analyzeDarvImage(input)` takes a `DarvAnalysisInput`: the `image` (never modified), the actual `exposure`, the nominal `legDuration`, the optional measured `outboundDuration`, `returnDuration` and `turnaroundDuration` (a dwell with the RA motion paused; the exposure must equal the three times within a relative 1e-6, otherwise the result is `inconclusive` with `invalidTiming`), the `firstDirection` of the mount (`east` or `west`), the exposure-start positions `starts` (a marker must single out one outer endpoint within the larger of 3 pixels and twice the width), an angular `transform` (see below), optional precomputed `streaks` (they skip the detection and keep their fits), the `detection` options of the streak detector and an optional `geometry` (latitude, west-positive hour angle at the exposure midpoint and the `mode`) to convert the drift to a polar error. The detection pairs legs of at least 12 pixels with similar widths and brightness, nearly parallel (the direction cosine above 0.85) and joined near the turn, and refines the outer 65% of each leg with 64 transverse profiles and a Huber fit. The transform is a `DarvImageTransform`, an oriented, locally linear map from a pixel offset to `[east, north]` radians: `DarvMatrixTransform` takes a row-major `[eastX, eastY, northX, northY]` matrix in radians per pixel (it can describe a rotated or a mirrored camera), `DarvCalibrationTransform` adapts the current guiding calibration matrix and the signed radians per axis unit (callbacks read at each use, so a calibration after a flip is honored) and `DarvWcsTransform` takes a callback for the current TAN or TAN-SIP FITS header and a reference pixel, using a one-pixel central difference at each star. The result is a `DarvImageAnalysisResult`: the `status` (`ok` only with a signed aggregate, `partial` with unsigned or upper-limit geometry, `inconclusive` otherwise), the paired `trails` (each a `DarvTrailMeasurement` with the `start`, `turn`, `returnStart` and `end` points, both legs, the `closure`, whether the direction is resolved, the `drift`, its unsigned `driftMagnitude` and `driftUnit`, an `uncertainty` resolution that is not a statistical sigma, a `confidence`, the `rmsResidual` and the `clipped` and `unresolved` flags), the signed `drift` in radians per second (only from trails with a known time order and a sky transform), the unsigned `driftMagnitude` with its `driftUnit` (`radiansPerSecond`, or `pixelsPerSecond` when there is no transform; the two are never mixed), the `driftScatter`, the number of `inliers`, a `confidence` in [0, 1] that is a quality score and not a probability, the `diagnostics` reasons (`noStreaks`, `noCompatibleLegPair`, `trailTooShort`, `trailClipped`, `trailSaturated`, `ambiguousTrails`, `directionUnresolved`, `missingAngularTransform`, `geometryDegenerate`, `insufficientSnr`, `fitFailed`, `invalidTiming`, `candidateLimit`, `unresolvedSeparation` and `outlierTrails`) and, with a geometry, the `component` of `DarvPolarErrorComponentResult`. Trails that touch the image border are kept but are excluded from the aggregate, a trail whose legs cannot be resolved gives only an upper limit, and a missing signed drift must never be read as a zero error. With equal leg times a start marker is needed to tell the two close outer ends apart, and with unequal times the closure cancels the RA motion with the mean leg velocity and the real shutter time. The polar error of a drift is solved in DARV Polar Error Estimation, and the exposure to plan is in DARV Exposure Planning.
+
+```ts
+import type { Streak } from 'nebulosa/src/imaging/analysis/streak/types'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+import { arcsec, deg, hour, toArcmin } from 'nebulosa/src/math/units/angle'
+import { analyzeDarvImage, type DarvAnalysisInput } from 'nebulosa/src/observation/alignment/polaralignment.darv.analysis'
+import { DarvCalibrationTransform, DarvMatrixTransform } from 'nebulosa/src/observation/alignment/polaralignment.darv.transform'
+
+const round = (value: number | undefined, digits = 3) => (value === undefined ? undefined : +value.toFixed(digits))
+
+// A blank 384 x 384 mono frame: the streaks come precomputed, so the pixels are not read.
+const image: Image = { raw: new Float32Array(384 * 384).fill(0.1), header: {}, metadata: { width: 384, height: 384, channels: 1, stride: 384, pixelCount: 147456, strideInBytes: 1536, pixelSizeInBytes: 4, bitpix: -32, bayer: undefined } }
+
+// A clean detection of one leg: the endpoints in pixels and the quality of a bright, narrow, straight trail.
+const leg = (start: { x: number; y: number }, end: { x: number; y: number }): Streak => ({
+	start,
+	end,
+	center: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 },
+	length: Math.hypot(end.x - start.x, end.y - start.y),
+	width: 2,
+	angle: Math.atan2(end.y - start.y, end.x - start.x),
+	rmsResidual: 0.05,
+	linearity: 1,
+	coverage: 1,
+	supportPixels: 400,
+	clippedAtBorder: false,
+	flux: 100,
+	meanSignal: 0.4,
+	peakSignal: 0.5,
+	snr: 50,
+	confidence: 0.9,
+})
+
+// A star that starts at (100, 80), moves 100 pixels towards +X in the outbound 100 s while it also drifts 15 pixels towards +Y, and returns in the next 100 s with another 15 pixels of drift: it ends at (100, 110).
+const start = { x: 100, y: 80 }
+const turn = { x: 200, y: 95 }
+const end = { x: 100, y: 110 }
+const input: DarvAnalysisInput = { image, exposure: 200, legDuration: 100, firstDirection: 'west', starts: [start], transform: new DarvMatrixTransform([arcsec(1), 0, 0, arcsec(1)]), streaks: [leg(start, turn), leg(turn, end)] }
+
+// The signed drift in arcseconds per second (the scale is 1 arcsecond per pixel and north is +Y), the unsigned magnitude and its unit, the inliers, the confidence and the diagnostics.
+const result = analyzeDarvImage(input)
+console.log(result.status, round(result.drift! / arcsec(1), 4), round(result.driftMagnitude! / arcsec(1), 4), result.driftUnit, result.inliers, round(result.confidence), result.diagnostics) // ok, 0.15, 0.15, radiansPerSecond, 1, 0.878, []
+
+// The measurement of the single trail: the lengths of both legs in pixels, the closure (end minus start in pixels), whether the direction is resolved, the flags, and its drift and resolution in arcseconds per second.
+const [trail] = result.trails
+console.log(round(trail.outbound.length), round(trail.inbound.length), trail.closure, trail.directionResolved, trail.clipped, trail.unresolved, round(trail.drift! / arcsec(1), 4), round(trail.uncertainty / arcsec(1), 5)) // 101.119, 101.119, [0, 30], true, false, false, 0.15, 0.01
+
+// A mirrored camera (north towards -Y) is described by the matrix alone: the same pixels now mean a drift of the opposite sign.
+console.log(round(analyzeDarvImage({ ...input, transform: new DarvMatrixTransform([arcsec(1), 0, 0, -arcsec(1)]) }).drift! / arcsec(1), 4)) // -0.15
+
+// The calibration adapter reads the guiding matrix (identity, image to axis) and the signed radians per axis unit when it is used: here 1 arcsecond for both axes, and a 10 x 10 pixel offset maps to [east, north] in arcseconds.
+const calibrated = new DarvCalibrationTransform(
+	() => [1, 0, 0, 1],
+	() => [arcsec(1), arcsec(1)],
+)
+console.log(calibrated.imageOffsetToSky(10, 10).map((value) => round(value / arcsec(1), 4))) // [ 10, 10 ]
+
+// With no transform the frame still gives a magnitude in pixels per second, but no sign: the status is partial and it is not a measurement of the polar error.
+const unsigned = analyzeDarvImage({ ...input, transform: undefined })
+console.log(unsigned.status, round(unsigned.driftMagnitude!, 4), unsigned.driftUnit, unsigned.drift, unsigned.diagnostics) // partial, 0.15, pixelsPerSecond, undefined, [ "missingAngularTransform" ]
+
+// With a geometry the signed drift is turned into the selected polar error: a star on the meridian at a latitude of 40 degrees for the azimuth, in arcminutes.
+const component = analyzeDarvImage({ ...input, geometry: { latitude: deg(40), hourAngle: 0, mode: 'azimuth' } }).component!
+console.log(component.status, component.status === 'ok' ? round(toArcmin(component.error), 2) : undefined, component.status === 'ok' ? round(component.geometryFactor, 4) : undefined) // ok, -44.75, -0.766
+
+// Six hours from the meridian the azimuth sensitivity vanishes, so the component is inconclusive (geometryDegenerate), while the signed drift is still there.
+const degenerate = analyzeDarvImage({ ...input, geometry: { latitude: deg(40), hourAngle: hour(6), mode: 'azimuth' } })
+console.log(degenerate.status, degenerate.component, round(degenerate.drift! / arcsec(1), 4)) // inconclusive, { status: inconclusive, reason: geometryDegenerate }, 0.15
+```
+
 ### DARV Polar Error Estimation
 
+`observation/alignment/polaralignment.darv.solve` is the inverse of the DARV geometry: it turns the signed north drift of the stars (radians per second, after the commanded RA motion is cancelled) into the polar error of the mount, with the small-angle factors of `darvGeometryFactors` (see DARV Exposure Planning). The polar errors are radians in the three-point convention (azimuth north through east, altitude the mount pole minus the target, relative to the geometric pole; convert a refracted display with `convertPolarAlignmentAltitudeError`, see Polar Alignment Geometry), the drift model is `drift = sidereal rate * (azimuthFactor * azimuthError + altitudeFactor * altitudeError)` and nothing is modified or printed. A `DarvDriftObservation` has the signed `drift`, the west-positive `hourAngle` of the exposure midpoint, the geographic `latitude` and an optional positive one-sigma `uncertainty` in radians per second (give it on all rows or on none). `estimateDarvPolarErrorComponent(observation, mode)` isolates one component, `azimuth` or `altitude`, assuming that the other is negligible, and returns a `DarvPolarErrorComponent` (`status: 'ok'`, the `mode`, the signed `error`, the propagated `uncertainty` when one was given, the `drift`, the signed `geometryFactor` and a `confidence` that is only the absolute value of that factor, not a probability or an SNR) or a `DarvPolarErrorFailure` (`status: 'inconclusive'`, with `geometryDegenerate` and an infinite condition number) when the sensitivity is below 0.01, that is when the star is where the chosen knob has almost no effect (the altitude for a star on the meridian, the azimuth six hours away from it, or either at the geographic pole), since a hundred-fold amplification of the noise is not a measurement. `solveDarvPolarError(observations, robust?)` solves both knobs at once, with at least two observations at independent hour angles, by a weighted QR least squares (omitted uncertainties take the largest supplied one, or equal weights when none is given, and the weights are normalized) and returns a `DarvPolarErrorSolution` (the `azimuthError` and the `altitudeError`, the weighted `residualRms` in radians per second, the `conditionNumber` of the weighted design matrix, the number of `observations` and the `inliers` that kept at least half of their weight) or an inconclusive failure with `insufficientObservations` (fewer than two rows) or `geometryDegenerate` (a rank deficient or badly conditioned matrix, a condition number above 100, before and after the fit, for example two observations at the same hour angle). With `robust` set, the Huber IRLS reweighting lowers the weight of an inconsistent row, which needs at least three observations, since with two none can be identified, and does not guarantee that a single wrong row is rejected. A single drift is only exact when the other error is really negligible; the two-knob fit does not tell a bias common to all rows (such as a drift with the guiding on) from a polar error, and a measurement error is amplified near a singular geometry. The drift of an image comes from DARV Image Analysis, whose `geometry` input applies the single-component conversion to a measured frame.
+
+```ts
+import { SIDEREAL_DRIFT_RATE } from 'nebulosa/src/core/constants'
+import { arcmin, arcsec, deg, hour, toArcmin, toArcsec } from 'nebulosa/src/math/units/angle'
+import { darvGeometryFactors } from 'nebulosa/src/observation/alignment/polaralignment.darv'
+import { estimateDarvPolarErrorComponent, solveDarvPolarError, type DarvDriftObservation, type DarvPolarErrorComponent, type DarvPolarErrorSolution } from 'nebulosa/src/observation/alignment/polaralignment.darv.solve'
+
+const round = (value: number, digits = 3) => +value.toFixed(digits)
+
+// A mount whose pole is 10 arcminutes off in azimuth and -5 in altitude at a latitude of 40 degrees: the drift a star would show at an hour angle is the sidereal rate times the geometry factors applied to both errors, in radians per second.
+const latitude = deg(40)
+const azimuth = arcmin(10)
+const altitude = arcmin(-5)
+const drift = (hourAngle: number) => {
+	const [fa, fh] = darvGeometryFactors(latitude, hourAngle)
+	return SIDEREAL_DRIFT_RATE * (fa * azimuth + fh * altitude)
+}
+
+// A single component from a star on the meridian: the altitude has no effect there, so only the azimuth is measured; the drift is in arcseconds per second, the error in arcminutes and the factor is cos(40 degrees) with its sign.
+const meridian: DarvDriftObservation = { drift: drift(0), hourAngle: 0, latitude, uncertainty: arcsec(0.0005) }
+const component = estimateDarvPolarErrorComponent(meridian, 'azimuth') as DarvPolarErrorComponent
+console.log(component.status, component.mode, round(toArcsec(component.drift), 5), round(toArcmin(component.error), 4), round(toArcmin(component.uncertainty!), 4), round(component.geometryFactor, 4), round(component.confidence, 4)) // ok, azimuth, -0.03352, 10, 0.1492, -0.766, 0.766
+
+// The altitude from a star six hours west of the meridian, where the azimuth has no effect and the altitude factor is largest (here -1): the error is the -5 arcminutes of the altitude knob; no uncertainty was given, so none is propagated.
+const side: DarvDriftObservation = { drift: drift(hour(6)), hourAngle: hour(6), latitude }
+const altitudeComponent = estimateDarvPolarErrorComponent(side, 'altitude') as DarvPolarErrorComponent
+console.log(round(toArcmin(altitudeComponent.error), 4), altitudeComponent.uncertainty, round(altitudeComponent.geometryFactor, 4)) // -5, undefined, -1
+
+// Both knobs from two observations at hour angles of 0 and 6 hours: the weighted fit recovers 10 and -5 arcminutes, with a null residual (the data are exact), a condition number of 1.3 and no outlier.
+const two = solveDarvPolarError([meridian, side]) as DarvPolarErrorSolution
+console.log(round(toArcmin(two.azimuthError), 4), round(toArcmin(two.altitudeError), 4), round(two.residualRms, 12), round(two.conditionNumber, 3), two.observations, two.inliers) // 10, -5, 0, 1.305, 2, 2
+
+// Four observations at different hour angles, with the uncertainty of the stars, give the same errors and a condition number that depends on how different the geometries are.
+const hours = [-4, -1.5, 2, 5]
+const many = hours.map((h): DarvDriftObservation => ({ drift: drift(hour(h)), hourAngle: hour(h), latitude, uncertainty: arcsec(0.001) }))
+const fit = solveDarvPolarError(many) as DarvPolarErrorSolution
+console.log(round(toArcmin(fit.azimuthError), 4), round(toArcmin(fit.altitudeError), 4), round(fit.conditionNumber, 3), fit.observations, fit.inliers) // 10, -5, 1.364, 4, 4
+
+// The robust option runs the Huber reweighting on the same rows: with consistent data nothing is downweighted, so the errors and the inliers do not change.
+const robust = solveDarvPolarError(many, true) as DarvPolarErrorSolution
+console.log(round(toArcmin(robust.azimuthError), 4), round(toArcmin(robust.altitudeError), 4), robust.observations, robust.inliers) // 10, -5, 4, 4
+```
+
 ### Direction Alignment
+
+`observation/mount/alignment` fits one proper rotation that maps directions measured in the mount base frame onto the same directions in a world frame (the local east-north-up frame for a telescope), using only directions and no encoder model or sky catalogue. Directions are 3-vectors whose length is ignored (they are normalized), the rotation is active and stored as a row-major `Mat3` (see the matrix helpers in `math/linear-algebra/mat3`), and the angular residuals are radians. A `DirectionAlignmentSample` has the `mount` direction, the `world` direction and an optional non-negative `weight` (one by default; a zero weight keeps the sample in the diagnostics only). `fitDirectionAlignment(samples, options?)` starts from a TRIAD rotation of the best-conditioned pair of samples (the largest of the smaller cross-product length of the mount pair and of the world pair, so the result is exact for two noise-free pairs) and then refines it by a damped Gauss-Newton on SO(3) with a weighted least squares of the angle (a left-multiplicative Rodrigues update with at most 16 backtracking halvings per iteration). The `DirectionAlignmentOptions` are `maxIterations` (24 by default), `tolerance` of the rotation increment in radians (1e-12), `robust` (`none` by default, `huber` or `tukey` with an IRLS sample reweighting from the median absolute deviation of the residuals) and the `tuning` cutoff in normalized residual units (1.345 for Huber and 4.685 for Tukey). A `DirectionAlignmentResult` has the `mountToWorld` rotation and its exact transpose `worldToMount`, the angular `residuals` of every sample, the final `weights` (the base weights times the robust ones), the weighted `rms` and the `maximumResidual` (which includes a downweighted outlier), the `conditionNumber` of the tangent design, the `iterations` (zero for an exact fit that needs no refinement), whether it `converged`, the `sampleCount`, the number of samples with a zero final weight in `rejectedCount` and a list of non-fatal `warnings` (ill-conditioned geometry above 1e8, no convergence, zero-weight samples). `predictWorldDirection(alignment, mountDirection, out?)` and `predictMountDirection(alignment, worldDirection, out?)` rotate and normalize a direction, in a new vector unless `out` is given, in which case it is mutated and returned. `fitMountAlignment(geometry, observations, options?)` builds the samples from a `TwoAxisMountGeometry` and `MountAlignmentObservation` rows (encoder positions with the observed azimuth, north through east, and altitude in radians, after the place conversion and the refraction, and a weight) using the geometry with an identity base, and `applyDirectionAlignment(geometry, alignment)` returns a geometry whose base-to-world rotation is the fit, keeping its translation in meters. It fits the orientation only: the mount axes errors are not estimated (see Pointing Model Fit and Correction), a direction pair does not distinguish a rotation from a mirrored frame, at least two samples with positive weights that are neither collinear nor antipodal are needed (and a Tukey fit must keep two with a weight), and a robust fit of a few samples can reject a good one.
+
+```ts
+import { enuVectorToHorizontal } from 'nebulosa/src/astronomy/coordinates/frame.local'
+import { matMulVec, matRodriguesRotation } from 'nebulosa/src/math/linear-algebra/mat3'
+import { deg, toArcsec } from 'nebulosa/src/math/units/angle'
+import { applyDirectionAlignment, fitDirectionAlignment, fitMountAlignment, predictMountDirection, predictWorldDirection, type DirectionAlignmentSample } from 'nebulosa/src/observation/mount/alignment'
+import { createIdealAltAzGeometry, mountDirectionFromEncoders } from 'nebulosa/src/observation/mount/kinematics'
+
+const round = (value: number, digits = 3) => +value.toFixed(digits)
+
+// A mount base tilted by 11 degrees about the axis (0.2, 0.5, -0.3): the rotation to recover, and six mount-frame directions spread over the sky, rotated to their world directions.
+const truth = matRodriguesRotation([0.2, 0.5, -0.3], deg(11))
+const mountDirections: [number, number, number][] = [
+	[1, 0, 0],
+	[0, 1, 0],
+	[0, 0.2, 1],
+	[-1, 0.5, 0.3],
+	[0.4, -1, 0.1],
+	[0.3, 0.3, -1],
+]
+const samples: DirectionAlignmentSample[] = mountDirections.map((mount) => ({ mount, world: [...matMulVec(truth, mount)] as [number, number, number] }))
+
+// Two exact pairs are enough for a TRIAD fit that needs no refinement: no iteration, zero residual and a fit that converged.
+const exact = fitDirectionAlignment(samples.slice(0, 2))
+console.log(exact.iterations, exact.converged, round(exact.rms, 12), exact.sampleCount, exact.warnings) // 0, true, 0, 2, []
+console.log(exact.mountToWorld.every((value, i) => Math.abs(value - truth[i]) < 1e-10)) // true
+
+// Six exact pairs: the same rotation, a small condition number of the geometry and the transpose as the inverse.
+const full = fitDirectionAlignment(samples)
+console.log(round(full.rms, 12), round(full.conditionNumber, 3), full.rejectedCount, full.worldToMount[1] === full.mountToWorld[3]) // 0, 1.313, 0, true
+
+// The direction predictions: a mount-frame direction goes to the world frame and back; the output vector is reused when one is given.
+const world = predictWorldDirection(full, [1, 1, 0])
+const out: [number, number, number] = [0, 0, 0]
+console.log(
+	world.map((value) => round(value, 5)),
+	predictMountDirection(full, world, out).map((value) => round(value, 5) + 0),
+	out[0] === predictMountDirection(full, world, out)[0],
+) // [0.76456, 0.64042, -0.07284], [0.70711, 0.70711, 0], true
+
+// Noisy world directions (offsets of a few arcseconds that alternate in sign) give a least-squares compromise: the weighted RMS and the largest residual in arcseconds, and the iterations spent.
+const noise = [5, -4, 3, -6, 2, -3].map((value) => deg(value / 3600))
+const noisy = fitDirectionAlignment(samples.map((sample, i) => ({ ...sample, world: [sample.world[0] + noise[i], sample.world[1] - noise[i] / 2, sample.world[2] + noise[(i + 1) % 6]] })))
+console.log(round(toArcsec(noisy.rms), 3), round(toArcsec(noisy.maximumResidual), 3), noisy.iterations, noisy.converged) // 2.675, 3.57, 3, true
+
+// An outlier of one degree on the fourth sample: the plain fit spreads it (its RMS), and the Tukey fit gives that sample a zero weight and recovers the rotation (the RMS of the others).
+const outlier = samples.map((sample, i) => (i === 3 ? { ...sample, world: [sample.world[0] + 0.017, sample.world[1], sample.world[2]] as [number, number, number] } : sample))
+const plain = fitDirectionAlignment(outlier)
+const tukey = fitDirectionAlignment(outlier, { robust: 'tukey' })
+console.log(round(toArcsec(plain.rms), 1), round(toArcsec(tukey.rms), 6), tukey.rejectedCount, round(toArcsec(tukey.maximumResidual), 1), tukey.warnings) // 693.1, 0, 1, 1961.7, [ 1 sample(s) received zero final weight ]
+console.log(Array.from(tukey.weights).map((value) => round(value, 3))) // [1, 1, 1, 0, 1, 1]
+
+// A zero base weight excludes a sample from the fit (a zero RMS for the other five), and the Huber option on the same data also drives the weight of the outlier to practically zero, since the clean samples are exact and the residual scale is then zero.
+const weighted = fitDirectionAlignment(outlier.map((sample, i) => ({ ...sample, weight: i === 3 ? 0 : 1 })))
+const huber = fitDirectionAlignment(outlier, { robust: 'huber', maxIterations: 50 })
+console.log(round(toArcsec(weighted.rms), 6), round(toArcsec(huber.rms), 2), round(huber.weights[3], 4)) // 0, 0.01, 0
+
+// An alt-azimuth mount: the base geometry has its orientation and translation, and the encoder positions with the observed horizontal coordinates give the same fit. The observed coordinates are those of the mount-frame directions rotated by the unknown base.
+const geometry = createIdealAltAzGeometry({ baseToWorld: { rotation: matRodriguesRotation([1, 0, 0], 0.1), translation: [4, 5, 6] } })
+const ideal = createIdealAltAzGeometry()
+const encoders = [
+	{ primary: deg(10), secondary: deg(20) },
+	{ primary: deg(100), secondary: deg(35) },
+	{ primary: deg(220), secondary: deg(50) },
+	{ primary: deg(310), secondary: deg(15) },
+]
+const observations = encoders.map((position) => ({ encoders: position, ...enuVectorToHorizontal(matMulVec(truth, mountDirectionFromEncoders(ideal, position))) }))
+const mount = fitMountAlignment(geometry, observations)
+console.log(
+	round(toArcsec(mount.rms), 6),
+	mount.sampleCount,
+	mount.mountToWorld.map((value, i) => round(value - truth[i], 9)).every((value) => value === 0),
+) // 0, 4, true
+
+// Applying the fit replaces the base rotation only: the translation (meters) is the same array, and the encoder direction now matches the world one.
+const aligned = applyDirectionAlignment(geometry, mount)
+console.log(
+	aligned.baseToWorld.translation === geometry.baseToWorld.translation,
+	aligned.baseToWorld.translation,
+	mountDirectionFromEncoders(aligned, encoders[0]).map((value) => round(value, 6)),
+	enuVectorToHorizontal(mountDirectionFromEncoders(aligned, encoders[0])).altitude === observations[0].altitude,
+) // true, [4, 5, 6], [0.302843, 0.881583, 0.362075], true
+```
 
 ### Dither Guide Pulses
 
@@ -13111,7 +13311,189 @@ console.log(custom.config.raPulse, custom.config.raDirection, custom.config.decD
 
 ### iPolar Alignment
 
+`observation/alignment/ipolar` runs a camera-based polar alignment in the style of an electronic polar scope, from plate solutions only: the camera looks near the pole, two solved frames separated by an RA-only rotation of the mount place the rotation axis in the image as the fixed point of the transform between the frames, that pixel is converted to an inertial J2000 direction, and from then on every new solved frame gives the error to the true celestial pole, split in altitude and azimuth, with the position of both markers on the frame and the next knob to turn. Angles are radians, pixels follow the convention of the supplied `PlateSolution` and the camera must be rigid with the RA axis (the declination, the guiding, the camera and the pier side do not change after the calibration). `IPolarPolarAlignment` is the stateful engine and its constructor takes an `IPolarPolarAlignmentConfig`, whose defaults are a minimum RA rotation of 10 arcminutes (`minimumAcceptedRaRotation`), a preferred window of 30 arcminutes to 2 degrees (`preferredRaRotationRange`, outside it only a warning), at least 6 stars for the star-matching check (`minimumStars`), a completion threshold of 30 arcseconds of total error (`completionThreshold`), a fixed-point residual of 1.5 pixels (`fixedPointTolerance`), 2 pixels for the star matches (`maxStarMatchResidual`), the default `refraction` (or `false`), `compensateEarthRotation`, `useStarMatchingValidation` and the `starMatchingConfig` forwarded to the matcher. A frame is an `IPolarPolarAlignmentFrameInput` (the `time` with its location, the `solution` and optional detected `stars`). `start(frame, observer?)` stores the first frame (the observer, a location with a refraction, comes from the time when omitted) and asks the operator to rotate the RA axis, `confirm(frame)` takes the second one, estimates the axis (Gauss-Newton on the fixed point with a derivative-free fallback and, when stars are given, a similarity transform from the matches as the seed) and measures the error, and `update(frame)` advances the machine (it starts, confirms or measures according to the stage); `getState()` returns a snapshot and `reset()` begins again. The `IPolarPolarAlignmentResult` has the `stage` (`WAITING_FOR_POSITION_1`, `WAITING_FOR_POSITION_2`, `INITIAL_AXIS_ESTIMATION`, `REFINEMENT`, `COMPLETE` or `FAILED`), the `totalError`, `altitudeError` and `azimuthError`, the `currentPoint` of the axis and the `targetPoint` of the pole as `IPolarPolarAlignmentGuidePoint` (the point, `onScreen`, the `clamped` border point, the `arrow` unit direction from the center and the `unclamped` one), `onScreenCurrent`, `onScreenTarget`, the machine-friendly `action` (`WAIT_FOR_POSITION_1`, `ROTATE_RA_TO_POSITION_2`, `ADJUST_ALTITUDE_POSITIVE`, `ADJUST_ALTITUDE_NEGATIVE`, `ADJUST_AZIMUTH_POSITIVE`, `ADJUST_AZIMUTH_NEGATIVE`, `ALIGNMENT_COMPLETE` or `INVALID_FRAME`, the larger of the two components first), `convergence` and the `diagnostics` (the solver, its iterations and residual in pixels, the accepted RA rotation, the star match, the refraction and Earth-rotation flags and the `warnings`). The accepted RA rotation in the diagnostics is an estimate taken as the largest of the separation of the frame centers, the change of the field orientation and the star-match rotation, so with a camera close to the axis it can be far smaller than the real rotation of the mount. A second frame with too little rotation (or with no stable fixed point) is answered by `INVALID_FRAME` and the engine stays waiting for a new second position; the calibrated axis pixel is kept across the following frames, and only the pole marker and the errors change with each solve. The helpers are `solveSimilarityFixedPoint(transform)` (the closed-form fixed point of a similarity transform from the star matcher, mirrored or not, with its determinant, or `false` for a pure translation), `solveImageFixedPoint(reference, current, guess?, tolerance?)` (the fixed point of the WCS transform between two solutions, with the solver, iterations and residual, or `false`), `decomposePolarError(axis, target, time, refraction?, location?)` (the small error split in the topocentric altitude and azimuth tangents of the target) and `projectGuidePoint(point, width, height, margin?)`. The polar error from a three-point sequence is Three-Point Polar Alignment, and a drawing of the tolerances is Polar Alignment Overlay.
+
+```ts
+import { plateSolutionFrom, type PlateSolution } from 'nebulosa/src/astrometry/solvers/platesolver'
+import { eraC2s } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { timeShift, timeYMDHMS, type Time } from 'nebulosa/src/astronomy/time/time'
+import type { FitsHeader } from 'nebulosa/src/io/formats/fits/fits'
+import { vecCross, vecDot, vecNormalizeMut, vecRotateByRodrigues, type Vec3 } from 'nebulosa/src/math/linear-algebra/vec3'
+import { arcmin, arcsec, deg, toArcmin, toDeg } from 'nebulosa/src/math/units/angle'
+import { decomposePolarError, IPolarPolarAlignment, projectGuidePoint, solveImageFixedPoint, solveSimilarityFixedPoint } from 'nebulosa/src/observation/alignment/ipolar'
+import { mountAdjustmentAxes } from 'nebulosa/src/observation/alignment/polaralignment'
+import { celestialPoleVector } from 'nebulosa/src/observation/alignment/polaralignment.util'
+
+const round = (value: number, digits = 3) => +value.toFixed(digits)
+
+// The closed-form fixed point of a similarity transform (rotation of 5 degrees, a shift of (12, -8) pixels): the point that the transform keeps in place, with the determinant of its 2 x 2 system. A mirrored transform has its own form.
+const fixed = solveSimilarityFixedPoint({ a: Math.cos(deg(5)), b: Math.sin(deg(5)), tx: 12, ty: -8, mirrored: false })
+console.log(fixed && [round(fixed.x), round(fixed.y), round(fixed.determinant, 5)]) // 97.615, 133.423, 0.00761
+console.log(solveSimilarityFixedPoint({ a: 0.8, b: 0.1, tx: -7, ty: 11, mirrored: true })) // { x: -32.857, y: 4.286, determinant: 0.35 }
+
+// A guide point inside the frame stays where it is, and one outside is clamped to the border of an inset of 20 pixels in the direction from the center, with a unit arrow.
+const inside = projectGuidePoint({ x: 400, y: 300 }, 800, 600)
+const outside = projectGuidePoint({ x: 1600, y: -200 }, 800, 600, 20)
+console.log(inside.onScreen, inside.arrow, outside.onScreen, outside.clamped, round(outside.arrow.x, 4), round(outside.arrow.y, 4)) // true, { x: 0, y: 0 }, false, { x: 780, y: 141.667 }, 0.9231, -0.3846
+
+// A camera that is offset by 1.6 degrees from the axis of a mount at a site of 22.5 degrees of south latitude, with a base 30 arcminutes off in azimuth and -18 in altitude: the synthetic solutions of the camera (a 1280 x 1024 pixels frame of 30 arcseconds per pixel) before and after rotating the RA axis by 25 degrees.
+const location = geodeticLocation(deg(-45.5), deg(-22.5))
+const at = (seconds: number): Time => {
+	const time = timeShift(timeYMDHMS(2026, 3, 27, 12, 0, 29), seconds / 86400)
+	time.location = location
+	return time
+}
+
+const tangentBasis = (origin: Vec3) => {
+	const east = vecNormalizeMut(vecCross([0, 0, 1], origin))
+	return { east, north: vecNormalizeMut(vecCross(origin, east)) }
+}
+
+function frame(time: Time, azimuthError: number, altitudeError: number, raRotation: number): PlateSolution {
+	const pole = celestialPoleVector(time, location, false)
+	const { upAxis, eastAxis } = mountAdjustmentAxes(time, location)
+	const alignedForward = vecRotateByRodrigues(pole, eastAxis, deg(1.6))
+	const axis = vecRotateByRodrigues(vecRotateByRodrigues(pole, upAxis, azimuthError), eastAxis, altitudeError)
+	const forward = vecRotateByRodrigues(vecRotateByRodrigues(alignedForward, upAxis, azimuthError), eastAxis, altitudeError)
+	const right = vecNormalizeMut(vecCross(forward, axis, [0, 0, 0]))
+	const up = vecNormalizeMut(vecCross(right, forward, [0, 0, 0]))
+	const rolledRight = vecRotateByRodrigues(right, forward, deg(33))
+	const rolledUp = vecRotateByRodrigues(up, forward, deg(33))
+	const rotatedForward = vecRotateByRodrigues(forward, axis, raRotation)
+	const rotatedRight = vecRotateByRodrigues(rolledRight, axis, raRotation)
+	const rotatedUp = vecRotateByRodrigues(rolledUp, axis, raRotation)
+	const [rightAscension, declination] = eraC2s(...rotatedForward)
+	const basis = tangentBasis(rotatedForward)
+	const scale = arcsec(30)
+	const header: FitsHeader = {
+		NAXIS: 2,
+		NAXIS1: 1280,
+		NAXIS2: 1024,
+		CTYPE1: 'RA---TAN',
+		CTYPE2: 'DEC--TAN',
+		CUNIT1: 'deg',
+		CUNIT2: 'deg',
+		CRPIX1: 640.5,
+		CRPIX2: 512.5,
+		CRVAL1: toDeg(rightAscension),
+		CRVAL2: toDeg(declination),
+		CD1_1: toDeg(scale * vecDot(rotatedRight, basis.east)),
+		CD1_2: toDeg(-scale * vecDot(rotatedUp, basis.east)),
+		CD2_1: toDeg(scale * vecDot(rotatedRight, basis.north)),
+		CD2_2: toDeg(-scale * vecDot(rotatedUp, basis.north)),
+		EQUINOX: 2000,
+	}
+	return plateSolutionFrom(header)!
+}
+
+const times = [at(0), at(20), at(40), at(60)]
+const first = frame(times[0], arcmin(30), arcmin(-18), 0)
+const second = frame(times[1], arcmin(30), arcmin(-18), deg(25))
+
+// The fixed point of the WCS transform between the two frames: the image position of the mount axis, the solver, its iterations and the residual in pixels (the first seed is the center of the frame when none is given).
+const axis = solveImageFixedPoint(first, second)
+console.log(axis && [round(axis.x, 1), round(axis.y, 1), axis.solver, axis.iterations, round(axis.residual, 6)]) // 535.6, 351.4, gauss-newton, 1, 0.040286
+
+// The engine: the first frame only starts the session and asks for the RA rotation, and a second one, 25 degrees of RA rotation later, calibrates the axis and measures the error at once: the total, the altitude and the azimuth components in arcminutes, the action and the position of the markers.
+const engine = new IPolarPolarAlignment({ refraction: false, minimumAcceptedRaRotation: deg(0.5), completionThreshold: arcmin(4) })
+const started = engine.update({ time: times[0], solution: first })
+console.log(started.stage, started.action, started.convergence)
+const calibrated = engine.update({ time: times[1], solution: second })
+console.log(
+	calibrated.stage,
+	calibrated.action,
+	[calibrated.totalError, calibrated.altitudeError, calibrated.azimuthError].map((value) => round(toArcmin(value), 2)),
+	calibrated.convergence,
+) // INITIAL_AXIS_ESTIMATION, ADJUST_AZIMUTH_POSITIVE, [33.21, 18.17, -27.8], false
+console.log(
+	[calibrated.currentPoint.x, calibrated.currentPoint.y, calibrated.targetPoint.x, calibrated.targetPoint.y].map((value) => round(value, 1)),
+	calibrated.onScreenCurrent,
+	calibrated.onScreenTarget,
+) // [535.6, 351.4, 595.8, 323.3], true, true
+console.log(calibrated.diagnostics.solver, calibrated.diagnostics.solverIterations, round(toDeg(calibrated.diagnostics.acceptedRaRotation!), 3), calibrated.diagnostics.warnings, calibrated.diagnostics.refractionEnabled) // gauss-newton, 1, 0.691, [], false
+
+// The user turns the knobs while new frames are solved: the calibrated axis pixel is kept, and the error and the target marker follow each solve (the next step leaves 10 and -6 arcminutes; the last one aligns the pole and completes the session).
+const refined = engine.update({ time: times[2], solution: frame(times[2], arcmin(10), arcmin(-6), deg(25)) })
+console.log(
+	refined.stage,
+	refined.action,
+	[refined.totalError, refined.altitudeError, refined.azimuthError].map((value) => round(toArcmin(value), 2)),
+	round(refined.currentPoint.x, 1) === round(calibrated.currentPoint.x, 1),
+) // REFINEMENT, ADJUST_AZIMUTH_POSITIVE, [11.16, 6.13, -9.32], true
+const done = engine.update({ time: times[3], solution: frame(times[3], 0, 0, deg(25)) })
+console.log(done.stage, done.action, round(toArcmin(done.totalError), 3), done.convergence) // COMPLETE, ALIGNMENT_COMPLETE, 0.151, true
+
+// The state of the session: the stage, the calibrated axis pixel and unit vectors in the inertial frame, and the decomposition of the last measurement computed again from them.
+const state = engine.getState()
+console.log(
+	state.stage,
+	state.axisPixel && [round(state.axisPixel.x, 1), round(state.axisPixel.y, 1)],
+	state.axisVector!.map((value) => round(value, 5)),
+	state.latestResult === done,
+) // COMPLETE, [535.6, 351.4], [-0.00252, -0.00004, -1], true
+const metrics = decomposePolarError(state.axisVector!, state.targetVector!, times[3], false, location)
+console.log([metrics.totalError, metrics.altitudeError, metrics.azimuthError].map((value) => round(toArcmin(value), 3))) // [0.151, 0.126, -0.082]
+
+// The reset begins a new session, which accepts a first frame again; a first update after it asks for the second position.
+engine.reset()
+console.log(engine.update({ time: times[0], solution: first }).action) // ROTATE_RA_TO_POSITION_2
+```
+
 ### Local Pointing Residuals
+
+`observation/mount/pointing.local` is the optional local layer of the mount pointing model (see Pointing Model Fit and Correction): a k-nearest-neighbour, tricube-weighted average of the residuals that the global model leaves at the training samples, evaluated on the sphere and restricted to the pier side of the query. It targets what a low-order global basis cannot describe, such as a localized flexure, a mirror that shifts over part of the sky or one irregular worm sector, which are smooth near a sample but not a simple function of hour angle and declination. It is interpolation and never extrapolation: the contribution is tapered by the local sampling density and decays to zero outside the sampled region, so a target far from every sample falls back to the global model alone. Angles are radians, an offset has the model convention of `dx` east and `dy` north in the tangent plane at the target, defined as `solved - target`, and the module has no hidden state beyond reusable scratch buffers (a prediction allocates only its result). `LocalPointingResidualOptions` are `enabled` (off by default, since with few or unevenly spread samples the layer memorizes the plate-solve noise), `neighbors` (6 by default and at least 3, the bandwidth is the distance to the k-th neighbor, which gets a zero weight) and `minimumSamples` (30 by default, the number of accepted samples below which the layer is not built); `DEFAULT_LOCAL_RESIDUAL_OPTIONS` holds the defaults and `resolveLocalResidualOptions(options?)` fills the missing fields (the neighbor count is truncated and not below 3, the minimum is not below 1). `buildLocalPointingResidual(directions, pierSides, residualsDx, residualsDy, options)` takes the training targets as unit vectors flattened as `[x0, y0, z0, x1, ...]`, the pier side of each, the east and north residuals of the global fit and the resolved options, and returns a `LocalPointingResidualModel` (copies of the arrays, the `neighbors` and the characteristic `scale` in radians, the median distance to the k-th neighbor of the training set, measured on the same pier side as a query would be, which is also the taper length) or `undefined` when the layer is disabled, when there are fewer than `minimumSamples` samples or when the set is too degenerate to measure its own spacing, so the caller keeps the global model. `predictLocalPointingResidual(model, rightAscension, declination, pierSide?)` takes only neighbors of the requested side (a query with `NEITHER`, no side, or a side that was never sampled uses the whole set), returns a zero offset when fewer than three neighbors exist, and otherwise the tricube average of the neighbors (`(1 - (d / bandwidth)^3)^3`) times `exp(-max(0, bandwidth - scale) / scale)`, so a query one scale outside the region keeps about a third of it; when all the neighbors are equidistant the nearest one is used alone. Brute force is used for the search, which is adequate for the few hundred samples of a pointing run. `MountPointing` and `fitPointingModel` build and evaluate this layer when the `local` fit option is enabled, so these functions are mostly useful to inspect or to compose it.
+
+```ts
+import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { arcsec, deg, hour, toArcsec } from 'nebulosa/src/math/units/angle'
+import { buildLocalPointingResidual, DEFAULT_LOCAL_RESIDUAL_OPTIONS, predictLocalPointingResidual, resolveLocalResidualOptions } from 'nebulosa/src/observation/mount/pointing.local'
+
+const round = (value: number, digits = 3) => +value.toFixed(digits)
+
+// The defaults and the resolution: the neighbors are truncated and not below 3, and the minimum sample count is not below 1.
+console.log(DEFAULT_LOCAL_RESIDUAL_OPTIONS) // { enabled: false, neighbors: 6, minimumSamples: 30 }
+console.log(resolveLocalResidualOptions({ enabled: true, neighbors: 1, minimumSamples: 0 }), resolveLocalResidualOptions({ enabled: true, neighbors: 8.9 })) // { enabled: true, neighbors: 3, minimumSamples: 1 } and { enabled: true, neighbors: 8, minimumSamples: 30 }
+
+// A 7 x 6 grid of targets, 24 samples on the eastern pier side (the first four hour angles) and 18 on the western one, at hour angles of -3 to 3 hours and declinations of -20 to 60 degrees. The global model leaves a bump of 20 arcseconds in the east of a patch centered at hour angle 1 h, declination 30 degrees, and nothing elsewhere.
+const directions: number[] = []
+const pierSides: ('EAST' | 'WEST')[] = []
+const residualsDx: number[] = []
+const residualsDy: number[] = []
+
+for (let i = 0; i < 7; i++) {
+	for (let j = 0; j < 6; j++) {
+		const ra = hour(i - 3)
+		const dec = deg(-20 + j * 16)
+		directions.push(...eraS2c(ra, dec))
+		pierSides.push(i < 4 ? 'EAST' : 'WEST')
+		const near = Math.exp(-(((ra - hour(1)) / hour(1.5)) ** 2 + ((dec - deg(30)) / deg(25)) ** 2))
+		residualsDx.push(arcsec(20) * near)
+		residualsDy.push(0)
+	}
+}
+
+// With the layer disabled, or with fewer samples than the minimum (42 here against 100), nothing is built (both give undefined) and the global model is kept.
+const enabled = resolveLocalResidualOptions({ enabled: true, minimumSamples: 20 })
+console.log(buildLocalPointingResidual(directions, pierSides, residualsDx, residualsDy, resolveLocalResidualOptions()), buildLocalPointingResidual(directions, pierSides, residualsDx, residualsDy, resolveLocalResidualOptions({ enabled: true, minimumSamples: 100 }))) // undefined, undefined
+
+// The layer: the copies of the training data, the neighbors and the characteristic spacing, in degrees.
+const model = buildLocalPointingResidual(directions, pierSides, residualsDx, residualsDy, enabled)!
+console.log(model.directions.length, model.pierSides.length, model.neighbors, round(model.scale * 57.29577951, 3)) // 126, 42, 6, 26.42
+
+// At a training sample the average is a smooth mix with its neighbors: the east component, in arcseconds, at the sample of the bump (hour angle 1 h, declination 28 degrees) and at one far from it; the north component is zero. The data of the model are copies, so changing an input afterwards does not change it (the last value is false).
+const atBump = predictLocalPointingResidual(model, hour(1), deg(28), 'EAST')
+const away = predictLocalPointingResidual(model, hour(-3), deg(-20), 'EAST')
+residualsDx[0] = 1
+console.log(round(toArcsec(atBump.dx), 3), round(toArcsec(atBump.dy), 3), round(toArcsec(away.dx), 5), model.residualsDx[0] === 1) // 8.148, 0, 0.00812, false
+
+// Between samples the result is an interpolation of the neighbors; the same position asked with no pier side or with the side of the west gives its own neighborhood, since the neighbors are taken from the requested side only.
+console.log(['EAST', 'WEST', 'NEITHER', undefined].map((side) => round(toArcsec(predictLocalPointingResidual(model, hour(0.5), deg(37), side as 'EAST' | 'WEST' | 'NEITHER' | undefined).dx), 3))) // [9.424, 15.79, 13.785, 13.785]
+
+// Toward the edge of the sampled region the layer fades out: at a declination of 85 degrees (25 degrees beyond the last row of the grid) the east component is smaller than at 76 degrees, both in arcseconds, and it vanishes smoothly as the neighborhood stretches beyond the characteristic spacing.
+const beyond = predictLocalPointingResidual(model, hour(1), deg(85), 'EAST')
+console.log(round(toArcsec(beyond.dx), 5), round(toArcsec(predictLocalPointingResidual(model, hour(1), deg(76), 'EAST').dx), 5)) // 0.61456, 1.04214
+```
 
 ### Meridian Flip Lifecycle
 
@@ -13214,6 +13596,67 @@ show({ localSiderealTime: hour(0.01), target: { rightAscension: hour(23.99) }, p
 ```
 
 ### Mosaic Framing
+
+`observation/framing/mosaic.plan` lays out a rectangular grid of camera panels that covers a requested sky rectangle. Every dimension lives on one shared gnomonic tangent plane centered on the target: sizes are converted to plane extents (`2·tan(angle/2)`), the panels are spaced on that plane and each center and corner is inverse-projected to equatorial coordinates, so a panel far from the center is a projected rectangle and not an independent per-panel field of view (the plate scale and the distortion of the real optics are not modelled). All angles are radians. A `MosaicPlanInput` has the `center` (`ra`, any finite angle that is normalized to `0..TAU`, and `dec`, in the frame chosen by the caller, which is not converted), the `panel` and the `region` as `MosaicFieldOfView` (`width` and `height` in radians, each within `(0, PI)`), the optional `positionAngle` of the positive local y axis from north toward east (zero by default and normalized to `(-PI, PI]`), the optional fractional `overlap` of columns (`x`) and rows (`y`) in `[0, 1)` (a missing axis is zero) and the `traversal` (`ROW_MAJOR` by default, or `SERPENTINE`). `planMosaic(input)` rounds the number of columns and of rows up (with a floating-point tolerance, so an exact multiple does not add a panel) so the grid spans the request, and returns a `MosaicPlan` with the normalized `center` and `positionAngle`, the `panel`, `region` and effective `overlap`, the `columns` and `rows`, the `coverage` that is really spanned (at least the region, in radians) and the `panels` in capture order. A `MosaicPanel` has the zero-based capture `index`, the geometric `row` (zero on the positive local y side) and `column` (zero on the negative local x side), the equatorial `center` and a `MosaicFootprint` with the four corners named in the panel's own frame: top corners at positive local y and left corners at negative local x, which rotate with the position angle and are therefore not fixed sky directions. `ROW_MAJOR` captures every row from the first column to the last, `SERPENTINE` reverses the odd rows to shorten the slews; the panel `index` equals its position in the array. `mosaicBasis(center, positionAngle)` returns the underlying orthonormal `MosaicBasis` (the unit vector to the center `c` and the rotated local axes `u` and `v`), which is what turns a plane point into a direction. The dimensions, the overlap and the center are validated at the entry point, and a request that would need more panels than an array can hold is refused, so a plan is always finite. The rotation of the camera on the mount, the focal-plane tilt, a mount that cannot reach a panel or the order that minimizes the slew time are not handled here.
+
+```ts
+import { arcmin, deg, hour, toArcmin, toDeg } from 'nebulosa/src/math/units/angle'
+import { mosaicBasis, planMosaic } from 'nebulosa/src/observation/framing/mosaic.plan'
+
+const round = (value: number, digits = 3) => +value.toFixed(digits)
+const sky = (coordinate: { ra: number; dec: number }) => [round(toDeg(coordinate.ra) / 15, 4), round(toDeg(coordinate.dec), 4)]
+
+// A 3 x 2 degree region around M31 (RA 0.712 h, Dec +41.27 degrees) with a camera that covers 1.2 x 0.9 degree and an overlap of 10% in both axes: the grid, the effective coverage in degrees and the panel centers (hours and degrees) in capture order.
+const plan = planMosaic({ center: { ra: hour(0.712), dec: deg(41.27) }, panel: { width: deg(1.2), height: deg(0.9) }, region: { width: deg(3), height: deg(2) }, overlap: { x: 0.1, y: 0.1 } })
+console.log(
+	plan.columns,
+	plan.rows,
+	plan.panels.length,
+	[plan.coverage.width, plan.coverage.height].map((value) => round(toDeg(value), 4)),
+	plan.overlap,
+	round(toDeg(plan.positionAngle), 4),
+) // 3 3 9 [ 3.3592, 2.5196 ] { x: 0.1, y: 0.1 } 0
+console.log(plan.panels.map((panel) => [panel.index, panel.row, panel.column, ...sky(panel.center)])) // [ [ 0, 0, 0, 0.615, 42.0708 ], [ 1, 0, 1, 0.712, 42.08 ], [ 2, 0, 2, 0.809, 42.0708 ], [ 3, 1, 0, 0.6162, 41.2611 ], [ 4, 1, 1, 0.712, 41.27 ], [ 5, 1, 2, 0.8078, 41.2611 ], [ 6, 2, 0, 0.6174, 40.4514 ], [ 7, 2, 1, 0.712, 40.46 ], [ 8, 2, 2, 0.8066, 40.4514 ] ]
+
+// The footprint of the first panel (top-left, top-right, bottom-right and bottom-left corners), in hours and degrees.
+console.log(Object.values(plan.panels[0].footprint).map(sky)) // [ [ 0.5601, 42.5073 ], [ 0.6686, 42.528 ], [ 0.6692, 41.6282 ], [ 0.5622, 41.6081 ] ]
+
+// The serpentine traversal visits the same panels, with the odd row reversed: the capture order as [row, column] pairs of both traversals.
+const serpentine = planMosaic({ center: { ra: hour(0.712), dec: deg(41.27) }, panel: { width: deg(1.2), height: deg(0.9) }, region: { width: deg(3), height: deg(2) }, overlap: { x: 0.1, y: 0.1 }, traversal: 'SERPENTINE' })
+console.log(plan.panels.map((panel) => `${panel.row}${panel.column}`).join(' '), serpentine.panels.map((panel) => `${panel.row}${panel.column}`).join(' ')) // 00 01 02 10 11 12 20 21 22 00 01 02 12 11 10 20 21 22
+
+// A position angle of 30 degrees rotates the whole grid about the center: the angle is normalized to (-PI, PI] (a 390 degree input gives the same plan), and the first panel center moves.
+const rotated = planMosaic({ center: { ra: hour(0.712), dec: deg(41.27) }, panel: { width: deg(1.2), height: deg(0.9) }, region: { width: deg(3), height: deg(2) }, overlap: { x: 0.1, y: 0.1 }, positionAngle: deg(390) })
+console.log(round(toDeg(rotated.positionAngle), 4), sky(rotated.panels[0].center), rotated.columns, rotated.rows) // 30 [ 0.6641, 42.5091 ] 3 3
+
+// A region that already fits in one panel gives a single panel centered on the target, and the plane stretches the sky with the distance, so a 2 degree region with panels of 1 degree needs 3 columns while 1.99 degrees fit in 2 (the counts of both); an RA of 7 turns plus 3 hours is normalized to 3 hours.
+const single = planMosaic({ center: { ra: hour(3) + 7 * 2 * Math.PI, dec: deg(10) }, panel: { width: deg(2), height: deg(2) }, region: { width: deg(1), height: deg(1) } })
+const exact = planMosaic({ center: { ra: hour(3), dec: deg(10) }, panel: { width: deg(1), height: deg(1) }, region: { width: deg(1.99), height: deg(1.99) } })
+const wider = planMosaic({ center: { ra: hour(3), dec: deg(10) }, panel: { width: deg(1), height: deg(1) }, region: { width: deg(2), height: deg(2) } })
+console.log(single.panels.length, sky(single.center), sky(single.panels[0].center), exact.columns, exact.rows, wider.columns, wider.rows) // 1 [ 3, 10 ] [ 3, 10 ] 2 2 3 3
+
+// The coverage is a plane extent converted back to an angle, so it is at least the request: the coverage of the 1.99 degree plan (2 panels without overlap) in degrees.
+console.log([exact.coverage.width, exact.coverage.height].map((value) => round(toDeg(value), 5))) // [ 1.99985, 1.99985 ]
+
+// The panel step in the sky shrinks with the overlap: the separation between the first two panel centers of one row for 0, 25 and 50% in arcminutes (a row at the center of a mosaic of one row).
+console.log(
+	[0, 0.25, 0.5].map((x) => {
+		const row = planMosaic({ center: { ra: hour(6), dec: 0 }, panel: { width: deg(1), height: deg(1) }, region: { width: deg(2), height: deg(1) }, overlap: { x } })
+		return round(toArcmin(row.panels[1].center.ra - row.panels[0].center.ra), 3)
+	}),
+) // [ 59.995, 44.999, 29.998 ]
+
+// The basis at the equator on the Greenwich meridian: the center unit vector, the local x axis (east) and the local y axis (north) of an unrotated mosaic, and the same axes for 90 degrees of position angle (u points south and v east).
+const basis = mosaicBasis({ ra: 0, dec: 0 }, 0)
+const turned = mosaicBasis({ ra: 0, dec: 0 }, deg(90))
+console.log(
+	[basis.cx, basis.cy, basis.cz],
+	[basis.ux, basis.uy, basis.uz],
+	[basis.vx, basis.vy, basis.vz],
+	[turned.ux, turned.uy, turned.uz].map((value) => round(value, 12)),
+	[turned.vx, turned.vy, turned.vz].map((value) => round(value, 12)),
+) // [ 1, 0, 0 ] [ 0, 1, -0 ] [ -0, 0, 1 ] [ 0, 0, -1 ] [ 0, 1, 0 ]
+```
 
 ### Mount Axis Limits
 
@@ -13469,6 +13912,113 @@ console.log(round(observationScore({ altitude: deg(50), sunAltitude: deg(-19), m
 
 ### Pointing Model Fit and Correction
 
+`observation/mount/pointing` fits the systematic pointing error of a telescope mount from pairs of commanded and plate-solved sky positions, predicts that error for a new target and inverts it so that a command lands on the requested position. The error is a local tangent-plane offset at the target in radians (`dx` toward east and `dy` toward north, defined as `solved - target`), and the three fitting strategies are a TPOINT-style semi-physical model (`semiPhysical`: collimation `CH`, hour-angle and declination index `IH` and `ID`, non-perpendicularity `NP`, polar-axis azimuth and elevation `MA` and `ME` and tube flexure `TF`), a linear empirical feature model (`empirical`, bias, sine and cosine of hour angle, declination and altitude, cross, pier-side and polynomial terms) and the default `hybrid`, which is the semi-physical model plus an empirical residual block (`POINTING_MODEL_STRATEGIES` lists them in the order `selectPointingStrategy` tries them, and `POINTING_ERROR_REPRESENTATIONS` the two representations, the gnomonic `vectorTangent` by default and the linearized `smallAngle` with `dRA cos(Dec)` and `dDec`). A `PointingSample` has the commanded target and the solved position (radians), and, for the hour angle, altitude and flexure terms, the `time` (with the `latitude` and the east-positive `longitude` of the site in radians), the `pierSide`, the radial `uncertainty` of the solve in radians (weights go with its inverse square) and the declared `frame` (`apparentTopocentric` by default, `apparentTopocentricRefracted` or `icrs`; a sample in another frame than the fit is rejected rather than mixed, since the difference would enter as mechanical error). `computePointingError(targetRa, targetDec, solvedRa, solvedDec, representation?)` returns the offsets with the great-circle `angularSeparation`, the `representationUsed` (it falls back to `smallAngle` when the projection is singular) and both representations in `comparison`, and `applyPointingOffset(rightAscension, declination, dx, dy, representation?)` is its inverse, with the right ascension in `0..TAU` and the declination clamped to `±PI/2`. `fitPointingModel(samples, options?)` validates the samples (the `PointingValidationOptions`: `minimumAltitude` of 10 degrees, `maximumSampleSeparation` of 5 degrees, `duplicateTolerance` of 5 arcminutes between same-side targets and a `minimumSamples` recommendation of 12), keeps the richest observing context that most of the samples can supply (it rejects the stragglers, `insufficient observing context`, instead of zero-filling), drops the terms that the context or a minimum sample-to-parameter ratio (`minimumSampleRatio`, 3) cannot support, and fits by weighted ridge-regularized least squares with a Huber IRLS (`robust`: `method`, `maxIterations`, `tolerance` and `tuning`; `ridge` and `ridgeEmpirical` are relative to the column energy; `semiPhysicalTerms`, `featureConfiguration`, `errorRepresentation`, `frame` and the `local` residual layer of Local Pointing Residuals are also options). The `FittedPointingModel` carries the `strategy`, the resolved configuration, a `usable` flag (false when underdetermined or with a condition number above 1e8, and then every prediction is a zero offset with a warning), the `physical`, `empirical`, `residual` and `local` components, the `coverage` of the sky, the `supportSet` of training directions and the `diagnostics`: the sample counts, the residual RMS in each axis and the radial `angularRms`, the median and the 50, 90 and 95 percentiles, the `conditionNumber`, the counts per pier side, the rejection reasons, the `droppedTerms`, the `warnings` and the leave-one-out RMS and percentiles (`looRms`, from a real refit per sample, the number to compare strategies with since the in-sample RMS can only fall as parameters are added). `selectPointingStrategy(samples, options?)` fits every strategy on the same samples and returns the one with the smallest leave-one-out RMS (the in-sample RMS only when no candidate produced one; unusable models are never chosen). `predictPointingModelError(model, input)` returns a `PredictedPointingError`: the `dx` and `dy` of the sum of the components, the `offsetMagnitude`, the `components` and a `quality` (the distances to the nearest and to the 4th-nearest training samples, a `support` in [0, 1] that stays at 1 as long as the target is as well surrounded as a typical sample and then decays, the `extrapolating` flag below 0.35, whether the pier side was trained and warnings, including a frame mismatch). `correctPointingCoordinate(model, input, options?)` solves `command + error(command) = target` by a fixed-point iteration in the tangent plane (re-deriving the hour angle, altitude and pier side at each command, `damping` 1, `maxIterations` 8, `tolerance` 1e-9 radians and `maximumCorrection` of 5 degrees, which clamps a wildly extrapolating model instead of sending the mount away) and returns the corrected coordinate, the `predictedError` at it, `converged`, `iterations`, `clamped` and the gnomonic `residual`. `MountPointing` is the stateful collector: `add(sample)` and `model(sample, { fit, fitOptions })` store samples (the latter can refit), `fit(options?)` fits with the constructor `defaults`, `predictError(input)` and `correctCoordinate(input, options?)` use the latest model (an identity prediction with no model), `export({ includeSamples })` and `import(serialized)` move a model (and, optionally, its dataset) in and out as a structured clone, and `state` and `diagnostics` summarize it. The model describes the mechanics and not the atmosphere: keep samples and predictions in one frame, refraction belongs to the astrometric layer, a term that the sky coverage does not constrain is not trustworthy, the sign of the terms and of the correction is the one in `signConvention` (the correction subtracts the predicted error) and a mount without a calibration run of well spread targets on both pier sides should not use the local layer or the hybrid empirical block.
+
+```ts
+import { eraC2s, eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { localSiderealTime } from 'nebulosa/src/astronomy/observer/location'
+import { timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { sphericalUnprojectTangentPlane } from 'nebulosa/src/math/numerical/geometry'
+import { gaussian, mulberry32 } from 'nebulosa/src/math/numerical/random'
+import { arcsec, deg, hour, normalizeAngle, toArcsec } from 'nebulosa/src/math/units/angle'
+import { applyPointingOffset, computePointingError, correctPointingCoordinate, fitPointingModel, MountPointing, POINTING_ERROR_REPRESENTATIONS, POINTING_MODEL_STRATEGIES, predictPointingModelError, selectPointingStrategy, type PointingSample } from 'nebulosa/src/observation/mount/pointing'
+import { extractPointingContext, predictSemiPhysicalOffset, SEMI_PHYSICAL_TERM_NAMES } from 'nebulosa/src/observation/mount/pointing.basis'
+
+const round = (value: number, digits = 3) => +value.toFixed(digits)
+
+// The strategies, the representations and the plain error of a sample: a target at RA 3 h and Dec 40 degrees that landed 30 arcseconds to the east on the sky (the dRA·cos(Dec) of 30 arcseconds is a little more than the gnomonic offset) and 12 arcseconds to the north: the offsets in arcseconds in both representations and the separation.
+console.log(POINTING_MODEL_STRATEGIES, POINTING_ERROR_REPRESENTATIONS) // [ 'semiPhysical', 'hybrid', 'empirical' ] [ 'vectorTangent', 'smallAngle' ]
+const target = { rightAscension: hour(3), declination: deg(40) }
+const solved = applyPointingOffset(target.rightAscension, target.declination, arcsec(30), arcsec(12), 'smallAngle')
+const error = computePointingError(target.rightAscension, target.declination, solved.rightAscension, solved.declination)
+console.log(
+	[error.dx, error.dy, error.angularSeparation].map((value) => round(toArcsec(value), 4)),
+	error.representationUsed,
+	[error.comparison!.smallAngleDx, error.comparison!.vectorDx].map((value) => round(toArcsec(value), 4)),
+) // [ 29.9985, 12.0018, 32.3103 ] vectorTangent [ 30, 29.9985 ]
+console.log(round(toArcsec(applyPointingOffset(target.rightAscension, target.declination, error.dx, error.dy).declination - solved.declination), 8)) // -0
+
+// A mount with the seven TPOINT terms (1.4, 1.8, -1.1, 0.9, 1.6, -1.2 and 1.2 arcseconds) at a site of -23 degrees of latitude and -46 of longitude: 60 targets spread over the sky, with a plate-solve noise of 0.3 arcsecond; the solved position of each is the target plus the offset of the mechanical model in the tangent plane.
+const time = timeYMDHMS(2025, 6, 1, 3, 0, 0)
+const latitude = deg(-23)
+const longitude = deg(-46)
+const truth = Float64Array.from([1.4, 1.8, -1.1, 0.9, 1.6, -1.2, 1.2].map((value) => arcsec(value)))
+const lst = localSiderealTime(time, longitude, true)
+const random = mulberry32(7)
+const noise = gaussian(random, arcsec(0.3))
+const samples: PointingSample[] = []
+
+for (let i = 0; i < 60; i++) {
+	const targetRightAscension = normalizeAngle(lst - deg(-110 + 220 * random()))
+	const targetDeclination = deg(-40 + 100 * random())
+	const pierSide = i % 2 === 0 ? 'EAST' : 'WEST'
+	const context = extractPointingContext({ rightAscension: targetRightAscension, declination: targetDeclination, time, latitude, longitude, pierSide })
+	const offset = predictSemiPhysicalOffset(truth, SEMI_PHYSICAL_TERM_NAMES, context)
+	const [solvedRightAscension, solvedDeclination] = eraC2s(...sphericalUnprojectTangentPlane(offset.dx + noise(), offset.dy + noise(), eraS2c(targetRightAscension, targetDeclination)))
+	samples.push({ targetRightAscension, targetDeclination, solvedRightAscension, solvedDeclination, time, latitude, longitude, pierSide })
+}
+
+// The raw error of the mount over the samples, and the fit of the semi-physical model: the accepted samples (the 24 targets below the 10 degrees of minimum altitude are rejected), the radial RMS in arcseconds before (the plain mean of the errors) and after, the leave-one-out RMS, the condition number and the warnings.
+const raw = samples.map((sample) => computePointingError(sample.targetRightAscension, sample.targetDeclination, sample.solvedRightAscension, sample.solvedDeclination).angularSeparation)
+console.log(round(toArcsec(Math.sqrt(raw.reduce((sum, value) => sum + value * value, 0) / raw.length)), 3)) // 3.496
+const model = fitPointingModel(samples, { strategy: 'semiPhysical' })
+const d = model.diagnostics
+console.log(model.strategy, model.usable, d.validSamples, d.rejectedSamples, round(toArcsec(d.angularRms), 3), round(toArcsec(d.looRms!), 3), round(d.conditionNumber, 2), d.warnings, d.droppedTerms) // semiPhysical true 36 24 0.402 0.444 19.33 [] []
+
+// The fitted parameters in arcseconds, in the order of the terms (the truth is 1.4, 1.8, -1.1, 0.9, 1.6, -1.2 and 1.2), and the percentiles of the radial residual.
+console.log(
+	model.physical!.terms.join(' '),
+	Array.from(model.physical!.parameters, (value) => round(toArcsec(value), 3)),
+) // CH IH ID NP MA ME TF [ 1.498, 1.721, -1.064, 0.886, 1.585, -1.177, 1.255 ]
+console.log(
+	[d.residualPercentiles.p50, d.residualPercentiles.p90, d.residualPercentiles.p95].map((value) => round(toArcsec(value), 3)),
+	d.perPierSideSampleCounts,
+	round(model.coverage.skyCoverageRatio, 3),
+	d.supportedContext,
+) // [ 0.327, 0.614, 0.628 ] { EAST: 19, WEST: 17, NEITHER: 0 } 0.375 horizon
+
+// The prediction at a target of the sky: the offset in arcseconds, which must be close to that of the true mechanical model, the components, and the quality of the support.
+const input = { rightAscension: normalizeAngle(lst - deg(30)), declination: deg(10), time, latitude, longitude, pierSide: 'EAST' as const }
+const expected = predictSemiPhysicalOffset(truth, SEMI_PHYSICAL_TERM_NAMES, extractPointingContext(input))
+const prediction = predictPointingModelError(model, input)
+console.log(
+	[prediction.dx, prediction.dy, prediction.offsetMagnitude, expected.dx, expected.dy].map((value) => round(toArcsec(value), 3)),
+	Object.keys(prediction.components),
+) // [ -3.584, -0.634, 3.64, -3.536, -0.711 ] [ 'physical', 'empirical', 'residual', 'local' ]
+console.log(round(toArcsec(prediction.quality.nearestSampleDistance) / 3600, 3), round(prediction.quality.support, 3), prediction.quality.extrapolating, prediction.quality.pierSideCovered, prediction.quality.warnings) // 16.574 1 false true []
+
+// The correction: the command that makes the mount land on the target, the predicted error at the command (it is the opposite of the correction), whether it converged, the iterations and the gnomonic residual in arcseconds.
+const corrected = correctPointingCoordinate(model, input)
+console.log(
+	[corrected.rightAscension - input.rightAscension, corrected.declination - input.declination].map((value) => round(toArcsec(value), 3)),
+	[corrected.predictedError.dx, corrected.predictedError.dy].map((value) => round(toArcsec(value), 3)),
+	corrected.converged,
+	corrected.iterations,
+	corrected.clamped,
+	round(toArcsec(corrected.residual), 8),
+) // [ 3.639, 0.634 ] [ -3.584, -0.634 ] true 1 false 0.00003676
+
+// The hybrid default adds the empirical residual block, with its leave-one-out RMS, and the strategy selector fits all of them and returns the best by that metric (which can be the simplest, as the data have no unmodelled deformation).
+const hybrid = fitPointingModel(samples)
+const selected = selectPointingStrategy(samples)
+console.log(hybrid.strategy, round(toArcsec(hybrid.diagnostics.angularRms), 3), round(toArcsec(hybrid.diagnostics.looRms!), 3), Object.keys(hybrid.diagnostics.droppedTerms).length, selected.strategy, round(toArcsec(selected.diagnostics.looRms!), 3)) // hybrid 0.36 0.464 1 semiPhysical 0.444
+
+// A model built with only the empirical features, in the small-angle representation, and a tighter feature set: the mean quality of the fit as the radial RMS.
+const empirical = fitPointingModel(samples, { strategy: 'empirical', errorRepresentation: 'smallAngle', featureConfiguration: { includeCrossTerms: false, includePolynomialTerms: false } })
+console.log(empirical.strategy, empirical.errorRepresentation, round(toArcsec(empirical.diagnostics.angularRms), 3), round(toArcsec(empirical.diagnostics.looRms!), 3), empirical.usable) // empirical smallAngle 0.514 0.736 true
+
+// The stateful collector: it collects the samples (the second call refits at once), predicts and corrects through the latest model, and it exports the model, with or without its dataset, to import into another instance; with no fit the correction is the identity.
+const pointing = new MountPointing({ strategy: 'semiPhysical' })
+for (const sample of samples.slice(0, 40)) pointing.add(sample)
+console.log(pointing.state.sampleCount, pointing.state.dirty, pointing.state.fittedModel === undefined, pointing.correctCoordinate(input).converged, pointing.correctCoordinate(input).rightAscension === input.rightAscension) // 40 true true true true
+const state = pointing.model(samples[40], { fit: true })
+console.log(state.sampleCount, state.dirty, state.fittedModel!.trainingSampleCount, round(toArcsec(pointing.diagnostics.angularRms), 3)) // 41 false 25 0.44
+const exported = pointing.export({ includeSamples: true })!
+const other = new MountPointing()
+other.import(exported)
+console.log(exported.samples!.length, other.state.sampleCount, other.state.dirty, round(toArcsec(other.predictError(input).dx), 3) === round(toArcsec(pointing.predictError(input).dx), 3)) // 41 41 false true
+```
+
 ### Polar Alignment Exposure Estimator
 
 `observation/alignment/polaralignment.exposure` turns the residual polar error of a mount into a limit on the exposure of an unguided frame, or of a guided one: the star motion that remains after a perfect guiding is the rotation of the field around the guide star. It concerns only the polar misalignment, not the periodic error, the flexure or the generic sidereal star-trail formula of a perfectly aligned tracking mount. Directions are unit vectors in the inertial ICRF frame of the plate solutions, angles are radians, rates are radians per second, the exposures are SI seconds, the image scale is radians per pixel, and the allowed trail (`maxTrail`, 0.5 pixel by default as `DEFAULT_POLAR_ALIGNMENT_MAX_TRAIL`) is a displacement in pixels. The mechanical axis is fixed to the Earth, so the model has it turn around the true pole at the sidereal rate while the exposure runs, and a residual angular velocity `omega * (celestialPole - mountPole)` moves every star. The rate functions are instantaneous at the given directions (the sidereal rate by default, and the vectors are normalized): `polarAlignmentResidualAngularVelocity(mountPole, celestialPole, rate?)` returns that velocity vector, `polarAlignmentUnguidedDriftRate(mountPole, celestialPole, target, rate?)` the drift of a target (its component perpendicular to the direction of the target), `polarAlignmentWorstCaseDriftRate(...)` the largest drift for any target (`2 * rate * sin(error / 2)`, independent of the direction) and `polarAlignmentGuidedFieldRotationRate(mountPole, celestialPole, guide, rate?)` the signed field roll for an ideal RA and DEC guiding at the guide direction, or `undefined` when the guide is too close to the mechanical axis. The sampling helpers are `polarAlignmentImageScale(pixelSize, focalLength)` (a pixel size in micrometers and a focal length in millimeters to radians per pixel) and `polarAlignmentFieldRadius(width, height, imageScale)` (the gnomonic angular radius from the guide star at the center of a sensor to its corner, with the sizes in pixels). `polarAlignmentExposureLimit(input)` takes a `PolarAlignmentExposureInput` (the `mountPole`, the `celestialPole`, the `imageScale`, an optional `maxTrail`, an optional `target` direction, an optional `guiding` of a `guide` direction and the `fieldRadius` of the farthest relevant point from it, and the `searchLimit` in seconds, one sidereal day by default) and returns the `polarError`, the `imageScale` and `maxTrail` used, the `unguided` limits (the `worstCaseRate` and the conservative `worstCase` exposure for any target; with a target, its initial `targetRate` and the time-dependent `target` exposure, integrating the changing rate with Simpson's rule until the trail reaches the threshold) and, when guiding is given, the `guided` rate of the roll `rotationRate`, the protected `fieldRadius`, the `exposure` (which scales the roll with the sine of the field radius) and a `singular` flag for a guide near the mechanical axis (with no exposure). An exposure of `Infinity` means that the trail is not reached within the `searchLimit` (an aligned axis always gives it), and not an unlimited exposure physically. `polarAlignmentExposureLimitForResult(input, location?)` does the same from a `ThreePointPolarAlignmentResult` (its `pole` and `time`, transported as Earth-fixed to an optional start `time`, with the true pole computed without refraction), so the target and guide directions must be those of the chosen start epoch. The limits are conservative planning values for a smooth tracking with no other error, and the guided model assumes ideal guiding with both axes and no guider lag.
@@ -13604,6 +14154,100 @@ console.log(round(toArcmin(ra - hour(3)), 3), round(toArcmin(dec - deg(48)), 3))
 ```
 
 ### Polar Alignment Overlay
+
+`observation/alignment/polaralignment.overlay` turns the result of a three-point polar alignment (see Three-Point Polar Alignment, which gives the current mount pole) and the plate solution of the latest frame into the geometry of an on-screen guide: where a reference star is now, where it must be moved by the azimuth knob alone and where it ends with both knobs, the three segments between those points and closed contours of constant residual polar error. It is geometry only, with no rendering or DOM dependency, and it never mutates its inputs. The remaining correction is solved in inertial 3D as two rotations of the mount base (an azimuth rotation around local up, then an altitude rotation around the east axis carried by the base) with a damped Levenberg-Marquardt on the spherical residual to the target pole (the refracted or the geometric celestial pole, as the `refraction` option says), seeded by the exact two-rotation branches so that large errors work too; the reference is then projected through the complete TAN or TAN-SIP WCS of the solution, so the distortion of the lens is included, and pixel positions follow the continuous WCS convention of `tanUnproject` (`PlateSolution` is described in Plate Solution). `computeThreePointPolarAlignmentOverlay(result, solution, time, options?)` takes the alignment result (whose `pole` is the unit direction of the mechanical pole), the solution, the exposure time (which carries the observing location unless `options.location` is given; time, WCS and pole must describe the same exposure) and returns a discriminated `ThreePointPolarAlignmentOverlayResult`: `success: false` with a `reason` (`invalidOptions`, `invalidFrame`, `invalidWcs`, `missingLocation`, `invalidPole`, `invalidReference`, `unprojectableReference`, `unprojectableTarget` or `degenerateCorrection`) and the warnings, or `success: true` with an `overlay`. The `ThreePointPolarAlignmentOverlayOptions` are `location`, `refraction` (the default parameters, or `false` for the geometric pole), the visual `reference` (a `pixel` position, or an inertial `equatorial` position in radians; the image center by default), the `frame` rectangle and `margin` (pixels) used to clip and to place markers (the solution size and zero by default), the `tolerances` of the contours in radians (30 arcseconds, 1 and 5 arcminutes by default as `DEFAULT_POLAR_ALIGNMENT_OVERLAY_TOLERANCES`), the unique `samples` per contour (48, from 12 to 256) and the solver controls `correctionTolerance`, `maximumIterations`, `derivativeStep` and `maximumCondition` (the largest accepted condition number of the normal matrix). The overlay has the `frame`, the `reference`, the three `PolarAlignmentOverlayPoint` (`currentPoint`, `azimuthTargetPoint` and `targetPoint`: the real WCS `position`, which may lie outside the frame, a `display` position on or inside the inset frame for a marker, `onScreen` and the unit pixel `direction` from the anchor), the `azimuthSegment`, `altitudeSegment` and `totalSegment` (`PolarAlignmentOverlaySegment`: the original and the clipped endpoints, `visible`, `clipped`, `length` and `direction`), the `contours` (`PolarAlignmentOverlayContour`: the `tolerance`, the closed `points`, whose last point repeats the first, `visible` and the `bounds`), the `correction` (the signed `azimuth` and `altitude` rotations in radians, the `residual`, the `iterations`, the `condition`, `converged`, `stable` and the `termination` reason), the normalized `currentPole` and `targetPole`, the exact geodesic `error` (`total`, `azimuth` and `altitude`, radians) and the `diagnostics` (the `warnings` `correctionNotConverged`, `correctionIllConditioned`, `referenceOutsideFrame`, `contourOmitted` and `contourIllConditioned`, whether the reference and the target are on screen and the `omittedTolerances`). A contour that cannot be projected in full is left out whole, never drawn partially. The helpers `polarAlignmentReferenceFromPixel(solution, point)` (a pixel to an inertial coordinate, `undefined` when it cannot be unprojected), `projectPolarAlignmentOverlayPoint(point, frame, margin?, origin?)` (the marker position, projected to the inset border along the line from an in-frame `origin`, or from the center, when the point is off screen) and `clipPolarAlignmentOverlaySegment(from, to, frame, margin?)` (a Cohen-Sutherland clip that keeps both original endpoints, also for an invisible segment) can be used on their own. The segments are not the path of the mount: the knob order is first the azimuth, then the altitude, and for a large error the two components are exact but not additive. Choose a reference star that stays in the frame after the correction, since a target outside the frame is shown only at the border.
+
+```ts
+import { plateSolutionFrom } from 'nebulosa/src/astrometry/solvers/platesolver'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { arcmin, arcsec, deg, toArcmin, toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
+import { mountAdjustmentAxes, type ThreePointPolarAlignmentResult } from 'nebulosa/src/observation/alignment/polaralignment'
+import { clipPolarAlignmentOverlaySegment, computeThreePointPolarAlignmentOverlay, DEFAULT_POLAR_ALIGNMENT_OVERLAY_TOLERANCES, polarAlignmentReferenceFromPixel, projectPolarAlignmentOverlayPoint, type ThreePointPolarAlignmentOverlayResult } from 'nebulosa/src/observation/alignment/polaralignment.overlay'
+import { applyInverseMountAdjustment, celestialPoleVector } from 'nebulosa/src/observation/alignment/polaralignment.util'
+
+type Ok = Extract<ThreePointPolarAlignmentOverlayResult, { success: true }>
+const round = (value: number, digits = 3) => +value.toFixed(digits)
+const pixel = (point: { x: number; y: number }) => [round(point.x, 2), round(point.y, 2)]
+
+// A TAN solution of 800 x 600 pixels at RA 120 and Dec +30 degrees, 3.6 arcseconds per pixel, with a slight shear.
+const solution = plateSolutionFrom({ NAXIS: 2, NAXIS1: 800, NAXIS2: 600, CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 400, CRPIX2: 300, CRVAL1: 120, CRVAL2: 30, CD1_1: -0.001, CD1_2: 0.0001, CD2_1: 0.00005, CD2_2: 0.0011 })!
+
+// A mount at latitude 35 degrees south with its pole off by 6 arcminutes in azimuth and -4 in altitude: the current pole is the target pole moved back by that base correction.
+const location = geodeticLocation(deg(-45), deg(-35))
+const time = timeYMDHMS(2026, 7, 12, 2, 0, 0)
+time.location = location
+const targetPole = celestialPoleVector(time, location, false)
+const axes = mountAdjustmentAxes(time, location)
+const pole = applyInverseMountAdjustment(targetPole, axes.upAxis, axes.eastAxis, arcmin(6), arcmin(-4))
+const alignment: ThreePointPolarAlignmentResult = { time, azimuth: 0, altitude: 0, azimuthError: 0, altitudeError: 0, pole, azimuthAdjustment: 0, altitudeAdjustment: 0 }
+
+// The overlay with the geometric pole (no refraction) and the image center as the reference: the success flag, the knob rotations in arcminutes, the exact geodesic error and the solver state.
+const result = computeThreePointPolarAlignmentOverlay(alignment, solution, time, { refraction: false })
+
+const overlay = (result as Ok).overlay
+console.log(
+	result.success,
+	[overlay.correction.azimuth, overlay.correction.altitude].map((value) => round(toArcmin(value), 4)),
+	[overlay.error.total, overlay.error.azimuth, overlay.error.altitude].map((value) => round(toArcmin(value), 4)),
+) // true [ 6, -4 ] [ 6.3353, -4.9149, 3.9975 ]
+console.log(overlay.correction.converged, overlay.correction.stable, overlay.correction.termination, overlay.correction.iterations, round(toArcsec(overlay.correction.residual), 6)) // true true convergedResidual 1 0
+
+// The reference (the frame center, in degrees), the three points in pixels (the star moves a few tens of pixels), whether they are on screen and the segments: the lengths in pixels, visibility and clipping.
+console.log(
+	[overlay.reference.rightAscension, overlay.reference.declination].map((value) => round(toDeg(value), 4)),
+	overlay.frame,
+) // [ 120, 30 ] { x: 0, y: 0, width: 800, height: 600 }
+console.log([overlay.currentPoint, overlay.azimuthTargetPoint, overlay.targetPoint].map((point) => [pixel(point.position), pixel(point.display), point.onScreen])) // [ [ [ 400, 300 ], [ 400, 300 ], true ], [ [ 390.56, 332.44 ], [ 390.56, 332.44 ], true ], [ [ 381.93, 387.6 ], [ 381.93, 387.6 ], true ] ]
+console.log([overlay.azimuthSegment, overlay.altitudeSegment, overlay.totalSegment].map((segment) => [round(segment.length, 3), segment.visible, segment.clipped, pixel(segment.direction as { x: number; y: number })])) // [ [ 33.787, true, false, [ -0.28, 0.96 ] ], [ 55.826, true, false, [ -0.15, 0.99 ] ], [ 89.441, true, false, [ -0.2, 0.98 ] ] ]
+
+// The contours: one per default tolerance (30 arcseconds, 1 and 5 arcminutes), each closed with 48 unique samples, and their bounds in pixels; the pole vectors and the diagnostics are the last part.
+console.log(
+	DEFAULT_POLAR_ALIGNMENT_OVERLAY_TOLERANCES.map((value) => round(toArcmin(value), 3)),
+	overlay.contours.map((contour) => [
+		round(toArcmin(contour.tolerance), 3),
+		contour.points.length,
+		contour.visible,
+		contour.points[0].x === contour.points.at(-1)!.x && contour.points[0].y === contour.points.at(-1)!.y,
+		pixel(contour.bounds as { x: number; y: number }),
+		round(contour.bounds.width, 1),
+		round(contour.bounds.height, 1),
+	]),
+) // [ 0.5, 1, 5 ] [ [ 0.5, 49, true, true, [ 380.48, 379.95 ], 2.9, 15.3 ], [ 1, 49, true, true, [ 379.04, 372.3 ], 5.8, 30.6 ], [ 5, 49, true, true, [ 367.46, 311.14 ], 28.9, 152.9 ] ]
+console.log(
+	overlay.diagnostics,
+	overlay.currentPole.map((value) => round(value, 6)),
+	overlay.targetPole.map((value) => round(value, 6)),
+) // { warnings: [], referenceOnScreen: true, targetOnScreen: true, omittedTolerances: [] } [ -0.004114, 0.001014, -0.999991 ] [ -0.002595, -0.000029, -0.999997 ]
+
+// A star away from the center chosen by pixel (the helper gives its inertial coordinate), with a margin of 20 pixels, one contour of 2 arcminutes and 24 samples: the reference in degrees and the marker positions for that star.
+const star = polarAlignmentReferenceFromPixel(solution, { x: 600, y: 200 })!
+console.log([star.rightAscension, star.declination].map((value) => round(toDeg(value), 4))) // [ 119.7578, 29.8998 ]
+const custom = computeThreePointPolarAlignmentOverlay(alignment, solution, time, { refraction: false, reference: { type: 'pixel', point: { x: 600, y: 200 } }, margin: 20, tolerances: [arcmin(2)], samples: 24, maximumIterations: 30, correctionTolerance: arcsec(0.01), derivativeStep: 1e-6, maximumCondition: 1e10 })
+
+console.log(
+	[(custom as Ok).overlay.currentPoint, (custom as Ok).overlay.targetPoint].map((point) => [pixel(point.position), point.onScreen]),
+	(custom as Ok).overlay.contours.map((contour) => [contour.points.length, round(toArcmin(contour.tolerance), 3)]),
+) // [ [ [ 600, 200 ], true ], [ [ 581.79, 287.38 ], true ] ] [ [ 25, 2 ] ]
+
+// The same reference given as an inertial coordinate, over a frame that is a sub-window of the image (x from 100 to 700 and y from 50 to 550): the points are the same, only the clipping changes.
+const equatorial = computeThreePointPolarAlignmentOverlay(alignment, solution, time, { refraction: false, reference: { type: 'equatorial', rightAscension: star.rightAscension, declination: star.declination }, frame: { x: 100, y: 50, width: 600, height: 500 } })
+
+console.log((equatorial as Ok).overlay.frame, pixel((equatorial as Ok).overlay.currentPoint.position), (equatorial as Ok).overlay.currentPoint.onScreen) // { x: 100, y: 50, width: 600, height: 500 } [ 600, 200 ] true
+
+// A reference far outside the frame (pixel 5000, 5000) is still projected; its marker is moved to the border along the line from the frame center and the overlay says so: the position, the display point, the unit direction and the warnings.
+const outside = computeThreePointPolarAlignmentOverlay(alignment, solution, time, { refraction: false, reference: { type: 'pixel', point: { x: 5000, y: 5000 } }, margin: 10 })
+
+console.log(pixel((outside as Ok).overlay.currentPoint.position), pixel((outside as Ok).overlay.currentPoint.display), pixel((outside as Ok).overlay.currentPoint.direction), (outside as Ok).overlay.currentPoint.onScreen, (outside as Ok).overlay.diagnostics.warnings) // [ 5000, 5000 ] [ 683.83, 590 ] [ 0.7, 0.71 ] false [ 'referenceOutsideFrame' ]
+
+// The standalone helpers over a frame of 100 x 80 pixels with a margin of 5: a segment that crosses it is clipped to the inset, a point beyond the right edge is moved to the inset border along the line from an in-frame origin, and a point inside stays where it is.
+const frame = { x: 10, y: 20, width: 100, height: 80 }
+const segment = clipPolarAlignmentOverlaySegment({ x: -20, y: 60 }, { x: 140, y: 60 }, frame, 5)!
+console.log(pixel(segment.from), pixel(segment.to), segment.visible, segment.clipped, segment.length, pixel(segment.direction as { x: number; y: number })) // [ 15, 60 ] [ 105, 60 ] true true 160 [ 1, 0 ]
+const marker = projectPolarAlignmentOverlayPoint({ x: 300, y: 60 }, frame, 5, { x: 60, y: 60 })!
+const inside = projectPolarAlignmentOverlayPoint({ x: 50, y: 50 }, frame, 5)!
+console.log(pixel(marker.display), marker.onScreen, pixel(marker.direction), pixel(inside.display), inside.onScreen) // [ 105, 60 ] false [ 1, 0 ] [ 50, 50 ] true
+```
 
 ### Taki Mount Geometry
 
@@ -14592,7 +15236,99 @@ await fs.rm(root, { recursive: true, force: true })
 
 ### ASCOM Alpaca Discovery Client
 
+`AlpacaDiscoveryClient` is the probing side of the Alpaca Discovery v1 protocol (see ASCOM Alpaca Discovery Server for the responder): it opens a UDP socket, sends the probe `alpacadiscovery1` to the IPv4 broadcast address of every local interface (or, for IPv6, to the discovery multicast group through each external interface, and to `::1` for the internal one), parses each response `{"AlpacaPort":N}` defensively (a number or a canonical integer string from 1 to 65535 is accepted and anything else is dropped) and calls the callback once per response with an `AlpacaDeviceServer`: the `address` of the sender (an IPv6 address keeps its `%zone` suffix), the announced `port` and the `devices`, the configured devices read from `GET /management/v1/configureddevices` of that server through `AlpacaManagementApi` (see ASCOM Alpaca REST API), or an empty list when the fetch is turned off, fails or is skipped (a link-local address with a zone cannot be used in a URL, so it is never fetched). `discovery(onDiscovery, options?)` starts the exchange and returns a promise of `true`, or of `false` at once if one is already running. The `AlpacaDiscoveryOptions` are the `family` (`IPv4` by default, or `IPv6`), the destination `port` (32227), the local `host` (`0.0.0.0` for IPv4 and `::` for IPv6), the `timeout` in milliseconds of the listen window (15000 by default, 0 keeps it open until `close`), `fetch` (true by default) and `wait`: with it the promise resolves only after the window closes, otherwise it resolves once the probes are sent and the callback keeps being called during the window. A server that answers with several ports is reported once per port, and the same server can be reported again when it answers a probe of more than one interface. `close()` stops the timer, closes the socket and resolves a pending wait; the client is `Disposable`, so `using` closes it at the end of the scope, and it can run again after it closes. A failed send is logged and closes it; the network is not guaranteed to deliver the probes, so a discovery that finds nothing is not proof that there are no servers.
+
+```ts
+import { AlpacaDiscoveryClient, AlpacaDiscoveryServer, type AlpacaDeviceServer } from 'nebulosa/src/devices/alpaca/discovery'
+
+// A management API that lists one configured device, an Alpaca-like HTTP server on any free port of all interfaces, and a discovery responder that announces its port on a private UDP port (so the standard one stays free).
+const http = Bun.serve({ hostname: '0.0.0.0', port: 0, fetch: () => Response.json({ Value: [{ DeviceName: 'Simulated Camera', DeviceType: 'Camera', DeviceNumber: 0, UniqueID: 'abc-1' }], ClientTransactionID: 0, ServerTransactionID: 1, ErrorNumber: 0, ErrorMessage: '' }) })
+const responder = new AlpacaDiscoveryServer()
+responder.addPort(http.port)
+await responder.start('0.0.0.0', 32229)
+
+// The discovery with the defaults but the port and a window of 1.5 s, waiting for the window to close: the callback gets the address of the machine (the LAN address of the interface that answered), the announced port and the configured devices with the type in lower case.
+const servers: AlpacaDeviceServer[] = []
+const client = new AlpacaDiscoveryClient()
+console.log(await client.discovery((server) => servers.push(server), { port: 32229, timeout: 1500, wait: true })) // true
+console.log(servers.length, servers[0].port === http.port, servers[0].devices) // 1 true [ { DeviceName: 'Simulated Camera', DeviceType: 'camera', DeviceNumber: 0, UniqueID: 'abc-1' } ]
+
+// With fetch turned off the device list is not requested and stays empty; the promise resolves at once, since it does not wait, and a second call while the first runs does nothing and returns false.
+const quick: AlpacaDeviceServer[] = []
+console.log(await client.discovery((server) => quick.push(server), { port: 32229, fetch: false, timeout: 500 })) // true
+console.log(await client.discovery(() => {}, { port: 32229, fetch: false })) // false
+await Bun.sleep(700)
+console.log(quick.length, quick[0].devices) // 1 []
+
+// A window of zero keeps the socket open until it is closed, which is also what disposal does at the end of a scope.
+{
+	using scoped = new AlpacaDiscoveryClient()
+	const found: AlpacaDeviceServer[] = []
+	await scoped.discovery((server) => found.push(server), { port: 32229, fetch: false, timeout: 0 })
+	await Bun.sleep(300)
+	console.log(found.length) // 1
+}
+
+client.close()
+responder.stop()
+http.stop()
+```
+
 ### ASCOM Alpaca Discovery Server
+
+`devices/alpaca/discovery` implements the ASCOM Alpaca Discovery v1 protocol, and `AlpacaDiscoveryServer` is its responder side: a UDP socket that answers every probe (a datagram that starts with the ASCII text `alpacadiscovery1`, the reserved trailing bytes are ignored) with one JSON datagram `{"AlpacaPort":N}` for each registered management port, sent back to the address and port of the sender. The constants are `ALPACA_DISCOVERY_PORT` (32227, the UDP port of the protocol), `ALPACA_DISCOVERY_DATA` (the probe prefix) and `ALPACA_DISCOVERY_IPV6_GROUP` (the link-scoped IPv6 multicast group `ff12::a1:9aca`). `addPort(port)` registers an HTTP port of an Alpaca server to announce (a value that is not an integer from 1 to 65535 is silently ignored) and `removePort(port)` unregisters it; both can be called while it runs, since the ports are read at each probe. `start(hostname?, port?, ignoreLocalhost?)` binds the socket (`0.0.0.0`, the protocol port and the `ignoreLocalhost` option, which is true by default, so a probe from a loopback address is not answered) and returns `true`, or `false` when it is already running; an address with a colon binds an IPv6 socket that also joins the discovery group on every non-internal IPv6 interface. The bind shares the port (`reuseAddr`), so several Alpaca servers of the same machine can answer one probe, and a bind failure releases the socket and rethrows. `stop()` closes the socket; `running` is the state and `port`, `host` and `ip` are the bound port (`-1` while stopped) and address (`undefined` while stopped). It only announces ports: the HTTP server that answers the management and device requests is another component (see ASCOM Alpaca Server), and the discovery of a network that blocks UDP broadcast or multicast does not work.
+
+```ts
+import { createSocket } from 'node:dgram'
+import { ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_IPV6_GROUP, ALPACA_DISCOVERY_PORT, AlpacaDiscoveryServer } from 'nebulosa/src/devices/alpaca/discovery'
+
+// The protocol constants.
+console.log(ALPACA_DISCOVERY_PORT, ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_IPV6_GROUP) // 32227 alpacadiscovery1 ff12::a1:9aca
+
+// A stopped server: not running, no port and no address. Of the registered ports, 70000, 0 and 1.5 are ignored, and 11112 is removed before it starts.
+const server = new AlpacaDiscoveryServer()
+console.log(server.running, server.port, server.host, server.ip) // false -1 undefined undefined
+server.addPort(11111)
+server.addPort(11112)
+server.addPort(70000)
+server.addPort(0)
+server.addPort(1.5)
+server.removePort(11112)
+server.addPort(11113)
+
+// It binds an ephemeral UDP port on the loopback (the port 0 asks the system for a free one) and answers the probes of loopback too, since the last argument turns off the default filter. A second start does nothing and returns false.
+console.log(await server.start('127.0.0.1', 0, false), server.running, server.port > 0, server.host, server.ip) // true true true 127.0.0.1 127.0.0.1
+console.log(await server.start()) // false
+
+// A client of the protocol, here a plain UDP socket: the probe (with the reserved trailing bytes) gets one response per port; another text gets nothing.
+const probe = createSocket('udp4')
+const responses: string[] = []
+probe.on('message', (message) => responses.push(message.toString()))
+await new Promise<void>((resolve) => probe.bind(0, '127.0.0.1', resolve))
+probe.send(`${ALPACA_DISCOVERY_DATA}\0\0`, server.port, '127.0.0.1')
+probe.send('hello', server.port, '127.0.0.1')
+await Bun.sleep(200)
+console.log(responses) // [ '{"AlpacaPort":11111}', '{"AlpacaPort":11113}' ]
+probe.close()
+
+// Stopping releases the socket.
+server.stop()
+console.log(server.running, server.port, server.host) // false -1 undefined
+
+// With the default filter the probe of the loopback is ignored, so the same exchange gets no response.
+const filtered = new AlpacaDiscoveryServer({ ignoreLocalhost: true })
+filtered.addPort(11111)
+await filtered.start('127.0.0.1', 0)
+const silent = createSocket('udp4')
+const silentResponses: string[] = []
+silent.on('message', (message) => silentResponses.push(message.toString()))
+await new Promise<void>((resolve) => silent.bind(0, '127.0.0.1', resolve))
+silent.send(ALPACA_DISCOVERY_DATA, filtered.port, '127.0.0.1')
+await Bun.sleep(200)
+console.log(silentResponses) // []
+silent.close()
+filtered.stop()
+```
 
 ### ASCOM Alpaca REST API
 
