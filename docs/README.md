@@ -7229,6 +7229,57 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Arcsinh Stretch
 
+`arcsinhStretch(image, options?)` applies the PixInsight-style arcsinh stretch to the normalized 0..1 buffer of an `Image`, in place, and returns the same image. A mono image is stretched per sample. An RGB image is stretched through its luminance (the mean of the three channels, or the weights of `rgbWorkingSpace` when `useRgbWorkingSpace` is set), and the three channels are multiplied by the same factor, so the color ratios above the black point are kept. `stretchFactor` (1 or more, 1 by default) sets the strength and `blackPoint` (0..1, 0 by default) is clipped to 0 and the remaining range is renormalized to 0..1 before the stretch. With `protectHighlights` the pixels that exceed 1 after the stretch are not clipped per channel: the whole image is divided by the largest value, so the ratios survive at the cost of a darker image. Non-finite options fall back to the defaults, and a stretch factor of 1 with a black point of 0 returns the image untouched (`DEFAULT_ARCSINH_STRETCH_OPTIONS`). The image is not validated: it must be a mono or interleaved RGB buffer in 0..1.
+
+`approximateArcsinhStretchParameters(midtone?, shadow?, highlight?)` searches the `stretchFactor` and `blackPoint` whose mono arcsinh curve is the closest (RMS over 129 samples in 0..1) to the screen transfer function with that midtone, shadow and highlight (see Screen Transfer Function), so an STF that is displayed can be turned into a stretch that preserves color. The black point is searched between 0 and the shadow, and the strength is solved for each candidate so that the STF midpoint lands at 0.5. The result is an approximation of the curve, not an exact match, and the neutral STF (0.5, 0, 1) gives a factor of 1 and a black point of 0.
+
+```ts
+import { approximateArcsinhStretchParameters, arcsinhStretch, DEFAULT_ARCSINH_STRETCH_OPTIONS } from 'nebulosa/src/imaging/processing/arcsinh'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+const ramp = (): Image => ({
+	header: { SIMPLE: true, BITPIX: -64, NAXIS: 2, NAXIS1: 5, NAXIS2: 1 },
+	metadata: { width: 5, height: 1, channels: 1, pixelCount: 5, stride: 5, strideInBytes: 40, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined },
+	raw: new Float64Array([0, 0.05, 0.1, 0.5, 1]),
+})
+
+const pixels = (): Image => ({
+	header: { SIMPLE: true, BITPIX: -64, NAXIS: 3, NAXIS1: 2, NAXIS2: 1, NAXIS3: 3 },
+	metadata: { width: 2, height: 1, channels: 3, pixelCount: 2, stride: 6, strideInBytes: 48, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined },
+	raw: new Float64Array([0.2, 0.1, 0.05, 0.9, 0.6, 0.3]),
+})
+
+const round = (values: ArrayLike<number>) => Array.from(values, (value) => Number(value.toFixed(4)))
+
+// A mono ramp: the faint samples are lifted much more than the bright ones, and 0 and 1 are fixed.
+console.log(round(arcsinhStretch(ramp(), { stretchFactor: 20 }).raw)) // [ 0, 0.4437, 0.5716, 0.8709, 1 ]
+
+// The black point clips the shadows and renormalizes the rest.
+console.log(round(arcsinhStretch(ramp(), { stretchFactor: 20, blackPoint: 0.05 }).raw)) // [ 0, 0, 0.4531, 0.8609, 1 ]
+
+// Color: the channels of a pixel are scaled by the same factor, so their ratios do not change.
+const color = arcsinhStretch(pixels(), { stretchFactor: 10 })
+console.log(round(color.raw)) // [ 0.8992, 0.4496, 0.2248, 1, 0.8865, 0.4433 ] (the second pixel is clipped at 1 in red)
+console.log(round([color.raw[0] / color.raw[1], color.raw[1] / color.raw[2]])) // 2 2 (the ratios of the first pixel)
+
+// A bright pixel exceeds 1: it is clipped per channel by default, and rescaled as a whole with protectHighlights.
+const bright = (): Image => ({ ...pixels(), raw: new Float64Array([0.9, 0.4, 0.1, 0.05, 0.02, 0.01]) })
+console.log(round(arcsinhStretch(bright(), { stretchFactor: 30 }).raw)) // [ 1, 0.7457, 0.1864, 0.7195, 0.2878, 0.1439 ] (the first pixel is clipped, so its ratios change)
+console.log(round(arcsinhStretch(bright(), { stretchFactor: 30, protectHighlights: true }).raw)) // [ 1, 0.4444, 0.1111, 0.4288, 0.1715, 0.0858 ] (the ratios of both pixels are kept)
+
+// The luminance of an RGB working space instead of the channel mean.
+console.log(round(arcsinhStretch(pixels(), { stretchFactor: 10, useRgbWorkingSpace: true, rgbWorkingSpace: 'BT709' }).raw)) // [ 0.8948, 0.4474, 0.2237, 1, 0.8425, 0.4212 ]
+
+// The defaults, a factor of 1 and a black point of 0 leave the image untouched and return it.
+const same = ramp()
+console.log(arcsinhStretch(same) === same, arcsinhStretch(same, DEFAULT_ARCSINH_STRETCH_OPTIONS) === same, round(same.raw)) // true true [ 0, 0.05, 0.1, 0.5, 1 ]
+
+// The arcsinh parameters that approximate an STF.
+console.log(approximateArcsinhStretchParameters()) // { stretchFactor: 1, blackPoint: 0 }
+console.log(approximateArcsinhStretchParameters(0.15)) // { stretchFactor: 5.656532158010995, blackPoint: 0 }
+console.log(approximateArcsinhStretchParameters(0.1, 0.02, 0.9)) // { stretchFactor: 12.697700249709829, blackPoint: 0.02 }
+```
+
 ### Automatic Background Extraction
 
 ### Backfocus Correction Estimates
@@ -7236,6 +7287,50 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 ### Background Estimate
 
 ### Background Neutralization
+
+`backgroundNeutralization(image, options?)` removes a color cast from the sky of an interleaved RGB image of normalized 0..1 samples, in place, and returns the same image. For each channel it takes the median of the samples that lie above `lowerLimit` and up to `upperLimit` (the reference range, 0..1; samples exactly at the lower limit, which are clipped blacks, are excluded, with a tiny tolerance of 1e-7 for Float32 and 1e-12 for Float64 buffers), and adds `target - median` to the whole channel, the additive form of the PixInsight tool, so the three channel medians land at the same level. A mono or other non-RGB image is returned unchanged. The shift moves values out of 0..1, and `mode` says what happens next: `'rescaleAsNeeded'` (the default) rescales the whole image affinely from its minimum and maximum to 0..1 only if some value left the range, `'rescale'` always does it, `'truncate'` clamps to 0..1 and the target of the shift is a median of 0 (the background goes to black), and `'targetBackground'` places the common median at `targetBackground` (0.05 by default) and then clamps. The limits are swapped when `lowerLimit` is above `upperLimit`, non-finite options fall back to the defaults, and a `TypeError` is thrown when a channel has no sample in the reference range. The reference range is a brightness range and not a region of the image, so the median is of the whole frame within that range; choose a narrow range around the sky level on an image with large bright areas. A scratch buffer of one 64-bit value per pixel is allocated for the medians.
+
+```ts
+import { backgroundNeutralization, DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS } from 'nebulosa/src/imaging/processing/neutralization'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// Five pixels over a sky with a magenta cast: the medians are (0.20, 0.10, 0.16), and one pixel is a bright star.
+const pixels = (): Image => ({
+	header: { SIMPLE: true, BITPIX: -64, NAXIS: 3, NAXIS1: 5, NAXIS2: 1, NAXIS3: 3 },
+	metadata: { width: 5, height: 1, channels: 3, pixelCount: 5, stride: 15, strideInBytes: 120, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined },
+	raw: new Float64Array([0.19, 0.09, 0.15, 0.2, 0.1, 0.16, 0.21, 0.11, 0.17, 0.2, 0.1, 0.16, 0.9, 0.7, 0.8]),
+})
+
+const round = (values: ArrayLike<number>) => Array.from(values, (value) => Number(value.toFixed(4)))
+
+// The default: the medians go to 0 and the image is rescaled to the full 0..1 range because the values left it.
+console.log(round(backgroundNeutralization(pixels()).raw)) // [ 0, 0, 0, 0.0141, 0.0141, 0.0141, 0.0282, 0.0282, 0.0282, 0.0141, 0.0141, 0.0141, 1, 0.8592, 0.9155 ]
+
+// The background pinned at 0.05, with the other values clamped (the star is not rescaled).
+console.log(round(backgroundNeutralization(pixels(), { mode: 'targetBackground', targetBackground: 0.05 }).raw)) // [ 0.04, 0.04, 0.04, 0.05, 0.05, 0.05, 0.06, 0.06, 0.06, 0.05, 0.05, 0.05, 0.75, 0.65, 0.69 ]
+
+// Truncate: the medians go to 0, the negative values are clamped and nothing is rescaled.
+console.log(round(backgroundNeutralization(pixels(), { mode: 'truncate' }).raw)) // [ 0, 0, 0, 0, 0, 0, 0.01, 0.01, 0.01, 0, 0, 0, 0.7, 0.6, 0.64 ]
+
+// Rescale always maps the minimum and the maximum to 0 and 1.
+console.log(round(backgroundNeutralization(pixels(), { mode: 'rescale' }).raw)) // [ 0, 0, 0, 0.0141, 0.0141, 0.0141, 0.0282, 0.0282, 0.0282, 0.0141, 0.0141, 0.0141, 1, 0.8592, 0.9155 ] (the same as the default here)
+
+// A reference range around the sky excludes the star from the medians.
+console.log(round(backgroundNeutralization(pixels(), { mode: 'targetBackground', lowerLimit: 0.05, upperLimit: 0.3, targetBackground: 0.1 }).raw)) // [ 0.09, 0.09, 0.09, 0.1, 0.1, 0.1, 0.11, 0.11, 0.11, 0.1, 0.1, 0.1, 0.8, 0.7, 0.74 ]
+
+// The defaults, and a mono image that is returned untouched.
+console.log(DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS) // { lowerLimit: 0, upperLimit: 1, targetBackground: 0.05, mode: 'rescaleAsNeeded' }
+const image = pixels()
+const mono: Image = { ...image, metadata: { ...image.metadata, channels: 1, stride: 5 }, raw: new Float64Array([0.1, 0.2, 0.3, 0.4, 0.5]) }
+console.log(backgroundNeutralization(mono) === mono, round(mono.raw)) // true [ 0.1, 0.2, 0.3, 0.4, 0.5 ]
+
+// No sample of a channel in the reference range.
+try {
+	backgroundNeutralization(pixels(), { lowerLimit: 0.95, upperLimit: 1 })
+} catch (e) {
+	console.log((e as Error).message) // background neutralization requires at least one significant RED sample in the reference area
+}
+```
 
 ### Bahtinov Chromatic Comparison
 
@@ -7257,9 +7352,115 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Curves
 
+`curvesTransformation(image, options)` applies tone curves to a normalized `Image` in place, as the Curves tool of PixInsight does, and returns the same image. Each entry of `options.curves` is a `CurvesTransformationCurve`: the `channel` it acts on (`'RED'`, `'GREEN'` or `'BLUE'` for a single channel of an RGB image, or a luminance-style `'GRAY'`, `'BT709'`, `'RMY'`, `'Y'` or explicit weights that sum to 1, for the whole pixel), the control points `x` (strictly increasing after clamping to 0..1) and `y` (the output at each one), which are clamped to 0..1, and the end points (0, 0) and (1, 1) are added when they are missing. The curves are applied in order, an `undefined` entry or an identity curve is skipped, and a curve for a color channel is ignored in a mono image (a luminance or `'GRAY'` curve is applied to its samples). The curve of a luminance channel preserves the color ratios of the pixel: it is evaluated on the weighted luminance, the pixel is scaled by the ratio when the curve darkens it and blended toward white when it brightens it, so the requested luminance is reached; a black pixel becomes gray.
+
+The curve is evaluated through a lookup table of `2^bits` entries (`bits` is clamped to 8..24 and the table is capped at 16 bits, 16 by default) with linear interpolation between the entries, built with one of four splines from `interpolation`: `'cubicHermite'` (the default, monotone), `'akima'`, `'catmullRom'` and `'naturalCubic'`. The table is clipped to 0..1 and made monotone in the direction of the control points, so a spline overshoot cannot invert the tones of a monotone curve. `DEFAULT_CURVES_TRANSFORMATION_OPTIONS` is the no-op configuration. An unknown interpolation, an unknown channel, weights that do not sum to 1, arrays of different length, non-finite control points or x values that are not increasing throw before the image is changed.
+
+```ts
+import { curvesTransformation, DEFAULT_CURVES_TRANSFORMATION_OPTIONS } from 'nebulosa/src/imaging/processing/curves'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+const ramp = (): Image => ({
+	header: { SIMPLE: true, BITPIX: -64, NAXIS: 2, NAXIS1: 5, NAXIS2: 1 },
+	metadata: { width: 5, height: 1, channels: 1, pixelCount: 5, stride: 5, strideInBytes: 40, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined },
+	raw: new Float64Array([0, 0.25, 0.5, 0.75, 1]),
+})
+
+const pixel = (): Image => ({
+	header: { SIMPLE: true, BITPIX: -64, NAXIS: 3, NAXIS1: 1, NAXIS2: 1, NAXIS3: 3 },
+	metadata: { width: 1, height: 1, channels: 3, pixelCount: 1, stride: 3, strideInBytes: 24, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined },
+	raw: new Float64Array([0.6, 0.3, 0.1]),
+})
+
+const round = (values: ArrayLike<number>) => Array.from(values, (value) => Number(value.toFixed(4)))
+
+// A curve through (0.5, 0.75) lifts the midtones: the end points are added, and the output is smooth and monotone.
+const lifted = curvesTransformation(ramp(), { curves: [{ channel: 'GRAY', x: [0.5], y: [0.75] }] })
+console.log(round(lifted.raw)) // [ 0, 0.4531, 0.75, 0.9219, 1 ]
+
+// The splines differ between the control points: eleven samples from 0 to 1 and three control points.
+for (const interpolation of ['cubicHermite', 'akima', 'catmullRom', 'naturalCubic'] as const) {
+	const steps = ramp()
+	const image: Image = { ...steps, metadata: { ...steps.metadata, width: 11, pixelCount: 11, stride: 11 }, raw: Float64Array.from({ length: 11 }, (_, i) => i / 10) }
+	console.log(interpolation, round(curvesTransformation(image, { interpolation, curves: [{ channel: 'GRAY', x: [0.2, 0.5], y: [0.1, 0.8] }] }).raw).join(' ')) // cubicHermite 0 0.0303 0.1 0.3004 0.6038 0.8 0.8672 0.9227 0.9644 0.9908 1 (the four splines agree at the control points and differ between them, and the table is clipped to 0..1)
+}
+
+// An S-curve with several points and a lower LUT depth.
+console.log(round(curvesTransformation(ramp(), { bits: 8, curves: [{ channel: 'GRAY', x: [0.25, 0.5, 0.75], y: [0.15, 0.5, 0.85] }] }).raw).join(' ')) // [ 0, 0.15, 0.5, 0.85, 1 ]
+
+// A curve of one color channel changes only that channel, and several curves are applied in order.
+console.log(
+	round(
+		curvesTransformation(pixel(), {
+			curves: [
+				{ channel: 'RED', x: [0.6], y: [0.3] },
+				{ channel: 'BLUE', x: [0.1], y: [0.5] },
+			],
+		}).raw,
+	).join(' '),
+) // [ 0.3, 0.3, 0.5 ]
+
+// A luminance curve keeps the color ratios while it darkens, and blends toward white while it brightens.
+const darker = curvesTransformation(pixel(), { curves: [{ channel: 'BT709', x: [0.3], y: [0.15] }] })
+console.log(round(darker.raw), round(darker.raw.map((value, i) => value / pixel().raw[i]))) // [ 0.318, 0.159, 0.053 ] [ 0.53, 0.53, 0.53 ] (the pixel is scaled by the same ratio)
+console.log(round(curvesTransformation(pixel(), { curves: [{ channel: 'BT709', x: [0.3], y: [0.6] }] }).raw).join(' ')) // 0.7827 0.6198 0.5112
+
+// The identity curves, the empty list and the default options leave the image untouched.
+console.log(round(curvesTransformation(ramp(), { curves: [{ channel: 'GRAY', x: [0, 1], y: [0, 1] }, undefined] }).raw), round(curvesTransformation(ramp(), DEFAULT_CURVES_TRANSFORMATION_OPTIONS).raw), round(curvesTransformation(ramp()).raw)) // [ 0, 0.25, 0.5, 0.75, 1 ] [ 0, 0.25, 0.5, 0.75, 1 ] [ 0, 0.25, 0.5, 0.75, 1 ]
+
+// The errors: an x that is not increasing, arrays of different lengths, and an unknown channel.
+for (const curve of [
+	{ channel: 'GRAY', x: [0.5, 0.4], y: [0.5, 0.6] },
+	{ channel: 'GRAY', x: [0.5], y: [0.5, 0.6] },
+	{ channel: 'LUMA', x: [0.5], y: [0.5] },
+]) {
+	try {
+		curvesTransformation(ramp(), { curves: [curve as never] })
+	} catch (e) {
+		console.log((e as Error).message) // curves transformation x coordinates must be strictly increasing after clamping, curves transformation x and y arrays must have the same length and unsupported curves transformation channel: LUMA
+	}
+}
+```
+
 ### Dark Current
 
 ### Debayering
+
+`debayer(image, pattern?)` reconstructs a three-channel RGB image from a single-channel CFA mosaic (the raw output of a one-shot color sensor), and `bayer(image, pattern)` does the opposite, sampling one color per pixel from an RGB image. Both allocate fresh buffers, keep the sample type (Float32 or Float64) and do not change their input. The patterns are the eight `CfaPattern` values (`'RGGB'`, `'BGGR'`, `'GBRG'`, `'GRBG'`, `'GRGB'`, `'GBGR'`, `'RGBG'` and `'BGRG'`), read as the colors of the 2x2 block at the origin of the buffer, row by row; the origin already includes any region-of-interest phase shift. `debayer` takes the pattern from `image.metadata.bayer` when it is omitted, returns `undefined` for an image that is not mono, has no pattern or is smaller than 2x2, and fills each missing color of a pixel with the average of the nearest samples of that color in its 3x3 neighbourhood (bilinear interpolation), using the available neighbours at the borders. The pixel that already has a sample of a color keeps it. This is a plain bilinear interpolation: no edge-directed or frequency-domain algorithm is applied, so sharp color edges show zippering. The result has `bayer: undefined` and a header without `BAYERPAT`; `bayer` returns `undefined` for an image that is not RGB and sets the pattern in the metadata.
+
+```ts
+import { bayer, debayer } from 'nebulosa/src/imaging/processing/debayer'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A 4x4 uniform orange frame (R 0.8, G 0.4, B 0.2) sampled with RGGB.
+const rgb: Image = {
+	header: { SIMPLE: true, BITPIX: -32, NAXIS: 3, NAXIS1: 4, NAXIS2: 4, NAXIS3: 3 },
+	metadata: { width: 4, height: 4, channels: 3, pixelCount: 16, stride: 12, strideInBytes: 48, pixelSizeInBytes: 4, bitpix: -32, bayer: undefined },
+	raw: Float32Array.from({ length: 48 }, (_, i) => [0.8, 0.4, 0.2][i % 3]),
+}
+
+const mosaic = bayer(rgb, 'RGGB')!
+console.log(mosaic.metadata.channels, mosaic.metadata.bayer, mosaic.header.BAYERPAT, mosaic.raw) // 1 RGGB RGGB Float32Array(16) [ 0.8, 0.4, 0.8, 0.4, 0.4, 0.2, 0.4, 0.2, 0.8, 0.4, 0.8, 0.4, 0.4, 0.2, 0.4, 0.2 ] (32-bit floats: 0.8 is stored as 0.800000011920929)
+
+// Debayering restores a uniform image exactly (the bilinear average of equal samples).
+const restored = debayer(mosaic)!
+console.log(restored.metadata.channels, restored.metadata.bayer, restored.header.BAYERPAT, restored.raw.slice(0, 6), restored.raw.length) // 3 undefined undefined Float32Array(6) [ 0.8, 0.4, 0.2, 0.8, 0.4, 0.2 ] 48 (the same 32-bit rounding)
+
+// A pattern passed explicitly overrides the metadata: with the wrong phase the colors are swapped.
+console.log(debayer(mosaic, 'BGGR')!.raw.slice(0, 3)) // Float32Array(3) [ 0.2, 0.4, 0.8 ]
+
+// A horizontal gradient shows the interpolation: the missing red and green of the blue pixel at (1, 1) are averages of its neighbours.
+const gradient: Image = {
+	header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: 4, NAXIS2: 4 },
+	metadata: { width: 4, height: 4, channels: 1, pixelCount: 16, stride: 4, strideInBytes: 16, pixelSizeInBytes: 4, bitpix: -32, bayer: 'RGGB' },
+	raw: Float32Array.from({ length: 16 }, (_, i) => (i % 4) / 3),
+}
+const pixel = debayer(gradient)!.raw.slice((1 * 4 + 1) * 3, (1 * 4 + 1) * 3 + 3)
+console.log(Array.from(pixel, (value) => Number(value.toFixed(4)))) // [ 0.3333, 0.3333, 0.3333 ]
+
+// The unsupported inputs return undefined.
+console.log(debayer(rgb), debayer({ ...gradient, metadata: { ...gradient.metadata, bayer: undefined } }), bayer(gradient, 'RGGB')) // undefined undefined undefined
+```
 
 ### Defocused Annular Geometry Analysis
 
@@ -7274,6 +7475,75 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 ### Eyepiece Magnification and Exit Pupil
 
 ### FFT Image Filter
+
+`fft(image, workspace, filterType, cutoff, weight)` filters a normalized `Image` in place with a centered radial Butterworth mask in the frequency domain (`'lowPass'` keeps the large structures and blurs the noise, `'highPass'` keeps the small ones) and returns the same image; every channel is filtered on its own. The image is padded with its border pixels to the next power of two in each axis (so a star near an edge is not duplicated by a mirror) and transformed with a radix-2 FFT, and non-finite samples are read as 0. `cutoff` is the normalized radius of the −3 dB point of the second-order Butterworth amplitude response, where 0 is the center (zero frequency) and 1 is the Nyquist frequency of each axis (the radius is scaled by axis, so the mask is circular in that normalized frequency even on a rectangular grid); it defaults to 1 for `'lowPass'` (no change) and 0 for `'highPass'` (no change), a cutoff of 0 keeps only the mean in a low-pass and everything but the mean in a high-pass, and a value outside 0..1 is clamped. `weight`, from 0 to 1 (clamped, 1 by default), blends the original and the filtered image, and 0 returns the image untouched. The low-pass result is stretched back to the minimum and maximum of the input channel (a "range restoration" in the style of MaxIm DL), unless the filtered range is less than 1% of the input range; the high-pass result is not restored, so it has the scale of the filtered signal: the mask removes the zero frequency, the mean of the output is close to 0 (the pixels are positive and negative) and nothing is clipped.
+
+`FFTWorkspace(width, height)` holds the reusable buffers of the transform for an image up to that size: `width` and `height` are rounded up to powers of two (read them back from the instance) and the same workspace serves any image that fits, with a cached radial mask for the last filter type and cutoff (`mask(filterType, cutoff)`). Create one and reuse it for a batch of frames; a workspace smaller than the image makes `fft` throw an `Error`. The transform allocates nothing per call besides what the workspace owns, and its cost grows as N log N with the padded pixel count.
+
+```ts
+import { fft, FFTWorkspace } from 'nebulosa/src/imaging/processing/fft'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A 30x20 gray frame with a smooth horizontal gradient plus a pseudo-random pattern (fixed seed, so the numbers repeat).
+const width = 30
+const height = 20
+let seed = 12345
+const random = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296 - 0.5) * 0.2
+
+const make = (): Image => {
+	const raw = new Float64Array(width * height)
+	seed = 12345
+	for (let y = 0, i = 0; y < height; y++) for (let x = 0; x < width; x++, i++) raw[i] = 0.3 + (0.4 * x) / width + random()
+	return {
+		header: { SIMPLE: true, BITPIX: -64, NAXIS: 2, NAXIS1: width, NAXIS2: height },
+		metadata: { width, height, channels: 1, pixelCount: width * height, stride: width, strideInBytes: width * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined },
+		raw,
+	}
+}
+
+// The roughness: the RMS difference between horizontally adjacent pixels, which the noise dominates.
+const roughness = (image: Image) => {
+	let sum = 0
+	let n = 0
+	for (let y = 0; y < height; y++) for (let x = 1; x < width; x++, n++) sum += (image.raw[y * width + x] - image.raw[y * width + x - 1]) ** 2
+	return Math.sqrt(sum / n)
+}
+
+// The workspace pads 30x20 to 32x32 and is reused below.
+const workspace = new FFTWorkspace(width, height)
+console.log(workspace.width, workspace.height) // 32 32
+
+const original = make()
+console.log(roughness(original).toFixed(4)) // 0.0860
+
+// A low-pass with a small cutoff removes the noise but keeps the gradient and the range of the input.
+const low = fft(make(), workspace, 'lowPass', 0.15)
+console.log(roughness(low).toFixed(4), Math.min(...low.raw).toFixed(4), Math.max(...low.raw).toFixed(4), Math.min(...original.raw).toFixed(4), Math.max(...original.raw).toFixed(4)) // 0.0317 0.2041 0.7764 0.2041 0.7764
+
+// A high-pass keeps the noise and removes the gradient and the mean, so the result has a mean close to 0.
+const high = fft(make(), workspace, 'highPass', 0.5)
+console.log(roughness(high).toFixed(4), (high.raw.reduce((sum, value) => sum + value, 0) / high.raw.length).toFixed(4)) // 0.0811 -0.0046
+
+// Weight: half of the filtered image blended with the original; weight 0 and the default cutoffs change nothing.
+const half = fft(make(), workspace, 'lowPass', 0.15, 0.5)
+console.log(
+	roughness(half).toFixed(4),
+	fft(make(), workspace, 'lowPass', 0.15, 0).raw.every((value, i) => value === original.raw[i]),
+	fft(make(), workspace).raw.every((value, i) => Math.abs(value - original.raw[i]) < 1e-9),
+) // 0.0625 true true
+
+// A cutoff of 0 in a low-pass keeps only the mean (of the padded image, which repeats the border pixels), so the result is flat.
+const mean = original.raw.reduce((sum, value) => sum + value, 0) / original.raw.length
+const flat = fft(make(), workspace, 'lowPass', 0)
+console.log(roughness(flat) < 1e-9, Math.abs(flat.raw[0] - mean) < 0.05) // true true
+
+// An image larger than the workspace.
+try {
+	fft({ ...original, metadata: { ...original.metadata, width: 40, height: 20 } }, workspace)
+} catch (e) {
+	console.log((e as Error).message) // FFT workspace 32x32 is smaller than image 40x20
+}
+```
 
 ### Flat Exposure Estimate
 
@@ -7431,6 +7701,106 @@ try {
 
 ### Image Convolution
 
+`convolution(image, kernel, options)` applies a spatial kernel to a normalized `Image` in place (a mono or an interleaved color image: every channel is convolved on its own) and returns the same image. A `ConvolutionKernel` is the row-major `kernel` weights, its odd `width` and `height` (3 to 99; an even or out-of-range size throws) and a `divisor`; `convolutionKernel(weights, width, height = width, divisor?)` builds one and takes the sum of the weights as the divisor when it is omitted. The pixels outside the image are not read: at a border the kernel is truncated. With the default options the divisor is recomputed for every pixel as the sum of the weights that fall inside the image (`dynamicDivisorForEdges: true`), so a smoothing kernel keeps its gain at the borders, and with `false` the divisor of the kernel is used and the border is darker. A divisor that is negative is made positive and `1` is added to the result when `normalize` is `true` (the default), and a divisor of 0, the case of the edge and emboss kernels, is replaced by 1 and `0.5` is added, so those filters are centered at 0.5 (and the truncated border rows and columns of a zero-sum kernel do not have a zero divisor, and are not reliable). The result is not clipped.
+
+The named filters apply a fixed kernel with `ConvolutionOptions`: `edges` (the 3x3 Laplacian), `emboss`, `sharpen`, the box blurs `mean3x3`, `mean5x5`, `mean7x7`, and the pyramid blurs `blur3x3`, `blur5x5` and `blur7x7`, the last ones with weights that grow linearly to the center (divisors 16, 81 and 256). `mean(image, size, options)` and `blur(image, size, options)` take any odd size from 3 to 99, using the fixed kernel for 3, 5 and 7 and building it otherwise with `meanConvolutionKernel(size)` and `blurConvolutionKernel(size)`. `gaussianBlurKernel(sigma = 1.4, size = 5)` samples the continuous Gaussian density (sigma in pixels, 0.5 to 5; size odd) and the kernel divisor is the sum of the samples, and `gaussianBlur(image, { sigma, size, ...options })` applies it. `DEFAULT_CONVOLUTION_OPTIONS` and `DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS` hold the defaults.
+
+`separableSmoothing(source, output, intermediate, metadata, kernel, options)` is the cheaper path for a dilated ("à trous") smoothing, used by the multiscale transforms: it applies a one-dimensional `SeparableSmoothingKernel` (odd length of at least 3, built by `separableSmoothingKernel(weights, divisor?)`) along rows and then columns, with taps `step` pixels apart (default 1) and the same border rule (`dynamicDivisorForEdges`). The three buffers are separate typed arrays of the same precision and of the length of the image (`metadata.stride * metadata.height`), the result is `output`, and the work is linear in the size of the image whatever the step. `shift(buffer)` is the helper that rotates the row buffer of `convolution` by one slot.
+
+```ts
+import {
+	blur,
+	blur3x3,
+	blur5x5,
+	blur7x7,
+	blurConvolutionKernel,
+	convolution,
+	convolutionKernel,
+	DEFAULT_CONVOLUTION_OPTIONS,
+	DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS,
+	edges,
+	emboss,
+	gaussianBlur,
+	gaussianBlurKernel,
+	mean,
+	mean3x3,
+	mean5x5,
+	mean7x7,
+	meanConvolutionKernel,
+	separableSmoothing,
+	separableSmoothingKernel,
+	shift,
+	sharpen,
+} from 'nebulosa/src/imaging/processing/convolution'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A 5x5 gray image with a single bright pixel in the center (an impulse), and a printer for its rows.
+const frame = (values: number[]): Image => ({
+	header: { SIMPLE: true, BITPIX: -64, NAXIS: 2, NAXIS1: 5, NAXIS2: 5 },
+	metadata: { width: 5, height: 5, channels: 1, pixelCount: 25, stride: 5, strideInBytes: 40, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined },
+	raw: new Float64Array(values),
+})
+
+const impulse = () => frame(Array.from({ length: 25 }, (_, i) => (i === 12 ? 1 : 0)))
+const row = (image: Image, y: number) => Array.from(image.raw.slice(y * 5, y * 5 + 5), (value) => Number(value.toFixed(4)))
+
+// The impulse response of the box and the pyramid blurs: the kernel itself divided by its divisor.
+console.log(row(mean3x3(impulse()), 2), row(blur3x3(impulse()), 2)) // [ 0, 0.1111, 0.1111, 0.1111, 0 ] [ 0, 0.125, 0.25, 0.125, 0 ]
+console.log(row(sharpen(impulse()), 2), row(edges(impulse()), 2)) // [ 0, -1, 5, -1, 0 ] [ 0, -0.5, 4.5, -0.5, 0 ]
+console.log(row(emboss(impulse()), 2)) // [ 0, 0.5, 0.5, 0.5, 1 ]
+console.log(row(gaussianBlur(impulse()), 2), row(gaussianBlur(impulse(), { sigma: 0.8, size: 3 }), 2)) // [ 0.0516, 0.0814, 0.0935, 0.0814, 0.0516 ] [ 0, 0.1248, 0.2725, 0.1248, 0 ]
+
+// The sizes with a fixed kernel and the others: all the same operation with a kernel of a given size, in place.
+console.log(row(mean5x5(impulse()), 2), row(mean(impulse(), 5), 2), row(blur(impulse(), 5), 2)) // [ 0.04, 0.04, 0.04, 0.04, 0.04 ] [ 0.04, 0.04, 0.04, 0.04, 0.04 ] [ 0.037, 0.0741, 0.1111, 0.0741, 0.037 ]
+console.log(row(blur5x5(impulse()), 2), row(mean7x7(impulse()), 2), row(blur7x7(impulse()), 2)) // [ 0.0556, 0.0833, 0.1111, 0.0833, 0.0556 ] [ 0.05, 0.04, 0.04, 0.04, 0.05 ] [ 0.0571, 0.0659, 0.0816, 0.0659, 0.0571 ]
+
+// The kernels: weights, size and divisor.
+const kernel = gaussianBlurKernel(1, 3)
+console.log(
+	kernel.width,
+	kernel.height,
+	kernel.divisor.toFixed(4),
+	Array.from(kernel.kernel, (value) => Number(value.toFixed(4))),
+) // 3 3 0.7795 [ 0.0585, 0.0965, 0.0585, 0.0965, 0.1592, 0.0965, 0.0585, 0.0965, 0.0585 ]
+console.log(meanConvolutionKernel(9).divisor, blurConvolutionKernel(9).divisor, Array.from(blurConvolutionKernel(5).kernel).join(' ')) // 81 625 1 2 3 2 1 2 4 6 4 2 3 6 9 6 3 2 4 6 4 2 1 2 3 2 1
+console.log(convolutionKernel([1, 2, 1, 2, 4, 2, 1, 2, 1], 3).divisor, convolutionKernel([1, 1, 1, 1, 1, 1, 1, 1, 1], 3, 3, 3).divisor) // 16 3
+
+// A custom kernel through convolution(), and the border rule: a 3x3 image of ones.
+const ones = () => ({ ...frame([]), metadata: { ...frame([]).metadata, width: 3, height: 3, pixelCount: 9, stride: 3 }, raw: new Float64Array(9).fill(1) })
+console.log(Array.from(convolution(ones(), convolutionKernel(new Array(9).fill(1), 3)).raw, (value) => Number(value.toFixed(3)))) // [ 1, 1, 1, 1, 1, 1, 1, 1, 1 ] (the divisor follows the truncated border)
+console.log(Array.from(convolution(ones(), convolutionKernel(new Array(9).fill(1), 3), { dynamicDivisorForEdges: false }).raw, (value) => Number(value.toFixed(3)))) // [ 0.444, 0.667, 0.444, 0.667, 1, 0.667, 0.444, 0.667, 0.444 ]
+console.log(DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS) // { dynamicDivisorForEdges: true, normalize: true } and the same with sigma 1.4 and size 5
+
+// The separable smoothing with the binomial kernel [1, 4, 6, 4, 1] / 16, and with a dilation of 2 pixels.
+const source = new Float64Array(25)
+source[12] = 1
+const output = new Float64Array(25)
+const intermediate = new Float64Array(25)
+const metadata = impulse().metadata
+const smoothing = separableSmoothingKernel([1, 4, 6, 4, 1])
+console.log(
+	smoothing.divisor,
+	separableSmoothing(source, output, intermediate, metadata, smoothing) === output,
+	Array.from(output.slice(10, 15), (value) => Number(value.toFixed(4))),
+) // 16 true [ 0.0341, 0.1, 0.1406, 0.1, 0.0341 ]
+separableSmoothing(source, output, intermediate, metadata, separableSmoothingKernel([1, 2, 1]), { step: 2, dynamicDivisorForEdges: false })
+console.log(Array.from(output.slice(10, 15))) // [ 0.125, 0, 0.25, 0, 0.125 ]
+
+// The row buffer rotation.
+const rows = [[1], [2], [3]]
+shift(rows)
+console.log(rows) // [ [ 2 ], [ 3 ], [ 1 ] ]
+
+// An even kernel, a sigma outside 0.5..5, and a one-dimensional kernel of even length.
+for (const action of [() => convolution(impulse(), convolutionKernel([1, 1, 1, 1], 2)), () => gaussianBlurKernel(6, 5), () => separableSmoothingKernel([1, 1]), () => meanConvolutionKernel(4)]) {
+	try {
+		action()
+	} catch (e) {
+		console.log((e as Error).message) // kernel size must be odd, kernel size bust be in range [0.5..5], separable kernel length must be odd and at least 3 and size must be odd
+	}
+}
+```
+
 ### Image Intensity Inversion
 
 `invert(image)` replaces every sample `v` of a normalized image with `1 - v`, in place, and returns the same image. It is the negative of an image whose full scale is 1 (the usual input of the processing functions); a sample outside 0..1 maps outside it as well, and the function does not clip. The image must be dense mono or interleaved RGB (1 or 3 channels), with the stride and the buffer length that agree with the geometry, or it throws an `Error`. Applying it twice gives back the original samples up to the rounding of the sample type.
@@ -7511,6 +7881,51 @@ console.log(
 ### Pixel Sigma Clipping and Background Levels
 
 ### PSF Filter
+
+`psf(image)` applies the point-spread-function matched filter of the KStars internal guider: a fixed 9x9 stencil (radius 4 pixels) that responds to a star-sized peak and rejects a flat background. The stencil is the sum of rings around the pixel with the weights of KStars (1 for the center, 0.678 for the four nearest neighbours, down to 0.02 for the outermost ring) minus a constant outer weight that makes the sum of all the weights zero, so a uniform region gives 0 (up to rounding) and the result is not a brightness image: it is positive on a star, around zero on the sky and negative next to bright structure. The image is modified in place and the same object is returned; each channel of an RGB image is filtered on its own, the four-pixel border keeps the original values (the stencil does not fit there), and an image smaller than 9x9 is returned unchanged. The image must be a dense mono or interleaved RGB intensity image: a raw CFA mosaic, a stride or buffer that does not agree with the geometry, or a channel count other than 1 or 3 throws an `Error`, because a mosaic has to be converted to a coherent intensity image first. The work is linear in the number of samples, with a sliding sum for the 81 values and a small row buffer.
+
+```ts
+import { psf } from 'nebulosa/src/imaging/processing/psf'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+const size = 21
+const frame = (channels: 1 | 3, value: (x: number, y: number, channel: number) => number): Image => {
+	const raw = new Float64Array(size * size * channels)
+	for (let y = 0, i = 0; y < size; y++) for (let x = 0; x < size; x++) for (let c = 0; c < channels; c++, i++) raw[i] = value(x, y, c)
+	return {
+		header: { SIMPLE: true, BITPIX: -64, NAXIS: channels === 1 ? 2 : 3, NAXIS1: size, NAXIS2: size },
+		metadata: { width: size, height: size, channels, pixelCount: size * size, stride: size * channels, strideInBytes: size * channels * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined },
+		raw,
+	}
+}
+
+// A flat background gives 0 inside the image and the border is left alone.
+const flat = psf(frame(1, () => 0.2))
+console.log(Math.abs(flat.raw[10 * size + 10]) < 1e-12, flat.raw[0], flat.raw[3 * size + 3], Math.abs(flat.raw[4 * size + 4]) < 1e-12) // true 0.2 0.2 true
+
+// A star (a Gaussian of sigma 1.2 pixels, at (10, 10)) on that background: the response peaks on its center and goes negative a few pixels away.
+const star = (x: number, y: number) => 0.2 + 0.6 * Math.exp(-((x - 10) ** 2 + (y - 10) ** 2) / (2 * 1.2 * 1.2))
+const filtered = psf(frame(1, star))
+console.log(Array.from(filtered.raw.slice(10 * size + 5, 10 * size + 16), (value) => Number(value.toFixed(3)))) // [ -0.155, -0.225, 0.004, 0.699, 1.595, 2.024, 1.595, 0.699, 0.004, -0.225, -0.155 ]
+console.log(filtered.raw[10 * size + 10] > filtered.raw[10 * size + 9], filtered.raw[10 * size + 10] > filtered.raw[10 * size + 14]) // true true
+
+// The same star in the three channels, with different amplitudes: each channel is filtered on its own.
+const color = psf(frame(3, (x, y, c) => 0.1 + ((c + 1) / 3) * 0.6 * Math.exp(-((x - 10) ** 2 + (y - 10) ** 2) / (2 * 1.2 * 1.2))))
+const center = (10 * size + 10) * 3
+console.log(Array.from(color.raw.slice(center, center + 3), (value) => Number(value.toFixed(3)))) // [ 0.675, 1.35, 2.024 ] (proportional to the amplitudes 0.2, 0.4 and 0.6)
+
+// A frame smaller than the stencil is returned untouched.
+const tiny = frame(1, () => 0.5)
+const small: Image = { ...tiny, metadata: { ...tiny.metadata, width: 5, height: 5, pixelCount: 25, stride: 5 }, raw: new Float64Array(25).fill(0.5) }
+console.log(psf(small) === small, small.raw[12]) // true 0.5
+
+// A raw mosaic is rejected.
+try {
+	psf({ ...tiny, metadata: { ...tiny.metadata, bayer: 'RGGB' } })
+} catch (e) {
+	console.log((e as Error).message) // PSF filtering requires a non-CFA intensity image
+}
+```
 
 ### Scalar Surface Fitting
 
@@ -7668,7 +8083,100 @@ console.log(isImage(small), small.raw[1 * small.metadata.stride + 1]) // true 1
 
 ### SCNR
 
+`scnr(image, channel?, amount?, method?)` is the Subtractive Chromatic Noise Reduction of PixInsight: it attenuates the excess of one color (green by default, `'RED'` and `'BLUE'` are also accepted) in an interleaved RGB image of normalized 0..1 samples, in place, and returns the same image. `amount` (0.5 by default) is the strength from 0 (nothing changes) to 1. The `method` decides how the other two channels protect the pixel: with `'MAXIMUM_MASK'` (the default) and `'ADDITIVE_MASK'` the selected channel `a` becomes `a (1 - amount)(1 - m) + m a`, where `m` is the larger of the other two channels, or their sum clipped to 1, so bright neighbours keep the value and dark ones let it be reduced. The `'AVERAGE_NEUTRAL'`, `'MAXIMUM_NEUTRAL'` and `'MINIMUM_NEUTRAL'` methods only touch the pixels where the selected channel is above the mean, the maximum or the minimum of the other two, and blend it toward that reference by `amount`. A mono image or an `amount` of 0 returns the image unchanged. The layout is validated (positive integer geometry, 1 or 3 channels, a `pixelCount` and `raw` length that agree, and a CFA mosaic must have one channel), and an `Error` is thrown otherwise. The function does not rebalance the other channels or the luminance, so the pixel gets darker where the cast is removed.
+
+```ts
+import { scnr } from 'nebulosa/src/imaging/processing/scnr'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// Three pixels: a green-cast sky, a neutral gray and a saturated green one.
+const pixels = (): Image => ({
+	header: { SIMPLE: true, BITPIX: -64, NAXIS: 3, NAXIS1: 3, NAXIS2: 1, NAXIS3: 3 },
+	metadata: { width: 3, height: 1, channels: 3, pixelCount: 3, stride: 9, strideInBytes: 72, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined },
+	raw: new Float64Array([0.1, 0.2, 0.1, 0.5, 0.5, 0.5, 0.05, 0.9, 0.05]),
+})
+
+const round = (values: ArrayLike<number>) => Array.from(values, (value) => Number(value.toFixed(4)))
+
+// The defaults: green, 0.5 and the maximum mask.
+console.log(round(scnr(pixels()).raw)) // [ 0.1, 0.11, 0.1, 0.5, 0.375, 0.5, 0.05, 0.4725, 0.05 ] (the gray pixel is attenuated by its own maximum mask)
+
+// The protection methods with the full amount.
+for (const method of ['MAXIMUM_MASK', 'ADDITIVE_MASK', 'AVERAGE_NEUTRAL', 'MAXIMUM_NEUTRAL', 'MINIMUM_NEUTRAL'] as const) {
+	console.log(method, round(scnr(pixels(), 'GREEN', 1, method).raw).join(' ')) // one line per method: MAXIMUM_MASK gives 0.1 0.02 0.1 0.5 0.25 0.5 0.05 0.045 0.05, ADDITIVE_MASK 0.1 0.04 0.1 0.5 0.5 0.5 0.05 0.09 0.05, and the three neutral methods 0.1 0.1 0.1 0.5 0.5 0.5 0.05 0.05 0.05
+}
+
+// Another channel: a red-cast pixel (0.8, 0.3, 0.2) with the neutral methods.
+const cast = (): Image => ({ ...pixels(), metadata: { ...pixels().metadata, width: 1, pixelCount: 1, stride: 3 }, raw: new Float64Array([0.8, 0.3, 0.2]) })
+console.log(round(scnr(cast(), 'RED', 1, 'AVERAGE_NEUTRAL').raw), round(scnr(cast(), 'RED', 1, 'MAXIMUM_NEUTRAL').raw), round(scnr(cast(), 'RED', 0.5, 'MINIMUM_NEUTRAL').raw)) // [ 0.25, 0.3, 0.2 ] [ 0.3, 0.3, 0.2 ] [ 0.5, 0.3, 0.2 ]
+
+// An amount of 0 and a mono image return the same object untouched.
+const image = pixels()
+console.log(scnr(image, 'GREEN', 0) === image, round(image.raw)) // true [ 0.1, 0.2, 0.1, 0.5, 0.5, 0.5, 0.05, 0.9, 0.05 ]
+const mono: Image = { ...image, metadata: { ...image.metadata, channels: 1, stride: 3 }, raw: new Float64Array([0.1, 0.2, 0.3]) }
+console.log(scnr(mono) === mono, round(mono.raw)) // true [ 0.1, 0.2, 0.3 ]
+
+// A buffer that does not match the geometry is rejected.
+try {
+	scnr({ ...image, raw: new Float64Array(4) })
+} catch (e) {
+	console.log((e as Error).message) // image raw length does not match metadata: 4 != 9
+}
+```
+
 ### Screen Transfer Function
+
+`stf(image, midtone?, shadow?, highlight?, options?)` applies the PixInsight screen transfer function (the midtones transfer function with shadows and highlights clipping) to the normalized 0..1 buffer of an `Image`, in place, and returns the same image. A sample at or below `shadow` becomes 0, at or above `highlight` becomes 1, and a value between them is rescaled to `d = (v - shadow) / (highlight - shadow)` and mapped by `(midtone - 1) d / ((2 midtone - 1) d - midtone)`, which sends the rescaled value equal to `midtone` to 0.5 (with the full range, `midtone` itself goes to 0.5). `midtone` below 0.5 brightens (the usual autostretch uses values around 0.1 to 0.25), above 0.5 darkens, and 0.5 is the identity. The three arguments are finite values in 0..1 with `shadow <= highlight` (a `RangeError` otherwise). The defaults (0.5, 0, 1) return the image without touching it, and a midtone of 1 sends everything below the highlight to 0.
+
+`options.channel` selects what is transformed: `'RED'`, `'GREEN'` or `'BLUE'` transform only that channel of an RGB image, and any other value (the default `'GRAY'`) transforms every stored sample. The curve is evaluated exactly for each sample, with no lookup table, in a single pass, so it also applies to a Float64 buffer without quantization. The function does not estimate the parameters from the data (for that, see Display Stretch Parameter Estimation), and it destroys the linear data, so it is applied on a copy used for display.
+
+```ts
+import { DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, stf } from 'nebulosa/src/imaging/processing/stf'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+const ramp = (): Image => ({
+	header: { SIMPLE: true, BITPIX: -64, NAXIS: 2, NAXIS1: 6, NAXIS2: 1 },
+	metadata: { width: 6, height: 1, channels: 1, pixelCount: 6, stride: 6, strideInBytes: 48, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined },
+	raw: new Float64Array([0, 0.02, 0.1, 0.25, 0.5, 1]),
+})
+
+const pixel = (): Image => ({
+	header: { SIMPLE: true, BITPIX: -64, NAXIS: 3, NAXIS1: 1, NAXIS2: 1, NAXIS3: 3 },
+	metadata: { width: 1, height: 1, channels: 3, pixelCount: 1, stride: 3, strideInBytes: 24, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined },
+	raw: new Float64Array([0.1, 0.2, 0.4]),
+})
+
+const round = (values: ArrayLike<number>) => Array.from(values, (value) => Number(value.toFixed(4)))
+
+// A midtone below 0.5 brightens the faint samples, and 0 and 1 stay fixed.
+console.log(round(stf(ramp(), 0.15).raw)) // [ 0, 0.1037, 0.3864, 0.6538, 0.85, 1 ]
+
+// The midtone value is sent to 0.5: with a midtone of 0.1, the sample 0.1 becomes 0.5.
+console.log(round(stf(ramp(), 0.1).raw)) // [ 0, 0.1552, 0.5, 0.75, 0.9, 1 ]
+
+// A midtone above 0.5 darkens.
+console.log(round(stf(ramp(), 0.8).raw)) // [ 0, 0.0051, 0.027, 0.0769, 0.2, 1 ]
+
+// Shadows and highlights clip, and the range between them is rescaled before the curve.
+console.log(round(stf(ramp(), 0.25, 0.02, 0.5).raw)) // [ 0, 0, 0.375, 0.734, 1, 1 ]
+
+// One channel only, or all of them.
+console.log(round(stf(pixel(), 0.2, 0, 1, { channel: 'RED' }).raw)) // [ 0.3077, 0.2, 0.4 ]
+console.log(round(stf(pixel(), 0.2).raw)) // [ 0.3077, 0.5, 0.7273 ]
+
+// The neutral parameters and the defaults return the same image untouched.
+const same = ramp()
+console.log(stf(same) === same, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, round(same.raw)) // true { channel: 'GRAY' } [ 0, 0.02, 0.1, 0.25, 0.5, 1 ]
+
+// A midtone of 1 sends everything below the highlight to 0.
+console.log(round(stf(ramp(), 1).raw)) // [ 0, 0, 0, 0, 0, 1 ]
+
+try {
+	stf(ramp(), 0.25, 0.8, 0.2)
+} catch (e) {
+	console.log((e as Error).message) // shadow must be less than or equal to highlight
+}
+```
 
 ### Sensor Characterization
 
@@ -7721,6 +8229,47 @@ console.log(isImage(small), small.raw[1 * small.metadata.stride + 1]) // true 1
 ### Telescope Resolution and Light Grasp
 
 ### Tone Mapping
+
+The tone functions adjust a normalized `Image` in place and return the same object. They work on a dense mono or interleaved RGB image (another channel count, a buffer that does not match the geometry or a CFA image with three channels throws an `Error`) and clip the output to 0..1, so they are meant for the display-ready range after a stretch and not for linear data that must keep values outside it. `brightness(image, value)` multiplies every sample by a finite non-negative factor (1 changes nothing, 0 gives black). `linear(image, slope, intercept)` evaluates `slope * v + intercept` (a slope of 0 fills the image with the clipped intercept). `contrast(image, value)` is the linear map that scales the distance to mid-gray 0.5 by the factor (`linear(image, value, 0.5 - 0.5 * value)`, so 1 changes nothing and 0 gives a flat 0.5). `gamma(image, value)` applies the inverse-gamma encoding `v^(1/value)` to the samples clamped to 0..1, so a value above 1 brightens the midtones (2 is a square root) and a value below 1 darkens them; 0 and negative values are outside its domain. `saturation(image, value, channel = 'GRAY')` scales the chroma of an RGB image around a luminance reference: `gray + (c - gray) * value` for each channel, where `gray` is the weighted sum of the pixel with the weights of `channel` (a named grayscale as in Scientific Image Model, or explicit weights that sum to 1, otherwise a `RangeError`), 1 changes nothing and 0 gives the gray image; a mono image is returned unchanged.
+
+```ts
+import { brightness, contrast, gamma, linear, saturation } from 'nebulosa/src/imaging/processing/tone'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A mono ramp of five samples and a one-pixel RGB image, built with the metadata of a reader.
+const ramp = (): Image => ({
+	header: { SIMPLE: true, BITPIX: -64, NAXIS: 2, NAXIS1: 5, NAXIS2: 1 },
+	metadata: { width: 5, height: 1, channels: 1, pixelCount: 5, stride: 5, strideInBytes: 40, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined },
+	raw: new Float64Array([0, 0.1, 0.25, 0.5, 1]),
+})
+
+const pixel = (): Image => ({
+	header: { SIMPLE: true, BITPIX: -64, NAXIS: 3, NAXIS1: 1, NAXIS2: 1, NAXIS3: 3 },
+	metadata: { width: 1, height: 1, channels: 3, pixelCount: 1, stride: 3, strideInBytes: 24, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined },
+	raw: new Float64Array([0.8, 0.4, 0.2]),
+})
+
+console.log(brightness(ramp(), 1.5).raw) // Float64Array(5) [ 0, 0.15000000000000002, 0.375, 0.75, 1 ] (clipped at 1)
+console.log(linear(ramp(), 0.5, 0.25).raw, contrast(ramp(), 2).raw) // Float64Array(5) [ 0.25, 0.3, 0.375, 0.5, 0.75 ] Float64Array(5) [ 0, 0, 0, 0.5, 1 ]
+console.log(gamma(ramp(), 2).raw, gamma(ramp(), 0.5).raw) // Float64Array(5) [ 0, 0.31622776601683794, 0.5, 0.7071067811865476, 1 ] Float64Array(5) [ 0, 0.010000000000000002, 0.0625, 0.25, 1 ]
+
+// The same object is returned and modified, and the neutral values do nothing.
+const image = ramp()
+console.log(brightness(image, 1) === image, gamma(image, 1) === image, contrast(image, 1) === image, linear(image, 1, 0) === image, image.raw) // true true true true Float64Array(5) [ 0, 0.1, 0.25, 0.5, 1 ]
+
+// Saturation: boosted, removed (the BT.709 luminance of the pixel), with other weights, and on a mono image.
+console.log(saturation(pixel(), 2).raw) // Float64Array(3) [ 1, 0.32942000000000005, 0 ] (the red channel is clipped at 1 and the blue one at 0)
+console.log(saturation(pixel(), 0).raw, saturation(pixel(), 0, 'Y').raw) // Float64Array(3) [ 0.47058, 0.47058, 0.47058 ] Float64Array(3) [ 0.4968, 0.4968, 0.4968 ] (the luminance of the pixel, BT.709 and NTSC)
+console.log(saturation(pixel(), 0.5, { red: 0.5, green: 0.5, blue: 0 }).raw) // Float64Array(3) [ 0.7, 0.5, 0.4 ]
+const mono = ramp()
+console.log(saturation(mono, 2) === mono, mono.raw[2]) // true 0.25
+
+try {
+	saturation(pixel(), 2, { red: 1, green: 1, blue: 1 })
+} catch (e) {
+	console.log((e as Error).message) // grayscale weights must sum to one: 3
+}
+```
 
 ### Tracking Quality
 
