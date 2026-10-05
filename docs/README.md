@@ -18637,7 +18637,158 @@ client.sendSwitch({ device: simulator.name, name: 'WEATHER_REFRESH', elements: {
 
 ### ADES Codec
 
+The ADES (Astrometry Data Exchange Standard) codec of `src/adapters/orbits/mpc.ts` reads and writes the observations of the Minor Planet Center as the `MPCObservation` union: `'optical'`, `'offset'`, `'occultation'` and `'radar'` records, discriminated by `type`, with the time as a UTC `Time`, the angles in radians (the ADES degrees and arcseconds are converted), the radar delay in seconds and its transmitter frequency in Hz, the spacecraft positions in AU and the geodetic observer elevation in AU (see the MPC API for the fields and the network functions that return these records).
+
+- `parseADESObservation(raw)` converts one record given as an object, such as a row of the `ADES_DF` payload or a line of the PSV format split by its header. The field names are matched without regard to case (`permid`, `permID` and `PERMID` are the same field), null values and fields it does not know are skipped, and numbers can be given as numbers or as text. `obsTime` (ISO 8601 with `Z` or a numeric `+hh:mm` offset, which is applied to give UTC) and `stn` are required. The type comes from `obsType`, or is inferred: `ra` and `dec` give an optical record, a `delay` or `doppler` a radar one, `deltaRA` an offset one. Optical records need `ra` and `dec` (degrees) and keep `rmsRA` and `rmsDec` (arcseconds, already multiplied by cos(dec) in the ADES convention, returned as `raError` and `decError` in radians), the correlation, the magnitude and its error, the `band` (or `fltr`), the catalogs, `exp` (seconds), `seeing` and `rmsFit` (arcseconds, returned in radians) and `nStars`. An embedded observer comes from `sys`: `'ICRF_KM'` and `'ICRF_AU'` give a `'spacecraft'` observer with `pos1`, `pos2` and `pos3` as the position (kilometres converted to AU), and `'WGS84'`, `'ITRF'` and `'IAU'` give a `'geodetic'` observer with the longitude and latitude in degrees and the height in metres. The identifiers are `permID`, `provID`, `trkID` (or `trkMPC`), `trkSub`, `obsID` and `obsSubID`, and `disc` equal to `'*'` marks a discovery. A missing required field or an unknown `obsType` or `sys` is an error.
+- `parseADESPSV(text)` reads the pipe-separated format (LF or CRLF line breaks): the `# version=` line (`2017` or `2022`, `2022` when it is absent), the `# section` lines with the `! key value` metadata lines below them, the header row with the column names and the observation rows below it. A new `#` section after observations starts a new block, so a file can have several contexts, each applying to the rows that follow it. The result is `{ version, blocks }`, where each block has an optional `context` (`observatory`, `submitter`, `observers`, `measurers`, `telescope` with the aperture in metres, `software` and `comment`) and its `observations`. Blank cells are treated as absent.
+- `writeADESPSV(document)` writes a document back with LF line breaks and a final line break: the version, the context of each block, the header and the rows. The header is the union of the fields used by the observations of the block, in the order they first appear, so a record leaves a cell empty for a field it does not have. The angles are written in degrees and arcseconds, the time as `YYYY-MM-DDThh:mm:ss.sssZ` (millisecond resolution), and nothing the model does not hold is invented.
+
+The snippet reads a PSV file with a context, writes it back, and parses each type of record from objects.
+
+```ts
+import { parseADESObservation, parseADESPSV, writeADESPSV, type MPCADESDocument } from 'nebulosa/src/adapters/orbits/mpc'
+import { timeToDate } from 'nebulosa/src/astronomy/time/time'
+import { toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
+import { toKilometer, toMeter } from 'nebulosa/src/math/units/distance'
+
+// A PSV document with a context, two optical rows (the second one without magnitude) and a second block.
+const psv = `# version=2022
+# observatory
+! mpcCode 568
+! name Mauna Kea
+# submitter
+! name T. Henrique
+! institution Home Observatory
+# telescope
+! aperture 0.2
+! design Reflector
+! detector CCD
+# observers
+! name A. One
+! name B. Two
+# comment
+! line first comment
+permID|provID|trkSub|obsTime|ra|dec|rmsRA|rmsDec|mag|band|stn|mode|astCat|obsID|disc
+433||tr1|2024-03-05T10:20:30.250Z|123.456789|-12.345678|0.12|0.15|17.4|V|568|CCD|Gaia2|OBS1|*
+|2024 YR4|tr2|2024-03-05T10:25:30Z|123.5|-12.4||||G|568|CCD|||
+# software
+! name nebulosa
+obsType|obsTime|stn|provID|delay|rmsDelay|doppler|rmsDoppler|frq|trx|rcv|com
+radar|2024-03-07T10:20:30Z|251|2024 YR4|1000|0.5|-10.5|0.1|2380|251|251|C
+`
+
+const document = parseADESPSV(psv)
+console.log(
+	document.version,
+	document.blocks.length,
+	document.blocks.map((block) => block.observations.length),
+) // 2022 2 [ 2, 1 ]
+console.log(JSON.stringify(document.blocks[0].context)) // {"observatory":{"mpcCode":"568","name":"Mauna Kea"},"submitter":{"name":"T. Henrique","institution":"Home Observatory"},"observers":["A. One","B. Two"],"telescope":{"aperture":0.2,"design":"Reflector","detector":"CCD"},"comment":["first comment"]}
+console.log(JSON.stringify(document.blocks[1].context)) // {"software":{"name":"nebulosa"}}
+
+const [eros, yr4] = document.blocks[0].observations
+console.log(eros.type, eros.station, eros.permanentId, eros.trackletSubmissionId, eros.observationId, eros.mode, eros.discovery, eros.catalog) // optical 568 433 tr1 OBS1 CCD true Gaia2
+if (eros.type === 'optical') console.log(toDeg(eros.rightAscension), toDeg(eros.declination), toArcsec(eros.raError!), toArcsec(eros.decError!), eros.magnitude, eros.band, eros.astrometricCatalog) // 123.456789 -12.345678 0.12 0.15 17.4 V Gaia2
+console.log(yr4.provisionalId, yr4.discovery, JSON.stringify(timeToDate(yr4.time))) // 2024 YR4 false [2024,3,5,10,25,30,0]
+
+// The radar row of the second block: seconds, hertz and the echo origin.
+const radar = document.blocks[1].observations[0]
+if (radar.type === 'radar') console.log(radar.delay, radar.delayError, radar.doppler, radar.dopplerError, radar.transmitFrequency, radar.transmitterStation, radar.receiverStation, radar.bounce) // 0.001 5e-7 -10.5 0.1 2380000000 251 251 com
+
+// The same document is written back: the context, the columns of each block and the rows.
+const text = writeADESPSV(document)
+console.log(text.split('\n').slice(16)) // [ 'obsType|obsTime|stn|permID|trkSub|obsID|mode|disc|ra|dec|rmsRA|rmsDec|mag|band|astCat|provID', 'optical|2024-03-05T10:20:30.250Z|568|433|tr1|OBS1|CCD|*|123.456789|-12.345678|0.12|0.15|17.4|V|Gaia2|', 'optical|2024-03-05T10:25:30.000Z|568||tr2||CCD||123.5|-12.4||||G||2024 YR4', '# software', '! name nebulosa', 'obsType|obsTime|stn|provID|delay|rmsDelay|doppler|rmsDoppler|frq|trx|rcv|com', 'radar|2024-03-07T10:20:30.000Z|251|2024 YR4|1000|0.5|-10.5|0.1|2380|251|251|C', '' ]
+const again = parseADESPSV(text)
+console.log(
+	again.blocks.length,
+	again.blocks.map((block) => block.observations.length),
+	JSON.stringify(again.blocks[0].context) === JSON.stringify(document.blocks[0].context),
+) // 2 [ 2, 1 ] true
+
+// CRLF line breaks and a file without a version line (ADES 2022).
+console.log(parseADESPSV('permID|obsTime|ra|dec|stn\r\n1|2025-01-01T00:00:00Z|10|20|500\r\n').version) // 2022
+
+// One record at a time: the field names ignore the case, numbers may be text, and the type is inferred.
+const optical = parseADESObservation({ OBSTIME: '2024-03-05T10:20:30+01:00', STN: 'F51', PERMID: '433', RA: '10.5', DEC: '20.25', RMSRA: '0.2', unknown: 'ignored', note: null })
+if (optical.type === 'optical') console.log(optical.type, optical.station, optical.permanentId, toDeg(optical.rightAscension), toDeg(optical.declination), toArcsec(optical.raError!), JSON.stringify(timeToDate(optical.time))) // optical F51 433 10.5 20.25 0.20000000000000004 [2024,3,5,9,20,30,0]
+
+// An observer in a spacecraft: kilometres become AU and the NAIF center is kept.
+const hubble = parseADESObservation({ obsTime: '2024-03-05T10:20:30Z', stn: 'C51', provID: '2024 AB', ra: 10, dec: 20, sys: 'ICRF_KM', ctr: 399, pos1: 149597870.7, pos2: 0, pos3: 7000 })
+if (hubble.type === 'optical' && hubble.observer?.kind === 'spacecraft') console.log(hubble.observer.sys, hubble.observer.center, hubble.observer.position, toKilometer(hubble.observer.position[2])) // ICRF_KM 399 [ 1, 0, 0.00004679210985587912 ] 7000
+
+// A geodetic observer of a roving site: degrees and metres, the elevation kept in AU.
+const rover = parseADESObservation({ obsTime: '2024-03-05T10:20:30Z', stn: '247', provID: '2024 AB', ra: 10, dec: 20, sys: 'WGS84', pos1: -45.123456, pos2: -23.123456, pos3: 800 })
+if (rover.type === 'optical' && rover.observer?.kind === 'geodetic') console.log(rover.observer.sys, toDeg(rover.observer.longitude), toDeg(rover.observer.latitude), toMeter(rover.observer.elevation)) // WGS84 -45.123456 -23.123456 800
+
+// Offset and occultation records.
+const offset = parseADESObservation({ obsType: 'offset', obsTime: '2024-03-05T10:20:30Z', stn: '250', permID: '1', deltaRA: 0.001, deltaDec: -0.002, raStar: 10, decStar: 20 })
+if (offset.type === 'offset') console.log(toArcsec(offset.deltaRightAscension), toArcsec(offset.deltaDeclination), toDeg(offset.starRightAscension!), toDeg(offset.starDeclination!)) // 3.6 -7.2 10 20
+const occultation = parseADESObservation({ obsType: 'occultation', obsTime: '2024-03-05T10:20:30Z', stn: '500', permID: '1', ra: 10, dec: 20, rmsRA: 0.01 })
+if (occultation.type === 'occultation') console.log(toDeg(occultation.rightAscension!), toDeg(occultation.declination!), toArcsec(occultation.raError!), occultation.decError) // 10 20 0.01 undefined
+
+// A document built by hand with several types in one block, in the 2017 schema.
+const built: MPCADESDocument = { version: '2017', blocks: [{ observations: [eros, hubble, rover, offset, occultation, radar] }] }
+const lines = writeADESPSV(built).split('\n')
+console.log(lines[0], lines[1]) // # version=2017 obsType|obsTime|stn|permID|trkSub|obsID|mode|disc|ra|dec|rmsRA|rmsDec|mag|band|astCat|provID|sys|ctr|pos1|pos2|pos3|deltaRA|deltaDec|raStar|decStar|delay|rmsDelay|doppler|rmsDoppler|frq|trx|rcv|com
+console.log(lines.slice(2, 8)) // [ 'optical|2024-03-05T10:20:30.250Z|568|433|tr1|OBS1|CCD|*|123.456789|-12.345678|0.12|0.15|17.4|V|Gaia2||||||||||||||||||', 'optical|2024-03-05T10:20:30.000Z|C51||||||10|20||||||2024 AB|ICRF_KM|399|149597870.7|0|7000||||||||||||', 'optical|2024-03-05T10:20:30.000Z|247||||||10|20||||||2024 AB|WGS84||-45.123456|-23.123456|800||||||||||||', 'offset|2024-03-05T10:20:30.000Z|250|1||||||||||||||||||0.001|-0.002|10|20||||||||', 'occultation|2024-03-05T10:20:30.000Z|500|1|||||10|20|0.01||||||||||||||||||||||', 'radar|2024-03-07T10:20:30.000Z|251|||||||||||||2024 YR4||||||||||1000|0.5|-10.5|0.1|2380|251|251|C' ]
+```
+
 ### AstroBin Equipment API
+
+The client of `src/adapters/imaging/astrobin.ts` reads the equipment database of AstroBin (API v2, `BASE_URL` plus `api/v2/equipment/`) with `GET` requests that ask for JSON. There are three kinds of equipment, each with a listing by page and a lookup by id: `sensors(page)` and `sensor(id)`, `cameras(page)` and `camera(id)`, and `telescopes(page)` and `telescope(id)`. A listing returns an `AstrobinPage` with the total `count`, the `results` of the page and the addresses `next` and `previous` of the neighbor pages (`null` when there is none), so a caller walks the whole database by increasing the page number until `next` is `null`; a lookup returns one record. Every record has `id`, `brandName` and `name`. An `AstrobinSensor` adds `pixelSize` (micrometers), `pixelWidth` and `pixelHeight` (pixels), `quantumEfficiency`, `readNoise` and `fullWellCapacity`, `frameRate`, `adc`, `colorOrMono` (`'M'` or `'C'`) and `cameras`, the ids of the cameras that use it; an `AstrobinCamera` adds `cooled`, `type` and `sensor`, the id of its sensor; and an `AstrobinTelescope` adds `type`, `aperture` (mm) and the `minFocalLength` and `maxFocalLength` (mm). The numeric specifications that are not counts are strings, exactly as the API gives them, and many fields can be `null`. The functions return `undefined` (after logging the status, the address and the text with `console.error`) when the response is not successful or is empty, and the JSON is not validated. The snippet replaces `fetch` by a local stand-in with one page of each kind, so it does not use the network.
+
+```ts
+import { BASE_URL, camera, cameras, sensor, sensors, telescope, telescopes } from 'nebulosa/src/adapters/imaging/astrobin'
+
+// A local stand-in for the service: it records the addresses and answers by the path.
+const addresses: string[] = []
+const imx = { id: 7, brandName: 'Sony', name: 'IMX571', quantumEfficiency: '91', pixelSize: '3.76', pixelWidth: 6248, pixelHeight: 4176, readNoise: '1.6', fullWellCapacity: '51000', frameRate: 3, adc: 16, colorOrMono: 'M', cameras: [21] }
+const asi2600 = { id: 21, brandName: 'ZWO', name: 'ASI2600MM Pro', cooled: true, sensor: 7, type: 'DEDICATED_DEEP_SKY' }
+const refractor = { id: 5, brandName: 'Askar', name: '120APO', type: 'REFRACTOR_APOCHROMATIC', aperture: '120', minFocalLength: '840', maxFocalLength: '840' }
+
+globalThis.fetch = (async (input: string | URL | Request) => {
+	const url = input.toString()
+	addresses.push(url)
+	const path = new URL(url).pathname
+	const page = (results: object[]) => Response.json({ count: results.length + 1, results, next: `${url.split('?')[0]}?page=2`, previous: null })
+
+	if (path.endsWith('/sensor/')) return page([imx])
+	if (path.endsWith('/camera/')) return page([asi2600])
+	if (path.endsWith('/telescope/')) return page([refractor])
+	if (path.endsWith('/sensor/7')) return Response.json(imx)
+	if (path.endsWith('/camera/21')) return Response.json(asi2600)
+	return Response.json(refractor)
+}) as typeof fetch
+
+// A page of sensors: the first of the listing, with its count and the address of the next page.
+const page = await sensors(1)
+console.log(page!.count, page!.next, page!.previous, page!.results.length) // 2 https://www.astrobin.com/api/v2/equipment/sensor/?page=2 null 1
+console.log(page!.results[0].name, page!.results[0].pixelSize, page!.results[0].pixelWidth, page!.results[0].pixelHeight, page!.results[0].colorOrMono, page!.results[0].cameras) // IMX571 3.76 6248 4176 M [ 21 ]
+
+// The specifications are strings: convert the ones that are needed.
+const pixelSize = +page!.results[0].pixelSize
+console.log(pixelSize, (pixelSize * page!.results[0].pixelWidth) / 1000, 'mm of width') // 3.76 23.49248 mm of width
+
+// A sensor by id, the camera that has it and a telescope.
+const one = await sensor(7)
+const body = await camera(one!.cameras[0])
+console.log(one!.brandName, one!.name, body!.brandName, body!.name, body!.cooled, body!.sensor === one!.id, body!.type) // Sony IMX571 ZWO ASI2600MM Pro true true DEDICATED_DEEP_SKY
+const scope = await telescope(5)
+console.log(scope!.name, scope!.type, +scope!.aperture!, +scope!.minFocalLength!, +scope!.maxFocalLength!, +scope!.minFocalLength! / +scope!.aperture!) // 120APO REFRACTOR_APOCHROMATIC 120 840 840 7
+
+// The pages of cameras and telescopes.
+console.log(
+	(await cameras(1))!.results.map((item) => `${item.brandName} ${item.name}`),
+	(await telescopes(3))!.results.map((item) => item.name),
+) // [ "ZWO ASI2600MM Pro" ] [ "120APO" ]
+
+// The requests: the page is a query parameter and the id is the last segment.
+console.log(
+	addresses.every((address) => address.startsWith(BASE_URL)),
+	BASE_URL,
+) // true https://www.astrobin.com/
+console.log(addresses.map((address) => address.slice(BASE_URL.length))) // [ "api/v2/equipment/sensor/?page=1", "api/v2/equipment/sensor/7", "api/v2/equipment/camera/21", "api/v2/equipment/telescope/5", "api/v2/equipment/camera/?page=1", "api/v2/equipment/telescope/?page=3" ]
+```
 
 ### Close Approach Data
 
@@ -18755,9 +18906,180 @@ console.log(queries.at(-1)!.includes('Source = 4472832130942575872')) // true
 
 ### HiPS Survey Discovery
 
+`hipsSurveys(minSkyFraction?, baseUrl?)` (`src/adapters/sky/hips2fits.ts`) lists the HiPS (Hierarchical Progressive Survey) image surveys that the CDS MocServer (`HIPS2FITS_BASE_URL`, with `HIPS2FITS_ALTERNATIVE_URL` as the mirror) knows: it queries `MocServer/query` for the records of the surveys whose identifier starts with `CDS`, served by the `alasky` hosts, of the image data product, covering at least `minSkyFraction` of the sky (0..1, 0.99 by default, which keeps the all-sky surveys), in any of the regimes optical, infrared, UV, radio, X-ray and gamma-ray, and in the `Image/` categories. It returns an array of `HipsSurvey` with the `id` (the identifier that `hips2Fits` takes, such as `CDS/P/DSS2/color`), the `category` path, the native `frame` (`'equatorial'` or `'galactic'`), the `regime` in lower case (`'optical'`, `'infrared'`, `'uv'`, `'radio'`, `'x-ray'` or `'gamma-ray'`), the pixel `bitpix` (0 when the record does not tell it), the native `pixelScale` in degrees per pixel and the `skyFraction` (0..1). A response that is not successful gives an empty array, and the order is the one of the service. The mapping reads the text fields of the record and converts the numbers, and nothing else is validated. The snippet replaces `fetch` by a local stand-in with a short answer, so it does not use the network.
+
+```ts
+import { HIPS2FITS_ALTERNATIVE_URL, HIPS2FITS_BASE_URL, hipsSurveys } from 'nebulosa/src/adapters/sky/hips2fits'
+
+// A local stand-in for the MocServer with two records, in the field names of the service.
+const addresses: string[] = []
+globalThis.fetch = (async (input: string | URL | Request) => {
+	addresses.push(input.toString())
+	return Response.json([
+		{ ID: 'CDS/P/DSS2/color', client_category: 'Image/Optical/DSS', hips_frame: 'equatorial', obs_regime: 'Optical', hips_pixel_bitpix: '8', hips_pixel_scale: '1.7E-4', moc_sky_fraction: '0.9999' },
+		{ ID: 'CDS/P/Fermi/color', client_category: 'Image/Gamma-ray/Fermi', hips_frame: 'galactic', obs_regime: 'Gamma-ray', hips_pixel_scale: '0.0366', moc_sky_fraction: '1' },
+	])
+}) as typeof fetch
+
+// The surveys that cover at least 99% of the sky (the default).
+const surveys = await hipsSurveys()
+console.log(surveys.length) // 2
+for (const survey of surveys) console.log(survey.id, survey.category, survey.frame, survey.regime, survey.bitpix, survey.pixelScale, survey.skyFraction) // CDS/P/DSS2/color Image/Optical/DSS equatorial optical 8 0.00017 0.9999; CDS/P/Fermi/color Image/Gamma-ray/Fermi galactic gamma-ray 0 0.0366 1
+
+// The query is the MocServer path with the filter expression.
+const url = new URL(addresses[0])
+console.log(addresses[0].startsWith(HIPS2FITS_BASE_URL), url.pathname, url.searchParams.get('get'), url.searchParams.get('fmt')) // true /MocServer/query record json
+console.log(url.searchParams.get('expr')) // ID=CDS* && hips_service_url*=*alasky* && dataproduct_type=image && moc_sky_fraction >= 0.99 && obs_regime=Optical,Infrared,UV,Radio,X-ray,Gamma-ray && client_category=Image/*
+
+// A lower coverage and the mirror host.
+await hipsSurveys(0.5, HIPS2FITS_ALTERNATIVE_URL)
+const mirror = new URL(addresses.at(-1)!)
+console.log(addresses.at(-1)!.startsWith(HIPS2FITS_ALTERNATIVE_URL), mirror.searchParams.get('expr')!.includes('moc_sky_fraction >= 0.5')) // true true
+
+// A client can pick by regime or by the pixel scale, which is in degrees per pixel (here in arcseconds).
+console.log(
+	surveys.filter((survey) => survey.regime === 'optical').map((survey) => survey.id),
+	surveys.map((survey) => survey.pixelScale * 3600),
+) // [ "CDS/P/DSS2/color" ] [ 0.6120000000000001, 131.76 ]
+```
+
 ### HiPS2FITS Cutouts
 
+`hips2Fits(id, ra, dec, options?)` (`src/adapters/sky/hips2fits.ts`) asks the hips2fits service of the CDS (`HIPS2FITS_BASE_URL` plus `hips-image-services/hips2fits`) for a cutout of the HiPS survey `id` (for example `CDS/P/DSS2/color`, see HiPS Survey Discovery) centered on the ICRS position `ra` and `dec` (radians, converted to degrees in the request) and returns it as a `Blob`, or `undefined` when the response is not successful. The options are `width` and `height` (pixels, 1200 and 900 by default), `fov` (the field of view in radians, 1 degree by default), `rotation` (the angle of the image in radians, 0 by default), `projection` (the WCS code of the output, `'TAN'` by default, among `'AZP'`, `'SZP'`, `'TAN'`, `'STG'`, `'SIN'`, `'ARC'`, `'ZEA'`, `'AIR'`, `'CYP'`, `'CEA'`, `'CAR'`, `'MER'`, `'SFL'`, `'PAR'`, `'MOL'`, `'AIT'`, `'TSC'`, `'CSC'`, `'QSC'`, `'HPX'` and `'XPH'`), `coordSystem` (the frame of the output WCS, `'icrs'` by default or `'galactic'`; the center stays ICRS), `format` (`'fits'` by default, `'jpg'` or `'png'`), `baseUrl` (the host, `HIPS2FITS_ALTERNATIVE_URL` is the mirror) and `timeout` (milliseconds, 60000 by default). The id is URL-encoded, the angles are sent with the full precision of the conversion, and nothing is validated, so a combination that the service does not accept is only known from the response. The FITS cutout carries the WCS of the projection, so it can be read with the FITS reader (see FITS Image Reading) and used as an image with astrometry. The snippet replaces `fetch` by a local stand-in that records the address and returns a few bytes, so it does not use the network.
+
+```ts
+import { hips2Fits, HIPS2FITS_ALTERNATIVE_URL, HIPS2FITS_BASE_URL } from 'nebulosa/src/adapters/sky/hips2fits'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+
+// A local stand-in for the service: it records the address and the signal, and returns a small payload.
+const requests: { url: URL; signal?: AbortSignal | null }[] = []
+globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+	requests.push({ url: new URL(input.toString()), signal: init?.signal })
+	return new Response(new Uint8Array([0x53, 0x49, 0x4d, 0x50, 0x4c, 0x45]), { headers: { 'Content-Type': 'application/fits' } })
+}) as typeof fetch
+
+// The Orion Nebula with the defaults: 1200 x 900 pixels, 1 degree, TAN projection, FITS.
+const blob = await hips2Fits('CDS/P/DSS2/color', hour(5.588), deg(-5.39))
+console.log(blob?.size, blob?.type) // 6 application/fits
+const first = requests[0].url
+console.log(first.origin + '/' === HIPS2FITS_BASE_URL.replace(/\/$/, '') + '/', first.pathname) // true /hips-image-services/hips2fits
+console.log(first.searchParams.get('hips'), first.searchParams.get('ra'), first.searchParams.get('dec')) // CDS/P/DSS2/color 83.82 -5.39
+console.log(first.searchParams.get('width'), first.searchParams.get('height'), first.searchParams.get('fov'), first.searchParams.get('projection'), first.searchParams.get('coordsys'), first.searchParams.get('rotation_angle'), first.searchParams.get('format')) // 1200 900 1 TAN icrs 0 fits
+console.log(requests[0].signal instanceof AbortSignal) // true
+
+// A wide field of 5 degrees in a 1000 x 600 JPEG, rotated by 30 degrees, in a different projection and in galactic coordinates.
+await hips2Fits('CDS/P/2MASS/color', deg(83.8), deg(-5.4), { width: 1000, height: 600, fov: deg(5), rotation: deg(30), projection: 'STG', coordSystem: 'galactic', format: 'jpg' })
+const wide = requests.at(-1)!.url.searchParams
+console.log(wide.get('hips'), wide.get('width'), wide.get('height'), wide.get('fov'), wide.get('rotation_angle'), wide.get('projection'), wide.get('coordsys'), wide.get('format')) // CDS/P/2MASS/color 1000 600 5 29.999999999999996 STG galactic jpg
+
+// The mirror host, the position 0, 0 and a long timeout.
+await hips2Fits('CDS/P/allWISE/color', 0, 0, { baseUrl: HIPS2FITS_ALTERNATIVE_URL, timeout: 120000 })
+const mirror = requests.at(-1)!.url
+console.log(mirror.origin + '/' === HIPS2FITS_ALTERNATIVE_URL, mirror.searchParams.get('hips'), mirror.searchParams.get('ra'), mirror.searchParams.get('dec')) // true CDS/P/allWISE/color 0 0
+```
+
 ### IAU Meteor Data Center catalog
+
+The adapter of `src/adapters/catalogs/iau.meteor.showers.ts` turns the stream catalog of the IAU Meteor Data Center (`IAU_METEOR_SHOWER_CATALOG_URL`, the `streamfulldata.json` document) into the meteor shower model of the toolkit (see Meteor Shower State and Meteor Radiants). It has three stages that can be used apart. `parseIauMeteorShowerCatalog(input)` accepts the parsed object or its JSON text and checks only the structure: a versioned object with a non-empty `source` and `version`, a `data` array of records, and a `solution` array of objects in each record; unknown properties of the records are kept as they are in the returned `IauMeteorShowerCatalog` (`source`, `version`, `count`, `fields` and `data`). `normalizeIauMeteorShowerCatalog(catalog)` returns `{ metadata, showers }`, where `metadata` has the `source`, the `version` and the `url`, and each `MeteorShower` has `catalogRecordId` (`LP`), `number` (`IAUNo`), `code`, `name` (the `Name`, else the provisional name, else `'Unnamed meteor shower'`), `provisionalName`, the `status` (`'working'` for 0, `'established'` for 1, `'toBeEstablished'` for 2, `'removed'` for a negative value and `'unknown'` otherwise), the original `sourceStatus` and the `solutions` in the source order. Numbers may be numbers or numeric text, a blank, missing or non-numeric value becomes `undefined` (never zero), and the conversions are: the angles from degrees to radians, with the right ascension and the longitudes normalized to 0..2π, the geocentric speed `Vg` from km/s to AU/day, and the semi-major axis and perihelion distance kept in AU. A `MeteorShowerSolution` carries the radiant (`rightAscension` and `declination`), the `radiantDrift` per day (`{ basis: 'day', rightAscensionRate, declinationRate }` in radians per day, only when both rates exist), the ecliptic radiant (`eclipticLongitude`, `eclipticLatitude` and the Sun-centered longitude), the reference `referenceSolarLongitude` and the `activityInterval` between the beginning and end solar longitudes (left out when either is missing or they are equal; it can wrap through 0), the `orbit` (`semiMajorAxis`, `perihelionDistance`, `eccentricity` and the `argumentOfPerihelion`, `longitudeOfAscendingNode` and `inclination` in radians, or `undefined` when no element is published), the `memberCount`, `parentBody`, `group`, the `observationTechnique` (`'ccd'`, `'photo'`, `'radar'`, `'tv'`, `'visual'` or `'unknown'` from the first letter of `Ote`), `submissionDate`, `sourceFlags`, `reference` (a text or the lines joined) and `remarks`. The `activity` is interpreted from the text of the catalog as `{ kind, source }`, with `kind` `'annual'` (for `annual`, `annual?` and `periodic`), `'outburst'` (a year with `out`, such as `2022out`, or a text with `outburst`), `'yearSpecific'` (a year, or a range such as `1989-92` or `1989-1992`, with `years`), `'variable'`, `'irregular'` or `'unknown'`; no activity profile is invented. `selectMeteorShowerSolution(shower, selector?)` picks one solution without mixing fields: `'largestSample'` (the default) is the one with the greatest `memberCount`, the first in the source order for a tie and `undefined` when none has a count, and a function receives the solutions and returns the one it chooses. `fetchIauMeteorShowerCatalog({ url?, signal?, timeout? })` downloads, parses and normalizes the catalog, adding `retrievedAt` (a `Date`) to the metadata, with an own `signal` and a `timeout` in milliseconds that abort the request; it throws when the response is not successful. The snippet works on a short catalog written in the shape of the MDC document (the values are only an illustration) and replaces `fetch` by a local stand-in for the download, so it does not use the network.
+
+```ts
+import { fetchIauMeteorShowerCatalog, IAU_METEOR_SHOWER_CATALOG_URL, normalizeIauMeteorShowerCatalog, parseIauMeteorShowerCatalog, selectMeteorShowerSolution } from 'nebulosa/src/adapters/catalogs/iau.meteor.showers'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+import { toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+// A short catalog in the shape of the MDC document: two records, the first with two solutions.
+const document = {
+	source: 'IAU Meteor Data Center',
+	version: '2026-01-01',
+	count: 2,
+	fields: { LP: 'record', Name: 'name' },
+	data: [
+		{
+			LP: '00007',
+			IAUNo: '7',
+			Code: 'PER',
+			s: '1',
+			Name: 'Perseids',
+			ProvName: 'M2000-A1',
+			solution: [
+				{
+					AdNo: '000',
+					s: '1',
+					activity: 'annual',
+					LoSb: 107,
+					LoSe: 158,
+					LoS: 140,
+					Ra: 48.2,
+					De: 58,
+					dRa: 1.4,
+					dDe: 0.25,
+					Vg: 59.1,
+					a: '24.3',
+					q: 0.953,
+					e: 0.96,
+					peri: 150,
+					node: 139.5,
+					inc: 113,
+					N: 120,
+					'Parent body': '109P/Swift-Tuttle',
+					Ote: 'TV',
+					'sub.date': '2020.01.01',
+					References: ['Jenniskens 2006', ''],
+					Remarks: 'sample',
+				},
+				{ AdNo: '001', activity: '1989-92', LoS: 140, Ra: '47.5', De: '57.9', Vg: '58.8', N: 480, Ote: 'RADAR' },
+			],
+		},
+		{ LP: '00219', IAUNo: '', Code: '', s: '-1', ProvName: 'M2024-B3', solution: [{ AdNo: '000', activity: '2022out', LoSb: 350, LoSe: 20, Ra: 359, De: -20, N: '' }] },
+	],
+}
+
+// The structure is checked, and the JSON text gives the same document.
+const catalog = parseIauMeteorShowerCatalog(document)
+console.log(catalog.source, catalog.version, catalog.count, catalog.data.length) // IAU Meteor Data Center 2026-01-01 2 2
+console.log(parseIauMeteorShowerCatalog(JSON.stringify(document)).data.length) // 2
+
+// The normalization converts the units and keeps the absent values undefined.
+const { metadata, showers } = normalizeIauMeteorShowerCatalog(catalog)
+console.log(metadata.source, metadata.version, metadata.url === IAU_METEOR_SHOWER_CATALOG_URL) // IAU Meteor Data Center 2026-01-01 true
+const perseids = showers[0]
+console.log(perseids.catalogRecordId, perseids.number, perseids.code, perseids.name, perseids.provisionalName, perseids.status, perseids.sourceStatus, perseids.solutions.length) // 00007 7 PER Perseids M2000-A1 established 1 2
+
+const [primary, secondary] = perseids.solutions
+console.log(primary.solutionId, primary.status, primary.activity, primary.observationTechnique, primary.memberCount, primary.parentBody, primary.submissionDate) // 000 established { kind: "annual", source: "annual" } tv 120 109P/Swift-Tuttle 2020.01.01
+console.log(toDeg(primary.rightAscension!), toDeg(primary.declination!), toDeg(primary.referenceSolarLongitude!), toDeg(primary.activityInterval!.start), toDeg(primary.activityInterval!.end)) // 48.2 58.00000000000001 140 107 158
+console.log(toKilometerPerSecond(primary.geocentricSpeed!), primary.radiantDrift!.basis, toDeg(primary.radiantDrift!.rightAscensionRate), toDeg(primary.radiantDrift!.declinationRate)) // 59.1 day 1.4 0.25
+console.log(primary.orbit!.semiMajorAxis, primary.orbit!.perihelionDistance, primary.orbit!.eccentricity, toDeg(primary.orbit!.inclination!), toDeg(primary.orbit!.longitudeOfAscendingNode!), toDeg(primary.orbit!.argumentOfPerihelion!)) // 24.3 0.953 0.96 113 139.5 150
+console.log(JSON.stringify(primary.reference), primary.remarks) // "Jenniskens 2006" sample
+
+// Numeric text is accepted, the second solution has no interval, drift or orbit, and its status follows the record.
+console.log(secondary.activity, secondary.observationTechnique, toDeg(secondary.rightAscension!), secondary.activityInterval, secondary.radiantDrift, secondary.orbit, secondary.status, secondary.memberCount) // { kind: "yearSpecific", source: "1989-92", years: { start: 1989, end: 1992 } } radar 47.5 undefined undefined undefined established 480
+
+// The second record has no name or number, a removed status and a dated outburst.
+const unnamed = showers[1]
+console.log(unnamed.name, unnamed.number, unnamed.code, unnamed.status, unnamed.solutions[0].activity, unnamed.solutions[0].memberCount) // M2024-B3 undefined undefined removed { kind: "outburst", source: "2022out", years: { start: 2022, end: 2022 } } undefined
+console.log(toDeg(unnamed.solutions[0].activityInterval!.start), toDeg(unnamed.solutions[0].activityInterval!.end), toDeg(unnamed.solutions[0].rightAscension!)) // 350 20 359
+
+// The solution with the largest sample (the default), the first one, and a function.
+console.log(selectMeteorShowerSolution(perseids)?.solutionId, selectMeteorShowerSolution(perseids, (solutions) => solutions[0])?.solutionId) // 001 000
+console.log(selectMeteorShowerSolution(perseids, (solutions) => solutions.find((solution) => solution.observationTechnique === 'radar'))?.solutionId) // 001
+console.log(selectMeteorShowerSolution(unnamed)?.solutionId, selectMeteorShowerSolution({ ...unnamed, solutions: [] })) // undefined undefined
+
+// The download, with a local stand-in for the service, the default address and a timeout.
+const requests: { url: string; signal?: AbortSignal | null }[] = []
+globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+	requests.push({ url: input.toString(), signal: init?.signal })
+	return Response.json(document)
+}) as typeof fetch
+
+const downloaded = await fetchIauMeteorShowerCatalog({ timeout: 30000 })
+console.log(downloaded.showers.length, downloaded.metadata.url === requests[0].url, downloaded.metadata.retrievedAt instanceof Date, requests[0].signal instanceof AbortSignal) // 2 true true true
+
+// Another address and an own abort signal.
+const controller = new AbortController()
+await fetchIauMeteorShowerCatalog({ url: 'http://localhost:8080/streams.json', signal: controller.signal })
+console.log(requests[1].url) // http://localhost:8080/streams.json
+```
 
 ### JPL Horizons Observer Tables
 
@@ -19003,7 +19325,279 @@ console.log(SEARCH_PATH.split('&').length) // 18
 
 ### Minor Planet Center API
 
+The adapter of `src/adapters/orbits/mpc.ts` talks to the API of the Minor Planet Center (`MPC_BASE_URL`, `https://data.minorplanetcenter.net/api/`) and converts the answers to typed records in radians, AU and UTC. The service takes `GET` requests with a JSON body, which `fetch` of Bun refuses, so the adapter uses `node:https` directly with the base address fixed; the snippet below therefore redirects the connections of `https.globalAgent` to a local HTTP server written for the example, and no real service is contacted. The functions are:
+
+- Designations: `designations(ids, options?)` looks up to 100 ids (a number, a provisional designation, a name or a packed form) in one request and returns one `MPCDesignation` per id, in the input order (`found` 0 for no match, 1 for a unique one and above 1 for an ambiguous one, with the `disambiguation` candidates); the options are the name `comparison` (`'='`, `'ILIKE'` or `'%'`), the `group` and a `signal`; an empty list returns `[]` without a request. `designation(id, options?)` returns the record only when it is unique, else `undefined`. `primaryDesignation(designation)` picks the permanent id, else the primary provisional designation, the IAU designation or the name, and `designationAliases(designation)` returns the distinct ids and names (packed and unpacked) of the object.
+- Observatories: `observatory(code, signal?)` returns one `MPCObservatory` (`undefined` for a known miss) and `observatories(signal?)` returns all of them in the order of the service. The record has the `longitude` (east-positive radians), `rhoCosPhi` and `rhoSinPhi` (equatorial Earth radii), the names, the dates, the `observationType` (`'optical'`, `'occultation'`, `'satellite'`, `'radar'` or `'roving'`) and the `oldNames`; the geometry is absent for satellites and roving sites. The text format of the ObsCodes file is handled by `parseObservatoryCode(line)`, `parseObservatoryCodes(text)` (blank lines skipped) and `writeObservatoryCode(observatory)` (it needs the longitude and both rho values). `observatoryItrsPosition(observatory, ellipsoid?)` returns the geocentric ITRS position in AU, `undefined` without geometry or for the geocenter (code 500), and `observatoryLocation(observatory, ellipsoid?)` gives the geodetic position (see Geographic Observer); the ellipsoid is `Ellipsoid.IERS2010` by default.
+- Observations: `observations(designation, adesVersion?, signal?)` and `neocpObservations(tracklet, adesVersion?, signal?)` return the parsed `MPCObservation` records of an object or of a NEO Confirmation Page tracklet (ADES `'2022'` by default, or `'2017'`), and an unknown object gives `[]`. `queryObservations(designation, options?)` and `queryNEOCPObservations(tracklet, options?)` return the raw `MPCObservationPayload` (`ades` rows, the `obs80` text and the `obsDf` rows) for the `outputFormats` asked among `'ADES_DF'`, `'OBS_DF'` and `'OBS80'`. The records are described in ADES Codec and MPC1992 Codec.
+- Orbits: `orbit(designation, signal?)` returns the first `mpc_orb` solution (`MPCOrbitSolution`, with the `car`, `com` and `kep` element sets, the epoch, the frame, the magnitude, the MOIDs, the categorization and the fit statistics) or `undefined` when there is none. `orbitCartesianState(orbit)` extracts the heliocentric state of the `car` set (position in AU, velocity in AU/day, the epoch as a `Time` in TT for `TDT` or TDB, and the 6 x 6 `covariance` rebuilt from the `covij` terms) and gives `undefined` when the names, the epoch or the frame are not the expected ones. `orbitToKeplerOrbit(orbit)` builds a `KeplerOrbit` (see Two-Body Kepler Propagation) with the Sun's gravitational parameter, using the ecliptic rotation of the class for `'Ecliptic'` states and the identity for `'Equatorial'` ones; natural satellites (object types 30, 31 and 40) give `undefined`.
+- Lists: `list(type, options?)` queries one page of a category (`MPCList`: `'minor-planets'`, `'neos'`, `'comets'`, `'tnos'`, `'impacted'`, `'minor-planet-names'`, and so on) with `order`, `limit` (1 to 50000), `offset` and a `like` pattern on the provisional designation, and returns the `items` plus the `request` the server reports. `listAll(type, { maxItems, ... })` pages until `maxItems` (a positive integer) items are collected or a short page comes back, with pages of 1000 items by default and at most 50000.
+- Fit input: `isOpticalObservation(observation)` is a type guard, `observationDesignation(observation)` gives the permanent id, else the provisional one, else the submitter tracklet, and `observationIdentifier(observation)` the `obsID`, else the submitter id. `observationToOrbitFitObservation(observation, observerPosition)` maps an optical record to the `OrbitFitObservation` of the orbit fit (see Differential Orbit Correction), with the observer position given by the caller, and `observationsToOrbitFit(observations, resolve)` does it for a list: records that are not optical, or whose observer `resolve(time, observation)` cannot give, go to `rejected`. The station positions are not looked up by the adapter, so the caller supplies the heliocentric observer position.
+
+Network failures, an aborted `signal` and a response that is not successful (other than the known lookup misses) are reported as errors, and the payloads are checked only for their shape. The snippet answers every path with a small document written in the format of the service.
+
+```ts
+import http from 'node:http'
+import https from 'node:https'
+import net from 'node:net'
+import {
+	designation,
+	designationAliases,
+	designations,
+	isOpticalObservation,
+	list,
+	listAll,
+	neocpObservations,
+	observationDesignation,
+	observationIdentifier,
+	observations,
+	observationsToOrbitFit,
+	observationToOrbitFitObservation,
+	observatories,
+	observatory,
+	observatoryItrsPosition,
+	observatoryLocation,
+	orbit,
+	orbitCartesianState,
+	orbitToKeplerOrbit,
+	parseObservatoryCode,
+	parseObservatoryCodes,
+	primaryDesignation,
+	queryNEOCPObservations,
+	queryObservations,
+	writeObservatoryCode,
+} from 'nebulosa/src/adapters/orbits/mpc'
+import { toDeg } from 'nebulosa/src/math/units/angle'
+import { toKilometer, toMeter } from 'nebulosa/src/math/units/distance'
+
+// A local stand-in for the service. It records the path and the JSON body of each request.
+const requests: { path: string; body: any }[] = []
+
+const station568 = { obscode: '568', name: 'Maunakea', name_utf8: 'Maunakea', short_name: 'Maunakea', longitude: '204.5278', rhocosphi: '0.940153', rhosinphi: '0.338883', observations_type: 'optical', old_names: null }
+const station500 = { obscode: '500', name: 'Geocentric', longitude: '0', rhocosphi: '0', rhosinphi: '0', observations_type: 'satellite', old_names: ['Geocenter'] }
+
+const ades = [
+	{ obsType: 'optical', permID: '433', provID: '1898 DQ', obsTime: '2024-03-05T10:20:30.250Z', ra: '123.456789', dec: '-12.345678', rmsRA: '0.12', rmsDec: '0.15', mag: '17.4', band: 'V', stn: '568', mode: 'CCD', obsID: 'OBS1' },
+	{ obsType: 'optical', permID: '433', obsTime: '2024-03-06T10:20:30Z', ra: '124.0', dec: '-12.0', stn: 'C51', sys: 'ICRF_KM', ctr: '399', pos1: '149597870.7', pos2: '0', pos3: '0' },
+	{ obsType: 'radar', permID: '433', obsTime: '2024-03-07T10:20:30Z', stn: '251', delay: '1000', rmsDelay: '0.5', doppler: '-10.5', rmsDoppler: '0.1', frq: '2380', trx: '251', rcv: '251', com: 'C' },
+]
+
+const orbitRecord = {
+	CAR: { coefficient_names: ['x', 'y', 'z', 'vx', 'vy', 'vz'], coefficients: [-0.5, 0.9, 0.05, -0.0165, -0.009, 0.001], cov00: 1e-12, cov01: 2e-13, cov11: 3e-12 },
+	epoch_data: { epoch: 60400, timeform: 'MJD', timesystem: 'TDT' },
+	system_data: { refsys: 'Ecliptic', refframe: 'ICRF', eph: 'DE441' },
+	designation_data: { name: 'Eros', permid: '433', unpacked_primary_provisional_designation: '1898 DQ' },
+	magnitude_data: { H: 10.4, G: 0.46 },
+	moid_data: { Earth: 0.148 },
+	categorization: { object_type: 'Minor Planet', object_type_int: 1 },
+	orbit_fit_statistics: { n_obs: 9000, n_opp: 100, arc_length: 40000, rms: 0.3 },
+}
+
+const server = http.createServer((request, response) => {
+	let text = ''
+	request.on('data', (chunk) => (text += chunk))
+	request.on('end', () => {
+		const body = text ? JSON.parse(text) : {}
+		requests.push({ path: request.url!, body })
+		const send = (value: unknown) => response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(value))
+
+		if (request.url === '/api/query-identifier') {
+			const result: Record<string, unknown> = {}
+			for (const id of body.ids as string[]) {
+				if (id === '433')
+					result[id] = {
+						found: 1,
+						name: 'Eros',
+						permid: '433',
+						packed_permid: '00433',
+						iau_designation: '(433) Eros',
+						orbfit_name: '(433)Eros',
+						object_type: ['Minor Planet', 1],
+						packed_primary_provisional_designation: 'I98D00Q',
+						unpacked_primary_provisional_designation: '1898 DQ',
+						packed_secondary_provisional_designations: null,
+						unpacked_secondary_provisional_designations: ['1931 PH'],
+					}
+				else
+					result[id] = {
+						found: 2,
+						disambiguation_list: [
+							{ name: 'Eros', permid: '433', group: 'Minor Planets', similarity: 0.9 },
+							{ name: 'Erosita', permid: '12345', group: 'Minor Planets', similarity: 0.5 },
+						],
+					}
+			}
+			send(result)
+		} else if (request.url === '/api/obscodes') send(body.obscode ? { [body.obscode]: station568 } : { 568: station568, 500: station500 })
+		else if (request.url === '/api/get-obs') send([{ ADES_DF: ades, OBS80: 'line1\nline2', OBS_DF: [{ obs80: 'line1' }, { obs80: 'line2' }] }, 200])
+		else if (request.url === '/api/get-obs-neocp') send([{ ADES_DF: ades.slice(0, 1) }, 200])
+		else if (request.url === '/api/get-orb') send([{ mpc_orb: [orbitRecord] }, 200])
+		else if (request.url === '/api/list') {
+			const offset = body.offset ?? 0
+			const limit = body.limit ?? 3
+			const all = ['433', '1036', '1221', '1566', '1620']
+			const items = all.slice(offset, offset + limit).map((permid) => ({ permid, name: `Object ${permid}`, group: 'Minor Planets' }))
+			send({ items, request: { list: body.list, order: body.order ?? 'ASC', limit, offset } })
+		} else response.writeHead(404).end()
+	})
+})
+
+await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+const port = (server.address() as net.AddressInfo).port
+;(https.globalAgent as any).createConnection = () => net.connect(port, '127.0.0.1')
+
+// Designations: one request for several ids, with the unique match and the ambiguous one.
+const found = await designations(['433', 'Eros'])
+console.log(
+	found.length,
+	found.map((item) => item.found),
+	requests.at(-1)!.path,
+	JSON.stringify(requests.at(-1)!.body),
+) // 2 [ 1, 2 ] /api/query-identifier {"ids":["433","Eros"]}
+const eros = found[0]
+console.log(eros.name, eros.permanentId, eros.packedPermanentId, eros.iauDesignation, eros.orbfitName, eros.objectType, eros.objectTypeCode) // Eros 433 00433 (433) Eros (433)Eros Minor Planet 1
+console.log(eros.primaryProvisionalDesignation, eros.packedPrimaryProvisionalDesignation, eros.secondaryProvisionalDesignations, eros.packedSecondaryProvisionalDesignations) // 1898 DQ I98D00Q [ '1931 PH' ] []
+console.log(found[1].disambiguation!.map((item) => `${item.name} ${item.permanentId} ${item.similarity}`)) // [ 'Eros 433 0.9', 'Erosita 12345 0.5' ]
+console.log(primaryDesignation(eros), designationAliases(eros)) // 433 [ '433', '00433', '1898 DQ', 'I98D00Q', '(433) Eros', '(433)Eros', 'Eros', '1931 PH' ]
+console.log((await designation('433'))?.name) // Eros
+console.log(await designations([])) // []
+
+// The name search modifiers.
+await designations(['Eros'], { comparison: 'ILIKE', group: 'Minor Planets' })
+console.log(JSON.stringify(requests.at(-1)!.body)) // {"ids":["Eros"],"comparison":"ILIKE","group":"Minor Planets"}
+
+// Observatories: one code, the whole table, and the geometry as a position.
+const mauna = (await observatory('568'))!
+console.log(mauna.code, mauna.name, toDeg(mauna.longitude!), mauna.rhoCosPhi, mauna.rhoSinPhi, mauna.observationType, mauna.oldNames) // 568 Maunakea 204.52780000000004 0.940153 0.338883 optical []
+const all = await observatories()
+console.log(all.map((item) => `${item.code} ${item.name} ${item.observationType} ${item.oldNames}`)) // [ '500 Geocentric satellite Geocenter', '568 Maunakea optical ' ]
+const itrs = observatoryItrsPosition(mauna)!
+console.log(itrs.map((value) => toKilometer(value))) // [ -5455.3066577971895, -2489.3238363289865, 2161.4420654177998 ]
+const location = observatoryLocation(mauna)!
+console.log(toDeg(location.longitude), toDeg(location.latitude), toMeter(location.elevation), location.ellipsoid) // -155.4722 19.945078156259186 -1583.4993459476211 3
+
+// The ObsCodes flat file: write a line, parse it back, and parse a table.
+const line = writeObservatoryCode(mauna)
+console.log(JSON.stringify(line)) // "568 204.527800.940153+0.338883Maunakea"
+const parsed = parseObservatoryCode(line)
+console.log(parsed.code, parsed.name, toDeg(parsed.longitude!), parsed.rhoCosPhi, parsed.rhoSinPhi) // 568 Maunakea 204.52780000000004 0.940153 0.338883
+console.log(parseObservatoryCodes(`${writeObservatoryCode(all[0])}\n\n${line}\n`).map((item) => `${item.code} ${item.name}`)) // [ '500 Geocentric', '568 Maunakea' ]
+
+// Observations: parsed records, the raw payload, and the NEO Confirmation Page.
+const records = await observations('433')
+console.log(records.map((item) => `${item.type} ${item.station} ${observationDesignation(item)} ${observationIdentifier(item)}`)) // [ 'optical 568 433 OBS1', 'optical C51 433 undefined', 'radar 251 433 undefined' ]
+console.log(requests.at(-1)!.path, JSON.stringify(requests.at(-1)!.body)) // /api/get-obs {"desigs":["433"],"output_format":["ADES_DF"],"ades_version":"2022"}
+await observations('433', '2017')
+console.log(JSON.stringify(requests.at(-1)!.body)) // {"desigs":["433"],"output_format":["ADES_DF"],"ades_version":"2017"}
+const payload = await queryObservations('433', { outputFormats: ['ADES_DF', 'OBS80', 'OBS_DF'], adesVersion: '2017' })
+console.log(payload.ades!.length, JSON.stringify(payload.obs80), payload.obsDf, JSON.stringify(requests.at(-1)!.body)) // 3 "line1\nline2" [ { obs80: 'line1' }, { obs80: 'line2' } ] {"desigs":["433"],"output_format":["ADES_DF","OBS80","OBS_DF"],"ades_version":"2017"}
+console.log((await neocpObservations('P21abcd')).length, (await queryNEOCPObservations('P21abcd')).ades!.length, JSON.stringify(requests.at(-1)!.body)) // 1 1 {"trksubs":["P21abcd"],"output_format":["ADES_DF"],"ades_version":"2022"}
+
+// The fit input: only the optical records whose observer position is known are kept.
+console.log(records.map((item) => isOpticalObservation(item))) // [ true, true, false ]
+const optical = records.filter(isOpticalObservation)
+const fit = observationsToOrbitFit(records, (_, observation) => (observation.station === '568' ? [0.9, 0.4, 0.1] : undefined))
+console.log(
+	fit.observations.length,
+	fit.rejected.map((item) => item.type + ' ' + item.station),
+) // 1 [ 'optical C51', 'radar 251' ]
+const first = observationToOrbitFitObservation(optical[0], [1, 0, 0])
+console.log(toDeg(first.rightAscension), toDeg(first.declination), first.raErr, first.decErr, first.observerPosition) // 123.456789 -12.345678 5.817764173314431e-7 7.272205216643039e-7 [ 1, 0, 0 ]
+
+// Orbits: the solution, its Cartesian state, and the Kepler orbit.
+const solution = (await orbit('433'))!
+console.log(solution.designationData?.name, solution.epochData, solution.systemData?.referenceSystem, solution.magnitudeData, solution.moidData, solution.categorization, solution.orbitFitStatistics) // Eros { epoch: 60400, timeForm: 'MJD', timeSystem: 'TDT' } Ecliptic { h: 10.4, g: 0.46 } { earth: 0.148, jupiter: undefined } { objectType: 'Minor Planet', objectTypeInt: 1 } { nObs: 9000, nOpp: 100, arcLength: 40000, rms: 0.3 }
+console.log(solution.car!.coefficientNames, solution.car!.coefficients, solution.car!.covarianceValues) // [ 'x', 'y', 'z', 'vx', 'vy', 'vz' ] [ -0.5, 0.9, 0.05, -0.0165, -0.009, 0.001 ] { cov00: 1e-12, cov01: 2e-13, cov11: 3e-12 }
+const state = orbitCartesianState(solution)!
+console.log(state.position, state.velocity, state.referenceSystem, state.referenceFrame, state.timeSystem, state.ephemeris) // [ -0.5, 0.9, 0.05 ] [ -0.0165, -0.009, 0.001 ] Ecliptic ICRF TDT DE441
+console.log(state.epoch.day + state.epoch.fraction, state.covariance!.get(0, 1), state.covariance!.get(1, 0), state.covariance!.get(5, 5)) // 2460400.5 2e-13 2e-13 0
+const kepler = orbitToKeplerOrbit(solution)!
+console.log(kepler.semiMajorAxis, kepler.eccentricity, toDeg(kepler.inclination), kepler.periodInDays) // 1.3456425646226267 0.23420400269567873 4.104548896574671 570.1550836022479
+
+// Lists: one page with the request echoed, a paged walk and the first items only.
+const page = await list('minor-planets', { limit: 2, offset: 1, order: 'DESC', like: '19%' })
+console.log(
+	page.items.map((item) => item.permanentId),
+	page.request,
+	JSON.stringify(requests.at(-1)!.body),
+) // [ '1036', '1221' ] { list: 'minor-planets', order: 'DESC', limit: 2, offset: 1, like: undefined } {"list":"minor-planets","order":"DESC","limit":2,"offset":1,"like":"19%"}
+const walk = await listAll('minor-planets', { maxItems: 4, limit: 2 })
+console.log(
+	walk.map((item) => item.name),
+	requests.slice(-2).map((item) => item.body.offset),
+) // [ 'Object 433', 'Object 1036', 'Object 1221', 'Object 1566' ] [ 0, 2 ]
+console.log((await listAll('minor-planets', { maxItems: 3, limit: 3 })).length) // 3
+
+server.close()
+```
+
 ### MPC1992 Codec
+
+The MPC1992 codec of `src/adapters/orbits/mpc.ts` handles the fixed-width 80-column observation format of the Minor Planet Center and the packed designations it uses. A record is one line of exactly 80 characters, or two lines for the observations that need a second record (satellite, roving observer and radar); both directions use the same `MPCObservation` union as ADES Codec, with the time as a UTC `Time` (the day fraction has six decimals in the file, about 0.09 s), the angles in radians and the other values converted as described there.
+
+- `packMPCDesignation(value)` and `unpackMPCDesignation(value)` convert between the readable and the packed forms: numbered minor planets (`'433'` or `'(433)'` to `'00433'`, letter forms up to 619999 and `~` forms above that), provisional designations (`'2024 YR4'` to `'K24Y04R'`, with the extended `_` form for cycles above 619, such as `'2025 AZ700'`), the old `A908 CJ` style, comets and their fragments (`'C/1995 O1'` to `'CJ95O010'`, `'P/2010 A2'`, `'73P/1930 J1-B'`), survey designations (`'2040 P-L'`, `'3138 T-1'`) and natural satellites (`'S/2004 N 1'`). A string that is already packed is returned as it is, and a string that cannot be represented, for instance a comet written with only its name, is an error.
+- `parseMPC80(line)` reads one line of 80 characters. Columns 1 to 5 hold the packed permanent id and 6 to 12 the packed provisional designation (the permanent and provisional ids and the tracklet are kept in `permanentId`, `provisionalId` and `trackletSubmissionId`), column 13 the discovery asterisk, column 14 the program code (kept in `programCode` and `notes`), column 15 the second note, which is the observing mode (`C` for CCD, and so on) and also selects the type (`E` occultation, `O` offset, `R` and `Q` radar), columns 16 to 32 the date, 33 to 56 the right ascension in hours and the declination in degrees (or the offsets), 66 to 71 the magnitude and band, 72 to 77 the reference and 78 to 80 the station. A line that is the second record of a pair is an error when it is given alone.
+- `parseMPC80Lines(text)` reads a text with LF or CRLF line breaks, skips blank lines and joins the pairs: the second record of a satellite observation (`S` then `s`) carries the position of the spacecraft in kilometres (type `1`) or AU (type `2`), that of a roving observer (`V` then `v`) the longitude, latitude and altitude in metres, and that of a radar observation (`R` then `r`) the delay and Doppler uncertainties and the bounce point. The first records give the `observer` of an optical record or the radar fields; the rest of the format is optical.
+- `writeMPC80(observation)` writes one record of 80 characters, or the two records joined by an LF for a radar observation and for an optical one with an `observer`. `writeMPC80Lines(observations)` joins the records with LF and adds a final line break. The packed ids are made from `permanentId` and `provisionalId` (or the tracklet), the right ascension is written in hours with three decimals of the second and the declination with two decimals of the arcsecond, the magnitude with two decimals, and the values the format cannot hold (the errors of optical records, the exposure, the seeing and the catalogs) are not written. The date has the six decimals of the day, and a declination beyond 90 degrees cannot be written. The longitude of the second line of a roving observer is written as an unsigned number, so it must be given east-positive and positive (the latitude keeps its sign).
+
+The snippet packs and unpacks a set of designations, builds records from ADES-style input, writes them to the 80-column format and reads them back.
+
+```ts
+import { packMPCDesignation, parseADESObservation, parseMPC80, parseMPC80Lines, unpackMPCDesignation, writeMPC80, writeMPC80Lines } from 'nebulosa/src/adapters/orbits/mpc'
+import { timeToDate } from 'nebulosa/src/astronomy/time/time'
+import { toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
+import { toKilometer, toMeter } from 'nebulosa/src/math/units/distance'
+
+// Numbered minor planets: the zero-padded, the letter and the tilde forms.
+for (const value of ['433', '(433)', '1', '360000', '620000', '700000']) console.log(value, packMPCDesignation(value), unpackMPCDesignation(packMPCDesignation(value))) // 433 00433 433; (433) 00433 433; 1 00001 1; 360000 a0000 360000; 620000 ~0000 620000; 700000 ~0KoK 700000
+
+// Provisional designations, the old A-style year and the extended form for the high cycle counts.
+for (const value of ['2005 AB', '2024 YR4', '1995 XA', 'A908 CJ', '2020 AA100', '2000 SG344', '2025 AZ700']) console.log(value, packMPCDesignation(value), unpackMPCDesignation(packMPCDesignation(value))) // 2005 AB K05A00B 2005 AB; 2024 YR4 K24Y04R 2024 YR4; 1995 XA J95X00A 1995 XA; A908 CJ J08C00J A908 CJ; 2020 AA100 K20AA0A 2020 AA100; 2000 SG344 K00SY4G 2000 SG344; 2025 AZ700 _PA00We 2025 AZ700
+
+// Comets and their fragments, the satellites and the survey designations.
+for (const value of ['C/1995 O1', 'P/2010 A2', '73P/1930 J1-B', 'S/2004 N 1', '2040 P-L', '3138 T-1']) console.log(value, packMPCDesignation(value), unpackMPCDesignation(packMPCDesignation(value))) // C/1995 O1 CJ95O010 C/1995 O1; P/2010 A2 PK10A020 P/2010 A2; 73P/1930 J1-B 0073PJ30J01b 73P/1930 J1-B; S/2004 N 1 SK04N010 S/2004 N 1; 2040 P-L PLS2040 2040 P-L; 3138 T-1 T1S3138 3138 T-1
+
+// A packed designation is returned unchanged, and the packed forms read in the files unpack directly.
+console.log(packMPCDesignation('K24Y04R'), unpackMPCDesignation('K24Y04R'), unpackMPCDesignation('0001P'), unpackMPCDesignation('PLS2040'), unpackMPCDesignation('J95X00A'), unpackMPCDesignation('_PA0000')) // K24Y04R 2024 YR4 1P 2040 P-L 1995 XA 2025 AA620
+
+// Records from ADES-style input: an optical one with a discovery mark, another for a station, a satellite, a roving observer and a radar one.
+const eros = parseADESObservation({ obsType: 'optical', permID: '433', obsTime: '2024-03-05T10:20:30.250Z', ra: 123.456789, dec: -12.345678, mag: 17.4, band: 'V', stn: '568', disc: '*', ref: 'MPEC1' })
+const yr4 = parseADESObservation({ obsType: 'optical', provID: '2024 YR4', obsTime: '2024-03-05T10:25:30Z', ra: 10.5, dec: 20.25, stn: 'F51', prog: '3' })
+const satellite = parseADESObservation({ obsType: 'optical', provID: '2024 YR4', obsTime: '2024-03-05T10:25:30Z', ra: 10.5, dec: 20.25, stn: 'C51', sys: 'ICRF_KM', pos1: 1000000, pos2: -2000000, pos3: 300000 })
+const rover = parseADESObservation({ obsType: 'optical', provID: '2024 YR4', obsTime: '2024-03-05T10:25:30Z', ra: 10.5, dec: 20.25, stn: '247', sys: 'WGS84', pos1: 45.123456, pos2: -23.123456, pos3: 800 })
+const radar = parseADESObservation({ obsType: 'radar', permID: '99942', obsTime: '2024-03-05T10:20:30Z', stn: '251', delay: 1000, rmsDelay: 0.5, doppler: -10.5, rmsDoppler: 0.1, frq: 2380, trx: '251', rcv: '251', com: 'C' })
+const offset = parseADESObservation({ obsType: 'offset', permID: '1', obsTime: '2024-03-05T10:20:30Z', stn: '250', deltaRA: 0.001, deltaDec: -0.002 })
+const occultation = parseADESObservation({ obsType: 'occultation', permID: '1', obsTime: '2024-03-05T10:20:30Z', stn: '500', ra: 10, dec: 20 })
+
+// One record per call: the lines have 80 characters and the pairs are joined by an LF.
+for (const observation of [eros, yr4, satellite, rover, radar, offset, occultation])
+	console.log(
+		writeMPC80(observation)
+			.split('\n')
+			.map((line) => `${line.length}|${line}`),
+	) // [ '80|00433       * C2024 03 05.43090608 13 49.629-12 20 44.44         17.40VMPEC1 568' ]; [ '80|     K24Y04R 3C2024 03 05.43437500 42 00.000+20 15 00.00                     F51' ]; [ '80|     K24Y04R  S2024 03 05.43437500 42 00.000+20 15 00.00                     C51', '80|     K24Y04R  s2024 03 05.4343751 +1000000.00 -2000000.00  +300000.00        C51' ]; [ '80|     K24Y04R  V2024 03 05.43437500 42 00.000+20 15 00.00                     247', '80|     K24Y04R  v2024 03 05.4343751  45.123456 -23.123456   800                247' ]; [ '80|99942         R2024 03 05.430903000000010000000-00000000105000023800251      251', '80|99942         r2024 03 05.430903C00000000005000000000000001000      251      251' ]; [ '80|00001         O2024 03 05.43090300 00 00.240-00 00 07.20                     250' ]; [ '80|00001         E2024 03 05.43090300 40 00.000+20 00 00.00                     500' ]
+
+// A whole file, read back: the pairs become single records with the observer or the radar fields.
+const text = writeMPC80Lines([eros, yr4, satellite, rover, radar, offset, occultation])
+console.log(text.split('\n').length, text.endsWith('\n')) // 11 true
+const records = parseMPC80Lines(text)
+console.log(
+	records.length,
+	records.map((record) => record.type),
+) // 7 [ 'optical', 'optical', 'optical', 'optical', 'radar', 'offset', 'occultation' ]
+
+const [first, second, spacecraft, roving, echo, shifted, occulted] = records
+if (first.type === 'optical') console.log(first.permanentId, first.station, first.discovery, first.mode, first.reference, toDeg(first.rightAscension), toDeg(first.declination), first.magnitude, first.band, JSON.stringify(timeToDate(first.time))) // 433 568 true C MPEC1 123.45678749999999 -12.345677777777778 17.4 V [2024,3,5,10,20,30,278]
+console.log(second.provisionalId, second.programCode, second.station, second.discovery) // 2024 YR4 3 F51 undefined
+if (spacecraft.type === 'optical' && spacecraft.observer?.kind === 'spacecraft') console.log(spacecraft.observer.sys, spacecraft.observer.position.map(toKilometer), spacecraft.station) // ICRF_KM [ 1000000, -2000000, 300000 ] C51
+if (roving.type === 'optical' && roving.observer?.kind === 'geodetic') console.log(roving.observer.sys, toDeg(roving.observer.longitude), toDeg(roving.observer.latitude), toMeter(roving.observer.elevation)) // WGS84 45.123456 -23.123456 800
+if (echo.type === 'radar') console.log(echo.permanentId, echo.delay, echo.delayError, echo.doppler, echo.dopplerError, echo.transmitFrequency, echo.transmitterStation, echo.receiverStation, echo.bounce) // 99942 0.001 5e-7 -10.5 0.1 2380000000 251 251 com
+if (shifted.type === 'offset') console.log(toArcsec(shifted.deltaRightAscension), toArcsec(shifted.deltaDeclination)) // 3.5999999999999996 -7.2
+if (occulted.type === 'occultation') console.log(toDeg(occulted.rightAscension!), toDeg(occulted.declination!)) // 9.999999999999998 20
+
+// One line at a time, and the CRLF form of a file.
+console.log(parseMPC80(writeMPC80(yr4)).provisionalId, parseMPC80Lines(text.replaceAll('\n', '\r\n')).length) // 2024 YR4 7
+```
 
 ### SIMBAD Object Types
 
