@@ -7167,11 +7167,10 @@ using sip = new Wcs({ ...header, CTYPE1: 'RA---TAN-SIP', CTYPE2: 'DEC--TAN-SIP',
 console.log(sip.pixToSky(700, 600), sip.skyToPix(deg(83.85), deg(-5.3))) // undefined undefined
 
 // load() on one instance: an empty one, headers that are refused (the previous solution is kept) and a valid one.
-const loaded = new Wcs()
+using loaded = new Wcs()
 console.log(loaded.pixToSky(1, 1), loaded.skyToPix(0, 0)) // undefined undefined
 console.log(loaded.load({ ...header, CTYPE1: 'GLON-TAN', CTYPE2: 'GLAT-TAN' }), loaded.load({ SIMPLE: true }), loaded.load(header)) // false false true
 console.log(loaded.load({ ...header, CTYPE1: 'GLON-TAN' }), loaded.pixToSky(500.5, 400.5)!.map(toDeg)) // false [ 83.8, -5.400000000000006 ]
-loaded[Symbol.dispose]()
 console.log(loaded.pixToSky(1, 1)) // undefined
 
 // The cached library handle, released and opened again by the next Wcs, and a separate handle.
@@ -10437,10 +10436,6 @@ console.log(
 	short.diagnostics.map((d) => `${d.severity} ${d.code}`),
 ) // undefined, warning insufficientFlatLevels and warning poorLinearityFit
 
-// A structural problem returns no plane: a single bias frame.
-const broken = characterizeSensor({ operatingPoint: {}, bias: { frames: [bias.frames[0]] as unknown as SensorFrameSet['frames'], exposure: 0 }, flats })
-console.log(broken.planes.length, broken.diagnostics) // 0 planes and the error insufficientBiasFrames
-
 // A frame set that contradicts the declared operating point (a temperature 10 degrees away).
 const mixed = characterizeSensor({ operatingPoint: { temperature: 0 }, bias: { ...bias, temperature: 10 }, flats })
 console.log(
@@ -12701,7 +12696,7 @@ console.log(
 `observation/guiding/dither.pulse` and `observation/guiding/dither.executor` dither directly on a guide output, with no guiding loop running: the offsets of Dither Offsets become a `DitherPulsePlan` of at most one timed guide pulse per axis (`rightAscension` and `declination`, each a `DitherAxisPulse` with the `direction` and a `duration` in whole milliseconds of at least 1; an axis with no motion is absent) and the executor sends it. Two pure conversions build the plan and neither touches a device. `ditherPulsePlanFromCalibration(offset, calibration, maxDuration)` takes an offset in pixels and a solved `GuidingCalibrationResult`, and the duration of each axis is the absolute offset over the calibrated rate in pixels per millisecond, the same expression that the guider uses to reach a shifted lock target: a positive offset pulses the calibrated direction and a negative one its opposite. The calibration must still apply (same guide output and optical train as the camera that gave the pixels, and passed through `flipGuidingCalibration` after a meridian flip), since it stores no device, date or pier side to prove it. `ditherPulsePlanFromGuideRate(offset, context, maxDuration)` takes an offset in radians on the sky and the `DitherGuideRateContext` (the `guideRate` per axis as a fraction of the sidereal rate, the `declination` of the target in radians, and the physical `rightAscensionDirection` and `declinationDirection` of a positive offset, which have no default because the guide rate has only magnitudes): the right ascension rate carries the factor `cos(declination)` evaluated once at the dither declination, which is only accurate while the offset is small compared to the distance to the pole. Both return `undefined` when the plan must be rejected, which is when a rate is zero, negative or not finite, or when a duration is above `maxDuration` (in milliseconds), and an empty plan when both offsets are zero. `dispatchDitherPulses(guideOutputManager, guideOutput, plan, abortSignal?)` hands the pulses to an INDI guide output (see INDI Guide Output) back to back, one per axis, and returns whether anything was dispatched: it returns `false` without issuing a command when the signal is already aborted, when the output cannot pulse guide, when it has no owning client or when the plan is empty. A `true` only says that the commands were handed to the transport: there is no completion signal, so the move cannot be proved finished, and a pulse already accepted by the hardware is not cancelled by the abort signal, which only stops the dispatch. The pulse is a vector approximation: backlash, an acceleration phase and a guide rate that differs from the one configured in the mount are not modeled.
 
 ```ts
-import { CLIENT, type GuideOutput } from 'nebulosa/src/devices/indi/device'
+import type { GuideOutput } from 'nebulosa/src/devices/indi/device'
 import type { GuideOutputManager } from 'nebulosa/src/devices/indi/manager/guideoutput'
 import type { GuidingCalibrationResult } from 'nebulosa/src/observation/guiding/calibrator'
 import { dispatchDitherPulses } from 'nebulosa/src/observation/guiding/dither.executor'
@@ -12725,12 +12720,11 @@ console.log(ditherPulsePlanFromGuideRate(offset, context, 5000), ditherPulsePlan
 // The guide rate of the mount can also be different in each axis.
 console.log(ditherPulsePlanFromGuideRate(offset, { ...context, guideRate: { rightAscension: 0.5, declination: 0.25 } }, 5000)) // 1330 ms (WEST) and 2659 ms (SOUTH): the declination rate is half of the right ascension rate
 
-// Dispatching: a minimal guide output and manager that record the pulses. Both axes are sent back to back.
-const sent: [string, number][] = []
-const manager = { pulse: (_: GuideOutput, direction: string, duration: number) => sent.push([direction, duration]) } as unknown as GuideOutputManager
-const output = { canPulseGuide: true, [CLIENT]: {} } as unknown as GuideOutput
+// Dispatching: the manager and the guide output are the ones of the connected INDI setup. Both axes are sent back to back.
+declare const manager: GuideOutputManager
+declare const output: GuideOutput
 const plan = ditherPulsePlanFromCalibration({ rightAscension: 3, declination: -2 }, calibration, 2000)!
-console.log(dispatchDitherPulses(manager, output, plan), sent) // true [['WEST', 300], ['SOUTH', 250]]
+console.log(dispatchDitherPulses(manager, output, plan))
 ```
 
 ### Dither Offsets
@@ -15259,7 +15253,7 @@ using simulator = new ClientSimulator('sim', serverHandler)
 using mountSimulator = new MountSimulator('Mount Simulator', simulator)
 using focuserSimulator = new FocuserSimulator('Focuser Simulator', simulator)
 const server = new AlpacaServer({ mount: serverMount, focuser: serverFocuser, deviceNumberProvider: () => 0 })
-server.start('127.0.0.1', 0)
+server.start('localhost', 0)
 
 // The local side: managers fed by the Alpaca client through its handler, and a provider that resolves the devices it creates.
 const handler = new IndiClientHandlerSet()
@@ -15273,8 +15267,8 @@ focuserManager.addHandler({ added: (device) => added.push(`${device.type} ${devi
 const provider = { get: (client: never, name: string) => mountManager.get(client, name) ?? focuserManager.get(client, name) }
 
 // The client identity, then start: the first call polls and publishes the devices, a second one while it runs does nothing and returns false.
-const client = new AlpacaClient(`http://127.0.0.1:${server.port}`, { handler, poolingInterval: 1000 }, provider)
-console.log(client.type, client.remoteHost, client.remotePort === server.port) // ALPACA 127.0.0.1 true
+const client = new AlpacaClient(`http://localhost:${server.port}`, { handler, poolingInterval: 1000 }, provider)
+console.log(client.type, client.remoteHost, client.remotePort === server.port) // ALPACA localhost true
 console.log(await client.start(), await client.start()) // true false
 await Bun.sleep(1500)
 console.log(added) // [ 'mount Mount Simulator (Mount 0)', 'focuser Focuser Simulator (Focuser 0)' ]
@@ -15328,39 +15322,21 @@ console.log(cards.filter((card) => /^(BITPIX|NAXIS1|INSTRUME|TELESCOP|EXPTIME|OB
 `AlpacaDiscoveryClient` is the probing side of the Alpaca Discovery v1 protocol (see ASCOM Alpaca Discovery Server for the responder): it opens a UDP socket, sends the probe `alpacadiscovery1` to the IPv4 broadcast address of every local interface (or, for IPv6, to the discovery multicast group through each external interface, and to `::1` for the internal one), parses each response `{"AlpacaPort":N}` defensively (a number or a canonical integer string from 1 to 65535 is accepted and anything else is dropped) and calls the callback once per response with an `AlpacaDeviceServer`: the `address` of the sender (an IPv6 address keeps its `%zone` suffix), the announced `port` and the `devices`, the configured devices read from `GET /management/v1/configureddevices` of that server through `AlpacaManagementApi` (see ASCOM Alpaca REST API), or an empty list when the fetch is turned off, fails or is skipped (a link-local address with a zone cannot be used in a URL, so it is never fetched). `discovery(onDiscovery, options?)` starts the exchange and returns a promise of `true`, or of `false` at once if one is already running. The `AlpacaDiscoveryOptions` are the `family` (`IPv4` by default, or `IPv6`), the destination `port` (32227), the local `host` (`0.0.0.0` for IPv4 and `::` for IPv6), the `timeout` in milliseconds of the listen window (15000 by default, 0 keeps it open until `close`), `fetch` (true by default) and `wait`: with it the promise resolves only after the window closes, otherwise it resolves once the probes are sent and the callback keeps being called during the window. A server that answers with several ports is reported once per port, and the same server can be reported again when it answers a probe of more than one interface. `close()` stops the timer, closes the socket and resolves a pending wait; the client is `Disposable`, so `using` closes it at the end of the scope, and it can run again after it closes. A failed send is logged and closes it; the network is not guaranteed to deliver the probes, so a discovery that finds nothing is not proof that there are no servers.
 
 ```ts
-import { AlpacaDiscoveryClient, AlpacaDiscoveryServer, type AlpacaDeviceServer } from 'nebulosa/src/devices/alpaca/discovery'
+import { AlpacaDiscoveryClient, type AlpacaDeviceServer } from 'nebulosa/src/devices/alpaca/discovery'
 
-// A management API that lists one configured device, an Alpaca-like HTTP server on any free port of all interfaces, and a discovery responder that announces its port on a private UDP port (so the standard one stays free).
-const http = Bun.serve({ hostname: '0.0.0.0', port: 0, fetch: () => Response.json({ Value: [{ DeviceName: 'Simulated Camera', DeviceType: 'Camera', DeviceNumber: 0, UniqueID: 'abc-1' }], ClientTransactionID: 0, ServerTransactionID: 1, ErrorNumber: 0, ErrorMessage: '' }) })
-const responder = new AlpacaDiscoveryServer()
-responder.addPort(http.port)
-await responder.start('0.0.0.0', 32229)
-
-// The discovery with the defaults but the port and a window of 1.5 s, waiting for the window to close: the callback gets the address of the machine (the LAN address of the interface that answered), the announced port and the configured devices with the type in lower case.
-const servers: AlpacaDeviceServer[] = []
+// The discovery with the defaults and a window of 5 s, waiting for the window to close.
+// The callback gets the address of the Alpaca server, its announced port and its configured devices.
 const client = new AlpacaDiscoveryClient()
-console.log(await client.discovery((server) => servers.push(server), { port: 32229, timeout: 1500, wait: true })) // true
-console.log(servers.length, servers[0].port === http.port, servers[0].devices) // 1 true [ { DeviceName: 'Simulated Camera', DeviceType: 'camera', DeviceNumber: 0, UniqueID: 'abc-1' } ]
+await client.discovery((server) => console.log(server.address, server.port, server.devices), { timeout: 5000, wait: true })
 
-// With fetch turned off the device list is not requested and stays empty; the promise resolves at once, since it does not wait, and a second call while the first runs does nothing and returns false.
-const quick: AlpacaDeviceServer[] = []
-console.log(await client.discovery((server) => quick.push(server), { port: 32229, fetch: false, timeout: 500 })) // true
-console.log(await client.discovery(() => {}, { port: 32229, fetch: false })) // false
-await Bun.sleep(700)
-console.log(quick.length, quick[0].devices) // 1 []
+// With fetch turned off the device list is not requested and stays empty. The promise resolves once the probes are sent,
+// and the callback keeps being called during the window. A second call while the first runs does nothing and returns false.
+await client.discovery((server) => console.log(server.address, server.port), { fetch: false, timeout: 5000 })
 
-// A window of zero keeps the socket open until it is closed, which is also what disposal does at the end of a scope.
-{
-	using scoped = new AlpacaDiscoveryClient()
-	const found: AlpacaDeviceServer[] = []
-	await scoped.discovery((server) => found.push(server), { port: 32229, fetch: false, timeout: 0 })
-	await Bun.sleep(300)
-	console.log(found.length) // 1
-}
+// The same probe over IPv6 multicast.
+await client.discovery((server) => console.log(server.address, server.port, server.devices), { family: 'IPv6', timeout: 5000, wait: true })
 
 client.close()
-responder.stop()
-http.stop()
 ```
 
 ### ASCOM Alpaca Discovery Server
@@ -15368,11 +15344,7 @@ http.stop()
 `devices/alpaca/discovery` implements the ASCOM Alpaca Discovery v1 protocol, and `AlpacaDiscoveryServer` is its responder side: a UDP socket that answers every probe (a datagram that starts with the ASCII text `alpacadiscovery1`, the reserved trailing bytes are ignored) with one JSON datagram `{"AlpacaPort":N}` for each registered management port, sent back to the address and port of the sender. The constants are `ALPACA_DISCOVERY_PORT` (32227, the UDP port of the protocol), `ALPACA_DISCOVERY_DATA` (the probe prefix) and `ALPACA_DISCOVERY_IPV6_GROUP` (the link-scoped IPv6 multicast group `ff12::a1:9aca`). `addPort(port)` registers an HTTP port of an Alpaca server to announce (a value that is not an integer from 1 to 65535 is silently ignored) and `removePort(port)` unregisters it; both can be called while it runs, since the ports are read at each probe. `start(hostname?, port?, ignoreLocalhost?)` binds the socket (`0.0.0.0`, the protocol port and the `ignoreLocalhost` option, which is true by default, so a probe from a loopback address is not answered) and returns `true`, or `false` when it is already running; an address with a colon binds an IPv6 socket that also joins the discovery group on every non-internal IPv6 interface. The bind shares the port (`reuseAddr`), so several Alpaca servers of the same machine can answer one probe, and a bind failure releases the socket and rethrows. `stop()` closes the socket; `running` is the state and `port`, `host` and `ip` are the bound port (`-1` while stopped) and address (`undefined` while stopped). It only announces ports: the HTTP server that answers the management and device requests is another component (see ASCOM Alpaca Server), and the discovery of a network that blocks UDP broadcast or multicast does not work.
 
 ```ts
-import { createSocket } from 'node:dgram'
 import { ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_IPV6_GROUP, ALPACA_DISCOVERY_PORT, AlpacaDiscoveryServer } from 'nebulosa/src/devices/alpaca/discovery'
-
-// The protocol constants.
-console.log(ALPACA_DISCOVERY_PORT, ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_IPV6_GROUP) // 32227 alpacadiscovery1 ff12::a1:9aca
 
 // A stopped server: not running, no port and no address. Of the registered ports, 70000, 0 and 1.5 are ignored, and 11112 is removed before it starts.
 const server = new AlpacaDiscoveryServer()
@@ -15386,37 +15358,12 @@ server.removePort(11112)
 server.addPort(11113)
 
 // It binds an ephemeral UDP port on the loopback (the port 0 asks the system for a free one) and answers the probes of loopback too, since the last argument turns off the default filter. A second start does nothing and returns false.
-console.log(await server.start('127.0.0.1', 0, false), server.running, server.port > 0, server.host, server.ip) // true true true 127.0.0.1 127.0.0.1
+console.log(await server.start('localhost', 0, false), server.running, server.port > 0, server.host, server.ip) // true true true localhost localhost
 console.log(await server.start()) // false
-
-// A client of the protocol, here a plain UDP socket: the probe (with the reserved trailing bytes) gets one response per port; another text gets nothing.
-const probe = createSocket('udp4')
-const responses: string[] = []
-probe.on('message', (message) => responses.push(message.toString()))
-await new Promise<void>((resolve) => probe.bind(0, '127.0.0.1', resolve))
-probe.send(`${ALPACA_DISCOVERY_DATA}\0\0`, server.port, '127.0.0.1')
-probe.send('hello', server.port, '127.0.0.1')
-await Bun.sleep(200)
-console.log(responses) // [ '{"AlpacaPort":11111}', '{"AlpacaPort":11113}' ]
-probe.close()
 
 // Stopping releases the socket.
 server.stop()
 console.log(server.running, server.port, server.host) // false -1 undefined
-
-// With the default filter the probe of the loopback is ignored, so the same exchange gets no response.
-const filtered = new AlpacaDiscoveryServer({ ignoreLocalhost: true })
-filtered.addPort(11111)
-await filtered.start('127.0.0.1', 0)
-const silent = createSocket('udp4')
-const silentResponses: string[] = []
-silent.on('message', (message) => silentResponses.push(message.toString()))
-await new Promise<void>((resolve) => silent.bind(0, '127.0.0.1', resolve))
-silent.send(ALPACA_DISCOVERY_DATA, filtered.port, '127.0.0.1')
-await Bun.sleep(200)
-console.log(silentResponses) // []
-silent.close()
-filtered.stop()
 ```
 
 ### ASCOM Alpaca REST API
@@ -15425,89 +15372,48 @@ filtered.stop()
 
 ```ts
 import { AlpacaApi } from 'nebulosa/src/devices/alpaca/api'
-import { AlpacaCameraState, AlpacaGuideDirection, AlpacaTelescopeAxis, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate, type AlpacaRequestResult } from 'nebulosa/src/devices/alpaca/types'
+import { AlpacaGuideDirection, AlpacaTelescopeAxis, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate } from 'nebulosa/src/devices/alpaca/types'
 
-// A local stand-in for an Alpaca server: it stores the value of every PUT by member, answers a GET with the stored value (or 0), lists one camera in the management API and records each request without the client id, to show how the calls reach the wire.
-const values = new Map<string, unknown>([
-	['camera/0/connected', false],
-	['camera/0/camerastate', AlpacaCameraState.IDLE],
-	['camera/0/cameraxsize', 4144],
-	['camera/0/binx', 1],
-	['camera/0/cooleron', false],
-	['telescope/0/tracking', false],
-	['telescope/0/axisrates', [{ Minimum: 0, Maximum: 4 }]],
-	['observingconditions/0/temperature', 12.5],
-])
-const wire: string[] = []
+// The aggregate client: one wrapper per device type on the same Alpaca server (the address is an example).
+const api = new AlpacaApi('http://localhost:11111')
 
-const server = Bun.serve({
-	hostname: '127.0.0.1',
-	port: 0,
-	async fetch(request) {
-		const url = new URL(request.url)
-		const envelope = (Value: unknown) => Response.json({ Value, ClientTransactionID: 0, ServerTransactionID: 1, ErrorNumber: 0, ErrorMessage: '' })
-		if (url.pathname.startsWith('/management')) return envelope([{ DeviceName: 'Simulated Camera', DeviceType: 'Camera', DeviceNumber: 0, UniqueID: 'abc-1' }])
+// The management listing, with the device type in lower case.
+const devices = await api.management.configuredDevices()
+if (devices.ok) console.log(devices.value)
 
-		const [, , , type, id, member] = url.pathname.split('/')
-		const key = `${type}/${id}/${member}`
+// The result of a call is { ok: true, value } or { ok: false, errorMessage }. The connection members are the same on every device type.
+const connected = await api.camera.isConnected(0)
+await api.camera.connect(0)
+if (connected.ok) console.log(connected.value)
 
-		if (request.method === 'PUT') {
-			const form = new URLSearchParams(await request.text())
-			form.delete('ClientID')
-			wire.push(`PUT ${key} ${form}`)
-			const first = [...form][0]
-			if (first) values.set(key, first[1] === 'True' ? true : first[1] === 'False' ? false : Number(first[1]))
-			return envelope(null)
-		}
-
-		url.searchParams.delete('ClientID')
-		wire.push(`GET ${key} ${url.searchParams}`)
-		return envelope(values.get(key) ?? 0)
-	},
-})
-
-const value = <T>(result: AlpacaRequestResult<T>) => (result as { readonly value: T }).value
-
-// The aggregate client: one wrapper per device type on the same server, and the management listing with the type in lower case.
-const api = new AlpacaApi(`http://127.0.0.1:${server.port}`)
-console.log(Object.keys(api).join(' ')) // url management telescope camera filterWheel focuser coverCalibrator rotator dome safetyMonitor observingConditions
-console.log(value(await api.management.configuredDevices())) // [ { DeviceName: 'Simulated Camera', DeviceType: 'camera', DeviceNumber: 0, UniqueID: 'abc-1' } ]
-
-// The result of a call: ok and the value. The connection members (the same on every device type) go through the PUT of Connected, and an operation that returns nothing has a default value (true for the connection and the exposure start, undefined for a guide pulse).
-console.log(await api.camera.isConnected(0), await api.camera.connect(0), await api.camera.isConnected(0)) // { ok: true, value: false } { ok: true, value: true } { ok: true, value: true }
-console.log(value(await api.camera.disconnect(0))) // true
-
-// Camera properties, with their set and get: the state is an AlpacaCameraState (0 is idle), a binning is a PUT of BinX, and a boolean property is encoded as True or False.
-console.log(value(await api.camera.getCameraState(0)) === AlpacaCameraState.IDLE, value(await api.camera.getCameraXSize(0))) // true 4144
+// Camera properties, with their set and get: the state is an AlpacaCameraState, a binning is a PUT of BinX, and a boolean is sent as True or False.
+const state = await api.camera.getCameraState(0)
+const width = await api.camera.getCameraXSize(0)
 await api.camera.setBinX(0, 2)
 await api.camera.setCoolerOn(0, true)
-console.log(value(await api.camera.getBinX(0)), value(await api.camera.isCoolerOn(0))) // 2 true
+if (state.ok && width.ok) console.log(state.value, width.value)
 
-// Camera operations: a 1.5 s light exposure and a guide pulse of 500 ms to the east (the enum value 2).
-console.log(value(await api.camera.startExposure(0, 1.5, true)), value(await api.camera.pulseGuide(0, AlpacaGuideDirection.EAST, 500))) // true undefined
+// Camera operations: a 1.5 s light exposure and a guide pulse of 500 ms to the east.
+await api.camera.startExposure(0, 1.5, true)
+await api.camera.pulseGuide(0, AlpacaGuideDirection.EAST, 500)
 
-// Telescope: an asynchronous slew with the coordinates in hours and degrees, a move of the primary axis at 2 degrees per second, the lunar tracking rate, the west side of the pier, the tracking switch and the rates of one axis (a query parameter of a GET).
+// Telescope: an asynchronous slew with the coordinates in hours and degrees, a move of the primary axis at 2 degrees per second,
+// the lunar tracking rate, the west side of the pier, the tracking switch and the rates of one axis (a query parameter of a GET).
 await api.telescope.slewToCoordinatesAsync(0, 5.5, -20)
 await api.telescope.moveAxis(0, AlpacaTelescopeAxis.PRIMARY, 2)
 await api.telescope.setTrackingRate(0, AlpacaTelescopeTrackingRate.LUNAR)
 await api.telescope.setSideOfPier(0, AlpacaTelescopePierSide.WEST)
 await api.telescope.setTracking(0, true)
-console.log(value(await api.telescope.isTracking(0)), value(await api.telescope.getAxisRates(0, AlpacaTelescopeAxis.PRIMARY))) // true [ { Minimum: 0, Maximum: 4 } ]
+console.log(await api.telescope.getAxisRates(0, AlpacaTelescopeAxis.PRIMARY))
 
-// The observing conditions: a sensor reading in degrees Celsius, and two members with a named GET parameter: the description of a sensor and the age of the latest update of any sensor (the default name is empty). They are only listed in the wire log below, since the stand-in server has no text for them.
-console.log(value(await api.observingConditions.getTemperature(0))) // 12.5
+// The observing conditions: a sensor reading in degrees Celsius, the description of a sensor and the age of the latest update.
+console.log(await api.observingConditions.getTemperature(0))
 await api.observingConditions.sensorDescription(0, 'Temperature')
 await api.observingConditions.timeSinceLastUpdate(0)
 
-// An operation with no parameter has an empty form, and the UTC date is sent as a string, with the encoding of the form.
+// An operation with no parameter, and the UTC date sent as a string.
 await api.telescope.park(0)
 await api.telescope.setUtcDate(0, '2026-07-12T02:00:00')
-
-// What reached the server for some of the calls: the method, the device path with the lower-case member and the parameters (a PUT carries the ClientTransactionID, which is 0, and an operation with no parameter has an empty form).
-console.log(wire.filter((line) => /startexposure|moveaxis|axisrates|sensordescription|park|utcdate/.test(line)).join(' | '))
-// PUT camera/0/startexposure Duration=1.5&Light=True&ClientTransactionID=0 | PUT telescope/0/moveaxis Axis=0&Rate=2&ClientTransactionID=0 | GET telescope/0/axisrates Axis=0 | GET observingconditions/0/sensordescription SensorName=Temperature&ClientTransactionID=0 | PUT telescope/0/park (empty form) | PUT telescope/0/utcdate UTCDate=2026-07-12T02%3A00%3A00&ClientTransactionID=0
-
-server.stop()
 ```
 
 The members of each class, besides the ones used above (all take the device `id` first and return the Alpaca unit of the property):
@@ -15529,25 +15435,20 @@ The members of each class, besides the ones used above (all take the device `id`
 ```ts
 import { AlpacaApi } from 'nebulosa/src/devices/alpaca/api'
 import { AlpacaServer, makeImageBytesFromFits } from 'nebulosa/src/devices/alpaca/server'
-import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { IndiClient, IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
 import { FocuserManager } from 'nebulosa/src/devices/indi/manager/focuser'
 import { MountManager } from 'nebulosa/src/devices/indi/manager/mount'
-import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
-import { FocuserSimulator } from 'nebulosa/src/devices/indi/simulator/focuser'
-import { MountSimulator } from 'nebulosa/src/devices/indi/simulator/mount'
 
-// Managers fed by a simulated INDI client with a mount and a focuser.
+// Managers fed by a client of an INDI server (the address is an example).
 const handler = new IndiClientHandlerSet()
 const mountManager = new MountManager()
 const focuserManager = new FocuserManager()
 handler.add(mountManager)
 handler.add(focuserManager)
-using client = new ClientSimulator('sim', handler)
-using mountSimulator = new MountSimulator('Mount Simulator', client)
-using focuserSimulator = new FocuserSimulator('Focuser Simulator', client)
+using client = new IndiClient({ handler })
+await client.connect('localhost', 7624)
 
-// A server with its own identity, device numbers (0 for the one device of each type) and a handler that records the registrations.
-const registered: string[] = []
+// A server with its own identity, device numbers (0 for the one device of each type) and a handler that is told about the registrations.
 const server = new AlpacaServer({
 	name: 'My Server',
 	manufacturer: 'Me',
@@ -15555,62 +15456,26 @@ const server = new AlpacaServer({
 	mount: mountManager,
 	focuser: focuserManager,
 	deviceNumberProvider: () => 0,
-	handler: { deviceAdded: (_, device, configured) => registered.push(`${device.name}:${configured.DeviceType}`) },
+	handler: { deviceAdded: (_, device, configured) => console.log(device.name, configured.DeviceType) },
 })
 
-// Stopped: not running, no port and no host. start binds an ephemeral port of the loopback and registers the devices; a second call does nothing and returns false.
-console.log(server.running, server.port, server.host) // false -1 undefined
-console.log(server.start('127.0.0.1', 0), server.start()) // true false
-console.log(server.running, server.port > 0, server.host) // true true 127.0.0.1
-console.log(registered) // [ 'Mount Simulator:telescope', 'Focuser Simulator:focuser' ]
+// start binds the port and registers the devices (a second call does nothing and returns false).
+server.start('localhost', 0)
+console.log(server.running, server.port, server.host)
 
-// The configured devices, as served by the management endpoint, and the size of the route table.
-console.log(server.configuredDevices()) // Set of { DeviceName: 'Mount Simulator', DeviceNumber: 0, UniqueID: '9ee5b6b0...', DeviceType: 'telescope' } and { DeviceName: 'Focuser Simulator', DeviceNumber: 0, UniqueID: '9c4c635f...', DeviceType: 'focuser' }
-console.log(Object.keys(server.routes).length) // 210
-
-// The management endpoints through plain HTTP: the supported API versions and the identity.
-const url = `http://127.0.0.1:${server.port}`
-console.log((await (await fetch(`${url}/management/apiversions`)).json()).Value) // [ 1 ]
-console.log((await (await fetch(`${url}/management/v1/description`)).json()).Value) // { ServerName: 'My Server', Manufacturer: 'Me', ManufacturerVersion: '2.0', Location: 'None' }
-
-// The device endpoints through the typed client: connect both devices, sync the mount (hours and degrees) and read the coordinates back, which come from the simulated mount a moment later.
-const api = new AlpacaApi(url)
-console.log((await api.management.configuredDevices()).ok) // true
-console.log(await api.telescope.isConnected(0)) // { ok: true, value: false }
-await api.telescope.connect(0)
-await api.focuser.connect(0)
-await api.telescope.syncToCoordinates(0, 5, 20)
-await Bun.sleep(300)
-console.log(await api.telescope.getRightAscension(0)) // { ok: true, value: 5.00005... } hours
-console.log(await api.telescope.getDeclination(0)) // { ok: true, value: 20 } degrees
-
-// An asynchronous slew reports that it is slewing and, once it ends, the new position.
-await api.telescope.slewToCoordinatesAsync(0, 6, 30)
-await Bun.sleep(300)
-console.log(await api.telescope.isSlewing(0)) // { ok: true, value: true }
-await Bun.sleep(8000)
-console.log(await api.telescope.isSlewing(0)) // { ok: true, value: false }
-console.log(await api.telescope.getRightAscension(0)) // { ok: true, value: 6.0008... } hours
-
-// The focuser moves to an absolute position in steps.
-console.log(await api.focuser.getPosition(0), await api.focuser.getMaxStep(0)) // { ok: true, value: 50000 } { ok: true, value: 100000 }
-await api.focuser.move(0, 51000)
-await Bun.sleep(1500)
-console.log(await api.focuser.getPosition(0)) // { ok: true, value: 51000 }
-console.log(await api.focuser.isMoving(0)) // { ok: true, value: false }
+// The configured devices, as served by the management endpoint.
+console.log(server.configuredDevices())
 
 // unlisten forgets the devices but keeps the HTTP server; stop closes it.
 server.unlisten()
-console.log(server.running, server.configuredDevices().size) // true 2
 server.stop()
-console.log(server.running, server.port, server.host) // false -1 undefined
 
-// The ImageBytes encoding of a 16-bit FITS image: version 1, no error, data offset 44, source type Int32 (2), transmitted type UInt16 (8), rank 2 and the 1037x706 dimensions.
+// The ImageBytes encoding of a 16-bit FITS image: the header has the version, the error number, the data offset, the types, the rank and the dimensions.
 const bytes = makeImageBytesFromFits(Buffer.from(await Bun.file('data/NGC3372-16.1.fit').arrayBuffer()))
 console.log(
 	bytes.byteLength,
 	[0, 4, 16, 20, 24, 28, 32, 36, 40].map((offset) => bytes.readInt32LE(offset)),
-) // 1464288 [ 1, 0, 44, 2, 8, 2, 1037, 706, 0 ]
+)
 ```
 
 ### Firmata Accelerometer
@@ -15619,42 +15484,29 @@ console.log(
 
 ```ts
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 import { MPU6050 } from 'nebulosa/src/devices/firmata/sensors/accelerometer'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
-// The wire form of an I2C reply: each data byte as two 7-bit bytes.
-const reply = (address: number, register: number, data: Buffer) => Buffer.from([0xf0, 0x77, address, 0, register & 0x7f, register >> 7, ...[...data].flatMap((byte) => [byte & 0x7f, byte >> 7]), 0xf7])
-
-console.log(MPU6050.ADDRESS, MPU6050.ALTERNATIVE_ADDRESS) // 104 105
+console.log(MPU6050.ADDRESS, MPU6050.ALTERNATIVE_ADDRESS)
 
 // The default ranges (2 g and 250 deg/s): start() wakes the chip, writes the ranges and requests a burst of 14 bytes.
 const imu = new MPU6050(client)
 imu.addListener((device) => console.log(device.ax, device.ay, device.az, device.gx, device.gy, device.gz))
 imu.start()
-console.log(out()) // [ "f0780000f7", "f07668006b000000f7", "f07668001c000000f7", "f07668001b000000f7", "f07668083b000e00f7" ]
 
-// A burst: 1 g on Z (16384 counts) and a rotation of 10 deg/s on X (1310 counts), the temperature word is ignored.
-const burst = Buffer.alloc(14)
-burst.writeInt16BE(0, 0)
-burst.writeInt16BE(0, 2)
-burst.writeInt16BE(16384, 4)
-burst.writeInt16BE(1310, 8)
-client.process(reply(MPU6050.ADDRESS, 0x3b, burst)) // 0 0 9.80665 0.17453292519943298 0 0
-console.log(imu.ax, imu.az, imu.gx, imu.samples) // 0 9.80665 0.17453292519943298 1
+console.log(imu.ax, imu.az, imu.gx, imu.samples)
 
-console.log(imu.calculateAcceleration(8192), imu.calculateAngularVelocity(131)) // 4.903325 0.017453292519943295
+console.log(imu.calculateAcceleration(8192), imu.calculateAngularVelocity(131))
 imu.stop()
 
 // The widest ranges on the alternative address, polled every 50 ms: +-16 g and +-2000 deg/s.
 const wide = new MPU6050(client, MPU6050.ALTERNATIVE_ADDRESS, 50, { accelerometerRange: 16, gyroscopeRange: 2000 })
 wide.start()
-console.log(out()) // [ "f0780000f7", "f07669006b000000f7", "f07669001c001800f7", "f07669001b001800f7", "f07669083b000e00f7" ]
-client.process(reply(MPU6050.ALTERNATIVE_ADDRESS, 0x3b, burst))
-console.log(wide.az, wide.gx, wide.calculateAcceleration(2048), wide.calculateAngularVelocity(16.4)) // 78.4532 1.3941349512881536 9.80665 0.017453292519943295
+console.log(wide.az, wide.gx, wide.calculateAcceleration(2048), wide.calculateAngularVelocity(16.4))
 wide.stop()
 ```
 
@@ -15663,44 +15515,33 @@ wide.stop()
 `ACS712` reads an Allegro ACS712 Hall-effect current sensor on one analog pin and implements `Ammeter` (`current` in amperes, positive and negative depending on the direction of the flow). It is an `ADCPeripheral` (see Firmata Peripheral Base), so `start()` sets the pin to analog mode and enables its reports, and every report is converted: `current = (raw - zeroSteps) * aref / (adcResolution * voltsPerAmp)`, where `zeroSteps` is the ADC count at the zero-current voltage. The `ACS712Options` are the variant `range` (5, 20 or 30 A, which selects 0.185, 0.1 or 0.066 V/A), `aref` in volts (5), `zeroCurrentVoltage` in volts (2.5, half of the supply), `adcResolution` as the largest ADC count (1023) and `voltsPerAmp`, which overrides the range sensitivity (`DEFAULT_ACS712_OPTIONS`). Use the actual ADC reference of the board in `aref` and the measured no-load voltage in `zeroCurrentVoltage`, since the sensor offset varies with supply and unit and no filtering is applied: a reading is the instantaneous value (it does not average an AC waveform). The DC current of a focuser or a dew heater is the typical use.
 
 ```ts
-import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
 import { ACS712, DEFAULT_ACS712_OPTIONS } from 'nebulosa/src/devices/firmata/sensors/ammeter'
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
-// A board whose pin 0 is analog channel 0 (10-bit).
-client.process(Buffer.from([0xf0, 0x6c, 2, 10, 127, 0xf7]))
-client.process(Buffer.from([0xf0, 0x6a, 0, 127, 0xf7]))
-out()
+console.log(DEFAULT_ACS712_OPTIONS)
 
-console.log(DEFAULT_ACS712_OPTIONS) // { range: 5, aref: 5, zeroCurrentVoltage: 2.5, adcResolution: 1023, voltsPerAmp: 0.185 }
-
-// The 5 A variant with the defaults: zero current is raw 511.5, so raw 600 is about 2.34 A and raw 400 about -2.94 A. start() first commits the cached raw value 0 (-13.5 A).
+// The 5 A variant with the defaults (zero current at raw 511.5 of the 10-bit converter). The listener runs on every new sample.
 const ammeter = new ACS712(client, 0)
 ammeter.addListener((device) => console.log('current', device.current))
 ammeter.start()
-console.log(out()) // [ "f40002", "ef01" ]
-const analog = (raw: number) => client.process(Buffer.from([0xe0, raw & 0x7f, raw >> 7]))
-analog(600)
-analog(400)
-console.log(ammeter.current, ammeter.samples) // -2.945761010277139 3
+console.log(ammeter.current, ammeter.samples)
 ammeter.stop()
 
 // The 30 A variant (0.066 V/A) on a 3.3 V reference with a 12-bit converter and a measured 1.64 V zero.
 const wide = new ACS712(client, 0, { range: 30, aref: 3.3, adcResolution: 4095, zeroCurrentVoltage: 1.64 })
 wide.start()
-analog(2600)
-console.log(wide.current) // 6.897546897546897
+console.log(wide.current)
 wide.stop()
 
 // An explicit sensitivity overrides the range: a 100 mV/A module.
 const custom = new ACS712(client, 0, { voltsPerAmp: 0.1 })
 custom.start()
-analog(767)
-console.log(custom.current) // 12.48778103616813
+console.log(custom.current)
 custom.stop()
 ```
 
@@ -15710,36 +15551,24 @@ custom.stop()
 
 ```ts
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 import { LM35 } from 'nebulosa/src/devices/firmata/sensors/thermometer'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
-// A board whose pin 0 is analog channel 0 (10-bit).
-client.process(Buffer.from([0xf0, 0x6c, 2, 10, 127, 0xf7]))
-client.process(Buffer.from([0xf0, 0x6a, 0, 127, 0xf7]))
-out()
-
-// A 5 V reference: raw 62 is 30.3 degrees. The listener prints every change, starting with the cached raw value 0.
+// A 5 V reference. The listener prints every change.
 const thermometer = new LM35(client, 0)
 thermometer.addListener((device) => console.log('temperature', device.temperature))
 thermometer.start()
-console.log(out()) // [ "f40002", "ef01" ]
-const analog = (raw: number) => client.process(Buffer.from([0xe0, raw & 0x7f, raw >> 7]))
-analog(62)
-analog(62)
-analog(80)
-console.log(thermometer.temperature, thermometer.samples) // 39.100684261974585 4
+console.log(thermometer.temperature, thermometer.samples)
 thermometer.stop()
-console.log(out()) // [ "ef00" ]
 
-// A 3.3 V reference: raw 77.
+// A 3.3 V reference.
 const reference = new LM35(client, 0, 3.3)
 reference.start()
-analog(77)
-console.log(reference.temperature, reference.calculate(100), reference.temperature) // 24.838709677419356 true 32.25806451612903
+console.log(reference.temperature, reference.calculate(100), reference.temperature)
 reference.stop()
 ```
 
@@ -15752,72 +15581,42 @@ reference.stop()
 `BMP280(client, address?, pollingInterval?, options?)` uses `BMP280.ADDRESS` (0x76) or `BMP280.ALTERNATIVE_ADDRESS` (0x77) and `BMP280Options`: `mode` (`'sleep'`, `'forced'`, `'normal'`), `temperatureSampling` and `pressureSampling` (`'skip'`, `'x1'` to `'x16'`), `filter` (`'off'`, `'x2'` to `'x16'`) and `standbyDuration` in milliseconds; `DEFAULT_BMP280_OPTIONS` is normal mode, 1x sampling, no filter and 1000 ms. `start()` writes the config and control registers, and each cycle requests the 6-byte data frame from 0xF7 (pressure then temperature, 20 bits each); in forced mode it first retriggers the conversion and waits its worst-case duration. The interval never goes below 100 ms. `compensateTemperature(adcT)` and `compensatePressure(adcP)` expose the floating-point compensation and the pressure one depends on the temperature computed just before. The altitude is a pressure altitude, so it changes with the weather with the weather and no sea-level reduction is applied.
 
 ```ts
-import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
-import { toMeter } from 'nebulosa/src/math/units/distance'
 import { BMP180, BMP180Mode, BMP280, DEFAULT_BMP280_OPTIONS } from 'nebulosa/src/devices/firmata/sensors/barometer'
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
+import { toMeter } from 'nebulosa/src/math/units/distance'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
-// The wire form of an I2C reply: each data byte as two 7-bit bytes.
-const reply = (address: number, register: number, data: Buffer) => client.process(Buffer.from([0xf0, 0x77, address, 0, register & 0x7f, register >> 7, ...[...data].flatMap((byte) => [byte & 0x7f, byte >> 7]), 0xf7]))
+console.log(BMP180.ADDRESS, BMP280.ADDRESS, BMP280.ALTERNATIVE_ADDRESS, DEFAULT_BMP280_OPTIONS)
 
-console.log(BMP180.ADDRESS, BMP280.ADDRESS, BMP280.ALTERNATIVE_ADDRESS, DEFAULT_BMP280_OPTIONS) // 119 118 119 { mode: "normal", temperatureSampling: "x1", pressureSampling: "x1", filter: "off", standbyDuration: 1000 }
-
-// BMP180 with the calibration of the datasheet example: start() requests the 22-byte block.
+// BMP180: start() requests the 22-byte calibration block.
 const bmp180 = new BMP180(client, BMP180Mode.ULTRA_LOW_POWER)
 bmp180.addListener((device) => console.log('BMP180', device.temperature, device.pressure, toMeter(device.altitude)))
 bmp180.start()
-console.log(out()) // [ "f0780000f7", "f07677082a011600f7" ]
 
-const calibration180 = Buffer.alloc(22)
-;[408, -72, -14383].forEach((value, i) => calibration180.writeInt16BE(value, i * 2))
-;[32741, 32757, 23153].forEach((value, i) => calibration180.writeUInt16BE(value, 6 + i * 2))
-;[6190, 4, -32768, -8711, 2868].forEach((value, i) => calibration180.writeInt16BE(value, 12 + i * 2))
-reply(BMP180.ADDRESS, 0xaa, calibration180)
-
-// The temperature conversion is started and read after 5 ms: raw 27898 is 15.0 C.
-await Bun.sleep(50)
-console.log(out()) // [ "f076770074012e00f7", "f076770876010200f7" ]
-reply(BMP180.ADDRESS, 0xf6, Buffer.from([0x6c, 0xfa]))
-
-// The pressure conversion is read after 30 ms: raw 23843 (shifted by 8 bits in the 3-byte register).
-await Bun.sleep(80)
-console.log(out()) // [ "f076770074013400f7", "f076770876010300f7" ]
-reply(BMP180.ADDRESS, 0xf6, Buffer.from([0x5d, 0x23, 0x00]))
-console.log(bmp180.temperature, bmp180.pressure, toMeter(bmp180.altitude), bmp180.samples) // 15 699.64 3016.2264051728516 1 (the listener also printed the same three values)
-console.log(bmp180.calculateTrueTemperature(27898), bmp180.calculateTruePressure(23843)) // 15 69964
+// The temperature conversion is read after 5 ms and the pressure one after 30 ms.
+await Bun.sleep(150)
+console.log(bmp180.temperature, bmp180.pressure, toMeter(bmp180.altitude), bmp180.samples)
+console.log(bmp180.calculateTrueTemperature(27898), bmp180.calculateTruePressure(23843))
 bmp180.stop()
 
-// BMP280 with the calibration of the datasheet example.
+// BMP280: start() reads the calibration block and starts the measurements.
 const bmp280 = new BMP280(client)
 bmp280.addListener((device) => console.log('BMP280', device.temperature, device.pressure, toMeter(device.altitude)))
 bmp280.start()
-console.log(out()) // [ "f0780000f7", "f076760075012001f7", "f076760074012700f7", "f076760808011800f7" ]
 
-const calibration280 = Buffer.alloc(24)
-calibration280.writeUInt16LE(27504, 0)
-calibration280.writeInt16LE(26435, 2)
-calibration280.writeInt16LE(-1000, 4)
-calibration280.writeUInt16LE(36477, 6)
-;[-10685, 3024, 2855, 140, -7, 15500, -14600, 6000].forEach((value, i) => calibration280.writeInt16LE(value, 8 + i * 2))
-reply(BMP280.ADDRESS, 0x88, calibration280)
-
-// A data frame with raw pressure 415148 and raw temperature 519888, each shifted by 4 bits into 3 bytes.
+// The data frame of the measurement is read after a moment.
 await Bun.sleep(50)
-console.log(out()) // [ "f076760877010600f7" ]
-const twenty = (value: number) => [(value >> 12) & 0xff, (value >> 4) & 0xff, (value << 4) & 0xf0]
-reply(BMP280.ADDRESS, 0xf7, Buffer.from([...twenty(415148), ...twenty(519888)]))
-console.log(bmp280.temperature, bmp280.pressure, toMeter(bmp280.altitude), bmp280.samples) // 25.08247793081682 1006.5326677582515 56.067236552213714 1 (the listener also printed the same three values)
-console.log(bmp280.compensateTemperature(519888), bmp280.compensatePressure(415148)) // 25.08247793081682 100653.26677582515
+console.log(bmp280.temperature, bmp280.pressure, toMeter(bmp280.altitude), bmp280.samples)
+console.log(bmp280.compensateTemperature(519888), bmp280.compensatePressure(415148))
 bmp280.stop()
 
 // A BMP280 on the alternative address in forced mode with 16x sampling, the filter on and 250 ms standby.
 const forced = new BMP280(client, BMP280.ALTERNATIVE_ADDRESS, 1000, { mode: 'forced', temperatureSampling: 'x2', pressureSampling: 'x16', filter: 'x4', standbyDuration: 250 })
 forced.start()
-console.log(out()) // [ "f0780000f7", "f076770075016800f7", "f076770074015500f7", "f076770808011800f7" ]
 forced.stop()
 ```
 
@@ -15830,45 +15629,33 @@ forced.stop()
 The operations mirror the Arduino LiquidCrystal API: `clear()`, `home()` (both wait the 2 ms the controller needs), `setCursor(column, row)` (a row beyond the last is clamped to it), `display()`/`noDisplay()`, `cursor()`/`noCursor()`, `blink()`/`noBlink()`, `scrollDisplayLeft()`/`scrollDisplayRight()`, `leftToRight()`/`rightToLeft()`, `autoscroll()`/`noAutoscroll()`, `backlight()`/`noBacklight()` (these two only touch the backlight bit and may be used before `begin()`), `createChar(location, charmap)` (eight 5x8 glyphs, location 0..7 taken modulo 8, one byte per row using the low five bits) and the writers `write(byte)` (one raw byte, returns 1) and `print(value)` (a string or a value converted with `String`; each character is masked to 8 bits, so only the characters of the controller character set, ASCII and the ROM extensions, display properly, and text is not wrapped between lines, so position it with `setCursor`). Every call issues I2C writes through the expander and returns after queuing them, and a display that is not connected simply does not answer: nothing is read back from it.
 
 ```ts
-import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
 import { DEFAULT_HD44780_OPTIONS, HD44780 } from 'nebulosa/src/devices/firmata/components/display'
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 import { PCF8574 } from 'nebulosa/src/devices/firmata/components/io'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
-// The expander port bytes that were written since the last call (the read requests are skipped).
-const ports = () =>
-	sent
-		.splice(0)
-		.map((hex) => Buffer.from(hex, 'hex'))
-		.filter((frame) => frame[1] === 0x76 && frame[3] === 0x00 && frame.length === 7)
-		.map((frame) => (frame[4] | (frame[5] << 7)).toString(16).padStart(2, '0'))
-
-console.log(DEFAULT_HD44780_OPTIONS) // { rsPin: 0, rwPin: 1, enablePin: 2, backlightPin: 3, data4Pin: 4, data5Pin: 5, data6Pin: 6, data7Pin: 7, backlight: true, backlightPolarity: true }
+console.log(DEFAULT_HD44780_OPTIONS)
 
 // A 16x2 module on a PCF8574 backpack at 0x27 (polling disabled): begin() runs the 4-bit initialisation sequence.
 const expander = new PCF8574(client, 0x27, 0)
 const lcd = new HD44780(expander)
 lcd.begin(16, 2)
-const init = ports()
-console.log(init.length, init.slice(0, 7), init.slice(-6)) // 34 [ "08", "38", "3c", "38", "3c", "38", "3c" ] [ "08", "0c", "08", "68", "6c", "68" ]
 
 // Print "A" (0x41) at the first cell: the high nibble then the low one, each with RS set and the enable pulse (bit 2).
 lcd.setCursor(0, 0)
-ports()
-console.log(lcd.print('A'), ports()) // 1 [ "49", "4d", "49", "19", "1d", "19" ]
+console.log(lcd.print('A'))
 
-// The second row starts at DDRAM address 0x40: the command 0xc0 as two nibbles.
+// The second row starts at DDRAM address 0x40.
 lcd.setCursor(0, 1)
-console.log(ports()) // [ "c8", "cc", "c8", "08", "0c", "08" ]
 
 // A custom glyph in slot 0 (a heart, 5x8) and its use with write().
 lcd.createChar(0, [0x00, 0x0a, 0x1f, 0x1f, 0x1f, 0x0e, 0x04, 0x00])
 lcd.setCursor(3, 0)
-ports()
-console.log(lcd.write(0), ports()) // 1 [ "09", "0d", "09", "0d", "09" ]
+console.log(lcd.write(0))
 
 // Display control: the commands are the control register 0x08 plus the display (4), cursor (2) and blink (1) flags.
 lcd.cursor()
@@ -15877,13 +15664,10 @@ lcd.noDisplay()
 lcd.display()
 lcd.noBlink()
 lcd.noCursor()
-console.log(ports().length) // 36
 
 // The backlight only changes bit 3 of the last port byte.
 lcd.noBacklight()
-console.log(ports()) // [ "c0" ]
 lcd.backlight()
-console.log(ports()) // [ "c8" ]
 
 // Text flow, shifts and clearing.
 lcd.rightToLeft()
@@ -15894,16 +15678,13 @@ lcd.scrollDisplayLeft()
 lcd.scrollDisplayRight()
 lcd.home()
 lcd.clear()
-console.log(ports().length) // 48
 lcd.stop()
 
 // A 20x4 module, 5x10 dots requested (ignored for more than one row) and a backpack that lights the backlight with a low level.
 const wide = new HD44780(new PCF8574(client, 0x27, 0), { backlightPolarity: false })
 wide.begin(20, 4, '5x10')
 wide.setCursor(0, 2)
-ports()
 wide.setCursor(0, 3)
-console.log(ports()) // [ "d0", "d4", "d0", "40", "44", "40" ] (0xd4 is the DDRAM address 0x54 of the fourth row on 20 columns)
 wide.stop()
 ```
 
@@ -15914,41 +15695,38 @@ wide.stop()
 `start()` registers the handler, sets the read delay to zero and writes the current state with the fast-mode command (two bytes: the power-down bits and the high nibble of the code, then the low byte); `stop()` detaches the handler and leaves the output as it was. The `value` and `powerDownMode` properties are accessors: a change is normalised, written when the peripheral is started and then notifies the listeners (see Firmata Peripheral Base), while assigning the current value does nothing. Before `start()` a change is only staged and goes out with the first write. `persist()` writes the current code and power-down mode to the EEPROM of the chip with the write-DAC-and-EEPROM command (`WRITE_DAC_EEPROM_CMD`, three bytes), so the output powers up in that state; the EEPROM has a limited number of write cycles and the write takes some milliseconds on the chip, so it is a configuration step and not a per-sample operation. The static members are `MAX_VALUE` (4095) and the bit constants of the two commands.
 
 ```ts
-import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
 import { DEFAULT_MCP4725_OPTIONS, MCP4725 } from 'nebulosa/src/devices/firmata/components/dac'
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
-console.log(MCP4725.ADDRESS, MCP4725.ALTERNATIVE_ADDRESS, MCP4725.MAX_VALUE, DEFAULT_MCP4725_OPTIONS) // 98 99 4095 { value: 0, powerDownMode: "normal" }
+console.log(MCP4725.ADDRESS, MCP4725.ALTERNATIVE_ADDRESS, MCP4725.MAX_VALUE, DEFAULT_MCP4725_OPTIONS)
 
 // Half scale (2048 of 4095, about 1.65 V on a 3.3 V supply): start() writes the two-byte fast-mode frame.
 const dac = new MCP4725(client, MCP4725.ADDRESS, { value: 2048 })
 dac.addListener((device) => console.log('dac', device.value, device.powerDownMode))
 dac.start()
-console.log(out()) // [ "f0780000f7", "f076620008000000f7" ]
 
 // Changing the code writes it and notifies the listeners; the same code again does nothing.
 dac.value = 4095
 dac.value = 4095
-console.log(dac.value, out()) // 4095 [ "f07662000f007f01f7" ] (the listener printed once: dac 4095 normal)
+console.log(dac.value)
 
 // Non-integer codes are rounded, and the output can be released through a 100 kohm resistor.
 dac.value = 1000.4
 dac.powerDownMode = '100k'
-console.log(dac.value, dac.powerDownMode, out()) // 1000 100k [ "f076620003006801f7", "f076620023006801f7" ] (the listener printed twice)
+console.log(dac.value, dac.powerDownMode)
 
 // Persist the code and the power-down mode to the EEPROM of the chip.
 dac.persist()
-console.log(out()) // [ "f076620064003e000001f7" ]
 dac.stop()
 
 // A staged state on the alternative address goes out with start().
 const staged = new MCP4725(client, MCP4725.ALTERNATIVE_ADDRESS, { value: 100, powerDownMode: '500k' })
 staged.start()
-console.log(out()) // [ "f0780000f7", "f076630030006400f7" ]
 staged.stop()
 ```
 
@@ -15957,56 +15735,36 @@ staged.stop()
 `DS18B20` reads a Dallas/Maxim DS18B20 1-Wire thermometer through the One-Wire feature of the client (see Firmata One-Wire) and implements `Thermometer` (`temperature` in degrees Celsius, 0.0625 °C per least significant bit of the 16-bit reading). The constructor takes the `client`, the 1-Wire `pin`, the `pollingInterval` in milliseconds (`DEFAULT_POLLING_INTERVAL`, never below 1000) and `DS18B20Options`: the ROM `address` (8 bytes; when given the bus is not searched), `skip` (use SKIP ROM, valid only with a single device on the bus), the `resolution` (9, 10, 11 or 12 bits, default 12, with conversion waits of 94, 188, 375 and 750 ms) and the `powerMode` (`'normal'` or `'parasitic'`); `DEFAULT_DS18B20_OPTIONS` holds the defaults and an address that is not 8 bytes is rejected. `start()` configures the pin and, without an address and without `skip`, searches the bus and adopts the first family-0x28 address of the reply (an alarm search reply is ignored). It then writes the resolution to the scratchpad when it is not 12 bits, and each polling cycle starts a conversion (Convert T), waits the conversion time and requests the 9-byte scratchpad; the reply is accepted only for that read (matched by correlation ID), only with a valid Maxim CRC-8 (`DS18B20.isScratchpadValid`), and then decoded. A read cycle that is still outstanding is not overlapped, and `stop()` invalidates any conversion in flight. A first reading of exactly 0 °C is still delivered to the listeners (see Firmata Peripheral Base). The static members are the command bytes (`CONVERT_T_CMD`, `READ_SCRATCHPAD_CMD`, `WRITE_SCRATCHPAD_CMD`), `FAMILY_CODE`, the default alarm limits and `SCRATCHPAD_SIZE`. The class logs the address it found with `console.info`.
 
 ```ts
-import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
-import { encodePacked7Bit } from 'nebulosa/src/devices/firmata/codecs/numeric'
-import { CRC } from 'nebulosa/src/io/crc'
 import { DEFAULT_DS18B20_OPTIONS, DS18B20 } from 'nebulosa/src/devices/firmata/sensors/thermometer'
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
-console.log(DEFAULT_DS18B20_OPTIONS, DS18B20.FAMILY_CODE, DS18B20.SCRATCHPAD_SIZE) // { resolution: 12, powerMode: "normal", skip: false } 40 9
-
-// A scratchpad with temperature 25.0625 C (raw 401 = 0x0191) and its CRC-8 in the ninth byte.
-const scratchpad = (raw: number) => {
-	const data = Buffer.from([raw & 0xff, (raw >> 8) & 0xff, 0x4b, 0x46, 0x7f, 0xff, 0x0c, 0x10, 0])
-	data[8] = CRC.crc8maxim.compute(data, undefined, 0, 8)
-	return data
-}
-const pad = scratchpad(401)
-console.log(pad.toString('hex'), DS18B20.isScratchpadValid(pad)) // 91014b467fff0c1070 true
+console.log(DEFAULT_DS18B20_OPTIONS, DS18B20.FAMILY_CODE, DS18B20.SCRATCHPAD_SIZE)
 
 // With a known ROM address and 9-bit resolution: start() configures the pin, writes the resolution and starts a conversion.
 const rom = Buffer.from([0x28, 0xff, 0x64, 0x1e, 0x0f, 0x16, 0x03, 0x4b])
 const sensor = new DS18B20(client, ESP8266.D4, 1000, { address: rom, resolution: 9 })
 sensor.addListener((device) => console.log('temperature', device.temperature))
 sensor.start()
-console.log(out()) // [ "f073410201f7", "f0732502287e1373714145014b1c2d327403f7", "f0732502287e1373714145014b0801f7" ]
 
-// After the 94 ms conversion the scratchpad is requested (correlation ID 0); the reply is decoded.
+// After the 94 ms conversion the scratchpad is requested (correlation ID 0) and decoded.
 await Bun.sleep(150)
-console.log(out()) // [ "f0732d02287e1373714145014b12000000402ff7" ]
-const reply = (id: number, data: Buffer) => client.process(Buffer.from([0xf0, 0x73, 0x43, ESP8266.D4, ...encodePacked7Bit([id & 0xff, id >> 8, ...data]), 0xf7]))
-reply(0, pad)
-console.log(sensor.temperature, sensor.samples) // 25.0625 1
+console.log(sensor.temperature, sensor.samples)
 
 sensor.stop()
 
 // Without an address the bus is searched and the first DS18B20 (family 0x28) is adopted, then it is measured.
 const found = new DS18B20(client, ESP8266.D4)
 found.start()
-console.log(out()) // [ "f073410201f7", "f0734002f7" ]
-const other = [0x10, 1, 2, 3, 4, 5, 6, 7]
-client.process(Buffer.from([0xf0, 0x73, 0x42, ESP8266.D4, ...encodePacked7Bit([...other, ...rom]), 0xf7]))
-console.log(out()) // [ "f0732502287e1373714145014b0801f7" ]
 found.stop()
 
 // SKIP ROM: a single device on the bus needs no address and no search.
 const single = new DS18B20(client, ESP8266.D4, 1000, { skip: true, powerMode: 'parasitic' })
 single.start()
-console.log(out()) // [ "f073410200f7", "f07323024400f7" ]
 single.stop()
 ```
 
@@ -16019,41 +15777,32 @@ single.stop()
 `RDA5807(client, address?, pollingInterval?, options?)` uses `RDA5807.ADDRESS` (0x11, the direct-access address) and `RDA5807Options`: `frequency` (87 MHz), `volume` (0 to 100, mapped onto the 16 chip steps, so values are quantised to multiples of about 6.7), `muted`, `band` (`'usEurope'` 87 to 108 MHz, `'japanWide'` 76 to 91, `'world'` 76 to 108 and `'eastEurope'`), `eastEuropeMode` (`'65_76'` or `'50_65'` MHz), `stereo`, `bassBoost`, `audioOutputHighZ`, `spacing` (25, 50, 100 or 200 kHz), `seekThreshold` (0 to 15 RSSI threshold of the hardware seek) and `wrap` (`DEFAULT_RDA5807_OPTIONS`). Registers are 16-bit and written as register, high byte, low byte (control 0x02, tuning 0x03, audio 0x05, and 0x06/0x07 for the east-Europe band); the status read asks for the four bytes of registers 0x0A and 0x0B (seek/tune complete, seek-fail, stereo and the channel index in 0x0A; RSSI, station and ready flags in 0x0B) and the frequency is `band start + channel * spacing`. Unlike the TEA5767 the seek is done by the chip: `seek()` clears stale seek state, sets the seek, direction and wrap-mode bits and the driver finishes it when a status frame reports seek/tune complete, applying the reported channel and the seek-failed flag; during the seek the previous values are kept. `volume` has the accessors and steps `volumeUp()`/`volumeDown()` (one chip step), and `bassBoost`, `audioOutputHighZ` and `muted` are accessors that rewrite the control register. `stop()` clears the enable bit and any pending read. Both `seek()` methods need the peripheral to be started.
 
 ```ts
-import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
 import { DEFAULT_RDA5807_OPTIONS, DEFAULT_TEA5767_OPTIONS, RDA5807, TEA5767 } from 'nebulosa/src/devices/firmata/components/radio'
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
-// The wire form of a registerless reply (TEA5767) and of a register reply (RDA5807).
-const wire = (address: number, register: number, data: number[]) => client.process(Buffer.from([0xf0, 0x77, address, 0, register & 0x7f, register >> 7, ...data.flatMap((byte) => [byte & 0x7f, byte >> 7]), 0xf7]))
-
-console.log(TEA5767.ADDRESS, RDA5807.ADDRESS) // 96 17
-console.log(DEFAULT_TEA5767_OPTIONS) // { frequency: 87.5, muted: false, band: "usEurope", stereo: true, softMute: true, highCutControl: true, stereoNoiseCancelling: true, highSideInjection: true, referenceClock: 32768, deEmphasis: 50, searchStopLevel: "mid", wrap: true }
-console.log(DEFAULT_RDA5807_OPTIONS) // { frequency: 87, volume: 100, muted: false, band: "usEurope", stereo: true, bassBoost: false, audioOutputHighZ: false, eastEuropeMode: "65_76", spacing: 100, seekThreshold: 8, wrap: true }
+console.log(TEA5767.ADDRESS, RDA5807.ADDRESS)
+console.log(DEFAULT_TEA5767_OPTIONS)
+console.log(DEFAULT_RDA5807_OPTIONS)
 
 // TEA5767: start() writes the five-byte frame for 87.5 MHz and asks for a status frame.
 const tea = new TEA5767(client)
 tea.addListener((device) => console.log('TEA5767', device.frequency, device.stereo, device.rssi, device.station))
 tea.start()
-console.log(out()) // [ "f0780000f7", "f07660002900550150011e000000f7", "f07660080500f7" ]
 
-// A status frame for 98.5 MHz (PLL 12051 = 0x2f13): ready, stereo, IF counter 0x35 (a station) and level 9.
-wire(TEA5767.ADDRESS, 0x3fff, [0x80 | 0x2f, 0x13, 0x80 | 0x35, 9 << 4, 0])
-console.log(tea.frequency, tea.stereo, tea.rssi, tea.station, tea.samples) // 98.5 true 76 true 1 (the listener printed the same values)
+console.log(tea.frequency, tea.stereo, tea.rssi, tea.station, tea.samples)
 
-// Seek up: the driver tunes one step (98.6 MHz) with the search bit set; a station is found at 101.1 MHz (PLL 12369 = 0x3051).
+// Seek up: the driver tunes one step with the search bit set and the status frames report the station found.
 tea.seek('up')
-console.log(out()) // [ "f07660006f01200050011e000000f7", "f07660080500f7" ]
-wire(TEA5767.ADDRESS, 0x3fff, [0x80 | 0x30, 0x51, 0x80 | 0x35, 12 << 4, 0])
-console.log(tea.frequency, tea.rssi, tea.seekFailed) // 101.1 102 false (the listener printed 101.1 true 102 true)
-out()
+console.log(tea.frequency, tea.rssi, tea.seekFailed)
 
 // Grid steps, mono, mute and the feature flags each rewrite the frame.
 tea.frequency = 100.05
-console.log(tea.frequency, out().length) // 100.1 2
+console.log(tea.frequency)
 tea.frequencyUp()
 tea.frequencyDown()
 tea.stereo = false
@@ -16062,33 +15811,26 @@ tea.softMute = false
 tea.highCutControl = false
 tea.stereoNoiseCancelling = false
 tea.highSideInjection = false
-console.log(tea.frequency, tea.stereo, tea.muted, tea.softMute, tea.highCutControl, tea.stereoNoiseCancelling, tea.highSideInjection, tea.volume) // 100.1 false true false false false false 100
+console.log(tea.frequency, tea.stereo, tea.muted, tea.softMute, tea.highCutControl, tea.stereoNoiseCancelling, tea.highSideInjection, tea.volume)
 tea.volumeUp()
 tea.stop()
-console.log(out().length) // 13
 
 // The Japanese band, a 13 MHz clock, 75 us de-emphasis and a low search threshold.
 const japan = new TEA5767(client, TEA5767.ADDRESS, 1000, { frequency: 80, band: 'japan', referenceClock: 13000000, deEmphasis: 75, searchStopLevel: 'low', wrap: false })
 japan.start()
-console.log(japan.frequency, out()) // 80 [ "f0780000f7", "f07660001900120030012e004000f7", "f07660080500f7" ]
+console.log(japan.frequency)
 japan.stop()
-out()
 
 // RDA5807: start() writes the control (0x02), audio (0x05) and tuning (0x03) registers, then asks for registers 0x0a and 0x0b.
 const rda = new RDA5807(client)
 rda.addListener((device) => console.log('RDA5807', device.frequency, device.stereo, device.rssi, device.station, device.seekFailed))
 rda.start()
-console.log(out()) // [ "f0780000f7", "f0761100020040010100f7", "f0761100050008000f01f7", "f0761100030000001000f7", "f07611080a000400f7" ]
 
-// Channel 115 is 98.5 MHz at 100 kHz spacing: seek/tune complete, stereo, RSSI 60, station and ready.
-wire(RDA5807.ADDRESS, 0x0a, [0x44, 0x73, 0x79, 0x80])
-console.log(rda.frequency, rda.stereo, rda.rssi, rda.station, rda.volume) // 98.5 true 60 true 100 (the listener printed 98.5 true 60 true false)
+console.log(rda.frequency, rda.stereo, rda.rssi, rda.station, rda.volume)
 
-// Hardware seek up (the chip clears the old seek state first), completed by a status that reports channel 140 (101 MHz).
+// Hardware seek up (the chip clears the old seek state first), completed by a status that reports the channel found.
 rda.seek('up')
-console.log(out()) // [ "f0761100020040010100f7", "f076110003001c004001f7", "f0761100020043010100f7", "f07611080a000400f7" ]
-wire(RDA5807.ADDRESS, 0x0a, [0x40 | 0x04, 140, 0x71, 0x80])
-console.log(rda.frequency, rda.rssi, rda.seekFailed, out()) // 101 56 false [ "f0761100020040010100f7" ] (the listener printed 101 true 56 true false)
+console.log(rda.frequency, rda.rssi, rda.seekFailed)
 
 // Volume in 16 steps, then the audio flags, and a step in the 100 kHz grid.
 rda.volume = 50
@@ -16097,17 +15839,16 @@ rda.bassBoost = true
 rda.audioOutputHighZ = true
 rda.mute()
 rda.stereo = false
-console.log(rda.volume, rda.bassBoost, rda.audioOutputHighZ, rda.muted, rda.stereo) // 60 true true true false
+console.log(rda.volume, rda.bassBoost, rda.audioOutputHighZ, rda.muted, rda.stereo)
 rda.frequency = 104.3
 rda.frequencyUp()
-console.log(rda.frequency) // 104.4
+console.log(rda.frequency)
 rda.stop()
-out()
 
 // The east-Europe band 50-65 MHz with a 50 kHz spacing, started muted at half volume.
 const east = new RDA5807(client, RDA5807.ADDRESS, 1000, { frequency: 60, band: 'eastEurope', eastEuropeMode: '50_65', spacing: 50, muted: true, volume: 50, seekThreshold: 4 })
 east.start()
-console.log(east.frequency, east.volume, out()) // 60 53 [ "f0780000f7", "f0761100020000010100f7", "f0761100050004000801f7", "f0761100060060000000f7", "f0761100070040000200f7", "f0761100030032001e00f7", "f07611080a000400f7" ]
+console.log(east.frequency, east.volume)
 east.stop()
 ```
 
@@ -16118,37 +15859,28 @@ east.stop()
 The constructor takes the `client`, the I2C `address` (`KT0803L.ADDRESS`, 0x3E) and `KT0803LOptions`: `frequency` (89.7 MHz), `muted`, `stereo`, `gain` (the audio PGA in dB, integer steps from -15 to 12), `transmitPower` (the RFGAIN code of the datasheet, 0 to 15, 15 being the highest output; the code is not a calibrated power), `bassBoost` (0, 5, 11 or 17 dB, snapped to the nearest), `preEmphasis` (50 or 75 µs), `pilotToneHigh`, `automaticLevelControl`, `automaticPowerDown` (power down on silence), `powerAmplifierBias`, `deviation` (75 or 112.5 kHz) and `audioEnhancement`; `DEFAULT_KT0803L_OPTIONS` holds the defaults. `start()` registers the handler, enables I2C and writes the whole configuration while holding the chip in standby (registers 0x0B, 0x10, 0x04, 0x0E, 0x17, 0x13, then the frequency registers 0x01, 0x02, 0x00) before releasing the standby with a final write to 0x0B; `stop()` writes the standby bit and detaches. Every property is an accessor: setting a different value rewrites the registers that carry it (only when started) and notifies the listeners (see Firmata Peripheral Base), and setting the current value does nothing. `frequencyUp()` and `frequencyDown()` move one 50 kHz channel and wrap at the band edges, and `mute()` and `unmute()` set `muted`. Each register write is a two-byte `[register, value]` I2C write, and the channel is split across registers 0x00, 0x01 and 0x02.
 
 ```ts
-import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
 import { DEFAULT_KT0803L_OPTIONS, KT0803L } from 'nebulosa/src/devices/firmata/components/radio'
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
-// The register writes as register:value pairs in hexadecimal (the I2C configuration frame is skipped).
-const writes = () =>
-	sent
-		.splice(0)
-		.map((hex) => Buffer.from(hex, 'hex'))
-		.filter((frame) => frame[1] === 0x76 && frame.length === 9)
-		.map((frame) => `${(frame[4] | (frame[5] << 7)).toString(16)}:${(frame[6] | (frame[7] << 7)).toString(16)}`)
-
-console.log(KT0803L.ADDRESS, KT0803L.MIN_CHANNEL, KT0803L.MAX_CHANNEL, DEFAULT_KT0803L_OPTIONS) // 62 1400 2160 { frequency: 89.7, muted: false, stereo: true, gain: 0, transmitPower: 15, bassBoost: 0, preEmphasis: 75, pilotToneHigh: false, automaticLevelControl: false, automaticPowerDown: false, powerAmplifierBias: true, deviation: 75, audioEnhancement: false }
+console.log(KT0803L.ADDRESS, KT0803L.MIN_CHANNEL, KT0803L.MAX_CHANNEL, DEFAULT_KT0803L_OPTIONS)
 
 // The defaults: 89.7 MHz (channel 1794), stereo, full RF gain code.
 const transmitter = new KT0803L(client)
 transmitter.addListener((device) => console.log('KT0803L', device.frequency, device.muted, device.gain))
 transmitter.start()
-console.log(writes()) // [ "b:80", "10:a9", "4:4", "e:2", "17:0", "13:80", "1:c3", "2:40", "0:81", "b:0" ]
 
 // Frequency: a different value rewrites the three channel registers; the same value is ignored. Values snap to 50 kHz.
 transmitter.frequency = 100.1
 transmitter.frequency = 100.1
-console.log(transmitter.frequency, writes()) // 100.1 [ "1:c3", "2:40", "0:e9" ] (the listener printed once)
+console.log(transmitter.frequency)
 transmitter.frequencyUp()
 transmitter.frequencyDown()
-console.log(transmitter.frequency) // 100.1 (the listener printed 100.15 and then 100.1)
-writes()
+console.log(transmitter.frequency)
 
 // Audio: mute, mono, +6 dB of gain, the strongest bass boost and the 50 us pre-emphasis.
 transmitter.mute()
@@ -16156,7 +15888,7 @@ transmitter.stereo = false
 transmitter.gain = 6
 transmitter.bassBoost = 17
 transmitter.preEmphasis = 50
-console.log(transmitter.muted, transmitter.stereo, transmitter.gain, transmitter.bassBoost, transmitter.preEmphasis, writes()) // true false 6 17 50 [ "2:48", "4:44", "1:f3", "4:54", "4:57", "2:49" ] (the listener printed once per change)
+console.log(transmitter.muted, transmitter.stereo, transmitter.gain, transmitter.bassBoost, transmitter.preEmphasis)
 transmitter.unmute()
 
 // RF and chip options: a lower RFGAIN code, the pilot tone, level control, power-down, PA bias, deviation and enhancement.
@@ -16167,22 +15899,20 @@ transmitter.automaticPowerDown = true
 transmitter.powerAmplifierBias = false
 transmitter.deviation = 112.5
 transmitter.audioEnhancement = true
-console.log(transmitter.transmitPower, transmitter.pilotToneHigh, transmitter.automaticLevelControl, transmitter.automaticPowerDown, transmitter.powerAmplifierBias, transmitter.deviation, transmitter.audioEnhancement, writes()) // 8 true true true false 112.5 true [ "2:41", "13:0", "1:33", "2:41", "2:45", "4:d7", "b:4", "e:0", "17:40", "17:60" ]
+console.log(transmitter.transmitPower, transmitter.pilotToneHigh, transmitter.automaticLevelControl, transmitter.automaticPowerDown, transmitter.powerAmplifierBias, transmitter.deviation, transmitter.audioEnhancement)
 
 // stop() puts the chip in standby; later changes are only staged.
 transmitter.stop()
-console.log(writes()) // [ "b:84" ]
 transmitter.frequency = 91.5
-console.log(transmitter.frequency, writes()) // 91.5 [] (the listener still printed)
+console.log(transmitter.frequency)
 
 // A transmitter built with options: the band edges wrap with the up and down steps.
 const edge = new KT0803L(client, KT0803L.ADDRESS, { frequency: 108, stereo: false, gain: -15, transmitPower: 0, preEmphasis: 50, deviation: 112.5 })
 edge.start()
-console.log(writes()) // [ "b:80", "10:a9", "4:74", "e:2", "17:40", "13:0", "1:1c", "2:1", "0:38", "b:0" ]
 edge.frequencyUp()
-console.log(edge.frequency) // 70
+console.log(edge.frequency)
 edge.frequencyDown()
-console.log(edge.frequency) // 108
+console.log(edge.frequency)
 edge.stop()
 ```
 
@@ -16197,53 +15927,33 @@ edge.stop()
 Neither driver compensates the humidity for temperature or applies a calibration offset, and neither checks the SHT21 CRC byte (the reply is two bytes).
 
 ```ts
-import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
-import { CRC } from 'nebulosa/src/io/crc'
 import { AM2320, SHT21 } from 'nebulosa/src/devices/firmata/sensors/hygrometer'
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
-// The wire form of an I2C reply: each data byte as two 7-bit bytes.
-const reply = (address: number, register: number, data: Buffer) => client.process(Buffer.from([0xf0, 0x77, address, 0, register & 0x7f, register >> 7, ...[...data].flatMap((byte) => [byte & 0x7f, byte >> 7]), 0xf7]))
-
-console.log(AM2320.ADDRESS, SHT21.ADDRESS) // 92 64
+console.log(AM2320.ADDRESS, SHT21.ADDRESS)
 
 // AM2320: start() wakes the sensor, writes the read command and asks for the 8-byte frame.
 const am2320 = new AM2320(client)
 am2320.addListener((device) => console.log('AM2320', device.humidity, device.temperature))
 am2320.start()
 await Bun.sleep(50)
-console.log(out()) // [ "f0780000f7", "f0765c00f7", "f0765c00030000000400f7", "f0765c080800f7" ]
 
-// A frame with 65.2 % (652) and 25.1 C (251), followed by its CRC-16 Modbus.
-const frame = Buffer.from([0x03, 0x04, 0x02, 0x8c, 0x00, 0xfb, 0, 0])
-frame.writeUInt16LE(CRC.crc16modbus.compute(frame, undefined, 0, 6), 6)
-reply(AM2320.ADDRESS, 0, frame)
-console.log(am2320.humidity, am2320.temperature, am2320.samples) // 65.2 25.1 1 (the listener printed the same two values)
-
-// A negative temperature uses the sign bit: -10.3 C is 0x8067.
-const cold = Buffer.from([0x03, 0x04, 0x01, 0xf4, 0x80, 0x67, 0, 0])
-cold.writeUInt16LE(CRC.crc16modbus.compute(cold, undefined, 0, 6), 6)
-reply(AM2320.ADDRESS, 0, cold)
-console.log(am2320.humidity, am2320.temperature) // 50 -10.3 (the listener printed the same two values)
+console.log(am2320.humidity, am2320.temperature, am2320.samples)
 am2320.stop()
 
 // SHT21: start() requests the temperature (0xE3) and humidity (0xE5) registers.
 const sht21 = new SHT21(client)
 sht21.addListener((device) => console.log('SHT21', device.humidity, device.temperature))
 sht21.start()
-console.log(out()) // [ "f0780000f7", "f076400863010200f7", "f076400865010200f7" ]
 
-// Raw 26000 (0x6590) is about 22.9 C and raw 31000 (0x7918) about 53.1 %.
-reply(SHT21.ADDRESS, 0xe3, Buffer.from([0x65, 0x90]))
-reply(SHT21.ADDRESS, 0xe5, Buffer.from([0x79, 0x18]))
-console.log(sht21.temperature, sht21.humidity, sht21.samples) // 22.863134765625 53.1278076171875 1 (the listener printed the humidity first, then the temperature)
+console.log(sht21.temperature, sht21.humidity, sht21.samples)
 
 sht21.reset()
-console.log(out()) // [ "f07640007e01f7" ]
 sht21.stop()
 ```
 
@@ -16254,46 +15964,37 @@ sht21.stop()
 `start()` registers the handler, enables I2C, writes the staged byte, requests a port snapshot and starts polling; `stop()` cancels the timer and detaches. `pinMode(pin, mode)` sets or clears the input bit (`PinMode.INPUT` makes it an input, any other mode an output) and flushes. `pinWrite(pin, value, flush?)` stages one bit, makes that pin an output and, unless `flush` is `false`, writes the port and requests a snapshot, so several writes can be batched and sent with a final `flush()`. `pinRead(pin)` returns the logic level of the latest snapshot without a bus transaction, `refresh()` requests a fresh snapshot with a registerless one-byte read, and a changed snapshot notifies the listeners (see Firmata Peripheral Base). `pinRead` therefore reflects the chip only after a reply, and a pin written as an output reads back its driven level. An index outside 0..7 is a programming error, and `refresh()` throws before `start()`. The chip has no interrupt handling here: input changes are seen at the polling period.
 
 ```ts
-import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
 import { DEFAULT_PCF8574_OPTIONS, PCF8574 } from 'nebulosa/src/devices/firmata/components/io'
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 import { PinMode } from 'nebulosa/src/devices/firmata/types'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
-// The wire form of the registerless one-byte reply of the expander.
-const reply = (address: number, state: number) => client.process(Buffer.from([0xf0, 0x77, address, 0, 0x7f, 0x7f, state & 0x7f, state >> 7, 0xf7]))
-
-console.log(PCF8574.ADDRESS, PCF8574.PIN_COUNT, DEFAULT_PCF8574_OPTIONS) // 32 8 { output: 255, inputMask: 255 }
+console.log(PCF8574.ADDRESS, PCF8574.PIN_COUNT, DEFAULT_PCF8574_OPTIONS)
 
 // All pins released high: start() writes 0xff and requests a snapshot (pollingInterval 0 disables the timer).
 const expander = new PCF8574(client, PCF8574.ADDRESS, 0)
 expander.addListener((device) => console.log('port', device.pinRead(0), device.pinRead(1), device.pinRead(7)))
 expander.start()
-console.log(out()) // [ "f0780000f7", "f07620007f01f7", "f07620080100f7" ]
 
 // Pins 0 and 1 become outputs (written 0 and 1): the written byte keeps the other pins released.
 expander.pinWrite(0, false, false)
 expander.pinWrite(1, true, false)
 expander.flush()
-console.log(out()) // [ "f07620007e01f7", "f07620080100f7" ]
 
-// The chip reports the port 0x7e: pin 0 low (driven), pin 1 high and pin 7 pulled low by a switch.
-reply(PCF8574.ADDRESS, 0x7e)
-console.log(expander.pinRead(0), expander.pinRead(1), expander.pinRead(7)) // false true false (the listener printed the same levels)
+console.log(expander.pinRead(0), expander.pinRead(1), expander.pinRead(7))
 
 // Pin 0 back to an input and a fresh snapshot.
 expander.pinMode(0, PinMode.INPUT)
 expander.refresh()
-console.log(out()) // [ "f07620007f01f7", "f07620080100f7", "f07620080100f7" ]
 expander.stop()
 
 // The PCF8574A range, with an initial output byte of 0x0f on the lower nibble and the upper nibble as inputs.
 const alternative = new PCF8574(client, PCF8574.ALTERNATIVE_MIN_ADDRESS, 0, { output: 0x0f, inputMask: 0xf0 })
 alternative.start()
-console.log(out()) // [ "f0780000f7", "f07638007f01f7", "f07638080100f7" ]
 alternative.stop()
 ```
 
@@ -16310,69 +16011,49 @@ alternative.stop()
 `TEMT6000(client, pin, options?)` is an `ADCPeripheral` with `TEMT6000Options` `aref` in volts (5), `loadResistance` in ohms (10000), `adcResolution` as the largest count (1023) and `microampsPerLux` (0.5); every report is multiplied by `aref * 1e6 / (loadResistance * adcResolution * microampsPerLux)`. Its `name` is the string `'TEMPT6000'`.
 
 ```ts
-import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
 import { BH1750, DEFAULT_BH1750_OPTIONS, DEFAULT_MAX44009_OPTIONS, DEFAULT_TEMT6000_OPTIONS, DEFAULT_TSL2561_OPTIONS, MAX44009, TEMT6000, TSL2561 } from 'nebulosa/src/devices/firmata/sensors/luxmeter'
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
-// The wire form of an I2C reply: each value as two 7-bit bytes, the register included.
-const reply = (address: number, register: number, data: Buffer) => client.process(Buffer.from([0xf0, 0x77, address, 0, register & 0x7f, register >> 7, ...[...data].flatMap((byte) => [byte & 0x7f, byte >> 7]), 0xf7]))
-
-console.log(DEFAULT_BH1750_OPTIONS, DEFAULT_TSL2561_OPTIONS, DEFAULT_MAX44009_OPTIONS, DEFAULT_TEMT6000_OPTIONS) // { mode: "continuousHighResolution", measurementTime: 69 } { gain: 1, integrationTime: 402 } { continuousMode: false } { aref: 5, loadResistance: 10000, adcResolution: 1023, microampsPerLux: 0.5 }
+console.log(DEFAULT_BH1750_OPTIONS, DEFAULT_TSL2561_OPTIONS, DEFAULT_MAX44009_OPTIONS, DEFAULT_TEMT6000_OPTIONS)
 
 // BH1750 in continuous high resolution: power on, the two MTreg writes, the mode command, then a 2-byte read.
 const bh1750 = new BH1750(client)
 bh1750.addListener((device) => console.log('BH1750', device.lux, device.raw))
 bh1750.start()
 await Bun.sleep(250)
-console.log(out()) // [ "f0780000f7", "f07623000100f7", "f07623004200f7", "f07623006500f7", "f07623001000f7", "f07623080200f7" ]
-reply(BH1750.ADDRESS, 0, Buffer.from([0x01, 0xf4])) // 500 counts
-console.log(bh1750.lux, bh1750.raw, bh1750.samples) // 416.6666666666667 500 1 (the listener printed the same lux and raw)
-console.log(bh1750.calculateLux(12000)) // 10000
+console.log(bh1750.lux, bh1750.raw, bh1750.samples)
+console.log(bh1750.calculateLux(12000))
 bh1750.stop()
-console.log(out()) // [ "f07623000000f7" ]
 
 // One-time 0.5 lx mode on the alternative address with MTreg 138: counts are scaled by 69 / 138 and divided by 2.4.
 const precise = new BH1750(client, BH1750.ALTERNATIVE_ADDRESS, 1000, { mode: 'oneTimeHighResolution2', measurementTime: 138 })
-console.log(precise.calculateLux(1000)) // 208.33333333333334
+console.log(precise.calculateLux(1000))
 
 // TSL2561 at 16x gain and 101 ms: the first read follows one integration period.
 const tsl2561 = new TSL2561(client, TSL2561.ADDRESS, 1000, { gain: 16, integrationTime: 101 })
 tsl2561.addListener((device) => console.log('TSL2561', device.lux, device.broadband, device.infrared))
 tsl2561.start()
-console.log(out()) // [ "f0780000f7", "f076390000010300f7", "f076390001011100f7" ]
 await Bun.sleep(200)
-console.log(out()) // [ "f07639081c010400f7" ]
-const channels = Buffer.alloc(4)
-channels.writeUInt16LE(1500, 0)
-channels.writeUInt16LE(300, 2)
-reply(TSL2561.ADDRESS, 0x9c, channels)
-console.log(tsl2561.lux, tsl2561.broadband, tsl2561.infrared) // 142.43259178732086 1500 300 (the listener printed the same values)
-console.log(tsl2561.calculateLux(40000, 100), tsl2561.calculateLux(0, 0)) // 65536 0
+console.log(tsl2561.lux, tsl2561.broadband, tsl2561.infrared)
+console.log(tsl2561.calculateLux(40000, 100), tsl2561.calculateLux(0, 0))
 tsl2561.stop()
 
-// MAX44009 in continuous mode: the high byte 0x54 is exponent 5 and mantissa 0x40, and the low nibble 0xa adds 0x0a to the mantissa.
+// MAX44009 in continuous mode: the lux comes from an exponent and a mantissa, which calculateLux also converts from the two register bytes.
 const max44009 = new MAX44009(client, MAX44009.ADDRESS, 1000, { continuousMode: true })
 max44009.addListener((device) => console.log('MAX44009', device.lux))
 max44009.start()
-console.log(out()) // [ "f0780000f7", "f0764a0002000301f7", "f0764a4803000100f7" ]
-reply(MAX44009.ADDRESS, 3, Buffer.from([0x54]))
-console.log(max44009.lux, max44009.calculateLux(0x54, 0x0a), max44009.calculateLux(0xf0)) // 92.16 106.56 188006.4 (the listener printed 92.16)
+console.log(max44009.lux, max44009.calculateLux(0x54, 0x0a), max44009.calculateLux(0xf0))
 max44009.stop()
 
-// TEMT6000 on analog pin 0 with the 5 V front end: one step is about 0.98 lux.
-client.process(Buffer.from([0xf0, 0x6c, 2, 10, 127, 0xf7]))
-client.process(Buffer.from([0xf0, 0x6a, 0, 127, 0xf7]))
-out()
 const temt6000 = new TEMT6000(client, 0)
 temt6000.addListener((device) => console.log('TEMT6000', device.lux))
 temt6000.start()
-console.log(out()) // [ "f40002", "ef01" ] (the listener printed the cached 0)
-client.process(Buffer.from([0xe0, 100 & 0x7f, 100 >> 7]))
-console.log(temt6000.lux, temt6000.calculate(1023), temt6000.name) // 97.75171065493646 true TEMPT6000 (the listener printed 97.75171065493646)
+console.log(temt6000.lux, temt6000.calculate(1023), temt6000.name)
 temt6000.stop()
 ```
 
@@ -16381,44 +16062,30 @@ temt6000.stop()
 `HMC5883L` drives the Honeywell HMC5883L three-axis magnetometer over I2C and implements `Magnetometer` (`x`, `y` and `z` in gauss, in the sensor frame). The constructor takes the `client`, the I2C `address` (`HMC5883L.ADDRESS`, 0x1E), the `pollingInterval` in milliseconds (`DEFAULT_POLLING_INTERVAL`) and `HMC5883LOptions`: `sampleAveraging` (1, 2, 4 or 8 samples per output), `dataRate` (0.75, 1.5, 3, 7.5, 15, 30 or 75 Hz) and the full-scale `range` in gauss (0.88, 1.3, 1.9, 2.5, 4, 4.7, 5.6 or 8.1), with `DEFAULT_HMC5883L_OPTIONS` of 1, 15 Hz and 1.3 gauss. `start()` registers the handler, sets the read delay to zero, writes the two configuration registers and the continuous-measurement mode and requests the six data bytes from register 0x03, repeating on a timer that never runs faster than the data rate (`ceil(1000 / dataRate)` milliseconds); `stop()` cancels the timer. A reply is decoded as big-endian signed 16-bit values in the chip order X, Z, Y and converted with the counts per gauss of the range (1370, 1090, 820, 660, 440, 390, 330 or 230); a sample where any axis is the overflow value -4096 is dropped entirely. `rawToGauss(raw)` exposes the conversion, and listeners are notified when an axis changed (see Firmata Peripheral Base). No hard-iron or soft-iron calibration and no declination is applied, so the reading is the raw field including the offsets of nearby metal and currents, and a heading needs a calibration and a tilt compensation done by the caller.
 
 ```ts
-import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
 import { DEFAULT_HMC5883L_OPTIONS, HMC5883L } from 'nebulosa/src/devices/firmata/sensors/magnetometer'
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
-const reply = (data: Buffer) => client.process(Buffer.from([0xf0, 0x77, HMC5883L.ADDRESS, 0, 0x03, 0, ...[...data].flatMap((byte) => [byte & 0x7f, byte >> 7]), 0xf7]))
-const sample = (x: number, z: number, y: number) => {
-	const data = Buffer.alloc(6)
-	data.writeInt16BE(x, 0)
-	data.writeInt16BE(z, 2)
-	data.writeInt16BE(y, 4)
-	return data
-}
-
-console.log(HMC5883L.ADDRESS, DEFAULT_HMC5883L_OPTIONS) // 30 { sampleAveraging: 1, dataRate: 15, range: 1.3 }
+console.log(HMC5883L.ADDRESS, DEFAULT_HMC5883L_OPTIONS)
 
 // The defaults (no averaging, 15 Hz, 1.3 gauss = 1090 counts per gauss): start() writes the setup and reads 6 bytes.
 const compass = new HMC5883L(client)
 compass.addListener((device) => console.log('field', device.x, device.y, device.z))
 compass.start()
-console.log(out()) // [ "f0780000f7", "f0761e0000001000f7", "f0761e0001002000f7", "f0761e0002000000f7", "f0761e0803000600f7" ]
 
-// The registers are X, Z, Y: 218 counts of X, 109 of Z and -545 of Y (0.2, 0.1 and -0.5 gauss).
-reply(sample(218, 109, -545))
-console.log(compass.x, compass.y, compass.z, compass.samples) // 0.2 -0.5 0.1 1
+console.log(compass.x, compass.y, compass.z, compass.samples)
 
-console.log(compass.rawToGauss(1090)) // 1
+console.log(compass.rawToGauss(1090))
 compass.stop()
 
 // Eight-sample averaging at 75 Hz and the widest range (8.1 gauss, 230 counts per gauss).
 const fast = new HMC5883L(client, HMC5883L.ADDRESS, 10, { sampleAveraging: 8, dataRate: 75, range: 8.1 })
 fast.start()
-console.log(out()) // [ "f0780000f7", "f0761e0000007800f7", "f0761e0001006001f7", "f0761e0002000000f7", "f0761e0803000600f7" ]
-reply(sample(230, 0, -115))
-console.log(fast.x, fast.y, fast.rawToGauss(230)) // 1 -0.5 1
+console.log(fast.x, fast.y, fast.rawToGauss(230))
 fast.stop()
 ```
 
@@ -16427,20 +16094,16 @@ fast.stop()
 `devices/firmata/peripheral` defines what every Firmata-attached sensor or actuator is and the base classes that implement the common plumbing. A `Peripheral` has a `name`, the owning `client`, `start()` and `stop()` and is `Disposable` (disposing stops it); a `ListenablePeripheral` also reports `samples` and accepts listeners. The measurement contracts are `Thermometer` (`temperature` in degrees Celsius), `Hygrometer` (`humidity` in percent), `Barometer` (`pressure` in hPa), `Altimeter` (`altitude`, a `Distance` in AU), `Luxmeter` (`lux`), `Ammeter` (`current` in amperes), `Accelerometer` (`ax`, `ay`, `az` in m/s²), `Gyroscope` (`gx`, `gy`, `gz` in rad/s), `Magnetometer` (`x`, `y`, `z` in gauss), `RadioTuner`, `RadioTransmitter`, `RealTimeClock`, `IOExpander` and `Display`, each implemented by the classes of the following topics. `PeripheralBase` implements `addListener`, `removeListener`, `samples`, `initialized`, `close` (stops the peripheral when its own client disconnects) and `Symbol.dispose`, and gives subclasses the protected `fire()`, `commit(changed)`, `readTwoWireRegister(address, register, bytes, timeout?)`, `resolvePendingTwoWireRead(...)` and `clearPendingTwoWireReads(error)`. Listeners are called with the peripheral on every change; a listener added later still gets its first reading even when the value did not change (`commit(false)` delivers that first completed read only to the listeners that still wait for one, while `fire()` notifies everyone), and `samples` counts every completed reading, changed or not, so a consumer can tell a sensor that holds a steady value from one that stopped answering. `initialized` is true when there is at least one listener and every listener already received a reading. Adding the same listener twice does not re-arm it. `readTwoWireRegister` queues one register read per address and register pair, sends it with `twoWireRead` and resolves with a copy of the reply data when the subclass forwards the `twoWireMessage` event to `resolvePendingTwoWireRead` (it ignores replies of another client), and rejects after `timeoutMs` (1000 by default, and clearing the queue rejects the pending reads). `ADCPeripheral` is the base of the analog sensors: it declares the analog `pin` and a `calculate(raw)` that stores the derived reading and returns whether it changed; `start()` registers the handler, sets the pin to analog mode, enables the analog report and commits an initial sample from the cached pin value, `stop()` undoes that, and every `pinChange` of the pin commits a new one. `DEFAULT_POLLING_INTERVAL` (5000 ms) is the period used by the peripherals that poll on a timer. The raw reading of an ADC peripheral is the 10-bit-style value of the Firmata analog report, and the conversion to the physical unit is the subclass job.
 
 ```ts
-import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
 import { ADCPeripheral, DEFAULT_POLLING_INTERVAL, PeripheralBase, type Thermometer } from 'nebulosa/src/devices/firmata/peripheral'
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import type { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 
-console.log(DEFAULT_POLLING_INTERVAL) // 5000
+console.log(DEFAULT_POLLING_INTERVAL)
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
-
-// A board with one analog-capable pin: pin 0 is analog channel 0 and a 10-bit ADC.
-client.process(Buffer.from([0xf0, 0x6c, 2, 10, 127, 0xf7]))
-client.process(Buffer.from([0xf0, 0x6a, 0, 127, 0xf7]))
-out()
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
 // An analog thermistor-like sensor: 10 mV per degree with a 3.3 V reference and a 10-bit converter.
 class Probe extends ADCPeripheral<Probe> implements Thermometer {
@@ -16465,27 +16128,19 @@ const first = (device: Probe) => console.log('first', device.temperature)
 const second = (device: Probe) => console.log('second', device.temperature)
 probe.addListener(first)
 probe.addListener(first)
-console.log(probe.initialized, probe.samples) // false 0
+console.log(probe.initialized, probe.samples)
 
-// start() puts the pin in analog mode, enables its report and commits the cached value (0 here: the first listener still gets its first reading, printing first 0).
+// start() puts the pin in analog mode, enables its report and commits the cached value. The analog reports of the board then feed calculate().
 probe.start()
-console.log(out(), probe.initialized, probe.samples) // [ "f40002", "ef01" ] true 1
+console.log(probe.initialized, probe.samples, probe.temperature)
 
-// An analog report with raw value 77: 77 / 1023 * 330 is about 24.8 degrees.
-client.process(Buffer.from([0xe0, 77, 0]))
-console.log(probe.temperature, probe.samples) // 24.838709677419352 2
-
-// A repeated value does not notify the listener again, but is still a sample; a new listener gets its first reading at the next sample (printing second).
-client.process(Buffer.from([0xe0, 77, 0]))
+// A repeated value does not notify the listener again, but is still a sample; a new listener gets its first reading at the next sample.
 probe.addListener(second)
-console.log(probe.initialized, probe.samples) // false 3
-client.process(Buffer.from([0xe0, 77, 0]))
-console.log(probe.initialized, probe.samples) // true 4
+console.log(probe.initialized, probe.samples)
 probe.removeListener(first)
 probe.removeListener(second)
-console.log(probe.initialized) // false
+console.log(probe.initialized)
 probe.stop()
-console.log(out()) // [ "ef00" ]
 
 // A register-based I2C sensor: queue reads and resolve them from the twoWireMessage events.
 class Register extends PeripheralBase<Register> {
@@ -16511,21 +16166,16 @@ class Register extends PeripheralBase<Register> {
 	}
 }
 
-const device = new Register(client)
+using device = new Register(client)
 const read = device.read(0x02, 2)
-console.log(out()) // [ "f076400802000200f7" ]
-client.process(Buffer.from([0xf0, 0x77, 0x40, 0, 0x02, 0, 0x12, 0, 0x34, 0, 0xf7]))
-console.log(await read) // <Buffer 12 34>
+console.log(await read)
 
 // Two reads of the same register are answered in order, one reply each.
 const [a, b] = [device.read(0x03, 1), device.read(0x03, 1)]
-client.process(Buffer.from([0xf0, 0x77, 0x40, 0, 0x03, 0, 0x01, 0, 0xf7]))
-client.process(Buffer.from([0xf0, 0x77, 0x40, 0, 0x03, 0, 0x02, 0, 0xf7]))
-console.log(await a, await b) // <Buffer 01> <Buffer 02>
+console.log(await a, await b)
 
 // Closing the client stops the device through the close hook, and disposal does the same.
 client.disconnect()
-device[Symbol.dispose]()
 ```
 
 ### Firmata Real-Time Clock
@@ -16537,53 +16187,38 @@ The constructor takes the `client`, the I2C `address` (`ADDRESS` 0x68 for both) 
 `update(year?, month?, day?, dayOfWeek?, hour?, minute?, second?, millisecond?)` writes the time in BCD in 24-hour format and then requests a read; every omitted argument keeps its latest decoded value, and the DS3231 sets the century bit for years from 2100 on. `sync(date?)` calls `update` with the fields of a `Date` in the local time zone of the host (the current time by default); the millisecond is accepted for symmetry but not stored. The DS1307 oscillator can be halted by its seconds-register bit and neither driver manages that bit, the alarms or the DS3231 temperature register.
 
 ```ts
-import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
 import { DS1307, DS3231 } from 'nebulosa/src/devices/firmata/components/rtc'
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
-// The wire form of the 7-byte calendar block read from register 0.
-const reply = (data: number[]) => client.process(Buffer.from([0xf0, 0x77, 0x68, 0, 0, 0, ...data.flatMap((byte) => [byte & 0x7f, byte >> 7]), 0xf7]))
-
-console.log(DS3231.ADDRESS, DS1307.ADDRESS) // 104 104
+console.log(DS3231.ADDRESS, DS1307.ADDRESS)
 
 // DS3231: start() requests the 7 calendar bytes.
 const ds3231 = new DS3231(client)
 ds3231.addListener((device) => console.log('DS3231', device.year, device.month, device.day, device.dayOfWeek, device.hour, device.minute, device.second))
 ds3231.start()
-console.log(out()) // [ "f0780000f7", "f076680800000700f7" ]
 
-// 2025-03-14 (a Friday, register 6) 09:26:53 in 24-hour mode: the BCD bytes.
-reply([0x53, 0x26, 0x09, 0x06, 0x14, 0x03, 0x25])
-console.log(ds3231.year, ds3231.month, ds3231.day, ds3231.dayOfWeek, ds3231.hour, ds3231.minute, ds3231.second, ds3231.millisecond, ds3231.samples) // 2025 3 14 5 9 26 53 0 1 (the listener printed the same fields)
-
-// 2125-12-31 11 PM in 12-hour mode (bit 6 set, PM bit 5 set, hour 11): the century bit of the month register selects 2100.
-reply([0x59, 0x59, 0x71, 0x04, 0x31, 0x92, 0x25])
-console.log(ds3231.year, ds3231.month, ds3231.hour) // 2125 12 23 (the listener printed the new fields)
+console.log(ds3231.year, ds3231.month, ds3231.day, ds3231.dayOfWeek, ds3231.hour, ds3231.minute, ds3231.second, ds3231.millisecond, ds3231.samples)
 
 // Set the clock to 2026-10-05 (a Monday, 1) 21:30:15; the time is written and read back.
 ds3231.update(2026, 10, 5, 1, 21, 30, 15)
-console.log(out()) // [ "f0780000f7", "f076680000001500300021000200050010002600f7", "f076680800000700f7" ]
 
-// An omitted argument keeps the decoded value: only the hour is changed here (the chip was read as 2125-12-31).
+// An omitted argument keeps the decoded value: only the hour is changed here.
 ds3231.update(undefined, undefined, undefined, undefined, 3)
-console.log(out()) // [ "f0780000f7", "f076680000005900590003000400310012012500f7", "f076680800000700f7" ]
 ds3231.stop()
 
 // sync() writes the fields of a Date in the host time zone (here a local-time Date built from fields).
 const ds1307 = new DS1307(client, DS1307.ADDRESS, 5000)
 ds1307.start()
-console.log(out()) // [ "f0780000f7", "f076680800000700f7" ]
 ds1307.sync(new Date(2026, 9, 5, 21, 30, 15))
-console.log(out()) // [ "f0780000f7", "f076680000001500300021000200050010002600f7", "f076680800000700f7" ]
 
-// The DS1307 has no century bit: the year is 2000 plus the two digits.
+// The DS1307 has no century bit: the year is 2000 plus the two digits of the chip.
 ds1307.addListener((device) => console.log('DS1307', device.year, device.month, device.day, device.hour, device.minute, device.second))
-reply([0x15, 0x30, 0x21, 0x02, 0x05, 0x10, 0x26])
-console.log(ds1307.year, ds1307.dayOfWeek) // 2026 1 (the listener printed 2026 10 5 21 30 15)
+console.log(ds1307.year, ds1307.dayOfWeek)
 ds1307.stop()
 ```
 
@@ -16598,17 +16233,15 @@ The constructor takes the `FirmataClient`, a non-empty `name` and `FirmataIndiCl
 The lifecycle is driven by the usual INDI commands. `sendSwitch({ device, name: 'CONNECTION', elements: { CONNECT: true } })` waits for readiness (the connection is Busy meanwhile), attaches the listener, publishes every measurement vector Busy, starts the peripheral and finally sets the connection Idle; a vector settles to Idle with its first real reading, so a value that is not yet known is never presented as a measurement. Later readings publish a `setNumberVector` only when an element changed, except the weather vector, which is also republished every `reportInterval` (when new samples arrived) so its consumers can tell the sensor is alive. A reading outside the declared range of the vector is ignored and the vector keeps its last valid values. `DISCONNECT` removes the vectors and stops the peripheral, a disconnect during a connect cancels it, and a connection that fails leaves `CONNECTION` in the Alert state. `getProperties({ device?, name? })` replays the definitions (the measurements only while connected), `sendText` and `sendNumber` are ignored by the sensors, and `enableBlob` does nothing. On a clock, `sendNumber` for `TIME` writes the given fields (the others keep the current values, and an incomplete write before the first reading is ignored; the day of the week is computed), publishing the accepted values at once, and `TIME_SYNC` writes the host clock. `dispose()` (also `Symbol.dispose`) tears every device down, deletes their properties, detaches from the Firmata client and calls `handler.close(client, false)` once; a device's own `dispose()` removes only that device and frees its name.
 
 ```ts
-import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
-import { FirmataIndiClient } from 'nebulosa/src/devices/firmata/adapters/indi.client'
 import { DS3231 } from 'nebulosa/src/devices/firmata/components/rtc'
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
+import { FirmataIndiClient } from 'nebulosa/src/devices/firmata/adapters/indi.client'
 import { SHT21 } from 'nebulosa/src/devices/firmata/sensors/hygrometer'
 
-const sent: string[] = []
-const firmata = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-
-// The wire form of an I2C reply: the register as two 7-bit bytes and each data byte as two 7-bit bytes.
-const reply = (address: number, register: number, data: number[]) => firmata.process(Buffer.from([0xf0, 0x77, address, 0, register & 0x7f, register >> 7, ...data.flatMap((byte) => [byte & 0x7f, byte >> 7]), 0xf7]))
+// A Firmata client over TCP to a board (the address and port are an example).
+const firmata = new FirmataClientOverTcp(new ESP8266())
+await firmata.connect('192.168.0.50', 3030)
 
 // A handler that prints a line per event.
 const handler = {
@@ -16630,13 +16263,10 @@ const handler = {
 	close: (_: unknown, server: boolean) => console.log('close', server),
 }
 
-// The Firmata board finishes its initialization when it reports its firmware, its capabilities and its analog mapping.
+// The bridge is ready when the board finishes its initialization (firmware, capabilities and analog mapping).
 const bridge = new FirmataIndiClient(firmata, 'esp8266', { handler, connectionTimeout: 1000, reportInterval: 0 })
-console.log(bridge.type, bridge.id, bridge.description, bridge.ready) // FIRMATA 0691d06ace17eb66a69f943d62dd9204 Firmata Client (esp8266) false
-firmata.process(Buffer.from([0xf0, 0x79, 2, 5, 0x41, 0, 0xf7]))
-firmata.process(Buffer.from([0xf0, 0x6c, 0x7f, 0xf7]))
-firmata.process(Buffer.from([0xf0, 0x6a, 0x7f, 0xf7]))
-console.log(bridge.ready, await bridge.whenReady()) // true true
+console.log(bridge.type, bridge.id, bridge.description, bridge.ready)
+console.log(bridge.ready, await bridge.whenReady())
 
 // A weather sensor: the SHT21 becomes a Weather and Auxiliary device.
 const sht21 = new SHT21(firmata)
@@ -16645,16 +16275,12 @@ console.log(
 	weather.name,
 	weather.isConnected,
 	weather.measurements.map((m) => m.vector.name),
-) // SHT21 false [ 'WEATHER_PARAMETERS' ]
+)
 
 // Connect through the INDI command: the vector is defined Busy and settles to Idle with the first reading.
 bridge.sendSwitch({ device: 'SHT21', name: 'CONNECTION', elements: { CONNECT: true, DISCONNECT: false } })
 await Bun.sleep(20)
-console.log(weather.isConnected) // true
-
-// Raw temperature 0x6666 is about 23.43 C and raw humidity 0x7ccc is about 54.94 %.
-reply(SHT21.ADDRESS, 0xe3, [0x66, 0x66])
-reply(SHT21.ADDRESS, 0xe5, [0x7c, 0xcc])
+console.log(weather.isConnected)
 
 // getProperties replays the definitions of one device, or of every device when it is omitted.
 bridge.getProperties({ device: 'SHT21', name: 'WEATHER_PARAMETERS' })
@@ -16667,16 +16293,13 @@ bridge.enableBlob({ device: 'SHT21', value: 'Never' })
 
 // Disconnect removes the measurement vectors and stops the peripheral.
 bridge.sendSwitch({ device: 'SHT21', name: 'CONNECTION', elements: { CONNECT: false, DISCONNECT: true } })
-console.log(weather.isConnected) // false
+console.log(weather.isConnected)
 
-// A real-time clock: TIME is writable and TIME_SYNC writes the host clock. A DS3231 reply is 7 BCD registers.
+// A real-time clock: TIME is writable and TIME_SYNC writes the host clock.
 const ds3231 = new DS3231(firmata)
 const clock = bridge.createPeripheral(ds3231)
 await clock.connect()
-console.log(clock.isConnected) // true
-
-// 2026-10-05 (a Monday) 13:45:30 as BCD: seconds, minutes, hours, weekday (Sunday is 1), day, month, year.
-reply(DS3231.ADDRESS, 0x00, [0x30, 0x45, 0x13, 0x02, 0x05, 0x10, 0x26])
+console.log(clock.isConnected)
 
 // A partial write keeps the other fields; the day of the week is computed from the date (0 is Sunday).
 bridge.sendNumber({ device: 'DS3231', name: 'TIME', elements: { HOUR: 22, MINUTE: 10 } })
@@ -16689,7 +16312,7 @@ clock.disconnect()
 clock.dispose()
 bridge.dispose()
 bridge.dispose()
-console.log(bridge.ready) // false
+console.log(bridge.ready)
 ```
 
 ### INDI Camera Control
@@ -18194,21 +17817,7 @@ handleDelProperty(local, handlers, exposure)
 handlers.close(local, true)
 console.log(calls) // [ 'a:def:CCD_EXPOSURE', 'a:defNumberVector', 'a:vector:defNumberVector', 'b:set:CCD_EXPOSURE', 'a:setNumberVector', 'a:vector:setNumberVector', 'a:vector:defSwitchVector', 'b:del:CCD_EXPOSURE', 'b:close:true' ]
 
-// A local indiserver mock that records what the client sends and answers a getProperties request with a definition.
-const received: string[] = []
-const server = Bun.listen({
-	hostname: '127.0.0.1',
-	port: 0,
-	socket: {
-		data: (socket, data) => {
-			const text = data.toString()
-			received.push(text)
-			if (text.startsWith('<getProperties'))
-				socket.write('<defNumberVector device="CCD Simulator" name="CCD_EXPOSURE" label="Expose" group="Main Control" state="Idle" perm="rw" timeout="60"><defNumber name="CCD_EXPOSURE_VALUE" label="Duration" format="%5.2f" min="0.001" max="3600" step="0.001">1</defNumber></defNumberVector>')
-		},
-	},
-})
-
+// The events of a client are delivered to its handler. The address is an example of an INDI server.
 const events: string[] = []
 const client = new IndiClient({
 	handler: {
@@ -18229,11 +17838,10 @@ const client = new IndiClient({
 	},
 })
 
-console.log(DEFAULT_INDI_PORT, client.connected, client.id) // 7624 false undefined
-console.log(await client.connect('127.0.0.1', server.port), await client.connect('127.0.0.1', server.port)) // true false (the client logs 'connection open' with console.info)
-await Bun.sleep(100)
-console.log(client.connected, client.remoteHost, client.remotePort === server.port, client.remoteIp, client.description === `INDI Client at 127.0.0.1:${server.port}`, client.id.length) // true 127.0.0.1 true 127.0.0.1 true 32
-console.log(received[0], events[0]) // <getProperties version="1.7"></getProperties> def CCD Simulator/CCD_EXPOSURE Idle rw {"name":"CCD_EXPOSURE_VALUE","label":"Duration","format":"%5.2f","min":0.001,"max":3600,"step":0.001,"value":1}
+// connect opens the socket and asks the server for its properties (getProperties). It resolves false when already connected or connecting.
+console.log(DEFAULT_INDI_PORT, client.connected)
+await client.connect('localhost', DEFAULT_INDI_PORT)
+console.log(client.connected, client.remoteHost, client.remotePort, client.remoteIp, client.description, client.id)
 
 // The commands are serialized as XML: switches as On/Off, and the special characters of the text are escaped.
 client.getProperties({ device: 'CCD Simulator', name: 'CCD_EXPOSURE' })
@@ -18241,8 +17849,6 @@ client.enableBlob({ device: 'CCD Simulator', value: 'Also' })
 client.sendNumber({ device: 'CCD Simulator', name: 'CCD_EXPOSURE', elements: { CCD_EXPOSURE_VALUE: 2.5 } })
 client.sendSwitch({ device: 'CCD Simulator', name: 'CONNECTION', elements: { CONNECT: true, DISCONNECT: false } })
 client.sendText({ device: 'CCD Simulator', name: 'ACTIVE_DEVICES', elements: { ACTIVE_TELESCOPE: 'Mount & <Guider>' } })
-await Bun.sleep(100)
-console.log(received.slice(1).join('')) // <getProperties version="1.7" device="CCD Simulator" name="CCD_EXPOSURE"></getProperties><enableBLOB device="CCD Simulator">Also</enableBLOB><newNumberVector device="CCD Simulator" name="CCD_EXPOSURE"><oneNumber name="CCD_EXPOSURE_VALUE">2.5</oneNumber></newNumberVector><newSwitchVector device="CCD Simulator" name="CONNECTION"><oneSwitch name="CONNECT">On</oneSwitch><oneSwitch name="DISCONNECT">Off</oneSwitch></newSwitchVector><newTextVector device="CCD Simulator" name="ACTIVE_DEVICES"><oneText name="ACTIVE_TELESCOPE">Mount &amp; &lt;Guider&gt;</oneText></newTextVector>
 
 // The XML stream is parsed in any chunking: here a set vector of each kind, a message and a deletion split in the middle of a tag.
 const xml = Buffer.from(
@@ -18257,12 +17863,10 @@ const xml = Buffer.from(
 client.parse(xml.subarray(0, 60))
 client.parse(xml.subarray(60, 200))
 client.parse(xml.subarray(200))
-console.log(events.slice(1)) // [ 'def CCD Simulator/CCD_EXPOSURE Idle rw {...}', 'set CCD_EXPOSURE Busy 0.5', 'set CONNECTION CONNECT=true,DISCONNECT=false', 'set NAME Camera and Co', 'def STATUS Ok', 'set CCD1 .fits 5 hello', 'message CCD Simulator Exposure complete', 'del CCD Simulator CCD_EXPOSURE' ] (the first event is the definition received on connect, and 0:30:00 is parsed as 0.5)
+console.log(events)
 
 // close() drops the connection without notifying the handler.
 client.close()
-console.log(client.connected, client.remoteHost) // false 127.0.0.1
-server.stop(true)
 
 // The device model: the interface bit mask, the guards and the default templates.
 const mask = DeviceInterfaceType.CCD | DeviceInterfaceType.GUIDER | DeviceInterfaceType.FILTER
@@ -18735,252 +18339,163 @@ console.log(lines.slice(2, 8)) // [ 'optical|2024-03-05T10:20:30.250Z|568|433|tr
 
 ### AstroBin Equipment API
 
-The client of `src/adapters/imaging/astrobin.ts` reads the equipment database of AstroBin (API v2, `BASE_URL` plus `api/v2/equipment/`) with `GET` requests that ask for JSON. There are three kinds of equipment, each with a listing by page and a lookup by id: `sensors(page)` and `sensor(id)`, `cameras(page)` and `camera(id)`, and `telescopes(page)` and `telescope(id)`. A listing returns an `AstrobinPage` with the total `count`, the `results` of the page and the addresses `next` and `previous` of the neighbor pages (`null` when there is none), so a caller walks the whole database by increasing the page number until `next` is `null`; a lookup returns one record. Every record has `id`, `brandName` and `name`. An `AstrobinSensor` adds `pixelSize` (micrometers), `pixelWidth` and `pixelHeight` (pixels), `quantumEfficiency`, `readNoise` and `fullWellCapacity`, `frameRate`, `adc`, `colorOrMono` (`'M'` or `'C'`) and `cameras`, the ids of the cameras that use it; an `AstrobinCamera` adds `cooled`, `type` and `sensor`, the id of its sensor; and an `AstrobinTelescope` adds `type`, `aperture` (mm) and the `minFocalLength` and `maxFocalLength` (mm). The numeric specifications that are not counts are strings, exactly as the API gives them, and many fields can be `null`. The functions return `undefined` (after logging the status, the address and the text with `console.error`) when the response is not successful or is empty, and the JSON is not validated. The snippet replaces `fetch` by a local stand-in with one page of each kind, so it does not use the network.
+The client of `src/adapters/imaging/astrobin.ts` reads the equipment database of AstroBin (API v2, `BASE_URL` plus `api/v2/equipment/`) with `GET` requests that ask for JSON. There are three kinds of equipment, each with a listing by page and a lookup by id: `sensors(page)` and `sensor(id)`, `cameras(page)` and `camera(id)`, and `telescopes(page)` and `telescope(id)`. A listing returns an `AstrobinPage` with the total `count`, the `results` of the page and the addresses `next` and `previous` of the neighbor pages (`null` when there is none), so a caller walks the whole database by increasing the page number until `next` is `null`; a lookup returns one record. Every record has `id`, `brandName` and `name`. An `AstrobinSensor` adds `pixelSize` (micrometers), `pixelWidth` and `pixelHeight` (pixels), `quantumEfficiency`, `readNoise` and `fullWellCapacity`, `frameRate`, `adc`, `colorOrMono` (`'M'` or `'C'`) and `cameras`, the ids of the cameras that use it; an `AstrobinCamera` adds `cooled`, `type` and `sensor`, the id of its sensor; and an `AstrobinTelescope` adds `type`, `aperture` (mm) and the `minFocalLength` and `maxFocalLength` (mm). The numeric specifications that are not counts are strings, exactly as the API gives them, and many fields can be `null`. The functions return `undefined` (after logging the status, the address and the text with `console.error`) when the response is not successful or is empty, and the JSON is not validated. The ids below are only examples of the kind of value a caller passes.
 
 ```ts
-import { BASE_URL, camera, cameras, sensor, sensors, telescope, telescopes } from 'nebulosa/src/adapters/imaging/astrobin'
+import { camera, cameras, sensor, sensors, telescope, telescopes } from 'nebulosa/src/adapters/imaging/astrobin'
 
-// A local stand-in for the service: it records the addresses and answers by the path.
-const addresses: string[] = []
-const imx = { id: 7, brandName: 'Sony', name: 'IMX571', quantumEfficiency: '91', pixelSize: '3.76', pixelWidth: 6248, pixelHeight: 4176, readNoise: '1.6', fullWellCapacity: '51000', frameRate: 3, adc: 16, colorOrMono: 'M', cameras: [21] }
-const asi2600 = { id: 21, brandName: 'ZWO', name: 'ASI2600MM Pro', cooled: true, sensor: 7, type: 'DEDICATED_DEEP_SKY' }
-const refractor = { id: 5, brandName: 'Askar', name: '120APO', type: 'REFRACTOR_APOCHROMATIC', aperture: '120', minFocalLength: '840', maxFocalLength: '840' }
-
-globalThis.fetch = (async (input: string | URL | Request) => {
-	const url = input.toString()
-	addresses.push(url)
-	const path = new URL(url).pathname
-	const page = (results: object[]) => Response.json({ count: results.length + 1, results, next: `${url.split('?')[0]}?page=2`, previous: null })
-
-	if (path.endsWith('/sensor/')) return page([imx])
-	if (path.endsWith('/camera/')) return page([asi2600])
-	if (path.endsWith('/telescope/')) return page([refractor])
-	if (path.endsWith('/sensor/7')) return Response.json(imx)
-	if (path.endsWith('/camera/21')) return Response.json(asi2600)
-	return Response.json(refractor)
-}) as typeof fetch
-
-// A page of sensors: the first of the listing, with its count and the address of the next page.
+// A page of sensors: the total count, the records of the page and the addresses of the neighbor pages.
 const page = await sensors(1)
-console.log(page!.count, page!.next, page!.previous, page!.results.length) // 2 https://www.astrobin.com/api/v2/equipment/sensor/?page=2 null 1
-console.log(page!.results[0].name, page!.results[0].pixelSize, page!.results[0].pixelWidth, page!.results[0].pixelHeight, page!.results[0].colorOrMono, page!.results[0].cameras) // IMX571 3.76 6248 4176 M [ 21 ]
+console.log(page?.count, page?.next, page?.previous, page?.results.length)
 
-// The specifications are strings: convert the ones that are needed.
-const pixelSize = +page!.results[0].pixelSize
-console.log(pixelSize, (pixelSize * page!.results[0].pixelWidth) / 1000, 'mm of width') // 3.76 23.49248 mm of width
+// Each record carries the specifications as the API publishes them (strings for the decimal values).
+const first = page!.results[0]
+console.log(first.brandName, first.name, first.pixelSize, first.pixelWidth, first.pixelHeight, first.colorOrMono, first.cameras)
 
-// A sensor by id, the camera that has it and a telescope.
-const one = await sensor(7)
+// The specifications are strings: convert the ones that are needed. Here, the sensor width in mm.
+const widthMm = (+first.pixelSize * first.pixelWidth) / 1000
+
+// A sensor by id, then the camera that uses it, and a telescope by id.
+const one = await sensor(first.id)
 const body = await camera(one!.cameras[0])
-console.log(one!.brandName, one!.name, body!.brandName, body!.name, body!.cooled, body!.sensor === one!.id, body!.type) // Sony IMX571 ZWO ASI2600MM Pro true true DEDICATED_DEEP_SKY
+console.log(one?.name, body?.brandName, body?.name, body?.cooled, body?.sensor === one?.id, body?.type)
+
 const scope = await telescope(5)
-console.log(scope!.name, scope!.type, +scope!.aperture!, +scope!.minFocalLength!, +scope!.maxFocalLength!, +scope!.minFocalLength! / +scope!.aperture!) // 120APO REFRACTOR_APOCHROMATIC 120 840 840 7
+console.log(scope?.name, scope?.type, scope?.aperture, scope?.minFocalLength, scope?.maxFocalLength)
+
+// Focal ratio of a fixed-focal-length telescope, from the string specifications (focal length / aperture).
+const focalRatio = +scope!.minFocalLength! / +scope!.aperture!
 
 // The pages of cameras and telescopes.
-console.log(
-	(await cameras(1))!.results.map((item) => `${item.brandName} ${item.name}`),
-	(await telescopes(3))!.results.map((item) => item.name),
-) // [ "ZWO ASI2600MM Pro" ] [ "120APO" ]
+console.log((await cameras(1))?.results.map((item) => `${item.brandName} ${item.name}`))
+console.log((await telescopes(3))?.results.map((item) => item.name))
 
-// The requests: the page is a query parameter and the id is the last segment.
-console.log(
-	addresses.every((address) => address.startsWith(BASE_URL)),
-	BASE_URL,
-) // true https://www.astrobin.com/
-console.log(addresses.map((address) => address.slice(BASE_URL.length))) // [ "api/v2/equipment/sensor/?page=1", "api/v2/equipment/sensor/7", "api/v2/equipment/camera/21", "api/v2/equipment/telescope/5", "api/v2/equipment/camera/?page=1", "api/v2/equipment/telescope/?page=3" ]
+// Walk the whole sensor listing by following the page number until there is no next page.
+for (let number = 1, next = true; next; number++) {
+	const listing = await sensors(number)
+	next = !!listing?.next
+	for (const item of listing?.results ?? []) console.log(item.id, item.brandName, item.name)
+}
 ```
 
 ### Close Approach Data
 
-`closeApproaches(dateMin?, dateMax?, distance?)` (`src/adapters/orbits/sbd.ts`) queries the close-approach data service (`cad.api`, with the full name and the diameter requested and without restricting to near-Earth objects) for the approaches of small bodies to the Earth in a date interval and returns `{ signature, count, fields, data }`. `dateMin` is a Unix millisecond timestamp, or `'now'` or nothing for the current time, `dateMax` is a timestamp or a relative span `'${n}d'` of days after `dateMin` (`'7d'` by default) and `distance` is the largest nominal approach distance in lunar distances (10 by default); the dates are sent as `YYYY-MM-DD` (UTC). `fields` names the columns, which the service gives as `des`, `orbit_id`, `jd`, `cd`, `dist` (nominal distance in AU), `dist_min` and `dist_max` (AU), `v_rel` and `v_inf` (km/s), `t_sigma_f`, `h` (absolute magnitude), `diameter` and `diameter_sigma` (km) and `fullname`, and `data` has one array of strings per approach in that order. The result is normalized so that `fields` and `data` are empty arrays when the service finds nothing and omits them. The values are text as published; the call does not parse numbers or check the HTTP status. The snippet replaces `fetch` by a local stand-in that records the address and returns two rows, so it does not use the network.
+`closeApproaches(dateMin?, dateMax?, distance?)` (`src/adapters/orbits/sbd.ts`) queries the close-approach data service (`cad.api`, with the full name and the diameter requested and without restricting to near-Earth objects) for the approaches of small bodies to the Earth in a date interval and returns `{ signature, count, fields, data }`. `dateMin` is a Unix millisecond timestamp, or `'now'` or nothing for the current time, `dateMax` is a timestamp or a relative span `'${n}d'` of days after `dateMin` (`'7d'` by default) and `distance` is the largest nominal approach distance in lunar distances (10 by default); the dates are sent as `YYYY-MM-DD` (UTC). `fields` names the columns, which the service gives as `des`, `orbit_id`, `jd`, `cd`, `dist` (nominal distance in AU), `dist_min` and `dist_max` (AU), `v_rel` and `v_inf` (km/s), `t_sigma_f`, `h` (absolute magnitude), `diameter` and `diameter_sigma` (km) and `fullname`, and `data` has one array of strings per approach in that order. The result is normalized so that `fields` and `data` are empty arrays when the service finds nothing and omits them. The values are text as published; the call does not parse numbers or check the HTTP status.
 
 ```ts
-import { closeApproaches, CLOSE_APPROACHES_PATH, SBD_BASE_URL } from 'nebulosa/src/adapters/orbits/sbd'
+import { closeApproaches } from 'nebulosa/src/adapters/orbits/sbd'
 
-// A local stand-in for the service: two approaches, and a result without rows for a very small distance.
-const addresses: string[] = []
-globalThis.fetch = (async (input: string | URL | Request) => {
-	addresses.push(input.toString())
-	const signature = { version: '1.5', source: 'NASA/JPL SBDB Close Approach Data API' }
-	if (new URL(addresses.at(-1)!).searchParams.get('dist-max') === '0.01LD') return Response.json({ signature, count: 0 })
-	return Response.json({
-		signature,
-		count: 2,
-		fields: ['des', 'orbit_id', 'jd', 'cd', 'dist', 'dist_min', 'dist_max', 'v_rel', 'v_inf', 't_sigma_f', 'h', 'diameter', 'diameter_sigma', 'fullname'],
-		data: [
-			['2026 TA', '12', '2461319.5', '2026-Oct-06 00:12', '0.0152', '0.0151', '0.0153', '9.8', '9.7', '00:01', '24.5', '0.045', '0.01', '(2026 TA)'],
-			['433', '659', '2461322.1', '2026-Oct-08 14:30', '0.1923', '0.1923', '0.1923', '5.6', '5.6', '< 00:01', '10.4', '16.84', '0.06', '433 Eros (A898 PA)'],
-		],
-	})
-}) as typeof fetch
-
-// The approaches from 2026-10-05 over 7 days (the default) within 10 lunar distances (the default).
-const start = Date.UTC(2026, 9, 5)
-const result = await closeApproaches(start)
-console.log(result.count, result.signature.version, result.fields.length) // 2 1.5 14
+// The approaches in the next 7 days (the default) within 10 lunar distances (the default).
+const week = await closeApproaches()
+console.log(week.count, week.signature.version, week.fields)
 
 // The rows are in the order of the fields. Pick the columns by name.
-const column = (name: (typeof result.fields)[number]) => result.fields.indexOf(name)
-for (const row of result.data) console.log(row[column('fullname')], row[column('cd')], `${row[column('dist')]} au`, `${row[column('v_rel')]} km/s`, `H=${row[column('h')]}`) // (2026 TA) 2026-Oct-06 00:12 0.0152 au 9.8 km/s H=24.5; 433 Eros (A898 PA) 2026-Oct-08 14:30 0.1923 au 5.6 km/s H=10.4
+const column = (name: (typeof week.fields)[number]) => week.fields.indexOf(name)
+for (const row of week.data) console.log(row[column('fullname')], row[column('cd')], `${row[column('dist')]} au`, `${row[column('v_rel')]} km/s`, `H=${row[column('h')]}`)
 
-// The request: the fixed query, the dates in UTC and the distance in lunar distances.
-const url = new URL(addresses[0])
-console.log(addresses[0].startsWith(`${SBD_BASE_URL}${CLOSE_APPROACHES_PATH}`), url.searchParams.get('date-min'), url.searchParams.get('date-max'), url.searchParams.get('dist-max')) // true 2026-10-05 2026-10-12 10LD
+// From a given date, with a span of 30 days and a limit of 1 lunar distance.
+const start = Date.UTC(2026, 9, 5)
+const month = await closeApproaches(start, '30d', 1)
+console.log(month.count)
 
-// An explicit span of 30 days and a closer limit, then a final date.
-await closeApproaches(start, '30d', 1)
-console.log(new URL(addresses.at(-1)!).searchParams.get('date-max'), new URL(addresses.at(-1)!).searchParams.get('dist-max')) // 2026-11-04 1LD
-await closeApproaches(start, Date.UTC(2026, 9, 10), 5)
-console.log(new URL(addresses.at(-1)!).searchParams.get('date-max'), new URL(addresses.at(-1)!).searchParams.get('dist-max')) // 2026-10-10 5LD
-
-// A response without rows gives empty arrays and not undefined.
-const none = await closeApproaches(start, '1d', 0.01)
-console.log(none.count, none.fields, none.data) // 0 [] []
-
-// With no date the interval starts now.
-await closeApproaches()
-console.log(new URL(addresses.at(-1)!).searchParams.get('date-min') === new Date().toISOString().slice(0, 10)) // true
+// With a final date given as a timestamp and a limit of 5 lunar distances.
+const interval = await closeApproaches(start, Date.UTC(2026, 9, 10), 5)
+console.log(interval.count, interval.data.length)
 ```
 
 ### Gaia DR3 Star Catalog
 
-`VizierGaiaCatalog` (`src/adapters/catalogs/vizier.ts`) is a star catalog (see Star Catalog Interface and Spatial Query) over the Gaia DR3 table of VizieR (`I/355/gaiadr3`), queried remotely through the TAP endpoint of VizieR TAP Queries. `new VizierGaiaCatalog(options?)` takes the `VizierQueryOptions` (host, timeout, signal and the fetch options); the parsing options `skipFirstLine` and `forceTrim` are always enabled. The catalog has the six query methods of the interface (`queryCone`, `queryBox`, `queryTriangle`, `queryPolygon`, `queryRegion` and `streamRegion`), where each query becomes an ADQL `SELECT` of `Source, RAJ2000, DEJ2000, Gmag, pmRA, pmDE, RV` ordered by `Gmag`, with the coarse boxes of the region and the condition `Gmag IS NOT NULL` (an object without a G magnitude never appears) in the `WHERE`, and the exact geometry test is applied locally to the rows. `get(id)` returns one source by its Gaia `Source` identifier, a number, a bigint or a string of digits (a string or bigint keeps the full precision of the 64-bit id), or `undefined` when there is no row. Each `VizierGaiaCatalogEntry` has the `id` (a string), `epoch` 2000 (positions are at J2000 as VizieR gives them, not at the Gaia epoch of 2016), `rightAscension` and `declination` in radians, `magnitude` (G band), `pmRA` and `pmDEC` in radians per year (the published μα·cosδ is divided by cos δ, so that `pmRA` is dα/dt as the toolkit expects, and it is left out very close to a pole) and `rv` as a `Velocity`. There is no parallax. A row without a source id, position or G magnitude is skipped, and the other columns may be `undefined`. The whole answer of a region is read in a single request, so a very large region (the service limits the rows) is cut by the server, and a failed request gives an empty result. The snippet replaces `fetch` by a local stand-in with two stars, so it does not use the network.
+`VizierGaiaCatalog` (`src/adapters/catalogs/vizier.ts`) is a star catalog (see Star Catalog Interface and Spatial Query) over the Gaia DR3 table of VizieR (`I/355/gaiadr3`), queried remotely through the TAP endpoint of VizieR TAP Queries. `new VizierGaiaCatalog(options?)` takes the `VizierQueryOptions` (host, timeout, signal and the fetch options); the parsing options `skipFirstLine` and `forceTrim` are always enabled. The catalog has the six query methods of the interface (`queryCone`, `queryBox`, `queryTriangle`, `queryPolygon`, `queryRegion` and `streamRegion`), where each query becomes an ADQL `SELECT` of `Source, RAJ2000, DEJ2000, Gmag, pmRA, pmDE, RV` ordered by `Gmag`, with the coarse boxes of the region and the condition `Gmag IS NOT NULL` (an object without a G magnitude never appears) in the `WHERE`, and the exact geometry test is applied locally to the rows. `get(id)` returns one source by its Gaia `Source` identifier, a number, a bigint or a string of digits (a string or bigint keeps the full precision of the 64-bit id), or `undefined` when there is no row. Each `VizierGaiaCatalogEntry` has the `id` (a string), `epoch` 2000 (positions are at J2000 as VizieR gives them, not at the Gaia epoch of 2016), `rightAscension` and `declination` in radians, `magnitude` (G band), `pmRA` and `pmDEC` in radians per year (the published μα·cosδ is divided by cos δ, so that `pmRA` is dα/dt as the toolkit expects, and it is left out very close to a pole) and `rv` as a `Velocity`. There is no parallax. A row without a source id, position or G magnitude is skipped, and the other columns may be `undefined`. The whole answer of a region is read in a single request, so a very large region (the service limits the rows) is cut by the server, and a failed request gives an empty result.
 
 ```ts
 import { VizierGaiaCatalog } from 'nebulosa/src/adapters/catalogs/vizier'
 import { deg, toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
 import { toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
 
-// A local stand-in for the service: it records the queries and returns two stars of a table in the VizieR order.
-const queries: string[] = []
-globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-	const query = (init!.body as FormData).get('query') as string
-	queries.push(query)
-	const rows = ['Source\tRAJ2000\tDEJ2000\tGmag\tpmRA\tpmDE\tRV', '4472832130942575872\t83.8221\t-5.3911\t8.5\t1.5\t-2.5\t21.3', '4472832130942575999\t83.9\t-5.4\t12.2\t\t\t']
-	return new Response(rows.join('\n'))
-}) as typeof fetch
-
 const catalog = new VizierGaiaCatalog({ timeout: 30000 })
 
-// A cone of 3 arcminutes around the first star. The exact test removes the second one, which is outside.
+// A cone of 3 arcminutes around the Orion Nebula (J2000), ordered by the G magnitude.
 const stars = await catalog.queryCone(deg(83.8221), deg(-5.3911), deg(0.05))
-console.log(stars.length, stars[0].id, stars[0].epoch, toDeg(stars[0].rightAscension), toDeg(stars[0].declination), stars[0].magnitude) // 1 4472832130942575872 2000 83.8221 -5.3911 8.5
-console.log(toArcsec(stars[0].pmRA!) * 1000, toArcsec(stars[0].pmDEC!) * 1000, toKilometerPerSecond(stars[0].rv!)) // 1.506664624230924 -2.5 21.300000000000004
-console.log(queries[0]) // SELECT Source, RAJ2000, DEJ2000, Gmag, pmRA, pmDE, RV FROM "I/355/gaiadr3" WHERE (RAJ2000 >= 83.77187784580221 AND RAJ2000 <= 83.87232215419782 AND DEJ2000 >= -5.4411 AND DEJ2000 <= -5.341099999999999) AND Gmag IS NOT NULL ORDER BY GMag ASC
+for (const star of stars) console.log(star.id, star.epoch, toDeg(star.rightAscension), toDeg(star.declination), star.magnitude)
 
-// A box query: both stars are inside and the second one has no motion or velocity.
-const field = await catalog.queryRegion({ kind: 'box', minRA: deg(83.7), maxRA: deg(84), minDEC: deg(-5.5), maxDEC: deg(-5.3) })
-console.log(
-	field.map((star) => star.id),
-	field[1].pmRA,
-	field[1].pmDEC,
-	field[1].rv,
-) // [ "4472832130942575872", "4472832130942575999" ] undefined undefined undefined
-console.log(queries[1]) // SELECT Source, RAJ2000, DEJ2000, Gmag, pmRA, pmDE, RV FROM "I/355/gaiadr3" WHERE (RAJ2000 >= 83.7 AND RAJ2000 <= 84 AND DEJ2000 >= -5.5 AND DEJ2000 <= -5.300000000000001) AND Gmag IS NOT NULL ORDER BY GMag ASC
+// The proper motion (radians per year, dα/dt) and the radial velocity are optional.
+for (const star of stars) if (star.pmRA !== undefined && star.pmDEC !== undefined) console.log(toArcsec(star.pmRA) * 1000, toArcsec(star.pmDEC) * 1000, star.rv === undefined ? undefined : toKilometerPerSecond(star.rv))
 
-// The same region as a stream.
-for await (const star of catalog.streamRegion({ kind: 'box', minRA: deg(83.7), maxRA: deg(84), minDEC: deg(-5.5), maxDEC: deg(-5.3) })) console.log(star.id, star.magnitude) // 4472832130942575872 8.5; 4472832130942575999 12.2
+// A box, a region given as a shape, and the same region as a stream.
+const box = await catalog.queryBox(deg(83.7), deg(84), deg(-5.5), deg(-5.3))
+const region = await catalog.queryRegion({ kind: 'box', minRA: deg(83.7), maxRA: deg(84), minDEC: deg(-5.5), maxDEC: deg(-5.3) })
+console.log(box.length, region.length)
+for await (const star of catalog.streamRegion({ kind: 'box', minRA: deg(83.7), maxRA: deg(84), minDEC: deg(-5.5), maxDEC: deg(-5.3) })) console.log(star.id, star.magnitude)
 
-// A triangle and a polygon go through the same flow, and a box across RA 0 makes two predicates.
-console.log((await catalog.queryTriangle([deg(83.7), deg(-5.5)], [deg(84), deg(-5.5)], [deg(83.85), deg(-5.3)])).length) // 2
-console.log(
-	(
-		await catalog.queryPolygon([
-			[deg(83.7), deg(-5.5)],
-			[deg(84), deg(-5.5)],
-			[deg(84), deg(-5.3)],
-			[deg(83.7), deg(-5.3)],
-		])
-	).length,
-) // 2
-await catalog.queryBox(deg(359.9), deg(0.1), deg(-1), deg(1))
-console.log(queries.at(-1)!.includes(' OR ')) // true
+// A triangle and a polygon go through the same flow.
+const triangle = await catalog.queryTriangle([deg(83.7), deg(-5.5)], [deg(84), deg(-5.5)], [deg(83.85), deg(-5.3)])
+const polygon = await catalog.queryPolygon([
+	[deg(83.7), deg(-5.5)],
+	[deg(84), deg(-5.5)],
+	[deg(84), deg(-5.3)],
+	[deg(83.7), deg(-5.3)],
+])
+console.log(triangle.length, polygon.length)
 
-// One source by its identifier: a string keeps all the digits of the 64-bit id.
+// A box across RA 0 is split in two predicates by the query.
+const across = await catalog.queryBox(deg(359.9), deg(0.1), deg(-1), deg(1))
+console.log(across.length)
+
+// One source by its identifier: a string or a bigint keeps all the digits of the 64-bit id.
 const one = await catalog.get('4472832130942575872')
-console.log(one?.id, one?.magnitude) // 4472832130942575872 8.5
-console.log(queries.at(-1)) // SELECT TOP 1 Source, RAJ2000, DEJ2000, Gmag, pmRA, pmDE, RV FROM "I/355/gaiadr3" WHERE Source = 4472832130942575872 ORDER BY GMag ASC
-await catalog.get(4472832130942575872n)
-console.log(queries.at(-1)!.includes('Source = 4472832130942575872')) // true
+console.log(one?.id, one?.magnitude)
+console.log((await catalog.get(4472832130942575872n))?.id)
 ```
 
 ### HiPS Survey Discovery
 
-`hipsSurveys(minSkyFraction?, baseUrl?)` (`src/adapters/sky/hips2fits.ts`) lists the HiPS (Hierarchical Progressive Survey) image surveys that the CDS MocServer (`HIPS2FITS_BASE_URL`, with `HIPS2FITS_ALTERNATIVE_URL` as the mirror) knows: it queries `MocServer/query` for the records of the surveys whose identifier starts with `CDS`, served by the `alasky` hosts, of the image data product, covering at least `minSkyFraction` of the sky (0..1, 0.99 by default, which keeps the all-sky surveys), in any of the regimes optical, infrared, UV, radio, X-ray and gamma-ray, and in the `Image/` categories. It returns an array of `HipsSurvey` with the `id` (the identifier that `hips2Fits` takes, such as `CDS/P/DSS2/color`), the `category` path, the native `frame` (`'equatorial'` or `'galactic'`), the `regime` in lower case (`'optical'`, `'infrared'`, `'uv'`, `'radio'`, `'x-ray'` or `'gamma-ray'`), the pixel `bitpix` (0 when the record does not tell it), the native `pixelScale` in degrees per pixel and the `skyFraction` (0..1). A response that is not successful gives an empty array, and the order is the one of the service. The mapping reads the text fields of the record and converts the numbers, and nothing else is validated. The snippet replaces `fetch` by a local stand-in with a short answer, so it does not use the network.
+`hipsSurveys(minSkyFraction?, baseUrl?)` (`src/adapters/sky/hips2fits.ts`) lists the HiPS (Hierarchical Progressive Survey) image surveys that the CDS MocServer (`HIPS2FITS_BASE_URL`, with `HIPS2FITS_ALTERNATIVE_URL` as the mirror) knows: it queries `MocServer/query` for the records of the surveys whose identifier starts with `CDS`, served by the `alasky` hosts, of the image data product, covering at least `minSkyFraction` of the sky (0..1, 0.99 by default, which keeps the all-sky surveys), in any of the regimes optical, infrared, UV, radio, X-ray and gamma-ray, and in the `Image/` categories. It returns an array of `HipsSurvey` with the `id` (the identifier that `hips2Fits` takes, such as `CDS/P/DSS2/color`), the `category` path, the native `frame` (`'equatorial'` or `'galactic'`), the `regime` in lower case (`'optical'`, `'infrared'`, `'uv'`, `'radio'`, `'x-ray'` or `'gamma-ray'`), the pixel `bitpix` (0 when the record does not tell it), the native `pixelScale` in degrees per pixel and the `skyFraction` (0..1). A response that is not successful gives an empty array, and the order is the one of the service. The mapping reads the text fields of the record and converts the numbers, and nothing else is validated.
 
 ```ts
-import { HIPS2FITS_ALTERNATIVE_URL, HIPS2FITS_BASE_URL, hipsSurveys } from 'nebulosa/src/adapters/sky/hips2fits'
-
-// A local stand-in for the MocServer with two records, in the field names of the service.
-const addresses: string[] = []
-globalThis.fetch = (async (input: string | URL | Request) => {
-	addresses.push(input.toString())
-	return Response.json([
-		{ ID: 'CDS/P/DSS2/color', client_category: 'Image/Optical/DSS', hips_frame: 'equatorial', obs_regime: 'Optical', hips_pixel_bitpix: '8', hips_pixel_scale: '1.7E-4', moc_sky_fraction: '0.9999' },
-		{ ID: 'CDS/P/Fermi/color', client_category: 'Image/Gamma-ray/Fermi', hips_frame: 'galactic', obs_regime: 'Gamma-ray', hips_pixel_scale: '0.0366', moc_sky_fraction: '1' },
-	])
-}) as typeof fetch
+import { HIPS2FITS_ALTERNATIVE_URL, hipsSurveys } from 'nebulosa/src/adapters/sky/hips2fits'
 
 // The surveys that cover at least 99% of the sky (the default).
 const surveys = await hipsSurveys()
-console.log(surveys.length) // 2
-for (const survey of surveys) console.log(survey.id, survey.category, survey.frame, survey.regime, survey.bitpix, survey.pixelScale, survey.skyFraction) // CDS/P/DSS2/color Image/Optical/DSS equatorial optical 8 0.00017 0.9999; CDS/P/Fermi/color Image/Gamma-ray/Fermi galactic gamma-ray 0 0.0366 1
-
-// The query is the MocServer path with the filter expression.
-const url = new URL(addresses[0])
-console.log(addresses[0].startsWith(HIPS2FITS_BASE_URL), url.pathname, url.searchParams.get('get'), url.searchParams.get('fmt')) // true /MocServer/query record json
-console.log(url.searchParams.get('expr')) // ID=CDS* && hips_service_url*=*alasky* && dataproduct_type=image && moc_sky_fraction >= 0.99 && obs_regime=Optical,Infrared,UV,Radio,X-ray,Gamma-ray && client_category=Image/*
-
-// A lower coverage and the mirror host.
-await hipsSurveys(0.5, HIPS2FITS_ALTERNATIVE_URL)
-const mirror = new URL(addresses.at(-1)!)
-console.log(addresses.at(-1)!.startsWith(HIPS2FITS_ALTERNATIVE_URL), mirror.searchParams.get('expr')!.includes('moc_sky_fraction >= 0.5')) // true true
+console.log(surveys.length)
+for (const survey of surveys) console.log(survey.id, survey.category, survey.frame, survey.regime, survey.bitpix, survey.pixelScale, survey.skyFraction)
 
 // A client can pick by regime or by the pixel scale, which is in degrees per pixel (here in arcseconds).
-console.log(
-	surveys.filter((survey) => survey.regime === 'optical').map((survey) => survey.id),
-	surveys.map((survey) => survey.pixelScale * 3600),
-) // [ "CDS/P/DSS2/color" ] [ 0.6120000000000001, 131.76 ]
+const optical = surveys.filter((survey) => survey.regime === 'optical').map((survey) => survey.id)
+const scales = surveys.map((survey) => survey.pixelScale * 3600)
+console.log(optical, scales)
+
+// A lower coverage and the mirror host.
+const partial = await hipsSurveys(0.5, HIPS2FITS_ALTERNATIVE_URL)
+console.log(partial.length)
 ```
 
 ### HiPS2FITS Cutouts
 
-`hips2Fits(id, ra, dec, options?)` (`src/adapters/sky/hips2fits.ts`) asks the hips2fits service of the CDS (`HIPS2FITS_BASE_URL` plus `hips-image-services/hips2fits`) for a cutout of the HiPS survey `id` (for example `CDS/P/DSS2/color`, see HiPS Survey Discovery) centered on the ICRS position `ra` and `dec` (radians, converted to degrees in the request) and returns it as a `Blob`, or `undefined` when the response is not successful. The options are `width` and `height` (pixels, 1200 and 900 by default), `fov` (the field of view in radians, 1 degree by default), `rotation` (the angle of the image in radians, 0 by default), `projection` (the WCS code of the output, `'TAN'` by default, among `'AZP'`, `'SZP'`, `'TAN'`, `'STG'`, `'SIN'`, `'ARC'`, `'ZEA'`, `'AIR'`, `'CYP'`, `'CEA'`, `'CAR'`, `'MER'`, `'SFL'`, `'PAR'`, `'MOL'`, `'AIT'`, `'TSC'`, `'CSC'`, `'QSC'`, `'HPX'` and `'XPH'`), `coordSystem` (the frame of the output WCS, `'icrs'` by default or `'galactic'`; the center stays ICRS), `format` (`'fits'` by default, `'jpg'` or `'png'`), `baseUrl` (the host, `HIPS2FITS_ALTERNATIVE_URL` is the mirror) and `timeout` (milliseconds, 60000 by default). The id is URL-encoded, the angles are sent with the full precision of the conversion, and nothing is validated, so a combination that the service does not accept is only known from the response. The FITS cutout carries the WCS of the projection, so it can be read with the FITS reader (see FITS Image Reading) and used as an image with astrometry. The snippet replaces `fetch` by a local stand-in that records the address and returns a few bytes, so it does not use the network.
+`hips2Fits(id, ra, dec, options?)` (`src/adapters/sky/hips2fits.ts`) asks the hips2fits service of the CDS (`HIPS2FITS_BASE_URL` plus `hips-image-services/hips2fits`) for a cutout of the HiPS survey `id` (for example `CDS/P/DSS2/color`, see HiPS Survey Discovery) centered on the ICRS position `ra` and `dec` (radians, converted to degrees in the request) and returns it as a `Blob`, or `undefined` when the response is not successful. The options are `width` and `height` (pixels, 1200 and 900 by default), `fov` (the field of view in radians, 1 degree by default), `rotation` (the angle of the image in radians, 0 by default), `projection` (the WCS code of the output, `'TAN'` by default, among `'AZP'`, `'SZP'`, `'TAN'`, `'STG'`, `'SIN'`, `'ARC'`, `'ZEA'`, `'AIR'`, `'CYP'`, `'CEA'`, `'CAR'`, `'MER'`, `'SFL'`, `'PAR'`, `'MOL'`, `'AIT'`, `'TSC'`, `'CSC'`, `'QSC'`, `'HPX'` and `'XPH'`), `coordSystem` (the frame of the output WCS, `'icrs'` by default or `'galactic'`; the center stays ICRS), `format` (`'fits'` by default, `'jpg'` or `'png'`), `baseUrl` (the host, `HIPS2FITS_ALTERNATIVE_URL` is the mirror) and `timeout` (milliseconds, 60000 by default). The id is URL-encoded, the angles are sent with the full precision of the conversion, and nothing is validated, so a combination that the service does not accept is only known from the response. The FITS cutout carries the WCS of the projection, so it can be read with the FITS reader (see FITS Image Reading) and used as an image with astrometry.
 
 ```ts
-import { hips2Fits, HIPS2FITS_ALTERNATIVE_URL, HIPS2FITS_BASE_URL } from 'nebulosa/src/adapters/sky/hips2fits'
+import { hips2Fits, HIPS2FITS_ALTERNATIVE_URL } from 'nebulosa/src/adapters/sky/hips2fits'
 import { deg, hour } from 'nebulosa/src/math/units/angle'
-
-// A local stand-in for the service: it records the address and the signal, and returns a small payload.
-const requests: { url: URL; signal?: AbortSignal | null }[] = []
-globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-	requests.push({ url: new URL(input.toString()), signal: init?.signal })
-	return new Response(new Uint8Array([0x53, 0x49, 0x4d, 0x50, 0x4c, 0x45]), { headers: { 'Content-Type': 'application/fits' } })
-}) as typeof fetch
 
 // The Orion Nebula with the defaults: 1200 x 900 pixels, 1 degree, TAN projection, FITS.
 const blob = await hips2Fits('CDS/P/DSS2/color', hour(5.588), deg(-5.39))
-console.log(blob?.size, blob?.type) // 6 application/fits
-const first = requests[0].url
-console.log(first.origin + '/' === HIPS2FITS_BASE_URL.replace(/\/$/, '') + '/', first.pathname) // true /hips-image-services/hips2fits
-console.log(first.searchParams.get('hips'), first.searchParams.get('ra'), first.searchParams.get('dec')) // CDS/P/DSS2/color 83.82 -5.39
-console.log(first.searchParams.get('width'), first.searchParams.get('height'), first.searchParams.get('fov'), first.searchParams.get('projection'), first.searchParams.get('coordsys'), first.searchParams.get('rotation_angle'), first.searchParams.get('format')) // 1200 900 1 TAN icrs 0 fits
-console.log(requests[0].signal instanceof AbortSignal) // true
+console.log(blob?.size, blob?.type)
+
+// Save the cutout to a file.
+if (blob) await Bun.write('orion.fits', blob)
 
 // A wide field of 5 degrees in a 1000 x 600 JPEG, rotated by 30 degrees, in a different projection and in galactic coordinates.
-await hips2Fits('CDS/P/2MASS/color', deg(83.8), deg(-5.4), { width: 1000, height: 600, fov: deg(5), rotation: deg(30), projection: 'STG', coordSystem: 'galactic', format: 'jpg' })
-const wide = requests.at(-1)!.url.searchParams
-console.log(wide.get('hips'), wide.get('width'), wide.get('height'), wide.get('fov'), wide.get('rotation_angle'), wide.get('projection'), wide.get('coordsys'), wide.get('format')) // CDS/P/2MASS/color 1000 600 5 29.999999999999996 STG galactic jpg
+const wide = await hips2Fits('CDS/P/2MASS/color', deg(83.8), deg(-5.4), { width: 1000, height: 600, fov: deg(5), rotation: deg(30), projection: 'STG', coordSystem: 'galactic', format: 'jpg' })
+if (wide) await Bun.write('orion.jpg', wide)
 
 // The mirror host, the position 0, 0 and a long timeout.
-await hips2Fits('CDS/P/allWISE/color', 0, 0, { baseUrl: HIPS2FITS_ALTERNATIVE_URL, timeout: 120000 })
-const mirror = requests.at(-1)!.url
-console.log(mirror.origin + '/' === HIPS2FITS_ALTERNATIVE_URL, mirror.searchParams.get('hips'), mirror.searchParams.get('ra'), mirror.searchParams.get('dec')) // true CDS/P/allWISE/color 0 0
+const sky = await hips2Fits('CDS/P/allWISE/color', 0, 0, { baseUrl: HIPS2FITS_ALTERNATIVE_URL, timeout: 120000 })
+console.log(sky?.size)
 ```
 
 ### IAU Meteor Data Center catalog
 
-The adapter of `src/adapters/catalogs/iau.meteor.showers.ts` turns the stream catalog of the IAU Meteor Data Center (`IAU_METEOR_SHOWER_CATALOG_URL`, the `streamfulldata.json` document) into the meteor shower model of the toolkit (see Meteor Shower State and Meteor Radiants). It has three stages that can be used apart. `parseIauMeteorShowerCatalog(input)` accepts the parsed object or its JSON text and checks only the structure: a versioned object with a non-empty `source` and `version`, a `data` array of records, and a `solution` array of objects in each record; unknown properties of the records are kept as they are in the returned `IauMeteorShowerCatalog` (`source`, `version`, `count`, `fields` and `data`). `normalizeIauMeteorShowerCatalog(catalog)` returns `{ metadata, showers }`, where `metadata` has the `source`, the `version` and the `url`, and each `MeteorShower` has `catalogRecordId` (`LP`), `number` (`IAUNo`), `code`, `name` (the `Name`, else the provisional name, else `'Unnamed meteor shower'`), `provisionalName`, the `status` (`'working'` for 0, `'established'` for 1, `'toBeEstablished'` for 2, `'removed'` for a negative value and `'unknown'` otherwise), the original `sourceStatus` and the `solutions` in the source order. Numbers may be numbers or numeric text, a blank, missing or non-numeric value becomes `undefined` (never zero), and the conversions are: the angles from degrees to radians, with the right ascension and the longitudes normalized to 0..2π, the geocentric speed `Vg` from km/s to AU/day, and the semi-major axis and perihelion distance kept in AU. A `MeteorShowerSolution` carries the radiant (`rightAscension` and `declination`), the `radiantDrift` per day (`{ basis: 'day', rightAscensionRate, declinationRate }` in radians per day, only when both rates exist), the ecliptic radiant (`eclipticLongitude`, `eclipticLatitude` and the Sun-centered longitude), the reference `referenceSolarLongitude` and the `activityInterval` between the beginning and end solar longitudes (left out when either is missing or they are equal; it can wrap through 0), the `orbit` (`semiMajorAxis`, `perihelionDistance`, `eccentricity` and the `argumentOfPerihelion`, `longitudeOfAscendingNode` and `inclination` in radians, or `undefined` when no element is published), the `memberCount`, `parentBody`, `group`, the `observationTechnique` (`'ccd'`, `'photo'`, `'radar'`, `'tv'`, `'visual'` or `'unknown'` from the first letter of `Ote`), `submissionDate`, `sourceFlags`, `reference` (a text or the lines joined) and `remarks`. The `activity` is interpreted from the text of the catalog as `{ kind, source }`, with `kind` `'annual'` (for `annual`, `annual?` and `periodic`), `'outburst'` (a year with `out`, such as `2022out`, or a text with `outburst`), `'yearSpecific'` (a year, or a range such as `1989-92` or `1989-1992`, with `years`), `'variable'`, `'irregular'` or `'unknown'`; no activity profile is invented. `selectMeteorShowerSolution(shower, selector?)` picks one solution without mixing fields: `'largestSample'` (the default) is the one with the greatest `memberCount`, the first in the source order for a tie and `undefined` when none has a count, and a function receives the solutions and returns the one it chooses. `fetchIauMeteorShowerCatalog({ url?, signal?, timeout? })` downloads, parses and normalizes the catalog, adding `retrievedAt` (a `Date`) to the metadata, with an own `signal` and a `timeout` in milliseconds that abort the request; it throws when the response is not successful. The snippet works on a short catalog written in the shape of the MDC document (the values are only an illustration) and replaces `fetch` by a local stand-in for the download, so it does not use the network.
+The adapter of `src/adapters/catalogs/iau.meteor.showers.ts` turns the stream catalog of the IAU Meteor Data Center (`IAU_METEOR_SHOWER_CATALOG_URL`, the `streamfulldata.json` document) into the meteor shower model of the toolkit (see Meteor Shower State and Meteor Radiants). It has three stages that can be used apart. `parseIauMeteorShowerCatalog(input)` accepts the parsed object or its JSON text and checks only the structure: a versioned object with a non-empty `source` and `version`, a `data` array of records, and a `solution` array of objects in each record; unknown properties of the records are kept as they are in the returned `IauMeteorShowerCatalog` (`source`, `version`, `count`, `fields` and `data`). `normalizeIauMeteorShowerCatalog(catalog)` returns `{ metadata, showers }`, where `metadata` has the `source`, the `version` and the `url`, and each `MeteorShower` has `catalogRecordId` (`LP`), `number` (`IAUNo`), `code`, `name` (the `Name`, else the provisional name, else `'Unnamed meteor shower'`), `provisionalName`, the `status` (`'working'` for 0, `'established'` for 1, `'toBeEstablished'` for 2, `'removed'` for a negative value and `'unknown'` otherwise), the original `sourceStatus` and the `solutions` in the source order. Numbers may be numbers or numeric text, a blank, missing or non-numeric value becomes `undefined` (never zero), and the conversions are: the angles from degrees to radians, with the right ascension and the longitudes normalized to 0..2π, the geocentric speed `Vg` from km/s to AU/day, and the semi-major axis and perihelion distance kept in AU. A `MeteorShowerSolution` carries the radiant (`rightAscension` and `declination`), the `radiantDrift` per day (`{ basis: 'day', rightAscensionRate, declinationRate }` in radians per day, only when both rates exist), the ecliptic radiant (`eclipticLongitude`, `eclipticLatitude` and the Sun-centered longitude), the reference `referenceSolarLongitude` and the `activityInterval` between the beginning and end solar longitudes (left out when either is missing or they are equal; it can wrap through 0), the `orbit` (`semiMajorAxis`, `perihelionDistance`, `eccentricity` and the `argumentOfPerihelion`, `longitudeOfAscendingNode` and `inclination` in radians, or `undefined` when no element is published), the `memberCount`, `parentBody`, `group`, the `observationTechnique` (`'ccd'`, `'photo'`, `'radar'`, `'tv'`, `'visual'` or `'unknown'` from the first letter of `Ote`), `submissionDate`, `sourceFlags`, `reference` (a text or the lines joined) and `remarks`. The `activity` is interpreted from the text of the catalog as `{ kind, source }`, with `kind` `'annual'` (for `annual`, `annual?` and `periodic`), `'outburst'` (a year with `out`, such as `2022out`, or a text with `outburst`), `'yearSpecific'` (a year, or a range such as `1989-92` or `1989-1992`, with `years`), `'variable'`, `'irregular'` or `'unknown'`; no activity profile is invented. `selectMeteorShowerSolution(shower, selector?)` picks one solution without mixing fields: `'largestSample'` (the default) is the one with the greatest `memberCount`, the first in the source order for a tie and `undefined` when none has a count, and a function receives the solutions and returns the one it chooses. `fetchIauMeteorShowerCatalog({ url?, signal?, timeout? })` downloads, parses and normalizes the catalog, adding `retrievedAt` (a `Date`) to the metadata, with an own `signal` and a `timeout` in milliseconds that abort the request; it throws when the response is not successful. The snippet works on a short catalog written in the shape of the MDC document (the values are only an illustration). The download in the last lines is a real request to the Data Center.
 
 ```ts
 import { fetchIauMeteorShowerCatalog, IAU_METEOR_SHOWER_CATALOG_URL, normalizeIauMeteorShowerCatalog, parseIauMeteorShowerCatalog, selectMeteorShowerSolution } from 'nebulosa/src/adapters/catalogs/iau.meteor.showers'
@@ -19065,241 +18580,130 @@ console.log(selectMeteorShowerSolution(perseids)?.solutionId, selectMeteorShower
 console.log(selectMeteorShowerSolution(perseids, (solutions) => solutions.find((solution) => solution.observationTechnique === 'radar'))?.solutionId) // 001
 console.log(selectMeteorShowerSolution(unnamed)?.solutionId, selectMeteorShowerSolution({ ...unnamed, solutions: [] })) // undefined undefined
 
-// The download, with a local stand-in for the service, the default address and a timeout.
-const requests: { url: string; signal?: AbortSignal | null }[] = []
-globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-	requests.push({ url: input.toString(), signal: init?.signal })
-	return Response.json(document)
-}) as typeof fetch
-
+// The download of the current catalog, with the default address and a timeout.
 const downloaded = await fetchIauMeteorShowerCatalog({ timeout: 30000 })
-console.log(downloaded.showers.length, downloaded.metadata.url === requests[0].url, downloaded.metadata.retrievedAt instanceof Date, requests[0].signal instanceof AbortSignal) // 2 true true true
+console.log(downloaded.showers.length, downloaded.metadata.url, downloaded.metadata.retrievedAt)
 
 // Another address and an own abort signal.
 const controller = new AbortController()
 await fetchIauMeteorShowerCatalog({ url: 'http://localhost:8080/streams.json', signal: controller.signal })
-console.log(requests[1].url) // http://localhost:8080/streams.json
 ```
 
 ### JPL Horizons Observer Tables
 
-`observer(input, center, coord, startTime, endTime, quantities?, options?, signal?)` (`src/adapters/ephemeris/horizons.ts`) asks the JPL Horizons API (`HORIZONS_BASE_URL`) for an observer table of a target and returns the rows of the CSV block between the `$$SOE` and `$$EOE` markers as arrays of strings (one array per time step, one string per column, the header dropped by default and the trailing empty column of the CSV kept). `input` is a Horizons target string (a name, an id, `'499'`, `'Ceres;'`), a TLE (`{ line1, line2, name? }`) or the osculating elements of the target (`{ epoch, ec, tpqr, om, w, i, ... }`, see JPL Horizons Orbital Elements). `center` is the observing site: `'geo'` for the geocenter, `'coord@399'` for a topocentric site on the Earth, or another body-centered string, and `coord` gives the site for the `coord` centers as `[longitude, latitude, elevation]` (radians, radians and AU, the elevation being sent in kilometers) or as a ready `'lon,lat,km'` string in degrees (`0`, `false` or `undefined` mean `'0,0,0'`). `startTime` and `endTime` are Unix milliseconds (UT scale for the observer table) or a library `Time`. `quantities` is a list of the `Quantity` codes (the columns of the table; the default is 1, 9, 20, 23, 24, 47 and 48, which are the astrometric position, magnitude, range, elongation, phase angle, sky motion and lunar sky brightness) and `options` (`ObserverVectorElementsOptions`) maps onto the Horizons parameters: `stepSize` and `stepSizeUnit` (the default is `60 m`), `refractionCorrection` (`REFRACTED` or `AIRLESS`), `extraPrecision`, `angleFormat` (`'DEG'` or `'HMS'`), `calendarFormat`, `calendarType`, `timeDigitsPrecision`, `rangeUnits`, `suppressRangeRate`, `skipDaylight`, `timeZone` (a `'+HH:MM'` string or the offset in minutes), `referenceSystem`, `coordinateType` and `skipFirstLine`. The columns that come back depend on the quantities, and their text is returned as the service gives it, so the caller must parse the numbers. When a name matches several small bodies, the service answers with an index of matches and `observer` tries once more, with `NOFRAG;` added for the fragments of a comet and `CAP<jd;` for the comets with several apparitions, and returns an empty array when that does not give a table. A call is one HTTP `GET` that `signal` can abort, and the service rate limits and changes are those of JPL. The snippet replaces `fetch` by a local stand-in that records the query and answers with a short table, so it does not need the network; the query values appear without the single quotes that Horizons requires around them.
+`observer(input, center, coord, startTime, endTime, quantities?, options?, signal?)` (`src/adapters/ephemeris/horizons.ts`) asks the JPL Horizons API (`HORIZONS_BASE_URL`) for an observer table of a target and returns the rows of the CSV block between the `$$SOE` and `$$EOE` markers as arrays of strings (one array per time step, one string per column, the header dropped by default and the trailing empty column of the CSV kept). `input` is a Horizons target string (a name, an id, `'499'`, `'Ceres;'`), a TLE (`{ line1, line2, name? }`) or the osculating elements of the target (`{ epoch, ec, tpqr, om, w, i, ... }`, see JPL Horizons Orbital Elements). `center` is the observing site: `'geo'` for the geocenter, `'coord@399'` for a topocentric site on the Earth, or another body-centered string, and `coord` gives the site for the `coord` centers as `[longitude, latitude, elevation]` (radians, radians and AU, the elevation being sent in kilometers) or as a ready `'lon,lat,km'` string in degrees (`0`, `false` or `undefined` mean `'0,0,0'`). `startTime` and `endTime` are Unix milliseconds (UT scale for the observer table) or a library `Time`. `quantities` is a list of the `Quantity` codes (the columns of the table; the default is 1, 9, 20, 23, 24, 47 and 48, which are the astrometric position, magnitude, range, elongation, phase angle, sky motion and lunar sky brightness) and `options` (`ObserverVectorElementsOptions`) maps onto the Horizons parameters: `stepSize` and `stepSizeUnit` (the default is `60 m`), `refractionCorrection` (`REFRACTED` or `AIRLESS`), `extraPrecision`, `angleFormat` (`'DEG'` or `'HMS'`), `calendarFormat`, `calendarType`, `timeDigitsPrecision`, `rangeUnits`, `suppressRangeRate`, `skipDaylight`, `timeZone` (a `'+HH:MM'` string or the offset in minutes), `referenceSystem`, `coordinateType` and `skipFirstLine`. The columns that come back depend on the quantities, and their text is returned as the service gives it, so the caller must parse the numbers. When a name matches several small bodies, the service answers with an index of matches and `observer` tries once more, with `NOFRAG;` added for the fragments of a comet and `CAP<jd;` for the comets with several apparitions, and returns an empty array when that does not give a table. A call is one HTTP `GET` that `signal` can abort, and the service rate limits and changes are those of JPL.
 
 ```ts
 import { observer, Quantity } from 'nebulosa/src/adapters/ephemeris/horizons'
 import { deg } from 'nebulosa/src/math/units/angle'
 import { meter } from 'nebulosa/src/math/units/distance'
 
-// A local stand-in for the service: it records the parameters of each request and returns a table in the Horizons text format.
-const queries: Record<string, string>[] = []
-const table = (header: string, rows: string[]) => ['*****', 'Ephemeris', header, '*****', '$$SOE', ...rows, '$$EOE', 'Column meaning:'].join('\n')
-globalThis.fetch = (async (input: string | URL | Request) => {
-	const query = Object.fromEntries([...new URL(input.toString()).searchParams].map(([key, value]) => [key, value.replace(/^'|'$/g, '')]))
-	queries.push(query)
-
-	if (query.COMMAND === '73P;NOFRAG;') return new Response(table(' Date__(UT)__HR:MN, , , R.A._(ICRF), DEC_(ICRF),', [' 2026-Oct-05 00:00, , , 12.5, 30.25,']))
-
-	if (query.COMMAND === '73P;') {
-		const row = (record: string, epoch: string, match: string, primary: string, name: string) => ` ${record.padEnd(9)} ${epoch.padEnd(9)} ${match.padEnd(14)} ${primary.padEnd(14)} ${name}`
-		return new Response(
-			[
-				'Small-body Index Search Results',
-				'',
-				row('Record #', 'Epoch-yr', '>MATCH DESIG<', 'Primary Desig', 'Name'),
-				row('--------', '--------', '-------------', '-------------', '----'),
-				row('90000123', '2022', '73P', '73P', 'SCHWASSMANN-WACHMANN 3'),
-				row('90000124', '2022', '73P-B', '73P-B', 'SCHWASSMANN-WACHMANN 3-B'),
-				row('90000125', '2022', '73P-C', '73P-C', 'SCHWASSMANN-WACHMANN 3-C'),
-				'3 matches.',
-			].join('\n'),
-		)
-	}
-
-	return new Response(table(' Date__(UT)__HR:MN, , , R.A._(ICRF), DEC_(ICRF),', [' 2026-Oct-05 00:00, , , 83.822, -5.391,', ' 2026-Oct-05 01:00, , , 83.900, -5.380,']))
-}) as typeof fetch
-
 const start = Date.UTC(2026, 9, 5)
 const end = Date.UTC(2026, 9, 5, 2)
 
 // Mars (499) seen from a site on the Earth: longitude, latitude (radians) and elevation (AU).
+// Each row has one string per column of the default quantities (the astrometric position, magnitude, range, ...).
 const rows = await observer('499', 'coord@399', [deg(-45.5), deg(-23.2), meter(760)], start, end)
-console.log(rows) // [ [ "2026-Oct-05 00:00", "", "", "83.822", "-5.391", "" ], [ "2026-Oct-05 01:00", "", "", "83.900", "-5.380", "" ] ]
-console.log(queries.at(-1)!.CENTER, queries.at(-1)!.SITE_COORD, queries.at(-1)!.COORD_TYPE, queries.at(-1)!.START_TIME, queries.at(-1)!.STOP_TIME) // coord@399 -45.5,-23.2,0.76 GEODETIC 2026-10-05 00:00:00.000 2026-10-05 02:00:00.000
-console.log(queries.at(-1)!.QUANTITIES, queries.at(-1)!.STEP_SIZE, queries.at(-1)!.APPARENT, queries.at(-1)!.ANG_FORMAT, queries.at(-1)!.TIME_TYPE) // 1,9,20,23,24,47,48 60 m REFRACTED DEG UT
+for (const row of rows) console.log(row)
 
 // Chosen quantities and options. A geocentric request has no site coordinates.
-await observer('Ceres;', 'geo', undefined, start, end, [Quantity.APPARENT_RA_DEC, Quantity.AIRMASS_EXTINCTION], { stepSize: 10, stepSizeUnit: 'minutes', refractionCorrection: false, angleFormat: 'HMS', skipDaylight: true, timeZone: -180 })
-console.log(queries.at(-1)!.CENTER, queries.at(-1)!.SITE_COORD, queries.at(-1)!.QUANTITIES) // geo undefined 2,8
-console.log(queries.at(-1)!.STEP_SIZE, queries.at(-1)!.APPARENT, queries.at(-1)!.ANG_FORMAT, queries.at(-1)!.SKIP_DAYLT, queries.at(-1)!.TIME_ZONE) // 10 minutes AIRLESS HMS YES -03:00
+const ceres = await observer('Ceres;', 'geo', undefined, start, end, [Quantity.APPARENT_RA_DEC, Quantity.AIRMASS_EXTINCTION], { stepSize: 10, stepSizeUnit: 'minutes', refractionCorrection: false, angleFormat: 'HMS', skipDaylight: true, timeZone: -180 })
+console.log(ceres.length)
 
-// The site as a text and a satellite given as a TLE (the lines are placeholders of the example).
-await observer({ line1: '1 25544U 98067A ...', line2: '2 25544 51.6 ...', name: 'ISS' }, 'coord@399', '-45.5,-23.2,0.76', start, end)
-console.log(queries.at(-1)!.COMMAND, JSON.stringify(queries.at(-1)!.TLE), queries.at(-1)!.SITE_COORD) // TLE "ISS\n1 25544U 98067A ...\n2 25544 51.6 ..." -45.5,-23.2,0.76
+// The site as a text ('lon,lat,km' in degrees) and a satellite given as a TLE.
+const iss = await observer({ line1: '1 25544U 98067A ...', line2: '2 25544 51.6 ...', name: 'ISS' }, 'coord@399', '-45.5,-23.2,0.76', start, end)
+console.log(iss.length)
 
-// A target with several matches: the service answers with an index, and the retry asks for the comet without its fragments.
-const requestsBefore = queries.length
-console.log(await observer('73P;', 'geo', undefined, start, end)) // [ [ "2026-Oct-05 00:00", "", "", "12.5", "30.25", "" ] ]
-console.log(queries.length - requestsBefore, queries.at(-1)!.COMMAND) // 2 73P;NOFRAG;
+// A comet with several apparitions or fragments is retried by the helper with the proper adjustments.
+console.log(await observer('73P;', 'geo', undefined, start, end))
 
 // The header row is kept with skipFirstLine false.
 const withHeader = await observer('499', 'geo', undefined, start, end, [Quantity.ASTROMETRIC_RA_DEC], { skipFirstLine: false })
-console.log(withHeader.length, withHeader[0]) // 3 [ "Date__(UT)__HR:MN", "", "", "R.A._(ICRF)", "DEC_(ICRF)", "" ]
+console.log(withHeader[0])
 ```
 
 ### JPL Horizons Orbital Elements
 
-`elements(input, center, startTime, endTime, options?, signal?)` (`src/adapters/ephemeris/horizons.ts`) asks the JPL Horizons API for the osculating orbital elements of a target at the steps of an interval and returns the CSV rows between the `$$SOE` and `$$EOE` markers as arrays of strings (one per step; the header is dropped by default; the columns are the ones of the service: `JDTDB`, the calendar date, `EC`, `QR`, `IN`, `OM`, `W`, `Tp`, `N`, `MA`, `TA`, `A`, `AD` and `PR`, with their units as Horizons defines them for the chosen output units). `input` is a Horizons target string or a TLE (see JPL Horizons Observer Tables), or the osculating elements of a body that Horizons does not know, `{ epoch, ec, tpqr, om, w, i, ... }`: `epoch` is a Julian day in TDB, `ec` the eccentricity, `om`, `w` and `i` the longitude of the ascending node, the argument of perihelion and the inclination in radians, `referenceEclipticFrame` is `'J2000'` (the default) or `'B1950'`, and `tpqr` chooses how the orbit size and phase are given: `{ ma, a }` (mean anomaly in radians and semi-major axis in AU), `{ qr, tp }` (perihelion distance in AU and time of perihelion, Julian day TDB) or `{ ma, n }` (mean anomaly and mean motion in radians per day). Optional fields add the magnitude parameters of an asteroid (`h`, `g`) or of a comet (`m1`, `m2`, `k1`, `k2`, `phcof`) and the non-gravitational model (`a1`, `a2`, `a3`, `r0`, `aln`, `nm`, `nn`, `nk`, `dt`, `amrat`). `center` is `'500@10'` for the Sun (heliocentric elements) or `'500@399'` for the Earth, another `500@<id>` body or `'geo'`, and the times are Unix milliseconds or library `Time` values converted to Julian days in TDB. The options are those of `ObserverVectorElementsOptions` that apply to elements: `stepSize` and `stepSizeUnit`, `referencePlane` (the default for elements is the ecliptic, `'ECLIPTIC'`), `referenceSystem`, `outputUnits` (`'AU-D'`, `'KM-S'` or `'KM-D'`), `timeOfPeriapsisType` (`'ABSOLUTE'` or `'RELATIVE'`) and `skipFirstLine`. Like the other Horizons helpers it retries a name that matches several small bodies, and returns an empty array when no table is obtained. The snippet replaces `fetch` by a local stand-in that records the query and returns a table, so it does not use the network; the recorded values have the single quotes of Horizons removed.
+`elements(input, center, startTime, endTime, options?, signal?)` (`src/adapters/ephemeris/horizons.ts`) asks the JPL Horizons API for the osculating orbital elements of a target at the steps of an interval and returns the CSV rows between the `$$SOE` and `$$EOE` markers as arrays of strings (one per step; the header is dropped by default; the columns are the ones of the service: `JDTDB`, the calendar date, `EC`, `QR`, `IN`, `OM`, `W`, `Tp`, `N`, `MA`, `TA`, `A`, `AD` and `PR`, with their units as Horizons defines them for the chosen output units). `input` is a Horizons target string or a TLE (see JPL Horizons Observer Tables), or the osculating elements of a body that Horizons does not know, `{ epoch, ec, tpqr, om, w, i, ... }`: `epoch` is a Julian day in TDB, `ec` the eccentricity, `om`, `w` and `i` the longitude of the ascending node, the argument of perihelion and the inclination in radians, `referenceEclipticFrame` is `'J2000'` (the default) or `'B1950'`, and `tpqr` chooses how the orbit size and phase are given: `{ ma, a }` (mean anomaly in radians and semi-major axis in AU), `{ qr, tp }` (perihelion distance in AU and time of perihelion, Julian day TDB) or `{ ma, n }` (mean anomaly and mean motion in radians per day). Optional fields add the magnitude parameters of an asteroid (`h`, `g`) or of a comet (`m1`, `m2`, `k1`, `k2`, `phcof`) and the non-gravitational model (`a1`, `a2`, `a3`, `r0`, `aln`, `nm`, `nn`, `nk`, `dt`, `amrat`). `center` is `'500@10'` for the Sun (heliocentric elements) or `'500@399'` for the Earth, another `500@<id>` body or `'geo'`, and the times are Unix milliseconds or library `Time` values converted to Julian days in TDB. The options are those of `ObserverVectorElementsOptions` that apply to elements: `stepSize` and `stepSizeUnit`, `referencePlane` (the default for elements is the ecliptic, `'ECLIPTIC'`), `referenceSystem`, `outputUnits` (`'AU-D'`, `'KM-S'` or `'KM-D'`), `timeOfPeriapsisType` (`'ABSOLUTE'` or `'RELATIVE'`) and `skipFirstLine`. Like the other Horizons helpers it retries a name that matches several small bodies, and returns an empty array when no table is obtained.
 
 ```ts
 import { elements } from 'nebulosa/src/adapters/ephemeris/horizons'
 import { deg } from 'nebulosa/src/math/units/angle'
 
-// A local stand-in for the service, with the elements table of the text format.
-const queries: Record<string, string>[] = []
-globalThis.fetch = (async (input: string | URL | Request) => {
-	queries.push(Object.fromEntries([...new URL(input.toString()).searchParams].map(([key, value]) => [key, value.replace(/^'|'$/g, '')])))
-	const header = ' JDTDB, Calendar Date (TDB), EC, QR, IN, OM, W, Tp, N, MA, TA, A, AD, PR,'
-	const rows = [' 2461318.5, A.D. 2026-Oct-05 00:00:00.0000, 0.0785, 2.55, 10.59, 80.25, 73.6, 2461500.5, 0.214, 120.5, 125.1, 2.77, 2.99, 1680.2,']
-	return new Response(['*****', 'Ephemeris', header, '*****', '$$SOE', ...rows, '$$EOE', 'Column meaning:'].join('\n'))
-}) as typeof fetch
-
 const start = Date.UTC(2026, 9, 5)
 const end = Date.UTC(2026, 9, 7)
 
 // The elements of Ceres around the Sun, one row per day.
+// Each row follows the columns JDTDB, calendar date, EC, QR, IN, OM, W, Tp, N, MA, TA, A, AD and PR.
 const rows = await elements('Ceres;', '500@10', start, end, { stepSize: 1, stepSizeUnit: 'd' })
-console.log(rows[0].length, rows[0].slice(0, 5)) // 15 [ "2461318.5", "A.D. 2026-Oct-05 00:00:00.0000", "0.0785", "2.55", "10.59" ]
-console.log(queries.at(-1)!.EPHEM_TYPE, queries.at(-1)!.CENTER, queries.at(-1)!.REF_PLANE, queries.at(-1)!.OUT_UNITS, queries.at(-1)!.STEP_SIZE, queries.at(-1)!.TP_TYPE) // ELEMENTS 500@10 E AU-D 1 d ABSOLUTE
-console.log(queries.at(-1)!.TIME_TYPE, queries.at(-1)!.START_TIME, queries.at(-1)!.STOP_TIME) // TDB JD 2461318.500800722 JD 2461320.500800722
+for (const row of rows) console.log(row)
 
 // Kilometers and seconds, the equator of the frame, and a time of periapsis relative to the start.
 await elements('Ceres;', '500@10', start, end, { outputUnits: 'KM-S', referencePlane: 'FRAME', timeOfPeriapsisType: 'RELATIVE', stepSize: 12, stepSizeUnit: 'h' })
-console.log(queries.at(-1)!.OUT_UNITS, queries.at(-1)!.REF_PLANE, queries.at(-1)!.TP_TYPE, queries.at(-1)!.STEP_SIZE) // KM-S F RELATIVE 12 h
 
 // Body-defined elements with the mean anomaly and the semi-major axis, plus the magnitude parameters of an asteroid.
 await elements({ epoch: 2461000.5, ec: 0.0785, tpqr: { ma: deg(120.5), a: 2.77 }, om: deg(80.25), w: deg(73.6), i: deg(10.59), h: 3.3, g: 0.12 }, '500@10', start, end)
-console.log(queries.at(-1)!.COMMAND, queries.at(-1)!.EPOCH, queries.at(-1)!.ECLIP, queries.at(-1)!.EC, queries.at(-1)!.OM, queries.at(-1)!.W, queries.at(-1)!.IN) // ; 2461000.5 J2000 0.0785 80.25 73.6 10.59
-console.log(queries.at(-1)!.MA, queries.at(-1)!.A, queries.at(-1)!.H, queries.at(-1)!.G) // 120.5 2.77 3.3 0.12
 
 // The perihelion distance and time of a comet, with the non-gravitational terms.
 await elements({ epoch: 2461000.5, referenceEclipticFrame: 'B1950', ec: 0.64, tpqr: { qr: 1.2, tp: 2461200.5 }, om: deg(50), w: deg(40), i: deg(10), m1: 12, k1: 10, a1: 1e-8, a2: 2e-9 }, '500@10', start, end)
-console.log(queries.at(-1)!.ECLIP, queries.at(-1)!.QR, queries.at(-1)!.TP, queries.at(-1)!.M1, queries.at(-1)!.K1, queries.at(-1)!.A1, queries.at(-1)!.A2, queries.at(-1)!.MA) // B1950 1.2 2461200.5 12 10 1e-8 2e-9 undefined
 
-// The mean anomaly and the mean motion (radians per day, sent in degrees per day).
+// The mean anomaly and the mean motion (radians per day).
 await elements({ epoch: 2461000.5, ec: 0.1, tpqr: { ma: deg(10), n: deg(0.9) }, om: deg(80), w: deg(70), i: deg(5) }, '500@10', start, end)
-console.log(queries.at(-1)!.MA, queries.at(-1)!.N, queries.at(-1)!.A) // 10 0.9 undefined
 ```
 
 ### JPL Horizons SPK Downloads
 
-`spkFile(id, startTime, endTime, signal?)` (`src/adapters/ephemeris/horizons.ts`) requests from the JPL Horizons API an SPK binary kernel (the SPICE ephemeris format) of the small body with the SPK id `id` for the interval `[startTime, endTime]` (Unix milliseconds or library `Time` values, sent as Julian days in TDB with the scale named). It sends `COMMAND='DES=<id>;'` with `EPHEM_TYPE=SPK` and expects the JSON answer of the service, which it returns as `{ spk?, error? }`: `spk` is the content of the kernel encoded in Base64 and `error` is the message of Horizons when it could not build the file, so a caller checks which one is present. Only the JSON answer is read: nothing is validated or decoded, so the caller decodes the Base64 (for example with `Buffer.from(spk, 'base64')`) and writes or parses the kernel. The id is the SPK id of the body. A new request is made for each call, and `signal` aborts the request. The snippet replaces `fetch` by a local stand-in that answers with a small Base64 payload and records the query, so it does not use the network; the recorded values have the single quotes of Horizons removed.
+`spkFile(id, startTime, endTime, signal?)` (`src/adapters/ephemeris/horizons.ts`) requests from the JPL Horizons API an SPK binary kernel (the SPICE ephemeris format) of the small body with the SPK id `id` for the interval `[startTime, endTime]` (Unix milliseconds or library `Time` values, sent as Julian days in TDB with the scale named). It sends `COMMAND='DES=<id>;'` with `EPHEM_TYPE=SPK` and expects the JSON answer of the service, which it returns as `{ spk?, error? }`: `spk` is the content of the kernel encoded in Base64 and `error` is the message of Horizons when it could not build the file, so a caller checks which one is present. Only the JSON answer is read: nothing is validated or decoded, so the caller decodes the Base64 (for example with `Buffer.from(spk, 'base64')`) and writes or parses the kernel. The id is the SPK id of the body. A new request is made for each call, and `signal` aborts the request.
 
 ```ts
 import { spkFile } from 'nebulosa/src/adapters/ephemeris/horizons'
-
-// A local stand-in for the service: a tiny payload instead of a real kernel.
-const queries: Record<string, string>[] = []
-globalThis.fetch = (async (input: string | URL | Request) => {
-	const query = Object.fromEntries([...new URL(input.toString()).searchParams].map(([key, value]) => [key, value.replace(/^'|'$/g, '')]))
-	queries.push(query)
-	return Response.json({ spk: Buffer.from('DAF/SPK a small stand-in for the kernel').toString('base64') })
-}) as typeof fetch
 
 const start = Date.UTC(2026, 0, 1)
 const end = Date.UTC(2027, 0, 1)
 
 // Ceres is the asteroid number 1, whose SPK id is 2000001.
 const file = await spkFile(2000001, start, end)
-console.log(Object.keys(file), file.error) // [ "spk" ] undefined
-console.log(queries.at(-1)!.EPHEM_TYPE, queries.at(-1)!.COMMAND, queries.at(-1)!.START_TIME, queries.at(-1)!.STOP_TIME) // SPK DES=2000001; JD 2461041.50080074 TDB JD 2461406.50080074 TDB
 
 // The kernel is the Base64 text: decode it to the bytes that go to a file.
-const bytes = Buffer.from(file.spk!, 'base64')
-console.log(bytes.byteLength, bytes.toString('latin1', 0, 7)) // 39 DAF/SPK
+if (file.spk) await Bun.write('ceres.bsp', Buffer.from(file.spk, 'base64'))
+else console.log(file.error)
 ```
 
 ### JPL Horizons State Vectors
 
-`vector(input, center, coord, startTime, endTime, options?, signal?)` (`src/adapters/ephemeris/horizons.ts`) asks the JPL Horizons API for the Cartesian state vectors of a target and returns the CSV rows between the `$$SOE` and `$$EOE` markers as arrays of strings: the table type is the state vector (`VEC_TABLE` 2), whose columns are the Julian day in TDB, the calendar date and `X`, `Y`, `Z`, `VX`, `VY`, `VZ`, the header being dropped by default (`skipFirstLine`). `input` is a target string, a TLE or user-defined osculating elements (see JPL Horizons Orbital Elements), `center` is the origin of the vectors (`'500@10'` the Sun, `'500@0'` the solar system barycenter, `'500@399'` or `'geo'` the Earth, `'coord@399'` a site on the Earth, and so on) and `coord` is the site for the `coord` centers in the same forms as in JPL Horizons Observer Tables (longitude and latitude in radians and elevation in AU, or a text). The times are Unix milliseconds or `Time` values and are sent as Julian days in TDB. The options that apply here are `stepSize` and `stepSizeUnit` (default `60 m`), `outputUnits` (`'AU-D'` by default, so positions are in AU and velocities in AU/day; `'KM-S'` and `'KM-D'` are the others), `referenceSystem` (`'ICRF'` or `'B1950'`), `referencePlane` (`'FRAME'`, the equator of the system, by default, `'ECLIPTIC'` or `'BODY_EQUATOR'`), `vectorCorrection` (`'NONE'` for geometric, `'LT'` for light-time corrected, `'LT+S'` to include the stellar aberration), `calendarType`, `timeDigitsPrecision` and `coordinateType`. The helper makes one request and, if the answer is not a table, retries a name that matched several small bodies with the fragment and apparition adjustments of JPL Horizons Observer Tables, returning an empty array if nothing is obtained. The numbers come back as text, in the units asked for. The snippet replaces `fetch` by a local stand-in, so it does not use the network, and the query values appear without the single quotes that Horizons requires.
+`vector(input, center, coord, startTime, endTime, options?, signal?)` (`src/adapters/ephemeris/horizons.ts`) asks the JPL Horizons API for the Cartesian state vectors of a target and returns the CSV rows between the `$$SOE` and `$$EOE` markers as arrays of strings: the table type is the state vector (`VEC_TABLE` 2), whose columns are the Julian day in TDB, the calendar date and `X`, `Y`, `Z`, `VX`, `VY`, `VZ`, the header being dropped by default (`skipFirstLine`). `input` is a target string, a TLE or user-defined osculating elements (see JPL Horizons Orbital Elements), `center` is the origin of the vectors (`'500@10'` the Sun, `'500@0'` the solar system barycenter, `'500@399'` or `'geo'` the Earth, `'coord@399'` a site on the Earth, and so on) and `coord` is the site for the `coord` centers in the same forms as in JPL Horizons Observer Tables (longitude and latitude in radians and elevation in AU, or a text). The times are Unix milliseconds or `Time` values and are sent as Julian days in TDB. The options that apply here are `stepSize` and `stepSizeUnit` (default `60 m`), `outputUnits` (`'AU-D'` by default, so positions are in AU and velocities in AU/day; `'KM-S'` and `'KM-D'` are the others), `referenceSystem` (`'ICRF'` or `'B1950'`), `referencePlane` (`'FRAME'`, the equator of the system, by default, `'ECLIPTIC'` or `'BODY_EQUATOR'`), `vectorCorrection` (`'NONE'` for geometric, `'LT'` for light-time corrected, `'LT+S'` to include the stellar aberration), `calendarType`, `timeDigitsPrecision` and `coordinateType`. The helper makes one request and, if the answer is not a table, retries a name that matched several small bodies with the fragment and apparition adjustments of JPL Horizons Observer Tables, returning an empty array if nothing is obtained. The numbers come back as text, in the units asked for.
 
 ```ts
 import { vector } from 'nebulosa/src/adapters/ephemeris/horizons'
 import { deg } from 'nebulosa/src/math/units/angle'
 import { meter } from 'nebulosa/src/math/units/distance'
 
-// A local stand-in for the service, with a state-vector table in the text format.
-const queries: Record<string, string>[] = []
-globalThis.fetch = (async (input: string | URL | Request) => {
-	queries.push(Object.fromEntries([...new URL(input.toString()).searchParams].map(([key, value]) => [key, value.replace(/^'|'$/g, '')])))
-	const header = ' JDTDB, Calendar Date (TDB), X, Y, Z, VX, VY, VZ,'
-	const rows = [' 2461318.5008, A.D. 2026-Oct-05 00:00:00.0000, -0.9, 0.35, 0.15, -0.0072, -0.0156, -0.0068,', ' 2461318.5425, A.D. 2026-Oct-05 01:00:00.0000, -0.9001, 0.3497, 0.1499, -0.0072, -0.0156, -0.0068,']
-	return new Response(['*****', 'Ephemeris', header, '*****', '$$SOE', ...rows, '$$EOE', 'Column meaning:'].join('\n'))
-}) as typeof fetch
-
 const start = Date.UTC(2026, 9, 5)
 const end = Date.UTC(2026, 9, 5, 2)
 
 // The Earth relative to the Sun, hourly, with the default units (AU and AU/day) and plane.
+// Each row follows the columns JDTDB, calendar date, X, Y, Z, VX, VY and VZ.
 const rows = await vector('399', '500@10', undefined, start, end)
-console.log(rows.length, rows[0]) // 2 [ "2461318.5008", "A.D. 2026-Oct-05 00:00:00.0000", "-0.9", "0.35", "0.15", "-0.0072", "-0.0156", "-0.0068", "" ]
-console.log(queries.at(-1)!.EPHEM_TYPE, queries.at(-1)!.VEC_TABLE, queries.at(-1)!.VEC_CORR, queries.at(-1)!.OUT_UNITS, queries.at(-1)!.REF_PLANE, queries.at(-1)!.REF_SYSTEM) // VECTOR 2 NONE AU-D F ICRF
-console.log(queries.at(-1)!.TIME_TYPE, queries.at(-1)!.START_TIME, queries.at(-1)!.STOP_TIME, queries.at(-1)!.STEP_SIZE) // TDB JD 2461318.500800722 JD 2461318.5841340553 60 m
+for (const row of rows) console.log(row)
 
 // Kilometers, light-time corrected vectors in the ecliptic, every 30 minutes.
 await vector('499', 'geo', undefined, start, end, { outputUnits: 'KM-S', vectorCorrection: 'LT', referencePlane: 'ECLIPTIC', stepSize: 30, stepSizeUnit: 'minutes' })
-console.log(queries.at(-1)!.CENTER, queries.at(-1)!.OUT_UNITS, queries.at(-1)!.VEC_CORR, queries.at(-1)!.REF_PLANE, queries.at(-1)!.STEP_SIZE) // geo KM-S LT E 30 minutes
 
 // The vectors from a topocentric site (longitude, latitude and elevation) and the header row kept.
 const withHeader = await vector('301', 'coord@399', [deg(-45.5), deg(-23.2), meter(760)], start, end, { skipFirstLine: false })
-console.log(withHeader.length, withHeader[0]) // 3 [ "JDTDB", "Calendar Date (TDB)", "X", "Y", "Z", "VX", "VY", "VZ", "" ]
-console.log(queries.at(-1)!.CENTER, queries.at(-1)!.SITE_COORD, queries.at(-1)!.COORD_TYPE) // coord@399 -45.5,-23.2,0.76 GEODETIC
+console.log(withHeader[0])
 
-// A satellite given as a TLE (placeholders of the example) and elements defined by the caller.
+// A satellite given as a TLE and elements defined by the caller.
 await vector({ line1: '1 25544U 98067A ...', line2: '2 25544 51.6 ...', name: 'ISS' }, '500@399', undefined, start, end)
-console.log(queries.at(-1)!.COMMAND, JSON.stringify(queries.at(-1)!.TLE)) // TLE "ISS\n1 25544U 98067A ...\n2 25544 51.6 ..."
 await vector({ epoch: 2461000.5, ec: 0.1, tpqr: { ma: deg(10), a: 1.1 }, om: deg(80), w: deg(70), i: deg(5) }, '500@10', undefined, start, end)
-console.log(queries.at(-1)!.COMMAND, queries.at(-1)!.EC, queries.at(-1)!.A, queries.at(-1)!.MA) // ; 0.1 1.1 10
 ```
 
 ### JPL Small-Body Lookup
 
-`search(text)` (`src/adapters/orbits/sbd.ts`) queries the JPL Small-Body Database API (`SBD_BASE_URL` with `SEARCH_PATH`, which asks for the alternate designations and orbits, the close-approach, discovery, physical-parameter, radar and satellite blocks and full-precision numbers) for a name or designation and returns the JSON answer of the service as one of three shapes of the `SmallBodySearch` union. A unique match is a `SmallBodySearchFound` with the `object` identity (`fullname`, `shortname`, `des`, the SPICE `spkid`, the `kind` of `'an'`, `'au'`, `'cn'` or `'cu'` for numbered or unnumbered asteroids and comets, the `neo` and `pha` flags, the `orbit_class` and the alternate designations), the `orbit` solution (epoch, the observation arc and counts, the RMS, the MOID and the `elements` list with `name`, `value`, `sigma`, `units` and `label`, all as strings) and the `phys_par` list (diameter, albedo, rotation period and the like, also strings), plus the `signature` of the API version. An ambiguous query is a `SmallBodySearchList` with `list` of `{ pdes, name }` candidates, and a query with no usable answer is a `SmallBodySearchMessage` with a `message`, so a caller distinguishes them by their properties (`'orbit'`, `'list'` and `'message'`). The values are text exactly as published, in the units named in each element (angles in degrees, distances in AU, epochs as Julian dates in TDB, for the elements of the database), and the function does not check the HTTP status or the shape of the JSON. `text` is URL-encoded, so spaces and slashes of designations are accepted. The snippet replaces `fetch` by a local stand-in that records the address and answers with short examples of the three shapes, so it does not use the network; the real fields are many more than the ones shown.
+`search(text)` (`src/adapters/orbits/sbd.ts`) queries the JPL Small-Body Database API (`SBD_BASE_URL` with `SEARCH_PATH`, which asks for the alternate designations and orbits, the close-approach, discovery, physical-parameter, radar and satellite blocks and full-precision numbers) for a name or designation and returns the JSON answer of the service as one of three shapes of the `SmallBodySearch` union. A unique match is a `SmallBodySearchFound` with the `object` identity (`fullname`, `shortname`, `des`, the SPICE `spkid`, the `kind` of `'an'`, `'au'`, `'cn'` or `'cu'` for numbered or unnumbered asteroids and comets, the `neo` and `pha` flags, the `orbit_class` and the alternate designations), the `orbit` solution (epoch, the observation arc and counts, the RMS, the MOID and the `elements` list with `name`, `value`, `sigma`, `units` and `label`, all as strings) and the `phys_par` list (diameter, albedo, rotation period and the like, also strings), plus the `signature` of the API version. An ambiguous query is a `SmallBodySearchList` with `list` of `{ pdes, name }` candidates, and a query with no usable answer is a `SmallBodySearchMessage` with a `message`, so a caller distinguishes them by their properties (`'orbit'`, `'list'` and `'message'`). The values are text exactly as published, in the units named in each element (angles in degrees, distances in AU, epochs as Julian dates in TDB, for the elements of the database), and the function does not check the HTTP status or the shape of the JSON. `text` is URL-encoded, so spaces and slashes of designations are accepted.
 
 ```ts
-import { search, SBD_BASE_URL, SEARCH_PATH, type SmallBodySearch } from 'nebulosa/src/adapters/orbits/sbd'
-
-// A local stand-in for the service, with a found body and a list of candidates.
-const addresses: string[] = []
-globalThis.fetch = (async (input: string | URL | Request) => {
-	const url = new URL(input.toString())
-	addresses.push(url.toString())
-	const text = url.searchParams.get('sstr')
-
-	if (text === 'Ceres') {
-		return Response.json({
-			signature: { version: '1.3', source: 'NASA/JPL Small-Body Database (SBDB) API' },
-			object: { fullname: '1 Ceres (A801 AA)', shortname: '1 Ceres', des: '1', spkid: '20000001', kind: 'an', neo: false, pha: false, orbit_id: '47', orbit_class: { name: 'Main-belt Asteroid', code: 'MBA' }, des_alt: [], prefix: null },
-			orbit: {
-				epoch: '2461000.5',
-				elements: [
-					{ name: 'e', label: 'e', title: 'eccentricity', value: '.0785', sigma: '1.2e-9', units: null },
-					{ name: 'a', label: 'a', title: 'semi-major axis', value: '2.7656', sigma: '1.0e-9', units: 'au' },
-				],
-			},
-			phys_par: [{ name: 'diameter', title: 'diameter', value: '939.4', sigma: '0.2', units: 'km', desc: '', notes: '', ref: '' }],
-		})
-	}
-
-	return Response.json({
-		list: [
-			{ pdes: '433', name: 'Eros' },
-			{ pdes: '4337', name: 'Arecibo' },
-		],
-		code: '300',
-		message: 'specified search string is ambiguous',
-		count: 2,
-	})
-}) as typeof fetch
+import { search, type SmallBodySearch } from 'nebulosa/src/adapters/orbits/sbd'
 
 // A function that tells the three shapes apart by their properties.
 function describe(result: SmallBodySearch) {
@@ -19308,24 +18712,21 @@ function describe(result: SmallBodySearch) {
 	return result.message
 }
 
-// A unique match.
+// A unique match: the identity, the orbit solution and the physical parameters.
 const ceres = await search('Ceres')
-console.log(describe(ceres)) // 1 Ceres (A801 AA) an e=.0785 a=2.7656 au
-if ('orbit' in ceres) console.log(ceres.object.spkid, ceres.object.orbit_class.code, ceres.orbit.epoch, ceres.phys_par[0].name, ceres.phys_par[0].value, ceres.phys_par[0].units, ceres.signature.version) // 20000001 MBA 2461000.5 diameter 939.4 km 1.3
+console.log(describe(ceres))
+if ('orbit' in ceres) console.log(ceres.object.spkid, ceres.object.orbit_class.code, ceres.orbit.epoch, ceres.phys_par[0].name, ceres.phys_par[0].value, ceres.phys_par[0].units, ceres.signature.version)
 
 // An ambiguous text gives the list of candidates.
-console.log(describe(await search('43'))) // 2 candidates: 433 Eros, 4337 Arecibo
+console.log(describe(await search('43')))
 
-// The request is the base address, the fixed query and the encoded text.
-console.log(addresses[0] === `${SBD_BASE_URL}${SEARCH_PATH}&sstr=Ceres`, SBD_BASE_URL) // true https://ssd-api.jpl.nasa.gov/
-await search('C/2023 A3 (Tsuchinshan-ATLAS)')
-console.log(new URL(addresses.at(-1)!).searchParams.get('sstr'), addresses.at(-1)!.endsWith('sstr=C%2F2023%20A3%20(Tsuchinshan-ATLAS)')) // C/2023 A3 (Tsuchinshan-ATLAS) true
-console.log(SEARCH_PATH.split('&').length) // 18
+// The text is URL-encoded, so a comet designation with spaces and a slash is accepted.
+console.log(describe(await search('C/2023 A3 (Tsuchinshan-ATLAS)')))
 ```
 
 ### Minor Planet Center API
 
-The adapter of `src/adapters/orbits/mpc.ts` talks to the API of the Minor Planet Center (`MPC_BASE_URL`, `https://data.minorplanetcenter.net/api/`) and converts the answers to typed records in radians, AU and UTC. The service takes `GET` requests with a JSON body, which `fetch` of Bun refuses, so the adapter uses `node:https` directly with the base address fixed; the snippet below therefore redirects the connections of `https.globalAgent` to a local HTTP server written for the example, and no real service is contacted. The functions are:
+The adapter of `src/adapters/orbits/mpc.ts` talks to the API of the Minor Planet Center (`MPC_BASE_URL`, `https://data.minorplanetcenter.net/api/`) and converts the answers to typed records in radians, AU and UTC. The service takes `GET` requests with a JSON body, which `fetch` of Bun refuses, so the adapter uses `node:https` directly with the base address fixed; the calls below are real requests to the service. The functions are:
 
 - Designations: `designations(ids, options?)` looks up to 100 ids (a number, a provisional designation, a name or a packed form) in one request and returns one `MPCDesignation` per id, in the input order (`found` 0 for no match, 1 for a unique one and above 1 for an ambiguous one, with the `disambiguation` candidates); the options are the name `comparison` (`'='`, `'ILIKE'` or `'%'`), the `group` and a `signal`; an empty list returns `[]` without a request. `designation(id, options?)` returns the record only when it is unique, else `undefined`. `primaryDesignation(designation)` picks the permanent id, else the primary provisional designation, the IAU designation or the name, and `designationAliases(designation)` returns the distinct ids and names (packed and unpacked) of the object.
 - Observatories: `observatory(code, signal?)` returns one `MPCObservatory` (`undefined` for a known miss) and `observatories(signal?)` returns all of them in the order of the service. The record has the `longitude` (east-positive radians), `rhoCosPhi` and `rhoSinPhi` (equatorial Earth radii), the names, the dates, the `observationType` (`'optical'`, `'occultation'`, `'satellite'`, `'radar'` or `'roving'`) and the `oldNames`; the geometry is absent for satellites and roving sites. The text format of the ObsCodes file is handled by `parseObservatoryCode(line)`, `parseObservatoryCodes(text)` (blank lines skipped) and `writeObservatoryCode(observatory)` (it needs the longitude and both rho values). `observatoryItrsPosition(observatory, ellipsoid?)` returns the geocentric ITRS position in AU, `undefined` without geometry or for the geocenter (code 500), and `observatoryLocation(observatory, ellipsoid?)` gives the geodetic position (see Geographic Observer); the ellipsoid is `Ellipsoid.IERS2010` by default.
@@ -19334,12 +18735,9 @@ The adapter of `src/adapters/orbits/mpc.ts` talks to the API of the Minor Planet
 - Lists: `list(type, options?)` queries one page of a category (`MPCList`: `'minor-planets'`, `'neos'`, `'comets'`, `'tnos'`, `'impacted'`, `'minor-planet-names'`, and so on) with `order`, `limit` (1 to 50000), `offset` and a `like` pattern on the provisional designation, and returns the `items` plus the `request` the server reports. `listAll(type, { maxItems, ... })` pages until `maxItems` (a positive integer) items are collected or a short page comes back, with pages of 1000 items by default and at most 50000.
 - Fit input: `isOpticalObservation(observation)` is a type guard, `observationDesignation(observation)` gives the permanent id, else the provisional one, else the submitter tracklet, and `observationIdentifier(observation)` the `obsID`, else the submitter id. `observationToOrbitFitObservation(observation, observerPosition)` maps an optical record to the `OrbitFitObservation` of the orbit fit (see Differential Orbit Correction), with the observer position given by the caller, and `observationsToOrbitFit(observations, resolve)` does it for a list: records that are not optical, or whose observer `resolve(time, observation)` cannot give, go to `rejected`. The station positions are not looked up by the adapter, so the caller supplies the heliocentric observer position.
 
-Network failures, an aborted `signal` and a response that is not successful (other than the known lookup misses) are reported as errors, and the payloads are checked only for their shape. The snippet answers every path with a small document written in the format of the service.
+Network failures, an aborted `signal` and a response that is not successful (other than the known lookup misses) are reported as errors, and the payloads are checked only for their shape.
 
 ```ts
-import http from 'node:http'
-import https from 'node:https'
-import net from 'node:net'
 import {
 	designation,
 	designationAliases,
@@ -19368,167 +18766,58 @@ import {
 	writeObservatoryCode,
 } from 'nebulosa/src/adapters/orbits/mpc'
 import { toDeg } from 'nebulosa/src/math/units/angle'
-import { toKilometer, toMeter } from 'nebulosa/src/math/units/distance'
 
-// A local stand-in for the service. It records the path and the JSON body of each request.
-const requests: { path: string; body: any }[] = []
+// Designations: up to 100 ids (numbers, provisional designations, names or packed forms) in one request.
+const records = await designations(['433', '1898 DQ', 'Eros'])
+for (const record of records) console.log(record.found, primaryDesignation(record), designationAliases(record))
+const eros = await designation('433')
+if (eros) console.log(primaryDesignation(eros))
 
-const station568 = { obscode: '568', name: 'Maunakea', name_utf8: 'Maunakea', short_name: 'Maunakea', longitude: '204.5278', rhocosphi: '0.940153', rhosinphi: '0.338883', observations_type: 'optical', old_names: null }
-const station500 = { obscode: '500', name: 'Geocentric', longitude: '0', rhocosphi: '0', rhosinphi: '0', observations_type: 'satellite', old_names: ['Geocenter'] }
-
-const ades = [
-	{ obsType: 'optical', permID: '433', provID: '1898 DQ', obsTime: '2024-03-05T10:20:30.250Z', ra: '123.456789', dec: '-12.345678', rmsRA: '0.12', rmsDec: '0.15', mag: '17.4', band: 'V', stn: '568', mode: 'CCD', obsID: 'OBS1' },
-	{ obsType: 'optical', permID: '433', obsTime: '2024-03-06T10:20:30Z', ra: '124.0', dec: '-12.0', stn: 'C51', sys: 'ICRF_KM', ctr: '399', pos1: '149597870.7', pos2: '0', pos3: '0' },
-	{ obsType: 'radar', permID: '433', obsTime: '2024-03-07T10:20:30Z', stn: '251', delay: '1000', rmsDelay: '0.5', doppler: '-10.5', rmsDoppler: '0.1', frq: '2380', trx: '251', rcv: '251', com: 'C' },
-]
-
-const orbitRecord = {
-	CAR: { coefficient_names: ['x', 'y', 'z', 'vx', 'vy', 'vz'], coefficients: [-0.5, 0.9, 0.05, -0.0165, -0.009, 0.001], cov00: 1e-12, cov01: 2e-13, cov11: 3e-12 },
-	epoch_data: { epoch: 60400, timeform: 'MJD', timesystem: 'TDT' },
-	system_data: { refsys: 'Ecliptic', refframe: 'ICRF', eph: 'DE441' },
-	designation_data: { name: 'Eros', permid: '433', unpacked_primary_provisional_designation: '1898 DQ' },
-	magnitude_data: { H: 10.4, G: 0.46 },
-	moid_data: { Earth: 0.148 },
-	categorization: { object_type: 'Minor Planet', object_type_int: 1 },
-	orbit_fit_statistics: { n_obs: 9000, n_opp: 100, arc_length: 40000, rms: 0.3 },
+// Observatories: one code, all of them, and the geocentric ITRS position in AU of a site with geometry.
+const maunakea = await observatory('568')
+if (maunakea) {
+	console.log(maunakea.name, toDeg(maunakea.longitude!), maunakea.rhoCosPhi, maunakea.rhoSinPhi, maunakea.observationType)
+	const position = observatoryItrsPosition(maunakea)
+	const location = observatoryLocation(maunakea)
+	console.log(position, location)
 }
 
-const server = http.createServer((request, response) => {
-	let text = ''
-	request.on('data', (chunk) => (text += chunk))
-	request.on('end', () => {
-		const body = text ? JSON.parse(text) : {}
-		requests.push({ path: request.url!, body })
-		const send = (value: unknown) => response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(value))
-
-		if (request.url === '/api/query-identifier') {
-			const result: Record<string, unknown> = {}
-			for (const id of body.ids as string[]) {
-				if (id === '433')
-					result[id] = {
-						found: 1,
-						name: 'Eros',
-						permid: '433',
-						packed_permid: '00433',
-						iau_designation: '(433) Eros',
-						orbfit_name: '(433)Eros',
-						object_type: ['Minor Planet', 1],
-						packed_primary_provisional_designation: 'I98D00Q',
-						unpacked_primary_provisional_designation: '1898 DQ',
-						packed_secondary_provisional_designations: null,
-						unpacked_secondary_provisional_designations: ['1931 PH'],
-					}
-				else
-					result[id] = {
-						found: 2,
-						disambiguation_list: [
-							{ name: 'Eros', permid: '433', group: 'Minor Planets', similarity: 0.9 },
-							{ name: 'Erosita', permid: '12345', group: 'Minor Planets', similarity: 0.5 },
-						],
-					}
-			}
-			send(result)
-		} else if (request.url === '/api/obscodes') send(body.obscode ? { [body.obscode]: station568 } : { 568: station568, 500: station500 })
-		else if (request.url === '/api/get-obs') send([{ ADES_DF: ades, OBS80: 'line1\nline2', OBS_DF: [{ obs80: 'line1' }, { obs80: 'line2' }] }, 200])
-		else if (request.url === '/api/get-obs-neocp') send([{ ADES_DF: ades.slice(0, 1) }, 200])
-		else if (request.url === '/api/get-orb') send([{ mpc_orb: [orbitRecord] }, 200])
-		else if (request.url === '/api/list') {
-			const offset = body.offset ?? 0
-			const limit = body.limit ?? 3
-			const all = ['433', '1036', '1221', '1566', '1620']
-			const items = all.slice(offset, offset + limit).map((permid) => ({ permid, name: `Object ${permid}`, group: 'Minor Planets' }))
-			send({ items, request: { list: body.list, order: body.order ?? 'ASC', limit, offset } })
-		} else response.writeHead(404).end()
-	})
-})
-
-await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-const port = (server.address() as net.AddressInfo).port
-;(https.globalAgent as any).createConnection = () => net.connect(port, '127.0.0.1')
-
-// Designations: one request for several ids, with the unique match and the ambiguous one.
-const found = await designations(['433', 'Eros'])
-console.log(
-	found.length,
-	found.map((item) => item.found),
-	requests.at(-1)!.path,
-	JSON.stringify(requests.at(-1)!.body),
-) // 2 [ 1, 2 ] /api/query-identifier {"ids":["433","Eros"]}
-const eros = found[0]
-console.log(eros.name, eros.permanentId, eros.packedPermanentId, eros.iauDesignation, eros.orbfitName, eros.objectType, eros.objectTypeCode) // Eros 433 00433 (433) Eros (433)Eros Minor Planet 1
-console.log(eros.primaryProvisionalDesignation, eros.packedPrimaryProvisionalDesignation, eros.secondaryProvisionalDesignations, eros.packedSecondaryProvisionalDesignations) // 1898 DQ I98D00Q [ '1931 PH' ] []
-console.log(found[1].disambiguation!.map((item) => `${item.name} ${item.permanentId} ${item.similarity}`)) // [ 'Eros 433 0.9', 'Erosita 12345 0.5' ]
-console.log(primaryDesignation(eros), designationAliases(eros)) // 433 [ '433', '00433', '1898 DQ', 'I98D00Q', '(433) Eros', '(433)Eros', 'Eros', '1931 PH' ]
-console.log((await designation('433'))?.name) // Eros
-console.log(await designations([])) // []
-
-// The name search modifiers.
-await designations(['Eros'], { comparison: 'ILIKE', group: 'Minor Planets' })
-console.log(JSON.stringify(requests.at(-1)!.body)) // {"ids":["Eros"],"comparison":"ILIKE","group":"Minor Planets"}
-
-// Observatories: one code, the whole table, and the geometry as a position.
-const mauna = (await observatory('568'))!
-console.log(mauna.code, mauna.name, toDeg(mauna.longitude!), mauna.rhoCosPhi, mauna.rhoSinPhi, mauna.observationType, mauna.oldNames) // 568 Maunakea 204.52780000000004 0.940153 0.338883 optical []
+// The text format of the ObsCodes file: write a record to a line and parse it back.
 const all = await observatories()
-console.log(all.map((item) => `${item.code} ${item.name} ${item.observationType} ${item.oldNames}`)) // [ '500 Geocentric satellite Geocenter', '568 Maunakea optical ' ]
-const itrs = observatoryItrsPosition(mauna)!
-console.log(itrs.map((value) => toKilometer(value))) // [ -5455.3066577971895, -2489.3238363289865, 2161.4420654177998 ]
-const location = observatoryLocation(mauna)!
-console.log(toDeg(location.longitude), toDeg(location.latitude), toMeter(location.elevation), location.ellipsoid) // -155.4722 19.945078156259186 -1583.4993459476211 3
+const line = writeObservatoryCode(all.find((item) => item.code === '568')!)
+console.log(line, parseObservatoryCode(line)?.name, parseObservatoryCodes(line).length)
 
-// The ObsCodes flat file: write a line, parse it back, and parse a table.
-const line = writeObservatoryCode(mauna)
-console.log(JSON.stringify(line)) // "568 204.527800.940153+0.338883Maunakea"
-const parsed = parseObservatoryCode(line)
-console.log(parsed.code, parsed.name, toDeg(parsed.longitude!), parsed.rhoCosPhi, parsed.rhoSinPhi) // 568 Maunakea 204.52780000000004 0.940153 0.338883
-console.log(parseObservatoryCodes(`${writeObservatoryCode(all[0])}\n\n${line}\n`).map((item) => `${item.code} ${item.name}`)) // [ '500 Geocentric', '568 Maunakea' ]
+// Observations of an object (ADES 2022 by default) and of a NEO Confirmation Page tracklet.
+const records433 = await observations('433')
+const tracklet = await neocpObservations('P21abcd', '2017')
+console.log(records433.length, tracklet.length)
+for (const observation of records433.slice(0, 5)) console.log(observationDesignation(observation), observationIdentifier(observation), isOpticalObservation(observation))
 
-// Observations: parsed records, the raw payload, and the NEO Confirmation Page.
-const records = await observations('433')
-console.log(records.map((item) => `${item.type} ${item.station} ${observationDesignation(item)} ${observationIdentifier(item)}`)) // [ 'optical 568 433 OBS1', 'optical C51 433 undefined', 'radar 251 433 undefined' ]
-console.log(requests.at(-1)!.path, JSON.stringify(requests.at(-1)!.body)) // /api/get-obs {"desigs":["433"],"output_format":["ADES_DF"],"ades_version":"2022"}
-await observations('433', '2017')
-console.log(JSON.stringify(requests.at(-1)!.body)) // {"desigs":["433"],"output_format":["ADES_DF"],"ades_version":"2017"}
-const payload = await queryObservations('433', { outputFormats: ['ADES_DF', 'OBS80', 'OBS_DF'], adesVersion: '2017' })
-console.log(payload.ades!.length, JSON.stringify(payload.obs80), payload.obsDf, JSON.stringify(requests.at(-1)!.body)) // 3 "line1\nline2" [ { obs80: 'line1' }, { obs80: 'line2' } ] {"desigs":["433"],"output_format":["ADES_DF","OBS80","OBS_DF"],"ades_version":"2017"}
-console.log((await neocpObservations('P21abcd')).length, (await queryNEOCPObservations('P21abcd')).ades!.length, JSON.stringify(requests.at(-1)!.body)) // 1 1 {"trksubs":["P21abcd"],"output_format":["ADES_DF"],"ades_version":"2022"}
+// The raw payloads, with the output formats asked.
+const payload = await queryObservations('433', { outputFormats: ['ADES_DF', 'OBS80'] })
+const neocp = await queryNEOCPObservations('P21abcd', { outputFormats: ['OBS_DF'] })
+console.log(payload.obs80, neocp.obsDf)
 
-// The fit input: only the optical records whose observer position is known are kept.
-console.log(records.map((item) => isOpticalObservation(item))) // [ true, true, false ]
-const optical = records.filter(isOpticalObservation)
-const fit = observationsToOrbitFit(records, (_, observation) => (observation.station === '568' ? [0.9, 0.4, 0.1] : undefined))
-console.log(
-	fit.observations.length,
-	fit.rejected.map((item) => item.type + ' ' + item.station),
-) // 1 [ 'optical C51', 'radar 251' ]
-const first = observationToOrbitFitObservation(optical[0], [1, 0, 0])
-console.log(toDeg(first.rightAscension), toDeg(first.declination), first.raErr, first.decErr, first.observerPosition) // 123.456789 -12.345678 5.817764173314431e-7 7.272205216643039e-7 [ 1, 0, 0 ]
+// Orbit fit input: the observer position is given by the caller (heliocentric, in AU), here the same one for all.
+const optical = records433.filter(isOpticalObservation)
+const first = optical[0]
+if (first) console.log(observationToOrbitFitObservation(first, [1, 0, 0]))
+const { observations: fit, rejected } = observationsToOrbitFit(optical, () => [1, 0, 0])
+console.log(fit.length, rejected.length)
 
-// Orbits: the solution, its Cartesian state, and the Kepler orbit.
-const solution = (await orbit('433'))!
-console.log(solution.designationData?.name, solution.epochData, solution.systemData?.referenceSystem, solution.magnitudeData, solution.moidData, solution.categorization, solution.orbitFitStatistics) // Eros { epoch: 60400, timeForm: 'MJD', timeSystem: 'TDT' } Ecliptic { h: 10.4, g: 0.46 } { earth: 0.148, jupiter: undefined } { objectType: 'Minor Planet', objectTypeInt: 1 } { nObs: 9000, nOpp: 100, arcLength: 40000, rms: 0.3 }
-console.log(solution.car!.coefficientNames, solution.car!.coefficients, solution.car!.covarianceValues) // [ 'x', 'y', 'z', 'vx', 'vy', 'vz' ] [ -0.5, 0.9, 0.05, -0.0165, -0.009, 0.001 ] { cov00: 1e-12, cov01: 2e-13, cov11: 3e-12 }
-const state = orbitCartesianState(solution)!
-console.log(state.position, state.velocity, state.referenceSystem, state.referenceFrame, state.timeSystem, state.ephemeris) // [ -0.5, 0.9, 0.05 ] [ -0.0165, -0.009, 0.001 ] Ecliptic ICRF TDT DE441
-console.log(state.epoch.day + state.epoch.fraction, state.covariance!.get(0, 1), state.covariance!.get(1, 0), state.covariance!.get(5, 5)) // 2460400.5 2e-13 2e-13 0
-const kepler = orbitToKeplerOrbit(solution)!
-console.log(kepler.semiMajorAxis, kepler.eccentricity, toDeg(kepler.inclination), kepler.periodInDays) // 1.3456425646226267 0.23420400269567873 4.104548896574671 570.1550836022479
+// The first mpc_orb solution, its heliocentric Cartesian state and the Kepler orbit.
+const solution = await orbit('433')
+if (solution) {
+	const state = orbitCartesianState(solution)
+	const kepler = orbitToKeplerOrbit(solution)
+	console.log(solution.epoch, state?.position, state?.velocity, kepler)
+}
 
-// Lists: one page with the request echoed, a paged walk and the first items only.
-const page = await list('minor-planets', { limit: 2, offset: 1, order: 'DESC', like: '19%' })
-console.log(
-	page.items.map((item) => item.permanentId),
-	page.request,
-	JSON.stringify(requests.at(-1)!.body),
-) // [ '1036', '1221' ] { list: 'minor-planets', order: 'DESC', limit: 2, offset: 1, like: undefined } {"list":"minor-planets","order":"DESC","limit":2,"offset":1,"like":"19%"}
-const walk = await listAll('minor-planets', { maxItems: 4, limit: 2 })
-console.log(
-	walk.map((item) => item.name),
-	requests.slice(-2).map((item) => item.body.offset),
-) // [ 'Object 433', 'Object 1036', 'Object 1221', 'Object 1566' ] [ 0, 2 ]
-console.log((await listAll('minor-planets', { maxItems: 3, limit: 3 })).length) // 3
-
-server.close()
+// Lists: a page of a category, and many pages until a number of items is collected.
+const page = await list('neos', { order: 'asc', limit: 10, offset: 0, like: '2024 %' })
+console.log(page.items.length, page.request)
+const many = await listAll('minor-planet-names', { maxItems: 2500 })
+console.log(many.length)
 ```
 
 ### MPC1992 Codec
@@ -19629,199 +18918,114 @@ console.log(types.filter((type) => type.codes.some((code) => code.endsWith('?'))
 
 ### SIMBAD Star Catalog
 
-`SimbadCatalog` (`src/adapters/catalogs/simbad.ts`) is a star catalog (see Star Catalog Interface and Spatial Query) backed by the `basic` and `allfluxes` tables of SIMBAD, queried through the TAP endpoint of SIMBAD TAP Queries. `new SimbadCatalog(options?)` takes the `SimbadQueryOptions` (host, timeout, signal and fetch options); the parsing options `skipFirstLine` and `forceTrim` are always enabled. It has the six query methods of the interface (`queryCone`, `queryBox`, `queryTriangle`, `queryPolygon`, `queryRegion` and `streamRegion`) and `get(id)`, which returns the object with the SIMBAD `oid` (a number, a bigint or a string of digits) or `undefined` when there is no row. A query is an ADQL `SELECT b.oid, b.otype, b.ra, b.dec, f.V, b.pmra, b.pmdec, b.plx_value, b.rvz_radvel` from `basic b JOIN allfluxes f ON f.oidref = b.oid`, ordered by `V` and `oid`, where the `WHERE` has the coarse boxes of the region, an ADQL `CONTAINS` of a circle for a cone and the condition `f.V IS NOT NULL` (so an object without a V magnitude never appears), and the exact geometry test runs locally. A region is read in pages of 50000 rows: while a page is full, the next one is requested with a keyset condition on the last `V` and `oid`, so the stream is complete and does not repeat rows. Each `SimbadCatalogEntry` has the numeric `id` (the `oid`), `epoch` 2000, `rightAscension` and `declination` in radians (ICRS, J2000), `magnitude` (V), `pmRA` and `pmDEC` in radians per year (the published μα·cosδ is divided by cos δ, so `pmRA` is dα/dt, and it is left out very close to a pole), `parallax` in radians, `rv` as a `Velocity` and `type`, the short code of the object type (see SIMBAD Object Types). Rows without an `oid`, position or V magnitude are skipped and the optional columns may be `undefined`. The snippet replaces `fetch` by a local stand-in that answers by the kind of the query, so it does not use the network.
+`SimbadCatalog` (`src/adapters/catalogs/simbad.ts`) is a star catalog (see Star Catalog Interface and Spatial Query) backed by the `basic` and `allfluxes` tables of SIMBAD, queried through the TAP endpoint of SIMBAD TAP Queries. `new SimbadCatalog(options?)` takes the `SimbadQueryOptions` (host, timeout, signal and fetch options); the parsing options `skipFirstLine` and `forceTrim` are always enabled. It has the six query methods of the interface (`queryCone`, `queryBox`, `queryTriangle`, `queryPolygon`, `queryRegion` and `streamRegion`) and `get(id)`, which returns the object with the SIMBAD `oid` (a number, a bigint or a string of digits) or `undefined` when there is no row. A query is an ADQL `SELECT b.oid, b.otype, b.ra, b.dec, f.V, b.pmra, b.pmdec, b.plx_value, b.rvz_radvel` from `basic b JOIN allfluxes f ON f.oidref = b.oid`, ordered by `V` and `oid`, where the `WHERE` has the coarse boxes of the region, an ADQL `CONTAINS` of a circle for a cone and the condition `f.V IS NOT NULL` (so an object without a V magnitude never appears), and the exact geometry test runs locally. A region is read in pages of 50000 rows: while a page is full, the next one is requested with a keyset condition on the last `V` and `oid`, so the stream is complete and does not repeat rows. Each `SimbadCatalogEntry` has the numeric `id` (the `oid`), `epoch` 2000, `rightAscension` and `declination` in radians (ICRS, J2000), `magnitude` (V), `pmRA` and `pmDEC` in radians per year (the published μα·cosδ is divided by cos δ, so `pmRA` is dα/dt, and it is left out very close to a pole), `parallax` in radians, `rv` as a `Velocity` and `type`, the short code of the object type (see SIMBAD Object Types). Rows without an `oid`, position or V magnitude are skipped and the optional columns may be `undefined`.
 
 ```ts
-import { SimbadCatalog } from 'nebulosa/src/adapters/catalogs/simbad'
-import { findSimbadObjectTypeInfoByCode } from 'nebulosa/src/adapters/catalogs/simbad'
+import { findSimbadObjectTypeInfoByCode, SimbadCatalog } from 'nebulosa/src/adapters/catalogs/simbad'
 import { deg, toArcsec, toDeg, toMas } from 'nebulosa/src/math/units/angle'
 import { toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
 
-// A local stand-in for the service: it records the queries and returns two objects in the SIMBAD column order.
-const queries: string[] = []
-const header = ['oid', 'otype', 'ra', 'dec', 'V', 'pmra', 'pmdec', 'plx_value', 'rvz_radvel'].join('\t')
-const orionNebulaStar = ['3755198', '*', '83.8221', '-5.3911', '8.5', '1.5', '-2.5', '2.5', '21.3'].join('\t')
-const faintGalaxy = ['1575544', 'G', '83.9', '-5.4', '12.2', '', '', '', ''].join('\t')
-
-globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-	const query = (init!.body as FormData).get('query') as string
-	queries.push(query)
-	return new Response([header, orionNebulaStar, faintGalaxy].join('\n'))
-}) as typeof fetch
-
 const catalog = new SimbadCatalog({ timeout: 30000 })
 
-// A cone of 3 arcminutes: the exact test removes the second object, which is outside.
+// A cone of 3 arcminutes around the Orion Nebula, ordered by the V magnitude.
 const stars = await catalog.queryCone(deg(83.8221), deg(-5.3911), deg(0.05))
-const star = stars[0]
-console.log(stars.length, star.id, star.type, star.epoch, toDeg(star.rightAscension), toDeg(star.declination), star.magnitude) // 1 3755198 * 2000 83.8221 -5.3911 8.5
-console.log(toMas(star.pmRA!), toMas(star.pmDEC!), toMas(star.parallax!), toKilometerPerSecond(star.rv!)) // 1.5066646242309238 -2.5 2.5 21.300000000000004
-console.log(findSimbadObjectTypeInfoByCode(star.type!)?.description) // Star
-console.log(queries[0]) // SELECT TOP 50000 b.oid, b.otype, b.ra, b.dec, f.V, b.pmra, b.pmdec, b.plx_value, b.rvz_radvel FROM basic b JOIN allfluxes f ON f.oidref = b.oid WHERE (b.ra >= 83.77187784580221 AND b.ra <= 83.87232215419782 AND b.dec >= -5.4411 AND b.dec <= -5.341099999999999) AND 1=CONTAINS(POINT('ICRS', b.ra, b.dec), CIRCLE('ICRS', 83.8221, -5.3911, 0.05)) AND f.V IS NOT NULL ORDER BY V ASC, oid ASC
+for (const star of stars) console.log(star.id, star.type, star.epoch, toDeg(star.rightAscension), toDeg(star.declination), star.magnitude)
 
-// A box: both objects are inside, and the second has no motion, parallax or velocity.
+// The motion (dα/dt and dδ/dt), the parallax and the radial velocity are optional.
+for (const star of stars) if (star.pmRA !== undefined && star.pmDEC !== undefined) console.log(toMas(star.pmRA), toMas(star.pmDEC), star.parallax && toMas(star.parallax), star.rv && toKilometerPerSecond(star.rv))
+
+// The type is the short code of the object type, which has a description.
+for (const star of stars) console.log(star.type && findSimbadObjectTypeInfoByCode(star.type)?.description)
+
+// A box and the same region as a stream, which pages through the service.
 const field = await catalog.queryRegion({ kind: 'box', minRA: deg(83.7), maxRA: deg(84), minDEC: deg(-5.5), maxDEC: deg(-5.3) })
-console.log(
-	field.map((entry) => `${entry.id} ${entry.type} ${entry.magnitude}`),
-	field[1].pmRA,
-	field[1].pmDEC,
-	field[1].parallax,
-	field[1].rv,
-) // [ "3755198 * 8.5", "1575544 G 12.2" ] undefined undefined undefined undefined
-console.log(queries[1]) // SELECT TOP 50000 b.oid, b.otype, b.ra, b.dec, f.V, b.pmra, b.pmdec, b.plx_value, b.rvz_radvel FROM basic b JOIN allfluxes f ON f.oidref = b.oid WHERE (b.ra >= 83.7 AND b.ra <= 84 AND b.dec >= -5.5 AND b.dec <= -5.300000000000001) AND f.V IS NOT NULL ORDER BY V ASC, oid ASC
+console.log(field.map((entry) => `${entry.id} ${entry.type} ${entry.magnitude}`))
+for await (const entry of catalog.streamRegion({ kind: 'box', minRA: deg(83.7), maxRA: deg(84), minDEC: deg(-5.5), maxDEC: deg(-5.3) })) console.log(entry.id, entry.magnitude)
 
-// The same region as a stream, and a triangle and a polygon.
-for await (const entry of catalog.streamRegion({ kind: 'box', minRA: deg(83.7), maxRA: deg(84), minDEC: deg(-5.5), maxDEC: deg(-5.3) })) console.log(entry.id, entry.magnitude) // 3755198 8.5; 1575544 12.2
-console.log((await catalog.queryTriangle([deg(83.7), deg(-5.5)], [deg(84), deg(-5.5)], [deg(83.85), deg(-5.3)])).length) // 2
-console.log(
-	(
-		await catalog.queryPolygon([
-			[deg(83.7), deg(-5.5)],
-			[deg(84), deg(-5.5)],
-			[deg(84), deg(-5.3)],
-			[deg(83.7), deg(-5.3)],
-		])
-	).length,
-) // 2
+// A triangle and a polygon.
+const triangle = await catalog.queryTriangle([deg(83.7), deg(-5.5)], [deg(84), deg(-5.5)], [deg(83.85), deg(-5.3)])
+const polygon = await catalog.queryPolygon([
+	[deg(83.7), deg(-5.5)],
+	[deg(84), deg(-5.5)],
+	[deg(84), deg(-5.3)],
+	[deg(83.7), deg(-5.3)],
+])
+console.log(triangle.length, polygon.length)
 
 // A box across RA 0 gives two coarse predicates joined by OR.
-await catalog.queryBox(deg(359.9), deg(0.1), deg(-1), deg(1))
-console.log(queries.at(-1)!.includes(' OR ')) // true
+console.log((await catalog.queryBox(deg(359.9), deg(0.1), deg(-1), deg(1))).length)
 
 // One object by its oid, as a number, a string or a bigint.
 const one = await catalog.get(3755198)
-console.log(one?.id, one?.magnitude, toArcsec(one!.parallax!) * 1000) // 3755198 8.5 2.5
-console.log(queries.at(-1)) // SELECT TOP 1 b.oid, b.otype, b.ra, b.dec, f.V, b.pmra, b.pmdec, b.plx_value, b.rvz_radvel FROM basic b JOIN allfluxes f ON f.oidref = b.oid WHERE b.oid = 3755198 ORDER BY V ASC, oid ASC
-await catalog.get('3755198')
-await catalog.get(3755198n)
-console.log(queries.at(-1)!.includes('b.oid = 3755198')) // true
+console.log(one?.id, one?.magnitude, one?.parallax && toArcsec(one.parallax) * 1000)
+console.log((await catalog.get('3755198'))?.id, (await catalog.get(3755198n))?.id)
 ```
 
 ### SIMBAD TAP Queries
 
-`simbadQuery(query, options?)` (`src/adapters/catalogs/simbad.ts`) is the same call for SIMBAD: it runs an ADQL query against the synchronous TAP endpoint (`SIMBAD_URL` plus `simbad/sim-tap/sync`; `SIMBAD_ALTERNATIVE_URL` is the mirror at Strasbourg) with a form `POST` of `request=doQuery`, `lang=adql`, `format=tsv` and `query`, and returns the TSV rows as arrays of strings, or `undefined` when the HTTP status is 300 or more. `SimbadQueryOptions` are the `fetch` options (without `method` and `body`) and the CSV reader options (see CSV Reading and Parsing) plus `baseUrl` and `timeout` (milliseconds, 60000 by default, 0 for none); `signal` replaces the timeout. The cells are text as published, the header line is dropped by default (`skipFirstLine` is true) and `skipFirstLine: false` keeps it as the first row, and the ADQL is not validated. The tables of SIMBAD are `basic` (identity, type, ICRS position `ra` and `dec` in degrees, proper motions `pmra` and `pmdec` in mas/yr, `plx_value` in mas and `rvz_radvel` in km/s), `allfluxes` (one row per object with the magnitudes by band, such as `V`) and others; `TOP n` limits the rows and the service itself limits the answer. The snippet replaces `fetch` by a local stand-in, so it does not use the network.
+`simbadQuery(query, options?)` (`src/adapters/catalogs/simbad.ts`) is the same call for SIMBAD: it runs an ADQL query against the synchronous TAP endpoint (`SIMBAD_URL` plus `simbad/sim-tap/sync`; `SIMBAD_ALTERNATIVE_URL` is the mirror at Strasbourg) with a form `POST` of `request=doQuery`, `lang=adql`, `format=tsv` and `query`, and returns the TSV rows as arrays of strings, or `undefined` when the HTTP status is 300 or more. `SimbadQueryOptions` are the `fetch` options (without `method` and `body`) and the CSV reader options (see CSV Reading and Parsing) plus `baseUrl` and `timeout` (milliseconds, 60000 by default, 0 for none); `signal` replaces the timeout. The cells are text as published, the header line is dropped by default (`skipFirstLine` is true) and `skipFirstLine: false` keeps it as the first row, and the ADQL is not validated. The tables of SIMBAD are `basic` (identity, type, ICRS position `ra` and `dec` in degrees, proper motions `pmra` and `pmdec` in mas/yr, `plx_value` in mas and `rvz_radvel` in km/s), `allfluxes` (one row per object with the magnitudes by band, such as `V`) and others; `TOP n` limits the rows and the service itself limits the answer.
 
 ```ts
-import { SIMBAD_ALTERNATIVE_URL, SIMBAD_URL, simbadQuery } from 'nebulosa/src/adapters/catalogs/simbad'
-
-// A local stand-in for the service: it records the address and the form, and returns a TSV table.
-const requests: { url: string; form: FormData; signal?: AbortSignal | null }[] = []
-globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-	requests.push({ url: input.toString(), form: init!.body as FormData, signal: init!.signal })
-	return new Response(['oid\tmain_id\tra\tdec', '3755198\tM  42\t83.82208\t-5.39111', '1575544\tM  31\t10.68471\t41.26875'].join('\n'))
-}) as typeof fetch
+import { SIMBAD_ALTERNATIVE_URL, simbadQuery } from 'nebulosa/src/adapters/catalogs/simbad'
 
 const adql = "SELECT TOP 2 oid, main_id, ra, dec FROM basic WHERE main_id IN ('M  42', 'M  31')"
 
-// The header line is dropped by default.
+// The header line is dropped by default: one array of strings per row.
 const rows = await simbadQuery(adql)
-console.log(rows!.length, rows![0], rows![1]) // 2 [ "3755198", "M  42", "83.82208", "-5.39111" ] [ "1575544", "M  31", "10.68471", "41.26875" ]
-
-// The request is a form POST to the TAP endpoint of the primary host.
-const first = requests[0]
-console.log(first.url === `${SIMBAD_URL}simbad/sim-tap/sync`, SIMBAD_URL, SIMBAD_ALTERNATIVE_URL) // true https://simbad.cds.unistra.fr/ https://simbad.u-strasbg.fr/
-console.log(first.form.get('request'), first.form.get('lang'), first.form.get('format'), first.form.get('query') === adql) // doQuery adql tsv true
-console.log(first.signal instanceof AbortSignal) // true
+for (const row of rows ?? []) console.log(row)
 
 // The mirror host, with the header kept and the cells trimmed.
 const data = await simbadQuery(adql, { baseUrl: SIMBAD_ALTERNATIVE_URL, skipFirstLine: false, forceTrim: true })
-console.log(data) // [ [ "oid", "main_id", "ra", "dec" ], [ "3755198", "M  42", "83.82208", "-5.39111" ], [ "1575544", "M  31", "10.68471", "41.26875" ] ]
-console.log(requests[1].url) // https://simbad.u-strasbg.fr/simbad/sim-tap/sync
+console.log(data)
 
 // An own abort signal replaces the timeout, and a timeout of zero sends none.
 const controller = new AbortController()
 await simbadQuery(adql, { signal: controller.signal })
 await simbadQuery(adql, { timeout: 0 })
-console.log(requests[2].signal === controller.signal, requests[3].signal) // true undefined
 ```
 
 ### Small-Body Identification
 
-`identify(dateTime, longitude, latitude, elevation, fovRa, fovDec, fovRaWidth?, fovDecWidth?, magLimit?, magRequired?)` (`src/adapters/orbits/sbd.ts`) asks the `sb_ident` service of JPL (the two-pass identification, with the first pass suppressed so that only the refined table is returned) which asteroids and comets are inside a field of view at a given time as seen from an observing site, and returns the parsed JSON. `dateTime` is a Unix millisecond timestamp (sent as `YYYY-MM-DD_HH:mm:ss`, in UTC) or a library `Time` (sent as its Julian day number plus its fraction); `longitude` and `latitude` locate the site (radians, east positive), `elevation` is a `Distance` (AU) sent in kilometers, `fovRa` and `fovDec` are the center of the field (radians, the right ascension being sent as `hh-mm-ss.ss` and the declination as `dd-mm-ss.ss` with `M` for the minus sign), `fovRaWidth` and `fovDecWidth` are the half-widths of the field (radians, 1 degree by default; the declination one defaults to the right-ascension one), `magLimit` is the limiting visual magnitude (18 by default) and `magRequired` (true by default) asks that only bodies with a known magnitude are listed (it is not sent as true when the limit is 30 or more). The answer is the `SmallBodyIdentifySecondPass` with `n_second_pass`, the column names `fields_second` and `data_second_pass`, the rows of text of the service, each row with the columns that the names give in order (name, position, distance and rates, magnitude, and the like). The numbers are as published and are not parsed, and the HTTP status is not checked. The snippet replaces `fetch` by a local stand-in that records the query and returns a short table, so it does not use the network.
+`identify(dateTime, longitude, latitude, elevation, fovRa, fovDec, fovRaWidth?, fovDecWidth?, magLimit?, magRequired?)` (`src/adapters/orbits/sbd.ts`) asks the `sb_ident` service of JPL (the two-pass identification, with the first pass suppressed so that only the refined table is returned) which asteroids and comets are inside a field of view at a given time as seen from an observing site, and returns the parsed JSON. `dateTime` is a Unix millisecond timestamp (sent as `YYYY-MM-DD_HH:mm:ss`, in UTC) or a library `Time` (sent as its Julian day number plus its fraction); `longitude` and `latitude` locate the site (radians, east positive), `elevation` is a `Distance` (AU) sent in kilometers, `fovRa` and `fovDec` are the center of the field (radians, the right ascension being sent as `hh-mm-ss.ss` and the declination as `dd-mm-ss.ss` with `M` for the minus sign), `fovRaWidth` and `fovDecWidth` are the half-widths of the field (radians, 1 degree by default; the declination one defaults to the right-ascension one), `magLimit` is the limiting visual magnitude (18 by default) and `magRequired` (true by default) asks that only bodies with a known magnitude are listed (it is not sent as true when the limit is 30 or more). The answer is the `SmallBodyIdentifySecondPass` with `n_second_pass`, the column names `fields_second` and `data_second_pass`, the rows of text of the service, each row with the columns that the names give in order (name, position, distance and rates, magnitude, and the like). The numbers are as published and are not parsed, and the HTTP status is not checked.
 
 ```ts
-import { identify, IDENTIFY_PATH, SBD_BASE_URL, type SmallBodyIdentifySecondPass } from 'nebulosa/src/adapters/orbits/sbd'
+import { identify, type SmallBodyIdentifySecondPass } from 'nebulosa/src/adapters/orbits/sbd'
 import { deg, hour } from 'nebulosa/src/math/units/angle'
 import { meter } from 'nebulosa/src/math/units/distance'
-
-// A local stand-in for the service with a second pass table.
-const addresses: string[] = []
-globalThis.fetch = (async (input: string | URL | Request) => {
-	addresses.push(input.toString())
-	return Response.json({
-		n_second_pass: 2,
-		fields_second: ['Object name', 'Astrometric RA', 'Astrometric Dec', 'Dist. from center', 'V mag'],
-		data_second_pass: [
-			['433 Eros (A898 PA)', '05:35:12.1', '-05:20:30', '12.4', '11.2'],
-			['1221 Amor (1932 EA1)', '05:35:40.5', '-05:25:02', '35.7', '16.9'],
-		],
-	})
-}) as typeof fetch
 
 // The field around the Orion Nebula seen from a site at 760 m, on 2026-10-05 at 03:00 UTC, 1 degree wide.
 const when = Date.UTC(2026, 9, 5, 3)
 const result = (await identify(when, deg(-45.5), deg(-23.2), meter(760), hour(5.588), deg(-5.39))) as SmallBodyIdentifySecondPass
-console.log(result.n_second_pass, result.fields_second) // 2 [ "Object name", "Astrometric RA", "Astrometric Dec", "Dist. from center", "V mag" ]
-for (const row of result.data_second_pass) console.log(row.join(' | ')) // 433 Eros (A898 PA) | 05:35:12.1 | -05:20:30 | 12.4 | 11.2; 1221 Amor (1932 EA1) | 05:35:40.5 | -05:25:02 | 35.7 | 16.9
-
-// The request: the fixed path of the service, then the time, the site (degrees and km) and the field.
-const url = new URL(addresses[0])
-console.log(addresses[0].startsWith(`${SBD_BASE_URL}${IDENTIFY_PATH}`), url.pathname) // true /sb_ident.api
-console.log(url.searchParams.get('obs-time'), url.searchParams.get('lat'), url.searchParams.get('lon'), url.searchParams.get('alt')) // 2026-10-05_03:00:00 -23.2 -45.5 0.76
-console.log(url.searchParams.get('fov-ra-center'), url.searchParams.get('fov-dec-center'), url.searchParams.get('fov-ra-hwidth'), url.searchParams.get('fov-dec-hwidth')) // 05-35-16.80 M05-23-24.00 1 1
-console.log(url.searchParams.get('vmag-lim'), url.searchParams.get('mag-required'), url.searchParams.get('two-pass'), url.searchParams.get('suppress-first-pass')) // 18 true true true
+console.log(result.n_second_pass, result.fields_second)
+for (const row of result.data_second_pass) console.log(row.join(' | '))
 
 // A rectangular field of 2 x 0.5 degrees, a limit of 20 and bodies with unknown magnitude included.
 await identify(when, deg(-45.5), deg(-23.2), meter(760), hour(5.588), deg(-5.39), deg(2), deg(0.5), 20, false)
-const wide = new URL(addresses.at(-1)!)
-console.log(wide.searchParams.get('fov-ra-hwidth'), wide.searchParams.get('fov-dec-hwidth'), wide.searchParams.get('vmag-lim'), wide.searchParams.get('mag-required')) // 2 0.5 20 false
 
 // A square field: the declination half-width follows the right-ascension one. A limit of 30 never requires a magnitude.
 await identify(when, deg(-45.5), deg(-23.2), meter(760), hour(5.588), deg(5.39), deg(0.25), undefined, 30)
-const square = new URL(addresses.at(-1)!)
-console.log(square.searchParams.get('fov-dec-center'), square.searchParams.get('fov-ra-hwidth'), square.searchParams.get('fov-dec-hwidth'), square.searchParams.get('mag-required')) // 05-23-24.00 0.25 0.25 false
 ```
 
 ### VizieR TAP Queries
 
-`vizierQuery(query, options?)` (`src/adapters/catalogs/vizier.ts`) runs an ADQL query against the synchronous TAP endpoint of VizieR (`VIZIER_URL` plus `TAPVizieR/tap/sync`) and returns the answer as the rows of a TSV table, each row an array of strings, or `undefined` when the HTTP status is 300 or more. It sends a `POST` with the form fields `request=doQuery`, `lang=adql`, `format=tsv` and `query`. The options extend the `fetch` options (without `method` and `body`) and the CSV reader options (see CSV Reading and Parsing): `baseUrl` replaces the host, `timeout` is the limit in milliseconds (60000 by default, and 0 disables it), `signal` replaces the timeout with an own abort signal, and options such as `skipFirstLine` and `forceTrim` control the parsing. Nothing is converted: the cells are the text of the service, the header line is dropped by default (`skipFirstLine` is true) and `skipFirstLine: false` keeps it as the first row, and the call does not validate the ADQL. The snippet replaces `fetch` by a local stand-in that records the request and answers with a short table, so it does not use the network.
+`vizierQuery(query, options?)` (`src/adapters/catalogs/vizier.ts`) runs an ADQL query against the synchronous TAP endpoint of VizieR (`VIZIER_URL` plus `TAPVizieR/tap/sync`) and returns the answer as the rows of a TSV table, each row an array of strings, or `undefined` when the HTTP status is 300 or more. It sends a `POST` with the form fields `request=doQuery`, `lang=adql`, `format=tsv` and `query`. The options extend the `fetch` options (without `method` and `body`) and the CSV reader options (see CSV Reading and Parsing): `baseUrl` replaces the host, `timeout` is the limit in milliseconds (60000 by default, and 0 disables it), `signal` replaces the timeout with an own abort signal, and options such as `skipFirstLine` and `forceTrim` control the parsing. Nothing is converted: the cells are the text of the service, the header line is dropped by default (`skipFirstLine` is true) and `skipFirstLine: false` keeps it as the first row, and the call does not validate the ADQL.
 
 ```ts
-import { vizierQuery, VIZIER_URL } from 'nebulosa/src/adapters/catalogs/vizier'
-
-// A local stand-in for the service: it records the address and the form, and returns a TSV table.
-const requests: { url: string; form: FormData; signal?: AbortSignal | null }[] = []
-globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-	requests.push({ url: input.toString(), form: init!.body as FormData, signal: init!.signal })
-	const rows = [
-		['Source', 'RAJ2000', 'DEJ2000', 'Gmag'],
-		['1', '10.5', '-5.25', '9.1'],
-		['2', '10.6', '-5.3', '12.4'],
-	]
-	return new Response(rows.map((row) => row.join('\t')).join('\n'))
-}) as typeof fetch
+import { vizierQuery } from 'nebulosa/src/adapters/catalogs/vizier'
 
 const adql = 'SELECT TOP 2 Source, RAJ2000, DEJ2000, Gmag FROM "I/355/gaiadr3" WHERE Gmag < 13 ORDER BY Gmag ASC'
 
-// The default parsing drops the header line, so the rows are the data.
+// The default parsing drops the header line, so the rows are the data: one array of strings per row.
 const rows = await vizierQuery(adql)
-console.log(rows!.length, rows![0], rows![1]) // 2 [ "1", "10.5", "-5.25", "9.1" ] [ "2", "10.6", "-5.3", "12.4" ]
+for (const row of rows ?? []) console.log(row)
 
-// The request is a form POST to the TAP endpoint of the default host.
-const first = requests[0]
-console.log(first.url === `${VIZIER_URL}TAPVizieR/tap/sync`, VIZIER_URL) // true http://tapvizier.cds.unistra.fr/
-console.log(first.form.get('request'), first.form.get('lang'), first.form.get('format'), first.form.get('query') === adql) // doQuery adql tsv true
-console.log(first.signal instanceof AbortSignal) // true
-
-// Keep the header, trim the cells, change the host and give an own abort signal instead of the timeout.
+// Keep the header, trim the cells and give an own abort signal instead of the timeout.
 const controller = new AbortController()
-const data = await vizierQuery(adql, { baseUrl: 'http://localhost:8080/', skipFirstLine: false, forceTrim: true, signal: controller.signal })
-console.log(data) // [ [ "Source", "RAJ2000", "DEJ2000", "Gmag" ], [ "1", "10.5", "-5.25", "9.1" ], [ "2", "10.6", "-5.3", "12.4" ] ]
-console.log(requests[1].url, requests[1].signal === controller.signal) // http://localhost:8080/TAPVizieR/tap/sync true
+const data = await vizierQuery(adql, { skipFirstLine: false, forceTrim: true, signal: controller.signal })
+console.log(data)
 
 // A timeout of zero sends no signal.
 await vizierQuery(adql, { timeout: 0 })
-console.log(requests[2].signal) // undefined
 ```
 
 ## 💾 I/O and Data Formats
@@ -20539,55 +19743,33 @@ console.log(text.length, text.toString()) // 6 SIMPLE
 
 ### HTTP Range Byte Sources
 
-`RangeHttpSource` reads an HTTP(S) resource through `Range` requests, so a large file (a FITS or XISF image, a catalog) can be read piece by piece from a server without downloading it whole. `rangeHttpSource(uri, options?)` creates it. It is a seekable source (see Byte-Stream Contracts): `seek(position)` accepts any non-negative byte offset and does not touch the network, and each `read(buffer, offset?, size?)` sends one request for `bytes=position-(position+size-1)` (with `Accept-Encoding: identity`) and advances the position by the bytes received. The server must answer `206 Partial Content`; a `416` (a position at or past the end of the resource) is a read of `0`, which is how the end is seen, and any other status (a `200` that ignored the range included) is reported as an error. `options.timeout` is the maximum time of each request in milliseconds (`0`, the default, has no timeout), and disposing the source with `using` aborts the pending requests. The synchronous `readSync` is not supported. Requests of more than 64 KiB stream the body into the buffer, smaller ones read it as a whole. Each read is a round trip, so it is better to read in blocks of tens of kilobytes than a few bytes at a time. The snippet starts a local server that honours ranges.
+`RangeHttpSource` reads an HTTP(S) resource through `Range` requests, so a large file (a FITS or XISF image, a catalog) can be read piece by piece from a server without downloading it whole. `rangeHttpSource(uri, options?)` creates it. It is a seekable source (see Byte-Stream Contracts): `seek(position)` accepts any non-negative byte offset and does not touch the network, and each `read(buffer, offset?, size?)` sends one request for `bytes=position-(position+size-1)` (with `Accept-Encoding: identity`) and advances the position by the bytes received. The server must answer `206 Partial Content`; a `416` (a position at or past the end of the resource) is a read of `0`, which is how the end is seen, and any other status (a `200` that ignored the range included) is reported as an error. `options.timeout` is the maximum time of each request in milliseconds (`0`, the default, has no timeout), and disposing the source with `using` aborts the pending requests. The synchronous `readSync` is not supported. Requests of more than 64 KiB stream the body into the buffer, smaller ones read it as a whole. Each read is a round trip, so it is better to read in blocks of tens of kilobytes than a few bytes at a time. The URL of the snippet is only an example of a server that honours ranges.
 
 ```ts
 import { rangeHttpSource, readRemaining, readUntil } from 'nebulosa/src/io/io'
 
-// A local server that serves a resource of 100000 bytes and honours the Range header.
-const resource = Buffer.alloc(100000)
-for (let i = 0; i < resource.byteLength; i++) resource[i] = i % 251
-const requests: string[] = []
+using source = rangeHttpSource('https://example.com/data.bin', { timeout: 5000 })
 
-using server = Bun.serve({
-	port: 0,
-	fetch(request) {
-		const range = request.headers.get('range')
-		requests.push(range ?? 'none')
-		const match = /^bytes=(\d+)-(\d+)$/.exec(range ?? '')
-		if (!match) return new Response(resource)
-		const start = +match[1]
-		const end = Math.min(+match[2], resource.byteLength - 1)
-		if (start >= resource.byteLength) return new Response(null, { status: 416 })
-		return new Response(resource.subarray(start, end + 1), { status: 206, headers: { 'Content-Range': `bytes ${start}-${end}/${resource.byteLength}` } })
-	},
-})
-
-using source = rangeHttpSource(`http://localhost:${server.port}/data.bin`, { timeout: 5000 })
-console.log(source.position) // 0
-
-// The first bytes, then a seek and a read in the middle. A seek only moves the cursor.
+// The first bytes, then a seek and a read in the middle. A seek only moves the cursor, without any request.
 const buffer = Buffer.alloc(16)
-console.log(await source.read(buffer), source.position, buffer.subarray(0, 6)) // 16 16 <Buffer 00 01 02 03 04 05>
-console.log(source.seek(50000), requests.length) // true 1
-console.log(await source.read(buffer, 4, 8), source.position, buffer.subarray(4, 12).equals(resource.subarray(50000, 50008))) // 8 50008 true
+const count = await source.read(buffer)
+console.log(count, source.position, buffer.subarray(0, count))
+source.seek(50000)
+console.log(await source.read(buffer, 4, 8), source.position)
 
 // A read of more than 64 KiB is streamed, and readUntil joins what the server returns.
 source.seek(0)
 const big = Buffer.alloc(70000)
-console.log(await readUntil(source, big), big.equals(resource.subarray(0, 70000))) // 70000 true
+console.log(await readUntil(source, big))
 
-// The end of the resource: a position at the end answers with 416, which is a read of 0.
-source.seek(resource.byteLength)
-console.log(await source.read(buffer)) // 0
+// The end of the resource is seen as a read of 0 bytes (the server answers with 416).
+source.seek(1 << 30)
+console.log(await source.read(buffer))
 
-// A range that crosses the end is shortened by the server, and the rest is read to the end.
-source.seek(99990)
-console.log(await source.read(buffer), source.position) // 10 100000
+// The rest of the resource from a position, read to the end.
 source.seek(99000)
 const tail = await readRemaining(source)
-console.log(tail.byteLength, tail.equals(resource.subarray(99000))) // 1000 true
-console.log(requests.slice(0, 3)) // [ "bytes=0-15", "bytes=50000-50007", "bytes=0-69999" ]
+console.log(tail.byteLength)
 ```
 
 ### JPEG via TurboJPEG
@@ -22758,107 +21940,57 @@ console.log(toKilometerPerSecond(kilometerPerSecond(29.78))) // 29.7800000000000
 
 ```ts
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 import { PinMode } from 'nebulosa/src/devices/firmata/types'
 
 // The ESP8266 board: Wemos D1 labels map to GPIO numbers.
 console.log(ESP8266.D1, ESP8266.D2, ESP8266.A0, ESP8266.LED_BUILTIN, ESP8266.SDA, ESP8266.SCL) // 5 4 17 2 4 5
 const board = new ESP8266()
-console.log(board.name, board.isPinDigital(ESP8266.D5), board.isPinAnalog(ESP8266.A0), board.isPinTwoWire(ESP8266.SDA), board.isPinSPI(ESP8266.MOSI), board.isPinSerial(ESP8266.TX), board.isPinLED(ESP8266.LED_BUILTIN)) // ESP8266 true true true true true true
-console.log(board.isPinPWM(ESP8266.D6), board.isPinServo(ESP8266.D1), board.isPinDigital(ESP8266.A0), board.pinToAnalog(ESP8266.A0), board.pinToDigital(5), board.pinToPWM(12), board.pinToServo(4)) // true true false 0 5 12 4
+console.log(board.name, board.isPinDigital(ESP8266.D5), board.isPinAnalog(ESP8266.A0), board.isPinTwoWire(ESP8266.SDA), board.isPinSPI(ESP8266.MOSI), board.isPinSerial(ESP8266.TX), board.isPinLED(ESP8266.LED_BUILTIN))
+console.log(board.isPinPWM(ESP8266.D6), board.isPinServo(ESP8266.D1), board.isPinDigital(ESP8266.A0), board.pinToAnalog(ESP8266.A0), board.pinToDigital(5), board.pinToPWM(12), board.pinToServo(4))
 
-// A transport that records the frames the client sends and answers the handshake like a tiny board with
-// three pins (pin 1 is analog channel 0). Replies are delivered asynchronously, as a real link would do.
-const sent: string[] = []
-const hex = (data: Uint8Array) => Buffer.from(data).toString('hex')
-const replies: Record<number, number[]> = {
-	0x79: [0xf0, 0x79, 2, 7, 0x42, 0, 0xf7], // firmware 2.7 "B"
-	0x6b: [0xf0, 0x6c, 0, 1, 1, 1, 127, 0, 1, 1, 1, 2, 10, 127, 127, 0xf7], // capabilities of pins 0, 1 and 2
-	0x69: [0xf0, 0x6a, 127, 0, 127, 0xf7], // analog mapping
-}
-const transport = {
-	write: (data: string | Bun.BufferSource) => {
-		const frame = Buffer.from(data as Uint8Array)
-		sent.push(hex(frame))
-		if (frame[0] !== 0xf0) return
-		const reply = frame[1] === 0x6d ? [0xf0, 0x6e, frame[2], frame[2] === 1 ? 0 : 1, frame[2] === 1 ? 5 : 0, 0xf7] : replies[frame[1]]
-		if (reply) queueMicrotask(() => client.process(Buffer.from(reply)))
-	},
-	flush: () => {},
-	close: () => sent.push('closed'),
-}
-const client = new FirmataClient(transport, board)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+// connect() starts the handshake: firmware, capabilities, state of the pins and analog mapping.
+const client = new FirmataClientOverTcp(board)
 client.addHandler({ ready: () => console.log('ready, pins:', client.pinCount) })
-
-client.requestFirmware()
-console.log(await client.ensureInitializationIsDone(1000)) // true
-console.log(sent.splice(0)) // [ "f079f7", "f06bf7", "f06d00f7", "f06d01f7", "f069f7" ] (firmware, capabilities, state of pins 0 and 1, analog mapping) (the queries of the handshake)
+await client.connect('192.168.0.50', 3030)
+await client.ensureInitializationIsDone(2000)
 
 // Cached pins: modes with resolutions, the current mode and the last value.
-console.log(client.pinAt(1)) // { id: 1, modes: Set(3) { 0, 1, 2 }, resolutions: Map(3) { 0: 1, 1: 1, 2: 10 }, mode: 0, value: 5 }
-console.log([...client.pins].map((pin) => [pin.id, pin.mode, pin.modes.size])) // [ [ 0, 1, 2 ], [ 1, 0, 3 ], [ 2, 126, 0 ] ] (pin 2 has no modes: its mode is UNSUPPORTED = 126)
-console.log(client.pinAt(7)) // undefined
+console.log(client.pinAt(1))
+console.log([...client.pins].map((pin) => [pin.id, pin.mode, pin.modes.size]))
 
-// Pin modes and digital/analog outputs, as frames.
+// Pin modes and digital/analog outputs.
 client.pinMode(0, PinMode.OUTPUT)
 client.digitalWrite(0, true)
 client.digitalWrite(0, 0)
 client.analogWrite(2, 1023)
-client.analogWrite(2, 300000)
-console.log(client.pinAt(0)?.mode, sent.splice(0)) // 1 [ "f40001", "f50001", "f50000", "f06f027f07f7", "f06f02602712f7" ]
 
 // Reporting.
 client.requestAnalogPinReport(ESP8266.A0, true)
 client.requestDigitalPinReport(9, true)
 client.requestAnalogReport(false)
 client.requestDigitalReport(true)
-console.log(
-	sent.splice(0).map((frame) => frame.length / 2),
-	'bytes',
-) // [ 2, 2, 32, 32 ] bytes
 
 // Sampling interval, servo pulse range, strings, version, system variables.
 client.samplingInterval(100)
-client.samplingInterval(100000)
 client.querySamplingInterval()
 client.servoConfig(5, 544, 2400)
 client.sendString('Hi')
 client.requestProtocolVersion()
 client.querySystemVariable(3)
 client.setSystemVariable(3, -5, 4)
-console.log(sent.splice(0)) // [ "f07a6400f7", "f07a7f7ff7", "f07cf7", "f0700520046012f7", "f07148006900f7", "f9", "f06600010003007f0000000000f7", "f0660101000300047b7f7f7f0ff7" ]
 
 // Handlers can be removed, and a reset clears the pins and the handshake without telling the board.
 const handler = { pinChange: () => {} }
 client.addHandler(handler)
 client.removeHandler(handler)
 client.reset()
-console.log(client.pinCount, sent) // 0 []
-client.sendSystemReset()
-console.log(sent.splice(0)) // [ "ff", "f079f7" ] (reset, then a new firmware query)
-console.log(await client.ensureInitializationIsDone(1000)) // true
-client.disconnect()
-console.log(sent) // [ "f06bf7", "f06d00f7", "f06d01f7", "f069f7", "closed" ] (the handshake queries again, then the transport closes)
 
-// Over TCP: a local mock board answers the same queries. connect() starts the handshake itself.
-const answers: Record<number, number[]> = { ...replies }
-const server = Bun.listen({
-	hostname: '127.0.0.1',
-	port: 0,
-	socket: {
-		data: (socket, data) => {
-			const reply = data[1] === 0x6d ? [0xf0, 0x6e, data[2], 1, 0, 0xf7] : answers[data[1]]
-			if (data[0] === 0xf0 && reply) socket.write(Buffer.from(reply))
-		},
-	},
-})
-const tcp = new FirmataClientOverTcp(new ESP8266())
-console.log(await tcp.connect('127.0.0.1', server.port), await tcp.connect('127.0.0.1', server.port)) // true false (the second call finds it connected)
-console.log(await tcp.ensureInitializationIsDone(2000), tcp.pinCount) // true 3
-tcp.close()
-tcp.reset()
-server.stop(true)
+// A system reset asks the board to restart, and then the handshake runs again.
+client.sendSystemReset()
+await client.ensureInitializationIsDone(2000)
+client.close()
 ```
 
 ### Firmata DHT
@@ -22867,26 +21999,22 @@ The DHT feature reads DHT11 and DHT22 (AM2302) temperature and humidity sensors 
 
 ```ts
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 import { encodeDhtAttach } from 'nebulosa/src/devices/firmata/codecs/dht'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
 // A DHT22 on D4 reporting every second, a DHT11 on D3 at the default 500 ms with blocking reads, then detach both.
 client.dhtAttach(ESP8266.D4, 'dht22', 1000)
 client.dhtAttach(ESP8266.D3, 'dht11', undefined, true)
 client.dhtDetach(ESP8266.D4)
 client.dhtDetach(ESP8266.D3)
-console.log(out()) // [ "f0740202006807f7", "f0740100017403f7", "f0740302f7", "f0740300f7" ]
-console.log(encodeDhtAttach(2, 'dht22', 2000, false)) // [ 2, 2, 0, 80, 15 ]
+console.log(encodeDhtAttach(2, 'dht22', 2000, false))
 
-// Reports: 21.5 C and 48.2 % (raw 215 and 482), then -3.4 C (raw 14-bit two's complement of -34) and 80 %.
-const split = (value: number) => [value & 0x7f, (value >> 7) & 0x7f]
+// The temperature (Celsius) and the humidity (%) of each report go to the handler.
 client.addHandler({ dhtReport: (_, report) => console.log(report) })
-client.process(Buffer.from([0xf0, 0x74, 0, 2, ...split(215), ...split(482), 0xf7])) // { pin: 2, temperature: 21.5, humidity: 48.2 }
-client.process(Buffer.from([0xf0, 0x74, 0, 2, ...split(0x4000 - 34), ...split(800), 0xf7])) // { pin: 2, temperature: -3.4, humidity: 80 }
 ```
 
 ### Firmata Encoders
@@ -22895,16 +22023,15 @@ The encoder feature counts the quadrature pulses of up to 64 incremental rotary 
 
 ```ts
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
 // Two encoders: 0 on D5/D6 and 1 on D7/D8.
 client.encoderAttach(0, ESP8266.D5, ESP8266.D6)
 client.encoderAttach(1, ESP8266.D7, ESP8266.D8)
-console.log(out()) // [ "f06100000e0cf7", "f06100010d0ff7" ]
 
 // Reports and management.
 client.encoderReport(0)
@@ -22913,12 +22040,9 @@ client.encoderAutoReport(true)
 client.encoderReset(0)
 client.encoderAutoReport(false)
 client.encoderDetach(1)
-console.log(out()) // [ "f0610100f7", "f06102f7", "f0610401f7", "f0610300f7", "f0610400f7", "f0610501f7" ]
 
-// Replies: each position is 5 bytes (id with the 0x40 sign flag, then 28 bits in four 7-bit bytes).
+// The positions reported by the board go to the handler.
 client.addHandler({ encoderPositions: (_, positions) => console.log(positions) })
-client.process(Buffer.from([0xf0, 0x61, 0, 0x2c, 0x02, 0, 0, 0xf7])) // [ { id: 0, position: 300, negative: false } ] (position 300)
-client.process(Buffer.from([0xf0, 0x61, 0, 0x2c, 0x02, 0, 0, 0x41, 0x05, 0, 0, 0, 0xf7])) // [ { id: 0, position: 300, negative: false }, { id: 1, position: -5, negative: true } ] (a batch: 300 and -5)
 ```
 
 ### Firmata Frequency Measurement
@@ -22927,30 +22051,28 @@ The frequency feature counts the edges seen by a digital pin and reports the raw
 
 ```ts
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 import { encodeFrequencyFilter, encodeFrequencyQuery } from 'nebulosa/src/devices/firmata/codecs/frequency'
-import { encodeUnsigned7 } from 'nebulosa/src/devices/firmata/codecs/numeric'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
 // Count rising edges on D5 every 500 ms, ignore edges closer than 100 microseconds, then stop D5 and finally every pin.
 client.frequencyQuery(ESP8266.D5, 3, 500)
 client.frequencyFilter(ESP8266.D5, 100)
 client.frequencyClear(ESP8266.D5)
 client.frequencyClear()
-console.log(out()) // [ "f07d010e037403f7", "f07d030e6400000000f7", "f07d000ef7", "f07d007ff7" ]
-console.log(encodeFrequencyQuery(5, 5, 1000), encodeFrequencyFilter(5, 250)) // [ 1, 5, 5, 104, 7 ] [ 3, 5, 122, 1, 0, 0, 0 ]
+console.log(encodeFrequencyQuery(5, 5, 1000), encodeFrequencyFilter(5, 250))
 
-// Two reports half a second apart: 1500 more rising edges, so the signal is 3 kHz.
-const reports: { timestamp: number; ticks: number }[] = []
-client.addHandler({ frequencyReport: (_, report) => reports.push(report) })
-client.process(Buffer.from([0xf0, 0x7d, 2, 14, ...encodeUnsigned7(10000, 5), ...encodeUnsigned7(4000, 5), 0xf7]))
-client.process(Buffer.from([0xf0, 0x7d, 2, 14, ...encodeUnsigned7(10500, 5), ...encodeUnsigned7(5500, 5), 0xf7]))
-const [a, b] = reports
-console.log(reports) // [ { pin: 14, timestamp: 10000, ticks: 4000 }, { pin: 14, timestamp: 10500, ticks: 5500 } ]
-console.log(((b.ticks - a.ticks) / (b.timestamp - a.timestamp)) * 1000) // 3000
+// A report has a timestamp and the raw tick counter, so the frequency comes from two consecutive reports (here, in Hz when the timestamp is in milliseconds).
+let previous: { timestamp: number; ticks: number } | undefined
+client.addHandler({
+	frequencyReport: (_, report) => {
+		if (previous) console.log(((report.ticks - previous.ticks) / (report.timestamp - previous.timestamp)) * 1000)
+		previous = report
+	},
+})
 ```
 
 ### Firmata I2C
@@ -22959,45 +22081,39 @@ The I2C feature of a `FirmataClient` reads and writes devices on the board's two
 
 ```ts
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 import { encodeTwoWireConfig, encodeTwoWireReadWrite } from 'nebulosa/src/devices/firmata/codecs/twowire'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
 // The read delay keeps the largest value ever requested.
 client.twoWireConfig(100)
 client.twoWireConfig(50)
 client.twoWireConfig(300)
-console.log(out()) // [ "f0786400f7", "f0786400f7", "f0782c02f7" ]
 
 // Write 0x01 0xff to the device at 0x40, then read two bytes from its register 0x02.
 client.twoWireWrite(0x40, [0x01, 0xff])
 client.twoWireRead(0x40, 0x02, 2)
-console.log(out()) // [ "f076400001007f01f7", "f076400802000200f7" ]
 
 // Without a register, continuous reads, a repeated start, and a stop.
 client.twoWireRead(0x40, -1, 1)
 client.twoWireRead(0x40, 0x02, 6, true)
 client.twoWireRead(0x40, 0x02, 6, false, 7, 'restart')
 client.twoWireStop(0x40)
-console.log(out()) // [ "f07640080100f7", "f076401002000600f7", "f076404802000600f7", "f0764018f7" ]
 
 // Ten-bit addressing sets bit 5, and the three high address bits go in the second byte.
 client.twoWireWrite(0x2a5, [0x10], 10)
 client.twoWireReadWrite(0x2a5, 'read', [0x00, 0x04], 10, 'restart')
 client.twoWireReadWrite(0x40, 'write')
-console.log(out()) // [ "f07625251000f7", "f076256d00000400f7", "f0764000f7" ]
 
 // The codecs build the frames without a client.
-console.log(Buffer.from(encodeTwoWireConfig(1000)).toString('hex')) // f0786807f7
-console.log(encodeTwoWireReadWrite(0x40, 'readContinuously', [0x02, 0x06]).toString('hex')) // f076401002000600f7
+console.log(Buffer.from(encodeTwoWireConfig(1000)).toString('hex'))
+console.log(encodeTwoWireReadWrite(0x40, 'readContinuously', [0x02, 0x06]).toString('hex'))
 
-// A reply: device 0x40, register 0x02 and the two bytes 0x12 0x34 (each as two 7-bit bytes).
+// The replies of the reads (device, register and data) go to the handler.
 client.addHandler({ twoWireMessage: (_, address, register, data) => console.log(address.toString(16), register, data) })
-client.process(Buffer.from([0xf0, 0x77, 0x40, 0, 0x02, 0, 0x12, 0, 0x34, 0, 0xf7])) // 40 2 <Buffer 12 34>
-client.process(Buffer.from([0xf0, 0x77, 0x40, 0, 0x00, 0, 0x7f, 1, 0xf7])) // 40 0 <Buffer ff> (one byte: 0xff)
 ```
 
 ### Firmata One-Wire
@@ -23006,41 +22122,35 @@ The 1-Wire feature talks to Dallas/Maxim devices (the DS18B20 thermometer, for i
 
 ```ts
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
-import { encodePacked7Bit } from 'nebulosa/src/devices/firmata/codecs/numeric'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 import { encodeOneWireCommand, encodeOneWireConfig, encodeOneWireSearch } from 'nebulosa/src/devices/firmata/codecs/onewire'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
 client.oneWireConfig(ESP8266.D4)
 client.oneWireConfig(ESP8266.D4, 'parasitic')
 client.oneWireSearch(ESP8266.D4)
 client.oneWireSearch(ESP8266.D4, 'alarms')
-console.log(out()) // [ "f073410201f7", "f073410200f7", "f0734002f7", "f0734402f7" ]
 
 // A DS18B20: start a conversion on all devices (SKIP ROM), then read its scratchpad by ROM address.
 const rom = [0x28, 0xff, 0x64, 0x1e, 0x0f, 0x16, 0x03, 0x4b]
 client.oneWireReset(ESP8266.D4)
 client.oneWireWrite(ESP8266.D4, [0x44])
-console.log(out()) // [ "f0730102f7", "f07323024400f7" ]
 client.oneWireWrite(ESP8266.D4, [0xbe], rom)
-console.log(client.oneWireRead(ESP8266.D4, 9, rom), client.oneWireRead(ESP8266.D4, 2), client.oneWireWriteAndRead(ESP8266.D4, [0xbe], 9, rom)) // 0 1 2
-console.log(out()) // [ "f0732502287e1373714145014b7c02f7", "f0730d02287e1373714145014b1200000000f7", "f0730b020200040000f7", "f0732d02287e1373714145014b12001000402ff7" ]
-console.log(client.oneWireRead(ESP8266.D4, 9, rom, 0x1234)) // 4660 (an explicit ID does not advance the counter)
-console.log(out()) // [ "f0730d02287e1373714145014b1200202302f7" ]
+console.log(client.oneWireRead(ESP8266.D4, 9, rom), client.oneWireRead(ESP8266.D4, 2), client.oneWireWriteAndRead(ESP8266.D4, [0xbe], 9, rom))
+console.log(client.oneWireRead(ESP8266.D4, 9, rom, 0x1234))
 
 // The general command, with a delay before the read.
-console.log(client.oneWireCommand(ESP8266.D4, { reset: true, skip: true, data: [0x44], bytesToRead: 1, delay: 750 })) // 3
-console.log(out()) // [ "f0733b0201000c00605d0000000801f7" ]
+console.log(client.oneWireCommand(ESP8266.D4, { reset: true, skip: true, data: [0x44], bytesToRead: 1, delay: 750 }))
 
 // The codecs build the frames without a client; the correlation cursor is passed in and returned.
-console.log(Buffer.from(encodeOneWireConfig(2, 'normal')).toString('hex'), Buffer.from(encodeOneWireSearch(2, 'all')).toString('hex')) // f073410201f7 f0734002f7
+console.log(Buffer.from(encodeOneWireConfig(2, 'normal')).toString('hex'), Buffer.from(encodeOneWireSearch(2, 'all')).toString('hex'))
 const { message, readCorrelationId, nextCorrelationId } = encodeOneWireCommand(2, { reset: true, address: rom, bytesToRead: 9 }, 7)
-console.log(message.toString('hex'), readCorrelationId, nextCorrelationId) // f0730d02287e1373714145014b1200380000f7 7 8
+console.log(message.toString('hex'), readCorrelationId, nextCorrelationId)
 
-// Replies: a search with two ROM addresses, and a read answered with its correlation ID and two data bytes.
+// The replies of a search (ROM addresses) and of a read (correlation id and data) go to the handler.
 client.addHandler({
 	oneWireSearchReply: (_, pin, addresses, alarms) =>
 		console.log(
@@ -23050,10 +22160,6 @@ client.addHandler({
 		),
 	oneWireReadReply: (_, pin, id, data) => console.log(pin, id.toString(16), data),
 })
-const roms = encodePacked7Bit([...rom, ...rom.map((byte) => byte ^ 0xff)])
-client.process(Buffer.from([0xf0, 0x73, 0x42, 4, ...roms, 0xf7])) // 4 [ "28ff641e0f16034b", "d7009be1f0e9fcb4" ] false
-client.process(Buffer.from([0xf0, 0x73, 0x45, 4, ...encodePacked7Bit(rom), 0xf7])) // 4 [ "28ff641e0f16034b" ] true (an alarm search)
-client.process(Buffer.from([0xf0, 0x73, 0x43, 4, ...encodePacked7Bit([0x34, 0x12, 0x91, 0x01]), 0xf7])) // 4 1234 <Buffer 91 01> (temperature scratchpad bytes 0x91 0x01)
 ```
 
 ### Firmata Scheduler
@@ -23062,13 +22168,12 @@ The scheduler feature stores a short list of Firmata messages on the board and r
 
 ```ts
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
-import { encodePacked7Bit } from 'nebulosa/src/devices/firmata/codecs/numeric'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 import { encodeSchedulerAdd, encodeSchedulerDelay, encodeSchedulerSchedule } from 'nebulosa/src/devices/firmata/codecs/scheduler'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
 // Pulse the built-in LED: on, wait 500 ms, off. The task is 10 bytes long and starts in 2 seconds.
 client.schedulerCreate(1, 10)
@@ -23076,27 +22181,21 @@ client.schedulerAdd(1, [0xf5, ESP8266.LED_BUILTIN, 0])
 client.schedulerDelay(500)
 client.schedulerAdd(1, [0xf5, ESP8266.LED_BUILTIN, 1])
 client.schedulerSchedule(1, 2000)
-console.log(out()) // [ "f07b00010a00f7", "f07b020175050000f7", "f07b037403000000f7", "f07b020175050400f7", "f07b0401500f000000f7" ]
 
 // Inventory, details, delete and reset.
 client.schedulerQueryAll()
 client.schedulerQuery(1)
 client.schedulerDelete(1)
 client.schedulerReset()
-console.log(out()) // [ "f07b05f7", "f07b0601f7", "f07b0101f7", "f07b07f7" ]
 
 // The payload codecs.
-console.log(encodeSchedulerAdd(1, [0xf5, 2, 0]), encodeSchedulerDelay(500), encodeSchedulerSchedule(1, 2000)) // [ 2, 1, 117, 5, 0, 0 ] [ 3, 116, 3, 0, 0, 0 ] [ 4, 1, 80, 15, 0, 0, 0 ]
+console.log(encodeSchedulerAdd(1, [0xf5, 2, 0]), encodeSchedulerDelay(500), encodeSchedulerSchedule(1, 2000))
 
-// Replies: the ids, a found task (time, length and position as little-endian words, then the data), and a missing one.
+// The ids of the tasks and the details of a task go to the handlers.
 client.addHandler({
 	schedulerTasks: (_, ids) => console.log('ids', ids),
 	schedulerTask: (_, reply) => console.log(reply),
 })
-client.process(Buffer.from([0xf0, 0x7b, 9, 1, 5, 0xf7])) // ids [ 1, 5 ]
-const task = Buffer.from([2000 & 0xff, 2000 >> 8, 0, 0, 10, 0, 3, 0, 0xf5, 2, 0])
-client.process(Buffer.from([0xf0, 0x7b, 0x0a, 1, ...encodePacked7Bit(task), 0xf7])) // { id: 1, found: true, time: 2000, length: 10, position: 3, data: <Buffer f5 02 00>, error: false }
-client.process(Buffer.from([0xf0, 0x7b, 0x0a, 9, 0xf7])) // { id: 9, found: false, error: false }
 ```
 
 ### Firmata Serial
@@ -23105,22 +22204,18 @@ The Serial 1.0 feature bridges the board's UARTs to the host. Ports 0-7 are hard
 
 ```ts
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 import { encodeSerialConfig, encodeSerialWrite } from 'nebulosa/src/devices/firmata/codecs/serial'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
-// Capabilities of a tiny board: pin 1 is RX and pin 2 is TX of hardware port 1 (SERIAL mode 10, resolutions 2 and 3).
-client.process(Buffer.from([0xf0, 0x6c, 127, 10, 2, 127, 10, 3, 127, 0xf7]))
-out()
-console.log(client.serialPins(1), client.serialPins(0), client.serialPins(9)) // { rx: 1, tx: 2 } {} {}
+console.log(client.serialPins(1), client.serialPins(0), client.serialPins(9))
 
 // Open port 1 at 9600 bit/s: the pins are inferred. Software port 8 needs its pins.
 client.serialConfig(1, 9600)
 client.serialConfig(8, 57600, 4, 5)
-console.log(out()) // [ "f06011004b000102f7", "f060180042030405f7" ]
 
 // Write bytes, start and stop reading, listen, flush and close.
 client.serialWrite(1, Buffer.from('AT\r\n'))
@@ -23130,15 +22225,13 @@ client.serialStopRead(1)
 client.serialListen(8)
 client.serialFlush(1)
 client.serialClose(1)
-console.log(out()) // [ "f06021410054000d000a00f7", "f06031000000f7", "f06031002000f7", "f0603101f7", "f06078f7", "f06061f7", "f06051f7" ]
 
 // The payload codecs, without a client.
-console.log(encodeSerialConfig(0, 115200), encodeSerialConfig(8, 9600, 12, 14)) // [ 16, 0, 4, 7 ] [ 24, 0, 75, 0, 12, 14 ]
-console.log(encodeSerialWrite(2, [0x41, 0xff])) // [ 34, 65, 0, 127, 1 ]
+console.log(encodeSerialConfig(0, 115200), encodeSerialConfig(8, 9600, 12, 14))
+console.log(encodeSerialWrite(2, [0x41, 0xff]))
 
-// Received bytes, as two 7-bit bytes each: "Hi\n" from port 1.
+// The bytes received on a port go to the handler.
 client.addHandler({ serialReply: (_, port, data) => console.log(port, data.toString().trim()) })
-client.process(Buffer.from([0xf0, 0x60, 0x41, 72, 0, 105, 0, 10, 0, 0xf7])) // 1 Hi
 ```
 
 ### Firmata SPI
@@ -23147,42 +22240,36 @@ The SPI feature drives devices on the board's SPI bus (`ESP8266.SCK`, `MISO`, `M
 
 ```ts
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 import { decodeSpiReply, encodeSpiConfig, encodeSpiWords, spiSelector } from 'nebulosa/src/devices/firmata/codecs/spi'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
 // Start channel 0 and configure device 1 (mode 0, MSB first, 1 MHz) with the board driving GPIO 15 as chip select.
 client.spiBegin()
 client.spiConfig({ channel: 0, deviceId: 1, dataMode: 0, bitOrder: 'msb', maxSpeed: 1000000, csPin: ESP8266.D8 })
-console.log(out()) // [ "f0680000f7", "f06801080140043d000000010ff7" ]
 
-// Transfers return request IDs 0, 1, 2 and 3.
-console.log(client.spiTransfer(0, 1, [0x9f, 0x00, 0x00]), client.spiWrite(0, 1, Buffer.from([0x06])), client.spiWriteAck(0, 1, [0x01, 0x02], false), client.spiRead(0, 1, 4)) // 0 1 2 3
-console.log(out()) // [ "f06802080001031f0100000000f7", "f06803080101010600f7", "f068070802000201000200f7", "f0680408030104f7" ]
+// Each transfer returns the id of the request, which its reply carries.
+console.log(client.spiTransfer(0, 1, [0x9f, 0x00, 0x00]), client.spiWrite(0, 1, Buffer.from([0x06])), client.spiWriteAck(0, 1, [0x01, 0x02], false), client.spiRead(0, 1, 4))
 
 // The selector combines the device and the channel, and the config codec shows the layout of the payload.
-console.log(spiSelector(0, 1), spiSelector(3, 15)) // 8 123
-console.log(encodeSpiConfig({ channel: 0, deviceId: 1, dataMode: 3, bitOrder: 'lsb', maxSpeed: 8000000, wordSize: 8, controlCs: true, csActiveHigh: true, csPin: 15, packed: true })) // [ 1, 8, 14, 0, 36, 104, 3, 0, 8, 3, 15 ]
-console.log(encodeSpiWords(2, spiSelector(0, 1), 9, [0xa5, 0x01], false, true), encodeSpiWords(2, spiSelector(0, 1), 9, [0xa5, 0x01], true, true)) // [ 2, 8, 9, 1, 2, 37, 1, 1, 0 ] [ 2, 8, 9, 1, 2, 37, 3, 0 ]
+console.log(spiSelector(0, 1), spiSelector(3, 15))
+console.log(encodeSpiConfig({ channel: 0, deviceId: 1, dataMode: 3, bitOrder: 'lsb', maxSpeed: 8000000, wordSize: 8, controlCs: true, csActiveHigh: true, csPin: 15, packed: true }))
+console.log(encodeSpiWords(2, spiSelector(0, 1), 9, [0xa5, 0x01], false, true), encodeSpiWords(2, spiSelector(0, 1), 9, [0xa5, 0x01], true, true))
 
-// A reply for device 1: request 0 returned the bytes 0xef 0x40 0x18.
+// The replies of the transfers go to the handler.
 client.addHandler({ spiReply: (_, reply) => console.log(reply.channel, reply.deviceId, reply.requestId, reply.data) })
-client.process(Buffer.from([0xf0, 0x68, 5, 0x08, 0, 3, 0x6f, 1, 0x40, 0, 0x18, 0, 0xf7])) // 0 1 0 <Buffer ef 40 18>
-console.log(decodeSpiReply(Buffer.from([5, 0x08, 0, 3, 0x6f, 1, 0x40, 0, 0x18, 0]), false)) // { channel: 0, deviceId: 1, requestId: 0, data: <Buffer ef 40 18> }
-console.log(client.parseSpiReply(Buffer.from([5, 0x08, 1, 1, 0x7f, 1]))) // { channel: 0, deviceId: 1, requestId: 1, data: <Buffer ff> }
+console.log(decodeSpiReply(Buffer.from([5, 0x08, 0, 3, 0x6f, 1, 0x40, 0, 0x18, 0]), false))
+console.log(client.parseSpiReply(Buffer.from([5, 0x08, 1, 1, 0x7f, 1])))
 
 // A device configured as packed has its replies decoded from dense 7-bit bytes (the first handler still runs too).
 client.spiConfig({ channel: 0, deviceId: 2, packed: true })
 client.addHandler({ spiReply: (_, reply) => console.log('packed', reply.deviceId, reply.data) })
-client.process(Buffer.from([0xf0, 0x68, 5, 0x10, 2, 3, 0x6f, 0x50, 0x01, 0x00, 0xf7])) // 0 2 2 <Buffer 6f 68 00>
-packed 2 <Buffer 6f 68 00>
 
 // Release the channel.
 client.spiEnd()
-console.log(out().slice(-1)) // [ "f0680600f7" ]
 ```
 
 ### Firmata Stepper
@@ -23191,20 +22278,18 @@ The stepper feature drives up to ten AccelStepper motors (numbered 0-9) with acc
 
 ```ts
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
 import { encodeMultiStepperConfig, encodeMultiStepperMoveTo, encodeMultiStepperStop, encodeStepperConfig } from 'nebulosa/src/devices/firmata/codecs/stepper'
-import { encodeStepperPosition } from 'nebulosa/src/devices/firmata/codecs/numeric'
 
-const sent: string[] = []
-const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
-const out = () => sent.splice(0)
+// A client over TCP to a board that runs Firmata (the address and port are an example).
+const client = new FirmataClientOverTcp(new ESP8266())
+await client.connect('192.168.0.50', 3030)
 
 // A step/direction driver (a common A4988 setup) on D1 and D2 with an enable pin on D5, and a four-wire motor.
 client.stepperConfig({ device: 0, interface: 'driver', pin1: ESP8266.D1, pin2: ESP8266.D2, enablePin: ESP8266.D5 })
 client.stepperConfig({ device: 1, interface: 'fourWire', pin1: 12, pin2: 13, pin3: 14, pin4: 15, stepType: 1 })
 client.stepperConfig({ device: 2, interface: 'threeWire', pin1: 4, pin2: 5, pin3: 6 })
 client.stepperConfig({ device: 3, interface: 'twoWire', pin1: 7, pin2: 8, invertPins: 0b00011 })
-console.log(out()) // [ "f06200001105040ef7", "f0620001420c0d0e0ff7", "f062000230040506f7", "f062000320070803f7" ]
 
 // Motion: speed in steps/s, acceleration in steps/s^2, then a relative move, an absolute one and a stop.
 client.stepperSetMaxSpeed(0, 1500.5)
@@ -23216,26 +22301,21 @@ client.stepperZero(0)
 client.stepperReportPosition(0)
 client.stepperStop(0)
 client.stepperEnable(0, false)
-console.log(out()) // [ "f0620900544a5b20f7", "f06208000012741df7", "f062040001f7", "f06202006807000008f7", "f0620300201c010000f7", "f0620100f7", "f0620600f7", "f0620500f7", "f062040000f7" ]
 
 // Groups: members and targets (one per member, in order), then a stop.
 client.multiStepperConfig(1, [0, 1])
 client.multiStepperMoveTo(1, [1000, -500])
 client.multiStepperStop(1)
-console.log(out()) // [ "f06220010001f7", "f062210168070000007403000008f7", "f0622301f7" ]
 
 // The payload codecs.
-console.log(encodeStepperConfig({ device: 0, interface: 'driver', pin1: 5, pin2: 4 })) // [ 0, 0, 16, 5, 4 ]
-console.log(encodeMultiStepperConfig(1, [0, 1]), encodeMultiStepperMoveTo(1, [1000, -500]), encodeMultiStepperStop(1)) // [ 32, 1, 0, 1 ] [ 33, 1, 104, 7, 0, 0, 0, 116, 3, 0, 0, 8 ] [ 35, 1 ]
+console.log(encodeStepperConfig({ device: 0, interface: 'driver', pin1: 5, pin2: 4 }))
+console.log(encodeMultiStepperConfig(1, [0, 1]), encodeMultiStepperMoveTo(1, [1000, -500]), encodeMultiStepperStop(1))
 
-// Replies: a requested position report, a move-complete event and the end of a group move.
+// Position reports, move-complete events and the end of a group move go to the handlers.
 client.addHandler({
 	stepperPosition: (_, report) => console.log(report),
 	multiStepperComplete: (_, group) => console.log('group', group, 'done'),
 })
-client.process(Buffer.from([0xf0, 0x62, 0x06, 0, ...encodeStepperPosition(-1000), 0xf7])) // { device: 0, position: -1000, complete: false }
-client.process(Buffer.from([0xf0, 0x62, 0x0a, 0, ...encodeStepperPosition(20000), 0xf7])) // { device: 0, position: 20000, complete: true }
-client.process(Buffer.from([0xf0, 0x62, 0x24, 1, 0xf7])) // group 1 done
 ```
 
 ### Firmata Wire Protocol
@@ -23347,36 +22427,7 @@ const handler: Lx200ProtocolHandler = {
 }
 
 const server = new Lx200ProtocolServer({ handler, name: 'Nebulosa', version: '1.0' })
-console.log(server.start('127.0.0.1', 0), server.start('127.0.0.1', 0), server.port > 0) // true false true
-
-// A client that sends one command and waits for the reply (or a short silence for commands without one).
-const replies: string[] = []
-const socket = await Bun.connect({ hostname: '127.0.0.1', port: server.port, socket: { data: (_, data) => replies.push(data.toString('ascii')), open: () => {}, close: () => {}, error: () => {} } })
-const ask = async (command: string) => {
-	socket.write(command)
-	await Bun.sleep(30)
-	return replies.splice(0).join('')
-}
-
-console.log(await ask('\u0006'), await ask(':GVP#'), await ask(':GVN#'), await ask(':GVD#')) // G Nebulosa# 1.0# Jan 01 2025#
-console.log(await ask(':GR#'), await ask(':GD#'), await ask(':Gg#'), await ask(':Gt#')) // 05:30:00# -05*24:00# +046*38# -23*33#
-console.log(await ask(':GC#'), await ask(':GL#'), await ask(':GG#'), await ask(':GW#'), await ask(':D#')) // 03/21/25# 19:30:15# +03.0# GTH# |#
-
-// Stage a target (RA 10:30:00, Dec +20*15:30), sync and goto to it; a leading '#' is also accepted.
-console.log(await ask(':Sr10:30:00#'), await ask(':Sd+20*15:30#'), await ask(':CM#'), await ask('#:MS#')) // 1 1 # 0 (the handler prints sync and goto with 10.5 hours and 20.258333 degrees)
-
-// Set the site (longitude is west positive on the wire) and the clock: three commands commit the date and time.
-console.log(await ask(':Sg046*38#'), await ask(':St-23*33#'), await ask(':Gg#'), await ask(':Gt#')) // 1 1 +046*38# -23*33#
-console.log(await ask(':SG+03.0#'), await ask(':SL23:15:00#'), await ask(':SC03/22/25#')) // 1 1 1Updating planetary data       #                              #
-console.log(await ask(':GC#'), await ask(':GL#'), await ask(':GG#')) // 03/22/25# 23:15:00# +03.0#
-
-// Manual motion, slew rates and abort have no reply.
-console.log([await ask(':RC#'), await ask(':Mn#'), await ask(':Qn#'), await ask(':Me#'), await ask(':Qe#'), await ask(':RM#'), await ask(':Q#')]) // ["", "", "", "", "", "", ""] (the handler prints rate CENTER, move NORTH true and false, move EAST true and false, rate FIND and abort)
-
-// A command split across packets is reassembled.
-socket.write(':G')
-await Bun.sleep(20)
-console.log(await ask('R#')) // 05:30:00#
+console.log(server.start('localhost', 0), server.start('localhost', 0), server.port > 0) // true false true
 
 socket.end()
 server.stop()
@@ -23388,95 +22439,42 @@ console.log(server.port) // -1
 `PHD2Client` controls PHD2 (the open-source guiding application) through its event-monitoring server, a TCP connection (port 4400 by default, `DEFAULT_PHD2_PORT`) that exchanges newline-delimited JSON. `connect(hostname, port?)` opens the socket and returns false when it is already open; `close()` (also `Symbol.dispose`) closes it and resolves every pending command as `socketUnavailable`. Every command method is a thin wrapper over `send(method, params?, timeout?)`, which writes one JSON-RPC request with a fresh id and resolves a `PHD2CommandResult`: `{ success: true, result }` with the typed result, or `{ success: false, error }` where the error is the PHD2 `{ code, message }` object, `'timeout'` (15 seconds by default, a non-positive or non-finite timeout falls back to it), `'socketUnavailable'` or `'socketError'`. Replies are matched by id, so several commands may be in flight; everything that is not a reply is an asynchronous event, delivered to the `PHD2ClientHandler` as `event(client, event)` (a union of the `PHD2Events` payloads, keyed by `Event`, with the field names of the PHD2 protocol such as `GuideStep`, `StarLost`, `SettleDone`, `Alert` and `AppState`), while `command(client, command, success, result)` is called for each reply and `close(client, error?)` when the connection ends. `id` is a stable hash of the remote address and port, and the address and port getters expose the socket endpoints. The commands cover the equipment (`getConnected`, `setConnected`, `getCurrentEquipment`, `getProfile`, `getProfiles`, `setProfile` by id or profile), the state (`getAppState`, `getPaused`, `setPaused(paused, full?)`, `getSettling`, `getCalibrated`, `getCalibrationData(which?)`, `clearCalibration(which?)`, `flipCalibration`), the camera (`getExposure`, `setExposure` in milliseconds, `getExposureDurations`, `getCameraBinning`, `getCameraFrameSize`, `getPixelScale` in arcseconds per pixel, `getUseSubframes`, `getSearchRegion`, `startCapture(exposure, roi?)`, `stopCapture`, `saveImage`, `getStarImage` with base64 pixels), the loop and the guide star (`loop`, `findStar(roi?)`, `deselectStar`, `getLockPosition`, `setLockPosition(x, y, exact?)`, the lock shift commands `getLockShiftEnabled`, `setLockShiftEnabled` and `getLockShiftParams`, `setLockShiftParams`), guiding (`guide(recalibrate?, settle?, roi?)`, `dither(amount, raOnly?, settle?, timeout?)`, `guidePulse(amount, direction, which?)` with the amount in milliseconds, `getGuideOutputEnabled`, `setGuideOutputEnabled`, `getDeclinationGuideMode`, `setDeclinationGuideMode`, the algorithm parameters `getAlgorithmParamNames`, `getAlgorithmParam` and `setAlgorithmParam` per `'RA'` or `'DEC'` axis) and `shutdown`. The settle criteria are `{ pixels, time, timeout }` (a distance in pixels held for `time` seconds, giving up after `timeout` seconds) and default to `DEFAULT_PHD2_SETTLE` (1.5 pixels, 10 s, 30 s); a partial settle given to `dither` or `guide` is merged over the defaults. A region of interest is `{ x, y, width, height }` in pixels and is sent only when its width and height are nonzero (`DEFAULT_ROI` is empty, meaning the full frame). Settling progress and the end of a guide or dither request are not in the command reply: they come as `Settling` and `SettleDone` events. The lock shift rate units are chosen from the axes when omitted (`'arcsec/hr'` for `'RA/Dec'`, otherwise `'pixels/hr'`).
 
 ```ts
-import { DEFAULT_PHD2_SETTLE, PHD2Client, type PHD2Events } from 'nebulosa/src/devices/guiding/phd2'
-
-// A local mock of PHD2: it replies to every request with a canned result and records what it received.
-const requests: [string, unknown][] = []
-const results: Record<string, unknown> = {
-	get_app_state: 'Guiding',
-	get_connected: true,
-	get_calibrated: true,
-	get_calibration_data: { calibrated: true, xAngle: 0.5, xRate: 0.0165, xParity: '+', yAngle: 2.07, yRate: 0.0158, yParity: '-' },
-	get_camera_binning: 1,
-	get_camera_frame_size: [1280, 960],
-	get_current_equipment: { camera: { name: 'ZWO ASI120MM', connected: true }, mount: { name: 'On-camera', connected: true } },
-	get_dec_guide_mode: 'Auto',
-	get_exposure: 2000,
-	get_exposure_durations: [500, 1000, 2000, 3000],
-	get_guide_output_enabled: true,
-	get_lock_position: [640.5, 480.25],
-	get_lock_shift_enabled: false,
-	get_lock_shift_params: { enabled: false, rate: [0, 0], units: 'arcsec/hr', axes: 'RA/Dec' },
-	get_paused: false,
-	get_pixel_scale: 3.77,
-	get_profile: { id: 2, name: 'Guide scope' },
-	get_profiles: [
-		{ id: 1, name: 'Default', selected: false },
-		{ id: 2, name: 'Guide scope', selected: true },
-	],
-	get_search_region: 15,
-	get_settling: false,
-	get_star_image: { frame: 42, width: 15, height: 15, star_pos: { x: 7.5, y: 7.5 }, pixels: 'AAAA' },
-	get_use_subframes: false,
-	get_algo_param_names: ['Aggressiveness', 'MinMove'],
-	get_algo_param: 0.7,
-	find_star: [640.5, 480.25],
-	save_image: { filename: '/tmp/phd2_guide.fit' },
-}
-const server = Bun.listen({
-	hostname: '127.0.0.1',
-	port: 0,
-	socket: {
-		open: (socket) => socket.write(JSON.stringify({ Event: 'Version', Timestamp: 1, Host: 'mock', Inst: 1, PHDVersion: '2.6.13', PHDSubver: '', OverlapSupport: true, MsgVersion: 1 }) + '\r\n'),
-		data: (socket, data) => {
-			for (const line of data.toString().split('\r\n').filter(Boolean)) {
-				const { id, method, params } = JSON.parse(line)
-				requests.push([method, params])
-				socket.write(JSON.stringify({ jsonrpc: '2.0', id, result: results[method] ?? 0 }) + '\r\n')
-				if (method === 'guide') socket.write(JSON.stringify({ Event: 'SettleDone', Timestamp: 2, Host: 'mock', Inst: 1, Status: 0, TotalFrames: 12, DroppedFrames: 0 }) + '\r\n')
-			}
-		},
-		close: () => {},
-	},
-})
+import { DEFAULT_PHD2_PORT, DEFAULT_PHD2_SETTLE, PHD2Client, type PHD2Events } from 'nebulosa/src/devices/guiding/phd2'
 
 const events: PHD2Events[] = []
 const client = new PHD2Client({ handler: { event: (_, event) => events.push(event) } })
-console.log(await client.connect('127.0.0.1', server.port), await client.connect('127.0.0.1', server.port), client.id?.length) // true false 32
-await Bun.sleep(30)
-console.log(events.shift()) // { Event: "Version", Timestamp: 1, Host: "mock", Inst: 1, PHDVersion: "2.6.13", PHDSubver: "", OverlapSupport: true, MsgVersion: 1 }
+// connect opens the socket (the address is an example of the machine that runs PHD2) and returns false when it is already open.
+console.log(await client.connect('localhost', DEFAULT_PHD2_PORT), client.id)
+console.log(events.shift())
 
 // Equipment, profiles and state.
-console.log(await client.getConnected(), await client.getCurrentEquipment()) // { success: true, result: true } { success: true, result: { camera: { name: "ZWO ASI120MM", connected: true }, mount: { name: "On-camera", connected: true } } }
-console.log(await client.getProfile(), await client.getProfiles()) // { success: true, result: { id: 2, name: "Guide scope" } } { success: true, result: [ { id: 1, name: "Default", selected: false }, { id: 2, name: "Guide scope", selected: true } ] }
-console.log(await client.setProfile(2), await client.setProfile({ id: 1, name: 'Default', selected: false }), await client.setConnected(true)) // { success: true, result: 0 } { success: true, result: 0 } { success: true, result: 0 }
-console.log(await client.getAppState(), await client.getPaused(), await client.getSettling(), await client.getCalibrated(), await client.getCalibrationData()) // { success: true, result: "Guiding" } { success: true, result: false } { success: true, result: false } { success: true, result: true } { success: true, result: { calibrated: true, xAngle: 0.5, xRate: 0.0165, xParity: "+", yAngle: 2.07, yRate: 0.0158, yParity: "-" } }
-console.log(await client.setPaused(true), await client.setPaused(false, false), await client.clearCalibration(), await client.clearCalibration('AO'), await client.flipCalibration()) // { success: true, result: 0 } { success: true, result: 0 } { success: true, result: 0 } { success: true, result: 0 } { success: true, result: 0 }
+console.log(await client.getConnected(), await client.getCurrentEquipment())
+console.log(await client.getProfile(), await client.getProfiles())
+console.log(await client.setProfile(2), await client.setProfile({ id: 1, name: 'Default', selected: false }), await client.setConnected(true))
+console.log(await client.getAppState(), await client.getPaused(), await client.getSettling(), await client.getCalibrated(), await client.getCalibrationData())
+console.log(await client.setPaused(true), await client.setPaused(false, false), await client.clearCalibration(), await client.clearCalibration('AO'), await client.flipCalibration())
 
 // Camera.
-console.log(await client.getExposure(), await client.getExposureDurations(), await client.getCameraBinning(), await client.getCameraFrameSize(), await client.getPixelScale(), await client.getUseSubframes(), await client.getSearchRegion()) // { success: true, result: 2000 } { success: true, result: [ 500, 1000, 2000, 3000 ] } { success: true, result: 1 } { success: true, result: [ 1280, 960 ] } { success: true, result: 3.77 } { success: true, result: false } { success: true, result: 15 }
-console.log(await client.setExposure(1000), await client.startCapture(1500), await client.startCapture(1500, { x: 100, y: 120, width: 64, height: 64 }), await client.stopCapture()) // { success: true, result: 0 } { success: true, result: 0 } { success: true, result: 0 } { success: true, result: 0 }
-console.log(await client.saveImage(), await client.getStarImage()) // { success: true, result: { filename: "/tmp/phd2_guide.fit" } } { success: true, result: { frame: 42, width: 15, height: 15, star_pos: { x: 7.5, y: 7.5 }, pixels: "AAAA" } }
+console.log(await client.getExposure(), await client.getExposureDurations(), await client.getCameraBinning(), await client.getCameraFrameSize(), await client.getPixelScale(), await client.getUseSubframes(), await client.getSearchRegion())
+console.log(await client.setExposure(1000), await client.startCapture(1500), await client.startCapture(1500, { x: 100, y: 120, width: 64, height: 64 }), await client.stopCapture())
+console.log(await client.saveImage(), await client.getStarImage())
 
 // Looping, the guide star and the lock position.
-console.log(await client.loop(), await client.findStar(), await client.findStar({ x: 0, y: 0, width: 640, height: 480 }), await client.deselectStar()) // { success: true, result: 0 } { success: true, result: [ 640.5, 480.25 ] } { success: true, result: [ 640.5, 480.25 ] } { success: true, result: 0 }
-console.log(await client.getLockPosition(), await client.setLockPosition(640.5, 480.25), await client.setLockPosition(100, 200, true)) // { success: true, result: [ 640.5, 480.25 ] } { success: true, result: 0 } { success: true, result: 0 }
-console.log(await client.getLockShiftEnabled(), await client.getLockShiftParams(), await client.setLockShiftEnabled(true), await client.setLockShiftParams({ rate: [15, 0], axes: 'RA/Dec' }), await client.setLockShiftParams({ rate: [30, 5], axes: 'X/Y', units: 'pixels/hr' })) // { success: true, result: false } { success: true, result: { enabled: false, rate: [ 0, 0 ], units: "arcsec/hr", axes: "RA/Dec" } } { success: true, result: 0 } { success: true, result: 0 } { success: true, result: 0 }
+console.log(await client.loop(), await client.findStar(), await client.findStar({ x: 0, y: 0, width: 640, height: 480 }), await client.deselectStar())
+console.log(await client.getLockPosition(), await client.setLockPosition(640.5, 480.25), await client.setLockPosition(100, 200, true))
+console.log(await client.getLockShiftEnabled(), await client.getLockShiftParams(), await client.setLockShiftEnabled(true), await client.setLockShiftParams({ rate: [15, 0], axes: 'RA/Dec' }), await client.setLockShiftParams({ rate: [30, 5], axes: 'X/Y', units: 'pixels/hr' }))
 
 // Guiding: the settle criteria are merged over the defaults.
-console.log(DEFAULT_PHD2_SETTLE) // { pixels: 1.5, time: 10, timeout: 30 }
-console.log(await client.guide(), await client.guide(true, { pixels: 1, time: 5, timeout: 60 }, { x: 10, y: 20, width: 300, height: 200 }), await client.dither(5), await client.dither(3, true, { pixels: 2 }, 60000)) // { success: true, result: 0 } { success: true, result: 0 } { success: true, result: 0 } { success: true, result: 0 }
-console.log(events.map((event) => [event.Event, 'Status' in event ? event.Status : undefined])) // [ [ "SettleDone", 0 ], [ "SettleDone", 0 ] ]
-console.log(await client.guidePulse(300, 'North'), await client.guidePulse(150, 'East', 'AO'), await client.getGuideOutputEnabled(), await client.setGuideOutputEnabled(false)) // { success: true, result: 0 } { success: true, result: 0 } { success: true, result: true } { success: true, result: 0 }
-console.log(await client.getDeclinationGuideMode(), await client.setDeclinationGuideMode('North')) // { success: true, result: "Auto" } { success: true, result: 0 }
-console.log(await client.getAlgorithmParamNames('RA'), await client.getAlgorithmParam('RA', 'Aggressiveness'), await client.setAlgorithmParam('DEC', 'MinMove', 0.2)) // { success: true, result: [ "Aggressiveness", "MinMove" ] } { success: true, result: 0.7 } { success: true, result: 0 }
+console.log(DEFAULT_PHD2_SETTLE)
+console.log(await client.guide(), await client.guide(true, { pixels: 1, time: 5, timeout: 60 }, { x: 10, y: 20, width: 300, height: 200 }), await client.dither(5), await client.dither(3, true, { pixels: 2 }, 60000))
+console.log(events.map((event) => [event.Event, 'Status' in event ? event.Status : undefined]))
+console.log(await client.guidePulse(300, 'North'), await client.guidePulse(150, 'East', 'AO'), await client.getGuideOutputEnabled(), await client.setGuideOutputEnabled(false))
+console.log(await client.getDeclinationGuideMode(), await client.setDeclinationGuideMode('North'))
+console.log(await client.getAlgorithmParamNames('RA'), await client.getAlgorithmParam('RA', 'Aggressiveness'), await client.setAlgorithmParam('DEC', 'MinMove', 0.2))
 
-// The requests the mock received (method and parameters), in order.
-console.log(requests.filter(([method]) => !method.startsWith('get_')).map(([method, params]) => `${method} ${JSON.stringify(params)}`)) // [ "set_profile [2]", "set_profile [1]", "set_connected [true]", "set_paused [true,\"full\"]", "set_paused [false]", "clear_calibration [\"BOTH\"]", "clear_calibration [\"AO\"]", "flip_calibration undefined", "set_exposure [1000]", "capture_single_frame {\"exposure\":1500}", "capture_single_frame {\"exposure\":1500,\"subframe\":[100,120,64,64]}", "stop_capture undefined", "save_image undefined", "loop undefined", "find_star undefined", "find_star {\"roi\":[0,0,640,480]}", "deselect_star undefined", "set_lock_position [640.5,480.25,false]", "set_lock_position [100,200,true]", "set_lock_shift_enabled [true]", "set_lock_shift_params {\"rate\":[15,0],\"axes\":\"RA/Dec\",\"units\":\"arcsec/hr\"}", "set_lock_shift_params {\"rate\":[30,5],\"axes\":\"X/Y\",\"units\":\"pixels/hr\"}", "guide {\"recalibrate\":false,\"settle\":{\"pixels\":1.5,\"time\":10,\"timeout\":30}}", "guide {\"recalibrate\":true,\"roi\":[10,20,300,200],\"settle\":{\"pixels\":1,\"time\":5,\"timeout\":60}}", "dither {\"amount\":5,\"raOnly\":false,\"settle\":{\"pixels\":1.5,\"time\":10,\"timeout\":30}}", "dither {\"amount\":3,\"raOnly\":true,\"settle\":{\"pixels\":2,\"time\":10,\"timeout\":30}}", "guide_pulse [300,\"North\",\"MOUNT\"]", "guide_pulse [150,\"East\",\"AO\"]", "set_guide_output_enabled [false]", "set_dec_guide_mode [\"North\"]", "set_algo_param [\"DEC\",\"MinMove\",0.2]" ]
-console.log(await client.shutdown()) // { success: true, result: 0 }
+console.log(await client.shutdown())
 
 client.close()
-server.stop(true)
 ```
 
 ### Stellarium Telescope Control Protocol
@@ -23494,37 +22492,12 @@ const server = new StellariumProtocolServer({
 		disconnect: () => console.log('client disconnected'),
 	},
 })
-console.log(server.start('127.0.0.1', 0), server.start('127.0.0.1', 0), server.port > 0) // true false true
 
-// A client collecting the bytes it receives.
-const received: Buffer[] = []
-const socket = await Bun.connect({ hostname: '127.0.0.1', port: server.port, socket: { data: (_, data) => received.push(Buffer.from(data)), open: () => {}, close: () => {}, error: () => {} } })
-await Bun.sleep(30)
+console.log(server.start('localhost', 0), server.start('localhost', 0), server.port > 0) // true false true
 
 // Broadcast the position of the mount: RA 5h35m (83.75 degrees) and Dec -5.4 degrees.
 server.send(hour(5 + 35 / 60), deg(-5.4))
-await Bun.sleep(30)
-const message = received.shift()!
-console.log(message.length, message.readInt16LE(0), message.readInt16LE(2)) // 24 24 0 (length, length field and type)
-console.log((message.readInt32LE(12) / 0x80000000) * 180, (message.readInt32LE(16) / 0x80000000) * 180) // 83.74999995343387 -5.399999963119626 (RA and Dec in degrees)
 
-// A goto request: length 20, type 0, time (8 bytes), RA as unsigned 32-bit and Dec as signed 32-bit fixed point.
-const goto = Buffer.alloc(20)
-goto.writeUInt16LE(20, 0)
-goto.writeUInt16LE(0, 2)
-goto.writeUInt32LE(Math.trunc((hour(10.5) / Math.PI) * 0x80000000), 12)
-goto.writeInt32LE(Math.trunc((deg(20.25) / Math.PI) * 0x80000000), 16)
-socket.write(goto)
-await Bun.sleep(30)
-
-// The same message split in two packets is reassembled.
-socket.write(goto.subarray(0, 9))
-await Bun.sleep(20)
-socket.write(goto.subarray(9))
-await Bun.sleep(30)
-
-socket.end()
-await Bun.sleep(30)
+// Stops the server.
 server.stop()
-console.log(server.port) // -1 (the handler printed client connected, goto 10.5 20.25 twice and client disconnected)
 ```
