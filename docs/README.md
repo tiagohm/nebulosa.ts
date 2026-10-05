@@ -1391,6 +1391,173 @@ console.log(timeToDate(utc(season(2026, 'winter'))).slice(0, 6)) // [2026, 12, 2
 
 ### ERFA / SOFA Algorithms
 
+`src/astronomy/coordinates/erfa/erfa.ts` is a TypeScript port of the ERFA (Essential Routines for Fundamental Astronomy) library, derived from the IAU SOFA routines, with the `era` prefix of the C names kept: `eraAtco13`, `eraC2t06a`, `eraNut06a`, and so on. The two companion files add `eraEpv00` (Earth position and velocity, `erfa/earth.ts`) and `eraMoon98` (geocentric Moon, `erfa/moon.ts`). The port follows the conventions of the original: the date is a two-part Julian Day `(date1, date2)` whose sum is the date, split to keep the precision (`2400000.5` plus an MJD, or `2451545` plus an offset), angles are radians, distances AU, velocities AU/day (unless the parameter is typed `Velocity`, which is in the unit of the library) and rotation matrices are row-major `Mat3` in the sense of the C code. Functions that return several values return a tuple, and many accept an optional output (`out`, `o`, `astrom`) that is filled and returned to avoid allocations. A routine whose C version returns a status code returns it as the first element (`eraTpxes`, `eraTpors`) or `false` (`eraPvstar`); the tests of the library reproduce the t_erfa_c reference values.
+
+The naming follows ERFA, so the routines come in families: `Tt`, `Tai`, `Utc`, `Ut1`, `Tdb` and `Tcb` for the time scales, `Nut`, `Pn`, `Pnm`, `Pr`, `Prec`, `Bp`, `Pfw` and `Fw` for precession, bias and nutation (IAU 1976/1980, 2000A/B and 2006), `Gst`, `Gmst`, `Era` and `Ee` for the sidereal times, `Xy`, `Xys` and `S` for the CIO locator, `C2i`, `C2t`, `C2ixy` and `C2tcio` for the celestial-to-terrestrial matrices, `Ap`, `At` for the star-independent and the astrometric transformations, `Fk`, `H`, `Icrs` and `G` for the reference frames, `Tp` for the tangent plane, `Ltp` and `Lte` for the long-term precession, `Fa` for the fundamental arguments, and `Pv`, `Star` and `Pm` for the position/velocity and proper motion. The astrometric functions work on an `EraAstrom` record of the star-independent parameters, which `eraApco13`, `eraApci13` and the other `eraAp*` routines build and `eraAtciq`, `eraAtioq` and the other `eraAt*` routines consume. The chain of the observer functions is ICRS (`rc`, `dc`) to CIRS (`ri`, `di`) to observed (`aob`, `zob`, `hob`, `dob`, `rob`), with refraction when the pressure is positive.
+
+Each snippet below shows one call per distinct pattern, with the reference values used by the tests of the library and the output observed when running it; the long list that follows names the other routines of each family and what they return.
+
+```ts
+import {
+	eraAe2hd,
+	eraAnpm,
+	eraApco13,
+	eraAtciq,
+	eraAtco13,
+	eraAtoc13,
+	eraBp06,
+	eraC2i06a,
+	eraC2s,
+	eraC2t06a,
+	eraCalToJd,
+	eraDat,
+	eraEe00a,
+	eraEpj,
+	eraEra00,
+	eraFal03,
+	eraGmst06,
+	eraGst06a,
+	eraHd2ae,
+	eraHd2pa,
+	eraJdToCal,
+	eraNut06a,
+	eraObl06,
+	eraP2s,
+	eraPfw06,
+	eraPom00,
+	eraRefco,
+	eraS06,
+	eraS2c,
+	eraTaiTt,
+	eraTtTdb,
+	eraUtcTai,
+	eraUtcUt1,
+	eraXys06a,
+} from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { arcsec, deg } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+import { kilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+// Angles and vectors: normalize to [-π, π), Cartesian to spherical and back, and position to spherical with the radius.
+console.log(eraAnpm(deg(190))) // -2.96705972839036 (-170°)
+console.log(eraC2s(1, 1, 1)) // [ 0.7853981633974483, 0.6154797086703873 ]
+console.log(eraS2c(1, 0.5)) // [ 0.4741598817790379, 0.7384602626041288, 0.479425538604203 ]
+console.log(eraP2s(1, 2, 3)) // [ 1.1071487177940904, 0.9302740141154721, 3.7416573867739413 ] — longitude, latitude, radius
+
+// Calendars: the MJD of 2008-02-29, the calendar date of an MJD (year, month, day, fraction), and TAI-UTC on 2017-01-01 in seconds.
+console.log(eraCalToJd(2008, 2, 29)) // 54525
+console.log(eraJdToCal(2400000.5, 54000.25)) // [ 2006, 9, 22, 0.25 ]
+console.log(eraDat(2017, 1, 1, 0.5)) // 37
+
+// Time scales: UTC 2456384.5 + 0.969254051 days to TAI, TT and UT1 with DUT1 = 0.1550675 s; each result is a [part1, part2] pair.
+const utc1 = 2456384.5
+const utc2 = 0.969254051
+const tai = eraUtcTai(utc1, utc2).slice()
+const tt = eraTaiTt(tai[0], tai[1]).slice()
+const ut1 = eraUtcUt1(utc1, utc2, 0.1550675).slice()
+console.log(tai, tt, ut1) // [ 2456384.5, 0.9696591435925925 ] [ 2456384.5, 0.9700316435925925 ] [ 2456384.5, 0.9692558457627314 ]
+console.log(eraTtTdb(tt[0], tt[1], -0.001342).slice()) // [ 2456384.5, 0.9700316280601852 ] — TDB − TT given in seconds
+console.log(eraEpj(2451545, 0)) // 2000 — the Julian epoch
+
+// Earth rotation and sidereal times (radians): ERA, GMST 2006, GAST 2006/2000A and the equation of the equinoxes.
+console.log(eraEra00(ut1[0], ut1[1]), eraGmst06(ut1[0], ut1[1], tt[0], tt[1])) // 3.1454097152192517 3.14837320809816
+console.log(eraGst06a(ut1[0], ut1[1], tt[0], tt[1]), eraEe00a(tt[0], tt[1])) // 3.148430263574054 0.00005705546414680882
+
+// Nutation (Δψ, Δε), the mean obliquity and a fundamental argument (the mean anomaly of the Moon) at the same TT.
+console.log(eraNut06a(tt[0], tt[1])) // [ 0.0000621963812079798, -0.000027249381174917327 ]
+console.log(eraObl06(tt[0], tt[1])) // 0.40906250804962774
+console.log(eraFal03(0.8)) // 5.132369751109105
+console.log(eraPfw06(tt[0], tt[1])) // [ 6.5678e-6, 0.40906256, 0.00323715, 0.40906251 ] — γ̄, φ̄, ψ̄, ε_A (Fukushima-Williams angles)
+
+// Bias-precession: the frame bias, the precession and the bias-precession matrices (row-major 3×3 each).
+const [bias, precession, biasPrecession] = eraBp06(tt[0], tt[1])
+console.log(biasPrecession[0], biasPrecession[1], biasPrecession[2]) // 0.9999947799282427 -0.0029634906149046173 -0.0012875712178174882
+
+// The CIP coordinates and the CIO locator, and the celestial-to-intermediate matrix.
+console.log(eraXys06a(tt[0], tt[1])) // [ 0.0013122272008502932, -0.000029280862309744027, 3.0574946809250636e-8 ] — X, Y, s
+console.log(eraS06(tt[0], tt[1], 0.0006, 0.0001)) // -1.863662518434849e-8
+console.log(eraC2i06a(tt[0], tt[1])[0], eraC2i06a(tt[0], tt[1])[8]) // 0.9999991390295148 0.9999991386008312
+
+// The celestial-to-terrestrial matrix with polar motion xp, yp and the locator s'.
+const xp = 2.47230737e-7
+const yp = 1.82640464e-6
+const sp = -3.01974337e-11
+console.log(eraPom00(xp, yp, sp)[0], eraC2t06a(tt[0], tt[1], ut1[0], ut1[1], xp, yp, sp)[0]) // 0.9999999999999695 -0.9999918539305882 — the first elements of the polar-motion and of the celestial-to-terrestrial matrices
+
+// Refraction constants A and B (radians) for 731 hPa, 12.8 °C, 59 % humidity and 0.55 µm.
+console.log(eraRefco(731, 12.8, 0.59, 0.55)) // [ 0.0002014187785940397, -2.3614083149436963e-7 ]
+
+// Astrometry: the ICRS position of a star to observed place at an observatory, with the barycentric and heliocentric Earth.
+const pb = [-0.974170437669016342, -0.211520082035387968, -0.091758302425478583] as const
+const vb = [0.003643658242375083, -0.015428731944935825, -0.006689220237864495] as const
+const ph = [-0.973458265012157486, -0.209215306558769298, -0.090699647709202746] as const
+const site = [-0.527800806, -1.2345856, meter(2738), xp, yp, sp, 731, 12.8, 0.59, 0.55] as const // longitude, latitude, height, xp, yp, sp, pressure, temperature, humidity, wavelength
+const [aob, zob, hob, rob, dob, astrom] = eraAtco13(tt[0], tt[1], ut1[0], ut1[1], 2.71, 0.174, 1e-5, 5e-6, arcsec(0.1), kilometerPerSecond(55), ...site, [pb, vb], ph)
+console.log(aob, zob, hob) // 0.09251774485486736 1.4076614052564997 -0.09265154431530948 — azimuth, zenith distance, hour angle
+console.log(rob, dob, astrom.eo) // 2.710260453504961 0.17166265600725286 -0.0030205483548024123 — observed RA, Dec and the equation of the origins
+
+// The inverse: from observed azimuth/zenith distance ('A') to ICRS, and the two stages separately.
+console.log(eraAtoc13('A', aob, zob, tt[0], tt[1], ut1[0], ut1[1], ...site, [pb, vb], ph).slice(0, 2)) // [ 2.710132222988453, 0.17406641381551874 ]
+const params = eraApco13(tt[0], tt[1], ut1[0], ut1[1], ...site, [pb, vb], ph)
+console.log(eraAtciq(2.71, 0.174, 1e-5, 5e-6, arcsec(0.1), kilometerPerSecond(55), params)) // [ 2.7102974865123404, 0.17283379216905348 ] — CIRS
+
+// Horizontal and equatorial: hour angle/declination from azimuth/elevation and back, and the parallactic angle.
+console.log(eraAe2hd(5.5, 1.1, 0.7), eraHd2ae(1.1, 1.2, 0.3)) // [ 0.5933291115507308, 0.9613934761647818 ] [ 5.916889243730066, 0.4472186304990486 ]
+console.log(eraHd2pa(1.1, 1.2, 0.3)) // 1.9062274280019955
+```
+
+The frames, the proper motion, the geodetic and the tangent-plane routines follow the same pattern.
+
+```ts
+import { eraFk425, eraG2icrs, eraGc2Gde, eraGd2Gce, eraIcrs2g, eraLtp, eraNut80, eraObl80, eraPlan94, eraPr00, eraPrec76, eraPvstar, eraSepp, eraSeps, eraStarpm, eraStarpv, eraTpsts, eraTpxes } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { eraEpv00 } from 'nebulosa/src/astronomy/coordinates/erfa/earth'
+import { eraMoon98 } from 'nebulosa/src/astronomy/coordinates/erfa/moon'
+
+// Geodetic and geocentric coordinates (radius 6378136.6 m, flattening 1/298.25642): [x, y, z] in meters and [longitude, latitude, height].
+console.log(eraGd2Gce(6378136.6, 1 / 298.25642, 3, -0.5, 1000)) // [ -5546462.988430975, 790629.1252902636, -3040190.092955975 ]
+console.log(eraGc2Gde(6378136.6, 1 / 298.25642, 2e6, 3e6, 5.244e6)) // [ 0.982793723247329, 0.971601856417379, 331.8555791663812 ]
+
+// Frames: FK4 B1950 to FK5 J2000 (position, proper motion, parallax, radial velocity), and ICRS to Galactic and back.
+console.log(eraFk425(0.1, 0.2, 1e-6, 2e-6, 0.1, 10)) // [ 0.11128743449126417, 0.20483107183314778, 5.1259e-9, -9.7198e-9, 5.4752e-6, 10.000213636167985 ]
+console.log(eraIcrs2g(0, 0), eraG2icrs(0, 0)) // [ 1.6814025947831113, -1.0504884265315022 ] [ 4.64964430303663, -0.5050315085342666 ]
+
+// Separations: from spherical coordinates, and from two vectors.
+console.log(eraSeps(1, 0.5, 2, 0.4), eraSepp([1, 0, 0], [0, 1, 0])) // 0.8976778790449081 1.5707963267948966
+
+// Star: position/velocity vector in AU and AU/day, and back; then the proper motion to another epoch.
+const pv = eraStarpv(0.01, 0.02, 1e-6, 2e-6, 0.05, 10)
+console.log(pv[0], pv[1]) // [ 19.995000341656528, 0.19995666868328996, 0.3999733338666616 ] [ 10.285693775251145, 0.10286042445623095, 0.2057517119612684 ] — the vectors keep the units of the function
+console.log(eraPvstar(pv[0], pv[1])) // [ 0.01, 0.02, 1.0000e-6, 2.0000e-6, 0.05, 9.999999999999998 ]
+console.log(eraStarpm(0.01, 0.02, 1e-6, 2e-6, 0.05, 10, 2451545, 0, 2460000, 0)) // [ 0.010000005637155604, 0.020000011274311204, ... ]
+
+// Planets and the Moon: heliocentric Mercury (index 0), the Earth (barycentric and heliocentric) and the geocentric Moon.
+console.log(eraPlan94(2400000.5, 43999.9, 0)[0]) // [ 0.2945293959257472, -0.2452204176600993, -0.1615427700571952 ]
+console.log(eraEpv00(2400000.5, 53411.52501161)[0][0]) // [ -0.7714104440491069, 0.5598412061824241, 0.24259962777224825 ]
+console.log(eraMoon98(2400000.5, 54282.5)[0]) // [ 0.0008944441964973188, -0.002147741375955652, -0.0011168576496977227 ]
+
+// Long-term precession matrix, precession angles and nutation of the 1976/1980 model, the mean obliquity and the tangent plane.
+console.log(eraLtp(1000)[0], eraPr00(2460000, 0)) // 0.9705557534220458 [ -0.00033628890273744413, -0.000000028326153529427962 ]
+console.log(eraPrec76(2451545, 0, 2460000, 0)) // [ 0.0025882842609029747, 0.0025884902343692377, 0.002249269302520354 ]
+console.log(eraNut80(2451545, 0), eraObl80(2451545, 0)) // [ -0.00006750247617532478, -0.000027992212383770132 ] 0.40909280422232897
+console.log(eraTpxes(1.2, 0.5, 1.0, 0.4)) // [ 0, 0.17810827845499125, 0.10894523228859818 ] — status, ξ, η
+console.log(eraTpsts(0.1, 0.1, 1, 0.4)) // [ 1.1128814592161678, 0.49698817476678764 ]
+```
+
+The remaining routines, by family:
+
+- Time scales: `eraTcbTdb`, `eraTcgTt`, `eraTdbTcb`, `eraTtTcg`, `eraTtUt1`, `eraTaiUt1`, `eraUt1Tai`, `eraUt1Tt`, `eraTtTai`, `eraTdbTt`, `eraTaiUtc`, `eraUtcTai`, `eraUt1Utc`, `eraDtDb` (TDB − TT in seconds), `eraEpb`, `eraEpb2jd` and `eraEpj2jd`; all take a two-part date and return a new two-part date.
+- Sidereal time and Earth rotation: `eraGmst82`, `eraGmst00`, `eraGst94`, `eraGst00a`, `eraGst00b`, `eraGst06`, `eraEqeq94`, `eraEect00`, `eraEe00`, `eraEe00b`, `eraEe06a`, `eraEo06a`, `eraEors`, `eraSp00`, `eraPom00` and `eraC2teqx`.
+- CIO locator and the X, Y of the CIP: `eraS00`, `eraS00a`, `eraS00b`, `eraS06a`, `eraXys00a`, `eraXys00b`, `eraXy06`, `eraBpn2xy`, `eraFw2xy`.
+- Precession, nutation and obliquity: `eraPr00`, `eraPrec76`, `eraPmat76`, `eraPmat00`, `eraPmat06`, `eraPnm80`, `eraPnm00a`, `eraPnm00b`, `eraPnm06a`, `eraPn00`, `eraPn00a`, `eraPn00b`, `eraPn06`, `eraPn06a`, `eraP06e`, `eraBp00`, `eraBi00`, `eraPb06`, `eraFw2m`, `eraNut80`, `eraNutm80`, `eraNumat`, `eraNum00a`, `eraNum00b`, `eraNum06a`, `eraNut00a`, `eraNut00b`, `eraNut06a`, `eraObl80`, `eraObl06`.
+- Fundamental arguments: `eraFal03`, `eraFalp03`, `eraFad03`, `eraFaf03`, `eraFaom03`, `eraFapa03`, `eraFame03`, `eraFave03`, `eraFae03`, `eraFama03`, `eraFaju03`, `eraFasa03`, `eraFaur03`, `eraFane03`, each of the Julian centuries `t` since J2000.
+- Celestial to terrestrial: `eraC2t06a`, `eraC2t00a`, `eraC2t00b`, `eraC2txy`, `eraC2tpe`, `eraC2i06a`, `eraC2i00a`, `eraC2i00b`, `eraC2ixys`, `eraC2ixy`, `eraC2ibpn` and `eraC2tcio`.
+- Ecliptic and long-term precession: `eraEqec06`, `eraEceq06`, `eraEcm06`, `eraLtpecl`, `eraLtpequ`, `eraLtp`, `eraLtpb`, `eraLtecm`, `eraLteqec`, `eraLteceq`.
+- Reference frames: `eraFk425`, `eraFk45z`, `eraFk524`, `eraFk54z`, `eraFk5hz`, `eraFk52h`, `eraH2fk5`, `eraHfk5z`, `eraIcrs2g`, `eraG2icrs`.
+- Stars, vectors and apparent place: `eraStarpv`, `eraS2pv`, `eraStarpmpv`, `eraStarpm`, `eraPvstar`, `eraPv2s`, `eraPpsp`, `eraSeps`, `eraSepp`, `eraPmpx` (proper motion and parallax to a position), `eraAb` (stellar aberration), `eraLdn`, `eraLd` and `eraLdSun` (light deflection).
+- Astrometry parameters: `eraApci13`, `eraApci`, `eraApcg`, `eraApcs`, `eraApco`, `eraApco13`, `eraApio13`, `eraApio`, `eraPvtob`, `eraRefco`; transformations `eraAtccq`, `eraAtciq`, `eraAtciqz`, `eraAtciqn`, `eraAtioq`, `eraAtoiq`, `eraAticq`, `eraAticqn`, `eraAtci13`, `eraAtco13`, `eraAtoc13`, `eraAtio13`, `eraAtoi13`, `eraAtic13` and `eraAtcc13`.
+- Horizontal and tangent plane: `eraAe2hd`, `eraHd2ae`, `eraHd2pa`, `eraTpsts`, `eraTpstv`, `eraTpors`, `eraTporv`, `eraTpxes`, `eraTpxev`; the geodetic routines `eraGc2Gde`, `eraGd2Gce` take the ellipsoid radius and flattening as arguments.
+- Planets and Moon: `eraPlan94` (`np` from 0 for Mercury to 7 for Neptune, with the Earth–Moon barycentre as 2; an index outside 0 to 7 throws a TypeError), `eraEpv00` and `eraMoon98`.
+
 ### FK5 Precession and ICRS Frame Bias
 
 FK5 is the J2000 mean-equator-and-equinox catalog frame. ICRS differs from it by a small constant frame bias of a few tens of milliarcseconds, and FK5 positions at another equinox differ by precession. Both are rotations, so they preserve the length of a vector.
@@ -2997,6 +3164,107 @@ console.log(marssat(time, 0)[0]) // [-0.000038291, 0.000030662, 0.000038326] —
 ```
 
 ### Meeus Algorithms
+
+`src/astronomy/ephemeris/meeus.ts` is a port of the algorithms of Jean Meeus' _Astronomical Algorithms_ (2nd edition), organized as one TypeScript `namespace` per chapter topic. It is a toolkit of pure functions: unless a function says otherwise, angles are radians, distances are AU, and a Julian Day argument named `jde` is on the dynamical (TT) scale while `jd` is UT. Sidereal times are in seconds of time. The longitudes of `Rise` and `Sunrise` are west-positive, as in the book, and the `Julian.Calendar` classes use fractional days. The functions are low-order series meant for the book's accuracy (arcseconds for the Sun, Moon and planets, minutes of time for events), not a replacement for the JPL ephemerides of the library; the tests of the module reproduce the examples of the book.
+
+The namespaces are, by group:
+
+- Time and calendars: `Julian` (Julian Day and calendar conversions, `Calendar`, `CalendarGregorian`, `CalendarJulian`), `Easter`, `Base` (Julian centuries, `horner`, `K`, `J2000`), `Sidereal`.
+- Numerics: `Interpolation` (`Len3`, `Len5`), `Fit`, `Iteration`, `Kepler`.
+- Geometry and coordinates: `Coords`, `Parallactic`, `Globe` (`Ellipsoid`, `EARTH76`), `Refraction`, `Rise` (`PlanetRise`), `AngularSeparation`, `Conjunction`, `Line`, `Circle`, `Precession` (`Precessor`, `EclipticPrecessor`), `Nutation`, `Apparent`, `ElementEquinox`, `Parallax`.
+- Sun: `Solar`, `SolarXYZ`, `Solstice`, `EquationOfTime`, `SolarDisk`, `Sunrise`, `Sundial`.
+- Planets and orbits: `PlanetElements`, `PlanetPosition`, `Elliptic`, `Parabolic`, `NearParabolic`, `Planetary` (conjunctions, oppositions, elongations, stations), `Perihelion`, `Node`, `Illuminated`, `Mars`, `Jupiter`, `JupiterMoons`, `SaturnRing`, `SaturnMoons`.
+- Moon and stars: `MoonPosition`, `MoonIlluminated`, `Moon` (`PhysicalEphemeris`), `Semidiameter`, `Stellar`, `BinaryStars`.
+
+The functions of a namespace of a given kind share an argument pattern, so the snippets below show one call per distinct pattern and the remaining names are listed with what they return. Some functions return an object or a class instance whose shape is in the type, and `Interpolation.Len3.extremum()` throws when the extremum lies outside its table.
+
+```ts
+import { AngularSeparation, Base, Coords, Easter, Julian, Nutation, Precession, Sidereal } from 'nebulosa/src/astronomy/ephemeris/meeus'
+import { hms, signedDms, toDeg } from 'nebulosa/src/math/units/angle'
+
+// Calendars: the Julian Day of 2000-01-01 12:00 and the calendar date of a Julian Day (fractional day).
+console.log(Julian.calendarGregorianToJD(2000, 1, 1.5)) // 2451545
+console.log(Julian.jdToCalendar(2436116.31)) // [ 1957, 10, 4.81 ] — year, month and fractional day
+
+// Easter Sunday: the Gregorian and the Julian calendar.
+console.log(Easter.gregorian(1991), Easter.julian(179)) // [ 1991, 3, 31 ] [ 179, 4, 12 ] — year, month, day
+
+// Sidereal time at 0h UT of 1987-04-10, in seconds of time: mean and apparent.
+console.log(Sidereal.mean(2446895.5), Sidereal.apparent(2446895.5)) // 47446.36683 47446.13514 (13h10m46.37s)
+
+// Ecliptic to equatorial coordinates of Pollux (example 13.a, lon 113.21563°, lat 6.68417°), in degrees.
+console.log(Coords.eclipticToEquatorial(...([113.21563, 6.68417].map((v) => (v * Math.PI) / 180) as [number, number]), Nutation.meanObliquity(2447000.5)).map(toDeg)) // [ 116.3293245, 28.0276333 ] — the obliquity of the date is that of 2447000.5, not the book's 23.4392911°
+
+// Nutation in longitude and obliquity for 1987-04-10 0h TT, in arcseconds, and the mean obliquity.
+console.log(Nutation.nutation(2446895.5).map((v) => (v * 206264.80624709636).toFixed(3))) // [ '-3.788', '9.443' ]
+console.log(toDeg(Nutation.meanObliquity(2446895.5))) // 23.44094649
+
+// Angular separation of Arcturus and Spica (RA, Dec in radians), in degrees.
+const arcturus = [hms(14, 15, 39.7), signedDms(false, 19, 10, 57)] as const
+const spica = [hms(13, 25, 11.6), signedDms(true, 11, 9, 41)] as const
+console.log(toDeg(AngularSeparation.sep(arcturus, spica))) // 32.79301034
+
+// Precession of a star from J2000 to the epoch 2028 November 13.19, in degrees.
+const epoch = Base.jdeToJulianYear(Julian.calendarGregorianToJD(2028, 11, 13.19))
+const precessor = new Precession.Precessor(2000, epoch)
+console.log(precessor.precess(hms(2, 44, 11.986), signedDms(false, 49, 13, 42.48)).map(toDeg)) // [ 41.5430861, 49.3492074 ] — without proper motion
+```
+
+The Sun, the planets, the Moon and the satellites all follow the same pattern of one position or one event per Julian Day.
+
+```ts
+import { Base, BinaryStars, Elliptic, EquationOfTime, Illuminated, Jupiter, JupiterMoons, Julian, Kepler, Mars, MoonPosition, Parabolic, Parallax, Perihelion, PlanetPosition, Planetary, SaturnRing, Semidiameter, Solar, SolarDisk, Solstice } from 'nebulosa/src/astronomy/ephemeris/meeus'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+// The Sun on 1992-10-13 0h TT (Meeus example 25.a): low-order longitude and radius, apparent RA/Dec, equation of time.
+const jde = 2448908.5
+const T = Base.j2000Century(jde)
+console.log(toDeg(Solar.trueLongitude(T)[0]), Solar.radius(T)) // 199.9098727 0.99766195
+console.log(Solar.apparentEquatorial(jde).map(toDeg)) // [ 198.3808252, -7.7850698 ] — 13h13m31.4s, -7°47′06″
+console.log(Solar.apparentEquatorialVSOP87(jde).map(toDeg)) // [ 198.3781182, -7.7838165, 57.1587575 ] — RA, Dec in degrees, then the range in the unit of the function
+console.log(EquationOfTime.e(jde) * 13750.987083139758) // 822.5786 seconds of time (13 m 42.6 s)
+console.log(SolarDisk.ephemeris(2448908.50068).map(toDeg)) // [ 26.2734545, 5.9882202, 238.6315682 ] — P, B0, L0
+console.log(SolarDisk.cycle(1699), Solstice.june(1962), Solstice.march(2000)) // 2444480.7229648 2437837.3924482 2451623.8169944
+
+// Kepler's equation and the planets: Venus on 1992-12-20 0h TT (example 33.a).
+console.log(Kepler.kepler1(0.1, deg(5), 8)) // 0.0969458701 rad
+console.log(PlanetPosition.position('venus', 2448976.5).map(toDeg)) // [ 26.1141192, -2.6206030, 41.5166177 ] — lon, lat in degrees, range
+console.log(Elliptic.position('venus', 2448976.5).map(toDeg)) // [ 316.1727242, -18.8880108 ] — apparent RA, Dec
+
+// A comet on an elliptic and on a parabolic orbit.
+const orbit = new Elliptic.Elements(2.2091404, 0.8502196, deg(11.94524), deg(186.23352), deg(334.75006), Julian.calendarGregorianToJD(1990, 10, 28.54502))
+console.log(orbit.position(Julian.calendarGregorianToJD(1990, 10, 6)).map(toDeg)) // [ 158.5589662, 19.1584951, 40.5073087 ] — RA, Dec, elongation
+console.log(new Parabolic.Elements(Julian.calendarGregorianToJD(1998, 4, 14.4358), 1.487469).anomalyDistance(Julian.calendarGregorianToJD(1998, 8, 5))) // [ 1.1656813, 2.1339113 ] — true anomaly (rad), distance (AU)
+
+// Events: Mars opposition in 2729, Jupiter opposition in 2000, the perihelion of Venus in 1978 and the aphelion of Mars in 1993.
+console.log(Planetary.marsOpp(2729.5), Planetary.jupiterOpp(2000)) // 2718057.6412432 2451475.4243247
+console.log(Perihelion.perihelion('venus', 1978), Perihelion.aphelion2('mars', 1993)) // 2443424.3026596 [ 2449103.4732999, 1.6660372 ]
+
+// Parallax: the horizontal parallax at 1 AU (8.794″) and the topocentric RA/Dec of Mars.
+console.log(Parallax.horizontal(1)) // 0.0000426345 rad
+console.log(Parallax.topocentric(deg(339.530208), deg(-15.771083), 0.37276, 0.546861, 0.836339, deg(116.8625), 2452879.63651)) // [ 5.9260142, -0.2753258 ] radians
+
+// Phase: the phase angle and illuminated fraction of Venus.
+console.log(Illuminated.phaseAngle(0.724604, 0.910947, 0.983824), Illuminated.fraction(0.724604, 0.910947, 0.983824), Illuminated.fractionVenus(2448976.5)) // 1.2733055 0.6465611 0.6402440
+
+// Physical ephemerides: Mars (example 42.a) and Jupiter, in degrees (Mars index 6 is the illuminated fraction, indexes 5 and 7 are small angles left in radians).
+console.log(Mars.physical(2448935.500683).map((v, i) => (i === 6 ? v : toDeg(v)))) // [ 12.4371585, -2.7577986, 111.5542286, 347.6431727, 279.9113725, 0.0029869, 0.9011823, 0.0002952 ]
+console.log(Jupiter.physical(2448972.50068).map(toDeg)) // [ -2.1980363, -2.4846212, 268.0632373, 72.7355344, 24.8008112 ]
+
+// Satellites of Jupiter: x, y, z in Jupiter radii for Io, Europa, Ganymede and Callisto, and Saturn's ring.
+console.log(JupiterMoons.positions(2448972.50068)[JupiterMoons.IO]) // [ -3.4443983, 0.2101855, -4.8224636 ]
+console.log(SaturnRing.ring(2448972.50068).map(toDeg).slice(0, 3)) // [ 16.4418434, 14.6788975, 4.1982761 ]
+
+// The Moon: geocentric ecliptic longitude and latitude (degrees) and the distance (AU) of 1992-04-12 0h TT (example 47.a).
+const [lon, lat, distance] = MoonPosition.position(2448724.5)
+console.log(toDeg(lon), toDeg(lat), distance) // 133.1626547 -3.2291264 0.0024627 — the distance is in AU
+
+// The solar semidiameter at 1 AU (radians, 959.63″) and the apparent eccentricity of a binary star orbit.
+console.log(Semidiameter.semidiameter(Semidiameter.SUN, 1)) // 0.00465241753 rad
+console.log(BinaryStars.apparentEccentricity(0.2763, deg(59.025), deg(219.907))) // 0.8599374
+```
+
+Group by group, the functions not shown are: `Sidereal.mean0UT` and `apparent0UT` (the sidereal time at 0h UT), `Globe.Ellipsoid` and `EARTH76` (the figure of the Earth) with `oneDegreeOfLongitude`, `oneDegreeOfLatitude`, `geocentricLatitudeDifference`, `approxAngularDistance` and `approxLinearDistance`, `Refraction` (`bennett`, `bennett2`, `saemundsson`, `gt15True` and `gt15Apparent`), `Rise.approxTimes` and `times` (rise, transit and set in seconds of time, with `hourAngle` returning `alwaysAbove` or `alwaysBelow`), `Interpolation.Len3` and `Len5` (`interpolateX`, `interpolateN`, `zero`, `extremum`), `Fit` (`linear`, `quadratic`, `correlationCoefficient`), `Iteration` (`decimalPlaces`, `fullPrecision`, `binaryRoot`), `Julian` (`calendarJulianToJD`, `jdToCalendarGregorian`, `jdToCalendarJulian`, `isLeapYearGregorian`, `isLeapYearJulian`, `dayOfWeek`, `dayOfYear`, `mjdToJD`, `jdToMJD`, `jdToDate`, `dateToJD`, `deltaTSeconds`), `Coords` (`equatorialToEcliptic`, `equatorialToHorizontal`, `horizontalToEquatorial`, `equatorialToGalactic`, `galacticToEquatorial`, which returns B1950 coordinates), `Parallactic` (`parallacticAngle`, `parallacticAngleOnHorizon`, `eclipticAtHorizon`, `eclipticAtEquator`, `diurnalPathAtHorizon`), `Conjunction` (`stellar`, `planetary`), `Line` (`time`, `angle`, `error`, `angleError`), `Circle.smallest` (the diameter and a flag that tells the smallest circle is the one through two stars), `Apparent` (`nutation`, `aberration`, `aberrationRonVondrak`, `eclipticAberration`, `perihelion`, `position`, `positionRonVondrak`), `ElementEquinox` (`reduceB1950ToJ2000`, `reduceB1950FK4ToJ2000FK5`), `Precession.mn`, `approxAnnualPrecession`, `approxPosition` (low-accuracy precession from the annual `m` and `n`, for example 10h07m12.1s, +12°04′32″ from J2000 to 1978), `position`, `properMotion`, `properMotion3D`, `EclipticPrecessor` and `eclipticPosition`, `PlanetElements` (`mean`, `inc`, `node`), `PlanetPosition.position2000` and `toFK5`, `Planetary` (`mercuryInfConj`, `mercurySupConj`, `venusInfConj`, `saturnOpp`, `saturnConj`, `uranusOpp`, `neptuneOpp`, `mercuryEastElongation`, `mercuryWestElongation`, `marsStation2`), `NearParabolic.Elements`, `Node` (the passage through the nodes of elliptic and parabolic orbits), `Parallax.topocentric2`, `topocentric3` and `topocentricEcliptical`, `Illuminated` (the per-planet magnitude functions and the 1984 variants), `Jupiter.physical2`, `JupiterMoons.e5`, `SaturnMoons.positions`, `MoonIlluminated` (the phase angle from the coordinates of the Sun and the Moon), `Moon.physical` and `PhysicalEphemeris` (selenographic position and libration), `Stellar` (`sum`, `sumN`, `ratio`, `difference`, absolute magnitudes), `Sundial` (`equatorial`, `horizontal`, `vertical`, `general`), and `Sunrise.Sunrise`, a class built from a `Julian.Calendar` day, a latitude and a west-positive longitude whose methods `rise`, `riseEnd`, `setStart`, `set`, `dawn`, `dusk`, `nauticalDawn`, `nauticalDusk`, `nightStart`, `nightEnd`, `goldenHourStart`, `goldenHourEnd` and `noon` return a `Julian.CalendarGregorian`. For example, on 2020-06-21 at latitude 50.8° and longitude 4.36° east (`-4.36°` west-positive) the sunrise is at 03:29:06 UTC, noon at 11:44:28 UTC and sunset at 19:59:48 UTC.
 
 ### Meteor Activity Profiles
 
