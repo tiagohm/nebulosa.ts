@@ -6671,7 +6671,108 @@ console.log(noCatalog.success, noCatalog.failureReason) // false no catalog star
 
 ### FITS TAN and SIP Coordinate Mapping
 
+The functions of `fits.wcs` convert between the sky and the pixels of an image whose FITS header holds a gnomonic WCS: `RA---TAN` and `DEC--TAN`, or the same with the `-SIP` suffix for the Simple Imaging Polynomial distortion. They take a plain `FitsHeader` object (keys are the FITS keywords, with numeric or text values), so the header can come from a file or be written by hand. Other projections (`SIN`, `ARC`, `TPV`...) are not handled and give `undefined`; see WCSLIB Equatorial Projection for them. Pixel coordinates are the FITS ones: 1-based, with the center of the first pixel at (1, 1), and `CRPIX` is in the same frame. Angles in the results are radians, the header values are degrees, and the CD matrix is in degrees per pixel.
+
+The linear part is read from one of three conventions, and `matrixKind(header)` says which: `'cd'` (any `CDi_j` key), `'pc'` (`CDELT1` and `CDELT2` with a `PCi_j` key, whose missing terms are the identity), `'crota'` (`CDELT1`, `CDELT2` and `CROTA2`) or `'none'`; `hasCd(header)` is true unless it is `'none'`. `cdMatrix(header, kind?)` returns the row-major `[cd11, cd12, cd21, cd22]` and `cd(header, i, j)` one element with 1-based indices. `cdFromCdelt(cdelt1, cdelt2, crota, flipH?, flipV?)` builds the matrix of the CDELT + CROTA form (`crota` in radians; a flip negates the scale of its axis) and `pc2cd(pc11, pc12, pc21, pc22, cdelt1, cdelt2)` scales a PC matrix by the CDELT of each row.
+
+`tanHeader(header)` packs the WCS into a 15-element tuple (`crpix1`, `crpix2`, `crval1`, `crval2` in radians, `cd11`, `cd12`, `cd21`, `cd22`, the determinant, the cosine and sine of the pole rotation derived from `LONPOLE`, and the SIP orders `A`, `B`, `AP` and `BP`) and returns `undefined` for a non-TAN axis, a missing reference value or a singular matrix. A missing `LONPOLE` is 180° unless `CRVAL2` is 90° or more, which is 0°, as in the FITS WCS standard. `tanProject(header, ra, dec)` gives the pixel `[x, y]` of a position, or `undefined` for a position on the far side of the tangent plane (the denominator is not positive) and for an invalid header. `tanUnproject(header, x, y)` gives `[rightAscension, declination]` with the right ascension in 0..2π, and the reference position for the reference pixel. SIP: `A_ORDER`, `B_ORDER` and the `A_p_q` and `B_p_q` coefficients apply to the pixel offsets from `CRPIX` before the CD matrix, in `tanUnproject`; `tanProject` uses the `AP` and `BP` inverse polynomials when both orders are positive, and otherwise inverts the forward polynomial by a fixed-point iteration (at most 20 steps, 1e-9 pixel), so the round trip is exact only as far as the inverse polynomials or that iteration allow. The SIP terms are used only when both `CTYPE`s end with `-SIP`.
+
+`RA_TAN`, `RA_TAN_SIP`, `DEC_TAN` and `DEC_TAN_SIP` are the `CTYPE` strings, and `isWcsFitsKeyword(key)` tells whether a header key is a WCS keyword of this module (`CTYPEn`, `CRPIXn`, `CRVALn`, `CDi_j`, `PCi_j`, `CDELTn`, `CROTAn`, `PVi_m`, `PSi_m`, `RADESYS`, `LONPOLE`, `LATPOLE`, `EQUINOX`, `WCSAXES`, `CUNITn` and the SIP keywords), for example to copy only those cards.
+
+```ts
+import { cd, cdFromCdelt, cdMatrix, DEC_TAN, DEC_TAN_SIP, hasCd, isWcsFitsKeyword, matrixKind, pc2cd, RA_TAN, RA_TAN_SIP, tanHeader, tanProject, tanUnproject } from 'nebulosa/src/astrometry/wcs/fits.wcs'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+console.log(RA_TAN, RA_TAN_SIP, DEC_TAN, DEC_TAN_SIP) // RA---TAN RA---TAN-SIP DEC--TAN DEC--TAN-SIP
+
+// A TAN header of 0.0005°/pixel (1.8″), centered at RA 83.8°, Dec -5.4°, with the reference pixel at (500.5, 400.5).
+const header = { CTYPE1: RA_TAN, CTYPE2: DEC_TAN, CRPIX1: 500.5, CRPIX2: 400.5, CRVAL1: 83.8, CRVAL2: -5.4, CD1_1: -0.0005, CD1_2: 0, CD2_1: 0, CD2_2: 0.0005 }
+console.log(matrixKind(header), hasCd(header), cdMatrix(header), cd(header, 1, 1), cd(header, 2, 2)) // cd true [ -0.0005, 0, 0, 0.0005 ] -0.0005 0.0005
+
+// The other two conventions, and a header without a linear part.
+console.log(matrixKind({ CDELT1: -0.0005, CDELT2: 0.0005, PC1_1: 1 }), matrixKind({ CDELT1: -0.0005, CDELT2: 0.0005, CROTA2: 30 }), matrixKind({ CRVAL1: 1 }), hasCd({})) // pc crota none false
+console.log(cdMatrix({ CDELT1: -0.0005, CDELT2: 0.0005, PC1_1: 1, PC1_2: 0.1, PC2_1: -0.1, PC2_2: 1 })) // [ -0.0005, -0.00005, -0.00005, 0.0005 ]
+console.log(cdMatrix({ CDELT1: -0.0005, CDELT2: 0.0005, CROTA2: 30 })) // [ -0.000433, -0.00025, -0.00025, 0.000433 ] (rounded)
+console.log(cdFromCdelt(-0.0005, 0.0005, deg(30))) // the same matrix, from the angle in radians
+console.log(cdFromCdelt(-0.0005, 0.0005, deg(30), true, false)) // [ 0.000433, -0.00025, 0.00025, 0.000433 ] (rounded; the x scale is flipped)
+console.log(pc2cd(1, 0.1, -0.1, 1, -0.0005, 0.0005)) // [ -0.0005, -0.00005, -0.00005, 0.0005 ]
+
+// The packed descriptor: crpix, crval (radians), the CD matrix, its determinant, the pole rotation and the four SIP orders.
+console.log(tanHeader(header)) // [ 500.5, 400.5, 1.4625859, -0.0942478, -0.0005, 0, 0, 0.0005, -2.5e-7, 1, 0, 0, 0, 0, 0 ] (rounded)
+console.log(tanHeader({ ...header, CTYPE1: 'RA---SIN' }), tanHeader({ ...header, CD1_1: 0, CD2_2: 0 }), tanHeader({ CTYPE1: RA_TAN, CTYPE2: DEC_TAN })) // undefined undefined undefined
+
+// Sky to pixel and back.
+const [x, y] = tanProject(header, deg(83.85), deg(-5.3))!
+console.log(x, y) // 400.9273535770926 600.4961898691276
+const [ra, dec] = tanUnproject(header, x, y)!
+console.log(toDeg(ra), toDeg(dec)) // 83.85 -5.300000000000001 (to rounding)
+console.log(tanUnproject(header, 500.5, 400.5)!.map(toDeg)) // [ 83.8, -5.4 ] (the reference position)
+console.log(tanProject(header, deg(83.8 + 180), deg(5.4))) // undefined (the antipode is not on the tangent plane)
+
+// The same header with a SIP distortion of order 2 in both axes.
+const sip = { ...header, CTYPE1: RA_TAN_SIP, CTYPE2: DEC_TAN_SIP, A_ORDER: 2, B_ORDER: 2, A_2_0: 1e-5, A_1_1: -2e-6, B_0_2: 1.5e-5, B_1_1: 3e-6 }
+const [sx, sy] = tanProject(sip, deg(83.85), deg(-5.3))!
+console.log(sx, sy) // 400.7881521810434 599.9590962083622 (no AP/BP: the forward polynomial is inverted by iteration)
+const [sra, sdec] = tanUnproject(sip, sx, sy)!
+console.log(toDeg(sra), toDeg(sdec)) // 83.85 -5.3000000000000025
+console.log(tanProject({ ...sip, AP_ORDER: 2, BP_ORDER: 2, AP_2_0: -1e-5 }, deg(83.85), deg(-5.3))) // [ 400.828206457936, 600.4961898691276 ] (with an `AP_2_0` term only, so the inverse differs from the iteration)
+
+// The keywords that belong to the WCS.
+console.log(['CRPIX1', 'CD1_1', 'A_2_0', 'BP_ORDER', 'DATE-OBS', 'NAXIS1', 'CTYPE2', 'PV1_2', 'A_DMAX', 'CROTA2'].map((key) => isWcsFitsKeyword(key))) // [ true, true, true, true, false, false, true, true, true, true ]
+```
+
 ### FITS WCS Geometry Updates
+
+`reflectFitsWcs` and `scaleAndCropFitsWcs` rewrite the WCS keywords of a header when the image itself is flipped, resized or cropped, so that the same sky position still falls on the same star. Both change the header object in place and return that same object, so clone it first (`{ ...header }`) to keep the original. They work on the primary two-axis linear WCS, TAN or TAN-SIP, and use the FITS 1-based pixel frame, where the center of the first pixel is (1, 1) and `CRPIX` follows it.
+
+`reflectFitsWcs(header, width, height, horizontal, vertical)` mirrors the solution for an image of `width` × `height` pixels (positive integers, otherwise it throws a `RangeError`) flipped across the x axis (`horizontal`), the y axis (`vertical`) or both. `CRPIX1` becomes `width + 1 − CRPIX1` and `CRPIX2` becomes `height + 1 − CRPIX2`. The linear matrix is rewritten in its own convention: the `CD` columns, the `PC` columns, or the sign of `CDELT1` and `CDELT2`, and every SIP coefficient (`A_p_q`, `B_p_q`, `AP_p_q`, `BP_p_q`) gets the sign that its axis and the parities of `p` and `q` require. With both flags false it returns the header unchanged. After a horizontal flip a star at pixel x is at `width + 1 − x`, and after a vertical one at `height + 1 − y`, with the other coordinate unchanged.
+
+`scaleAndCropFitsWcs(header, scaleX, scaleY, left, top)` resizes and then crops. `scaleX` and `scaleY` are positive output samples per input pixel (0.5 halves the image) and `left` and `top` are the pixels removed from the left and top of the resized grid. `CRPIX` becomes `(CRPIX − 0.5)·scale + 0.5 − offset`, so a pixel center stays a pixel center, the matrix is divided by the scales and always written as a `CD` matrix (the `PC`, `CDELT` and `CROTA` keys are removed), and the SIP coefficients and `A_DMAX` and `B_DMAX` are rescaled. Defaults of the standard (`CRPIX` and `CRVAL` 0, `CDELT` 1, `PC` the identity) apply to the axes the header declares. Alternate solutions (keys with a letter suffix) are always removed, a header without any axis keyword gets no solution, and a WCS that cannot be resized exactly (a distortion table, `PV` or `PS` terms, `-TPV`, `-TAB` and similar projections, a SIP that is incomplete or inconsistent, or a singular matrix) loses all its WCS keywords instead of staying as a wrong linear TAN. The new width and height of the image are not in the WCS, so `NAXIS1` and `NAXIS2` are left to the caller.
+
+```ts
+import { DEC_TAN, DEC_TAN_SIP, RA_TAN, RA_TAN_SIP, reflectFitsWcs, scaleAndCropFitsWcs, tanProject } from 'nebulosa/src/astrometry/wcs/fits.wcs'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+// A 1000 × 800 image with a TAN-SIP solution of 0.0005°/pixel, with a small rotation term and an order-2 distortion.
+const header = { CTYPE1: RA_TAN_SIP, CTYPE2: DEC_TAN_SIP, CRPIX1: 500.5, CRPIX2: 400.5, CRVAL1: 83.8, CRVAL2: -5.4, CD1_1: -0.0005, CD1_2: 0.00005, CD2_1: 0.00005, CD2_2: 0.0005, A_ORDER: 2, B_ORDER: 2, A_2_0: 1e-5, A_1_1: -2e-6, B_0_2: 1.5e-5, B_1_1: 3e-6 }
+const [x, y] = tanProject(header, deg(83.85), deg(-5.3))!
+console.log(x, y) // 421.61990320356387 607.7792875222979
+
+// A horizontal flip: x goes to 1001 - x, y stays, and the coefficients change sign as needed.
+const horizontal = reflectFitsWcs({ ...header }, 1000, 800, true, false)
+console.log(horizontal.CRPIX1, horizontal.CD1_1, horizontal.CD1_2, horizontal.CD2_1, horizontal.CD2_2) // 500.5 0.0005 0.00005 -0.00005 0.0005
+console.log(horizontal.A_2_0, horizontal.A_1_1, horizontal.B_0_2, horizontal.B_1_1) // -0.00001 -0.000002 0.000015 -0.000003
+console.log(tanProject(horizontal, deg(83.85), deg(-5.3))) // [ 579.3800967964362, 607.7792875222979 ] = [ 1001 - x, y ]
+
+// A vertical flip: y goes to 801 - y.
+console.log(tanProject(reflectFitsWcs({ ...header }, 1000, 800, false, true), deg(83.85), deg(-5.3))) // [ 421.61990320356387, 193.22071247770208 ] = [ x, 801 - y ]
+
+// No flip returns the very same header, and an invalid size throws.
+console.log(reflectFitsWcs(header, 1000, 800, false, false) === header) // true
+try {
+	reflectFitsWcs({ ...header }, 0, 800, true, false)
+} catch (e) {
+	console.log((e as Error).message) // WCS reflection width must be a positive integer: 0
+}
+
+// The CDELT + CROTA and the PC conventions are mirrored in their own keywords.
+console.log(reflectFitsWcs({ CTYPE1: RA_TAN, CTYPE2: DEC_TAN, CRPIX1: 500.5, CRPIX2: 400.5, CRVAL1: 83.8, CRVAL2: -5.4, CDELT1: -0.0005, CDELT2: 0.0005, CROTA2: 20 }, 1000, 800, true, true)) // CDELT1 0.0005, CDELT2 -0.0005, CRPIX unchanged (500.5, 400.5)
+console.log(reflectFitsWcs({ CRPIX1: 1, CRPIX2: 1, CRVAL1: 1, CRVAL2: 1, CDELT1: -0.0005, CDELT2: 0.0005, PC1_1: 1, PC1_2: 0.1, PC2_1: -0.1, PC2_2: 1 }, 10, 10, true, false)) // CRPIX1 10, PC1_1 -1, PC1_2 0.1, PC2_1 0.1, PC2_2 1
+
+// Halving the image and then cropping 10 columns and 20 rows: the pixels of a star follow (p - 0.5)·0.5 + 0.5 - offset.
+const half = scaleAndCropFitsWcs({ ...header }, 0.5, 0.5, 10, 20)
+console.log(half.CRPIX1, half.CRPIX2, half.CD1_1, half.CD1_2, half.A_2_0, half.B_0_2) // 240.5 180.5 -0.001 0.0001 0.00002 0.00003
+console.log(tanProject(half, deg(83.85), deg(-5.3))) // [ 201.05995160178193, 284.13964376114893 ] = [ (x - 0.5)·0.5 + 0.5 - 10, (y - 0.5)·0.5 + 0.5 - 20 ]
+
+// A crop alone only moves the reference pixel.
+const crop = scaleAndCropFitsWcs({ ...header }, 1, 1, 100, 50)
+console.log(crop.CRPIX1, crop.CRPIX2) // 400.5 350.5
+
+// A PC header comes out as a CD matrix; an unsupported WCS loses its keywords; a header with no WCS is left alone.
+console.log(scaleAndCropFitsWcs({ CRPIX1: 1, CRPIX2: 1, CRVAL1: 1, CRVAL2: 1, CDELT1: -0.0005, CDELT2: 0.0005, PC1_1: 1, PC1_2: 0.1, PC2_1: -0.1, PC2_2: 1 }, 2, 2, 0, 0)) // { CRPIX1: 1.5, CRPIX2: 1.5, CRVAL1: 1, CRVAL2: 1, CD1_1: -0.00025, CD1_2: -0.000025, CD2_1: -0.000025, CD2_2: 0.00025 }
+console.log(Object.keys(scaleAndCropFitsWcs({ ...header, PV1_1: 1 }, 2, 2, 0, 0))) // []
+console.log(scaleAndCropFitsWcs({ DATE_OBS: 'x', EXPTIME: 5 }, 2, 2, 0, 0)) // { DATE_OBS: "x", EXPTIME: 5 }
+```
 
 ### Local Astrometry.net Plate Solving
 
@@ -6877,6 +6978,104 @@ console.log(EMPTY_PLATE_SOLUTION.parity, EMPTY_PLATE_SOLUTION.scale, EMPTY_PLATE
 
 ### SIP Distortion Fitting
 
+`fitSipDistortion(matchedStars, wcs, options)` fits the forward SIP (Simple Imaging Polynomial) distortion of a TAN solution from matched stars, so that a plain gnomonic WCS becomes `RA---TAN-SIP` (see FITS TAN and SIP Coordinate Mapping). Each `MatchedStar` has the measured pixel `x`, `y`, the reference pixel `xRef`, `yRef` where the star should be according to the linear WCS and the catalog position, and an optional `weight`. The fit is a weighted least squares, in the centered offsets `u = x − CRPIX1` and `v = y − CRPIX2`, of the corrections `xRef − x` and `yRef − y` against the polynomial terms `u^i·v^j` with `2 ≤ i + j ≤ order`, solved by QR with scaled columns, one polynomial for `A` (x) and one for `B` (y), followed by iterative sigma clipping. The linear terms belong to the CD matrix, so the model has no terms of degree 0 or 1. Pixels are in the frame used by the header, and the reference pixel is the one of the linear WCS; the model describes the distortion of that frame only and should be refit if `CRPIX` changes.
+
+`wcs` is either a `SipFitsHeader` (`crpix1`, `crpix2` and optionally the `width` and `height` in pixels, used to check the spread of the stars) or a `FitsHeader`, from which `CRPIX1`, `CRPIX2` and the image size are read. The options are `order` (an integer from 2 to 5), `maxIterations` (default 5) and `sigmaClip` (default 3, in units of the robust scatter) for the clipping, `minStars` (default the number of coefficients plus one), `minStarRatio` (default 2 stars per coefficient) and `requireRecommendedStarCount` (a warning, or an error when true, below that ratio), `weighting` (`'auto'`, `'none'` or `'star'`), `scatter` (`'mad'` or `'standardDeviation'`), `spatialDistribution` (`'off'`, `'warn'` or `'fail'`, the default being `'fail'` when the size is known), `allowPoorDistribution` (the same as `'warn'`), `spatialGridSize` (default 2), `minOccupiedCells` and `minOccupiedQuadrants` (default 3 each), `width` and `height` (which override the header) and `maxConditionNumber` (default 1e12). The fit throws a `SipFitError`, an `Error` with a `code` of `'invalidOrder'`, `'invalidCoordinate'`, `'invalidWeight'`, `'invalidOption'`, `'insufficientStars'`, `'poorSpatialDistribution'`, `'singularMatrix'`, `'illConditionedFit'` or `'excessiveOutlierRejection'`.
+
+The result has the `order`, `A_ORDER`, `B_ORDER`, the coefficient maps `A` and `B` (keys such as `A_2_0`), a `model` (`SipModel`, which is what the other functions take), `rmsTotal`, `rmsX` and `rmsY` in pixels over the used stars, the star counts and `rejectedStarIndices`, one `residuals` entry per input star (`dx`, `dy`, `predDx`, `predDy`, the residuals `rx`, `ry` and `r`, `used`, `rejected` and `rejectedIteration`) and the `diagnostics` (`coefficientCount`, `iterations`, `scatter`, `conditionNumber`, `weighted`, `rawRmsTotal` before the fit, the median, 90th and 95th percentile and maximum residual, the `spatialDistribution` counts and the `warnings`). `countSipTerms(order)` gives the number of terms per axis, `3` for order 2, and `listSipTerms(order)` lists them as `{ i, j }` in increasing degree. `buildSipDesignMatrix(stars, wcs, order)` returns the unweighted system of the fit (`matrix` with one row per star and one column per term, `terms`, the targets `residualX` and `residualY` and the centered `centeredX` and `centeredY`). `evaluateSipCorrection(x, y, model, wcs)` returns `{ dx, dy }`, the pixel correction at a measured pixel, `applySipCorrection` returns the corrected `{ x, y }`, and `sipModelIntoFitsHeader(model, header)` writes `A_ORDER`, `B_ORDER` and every coefficient into the header (removing the old SIP keywords, including the `AP` and `BP` inverse terms) and promotes a `TAN` `CTYPE` to `TAN-SIP`, returning the same header. It does not fit the inverse polynomials, so the sky-to-pixel direction of the header is then computed by iteration.
+
+```ts
+import { applySipCorrection, buildSipDesignMatrix, countSipTerms, evaluateSipCorrection, fitSipDistortion, listSipTerms, type MatchedStar, SipFitError, sipModelIntoFitsHeader } from 'nebulosa/src/astrometry/wcs/sip.fit'
+import { mulberry32 } from 'nebulosa/src/math/numerical/random'
+
+console.log(countSipTerms(2), countSipTerms(3), countSipTerms(5)) // 3 7 18
+console.log(listSipTerms(2)) // [ { i: 2, j: 0 }, { i: 1, j: 1 }, { i: 0, j: 2 } ]
+
+// 60 stars on a 1000 × 800 image, displaced by a known distortion of order 2 and a noise of ±0.02 pixel, with one 6-pixel outlier.
+const wcs = { crpix1: 500.5, crpix2: 400.5, width: 1000, height: 800 }
+const random = mulberry32(7)
+const distortionX = (u: number, v: number) => 2e-6 * u * u - 1e-6 * u * v
+const distortionY = (u: number, v: number) => 1.5e-6 * v * v + 5e-7 * u * v
+const stars: MatchedStar[] = []
+
+for (let i = 0; i < 60; i++) {
+	const x = 20 + random() * 960
+	const y = 20 + random() * 760
+	const u = x - wcs.crpix1
+	const v = y - wcs.crpix2
+	stars.push({ x, y, xRef: x + distortionX(u, v) + (random() - 0.5) * 0.04, yRef: y + distortionY(u, v) + (random() - 0.5) * 0.04 })
+}
+
+stars[5] = { ...stars[5], xRef: stars[5].xRef + 6 }
+
+const fit = fitSipDistortion(stars, wcs, { order: 2 })
+console.log(Object.entries(fit.A).map(([key, value]) => `${key}=${value.toExponential(3)}`)) // [ "A_2_0=2.022e-6", "A_1_1=-9.580e-7", "A_0_2=7.635e-9" ]
+console.log(Object.entries(fit.B).map(([key, value]) => `${key}=${value.toExponential(3)}`)) // [ "B_2_0=6.347e-8", "B_1_1=4.811e-7", "B_0_2=1.547e-6" ]
+console.log(fit.rmsTotal.toFixed(4), fit.rmsX.toFixed(4), fit.rmsY.toFixed(4)) // 0.0144 0.0102 0.0102
+console.log(fit.inputStarCount, fit.usedStarCount, fit.rejectedStarCount, fit.rejectedStarIndices) // 60 49 11 [ 5, 7, 9, 19, 24, 27, 34, 35, 43, 52, 57 ] (the outlier and ten noise samples that the iterated clipping removes)
+console.log(fit.residuals[5].rejected, fit.residuals[5].rejectedIteration, fit.residuals[5].r.toFixed(3)) // true 1 5.989
+
+const diagnostics = fit.diagnostics
+console.log(diagnostics.coefficientCount, diagnostics.iterations, diagnostics.scatterMode, diagnostics.weighted, diagnostics.conditionNumber.toFixed(3)) // 3 3 mad false 4.717
+console.log(diagnostics.rawRmsTotal.toFixed(4), diagnostics.medianResidual.toFixed(4), diagnostics.p95Residual.toFixed(4), diagnostics.maxResidual.toFixed(4)) // 0.8258 0.0131 0.0200 0.0260
+console.log(diagnostics.spatialDistribution, diagnostics.warnings) // { checked: true, width: 1000, height: 800, gridSize: 2, occupiedCells: 4, occupiedQuadrants: 4, minOccupiedCells: 3, minOccupiedQuadrants: 3 } []
+
+// The correction of the model at a pixel far from the center, against the true distortion (0.1996, 0.1944), and the corrected pixel.
+const { dx, dy } = evaluateSipCorrection(900, 700, fit.model, wcs)
+console.log(dx.toFixed(4), dy.toFixed(4), distortionX(399.5, 299.5).toFixed(4), distortionY(399.5, 299.5).toFixed(4)) // 0.2088 0.2065 0.1996 0.1944
+const corrected = applySipCorrection(900, 700, fit.model, wcs)
+console.log(corrected.x.toFixed(2), corrected.y.toFixed(2)) // 900.21 700.21
+
+// The design matrix of the first four stars: 4 rows, 3 terms.
+const design = buildSipDesignMatrix(stars.slice(0, 4), wcs, 2)
+console.log(design.matrix.rows, design.matrix.cols, design.terms.length, design.centeredX[0].toFixed(1), design.centeredY[0].toFixed(1), design.residualX[0].toFixed(3)) // 4 3 3 -469.3 -333.4 0.303
+
+// Another configuration: order 3, no weights, standard deviation as scatter, a 2.5σ clip in 3 iterations and a minimum of 20 stars.
+const cubic = fitSipDistortion(stars, wcs, { order: 3, weighting: 'none', scatter: 'standardDeviation', sigmaClip: 2.5, maxIterations: 3, minStars: 20 })
+console.log(cubic.rmsTotal.toFixed(4), cubic.diagnostics.coefficientCount, cubic.usedStarCount, cubic.rejectedStarIndices) // 0.0139 7 59 [ 5 ]
+
+// With weights, 'auto' uses them and 'none' ignores them; a FITS header can supply the reference pixel and the size.
+const weighted = stars.map((star, i) => ({ ...star, weight: 1 + (i % 3) }))
+console.log(fitSipDistortion(weighted, wcs, { order: 2 }).diagnostics.weighted, fitSipDistortion(weighted, wcs, { order: 2, weighting: 'none' }).diagnostics.weighted) // true false
+console.log(fitSipDistortion(stars, { CRPIX1: 500.5, CRPIX2: 400.5, NAXIS1: 1000, NAXIS2: 800 }, { order: 2 }).usedStarCount) // 49
+
+// The model into a TAN header: stale terms are removed and the CTYPEs become TAN-SIP.
+const header = { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 500.5, CRPIX2: 400.5, A_ORDER: 5, A_4_1: 3 }
+sipModelIntoFitsHeader(fit.model, header)
+console.log(Object.keys(header).join(' '), header.A_ORDER) // CTYPE1 CTYPE2 CRPIX1 CRPIX2 A_ORDER B_ORDER A_2_0 B_2_0 A_1_1 B_1_1 A_0_2 B_0_2 2
+console.log(header.CTYPE1, 'A_4_1' in header) // RA---TAN-SIP false
+
+// The failures are SipFitError with a code.
+const crowded = stars.filter((star) => star.x < 400 && star.y < 300)
+const attempts: [string, () => unknown][] = [
+	['order 6', () => fitSipDistortion(stars, wcs, { order: 6 })],
+	['3 stars', () => fitSipDistortion(stars.slice(0, 3), wcs, { order: 2 })],
+	['one corner', () => fitSipDistortion(crowded, wcs, { order: 2 })],
+	[
+		'negative weight',
+		() =>
+			fitSipDistortion(
+				stars.map((star) => ({ ...star, weight: -1 })),
+				wcs,
+				{ order: 2 },
+			),
+	],
+	['5 stars, ratio required', () => fitSipDistortion(stars.slice(0, 5), wcs, { order: 2, requireRecommendedStarCount: true, spatialDistribution: 'off' })],
+]
+
+for (const [label, attempt] of attempts) {
+	try {
+		attempt()
+	} catch (e) {
+		console.log(label, e instanceof SipFitError, (e as SipFitError).code) // order 6 true invalidOrder; 3 stars true insufficientStars; one corner true poorSpatialDistribution; negative weight true invalidWeight; 5 stars, ratio required true insufficientStars
+	}
+}
+
+// A poor distribution only warns with allowPoorDistribution, and the check is skipped with 'off'.
+const warned = fitSipDistortion(crowded, wcs, { order: 2, allowPoorDistribution: true })
+console.log(warned.diagnostics.warnings.length, warned.diagnostics.spatialDistribution?.occupiedCells, fitSipDistortion(crowded, wcs, { order: 2, spatialDistribution: 'off' }).diagnostics.spatialDistribution) // 2 1 { checked: false }
+```
+
 ### Star Pattern Matching
 
 `matchStars(referenceStars, currentStars, config?)` registers two lists of detected stars without knowing which star is which. It ranks the stars of each list by quality (`snr · √flux / hfd`), drops duplicates closer than `dedupeDistance`, keeps the best `maxStars` and builds local triangles from the nearest neighbors of each star. A triangle is reduced to a descriptor that does not change with scale or rotation, `[shortest/longest, middle/longest, area ratio]`, plus its chirality (a mirrored field flips it). Triangles with close descriptors vote for star pairs, the best hypotheses are scored on the whole frame and refined with outlier clipping, and the result is a similarity transform (rotation, uniform scale, optional mirror and translation), or an affine one when it fits materially better. It is deterministic and meant for tens to a few hundred stars with a scale ratio between 0.8 and 1.2 by default.
@@ -6958,6 +7157,69 @@ console.log(
 ```
 
 ### WCSLIB Equatorial Projection
+
+`Wcs` is a binding to the native WCSLIB (`native/libwcs.shared`, loaded with `bun:ffi`) that parses the WCS keywords of a `FitsHeader` and converts between pixels and equatorial coordinates for any projection that WCSLIB knows (`TAN`, `SIN`, `ARC`, `ZEA`, `AIT`...), where the pure TypeScript `tanProject` and `tanUnproject` of FITS TAN and SIP Coordinate Mapping only know the gnomonic one. The sky side is always `[rightAscension, declination]` in radians, whatever the order of the FITS axes, and the pixel side is the FITS one: 1-based, with the center of the first pixel at (1, 1). The class owns native memory, so it implements `Disposable`: release it with `using` or `[Symbol.dispose]()`. The library must exist for the platform.
+
+`new Wcs(header?)` parses the header when one is given and throws `Error('failed to initialize WCS from header')` when it cannot be used. `load(header)` does the same and returns a boolean; it accepts a single two-axis solution whose axes are `RA---` and `DEC--` in either order, and returns false, keeping the solution that was loaded before, for a header with other celestial frames (`GLON`, `GLAT`...), linear or more than two axes, no WCS keywords or several alternate solutions. Only the WCS keywords of the header are sent to the library. `pixToSky(x, y)` and `skyToPix(ra, dec)` return `[Angle, Angle]` and `[x, y]`, or `undefined` when nothing is loaded, the class is disposed, or the native call fails, which also writes the WCSLIB status to `console.error`. A `-SIP` header is parsed, but the transforms fail with that status (5 in the run below), so SIP is not applied by this class: use `tanProject` and `tanUnproject` for TAN-SIP.
+
+`open()` returns a fresh `dlopen` handle (with `wcspih`, `wcsp2s`, `wcss2p` and `wcsvfree`), `load()` the symbols of a handle that is cached for the process, and `unload()` closes that handle; a `Wcs` created afterwards opens it again.
+
+```ts
+import { tanProject, tanUnproject } from 'nebulosa/src/astrometry/wcs/fits.wcs'
+import { load, open, unload, Wcs } from 'nebulosa/src/bindings/astrometry/libwcs'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+// A TAN header of 0.0005°/pixel with a small rotation term, centered at RA 83.8°, Dec -5.4°.
+const header = { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 500.5, CRPIX2: 400.5, CRVAL1: 83.8, CRVAL2: -5.4, CD1_1: -0.0005, CD1_2: 0.00005, CD2_1: 0.00005, CD2_2: 0.0005, RADESYS: 'ICRS', EQUINOX: 2000 }
+using wcs = new Wcs(header)
+
+// Pixel to sky agrees with the TypeScript implementation, and the reference pixel is the reference position.
+console.log(wcs.pixToSky(700, 600)!.map(toDeg)) // [ 83.70984119484692, -5.290268621632361 ]
+console.log(tanUnproject(header, 700, 600)!.map(toDeg)) // [ 83.70984119484692, -5.290268621632354 ]
+console.log(wcs.pixToSky(500.5, 400.5)!.map(toDeg)) // [ 83.8, -5.400000000000006 ]
+
+// Sky to pixel, which is the inverse, and again agrees with tanProject.
+const [ra, dec] = wcs.pixToSky(700, 600)!
+console.log(wcs.skyToPix(ra, dec)) // [ 699.9999999999877, 599.9999999999987 ]
+console.log(wcs.skyToPix(deg(83.85), deg(-5.3)), tanProject(header, deg(83.85), deg(-5.3))) // [ 421.7148243207994, 608.3747074370472 ] [ 421.7148243207974, 608.374707437048 ]
+
+// Other projections: the same header with SIN or ARC axes.
+using sin = new Wcs({ ...header, CTYPE1: 'RA---SIN', CTYPE2: 'DEC--SIN' })
+console.log(sin.pixToSky(700, 600)!.map(toDeg), sin.skyToPix(deg(83.85), deg(-5.3))) // [ 83.70984091889542, -5.290268285694518 ] [ 421.7149740557992, 608.3743123612096 ]
+using arc = new Wcs({ ...header, CTYPE1: 'RA---ARC', CTYPE2: 'DEC--ARC' })
+console.log(arc.pixToSky(700, 600)!.map(toDeg)) // [ 83.70984101087964, -5.2902683976742795 ]
+
+// DEC before RA in the FITS axes: the result is still [RA, Dec].
+using swapped = new Wcs({ ...header, CTYPE1: 'DEC--TAN', CTYPE2: 'RA---TAN', CRVAL1: -5.4, CRVAL2: 83.8, CD1_1: 0.0005, CD1_2: 0.00005, CD2_1: 0.00005, CD2_2: -0.0005 })
+console.log(swapped.pixToSky(500.5, 400.5)!.map(toDeg)) // [ 83.8, -5.400000000000006 ]
+
+// A TAN-SIP header is parsed but not applied: the transforms fail and give undefined (WCSLIB status 5 on stderr).
+using sip = new Wcs({ ...header, CTYPE1: 'RA---TAN-SIP', CTYPE2: 'DEC--TAN-SIP', A_ORDER: 2, B_ORDER: 2, A_2_0: 1e-5, B_0_2: 1.5e-5 })
+console.log(sip.pixToSky(700, 600), sip.skyToPix(deg(83.85), deg(-5.3))) // undefined undefined
+
+// load() on one instance: an empty one, headers that are refused (the previous solution is kept) and a valid one.
+const loaded = new Wcs()
+console.log(loaded.pixToSky(1, 1), loaded.skyToPix(0, 0)) // undefined undefined
+console.log(loaded.load({ ...header, CTYPE1: 'GLON-TAN', CTYPE2: 'GLAT-TAN' }), loaded.load({ SIMPLE: true }), loaded.load(header)) // false false true
+console.log(loaded.load({ ...header, CTYPE1: 'GLON-TAN' }), loaded.pixToSky(500.5, 400.5)!.map(toDeg)) // false [ 83.8, -5.400000000000006 ]
+loaded[Symbol.dispose]()
+console.log(loaded.pixToSky(1, 1)) // undefined
+
+try {
+	new Wcs({ SIMPLE: true })
+} catch (e) {
+	console.log((e as Error).message) // failed to initialize WCS from header
+}
+
+// The cached library handle, released and opened again by the next Wcs, and a separate handle.
+console.log(typeof load().wcspih, load() === load()) // function true
+unload()
+using again = new Wcs(header)
+console.log(again.pixToSky(500.5, 400.5)!.map(toDeg)) // [ 83.8, -5.400000000000006 ]
+const handle = open()
+console.log(Object.keys(handle.symbols)) // [ "wcspih", "wcsp2s", "wcss2p", "wcsvfree" ]
+handle.close()
+```
 
 ## 🖼️ Imaging
 
@@ -7211,17 +7473,530 @@ Evaluate observing conditions and target suitability before scheduling or contro
 
 ### Hipparcos Catalog
 
+The ESA Hipparcos main catalog (`hip_main.dat`, CDS I/239) has about 118 thousand stars measured by the satellite, with positions, parallaxes and proper motions at the epoch J1991.25. `readHipparcosCatalog(source)` streams the usable rows of the pipe-delimited file from a `Source` in constant reader memory and yields `HipparcosCatalogEntry` objects: `id` (the HIP number), `epoch` (always `1991.25`), `rightAscension` and `declination` (ICRS, radians), and, when the row has them, `magnitude` (V), `parallax` (radians, a negative value is kept as measured), `pmRA` and `pmDEC` (radians per Julian year). The catalog publishes μα* = dα/dt·cos δ, and the reader divides by cos δ so that `pmRA` is dα/dt, as the other catalogs and `star` expect; at a pole that direction is undefined and `pmRA` is left out. Rows with a missing or invalid identifier or position are skipped, and blank or non-numeric optional fields are `undefined`. There is no radial velocity.
+
+`HipparcosCatalog` is a `HealpixIndex` of those entries, so it has the query methods of HEALPix Object Index and of Star Catalog Interface and Spatial Query (`queryCone`, `queryBox`, `queryTriangle`, `queryPolygon`, `queryRegion`, `streamRegion`), where each result is an index entry whose `metadata` is the `HipparcosCatalogEntry`. `new HipparcosCatalog({ nside, ordering })` defaults to NSIDE 8, `load(source)` reads and indexes every entry, and `get(id)`, `size` and `add` behave as in the index. The positions are the ones at J1991.25: to compare them with a J2000 or current-date sky, apply the proper motion first (see Stellar Space Motion).
+
+```ts
+import { HipparcosCatalog, readHipparcosCatalog } from 'nebulosa/src/catalogs/stars/hipparcos'
+import { fileHandleSource } from 'nebulosa/src/io/file'
+import { bufferSource } from 'nebulosa/src/io/io'
+import { deg, toMas } from 'nebulosa/src/math/units/angle'
+import fs from 'fs/promises'
+
+// Stream the file: nothing but the entry being read is kept in memory.
+let count = 0
+
+await using source = fileHandleSource(await fs.open('data/hip_main.dat', 'r'))
+
+for await (const entry of readHipparcosCatalog(source)) {
+	if (entry.id === 32349) console.log(entry.epoch, entry.magnitude, toMas(entry.parallax!), toMas(entry.pmDEC!), toMas(entry.pmRA! * Math.cos(entry.declination))) // 1991.25 -1.44 379.21 -1223.08 -546.01 (Sirius, μα* in mas/yr)
+	count++
+}
+
+console.log(count) // 117955
+
+// An index of the whole catalog, and a cone of 5° around Sirius.
+await using file = fileHandleSource(await fs.open('data/hip_main.dat', 'r'))
+const catalog = new HipparcosCatalog({ nside: 16 })
+await catalog.load(file)
+console.log(catalog.size) // 117955
+
+const stars = catalog.queryCone(deg(101.28854105), deg(-16.71314306), deg(5))
+console.log(
+	stars.length,
+	stars.filter((star) => star.metadata!.magnitude! < 2).map((star) => star.id),
+) // 255 [ 32349 ]
+console.log(catalog.get(32349)?.metadata?.magnitude, catalog.get(421)) // -1.44 undefined
+
+// Rows with a blank position or a bad number are skipped, a blank field is undefined, and the pole has no pmRA.
+const row = (id: number, ra: string, dec: string, magnitude = '', parallax = '', pmRA = '', pmDEC = '') => {
+	const fields = new Array<string>(78).fill('')
+	fields[0] = 'H'
+	fields[1] = String(id)
+	fields[5] = magnitude
+	fields[8] = ra
+	fields[9] = dec
+	fields[11] = parallax
+	fields[12] = pmRA
+	fields[13] = pmDEC
+	return fields.join('|')
+}
+
+const bytes = Buffer.from(`${row(1, '12.5', '-4.5')}\n${row(2, '', '20')}\n${row(3, 'NaN', '20')}\n${row(4, '33', '90', '5', '-2', '10', '3')}\n${row(0, '10', '10')}\n`)
+const entries = []
+
+for await (const entry of readHipparcosCatalog(bufferSource(bytes))) entries.push(entry)
+
+console.log(entries.map((entry) => entry.id)) // [ 1, 4 ]
+console.log(entries[0].magnitude, entries[0].pmRA, entries[1].magnitude, entries[1].pmRA, toMas(entries[1].pmDEC!), toMas(entries[1].parallax!)) // undefined undefined 5 undefined 3 -2
+
+const small = new HipparcosCatalog()
+await small.load(bufferSource(bytes))
+console.log(
+	small.size,
+	small.queryBox(deg(12), deg(13), deg(-5), deg(-4)).map((star) => star.id),
+) // 2 [ 1 ]
+console.log([...small.streamRegion({ kind: 'cone', centerRA: deg(12.5), centerDEC: deg(-4.5), radius: deg(0.1) })].map((star) => star.id)) // [ 1 ]
+```
+
 ### HNSKY Tiled Catalog
 
 ### HYG Catalog
 
+The HYG database merges the Hipparcos, Yale Bright Star and Gliese catalogs into one CSV of about 119 thousand stars with identifiers and physical data, which makes it the catalog to use when a star needs a name. `readHygCatalog(source)` streams the CSV of a `Source` (the `hyg_v42.csv` layout, with its header line) and yields one `HygCatalogEntry` per row, without validating or skipping rows. The entry has the astrometry at J2000 (`epoch` 2000, `rightAscension` and `declination` in radians, `pmRA` and `pmDEC` in radians per year, and `rv` in AU per day, converted from the km/s of the file), the `magnitude` (99 when blank), and the cross-references `hip`, `hd` and `hr` (0 when the star has none), `bayer`, `flamsteed` (0 when none), `name` and `spType` (when present), the `constellation` as an uppercase IAU abbreviation and the `distance` in AU. The file publishes μα* = dα/dt·cos δ and the reader divides by cos δ, so `pmRA` is dα/dt; at a pole, where that is undefined, it is 0. A blank, zero or out-of-range distance (of 100000 pc or more) gives a `distance` of 0, and a blank radial velocity gives 0 as well, so these two cannot be told from a measured zero. There is no parallax.
+
+`HygCatalog` is a `HealpixIndex<HygCatalogEntry>` and so has the queries of HEALPix Object Index and Star Catalog Interface and Spatial Query, with the entry in the `metadata` of each result. `new HygCatalog({ nside, ordering })` uses NSIDE 8 by default, and `load(source)` reads and indexes every row, keyed by the HYG `id` (which is not the HIP number).
+
+```ts
+import { HygCatalog, readHygCatalog } from 'nebulosa/src/catalogs/stars/hyg'
+import { fileHandleSource } from 'nebulosa/src/io/file'
+import { deg, formatDEC, formatRA, toMas } from 'nebulosa/src/math/units/angle'
+import { toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+import fs from 'fs/promises'
+
+// Stream until Sirius, the star with the HYG id 32263.
+await using source = fileHandleSource(await fs.open('data/hyg_v42.csv', 'r'))
+
+for await (const star of readHygCatalog(source)) {
+	if (star.id !== 32263) continue
+
+	console.log(star.name, star.hip, star.hd, star.hr, star.bayer, star.flamsteed, star.constellation, star.spType) // Sirius 32349 48915 2491 Alp 9 CMA A0m...
+	console.log(star.epoch, star.magnitude, formatRA(star.rightAscension), formatDEC(star.declination)) // 2000 -1.44 06 45 08.93 -16 42 58.02
+	console.log(toMas(star.pmRA * Math.cos(star.declination)), toMas(star.pmDEC)) // -546.0099 -1223.0799 (μα* in mas/yr)
+	console.log(toKilometerPerSecond(star.rv), star.distance / 206264.806) // -9.4 2.637 (km/s, parsec)
+	break
+}
+
+// The index of all the rows, a cone of 1° around the Orion Nebula and a lookup by HYG id.
+await using file = fileHandleSource(await fs.open('data/hyg_v42.csv', 'r'))
+const catalog = new HygCatalog()
+await catalog.load(file)
+
+console.log(catalog.size) // 119626
+console.log(catalog.get(0)?.metadata?.name, catalog.get(32263)?.metadata?.name) // Sol Sirius
+
+const field = catalog.queryCone(deg(83.8), deg(-5.39), deg(1))
+console.log(field.length) // 22
+console.log(field.map((star) => star.metadata!.name).filter(Boolean)) // [ "Hatysa" ]
+```
+
 ### SAO Catalog
+
+The Smithsonian Astrophysical Observatory (SAO) star catalog has about 259 thousand stars to roughly magnitude 9, and is distributed as the binary file `SAO.pc.dat` (the Harvard TDC layout, little endian for the PC files and big endian for the UNIX ones). `readSaoCatalog(source, bigEndian)` streams the file from a `Source` and yields `SaoCatalogEntry` objects: `id` (the SAO number), `epoch` (always `'B1950'`, a string), `rightAscension` and `declination` in radians, the `magnitude`, the two-character `spType` and, when the header says that the file has them, `pmRA` and `pmDEC` in radians per year. The positions are B1950 mean positions, not J2000, and must be precessed before they are compared with a modern frame or catalog. The proper motion of the file is already dα/dt, so unlike the other catalogs it is not divided by cos δ. The first 28 bytes are a header that gives the numbering, whether the proper motion and the identifiers are present, and the size of an entry; the reader derives the entry size from those flags, a file shorter than the header gives no entries and a truncated final entry is dropped. A source that returns partial reads is retried.
+
+`SaoCatalog` is a `HealpixIndex<SaoCatalogEntry>`, with the queries of HEALPix Object Index and Star Catalog Interface and Spatial Query (the entry is the `metadata` of each result), and a cone is therefore a cone in the B1950 frame. `new SaoCatalog({ nside, ordering })` defaults to NSIDE 8 and `load(source, bigEndian)` reads and indexes every star, keyed by the SAO number.
+
+```ts
+import { readSaoCatalog, SaoCatalog } from 'nebulosa/src/catalogs/stars/sao'
+import { fileHandleSource } from 'nebulosa/src/io/file'
+import { bufferSource } from 'nebulosa/src/io/io'
+import { deg, formatDEC, formatRA, toMas } from 'nebulosa/src/math/units/angle'
+import fs from 'fs/promises'
+
+// The first star and the one of Groombridge 1830 (SAO 62738).
+await using source = fileHandleSource(await fs.open('data/SAO.pc.dat'))
+let count = 0
+
+for await (const star of readSaoCatalog(source, false)) {
+	count++
+
+	if (star.id === 1)
+		console.log(star.epoch, formatRA(star.rightAscension), formatDEC(star.declination), star.magnitude, star.spType) // B1950 00 00 05.10 +82 41 41.82 7.2 A0
+	else if (star.id === 62738) console.log(toMas(star.pmRA!), toMas(star.pmDEC!), toMas(star.pmRA! * Math.cos(star.declination))) // about 5080.5 -5806 3999.25 (the last is μα* in mas/yr)
+}
+
+console.log(count) // 258997
+
+// An index of the whole file: a cone of 1° around the Orion Nebula, in B1950 coordinates.
+await using file = fileHandleSource(await fs.open('data/SAO.pc.dat'))
+const catalog = new SaoCatalog()
+await catalog.load(file, false)
+
+console.log(catalog.size, catalog.queryCone(deg(83.8), deg(-5.39), deg(1)).length) // 258997 55
+console.log(catalog.get(62738)?.metadata?.magnitude, catalog.get(62738)?.metadata?.spType) // 6.5 G5
+
+// A hand-made file of two stars: a 28-byte header (star0, first number, count, identifiers present, proper motion, magnitudes, bytes per entry) and 28-byte entries.
+const header = Buffer.alloc(28)
+;[0, 1, 2, 0, 1, 1, 28].forEach((value, i) => header.writeInt32LE(value, i * 4))
+
+const entry = (ra: number, dec: number, sp: string, magnitude: number, pmRA: number, pmDEC: number) => {
+	const buffer = Buffer.alloc(28)
+	buffer.writeDoubleLE(ra, 0)
+	buffer.writeDoubleLE(dec, 8)
+	buffer.write(sp, 16, 'ascii')
+	buffer.writeInt16LE(Math.round(magnitude * 100), 18)
+	buffer.writeFloatLE(pmRA, 20)
+	buffer.writeFloatLE(pmDEC, 24)
+	return buffer
+}
+
+const bytes = Buffer.concat([header, entry(1, 0.5, 'K0', 5.5, 1e-6, -2e-6), entry(2, -0.5, 'B2', 3.25, 0, 0)])
+const stars = []
+
+for await (const star of readSaoCatalog(bufferSource(bytes), false)) stars.push(star)
+
+console.log(stars.map((star) => [star.id, star.rightAscension, star.declination, star.spType, star.magnitude])) // [ [ 1, 1, 0.5, "K0", 5.5 ], [ 2, 2, -0.5, "B2", 3.25 ] ]
+console.log(stars[0].pmRA, stars[0].pmDEC) // about 1e-6 -2e-6 (stored as 32-bit floats)
+
+// A truncated last entry is dropped, and a file shorter than the header gives nothing.
+const cut = []
+for await (const star of readSaoCatalog(bufferSource(bytes.subarray(0, bytes.length - 5)), false)) cut.push(star.id)
+console.log(cut, (await Array.fromAsync(readSaoCatalog(bufferSource(bytes.subarray(0, 20)), false))).length) // [ 1 ] 0
+
+const small = new SaoCatalog({ nside: 4 })
+await small.load(bufferSource(bytes), false)
+console.log(
+	small.size,
+	small.queryCone(1, 0.5, 0.01).map((star) => star.id),
+) // 2 [ 1 ]
+```
 
 ### Star Catalog Interface and Spatial Query
 
+Every star catalog of the toolkit, local or remote, answers the same `StarCatalog` interface, so the code that consumes stars (crossmatching, framing, annotation) does not depend on where they come from. A `StarCatalogEntry` is an equatorial position, `rightAscension` and `declination` in radians (J2000 unless the catalog says otherwise), plus the optional `epoch` (Julian year), `magnitude`, proper motions `pmRA` and `pmDEC` (radians per year), radial velocity `rv` and `parallax` (radians). The interface has `queryCone(centerRA, centerDEC, radius)`, `queryTriangle(a, b, c)`, `queryBox(minRA, maxRA, minDEC, maxDEC)`, `queryPolygon(vertices)`, `queryRegion(query)` for any of them as a tagged `StarCatalogQuery` (`kind` is `'cone'`, `'triangle'`, `'box'` or `'polygon'`), which return an array (or a promise of one), and `streamRegion(query)`, which yields the same entries one by one as an iterable or async iterable. A `Vertex` is `[rightAscension, declination]` in radians.
+
+The geometry is exact and the same for every catalog. A cone is a spherical cap (a radius of 0 to π; the boundary counts as inside, within 1e-12 rad). A box covers `minDEC` to `maxDEC` (inclusive, with `minDEC <= maxDEC`) and a right ascension span that may wrap across 0, as in `359.7°` to `0.3°`. A triangle and a polygon (convex, three vertices or more, in either winding, and a repeated first vertex is accepted) are tested on a tangent plane centered on the vertices, so they are best for fields of tens of degrees or less, except that a region that contains or touches a pole is tested with great-circle edges. Vertices on the boundary count as inside. The ranges are not validated beyond the failures below, and a non-convex polygon gives whatever the ray casting gives.
+
+`BaseStarCatalog<T>` is the base class of the concrete catalogs: a subclass implements only `streamCandidateEntries(query)`, which yields the entries that fall in the `preselectionBoxes` of a `NormalizedStarCatalogQuery` (one or two non-wrapping boxes in radians that cover the region, with `minRA <= maxRA` in 0..2π), and the base class applies the exact test, and implements the five query methods and `streamRegion`. The provider has to be tolerant at the edge of a box, since the exact test is the one that decides. `normalizeStarCatalogQuery(query)` is that normalization, with `geometryMode` (`'spherical'` or `'planarTangent'`), `wrapAround`, `preselectionBoxes` and `sortAnchor`; it throws an `Error` for a cone radius outside [0, π] or non-finite, a polygon of fewer than three vertices, an inverted declination range and an unknown kind. `splitRaBox(minRA, maxRA, minDEC, maxDEC)` returns the one or two boxes of a span, one full-circle box when the span is 2π or more, and `projectPolygonVertex(ra, dec, centerRA, centerDEC)` returns the tangent-plane `[Δra·cos(centerDEC), dec − centerDEC]` of a vertex in radians, with the right ascension difference taken the short way around.
+
+```ts
+import { BaseStarCatalog, type NormalizedStarCatalogQuery, normalizeStarCatalogQuery, projectPolygonVertex, splitRaBox, type StarCatalogEntry, type StarCatalogRaDecBox } from 'nebulosa/src/catalogs/stars/catalog'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+interface Star extends StarCatalogEntry {
+	readonly id: string
+}
+
+// An in-memory catalog: it streams the stars that fall in the preselection boxes, with a margin at the edges.
+class ListCatalog extends BaseStarCatalog<Star> {
+	constructor(readonly stars: readonly Star[]) {
+		super()
+	}
+
+	protected *streamCandidateEntries(query: NormalizedStarCatalogQuery) {
+		for (const star of this.stars) {
+			if (query.preselectionBoxes.some((box) => insideBox(star.rightAscension, star.declination, box))) yield star
+		}
+	}
+}
+
+function insideBox(ra: number, dec: number, box: StarCatalogRaDecBox) {
+	return ra >= box.minRA - 1e-12 && ra <= box.maxRA + 1e-12 && dec >= box.minDEC - 1e-12 && dec <= box.maxDEC + 1e-12
+}
+
+const catalog = new ListCatalog([
+	{ id: 'a', rightAscension: deg(0.1), declination: deg(5) },
+	{ id: 'b', rightAscension: deg(359.9), declination: 0 },
+	{ id: 'c', rightAscension: deg(120), declination: 0 },
+	{ id: 'd', rightAscension: deg(130), declination: 0 },
+	{ id: 'e', rightAscension: deg(130.2), declination: 0 },
+	{ id: 'f', rightAscension: deg(102), declination: deg(12) },
+	{ id: 'g', rightAscension: deg(108), declination: deg(18) },
+	{ id: 'n1', rightAscension: deg(10), declination: deg(88) },
+	{ id: 'n2', rightAscension: deg(200), declination: deg(86) },
+	{ id: 'n3', rightAscension: deg(100), declination: deg(70) },
+])
+
+const ids = (stars: readonly Star[]) =>
+	stars
+		.map((star) => star.id)
+		.sort()
+		.join(',')
+
+// A cone of 10° around RA 120°, Dec 0°: the star at exactly 10° is inside and the one at 10.2° is not.
+console.log(ids(await catalog.queryCone(deg(120), 0, deg(10)))) // c,d
+
+// A box that wraps across RA = 0.
+console.log(ids(await catalog.queryBox(deg(359.7), deg(0.3), deg(-0.1), deg(10)))) // a,b
+
+// A triangle and a polygon (a square) in the same area.
+console.log(ids(await catalog.queryTriangle([deg(100), deg(10)], [deg(110), deg(10)], [deg(100), deg(20)]))) // f
+console.log(
+	ids(
+		await catalog.queryPolygon([
+			[deg(100), deg(10)],
+			[deg(110), deg(10)],
+			[deg(110), deg(20)],
+			[deg(100), deg(20)],
+		]),
+	),
+) // f,g
+
+// The tagged form, and the stream of a region.
+console.log(ids(await catalog.queryRegion({ kind: 'cone', centerRA: deg(120), centerDEC: 0, radius: deg(11) }))) // c,d,e
+
+const streamed: string[] = []
+
+for await (const star of catalog.streamRegion({ kind: 'box', minRA: deg(90), maxRA: deg(140), minDEC: 0, maxDEC: deg(20) })) streamed.push(star.id)
+
+console.log(streamed) // [ "c", "d", "e", "f", "g" ]
+
+// Near the pole: a polygon that surrounds it, and cones centered on it.
+console.log(
+	ids(
+		await catalog.queryPolygon([
+			[0, deg(80)],
+			[deg(90), deg(80)],
+			[deg(180), deg(80)],
+			[deg(270), deg(80)],
+		]),
+	),
+) // n1,n2
+console.log(ids(await catalog.queryCone(0, deg(90), deg(5))), ids(await catalog.queryCone(0, deg(90), deg(25)))) // n1,n2 n1,n2,n3
+
+// What a provider receives: the boxes that cover a cone centered at RA -10° (normalized to 350°), Dec 40°, with a radius of 5°.
+const cone = normalizeStarCatalogQuery({ kind: 'cone', centerRA: deg(-10), centerDEC: deg(40), radius: deg(5) })
+console.log(
+	cone.kind,
+	cone.geometryMode,
+	cone.wrapAround,
+	cone.preselectionBoxes.map((box) => [box.minRA, box.maxRA, box.minDEC, box.maxDEC].map(toDeg)),
+	cone.sortAnchor?.map(toDeg),
+) // cone spherical false [ [ 343.4670985802534, 356.5329014197467, 35, 45 ] ] [ 350, 40 ]
+
+// A cone at RA 2° reaches across 0, so it is split in two boxes.
+const wrapped = normalizeStarCatalogQuery({ kind: 'cone', centerRA: deg(2), centerDEC: deg(40), radius: deg(5) })
+console.log(wrapped.wrapAround, wrapped.preselectionBoxes.length) // true 2
+
+// A polygon around the pole is tested with great circles and covers every right ascension.
+const polar = normalizeStarCatalogQuery({
+	kind: 'polygon',
+	vertices: [
+		[0, deg(80)],
+		[deg(90), deg(80)],
+		[deg(180), deg(80)],
+		[deg(270), deg(80)],
+	],
+})
+console.log(
+	polar.geometryMode,
+	polar.preselectionBoxes.map((box) => [box.minRA, box.maxRA, box.minDEC, box.maxDEC].map(toDeg)),
+) // spherical [ [ 0, 360, 80, 90 ] ]
+console.log(normalizeStarCatalogQuery({ kind: 'triangle', a: [deg(100), deg(10)], b: [deg(110), deg(10)], c: [deg(100), deg(20)] }).geometryMode) // planarTangent
+
+// The helpers: the boxes of a span, and the tangent-plane position of a vertex (a position 1° east and 1° north of the center, and another 2° west of RA 1°).
+console.log(
+	splitRaBox(deg(350), deg(10), -1, 1).map((box) => [box.minRA, box.maxRA].map(toDeg)),
+	splitRaBox(0, deg(360), -1, 1).length,
+	splitRaBox(deg(10), deg(20), -1, 1).length,
+) // [ [ 0, 10 ], [ 350, 360 ] ] 1 1
+console.log(projectPolygonVertex(deg(11), deg(21), deg(10), deg(20)).map(toDeg), projectPolygonVertex(deg(359), deg(20), deg(1), deg(20)).map(toDeg)) // [ 0.9396926207859083, 1.0000000000000013 ] [ -1.8793852415717955, 0 ]
+
+// The failures of the normalization.
+const invalid = [
+	{ kind: 'cone', centerRA: 0, centerDEC: 0, radius: -1 },
+	{ kind: 'polygon', vertices: [[0, 0]] },
+	{ kind: 'box', minRA: 0, maxRA: 1, minDEC: 1, maxDEC: 0 },
+] as const
+
+for (const query of invalid) {
+	try {
+		normalizeStarCatalogQuery(query)
+	} catch (e) {
+		console.log((e as Error).message) // invalid cone radius: -1. Expected a finite value in [0, pi]; polygon queries require at least three vertices; invalid declination range: [1, 0]
+	}
+}
+```
+
 ### Stellarium Catalog
 
+Stellarium's deep-sky catalog is a binary `catalog.dat` of about 95 thousand objects (galaxies, clusters, nebulae and some stars) with their cross-identifiers, and `names.dat` is the text file with the common names of some of them. `readCatalogDat(source)` streams the big-endian records of a `Source` and yields `StellariumCatalogEntry` objects: `id` (the record number of the file, not an NGC or Messier number), `epoch` (2000), `rightAscension` and `declination` in radians, the `magnitude` (the V magnitude, or B when V is absent, or `undefined` when there is neither), the `type` (a `StellariumObjectType`, an enum that is 0 for `UNKNOWN`, with `GALAXY`, `OPEN_STAR_CLUSTER`, `PLANETARY_NEBULA`, `HII_REGION` and others), the `mType` morphological text when present, `majorAxis`, `minorAxis` and `orientation` in radians (0 when unknown), `redshift` (99 when unknown), `parallax` in radians, `distance` in AU (0 when unknown), and the identifiers `ngc`, `ic`, `m` (Messier), `c`, `b`, `sh2`, `vdb`, `rcw`, `ldn`, `lbn`, `cr`, `mel`, `pgc`, `ugc`, `arp`, `vv`, `dwb`, `tr`, `st`, `ru` and `vdbha` (numbers, 0 when the object has no such designation) and `ced`, `pk`, `png`, `snrg`, `aco`, `hcg`, `eso` and `vdbh` (text, `undefined` when none). The file has no proper motion. The reader keeps a 64 KiB buffer, and it ends at the end of the source.
+
+`readNamesDat(source)` streams the names text, skips the lines that start with `#` and the lines that do not have the form `_("name")`, and yields `{ prefix, id, name }` where `prefix` is the catalog (`NGC`, `M`, `IC`... or empty), `id` the designation as text and `name` the translatable name; an object can have several names. `StellariumCatalog` is a `HealpixIndex<StellariumCatalogEntry>` with the queries of HEALPix Object Index and Star Catalog Interface and Spatial Query; `new StellariumCatalog({ nside, ordering })` defaults to NSIDE 8 and `load(source)` indexes every entry by its `id`, with the entry as `metadata` of each result. Large objects are indexed by their center only, so a cone selects an object when its center is inside, even if its extent crosses the border.
+
+```ts
+import { readCatalogDat, readNamesDat, StellariumCatalog, StellariumObjectType } from 'nebulosa/src/catalogs/stars/stellarium'
+import { fileHandleSource } from 'nebulosa/src/io/file'
+import { BufferSource } from 'nebulosa/src/io/io'
+import { deg, formatDEC, formatRA, toArcmin } from 'nebulosa/src/math/units/angle'
+import { toLightYear } from 'nebulosa/src/math/units/distance'
+import fs from 'fs/promises'
+
+// Read the whole catalog and count the objects of each type.
+await using source = fileHandleSource(await fs.open('data/catalog.dat'))
+const entries = []
+
+for await (const entry of readCatalogDat(source)) entries.push(entry)
+
+console.log(entries.length) // 94899
+
+const types = new Map<string, number>()
+for (const entry of entries) types.set(StellariumObjectType[entry.type], (types.get(StellariumObjectType[entry.type]) ?? 0) + 1)
+console.log([...types].sort((a, b) => b[1] - a[1]).slice(0, 3)) // [ [ "GALAXY", 75025 ], [ "CLUSTER_OF_GALAXIES", 5246 ], [ "INTERACTING_GALAXY", 2474 ] ]
+
+// The Orion Nebula (M 42 = NGC 1976) and the Andromeda Galaxy (M 31).
+const m42 = entries.find((entry) => entry.m === 42)!
+console.log(m42.id, m42.ngc, m42.sh2, m42.ced, m42.magnitude, StellariumObjectType[m42.type], m42.mType) // 1879 1976 281 55d 4 HII_REGION EN+RN; 3, 2, 3
+console.log(formatRA(m42.rightAscension), formatDEC(m42.declination), toArcmin(m42.majorAxis), toArcmin(m42.minorAxis), Math.round(toLightYear(m42.distance))) // 05 35 17.30 -05 23 27.96 90 60 1344
+
+const m31 = entries.find((entry) => entry.m === 31)!
+console.log(m31.id, StellariumObjectType[m31.type], m31.mType, m31.magnitude?.toFixed(1), toArcmin(m31.majorAxis).toFixed(1), toArcmin(m31.minorAxis).toFixed(1), m31.ngc, m31.pgc, m31.redshift.toFixed(4)) // 255 GALAXY SA(s)b 3.4 189.1 61.7 224 2557 -0.0010
+
+// A 0 identifier means none, and a missing magnitude is undefined (NGC 281 has none).
+console.log(entries.find((entry) => entry.ngc === 281)?.magnitude) // undefined
+
+// An index of the catalog: a cone of 1° around the Orion Nebula, with the entry as the metadata of each result.
+await using file = fileHandleSource(await fs.open('data/catalog.dat'))
+const catalog = new StellariumCatalog()
+await catalog.load(file)
+
+const field = catalog.queryCone(deg(83.8), deg(-5.39), deg(1))
+console.log(catalog.size, field.length) // 94899 11
+console.log(field.filter((object) => object.metadata!.ngc).map((object) => `NGC ${object.metadata!.ngc} ${StellariumObjectType[object.metadata!.type]}`)) // [ "NGC 1976 HII_REGION", "NGC 1980 STAR_CLUSTER", "NGC 1982 HII_REGION", "NGC 1973 BIPOLAR_NEBULA", "NGC 1975 BIPOLAR_NEBULA", "NGC 1977 BIPOLAR_NEBULA", "NGC 1981 STAR_CLUSTER" ] (in index order, which may differ)
+
+// The common names: several names for one object, and the filter by catalog.
+await using namesFile = fileHandleSource(await fs.open('data/names.dat'))
+const names = []
+
+for await (const name of readNamesDat(namesFile)) names.push(name)
+
+console.log(names.length) // 1388
+console.log(names.filter((name) => name.prefix === 'NGC' && name.id === '1976').map((name) => name.name)) // [ "Great Orion Nebula", "Orion Nebula", "Orion A" ]
+console.log(names.filter((name) => name.prefix === 'M' && name.id === '8').map((name) => name.name)) // [ "Lagoon Nebula", "Hourglass Region" ]
+
+// A small text: comments and lines without the _("...") form are skipped, and the prefix may be empty.
+const line = (prefix: string, id: string, name: string) => `${prefix.padEnd(5)}${id.padEnd(15)}${name}`
+const text = ['# comment', line('NGC', '40', '_("Bow-Tie Nebula")'), line('IC', '1', 'Plain text name'), line('', '49', '_("Norma Star Cloud") # note')].join('\n') + '\n'
+console.log(await Array.fromAsync(readNamesDat(new BufferSource(Buffer.from(text))))) // [ { prefix: "NGC", id: "40", name: "Bow-Tie Nebula" }, { prefix: "", id: "49", name: "Norma Star Cloud" } ]
+```
+
 ### Tiled Sky Catalog
+
+HNSKY and ASTAP distribute their star databases as thousands of small binary files, one per tile of the sky, so that a query reads only the few tiles that it touches. The module `tiled.catalog` is the engine shared by the two formats (the concrete ones are ASTAP Tiled Catalog and HNSKY Tiled Catalog): it describes a tiling, finds the tiles of a field, decodes the packed records and exposes the result as a star catalog. A tiling (`TiledSkyGeometry`) is a list of declination bands from the south to the north pole, each divided in a number of equal right ascension cells; the tiles are numbered from 1, band after band, and a tile file is named by its 1-based band and cell as `BBCC` plus the extension (`0203.1476`). Inside a database the file key is `<database>_<file name>` (`d05_0203.1476`).
+
+Each tile file has a 110-byte header (a description of 108 bytes, the version byte and the record size byte, which is 5, 6, 7, 9, 10 or 11, with `0x20` read as 11) followed by records that are sorted by magnitude. A record has a 24-bit right ascension (`raRaw`, a full circle over 2²⁴−1, so `TILED_STAR_RA_SCALE` radians per unit) and a signed 24-bit declination (`decRaw`, a quarter circle over 2²³−1, `TILED_STAR_DEC_SCALE`), with the magnitude and the high byte of the declination shared with the next records through special header records; larger sizes also carry a color byte and a packed designation. The epoch of the positions is the `Epoch=` tag of the header description, or the default of the format.
+
+`createTiledSkyGeometry(ringCounts, decBoundaries, extension)` builds a tiling from the cells of each band and the `ringCounts.length + 1` declination boundaries in radians (it throws an `Error` for another count) and precomputes `areas`, `areaBounds` and `areaOffsets`. `lookupTiledStarArea(geometry, area)` returns the shared descriptor of an area number and throws a `RangeError` when it is not an integer from 1 to `areaCount`, and `tiledStarAreaFile` returns a copy. `findTiledStarAreas(geometry, ra, dec, radius)` returns the 1 to 4 tiles that a square field of half width `radius` (radians, a square in declination and in right ascension times cos δ, so the longitude span grows by 1/cos δ toward the poles) touches, each with the `fraction` of the field that it covers (tiles that cover less than 1% are dropped, and the fractions of a field on a border are estimates that may overlap). `readTiledStarHeader(buffer, defaultEpoch, label)` parses the header and throws for an unsupported record size, `createTiledStarRawRecord()` and `scanTiledStarRecords(header, buffer, cursor)` walk the records of a tile through one reused cursor (`recordNumber`, `raRaw`, `decRaw`, `magnitude`, and `designationValue` and `colorRaw` with their `has` flags), so the cursor must be consumed before the iterator advances. `readTiledStarArea(header, buffer, area, query, materialize)` yields the records of a tile inside a square field (`rightAscension`, `declination`, `radius`, and an optional `magnitudeLimit`, which ends the scan at the first fainter record), `findTiledStarRegion(files, database, geometry, query, defaultEpoch, label, materialize)` reads the touched tiles in parallel, skips the missing ones and returns `{ areas, headers, stars }` with the stars sorted by magnitude, `decodeTiledStarDesignation(value)` turns a packed identifier into a Tycho-2 or UCAC4 designation, `bufferFromTiledStarFile(file)` normalizes a `Buffer`, typed array, `ArrayBuffer` or `File`, `touchedTiledStarAreas(geometry, query)` lists the areas that the preselection boxes of a normalized query touch, `matchesPreselectionBoxes(ra, dec, boxes)` is the point test with a 1e-12 rad tolerance and `validateTiledStarRecordNumber(n)` throws a `RangeError` unless `n` is an integer of at least 1.
+
+`TiledStarCatalog<T, DB>` is the abstract `BaseStarCatalog` of the tiles: a subclass calls the protected constructor with a geometry, a default epoch, a label for the messages and a default database, and implements `buildEntry(record, header, area)`. `open(files, database?)` takes a `Map` or an object of files (the tile contents are read when first needed) and throws when none has the database prefix and the extension, `close()` and `[Symbol.dispose]()` drop the cached tiles, `get(database, area, recordNumber)` returns one entry or `undefined`, `loadArea(area)` loads and caches a tile (concurrent calls share one read, a missing file is cached as `undefined` and a failure is not), `hasAnyAreaFile()` tells whether the open collection has a tile, and the region queries of Star Catalog Interface and Spatial Query read the touched tiles and keep the stars that pass the exact test. A query on a catalog that was not opened or was closed throws. The positions have the epoch of the tile and are not moved by any proper motion.
+
+```ts
+import {
+	createTiledStarRawRecord,
+	createTiledSkyGeometry,
+	bufferFromTiledStarFile,
+	decodeTiledStarDesignation,
+	findTiledStarAreas,
+	findTiledStarRegion,
+	lookupTiledStarArea,
+	matchesPreselectionBoxes,
+	readTiledStarArea,
+	readTiledStarHeader,
+	scanTiledStarRecords,
+	TILED_STAR_DEC_SCALE,
+	TILED_STAR_RA_SCALE,
+	TiledStarCatalog,
+	type TiledStarRawRecord,
+	tiledStarAreaFile,
+	touchedTiledStarAreas,
+	validateTiledStarRecordNumber,
+	type TiledStarFileHeader,
+} from 'nebulosa/src/catalogs/stars/tiled.catalog'
+import { normalizeStarCatalogQuery, type StarCatalogEntry } from 'nebulosa/src/catalogs/stars/catalog'
+import { PIOVERTWO } from 'nebulosa/src/core/constants'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+// A tiling of three bands: a south cap of 1 cell, a band with 4 cells of 90° between -30° and +30°, and a north cap.
+const geometry = createTiledSkyGeometry([1, 4, 1], [-PIOVERTWO, -deg(30), deg(30), PIOVERTWO], '.demo')
+console.log(
+	geometry.areaCount,
+	geometry.areaOffsets,
+	geometry.areas.map((area) => area.fileName),
+) // 6 [ 0, 1, 5 ] [ "0101.demo", "0201.demo", "0202.demo", "0203.demo", "0204.demo", "0301.demo" ]
+console.log(geometry.areaBounds[2]) // { minRA: 1.5707963267948966, maxRA: 3.141592653589793, minDEC: -0.5235987755982988, maxDEC: 0.5235987755982988 }
+console.log(lookupTiledStarArea(geometry, 3), tiledStarAreaFile(geometry, 6)) // { area: 3, ring: 2, index: 2, fileName: "0202.demo", fraction: 0 } { area: 6, ring: 3, index: 1, fileName: "0301.demo", fraction: 0 }
+
+// The tiles of a square field of 2° of half width: inside one tile, across the border of two, and at a corner of three.
+const tiles = (ra: number, dec: number) => findTiledStarAreas(geometry, deg(ra), deg(dec), deg(2)).map((area) => [area.area, area.fileName, Number(area.fraction.toFixed(3))])
+console.log(tiles(100, 0)) // [ [ 3, "0202.demo", 1 ] ]
+console.log(tiles(89.5, 0)) // [ [ 3, "0202.demo", 0.75 ], [ 2, "0201.demo", 1 ] ] (the fractions overlap at the border)
+console.log(tiles(0.5, 29)) // [ [ 6, "0301.demo", 0.5 ], [ 2, "0201.demo", 0.459 ], [ 5, "0204.demo", 0.291 ] ]
+
+for (const attempt of [() => createTiledSkyGeometry([1, 1], [0, 1], '.x'), () => lookupTiledStarArea(geometry, 7), () => validateTiledStarRecordNumber(0)]) {
+	try {
+		attempt()
+	} catch (e) {
+		console.log((e as Error).message) // invalid tiling: 2 bands need 3 boundaries, got 2; invalid .demo area: 7; invalid record number: 0
+	}
+}
+
+// The packed designations: UCAC4 when the value is not negative, Tycho-2 (with its component) otherwise.
+console.log(decodeTiledStarDesignation((5 << 20) | 1234).label, decodeTiledStarDesignation(-((100 << 16) | 0x8000 | 55)).label, decodeTiledStarDesignation(-((100 << 16) | 0x40000000 | 55)).label) // UCAC4 5-1234 TYC 100-55-3 TYC 100-55-2
+console.log(TILED_STAR_RA_SCALE, TILED_STAR_DEC_SCALE) // 3.7450705061475256e-7 1.8725353646855748e-7
+
+// A real tile: the south polar cap of the ASTAP d05 database (5-byte records, 10387 stars).
+const buffer = Buffer.from(await Bun.file('data/d05_0101.1476').arrayBuffer())
+const header = readTiledStarHeader(buffer, 2000, 'ASTAP .1476')
+console.log(header.recordSize, header.version, header.epoch, header.description) // 5 32 2025 GAIA DR3, density<=500 stars/sqr(degree), Epoch=2025. Including 82 bright Tycho2 stars. Magnitude is BP
+
+const cursor = createTiledStarRawRecord()
+let count = 0
+
+for (const record of scanTiledStarRecords(header, buffer, cursor)) {
+	if (count++ === 0) console.log(record.recordNumber, record.raRaw, record.decRaw, record.magnitude, record.hasColor, record.hasDesignation) // 2 14782838 -8291343 5.5 false false (the cursor is reused: copy what you need)
+}
+
+console.log(count) // 10387
+
+// The stars of a square field of 1° half width around the pole of the tile, and with a magnitude limit.
+const materialize = (area: number, record: Readonly<TiledStarRawRecord>) => ({ area, magnitude: record.magnitude, rightAscension: record.raRaw * TILED_STAR_RA_SCALE, declination: record.decRaw * TILED_STAR_DEC_SCALE })
+const field = [...readTiledStarArea(header, buffer, 1, { rightAscension: 0, declination: deg(-89.5), radius: deg(0.5) }, materialize)]
+console.log(field.length, field[0].magnitude, toDeg(field[0].declination).toFixed(3)) // 483 9.8 -89.169 (the field has no star brighter than magnitude 9.8)
+console.log([...readTiledStarArea(header, buffer, 1, { rightAscension: 0, declination: deg(-89.5), radius: deg(0.5), magnitudeLimit: 8 }, materialize)].length) // 0
+
+// The same through a one-tile tiling (the cap) and a collection of files, which can be a Map or an object.
+const cap = createTiledSkyGeometry([1, 1], [-PIOVERTWO, deg(-87.42857143), PIOVERTWO], '.1476')
+const found = await findTiledStarRegion({ 'd05_0101.1476': buffer }, 'd05', cap, { rightAscension: 0, declination: deg(-89.5), radius: deg(0.5) }, 2000, 'ASTAP .1476', materialize)
+console.log(found.areas.length, found.headers.length, found.stars.length, found.stars[0].magnitude <= found.stars[1].magnitude) // 1 1 483 true
+console.log((await findTiledStarRegion(new Map(), 'd05', cap, { rightAscension: 0, declination: deg(-89.5), radius: deg(0.5) }, 2000, 'x', materialize)).stars.length) // 0 (a missing tile is skipped)
+
+// bufferFromTiledStarFile accepts a Buffer, a typed array, an ArrayBuffer or a File-like.
+console.log(await bufferFromTiledStarFile(new Uint8Array([1, 2, 3])), await bufferFromTiledStarFile(new Uint8Array([1, 2, 3]).buffer), await bufferFromTiledStarFile(new Blob([new Uint8Array([9, 8])]) as unknown as File)) // <Buffer 01 02 03> <Buffer 01 02 03> <Buffer 09 08>
+
+// Which tiles a normalized query touches, and the point test of the preselection boxes.
+const query = normalizeStarCatalogQuery({ kind: 'box', minRA: deg(100), maxRA: deg(200), minDEC: deg(-10), maxDEC: deg(10) })
+console.log(touchedTiledStarAreas(geometry, query)) // [ 3, 4 ]
+console.log(matchesPreselectionBoxes(1, 0.5, [{ minRA: 0.9, maxRA: 1.1, minDEC: 0.4, maxDEC: 0.6 }]), matchesPreselectionBoxes(2, 0.5, [{ minRA: 0.9, maxRA: 1.1, minDEC: 0.4, maxDEC: 0.6 }])) // true false
+
+// A catalog on top of the engine: only buildEntry is needed.
+class DemoCatalog extends TiledStarCatalog<StarCatalogEntry & { area: number }, 'd05'> {
+	constructor() {
+		super(cap, 2000, 'demo .1476', 'd05')
+	}
+
+	protected buildEntry(record: Readonly<TiledStarRawRecord>, header: TiledStarFileHeader, area: number) {
+		return { epoch: header.epoch, area, rightAscension: record.raRaw * TILED_STAR_RA_SCALE, declination: record.decRaw * TILED_STAR_DEC_SCALE, magnitude: record.magnitude }
+	}
+}
+
+const catalog = new DemoCatalog()
+
+try {
+	await catalog.queryCone(0, deg(-89.5), deg(0.5))
+} catch (e) {
+	console.log((e as Error).message) // demo .1476 catalog is not open
+}
+
+try {
+	catalog.open({ 'other_0101.1476': buffer })
+} catch (e) {
+	console.log((e as Error).message) // no .1476 files were found for d05
+}
+
+catalog.open({ 'd05_0101.1476': buffer })
+console.log(catalog.database, catalog.hasAnyAreaFile(), (await catalog.loadArea(1))?.header.epoch, (await catalog.loadArea(1)) === (await catalog.loadArea(1))) // d05 true 2025 true
+console.log(await catalog.loadArea(2)) // undefined (no file in the collection)
+console.log((await catalog.queryCone(0, deg(-89.5), deg(0.5))).length, (await catalog.queryCone(0, deg(-88.5), deg(1))).length) // 374 1468
+console.log(await catalog.get('d05', 1, 2), await catalog.get('d05', 1, 99999), await catalog.get('d04' as 'd05', 1, 2)) // { epoch: 2025, area: 1, rightAscension: 5.536277059095688, declination: -1.5525832988238188, magnitude: 5.5 } undefined undefined
+catalog.close()
+
+try {
+	await catalog.queryCone(0, deg(-89.5), deg(0.5))
+} catch (e) {
+	console.log((e as Error).message) // demo .1476 catalog is not open
+}
+```
 
 ### UCAC4 Catalog
 
