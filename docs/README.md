@@ -7293,19 +7293,202 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Grayscale Image Conversion
 
+`grayscale(image, channel?)` converts an interleaved RGB image into a fresh single-channel image (the input is not modified), or returns a mono input unchanged (the same object). `channel` selects a color channel (`'RED'`, `'GREEN'` or `'BLUE'`), which is extracted without weighting, or a luminance: the named weights `'BT709'` (the default, 0.2125, 0.7154, 0.0721), `'Y'` (NTSC, 0.299, 0.587, 0.114), `'RMY'` (0.5, 0.419, 0.081) and `'GRAY'` (BT.709), or explicit `{ red, green, blue }` weights, whose sum must be 1 within 1e-6 (a `RangeError` otherwise). The raw buffer of the result has the precision of the input, and the header loses the third axis (`NAXIS3` and the keywords tied to it, such as `CTYPE3` and `CRPIX3`), `WCSAXES` becomes 2, `NAXIS` becomes 2 and `BAYERPAT` is removed. The weights are the constants of Scientific Image Model.
+
+```ts
+import { grayscale } from 'nebulosa/src/imaging/processing/geometry'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A 2x1 RGB image: a pure red pixel and a (0, 0.5, 1) one.
+const rgb: Image = {
+	header: { BITPIX: -32, NAXIS: 3, NAXIS1: 2, NAXIS2: 1, NAXIS3: 3, WCSAXES: 3, CTYPE3: 'RGB' },
+	metadata: { width: 2, height: 1, channels: 3, pixelCount: 2, stride: 6, strideInBytes: 24, pixelSizeInBytes: 4, bitpix: -32, bayer: undefined },
+	raw: new Float32Array([1, 0, 0, 0, 0.5, 1]),
+}
+
+// The luminance with the default (BT.709) weights, and the named weights.
+console.log(grayscale(rgb).raw) // Float32Array(2) [ 0.2125, 0.4298 ] (stored as 32-bit floats)
+console.log(grayscale(rgb, 'Y').raw, grayscale(rgb, 'RMY').raw) // Float32Array(2) [ 0.299, 0.4075 ] Float32Array(2) [ 0.5, 0.2905 ] (stored as 32-bit floats)
+
+// A channel is extracted, not weighted.
+console.log(grayscale(rgb, 'RED').raw, grayscale(rgb, 'GREEN').raw, grayscale(rgb, 'BLUE').raw) // Float32Array(2) [ 1, 0 ] Float32Array(2) [ 0, 0.5 ] Float32Array(2) [ 0, 1 ]
+
+// Explicit weights that sum to one.
+console.log(grayscale(rgb, { red: 0.5, green: 0.5, blue: 0 }).raw) // Float32Array(2) [ 0.5, 0.25 ]
+
+// The geometry of the result: one channel, the stride of a mono row and a header with two axes.
+const mono = grayscale(rgb)
+console.log(mono.metadata.channels, mono.metadata.stride, mono.header) // 1 2 { BITPIX: -32, NAXIS: 2, NAXIS1: 2, NAXIS2: 1, WCSAXES: 2 }
+console.log(rgb.metadata.channels, grayscale(mono) === mono) // 3 true
+
+try {
+	grayscale(rgb, { red: 1, green: 1, blue: 1 })
+} catch (e) {
+	console.log((e as Error).message) // grayscale weights must sum to one: 3
+}
+```
+
 ### Image Analysis Planes
 
 ### Image Arithmetic
+
+The arithmetic functions combine two images or an image and a scalar sample by sample, in the full floating-point range and without clipping, so results may leave 0..1 and the caller decides when to clamp or renormalize. Every operation takes `out` as its last argument, the image of the result: it defaults to the first image, which is then modified in place, and an exact alias of an input is accepted, but a buffer that partially overlaps an input (a shifted view of the same memory) throws an `Error`. The operands of the image form must have the same width, height, channels and CFA pattern and a dense buffer that agrees with the metadata (`checkDimensions(a, b)` runs that check and throws a message that names the first mismatch); the scalar must be finite and the divisor of `divideScalar` non-zero. `divide` writes 0 for every sample whose divisor is 0, instead of an infinity. The functions return `out`.
+
+`plus`, `subtract`, `multiply` and `divide` take two images, and `plusScalar`, `subtractScalar`, `multiplyScalar` and `divideScalar` an image and a number. Cloning and copying are in Image Cloning and Copying.
+
+```ts
+import { checkDimensions, divide, divideScalar, multiply, multiplyScalar, plus, plusScalar, subtract, subtractScalar } from 'nebulosa/src/imaging/processing/arithmetic'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A 2x1 gray frame, with the header and the metadata that a reader would give.
+const frame = (values: number[], bayer?: Image['metadata']['bayer']): Image => ({
+	header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: values.length, NAXIS2: 1 },
+	metadata: { width: values.length, height: 1, channels: 1, pixelCount: values.length, stride: values.length, strideInBytes: values.length * 4, pixelSizeInBytes: 4, bitpix: -32, bayer },
+	raw: new Float32Array(values),
+})
+
+const a = frame([1, 2])
+const b = frame([4, 0])
+
+// With an explicit output the inputs are kept; without it the first image is overwritten.
+console.log(plus(a, b, frame([0, 0])).raw, a.raw) // Float32Array(2) [ 5, 2 ] Float32Array(2) [ 1, 2 ]
+console.log(subtract(a, b, frame([0, 0])).raw, multiply(a, b, frame([0, 0])).raw) // Float32Array(2) [ -3, 2 ] Float32Array(2) [ 4, 0 ]
+console.log(divide(a, b, frame([0, 0])).raw) // Float32Array(2) [ 0.25, 0 ] (the divisor 0 gives 0)
+
+// The scalar forms, and the in-place use.
+console.log(plusScalar(a, 0.5, frame([0, 0])).raw, subtractScalar(a, 0.5, frame([0, 0])).raw) // Float32Array(2) [ 1.5, 2.5 ] Float32Array(2) [ 0.5, 1.5 ]
+console.log(multiplyScalar(a, 3, frame([0, 0])).raw, divideScalar(a, 4, frame([0, 0])).raw) // Float32Array(2) [ 3, 6 ] Float32Array(2) [ 0.25, 0.5 ]
+console.log(plus(a, b) === a, a.raw) // true Float32Array(2) [ 5, 2 ]
+
+// The geometry check.
+try {
+	checkDimensions(a, frame([1, 2, 3]))
+} catch (e) {
+	console.log((e as Error).message) // width does not match: 2 != 3
+}
+
+try {
+	checkDimensions(a, frame([1, 2], 'RGGB'))
+} catch (e) {
+	console.log((e as Error).message) // CFA patterns do not match: none != RGGB
+}
+
+// A scalar that is not finite, a null divisor, and an output that is a shifted view of an input.
+try {
+	multiplyScalar(a, Infinity)
+} catch (e) {
+	console.log((e as Error).message) // scalar must be finite: Infinity
+}
+
+try {
+	divideScalar(a, 0)
+} catch (e) {
+	console.log((e as Error).message) // scalar must be non-zero: 0
+}
+
+const memory = new Float32Array(4)
+const view = (offset: number): Image => ({ ...frame([0, 0]), raw: memory.subarray(offset, offset + 2) })
+
+try {
+	plus(view(0), b, view(1))
+} catch (e) {
+	console.log((e as Error).message) // first image and output raw buffers partially overlap
+}
+```
 
 ### Image Calibration
 
 ### Image Cloning and Copying
 
+`clone(image)` returns an independent `Image`: the header, the metadata and the raw buffer are copied (the buffer with the same precision, through `slice`), so changing the result never touches the source, and any other property of the image, such as the sample scale, is carried over. `copyInto(from, to)` copies the samples of an image into another one of the same width, height, channels and CFA pattern, leaves the header and the metadata of the destination alone, and returns the destination; copying a buffer over itself, or over a shifted view of the same memory, keeps the values, because the copy is done by `TypedArray.set`. The destination must already have the dense geometry of the source (Image Arithmetic describes the check, which is `checkDimensions`), or the call throws.
+
+```ts
+import { clone, copyInto } from 'nebulosa/src/imaging/processing/arithmetic'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+const frame = (values: number[]): Image => ({
+	header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: values.length, NAXIS2: 1 },
+	metadata: { width: values.length, height: 1, channels: 1, pixelCount: values.length, stride: values.length, strideInBytes: values.length * 4, pixelSizeInBytes: 4, bitpix: -32, bayer: undefined },
+	raw: new Float32Array(values),
+})
+
+const source = frame([1, 2])
+const copy = clone(source)
+copy.raw[0] = 9
+copy.header.NAXIS1 = 99
+console.log(source.raw, source.header.NAXIS1, copy.raw.constructor === source.raw.constructor) // Float32Array(2) [ 1, 2 ] 2 true
+
+// Copy the samples into an existing image of the same shape: the metadata of the destination is kept.
+const target = frame([0, 0])
+console.log(copyInto(source, target) === target, target.raw) // true Float32Array(2) [ 1, 2 ]
+
+try {
+	copyInto(source, frame([0, 0, 0]))
+} catch (e) {
+	console.log((e as Error).message) // width does not match: 2 != 3
+}
+```
+
 ### Image Convolution
 
 ### Image Intensity Inversion
 
+`invert(image)` replaces every sample `v` of a normalized image with `1 - v`, in place, and returns the same image. It is the negative of an image whose full scale is 1 (the usual input of the processing functions); a sample outside 0..1 maps outside it as well, and the function does not clip. The image must be dense mono or interleaved RGB (1 or 3 channels), with the stride and the buffer length that agree with the geometry, or it throws an `Error`. Applying it twice gives back the original samples up to the rounding of the sample type.
+
+```ts
+import { invert } from 'nebulosa/src/imaging/processing/geometry'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+const image: Image = {
+	header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: 3, NAXIS2: 2 },
+	metadata: { width: 3, height: 2, channels: 1, pixelCount: 6, stride: 3, strideInBytes: 12, pixelSizeInBytes: 4, bitpix: -32, bayer: undefined },
+	raw: new Float64Array([0, 0.1, 0.2, 0.3, 0.4, 1.5]),
+}
+
+console.log(invert(image) === image, image.raw) // true Float64Array(6) [ 1, 0.9, 0.8, 0.7, 0.6, -0.5 ]
+console.log(invert(image).raw) // Float64Array(6) [ 0, 0.09999999999999998, 0.19999999999999996, 0.30000000000000004, 0.4, 1.5 ]
+
+try {
+	invert({ ...image, metadata: { ...image.metadata, channels: 2 } })
+} catch (e) {
+	console.log((e as Error).message) // image channels must be 1 or 3: 2
+}
+```
+
 ### Image Mirroring
+
+`horizontalFlip(image)` mirrors an image across its vertical axis (the columns are reversed, left becomes right) and `verticalFlip(image)` across its horizontal axis (the rows are reversed, the first row becomes the last), both in place, for a dense mono or interleaved RGB image, returning the same image. A flip also keeps the metadata that describes the pixels consistent with them: the FITS WCS keywords of the header (`CRPIX` and the linear transformation terms) are reflected, so the sky coordinates of each star are unchanged after the flip, and the CFA pattern of a raw mosaic is shifted when the reflection moves its origin to an odd pixel (an even width makes the new origin an odd pixel, so `RGGB` becomes `GRBG` after a horizontal flip, and an even height does the same, in rows, for a vertical flip). The header `BAYERPAT` is updated with the metadata. Two flips along the same axis restore the image.
+
+```ts
+import { horizontalFlip, verticalFlip } from 'nebulosa/src/imaging/processing/geometry'
+import { clone } from 'nebulosa/src/imaging/processing/arithmetic'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A 4x2 raw mosaic with a simple WCS: the reference pixel is the first one (FITS counts from 1) and the axes are mirrored in RA.
+const mosaic: Image = {
+	header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: 4, NAXIS2: 2, CRPIX1: 1, CRPIX2: 1, CD1_1: -0.001, CD1_2: 0, CD2_1: 0, CD2_2: 0.001, BAYERPAT: 'RGGB' },
+	metadata: { width: 4, height: 2, channels: 1, pixelCount: 8, stride: 4, strideInBytes: 16, pixelSizeInBytes: 4, bitpix: -32, bayer: 'RGGB' },
+	raw: new Float32Array([0, 1, 2, 3, 4, 5, 6, 7]),
+}
+
+const h = horizontalFlip(clone(mosaic))
+console.log(h.raw, h.header.CRPIX1, h.header.CD1_1, h.metadata.bayer, h.header.BAYERPAT) // Float32Array(8) [ 3, 2, 1, 0, 7, 6, 5, 4 ] 4 0.001 GRBG GRBG
+
+const v = verticalFlip(clone(mosaic))
+console.log(v.raw, v.header.CRPIX2, v.header.CD2_2, v.metadata.bayer) // Float32Array(8) [ 4, 5, 6, 7, 0, 1, 2, 3 ] 2 -0.001 GBRG
+
+// An image with an odd width keeps its CFA phase in a horizontal flip (the new origin is an even pixel).
+const odd: Image = { ...mosaic, header: { ...mosaic.header, NAXIS1: 3 }, metadata: { ...mosaic.metadata, width: 3, pixelCount: 6, stride: 3, strideInBytes: 12 }, raw: new Float32Array([0, 1, 2, 3, 4, 5]) }
+console.log(horizontalFlip(odd).raw, odd.metadata.bayer) // Float32Array(6) [ 2, 1, 0, 5, 4, 3 ] RGGB
+
+// Flipping twice restores the image.
+const twice = horizontalFlip(horizontalFlip(clone(mosaic)))
+console.log(
+	twice.raw.every((value, i) => value === mosaic.raw[i]),
+	twice.metadata.bayer,
+	twice.header.CRPIX1,
+) // true RGGB 1
+```
 
 ### Image Scale and Field of View
 
@@ -7333,7 +7516,155 @@ Plan telescope and camera combinations, then work with captured or synthetic ima
 
 ### Scientific Image Loading and Export
 
+The readers turn a FITS, XISF or JPEG source into an `Image` (or a `DigitalImage`, see Scientific Image Model) and the writers serialize an `Image` back. A reader takes either the legacy positional `raw` argument (an existing `Float32Array` or `Float64Array`, or the precision `32`, `64` or `'auto'`, which is a 32-bit buffer for 8-bit sources and a 64-bit one for the others) or an options object `{ raw, sampleScale }`, where `sampleScale: 'digital'` keeps the digital numbers after the scaling of the format, and the default `'normalized'` rescales a source whose samples are outside 0..1 by its minimum and maximum. A buffer supplied by the caller is reused (the image is a view of its first samples) and must have room for `width * height * channels` samples; a smaller one makes the reader return `undefined`, as does a source that is not an image, and JPEG has no digital mode. The first HDU that is a Rice-compressed image or an uncompressed 2-D IMAGE or primary raster is the one that is read.
+
+The readers differ in what they receive: `readImageFromFits(fits, source, options)` and `readImageFromXisf(xisf, source, options)` take the already parsed container together with its seekable source, `readImageFromJpeg(buffer, raw, format)` takes the bytes of a JPEG (the optional TurboJPEG pixel `format`, such as `'GRAY'` or `'RGB'`, forces the channels), and `readImageFromSource`, `readImageFromBuffer`, `readImageFromFileHandle` and `readImageFromPath` detect FITS, XISF or JPEG by their content. The writers are `writeImageToFormat(image, 'jpeg', options)`, which returns a JPEG `Buffer` (the samples are scaled from 0..1 to 0..255 and clamped, with the `quality` of 0 to 100 and the `chrominanceSubsampling`, 100 and `'4:4:4'` by default), `writeImageToFits(image, output)` and `writeImageToXisf(image, output, format)`, where the output is a `Buffer` that must be large enough, or any `Sink`, and the XISF `format` has the `byteOrder` (`'little'` by default), the `pixelStorage` (`'Planar'` by default) and the `compression` (`false` by default). `truncatePixel(p, max)` is the helper that maps a normalized sample to an integer from 0 to `max`.
+
+```ts
+import { readImageFromBuffer, readImageFromFileHandle, readImageFromFits, readImageFromJpeg, readImageFromPath, readImageFromSource, readImageFromXisf, truncatePixel, writeImageToFits, writeImageToFormat, writeImageToXisf } from 'nebulosa/src/imaging/model/image'
+import { fileHandleSource } from 'nebulosa/src/io/file'
+import { readFits } from 'nebulosa/src/io/formats/fits/fits'
+import { readXisf } from 'nebulosa/src/io/formats/xisf/xisf'
+import { bufferSink, bufferSource } from 'nebulosa/src/io/io'
+import fs from 'fs/promises'
+
+// By path: the format is detected from the content, and 'auto' gives a 64-bit buffer for a 16-bit file.
+const image = (await readImageFromPath('data/NGC3372-16.3.fit'))!
+console.log(image.metadata.width, image.metadata.height, image.metadata.channels, image.raw.constructor.name) // 1037 706 3 Float64Array
+
+// The precision and the digital numbers.
+console.log((await readImageFromPath('data/NGC3372-16.3.fit', 32))!.raw.constructor.name, (await readImageFromPath('data/NGC3372-8.1.fit'))!.raw.constructor.name) // Float32Array Float32Array
+const digital = (await readImageFromPath('data/NGC3372-16.1.xisf', { sampleScale: 'digital', raw: 32 }))!
+console.log(digital.sampleScale, digital.digitalRange, digital.quantizationStep, digital.raw.constructor.name) // digital [ 0, 65535 ] 1 Float32Array
+
+// A buffer, a file handle and a source.
+const bytes = Buffer.from(await Bun.file('data/NGC3372-16.1.fit').arrayBuffer())
+console.log((await readImageFromBuffer(bytes))!.metadata.channels, (await readImageFromBuffer(Buffer.from('not an image'))) === undefined) // 1 true
+
+const handle = await fs.open('data/NGC3372-16.1.xisf')
+console.log((await readImageFromFileHandle(handle))!.metadata.width) // 1037
+await handle.close()
+
+console.log((await readImageFromSource(bufferSource(bytes), { raw: 64, sampleScale: 'normalized' }))!.raw.constructor.name) // Float64Array
+
+// A caller buffer larger than the image is reused: the image is a view of its first samples.
+const shared = new Float32Array(1037 * 706 + 10)
+const reused = (await readImageFromBuffer(bytes, shared))!
+console.log(reused.raw.length, reused.raw.buffer === shared.buffer) // 732122 true
+console.log(await readImageFromBuffer(bytes, new Float32Array(10))) // undefined
+
+// The parsed containers: the FITS HDUs, and the XISF images.
+{
+	await using source = fileHandleSource(await fs.open('data/NGC3372-16.3.fit'))
+	const fits = (await readFits(source))!
+	console.log(fits.hdus.length, (await readImageFromFits(fits, source, 32))!.metadata.channels) // 1 3
+	console.log((await readImageFromFits(fits.hdus[0], source))!.metadata.height) // 706
+}
+
+{
+	await using source = fileHandleSource(await fs.open('data/NGC3372-16.1.xisf'))
+	const xisf = (await readXisf(source))!
+	console.log((await readImageFromXisf(xisf, source))!.metadata.width) // 1037
+	console.log((await readImageFromXisf(xisf.images[0], source, { sampleScale: 'digital' }))!.digitalRange) // [ 0, 65535 ]
+}
+
+// JPEG: normalized 8-bit samples, a layout chosen by the file or forced.
+const jpeg = Buffer.from(await Bun.file('data/apod4.jpg').arrayBuffer())
+const color = readImageFromJpeg(jpeg)!
+console.log(color.metadata.width, color.metadata.height, color.metadata.channels, color.raw.constructor.name, color.header.NAXIS3) // 719 507 3 Float32Array 3
+console.log(readImageFromJpeg(jpeg, 64, 'GRAY')!.metadata.channels, readImageFromJpeg(Buffer.from('JFIF?')) === undefined) // 1 true
+
+// Writers: a JPEG at full or reduced quality, FITS and XISF in a buffer or a sink, and a round trip.
+console.log(writeImageToFormat(image)!.length, writeImageToFormat(image, 'jpeg', { jpeg: { quality: 80, chrominanceSubsampling: '4:2:0' } })!.length) // 107146 18176
+
+const fitsOut = Buffer.alloc(8e6)
+await writeImageToFits(image, fitsOut)
+const sink = bufferSink(Buffer.alloc(8e6))
+await writeImageToFits(image, sink)
+console.log(sink.position, (await readImageFromBuffer(fitsOut))!.raw[1000] === image.raw[1000]) // 4400640 true
+
+const xisfOut = Buffer.alloc(8e6)
+const size = await writeImageToXisf(image, xisfOut, { pixelStorage: 'Normal', compression: false })
+console.log(size, Math.abs((await readImageFromBuffer(xisfOut.subarray(0, size)))!.raw[1000] - image.raw[1000]) < 1e-9) // 4396602 true
+
+// truncatePixel: truncates and clamps.
+console.log(truncatePixel(0.5, 255), truncatePixel(1.5, 255), truncatePixel(-1, 255), truncatePixel(0.999, 255)) // 127 255 0 254
+```
+
 ### Scientific Image Model
+
+Every imaging function works on an `Image`: a FITS-compatible `header`, the `metadata` that the header implies and a flat `raw` buffer (`Float32Array` or `Float64Array`) of the samples. The layout is row-major, with the origin at the first sample of the first row of the buffer and the channels of a pixel interleaved (`raw[(y * width + x) * channels + c]`, so `stride` is `width * channels`); an image has 1 (grayscale) or 3 (RGB) channels, or a single channel that is a color filter array mosaic when `metadata.bayer` is set. The samples of an `Image` are in a normalized full-scale unit, where 0..1 is the nominal range of an input, and the results of processing may leave that range. A `DigitalImage` is the read-only counterpart for measurements: its samples keep the digital numbers of the source after the scaling of the format (`BZERO` and `BSCALE` of FITS), with the representable `digitalRange` and the `quantizationStep` (both in DN, and only for integer sources). It is not an input of the writers, and `isImage` is `false` for it.
+
+`ImageMetadata` has `width`, `height`, `channels`, `stride` (samples of a row), `pixelCount` (per channel), `strideInBytes` and `pixelSizeInBytes` (of the source), `bitpix` (the FITS code of the source) and `bayer`. The configuration types are the tuples that the operations share: `ImageChannel` (`'RED'`, `'GREEN'` or `'BLUE'`), `ImageChannelOrGray`, `GrayscaleAlgorithm` (`'BT709'`, `'RMY'`, `'Y'` or explicit weights), `CfaPattern` (the 2x2 tile read row by row, like `'RGGB'`), `ImageRawType`, `ImageRawPrecision` (`32`, `64` or `'auto'`) and the options of the readers and the writers. The helpers are `isImage(value)`, `channelIndex(channel)` (0 for red, gray or undefined, 1 for green, 2 for blue), `grayscaleFromChannel(channel)` (the weights of a channel or named algorithm, BT.709 by default), `makeImageRawTypedArray(source, size)` (a new zeroed buffer of the precision of a typed array or of 32 or 64), `cfaChannelAt(pattern, x, y)` (the channel 0, 1 or 2 of a raw coordinate, the pattern describing the origin of the buffer) and `shiftCfaPattern(pattern, offsetX, offsetY)` (the pattern of an image whose origin is moved by an integer offset of unbinned pixels, which throws a `RangeError` for a fraction), and the constants `BT709_GRAYSCALE`, `RMY_GRAYSCALE`, `Y_GRAYSCALE`, `RED_GRAYSCALE`, `GREEN_GRAYSCALE`, `BLUE_GRAYSCALE`, `DEFAULT_GRAYSCALE`, `GRAYSCALES` and `DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS`.
+
+```ts
+import { readImageFromPath } from 'nebulosa/src/imaging/model/image'
+import {
+	BLUE_GRAYSCALE,
+	BT709_GRAYSCALE,
+	cfaChannelAt,
+	channelIndex,
+	DEFAULT_GRAYSCALE,
+	DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS,
+	grayscaleFromChannel,
+	GRAYSCALES,
+	GREEN_GRAYSCALE,
+	isImage,
+	makeImageRawTypedArray,
+	RED_GRAYSCALE,
+	RMY_GRAYSCALE,
+	shiftCfaPattern,
+	Y_GRAYSCALE,
+	type Image,
+} from 'nebulosa/src/imaging/model/types'
+
+// A color image of 16 bits per sample: 1037x706 pixels, three interleaved channels.
+const image = (await readImageFromPath('data/NGC3372-16.3.fit'))!
+console.log(image.metadata) // { width: 1037, height: 706, channels: 3, pixelCount: 732122, pixelSizeInBytes: 2, strideInBytes: 2074, stride: 3111, bitpix: 16, bayer: undefined }
+console.log(image.raw.constructor.name, image.raw.length, image.header.BITPIX, image.header.NAXIS3) // Float64Array 2196366 16 3
+
+// The value of the channel c of the pixel (x, y).
+const x = 500
+const y = 300
+const green = image.raw[(y * image.metadata.width + x) * image.metadata.channels + channelIndex('GREEN')]
+console.log(green >= 0 && green <= 1) // true (normalized samples)
+
+// A DigitalImage keeps the digital numbers (here, a 16-bit unsigned range) and is not an Image.
+const digital = (await readImageFromPath('data/NGC3372-16.3.fit', { sampleScale: 'digital' }))!
+console.log(digital.sampleScale, digital.digitalRange, digital.quantizationStep, isImage(digital), isImage(image), isImage(undefined)) // digital [ 0, 65535 ] 1 false true false
+
+// A gray image from a mosaic image: its metadata carries the CFA pattern.
+const mosaic = (await readImageFromPath('data/GRBG-16.1.fit'))!
+console.log(mosaic.metadata.channels, mosaic.metadata.bayer) // 1 GRBG
+
+// The channels and the weights.
+console.log(channelIndex('RED'), channelIndex('GREEN'), channelIndex('BLUE'), channelIndex('GRAY'), channelIndex()) // 0 1 2 0 0
+console.log(grayscaleFromChannel(), grayscaleFromChannel('Y'), grayscaleFromChannel({ red: 1, green: 1, blue: 1 })) // BT.709, NTSC and the given weights
+console.log(DEFAULT_GRAYSCALE === BT709_GRAYSCALE, GRAYSCALES.RMY === RMY_GRAYSCALE, GRAYSCALES.RED === RED_GRAYSCALE, GRAYSCALES.GREEN === GREEN_GRAYSCALE, GRAYSCALES.BLUE === BLUE_GRAYSCALE, GRAYSCALES.GRAY === DEFAULT_GRAYSCALE, Y_GRAYSCALE.green, BLUE_GRAYSCALE.blue) // true true true true true true 0.587 1
+console.log(DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS) // { jpeg: { quality: 100, chrominanceSubsampling: "4:4:4" } }
+
+// The CFA: the channel of each raw coordinate of an RGGB tile, and the pattern after a crop with an odd origin.
+console.log(cfaChannelAt('RGGB', 0, 0), cfaChannelAt('RGGB', 1, 0), cfaChannelAt('RGGB', 0, 1), cfaChannelAt('RGGB', 1, 1), cfaChannelAt('RGGB', 3, 2)) // 0 1 1 2 1
+console.log(shiftCfaPattern('RGGB', 1, 0), shiftCfaPattern('RGGB', 0, 1), shiftCfaPattern('RGGB', 1, 1), shiftCfaPattern('RGGB', 2, 4), shiftCfaPattern(undefined, 1, 1)) // GRBG GBRG BGGR RGGB undefined
+
+try {
+	shiftCfaPattern('RGGB', 0.5, 0)
+} catch (e) {
+	console.log((e as Error).message) // CFA offsets must be integers
+}
+
+// Zeroed buffers of a precision, or of the precision of another buffer.
+console.log(makeImageRawTypedArray(32, 4), makeImageRawTypedArray(64, 2), makeImageRawTypedArray(new Float32Array(1), 3)) // Float32Array(4) [ 0, 0, 0, 0 ] Float64Array(2) [ 0, 0 ] Float32Array(3) [ 0, 0, 0 ]
+
+// An Image of a 2x2 gray frame built by hand: the header has the geometry, the metadata derives from it.
+const small: Image = {
+	header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: 2, NAXIS2: 2 },
+	metadata: { width: 2, height: 2, channels: 1, pixelCount: 4, stride: 2, strideInBytes: 8, pixelSizeInBytes: 4, bitpix: -32, bayer: undefined },
+	raw: new Float32Array([0, 0.25, 0.5, 1]),
+}
+
+console.log(isImage(small), small.raw[1 * small.metadata.stride + 1]) // true 1
+```
 
 ### SCNR
 
@@ -7471,6 +7802,109 @@ Evaluate observing conditions and target suitability before scheduling or contro
 
 ### ASTAP Tiled Catalog
 
+ASTAP (the plate solver and photometry program) distributes its star databases `d05`, `d20`, `d50` and `d80` as `.1476` files: the sky is cut in 1476 tiles of about 5° (36 declination bands of 5.143° with 1, 3, 9... 69... 3, 1 right ascension cells, and caps of 2.571°), and each tile `<database>_BBCC.1476` holds the Gaia stars of that region, sorted from the brightest, in the packed record format that Tiled Sky Catalog describes (ASTAP uses the HNSKY layout). The databases differ in the star density and the limiting magnitude (`d05` is the smallest), and the magnitude of a record is the Gaia BP one. The file header carries the epoch (`Epoch=2025` in the d05 sample) and, for the Gaia color variant (version byte 2, 6-byte records), a Johnson B−V color in units of 1/50 mag. Positions have the epoch of the tile and no proper motion.
+
+The tile functions: `astap1476AreaFile(area)` returns the `{ area, ring, index, fileName, fraction }` of an area from 1 to 1476 (the band is 1-based from the south, and a `RangeError` is thrown outside the range), `ASTAP_1476_DEC_BOUNDARIES` holds the 37 band boundaries in radians, `findAstap1476Areas(ra, dec, radius)` gives the 1 to 4 tiles of a square field of half width `radius` (radians), `readAstap1476Header(buffer)` parses the 110 bytes of a tile (and throws for an unsupported record size), `readAstap1476Area(header, buffer, area, query)` yields the `Astap1476Star` (`area`, `rightAscension`, `declination` in radians, `magnitude`, and `bv` when there is one) of a tile inside a square field `{ rightAscension, declination, radius, magnitudeLimit? }`, and `findAstap1476Region(files, database, query)` and `findAstap1476Stars(files, database, query)` do it for the files of a collection, a `Map` or an object keyed `d05_0101.1476` of buffers or `File` objects, and return `{ areas, headers, stars }` or just the stars sorted from the brightest, skipping tiles that are not in the collection. The square field is `|Δα·cos δ| < radius` and `|Δδ| < radius`, which is not a cone.
+
+`AstapCatalog` exposes the tiles through the star catalog interface (Star Catalog Interface and Spatial Query): `new AstapCatalog().open(files, database)` (or `openAstapCatalog(files, database)`, which does both) reads the files lazily and throws when the collection has none of the database, the queries (`queryCone`, `queryBox`, `queryTriangle`, `queryPolygon`, `queryRegion`, `streamRegion`) are asynchronous and return `AstapCatalogEntry` objects with `epoch`, `area`, `recordNumber`, `rightAscension`, `declination`, `magnitude` and `bv`, `get(database, area, recordNumber)` returns a star by its identifier, and `close()` or `using` releases the cached tiles. Queries are exact (a cone is a cone), but they return only what the tiles in the collection have, so the result of a field whose tiles are not loaded is empty or partial without an error.
+
+```ts
+import { astap1476AreaFile, ASTAP_1476_DEC_BOUNDARIES, AstapCatalog, findAstap1476Areas, findAstap1476Region, findAstap1476Stars, openAstapCatalog, readAstap1476Area, readAstap1476Header } from 'nebulosa/src/catalogs/stars/astap'
+import { deg, hour, normalizeAngle, toDeg } from 'nebulosa/src/math/units/angle'
+import { PIOVERTWO, TAU } from 'nebulosa/src/core/constants'
+
+// The tiling: band 18 holds 69 cells and starts at the area 670, and the caps are tiles of their own.
+console.log(astap1476AreaFile(1), astap1476AreaFile(670).fileName, astap1476AreaFile(738).fileName, astap1476AreaFile(1476).fileName) // { area: 1, ring: 1, index: 1, fileName: "0101.1476", fraction: 0 } 1801.1476 1869.1476 3601.1476
+console.log(ASTAP_1476_DEC_BOUNDARIES.length, toDeg(ASTAP_1476_DEC_BOUNDARIES[1]), toDeg(ASTAP_1476_DEC_BOUNDARIES[18]), toDeg(ASTAP_1476_DEC_BOUNDARIES[19])) // 37 -87.42857143 0 5.142857143
+
+// The tiles of a field: the caps, and an equatorial field that touches several cells.
+console.log(
+	findAstap1476Areas(deg(0), deg(-89.9), deg(0.5)).map((area) => area.fileName),
+	findAstap1476Areas(deg(0), deg(89.9), deg(0.5)).map((area) => area.fileName),
+) // [ "0101.1476" ] [ "3601.1476" ]
+console.log(findAstap1476Areas(deg(0.1), deg(0), deg(1)).map((area) => [area.fileName, Number(area.fraction.toFixed(2))])) // [ [ "1901.1476", 0.27 ], [ "1969.1476", 0.23 ], [ "1801.1476", 0.27 ], [ "1869.1476", 0.23 ] ]
+
+// The real d05 south polar cap: header, epoch and the stars of a field.
+const file = Buffer.from(await Bun.file('data/d05_0101.1476').arrayBuffer())
+const header = readAstap1476Header(file)
+console.log(header.recordSize, header.version, header.epoch) // 5 32 2025
+
+const files = { 'd05_0101.1476': file }
+const region = await findAstap1476Region(files, 'd05', { rightAscension: 0, declination: deg(-89.5), radius: deg(0.5) })
+console.log(region.areas.length, region.headers[0].fileName, region.headers[0].epoch, region.stars.length, region.stars[0]) // 1 0101.1476 2025 483 { area: 1, rightAscension: 0.19923288233539038, declination: -1.5562937276489432, magnitude: 9.8, bv: undefined }
+const bright = await findAstap1476Stars(files, 'd05', { rightAscension: 0, declination: deg(-89.5), radius: deg(0.5), magnitudeLimit: 10.5 })
+console.log(
+	bright.length,
+	bright.every((star) => star.magnitude <= 10.5),
+) // 4 true
+console.log((await findAstap1476Stars(new Map(), 'd05', { rightAscension: 0, declination: deg(-89.5), radius: deg(0.5) })).length) // 0 (no file of the field)
+
+// A synthetic tile of the Gaia color variant (6-byte records, version 2): a header record, then one star inside a field of 1° and one outside.
+const scale = { ra: TAU / 0xffffff, dec: PIOVERTWO / 0x7fffff }
+const tileHeader = Buffer.alloc(110, 0x20)
+tileHeader.write('synthetic, Epoch=2020', 'ascii')
+tileHeader[108] = 2
+tileHeader[109] = 6
+
+const sentinel = Buffer.alloc(6)
+
+sentinel.writeUIntLE(0xffffff, 0, 3)
+sentinel[3] = Math.floor(deg(2.1) / scale.dec / 65536) + 128 // the shared high byte of the declination of the stars that follow
+sentinel[4] = Math.round(7.3 * 10) + 16 // the shared magnitude, in tenths
+sentinel.writeInt8(0, 5)
+
+const star = (ra: number, dec: number, bv: number) => {
+	const buffer = Buffer.alloc(6)
+	buffer.writeUIntLE(Math.round(normalizeAngle(ra) / scale.ra), 0, 3)
+	const decRaw = Buffer.alloc(3)
+	decRaw.writeIntLE(Math.round(dec / scale.dec), 0, 3)
+	decRaw.copy(buffer, 3, 0, 2)
+	buffer.writeInt8(Math.round(bv * 50), 5)
+	return buffer
+}
+
+const tile = Buffer.concat([tileHeader, sentinel, star(hour(2.02), deg(2.1), 0.62), star(hour(4), deg(2.12), -0.2)])
+const synthetic = readAstap1476Header(tile)
+console.log(synthetic.recordSize, synthetic.version, synthetic.epoch) // 6 2 2020
+const inField = [...readAstap1476Area(synthetic, tile, 760, { rightAscension: hour(2), declination: deg(2), radius: deg(1) })]
+console.log(inField.length, inField[0].area, toDeg(inField[0].declination).toFixed(4), inField[0].magnitude.toFixed(1), inField[0].bv?.toFixed(2)) // 1 760 2.1000 7.3 0.62
+
+// The catalog: a cone, a box, the identifier of a star and the errors. A catalog is closed with `using`.
+{
+	using catalog = openAstapCatalog(files, 'd05')
+	console.log((await catalog.queryCone(0, deg(-89.5), deg(0.5))).length, (await catalog.queryCone(0, deg(-88.5), deg(1))).length) // 374 1468
+	const cap = await catalog.queryBox(0, deg(360), deg(-90), deg(-87.42857143))
+	console.log(
+		cap.length,
+		cap.every((entry) => entry.area === 1 && entry.epoch === 2025 && entry.bv === undefined),
+		cap[0].magnitude <= cap[1].magnitude,
+	) // 10387 true true
+	console.log(await catalog.get('d05', 1, 2), await catalog.get('d05', 1, 99999)) // { epoch: 2025, recordNumber: 2, area: 1, rightAscension: 5.536277059095688, declination: -1.5525832988238188, magnitude: 5.5, bv: undefined } undefined
+	console.log(await Array.fromAsync(catalog.streamRegion({ kind: 'cone', centerRA: 0, centerDEC: deg(-89.9), radius: deg(0.05) })).then((entries) => entries.length)) // 4
+}
+
+try {
+	openAstapCatalog({ 'd20_0101.1476': file }, 'd05')
+} catch (e) {
+	console.log((e as Error).message) // no .1476 files were found for d05
+}
+
+const closed = new AstapCatalog().open(files, 'd05')
+closed.close()
+
+try {
+	await closed.queryCone(0, 0, 0.1)
+} catch (e) {
+	console.log((e as Error).message) // ASTAP .1476 catalog is not open
+}
+
+try {
+	astap1476AreaFile(1477)
+} catch (e) {
+	console.log((e as Error).message) // invalid .1476 area: 1477
+}
+```
+
 ### Hipparcos Catalog
 
 The ESA Hipparcos main catalog (`hip_main.dat`, CDS I/239) has about 118 thousand stars measured by the satellite, with positions, parallaxes and proper motions at the epoch J1991.25. `readHipparcosCatalog(source)` streams the usable rows of the pipe-delimited file from a `Source` in constant reader memory and yields `HipparcosCatalogEntry` objects: `id` (the HIP number), `epoch` (always `1991.25`), `rightAscension` and `declination` (ICRS, radians), and, when the row has them, `magnitude` (V), `parallax` (radians, a negative value is kept as measured), `pmRA` and `pmDEC` (radians per Julian year). The catalog publishes μα* = dα/dt·cos δ, and the reader divides by cos δ so that `pmRA` is dα/dt, as the other catalogs and `star` expect; at a pole that direction is undefined and `pmRA` is left out. Rows with a missing or invalid identifier or position are skipped, and blank or non-numeric optional fields are `undefined`. There is no radial velocity.
@@ -7541,6 +7975,108 @@ console.log([...small.streamRegion({ kind: 'cone', centerRA: deg(12.5), centerDE
 ```
 
 ### HNSKY Tiled Catalog
+
+HNSKY (and the Cartes du Ciel / SkyChart programs) use the `.290` star databases `g14` and `g16`, which hold the Gaia stars up to magnitude 14 and 16: the sky is cut in 290 tiles (18 declination bands of 1, 4, 8... 32, 32... 8, 4, 1 right ascension cells, with caps of 4.8° and equatorial bands of 12.8°) and each file `<database>_BBCC.290` holds the stars of one tile, sorted from the brightest, in the packed format described in Tiled Sky Catalog. A tile of the 5- or 9-byte format has no color, 6 has a Gaia BP−RP color in tenths of a magnitude (the byte −128 means missing), the 7-byte format carries no color, and the 9, 10 and 11-byte formats carry a packed designation that is a Tycho-2 (`TYC 1234-42-1`) or a UCAC4 (`UCAC4 321-12345`) identifier. The magnitude is the Gaia BP one, the epoch of the positions is the `Epoch=` tag of the file or J2000, and there is no proper motion.
+
+The functions are the ones of ASTAP Tiled Catalog with `Hnsky290` names: `hnsky290AreaFile(area)` describes a tile from 1 to 290 (`RangeError` otherwise), `HNSKY_290_DEC_BOUNDARIES` has the 19 band edges in radians, `findHnsky290Areas(ra, dec, radius)` gives the 1 to 4 tiles of a square field of half width `radius` (radians), `readHnsky290Header(buffer)` parses the 110 bytes, `decodeHnsky290Designation(value)` decodes a packed identifier, `readHnsky290Area(header, buffer, area, query)` yields the `Hnsky290Star` (`area`, `rightAscension`, `declination` in radians, `magnitude`, `bpRp` and `designation` when present) inside the field `{ rightAscension, declination, radius, magnitudeLimit? }` (the field is `|Δα·cos δ| < radius` and `|Δδ| < radius`, not a cone), and `findHnsky290Region(files, database, query)` and `findHnsky290Stars(files, database, query)` read the touched tiles of a `Map` or object of files keyed `g14_0201.290` and return `{ areas, headers, stars }` or the stars sorted from the brightest. `HnskyCatalog` and `openHnskyCatalog(files, database)` expose the tiles through the star catalog interface (Star Catalog Interface and Spatial Query): asynchronous queries return `HnskyCatalogEntry` objects (`epoch`, `area`, `recordNumber`, `rightAscension`, `declination`, `magnitude`, `bpRp`, `designation`), `get(database, area, recordNumber)` returns one star, and `close()` or `using` frees the cached tiles. A tile that is not in the collection is skipped without an error, so a field whose tiles are missing is empty or partial.
+
+```ts
+import { decodeHnsky290Designation, findHnsky290Areas, findHnsky290Region, findHnsky290Stars, HNSKY_290_DEC_BOUNDARIES, HnskyCatalog, hnsky290AreaFile, openHnskyCatalog, readHnsky290Area, readHnsky290Header } from 'nebulosa/src/catalogs/stars/hnsky'
+import { PIOVERTWO, TAU } from 'nebulosa/src/core/constants'
+import { deg, hour, normalizeAngle, toDeg } from 'nebulosa/src/math/units/angle'
+
+// The tiling: 290 tiles, the file names and the band edges.
+console.log(hnsky290AreaFile(1), hnsky290AreaFile(146).fileName, hnsky290AreaFile(290).fileName) // { area: 1, ring: 1, index: 1, fileName: "0101.290", fraction: 0 } 1001.290 1801.290
+console.log(HNSKY_290_DEC_BOUNDARIES.length, HNSKY_290_DEC_BOUNDARIES.map((value) => Number(toDeg(value).toFixed(2))).slice(0, 4)) // 19 [ -90, -85.23, -75.66, -65.99 ]
+
+// A field across a right ascension cell border, and the pole caps.
+console.log(findHnsky290Areas(deg(11.1), deg(5), deg(4)).map((area) => area.fileName)) // [ "1002.290", "1001.290" ]
+console.log(
+	findHnsky290Areas(0, deg(-89.9), deg(0.5)).map((area) => area.fileName),
+	findHnsky290Areas(0, deg(89.9), deg(0.5)).map((area) => area.fileName),
+) // [ "0101.290" ] [ "1801.290" ]
+
+// The real g14 database in its tar archive (290 files): a field of 0.5° half width at RA 0, Dec 0.
+const archive = new Bun.Archive(await Bun.file('data/HNSKY_g14.tar').arrayBuffer())
+const files = await archive.files() // a Map of File objects keyed g14_0201.290
+console.log(files.size, [...files.keys()].slice(0, 2)) // 290 [ "g14_0201.290", "g14_0202.290" ]
+
+const stars = await findHnsky290Stars(files, 'g14', { rightAscension: 0, declination: 0, radius: deg(0.5) })
+console.log(stars.length, stars[0].magnitude, stars[0].area, stars[0].bpRp, stars[0].designation?.label) // 97 7.1 145 undefined undefined
+console.log((await findHnsky290Stars(files, 'g14', { rightAscension: 0, declination: 0, radius: deg(0.5), magnitudeLimit: 10 })).length) // 9
+
+const region = await findHnsky290Region(files, 'g14', { rightAscension: 0, declination: 0, radius: deg(0.5) })
+console.log(
+	region.areas.map((area) => area.fileName),
+	region.headers.map((header) => [header.recordSize, header.epoch]),
+) // [ "1001.290", "1032.290", "0901.290", "0932.290" ] [ [ 5, 2025 ], [ 5, 2025 ], [ 5, 2025 ], [ 5, 2025 ] ]
+
+// The header of a real tile, with its description.
+const tile = Buffer.from(await files.get('g14_1001.290')!.arrayBuffer())
+const header = readHnsky290Header(tile)
+console.log(header.recordSize, header.version, header.epoch, header.description) // 5 0 2025 GAIA eDR3, stars up to BP magnitude 14.0, Epoch=2025. Including 82 bright Tycho2 stars. Magnitude is BP
+
+// The catalog: a cone, a box and the star of a record.
+{
+	using catalog = openHnskyCatalog(files, 'g14')
+	const cone = await catalog.queryCone(0, 0, deg(0.5))
+	console.log(cone.length, cone[0].epoch, cone[0].recordNumber, cone[0].area) // 84 2025 121 114
+	console.log((await catalog.queryBox(deg(359.5), deg(0.5), deg(-0.25), deg(0.25))).length) // 58
+	console.log((await catalog.get('g14', cone[0].area, cone[0].recordNumber))?.magnitude === cone[0].magnitude) // true
+}
+
+// A synthetic tile of 11-byte records (a designation, the position, the high byte of the declination and the magnitude in tenths): one UCAC4 star in the field and one outside.
+const scale = { ra: TAU / 0xffffff, dec: PIOVERTWO / 0x7fffff }
+const header110 = Buffer.alloc(110, 0x20)
+header110.write('synthetic', 'ascii')
+header110[109] = 11
+
+const record = (designation: number, ra: number, dec: number, magnitude: number) => {
+	const buffer = Buffer.alloc(11)
+	const decRaw = Buffer.alloc(3)
+	decRaw.writeIntLE(Math.round(dec / scale.dec), 0, 3)
+	buffer.writeInt32LE(designation, 0)
+	buffer.writeUIntLE(Math.round(normalizeAngle(ra) / scale.ra), 4, 3)
+	decRaw.copy(buffer, 7, 0, 2)
+	buffer.writeInt8(decRaw.readInt8(2), 9)
+	buffer.writeInt8(Math.round(magnitude * 10), 10)
+	return buffer
+}
+
+const synthetic = Buffer.concat([header110, record((321 << 20) | 12345, hour(2.02), deg(5.1), 1.4), record((321 << 20) | 12346, hour(4), deg(5.12), 1.4)])
+const syntheticHeader = readHnsky290Header(synthetic)
+const inField = [...readHnsky290Area(syntheticHeader, synthetic, 146, { rightAscension: hour(2), declination: deg(5), radius: deg(1) })]
+console.log(syntheticHeader.recordSize, syntheticHeader.epoch, inField.length, inField[0].magnitude.toFixed(1), inField[0].designation?.label, inField[0].bpRp) // 11 2000 1 1.4 UCAC4 321-12345 undefined
+
+// The designations: UCAC4 for a non-negative value, Tycho-2 and its component otherwise.
+console.log(decodeHnsky290Designation((321 << 20) | 12345).label, decodeHnsky290Designation(-((1234 << 16) | 42)).label, decodeHnsky290Designation(-((200 << 16) | 55 | 0x40000000)).label) // UCAC4 321-12345 TYC 1234-42-1 TYC 200-55-2
+
+// A collection with that synthetic tile as the area 148 (RA 22.5° to 33.75°, Dec 0° to 12.8°) of a g16 database.
+using small = openHnskyCatalog({ [`g16_${hnsky290AreaFile(148).fileName}`]: synthetic }, 'g16')
+const found = await small.queryCone(hour(2.02), deg(5.1), deg(0.1))
+console.log(small.database, found.length, found[0].designation?.label, found[0].area, found[0].recordNumber) // g16 1 UCAC4 321-12345 148 1
+
+try {
+	openHnskyCatalog({ [`g16_${hnsky290AreaFile(148).fileName}`]: synthetic }, 'g14')
+} catch (e) {
+	console.log((e as Error).message) // no .290 files were found for g14
+}
+
+const closed = new HnskyCatalog().open({ [`g14_${hnsky290AreaFile(148).fileName}`]: synthetic }, 'g14')
+closed.close()
+
+try {
+	await closed.queryCone(0, 0, 0.1)
+} catch (e) {
+	console.log((e as Error).message) // HNSKY .290 catalog is not open
+}
+
+try {
+	hnsky290AreaFile(291)
+} catch (e) {
+	console.log((e as Error).message) // invalid .290 area: 291
+}
+```
 
 ### HYG Catalog
 
@@ -7999,6 +8535,84 @@ try {
 ```
 
 ### UCAC4 Catalog
+
+UCAC4 (the fourth USNO CCD Astrograph Catalog) has about 113 million stars to roughly magnitude 16, and its native distribution is a directory of 900 binary zone files `z001` to `z900`, each one a strip of 0.2° of declination (zone = floor((δ + 90°) / 0.2°) + 1, with 900 for the north pole) whose records of 78 bytes are sorted by right ascension. The catalog does not load the files in memory: `Ucac4Catalog` opens the root directory, finds the zone files in the root or in the `u4b`, `u4s` and `u4n` subdirectories, reads only the records that the preselection of a query may touch and caches the file handles. The optional `u4index.unf` (in the root or in `u4i`) is a table of the first record and the count for each cell of 0.25° of right ascension of each zone, which narrows the records read from a zone; without it every record of the touched zones is read. The optional `u4hpm.dat` supplies the proper motion of the stars whose stored motion is the sentinel 32767 (more than 3276.7 mas/yr).
+
+`ucac4ZoneForDec(dec)` gives the zone of a declination in radians. `openUcac4Catalog(root)` creates a `Ucac4Catalog` and opens it, and `catalog.open(root)` does the same for an existing instance, throwing when the root is empty or missing, when it is not accessible, when no zone file is found, when the index file does not have the size of 900 × 1440 pairs of 32-bit integers, and when `u4hpm.dat` has a row that does not have eight integers. The queries are the ones of Star Catalog Interface and Spatial Query (`queryCone`, `queryBox`, `queryTriangle`, `queryPolygon`, `queryRegion` and `streamRegion`), are asynchronous, and return `Ucac4CatalogEntry` objects with the fields of the interface (`rightAscension` and `declination` in radians, J2000 ICRS, at the epoch of the catalog; `pmRA` and `pmDEC` in radians per year, where `pmRA` is the dα/dt obtained from the stored μα·cos δ; `magnitude`, the UCAC aperture magnitude, or the model one, or the 2MASS J, in this order, when it is not missing) plus the native `zone` and `recordNumber` (starting at 1) of the star. A star whose proper motion is the sentinel and is not in `u4hpm.dat` has `pmRA` and `pmDEC` `undefined`. `get(zone, recordNumber)` returns one entry, or `undefined` for a record beyond the end of the zone, and throws for a zone outside 1 to 900 or a record number that is not an integer of at least 1; `readRawRecord(zone, recordNumber)` is the same lookup, which `get` wraps. `hasAnyZoneFile()` is the asynchronous scan that `open` uses to find zone files and caches them, so it reports only zones not yet discovered and is `false` on an opened catalog, `root` is the opened path, and `close()` releases the handles. A query of a closed catalog throws `UCAC4 catalog is not open`, and a record with a right ascension outside 0° to 360° or a south pole distance outside 0° to 180° throws `invalid UCAC4 coordinates`. The files of the real catalog have to be downloaded from USNO, and the examples below use a small synthetic root built with the layout of the readme of the catalog.
+
+```ts
+import { openUcac4Catalog, ucac4ZoneForDec } from 'nebulosa/src/catalogs/stars/ucac4'
+import { deg, toDeg, toMas } from 'nebulosa/src/math/units/angle'
+import fs from 'fs/promises'
+import { tmpdir } from 'os'
+import { join } from 'path'
+
+// The zone of a declination: 0.2° strips from the south pole.
+console.log(ucac4ZoneForDec(deg(-90)), ucac4ZoneForDec(deg(0)), ucac4ZoneForDec(deg(0.19)), ucac4ZoneForDec(deg(0.2)), ucac4ZoneForDec(deg(90))) // 1 451 451 452 900
+
+// A synthetic root: the zone 451 (Dec 0° to 0.2°) with three stars sorted by right ascension, the high proper motion sentinel on the third.
+const RECORD_SIZE = 78
+
+const record = (buffer: Buffer, index: number, ra: number, dec: number, apertureMag: number, pmRA: number, pmDEC: number, id: number) => {
+	const offset = index * RECORD_SIZE
+	buffer.writeInt32LE(Math.round(toMas(ra)), offset) // RA in mas
+	buffer.writeInt32LE(Math.round(toMas(dec)) + 324000000, offset + 4) // south pole distance in mas
+	buffer.writeInt16LE(20000, offset + 8) // no model magnitude
+	buffer.writeInt16LE(Math.round(apertureMag * 1000), offset + 10)
+	buffer.writeInt16LE(Math.round(pmRA * 10), offset + 24) // μα·cos δ in tenths of mas/yr
+	buffer.writeInt16LE(Math.round(pmDEC * 10), offset + 26)
+	buffer.writeInt16LE(11000, offset + 34) // J = 11
+	buffer.writeInt32LE(id, offset + 68)
+}
+
+const root = await fs.mkdtemp(join(tmpdir(), 'ucac4-'))
+const zone = Buffer.alloc(RECORD_SIZE * 3)
+record(zone, 0, deg(10), deg(0.05), 12.5, 40, -10, 451001)
+record(zone, 1, deg(10.01), deg(0.1), 14, -3.5, 2.5, 451002)
+record(zone, 2, deg(200), deg(0.15), 9.25, 3276.7, 3276.7, 451003)
+await fs.writeFile(join(root, 'z451'), zone)
+
+// The motion supplement: unique number, zone, record in the zone, μα·cos δ and μδ in tenths of mas/yr, RA, SPD and magnitude (the last three are unused).
+await fs.writeFile(join(root, 'u4hpm.dat'), '451003 451 3 41087 -31413 0 0 9250\n')
+
+const catalog = await openUcac4Catalog(root)
+console.log(catalog.root === root, await catalog.hasAnyZoneFile()) // true false (the zone was already found by open)
+
+// A cone of 0.1°: two stars, the entries carry the zone and the record.
+const cone = await catalog.queryCone(deg(10), deg(0.07), deg(0.1))
+console.log(cone.map((entry) => [entry.zone, entry.recordNumber, entry.magnitude])) // [ [ 451, 1, 12.5 ], [ 451, 2, 14 ] ]
+
+// The proper motion: μα* in mas/yr is dα/dt times cos δ.
+const star = (await catalog.get(451, 1))!
+console.log(toMas(star.pmRA!) * Math.cos(star.declination), toMas(star.pmDEC!), toDeg(star.declination)) // 40 -10 0.05
+
+// The sentinel resolved from the supplement, and the record that does not exist.
+const fast = (await catalog.get(451, 3))!
+console.log(toMas(fast.pmRA!) * Math.cos(fast.declination), toMas(fast.pmDEC!), fast.magnitude) // 4108.7 -3141.3 9.25
+console.log(await catalog.get(451, 4), (await catalog.readRawRecord(451, 2))?.recordNumber) // undefined 2
+
+// A box and a stream: the region form is the one of the star catalog interface.
+console.log((await catalog.queryBox(deg(199), deg(201), deg(0.1), deg(0.2))).map((entry) => entry.recordNumber)) // [ 3 ]
+const streamed = []
+for await (const entry of catalog.streamRegion({ kind: 'cone', centerRA: deg(10), centerDEC: deg(0.07), radius: deg(1) })) streamed.push(entry.recordNumber)
+console.log(streamed) // [ 1, 2 ]
+
+// The errors.
+try {
+	await catalog.get(901, 1)
+} catch (e) {
+	console.log((e as Error).message) // invalid UCAC4 zone number: 901
+}
+
+try {
+	await openUcac4Catalog(join(root, 'missing'))
+} catch (e) {
+	console.log((e as Error).message.startsWith('unable to access UCAC4 root')) // true
+}
+
+await catalog.close()
+await fs.rm(root, { recursive: true, force: true })
+```
 
 ## 🖲️ Devices
 
