@@ -15860,6 +15860,86 @@ console.log(vec2RotMut(m, Math.PI)) // [ 0.30000000000000004, 0.3999999999999999
 
 ### 2x2 Matrices
 
+A 2x2 matrix is a flat row-major tuple `[m00, m01, m10, m11]` (`Mat2` is the read-only view of the mutable `MutMat2`). Every function that builds a matrix takes an optional output matrix: when it is given the result is written into it and that same array is returned, and when it is omitted a new array is allocated; the output may be one of the inputs for the element-wise and product functions that read all their operands first. `mat2Zero`, `mat2Identity` and `mat2Fill(m, a, b, c, d)` create or fill matrices, `mat2Rot(angle, m?)` builds the rotation matrix `[cos, sin, -sin, cos]` for an angle in radians (the rotation of the coordinate frame, so a vector is rotated by the opposite angle) or, when `m` is given, replaces `m` by the product `R·m`, and `mat2Clone` and `mat2Copy` duplicate a matrix. `mat2Determinant` and `mat2Trace` are scalar properties; `mat2Transpose`, `mat2FlipX` (swaps the rows), `mat2FlipY` (swaps the columns) and `mat2Negate` are unary; `mat2PlusScalar`, `mat2MinusScalar`, `mat2MulScalar` and `mat2DivScalar` apply a scalar to every element and `mat2Plus` and `mat2Minus` combine two matrices element by element. The products are `mat2Mul(a, b)` for `a·b` and the fused variants `mat2TransposeMul` (`aᵀ·b`), `mat2MulTranspose` (`a·bᵀ`) and `mat2TransposeMulTranspose` (`aᵀ·bᵀ`), which avoid building the transpose, and `mat2MulVec` and `mat2TransposeMulVec` multiply by a `Vec2` (`a·v` and `aᵀ·v`). There is no inverse function here; the 2x2 inverse is the adjugate divided by the determinant, and the general solvers are in the dense matrix topics.
+
+```ts
+import {
+	mat2Clone,
+	mat2Copy,
+	mat2Determinant,
+	mat2DivScalar,
+	mat2Fill,
+	mat2FlipX,
+	mat2FlipY,
+	mat2Identity,
+	mat2Minus,
+	mat2MinusScalar,
+	mat2Mul,
+	mat2MulScalar,
+	mat2MulTranspose,
+	mat2MulVec,
+	mat2Negate,
+	mat2Plus,
+	mat2PlusScalar,
+	mat2Rot,
+	mat2TransposeMul,
+	mat2TransposeMulTranspose,
+	mat2TransposeMulVec,
+	mat2Trace,
+	mat2Transpose,
+	mat2Zero,
+	type MutMat2,
+} from 'nebulosa/src/math/linear-algebra/mat2'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+const a: MutMat2 = [1, 2, 3, 4]
+const b: MutMat2 = [0, 1, 1, 0]
+
+// Constructors, and the mutation of a supplied output.
+console.log(mat2Zero()) // [ 0, 0, 0, 0 ]
+console.log(mat2Identity()) // [ 1, 0, 0, 1 ]
+const filled = mat2Fill([0, 0, 0, 0], 5, 6, 7, 8)
+console.log(filled) // [ 5, 6, 7, 8 ]
+console.log(mat2Identity(filled) === filled, filled) // true [ 1, 0, 0, 1 ]
+
+// A rotation of 90°, and the product with an existing matrix.
+console.log(mat2Rot(deg(90))) // [ 6.123233995736766e-17, 1, -1, 6.123233995736766e-17 ]
+console.log(mat2Rot(deg(90), mat2Clone(a))) // [ 3, 4, -0.9999999999999998, -1.9999999999999998 ] (R·m with the 90° rotation, exact values -1 and -2)
+
+// Copies.
+const copy = mat2Copy(a, mat2Zero())
+console.log(copy, copy !== a) // [ 1, 2, 3, 4 ] true
+
+// Scalar properties.
+console.log(mat2Determinant(a)) // -2
+console.log(mat2Trace(a)) // 5
+
+// Unary operations.
+console.log(mat2Transpose(a)) // [ 1, 3, 2, 4 ]
+console.log(mat2FlipX(a)) // [ 3, 4, 1, 2 ]
+console.log(mat2FlipY(a)) // [ 2, 1, 4, 3 ]
+console.log(mat2Negate(a)) // [ -1, -2, -3, -4 ]
+
+// Scalar arithmetic.
+console.log(mat2PlusScalar(a, 1)) // [ 2, 3, 4, 5 ]
+console.log(mat2MinusScalar(a, 1)) // [ 0, 1, 2, 3 ]
+console.log(mat2MulScalar(a, 2)) // [ 2, 4, 6, 8 ]
+console.log(mat2DivScalar(a, 2)) // [ 0.5, 1, 1.5, 2 ]
+
+// Matrix arithmetic, and writing into an existing output.
+console.log(mat2Plus(a, b)) // [ 1, 3, 4, 4 ]
+console.log(mat2Minus(a, b)) // [ 1, 1, 2, 4 ]
+const out = mat2Zero()
+console.log(mat2Mul(a, b, out) === out, out) // true [ 2, 1, 4, 3 ]
+
+// The products with transposes.
+console.log(mat2TransposeMul(a, b)) // [ 3, 1, 4, 2 ]
+console.log(mat2MulTranspose(a, b)) // [ 2, 1, 4, 3 ]
+console.log(mat2TransposeMulTranspose(a, b)) // [ 3, 1, 4, 2 ]
+console.log(mat2MulVec(a, [1, 1])) // [ 3, 7 ]
+console.log(mat2TransposeMulVec(a, [1, 1])) // [ 4, 6 ]
+```
+
 ### 3D Vectors
 
 `math/linear-algebra/vec3` has the three-component vector helpers: a `Vec3` is a readonly `[x, y, z]` tuple of plain numbers in the caller's unit and a `MutVec3` its mutable form (see 2D Vectors for the planar counterpart); names start with `vec` and angles are radians. As in the 2D module, the helpers that build a vector take an optional output `o`, written and returned (aliasing it, and it may be an input) when given and allocated when omitted, and the `...Mut` variants work in place. `vecDot`, `vecCross`, `vecCrossLength` (the length of the cross product without allocating), `vecTripleProduct(a, b, c)` (a · (b × c), the signed volume), `vecLength` and `vecDistance` are the basic products and norms. `vecAngle` is the unsigned angle between two vectors in [0, π] by a stable `atan2` formulation (0 for a zero vector), and `vecAngleUnit` is the faster form for unit vectors. The spherical extractions assume the usual right-handed frame: `vecLongitude` is the azimuth in the xy plane normalized to [0, 2π), `vecLatitude` the angle above the xy plane in [-π/2, π/2] and `vecPolarAngle` the colatitude from +z in [0, π]; all are stable at the poles and do not need a unit vector. `vecRotX`, `vecRotY` and `vecRotZ` rotate by the right-hand rule around an axis (counterclockwise seen from the positive axis), and `vecRotateByRodrigues(v, axis, angle)` rotates around any axis, normalizing it internally and returning a copy of `v` when the axis is zero. `vecPlane(a, b, c)` returns the unnormalized normal of the plane through three points, `(b - a) × (c - a)`, and `vecPositionAngle(a, b)` the position angle of `b` seen from `a` on the sphere, in (-π, π] counterclockwise from the direction of the pole (north) through east. `vecNormalize` returns the vector unchanged when its length is zero, and the scalar and element-wise arithmetic mirrors the 2D set.
@@ -15967,9 +16047,196 @@ console.log(m === vecRotYMut(m, Math.PI)) // true
 
 ### 3x3 Matrices
 
+A 3x3 matrix is a flat row-major tuple `[m00, m01, m02, m10, m11, m12, m20, m21, m22]` (`Mat3` is the read-only view of `MutMat3`), used mainly for coordinate-frame rotations. The functions follow the same conventions as the 2x2 matrices: the optional output `o` is written and returned when given and allocated otherwise, and the rotation builders take an angle in radians and, when passed an existing matrix `m`, return the product `R·m` instead of `R`. The rotations `matRotX`, `matRotY` and `matRotZ` are frame rotations in the style of ERFA (`eraRx`, `eraRy`, `eraRz`), so a vector is rotated by the opposite angle; `matRodriguesRotation(axis, angle)` builds the rotation of a vector by the angle around an arbitrary unit `axis` (right-handed, the opposite sense of the frame rotations), and `matToVec3` and `matFromVec3` convert between a rotation matrix and the rotation vector (the Euler axis scaled by the angle, in [0, π] for `matToVec3` and the zero vector for the identity), in the sense of the frame rotations like `matRotZ`, so the vector of a matrix from `matRodriguesRotation` has the opposite sign of its axis. The other functions mirror `mat2`: `matZero`, `matIdentity`, `matIsIdentity`, `matFill`, `matClone`, `matCopy`, `matDeterminant` (cofactor expansion, so use a decomposition for ill-conditioned matrices), `matTrace`, `matTranspose`, `matFlipX`, `matFlipY`, `matNegate`, the scalar functions `matPlusScalar`, `matMinusScalar`, `matMulScalar` and `matDivScalar`, `matPlus` and `matMinus`, the products `matMul`, `matTransposeMul`, `matMulTranspose` and `matTransposeMulTranspose`, and the vector products `matMulVec` and `matTransposeMulVec` (the transpose of a rotation is its inverse). The matrix and vector helpers are exported by `mat3`, and the vectors are `Vec3` tuples.
+
+```ts
+import {
+	matClone,
+	matCopy,
+	matDeterminant,
+	matDivScalar,
+	matFill,
+	matFlipX,
+	matFlipY,
+	matFromVec3,
+	matIdentity,
+	matIsIdentity,
+	matMinus,
+	matMinusScalar,
+	matMul,
+	matMulScalar,
+	matMulTranspose,
+	matMulVec,
+	matNegate,
+	matPlus,
+	matPlusScalar,
+	matRodriguesRotation,
+	matRotX,
+	matRotY,
+	matRotZ,
+	matToVec3,
+	matTrace,
+	matTranspose,
+	matTransposeMul,
+	matTransposeMulTranspose,
+	matTransposeMulVec,
+	matZero,
+	type MutMat3,
+} from 'nebulosa/src/math/linear-algebra/mat3'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+const a: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 10]
+const b: MutMat3 = [0, 1, 0, 1, 0, 0, 0, 0, 1]
+
+// Constructors, the identity test and filling an output.
+console.log(matZero()) // [ 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+console.log(matIdentity()) // [ 1, 0, 0, 0, 1, 0, 0, 0, 1 ]
+console.log(matIsIdentity(matIdentity()), matIsIdentity(a)) // true false
+console.log(matFill(matZero(), 1, 2, 3, 4, 5, 6, 7, 8, 9)) // [ 1, 2, 3, 4, 5, 6, 7, 8, 9 ]
+
+// Frame rotations of 90° around each axis.
+console.log(matRotX(deg(90))) // [ 1, 0, 0, 0, 6.123233995736766e-17, 1, 0, -1, 6.123233995736766e-17 ]
+console.log(matRotY(deg(90))) // [ 6.123233995736766e-17, 0, -1, 0, 1, 0, 1, 0, 6.123233995736766e-17 ]
+console.log(matRotZ(deg(90))) // [ 6.123233995736766e-17, 1, 0, -1, 6.123233995736766e-17, 0, 0, 0, 1 ]
+console.log(matRotZ(deg(90), matIdentity())) // [ 6.123233995736766e-17, 1, 0, -1, 6.123233995736766e-17, 0, 0, 0, 1 ] (R·I)
+
+// Rotation about an arbitrary unit axis, and the rotation vector round trip.
+const r = matRodriguesRotation([0, 0, 1], deg(90))
+console.log(r) // [ 6.123233995736766e-17, -1, 0, 1, 6.123233995736766e-17, 0, 0, 0, 1 ] (the vector rotation, opposite to matRotZ)
+console.log(matMulVec(r, [1, 0, 0])) // [ 6.123233995736766e-17, 1, 0 ] (+x goes to +y)
+console.log(matToVec3(r)) // [ 0, 0, -1.5707963267948966 ] (the vector is in the frame-rotation sense, like matRotZ)
+console.log(matFromVec3([0, 0, Math.PI / 2])) // [ 6.123233995736766e-17, 1, 0, -1, 6.123233995736766e-17, 0, 0, 0, 1 ] (equal to matRotZ(deg(90)))
+
+// Copies, and the scalar properties.
+console.log(matClone(a), matCopy(a, matZero())) // [ 1, 2, 3, 4, 5, 6, 7, 8, 10 ] twice
+console.log(matDeterminant(a)) // -3
+console.log(matTrace(a)) // 16
+
+// Unary operations.
+console.log(matTranspose(a)) // [ 1, 4, 7, 2, 5, 8, 3, 6, 10 ]
+console.log(matFlipX(a)) // [ 7, 8, 10, 4, 5, 6, 1, 2, 3 ]
+console.log(matFlipY(a)) // [ 3, 2, 1, 6, 5, 4, 10, 8, 7 ]
+console.log(matNegate(a)) // [ -1, -2, -3, -4, -5, -6, -7, -8, -10 ]
+
+// Scalar and matrix arithmetic.
+console.log(matPlusScalar(a, 1)) // [ 2, 3, 4, 5, 6, 7, 8, 9, 11 ]
+console.log(matMinusScalar(a, 1)) // [ 0, 1, 2, 3, 4, 5, 6, 7, 9 ]
+console.log(matMulScalar(a, 2)) // [ 2, 4, 6, 8, 10, 12, 14, 16, 20 ]
+console.log(matDivScalar(a, 2)) // [ 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5 ]
+console.log(matPlus(a, b)) // [ 1, 3, 3, 5, 5, 6, 7, 8, 11 ]
+console.log(matMinus(a, b)) // [ 1, 1, 3, 3, 5, 6, 7, 8, 9 ]
+
+// Products, with an existing output and with the fused transposes.
+const out = matZero()
+console.log(matMul(a, b, out) === out, out) // true [ 2, 1, 3, 5, 4, 6, 8, 7, 10 ]
+console.log(matTransposeMul(a, b)) // [ 4, 1, 7, 5, 2, 8, 6, 3, 10 ]
+console.log(matMulTranspose(a, b)) // [ 2, 1, 3, 5, 4, 6, 8, 7, 10 ]
+console.log(matTransposeMulTranspose(a, b)) // [ 4, 1, 7, 5, 2, 8, 6, 3, 10 ]
+console.log(matMulVec(a, [1, 1, 1])) // [ 6, 15, 25 ]
+console.log(matTransposeMulVec(a, [1, 1, 1])) // [ 12, 15, 19 ]
+```
+
 ### Angle Parsing and Formatting
 
+`parseAngle(input?, options?)` reads an angle in radians from a number or a string, and `formatAngle(angle, options?)` writes one as a sexagesimal string. A numeric input, or a string that is just a number, is read as degrees, or as hours when `options` is `true` or `{ isHour: true }`. Other strings may hold up to three fields (for example `-12d 45m 23.123s`, `12h30m`, `12°30′`, `-0 30`), separated by unit letters (`h`, `d`, `°`, `m`, `'`, `s`, `"`, in either case, and the Unicode minus, prime and double prime) or by anything that is not a digit; an `h` unit makes the value hours, and the sign of the leading field, even for `-0`, applies to the whole angle. When the input is empty or cannot be parsed, the result is `undefined`, or the `defaultValue` given as `{ defaultValue }` or as a bare number in place of the options.
+
+`formatAngle` splits the angle with `toDms` or, for `isHour`, `toHms` (which normalizes to [0, 24) h) and joins `sign + leading + minutes + seconds` with `separators` (one string for all of them, or an array for the positions after the leading field, the minutes and the seconds), a leading field padded to `padLength` digits and `fractionDigits` decimals in the seconds. `noSign` removes the plus sign for non-negative values (a minus sign is always shown), `noSecond` drops the seconds and rounds into the minutes, and `minusSign` and `plusSign` replace the signs. A seconds field that rounds to 60 carries into the minutes and then the leading field. The presets `DEFAULT_HMS_FORMAT`, `DEFAULT_DMS_FORMAT`, `DEFAULT_SIGNED_DMS_FORMAT`, `DEFAULT_RA_FORMAT`, `DEFAULT_DEC_FORMAT`, `DEFAULT_AZ_FORMAT` (and the `*_NO_FRACTION_FORMAT` variants) are the option objects behind the shortcuts `formatHMS`, `formatDMS`, `formatSignedDMS`, `formatRA`, `formatDEC`, `formatAZ` and `formatALT`, each of which takes `fractionDigits` as `true` (the default of 2 digits), `false` (none) or a number. Output of the shortcuts is text, so it is meant for display and not for further arithmetic.
+
+```ts
+import { DEFAULT_DEC_FORMAT, DEFAULT_RA_FORMAT, deg, formatALT, formatAngle, formatAZ, formatDEC, formatDMS, formatHMS, formatRA, formatSignedDMS, hms, parseAngle, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+
+// Numbers and numeric strings are degrees by default and hours with `true`.
+console.log(toDeg(parseAngle(90)!)) // 90
+console.log(toDeg(parseAngle('90')!)) // 90
+console.log(toHour(parseAngle(6, true)!)) // 6
+console.log(toHour(parseAngle('6', { isHour: true })!)) // 6
+
+// Sexagesimal strings with units, separators and the Unicode signs.
+console.log(toDeg(parseAngle('-12d 45m 23.123s')!)) // about -12.756423
+console.log(toDeg(parseAngle('12°30′36″')!)) // 12.51
+console.log(toHour(parseAngle('5h30m36s')!)) // 5.51
+console.log(toDeg(parseAngle('12 30 36')!)) // 12.51
+console.log(toDeg(parseAngle('-0 30')!)) // -0.5
+console.log(toHour(parseAngle('05:30:36', true)!)) // 5.51
+
+// Unparseable or empty input gives undefined, or the default value.
+console.log(parseAngle('')) // undefined
+console.log(parseAngle('', { defaultValue: 1 })) // 1
+console.log(parseAngle(undefined, 2)) // 2
+
+// The shortcuts.
+const ra = hms(5, 35, 17.3)
+const dec = deg(-5.390555)
+console.log(formatHMS(ra)) // 05:35:17.30
+console.log(formatHMS(ra, false)) // 05:35:17
+console.log(formatHMS(ra, 4)) // 05:35:17.3000
+console.log(formatRA(ra)) // 05 35 17.30
+console.log(formatDMS(deg(12.51))) // 12d30m36.00s
+console.log(formatDMS(deg(-12.51), false)) // -12d30m36s
+console.log(formatSignedDMS(deg(12.51))) // +12d30m36.00s
+console.log(formatDEC(dec)) // -05 23 26.00
+console.log(formatDEC(deg(41.2688), 1)) // +41 16 07.7
+console.log(formatAZ(deg(5.5))) // 005 30 00.00
+console.log(formatALT(deg(45))) // +45 00 00.00
+
+// formatAngle with custom options.
+console.log(formatAngle(deg(12.51))) // +12 30 36.00
+console.log(formatAngle(deg(12.51), { noSign: true, noSecond: true })) // 12 31 (30" rounds the minutes up)
+console.log(formatAngle(deg(12.51), { separators: [':', ':', ''], fractionDigits: 0 })) // +12:30:36
+console.log(formatAngle(deg(-12.51), { minusSign: '−', separators: 'dms' })) // −12d30m36.00s
+console.log(formatAngle(deg(7.5), { isHour: true, separators: ':', noSign: true, padLength: 3 })) // 000:30:00.00
+
+// The presets are option objects that can be extended.
+console.log(formatAngle(ra, { ...DEFAULT_RA_FORMAT, fractionDigits: 3 })) // 05 35 17.300
+console.log(formatAngle(dec, { ...DEFAULT_DEC_FORMAT, noSecond: true })) // -05 23
+```
+
 ### Angle Units and Wrapping
+
+An `Angle` is a plain number in radians, and this module converts to and from the other common units and wraps angles into a range. The constructors `deg`, `hour`, `arcmin`, `arcsec` and `mas` (milliarcseconds) and `secondsOfTime` produce radians from a single unit, and `toDeg`, `toHour`, `toArcmin`, `toArcsec`, `toMas` and `toSecondsOfTime` convert back. `dms(d, min?, sec?)` and `hms(h, min?, sec?)` build an angle from sexagesimal fields, where the sign is taken from the leading field (including `-0`) and applied to the whole value; `signedDms` and `signedHms` take the sign as an explicit boolean first argument, which is the way to keep the sign when the degrees or hours field is zero and written as a positive number. `toDms(angle)` returns `[degrees, minutes, seconds, sign]` with integer degrees and minutes, fractional seconds and `sign` equal to `Math.sign(angle)`, without normalizing the angle, and `toHms(angle)` returns `[hours, minutes, seconds]` after normalizing to [0, 24) hours. `normalizeAngle` wraps into [0, 2π), `normalizePI` into (-π, π] and `safeAngularDifference(a, b)` returns the wrap-safe difference `a - b` in [-π, π], which is the right way to compare two longitudes or position angles. Results are ordinary floating-point numbers, so exact round trips are not guaranteed.
+
+```ts
+import { arcmin, arcsec, deg, dms, hms, hour, mas, normalizeAngle, normalizePI, safeAngularDifference, secondsOfTime, signedDms, signedHms, toArcmin, toArcsec, toDeg, toDms, toHms, toHour, toMas, toSecondsOfTime } from 'nebulosa/src/math/units/angle'
+
+// Single-unit constructors give radians.
+console.log(deg(180)) // 3.141592653589793
+console.log(hour(12)) // 3.141592653589793
+console.log(arcmin(60)) // 0.017453292519943295 (1°)
+console.log(arcsec(3600)) // 0.017453292519943295 (1°)
+console.log(mas(3600000)) // 0.017453292519943295 (1°)
+console.log(secondsOfTime(43200)) // 3.141592653589793 (12 h)
+
+// And back from radians.
+console.log(toDeg(Math.PI / 2)) // 90
+console.log(toHour(Math.PI / 2)) // 6
+console.log(toArcmin(deg(1))) // about 60
+console.log(toArcsec(deg(1))) // about 3600
+console.log(toMas(deg(1))) // about 3600000
+console.log(toSecondsOfTime(Math.PI)) // 43200
+
+// Sexagesimal fields: the leading sign applies to the whole angle.
+console.log(toDeg(dms(12, 30, 36))) // 12.51
+console.log(toDeg(dms(-12, 30, 36))) // -12.51
+console.log(toDeg(dms(-0, 30))) // -0.5
+console.log(toDeg(signedDms(true, 0, 30))) // -0.5
+console.log(toHour(hms(5, 30, 36))) // 5.51
+console.log(toHour(signedHms(true, 0, 30))) // -0.5
+
+// Splitting an angle back into fields.
+console.log(toDms(deg(-12.51))) // [ 12, 30, 35.99999999999923, -1 ] (the seconds carry a floating-point residue, about 36)
+console.log(toHms(deg(82.5))) // [ 5, 29, 59.9999999999968 ] (5 h 30 m with a floating-point residue)
+console.log(toHms(deg(-15))) // [ 23, 0, 0 ] (normalized to [0, 24) h)
+
+// Wrapping.
+console.log(toDeg(normalizeAngle(deg(-90)))) // 270
+console.log(toDeg(normalizeAngle(deg(725)))) // about 5
+console.log(toDeg(normalizePI(deg(270)))) // -90
+console.log(toDeg(normalizePI(deg(180)))) // 180 (the upper bound is included)
+
+// The difference of two longitudes across the 0/360° line is small.
+console.log(toDeg(safeAngularDifference(deg(359), deg(1)))) // about -2
+console.log(toDeg(deg(359) - deg(1))) // 358 (the plain subtraction)
+```
 
 ### Barometric Pressure and Altitude
 
@@ -16004,11 +16271,154 @@ console.log(toMeter(fromPressure(pressureFrom(meter(5000), 10), 10))) // 4999.99
 
 ### Dense Linear System Solvers
 
+Three solvers cover dense systems `A·x = b`. `LuDecomposition` factorizes a square matrix once with partial row pivoting and then offers `determinant` (the product of the U pivots with the sign of the row swaps), `isSingular` (true when any pivot is exactly zero), `invert(o?)` (writes into `o` or allocates a matrix) and `solve(b)` (returns a `Float64Array`), so several right-hand sides can reuse one factorization; both `invert` and `solve` throw for a singular matrix. By default the factorization works on a clone, and `new LuDecomposition(matrix, true)` factorizes in place, which saves the copy but destroys the contents of `matrix` and makes the factors alias its data. `QrDecomposition` uses Householder reflections for a matrix with at least as many rows as columns: `isFullRank` tells whether every diagonal entry of R is non-zero and `solve(b)`, with `b` of length `rows`, returns the solution of a square system or the least-squares solution (minimum `‖A·x − b‖`) of a tall one as a `Float64Array` of length `cols`, throwing when the matrix is rank deficient; it also accepts the `destructive` flag as the second constructor argument. QR is the more stable choice for least squares than the normal equations and LU. `gaussianElimination(A, b, o?)` is a standalone Gaussian elimination with partial pivoting for a square `A`; it mutates `A.data` and `b` in place (pass copies to keep them), writes the solution into `o` (which may be `b` itself) or into a new array, and fills the result with `NaN` for a singular matrix instead of throwing. All three work in double precision, so the accuracy of the result depends on the conditioning of `A`.
+
+```ts
+import { gaussianElimination, LuDecomposition, Matrix, QrDecomposition } from 'nebulosa/src/math/linear-algebra/matrix'
+
+// The system 2x + y = 3, x + 3y = 5 has the solution x = 0.8, y = 1.4.
+const a = new Matrix(2, 2, [2, 1, 1, 3])
+
+// LU: the properties, the solution and the inverse of the same factorization.
+const lu = new LuDecomposition(a)
+console.log(lu.determinant, lu.isSingular) // 5 false
+console.log(lu.solve([3, 5])) // Float64Array(2) [ 0.8, 1.4 ] (up to roundoff)
+console.log(lu.solve([1, 0])) // Float64Array(2) [ 0.6, -0.2 ] (another right-hand side, up to roundoff)
+console.log(lu.invert().toArray()) // [ 0.6, -0.2, -0.2, 0.4 ] (up to roundoff)
+
+// A 3x3 system solved in place on a throwaway matrix.
+const big = new Matrix(3, 3, [4, 1, 2, 1, 5, 3, 2, 3, 6])
+console.log(new LuDecomposition(big, true).solve([1, 2, 3])) // Float64Array(3) [ 0, 0.14285714285714282, 0.4285714285714286 ] (1/7 and 3/7 up to roundoff)
+
+// QR: the square system, then a tall system fitted by least squares (y = c0 + c1·t at t = 0, 1, 2, 3).
+console.log(new QrDecomposition(a).solve([3, 5])) // Float64Array(2) [ 0.8000000000000003, 1.4 ] (0.8 and 1.4 up to roundoff)
+const tall = new QrDecomposition(new Matrix(4, 2, [1, 0, 1, 1, 1, 2, 1, 3]))
+console.log(tall.isFullRank) // true
+console.log(tall.solve([1, 3, 5, 7])) // Float64Array(2) [ 1, 2 ] (the exact line y = 1 + 2t)
+console.log(tall.solve([1, 2, 2, 4])) // Float64Array(2) [ 0.9000000000000001, 0.8999999999999999 ] (the least-squares line, 0.9 for both)
+
+// Gaussian elimination consumes its inputs, so pass copies when they are still needed.
+console.log(gaussianElimination(a.clone(), [3, 5])) // Float64Array(2) [ 0.8, 1.4 ] (up to roundoff)
+const rhs = [3, 5]
+console.log(gaussianElimination(a.clone(), rhs, rhs) === rhs, rhs) // true [ 0.8, 1.4 ] (up to roundoff)
+```
+
 ### Dense Matrix Operations
+
+`Matrix` is a dense matrix of arbitrary shape stored row-major in a flat `Float64Array` (`data[row * cols + col]`), for the cases that the fixed-size `mat2` and `mat3` helpers do not cover. `new Matrix(rows, cols, data?, copy?)` creates a zero-filled matrix, or one seeded with `data` of length `rows * cols`, which is cloned unless `copy` is `false` (then the array is adopted and later changes to it are visible in the matrix). The static builders are `Matrix.identity(size)`, `Matrix.square(size, data?)`, `Matrix.row(data | width)` and `Matrix.column(data | height)`. The read-only properties are `size`, `isSquare`, `isIdentity`, `isZero`, `isDiagonal` and `isSymmetric` (exact comparisons, no tolerance), `transposed` (a new matrix), `determinant` (a direct formula up to 3x3 and an LU decomposition above that), `isSingular` (an exactly zero determinant, or a zero LU pivot for larger sizes) and `trace`, the last two for square matrices only; elements are read with `at(index)` and `get(row, col)` and written with `set(row, col, value)`, `fill(value | 'identity')`, `flipX()` and `flipY()` (these mutate and return the matrix itself). `clone`, `copyInto(m)` and `toArray` copy the data. The arithmetic methods `invert`, `negate`, `plus`, `minus`, `plusScalar`, `minusScalar`, `mulScalar`, `divScalar` and `mul` return a new matrix, or write into the optional output `o` of the right shape and return it, and `mul` needs an output that is neither operand; `mulVec(v)` and `mulTransposedVec(v)` return a new `Float64Array`. Operations on incompatible shapes, and the inverse of a non-square or singular matrix, throw. `mulMTxN(a, b)` and `mulMxNT(a, b)` multiply arrays of rows without building `Matrix` objects, computing `aᵀ·b` and `a·bᵀ` as an array of `Float64Array` rows, which is the form used by the normal equations of the least squares topics.
+
+```ts
+import { Matrix, mulMTxN, mulMxNT } from 'nebulosa/src/math/linear-algebra/matrix'
+
+// Construction.
+const a = new Matrix(2, 3, [1, 2, 3, 4, 5, 6])
+console.log(a.rows, a.cols, a.size, a.toArray()) // 2 3 6 [ 1, 2, 3, 4, 5, 6 ]
+console.log(Matrix.identity(2).toArray()) // [ 1, 0, 0, 1 ]
+console.log(Matrix.square(2, new Float64Array([1, 2, 3, 4])).toArray()) // [ 1, 2, 3, 4 ]
+console.log(Matrix.row([1, 2, 3]).rows, Matrix.column([1, 2, 3]).cols) // 1 1 (a single row, a single column)
+console.log(Matrix.row(4).toArray()) // [ 0, 0, 0, 0 ]
+
+// A matrix that adopts its array sees the later changes of it.
+const shared = new Float64Array([1, 2, 3, 4])
+const adopted = new Matrix(2, 2, shared, false)
+shared[0] = 9
+console.log(adopted.get(0, 0)) // 9
+
+// Element access.
+const s = Matrix.square(3, new Float64Array([4, 1, 2, 1, 5, 3, 2, 3, 6]))
+console.log(s.at(4), s.get(1, 2)) // 5 3
+s.set(0, 0, 7)
+console.log(s.get(0, 0)) // 7
+console.log(Matrix.identity(3).fill(2).toArray()) // [ 2, 2, 2, 2, 2, 2, 2, 2, 2 ]
+console.log(Matrix.row(3).fill('identity').toArray()) // [ 1, 0, 0 ]
+
+// Shape and structure queries.
+console.log(a.isSquare, s.isSquare) // false true
+console.log(Matrix.identity(3).isIdentity, Matrix.identity(3).isDiagonal, Matrix.identity(3).isSymmetric) // true true true
+console.log(s.isSymmetric, s.isZero, new Matrix(2, 2).isZero) // true false true
+
+// Scalar properties of a square matrix.
+const m = new Matrix(2, 2, [1, 2, 3, 4])
+console.log(m.determinant, m.trace, m.isSingular) // -2 5 false
+console.log(new Matrix(2, 2, [1, 2, 2, 4]).isSingular) // true
+
+// Transpose, inverse and the in-place flips.
+console.log(a.transposed.toArray()) // [ 1, 4, 2, 5, 3, 6 ]
+console.log(m.invert().toArray()) // [ -2, 1, 1.5, -0.5 ]
+console.log(m.clone().flipX().toArray()) // [ 3, 4, 1, 2 ]
+console.log(m.clone().flipY().toArray()) // [ 2, 1, 4, 3 ]
+
+// Element-wise arithmetic, with and without an output.
+const out = new Matrix(2, 2)
+console.log(m.plus(m).toArray()) // [ 2, 4, 6, 8 ]
+console.log(m.minus(Matrix.identity(2)).toArray()) // [ 0, 2, 3, 3 ]
+console.log(m.negate().toArray()) // [ -1, -2, -3, -4 ]
+console.log(m.plusScalar(1).toArray()) // [ 2, 3, 4, 5 ]
+console.log(m.minusScalar(1).toArray()) // [ 0, 1, 2, 3 ]
+console.log(m.divScalar(2).toArray()) // [ 0.5, 1, 1.5, 2 ]
+console.log(m.mulScalar(2, out) === out, out.toArray()) // true [ 2, 4, 6, 8 ]
+
+// Products: a 2x3 times a 3x2 gives 2x2, and with vectors.
+const b = new Matrix(3, 2, [1, 0, 0, 1, 1, 1])
+console.log(a.mul(b).toArray()) // [ 4, 5, 10, 11 ]
+console.log(a.mulVec([1, 1, 1])) // Float64Array(2) [ 6, 15 ]
+console.log(a.mulTransposedVec([1, 1])) // Float64Array(3) [ 5, 7, 9 ]
+
+// Products of arrays of rows without Matrix objects.
+console.log(
+	mulMTxN(
+		[
+			[1, 2],
+			[3, 4],
+			[5, 6],
+		],
+		[[1], [1], [1]],
+	),
+) // [ Float64Array(1) [ 9 ], Float64Array(1) [ 12 ] ]
+console.log(
+	mulMxNT(
+		[
+			[1, 2],
+			[3, 4],
+		],
+		[
+			[1, 0],
+			[0, 1],
+			[1, 1],
+		],
+	),
+) // [ Float64Array(3) [ 1, 2, 3 ], Float64Array(3) [ 3, 4, 7 ] ]
+```
 
 ### Descriptive Statistics
 
 ### Distance Units
+
+A `Distance` is a plain number in astronomical units (AU, the IAU 2012 value of 149597870700 m), and this module converts to and from other length units. `meter`, `kilometer`, `lightYear` and `parsec` build a distance in AU from the given unit, and `toMeter`, `toKilometer`, `toLightYear` and `toParsec` convert back. The light year is the distance light travels in one Julian year (365.25 days of 86400 s) and the parsec is the library constant `ONE_PARSEC`. `fromPressure(pressure, temperature?)` estimates the pressure altitude, returned as a distance, from a pressure in millibar (hPa) and a temperature in degrees Celsius (15 by default), using the barometric formula with the constant tropospheric lapse rate of the 1976 US Standard Atmosphere; it is the inverse of the pressure helpers described in Barometric Pressure and Altitude and is only an approximation of the real atmosphere. Conversions are single multiplications or divisions, so values round trip up to floating-point precision.
+
+```ts
+import { fromPressure, kilometer, lightYear, meter, parsec, toKilometer, toLightYear, toMeter, toParsec } from 'nebulosa/src/math/units/distance'
+
+// One AU in other units.
+console.log(toMeter(1)) // 149597870700
+console.log(toKilometer(1)) // 149597870.7
+console.log(toLightYear(1)) // about 1.58125e-5 (8.3 light minutes)
+console.log(toParsec(1)) // about 4.848137e-6
+
+// From other units to AU.
+console.log(meter(149597870700)) // 1
+console.log(kilometer(149597870.7)) // 1
+console.log(lightYear(1)) // about 63241.077
+console.log(parsec(1)) // about 206264.806
+
+// The Moon at 384400 km, and Proxima Centauri at 4.2465 light years.
+console.log(kilometer(384400)) // about 0.002570 AU
+console.log(toParsec(lightYear(4.2465))) // about 1.302
+
+// Pressure altitude in AU, converted to meters: sea-level pressure at 15 °C, and 700 hPa at 5 °C.
+console.log(toMeter(fromPressure(1013.25))) // 0
+console.log(toMeter(fromPressure(700, 5))) // about 2907.6
+```
 
 ### Ellipse Containment Geometry
 
@@ -16017,6 +16427,37 @@ console.log(toMeter(fromPressure(pressureFrom(meter(5000), 10), 10))) // 4999.99
 ### Error-Free Floating-Point Arithmetic
 
 ### Exponential and Power Regression
+
+Two fits linearize their model with logarithms and reuse the ordinary least-squares line. `exponentialRegression(x, y)` fits `y = b·exp(a·x)` through `ln y = ln b + a·x`, and `powerRegression(x, y)` fits `y = A·x^B` through `ln y = ln A + B·ln x`; both return an `ExponentialRegression` whose `a` and `b` are, for the power fit, the scale `A` and the exponent `B`, together with `predict(x)` and the inverse `x(y)`. Because the fit is done in log space, every y (and every x for the power law) must be strictly positive, and the residuals that are minimized are the relative ones: the fit is not the least-squares fit of the original y values, and a few small samples weigh as much as large ones. The inverse of the power fit is `(y/A)^(1/B)` and returns 0 when either parameter is 0, and the exponential inverse is `ln(y/b)/a`. Use `regressionScore` (see Linear Regression) to judge the fit in the original units.
+
+```ts
+import { exponentialRegression, powerRegression, regressionScore } from 'nebulosa/src/math/numerical/regression'
+
+// Samples of y = 2·exp(0.5x): the fit recovers the parameters.
+const x = [0, 1, 2, 3, 4]
+const decay = exponentialRegression(
+	x,
+	x.map((v) => 2 * Math.exp(0.5 * v)),
+)
+console.log(decay.a, decay.b) // 0.5 2
+console.log(decay.predict(5)) // 24.364987921406946
+console.log(decay.x(10)) // 3.2188758248682006
+
+// Noisy data: the score tells how well the curve follows the samples in the original units.
+const noisy = exponentialRegression(x, [2.1, 3.2, 5.3, 8.6, 14.1])
+console.log(noisy.a, noisy.b) // 0.47970862987632723 2.0436330594214853
+console.log(regressionScore(noisy)) // { r: 0.9998710945550302, r2: 0.9995066745081632, rss: 0.04624038500084336, rmsd: 0.09616692258863581 }
+
+// Samples of y = 3·x^1.5 (a Kepler-like power law).
+const radius = [1, 2, 4, 8, 16]
+const law = powerRegression(
+	radius,
+	radius.map((v) => 3 * v ** 1.5),
+)
+console.log(law.a, law.b) // 3.000000000000002 1.5
+console.log(law.predict(10)) // 94.86832980505145
+console.log(law.x(30)) // 4.641588833612777
+```
 
 ### Great-Circle Geometry
 
@@ -16057,6 +16498,30 @@ console.log(sphericalGreatCirclePole([1, 0, 0], [2, 0, 0])) // [ 0, 0, 0 ]
 
 ### Hyperbolic Regression
 
+`hyperbolicRegression(x, y, weights?, initial?)` fits the V-curve `y = b·sqrt(1 + ((x - c)/a)²)` that describes the star size (HFD or FWHM) against the focuser position: `c` is the position of the minimum (best focus), `b` the minimum value and `a` the scale of the half-width, so the asymptotes have slope `±b/a`. The three parameters are found by Levenberg-Marquardt (at most 1000 iterations, relative tolerance 1e-8), starting from `a` equal to the weighted mean of y, `b` equal to the smallest y and `c` equal to the weighted mean of x, unless `initial = [a, b, c]` is given; samples with a non-positive weight are ignored, and a non-linear fit can end at a local minimum when the data do not cover both sides of the V or the start is far away. The result is a `HyperbolicRegression` with `a`, `b`, `c`, `minimum` (`{ x: c, y: b }`), `predict(x)` and the inverse `x(y)`, which returns the left branch (`c - sqrt(a²(y² - b²))/b`) and is `NaN` for a `y` below `b`. Use `regressionScore` to judge the fit and see Trend-Line Regression for the piecewise alternative.
+
+```ts
+import { hyperbolicRegression, regressionScore } from 'nebulosa/src/math/numerical/regression'
+
+// A V-curve with best focus at 5000, a minimum HFD of 2 and a = 400, sampled on both sides.
+const position = [4200, 4400, 4600, 4800, 5000, 5200, 5400, 5600, 5800]
+const hfd = position.map((p) => 2 * Math.sqrt(1 + ((p - 5000) / 400) ** 2))
+
+const fit = hyperbolicRegression(position, hfd)
+console.log(fit.a, fit.b, fit.c) // 400.00000000000006 2 5000
+console.log(fit.minimum) // { x: 5000, y: 2 }
+console.log(fit.predict(4500)) // 3.2015621187164243
+console.log(fit.x(3)) // 4552.786404500042
+console.log(regressionScore(fit).rmsd) // 4.681111291435602e-16 (the curve is exact)
+
+// Noisy samples, with a lower weight on the two outer points and an explicit starting point.
+const noisy = [8.1, 6.0, 4.1, 2.9, 2.1, 2.7, 4.0, 6.2, 7.9]
+const weights = [0.5, 1, 1, 1, 1, 1, 1, 1, 0.5]
+const robust = hyperbolicRegression(position, noisy, weights, [400, 2, 5000])
+console.log(robust.a, robust.b, robust.c) // 210.0759463313151 1.9980766997394732 5002.721969953848
+console.log(robust.minimum) // { x: 5002.721969953848, y: 1.9980766997394732 }
+```
+
 ### Line Intersection with Spheres and Ellipsoids
 
 Two functions intersect a line of sight with a round body, in any single distance unit (the same for every coordinate and radius). `intersectLineAndSphere(endpoint, center, radius)` takes the line through the origin along `endpoint` (any non-zero length, normalized internally) and a sphere with the given `center` and `radius`, and returns the signed distances `[near, far]` from the origin to the two intersections along the unit direction (a negative value is behind the origin, and the two are equal for a tangent line), or `false` when the line misses the sphere or `endpoint` is the zero vector. `intersectSegmentEllipsoid(observer, target, equatorialRadius, polarRadius)` intersects the closed segment from `observer` to `target` with the oblate ellipsoid centered at the origin with its polar axis along z (`x²/a² + y²/a² + z²/b² = 1`) and returns an `EllipsoidSegmentIntersection`: `intersects` tells whether the segment touches or enters the surface, `intersection` is the first contact as a fraction of `target - observer` in [0, 1] (0 when the observer is already inside; absent when there is no intersection), and `tangent` is true when the contact is a double root, a grazing limb contact within the roundoff of the quadratic (64 ulps of its terms). A zero-length segment has no line of sight and does not intersect, an endpoint on the surface belongs to the segment, and the quadratic is solved in a stable form that keeps the near root accurate for a distant target.
@@ -16094,6 +16559,41 @@ console.log(intersectSegmentEllipsoid([1, 0, 0], [1, 0, 0], 1, 0.9)) // { inters
 ### Linear Least Squares
 
 ### Linear Regression
+
+The regression fits of this toolkit all return an object with the sample arrays (`xPoints`, `yPoints`) and a `predict(x)` closure, and the straight-line fits (`LinearRegression`) add the `slope`, the `intercept` and `x(y)`, the inverse that solves x for a given y. `simpleLinearRegression(x, y)` is ordinary least squares with mean-subtracted sums, so a large x mean does not cause cancellation; it uses the shorter of the two arrays, and a vertical or constant-x data set gives a non-finite slope. `weightedLinearRegression(x, y, weights)` minimizes the weighted squared residuals with strictly positive finite weights (larger weight, more influence), and `weightedLinearRegressionScore(regression, x, y, weights)` returns the `RegressionScore` fields plus the number of samples, the weight sum and, from three samples on, the standard errors of the slope and of the intercept estimated from the weighted residual variance with `n - 2` degrees of freedom. `theilSenRegression(x, y)` is the robust fit: the slope is the median of all pairwise slopes (pairs with equal x are skipped, so the work grows with n² and suits small and moderate sample counts) and the intercept the median of `y - slope·x`, which tolerates a sizable fraction of outliers. `regressionScore(regression, x?, y?)` works for any regression and returns `r` (the Pearson correlation of y with the predictions), `r2` (1 minus the residual over the total sum of squares, `NaN` when y has no variance), `rss` (the residual sum of squares) and `rmsd` (the root-mean-square residual), against the fitted samples by default. `intersect(a, b)` returns the `{ x, y }` crossing of two straight-line fits, or `undefined` for parallel lines.
+
+```ts
+import { intersect, regressionScore, simpleLinearRegression, theilSenRegression, weightedLinearRegression, weightedLinearRegressionScore } from 'nebulosa/src/math/numerical/regression'
+
+const x = [0, 1, 2, 3, 4, 5]
+const y = [1.1, 2.9, 5.2, 7.1, 8.8, 11.2]
+
+// Ordinary least squares: the parameters, a prediction and the inverse.
+const fit = simpleLinearRegression(x, y)
+console.log(fit.slope, fit.intercept) // 2.0028571428571427 1.0428571428571436
+console.log(fit.predict(6)) // 13.059999999999999
+console.log(fit.x(10)) // 4.472182596291012
+
+// The goodness of fit.
+console.log(regressionScore(fit)) // { r: 0.9990408626775663, r2: 0.9980826452995359, rss: 0.1348571428571428, rmsd: 0.14992061391346576 }
+
+// Weights: a larger weight pulls the line toward that sample (here the last one counts 10 times).
+const weights = [1, 1, 1, 1, 1, 10]
+const weighted = weightedLinearRegression(x, y, weights)
+console.log(weighted.slope, weighted.intercept) // 2.0349999999999997 1
+console.log(weightedLinearRegressionScore(weighted, x, y, weights)) // { r: 0.9994963029222116, r2: 0.9989928595551694, rss: 0.16699999999999915, rmsd: 0.10551461194229582, pointCount: 6, weightSum: 15, slopeStandardError: 0.032307119958300136, interceptStandardError: 0.13958271144140033 }
+
+// The robust fit ignores a wild sample, where the ordinary fit is dragged toward it.
+const dirty = [1.1, 2.9, 5.2, 7.1, 8.8, 40]
+console.log(simpleLinearRegression(x, dirty).slope) // 6.117142857142857 (dragged to about 6 by the wild sample)
+console.log(theilSenRegression(x, dirty).slope, theilSenRegression(x, dirty).intercept) // 2.05 1.0250000000000001
+
+// The crossing of two lines: y = 2x + 1 and y = -x + 7 meet at (2, 5).
+const up = simpleLinearRegression([0, 1, 2], [1, 3, 5])
+const down = simpleLinearRegression([0, 1, 2], [7, 6, 5])
+console.log(intersect(up, down)) // { x: 2, y: 5 }
+console.log(intersect(up, simpleLinearRegression([0, 1, 2], [3, 5, 7]))) // undefined (parallel lines)
+```
 
 ### Multivariate Minimization
 
@@ -16136,6 +16636,42 @@ console.log(rectIntersection(a, { left: 5, top: 5, right: 15, bottom: 15 }, out)
 ```
 
 ### Polynomial and Chebyshev Regression
+
+`polynomialRegression(x, y, degree, interceptAtZero?)` fits `y = Σ c[k]·x^p[k]` by linear least squares and returns the `coefficients` (in the order of the powers, which are `0..degree` for a numeric degree, `1..degree` when `interceptAtZero` is true, or the exact list given when `degree` is an array of powers) and a `predict` closure. Consecutive powers starting at 0 are fitted internally in the centered variable `(x - mean)` so that a large x offset (a focuser position in the tens of thousands, for example) does not make the normal equations singular, and the coefficients are expanded back to powers of the original x; custom power lists and zero-intercept fits are fitted without that shift. A degree needs at least that many distinct x values plus one, or the system is rank deficient. `quadraticRegression(x, y, interceptAtZero?)` is the degree-2 fit and adds the vertex as `minimum` (`{ x, y }`), which exists only for a convex parabola (positive leading coefficient); for a parabola that opens downward or degenerates into a line the minimum is `{ NaN, NaN }`. `chebyshevLeastSquares(x, y, degree)` fits the coefficients of the Chebyshev basis `T0..T(degree)` with a QR solve and evaluates them with the Clenshaw recurrence; the x values must already be normalized to [-1, 1], which is where the basis is well conditioned, and there must be at least `degree + 1` samples. All three accept the `Readonly<NumberArray>` types (plain or typed arrays).
+
+```ts
+import { chebyshevLeastSquares, polynomialRegression, quadraticRegression } from 'nebulosa/src/math/numerical/regression'
+
+// A cubic through exact samples of y = 1 + 2x - 3x² + 0.5x³.
+const x = [-2, -1, 0, 1, 2, 3, 4]
+const y = x.map((v) => 1 + 2 * v - 3 * v ** 2 + 0.5 * v ** 3)
+const cubic = polynomialRegression(x, y, 3)
+console.log(cubic.coefficients) // [ 1, 2, -3, 0.5 ]
+console.log(cubic.predict(5)) // -1.5
+
+// The same fit with a custom list of powers (here only the even ones) and with the intercept fixed at zero.
+const even = [-3, -2, -1, 0, 1, 2, 3].map((v) => 2 + v ** 2)
+console.log(polynomialRegression([-3, -2, -1, 0, 1, 2, 3], even, [0, 2]).coefficients) // [ 2, 1 ]
+const through = polynomialRegression([1, 2, 3, 4], [2, 8, 18, 32], 2, true)
+console.log(through.coefficients) // [ 0, 2 ] (the exact y = 2x², with no constant term)
+
+// A quadratic on a large x offset, as in a focus curve, and its vertex.
+const position = [30000, 30100, 30200, 30300, 30400]
+const hfd = position.map((p) => 2 + 1e-5 * (p - 30180) ** 2)
+const parabola = quadraticRegression(position, hfd)
+console.log(parabola.minimum) // { x: 30180, y: 2 }
+console.log(parabola.predict(30180)) // 2
+
+// A concave parabola has no minimum.
+console.log(quadraticRegression([0, 1, 2, 3], [0, 3, 4, 3]).minimum) // { x: NaN, y: NaN }
+
+// Chebyshev fit of cos(1.5t) over [-1, 1] with degree 4, and its prediction at the edge.
+const t = Array.from({ length: 21 }, (_, i) => -1 + i / 10)
+const fn = t.map((v) => Math.cos(1.5 * v))
+const cheb = chebyshevLeastSquares(t, fn, 4)
+console.log(cheb.degree, cheb.coefficients) // 4 Float64Array(5) [ 0.5117955999586832, -1.6604615456591726e-18, -0.46421457464805166, -6.032899825421937e-18, 0.02359511854412703 ] (the odd coefficients vanish for an even function)
+console.log(cheb.predict(1), Math.cos(1.5)) // 0.07117614385475851 0.0707372016677029
+```
 
 ### Pressure Units
 
@@ -16312,6 +16848,29 @@ console.log(toKelvin(-273.15)) // 0
 ```
 
 ### Trend-Line Regression
+
+`trendLineRegression(x, y, method?)` fits a V-shaped curve with two straight lines, the usual way to find best focus from a focus run without assuming a curve shape. The minimum is the sample with the smallest y; the left line is fitted to the samples with a smaller x and larger y than that minimum, the right line to the samples with a larger x and larger y, with either ordinary least squares (`'simple'`, the default) or the robust `'theil-sen'` slope. The result is a `TrendLineRegression` with the two `LinearRegression` fits (`left`, `right`), the `minimum` (`{ x, y }` of the lowest sample), the `intersection` of the two lines (`undefined` when they are parallel) and `predict(x)`, which follows the left line below the minimum x, the right line above it and returns the minimum y exactly at it. A branch needs at least two samples to define a line, so a minimum at the end of the scanned range leaves that side without a fit, and the intersection, which is the usual best-focus estimate, can fall between samples where the sampled minimum cannot. The samples must cover both sides of the minimum, with the rising edges away from the noise floor.
+
+```ts
+import { trendLineRegression } from 'nebulosa/src/math/numerical/regression'
+
+// A V-curve with slopes -0.01 and +0.01 meeting at x = 5000 (y = 2), sampled every 200 steps.
+const position = [4200, 4400, 4600, 4800, 5000, 5200, 5400, 5600, 5800]
+const hfd = position.map((p) => 2 + 0.01 * Math.abs(p - 5000))
+
+const fit = trendLineRegression(position, hfd)
+console.log(fit.minimum) // { x: 5000, y: 2 }
+console.log(fit.left.slope, fit.right.slope) // -0.01 0.01
+console.log(fit.intersection) // { x: 5000, y: 2 }
+console.log(fit.predict(4500), fit.predict(5000), fit.predict(5500)) // 7 2 7
+
+// The slopes of the two methods with a noisy left branch, where the two fits differ.
+const dirty = [14.3, 8.9, 6.1, 4.2, 2.4, 3.9, 6.1, 8.0, 10.1]
+const simple = trendLineRegression(position, dirty)
+const robust = trendLineRegression(position, dirty, 'theil-sen')
+console.log(simple.left.slope, simple.intersection) // -0.016550000000000002 { x: 4932.835820895522, y: 1.211567164179101 }
+console.log(robust.left.slope, robust.intersection) // -0.015416666666666669 { x: 4948.298217179903, y: 1.3220691518098278 }
+```
 
 ### Velocity Units
 
