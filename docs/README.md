@@ -12448,6 +12448,51 @@ console.log(JSON.stringify(before) === JSON.stringify(show(take(stream, 2, 5))))
 
 ### Dome Slit Geometry
 
+`observation/dome/slit` finds where the optical axis of a telescope pierces a spherical dome, so the slit can be placed in front of the optics even when the telescope is off the center of the dome (as every German equatorial mount is). It is pure geometry with no device or timing state: points and distances are in metres, in a shared east, north, up frame, and the azimuth is north through east in radians. An `OpticalRay` has the `origin` and a non-zero `direction` (its magnitude is ignored). `intersectRaySphere(ray, center, radius)` returns the nearest strictly forward intersection of the ray with a sphere, as a `RaySphereIntersection` with the `point` and the `distance` in metres along the normalized direction, or `undefined` when the line misses the sphere or both roots are behind the origin; a ray that starts inside the sphere hits the far side, and a tangent ray is accepted within a tiny relative tolerance. `solveDomeSlit(ray, dome)` takes a `SphericalDomeGeometry` (the `center` in the same frame, the positive `radius`, and the optional `azimuthOffset` in radians and `azimuthDirection` of plus or minus one that map the geometric azimuth to the command of the controller) and returns the `DomeSlitSolution`: the intersection and the geometric `azimuth` (0 to TAU) and `altitude` (above the horizon of the dome center) of the slit seen from the center of the dome, and the `commandAzimuth` (the direction times the azimuth plus the offset, normalized to 0..TAU). `mountPoseToOpticalRay(pose)` exposes the origin and direction of a `MountPose` as a ray without copying them, and `solveDomeSlitFromMount(geometry, encoders, dome)` chains the forward kinematics of Mount Kinematics with the slit solution, so the offsets of the pivots and of the optical origin of the mount are accounted for. `domeAzimuthError(current, target)` is the shortest signed correction in radians (target minus current, wrapped to `[-PI, PI]`), and `isDomeMoveRequired(current, target, tolerance)` says whether its magnitude is strictly above a non-negative tolerance in radians. The dome is a sphere and the slit is a point: the width of the slit, the shadowing of the optics and the dome that is not spherical are not modeled, and a `RangeError` is thrown for a zero ray direction, an azimuth direction that is not 1 or -1 or a negative tolerance.
+
+```ts
+import { domeAzimuthError, intersectRaySphere, isDomeMoveRequired, mountPoseToOpticalRay, solveDomeSlit, solveDomeSlitFromMount } from 'nebulosa/src/observation/dome/slit'
+import { createCanonicalEquatorialGeometry, mountPoseFromEncoders } from 'nebulosa/src/observation/mount/kinematics'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+const degrees = (radians: number) => +((radians * 180) / Math.PI).toFixed(4)
+
+// A ray from the center of a sphere of 2 m of radius, looking east at an altitude of 30 degrees, meets it at 2 m (the distance).
+const ray = { origin: [0, 0, 0], direction: [Math.cos(deg(30)), 0, Math.sin(deg(30))] } as const
+console.log(intersectRaySphere(ray, [0, 0, 0], 2)) // { point: [1.732051, 0, 1], distance: 2 }
+
+// A ray that points away from the sphere, or that misses it, has no intersection.
+console.log(intersectRaySphere({ origin: [0, 5, 0], direction: [0, 1, 0] }, [0, 0, 0], 2), intersectRaySphere({ origin: [0, -5, 0], direction: [1, 0, 0] }, [0, 0, 0], 2)) // undefined undefined
+
+// The slit seen from the center: an azimuth of 90 degrees (east), an altitude of 30 degrees, and the command of the controller.
+const dome = { center: [0, 0, 0], radius: 2 } as const
+const slit = solveDomeSlit(ray, dome)!
+console.log(degrees(slit.azimuth), degrees(slit.altitude), degrees(slit.commandAzimuth), slit.distance) // 90 30 90 2
+
+// A controller whose zero is at the south and that counts the other way (a command of 180 - azimuth): the command azimuth is normalized to 0..360 degrees.
+const south = solveDomeSlit(ray, { ...dome, azimuthOffset: deg(180), azimuthDirection: -1 })!
+console.log(degrees(south.azimuth), degrees(south.commandAzimuth)) // 90 90 (the geometric azimuth is east, and the command is 180 - 90)
+
+// A telescope 0.6 m east of the center of the dome and looking at the zenith: the slit is above it, at an azimuth of 90 degrees and an altitude below 90 as seen from the center.
+const offAxis = solveDomeSlit({ origin: [0.6, 0, 0.5], direction: [0, 0, 1] }, dome)!
+console.log(
+	degrees(offAxis.azimuth),
+	degrees(offAxis.altitude),
+	offAxis.point.map((v) => +v.toFixed(4)),
+) // 90 72.5424 [0.6, 0, 1.9079]
+
+// From the mount: the kinematics gives the pose, whose origin and direction are the ray. An equatorial head with its pivots 0.4 m above the center of the dome and the optics 0.25 m off the axis.
+const geometry = createCanonicalEquatorialGeometry({ primaryPivot: [0, 0, 0.4], secondaryPivot: [0, 0, 0.4], opticalOrigin: [0.25, 0, 0.4] })
+const encoders = { primary: deg(30), secondary: deg(60) }
+const viaPose = solveDomeSlit(mountPoseToOpticalRay(mountPoseFromEncoders(geometry, encoders)), dome)!
+const direct = solveDomeSlitFromMount(geometry, encoders, dome)!
+console.log(degrees(direct.azimuth), degrees(direct.altitude), direct.azimuth === viaPose.azimuth) // 120 65.7392 true
+
+// Following the dome: the shortest correction wraps across north, and a move is needed only when it is strictly above the tolerance (here 2 degrees).
+console.log(degrees(domeAzimuthError(deg(350), deg(10))), degrees(domeAzimuthError(deg(10), deg(350)))) // 20 -20 (the correction wraps across north)
+console.log(isDomeMoveRequired(deg(359), deg(0.5), deg(2)), isDomeMoveRequired(deg(350), deg(12), deg(2)), isDomeMoveRequired(deg(100), deg(101), deg(2))) // false true false (1.5 degrees across north is within the tolerance, 22 is not, and 1 degree is within)
+```
+
 ### Focuser Backlash Calibration
 
 `observation/focus/backlash.calibration` measures the backlash of a focuser from a scalar metric that changes with the real position, such as the HFD, a star position or a laser spot, without any device I/O: the `BacklashCalibration` is a synchronous command and event state machine, so the caller executes each command (a move or a measurement) and feeds the result back. All positions, distances, breakpoints and uncertainties are focuser steps; the metric is in caller-defined units, and its slope per step must be large enough to be seen. A run of one direction (`FocusAxisDirection`, `increasing` or `decreasing` counter, independent of the IN and OUT naming of a driver) first preloads against it, traveling `preloadDistance` opposite to the measured direction in moves of `probeStep`, with `samplesPerPosition` measurements at each position (their median and dispersion are kept), and checks that the metric has a slope (at least `minimumSlope` per step over the last `minimumPreloadPoints`). It then reverses and probes in steps of `probeStep` up to `maximumProbeDistance`: the metric stays on a plateau while the play is taken up and then changes linearly, and after each point the machine fits a continuous model `intercept + slope * max(0, travel - breakpoint)` (`fitBacklashBreakpoint`) and stops the run when the last `stabilityCount` fits agree within `breakpointTolerance` with enough points after the breakpoint. The breakpoint is the backlash of that run. The runs alternate between the directions, `repeats` per direction (3 or more), and a direction is aggregated by its median when a strict majority of its runs is valid (`aggregateBacklashRuns`); the result is refused when the dispersion of the runs of a direction is above the larger of `probeStep` and `breakpointTolerance`. The `BacklashCalibrationOptions` are `probeStep`, `preloadDistance`, `maximumProbeDistance`, `minimumSlope`, `repeats` (3), `samplesPerPosition` (3), `minimumPreloadPoints` (4), `minimumPlateauPoints` (2), `minimumPostBreakPoints` (3), `breakpointTolerance` (the `probeStep`), `stabilityCount` (3), `huberTuning` (1.345), the optional inclusive `minimumPosition` and `maximumPosition`, and the `safetyFactor` (1.5, at least 1) of the recommendation; a `probeStep` that is not positive, `repeats` below 3, a preload or probe distance too short for its minimum number of points, or `minimumPosition` not below `maximumPosition` throws a `RangeError` at construction. `start(position)` takes the finite counter position in range and returns the first command, `next(event)` consumes the event of the pending command and returns the next one, and `state` (`idle`, `preloading`, `probing`, `completed`, `failed` or `cancelled`), `currentDirection` and `result` are readable at any time. A `BacklashCalibrationCommand` is a `move` (a signed `relative` distance and its `direction`) to execute and answer with `{ type: 'moved', position }` (the actual counter position: it must move the right way, by no more than asked, and inside the limits), a `measure` (a `sampleIndex` and the `sampleCount`) answered with `{ type: 'measured', position, value }` (at the confirmed position), or a terminal command: `completed` with the `BacklashCalibrationResult`, `failed` with a `reason` (`invalidEvent`, `invalidPosition`, `invalidSample`, `positionLimit`, `axisStalled`, `insufficientSlope`, `breakpointNotFound`, `maximumDistanceReached`, `insufficientValidRuns` or `unstableResult`) and the direction, or `cancelled` (the event `{ type: 'cancel' }` at any time). A terminal state is final and repeats its command. The result has an `increasing` and a `decreasing` `BacklashDirectionResult` (the rounded median `steps`, the `dispersion`, the combined `uncertainty`, the valid and total run counts and every `BacklashRunResult` with its probe points), the `recommendedOvershoot` (the larger direction times the safety factor, rounded up), the `confidence` from 0 to 1 and the `quality` (`good` from 0.8, `marginal` from 0.5, otherwise `poor`). `backlashCompensationFromCalibration(result, mode?)` gives the `BacklashCompensation` of Focuser Backlash Compensation: the `decreasing` steps become `backlashIn` and the `increasing` ones `backlashOut`, with the mode `OVERSHOOT` unless another is asked. The model has a single breakpoint and a linear response, so a metric that is curved, noisy, or still near its minimum (a V-curve vertex) will not fit, and the backlash is that of the conditions and load of the run.
@@ -12567,11 +12612,352 @@ console.log(executed) // [11740, 11800, 11540, 11600, 11340, 11400, 11600, 11800
 
 ### Guide Pulse Loop
 
+`observation/guiding/guider` closes a guiding loop from a stream of tracker results and a calibration matrix, with no device I/O: the `Guider` takes one `GuideFrame` at a time (the `tracking` result of a tracker, see Guide Star Tracking, plus the image `width` and `height` in pixels and the optional `timestamp` in ms, `captureMonotonic`, `frameId` and `cadence` in ms) and returns a `GuideCommand` with the `state`, an `AxisPulse` for RA and for DEC (a `direction` of `WEST`, `EAST`, `NORTH` or `SOUTH`, or none, and a `duration` in milliseconds) and the `diagnostics`. The caller sends the pulses (see Dither Guide Pulses and INDI Guide Output) and the calibration comes from Guiding Calibration: without one the pixel error is not a pulse. The state is `idle` before the first frame, `initializing` while the lock reference is averaged over `lockAveragingFrames` good frames (no pulses are issued; a frame that jumps more than `maxFrameJumpPx` from the previous sample, or that has no measurement or a quality below `minFrameQuality`, is skipped), `guiding` afterwards, and `lost` after `lostStarFrameCount` consecutive bad frames. A frame is bad when there is no measurement, when the quality is below `minFrameQuality`, or when the measurement jumped more than `maxFrameJumpPx` from the last good one (not during a dither settle); a frame whose capture time is not after the previous one is ignored as `duplicate_frame` or `out_of_order`, and a frame whose gap is above `droppedFrameFactor` times `nominalCadence` is noted as `dropped_frame`. The reference is the average of the lock (or the fixed `referencePosition`), the target is the reference plus the dither or lock-shift offset plus the tracker `targetOffset`, and a target outside the image (or the `targetEnvelope` of the frame) puts the guider in `lost` with a `targetLimit` diagnostic. The error `dx, dy` in pixels (measurement minus target) goes through the calibration, `axis = calibration * image` (`applyCalibration`), to the axis errors; each axis applies a deadband (`applyDeadband`, below `minMoveRA` or `minMoveDEC` the error is zero), a hysteresis filter `hysteresis * previous + (1 - hysteresis) * error`, and a pulse of `|filtered| * msPerUnit * aggressiveness * cadenceScale` milliseconds clamped to the minimum and maximum pulse of the axis, where the cadence scale is the frame cadence over `nominalCadence` limited to 0.5 and 2. A positive RA error pulses `raPositiveDirection` and a positive DEC error `decPositiveDirection`. DEC has a `decMode`: `auto`, `north-only`, `south-only` or `off`, and it protects against backlash: a reversal needs the filtered error to reach `decReversalThreshold` and the accumulated opposite error to reach `decBacklashAccumThreshold` before a pulse is issued. `DEFAULT_GUIDER_CONFIG` is the conservative tuning of the `GuiderConfig` (an identity calibration, six lock frames, 12 pixels of jump, 1000 ms cadence, gains near 0.7, 850 ms per unit and pulses from 20 or 30 ms to 2000 or 2500 ms), and the constructor takes a partial one. `validateCalibration(calibration, minDeterminant?)` returns whether the determinant is finite and above the minimum (1e-9), and `invertCalibration` inverts a matrix. The runtime is `currentState`, `lastDiagnostics()` and `reset()`. `startDither(dx, dy)` shifts the target by pixels and marks a settle, `setTargetOffset(dx, dy)` shifts it without marking one (a lock shift), `setDithering(false)` ends the settle and keeps the offset and `stopDither()` returns to the reference. `setNominalCadence(ms)` (a non-positive or non-finite value is ignored), `setDecMode(mode)` and `setCalibration(calibration, options?)` change the tuning without resetting the lock; changing the calibration or a positive direction clears the filter of the axis (after a meridian flip, give the flipped calibration and directions). The constructor and `setCalibration` throw an `Error` for a singular calibration or an invalid configuration. The pulses are a proportional controller with no model of the mount, so the gains and the calibration must match the setup, and `oppositeRA` and `oppositeDEC` give the opposite direction.
+
+```ts
+import { applyCalibration, applyDeadband, DEFAULT_GUIDER_CONFIG, Guider, invertCalibration, oppositeDEC, oppositeRA, validateCalibration } from 'nebulosa/src/observation/guiding/guider'
+import { trackingResultFromStars } from 'nebulosa/src/observation/guiding/tracker'
+
+// A frame of a 640 by 480 guide camera with one star at (x, y), a quality of 1, and a cadence of 1000 ms.
+const frame = (x: number, y: number, frameId: number) => ({ tracking: trackingResultFromStars([{ x, y, snr: 40, flux: 1000, hfd: 3 }]), width: 640, height: 480, frameId, cadence: 1000 })
+
+// An identity calibration (image X is RA, image Y is DEC), a lock averaged over 3 frames, and a gain of 1 without hysteresis (so the first pulse shows the arithmetic).
+const guider = new Guider({ lockAveragingFrames: 3, hysteresisRA: 0, hysteresisDEC: 0, aggressivenessRA: 1, aggressivenessDEC: 1, msPerRAUnit: 500, msPerDECUnit: 500 })
+console.log(guider.currentState.state) // idle
+
+// The first three frames only acquire the lock (no pulses): the reference is the average of the positions.
+for (let i = 0; i < 3; i++) {
+	const command = guider.processFrame(frame(320 + (i - 1) * 0.1, 240, i))
+	console.log(command.state, command.ra, command.dec, command.diagnostics.notes) // initializing, initializing, guiding (on the third frame), always with an empty pulse (no direction, 0 ms) on both axes, and the notes init_collecting, init_collecting and lock_acquired
+}
+console.log(guider.currentState.referenceX, guider.currentState.referenceY) // 320 240
+
+// The star moved by +1 pixel in X and -0.5 pixel in Y: 1 * 500 = 500 ms toward WEST (a positive RA error), and 0.5 * 500 = 250 ms toward SOUTH (a negative DEC error).
+const guiding = guider.processFrame(frame(321, 239.5, 3))
+console.log(guiding.state, guiding.ra, guiding.dec) // guiding, RA { direction: 'WEST', duration: 500 } and DEC { direction: 'SOUTH', duration: 250 }
+console.log(guiding.diagnostics.dx, guiding.diagnostics.dy, guiding.diagnostics.axisErrorRA, guiding.diagnostics.axisErrorDEC, guiding.diagnostics.targetX, guiding.diagnostics.qualityScore) // dx 1, dy -0.5, axisErrorRA 1, axisErrorDEC -0.5, targetX 320 and a quality of 1
+
+// A star inside the deadband (0.12 pixel in RA, 0.14 in DEC by default) gives no pulse, and the deadband is a plain function too.
+console.log(guider.processFrame(frame(320.05, 240.05, 4)).ra, applyDeadband(0.1, 0.12), applyDeadband(-0.3, 0.12)) // { direction: undefined, duration: 0 }, 0 and -0.3
+
+// The calibration maps pixels to the axes: a camera rotated by 90 degrees (RA along -Y, DEC along X) and its inverse, with the determinant check.
+const rotated = [0, -1, 1, 0] as const
+console.log(applyCalibration(rotated, 2, 3), invertCalibration(rotated), validateCalibration(rotated), validateCalibration([1, 2, 2, 4])) // { ra: -3, dec: 2 }, [0, 1, -1, 0], { valid: true, determinant: 1 } and { valid: false, determinant: 0 }
+
+// A dither: the target moves 3 pixels in X and the guider pulses to follow it, until the settle is over; the offset is kept after setDithering(false) and removed by stopDither().
+guider.startDither(3, 0)
+console.log(guider.currentState.ditherActive, guider.currentState.ditherOffsetX, guider.processFrame(frame(321, 240, 5)).ra) // true 3 and an EAST pulse of 1000 ms (the star is 2 pixels short of the shifted target)
+guider.setDithering(false)
+console.log(guider.currentState.ditherActive, guider.currentState.ditherOffsetX) // false 3 (the offset is kept)
+guider.stopDither()
+console.log(guider.currentState.ditherOffsetX) // 0
+
+// The DEC policy: with north-only a southward correction is dropped, and the opposite directions.
+const northOnly = new Guider({ lockAveragingFrames: 2, hysteresisDEC: 0, decMode: 'north-only', referencePosition: [320, 240] })
+northOnly.processFrame(frame(320, 240, 0))
+northOnly.processFrame(frame(320, 240, 1))
+console.log(northOnly.processFrame(frame(320, 239, 2)).dec, northOnly.processFrame(frame(320, 241, 3)).dec, oppositeRA('WEST'), oppositeDEC('NORTH')) // an empty DEC pulse (a southward correction in north-only), NORTH 552.5 ms (0.65 * 850 for 1 unit), EAST and SOUTH
+northOnly.setDecMode('auto')
+northOnly.setNominalCadence(2000)
+console.log(northOnly.config.decMode, northOnly.config.nominalCadence, DEFAULT_GUIDER_CONFIG.lockAveragingFrames) // auto 2000 6
+
+// After a meridian flip the calibration and the directions are replaced without losing the lock, and the filters of the axis are cleared.
+guider.setCalibration([-1, 0, 0, -1], { raPositiveDirection: 'EAST', decPositiveDirection: 'SOUTH' })
+console.log(guider.config.calibration, guider.config.raPositiveDirection, guider.currentState.state, guider.currentState.filteredRA) // [-1, 0, 0, -1] EAST guiding 0
+```
+
 ### Guide Star Tracking
+
+`observation/guiding/tracker.star` is the stellar implementation of the generic guide tracker of Guide Pulse Loop: it detects the stars of one guide image (with the detector of Star Detection), filters them, keeps the identity of the guide star from frame to frame and measures the translation of the field in pixels (origin at the upper left, +X right and +Y down). The `StarTracker` is synchronous and stateful and follows the `GuideTracker` contract: `track(frame, context)` takes the `GuideTrackerFrame` (the decoded `image`, its `width` and `height`, a `timestamp` in ms and a `frameId`; an absent image gives an empty result noted `image_unavailable`) and the `GuideTrackerContext` (the `phase` of the guide client, `allowAcquisition`, `preserveIdentity`, and optionally the `initialPosition` that is preferred at acquisition, the `searchPosition` and `searchRegion` (the side of a square box in pixels) that limit the stars that count, and the `maxMeasurementJumpPx` that widens the association radius while calibrating). It returns a `StarTrackerResult`: the generic `measurement` (`x`, `y` and a `confidence` from 0 to 1 equal to the quality), the `candidateCount` (detections), the `acceptedCount`, the `qualityScore` (accepted over total among the stars inside the search box), the `rejectedReasons` counts, the `notes` (`acquired`, `no_usable_measurement`, `acquisition_disabled`, `measurement_lost`, `primary_outside_search_region`), the `measurementMode` (`singleStar` or `multiStar`), the `telemetry` of the primary (SNR, flux as `mass` and HFD), and the stellar extras: the `detections` in overlay order (the star nearest the search position first), the filtered `accepted` ones, the `primary`, the quality-approved `selectionPrimary`, `primaryInsideSearchRegion` and the `matches` used. The first frame with acquisition allowed (or any frame when `preserveIdentity` is false) acquires the star nearest the `initialPosition` or the best scored one (`selectGuideStar`) and measures its position; the next frames measure the translation of the reference stars: in the `multiStar` mode (the default) with the robust weighted mean of `estimateTranslation`, added to the position of the origin, and in `singleStar` mode, or when there is one star only, with the nearest star to the previous position. With acquisition allowed a fallback takes the nearest accepted star at any distance, and the consumer (the `Guider`) decides with its jump limit. The reference only advances when `commit()` is called, which the consumer does after accepting the frame: a rejected frame leaves the last good reference. `reset()` clears the identity, the reference and the last result; the identity is also dropped when the frame size changes. `lastResult` is the last result only, `select(result, position?)` returns the full-frame position of the quality-approved acquisition star, or the detection nearest the given position without the quality filter, or `undefined` when there is none or the result is not stellar, and `starTrackingOf(result)` returns the result as a `StarTrackerResult` when it carries the stellar arrays. The `StarTrackerConfig` has the `mode`, the `maxMatchDistancePx` (6) of the association, the `outlierSigma` (2.5) of the robust rejection, and the `filter` and `selection` thresholds, all overridable in the constructor (`DEFAULT_STAR_TRACKER_CONFIG`). The helpers are exported: `filterGuideStars(frame, config)` returns the `accepted` stars, the `rejectedReasons` and the `qualityScore` for the `StarFilterConfig` (`DEFAULT_STAR_FILTER_CONFIG`: SNR at least 2, flux at least 1, HFD at most 10 pixels, a border of 10 pixels, ellipticity (or eccentricity) at most 0.5, FWHM at most 12 pixels, and a saturation peak of 0.98; the reasons are `invalid`, `nan`, `low_snr`, `low_flux`, `high_hfd`, `saturated`, `saturated_peak`, `elongated`, `high_fwhm` and `border`), `starInsideSearchRegion`, `qualityStarsOf` and `filterQualityGuideStars` restrict it to the box, `enrichGuideStars(stars, image?)` samples the peak (the maximum around the centroid) of the stars that have none, and `selectGuideStar(stars, width, height, image?, options?)` returns the `primary` (the best isolated star by a score of SNR, flux, compactness, isolation, distance to the edge and to the center, minus a penalty near saturation), the spaced `alternatives` (`alternativeSeparationPx` 32, `maxAlternatives` 5), the ranked `candidates`, the `rejectedReasons` (with `double_star` for the stars closer to a neighbor than the larger of 12 pixels and 3.5 HFD) and the `qualityScore`. `estimateTranslation(referenceStars, stars, maxMatchDistancePx, outlierSigma)` pairs each reference star with its nearest unused star within the distance, weights by SNR, flux and HFD, rejects pairs whose residual is more than `outlierSigma` MADs from the median (with three or more) and returns the `dx`, `dy` in pixels and the number of `matches`, or `undefined` when nothing matched. The tracker follows a field translation only: rotation, scale and a guide star that changes between frames are not modeled, and noise, hot pixels and star chains can be detected as stars, so check the quality and the telemetry.
+
+```ts
+import type { Image } from 'nebulosa/src/imaging/model/types'
+import { generateStarImage } from 'nebulosa/src/imaging/synthetic/generator'
+import { DEFAULT_STAR_FILTER_CONFIG, DEFAULT_STAR_TRACKER_CONFIG, enrichGuideStars, estimateTranslation, filterGuideStars, filterQualityGuideStars, qualityStarsOf, selectGuideStar, starInsideSearchRegion, starTrackingOf, StarTracker, type GuideStar } from 'nebulosa/src/observation/guiding/tracker.star'
+
+// A quiet 160 by 120 guide frame with three stars, shifted as a whole by (dx, dy) pixels.
+const width = 160
+const height = 120
+const quiet = { seed: 5, sensor: { readNoise: 0.5 }, artifacts: { hotPixelRate: 0, warmPixelRate: 0, deadPixelRate: 0 } }
+const capture = (dx: number, dy: number): Image => {
+	const raw = new Float64Array(width * height)
+	generateStarImage(
+		raw,
+		width,
+		height,
+		1,
+		[
+			{ x: 40 + dx, y: 30 + dy, hfd: 3.2, snr: 60, flux: 8 },
+			{ x: 100 + dx, y: 50 + dy, hfd: 3.5, snr: 40, flux: 5 },
+			{ x: 70 + dx, y: 95 + dy, hfd: 3, snr: 30, flux: 4 },
+		],
+		1,
+		quiet,
+	)
+	return { header: {}, raw, metadata: { width, height, channels: 1, pixelCount: width * height, stride: width, strideInBytes: width * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+}
+const frame = (image: Image | undefined, frameId: number) => ({ image, width, height, timestamp: frameId * 1000, frameId })
+const looping = { phase: 'looping', allowAcquisition: true, preserveIdentity: false } as const
+
+// The first frame acquires the best scored star (not necessarily the brightest): its position is the measurement, with the detections, the accepted ones and the quality.
+const tracker = new StarTracker()
+const first = tracker.track(frame(capture(0, 0), 0), looping)
+console.log(first.measurement, first.candidateCount, first.acceptedCount, first.qualityScore, first.notes, first.measurementMode, first.matches) // measurement { x: 100.0002, y: 50.0002, confidence: 0.667 }, 3 detections, 2 accepted, quality 0.667, notes ['acquired'], mode singleStar and 1 match
+console.log(first.primary && [first.primary.x, first.primary.y], first.selectionPrimary && [first.selectionPrimary.x, first.selectionPrimary.y], first.telemetry, first.rejectedReasons) // primary (the first detection) at [40, 30], selection primary [100.0002, 50.0002] (the star at 40, 30 has an SNR of 2.8 and the brightest is not the best scored), telemetry { signalToNoise: 2.796, mass: 7.816, hfdPx: 3.412 } and rejectedReasons { low_snr: 1 }
+
+// The consumer accepts the frame with commit(), and the next frame measures the translation of the field (here 1.5 pixels in X and -0.8 in Y) from the origin, with the identity preserved.
+tracker.commit()
+const second = tracker.track(frame(capture(1.5, -0.8), 1), { phase: 'guiding', allowAcquisition: true, preserveIdentity: true })
+console.log(second.measurement, second.matches, second.usedMode, second.notes, tracker.lastResult === second, starTrackingOf(second) === second) // measurement { x: 101.5003, y: 49.2131 } (the origin plus the translation), 2 matches, multiStar, no notes, true true
+
+// select(): without a position the quality-approved acquisition star, with a position the nearest detection.
+console.log(tracker.select(second), tracker.select(second, [38, 28])) // [101.5003, 49.2172] and [41.5002, 29.2103] (the detection nearest [38, 28])
+
+// A search box (side of 20 pixels) around the guide star counts only the stars inside, and the initial position picks the star to acquire.
+const boxed = new StarTracker({ mode: 'singleStar' }).track(frame(capture(0, 0), 2), { ...looping, searchPosition: [100, 50], searchRegion: 20, initialPosition: [100, 50] })
+console.log(boxed.measurement, boxed.candidateCount, boxed.acceptedCount, boxed.qualityScore, boxed.primaryInsideSearchRegion) // measurement [100.0002, 50.0002] with confidence 1, 3 detections, 2 accepted, quality 1 and true
+
+// Without a decoded image the result is empty and says so; reset() drops the identity and the last result.
+console.log(tracker.track(frame(undefined, 3), looping).notes) // ['image_unavailable']
+tracker.reset()
+console.log(tracker.lastResult, DEFAULT_STAR_TRACKER_CONFIG.mode, DEFAULT_STAR_TRACKER_CONFIG.maxMatchDistancePx, DEFAULT_STAR_TRACKER_CONFIG.outlierSigma) // undefined multiStar 6 2.5
+
+// The star filter: which stars are accepted and the reasons of the others (low SNR, border, elongated, too wide, and a saturated peak).
+const stars: GuideStar[] = [
+	{ x: 40, y: 30, hfd: 3, snr: 40, flux: 100 },
+	{ x: 100, y: 50, hfd: 3, snr: 1, flux: 100 },
+	{ x: 5, y: 5, hfd: 3, snr: 40, flux: 100 },
+	{ x: 70, y: 95, hfd: 3, snr: 40, flux: 100, ellipticity: 0.7 },
+	{ x: 80, y: 60, hfd: 12, snr: 40, flux: 100 },
+	{ x: 60, y: 60, hfd: 3, snr: 40, flux: 100, peak: 0.99 },
+	{ x: 62, y: 62, hfd: 3, snr: 40, flux: 100 },
+]
+const filtered = filterGuideStars({ stars, width, height }, DEFAULT_STAR_FILTER_CONFIG)
+console.log(
+	filtered.accepted.map((star) => [star.x, star.y]),
+	filtered.rejectedReasons,
+	filtered.qualityScore,
+) // [[40, 30], [62, 62]] { low_snr: 1, border: 1, elongated: 1, high_hfd: 1, saturated_peak: 1 } 0.2857
+
+// The search box: whether a star is inside, the stars that count for the quality, and the quality of the box (the star at 40, 30 only).
+const box = { stars, width, height, searchPosition: [45, 35], searchRegion: 20 } as const
+console.log(starInsideSearchRegion(stars[0], [45, 35], 20), qualityStarsOf(box).length, filterQualityGuideStars(box, DEFAULT_STAR_FILTER_CONFIG).qualityScore) // true 1 1
+
+// The selection of the guide star: the isolated star near the center wins, the others are spaced alternatives, and the two stars that are close to each other are rejected as double stars.
+const candidates: GuideStar[] = [
+	{ x: 80, y: 60, hfd: 3, snr: 50, flux: 500 },
+	{ x: 40, y: 30, hfd: 3, snr: 80, flux: 800 },
+	{ x: 120, y: 90, hfd: 3, snr: 30, flux: 300 },
+	{ x: 125, y: 92, hfd: 3, snr: 28, flux: 250 },
+	{ x: 20, y: 100, hfd: 3.5, snr: 20, flux: 200 },
+]
+const selection = selectGuideStar(candidates, width, height, undefined, { maxAlternatives: 2 })
+const primary = selection.primary!
+console.log(
+	[primary.x, primary.y],
+	+primary.score.toFixed(3),
+	primary.nearestNeighborDistance,
+	primary.centerDistance,
+	primary.edgeDistance,
+	selection.alternatives.map((star) => [star.x, star.y, +star.score.toFixed(2)]),
+	selection.candidates.length,
+	selection.rejectedReasons,
+	selection.qualityScore,
+) // [80, 60] 12.166 50 0 60 [[40, 30, 9.51], [20, 100, 7.28]] 3 { double_star: 2 } 1
+
+// The peaks are sampled from the image around the centroid for the stars that have none, and kept for those that have.
+console.log(
+	enrichGuideStars(
+		[
+			{ x: 40.2, y: 30.1, hfd: 3, snr: 10, flux: 1 },
+			{ x: 70, y: 95, hfd: 3, snr: 10, flux: 1, peak: 0.1 },
+		],
+		capture(0, 0),
+	).map((star) => +star.peak!.toFixed(4)),
+) // [0.6342, 0.1]
+
+// The translation of a field of four stars that moved by (1.2, -0.5) pixels, and with one star that moved wrongly (the outlier is rejected and three matches remain).
+const reference: GuideStar[] = [
+	{ x: 40, y: 30, hfd: 3, snr: 40, flux: 100 },
+	{ x: 100, y: 50, hfd: 3, snr: 30, flux: 80 },
+	{ x: 70, y: 95, hfd: 3, snr: 20, flux: 60 },
+	{ x: 20, y: 80, hfd: 3, snr: 20, flux: 60 },
+]
+const moved = reference.map((star) => ({ ...star, x: star.x + 1.2, y: star.y - 0.5 }))
+console.log(estimateTranslation(reference, moved, 6, 2.5)) // { dx: 1.2, dy: -0.5, matches: 4 }
+console.log(
+	estimateTranslation(
+		reference,
+		moved.map((star, i) => (i === 3 ? { ...star, x: star.x + 4, y: star.y + 4 } : star)),
+		6,
+		2.5,
+	),
+) // { dx: 1.2, dy: -0.5, matches: 3 }
+```
 
 ### Guiding Assistant
 
+`observation/guiding/assistant` is a passive analysis of the guide frames, in the style of the Guiding Assistant of PHD2, that tells whether the seeing, the mount drift, the polar alignment, the focus or the exposure are what limit the guiding, without sending any correction. It has no UI or device coupling: the caller runs a `Guider` (see Guide Pulse Loop) over the frames of a tracker (see Guide Star Tracking) but does not execute its pulses, and gives each frame and its `GuideCommand` to `addSample(frame, command)`, which keeps only the frames in the `guiding` state that are not bad (a frame with calibrated axis errors uses them, scaled to pixels by `raRatePxPerMs` and `decRatePxPerMs` when given, and otherwise the image deltas, so an uncalibrated identity controller gives pixels directly). The `timestamp` is in milliseconds, the axis displacements in pixels of the mount axes, the angles in radians and the durations in milliseconds. `start(timestamp?)` begins a run (and `addSample` starts it by itself on the first frame), and `result(timestamp?)` returns a `GuidingAssistantResult` snapshot at any moment: the `status` (`idle`, `measuring`, `backlash`, `completed` or `failed`), the elapsed seconds, the `sampleCount`, the mean SNR, star mass and HFD, the `motion`, the recommended RA and DEC minimum moves, the recommended exposure range and a list of `recommendations` and `notes` (`no_samples`, `sampling_interval_short` before `minSampling` seconds, 120 by default, `image_scale_unavailable` and `declination_unavailable`). The `motion` has per axis the high-frequency RMS (the residual of a straight-line fit of the displacement against time, so the drift is removed), the peak from the first sample and the drift per minute, in pixels and in arcseconds when the `imageScale` (arcseconds per pixel) is known; the combined RMS; the RA peak-to-peak of the low-passed motion (a first-order filter with a cutoff of the larger of 6 s and three exposures, with the `exposure` in seconds of the config), the largest RA drift rate between samples in pixels per second and the `driftLimitingExposure` it implies; the `polarAlignmentError` in arcminutes from the DEC drift, as `3.8197 * |drift in pixels per minute| * scale / |cos(declination)|` (the formula of PHD2, only with a scale and a `declination`, and not near the poles); and `decCorrectedRmsPx`, the seeing estimate, which is the smallest drift-removed DEC RMS over overlapping 120 s windows (with at least 4 samples and 96 s) or, for runs shorter than 144 s, the single fit. The recommended DEC minimum move is that seeing times 1.28 (a scale under 1.5 arcseconds per pixel) or 1.65, with a floor of 0.1 pixel (0.05 and a 0.9 factor when every sample was measured in `multiStar` mode), rounded up to 0.05 pixel and replaced by `fallbackDecMinMove` (0.2) when it exceeds `minMoveArcsecSanityLimit` (1.25 arcseconds), and the RA one is 0.65 times it (or the same with `hasHighPrecisionEncoders`); the exposure range is limited by the drift (the RA minimum move over the largest drift rate) and by the ideals of 2 to 4 seconds (4 to 8 with high-precision encoders). The recommendations (`GuidingAssistantRecommendation`, with a `kind`, a `message`, an optional `appliesTo` setting and `value` with its `unit`, and whether it is `actionable`) are the exposure range, a new calibration when `suspectCalibration`, a brighter star when the mean SNR is below `minSNR` (10), better focus when the scale is above `focusImageScaleThreshold` (1) and the mean HFD above `focusHfdThreshold` (4.5 pixels), the polar alignment above 5 arcminutes, the two minimum moves, and the result of the backlash test. The optional DEC backlash test (`measureBacklash`; `canMeasureBacklash` says when it can start and `measuringBacklash` that it is running) is driven by the caller: `startBacklashTest()` begins from the last sample and returns the first north pulse (a `CalibrationPulseCommand`, see Guiding Calibration), and each later `addSample` returns the next pulse in `step.pulse`, `backlashPulse` milliseconds north until the DEC moved `backlashTarget` pixels (4), then south until it returned within `backlashReturnTolerance` (0.5), where the time of the south pulses that moved less than `backlashMinMotion` (0.05 pixel) is the backlash in milliseconds, with a recommended compensation rounded down to 10 ms when it is between 100 and 3000 ms (above 3000 ms the recommendation is to guide in one DEC direction only); `alignBacklashOrigin(frame, command)` moves the origin of the test to the first frame after it started, before its first pulse is executed. `complete(timestamp?)` freezes the run as `completed` (and aborts a test in progress), `abortBacklash(message?, timestamp?)` stops the test, `fail(message, timestamp?)` marks the run `failed` with a note while keeping the data, and the backlash fails by itself after `backlashMaxPulsesPerDirection` (40) pulses without the expected motion. `DEFAULT_GUIDING_ASSISTANT_CONFIG` holds the defaults of the `GuidingAssistantConfig`. The estimates need a run of at least two minutes (a few hundred frames) to be meaningful, and the polar alignment value is a hint from the drift of one star, not a plate solve or a DARV result (see DARV Polar Error Estimation).
+
+```ts
+import { deg } from 'nebulosa/src/math/units/angle'
+import { DEFAULT_GUIDING_ASSISTANT_CONFIG, GuidingAssistant } from 'nebulosa/src/observation/guiding/assistant'
+import { Guider } from 'nebulosa/src/observation/guiding/guider'
+import { trackingResultFromStars } from 'nebulosa/src/observation/guiding/tracker'
+
+// An uncalibrated guider (identity, so the errors are pixels) that only measures: the star drifts 0.01 pixel per second in X (RA) and 0.004 in Y (DEC), with a periodic error of 0.8 pixel in a 60 s cycle and a small deterministic seeing in both axes.
+const guider = new Guider({ lockAveragingFrames: 1, referencePosition: [320, 240] })
+let frameId = 0
+let dec = 0
+const frameAt = (seconds: number, decOffset = 0, quiet = false) => {
+	const x = 320 + 0.01 * seconds + 0.8 * Math.sin((2 * Math.PI * seconds) / 60) + 0.05 * Math.sin(seconds * 7.3)
+	const y = 240 + 0.004 * seconds + (quiet ? 0 : 0.12 * Math.sin(seconds * 3.1)) + decOffset
+	return { tracking: trackingResultFromStars([{ x, y, snr: 40, flux: 1000, hfd: 3 }]), width: 640, height: 480, timestamp: 1_700_000_000_000 + seconds * 1000, frameId: frameId++, cadence: 1000 }
+}
+
+// The config: a guide scale of 2 arcseconds per pixel at a declination of 30 degrees (for the polar alignment hint), a 1 s exposure, and the backlash test enabled.
+const assistant = new GuidingAssistant({ imageScale: 2, declination: deg(30), exposure: 1, multiStar: false, measureBacklash: true })
+console.log(assistant.config.minSampling, assistant.config.imageScale, DEFAULT_GUIDING_ASSISTANT_CONFIG.backlashPulse, DEFAULT_GUIDING_ASSISTANT_CONFIG.minMoveArcsecSanityLimit) // 120 2 100 1.25
+console.log(assistant.start(1_700_000_000_000).status, assistant.canMeasureBacklash, assistant.result().notes) // measuring false ['no_samples']
+
+// One minute of frames is not enough: the snapshot says the sampling is short, but it already has the statistics.
+for (let seconds = 0; seconds < 60; seconds++) {
+	const frame = frameAt(seconds)
+	assistant.addSample(frame, guider.processFrame(frame))
+}
+const early = assistant.result()
+console.log(early.status, early.sampleCount, early.elapsed, early.notes) // measuring 60 59 ['sampling_interval_short']
+
+// Four minutes: the full snapshot of the passive run (arcseconds, with the scale; the DEC drift gives a polar alignment hint).
+for (let seconds = 60; seconds < 240; seconds++) {
+	const frame = frameAt(seconds)
+	assistant.addSample(frame, guider.processFrame(frame))
+}
+const result = assistant.result()
+const round = (value: number | undefined, digits = 3) => (value === undefined ? undefined : +value.toFixed(digits))
+console.log(result.sampleCount, result.elapsed, round(result.meanSnr, 1), round(result.meanStarMass, 0), round(result.meanHfd, 1), result.notes) // 240 239 40 1000 3 []
+console.log(round(result.motion.ra.rmsArcsec), round(result.motion.ra.driftRateArcsecPerMinute), round(result.motion.ra.peakArcsec), round(result.motion.dec.rmsArcsec), round(result.motion.dec.driftRateArcsecPerMinute), round(result.motion.dec.peakPx)) // 1.112 1.009 5.538 0.166 0.48 1.007
+console.log(round(result.motion.totalRmsArcsec), round(result.motion.raPeakPeakArcsec), round(result.motion.raMaxDriftRateArcsecPerSecond), round(result.motion.driftLimitingExposure), round(result.motion.polarAlignmentError), round(result.motion.decCorrectedRmsPx, 4)) // 1.124 5.699 0.173 1.153 2.115 0.0778
+console.log(result.recommendedRaMinMove, result.recommendedDecMinMove, result.recommendedMinExposure, result.recommendedMaxExposure) // 0.1 0.15 1 1
+for (const item of result.recommendations) console.log(item.kind, item.message, item.appliesTo, round(item.value), item.unit, item.actionable) // exposure 'Use exposure times in the range of 1.0s to 1.0s' exposure 1 s true; ra-min-move 'Try setting RA min-move to 0.10' raMinMove 0.1 px true; dec-min-move 'Try setting Dec min-move to 0.15' decMinMove 0.15 px true
+
+// The DEC backlash test (without the seeing, which would hide the small motions): the caller executes each pulse on the mount (here a simulation with 300 ms of backlash that moves the star 0.005 pixel per millisecond after it is taken up) and gives the next frame. alignBacklashOrigin takes the origin from the frame captured before the first pulse.
+let seconds = 240
+let slack = 300
+let lastSign = 0
+const decPerMs = 0.005
+const nextFrame = () => frameAt(seconds++, dec, true)
+const first = assistant.startBacklashTest()
+console.log(first.pulse, assistant.measuringBacklash, assistant.result().status) // { ra: { direction: undefined, duration: 0 }, dec: { direction: 'NORTH', duration: 100 } } true backlash
+const origin = nextFrame()
+console.log(assistant.alignBacklashOrigin(origin, guider.processFrame(origin)).aligned) // true
+let pulse = first.pulse
+while (pulse !== undefined) {
+	const sign = pulse.dec.direction === 'NORTH' ? 1 : -1
+	if (sign !== lastSign) slack = 300
+	lastSign = sign
+	const used = Math.min(slack, pulse.dec.duration)
+	slack -= used
+	dec += sign * decPerMs * (pulse.dec.duration - used)
+	const frame = nextFrame()
+	pulse = assistant.addSample(frame, guider.processFrame(frame)).pulse
+}
+const done = assistant.result()
+console.log(done.status, done.backlash) // completed { phase: 'completed', backlash: 300, recommendedCompensation: 300, northDistance: 4.044, southDistance: 3.968, northPulses: 11, southPulses: 11, message: 'backlash measurement completed' }
+console.log(done.recommendations.filter((item) => item.kind === 'backlash').map((item) => [item.message, item.appliesTo, item.value, item.unit])) // [['Try starting with a Dec backlash compensation of 300 ms', 'decBacklashCompensation', 300, 'ms']]
+
+// complete() freezes the run and gives the same final snapshot; the calls after it return it unchanged.
+console.log(assistant.complete().status, assistant.addSample(frameAt(seconds), guider.processFrame(frameAt(seconds))).result.sampleCount === done.sampleCount) // completed true
+
+// Cancelling a backlash test that is running (a user stop): the passive data is kept, and the test is marked aborted.
+const stopped = new GuidingAssistant({ measureBacklash: true })
+const otherGuider = new Guider({ lockAveragingFrames: 1, referencePosition: [320, 240] })
+for (let i = 0; i < 20; i++) {
+	const frame = frameAt(i)
+	stopped.addSample(frame, otherGuider.processFrame(frame))
+}
+stopped.startBacklashTest()
+const aborted = stopped.abortBacklash('stopped by the user')
+console.log(aborted.status, aborted.backlash?.phase, aborted.backlash?.message, aborted.sampleCount) // failed aborted 'stopped by the user' 20
+```
+
 ### Guiding Calibration
+
+`observation/guiding/calibrator` calibrates a guide camera against the mount: the `GuidingCalibrator` is a frame-by-frame state machine that asks for guide pulses, measures where the guide star went after each one, and solves the image-space direction and rate of the RA and DEC axes. It does no I/O: the caller feeds it one `GuideFrame` (the tracker result of Guide Star Tracking, with the image size in pixels) after each pulse, and executes the `pulse` (`CalibrationPulseCommand`, an `AxisPulse` of Guide Pulse Loop for `ra` and for `dec`, of which only the active axis is non-zero, in milliseconds) that the returned `CalibrationStepResult` carries, before the next frame. The `phase` goes from `idle` to `precheck` and `acquireLock` (the first frame fixes the origin and needs a measurement with the quality of `minFrameQuality` and a distance of `edgeMarginPx` from the edges), then the RA leg (`raForwardPulse` and `raForwardMeasure`, one pulse of `raPulse` toward `raDirection` per frame, until the net travel reaches `minNetRaTravelPx` or `maxRaSteps`), the optional clearing leg (`raClearPulse`, the opposite RA pulses back toward the origin until the offset is within `maxClearingOffsetPx`, the origin is crossed or `maxClearingSteps` is reached, when `clearingMoveEnabled`), the DEC leg (`decForwardPulse`, with `decBacklashClearing` while the first pulses only take up the backlash, until `minNetDecTravelPx` or `maxDecSteps`), then `solving` and `validating` and a terminal `completed` or `failed`. Each axis is solved from the samples (`GuidingCalibrationSample`: the step, the pulse, the measured position, the step and net displacements and their projections, in pixels) as a unit direction in the image, a rate in pixels per millisecond (`ratePxPerMs`), the travel, the pulse time, the angle (radians), the orthogonal residual and the count of steps that went backward; it is validated against the rate limits `minRatePxPerMs` and `maxRatePxPerMs`, the consistency of the direction, the separation of the two axes (`minAxisSeparation`, 12 degrees by default, in radians) and the `minDeterminant` of the normalized matrix. A `GuidingCalibrationResult` has the solved `ra` and `dec` (each with the commanded `direction`), the `imageMotion` matrix (axis to image, in pixels per millisecond, row-major `[a, b, c, d]`), the inverse `imageToAxis` (the `CalibrationMatrix` of the `Guider`, in milliseconds per pixel), the `determinant`, the DEC `backlash` estimate in milliseconds, the origins of the two legs, the `clearingSteps` and the `warnings` (for instance `ra_clearing_finished_near_threshold`). A bad frame (no measurement or a poor quality) is skipped up to `maxBadFrames`, a jump larger than `maxFrameJumpPx` counts as a bad frame, `settleFramesAfterMove` frames are ignored after each pulse, and the run aborts with a `GuidingCalibrationFailure` (`code`, `phase`, `message`, `frameId`) of one of `invalid_config`, `no_usable_star`, `bad_frame`, `star_lost`, `star_near_edge`, `impossible_jump`, `insufficient_ra_movement`, `insufficient_dec_movement`, `too_many_ra_no_motion_steps`, `too_many_dec_no_motion_steps`, `ra_clearing_failed`, `axis_rate_invalid`, `axis_direction_inconsistent`, `axes_too_parallel` or `matrix_singular`. The `completed` and `failed` states are terminal and repeat. `DEFAULT_GUIDING_CALIBRATOR_CONFIG` has 650 ms pulses toward WEST and NORTH, at most 20 steps per leg, and the limits shown above; the constructor takes a partial `GuidingCalibrationConfig` and throws an `Error` for an invalid one. `currentState` is a snapshot, `lastDiagnostics()` gives the `GuidingCalibrationDiagnostics` of the last step (the step counts, the net travel, the backlash, the warnings, the notes, the phase history and the recorded samples), and `reset()` clears the run. `flipGuidingCalibration(calibration, reverseDecOutput?, minDeterminant?)` returns the calibration for the same camera after a meridian flip, which turns the image by 180 degrees: it negates the RA column (and the DEC column unless `reverseDecOutput` is true, for a mount whose DEC output direction is reversed by the flip, in which case the DEC `direction` is also reversed), recomputes the inverse, and throws an `Error` when the flipped matrix is not usable; the RA direction is not changed. The calibration is that of the optical train, the declination and the guide rate at which it was measured, so recalibrate when they change; the clearing leg of the RA axis and the DEC backlash are measured with the mount as it was, and seeing and a star that moves for other reasons add error to the solution.
+
+```ts
+import { DEFAULT_GUIDING_CALIBRATOR_CONFIG, flipGuidingCalibration, GuidingCalibrator, type CalibrationPulseCommand } from 'nebulosa/src/observation/guiding/calibrator'
+import { trackingResultFromStars } from 'nebulosa/src/observation/guiding/tracker'
+
+// A simulated mount: a star at (320, 240) of a 640 by 480 guide camera that moves 0.004 pixel per millisecond of RA pulse (WEST) along a direction rotated by 0.3 radian from +X, and along the perpendicular for a DEC pulse (NORTH), with 900 ms of DEC backlash that is taken up again after each reversal.
+let x = 320
+let y = 240
+const rate = 0.004
+const raAxis = [Math.cos(0.3), Math.sin(0.3)]
+const decAxis = [-Math.sin(0.3), Math.cos(0.3)]
+let slack = 900
+let lastDecSign = 0
+const move = (pulse: CalibrationPulseCommand) => {
+	if (pulse.ra.direction !== undefined) {
+		const sign = pulse.ra.direction === 'WEST' ? 1 : -1
+		x += sign * rate * pulse.ra.duration * raAxis[0]
+		y += sign * rate * pulse.ra.duration * raAxis[1]
+	}
+	if (pulse.dec.direction !== undefined) {
+		const sign = pulse.dec.direction === 'NORTH' ? 1 : -1
+		if (sign !== lastDecSign) slack = 900
+		lastDecSign = sign
+		const used = Math.min(slack, pulse.dec.duration)
+		slack -= used
+		const effective = pulse.dec.duration - used
+		x += sign * rate * effective * decAxis[0]
+		y += sign * rate * effective * decAxis[1]
+	}
+}
+const frame = (frameId: number) => ({ tracking: trackingResultFromStars([{ x, y, snr: 40, flux: 1000, hfd: 3 }]), width: 640, height: 480, frameId })
+
+// The first frame locks the origin and asks for the first RA pulse; then each frame after a pulse advances the phases until the run ends.
+const calibrator = new GuidingCalibrator()
+console.log(calibrator.currentState.phase, DEFAULT_GUIDING_CALIBRATOR_CONFIG.raPulse, DEFAULT_GUIDING_CALIBRATOR_CONFIG.raDirection) // idle 650 'WEST'
+let step = calibrator.processFrame(frame(0))
+console.log(step.phase, step.pulse, step.diagnostics.notes) // raForwardPulse { ra: { direction: 'WEST', duration: 650 }, dec: { direction: undefined, duration: 0 } } ['calibration_started']
+const phases = new Set<string>([step.phase])
+let frames = 1
+while (step.completed === undefined && step.failure === undefined) {
+	if (step.pulse !== undefined) move(step.pulse)
+	step = calibrator.processFrame(frame(frames++))
+	phases.add(step.phase)
+}
+console.log(frames, [...phases], step.failure) // 16 ['raForwardPulse', 'raClearPulse', 'decForwardPulse', 'decBacklashClearing', 'completed'] undefined
+
+// The result: the axes (direction, rate in pixels per millisecond and image angle), the matrices, the DEC backlash and the origins.
+const result = step.completed!
+const round = (values: readonly number[]) => values.map((value) => +value.toFixed(5))
+console.log(result.ra.direction, +result.ra.ratePxPerMs.toFixed(5), +result.ra.angle.toFixed(4), result.dec.direction, +result.dec.ratePxPerMs.toFixed(5), +result.dec.angle.toFixed(4)) // WEST 0.004 0.3 NORTH 0.00369 1.8708
+console.log(round(result.imageMotion), round(result.imageToAxis), +result.determinant.toExponential(3), +result.backlash.toFixed(1), result.clearingSteps, result.warnings) // [0.00382, -0.00109, 0.00118, 0.00353] [238.83412, 73.88005, -80.03672, 258.73697] 0.00001477 650 4 ['ra_clearing_finished_near_threshold']
+console.log(result.startX, result.startY, +result.decStartX.toFixed(4), +result.decStartY.toFixed(4)) // 320 240 322.4839 240.7684
+
+// The diagnostics: the steps of each leg, the net travel in pixels and the first RA sample.
+const diagnostics = calibrator.lastDiagnostics()
+console.log(diagnostics.raSteps, diagnostics.decSteps, diagnostics.clearingSteps, +diagnostics.raNetDistancePx.toFixed(3), +diagnostics.decNetDistancePx.toFixed(3), diagnostics.phaseHistory.length, diagnostics.decMotionDetected) // 5 6 4 13 12 37 true
+console.log(diagnostics.raSamples[0]) // { step: 1, pulse: 650, pulseDirection: 'WEST', x: 322.484, y: 240.768, deltaX: 2.484, deltaY: 0.768, netDistance: 2.6, projectedDistance: 2.6, orthogonalDistance: 0, ... }
+console.log(calibrator.currentState) // { phase: 'completed', startX: 320, startY: 240, currentX: 318.94, currentY: 252.23, decStartX: 322.48, decStartY: 240.77, raSteps: 5, decSteps: 6, clearingSteps: 4, plannedClearingSteps: 5, decMotionDetected: true, backlash: 650, ... }
+
+// The terminal state repeats, and reset() starts over.
+console.log(calibrator.processFrame(frame(frames)).phase, calibrator.processFrame(frame(frames + 1)).completed === undefined)
+calibrator.reset()
+console.log(calibrator.currentState.phase) // idle
+
+// After a meridian flip the image turns 180 degrees: the matrices are flipped, and the directions stay unless the DEC output is reversed.
+const flipped = flipGuidingCalibration(result)
+console.log(flipped.ra.direction, flipped.dec.direction, round(flipped.imageMotion), round(flipped.imageToAxis)) // WEST NORTH [-0.00382, 0.00109, -0.00118, -0.00353] [-238.83412, -73.88005, 80.03672, -258.73697]
+const reversed = flipGuidingCalibration(result, true)
+console.log(reversed.dec.direction, round(reversed.imageMotion)) // SOUTH [-0.00382, -0.00109, -0.00118, 0.00353]
+
+// Other pulses and directions, a settle of one frame after each pulse, and no clearing leg.
+const custom = new GuidingCalibrator({ raPulse: 400, decPulse: 400, raDirection: 'EAST', decDirection: 'SOUTH', clearingMoveEnabled: false, settleFramesAfterMove: 1 })
+console.log(custom.config.raPulse, custom.config.raDirection, custom.config.decDirection, custom.config.clearingMoveEnabled) // 400 EAST SOUTH false
+```
 
 ### iPolar Alignment
 
@@ -12666,7 +13052,133 @@ console.log(back.converged, round([degrees(back.primary), degrees(back.secondary
 
 ### Mount Tracking Rates
 
+`astronomy/formulas` gives the mean drive rates that a mount uses for its tracking modes, and converts a rate among radians per second, arcseconds per second and sidereal multipliers; everything is per SI second. `trackingRate(mode)` takes the `TrackMode` of an INDI mount (see INDI Mount Control) without `CUSTOM`, which has no fixed rate, and returns a `TrackingRate` with the same rate in `radiansPerSecond`, `arcsecPerSecond` (numerically equal to degrees per hour) and `siderealMultiplier`. The `SIDEREAL` rate is 1296000 arcseconds per 86164.0905 seconds, the `SOLAR` rate is exactly one turn per 86400 s mean solar day, the `LUNAR` rate is the sidereal rate minus the mean motion of the Moon over its sidereal month of 27.321661 days, and the `KING` rate is the sidereal rate reduced by one part in 3600, the fixed factor of a King drive (not the hour-angle-dependent King formula). These are mean rates of the right ascension drive: the lunar one is not the instantaneous topocentric rate of the Moon, and the rate of a non-sidereal target (a comet, a satellite, the Moon at its real position) must come from an ephemeris difference or the functions of Non-Sidereal Guide Tracking and Satellite Tracking Rates. `convertTrackingRate(value, from, to)` converts one rate between the units `radiansPerSecond`, `arcsecPerSecond` and `siderealMultiplier`, where a multiplier of 1 is the sidereal rate; it does not change the nature of the rate and it accepts any finite value, including negative or zero ones.
+
+```ts
+import { convertTrackingRate, trackingRate } from 'nebulosa/src/astronomy/formulas'
+
+// The four fixed rates, each in the three units: the multiplier of the solar rate is a little below one, the lunar one is about 0.9635, and King is 3599/3600.
+console.log(trackingRate('SIDEREAL')) // radiansPerSecond 7.2921e-5, arcsecPerSecond 15.04107, siderealMultiplier 1
+console.log(trackingRate('SOLAR')) // radiansPerSecond 7.2722e-5, arcsecPerSecond 15 exactly, siderealMultiplier 0.997270
+console.log(trackingRate('LUNAR')) // radiansPerSecond 7.0259e-5, arcsecPerSecond 14.49205, siderealMultiplier 0.963499
+console.log(trackingRate('KING')) // radiansPerSecond 7.2901e-5, arcsecPerSecond 15.03689, siderealMultiplier 0.999722
+
+// The sidereal rate in degrees per hour is the arcsecond rate, and the solar rate is exactly 15 arcseconds per second, 0.99727 of the sidereal rate (3.9 minutes per day).
+console.log(trackingRate('SIDEREAL').arcsecPerSecond, trackingRate('SOLAR').siderealMultiplier) // 15.041068645644208 0.9972695659722223
+
+// A hand controller asks for 0.5x of the sidereal rate: in radians per second and in arcseconds per second.
+console.log(convertTrackingRate(0.5, 'siderealMultiplier', 'radiansPerSecond'), convertTrackingRate(0.5, 'siderealMultiplier', 'arcsecPerSecond')) // 3.6461e-5 rad/s and 7.520534 arcsec/s
+
+// A drive that turns at 14.9 arcseconds per second, as a multiplier of the sidereal rate, and the same rate in radians per second.
+console.log(convertTrackingRate(14.9, 'arcsecPerSecond', 'siderealMultiplier'), convertTrackingRate(14.9, 'arcsecPerSecond', 'radiansPerSecond')) // 0.990621 and 7.2237e-5 rad/s
+
+// A rate in radians per second and the units back, as a round trip, and the identity when both units are the same.
+console.log(convertTrackingRate(convertTrackingRate(7.2921159e-5, 'radiansPerSecond', 'arcsecPerSecond'), 'arcsecPerSecond', 'radiansPerSecond'), convertTrackingRate(2, 'siderealMultiplier', 'siderealMultiplier')) // 0.000072921159 (the round trip) and 2 (the identity)
+```
+
 ### Non-Sidereal Guide Tracking
+
+`observation/guiding/tracker.nonsidereal` lets a guider follow a target that moves against the stars (a comet, an asteroid or a satellite) while the stars stay the visual reference. The `NonSiderealTracker` is a decorator of any `GuideTracker` (see Guide Star Tracking): it calls the base tracker first, then adds to the `targetOffset` of the result the image displacement that the target has had since its anchor, so the guider (see Guide Pulse Loop) pulses to follow the target instead of locking the star; the base tracker keeps the detection, the identity and the `commit()` timing. Positions are equatorial RA and DEC in radians, offsets are local east and north tangent-plane radians, rates are radians per second and the image offsets are pixels with the origin and axes of the base measurement. The source is a `NonSiderealEphemeris` (a synchronous `position(time, out)` writing RA in 0..TAU and DEC, an optional inclusive `validTime` in Julian days TT and an optional `generation`) or a `NonSiderealMotionProvider` (a local fitted motion, from images, whose `motion(time)` gives a fixed-plane `offset` and an optional `rate`, `acceleration`, `confidence` and `stale` flag, and `reset()`), and the `NonSiderealImageTransform` maps `[east, north]` to `[x, y]` pixels, usually with `calibratedNonSiderealTransform` (the guider scale in arcseconds per pixel, the image unit vectors of positive RA and DEC from the calibration of Guiding Calibration, and an optional `orientation` matrix from east and north to the axes). `nonSiderealEphemerisFromInterpolator(interpolator)` adapts an ephemeris table (see Equatorial Ephemeris Interpolation) as an ephemeris with its window as `validTime`, a `generation` that `update()` increments and an error when the time is outside the table, so a tabulated position is never extrapolated or clamped. `arm(source, transform, feedback?)` configures the source and moves the state from `disabled` to `armed`; the anchor is captured at the first frame with a `capture time` after the visual lock (`phase` of `guiding` with `lockEstablished`, or `lostLock` with an anchor), the state is then `active`, and the next frames add the offset from the anchor: no rate is integrated, the position is re-evaluated at each capture time. Frames need an astronomical `captureTime` (preferably the exposure midpoint) and a time that increases (the `captureMonotonic` when present); before the lock and when disabled the base result is returned untouched. The derivative is estimated by finite differences of the ephemeris (`estimateNonSiderealDerivative(ephemeris, time, options)`): a centered five-point stencil with the acceleration when the `validTime` window permits it, then lower-order centered and one-sided stencils at the boundaries (`oneSided` true), with a step of 30 seconds by default clamped to `minStep` and `maxStep`, and `available: false` with a `reason` when the time is outside the window or the provider fails. The `feedback` (a `TrackingRateEstimator` and a `TrackingRateController`, see Tracking Rate Estimation and Tracking Rate Correction) adds a bounded residual rate to the ephemeris one, shown as `effectiveRate` and `rateCorrection`; it is only used with an ephemeris. The `NonSiderealState` is `disabled`, `armed`, `active`, `rateDegraded` (the offsets are valid but there is no rate), `limitReached` and `faulted` (the measurement is removed from the result, the notes gain `non_sidereal_<reason>`, and the tracker stays there until `reset()`, `clear()` or `reanchor()`); the reasons are `outsideValidity`, `invalidPosition`, `invalidTime`, `invalidTransform`, `antipodal`, `angularLimit`, `pixelLimit`, `outOfOrder`, `providerError`, `rateUnavailable`, `rateLimit` and `motionUnavailable`, and the options bound the separation (`geometry.maxAngularSeparation`, just below PI by default), the `maxRate` and the `maxAcceleration`. Each result is a `NonSiderealTrackerResult` with the base fields and a fresh `nonSidereal` diagnostic that `nonSiderealTrackingOf(result)` reads (the state, the reason, the position, the angular offset, the separation, the target offset, the rates, the derivative step and the confidences); a plain result gives `undefined`. `reanchor(time, position?)` takes a new anchor (and clears the residual estimates of the old frame), `reset()` clears the temporal state and keeps the source, `clear()` removes the source and `onCalibrationChanged(transform?)` discards the image fits when the camera orientation changes (a replacement transform keeps the state, none leaves the tracker `faulted` until one is supplied, as after a meridian flip), and `select`, `commit` and `baseTracker` delegate to the base tracker (`baseTrackerOf(tracker)` unwraps a decorated one). The helpers `nonSiderealAngularOffset(anchor, current, options?)`, `nonSiderealUnitVector(position)` and `nonSiderealGenerationOf(source)` are exported, and the defaults are `DEFAULT_NONSIDEREAL_DERIVATIVE_STEP_SECONDS`, `DEFAULT_NONSIDEREAL_MAX_ANGULAR_SEPARATION` and `DEFAULT_NONSIDEREAL_ANTIPODAL_TOLERANCE`. The geometry is a local tangent plane around the anchor with a pure scale-and-rotation image transform: the pointing of the mount, the refraction and the field distortion are not modeled, a position outside the plane of the transform or a long drift needs a new anchor, and the time must be the actual capture time of each frame.
+
+```ts
+import { time, timeShift, Timescale } from 'nebulosa/src/astronomy/time/time'
+import { linearInterpolator } from 'nebulosa/src/astronomy/ephemeris/interpolation/ephemeris'
+import { arcsec, deg } from 'nebulosa/src/math/units/angle'
+import { trackingResultFromStars, type GuideTracker } from 'nebulosa/src/observation/guiding/tracker'
+import {
+	baseTrackerOf,
+	calibratedNonSiderealTransform,
+	DEFAULT_NONSIDEREAL_DERIVATIVE_STEP_SECONDS,
+	estimateNonSiderealDerivative,
+	NonSiderealTracker,
+	nonSiderealAngularOffset,
+	nonSiderealEphemerisFromInterpolator,
+	nonSiderealGenerationOf,
+	nonSiderealTrackingOf,
+	nonSiderealUnitVector,
+	type NonSiderealMotionProvider,
+} from 'nebulosa/src/observation/guiding/tracker.nonsidereal'
+
+// A target that moves 10 arcseconds per minute toward the east and 5 toward the north, tabulated every minute for 10 minutes (TT) at RA 100 and DEC 20 degrees.
+const start = time(2460000.5, 0, Timescale.TT)
+const points = Array.from({ length: 11 }, (_, i) => ({ time: timeShift(start, (i * 60) / 86400), rightAscension: deg(100) + arcsec(10 * i) / Math.cos(deg(20)), declination: deg(20) + arcsec(5 * i) }))
+const ephemeris = nonSiderealEphemerisFromInterpolator(linearInterpolator(points))
+console.log(ephemeris.validTime, ephemeris.generation) // [2460000.5, 2460000.5069444445] 0
+
+// The finite-difference rate in the middle of the table (a centered stencil with the acceleration), in arcseconds per second, and at the first sample (one-sided).
+const middle = estimateNonSiderealDerivative(ephemeris, timeShift(start, 300 / 86400))
+console.log(
+	middle.rate!.map((value) => +(value / arcsec(1)).toFixed(4)),
+	middle.step,
+	middle.oneSided,
+	middle.acceleration !== undefined,
+) // [0.1667, 0.0833] 30 false true
+const boundary = estimateNonSiderealDerivative(ephemeris, start, { step: 10 })
+console.log(
+	boundary.rate!.map((value) => +(value / arcsec(1)).toFixed(4)),
+	boundary.step,
+	boundary.oneSided,
+	DEFAULT_NONSIDEREAL_DERIVATIVE_STEP_SECONDS,
+) // [0.1667, 0.0833] 10 true 30
+
+// The east and north offset from an anchor to a position 0.01 degree away in RA and in DEC, in arcseconds, and the unit vector of a position.
+const offset = nonSiderealAngularOffset({ rightAscension: deg(100), declination: deg(20) }, { rightAscension: deg(100.01), declination: deg(20.01) })
+console.log(
+	+(offset.east / arcsec(1)).toFixed(3),
+	+(offset.north / arcsec(1)).toFixed(3),
+	+(offset.separation / arcsec(1)).toFixed(3),
+	nonSiderealUnitVector({ rightAscension: deg(90), declination: 0 }).map((value) => +value.toFixed(6)),
+	nonSiderealGenerationOf(ephemeris),
+) // 33.827 36.001 49.4 [0, 1, 0] 0
+
+// A guider of 2 arcseconds per pixel in which positive RA moves the image to +X and positive DEC moves it to -Y: 20 arcseconds east and 10 north are 10 pixels in X and -5 in Y.
+const transform = calibratedNonSiderealTransform({ pixelScaleArcsecPerPixel: 2, calibration: { rightAscension: { unitX: 1, unitY: 0 }, declination: { unitX: 0, unitY: -1 } } })
+console.log(transform.offsetToImage([arcsec(20), arcsec(10)], start, { width: 640, height: 480, timestamp: 0, frameId: 0 })) // [10, -5]
+
+// A base tracker that always sees the guide star at (320, 240), the decorator, and the arming with the ephemeris: the state goes from disabled to armed.
+const base: GuideTracker = { reset: () => undefined, track: () => trackingResultFromStars([{ x: 320, y: 240, snr: 40, flux: 1000, hfd: 3 }]) }
+const tracker = new NonSiderealTracker(base, { maxRate: arcsec(100) })
+console.log(tracker.state, baseTrackerOf(tracker) === base) // disabled true
+tracker.arm(ephemeris, transform)
+console.log(tracker.state) // armed
+
+// Frames every 10 s from 30 s after the start: the first one sets the anchor (zero offset), the next ones add the motion of the target, here 0.833 pixel in X and -0.417 in Y per 10 s.
+const frame = (i: number) => ({ width: 640, height: 480, timestamp: i * 10000, frameId: i, captureTime: timeShift(start, (30 + i * 10) / 86400), captureMonotonic: i * 10000 })
+const guiding = { phase: 'guiding', allowAcquisition: true, preserveIdentity: true, lockEstablished: true } as const
+for (let i = 0; i < 3; i++) {
+	const result = tracker.track(frame(i), guiding)
+	const diagnostic = nonSiderealTrackingOf(result)!
+	console.log(
+		result.measurement?.x,
+		result.measurement?.y,
+		result.targetOffset?.map((value) => +value.toFixed(4)),
+		diagnostic.state,
+		diagnostic.rate?.map((value) => +(value / arcsec(1)).toFixed(4)),
+		diagnostic.separation === undefined ? undefined : +(diagnostic.separation / arcsec(1)).toFixed(3),
+	) // 320 240 [0, 0] active undefined undefined, then 320 240 [0.8333, -0.4167] active [0.1667, 0.0833] 1.863, then 320 240 [1.6667, -0.8333] active [0.1667, 0.0833] 3.727
+}
+
+// A new anchor at the current time takes the target offset back to zero; reset() keeps the source and goes back to armed, and clear() disables the tracker.
+tracker.reanchor(timeShift(start, 200 / 86400))
+console.log(tracker.state, tracker.lastResult !== undefined) // active true
+tracker.onCalibrationChanged(transform)
+console.log(tracker.state) // active
+tracker.reset()
+console.log(tracker.state) // armed
+tracker.clear()
+console.log(tracker.state, nonSiderealTrackingOf(tracker.track(frame(5), guiding))) // disabled undefined
+
+// A local fitted motion (for instance from the image stars of Tracking Rate Estimation): an offset in arcseconds that grows 2 arcseconds per frame and a rate of 0.2 arcsecond per second.
+let eastArcsec = 0
+const provider: NonSiderealMotionProvider = { motion: () => ({ offset: [arcsec(eastArcsec), 0], rate: [arcsec(0.2), 0], confidence: 0.9 }), reset: () => undefined }
+const local = new NonSiderealTracker(base)
+local.arm(provider, transform)
+for (let i = 0; i < 3; i++) {
+	const result = local.track(frame(i), guiding)
+	console.log(result.targetOffset, nonSiderealTrackingOf(result)?.motionConfidence) // [0, 0] undefined, then [1, 0] 0.9, then [2, 0] 0.9
+	eastArcsec += 2
+}
+```
 
 ### Observation Scores
 
@@ -12680,11 +13192,181 @@ console.log(back.converged, round([degrees(back.primary), degrees(back.secondary
 
 ### Taki Mount Geometry
 
+`observation/mount/kinematics.taki` turns the three fabrication errors of Toshimi Taki's matrix method into the vector geometry that the two-axis kinematics of Mount Kinematics consumes, so that the pointing of a mount with imperfect axes can be computed (or inverted) with the same functions. `applyTakiFabricationErrors(nominal, errors)` takes a nominal `TwoAxisMountGeometry` (the canonical equatorial one, whose primary axis is the polar axis) and the `TakiFabricationErrors`, all optional and in radians: `axisNonPerpendicularity` (Taki D, the departure of the secondary axis from perpendicular to the primary), `collimation` (Taki D', the optical axis away from the plane perpendicular to the secondary axis, applied as a rotation around the primary axis) and `secondaryIndex` (Taki D'', an apparent zero offset of the secondary encoder). It returns a new geometry with the `secondaryAxis` and `opticalDirection` rotated and the `secondaryIndex` increased by the error times the sign of the secondary encoder, and the other fields (the primary axis, the pivots and the encoder signs) are kept; with all errors absent or zero it returns the nominal object itself. The errors are small angles in the sense of the reference (equation 5.3-1 of Matrix Method, revision E), and the sign of each follows that convention and the canonical Taki frame, so errors measured in another convention need to be converted. It models only these three errors and not the polar misalignment, which is a rotation of `baseToWorld`, or a flexure; and it is an adapter, so the pointing is obtained from the functions of Mount Kinematics.
+
+```ts
+import { createCanonicalEquatorialGeometry, mountDirectionFromEncoders, solveMountEncoders } from 'nebulosa/src/observation/mount/kinematics'
+import { applyTakiFabricationErrors } from 'nebulosa/src/observation/mount/kinematics.taki'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+const round = (value: readonly number[]) => value.map((v) => +v.toFixed(6))
+const nominal = createCanonicalEquatorialGeometry()
+
+// No errors, or only zeros, return the nominal geometry itself.
+console.log(applyTakiFabricationErrors(nominal, {}) === nominal) // true
+
+// A mount with 0.1 degree of non-perpendicularity, 0.2 degree of collimation and 0.05 degree of secondary index: the secondary axis and the optical direction are tilted, the primary axis is the same, and the index is stored with the sign of the secondary encoder (-1 in the canonical geometry).
+const real = applyTakiFabricationErrors(nominal, { axisNonPerpendicularity: deg(0.1), collimation: deg(0.2), secondaryIndex: deg(0.05) })
+console.log(real.secondaryAxis, real.opticalDirection, real.secondaryIndex, real.primaryAxis) // secondary axis [0, 0.999998, 0.001745], optical direction [0.999994, 0.003491, 0.000006], secondaryIndex -0.000873 radians (-0.05 degree) and primary axis [0, 0, 1]
+
+// The effect on the pointing at an hour angle of 40 degrees and a declination of 25 degrees: the direction of the real mount differs from the ideal one by about 10 arcminutes (the last value, in arcseconds).
+const encoders = { primary: deg(40), secondary: deg(25) }
+const ideal = mountDirectionFromEncoders(nominal, encoders)
+const actual = mountDirectionFromEncoders(real, encoders)
+console.log(round(ideal), round(actual), +((Math.acos(ideal[0] * actual[0] + ideal[1] * actual[1] + ideal[2] * actual[2]) * 180 * 3600) / Math.PI).toFixed(2)) // ideal [0.694272, -0.582563, 0.422618], real [0.695754, -0.580215, 0.423412], 595.74 arcseconds apart
+
+// The inverse with the real geometry: the encoders that this mount needs to point at the ideal direction (in degrees).
+const solution = solveMountEncoders(real, ideal)
+console.log(solution.converged, +((solution.primary * 180) / Math.PI).toFixed(5), +((solution.secondary * 180) / Math.PI).toFixed(5)) // true 40.17404 24.94982
+
+// The secondary index adds to the index that the nominal geometry already has.
+console.log(applyTakiFabricationErrors(nominal, { secondaryIndex: deg(0.05) }).secondaryIndex, applyTakiFabricationErrors({ ...nominal, secondaryIndex: deg(1) }, { secondaryIndex: deg(0.05) }).secondaryIndex) // -0.000873 and 0.016581 (1 degree minus 0.05 degree, in radians)
+
+// A collimation of 1 degree: the optics at the equator (declination 0) and at the pole (declination 90) are both 1 degree off the meridian plane (the y component is sin 1 degree).
+const collimated = applyTakiFabricationErrors(nominal, { collimation: deg(1) })
+console.log(round(mountDirectionFromEncoders(collimated, { primary: 0, secondary: 0 })), round(mountDirectionFromEncoders(collimated, { primary: 0, secondary: deg(90) }))) // [0.999848, 0.017452, 0] and [0, 0.017452, 0.999848]
+```
+
 ### Three-Point Polar Alignment
 
 ### Tracking Rate Correction
 
+`observation/guiding/nonsidereal.rate.controller` turns the residual rate measured from the images (the estimate of Tracking Rate Estimation, observed minus ephemeris) into a bounded correction that is added to the feed-forward rate of the ephemeris (see Non-Sidereal Guide Tracking), so the images can trim the prediction of a target without ever replacing it. It is independent of any mount protocol: the inputs and outputs are sky-plane `[east, north]` rates in radians per second, and the conversion to the rates of the device axes belongs to the adapter. The `TrackingRateController` is stateful, with a stored correction that starts at zero, and `update(feedForward, estimate, elapsedSeconds)` returns a `TrackingRateCommand` with the total `rate` (the feed-forward plus the correction), the `correction`, the `confidence` of the estimate used (0 when it was rejected) and `limited` (true when the request was altered by a rejection, a deadband that zeroed a non-zero estimate, a magnitude clip or the slew limit). An estimate is used only when it is not stale, its confidence is at least `minimumConfidence` (0.5) and its rate is finite; otherwise the target correction is zero, so the stored correction decays toward zero at the same filtered pace instead of jumping. A used estimate whose magnitude is within the `deadband` (0.01 arcsecond per second) gives a zero target, and one above `maximumCorrection` (30 arcseconds per second) is scaled to that magnitude, keeping its direction. The correction then moves toward the target by a first-order low-pass of time constant `smoothingTimeConstantSeconds` (2 s), that is by the fraction `elapsed / (tau + elapsed)` of the difference for each update (all of it when the constant is zero), and the vector change in one update is limited to `maximumRateChangePerUpdate` (1 arcsecond per second). A non-positive or non-finite `elapsedSeconds` leaves the correction unchanged and is reported as limited, and a non-finite feed-forward clears the controller and returns `undefined`. `reset()` clears the stored correction for a new target, a change of the camera transform or a meridian flip. The controller does not know the physical limits of the mount, the lag of the images or the quality of the transform, so the options must be set to a rate that the mount can follow and that the tracker is able to verify.
+
+```ts
+import { time, timeShift, Timescale } from 'nebulosa/src/astronomy/time/time'
+import { arcsec } from 'nebulosa/src/math/units/angle'
+import { TrackingRateEstimator } from 'nebulosa/src/observation/guiding/nonsidereal.rate'
+import { TrackingRateController } from 'nebulosa/src/observation/guiding/nonsidereal.rate.controller'
+
+const start = time(2460000.5, 0, Timescale.TT)
+const at = (seconds: number) => timeShift(start, seconds / 86400)
+const asec = (value: number) => +(value / arcsec(1)).toFixed(4)
+
+// An ephemeris-assisted estimator whose residual is 0.3 arcsecond per second east and -0.1 north (the ephemeris is off by that much).
+const estimator = new TrackingRateEstimator()
+for (let i = 0; i < 8; i++) estimator.add({ time: at(i * 10), offset: [arcsec(0.3 * i * 10), arcsec(-0.1 * i * 10)], ephemerisOffset: [0, 0], source: 'targetImage' })
+const estimate = estimator.estimate(at(70))!
+console.log(estimate.rate.map(asec), +estimate.confidence.toFixed(3)) // [0.3, -0.1] 1
+
+// The feed-forward is the sidereal-like rate of the ephemeris: 15 arcseconds per second in the east. Each update (every 10 s) moves the correction a fraction (10 / 12) toward the residual, and the total rate follows it.
+const controller = new TrackingRateController()
+const feedForward = [arcsec(15), 0] as const
+for (let i = 0; i < 3; i++) {
+	const command = controller.update(feedForward, estimate, 10)!
+	console.log(command.rate.map(asec), command.correction.map(asec), +command.confidence.toFixed(3), command.limited) // [15.25, -0.0833] [0.25, -0.0833] 1 false, then [15.2917, -0.0972] [0.2917, -0.0972] 1 false, then [15.2986, -0.0995] [0.2986, -0.0995] 1 false
+}
+
+// A short interval (1 s) and a small time constant: the correction follows more slowly with a short update, and a zero constant follows at once.
+const slow = new TrackingRateController()
+console.log(slow.update(feedForward, estimate, 1)!.correction.map(asec), new TrackingRateController({ smoothingTimeConstantSeconds: 0 }).update(feedForward, estimate, 1)!.correction.map(asec)) // [0.1, -0.0333] [0.3, -0.1]
+
+// The slew limit: a jump of 0.3 arcsecond per second per update above a limit of 0.1 is reduced and flagged as limited, and the next updates continue until the target is reached.
+const slewed = new TrackingRateController({ smoothingTimeConstantSeconds: 0, maximumRateChangePerUpdate: arcsec(0.1) })
+for (let i = 0; i < 4; i++) {
+	const command = slewed.update(feedForward, estimate, 10)!
+	console.log(command.correction.map(asec), command.limited) // [0.0949, -0.0316] true, then [0.1897, -0.0632] true, then [0.2846, -0.0949] true, then [0.3, -0.1] false
+}
+
+// The magnitude clip: a residual of 0.3 arcsecond per second with a maximum correction of 0.2 is scaled to 0.2 in the same direction.
+const clipped = new TrackingRateController({ smoothingTimeConstantSeconds: 0, maximumCorrection: arcsec(0.2) }).update(feedForward, estimate, 10)!
+console.log(clipped.correction.map(asec), +(Math.hypot(...clipped.correction) / arcsec(1)).toFixed(4), clipped.limited) // [0.1897, -0.0632] 0.2 true
+
+// The deadband: a residual below it (here the controller is given 0.5 arcsecond per second of deadband) gives no correction, and counts as limited because the estimate was not zero.
+const quiet = new TrackingRateController({ deadband: arcsec(0.5) }).update(feedForward, estimate, 10)!
+console.log(quiet.correction.map(asec), quiet.rate.map(asec), quiet.limited) // [0, 0] [15, 0] true
+
+// Without an estimate (or with a low-confidence or stale one) the correction decays toward zero at the same filtered pace and the confidence is zero; reset() clears it at once.
+console.log(controller.update(feedForward, undefined, 10)!.correction.map(asec), controller.update(feedForward, undefined, 10)!.confidence) // [0.0498, -0.0166] 0
+controller.reset()
+console.log(controller.update(feedForward, undefined, 10)!.correction.map(asec)) // [0, 0]
+
+// A non-positive interval leaves the correction as it is, and flags the command as limited.
+const held = new TrackingRateController()
+held.update(feedForward, estimate, 10)
+console.log(held.update(feedForward, estimate, 0)!.correction.map(asec), held.update(feedForward, estimate, 0)!.limited) // [0.25, -0.0833] true
+```
+
 ### Tracking Rate Estimation
+
+`observation/guiding/nonsidereal.rate` estimates the sky motion of a non-sidereal target (its east and north rate) from a short series of position observations, and gives the converters that make the observations from astrometry, a target shift in the image, the drift of the background stars, or a streak. Positions are local east and north offsets in radians from a fixed tangent-plane anchor, times are astronomical times (preferably the exposure midpoint), rates are radians per second and accelerations radians per second squared. A `TrackingMotionSample` has the `time`, the `offset`, an optional one-sigma `uncertainty` in radians, a `source` label, a `confidence` in 0..1 (1 when absent) and, for an ephemeris-assisted fit, the `ephemerisOffset` predicted at the same time and in the same plane (the fit is then of the observed minus predicted residual, and a series cannot mix both modes). The `TrackingRateEstimator` keeps a bounded window of samples (`maximumSampleCount` 32, at most 256, and `windowSeconds` 600) and `add(sample)` returns whether it was accepted: it must be finite, have a time at least `minimumTimeSeparationSeconds` (0.1) after the last one, and a jump no larger than `maximumSampleJump` (unbounded by default). `estimate(time)` returns a `TrackingRateEstimate` once `minimumSampleCount` samples (5) are held and the time is within `maximumPredictionSeconds` (120) of the retained samples: the east and north `rate`, the `position` fitted at that time, the `sampleCount`, the `span` of the samples in seconds, the `rmsResidual`, the `confidence` from 0 to 1 (the residual against `robustOutlierThreshold` of 3 arcseconds, the span against 10 seconds, the sample confidences and the count), the `source` (`measured` or `ephemerisAssisted`) and `stale` (the newest sample is older than `staleTimeoutSeconds` of 120, which only shows when it is set below the prediction horizon, and a consumer must not use a stale feedback). The fit is a robust weighted straight line per axis, so samples farther than the threshold from it are clipped, and with `fitAcceleration` a quadratic is tried when the span reaches `minimumAccelerationSpanSeconds` (120) and it reduces the residual by `minimumAccelerationImprovement` (0.2), which then gives the `acceleration`. `reset()` clears the samples and the mode and increments `generation`. The converters are `trackingMotionSampleFromAstrometry(time, anchor, position, confidence?, uncertainty?)` (a solved position, as the log-map offset from the anchor of Non-Sidereal Guide Tracking), `trackingMotionSampleFromImage(time, deltaPixels, transform, ...)` (a target shift in pixels from a fixed reference position, X right and Y down), `trackingMotionSampleFromBackgroundStars(time, reference, current, transform)` (the opposite of the median drift of at least three stars matched by `id`, with a confidence that grows with the stars up to 6), all of which use a `TrackingImageTransform` whose `pixelDeltaToSky(delta, time)` gives the apparent east and north radians (from a WCS or a guiding calibration, with rotation and parity) or `undefined`, and `trackingRateFromStreak(time, streak, transform)`, which turns a long-exposure trail (`axisPixels`, `exposureSeconds`, the `role` of target or background star and a signed `direction`) into an estimate directly: a single-image streak has no direction and gives `undefined`, a background trail is negated, and the confidence is 0.25 when absent. `EstimatorNonSiderealMotionProvider` adapts an ephemeris-free estimator as the local motion source of the tracker (offset, rate, acceleration and confidence), available only for a fresh `measured` fit at or above `minimumConfidence` (0.5), and its `generation` and `reset()` follow the estimator. The estimator models a smooth motion in a local plane: a short or noisy series, a non-smooth maneuver or a transform that does not match the camera give a poor rate, so check the confidence and the residual.
+
+```ts
+import { time, timeShift, Timescale } from 'nebulosa/src/astronomy/time/time'
+import { arcsec, deg } from 'nebulosa/src/math/units/angle'
+import { EstimatorNonSiderealMotionProvider, TrackingRateEstimator, trackingMotionSampleFromAstrometry, trackingMotionSampleFromBackgroundStars, trackingMotionSampleFromImage, trackingRateFromStreak, type TrackingImageTransform } from 'nebulosa/src/observation/guiding/nonsidereal.rate'
+
+const start = time(2460000.5, 0, Timescale.TT)
+const at = (seconds: number) => timeShift(start, seconds / 86400)
+const asec = (value: number) => +(value / arcsec(1)).toFixed(4)
+
+// A target that moves 0.2 arcsecond per second toward the east and -0.1 toward the north, observed every 10 s for 70 s with a deterministic error of 0.3 arcsecond, and one bad sample (+8 arcseconds) at 40 s that the robust fit clips.
+const estimator = new TrackingRateEstimator({ minimumSampleCount: 5 })
+console.log(estimator.estimate(at(0))) // undefined
+let accepted = 0
+for (let i = 0; i < 8; i++) {
+	const jitter = (i % 2 === 0 ? 0.3 : -0.3) * arcsec(1)
+	const bad = i === 4 ? arcsec(8) : 0
+	if (estimator.add({ time: at(i * 10), offset: [arcsec(0.2 * i * 10) + jitter + bad, arcsec(-0.1 * i * 10) - jitter], source: 'targetImage' })) accepted++
+}
+const estimate = estimator.estimate(at(70))!
+console.log(accepted, estimate.rate.map(asec), estimate.position!.map(asec), estimate.sampleCount, estimate.span, estimate.rmsResidual.map(asec), +estimate.confidence.toFixed(3), estimate.source, estimate.stale, estimate.acceleration) // 8 [0.1966, -0.097] [13.8342, -6.8965] 8 70 [0.2848, 0.2922] 0.742 measured false undefined
+
+// The estimate is also a prediction a bit ahead of the newest sample (here 30 s); beyond the prediction horizon (120 s) there is none. The stale flag only matters when the stale timeout is set below that horizon.
+const ahead = estimator.estimate(at(100))!
+console.log(ahead.position!.map(asec), ahead.stale, estimator.estimate(at(200))) // [19.7323, -9.8078] false undefined
+
+// A quadratic motion (a satellite pass: the east rate grows 0.002 arcsecond per second squared) over 200 s with the acceleration fit enabled.
+const accelerating = new TrackingRateEstimator({ fitAcceleration: true, windowSeconds: 900, maximumPredictionSeconds: 300 })
+for (let i = 0; i <= 20; i++) accelerating.add({ time: at(i * 10), offset: [arcsec(0.2 * i * 10 + 0.001 * (i * 10) ** 2), 0], source: 'targetAstrometry' })
+const quadratic = accelerating.estimate(at(100))!
+console.log(
+	quadratic.rate.map(asec),
+	quadratic.acceleration!.map((value) => +(value / arcsec(1)).toFixed(5)),
+	+quadratic.confidence.toFixed(3),
+) // [0.4, 0] [0.002, 0] 1
+
+// An ephemeris-assisted series: the offsets are observed positions and the ephemeris offsets are the predicted ones; the fitted rate is the residual rate of the ephemeris (here 0.05 arcsecond per second east).
+const assisted = new TrackingRateEstimator()
+for (let i = 0; i < 8; i++) assisted.add({ time: at(i * 10), offset: [arcsec(0.3 * i * 10), arcsec(-0.1 * i * 10)], ephemerisOffset: [arcsec(0.25 * i * 10), arcsec(-0.1 * i * 10)], source: 'targetImage' })
+const residual = assisted.estimate(at(70))!
+console.log(residual.rate.map(asec), residual.source, residual.sampleCount) // [0.05, 0] ephemerisAssisted 8
+
+// The converters. A guider of 2 arcseconds per pixel whose +X is east and +Y is south (north is -Y).
+const transform: TrackingImageTransform = { pixelDeltaToSky: ([dx, dy]) => [arcsec(2 * dx), arcsec(-2 * dy)] }
+const fromAstrometry = trackingMotionSampleFromAstrometry(at(0), { rightAscension: deg(100), declination: deg(20) }, { rightAscension: deg(100.01), declination: deg(20.01) }, 0.9)
+console.log(fromAstrometry.offset.map(asec), fromAstrometry.confidence, fromAstrometry.source) // [33.8268, 36.001] 0.9 targetAstrometry
+const fromImage = trackingMotionSampleFromImage(at(0), [5, -3], transform, 0.8)!
+console.log(fromImage.offset.map(asec), fromImage.confidence, fromImage.source) // [10, 6] 0.8 targetImage
+
+// Four background stars matched by id that drifted (+2, +1) pixels (one with a wrong centroid, but the median ignores it): the target moved the opposite way, with a confidence of 4 / 6.
+const stars = [
+	{ id: 'a', x: 100, y: 100 },
+	{ id: 'b', x: 200, y: 50 },
+	{ id: 'c', x: 50, y: 300 },
+	{ id: 'd', x: 400, y: 200 },
+]
+const drifted = [
+	{ id: 'a', x: 102, y: 101 },
+	{ id: 'b', x: 202, y: 51 },
+	{ id: 'c', x: 52, y: 301 },
+	{ id: 'd', x: 410, y: 190 },
+]
+const fromStars = trackingMotionSampleFromBackgroundStars(at(0), stars, drifted, transform)!
+console.log(fromStars.offset.map(asec), +fromStars.confidence.toFixed(3), fromStars.source) // [-4, 2] 0.667 backgroundStars
+
+// A target streak of 12 pixels in X during 60 s with a known direction, and a background-star trail of 12 pixels (negated), as rates in arcseconds per second; the streak with no direction gives no rate.
+const targetStreak = trackingRateFromStreak(at(0), { axisPixels: [12, 0], exposureSeconds: 60, role: 'target', direction: 1, confidence: 0.6 }, transform)!
+console.log(targetStreak.rate.map(asec), targetStreak.confidence, targetStreak.source, targetStreak.sampleCount, targetStreak.span) // [0.4, 0] 0.6 measured 1 60
+console.log(trackingRateFromStreak(at(0), { axisPixels: [12, 0], exposureSeconds: 60, role: 'backgroundStar', direction: 1 }, transform)!.rate.map(asec), trackingRateFromStreak(at(0), { axisPixels: [12, 0], exposureSeconds: 60, role: 'target' }, transform)) // [-0.4, 0] undefined
+
+// The local motion provider of the non-sidereal tracker: the offset, the rate and the confidence of a fresh ephemeris-free fit.
+const provider = new EstimatorNonSiderealMotionProvider(estimator)
+const motion = provider.motion(at(75))!
+console.log(motion.offset.map(asec), motion.rate!.map(asec), +motion.confidence!.toFixed(3), provider.generation) // [14.8172, -7.3817] [0.1966, -0.097] 0.742 0
+provider.reset()
+console.log(provider.motion(at(75)), provider.generation, estimator.estimate(at(70))) // undefined 1 undefined
+```
 
 ### Weather Quality
 
