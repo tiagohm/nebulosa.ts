@@ -16485,7 +16485,95 @@ console.log(toMeter(fromPressure(700, 5))) // about 2907.6
 
 ### Ellipse Containment Geometry
 
+An `EllipseGeometry` is a real Cartesian ellipse: a `center` (a `Point` with `x` and `y`), two positive semi-axes `semiMajor` (along the direction `theta`) and `semiMinor` (perpendicular to it), all in one common length unit, and `theta`, the direction of the first axis in radians turning from +X toward +Y. The generic geometry accepts `semiMinor > semiMajor`, so the axis order is not required here, although the fitting functions return `semiMajor >= semiMinor`. `maximumNormalizedBoundaryRadiusSquared(outer, inner)` answers a containment question: it maps the plane so that `outer` becomes the unit circle and returns the largest squared radius reached by any point of the boundary of `inner` in that frame. The inner ellipse lies entirely inside the outer one when the result is at most 1, touches it from inside when it is 1, and sticks out when it is greater; the square root is the factor by which the outer ellipse would have to be scaled about its center to just contain the inner one. The value is solved analytically (a two-dimensional trust-region problem, with a bounded bisection for the secular root), so it is exact up to rounding for the whole continuous boundary and not a sampled estimate. It allocates nothing and does not modify its inputs.
+
+```ts
+import { maximumNormalizedBoundaryRadiusSquared, type EllipseGeometry } from 'nebulosa/src/math/numerical/ellipse.geometry'
+
+const circle = (x: number, y: number, r: number): EllipseGeometry => ({ center: { x, y }, semiMajor: r, semiMinor: r, theta: 0 })
+
+// A concentric circle of radius 1 inside a circle of radius 2 reaches (1/2)² of the outer radius.
+console.log(maximumNormalizedBoundaryRadiusSquared(circle(0, 0, 2), circle(0, 0, 1))) // 0.25
+
+// Shifting the inner circle by 0.5 makes its farthest point (0.5 + 1) / 2 = 0.75 of the way out.
+console.log(maximumNormalizedBoundaryRadiusSquared(circle(0, 0, 2), circle(0.5, 0, 1))) // 0.5625
+
+// A circle that touches the outer one from inside gives exactly 1 (up to rounding), and one sticking out more than 1.
+console.log(maximumNormalizedBoundaryRadiusSquared(circle(0, 0, 2), circle(1, 0, 1))) // 1
+console.log(maximumNormalizedBoundaryRadiusSquared(circle(0, 0, 2), circle(1.5, 0, 1))) // 1.5625
+
+// The same ellipse as inner and outer gives 1.
+const ellipse: EllipseGeometry = { center: { x: 3, y: -2 }, semiMajor: 5, semiMinor: 2, theta: 0.5 }
+console.log(maximumNormalizedBoundaryRadiusSquared(ellipse, ellipse)) // 1
+
+// An ellipse scaled by 0.8 about the same center reaches 0.8² = 0.64.
+console.log(maximumNormalizedBoundaryRadiusSquared(ellipse, { ...ellipse, semiMajor: 4, semiMinor: 1.6 })) // 0.6400000000000001
+
+// A thin ellipse along the outer major axis (a 4 x 0.5 ellipse in a 5 x 2 one) reaches (4/5)².
+const outer: EllipseGeometry = { center: { x: 0, y: 0 }, semiMajor: 5, semiMinor: 2, theta: 0 }
+console.log(maximumNormalizedBoundaryRadiusSquared(outer, { center: { x: 0, y: 0 }, semiMajor: 4, semiMinor: 0.5, theta: 0 })) // 0.6400000000000001
+
+// Turned by a quarter turn, the same thin ellipse points along the narrow outer axis and pokes out of it.
+console.log(maximumNormalizedBoundaryRadiusSquared(outer, { center: { x: 0, y: 0 }, semiMajor: 4, semiMinor: 0.5, theta: Math.PI / 2 })) // 4
+
+// The result is the squared scale factor to enlarge the outer ellipse by: here a factor of about 1.48 is needed.
+const factor = Math.sqrt(maximumNormalizedBoundaryRadiusSquared(circle(0, 0, 2), circle(1.2, 1, 1.4)))
+console.log(factor) // 1.4810249675906653
+```
+
 ### Ellipse Fitting
+
+`fitEllipse(x, y, precision?)` fits one ellipse to paired Cartesian samples in a common length unit (pixels, arcseconds, millimetres...). It starts from a normalized, weighted Halir-Flusser direct fit and refines it with a few robust passes (iteratively reweighted Levenberg-Marquardt on the normal distance to the curve, down-weighting outliers with a Tukey biweight). `precision` is an optional non-negative weight per sample: the weights are capped at four times their median so an isolated bright sector cannot dominate, and a zero excludes the sample completely. The two coordinate arrays (and the weights) must have the same length, and at least six informative points are needed. It returns an `EllipseFit` with the canonical `ellipse` (semi-axes ordered `semiMajor >= semiMinor`, `theta` in [0, π), and `theta = 0` for a circle), the weighted normal-distance `rms`, the signed normal-distance `residuals` per input (zero for excluded samples), the final `weights` (precision times the robust weight, zero for a rejected point) and the `conditionNumber` of the geometric Jacobian. It returns `undefined` when the points are degenerate (collinear, too few distinct), the geometry is badly conditioned (typically a short arc, which would otherwise yield a plausible but meaningless ellipse) or the refinement does not settle, so check the result and also judge the angular coverage of the samples and the `rms` against your own tolerance. `ellipseFromConic([A, B, C, D, E, F])` converts the implicit conic `A·x² + B·x·y + C·y² + D·x + E·y + F = 0` into the canonical ellipse, or `undefined` for a hyperbola, parabola, imaginary or degenerate conic; it is exact up to rounding and does not modify its input. The `Ellipse Containment Geometry` topic compares fitted ellipses.
+
+```ts
+import { ellipseFromConic, fitEllipse } from 'nebulosa/src/math/numerical/ellipse.fit'
+
+// A conic x²/4 + y² - 1 = 0 is an axis-aligned ellipse with semi-axes 2 and 1.
+console.log(ellipseFromConic([0.25, 0, 1, 0, 0, -1])) // { center: { x: 0, y: 0 }, semiMajor: 2, semiMinor: 1, theta: -0 }
+
+// Scaling the whole conic does not change the ellipse, and a negative scale is allowed too.
+console.log(ellipseFromConic([-2.5, 0, -10, 0, 0, 10])) // { center: { x: 0, y: 0 }, semiMajor: 2, semiMinor: 1, theta: 0 }
+
+// Shifted by (3, -1): (x - 3)²/9 + (y + 1)²/4 - 1 expands to x²/9 + y²/4 - 2x/3 + y/2 + 1/9 + 1/4 - 1.
+console.log(ellipseFromConic([1 / 9, 0, 1 / 4, -2 / 3, 0.5, 1 / 9 + 1 / 4 - 1])) // { center: { x: 3, y: -1 }, semiMajor: 4.123105625617661, semiMinor: 2.748737083745107, theta: -0 }
+
+// A circle has theta = 0, and a rotated ellipse gets theta in [0, PI).
+console.log(ellipseFromConic([1, 0, 1, 0, 0, -4])) // { center: { x: 0, y: 0 }, semiMajor: 2, semiMinor: 2, theta: 0 }
+console.log(ellipseFromConic([1, 1, 1, 0, 0, -1])) // { center: { x: 0, y: 0 }, semiMajor: 1.4142135623730951, semiMinor: 0.816496580927726, theta: 2.356194490192345 } (x² + xy + y² = 1, major axis along 45°)
+
+// Samples of an ellipse with center (3, -2), semi-axes 5 and 2, rotated by 0.5 rad.
+const cx = 3
+const cy = -2
+const a = 5
+const b = 2
+const theta = 0.5
+const t = Array.from({ length: 24 }, (_, i) => (i * 2 * Math.PI) / 24)
+const x = t.map((u) => cx + a * Math.cos(u) * Math.cos(theta) - b * Math.sin(u) * Math.sin(theta))
+const y = t.map((u) => cy + a * Math.cos(u) * Math.sin(theta) + b * Math.sin(u) * Math.cos(theta))
+
+const exact = fitEllipse(x, y)!
+console.log(exact.ellipse) // { center: { x: 3, y: -2 }, semiMajor: 5, semiMinor: 2, theta: 0.49999999999999983 }
+console.log(exact.rms, exact.conditionNumber) // 5.101411087666505e-16 5.582340436700768
+console.log(exact.residuals.length, exact.weights.length) // 24 24
+
+// The same points with a small deterministic jitter of about 0.02 units.
+const jx = x.map((v, i) => v + 0.02 * Math.sin(7 * i))
+const jy = y.map((v, i) => v + 0.02 * Math.cos(5 * i))
+const noisy = fitEllipse(jx, jy)!
+console.log(noisy.ellipse, noisy.rms) // { center: { x: 3.005115744222868, y: -1.9979284638467802 }, semiMajor: 4.995572096274904, semiMinor: 2.0037275470721, theta: 0.4995928374079198 } 0.010368017695141838
+
+// One gross outlier is down-weighted to zero and the ellipse barely moves.
+const ox = [...jx]
+ox[3] += 4
+const robust = fitEllipse(ox, jy)!
+console.log(robust.ellipse) // { center: { x: 3.0056937317392096, y: -1.9961597578063373 }, semiMajor: 4.996154818524964, semiMinor: 2.0052356704201992, theta: 0.5002333545176688 }
+console.log(robust.weights[3], robust.residuals[3]) // 0 1.6999299470539375 (an excluded point keeps its large residual)
+
+// Precision weights: a zero precision excludes a sample (here the same outlier) from the fit.
+const precision = Array.from({ length: 24 }, (_, i) => (i === 3 ? 0 : 1))
+const excluded = fitEllipse(ox, jy, precision)!
+console.log(excluded.ellipse, excluded.residuals[3], excluded.weights[3]) // { center: { x: 3.0057461909450214, y: -1.9961632344792322 }, semiMajor: 4.996098743704225, semiMinor: 2.005008038945786, theta: 0.500215247415027 } 0 0
+```
 
 ### Error-Free Floating-Point Arithmetic
 
@@ -16684,6 +16772,65 @@ console.log(intersectSegmentEllipsoid([1, 0, 0], [1, 0, 0], 1, 0.9)) // { inters
 
 ### Linear Least Squares
 
+The solvers fit `target ≈ design · coefficients`, where `design` is an array of rows (one array of feature values per sample, in the same column order as the coefficients) and `target` holds one value per row. `linearLeastSquares(design, target, options?)` solves it with a QR decomposition, falling back to regularized normal equations when the design is rank deficient, and returns the `coefficients`, the `fitted` values, the `residuals` (target minus fitted), the estimated `conditionNumber` of the weighted design and a `rankDeficient` flag (condition number above 1e12 or infinite). The options are `weights` (one non-negative value per row; a zero removes the row, and the weights multiply the squared residuals), `ridge` (a non-negative Tikhonov term added to the normal matrix diagonal, which shrinks the coefficients) and `leverage` (adds the hat-matrix diagonal, in [0, 1], at the cost of one more matrix inversion; `residual / (1 - leverage)` is the leave-one-out residual). `leastSquaresCoefficients` returns only the coefficients and skips the diagnostics, which makes it the cheap choice inside iterative loops. `estimateLeastSquaresConditioning(design, weights?)` reports the conditioning of the unregularized design alone, so a ridge cannot hide a degeneracy. `predictLinearLeastSquares(coefficients, features)` evaluates the model on one feature row. `robustLinearLeastSquares` runs iteratively reweighted least squares to resist outliers: `method` is `'huber'` (default), `'tukey'` (which discards gross outliers entirely) or `'none'`, `tuning` is the loss constant (1.345 by default), `maxIterations` is 25 and `tolerance` is 1e-9; the result adds the final per-row `weights`, the `iterations` performed and the residual `scale` (a median-absolute-deviation estimate, in the units of the target). The design must be rectangular and the weights as long as the rows; the fit is only as good as the model, and a design with strongly correlated columns gives unstable coefficients (watch `conditionNumber`).
+
+```ts
+import { estimateLeastSquaresConditioning, leastSquaresCoefficients, linearLeastSquares, predictLinearLeastSquares, robustLinearLeastSquares } from 'nebulosa/src/math/numerical/least.squares'
+
+// Fit y = a + b·x to five samples of y = 1 + 2x: each design row is [1, x].
+const xs = [0, 1, 2, 3, 4]
+const design = xs.map((x) => [1, x])
+const target = xs.map((x) => 1 + 2 * x)
+
+const fit = linearLeastSquares(design, target)
+console.log(fit.coefficients) // Float64Array(2) [ 0.9999999999999977, 2.0000000000000004 ]
+console.log(fit.fitted, fit.residuals) // Float64Array(5) [ 0.9999999999999977, 2.9999999999999982, 4.999999999999998, 6.999999999999999, 9 ] Float64Array(5) [ 2.3314683517128287e-15, 1.7763568394002505e-15, 1.7763568394002505e-15, 8.881784197001252e-16, 0 ]
+console.log(fit.conditionNumber, fit.rankDeficient) // 4.738720018687272 false
+console.log(predictLinearLeastSquares(fit.coefficients, [1, 10])) // 21 (the model at x = 10)
+console.log(leastSquaresCoefficients(design, target)) // Float64Array(2) [ 0.9999999999999977, 2.0000000000000004 ]
+
+// Noisy data with a quadratic model y = a + b·x + c·x².
+const nx = [-2, -1, 0, 1, 2, 3]
+const ny = [4.9, 1.1, 0.1, 0.9, 4.2, 9.1]
+const q = linearLeastSquares(
+	nx.map((x) => [1, x, x * x]),
+	ny,
+)
+console.log(q.coefficients) // Float64Array(3) [ 0.04857142857142862, -0.19535714285714334, 1.0839285714285716 ]
+console.log(q.residuals) // Float64Array(6) [ 0.12499999999999911, -0.22785714285714342, 0.051428571428571386, -0.03714285714285681, 0.20642857142857185, -0.11785714285714377 ]
+
+// Weights: the last row (an outlier) is ignored when its weight is zero.
+const wy = [1, 3, 5, 7, 40]
+console.log(linearLeastSquares(design, wy).coefficients) // Float64Array(2) [ -5.200000000000001, 8.200000000000001 ]
+console.log(linearLeastSquares(design, wy, { weights: [1, 1, 1, 1, 0] }).coefficients) // Float64Array(2) [ 1, 2 ]
+
+// Ridge shrinks the coefficients towards zero.
+console.log(linearLeastSquares(design, target, { ridge: 5 }).coefficients) // Float64Array(2) [ 0.7000000000000012, 1.799999999999999 ]
+
+// Leverage (hat-matrix diagonal): the ends of the range have the highest leverage, and they sum to the number of columns.
+const lev = linearLeastSquares(design, wy, { leverage: true }).leverage!
+console.log(lev) // Float64Array(5) [ 0.6, 0.29999999999999993, 0.19999999999999996, 0.3, 0.6 ]
+
+// Conditioning: independent columns versus a duplicated column.
+console.log(estimateLeastSquaresConditioning(design)) // { conditionNumber: 4.738720018687272, rankDeficient: false }
+console.log(estimateLeastSquaresConditioning(xs.map((x) => [x, 2 * x]))) // { conditionNumber: Infinity, rankDeficient: true }
+console.log(
+	linearLeastSquares(
+		xs.map((x) => [x, 2 * x]),
+		target,
+	).rankDeficient,
+) // true
+
+// Robust fits of the contaminated line: ordinary, Huber, Tukey.
+console.log(robustLinearLeastSquares(design, wy, { method: 'none' }).coefficients) // Float64Array(2) [ -5.200000000000001, 8.200000000000001 ] (the same as the ordinary fit)
+const huber = robustLinearLeastSquares(design, wy)
+console.log(huber.coefficients, huber.iterations, huber.scale) // Float64Array(2) [ -5.1450866967434195, 8.148386246316072 ] 25 9.123481391259862 (Huber barely downweights here: the residual scale is large, and the loop ends at the iteration cap)
+console.log(huber.weights) // Float64Array(5) [ 1, 1, 1, 0.9973174550837329, 0.9781248771988055 ]
+const tukey = robustLinearLeastSquares(design, wy, { method: 'tukey', tuning: 4.685 })
+console.log(tukey.coefficients, tukey.weights) // Float64Array(2) [ -4.825789847424056, 7.977517061931684 ] Float64Array(5) [ 0.9629001635923936, 0.9999745977687523, 0.9589760692681009, 0.8448046884050688, 0.8243996748326207 ]
+console.log(robustLinearLeastSquares(design, wy, { method: 'huber', tuning: 1, maxIterations: 50, tolerance: 1e-12, ridge: 0, weights: [1, 1, 1, 1, 1], leverage: false }).coefficients) // Float64Array(2) [ 0.8509586292344054, 2.156779664051241 ]
+```
+
 ### Linear Regression
 
 The regression fits of this toolkit all return an object with the sample arrays (`xPoints`, `yPoints`) and a `predict(x)` closure, and the straight-line fits (`LinearRegression`) add the `slope`, the `intercept` and `x(y)`, the inverse that solves x for a given y. `simpleLinearRegression(x, y)` is ordinary least squares with mean-subtracted sums, so a large x mean does not cause cancellation; it uses the shorter of the two arrays, and a vertical or constant-x data set gives a non-finite slope. `weightedLinearRegression(x, y, weights)` minimizes the weighted squared residuals with strictly positive finite weights (larger weight, more influence), and `weightedLinearRegressionScore(regression, x, y, weights)` returns the `RegressionScore` fields plus the number of samples, the weight sum and, from three samples on, the standard errors of the slope and of the intercept estimated from the weighted residual variance with `n - 2` degrees of freedom. `theilSenRegression(x, y)` is the robust fit: the slope is the median of all pairwise slopes (pairs with equal x are skipped, so the work grows with n² and suits small and moderate sample counts) and the intercept the median of `y - slope·x`, which tolerates a sizable fraction of outliers. `regressionScore(regression, x?, y?)` works for any regression and returns `r` (the Pearson correlation of y with the predictions), `r2` (1 minus the residual over the total sum of squares, `NaN` when y has no variance), `rss` (the residual sum of squares) and `rmsd` (the root-mean-square residual), against the fitted samples by default. `intersect(a, b)` returns the `{ x, y }` crossing of two straight-line fits, or `undefined` for parallel lines.
@@ -16723,6 +16870,31 @@ console.log(intersect(up, simpleLinearRegression([0, 1, 2], [3, 5, 7]))) // unde
 
 ### Multivariate Minimization
 
+Three derivative-free minimizers search a function of several variables, `f(params)`, from a starting vector `initial`, and return a `MultivariateMinimizationResult` with the `minimum` parameter vector, the objective `value` there, the `iterations` and `converged`. They share `maxIterations` (500), `tolerance` (1e-8) and `initialStep` (1, the size of the first simplex edges or line searches, so choose it on the scale of the parameters). `nelderMead(f, initial, options?)` is the downhill-simplex method with the coefficients `reflection` (1), `expansion` (2), `contraction` (0.5) and `shrink` (0.5); it needs no smoothness, copes with noisy objectives and is robust for a few variables, but is slow and may stall in narrow curved valleys. `coordinateDescent(f, initial, options?)` minimizes along each axis in turn and reduces the step by `stepReduction` (0.5) after a pass without improvement, which works for separable or weakly coupled problems and is slow when the variables are strongly correlated. `powell(f, initial, options?)` is the direction-set method that learns conjugate directions with Brent line searches (the inner tolerance is `lineTolerance`) and usually needs the fewest evaluations on smooth problems. The objective must be finite for every point visited (a non-finite value throws), the results are local minima that depend on the starting point, and the input vector is not modified.
+
+```ts
+import { coordinateDescent, nelderMead, powell } from 'nebulosa/src/math/numerical/optimization'
+
+// A paraboloid with its minimum at (1, -2) and value 3.
+const bowl = (p: Readonly<ArrayLike<number>>) => (p[0] - 1) ** 2 + 2 * (p[1] + 2) ** 2 + 3
+
+console.log(nelderMead(bowl, [0, 0])) // { minimum: Float64Array(2) [ 0.9999999996947966, -2.0000000063373644 ], value: 3, iterations: 66, converged: true }
+console.log(coordinateDescent(bowl, [0, 0])) // { minimum: Float64Array(2) [ 0.9999999940470461, -2.0000000059589054 ], value: 3, iterations: 29, converged: true }
+console.log(powell(bowl, [0, 0])) // { minimum: Float64Array(2) [ 0.9999999999999998, -1.99999999 ], value: 3, iterations: 2, converged: true }
+
+// The Rosenbrock valley, with its minimum at (1, 1), is hard for coordinate steps and easy for Powell and Nelder-Mead.
+const rosenbrock = (p: Readonly<ArrayLike<number>>) => (1 - p[0]) ** 2 + 100 * (p[1] - p[0] ** 2) ** 2
+console.log(nelderMead(rosenbrock, [-1.2, 1], { maxIterations: 2000 }).minimum) // Float64Array(2) [ 0.9999999995124882, 0.9999999992942233 ]
+console.log(powell(rosenbrock, [-1.2, 1], { maxIterations: 2000 }).minimum) // Float64Array(2) [ 0.9999999992476296, 0.9999999984934277 ]
+console.log(coordinateDescent(rosenbrock, [-1.2, 1], { maxIterations: 2000 }).converged) // false
+
+// Options: a smaller first step and a looser tolerance.
+console.log(nelderMead(bowl, [0.9, -1.9], { initialStep: 0.1, tolerance: 1e-6 })) // { minimum: Float64Array(2) [ 0.9999999999999999, -2 ], value: 3, iterations: 38, converged: true }
+console.log(powell(bowl, [0, 0], { lineTolerance: 1e-6 }).minimum) // Float64Array(2) [ 0.9999999999999993, -2.0000000000000004 ]
+console.log(coordinateDescent(bowl, [0, 0], { stepReduction: 0.25 }).minimum) // Float64Array(2) [ 0.9999999998063029, -1.9999999988689903 ]
+console.log(nelderMead(bowl, [0, 0], { reflection: 1, expansion: 2, contraction: 0.5, shrink: 0.5 }).value) // 3
+```
+
 ### Modulo and Integer Division
 
 The JavaScript `%` keeps the sign of the dividend, which is wrong for wrapping angles, indices and times; these helpers use the Euclidean convention instead. `pmod(num, other)` returns the remainder in [0, |other|) (so `-1` modulo `360` is `359`), where the sign of `other` is ignored, a tiny negative residual that would round up to the modulus becomes 0, and the result is never `-0`. `amod(num, other)` is the variant whose result lies in (0, |other|], so an exact multiple gives the modulus and not 0 (the convention of 1-based cycles, such as day-of-year or hour 24). `divmod(num, other)` returns `[quotient, remainder]` as a read-only pair such that `quotient * other + remainder = num`, with the remainder from `pmod` and an integer quotient. `floorDiv(x, y)` is `Math.floor(x / y)` and rounds toward minus infinity, unlike truncating integer division. All of them work on doubles, so they accept fractional operands (for example angles in radians modulo `TAU`), and a zero `other` gives `NaN`.
@@ -16750,6 +16922,37 @@ console.log(floorDiv(1, 0.3)) // 3
 ```
 
 ### Nonlinear Least Squares
+
+`levenbergMarquardt(x, y, model, params, options?)` fits a non-linear model `y ≈ model(x, params)` by minimizing the sum of squared residuals with the Levenberg-Marquardt algorithm, which blends Gauss-Newton and gradient descent through a damping factor. `model(x, params)` evaluates the model at one abscissa, `params` is the starting guess, and the function updates it in place and returns it, so copy the array if the guess must be kept. The Jacobian is estimated with forward differences (a relative step of about 1.5e-8, with a unit floor for a zero parameter), so no derivatives are needed. `options` are `maxIterations` (100), `lambda` (the initial damping, 0.01; it is divided by 10 after an accepted step and multiplied by 10 after a rejected one), `tolerance` (1e-6, the smallest residual improvement that continues the iteration) and `weights`, one non-negative value per sample (a weight of 0 ignores the sample, and the weights multiply the squared residuals). The arrays must have at least as many effective samples as parameters, otherwise an error is thrown. The fit is local: it depends on the starting guess, may stop at a local minimum or at the iteration cap without any flag (it returns just the parameters, so check the residuals), and the parameters of a poorly conditioned model are correlated. It is the engine behind the hyperbolic regression.
+
+```ts
+import { levenbergMarquardt } from 'nebulosa/src/math/numerical/optimization'
+
+// Samples of y = 2·exp(-0.5x) + 1, fitted with the model a·exp(b·x) + c from a rough guess.
+const x = [0, 0.5, 1, 1.5, 2, 3, 4, 5]
+const y = x.map((v) => 2 * Math.exp(-0.5 * v) + 1)
+const decay = (x: number, p: ArrayLike<number>) => p[0] * Math.exp(p[1] * x) + p[2]
+
+const guess = [1, -1, 0]
+const fitted = levenbergMarquardt(x, y, decay, guess)
+console.log(fitted) // [ 1.99999999998384, -0.5000000000105933, 1.0000000000189657 ]
+console.log(fitted === guess) // true (the starting array is updated in place)
+
+// A Gaussian profile a·exp(-(x - c)² / (2σ²)) fitted to noisy samples of a star cross-section.
+const px = [-4, -3, -2, -1, 0, 1, 2, 3, 4]
+const py = [0.02, 0.1, 0.45, 0.88, 1.01, 0.9, 0.42, 0.12, 0.01]
+const gauss = (x: number, p: ArrayLike<number>) => p[0] * Math.exp(-((x - p[1]) ** 2) / (2 * p[2] ** 2))
+console.log(levenbergMarquardt(px, py, gauss, [1, 0, 1])) // [ 1.0679513416890376, -0.0010974023402439146, 1.4835533952900515 ]
+
+// Weights: the sample with weight 0 (an outlier) does not take part in the fit.
+const line = (x: number, p: ArrayLike<number>) => p[0] * x + p[1]
+const lx = [0, 1, 2, 3, 4]
+const ly = [1, 3, 5, 7, 50]
+console.log(levenbergMarquardt(lx, ly, line, [1, 0], { weights: [1, 1, 1, 1, 0] })) // [ 1.9999999715768837, 1.0000000526862372 ]
+
+// Options: a smaller tolerance and a fixed number of iterations.
+console.log(levenbergMarquardt(x, y, decay, [1, -1, 0], { tolerance: 1e-12, maxIterations: 500, lambda: 0.1 })) // [ 2.0000000000000004, -0.4999999999999999, 0.9999999999999998 ]
+```
 
 ### Number Array Type and Detection
 
@@ -16940,7 +17143,87 @@ console.log(percentileBySelectionOf(new Float64Array(data), 1.5)) // 9
 
 ### Random Distributions and Shuffling
 
+Each sampler takes a base `Random` (see Seeded Random Sources) and returns a new `Random` that draws from the named distribution, consuming one or more values of the base on each call. Parameters that make a distribution degenerate collapse the sampler to a constant instead of failing. `uniform(random, min?, max?)` samples [min, max) (default [0, 1)); `bernoulli(random, p?)` gives 1 with probability `p` (default 0.5) and 0 otherwise; `exponential(random, lambda?)` has rate `lambda` (mean `1/lambda`, default 1), `weibull(random, lambda, k)` scale `lambda` and shape `k`, `geometric(random, p?)` is the number of trials up to the first success (an integer of at least 1, `Infinity` for `p <= 0`) and `pareto(random, alpha?)` a power-law tail with minimum 1 (`Infinity` for `alpha <= 0`); `normal(random, mu?, sigma?)` is the Gaussian with mean `mu` and standard deviation `sigma` by Marsaglia's polar method (two samples per pair of draws, the spare cached in the sampler), `gaussian(random, sigma)` the same with a zero mean, `logNormal(random, mu?, sigma?)` the exponential of a normal sample, `rayleigh(random, sigma?)` the magnitude of a 2D Gaussian vector with per-axis deviation `sigma` (zero for `sigma <= 0`), `cauchy(random, x0?, gamma?)` the heavy-tailed distribution with location `x0` and scale `gamma` (its mean and variance do not exist, so sample statistics do not converge), and `triangular(random, min?, max?, mode?)` the triangle between `min` and `max` peaking at `mode` (the midpoint by default; the bounds are ordered and the mode clamped). Units are those of the parameters. `shuffle(items, random)` is an in-place Fisher-Yates shuffle of an array or typed array, and returns nothing.
+
+```ts
+import { bernoulli, cauchy, exponential, gaussian, geometric, logNormal, normal, pareto, rayleigh, shuffle, splitmix32, triangular, uniform, weibull } from 'nebulosa/src/math/numerical/random'
+
+// A seeded source per sampler, so the printed values are reproducible.
+const source = () => splitmix32(7)
+const draw = (r: () => number, n: number = 5) => Array.from({ length: n }, r)
+
+console.log(draw(uniform(source(), -1, 1))) // [ 0.7873913091607392, 0.9607809060253203, -0.6267887456342578, -0.23251732857897878, -0.23925410211086273 ]
+console.log(draw(bernoulli(source(), 0.3), 10)) // [ 0, 0, 1, 0, 0, 0, 1, 0, 0, 1 ]
+console.log(draw(exponential(source(), 2))) // [ 1.120724557819869, 1.9658693700726313, 0.10326960181667506, 0.24204424701255262, 0.2393187562454228 ]
+console.log(draw(weibull(source(), 1.5, 2))) // [ 2.2457204879925308, 2.9742918762836377, 0.6816987664467626, 1.04364702440839, 1.0377545004019026 ]
+console.log(draw(geometric(source(), 0.25), 10)) // [ 8, 14, 1, 2, 2, 7, 1, 2, 12, 1 ]
+console.log(draw(pareto(source(), 3))) // [ 2.1109745337822567, 3.7083223591460786, 1.0712716504825848, 1.1751112586681665, 1.1729780273652388 ]
+console.log(draw(normal(source(), 10, 2))) // [ 7.620195128319255, 9.117173249908138, 9.310720892000939, 12.041905148817207, 7.256112090007393 ]
+console.log(draw(gaussian(source(), 0.5))) // [ -0.5949512179201862, -0.22070668752296538, -0.1723197769997653, 0.5104762872043017, -0.6859719774981518 ]
+console.log(draw(logNormal(source(), 0, 0.5))) // [ 0.5515894728932252, 0.8019518682856718, 0.8417099706393217, 1.666084540748705, 0.5036005032546778 ]
+console.log(draw(rayleigh(source(), 2))) // [ 4.234571161890883, 5.608378546528587, 1.2854235212826943, 1.967919701664893, 1.9568086518427816 ]
+console.log(draw(cauchy(source(), 0, 1))) // [ 2.882167921011094, 16.21185339242954, -1.5057473534132182, -0.3823941082766783, -0.3945733156997695 ] (a heavy tail: one draw is far from the others)
+console.log(draw(triangular(source(), 0, 10, 2))) // [ 7.083778534889637, 8.747497002403911, 1.931867630987543, 2.9785547682005555, 2.9593917816402744 ]
+
+// Sample statistics of a normal sampler: the mean and standard deviation approach 10 and 2.
+const g = normal(splitmix32(11), 10, 2)
+const samples = draw(g, 50000)
+const mean = samples.reduce((s, v) => s + v, 0) / samples.length
+console.log(mean, Math.sqrt(samples.reduce((s, v) => s + (v - mean) ** 2, 0) / samples.length)) // 9.99484951547586 2.01239436717763
+
+// A degenerate parameter gives a constant sampler.
+console.log(draw(normal(source(), 5, 0), 3), draw(bernoulli(source(), 0), 3), draw(bernoulli(source(), 1), 3)) // [ 5, 5, 5 ] [ 0, 0, 0 ] [ 1, 1, 1 ]
+
+// In-place shuffles of an array and of a typed array.
+const items = [1, 2, 3, 4, 5, 6, 7, 8]
+shuffle(items, splitmix32(3))
+console.log(items) // [ 4, 8, 6, 2, 1, 3, 7, 5 ]
+const typed = new Uint8Array([10, 20, 30, 40])
+shuffle(typed, splitmix32(3))
+console.log(typed) // Uint8Array(4) [ 20, 10, 40, 30 ]
+```
+
 ### Rigid Transforms
+
+A `RigidTransform3` is an active rigid motion made of a proper 3x3 `rotation` (see 3x3 Matrices) and a `translation` vector, mapping a point `p` from a source frame to a destination frame as `R·p + t`, in the same distance unit for the points and the translation (the library does not care which). Directions are rotated without the translation. `rigidIdentity()` returns a new identity. `rigidCompose(after, before)` returns the transform that applies `before` first and `after` second, so `rigidCompose(a, b)` is not the same as `rigidCompose(b, a)`. `rigidInverse(transform)` uses the rotation transpose, so it is exact for proper rotations. `rigidTransformPoint(transform, point, out?)` and `rigidTransformDirection(transform, direction, out?)` write into `out` when given (it may alias the input) and otherwise allocate a fresh vector; direction vectors are not normalized. `rigidRotationAroundAxis(pivot, axis, angle)` builds the right-handed rotation by `angle` (radians) about the line through `pivot` along `axis`, whose length is ignored (it must not be zero); that is the transform that keeps the pivot fixed.
+
+```ts
+import { rigidCompose, rigidIdentity, rigidInverse, rigidRotationAroundAxis, rigidTransformDirection, rigidTransformPoint, type RigidTransform3 } from 'nebulosa/src/math/linear-algebra/rigid3'
+
+console.log(rigidIdentity()) // { rotation: [ 1, 0, 0, 0, 1, 0, 0, 0, 1 ], translation: [ 0, 0, 0 ] }
+
+// A quarter turn about the z axis through the origin, then a translation by (10, 0, 0).
+const rotate = rigidRotationAroundAxis([0, 0, 0], [0, 0, 1], Math.PI / 2)
+const move: RigidTransform3 = { rotation: rigidIdentity().rotation, translation: [10, 0, 0] }
+console.log(rigidTransformPoint(rotate, [1, 0, 0])) // [ 6.123233995736766e-17, 1, 0 ] (x becomes y)
+console.log(rigidTransformDirection(move, [1, 2, 3])) // [ 1, 2, 3 ] (directions ignore the translation)
+console.log(rigidTransformPoint(move, [1, 2, 3])) // [ 11, 2, 3 ]
+
+// Rotation about a pivot at (1, 0, 0): the pivot stays put and (2, 0, 0) swings to (1, 1, 0).
+const about = rigidRotationAroundAxis([1, 0, 0], [0, 0, 5], Math.PI / 2)
+console.log(about.translation) // [ 0.9999999999999999, -1, 0 ]
+console.log(rigidTransformPoint(about, [1, 0, 0]), rigidTransformPoint(about, [2, 0, 0])) // [ 1, 0, 0 ] [ 1, 1, 0 ]
+
+// Composition applies the right operand first: rotate then move, versus move then rotate.
+const rotateThenMove = rigidCompose(move, rotate)
+const moveThenRotate = rigidCompose(rotate, move)
+console.log(rigidTransformPoint(rotateThenMove, [1, 0, 0])) // [ 10, 1, 0 ]
+console.log(rigidTransformPoint(moveThenRotate, [1, 0, 0])) // [ 6.735557395310443e-16, 11, 0 ]
+
+// The inverse undoes the transform.
+const inv = rigidInverse(rotateThenMove)
+console.log(rigidTransformPoint(inv, rigidTransformPoint(rotateThenMove, [3, -2, 1]))) // [ 3.0000000000000004, -2, 1 ]
+console.log(rigidCompose(inv, rotateThenMove)) // { rotation: [ 1, 0, 0, 0, 1, 0, 0, 0, 1 ], translation: [ 0, 0, 0 ] } (the identity)
+
+// With an output vector, the result is written in place and the same object is returned.
+const out: [number, number, number] = [0, 0, 0]
+console.log(rigidTransformPoint(rotate, [0, 2, 0], out) === out, out) // true [ -2, 1.2246467991473532e-16, 0 ]
+const point: [number, number, number] = [1, 1, 1]
+rigidTransformPoint(move, point, point)
+console.log(point) // [ 11, 1, 1 ] (the input aliased as the output)
+const dir: [number, number, number] = [0, 3, 0]
+console.log(rigidTransformDirection(rotate, dir, dir) === dir, dir) // true [ -3, 1.8369701987210297e-16, 0 ]
+```
 
 ### Rounding and Integer Conversion
 
@@ -17000,9 +17283,90 @@ console.log(fract(3.75), fract(-0.25), fract(5)) // 0.75 0.75 0
 
 ### Scalar Minimization
 
+`goldenSectionSearch(f, min, max, options?)` and `brentMinimize(f, min, max, options?)` find the minimum of a scalar function inside the bracket `[min, max]` and return a `ScalarMinimizationResult` with the `minimum` position, the function `value` there, the `iterations` and `converged`. The options are `maxIterations` (100) and `tolerance` (1e-10), an absolute threshold in the units of the search variable. Golden-section search shrinks the bracket by the golden ratio each iteration, needs only that `f` be unimodal on the bracket, and converges linearly; Brent's method adds parabolic interpolation steps when `f` is smooth, usually needing far fewer evaluations, and falls back to golden sections otherwise. Both locate a local minimum, which is the global one only for a unimodal function (on a function with several minima inside the bracket, which one they find is not determined), and since the position of a minimum is only known to about the square root of the machine epsilon relative to its scale, a tolerance below that does not improve the position. The functions throw when `f` returns a non-finite value. To maximize, minimize `-f`; for several variables see Multivariate Minimization.
+
+```ts
+import { brentMinimize, goldenSectionSearch } from 'nebulosa/src/math/numerical/optimization'
+
+// The minimum of (x - 3)² + 1 is at x = 3 with value 1.
+const f = (x: number) => (x - 3) ** 2 + 1
+
+console.log(goldenSectionSearch(f, 0, 10)) // { minimum: 3.000000010532873, value: 1, iterations: 54, converged: true }
+console.log(brentMinimize(f, 0, 10)) // { minimum: 2.999999992139974, value: 1, iterations: 36, converged: true }
+
+// A non-quadratic function: x·ln(x) has its minimum at x = 1/e = 0.36787944117144233.
+const g = (x: number) => x * Math.log(x)
+console.log(brentMinimize(g, 0.01, 2).minimum) // 0.36787944059892996
+console.log(goldenSectionSearch(g, 0.01, 2).minimum) // 0.3678794425601827
+
+// The best focus of an HFD curve with a small asymmetry, between two focuser positions.
+const hfd = (p: number) => 2 + 1e-6 * (p - 5100) ** 2 + 1e-9 * (p - 5100) ** 3
+console.log(brentMinimize(hfd, 4000, 6000).minimum) // 5099.99999993539
+
+// A tolerance of 1e-3 stops earlier, and a cap of 5 iterations leaves the search unconverged.
+console.log(goldenSectionSearch(f, 0, 10, { tolerance: 1e-3 })) // { minimum: 3.000005960860986, value: 1.0000000000355318, iterations: 21, converged: true }
+console.log(goldenSectionSearch(f, 0, 10, { maxIterations: 5 })) // { minimum: 2.9179606750063085, value: 1.0067304508454205, iterations: 5, converged: false }
+
+// Maximizing by minimizing the negative.
+console.log(brentMinimize((x) => -Math.sin(x), 0, Math.PI).minimum, Math.PI / 2) // 1.5707963266045875 1.5707963267948966
+```
+
 ### Scalar Root Finding
 
+Four derivative-free solvers find `x` with `f(x) = 0` for a scalar function and return a `RootFindingResult` with the estimated `root`, the function `value` there, the number of `iterations` and `converged`, which says whether a tolerance was met before the iteration cap. All accept the same optional `RootFindingOptions`: `maxIterations` (100), `tolerance` (1e-12, the smallest x interval or x step) and `functionTolerance` (1e-12, the smallest `|f|`); the tolerances are absolute and in the units of `x` and `f`, so scale them for very large or very small roots. `bisection(f, min, max)`, `brentRoot(f, min, max)` and `falsePositionRoot(f, min, max)` (the Illinois variant of false position) are bracketed: `f(min)` and `f(max)` must be finite with opposite signs, otherwise they throw, and then the root is guaranteed to stay inside the bracket. Bisection halves the interval each iteration (slow but unconditional), Brent's method combines bisection, the secant method and inverse quadratic interpolation and is the usual choice, and Illinois is a fast bracketed alternative. `secantRoot(f, x0, x1)` needs no bracket but can leave the region, diverge, or stop at a flat spot, in which case it returns the last point with `converged` false. A function that returns a non-finite value during the search throws. With several roots in the bracket, which one is found depends on the method.
+
+```ts
+import { bisection, brentRoot, falsePositionRoot, secantRoot } from 'nebulosa/src/math/numerical/optimization'
+
+// The root of x² - 2 on [0, 2] is √2 = 1.4142135623730951.
+const f = (x: number) => x * x - 2
+
+console.log(bisection(f, 0, 2)) // { root: 1.4142135623733338, value: 6.754596881819452e-13, iterations: 39, converged: true }
+console.log(brentRoot(f, 0, 2)) // { root: 1.4142135623731364, value: 1.1723955140041653e-13, iterations: 7, converged: true }
+console.log(falsePositionRoot(f, 0, 2)) // { root: 1.4142135623728758, value: -6.201705815556124e-13, iterations: 41, converged: true }
+console.log(secantRoot(f, 1, 2)) // { root: 1.4142135623730954, value: 8.881784197001252e-16, iterations: 6, converged: true }
+
+// Kepler's equation E - e·sin(E) = M for e = 0.3 and M = 1 rad.
+const kepler = (E: number) => E - 0.3 * Math.sin(E) - 1
+console.log(brentRoot(kepler, 0, Math.PI).root) // 1.2880913132122689
+
+// A looser tolerance stops earlier, and a low iteration cap leaves `converged` false.
+console.log(bisection(f, 0, 2, { tolerance: 1e-3 })) // { root: 1.41455078125, value: 0.0009539127349853516, iterations: 12, converged: true }
+console.log(bisection(f, 0, 2, { maxIterations: 5 })) // { root: 1.4375, value: 0.06640625, iterations: 5, converged: false }
+
+// A root at an endpoint is returned immediately with zero iterations.
+console.log(brentRoot((x) => x - 1, 1, 3)) // { root: 1, value: 0, iterations: 0, converged: true }
+```
+
 ### Seeded Random Sources
+
+A `Random` is a function that returns a double in [0, 1) on each call, and the base generators build one from a 32-bit integer `seed` (the seed is truncated to 32 bits and defaults to `Date.now()`, so pass a fixed seed for reproducible simulations, tests and synthetic images). Each call advances the private state of that generator, so two generators with the same seed produce the same sequence independently, and one generator must not be shared between consumers that need independent streams. `mulberry32` is a very small and fast generator of acceptable quality, `xorshift32` an extremely simple one (a zero seed is replaced by a fixed constant, since zero is a fixed point of the algorithm), `splitmix32` a fast generator of good quality for most uses, `sfc32` the Small Fast Counter generator with a 128-bit state seeded through SplitMix32, and `mt19937` the Mersenne Twister with a period of 2¹⁹⁹³⁷ - 1, which is the heaviest one (a 624-word state) and the one to use when a long period matters. None of them is cryptographically secure. The distribution samplers (see Random Distributions and Shuffling) wrap any of these.
+
+```ts
+import { mt19937, mulberry32, sfc32, splitmix32, xorshift32 } from 'nebulosa/src/math/numerical/random'
+
+// The same seed gives the same sequence, and another seed a different one.
+const a = mulberry32(42)
+const b = mulberry32(42)
+console.log(a(), a(), a()) // 0.6011037519201636 0.44829055899754167 0.8524657934904099
+console.log(b(), b(), b()) // 0.6011037519201636 0.44829055899754167 0.8524657934904099 (identical to the line above)
+console.log(mulberry32(43)()) // 0.9998110907617956
+
+// The other generators, the first three values of each for seed 1.
+console.log(xorshift32(1)(), xorshift32(0)()) // 0.00006295018829405308 0.25266689783893526
+const s = splitmix32(1)
+console.log(s(), s(), s()) // 0.3678755429573357 0.08161311969161034 0.8205357783008367
+const c = sfc32(1)
+console.log(c(), c(), c()) // 0.15070555242709816 0.16780947777442634 0.6835320217069238
+const m = mt19937(5489)
+console.log(m(), m(), m()) // 0.8147236919030547 0.13547700410708785 0.9057919341139495 (the reference MT19937 stream of seed 5489)
+
+// Every value is in [0, 1): the mean of many draws approaches 0.5.
+const r = splitmix32(2024)
+let sum = 0
+for (let i = 0; i < 100000; i++) sum += r()
+console.log(sum / 100000) // 0.5007811973248073
+```
 
 ### Spherical Mount Bases
 
@@ -17121,6 +17485,64 @@ console.log(
 ```
 
 ### Splines and Interpolation
+
+Two kinds of interpolators live here. `spline(lower, upper, coefficients)` is a single polynomial over one interval `[lower, upper]`, evaluated in the normalized parameter `t = (x - lower) / (upper - lower)` with coefficients in descending power order, and it exposes `compute(x)`, `derivative()` (the spline of dy/dx, in the original x units) and `integral(constant?)` (the antiderivative, with value `constant` at `lower`, default 0). `splineGivenEnds(x0, y0, slope0, x1, y1, slope1)` builds the cubic Hermite polynomial that matches the values and slopes at both ends. The piecewise builders take ordered control points `x` (strictly increasing) and `y` and return an object with `compute(x)`, `reset()`, the knots `x` and `y`, and (for the cubic family) the nodal `slopes`: `linearSpline` joins the points with straight segments; `cubicHermiteSpline` and `pchip` use shape-preserving slopes that never overshoot monotone data (PCHIP additionally exposes `knots`, `values`, `derivatives`, `widths` and `secants`); `akimaSpline` weights the local secants so that outliers disturb the curve little; `catmullRomSpline` takes centered finite-difference slopes; and `naturalCubicSpline` is the C² cubic with zero second derivative at both ends. All of them interpolate, so the curve passes through every control point. Outside `[x[0], x[last]]` a query is clamped to the end value unless the `extrapolate` option (or a `true` third argument) continues the end segment; `pchip` also accepts `outOfRange: 'clamp' | 'extrapolate' | 'throw'`. Evaluation caches the last segment to be fast for monotonic query streams, so call `reset()` before jumping around, and the control-point arrays are kept by reference and must not be changed afterwards. `cubicHermiteSplineLUT`, `akimaSplineLUT`, `catmullRomSplineLUT` and `naturalCubicSplineLUT` sample the whole x-range at `size` (at least 2) evenly spaced positions into a `Float32Array`, which is handy for tone curves and look-up tables.
+
+```ts
+import { akimaSpline, akimaSplineLUT, catmullRomSpline, catmullRomSplineLUT, cubicHermiteSpline, cubicHermiteSplineLUT, linearSpline, naturalCubicSpline, naturalCubicSplineLUT, pchip, spline, splineGivenEnds } from 'nebulosa/src/math/numerical/spline'
+
+// A single polynomial 2t² + 1 on [0, 4]: t = x / 4.
+const p = spline(0, 4, [2, 0, 1])
+console.log(p.compute(2), p.lower, p.upper) // 1.5 0 4
+console.log(p.derivative().compute(2), p.derivative().coefficients) // 0.5 Float64Array(2) [ 1, 0 ] (dy/dx at x = 2)
+console.log(p.integral(5).compute(0), p.integral().compute(4)) // 5 6.666666666666666 (value at lower, and the area under the curve)
+
+// The cubic through (0, 0) with slope 0 and (1, 1) with slope 0 is the smoothstep 3t² - 2t³.
+const ends = splineGivenEnds(0, 0, 0, 1, 1, 0)
+console.log(ends.compute(0.25), ends.compute(0.5), ends.compute(0.75)) // 0.15625 0.5 0.84375
+
+// Step-like data: linear, Hermite, PCHIP and Akima stay inside the data range, while Catmull-Rom and the natural cubic overshoot.
+const x = [0, 1, 2, 3, 4, 5]
+const y = [0, 0, 0, 1, 1, 1]
+const lin = linearSpline(x, y)
+const her = cubicHermiteSpline(x, y)
+const pc = pchip(x, y)
+const ak = akimaSpline(x, y)
+const cr = catmullRomSpline(x, y)
+const nat = naturalCubicSpline(x, y)
+for (const q of [0.5, 2.5, 3.5]) console.log(q, lin.compute(q), her.compute(q), pc.compute(q), ak.compute(q), cr.compute(q), nat.compute(q)) // q = 0.5: 0 0 0 0 0 0.03409090909090909 | q = 2.5: 0.5 for all six | q = 3.5: 1 1 1 1 1.0625 1.1022727272727273 (columns: linear, Hermite, PCHIP, Akima, Catmull-Rom, natural)
+
+// Every interpolator returns the control values at the knots, and exposes its nodal slopes.
+console.log(pc.compute(3), pc.slopes, her.slopes) // 1 Float64Array(6) [ 0, 0, 0, 0, 0, 0 ] Float64Array(6) [ 0, 0, 0, 0, 0, 0 ]
+console.log(ak.slopes, cr.slopes, nat.slopes) // Float64Array(6) [ 0, 0, 0, 0, 0, 0 ] Float64Array(6) [ 0, 0, 0.5, 0.5, 0, 0 ] Float64Array(6) [ 0.0909090909090909, -0.1818181818181818, 0.6363636363636364, 0.6363636363636365, -0.1818181818181818, 0.0909090909090909 ]
+console.log(pc.knots === pc.x, pc.widths, pc.secants) // true Float64Array(5) [ 1, 1, 1, 1, 1 ] Float64Array(5) [ 0, 0, 1, 0, 0 ]
+
+// Out of range: clamped by default, extended with the end segment when asked.
+console.log(lin.compute(-1), lin.compute(7)) // 0 1
+console.log(linearSpline(x, y, true).compute(7), linearSpline(x, y, { extrapolate: true }).compute(-1)) // 1 0 (the end segments are flat for this data)
+console.log(pchip(x, y, { outOfRange: 'extrapolate' }).compute(6), pchip(x, y, { outOfRange: 'clamp' }).compute(6)) // 1 1
+console.log(naturalCubicSpline(x, y, true).compute(6), akimaSpline(x, y, true).compute(6), catmullRomSpline(x, y, true).compute(6), cubicHermiteSpline(x, y, true).compute(6)) // 1 1 1 1
+
+// A smooth sample of sin(x): compare each interpolator between two knots.
+const sx = [0, 0.5, 1, 1.5, 2, 2.5, 3]
+const sy = sx.map(Math.sin)
+const target = Math.sin(1.25)
+console.log(target) // 0.9489846193555862
+console.log(linearSpline(sx, sy).compute(1.25), cubicHermiteSpline(sx, sy).compute(1.25), pchip(sx, sy).compute(1.25)) // 0.9194829857059754 0.9467417729047103 0.9467417729047103
+console.log(akimaSpline(sx, sy).compute(1.25), catmullRomSpline(sx, sy).compute(1.25), naturalCubicSpline(sx, sy).compute(1.25)) // 0.9515485589020327 0.9476231735798546 0.9488520560575384
+
+// A monotonic query stream, then a jump back with reset().
+const stream = naturalCubicSpline(sx, sy)
+console.log(stream.compute(0.2), stream.compute(1.7), stream.compute(2.9)) // 0.19862572588293415 0.9914081159474999 0.23778762360048444
+stream.reset()
+console.log(stream.compute(0.2)) // 0.19862572588293415
+
+// Look-up tables of 5 evenly spaced samples over [0, 3].
+console.log(cubicHermiteSplineLUT(sx, sy, 5)) // Float32Array(5) [ 0, 0.6847580671310425, 0.9974949955940247, 0.7829732894897461, 0.14112000167369843 ]
+console.log(akimaSplineLUT(sx, sy, 5)) // Float32Array(5) [ 0, 0.6781549453735352, 0.9974949955940247, 0.7753660082817078, 0.14112000167369843 ]
+console.log(catmullRomSplineLUT(sx, sy, 5)) // Float32Array(5) [ 0, 0.6806608438491821, 0.9974949955940247, 0.7769569754600525, 0.14112000167369843 ]
+console.log(naturalCubicSplineLUT(sx, sy, 5)) // Float32Array(5) [ 0, 0.6815120577812195, 0.9974949955940247, 0.7783800959587097, 0.14112000167369843 ]
+```
 
 ### Temperature Units
 
