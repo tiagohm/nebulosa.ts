@@ -7955,6 +7955,50 @@ console.log(frame().raw[2 * 6 + 2], analyzeSaturation({ ...frame(), raw: new Flo
 
 ### Global Image Normalization
 
+Before a set of registered frames is combined, each one is matched photometrically to a reference with a linear transform, `reference ≈ scale * current + offset`, in the units of the image (normalized 0..1 for `Image`, see Scientific Image Model), with no clamping. `solveGlobalNormalization(reference, current, mode)` solves it from two arrays of the same size, the overlapping pixel values of the reference and of the frame. The distributions are matched by quantile and not pixel by pixel, which tolerates a residual misregistration that would bias a paired regression over the whole frame. The `mode` chooses the estimator: `'scale'` is multiplicative only, the ratio of the medians (offset 0, scale 1 when the median of the current is zero); `'background-scale'` matches the 25th percentile (the background level) and the 25th to 75th percentile span; `'percentile'` matches the 10th percentile and the 10th to 90th percentile span, which tolerates bright structure better. A collapsed distribution carries no scale information, so only its level is matched (scale 1) and an empty input returns the identity.
+
+`solveGlobalNormalizationPlanes(currentRaw, valid, referenceRaw, channels, width, height, mode, colorMode, sampleCounts?)` runs it on the raw buffers of two frames of the same geometry: it collects at most `NORMALIZATION_SAMPLE_LIMIT` (8192) pairs of finite pixels where `valid` (a byte per pixel, nonzero is usable, or `undefined` for all) allows, retries the dense scan when the lattice leaves fewer than `MIN_GLOBAL_NORMALIZATION_SAMPLES` (32), and returns one `{ scale, offset }` per plane, either one per interleaved channel (`colorMode` `'per-channel'`) or a single one derived from the luminance (`'luminance'`, falling back to per-channel for non-RGB images); `sampleCounts` is resized and filled with the number of pairs fitted per plane, and a plane without overlap gets the identity. `broadcastNormalizationPlanes(planes, channels)` expands the planes to the `scales` and `offsets` arrays per channel, and `applyGlobalNormalizationInPlace(raw, valid, channels, scales, offsets)` applies `value * scale + offset` to the pixels of `raw` whose `valid` byte is nonzero. The quantile estimators need a reference and a frame that show the same sky: a different field of view, a satellite trail or a cloud over a large part of the frame bias them; for a differential gradient see Local Image Normalization.
+
+```ts
+import { applyGlobalNormalizationInPlace, broadcastNormalizationPlanes, MIN_GLOBAL_NORMALIZATION_SAMPLES, NORMALIZATION_SAMPLE_LIMIT, solveGlobalNormalization, solveGlobalNormalizationPlanes } from 'nebulosa/src/imaging/processing/normalization'
+
+// A reference ramp 0.1 .. 0.5 and a frame that is the same sky at 0.8 of the gain, plus a pedestal of 0.05.
+const reference = Array.from({ length: 101 }, (_, i) => 0.1 + (0.4 * i) / 100)
+const current = reference.map((value) => (value - 0.05) / 0.8)
+for (const mode of ['scale', 'background-scale', 'percentile'] as const) console.log(mode, solveGlobalNormalization(reference, current, mode)) // scale { scale: 0.96, offset: 0 } (ratio of medians only, so the pedestal is not removed)
+console.log(solveGlobalNormalization([], [], 'scale'), solveGlobalNormalization([0.2, 0.2, 0.2], [0.1, 0.1, 0.1], 'percentile')) // background-scale { scale: 0.8, offset: 0.05 }
+
+// Two RGB frames: the whole analysis works on the raw buffers.
+const width = 16
+const height = 16
+const pixels = width * height
+const referenceRaw = new Float64Array(pixels * 3)
+const currentRaw = new Float64Array(pixels * 3)
+for (let i = 0; i < pixels; i++) {
+	for (let channel = 0; channel < 3; channel++) {
+		const sky = 0.1 + (0.3 * ((i * 7 + channel * 3) % 50)) / 50
+		referenceRaw[i * 3 + channel] = sky
+		currentRaw[i * 3 + channel] = (sky - 0.02 * (channel + 1)) / (0.5 + 0.25 * channel)
+	}
+}
+const counts: number[] = []
+const planes = solveGlobalNormalizationPlanes(currentRaw, undefined, referenceRaw, 3, width, height, 'background-scale', 'per-channel', counts)
+console.log(planes, counts) // percentile { scale: 0.8, offset: 0.05 }
+const luminance = solveGlobalNormalizationPlanes(currentRaw, undefined, referenceRaw, 3, width, height, 'scale', 'luminance')
+console.log(luminance, broadcastNormalizationPlanes(luminance, 3)) // { scale: 1, offset: 0 } { scale: 1, offset: 0.1 } (an empty input is the identity, and a collapsed distribution matches only its level)
+
+// Applying the per-channel solution to the valid pixels (the mask skips the first pixel) recovers the reference.
+const valid = new Uint8Array(pixels).fill(1)
+valid[0] = 0
+const { scales, offsets } = broadcastNormalizationPlanes(planes, 3)
+const before = currentRaw[0]
+applyGlobalNormalizationInPlace(currentRaw, valid, 3, scales, offsets)
+let worst = 0
+for (let i = 3; i < currentRaw.length; i++) worst = Math.max(worst, Math.abs(currentRaw[i] - referenceRaw[i]))
+console.log(currentRaw[0] === before, worst < 1e-12) // scales 0.5, 0.75, 1 and offsets 0.02, 0.04, 0.06 per channel, and 256 pairs in each plane
+console.log(NORMALIZATION_SAMPLE_LIMIT, MIN_GLOBAL_NORMALIZATION_SAMPLES) // 8192 32
+```
+
 ### Grayscale Image Conversion
 
 `grayscale(image, channel?)` converts an interleaved RGB image into a fresh single-channel image (the input is not modified), or returns a mono input unchanged (the same object). `channel` selects a color channel (`'RED'`, `'GREEN'` or `'BLUE'`), which is extracted without weighting, or a luminance: the named weights `'BT709'` (the default, 0.2125, 0.7154, 0.0721), `'Y'` (NTSC, 0.299, 0.587, 0.114), `'RMY'` (0.5, 0.419, 0.081) and `'GRAY'` (BT.709), or explicit `{ red, green, blue }` weights, whose sum must be 1 within 1e-6 (a `RangeError` otherwise). The raw buffer of the result has the precision of the input, and the header loses the third axis (`NAXIS3` and the keywords tied to it, such as `CTYPE3` and `CRPIX3`), `WCSAXES` becomes 2, `NAXIS` becomes 2 and `BAYERPAT` is removed. The weights are the constants of Scientific Image Model.
@@ -7993,6 +8037,76 @@ try {
 ```
 
 ### Image Analysis Planes
+
+The quantitative image analyses (the sensor characterization, the flat and saturation checks) work on one plane of a `DigitalImage` (see Scientific Image Loading and Export) at a time, without luminance conversion or debayering, and share the helpers of `imaging/analysis/plane`. An `ImageAnalysisPlane` is `'mono'`, one of the interleaved RGB planes (`'red'`, `'green'`, `'blue'`) or one of the planes of a non-debayered color filter array (CFA) mosaic (`'red'`, `'green1'`, `'green2'`, `'blue'`); the canonical lists are `MONO_ANALYSIS_PLANES`, `RGB_ANALYSIS_PLANES` and `CFA_ANALYSIS_PLANES`, and `resolveImageAnalysisPlanes(image)` picks the one that fits the layout of an image after validating it. Rectangles are `Rect` values with inclusive `left` and `top` and exclusive `right` and `bottom`, in image pixels, and the CFA pattern of the metadata is image-local: `cfaOffset` (`[x, y]` in unbinned sensor pixels, applied once) shifts the pattern of a full-sensor frame to the origin of a crop.
+
+`validateDigitalImageLayout(image)` throws when the layout is not the dense, row-major and interleaved one that these analyses assume: `sampleScale` other than `'digital'`, a raw buffer that is not a `Float32Array` or a `Float64Array` or is shorter than `stride * height`, dimensions that are not positive integers, `channels` other than 1 or 3, an inconsistent `pixelCount` or `stride`, a CFA mosaic with several channels, a non-finite or unordered `digitalRange` and a non-positive `quantizationStep`. `resolveAnalysisArea(area, width, height)` returns the area, or the whole frame when it is omitted, and throws unless it is a non-empty rectangle of integers inside the extent. `resolveLocalCfaPattern(image, cfaOffset?)` returns the image-local pattern, shifted by the offset when there is one (a `RangeError` when the image is not a mosaic).
+
+`resolveImagePlaneGeometry(image, area, plane, cfaOffset?)` maps a plane inside an area to an `ImagePlaneGeometry`: the first source pixel (`sourceLeft`, `sourceTop`), the `step` between samples in the source (1 for mono and RGB, 2 for a CFA), the `width` and `height` in samples, and the raw-buffer layout (`rawStart`, `rawColumnStep`, `rawRowStep`, so that sample `(x, y)` is `raw[rawStart + y * rawRowStep + x * rawColumnStep]`), with the `cfaPattern` that selected it. A mosaic plane that has no sample in a tiny area is an error here and `undefined` in `resolveOptionalImagePlaneGeometry`, which still throws for an invalid layout, area, offset or plane; `imagePlaneGeometry(metadata, area, plane, pattern?)` is the lower-level function that expects a validated layout and area.
+
+```ts
+import { CFA_ANALYSIS_PLANES, imagePlaneGeometry, MONO_ANALYSIS_PLANES, resolveAnalysisArea, resolveImageAnalysisPlanes, resolveImagePlaneGeometry, resolveLocalCfaPattern, resolveOptionalImagePlaneGeometry, RGB_ANALYSIS_PLANES, validateDigitalImageLayout } from 'nebulosa/src/imaging/analysis/plane'
+import type { DigitalImage } from 'nebulosa/src/imaging/model/types'
+
+// A 6x4 digital image: mono, interleaved RGB or an RGGB mosaic.
+const make = (channels: 1 | 3, bayer?: 'RGGB'): DigitalImage => ({
+	header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 6, NAXIS2: 4 },
+	raw: new Float64Array(6 * 4 * channels),
+	metadata: { width: 6, height: 4, channels, pixelCount: 24, pixelSizeInBytes: 2, strideInBytes: 6 * channels * 8, stride: 6 * channels, bitpix: 16, bayer },
+	sampleScale: 'digital',
+	digitalRange: [0, 65535],
+	quantizationStep: 1,
+})
+
+const mono = make(1)
+const rgb = make(3)
+const mosaic = make(1, 'RGGB')
+console.log(resolveImageAnalysisPlanes(mono), resolveImageAnalysisPlanes(rgb), resolveImageAnalysisPlanes(mosaic)) // ['mono'] ['red', 'green', 'blue'] ['red', 'green1', 'green2', 'blue']
+console.log(MONO_ANALYSIS_PLANES === resolveImageAnalysisPlanes(mono), RGB_ANALYSIS_PLANES.length, CFA_ANALYSIS_PLANES.length) // true 3 4
+
+// The area defaults to the whole frame and is checked against the extent.
+const whole = resolveAnalysisArea(undefined, 6, 4)
+console.log(whole) // { left: 0, top: 0, right: 6, bottom: 4 }
+console.log(resolveAnalysisArea({ left: 1, top: 1, right: 5, bottom: 3 }, 6, 4)) // { left: 1, top: 1, right: 5, bottom: 3 } (the same rectangle)
+
+// Plane geometry: the whole mono image, the green samples of an RGB image and each plane of the mosaic.
+console.log(resolveImagePlaneGeometry(mono, whole, 'mono')) // { sourceLeft: 0, sourceTop: 0, step: 1, width: 6, height: 4, rawStart: 0, rawColumnStep: 1, rawRowStep: 6 }
+console.log(resolveImagePlaneGeometry(rgb, whole, 'green')) // { sourceLeft: 0, sourceTop: 0, step: 1, width: 6, height: 4, rawStart: 1, rawColumnStep: 3, rawRowStep: 18 }
+for (const plane of CFA_ANALYSIS_PLANES) {
+	const g = resolveImagePlaneGeometry(mosaic, whole, plane)
+	console.log(plane, g.sourceLeft, g.sourceTop, g.step, g.width, g.height, g.rawStart, g.rawColumnStep, g.rawRowStep) // red: source (0, 0), step 2, 3x2 samples, rawStart 0, steps 2 and 12
+}
+
+// Sample (1, 1) of the blue plane is raw[rawStart + rawRowStep + rawColumnStep], the source pixel (3, 3), that is raw index 21.
+const blue = resolveImagePlaneGeometry(mosaic, whole, 'blue')
+console.log(blue.rawStart + 1 * blue.rawRowStep + 1 * blue.rawColumnStep) // green1: source (1, 0), step 2, 3x2 samples, rawStart 1, steps 2 and 12
+
+// A crop of a full-sensor mosaic that starts at an odd column swaps the pattern: the offset shifts it once.
+console.log(resolveLocalCfaPattern(mosaic), resolveLocalCfaPattern(mosaic, [1, 0]), resolveLocalCfaPattern(mono)) // green2: source (0, 1), step 2, 3x2 samples, rawStart 6, steps 2 and 12
+console.log(resolveImagePlaneGeometry(mosaic, whole, 'red', [1, 0]).sourceLeft) // blue: source (1, 1), step 2, 3x2 samples, rawStart 7, steps 2 and 12
+
+// A mosaic plane without samples in a tiny area: an error, or undefined from the optional variant.
+const tiny = { left: 0, top: 0, right: 1, bottom: 1 }
+console.log(resolveOptionalImagePlaneGeometry(mosaic, tiny, 'blue')) // undefined
+console.log(imagePlaneGeometry(mosaic.metadata, tiny, 'red')?.width) // 21
+
+for (const run of [
+	() => resolveImagePlaneGeometry(mosaic, tiny, 'blue'),
+	() => resolveImagePlaneGeometry(mono, whole, 'red'),
+	() => resolveImagePlaneGeometry(rgb, whole, 'mono'),
+	() => resolveAnalysisArea({ left: 0, top: 0, right: 7, bottom: 4 }, 6, 4),
+	() => resolveLocalCfaPattern(mono, [1, 0]),
+	() => validateDigitalImageLayout({ ...mono, sampleScale: 'normalized' } as never),
+	() => validateDigitalImageLayout({ ...mono, quantizationStep: 0 }),
+	() => validateDigitalImageLayout({ ...mono, raw: new Float64Array(4) }),
+]) {
+	try {
+		run()
+	} catch (e) {
+		console.log((e as Error).message) // RGGB GRBG undefined
+	}
+}
+```
 
 ### Image Arithmetic
 
@@ -8061,6 +8175,64 @@ try {
 ```
 
 ### Image Calibration
+
+`calibrate(light, options?)` applies the bias, dark and flat master frames to a light frame in one pass, and modifies `light` in place and returns the same object. The masters are raw, as stacked, in the normalized 0..1 units of `Image` (see Scientific Image Model): the `dark` and the `darkFlat` still contain their bias pedestal and the `flat` contains its bias and dark current, the result is `(light - dark) * mean(flat') / flat'`, with `flat'` the flat minus its `darkFlat` (or its `bias`). Without a `flat` the light is just reduced by the dark (or by the bias alone when it is the only master). When the exposures differ, `darkScaling: 'exposure'` (the default) scales only the dark current, `bias + (dark - bias) * exposure(light) / exposure(dark)`, which requires a `bias`, and finite positive `EXPTIME` or `EXPOSURE` keywords in seconds in the headers of both frames (the same for the flat and its dark-flat); `'none'` uses the masters as they are, for exposure-matched masters or for a sensor whose dark signal does not scale linearly. The mean of the corrected flat, the normalization, is computed independently for each interleaved channel of a color image and for each of the four phases of an undebayered CFA mosaic. The result is not clipped, so the noise around zero keeps its sign, and a corrected flat sample at or below `minimumFlat` (zero by default, a normalized value) is rejected before the light is touched.
+
+Everything is validated before the first pixel is written: each master has the geometry and channels of the light, a CFA pattern equal to it (a flat must have the pattern, the others may have none), and the same `XBINNING`, `YBINNING`, `XORGSUBF`, `YORGSUBF`, `XBAYROFF`, `YBAYROFF`, `GAIN` and `OFFSET` header values when both frames have them. Each failure is an `Error` that names the master, as is a dark-flat without a flat, an unsupported scaling and a `minimumFlat` that is negative or not finite. With no dark, flat or bias the light is returned unchanged. The master frames are never modified, and the scaling assumes a dark current linear in time and the same temperature, which the function cannot check.
+
+```ts
+import { calibrate } from 'nebulosa/src/imaging/processing/calibration'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+const make = (width: number, height: number, channels: number, values: number[], header: Image['header'] = {}, bayer?: 'RGGB'): Image => ({
+	header,
+	raw: Float64Array.from(values),
+	metadata: { width, height, channels, pixelCount: width * height, stride: width * channels, strideInBytes: width * channels * 8, pixelSizeInBytes: 8, bitpix: -64, bayer },
+})
+
+// An exposure-matched dark and a flat corrected by the bias: (L - D) * mean(F - B) / (F - B).
+const light = make(2, 1, 1, [0.6, 0.4], { EXPTIME: 30 })
+const dark = make(2, 1, 1, [0.1, 0.1], { EXPTIME: 30 })
+const flat = make(2, 1, 1, [0.4, 0.8])
+const bias = make(2, 1, 1, [0.05, 0.05])
+console.log(calibrate(light, { dark, flat, bias }) === light, light.raw) // true [0.7857, 0.22]
+
+// Only a bias, and only an exposure-matched dark.
+console.log(calibrate(make(2, 1, 1, [0.6, 0.4]), { bias: make(2, 1, 1, [0.1, 0.05]) }).raw) // [0.5, 0.35]
+console.log(calibrate(make(2, 1, 1, [0.6, 0.4], { EXPTIME: 30 }), { dark: make(2, 1, 1, [0.1, 0.2], { EXPTIME: 30 }) }).raw) // [0.5, 0.2]
+
+// A 10 s dark for a 30 s light: only the dark current (dark - bias) is tripled, and the bias is needed.
+const scaled = calibrate(make(2, 1, 1, [0.41, 0.7], { EXPTIME: 30 }), { dark: make(2, 1, 1, [0.07, 0.1], { EXPTIME: 10 }), bias: make(2, 1, 1, [0.05, 0.04]) })
+console.log(scaled.raw) // [0.3, 0.48] (L - B) - (D - B) * 3
+console.log(calibrate(make(1, 1, 1, [0.41], { EXPOSURE: 30 }), { dark: make(1, 1, 1, [0.07], { EXPOSURE: 10 }), bias: make(1, 1, 1, [0.05]) }).raw) // [0.3]
+console.log(calibrate(make(2, 1, 1, [0.41, 0.7], { EXPTIME: 30 }), { dark: make(2, 1, 1, [0.07, 0.1], { EXPTIME: 10 }), darkScaling: 'none' }).raw) // [0.34, 0.6] (the dark is subtracted as it is, with no scaling)
+
+// The negative residuals are kept, and a dark-flat is subtracted from the flat before it is normalized.
+console.log(calibrate(make(2, 1, 1, [0.04, 0.06], { EXPTIME: 10 }), { dark: make(2, 1, 1, [0.05, 0.05], { EXPTIME: 10 }) }).raw) // [-0.01, 0.01]
+const withDarkFlat = calibrate(make(2, 1, 1, [0.6, 0.4], { EXPTIME: 30 }), { dark: make(2, 1, 1, [0.1, 0.1], { EXPTIME: 30 }), flat: make(2, 1, 1, [0.45, 0.85], { EXPTIME: 2 }), darkFlat: make(2, 1, 1, [0.07, 0.07], { EXPTIME: 2 }) })
+console.log(withDarkFlat.raw) // [0.7632, 0.2231]
+
+// An RGB image is normalized per channel; a RGGB mosaic per phase, so a flat with one sample per phase leaves a uniform light unchanged.
+const rgb = calibrate(make(2, 1, 3, [0.5, 0.4, 0.3, 0.5, 0.4, 0.3]), { flat: make(2, 1, 3, [0.2, 0.4, 0.8, 0.4, 0.8, 0.8]) })
+console.log(rgb.raw) // [0.75, 0.6, 0.3, 0.375, 0.3, 0.3] (each channel is divided by its own normalized flat)
+const mosaic = calibrate(make(2, 2, 1, [0.5, 0.5, 0.5, 0.5], {}, 'RGGB'), { flat: make(2, 2, 1, [0.2, 0.4, 0.4, 0.8], {}, 'RGGB') })
+console.log(mosaic.raw) // [0.5, 0.5, 0.5, 0.5]
+
+for (const run of [
+	() => calibrate(make(2, 1, 1, [0.5, 0.5]), { darkFlat: make(2, 1, 1, [0.1, 0.1]) }),
+	() => calibrate(make(2, 1, 1, [0.5, 0.5], { EXPTIME: 30 }), { dark: make(2, 1, 1, [0.1, 0.1], { EXPTIME: 10 }) }),
+	() => calibrate(make(2, 1, 1, [0.5, 0.5]), { dark: make(3, 1, 1, [0.1, 0.1, 0.1]) }),
+	() => calibrate(make(2, 1, 1, [0.5, 0.5], { GAIN: 100 }), { bias: make(2, 1, 1, [0.1, 0.1], { GAIN: 200 }) }),
+	() => calibrate(make(2, 1, 1, [0.5, 0.5]), { flat: make(2, 1, 1, [0.1, 0]) }),
+	() => calibrate(make(2, 1, 1, [0.5, 0.5]), { minimumFlat: -1 }),
+]) {
+	try {
+		run()
+	} catch (e) {
+		console.log((e as Error).message) // darkFlat requires a flat master
+	}
+}
+```
 
 ### Image Cloning and Copying
 
@@ -8262,13 +8434,291 @@ console.log(
 
 ### Image Warp
 
+`warpImage(source, reference, inverseTransform, options?)` resamples `source` onto the pixel grid of `reference`, with no normalization or combination of samples (see Image Stacking for the whole pipeline and Star List Registration for the transform fit). `inverseTransform` maps coordinates of the reference grid to coordinates of the source, in pixels, and is either a `SimilarityTransform` (`a`, `b`, `tx`, `ty` and `mirrored`: `x' = a x - b y + tx`, `y' = b x + a y + ty`, the y row of the mirrored form being flipped) or an `AffineTransform` (`m00`, `m01`, `tx`, `m10`, `m11`, `ty`); `toAffineMatrix(transform)` converts the first to the second (an affine transform is returned as it is). Pixel coordinates are in pixel units with an integer at the center of a pixel and the origin at the center of the first pixel, so a pure translation `tx = 2` makes output pixel `x` the source pixel `x + 2`. The result is a `WarpedImage`: a fresh `image` with the geometry of the reference (its width, height, channels and CFA metadata) whose samples are Float32 or Float64 as the source or as `outputPrecision` asks, a `validityMask` of one byte per output pixel (1 where the whole interpolation kernel falls inside the source and no rejected pixel touches it), the number of output centers that fall in the source domain (`coveredPixels`) and of those with an unmasked kernel (`validPixels`). The samples where the mask is zero are zero, and the pixels near the borders of the source are not valid for the bilinear and bicubic kernels, as their support is not complete.
+
+The `interpolationMode` is `'nearest'`, `'bilinear'` (the default) or `'bicubic'`; the interpolation attenuates the noise by an amount that depends on the subpixel phase, which matters for any later noise statistics (see Local Image Normalization). The `rejectionMask` is one byte per source pixel, nonzero invalidates every output whose kernel support contains it, in every channel, without renormalizing the weights (streak or cosmic-ray masks, for example). `outputRaw` and `validityMask` can be given to reuse the buffers between warps (they are used only when their lengths match the reference, and are overwritten) and then the `image` aliases `outputRaw`. `finitePairSupport` (`limit` positive and `luminance` for one BT.709 plane of an RGB image) additionally counts, per plane and up to `limit`, the pixels where both the warped and the reference samples are finite, before the rejection mask, and returns them as `finitePairCounts`; the count stops as soon as every plane reaches the limit. A singular transform is not detected and produces whatever mapping the matrix defines.
+
+```ts
+import { toAffineMatrix, warpImage } from 'nebulosa/src/imaging/processing/registration'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+const make = (width: number, height: number, value: (x: number, y: number) => number, channels = 1): Image => {
+	const raw = new Float64Array(width * height * channels)
+	for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) for (let c = 0; c < channels; c++) raw[(y * width + x) * channels + c] = value(x, y) + c
+	return { header: {}, raw, metadata: { width, height, channels, pixelCount: width * height, stride: width * channels, strideInBytes: width * channels * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+}
+
+// The source value is x + 10 y, and the reference is any 6x4 grid.
+const source = make(6, 4, (x, y) => x + 10 * y)
+const reference = make(6, 4, () => 0)
+const first = (image: Image) => Array.from(image.raw.slice(0, 6))
+
+// A translation of 2 pixels: output x is source x + 2, and the last two columns fall outside the source.
+const shifted = warpImage(source, reference, { a: 1, b: 0, tx: 2, ty: 0, mirrored: false })
+console.log(first(shifted.image), Array.from(shifted.validityMask.slice(0, 6)), shifted.coveredPixels, shifted.validPixels) // [2, 3, 4, 5, 0, 0] [1, 1, 1, 1, 0, 0] 16 16
+
+// A half-pixel shift with each kernel: nearest takes the closest pixel, bilinear interpolates, bicubic is close to the bilinear on a ramp.
+const half = { a: 1, b: 0, tx: 0.5, ty: 0, mirrored: false }
+console.log(first(warpImage(source, reference, half, { interpolationMode: 'nearest' }).image)) // [1, 2, 3, 4, 5, 0]
+console.log(first(warpImage(source, reference, half).image)) // [0.5, 1.5, 2.5, 3.5, 4.5, 0]
+console.log(first(warpImage(source, reference, half, { interpolationMode: 'bicubic' }).image)) // [0.4375, 1.5, 2.5, 3.5, 4.5625, 0]
+
+// A mirror (a = -1) and a quarter turn, as similarity transforms; the affine matrix is the equivalent.
+console.log(first(warpImage(source, reference, { a: -1, b: 0, tx: 5, ty: 0, mirrored: false }).image)) // [5, 4, 3, 2, 1, 0]
+const turn = { a: 0, b: 1, tx: 0, ty: 0, mirrored: false }
+console.log(toAffineMatrix(turn), toAffineMatrix({ a: 1, b: 0, tx: 0, ty: 0, mirrored: true })) // { m00: 0, m01: -1, tx: 0, m10: 1, m11: 0, ty: 0 } { m00: 1, m01: 0, tx: 0, m10: 0, m11: -1, ty: 0 }
+const affine = { m00: 1, m01: 0, tx: 1, m10: 0, m11: 1, ty: 1 }
+console.log(toAffineMatrix(affine) === affine, first(warpImage(source, reference, affine).image)) // true [11, 12, 13, 14, 15, 0]
+
+// A rejection mask on the source invalidates the outputs whose kernel includes it, and a smaller reference changes the output grid.
+const rejected = new Uint8Array(24)
+rejected[3] = 1
+const masked = warpImage(source, reference, { a: 1, b: 0, tx: 0, ty: 0, mirrored: false }, { rejectionMask: rejected })
+console.log(Array.from(masked.validityMask.slice(0, 6)), masked.coveredPixels, masked.validPixels) // [1, 1, 1, 0, 1, 1] 24 23
+const small = warpImage(
+	source,
+	make(3, 2, () => 0),
+	{ a: 1, b: 0, tx: 1, ty: 1, mirrored: false },
+)
+console.log(small.image.metadata.width, small.image.metadata.height, Array.from(small.image.raw)) // 3 2 [11, 12, 13, 21, 22, 23]
+
+// Output precision, reusable buffers (the image aliases the raw buffer) and an RGB image.
+const reused = new Float32Array(24)
+const buffer = new Uint8Array(24)
+const again = warpImage(source, reference, half, { outputRaw: reused, validityMask: buffer, outputPrecision: 32 })
+console.log(again.image.raw === reused, again.validityMask === buffer, again.image.raw.constructor.name, warpImage(source, reference, half, { outputPrecision: 32 }).image.raw.constructor.name) // true true Float32Array Float32Array
+const rgb = warpImage(
+	make(6, 4, (x, y) => x + 10 * y, 3),
+	make(6, 4, () => 0, 3),
+	{ a: 1, b: 0, tx: 1, ty: 0, mirrored: false },
+)
+console.log(rgb.image.metadata.channels, rgb.image.raw.length, Array.from(rgb.image.raw.slice(0, 6))) // 3 72 [1, 2, 3, 2, 3, 4]
+
+// Finite pairs against the reference, capped at the limit (the reference has a NaN).
+const withNaN = make(6, 4, () => 0)
+withNaN.raw[0] = Number.NaN
+console.log(warpImage(source, withNaN, half, { finitePairSupport: { limit: 10 } }).finitePairCounts, warpImage(source, withNaN, half, { finitePairSupport: { limit: 1000 } }).finitePairCounts) // [10] [19]
+console.log(warpImage(source, reference, half).finitePairCounts) // undefined
+```
+
 ### Live Stacking
 
 ### Local Image Normalization
 
+Local normalization matches a registered frame to a reference when the difference between them is not the same everywhere, as with moonlight, drifting light pollution or a transparency that changes across the field, where one global scale and offset (see Global Image Normalization) is right on average and wrong in the corners. `fitLocalNormalization(reference, current, options?)` fits a `LocalNormalizationModel` and `applyLocalNormalization(image, model, validityMask?)` applies it in place and returns the same image; `localNormalization(reference, current, options?)` does both and returns `{ image, model, applied }`. Both images are `Image` values already registered onto the same grid, with the same width, height and channel count (a documented precondition, not a checked one); the reference is only read. The model keeps the global solution as an anchor and describes only the smooth residual: the frame is divided into a grid of cells (`gridSize` cells on the longer axis, 16 by default), each cell estimates its residual offset (and, if it has enough dynamic range, its gain) from paired statistics of the same pixels (never from independent quantiles, because the resampling of the registered frame attenuates the noise by a factor that varies across the frame), and polynomial surfaces are fitted over the cells with outlier rejection. The gain surface is applied only when it is significant, and the local gain is limited to `relativeScaleRange` around the anchor (`[0.8, 1.25]`), so a legitimate global exposure difference is never truncated.
+
+`options` extends the options of the global estimator (`estimator`, `'background-scale'` by default) with `colorMode` (`'per-channel'`, or `'luminance'` with one model for the three channels of an RGB image), a `validityMask` (a byte per pixel, nonzero is usable, which is also left untouched when applying), the cell geometry (`boxSize`, `maxSamplesPerCell`, `minSamplesPerCell`, `minValidFraction`), the gain gate (`dynamicRangeSigma`, in multiples of the paired noise) and significance (`scaleSignificance`), the surfaces (`surfaceModel`, `offsetDegree` 3, `scaleDegree` 1, `smoothing` for the spline), the outlier rejection (`rejectionSigma`, `rejectionIterations`), the evaluation node spacing and the `fallback` policy for a plane that cannot be modeled: `'global'` (the default, the anchor alone), `'identity'` (the plane is left alone) or `'reject'`, under which `localNormalization` applies nothing and returns `applied: false` so that the caller can drop the frame. `DEFAULT_LOCAL_NORMALIZATION_OPTIONS` has every default and `resolveLocalNormalizationOptions(options)` merges and clamps them (a non-finite `gridSize` is a `TypeError`, a `relativeScaleRange` that is not `0 < min <= 1 <= max` is a `RangeError`). The model records per-plane diagnostics, which `localNormalizationSummary(model)` reduces to a compact record that is cheap to keep for every frame of a stack, `isLocalNormalizationFallback(model)` says whether any plane fell back and `localNormalizationFailureReason(model)` returns the first reason (`'no-valid-overlap'`, `'invalid-global-solution'`, `'insufficient-valid-cells'`, `'insufficient-spatial-coverage'` or `'surface-fit-failed'`). The lower-level `fitLocalNormalizationRaw` and `applyLocalNormalizationInPlace` take raw buffers and a validity mask, and applying a model to an image of another geometry is an `Error`. The fit needs a smooth residual and clean sky: a nebula that fills the frame, or frames that are not registered, will be modeled as gradient.
+
+```ts
+import { applyLocalNormalization, DEFAULT_LOCAL_NORMALIZATION_OPTIONS, fitLocalNormalization, isLocalNormalizationFallback, localNormalization, localNormalizationFailureReason, localNormalizationSummary, resolveLocalNormalizationOptions } from 'nebulosa/src/imaging/processing/normalization'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+const width = 320
+const height = 320
+
+let seed = 7
+const noise = () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return (seed / 0xffffffff - 0.5) * 0.004
+}
+
+const make = (value: (x: number, y: number) => number): Image => {
+	const raw = new Float64Array(width * height)
+	for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) raw[y * width + x] = value(x, y)
+	return { header: {}, raw, metadata: { width, height, channels: 1, pixelCount: raw.length, stride: width, strideInBytes: width * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+}
+
+// A reference with a faint structure and noise, and a frame with the same signal plus a sky gradient from 0 to 0.1 across the field.
+const structure = (x: number, y: number) => 0.1 + 0.02 * Math.sin(x / 30) * Math.cos(y / 25)
+const reference = make((x, y) => structure(x, y) + noise())
+const frame = () => make((x, y) => structure(x, y) + 0.1 * (x / (width - 1)) + noise())
+const rms = (image: Image) => Math.sqrt(image.raw.reduce((sum, value, i) => sum + (value - reference.raw[i]) ** 2, 0) / image.raw.length)
+console.log(rms(frame())) // 0.0579 (the RMS difference to the reference before the correction)
+
+// Fit and apply in one step: the RMS difference to the reference falls from 0.058 to about 0.007, what the smooth fit leaves of the structure.
+const result = localNormalization(reference, frame())
+console.log(result.applied, rms(result.image)) // true 0.00715
+console.log(result.model.width, result.model.height, result.model.channelCount, result.model.estimator, result.model.surfaceModel, result.model.fallback) // 320 320 1 'background-scale' 'polynomial' 'global' (the fallback policy)
+console.log(localNormalizationSummary(result.model)) // 256 candidate and accepted cells, 0 rejected, 0 scale cells (offset only, residual 0.00696), fallback false
+console.log(isLocalNormalizationFallback(result.model), localNormalizationFailureReason(result.model)) // false undefined
+
+// The two steps apart: the model is tied to the grid, and it can be applied to another frame of the same geometry.
+const model = fitLocalNormalization(reference, frame(), { gridSize: 8, offsetDegree: 2 })
+const other = applyLocalNormalization(frame(), model)
+console.log(rms(other), model.diagnostics[0].acceptedCells, model.diagnostics[0].scaleCells) // 0.00716 64 0 (a gridSize of 8 gives 64 cells)
+
+// A validity mask excludes pixels from the fit and leaves them untouched in the output (the first 64 rows), so the RMS over the whole frame stays higher.
+const mask = new Uint8Array(width * height).fill(1)
+for (let y = 0; y < 64; y++) for (let x = 0; x < width; x++) mask[y * width + x] = 0
+const original = frame()
+const masked = localNormalization(reference, frame(), { validityMask: mask })
+console.log(masked.image.raw[0] !== original.raw[0], rms(masked.image)) // true 0.0266
+
+// A frame without any valid pixel cannot be modeled: the policies are global, identity and reject.
+const empty = new Uint8Array(width * height)
+for (const fallback of ['global', 'identity', 'reject'] as const) {
+	const failed = localNormalization(reference, frame(), { validityMask: empty, fallback })
+	console.log(fallback, failed.applied, localNormalizationFailureReason(failed.model), rms(failed.image)) // global true 'no-valid-overlap' 0.0578 (the anchor is applied), identity true 'no-valid-overlap' 0.0578 (left alone), reject false 'no-valid-overlap' 0.0578 (nothing applied)
+}
+
+// An RGB image can use a single luminance model.
+const color: Image = { header: {}, raw: new Float64Array(width * height * 3), metadata: { width, height, channels: 3, pixelCount: width * height, stride: width * 3, strideInBytes: width * 24, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+for (let i = 0; i < width * height; i++) for (let c = 0; c < 3; c++) color.raw[i * 3 + c] = reference.raw[i] * (1 + 0.1 * c)
+const colorModel = fitLocalNormalization(color, color, { colorMode: 'luminance' })
+console.log(colorModel.channelCount, colorModel.diagnostics.length) // 3 1 (a luminance model has one plane)
+
+console.log(resolveLocalNormalizationOptions({ gridSize: 4.9, relativeScaleRange: [0.5, 2] }).gridSize, DEFAULT_LOCAL_NORMALIZATION_OPTIONS.gridSize, DEFAULT_LOCAL_NORMALIZATION_OPTIONS.fallback) // 4 16 'global' (a gridSize of 4.9 is truncated)
+for (const run of [() => resolveLocalNormalizationOptions({ gridSize: Number.NaN }), () => resolveLocalNormalizationOptions({ relativeScaleRange: [1.5, 2] }), () => applyLocalNormalization(color, model)]) {
+	try {
+		run()
+	} catch (e) {
+		console.log((e as Error).message) // gridSize must be a finite number, relativeScaleRange must satisfy 0 < min <= 1 <= max, and local normalization model geometry (320x320x1) does not match image (320x320x3)
+	}
+}
+```
+
 ### Multiscale Linear Transform
 
+`multiscaleLinearTransform(image, options?)` is the redundant à trous wavelet transform (undecimated, so every layer has the size of the image) with a cubic B-spline scaling function, the five-tap kernel `[1, 4, 6, 4, 1] / 16` applied along each axis and dilated by `2^layer` (the `step` between taps) on layer `layer`. It decomposes an `Image` (see Scientific Image Model; mono or interleaved color, `Float32Array` or `Float64Array`) into `layers` detail layers, `detail_k = smooth_k - smooth_(k+1)`, and a smooth residual, changes the coefficients of each layer and adds everything back, in place, returning the same image; with the default options the reconstruction is the original image up to floating-point rounding. The values are not clamped, so the result keeps its signed range and a sharpened or denoised image can leave 0..1. Layer 0 holds the finest detail (about 1 to 2 pixels) and each following layer doubles the scale, so the layers are, roughly, noise and small stars, then larger stars and fine structure, then nebulosity, and the residual is the large-scale background. The number of layers is limited to `ceil(log2(max(width, height)))`, since beyond that the kernel is larger than the image; `layers` of zero (or a one-pixel image) returns the image untouched.
+
+The `options` are `layers` (3 by default, a non-finite value takes the default and a fraction is truncated), `residualGain` (a gain applied to the smooth residual, 1 by default, 0 removes the large-scale component) and `detailLayers`, an array indexed from the finest layer of partial `MultiscaleLinearTransformLayerOptions`: `threshold`, the denoise limit as a multiple of the robust standard deviation of the layer (the median absolute coefficient times 1.4826, per channel, falling back to the RMS when the median is zero), `amount`, the fraction in 0..1 that is removed from the coefficients at or below that limit (1 by default), and `bias`, so that the coefficients are multiplied by `1 + bias` (a positive bias sharpens the layer, a negative one softens it, -1 removes it). Values that are not finite take the default, a negative threshold is zero and the amount is clamped to 0..1. `DEFAULT_MLT_OPTIONS` and `DEFAULT_MLT_LAYER_OPTIONS` hold the defaults, and a layer is denoised only when both `threshold` and `amount` are positive. The helpers shared with the median transform (`resolveMultiscaleLayers`, `resolveMultiscaleResidualGain`, `resolveMultiscaleLayer`, `multiscaleNeedsDenoise` and `multiscaleDetailScales`) live in `imaging/processing/multiscale`; the last one throws a `RangeError` for inconsistent buffers or workspaces. Memory is three copies of the buffer and, for the denoising, one workspace of `pixelCount` values. The transform is linear in the image only without the denoise threshold, which is a soft per-coefficient decision.
+
+```ts
+import { DEFAULT_MLT_LAYER_OPTIONS, DEFAULT_MLT_OPTIONS, multiscaleLinearTransform } from 'nebulosa/src/imaging/processing/mlt'
+import { multiscaleDetailScales, multiscaleNeedsDenoise, resolveMultiscaleLayer, resolveMultiscaleLayers, resolveMultiscaleResidualGain } from 'nebulosa/src/imaging/processing/multiscale'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+let seed = 99
+const noise = () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return (seed / 0xffffffff - 0.5) * 0.02
+}
+
+// A 32x32 image (the same noise at every call): a background of 0.2 with noise, a faint ramp (large scale) and a star of 0.5 at (16, 16).
+const make = (precision: 32 | 64 = 64): Image => {
+	seed = 99
+	const width = 32
+	const height = 32
+	const raw = precision === 64 ? new Float64Array(width * height) : new Float32Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) raw[y * width + x] = 0.2 + 0.1 * (x / width) + noise() + 0.5 * Math.exp(-((x - 16) ** 2 + (y - 16) ** 2) / 4)
+	}
+	return { header: {}, raw, metadata: { width, height, channels: 1, pixelCount: width * height, stride: width, strideInBytes: (width * precision) / 8, pixelSizeInBytes: precision / 8, bitpix: precision === 64 ? -64 : -32, bayer: undefined } }
+}
+const maxDifference = (a: Image, b: Image) => a.raw.reduce((worst, value, i) => Math.max(worst, Math.abs(value - b.raw[i])), 0)
+const reference = make()
+const star = 16 * 32 + 16
+
+// The default options reconstruct the image (the layers and the residual add up to the original).
+const same = multiscaleLinearTransform(make())
+console.log(same.raw[star] === make().raw[star], maxDifference(same, reference) < 1e-12) // true true
+
+// Sharpening the finest layers: bias +1 doubles the coefficients of the layers 0 and 1, and the star peak rises.
+const sharp = multiscaleLinearTransform(make(), { layers: 4, detailLayers: [{ bias: 1 }, { bias: 1 }] })
+console.log(reference.raw[star], sharp.raw[star]) // 0.752 1.118 (the star peak before and after)
+
+// Removing the finest layer (bias -1) smooths the noise: compare the spread of a flat corner before and after.
+const spread = (image: Image) => {
+	let sum = 0
+	let sumSquares = 0
+	for (let y = 0; y < 8; y++) for (let x = 24; x < 32; x++) ((sum += image.raw[y * 32 + x]), (sumSquares += image.raw[y * 32 + x] ** 2))
+	return Math.sqrt(sumSquares / 64 - (sum / 64) ** 2)
+}
+const soft = multiscaleLinearTransform(make(), { layers: 3, detailLayers: [{ bias: -1 }] })
+console.log(spread(reference), spread(soft)) // 0.00936 0.00754 (the standard deviation of the corner before and after)
+
+// A denoise threshold of 3 sigma with a full amount removes the small coefficients of the first layer but keeps the star.
+const denoised = multiscaleLinearTransform(make(), { layers: 3, detailLayers: [{ threshold: 3, amount: 1 }] })
+console.log(spread(denoised), denoised.raw[star] > 0.5) // 0.00754 true (the thresholded layer gives the same spread as the removed one here)
+
+// The residual gain scales the large-scale component: 0 removes the background, so the mean falls.
+const mean = (image: Image) => image.raw.reduce((sum, value) => sum + value, 0) / image.raw.length
+console.log(mean(reference), mean(multiscaleLinearTransform(make(), { layers: 5, residualGain: 0 })), mean(multiscaleLinearTransform(make(), { layers: 5, residualGain: 2 }))) // 0.2543 -0.0013 0.5100 (the mean with the background removed and doubled)
+
+// No layers is a no-op, a Float32 image is processed in its own precision and the layer count is limited by the image size.
+console.log(multiscaleLinearTransform(make(), { layers: 0 }).raw[star] === reference.raw[star], multiscaleLinearTransform(make(32), { layers: 100 }).raw.constructor.name) // true 'Float32Array'
+
+// The option helpers.
+console.log(DEFAULT_MLT_OPTIONS, DEFAULT_MLT_LAYER_OPTIONS) // { layers: 3, detailLayers: [], residualGain: 1 } { threshold: 0, amount: 1, bias: 0 }
+console.log(resolveMultiscaleLayers(2.7, 3), resolveMultiscaleLayers(Number.NaN, 3), resolveMultiscaleLayers(-4, 3), resolveMultiscaleResidualGain(undefined, 1)) // 2 3 0 1
+console.log(resolveMultiscaleLayer({ threshold: -1, amount: 5, bias: 0.5 }, DEFAULT_MLT_LAYER_OPTIONS), multiscaleNeedsDenoise([{}, { threshold: 2 }], 2, DEFAULT_MLT_LAYER_OPTIONS)) // { threshold: 0, amount: 1, gain: 1.5 } true
+
+// The robust per-channel scale of the detail between a buffer and its smoothed version.
+const current = Float64Array.from([0, 1, 0, -1, 0, 1, 0, -1])
+const smooth = new Float64Array(8)
+console.log(multiscaleDetailScales(current, smooth, 1, new Float64Array(8), new Float64Array(1))) // [0.7413] (1.4826 times the median absolute coefficient of 0.5)
+try {
+	multiscaleDetailScales(current, smooth, 1, new Float64Array(4), new Float64Array(1))
+} catch (e) {
+	console.log((e as Error).message) // invalid multiscale detail workspaces
+}
+```
+
 ### Multiscale Median Transform
+
+`multiscaleMedianTransform(image, options?)` is the median counterpart of the Multiscale Linear Transform, similar to the multiscale median transform of PixInsight. It has the same decomposition and the same options (`layers`, `residualGain` and `detailLayers` with `threshold`, `amount` and `bias`, resolved by the shared helpers of `imaging/processing/multiscale`), but each smoothed layer is a sliding square median of radius `2^layer` pixels (windows of 3x3, 5x5, 9x9 and so on, truncated at the borders) instead of the B-spline, so `detail_k = smooth_k - smooth_(k+1)` where `smooth_(k+1)` is the median of `smooth_k`. The median does not blur the edges and ignores isolated outliers, so the layers are better suited to the separation of structure from noise and stars from a smooth background, and the detail of a small bright object is not spread to its surroundings; the price is a transform that is not linear even without thresholds and a layer whose coefficients are not exactly zero-mean. As in the linear transform, the image (mono or interleaved color, `Float32Array` or `Float64Array`, see Scientific Image Model) is modified in place and returned, nothing is clamped, with the default options the reconstruction is the original, and `layers` of zero returns the image untouched.
+
+The median is computed with a quantized Huang-style histogram: each channel is quantized with 14 bits between its minimum and maximum, and a two-level (fine and coarse) histogram is updated as the window slides, so the cost per pixel does not depend on the radius beyond the update of one window column. The quantization is the precision limit of each median: it is exact to 1 / 16383 of the range of the channel, so an image with a very large dynamic range (a bright star over a faint background) has a coarser median of the background and a layer split that is correspondingly coarse, although the layers still add up exactly to the image (the sum telescopes). A constant channel is returned as it is. `DEFAULT_MMT_OPTIONS` and `DEFAULT_MMT_LAYER_OPTIONS` are the same defaults as the linear transform (three layers, unit residual gain, no denoise, unit gain), and the denoise limit is `threshold` times the robust standard deviation of the layer, as there.
+
+```ts
+import { DEFAULT_MMT_LAYER_OPTIONS, DEFAULT_MMT_OPTIONS, multiscaleMedianTransform } from 'nebulosa/src/imaging/processing/mmt'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+let seed = 99
+const noise = () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return (seed / 0xffffffff - 0.5) * 0.02
+}
+
+// A 32x32 image (the same noise at every call): a background of 0.2 with noise, a faint ramp and a star of 0.5 at (16, 16).
+const make = (precision: 32 | 64 = 64, channels = 1): Image => {
+	seed = 99
+	const width = 32
+	const height = 32
+	const raw = precision === 64 ? new Float64Array(width * height * channels) : new Float32Array(width * height * channels)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			for (let c = 0; c < channels; c++) raw[(y * width + x) * channels + c] = 0.2 + 0.1 * (x / width) + noise() + 0.5 * Math.exp(-((x - 16) ** 2 + (y - 16) ** 2) / 4)
+		}
+	}
+	return { header: {}, raw, metadata: { width, height, channels, pixelCount: width * height, stride: width * channels, strideInBytes: (width * channels * precision) / 8, pixelSizeInBytes: precision / 8, bitpix: precision === 64 ? -64 : -32, bayer: undefined } }
+}
+const maxDifference = (a: Image, b: Image) => a.raw.reduce((worst, value, i) => Math.max(worst, Math.abs(value - b.raw[i])), 0)
+const reference = make()
+const star = 16 * 32 + 16
+
+// The default options reconstruct the image: the layers and the residual add up to it.
+const same = multiscaleMedianTransform(make())
+console.log(maxDifference(same, reference) < 1e-12, same === same) // true true
+
+// Removing the finest layer (bias -1) lowers the spread of the noise; the star loses its finest-scale detail and so part of its peak.
+const spread = (image: Image) => {
+	let sum = 0
+	let sumSquares = 0
+	for (let y = 0; y < 8; y++) for (let x = 24; x < 32; x++) ((sum += image.raw[y * 32 + x]), (sumSquares += image.raw[y * 32 + x] ** 2))
+	return Math.sqrt(sumSquares / 64 - (sum / 64) ** 2)
+}
+const soft = multiscaleMedianTransform(make(), { layers: 3, detailLayers: [{ bias: -1 }] })
+console.log(spread(reference), spread(soft), reference.raw[star], soft.raw[star]) // 0.00936 0.00784 0.752 0.629 (spread before and after, star peak before and after)
+
+// Sharpening the second layer, and a thresholded denoise of the first.
+const sharp = multiscaleMedianTransform(make(), { layers: 4, detailLayers: [{}, { bias: 1 }] })
+const denoised = multiscaleMedianTransform(make(), { layers: 3, detailLayers: [{ threshold: 3, amount: 1 }] })
+console.log(sharp.raw[star], spread(denoised), denoised.raw[star] > 0.5) // 0.985 0.00784 true (the star peak after sharpening layer 1, the spread after the denoise, the star kept)
+
+// The residual gain scales the large-scale component of the last layer.
+const mean = (image: Image) => image.raw.reduce((sum, value) => sum + value, 0) / image.raw.length
+console.log(mean(reference), mean(multiscaleMedianTransform(make(), { layers: 5, residualGain: 0 })), mean(multiscaleMedianTransform(make(), { layers: 5, residualGain: 2 }))) // 0.2543 0.0036 0.5051 (the mean with the large-scale component removed and doubled)
+
+// Color images are processed channel by channel; Float32 stays Float32; a constant image is a fixed point; no layers is a no-op.
+const color = multiscaleMedianTransform(make(64, 3), { layers: 2, detailLayers: [{ bias: -1 }] })
+console.log(color.raw.length, color.raw[star * 3] > 0.5) // 3072 true (3 channels x 1024 pixels)
+console.log(multiscaleMedianTransform(make(32)).raw.constructor.name, multiscaleMedianTransform(make(), { layers: 0 }).raw[star] === reference.raw[star]) // Float32Array true
+const constant = make()
+constant.raw.fill(0.25)
+console.log(multiscaleMedianTransform(constant, { layers: 3 }).raw.every((value) => Math.abs(value - 0.25) < 1e-12)) // true
+console.log(DEFAULT_MMT_OPTIONS, DEFAULT_MMT_LAYER_OPTIONS) // { layers: 3, detailLayers: [], residualGain: 1 } { threshold: 0, amount: 1, bias: 0 }
+```
 
 ### Photon Transfer and Read Noise
 
@@ -8729,6 +9179,76 @@ try {
 
 ### Sensor Fixed-Pattern Noise
 
+`measureSensorSpatial(dark, flat, conversionGain, options?)` measures the fixed-pattern noise of one plane of a sensor from a dark and a bright (flat) stack of digital frames with the same non-negative `exposure` in seconds (see Scientific Image Loading and Export for `DigitalImage`, and Sensor Stack Defects for the stack arguments), following the EMVA 1288 spatial analysis. The stack means remove the temporal noise (the residual temporal variance of the average is subtracted), and the spatial part is the high-pass residual after the EMVA 7x7 and 11x11 box filters and a binomial 3x3 smoothing, so a slow gradient of illumination or of the dark signal does not count as noise. The result has the `dsnu` (dark signal non-uniformity) in electrons RMS, using the `conversionGain` in electrons per DN (see Photon Transfer and Read Noise), and the `prnu` (photo response non-uniformity) as a dimensionless fraction of the mean bright-minus-dark `signal` in DN; both split into `overall`, `rows` (row-correlated), `columns` (column-correlated) and `pixels` (what remains), over the `sampleCount` pixels of the plane. The `prnu` has the EMVA components (`emva`), the `undetrended` components of the raw bright-minus-dark response, which include any illumination gradient, and, when `spatialDetrend` is `'plane'` or `'polynomial'`, the `corrected` components after removing a fitted plane (three terms) or a second-order polynomial (six terms), the practical figure for a flat that is not perfectly uniform. The default `spatialDetrend` is `'emvaHighpass'`, `'none'` skips the correction, and the `rowProfile` and `columnProfile` are the unfiltered mean profiles by row and column in DN.
+
+The analysis is tiled: every tile of `options.tile` pixels (256 by 256 by default, each with a nine-pixel halo) reads the frames again, so memory does not grow with the image, but the cost is a full read of the stacks per pass. `maps: 'all'` adds the `Float32Array` residual `map` of the DSNU (electrons) and PRNU (fraction) on the plane grid; the `spatialBuffers` option takes caller-owned `mean`, `variance` and `mask` arrays that are overwritten for the plane (see Sensor Stack Defects). The `area`, `plane` and `cfaOffset` options are as in the other sensor analyses, and a `RangeError` reports a conversion gain that is not positive and finite, different or invalid exposures, an unknown detrend mode, tile dimensions that are not positive integers and buffers that are too small. A stack of few frames leaves temporal noise in the means, and the correction cannot make up for it: a spatial analysis wants tens of frames (the characterization in Sensor Characterization warns below 100), and the figures only mean something for a linear, unsaturated flat.
+
+```ts
+import { measureSensorSpatial } from 'nebulosa/src/imaging/analysis/sensor/spatial'
+import type { SensorFrameSet } from 'nebulosa/src/imaging/analysis/sensor/types'
+import type { DigitalImage } from 'nebulosa/src/imaging/model/types'
+
+const width = 32
+
+const image = (raw: Float64Array): DigitalImage => ({
+	header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: width },
+	raw,
+	metadata: { width, height: width, channels: 1, pixelCount: raw.length, pixelSizeInBytes: 2, strideInBytes: width * 2, stride: width, bitpix: 16, bayer: undefined },
+	sampleScale: 'digital',
+	digitalRange: [0, 65535],
+	quantizationStep: 1,
+})
+
+// Two identical frames, so the temporal variance is exactly zero and only the fixed pattern remains.
+const stack = (raw: Float64Array): SensorFrameSet => ({ frames: [image(raw.slice()), image(raw.slice())], exposure: 10 })
+
+// A checkerboard dark of +-2 DN (2 DN RMS, so 4 e- at 2 e-/DN) and a flat at 1000 DN above the dark.
+const darkRaw = new Float64Array(width * width)
+const flatRaw = new Float64Array(width * width)
+for (let y = 0; y < width; y++) {
+	for (let x = 0; x < width; x++) {
+		darkRaw[y * width + x] = 100 + (((x + y) & 1) === 0 ? 2 : -2)
+		flatRaw[y * width + x] = darkRaw[y * width + x] + 1000
+	}
+}
+const result = measureSensorSpatial(stack(darkRaw), stack(flatRaw), 2, { tile: { width: 8, height: 8 } })
+console.log(result.dsnu.overall, result.dsnu.rows, result.dsnu.columns, result.dsnu.pixels) // 4.0018 e- overall and in the pixels, about 0 in rows and columns (a checkerboard is neither)
+console.log(result.prnu.emva.overall, result.prnu.undetrended.overall, result.prnu.corrected, result.signal, result.sampleCount) // about 0 (1.5e-10), 0, undefined (no corrected components), 1000 DN, 1024 pixels
+console.log(result.dsnu.rowProfile?.length, result.dsnu.map) // 32 undefined (a profile per row, no map without maps: 'all')
+
+// A PRNU of +-2 % over an illumination gradient: the EMVA high-pass sees about 2 %, the undetrended figure includes the gradient (5.2 %), and only plane or polynomial add the corrected components.
+const gradientDark = new Float64Array(width * width).fill(100)
+const gradientFlat = new Float64Array(width * width)
+for (let y = 0; y < width; y++) {
+	for (let x = 0; x < width; x++) gradientFlat[y * width + x] = 100 + (1000 + 5 * x + 3 * y) * (((x + y) & 1) === 0 ? 1.02 : 0.98)
+}
+for (const spatialDetrend of ['emvaHighpass', 'none', 'plane', 'polynomial'] as const) {
+	const prnu = measureSensorSpatial(stack(gradientDark), stack(gradientFlat), 2, { spatialDetrend, tile: { width: 16, height: 16 } }).prnu
+	console.log(spatialDetrend, prnu.emva.overall, prnu.undetrended.overall, prnu.corrected?.overall) // emvaHighpass 0.0202 0.0519 undefined
+}
+
+// Maps, a region of interest, and caller buffers.
+const mean = new Float64Array(width * width)
+const variance = new Float64Array(width * width)
+const mask = new Uint8Array(width * width)
+const full = measureSensorSpatial(stack(darkRaw), stack(flatRaw), 2, { maps: 'all', spatialBuffers: { mean, variance, mask }, tile: { width: 16, height: 16 } })
+console.log(full.dsnu.map?.length, full.prnu.map?.length, mean[0], variance[0]) // none 0.0202 0.0519 undefined
+console.log(measureSensorSpatial(stack(darkRaw), stack(flatRaw), 2, { area: { left: 0, top: 0, right: 16, bottom: 16 } }).sampleCount) // plane 0.0202 0.0519 0.0200
+
+for (const run of [
+	() => measureSensorSpatial(stack(darkRaw), stack(flatRaw), 0),
+	() => measureSensorSpatial(stack(darkRaw), { ...stack(flatRaw), exposure: 5 }, 2),
+	() => measureSensorSpatial(stack(darkRaw), stack(flatRaw), 2, { tile: { width: 0, height: 4 } }),
+	() => measureSensorSpatial(stack(darkRaw), stack(flatRaw), 2, { spatialDetrend: 'cubic' as never }),
+]) {
+	try {
+		run()
+	} catch (e) {
+		console.log((e as Error).message) // polynomial 0.0202 0.0519 0.0200
+	}
+}
+```
+
 ### Sensor Linearity
 
 `measureSensorLinearity(points, flats, saturation, gain, range?)` checks how linear the response of one sensor plane is, from the dark-corrected photon transfer points of `characterizeSensorTemporal` (see Photon Transfer and Read Noise, where `points` come from the `photonTransfer` field) and the flat sets that produced them (`flats[point.level]` supplies the exposure, the relative `intensity`, the incident `photons` per pixel and the `wavelength` in nanometres). It keeps the valid, unclipped points whose signal lies in the fraction `range` of the saturation signal (`[0.05, 0.95]` by default; the saturation signal of `saturation` when it is given, the largest valid unclipped signal otherwise; a `RangeError` for a range that is not increasing within 0..1) and fits `signal = slope * input + intercept` by weighted least squares with inverse-square weights, so the residuals are minimized in relative terms across the interval. The input is the incident photons per pixel when every selected level has them, otherwise exposure times intensity (the intensity is 1 when absent). The result is `{ linearity, responsivity, quantumEfficiency, quantumEfficiencyUnavailable }`, all omitted when fewer than two points are usable or the slope is not positive. `linearity` has the `slope` (DN per input unit), the `intercept` (DN), the signed relative residuals `minimum` and `maximum` (as fractions, for example 0.01 is 1 percent), their `rms` and mean absolute `error`, the selected `points` (`input`, `measured`, `predicted` and the relative `error`, in ascending input order) and the regression report `fit`. `responsivity` is the slope in DN per photon when all the levels are photon calibrated, and `quantumEfficiency` is the responsivity divided by the system gain of `gain` (DN per electron, so electrons per photon) when all the levels also share one wavelength; it is only reported when it falls within 0..1, otherwise `quantumEfficiencyUnavailable` says `'missingSpectralCalibration'` (no common wavelength) or `'outOfRange'`. The relative residual measures non-linearity only within the selected range, so a response that bends below the range or above it is not seen, and the quantum efficiency depends on the calibration of the photon counts as much as on the sensor.
@@ -8907,11 +9427,139 @@ try {
 
 ### Sensor Stack Defects
 
+`measureSensorDefects(dark, flat, options?)` classifies the defective pixels of one plane of a sensor from two matched stacks of digital frames (see Scientific Image Loading and Export): `dark` and `flat`, both `SensorFrameSet` values with the same non-negative `exposure` in seconds, at least two frames each and the same geometry. For every pixel it computes the stack mean and the unbiased temporal variance (DN and DN squared, non-finite samples ignored), takes the robust median of each statistic over the plane and its median absolute deviation (MAD), and flags with `rejectionSigma` (5 by default) MADs: `hot` pixels (dark mean above the limit), `cold` pixels (flat minus dark response below the limit), `noisy` pixels (dark variance above the limit), the `unstable` ones among the noisy (a dark series with at least eight finite samples whose excess kurtosis or whose occupancy within half a standard deviation of the mean is not Gaussian, as with a random telegraph signal) and `saturated` pixels (some flat sample at or above the known `digitalClip` in DN). A row or a column is reported in `rows` and `columns` (indices on the plane grid) when at least a quarter of its pixels, and no fewer than two, have a hot, cold, noisy or unstable flag, or when its mean response, computed without the flagged pixels, deviates from the median of the profiles by more than `rejectionSigma` MADs. The thresholds come from the plane itself, so a sensor that is mostly defective, or a flat that has a strong illumination gradient, shifts the medians and the classification with them; the flat should be uniform, and the stacks should contain tens of frames for the temporal tests to mean anything.
+
+The result is `undefined` unless something retains the data: `maps` set to `'defects'` or `'all'` returns the `mask`, a `Uint8Array` on the plane grid (row-major, width times height of the plane in the area) of the bits `SENSOR_DEFECT_HOT`, `SENSOR_DEFECT_COLD`, `SENSOR_DEFECT_NOISY`, `SENSOR_DEFECT_UNSTABLE` and `SENSOR_DEFECT_SATURATED`; the counts `hot`, `cold`, `noisy` and `unstable` are always returned. The `spatialBuffers` option takes caller-owned `mean`, `variance` and `mask` arrays (at least as long as the plane, overwritten with the dark-corrected response in DN, the sum of the dark and flat temporal variances and the mask), which also enable the classification when `maps` is `'none'` and are the way to reuse memory between calls. Memory is bounded: the robust medians use `RobustReservoir` (see Bounded Robust Sampling) and three passes reread the stacks. The `area` is an inclusive-exclusive rectangle of the image, the `plane` and `cfaOffset` select one CFA plane of a mosaic as in Dark Current, and a `RangeError` rejects dark and flat exposures that differ or are invalid, a non-finite clip, a non-positive sigma, a buffer smaller than the plane and stacks without any finite statistics.
+
+```ts
+import { measureSensorDefects, SENSOR_DEFECT_COLD, SENSOR_DEFECT_HOT, SENSOR_DEFECT_NOISY, SENSOR_DEFECT_SATURATED, SENSOR_DEFECT_UNSTABLE } from 'nebulosa/src/imaging/analysis/sensor/defects'
+import type { SensorFrameSet } from 'nebulosa/src/imaging/analysis/sensor/types'
+import type { DigitalImage } from 'nebulosa/src/imaging/model/types'
+
+const width = 12
+const height = 10
+
+const image = (raw: Float64Array): DigitalImage => ({
+	header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height },
+	raw,
+	metadata: { width, height, channels: 1, pixelCount: raw.length, pixelSizeInBytes: 2, strideInBytes: width * 2, stride: width, bitpix: 16, bayer: undefined },
+	sampleScale: 'digital',
+	digitalRange: [0, 65535],
+	quantizationStep: 1,
+})
+
+// 16 dark frames at 100 DN and 16 flat frames at 1100 DN, with a hot row (+40 DN), a cold column (400 DN in the flat),
+// a noisy pixel (a Gaussian-like series) and a two-level pixel (+-30 DN) that is also unstable.
+const noisyIndex = 3 * width + 8
+const unstableIndex = 7 * width + 9
+const gaussianLike = [-22, -15, -11.5, -9, -6.5, -4.5, -2.5, -0.8, 0.8, 2.5, 4.5, 6.5, 9, 11.5, 15, 22]
+const darkFrames: DigitalImage[] = []
+const flatFrames: DigitalImage[] = []
+for (let frame = 0; frame < 16; frame++) {
+	const dark = new Float64Array(width * height).fill(100)
+	const flat = new Float64Array(width * height).fill(1100)
+	for (let x = 0; x < width; x++) {
+		dark[width + x] += 40
+		flat[width + x] += 40
+	}
+	for (let y = 0; y < height; y++) flat[y * width + 4] = 400
+	dark[noisyIndex] += gaussianLike[frame]
+	dark[unstableIndex] += (frame & 1) === 0 ? -30 : 30
+	darkFrames.push(image(dark))
+	flatFrames.push(image(flat))
+}
+const dark: SensorFrameSet = { frames: darkFrames as unknown as SensorFrameSet['frames'], exposure: 10 }
+const flat: SensorFrameSet = { frames: flatFrames as unknown as SensorFrameSet['frames'], exposure: 10 }
+
+const result = measureSensorDefects(dark, flat, { maps: 'defects' })!
+console.log(result.hot, result.cold, result.noisy, result.unstable) // 12 10 2 1 (hot, cold, noisy and unstable)
+console.log(result.rows, result.columns) // [1] [4] (the hot row and the cold column)
+console.log(result.mask![width + 2] === SENSOR_DEFECT_HOT, (result.mask![5 * width + 4] & SENSOR_DEFECT_COLD) !== 0, (result.mask![noisyIndex] & SENSOR_DEFECT_NOISY) !== 0, (result.mask![unstableIndex] & SENSOR_DEFECT_UNSTABLE) !== 0) // true true true true
+console.log(result.mask!.length, [SENSOR_DEFECT_HOT, SENSOR_DEFECT_COLD, SENSOR_DEFECT_NOISY, SENSOR_DEFECT_UNSTABLE, SENSOR_DEFECT_SATURATED]) // 120 [1, 2, 4, 8, 16]
+
+// Without maps and buffers nothing is retained, so the result is undefined; caller buffers enable it and receive the response and variance.
+console.log(measureSensorDefects(dark, flat, { maps: 'none' })) // undefined
+const capacity = width * height
+const buffers = { mean: new Float64Array(capacity), variance: new Float64Array(capacity), mask: new Uint8Array(capacity) }
+const reused = measureSensorDefects(dark, flat, { spatialBuffers: buffers })!
+console.log(reused.mask, reused.hot, buffers.mean[0], buffers.mean[width + 2], buffers.variance[0]) // undefined 12 1000 1000 0 (no mask retained, the response is 1000 DN and the dark-pixel variance 0 for this constant stack)
+
+// A known clip flags the saturated flat pixels (here every flat pixel at or above 1100 DN); the MAD of this synthetic plane is zero, so the sigma changes nothing; a region of interest limits the plane.
+console.log(measureSensorDefects(dark, flat, { maps: 'defects', digitalClip: 1100 })!.mask!.filter((value) => (value & SENSOR_DEFECT_SATURATED) !== 0).length) // 110
+const tolerant = measureSensorDefects(dark, flat, { maps: 'defects', rejectionSigma: 1000 })!
+console.log(tolerant.hot, tolerant.cold, tolerant.noisy) // 12 10 2 (unchanged)
+const part = measureSensorDefects(dark, flat, { maps: 'defects', area: { left: 0, top: 0, right: 6, bottom: 5 } })!
+console.log(part.mask!.length, part.hot, part.cold, part.columns) // 30 6 5 [4] (a 6x5 plane, with the hot row cut to 6 pixels and the cold column to 5)
+
+for (const run of [() => measureSensorDefects(dark, { ...flat, exposure: 20 }), () => measureSensorDefects(dark, flat, { maps: 'defects', rejectionSigma: 0 }), () => measureSensorDefects(dark, flat, { spatialBuffers: { ...buffers, mask: new Uint8Array(4) } })]) {
+	try {
+		run()
+	} catch (e) {
+		console.log((e as Error).message) // defect dark and flat stacks must have matching finite non-negative exposure
+	}
+}
+```
+
 ### Sensor Tilt Estimator
 
 ### Signal-to-Noise and Dynamic Range Estimates
 
 ### Single-Frame Bad-Pixel Map
+
+`detectBadPixels(image, options?)` finds the isolated hot and cold pixels of one frame, without dark or flat calibration frames (for the stacks, see Sensor Stack Defects), and returns a `BadPixelMap`: a row-major `mask` of `width * height` bytes (`0` clean, `BAD_PIXEL_HOT` is 1, `BAD_PIXEL_COLD` is 2) and the counts `hot` and `cold`. The frame is an `Image` in normalized 0..1 samples (see Scientific Image Model) and is not modified. A pixel is a candidate when it exceeds, or falls below, the median of its neighbors by `hotSigma` or `coldSigma` robust noise sigmas (5 by default, zero disables that class), where the noise comes from the background estimate of the frame (see Background Estimate); it is kept only when it is isolated, that is, when no neighbor reaches halfway from the local median to the pixel, which is what tells a one-pixel defect from the peak of a star. The neighborhood is the square of `radius` pixels (1 by default, a value below one is taken as one), a pixel needs at least four finite neighbors (the corners of a radius-1 window are left clean), a color frame is judged on its BT.709 luminance (or the `channel` of the option: `'RED'`, `'GREEN'`, `'BLUE'`, `'GRAY'` or another grayscale weighting) and a Bayer mosaic is judged per color phase with the noise of that phase, so the different pedestals of the colors are not defects.
+
+It is a heuristic for a single frame: a defect that sits next to another one (a cluster, a column) is not isolated and is not flagged, an undersampled star can be mistaken for a hot pixel, and a very noisy or empty frame makes the noise estimate unreliable. A flat image has zero noise, so any pixel that differs from its neighborhood is flagged, however slightly.
+
+```ts
+import { BAD_PIXEL_COLD, BAD_PIXEL_HOT, detectBadPixels } from 'nebulosa/src/imaging/analysis/badpixel'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A 16x16 frame at 0.2 with a deterministic noise of about +-0.01.
+let seed = 12345
+const noise = () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return (seed / 0xffffffff - 0.5) * 0.02
+}
+
+const make = (width: number, height: number, bayer?: 'RGGB', pedestal = (x: number, y: number) => 0.2): Image => {
+	const raw = new Float64Array(width * height)
+	for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) raw[y * width + x] = pedestal(x, y) + noise()
+	return { header: {}, raw, metadata: { width, height, channels: 1, pixelCount: raw.length, stride: width, strideInBytes: width * 8, pixelSizeInBytes: 8, bitpix: -64, bayer } }
+}
+
+const image = make(16, 16)
+image.raw[5 * 16 + 5] = 1
+image.raw[10 * 16 + 3] = 0
+const found = detectBadPixels(image)
+console.log(found.hot, found.cold, found.mask[5 * 16 + 5] === BAD_PIXEL_HOT, found.mask[10 * 16 + 3] === BAD_PIXEL_COLD, found.mask.length) // 1 1 true true 256
+
+// A star (a bright pixel with bright neighbors) is not isolated, so it is not a defect.
+const star = make(16, 16)
+star.raw[8 * 16 + 8] = 1
+star.raw[8 * 16 + 7] = 0.8
+star.raw[8 * 16 + 9] = 0.8
+console.log(detectBadPixels(star).hot) // 0 (the star is not isolated)
+
+// A threshold of zero disables a class, and a larger sigma only keeps the strongest outliers.
+console.log(detectBadPixels(image, { hotSigma: 0 }).hot, detectBadPixels(image, { coldSigma: 0 }).cold) // 0 0 (the defect of that class is not reported)
+image.raw[2 * 16 + 12] = 0.25
+console.log(detectBadPixels(image, { hotSigma: 3 }).hot, detectBadPixels(image, { hotSigma: 50 }).hot) // 2 1 (the weak 0.25 pixel passes only the lower threshold)
+console.log(detectBadPixels(image, { radius: 2 }).hot) // 2
+
+// A Bayer mosaic with four very different pedestals: the defects are found against their own color phase.
+const pedestals = [0.2, 0.45, 0.55, 0.8]
+const mosaic = make(16, 16, 'RGGB', (x, y) => pedestals[(y & 1) * 2 + (x & 1)])
+mosaic.raw[4 * 16 + 4] = 1
+mosaic.raw[5 * 16 + 5] = 0
+const phased = detectBadPixels(mosaic)
+console.log(phased.hot, phased.cold, phased.mask[4 * 16 + 4], phased.mask[5 * 16 + 5]) // 1 1 1 2 (BAD_PIXEL_HOT and BAD_PIXEL_COLD against their own phase)
+
+// A color frame is judged on the luminance of the selected channel.
+const color: Image = { header: {}, raw: new Float64Array(16 * 16 * 3), metadata: { width: 16, height: 16, channels: 3, pixelCount: 256, stride: 48, strideInBytes: 48 * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+for (let i = 0; i < color.raw.length; i++) color.raw[i] = 0.3 + noise()
+color.raw[(7 * 16 + 7) * 3 + 1] = 1
+console.log(detectBadPixels(color, { channel: 'GREEN' }).hot, detectBadPixels(color, { channel: 'RED' }).hot) // 1 0 (the defect is in the green channel only)
+```
 
 ### Star Detection
 
