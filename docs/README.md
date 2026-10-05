@@ -8379,6 +8379,67 @@ console.log(drizzleNormalization(createDrizzleAccumulator(64, 64, 1, false, 1, f
 
 ### Elliptical Moffat Fitting
 
+`imaging/stars/profile.moffat` fits one elliptical Moffat component to the aperture around a star, as the optional refinement behind `model: 'moffat'` of Star Profile Measurement. The model is `background + amplitude * (1 + u² / alphaMajor² + v² / alphaMinor²) ^ -beta` evaluated at the pixel centers, where `u` and `v` are the coordinates from the fitted center along and across the major axis, which is rotated by `theta`; the Gaussian-equivalent FWHM of an axis is `2 * alpha * sqrt(2 ^ (1 / beta) - 1)`. `fitEllipticalMoffat(image, input, workspace)` runs a damped nonlinear least squares (at most 60 steps, with an analytic Jacobian) on the unsaturated, finite samples of a circular aperture of a single-channel image, and never mutates it. The `MoffatFitInput` is the initial `x` and `y` (pixels, the pixel centers are at integer coordinates), the aperture `radius` (pixels), a robust `background` and its `deviation`, the `peak` above the background (all in the sample units of the image), the moment-derived `major` and `minor` FWHM (pixels, with `major` not smaller than `minor`), the `theta` of the major axis (radians) and the `saturationLevel` above which samples are excluded. The `workspace` comes from `createMoffatFitWorkspace()`, holds the fixed-size matrices of the eight parameters and can be reused across any number of fits of a batch (it is not safe to share between concurrent fits). The result is a `MoffatProfileFit`, discriminated by `success`. A success has the `background`, the `amplitude` above it, the sub-pixel `centerX` and `centerY`, the `alphaMajor` and `alphaMinor` (pixels, with the major one not smaller), the `theta` (radians in `[0, PI)`, clockwise from +X because Y grows downward, and absent when the fitted eccentricity is below 0.05, because the direction of a round star is not meaningful), the `beta` (always above one), the `rms` of the residuals in sample units and the `iterations`. A failure has a `reason`, the last finite `rms` when there is one and the `iterations`: `invalidInput` (a non-finite or non-positive input, a color image, a buffer that is too short, or not more than eight usable samples), `singular`, `notConverged`, `nonFinite` and `poorResidual` (the residual is above 35% of the amplitude, the major `alpha` is at least 1.8 radii or `beta` is near its limit of 20). The parameters are kept inside bounds: the center within half a radius of the start, the `alpha` between 0.25 and twice the radius (at least 2 pixels), `beta` between 1.05 and 20, the amplitude up to ten times the peak and the background within the larger of five deviations and half the peak; a step that leaves them is rejected, not clamped. The fit is a local, one-component description of the star: it needs a start close to the truth, a neighbor in the aperture or a strongly non-Moffat profile is absorbed or rejected, `alpha` and `beta` are strongly correlated for a small or noisy star, and the result is not a measurement of the seeing.
+
+```ts
+import type { Image } from 'nebulosa/src/imaging/model/types'
+import { createMoffatFitWorkspace, fitEllipticalMoffat, type MoffatFitInput } from 'nebulosa/src/imaging/stars/profile.moffat'
+
+// A deterministic noise source for the frames.
+let seed = 5
+const random = () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return seed / 0xffffffff
+}
+
+// A 48 by 48 grayscale frame with a sky level, a small noise and one elliptical Moffat star sampled at the pixel centers.
+const width = 48
+const height = 48
+const frame = (cx: number, cy: number, amplitude: number, alphaMajor: number, alphaMinor: number, theta: number, beta: number, sky: number = 0.1, noise: number = 0.002): Image => {
+	const raw = new Float64Array(width * height)
+	const c = Math.cos(theta)
+	const s = Math.sin(theta)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const u = c * (x - cx) + s * (y - cy)
+			const v = -s * (x - cx) + c * (y - cy)
+			raw[y * width + x] = sky + amplitude * (1 + (u * u) / (alphaMajor * alphaMajor) + (v * v) / (alphaMinor * alphaMinor)) ** -beta + (random() - 0.5) * noise
+		}
+	}
+	return { header: {}, raw, metadata: { width, height, channels: 1, pixelCount: width * height, stride: width, strideInBytes: width * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+}
+
+// The input that a moment measurement would give: a start about a pixel away from the truth and rough FWHM values.
+const input = (x: number, y: number, major: number, minor: number, theta: number, extra: Partial<MoffatFitInput> = {}): MoffatFitInput => ({ x, y, radius: 12, background: 0.1, deviation: 0.002, peak: 0.8, major, minor, theta, saturationLevel: 1, ...extra })
+const fwhm = (alpha: number, beta: number) => 2 * alpha * Math.sqrt(2 ** (1 / beta) - 1)
+const workspace = createMoffatFitWorkspace()
+
+// A star of alpha 3.2 by 2.0 pixels at 30 degrees with beta 3 at (24.3, 23.6): the fit recovers the parameters from a start 0.7 pixel off, and the FWHM follows from alpha and beta.
+const star = frame(24.3, 23.6, 0.8, 3.2, 2, Math.PI / 6, 3)
+const fit = fitEllipticalMoffat(star, input(25, 23, 6, 4, 0.4), workspace)
+console.log(fit) // { success: true, background: 0.10001, amplitude: 0.79934, centerX: 24.2993, centerY: 23.6003, alphaMajor: 3.2107, alphaMinor: 2.0076, theta: 0.52352, beta: 3.0145, rms: 0.00058, iterations: 7 } (the truth is 0.1, 0.8, 24.3, 23.6, 3.2, 2, PI / 6 = 0.5236 and 3)
+if (fit.success) console.log(fwhm(fit.alphaMajor, fit.beta), fwhm(fit.alphaMinor, fit.beta), fit.alphaMinor / fit.alphaMajor) // 3.265 2.042 0.625 (FWHM along the major and minor axes in pixels, and the axis ratio)
+
+// The same workspace is reused for a second star, which is round: the major axis is not meaningful and `theta` is absent.
+const round = fitEllipticalMoffat(frame(20.2, 27.4, 0.6, 2.5, 2.5, 0, 2.5), input(20, 27, 5, 5, 0), workspace)
+console.log(round.success, round.success ? [round.centerX, round.centerY, round.alphaMajor, round.alphaMinor, round.theta, round.beta] : round.reason) // true [20.1991, 27.4002, 2.4995, 2.4985, undefined, 2.4969] (the center and the alphas are recovered and theta is absent)
+
+// The wings: a smaller beta is a heavier tail. A Gaussian-like star (large beta) and a wing-dominated one at the same FWHM.
+const wings = [1.8, 8].map((beta) => {
+	const alpha = 3 / (2 * Math.sqrt(2 ** (1 / beta) - 1))
+	const result = fitEllipticalMoffat(frame(24, 24, 0.8, alpha, alpha, 0, beta), input(24, 24, 3, 3, 0), workspace)
+	return result.success ? [beta, +result.beta.toFixed(2), +fwhm(result.alphaMajor, result.beta).toFixed(3)] : result.reason
+})
+console.log(wings) // [[1.8, 1.79, 2.999], [8, 7.9, 2.999]] (the fitted beta and the FWHM, which is the 3 pixels drawn for both)
+
+// A saturated core: samples at or above the level are excluded, so the flattened peak does not bias the fit.
+const bright = frame(24, 24, 1.6, 2.6, 2.6, 0, 2.5)
+for (let i = 0; i < bright.raw.length; i++) bright.raw[i] = Math.min(bright.raw[i], 1)
+const unclipped = fitEllipticalMoffat(frame(24, 24, 1.6, 2.6, 2.6, 0, 2.5), input(24, 24, 4.5, 4.5, 0, { peak: 1.5, saturationLevel: 100 }), workspace)
+const clippedFit = fitEllipticalMoffat(bright, input(24, 24, 4.5, 4.5, 0, { peak: 0.9, saturationLevel: 1 }), workspace)
+console.log(unclipped.success ? unclipped.amplitude : unclipped.reason, clippedFit.success ? [clippedFit.amplitude, clippedFit.alphaMajor, clippedFit.beta] : clippedFit.reason) // 1.5993 [1.6028, 2.5930, 2.4916] (the amplitude of the unclipped star, then the amplitude, alpha and beta fitted with the clipped core excluded: close to the drawn 1.6, 2.6 and 2.5)
+```
+
 ### Eyepiece Magnification and Exit Pupil
 
 `astronomy/formulas` has the visual-observing relations of a telescope and an eyepiece, in millimeters and degrees. They are planning formulas of the ideal optics (the true field of view of `eyepieceView` is the apparent field divided by the magnification, which is the usual approximation and not the exact tangent relation, and the exit pupil takes no obstruction into account), without validation of the inputs. `magnification(telescopeFocalLengthMm, eyepieceFocalLengthMm)` is `F / f`, dimensionless. `exitPupil` has two overloads that look the same to the type system and differ in meaning: `exitPupil(apertureDiameterMm, magnification)` is `D / M` and `exitPupil(eyepieceFocalLengthMm, focalRatio)` is `f / N`, both in millimeters; `exitPupilFromApertureAndMagnification` and `exitPupilFromEyepieceAndFocalRatio` are the named forms of each, which avoid mixing the arguments (the two are the same value for one telescope). `eyepieceTrueFovViaFieldStop(fieldStopDiameterMm, telescopeFocalLengthMm)` is the true field in degrees from the field stop of the eyepiece (`field stop / F`, in the small-angle approximation), which does not need the apparent field. `eyepieceView(telescopeFocalLengthMm, apertureMm, eyepieceFocalLengthMm, apparentFieldOfViewDegrees)` returns an `EyepieceView` with the `magnification`, the `trueFieldOfViewDegrees` (the apparent field over the magnification) and the `exitPupilMm`. An exit pupil larger than the pupil of the eye (about 7 mm, which depends on age) wastes light and one below about 0.5 mm shows the defects of the eye and of the seeing; those limits are not applied here.
@@ -11742,6 +11803,91 @@ console.log(renderSyntheticFlat(buffer, { width: 16, height: 16, bias: 10, signa
 
 ### Synthetic Image Noise
 
+`imaging/synthetic/generator` models the sky background and the camera noise of an exposure in the electron domain and writes the result into a normalized image buffer, to give detectors, calibration and stacking code a deterministic, tunable input. `generateNoiseImage(raw, width, height, channels, config?)` adds the signal in place to a caller-owned `raw` of `width * height * channels` samples (`channels` is 1 or 3, interleaved; a longer buffer is accepted and only the first samples are used) and returns the `stats`; it never allocates an image. The buffer is normalized: a sample is the electrons over the saturation electrons, and the saturation is the smaller of the `sensor.fullWellCapacity` and the ADC limit (`output.maxValue` times `exposure.electronsPerAdu` over the total gain), so anything already drawn in `raw` (such as stars) is kept and receives the noise on top. The `AstronomicalImageNoiseConfig` has the `seed` (the same seed gives the same pixels), the `quality` (`fast`, `balanced` or `high-realism`, which only moves the electron count above which a Gaussian replaces the Poisson draw: 16, 32 or 64), and one optional section per effect, each field of which falls back to `DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG`: the `exposure` (`exposureTime` in seconds, the `analogGain` and `digitalGain` factors and the `electronsPerAdu`), the `sky` (the `baseRate` in electrons per pixel per second, a `globalOffset`, a linear `gradientStrength` along `gradientDirection` in radians, a `radialGradientStrength`, a `lowFrequencyVariationStrength`, and per-channel `perChannelMultipliers`, `colorBias` and `filterTransmission`), the `moon` (off by default: `illuminationFraction`, `altitude`, `angularDistance` and `positionAngle` in radians, a `tint` and a `strength`), the `lightPollution` (on by default, with a `strength`, a `direction` in radians, a `gradientStrength`, a `domeSharpness` and a `tint`), the `atmosphere` (unitless factors such as `airglowStrength`, `transparency`, `airmass`, `haze`, `humidity`, `thinCloudVeil`, `twilightContribution`, `horizonGlow`, `zodiacalLightFactor` and `milkyWayBackgroundFactor`), the `sensor` (the `readNoise` in electrons, the `biasElectrons` pedestal, the dark current at a reference temperature with its `temperature` and `temperatureDoublingInterval` in degrees Celsius, the `fullWellCapacity` in electrons, the `channelCorrelation` of the read noise, per-channel noise, gain and bias, and an optional `ampGlow` at a `position` of the sensor), the `artifacts` (fixed-pattern, row, column and banding strengths, and the rates and strengths of the hot, warm and dead pixels) and the `output` (`bitDepth` from 1 to 32, `maxValue`, the `clampMode` and `quantize`). The `clampMode` is `clamp` (to 0..1, the default), `normalize` (divide by the maximum when it is above 1) or `none`, and `quantize` rounds to the levels of the output. The `stats` give the `seed` used, the `expectedLength`, the `saturationElectrons`, the `normalizationScale`, the `maxValueBeforeOutput` (before the clamp) and the `saturatedPixels`, `hotPixelCount`, `warmPixelCount` and `deadPixelCount`. It is a phenomenological model and not a calibrated sensor: the defaults are plausible values, not the ones of a camera, and the sky, moon and atmosphere terms are tuning knobs rather than photometry. A non-integer or negative size, a buffer that is too short, or a non-positive exposure time, gain, `electronsPerAdu`, `fullWellCapacity` or `maxValue` throws a `RangeError`. The stars are drawn by Synthetic Star Fields.
+
+```ts
+import { DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, type AstronomicalImageNoiseConfig } from 'nebulosa/src/imaging/synthetic/generator'
+
+const mean = (raw: ArrayLike<number>) => Array.from(raw).reduce((a, b) => a + b, 0) / raw.length
+
+// The defaults: a 60 s exposure of a 64 by 64 monochrome frame, the statistics and the mean level in the normalized range.
+const mono = new Float64Array(64 * 64)
+const result = generateNoiseImage(mono, 64, 64, 1)
+console.log(result.stats, mean(mono).toFixed(5), DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.exposure) // { seed: 1597463007, expectedLength: 4096, saturationElectrons: 50000, normalizationScale: 1, maxValueBeforeOutput: 0.00668, saturatedPixels: 0, hotPixelCount: 0, warmPixelCount: 0, deadPixelCount: 0 }, a mean of 0.00601 and the exposure defaults (60 s, gains of 1, 0.85 electrons per ADU)
+
+// The same seed gives the same pixels and another seed does not.
+const a = new Float64Array(32 * 32)
+const b = new Float64Array(32 * 32)
+const c = new Float64Array(32 * 32)
+generateNoiseImage(a, 32, 32, 1, { seed: 7 })
+generateNoiseImage(b, 32, 32, 1, { seed: 7 })
+generateNoiseImage(c, 32, 32, 1, { seed: 8 })
+console.log(
+	a.every((v, i) => v === b[i]),
+	a.every((v, i) => v === c[i]),
+) // true false
+
+// An interleaved RGB frame has three samples per pixel, and a warm tint on the light pollution changes the channels unequally.
+const rgb = new Float64Array(64 * 64 * 3)
+generateNoiseImage(rgb, 64, 64, 3, { lightPollution: { strength: 1, tint: [1.3, 1, 0.7] } })
+const channel = (index: number) => mean(rgb.filter((_, i) => i % 3 === index))
+console.log(channel(0).toFixed(5), channel(1).toFixed(5), channel(2).toFixed(5)) // 0.00637 0.00627 0.00617 (the red channel has the most sky and the blue one the least)
+
+// The exposure drives the sky and the dark signal: four times the exposure gives about four times the signal when the bias and the read noise are removed.
+const quiet: AstronomicalImageNoiseConfig = { sensor: { biasElectrons: 0, readNoise: 0 }, artifacts: { hotPixelRate: 0, warmPixelRate: 0, deadPixelRate: 0, fixedPatternNoiseStrength: 0, rowNoiseStrength: 0, columnNoiseStrength: 0, bandingStrength: 0 } }
+const short = new Float64Array(64 * 64)
+const long = new Float64Array(64 * 64)
+generateNoiseImage(short, 64, 64, 1, { ...quiet, exposure: { exposureTime: 30 } })
+generateNoiseImage(long, 64, 64, 1, { ...quiet, exposure: { exposureTime: 120 } })
+console.log(mean(short).toFixed(5), mean(long).toFixed(5), (mean(long) / mean(short)).toFixed(2)) // 0.00020 0.00081 3.99
+
+// The sky options: a gradient along +Y, the moon and an amp glow on the right side, as the mean of each quarter of the frame (top-left, top-right, bottom-left, bottom-right).
+const quarters = (raw: Float64Array, w: number, h: number) =>
+	[
+		[0, 0],
+		[w / 2, 0],
+		[0, h / 2],
+		[w / 2, h / 2],
+	].map(([x0, y0]) => {
+		let s = 0
+		for (let y = y0; y < y0 + h / 2; y++) for (let x = x0; x < x0 + w / 2; x++) s += raw[y * w + x]
+		return +(s / ((w / 2) * (h / 2))).toFixed(5)
+	})
+const gradient = new Float64Array(64 * 64)
+generateNoiseImage(gradient, 64, 64, 1, { ...quiet, sky: { gradientStrength: 0.5, gradientDirection: Math.PI / 2 }, lightPollution: { enabled: false } })
+const moonless = new Float64Array(64 * 64)
+const moonlit = new Float64Array(64 * 64)
+generateNoiseImage(moonless, 64, 64, 1, quiet)
+generateNoiseImage(moonlit, 64, 64, 1, { ...quiet, moon: { enabled: true, illuminationFraction: 1, altitude: 0.9, angularDistance: 0.5 } })
+const glow = new Float64Array(64 * 64)
+generateNoiseImage(glow, 64, 64, 1, { ...quiet, sensor: { ...quiet.sensor, ampGlow: { enabled: true, strength: 0.2, position: 'right' } } })
+console.log(quarters(gradient, 64, 64), mean(moonless).toFixed(5), mean(moonlit).toFixed(5), quarters(glow, 64, 64)) // [0.00026, 0.00026, 0.00041, 0.0004] 0.00041 0.00069 [0.00049, 0.00167, 0.00033, 0.00151] (the bottom is brighter than the top, the moon raises the mean, and the right side of the glow is brighter than the left)
+
+// Hot, warm and dead pixels: the counts in the statistics follow the rates of the artifacts (per pixel).
+const defects = new Float64Array(128 * 128)
+const defectStats = generateNoiseImage(defects, 128, 128, 1, { seed: 3, artifacts: { hotPixelRate: 0.002, warmPixelRate: 0.004, deadPixelRate: 0.001 } }).stats
+console.log(defectStats.hotPixelCount, defectStats.warmPixelCount, defectStats.deadPixelCount) // 38 60 9
+
+// The output modes: a very bright bias overflows the range, which is clamped, normalized by the maximum or left alone; quantize rounds to 8-bit levels.
+const bright: AstronomicalImageNoiseConfig = { sensor: { biasElectrons: 80000, fullWellCapacity: 40000 } }
+const modes = (['clamp', 'normalize', 'none'] as const).map((clampMode) => {
+	const raw = new Float64Array(16 * 16)
+	const { stats } = generateNoiseImage(raw, 16, 16, 1, { ...bright, output: { clampMode } })
+	return [clampMode, Math.max(...raw).toFixed(3), stats.saturatedPixels, stats.maxValueBeforeOutput.toFixed(3), stats.normalizationScale.toFixed(3)]
+})
+const quantized = new Float64Array(16 * 16)
+generateNoiseImage(quantized, 16, 16, 1, { output: { bitDepth: 8, quantize: true } })
+console.log(
+	modes,
+	quantized.every((v) => Math.abs(v * 255 - Math.round(v * 255)) < 1e-9),
+) // [['clamp', '1.000', 256, '2.001', '1.000'], ['normalize', '1.000', 256, '2.001', '0.500'], ['none', '2.001', 256, '2.001', '1.000']] true
+
+// An image that already holds signal keeps it: the noise is added on top of a drawn pedestal.
+const pedestal = new Float64Array(16 * 16).fill(0.25)
+generateNoiseImage(pedestal, 16, 16, 1, quiet)
+console.log(mean(pedestal).toFixed(4)) // 0.2504
+```
+
 ### Synthetic Optical Aberration
 
 `imaging/synthetic/aberration` is a phenomenological model of the optical aberrations that a synthetic star field applies to each star (see Synthetic Star Fields), not an optical simulation: it has no wavefront, no diffraction and no ray tracing, and the sizes are tuning scales. Coordinates and blur sizes are in unbinned sensor pixels and the focus values are focuser steps. `resolveSyntheticAberration(config)` is called once per frame: it takes a `SyntheticAberrationConfig` and returns a `ResolvedSyntheticAberration`. The config has one switch per effect (`sensorTiltEnabled`, `fieldCurvatureEnabled`, `backfocusEnabled`, `comaEnabled`, `astigmatismEnabled`, `decenterEnabled`, `collimationEnabled`) and a general `enabled`; the strengths are the `tilt` (the change of the best focus from the sensor center to the edge in the tilt direction, in steps), the `tiltAngle` (radians, clockwise because Y grows downward), the `curvature` (the change of the best focus from the optical axis to a corner of a centered sensor, in steps), the `backfocus` (signed, clamped to -1..1, the sign selecting radial or tangential elongation) with its `backfocusBlur` (an additional Gaussian half-flux diameter at unit strength and corner radius, in pixels) and `backfocusEllipticity` (at most 0.8), the radial `coma` (0..1), the `astigmatism` (signed, clamped to -0.8..0.8, the sign rotating the major axis by PI/2) with its `astigmatismBlur` (pixels) and `astigmatismAngle` (the offset from the local radial direction, radians), the field-uniform `collimation` coma (0..1) and its `collimationAngle`, the optical-axis displacement `decenterX` and `decenterY` (normalized to the sensor size, clamped to -0.5..0.5) and the `focusRange` (the steps that make a normalized defocus of one, at least 1). A disabled effect or a non-finite number counts as zero, and the resolved context is `enabled` only when the model is enabled and at least one effect is non-zero; `focusEnabled` says that a local best-focus surface (tilt or curvature) replaces the global focus model of the renderer. `evaluateSyntheticAberration(x, y, width, height, currentFocus, bestFocus, config, out)` gives the aberration at the position `(x, y)` of a sensor of `width` by `height` pixels and writes it into `out`, which it returns (it never allocates, so a large catalog can be processed). The `out` has the normalized local `defocus` (0..1, the absolute focus error over the focus range), the `focusOffset` (the local best-focus displacement in steps: `tilt` times the position along the tilt direction, which goes from -1 to 1, plus `curvature` times the square of the normalized radius), the additive Gaussian covariance of the blur (`covarianceXX`, `covarianceXY`, `covarianceYY`, in square pixels, from backfocus and astigmatism, area preserving, with the ellipticity as the axis ratio) and the `coma` strength (0..1, from the radial term, which grows as the radius to the power 1.5, plus the collimation vector) with its `comaTheta` (radians, clockwise). With the model disabled, `out` is zero. The normalized radius is the distance from the (possibly decentered) optical axis over the center-to-corner distance, so the position of the sensor must be given in the same unbinned coordinates as the sensor `width` and `height`.
@@ -11823,6 +11969,100 @@ console.log(clamped.coma, clamped.backfocus, clamped.astigmatism, clamped.collim
 ```
 
 ### Synthetic Star Fields
+
+`generateStarImage(raw, width, height, channels, stars, seeing, noiseConfig?, plotOptions?)` in `imaging/synthetic/generator` renders a list of stars into a normalized buffer and then applies the noise of Synthetic Image Noise, so a detector, a focus metric or a tracker can be tested on a scene whose truth is known. Each `AstronomicalImageStar` is a `DetectedStar` (`x` and `y` in pixels, `hfd` in pixels, `snr`, and `flux`, the total integrated signal in the normalized units of the buffer, before the optional `gain`) with the optional `colorIndex` (a B-V color, which sets the RGB weights and is ignored for a monochrome image) and the per-star `StarPsfModifiers` that an optical model supplies (`scaleX` and `scaleY` for binning, an overriding `defocus` from 0 to 1, the additive `covarianceXX`, `covarianceXY` and `covarianceYY` in square pixels, and a `coma` strength with its `comaTheta` in radians, clockwise); the output of `evaluateSyntheticAberration` (see Synthetic Optical Aberration) can be spread into a star for that. The `seeing` is the extra blur of the atmosphere and the `plotOptions` (`PlotStarOptions`) control every star: the `background` under it, a `saturationLevel`, the global focus through `focusStep`, `bestFocus` and `maxFocusStep` (the positions are clamped to the travel 0 to `maxFocusStep`, 100000 by default, and the defocus is the absolute error over the larger distance from the best focus to either end of the travel, from 0 to 1, and it widens the star, lowers its peak and adds a halo), a `peakScale`, a global `ellipticity` with its `theta`, a `softCore`, the `psfModel` (`gaussian`, the default, or `moffat` with its `beta`), a `haloStrength` and `haloScale`, a sub-pixel `jitterX` and `jitterY`, a `gain`, the `gammaCompensation` of the color weights and the plot limits `minPlotRadius`, `maxPlotRadius` and `cutoffSigma`. The call returns the noise `stats`; the noise config is optional and the defaults apply when it is omitted. `plotStar(raw, width, height, channels, x, y, flux, hfd, snr, seeing, colorIndex?, options?, modifiers?)` draws one star in place (without noise) and returns whether anything was drawn, which is false for a flux that is not positive or a non-finite center. The stars are drawn analytically (a Gaussian or Moffat core with an optional halo and coma), not ray traced: the HFD is a scale of the profile, not a measurement made on the result, and a faint star can be buried by the noise. A width or height that is not a positive integer, or a buffer that is too short, throws a `RangeError`.
+
+```ts
+import { plotStar } from 'nebulosa/src/imaging/stars/generator'
+import { evaluateSyntheticAberration, resolveSyntheticAberration, type SyntheticStarAberration } from 'nebulosa/src/imaging/synthetic/aberration'
+import { generateStarImage, type AstronomicalImageNoiseConfig, type AstronomicalImageStar } from 'nebulosa/src/imaging/synthetic/generator'
+
+const quiet: AstronomicalImageNoiseConfig = { seed: 5, sensor: { readNoise: 0.5 }, artifacts: { hotPixelRate: 0, warmPixelRate: 0, deadPixelRate: 0 } }
+const width = 64
+const height = 64
+const peak = (raw: Float64Array) => {
+	let best = 0
+	for (let i = 1; i < raw.length; i++) if (raw[i] > raw[best]) best = i
+	return [best % width, Math.floor(best / width), +raw[best].toFixed(4)]
+}
+const sum = (raw: Float64Array) => raw.reduce((a, b) => a + b, 0)
+
+// Two stars on a quiet background: where the peak is, the level at the center of each star, and the stats returned by the noise pass.
+const raw = new Float64Array(width * height)
+const stars: AstronomicalImageStar[] = [
+	{ x: 20, y: 30, hfd: 3, snr: 40, flux: 8 },
+	{ x: 45.4, y: 12.7, hfd: 4, snr: 15, flux: 2, colorIndex: 1.2 },
+]
+const { stats } = generateStarImage(raw, width, height, 1, stars, 1, quiet)
+console.log(peak(raw), raw[30 * width + 20].toFixed(4), raw[12 * width + 45].toFixed(4), stats.saturatedPixels, stats.seed) // [20, 30, 0.712] 0.7120 0.0853 0 5
+
+// plotStar draws without noise and tells whether it drew: a zero flux or a non-finite center draws nothing.
+const bare = new Float64Array(width * height)
+console.log(plotStar(bare, width, height, 1, 32, 32, 4, 3, 30, 1), sum(bare).toFixed(4), plotStar(bare, width, height, 1, 10, 10, 0, 3, 30, 1), plotStar(bare, width, height, 1, Number.NaN, 10, 4, 3, 30, 1)) // true 4.0000 false false (the integrated flux of the star is the flux requested)
+
+// The global focus: the same star in focus and half of the available distance away has a lower peak and a wider footprint (the pixels above 0.01).
+const footprint = (focusStep?: number) => {
+	const image = new Float64Array(width * height)
+	plotStar(image, width, height, 1, 32, 32, 4, 3, 30, 1, undefined, { focusStep, bestFocus: 5000, maxFocusStep: 10000 })
+	return [+Math.max(...image).toFixed(4), image.filter((v) => v > 0.01).length]
+}
+console.log(footprint(5000), footprint(7500)) // [0.3452, 45] [0.0532, 121] (the in-focus star has the higher peak and the smaller footprint)
+
+// The PSF model: the fraction of the flux beyond 6 pixels from the center for a Gaussian and a Moffat profile of the same HFD.
+const wings = (psfModel: 'gaussian' | 'moffat') => {
+	const image = new Float64Array(width * height)
+	plotStar(image, width, height, 1, 32, 32, 4, 3, 30, 1, undefined, { psfModel, beta: 2.5, cutoffSigma: 7, maxPlotRadius: 30 })
+	let outer = 0
+	for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) if (Math.hypot(x - 32, y - 32) > 6) outer += image[y * width + x]
+	return +(outer / sum(image)).toFixed(4)
+}
+console.log(wings('gaussian'), wings('moffat')) // 0.0001 0.033
+
+// Elongation, a sub-pixel jitter and the saturation clip as plot options: the RMS spread along X and Y, the peak of the shifted star and the clipped peak.
+const spread = (image: Float64Array) => {
+	let sx = 0
+	let sy = 0
+	let s = 0
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const v = image[y * width + x]
+			sx += v * (x - 32) ** 2
+			sy += v * (y - 32) ** 2
+			s += v
+		}
+	}
+	return [+Math.sqrt(sx / s).toFixed(3), +Math.sqrt(sy / s).toFixed(3)]
+}
+const elongated = new Float64Array(width * height)
+plotStar(elongated, width, height, 1, 32, 32, 4, 3, 30, 1, undefined, { ellipticity: 0.5, theta: 0 })
+const jittered = new Float64Array(width * height)
+plotStar(jittered, width, height, 1, 32, 32, 4, 3, 30, 1, undefined, { jitterX: 1 })
+const clipped = new Float64Array(width * height)
+plotStar(clipped, width, height, 1, 32, 32, 40, 3, 30, 1, undefined, { saturationLevel: 0.8 })
+console.log(spread(elongated), peak(jittered), Math.max(...clipped).toFixed(3)) // [1.92, 0.96] [33, 32, 0.3452] 0.800 (the spread is larger along X, a jitter of one pixel moves the peak to x = 33, and the clip holds the peak at the saturation level)
+
+// An RGB frame: the colorIndex sets the channel weights (a blue star and a red one at the same flux), as the central pixel of each channel.
+const color = new Float64Array(width * height * 3)
+plotStar(color, width, height, 3, 16, 32, 4, 3, 30, 1, -0.3)
+plotStar(color, width, height, 3, 48, 32, 4, 3, 30, 1, 1.8)
+const channelPeak = (x: number) => [0, 1, 2].map((c) => +color[(32 * width + x) * 3 + c].toFixed(4))
+console.log(channelPeak(16), channelPeak(48)) // [0.088, 0.1024, 0.1548] [0.1777, 0.108, 0.0595] (the blue star is stronger in the blue channel and the red one in the red channel)
+
+// The per-star modifiers from the optical model: stars of the same HFD at the center and near a corner of a frame with backfocus and coma.
+const model = resolveSyntheticAberration({ enabled: true, backfocusEnabled: true, comaEnabled: true, backfocus: 0.8, backfocusBlur: 6, backfocusEllipticity: 0.5, coma: 0.8, focusRange: 1000 })
+const aberration: SyntheticStarAberration = { defocus: 0, focusOffset: 0, covarianceXX: 0, covarianceXY: 0, covarianceYY: 0, coma: 0, comaTheta: 0 }
+const field: AstronomicalImageStar[] = [
+	[32, 32],
+	[4, 4],
+].map(([x, y]) => ({ x, y, hfd: 3, snr: 40, flux: 6, ...evaluateSyntheticAberration(x, y, width, height, 5000, 5000, model, { ...aberration }) }))
+const aberrated = new Float64Array(width * height)
+generateStarImage(aberrated, width, height, 1, field, 1, quiet)
+console.log(
+	field.map((s) => [s.x, s.y, +(s.covarianceXX ?? 0).toFixed(2), +(s.coma ?? 0).toFixed(2)]),
+	aberrated[32 * width + 32].toFixed(4),
+	aberrated[4 * width + 4].toFixed(4),
+) // [[32, 32, 0, 0], [4, 4, 2.57, 0.65]] 0.5355 0.1801 (the center is free of the aberration; the corner star has a covariance and a coma and a much lower peak)
+```
 
 ### Synthetic Straight Streaks
 
@@ -11968,6 +12208,102 @@ console.log(saturation(mono, 2) === mono, mono.raw[2]) // true 0.25
 
 ### Tracking Quality
 
+`measureTrackingQuality(image, stars, options?, context?)` in `imaging/analysis/tracking/quality` judges from the shapes of the stars of one frame whether the mount tracked: it looks for a field-wide, coherent elongation, which is what a drift, a periodic error or a wind gust leaves in every star, and tells it apart from an optical pattern (coma, tilt) that elongates stars with a different direction or only at the edge. The input is a list of already detected `DetectedStar` (see Star Detection), and only the `x` and `y` (pixels, origin at the upper left, +X right and +Y down), the `snr`, the `majorVariance` and `minorVariance` (squared pixels) and the `theta` of the major axis (radians, from +X toward +Y) are used; a star without those moments is not usable. The image is read only for its size and, with a `saturationLevel`, for the sample at each star. A uniform trail of length `L` adds `L² / 12` to the major variance, so the trail of a star is `sqrt(12 * (majorVariance - minorVariance))` pixels, a proxy of the shape that is not a sub-pixel measurement of the displacement and is biased by undersampling, asymmetric optics and truncated apertures. The `TrackingQualityOptions` are the `minSNR` (2), the `minTrail` (0.75 pixels), the `minTrailToCrossWidth` (0.25, the trail over the Gaussian FWHM of the minor axis) and the `minElongatedStars` (5), the number of significant stars below which no score is given; the `saturationLevel` excludes stars whose peak sample is at or above it. The `TrackingQualityContext` has the optional `streaks` (see Straight Streak Detection: at most the first 32 are checked, so give the strongest first) that remove the stars that sit on an isolated trail, such as a satellite, and either a `wcs` (a TAN or TAN-SIP header whose `CRPIX` is one-based) or a `pixelToSky` matrix (`[east/X, east/Y, north/X, north/Y]` in radians per pixel, which can include rotation, reflection and unequal scales) to express the trail on the sky. The `TrackingQuality` has the `starCount`, the `usableStarCount` (those that pass the cuts, round ones included), the `elongatedFraction`, the `directionCoherence` (0 to 1, the length of the mean of the doubled axial angles), the dominant `angle` of the unoriented image axis in `[0, PI)` radians (present with at least two significant stars and a coherence above 0.2), the `medianTrail`, `p90Trail` and `maxTrail` in pixels, the `medianCrossWidth` in pixels, the `score` from 0 to 1, the optional `sky` (the `angle` east toward north in `[0, PI)`, the `medianTrail` in radians and the signed `east` and `north` displacements, whose signs reverse with the sign chosen for the axis) and the `diagnostics` (`quadrantCoverage`, the `angleDispersion` in radians, the `rejectedStars`, the `opticalPatternSuspected` flag and the `isolatedStreakCount`). Very long trails (far above the median of the field) do not set the trail scale, and with six or more significant stars and a coherent preliminary axis the stars more than 60 degrees (in doubled angle) from it are dropped. The score is the product of the elongated fraction, the coherence, the field coverage (at least two stars in each quadrant is full, and the score reaches one at three quarters of the quadrants) and the trail over three quarters of the cross width, and it is divided by four when the elongation is only at the edge of the field; it is a bounded heuristic and not a calibrated probability, and the optical-pattern flag is a heuristic of the same kind.
+
+```ts
+import type { Image } from 'nebulosa/src/imaging/model/types'
+import { measureTrackingQuality } from 'nebulosa/src/imaging/analysis/tracking/quality'
+import type { DetectedStar } from 'nebulosa/src/imaging/stars/detector'
+import type { Streak } from 'nebulosa/src/imaging/analysis/streak/types'
+
+// Only the size of the image matters for the shapes: a 1000 by 800 frame of zeros.
+const width = 1000
+const height = 800
+const image: Image = { header: {}, raw: new Float64Array(width * height), metadata: { width, height, channels: 1, pixelCount: width * height, stride: width, strideInBytes: width * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+
+// A star whose trail is `trail` pixels long at `theta` radians, with a minor sigma of 1.1 pixels.
+const star = (x: number, y: number, trail: number, theta: number, snr: number = 30): DetectedStar => {
+	const minor = 1.1 * 1.1
+	return { x, y, hfd: 3, snr, flux: 1, majorVariance: minor + (trail * trail) / 12, minorVariance: minor, theta }
+}
+
+// A grid of 4 by 4 stars over the whole frame.
+const grid = (make: (x: number, y: number, i: number) => DetectedStar) => {
+	const stars: DetectedStar[] = []
+	for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) stars.push(make(125 + i * 250, 100 + j * 200, j * 4 + i))
+	return stars
+}
+
+// A drift: every star trails 4 pixels along the same 20 degree axis. The trail, the cross width (the FWHM of 1.1 pixels of sigma is 2.59), the coherence and the score.
+const drift = measureTrackingQuality(
+	image,
+	grid((x, y) => star(x, y, 4, (20 * Math.PI) / 180)),
+)
+console.log(drift) // { starCount: 16, usableStarCount: 16, elongatedFraction: 1, directionCoherence: 1, angle: 0.349 (20 degrees), medianTrail: 4, p90Trail: 4, maxTrail: 4, medianCrossWidth: 2.590, score: 1, sky: undefined, diagnostics: { quadrantCoverage: 1, angleDispersion: 0, rejectedStars: 0, opticalPatternSuspected: false, isolatedStreakCount: 0 } } (the trail of 4 pixels is recovered, and there is no sky part without a calibration)
+
+// Round stars: nothing is significant, so there is no angle, no trail and a score of zero.
+const sharp = measureTrackingQuality(
+	image,
+	grid((x, y) => star(x, y, 0.2, 0)),
+)
+console.log(sharp.usableStarCount, sharp.elongatedFraction, sharp.score, sharp.angle, sharp.medianTrail) // 16 0 0 undefined undefined
+
+// An optical pattern: the elongation points away from the center of the frame (as the field aberrations do), so there is no common direction.
+const radial = measureTrackingQuality(
+	image,
+	grid((x, y) => star(x, y, 4, Math.atan2(y - height / 2, x - width / 2))),
+)
+console.log(radial.elongatedFraction, radial.directionCoherence, radial.score, radial.diagnostics.opticalPatternSuspected, radial.diagnostics.angleDispersion) // 1 0.1505 0.1505 true 0.973 (every star is elongated, but the coherence and so the score are low and the pattern is flagged)
+
+// Elongation only at the edge: the center is round, the border trails, and the score is cut to a quarter and flagged.
+const edge = measureTrackingQuality(
+	image,
+	grid((x, y) => (Math.abs(x - width / 2) <= 250 && Math.abs(y - height / 2) <= 200 ? star(x, y, 0.2, 0) : star(x, y, 4, 0.3))),
+)
+console.log(edge.elongatedFraction, edge.score, edge.diagnostics.opticalPatternSuspected, edge.diagnostics.quadrantCoverage) // 0.75 0.1875 true 1 (12 of the 16 stars trail, the score is a quarter of the one without the edge-only penalty, and the quadrants are all covered)
+
+// Trailed stars in only the left half of the frame: the coverage of the quadrants limits the score, and the pattern is flagged as suspect.
+const half = measureTrackingQuality(
+	image,
+	grid((x, y) => star(x < 500 ? x : x - 400, y, x < 500 ? 4 : 0.2, 0.2)),
+)
+console.log(half.elongatedFraction, half.diagnostics.quadrantCoverage, half.score, half.diagnostics.opticalPatternSuspected) // 0.5 0.5 0.333 true (half of the stars trail, and only two of the four quadrants are covered)
+
+// The star cuts: a low SNR and a saturated star are rejected (the saturation level is compared with the sample under the star).
+const noisy = grid((x, y, i) => star(x, y, 4, 0.3, i < 6 ? 1 : 30))
+const bright = grid((x, y) => star(x, y, 4, 0.3))
+image.raw[Math.round(100) * width + 125] = 0.95
+const lowSnr = measureTrackingQuality(image, noisy, { minSNR: 2 })
+const saturated = measureTrackingQuality(image, bright, { saturationLevel: 0.9 })
+image.raw.fill(0)
+console.log(lowSnr.starCount, lowSnr.usableStarCount, lowSnr.diagnostics.rejectedStars, saturated.usableStarCount, saturated.diagnostics.rejectedStars) // 16 10 6 15 1 (six stars of SNR 1 are rejected, and one star at a peak of 0.95 is rejected by a saturation level of 0.9)
+
+// The trail on the sky: a plate scale of 1.5 arcsec per pixel with east to the left (the usual orientation of a non-mirrored image with north up), as a matrix, converted to arcseconds.
+const arcsec = (1.5 * Math.PI) / (180 * 3600)
+const rotated = grid((x, y) => star(x, y, 4, 0))
+const matrix = measureTrackingQuality(image, rotated, {}, { pixelToSky: [-arcsec, 0, 0, -arcsec] })
+const toArcsec = (radians: number) => (radians * 180 * 3600) / Math.PI
+console.log(matrix.angle, matrix.sky && [matrix.sky.angle, toArcsec(matrix.sky.medianTrail), toArcsec(matrix.sky.east), toArcsec(matrix.sky.north)]) // 0 [0, 6, -6, 0] (an image axis along +X is a trail of 6 arcsec: 4 pixels of 1.5 arcsec; its positive end points 6 arcsec to the west, east being toward -X)
+
+// The same trail with a TAN header (RA 83.8 and Dec -5.4 degrees at the center, 1.5 arcsec per pixel, east toward -X and north toward +Y): the east and north components and the RA wrap are handled through the projection.
+const scale = 1.5 / 3600
+const header = { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 500.5, CRPIX2: 400.5, CRVAL1: 83.8, CRVAL2: -5.4, CD1_1: -scale, CD1_2: 0, CD2_1: 0, CD2_2: scale }
+const wcs = measureTrackingQuality(
+	image,
+	grid((x, y) => star(x, y, 4, Math.PI / 2)),
+	{},
+	{ wcs: header },
+)
+console.log(wcs.angle, wcs.sky && [wcs.sky.angle, toArcsec(wcs.sky.medianTrail), toArcsec(wcs.sky.east), toArcsec(wcs.sky.north)]) // 1.5708 [1.5708, 6.0, 0, 6.0] (an axis along +Y points 6 arcsec to the north in this header, with no east component)
+
+// A trail through stars that do not share its direction, such as a satellite crossing the field: the stars that sit on it are left out of the measurement (here the three added ones and the two grid stars at y = 100), and a streak that overlaps three or more stars is not counted as isolated.
+const satellite: Streak = { start: { x: 100, y: 100 }, end: { x: 400, y: 100 }, center: { x: 250, y: 100 }, length: 300, width: 3, angle: 0, linearity: 1, rmsResidual: 0.2, coverage: 1, supportPixels: 900, clippedAtBorder: false, flux: 10, meanSignal: 0.1, peakSignal: 0.3, snr: 20, confidence: 0.9 }
+const onTrail = grid((x, y) => star(x, y, 4, 0.3))
+onTrail.push(star(150, 100, 1, 1), star(250, 100, 1, 1), star(350, 100, 1, 1))
+const withStreak = measureTrackingQuality(image, onTrail, {}, { streaks: [satellite] })
+console.log(measureTrackingQuality(image, onTrail).usableStarCount, withStreak.usableStarCount, withStreak.diagnostics.rejectedStars, withStreak.diagnostics.isolatedStreakCount) // 19 14 5 0 (19 usable stars become 14: the five on the trail are excluded, and as three or more stars overlap the streak it is not counted as isolated)
+```
+
 ### Trailing and Smear Limits
 
 `astronomy/formulas` has the planning relations between the exposure time, the image scale and the motion of the image on the sensor. `starTrailLength(declination, exposureSeconds, imageScaleArcsecPerPixel)` is the length in pixels of a star trail of an untracked mount, `SIDEREAL_RATE * cos(dec) * t / scale` (the sidereal rate is about 15.041 arcseconds per second of time, with the declination in radians in `[-PI/2, PI/2]`), and `maxExposureBeforeTrail(trailLimitPixels, imageScaleArcsecPerPixel, declination)` is its inverse, the longest exposure in seconds for a trail budget in pixels; it throws a `RangeError` when the cosine of the declination is not larger than `1e-12` (the celestial pole, where an untracked star does not move and the limit is unbounded). The general case of a body that moves at any rate is `exposureSmearPixels(angularRateArcsecPerSecond, exposureSeconds, arcsecPerPixel)` (the displacement in pixels, with the sign of the rate ignored) and `maxExposureForSmear(angularRateArcsecPerSecond, smearLimitPixels, arcsecPerPixel)` (the exposure in seconds that keeps a smear budget, or `Infinity` for a zero rate), which is what to use for a comet, an asteroid or a satellite (a rate in arcseconds per second, see Mount Tracking Rates for the sidereal, lunar and solar rates). `guidingErrorInPixels(rmsArcsec, imageScaleArcsecPerPixel)` and `periodicErrorInPixels(periodicErrorArcsec, imageScaleArcsecPerPixel)` convert an RMS guiding error and a periodic error of the mount into pixels. All of them are straight proportions of a uniform motion in the small-angle approximation: the atmospheric refraction, the field rotation, the polar misalignment and the non-uniform motion of a real mount are not modeled, and an arcsecond budget is not a statement about the FWHM of the stars.
@@ -12012,13 +12348,222 @@ Evaluate observing conditions and target suitability before scheduling or contro
 
 ### Dither Guide Pulses
 
+`observation/guiding/dither.pulse` and `observation/guiding/dither.executor` dither directly on a guide output, with no guiding loop running: the offsets of Dither Offsets become a `DitherPulsePlan` of at most one timed guide pulse per axis (`rightAscension` and `declination`, each a `DitherAxisPulse` with the `direction` and a `duration` in whole milliseconds of at least 1; an axis with no motion is absent) and the executor sends it. Two pure conversions build the plan and neither touches a device. `ditherPulsePlanFromCalibration(offset, calibration, maxDuration)` takes an offset in pixels and a solved `GuidingCalibrationResult`, and the duration of each axis is the absolute offset over the calibrated rate in pixels per millisecond, the same expression that the guider uses to reach a shifted lock target: a positive offset pulses the calibrated direction and a negative one its opposite. The calibration must still apply (same guide output and optical train as the camera that gave the pixels, and passed through `flipGuidingCalibration` after a meridian flip), since it stores no device, date or pier side to prove it. `ditherPulsePlanFromGuideRate(offset, context, maxDuration)` takes an offset in radians on the sky and the `DitherGuideRateContext` (the `guideRate` per axis as a fraction of the sidereal rate, the `declination` of the target in radians, and the physical `rightAscensionDirection` and `declinationDirection` of a positive offset, which have no default because the guide rate has only magnitudes): the right ascension rate carries the factor `cos(declination)` evaluated once at the dither declination, which is only accurate while the offset is small compared to the distance to the pole. Both return `undefined` when the plan must be rejected, which is when a rate is zero, negative or not finite, or when a duration is above `maxDuration` (in milliseconds), and an empty plan when both offsets are zero. `dispatchDitherPulses(guideOutputManager, guideOutput, plan, abortSignal?)` hands the pulses to an INDI guide output (see INDI Guide Output) back to back, one per axis, and returns whether anything was dispatched: it returns `false` without issuing a command when the signal is already aborted, when the output cannot pulse guide, when it has no owning client or when the plan is empty. A `true` only says that the commands were handed to the transport: there is no completion signal, so the move cannot be proved finished, and a pulse already accepted by the hardware is not cancelled by the abort signal, which only stops the dispatch. The pulse is a vector approximation: backlash, an acceleration phase and a guide rate that differs from the one configured in the mount are not modeled.
+
+```ts
+import { CLIENT, type GuideOutput } from 'nebulosa/src/devices/indi/device'
+import type { GuideOutputManager } from 'nebulosa/src/devices/indi/manager/guideoutput'
+import type { GuidingCalibrationResult } from 'nebulosa/src/observation/guiding/calibrator'
+import { dispatchDitherPulses } from 'nebulosa/src/observation/guiding/dither.executor'
+import { ditherPulsePlanFromCalibration, ditherPulsePlanFromGuideRate } from 'nebulosa/src/observation/guiding/dither.pulse'
+import { arcsec, deg } from 'nebulosa/src/math/units/angle'
+
+// A calibration reduced to what the conversion reads: 0.01 pixel/ms in RA (a positive offset pulses WEST) and 0.008 pixel/ms in DEC (NORTH).
+const calibration = { ra: { ratePxPerMs: 0.01, direction: 'WEST' }, dec: { ratePxPerMs: 0.008, direction: 'NORTH' } } as unknown as GuidingCalibrationResult
+
+// A dither of 3 pixels in RA and -2 in DEC: 3 / 0.01 = 300 ms toward WEST and 2 / 0.008 = 250 ms toward SOUTH (the opposite of the calibrated direction).
+console.log(ditherPulsePlanFromCalibration({ rightAscension: 3, declination: -2 }, calibration, 2000)) // { rightAscension: { direction: 'WEST', duration: 300 }, declination: { direction: 'SOUTH', duration: 250 } }
+
+// An axis with no motion is absent, a duration is at least 1 ms, and a zero offset on both axes is an empty plan.
+console.log(ditherPulsePlanFromCalibration({ rightAscension: -0.004, declination: 0 }, calibration, 2000), ditherPulsePlanFromCalibration({ rightAscension: 0, declination: 0 }, calibration, 2000)) // { rightAscension: { direction: 'EAST', duration: 1 }, declination: undefined } and { rightAscension: undefined, declination: undefined }
+
+// From the guide rate alone: a dither of 10 arcsec at 0.5x sidereal in both axes. The RA pulse is longer by 1 / cos(declination) near the pole.
+const context = { guideRate: { rightAscension: 0.5, declination: 0.5 }, declination: 0, rightAscensionDirection: 'WEST', declinationDirection: 'NORTH' } as const
+const offset = { rightAscension: arcsec(10), declination: -arcsec(10) }
+console.log(ditherPulsePlanFromGuideRate(offset, context, 5000), ditherPulsePlanFromGuideRate(offset, { ...context, declination: deg(60) }, 5000)) // 1330 ms toward WEST and 1330 ms toward SOUTH at the equator, and 2659 ms (WEST) and 1330 ms (SOUTH) at a declination of 60 degrees, where cos is 0.5
+
+// The guide rate of the mount can also be different in each axis.
+console.log(ditherPulsePlanFromGuideRate(offset, { ...context, guideRate: { rightAscension: 0.5, declination: 0.25 } }, 5000)) // 1330 ms (WEST) and 2659 ms (SOUTH): the declination rate is half of the right ascension rate
+
+// Dispatching: a minimal guide output and manager that record the pulses. Both axes are sent back to back.
+const sent: [string, number][] = []
+const manager = { pulse: (_: GuideOutput, direction: string, duration: number) => sent.push([direction, duration]) } as unknown as GuideOutputManager
+const output = { canPulseGuide: true, [CLIENT]: {} } as unknown as GuideOutput
+const plan = ditherPulsePlanFromCalibration({ rightAscension: 3, declination: -2 }, calibration, 2000)!
+console.log(dispatchDitherPulses(manager, output, plan), sent) // true [['WEST', 300], ['SOUTH', 250]]
+```
+
 ### Dither Offsets
+
+`observation/guiding/dither` generates the sequence of small, relative pointing offsets of a dither, to spread the hot pixels and the fixed pattern of the sensor across the stack. The `DitherGenerator` owns one mutable sequence of one `DitherMode` and is unit-agnostic: `next(amount, raOnly?)` returns a `DitherOffset` with a `rightAscension` and a `declination` increment along the mount axes, in the same unit as `amount` (pixels for a guider, radians for a sky-plane dither), as the step from the previous point and not as an absolute position. The sign of a positive right ascension follows the convention of whoever consumes it. The modes are `random` (PHD2's uniform draws, each axis in `[-amount, +amount]`), `spiral` (the PHD2 lattice spiral, in steps of one `amount`), `golden` (a golden-angle disk whose sample `n` is at the radius `amount * sqrt(n)`, so the points stay evenly spread as it grows) and `grid` (the border cells of the growing square rings around the origin, starting at the south-west corner of ring one and never returning to the origin). With `raOnly` the declination is held at zero, and, for the spiral, golden and grid patterns, switching `raOnly` restarts the sequence; the random pattern consumes one draw instead of two. The `DitherGeneratorOptions` has the initial `mode` (`random` by default) and the `random` source, a function that returns a number in `[0, 1)` (`Math.random` by default; give a seeded one for a reproducible sequence, see Seeded Random Sources). `mode` returns the active pattern; `setMode(mode)` replaces the strategy with a fresh sequence, even for the same mode, and keeps the random source where it was; `reset()` restarts only the active sequence and never rewinds the random source, so a `random` generator keeps drawing from its stream. The `amount` is expected to be positive and finite and is not validated. The generator only produces the offsets: it does not know the mount, the pier side or a limit of the field, and the sum of the offsets drifts as a random walk or an unbounded pattern, so the caller must bring the pointing back (or re-center) when it matters. Turning the offsets into guide pulses is in Dither Guide Pulses.
+
+```ts
+import { DitherGenerator } from 'nebulosa/src/observation/guiding/dither'
+
+// A seeded uniform source in [0, 1), so that the random pattern is reproducible.
+const lcg = (seed: number) => () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return seed / 0x100000000
+}
+
+const round = (value: number) => +value.toFixed(3)
+const show = (offsets: readonly { rightAscension: number; declination: number }[]) => offsets.map((o) => [round(o.rightAscension), round(o.declination)])
+const take = (generator: DitherGenerator, count: number, amount: number, raOnly: boolean = false) => Array.from({ length: count }, () => generator.next(amount, raOnly))
+
+// The default generator is random and uses Math.random; with a seeded source it is reproducible, and each increment is within the amount (here 5 pixels).
+const random = new DitherGenerator({ mode: 'random', random: lcg(1) })
+console.log(random.mode, show(take(random, 4, 5))) // random [[-2.635, -1.307], [0.042, 2.049], [-4.495, -1.305], [2.748, 0.562]]
+
+// RA only: the declination is zero, and only one draw is consumed per step.
+console.log(show(take(new DitherGenerator({ random: lcg(1) }), 3, 5, true))) // [[-2.635, 0], [-1.307, 0], [0.042, 0]] (the same stream, one draw per step)
+
+// The spiral: the first nine steps of the PHD2 lattice, each one amount long, as [RA, DEC] increments.
+console.log(show(take(new DitherGenerator({ mode: 'spiral' }), 9, 1))) // [[0, 1], [1, 0], [0, -1], [0, -1], [-1, 0], [-1, 0], [0, 1], [0, 1], [0, 1]]
+
+// The golden-angle disk: the increments between successive points, and the absolute points that they add up to, whose distance from the origin is amount * sqrt(n).
+const golden = new DitherGenerator({ mode: 'golden' })
+const goldenSteps = take(golden, 5, 2)
+let x = 0
+let y = 0
+const goldenPoints = goldenSteps.map((o) => [round((x += o.rightAscension)), round((y += o.declination))])
+console.log(
+	show(goldenSteps),
+	goldenPoints,
+	goldenPoints.map(([px, py]) => round(Math.hypot(px, py))),
+) // [[-1.475, 1.351], [1.722, -4.169], [1.86, 5.567], [-6.047, -3.446], [7.712, -1.704]] are the increments, [[-1.475, 1.351], [0.247, -2.818], [2.108, 2.749], [-3.939, -0.697], [3.773, -2.4]] the points, and [2, 2.829, 3.464, 4, 4.472] their distances from the origin
+
+// The grid: the first ring of 8 cells in row-major order from the south-west corner (as absolute cells), then the first cells of ring two.
+const grid = new DitherGenerator({ mode: 'grid' })
+x = 0
+y = 0
+console.log(take(grid, 12, 1).map((o) => [(x += o.rightAscension), (y += o.declination)])) // [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1], [-2, -2], [-1, -2], [0, -2], [1, -2]]
+
+// Switching to RA only restarts the sequence of a golden or grid generator and keeps declination at zero; the same happens when it is switched back.
+const switching = new DitherGenerator({ mode: 'grid' })
+take(switching, 3, 1)
+console.log(show([switching.next(1, true), switching.next(1, true), switching.next(1, false)])) // [[-1, 0], [1, 0], [-1, -1]] (the two RA-only steps restart at ring one and keep DEC at zero, and the step after switching back restarts again at the south-west corner)
+
+// reset() restarts the active pattern, and setMode() starts a new one: the random source is never rewound.
+const lifecycle = new DitherGenerator({ mode: 'spiral' })
+const first = show(take(lifecycle, 3, 1))
+lifecycle.reset()
+console.log(JSON.stringify(first) === JSON.stringify(show(take(lifecycle, 3, 1)))) // true (the same three steps after the reset)
+lifecycle.setMode('random')
+console.log(lifecycle.mode) // random
+const stream = new DitherGenerator({ mode: 'random', random: lcg(9) })
+const before = show(take(stream, 2, 5))
+stream.reset()
+console.log(JSON.stringify(before) === JSON.stringify(show(take(stream, 2, 5)))) // false (the random source was not rewound, so the next draws are new ones)
+```
 
 ### Dome Slit Geometry
 
 ### Focuser Backlash Calibration
 
+`observation/focus/backlash.calibration` measures the backlash of a focuser from a scalar metric that changes with the real position, such as the HFD, a star position or a laser spot, without any device I/O: the `BacklashCalibration` is a synchronous command and event state machine, so the caller executes each command (a move or a measurement) and feeds the result back. All positions, distances, breakpoints and uncertainties are focuser steps; the metric is in caller-defined units, and its slope per step must be large enough to be seen. A run of one direction (`FocusAxisDirection`, `increasing` or `decreasing` counter, independent of the IN and OUT naming of a driver) first preloads against it, traveling `preloadDistance` opposite to the measured direction in moves of `probeStep`, with `samplesPerPosition` measurements at each position (their median and dispersion are kept), and checks that the metric has a slope (at least `minimumSlope` per step over the last `minimumPreloadPoints`). It then reverses and probes in steps of `probeStep` up to `maximumProbeDistance`: the metric stays on a plateau while the play is taken up and then changes linearly, and after each point the machine fits a continuous model `intercept + slope * max(0, travel - breakpoint)` (`fitBacklashBreakpoint`) and stops the run when the last `stabilityCount` fits agree within `breakpointTolerance` with enough points after the breakpoint. The breakpoint is the backlash of that run. The runs alternate between the directions, `repeats` per direction (3 or more), and a direction is aggregated by its median when a strict majority of its runs is valid (`aggregateBacklashRuns`); the result is refused when the dispersion of the runs of a direction is above the larger of `probeStep` and `breakpointTolerance`. The `BacklashCalibrationOptions` are `probeStep`, `preloadDistance`, `maximumProbeDistance`, `minimumSlope`, `repeats` (3), `samplesPerPosition` (3), `minimumPreloadPoints` (4), `minimumPlateauPoints` (2), `minimumPostBreakPoints` (3), `breakpointTolerance` (the `probeStep`), `stabilityCount` (3), `huberTuning` (1.345), the optional inclusive `minimumPosition` and `maximumPosition`, and the `safetyFactor` (1.5, at least 1) of the recommendation; a `probeStep` that is not positive, `repeats` below 3, a preload or probe distance too short for its minimum number of points, or `minimumPosition` not below `maximumPosition` throws a `RangeError` at construction. `start(position)` takes the finite counter position in range and returns the first command, `next(event)` consumes the event of the pending command and returns the next one, and `state` (`idle`, `preloading`, `probing`, `completed`, `failed` or `cancelled`), `currentDirection` and `result` are readable at any time. A `BacklashCalibrationCommand` is a `move` (a signed `relative` distance and its `direction`) to execute and answer with `{ type: 'moved', position }` (the actual counter position: it must move the right way, by no more than asked, and inside the limits), a `measure` (a `sampleIndex` and the `sampleCount`) answered with `{ type: 'measured', position, value }` (at the confirmed position), or a terminal command: `completed` with the `BacklashCalibrationResult`, `failed` with a `reason` (`invalidEvent`, `invalidPosition`, `invalidSample`, `positionLimit`, `axisStalled`, `insufficientSlope`, `breakpointNotFound`, `maximumDistanceReached`, `insufficientValidRuns` or `unstableResult`) and the direction, or `cancelled` (the event `{ type: 'cancel' }` at any time). A terminal state is final and repeats its command. The result has an `increasing` and a `decreasing` `BacklashDirectionResult` (the rounded median `steps`, the `dispersion`, the combined `uncertainty`, the valid and total run counts and every `BacklashRunResult` with its probe points), the `recommendedOvershoot` (the larger direction times the safety factor, rounded up), the `confidence` from 0 to 1 and the `quality` (`good` from 0.8, `marginal` from 0.5, otherwise `poor`). `backlashCompensationFromCalibration(result, mode?)` gives the `BacklashCompensation` of Focuser Backlash Compensation: the `decreasing` steps become `backlashIn` and the `increasing` ones `backlashOut`, with the mode `OVERSHOOT` unless another is asked. The model has a single breakpoint and a linear response, so a metric that is curved, noisy, or still near its minimum (a V-curve vertex) will not fit, and the backlash is that of the conditions and load of the run.
+
+```ts
+import { backlashCompensationFromCalibration, aggregateBacklashRuns, BacklashCalibration, fitBacklashBreakpoint, type BacklashCalibrationCommand, type BacklashProbePoint } from 'nebulosa/src/observation/focus/backlash.calibration'
+
+// A simulated focuser with 30 steps of play and a metric of 0.02 per step of real position (plus a small deterministic noise): the counter moves exactly as commanded, the real position only after the play is taken up.
+function simulate(play: number) {
+	let counter = 20000
+	let physical = 20000
+	let slack = 0
+	let seed = 11
+	const noise = () => {
+		seed = (seed * 1664525 + 1013904223) >>> 0
+		return (seed / 0x100000000 - 0.5) * 0.02
+	}
+	return {
+		position: () => counter,
+		move(relative: number) {
+			counter += relative
+			if (relative > 0) {
+				const used = Math.min(relative, play - slack)
+				slack += used
+				physical += relative - used
+			} else {
+				const used = Math.min(-relative, slack)
+				slack -= used
+				physical += relative + used
+			}
+			return counter
+		},
+		measure: () => 0.02 * physical + noise(),
+	}
+}
+
+// Drives the machine with the simulated focuser until it reaches a terminal command, and counts the commands.
+const options = { probeStep: 10, preloadDistance: 60, maximumProbeDistance: 200, minimumSlope: 0.005 }
+const focuser = simulate(30)
+const calibration = new BacklashCalibration(options)
+console.log(calibration.state, calibration.currentDirection, calibration.result) // idle undefined undefined
+let command: BacklashCalibrationCommand = calibration.start(focuser.position())
+const counts = { move: 0, measure: 0 }
+const firstCommands: BacklashCalibrationCommand[] = [command]
+while (command.type === 'move' || command.type === 'measure') {
+	counts[command.type]++
+	if (command.type === 'move') command = calibration.next({ type: 'moved', position: focuser.move(command.relative) })
+	else command = calibration.next({ type: 'measured', position: focuser.position(), value: focuser.measure() })
+	if (firstCommands.length < 6) firstCommands.push(command)
+}
+console.log(firstCommands, counts, calibration.state) // the first command is a move of -10 (decreasing: the preload of the increasing run goes against it), then three measures of the same position (sampleIndex 0 to 2 of 3), then the next move; 76 moves and 228 measures (3 per position) in total, ending in the state completed
+
+// The result: the backlash of each direction (30 steps simulated), the runs, the recommendation and the quality.
+const result = calibration.result!
+console.log(command.type, result.increasing.steps, result.decreasing.steps, result.increasing.dispersion, result.increasing.uncertainty, result.increasing.validRunCount, result.increasing.totalRunCount) // completed 30 30, the dispersion of the increasing runs 0.057 steps, the uncertainty 10 steps (the probe step) and 3 valid runs of 3
+console.log(
+	result.recommendedOvershoot,
+	result.confidence,
+	result.quality,
+	result.increasing.runs.map((run) => [run.direction, run.valid, +(run.steps ?? Number.NaN).toFixed(2), run.points.length]),
+) // 45 (30 times 1.5), a confidence of 0.867, quality good, and three increasing runs of 30, 30.08 and 29.94 steps with 8 probe points each
+
+// The compensation for the compensator of Focuser Backlash Compensation: IN is decreasing and OUT is increasing.
+console.log(backlashCompensationFromCalibration(result), backlashCompensationFromCalibration(result, 'ABSOLUTE')) // { mode: 'OVERSHOOT', backlashIn: 30, backlashOut: 30 } and the same with mode 'ABSOLUTE'
+
+// The fit alone: probe points of a plateau of 0.4 up to 25 steps of travel, then a slope of 0.02 per step. The breakpoint is the backlash, with its uncertainty and the quality of the fit.
+const points: BacklashProbePoint[] = Array.from({ length: 16 }, (_, i) => ({ position: 20000 + i * 5, traveled: i * 5, value: 0.4 + 0.02 * Math.max(0, i * 5 - 25) + ((i * 7) % 5) * 0.001, dispersion: 0.002, sampleCount: 3 }))
+console.log(fitBacklashBreakpoint(points, { probeStep: 5, minimumPlateauPoints: 2, minimumPostBreakPoints: 3, minimumSlope: 0.005, huberTuning: 1.345 })) // valid, breakpoint 25 (uncertainty 5, the probe step), intercept 0.402, slope 0.0200, nrmse 0.0023, 6 plateau and 10 post-breakpoint points
+
+// The aggregation of runs: the median of the valid breakpoints of a direction, rounded, with the dispersion and the uncertainty.
+console.log(aggregateBacklashRuns(result.decreasing.runs)) // decreasing, steps 30, dispersion 0.075, uncertainty 9.69, 3 of 3 valid runs (29.87, 29.80 and 29.99 steps)
+
+// A cancel event stops the calibration at any time, without a partial result.
+const stopped = new BacklashCalibration(options)
+stopped.start(20000)
+console.log(stopped.next({ type: 'cancel' }), stopped.state, stopped.result) // { type: 'cancelled' }, state cancelled and no result
+```
+
 ### Focuser Backlash Compensation
+
+`observation/focus/backlash` turns a desired focuser position into the move or moves that absorb the mechanical backlash of the drive train, so that the final approach always has the same sense. Everything is in focuser steps, and the positions are absolute counter values in `[0, maxPosition]`. The `BacklashCompensator` is built with a `BacklashCompensation` (the `mode`, and the `backlashIn` and `backlashOut` in steps, the play that is absorbed when the movement reverses into the IN or the OUT direction; OUT is an increasing position) and the `maxPosition`, the travel limit. `compute(targetPosition, currentPosition)` returns the absolute positions to command, in order, and is stateful: it remembers the direction of the last move (`IN`, `OUT` or none before the first move), and in `ABSOLUTE` mode an offset. The `NONE` mode returns the target alone. The `OVERSHOOT` mode returns `[overshoot, target]` for every move whose sense has a non-zero backlash, where the overshoot is the target moved by `-backlashIn` for an IN move or by `+backlashOut` for an OUT move, clamped to `[0, maxPosition]`: the focuser goes past the target and returns, so the last leg of an IN move is an OUT one and the other way round, whatever the previous move was. A move to the current position, a move whose sense has zero backlash, or an overshoot that the clamp brings back to the target returns `[target]`. The `ABSOLUTE` mode returns a single move and, when the direction reverses (IN after OUT, or OUT after IN), adds `-backlashIn` or `+backlashOut` to it, clamped to the travel; the difference is accumulated as an offset that is applied to every later target, so the commanded positions drift from the requested ones while the driver counter and the optical position stay consistent, and a target whose offset-adjusted value is outside the travel is clamped without changing the offset. In `ABSOLUTE` mode the first move has no known direction and so is not compensated. The compensator does not measure the backlash (see Focuser Backlash Calibration, which gives a `BacklashCompensation` through `backlashCompensationFromCalibration`), does not move the focuser, and keeps the direction of the move it computed, even if the caller does not execute it.
+
+```ts
+import { BacklashCompensator, type BacklashCompensation } from 'nebulosa/src/observation/focus/backlash'
+
+const settings = (mode: BacklashCompensation['mode']): BacklashCompensation => ({ mode, backlashIn: 40, backlashOut: 25 })
+
+// NONE: the move is the target.
+console.log(new BacklashCompensator(settings('NONE'), 10000).compute(5000, 5200)) // [5000]
+
+// OVERSHOOT: every move goes past the target, 25 steps for an OUT move (5000 to 5200), then 40 for an IN one (back to 5100), then 25 again (up to 5300).
+const overshoot = new BacklashCompensator(settings('OVERSHOOT'), 10000)
+console.log(overshoot.compute(5200, 5000)) // [5225, 5200]
+console.log(overshoot.compute(5100, 5200)) // [5060, 5100]
+console.log(overshoot.compute(5300, 5100)) // [5325, 5300]
+
+// A move to the current position is not compensated, and the overshoot is clamped to the travel, at the lower end and at the upper end.
+console.log(overshoot.compute(5300, 5300), new BacklashCompensator(settings('OVERSHOOT'), 10000).compute(10, 500)) // [5300] and [0, 10]
+console.log(new BacklashCompensator(settings('OVERSHOOT'), 10000).compute(9990, 9000)) // [10000, 9990]
+
+// ABSOLUTE: a single move that carries the compensation on reversals, and the offset is kept for the next targets (the reversal to 5000 is commanded as 4960, and the next target 5025 as 4985).
+const absolute = new BacklashCompensator(settings('ABSOLUTE'), 10000)
+console.log(absolute.compute(5200, 5000), absolute.compute(5000, 5200), absolute.compute(5025, 5000)) // [5200] [4960] [4985]
+
+// An asymmetric backlash (60 steps IN, none OUT) over the moves of a focus run, down and back up: only the IN moves overshoot.
+const run = new BacklashCompensator({ mode: 'OVERSHOOT', backlashIn: 60, backlashOut: 0 }, 20000)
+let position = 12000
+const executed: number[] = []
+for (const target of [11800, 11600, 11400, 11600, 11800]) {
+	for (const move of run.compute(target, position)) {
+		executed.push(move)
+		position = move
+	}
+}
+console.log(executed) // [11740, 11800, 11540, 11600, 11340, 11400, 11600, 11800] (the descending moves go 60 steps beyond and return; the ascending ones are direct)
+```
 
 ### Guide Pulse Loop
 
@@ -12040,7 +12585,84 @@ Evaluate observing conditions and target suitability before scheduling or contro
 
 ### Mount Axis Limits
 
+`observation/mount/limits` is a pure check of where a mount is pointing against configured axis limits: nothing here commands, parks or stops a mount. `evaluateMountLimits(position, limits)` takes a `MountLimitPosition` with any of `hourAngle`, `declination`, `altitude` and `azimuth` (all in radians) and a `MountLimits` with the closed `AxisRange` `[min, max]` (radians) of any of the same axes, and returns whether every tested axis is inside its range and the list of `MountLimitViolation` (the `axis`, the supplied `value`, and the `minimum` and `maximum`), in hour angle, declination, altitude and azimuth order. An axis that has no limit, and a limit whose axis was not supplied, are skipped, so a position with no overlapping axis is accepted. The hour angle, declination and altitude are linear intervals: a cable wrap may extend beyond plus or minus PI, and the hour angle that is passed must then be the unwrapped angle that the mount holds, with the usual positive west sign. The azimuth (north through east) is circular by default, so a window that crosses north is written with a minimum above the maximum (after normalization) and a range of a full turn or more accepts everything, while `azimuthWrap: 'linear'` compares the raw azimuth for an unwrapped azimuth cable. The bounds are inclusive, and a `NaN` value fails the test. The check says nothing about the speed, the slew path, the pier side or the horizon profile: a target that is inside the limits can still need a path through a limit.
+
+```ts
+import { evaluateMountLimits } from 'nebulosa/src/observation/mount/limits'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+// An equatorial mount that can go 6 hours past the meridian on either side (hour angle in radians), with a declination range and a minimum altitude of 20 degrees.
+const limits = { hourAngle: [-Math.PI / 2, Math.PI / 2], declination: [deg(-85), deg(85)], altitude: [deg(20), deg(90)] } as const
+console.log(evaluateMountLimits({ hourAngle: deg(40), declination: deg(30), altitude: deg(55) }, limits)) // { accepted: true, violations: [] }
+
+// Several axes can fail at once; the violations list the failing axes in a fixed order with the value and the range.
+console.log(evaluateMountLimits({ hourAngle: deg(100), declination: deg(30), altitude: deg(10) }, limits)) // accepted false, with two violations: hourAngle 1.745 (outside -1.571 to 1.571) and altitude 0.175 (below 0.349)
+
+// The limits are inclusive, and axes that are not supplied are not tested (here only the altitude is known).
+console.log(evaluateMountLimits({ altitude: deg(20) }, limits).accepted, evaluateMountLimits({}, limits).accepted) // true true (the altitude of exactly 20 degrees, and an empty position)
+
+// A cable wrap beyond one half turn: the unwrapped hour angle of 200 degrees is held by the mount.
+console.log(evaluateMountLimits({ hourAngle: deg(200) }, { hourAngle: [deg(-220), deg(220)] }).accepted) // true (200 degrees is inside the wrap of plus or minus 220)
+
+// A circular azimuth window that crosses north, from 300 to 60 degrees, and the same raw numbers as a linear range.
+const north = { azimuth: [deg(300), deg(60)] } as const
+console.log(evaluateMountLimits({ azimuth: deg(350) }, north).accepted, evaluateMountLimits({ azimuth: deg(10) }, north).accepted, evaluateMountLimits({ azimuth: deg(180) }, north).accepted) // true true false (350 and 10 degrees are inside the window across north, 180 is not)
+console.log(evaluateMountLimits({ azimuth: deg(350) }, { ...north, azimuthWrap: 'linear' }).accepted) // false (350 is outside 300 to 60 when the range is linear, the minimum being above the maximum)
+
+// An azimuth cable that allows 540 degrees of unwrapped travel.
+console.log(evaluateMountLimits({ azimuth: deg(400) }, { azimuth: [deg(-90), deg(450)], azimuthWrap: 'linear' }).accepted) // true (400 degrees inside the unwrapped range)
+```
+
 ### Mount Kinematics
+
+`observation/mount/kinematics` is the forward and inverse kinematics of a serial two-axis telescope mount (an equatorial or an altitude-azimuth head), with no device I/O. A `TwoAxisMountGeometry` describes the mount at encoder zero in its own base frame: the `primaryPivot` and `primaryAxis`, the `secondaryPivot` and `secondaryAxis` (before the primary rotation), the `opticalOrigin` and `opticalDirection`, the optional `primaryIndex` and `secondaryIndex` (physical zero offsets in radians) and `primaryDirection` and `secondaryDirection` (the sign, 1 or -1, that maps an encoder angle to a right-handed rotation), and the active rigid transform `baseToWorld` from the base to the world frame. The points are in metres, the axes need not be unit vectors but must be non-zero, and the angles are radians. The primary rotation carries the secondary axis, its pivot and the optics, and then the secondary rotates around its own axis, so an axis offset, a non-orthogonality or a displaced optical origin of a real mount can be described. `createIdealAltAzGeometry(options?)` gives the ideal altitude-azimuth head in an east, north, up frame (the primary is the azimuth, north through east, and the secondary the altitude above the horizon), and `createCanonicalEquatorialGeometry(options?)` an ideal equatorial head in the Taki frame (the primary is the west-positive hour angle and the secondary the declination; see Taki Mount Geometry); both take the `CanonicalMountGeometryOptions` (`baseToWorld`, the pivots and the optical origin in metres, the zero offsets and the encoder signs that replace the canonical ones). `mountPoseFromEncoders(geometry, encoders)` returns the `MountPose` for the encoders `{ primary, secondary }` in radians: the optical `origin` and the unit `direction` in the world frame, the unit `primaryAxis` and `secondaryAxis` and the `secondaryPivot` (in metres) at that primary angle. `mountDirectionFromEncoders(geometry, encoders, out?)` computes only the unit direction, and writes it into `out` when given (the result aliases `out`; a new vector is allocated otherwise). `solveMountEncoders(geometry, worldDirection, options?)` goes the other way: a damped Gauss-Newton search for encoder angles whose optical direction matches a non-zero world direction (it need not be normalized). It is local: a mount reaches the same direction in several mechanical branches (a German equatorial mount on either side of the pier), and the solver returns the one near the `initial` seed (both encoders at zero by default), so the caller gives the seed of the branch it wants and the optional inclusive unwrapped `primaryRange` and `secondaryRange` that bound it (the angles are clamped to them, and they are not wrapped). The `MountEncoderSolveOptions` also has the `maxIterations` (32), the angular `tolerance` (1e-10 radians) and the `maxStep` of one iteration (PI/12 radians). The `MountEncoderSolution` has the `primary` and `secondary` angles, the `converged` flag, the `iterations` and the `residual` angular separation in radians: when it does not converge (a direction out of the ranges, or a singular configuration such as a target at the pole of the primary axis, where the Jacobian loses rank) the best position found is returned with the flag false, so check `converged` and `residual`. A target exactly opposite to the current direction is a stationary point of the residual, and the solver leaves it by a bounded step on one encoder. A zero axis, an encoder sign that is not 1 or -1, an inverted range, or a non-positive iteration count or step throws a `RangeError`. The geometry is only the kinematic model: it does not model flexure, refraction, speeds or tracking.
+
+```ts
+import { createCanonicalEquatorialGeometry, createIdealAltAzGeometry, mountDirectionFromEncoders, mountPoseFromEncoders, solveMountEncoders } from 'nebulosa/src/observation/mount/kinematics'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+const round = (value: readonly number[]) => value.map((v) => +v.toFixed(6))
+const degrees = (radians: number) => (radians * 180) / Math.PI
+
+// An ideal altitude-azimuth head in east, north and up: azimuth 0 looks north, 90 degrees is east, and altitude 90 degrees is the zenith.
+const altaz = createIdealAltAzGeometry()
+console.log(round(mountDirectionFromEncoders(altaz, { primary: 0, secondary: 0 })), round(mountDirectionFromEncoders(altaz, { primary: deg(90), secondary: 0 })), round(mountDirectionFromEncoders(altaz, { primary: deg(90), secondary: deg(90) }))) // [0, 1, 0] (north), [1, 0, 0] (east) and [0, 0, 1] (zenith)
+
+// The ideal equatorial head in the Taki frame: the secondary is the declination and the primary the west-positive hour angle.
+const equatorial = createCanonicalEquatorialGeometry()
+console.log(round(mountDirectionFromEncoders(equatorial, { primary: 0, secondary: 0 })), round(mountDirectionFromEncoders(equatorial, { primary: 0, secondary: deg(90) })), round(mountDirectionFromEncoders(equatorial, { primary: deg(90), secondary: 0 }))) // [1, 0, 0], [0, 0, 1] (the pole) and [0, -1, 0] (an hour angle of 90 degrees turns the equator direction about the pole axis)
+
+// The direction can be written into a buffer, which is also the returned value.
+const out: [number, number, number] = [0, 0, 0]
+console.log(mountDirectionFromEncoders(altaz, { primary: deg(45), secondary: deg(30) }, out) === out, round(out)) // true [0.612372, 0.612372, 0.5]
+
+// The complete pose, with a secondary pivot and an optical origin displaced from the primary axis (metres) and a zero offset of the secondary encoder.
+const offset = createCanonicalEquatorialGeometry({ secondaryPivot: [0, 0, 0.1], opticalOrigin: [0.2, 0, 0.1], secondaryIndex: deg(1) })
+const pose = mountPoseFromEncoders(offset, { primary: deg(30), secondary: deg(20) })
+console.log(round(pose.origin), round(pose.direction), round(pose.primaryAxis), round(pose.secondaryAxis), round(pose.secondaryPivot)) // origin [0.163769, -0.094552, 0.165114], direction [0.818843, -0.472759, 0.325568], primary axis [0, 0, 1], secondary axis [0.5, 0.866025, 0] and secondary pivot [0, 0, 0.1]
+
+// The inverse: the encoders that point the equatorial head at the direction of an hour angle of 40 degrees and a declination of 25 degrees.
+const target = mountDirectionFromEncoders(equatorial, { primary: deg(40), secondary: deg(25) })
+const solution = solveMountEncoders(equatorial, target)
+console.log(solution.converged, solution.iterations, +degrees(solution.primary).toFixed(6), +degrees(solution.secondary).toFixed(6), solution.residual < 1e-9) // true after 6 iterations, hour angle 40 and declination 25 degrees, residual below 1e-9 radians
+
+// The direction does not need to be normalized.
+const unnormalized = solveMountEncoders(altaz, [3, 4, 5])
+console.log(unnormalized.converged, round([degrees(unnormalized.primary), degrees(unnormalized.secondary)])) // true [36.869898, 45] degrees (azimuth and altitude of the direction 3, 4, 5)
+
+// A seed near the other mechanical branch (the secondary beyond the pole) selects it.
+const flipped = solveMountEncoders(equatorial, target, { initial: { primary: deg(220), secondary: deg(155) } })
+console.log(flipped.converged, round([degrees(flipped.primary), degrees(flipped.secondary)])) // true [220, 155]: the seed already is a solution, and the other branch of the same direction is kept
+
+// The ranges bound the search to a branch (the secondary is kept between 0 and 90 degrees), and the tolerance, the iteration cap and the step can be changed.
+const ranged = solveMountEncoders(equatorial, target, { secondaryRange: [0, deg(90)], tolerance: 1e-12, maxIterations: 64, maxStep: deg(10) })
+console.log(ranged.converged, round([degrees(ranged.primary), degrees(ranged.secondary)])) // true [40, 25]
+
+// A zero offset of the primary encoder is part of the model: the solution is the encoder, not the physical angle.
+const indexed = createCanonicalEquatorialGeometry({ primaryIndex: deg(10) })
+const back = solveMountEncoders(indexed, mountDirectionFromEncoders(indexed, { primary: deg(25), secondary: deg(15) }))
+console.log(back.converged, round([degrees(back.primary), degrees(back.secondary)])) // true [25, 15]
+```
 
 ### Mount Tracking Rates
 
