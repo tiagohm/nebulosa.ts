@@ -16694,7 +16694,228 @@ console.log(bridge.ready) // false
 
 ### INDI Camera Control
 
+`CameraManager` builds a `Camera` device from the INDI CCD interface and reflects its vectors onto the shared model, which also serves the Alpaca camera. The model has the cooler (`hasCooler` and `canSetTemperature` from `CCD_TEMPERATURE`, `hasCoolerControl` and `cooler` from `CCD_COOLER`, `coolerPower` in percent), the exposure (`exposuring`, and `exposure` with the remaining `value` in seconds and its `min`, `max` and `step`), `canAbort`, the frame type (`frameType` as `'LIGHT'`, `'DARK'`, `'FLAT'` or `'BIAS'`), the readout modes (`frameFormats` and the selected `frameFormat`), the subframe (`canSubFrame` and `frame.x`, `frame.y`, `frame.width` and `frame.height`, each a property in unbinned pixels), the binning (`canBin`, `bin.x` and `bin.y`), `gain` and `offset` (properties, in the units of the driver), the `pixelSize` (micrometres), the colour filter array (`cfa` with `offsetX`, `offsetY` and `type`, such as `'RGGB'`) and the guide output (see INDI Guide Output). The temperature of the sensor is not part of this manager: it is read through the thermometer (see INDI Thermometer), and the dew heater is described in INDI Dew Heater.
+
+The commands are `cooler(camera, enabled)`, `temperature(camera, celsius)` (the target of the cooler, when `canSetTemperature`), `frameType`, `frameFormat` (only a name in `frameFormats` is sent), `frame(camera, x, y, width, height)` (when `canSubFrame`), `bin(camera, x, y)` (when `canBin`), `gain`, `offset` (sent to the vector that the driver publishes: `CCD_CONTROLS` of the ZWO and SVBony drivers, or `CCD_GAIN` and `CCD_OFFSET`, and ignored when there is none), `compression(camera, enabled)`, `transferFormat(camera, 'FITS' | 'XISF' | 'NATIVE')`, `startExposure(camera, seconds)`, `stopExposure(camera)` and `snoop(camera, mount?, focuser?, wheel?, rotator?)`, which tells the driver which devices it should read (the simulator renders its frames from them). The image arrives as the `CCD1` BLOB, which the manager forwards to the handlers added with `addHandler` as `blobReceived(camera, data, encoding)` (a `Buffer`, and the encoding of the transfer, `'raw'` for the simulator), after BLOB delivery was enabled with `enableBlob(camera)`; `disableBlob(camera)` stops it. The state follows the driver, so a command is visible only after the driver reports it. The snippet uses the camera simulator with a mount (see INDI Camera Simulator).
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { CameraManager } from 'nebulosa/src/devices/indi/manager/camera'
+import { MountManager } from 'nebulosa/src/devices/indi/manager/mount'
+import { CameraSimulator } from 'nebulosa/src/devices/indi/simulator/camera'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { MountSimulator } from 'nebulosa/src/devices/indi/simulator/mount'
+
+// Waits until a condition is true, polling every 10 ms.
+async function waitUntil(condition: () => boolean, timeout: number = 20000) {
+	const start = performance.now()
+	while (!condition() && performance.now() - start < timeout) await Bun.sleep(10)
+}
+
+const handler = new IndiClientHandlerSet()
+const mounts = new MountManager()
+const manager = new CameraManager()
+handler.add(mounts)
+handler.add(manager)
+
+using client = new ClientSimulator('camera', handler)
+using mountSimulator = new MountSimulator('Mount Simulator', client)
+using simulator = new CameraSimulator('Camera Simulator', client, { mountManager: mounts })
+const camera = manager.get(client, simulator.name)!
+const mount = mounts.get(client, mountSimulator.name)!
+
+// The images are delivered to the handlers: here only the size, the encoding and the start of the FITS header.
+const images: [number, string, string][] = []
+manager.addHandler({
+	added() {},
+	removed() {},
+	blobReceived: (_, data, encoding) => images.push([data.length, encoding, data.subarray(0, 30).toString('latin1')]),
+})
+
+manager.connect(camera)
+mounts.connect(mount)
+await waitUntil(() => camera.connected && mount.connected)
+manager.enableBlob(camera)
+console.log(camera.type, camera.hasCooler, camera.hasCoolerControl, camera.canSetTemperature, camera.canSubFrame, camera.canBin, camera.canAbort) // camera true true true true true true
+console.log(
+	camera.frameFormats.map((e) => e.name),
+	camera.frameFormat,
+	camera.frameType,
+	camera.cfa,
+	camera.pixelSize,
+) // ['MONO', 'RGB'] MONO LIGHT { offsetX: 0, offsetY: 0, type: 'RGGB' } { x: 5.2, y: 5.2 }
+console.log(camera.frame.width.max, camera.frame.height.max, camera.bin.x.max, camera.exposure.min, camera.exposure.max, camera.gain.max, camera.offset.max) // 1280 1024 4 0.001 3600 400 1000
+
+// The cooler, with a target temperature in degrees Celsius. The cooler power is in percent.
+manager.cooler(camera, true)
+manager.temperature(camera, -10)
+await Bun.sleep(1000)
+console.log(camera.cooler, camera.coolerPower > 0) // true true
+
+// Subframe (unbinned pixels), binning, gain, offset, frame type, readout mode and the transfer of the image.
+manager.frame(camera, 100, 50, 640, 480)
+manager.bin(camera, 2, 2)
+manager.gain(camera, 120)
+manager.offset(camera, 10)
+manager.frameType(camera, 'DARK')
+manager.frameFormat(camera, 'RGB')
+manager.transferFormat(camera, 'XISF')
+manager.compression(camera, false)
+await Bun.sleep(100)
+console.log(camera.frame.x.value, camera.frame.y.value, camera.frame.width.value, camera.frame.height.value, camera.bin.x.value, camera.bin.y.value) // 100 50 640 480 2 2
+console.log(camera.gain.value, camera.offset.value, camera.frameType, camera.frameFormat) // 120 10 DARK RGB
+
+// Back to a mono light frame in FITS, reading the scene from the mount.
+manager.frameType(camera, 'LIGHT')
+manager.frameFormat(camera, 'MONO')
+manager.transferFormat(camera, 'FITS')
+manager.snoop(camera, mount)
+await Bun.sleep(100)
+
+// A short exposure: the camera reports it while it runs, and the image arrives when it ends.
+manager.startExposure(camera, 1)
+await waitUntil(() => camera.exposuring)
+console.log(camera.exposuring, camera.exposure.value) // true 1
+await waitUntil(() => images.length > 0 && !camera.exposuring)
+console.log(camera.exposuring, camera.exposure.value) // false 0
+console.log(images[0]) // [158400, 'raw', 'SIMPLE  =                    T']
+
+// An exposure that is aborted delivers no image.
+manager.startExposure(camera, 30)
+await waitUntil(() => camera.exposuring)
+manager.stopExposure(camera)
+await waitUntil(() => !camera.exposuring)
+console.log(camera.exposuring, images.length) // false 1
+
+manager.disableBlob(camera)
+```
+
 ### INDI Camera Simulator
+
+`CameraSimulator(name, client, options?)` simulates a monochrome or colour camera of `CAMERA_SENSOR_WIDTH` × `CAMERA_SENSOR_HEIGHT` (1280 × 1024) pixels of `CAMERA_PIXEL_SIZE` (5.2 µm), with up to `CAMERA_MAX_BIN` (4) binning, exposures from `CAMERA_MIN_EXPOSURE` (1 ms) to `CAMERA_MAX_EXPOSURE` (3600 s), an ambient temperature of `CAMERA_AMBIENT_TEMPERATURE` (18 °C) and a cooler. It defines the CCD vectors of the INDI camera (info, cooler, frame type, readout mode `MONO` or `RGB`, transfer format `FITS` or `XISF`, abort, exposure, cooler power, temperature, frame, binning, gain from 0 to 400, offset from 0 to 1000, the colour filter array `RGGB` and the timed guide vectors) and the `CCD1` image BLOB, plus the simulator-only vectors that shape the frame (`SIMULATOR_SCENE`, `SIMULATOR_FLAT_*`, `SIMULATOR_NOISE_*`, `SIMULATOR_STAR_PLOT_*`, `SIMULATOR_BAHTINOV_PATTERN`, `SIMULATOR_COLLIMATION_PATTERN`, `SIMULATOR_ABERRATION_*` and `TELESCOPE_INFO`, a focal length of 500 mm and an aperture of 80 mm by default). The cooler moves the temperature 12 % of the way to the target on each tick of 100 ms (4 % toward the ambient one when it is off), and the cooler power is 6.5 % per degree below ambient, up to 100 %.
+
+An exposure lasts its real duration, and the image is rendered when it ends: the stars come from a deterministic random field (`SIMULATOR_SCENE` has the seed, the density, the seeing in pixels and the ranges of the size and flux of the stars) or, when `catalogSources` are given in the options, from the catalog selected by `SIMULATOR_CATALOG_SOURCE`, projected through the pointing of the active mount. The simulator reads the mount, focuser, rotator and filter wheel that the `ACTIVE_DEVICES` text names (see `snoop` in INDI Camera Control) through the managers of the options (`mountManager`, `focuserManager`, `rotatorManager`, `wheelManager`, `guideOutputManager`): the field centre follows the mount, the star profile follows the focus position, the field turns with the rotator, the filter dims the flux, and the stars trail along the recorded path of the mount during the exposure. The frame types differ as in a real camera: a bias has only the read noise and the offset, a dark adds the dark current of the sensor temperature, a flat is a vignetted illumination with dust and banding, and a light adds the sky, the stars and the optional moon, light pollution and amp glow of `SIMULATOR_NOISE_FEATURES`. The noise has its own vectors (the sky, moon, light pollution, atmosphere, sensor, amp glow, artifacts and output) with a quality of `'fast'`, `'balanced'` or `'high-realism'`, and the profile of a star is Gaussian, Moffat, annular or Bahtinov, with optional sensor tilt, backfocus, field curvature, coma, astigmatism, decenter and collimation aberrations. The output is 16-bit, written to a FITS or XISF file with its header (size, exposure, binning, pixel size, gain, offset, frame type, sensor temperature, the observation date and, with a mount, its coordinates), and it is delivered to a client that enabled the BLOBs.
+
+The methods `startExposure(seconds)` (clamped to the limits and ignored while an exposure runs), `abortExposure(alert?)` (no frame is produced), `setTargetTemperature(celsius)` (clamped to the range of the vector), `setFrame(x, y, width, height)` (unbinned pixels, clamped to the sensor), `setBin(horizontal, vertical)` and `pulse(direction, duration)` (milliseconds, forwarded to the active mount through the guide output manager and reported through the timed guide vectors) are the same actions as the INDI switches and numbers, and the getters `isExposuring`, `isPulsing`, `frameType`, `frameFormat`, `transferFormat`, `channels`, `imageWidth` and `imageHeight` (binned), `sensorWidth`, `sensorHeight`, `cfaPattern`, `seeing`, `noiseQuality`, `clampMode`, `ampGlowPosition`, `catalogSourceType`, `activeMount`, `telescopeFocalLength` and `telescopeAperture` expose the state. Everything except the exposure, the cooler, the temperature and the image is saved by `CONFIG` (see INDI Client Simulator).
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { CameraManager } from 'nebulosa/src/devices/indi/manager/camera'
+import { ThermometerManager } from 'nebulosa/src/devices/indi/manager/thermometer'
+import { CameraSimulator } from 'nebulosa/src/devices/indi/simulator/camera'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH } from 'nebulosa/src/devices/indi/simulator/constants'
+
+// Waits until a condition is true, polling every 10 ms.
+async function waitUntil(condition: () => boolean, timeout: number = 20000) {
+	const start = performance.now()
+	while (!condition() && performance.now() - start < timeout) await Bun.sleep(10)
+}
+
+// Mean of the pixels of a 16-bit FITS image (BZERO 32768) and the largest one, after the header blocks of 2880 bytes.
+function statistics(fits: Buffer, pixels: number) {
+	const offset = Math.ceil((fits.indexOf('END     ') + 80) / 2880) * 2880
+	let sum = 0
+	let max = 0
+
+	for (let i = 0; i < pixels; i++) {
+		const value = fits.readInt16BE(offset + i * 2) + 32768
+		sum += value
+		if (value > max) max = value
+	}
+
+	return [sum / pixels, max]
+}
+
+console.log(CAMERA_SENSOR_WIDTH, CAMERA_SENSOR_HEIGHT, CAMERA_PIXEL_SIZE, CAMERA_MAX_BIN, CAMERA_MIN_EXPOSURE, CAMERA_MAX_EXPOSURE, CAMERA_AMBIENT_TEMPERATURE) // 1280 1024 5.2 4 0.001 3600 18
+
+const handler = new IndiClientHandlerSet()
+const manager = new CameraManager()
+const thermometers = new ThermometerManager(manager)
+handler.add(manager)
+handler.add(thermometers)
+
+using client = new ClientSimulator('camera', handler)
+using simulator = new CameraSimulator('Camera Simulator', client)
+const camera = manager.get(client, simulator.name)!
+
+let image: Buffer | undefined
+manager.addHandler({
+	added() {},
+	removed() {},
+	blobReceived: (_, data) => (image = Buffer.from(data)),
+})
+
+manager.connect(camera)
+await waitUntil(() => camera.connected)
+manager.enableBlob(camera)
+console.log(simulator.isExposuring, simulator.isPulsing, simulator.frameType, simulator.frameFormat, simulator.transferFormat, simulator.channels, simulator.cfaPattern) // false false LIGHT MONO FITS 1 RGGB
+console.log(simulator.sensorWidth, simulator.sensorHeight, simulator.imageWidth, simulator.imageHeight, simulator.seeing) // 1280 1024 1280 1024 1.2
+console.log(simulator.noiseQuality, simulator.clampMode, simulator.ampGlowPosition, simulator.catalogSourceType, simulator.telescopeFocalLength, simulator.telescopeAperture) // balanced clamp right RANDOM 500 80
+
+// The frame and the binning are clamped to the sensor. The image is the binned frame.
+simulator.setBin(2, 2)
+simulator.setFrame(0, 0, 400, 300)
+console.log(simulator.imageWidth, simulator.imageHeight) // 200 150
+simulator.setBin(1, 1)
+simulator.setFrame(0, 0, 256, 256)
+
+// The same pixels of the sensor with each frame type. A bias is the offset and the read noise, a flat is a bright field.
+for (const type of ['BIAS', 'DARK', 'LIGHT', 'FLAT'] as const) {
+	image = undefined
+	manager.frameType(camera, type)
+	await Bun.sleep(50)
+	manager.startExposure(camera, 0.1)
+	await waitUntil(() => image !== undefined)
+	console.log(type, statistics(image!, 256 * 256)) // BIAS [ 366.99, 377 ] / DARK [ 367.06, 377 ] / LIGHT [ 367.13, 387 ] / FLAT [ 422.35, 439 ]
+}
+
+// Stars: a denser random field (the seed makes the frame reproducible), written to the vector of the scene.
+image = undefined
+client.sendNumber({ device: simulator.name, name: 'SIMULATOR_SCENE', elements: { STAR_DENSITY: 0.003 } })
+manager.frameType(camera, 'LIGHT')
+await Bun.sleep(50)
+manager.startExposure(camera, 0.1)
+await waitUntil(() => image !== undefined)
+console.log(statistics(image!, 256 * 256)) // [ 367.16, 387 ]
+
+// An exposure from the methods. The header carries the exposure, the binning, the frame type and the sensor temperature.
+image = undefined
+simulator.setBin(2, 2)
+simulator.startExposure(0.5)
+console.log(simulator.isExposuring) // true
+await waitUntil(() => image !== undefined)
+console.log(
+	image!
+		.toString('latin1', 0, 80 * 5)
+		.replace(/ +/g, ' ')
+		.split('\n')[0],
+) // SIMPLE = T / Primary HDU BITPIX = 16 / Bits per data element NAXIS = 2 / Number of axes NAXIS1 = 128 / Fastest changing axis NAXIS2 = 128 / Next to fastest changing axis
+console.log(image!.length) // 37440
+
+// Abort: no image is produced.
+image = undefined
+simulator.startExposure(20)
+simulator.abortExposure()
+console.log(simulator.isExposuring, image) // false undefined
+
+// Cooling, read through the thermometer (whole degrees Celsius). The power is in percent.
+const thermometer = thermometers.get(client, simulator.name)!
+console.log(thermometer.temperature, camera.coolerPower) // 18 0
+simulator.setTargetTemperature(-10)
+client.sendSwitch({ device: simulator.name, name: 'CCD_COOLER', elements: { COOLER_ON: true } })
+await waitUntil(() => thermometer.temperature <= -10)
+console.log(thermometer.temperature, camera.coolerPower) // -10 100
+client.sendSwitch({ device: simulator.name, name: 'CCD_COOLER', elements: { COOLER_OFF: true } })
+await waitUntil(() => camera.coolerPower === 0)
+console.log(camera.coolerPower) // 0
+
+// A pulse on the guide output: pulsing follows the timed guide vector.
+simulator.pulse('NORTH', 300)
+console.log(simulator.isPulsing) // true
+await waitUntil(() => !simulator.isPulsing)
+console.log(simulator.isPulsing) // false
+```
 
 ### INDI Client Simulator
 
@@ -16961,7 +17182,204 @@ heaters.dutyCycle(cover, 25)
 
 ### INDI Dome and Roof
 
+`DomeManager` builds a `Dome` device from the INDI Dome interface and reflects its vectors onto the shared model, which also serves the roll-off roof and the ASCOM dome of the Alpaca backend. Positions are radians in the model (the driver uses degrees) and the speed is in RPM. The state has `slewing`, `moving`, `homing`, `atHome`, `parking`, `parked`, `direction` (`'CLOCKWISE'` or `'COUNTER_CLOCKWISE'` while the continuous motion runs), the capability flags (`canSetAzimuth`, `canSetAltitude`, `canSync`, `canPark`, `canHome`, `canAbort` and the like), `hasShutter` with `shutterState` (`'OPEN'`, `'OPENING'`, `'CLOSED'`, `'CLOSING'`, `'ERROR'` or `'UNKNOWN'`), `slaved`, the `MinMaxValueProperty` objects `azimuth`, `altitude`, `speed`, `homePosition`, `parkPosition` and `autoSyncThreshold`, the backlash settings (`backlashEnabled` and `backlash`, a property in steps) and, when the driver publishes `DOME_MEASUREMENTS`, `hasMeasurements` with `measurements` (`radius`, `shutterWidth`, `northDisplacement`, `eastDisplacement`, `upDisplacement` and `otaOffset` in metres, plus `otaSide`).
+
+Every command is ignored when the driver does not have the matching capability, and the motion commands are also ignored while the dome is slaved to a mount. The commands are `moveTo(dome, azimuth)` and `moveToAltitude(dome, altitude)` (absolute, radians), `moveBy(dome, delta)` (signed relative, radians), `move(dome, direction, enabled)` (continuous motion), `speed(dome, rpm)`, `syncTo(dome, azimuth)` (reports a position without moving), `home`, `park`, `unpark`, `setPark` (the current azimuth becomes the park position), `openShutter`, `closeShutter`, `slave(dome, enabled)` (autosync with the active mount, which needs a driver with `DOME_AUTOSYNC`), `stop`, `backlash(dome, enabled)` and `backlashSteps(dome, steps)`. The snippet uses the dome simulator with a mount manager so that slaving is available (see INDI Dome Simulator).
+
+```ts
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { DomeManager } from 'nebulosa/src/devices/indi/manager/dome'
+import { MountManager } from 'nebulosa/src/devices/indi/manager/mount'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { DomeSimulator } from 'nebulosa/src/devices/indi/simulator/dome'
+
+// Waits until a condition is true, polling every 10 ms.
+async function waitUntil(condition: () => boolean, timeout: number = 5000) {
+	const start = performance.now()
+	while (!condition() && performance.now() - start < timeout) await Bun.sleep(10)
+}
+
+const handler = new IndiClientHandlerSet()
+const mounts = new MountManager()
+const manager = new DomeManager()
+handler.add(mounts)
+handler.add(manager)
+
+using client = new ClientSimulator('dome', handler)
+using simulator = new DomeSimulator('Dome Simulator', client, { mountManager: mounts })
+const dome = manager.get(client, simulator.name)!
+manager.connect(dome)
+await waitUntil(() => dome.connected)
+console.log(dome.type, dome.canSetAzimuth, dome.canSync, dome.canPark, dome.hasShutter, dome.shutterState) // dome true true true true CLOSED
+console.log(toDeg(dome.azimuth.value), dome.speed.value, dome.speed.min, dome.speed.max, toDeg(dome.homePosition.value), toDeg(dome.parkPosition.value)) // 0 6 0.1 12 0 180
+console.log(dome.hasMeasurements, dome.measurements.radius, dome.measurements.shutterWidth) // true 3 1
+
+// Absolute move, in radians. The azimuth follows the driver while the dome slews.
+manager.speed(dome, 12)
+manager.moveTo(dome, deg(30))
+await waitUntil(() => dome.slewing)
+console.log(dome.slewing, dome.moving) // true true
+await waitUntil(() => !dome.slewing)
+console.log(toDeg(dome.azimuth.value)) // 30
+
+// Relative move, signed.
+manager.moveBy(dome, deg(-10))
+await waitUntil(() => dome.slewing)
+await waitUntil(() => !dome.slewing)
+console.log(toDeg(dome.azimuth.value)) // 20
+
+// Sync reports the position without moving.
+manager.syncTo(dome, deg(100))
+await Bun.sleep(50)
+console.log(toDeg(dome.azimuth.value)) // 100
+
+// Continuous motion until it is stopped.
+manager.move(dome, 'CLOCKWISE', true)
+await waitUntil(() => dome.moving)
+console.log(dome.moving, dome.direction) // true CLOCKWISE
+manager.stop(dome)
+await waitUntil(() => !dome.moving)
+console.log(dome.moving) // false
+
+// Home, then the park position, which can be set to the current azimuth.
+manager.home(dome)
+await waitUntil(() => dome.homing)
+await waitUntil(() => !dome.homing)
+console.log(dome.atHome, toDeg(dome.azimuth.value)) // true 0
+manager.syncTo(dome, deg(250))
+await Bun.sleep(50)
+manager.setPark(dome)
+await Bun.sleep(50)
+console.log(toDeg(dome.parkPosition.value)) // 250
+manager.moveTo(dome, deg(200))
+await waitUntil(() => dome.slewing)
+await waitUntil(() => !dome.slewing)
+manager.park(dome)
+await waitUntil(() => dome.parked)
+console.log(dome.parked, toDeg(dome.azimuth.value)) // true 250
+manager.unpark(dome)
+await waitUntil(() => !dome.parked)
+console.log(dome.parked) // false
+
+// The shutter is asynchronous.
+manager.openShutter(dome)
+await waitUntil(() => dome.shutterState === 'OPENING')
+console.log(dome.shutterState) // OPENING
+await waitUntil(() => dome.shutterState === 'OPEN')
+console.log(dome.shutterState) // OPEN
+manager.closeShutter(dome)
+await waitUntil(() => dome.shutterState === 'CLOSED')
+console.log(dome.shutterState) // CLOSED
+
+// Backlash compensation, in steps.
+manager.backlash(dome, true)
+manager.backlashSteps(dome, 20)
+await Bun.sleep(50)
+console.log(dome.backlashEnabled, dome.backlash.value) // true 20
+
+// Slaving follows the active mount, so the motion commands are ignored while it is on.
+manager.slave(dome, true)
+await waitUntil(() => dome.slaved)
+console.log(dome.slaved) // true
+manager.stop(dome)
+await waitUntil(() => !dome.slaved)
+console.log(dome.slaved) // false
+```
+
 ### INDI Dome Simulator
+
+`DomeSimulator(name, client, options?)` simulates a dome controller whose movements and shutter transitions run on a clock (every `TICK_INTERVAL_MS`) from the elapsed wall time, so they are observable through the INDI vectors. The angles are in degrees on the INDI side and the speed is in RPM (6 RPM is the default, from `DOME_MIN_SPEED_RPM` 0.1 to `DOME_MAX_SPEED_RPM` 12, and one RPM is 6°/s). The home azimuth is `DOME_DEFAULT_HOME_AZIMUTH` (0°) and the park azimuth `DOME_DEFAULT_PARK_AZIMUTH` (180°). Absolute moves take the shortest path, relative moves keep the requested direction across 0°, and the shutter takes `DOME_SHUTTER_MOVE_TIME_MS` (1.5 s) to open or close. Park and home are slews to the configured azimuth, and unpark only clears the parked state. The simulator also defines the dome measurements (a radius of 3 m and a shutter width of 1 m), the OTA side and the backlash vectors, which are stored but do not alter the motion.
+
+The optional `mountManager` enables `DOME_AUTOSYNC`: when it is on, the dome follows the azimuth of the telescope named by `ACTIVE_TELESCOPE` (the connected mount that the manager resolves), converted from its equatorial coordinate, its time and its site, and switching it off interrupts the slew it started. The methods `moveTo`, `moveBy`, `syncTo`, `home`, `park`, `unpark`, `setPark`, `openShutter`, `closeShutter`, `stop`, `connect`, `disconnect` and `dispose` are the same actions as the INDI switches and numbers, and the getters `azimuth` (degrees in [0, 360)), `shutterTarget`, `activeMount` and `isMoving` expose the state. `stop` aborts the motion and the shutter and disables the autosync. The vectors that hold a position, the speed, the parameters and the backlash are saved by `CONFIG` (see INDI Client Simulator), and the transient ones (motion, targets, shutter, park) are not.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { DomeManager } from 'nebulosa/src/devices/indi/manager/dome'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { DOME_DEFAULT_HOME_AZIMUTH, DOME_DEFAULT_PARK_AZIMUTH, DOME_DEFAULT_SPEED_RPM, DOME_MAX_SPEED_RPM, DOME_MIN_SPEED_RPM, DOME_SHUTTER_MOVE_TIME_MS } from 'nebulosa/src/devices/indi/simulator/constants'
+import { DomeSimulator } from 'nebulosa/src/devices/indi/simulator/dome'
+
+// Waits until a condition is true, polling every 10 ms.
+async function waitUntil(condition: () => boolean, timeout: number = 5000) {
+	const start = performance.now()
+	while (!condition() && performance.now() - start < timeout) await Bun.sleep(10)
+}
+
+console.log(DOME_DEFAULT_SPEED_RPM, DOME_MIN_SPEED_RPM, DOME_MAX_SPEED_RPM, DOME_DEFAULT_HOME_AZIMUTH, DOME_DEFAULT_PARK_AZIMUTH, DOME_SHUTTER_MOVE_TIME_MS) // 6 0.1 12 0 180 1500
+
+const handler = new IndiClientHandlerSet()
+const manager = new DomeManager()
+handler.add(manager)
+
+using client = new ClientSimulator('dome', handler)
+using simulator = new DomeSimulator('Dome Simulator', client)
+const dome = manager.get(client, simulator.name)!
+manager.connect(dome)
+await waitUntil(() => dome.connected)
+console.log(simulator.azimuth, simulator.isMoving, simulator.shutterTarget, simulator.activeMount === undefined) // 0 false undefined true
+
+// Absolute move at the maximum speed (72 degrees per second at 12 RPM).
+client.sendNumber({ device: simulator.name, name: 'DOME_SPEED', elements: { DOME_SPEED_VALUE: 12 } })
+simulator.moveTo(350)
+await waitUntil(() => simulator.isMoving)
+console.log(simulator.isMoving) // true
+await waitUntil(() => !simulator.isMoving)
+console.log(simulator.azimuth) // 350
+
+// Relative move: +20 degrees crosses 0 and ends at 10.
+simulator.moveBy(20)
+await waitUntil(() => simulator.isMoving)
+await waitUntil(() => !simulator.isMoving)
+console.log(simulator.azimuth) // 10
+
+// Sync reports a position at once, without moving.
+simulator.syncTo(90)
+console.log(simulator.azimuth, simulator.isMoving) // 90 false
+
+// The same actions come as INDI numbers and switches.
+client.sendNumber({ device: simulator.name, name: 'ABS_DOME_POSITION', elements: { DOME_ABSOLUTE_POSITION: 120 } })
+await waitUntil(() => simulator.isMoving)
+await waitUntil(() => !simulator.isMoving)
+console.log(simulator.azimuth) // 120
+
+// Continuous motion, aborted by the abort switch.
+client.sendSwitch({ device: simulator.name, name: 'DOME_MOTION', elements: { DOME_CW: true } })
+await Bun.sleep(300)
+console.log(simulator.azimuth > 120 || simulator.azimuth < 100) // true
+client.sendSwitch({ device: simulator.name, name: 'DOME_ABORT_MOTION', elements: { ABORT: true } })
+await Bun.sleep(100)
+console.log(simulator.isMoving) // false
+
+// Home and park slew to the configured azimuths, and the current one can become the park position.
+simulator.home()
+await waitUntil(() => simulator.isMoving)
+await waitUntil(() => !simulator.isMoving)
+console.log(simulator.azimuth) // 0
+simulator.syncTo(45)
+simulator.setPark()
+simulator.syncTo(300)
+simulator.park()
+await waitUntil(() => simulator.isMoving)
+await waitUntil(() => !simulator.isMoving)
+console.log(simulator.azimuth) // 45
+simulator.unpark()
+console.log(simulator.isMoving) // false
+
+// The shutter transition is timed, and its target is visible meanwhile.
+simulator.openShutter()
+console.log(simulator.shutterTarget, simulator.isMoving) // OPEN true
+await waitUntil(() => !simulator.isMoving)
+console.log(dome.shutterState, simulator.shutterTarget) // OPEN undefined
+simulator.closeShutter()
+await waitUntil(() => !simulator.isMoving)
+console.log(dome.shutterState) // CLOSED
+
+// Disconnecting stops the clock, and dispose also unregisters the device.
+simulator.disconnect()
+await waitUntil(() => !dome.connected)
+console.log(dome.connected) // false
+```
 
 ### INDI Filter Wheel
 
@@ -17364,9 +17782,301 @@ console.log(guide.guideRate, mount.guideRate) // { rightAscension: 0.3, declinat
 
 ### INDI Mount Alignment Subsystem
 
+The INDI Alignment Subsystem is the pointing-model engine that some telescope drivers embed (a database of alignment points and a math plugin that turns it into a coordinate correction). `MountManager` mirrors only what the driver advertises, in `mount.alignment`: `available` (the driver defined `ALIGNMENT_SUBSYSTEM_ACTIVE`), `active` (the logical state of its switch, never the state of the vector), `plugins` (the math plugins of `ALIGNMENT_SUBSYSTEM_MATH_PLUGINS`, each with `name` and `label`, in driver order), `plugin` (the name of the selected one, or `undefined` when none is on) and `pointCount` (`ALIGNMENT_POINTSET_SIZE`, kept as a non-negative integer). It carries neither the alignment points nor the math model, and the state changes only when the driver reports it: a command is never applied optimistically, because the driver may refuse it. The manager targets the element name that the driver defined for the active switch, which INDI spells with spaces, so a driver that renamed it is still commanded.
+
+The commands do nothing while `available` is false. `alignmentActive(mount, active)` turns the subsystem on or off, `alignmentPlugin(mount, plugin)` selects one of `plugins` by name or by element (an unknown plugin is ignored), and `alignmentInitialize` re-initialises the current plugin against the database. The database commands send a pointset action followed by its commit, and re-initialise the plugin afterwards when the database changed: `alignmentDeletePoint(mount, index)` (a 0-based index inside `[0, pointCount)`, which the manager checks because a driver would otherwise delete another entry), `alignmentDeleteLastPoint` (useful to undo a sync, only if the sync did append a point, which not every driver does), `alignmentClear`, `alignmentSave` (without re-initialisation) and `alignmentLoad`. The count is not updated locally; it follows the driver. The mount simulator does not publish this subsystem, so the snippet is the driver side: it announces the mount with a hand-made `DRIVER_INFO`, defines the vectors and prints the commands sent by a recording client.
+
+```ts
+import { type Client, DeviceInterfaceType } from 'nebulosa/src/devices/indi/device'
+import { MountManager } from 'nebulosa/src/devices/indi/manager/mount'
+import { makeNumberVector, makeSwitchVector, makeTextVector } from 'nebulosa/src/devices/indi/types'
+
+// A client that only prints the commands.
+const client: Client = {
+	type: 'INDI',
+	id: 'mount',
+	description: 'Mount',
+	getProperties() {},
+	enableBlob() {},
+	sendText() {},
+	sendNumber: (vector) => console.log('number', vector.name, JSON.stringify(vector.elements)),
+	sendSwitch: (vector) => console.log('switch', vector.name, JSON.stringify(vector.elements)),
+	[Symbol.dispose]() {},
+}
+
+const manager = new MountManager()
+const device = 'Telescope'
+
+// The driver announces itself with the Telescope interface bit, in the DRIVER_INFO text vector.
+manager.textVector(client, makeTextVector(device, 'DRIVER_INFO', 'Driver Info', 'General Info', 'ro', ['DRIVER_INTERFACE', 'Interface', `${DeviceInterfaceType.TELESCOPE}`], ['DRIVER_EXEC', 'Exec', 'telescope'], ['DRIVER_VERSION', 'Version', '1.0'], ['DRIVER_NAME', 'Name', 'Telescope']), 'defTextVector')
+const mount = manager.get(client, device)!
+console.log(mount.alignment.available, mount.alignment.active, mount.alignment.plugin, mount.alignment.pointCount) // false false undefined 0
+
+// Without the subsystem every command is ignored, and nothing is printed.
+manager.alignmentActive(mount, true)
+manager.alignmentClear(mount)
+
+// The driver defines the subsystem: the switch, three math plugins (the first one selected) and a database with 3 points.
+manager.switchVector(client, makeSwitchVector(device, 'ALIGNMENT_SUBSYSTEM_ACTIVE', 'Alignment', 'Alignment Subsystem', 'AtMostOne', 'rw', ['ALIGNMENT SUBSYSTEM ACTIVE', 'Alignment Subsystem Active', false]), 'defSwitchVector')
+manager.switchVector(
+	client,
+	makeSwitchVector(device, 'ALIGNMENT_SUBSYSTEM_MATH_PLUGINS', 'Math plugins', 'Alignment Subsystem', 'OneOfMany', 'rw', ['Inbuilt Math Plugin', 'Inbuilt Math Plugin', true], ['SVD Math Plugin', 'SVD Math Plugin', false], ['Nearest Math Plugin', 'Nearest Math Plugin', false]),
+	'defSwitchVector',
+)
+manager.numberVector(client, makeNumberVector(device, 'ALIGNMENT_POINTSET_SIZE', 'Points', 'Alignment Subsystem', 'ro', ['ALIGNMENT_POINTSET_SIZE', 'Size', 3, 0, 1000, 1, '%.0f']), 'defNumberVector')
+console.log(
+	mount.alignment.available,
+	mount.alignment.active,
+	mount.alignment.plugins.map((e) => e.name),
+	mount.alignment.plugin,
+	mount.alignment.pointCount,
+) // true false ['Inbuilt Math Plugin', 'SVD Math Plugin', 'Nearest Math Plugin'] Inbuilt Math Plugin 3
+
+// Turn it on and pick a plugin by its name. The state follows only when the driver confirms it.
+manager.alignmentActive(mount, true)
+console.log(mount.alignment.active) // false
+manager.alignmentPlugin(mount, 'SVD Math Plugin')
+manager.alignmentPlugin(mount, mount.alignment.plugins[2])
+manager.switchVector(client, makeSwitchVector(device, 'ALIGNMENT_SUBSYSTEM_ACTIVE', 'Alignment', 'Alignment Subsystem', 'AtMostOne', 'rw', ['ALIGNMENT SUBSYSTEM ACTIVE', 'Alignment Subsystem Active', true]), 'setSwitchVector')
+manager.switchVector(
+	client,
+	makeSwitchVector(device, 'ALIGNMENT_SUBSYSTEM_MATH_PLUGINS', 'Math plugins', 'Alignment Subsystem', 'OneOfMany', 'rw', ['Inbuilt Math Plugin', 'Inbuilt Math Plugin', false], ['SVD Math Plugin', 'SVD Math Plugin', false], ['Nearest Math Plugin', 'Nearest Math Plugin', true]),
+	'setSwitchVector',
+)
+console.log(mount.alignment.active, mount.alignment.plugin) // true Nearest Math Plugin
+
+// Database commands: each is an action, its commit and, when the database changed, a re-initialisation.
+manager.alignmentInitialize(mount)
+manager.alignmentDeletePoint(mount, 1)
+manager.alignmentDeleteLastPoint(mount)
+manager.alignmentSave(mount)
+manager.alignmentLoad(mount)
+manager.alignmentClear(mount)
+
+// The count follows the driver.
+manager.numberVector(client, makeNumberVector(device, 'ALIGNMENT_POINTSET_SIZE', 'Points', 'Alignment Subsystem', 'ro', ['ALIGNMENT_POINTSET_SIZE', 'Size', 0, 0, 1000, 1, '%.0f']), 'setNumberVector')
+console.log(mount.alignment.pointCount) // 0
+```
+
 ### INDI Mount Control
 
+`MountManager` builds a `Mount` device from the INDI Telescope interface and reflects its vectors onto the shared model, which also serves the Alpaca telescope. The model has the capability flags (`canPark`, `canSetPark`, `canAbort`, `canSync`, `canGoTo`, `canFlip`, `canHome`, `canFindHome`, `canSetHome`, `canTracking`, `canMove`), the state (`slewing`, `moving`, `tracking`, `homing`, `parking`, `parked`), the `mountType` (`'ALTAZ'`, `'EQ_FORK'` or `'EQ_GEM'`), the `slewRates` with the selected `slewRate`, the `trackModes` with the `trackMode`, the pier side (`hasPierSide`, `canSetPierSide`, `pierSide` as `'EAST'`, `'WEST'` or `'NEITHER'`), the `equatorialCoordinate` (JNOW, radians, `rightAscension` and `declination`), the site (`geographicCoordinate` with the latitude and longitude in radians and the elevation as a distance in AU, like `meter` and `toMeter` convert, with `hasGPS`) and the UTC `time` (epoch milliseconds and the offset in minutes). As a guide output it also carries the pulse-guiding state (see INDI Guide Output) and the `alignment` state belongs to INDI Mount Alignment Subsystem.
+
+The commands send the INDI switches and numbers of the driver. `tracking(mount, enabled)`, `slewRate(mount, rate)` and the four `moveNorth`, `moveSouth`, `moveWest` and `moveEast` (`enabled` true starts the motion at the selected slew rate and false stops it) act on the mount, `trackMode(mount, mode)` selects `'SIDEREAL'`, `'SOLAR'`, `'LUNAR'`, `'KING'` or `'CUSTOM'`, and `stop`, `park`, `unpark`, `setPark`, `home`, `findHome` and `setHome` act on the matching property. Except for tracking, the slew rate and the target coordinate, a command is ignored when the driver does not advertise its capability. The targets are `goTo`, `flipTo` and `syncTo` (`rightAscension` and `declination`, radians, JNOW, sent after the `ON_COORD_SET` mode: `TRACK` is chosen over `SLEW` when the driver offers it) and `equatorialCoordinate(mount, rightAscension, declination)`, which sends only the coordinate and therefore uses the mode that was set last. `moveTo(mount, mode, request, client?, time?)` accepts a target in `'J2000'`, `'JNOW'`, `'ALTAZ'`, `'ECLIPTIC'` or `'GALACTIC'`, given as angles or as strings that the parser understands (hours for a right ascension and a longitude in sexagesimal), converts it to JNOW and dispatches `'goto'`, `'flip'` or `'sync'`. `geographicCoordinate(mount, coordinate)` and `time(mount, time)` set the site and the clock of the driver. The model follows the driver: a command does not change it until the driver reports it, and the position of the vector is republished while the mount moves, so read it after the slew has ended.
+
+The snippet uses the mount simulator with the fastest slew rate selected (see INDI Mount Simulator).
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { MountManager } from 'nebulosa/src/devices/indi/manager/mount'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { MountSimulator } from 'nebulosa/src/devices/indi/simulator/mount'
+import { deg, hour, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+import { meter, toMeter } from 'nebulosa/src/math/units/distance'
+
+// Waits until a condition is true, polling every 10 ms.
+async function waitUntil(condition: () => boolean, timeout: number = 20000) {
+	const start = performance.now()
+	while (!condition() && performance.now() - start < timeout) await Bun.sleep(10)
+}
+
+const handler = new IndiClientHandlerSet()
+const manager = new MountManager()
+handler.add(manager)
+
+using client = new ClientSimulator('mount', handler)
+using simulator = new MountSimulator('Mount Simulator', client)
+const mount = manager.get(client, simulator.name)!
+manager.connect(mount)
+await waitUntil(() => mount.connected)
+console.log(mount.type, mount.mountType, mount.canGoTo, mount.canFlip, mount.canSync, mount.canMove, mount.canHome, mount.canFindHome, mount.canSetHome, mount.canPark, mount.canSetPark, mount.canAbort, mount.hasPierSide) // mount EQ_GEM true true true true true true true true true true true
+console.log(mount.slewRates.map((e) => e.name).join(' '), mount.slewRate, mount.trackModes.join(' '), mount.trackMode, mount.pierSide, mount.parked, mount.tracking) // SPEED_1 SPEED_2 SPEED_3 SPEED_4 SPEED_5 SPEED_6 SPEED_7 SPEED_2 SIDEREAL SOLAR LUNAR KING SIDEREAL NEITHER false false
+
+// Make sure the mount is unparked, start tracking and select the fastest rate.
+manager.unpark(mount)
+await waitUntil(() => !mount.parked)
+manager.tracking(mount, true)
+manager.slewRate(mount, 'SPEED_7')
+await Bun.sleep(100)
+console.log(mount.parked, mount.tracking, mount.slewRate) // false true SPEED_7
+
+// The site and the clock of the driver.
+manager.geographicCoordinate(mount, { latitude: deg(-23), longitude: deg(-46), elevation: meter(760) })
+manager.time(mount, { utc: Date.UTC(2026, 9, 5, 12), offset: -180 })
+await Bun.sleep(100)
+console.log(toDeg(mount.geographicCoordinate.latitude), toDeg(mount.geographicCoordinate.longitude), toMeter(mount.geographicCoordinate.elevation)) // -23 -46 760
+console.log(mount.time) // { utc: 1791201600000, offset: -180 }
+
+// Sync places the mount at a coordinate without moving it. Go to a target near it and wait for the slew to end.
+manager.syncTo(mount, hour(3), deg(20))
+await Bun.sleep(100)
+manager.goTo(mount, hour(3.5), deg(25))
+await waitUntil(() => mount.slewing)
+console.log(mount.slewing) // true
+await waitUntil(() => !mount.slewing)
+console.log(toHour(mount.equatorialCoordinate.rightAscension), toDeg(mount.equatorialCoordinate.declination), mount.pierSide) // 3.5 25 EAST
+
+// A flip goes to the same target on the opposite side of the pier.
+manager.flipTo(mount, hour(3.5), deg(25))
+await waitUntil(() => mount.slewing)
+await waitUntil(() => !mount.slewing)
+console.log(toHour(mount.equatorialCoordinate.rightAscension), toDeg(mount.equatorialCoordinate.declination), mount.pierSide) // 3.5 25 WEST
+
+// The coordinate alone, sent with the mode that was set last (the flip).
+manager.equatorialCoordinate(mount, hour(3.6), deg(26))
+await waitUntil(() => mount.slewing)
+await waitUntil(() => !mount.slewing)
+console.log(toHour(mount.equatorialCoordinate.rightAscension), toDeg(mount.equatorialCoordinate.declination)) // 3.6 26
+
+// A J2000 target given as text is converted to JNOW. Abort the slew on its way.
+manager.moveTo(mount, 'goto', { type: 'J2000', J2000: { x: '05 35 17', y: '-05 23 28' } })
+await waitUntil(() => mount.slewing)
+manager.stop(mount)
+await waitUntil(() => !mount.slewing)
+console.log(mount.slewing) // false
+
+// The track mode and the manual motion, which runs until it is disabled.
+manager.trackMode(mount, 'LUNAR')
+await Bun.sleep(100)
+console.log(mount.trackMode) // LUNAR
+const declination = mount.equatorialCoordinate.declination
+manager.moveNorth(mount, true)
+await Bun.sleep(500)
+manager.moveNorth(mount, false)
+console.log(mount.equatorialCoordinate.declination > declination) // true
+manager.moveSouth(mount, true)
+manager.moveSouth(mount, false)
+manager.moveWest(mount, true)
+manager.moveWest(mount, false)
+manager.moveEast(mount, true)
+manager.moveEast(mount, false)
+
+// Home: go to the stored pose, find the sensor reference, store the current pose.
+manager.home(mount)
+await waitUntil(() => mount.homing)
+console.log(mount.homing) // true
+await waitUntil(() => !mount.homing)
+manager.findHome(mount)
+await waitUntil(() => mount.homing)
+await waitUntil(() => !mount.homing)
+manager.setHome(mount)
+
+// Park goes to the park position, which can be set to the current one.
+manager.setPark(mount)
+manager.park(mount)
+await waitUntil(() => mount.parking)
+console.log(mount.parking) // true
+await waitUntil(() => mount.parked)
+console.log(mount.parked, mount.tracking) // true false
+```
+
 ### INDI Mount Simulator
+
+`MountSimulator(name, client, options?)` simulates an equatorial German mount with a guider interface, which the `MountManager` and the `GuideOutputManager` see as a telescope. The reported coordinate (`rightAscension` and `declination`, radians, JNOW) is what the controller believes and what an INDI client sees; `mechanical` is the true orientation of its axes and `boresight` the direction the optical axis really points, which differ when the error features are on (`pointingState` returns the three at once). It models goto, flip and sync, manual motion at the slew rates `SLEW_RATES` (seven presets, from 0.5° to 32°, `SPEED_2` by default, with an automatic slew running `SLEW_SPEED_FACTOR` (3) times faster than the selected rate), tracking in the `'SIDEREAL'`, `'SOLAR'`, `'LUNAR'` and `'KING'` modes, home (`FIND` acquires the sensor reference, `SET` stores the current pose and `GO` returns to it), park, the site and the clock, and pulse guiding with a guide rate that is a fraction of the sidereal rate (up to `MAX_GUIDE_RATE`, and up to `MAX_QUEUED_GUIDE_PULSES` pulses queued on each axis). The side of the pier follows the placement of the axes: a slew, a flip or a sync decides it.
+
+The imperfections are independent families, switched by `SIMULATOR_ERROR_FEATURES` (`ALIGNMENT`, `PERIODIC_ERROR`, `MECHANICS`, `GUIDING`, `SETTLING`, `FLEXURE`, `WIND` and `TRACKING_RATE`) and configured by their own number vector, and a family that is off is simulated as perfect. `MOUNT_ALIGNMENT` has the polar azimuth and altitude errors, the cone error, the non-orthogonality of the axes and the right ascension and declination index errors (arcseconds; the index errors change what the controller reports and not where the tube looks). `MOUNT_PERIODIC_ERROR` has the worm period (s), the amplitude (arcsec) and the phase (deg), `MOUNT_PEC` the recorded samples and the gain of the playback, `MOUNT_MECHANICS` the backlash and stiction per axis, the take-up rate and the home repeatability, `MOUNT_GUIDING` the latency, its jitter, the minimum pulse, the quantization and a gain per direction, `MOUNT_SETTLING` the overshoot, the frequency and the damping of the ring-down after a stop, `MOUNT_FLEXURE` the tube flexure and the offsets of the west side of the pier, `MOUNT_WIND` the amplitude and the correlation time of the deflection, and `MOUNT_TRACKING_RATE` the bias, the temperature coefficient, the temperature and the random walk of the rate. `MOUNT_AUTO_MERIDIAN_FLIP` with `MOUNT_MERIDIAN_FLIP_SETTINGS` makes the controller flip by itself at an hour angle; it is off by default so that a sequencer owns the flip. `pointingModel` is the optical model that the geometric errors define, `pointingErrorBound` an upper bound in radians of how far the errors can move the optical axis, and `wormPhase` (radians in [0, 2π)) and `trackingRateOffset` (radians) the accumulated worm turn and rate drift. `sampleBoresightTrajectory`, `sampleBoresightPath` and `boresightPathLength` read the recorded history of the boresight on the simulated clock, which a camera simulator uses to trail the stars of an exposure.
+
+The simulated clock `utcTime` (milliseconds since the epoch) advances with the real-time tick, and `setTime` replaces it. `pauseAutomaticTicking` stops that tick so that a test drives the mount with `advance(seconds)`, which makes every boundary deterministic and is what the snippet does. The methods are the same actions as the INDI switches and numbers (`goTo`, `flipTo`, `syncTo`, `home`, `findHome`, `setHome`, `park`, `unpark`, `setPark`, `setTrackingEnabled`, `setTrackMode`, `setSlewRate`, `setGuideRate`, `moveNorth`, `moveSouth`, `moveWest`, `moveEast`, `pulse`, `stop`, `connect`, `disconnect` and `dispose`), and the getters `isParked`, `isTracking`, `isHoming`, `isSlewing`, `isParking` and `isPulsing` follow the vectors. The site getters `longitude` and `latitude` are radians and `elevation` is a distance in AU, like the model of the manager (see INDI Mount Control). The vectors of the site, the rates and the error families are saved by `CONFIG` (see INDI Client Simulator).
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { MAX_GUIDE_RATE, MAX_QUEUED_GUIDE_PULSES, SLEW_RATES, SLEW_SPEED_FACTOR } from 'nebulosa/src/devices/indi/simulator/constants'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { MountSimulator } from 'nebulosa/src/devices/indi/simulator/mount'
+import { deg, hour, normalizeAngle, toArcsec, toDeg, toHour } from 'nebulosa/src/math/units/angle'
+import { toMeter } from 'nebulosa/src/math/units/distance'
+
+console.log(SLEW_RATES.map((e) => e.name).join(' '), SLEW_SPEED_FACTOR, MAX_GUIDE_RATE, MAX_QUEUED_GUIDE_PULSES) // SPEED_1 SPEED_2 SPEED_3 SPEED_4 SPEED_5 SPEED_6 SPEED_7 3 1 8
+
+const handler = new IndiClientHandlerSet()
+using client = new ClientSimulator('mount', handler)
+using simulator = new MountSimulator('Mount Simulator', client)
+
+// Connect, then take over the clock so that every step is explicit.
+simulator.connect()
+simulator.pauseAutomaticTicking()
+console.log(simulator.slewRate, simulator.isParked, simulator.isTracking, simulator.trackMode, simulator.pierSide) // SPEED_2 false false SIDEREAL NEITHER
+
+// The clock and the site. The vector uses degrees, and the getters radians and AU.
+simulator.setTime({ utc: Date.UTC(2026, 9, 5, 0), offset: 0 })
+client.sendNumber({ device: simulator.name, name: 'GEOGRAPHIC_COORD', elements: { LAT: -23, LONG: 314, ELEV: 760 } })
+console.log(simulator.utcTime, toDeg(simulator.latitude), toDeg(simulator.longitude), toMeter(simulator.elevation)) // 1791158400000 -23 314 760
+console.log(simulator.siderealTimeAt(simulator.utcTime)) // 5.7192
+
+// Sync places the axes, so the pier side is decided there. Then a goto at the fifth slew rate, step by step.
+simulator.syncTo(hour(3), deg(20))
+simulator.setTrackingEnabled(true)
+simulator.setSlewRate('SPEED_5')
+console.log(simulator.isTracking, simulator.pierSide, toHour(simulator.rightAscension)) // true WEST 3
+simulator.goTo(hour(4), deg(30))
+let elapsed = 0
+while (simulator.isSlewing) {
+	simulator.advance(0.1)
+	elapsed += 0.1
+}
+console.log(elapsed, toHour(simulator.rightAscension), toDeg(simulator.declination)) // 0.7 4 30
+
+// A flip reaches the same coordinate from the other side of the pier.
+simulator.flipTo(hour(4), deg(30))
+while (simulator.isSlewing) simulator.advance(0.1)
+console.log(simulator.pierSide) // EAST
+
+// The worm of the right ascension turns once per period while tracking: 120 s of a 480 s period is a quarter of a turn, in [0, 2 pi).
+const phase = simulator.wormPhase
+simulator.advance(120)
+console.log(normalizeAngle(simulator.wormPhase - phase)) // 1.5707963267948966
+
+// A pulse of 1 s at half of the sidereal rate (about 7.5 arcseconds per second) moves the declination by that angle.
+simulator.setGuideRate(0.5, 0.5)
+const declination = simulator.declination
+simulator.pulse('NORTH', 1000)
+console.log(simulator.isPulsing) // true
+for (let i = 0; i < 30; i++) simulator.advance(0.1)
+console.log(toArcsec(simulator.declination - declination), simulator.isPulsing) // 7.5205 false
+
+// The error features are off, so the optical axis is where the controller says. Turn two families on.
+console.log(toArcsec(simulator.pointingErrorBound)) // 0
+client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { ALIGNMENT: true, PERIODIC_ERROR: true } })
+const { reported, boresight } = simulator.pointingState
+console.log(toArcsec(boresight.declination - reported.declination), toArcsec(boresight.rightAscension - reported.rightAscension)) // -226.7 -227.5
+console.log(toArcsec(simulator.pointingErrorBound), simulator.trackingRateOffset) // 680.41 0
+
+// The recorded path of the optical axis over the last 5 s: 5 samples of right ascension and declination, in radians.
+const samples = new Float64Array(10)
+const count = simulator.sampleBoresightTrajectory(simulator.utcTime - 5000, simulator.utcTime, 5, samples)
+console.log(count, samples.slice(0, 4)) // 5 Float64Array(4) [1.0471975511965976, 0.5235987755982988, 1.0471975511965976, 0.5235987755982988]
+console.log(toArcsec(simulator.boresightPathLength(simulator.utcTime - 5000, simulator.utcTime))) // 7.5205
+
+// Home, the sensor search and the store of the pose, then park.
+simulator.home()
+while (simulator.isHoming) simulator.advance(0.5)
+console.log(toHour(simulator.rightAscension), toDeg(simulator.declination)) // 21.8856 90
+simulator.findHome()
+while (simulator.isHoming) simulator.advance(0.5)
+simulator.setHome()
+simulator.setPark()
+simulator.park()
+console.log(simulator.isParking) // true
+while (simulator.isParking) simulator.advance(0.5)
+console.log(simulator.isParked, simulator.isTracking) // true false
+simulator.unpark()
+console.log(simulator.isParked) // false
+
+// Manual motion until it is stopped, another track mode, and the abort.
+simulator.moveNorth(true)
+simulator.advance(2)
+simulator.moveNorth(false)
+simulator.moveSouth(true)
+simulator.moveSouth(false)
+simulator.moveWest(true)
+simulator.moveWest(false)
+simulator.moveEast(true)
+simulator.moveEast(false)
+simulator.setTrackMode('KING')
+console.log(simulator.trackMode) // KING
+simulator.stop()
+simulator.disconnect()
+```
 
 ### INDI Power Channels
 
@@ -17967,11 +18677,178 @@ client.sendSwitch({ device: simulator.name, name: 'WEATHER_REFRESH', elements: {
 
 ### Buffer Byte I/O
 
+`BufferSource` reads from a fixed `Buffer` and `BufferSink` writes into one, both through a `position` cursor (bytes from the start) that is public and can be assigned. They are the in-memory implementations of `Source` and `Sink` (see Byte-Stream Contracts), are `Seekable` and `Exhaustible`, and their synchronous and asynchronous methods are the same function. `bufferSource(buffer)` and `bufferSink(buffer)` create them. A read copies at most the remaining bytes and returns `0` at the end. A write copies as much as fits: the buffer does not grow, so the returned count is smaller than the request when the buffer is full, and it is the number of bytes written for a string (decoded with the encoding, `utf8` by default). `seek(position)` clamps the position to the buffer length and treats a negative value as an offset from the end (`-1` is the last byte), and it always returns `true`. Nothing is copied except the bytes of each call. The buffer is shared, not duplicated, so a change to it is visible to the source or sink.
+
+```ts
+import { bufferSink, bufferSource } from 'nebulosa/src/io/io'
+
+const source = bufferSource(Buffer.from('Nebulosa 2026'))
+console.log(source.position, source.exhausted) // 0 false
+
+// Read into the start of a buffer, then into an offset with a limited size.
+const chunk = Buffer.alloc(8)
+console.log(source.readSync(chunk), chunk.toString()) // 8 Nebulosa
+console.log(source.readSync(chunk, 2, 3), chunk.toString('latin1', 0, 5)) // 3 Ne 20
+console.log(source.position, source.exhausted) // 11 false
+
+// Seek from the start, from the end (negative) and to the end. The position is clamped.
+source.seek(0)
+console.log(await source.read(chunk, 0, 4), chunk.toString('latin1', 0, 4)) // 4 Nebu
+source.seek(-4)
+console.log(source.position, await source.read(chunk), chunk.toString('latin1', 0, 4)) // 9 4 2026
+console.log(source.exhausted, await source.read(chunk)) // true 0
+source.seek(1000)
+console.log(source.position) // 13
+
+// The sink writes into a fixed buffer, from strings or buffers, with offset and size.
+const target = Buffer.alloc(16, '.')
+const sink = bufferSink(target)
+console.log(sink.write('Hello'), sink.position) // 5 5
+console.log(sink.writeSync(Buffer.from('-world!'), 1, 4), sink.position) // 4 9
+console.log(sink.writeSync('abcdef', 2, 3), sink.position) // 3 12
+console.log(sink.writeSync('c3a9', 0, undefined, 'hex'), sink.position) // 2 14
+console.log(target.toString('latin1')) // HelloworlcdeÃ©..
+
+// Seek back to overwrite, and a write at the end stops at the end of the buffer.
+sink.seek(0)
+sink.writeSync('H')
+sink.seek(-2)
+console.log(sink.writeSync('XYZ'), sink.position, sink.exhausted) // 2 16 true
+console.log(target.toString('latin1')) // HelloworlcdeÃ©XY
+```
+
 ### Byte Reading, Writing, and Transfer
+
+The helpers of `src/io/io.ts` build the usual byte loops on top of the `Source` and `Sink` contracts (see Byte-Stream Contracts), so they work with any adapter. `readUntil(source, buffer, size?, offset?)` and `readUntilSync` keep reading until `size` bytes (by default the length of the buffer) were read or the source returns `0`, and return the number of bytes read, which is smaller than `size` only at the end of the input. `writeFully(sink, buffer, size?, offset?)` and `writeFullySync` retry the short writes of a sink until every byte was accepted, and return `size`. `readRemaining(source)` reads to the end with a 64 KiB working buffer and returns all the bytes as one new `Buffer`, so it materializes the whole input. `sourceTransferToSink(source, sink, size?)` copies everything from a source to a sink with one reusable transfer buffer (a size in bytes, 1024 by default, or a buffer of the caller) and returns the number of bytes copied, stopping when the source ends or when the sink accepts nothing. A sink that stalls in the middle of a write, or that reports an impossible count, makes the loops throw instead of spinning, and a transfer to a sink without room for the whole block throws too. The helpers do not seek and do not close anything.
+
+```ts
+import { bufferSink, bufferSource, readRemaining, readUntil, readUntilSync, sourceTransferToSink, writeFully, writeFullySync } from 'nebulosa/src/io/io'
+import type { Sink } from 'nebulosa/src/io/types'
+
+// A sink that accepts at most 4 bytes per write, like a slow transport.
+class SlowSink implements Sink {
+	readonly chunks: string[] = []
+
+	write(chunk: string | Buffer, offset: number = 0, size?: number) {
+		const buffer = Buffer.from(chunk as Buffer)
+		const n = Math.min(4, size ?? buffer.byteLength - offset)
+		this.chunks.push(buffer.toString('latin1', offset, offset + n))
+		return n
+	}
+
+	writeSync(chunk: string | Buffer, offset?: number, size?: number) {
+		return this.write(chunk, offset, size)
+	}
+}
+
+// readUntil fills the buffer, or what is left of the input.
+const source = bufferSource(Buffer.from('0123456789abcdefghij'))
+const buffer = Buffer.alloc(8)
+console.log(await readUntil(source, buffer), buffer.toString()) // 8 01234567
+console.log(readUntilSync(source, buffer, 4, 2), buffer.toString('latin1', 2, 6)) // 4 89ab
+console.log(await readUntil(source, buffer), buffer.toString('latin1', 0, 8)) // 8 cdefghij
+console.log(await readUntil(source, buffer)) // 0
+
+// A sink with short writes receives the data in pieces, and writeFully reports the whole size.
+const slow = new SlowSink()
+console.log(await writeFully(slow, Buffer.from('nebulosa-docs')), slow.chunks) // 13 [ "nebu", "losa", "-doc", "s" ]
+const slowSync = new SlowSink()
+console.log(writeFullySync(slowSync, Buffer.from('abcdefghij'), 6, 2), slowSync.chunks) // 6 [ "cdef", "gh" ]
+
+// readRemaining returns the rest of the source as one buffer.
+const text = bufferSource(Buffer.from('first line\nsecond line'))
+text.seek(11)
+console.log((await readRemaining(text)).toString()) // second line
+
+// A transfer copies from a source to a sink in blocks of the given size.
+const input = bufferSource(Buffer.from('The quick brown fox jumps over the lazy dog'))
+const output = Buffer.alloc(64)
+const sink = bufferSink(output)
+console.log(await sourceTransferToSink(input, sink, 16), output.toString('latin1', 0, sink.position)) // 43 The quick brown fox jumps over the lazy dog
+
+// With a transfer buffer of the caller.
+const input2 = bufferSource(Buffer.from('0123456789'))
+const small = bufferSink(Buffer.alloc(10))
+console.log(await sourceTransferToSink(input2, small, Buffer.alloc(3)), small.position) // 10 10
+```
 
 ### Byte Shuffling
 
 ### Byte-Stream Contracts
+
+`src/io/types.ts` holds the small interfaces that every byte reader and writer of the toolkit implements, plus a runtime guard for each capability. A `Source` has `read(buffer, offset?, size?)`, which copies up to `size` bytes into `buffer` at `offset` and resolves to the number of bytes copied, with `0` at the end of the input, and `readSync`, its synchronous counterpart. A `Sink` has `write(chunk, offset?, size?, encoding?)`, which accepts a `Buffer` or a string (decoded with `encoding`) and returns the number of bytes consumed, and `writeSync`. The results of `read` and `write` may be a number or a promise, so callers `await` them. A source or sink backed by an asynchronous transport throws in its synchronous method, and the synchronous and asynchronous calls of one object share a single cursor, so they must not run at the same time.
+
+The optional capabilities are separate interfaces: `Seekable` (`position` in bytes and `seek(position)`, which returns `false` when the move is rejected), `Exhaustible` (`exhausted` is true once everything was consumed) and `Flushable` (`flush()`). `isSeekable`, `isExhaustible` and `isFlushable` check an object at runtime, so generic code can use a capability only when the object has it. A short read is allowed: a source may return fewer bytes than requested without being at the end, which is why the helpers in Byte Reading, Writing, and Transfer loop until the request is satisfied. The concrete adapters are described in Buffer Byte I/O, File-Handle Byte I/O, ReadableStream Byte Sources and HTTP Range Byte Sources.
+
+```ts
+import { bufferSink, bufferSource } from 'nebulosa/src/io/io'
+import { isExhaustible, isFlushable, isSeekable, type Sink, type Source } from 'nebulosa/src/io/types'
+
+// A source of the bytes of a counter that hands out at most 3 bytes per read (a short read).
+class CounterSource implements Source {
+	#next = 0
+
+	constructor(readonly total: number) {}
+
+	read(buffer: Buffer, offset: number = 0, size: number = buffer.byteLength - offset) {
+		const n = Math.min(size, 3, this.total - this.#next)
+		for (let i = 0; i < n; i++) buffer[offset + i] = this.#next++
+		return n
+	}
+
+	readSync(buffer: Buffer, offset?: number, size?: number) {
+		return this.read(buffer, offset, size)
+	}
+}
+
+// A sink that only counts the bytes that it receives.
+class CountingSink implements Sink {
+	bytes = 0
+
+	write(chunk: string | Buffer, offset: number = 0, size?: number, encoding?: BufferEncoding) {
+		const n = typeof chunk === 'string' ? Buffer.byteLength(chunk.slice(offset, size === undefined ? undefined : offset + size), encoding) : (size ?? chunk.byteLength - offset)
+		this.bytes += n
+		return n
+	}
+
+	writeSync(chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
+		return this.write(chunk, offset, size, encoding)
+	}
+}
+
+// The guards tell which capabilities an object has.
+const counter = new CounterSource(8)
+const counting = new CountingSink()
+const memory = bufferSource(Buffer.from('nebulosa'))
+console.log(isSeekable(counter), isExhaustible(counter), isFlushable(counter)) // false false false
+console.log(isSeekable(memory), isExhaustible(memory), isFlushable(memory)) // true true false
+console.log(isSeekable(counting), isSeekable(bufferSink(Buffer.alloc(4)))) // false true
+
+// A short read: asking for 8 bytes returns 3.
+const buffer = Buffer.alloc(8)
+const n = counter.readSync(buffer)
+console.log(n, buffer) // 3 <Buffer 00 01 02 00 00 00 00 00>
+
+// Source and sink are used through the interfaces: copy the rest of the counter into the counting sink.
+let total = await counting.write(buffer, 0, n)
+while (true) {
+	const m = await counter.read(buffer)
+	if (m === 0) break
+	total += await counting.write(buffer, 0, m)
+}
+console.log(total, counting.bytes) // 8 8
+
+// Strings are accepted by a sink with the encoding of the source text.
+console.log(counting.writeSync('olá', 0, undefined, 'utf8'), counting.bytes) // 4 12
+
+// Seekable and exhaustible are used through the guards.
+if (isSeekable(memory) && isExhaustible(memory)) {
+	memory.seek(-3)
+	console.log(memory.position, memory.exhausted) // 5 false
+	memory.seek(8)
+	console.log(memory.position, memory.exhausted) // 8 true
+}
+```
 
 ### CRC Checksums
 
@@ -17980,6 +18857,57 @@ client.sendSwitch({ device: simulator.name, name: 'WEATHER_REFRESH', elements: {
 ### Deflate Compression
 
 ### File-Handle Byte I/O
+
+`FileHandleSource` and `FileHandleSink` (`src/io/file.ts`) adapt a `FileHandle` of `fs/promises` to the `Source` and `Sink` contracts (see Byte-Stream Contracts). Each keeps its own `position` cursor in bytes and reads or writes at that explicit offset, so the file offset of the descriptor does not matter, and `seek(position)` accepts any non-negative position and returns `false` for a negative one (there is no seek from the end). The asynchronous methods use the handle and the synchronous ones (`readSync`, `writeSync`) use its file descriptor with the same cursor, so they can be interleaved as long as they run one after the other. The adapters take ownership of the handle: `close()`, `closeSync()` and the `await using` and `using` disposal close it, and `fileHandleSource(handle)` and `fileHandleSink(handle)` create them. A read returns `0` at the end of the file, and a write returns the bytes written, which is the byte length of the text for a string. They are not `Exhaustible`, so the end of a file is only seen as a read of `0`. The snippet works on a temporary file.
+
+```ts
+import { mkdtemp, open, rm } from 'fs/promises'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { fileHandleSink, fileHandleSource } from 'nebulosa/src/io/file'
+import { readRemaining, sourceTransferToSink } from 'nebulosa/src/io/io'
+
+const directory = await mkdtemp(join(tmpdir(), 'nebulosa-io-'))
+const path = join(directory, 'data.txt')
+
+// Write text and bytes sequentially, mixing async and sync calls on the same cursor.
+{
+	await using sink = fileHandleSink(await open(path, 'w'))
+	console.log(await sink.write('Nebulosa'), sink.position) // 8 8
+	console.log(sink.writeSync(Buffer.from(' toolkit!'), 0, 8), sink.position) // 8 16
+	console.log(await sink.write('-- ignored --', 3, 5), sink.position) // 5 21
+
+	// Seek back and overwrite the first letter. A negative position is rejected and does not move the cursor.
+	console.log(sink.seek(0), sink.seek(-1), sink.position) // true false 0
+	console.log(sink.writeSync('n'), sink.position) // 1 1
+}
+
+// Read it back, with explicit positions.
+{
+	await using source = fileHandleSource(await open(path, 'r'))
+	const buffer = Buffer.alloc(8)
+	console.log(await source.read(buffer), buffer.toString(), source.position) // 8 nebulosa 8
+	console.log(source.readSync(buffer, 0, 4), buffer.toString('latin1', 0, 4), source.position) // 4  too 12
+	console.log(source.seek(2), source.readSync(buffer, 4, 3), buffer.toString('latin1', 4, 7)) // true 3 bul
+	source.seek(0)
+	console.log((await readRemaining(source)).toString()) // nebulosa toolkitignor
+	console.log(await source.read(buffer)) // 0
+}
+
+// A copy between files with the transfer helper, and a synchronous disposal.
+const copy = join(directory, 'copy.txt')
+{
+	await using source = fileHandleSource(await open(path, 'r'))
+	using sink = fileHandleSink(await open(copy, 'w'))
+	console.log(await sourceTransferToSink(source, sink, 4)) // 21
+}
+{
+	using source = fileHandleSource(await open(copy, 'r'))
+	console.log(source.readSync(Buffer.alloc(32))) // 21
+}
+
+await rm(directory, { recursive: true })
+```
 
 ### FITS Containers and HDUs
 
@@ -17991,15 +18919,145 @@ client.sendSwitch({ device: simulator.name, name: 'WEATHER_REFRESH', elements: {
 
 ### Growable Binary Buffers
 
+`GrowableBuffer` (`src/io/io.ts`) assembles small binary records without knowing their size in advance. It starts with the given capacity in bytes (1024 by default, at least 1), doubles it whenever a write does not fit, and keeps a write position that `length` reports in bytes. The writers cover signed and unsigned integers of 8 bits (`writeInt8`, `writeUInt8`), of 16 bits (`writeInt16LE`, `writeUInt16LE`, `writeInt16BE`, `writeUInt16BE`) and of 32 bits (`writeInt32LE`, `writeUInt32LE`, `writeInt32BE`, `writeUInt32BE`), each appended at the end, and they follow the rules of `Buffer` for the range of the value. There is no writer for strings or floating-point numbers. `toBuffer()` returns a view of the written region (not a copy, so the next write or `reset` changes it and a growth leaves it pointing to the old storage), `toString(trim?, encoding?)` decodes it, and the `trim` option removes the leading and trailing bytes up to 0x20 (spaces, line feeds and zero bytes) from the result. `reset()` rewinds to the beginning without freeing the storage so the same buffer serves many records.
+
+```ts
+import { GrowableBuffer } from 'nebulosa/src/io/io'
+
+// A tiny initial capacity grows by doubling.
+const buffer = new GrowableBuffer(4)
+console.log(buffer.length) // 0
+
+buffer.writeUInt8(0xca)
+buffer.writeInt8(-2)
+buffer.writeUInt16BE(0x0102)
+buffer.writeUInt16LE(0x0102)
+console.log(buffer.length, buffer.toBuffer()) // 6 <Buffer ca fe 01 02 02 01>
+
+buffer.writeInt16BE(-2)
+buffer.writeInt16LE(-2)
+buffer.writeUInt32BE(0xdeadbeef)
+buffer.writeUInt32LE(0xdeadbeef)
+buffer.writeInt32BE(-1)
+buffer.writeInt32LE(-2)
+console.log(buffer.length, buffer.toBuffer().toString('hex')) // 26 cafe01020201fffefeffdeadbeefefbeaddefffffffffeffffff
+
+// The view reads the values back.
+const view = buffer.toBuffer()
+console.log(view.readUInt8(0), view.readInt8(1), view.readUInt16BE(2), view.readUInt16LE(4), view.readUInt32BE(10)) // 202 -2 258 258 3735928559
+
+// Text: the bytes written one by one, with and without trimming.
+const text = new GrowableBuffer()
+for (const c of '  FITS card \n\0') text.writeUInt8(c.charCodeAt(0))
+console.log(JSON.stringify(text.toString()), JSON.stringify(text.toString(true)), text.toBuffer(true)) // "  FITS card \n\u0000" "FITS card" <Buffer 46 49 54 53 20 63 61 72 64>
+console.log(text.toString(false, 'hex')) // 2020464954532063617264200a00
+
+// Reset rewinds, and the storage is reused for the next record.
+text.reset()
+console.log(text.length, JSON.stringify(text.toString())) // 0 ""
+for (const c of 'SIMPLE') text.writeUInt8(c.charCodeAt(0))
+console.log(text.length, text.toString()) // 6 SIMPLE
+```
+
 ### HTTP Range Byte Sources
 
 ### JPEG via TurboJPEG
 
 ### ReadableStream Byte Sources
 
+`ReadableStreamSource` adapts a web `ReadableStream<Uint8Array>` (a `fetch` body, a `Blob` stream, `Bun.file(...).stream()`) to the `Source` contract (see Byte-Stream Contracts), created with `readableStreamSource(stream)`. It takes the lock of a reader, pulls one chunk at a time, serves the reads from that chunk and asks for the next one when it is consumed, so memory use is one chunk and a read can return fewer bytes than requested. Zero-length chunks are skipped, and the end of the stream is a read of `0`. The source is not seekable and has no synchronous read (`readSync` throws), so only the asynchronous `read` and the helpers of Byte Reading, Writing, and Transfer are used. `close()` and the `await using` disposal release the reader and cancel the stream, which stops an unfinished download.
+
+```ts
+import { readRemaining, readUntil, readableStreamSource, sourceTransferToSink, bufferSink } from 'nebulosa/src/io/io'
+
+// A stream of three chunks with an empty one in the middle.
+function chunks(...parts: string[]) {
+	return new ReadableStream<Uint8Array>({
+		start(controller) {
+			for (const part of parts) controller.enqueue(Buffer.from(part))
+			controller.close()
+		},
+	})
+}
+
+// A read returns at most what is left of the current chunk.
+{
+	await using source = readableStreamSource(chunks('abcd', '', 'efghij'))
+	const buffer = Buffer.alloc(8)
+	console.log(await source.read(buffer, 0, 3), buffer.toString('latin1', 0, 3)) // 3 abc
+	console.log(await source.read(buffer, 3, 8), buffer.toString('latin1', 3, 4)) // 1 d
+	console.log(await source.read(buffer, 4, 4), buffer.toString('latin1', 4, 8)) // 4 efgh
+	console.log(await source.read(buffer, 0, 8)) // 2
+}
+
+// readUntil joins the chunks to fill the buffer, and readRemaining returns everything.
+{
+	await using source = readableStreamSource(chunks('Neb', 'ulo', 'sa'))
+	const buffer = Buffer.alloc(5)
+	console.log(await readUntil(source, buffer), buffer.toString()) // 5 Nebul
+	console.log((await readRemaining(source)).toString()) // osa
+}
+
+// Copy a stream of bytes to a buffer in blocks.
+{
+	await using source = readableStreamSource(chunks('0123', '4567', '89'))
+	const output = Buffer.alloc(16)
+	const sink = bufferSink(output)
+	console.log(await sourceTransferToSink(source, sink, 3), output.toString('latin1', 0, sink.position)) // 10 0123456789
+}
+
+// A body of a Response is a stream too. Closing before the end cancels the rest.
+{
+	const response = new Response('stellar data from a response')
+	await using source = readableStreamSource(response.body!)
+	const buffer = Buffer.alloc(7)
+	console.log(await readUntil(source, buffer), buffer.toString()) // 7 stellar
+}
+```
+
 ### Streaming Base64
 
 ### Streaming Text Lines
+
+`readLines(source, chunkSize, options?)` is an async generator that yields the lines of any `Source` (see Byte-Stream Contracts) without loading it whole: it reads `chunkSize` bytes at a time, splits on the line feed (`0x0A`) and joins the lines that cross a chunk boundary, so the memory is one chunk plus the longest line. A carriage return stays at the end of a line (CRLF text yields lines that end in `\r`), the text is decoded with `utf8` unless `options.encoding` is `'ascii'` (or `'utf8'`/`'utf-8'`), and `options.emptyLines` (true by default) tells whether empty lines are yielded. A multi-byte character that crosses a chunk is decoded correctly because the line is assembled as bytes before decoding. When the input ends without a line feed the last partial line is yielded, and when it ends with one a final empty line is yielded as well (unless `emptyLines` is false). The generator reads through `read`, so it works with sources of files, memory, streams and HTTP ranges.
+
+```ts
+import { bufferSource, readLines, readableStreamSource } from 'nebulosa/src/io/io'
+
+async function collect(lines: AsyncGenerator<string>) {
+	const output: string[] = []
+	for await (const line of lines) output.push(line)
+	return output
+}
+
+// A small chunk size makes lines cross the chunk boundaries.
+const text = 'alpha\nbeta\n\ngamma\ndelta'
+console.log(await collect(readLines(bufferSource(Buffer.from(text)), 4))) // [ "alpha", "beta", "", "gamma", "delta" ]
+console.log(await collect(readLines(bufferSource(Buffer.from(text)), 1024))) // [ "alpha", "beta", "", "gamma", "delta" ]
+
+// Empty lines can be skipped. A trailing line feed yields a final empty line unless they are skipped.
+console.log(await collect(readLines(bufferSource(Buffer.from(text + '\n')), 8))) // [ "alpha", "beta", "", "gamma", "delta", "" ]
+console.log(await collect(readLines(bufferSource(Buffer.from(text + '\n')), 8, { emptyLines: false }))) // [ "alpha", "beta", "gamma", "delta" ]
+
+// CRLF keeps the carriage return, which the caller trims.
+console.log(await collect(readLines(bufferSource(Buffer.from('one\r\ntwo\r\n')), 5))) // [ "one\r", "two\r", "" ]
+
+// Multi-byte characters across the chunks are decoded whole.
+console.log(await collect(readLines(bufferSource(Buffer.from('café\nnoël')), 4))) // [ "café", "noël" ]
+console.log(await collect(readLines(bufferSource(Buffer.from('plain\ntext')), 3, { encoding: 'ascii' }))) // [ "plain", "text" ]
+
+// A stream source works the same, here a CSV body that is read line by line.
+const stream = new ReadableStream<Uint8Array>({
+	start(controller) {
+		controller.enqueue(Buffer.from('name,mag\nVe'))
+		controller.enqueue(Buffer.from('ga,0.03\nSiri'))
+		controller.enqueue(Buffer.from('us,-1.46\n'))
+		controller.close()
+	},
+})
+await using source = readableStreamSource(stream)
+for await (const line of readLines(source, 16, { emptyLines: false })) console.log(line.split(',')) // [ "name", "mag" ] / [ "Vega", "0.03" ] / [ "Sirius", "-1.46" ]
+```
 
 ### XISF Containers and Metadata
 
