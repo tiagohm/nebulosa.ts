@@ -18641,7 +18641,117 @@ client.sendSwitch({ device: simulator.name, name: 'WEATHER_REFRESH', elements: {
 
 ### Close Approach Data
 
+`closeApproaches(dateMin?, dateMax?, distance?)` (`src/adapters/orbits/sbd.ts`) queries the close-approach data service (`cad.api`, with the full name and the diameter requested and without restricting to near-Earth objects) for the approaches of small bodies to the Earth in a date interval and returns `{ signature, count, fields, data }`. `dateMin` is a Unix millisecond timestamp, or `'now'` or nothing for the current time, `dateMax` is a timestamp or a relative span `'${n}d'` of days after `dateMin` (`'7d'` by default) and `distance` is the largest nominal approach distance in lunar distances (10 by default); the dates are sent as `YYYY-MM-DD` (UTC). `fields` names the columns, which the service gives as `des`, `orbit_id`, `jd`, `cd`, `dist` (nominal distance in AU), `dist_min` and `dist_max` (AU), `v_rel` and `v_inf` (km/s), `t_sigma_f`, `h` (absolute magnitude), `diameter` and `diameter_sigma` (km) and `fullname`, and `data` has one array of strings per approach in that order. The result is normalized so that `fields` and `data` are empty arrays when the service finds nothing and omits them. The values are text as published; the call does not parse numbers or check the HTTP status. The snippet replaces `fetch` by a local stand-in that records the address and returns two rows, so it does not use the network.
+
+```ts
+import { closeApproaches, CLOSE_APPROACHES_PATH, SBD_BASE_URL } from 'nebulosa/src/adapters/orbits/sbd'
+
+// A local stand-in for the service: two approaches, and a result without rows for a very small distance.
+const addresses: string[] = []
+globalThis.fetch = (async (input: string | URL | Request) => {
+	addresses.push(input.toString())
+	const signature = { version: '1.5', source: 'NASA/JPL SBDB Close Approach Data API' }
+	if (new URL(addresses.at(-1)!).searchParams.get('dist-max') === '0.01LD') return Response.json({ signature, count: 0 })
+	return Response.json({
+		signature,
+		count: 2,
+		fields: ['des', 'orbit_id', 'jd', 'cd', 'dist', 'dist_min', 'dist_max', 'v_rel', 'v_inf', 't_sigma_f', 'h', 'diameter', 'diameter_sigma', 'fullname'],
+		data: [
+			['2026 TA', '12', '2461319.5', '2026-Oct-06 00:12', '0.0152', '0.0151', '0.0153', '9.8', '9.7', '00:01', '24.5', '0.045', '0.01', '(2026 TA)'],
+			['433', '659', '2461322.1', '2026-Oct-08 14:30', '0.1923', '0.1923', '0.1923', '5.6', '5.6', '< 00:01', '10.4', '16.84', '0.06', '433 Eros (A898 PA)'],
+		],
+	})
+}) as typeof fetch
+
+// The approaches from 2026-10-05 over 7 days (the default) within 10 lunar distances (the default).
+const start = Date.UTC(2026, 9, 5)
+const result = await closeApproaches(start)
+console.log(result.count, result.signature.version, result.fields.length) // 2 1.5 14
+
+// The rows are in the order of the fields. Pick the columns by name.
+const column = (name: (typeof result.fields)[number]) => result.fields.indexOf(name)
+for (const row of result.data) console.log(row[column('fullname')], row[column('cd')], `${row[column('dist')]} au`, `${row[column('v_rel')]} km/s`, `H=${row[column('h')]}`) // (2026 TA) 2026-Oct-06 00:12 0.0152 au 9.8 km/s H=24.5; 433 Eros (A898 PA) 2026-Oct-08 14:30 0.1923 au 5.6 km/s H=10.4
+
+// The request: the fixed query, the dates in UTC and the distance in lunar distances.
+const url = new URL(addresses[0])
+console.log(addresses[0].startsWith(`${SBD_BASE_URL}${CLOSE_APPROACHES_PATH}`), url.searchParams.get('date-min'), url.searchParams.get('date-max'), url.searchParams.get('dist-max')) // true 2026-10-05 2026-10-12 10LD
+
+// An explicit span of 30 days and a closer limit, then a final date.
+await closeApproaches(start, '30d', 1)
+console.log(new URL(addresses.at(-1)!).searchParams.get('date-max'), new URL(addresses.at(-1)!).searchParams.get('dist-max')) // 2026-11-04 1LD
+await closeApproaches(start, Date.UTC(2026, 9, 10), 5)
+console.log(new URL(addresses.at(-1)!).searchParams.get('date-max'), new URL(addresses.at(-1)!).searchParams.get('dist-max')) // 2026-10-10 5LD
+
+// A response without rows gives empty arrays and not undefined.
+const none = await closeApproaches(start, '1d', 0.01)
+console.log(none.count, none.fields, none.data) // 0 [] []
+
+// With no date the interval starts now.
+await closeApproaches()
+console.log(new URL(addresses.at(-1)!).searchParams.get('date-min') === new Date().toISOString().slice(0, 10)) // true
+```
+
 ### Gaia DR3 Star Catalog
+
+`VizierGaiaCatalog` (`src/adapters/catalogs/vizier.ts`) is a star catalog (see Star Catalog Interface and Spatial Query) over the Gaia DR3 table of VizieR (`I/355/gaiadr3`), queried remotely through the TAP endpoint of VizieR TAP Queries. `new VizierGaiaCatalog(options?)` takes the `VizierQueryOptions` (host, timeout, signal and the fetch options); the parsing options `skipFirstLine` and `forceTrim` are always enabled. The catalog has the six query methods of the interface (`queryCone`, `queryBox`, `queryTriangle`, `queryPolygon`, `queryRegion` and `streamRegion`), where each query becomes an ADQL `SELECT` of `Source, RAJ2000, DEJ2000, Gmag, pmRA, pmDE, RV` ordered by `Gmag`, with the coarse boxes of the region and the condition `Gmag IS NOT NULL` (an object without a G magnitude never appears) in the `WHERE`, and the exact geometry test is applied locally to the rows. `get(id)` returns one source by its Gaia `Source` identifier, a number, a bigint or a string of digits (a string or bigint keeps the full precision of the 64-bit id), or `undefined` when there is no row. Each `VizierGaiaCatalogEntry` has the `id` (a string), `epoch` 2000 (positions are at J2000 as VizieR gives them, not at the Gaia epoch of 2016), `rightAscension` and `declination` in radians, `magnitude` (G band), `pmRA` and `pmDEC` in radians per year (the published μα·cosδ is divided by cos δ, so that `pmRA` is dα/dt as the toolkit expects, and it is left out very close to a pole) and `rv` as a `Velocity`. There is no parallax. A row without a source id, position or G magnitude is skipped, and the other columns may be `undefined`. The whole answer of a region is read in a single request, so a very large region (the service limits the rows) is cut by the server, and a failed request gives an empty result. The snippet replaces `fetch` by a local stand-in with two stars, so it does not use the network.
+
+```ts
+import { VizierGaiaCatalog } from 'nebulosa/src/adapters/catalogs/vizier'
+import { deg, toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
+import { toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+// A local stand-in for the service: it records the queries and returns two stars of a table in the VizieR order.
+const queries: string[] = []
+globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+	const query = (init!.body as FormData).get('query') as string
+	queries.push(query)
+	const rows = ['Source\tRAJ2000\tDEJ2000\tGmag\tpmRA\tpmDE\tRV', '4472832130942575872\t83.8221\t-5.3911\t8.5\t1.5\t-2.5\t21.3', '4472832130942575999\t83.9\t-5.4\t12.2\t\t\t']
+	return new Response(rows.join('\n'))
+}) as typeof fetch
+
+const catalog = new VizierGaiaCatalog({ timeout: 30000 })
+
+// A cone of 3 arcminutes around the first star. The exact test removes the second one, which is outside.
+const stars = await catalog.queryCone(deg(83.8221), deg(-5.3911), deg(0.05))
+console.log(stars.length, stars[0].id, stars[0].epoch, toDeg(stars[0].rightAscension), toDeg(stars[0].declination), stars[0].magnitude) // 1 4472832130942575872 2000 83.8221 -5.3911 8.5
+console.log(toArcsec(stars[0].pmRA!) * 1000, toArcsec(stars[0].pmDEC!) * 1000, toKilometerPerSecond(stars[0].rv!)) // 1.506664624230924 -2.5 21.300000000000004
+console.log(queries[0]) // SELECT Source, RAJ2000, DEJ2000, Gmag, pmRA, pmDE, RV FROM "I/355/gaiadr3" WHERE (RAJ2000 >= 83.77187784580221 AND RAJ2000 <= 83.87232215419782 AND DEJ2000 >= -5.4411 AND DEJ2000 <= -5.341099999999999) AND Gmag IS NOT NULL ORDER BY GMag ASC
+
+// A box query: both stars are inside and the second one has no motion or velocity.
+const field = await catalog.queryRegion({ kind: 'box', minRA: deg(83.7), maxRA: deg(84), minDEC: deg(-5.5), maxDEC: deg(-5.3) })
+console.log(
+	field.map((star) => star.id),
+	field[1].pmRA,
+	field[1].pmDEC,
+	field[1].rv,
+) // [ "4472832130942575872", "4472832130942575999" ] undefined undefined undefined
+console.log(queries[1]) // SELECT Source, RAJ2000, DEJ2000, Gmag, pmRA, pmDE, RV FROM "I/355/gaiadr3" WHERE (RAJ2000 >= 83.7 AND RAJ2000 <= 84 AND DEJ2000 >= -5.5 AND DEJ2000 <= -5.300000000000001) AND Gmag IS NOT NULL ORDER BY GMag ASC
+
+// The same region as a stream.
+for await (const star of catalog.streamRegion({ kind: 'box', minRA: deg(83.7), maxRA: deg(84), minDEC: deg(-5.5), maxDEC: deg(-5.3) })) console.log(star.id, star.magnitude) // 4472832130942575872 8.5; 4472832130942575999 12.2
+
+// A triangle and a polygon go through the same flow, and a box across RA 0 makes two predicates.
+console.log((await catalog.queryTriangle([deg(83.7), deg(-5.5)], [deg(84), deg(-5.5)], [deg(83.85), deg(-5.3)])).length) // 2
+console.log(
+	(
+		await catalog.queryPolygon([
+			[deg(83.7), deg(-5.5)],
+			[deg(84), deg(-5.5)],
+			[deg(84), deg(-5.3)],
+			[deg(83.7), deg(-5.3)],
+		])
+	).length,
+) // 2
+await catalog.queryBox(deg(359.9), deg(0.1), deg(-1), deg(1))
+console.log(queries.at(-1)!.includes(' OR ')) // true
+
+// One source by its identifier: a string keeps all the digits of the 64-bit id.
+const one = await catalog.get('4472832130942575872')
+console.log(one?.id, one?.magnitude) // 4472832130942575872 8.5
+console.log(queries.at(-1)) // SELECT TOP 1 Source, RAJ2000, DEJ2000, Gmag, pmRA, pmDE, RV FROM "I/355/gaiadr3" WHERE Source = 4472832130942575872 ORDER BY GMag ASC
+await catalog.get(4472832130942575872n)
+console.log(queries.at(-1)!.includes('Source = 4472832130942575872')) // true
+```
 
 ### HiPS Survey Discovery
 
@@ -18651,13 +18761,245 @@ client.sendSwitch({ device: simulator.name, name: 'WEATHER_REFRESH', elements: {
 
 ### JPL Horizons Observer Tables
 
+`observer(input, center, coord, startTime, endTime, quantities?, options?, signal?)` (`src/adapters/ephemeris/horizons.ts`) asks the JPL Horizons API (`HORIZONS_BASE_URL`) for an observer table of a target and returns the rows of the CSV block between the `$$SOE` and `$$EOE` markers as arrays of strings (one array per time step, one string per column, the header dropped by default and the trailing empty column of the CSV kept). `input` is a Horizons target string (a name, an id, `'499'`, `'Ceres;'`), a TLE (`{ line1, line2, name? }`) or the osculating elements of the target (`{ epoch, ec, tpqr, om, w, i, ... }`, see JPL Horizons Orbital Elements). `center` is the observing site: `'geo'` for the geocenter, `'coord@399'` for a topocentric site on the Earth, or another body-centered string, and `coord` gives the site for the `coord` centers as `[longitude, latitude, elevation]` (radians, radians and AU, the elevation being sent in kilometers) or as a ready `'lon,lat,km'` string in degrees (`0`, `false` or `undefined` mean `'0,0,0'`). `startTime` and `endTime` are Unix milliseconds (UT scale for the observer table) or a library `Time`. `quantities` is a list of the `Quantity` codes (the columns of the table; the default is 1, 9, 20, 23, 24, 47 and 48, which are the astrometric position, magnitude, range, elongation, phase angle, sky motion and lunar sky brightness) and `options` (`ObserverVectorElementsOptions`) maps onto the Horizons parameters: `stepSize` and `stepSizeUnit` (the default is `60 m`), `refractionCorrection` (`REFRACTED` or `AIRLESS`), `extraPrecision`, `angleFormat` (`'DEG'` or `'HMS'`), `calendarFormat`, `calendarType`, `timeDigitsPrecision`, `rangeUnits`, `suppressRangeRate`, `skipDaylight`, `timeZone` (a `'+HH:MM'` string or the offset in minutes), `referenceSystem`, `coordinateType` and `skipFirstLine`. The columns that come back depend on the quantities, and their text is returned as the service gives it, so the caller must parse the numbers. When a name matches several small bodies, the service answers with an index of matches and `observer` tries once more, with `NOFRAG;` added for the fragments of a comet and `CAP<jd;` for the comets with several apparitions, and returns an empty array when that does not give a table. A call is one HTTP `GET` that `signal` can abort, and the service rate limits and changes are those of JPL. The snippet replaces `fetch` by a local stand-in that records the query and answers with a short table, so it does not need the network; the query values appear without the single quotes that Horizons requires around them.
+
+```ts
+import { observer, Quantity } from 'nebulosa/src/adapters/ephemeris/horizons'
+import { deg } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+// A local stand-in for the service: it records the parameters of each request and returns a table in the Horizons text format.
+const queries: Record<string, string>[] = []
+const table = (header: string, rows: string[]) => ['*****', 'Ephemeris', header, '*****', '$$SOE', ...rows, '$$EOE', 'Column meaning:'].join('\n')
+globalThis.fetch = (async (input: string | URL | Request) => {
+	const query = Object.fromEntries([...new URL(input.toString()).searchParams].map(([key, value]) => [key, value.replace(/^'|'$/g, '')]))
+	queries.push(query)
+
+	if (query.COMMAND === '73P;NOFRAG;') return new Response(table(' Date__(UT)__HR:MN, , , R.A._(ICRF), DEC_(ICRF),', [' 2026-Oct-05 00:00, , , 12.5, 30.25,']))
+
+	if (query.COMMAND === '73P;') {
+		const row = (record: string, epoch: string, match: string, primary: string, name: string) => ` ${record.padEnd(9)} ${epoch.padEnd(9)} ${match.padEnd(14)} ${primary.padEnd(14)} ${name}`
+		return new Response(
+			[
+				'Small-body Index Search Results',
+				'',
+				row('Record #', 'Epoch-yr', '>MATCH DESIG<', 'Primary Desig', 'Name'),
+				row('--------', '--------', '-------------', '-------------', '----'),
+				row('90000123', '2022', '73P', '73P', 'SCHWASSMANN-WACHMANN 3'),
+				row('90000124', '2022', '73P-B', '73P-B', 'SCHWASSMANN-WACHMANN 3-B'),
+				row('90000125', '2022', '73P-C', '73P-C', 'SCHWASSMANN-WACHMANN 3-C'),
+				'3 matches.',
+			].join('\n'),
+		)
+	}
+
+	return new Response(table(' Date__(UT)__HR:MN, , , R.A._(ICRF), DEC_(ICRF),', [' 2026-Oct-05 00:00, , , 83.822, -5.391,', ' 2026-Oct-05 01:00, , , 83.900, -5.380,']))
+}) as typeof fetch
+
+const start = Date.UTC(2026, 9, 5)
+const end = Date.UTC(2026, 9, 5, 2)
+
+// Mars (499) seen from a site on the Earth: longitude, latitude (radians) and elevation (AU).
+const rows = await observer('499', 'coord@399', [deg(-45.5), deg(-23.2), meter(760)], start, end)
+console.log(rows) // [ [ "2026-Oct-05 00:00", "", "", "83.822", "-5.391", "" ], [ "2026-Oct-05 01:00", "", "", "83.900", "-5.380", "" ] ]
+console.log(queries.at(-1)!.CENTER, queries.at(-1)!.SITE_COORD, queries.at(-1)!.COORD_TYPE, queries.at(-1)!.START_TIME, queries.at(-1)!.STOP_TIME) // coord@399 -45.5,-23.2,0.76 GEODETIC 2026-10-05 00:00:00.000 2026-10-05 02:00:00.000
+console.log(queries.at(-1)!.QUANTITIES, queries.at(-1)!.STEP_SIZE, queries.at(-1)!.APPARENT, queries.at(-1)!.ANG_FORMAT, queries.at(-1)!.TIME_TYPE) // 1,9,20,23,24,47,48 60 m REFRACTED DEG UT
+
+// Chosen quantities and options. A geocentric request has no site coordinates.
+await observer('Ceres;', 'geo', undefined, start, end, [Quantity.APPARENT_RA_DEC, Quantity.AIRMASS_EXTINCTION], { stepSize: 10, stepSizeUnit: 'minutes', refractionCorrection: false, angleFormat: 'HMS', skipDaylight: true, timeZone: -180 })
+console.log(queries.at(-1)!.CENTER, queries.at(-1)!.SITE_COORD, queries.at(-1)!.QUANTITIES) // geo undefined 2,8
+console.log(queries.at(-1)!.STEP_SIZE, queries.at(-1)!.APPARENT, queries.at(-1)!.ANG_FORMAT, queries.at(-1)!.SKIP_DAYLT, queries.at(-1)!.TIME_ZONE) // 10 minutes AIRLESS HMS YES -03:00
+
+// The site as a text and a satellite given as a TLE (the lines are placeholders of the example).
+await observer({ line1: '1 25544U 98067A ...', line2: '2 25544 51.6 ...', name: 'ISS' }, 'coord@399', '-45.5,-23.2,0.76', start, end)
+console.log(queries.at(-1)!.COMMAND, JSON.stringify(queries.at(-1)!.TLE), queries.at(-1)!.SITE_COORD) // TLE "ISS\n1 25544U 98067A ...\n2 25544 51.6 ..." -45.5,-23.2,0.76
+
+// A target with several matches: the service answers with an index, and the retry asks for the comet without its fragments.
+const requestsBefore = queries.length
+console.log(await observer('73P;', 'geo', undefined, start, end)) // [ [ "2026-Oct-05 00:00", "", "", "12.5", "30.25", "" ] ]
+console.log(queries.length - requestsBefore, queries.at(-1)!.COMMAND) // 2 73P;NOFRAG;
+
+// The header row is kept with skipFirstLine false.
+const withHeader = await observer('499', 'geo', undefined, start, end, [Quantity.ASTROMETRIC_RA_DEC], { skipFirstLine: false })
+console.log(withHeader.length, withHeader[0]) // 3 [ "Date__(UT)__HR:MN", "", "", "R.A._(ICRF)", "DEC_(ICRF)", "" ]
+```
+
 ### JPL Horizons Orbital Elements
+
+`elements(input, center, startTime, endTime, options?, signal?)` (`src/adapters/ephemeris/horizons.ts`) asks the JPL Horizons API for the osculating orbital elements of a target at the steps of an interval and returns the CSV rows between the `$$SOE` and `$$EOE` markers as arrays of strings (one per step; the header is dropped by default; the columns are the ones of the service: `JDTDB`, the calendar date, `EC`, `QR`, `IN`, `OM`, `W`, `Tp`, `N`, `MA`, `TA`, `A`, `AD` and `PR`, with their units as Horizons defines them for the chosen output units). `input` is a Horizons target string or a TLE (see JPL Horizons Observer Tables), or the osculating elements of a body that Horizons does not know, `{ epoch, ec, tpqr, om, w, i, ... }`: `epoch` is a Julian day in TDB, `ec` the eccentricity, `om`, `w` and `i` the longitude of the ascending node, the argument of perihelion and the inclination in radians, `referenceEclipticFrame` is `'J2000'` (the default) or `'B1950'`, and `tpqr` chooses how the orbit size and phase are given: `{ ma, a }` (mean anomaly in radians and semi-major axis in AU), `{ qr, tp }` (perihelion distance in AU and time of perihelion, Julian day TDB) or `{ ma, n }` (mean anomaly and mean motion in radians per day). Optional fields add the magnitude parameters of an asteroid (`h`, `g`) or of a comet (`m1`, `m2`, `k1`, `k2`, `phcof`) and the non-gravitational model (`a1`, `a2`, `a3`, `r0`, `aln`, `nm`, `nn`, `nk`, `dt`, `amrat`). `center` is `'500@10'` for the Sun (heliocentric elements) or `'500@399'` for the Earth, another `500@<id>` body or `'geo'`, and the times are Unix milliseconds or library `Time` values converted to Julian days in TDB. The options are those of `ObserverVectorElementsOptions` that apply to elements: `stepSize` and `stepSizeUnit`, `referencePlane` (the default for elements is the ecliptic, `'ECLIPTIC'`), `referenceSystem`, `outputUnits` (`'AU-D'`, `'KM-S'` or `'KM-D'`), `timeOfPeriapsisType` (`'ABSOLUTE'` or `'RELATIVE'`) and `skipFirstLine`. Like the other Horizons helpers it retries a name that matches several small bodies, and returns an empty array when no table is obtained. The snippet replaces `fetch` by a local stand-in that records the query and returns a table, so it does not use the network; the recorded values have the single quotes of Horizons removed.
+
+```ts
+import { elements } from 'nebulosa/src/adapters/ephemeris/horizons'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+// A local stand-in for the service, with the elements table of the text format.
+const queries: Record<string, string>[] = []
+globalThis.fetch = (async (input: string | URL | Request) => {
+	queries.push(Object.fromEntries([...new URL(input.toString()).searchParams].map(([key, value]) => [key, value.replace(/^'|'$/g, '')])))
+	const header = ' JDTDB, Calendar Date (TDB), EC, QR, IN, OM, W, Tp, N, MA, TA, A, AD, PR,'
+	const rows = [' 2461318.5, A.D. 2026-Oct-05 00:00:00.0000, 0.0785, 2.55, 10.59, 80.25, 73.6, 2461500.5, 0.214, 120.5, 125.1, 2.77, 2.99, 1680.2,']
+	return new Response(['*****', 'Ephemeris', header, '*****', '$$SOE', ...rows, '$$EOE', 'Column meaning:'].join('\n'))
+}) as typeof fetch
+
+const start = Date.UTC(2026, 9, 5)
+const end = Date.UTC(2026, 9, 7)
+
+// The elements of Ceres around the Sun, one row per day.
+const rows = await elements('Ceres;', '500@10', start, end, { stepSize: 1, stepSizeUnit: 'd' })
+console.log(rows[0].length, rows[0].slice(0, 5)) // 15 [ "2461318.5", "A.D. 2026-Oct-05 00:00:00.0000", "0.0785", "2.55", "10.59" ]
+console.log(queries.at(-1)!.EPHEM_TYPE, queries.at(-1)!.CENTER, queries.at(-1)!.REF_PLANE, queries.at(-1)!.OUT_UNITS, queries.at(-1)!.STEP_SIZE, queries.at(-1)!.TP_TYPE) // ELEMENTS 500@10 E AU-D 1 d ABSOLUTE
+console.log(queries.at(-1)!.TIME_TYPE, queries.at(-1)!.START_TIME, queries.at(-1)!.STOP_TIME) // TDB JD 2461318.500800722 JD 2461320.500800722
+
+// Kilometers and seconds, the equator of the frame, and a time of periapsis relative to the start.
+await elements('Ceres;', '500@10', start, end, { outputUnits: 'KM-S', referencePlane: 'FRAME', timeOfPeriapsisType: 'RELATIVE', stepSize: 12, stepSizeUnit: 'h' })
+console.log(queries.at(-1)!.OUT_UNITS, queries.at(-1)!.REF_PLANE, queries.at(-1)!.TP_TYPE, queries.at(-1)!.STEP_SIZE) // KM-S F RELATIVE 12 h
+
+// Body-defined elements with the mean anomaly and the semi-major axis, plus the magnitude parameters of an asteroid.
+await elements({ epoch: 2461000.5, ec: 0.0785, tpqr: { ma: deg(120.5), a: 2.77 }, om: deg(80.25), w: deg(73.6), i: deg(10.59), h: 3.3, g: 0.12 }, '500@10', start, end)
+console.log(queries.at(-1)!.COMMAND, queries.at(-1)!.EPOCH, queries.at(-1)!.ECLIP, queries.at(-1)!.EC, queries.at(-1)!.OM, queries.at(-1)!.W, queries.at(-1)!.IN) // ; 2461000.5 J2000 0.0785 80.25 73.6 10.59
+console.log(queries.at(-1)!.MA, queries.at(-1)!.A, queries.at(-1)!.H, queries.at(-1)!.G) // 120.5 2.77 3.3 0.12
+
+// The perihelion distance and time of a comet, with the non-gravitational terms.
+await elements({ epoch: 2461000.5, referenceEclipticFrame: 'B1950', ec: 0.64, tpqr: { qr: 1.2, tp: 2461200.5 }, om: deg(50), w: deg(40), i: deg(10), m1: 12, k1: 10, a1: 1e-8, a2: 2e-9 }, '500@10', start, end)
+console.log(queries.at(-1)!.ECLIP, queries.at(-1)!.QR, queries.at(-1)!.TP, queries.at(-1)!.M1, queries.at(-1)!.K1, queries.at(-1)!.A1, queries.at(-1)!.A2, queries.at(-1)!.MA) // B1950 1.2 2461200.5 12 10 1e-8 2e-9 undefined
+
+// The mean anomaly and the mean motion (radians per day, sent in degrees per day).
+await elements({ epoch: 2461000.5, ec: 0.1, tpqr: { ma: deg(10), n: deg(0.9) }, om: deg(80), w: deg(70), i: deg(5) }, '500@10', start, end)
+console.log(queries.at(-1)!.MA, queries.at(-1)!.N, queries.at(-1)!.A) // 10 0.9 undefined
+```
 
 ### JPL Horizons SPK Downloads
 
+`spkFile(id, startTime, endTime, signal?)` (`src/adapters/ephemeris/horizons.ts`) requests from the JPL Horizons API an SPK binary kernel (the SPICE ephemeris format) of the small body with the SPK id `id` for the interval `[startTime, endTime]` (Unix milliseconds or library `Time` values, sent as Julian days in TDB with the scale named). It sends `COMMAND='DES=<id>;'` with `EPHEM_TYPE=SPK` and expects the JSON answer of the service, which it returns as `{ spk?, error? }`: `spk` is the content of the kernel encoded in Base64 and `error` is the message of Horizons when it could not build the file, so a caller checks which one is present. Only the JSON answer is read: nothing is validated or decoded, so the caller decodes the Base64 (for example with `Buffer.from(spk, 'base64')`) and writes or parses the kernel. The id is the SPK id of the body. A new request is made for each call, and `signal` aborts the request. The snippet replaces `fetch` by a local stand-in that answers with a small Base64 payload and records the query, so it does not use the network; the recorded values have the single quotes of Horizons removed.
+
+```ts
+import { spkFile } from 'nebulosa/src/adapters/ephemeris/horizons'
+
+// A local stand-in for the service: a tiny payload instead of a real kernel.
+const queries: Record<string, string>[] = []
+globalThis.fetch = (async (input: string | URL | Request) => {
+	const query = Object.fromEntries([...new URL(input.toString()).searchParams].map(([key, value]) => [key, value.replace(/^'|'$/g, '')]))
+	queries.push(query)
+	return Response.json({ spk: Buffer.from('DAF/SPK a small stand-in for the kernel').toString('base64') })
+}) as typeof fetch
+
+const start = Date.UTC(2026, 0, 1)
+const end = Date.UTC(2027, 0, 1)
+
+// Ceres is the asteroid number 1, whose SPK id is 2000001.
+const file = await spkFile(2000001, start, end)
+console.log(Object.keys(file), file.error) // [ "spk" ] undefined
+console.log(queries.at(-1)!.EPHEM_TYPE, queries.at(-1)!.COMMAND, queries.at(-1)!.START_TIME, queries.at(-1)!.STOP_TIME) // SPK DES=2000001; JD 2461041.50080074 TDB JD 2461406.50080074 TDB
+
+// The kernel is the Base64 text: decode it to the bytes that go to a file.
+const bytes = Buffer.from(file.spk!, 'base64')
+console.log(bytes.byteLength, bytes.toString('latin1', 0, 7)) // 39 DAF/SPK
+```
+
 ### JPL Horizons State Vectors
 
+`vector(input, center, coord, startTime, endTime, options?, signal?)` (`src/adapters/ephemeris/horizons.ts`) asks the JPL Horizons API for the Cartesian state vectors of a target and returns the CSV rows between the `$$SOE` and `$$EOE` markers as arrays of strings: the table type is the state vector (`VEC_TABLE` 2), whose columns are the Julian day in TDB, the calendar date and `X`, `Y`, `Z`, `VX`, `VY`, `VZ`, the header being dropped by default (`skipFirstLine`). `input` is a target string, a TLE or user-defined osculating elements (see JPL Horizons Orbital Elements), `center` is the origin of the vectors (`'500@10'` the Sun, `'500@0'` the solar system barycenter, `'500@399'` or `'geo'` the Earth, `'coord@399'` a site on the Earth, and so on) and `coord` is the site for the `coord` centers in the same forms as in JPL Horizons Observer Tables (longitude and latitude in radians and elevation in AU, or a text). The times are Unix milliseconds or `Time` values and are sent as Julian days in TDB. The options that apply here are `stepSize` and `stepSizeUnit` (default `60 m`), `outputUnits` (`'AU-D'` by default, so positions are in AU and velocities in AU/day; `'KM-S'` and `'KM-D'` are the others), `referenceSystem` (`'ICRF'` or `'B1950'`), `referencePlane` (`'FRAME'`, the equator of the system, by default, `'ECLIPTIC'` or `'BODY_EQUATOR'`), `vectorCorrection` (`'NONE'` for geometric, `'LT'` for light-time corrected, `'LT+S'` to include the stellar aberration), `calendarType`, `timeDigitsPrecision` and `coordinateType`. The helper makes one request and, if the answer is not a table, retries a name that matched several small bodies with the fragment and apparition adjustments of JPL Horizons Observer Tables, returning an empty array if nothing is obtained. The numbers come back as text, in the units asked for. The snippet replaces `fetch` by a local stand-in, so it does not use the network, and the query values appear without the single quotes that Horizons requires.
+
+```ts
+import { vector } from 'nebulosa/src/adapters/ephemeris/horizons'
+import { deg } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+// A local stand-in for the service, with a state-vector table in the text format.
+const queries: Record<string, string>[] = []
+globalThis.fetch = (async (input: string | URL | Request) => {
+	queries.push(Object.fromEntries([...new URL(input.toString()).searchParams].map(([key, value]) => [key, value.replace(/^'|'$/g, '')])))
+	const header = ' JDTDB, Calendar Date (TDB), X, Y, Z, VX, VY, VZ,'
+	const rows = [' 2461318.5008, A.D. 2026-Oct-05 00:00:00.0000, -0.9, 0.35, 0.15, -0.0072, -0.0156, -0.0068,', ' 2461318.5425, A.D. 2026-Oct-05 01:00:00.0000, -0.9001, 0.3497, 0.1499, -0.0072, -0.0156, -0.0068,']
+	return new Response(['*****', 'Ephemeris', header, '*****', '$$SOE', ...rows, '$$EOE', 'Column meaning:'].join('\n'))
+}) as typeof fetch
+
+const start = Date.UTC(2026, 9, 5)
+const end = Date.UTC(2026, 9, 5, 2)
+
+// The Earth relative to the Sun, hourly, with the default units (AU and AU/day) and plane.
+const rows = await vector('399', '500@10', undefined, start, end)
+console.log(rows.length, rows[0]) // 2 [ "2461318.5008", "A.D. 2026-Oct-05 00:00:00.0000", "-0.9", "0.35", "0.15", "-0.0072", "-0.0156", "-0.0068", "" ]
+console.log(queries.at(-1)!.EPHEM_TYPE, queries.at(-1)!.VEC_TABLE, queries.at(-1)!.VEC_CORR, queries.at(-1)!.OUT_UNITS, queries.at(-1)!.REF_PLANE, queries.at(-1)!.REF_SYSTEM) // VECTOR 2 NONE AU-D F ICRF
+console.log(queries.at(-1)!.TIME_TYPE, queries.at(-1)!.START_TIME, queries.at(-1)!.STOP_TIME, queries.at(-1)!.STEP_SIZE) // TDB JD 2461318.500800722 JD 2461318.5841340553 60 m
+
+// Kilometers, light-time corrected vectors in the ecliptic, every 30 minutes.
+await vector('499', 'geo', undefined, start, end, { outputUnits: 'KM-S', vectorCorrection: 'LT', referencePlane: 'ECLIPTIC', stepSize: 30, stepSizeUnit: 'minutes' })
+console.log(queries.at(-1)!.CENTER, queries.at(-1)!.OUT_UNITS, queries.at(-1)!.VEC_CORR, queries.at(-1)!.REF_PLANE, queries.at(-1)!.STEP_SIZE) // geo KM-S LT E 30 minutes
+
+// The vectors from a topocentric site (longitude, latitude and elevation) and the header row kept.
+const withHeader = await vector('301', 'coord@399', [deg(-45.5), deg(-23.2), meter(760)], start, end, { skipFirstLine: false })
+console.log(withHeader.length, withHeader[0]) // 3 [ "JDTDB", "Calendar Date (TDB)", "X", "Y", "Z", "VX", "VY", "VZ", "" ]
+console.log(queries.at(-1)!.CENTER, queries.at(-1)!.SITE_COORD, queries.at(-1)!.COORD_TYPE) // coord@399 -45.5,-23.2,0.76 GEODETIC
+
+// A satellite given as a TLE (placeholders of the example) and elements defined by the caller.
+await vector({ line1: '1 25544U 98067A ...', line2: '2 25544 51.6 ...', name: 'ISS' }, '500@399', undefined, start, end)
+console.log(queries.at(-1)!.COMMAND, JSON.stringify(queries.at(-1)!.TLE)) // TLE "ISS\n1 25544U 98067A ...\n2 25544 51.6 ..."
+await vector({ epoch: 2461000.5, ec: 0.1, tpqr: { ma: deg(10), a: 1.1 }, om: deg(80), w: deg(70), i: deg(5) }, '500@10', undefined, start, end)
+console.log(queries.at(-1)!.COMMAND, queries.at(-1)!.EC, queries.at(-1)!.A, queries.at(-1)!.MA) // ; 0.1 1.1 10
+```
+
 ### JPL Small-Body Lookup
+
+`search(text)` (`src/adapters/orbits/sbd.ts`) queries the JPL Small-Body Database API (`SBD_BASE_URL` with `SEARCH_PATH`, which asks for the alternate designations and orbits, the close-approach, discovery, physical-parameter, radar and satellite blocks and full-precision numbers) for a name or designation and returns the JSON answer of the service as one of three shapes of the `SmallBodySearch` union. A unique match is a `SmallBodySearchFound` with the `object` identity (`fullname`, `shortname`, `des`, the SPICE `spkid`, the `kind` of `'an'`, `'au'`, `'cn'` or `'cu'` for numbered or unnumbered asteroids and comets, the `neo` and `pha` flags, the `orbit_class` and the alternate designations), the `orbit` solution (epoch, the observation arc and counts, the RMS, the MOID and the `elements` list with `name`, `value`, `sigma`, `units` and `label`, all as strings) and the `phys_par` list (diameter, albedo, rotation period and the like, also strings), plus the `signature` of the API version. An ambiguous query is a `SmallBodySearchList` with `list` of `{ pdes, name }` candidates, and a query with no usable answer is a `SmallBodySearchMessage` with a `message`, so a caller distinguishes them by their properties (`'orbit'`, `'list'` and `'message'`). The values are text exactly as published, in the units named in each element (angles in degrees, distances in AU, epochs as Julian dates in TDB, for the elements of the database), and the function does not check the HTTP status or the shape of the JSON. `text` is URL-encoded, so spaces and slashes of designations are accepted. The snippet replaces `fetch` by a local stand-in that records the address and answers with short examples of the three shapes, so it does not use the network; the real fields are many more than the ones shown.
+
+```ts
+import { search, SBD_BASE_URL, SEARCH_PATH, type SmallBodySearch } from 'nebulosa/src/adapters/orbits/sbd'
+
+// A local stand-in for the service, with a found body and a list of candidates.
+const addresses: string[] = []
+globalThis.fetch = (async (input: string | URL | Request) => {
+	const url = new URL(input.toString())
+	addresses.push(url.toString())
+	const text = url.searchParams.get('sstr')
+
+	if (text === 'Ceres') {
+		return Response.json({
+			signature: { version: '1.3', source: 'NASA/JPL Small-Body Database (SBDB) API' },
+			object: { fullname: '1 Ceres (A801 AA)', shortname: '1 Ceres', des: '1', spkid: '20000001', kind: 'an', neo: false, pha: false, orbit_id: '47', orbit_class: { name: 'Main-belt Asteroid', code: 'MBA' }, des_alt: [], prefix: null },
+			orbit: {
+				epoch: '2461000.5',
+				elements: [
+					{ name: 'e', label: 'e', title: 'eccentricity', value: '.0785', sigma: '1.2e-9', units: null },
+					{ name: 'a', label: 'a', title: 'semi-major axis', value: '2.7656', sigma: '1.0e-9', units: 'au' },
+				],
+			},
+			phys_par: [{ name: 'diameter', title: 'diameter', value: '939.4', sigma: '0.2', units: 'km', desc: '', notes: '', ref: '' }],
+		})
+	}
+
+	return Response.json({
+		list: [
+			{ pdes: '433', name: 'Eros' },
+			{ pdes: '4337', name: 'Arecibo' },
+		],
+		code: '300',
+		message: 'specified search string is ambiguous',
+		count: 2,
+	})
+}) as typeof fetch
+
+// A function that tells the three shapes apart by their properties.
+function describe(result: SmallBodySearch) {
+	if ('orbit' in result) return `${result.object.fullname} ${result.object.kind} ${result.orbit.elements.map((e) => `${e.name}=${e.value}${e.units ? ` ${e.units}` : ''}`).join(' ')}`
+	if ('list' in result) return `${result.list.length} candidates: ${result.list.map((e) => `${e.pdes} ${e.name}`).join(', ')}`
+	return result.message
+}
+
+// A unique match.
+const ceres = await search('Ceres')
+console.log(describe(ceres)) // 1 Ceres (A801 AA) an e=.0785 a=2.7656 au
+if ('orbit' in ceres) console.log(ceres.object.spkid, ceres.object.orbit_class.code, ceres.orbit.epoch, ceres.phys_par[0].name, ceres.phys_par[0].value, ceres.phys_par[0].units, ceres.signature.version) // 20000001 MBA 2461000.5 diameter 939.4 km 1.3
+
+// An ambiguous text gives the list of candidates.
+console.log(describe(await search('43'))) // 2 candidates: 433 Eros, 4337 Arecibo
+
+// The request is the base address, the fixed query and the encoded text.
+console.log(addresses[0] === `${SBD_BASE_URL}${SEARCH_PATH}&sstr=Ceres`, SBD_BASE_URL) // true https://ssd-api.jpl.nasa.gov/
+await search('C/2023 A3 (Tsuchinshan-ATLAS)')
+console.log(new URL(addresses.at(-1)!).searchParams.get('sstr'), addresses.at(-1)!.endsWith('sstr=C%2F2023%20A3%20(Tsuchinshan-ATLAS)')) // C/2023 A3 (Tsuchinshan-ATLAS) true
+console.log(SEARCH_PATH.split('&').length) // 18
+```
 
 ### Minor Planet Center API
 
@@ -18665,13 +19007,228 @@ client.sendSwitch({ device: simulator.name, name: 'WEATHER_REFRESH', elements: {
 
 ### SIMBAD Object Types
 
+`SIMBAD_OBJECT_TYPES` (`src/adapters/catalogs/simbad.ts`) is the object-type taxonomy of SIMBAD (the one of the VizieR object-type page) as a constant object of 153 entries, keyed by a name in upper case such as `STAR`, `QUASAR` or `GLOBULAR_CLUSTER`. Each value is a `SimbadObjectTypeInfo` with the numeric `id`, the `description`, the broad `classification` (`'STAR'`, `'SET_OF_STARS'`, `'GALAXY'`, `'SET_OF_GALAXIES'`, `'INTERSTELLAR_MEDIUM'`, `'SPECTRAL'`, `'GRAVITATION'` or `'OTHER'`) and the short `codes` of the type, where a code ending in `?` marks a candidate (`'QSO'` and `'Q?'` for a quasar, for example). The ids are unique and grouped by classification: 0 to 66 for stars, 100 to 105 for sets of stars, 200 to 218 for galaxies, 300 to 307 for sets of galaxies, 400 to 415 for the interstellar medium, 500 to 521 for spectral objects, 600 to 608 for gravitation phenomena and 700 to 705 for the other objects. The types `SimbadObjectType` (a key), `SimbadObjectClassification` and `SimbadObjectCode` (a code, as a literal union) follow from the table. `findSimbadObjectTypeInfoById(id)` and `findSimbadObjectTypeInfoByCode(code)` look a type up in a precomputed map and return the info, or `undefined` when the key is not in the table; both candidate and confirmed codes resolve to the same entry. The `type` of a SIMBAD catalog entry (see SIMBAD Star Catalog) is such a code, and the `otype` column of a TAP query is the same short code.
+
+```ts
+import { findSimbadObjectTypeInfoByCode, findSimbadObjectTypeInfoById, SIMBAD_OBJECT_TYPES, type SimbadObjectClassification } from 'nebulosa/src/adapters/catalogs/simbad'
+
+const types = Object.values(SIMBAD_OBJECT_TYPES)
+console.log(types.length, new Set(types.map((type) => type.id)).size) // 153 153
+
+// An entry of the table.
+console.log(SIMBAD_OBJECT_TYPES.STAR) // { id: 54, description: "Star", classification: "STAR", codes: [ "*" ] }
+console.log(SIMBAD_OBJECT_TYPES.QUASAR) // { id: 213, description: "Quasar", classification: "GALAXY", codes: [ "QSO", "Q?" ] }
+
+// The number of types and the range of ids of each classification.
+const groups = new Map<SimbadObjectClassification, number[]>()
+for (const type of types) groups.set(type.classification, [...(groups.get(type.classification) ?? []), type.id])
+for (const [classification, ids] of groups) console.log(classification, ids.length, Math.min(...ids), Math.max(...ids)) // GALAXY 19 200 218; STAR 67 0 66; SET_OF_STARS 6 100 105; GRAVITATION 9 600 608; SPECTRAL 22 500 521; INTERSTELLAR_MEDIUM 16 400 415; SET_OF_GALAXIES 8 300 307; OTHER 6 700 705
+
+// Lookup by id and by code. The confirmed and the candidate codes give the same entry.
+console.log(findSimbadObjectTypeInfoById(213)?.description) // Quasar
+console.log(findSimbadObjectTypeInfoByCode('*')?.id) // 54
+console.log(findSimbadObjectTypeInfoByCode('GlC')?.description, findSimbadObjectTypeInfoByCode('Gl?') === findSimbadObjectTypeInfoByCode('GlC')) // Globular Cluster true
+
+// The types that have a candidate code.
+console.log(types.filter((type) => type.codes.some((code) => code.endsWith('?'))).length) // 69
+```
+
 ### SIMBAD Star Catalog
+
+`SimbadCatalog` (`src/adapters/catalogs/simbad.ts`) is a star catalog (see Star Catalog Interface and Spatial Query) backed by the `basic` and `allfluxes` tables of SIMBAD, queried through the TAP endpoint of SIMBAD TAP Queries. `new SimbadCatalog(options?)` takes the `SimbadQueryOptions` (host, timeout, signal and fetch options); the parsing options `skipFirstLine` and `forceTrim` are always enabled. It has the six query methods of the interface (`queryCone`, `queryBox`, `queryTriangle`, `queryPolygon`, `queryRegion` and `streamRegion`) and `get(id)`, which returns the object with the SIMBAD `oid` (a number, a bigint or a string of digits) or `undefined` when there is no row. A query is an ADQL `SELECT b.oid, b.otype, b.ra, b.dec, f.V, b.pmra, b.pmdec, b.plx_value, b.rvz_radvel` from `basic b JOIN allfluxes f ON f.oidref = b.oid`, ordered by `V` and `oid`, where the `WHERE` has the coarse boxes of the region, an ADQL `CONTAINS` of a circle for a cone and the condition `f.V IS NOT NULL` (so an object without a V magnitude never appears), and the exact geometry test runs locally. A region is read in pages of 50000 rows: while a page is full, the next one is requested with a keyset condition on the last `V` and `oid`, so the stream is complete and does not repeat rows. Each `SimbadCatalogEntry` has the numeric `id` (the `oid`), `epoch` 2000, `rightAscension` and `declination` in radians (ICRS, J2000), `magnitude` (V), `pmRA` and `pmDEC` in radians per year (the published μα·cosδ is divided by cos δ, so `pmRA` is dα/dt, and it is left out very close to a pole), `parallax` in radians, `rv` as a `Velocity` and `type`, the short code of the object type (see SIMBAD Object Types). Rows without an `oid`, position or V magnitude are skipped and the optional columns may be `undefined`. The snippet replaces `fetch` by a local stand-in that answers by the kind of the query, so it does not use the network.
+
+```ts
+import { SimbadCatalog } from 'nebulosa/src/adapters/catalogs/simbad'
+import { findSimbadObjectTypeInfoByCode } from 'nebulosa/src/adapters/catalogs/simbad'
+import { deg, toArcsec, toDeg, toMas } from 'nebulosa/src/math/units/angle'
+import { toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+// A local stand-in for the service: it records the queries and returns two objects in the SIMBAD column order.
+const queries: string[] = []
+const header = ['oid', 'otype', 'ra', 'dec', 'V', 'pmra', 'pmdec', 'plx_value', 'rvz_radvel'].join('\t')
+const orionNebulaStar = ['3755198', '*', '83.8221', '-5.3911', '8.5', '1.5', '-2.5', '2.5', '21.3'].join('\t')
+const faintGalaxy = ['1575544', 'G', '83.9', '-5.4', '12.2', '', '', '', ''].join('\t')
+
+globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+	const query = (init!.body as FormData).get('query') as string
+	queries.push(query)
+	return new Response([header, orionNebulaStar, faintGalaxy].join('\n'))
+}) as typeof fetch
+
+const catalog = new SimbadCatalog({ timeout: 30000 })
+
+// A cone of 3 arcminutes: the exact test removes the second object, which is outside.
+const stars = await catalog.queryCone(deg(83.8221), deg(-5.3911), deg(0.05))
+const star = stars[0]
+console.log(stars.length, star.id, star.type, star.epoch, toDeg(star.rightAscension), toDeg(star.declination), star.magnitude) // 1 3755198 * 2000 83.8221 -5.3911 8.5
+console.log(toMas(star.pmRA!), toMas(star.pmDEC!), toMas(star.parallax!), toKilometerPerSecond(star.rv!)) // 1.5066646242309238 -2.5 2.5 21.300000000000004
+console.log(findSimbadObjectTypeInfoByCode(star.type!)?.description) // Star
+console.log(queries[0]) // SELECT TOP 50000 b.oid, b.otype, b.ra, b.dec, f.V, b.pmra, b.pmdec, b.plx_value, b.rvz_radvel FROM basic b JOIN allfluxes f ON f.oidref = b.oid WHERE (b.ra >= 83.77187784580221 AND b.ra <= 83.87232215419782 AND b.dec >= -5.4411 AND b.dec <= -5.341099999999999) AND 1=CONTAINS(POINT('ICRS', b.ra, b.dec), CIRCLE('ICRS', 83.8221, -5.3911, 0.05)) AND f.V IS NOT NULL ORDER BY V ASC, oid ASC
+
+// A box: both objects are inside, and the second has no motion, parallax or velocity.
+const field = await catalog.queryRegion({ kind: 'box', minRA: deg(83.7), maxRA: deg(84), minDEC: deg(-5.5), maxDEC: deg(-5.3) })
+console.log(
+	field.map((entry) => `${entry.id} ${entry.type} ${entry.magnitude}`),
+	field[1].pmRA,
+	field[1].pmDEC,
+	field[1].parallax,
+	field[1].rv,
+) // [ "3755198 * 8.5", "1575544 G 12.2" ] undefined undefined undefined undefined
+console.log(queries[1]) // SELECT TOP 50000 b.oid, b.otype, b.ra, b.dec, f.V, b.pmra, b.pmdec, b.plx_value, b.rvz_radvel FROM basic b JOIN allfluxes f ON f.oidref = b.oid WHERE (b.ra >= 83.7 AND b.ra <= 84 AND b.dec >= -5.5 AND b.dec <= -5.300000000000001) AND f.V IS NOT NULL ORDER BY V ASC, oid ASC
+
+// The same region as a stream, and a triangle and a polygon.
+for await (const entry of catalog.streamRegion({ kind: 'box', minRA: deg(83.7), maxRA: deg(84), minDEC: deg(-5.5), maxDEC: deg(-5.3) })) console.log(entry.id, entry.magnitude) // 3755198 8.5; 1575544 12.2
+console.log((await catalog.queryTriangle([deg(83.7), deg(-5.5)], [deg(84), deg(-5.5)], [deg(83.85), deg(-5.3)])).length) // 2
+console.log(
+	(
+		await catalog.queryPolygon([
+			[deg(83.7), deg(-5.5)],
+			[deg(84), deg(-5.5)],
+			[deg(84), deg(-5.3)],
+			[deg(83.7), deg(-5.3)],
+		])
+	).length,
+) // 2
+
+// A box across RA 0 gives two coarse predicates joined by OR.
+await catalog.queryBox(deg(359.9), deg(0.1), deg(-1), deg(1))
+console.log(queries.at(-1)!.includes(' OR ')) // true
+
+// One object by its oid, as a number, a string or a bigint.
+const one = await catalog.get(3755198)
+console.log(one?.id, one?.magnitude, toArcsec(one!.parallax!) * 1000) // 3755198 8.5 2.5
+console.log(queries.at(-1)) // SELECT TOP 1 b.oid, b.otype, b.ra, b.dec, f.V, b.pmra, b.pmdec, b.plx_value, b.rvz_radvel FROM basic b JOIN allfluxes f ON f.oidref = b.oid WHERE b.oid = 3755198 ORDER BY V ASC, oid ASC
+await catalog.get('3755198')
+await catalog.get(3755198n)
+console.log(queries.at(-1)!.includes('b.oid = 3755198')) // true
+```
 
 ### SIMBAD TAP Queries
 
+`simbadQuery(query, options?)` (`src/adapters/catalogs/simbad.ts`) is the same call for SIMBAD: it runs an ADQL query against the synchronous TAP endpoint (`SIMBAD_URL` plus `simbad/sim-tap/sync`; `SIMBAD_ALTERNATIVE_URL` is the mirror at Strasbourg) with a form `POST` of `request=doQuery`, `lang=adql`, `format=tsv` and `query`, and returns the TSV rows as arrays of strings, or `undefined` when the HTTP status is 300 or more. `SimbadQueryOptions` are the `fetch` options (without `method` and `body`) and the CSV reader options (see CSV Reading and Parsing) plus `baseUrl` and `timeout` (milliseconds, 60000 by default, 0 for none); `signal` replaces the timeout. The cells are text as published, the header line is dropped by default (`skipFirstLine` is true) and `skipFirstLine: false` keeps it as the first row, and the ADQL is not validated. The tables of SIMBAD are `basic` (identity, type, ICRS position `ra` and `dec` in degrees, proper motions `pmra` and `pmdec` in mas/yr, `plx_value` in mas and `rvz_radvel` in km/s), `allfluxes` (one row per object with the magnitudes by band, such as `V`) and others; `TOP n` limits the rows and the service itself limits the answer. The snippet replaces `fetch` by a local stand-in, so it does not use the network.
+
+```ts
+import { SIMBAD_ALTERNATIVE_URL, SIMBAD_URL, simbadQuery } from 'nebulosa/src/adapters/catalogs/simbad'
+
+// A local stand-in for the service: it records the address and the form, and returns a TSV table.
+const requests: { url: string; form: FormData; signal?: AbortSignal | null }[] = []
+globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+	requests.push({ url: input.toString(), form: init!.body as FormData, signal: init!.signal })
+	return new Response(['oid\tmain_id\tra\tdec', '3755198\tM  42\t83.82208\t-5.39111', '1575544\tM  31\t10.68471\t41.26875'].join('\n'))
+}) as typeof fetch
+
+const adql = "SELECT TOP 2 oid, main_id, ra, dec FROM basic WHERE main_id IN ('M  42', 'M  31')"
+
+// The header line is dropped by default.
+const rows = await simbadQuery(adql)
+console.log(rows!.length, rows![0], rows![1]) // 2 [ "3755198", "M  42", "83.82208", "-5.39111" ] [ "1575544", "M  31", "10.68471", "41.26875" ]
+
+// The request is a form POST to the TAP endpoint of the primary host.
+const first = requests[0]
+console.log(first.url === `${SIMBAD_URL}simbad/sim-tap/sync`, SIMBAD_URL, SIMBAD_ALTERNATIVE_URL) // true https://simbad.cds.unistra.fr/ https://simbad.u-strasbg.fr/
+console.log(first.form.get('request'), first.form.get('lang'), first.form.get('format'), first.form.get('query') === adql) // doQuery adql tsv true
+console.log(first.signal instanceof AbortSignal) // true
+
+// The mirror host, with the header kept and the cells trimmed.
+const data = await simbadQuery(adql, { baseUrl: SIMBAD_ALTERNATIVE_URL, skipFirstLine: false, forceTrim: true })
+console.log(data) // [ [ "oid", "main_id", "ra", "dec" ], [ "3755198", "M  42", "83.82208", "-5.39111" ], [ "1575544", "M  31", "10.68471", "41.26875" ] ]
+console.log(requests[1].url) // https://simbad.u-strasbg.fr/simbad/sim-tap/sync
+
+// An own abort signal replaces the timeout, and a timeout of zero sends none.
+const controller = new AbortController()
+await simbadQuery(adql, { signal: controller.signal })
+await simbadQuery(adql, { timeout: 0 })
+console.log(requests[2].signal === controller.signal, requests[3].signal) // true undefined
+```
+
 ### Small-Body Identification
 
+`identify(dateTime, longitude, latitude, elevation, fovRa, fovDec, fovRaWidth?, fovDecWidth?, magLimit?, magRequired?)` (`src/adapters/orbits/sbd.ts`) asks the `sb_ident` service of JPL (the two-pass identification, with the first pass suppressed so that only the refined table is returned) which asteroids and comets are inside a field of view at a given time as seen from an observing site, and returns the parsed JSON. `dateTime` is a Unix millisecond timestamp (sent as `YYYY-MM-DD_HH:mm:ss`, in UTC) or a library `Time` (sent as its Julian day number plus its fraction); `longitude` and `latitude` locate the site (radians, east positive), `elevation` is a `Distance` (AU) sent in kilometers, `fovRa` and `fovDec` are the center of the field (radians, the right ascension being sent as `hh-mm-ss.ss` and the declination as `dd-mm-ss.ss` with `M` for the minus sign), `fovRaWidth` and `fovDecWidth` are the half-widths of the field (radians, 1 degree by default; the declination one defaults to the right-ascension one), `magLimit` is the limiting visual magnitude (18 by default) and `magRequired` (true by default) asks that only bodies with a known magnitude are listed (it is not sent as true when the limit is 30 or more). The answer is the `SmallBodyIdentifySecondPass` with `n_second_pass`, the column names `fields_second` and `data_second_pass`, the rows of text of the service, each row with the columns that the names give in order (name, position, distance and rates, magnitude, and the like). The numbers are as published and are not parsed, and the HTTP status is not checked. The snippet replaces `fetch` by a local stand-in that records the query and returns a short table, so it does not use the network.
+
+```ts
+import { identify, IDENTIFY_PATH, SBD_BASE_URL, type SmallBodyIdentifySecondPass } from 'nebulosa/src/adapters/orbits/sbd'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+// A local stand-in for the service with a second pass table.
+const addresses: string[] = []
+globalThis.fetch = (async (input: string | URL | Request) => {
+	addresses.push(input.toString())
+	return Response.json({
+		n_second_pass: 2,
+		fields_second: ['Object name', 'Astrometric RA', 'Astrometric Dec', 'Dist. from center', 'V mag'],
+		data_second_pass: [
+			['433 Eros (A898 PA)', '05:35:12.1', '-05:20:30', '12.4', '11.2'],
+			['1221 Amor (1932 EA1)', '05:35:40.5', '-05:25:02', '35.7', '16.9'],
+		],
+	})
+}) as typeof fetch
+
+// The field around the Orion Nebula seen from a site at 760 m, on 2026-10-05 at 03:00 UTC, 1 degree wide.
+const when = Date.UTC(2026, 9, 5, 3)
+const result = (await identify(when, deg(-45.5), deg(-23.2), meter(760), hour(5.588), deg(-5.39))) as SmallBodyIdentifySecondPass
+console.log(result.n_second_pass, result.fields_second) // 2 [ "Object name", "Astrometric RA", "Astrometric Dec", "Dist. from center", "V mag" ]
+for (const row of result.data_second_pass) console.log(row.join(' | ')) // 433 Eros (A898 PA) | 05:35:12.1 | -05:20:30 | 12.4 | 11.2; 1221 Amor (1932 EA1) | 05:35:40.5 | -05:25:02 | 35.7 | 16.9
+
+// The request: the fixed path of the service, then the time, the site (degrees and km) and the field.
+const url = new URL(addresses[0])
+console.log(addresses[0].startsWith(`${SBD_BASE_URL}${IDENTIFY_PATH}`), url.pathname) // true /sb_ident.api
+console.log(url.searchParams.get('obs-time'), url.searchParams.get('lat'), url.searchParams.get('lon'), url.searchParams.get('alt')) // 2026-10-05_03:00:00 -23.2 -45.5 0.76
+console.log(url.searchParams.get('fov-ra-center'), url.searchParams.get('fov-dec-center'), url.searchParams.get('fov-ra-hwidth'), url.searchParams.get('fov-dec-hwidth')) // 05-35-16.80 M05-23-24.00 1 1
+console.log(url.searchParams.get('vmag-lim'), url.searchParams.get('mag-required'), url.searchParams.get('two-pass'), url.searchParams.get('suppress-first-pass')) // 18 true true true
+
+// A rectangular field of 2 x 0.5 degrees, a limit of 20 and bodies with unknown magnitude included.
+await identify(when, deg(-45.5), deg(-23.2), meter(760), hour(5.588), deg(-5.39), deg(2), deg(0.5), 20, false)
+const wide = new URL(addresses.at(-1)!)
+console.log(wide.searchParams.get('fov-ra-hwidth'), wide.searchParams.get('fov-dec-hwidth'), wide.searchParams.get('vmag-lim'), wide.searchParams.get('mag-required')) // 2 0.5 20 false
+
+// A square field: the declination half-width follows the right-ascension one. A limit of 30 never requires a magnitude.
+await identify(when, deg(-45.5), deg(-23.2), meter(760), hour(5.588), deg(5.39), deg(0.25), undefined, 30)
+const square = new URL(addresses.at(-1)!)
+console.log(square.searchParams.get('fov-dec-center'), square.searchParams.get('fov-ra-hwidth'), square.searchParams.get('fov-dec-hwidth'), square.searchParams.get('mag-required')) // 05-23-24.00 0.25 0.25 false
+```
+
 ### VizieR TAP Queries
+
+`vizierQuery(query, options?)` (`src/adapters/catalogs/vizier.ts`) runs an ADQL query against the synchronous TAP endpoint of VizieR (`VIZIER_URL` plus `TAPVizieR/tap/sync`) and returns the answer as the rows of a TSV table, each row an array of strings, or `undefined` when the HTTP status is 300 or more. It sends a `POST` with the form fields `request=doQuery`, `lang=adql`, `format=tsv` and `query`. The options extend the `fetch` options (without `method` and `body`) and the CSV reader options (see CSV Reading and Parsing): `baseUrl` replaces the host, `timeout` is the limit in milliseconds (60000 by default, and 0 disables it), `signal` replaces the timeout with an own abort signal, and options such as `skipFirstLine` and `forceTrim` control the parsing. Nothing is converted: the cells are the text of the service, the header line is dropped by default (`skipFirstLine` is true) and `skipFirstLine: false` keeps it as the first row, and the call does not validate the ADQL. The snippet replaces `fetch` by a local stand-in that records the request and answers with a short table, so it does not use the network.
+
+```ts
+import { vizierQuery, VIZIER_URL } from 'nebulosa/src/adapters/catalogs/vizier'
+
+// A local stand-in for the service: it records the address and the form, and returns a TSV table.
+const requests: { url: string; form: FormData; signal?: AbortSignal | null }[] = []
+globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+	requests.push({ url: input.toString(), form: init!.body as FormData, signal: init!.signal })
+	const rows = [
+		['Source', 'RAJ2000', 'DEJ2000', 'Gmag'],
+		['1', '10.5', '-5.25', '9.1'],
+		['2', '10.6', '-5.3', '12.4'],
+	]
+	return new Response(rows.map((row) => row.join('\t')).join('\n'))
+}) as typeof fetch
+
+const adql = 'SELECT TOP 2 Source, RAJ2000, DEJ2000, Gmag FROM "I/355/gaiadr3" WHERE Gmag < 13 ORDER BY Gmag ASC'
+
+// The default parsing drops the header line, so the rows are the data.
+const rows = await vizierQuery(adql)
+console.log(rows!.length, rows![0], rows![1]) // 2 [ "1", "10.5", "-5.25", "9.1" ] [ "2", "10.6", "-5.3", "12.4" ]
+
+// The request is a form POST to the TAP endpoint of the default host.
+const first = requests[0]
+console.log(first.url === `${VIZIER_URL}TAPVizieR/tap/sync`, VIZIER_URL) // true http://tapvizier.cds.unistra.fr/
+console.log(first.form.get('request'), first.form.get('lang'), first.form.get('format'), first.form.get('query') === adql) // doQuery adql tsv true
+console.log(first.signal instanceof AbortSignal) // true
+
+// Keep the header, trim the cells, change the host and give an own abort signal instead of the timeout.
+const controller = new AbortController()
+const data = await vizierQuery(adql, { baseUrl: 'http://localhost:8080/', skipFirstLine: false, forceTrim: true, signal: controller.signal })
+console.log(data) // [ [ "Source", "RAJ2000", "DEJ2000", "Gmag" ], [ "1", "10.5", "-5.25", "9.1" ], [ "2", "10.6", "-5.3", "12.4" ] ]
+console.log(requests[1].url, requests[1].signal === controller.signal) // http://localhost:8080/TAPVizieR/tap/sync true
+
+// A timeout of zero sends no signal.
+await vizierQuery(adql, { timeout: 0 })
+console.log(requests[2].signal) // undefined
+```
 
 ## 💾 I/O and Data Formats
 
@@ -19659,7 +20216,118 @@ for await (const line of readLines(source, 16, { emptyLines: false })) console.l
 
 ### XISF Containers and Metadata
 
+An XISF monolithic file (`src/io/formats/xisf/xisf.ts`) starts with the signature `XISF0100`, a 32-bit little-endian length of the XML header and 4 reserved bytes, then the XML header (UTF-8) and the attached data blocks that its `location="attachment:offset:size"` attributes point to. `isXisf(bytes)` checks the signature. `readXisf(source)` reads the XML of a seekable source (see Byte-Stream Contracts) and returns `{ images }`, or `undefined` when the signature is missing or the declared header is longer than `XISF_MAX_HEADER_LENGTH` (8 MiB); the pixel blocks are not read, only located. `parseXisfHeader(xml)` is the parser it uses on the XML buffer. Each `XisfImage` has the `geometry` (`width`, `height` and `channels`), the `sampleFormat` and its `bitpix` equivalent (`bitpixFromSampleFormat` maps `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float32` and `Float64` to 8, 16, 32, 64, -32 and -64), the `colorSpace` (`Gray` or `RGB`, a missing one being gray), the `pixelStorage` (`Planar` or `Normal`, which is interleaved), the `byteOrder` (`little` unless the file says `big`), the `imageType` (`Light` by default), the `location` of the block (offset and size in bytes, the size being the compressed one), the `compression` descriptor when there is one, and a FITS-style `header` built from the geometry, the sample format and the `FITSKeyword` elements, so the metadata accessors of FITS Header Cards and Metadata work on it. Images that are not attached, are `CIELab`, `UInt64`, have an invalid geometry or an unknown compression are skipped. `writeXisf(sink, images, format?)` writes the images (`header`, `raw` and `sampleScale`, as in FITS Containers and HDUs) as a monolithic file and returns the bytes written: the geometry, the sample format (from `BITPIX`, which is 64-bit float when absent) and the header cards are written to the XML, the cards `SIMPLE`, `BITPIX` and `NAXIS*` being dropped as redundant. The `format` selects the `byteOrder` (little by default), the `pixelStorage` (`Planar` by default) and the `compression` (see XISF Pixel I/O and Compression). The data blocks follow the header without padding.
+
+```ts
+import { bitpixFromSampleFormat, isXisf, parseXisfHeader, readXisf, writeXisf, XISF_MAX_HEADER_LENGTH, XISF_SIGNATURE } from 'nebulosa/src/io/formats/xisf/xisf'
+import { bufferSink, bufferSource } from 'nebulosa/src/io/io'
+
+console.log(XISF_SIGNATURE, XISF_MAX_HEADER_LENGTH) // XISF0100 8388608
+console.log(bitpixFromSampleFormat('UInt8'), bitpixFromSampleFormat('UInt16'), bitpixFromSampleFormat('UInt32'), bitpixFromSampleFormat('Float32'), bitpixFromSampleFormat('Float64')) // 8 16 32 -32 -64
+
+// A color image of 8x4 pixels (3 channels, interleaved in memory) written as a 16-bit file.
+const width = 8
+const height = 4
+const raw = new Float32Array(width * height * 3)
+for (let i = 0; i < width * height; i++) raw.set([i / 31, 0.5, 1 - i / 31], i * 3)
+const header = { SIMPLE: true, BITPIX: 16, NAXIS: 3, NAXIS1: width, NAXIS2: height, NAXIS3: 3, OBJECT: 'M42', EXPTIME: 30 }
+
+const out = Buffer.alloc(8192)
+const sink = bufferSink(out)
+console.log(await writeXisf(sink, [{ header, raw, sampleScale: 'normalized' }]), sink.position) // 530 530
+const file = out.subarray(0, sink.position)
+console.log(isXisf(file), isXisf(Buffer.from('SIMPLE'))) // true false
+
+// The layout: the length of the XML at byte 8, the XML at byte 16 and the data block after it.
+const length = file.readUInt32LE(8)
+console.log(length, file.toString('latin1', 16, 16 + length)) // 322 <?xml version="1.0" encoding="UTF-8"?>\n<xisf version="1.0"><Image geometry="8:4:3" sampleFormat="UInt16" colorSpace="RGB" location="attachment:338:192" pixelStorage="Planar" byteOrder="little"><FITSKeyword name="OBJECT" value="&apos;M42&apos;" comment=""/><FITSKeyword name="EXPTIME" value="30" comment=""/></Image></xisf>
+
+// Reading locates the block and rebuilds a FITS-style header.
+const xisf = (await readXisf(bufferSource(file)))!
+const image = xisf.images[0]
+console.log(xisf.images.length, image.geometry, image.location, image.compression) // 1 { width: 8, height: 4, channels: 3 } { offset: 338, size: 192 } undefined
+console.log(image.sampleFormat, image.bitpix, image.byteOrder, image.colorSpace, image.imageType, image.pixelStorage) // UInt16 16 little RGB Light Planar
+console.log(image.header) // { SIMPLE: true, BITPIX: 16, NAXIS: 3, NAXIS1: 8, NAXIS2: 4, NAXIS3: 3, OBJECT: "M42", EXPTIME: 30 }
+
+// The parser can be used on the XML alone.
+const parsed = parseXisfHeader(file.subarray(16, 16 + length))
+console.log(parsed.length, parsed[0].geometry, parsed[0].location) // 1 { width: 8, height: 4, channels: 3 } { offset: 338, size: 192 }
+
+// Several images in a file, with different sample formats: the blocks are placed one after the other.
+const mono = new Float32Array(width * height)
+const both = Buffer.alloc(4096)
+const bothSink = bufferSink(both)
+await writeXisf(bothSink, [
+	{ header: { BITPIX: 8, NAXIS: 2, NAXIS1: width, NAXIS2: height }, raw: mono, sampleScale: 'normalized' },
+	{ header: { BITPIX: -64, NAXIS: 2, NAXIS1: width, NAXIS2: height }, raw: mono, sampleScale: 'normalized' },
+])
+const images = (await readXisf(bufferSource(both.subarray(0, bothSink.position))))!.images
+console.log(images.map((e) => [e.sampleFormat, e.location.offset, e.location.size])) // [ [ "UInt8", 361, 32 ], [ "Float64", 393, 256 ] ]
+```
+
 ### XISF Pixel I/O and Compression
+
+`XisfImageReader` and `XisfImageWriter` (`src/io/formats/xisf/xisf.ts`) move the pixels of one XISF image between its data block and the channel-interleaved `Float32Array` or `Float64Array` of the imaging code. `new XisfImageReader(image, buffer?)` takes an image from `readXisf` (see XISF Containers and Metadata), and `read(source, output, sampleScale?)` seeks to the block, decompresses it if needed, undoes the byte shuffling, the byte order and the planar layout, and fills `output` (`width * height * channels` samples), returning `true` when the block has the size that the geometry and the sample type imply. `sampleScale` is `'normalized'` (the default, integers mapped to 0 to 1) or `'digital'` (the integer values, such as 0 to 65535 for `UInt16`); floating-point formats are read as stored. `new XisfImageWriter(xisf, compression?, buffer?)` encodes an image described by `{ byteOrder, bitpix, geometry, pixelStorage, compression }`: `encode(raw)` returns `{ data, compression? }` with the block bytes and the descriptor to write in the XML, and `write(raw, sink)` writes the block and returns the bytes written. The compression is `false` (none) or `{ format, shuffled?, level? }`, where `format` is `'zlib'` (the codec of Deflate Compression) or `'zstd'` (through Bun) and `shuffled` applies the byte shuffle of Byte Shuffling on the multi-byte samples before compressing, which is declared as `zlib+sh` or `zstd+sh` with the item size; the type names `lz4` and `lz4hc` too, but they are not implemented for writing, and a block with a codec that is not zlib or zstd cannot be decompressed. `level` is the level of the codec. Integer sample formats quantize the floats to their range, so the round trip of a 16-bit file is accurate to one step (1/65535), while a floating-point file round-trips exactly. In `writeXisf` the same options go in its `format` argument.
+
+```ts
+import { bitpixFromSampleFormat, readXisf, writeXisf, XisfImageReader, XisfImageWriter } from 'nebulosa/src/io/formats/xisf/xisf'
+import { bufferSink, bufferSource } from 'nebulosa/src/io/io'
+
+const width = 8
+const height = 4
+const raw = new Float32Array(width * height * 3)
+for (let i = 0; i < width * height; i++) raw.set([i / 31, 0.5, 1 - i / 31], i * 3)
+const header = { SIMPLE: true, BITPIX: 16, NAXIS: 3, NAXIS1: width, NAXIS2: height, NAXIS3: 3 }
+
+// A file with the defaults (little-endian, planar, uncompressed), read in the two scales.
+const out = Buffer.alloc(8192)
+const sink = bufferSink(out)
+await writeXisf(sink, [{ header, raw, sampleScale: 'normalized' }])
+const file = out.subarray(0, sink.position)
+const image = (await readXisf(bufferSource(file)))!.images[0]
+
+const normalized = new Float32Array(raw.length)
+console.log(await new XisfImageReader(image).read(bufferSource(file), normalized), normalized.slice(0, 6)) // true Float32Array(6) [ 0, 0.5, 1, 0.0323, 0.5, 0.9677 ]
+const digital = new Float32Array(raw.length)
+await new XisfImageReader(image).read(bufferSource(file), digital, 'digital')
+console.log(digital.slice(0, 6)) // Float32Array(6) [ 0, 32768, 65535, 2114, 32768, 63421 ]
+
+// The options of the writer: byte order, layout and compression, with the descriptor and block size read back.
+const sizes: unknown[] = []
+for (const compression of [false, { format: 'zlib' }, { format: 'zlib', shuffled: true }, { format: 'zstd', level: 3 }, { format: 'zstd', shuffled: true }] as const) {
+	const target = Buffer.alloc(8192)
+	const targetSink = bufferSink(target)
+	await writeXisf(targetSink, [{ header, raw, sampleScale: 'normalized' }], { byteOrder: 'big', pixelStorage: 'Normal', compression })
+	const bytes = target.subarray(0, targetSink.position)
+	const read = (await readXisf(bufferSource(bytes)))!.images[0]
+	const decoded = new Float32Array(raw.length)
+	await new XisfImageReader(read).read(bufferSource(bytes), decoded)
+	let worst = 0
+	for (let i = 0; i < raw.length; i++) worst = Math.max(worst, Math.abs(decoded[i] - raw[i]))
+	sizes.push([read.compression?.format ?? 'none', read.compression?.shuffled, read.location.size, read.byteOrder, read.pixelStorage, worst < 1 / 65535])
+}
+console.log(sizes) // [ [ "none", undefined, 192, "big", "Normal", true ], [ "zlib", false, 153, "big", "Normal", true ], [ "zlib", true, 153, "big", "Normal", true ], [ "zstd", false, 150, "big", "Normal", true ], [ "zstd", true, 150, "big", "Normal", true ] ]
+
+// A floating-point file round-trips exactly, and shuffling uses the item size of the samples (4 bytes).
+const floating = Buffer.alloc(8192)
+const floatingSink = bufferSink(floating)
+await writeXisf(floatingSink, [{ header: { ...header, BITPIX: -32 }, raw, sampleScale: 'normalized' }], { compression: { format: 'zlib', shuffled: true } })
+const floatingBytes = floating.subarray(0, floatingSink.position)
+const floatImage = (await readXisf(bufferSource(floatingBytes)))!.images[0]
+const floatBack = new Float32Array(raw.length)
+await new XisfImageReader(floatImage).read(bufferSource(floatingBytes), floatBack)
+console.log(
+	floatImage.compression,
+	floatBack.every((value, i) => value === raw[i]),
+) // { format: "zlib", shuffled: true, uncompressedSize: 384, itemSize: 4 } true
+
+// The block writer alone: the encoded bytes and descriptor, or the bytes written to a sink.
+const writer = new XisfImageWriter({ byteOrder: 'little', bitpix: -32, geometry: { width, height, channels: 3 }, pixelStorage: 'Planar', compression: undefined })
+const encoded = await writer.encode(raw)
+console.log(encoded.data.byteLength, encoded.compression) // 384 undefined
+const block = Buffer.alloc(1024)
+console.log(await writer.write(raw, bufferSink(block)), bitpixFromSampleFormat('Float32')) // 384 -32
+```
 
 ### XML Parsing
 
