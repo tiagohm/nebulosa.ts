@@ -137,7 +137,7 @@ console.log(airmass(deg(60))) // 2.0 — dimensionless airmass
 console.log(airmassKastenYoung(deg(30))) // 1.9943 — dimensionless
 console.log(airmassKastenYoung(deg(10))) // 5.5860 — dimensionless
 
-// Magnitude loss = k * X. k: mag/airmass. X: airmass, must be >= 1 (throws RangeError otherwise).
+// Magnitude loss = k * X. k: mag/airmass. X: airmass, must be >= 1.
 console.log(atmosphericExtinction(0.2, airmassKastenYoung(deg(30)))) // 0.3989 — magnitudes lost
 ```
 
@@ -1243,9 +1243,6 @@ console.log(relativeEphemerisPath(sunPath, earthPath).stateAt(time)[0]) // [-0.1
 // Endpoint identity ignores the display name, and kinds never mix.
 console.log(sameEphemerisEndpoint(EARTH, naifEphemerisEndpoint(399))) // true
 console.log(sameEphemerisEndpoint(EARTH, customEphemerisEndpoint('399'))) // false
-
-// Mismatched endpoints throw instead of giving plausible but invalid geometry.
-composeEphemerisPaths(earthPath, sunPath) // Error: cannot compose ephemeris paths: first target does not match second center
 ```
 
 ### Equation of Time
@@ -1308,7 +1305,6 @@ console.log(chebyshev.diagnostics?.maxAbsRA) // 0 — radians, within the fit's 
 // Outside the span: clamped by default, optionally extrapolated or rejected.
 console.log(linear.compute(at(6)).map(toDeg)) // [152.32, 19.6] — degrees, the last sample
 console.log(linearInterpolator(points, { outOfRange: 'extrapolate' }).compute(at(5)).map(toDeg)) // [152.96, 19.5] — degrees
-linearInterpolator(points, { outOfRange: 'throw' }).compute(at(9)) // RangeError: interpolation time is outside the sample range
 
 // A denser table.
 console.log(
@@ -1705,9 +1701,6 @@ console.log(vecDistance(result.state.v, truth[1]) / vecLength(truth[1])) // 0.00
 console.log(result.ranges.rho2) // 2.1257 — AU, observer-to-target distance
 console.log(result.diagnostics.methodForVelocity) // gibbs — chosen from the geometry
 console.log(result.diagnostics.warnings) // ['MULTIPLE_POSITIVE_ROOTS']
-
-// Times that do not increase throw.
-gauss(observe(0), observe(-4), observe(4), { mu: GM_SUN_PITJEVA_2005 }) // RangeError: gauss requires strictly increasing observation times
 ```
 
 ### GCRS to ITRS Rotation
@@ -1821,11 +1814,6 @@ console.log(v) // [-0.011823, -0.0085783, 0.00030201] — AU/day, equal to the t
 console.log(diagnostics.reliability) // good
 console.log(toDeg(diagnostics.angle12)) // 7.76 — degrees between the first two positions
 console.log(diagnostics.warnings) // []
-
-// Duplicate positions are degenerate: this returns a bad result instead of throwing.
-console.log(gibbs(r1, r1, r3, GM_SUN_PITJEVA_2005, { allowUnreliable: true }).v) // [NaN, NaN, NaN]
-
-gibbs(r1, r1, r3, GM_SUN_PITJEVA_2005) // RangeError: gibbs input is invalid: ANGULAR_SEPARATION_TOO_SMALL, ...
 ```
 
 ### Great Red Spot Transits
@@ -1975,8 +1963,6 @@ console.log(
 // The same cone in ring ordering, and at a finer resolution.
 console.log(circleToPixels(nside, hour(10), deg(20), deg(1), { ordering: 'ring' }).length) // 21
 console.log(circleToPixels(nside, hour(10), deg(20), deg(1), { targetNside: 256 }).length) // 111
-
-coordToPixel(63, 0, 0) // Error: invalid HEALPix NSIDE: 63. Expected a power of two in [1, 16777216]
 ```
 
 ### Heliacal Events
@@ -2046,13 +2032,6 @@ console.log(r) // [-1.01258, 1.25644, 0.19314] — AU, the middle position
 console.log(v) // [-0.011823, -0.0085783, 0.00030201] — AU/day, within 1e-8 of the true velocity (relative)
 console.log(diagnostics.dt21, diagnostics.dt32, diagnostics.dt31) // 2 3 5 — days
 console.log(diagnostics.reliable, diagnostics.warnings) // true []
-
-// Epochs that do not increase are rejected: NaN velocity and a warning list.
-const bad = herrickGibbs(r3, r2, r1, t3, t2, t1, GM_SUN_PITJEVA_2005)
-
-console.log(bad.diagnostics.reliable, bad.diagnostics.warnings) // false ['NON_INCREASING_TIME', 'TIME_INTERVAL_TOO_SMALL']
-
-herrickGibbs(r3, r2, r1, t3, t2, t1, GM_SUN_PITJEVA_2005, { throwOnInvalid: true }) // Error: herrick-gibbs input is unreliable: NON_INCREASING_TIME, TIME_INTERVAL_TOO_SMALL
 ```
 
 ### Hour-Angle Windows
@@ -2294,8 +2273,6 @@ console.log(horizontalToEnuVector(0, 0)) // [0, 1, 0]
 console.log(horizontalToEnuVector(deg(90), 0)) // [1, 0, 0]
 console.log(horizontalToEnuVector(deg(180), 0)) // [0, -1, 0]
 console.log(enuVectorToHorizontal([0, 0, 1])) // { azimuth: 0, altitude: 1.5708 } — the azimuth is arbitrary at the zenith
-
-enuVectorToHorizontal([0, 0, 0]) // RangeError: vector must be non-zero
 ```
 
 ### Local Horizon Coordinates
@@ -2430,7 +2407,7 @@ console.log(view.shapes.map((shape) => `${shape.kind}:${shape.role}`).join(' '))
 // polygon:horizonBand path:trajectoryPath circle:ghostMoonDisk ×6 circle:moonDisk circle:penumbra circle:umbra line:horizonLine
 
 for (const shape of view.shapes) {
-	if (shape.kind === 'circle' && (shape.role === 'moonDisk' || shape.role === 'penumbra' || shape.role === 'umbra')) console.log(shape.role, shape.event, shape.cx.toFixed(2), shape.cy.toFixed(2), shape.r.toFixed(2))
+	if (shape.kind === 'circle' && (shape.role === 'moonDisk' || shape.role === 'penumbra' || shape.role === 'umbra')) console.log(shape.role, shape.event, shape.cx, shape.cy, shape.r)
 }
 // moonDisk MAX 156.10 124.81 25.61
 // penumbra undefined 150.00 150.00 120.32
@@ -2490,7 +2467,7 @@ console.log(circumstances.details.maximalMagnitude, circumstances.details.moonSu
 console.log(circumstances.details.partialPhaseDuration, circumstances.details.centralPhaseDuration, circumstances.details.shadowPathWidthKm) // 9560.84 234.98 172.49
 
 for (const event of Object.values(circumstances.events)) {
-	console.log(event.kind, timeToDate(utc(event.time)).slice(0, 6).join('-'), toDeg(event.sunAltitude).toFixed(2), toDeg(event.positionAngle!).toFixed(1), event.magnitude.toFixed(4), event.description)
+	console.log(event.kind, timeToDate(utc(event.time)).slice(0, 6).join('-'), toDeg(event.sunAltitude), toDeg(event.positionAngle!), event.magnitude, event.description)
 }
 // C1 2024-4-8-17-23-22 60.57 226.2 -0.0000 Beginning of partial phase
 // C2 2024-4-8-18-40-44 64.67 20.3 1.0000 Beginning of total phase
@@ -2552,7 +2529,7 @@ console.log(entries.length) // 3
 
 for (const { eclipse, elements, state } of entries) {
 	const local = computeLocalSolarEclipseCircumstances(elements, longitude, latitude, { sunMoonPosition })
-	console.log(timeToDate(utc(eclipse.maximalTime)).slice(0, 3).join('-'), eclipse.type, eclipse.magnitude.toFixed(3), local.visibility.kind, local.details.maximalMagnitude!.toFixed(3), state.magnitude.toFixed(3))
+	console.log(timeToDate(utc(eclipse.maximalTime)).slice(0, 3).join('-'), eclipse.type, eclipse.magnitude, local.visibility.kind, local.details.maximalMagnitude!, state.magnitude)
 }
 // 2023-10-14 annular 0.952 completelyVisible 0.862 0.862
 // 2024-4-8 total 1.055 completelyVisible 1.015 1.015
@@ -2591,7 +2568,7 @@ console.log(view.shapes.map((shape) => `${shape.kind}:${shape.role}`).join(' '))
 // circle:ghostMoonDisk ×4 circle:sunDisk circle:moonDisk polygon:horizonBand line:horizonLine
 
 for (const shape of view.shapes) {
-	if (shape.kind === 'circle') console.log(shape.role, shape.event, shape.cx.toFixed(2), shape.cy.toFixed(2), shape.r.toFixed(2))
+	if (shape.kind === 'circle') console.log(shape.role, shape.event, shape.cx, shape.cy, shape.r)
 }
 // ghostMoonDisk C1 180.57 133.97 35.90
 // ghostMoonDisk C2 224.55 81.86 35.91
@@ -2616,7 +2593,7 @@ console.log(empty.selectedEvent, empty.shapes.length) // undefined 0
 // The pieces: the disks of the start of totality in the frame of the maximum, and its horizon.
 const options = { width: 450, height: 160, selectedEvent: 'MAX', orientationMode: 'zenith', solarRadiusPx: 34, includeGhostDisks: true, includeHorizon: true } as const
 const pair = computeLocalViewDiskPair(circumstances.events.C2!, options, circumstances.events.MAX!)
-console.log(pair.sun.cx, pair.sun.cy, pair.moon.cx.toFixed(2), pair.moon.cy.toFixed(2), pair.moon.r.toFixed(2)) // 225 80 224.55 81.86 35.91
+console.log(pair.sun.cx, pair.sun.cy, pair.moon.cx, pair.moon.cy, pair.moon.r) // 225 80 224.55 81.86 35.91
 console.log(buildLocalViewHorizonGeometry(circumstances.events.MAX!, options).map((shape) => `${shape.kind}:${shape.role}`)) // [ 'polygon:horizonBand', 'line:horizonLine' ]
 ```
 
@@ -3196,7 +3173,7 @@ console.log(Sidereal.mean(2446895.5), Sidereal.apparent(2446895.5)) // 47446.366
 console.log(Coords.eclipticToEquatorial(...([113.21563, 6.68417].map((v) => (v * Math.PI) / 180) as [number, number]), Nutation.meanObliquity(2447000.5)).map(toDeg)) // [ 116.3293245, 28.0276333 ] — the obliquity of the date is that of 2447000.5, not the book's 23.4392911°
 
 // Nutation in longitude and obliquity for 1987-04-10 0h TT, in arcseconds, and the mean obliquity.
-console.log(Nutation.nutation(2446895.5).map((v) => (v * 206264.80624709636).toFixed(3))) // [ '-3.788', '9.443' ]
+console.log(Nutation.nutation(2446895.5).map((v) => v * 206264.80624709636)) // [ -3.788, 9.443 ] (arcseconds)
 console.log(toDeg(Nutation.meanObliquity(2446895.5))) // 23.44094649
 
 // Angular separation of Arcturus and Spica (RA, Dec in radians), in degrees.
@@ -3965,7 +3942,6 @@ console.log(mpcorb('')) // undefined
 // Packed dates: century letter, two digits, month and day in base 32.
 console.log(packDate(2024, 11, 1)) // K24B1
 console.log(unpackDate('J9611')) // [1996, 1, 1]
-packDate(2025, 13, 1) // RangeError: invalid packed date value "13"
 ```
 
 ### Mutual Planetary-Satellite Events
@@ -4086,9 +4062,6 @@ console.log(observed.star === barnard) // true
 // Without refraction, and with a thinner, colder atmosphere.
 console.log(toDeg(observeStar(barnard, time, barycentric, heliocentric[0], false).altitude)) // 52.64 — degrees
 console.log(toDeg(observeStar(barnard, time, barycentric, heliocentric[0], { pressure: 700, temperature: 0 }).altitude)) // 52.65 — degrees
-
-// A missing location is rejected.
-observeStar(barnard, timeYMDHMS(2025, 7, 1, 3, 0, 0, Timescale.UTC), barycentric, heliocentric[0]) // Error: time.location is required
 ```
 
 ### Observing Visibility Windows
@@ -4130,8 +4103,6 @@ console.log(fmt(strict)) // [[[2025, 9, 28, 6, 52], [2025, 9, 28, 9, 33]]]
 
 console.log(visibilityWindows(() => star, site, start, end).length) // 1 — no constraints: the whole window
 console.log(visibilityWindows(() => star, site, start, end, { maximumAirmass: 0.9 })) // [] — airmass below 1 is impossible
-
-visibilityWindows(() => star, site, start, end, { maximumSunAltitude: 0 }) // RangeError: sun direction is required when a solar limit is set
 ```
 
 ### Orbit Covariance Propagation
@@ -4437,8 +4408,6 @@ const marsAt = (time: Time) => vecMinus(mars(time)[0], earth(time)[0])
 for (const station of planetaryStations(marsAt, start, stop, { step: 2 })) console.log(station.kind, timeToDate(station.time).slice(0, 5), toDeg(station.longitude))
 // directToRetrograde [2020, 9, 9, 22, 19] 28.14 — TT, ecliptic longitude in degrees
 // retrogradeToDirect [2020, 11, 14, 0, 32] 15.23
-
-planetaryStations(marsAt, start, stop, { derivativeHalfStep: 0 }) // RangeError: value must be positive
 ```
 
 ### Planetary Surface Locations
@@ -5306,8 +5275,6 @@ console.log(toDeg(ellipse.positionAngle)) // 73.5 — degrees, major axis from n
 
 // The 3-sigma ellipse.
 console.log(toArcsec(ephemerisUncertaintyEllipse(covariance, geocentric, { sigma: 3 }).semiMajor)) // 19.8 — arcseconds
-
-ephemerisUncertaintyEllipse(covariance, [0, 0, 0]) // Error: geocentric direction must be a non-zero vector to define a sky-plane ellipse
 ```
 
 ### Solar Eclipse Besselian Elements
@@ -5762,7 +5729,6 @@ console.log(pool.get('items')) // [1, 2, 3] — `=` then `+=`, name matched case
 console.log(pool.numbers('BODY301_RADII')) // [1737.4, 1737.4, 1737.4] — kilometers in the file
 console.log(pool.strings('FRAME_31000_NAME')) // ['MOON_PA']
 console.log(pool.get('GM')) // [398600.435436096] — the D exponent is converted
-console.log(pool.get('MISSING')) // undefined
 
 // A later load replaces a name with `=`.
 pool.load(new Map([['ITEMS', [9]]]))
@@ -5805,9 +5771,6 @@ const moon = (await spk.segment(Naif.EMB, Naif.MOON))!
 console.log(moon.at(time)[0]) // [-0.0017378, 0.0016515, 0.00089348] — AU
 
 console.log(await spk.segment(7, 9)) // undefined — no segment for that pair
-
-// A time outside the coverage throws.
-segment.at(timeYMDHMS(2300, 1, 1, 0, 0, 0, Timescale.TDB)) // Error: cannot find a segment that covers the date
 
 // NAIF codes for asteroid 65803 (Didymos).
 console.log(extendedPermanentAsteroidNumber(65803)) // 20065803
@@ -6174,9 +6137,8 @@ const direct = recordFromSgp4Elements({
 
 console.log(sgp4(tle.epoch, direct)[0].map(toKilometer)) // [-3737.79, 2970.46, 4831.15] — km
 
-// A different gravity model, and a malformed input.
+// A different gravity model.
 console.log(recordFromTLE(tle, SGP4_WGS84).gravity.name) // wgs84
-parseTLE('2 1', '2 2') // Error: TLE line 1 must start with "1"
 ```
 
 ### Topocentric Observed Place
@@ -6331,8 +6293,6 @@ console.log(fmt(darknessWindows(sunAt, site, start, end, { moonAt }).dark)) // [
 
 // Or allow it up to 10° above the horizon.
 console.log(fmt(darknessWindows(sunAt, site, start, end, { moonAt, maximumMoonAltitude: deg(10) }).dark)) // [[[2025, 9, 28, 3, 21], [2025, 9, 28, 9, 5]]]
-
-darknessWindows(sunAt, site, start, end, { maximumMoonAltitude: 0 }) // RangeError: moon direction is required when a lunar altitude limit is set
 ```
 
 ### Two-Body Kepler Propagation
@@ -6513,9 +6473,6 @@ console.log(stars[0]) // { x: 464.9656, y: 119.9062, hfd: 7.5315, snr: 295, flux
 // A filter on the signal-to-noise ratio, and a time limit.
 const bright = await astapDetectStars('data/apod4.jpg', { minSNR: 30, timeout: 60000 })
 console.log(bright.every((star) => star.hfd > 0 && star.flux > 0)) // true
-
-// A missing file gives an empty list.
-console.log(await astapDetectStars('data/missing.fit')) // []
 ```
 
 ### Astrometry.net Index Selection
@@ -6534,7 +6491,7 @@ import { deg, hour, toArcmin, toArcsec, toDeg } from 'nebulosa/src/math/units/an
 
 // The scales of the manifest, with the quad diameters in arcminutes.
 console.log(ASTROMETRY_INDEX_MANIFEST.length) // 20
-console.log(ASTROMETRY_INDEX_MANIFEST.map((s) => `${s.indexNumber}:${toArcmin(s.minimumQuadDiameter).toFixed(1)}-${toArcmin(s.maximumQuadDiameter).toFixed(1)}`).join(' '))
+console.log(ASTROMETRY_INDEX_MANIFEST.map((s) => `${s.indexNumber}:${toArcmin(s.minimumQuadDiameter)}-${toArcmin(s.maximumQuadDiameter)}`).join(' '))
 // 5200:2.0-2.8 5201:2.8-4.0 5202:4.0-5.6 5203:5.6-8.0 5204:8.0-11.0 5205:11.0-16.0 5206:16.0-22.0 4107:22.0-30.0 4108:30.0-42.0 4109:42.0-60.0 4110:60.0-85.0 4111:85.0-120.0 4112:120.0-170.0 4113:170.0-240.0 4114:240.0-340.0 4115:340.0-480.0 4116:480.0-680.0 4117:680.0-1000.0 4118:1000.0-1400.0 4119:1400.0-2000.0
 
 // A 1000 mm telescope with a 3.76 µm camera of 4144 × 2822 pixels, with no position known.
@@ -6651,8 +6608,8 @@ const result = await crossMatchStars(detected, new ListCatalog(catalog), { cente
 console.log(result.success, result.failureReason) // true undefined
 
 const solution = result.solution!
-console.log(toHour(solution.rightAscension).toFixed(6), toDeg(solution.declination).toFixed(6)) // 5.500000 -5.000000
-console.log(toArcsec(solution.scale).toFixed(6), toDeg(solution.rotation).toFixed(6), solution.mirrored, toDeg(solution.fieldRadius).toFixed(4)) // 2.000000 0.000000 false 0.5556
+console.log(toHour(solution.rightAscension), toDeg(solution.declination)) // 5.500000 -5.000000
+console.log(toArcsec(solution.scale), toDeg(solution.rotation), solution.mirrored, toDeg(solution.fieldRadius)) // 2.000000 0.000000 false 0.5556
 
 console.log(result.summary.totalDetected, result.summary.matchedCount, result.summary.catalogCount, result.summary.projectedCatalogCount, result.summary.inlierCount) // 16 16 16 16 16
 console.log(result.summary.medianResidual! < 1e-6, result.summary.medianSkySeparation! < 1e-12) // true true (exact synthetic data)
@@ -6660,13 +6617,6 @@ console.log(result.summary.medianResidual! < 1e-6, result.summary.medianSkySepar
 const first = result.matches[0]
 console.log(first.status, first.detectedIndex, first.catalogIndex, first.residual! < 1e-6, first.skySeparation! < 1e-12) // matched 0 0 true true
 console.log(result.catalogStars.length, result.starMatch!.inlierCount) // 16 16
-
-// The failures resolve with success false.
-const noStars = await crossMatchStars([], new ListCatalog(catalog), { centerRA: center.rightAscension, centerDEC: center.declination, radius: deg(1), camera: { width, height } })
-console.log(noStars.success, noStars.failureReason) // false no detected stars
-
-const noCatalog = await crossMatchStars(detected, new ListCatalog([]), { centerRA: center.rightAscension, centerDEC: center.declination, radius: deg(1), camera: { width, height } })
-console.log(noCatalog.success, noCatalog.failureReason) // false no catalog stars in query region
 ```
 
 ### FITS TAN and SIP Coordinate Mapping
@@ -6747,7 +6697,7 @@ console.log(tanProject(horizontal, deg(83.85), deg(-5.3))) // [ 579.380096796436
 // A vertical flip: y goes to 801 - y.
 console.log(tanProject(reflectFitsWcs({ ...header }, 1000, 800, false, true), deg(83.85), deg(-5.3))) // [ 421.61990320356387, 193.22071247770208 ] = [ x, 801 - y ]
 
-// No flip returns the very same header, and an invalid size throws.
+// No flip returns the very same header.
 console.log(reflectFitsWcs(header, 1000, 800, false, false) === header) // true
 
 // The CDELT + CROTA and the PC conventions are mirrored in their own keywords.
@@ -6907,18 +6857,18 @@ const current = reference.map(({ x, y }) => ({ x: c * x - s * y + 30, y: s * x +
 
 // The similarity from reference to current: a = 1.05·cos(10°), b = 1.05·sin(10°).
 const similarity = fitSimilarityTransform(reference, current)!
-console.log(similarity.a.toFixed(6), similarity.b.toFixed(6), similarity.tx.toFixed(4), similarity.ty.toFixed(4), similarity.mirrored) // 1.034048 0.182331 30.0000 -20.0000 false
-console.log(Math.hypot(similarity.a, similarity.b).toFixed(6), toDeg(Math.atan2(similarity.b, similarity.a)).toFixed(4)) // 1.050000 10.0000
+console.log(similarity.a, similarity.b, similarity.tx, similarity.ty, similarity.mirrored) // 1.034048 0.182331 30.0000 -20.0000 false
+console.log(Math.hypot(similarity.a, similarity.b), toDeg(Math.atan2(similarity.b, similarity.a))) // 1.050000 10.0000
 
 // The same points with weights, and with the mirrored branch for a frame flipped in x.
-console.log(fitSimilarityTransform(reference, current, false, [1, 2, 3, 4, 5, 6, 7, 8])!.a.toFixed(6)) // 1.034048
+console.log(fitSimilarityTransform(reference, current, false, [1, 2, 3, 4, 5, 6, 7, 8])!.a) // 1.034048
 const flipped = current.map(({ x, y }) => ({ x: 1200 - x, y }))
 const mirrored = fitSimilarityTransform(reference, flipped, true)!
-console.log(mirrored.a.toFixed(6), mirrored.b.toFixed(6), mirrored.tx.toFixed(4), mirrored.mirrored) // -1.034048 0.182331 1170.0000 true
+console.log(mirrored.a, mirrored.b, mirrored.tx, mirrored.mirrored) // -1.034048 0.182331 1170.0000 true
 
 // The affine fit recovers a pure similarity as m00 = m11 = a, m01 = -b, m10 = b.
 const affine = fitAffineTransform(reference, current)!
-console.log(affine.m00.toFixed(6), affine.m01.toFixed(6), affine.m10.toFixed(6), affine.m11.toFixed(6), affine.tx.toFixed(4), affine.ty.toFixed(4)) // 1.034048 -0.182331 0.182331 1.034048 30.0000 -20.0000
+console.log(affine.m00, affine.m01, affine.m10, affine.m11, affine.tx, affine.ty) // 1.034048 -0.182331 0.182331 1.034048 30.0000 -20.0000
 
 // Applying the transforms to a point and to stars.
 console.log(applySimilarityTransformToPoint(100, 120, similarity)) // { x: 111.5251..., y: 122.3188... }
@@ -6929,7 +6879,7 @@ console.log(applyTransformToStars([{ x: 100, y: 120, flux: 9000 }], similarity))
 // The inverses, which bring the point back.
 const inverse = invertSimilarityTransform(similarity)!
 console.log(applySimilarityTransformToPoint(111.52514368024852, 122.3188355345657, inverse)) // { x: 100, y: 120 } (to rounding)
-console.log(invertAffineTransform(affine)!.m00.toFixed(6), invertTransform(similarity)!.mirrored) // 0.937912 false
+console.log(invertAffineTransform(affine)!.m00, invertTransform(similarity)!.mirrored) // 0.937912 false
 
 // Not enough points, a zero scale and a singular matrix give undefined.
 console.log(fitSimilarityTransform([{ x: 0, y: 0 }], [{ x: 1, y: 1 }]), fitAffineTransform(reference.slice(0, 2), current.slice(0, 2))) // undefined undefined
@@ -7006,28 +6956,28 @@ stars[5] = { ...stars[5], xRef: stars[5].xRef + 6 }
 const fit = fitSipDistortion(stars, wcs, { order: 2 })
 console.log(Object.entries(fit.A).map(([key, value]) => `${key}=${value.toExponential(3)}`)) // [ "A_2_0=2.022e-6", "A_1_1=-9.580e-7", "A_0_2=7.635e-9" ]
 console.log(Object.entries(fit.B).map(([key, value]) => `${key}=${value.toExponential(3)}`)) // [ "B_2_0=6.347e-8", "B_1_1=4.811e-7", "B_0_2=1.547e-6" ]
-console.log(fit.rmsTotal.toFixed(4), fit.rmsX.toFixed(4), fit.rmsY.toFixed(4)) // 0.0144 0.0102 0.0102
+console.log(fit.rmsTotal, fit.rmsX, fit.rmsY) // 0.0144 0.0102 0.0102
 console.log(fit.inputStarCount, fit.usedStarCount, fit.rejectedStarCount, fit.rejectedStarIndices) // 60 49 11 [ 5, 7, 9, 19, 24, 27, 34, 35, 43, 52, 57 ] (the outlier and ten noise samples that the iterated clipping removes)
-console.log(fit.residuals[5].rejected, fit.residuals[5].rejectedIteration, fit.residuals[5].r.toFixed(3)) // true 1 5.989
+console.log(fit.residuals[5].rejected, fit.residuals[5].rejectedIteration, fit.residuals[5].r) // true 1 5.989
 
 const diagnostics = fit.diagnostics
-console.log(diagnostics.coefficientCount, diagnostics.iterations, diagnostics.scatterMode, diagnostics.weighted, diagnostics.conditionNumber.toFixed(3)) // 3 3 mad false 4.717
-console.log(diagnostics.rawRmsTotal.toFixed(4), diagnostics.medianResidual.toFixed(4), diagnostics.p95Residual.toFixed(4), diagnostics.maxResidual.toFixed(4)) // 0.8258 0.0131 0.0200 0.0260
+console.log(diagnostics.coefficientCount, diagnostics.iterations, diagnostics.scatterMode, diagnostics.weighted, diagnostics.conditionNumber) // 3 3 mad false 4.717
+console.log(diagnostics.rawRmsTotal, diagnostics.medianResidual, diagnostics.p95Residual, diagnostics.maxResidual) // 0.8258 0.0131 0.0200 0.0260
 console.log(diagnostics.spatialDistribution, diagnostics.warnings) // { checked: true, width: 1000, height: 800, gridSize: 2, occupiedCells: 4, occupiedQuadrants: 4, minOccupiedCells: 3, minOccupiedQuadrants: 3 } []
 
 // The correction of the model at a pixel far from the center, against the true distortion (0.1996, 0.1944), and the corrected pixel.
 const { dx, dy } = evaluateSipCorrection(900, 700, fit.model, wcs)
-console.log(dx.toFixed(4), dy.toFixed(4), distortionX(399.5, 299.5).toFixed(4), distortionY(399.5, 299.5).toFixed(4)) // 0.2088 0.2065 0.1996 0.1944
+console.log(dx, dy, distortionX(399.5, 299.5), distortionY(399.5, 299.5)) // 0.2088 0.2065 0.1996 0.1944
 const corrected = applySipCorrection(900, 700, fit.model, wcs)
-console.log(corrected.x.toFixed(2), corrected.y.toFixed(2)) // 900.21 700.21
+console.log(corrected.x, corrected.y) // 900.21 700.21
 
 // The design matrix of the first four stars: 4 rows, 3 terms.
 const design = buildSipDesignMatrix(stars.slice(0, 4), wcs, 2)
-console.log(design.matrix.rows, design.matrix.cols, design.terms.length, design.centeredX[0].toFixed(1), design.centeredY[0].toFixed(1), design.residualX[0].toFixed(3)) // 4 3 3 -469.3 -333.4 0.303
+console.log(design.matrix.rows, design.matrix.cols, design.terms.length, design.centeredX[0], design.centeredY[0], design.residualX[0]) // 4 3 3 -469.3 -333.4 0.303
 
 // Another configuration: order 3, no weights, standard deviation as scatter, a 2.5σ clip in 3 iterations and a minimum of 20 stars.
 const cubic = fitSipDistortion(stars, wcs, { order: 3, weighting: 'none', scatter: 'standardDeviation', sigmaClip: 2.5, maxIterations: 3, minStars: 20 })
-console.log(cubic.rmsTotal.toFixed(4), cubic.diagnostics.coefficientCount, cubic.usedStarCount, cubic.rejectedStarIndices) // 0.0139 7 59 [ 5 ]
+console.log(cubic.rmsTotal, cubic.diagnostics.coefficientCount, cubic.usedStarCount, cubic.rejectedStarIndices) // 0.0139 7 59 [ 5 ]
 
 // With weights, 'auto' uses them and 'none' ignores them; a FITS header can supply the reference pixel and the size.
 const weighted = stars.map((star, i) => ({ ...star, weight: 1 + (i % 3) }))
@@ -7084,33 +7034,26 @@ current.push({ x: 500, y: 500, flux: 400, snr: 8, hfd: 3 })
 
 const match = matchStars(reference, current)
 console.log(match.success, match.model, match.inlierCount, match.failureReason) // true similarity 15 undefined
-console.log(match.similarity!.scale.toFixed(6), toDeg(match.similarity!.rotation).toFixed(4), match.similarity!.mirrored) // 0.952381 -10.0000 false (1 / 1.05, back to the reference)
+console.log(match.similarity!.scale, toDeg(match.similarity!.rotation), match.similarity!.mirrored) // 0.952381 -10.0000 false (1 / 1.05, back to the reference)
 console.log(match.rmsError! < 1e-9, match.matches[0].currentIndex, match.matches[0].referenceIndex, match.matches.length) // true 0 0 15 (the extra star is not matched)
 
 // A mirrored current frame is found, unless the mirror is not allowed.
 const mirrored = current.map((star) => ({ ...star, x: 1200 - star.x }))
 console.log(matchStars(reference, mirrored).similarity!.mirrored, matchStars(reference, mirrored, { allowMirror: false }).success) // true false
 
-// A rotation limit of 5° rejects the 10° field.
-console.log(matchStars(reference, current, { maxRotation: deg(5) }).success) // false
-
-// Too few stars.
-console.log(matchStars(reference.slice(0, 4), current).failureReason) // too few usable reference stars
-console.log(matchStars(reference, current.slice(0, 4)).failureReason) // too few usable current stars
-
 // The triangle patterns of the reference list, and one canonical triangle.
 const patterns = buildTrianglePatterns(reference)
 console.log(
 	patterns.length,
 	patterns[0].starIndices,
-	patterns[0].descriptor.map((v) => v.toFixed(4)),
+	patterns[0].descriptor.map((v) => v),
 	patterns[0].chirality,
 ) // 165 [ 0, 1, 2 ] [ "0.8526", "0.8784", "0.7062" ] -1
 
 const triangle = canonicalTrianglePattern([reference[0], reference[1], reference[3]], [0, 1, 3])!
 console.log(
 	triangle.starIndices,
-	triangle.descriptor.map((v) => v.toFixed(4)),
+	triangle.descriptor.map((v) => v),
 	triangle.chirality,
 ) // [ 0, 3, 1 ] [ "0.8526", "0.8784", "0.7062" ] -1
 console.log(
@@ -7223,16 +7166,16 @@ const result = inspectAberrationProfiles(width, height, profiles)
 console.log(result.quality) // 160 detected and profiled, 150 selected (the 10 over the quota of 20 per cell are left out), 9 occupied regions, a confidence of 1 and no warnings
 
 // The regions in layout order (r<row>c<column>): the median HFD in pixels and the usable count of each one, which grow toward the corners.
-console.log(result.regions.map((region) => [region.id, region.medianHFD?.toFixed(2), region.usedStarCountByMetric.hfd])) // r0c0 5.61 (11 stars), r0c1 4.32 (20), r0c2 5.04 (20), r1c0 4.59 (13), r1c1 3.16 (16), r1c2 4.07 (17), r2c0 5.19 (15), r2c1 3.74 (18), r2c2 5.23 (20): the center is the smallest and the corners the largest
+console.log(result.regions.map((region) => [region.id, region.medianHFD, region.usedStarCountByMetric.hfd])) // r0c0 5.61 (11 stars), r0c1 4.32 (20), r0c2 5.04 (20), r1c0 4.59 (13), r1c1 3.16 (16), r1c2 4.07 (17), r2c0 5.19 (15), r2c1 3.74 (18), r2c2 5.23 (20): the center is the smallest and the corners the largest
 
 // The findings with their kind, likelihood and limitations.
-console.log(result.findings.map((finding) => [finding.kind, finding.likelihood.toFixed(2), finding.confidence.toFixed(2), finding.limitations])) // fieldDegradation (likelihood 1.00, confidence 1.00) and radialElongation (0.95, 1.00), both with the limitation singleFrameOnly
+console.log(result.findings.map((finding) => [finding.kind, finding.likelihood, finding.confidence, finding.limitations])) // fieldDegradation (likelihood 1.00, confidence 1.00) and radialElongation (0.95, 1.00), both with the limitation singleFrameOnly
 
 // The vector samples of the regions with a coherent orientation (the center of the region in pixels and the axial angle in radians).
 console.log(result.vectors.slice(0, 3)) // the top-left region at (166.5, 133.2) with theta 0.587, magnitude 1.164, coherence 0.927 and 11 stars; the top-middle one at (499.5, 133.2) with theta 1.412 (the long axis follows the radius), 1.087, 0.841 and 20 stars; the top-right one at (832.5, 133.2) with 2.496, 1.124, 0.912 and 20 stars
 
 // One star: the normalized position, the weight and whether it was selected.
-console.log(result.stars[0].u.toFixed(3), result.stars[0].v.toFixed(3), result.stars[0].weight.toFixed(3), result.stars[0].selected, result.stars[0].selectionReasons) // -0.251 0.394 0.764 true [] (left of the center and below it, selected)
+console.log(result.stars[0].u, result.stars[0].v, result.stars[0].weight, result.stars[0].selected, result.stars[0].selectionReasons) // -0.251 0.394 0.764 true [] (left of the center and below it, selected)
 
 // The selection rejects the saturated, the clipped, the blended and the faint stars and keeps the reason of each one; sigma clipping excludes an outlier of a metric only.
 const flawed = [...profiles]
@@ -7276,10 +7219,10 @@ console.log(assignAberrationRegion(-0.25, 0, halves), assignAberrationRegion(0.2
 
 // The regional summaries of the selected stars for the two halves, and the same with the stricter options of the summary.
 const summaries = summarizeAberrationRegions(result.stars, halves, { minimumStars: 5 })
-console.log(summaries.map((region) => [region.id, region.inputStarCount, region.medianHFD?.toFixed(2), region.deviationHFD?.toFixed(2), region.confidence.toFixed(2)])) // left: 74 input stars, a median HFD of 4.54, a deviation of 1.16 and a confidence of 0.81; right: 86 stars, 4.39, 1.05 and 0.80 (the input count includes the stars that were not selected, the median does not)
+console.log(summaries.map((region) => [region.id, region.inputStarCount, region.medianHFD, region.deviationHFD, region.confidence])) // left: 74 input stars, a median HFD of 4.54, a deviation of 1.16 and a confidence of 0.81; right: 86 stars, 4.39, 1.05 and 0.80 (the input count includes the stars that were not selected, the median does not)
 
 // A regular field of one metric for a heatmap (no interpolation): the median of each cell, its count and its confidence.
-console.log(buildAberrationField(result.stars, 'hfd', { columns: 3, rows: 3 }).map((cell) => [cell.column, cell.row, cell.value?.toFixed(2), cell.count])) // the 3 by 3 medians in row order, 5.61, 4.32, 5.04 / 4.59, 3.16, 4.07 / 5.19, 3.74, 5.23, with 11 to 20 stars each, equal to the regions of the inspection
+console.log(buildAberrationField(result.stars, 'hfd', { columns: 3, rows: 3 }).map((cell) => [cell.column, cell.row, cell.value, cell.count])) // the 3 by 3 medians in row order, 5.61, 4.32, 5.04 / 4.59, 3.16, 4.07 / 5.19, 3.74, 5.23, with 11 to 20 stars each, equal to the regions of the inspection
 ```
 
 ### Arcsinh Stretch
@@ -7304,30 +7247,28 @@ const pixels = (): Image => ({
 	raw: new Float64Array([0.2, 0.1, 0.05, 0.9, 0.6, 0.3]),
 })
 
-const round = (values: ArrayLike<number>) => Array.from(values, (value) => Number(value.toFixed(4)))
-
 // A mono ramp: the faint samples are lifted much more than the bright ones, and 0 and 1 are fixed.
-console.log(round(arcsinhStretch(ramp(), { stretchFactor: 20 }).raw)) // [ 0, 0.4437, 0.5716, 0.8709, 1 ]
+console.log(arcsinhStretch(ramp(), { stretchFactor: 20 }).raw) // [ 0, 0.4437, 0.5716, 0.8709, 1 ]
 
 // The black point clips the shadows and renormalizes the rest.
-console.log(round(arcsinhStretch(ramp(), { stretchFactor: 20, blackPoint: 0.05 }).raw)) // [ 0, 0, 0.4531, 0.8609, 1 ]
+console.log(arcsinhStretch(ramp(), { stretchFactor: 20, blackPoint: 0.05 }).raw) // [ 0, 0, 0.4531, 0.8609, 1 ]
 
 // Color: the channels of a pixel are scaled by the same factor, so their ratios do not change.
 const color = arcsinhStretch(pixels(), { stretchFactor: 10 })
-console.log(round(color.raw)) // [ 0.8992, 0.4496, 0.2248, 1, 0.8865, 0.4433 ] (the second pixel is clipped at 1 in red)
-console.log(round([color.raw[0] / color.raw[1], color.raw[1] / color.raw[2]])) // 2 2 (the ratios of the first pixel)
+console.log(color.raw) // [ 0.8992, 0.4496, 0.2248, 1, 0.8865, 0.4433 ] (the second pixel is clipped at 1 in red)
+console.log([color.raw[0] / color.raw[1], color.raw[1] / color.raw[2]]) // 2 2 (the ratios of the first pixel)
 
 // A bright pixel exceeds 1: it is clipped per channel by default, and rescaled as a whole with protectHighlights.
 const bright = (): Image => ({ ...pixels(), raw: new Float64Array([0.9, 0.4, 0.1, 0.05, 0.02, 0.01]) })
-console.log(round(arcsinhStretch(bright(), { stretchFactor: 30 }).raw)) // [ 1, 0.7457, 0.1864, 0.7195, 0.2878, 0.1439 ] (the first pixel is clipped, so its ratios change)
-console.log(round(arcsinhStretch(bright(), { stretchFactor: 30, protectHighlights: true }).raw)) // [ 1, 0.4444, 0.1111, 0.4288, 0.1715, 0.0858 ] (the ratios of both pixels are kept)
+console.log(arcsinhStretch(bright(), { stretchFactor: 30 }).raw) // [ 1, 0.7457, 0.1864, 0.7195, 0.2878, 0.1439 ] (the first pixel is clipped, so its ratios change)
+console.log(arcsinhStretch(bright(), { stretchFactor: 30, protectHighlights: true }).raw) // [ 1, 0.4444, 0.1111, 0.4288, 0.1715, 0.0858 ] (the ratios of both pixels are kept)
 
 // The luminance of an RGB working space instead of the channel mean.
-console.log(round(arcsinhStretch(pixels(), { stretchFactor: 10, useRgbWorkingSpace: true, rgbWorkingSpace: 'BT709' }).raw)) // [ 0.8948, 0.4474, 0.2237, 1, 0.8425, 0.4212 ]
+console.log(arcsinhStretch(pixels(), { stretchFactor: 10, useRgbWorkingSpace: true, rgbWorkingSpace: 'BT709' }).raw) // [ 0.8948, 0.4474, 0.2237, 1, 0.8425, 0.4212 ]
 
 // The defaults, a factor of 1 and a black point of 0 leave the image untouched and return it.
 const same = ramp()
-console.log(arcsinhStretch(same) === same, arcsinhStretch(same, DEFAULT_ARCSINH_STRETCH_OPTIONS) === same, round(same.raw)) // true true [ 0, 0.05, 0.1, 0.5, 1 ]
+console.log(arcsinhStretch(same) === same, arcsinhStretch(same, DEFAULT_ARCSINH_STRETCH_OPTIONS) === same, same.raw) // true true [ 0, 0.05, 0.1, 0.5, 1 ]
 
 // The arcsinh parameters that approximate an STF.
 console.log(approximateArcsinhStretchParameters()) // { stretchFactor: 1, blackPoint: 0 }
@@ -7365,8 +7306,7 @@ const frame = (): Image => {
 	}
 }
 
-const round = (value: number) => Number(value.toFixed(4))
-const row = (image: Image, y: number, xs: number[]) => xs.map((x) => round(image.raw[y * width + x]))
+const row = (image: Image, y: number, xs: number[]) => xs.map((x) => image.raw[y * width + x])
 
 // The columns before the correction: the gradient is 0.10 at the left edge and 0.30 at the right.
 console.log(row(frame(), 5, [0, 24, 48, 72, 95])) // [ 0.1, 0.1505, 0.2011, 0.2516, 0.3 ]
@@ -7375,11 +7315,11 @@ console.log(row(frame(), 5, [0, 24, 48, 72, 95])) // [ 0.1, 0.1505, 0.2011, 0.25
 const result = automaticBackgroundExtraction(frame())
 console.log(row(result.image, 5, [0, 24, 48, 72, 95])) // [ 0.2, 0.2, 0.2, 0.2, 0.2 ]
 console.log(row(result.background, 5, [0, 24, 48, 72, 95])) // [ 0.1, 0.1505, 0.2011, 0.2516, 0.3 ] (the model follows the gradient)
-console.log(result.channels.length, result.channels[0].acceptedSamples, result.channels[0].rejectedSamples, round(result.channels[0].residual)) // 1 325 59 0 (the residual of this noiseless frame is below 0.00005)
-console.log(round(result.channels[0].outputMin!), round(result.channels[0].outputMax!), result.channels[0].samples.length, result.channels[0].samples.filter((s) => s.accepted).length) // 0.2 0.7 384 325 (outputMax is the star peak; 384 grid samples, 325 accepted)
+console.log(result.channels.length, result.channels[0].acceptedSamples, result.channels[0].rejectedSamples, result.channels[0].residual) // 1 325 59 0 (the residual of this noiseless frame is below 0.00005)
+console.log(result.channels[0].outputMin!, result.channels[0].outputMax!, result.channels[0].samples.length, result.channels[0].samples.filter((s) => s.accepted).length) // 0.2 0.7 384 325 (outputMax is the star peak; 384 grid samples, 325 accepted)
 
 // The star pixels stay above the sky (the star at (30, 20) peaks 0.5 above it).
-console.log(round(result.image.raw[20 * width + 30] - result.image.raw[20 * width + 40])) // 0.5
+console.log(result.image.raw[20 * width + 30] - result.image.raw[20 * width + 40]) // 0.5
 
 // Fit, evaluate and apply as separate steps, with a fixed pedestal and a mask that keeps the stars out of the samples.
 const mask = backgroundExclusionMaskFromStars(width, height, stars)
@@ -7391,7 +7331,7 @@ const background = evaluateBackgroundModel(model, image)
 const ranges = applyBackground(image, background, { correction: 'subtract', targetBackground: 0.1, clipping: 'truncate' })
 console.log(
 	row(image, 5, [0, 24, 48, 72, 95]),
-	ranges.map((r) => [round(r.min), round(r.max)]),
+	ranges.map((r) => [r.min, r.max]),
 ) // [ 0.1, 0.1, 0.1, 0.1, 0.1 ] [ [ 0.1, 0.6 ] ]
 
 // A multiplicative correction, a thin-plate spline and the 'none' correction, which leaves the image untouched.
@@ -7467,10 +7407,9 @@ const frame = (width: number, height: number, channels: 1 | 3, value: (x: number
 	}
 }
 
-const round = (value: number) => Number(value.toFixed(4))
 const show = (image: Image) => {
 	const { background, noise, snr } = estimateBackground(image)
-	return [round(background), round(noise), round(snr)]
+	return [background, noise, snr]
 }
 
 // A flat sky of 0.2 with a noise of about 0.01: the background and noise are recovered and no cell stands out much.
@@ -7509,22 +7448,20 @@ const pixels = (): Image => ({
 	raw: new Float64Array([0.19, 0.09, 0.15, 0.2, 0.1, 0.16, 0.21, 0.11, 0.17, 0.2, 0.1, 0.16, 0.9, 0.7, 0.8]),
 })
 
-const round = (values: ArrayLike<number>) => Array.from(values, (value) => Number(value.toFixed(4)))
-
 // The default: the medians go to 0 and the image is rescaled to the full 0..1 range because the values left it.
-console.log(round(backgroundNeutralization(pixels()).raw)) // [ 0, 0, 0, 0.0141, 0.0141, 0.0141, 0.0282, 0.0282, 0.0282, 0.0141, 0.0141, 0.0141, 1, 0.8592, 0.9155 ]
+console.log(backgroundNeutralization(pixels()).raw) // [ 0, 0, 0, 0.0141, 0.0141, 0.0141, 0.0282, 0.0282, 0.0282, 0.0141, 0.0141, 0.0141, 1, 0.8592, 0.9155 ]
 
 // The background pinned at 0.05, with the other values clamped (the star is not rescaled).
-console.log(round(backgroundNeutralization(pixels(), { mode: 'targetBackground', targetBackground: 0.05 }).raw)) // [ 0.04, 0.04, 0.04, 0.05, 0.05, 0.05, 0.06, 0.06, 0.06, 0.05, 0.05, 0.05, 0.75, 0.65, 0.69 ]
+console.log(backgroundNeutralization(pixels(), { mode: 'targetBackground', targetBackground: 0.05 }).raw) // [ 0.04, 0.04, 0.04, 0.05, 0.05, 0.05, 0.06, 0.06, 0.06, 0.05, 0.05, 0.05, 0.75, 0.65, 0.69 ]
 
 // Truncate: the medians go to 0, the negative values are clamped and nothing is rescaled.
-console.log(round(backgroundNeutralization(pixels(), { mode: 'truncate' }).raw)) // [ 0, 0, 0, 0, 0, 0, 0.01, 0.01, 0.01, 0, 0, 0, 0.7, 0.6, 0.64 ]
+console.log(backgroundNeutralization(pixels(), { mode: 'truncate' }).raw) // [ 0, 0, 0, 0, 0, 0, 0.01, 0.01, 0.01, 0, 0, 0, 0.7, 0.6, 0.64 ]
 
 // Rescale always maps the minimum and the maximum to 0 and 1.
-console.log(round(backgroundNeutralization(pixels(), { mode: 'rescale' }).raw)) // [ 0, 0, 0, 0.0141, 0.0141, 0.0141, 0.0282, 0.0282, 0.0282, 0.0141, 0.0141, 0.0141, 1, 0.8592, 0.9155 ] (the same as the default here)
+console.log(backgroundNeutralization(pixels(), { mode: 'rescale' }).raw) // [ 0, 0, 0, 0.0141, 0.0141, 0.0141, 0.0282, 0.0282, 0.0282, 0.0141, 0.0141, 0.0141, 1, 0.8592, 0.9155 ] (the same as the default here)
 
 // A reference range around the sky excludes the star from the medians.
-console.log(round(backgroundNeutralization(pixels(), { mode: 'targetBackground', lowerLimit: 0.05, upperLimit: 0.3, targetBackground: 0.1 }).raw)) // [ 0.09, 0.09, 0.09, 0.1, 0.1, 0.1, 0.11, 0.11, 0.11, 0.1, 0.1, 0.1, 0.8, 0.7, 0.74 ]
+console.log(backgroundNeutralization(pixels(), { mode: 'targetBackground', lowerLimit: 0.05, upperLimit: 0.3, targetBackground: 0.1 }).raw) // [ 0.09, 0.09, 0.09, 0.1, 0.1, 0.1, 0.11, 0.11, 0.11, 0.1, 0.1, 0.1, 0.8, 0.7, 0.74 ]
 ```
 
 ### Bahtinov Chromatic Comparison
@@ -7562,17 +7499,17 @@ const center = { x: 100, y: 100 }
 
 // Central spikes drawn 2 pixels off for red, 0 for green and -3 for blue: the differences, the span and the offsets of the reference points.
 const result = compareBahtinovChromatic({ image: render([2, 0, -3]), center, size: 160 }, workspace)
-if (result.success) console.log(result.redMinusGreen.toFixed(3), result.blueMinusGreen.toFixed(3), result.focusSpan.toFixed(3), result.redReferenceOffset, result.blueReferenceOffset, result.confidence.toFixed(3)) // redMinusGreen -2.210, blueMinusGreen 3.124, focusSpan 5.334, red reference offset (0.067, 0.036), blue offset (-0.042, 0.021), confidence 0.840 (the drawn offsets 2 and -3 are read as 2.137 and -3.197 against the green 0.073, but the signs of the two differences are inverted because of the green normal angle, see below)
+if (result.success) console.log(result.redMinusGreen, result.blueMinusGreen, result.focusSpan, result.redReferenceOffset, result.blueReferenceOffset, result.confidence) // redMinusGreen -2.210, blueMinusGreen 3.124, focusSpan 5.334, red reference offset (0.067, 0.036), blue offset (-0.042, 0.021), confidence 0.840 (the drawn offsets 2 and -3 are read as 2.137 and -3.197 against the green 0.073, but the signs of the two differences are inverted because of the green normal angle, see below)
 
 // Each channel is a full analysis that can be inspected on its own.
-if (result.success) console.log([result.channels.red, result.channels.green, result.channels.blue].map((r) => [r.error.toFixed(3), r.uncertainty?.toFixed(3), r.focusState, r.confidence.toFixed(3)])) // red 2.137 (uncertainty 0.058, defocused, 0.848), green 0.073 (0.061, focused, 0.843) and blue -3.197 (0.060, defocused, 0.840)
+if (result.success) console.log([result.channels.red, result.channels.green, result.channels.blue].map((r) => [r.error, r.uncertainty, r.focusState, r.confidence])) // red 2.137 (uncertainty 0.058, defocused, 0.848), green 0.073 (0.061, focused, 0.843) and blue -3.197 (0.060, defocused, 0.840)
 
 // The sign is along the central normal of the green plane, whose canonical angle is in [0, PI): this is the angle of each plane.
-if (result.success) console.log([result.channels.red, result.channels.green, result.channels.blue].map((r) => r.centralLine.normalAngle.toFixed(4))) // central normal angles of 0.0000 for red, 3.1416 for green and 0.0001 for blue: the green normal is the opposite one, so the errors of red and blue are expressed along it and change sign
+if (result.success) console.log([result.channels.red, result.channels.green, result.channels.blue].map((r) => r.centralLine.normalAngle)) // central normal angles of 0.0000 for red, 3.1416 for green and 0.0001 for blue: the green normal is the opposite one, so the errors of red and blue are expressed along it and change sign
 
 // All the planes at the same focus: the differences and the span are within the noise of the measurement.
 const same = compareBahtinovChromatic({ image: render([1, 1, 1]), center, size: 160 }, workspace)
-if (same.success) console.log(same.redMinusGreen.toFixed(3), same.blueMinusGreen.toFixed(3), same.focusSpan.toFixed(3)) // 0.011, 0.047 and 0.047: all within the noise of the measurement
+if (same.success) console.log(same.redMinusGreen, same.blueMinusGreen, same.focusSpan) // 0.011, 0.047 and 0.047: all within the noise of the measurement
 
 // The options and the area are shared by the three planes (a tolerance here changes every channel state).
 const wide = compareBahtinovChromatic({ image: render([2, 0, -3]), center, area: { left: 20, top: 20, right: 180, bottom: 180 } }, workspace, { focusTolerance: 3 })
@@ -7610,23 +7547,23 @@ const center = { x: 100, y: 100 }
 
 // A pattern drawn 1.5 pixels off: the signed error, its uncertainty, the state, the confidence and the warnings.
 const result = analyzeBahtinov({ image: render(1.5), center, size: 160 }, workspace)
-if (result.success) console.log(result.area, result.reference, result.error.toFixed(3), result.absoluteError.toFixed(3), result.focusProximity.toFixed(3), result.uncertainty?.toFixed(3), result.focusState, result.confidence.toFixed(3), result.warnings) // area { left: 21, top: 21, right: 181, bottom: 181 }, reference (100.055, 99.991), error 1.674 (the drawn 1.5 is read 0.17 pixel high with this noise), absolute error 1.674, proximity 0.130, uncertainty 0.059, defocused, confidence 0.784, one patternCropped warning with coverage 0.75 (the 160 pixel region cuts the 80 pixel spikes)
+if (result.success) console.log(result.area, result.reference, result.error, result.absoluteError, result.focusProximity, result.uncertainty, result.focusState, result.confidence, result.warnings) // area { left: 21, top: 21, right: 181, bottom: 181 }, reference (100.055, 99.991), error 1.674 (the drawn 1.5 is read 0.17 pixel high with this noise), absolute error 1.674, proximity 0.130, uncertainty 0.059, defocused, confidence 0.784, one patternCropped warning with coverage 0.75 (the 160 pixel region cuts the 80 pixel spikes)
 
 // The three fitted lines: normal angles in radians (the central one at 0 and the externals at 15 degrees), strength, signal-to-noise and the evidence of the fit.
-if (result.success) for (const line of [result.centralLine, ...result.externalLines]) console.log(line.normalAngle.toFixed(4), line.distance.toFixed(2), line.signalToNoise.toFixed(1), line.fwhm.toFixed(2), line.coverage.toFixed(3), line.balance.toFixed(3), line.residual.toFixed(3), line.segment) // central 0.0002 rad, distance 98.40, SNR 96.4, FWHM 2.78 px, coverage 0.962, balance 0.980, residual 0.619; externals 0.2616 rad (15.0 degrees, distance 122.51, SNR 87.3, FWHM 2.52) and 2.8796 rad (165.0 degrees, distance -70.74, SNR 86.5, FWHM 2.51), each with a segment clipped to the region from y = 21 to y = 180
+if (result.success) for (const line of [result.centralLine, ...result.externalLines]) console.log(line.normalAngle, line.distance, line.signalToNoise, line.fwhm, line.coverage, line.balance, line.residual, line.segment) // central 0.0002 rad, distance 98.40, SNR 96.4, FWHM 2.78 px, coverage 0.962, balance 0.980, residual 0.619; externals 0.2616 rad (15.0 degrees, distance 122.51, SNR 87.3, FWHM 2.52) and 2.8796 rad (165.0 degrees, distance -70.74, SNR 86.5, FWHM 2.51), each with a segment clipped to the region from y = 21 to y = 180
 if (result.success) console.log(result.quality) // signal 0.966, lineStrength 0.916, lineCoverage 0.918, lineBalance 0.969, lineFit 0.646, angularSymmetry 0.992, intersectionCondition 0.500 (the sine of the 30 degrees between the externals), saturationRetention 1, cropCoverage 0.75, candidateSeparation 0.461
 
 // The sign and the state follow the offset: an error of zero, of 0.1 pixel, of -3 pixels and of 6 pixels.
 for (const error of [0, 0.1, -3, 6]) {
 	const r = analyzeBahtinov({ image: render(error), center, size: 160 }, workspace)
-	if (r.success) console.log(error, r.error.toFixed(3), r.focusProximity.toFixed(3), r.focusState) // errors read 0.062 (drawn 0), 0.034 (drawn 0.1), -3.202 (drawn -3) and 5.954 (drawn 6) pixels: the sign follows the drawn offset, proximity falls from 0.80 to 0.04 and the states are focused, focused, defocused, defocused; a fraction of a pixel is within the noise of the measurement
+	if (r.success) console.log(error, r.error, r.focusProximity, r.focusState) // errors read 0.062 (drawn 0), 0.034 (drawn 0.1), -3.202 (drawn -3) and 5.954 (drawn 6) pixels: the sign follows the drawn offset, proximity falls from 0.80 to 0.04 and the states are focused, focused, defocused, defocused; a fraction of a pixel is within the noise of the measurement
 }
 
 // The state is focused when the error plus focusSigma times its uncertainty is within the tolerance, defocused when the error minus that is beyond it and indeterminate in between or when the confidence or the uncertainty fail their limits: the same 0.33 pixel measurement with the default tolerance (indeterminate), with a tolerance of 0.5 (focused) and with an impossible confidence (indeterminate).
 const near = render(0.4)
 for (const options of [{}, { focusTolerance: 0.5 }, { focusTolerance: 0.5, minimumConfidence: 0.99 }] as BahtinovAnalysisOptions[]) {
 	const r = analyzeBahtinov({ image: near, center, size: 160 }, workspace, options)
-	if (r.success) console.log(r.error.toFixed(3), r.focusState, r.focusProximity.toFixed(3)) // -0.328 indeterminate 0.433 for the defaults, -0.328 focused 0.604 with a tolerance of 0.5, and -0.328 indeterminate 0.604 with a minimum confidence of 0.99 (the 0.4 pixel drawn offset is read as -0.328 in this noisy render)
+	if (r.success) console.log(r.error, r.focusState, r.focusProximity) // -0.328 indeterminate 0.433 for the defaults, -0.328 focused 0.604 with a tolerance of 0.5, and -0.328 indeterminate 0.604 with a minimum confidence of 0.99 (the 0.4 pixel drawn offset is read as -0.328 in this noisy render)
 }
 
 // An explicit area instead of a size, and the resolved area for a center near the edge (kept inside the image).
@@ -7637,7 +7574,7 @@ console.log(explicit.success ? explicit.area : explicit.reason, resolveBahtinovA
 const mask = { centralNormalAngle: 0, externalNormalAngles: [Math.PI / 12, (Math.PI * 11) / 12] as const }
 const agreeing = analyzeBahtinov({ image: near, center, size: 160, expected: mask }, workspace)
 const disagreeing = analyzeBahtinov({ image: near, center, size: 160, expected: { centralNormalAngle: 1, externalNormalAngles: [1.3, 0.7], maximumAngleDelta: 0.05 } }, workspace)
-console.log(agreeing.success ? agreeing.error.toFixed(3) : agreeing.reason, disagreeing.success ? disagreeing.warnings.map((w) => w.code) : disagreeing.reason) // -0.328 for the right mask, and patternNotFound when the expected angles (central 1 rad, externals 1.3 and 0.7 rad) differ from every candidate by more than 0.05 rad
+console.log(agreeing.success ? agreeing.error : agreeing.reason, disagreeing.success ? disagreeing.warnings.map((w) => w.code) : disagreeing.reason) // -0.328 for the right mask, and patternNotFound when the expected angles (central 1 rad, externals 1.3 and 0.7 rad) differ from every candidate by more than 0.05 rad
 
 // Geometry: a normal angle outside [0, PI) is folded back and the distance changes sign with it.
 console.log(canonicalizeBahtinovLine(-Math.PI / 4, 10), canonicalizeBahtinovLine(Math.PI, 5)) // { normalAngle: 2.356 (3 PI / 4), distance: -10 } and { normalAngle: 0, distance: -5 }
@@ -7655,7 +7592,7 @@ console.log(bahtinovGlobalLineDistance(20, 0, { left: 30, top: 20, right: 190, b
 console.log(clipBahtinovLineToArea({ normalAngle: 0, distance: 100 }, { left: 20, top: 20, right: 180, bottom: 180 }), clipBahtinovLineToArea({ normalAngle: 0, distance: 300 }, { left: 20, top: 20, right: 180, bottom: 180 })) // the segment from (100, 20) to (100, 179) for the line x = 100, and undefined for x = 300
 
 // The proximity is 1 at zero, 0.5 at the tolerance and falls with the error.
-console.log([0, 0.125, 0.25, 0.5, 2].map((e) => bahtinovFocusProximity(e, 0.25).toFixed(3))) // 1.000, 0.667, 0.500, 0.333, 0.111
+console.log([0, 0.125, 0.25, 0.5, 2].map((e) => bahtinovFocusProximity(e, 0.25))) // 1.000, 0.667, 0.500, 0.333, 0.111
 
 // The focus geometry of one central and two external lines: the reference point, the signed error and the condition of the external intersection.
 console.log(computeBahtinovFocusGeometry({ normalAngle: 0, distance: 101.5 }, { normalAngle: Math.PI / 12, distance: 100 * (Math.cos(Math.PI / 12) + Math.sin(Math.PI / 12)) }, { normalAngle: (Math.PI * 11) / 12, distance: 100 * (Math.cos((Math.PI * 11) / 12) + Math.sin((Math.PI * 11) / 12)) }, 0.25)) // reference (100, 100), error -1.5, absolute error 1.5, proximity 0.143, intersection condition 0.500 (the central line at 101.5 is 1.5 pixels beyond the reference along +X)
@@ -7691,12 +7628,12 @@ const overlay = createBahtinovOverlayGeometry(analysis)
 console.log(overlay.area, overlay.focusRegionCircle, overlay.errorCircles) // area { left: 21, top: 21, right: 181, bottom: 181 }; guide circle centered on the reference (99.952, 99.989) with radius 79.5; error circles of radius 2.482 at the reference and at the projection (103.151, 99.989)
 
 // The three spike segments with their roles, and the error between the reference and its projection on the central line.
-console.log(overlay.spikes.map((spike) => [spike.role, spike.segment.map((p) => [p.x.toFixed(1), p.y.toFixed(1)])])) // central from (103.1, 21) to (103.2, 180), external0 from (121.1, 21) to (78.5, 180) and external1 from (78.8, 21) to (121.4, 180), all clipped to the region rows 21 to 180
-console.log(overlay.reference, overlay.centralProjection, overlay.errorSegment, analysis.error.toFixed(3)) // reference (99.952, 99.989), projection (103.151, 99.989) and the error segment from the projection to the reference, for an analysis error of 3.199 (the central normal is at 3.1415 rad, pointing to -X, so the projection is 3.2 pixels to the right of the reference, where the central spike was drawn)
+console.log(overlay.spikes.map((spike) => [spike.role, spike.segment.map((p) => [p.x, p.y])])) // central from (103.1, 21) to (103.2, 180), external0 from (121.1, 21) to (78.5, 180) and external1 from (78.8, 21) to (121.4, 180), all clipped to the region rows 21 to 180
+console.log(overlay.reference, overlay.centralProjection, overlay.errorSegment, analysis.error) // reference (99.952, 99.989), projection (103.151, 99.989) and the error segment from the projection to the reference, for an analysis error of 3.199 (the central normal is at 3.1415 rad, pointing to -X, so the projection is 3.2 pixels to the right of the reference, where the central spike was drawn)
 
 // The projection is on the central line and the error segment has the length of the absolute error.
 const [from, to] = overlay.errorSegment
-console.log(Math.hypot(to.x - from.x, to.y - from.y).toFixed(3), analysis.absoluteError.toFixed(3)) // 3.199 3.199
+console.log(Math.hypot(to.x - from.x, to.y - from.y), analysis.absoluteError) // 3.199 3.199
 
 // The radii are free: bigger circles for a bigger display, and the objects are fresh copies of the analysis.
 const large = createBahtinovOverlayGeometry(analysis, { errorCircleRadius: 6, focusRegionRadius: 40 })
@@ -7777,13 +7714,13 @@ const rad = Math.PI / 180
 // The sky track of the streak: the endpoints in degrees (the start is near RA 2 deg, the end wraps to 358 deg), the length and the position angle.
 const observed = celestialStreakTrack(streak, wcs)!
 console.log(
-	observed.start.map((v) => (v * deg).toFixed(4)),
-	observed.end.map((v) => (v * deg).toFixed(4)),
+	observed.start.map((v) => v * deg),
+	observed.end.map((v) => v * deg),
 ) // [1.9742, -1.4738] [357.9758, 1.0243] (RA and Dec in degrees)
-console.log((observed.length * deg).toFixed(4), (observed.positionAngle * deg).toFixed(2), (observed.axialPositionAngle * deg).toFixed(2)) // 4.7143 301.98 121.98 (degrees: the arc, the position angle east of north, and the same axis folded into [0, 180))
+console.log(observed.length * deg, observed.positionAngle * deg, observed.axialPositionAngle * deg) // 4.7143 301.98 121.98 (degrees: the arc, the position angle east of north, and the same axis folded into [0, 180))
 console.log(
-	observed.normal.map((v) => v.toFixed(4)),
-	observed.startVector.map((v) => v.toFixed(4)),
+	observed.normal.map((v) => v),
+	observed.startVector.map((v) => v),
 ) // [-0.0036, -0.5300, -0.8480] [0.9991, 0.0344, -0.0257]
 
 // Not projectable or degenerate: a zero-length streak, a header that is not TAN, and an empty header.
@@ -7791,7 +7728,7 @@ console.log(celestialStreakTrack({ ...streak, end: streak.start }, wcs), celesti
 
 // The RA/Dec (radians) of a pixel through the same header, to write predictions: the sky position of the pixel center (x, y).
 const skyOf = (x: number, y: number): [number, number] => [-(x - 49.5) * 0.05 * rad, (y - 49.5) * 0.05 * rad]
-const line = (c: CelestialTrackComparison | undefined) => c && [(c.crossTrack * deg).toFixed(4), c.overlap.toFixed(3), (c.orientation * deg).toFixed(3), c.temporalOverlap, c.score.toFixed(3)]
+const line = (c: CelestialTrackComparison | undefined) => c && [c.crossTrack * deg, c.overlap, c.orientation * deg, c.temporalOverlap, c.score]
 
 // A prediction that runs along the streak (and extends past both ends): a small residual, a full overlap, the same plane up to a fraction of a degree; reversing it gives the same comparison.
 const along = { start: skyOf(0, 12), end: skyOf(100, 75) }
@@ -7848,7 +7785,7 @@ const measure = (dx: number, dy: number, seed: number, outerRadius?: number, fie
 // Six frames of the same configuration with a drawn offset of (4, -2) pixels: the median vector, the dispersion and the direction in radians.
 const analyses = [1, 2, 3, 4, 5, 6].map((seed) => measure(4, -2, seed))
 const summary = summarizeCollimationSequence(analyses)
-if (summary.success) console.log(summary.usableCount, summary.offset, summary.referenceRadius.toFixed(3), summary.distance.toFixed(3), summary.normalizedDistance.toFixed(4), summary.dispersion.toFixed(3), summary.normalizedDispersion.toFixed(5), summary.resolutionFloor, summary.direction?.toFixed(4)) // 6 frames, offset (4.001, -1.997), reference radius 58.980, distance 4.472, normalized distance 0.0758, dispersion 0.019 pixel (normalized 0.00032), resolution floor 0.2 and direction 5.820 rad (the drawn offset is (4, -2))
+if (summary.success) console.log(summary.usableCount, summary.offset, summary.referenceRadius, summary.distance, summary.normalizedDistance, summary.dispersion, summary.normalizedDispersion, summary.resolutionFloor, summary.direction) // 6 frames, offset (4.001, -1.997), reference radius 58.980, distance 4.472, normalized distance 0.0758, dispersion 0.019 pixel (normalized 0.00032), resolution floor 0.2 and direction 5.820 rad (the drawn offset is (4, -2))
 
 // The tolerance compares the repeatability (the normalized dispersion), not the offset.
 for (const tolerance of [0.01, 0.0001]) {
@@ -7858,7 +7795,7 @@ for (const tolerance of [0.01, 0.0001]) {
 
 // A concentric obstruction: the median offset is about zero and the direction is not resolved.
 const concentric = summarizeCollimationSequence([1, 2, 3, 4, 5, 6].map((seed) => measure(0, 0, seed)))
-if (concentric.success) console.log(concentric.distance.toFixed(3), concentric.resolutionFloor, concentric.direction) // distance 0.009 pixel, resolution floor 0.2 and no direction
+if (concentric.success) console.log(concentric.distance, concentric.resolutionFloor, concentric.direction) // distance 0.009 pixel, resolution floor 0.2 and no direction
 
 // An analysis that failed keeps its reason in the entries and does not enter the summary; a frame whose outer center is outside the field reference is excluded too.
 const field = { center: { x: 100, y: 100 }, maximumDistance: 5 }
@@ -7872,18 +7809,6 @@ const mixed = summarizeCollimationSequence([
 	analyzeCollimation({ image: generateSyntheticCollimationImage({ ...pattern(4, -2, 7), signal: 0 }), area }, { workspace }),
 ])
 if (mixed.success) console.log(mixed.usableCount, mixed.entries) // usableCount 5: frames 0 to 4 usable, frame 5 excluded as outsideFieldReference and frame 6 as analysisFailed with the analysisReason lowSignal
-
-// Fewer than five usable frames cannot give a summary.
-const few = summarizeCollimationSequence(analyses.slice(0, 4))
-console.log(few.success, !few.success && few.reason, few.usableCount) // false insufficientFrames 4
-
-// An outer radius that differs by more than 5% from the median (a different focus position) makes the group incompatible.
-const radii = summarizeCollimationSequence([...analyses.slice(0, 5), measure(4, -2, 8, 70)])
-console.log(radii.success, !radii.success && radii.reason, radii.usableCount) // false incompatibleMeasurements 6
-
-// The empty sequence has no usable frame.
-const none = summarizeCollimationSequence([])
-console.log(none.success, !none.success && none.reason) // false insufficientFrames
 ```
 
 ### Cosmetic Correction
@@ -7929,7 +7854,7 @@ const frame = () => {
 	image.raw[12 * size + 20] = 0 // a dead pixel at (20, 12)
 	return image
 }
-const at = (image: Image, x: number, y: number) => Number(image.raw[y * size + x].toFixed(4))
+const at = (image: Image, x: number, y: number) => Number(image.raw[y * size + x])
 
 // The defaults repair the hot and the dead pixel with the median of their 3x3 neighbourhood and leave the star alone.
 const image = frame()
@@ -7993,7 +7918,7 @@ console.log(criticalFocusZone(0.55, 5)) // 67.1 micrometers
 console.log(criticalFocusZone(0.55, 2), criticalFocusZone(0.55, 10), criticalFocusZone(0.55, 10) / criticalFocusZone(0.55, 2)) // 10.736, 268.4 and a ratio of 25 micrometers
 
 // The wavelength scales it linearly: blue (0.45), green (0.55) and near infrared (0.85) light at f/4.
-console.log([0.45, 0.55, 0.85].map((wavelength) => criticalFocusZone(wavelength, 4).toFixed(2))) // 35.14, 42.94 and 66.37 micrometers
+console.log([0.45, 0.55, 0.85].map((wavelength) => criticalFocusZone(wavelength, 4))) // 35.14, 42.94 and 66.37 micrometers
 ```
 
 ### Critical Focus Zone
@@ -8035,41 +7960,40 @@ const pixel = (): Image => ({
 	raw: new Float64Array([0.6, 0.3, 0.1]),
 })
 
-const round = (values: ArrayLike<number>) => Array.from(values, (value) => Number(value.toFixed(4)))
-
 // A curve through (0.5, 0.75) lifts the midtones: the end points are added, and the output is smooth and monotone.
 const lifted = curvesTransformation(ramp(), { curves: [{ channel: 'GRAY', x: [0.5], y: [0.75] }] })
-console.log(round(lifted.raw)) // [ 0, 0.4531, 0.75, 0.9219, 1 ]
+console.log(lifted.raw) // [ 0, 0.4531, 0.75, 0.9219, 1 ]
 
 // The splines differ between the control points: eleven samples from 0 to 1 and three control points.
 for (const interpolation of ['cubicHermite', 'akima', 'catmullRom', 'naturalCubic'] as const) {
 	const steps = ramp()
 	const image: Image = { ...steps, metadata: { ...steps.metadata, width: 11, pixelCount: 11, stride: 11 }, raw: Float64Array.from({ length: 11 }, (_, i) => i / 10) }
-	console.log(interpolation, round(curvesTransformation(image, { interpolation, curves: [{ channel: 'GRAY', x: [0.2, 0.5], y: [0.1, 0.8] }] }).raw).join(' ')) // cubicHermite 0 0.0303 0.1 0.3004 0.6038 0.8 0.8672 0.9227 0.9644 0.9908 1 (the four splines agree at the control points and differ between them, and the table is clipped to 0..1)
+	console.log(interpolation, curvesTransformation(image, { interpolation, curves: [{ channel: 'GRAY', x: [0.2, 0.5], y: [0.1, 0.8] }] }).raw.join(' ')) // cubicHermite 0 0.0303 0.1 0.3004 0.6038 0.8 0.8672 0.9227 0.9644 0.9908 1 (the four splines agree at the control points and differ between them, and the table is clipped to 0..1)
 }
 
 // An S-curve with several points and a lower LUT depth.
-console.log(round(curvesTransformation(ramp(), { bits: 8, curves: [{ channel: 'GRAY', x: [0.25, 0.5, 0.75], y: [0.15, 0.5, 0.85] }] }).raw).join(' ')) // [ 0, 0.15, 0.5, 0.85, 1 ]
+console.log(curvesTransformation(ramp(), { bits: 8, curves: [{ channel: 'GRAY', x: [0.25, 0.5, 0.75], y: [0.15, 0.5, 0.85] }] }).raw.join(' ')) // [ 0, 0.15, 0.5, 0.85, 1 ]
 
 // A curve of one color channel changes only that channel, and several curves are applied in order.
 console.log(
-	round(
-		curvesTransformation(pixel(), {
-			curves: [
-				{ channel: 'RED', x: [0.6], y: [0.3] },
-				{ channel: 'BLUE', x: [0.1], y: [0.5] },
-			],
-		}).raw,
-	).join(' '),
+	curvesTransformation(pixel(), {
+		curves: [
+			{ channel: 'RED', x: [0.6], y: [0.3] },
+			{ channel: 'BLUE', x: [0.1], y: [0.5] },
+		],
+	}).raw.join(' '),
 ) // [ 0.3, 0.3, 0.5 ]
 
 // A luminance curve keeps the color ratios while it darkens, and blends toward white while it brightens.
 const darker = curvesTransformation(pixel(), { curves: [{ channel: 'BT709', x: [0.3], y: [0.15] }] })
-console.log(round(darker.raw), round(darker.raw.map((value, i) => value / pixel().raw[i]))) // [ 0.318, 0.159, 0.053 ] [ 0.53, 0.53, 0.53 ] (the pixel is scaled by the same ratio)
-console.log(round(curvesTransformation(pixel(), { curves: [{ channel: 'BT709', x: [0.3], y: [0.6] }] }).raw).join(' ')) // 0.7827 0.6198 0.5112
+console.log(
+	darker.raw,
+	darker.raw.map((value, i) => value / pixel().raw[i]),
+) // [ 0.318, 0.159, 0.053 ] [ 0.53, 0.53, 0.53 ] (the pixel is scaled by the same ratio)
+console.log(curvesTransformation(pixel(), { curves: [{ channel: 'BT709', x: [0.3], y: [0.6] }] }).raw.join(' ')) // 0.7827 0.6198 0.5112
 
 // The identity curves, the empty list and the default options leave the image untouched.
-console.log(round(curvesTransformation(ramp(), { curves: [{ channel: 'GRAY', x: [0, 1], y: [0, 1] }, undefined] }).raw), round(curvesTransformation(ramp(), DEFAULT_CURVES_TRANSFORMATION_OPTIONS).raw), round(curvesTransformation(ramp()).raw)) // [ 0, 0.25, 0.5, 0.75, 1 ] [ 0, 0.25, 0.5, 0.75, 1 ] [ 0, 0.25, 0.5, 0.75, 1 ]
+console.log(curvesTransformation(ramp(), { curves: [{ channel: 'GRAY', x: [0, 1], y: [0, 1] }, undefined] }).raw, curvesTransformation(ramp(), DEFAULT_CURVES_TRANSFORMATION_OPTIONS).raw, curvesTransformation(ramp()).raw) // [ 0, 0.25, 0.5, 0.75, 1 ] [ 0, 0.25, 0.5, 0.75, 1 ] [ 0, 0.25, 0.5, 0.75, 1 ]
 ```
 
 ### Dark Current
@@ -8168,7 +8092,7 @@ const gradient: Image = {
 	raw: Float32Array.from({ length: 16 }, (_, i) => (i % 4) / 3),
 }
 const pixel = debayer(gradient)!.raw.slice((1 * 4 + 1) * 3, (1 * 4 + 1) * 3 + 3)
-console.log(Array.from(pixel, (value) => Number(value.toFixed(4)))) // [ 0.3333, 0.3333, 0.3333 ]
+console.log(Array.from(pixel, (value) => Number(value))) // [ 0.3333, 0.3333, 0.3333 ]
 
 // The unsupported inputs return undefined.
 console.log(debayer(rgb), debayer({ ...gradient, metadata: { ...gradient.metadata, bayer: undefined } }), bayer(gradient, 'RGGB')) // undefined undefined undefined
@@ -8206,7 +8130,7 @@ const result = analyzeCollimation({ image: generateSyntheticCollimationImage(pat
 if (result.success) console.log(result.plane, result.geometry) // mono, offset (4.000, -2.016), distance 4.479, normalized distance 0.0759, obstruction ratio 0.398, direction 5.816 rad (the drawn offset is (4, -2))
 
 // The two boundaries: centers, axes, the orientation in radians, the equivalent radius, the residual of the fit and the support of the sectors.
-if (result.success) for (const fit of [result.outer, result.obstruction]) console.log(fit.ellipse, fit.equivalentRadius.toFixed(3), fit.rms.toFixed(3), fit.coverage, fit.maximumGap, fit.sectors) // outer center (99.997, 100.013), axes 59.975 and 58.000, theta 0.303 rad (drawn 0.3), equivalent radius 58.979, rms 0.092 pixel, coverage 1, gap 0, 360 sectors; obstruction center (103.996, 97.996), axes 23.942 and 22.988, theta 0.312 rad, equivalent radius 23.460, rms 0.093, coverage 1, gap 0, 360 sectors
+if (result.success) for (const fit of [result.outer, result.obstruction]) console.log(fit.ellipse, fit.equivalentRadius, fit.rms, fit.coverage, fit.maximumGap, fit.sectors) // outer center (99.997, 100.013), axes 59.975 and 58.000, theta 0.303 rad (drawn 0.3), equivalent radius 58.979, rms 0.092 pixel, coverage 1, gap 0, 360 sectors; obstruction center (103.996, 97.996), axes 23.942 and 22.988, theta 0.312 rad, equivalent radius 23.460, rms 0.093, coverage 1, gap 0, 360 sectors
 
 // The signal, the background, the photometry, the stability and the diagnostics.
 if (result.success) console.log(result.quality, result.photometry, result.stability, result.diagnostics, result.assessment) // background 0.0501, noise 0.00205, signal 0.2175, SNR 106.0, no invalid or saturated fraction (saturation unknown) and field unknown; photometry relative variation 0.0020 with coverage 1; stability offset spread 0.020 pixel (normalized 0.00033) and resolution floor 0.2; diagnostics saturationUnknown and fieldReferenceMissing; no assessment without a tolerance
@@ -8223,7 +8147,7 @@ if (far.success) console.log(far.quality.field, far.diagnostics) // outsideRefer
 
 // A concentric obstruction has an offset of about zero and no resolved direction.
 const concentric = analyzeCollimation({ image: generateSyntheticCollimationImage(pattern({}, 0, 0)), area }, { workspace })
-if (concentric.success) console.log(concentric.geometry.distance.toFixed(3), concentric.geometry.direction, concentric.diagnostics) // distance 0.011 pixel, no direction, and the diagnostics saturationUnknown, fieldReferenceMissing and directionUnresolved
+if (concentric.success) console.log(concentric.geometry.distance, concentric.geometry.direction, concentric.diagnostics) // distance 0.011 pixel, no direction, and the diagnostics saturationUnknown, fieldReferenceMissing and directionUnresolved
 
 // A given center in the shadow, more sectors and more smoothing, with a workspace sized for the sectors.
 const wide = analyzeCollimation({ image: generateSyntheticCollimationImage(pattern()), area, center: { x: 104, y: 98 } }, { workspace: createCollimationWorkspace(200, 200, { precision: 32, angularSamples: 720 }), angularSamples: 720, smoothingSigma: 2 })
@@ -8246,13 +8170,13 @@ console.log(classifyFWHMSampling(1.5), classifyFWHMSampling(2), classifyFWHMSamp
 
 // The focal length for 2 pixels across a 2.4 arcsecond seeing with a 3.76 micron pixel (millimeters); the scale it gives is 1.2 arcsec per pixel.
 const focal = recommendedFocalLength(3.76, 2, 2.4)
-console.log(focal.toFixed(1), ((206.265 * 3.76) / focal).toFixed(3)) // 646.3 1.200
+console.log(focal, (206.265 * 3.76) / focal) // 646.3 1.200
 
 // The Airy disk of an f/5 train in green light (0.55 microns) and in red (0.65), and in pixels of 3.76 microns.
-console.log(airyDiskSize(0.55, 5).toFixed(3), airyDiskSize(0.65, 5).toFixed(3), airyDiskInPixels(airyDiskSize(0.55, 5), 3.76).toFixed(3)) // 6.710 7.930 1.785 (microns, microns, pixels)
+console.log(airyDiskSize(0.55, 5), airyDiskSize(0.65, 5), airyDiskInPixels(airyDiskSize(0.55, 5), 3.76)) // 6.710 7.930 1.785 (microns, microns, pixels)
 
 // A slow f/10 train has a disk twice as large in microns, so the same pixel samples it twice as finely.
-console.log(airyDiskSize(0.55, 10).toFixed(3), airyDiskInPixels(airyDiskSize(0.55, 10), 3.76).toFixed(3)) // 13.420 3.569 (microns, pixels)
+console.log(airyDiskSize(0.55, 10), airyDiskInPixels(airyDiskSize(0.55, 10), 3.76)) // 13.420 3.569 (microns, pixels)
 ```
 
 ### Display Stretch Parameter Estimation
@@ -8427,7 +8351,7 @@ console.log(round.success, round.success ? [round.centerX, round.centerY, round.
 const wings = [1.8, 8].map((beta) => {
 	const alpha = 3 / (2 * Math.sqrt(2 ** (1 / beta) - 1))
 	const result = fitEllipticalMoffat(frame(24, 24, 0.8, alpha, alpha, 0, beta), input(24, 24, 3, 3, 0), workspace)
-	return result.success ? [beta, +result.beta.toFixed(2), +fwhm(result.alphaMajor, result.beta).toFixed(3)] : result.reason
+	return result.success ? [beta, +result.beta, +fwhm(result.alphaMajor, result.beta)] : result.reason
 })
 console.log(wings) // [[1.8, 1.79, 2.999], [8, 7.9, 2.999]] (the fitted beta and the FWHM, which is the 3 pixels drawn for both)
 
@@ -8454,7 +8378,7 @@ console.log(power) // 40
 console.log(exitPupil(200, power), exitPupil(25, 5), exitPupilFromApertureAndMagnification(200, power), exitPupilFromEyepieceAndFocalRatio(25, 5)) // 5 5 5 5
 
 // The true field from the field stop of the eyepiece (a 27 mm field stop, typical of a 2 inch eyepiece), in degrees.
-console.log(eyepieceTrueFovViaFieldStop(27, 1000).toFixed(4)) // 1.5470 (degrees; the apparent-field estimate gives 1.3, so the two disagree for this eyepiece)
+console.log(eyepieceTrueFovViaFieldStop(27, 1000)) // 1.5470 (degrees; the apparent-field estimate gives 1.3, so the two disagree for this eyepiece)
 
 // The whole view of the eyepiece: the magnification, the true field (apparent / magnification) and the exit pupil.
 console.log(eyepieceView(1000, 200, 25, 52)) // { magnification: 40, trueFieldOfViewDegrees: 1.3, exitPupilMm: 5 }
@@ -8503,20 +8427,20 @@ const workspace = new FFTWorkspace(width, height)
 console.log(workspace.width, workspace.height) // 32 32
 
 const original = make()
-console.log(roughness(original).toFixed(4)) // 0.0860
+console.log(roughness(original)) // 0.0860
 
 // A low-pass with a small cutoff removes the noise but keeps the gradient and the range of the input.
 const low = fft(make(), workspace, 'lowPass', 0.15)
-console.log(roughness(low).toFixed(4), Math.min(...low.raw).toFixed(4), Math.max(...low.raw).toFixed(4), Math.min(...original.raw).toFixed(4), Math.max(...original.raw).toFixed(4)) // 0.0317 0.2041 0.7764 0.2041 0.7764
+console.log(roughness(low), Math.min(...low.raw), Math.max(...low.raw), Math.min(...original.raw), Math.max(...original.raw)) // 0.0317 0.2041 0.7764 0.2041 0.7764
 
 // A high-pass keeps the noise and removes the gradient and the mean, so the result has a mean close to 0.
 const high = fft(make(), workspace, 'highPass', 0.5)
-console.log(roughness(high).toFixed(4), (high.raw.reduce((sum, value) => sum + value, 0) / high.raw.length).toFixed(4)) // 0.0811 -0.0046
+console.log(roughness(high), high.raw.reduce((sum, value) => sum + value, 0) / high.raw.length) // 0.0811 -0.0046
 
 // Weight: half of the filtered image blended with the original; weight 0 and the default cutoffs change nothing.
 const half = fft(make(), workspace, 'lowPass', 0.15, 0.5)
 console.log(
-	roughness(half).toFixed(4),
+	roughness(half),
 	fft(make(), workspace, 'lowPass', 0.15, 0).raw.every((value, i) => value === original.raw[i]),
 	fft(make(), workspace).raw.every((value, i) => Math.abs(value - original.raw[i]) < 1e-9),
 ) // 0.0625 true true
@@ -8539,9 +8463,6 @@ const exposureRange = [0.1, 10] as const // seconds
 
 // The first frame of 1 s gave a level of 8000 DN above the bias: a corrected level scales in proportion to the exposure.
 console.log(estimateFlatExposure({ observations: [{ exposure: 1, level: 8000 }], levelMode: 'corrected', targetRange, exposureRange })) // increase, method ratio, 4 s with a predicted level of 32000, no diagnostics
-
-// The same level with the bias still in it cannot be scaled with a single frame: it needs a second point to separate the pedestal.
-console.log(estimateFlatExposure({ observations: [{ exposure: 1, level: 8000 }], levelMode: 'observed', targetRange, exposureRange })) // invalid, method none, insufficientSamples: one observed level cannot separate illumination signal from its pedestal
 
 // With two observed levels (the signal is 6000 DN per second over a 2000 DN pedestal) the affine fit gives the exposure for the middle of the target.
 console.log(
@@ -8582,42 +8503,6 @@ console.log(estimateFlatExposure({ observations: [{ exposure: 1, level: 60000 }]
 
 // A current exposure that is inside the target but outside the allowed range is reported against that range.
 console.log(estimateFlatExposure({ observations: [{ exposure: 0.05, level: 30000 }], levelMode: 'corrected', targetRange, exposureRange })) // belowMinimum, method none, 0.1 s, with no predicted level
-
-// The failures keep a diagnostic: levels that do not grow with the exposure, an unstable affine fit and contradictory duplicates.
-const invalid = [
-	estimateFlatExposure({
-		observations: [
-			{ exposure: 1, level: 9000 },
-			{ exposure: 2, level: 7000 },
-		],
-		levelMode: 'observed',
-		targetRange,
-		exposureRange,
-	}),
-	estimateFlatExposure({
-		observations: [
-			{ exposure: 1, level: 8000 },
-			{ exposure: 2, level: 12000 },
-			{ exposure: 3, level: 8000 },
-			{ exposure: 4, level: 14000 },
-		],
-		levelMode: 'observed',
-		targetRange,
-		exposureRange,
-	}),
-	estimateFlatExposure({
-		observations: [
-			{ exposure: 1, level: 8000 },
-			{ exposure: 1, level: 9000 },
-		],
-		levelMode: 'observed',
-		targetRange,
-		exposureRange,
-	}),
-	estimateFlatExposure({ observations: [{ exposure: 1, level: -5 }], levelMode: 'corrected', targetRange, exposureRange }),
-	estimateFlatExposure({ observations: [{ exposure: 1, level: 8000 }], levelMode: 'corrected', targetRange: [36000, 28000], exposureRange }),
-]
-console.log(invalid.map((estimate) => [estimate.status, estimate.method, estimate.diagnostics[0]?.code, estimate.diagnostics[0]?.message])) // all five are invalid with method none and the code targetUnavailable, with the messages: observed exposure levels do not define a finite positive-slope affine model; observed exposure levels are too unstable for an affine recommendation; duplicate exposures contain contradictory levels; corrected exposure levels must be positive; target range must contain ordered finite levels
 ```
 
 ### Flat Sequence Stability
@@ -8784,14 +8669,14 @@ const points: AberrationFocusPoint[] = Array.from({ length: 11 }, (_, i) => {
 // Each model on the same data: the hyperbola recovers the curve it was drawn from, the quadratic is slightly off and the trend lines cross below the data.
 for (const model of ['quadratic', 'hyperbolic', 'trendLines'] as const) {
 	const fit = fitAberrationFocusCurve(points, { model })
-	if (fit.success) console.log(model, fit.minimum.x.toFixed(1), fit.minimum.y.toFixed(3), fit.uncertainty?.toFixed(2), fit.rms.toExponential(2), fit.r2.toFixed(4), fit.confidence.toFixed(3)) // quadratic: 4535.1 steps, a minimum of 2.405 pixels, an uncertainty of 6.28 steps, an rms of 0.143 pixels, an r2 of 0.9851 and a confidence of 0.947; hyperbolic: 4540.0, 2.200, no uncertainty, an rms of 4.4e-16 (the data are exactly a hyperbola), an r2 of 1 and 0.892; trendLines: 4539.2, 1.680 (below every measured value), no uncertainty, 0.148, 0.9840 and 0.931
+	if (fit.success) console.log(model, fit.minimum.x, fit.minimum.y, fit.uncertainty, fit.rms.toExponential(2), fit.r2, fit.confidence) // quadratic: 4535.1 steps, a minimum of 2.405 pixels, an uncertainty of 6.28 steps, an rms of 0.143 pixels, an r2 of 0.9851 and a confidence of 0.947; hyperbolic: 4540.0, 2.200, no uncertainty, an rms of 4.4e-16 (the data are exactly a hyperbola), an r2 of 1 and 0.892; trendLines: 4539.2, 1.680 (below every measured value), no uncertainty, 0.148, 0.9840 and 0.931
 }
 
 // The automatic mode keeps the best model by its penalized error: the hyperbola for this curve, and the parabola for a true parabola.
 const parabola = points.map((point) => ({ ...point, value: 2 + 3 * ((point.position - 4500) / 400) ** 2 }))
 for (const data of [points, parabola]) {
 	const fit = fitAberrationFocusCurve(data, { model: 'auto' })
-	if (fit.success) console.log(fit.model, fit.minimum.x.toFixed(1)) // auto keeps hyperbolic with 4540.0 for the first data and quadratic with 4500.0 for the parabola
+	if (fit.success) console.log(fit.model, fit.minimum.x) // auto keeps hyperbolic with 4540.0 for the first data and quadratic with 4500.0 for the parabola
 }
 
 // One bad point (a measurement that is 6 pixels too large) is rejected by the robust weights: the point is flagged, a warning explains why, and the minimum is hardly moved.
@@ -8799,33 +8684,14 @@ const outlier = points.map((point, i) => (i === 3 ? { ...point, value: point.val
 const robust = fitAberrationFocusCurve(outlier, { model: 'hyperbolic' })
 if (robust.success)
 	console.log(
-		robust.minimum.x.toFixed(1),
+		robust.minimum.x,
 		robust.used.indexOf(false),
 		robust.warnings.map((warning) => warning.code),
 	) // 4540.0, the flagged index is 3 and the warning is robustOutliers
 
 // The weights of the points count in the fit: the five first points with a tenth of the weight move the quadratic minimum.
 const weighted = fitAberrationFocusCurve(points.map((point, i) => ({ ...point, weight: i < 5 ? 0.1 : 1 })))
-if (weighted.success) console.log(weighted.minimum.x.toFixed(1)) // 4528.7 against 4535.1 without the weights
-
-// The failures: too few points, a minimum beyond the sampled range, an inverted curve, one side with too few points and an invalid value.
-const reasons = [
-	fitAberrationFocusCurve(points.slice(0, 4)),
-	fitAberrationFocusCurve(points.slice(0, 6)),
-	fitAberrationFocusCurve(points.map((point) => ({ ...point, value: 8 - point.value }))),
-	fitAberrationFocusCurve(points, { minimumPointsPerSide: 7 }),
-	fitAberrationFocusCurve(points.map((point) => ({ ...point, value: -1 }))),
-].map((fit) => (fit.success ? 'success' : fit.reason))
-console.log(reasons) // [ 'insufficientPoints', 'minimumOutsideRange', 'nonConvex', 'insufficientSides', 'invalidInput' ]
-
-// The V is almost at the first position, so only one point lies below the minimum: the hyperbola reports insufficientSides and the quadratic reports nonConvergent.
-for (const model of ['quadratic', 'hyperbolic'] as const) {
-	const edge = fitAberrationFocusCurve(
-		points.map((point) => ({ ...point, value: Math.sqrt(2.2 ** 2 + (0.01 * (point.position - 4020)) ** 2) })),
-		{ model },
-	)
-	console.log(model, edge.success ? 'success' : edge.reason) // quadratic reports nonConvergent and hyperbolic reports insufficientSides
-}
+if (weighted.success) console.log(weighted.minimum.x) // 4528.7 against 4535.1 without the weights
 ```
 
 ### Focus Field Curvature
@@ -8883,31 +8749,31 @@ for (let row = 0; row < 5; row++) {
 
 // The full quadratic: the coefficients, the residual scatter and the support of the fit.
 const fit = fitFocusSurface(samples)
-if (fit.success) console.log(fit.model, fit.coefficients, fit.rms.toFixed(3), fit.degreesOfFreedom, fit.rejectedIndices, fit.conditionNumber.toFixed(2), fit.confidence.toFixed(3), fit.warnings) // quadratic with c 4499.90, ax 119.90, ay 60.22, qxx 203.56, qxy 1.06 and qyy 198.97 (the surface it was drawn from has 4500, 120, 60, 200, 0 and 200), an rms of 0.619 steps, 19 degrees of freedom, no rejected sample, a condition number of 15.28, a confidence of 0.882 and no warnings
+if (fit.success) console.log(fit.model, fit.coefficients, fit.rms, fit.degreesOfFreedom, fit.rejectedIndices, fit.conditionNumber, fit.confidence, fit.warnings) // quadratic with c 4499.90, ax 119.90, ay 60.22, qxx 203.56, qxy 1.06 and qyy 198.97 (the surface it was drawn from has 4500, 120, 60, 200, 0 and 200), an rms of 0.619 steps, 19 degrees of freedom, no rejected sample, a condition number of 15.28, a confidence of 0.882 and no warnings
 
 // The covariance has 6 by 6 entries in the order of the coefficients; its diagonal gives the standard uncertainty of each one.
-if (fit.success && fit.covariance) console.log([0, 7, 14, 21, 28, 35].map((i) => Math.sqrt(fit.covariance![i]).toFixed(2))) // 1.57, 2.83, 2.83, 11.95, 10.00 and 11.95 steps (the curvature terms are the least constrained)
+if (fit.success && fit.covariance) console.log([0, 7, 14, 21, 28, 35].map((i) => Math.sqrt(fit.covariance![i]))) // 1.57, 2.83, 2.83, 11.95, 10.00 and 11.95 steps (the curvature terms are the least constrained)
 
 // The simpler models: the plane has three coefficients (the curvature goes to the residuals) and the radial one has a single curvature.
 for (const model of ['plane', 'radialQuadratic'] as const) {
 	const simpler = fitFocusSurface(samples, { model })
-	if (simpler.success) console.log(model, simpler.coefficients, simpler.rms.toFixed(2)) // plane: c 4531.89, ax 119.88, ay 60.08 and an rms of 19.06 steps, the curvature left in the residuals; radialQuadratic: c 4499.89, ax 119.91, ay 60.22, qxx = qyy = 201.30 and an rms of 0.66 steps
+	if (simpler.success) console.log(model, simpler.coefficients, simpler.rms) // plane: c 4531.89, ax 119.88, ay 60.08 and an rms of 19.06 steps, the curvature left in the residuals; radialQuadratic: c 4499.89, ax 119.91, ay 60.22, qxx = qyy = 201.30 and an rms of 0.66 steps
 }
 
 // The surface at a point (the center, and the bottom-right corner of the sensor).
-if (fit.success) console.log(evaluateFocusSurface(fit.coefficients, 0, 0).toFixed(2), evaluateFocusSurface(fit.coefficients, 0.5, 0.5).toFixed(2)) // 4499.90 at the center and 4690.86 at the bottom-right corner
+if (fit.success) console.log(evaluateFocusSurface(fit.coefficients, 0, 0), evaluateFocusSurface(fit.coefficients, 0.5, 0.5)) // 4499.90 at the center and 4690.86 at the bottom-right corner
 
 // The planar part: gradients in steps per sensor width and height, the direction in radians (clockwise from +X in image coordinates) and the corner-to-corner effect.
 if (fit.success) console.log(analyzeFocusPlane(fit.coefficients)) // gradientX 119.90, gradientY 60.22, direction 0.465 rad and an effect of 180.12 steps
 
 // The full range of the surface over the sensor (it includes the curvature), and a flat plane has no direction.
-if (fit.success) console.log(focusSurfaceEffect(fit.coefficients).toFixed(2), analyzeFocusPlane({ c: 4500, ax: 0, ay: 0, qxx: 0, qxy: 0, qyy: 0 })) // 213.13 steps, and { gradientX: 0, gradientY: 0, direction: undefined, effect: 0 } for the flat plane
+if (fit.success) console.log(focusSurfaceEffect(fit.coefficients), analyzeFocusPlane({ c: 4500, ax: 0, ay: 0, qxx: 0, qxy: 0, qyy: 0 })) // 213.13 steps, and { gradientX: 0, gradientY: 0, direction: undefined, effect: 0 } for the flat plane
 
 // A 3 by 3 map of the model: the center cell is exactly the center of the sensor, and the uncertainty is that of the model prediction.
 if (fit.success) {
 	const map = buildFocusSurfaceMap(fit, { columns: 3, rows: 3 })
-	console.log(map.centerFocus.toFixed(2), map.minimumFocus.toFixed(2), map.maximumFocus.toFixed(2), map.range.toFixed(2), map.confidence.toFixed(3)) // center 4499.90, minimum 4482.55, maximum 4604.78, a range of 122.23 steps and the confidence 0.882 of the fit (the grid of cell centers does not reach the corners, so its range is smaller than the 213.13 of the whole sensor)
-	console.log(map.cells.map((cell) => [cell.column, cell.row, cell.focus.toFixed(1), cell.offsetFromCenter.toFixed(1), cell.uncertainty?.toFixed(2)])) // the cells in row order from (0, 0): 4484.7 (offset -15.2, uncertainty 1.98), 4501.9 (2.0, 1.61), 4564.4 (64.5, 1.98) / 4482.5 (-17.4, 1.61), 4499.9 (0.0, 1.57), 4562.5 (62.6, 1.61) / 4524.6 (24.7, 1.98), 4542.1 (42.2, 1.61), 4604.8 (104.9, 1.98), all in steps
+	console.log(map.centerFocus, map.minimumFocus, map.maximumFocus, map.range, map.confidence) // center 4499.90, minimum 4482.55, maximum 4604.78, a range of 122.23 steps and the confidence 0.882 of the fit (the grid of cell centers does not reach the corners, so its range is smaller than the 213.13 of the whole sensor)
+	console.log(map.cells.map((cell) => [cell.column, cell.row, cell.focus, cell.offsetFromCenter, cell.uncertainty])) // the cells in row order from (0, 0): 4484.7 (offset -15.2, uncertainty 1.98), 4501.9 (2.0, 1.61), 4564.4 (64.5, 1.98) / 4482.5 (-17.4, 1.61), 4499.9 (0.0, 1.57), 4562.5 (62.6, 1.61) / 4524.6 (24.7, 1.98), 4542.1 (42.2, 1.61), 4604.8 (104.9, 1.98), all in steps
 }
 
 // Outliers are rejected by the robust weights: a region with a best focus 400 steps off is flagged and the coefficients hardly change.
@@ -8916,13 +8782,9 @@ const robust = fitFocusSurface(withOutlier)
 if (robust.success)
 	console.log(
 		robust.rejectedIndices,
-		robust.coefficients.ax.toFixed(1),
+		robust.coefficients.ax,
 		robust.warnings.map((warning) => warning.code),
 	) // [ 7 ] is rejected, ax stays at 119.9 and the warning is robustOutliers
-
-// Too few samples for the model, or invalid ones, are reported with a reason instead of a surface.
-const failures = [fitFocusSurface(samples.slice(0, 4)), fitFocusSurface([...samples.slice(0, 8), { u: Number.NaN, v: 0, focus: 1 }]), fitFocusSurface(samples.slice(0, 8).map((sample) => ({ ...sample, v: 0 })))]
-console.log(failures.map((result) => (result.success ? 'success' : result.reason))) // [ 'insufficientSamples', 'invalidInput', 'rankDeficient' ] (the last one has every region on the same row, so the Y terms cannot be determined)
 ```
 
 ### Frame Saturation
@@ -9254,7 +9116,7 @@ const frame = (values: number[]): Image => ({
 })
 
 const impulse = () => frame(Array.from({ length: 25 }, (_, i) => (i === 12 ? 1 : 0)))
-const row = (image: Image, y: number) => Array.from(image.raw.slice(y * 5, y * 5 + 5), (value) => Number(value.toFixed(4)))
+const row = (image: Image, y: number) => Array.from(image.raw.slice(y * 5, y * 5 + 5), (value) => Number(value))
 
 // The impulse response of the box and the pyramid blurs: the kernel itself divided by its divisor.
 console.log(row(mean3x3(impulse()), 2), row(blur3x3(impulse()), 2)) // [ 0, 0.1111, 0.1111, 0.1111, 0 ] [ 0, 0.125, 0.25, 0.125, 0 ]
@@ -9271,16 +9133,16 @@ const kernel = gaussianBlurKernel(1, 3)
 console.log(
 	kernel.width,
 	kernel.height,
-	kernel.divisor.toFixed(4),
-	Array.from(kernel.kernel, (value) => Number(value.toFixed(4))),
+	kernel.divisor,
+	Array.from(kernel.kernel, (value) => Number(value)),
 ) // 3 3 0.7795 [ 0.0585, 0.0965, 0.0585, 0.0965, 0.1592, 0.0965, 0.0585, 0.0965, 0.0585 ]
 console.log(meanConvolutionKernel(9).divisor, blurConvolutionKernel(9).divisor, Array.from(blurConvolutionKernel(5).kernel).join(' ')) // 81 625 1 2 3 2 1 2 4 6 4 2 3 6 9 6 3 2 4 6 4 2 1 2 3 2 1
 console.log(convolutionKernel([1, 2, 1, 2, 4, 2, 1, 2, 1], 3).divisor, convolutionKernel([1, 1, 1, 1, 1, 1, 1, 1, 1], 3, 3, 3).divisor) // 16 3
 
 // A custom kernel through convolution(), and the border rule: a 3x3 image of ones.
 const ones = () => ({ ...frame([]), metadata: { ...frame([]).metadata, width: 3, height: 3, pixelCount: 9, stride: 3 }, raw: new Float64Array(9).fill(1) })
-console.log(Array.from(convolution(ones(), convolutionKernel(new Array(9).fill(1), 3)).raw, (value) => Number(value.toFixed(3)))) // [ 1, 1, 1, 1, 1, 1, 1, 1, 1 ] (the divisor follows the truncated border)
-console.log(Array.from(convolution(ones(), convolutionKernel(new Array(9).fill(1), 3), { dynamicDivisorForEdges: false }).raw, (value) => Number(value.toFixed(3)))) // [ 0.444, 0.667, 0.444, 0.667, 1, 0.667, 0.444, 0.667, 0.444 ]
+console.log(Array.from(convolution(ones(), convolutionKernel(new Array(9).fill(1), 3)).raw, (value) => Number(value))) // [ 1, 1, 1, 1, 1, 1, 1, 1, 1 ] (the divisor follows the truncated border)
+console.log(Array.from(convolution(ones(), convolutionKernel(new Array(9).fill(1), 3), { dynamicDivisorForEdges: false }).raw, (value) => Number(value))) // [ 0.444, 0.667, 0.444, 0.667, 1, 0.667, 0.444, 0.667, 0.444 ]
 
 // The separable smoothing with the binomial kernel [1, 4, 6, 4, 1] / 16, and with a dilation of 2 pixels.
 const source = new Float64Array(25)
@@ -9292,7 +9154,7 @@ const smoothing = separableSmoothingKernel([1, 4, 6, 4, 1])
 console.log(
 	smoothing.divisor,
 	separableSmoothing(source, output, intermediate, metadata, smoothing) === output,
-	Array.from(output.slice(10, 15), (value) => Number(value.toFixed(4))),
+	Array.from(output.slice(10, 15), (value) => Number(value)),
 ) // 16 true [ 0.0341, 0.1, 0.1406, 0.1, 0.0341 ]
 separableSmoothing(source, output, intermediate, metadata, separableSmoothingKernel([1, 2, 1]), { step: 2, dynamicDivisorForEdges: false })
 console.log(Array.from(output.slice(10, 15))) // [ 0.125, 0, 0.25, 0, 0.125 ]
@@ -9368,13 +9230,13 @@ const f = focalLength(200, 5)
 console.log(f, focalRatio(f, 200)) // 1000 5
 
 // The scale of the focal plane (arcsec per mm), and of a 3.76 micron pixel (arcsec per pixel) at 1000 mm and with a 2x2 binning (7.52 microns).
-console.log(plateScale(f).toFixed(3), pixelScale(3.76, f).toFixed(4), pixelScale(2 * 3.76, f).toFixed(4)) // 206.265 0.7756 1.5511 (arcsec per mm, then arcsec per pixel unbinned and binned 2x2)
+console.log(plateScale(f), pixelScale(3.76, f), pixelScale(2 * 3.76, f)) // 206.265 0.7756 1.5511 (arcsec per mm, then arcsec per pixel unbinned and binned 2x2)
 
 // A 23.5 x 15.7 mm APS-C sensor at 1000 mm: the field along each axis (degrees) and along the 28.26 mm diagonal (radians converted to degrees).
-console.log(sensorFieldOfView(23.5, f).toFixed(4), sensorFieldOfView(15.7, f).toFixed(4), ((sensorDiagonalFov(Math.hypot(23.5, 15.7), f) * 180) / Math.PI).toFixed(4)) // 1.3465 0.8995 1.6192 (degrees)
+console.log(sensorFieldOfView(23.5, f), sensorFieldOfView(15.7, f), (sensorDiagonalFov(Math.hypot(23.5, 15.7), f) * 180) / Math.PI) // 1.3465 0.8995 1.6192 (degrees)
 
 // The small-angle approximation against the exact angle for a wide field: a 36 mm side at 50 mm (degrees).
-console.log(sensorFieldOfView(36, 50).toFixed(3), ((2 * Math.atan(36 / 100) * 180) / Math.PI).toFixed(3)) // 41.253 39.598 (the approximation overestimates a wide field by 4%)
+console.log(sensorFieldOfView(36, 50), (2 * Math.atan(36 / 100) * 180) / Math.PI) // 41.253 39.598 (the approximation overestimates a wide field by 4%)
 
 // A 6 x 4 degree target with a 1.35 x 0.9 degree camera: the panels along each axis for no overlap and for 20% overlap.
 console.log(mosaicPanelCount(6, 1.35, 0), mosaicPanelCount(4, 0.9, 0), mosaicPanelCount(6, 1.35, 0.2), mosaicPanelCount(4, 0.9, 0.2)) // 5 5 6 6
@@ -9424,12 +9286,12 @@ const frame = (dx: number, dy: number, noise = 0.004, hfd = 3.5, sky = 0.1): Sta
 // Five frames dithered by whole pixels, the third with a cosmic ray of 5 on the sky pixel that maps to the output pixel (50, 50).
 const frames = [frame(0, 0), frame(3, -2), frame(-4, 5), frame(2, 2), frame(-1, -3)]
 frames[2].image.raw[55 * width + 46] = 5
-const at = (image: Image | undefined, x = 50, y = 50) => image?.raw[y * width + x].toFixed(4)
+const at = (image: Image | undefined, x = 50, y = 50) => image?.raw[y * width + x]
 
 // The default stack: the first frame is the reference and the others are registered to it by translations of the dithers (negated).
 const stack = stackFrames(frames)
 console.log(stack.acceptedFrames, stack.rejectedFrames, stack.referenceFrameIndex, stack.finalImage?.metadata.width, stack.statistics.method, stack.statistics.normalizationMode, stack.statistics.acceptedWeightSum) // 5 0 0 96 average background-scale 5
-console.log(stack.diagnostics.map((d) => [d.accepted, d.transform?.model, d.transform?.translationX, d.transform?.translationY, d.transform?.inlierCount, d.overlapFraction.toFixed(3)])) // [[true, "identity", 0, 0, 0, "1.000"], [true, "similarity", -3, 2, 14, "0.939"], [true, "similarity", 4, -5, 14, "0.908"], [true, "similarity", -2, -2, 14, "0.959"], [true, "similarity", 1, 3, 14, "0.959"]]
+console.log(stack.diagnostics.map((d) => [d.accepted, d.transform?.model, d.transform?.translationX, d.transform?.translationY, d.transform?.inlierCount, d.overlapFraction])) // [[true, "identity", 0, 0, 0, "1.000"], [true, "similarity", -3, 2, 14, "0.939"], [true, "similarity", 4, -5, 14, "0.908"], [true, "similarity", -2, -2, 14, "0.959"], [true, "similarity", 1, 3, 14, "0.959"]]
 console.log(stack.diagnostics[1].transform?.rmsError, stack.diagnostics[1].normalization?.scales, stack.diagnostics[1].normalization?.offsets, stack.diagnostics[1].quality.starCount, stack.diagnostics[1].quality.medianHFD) // 9.4950266995548e-16 [0.9904749206507728] [0.0009339218422435708] 14 3.5
 console.log(stack.effectiveCropBounds, Array.from(new Set(stack.coverageMap!)), stack.validityMask?.length) // { left: 0, top: 0, right: 95, bottom: 95, width: 96, height: 96 } [2, 3, 4, 5] 9216
 
@@ -9452,7 +9314,7 @@ const uneven = [frame(0, 0), frame(3, -2), frame(-4, 5), frame(2, 2, 0.05, 6), f
 for (const weightingMode of ['snr', 'inverse-hfd', 'stars', 'quality'] as const)
 	console.log(
 		weightingMode,
-		stackFrames(uneven, { combinationMethod: 'weighted-average', weightingMode }).diagnostics.map((d) => d.normalization?.weight.toFixed(3)),
+		stackFrames(uneven, { combinationMethod: 'weighted-average', weightingMode }).diagnostics.map((d) => d.normalization?.weight),
 	) // snr [4.000 x5] / inverse-hfd [0.714, 0.714, 0.714, 0.417, 0.714] / stars [2.333 x5] / quality [5.345, 5.345, 5.345, 3.118, 5.345]
 console.log(
 	stackFrames([frames[0], { ...frames[1], weight: 3 }], { combinationMethod: 'weighted-average' }).diagnostics.map((d) => d.normalization?.weight),
@@ -9473,16 +9335,8 @@ const lit = frame(3, -2)
 for (let i = 0; i < lit.image.raw.length; i++) lit.image.raw[i] = lit.image.raw[i] * 1.5 + 0.05
 for (const normalizationMode of ['none', 'scale', 'background-scale', 'percentile', 'local'] as const) {
 	const result = stackFrames([frames[0], lit, frames[3]], { normalizationMode })
-	console.log(normalizationMode, result.diagnostics[1].normalization?.scales[0].toFixed(3), result.diagnostics[1].normalization?.offsets[0].toFixed(4), at(result.finalImage, 5, 5)) // none 1.000 0.0000 0.1317 / scale 0.500 0.0000 0.0988 / background-scale 0.665 -0.0330 0.0987 / percentile 0.641 -0.0282 0.0987 / local 0.665 -0.0330 0.0987
+	console.log(normalizationMode, result.diagnostics[1].normalization?.scales[0], result.diagnostics[1].normalization?.offsets[0], at(result.finalImage, 5, 5)) // none 1.000 0.0000 0.1317 / scale 0.500 0.0000 0.0988 / background-scale 0.665 -0.0330 0.0987 / percentile 0.641 -0.0282 0.0987 / local 0.665 -0.0330 0.0987
 }
-
-// Frames that are not accepted: too few stars, a frame that does not overlap, a frame whose metadata does not match its buffer, and an empty list.
-const sparse = { ...frames[1], stars: frames[1].stars.slice(0, 3) }
-const mismatched = { ...frames[1], image: { ...frames[1].image, metadata: { ...frames[1].image.metadata, channels: 3 } } }
-console.log(stackFrames([frames[0], sparse, frame(200, 0), mismatched]).diagnostics.map((d) => d.reason)) // [undefined, "too-few-stars", "no-overlap", "invalid-image-shape"]
-console.log(stackFrames([frames[0], sparse], { minAcceptedStars: 3, minAcceptedInliers: 3 }).diagnostics[1].reason, stackFrames([frames[0], frames[1]], { maxTranslation: 2 }).diagnostics[1].reason, stackFrames([frames[0], frames[1]], { minOverlapFraction: 0.99 }).diagnostics[1].reason) // match-failed transform-out-of-bounds insufficient-overlap
-const empty = stackFrames([])
-console.log(empty.finalImage, empty.acceptedFrames, empty.referenceFrameIndex) // undefined 0 -1
 
 // Sample precision, without the per-pixel maps: the resampled stack keeps the storage class of the reference, and drizzle follows the option.
 const lean = stackFrames(frames, { samplePrecision: 32, keepPerPixelStatistics: false })
@@ -9663,16 +9517,15 @@ const dithers: [number, number][] = [
 for (const [dx, dy] of dithers) {
 	const result = live.add(frame(dx, dy))
 	const snapshot = live.snapshot()!
-	console.log(result.frameIndex, result.accepted, result.transform?.model, result.transform?.translationX, result.transform?.translationY, result.overlapFraction.toFixed(3), snapshot.acceptedFrames, Math.max(...snapshot.coverageMap!)) // 0 true identity 0 0 1.000 1 1 / 1 true similarity -3 2 0.939 2 2 / 2 true similarity 4 -5 0.908 3 3 / 3 true similarity -2 -2 0.959 4 4 / 4 true similarity 1 3 0.959 5 5
+	console.log(result.frameIndex, result.accepted, result.transform?.model, result.transform?.translationX, result.transform?.translationY, result.overlapFraction, snapshot.acceptedFrames, Math.max(...snapshot.coverageMap!)) // 0 true identity 0 0 1.000 1 1 / 1 true similarity -3 2 0.939 2 2 / 2 true similarity 4 -5 0.908 3 3 / 3 true similarity -2 -2 0.959 4 4 / 4 true similarity 1 3 0.959 5 5
 }
 
 // The snapshot is a copy: a new frame does not change a previous one, and a rejected frame is in the diagnostics.
 const before = live.snapshot()!
-console.log(live.add(frame(200, 0)).reason, live.add(frame(1, 1, 3)).reason) // no-overlap too-few-stars
 const after = live.snapshot()!
 console.log(before.acceptedFrames, after.acceptedFrames, after.rejectedFrames, after.diagnostics.length, after.finalImage?.raw === before.finalImage?.raw, after.statistics.liveExact, after.statistics.acceptedWeightSum) // 5 5 2 7 false true 5
 live.add(frame(-2, 4))
-console.log(before.acceptedFrames, live.snapshot()?.acceptedFrames, before.finalImage?.raw[50 * width + 50].toFixed(5), live.snapshot()?.finalImage?.raw[50 * width + 50].toFixed(5)) // 5 6 0.09973 0.09967
+console.log(before.acceptedFrames, live.snapshot()?.acceptedFrames, before.finalImage?.raw[50 * width + 50], live.snapshot()?.finalImage?.raw[50 * width + 50]) // 5 6 0.09973 0.09967
 
 // Options: the weighted average with a frame weight, the sum, and the intersection crop (the dithered frames cover less than the union).
 const weighted = new LiveStacker({ combinationMethod: 'weighted-average' })
@@ -9685,11 +9538,7 @@ console.log(
 const summed = new LiveStacker({ combinationMethod: 'sum', normalizationMode: 'none', cropMode: 'intersection' })
 for (const [dx, dy] of dithers) summed.add(frame(dx, dy))
 const sum = summed.snapshot()!
-console.log(sum.finalImage?.metadata.width, sum.finalImage?.metadata.height, sum.effectiveCropBounds, sum.finalImage?.raw[0].toFixed(3)) // 89 88 { left: 4, top: 3, right: 92, bottom: 90, width: 89, height: 88 } 0.504
-
-// A method that cannot be accumulated is refused for every frame, and the stack stays empty.
-const median = new LiveStacker({ combinationMethod: 'median' })
-console.log(median.add(frame(0, 0)).reason, median.snapshot()) // combination-method-not-supported-in-live-mode undefined
+console.log(sum.finalImage?.metadata.width, sum.finalImage?.metadata.height, sum.effectiveCropBounds, sum.finalImage?.raw[0]) // 89 88 { left: 4, top: 3, right: 92, bottom: 90, width: 89, height: 88 } 0.504
 
 // The drizzle reconstruction on a live stack: the grid is that of the reference times the scale.
 const drizzle = new LiveStacker({ reconstructionMode: 'drizzle', drizzle: { scale: 2, pixfrac: 0.8 } })
@@ -10038,13 +9887,13 @@ console.log(Math.abs(flat.raw[10 * size + 10]) < 1e-12, flat.raw[0], flat.raw[3 
 // A star (a Gaussian of sigma 1.2 pixels, at (10, 10)) on that background: the response peaks on its center and goes negative a few pixels away.
 const star = (x: number, y: number) => 0.2 + 0.6 * Math.exp(-((x - 10) ** 2 + (y - 10) ** 2) / (2 * 1.2 * 1.2))
 const filtered = psf(frame(1, star))
-console.log(Array.from(filtered.raw.slice(10 * size + 5, 10 * size + 16), (value) => Number(value.toFixed(3)))) // [ -0.155, -0.225, 0.004, 0.699, 1.595, 2.024, 1.595, 0.699, 0.004, -0.225, -0.155 ]
+console.log(Array.from(filtered.raw.slice(10 * size + 5, 10 * size + 16), (value) => Number(value))) // [ -0.155, -0.225, 0.004, 0.699, 1.595, 2.024, 1.595, 0.699, 0.004, -0.225, -0.155 ]
 console.log(filtered.raw[10 * size + 10] > filtered.raw[10 * size + 9], filtered.raw[10 * size + 10] > filtered.raw[10 * size + 14]) // true true
 
 // The same star in the three channels, with different amplitudes: each channel is filtered on its own.
 const color = psf(frame(3, (x, y, c) => 0.1 + ((c + 1) / 3) * 0.6 * Math.exp(-((x - 10) ** 2 + (y - 10) ** 2) / (2 * 1.2 * 1.2))))
 const center = (10 * size + 10) * 3
-console.log(Array.from(color.raw.slice(center, center + 3), (value) => Number(value.toFixed(3)))) // [ 0.675, 1.35, 2.024 ] (proportional to the amplitudes 0.2, 0.4 and 0.6)
+console.log(Array.from(color.raw.slice(center, center + 3), (value) => Number(value))) // [ 0.675, 1.35, 2.024 ] (proportional to the amplitudes 0.2, 0.4 and 0.6)
 
 // A frame smaller than the stencil is returned untouched.
 const tiny = frame(1, () => 0.5)
@@ -10129,26 +9978,6 @@ if (fit.ok) {
 const band: SurfaceSample[] = []
 for (let y = 20; y < 24; y++) for (let x = 0; x < width; x += 6) band.push({ x, y, value: truth(x, y) })
 console.log(fitScalarSurface(band, width, height, { degree: 2 }).ok, fitScalarSurface(band, width, height, { degree: 2, domain: { x0: 0, y0: 20, x1: 63, y1: 23 } }).ok) // true true
-
-// The failure reasons: too few samples for the terms, collinear samples, a spline with fewer than 3 points.
-console.log(fitScalarSurface(samples.slice(0, 5), width, height, { degree: 4 })) // { ok: false, reason: 'too-few-samples' }
-console.log(
-	fitScalarSurface(
-		Array.from({ length: 20 }, (_, i) => ({ x: i, y: i, value: i })),
-		width,
-		height,
-		{ degree: 2 },
-	),
-) // { ok: false, reason: 'degenerate-layout' }
-console.log(fitScalarSurface(samples.slice(0, 2), width, height, { model: 'thinPlateSpline' })) // { ok: false, reason: 'too-few-samples' }
-console.log(
-	fitScalarSurface(
-		Array.from({ length: 20 }, (_, i) => ({ x: i, y: 10, value: i })),
-		width,
-		height,
-		{ model: 'thinPlateSpline' },
-	),
-) // { ok: false, reason: 'degenerate-layout' }
 ```
 
 ### Scientific Image Loading and Export
@@ -10310,25 +10139,23 @@ const pixels = (): Image => ({
 	raw: new Float64Array([0.1, 0.2, 0.1, 0.5, 0.5, 0.5, 0.05, 0.9, 0.05]),
 })
 
-const round = (values: ArrayLike<number>) => Array.from(values, (value) => Number(value.toFixed(4)))
-
 // The defaults: green, 0.5 and the maximum mask.
-console.log(round(scnr(pixels()).raw)) // [ 0.1, 0.11, 0.1, 0.5, 0.375, 0.5, 0.05, 0.4725, 0.05 ] (the gray pixel is attenuated by its own maximum mask)
+console.log(scnr(pixels()).raw) // [ 0.1, 0.11, 0.1, 0.5, 0.375, 0.5, 0.05, 0.4725, 0.05 ] (the gray pixel is attenuated by its own maximum mask)
 
 // The protection methods with the full amount.
 for (const method of ['MAXIMUM_MASK', 'ADDITIVE_MASK', 'AVERAGE_NEUTRAL', 'MAXIMUM_NEUTRAL', 'MINIMUM_NEUTRAL'] as const) {
-	console.log(method, round(scnr(pixels(), 'GREEN', 1, method).raw).join(' ')) // one line per method: MAXIMUM_MASK gives 0.1 0.02 0.1 0.5 0.25 0.5 0.05 0.045 0.05, ADDITIVE_MASK 0.1 0.04 0.1 0.5 0.5 0.5 0.05 0.09 0.05, and the three neutral methods 0.1 0.1 0.1 0.5 0.5 0.5 0.05 0.05 0.05
+	console.log(method, scnr(pixels(), 'GREEN', 1, method).raw.join(' ')) // one line per method: MAXIMUM_MASK gives 0.1 0.02 0.1 0.5 0.25 0.5 0.05 0.045 0.05, ADDITIVE_MASK 0.1 0.04 0.1 0.5 0.5 0.5 0.05 0.09 0.05, and the three neutral methods 0.1 0.1 0.1 0.5 0.5 0.5 0.05 0.05 0.05
 }
 
 // Another channel: a red-cast pixel (0.8, 0.3, 0.2) with the neutral methods.
 const cast = (): Image => ({ ...pixels(), metadata: { ...pixels().metadata, width: 1, pixelCount: 1, stride: 3 }, raw: new Float64Array([0.8, 0.3, 0.2]) })
-console.log(round(scnr(cast(), 'RED', 1, 'AVERAGE_NEUTRAL').raw), round(scnr(cast(), 'RED', 1, 'MAXIMUM_NEUTRAL').raw), round(scnr(cast(), 'RED', 0.5, 'MINIMUM_NEUTRAL').raw)) // [ 0.25, 0.3, 0.2 ] [ 0.3, 0.3, 0.2 ] [ 0.5, 0.3, 0.2 ]
+console.log(scnr(cast(), 'RED', 1, 'AVERAGE_NEUTRAL').raw, scnr(cast(), 'RED', 1, 'MAXIMUM_NEUTRAL').raw, scnr(cast(), 'RED', 0.5, 'MINIMUM_NEUTRAL').raw) // [ 0.25, 0.3, 0.2 ] [ 0.3, 0.3, 0.2 ] [ 0.5, 0.3, 0.2 ]
 
 // An amount of 0 and a mono image return the same object untouched.
 const image = pixels()
-console.log(scnr(image, 'GREEN', 0) === image, round(image.raw)) // true [ 0.1, 0.2, 0.1, 0.5, 0.5, 0.5, 0.05, 0.9, 0.05 ]
+console.log(scnr(image, 'GREEN', 0) === image, image.raw) // true [ 0.1, 0.2, 0.1, 0.5, 0.5, 0.5, 0.05, 0.9, 0.05 ]
 const mono: Image = { ...image, metadata: { ...image.metadata, channels: 1, stride: 3 }, raw: new Float64Array([0.1, 0.2, 0.3]) }
-console.log(scnr(mono) === mono, round(mono.raw)) // true [ 0.1, 0.2, 0.3 ]
+console.log(scnr(mono) === mono, mono.raw) // true [ 0.1, 0.2, 0.3 ]
 ```
 
 ### Screen Transfer Function
@@ -10353,30 +10180,28 @@ const pixel = (): Image => ({
 	raw: new Float64Array([0.1, 0.2, 0.4]),
 })
 
-const round = (values: ArrayLike<number>) => Array.from(values, (value) => Number(value.toFixed(4)))
-
 // A midtone below 0.5 brightens the faint samples, and 0 and 1 stay fixed.
-console.log(round(stf(ramp(), 0.15).raw)) // [ 0, 0.1037, 0.3864, 0.6538, 0.85, 1 ]
+console.log(stf(ramp(), 0.15).raw) // [ 0, 0.1037, 0.3864, 0.6538, 0.85, 1 ]
 
 // The midtone value is sent to 0.5: with a midtone of 0.1, the sample 0.1 becomes 0.5.
-console.log(round(stf(ramp(), 0.1).raw)) // [ 0, 0.1552, 0.5, 0.75, 0.9, 1 ]
+console.log(stf(ramp(), 0.1).raw) // [ 0, 0.1552, 0.5, 0.75, 0.9, 1 ]
 
 // A midtone above 0.5 darkens.
-console.log(round(stf(ramp(), 0.8).raw)) // [ 0, 0.0051, 0.027, 0.0769, 0.2, 1 ]
+console.log(stf(ramp(), 0.8).raw) // [ 0, 0.0051, 0.027, 0.0769, 0.2, 1 ]
 
 // Shadows and highlights clip, and the range between them is rescaled before the curve.
-console.log(round(stf(ramp(), 0.25, 0.02, 0.5).raw)) // [ 0, 0, 0.375, 0.734, 1, 1 ]
+console.log(stf(ramp(), 0.25, 0.02, 0.5).raw) // [ 0, 0, 0.375, 0.734, 1, 1 ]
 
 // One channel only, or all of them.
-console.log(round(stf(pixel(), 0.2, 0, 1, { channel: 'RED' }).raw)) // [ 0.3077, 0.2, 0.4 ]
-console.log(round(stf(pixel(), 0.2).raw)) // [ 0.3077, 0.5, 0.7273 ]
+console.log(stf(pixel(), 0.2, 0, 1, { channel: 'RED' }).raw) // [ 0.3077, 0.2, 0.4 ]
+console.log(stf(pixel(), 0.2).raw) // [ 0.3077, 0.5, 0.7273 ]
 
 // The neutral parameters and the defaults return the same image untouched.
 const same = ramp()
-console.log(stf(same) === same, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, round(same.raw)) // true { channel: 'GRAY' } [ 0, 0.02, 0.1, 0.25, 0.5, 1 ]
+console.log(stf(same) === same, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, same.raw) // true { channel: 'GRAY' } [ 0, 0.02, 0.1, 0.25, 0.5, 1 ]
 
 // A midtone of 1 sends everything below the highlight to 0.
-console.log(round(stf(ramp(), 1).raw)) // [ 0, 0, 0, 0, 0, 1 ]
+console.log(stf(ramp(), 1).raw) // [ 0, 0, 0, 0, 0, 1 ]
 ```
 
 ### Sensor Characterization
@@ -10653,18 +10478,9 @@ console.log(series.unityGain?.configuredGain, series.unityGain?.lower.gain, seri
 const exact = characterizeSensorSeries([profile(0, 0.5), profile(100, 1), profile(200, 2)])
 console.log(exact.unityGain?.configuredGain, exact.unityGain?.lower === exact.unityGain?.upper) // 100.00000000000104 false
 
-// Points that do not bracket one DN/e- are not extrapolated.
-console.log(characterizeSensorSeries([profile(0, 0.5), profile(100, 0.8)]).diagnostics.map((d) => d.code)) // ['unityGainNotBracketed']
-
 // A slope change across the bracket is a regime change: the curve is flat and then jumps.
 console.log(characterizeSensorSeries([profile(0, 0.5), profile(100, 0.55), profile(200, 1.5)]).diagnostics.map((d) => d.code)) // ['regimeChangeDetected']
 console.log(characterizeSensorSeries([profile(0, 0.5), profile(100, 0.55), profile(200, 1.5)], { regimeSlopeRatio: 50 }).unityGain?.configuredGain) // 147.4 (interpolated once the slope limit is relaxed)
-
-// Incompatible acquisitions, duplicated gains, a non-monotonic curve and an empty list.
-console.log(characterizeSensorSeries([profile(0, 0.5), profile(100, 0.8, 10)]).diagnostics.map((d) => d.code)) // ['incompatibleProfiles']
-console.log(characterizeSensorSeries([profile(0, 0.5), profile(0, 0.8)]).diagnostics.map((d) => d.code)) // ['invalidConfiguredGain']
-console.log(characterizeSensorSeries([profile(0, 0.5), profile(100, 0.8), profile(200, 0.6)]).diagnostics.map((d) => d.code)) // ['nonMonotonicGainSeries']
-console.log(characterizeSensorSeries([]).diagnostics.map((d) => d.code)) // ['insufficientProfiles']
 ```
 
 ### Sensor Stack Defects
@@ -10775,13 +10591,13 @@ for (let position = 4000; position <= 5000; position += 100) {
 // The scan over a 4 by 4 grid of regions with the physical scale: the plane, the tilt of the surface and its findings. The regional curves use the hyperbolic model, which matches the shape of these stars (the default quadratic is biased toward the middle of the sampled range on a V-shaped curve and would lower the gradients).
 const options = { regions: { columns: 4, rows: 4 }, curve: { model: 'hyperbolic' } } as const
 const scan = inspectAberrationFocusScan(frames, { ...options, physicalScale: scale })
-console.log(scan.quality.usedFrameCount, scan.quality.confidence.toFixed(3), scan.regions.filter((region) => region.bestFocus !== undefined).length) // 11 used frames, a confidence of 0.855 and 15 of the 16 regions with a best focus (one region, the left one of the bottom row, has none)
+console.log(scan.quality.usedFrameCount, scan.quality.confidence, scan.regions.filter((region) => region.bestFocus !== undefined).length) // 11 used frames, a confidence of 0.855 and 15 of the 16 regions with a best focus (one region, the left one of the bottom row, has none)
 console.log(scan.plane) // gradientX 122.80, gradientY 62.51, direction 0.471 rad and an effect of 185.31 steps, close to the 120 and 60 of the plane that was drawn
 console.log(scan.tilt?.significant, scan.tilt?.gradientUncertainty, scan.tilt?.physical) // true, with gradient uncertainties of 2.32 and 2.34 steps and a covariance of -1.19; the physical angles are x 0.019556, y -0.030721, a magnitude of 0.036410 and uncertainties of 0.000731, 0.000581 and 0.000556 radians
-console.log(scan.findings.map((finding) => [finding.kind, finding.likelihood.toFixed(3), finding.limitations])) // one finding, sensorTiltPattern, with a likelihood of 1.000 and no limitations (the physical scale was given)
+console.log(scan.findings.map((finding) => [finding.kind, finding.likelihood, finding.limitations])) // one finding, sensorTiltPattern, with a likelihood of 1.000 and no limitations (the physical scale was given)
 
 // The best focus of the first regions in focuser steps (the uncertainty of a regional curve exists only for the quadratic model, so it is absent here).
-console.log(scan.regions.slice(0, 4).map((region) => [region.region.id, region.bestFocus?.toFixed(1), region.uncertainty])) // r0c0 4427.8, r0c1 4466.1, r0c2 4493.5 and r0c3 4520.2 steps, with an undefined uncertainty
+console.log(scan.regions.slice(0, 4).map((region) => [region.region.id, region.bestFocus, region.uncertainty])) // r0c0 4427.8, r0c1 4466.1, r0c2 4493.5 and r0c3 4520.2 steps, with an undefined uncertainty
 
 // Without the physical scale the tilt is still found in focuser units, but the pattern keeps the missingPhysicalScale limitation.
 const unscaled = inspectAberrationFocusScan(frames, options)
@@ -10789,20 +10605,6 @@ console.log(
 	unscaled.tilt?.physical,
 	unscaled.findings.map((finding) => [finding.kind, finding.limitations]),
 ) // no physical tilt, and the same sensorTiltPattern with the limitation missingPhysicalScale
-
-// With a 3 by 3 grid only nine regions fit six coefficients, leaving too few degrees of freedom to publish a test.
-const coarse = inspectAberrationFocusScan(frames, { curve: { model: 'hyperbolic' } })
-console.log(
-	coarse.findings.map((finding) => finding.kind),
-	coarse.tilt?.significant,
-) // [ 'inconclusive' ] and false: the 3 by 3 grid has at most 9 samples for 6 coefficients, below the 4 residual degrees of freedom that a test needs
-
-// A frame at another size or without a source is rejected and kept in order with its reason; the scan goes on with the others.
-const bad = inspectAberrationFocusScan([...frames, { position: 5100, profiles: [], width: 640, height: 480 }, { position: 5200 }], options)
-console.log(
-	bad.frames.slice(-2).map((frame) => [frame.status, frame.rejectionReasons]),
-	bad.quality.rejectedFrameCount,
-) // the 640 by 480 frame is [ 'rejected', [ 'inconsistentDimensions' ] ] and the frame without a source is [ 'rejected', [ 'invalidInput' ] ], and 2 frames were rejected
 ```
 
 ### Signal-to-Noise and Dynamic Range Estimates
@@ -10813,19 +10615,19 @@ console.log(
 import { dynamicRange, dynamicRangeInStops, saturationTime, signalToNoiseRatio, skyLimitedExposure, stackingMagnitudeGain, stackingSnrGain } from 'nebulosa/src/astronomy/formulas'
 
 // A star of 20000 e- measured in 30 pixels of 400 e- of sky and 2 e- of dark current each, with 1.6 e- of read noise: the shot noise of the signal plus the background dominate.
-console.log(signalToNoiseRatio(20000, 30, 400, 2, 1.6).toFixed(3)) // 111.565
+console.log(signalToNoiseRatio(20000, 30, 400, 2, 1.6)) // 111.565
 
 // With no background, dark current or read noise only the shot noise of the signal is left: sqrt(S). A faint source in the same sky is background limited.
-console.log(signalToNoiseRatio(20000, 30, 0, 0, 0).toFixed(3), Math.sqrt(20000).toFixed(3), signalToNoiseRatio(500, 30, 400, 2, 1.6).toFixed(3)) // 141.421 141.421 4.448
+console.log(signalToNoiseRatio(20000, 30, 0, 0, 0), Math.sqrt(20000), signalToNoiseRatio(500, 30, 400, 2, 1.6)) // 141.421 141.421 4.448
 
 // The read noise alone matters in a dark sky: the same star with a read noise of 10 e- against 1.6 e-, in a sky of 5 e- per pixel.
-console.log(signalToNoiseRatio(800, 30, 5, 0.1, 1.6).toFixed(3), signalToNoiseRatio(800, 30, 5, 0.1, 10).toFixed(3)) // 24.929 12.724
+console.log(signalToNoiseRatio(800, 30, 5, 0.1, 1.6), signalToNoiseRatio(800, 30, 5, 0.1, 10)) // 24.929 12.724
 
 // 25 frames: the ideal gain in the ratio and in the limiting magnitude, and the stack of 4 frames that doubles the ratio.
-console.log(stackingSnrGain(25), stackingMagnitudeGain(25).toFixed(3), stackingSnrGain(4), stackingMagnitudeGain(1)) // 5 1.747 2 0
+console.log(stackingSnrGain(25), stackingMagnitudeGain(25), stackingSnrGain(4), stackingMagnitudeGain(1)) // 5 1.747 2 0
 
 // A 50000 e- well with 1.6 e- of read noise: the ratio and the stops.
-console.log(dynamicRange(50000, 1.6), dynamicRangeInStops(50000, 1.6).toFixed(3)) // 31250 14.932 (stops)
+console.log(dynamicRange(50000, 1.6), dynamicRangeInStops(50000, 1.6)) // 31250 14.932 (stops)
 
 // The well of that camera is full in 125 s with a 400 e-/s source, and the sky-limited exposure for a 1.6 e- read noise under a sky of 0.5 e-/s per pixel.
 console.log(saturationTime(50000, 400), skyLimitedExposure(1.6, 0.5)) // 125 51.2
@@ -10932,10 +10734,10 @@ image.raw[50 * width + 50] = 1 // a hot pixel
 // The detected stars, brightest first, with the centroid, the photometry and the shape of each; the hot pixel is not a star.
 const stars = detectStars(image)
 console.log(stars.length) // 6 (the five stars and a hot pixel that leaks through, the broad elongated row below)
-for (const star of stars) console.log(star.x.toFixed(2), star.y.toFixed(2), star.flux.toFixed(3), star.snr.toFixed(1), star.hfd.toFixed(2), star.fwhm?.toFixed(2), star.eccentricity?.toFixed(3), star.elongation?.toFixed(3), star.theta?.toFixed(3)) // x y flux snr hfd fwhm eccentricity elongation theta: 30.32 20.69 9.143 3.0 3.76 3.47 0.179 1.017 0.758; 80.50 30.22 5.366 2.3 3.78 3.49 0.199 1.020 0.106; 60.22 70.58 3.051 1.7 3.75 3.46 0.169 1.015 0.945; 105.67 60.40 1.529 1.2 3.78 3.48 0.153 1.012 3.001; 49.94 50.08 0.932 1.0 5.62 4.70 0.848 1.888 2.294 (the hot pixel: broad and elongated); 20.41 75.31 0.729 0.9 3.69 3.40 0.183 1.017 1.270
+for (const star of stars) console.log(star.x, star.y, star.flux, star.snr, star.hfd, star.fwhm, star.eccentricity, star.elongation, star.theta) // x y flux snr hfd fwhm eccentricity elongation theta: 30.32 20.69 9.143 3.0 3.76 3.47 0.179 1.017 0.758; 80.50 30.22 5.366 2.3 3.78 3.49 0.199 1.020 0.106; 60.22 70.58 3.051 1.7 3.75 3.46 0.169 1.015 0.945; 105.67 60.40 1.529 1.2 3.78 3.48 0.153 1.012 3.001; 49.94 50.08 0.932 1.0 5.62 4.70 0.848 1.888 2.294 (the hot pixel: broad and elongated); 20.41 75.31 0.729 0.9 3.69 3.40 0.183 1.017 1.270
 
 // The options: at most 2 stars, a minimum SNR, and the search-box filter that keeps only the stars that have no comparable neighbor.
-console.log(detectStars(image, { maxStars: 2 }).map((s) => s.flux.toFixed(3))) // [ '9.143', '5.366' ]
+console.log(detectStars(image, { maxStars: 2 }).map((s) => s.flux)) // [ '9.143', '5.366' ]
 console.log(detectStars(image, { minSNR: 1.5 }).length, detectStars(image, { minSNR: 5 }).length) // 3 0
 const crowded = make([...truth, [42, 26, 0.5]])
 console.log(detectStars(crowded).length, detectStars(crowded, { searchRegion: 20 }).length) // 6 4 (the two close stars of comparable height are removed by the search box)
@@ -10946,7 +10748,7 @@ console.log(detectStars({ ...make([]), raw: new Float64Array(8 * 8), metadata: {
 
 // The photometry of one position: the centroid of the brightest star, a larger radius, an empty sky position and invalid input.
 const [flux, snr, hfd, fwhm] = measureStarPhotometry(image, stars[0].x, stars[0].y, STAR_SIGNAL_RADIUS)
-console.log(STAR_SIGNAL_RADIUS, flux.toFixed(3), snr.toFixed(1), hfd.toFixed(2), fwhm.toFixed(2)) // 4 9.143 3.0 3.77 3.47
+console.log(STAR_SIGNAL_RADIUS, flux, snr, hfd, fwhm) // 4 9.143 3.0 3.77 3.47
 console.log(measureStarPhotometry(image, stars[0].x, stars[0].y, 8), measureStarPhotometry(image, 64, 48, 4), measureStarPhotometry(image, Number.NaN, 5, 4)) // [ 9.69, 3.11, 4.07, 3.86 ] [ 0.015, 0.123, 4.77, 4.25 ] [ 0, 0, 0, 0 ]
 
 // The candidate list: sorted by height with a bounded capacity, and the two pruning steps.
@@ -11035,20 +10837,16 @@ const referenceStars = observe(0, 0)
 const shifted = registerStars(referenceStars, observe(3, -2))
 if (shifted.success) {
 	const { summary } = shifted.transform
-	console.log(summary.model, summary.translationX.toFixed(2), summary.translationY.toFixed(2), summary.scaleX.toFixed(4), summary.rotation.toFixed(4), summary.mirrored, summary.inlierCount, summary.rmsError.toFixed(4)) // similarity -3.00 2.00 1.0000 -0.0000 false 24 0.0000
+	console.log(summary.model, summary.translationX, summary.translationY, summary.scaleX, summary.rotation, summary.mirrored, summary.inlierCount, summary.rmsError) // similarity -3.00 2.00 1.0000 -0.0000 false 24 0.0000
 	console.log(shifted.match.matches.length, shifted.match.success, 'a' in shifted.transform.transform, 'm00' in shifted.transform.inverseTransform) // 24 true true false (both transforms are similarities here, with a, b, tx, ty and mirrored)
 }
 
 // A rotation of 0.05 rad and the acceptance limits that bound it.
 const rotated = observe(1, 1, 0.05)
 const turned = registerStars(referenceStars, rotated)
-console.log(turned.success && turned.transform.summary.rotation.toFixed(4)) // -0.0500 (the target is rotated by +0.05 rad, so the transform undoes it)
-console.log(registerStars(referenceStars, rotated, { acceptance: { maxRotation: 0.01 } })) // { success: false, reason: 'transform-out-of-bounds', match: { success: true, inlierCount: 24, ... } }
-console.log(registerStars(referenceStars, observe(8, 0), { acceptance: { maxTranslation: 4 } })) // { success: false, reason: 'transform-out-of-bounds', match: { success: true, inlierCount: 24, ... } } (the translation is 8 pixels)
+console.log(turned.success && turned.transform.summary.rotation) // -0.0500 (the target is rotated by +0.05 rad, so the transform undoes it)
 console.log(registerStars(referenceStars, observe(3, -2), { acceptance: { minInliers: 40 } }).success, registerStars(referenceStars, observe(3, -2), { acceptance: { maxRmsError: 1e-9 } }).success) // false true
 
-// Too few stars for a match, and a matcher configuration (the minimum of usable stars).
-console.log(registerStars(referenceStars, observe(3, -2).slice(0, 3))) // { success: false, reason: 'match-failed', match: { success: false, matches: [], inlierCount: 0, score: 0, failureReason: 'too few usable current stars' } }
 console.log(registerStars(referenceStars, observe(3, -2).slice(0, 10), { matchStarsConfig: { minStars: 4, minInliers: 4 } }).success) // true
 
 // Registering and warping a frame: the stars land back on the reference positions, and the covered area shrinks with the shift.
@@ -11058,20 +10856,18 @@ const registered = registerImage(reference, target)
 if (registered.success) {
 	console.log(registered.image.metadata.width, registered.image.raw.length, registered.coveredPixels, registered.validPixels, registered.validityMask.length, registered.finitePairCounts) // 96 9216 8742 8742 9216 undefined
 	const p = Math.round(referenceStars[0].y) * width + Math.round(referenceStars[0].x)
-	console.log(reference.image.raw[p].toFixed(3), registered.image.raw[p].toFixed(3), registered.image.raw[0], registered.validityMask[0], registered.validityMask[p]) // 0.738 0.738 0 0 1
+	console.log(reference.image.raw[p], registered.image.raw[p], registered.image.raw[0], registered.validityMask[0], registered.validityMask[p]) // 0.738 0.738 0 0 1
 }
 
 // Finite-pair counts for the photometric fit (capped), precision and interpolation options.
 const counted = registerImage(reference, target, { finitePairSupport: { limit: 500 }, interpolationMode: 'bicubic', outputPrecision: 32 })
 console.log(counted.success && [counted.finitePairCounts, counted.image.raw.constructor.name]) // [ [ 500 ], 'Float32Array' ]
-console.log(registerImage(reference, { image: render(observe(0, 0), 3), stars: referenceStars })) // { success: false, reason: 'channel-mismatch' }
-console.log(registerImage({ image: { ...reference.image, raw: new Float64Array(3) }, stars: referenceStars }, target)) // { success: false, reason: 'invalid-reference-image' }
 
 // The direct warp from an inverse transform (reference to source): a pure shift of 2.5 pixels with the three interpolation modes.
 const inverse = { m00: 1, m01: 0, tx: 2.5, m10: 0, m11: 1, ty: 0 }
 for (const mode of ['nearest', 'bilinear', 'bicubic'] as const) {
 	const warped = warpImage(reference.image, reference.image, inverse, { interpolationMode: mode })
-	console.log(mode, warped.validPixels, warped.coveredPixels, warped.image.raw[40 * width + 40].toFixed(4)) // nearest 8928 8928 0.1036; bilinear 8928 8928 0.1137; bicubic 8928 8928 0.1090
+	console.log(mode, warped.validPixels, warped.coveredPixels, warped.image.raw[40 * width + 40]) // nearest 8928 8928 0.1036; bilinear 8928 8928 0.1137; bicubic 8928 8928 0.1090
 }
 
 // A source rejection mask invalidates the support of the pixels that touch it, and reusable buffers are filled in place.
@@ -11132,20 +10928,17 @@ const image = make([
 ])
 const round = measureStarProfile(image, { x: 41, y: 31 })
 console.log(round.valid, round.model, round.flags, round.quality, round.sourceIndex) // true moments [] 1 undefined
-console.log(round.x.toFixed(2), round.y.toFixed(2), round.flux?.toFixed(3), round.snr?.toFixed(0), round.hfd?.toFixed(2), round.fwhm?.toFixed(2)) // 40.30 30.60 8.091 462 3.72 3.88
-console.log(round.major?.toFixed(2), round.minor?.toFixed(2), round.eccentricity?.toFixed(3), round.elongation?.toFixed(3), round.theta, round.background?.toFixed(4), round.deviation?.toFixed(5), round.peak?.toFixed(3)) // 3.90 3.85 0.159 1.013 1.1830523186201807 0.0999 0.00123 0.476
+console.log(round.x, round.y, round.flux, round.snr, round.hfd, round.fwhm) // 40.30 30.60 8.091 462 3.72 3.88
+console.log(round.major, round.minor, round.eccentricity, round.elongation, round.theta, round.background, round.deviation, round.peak) // 3.90 3.85 0.159 1.013 1.1830523186201807 0.0999 0.00123 0.476
 
 // An elongated star (sigma 3 x 1.5, rotated by 0.6 rad): the axes, the ratio and the orientation (the major axis points at 0.6 rad).
 const long = measureStarProfile(image, { x: 70, y: 20 })
-console.log(long.valid, long.flags, long.major?.toFixed(2), long.minor?.toFixed(2), long.elongation?.toFixed(3), long.eccentricity?.toFixed(3), long.theta?.toFixed(3)) // true [] 7.11 3.73 1.905 0.851 0.606
+console.log(long.valid, long.flags, long.major, long.minor, long.elongation, long.eccentricity, long.theta) // true [] 7.11 3.73 1.905 0.851 0.606
 
 // A saturated star is invalid (its profile is flattened); the level and the allowed fraction can be changed.
 const saturated = measureStarProfile(image, { x: 20.5, y: 60.5 })
 console.log(saturated.valid, saturated.flags, saturated.quality) // false [ 'saturated' ] 0
 console.log(measureStarProfile(image, { x: 20.5, y: 60.5 }, { saturationLevel: 2 }).valid, measureStarProfile(image, { x: 20.5, y: 60.5 }, { maximumSaturatedFraction: 0.5 }).valid) // true true
-
-// The SNR threshold: a star below it is invalid with 'lowSignal'.
-console.log(measureStarProfile(image, { x: 41, y: 31 }, { minSNR: 1000 }).flags, measureStarProfile(image, { x: 41, y: 31 }, { minSNR: 1000 }).valid) // [ 'lowSignal' ] false
 
 // A star near the edge: the aperture reaches the border, so the profile is clipped (invalid) and near the border; a star with room only loses quality
 // when it is inside the margin, and the margin can be changed.
@@ -11160,7 +10953,7 @@ console.log(measureStarProfile(edge, { x: 10, y: 20 }).flags, measureStarProfile
 // A position without a star is not meaningful: the positive noise of a growing aperture reads as a broad, faint source (here it is flagged blended and clipped, but
 // the flags depend on the noise), so measure detected positions or check the peak against the deviation.
 const empty = measureStarProfile(make([]), { x: 80, y: 60 })
-console.log(empty.valid, empty.flags, empty.snr?.toFixed(0), empty.peak?.toFixed(4), empty.deviation?.toFixed(5), empty.fwhm?.toFixed(1)) // false [ 'blended', 'clipped' ] 16 0.0019 0.00159 37.2
+console.log(empty.valid, empty.flags, empty.snr, empty.peak, empty.deviation, empty.fwhm) // false [ 'blended', 'clipped' ] 16 0.0019 0.00159 37.2
 
 // A companion inside the aperture flags a blend and halves the quality.
 const pair = make([
@@ -11173,23 +10966,23 @@ console.log(measureStarProfile(pair, { x: 40, y: 30 }).flags, measureStarProfile
 const wings = make([])
 for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) wings.raw[y * width + x] += 0.5 * (1 + ((x - 40.3) ** 2 + (y - 30.6) ** 2) / 2.5 ** 2) ** -3
 const fitted = measureStarProfile(wings, { x: 41, y: 31 }, { model: 'moffat' })
-console.log(fitted.model, fitted.valid, fitted.flags, fitted.moffat?.success, fitted.fwhm?.toFixed(2), measureStarProfile(wings, { x: 41, y: 31 }).fwhm?.toFixed(2)) // moffat true [] true 2.55 3.82 (the moments give 3.82, the fit 2.55 of a profile with wings)
-console.log(fitted.moffat?.success && [fitted.moffat.alphaMajor.toFixed(2), fitted.moffat.beta.toFixed(2), fitted.moffat.iterations]) // [ '2.52', '3.03', 6 ]
+console.log(fitted.model, fitted.valid, fitted.flags, fitted.moffat?.success, fitted.fwhm, measureStarProfile(wings, { x: 41, y: 31 }).fwhm) // moffat true [] true 2.55 3.82 (the moments give 3.82, the fit 2.55 of a profile with wings)
+console.log(fitted.moffat?.success && [fitted.moffat.alphaMajor, fitted.moffat.beta, fitted.moffat.iterations]) // [ '2.52', '3.03', 6 ]
 
 // A Gaussian star is not a Moffat profile well enough for the residual test: the fit is rejected, the moments are kept and the quality drops.
 const rejected = measureStarProfile(image, { x: 41, y: 31 }, { model: 'moffat' })
-console.log(rejected.model, rejected.valid, rejected.flags, rejected.moffat, rejected.fwhm?.toFixed(2), rejected.quality) // moments true [ 'poorFit' ] { success: false, reason: 'poorResidual', rms: 0.0016, iterations: 48 } 3.88 0.75
+console.log(rejected.model, rejected.valid, rejected.flags, rejected.moffat, rejected.fwhm, rejected.quality) // moments true [ 'poorFit' ] { success: false, reason: 'poorResidual', rms: 0.0016, iterations: 48 } 3.88 0.75
 
 // A color image (the grayscale or a channel), a batch with a bad position, and the detector followed by the profile.
 const color = make([[40.3, 30.6, 0.5, 1.6, 1.6, 0]], 3)
-console.log(measureStarProfile(color, { x: 40, y: 31 }).fwhm?.toFixed(2), measureStarProfile(color, { x: 40, y: 31 }, { channel: 'GREEN' }).fwhm?.toFixed(2)) // 3.86 3.89
+console.log(measureStarProfile(color, { x: 40, y: 31 }).fwhm, measureStarProfile(color, { x: 40, y: 31 }, { channel: 'GREEN' }).fwhm) // 3.86 3.89
 const batch = measureStarProfiles(image, [
 	{ x: 41, y: 31 },
 	{ x: Number.NaN, y: 0 },
 	{ x: 5, y: 5 },
 ])
-console.log(batch.map((p) => [p.sourceIndex, p.valid, p.flags.join('+') || '-', p.hfd?.toFixed(2)])) // [ [ 0, true, '-', '3.72' ], [ 1, false, 'nonFinite', undefined ], [ 2, true, 'blended', '31.27' ] ] (the third is an empty sky position: do not trust it)
-for (const profile of detectStarProfiles(image)) console.log(profile.sourceIndex, profile.valid, profile.flags.join('+') || '-', profile.x.toFixed(2), profile.y.toFixed(2), profile.hfd?.toFixed(2), profile.fwhm?.toFixed(2)) // 0 false saturated 20.50 60.50 3.45 3.78; 1 true - 70.21 20.40 5.22 5.15; 2 true - 40.30 30.60 3.72 3.88
+console.log(batch.map((p) => [p.sourceIndex, p.valid, p.flags.join('+') || '-', p.hfd])) // [ [ 0, true, '-', '3.72' ], [ 1, false, 'nonFinite', undefined ], [ 2, true, 'blended', '31.27' ] ] (the third is an empty sky position: do not trust it)
+for (const profile of detectStarProfiles(image)) console.log(profile.sourceIndex, profile.valid, profile.flags.join('+') || '-', profile.x, profile.y, profile.hfd, profile.fwhm) // 0 false saturated 20.50 60.50 3.45 3.78; 1 true - 70.21 20.40 5.22 5.15; 2 true - 40.30 30.60 3.72 3.88
 console.log(detectStarProfiles(image, { maxStars: 1 }, { minSNR: 1000 }).map((p) => [p.valid, p.flags])) // [ [ false, [ 'saturated' ] ] ] (the brightest star is the saturated one, and it is the only one kept)
 ```
 
@@ -11205,7 +10998,7 @@ import type { StarShapeSample } from 'nebulosa/src/imaging/stars/shape'
 
 // The shape of the moments of a Gaussian with sigma 3 along x and 1.5 along y (variances 9 and 2.25, no covariance): the major axis is x, so theta is 0.
 const flat = starMomentShape(9, 0, 2.25)
-console.log(flat.majorVariance, flat.minorVariance, flat.elongation, flat.eccentricity?.toFixed(4), flat.theta) // 9 2.25 2 0.8660 0
+console.log(flat.majorVariance, flat.minorVariance, flat.elongation, flat.eccentricity, flat.theta) // 9 2.25 2 0.8660 0
 
 // The same ellipse rotated by 30 degrees toward +Y: the covariance appears, and theta recovers the angle (in radians).
 const angle = Math.PI / 6
@@ -11215,11 +11008,10 @@ const xx = 9 * c * c + 2.25 * s * s
 const xy = (9 - 2.25) * c * s
 const yy = 9 * s * s + 2.25 * c * c
 const rotated = starMomentShape(xx, xy, yy)
-console.log(rotated.majorVariance?.toFixed(4), rotated.minorVariance?.toFixed(4), rotated.elongation?.toFixed(4), rotated.theta?.toFixed(4), angle.toFixed(4)) // 9.0000 2.2500 2.0000 0.5236 0.5236
+console.log(rotated.majorVariance, rotated.minorVariance, rotated.elongation, rotated.theta, angle) // 9.0000 2.2500 2.0000 0.5236 0.5236
 
 // A major axis along y gives pi/2, a negative angle folds into [0, PI), a round star has an angle that means nothing, and a degenerate or non-finite matrix is empty.
-console.log(starMomentShape(2.25, 0, 9).theta?.toFixed(4), starMomentShape(2, -1.2, 2).theta?.toFixed(4), starMomentShape(4, 0, 4)) // 1.5708 2.3562 { majorVariance: 4, minorVariance: 4, eccentricity: 0, elongation: 1, theta: 0 } (the angle of the round star is only a convention)
-console.log(starMomentShape(0, 0, 0), starMomentShape(4, 4, 4), starMomentShape(Number.NaN, 0, 1)) // {} {} {}
+console.log(starMomentShape(2.25, 0, 9).theta, starMomentShape(2, -1.2, 2).theta, starMomentShape(4, 0, 4)) // 1.5708 2.3562 { majorVariance: 4, minorVariance: 4, eccentricity: 0, elongation: 1, theta: 0 } (the angle of the round star is only a convention)
 
 // A field of 8 round stars (the eccentricity of a good frame): the median is below the threshold, so it is round, whatever their angles.
 const roundField: StarShapeSample[] = Array.from({ length: 8 }, (_, i) => ({ eccentricity: 0.1 + 0.01 * i, elongation: 1.01 + 0.002 * i, theta: i * 0.4 }))
@@ -11228,16 +11020,16 @@ console.log(starShapeStatistics(roundField)) // { count: 8, medianEccentricity: 
 // A field trailed along one direction (tracking error): the stars share an axis near 0.5 rad, with a small scatter, so the field is aligned.
 const trailed: StarShapeSample[] = Array.from({ length: 10 }, (_, i) => ({ eccentricity: 0.6 + 0.01 * (i % 3), elongation: 1.25, theta: 0.5 + 0.05 * Math.sin(i) }))
 const aligned = starShapeStatistics(trailed)
-console.log(aligned.assessment, aligned.count, aligned.medianEccentricity?.toFixed(2), aligned.medianElongation, aligned.orientedCount, aligned.orientation?.toFixed(3), aligned.coherence?.toFixed(3)) // aligned 10 0.61 1.25 10 0.510 0.998
+console.log(aligned.assessment, aligned.count, aligned.medianEccentricity, aligned.medianElongation, aligned.orientedCount, aligned.orientation, aligned.coherence) // aligned 10 0.61 1.25 10 0.510 0.998
 
 // The angle is axial: stars at 0.05 and at PI - 0.05 (nearly the same line) agree on an orientation near 0, not on PI / 2.
 const wrap = starShapeStatistics([0.05, Math.PI - 0.05, 0.02, Math.PI - 0.02, 0.08].map((theta) => ({ eccentricity: 0.5, elongation: 1.15, theta })))
-console.log(wrap.assessment, wrap.orientation?.toFixed(3), wrap.coherence?.toFixed(3)) // aligned 0.016 0.996
+console.log(wrap.assessment, wrap.orientation, wrap.coherence) // aligned 0.016 0.996
 
 // Elongated stars in every direction: no shared axis, so the field is mixed (an optical or a sensor effect, rather than a tracking one).
 const scattered: StarShapeSample[] = Array.from({ length: 12 }, (_, i) => ({ eccentricity: 0.5, elongation: 1.15, theta: (i * Math.PI) / 12 }))
 const mixed = starShapeStatistics(scattered)
-console.log(mixed.assessment, mixed.orientedCount, mixed.coherence?.toFixed(3)) // mixed 12 0.000
+console.log(mixed.assessment, mixed.orientedCount, mixed.coherence) // mixed 12 0.000
 
 // Too few elongated stars to judge, an empty list, samples without angles or eccentricities, and the options (a looser round limit and alignment).
 console.log(starShapeStatistics(trailed.slice(0, 4)).assessment, starShapeStatistics([]), starShapeStatistics([{ elongation: 1.3 }, { theta: 1 }])) // insufficient { count: 0, medianEccentricity: undefined, medianElongation: undefined, orientedCount: 0, orientation: undefined, coherence: undefined, assessment: 'insufficient' } { count: 0, medianElongation: 1.3, orientedCount: 0, assessment: 'insufficient', ... }
@@ -11279,12 +11071,12 @@ const make = (channels = 1): Image => {
 // A trail from (20, 30) to (140, 80), 3 pixels wide and 0.2 above the sky; its true angle is atan2(50, 120) = 0.3948 rad.
 const image = make()
 renderSyntheticStreak(image, { start: { x: 20, y: 30 }, end: { x: 140, y: 80 }, width: 3, intensity: 0.2 })
-const row = (s: Streak) => [s.start.x.toFixed(1), s.start.y.toFixed(1), s.end.x.toFixed(1), s.end.y.toFixed(1), s.length.toFixed(1), s.angle.toFixed(3)]
+const row = (s: Streak) => [s.start.x, s.start.y, s.end.x, s.end.y, s.length, s.angle]
 const streaks = detectStreaks(image)
 console.log(streaks.length, DEFAULT_STREAK_DETECTION_OPTIONS.minLength, DEFAULT_STREAK_DETECTION_OPTIONS.maxStreaks) // 1 12 32 (one streak; the defaults of minLength and maxStreaks)
 const s = streaks[0]
-console.log(row(s), s.center, s.width.toFixed(2), s.linearity.toFixed(3), s.rmsResidual.toFixed(3), s.coverage.toFixed(2), s.supportPixels, s.clippedAtBorder) // [17.6, 29.0, 142.4, 81.0, 135.1, 0.395] { x: 79.99, y: 55.01 } 3.04 0.997 0.175 1.00 1236 false (the true trail is 144.2 long, 3 wide, at 0.3948 rad; the ends are a little short because the Gaussian tails fade into the noise)
-console.log(s.flux.toFixed(2), s.meanSignal.toFixed(3), s.peakSignal.toFixed(3), s.snr?.toFixed(0), s.saturationFraction, s.confidence.toFixed(3)) // 84.48 0.056 0.204 642 undefined 0.984 (no saturation level was given, so saturationFraction is absent)
+console.log(row(s), s.center, s.width, s.linearity, s.rmsResidual, s.coverage, s.supportPixels, s.clippedAtBorder) // [17.6, 29.0, 142.4, 81.0, 135.1, 0.395] { x: 79.99, y: 55.01 } 3.04 0.997 0.175 1.00 1236 false (the true trail is 144.2 long, 3 wide, at 0.3948 rad; the ends are a little short because the Gaussian tails fade into the noise)
+console.log(s.flux, s.meanSignal, s.peakSignal, s.snr, s.saturationFraction, s.confidence) // 84.48 0.056 0.204 642 undefined 0.984 (no saturation level was given, so saturationFraction is absent)
 
 // A sky without a trail returns nothing; the length, SNR, width and threshold limits reject this trail.
 console.log(detectStreaks(make()).length) // 0
@@ -11323,11 +11115,11 @@ renderSyntheticStreak(broken, {
 		],
 	},
 })
-console.log(detectStreaks(broken).map((c) => [...row(c), c.coverage.toFixed(2)])) // two streaks, [7.0, 60.1, 153.0, 60.1, 146.0] with coverage 0.91 (the gap is bridged) and a spurious fragment of 83 pixels at a different angle with coverage 0.86; a noisy sky can add a false detection next to a real one
-console.log(detectStreaks(broken, { mergeGap: 0 }).map((c) => [...row(c), c.coverage.toFixed(2)])) // two fragments of the trail ([80.0, 60.1, 152.0, 60.0] and [8.0, 57.6, 66.0, 60.1]), the gap is not bridged
+console.log(detectStreaks(broken).map((c) => [...row(c), c.coverage])) // two streaks, [7.0, 60.1, 153.0, 60.1, 146.0] with coverage 0.91 (the gap is bridged) and a spurious fragment of 83 pixels at a different angle with coverage 0.86; a noisy sky can add a false detection next to a real one
+console.log(detectStreaks(broken, { mergeGap: 0 }).map((c) => [...row(c), c.coverage])) // two fragments of the trail ([80.0, 60.1, 152.0, 60.0] and [8.0, 57.6, 66.0, 60.1]), the gap is not bridged
 
 // The saturation level (normalized samples): the fraction of the corridor samples at or above it.
-console.log(detectStreaks(image, { saturationLevel: 0.25 })[0].saturationFraction, detectStreaks(image, { saturationLevel: 0.2 })[0].saturationFraction?.toFixed(2)) // 0.17 0.27 (samples at or above 0.25 and 0.2 in the raw scale, since the trail peaks at 0.30)
+console.log(detectStreaks(image, { saturationLevel: 0.25 })[0].saturationFraction, detectStreaks(image, { saturationLevel: 0.2 })[0].saturationFraction) // 0.17 0.27 (samples at or above 0.25 and 0.2 in the raw scale, since the trail peaks at 0.30)
 
 // An RGB image is analyzed on its green plane by default, and any plane can be forced.
 const color = make(3)
@@ -11362,7 +11154,7 @@ const make = (x0: number, y0: number, x1: number, y1: number, overrides: Partial
 const sky = (): Image => ({ header: {}, raw: new Float64Array(160 * 120).fill(0.1), metadata: { width: 160, height: 120, channels: 1, pixelCount: 19200, stride: 160, strideInBytes: 1280, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } })
 
 // A compact line: the class, the confidence, the alternatives and the evidence metrics (the last one with the id of a track or a radiant).
-const show = (c: StreakClassification) => [c.class, c.confidence.toFixed(3), c.alternatives.map((a) => `${a.class}:${a.score.toFixed(2)}`).join(' ') || '-', c.evidence.map((e) => `${e.kind}:${e.score.toFixed(2)}${e.id === undefined ? '' : '#' + e.id}`).join(' ') || '-']
+const show = (c: StreakClassification) => [c.class, c.confidence, c.alternatives.map((a) => `${a.class}:${a.score}`).join(' ') || '-', c.evidence.map((e) => `${e.kind}:${e.score}${e.id === undefined ? '' : '#' + e.id}`).join(' ') || '-']
 
 // The shape alone only raises an alternative: a long thin trail leans to a satellite, a short PSF-wide one to a moving object, a broad and poorly linear one to an airplane; none is named.
 const trail = make(10, 20, 150, 60)
@@ -11489,7 +11281,7 @@ const build = () => dithers.map(([dx, dy], i) => frame(dx, dy, i === 2 ? trail :
 // Frames that declare their streaks (none, but the third) so that the detector does not run on them.
 const declared = (extra: Partial<StackingFrame> = {}) => build().map((f, i) => ({ ...f, streaks: i === 2 ? [streak] : [], ...(i === 2 ? extra : {}) }))
 // The trail crosses the reference at y = 43 (the third frame is shifted by (-4, 5)).
-const at = (r: { finalImage?: Image }) => r.finalImage?.raw[43 * width + 50].toFixed(4)
+const at = (r: { finalImage?: Image }) => r.finalImage?.raw[43 * width + 50]
 const plain = stackFrames(build(), { combinationMethod: 'average' })
 console.log(plain.acceptedFrames, at(plain), plain.diagnostics[2].streaks) // 5 0.1930 undefined
 
@@ -11516,7 +11308,7 @@ console.log(
 
 // Rejecting a frame by its contamination: the masked fraction of the third frame is above the threshold.
 const limited = stackFrames(declared(), { streaks: { enabled: true, maxMaskedFraction: 0.01 } })
-console.log(limited.acceptedFrames, limited.rejectedFrames, limited.diagnostics[2].accepted, limited.diagnostics[2].reason, limited.diagnostics[2].streaks?.maskedFraction.toFixed(4)) // 4 1 false streak-contamination-too-high 0.0286
+console.log(limited.acceptedFrames, limited.rejectedFrames, limited.diagnostics[2].accepted, limited.diagnostics[2].reason, limited.diagnostics[2].streaks?.maskedFraction) // 4 1 false streak-contamination-too-high 0.0286
 
 // The option is off by default, even when frames carry masks.
 const off = stackFrames(declared({ streakMask: mask }))
@@ -11594,7 +11386,7 @@ import { requiredSubframeCount, subframeCount, totalIntegrationTime } from 'nebu
 console.log(totalIntegrationTime(36, 300)) // 10800
 
 // The frames for 3 hours in 240 s sub-exposures: 45 exactly, and for 3 hours in 420 s sub-exposures, a fractional count that rounds up to 26.
-console.log(subframeCount(10800, 240), subframeCount(10800, 420).toFixed(3), requiredSubframeCount(10800, 240), requiredSubframeCount(10800, 420)) // 45 25.714 45 26
+console.log(subframeCount(10800, 240), subframeCount(10800, 420), requiredSubframeCount(10800, 240), requiredSubframeCount(10800, 420)) // 45 25.714 45 26
 
 // The ceiling overshoots: 26 frames of 420 s give 10920 s, 2 minutes more than the plan. A small total is one frame, and nothing needs no frames.
 console.log(totalIntegrationTime(requiredSubframeCount(10800, 420), 420), requiredSubframeCount(60, 300), requiredSubframeCount(0, 300)) // 10920 1 0
@@ -11619,8 +11411,8 @@ console.log(plotBahtinovSpikes(mono, width, height, 1, 100, 100, 40, 1.5), mono.
 
 // The central spike has a normal along X, so it is a vertical line at x = 100 - 1.5 = 98.5: along the row y = 60 the pedestal peaks at x = 98 and 99 and falls off on both sides, and a corner far from every spike keeps the pedestal.
 console.log(
-	[95, 97, 98, 99, 100, 103].map((x) => mono[60 * width + x].toFixed(4)),
-	mono[5 * width + 5].toFixed(4),
+	[95, 97, 98, 99, 100, 103].map((x) => mono[60 * width + x]),
+	mono[5 * width + 5],
 ) // [ 0.0500, 0.0622, 0.0988, 0.0988, 0.0622, 0.0500 ] 0.0500 (a peak of 0.0988 at x = 98 and 99, either side of 98.5, and the pedestal unchanged far away)
 
 // The spikes are additive: drawing again doubles the pattern, and a gain of 3 scales the flux of a drawing by three.
@@ -11630,7 +11422,7 @@ const once = twice[60 * width + 100]
 plotBahtinovSpikes(twice, width, height, 1, 100, 100, 40, 0)
 const tripled = new Float64Array(width * height)
 plotBahtinovSpikes(tripled, width, height, 1, 100, 100, 40, 0, undefined, { gain: 3 })
-console.log((twice[60 * width + 100] / once).toFixed(3), (tripled[60 * width + 100] / once).toFixed(3)) // 2.000 3.000
+console.log(twice[60 * width + 100] / once, tripled[60 * width + 100] / once) // 2.000 3.000
 
 // One spike at a time, and the strengths of the three: the central one alone with half the flux of the others.
 const single = new Float32Array(width * height)
@@ -11639,23 +11431,20 @@ const weighted = new Float32Array(width * height)
 plotBahtinovSpikes(weighted, width, height, 1, 100, 100, 40, 0, undefined, { strengths: [1, 0.5, 1] })
 const even = new Float32Array(width * height)
 plotBahtinovSpikes(even, width, height, 1, 100, 100, 40, 0)
-console.log(weighted[60 * width + 100].toFixed(4), even[60 * width + 100].toFixed(4), single[60 * width + 100].toFixed(4), single[60 * width + 90].toFixed(4)) // 0.0348 0.0580 0.0439 0.0000 (half the central strength gives 0.6 of the even value, 0.0348 against 0.0580, because the shares are normalized to 2.5 instead of 3; the single spike at full flux gives 0.0439 on its line and nothing 10 pixels away)
+console.log(weighted[60 * width + 100], even[60 * width + 100], single[60 * width + 100], single[60 * width + 90]) // 0.0348 0.0580 0.0439 0.0000 (half the central strength gives 0.6 of the even value, 0.0348 against 0.0580, because the shares are normalized to 2.5 instead of 3; the single spike at full flux gives 0.0439 on its line and nothing 10 pixels away)
 
 // Other angles (for example the mask turned by 90 degrees): the normals of the three spikes in radians.
 const turned = new Float64Array(width * height)
 plotBahtinovSpikes(turned, width, height, 1, 100, 100, 40, 0, undefined, { normalAngles: [Math.PI / 12 + Math.PI / 2, Math.PI / 2, (Math.PI * 11) / 12 + Math.PI / 2] })
-console.log(turned[60 * width + 100].toFixed(4), turned[100 * width + 60].toFixed(4), once.toFixed(4)) // 0.0000 0.0580 0.0580 (the turned mask has its central spike horizontal: nothing at (100, 60) and the same 0.0580 at (60, 100) as the default pattern has at (100, 60))
+console.log(turned[60 * width + 100], turned[100 * width + 60], once) // 0.0000 0.0580 0.0580 (the turned mask has its central spike horizontal: nothing at (100, 60) and the same 0.0580 at (60, 100) as the default pattern has at (100, 60))
 
 // An RGB buffer: the color index decides the channel weights (a blue star, B-V -0.2, and a red one, 1.8).
 const rgb = new Float32Array(width * height * 3)
 plotBahtinovSpikes(rgb, width, height, 3, 100, 100, 40, 0, -0.2)
 const redder = new Float32Array(width * height * 3)
 plotBahtinovSpikes(redder, width, height, 3, 100, 100, 40, 0, 1.8)
-const at = (buffer: Float32Array) => [0, 1, 2].map((c) => buffer[(60 * width + 100) * 3 + c].toFixed(4))
+const at = (buffer: Float32Array) => [0, 1, 2].map((c) => buffer[(60 * width + 100) * 3 + c])
 console.log(at(rgb), at(redder)) // [ 0.0157, 0.0178, 0.0245 ] [ 0.0299, 0.0181, 0.0100 ] (red, green and blue: the blue star is strongest in blue and the red one in red)
-
-// Nothing is drawn for a non-positive or non-finite flux, a non-finite position or a pattern entirely off the image.
-console.log(plotBahtinovSpikes(mono, width, height, 1, 100, 100, 0, 0), plotBahtinovSpikes(mono, width, height, 1, Number.NaN, 100, 40, 0), plotBahtinovSpikes(mono, width, height, 1, 1000, 1000, 40, 0)) // false false false
 ```
 
 ### Synthetic Defocused Collimation Patterns
@@ -11678,9 +11467,9 @@ const base: SyntheticCollimationPattern = {
 
 // The image is normalized Float32: the size, the samples at the center (in the shadow), on the annulus and outside, and the sum of the signal above the background.
 const image = generateSyntheticCollimationImage(base)
-const at = (x: number, y: number) => image.raw[y * 200 + x].toFixed(4)
+const at = (x: number, y: number) => image.raw[y * 200 + x]
 console.log(image.metadata.width, image.metadata.channels, image.raw.constructor.name, at(104, 98), at(100, 60), at(5, 5)) // 200 wide, 1 channel, a Float32Array; 0.0469 in the shadow (about the 0.05 background plus noise), 0.2664 on the annulus and 0.0486 outside
-console.log(image.raw.reduce((sum, value) => sum + value - 0.05, 0).toFixed(0)) // 2000: the sum above the background is the signal
+console.log(image.raw.reduce((sum, value) => sum + value - 0.05, 0)) // 2000: the sum above the background is the signal
 
 // The same pattern and seed give the same image; another seed changes only the noise.
 const again = generateSyntheticCollimationImage(base)
@@ -11694,17 +11483,17 @@ console.log(
 	renderSyntheticCollimationPattern(raw, { ...base, signal: 0 }),
 	renderSyntheticCollimationPattern(raw, { ...base, outer: { ...base.outer, center: { x: 900, y: 900 } }, obstruction: { ...base.obstruction, center: { x: 904, y: 898 } } }),
 ) // true, false, false (the second has no signal and the third is off the frame)
-console.log(raw.reduce((a, b) => a + b, 0).toFixed(1)) // 2000.0: the annulus integrates to the signal
+console.log(raw.reduce((a, b) => a + b, 0)) // 2000.0: the annulus integrates to the signal
 
 // The validated variant does the same without checking the pattern or the buffer, for many stars.
 const stars = new Float32Array(200 * 200)
 renderValidatedSyntheticCollimationPattern(stars, base)
 renderValidatedSyntheticCollimationPattern(stars, base)
-console.log(stars.reduce((a, b) => a + b, 0).toFixed(1)) // 4000.0: two renders add
+console.log(stars.reduce((a, b) => a + b, 0)) // 4000.0: two renders add
 
 // The effects on the annulus: a seeing of 2 pixels, a tracking trail of 10 pixels along X and a Gaussian of different sigmas in X and Y. The annulus is a plateau, so the peak does not change and the blur shows at its edge: the row through the center near the left edge of the outer boundary (x = 36, 40 and 44) falls from zero outside to the plateau inside.
-const peak = (buffer: ArrayLike<number>) => Math.max(...Array.from(buffer)).toFixed(4)
-const edge = (buffer: ArrayLike<number>) => [36, 40, 44].map((x) => buffer[100 * 200 + x].toFixed(4))
+const peak = (buffer: ArrayLike<number>) => Math.max(...Array.from(buffer))
+const edge = (buffer: ArrayLike<number>) => [36, 40, 44].map((x) => buffer[100 * 200 + x])
 const clean = new Float32Array(200 * 200)
 renderSyntheticCollimationPattern(clean, { ...base, background: 0, noise: 0 })
 const seeing = applySyntheticCollimationBlur(clean.slice(), 200, 200, 1, 2)
@@ -11713,13 +11502,13 @@ const anisotropic = applySyntheticCollimationBlur(clean.slice(), 200, 200, 1, { 
 console.log(peak(clean), edge(clean), edge(seeing), edge(trailed), edge(anisotropic)) // peak 0.2174 for all of them; edge samples [0.0068, 0.1006, 0.2084] clean, [0.0164, 0.1021, 0.1962] with a seeing of 2, [0.0329, 0.1052, 0.1789] with a trail of 10 pixels and [0.0387, 0.1052, 0.1740] with sigmaX 4: the edge is softened and the plateau is kept
 
 // The brightness modulations of the annulus (the sample on the annulus at the top, with each effect): a harmonic of order 1, a spider of four vanes, and a thermal plume toward the top.
-const sample = (extra: Partial<SyntheticCollimationPattern>) => generateSyntheticCollimationImage({ ...base, noise: 0, ...extra }).raw[62 * 200 + 100].toFixed(4)
+const sample = (extra: Partial<SyntheticCollimationPattern>) => generateSyntheticCollimationImage({ ...base, noise: 0, ...extra }).raw[62 * 200 + 100]
 console.log(sample({}), sample({ harmonics: [{ order: 1, amplitude: 0.5, phase: Math.PI / 2 }] }), sample({ spider: { vanes: 4, angle: Math.PI / 2, width: 4, attenuation: 0.8 } }), sample({ thermalPlume: { angle: -Math.PI / 2, width: 0.5, strength: 0.7 } })) // 0.2674 without effects, 0.1578 with the harmonic, 0.0958 with the spider and 0.1253 with the plume
 
 // The saturation clamps the samples after the noise, and hot pixels are set to the saturation level or the brightest value; the explicit clamp helper does the same on a buffer.
 const copy = clean.slice()
 const hot = generateSyntheticCollimationImage({ ...base, saturation: 0.2, hotPixels: [{ x: 5, y: 5 }] })
-console.log(peak(hot.raw), hot.raw[5 * 200 + 5].toFixed(4), peak(applySyntheticCollimationSaturation(clean.slice(), 0.1)), applySyntheticCollimationSaturation(copy) === copy) // peak 0.2 (the saturation), the hot pixel 0.2, a clamp of 0.1 gives a peak of 0.1 and the helper returns the same buffer (true)
+console.log(peak(hot.raw), hot.raw[5 * 200 + 5], peak(applySyntheticCollimationSaturation(clean.slice(), 0.1)), applySyntheticCollimationSaturation(copy) === copy) // peak 0.2 (the saturation), the hot pixel 0.2, a clamp of 0.1 gives a peak of 0.1 and the helper returns the same buffer (true)
 
 // An RGB image with unequal channel weights and a crop: the cropped size, the origin recorded in the header and the channel ratio on the annulus.
 const rgb = generateSyntheticCollimationImage({ ...base, channels: 3, channelWeights: [0.5, 0.3, 0.2], noise: 0, background: 0, crop: { left: 20, top: 20, right: 180, bottom: 150 } })
@@ -11730,7 +11519,7 @@ console.log(
 	rgb.metadata.channels,
 	rgb.header.XORGSUBF,
 	rgb.header.YORGSUBF,
-	[0, 1, 2].map((c) => (rgb.raw[p + c] / rgb.raw[p + 1]).toFixed(3)),
+	[0, 1, 2].map((c) => rgb.raw[p + c] / rgb.raw[p + 1]),
 ) // 160 by 130 pixels with 3 channels, the origin 20 and 20, and channel ratios 1.667, 1.000 and 0.667 (0.5, 0.3 and 0.2 over 0.3)
 ```
 
@@ -11763,7 +11552,7 @@ const b = generateSyntheticFlatImage({ ...noisy, frameIndex: 1 })
 const c = generateSyntheticFlatImage(noisy)
 const fixed = generateSyntheticFlatImage({ ...noisy, noise: 0 })
 const fixedNext = generateSyntheticFlatImage({ ...noisy, noise: 0, frameIndex: 1 })
-console.log(a.raw[100] === c.raw[100], a.raw[100] === b.raw[100], fixed.raw[100] === fixedNext.raw[100], mean(a.raw).toFixed(1)) // true, false, true, 9998.9: the same seed and frame index repeat the noise, another frame index changes it, the fixed PRNU is the same, and the mean stays near the 10000 signal
+console.log(a.raw[100] === c.raw[100], a.raw[100] === b.raw[100], fixed.raw[100] === fixedNext.raw[100], mean(a.raw)) // true, false, true, 9998.9: the same seed and frame index repeat the noise, another frame index changes it, the fixed PRNU is the same, and the mean stays near the 10000 signal
 
 // A dust mote of 6 pixels sigma and 40% contrast at (32, 32), and a row banding of 2% every 8 pixels.
 const dust = generateSyntheticFlatImage({ width: 64, height: 64, bias: 0, signal: 1000, vignetting: 0, dustMotes: [{ center: { x: 32, y: 32 }, sigmaX: 6, sigmaY: 6, contrast: 0.4 }] })
@@ -11789,7 +11578,7 @@ console.log(rgb.header.NAXIS, rgb.header.NAXIS3, rgb.metadata.stride, Array.from
 const full = generateSyntheticFlatImage({ width: 200, height: 200, bias: 0, signal: 1000, vignetting: 0.4 })
 const crop = generateSyntheticFlatImage({ width: 50, height: 50, bias: 0, signal: 1000, vignetting: 0.4, sensor: { width: 200, height: 200, origin: { x: 100, y: 100 } } })
 const binned = generateSyntheticFlatImage({ width: 100, height: 100, bias: 0, signal: 1000, vignetting: 0.4, sensor: { width: 200, height: 200, binning: [2, 2] } })
-console.log(crop.raw[0] === full.raw[100 * 200 + 100], crop.header.XORGSUBF, binned.header.XBINNING, binned.raw[0].toFixed(3), full.raw[0].toFixed(3), ((full.raw[0] + full.raw[1] + full.raw[200] + full.raw[201]) / 4).toFixed(3)) // true, 100, 2, 604.010, 600.000 and 604.000: the crop equals the pixel of the full sensor, the binned corner is the value at the center of its 2 by 2 block (the mean of four full pixels is 604.000)
+console.log(crop.raw[0] === full.raw[100 * 200 + 100], crop.header.XORGSUBF, binned.header.XBINNING, binned.raw[0], full.raw[0], (full.raw[0] + full.raw[1] + full.raw[200] + full.raw[201]) / 4) // true, 100, 2, 604.010, 600.000 and 604.000: the crop equals the pixel of the full sensor, the binned corner is the value at the center of its 2 by 2 block (the mean of four full pixels is 604.000)
 
 // The buffer variant fills a buffer that the caller owns and returns the same buffer.
 const buffer = new Float32Array(16 * 16)
@@ -11808,7 +11597,7 @@ const mean = (raw: ArrayLike<number>) => Array.from(raw).reduce((a, b) => a + b,
 // The defaults: a 60 s exposure of a 64 by 64 monochrome frame, the statistics and the mean level in the normalized range.
 const mono = new Float64Array(64 * 64)
 const result = generateNoiseImage(mono, 64, 64, 1)
-console.log(result.stats, mean(mono).toFixed(5), DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.exposure) // { seed: 1597463007, expectedLength: 4096, saturationElectrons: 50000, normalizationScale: 1, maxValueBeforeOutput: 0.00668, saturatedPixels: 0, hotPixelCount: 0, warmPixelCount: 0, deadPixelCount: 0 }, a mean of 0.00601 and the exposure defaults (60 s, gains of 1, 0.85 electrons per ADU)
+console.log(result.stats, mean(mono), DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.exposure) // { seed: 1597463007, expectedLength: 4096, saturationElectrons: 50000, normalizationScale: 1, maxValueBeforeOutput: 0.00668, saturatedPixels: 0, hotPixelCount: 0, warmPixelCount: 0, deadPixelCount: 0 }, a mean of 0.00601 and the exposure defaults (60 s, gains of 1, 0.85 electrons per ADU)
 
 // The same seed gives the same pixels and another seed does not.
 const a = new Float64Array(32 * 32)
@@ -11826,7 +11615,7 @@ console.log(
 const rgb = new Float64Array(64 * 64 * 3)
 generateNoiseImage(rgb, 64, 64, 3, { lightPollution: { strength: 1, tint: [1.3, 1, 0.7] } })
 const channel = (index: number) => mean(rgb.filter((_, i) => i % 3 === index))
-console.log(channel(0).toFixed(5), channel(1).toFixed(5), channel(2).toFixed(5)) // 0.00637 0.00627 0.00617 (the red channel has the most sky and the blue one the least)
+console.log(channel(0), channel(1), channel(2)) // 0.00637 0.00627 0.00617 (the red channel has the most sky and the blue one the least)
 
 // The exposure drives the sky and the dark signal: four times the exposure gives about four times the signal when the bias and the read noise are removed.
 const quiet: AstronomicalImageNoiseConfig = { sensor: { biasElectrons: 0, readNoise: 0 }, artifacts: { hotPixelRate: 0, warmPixelRate: 0, deadPixelRate: 0, fixedPatternNoiseStrength: 0, rowNoiseStrength: 0, columnNoiseStrength: 0, bandingStrength: 0 } }
@@ -11834,7 +11623,7 @@ const short = new Float64Array(64 * 64)
 const long = new Float64Array(64 * 64)
 generateNoiseImage(short, 64, 64, 1, { ...quiet, exposure: { exposureTime: 30 } })
 generateNoiseImage(long, 64, 64, 1, { ...quiet, exposure: { exposureTime: 120 } })
-console.log(mean(short).toFixed(5), mean(long).toFixed(5), (mean(long) / mean(short)).toFixed(2)) // 0.00020 0.00081 3.99
+console.log(mean(short), mean(long), mean(long) / mean(short)) // 0.00020 0.00081 3.99
 
 // The sky options: a gradient along +Y, the moon and an amp glow on the right side, as the mean of each quarter of the frame (top-left, top-right, bottom-left, bottom-right).
 const quarters = (raw: Float64Array, w: number, h: number) =>
@@ -11846,7 +11635,7 @@ const quarters = (raw: Float64Array, w: number, h: number) =>
 	].map(([x0, y0]) => {
 		let s = 0
 		for (let y = y0; y < y0 + h / 2; y++) for (let x = x0; x < x0 + w / 2; x++) s += raw[y * w + x]
-		return +(s / ((w / 2) * (h / 2))).toFixed(5)
+		return +(s / ((w / 2) * (h / 2)))
 	})
 const gradient = new Float64Array(64 * 64)
 generateNoiseImage(gradient, 64, 64, 1, { ...quiet, sky: { gradientStrength: 0.5, gradientDirection: Math.PI / 2 }, lightPollution: { enabled: false } })
@@ -11856,7 +11645,7 @@ generateNoiseImage(moonless, 64, 64, 1, quiet)
 generateNoiseImage(moonlit, 64, 64, 1, { ...quiet, moon: { enabled: true, illuminationFraction: 1, altitude: 0.9, angularDistance: 0.5 } })
 const glow = new Float64Array(64 * 64)
 generateNoiseImage(glow, 64, 64, 1, { ...quiet, sensor: { ...quiet.sensor, ampGlow: { enabled: true, strength: 0.2, position: 'right' } } })
-console.log(quarters(gradient, 64, 64), mean(moonless).toFixed(5), mean(moonlit).toFixed(5), quarters(glow, 64, 64)) // [0.00026, 0.00026, 0.00041, 0.0004] 0.00041 0.00069 [0.00049, 0.00167, 0.00033, 0.00151] (the bottom is brighter than the top, the moon raises the mean, and the right side of the glow is brighter than the left)
+console.log(quarters(gradient, 64, 64), mean(moonless), mean(moonlit), quarters(glow, 64, 64)) // [0.00026, 0.00026, 0.00041, 0.0004] 0.00041 0.00069 [0.00049, 0.00167, 0.00033, 0.00151] (the bottom is brighter than the top, the moon raises the mean, and the right side of the glow is brighter than the left)
 
 // Hot, warm and dead pixels: the counts in the statistics follow the rates of the artifacts (per pixel).
 const defects = new Float64Array(128 * 128)
@@ -11868,7 +11657,7 @@ const bright: AstronomicalImageNoiseConfig = { sensor: { biasElectrons: 80000, f
 const modes = (['clamp', 'normalize', 'none'] as const).map((clampMode) => {
 	const raw = new Float64Array(16 * 16)
 	const { stats } = generateNoiseImage(raw, 16, 16, 1, { ...bright, output: { clampMode } })
-	return [clampMode, Math.max(...raw).toFixed(3), stats.saturatedPixels, stats.maxValueBeforeOutput.toFixed(3), stats.normalizationScale.toFixed(3)]
+	return [clampMode, Math.max(...raw), stats.saturatedPixels, stats.maxValueBeforeOutput, stats.normalizationScale]
 })
 const quantized = new Float64Array(16 * 16)
 generateNoiseImage(quantized, 16, 16, 1, { output: { bitDepth: 8, quantize: true } })
@@ -11880,7 +11669,7 @@ console.log(
 // An image that already holds signal keeps it: the noise is added on top of a drawn pedestal.
 const pedestal = new Float64Array(16 * 16).fill(0.25)
 generateNoiseImage(pedestal, 16, 16, 1, quiet)
-console.log(mean(pedestal).toFixed(4)) // 0.2504
+console.log(mean(pedestal)) // 0.2504
 ```
 
 ### Synthetic Optical Aberration
@@ -11978,7 +11767,7 @@ const height = 64
 const peak = (raw: Float64Array) => {
 	let best = 0
 	for (let i = 1; i < raw.length; i++) if (raw[i] > raw[best]) best = i
-	return [best % width, Math.floor(best / width), +raw[best].toFixed(4)]
+	return [best % width, Math.floor(best / width), +raw[best]]
 }
 const sum = (raw: Float64Array) => raw.reduce((a, b) => a + b, 0)
 
@@ -11989,17 +11778,13 @@ const stars: AstronomicalImageStar[] = [
 	{ x: 45.4, y: 12.7, hfd: 4, snr: 15, flux: 2, colorIndex: 1.2 },
 ]
 const { stats } = generateStarImage(raw, width, height, 1, stars, 1, quiet)
-console.log(peak(raw), raw[30 * width + 20].toFixed(4), raw[12 * width + 45].toFixed(4), stats.saturatedPixels, stats.seed) // [20, 30, 0.712] 0.7120 0.0853 0 5
-
-// plotStar draws without noise and tells whether it drew: a zero flux or a non-finite center draws nothing.
-const bare = new Float64Array(width * height)
-console.log(plotStar(bare, width, height, 1, 32, 32, 4, 3, 30, 1), sum(bare).toFixed(4), plotStar(bare, width, height, 1, 10, 10, 0, 3, 30, 1), plotStar(bare, width, height, 1, Number.NaN, 10, 4, 3, 30, 1)) // true 4.0000 false false (the integrated flux of the star is the flux requested)
+console.log(peak(raw), raw[30 * width + 20], raw[12 * width + 45], stats.saturatedPixels, stats.seed) // [20, 30, 0.712] 0.7120 0.0853 0 5
 
 // The global focus: the same star in focus and half of the available distance away has a lower peak and a wider footprint (the pixels above 0.01).
 const footprint = (focusStep?: number) => {
 	const image = new Float64Array(width * height)
 	plotStar(image, width, height, 1, 32, 32, 4, 3, 30, 1, undefined, { focusStep, bestFocus: 5000, maxFocusStep: 10000 })
-	return [+Math.max(...image).toFixed(4), image.filter((v) => v > 0.01).length]
+	return [+Math.max(...image), image.filter((v) => v > 0.01).length]
 }
 console.log(footprint(5000), footprint(7500)) // [0.3452, 45] [0.0532, 121] (the in-focus star has the higher peak and the smaller footprint)
 
@@ -12009,7 +11794,7 @@ const wings = (psfModel: 'gaussian' | 'moffat') => {
 	plotStar(image, width, height, 1, 32, 32, 4, 3, 30, 1, undefined, { psfModel, beta: 2.5, cutoffSigma: 7, maxPlotRadius: 30 })
 	let outer = 0
 	for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) if (Math.hypot(x - 32, y - 32) > 6) outer += image[y * width + x]
-	return +(outer / sum(image)).toFixed(4)
+	return +(outer / sum(image))
 }
 console.log(wings('gaussian'), wings('moffat')) // 0.0001 0.033
 
@@ -12026,7 +11811,7 @@ const spread = (image: Float64Array) => {
 			s += v
 		}
 	}
-	return [+Math.sqrt(sx / s).toFixed(3), +Math.sqrt(sy / s).toFixed(3)]
+	return [+Math.sqrt(sx / s), +Math.sqrt(sy / s)]
 }
 const elongated = new Float64Array(width * height)
 plotStar(elongated, width, height, 1, 32, 32, 4, 3, 30, 1, undefined, { ellipticity: 0.5, theta: 0 })
@@ -12034,13 +11819,13 @@ const jittered = new Float64Array(width * height)
 plotStar(jittered, width, height, 1, 32, 32, 4, 3, 30, 1, undefined, { jitterX: 1 })
 const clipped = new Float64Array(width * height)
 plotStar(clipped, width, height, 1, 32, 32, 40, 3, 30, 1, undefined, { saturationLevel: 0.8 })
-console.log(spread(elongated), peak(jittered), Math.max(...clipped).toFixed(3)) // [1.92, 0.96] [33, 32, 0.3452] 0.800 (the spread is larger along X, a jitter of one pixel moves the peak to x = 33, and the clip holds the peak at the saturation level)
+console.log(spread(elongated), peak(jittered), Math.max(...clipped)) // [1.92, 0.96] [33, 32, 0.3452] 0.800 (the spread is larger along X, a jitter of one pixel moves the peak to x = 33, and the clip holds the peak at the saturation level)
 
 // An RGB frame: the colorIndex sets the channel weights (a blue star and a red one at the same flux), as the central pixel of each channel.
 const color = new Float64Array(width * height * 3)
 plotStar(color, width, height, 3, 16, 32, 4, 3, 30, 1, -0.3)
 plotStar(color, width, height, 3, 48, 32, 4, 3, 30, 1, 1.8)
-const channelPeak = (x: number) => [0, 1, 2].map((c) => +color[(32 * width + x) * 3 + c].toFixed(4))
+const channelPeak = (x: number) => [0, 1, 2].map((c) => +color[(32 * width + x) * 3 + c])
 console.log(channelPeak(16), channelPeak(48)) // [0.088, 0.1024, 0.1548] [0.1777, 0.108, 0.0595] (the blue star is stronger in the blue channel and the red one in the red channel)
 
 // The per-star modifiers from the optical model: stars of the same HFD at the center and near a corner of a frame with backfocus and coma.
@@ -12053,9 +11838,9 @@ const field: AstronomicalImageStar[] = [
 const aberrated = new Float64Array(width * height)
 generateStarImage(aberrated, width, height, 1, field, 1, quiet)
 console.log(
-	field.map((s) => [s.x, s.y, +(s.covarianceXX ?? 0).toFixed(2), +(s.coma ?? 0).toFixed(2)]),
-	aberrated[32 * width + 32].toFixed(4),
-	aberrated[4 * width + 4].toFixed(4),
+	field.map((s) => [s.x, s.y, +(s.covarianceXX ?? 0), +(s.coma ?? 0)]),
+	aberrated[32 * width + 32],
+	aberrated[4 * width + 4],
 ) // [[32, 32, 0, 0], [4, 4, 2.57, 0.65]] 0.5355 0.1801 (the center is free of the aberration; the corner star has a covariance and a coma and a much lower peak)
 ```
 
@@ -12088,7 +11873,7 @@ console.log(
 		[4, 10],
 		[2, 10],
 		[38, 10],
-	].map(([x, y]) => at(image, x, y).toFixed(4)),
+	].map(([x, y]) => at(image, x, y)),
 ) // [0.5000, 0.4204, 0.2500, 0.1051, 0.2500, 0.0313, 0.4204, 0.1051, 0.1051] (the centerline, 1 and 2 and 3 pixels below, 2 and 4 pixels above, then one and two pixels before the start and past the end)
 console.log(image.raw.filter((v) => v > 0).length) // 600 (the pixels with a positive signal: the band within the 4 sigma cutoff of the 30 pixel trail)
 
@@ -12100,7 +11885,7 @@ console.log(at(image, 20, 10)) // 1
 const sample = (profile?: Parameters<typeof renderSyntheticStreak>[1]['profile']) => {
 	const test = make(40, 20)
 	renderSyntheticStreak(test, { start: { x: 5, y: 10 }, end: { x: 35, y: 10 }, width: 2, intensity: 1, profile })
-	return [5, 12, 20, 28, 35].map((x) => at(test, x, 10).toFixed(3)).join(' ')
+	return [5, 12, 20, 28, 35].map((x) => at(test, x, 10)).join(' ')
 }
 console.log(sample(), '|', sample({ type: 'linear', start: 1, end: 0 }), '|', sample({ type: 'linear', start: 0.5, end: 2 })) // 1.000 1.000 1.000 1.000 1.000 | 1.000 0.767 0.500 0.233 0.000 | 0.500 0.850 1.250 1.650 2.000 (constant, a fade out, and a ramp up that crosses 1)
 console.log(sample({ type: 'gaussian', center: 0.5, sigma: 0.1 }), '|', sample({ type: 'gaussian', center: 0.5, sigma: 0 })) // 0.000 0.029 1.000 0.029 0.000 | 0.000 0.000 0.000 0.000 0.000 (a flare at the middle, and a flare of zero width, which adds nothing)
@@ -12119,7 +11904,7 @@ console.log(
 // Saturation: the sum is clamped after the addition.
 const clipped = make(40, 20)
 renderSyntheticStreak(clipped, { start: { x: 5, y: 10 }, end: { x: 35, y: 10 }, width: 4, intensity: 2, saturationLevel: 1 })
-console.log(at(clipped, 20, 10), at(clipped, 20, 11), at(clipped, 20, 13).toFixed(3)) // 1 1 0.420 (the centerline and the next row clamp at 1; a pixel 3 rows away is not clamped)
+console.log(at(clipped, 20, 10), at(clipped, 20, 11), at(clipped, 20, 13)) // 1 1 0.420 (the centerline and the next row clamp at 1; a pixel 3 rows away is not clamped)
 
 // An RGB image receives the same signal in every channel, so the trail is white.
 const color = make(40, 20, 3)
@@ -12129,10 +11914,10 @@ console.log(at(color, 20, 10, 0), at(color, 20, 10, 1), at(color, 20, 10, 2), co
 // A diagonal trail from (4.5, 4.5) to (30.5, 30.5), and one that starts outside the frame: the part inside is rendered, and the end at x = 20 is rounded.
 const diagonal = make(40, 40)
 renderSyntheticStreak(diagonal, { start: { x: 4.5, y: 4.5 }, end: { x: 30.5, y: 30.5 }, width: 3, intensity: 1 })
-console.log(at(diagonal, 10, 10).toFixed(3), at(diagonal, 10, 11).toFixed(3), at(diagonal, 10, 12).toFixed(3)) // 1.000 0.857 0.540
+console.log(at(diagonal, 10, 10), at(diagonal, 10, 11), at(diagonal, 10, 12)) // 1.000 0.857 0.540
 const outside = make(40, 20)
 renderSyntheticStreak(outside, { start: { x: -50, y: 10 }, end: { x: 20, y: 10 }, width: 3, intensity: 1 })
-console.log([0, 19, 21, 25].map((x) => at(outside, x, 10).toFixed(3))) // [1.000, 1.000, 0.735, 0.000] (x = 21 is 1 pixel past the end, and x = 25 is beyond the 4 sigma cutoff)
+console.log([0, 19, 21, 25].map((x) => at(outside, x, 10))) // [1.000, 1.000, 0.735, 0.000] (x = 21 is 1 pixel past the end, and x = 25 is beyond the 4 sigma cutoff)
 
 // A zero-length segment and a negative intensity add nothing.
 const nothing = make(40, 20)
@@ -12154,13 +11939,13 @@ console.log(at(single, 20, 10), Math.fround(0.3) === at(single, 20, 10)) // 0.30
 import { dawesLimit, effectiveApertureWithObstruction, lightGraspRatio, limitingMagnitude, obstructionRatio, rayleighLimit } from 'nebulosa/src/astronomy/formulas'
 
 // A 200 mm aperture: the resolving power by each criterion (arcseconds) and the visual limiting magnitude.
-console.log(dawesLimit(200), rayleighLimit(200), limitingMagnitude(200).toFixed(2)) // 0.58 0.69 14.21
+console.log(dawesLimit(200), rayleighLimit(200), limitingMagnitude(200)) // 0.58 0.69 14.21
 
 // An 80 mm refractor against a 200 mm reflector: the collecting area ratio (and the gap in limiting magnitude, 5 log10 of the aperture ratio).
-console.log(lightGraspRatio(200, 80), (limitingMagnitude(200) - limitingMagnitude(80)).toFixed(2)) // 6.25 1.99
+console.log(lightGraspRatio(200, 80), limitingMagnitude(200) - limitingMagnitude(80)) // 6.25 1.99
 
 // A 200 mm reflector with a 70 mm secondary: the obstruction in percent of the diameter, and the equal-area unobstructed aperture (millimeters).
-console.log(obstructionRatio(200, 70), effectiveApertureWithObstruction(200, 70).toFixed(2)) // 35 187.35
+console.log(obstructionRatio(200, 70), effectiveApertureWithObstruction(200, 70)) // 35 187.35
 console.log(obstructionRatio(200, 0), effectiveApertureWithObstruction(200, 0), obstructionRatio(200, 200)) // 0 200 100
 ```
 
@@ -12309,20 +12094,20 @@ import { exposureSmearPixels, guidingErrorInPixels, maxExposureBeforeTrail, maxE
 const deg = Math.PI / 180
 
 // An untracked star at the celestial equator, with a 2 arcsecond per pixel scale: the trail of a 10 s exposure (pixels), and at declination 60 degrees (half as long).
-console.log(starTrailLength(0, 10, 2).toFixed(3), starTrailLength(60 * deg, 10, 2).toFixed(3)) // 75.205 37.603
+console.log(starTrailLength(0, 10, 2), starTrailLength(60 * deg, 10, 2)) // 75.205 37.603
 
 // The exposure that keeps the trail within a pixel, at the equator and at 60 degrees (seconds); at the pole there is no limit and the function throws.
-console.log(maxExposureBeforeTrail(1, 2, 0).toFixed(3), maxExposureBeforeTrail(1, 2, 60 * deg).toFixed(3)) // 0.133 0.266
+console.log(maxExposureBeforeTrail(1, 2, 0), maxExposureBeforeTrail(1, 2, 60 * deg)) // 0.133 0.266
 
 // The generic smear: a comet that moves 30 arcseconds per hour (0.00833 arcsec/s) in a 300 s exposure at 1.5 arcsec per pixel, and the limit for a pixel of smear.
 const rate = 30 / 3600
-console.log(exposureSmearPixels(rate, 300, 1.5).toFixed(3), maxExposureForSmear(rate, 1, 1.5).toFixed(1)) // 1.667 180.0
+console.log(exposureSmearPixels(rate, 300, 1.5), maxExposureForSmear(rate, 1, 1.5)) // 1.667 180.0
 
 // The sign of the rate is ignored, a stationary body never smears, and the same relation reproduces the sidereal trail at the equator.
-console.log(exposureSmearPixels(-rate, 300, 1.5).toFixed(3), maxExposureForSmear(0, 1, 1.5), exposureSmearPixels(15.041, 10, 2).toFixed(3)) // 1.667 Infinity 75.205 (the last equals the equatorial trail above)
+console.log(exposureSmearPixels(-rate, 300, 1.5), maxExposureForSmear(0, 1, 1.5), exposureSmearPixels(15.041, 10, 2)) // 1.667 Infinity 75.205 (the last equals the equatorial trail above)
 
 // The mount errors in pixels at 1.5 arcsec per pixel: a guiding RMS of 0.8 arcsec, and a periodic error of 12 arcsec.
-console.log(guidingErrorInPixels(0.8, 1.5).toFixed(3), periodicErrorInPixels(12, 1.5)) // 0.533 8
+console.log(guidingErrorInPixels(0.8, 1.5), periodicErrorInPixels(12, 1.5)) // 0.533 8
 ```
 
 ## 🔭 Observation
@@ -12356,32 +12141,32 @@ const run = (autofocus: AutoFocus, start: number, measureHfd: (position: number)
 // The default scan: 7 steps of 50 on each side of the start, the hyperbolic fit, and a limit on the quality of the fit.
 const autofocus = new AutoFocus({ initialOffsetSteps: 7, stepSize: 50, fittingMode: 'HYPERBOLIC', rmsdThreshold: 0.1, reversed: false, maxPosition: 10000 })
 const result = run(autofocus, 5100)
-console.log(result.step.type, Math.round(result.step.absolute!), result.captures) // COMPLETED 5000 17
+console.log(result.step.type, result.step.absolute!, result.captures) // COMPLETED 5000 17
 console.log(autofocus.minimum, autofocus.maximum) // { x: 4650, y: 7.2188 } { x: 5450, y: 9.1743 }
 
 // The fits of the run: the hyperbolic minimum (the best focus and its HFD in pixels), the parabolic one is not computed in this mode, and the trend line gives the intersection of the two sides.
-console.log(autofocus.focusPoint!.x.toFixed(1), autofocus.focusPoint!.y.toFixed(3), autofocus.hyperbolic!.minimum.x.toFixed(1), autofocus.parabolic, autofocus.trendLine!.intersection.x.toFixed(1)) // 4999.6 1.806 4999.6 undefined 5004.2
+console.log(autofocus.focusPoint!.x, autofocus.focusPoint!.y, autofocus.hyperbolic!.minimum.x, autofocus.parabolic, autofocus.trendLine!.intersection.x) // 4999.6 1.806 4999.6 undefined 5004.2
 
 // The other fitting modes on the same curve: the best position and the HFD of each.
 for (const fittingMode of ['TRENDLINES', 'PARABOLIC', 'TREND_PARABOLIC', 'HYPERBOLIC', 'TREND_HYPERBOLIC'] as AutoFocusFittingMode[]) {
 	const other = new AutoFocus({ initialOffsetSteps: 7, stepSize: 50, fittingMode, reversed: false, maxPosition: 0 })
 	const { step } = run(other, 5100)
-	console.log(fittingMode, step.type, Math.round(step.absolute!), other.focusPoint!.y.toFixed(3)) // TRENDLINES COMPLETED 5004 0.829, then PARABOLIC COMPLETED 5007 2.476, then TREND_PARABOLIC COMPLETED 5006 1.653, then HYPERBOLIC COMPLETED 5000 1.806, then TREND_HYPERBOLIC COMPLETED 5002 1.317
+	console.log(fittingMode, step.type, step.absolute!, other.focusPoint!.y) // TRENDLINES COMPLETED 5004 0.829, then PARABOLIC COMPLETED 5007 2.476, then TREND_PARABOLIC COMPLETED 5006 1.653, then HYPERBOLIC COMPLETED 5000 1.806, then TREND_HYPERBOLIC COMPLETED 5002 1.317
 }
 
 // A focuser that moves the other way (reversed): the first move goes to the lower positions, and the same best focus is found.
 const reversed = new AutoFocus({ initialOffsetSteps: 7, stepSize: 50, fittingMode: 'HYPERBOLIC', reversed: true, maxPosition: 0 })
-console.log(reversed.add(5100, 0), run(new AutoFocus({ initialOffsetSteps: 7, stepSize: 50, fittingMode: 'HYPERBOLIC', reversed: true, maxPosition: 0 }), 5100).step.absolute!.toFixed(0)) // { type: 'MOVE', relative: -350 } 5000
+console.log(reversed.add(5100, 0), run(new AutoFocus({ initialOffsetSteps: 7, stepSize: 50, fittingMode: 'HYPERBOLIC', reversed: true, maxPosition: 0 }), 5100).step.absolute!) // { type: 'MOVE', relative: -350 } 5000
 
 // A start far from the focus (800 steps away): the first scan does not reach the minimum, so the machine keeps stepping toward the lower positions until both sides of the minimum are supported.
 const far = new AutoFocus({ initialOffsetSteps: 7, stepSize: 50, fittingMode: 'TREND_HYPERBOLIC', reversed: false, maxPosition: 0 })
 const lost = run(far, 5800)
-console.log(lost.step.type, Math.round(lost.step.absolute!), lost.captures) // COMPLETED 5007 31
+console.log(lost.step.type, lost.step.absolute!, lost.captures) // COMPLETED 5007 31
 
 // Frames without a star (HFD 0 or NaN) are dropped from the fit: here two positions near the edge of the scan fail to measure, and the result is still found.
 const gaps = new AutoFocus({ initialOffsetSteps: 7, stepSize: 50, fittingMode: 'HYPERBOLIC', reversed: false, maxPosition: 0 })
 const gapped = run(gaps, 5100, (position) => (position === 4750 ? 0 : position === 5450 ? Number.NaN : measure(position)))
-console.log(gapped.step.type, Math.round(gapped.step.absolute!)) // COMPLETED 5000
+console.log(gapped.step.type, gapped.step.absolute!) // COMPLETED 5000
 ```
 
 ### Challis Polar Alignment
@@ -12393,7 +12178,6 @@ import { challisRefractionCorrection, fitChallisPolarAlignment, type ChallisObse
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 
 const latitude = deg(40)
-const round = (value: number | undefined, digits = 4) => (value === undefined ? undefined : +toDeg(value).toFixed(digits))
 
 // Two stars (declinations 20 and 50 degrees, each with an unknown offset in the mount reading) followed during 120 degrees of hour angle with a true polar error of u = 0.30 and v = -0.15 degrees: the readings follow the model exactly.
 const u = deg(0.3)
@@ -12405,35 +12189,35 @@ for (const [star, intercept] of Object.entries(intercepts)) for (const hourAngle
 
 // The fit recovers the components (degrees), the magnitude and orientation, and the mount pole: its azimuth (north through east), altitude and the knob errors that bring it to the celestial pole.
 const fit = fitChallisPolarAlignment(observations, latitude)
-console.log(round(fit.u), round(fit.v), round(fit.magnitude), round(fit.orientation, 2)) // 0.3 -0.15 0.3354 116.57
-console.log(round(fit.azimuth, 4), round(fit.altitude, 4), round(fit.azimuthError, 4), round(fit.altitudeError, 4), round(fit.totalError, 4)) // 359.8033 40.2998 0.15 0.3 0.3354
+console.log(fit.u, fit.v, fit.magnitude, fit.orientation) // 0.3 -0.15 0.3354 116.57
+console.log(fit.azimuth, fit.altitude, fit.azimuthError, fit.altitudeError, fit.totalError) // 359.8033 40.2998 0.15 0.3 0.3354
 console.log(
-	fit.takiPole.map((value) => +value.toFixed(6)),
-	fit.poleEnu.map((value) => +value.toFixed(6)),
+	fit.takiPole.map((value) => +value),
+	fit.poleEnu.map((value) => +value),
 ) // [ 0.005236, -0.002618, 0.999983 ] [ -0.002618, 0.762666, 0.646788 ]
 console.log(fit.conditionNumber < 100, fit.rankDeficient, fit.residuals.length, Math.max(...fit.residuals.map(Math.abs)) < 1e-12, fit.weights.length, fit.warnings) // true false 14 true 14 []
 
 // Weights: a reading with a weight of zero is ignored, and a heavier one pulls the fit toward it.
 const weighted = observations.map((observation, i) => (i === 0 ? { ...observation, weight: 0 } : observation))
-console.log(round(fitChallisPolarAlignment(weighted, latitude).u)) // 0.3
+console.log(fitChallisPolarAlignment(weighted, latitude).u) // 0.3
 
 // A wild reading (a mis-centered star, +0.5 degree in one declination) biases the plain fit, and the Huber and Tukey robust losses reject it, with a zero final weight for the bad point.
 const noisy = observations.map((observation, i) => (i === 3 ? { ...observation, mountDeclination: observation.mountDeclination + deg(0.5) } : observation))
 const plain = fitChallisPolarAlignment(noisy, latitude)
 const huber = fitChallisPolarAlignment(noisy, latitude, { robust: 'huber' })
 const tukey = fitChallisPolarAlignment(noisy, latitude, { robust: 'tukey', maxIterations: 50, tolerance: 1e-10, tuning: 4.685 })
-console.log(round(plain.u), round(huber.u), round(tukey.u), tukey.weights[3] < 0.05) // 0.5214 0.3 0.3 true
+console.log(plain.u, huber.u, tukey.u, tukey.weights[3] < 0.05) // 0.5214 0.3 0.3 true
 
 // A known additive effect goes in the correction: the refraction increment of a real sky at each point, added to the readings and removed again in the fit.
 const refracted = observations.map((observation) => {
 	const declination = observation.star === 'alpha' ? deg(20) : deg(50)
 	return { ...observation, mountDeclination: observation.mountDeclination + challisRefractionCorrection(observation.hourAngle, declination, latitude), correction: challisRefractionCorrection(observation.hourAngle, declination, latitude) }
 })
-console.log(round(challisRefractionCorrection(0, deg(20), latitude), 5), round(challisRefractionCorrection(deg(60), deg(20), latitude), 5), round(fitChallisPolarAlignment(refracted, latitude).u)) // 0.00578 0.01292 0.3
+console.log(challisRefractionCorrection(0, deg(20), latitude), challisRefractionCorrection(deg(60), deg(20), latitude), fitChallisPolarAlignment(refracted, latitude).u) // 0.00578 0.01292 0.3
 
 // The same drift seen from the southern hemisphere (the latitude is negative): the pole is still reported above the horizon, as a south celestial pole.
 const south = fitChallisPolarAlignment(observations, deg(-40))
-console.log(round(south.azimuth, 2), round(south.altitude, 2), round(south.totalError, 4)) // 179.81 39.7 0.3354
+console.log(south.azimuth, south.altitude, south.totalError) // 179.81 39.7 0.3354
 
 // A short run (hour angles within 10 degrees) is reported as weak coverage in the warnings, and a magnitude beyond 5 degrees as outside the small-angle model.
 const short: ChallisObservation[] = Object.entries(intercepts).flatMap(([star, intercept]) => [-10, 0, 10].map(deg).map((hourAngle) => ({ star, hourAngle, mountDeclination: intercept + u * Math.cos(hourAngle) - v * Math.sin(hourAngle) })))
@@ -12448,41 +12232,39 @@ console.log(fitChallisPolarAlignment(short, latitude).warnings) // [ "hour-angle
 import { deg, hour } from 'nebulosa/src/math/units/angle'
 import { COARSE_DARV_EXPOSURE_PRESET, DARV_EXPOSURE_PRESETS, darvGeometryFactors, DRIFT_ARCSEC_PER_SECOND_PER_ARCMIN, estimateDarvExposure, FINE_DARV_EXPOSURE_PRESET, MEDIUM_DARV_EXPOSURE_PRESET, MIN_RA_COS_DECLINATION, type DarvExposureInput } from 'nebulosa/src/observation/alignment/polaralignment.darv'
 
-const round = (value: number, digits = 3) => +value.toFixed(digits)
-
 // The presets and the constants.
 console.log(COARSE_DARV_EXPOSURE_PRESET, MEDIUM_DARV_EXPOSURE_PRESET, FINE_DARV_EXPOSURE_PRESET === DARV_EXPOSURE_PRESETS.fine, DRIFT_ARCSEC_PER_SECOND_PER_ARCMIN, MIN_RA_COS_DECLINATION) // { targetTrail: 150, detectableSeparation: 3, targetPolarError: 15, guideRateSidereal: 1 } { targetTrail: 200, detectableSeparation: 3, targetPolarError: 5, guideRateSidereal: 1 } true 0.004375 0.001
 
 // The geometry at a latitude of 40 degrees: for a star on the meridian (hour angle 0) the azimuth coefficient is largest in magnitude (cos 40 = 0.766, with a negative sign) and the altitude one is zero; at 6 hours west it is the other way around; the sign follows the direction of the drift.
 console.log(
-	darvGeometryFactors(deg(40), 0).map((value) => round(value)),
-	darvGeometryFactors(deg(40), hour(6)).map((value) => round(value)),
-	darvGeometryFactors(deg(40), hour(-3)).map((value) => round(value)),
+	darvGeometryFactors(deg(40), 0).map((value) => value),
+	darvGeometryFactors(deg(40), hour(6)).map((value) => value),
+	darvGeometryFactors(deg(40), hour(-3)).map((value) => value),
 ) // [ -0.766, 0 ] [ 0, -1 ] [ -0.542, 0.707 ]
 
 // The exposure to set the azimuth with the medium preset, a 3.76 micrometers camera on a 400 mm telescope, a star on the meridian at a declination of 0 degrees and a latitude of 40 degrees.
 const base: DarvExposureInput = { focalLength: 400, pixelSize: 3.76, declination: 0, hourAngle: 0, latitude: deg(40), mode: 'azimuth', preset: MEDIUM_DARV_EXPOSURE_PRESET }
 const medium = estimateDarvExposure(base)
-console.log(round(medium.imageScale), round(medium.raVelocity), round(medium.geometryFactor), round(medium.driftDec, 5)) // 1.939 15.041 0.766 0.01676
-console.log(round(medium.raTrailTime), round(medium.driftDetectionTime), round(medium.recommendedLegTime), round(medium.recommendedExposure)) // 25.781 173.557 173.557 347.114
+console.log(medium.imageScale, medium.raVelocity, medium.geometryFactor, medium.driftDec) // 1.939 15.041 0.766 0.01676
+console.log(medium.raTrailTime, medium.driftDetectionTime, medium.recommendedLegTime, medium.recommendedExposure) // 25.781 173.557 173.557 347.114
 
 // The other presets on the same star: a coarse one is quicker for a large error, and the fine one takes a slower guide rate (half the sidereal) and a smaller error, so its exposure is longer.
 for (const preset of [COARSE_DARV_EXPOSURE_PRESET, FINE_DARV_EXPOSURE_PRESET]) {
 	const estimate = estimateDarvExposure({ ...base, preset })
-	console.log(round(estimate.raTrailTime), round(estimate.driftDetectionTime), round(estimate.recommendedExposure)) // 19.336 57.852 115.705, then 64.453 289.262 578.523
+	console.log(estimate.raTrailTime, estimate.driftDetectionTime, estimate.recommendedExposure) // 19.336 57.852 115.705, then 64.453 289.262 578.523
 }
 
 // The altitude mode needs a star far from the meridian: at 5 h 45 min west of the meridian the factor is near 1, while a star on the meridian would not drift in altitude at all.
 const altitude = estimateDarvExposure({ ...base, mode: 'altitude', hourAngle: hour(5.75) })
-console.log(round(altitude.geometryFactor), round(altitude.driftDetectionTime), round(altitude.recommendedExposure)) // 0.998 133.238 266.475
+console.log(altitude.geometryFactor, altitude.driftDetectionTime, altitude.recommendedExposure) // 0.998 133.238 266.475
 
 // A star near the celestial pole slows the RA trail (the speed goes with the cosine of the declination), so the trail takes longer: declination 60 degrees against 0.
 const north = estimateDarvExposure({ ...base, declination: deg(60) })
-console.log(round(north.raVelocity), round(north.raTrailTime), round(north.recommendedExposure)) // 7.521 51.563 347.114
+console.log(north.raVelocity, north.raTrailTime, north.recommendedExposure) // 7.521 51.563 347.114
 
 // A custom preset: a fast guide rate of four times the sidereal and a 100 pixels trail for a wide-field camera, with the smallest error to see set to 10 arcminutes.
 const custom = estimateDarvExposure({ ...base, focalLength: 135, pixelSize: 5.9, preset: { targetTrail: 100, detectableSeparation: 3, targetPolarError: 10, guideRateSidereal: 4 } })
-console.log(round(custom.imageScale), round(custom.raVelocity), round(custom.driftDetectionTime), round(custom.recommendedExposure)) // 9.015 60.164 403.462 806.924
+console.log(custom.imageScale, custom.raVelocity, custom.driftDetectionTime, custom.recommendedExposure) // 9.015 60.164 403.462 806.924
 ```
 
 ### DARV Image Analysis
@@ -12495,8 +12277,6 @@ import type { Image } from 'nebulosa/src/imaging/model/types'
 import { arcsec, deg, hour, toArcmin } from 'nebulosa/src/math/units/angle'
 import { analyzeDarvImage, type DarvAnalysisInput } from 'nebulosa/src/observation/alignment/polaralignment.darv.analysis'
 import { DarvCalibrationTransform, DarvMatrixTransform } from 'nebulosa/src/observation/alignment/polaralignment.darv.transform'
-
-const round = (value: number | undefined, digits = 3) => (value === undefined ? undefined : +value.toFixed(digits))
 
 // A blank 384 x 384 mono frame: the streaks come precomputed, so the pixels are not read.
 const image: Image = { raw: new Float32Array(384 * 384).fill(0.1), header: {}, metadata: { width: 384, height: 384, channels: 1, stride: 384, pixelCount: 147456, strideInBytes: 1536, pixelSizeInBytes: 4, bitpix: -32, bayer: undefined } }
@@ -12529,33 +12309,33 @@ const input: DarvAnalysisInput = { image, exposure: 200, legDuration: 100, first
 
 // The signed drift in arcseconds per second (the scale is 1 arcsecond per pixel and north is +Y), the unsigned magnitude and its unit, the inliers, the confidence and the diagnostics.
 const result = analyzeDarvImage(input)
-console.log(result.status, round(result.drift! / arcsec(1), 4), round(result.driftMagnitude! / arcsec(1), 4), result.driftUnit, result.inliers, round(result.confidence), result.diagnostics) // ok, 0.15, 0.15, radiansPerSecond, 1, 0.878, []
+console.log(result.status, result.drift! / arcsec(1), result.driftMagnitude! / arcsec(1), result.driftUnit, result.inliers, result.confidence, result.diagnostics) // ok, 0.15, 0.15, radiansPerSecond, 1, 0.878, []
 
 // The measurement of the single trail: the lengths of both legs in pixels, the closure (end minus start in pixels), whether the direction is resolved, the flags, and its drift and resolution in arcseconds per second.
 const [trail] = result.trails
-console.log(round(trail.outbound.length), round(trail.inbound.length), trail.closure, trail.directionResolved, trail.clipped, trail.unresolved, round(trail.drift! / arcsec(1), 4), round(trail.uncertainty / arcsec(1), 5)) // 101.119, 101.119, [0, 30], true, false, false, 0.15, 0.01
+console.log(trail.outbound.length, trail.inbound.length, trail.closure, trail.directionResolved, trail.clipped, trail.unresolved, trail.drift! / arcsec(1), trail.uncertainty / arcsec(1)) // 101.119, 101.119, [0, 30], true, false, false, 0.15, 0.01
 
 // A mirrored camera (north towards -Y) is described by the matrix alone: the same pixels now mean a drift of the opposite sign.
-console.log(round(analyzeDarvImage({ ...input, transform: new DarvMatrixTransform([arcsec(1), 0, 0, -arcsec(1)]) }).drift! / arcsec(1), 4)) // -0.15
+console.log(analyzeDarvImage({ ...input, transform: new DarvMatrixTransform([arcsec(1), 0, 0, -arcsec(1)]) }).drift! / arcsec(1)) // -0.15
 
 // The calibration adapter reads the guiding matrix (identity, image to axis) and the signed radians per axis unit when it is used: here 1 arcsecond for both axes, and a 10 x 10 pixel offset maps to [east, north] in arcseconds.
 const calibrated = new DarvCalibrationTransform(
 	() => [1, 0, 0, 1],
 	() => [arcsec(1), arcsec(1)],
 )
-console.log(calibrated.imageOffsetToSky(10, 10).map((value) => round(value / arcsec(1), 4))) // [ 10, 10 ]
+console.log(calibrated.imageOffsetToSky(10, 10).map((value) => value / arcsec(1))) // [ 10, 10 ]
 
 // With no transform the frame still gives a magnitude in pixels per second, but no sign: the status is partial and it is not a measurement of the polar error.
 const unsigned = analyzeDarvImage({ ...input, transform: undefined })
-console.log(unsigned.status, round(unsigned.driftMagnitude!, 4), unsigned.driftUnit, unsigned.drift, unsigned.diagnostics) // partial, 0.15, pixelsPerSecond, undefined, [ "missingAngularTransform" ]
+console.log(unsigned.status, unsigned.driftMagnitude!, unsigned.driftUnit, unsigned.drift, unsigned.diagnostics) // partial, 0.15, pixelsPerSecond, undefined, [ "missingAngularTransform" ]
 
 // With a geometry the signed drift is turned into the selected polar error: a star on the meridian at a latitude of 40 degrees for the azimuth, in arcminutes.
 const component = analyzeDarvImage({ ...input, geometry: { latitude: deg(40), hourAngle: 0, mode: 'azimuth' } }).component!
-console.log(component.status, component.status === 'ok' ? round(toArcmin(component.error), 2) : undefined, component.status === 'ok' ? round(component.geometryFactor, 4) : undefined) // ok, -44.75, -0.766
+console.log(component.status, component.status === 'ok' ? toArcmin(component.error) : undefined, component.status === 'ok' ? component.geometryFactor : undefined) // ok, -44.75, -0.766
 
 // Six hours from the meridian the azimuth sensitivity vanishes, so the component is inconclusive (geometryDegenerate), while the signed drift is still there.
 const degenerate = analyzeDarvImage({ ...input, geometry: { latitude: deg(40), hourAngle: hour(6), mode: 'azimuth' } })
-console.log(degenerate.status, degenerate.component, round(degenerate.drift! / arcsec(1), 4)) // inconclusive, { status: inconclusive, reason: geometryDegenerate }, 0.15
+console.log(degenerate.status, degenerate.component, degenerate.drift! / arcsec(1)) // inconclusive, { status: inconclusive, reason: geometryDegenerate }, 0.15
 ```
 
 ### DARV Polar Error Estimation
@@ -12567,8 +12347,6 @@ import { SIDEREAL_DRIFT_RATE } from 'nebulosa/src/core/constants'
 import { arcmin, arcsec, deg, hour, toArcmin, toArcsec } from 'nebulosa/src/math/units/angle'
 import { darvGeometryFactors } from 'nebulosa/src/observation/alignment/polaralignment.darv'
 import { estimateDarvPolarErrorComponent, solveDarvPolarError, type DarvDriftObservation, type DarvPolarErrorComponent, type DarvPolarErrorSolution } from 'nebulosa/src/observation/alignment/polaralignment.darv.solve'
-
-const round = (value: number, digits = 3) => +value.toFixed(digits)
 
 // A mount whose pole is 10 arcminutes off in azimuth and -5 in altitude at a latitude of 40 degrees: the drift a star would show at an hour angle is the sidereal rate times the geometry factors applied to both errors, in radians per second.
 const latitude = deg(40)
@@ -12582,26 +12360,26 @@ const drift = (hourAngle: number) => {
 // A single component from a star on the meridian: the altitude has no effect there, so only the azimuth is measured; the drift is in arcseconds per second, the error in arcminutes and the factor is cos(40 degrees) with its sign.
 const meridian: DarvDriftObservation = { drift: drift(0), hourAngle: 0, latitude, uncertainty: arcsec(0.0005) }
 const component = estimateDarvPolarErrorComponent(meridian, 'azimuth') as DarvPolarErrorComponent
-console.log(component.status, component.mode, round(toArcsec(component.drift), 5), round(toArcmin(component.error), 4), round(toArcmin(component.uncertainty!), 4), round(component.geometryFactor, 4), round(component.confidence, 4)) // ok, azimuth, -0.03352, 10, 0.1492, -0.766, 0.766
+console.log(component.status, component.mode, toArcsec(component.drift), toArcmin(component.error), toArcmin(component.uncertainty!), component.geometryFactor, component.confidence) // ok, azimuth, -0.03352, 10, 0.1492, -0.766, 0.766
 
 // The altitude from a star six hours west of the meridian, where the azimuth has no effect and the altitude factor is largest (here -1): the error is the -5 arcminutes of the altitude knob; no uncertainty was given, so none is propagated.
 const side: DarvDriftObservation = { drift: drift(hour(6)), hourAngle: hour(6), latitude }
 const altitudeComponent = estimateDarvPolarErrorComponent(side, 'altitude') as DarvPolarErrorComponent
-console.log(round(toArcmin(altitudeComponent.error), 4), altitudeComponent.uncertainty, round(altitudeComponent.geometryFactor, 4)) // -5, undefined, -1
+console.log(toArcmin(altitudeComponent.error), altitudeComponent.uncertainty, altitudeComponent.geometryFactor) // -5, undefined, -1
 
 // Both knobs from two observations at hour angles of 0 and 6 hours: the weighted fit recovers 10 and -5 arcminutes, with a null residual (the data are exact), a condition number of 1.3 and no outlier.
 const two = solveDarvPolarError([meridian, side]) as DarvPolarErrorSolution
-console.log(round(toArcmin(two.azimuthError), 4), round(toArcmin(two.altitudeError), 4), round(two.residualRms, 12), round(two.conditionNumber, 3), two.observations, two.inliers) // 10, -5, 0, 1.305, 2, 2
+console.log(toArcmin(two.azimuthError), toArcmin(two.altitudeError), two.residualRms, two.conditionNumber, two.observations, two.inliers) // 10, -5, 0, 1.305, 2, 2
 
 // Four observations at different hour angles, with the uncertainty of the stars, give the same errors and a condition number that depends on how different the geometries are.
 const hours = [-4, -1.5, 2, 5]
 const many = hours.map((h): DarvDriftObservation => ({ drift: drift(hour(h)), hourAngle: hour(h), latitude, uncertainty: arcsec(0.001) }))
 const fit = solveDarvPolarError(many) as DarvPolarErrorSolution
-console.log(round(toArcmin(fit.azimuthError), 4), round(toArcmin(fit.altitudeError), 4), round(fit.conditionNumber, 3), fit.observations, fit.inliers) // 10, -5, 1.364, 4, 4
+console.log(toArcmin(fit.azimuthError), toArcmin(fit.altitudeError), fit.conditionNumber, fit.observations, fit.inliers) // 10, -5, 1.364, 4, 4
 
 // The robust option runs the Huber reweighting on the same rows: with consistent data nothing is downweighted, so the errors and the inliers do not change.
 const robust = solveDarvPolarError(many, true) as DarvPolarErrorSolution
-console.log(round(toArcmin(robust.azimuthError), 4), round(toArcmin(robust.altitudeError), 4), robust.observations, robust.inliers) // 10, -5, 4, 4
+console.log(toArcmin(robust.azimuthError), toArcmin(robust.altitudeError), robust.observations, robust.inliers) // 10, -5, 4, 4
 ```
 
 ### Direction Alignment
@@ -12614,8 +12392,6 @@ import { matMulVec, matRodriguesRotation } from 'nebulosa/src/math/linear-algebr
 import { deg, toArcsec } from 'nebulosa/src/math/units/angle'
 import { applyDirectionAlignment, fitDirectionAlignment, fitMountAlignment, predictMountDirection, predictWorldDirection, type DirectionAlignmentSample } from 'nebulosa/src/observation/mount/alignment'
 import { createIdealAltAzGeometry, mountDirectionFromEncoders } from 'nebulosa/src/observation/mount/kinematics'
-
-const round = (value: number, digits = 3) => +value.toFixed(digits)
 
 // A mount base tilted by 11 degrees about the axis (0.2, 0.5, -0.3): the rotation to recover, and six mount-frame directions spread over the sky, rotated to their world directions.
 const truth = matRodriguesRotation([0.2, 0.5, -0.3], deg(11))
@@ -12631,38 +12407,38 @@ const samples: DirectionAlignmentSample[] = mountDirections.map((mount) => ({ mo
 
 // Two exact pairs are enough for a TRIAD fit that needs no refinement: no iteration, zero residual and a fit that converged.
 const exact = fitDirectionAlignment(samples.slice(0, 2))
-console.log(exact.iterations, exact.converged, round(exact.rms, 12), exact.sampleCount, exact.warnings) // 0, true, 0, 2, []
+console.log(exact.iterations, exact.converged, exact.rms, exact.sampleCount, exact.warnings) // 0, true, 0, 2, []
 console.log(exact.mountToWorld.every((value, i) => Math.abs(value - truth[i]) < 1e-10)) // true
 
 // Six exact pairs: the same rotation, a small condition number of the geometry and the transpose as the inverse.
 const full = fitDirectionAlignment(samples)
-console.log(round(full.rms, 12), round(full.conditionNumber, 3), full.rejectedCount, full.worldToMount[1] === full.mountToWorld[3]) // 0, 1.313, 0, true
+console.log(full.rms, full.conditionNumber, full.rejectedCount, full.worldToMount[1] === full.mountToWorld[3]) // 0, 1.313, 0, true
 
 // The direction predictions: a mount-frame direction goes to the world frame and back; the output vector is reused when one is given.
 const world = predictWorldDirection(full, [1, 1, 0])
 const out: [number, number, number] = [0, 0, 0]
 console.log(
-	world.map((value) => round(value, 5)),
-	predictMountDirection(full, world, out).map((value) => round(value, 5) + 0),
+	world.map((value) => value),
+	predictMountDirection(full, world, out).map((value) => value + 0),
 	out[0] === predictMountDirection(full, world, out)[0],
 ) // [0.76456, 0.64042, -0.07284], [0.70711, 0.70711, 0], true
 
 // Noisy world directions (offsets of a few arcseconds that alternate in sign) give a least-squares compromise: the weighted RMS and the largest residual in arcseconds, and the iterations spent.
 const noise = [5, -4, 3, -6, 2, -3].map((value) => deg(value / 3600))
 const noisy = fitDirectionAlignment(samples.map((sample, i) => ({ ...sample, world: [sample.world[0] + noise[i], sample.world[1] - noise[i] / 2, sample.world[2] + noise[(i + 1) % 6]] })))
-console.log(round(toArcsec(noisy.rms), 3), round(toArcsec(noisy.maximumResidual), 3), noisy.iterations, noisy.converged) // 2.675, 3.57, 3, true
+console.log(toArcsec(noisy.rms), toArcsec(noisy.maximumResidual), noisy.iterations, noisy.converged) // 2.675, 3.57, 3, true
 
 // An outlier of one degree on the fourth sample: the plain fit spreads it (its RMS), and the Tukey fit gives that sample a zero weight and recovers the rotation (the RMS of the others).
 const outlier = samples.map((sample, i) => (i === 3 ? { ...sample, world: [sample.world[0] + 0.017, sample.world[1], sample.world[2]] as [number, number, number] } : sample))
 const plain = fitDirectionAlignment(outlier)
 const tukey = fitDirectionAlignment(outlier, { robust: 'tukey' })
-console.log(round(toArcsec(plain.rms), 1), round(toArcsec(tukey.rms), 6), tukey.rejectedCount, round(toArcsec(tukey.maximumResidual), 1), tukey.warnings) // 693.1, 0, 1, 1961.7, [ 1 sample(s) received zero final weight ]
-console.log(Array.from(tukey.weights).map((value) => round(value, 3))) // [1, 1, 1, 0, 1, 1]
+console.log(toArcsec(plain.rms), toArcsec(tukey.rms), tukey.rejectedCount, toArcsec(tukey.maximumResidual), tukey.warnings) // 693.1, 0, 1, 1961.7, [ 1 sample(s) received zero final weight ]
+console.log(Array.from(tukey.weights).map((value) => value)) // [1, 1, 1, 0, 1, 1]
 
 // A zero base weight excludes a sample from the fit (a zero RMS for the other five), and the Huber option on the same data also drives the weight of the outlier to practically zero, since the clean samples are exact and the residual scale is then zero.
 const weighted = fitDirectionAlignment(outlier.map((sample, i) => ({ ...sample, weight: i === 3 ? 0 : 1 })))
 const huber = fitDirectionAlignment(outlier, { robust: 'huber', maxIterations: 50 })
-console.log(round(toArcsec(weighted.rms), 6), round(toArcsec(huber.rms), 2), round(huber.weights[3], 4)) // 0, 0.01, 0
+console.log(toArcsec(weighted.rms), toArcsec(huber.rms), huber.weights[3]) // 0, 0.01, 0
 
 // An alt-azimuth mount: the base geometry has its orientation and translation, and the encoder positions with the observed horizontal coordinates give the same fit. The observed coordinates are those of the mount-frame directions rotated by the unknown base.
 const geometry = createIdealAltAzGeometry({ baseToWorld: { rotation: matRodriguesRotation([1, 0, 0], 0.1), translation: [4, 5, 6] } })
@@ -12676,9 +12452,9 @@ const encoders = [
 const observations = encoders.map((position) => ({ encoders: position, ...enuVectorToHorizontal(matMulVec(truth, mountDirectionFromEncoders(ideal, position))) }))
 const mount = fitMountAlignment(geometry, observations)
 console.log(
-	round(toArcsec(mount.rms), 6),
+	toArcsec(mount.rms),
 	mount.sampleCount,
-	mount.mountToWorld.map((value, i) => round(value - truth[i], 9)).every((value) => value === 0),
+	mount.mountToWorld.map((value, i) => value - truth[i]).every((value) => value === 0),
 ) // 0, 4, true
 
 // Applying the fit replaces the base rotation only: the translation (meters) is the same array, and the encoder direction now matches the world one.
@@ -12686,7 +12462,7 @@ const aligned = applyDirectionAlignment(geometry, mount)
 console.log(
 	aligned.baseToWorld.translation === geometry.baseToWorld.translation,
 	aligned.baseToWorld.translation,
-	mountDirectionFromEncoders(aligned, encoders[0]).map((value) => round(value, 6)),
+	mountDirectionFromEncoders(aligned, encoders[0]).map((value) => value),
 	enuVectorToHorizontal(mountDirectionFromEncoders(aligned, encoders[0])).altitude === observations[0].altitude,
 ) // true, [4, 5, 6], [0.302843, 0.881583, 0.362075], true
 ```
@@ -12740,8 +12516,7 @@ const lcg = (seed: number) => () => {
 	return seed / 0x100000000
 }
 
-const round = (value: number) => +value.toFixed(3)
-const show = (offsets: readonly { rightAscension: number; declination: number }[]) => offsets.map((o) => [round(o.rightAscension), round(o.declination)])
+const show = (offsets: readonly { rightAscension: number; declination: number }[]) => offsets.map((o) => [o.rightAscension, o.declination])
 const take = (generator: DitherGenerator, count: number, amount: number, raOnly: boolean = false) => Array.from({ length: count }, () => generator.next(amount, raOnly))
 
 // The default generator is random and uses Math.random; with a seeded source it is reproducible, and each increment is within the amount (here 5 pixels).
@@ -12759,11 +12534,11 @@ const golden = new DitherGenerator({ mode: 'golden' })
 const goldenSteps = take(golden, 5, 2)
 let x = 0
 let y = 0
-const goldenPoints = goldenSteps.map((o) => [round((x += o.rightAscension)), round((y += o.declination))])
+const goldenPoints = goldenSteps.map((o) => [(x += o.rightAscension), (y += o.declination)])
 console.log(
 	show(goldenSteps),
 	goldenPoints,
-	goldenPoints.map(([px, py]) => round(Math.hypot(px, py))),
+	goldenPoints.map(([px, py]) => Math.hypot(px, py)),
 ) // [[-1.475, 1.351], [1.722, -4.169], [1.86, 5.567], [-6.047, -3.446], [7.712, -1.704]] are the increments, [[-1.475, 1.351], [0.247, -2.818], [2.108, 2.749], [-3.939, -0.697], [3.773, -2.4]] the points, and [2, 2.829, 3.464, 4, 4.472] their distances from the origin
 
 // The grid: the first ring of 8 cells in row-major order from the south-west corner (as absolute cells), then the first cells of ring two.
@@ -12799,7 +12574,7 @@ import { domeAzimuthError, intersectRaySphere, isDomeMoveRequired, mountPoseToOp
 import { createCanonicalEquatorialGeometry, mountPoseFromEncoders } from 'nebulosa/src/observation/mount/kinematics'
 import { deg } from 'nebulosa/src/math/units/angle'
 
-const degrees = (radians: number) => +((radians * 180) / Math.PI).toFixed(4)
+const degrees = (radians: number) => +((radians * 180) / Math.PI)
 
 // A ray from the center of a sphere of 2 m of radius, looking east at an altitude of 30 degrees, meets it at 2 m (the distance).
 const ray = { origin: [0, 0, 0], direction: [Math.cos(deg(30)), 0, Math.sin(deg(30))] } as const
@@ -12822,7 +12597,7 @@ const offAxis = solveDomeSlit({ origin: [0.6, 0, 0.5], direction: [0, 0, 1] }, d
 console.log(
 	degrees(offAxis.azimuth),
 	degrees(offAxis.altitude),
-	offAxis.point.map((v) => +v.toFixed(4)),
+	offAxis.point.map((v) => +v),
 ) // 90 72.5424 [0.6, 0, 1.9079]
 
 // From the mount: the kinematics gives the pose, whose origin and direction are the ray. An equatorial head with its pivots 0.4 m above the center of the dome and the optics 0.25 m off the axis.
@@ -12896,7 +12671,7 @@ console.log(
 	result.recommendedOvershoot,
 	result.confidence,
 	result.quality,
-	result.increasing.runs.map((run) => [run.direction, run.valid, +(run.steps ?? Number.NaN).toFixed(2), run.points.length]),
+	result.increasing.runs.map((run) => [run.direction, run.valid, +(run.steps ?? Number.NaN), run.points.length]),
 ) // 45 (30 times 1.5), a confidence of 0.867, quality good, and three increasing runs of 30, 30.08 and 29.94 steps with 8 probe points each
 
 // The compensation for the compensator of Focuser Backlash Compensation: IN is decreasing and OUT is increasing.
@@ -13099,11 +12874,11 @@ const selection = selectGuideStar(candidates, width, height, undefined, { maxAlt
 const primary = selection.primary!
 console.log(
 	[primary.x, primary.y],
-	+primary.score.toFixed(3),
+	+primary.score,
 	primary.nearestNeighborDistance,
 	primary.centerDistance,
 	primary.edgeDistance,
-	selection.alternatives.map((star) => [star.x, star.y, +star.score.toFixed(2)]),
+	selection.alternatives.map((star) => [star.x, star.y, +star.score]),
 	selection.candidates.length,
 	selection.rejectedReasons,
 	selection.qualityScore,
@@ -13117,7 +12892,7 @@ console.log(
 			{ x: 70, y: 95, hfd: 3, snr: 10, flux: 1, peak: 0.1 },
 		],
 		capture(0, 0),
-	).map((star) => +star.peak!.toFixed(4)),
+	).map((star) => +star.peak!),
 ) // [0.6342, 0.1]
 
 // The translation of a field of four stars that moved by (1.2, -0.5) pixels, and with one star that moved wrongly (the outlier is rejected and three matches remain).
@@ -13178,12 +12953,11 @@ for (let seconds = 60; seconds < 240; seconds++) {
 	assistant.addSample(frame, guider.processFrame(frame))
 }
 const result = assistant.result()
-const round = (value: number | undefined, digits = 3) => (value === undefined ? undefined : +value.toFixed(digits))
-console.log(result.sampleCount, result.elapsed, round(result.meanSnr, 1), round(result.meanStarMass, 0), round(result.meanHfd, 1), result.notes) // 240 239 40 1000 3 []
-console.log(round(result.motion.ra.rmsArcsec), round(result.motion.ra.driftRateArcsecPerMinute), round(result.motion.ra.peakArcsec), round(result.motion.dec.rmsArcsec), round(result.motion.dec.driftRateArcsecPerMinute), round(result.motion.dec.peakPx)) // 1.112 1.009 5.538 0.166 0.48 1.007
-console.log(round(result.motion.totalRmsArcsec), round(result.motion.raPeakPeakArcsec), round(result.motion.raMaxDriftRateArcsecPerSecond), round(result.motion.driftLimitingExposure), round(result.motion.polarAlignmentError), round(result.motion.decCorrectedRmsPx, 4)) // 1.124 5.699 0.173 1.153 2.115 0.0778
+console.log(result.sampleCount, result.elapsed, result.meanSnr, result.meanStarMass, result.meanHfd, result.notes) // 240 239 40 1000 3 []
+console.log(result.motion.ra.rmsArcsec, result.motion.ra.driftRateArcsecPerMinute, result.motion.ra.peakArcsec, result.motion.dec.rmsArcsec, result.motion.dec.driftRateArcsecPerMinute, result.motion.dec.peakPx) // 1.112 1.009 5.538 0.166 0.48 1.007
+console.log(result.motion.totalRmsArcsec, result.motion.raPeakPeakArcsec, result.motion.raMaxDriftRateArcsecPerSecond, result.motion.driftLimitingExposure, result.motion.polarAlignmentError, result.motion.decCorrectedRmsPx) // 1.124 5.699 0.173 1.153 2.115 0.0778
 console.log(result.recommendedRaMinMove, result.recommendedDecMinMove, result.recommendedMinExposure, result.recommendedMaxExposure) // 0.1 0.15 1 1
-for (const item of result.recommendations) console.log(item.kind, item.message, item.appliesTo, round(item.value), item.unit, item.actionable) // exposure 'Use exposure times in the range of 1.0s to 1.0s' exposure 1 s true; ra-min-move 'Try setting RA min-move to 0.10' raMinMove 0.1 px true; dec-min-move 'Try setting Dec min-move to 0.15' decMinMove 0.15 px true
+for (const item of result.recommendations) console.log(item.kind, item.message, item.appliesTo, item.value, item.unit, item.actionable) // exposure 'Use exposure times in the range of 1.0s to 1.0s' exposure 1 s true; ra-min-move 'Try setting RA min-move to 0.10' raMinMove 0.1 px true; dec-min-move 'Try setting Dec min-move to 0.15' decMinMove 0.15 px true
 
 // The DEC backlash test (without the seeing, which would hide the small motions): the caller executes each pulse on the mount (here a simulation with 300 ms of backlash that moves the star 0.005 pixel per millisecond after it is taken up) and gives the next frame. alignBacklashOrigin takes the origin from the frame captured before the first pulse.
 let seconds = 240
@@ -13276,14 +13050,13 @@ console.log(frames, [...phases], step.failure) // 16 ['raForwardPulse', 'raClear
 
 // The result: the axes (direction, rate in pixels per millisecond and image angle), the matrices, the DEC backlash and the origins.
 const result = step.completed!
-const round = (values: readonly number[]) => values.map((value) => +value.toFixed(5))
-console.log(result.ra.direction, +result.ra.ratePxPerMs.toFixed(5), +result.ra.angle.toFixed(4), result.dec.direction, +result.dec.ratePxPerMs.toFixed(5), +result.dec.angle.toFixed(4)) // WEST 0.004 0.3 NORTH 0.00369 1.8708
-console.log(round(result.imageMotion), round(result.imageToAxis), +result.determinant.toExponential(3), +result.backlash.toFixed(1), result.clearingSteps, result.warnings) // [0.00382, -0.00109, 0.00118, 0.00353] [238.83412, 73.88005, -80.03672, 258.73697] 0.00001477 650 4 ['ra_clearing_finished_near_threshold']
-console.log(result.startX, result.startY, +result.decStartX.toFixed(4), +result.decStartY.toFixed(4)) // 320 240 322.4839 240.7684
+console.log(result.ra.direction, +result.ra.ratePxPerMs, +result.ra.angle, result.dec.direction, +result.dec.ratePxPerMs, +result.dec.angle) // WEST 0.004 0.3 NORTH 0.00369 1.8708
+console.log(result.imageMotion, result.imageToAxis, +result.determinant.toExponential(3), +result.backlash, result.clearingSteps, result.warnings) // [0.00382, -0.00109, 0.00118, 0.00353] [238.83412, 73.88005, -80.03672, 258.73697] 0.00001477 650 4 ['ra_clearing_finished_near_threshold']
+console.log(result.startX, result.startY, +result.decStartX, +result.decStartY) // 320 240 322.4839 240.7684
 
 // The diagnostics: the steps of each leg, the net travel in pixels and the first RA sample.
 const diagnostics = calibrator.lastDiagnostics()
-console.log(diagnostics.raSteps, diagnostics.decSteps, diagnostics.clearingSteps, +diagnostics.raNetDistancePx.toFixed(3), +diagnostics.decNetDistancePx.toFixed(3), diagnostics.phaseHistory.length, diagnostics.decMotionDetected) // 5 6 4 13 12 37 true
+console.log(diagnostics.raSteps, diagnostics.decSteps, diagnostics.clearingSteps, +diagnostics.raNetDistancePx, +diagnostics.decNetDistancePx, diagnostics.phaseHistory.length, diagnostics.decMotionDetected) // 5 6 4 13 12 37 true
 console.log(diagnostics.raSamples[0]) // { step: 1, pulse: 650, pulseDirection: 'WEST', x: 322.484, y: 240.768, deltaX: 2.484, deltaY: 0.768, netDistance: 2.6, projectedDistance: 2.6, orthogonalDistance: 0, ... }
 console.log(calibrator.currentState) // { phase: 'completed', startX: 320, startY: 240, currentX: 318.94, currentY: 252.23, decStartX: 322.48, decStartY: 240.77, raSteps: 5, decSteps: 6, clearingSteps: 4, plannedClearingSteps: 5, decMotionDetected: true, backlash: 650, ... }
 
@@ -13294,9 +13067,9 @@ console.log(calibrator.currentState.phase) // idle
 
 // After a meridian flip the image turns 180 degrees: the matrices are flipped, and the directions stay unless the DEC output is reversed.
 const flipped = flipGuidingCalibration(result)
-console.log(flipped.ra.direction, flipped.dec.direction, round(flipped.imageMotion), round(flipped.imageToAxis)) // WEST NORTH [-0.00382, 0.00109, -0.00118, -0.00353] [-238.83412, -73.88005, 80.03672, -258.73697]
+console.log(flipped.ra.direction, flipped.dec.direction, flipped.imageMotion, flipped.imageToAxis) // WEST NORTH [-0.00382, 0.00109, -0.00118, -0.00353] [-238.83412, -73.88005, 80.03672, -258.73697]
 const reversed = flipGuidingCalibration(result, true)
-console.log(reversed.dec.direction, round(reversed.imageMotion)) // SOUTH [-0.00382, -0.00109, -0.00118, 0.00353]
+console.log(reversed.dec.direction, reversed.imageMotion) // SOUTH [-0.00382, -0.00109, -0.00118, 0.00353]
 
 // Other pulses and directions, a settle of one frame after each pulse, and no clearing leg.
 const custom = new GuidingCalibrator({ raPulse: 400, decPulse: 400, raDirection: 'EAST', decDirection: 'SOUTH', clearingMoveEnabled: false, settleFramesAfterMove: 1 })
@@ -13319,17 +13092,15 @@ import { decomposePolarError, IPolarPolarAlignment, projectGuidePoint, solveImag
 import { mountAdjustmentAxes } from 'nebulosa/src/observation/alignment/polaralignment'
 import { celestialPoleVector } from 'nebulosa/src/observation/alignment/polaralignment.util'
 
-const round = (value: number, digits = 3) => +value.toFixed(digits)
-
 // The closed-form fixed point of a similarity transform (rotation of 5 degrees, a shift of (12, -8) pixels): the point that the transform keeps in place, with the determinant of its 2 x 2 system. A mirrored transform has its own form.
 const fixed = solveSimilarityFixedPoint({ a: Math.cos(deg(5)), b: Math.sin(deg(5)), tx: 12, ty: -8, mirrored: false })
-console.log(fixed && [round(fixed.x), round(fixed.y), round(fixed.determinant, 5)]) // 97.615, 133.423, 0.00761
+console.log(fixed && [fixed.x, fixed.y, fixed.determinant]) // 97.615, 133.423, 0.00761
 console.log(solveSimilarityFixedPoint({ a: 0.8, b: 0.1, tx: -7, ty: 11, mirrored: true })) // { x: -32.857, y: 4.286, determinant: 0.35 }
 
 // A guide point inside the frame stays where it is, and one outside is clamped to the border of an inset of 20 pixels in the direction from the center, with a unit arrow.
 const inside = projectGuidePoint({ x: 400, y: 300 }, 800, 600)
 const outside = projectGuidePoint({ x: 1600, y: -200 }, 800, 600, 20)
-console.log(inside.onScreen, inside.arrow, outside.onScreen, outside.clamped, round(outside.arrow.x, 4), round(outside.arrow.y, 4)) // true, { x: 0, y: 0 }, false, { x: 780, y: 141.667 }, 0.9231, -0.3846
+console.log(inside.onScreen, inside.arrow, outside.onScreen, outside.clamped, outside.arrow.x, outside.arrow.y) // true, { x: 0, y: 0 }, false, { x: 780, y: 141.667 }, 0.9231, -0.3846
 
 // A camera that is offset by 1.6 degrees from the axis of a mount at a site of 22.5 degrees of south latitude, with a base 30 arcminutes off in azimuth and -18 in altitude: the synthetic solutions of the camera (a 1280 x 1024 pixels frame of 30 arcseconds per pixel) before and after rotating the RA axis by 25 degrees.
 const location = geodeticLocation(deg(-45.5), deg(-22.5))
@@ -13387,7 +13158,7 @@ const second = frame(times[1], arcmin(30), arcmin(-18), deg(25))
 
 // The fixed point of the WCS transform between the two frames: the image position of the mount axis, the solver, its iterations and the residual in pixels (the first seed is the center of the frame when none is given).
 const axis = solveImageFixedPoint(first, second)
-console.log(axis && [round(axis.x, 1), round(axis.y, 1), axis.solver, axis.iterations, round(axis.residual, 6)]) // 535.6, 351.4, gauss-newton, 1, 0.040286
+console.log(axis && [axis.x, axis.y, axis.solver, axis.iterations, axis.residual]) // 535.6, 351.4, gauss-newton, 1, 0.040286
 
 // The engine: the first frame only starts the session and asks for the RA rotation, and a second one, 25 degrees of RA rotation later, calibrates the axis and measures the error at once: the total, the altitude and the azimuth components in arcminutes, the action and the position of the markers.
 const engine = new IPolarPolarAlignment({ refraction: false, minimumAcceptedRaRotation: deg(0.5), completionThreshold: arcmin(4) })
@@ -13397,37 +13168,37 @@ const calibrated = engine.update({ time: times[1], solution: second })
 console.log(
 	calibrated.stage,
 	calibrated.action,
-	[calibrated.totalError, calibrated.altitudeError, calibrated.azimuthError].map((value) => round(toArcmin(value), 2)),
+	[calibrated.totalError, calibrated.altitudeError, calibrated.azimuthError].map((value) => toArcmin(value)),
 	calibrated.convergence,
 ) // INITIAL_AXIS_ESTIMATION, ADJUST_AZIMUTH_POSITIVE, [33.21, 18.17, -27.8], false
 console.log(
-	[calibrated.currentPoint.x, calibrated.currentPoint.y, calibrated.targetPoint.x, calibrated.targetPoint.y].map((value) => round(value, 1)),
+	[calibrated.currentPoint.x, calibrated.currentPoint.y, calibrated.targetPoint.x, calibrated.targetPoint.y].map((value) => value),
 	calibrated.onScreenCurrent,
 	calibrated.onScreenTarget,
 ) // [535.6, 351.4, 595.8, 323.3], true, true
-console.log(calibrated.diagnostics.solver, calibrated.diagnostics.solverIterations, round(toDeg(calibrated.diagnostics.acceptedRaRotation!), 3), calibrated.diagnostics.warnings, calibrated.diagnostics.refractionEnabled) // gauss-newton, 1, 0.691, [], false
+console.log(calibrated.diagnostics.solver, calibrated.diagnostics.solverIterations, toDeg(calibrated.diagnostics.acceptedRaRotation!), calibrated.diagnostics.warnings, calibrated.diagnostics.refractionEnabled) // gauss-newton, 1, 0.691, [], false
 
 // The user turns the knobs while new frames are solved: the calibrated axis pixel is kept, and the error and the target marker follow each solve (the next step leaves 10 and -6 arcminutes; the last one aligns the pole and completes the session).
 const refined = engine.update({ time: times[2], solution: frame(times[2], arcmin(10), arcmin(-6), deg(25)) })
 console.log(
 	refined.stage,
 	refined.action,
-	[refined.totalError, refined.altitudeError, refined.azimuthError].map((value) => round(toArcmin(value), 2)),
-	round(refined.currentPoint.x, 1) === round(calibrated.currentPoint.x, 1),
+	[refined.totalError, refined.altitudeError, refined.azimuthError].map((value) => toArcmin(value)),
+	refined.currentPoint.x === calibrated.currentPoint.x,
 ) // REFINEMENT, ADJUST_AZIMUTH_POSITIVE, [11.16, 6.13, -9.32], true
 const done = engine.update({ time: times[3], solution: frame(times[3], 0, 0, deg(25)) })
-console.log(done.stage, done.action, round(toArcmin(done.totalError), 3), done.convergence) // COMPLETE, ALIGNMENT_COMPLETE, 0.151, true
+console.log(done.stage, done.action, toArcmin(done.totalError), done.convergence) // COMPLETE, ALIGNMENT_COMPLETE, 0.151, true
 
 // The state of the session: the stage, the calibrated axis pixel and unit vectors in the inertial frame, and the decomposition of the last measurement computed again from them.
 const state = engine.getState()
 console.log(
 	state.stage,
-	state.axisPixel && [round(state.axisPixel.x, 1), round(state.axisPixel.y, 1)],
-	state.axisVector!.map((value) => round(value, 5)),
+	state.axisPixel && [state.axisPixel.x, state.axisPixel.y],
+	state.axisVector!.map((value) => value),
 	state.latestResult === done,
 ) // COMPLETE, [535.6, 351.4], [-0.00252, -0.00004, -1], true
 const metrics = decomposePolarError(state.axisVector!, state.targetVector!, times[3], false, location)
-console.log([metrics.totalError, metrics.altitudeError, metrics.azimuthError].map((value) => round(toArcmin(value), 3))) // [0.151, 0.126, -0.082]
+console.log([metrics.totalError, metrics.altitudeError, metrics.azimuthError].map((value) => toArcmin(value))) // [0.151, 0.126, -0.082]
 
 // The reset begins a new session, which accepts a first frame again; a first update after it asks for the second position.
 engine.reset()
@@ -13442,8 +13213,6 @@ console.log(engine.update({ time: times[0], solution: first }).action) // ROTATE
 import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
 import { arcsec, deg, hour, toArcsec } from 'nebulosa/src/math/units/angle'
 import { buildLocalPointingResidual, DEFAULT_LOCAL_RESIDUAL_OPTIONS, predictLocalPointingResidual, resolveLocalResidualOptions } from 'nebulosa/src/observation/mount/pointing.local'
-
-const round = (value: number, digits = 3) => +value.toFixed(digits)
 
 // The defaults and the resolution: the neighbors are truncated and not below 3, and the minimum sample count is not below 1.
 console.log(DEFAULT_LOCAL_RESIDUAL_OPTIONS) // { enabled: false, neighbors: 6, minimumSamples: 30 }
@@ -13473,20 +13242,20 @@ console.log(buildLocalPointingResidual(directions, pierSides, residualsDx, resid
 
 // The layer: the copies of the training data, the neighbors and the characteristic spacing, in degrees.
 const model = buildLocalPointingResidual(directions, pierSides, residualsDx, residualsDy, enabled)!
-console.log(model.directions.length, model.pierSides.length, model.neighbors, round(model.scale * 57.29577951, 3)) // 126, 42, 6, 26.42
+console.log(model.directions.length, model.pierSides.length, model.neighbors, model.scale * 57.29577951) // 126, 42, 6, 26.42
 
 // At a training sample the average is a smooth mix with its neighbors: the east component, in arcseconds, at the sample of the bump (hour angle 1 h, declination 28 degrees) and at one far from it; the north component is zero. The data of the model are copies, so changing an input afterwards does not change it (the last value is false).
 const atBump = predictLocalPointingResidual(model, hour(1), deg(28), 'EAST')
 const away = predictLocalPointingResidual(model, hour(-3), deg(-20), 'EAST')
 residualsDx[0] = 1
-console.log(round(toArcsec(atBump.dx), 3), round(toArcsec(atBump.dy), 3), round(toArcsec(away.dx), 5), model.residualsDx[0] === 1) // 8.148, 0, 0.00812, false
+console.log(toArcsec(atBump.dx), toArcsec(atBump.dy), toArcsec(away.dx), model.residualsDx[0] === 1) // 8.148, 0, 0.00812, false
 
 // Between samples the result is an interpolation of the neighbors; the same position asked with no pier side or with the side of the west gives its own neighborhood, since the neighbors are taken from the requested side only.
-console.log(['EAST', 'WEST', 'NEITHER', undefined].map((side) => round(toArcsec(predictLocalPointingResidual(model, hour(0.5), deg(37), side as 'EAST' | 'WEST' | 'NEITHER' | undefined).dx), 3))) // [9.424, 15.79, 13.785, 13.785]
+console.log(['EAST', 'WEST', 'NEITHER', undefined].map((side) => toArcsec(predictLocalPointingResidual(model, hour(0.5), deg(37), side as 'EAST' | 'WEST' | 'NEITHER' | undefined).dx))) // [9.424, 15.79, 13.785, 13.785]
 
 // Toward the edge of the sampled region the layer fades out: at a declination of 85 degrees (25 degrees beyond the last row of the grid) the east component is smaller than at 76 degrees, both in arcseconds, and it vanishes smoothly as the neighborhood stretches beyond the characteristic spacing.
 const beyond = predictLocalPointingResidual(model, hour(1), deg(85), 'EAST')
-console.log(round(toArcsec(beyond.dx), 5), round(toArcsec(predictLocalPointingResidual(model, hour(1), deg(76), 'EAST').dx), 5)) // 0.61456, 1.04214
+console.log(toArcsec(beyond.dx), toArcsec(predictLocalPointingResidual(model, hour(1), deg(76), 'EAST').dx)) // 0.61456, 1.04214
 ```
 
 ### Meridian Flip Lifecycle
@@ -13550,11 +13319,11 @@ console.log(transitionMeridianFlip(policy, failed, { type: 'RESET' })) // { phas
 import { deg, hour } from 'nebulosa/src/math/units/angle'
 import { computeHourAngle, computeLocalSiderealTime, evaluateMeridianFlip, type MeridianFlipPolicy, type MeridianFlipSnapshot } from 'nebulosa/src/observation/mount/meridian.flip'
 
-const degrees = (radians: number) => +((radians * 180) / Math.PI).toFixed(4)
+const degrees = (radians: number) => +((radians * 180) / Math.PI)
 
 // The local sidereal time from the Greenwich one (10 h) and the longitude of the site (45 degrees west, so -45 degrees = -3 h), and the hour angle of a target at RA 8 h: 10 - 3 - 8 = -1 h (east of the meridian, before it).
 const lst = computeLocalSiderealTime(hour(10), deg(-45))
-console.log(+(lst / hour(1)).toFixed(4), +(computeHourAngle(lst, hour(8)) / hour(1)).toFixed(4), +(computeHourAngle(hour(1), hour(23)) / hour(1)).toFixed(4)) // 7 -1 2
+console.log(+(lst / hour(1)), +(computeHourAngle(lst, hour(8)) / hour(1)), +(computeHourAngle(hour(1), hour(23)) / hour(1))) // 7 -1 2
 
 // A policy: prepare at -5 degrees of hour angle, flip at 0 (the meridian), and never after 7.5 degrees; the mount reports EAST before and WEST after the flip.
 const policy: MeridianFlipPolicy = { enabled: true, prepareAt: deg(-5), flipAt: 0, latestAt: deg(7.5), beforeFlipPierSide: 'EAST', afterFlipPierSide: 'WEST' }
@@ -13597,8 +13366,7 @@ show({ localSiderealTime: hour(0.01), target: { rightAscension: hour(23.99) }, p
 import { arcmin, deg, hour, toArcmin, toDeg } from 'nebulosa/src/math/units/angle'
 import { mosaicBasis, planMosaic } from 'nebulosa/src/observation/framing/mosaic.plan'
 
-const round = (value: number, digits = 3) => +value.toFixed(digits)
-const sky = (coordinate: { ra: number; dec: number }) => [round(toDeg(coordinate.ra) / 15, 4), round(toDeg(coordinate.dec), 4)]
+const sky = (coordinate: { ra: number; dec: number }) => [toDeg(coordinate.ra) / 15, toDeg(coordinate.dec)]
 
 // A 3 x 2 degree region around M31 (RA 0.712 h, Dec +41.27 degrees) with a camera that covers 1.2 x 0.9 degree and an overlap of 10% in both axes: the grid, the effective coverage in degrees and the panel centers (hours and degrees) in capture order.
 const plan = planMosaic({ center: { ra: hour(0.712), dec: deg(41.27) }, panel: { width: deg(1.2), height: deg(0.9) }, region: { width: deg(3), height: deg(2) }, overlap: { x: 0.1, y: 0.1 } })
@@ -13606,9 +13374,9 @@ console.log(
 	plan.columns,
 	plan.rows,
 	plan.panels.length,
-	[plan.coverage.width, plan.coverage.height].map((value) => round(toDeg(value), 4)),
+	[plan.coverage.width, plan.coverage.height].map((value) => toDeg(value)),
 	plan.overlap,
-	round(toDeg(plan.positionAngle), 4),
+	toDeg(plan.positionAngle),
 ) // 3 3 9 [ 3.3592, 2.5196 ] { x: 0.1, y: 0.1 } 0
 console.log(plan.panels.map((panel) => [panel.index, panel.row, panel.column, ...sky(panel.center)])) // [ [ 0, 0, 0, 0.615, 42.0708 ], [ 1, 0, 1, 0.712, 42.08 ], [ 2, 0, 2, 0.809, 42.0708 ], [ 3, 1, 0, 0.6162, 41.2611 ], [ 4, 1, 1, 0.712, 41.27 ], [ 5, 1, 2, 0.8078, 41.2611 ], [ 6, 2, 0, 0.6174, 40.4514 ], [ 7, 2, 1, 0.712, 40.46 ], [ 8, 2, 2, 0.8066, 40.4514 ] ]
 
@@ -13621,7 +13389,7 @@ console.log(plan.panels.map((panel) => `${panel.row}${panel.column}`).join(' '),
 
 // A position angle of 30 degrees rotates the whole grid about the center: the angle is normalized to (-PI, PI] (a 390 degree input gives the same plan), and the first panel center moves.
 const rotated = planMosaic({ center: { ra: hour(0.712), dec: deg(41.27) }, panel: { width: deg(1.2), height: deg(0.9) }, region: { width: deg(3), height: deg(2) }, overlap: { x: 0.1, y: 0.1 }, positionAngle: deg(390) })
-console.log(round(toDeg(rotated.positionAngle), 4), sky(rotated.panels[0].center), rotated.columns, rotated.rows) // 30 [ 0.6641, 42.5091 ] 3 3
+console.log(toDeg(rotated.positionAngle), sky(rotated.panels[0].center), rotated.columns, rotated.rows) // 30 [ 0.6641, 42.5091 ] 3 3
 
 // A region that already fits in one panel gives a single panel centered on the target, and the plane stretches the sky with the distance, so a 2 degree region with panels of 1 degree needs 3 columns while 1.99 degrees fit in 2 (the counts of both); an RA of 7 turns plus 3 hours is normalized to 3 hours.
 const single = planMosaic({ center: { ra: hour(3) + 7 * 2 * Math.PI, dec: deg(10) }, panel: { width: deg(2), height: deg(2) }, region: { width: deg(1), height: deg(1) } })
@@ -13630,13 +13398,13 @@ const wider = planMosaic({ center: { ra: hour(3), dec: deg(10) }, panel: { width
 console.log(single.panels.length, sky(single.center), sky(single.panels[0].center), exact.columns, exact.rows, wider.columns, wider.rows) // 1 [ 3, 10 ] [ 3, 10 ] 2 2 3 3
 
 // The coverage is a plane extent converted back to an angle, so it is at least the request: the coverage of the 1.99 degree plan (2 panels without overlap) in degrees.
-console.log([exact.coverage.width, exact.coverage.height].map((value) => round(toDeg(value), 5))) // [ 1.99985, 1.99985 ]
+console.log([exact.coverage.width, exact.coverage.height].map((value) => toDeg(value))) // [ 1.99985, 1.99985 ]
 
 // The panel step in the sky shrinks with the overlap: the separation between the first two panel centers of one row for 0, 25 and 50% in arcminutes (a row at the center of a mosaic of one row).
 console.log(
 	[0, 0.25, 0.5].map((x) => {
 		const row = planMosaic({ center: { ra: hour(6), dec: 0 }, panel: { width: deg(1), height: deg(1) }, region: { width: deg(2), height: deg(1) }, overlap: { x } })
-		return round(toArcmin(row.panels[1].center.ra - row.panels[0].center.ra), 3)
+		return toArcmin(row.panels[1].center.ra - row.panels[0].center.ra)
 	}),
 ) // [ 59.995, 44.999, 29.998 ]
 
@@ -13647,8 +13415,8 @@ console.log(
 	[basis.cx, basis.cy, basis.cz],
 	[basis.ux, basis.uy, basis.uz],
 	[basis.vx, basis.vy, basis.vz],
-	[turned.ux, turned.uy, turned.uz].map((value) => round(value, 12)),
-	[turned.vx, turned.vy, turned.vz].map((value) => round(value, 12)),
+	[turned.ux, turned.uy, turned.uz].map((value) => value),
+	[turned.vx, turned.vy, turned.vz].map((value) => value),
 ) // [ 1, 0, 0 ] [ 0, 1, -0 ] [ -0, 0, 1 ] [ 0, 0, -1 ] [ 0, 1, 0 ]
 ```
 
@@ -13690,47 +13458,46 @@ console.log(evaluateMountLimits({ azimuth: deg(400) }, { azimuth: [deg(-90), deg
 import { createCanonicalEquatorialGeometry, createIdealAltAzGeometry, mountDirectionFromEncoders, mountPoseFromEncoders, solveMountEncoders } from 'nebulosa/src/observation/mount/kinematics'
 import { deg } from 'nebulosa/src/math/units/angle'
 
-const round = (value: readonly number[]) => value.map((v) => +v.toFixed(6))
 const degrees = (radians: number) => (radians * 180) / Math.PI
 
 // An ideal altitude-azimuth head in east, north and up: azimuth 0 looks north, 90 degrees is east, and altitude 90 degrees is the zenith.
 const altaz = createIdealAltAzGeometry()
-console.log(round(mountDirectionFromEncoders(altaz, { primary: 0, secondary: 0 })), round(mountDirectionFromEncoders(altaz, { primary: deg(90), secondary: 0 })), round(mountDirectionFromEncoders(altaz, { primary: deg(90), secondary: deg(90) }))) // [0, 1, 0] (north), [1, 0, 0] (east) and [0, 0, 1] (zenith)
+console.log(mountDirectionFromEncoders(altaz, { primary: 0, secondary: 0 }), mountDirectionFromEncoders(altaz, { primary: deg(90), secondary: 0 }), mountDirectionFromEncoders(altaz, { primary: deg(90), secondary: deg(90) })) // [0, 1, 0] (north), [1, 0, 0] (east) and [0, 0, 1] (zenith)
 
 // The ideal equatorial head in the Taki frame: the secondary is the declination and the primary the west-positive hour angle.
 const equatorial = createCanonicalEquatorialGeometry()
-console.log(round(mountDirectionFromEncoders(equatorial, { primary: 0, secondary: 0 })), round(mountDirectionFromEncoders(equatorial, { primary: 0, secondary: deg(90) })), round(mountDirectionFromEncoders(equatorial, { primary: deg(90), secondary: 0 }))) // [1, 0, 0], [0, 0, 1] (the pole) and [0, -1, 0] (an hour angle of 90 degrees turns the equator direction about the pole axis)
+console.log(mountDirectionFromEncoders(equatorial, { primary: 0, secondary: 0 }), mountDirectionFromEncoders(equatorial, { primary: 0, secondary: deg(90) }), mountDirectionFromEncoders(equatorial, { primary: deg(90), secondary: 0 })) // [1, 0, 0], [0, 0, 1] (the pole) and [0, -1, 0] (an hour angle of 90 degrees turns the equator direction about the pole axis)
 
 // The direction can be written into a buffer, which is also the returned value.
 const out: [number, number, number] = [0, 0, 0]
-console.log(mountDirectionFromEncoders(altaz, { primary: deg(45), secondary: deg(30) }, out) === out, round(out)) // true [0.612372, 0.612372, 0.5]
+console.log(mountDirectionFromEncoders(altaz, { primary: deg(45), secondary: deg(30) }, out) === out, out) // true [0.612372, 0.612372, 0.5]
 
 // The complete pose, with a secondary pivot and an optical origin displaced from the primary axis (metres) and a zero offset of the secondary encoder.
 const offset = createCanonicalEquatorialGeometry({ secondaryPivot: [0, 0, 0.1], opticalOrigin: [0.2, 0, 0.1], secondaryIndex: deg(1) })
 const pose = mountPoseFromEncoders(offset, { primary: deg(30), secondary: deg(20) })
-console.log(round(pose.origin), round(pose.direction), round(pose.primaryAxis), round(pose.secondaryAxis), round(pose.secondaryPivot)) // origin [0.163769, -0.094552, 0.165114], direction [0.818843, -0.472759, 0.325568], primary axis [0, 0, 1], secondary axis [0.5, 0.866025, 0] and secondary pivot [0, 0, 0.1]
+console.log(pose.origin, pose.direction, pose.primaryAxis, pose.secondaryAxis, pose.secondaryPivot) // origin [0.163769, -0.094552, 0.165114], direction [0.818843, -0.472759, 0.325568], primary axis [0, 0, 1], secondary axis [0.5, 0.866025, 0] and secondary pivot [0, 0, 0.1]
 
 // The inverse: the encoders that point the equatorial head at the direction of an hour angle of 40 degrees and a declination of 25 degrees.
 const target = mountDirectionFromEncoders(equatorial, { primary: deg(40), secondary: deg(25) })
 const solution = solveMountEncoders(equatorial, target)
-console.log(solution.converged, solution.iterations, +degrees(solution.primary).toFixed(6), +degrees(solution.secondary).toFixed(6), solution.residual < 1e-9) // true after 6 iterations, hour angle 40 and declination 25 degrees, residual below 1e-9 radians
+console.log(solution.converged, solution.iterations, +degrees(solution.primary), +degrees(solution.secondary), solution.residual < 1e-9) // true after 6 iterations, hour angle 40 and declination 25 degrees, residual below 1e-9 radians
 
 // The direction does not need to be normalized.
 const unnormalized = solveMountEncoders(altaz, [3, 4, 5])
-console.log(unnormalized.converged, round([degrees(unnormalized.primary), degrees(unnormalized.secondary)])) // true [36.869898, 45] degrees (azimuth and altitude of the direction 3, 4, 5)
+console.log(unnormalized.converged, [degrees(unnormalized.primary), degrees(unnormalized.secondary)]) // true [36.869898, 45] degrees (azimuth and altitude of the direction 3, 4, 5)
 
 // A seed near the other mechanical branch (the secondary beyond the pole) selects it.
 const flipped = solveMountEncoders(equatorial, target, { initial: { primary: deg(220), secondary: deg(155) } })
-console.log(flipped.converged, round([degrees(flipped.primary), degrees(flipped.secondary)])) // true [220, 155]: the seed already is a solution, and the other branch of the same direction is kept
+console.log(flipped.converged, [degrees(flipped.primary), degrees(flipped.secondary)]) // true [220, 155]: the seed already is a solution, and the other branch of the same direction is kept
 
 // The ranges bound the search to a branch (the secondary is kept between 0 and 90 degrees), and the tolerance, the iteration cap and the step can be changed.
 const ranged = solveMountEncoders(equatorial, target, { secondaryRange: [0, deg(90)], tolerance: 1e-12, maxIterations: 64, maxStep: deg(10) })
-console.log(ranged.converged, round([degrees(ranged.primary), degrees(ranged.secondary)])) // true [40, 25]
+console.log(ranged.converged, [degrees(ranged.primary), degrees(ranged.secondary)]) // true [40, 25]
 
 // A zero offset of the primary encoder is part of the model: the solution is the encoder, not the physical angle.
 const indexed = createCanonicalEquatorialGeometry({ primaryIndex: deg(10) })
 const back = solveMountEncoders(indexed, mountDirectionFromEncoders(indexed, { primary: deg(25), secondary: deg(15) }))
-console.log(back.converged, round([degrees(back.primary), degrees(back.secondary)])) // true [25, 15]
+console.log(back.converged, [degrees(back.primary), degrees(back.secondary)]) // true [25, 15]
 ```
 
 ### Mount Tracking Rates
@@ -13791,14 +13558,14 @@ console.log(ephemeris.validTime, ephemeris.generation) // [2460000.5, 2460000.50
 // The finite-difference rate in the middle of the table (a centered stencil with the acceleration), in arcseconds per second, and at the first sample (one-sided).
 const middle = estimateNonSiderealDerivative(ephemeris, timeShift(start, 300 / 86400))
 console.log(
-	middle.rate!.map((value) => +(value / arcsec(1)).toFixed(4)),
+	middle.rate!.map((value) => +(value / arcsec(1))),
 	middle.step,
 	middle.oneSided,
 	middle.acceleration !== undefined,
 ) // [0.1667, 0.0833] 30 false true
 const boundary = estimateNonSiderealDerivative(ephemeris, start, { step: 10 })
 console.log(
-	boundary.rate!.map((value) => +(value / arcsec(1)).toFixed(4)),
+	boundary.rate!.map((value) => +(value / arcsec(1))),
 	boundary.step,
 	boundary.oneSided,
 	DEFAULT_NONSIDEREAL_DERIVATIVE_STEP_SECONDS,
@@ -13807,10 +13574,10 @@ console.log(
 // The east and north offset from an anchor to a position 0.01 degree away in RA and in DEC, in arcseconds, and the unit vector of a position.
 const offset = nonSiderealAngularOffset({ rightAscension: deg(100), declination: deg(20) }, { rightAscension: deg(100.01), declination: deg(20.01) })
 console.log(
-	+(offset.east / arcsec(1)).toFixed(3),
-	+(offset.north / arcsec(1)).toFixed(3),
-	+(offset.separation / arcsec(1)).toFixed(3),
-	nonSiderealUnitVector({ rightAscension: deg(90), declination: 0 }).map((value) => +value.toFixed(6)),
+	+(offset.east / arcsec(1)),
+	+(offset.north / arcsec(1)),
+	+(offset.separation / arcsec(1)),
+	nonSiderealUnitVector({ rightAscension: deg(90), declination: 0 }).map((value) => +value),
 	nonSiderealGenerationOf(ephemeris),
 ) // 33.827 36.001 49.4 [0, 1, 0] 0
 
@@ -13834,10 +13601,10 @@ for (let i = 0; i < 3; i++) {
 	console.log(
 		result.measurement?.x,
 		result.measurement?.y,
-		result.targetOffset?.map((value) => +value.toFixed(4)),
+		result.targetOffset?.map((value) => +value),
 		diagnostic.state,
-		diagnostic.rate?.map((value) => +(value / arcsec(1)).toFixed(4)),
-		diagnostic.separation === undefined ? undefined : +(diagnostic.separation / arcsec(1)).toFixed(3),
+		diagnostic.rate?.map((value) => +(value / arcsec(1))),
+		diagnostic.separation === undefined ? undefined : +(diagnostic.separation / arcsec(1)),
 	) // 320 240 [0, 0] active undefined undefined, then 320 240 [0.8333, -0.4167] active [0.1667, 0.0833] 1.863, then 320 240 [1.6667, -0.8333] active [0.1667, 0.0833] 3.727
 }
 
@@ -13871,37 +13638,35 @@ for (let i = 0; i < 3; i++) {
 import { deg } from 'nebulosa/src/math/units/angle'
 import { moonInterference, observationScore } from 'nebulosa/src/astronomy/planning'
 
-const round = (value: number) => +value.toFixed(4)
-
 // A target at 60 degrees of altitude (the factor saturates) in the middle of the night, with no Moon: only altitude and airmass count, and the airmass from Kasten and Young at 60 degrees is 1.15, so the score is a little below 1.
-console.log(round(observationScore({ altitude: deg(60) }))) // 0.9607
+console.log(observationScore({ altitude: deg(60) })) // 0.9607
 
 // Altitude ramp: 0 at the horizon, half at 30 degrees, and the same scale as a percentage.
-console.log(observationScore({ altitude: 0 }), round(observationScore({ altitude: deg(30) })), round(observationScore({ altitude: deg(30) }, { scale: 100 }))) // 0 0.5014 50.1425
+console.log(observationScore({ altitude: 0 }), observationScore({ altitude: deg(30) }), observationScore({ altitude: deg(30) }, { scale: 100 })) // 0 0.5014 50.1425
 
 // The sky factors: a Sun at -15 degrees is in the middle of the twilight ramp (0.5), a Sun at -20 degrees is dark (1).
-console.log(round(observationScore({ altitude: deg(60), sunAltitude: deg(-15) })), round(observationScore({ altitude: deg(60), sunAltitude: deg(-20) }))) // 0.7728 0.9736
+console.log(observationScore({ altitude: deg(60), sunAltitude: deg(-15) }), observationScore({ altitude: deg(60), sunAltitude: deg(-20) })) // 0.7728 0.9736
 
 // A gibbous Moon (80% lit) 45 degrees high: its interference on a target 20 degrees away, 90 degrees away and on the opposite side.
 const near = moonInterference(0.8, deg(45), deg(20))
 const far = moonInterference(0.8, deg(45), deg(90))
-console.log(round(near), round(far), round(moonInterference(0.8, deg(45), deg(-20))), moonInterference(0.8, deg(-5), 0), moonInterference(0, deg(45), 0)) // 0.453 0.0063 0.453 0 0
-console.log(round(observationScore({ altitude: deg(60), moonInterference: near })), round(observationScore({ altitude: deg(60), moonInterference: far }))) // 0.7963 0.9716
+console.log(near, far, moonInterference(0.8, deg(45), deg(-20)), moonInterference(0.8, deg(-5), 0), moonInterference(0, deg(45), 0)) // 0.453 0.0063 0.453 0 0
+console.log(observationScore({ altitude: deg(60), moonInterference: near }), observationScore({ altitude: deg(60), moonInterference: far })) // 0.7963 0.9716
 
 // The separation wraps: 340 degrees is 20 degrees on the other side, and a full Moon at the zenith on the target is 1 (the score is then 0).
-console.log(round(moonInterference(0.8, deg(45), deg(340))), moonInterference(1, deg(90), 0), observationScore({ altitude: deg(60), moonInterference: 1 })) // 0.453 1 0
+console.log(moonInterference(0.8, deg(45), deg(340)), moonInterference(1, deg(90), 0), observationScore({ altitude: deg(60), moonInterference: 1 })) // 0.453 1 0
 
 // The duration: 3 hours available for a 4 hours plan is 0.75; the ratio is capped at 1 and a zero requirement is satisfied.
-console.log(round(observationScore({ altitude: deg(60), availableDurationHours: 3, requiredDurationHours: 4 })), round(observationScore({ altitude: deg(60), availableDurationHours: 9, requiredDurationHours: 4 })), round(observationScore({ altitude: deg(60), availableDurationHours: 0, requiredDurationHours: 0 }))) // 0.8846 0.9736 0.9736
+console.log(observationScore({ altitude: deg(60), availableDurationHours: 3, requiredDurationHours: 4 }), observationScore({ altitude: deg(60), availableDurationHours: 9, requiredDurationHours: 4 }), observationScore({ altitude: deg(60), availableDurationHours: 0, requiredDurationHours: 0 })) // 0.8846 0.9736 0.9736
 
 // An airmass measured by the caller (for example from an atmosphere model) replaces the derived one; 2 is in the middle of the airmass ramp.
-console.log(round(observationScore({ altitude: deg(60), airmass: 2 })), round(observationScore({ altitude: deg(60), airmass: 1 }))) // 0.7071 1
+console.log(observationScore({ altitude: deg(60), airmass: 2 }), observationScore({ altitude: deg(60), airmass: 1 })) // 0.7071 1
 
 // Options: an observatory with a horizon limit at 20 degrees that wants 45 degrees to be the best altitude, and accepts an airmass up to 2.
-console.log(round(observationScore({ altitude: deg(30) }, { minimumAltitude: deg(20), goodAltitude: deg(45), maximumAirmass: 2 }))) // 0.0478
+console.log(observationScore({ altitude: deg(30) }, { minimumAltitude: deg(20), goodAltitude: deg(45), maximumAirmass: 2 })) // 0.0478
 
 // A full evaluation of a target: 50 degrees high, a Sun at -19 degrees, the same Moon, and a plan that fits only partly.
-console.log(round(observationScore({ altitude: deg(50), sunAltitude: deg(-19), moonInterference: far, availableDurationHours: 3, requiredDurationHours: 4 }, { scale: 100 }))) // 87.9622
+console.log(observationScore({ altitude: deg(50), sunAltitude: deg(-19), moonInterference: far, availableDurationHours: 3, requiredDurationHours: 4 }, { scale: 100 })) // 87.9622
 ```
 
 ### Pointing Model Fit and Correction
@@ -13918,19 +13683,17 @@ import { arcsec, deg, hour, normalizeAngle, toArcsec } from 'nebulosa/src/math/u
 import { applyPointingOffset, computePointingError, correctPointingCoordinate, fitPointingModel, MountPointing, POINTING_ERROR_REPRESENTATIONS, POINTING_MODEL_STRATEGIES, predictPointingModelError, selectPointingStrategy, type PointingSample } from 'nebulosa/src/observation/mount/pointing'
 import { extractPointingContext, predictSemiPhysicalOffset, SEMI_PHYSICAL_TERM_NAMES } from 'nebulosa/src/observation/mount/pointing.basis'
 
-const round = (value: number, digits = 3) => +value.toFixed(digits)
-
 // The strategies, the representations and the plain error of a sample: a target at RA 3 h and Dec 40 degrees that landed 30 arcseconds to the east on the sky (the dRA·cos(Dec) of 30 arcseconds is a little more than the gnomonic offset) and 12 arcseconds to the north: the offsets in arcseconds in both representations and the separation.
 console.log(POINTING_MODEL_STRATEGIES, POINTING_ERROR_REPRESENTATIONS) // [ 'semiPhysical', 'hybrid', 'empirical' ] [ 'vectorTangent', 'smallAngle' ]
 const target = { rightAscension: hour(3), declination: deg(40) }
 const solved = applyPointingOffset(target.rightAscension, target.declination, arcsec(30), arcsec(12), 'smallAngle')
 const error = computePointingError(target.rightAscension, target.declination, solved.rightAscension, solved.declination)
 console.log(
-	[error.dx, error.dy, error.angularSeparation].map((value) => round(toArcsec(value), 4)),
+	[error.dx, error.dy, error.angularSeparation].map((value) => toArcsec(value)),
 	error.representationUsed,
-	[error.comparison!.smallAngleDx, error.comparison!.vectorDx].map((value) => round(toArcsec(value), 4)),
+	[error.comparison!.smallAngleDx, error.comparison!.vectorDx].map((value) => toArcsec(value)),
 ) // [ 29.9985, 12.0018, 32.3103 ] vectorTangent [ 30, 29.9985 ]
-console.log(round(toArcsec(applyPointingOffset(target.rightAscension, target.declination, error.dx, error.dy).declination - solved.declination), 8)) // -0
+console.log(toArcsec(applyPointingOffset(target.rightAscension, target.declination, error.dx, error.dy).declination - solved.declination)) // -0
 
 // A mount with the seven TPOINT terms (1.4, 1.8, -1.1, 0.9, 1.6, -1.2 and 1.2 arcseconds) at a site of -23 degrees of latitude and -46 of longitude: 60 targets spread over the sky, with a plate-solve noise of 0.3 arcsecond; the solved position of each is the target plus the offset of the mechanical model in the tangent plane.
 const time = timeYMDHMS(2025, 6, 1, 3, 0, 0)
@@ -13954,20 +13717,20 @@ for (let i = 0; i < 60; i++) {
 
 // The raw error of the mount over the samples, and the fit of the semi-physical model: the accepted samples (the 24 targets below the 10 degrees of minimum altitude are rejected), the radial RMS in arcseconds before (the plain mean of the errors) and after, the leave-one-out RMS, the condition number and the warnings.
 const raw = samples.map((sample) => computePointingError(sample.targetRightAscension, sample.targetDeclination, sample.solvedRightAscension, sample.solvedDeclination).angularSeparation)
-console.log(round(toArcsec(Math.sqrt(raw.reduce((sum, value) => sum + value * value, 0) / raw.length)), 3)) // 3.496
+console.log(toArcsec(Math.sqrt(raw.reduce((sum, value) => sum + value * value, 0) / raw.length))) // 3.496
 const model = fitPointingModel(samples, { strategy: 'semiPhysical' })
 const d = model.diagnostics
-console.log(model.strategy, model.usable, d.validSamples, d.rejectedSamples, round(toArcsec(d.angularRms), 3), round(toArcsec(d.looRms!), 3), round(d.conditionNumber, 2), d.warnings, d.droppedTerms) // semiPhysical true 36 24 0.402 0.444 19.33 [] []
+console.log(model.strategy, model.usable, d.validSamples, d.rejectedSamples, toArcsec(d.angularRms), toArcsec(d.looRms!), d.conditionNumber, d.warnings, d.droppedTerms) // semiPhysical true 36 24 0.402 0.444 19.33 [] []
 
 // The fitted parameters in arcseconds, in the order of the terms (the truth is 1.4, 1.8, -1.1, 0.9, 1.6, -1.2 and 1.2), and the percentiles of the radial residual.
 console.log(
 	model.physical!.terms.join(' '),
-	Array.from(model.physical!.parameters, (value) => round(toArcsec(value), 3)),
+	Array.from(model.physical!.parameters, (value) => toArcsec(value)),
 ) // CH IH ID NP MA ME TF [ 1.498, 1.721, -1.064, 0.886, 1.585, -1.177, 1.255 ]
 console.log(
-	[d.residualPercentiles.p50, d.residualPercentiles.p90, d.residualPercentiles.p95].map((value) => round(toArcsec(value), 3)),
+	[d.residualPercentiles.p50, d.residualPercentiles.p90, d.residualPercentiles.p95].map((value) => toArcsec(value)),
 	d.perPierSideSampleCounts,
-	round(model.coverage.skyCoverageRatio, 3),
+	model.coverage.skyCoverageRatio,
 	d.supportedContext,
 ) // [ 0.327, 0.614, 0.628 ] { EAST: 19, WEST: 17, NEITHER: 0 } 0.375 horizon
 
@@ -13976,41 +13739,41 @@ const input = { rightAscension: normalizeAngle(lst - deg(30)), declination: deg(
 const expected = predictSemiPhysicalOffset(truth, SEMI_PHYSICAL_TERM_NAMES, extractPointingContext(input))
 const prediction = predictPointingModelError(model, input)
 console.log(
-	[prediction.dx, prediction.dy, prediction.offsetMagnitude, expected.dx, expected.dy].map((value) => round(toArcsec(value), 3)),
+	[prediction.dx, prediction.dy, prediction.offsetMagnitude, expected.dx, expected.dy].map((value) => toArcsec(value)),
 	Object.keys(prediction.components),
 ) // [ -3.584, -0.634, 3.64, -3.536, -0.711 ] [ 'physical', 'empirical', 'residual', 'local' ]
-console.log(round(toArcsec(prediction.quality.nearestSampleDistance) / 3600, 3), round(prediction.quality.support, 3), prediction.quality.extrapolating, prediction.quality.pierSideCovered, prediction.quality.warnings) // 16.574 1 false true []
+console.log(toArcsec(prediction.quality.nearestSampleDistance) / 3600, prediction.quality.support, prediction.quality.extrapolating, prediction.quality.pierSideCovered, prediction.quality.warnings) // 16.574 1 false true []
 
 // The correction: the command that makes the mount land on the target, the predicted error at the command (it is the opposite of the correction), whether it converged, the iterations and the gnomonic residual in arcseconds.
 const corrected = correctPointingCoordinate(model, input)
 console.log(
-	[corrected.rightAscension - input.rightAscension, corrected.declination - input.declination].map((value) => round(toArcsec(value), 3)),
-	[corrected.predictedError.dx, corrected.predictedError.dy].map((value) => round(toArcsec(value), 3)),
+	[corrected.rightAscension - input.rightAscension, corrected.declination - input.declination].map((value) => toArcsec(value)),
+	[corrected.predictedError.dx, corrected.predictedError.dy].map((value) => toArcsec(value)),
 	corrected.converged,
 	corrected.iterations,
 	corrected.clamped,
-	round(toArcsec(corrected.residual), 8),
+	toArcsec(corrected.residual),
 ) // [ 3.639, 0.634 ] [ -3.584, -0.634 ] true 1 false 0.00003676
 
 // The hybrid default adds the empirical residual block, with its leave-one-out RMS, and the strategy selector fits all of them and returns the best by that metric (which can be the simplest, as the data have no unmodelled deformation).
 const hybrid = fitPointingModel(samples)
 const selected = selectPointingStrategy(samples)
-console.log(hybrid.strategy, round(toArcsec(hybrid.diagnostics.angularRms), 3), round(toArcsec(hybrid.diagnostics.looRms!), 3), Object.keys(hybrid.diagnostics.droppedTerms).length, selected.strategy, round(toArcsec(selected.diagnostics.looRms!), 3)) // hybrid 0.36 0.464 1 semiPhysical 0.444
+console.log(hybrid.strategy, toArcsec(hybrid.diagnostics.angularRms), toArcsec(hybrid.diagnostics.looRms!), Object.keys(hybrid.diagnostics.droppedTerms).length, selected.strategy, toArcsec(selected.diagnostics.looRms!)) // hybrid 0.36 0.464 1 semiPhysical 0.444
 
 // A model built with only the empirical features, in the small-angle representation, and a tighter feature set: the mean quality of the fit as the radial RMS.
 const empirical = fitPointingModel(samples, { strategy: 'empirical', errorRepresentation: 'smallAngle', featureConfiguration: { includeCrossTerms: false, includePolynomialTerms: false } })
-console.log(empirical.strategy, empirical.errorRepresentation, round(toArcsec(empirical.diagnostics.angularRms), 3), round(toArcsec(empirical.diagnostics.looRms!), 3), empirical.usable) // empirical smallAngle 0.514 0.736 true
+console.log(empirical.strategy, empirical.errorRepresentation, toArcsec(empirical.diagnostics.angularRms), toArcsec(empirical.diagnostics.looRms!), empirical.usable) // empirical smallAngle 0.514 0.736 true
 
 // The stateful collector: it collects the samples (the second call refits at once), predicts and corrects through the latest model, and it exports the model, with or without its dataset, to import into another instance; with no fit the correction is the identity.
 const pointing = new MountPointing({ strategy: 'semiPhysical' })
 for (const sample of samples.slice(0, 40)) pointing.add(sample)
 console.log(pointing.state.sampleCount, pointing.state.dirty, pointing.state.fittedModel === undefined, pointing.correctCoordinate(input).converged, pointing.correctCoordinate(input).rightAscension === input.rightAscension) // 40 true true true true
 const state = pointing.model(samples[40], { fit: true })
-console.log(state.sampleCount, state.dirty, state.fittedModel!.trainingSampleCount, round(toArcsec(pointing.diagnostics.angularRms), 3)) // 41 false 25 0.44
+console.log(state.sampleCount, state.dirty, state.fittedModel!.trainingSampleCount, toArcsec(pointing.diagnostics.angularRms)) // 41 false 25 0.44
 const exported = pointing.export({ includeSamples: true })!
 const other = new MountPointing()
 other.import(exported)
-console.log(exported.samples!.length, other.state.sampleCount, other.state.dirty, round(toArcsec(other.predictError(input).dx), 3) === round(toArcsec(pointing.predictError(input).dx), 3)) // 41 41 false true
+console.log(exported.samples!.length, other.state.sampleCount, other.state.dirty, toArcsec(other.predictError(input).dx) === toArcsec(pointing.predictError(input).dx)) // 41 41 false true
 ```
 
 ### Polar Alignment Exposure Estimator
@@ -14037,8 +13800,6 @@ import {
 } from 'nebulosa/src/observation/alignment/polaralignment.exposure'
 import { applyMountAdjustment, celestialPoleVector } from 'nebulosa/src/observation/alignment/polaralignment.util'
 
-const round = (value: number | undefined, digits = 3) => (value === undefined ? undefined : +value.toFixed(digits))
-
 // A mount 30 arcminutes off in azimuth and -20 in altitude at a site of 22 degrees of latitude; the poles in ICRF at an instant.
 const time = timeYMDHMS(2025, 1, 1, 0, 0, 0)
 const location = geodeticLocation(deg(-45), deg(22), meter(800))
@@ -14049,27 +13810,27 @@ const mountPole = applyMountAdjustment(celestialPole, upAxis, eastAxis, arcmin(3
 
 // The sampling: a 3.76 micrometers pixel behind a 400 mm telescope is 1.94 arcseconds per pixel, and the corner of a 4144 x 2822 sensor is 1.35 degrees from its center.
 const imageScale = polarAlignmentImageScale(3.76, 400)
-console.log(round(toArcsec(imageScale)), round(polarAlignmentFieldRadius(4144, 2822, imageScale) * 57.29577951, 3), DEFAULT_POLAR_ALIGNMENT_MAX_TRAIL) // 1.939 1.35 0.5
+console.log(toArcsec(imageScale), polarAlignmentFieldRadius(4144, 2822, imageScale) * 57.29577951, DEFAULT_POLAR_ALIGNMENT_MAX_TRAIL) // 1.939 1.35 0.5
 
 // The instantaneous rates, in arcseconds per second: the residual angular velocity components, the drift of a target at RA 100 and Dec 20 degrees, the worst case for any target, and the same drift for a rate argument of half the sidereal rate.
 const target = eraS2c(deg(100), deg(20))
 const guide = eraS2c(deg(103), deg(22))
-console.log(polarAlignmentResidualAngularVelocity(mountPole, celestialPole).map((value) => round(toArcsec(value), 5))) // [ -0.05127, 0.14097, 0.00087 ]
-console.log(round(toArcsec(polarAlignmentUnguidedDriftRate(mountPole, celestialPole, target)), 4), round(toArcsec(polarAlignmentWorstCaseDriftRate(mountPole, celestialPole)), 4), round(toArcsec(polarAlignmentUnguidedDriftRate(mountPole, celestialPole, target, 0.5 * 7.292115855e-5)), 4)) // 0.0561 0.15 0.0281
+console.log(polarAlignmentResidualAngularVelocity(mountPole, celestialPole).map((value) => toArcsec(value))) // [ -0.05127, 0.14097, 0.00087 ]
+console.log(toArcsec(polarAlignmentUnguidedDriftRate(mountPole, celestialPole, target)), toArcsec(polarAlignmentWorstCaseDriftRate(mountPole, celestialPole)), toArcsec(polarAlignmentUnguidedDriftRate(mountPole, celestialPole, target, 0.5 * 7.292115855e-5))) // 0.0561 0.15 0.0281
 
 // The field roll of an ideal guiding at the guide star, in arcseconds per second of the angle of the field.
-console.log(round(toArcsec(polarAlignmentGuidedFieldRotationRate(mountPole, celestialPole, guide)!), 5)) // 0.15995
+console.log(toArcsec(polarAlignmentGuidedFieldRotationRate(mountPole, celestialPole, guide)!)) // 0.15995
 
 // The complete estimate with a target and guiding: the sensor corner as the field radius, and the default trail of 0.5 pixel.
 const input = { mountPole, celestialPole, imageScale, target, guiding: { guide, fieldRadius: polarAlignmentFieldRadius(4144, 2822, imageScale) } }
 const limit = polarAlignmentExposureLimit(input)
-console.log(round(toArcmin(limit.polarError)), round(toArcsec(limit.imageScale)), limit.maxTrail) // 34.286 1.939 0.5
-console.log(round(toArcsec(limit.unguided.worstCaseRate), 4), round(limit.unguided.worstCase, 2), round(toArcsec(limit.unguided.targetRate!), 4), round(limit.unguided.target, 2)) // 0.15 6.46 0.0561 17.28
-console.log(round(toArcsec(limit.guided!.rotationRate!), 5), round(limit.guided!.fieldRadius, 5), round(limit.guided!.exposure, 1), limit.guided!.singular) // 0.15995 0.02356 257.6 false
+console.log(toArcmin(limit.polarError), toArcsec(limit.imageScale), limit.maxTrail) // 34.286 1.939 0.5
+console.log(toArcsec(limit.unguided.worstCaseRate), limit.unguided.worstCase, toArcsec(limit.unguided.targetRate!), limit.unguided.target) // 0.15 6.46 0.0561 17.28
+console.log(toArcsec(limit.guided!.rotationRate!), limit.guided!.fieldRadius, limit.guided!.exposure, limit.guided!.singular) // 0.15995 0.02356 257.6 false
 
 // A tighter trail (a quarter of a pixel) halves the exposures, and a search limit of 3 seconds stops the search before the trail is reached, so the exposure is Infinity.
 const tight = polarAlignmentExposureLimit({ ...input, maxTrail: 0.25 })
-console.log(round(tight.unguided.worstCase, 2), round(tight.unguided.target, 2), round(tight.guided!.exposure, 1)) // 3.23 8.64 128.7
+console.log(tight.unguided.worstCase, tight.unguided.target, tight.guided!.exposure) // 3.23 8.64 128.7
 console.log(polarAlignmentExposureLimit({ ...input, searchLimit: 3 }).unguided.worstCase) // Infinity
 
 // An aligned mount never reaches the trail (Infinity), and a guide star on the mechanical axis is singular for the RA and DEC kinematics: no rotation rate and no exposure.
@@ -14080,7 +13841,7 @@ console.log(singular.guided) // { fieldRadius: 0.01, singular: true }
 
 // From the result of a three-point alignment (its pole and time), the true pole is computed by the function; here the exposure starts at the alignment time.
 const fromResult = polarAlignmentExposureLimitForResult({ alignment: { pole: mountPole, time }, imageScale, target, guiding: input.guiding })
-console.log(round(toArcmin(fromResult.polarError)), round(fromResult.unguided.worstCase, 2), round(fromResult.guided!.exposure, 1)) // 34.286 6.46 257.6
+console.log(toArcmin(fromResult.polarError), fromResult.unguided.worstCase, fromResult.guided!.exposure) // 34.286 6.46 257.6
 ```
 
 ### Polar Alignment Geometry
@@ -14097,32 +13858,30 @@ import { meter } from 'nebulosa/src/math/units/distance'
 import { mountAdjustmentAxes, polarAlignmentError, solveAzAltAdjustment } from 'nebulosa/src/observation/alignment/polaralignment'
 import { applyInverseMountAdjustment, applyMountAdjustment, celestialPoleVector, convertPolarAlignmentAltitudeError, decomposePolarErrorGeodesic, polarAlignmentReferenceAltitude, transportEarthFixed } from 'nebulosa/src/observation/alignment/polaralignment.util'
 
-const round = (value: number, digits = 4) => +value.toFixed(digits)
-
 // A site at 22 degrees of latitude, 45 degrees west and 800 m, and an instant.
 const time = timeYMDHMS(2025, 1, 1, 0, 0, 0)
 const location = geodeticLocation(deg(-45), deg(22), meter(800))
 time.location = location
 
 // The target pole: the reference altitude is the latitude for the geometric pole and a few arcminutes higher with the default atmosphere, and the celestial pole direction as an ICRF unit vector, which is the same with or without refraction (the angle between them, in arcminutes, is zero).
-console.log(round(toDeg(polarAlignmentReferenceAltitude(location.latitude, false)), 4), round(toArcmin(polarAlignmentReferenceAltitude(location.latitude) - location.latitude), 3)) // 22 2.338
+console.log(toDeg(polarAlignmentReferenceAltitude(location.latitude, false)), toArcmin(polarAlignmentReferenceAltitude(location.latitude) - location.latitude)) // 22 2.338
 const celestialPole = celestialPoleVector(time, location, false)
 console.log(
-	celestialPole.map((value) => round(value, 5)),
-	round(vecAngle(celestialPole, celestialPoleVector(time, location)) * 3437.7468, 3),
+	celestialPole.map((value) => value),
+	vecAngle(celestialPole, celestialPoleVector(time, location)) * 3437.7468,
 ) // [ 0.00243, 0.00003, 1 ] 0
 
 // The local axes of the base (up and east in the inertial frame at this instant), which are orthogonal unit vectors.
 const { upAxis, eastAxis } = mountAdjustmentAxes(time, location)
-console.log(Math.abs(vecDot(upAxis, eastAxis)) < 1e-12, round(Math.hypot(...upAxis), 12), round(Math.hypot(...eastAxis), 12)) // true 1 1
+console.log(Math.abs(vecDot(upAxis, eastAxis)) < 1e-12, Math.hypot(...upAxis), Math.hypot(...eastAxis)) // true 1 1
 
 // A mount whose base is 3 arcminutes off in azimuth and -10 in altitude: its pole is the celestial one rotated by the two knobs, about 10.4 arcminutes from it (not exactly hypot(3, 10), since the altitude axis is carried by the azimuth rotation), and the inverse adjustment brings it back.
 const mountPole = applyMountAdjustment(celestialPole, upAxis, eastAxis, arcmin(3), arcmin(-10))
-console.log(round(toArcmin(vecAngle(celestialPole, mountPole)), 3), round(toArcmin(vecAngle(celestialPole, applyInverseMountAdjustment(mountPole, upAxis, eastAxis, arcmin(3), arcmin(-10)))), 6)) // 10.38 0
+console.log(toArcmin(vecAngle(celestialPole, mountPole)), toArcmin(vecAngle(celestialPole, applyInverseMountAdjustment(mountPole, upAxis, eastAxis, arcmin(3), arcmin(-10))))) // 10.38 0
 
 // The error of that pole from the target: the total and the signed components of the finite geodesic, in arcminutes (the azimuth knob moves the pole by only cos(latitude) of its angle, so the 3 arcminutes of the knob are 2.785 along the sky), and the same for a mount pole that coincides with the target.
 const error = decomposePolarErrorGeodesic(mountPole, celestialPole, upAxis, eastAxis)!
-console.log(round(toArcmin(error.total), 3), round(toArcmin(error.azimuth), 3), round(toArcmin(error.altitude), 3)) // 10.38 2.785 -10
+console.log(toArcmin(error.total), toArcmin(error.azimuth), toArcmin(error.altitude)) // 10.38 2.785 -10
 console.log(decomposePolarErrorGeodesic(celestialPole, celestialPole, upAxis, eastAxis)) // { total: 0, azimuth: 0, altitude: 0 }
 
 // The knobs from the shift of a star: a star that moves because the base was adjusted by 2 arcminutes of azimuth and -1 of altitude (a mount with no tracking) gives back both values.
@@ -14131,20 +13890,20 @@ const length = Math.hypot(...star)
 const from = star.map((value) => value / length) as [number, number, number]
 const to = applyMountAdjustment(from, upAxis, eastAxis, arcmin(2), arcmin(-1))
 const knobs = solveAzAltAdjustment(from, to, upAxis, eastAxis)
-console.log(round(toArcmin(knobs.azimuthAdjustment), 3), round(toArcmin(knobs.altitudeAdjustment), 3)) // 2 -1
+console.log(toArcmin(knobs.azimuthAdjustment), toArcmin(knobs.altitudeAdjustment)) // 2 -1
 
 // An Earth-fixed direction is the same at the same instant (the same object is returned), and after 6 hours the inertial vector has turned by the rotation of the Earth, here only a fraction of a degree because the pole is close to the axis of rotation.
 const later = timeShift(time, 0.25)
 later.location = location
-console.log(transportEarthFixed(mountPole, time, time) === mountPole, round(toDeg(vecAngle(mountPole, transportEarthFixed(mountPole, time, later))), 3)) // true 0.245
+console.log(transportEarthFixed(mountPole, time, time) === mountPole, toDeg(vecAngle(mountPole, transportEarthFixed(mountPole, time, later)))) // true 0.245
 
 // The altitude error in the geometric reference and in the default atmosphere: a geometric error of 5 arcminutes (the pole 5 arcminutes too high) is displayed a bit smaller; and the inverse conversion recovers it.
 const displayed = convertPolarAlignmentAltitudeError(arcmin(5), location.latitude)
-console.log(round(toArcmin(displayed), 4), round(toArcmin(convertPolarAlignmentAltitudeError(displayed, location.latitude, DEFAULT_REFRACTION_PARAMETERS, false)), 4)) // 4.9904 5
+console.log(toArcmin(displayed), toArcmin(convertPolarAlignmentAltitudeError(displayed, location.latitude, DEFAULT_REFRACTION_PARAMETERS, false))) // 4.9904 5
 
 // The two-star formula of Ralph Pass (latitude 42.67 degrees, azimuth error of 32.26 arcminutes and altitude error of 7.39): the position a mount with that pole error shows for a star at RA 3 h and declination 48 degrees, as the offsets in arcminutes, shown minus true, for a local sidereal time of 0.
 const [ra, dec] = polarAlignmentError(hour(3), deg(48), deg(42 + 40 / 60), 0, arcmin(32.26), arcmin(7.39))
-console.log(round(toArcmin(ra - hour(3)), 3), round(toArcmin(dec - deg(48)), 3)) // -9.038 -21.999
+console.log(toArcmin(ra - hour(3)), toArcmin(dec - deg(48))) // -9.038 -21.999
 ```
 
 ### Polar Alignment Overlay
@@ -14161,8 +13920,7 @@ import { clipPolarAlignmentOverlaySegment, computeThreePointPolarAlignmentOverla
 import { applyInverseMountAdjustment, celestialPoleVector } from 'nebulosa/src/observation/alignment/polaralignment.util'
 
 type Ok = Extract<ThreePointPolarAlignmentOverlayResult, { success: true }>
-const round = (value: number, digits = 3) => +value.toFixed(digits)
-const pixel = (point: { x: number; y: number }) => [round(point.x, 2), round(point.y, 2)]
+const pixel = (point: { x: number; y: number }) => [point.x, point.y]
 
 // A TAN solution of 800 x 600 pixels at RA 120 and Dec +30 degrees, 3.6 arcseconds per pixel, with a slight shear.
 const solution = plateSolutionFrom({ NAXIS: 2, NAXIS1: 800, NAXIS2: 600, CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 400, CRPIX2: 300, CRVAL1: 120, CRVAL2: 30, CD1_1: -0.001, CD1_2: 0.0001, CD2_1: 0.00005, CD2_2: 0.0011 })!
@@ -14182,46 +13940,38 @@ const result = computeThreePointPolarAlignmentOverlay(alignment, solution, time,
 const overlay = (result as Ok).overlay
 console.log(
 	result.success,
-	[overlay.correction.azimuth, overlay.correction.altitude].map((value) => round(toArcmin(value), 4)),
-	[overlay.error.total, overlay.error.azimuth, overlay.error.altitude].map((value) => round(toArcmin(value), 4)),
+	[overlay.correction.azimuth, overlay.correction.altitude].map((value) => toArcmin(value)),
+	[overlay.error.total, overlay.error.azimuth, overlay.error.altitude].map((value) => toArcmin(value)),
 ) // true [ 6, -4 ] [ 6.3353, -4.9149, 3.9975 ]
-console.log(overlay.correction.converged, overlay.correction.stable, overlay.correction.termination, overlay.correction.iterations, round(toArcsec(overlay.correction.residual), 6)) // true true convergedResidual 1 0
+console.log(overlay.correction.converged, overlay.correction.stable, overlay.correction.termination, overlay.correction.iterations, toArcsec(overlay.correction.residual)) // true true convergedResidual 1 0
 
 // The reference (the frame center, in degrees), the three points in pixels (the star moves a few tens of pixels), whether they are on screen and the segments: the lengths in pixels, visibility and clipping.
 console.log(
-	[overlay.reference.rightAscension, overlay.reference.declination].map((value) => round(toDeg(value), 4)),
+	[overlay.reference.rightAscension, overlay.reference.declination].map((value) => toDeg(value)),
 	overlay.frame,
 ) // [ 120, 30 ] { x: 0, y: 0, width: 800, height: 600 }
 console.log([overlay.currentPoint, overlay.azimuthTargetPoint, overlay.targetPoint].map((point) => [pixel(point.position), pixel(point.display), point.onScreen])) // [ [ [ 400, 300 ], [ 400, 300 ], true ], [ [ 390.56, 332.44 ], [ 390.56, 332.44 ], true ], [ [ 381.93, 387.6 ], [ 381.93, 387.6 ], true ] ]
-console.log([overlay.azimuthSegment, overlay.altitudeSegment, overlay.totalSegment].map((segment) => [round(segment.length, 3), segment.visible, segment.clipped, pixel(segment.direction as { x: number; y: number })])) // [ [ 33.787, true, false, [ -0.28, 0.96 ] ], [ 55.826, true, false, [ -0.15, 0.99 ] ], [ 89.441, true, false, [ -0.2, 0.98 ] ] ]
+console.log([overlay.azimuthSegment, overlay.altitudeSegment, overlay.totalSegment].map((segment) => [segment.length, segment.visible, segment.clipped, pixel(segment.direction as { x: number; y: number })])) // [ [ 33.787, true, false, [ -0.28, 0.96 ] ], [ 55.826, true, false, [ -0.15, 0.99 ] ], [ 89.441, true, false, [ -0.2, 0.98 ] ] ]
 
 // The contours: one per default tolerance (30 arcseconds, 1 and 5 arcminutes), each closed with 48 unique samples, and their bounds in pixels; the pole vectors and the diagnostics are the last part.
 console.log(
-	DEFAULT_POLAR_ALIGNMENT_OVERLAY_TOLERANCES.map((value) => round(toArcmin(value), 3)),
-	overlay.contours.map((contour) => [
-		round(toArcmin(contour.tolerance), 3),
-		contour.points.length,
-		contour.visible,
-		contour.points[0].x === contour.points.at(-1)!.x && contour.points[0].y === contour.points.at(-1)!.y,
-		pixel(contour.bounds as { x: number; y: number }),
-		round(contour.bounds.width, 1),
-		round(contour.bounds.height, 1),
-	]),
+	DEFAULT_POLAR_ALIGNMENT_OVERLAY_TOLERANCES.map((value) => toArcmin(value)),
+	overlay.contours.map((contour) => [toArcmin(contour.tolerance), contour.points.length, contour.visible, contour.points[0].x === contour.points.at(-1)!.x && contour.points[0].y === contour.points.at(-1)!.y, pixel(contour.bounds as { x: number; y: number }), contour.bounds.width, contour.bounds.height]),
 ) // [ 0.5, 1, 5 ] [ [ 0.5, 49, true, true, [ 380.48, 379.95 ], 2.9, 15.3 ], [ 1, 49, true, true, [ 379.04, 372.3 ], 5.8, 30.6 ], [ 5, 49, true, true, [ 367.46, 311.14 ], 28.9, 152.9 ] ]
 console.log(
 	overlay.diagnostics,
-	overlay.currentPole.map((value) => round(value, 6)),
-	overlay.targetPole.map((value) => round(value, 6)),
+	overlay.currentPole.map((value) => value),
+	overlay.targetPole.map((value) => value),
 ) // { warnings: [], referenceOnScreen: true, targetOnScreen: true, omittedTolerances: [] } [ -0.004114, 0.001014, -0.999991 ] [ -0.002595, -0.000029, -0.999997 ]
 
 // A star away from the center chosen by pixel (the helper gives its inertial coordinate), with a margin of 20 pixels, one contour of 2 arcminutes and 24 samples: the reference in degrees and the marker positions for that star.
 const star = polarAlignmentReferenceFromPixel(solution, { x: 600, y: 200 })!
-console.log([star.rightAscension, star.declination].map((value) => round(toDeg(value), 4))) // [ 119.7578, 29.8998 ]
+console.log([star.rightAscension, star.declination].map((value) => toDeg(value))) // [ 119.7578, 29.8998 ]
 const custom = computeThreePointPolarAlignmentOverlay(alignment, solution, time, { refraction: false, reference: { type: 'pixel', point: { x: 600, y: 200 } }, margin: 20, tolerances: [arcmin(2)], samples: 24, maximumIterations: 30, correctionTolerance: arcsec(0.01), derivativeStep: 1e-6, maximumCondition: 1e10 })
 
 console.log(
 	[(custom as Ok).overlay.currentPoint, (custom as Ok).overlay.targetPoint].map((point) => [pixel(point.position), point.onScreen]),
-	(custom as Ok).overlay.contours.map((contour) => [contour.points.length, round(toArcmin(contour.tolerance), 3)]),
+	(custom as Ok).overlay.contours.map((contour) => [contour.points.length, toArcmin(contour.tolerance)]),
 ) // [ [ [ 600, 200 ], true ], [ [ 581.79, 287.38 ], true ] ] [ [ 25, 2 ] ]
 
 // The same reference given as an inertial coordinate, over a frame that is a sub-window of the image (x from 100 to 700 and y from 50 to 550): the points are the same, only the clipping changes.
@@ -14252,7 +14002,6 @@ import { createCanonicalEquatorialGeometry, mountDirectionFromEncoders, solveMou
 import { applyTakiFabricationErrors } from 'nebulosa/src/observation/mount/kinematics.taki'
 import { deg } from 'nebulosa/src/math/units/angle'
 
-const round = (value: readonly number[]) => value.map((v) => +v.toFixed(6))
 const nominal = createCanonicalEquatorialGeometry()
 
 // No errors, or only zeros, return the nominal geometry itself.
@@ -14266,18 +14015,18 @@ console.log(real.secondaryAxis, real.opticalDirection, real.secondaryIndex, real
 const encoders = { primary: deg(40), secondary: deg(25) }
 const ideal = mountDirectionFromEncoders(nominal, encoders)
 const actual = mountDirectionFromEncoders(real, encoders)
-console.log(round(ideal), round(actual), +((Math.acos(ideal[0] * actual[0] + ideal[1] * actual[1] + ideal[2] * actual[2]) * 180 * 3600) / Math.PI).toFixed(2)) // ideal [0.694272, -0.582563, 0.422618], real [0.695754, -0.580215, 0.423412], 595.74 arcseconds apart
+console.log(ideal, actual, +((Math.acos(ideal[0] * actual[0] + ideal[1] * actual[1] + ideal[2] * actual[2]) * 180 * 3600) / Math.PI)) // ideal [0.694272, -0.582563, 0.422618], real [0.695754, -0.580215, 0.423412], 595.74 arcseconds apart
 
 // The inverse with the real geometry: the encoders that this mount needs to point at the ideal direction (in degrees).
 const solution = solveMountEncoders(real, ideal)
-console.log(solution.converged, +((solution.primary * 180) / Math.PI).toFixed(5), +((solution.secondary * 180) / Math.PI).toFixed(5)) // true 40.17404 24.94982
+console.log(solution.converged, +((solution.primary * 180) / Math.PI), +((solution.secondary * 180) / Math.PI)) // true 40.17404 24.94982
 
 // The secondary index adds to the index that the nominal geometry already has.
 console.log(applyTakiFabricationErrors(nominal, { secondaryIndex: deg(0.05) }).secondaryIndex, applyTakiFabricationErrors({ ...nominal, secondaryIndex: deg(1) }, { secondaryIndex: deg(0.05) }).secondaryIndex) // -0.000873 and 0.016581 (1 degree minus 0.05 degree, in radians)
 
 // A collimation of 1 degree: the optics at the equator (declination 0) and at the pole (declination 90) are both 1 degree off the meridian plane (the y component is sin 1 degree).
 const collimated = applyTakiFabricationErrors(nominal, { collimation: deg(1) })
-console.log(round(mountDirectionFromEncoders(collimated, { primary: 0, secondary: 0 })), round(mountDirectionFromEncoders(collimated, { primary: 0, secondary: deg(90) }))) // [0.999848, 0.017452, 0] and [0, 0.017452, 0.999848]
+console.log(mountDirectionFromEncoders(collimated, { primary: 0, secondary: 0 }), mountDirectionFromEncoders(collimated, { primary: 0, secondary: deg(90) })) // [0.999848, 0.017452, 0] and [0, 0.017452, 0.999848]
 ```
 
 ### Three-Point Polar Alignment
@@ -14294,8 +14043,6 @@ import { meter } from 'nebulosa/src/math/units/distance'
 import { mountAdjustmentAxes, ThreePointPolarAlignment, threePointPolarAlignmentAfterAdjustment, threePointPolarAlignmentError, type ThreePointPolarAlignmentResult } from 'nebulosa/src/observation/alignment/polaralignment'
 import { applyInverseMountAdjustment, applyMountAdjustment, celestialPoleVector } from 'nebulosa/src/observation/alignment/polaralignment.util'
 
-const round = (value: number, digits = 3) => +value.toFixed(digits)
-
 // A mount whose base is 12 arcminutes off in azimuth and -7 arcminutes in altitude at a site of 22 degrees of latitude: three solves while the mount turns about its own axis (rotations of 0, 0.8 and 1.6 radians of a star on the circle it draws) at the same instant.
 const time = timeYMDHMS(2025, 1, 1, 0, 0, 0)
 const location = geodeticLocation(deg(-45), deg(22), meter(800))
@@ -14309,29 +14056,29 @@ const points = [0, 0.8, 1.6].map((angle) => {
 
 // The geometric estimate (no refraction): the errors are in arcminutes and recover the base error (-12 in azimuth, since a positive rotation of the base moves the pole to the west, and -7 in altitude), the pole is a unit vector in ICRF at the exposure and its azimuth (359.8 degrees, that is 12 arcminutes west of north) and altitude (degrees) are those of the mount pole, which differs from the true one by 0 arcminutes; the knob adjustments are zero in the first estimate.
 const initial = threePointPolarAlignmentError(points[0], points[1], points[2], false, location) as ThreePointPolarAlignmentResult
-console.log(round(toArcmin(initial.azimuthError)), round(toArcmin(initial.altitudeError)), round(toDeg(initial.azimuth), 4), round(toDeg(initial.altitude), 4), initial.azimuthAdjustment, initial.altitudeAdjustment, initial.time === time) // -12 -7 359.8 21.8833 0 0 true
-console.log(round(toArcmin(vecAngle(initial.pole, mountPole)), 6)) // 0
+console.log(toArcmin(initial.azimuthError), toArcmin(initial.altitudeError), toDeg(initial.azimuth), toDeg(initial.altitude), initial.azimuthAdjustment, initial.altitudeAdjustment, initial.time === time) // -12 -7 359.8 21.8833 0 0 true
+console.log(toArcmin(vecAngle(initial.pole, mountPole))) // 0
 
 // With the default atmosphere the displayed altitude error differs by the refraction of both poles (a fraction of an arcminute here, and its altitude in degrees), while the azimuth does not change.
 const refracted = threePointPolarAlignmentError(points[0], points[1], points[2], undefined, location) as ThreePointPolarAlignmentResult
-console.log(round(toArcmin(refracted.azimuthError)), round(toArcmin(refracted.altitudeError)), round(toDeg(refracted.altitude), 4)) // -12 -6.986 21.9225
+console.log(toArcmin(refracted.azimuthError), toArcmin(refracted.altitudeError), toDeg(refracted.altitude)) // -12 -6.986 21.9225
 
 // The user turns the knobs, undoing the error of the base: the star of the last exposure moves with the base, and a plate solve of the same field gives its new position. The refresh infers the knob rotations (a mount with the tracking off passes a zero rate) and the remaining error of the pole is near zero.
 const [toRa, toDec] = eraC2s(...applyInverseMountAdjustment(eraS2c(points[2][0], points[2][1]), upAxis, eastAxis, arcmin(12), arcmin(-7)))
 const after = threePointPolarAlignmentAfterAdjustment(initial, points[2], [toRa, toDec, time], false, location, 0)
-console.log(round(toArcmin(after.azimuthAdjustment)), round(toArcmin(after.altitudeAdjustment)), round(toArcmin(after.azimuthError), 4), round(toArcmin(after.altitudeError), 4)) // -11.993 7.004 -0.0171 0.0042
+console.log(toArcmin(after.azimuthAdjustment), toArcmin(after.altitudeAdjustment), toArcmin(after.azimuthError), toArcmin(after.altitudeError)) // -11.993 7.004 -0.0171 0.0042
 
 // The same field with no shift gives no adjustment and keeps the pole of the previous result.
 const unchanged = threePointPolarAlignmentAfterAdjustment(initial, points[2], points[2], false, location, 0)
-console.log(unchanged.azimuthAdjustment, unchanged.altitudeAdjustment, round(toArcmin(unchanged.azimuthError)), round(toArcmin(unchanged.altitudeError))) // 0 0 -12 -7
+console.log(unchanged.azimuthAdjustment, unchanged.altitudeAdjustment, toArcmin(unchanged.azimuthError), toArcmin(unchanged.altitudeError)) // 0 0 -12 -7
 
 // The session class does the same bookkeeping: the first two solves return false, the third the estimate and the next one the refreshed result, which follows the solves of the user between the knob turns. reset() starts a new session.
 const session = new ThreePointPolarAlignment(false, 0)
 console.log(session.add(points[0][0], points[0][1], time), session.add(points[1][0], points[1][1], time)) // false false
 const seeded = session.add(points[2][0], points[2][1], time) as ThreePointPolarAlignmentResult
-console.log(round(toArcmin(seeded.azimuthError)), round(toArcmin(seeded.altitudeError))) // -12 -7
+console.log(toArcmin(seeded.azimuthError), toArcmin(seeded.altitudeError)) // -12 -7
 const refreshed = session.add(toRa, toDec, time) as ThreePointPolarAlignmentResult
-console.log(round(toArcmin(refreshed.azimuthAdjustment)), round(toArcmin(refreshed.altitudeAdjustment)), round(toArcmin(refreshed.azimuthError), 4), round(toArcmin(refreshed.altitudeError), 4)) // -11.993 7.004 -0.0171 0.0042
+console.log(toArcmin(refreshed.azimuthAdjustment), toArcmin(refreshed.altitudeAdjustment), toArcmin(refreshed.azimuthError), toArcmin(refreshed.altitudeError)) // -11.993 7.004 -0.0171 0.0042
 session.reset()
 console.log(session.add(points[0][0], points[0][1], time)) // false
 ```
@@ -14348,20 +14095,20 @@ import { TrackingRateController } from 'nebulosa/src/observation/guiding/nonside
 
 const start = time(2460000.5, 0, Timescale.TT)
 const at = (seconds: number) => timeShift(start, seconds / 86400)
-const asec = (value: number) => +(value / arcsec(1)).toFixed(4)
+const asec = (value: number) => +(value / arcsec(1))
 
 // An ephemeris-assisted estimator whose residual is 0.3 arcsecond per second east and -0.1 north (the ephemeris is off by that much).
 const estimator = new TrackingRateEstimator()
 for (let i = 0; i < 8; i++) estimator.add({ time: at(i * 10), offset: [arcsec(0.3 * i * 10), arcsec(-0.1 * i * 10)], ephemerisOffset: [0, 0], source: 'targetImage' })
 const estimate = estimator.estimate(at(70))!
-console.log(estimate.rate.map(asec), +estimate.confidence.toFixed(3)) // [0.3, -0.1] 1
+console.log(estimate.rate.map(asec), +estimate.confidence) // [0.3, -0.1] 1
 
 // The feed-forward is the sidereal-like rate of the ephemeris: 15 arcseconds per second in the east. Each update (every 10 s) moves the correction a fraction (10 / 12) toward the residual, and the total rate follows it.
 const controller = new TrackingRateController()
 const feedForward = [arcsec(15), 0] as const
 for (let i = 0; i < 3; i++) {
 	const command = controller.update(feedForward, estimate, 10)!
-	console.log(command.rate.map(asec), command.correction.map(asec), +command.confidence.toFixed(3), command.limited) // [15.25, -0.0833] [0.25, -0.0833] 1 false, then [15.2917, -0.0972] [0.2917, -0.0972] 1 false, then [15.2986, -0.0995] [0.2986, -0.0995] 1 false
+	console.log(command.rate.map(asec), command.correction.map(asec), +command.confidence, command.limited) // [15.25, -0.0833] [0.25, -0.0833] 1 false, then [15.2917, -0.0972] [0.2917, -0.0972] 1 false, then [15.2986, -0.0995] [0.2986, -0.0995] 1 false
 }
 
 // A short interval (1 s) and a small time constant: the correction follows more slowly with a short update, and a zero constant follows at once.
@@ -14377,7 +14124,7 @@ for (let i = 0; i < 4; i++) {
 
 // The magnitude clip: a residual of 0.3 arcsecond per second with a maximum correction of 0.2 is scaled to 0.2 in the same direction.
 const clipped = new TrackingRateController({ smoothingTimeConstantSeconds: 0, maximumCorrection: arcsec(0.2) }).update(feedForward, estimate, 10)!
-console.log(clipped.correction.map(asec), +(Math.hypot(...clipped.correction) / arcsec(1)).toFixed(4), clipped.limited) // [0.1897, -0.0632] 0.2 true
+console.log(clipped.correction.map(asec), +(Math.hypot(...clipped.correction) / arcsec(1)), clipped.limited) // [0.1897, -0.0632] 0.2 true
 
 // The deadband: a residual below it (here the controller is given 0.5 arcsecond per second of deadband) gives no correction, and counts as limited because the estimate was not zero.
 const quiet = new TrackingRateController({ deadband: arcsec(0.5) }).update(feedForward, estimate, 10)!
@@ -14405,7 +14152,7 @@ import { EstimatorNonSiderealMotionProvider, TrackingRateEstimator, trackingMoti
 
 const start = time(2460000.5, 0, Timescale.TT)
 const at = (seconds: number) => timeShift(start, seconds / 86400)
-const asec = (value: number) => +(value / arcsec(1)).toFixed(4)
+const asec = (value: number) => +(value / arcsec(1))
 
 // A target that moves 0.2 arcsecond per second toward the east and -0.1 toward the north, observed every 10 s for 70 s with a deterministic error of 0.3 arcsecond, and one bad sample (+8 arcseconds) at 40 s that the robust fit clips.
 const estimator = new TrackingRateEstimator({ minimumSampleCount: 5 })
@@ -14417,7 +14164,7 @@ for (let i = 0; i < 8; i++) {
 	if (estimator.add({ time: at(i * 10), offset: [arcsec(0.2 * i * 10) + jitter + bad, arcsec(-0.1 * i * 10) - jitter], source: 'targetImage' })) accepted++
 }
 const estimate = estimator.estimate(at(70))!
-console.log(accepted, estimate.rate.map(asec), estimate.position!.map(asec), estimate.sampleCount, estimate.span, estimate.rmsResidual.map(asec), +estimate.confidence.toFixed(3), estimate.source, estimate.stale, estimate.acceleration) // 8 [0.1966, -0.097] [13.8342, -6.8965] 8 70 [0.2848, 0.2922] 0.742 measured false undefined
+console.log(accepted, estimate.rate.map(asec), estimate.position!.map(asec), estimate.sampleCount, estimate.span, estimate.rmsResidual.map(asec), +estimate.confidence, estimate.source, estimate.stale, estimate.acceleration) // 8 [0.1966, -0.097] [13.8342, -6.8965] 8 70 [0.2848, 0.2922] 0.742 measured false undefined
 
 // The estimate is also a prediction a bit ahead of the newest sample (here 30 s); beyond the prediction horizon (120 s) there is none. The stale flag only matters when the stale timeout is set below that horizon.
 const ahead = estimator.estimate(at(100))!
@@ -14429,8 +14176,8 @@ for (let i = 0; i <= 20; i++) accelerating.add({ time: at(i * 10), offset: [arcs
 const quadratic = accelerating.estimate(at(100))!
 console.log(
 	quadratic.rate.map(asec),
-	quadratic.acceleration!.map((value) => +(value / arcsec(1)).toFixed(5)),
-	+quadratic.confidence.toFixed(3),
+	quadratic.acceleration!.map((value) => +(value / arcsec(1))),
+	+quadratic.confidence,
 ) // [0.4, 0] [0.002, 0] 1
 
 // An ephemeris-assisted series: the offsets are observed positions and the ephemeris offsets are the predicted ones; the fitted rate is the residual rate of the ephemeris (here 0.05 arcsecond per second east).
@@ -14460,7 +14207,7 @@ const drifted = [
 	{ id: 'd', x: 410, y: 190 },
 ]
 const fromStars = trackingMotionSampleFromBackgroundStars(at(0), stars, drifted, transform)!
-console.log(fromStars.offset.map(asec), +fromStars.confidence.toFixed(3), fromStars.source) // [-4, 2] 0.667 backgroundStars
+console.log(fromStars.offset.map(asec), +fromStars.confidence, fromStars.source) // [-4, 2] 0.667 backgroundStars
 
 // A target streak of 12 pixels in X during 60 s with a known direction, and a background-star trail of 12 pixels (negated), as rates in arcseconds per second; the streak with no direction gives no rate.
 const targetStreak = trackingRateFromStreak(at(0), { axisPixels: [12, 0], exposureSeconds: 60, role: 'target', direction: 1, confidence: 0.6 }, transform)!
@@ -14470,7 +14217,7 @@ console.log(trackingRateFromStreak(at(0), { axisPixels: [12, 0], exposureSeconds
 // The local motion provider of the non-sidereal tracker: the offset, the rate and the confidence of a fresh ephemeris-free fit.
 const provider = new EstimatorNonSiderealMotionProvider(estimator)
 const motion = provider.motion(at(75))!
-console.log(motion.offset.map(asec), motion.rate!.map(asec), +motion.confidence!.toFixed(3), provider.generation) // [14.8172, -7.3817] [0.1966, -0.097] 0.742 0
+console.log(motion.offset.map(asec), motion.rate!.map(asec), +motion.confidence!, provider.generation) // [14.8172, -7.3817] [0.1966, -0.097] 0.742 0
 provider.reset()
 console.log(provider.motion(at(75)), provider.generation, estimator.estimate(at(70))) // undefined 1 undefined
 ```
@@ -14482,8 +14229,6 @@ console.log(provider.motion(at(75)), provider.generation, estimator.estimate(at(
 ```ts
 import { weatherQualityScore } from 'nebulosa/src/astronomy/weather'
 
-const round = (value: number) => +value.toFixed(4)
-
 // No sensors score 1 (nothing to penalize), and a clear, dry and calm reading too.
 console.log(weatherQualityScore({}), weatherQualityScore({ cloudCoverPercent: 0, humidityPercent: 50, windSpeedMetersPerSecond: 2, dewMarginCelsius: 8 })) // 1 1
 
@@ -14493,13 +14238,13 @@ console.log(weatherQualityScore({ humidityPercent: 70 }), weatherQualityScore({ 
 console.log(weatherQualityScore({ windSpeedMetersPerSecond: 5 }), weatherQualityScore({ windSpeedMetersPerSecond: 10 }), weatherQualityScore({ windSpeedMetersPerSecond: 15 })) // 1 0.5 0
 
 // The gust is scored together with the sustained wind by keeping the faster one: a calm 3 m/s wind with 12 m/s gusts scores as 12 m/s, and a gust alone is enough.
-console.log(round(weatherQualityScore({ windSpeedMetersPerSecond: 3, windGustMetersPerSecond: 12 })), round(weatherQualityScore({ windGustMetersPerSecond: 10 }))) // 0.3 0.5
+console.log(weatherQualityScore({ windSpeedMetersPerSecond: 3, windGustMetersPerSecond: 12 }), weatherQualityScore({ windGustMetersPerSecond: 10 })) // 0.3 0.5
 
 // The dew margin: 5 degrees Celsius or more is safe, and the score falls as the surfaces approach the dew point.
-console.log(weatherQualityScore({ dewMarginCelsius: 5 }), round(weatherQualityScore({ dewMarginCelsius: 2.5 })), weatherQualityScore({ dewMarginCelsius: 0 })) // 1 0.5 0
+console.log(weatherQualityScore({ dewMarginCelsius: 5 }), weatherQualityScore({ dewMarginCelsius: 2.5 }), weatherQualityScore({ dewMarginCelsius: 0 })) // 1 0.5 0
 
 // The factors combine by the geometric mean: 50% of clouds (0.5) and 85% of humidity (0.5) give 0.5, and with the wind at 10 m/s (0.5) too the score stays 0.5.
-console.log(round(weatherQualityScore({ cloudCoverPercent: 50, humidityPercent: 85 })), round(weatherQualityScore({ cloudCoverPercent: 50, humidityPercent: 85, windSpeedMetersPerSecond: 10 })), round(weatherQualityScore({ cloudCoverPercent: 10, humidityPercent: 60, windSpeedMetersPerSecond: 4 }))) // 0.5 0.5 0.9655
+console.log(weatherQualityScore({ cloudCoverPercent: 50, humidityPercent: 85 }), weatherQualityScore({ cloudCoverPercent: 50, humidityPercent: 85, windSpeedMetersPerSecond: 10 }), weatherQualityScore({ cloudCoverPercent: 10, humidityPercent: 60, windSpeedMetersPerSecond: 4 })) // 0.5 0.5 0.9655
 
 // Any rain wins over everything else, even over a clear sky; a rain sensor that reads zero does not.
 console.log(weatherQualityScore({ cloudCoverPercent: 0, rainRateMillimetersPerHour: 0.1 }), weatherQualityScore({ cloudCoverPercent: 0, rainRateMillimetersPerHour: 0 })) // 0 1
@@ -14529,7 +14274,7 @@ console.log(
 	findAstap1476Areas(deg(0), deg(-89.9), deg(0.5)).map((area) => area.fileName),
 	findAstap1476Areas(deg(0), deg(89.9), deg(0.5)).map((area) => area.fileName),
 ) // [ "0101.1476" ] [ "3601.1476" ]
-console.log(findAstap1476Areas(deg(0.1), deg(0), deg(1)).map((area) => [area.fileName, Number(area.fraction.toFixed(2))])) // [ [ "1901.1476", 0.27 ], [ "1969.1476", 0.23 ], [ "1801.1476", 0.27 ], [ "1869.1476", 0.23 ] ]
+console.log(findAstap1476Areas(deg(0.1), deg(0), deg(1)).map((area) => [area.fileName, Number(area.fraction)])) // [ [ "1901.1476", 0.27 ], [ "1969.1476", 0.23 ], [ "1801.1476", 0.27 ], [ "1869.1476", 0.23 ] ]
 
 // The real d05 south polar cap: header, epoch and the stars of a field.
 const file = Buffer.from(await Bun.file('data/d05_0101.1476').arrayBuffer())
@@ -14574,7 +14319,7 @@ const tile = Buffer.concat([tileHeader, sentinel, star(hour(2.02), deg(2.1), 0.6
 const synthetic = readAstap1476Header(tile)
 console.log(synthetic.recordSize, synthetic.version, synthetic.epoch) // 6 2 2020
 const inField = [...readAstap1476Area(synthetic, tile, 760, { rightAscension: hour(2), declination: deg(2), radius: deg(1) })]
-console.log(inField.length, inField[0].area, toDeg(inField[0].declination).toFixed(4), inField[0].magnitude.toFixed(1), inField[0].bv?.toFixed(2)) // 1 760 2.1000 7.3 0.62
+console.log(inField.length, inField[0].area, toDeg(inField[0].declination), inField[0].magnitude, inField[0].bv) // 1 760 2.1000 7.3 0.62
 
 // The catalog: a cone, a box, the identifier of a star and the errors. A catalog is closed with `using`.
 {
@@ -14673,7 +14418,7 @@ import { deg, hour, normalizeAngle, toDeg } from 'nebulosa/src/math/units/angle'
 
 // The tiling: 290 tiles, the file names and the band edges.
 console.log(hnsky290AreaFile(1), hnsky290AreaFile(146).fileName, hnsky290AreaFile(290).fileName) // { area: 1, ring: 1, index: 1, fileName: "0101.290", fraction: 0 } 1001.290 1801.290
-console.log(HNSKY_290_DEC_BOUNDARIES.length, HNSKY_290_DEC_BOUNDARIES.map((value) => Number(toDeg(value).toFixed(2))).slice(0, 4)) // 19 [ -90, -85.23, -75.66, -65.99 ]
+console.log(HNSKY_290_DEC_BOUNDARIES.length, HNSKY_290_DEC_BOUNDARIES.map((value) => Number(toDeg(value))).slice(0, 4)) // 19 [ -90, -85.23, -75.66, -65.99 ]
 
 // A field across a right ascension cell border, and the pole caps.
 console.log(findHnsky290Areas(deg(11.1), deg(5), deg(4)).map((area) => area.fileName)) // [ "1002.290", "1001.290" ]
@@ -14732,7 +14477,7 @@ const record = (designation: number, ra: number, dec: number, magnitude: number)
 const synthetic = Buffer.concat([header110, record((321 << 20) | 12345, hour(2.02), deg(5.1), 1.4), record((321 << 20) | 12346, hour(4), deg(5.12), 1.4)])
 const syntheticHeader = readHnsky290Header(synthetic)
 const inField = [...readHnsky290Area(syntheticHeader, synthetic, 146, { rightAscension: hour(2), declination: deg(5), radius: deg(1) })]
-console.log(syntheticHeader.recordSize, syntheticHeader.epoch, inField.length, inField[0].magnitude.toFixed(1), inField[0].designation?.label, inField[0].bpRp) // 11 2000 1 1.4 UCAC4 321-12345 undefined
+console.log(syntheticHeader.recordSize, syntheticHeader.epoch, inField.length, inField[0].magnitude, inField[0].designation?.label, inField[0].bpRp) // 11 2000 1 1.4 UCAC4 321-12345 undefined
 
 // The designations: UCAC4 for a non-negative value, Tycho-2 and its component otherwise.
 console.log(decodeHnsky290Designation((321 << 20) | 12345).label, decodeHnsky290Designation(-((1234 << 16) | 42)).label, decodeHnsky290Designation(-((200 << 16) | 55 | 0x40000000)).label) // UCAC4 321-12345 TYC 1234-42-1 TYC 200-55-2
@@ -15014,10 +14759,10 @@ console.log([...types].sort((a, b) => b[1] - a[1]).slice(0, 3)) // [ [ "GALAXY",
 // The Orion Nebula (M 42 = NGC 1976) and the Andromeda Galaxy (M 31).
 const m42 = entries.find((entry) => entry.m === 42)!
 console.log(m42.id, m42.ngc, m42.sh2, m42.ced, m42.magnitude, StellariumObjectType[m42.type], m42.mType) // 1879 1976 281 55d 4 HII_REGION EN+RN; 3, 2, 3
-console.log(formatRA(m42.rightAscension), formatDEC(m42.declination), toArcmin(m42.majorAxis), toArcmin(m42.minorAxis), Math.round(toLightYear(m42.distance))) // 05 35 17.30 -05 23 27.96 90 60 1344
+console.log(formatRA(m42.rightAscension), formatDEC(m42.declination), toArcmin(m42.majorAxis), toArcmin(m42.minorAxis), toLightYear(m42.distance)) // 05 35 17.30 -05 23 27.96 90 60 1344
 
 const m31 = entries.find((entry) => entry.m === 31)!
-console.log(m31.id, StellariumObjectType[m31.type], m31.mType, m31.magnitude?.toFixed(1), toArcmin(m31.majorAxis).toFixed(1), toArcmin(m31.minorAxis).toFixed(1), m31.ngc, m31.pgc, m31.redshift.toFixed(4)) // 255 GALAXY SA(s)b 3.4 189.1 61.7 224 2557 -0.0010
+console.log(m31.id, StellariumObjectType[m31.type], m31.mType, m31.magnitude, toArcmin(m31.majorAxis), toArcmin(m31.minorAxis), m31.ngc, m31.pgc, m31.redshift) // 255 GALAXY SA(s)b 3.4 189.1 61.7 224 2557 -0.0010
 
 // A 0 identifier means none, and a missing magnitude is undefined (NGC 281 has none).
 console.log(entries.find((entry) => entry.ngc === 281)?.magnitude) // undefined
@@ -15094,7 +14839,7 @@ console.log(geometry.areaBounds[2]) // { minRA: 1.5707963267948966, maxRA: 3.141
 console.log(lookupTiledStarArea(geometry, 3), tiledStarAreaFile(geometry, 6)) // { area: 3, ring: 2, index: 2, fileName: "0202.demo", fraction: 0 } { area: 6, ring: 3, index: 1, fileName: "0301.demo", fraction: 0 }
 
 // The tiles of a square field of 2° of half width: inside one tile, across the border of two, and at a corner of three.
-const tiles = (ra: number, dec: number) => findTiledStarAreas(geometry, deg(ra), deg(dec), deg(2)).map((area) => [area.area, area.fileName, Number(area.fraction.toFixed(3))])
+const tiles = (ra: number, dec: number) => findTiledStarAreas(geometry, deg(ra), deg(dec), deg(2)).map((area) => [area.area, area.fileName, Number(area.fraction)])
 console.log(tiles(100, 0)) // [ [ 3, "0202.demo", 1 ] ]
 console.log(tiles(89.5, 0)) // [ [ 3, "0202.demo", 0.75 ], [ 2, "0201.demo", 1 ] ] (the fractions overlap at the border)
 console.log(tiles(0.5, 29)) // [ [ 6, "0301.demo", 0.5 ], [ 2, "0201.demo", 0.459 ], [ 5, "0204.demo", 0.291 ] ]
@@ -15120,7 +14865,7 @@ console.log(count) // 10387
 // The stars of a square field of 1° half width around the pole of the tile, and with a magnitude limit.
 const materialize = (area: number, record: Readonly<TiledStarRawRecord>) => ({ area, magnitude: record.magnitude, rightAscension: record.raRaw * TILED_STAR_RA_SCALE, declination: record.decRaw * TILED_STAR_DEC_SCALE })
 const field = [...readTiledStarArea(header, buffer, 1, { rightAscension: 0, declination: deg(-89.5), radius: deg(0.5) }, materialize)]
-console.log(field.length, field[0].magnitude, toDeg(field[0].declination).toFixed(3)) // 483 9.8 -89.169 (the field has no star brighter than magnitude 9.8)
+console.log(field.length, field[0].magnitude, toDeg(field[0].declination)) // 483 9.8 -89.169 (the field has no star brighter than magnitude 9.8)
 console.log([...readTiledStarArea(header, buffer, 1, { rightAscension: 0, declination: deg(-89.5), radius: deg(0.5), magnitudeLimit: 8 }, materialize)].length) // 0
 
 // The same through a one-tile tiling (the cap) and a collection of files, which can be a Map or an object.
