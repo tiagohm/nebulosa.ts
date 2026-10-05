@@ -18774,6 +18774,51 @@ console.log(await sourceTransferToSink(input2, small, Buffer.alloc(3)), small.po
 
 ### Byte Shuffling
 
+`byteShuffle(input, output, itemSize)` and `byteUnshuffle(input, output, itemSize)` (`src/io/formats/xisf/xisf.ts`) are the reversible byte reordering that XISF applies before compressing a block of multi-byte samples. For items of `itemSize` bytes, the shuffle writes all the first bytes of the items, then all the second bytes, and so on, so that similar bytes (the high bytes of neighbouring pixels, for instance) end up together, which usually raises the compression ratio of a following codec; the unshuffle restores the original layout. Both write into a caller buffer of at least the same length, never change the input, and copy the trailing bytes that do not fill a whole item as they are. An `itemSize` of 1 is a plain copy. Sizes 2, 4 and 8 have dedicated paths and other sizes use a general loop. The item size is the sample size of the pixel type (2 for 16-bit integers, 4 for 32-bit integers and floats, 8 for double-precision). The XISF codecs call them when a compression name carries the `+sh` suffix (see XISF Pixel I/O and Compression).
+
+```ts
+import { deflate } from 'nebulosa/src/io/compression'
+import { byteShuffle, byteUnshuffle } from 'nebulosa/src/io/formats/xisf/xisf'
+
+// Four 16-bit samples, written big-endian: 0x0102 0x0304 0x0506 0x0708.
+const samples = Buffer.from([1, 2, 3, 4, 5, 6, 7, 8])
+const shuffled = Buffer.alloc(samples.byteLength)
+byteShuffle(samples, shuffled, 2)
+console.log(shuffled) // <Buffer 01 03 05 07 02 04 06 08>
+
+// The inverse restores the original bytes.
+const restored = Buffer.alloc(samples.byteLength)
+byteUnshuffle(shuffled, restored, 2)
+console.log(restored, restored.equals(samples)) // <Buffer 01 02 03 04 05 06 07 08> true
+
+// A 32-bit item: the i-th byte of every item is grouped. A trailing partial item is copied verbatim.
+const words = Buffer.from([0x11, 0x12, 0x13, 0x14, 0x21, 0x22, 0x23, 0x24, 0x99])
+const grouped = Buffer.alloc(words.byteLength)
+byteShuffle(words, grouped, 4)
+console.log(grouped.toString('hex')) // 112112221323142499
+const back = Buffer.alloc(words.byteLength)
+byteUnshuffle(grouped, back, 4)
+console.log(back.toString('hex')) // 111213142122232499
+
+// An item size of 1 copies, and an odd size such as 3 uses the general path.
+const rgb = Buffer.from([10, 20, 30, 11, 21, 31, 12, 22, 32])
+const planes = Buffer.alloc(rgb.byteLength)
+byteShuffle(rgb, planes, 3)
+console.log(planes) // <Buffer 0a 0b 0c 14 15 16 1e 1f 20>
+const copy = Buffer.alloc(rgb.byteLength)
+byteShuffle(rgb, copy, 1)
+console.log(copy.equals(rgb)) // true
+
+// The goal is locality: the high bytes of a smooth 16-bit ramp are gathered, which compresses better.
+
+const ramp = new Uint16Array(4096)
+for (let i = 0; i < ramp.length; i++) ramp[i] = 30000 + ((i * 7) % 2048) + ((i * 31) % 97)
+const raw = Buffer.from(ramp.buffer)
+const reordered = Buffer.alloc(raw.byteLength)
+byteShuffle(raw, reordered, 2)
+console.log((await deflate(reordered, { level: 6 })).byteLength < (await deflate(raw, { level: 6 })).byteLength) // true
+```
+
 ### Byte-Stream Contracts
 
 `src/io/types.ts` holds the small interfaces that every byte reader and writer of the toolkit implements, plus a runtime guard for each capability. A `Source` has `read(buffer, offset?, size?)`, which copies up to `size` bytes into `buffer` at `offset` and resolves to the number of bytes copied, with `0` at the end of the input, and `readSync`, its synchronous counterpart. A `Sink` has `write(chunk, offset?, size?, encoding?)`, which accepts a `Buffer` or a string (decoded with `encoding`) and returns the number of bytes consumed, and `writeSync`. The results of `read` and `write` may be a number or a promise, so callers `await` them. A source or sink backed by an asynchronous transport throws in its synchronous method, and the synchronous and asynchronous calls of one object share a single cursor, so they must not run at the same time.
@@ -18852,9 +18897,141 @@ if (isSeekable(memory) && isExhaustible(memory)) {
 
 ### CRC Checksums
 
+`CRC` (`src/io/crc.ts`) is a table-driven checksum calculator for any cyclic redundancy check of 1 to 32 bits, described by its width, polynomial, initial value, bit order and final xor (`new CRC(bit, polynomial, initial, reflect, finalXor, reorder?)`, with the polynomial, the initial value and the xor in the form of the catalogue, and `reorder` reversing the bytes of the result). The 256-entry table is built once per instance, and widths below 8 bits are computed bit by bit. The 78 algorithms of the RevEng catalogue that the module includes are exposed as lazily created, cached static getters named after `CRC_ALGORITHMS` (`CRC.crc32`, `CRC.crc32c`, `CRC.crc16xmodem`, `CRC.crc8`, `CRC.crc5usb`, and so on), and `CRCAlgorithm` is the union of these names. `compute(data, previous?, offset?, length?)` takes a `Buffer`, `Uint8Array`, `Uint8ClampedArray` or `DataView` (`offset` and `length` select a range of it, in bytes), and returns the checksum as an unsigned integer. Passing the previous result as `previous` continues a running checksum over the next chunk, so streams are checksummed piece by piece with the same value as the whole. The check values of the snippet are the ones of the catalogue for the ASCII text `123456789`.
+
+```ts
+import { CRC, CRC_ALGORITHMS } from 'nebulosa/src/io/crc'
+
+const text = Buffer.from('123456789')
+console.log(CRC_ALGORITHMS.length, CRC_ALGORITHMS.slice(0, 4)) // 78 [ "crc3gsm", "crc4itu", "crc4interlaken", "crc5epc" ]
+
+// Some of the catalogued algorithms, written in hexadecimal.
+console.log(CRC.crc32.compute(text).toString(16)) // cbf43926
+console.log(CRC.crc32c.compute(text).toString(16)) // e3069283
+console.log(CRC.crc32bzip2.compute(text).toString(16)) // fc891918
+console.log(CRC.crc16xmodem.compute(text).toString(16)) // 31c3
+console.log(CRC.crc16ccittfalse.compute(text).toString(16)) // 29b1
+console.log(CRC.crc16modbus.compute(text).toString(16)) // 4b37
+console.log(CRC.crc8.compute(text).toString(16)) // f4
+console.log(CRC.crc5usb.compute(text).toString(16), CRC.crc3gsm.compute(text).toString(16)) // 19 4
+console.log(CRC.crc24.compute(text).toString(16), CRC.crc30cdma.compute(text).toString(16)) // 21cf02 4c34abf
+
+// A catalogued preset is a cached instance.
+console.log(CRC.crc32 === CRC.crc32) // true
+
+// A running checksum: the result of the first chunk continues in the second one.
+const first = CRC.crc32.compute(text, undefined, 0, 4)
+console.log(CRC.crc32.compute(text, first, 4).toString(16)) // cbf43926
+
+// offset and length select a range of the data, and a DataView or a typed array is accepted.
+const data = new Uint8Array([0, 0, ...text, 0xff])
+console.log(CRC.crc32.compute(data, undefined, 2, 9).toString(16)) // cbf43926
+console.log(CRC.crc32.compute(new DataView(data.buffer), undefined, 2, 9).toString(16)) // cbf43926
+
+// A custom configuration: the same parameters of CRC-32/ISO-HDLC, and CRC-16/ARC with the bytes of the result swapped.
+const custom = new CRC(32, 0x04c11db7, 0xffffffff, true, 0xffffffff)
+console.log(custom.compute(text).toString(16)) // cbf43926
+console.log(new CRC(16, 0x8005, 0x0000, true, 0x0000).compute(text).toString(16)) // bb3d
+console.log(new CRC(16, 0x8005, 0x0000, true, 0x0000, true).compute(text).toString(16)) // 3dbb
+```
+
 ### CSV Parsing
 
+`src/io/csv.ts` parses delimited text into rows of strings. `readCsv(input, options?)` parses a whole string, or an array of lines that is joined with line feeds, and returns `CsvRow[]`. `readCsvStream(source, options?)` is an async generator that reads a `Source` (see Byte-Stream Contracts) in chunks of `bufferSize` bytes (8 KiB by default), decodes them incrementally with a `TextDecoder` so that multi-byte characters survive the chunk boundaries, and yields the rows as they complete, with quoted fields, doubled quotes and line breaks inside quotes reassembled across chunks. `CsvLineParser` is the engine that splits one logical line, and it can be used alone: `parse(line, offset?, row?)` returns the row, or `false` for an empty or comment line. The options are `delimiter` (a character or a list of accepted characters, `,` by default; `CSV_DELIMITER` and `TSV_DELIMITER` are the comma and the tab), `comment` (the marker or markers of the lines that are skipped, `'#'` by default), `quote` (the quote characters, `'"'` by default, or `false` to disable quoting), `forceTrim` (also trims the text inside quotes), `skipFirstLine` (drops the first data row, which is the header, and is `true` by default) and, for the stream, `encoding`, `bufferSize`, `ignoreBOM` and `fatal`. Unquoted fields are trimmed, empty fields are empty strings, and every value is text, so the numbers are converted by the caller. A single string or array of strings in place of the options is the delimiter or the delimiters. The parser does not infer types or names of columns.
+
+```ts
+import { bufferSource, readableStreamSource } from 'nebulosa/src/io/io'
+import { CSV_DELIMITER, CsvLineParser, DEFAULT_READ_CSV_STREAM_OPTIONS, readCsv, readCsvStream, TSV_DELIMITER } from 'nebulosa/src/io/csv'
+
+console.log(JSON.stringify(CSV_DELIMITER), JSON.stringify(TSV_DELIMITER), DEFAULT_READ_CSV_STREAM_OPTIONS.skipFirstLine, DEFAULT_READ_CSV_STREAM_OPTIONS.bufferSize) // "," "\t" true 8192
+
+// The first row is a header and is dropped by default. Comments and blank lines are skipped.
+const csv = `name,magnitude,constellation
+# the brightest stars
+Sirius, -1.46, Canis Major
+
+Canopus,-0.74,Carina
+Arcturus,-0.05,Boötes`
+console.log(readCsv(csv)) // [ [ "Sirius", "-1.46", "Canis Major" ], [ "Canopus", "-0.74", "Carina" ], [ "Arcturus", "-0.05", "Boötes" ] ]
+console.log(readCsv(csv, { skipFirstLine: false }).length) // 4
+
+// An array of lines is joined with line feeds, and a delimiter alone can replace the options.
+console.log(readCsv(['id;name', '1;Vega', '2;Altair'], ';')) // [ [ "1", "Vega" ], [ "2", "Altair" ] ]
+console.log(readCsv('a\tb\n1\t2', TSV_DELIMITER)) // [ [ "1", "2" ] ]
+console.log(readCsv('a|b;c\n1|2;3', { delimiter: ['|', ';'], skipFirstLine: false })) // [ [ "a", "b", "c" ], [ "1", "2", "3" ] ]
+
+// Quoted fields keep delimiters, doubled quotes and line breaks. Empty fields stay empty.
+const quoted = 'id,note,flag\n1,"Hello, ""World""",\n2,"two\nlines",x\n3,,'
+console.log(readCsv(quoted)) // [ [ "1", "Hello, \"World\"", "" ], [ "2", "two\nlines", "x" ], [ "3", "", "" ] ]
+
+// Quotes can be disabled, the comment marker changed, and the quoted text trimmed as well.
+console.log(readCsv('a,b\n"x,y', { quote: false })) // [ [ "\"x", "y" ] ]
+console.log(readCsv('a,b\n% skipped\n1,2', { comment: '%' })) // [ [ "1", "2" ] ]
+console.log(readCsv('a,b\n"  padded  ",2', { forceTrim: true }), readCsv('a,b\n"  padded  ",2', { forceTrim: false })) // [ [ "padded", "2" ] ] [ [ "  padded  ", "2" ] ]
+
+// The line parser alone: a row, an appended row, an offset, and the lines that return false.
+const parser = new CsvLineParser({ delimiter: ',' })
+console.log(parser.parse('1, 2 ,"3,4"')) // [ "1", "2", "3,4" ]
+console.log(parser.parse('5,6', 0, ['already'])) // [ "already", "5", "6" ]
+console.log(parser.parse('xx7,8', 2)) // [ "7", "8" ]
+console.log(parser.parse('   '), parser.parse('# comment')) // false false
+
+// A stream decodes in chunks: with 5 bytes at a time the rows cross the chunks, and the accents survive.
+const bytes = Buffer.from('id,name\n1,Café "A"\n2,"Año, nuevo"\n3,Zürich\n')
+const rows: string[][] = []
+for await (const row of readCsvStream(bufferSource(bytes), { bufferSize: 5 })) rows.push(row)
+console.log(rows) // [ [ "1", "Café \"A\"" ], [ "2", "Año, nuevo" ], [ "3", "Zürich" ] ]
+
+// A byte source of a web stream works the same, here converting the values to numbers.
+const stream = new ReadableStream<Uint8Array>({
+	start(controller) {
+		controller.enqueue(Buffer.from('x,y\n1.5,'))
+		controller.enqueue(Buffer.from('2.5\n3.5,4.5'))
+		controller.close()
+	},
+})
+await using source = readableStreamSource(stream)
+const numbers: number[][] = []
+for await (const row of readCsvStream(source, { bufferSize: 64 })) numbers.push(row.map(Number))
+console.log(numbers) // [ [ 1.5, 2.5 ], [ 3.5, 4.5 ] ]
+```
+
 ### Deflate Compression
+
+`deflate(input, options)` and `inflate(input)` (`src/io/compression.ts`) are promise wrappers over the zlib functions of Node (loaded on first use, so portable code that never calls them does not pay for the import). `deflate` compresses a `Buffer`, typed array, `DataView` or string to a new `Buffer` in the zlib format (the two-byte header, the deflate stream and the Adler-32 checksum, which is the one XISF and PNG-style containers expect), with `options.level` from `0` (stored) to `9` (best) and `-1` for the library default; `inflate` restores the original bytes. Both run on the thread pool of zlib, so they do not block the event loop while compressing large blocks, and the whole result is materialized in memory. They are not the raw deflate or the gzip format. They are used by the XISF pixel blocks (see XISF Pixel I/O and Compression), where they are often combined with byte shuffling (see Byte Shuffling). The other FITS-style compression of the module is described in FITS Rice Compression.
+
+```ts
+import { deflate, inflate } from 'nebulosa/src/io/compression'
+
+// A repetitive block compresses well. The result starts with the zlib header.
+const text = Buffer.from('NEBULOSA '.repeat(500))
+const fast = await deflate(text, { level: 1 })
+const best = await deflate(text, { level: 9 })
+console.log(text.byteLength, fast.byteLength, best.byteLength) // 4500 65 46
+console.log(best.subarray(0, 2).toString('hex'), fast.subarray(0, 2).toString('hex')) // 78da 7801
+
+// Inflate restores the original bytes.
+const restored = await inflate(best)
+console.log(restored.equals(text), restored.byteLength) // true 4500
+
+// Level 0 stores the data, the default level is -1, and a string input is encoded as UTF-8.
+const stored = await deflate(text, { level: 0 })
+console.log(stored.byteLength > text.byteLength, (await deflate(text, { level: -1 })).byteLength) // true 64
+console.log((await inflate(await deflate('Café', { level: 6 }))).toString()) // Café
+
+// Typed arrays are compressed as their bytes. A 16-bit image block of a flat field shrinks a lot.
+const pixels = new Uint16Array(256 * 256).fill(1000)
+const packed = await deflate(pixels, { level: 6 })
+console.log(pixels.byteLength, packed.byteLength) // 131072 598
+const unpacked = new Uint16Array((await inflate(packed)).buffer.slice(0))
+console.log(unpacked.length, unpacked[0], unpacked.at(-1)) // 65536 1000 1000
+
+// Data of an unrelated source (pseudo-random bytes) does not compress.
+const noise = Buffer.alloc(4096)
+let state = 12345
+for (let i = 0; i < noise.length; i++) noise[i] = (state = (state * 1103515245 + 12345) & 0x7fffffff) >>> 16
+console.log((await deflate(noise, { level: 9 })).byteLength >= noise.byteLength * 0.9) // true
+```
 
 ### File-Handle Byte I/O
 
@@ -18911,11 +19088,261 @@ await rm(directory, { recursive: true })
 
 ### FITS Containers and HDUs
 
+A FITS file is a sequence of header and data units (HDUs), each made of 2880-byte blocks: a header of 80-character cards that ends with `END`, followed by the data padded to a whole block. `readFits(source)` (`src/io/formats/fits/fits.ts`) scans a seekable source, parses every header with the card reader of FITS Header Cards and Metadata, and returns `{ hdus }`, where each HDU is `{ offset, header, data: { offset, size } }`: `offset` is where the unit starts, and the data `offset` and `size` (in bytes, without padding) are only located, never read, so a large file is indexed by seeking past the data (see Byte-Stream Contracts). The pixels are read afterwards with the reader of FITS Pixel I/O and Rice Tiles. It returns `undefined` when the stream does not start with the `SIMPLE` magic bytes, and `isFits(bytes)` is the cheap check of that signature. `writeFits(sink, hdus, options?)` writes the units: each item has the `header`, the `raw` pixels (a `Float32Array` or `Float64Array` in the channel layout of the library) and a `sampleScale` that says whether they are `'normalized'` (0 to 1) or `'digital'` (the integer range of the BITPIX). For 16-bit output it adds `BZERO` (32768) and `BSCALE` (1) to the header, so unsigned samples are stored as signed integers. `options.type` selects the Rice tile compression of FITS Rice Compression, which writes an empty primary unit and one binary table extension for each image. The size helpers `computeHduDataSize(header)` (the data bytes from `BITPIX`, `NAXISn`, `PCOUNT` and `GCOUNT`) and `computeRemainingBytes(size)` (the padding to the next block) are what the reader and the writers use to walk the file. `Bitpix` names the sample types (8, 16, 32, 64, -32 and -64), and the module also exports the constants `FITS_BLOCK_SIZE`, `FITS_HEADER_CARD_SIZE`, `FITS_MAX_KEYWORD_LENGTH`, `FITS_MAX_VALUE_LENGTH`, `FITS_MIN_STRING_END`, `FITS_IMAGE_MIME_TYPE`, `FITS_APPLICATION_MIME_TYPE` and `MAGIC_BYTES`. Only the uncompressed images and the RICE_1 tile compression are interpreted for pixels; other units are indexed but their data are not decoded.
+
+```ts
+import { Bitpix, computeRemainingBytes, FITS_APPLICATION_MIME_TYPE, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, FITS_IMAGE_MIME_TYPE, FITS_MAX_KEYWORD_LENGTH, FITS_MAX_VALUE_LENGTH, isFits, MAGIC_BYTES, readFits, writeFits } from 'nebulosa/src/io/formats/fits/fits'
+import { computeHduDataSize } from 'nebulosa/src/io/formats/fits/util'
+import { bufferSink, bufferSource } from 'nebulosa/src/io/io'
+
+// The constants of the format and the sample types.
+console.log(FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, FITS_MAX_KEYWORD_LENGTH, FITS_MAX_VALUE_LENGTH, FITS_IMAGE_MIME_TYPE, FITS_APPLICATION_MIME_TYPE, MAGIC_BYTES) // 2880 80 8 70 image/fits application/fits SIMPLE
+console.log(Bitpix.BYTE, Bitpix.SHORT, Bitpix.INTEGER, Bitpix.LONG, Bitpix.FLOAT, Bitpix.DOUBLE, Bitpix[-32]) // 8 16 32 64 -32 -64 FLOAT
+
+// An image of 6x4 pixels, a ramp from 0 to 1, written as a 16-bit image.
+const width = 6
+const height = 4
+const raw = new Float32Array(width * height)
+for (let i = 0; i < raw.length; i++) raw[i] = i / (raw.length - 1)
+
+const out = Buffer.alloc(FITS_BLOCK_SIZE * 4)
+const sink = bufferSink(out)
+await writeFits(sink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height, OBJECT: 'M42', EXPTIME: 30 }, raw, sampleScale: 'normalized' }])
+
+// One block of header and one block of data (24 samples of 2 bytes, padded).
+console.log(sink.position, isFits(out), isFits(Buffer.from('not a fits file'))) // 5760 true false
+
+// Indexing the file: the header is parsed, the data are only located.
+const fits = (await readFits(bufferSource(out.subarray(0, sink.position))))!
+const hdu = fits.hdus[0]
+console.log(fits.hdus.length, hdu.offset, hdu.data) // 1 0 { offset: 2880, size: 48 }
+console.log(hdu.header) // { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 6, NAXIS2: 4, BZERO: 32768, BSCALE: 1, OBJECT: "M42", EXPTIME: 30 }
+
+// The data size comes from the header, and the padding completes the block.
+console.log(computeHduDataSize(hdu.header), computeRemainingBytes(hdu.data.size)) // 48 2832
+console.log(computeHduDataSize({ BITPIX: -32, NAXIS: 3, NAXIS1: 100, NAXIS2: 50, NAXIS3: 3 }), computeHduDataSize({ BITPIX: 8, NAXIS: 0 })) // 60000 0
+
+// With Rice compression the file has an empty primary unit and a BINTABLE extension for the image.
+const compressed = Buffer.alloc(FITS_BLOCK_SIZE * 8)
+const compressedSink = bufferSink(compressed)
+const pixels = new Float32Array(64 * 32)
+for (let i = 0; i < pixels.length; i++) pixels[i] = 0.25 + 0.5 * ((i % 64) / 64) + ((i * 7) % 13) / 5000
+await writeFits(compressedSink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 64, NAXIS2: 32, OBJECT: 'M42' }, raw: pixels, sampleScale: 'normalized' }], { type: 'RICE_1', tileHeight: 8 })
+const tiled = (await readFits(bufferSource(compressed.subarray(0, compressedSink.position))))!
+console.log(
+	compressedSink.position,
+	tiled.hdus.length,
+	tiled.hdus.map((e) => [e.offset, e.data.size, e.header.XTENSION ?? 'primary']),
+) // 11520 2 [ [ 0, 0, "primary" ], [ 2880, 3176, "BINTABLE" ] ]
+console.log(tiled.hdus[1].header.ZCMPTYPE, tiled.hdus[1].header.ZBITPIX, tiled.hdus[1].header.NAXIS2, tiled.hdus[1].header.PCOUNT) // RICE_1 16 4 3144
+```
+
 ### FITS Header Cards and Metadata
+
+A header is a list of cards, `[key, value?, comment?]`, and the parsed form is the object `FitsHeader`, which maps each keyword to its value (a string, a number or a boolean). `FitsKeywordWriter` formats one card into the 80 characters of the file: `write(card, out, offset)` returns the bytes written, `writeAll(header, out, offset)` writes the cards of a whole header (an object or a list of cards), and `writeEnd(out, offset)` writes the `END` card; the padding to the block is done by `writeFits`. Strings are quoted with the quote character doubled, numbers are written in the exponential form of the format, booleans as `T` and `F`, and when a card has no comment the default one of the keyword table (`FitsKeywordWriter.keywords`, the `KEYWORDS` object of `headers.ts`, which has the standard, the observation and the instrument keywords) is used. `COMMENT` and `HISTORY` cards that do not fit in one card are wrapped over several, and a string that does not fit in the value field is split in `CONTINUE` cards. `FitsKeywordReader` is the inverse: `read(buffer, offset)` parses one card and `readAll(buffer, offset)` parses until `END`, joining the commentary cards with a line break and rebuilding the continued strings. The accessors of `util.ts` read a header with a default for a missing key: `hasKeyword`, `numericKeyword`, `booleanKeyword` and `textKeyword`, and the metadata readers `numberOfAxesKeyword`, `widthKeyword`, `heightKeyword`, `numberOfChannelsKeyword`, `bitpixKeyword`, `exposureTimeKeyword` (`EXPTIME`, or `EXPOSURE`), `cfaPatternKeyword` (`BAYERPAT`, trimmed), `rightAscensionKeyword`, `declinationKeyword` and `observationDateKeyword`. The coordinates are returned in radians and the date in milliseconds since the epoch (UTC); the right ascension is tried in the order `RA` (degrees), `OBJCTRA` (sexagesimal hours), `RA_OBJ` and `CRVAL1` (degrees), the declination in the order `DEC`, `OBJCTDEC` (sexagesimal degrees), `DEC_OBJ` and `CRVAL2`, and the date in the order `DATE-OBS`, `DATE-END` and `DATE`, skipping a value that is not a FITS date-time (`CCYY-MM-DD` with an optional `Thh:mm:ss[.sss]` and `Z`). The helpers `formatFitsHeaderValue`, `escapeQuotedText`, `unescapeQuotedText`, `isCommentKeyword`, `isCommentStyleCard` and `bitpixInBytes` support the reader and the writer. The keywords of the compressed images are described in FITS Pixel I/O and Rice Tiles.
+
+```ts
+import { FitsKeywordReader, FitsKeywordWriter } from 'nebulosa/src/io/formats/fits/fits'
+import { EXPTIME, KEYWORDS } from 'nebulosa/src/io/formats/fits/headers'
+import {
+	bitpixInBytes,
+	booleanKeyword,
+	bitpixKeyword,
+	cfaPatternKeyword,
+	declinationKeyword,
+	escapeQuotedText,
+	exposureTimeKeyword,
+	formatFitsHeaderValue,
+	hasKeyword,
+	heightKeyword,
+	isCommentKeyword,
+	isCommentStyleCard,
+	numberOfAxesKeyword,
+	numberOfChannelsKeyword,
+	numericKeyword,
+	observationDateKeyword,
+	rightAscensionKeyword,
+	textKeyword,
+	unescapeQuotedText,
+	widthKeyword,
+} from 'nebulosa/src/io/formats/fits/util'
+import { toDeg, toHour } from 'nebulosa/src/math/units/angle'
+
+const writer = new FitsKeywordWriter()
+const reader = new FitsKeywordReader()
+const buffer = Buffer.alloc(80 * 40)
+
+// A card takes 80 characters. The default comment of the keyword table is used when there is none.
+let size = writer.write(['EXPTIME', 120.5], buffer, 0)
+console.log(size, JSON.stringify(buffer.toString('latin1', 0, 80))) // 80 "EXPTIME = 1.20500000000000000000E+2 / Duration of exposure in seconds           "
+size += writer.write(['OBJECT', "Barnard's Star", 'target'], buffer, size)
+console.log(JSON.stringify(buffer.toString('latin1', 80, 160))) // "OBJECT  = 'Barnard''s Star'    / target                                         "
+console.log(Object.keys(KEYWORDS).length, EXPTIME, FitsKeywordWriter.keywords.GAIN) // 101 { type: "REAL", comment: "Duration of exposure in seconds" } { type: "REAL", comment: "Amplifier gain in electrons per analog unit" }
+
+// Booleans, commentary and long strings.
+size += writer.write(['TRACKING', true], buffer, size)
+size += writer.write(['COMMENT', 'first comment'], buffer, size)
+size += writer.write(['HISTORY', 'x'.repeat(100)], buffer, size)
+console.log(size) // 480
+size += writer.write(['LONG', 'a'.repeat(120)], buffer, size)
+console.log(size) // 640
+size += writer.writeEnd(buffer, size)
+
+// Reading one card and the whole header.
+console.log(reader.read(buffer, 0), reader.read(buffer, 80), reader.read(buffer, 160)) // [ "EXPTIME", 120.5, "Duration of exposure in seconds" ] [ "OBJECT", "Barnard's Star", "target" ] [ "TRACKING", true, undefined ]
+const header = reader.readAll(buffer)
+console.log(header) // { EXPTIME: 120.5, OBJECT: "Barnard's Star", TRACKING: true, COMMENT: "first comment", HISTORY: the 100 x in two lines of 71 and 29 characters, LONG: the 120 a rebuilt }
+
+// The cards of a whole header are written with writeAll, which does not add END.
+const again = Buffer.alloc(80 * 10)
+console.log(writer.writeAll({ SIMPLE: true, BITPIX: 16, NAXIS: 0 }, again, 0)) // 240
+
+// The generic accessors, with a default for the absent keys.
+console.log(hasKeyword(header, 'OBJECT'), numericKeyword(header, 'EXPTIME', 0), booleanKeyword(header, 'TRACKING'), textKeyword(header, 'OBJECT'), textKeyword(header, 'FILTER', 'none')) // true 120.5 true Barnard's Star none
+
+// The metadata readers: the geometry, the exposure and the pointing (in radians, converted back here).
+const image = { NAXIS: 3, NAXIS1: 100, NAXIS2: 50, NAXIS3: 3, BITPIX: -32, EXPOSURE: 10, BAYERPAT: 'RGGB ', RA: 83.82, DEC: -5.39, 'DATE-OBS': '2026-10-05T03:04:05.250Z' }
+console.log(numberOfAxesKeyword(image, 0), widthKeyword(image, 0), heightKeyword(image, 0), numberOfChannelsKeyword(image, 1), bitpixKeyword(image, 0), exposureTimeKeyword(image, 0), cfaPatternKeyword(image)) // 3 100 50 3 -32 10 RGGB
+console.log(toHour(rightAscensionKeyword(image, 0)), toDeg(declinationKeyword(image, 0)), observationDateKeyword(image)) // 5.587999999999999 -5.39 1791169445250
+
+// Sexagesimal coordinates and a date without time.
+const text = { OBJCTRA: '05 35 17.3', OBJCTDEC: '-05 23 28', DATE: '2026-01-02' }
+console.log(toHour(rightAscensionKeyword(text, 0)), toDeg(declinationKeyword(text, 0)), new Date(observationDateKeyword(text)!).toISOString()) // 5.588138888888888 -5.391111111111112 2026-01-02T00:00:00.000Z
+console.log(rightAscensionKeyword({}, undefined)) // undefined
+
+// The value formatting and the helpers.
+console.log(formatFitsHeaderValue(true), formatFitsHeaderValue(1.5), formatFitsHeaderValue("it's")) // T 1.5 'it''s'
+console.log(escapeQuotedText("it's"), unescapeQuotedText("it''s")) // it''s it's
+console.log(isCommentKeyword('HISTORY'), isCommentKeyword('OBJECT'), isCommentStyleCard(['COMMENT'])) // true false true
+console.log(bitpixInBytes(-64), bitpixInBytes(16), bitpixInBytes(8)) // 8 2 1
+```
 
 ### FITS Pixel I/O and Rice Tiles
 
+`FitsImageReader` and `FitsImageWriter` (`src/io/formats/fits/fits.ts`) convert between the planar big-endian data of a FITS unit and the channel-interleaved arrays of the imaging code (`Float32Array` or `Float64Array`, the samples of each pixel next to each other). `new FitsImageReader(hdu, buffer?)` is prepared with an HDU from `readFits` (see FITS Containers and HDUs), and `read(source, output, sampleScale?)` reads and converts the pixels into `output`, which must hold `width * height * channels` samples, and returns `true` when the unit was an image that could be read. The `sampleScale` is `'normalized'` (the default, samples from 0 to 1 after applying `BSCALE` and `BZERO`, the full integer range of an integer BITPIX being mapped to the unit interval) or `'digital'` (the integer values of the unsigned range, such as 0 to 65535 for 16 bits). Floating-point BITPIX values (-32 and -64) are read as they are in the normalized scale. The default scratch buffer is small and reused for planar chunks, so a large image is converted in a bounded memory; a buffer passed by the caller must cover the whole data segment of the unit. A binary table with `ZIMAGE` and `ZCMPTYPE = 'RICE_1'` is read through the same call: the reader looks up the tile table and the heap, decodes each tile with the Rice decoder of FITS Rice Compression, applies `ZSCALE` and `ZZERO` and reassembles the tiles; the dimensions come from the `Z` keywords (`ZNAXIS1`, `ZNAXIS2`, `ZBITPIX`), and a compressed image of another `ZCMPTYPE` is not supported. `new FitsImageWriter(header, buffer?)` writes the same layout in the other direction: `write(raw, sink)` converts the interleaved samples to the BITPIX and dimensions declared in the header, writes the data segment and returns the number of bytes written. It writes only the data, with no header and no padding, which is what `writeFits` composes with the cards. The scale of the samples written is the one of the header: for a 16-bit unit with `BZERO` 32768 and `BSCALE` 1 the normalized interval maps to 0 to 65535.
+
+```ts
+import { FitsImageReader, FitsImageWriter, readFits, writeFits } from 'nebulosa/src/io/formats/fits/fits'
+import { bufferSink, bufferSource } from 'nebulosa/src/io/io'
+
+// A monochrome image of 6x4 pixels, a ramp from 0 to 1, written as a complete 16-bit file.
+const width = 6
+const height = 4
+const raw = new Float32Array(width * height)
+for (let i = 0; i < raw.length; i++) raw[i] = i / (raw.length - 1)
+
+const file = Buffer.alloc(2880 * 4)
+const sink = bufferSink(file)
+await writeFits(sink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height }, raw, sampleScale: 'normalized' }])
+const fits = (await readFits(bufferSource(file.subarray(0, sink.position))))!
+const hdu = fits.hdus[0]
+
+// Reading in the two scales.
+const normalized = new Float32Array(width * height)
+console.log(await new FitsImageReader(hdu).read(bufferSource(file), normalized), normalized.slice(0, 4), normalized.at(-1)) // true Float32Array(4) [ 0, 0.043472953140735626, 0.08696116507053375, 0.13043412566184998 ] 1
+const digital = new Float32Array(width * height)
+await new FitsImageReader(hdu).read(bufferSource(file), digital, 'digital')
+console.log(digital.slice(0, 4), digital.at(-1)) // Float32Array(4) [ 0, 2849, 5699, 8548 ] 65535
+
+// The data of a unit written alone: the number of bytes is exactly the data size, with no padding.
+const data = Buffer.alloc(1024)
+const dataSink = bufferSink(data)
+const header = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height, BZERO: 32768, BSCALE: 1 }
+console.log(await new FitsImageWriter(header).write(raw, dataSink), dataSink.position) // 48 48
+console.log(data.subarray(0, 8)) // <Buffer 80 00 8b 21 96 43 a1 64>
+
+// A color image (3 channels) is interleaved in memory and planar in the file. Reading it back needs the unit.
+const colorWidth = 4
+const colorHeight = 2
+const color = new Float32Array(colorWidth * colorHeight * 3)
+for (let i = 0; i < colorWidth * colorHeight; i++) color.set([0.1, 0.5, 0.9], i * 3)
+const colorFile = Buffer.alloc(2880 * 4)
+const colorSink = bufferSink(colorFile)
+await writeFits(colorSink, [{ header: { SIMPLE: true, BITPIX: -32, NAXIS: 3, NAXIS1: colorWidth, NAXIS2: colorHeight, NAXIS3: 3 }, raw: color, sampleScale: 'normalized' }])
+const colorFits = (await readFits(bufferSource(colorFile.subarray(0, colorSink.position))))!
+const colorBack = new Float32Array(color.length)
+await new FitsImageReader(colorFits.hdus[0]).read(bufferSource(colorFile), colorBack)
+console.log(colorFits.hdus[0].data.size, colorBack.slice(0, 6)) // 96 Float32Array(6) [ 0.1, 0.5, 0.9, 0.1, 0.5, 0.9 ]
+
+// A Rice tiled image is read with the same reader. The file has an empty primary unit and the table extension.
+const w = 64
+const h = 32
+const pixels = new Float32Array(w * h)
+for (let i = 0; i < pixels.length; i++) pixels[i] = 0.25 + 0.5 * ((i % w) / w) + ((i * 7) % 13) / 5000
+const tiled = Buffer.alloc(2880 * 8)
+const tiledSink = bufferSink(tiled)
+await writeFits(tiledSink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: w, NAXIS2: h }, raw: pixels, sampleScale: 'normalized' }], { type: 'RICE_1', tileHeight: 8, blockSize: 32 })
+const tiledFits = (await readFits(bufferSource(tiled.subarray(0, tiledSink.position))))!
+const table = tiledFits.hdus[1]
+console.log(table.header.ZCMPTYPE, table.header.ZNAXIS1, table.header.ZNAXIS2, table.header.ZTILE1, table.header.ZTILE2, table.header.ZVAL1, table.header.ZVAL2) // RICE_1 64 32 64 8 32 2
+const decoded = new Float32Array(w * h)
+console.log(await new FitsImageReader(table).read(bufferSource(tiled), decoded)) // true
+
+// The 16-bit quantization is the only loss of the round trip: one step is 1/65535 in the normalized scale.
+let worst = 0
+for (let i = 0; i < pixels.length; i++) worst = Math.max(worst, Math.abs(decoded[i] - pixels[i]))
+console.log(worst < 1 / 65535, decoded[0], pixels[0]) // true 0.2500038146972656 0.25
+```
+
 ### FITS Rice Compression
+
+`compressRice(input, blockSize?, initialCapacity?)` and `decompressRice(compressed, output, blockSize?)` (`src/io/compression.ts`) implement the Rice codec that FITS uses for tile compression (`RICE_1`), working on the integer typed arrays `Int8Array`, `Uint8Array`, `Int16Array`, `Uint16Array`, `Int32Array` and `Uint32Array` (the element size must be 1, 2 or 4 bytes). Each block of `blockSize` samples (32 by default, the usual value of `ZVAL1`) is coded as the difference from the previous sample with a split between the low bits and a unary-coded rest, the number of low bits being chosen for each block, so smooth data of small differences compress well and flat blocks become a few bits. `compressRice` returns a view of the encoded bytes, and the coder runs through a `BitWriter`, which writes bits from the most significant end and grows as needed: by default a writer sized from the input is created, `initialCapacity` as a number pre-sizes it, and a `BitWriter` passed there is reset and reused, so the result then aliases its buffer and is valid only until the next call that uses that writer. `decompressRice` fills and returns `output`, which defines the number of samples and their type, and the `blockSize` must be the one used to compress. The codec is lossless for the integer samples; the loss of a FITS image comes only from the quantization of the float pixels to the integer BITPIX. In a FITS file each tile is one such stream, stored in the heap of a binary table (see FITS Pixel I/O and Rice Tiles); `writeFits` with `{ type: 'RICE_1', tileHeight, blockSize }` produces them, and `FitsImageReader` decodes them. Noise-like data may not shrink, and the compressed size depends on the data, so it cannot be predicted from the input size.
+
+```ts
+import { BitWriter, compressRice, decompressRice } from 'nebulosa/src/io/compression'
+
+// A smooth 16-bit signal: a slow drift with a small repetitive variation.
+const signal = new Int16Array(1024)
+for (let i = 0; i < signal.length; i++) signal[i] = 1000 + ((i * 37) % 17) - 8 + (i >> 5)
+const encoded = compressRice(signal, 32)
+console.log(signal.byteLength, encoded.byteLength, encoded.subarray(0, 8)) // 2048 601 Uint8Array(8) [ 3, 224, 72, 238, 238, 225, 125, 221 ]
+
+// Decoding needs an output of the same type and the same block size, and returns it.
+const decoded = decompressRice(encoded, new Int16Array(signal.length), 32)
+console.log(decoded.every((value, i) => value === signal[i])) // true
+
+// Bytes and 32-bit integers use the same call. The block size can be smaller.
+const bytes = Uint8Array.from({ length: 256 }, (_, i) => ((i * 3) % 11) + 100)
+const encodedBytes = compressRice(bytes, 16)
+console.log(
+	encodedBytes.byteLength,
+	decompressRice(encodedBytes, new Uint8Array(256), 16).every((value, i) => value === bytes[i]),
+) // 149 true
+
+const words = Int32Array.from({ length: 512 }, (_, i) => 100000 + ((i * i) % 101) - 50)
+const encodedWords = compressRice(words)
+console.log(
+	encodedWords.byteLength,
+	decompressRice(encodedWords, new Int32Array(512)).every((value, i) => value === words[i]),
+) // 493 true
+
+const unsigned = Uint16Array.from({ length: 512 }, (_, i) => 60000 + (i % 7))
+const encodedUnsigned = compressRice(unsigned)
+console.log(
+	encodedUnsigned.byteLength,
+	decompressRice(encodedUnsigned, new Uint16Array(512)).every((value, i) => value === unsigned[i]),
+) // 239 true
+
+// A flat field costs a few bits per block, and the block size changes that cost. Noise-like data barely shrinks.
+const flat = new Int16Array(512).fill(500)
+console.log(compressRice(flat).byteLength, compressRice(flat, 16).byteLength) // 10 18
+const noise = Int16Array.from({ length: 512 }, (_, i) => ((i * 7919) % 65536) - 32768)
+console.log(compressRice(noise).byteLength, noise.byteLength) // 970 1024
+
+// Reusing a BitWriter between calls avoids allocating a buffer for each tile. The result aliases its storage.
+const writer = new BitWriter(4096)
+const first = compressRice(signal, 32, writer)
+console.log(
+	first.byteLength === encoded.byteLength,
+	first.every((value, i) => value === encoded[i]),
+) // true true
+const copy = Uint8Array.from(first)
+const second = compressRice(flat, 32, writer)
+console.log(second.byteLength, copy.byteLength) // 10 601
+
+// A capacity as a number only pre-sizes the writer.
+console.log(compressRice(signal, 32, 4096).byteLength) // 601
+```
 
 ### Growable Binary Buffers
 
@@ -18961,7 +19388,119 @@ console.log(text.length, text.toString()) // 6 SIMPLE
 
 ### HTTP Range Byte Sources
 
+`RangeHttpSource` reads an HTTP(S) resource through `Range` requests, so a large file (a FITS or XISF image, a catalog) can be read piece by piece from a server without downloading it whole. `rangeHttpSource(uri, options?)` creates it. It is a seekable source (see Byte-Stream Contracts): `seek(position)` accepts any non-negative byte offset and does not touch the network, and each `read(buffer, offset?, size?)` sends one request for `bytes=position-(position+size-1)` (with `Accept-Encoding: identity`) and advances the position by the bytes received. The server must answer `206 Partial Content`; a `416` (a position at or past the end of the resource) is a read of `0`, which is how the end is seen, and any other status (a `200` that ignored the range included) is reported as an error. `options.timeout` is the maximum time of each request in milliseconds (`0`, the default, has no timeout), and disposing the source with `using` aborts the pending requests. The synchronous `readSync` is not supported. Requests of more than 64 KiB stream the body into the buffer, smaller ones read it as a whole. Each read is a round trip, so it is better to read in blocks of tens of kilobytes than a few bytes at a time. The snippet starts a local server that honours ranges.
+
+```ts
+import { rangeHttpSource, readRemaining, readUntil } from 'nebulosa/src/io/io'
+
+// A local server that serves a resource of 100000 bytes and honours the Range header.
+const resource = Buffer.alloc(100000)
+for (let i = 0; i < resource.byteLength; i++) resource[i] = i % 251
+const requests: string[] = []
+
+using server = Bun.serve({
+	port: 0,
+	fetch(request) {
+		const range = request.headers.get('range')
+		requests.push(range ?? 'none')
+		const match = /^bytes=(\d+)-(\d+)$/.exec(range ?? '')
+		if (!match) return new Response(resource)
+		const start = +match[1]
+		const end = Math.min(+match[2], resource.byteLength - 1)
+		if (start >= resource.byteLength) return new Response(null, { status: 416 })
+		return new Response(resource.subarray(start, end + 1), { status: 206, headers: { 'Content-Range': `bytes ${start}-${end}/${resource.byteLength}` } })
+	},
+})
+
+using source = rangeHttpSource(`http://localhost:${server.port}/data.bin`, { timeout: 5000 })
+console.log(source.position) // 0
+
+// The first bytes, then a seek and a read in the middle. A seek only moves the cursor.
+const buffer = Buffer.alloc(16)
+console.log(await source.read(buffer), source.position, buffer.subarray(0, 6)) // 16 16 <Buffer 00 01 02 03 04 05>
+console.log(source.seek(50000), requests.length) // true 1
+console.log(await source.read(buffer, 4, 8), source.position, buffer.subarray(4, 12).equals(resource.subarray(50000, 50008))) // 8 50008 true
+
+// A read of more than 64 KiB is streamed, and readUntil joins what the server returns.
+source.seek(0)
+const big = Buffer.alloc(70000)
+console.log(await readUntil(source, big), big.equals(resource.subarray(0, 70000))) // 70000 true
+
+// The end of the resource: a position at the end answers with 416, which is a read of 0.
+source.seek(resource.byteLength)
+console.log(await source.read(buffer)) // 0
+
+// A range that crosses the end is shortened by the server, and the rest is read to the end.
+source.seek(99990)
+console.log(await source.read(buffer), source.position) // 10 100000
+source.seek(99000)
+const tail = await readRemaining(source)
+console.log(tail.byteLength, tail.equals(resource.subarray(99000))) // 1000 true
+console.log(requests.slice(0, 3)) // [ "bytes=0-15", "bytes=50000-50007", "bytes=0-69999" ]
+```
+
 ### JPEG via TurboJPEG
+
+`Jpeg` (`src/bindings/imaging/libturbojpeg.ts`) is a stateless wrapper over the native TurboJPEG (libjpeg-turbo) library, loaded through `bun:ffi` from the shared library that the repository bundles for Windows (x64) and Linux (x64 and arm64), on first use. Each method creates and destroys its own native handle, so one instance serves any number of calls. `compress(data, width, height, format, quality, subsampling?, jpeg?)` encodes raw pixels (8 bits per sample, rows tightly packed, so the pitch is `width` times the samples of the format, 3 for `'RGB'` and `'BGR'`, 4 for the `X` and alpha formats, 1 for `'GRAY'`) with a `quality` from 1 to 100 and a chrominance subsampling of `'4:4:4'` (the default), `'4:2:2'`, `'4:2:0'`, `'4:4:0'`, `'4:1:1'`, `'4:4:1'` or `'GRAY'` (always used for gray input). It returns a view of the encoded bytes, written in a new worst-case buffer from `estimateBufferSize(width, height, subsampling)` or in the buffer that the caller supplies, which must be at least that large. `readHeader(jpeg)` returns the `width`, `height`, `subsampling` and the internal `colorspace` (`'RGB'`, `'YCbCr'`, `'GRAY'`, `'CMYK'` or `'YCCK'`) without decoding the pixels, and `decompress(jpeg, format?)` returns `{ data, width, height, format }` with the requested pixel layout (gray is kept gray, CMYK stays CMYK and the rest is RGB when it is omitted). A stream that cannot be parsed or decoded gives `undefined` and the library message is logged with `console.error`. `isJpeg(bytes)` is a cheap check of the two-byte start of image marker, `load()` returns the cached symbols of the library and `unload()` closes it. The encoder uses the fast DCT, so a decoded image differs from the source by the usual lossy error and not just by rounding.
+
+```ts
+import { isJpeg, Jpeg } from 'nebulosa/src/bindings/imaging/libturbojpeg'
+
+const jpeg = new Jpeg()
+const width = 64
+const height = 32
+
+// A smooth colour gradient: red grows with x, green with y, and blue is constant.
+const rgb = Buffer.alloc(width * height * 3)
+for (let y = 0; y < height; y++) {
+	for (let x = 0; x < width; x++) {
+		const i = (y * width + x) * 3
+		rgb[i] = x * 4
+		rgb[i + 1] = y * 8
+		rgb[i + 2] = 128
+	}
+}
+
+// The worst-case size of the encoded image depends on the subsampling.
+console.log(jpeg.estimateBufferSize(width, height, '4:4:4'), jpeg.estimateBufferSize(width, height, '4:2:0'), jpeg.estimateBufferSize(width, height, 'GRAY')) // 14336 8192 6144
+
+// Encode, then check the marker and the header.
+const encoded = jpeg.compress(rgb, width, height, 'RGB', 90, '4:4:4')!
+console.log(encoded.byteLength < rgb.byteLength, isJpeg(encoded), encoded.subarray(0, 2)) // true true <Buffer ff d8>
+console.log(jpeg.readHeader(encoded)) // { width: 64, height: 32, subsampling: "4:4:4", colorspace: "YCbCr" }
+
+// Decode to the default layout (RGB) and compare with the source: the worst pixel error of the lossy round trip.
+const decoded = jpeg.decompress(encoded)!
+console.log(decoded.width, decoded.height, decoded.format, decoded.data.byteLength) // 64 32 RGB 6144
+let worst = 0
+for (let i = 0; i < rgb.byteLength; i++) worst = Math.max(worst, Math.abs(rgb[i] - decoded.data[i]))
+console.log(worst < 16) // true
+
+// Other pixel layouts of the decoder: BGR swaps the first and third samples, RGBA adds an opaque alpha (255).
+const bgr = jpeg.decompress(encoded, 'BGR')!
+const rgba = jpeg.decompress(encoded, 'RGBA')!
+console.log(bgr.data[0] === decoded.data[2], bgr.data[2] === decoded.data[0], rgba.data.byteLength, rgba.data[3]) // true true 8192 255
+
+// A lower quality and a coarser chrominance give a smaller file, and the header reports the subsampling.
+const small = jpeg.compress(rgb, width, height, 'RGB', 40, '4:2:0')!
+console.log(small.byteLength < encoded.byteLength, jpeg.readHeader(small)?.subsampling) // true 4:2:0
+
+// Encoding into a buffer of the caller, which is large enough for the worst case.
+const target = Buffer.alloc(jpeg.estimateBufferSize(width, height, '4:2:2'))
+const inTarget = jpeg.compress(rgb, width, height, 'RGB', 75, '4:2:2', target)!
+console.log(inTarget.buffer === target.buffer, jpeg.readHeader(inTarget)?.subsampling) // true 4:2:2
+
+// Grayscale: one sample per pixel, and the header says so.
+const gray = Buffer.alloc(width * height)
+for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) gray[y * width + x] = x * 4
+const grayJpeg = jpeg.compress(gray, width, height, 'GRAY', 95)!
+console.log(jpeg.readHeader(grayJpeg)) // { width: 64, height: 32, subsampling: "GRAY", colorspace: "GRAY" }
+const grayDecoded = jpeg.decompress(grayJpeg)!
+console.log(grayDecoded.format, grayDecoded.data.byteLength) // GRAY 2048
+
+// isJpeg accepts any buffer.
+console.log(isJpeg(Buffer.from('not a jpeg')), isJpeg(new Uint8Array([0xff, 0xd8, 0xff]).buffer)) // false true
+```
 
 ### ReadableStream Byte Sources
 
@@ -19016,6 +19555,65 @@ function chunks(...parts: string[]) {
 ```
 
 ### Streaming Base64
+
+`Base64Source` decodes Base64 text into bytes as a `Source`, and `Base64Sink` encodes the bytes written to it and forwards the text to another `Sink` (see Byte-Stream Contracts), so a payload is converted in constant memory without building the whole encoded string. `base64Source(source)` takes a string or another `Source` of Base64 characters and `base64Sink(sink, alphabet?)` wraps a sink, with the alphabet `'base64'` (`+` and `/`, the default) or `'base64url'` (`-` and `_`). The source accepts both alphabets, ignores white space and line breaks (the wrapped lines of MIME and of XISF data blocks), decodes a trailing partial group, and keeps a group that crosses a read across calls; its `position` is the number of decoded bytes already returned. `seek(position)` moves to a decoded byte offset by realigning to a 3-byte, 4-character group and discarding the remainder of the group. A string source skips the white space while it counts, and a source backed by another `Source` must itself be seekable and the encoded stream must have no white space. A sink emits encoded text as the bytes arrive and may hold back the last characters of the final group, so `end()` must be called after the last write: it writes them, with `=` padding when the length is not a multiple of 3 bytes (in both alphabets), and returns how many characters it wrote. `encodedSize` counts all the characters sent, padding included.
+
+```ts
+import { base64Sink, base64Source, bufferSink, bufferSource } from 'nebulosa/src/io/io'
+
+// Decode a string. Whitespace and line breaks are ignored, and both alphabets are accepted.
+const source = base64Source('TmVidWxv\nc2E gdG9v bGtpdA==')
+const buffer = Buffer.alloc(32)
+const n = await source.read(buffer)
+console.log(n, buffer.toString('latin1', 0, n), source.position) // 16 Nebulosa toolkit 16
+
+// The URL-safe alphabet decodes the same bytes as the standard one.
+const standard = base64Source('+/+/')
+const urlSafe = base64Source('-_-_')
+console.log(standard.readSync(Buffer.alloc(3)), Buffer.from('+/+/', 'base64').toString('hex'), Buffer.from('-_-_', 'base64url').toString('hex')) // 3 fbffbf fbffbf
+const decoded = Buffer.alloc(3)
+urlSafe.readSync(decoded)
+console.log(decoded.toString('hex')) // fbffbf
+
+// Reading in small pieces gives the same bytes, since partial groups are kept between the reads.
+const pieces = base64Source('SGVsbG8sIHdvcmxkIQ==')
+const out = Buffer.alloc(13)
+let total = 0
+while (total < out.byteLength) {
+	const read = await pieces.read(out, total, 2)
+	if (!read) break
+	total += read
+}
+console.log(total, out.toString()) // 13 Hello, world!
+
+// Seeking in the decoded bytes: to byte 7 of "Hello, world!", and then to the end of the text.
+console.log(pieces.seek(7), pieces.position) // true 7
+const part = Buffer.alloc(5)
+console.log(await pieces.read(part), part.toString()) // 5 world
+
+// The source of another source: the encoded bytes of a buffer, decoded on the fly.
+const encoded = bufferSource(Buffer.from(Buffer.from('streamed from a source').toString('base64')))
+const target = Buffer.alloc(32)
+const length = await base64Source(encoded).read(target)
+console.log(target.toString('latin1', 0, length)) // streamed from a source
+
+// The sink encodes what is written and forwards text to its target. end() writes the last group with padding.
+const text = Buffer.alloc(64)
+const output = bufferSink(text)
+const sink = base64Sink(output)
+console.log(await sink.write(Buffer.from('Nebulosa')), sink.encodedSize) // 8 10
+console.log(sink.writeSync('!'), sink.encodedSize) // 1 11
+console.log(await sink.end(), sink.encodedSize) // 1 12
+console.log(text.toString('latin1', 0, output.position), Buffer.from('Nebulosa!').toString('base64')) // TmVidWxvc2Eh TmVidWxvc2Eh
+
+// The URL-safe alphabet of the sink, for bytes that would produce the '+' and '/' characters.
+const urlText = Buffer.alloc(16)
+const urlOutput = bufferSink(urlText)
+const urlSink = base64Sink(urlOutput, 'base64url')
+await urlSink.write(Buffer.from([0xfb, 0xff, 0xfe]))
+await urlSink.end()
+console.log(urlText.toString('latin1', 0, urlOutput.position)) // -__-
+```
 
 ### Streaming Text Lines
 
