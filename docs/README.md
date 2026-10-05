@@ -19852,6 +19852,46 @@ console.log(await writer.write(raw, bufferSink(block)), bitpixFromSampleFormat('
 
 ### XML Parsing
 
+`SimpleXmlParser` (`src/io/xml.ts`) is a small streaming XML parser for the plain element, attribute and text documents that the library consumes, such as the INDI and Alpaca payloads. It is a state machine fed with chunks: `parse(input)` takes a `string`, a `Buffer` or a `Uint8Array` (a message may arrive split at any byte, so the partial state is kept between calls) and returns the top-level nodes that were completed by that chunk, in order. The returned array is reused by the next call, so a caller keeps the nodes and not the array; the nodes stay valid. An `XmlNode` has the tag `name`, the `attributes` as a name to value map (an attribute without value maps to an empty string), the `children` elements in document order and the `text` of the element as a `Uint8Array` of raw bytes, which is the concatenation of the character data that sits directly inside the element (mixed content is joined) and is empty when there is none. A large text can be a view over a bigger buffer, so decode it with its `byteOffset` and `byteLength`, for example with `Buffer.from(node.text).toString()`, instead of using `.buffer` alone. The parser handles processing instructions (such as the `<?xml ... ?>` declaration), comments, single or double quoted attributes and self-closing tags, and decodes the five predefined entities and the decimal or hexadecimal character references in attribute values. It does not handle DTDs, CDATA, namespaces, or entities in the element text, which is left as it came. `new SimpleXmlParser(maxTextBytes?)` limits the text of one element (256 MiB by default), and `reset()` discards any partial node and the open elements, which also happens by itself when the input is malformed.
+
+```ts
+import { SimpleXmlParser } from 'nebulosa/src/io/xml'
+
+const parser = new SimpleXmlParser()
+
+// A whole document in one string: the nodes that closed in the call.
+const [vector] = parser.parse(`<?xml version="1.0"?>
+<!-- A vector of the INDI protocol -->
+<defNumberVector device="Telescope Simulator" name="EQUATORIAL_EOD_COORD" label='Eq. Coordinates' perm="rw">
+	<defNumber name="RA" format="%010.6m" min="0" max="24" step="0">5.5</defNumber>
+	<defNumber name="DEC" format="%010.6m" min="-90" max="90" step="0">-5.4</defNumber>
+</defNumberVector>
+`)
+
+console.log(vector.name, vector.attributes)
+for (const child of vector.children) console.log(child.name, child.attributes.name, Buffer.from(child.text).toString())
+
+// The same text can come in chunks that are cut anywhere: a node is returned by the call that closes it.
+const chunks = ['<setSwitchVector device="Mount" na', 'me="TELESCOPE_TRACK_STATE"><oneSwitch name="TRACK_ON">O', 'n</oneSwitch></setSwitchVec', 'tor><message device="Mount" message="a &lt;b&gt; &amp; &#x41;"/>']
+for (const chunk of chunks) {
+	for (const node of parser.parse(chunk))
+		console.log(
+			node.name,
+			node.attributes,
+			node.children.map((child) => Buffer.from(child.text).toString()),
+		)
+}
+
+// Bytes are accepted as well, as they come from a socket.
+const [node] = parser.parse(Buffer.from('<getProperties version="1.7"/>'))
+console.log(node.name, node.attributes.version, node.children.length, node.text.byteLength)
+
+// Start over, discarding a partial node.
+parser.parse('<defTextVector device="Camera"><defText name="DRIVER_INFO">')
+parser.reset()
+console.log(parser.parse('<enableBLOB device="Camera">Also</enableBLOB>')[0].name)
+```
+
 ## 🔢 Numerical
 
 ### 2D Vectors
