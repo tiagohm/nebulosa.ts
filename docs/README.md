@@ -6749,11 +6749,6 @@ console.log(tanProject(reflectFitsWcs({ ...header }, 1000, 800, false, true), de
 
 // No flip returns the very same header, and an invalid size throws.
 console.log(reflectFitsWcs(header, 1000, 800, false, false) === header) // true
-try {
-	reflectFitsWcs({ ...header }, 0, 800, true, false)
-} catch (e) {
-	console.log((e as Error).message) // WCS reflection width must be a positive integer: 0
-}
 
 // The CDELT + CROTA and the PC conventions are mirrored in their own keywords.
 console.log(reflectFitsWcs({ CTYPE1: RA_TAN, CTYPE2: DEC_TAN, CRPIX1: 500.5, CRPIX2: 400.5, CRVAL1: 83.8, CRVAL2: -5.4, CDELT1: -0.0005, CDELT2: 0.0005, CROTA2: 20 }, 1000, 800, true, true)) // CDELT1 0.0005, CDELT2 -0.0005, CRPIX unchanged (500.5, 400.5)
@@ -7045,32 +7040,6 @@ sipModelIntoFitsHeader(fit.model, header)
 console.log(Object.keys(header).join(' '), header.A_ORDER) // CTYPE1 CTYPE2 CRPIX1 CRPIX2 A_ORDER B_ORDER A_2_0 B_2_0 A_1_1 B_1_1 A_0_2 B_0_2 2
 console.log(header.CTYPE1, 'A_4_1' in header) // RA---TAN-SIP false
 
-// The failures are SipFitError with a code.
-const crowded = stars.filter((star) => star.x < 400 && star.y < 300)
-const attempts: [string, () => unknown][] = [
-	['order 6', () => fitSipDistortion(stars, wcs, { order: 6 })],
-	['3 stars', () => fitSipDistortion(stars.slice(0, 3), wcs, { order: 2 })],
-	['one corner', () => fitSipDistortion(crowded, wcs, { order: 2 })],
-	[
-		'negative weight',
-		() =>
-			fitSipDistortion(
-				stars.map((star) => ({ ...star, weight: -1 })),
-				wcs,
-				{ order: 2 },
-			),
-	],
-	['5 stars, ratio required', () => fitSipDistortion(stars.slice(0, 5), wcs, { order: 2, requireRecommendedStarCount: true, spatialDistribution: 'off' })],
-]
-
-for (const [label, attempt] of attempts) {
-	try {
-		attempt()
-	} catch (e) {
-		console.log(label, e instanceof SipFitError, (e as SipFitError).code) // order 6 true invalidOrder; 3 stars true insufficientStars; one corner true poorSpatialDistribution; negative weight true invalidWeight; 5 stars, ratio required true insufficientStars
-	}
-}
-
 // A poor distribution only warns with allowPoorDistribution, and the check is skipped with 'off'.
 const warned = fitSipDistortion(crowded, wcs, { order: 2, allowPoorDistribution: true })
 console.log(warned.diagnostics.warnings.length, warned.diagnostics.spatialDistribution?.occupiedCells, fitSipDistortion(crowded, wcs, { order: 2, spatialDistribution: 'off' }).diagnostics.spatialDistribution) // 2 1 { checked: false }
@@ -7204,12 +7173,6 @@ console.log(loaded.load({ ...header, CTYPE1: 'GLON-TAN', CTYPE2: 'GLAT-TAN' }), 
 console.log(loaded.load({ ...header, CTYPE1: 'GLON-TAN' }), loaded.pixToSky(500.5, 400.5)!.map(toDeg)) // false [ 83.8, -5.400000000000006 ]
 loaded[Symbol.dispose]()
 console.log(loaded.pixToSky(1, 1)) // undefined
-
-try {
-	new Wcs({ SIMPLE: true })
-} catch (e) {
-	console.log((e as Error).message) // failed to initialize WCS from header
-}
 
 // The cached library handle, released and opened again by the next Wcs, and a separate handle.
 console.log(typeof load().wcspih, load() === load()) // function true
@@ -7440,15 +7403,6 @@ console.log(row(spline.image, 5, [0, 24, 48, 72, 95]), spline.channels[0].coeffi
 const original = frame()
 const kept = automaticBackgroundExtraction(original, { correction: 'none' })
 console.log(kept.image === original, kept.channels[0].outputMin, row(kept.image, 5, [0, 95])) // true undefined [ 0.1, 0.3 ]
-
-console.log(DEFAULT_BACKGROUND_EXTRACTION_OPTIONS) // { gridSize: 24, boxSize: 0, model: 'polynomial', colorMode: 'perChannel', degree: 4, smoothing: 0.1, tolerance: 3, rejectionHigh: 2.5, rejectionLow: 4, rejectionIterations: 2, correction: 'subtract', clipping: 'truncate' }
-
-// A mask of the wrong length is rejected.
-try {
-	fitBackgroundSurface(frame(), { exclusionMask: new Uint8Array(10) })
-} catch (e) {
-	console.log((e as Error).message) // exclusionMask length must be 6144 (width*height), got 10
-}
 ```
 
 ### Backfocus Correction Estimates
@@ -7483,15 +7437,6 @@ console.log(estimateBackfocusCorrection(offset, { response: 80 })) // { correcti
 
 // A response of the opposite sign gives the opposite correction, and a zero offset needs none.
 console.log(estimateBackfocusCorrection(offset, { response: -80 }).correction, estimateBackfocusCorrection({ ...offset, centerToEdge: 0 }, { response: 80 }).correction) // 0.7375 and -0 (the zero offset needs no correction, and the sign of the zero is the negative one of the formula)
-
-// A zero response or a non-finite offset is an error.
-for (const test of [() => estimateBackfocusCorrection(offset, { response: 0 }), () => estimateBackfocusCorrection({ ...offset, centerToEdge: Number.NaN }, { response: 80 })]) {
-	try {
-		test()
-	} catch (e) {
-		console.log((e as Error).message) // both fail with 'finite non-zero calibration response is required'
-	}
-}
 ```
 
 ### Background Estimate
@@ -7581,22 +7526,59 @@ console.log(round(backgroundNeutralization(pixels(), { mode: 'rescale' }).raw)) 
 
 // A reference range around the sky excludes the star from the medians.
 console.log(round(backgroundNeutralization(pixels(), { mode: 'targetBackground', lowerLimit: 0.05, upperLimit: 0.3, targetBackground: 0.1 }).raw)) // [ 0.09, 0.09, 0.09, 0.1, 0.1, 0.1, 0.11, 0.11, 0.11, 0.1, 0.1, 0.1, 0.8, 0.7, 0.74 ]
-
-// The defaults, and a mono image that is returned untouched.
-console.log(DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS) // { lowerLimit: 0, upperLimit: 1, targetBackground: 0.05, mode: 'rescaleAsNeeded' }
-const image = pixels()
-const mono: Image = { ...image, metadata: { ...image.metadata, channels: 1, stride: 5 }, raw: new Float64Array([0.1, 0.2, 0.3, 0.4, 0.5]) }
-console.log(backgroundNeutralization(mono) === mono, round(mono.raw)) // true [ 0.1, 0.2, 0.3, 0.4, 0.5 ]
-
-// No sample of a channel in the reference range.
-try {
-	backgroundNeutralization(pixels(), { lowerLimit: 0.95, upperLimit: 1 })
-} catch (e) {
-	console.log((e as Error).message) // background neutralization requires at least one significant RED sample in the reference area
-}
 ```
 
 ### Bahtinov Chromatic Comparison
+
+`compareBahtinovChromatic(input, workspace, options?)` in `imaging/analysis/bahtinov/chromatic` measures the Bahtinov focus error of the red, green and blue planes of one registered RGB image separately and reports how far the focus of each color is from the green one, which is the signed reference. It is for the chromatic focus shift of a refractor or of a corrector: the three planes are analyzed one after the other with the same `input` (`image`, `center`, `area` or `size` and the optional `expected` prior), the same reusable workspace (see Bahtinov Focus Analysis) and the same options, except `plane`, which the comparison sets itself. It throws a `RangeError` when the image does not have exactly three channels (a CFA image has to be reconstructed first). When every channel succeeds, and the central spike and the two external spikes of the three planes agree in orientation within 5 degrees (the roles of the two external spikes can be swapped), the result is `success` with the three `channels` (each one a full analysis, see `analyzeBahtinov`), `redMinusGreen` and `blueMinusGreen` (the signed focus errors in pixels, each aligned with the orientation of the green central normal, so that a flipped normal does not flip the sign), the `focusSpan` (the largest pairwise separation of the three errors, in pixels), the `redReferenceOffset` and `blueReferenceOffset` (the displacement of the reference point from the green one in image pixels, which is the lateral color of the pattern) and the `confidence` (the weakest of the three). Otherwise it is a failure with the channels that were analyzed (successes and failures are kept) and `failedChannels`, which names the planes that could not be measured or that do not match the green pattern, and no number is made up. A channel's `focusState` is the one of its own analysis and is not summarized here, and the offsets are in pixels of focus error: converting them to a focuser distance is a calibration of the user, and the signs of `redMinusGreen` and `blueMinusGreen` follow the central normal of the green plane, whose canonical angle can fall at either end of `[0, PI)` (an angle of 0 and one of PI are the same line with opposite normals), so a plane that was drawn on the positive side can read as a negative difference: the magnitudes and the span are the stable numbers, and the angle of each channel is in `channels`.
+
+```ts
+import { compareBahtinovChromatic } from 'nebulosa/src/imaging/analysis/bahtinov/chromatic'
+import { createBahtinovWorkspace } from 'nebulosa/src/imaging/analysis/bahtinov/preprocess'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+import { plotBahtinovSpikes } from 'nebulosa/src/imaging/stars/bahtinov'
+
+const width = 200
+const height = 200
+let seed = 9
+const random = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967295
+
+// An RGB image (interleaved) where each plane has a pattern at the same place and its own offset of the central spike, in pixels; a plane can be left out with `undefined`.
+function render(errors: readonly [number | undefined, number | undefined, number | undefined]): Image {
+	const raw = new Float64Array(width * height * 3)
+
+	for (let c = 0; c < 3; c++) {
+		const plane = new Float64Array(width * height)
+		for (let i = 0; i < plane.length; i++) plane[i] = 0.05 + (random() - 0.5) * 0.004
+		const error = errors[c]
+		if (error !== undefined) plotBahtinovSpikes(plane, width, height, 1, 100, 100, 40, error, undefined, { halfLength: 80 })
+		for (let i = 0; i < plane.length; i++) raw[i * 3 + c] = plane[i]
+	}
+
+	return { header: {}, raw, metadata: { width, height, channels: 3, pixelCount: width * height, stride: width * 3, strideInBytes: width * 3 * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+}
+
+const workspace = createBahtinovWorkspace(160, 160)
+const center = { x: 100, y: 100 }
+
+// Central spikes drawn 2 pixels off for red, 0 for green and -3 for blue: the differences, the span and the offsets of the reference points.
+const result = compareBahtinovChromatic({ image: render([2, 0, -3]), center, size: 160 }, workspace)
+if (result.success) console.log(result.redMinusGreen.toFixed(3), result.blueMinusGreen.toFixed(3), result.focusSpan.toFixed(3), result.redReferenceOffset, result.blueReferenceOffset, result.confidence.toFixed(3)) // redMinusGreen -2.210, blueMinusGreen 3.124, focusSpan 5.334, red reference offset (0.067, 0.036), blue offset (-0.042, 0.021), confidence 0.840 (the drawn offsets 2 and -3 are read as 2.137 and -3.197 against the green 0.073, but the signs of the two differences are inverted because of the green normal angle, see below)
+
+// Each channel is a full analysis that can be inspected on its own.
+if (result.success) console.log([result.channels.red, result.channels.green, result.channels.blue].map((r) => [r.error.toFixed(3), r.uncertainty?.toFixed(3), r.focusState, r.confidence.toFixed(3)])) // red 2.137 (uncertainty 0.058, defocused, 0.848), green 0.073 (0.061, focused, 0.843) and blue -3.197 (0.060, defocused, 0.840)
+
+// The sign is along the central normal of the green plane, whose canonical angle is in [0, PI): this is the angle of each plane.
+if (result.success) console.log([result.channels.red, result.channels.green, result.channels.blue].map((r) => r.centralLine.normalAngle.toFixed(4))) // central normal angles of 0.0000 for red, 3.1416 for green and 0.0001 for blue: the green normal is the opposite one, so the errors of red and blue are expressed along it and change sign
+
+// All the planes at the same focus: the differences and the span are within the noise of the measurement.
+const same = compareBahtinovChromatic({ image: render([1, 1, 1]), center, size: 160 }, workspace)
+if (same.success) console.log(same.redMinusGreen.toFixed(3), same.blueMinusGreen.toFixed(3), same.focusSpan.toFixed(3)) // 0.011, 0.047 and 0.047: all within the noise of the measurement
+
+// The options and the area are shared by the three planes (a tolerance here changes every channel state).
+const wide = compareBahtinovChromatic({ image: render([2, 0, -3]), center, area: { left: 20, top: 20, right: 180, bottom: 180 } }, workspace, { focusTolerance: 3 })
+if (wide.success) console.log(wide.channels.red.focusState, wide.channels.green.focusState, wide.channels.blue.focusState) // focused, focused, defocused (a tolerance of 3 pixels accepts 2.1 and 0.07 but not 3.2)
+```
 
 ### Bahtinov Focus Analysis
 
@@ -7658,27 +7640,6 @@ const agreeing = analyzeBahtinov({ image: near, center, size: 160, expected: mas
 const disagreeing = analyzeBahtinov({ image: near, center, size: 160, expected: { centralNormalAngle: 1, externalNormalAngles: [1.3, 0.7], maximumAngleDelta: 0.05 } }, workspace)
 console.log(agreeing.success ? agreeing.error.toFixed(3) : agreeing.reason, disagreeing.success ? disagreeing.warnings.map((w) => w.code) : disagreeing.reason) // -0.328 for the right mask, and patternNotFound when the expected angles (central 1 rad, externals 1.3 and 0.7 rad) differ from every candidate by more than 0.05 rad
 
-// The failures keep the reason without any geometry: no pattern at all, a pattern too faint to be supported, a saturated one (the flux is far above the saturation level) and a plane that a mono image does not have.
-const failures = [
-	analyzeBahtinov({ image: render(0, 1e-9), center, size: 160 }, workspace),
-	analyzeBahtinov({ image: render(0.4, 1), center, size: 160 }, workspace),
-	analyzeBahtinov({ image: render(0.4, 40000), center, size: 160 }, workspace),
-	analyzeBahtinov({ image: near, center, size: 160 }, workspace, { plane: 'red' }),
-]
-console.log(failures.map((r) => (r.success ? 'success' : [r.reason, r.warnings.length]))) // [patternNotFound, 0], [insufficientSupport, 0], [saturated, 0], [unsupportedPlane, 0]
-
-// The structural errors throw: a center outside the image and a workspace smaller than the region.
-for (const test of [() => analyzeBahtinov({ image: near, center: { x: 300, y: 100 }, size: 160 }, workspace), () => analyzeBahtinov({ image: near, center, size: 190 }, workspace), () => createBahtinovWorkspace(4, 4)]) {
-	try {
-		test()
-	} catch (e) {
-		console.log((e as Error).message) // Bahtinov center must be finite and inside the image pixel-center domain, Bahtinov workspace is smaller than the resolved ROI, width must be an integer at least 16
-	}
-}
-
-// The defaults of the options.
-console.log(DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.focusTolerance, DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.maximumUncertainty, DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.minimumConfidence, DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.minimumSignalToNoise, DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.transform) // 0.25 0.5 0.2 3 sqrt
-
 // Geometry: a normal angle outside [0, PI) is folded back and the distance changes sign with it.
 console.log(canonicalizeBahtinovLine(-Math.PI / 4, 10), canonicalizeBahtinovLine(Math.PI, 5)) // { normalAngle: 2.356 (3 PI / 4), distance: -10 } and { normalAngle: 0, distance: -5 }
 
@@ -7703,6 +7664,51 @@ console.log(computeBahtinovFocusGeometry({ normalAngle: 0, distance: 101.5 }, { 
 
 ### Bahtinov Overlay Geometry
 
+`createBahtinovOverlayGeometry(analysis, options?)` in `imaging/analysis/bahtinov/overlay` turns a successful `analyzeBahtinov` result (see Bahtinov Focus Analysis) into the primitives that a viewer draws over the image: the three spike segments, the reference point, its projection on the central spike, the segment of the error between them and three circles. Everything is in full-image pixel coordinates and independent of any renderer or display transform: the function reads no pixel, applies no zoom and returns fresh objects that share nothing with the analysis. `errorCircleRadius` is the shared radius of the two small circles at the reference and at its projection, in image pixels (by default the median of the three fitted line widths, at least 2 pixels) and `focusRegionRadius` the radius of the guide circle around the reference (by default half the smaller side of the region minus a pixel, and at most the diagonal of the region). The result has the copied `area`, the `focusRegionCircle` (role `focusRegion`), the `spikes` (the roles `central`, `external0` and `external1`, each with the segment clipped to the region), the `reference`, the `centralProjection` (the reference moved along the central normal by the error), the `errorSegment` (from the projection to the reference, directed along the sign of the error) and the `errorCircles` (roles `reference` and `centralProjection`). The radii are only visual and never scale the error, so the circles of a focused pattern overlap and those of a defocused one separate. It throws a `RangeError` when the analysis is not self-consistent (a non-finite or inconsistent line, point or error, an absolute error that differs from the error, a region smaller than 2 by 2 pixels or a reference that is not on the two external lines) or a radius is not positive and finite; it does not look at the focus state, so a failed measurement has to be filtered out first (a failure cannot be given, by the type).
+
+```ts
+import { analyzeBahtinov } from 'nebulosa/src/imaging/analysis/bahtinov/bahtinov'
+import { createBahtinovOverlayGeometry } from 'nebulosa/src/imaging/analysis/bahtinov/overlay'
+import { createBahtinovWorkspace } from 'nebulosa/src/imaging/analysis/bahtinov/preprocess'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+import { plotBahtinovSpikes } from 'nebulosa/src/imaging/stars/bahtinov'
+
+const width = 200
+const height = 200
+let seed = 5
+const random = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967295
+
+// A mono image with a Bahtinov pattern whose central spike is 3 pixels off.
+const raw = new Float64Array(width * height)
+for (let i = 0; i < raw.length; i++) raw[i] = 0.05 + (random() - 0.5) * 0.004
+plotBahtinovSpikes(raw, width, height, 1, 100, 100, 40, -3, undefined, { halfLength: 80 })
+const image: Image = { header: {}, raw, metadata: { width, height, channels: 1, pixelCount: width * height, stride: width, strideInBytes: width * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+
+const analysis = analyzeBahtinov({ image, center: { x: 100, y: 100 }, size: 160 }, createBahtinovWorkspace(160, 160))
+if (!analysis.success) throw new Error(analysis.reason)
+
+// The default overlay: the guide circle and the two error circles, with the radii chosen from the line widths and the region.
+const overlay = createBahtinovOverlayGeometry(analysis)
+console.log(overlay.area, overlay.focusRegionCircle, overlay.errorCircles) // area { left: 21, top: 21, right: 181, bottom: 181 }; guide circle centered on the reference (99.952, 99.989) with radius 79.5; error circles of radius 2.482 at the reference and at the projection (103.151, 99.989)
+
+// The three spike segments with their roles, and the error between the reference and its projection on the central line.
+console.log(overlay.spikes.map((spike) => [spike.role, spike.segment.map((p) => [p.x.toFixed(1), p.y.toFixed(1)])])) // central from (103.1, 21) to (103.2, 180), external0 from (121.1, 21) to (78.5, 180) and external1 from (78.8, 21) to (121.4, 180), all clipped to the region rows 21 to 180
+console.log(overlay.reference, overlay.centralProjection, overlay.errorSegment, analysis.error.toFixed(3)) // reference (99.952, 99.989), projection (103.151, 99.989) and the error segment from the projection to the reference, for an analysis error of 3.199 (the central normal is at 3.1415 rad, pointing to -X, so the projection is 3.2 pixels to the right of the reference, where the central spike was drawn)
+
+// The projection is on the central line and the error segment has the length of the absolute error.
+const [from, to] = overlay.errorSegment
+console.log(Math.hypot(to.x - from.x, to.y - from.y).toFixed(3), analysis.absoluteError.toFixed(3)) // 3.199 3.199
+
+// The radii are free: bigger circles for a bigger display, and the objects are fresh copies of the analysis.
+const large = createBahtinovOverlayGeometry(analysis, { errorCircleRadius: 6, focusRegionRadius: 40 })
+console.log(
+	large.errorCircles.map((c) => c.radius),
+	large.focusRegionCircle.radius,
+	large.reference !== analysis.reference,
+	large.spikes[0].segment !== analysis.centralLine.segment,
+) // [6, 6], 40, true, true
+```
+
 ### Bounded Robust Sampling
 
 `RobustReservoir` is the fixed-memory sampler that the analysis modules use to take the median, the median absolute deviation and a robust standard deviation of an image of any size. `new RobustReservoir(populationCapacity)` allocates room for `min(populationCapacity, ROBUST_SAMPLE_CAPACITY)` values (65536, at least 1) and throws a `RangeError` when the capacity is not a non-negative safe integer. `push(value)` considers one value and ignores non-finite ones: the first values are stored exactly, and once the reservoir is full each new value replaces a random retained one with the probability of a uniform reservoir, drawn from a deterministic xorshift generator that `reset()` restores, so the same sequence always gives the same sample. `seenCount` counts every finite value considered, `retainedCount` those that are kept and `approximate` tells whether the retained values are a sample (more values seen than retained). `median()` returns the median of the retained values and `mad(normalized?, scratch?)` their median absolute deviation (`normalized` multiplies it by the Gaussian factor 1.4826), `madAround(center, normalized?, scratch?)` computes it around a median that is already known, and `robustStandardDeviation()` is the population standard deviation after the samples more than five normalized MADs from the median are dropped. All return `NaN` when nothing has been pushed. The values are reordered by the selection of the median, which is not a problem for the statistics but means the reservoir does not preserve the order of arrival. The scratch passed to `mad` or `madAround` must hold every retained value (a `RangeError` otherwise). Once the reservoir is full the statistics are estimates from at most 65536 values, so they differ slightly from the exact ones.
@@ -7721,15 +7727,6 @@ const outliers = new RobustReservoir(16)
 for (const value of [10, 11, 9, 10, 12, 8, 10, 11, 9, 1000]) outliers.push(value)
 console.log(outliers.median(), outliers.mad(true), outliers.robustStandardDeviation()) // 10 1.482602218505602 1.154700538379252 (the 1000 is dropped by the standard deviation)
 
-// A caller-owned scratch buffer avoids the allocation of the MAD.
-const scratch = new Float64Array(16)
-console.log(outliers.mad(false, scratch)) // 1
-try {
-	outliers.mad(false, new Float64Array(2))
-} catch (e) {
-	console.log((e as Error).message) // robust MAD scratch must hold every retained sample
-}
-
 // A large population is sampled: the capacity is bounded, the result is approximate and reproducible.
 const large = new RobustReservoir(1_000_000)
 for (let i = 0; i < 300_000; i++) large.push(i % 1000)
@@ -7739,14 +7736,6 @@ large.reset()
 console.log(large.seenCount, large.retainedCount, large.median()) // 0 0 NaN
 for (let i = 0; i < 300_000; i++) large.push(i % 1000)
 console.log(large.median()) // 500 (the same after the reset)
-
-// The capacity of the storage and the invalid arguments.
-console.log(new RobustReservoir(0).retainedCount, new RobustReservoir(10).approximate) // 0 false
-try {
-	new RobustReservoir(-1)
-} catch (e) {
-	console.log((e as Error).message) // robust reservoir population capacity must be a non-negative safe integer
-}
 ```
 
 ### Celestial Streak Tracks
@@ -7830,6 +7819,73 @@ console.log(matchPredictedStreakTrack(observed, { start: skyOf(10, 20), end: sky
 ```
 
 ### Collimation Sequence Summary
+
+`summarizeCollimationSequence(analyses, options?)` in `imaging/analysis/collimation/sequence` summarizes the results of `analyzeCollimation` (see Defocused Annular Geometry Analysis) over a short run of frames, so that the noise of a single frame does not decide the offset. The frames are grouped by the caller, and they must be of the same target, optical configuration, native plane, orientation, sampling, focus side and defocus regime, with no mechanical adjustment in between: the function only sees numbers in one image frame and cannot check any of that. At most 1024 analyses are accepted (it throws a `RangeError` beyond that). A frame is individually usable when its analysis succeeded, its outer center was not found outside a known field reference (an unknown reference is allowed) and it has a `stability` (which is omitted outside its supported domain, or when a replicate fails). The `entries` list has one record per input in the original order: `usable: true`, or `usable: false` with the `reason` (`analysisFailed`, with the `analysisReason` of the failure kept, `outsideFieldReference` or `stabilityUnavailable`). At least five usable frames are needed, all with the same plane and with outer equivalent radii within 5% of their median; otherwise it fails with `insufficientFrames` or `incompatibleMeasurements` (also for a median that cannot be computed), with the `usableCount` and the `entries`, and no zero vector stands in for the missing measurement. On `success` it has the `usableCount`, the `entries`, the common `plane`, the `offset` (the approximate geometric median of the offset vectors in image pixels), the `referenceRadius` (the median outer equivalent radius in pixels), the `normalizedOffset` and the scalar `distance` and `normalizedDistance` of the median vector, the `dispersion` (the largest distance of a frame offset from the median, in pixels, and `normalizedDispersion` over the reference radius), the `resolutionFloor` (the largest of the frames, in pixels) and the `direction` in `[0, TAU)` (+X toward +Y) only when the distance is greater than three times the larger of the dispersion and the floor. With a `tolerance` in the options, `dispersionExceedsTolerance` compares the normalized dispersion with it (not the offset, so it is a statement about repeatability and not about collimation). The dispersion is descriptive: it is not divided by the square root of the number of frames and it is not a confidence interval.
+
+```ts
+import { analyzeCollimation } from 'nebulosa/src/imaging/analysis/collimation/collimation'
+import { createCollimationWorkspace } from 'nebulosa/src/imaging/analysis/collimation/preprocess'
+import { summarizeCollimationSequence } from 'nebulosa/src/imaging/analysis/collimation/sequence'
+import { generateSyntheticCollimationImage, type SyntheticCollimationPattern } from 'nebulosa/src/imaging/synthetic/collimation'
+
+// A defocused star: an outer ellipse of 60 by 58 pixels at (100, 100) and an obstruction of 24 by 23 pixels offset by `dx` and `dy` pixels; the seed changes the noise.
+function pattern(dx: number, dy: number, seed: number, outerRadius: number = 60): SyntheticCollimationPattern {
+	return {
+		width: 200,
+		height: 200,
+		outer: { center: { x: 100, y: 100 }, semiMajor: outerRadius, semiMinor: outerRadius - 2, theta: 0.3, softness: 1.2 },
+		obstruction: { center: { x: 100 + dx, y: 100 + dy }, semiMajor: 24, semiMinor: 23, theta: 0.3, softness: 1.2 },
+		signal: 2000,
+		background: 0.05,
+		noise: 0.002,
+		seed,
+	}
+}
+
+const area = { left: 10, top: 10, right: 190, bottom: 190 }
+const workspace = createCollimationWorkspace(200, 200)
+const measure = (dx: number, dy: number, seed: number, outerRadius?: number, field?: { center: { x: number; y: number }; maximumDistance: number }) => analyzeCollimation({ image: generateSyntheticCollimationImage(pattern(dx, dy, seed, outerRadius)), area, field }, { workspace })
+
+// Six frames of the same configuration with a drawn offset of (4, -2) pixels: the median vector, the dispersion and the direction in radians.
+const analyses = [1, 2, 3, 4, 5, 6].map((seed) => measure(4, -2, seed))
+const summary = summarizeCollimationSequence(analyses)
+if (summary.success) console.log(summary.usableCount, summary.offset, summary.referenceRadius.toFixed(3), summary.distance.toFixed(3), summary.normalizedDistance.toFixed(4), summary.dispersion.toFixed(3), summary.normalizedDispersion.toFixed(5), summary.resolutionFloor, summary.direction?.toFixed(4)) // 6 frames, offset (4.001, -1.997), reference radius 58.980, distance 4.472, normalized distance 0.0758, dispersion 0.019 pixel (normalized 0.00032), resolution floor 0.2 and direction 5.820 rad (the drawn offset is (4, -2))
+
+// The tolerance compares the repeatability (the normalized dispersion), not the offset.
+for (const tolerance of [0.01, 0.0001]) {
+	const compared = summarizeCollimationSequence(analyses, { tolerance })
+	if (compared.success) console.log(tolerance, compared.dispersionExceedsTolerance) // 0.01 gives false and 0.0001 gives true: the dispersion of 0.00032 exceeds only the second
+}
+
+// A concentric obstruction: the median offset is about zero and the direction is not resolved.
+const concentric = summarizeCollimationSequence([1, 2, 3, 4, 5, 6].map((seed) => measure(0, 0, seed)))
+if (concentric.success) console.log(concentric.distance.toFixed(3), concentric.resolutionFloor, concentric.direction) // distance 0.009 pixel, resolution floor 0.2 and no direction
+
+// An analysis that failed keeps its reason in the entries and does not enter the summary; a frame whose outer center is outside the field reference is excluded too.
+const field = { center: { x: 100, y: 100 }, maximumDistance: 5 }
+const mixed = summarizeCollimationSequence([
+	measure(4, -2, 1),
+	measure(4, -2, 2),
+	measure(4, -2, 3),
+	measure(4, -2, 4),
+	measure(4, -2, 5),
+	measure(4, -2, 6, 60, { center: { x: 150, y: 150 }, maximumDistance: 5 }),
+	analyzeCollimation({ image: generateSyntheticCollimationImage({ ...pattern(4, -2, 7), signal: 0 }), area }, { workspace }),
+])
+if (mixed.success) console.log(mixed.usableCount, mixed.entries) // usableCount 5: frames 0 to 4 usable, frame 5 excluded as outsideFieldReference and frame 6 as analysisFailed with the analysisReason lowSignal
+
+// Fewer than five usable frames cannot give a summary.
+const few = summarizeCollimationSequence(analyses.slice(0, 4))
+console.log(few.success, !few.success && few.reason, few.usableCount) // false insufficientFrames 4
+
+// An outer radius that differs by more than 5% from the median (a different focus position) makes the group incompatible.
+const radii = summarizeCollimationSequence([...analyses.slice(0, 5), measure(4, -2, 8, 70)])
+console.log(radii.success, !radii.success && radii.reason, radii.usableCount) // false incompatibleMeasurements 6
+
+// The empty sequence has no usable frame.
+const none = summarizeCollimationSequence([])
+console.log(none.success, !none.success && none.reason) // false insufficientFrames
+```
 
 ### Cosmetic Correction
 
@@ -7922,13 +7978,6 @@ console.log(protectedResult.hot, protectedResult.cold) // 0 1 (the hot pixel is 
 
 // An amount of 0 changes nothing, and so do thresholds of 0 with no other detector.
 console.log(cosmeticCorrection(frame(), { amount: 0 }).corrected, cosmeticCorrection(frame(), { hotSigma: 0, coldSigma: 0 }).corrected) // 0 0
-console.log(DEFAULT_COSMETIC_CORRECTION_OPTIONS) // { hotSigma: 3, coldSigma: 3, windowRadius: 1, amount: 1, darkHotSigma: 5 }
-
-try {
-	cosmeticCorrection(frame(), { protect: new Uint8Array(10) })
-} catch (e) {
-	console.log((e as Error).message) // protect mask length must be 1024 (width*height), got 10
-}
 ```
 
 ### Critical Focus Planning Estimate
@@ -7963,15 +8012,6 @@ console.log(criticalFocusZone({ criterion: 'diffraction', focalRatio: 5, wavelen
 
 // An explicit tolerance of 15 micrometers, returned unchanged.
 console.log(criticalFocusZone({ criterion: 'callerProvided', tolerance: 15 })) // { tolerance: 15, criterion: 'callerProvided' }
-
-// A missing, zero or non-finite value is an error, whichever criterion needs it.
-for (const options of [{ focalRatio: 5 }, { focalRatio: 0, wavelength: 0.55 }, { criterion: 'callerProvided' as const }, { criterion: 'callerProvided' as const, tolerance: Number.NaN }]) {
-	try {
-		criticalFocusZone(options)
-	} catch (e) {
-		console.log((e as Error).message) // the first two (no wavelength, a zero focal ratio) fail with 'finite positive focal ratio and wavelength are required' and the last two (no tolerance, a NaN tolerance) with 'a finite positive caller-provided tolerance is required'
-	}
-}
 ```
 
 ### Curves
@@ -8031,19 +8071,6 @@ console.log(round(curvesTransformation(pixel(), { curves: [{ channel: 'BT709', x
 
 // The identity curves, the empty list and the default options leave the image untouched.
 console.log(round(curvesTransformation(ramp(), { curves: [{ channel: 'GRAY', x: [0, 1], y: [0, 1] }, undefined] }).raw), round(curvesTransformation(ramp(), DEFAULT_CURVES_TRANSFORMATION_OPTIONS).raw), round(curvesTransformation(ramp()).raw)) // [ 0, 0.25, 0.5, 0.75, 1 ] [ 0, 0.25, 0.5, 0.75, 1 ] [ 0, 0.25, 0.5, 0.75, 1 ]
-
-// The errors: an x that is not increasing, arrays of different lengths, and an unknown channel.
-for (const curve of [
-	{ channel: 'GRAY', x: [0.5, 0.4], y: [0.5, 0.6] },
-	{ channel: 'GRAY', x: [0.5], y: [0.5, 0.6] },
-	{ channel: 'LUMA', x: [0.5], y: [0.5] },
-]) {
-	try {
-		curvesTransformation(ramp(), { curves: [curve as never] })
-	} catch (e) {
-		console.log((e as Error).message) // curves transformation x coordinates must be strictly increasing after clamping, curves transformation x and y arrays must have the same length and unsupported curves transformation channel: LUMA
-	}
-}
 ```
 
 ### Dark Current
@@ -8108,15 +8135,6 @@ masked[5] = 1
 console.log(measureSensorDarkCurrent(darks, 2, { area: { left: 0, top: 0, right: 4, bottom: 2 }, mask: masked, tile: { width: 4, height: 2 } }).mean) // 10
 const mosaics: SensorFrameSet[] = [0, 10, 20, 40].map((exposure) => ({ frames: pair(100 + 3 * exposure, 4 + exposure, 'RGGB'), exposure }))
 console.log(measureSensorDarkCurrent(mosaics, 2, { plane: 'green1', cfaOffset: [0, 0], tile: { width: 4, height: 4 } }).mean) // 6
-
-// Errors: fewer than three exposures, and a CFA mosaic without a plane.
-for (const run of [() => measureSensorDarkCurrent(darks.slice(0, 2), 2), () => measureSensorDarkCurrent(mosaics, 2), () => measureSensorDarkCurrent(darks, 0)]) {
-	try {
-		run()
-	} catch (e) {
-		console.log((e as Error).message) // dark-current regression requires at least three distinct exposure times, then a CFA image requires an explicit color sensor plane, then dark-current conversion gain must be finite and positive
-	}
-}
 ```
 
 ### Debayering
@@ -8158,6 +8176,60 @@ console.log(debayer(rgb), debayer({ ...gradient, metadata: { ...gradient.metadat
 ```
 
 ### Defocused Annular Geometry Analysis
+
+`analyzeCollimation(input, options?)` in `imaging/analysis/collimation/collimation` measures the apparent geometry of one complete defocused star (the bright annulus of a reflector with its central obstruction) in a linear, unstretched, normalized image: it fits the outer boundary and the shadow of the obstruction as two independent ellipses and reports the offset of the shadow from the outer center. It is a geometric diagnostic to support a collimation workflow: it does not infer or certify the collimation of a telescope, and the offset is in the sampling grid of the image (no correction for non-square pixels or binning). The `input` has the `image`, an integer half-open `area` (`{ left, top, right, bottom }`, at most 1024 pixels per side) that contains one whole annulus and a margin of external background, an optional `center` (any point in the shadow, the middle of the area by default) and an optional `field` reference (`{ center, maximumDistance }` in the same image frame) that the outer center is checked against, because the middle of the area or of the sensor does not imply an optical axis. The `options` are `plane` (`auto` is the mono image, the green of an RGB one or the first green of a CFA one, no debayering), `saturationLevel` (in the original normalized scale, unknown by default and never assumed to be 1), `smoothingSigma` (in pixels, 1 by default, 0 to disable), `angularSamples` (the number of sectors, 360 by default, from 12 to 2048), `minimumCoverage` (0.8) and `maximumGap` (PI / 3 radians) of the accepted sectors, `maximumEdgeResidual` (0.5 pixel), `minimumSignalToNoise` (8), an optional `tolerance` (the offset divided by the outer equivalent radius that is accepted, with no universal default) and a reusable `workspace` from `createCollimationWorkspace(width, height, { precision?, angularSamples? })`, which must not serve two analyses at once and must match the precision of the image. The result is a union. On `success` it has the `plane`, the `outer` and `obstruction` fits (each with the canonical `ellipse`, the `equivalentRadius` as the geometric mean of the axes, the robust `rms` of the boundary, the `coverage` and `maximumGap` of the accepted sectors and their `sectors` count), the `geometry` (the `offset` of the obstruction center from the outer one in pixels, its `distance`, the `normalizedDistance` over the outer equivalent radius, the apparent `obstructionRatio` and the `direction` in `[0, TAU)` with +X toward +Y, omitted when it is not resolved), the `quality` (the fitted `background`, its `backgroundNoise`, the annulus `signal`, the `signalToNoise`, the `invalidFraction`, the `saturatedFraction` and whether the outer center is `withinReference`, `outsideReference` or `unknown`), the `photometry` (the relative azimuthal brightness variation, when there is enough interior), the `stability` (the sensitivity of the offset to the deletion of angular blocks, with a `resolutionFloor` of 0.2 pixel for the sampling that it was tested for, which is not a confidence interval), the `assessment` when a `tolerance` was given (`withinTolerance`, `outsideTolerance` or `inconclusive`, geometric names that do not mean collimated or miscollimated) and `diagnostics` (such as `saturationUnknown` or `fieldReferenceMissing`). A content failure returns the `reason` (`unsupportedPlane`, `patternNotFound`, `ambiguousPattern`, `insufficientBackground`, `lowSignal`, `saturated`, `cropped`, `unresolvedEdges`, `insufficientCoverage`, `fitFailed` or `inconsistentGeometry`), the area and diagnostics, with no partial geometry. A structural error (an area outside the image or too large, a workspace that is too small or of another precision, or an invalid option) throws a `RangeError`. The image is never mutated and the result owns its storage. The measurement needs a complete, isolated annulus, a defocus large enough that the obstruction is resolved and the same sampling and orientation between frames; the sequence of several frames is in Collimation Sequence Summary and the synthetic images are in Synthetic Defocused Collimation Patterns.
+
+```ts
+import { analyzeCollimation } from 'nebulosa/src/imaging/analysis/collimation/collimation'
+import { createCollimationWorkspace } from 'nebulosa/src/imaging/analysis/collimation/preprocess'
+import { generateSyntheticCollimationImage, type SyntheticCollimationPattern } from 'nebulosa/src/imaging/synthetic/collimation'
+
+// A defocused star on 200 by 200 pixels: an outer ellipse of 60 by 58 pixels at (100, 100) and an obstruction of 24 by 23 pixels with its center `dx` and `dy` pixels away, with a light noise.
+function pattern(options: Partial<SyntheticCollimationPattern> = {}, dx: number = 4, dy: number = -2, seed: number = 1): SyntheticCollimationPattern {
+	return {
+		width: 200,
+		height: 200,
+		outer: { center: { x: 100, y: 100 }, semiMajor: 60, semiMinor: 58, theta: 0.3, softness: 1.2 },
+		obstruction: { center: { x: 100 + dx, y: 100 + dy }, semiMajor: 24, semiMinor: 23, theta: 0.3, softness: 1.2 },
+		signal: 2000,
+		background: 0.05,
+		noise: 0.002,
+		seed,
+		...options,
+	}
+}
+
+const area = { left: 10, top: 10, right: 190, bottom: 190 }
+const workspace = createCollimationWorkspace(200, 200)
+
+// The measurement of a shadow that is 4 pixels right and 2 up of the outer center (the drawn offset is (4, -2), a distance of 4.472).
+const result = analyzeCollimation({ image: generateSyntheticCollimationImage(pattern()), area }, { workspace })
+if (result.success) console.log(result.plane, result.geometry) // mono, offset (4.000, -2.016), distance 4.479, normalized distance 0.0759, obstruction ratio 0.398, direction 5.816 rad (the drawn offset is (4, -2))
+
+// The two boundaries: centers, axes, the orientation in radians, the equivalent radius, the residual of the fit and the support of the sectors.
+if (result.success) for (const fit of [result.outer, result.obstruction]) console.log(fit.ellipse, fit.equivalentRadius.toFixed(3), fit.rms.toFixed(3), fit.coverage, fit.maximumGap, fit.sectors) // outer center (99.997, 100.013), axes 59.975 and 58.000, theta 0.303 rad (drawn 0.3), equivalent radius 58.979, rms 0.092 pixel, coverage 1, gap 0, 360 sectors; obstruction center (103.996, 97.996), axes 23.942 and 22.988, theta 0.312 rad, equivalent radius 23.460, rms 0.093, coverage 1, gap 0, 360 sectors
+
+// The signal, the background, the photometry, the stability and the diagnostics.
+if (result.success) console.log(result.quality, result.photometry, result.stability, result.diagnostics, result.assessment) // background 0.0501, noise 0.00205, signal 0.2175, SNR 106.0, no invalid or saturated fraction (saturation unknown) and field unknown; photometry relative variation 0.0020 with coverage 1; stability offset spread 0.020 pixel (normalized 0.00033) and resolution floor 0.2; diagnostics saturationUnknown and fieldReferenceMissing; no assessment without a tolerance
+
+// A known saturation level, a field reference and a tolerance (the offset over the outer radius, 0.076 here): a tolerance below and above it.
+for (const tolerance of [0.05, 0.1]) {
+	const r = analyzeCollimation({ image: generateSyntheticCollimationImage(pattern()), area, field: { center: { x: 101, y: 99 }, maximumDistance: 5 } }, { workspace, saturationLevel: 1, tolerance })
+	if (r.success) console.log(tolerance, r.assessment, r.quality.field, r.quality.saturatedFraction, r.diagnostics) // 0.05 gives outsideTolerance and 0.1 gives withinTolerance, both with the field withinReference, a saturated fraction of 0 and no diagnostics
+}
+
+// A field reference that the outer center is far from.
+const far = analyzeCollimation({ image: generateSyntheticCollimationImage(pattern()), area, field: { center: { x: 150, y: 150 }, maximumDistance: 5 } }, { workspace })
+if (far.success) console.log(far.quality.field, far.diagnostics) // outsideReference with the diagnostics saturationUnknown and outsideFieldReference
+
+// A concentric obstruction has an offset of about zero and no resolved direction.
+const concentric = analyzeCollimation({ image: generateSyntheticCollimationImage(pattern({}, 0, 0)), area }, { workspace })
+if (concentric.success) console.log(concentric.geometry.distance.toFixed(3), concentric.geometry.direction, concentric.diagnostics) // distance 0.011 pixel, no direction, and the diagnostics saturationUnknown, fieldReferenceMissing and directionUnresolved
+
+// A given center in the shadow, more sectors and more smoothing, with a workspace sized for the sectors.
+const wide = analyzeCollimation({ image: generateSyntheticCollimationImage(pattern()), area, center: { x: 104, y: 98 } }, { workspace: createCollimationWorkspace(200, 200, { precision: 32, angularSamples: 720 }), angularSamples: 720, smoothingSigma: 2 })
+if (wide.success) console.log(wide.geometry.offset, wide.outer.sectors) // offset (4.002, -1.998) with 720 sectors, the same as with the defaults
+```
 
 ### Diffraction and Seeing Sampling
 
@@ -8258,14 +8330,6 @@ const make = (width: number, height: number, channels: number, value: (x: number
 	return { header: {}, raw, metadata: { width, height, channels, pixelCount: width * height, stride: width * channels, strideInBytes: width * channels * 8, pixelSizeInBytes: 8, bitpix: -64, bayer } }
 }
 
-// The memory of a 4x4 mono frame at 2x with coverage maps (bytes), and a grid that does not fit the budget.
-console.log(drizzleMemoryBytes(8 * 8, 1, 1, true, false, 8)) // 789568
-try {
-	createDrizzleAccumulator(100000, 100000, 3, false, 2, false, false, 8, 2 ** 30)
-} catch (e) {
-	console.log((e as Error).message) // Drizzle grid exceeds the numeric buffer memory budget or safe allocation length
-}
-
 // The area of a drop over an output cell: full, a quarter (shifted by half a pixel on each axis), and none.
 const polygon = new Float64Array(16)
 const clipped = new Float64Array(16)
@@ -8311,12 +8375,6 @@ const fit = drizzleNormalization(createDrizzleAccumulator(64, 64, 1, false, 1, f
 console.log(fit?.scales, fit?.offsets) // [1.8728139904610492] [0]
 console.log(drizzleNormalization(state, reference, faint, identity, 'none', 'per-channel')) // { scales: [1], offsets: [0] }
 console.log(drizzleNormalization(createDrizzleAccumulator(64, 64, 1, false, 1, false, false, 8, 2 ** 30), reference, faint, { ...identity, tx: 1000 }, 'scale', 'per-channel')) // { scales: [1], offsets: [0] }
-
-try {
-	depositDrizzle(state, frame, prepareDrizzleFootprint(identity, 2, 2, 1, 4, 4)!, [1], [0], 1, 2 ** 32)
-} catch (e) {
-	console.log((e as Error).message) // Drizzle frame coverage exceeds Uint32 capacity
-}
 ```
 
 ### Elliptical Moffat Fitting
@@ -8407,20 +8465,248 @@ console.log(
 const mean = original.raw.reduce((sum, value) => sum + value, 0) / original.raw.length
 const flat = fft(make(), workspace, 'lowPass', 0)
 console.log(roughness(flat) < 1e-9, Math.abs(flat.raw[0] - mean) < 0.05) // true true
-
-// An image larger than the workspace.
-try {
-	fft({ ...original, metadata: { ...original.metadata, width: 40, height: 20 } }, workspace)
-} catch (e) {
-	console.log((e as Error).message) // FFT workspace 32x32 is smaller than image 40x20
-}
 ```
 
 ### Flat Exposure Estimate
 
+`estimateFlatExposure(input)` in `imaging/analysis/flat/exposure` recommends the next exposure of a flat from the signal levels of the frames already taken, for the search of an exposure that puts the signal of one plane inside a target interval. It is a scalar model for one explicitly chosen plane (the level of a frame comes from `analyzeFlat`, see Flat-Frame Quality) and is pure: it does not look at images or at the sensor. The `input` has the `observations` (at least one `{ exposure, level }`, in acquisition order, the last being the current one: the exposure in seconds and the level in digital numbers of approved, non-clipped frames), the `levelMode` (`observed` when the levels include an unknown pedestal such as the bias, or `corrected` when a reference was already subtracted), the inclusive `targetRange` of levels `[minimum, maximum]` in digital numbers, the inclusive `exposureRange` of allowed durations `[minimum, maximum]` in seconds (positive and ordered) and an optional `maximumStep`, the largest absolute change from the current exposure in seconds. If the current level is already inside the target the result is `accepted` with `method: 'none'` and the current exposure (or `belowMinimum` or `aboveMaximum` with the nearest allowed exposure, when the current exposure itself is outside the allowed range). Otherwise it aims for the middle of the target and picks the model: the closest adjacent pair of observations (sorted by exposure) whose levels bracket the target gives a straight `interpolation`; a `corrected` level with no bracket uses the `ratio` (a line through the origin, the level proportional to the exposure); an `observed` level needs at least two observations for the `affine` fit with a positive slope, and with three or more it is refused when the root-mean-square residual is above 5% of the level span or magnitude. The `status` is `increase` or `decrease` (toward the target), `belowMinimum` or `aboveMaximum` (the unconstrained answer is outside the allowed exposures, and the recommendation is the nearest limit), or `invalid`, whose `diagnostics` hold the reason (an `error` severity with a `message` and a `code`, mostly `targetUnavailable`, or `insufficientSamples`): no observation, a non-finite or non-positive exposure, a level that is not positive in corrected mode, unordered ranges, duplicated exposures with different levels, a model with no positive slope or a prediction with no positive duration. The `recommendedExposure` has the step and range limits applied and the `predictedLevel` is the model at that exposure. A linear signal in the exposure is assumed (the light source must be stable and the sensor linear in the range) and the result is a recommendation, not a measurement: the next frame has to be analyzed again.
+
+```ts
+import { estimateFlatExposure } from 'nebulosa/src/imaging/analysis/flat/exposure'
+
+const targetRange = [28000, 36000] as const // digital numbers, the middle is 32000
+const exposureRange = [0.1, 10] as const // seconds
+
+// The first frame of 1 s gave a level of 8000 DN above the bias: a corrected level scales in proportion to the exposure.
+console.log(estimateFlatExposure({ observations: [{ exposure: 1, level: 8000 }], levelMode: 'corrected', targetRange, exposureRange })) // increase, method ratio, 4 s with a predicted level of 32000, no diagnostics
+
+// The same level with the bias still in it cannot be scaled with a single frame: it needs a second point to separate the pedestal.
+console.log(estimateFlatExposure({ observations: [{ exposure: 1, level: 8000 }], levelMode: 'observed', targetRange, exposureRange })) // invalid, method none, insufficientSamples: one observed level cannot separate illumination signal from its pedestal
+
+// With two observed levels (the signal is 6000 DN per second over a 2000 DN pedestal) the affine fit gives the exposure for the middle of the target.
+console.log(
+	estimateFlatExposure({
+		observations: [
+			{ exposure: 0.5, level: 5000 },
+			{ exposure: 1, level: 8000 },
+		],
+		levelMode: 'observed',
+		targetRange,
+		exposureRange,
+	}),
+) // increase, method affine, 5 s with a predicted level of 32000
+
+// Two observations that bracket the target interpolate between them, and the closest bracketing pair is the one used.
+console.log(
+	estimateFlatExposure({
+		observations: [
+			{ exposure: 2, level: 14000 },
+			{ exposure: 8, level: 50000 },
+			{ exposure: 4, level: 26000 },
+		],
+		levelMode: 'observed',
+		targetRange,
+		exposureRange,
+	}),
+) // increase, method interpolation, 5 s with a predicted level of 32000 (the pair of 4 s and 8 s brackets the target)
+
+// The current level is inside the target: the exposure is accepted as it is.
+console.log(estimateFlatExposure({ observations: [{ exposure: 5, level: 30000 }], levelMode: 'observed', targetRange, exposureRange })) // accepted, method none, 5 s with the level 30000
+
+// A level above the target asks for a shorter exposure, and a limit on the step makes the change smaller than the model asks for (here from 3 s toward 1.6 s, in steps of at most 0.5 s).
+console.log(estimateFlatExposure({ observations: [{ exposure: 3, level: 60000 }], levelMode: 'corrected', targetRange, exposureRange, maximumStep: 0.5 })) // decrease, method ratio, 2.5 s (the model asks for 1.6 s) with a predicted level of 50000, still above the target
+
+// The exposure that the model asks for is outside the allowed range: the nearest limit is returned with the level predicted there.
+console.log(estimateFlatExposure({ observations: [{ exposure: 1, level: 100 }], levelMode: 'corrected', targetRange, exposureRange })) // aboveMaximum, method ratio, 10 s with a predicted level of 1000 (the target needs 320 s)
+console.log(estimateFlatExposure({ observations: [{ exposure: 1, level: 60000 }], levelMode: 'corrected', targetRange, exposureRange: [1, 10] })) // belowMinimum, method ratio, 1 s with a predicted level of 60000 (the target needs 0.53 s)
+
+// A current exposure that is inside the target but outside the allowed range is reported against that range.
+console.log(estimateFlatExposure({ observations: [{ exposure: 0.05, level: 30000 }], levelMode: 'corrected', targetRange, exposureRange })) // belowMinimum, method none, 0.1 s, with no predicted level
+
+// The failures keep a diagnostic: levels that do not grow with the exposure, an unstable affine fit and contradictory duplicates.
+const invalid = [
+	estimateFlatExposure({
+		observations: [
+			{ exposure: 1, level: 9000 },
+			{ exposure: 2, level: 7000 },
+		],
+		levelMode: 'observed',
+		targetRange,
+		exposureRange,
+	}),
+	estimateFlatExposure({
+		observations: [
+			{ exposure: 1, level: 8000 },
+			{ exposure: 2, level: 12000 },
+			{ exposure: 3, level: 8000 },
+			{ exposure: 4, level: 14000 },
+		],
+		levelMode: 'observed',
+		targetRange,
+		exposureRange,
+	}),
+	estimateFlatExposure({
+		observations: [
+			{ exposure: 1, level: 8000 },
+			{ exposure: 1, level: 9000 },
+		],
+		levelMode: 'observed',
+		targetRange,
+		exposureRange,
+	}),
+	estimateFlatExposure({ observations: [{ exposure: 1, level: -5 }], levelMode: 'corrected', targetRange, exposureRange }),
+	estimateFlatExposure({ observations: [{ exposure: 1, level: 8000 }], levelMode: 'corrected', targetRange: [36000, 28000], exposureRange }),
+]
+console.log(invalid.map((estimate) => [estimate.status, estimate.method, estimate.diagnostics[0]?.code, estimate.diagnostics[0]?.message])) // all five are invalid with method none and the code targetUnavailable, with the messages: observed exposure levels do not define a finite positive-slope affine model; observed exposure levels are too unstable for an affine recommendation; duplicate exposures contain contradictory levels; corrected exposure levels must be positive; target range must contain ordered finite levels
+```
+
 ### Flat Sequence Stability
 
+`analyzeFlatSequence(input, options?)` in `imaging/analysis/flat/sequence` checks whether three or more final flats of the same configuration are stable in time, from the per-frame measurements of `analyzeFlat` (see Flat-Frame Quality). It is for a stack that is meant to be homogeneous: an exposure-search ramp does not belong here (see Flat Exposure Estimate). The `input` has the `frames` (at least three `FlatFrame`, in acquisition order), an optional `reference` (a bias or dark-flat master shared by every frame, which makes the signals and signatures `corrected`) and an optional `mask` shared by every frame. The `options` are the `analysis` options of each frame (the same as `analyzeFlat`, except `maps` and `artifacts`, which are refused), the `exposureTolerance` in seconds (a numerical equality by default), the `temperatureTolerance` in degrees Celsius (temperature is not required when omitted) and the limits `maximumSignalVariation`, `maximumSpatialVariation`, `maximumProfileVariation`, `maximumDriftPerFrame`, `maximumDriftPerSecond` (fractions, finite and non-negative) and `outlierSigma` (finite and positive). Frames that are known to be incompatible are an error, not a verdict: a `RangeError` is thrown when the geometry, channels or local CFA pattern differ, when the exposures differ by more than the tolerance, when a known filter, illumination, camera or operating-point field differs, or when the temperature spread is above its tolerance; a missing field is not an error, it is recorded as `sequenceMetadataUnknown` because equality cannot be proved. The result has the `frames` (per frame in the original order: `index`, `id`, `status` and `reasons`), the `planes` and the `assessment`. For each plane the `basis`, the `medianSignal` in DN, the `signalVariation` (the scaled median absolute deviation over the median, dimensionless), the `spatialVariation`, `rowVariation` and `columnVariation` (the worst temporal dispersion among the normalized tiles, rows or columns), the `driftPerFrame` and `driftPerSecond` (a robust signed slope over the median signal, per frame index or per elapsed second, the second one only with strictly increasing timestamps) and the `outliers` (indices of the frames whose multivariate signature has a robust score above `outlierSigma`, only evaluated when it was configured). The `assessment` has the `verdict` (`accepted`, `rejected`, `inconclusive`), the checks `frameQuality`, `signalStability`, `spatialStability` and `profileStability` (`pass`, `fail` or `unknown`) and the `reasons` (`sequenceDrift`, `sequenceVariation`, `sequenceOutlier`, `sequenceMetadataUnknown` and the codes of the single-frame analysis). Only the limits that were configured are checked: a limit of 0 is strict, an omitted one is not evaluated (and leaves that check unknown), and so a variation measured without a limit cannot reject. The dispersion is a robust description of the frames in hand, not a confidence interval, and a slow drift of the light source cannot be told from one of the sensor.
+
+```ts
+import { analyzeFlatSequence } from 'nebulosa/src/imaging/analysis/flat/sequence'
+import type { FlatFrame } from 'nebulosa/src/imaging/analysis/flat/types'
+import { generateSyntheticFlatImage, type SyntheticFlatModel } from 'nebulosa/src/imaging/synthetic/flat'
+
+// A flat of 64 by 48 pixels with complete metadata: the exposure, the time in Unix milliseconds (one second apart), the filter and the operating point.
+function frame(index: number, model: Partial<SyntheticFlatModel> = {}, overrides: Partial<FlatFrame> = {}): FlatFrame {
+	const image = generateSyntheticFlatImage({ width: 64, height: 48, bias: 1000, signal: 20000, vignetting: 0.15, noise: 15, seed: 10 + index, lowerClip: 0, upperClip: 65535, quantizationStep: 1, ...model })
+	return {
+		id: `flat-${index}`,
+		image,
+		exposure: 1,
+		timestamp: 1_000_000 + index * 1000,
+		filter: 'L',
+		illumination: { source: 'panel', brightness: 50 },
+		operatingPoint: { gain: 100, offset: 20, temperature: -10 + index * 0.05, camera: 'ASI2600', readoutMode: 'low-noise', binning: [1, 1], sensorOrigin: [0, 0], bitDepth: 16 },
+		...overrides,
+	}
+}
+
+const analysis = { effectiveClip: { lower: 0, upper: 65535 }, criteria: { targets: { mono: { levelMode: 'observed', range: [10000, 40000] } }, maximumClippedFraction: 0, maximumNonFiniteFraction: 0 } } as const
+const limits = { analysis, temperatureTolerance: 0.5, maximumSignalVariation: 0.01, maximumSpatialVariation: 0.01, maximumProfileVariation: 0.01, maximumDriftPerFrame: 0.005, maximumDriftPerSecond: 0.005 } as const
+
+// A stable sequence of five frames: the plane metrics, the checks of the assessment and the status of every frame.
+const stable = analyzeFlatSequence({ frames: [frame(0), frame(1), frame(2), frame(3), frame(4)] }, limits)
+console.log(
+	stable.assessment.verdict,
+	stable.assessment.reasons,
+	stable.frames.map((f) => [f.index, f.id, f.status, f.reasons]),
+) // accepted, no reasons, and the five frames accepted in order with the ids flat-0 to flat-4
+console.log(stable.planes[0]) // mono, observed basis, median signal 20051.5 DN, signal variation 0.000185, spatial 0.000784, row 0.000324, column 0.000369, drift 0.0000187 per frame and the same per second (one second apart), no outliers
+console.log(stable.assessment.signalStability, stable.assessment.spatialStability, stable.assessment.profileStability, stable.assessment.frameQuality) // the signal, spatial, profile and frame-quality checks pass; the spatial value 0.000784 and the profile value 0.000369 are the worst dispersions against the limits [0, 0.01]
+
+// Without any limit nothing is evaluated: the metrics are still reported, and the verdict is inconclusive.
+const free = analyzeFlatSequence({ frames: [frame(0), frame(1), frame(2)] })
+console.log(
+	free.assessment.verdict,
+	free.assessment.signalStability,
+	free.planes[0].signalVariation,
+	free.diagnostics.map((d) => [d.severity, d.code, d.frame]),
+) // inconclusive with the signal-stability check unknown (no limit was configured), a signal variation of 0.000111 and, for each frame, the info pedestalNotRemoved and targetUnavailable and the warning effectiveClipUnknown
+
+// A light source that fades by 1% per frame: the drift per frame (negative) and per second, and the limit that it breaks.
+const fading = analyzeFlatSequence({ frames: [0, 1, 2, 3, 4].map((i) => frame(i, { signal: 20000 * (1 - 0.01 * i) })) }, limits)
+console.log(fading.assessment.verdict, fading.assessment.reasons, fading.planes[0].driftPerFrame, fading.planes[0].driftPerSecond, fading.planes[0].signalVariation) // rejected for sequenceVariation and sequenceDrift, a drift of -0.00966 per frame (and per second) for the drawn 1% per frame, and a signal variation of 0.0142 above the limit of 0.01
+
+// One frame with a dust mote that the others do not have, found as an outlier of the signature (it needs `outlierSigma`).
+const odd = analyzeFlatSequence({ frames: [0, 1, 2, 3, 4, 5].map((i) => frame(i, i === 3 ? { dustMotes: [{ center: { x: 32, y: 24 }, sigmaX: 8, sigmaY: 8, contrast: 0.3 }] } : {})) }, { ...limits, outlierSigma: 5 })
+console.log(
+	odd.planes[0].outliers,
+	odd.assessment.verdict,
+	odd.assessment.reasons,
+	odd.frames.map((f) => f.status),
+	odd.diagnostics.filter((d) => d.code === 'sequenceOutlier'),
+) // outlier frame 3, the verdict is rejected for sequenceOutlier, the frame statuses are accepted except frame 3, which is rejected, and the diagnostic is a warning for the plane mono and frame 3
+
+// A reference makes the basis corrected, and a mask is shared by the frames.
+const bias = generateSyntheticFlatImage({ width: 64, height: 48, bias: 1000, signal: 0, vignetting: 0, noise: 5, seed: 99 })
+const mask = new Uint8Array(64 * 48)
+mask.fill(1, 0, 64)
+const corrected = analyzeFlatSequence({ frames: [frame(0), frame(1), frame(2)], reference: { kind: 'bias', image: bias }, mask }, { analysis: { ...analysis, criteria: { targets: { mono: { levelMode: 'corrected', range: [10000, 40000] } } } } })
+console.log(corrected.planes[0].basis, corrected.planes[0].medianSignal, corrected.assessment.verdict) // corrected basis, median signal 19071.1 DN (the bias master subtracted), accepted
+
+// Missing timestamps leave the drift per second unavailable and the metadata unproven.
+const untimed = analyzeFlatSequence({ frames: [0, 1, 2].map((i) => frame(i, {}, { timestamp: undefined, operatingPoint: undefined })) }, { ...limits, maximumDriftPerSecond: undefined })
+console.log(
+	untimed.planes[0].driftPerSecond,
+	untimed.assessment.verdict,
+	untimed.diagnostics.filter((d) => d.code === 'sequenceMetadataUnknown').map((d) => d.message),
+) // undefined (no timestamps), inconclusive, with the two sequenceMetadataUnknown messages: missing acquisition metadata prevents a complete proof of homogeneity, and per-second drift is unavailable because timestamps are missing or not strictly increasing
+```
+
 ### Flat-Frame Quality
+
+`analyzeFlat(input, options?)` in `imaging/analysis/flat/flat` measures one already captured flat in source digital numbers (DN) and reports its signal, clipping and spatial response per physical plane, with a verdict derived only from the checks that the caller configured. The image is never mutated and the result owns its storage. The `input` has the `frame` (`image`, and optional `id`, `exposure` in seconds, `timestamp` in Unix milliseconds, `filter`, `illumination`, a `cfaOffset` and an `operatingPoint`), an optional `reference` (`kind: 'bias'`, or `kind: 'darkFlat'` with its `exposure`, a master at the same affine DN scale, which is subtracted only for the `corrected` measurements) and an optional row-major `mask` (a nonzero pixel is excluded from every plane). The `options` are the `area` (a half-open `{ left, top, right, bottom }` in pixels for the clipping and spatial measurements), the `targetArea` (a subregion for the reported signal and the target check, the `area` by default), the `planes` (`mono`, `red`, `green`, `blue` or the CFA planes without debayering, every plane of the layout by default), the `effectiveClip` limits (`lower` and `upper` codes in DN), the `criteria`, the `tile` size, the `rejectionSigma` (4 by default, in scaled median absolute deviations), the `maps` to retain (`none` by default, `illumination`, `residual` or `all`: full-resolution `Float32Array` maps) and the `artifacts` (`profiles` and `dust`, descriptive only). The `criteria` are the per-plane `targets` (`{ levelMode, range }`), the `maximumClippedFraction` and the `maximumNonFiniteFraction`. Each `FlatPlaneAnalysis` has the `observed` statistics of the target area (`count`, `masked`, `nonFinite`, `minimum`, `maximum`, `mean`, `median`, `mad`, and whether the median is `approximate`), the `corrected` ones when there is a reference, the `clipping` (a `lower` and an `upper` side with `limit`, `count`, `fraction` and a `status` of `present`, `absent` or `unknown`: a limit that is only the storage range of the format can prove clipping but never its absence), the `target` check and the `spatial` response: the tile statistics, the `uniformity` (the ratio of the fifth to the ninety-fifth percentile tile level), the center, edge and corner levels with the `edgeFalloff` and `cornerFalloff` (one minus the ratio to the center, which can be negative), the fitted `gradient` (the fractional edge-to-edge change along X and Y), the `model` of degree two, the `illuminationCenter` and its `illuminationCenterConfidence` when the surface is concave and well conditioned, and the optional maps, profiles and dust candidates (a smooth dark depression, with no optical cause assigned). The `assessment` has the `verdict` (`accepted`, `rejected` or `inconclusive`), the aggregate `target`, `clipping` and `finiteSamples` checks (each `pass`, `fail` or `unknown`) and the `reasons`, and the `diagnostics` list the severity, `code`, `message` and the optional `plane`. Without criteria nothing can fail, and an unknown check keeps the verdict `inconclusive` instead of passing silently. The measurement is of the digital frame only: it does not say that the flat is good for a given optical train, and a spatial structure is not attributed to dust, vignetting or a sensor effect. The exposure of the next flat is in Flat Exposure Estimate and the comparison of a series in Flat Sequence Stability.
+
+```ts
+import { analyzeFlat } from 'nebulosa/src/imaging/analysis/flat/flat'
+import { generateSyntheticFlatImage } from 'nebulosa/src/imaging/synthetic/flat'
+
+// A monochrome flat of 128 by 96 pixels: a 1000 DN pedestal, 30000 DN of signal at the center, a 30% quadratic vignetting and a light noise.
+const image = generateSyntheticFlatImage({ width: 128, height: 96, bias: 1000, signal: 30000, vignetting: 0.3, noise: 20, seed: 3 })
+
+// Without criteria nothing can fail: the statistics, the clipping (the limits are only the storage range) and the spatial response of the plane.
+const plain = analyzeFlat({ frame: { image, id: 'L-001', exposure: 2 } })
+const mono = plain.planes[0]
+console.log(plain.frameId, plain.planes.length, mono.plane, mono.observed.count, mono.observed.median, mono.observed.mad, mono.observed.approximate) // L-001, 1 plane, mono, 12288 samples, median 28199.7 DN, MAD 1508 DN, exact (not approximate)
+console.log(mono.clipping.lower, mono.clipping.upper) // undefined undefined: the float image has no storage range and no effective limit was given, so no side is measured
+console.log(mono.spatial.basis, mono.spatial.tiles.length, mono.spatial.uniformity, mono.spatial.centerLevel, mono.spatial.edgeLevel, mono.spatial.cornerLevel, mono.spatial.edgeFalloff, mono.spatial.cornerFalloff, mono.spatial.gradient) // observed basis, 192 tiles, uniformity 0.792, center 30764.6, edge 27182.8, corner 24802.5 DN, edge falloff 0.116, corner falloff 0.194, gradient about (0.0001, -0.0001)
+console.log(plain.assessment, plain.diagnostics) // inconclusive, with the three checks unknown and no reasons; diagnostics: info pedestalNotRemoved, info targetUnavailable and warning effectiveClipUnknown
+
+// With a bias master the signal is corrected, and a target on the corrected level, the effective clipping codes and the limits of the fractions give a verdict.
+const bias = generateSyntheticFlatImage({ width: 128, height: 96, bias: 1000, signal: 0, vignetting: 0, noise: 5, seed: 9 })
+const criteria = { targets: { mono: { levelMode: 'corrected', range: [20000, 32000] } }, maximumClippedFraction: 0, maximumNonFiniteFraction: 0 } as const
+const checked = analyzeFlat({ frame: { image }, reference: { image: bias, kind: 'bias' } }, { effectiveClip: { lower: 0, upper: 65535 }, criteria })
+console.log(checked.planes[0].corrected?.median, checked.planes[0].target, checked.planes[0].spatial.basis, checked.assessment) // corrected median 27200.2 DN, target pass with the limits [20000, 32000], corrected basis; the verdict is accepted with the clipping and finite-sample checks passing at a value of 0 and the limits [0, 0]
+
+// A target that the level is not in: the verdict is rejected and the reason is a stable code.
+const low = analyzeFlat({ frame: { image }, reference: { image: bias, kind: 'bias' } }, { effectiveClip: { lower: 0, upper: 65535 }, criteria: { targets: { mono: { levelMode: 'corrected', range: [1000, 5000] } } } })
+console.log(
+	low.assessment.verdict,
+	low.assessment.target,
+	low.assessment.reasons,
+	low.diagnostics.map((d) => [d.severity, d.code, d.plane]),
+) // rejected, the target check fails on the corrected basis, the reason is targetAboveRange and the diagnostics are warning referenceMetadataUnknown (the synthetic images carry no acquisition metadata) and warning targetAboveRange for mono
+
+// A pixel at the effective upper code is clipping; a mask excludes it from the measurement.
+const clipped = generateSyntheticFlatImage({ width: 128, height: 96, bias: 1000, signal: 30000, vignetting: 0.3, noise: 20, seed: 3 })
+clipped.raw[50 * 128 + 60] = 65535
+const hit = analyzeFlat({ frame: { image: clipped } }, { effectiveClip: { upper: 65535 }, criteria: { maximumClippedFraction: 0 } })
+console.log(hit.planes[0].clipping.upper, hit.assessment.verdict, hit.assessment.clipping) // the upper side is effective, limit 65535, 1 sample (fraction 0.0000814), present; the verdict is rejected with a clipping value of 0.015625 as the largest tile fraction against the limits [0, 0]
+const mask = new Uint8Array(128 * 96)
+mask[50 * 128 + 60] = 1
+const masked = analyzeFlat({ frame: { image: clipped }, mask }, { effectiveClip: { upper: 65535 }, criteria: { maximumClippedFraction: 0 } })
+console.log(masked.planes[0].clipping.upper, masked.planes[0].observed.masked, masked.assessment.verdict) // with the mask the upper side is absent with 0 samples, 1 masked sample, and the verdict is accepted
+
+// Non-finite samples are counted apart and can be limited.
+const bad = generateSyntheticFlatImage({ width: 128, height: 96, bias: 1000, signal: 30000, vignetting: 0.3, noise: 20, seed: 3 })
+for (let i = 0; i < 200; i++) bad.raw[i * 7] = Number.NaN
+const nan = analyzeFlat({ frame: { image: bad } }, { criteria: { maximumNonFiniteFraction: 0.001 } })
+console.log(nan.planes[0].observed.nonFinite, nan.assessment.finiteSamples, nan.assessment.verdict, nan.assessment.reasons) // 200 non-finite samples; the finite-sample check fails with a value of 0.156 (the largest tile fraction) against the limits [0, 0.001], the verdict is rejected and the reason is nonFiniteSamples
+
+// An off-center illumination: the gradient, the fitted center in pixels and its confidence, plus the full-resolution maps.
+const tilted = generateSyntheticFlatImage({ width: 128, height: 96, bias: 1000, signal: 30000, vignetting: 0.5, centerOffset: { x: 0.3, y: -0.2 }, gradient: { x: 0.1, y: 0 }, noise: 20, seed: 3 })
+const spatial = analyzeFlat({ frame: { image: tilted } }, { maps: 'all' }).planes[0].spatial
+console.log(spatial.gradient, spatial.illuminationCenter, spatial.illuminationCenterConfidence, spatial.model?.degree, spatial.model?.acceptedSamples, spatial.model?.rejectedSamples, spatial.illuminationMap?.length, spatial.residualMap?.length, spatial.residualMapValidity?.length) // gradient (0.323, -0.089), center (89.8, 38.0) pixels with a confidence of 0.696, a model of degree 2 with 183 accepted and 9 rejected tile samples, and three maps of 12288 entries (128 by 96)
+
+// A target area for the signal, tiles of 32 pixels, and the artifacts: row and column profiles of a banded flat and the dust candidates of a flat with a mote.
+const dusty = generateSyntheticFlatImage({ width: 128, height: 96, bias: 1000, signal: 30000, vignetting: 0.2, noise: 10, seed: 3, dustMotes: [{ center: { x: 40, y: 50 }, sigmaX: 6, sigmaY: 5, contrast: 0.2 }], rowBanding: { amplitude: 0.01, period: 12 } })
+const artifacts = analyzeFlat({ frame: { image: dusty } }, { targetArea: { left: 32, top: 24, right: 96, bottom: 72 }, tile: { width: 32, height: 32 }, artifacts: { profiles: true, dust: true } }).planes[0]
+console.log(artifacts.observed.count, artifacts.spatial.tiles.length, artifacts.spatial.profiles?.row.strength, artifacts.spatial.profiles?.column.strength, artifacts.spatial.dustCandidates) // 3072 samples in the target area, 12 tiles, row profile strength 0.0105 (the banding of the drawn 0.01 amplitude), column strength 0.0003, and one dust candidate centered at (40.0, 49.8) with semi-axes 3.14 and 2.77 pixels, angle 3.140 rad, contrast 0.183 and a support of 123 square pixels
+
+// An RGB flat gives three planes, and one plane can be chosen.
+const rgb = generateSyntheticFlatImage({ width: 64, height: 48, channels: 3, channelResponse: [0.9, 1, 0.7], bias: 500, signal: 20000, vignetting: 0.1, noise: 10 })
+console.log(
+	analyzeFlat({ frame: { image: rgb } }).planes.map((p) => [p.plane, p.observed.median]),
+	analyzeFlat({ frame: { image: rgb } }, { planes: ['green'] }).planes.map((p) => p.plane),
+) // red 17932.9, green 19865.5 and blue 14054.9 DN for the three planes; the chosen plane list is green
+
+// A mosaic is analyzed by its CFA planes, without debayering.
+const cfa = generateSyntheticFlatImage({ width: 64, height: 48, bayer: 'RGGB', channelResponse: [0.9, 1, 0.7], bias: 500, signal: 20000, vignetting: 0.1, noise: 10 })
+console.log(analyzeFlat({ frame: { image: cfa } }).planes.map((p) => [p.plane, p.observed.median])) // red 17929.1, green1 19870.0, green2 19870.6 and blue 14060.6 DN: the green planes are kept apart
+```
 
 ### Focus Curve Fitting
 
@@ -8513,15 +8799,6 @@ console.log(physical) // principalX 0.002780 and principalY 0.001563 per mm, wit
 
 // On a 3000 by 3000 sensor the same bowl is round and its radius is the one of the short side above, and a flat field has no radius.
 console.log(analyzePhysicalCurvature(bowl, 3000, 3000, { pixelSize: 0.004, focusDisplacement: 0.001 }).radiusX, analyzePhysicalCurvature({ ...bowl, qxx: 0, qyy: 0 }, 4000, 3000, { pixelSize: 0.004, focusDisplacement: 0.001 })) // 359.76 for the square sensor, and zero curvatures with undefined radii for the flat field
-
-// A zero displacement (an uncalibrated focuser) or a one-pixel sensor is an error.
-for (const test of [() => analyzePhysicalCurvature(bowl, 4000, 3000, { pixelSize: 0.004, focusDisplacement: 0 }), () => analyzePhysicalCurvature(bowl, 1, 3000, { pixelSize: 0.004, focusDisplacement: 0.001 })]) {
-	try {
-		test()
-	} catch (e) {
-		console.log((e as Error).message) // both fail with 'finite sensor dimensions, pixel size, and non-zero focus displacement are required'
-	}
-}
 ```
 
 ### Focus Surface Analysis
@@ -8586,13 +8863,6 @@ if (robust.success)
 // Too few samples for the model, or invalid ones, are reported with a reason instead of a surface.
 const failures = [fitFocusSurface(samples.slice(0, 4)), fitFocusSurface([...samples.slice(0, 8), { u: Number.NaN, v: 0, focus: 1 }]), fitFocusSurface(samples.slice(0, 8).map((sample) => ({ ...sample, v: 0 })))]
 console.log(failures.map((result) => (result.success ? 'success' : result.reason))) // [ 'insufficientSamples', 'invalidInput', 'rankDeficient' ] (the last one has every region on the same row, so the Y terms cannot be determined)
-
-// A huge map is refused before it allocates anything.
-try {
-	if (fit.success) buildFocusSurfaceMap(fit, { columns: 300, rows: 300 })
-} catch (e) {
-	console.log((e as Error).message) // focus surface map must contain at most 65536 cells
-}
 ```
 
 ### Frame Saturation
@@ -8723,12 +8993,6 @@ console.log(grayscale(rgb, { red: 0.5, green: 0.5, blue: 0 }).raw) // Float32Arr
 const mono = grayscale(rgb)
 console.log(mono.metadata.channels, mono.metadata.stride, mono.header) // 1 2 { BITPIX: -32, NAXIS: 2, NAXIS1: 2, NAXIS2: 1, WCSAXES: 2 }
 console.log(rgb.metadata.channels, grayscale(mono) === mono) // 3 true
-
-try {
-	grayscale(rgb, { red: 1, green: 1, blue: 1 })
-} catch (e) {
-	console.log((e as Error).message) // grayscale weights must sum to one: 3
-}
 ```
 
 ### Image Analysis Planes
@@ -8784,23 +9048,6 @@ console.log(resolveImagePlaneGeometry(mosaic, whole, 'red', [1, 0]).sourceLeft) 
 const tiny = { left: 0, top: 0, right: 1, bottom: 1 }
 console.log(resolveOptionalImagePlaneGeometry(mosaic, tiny, 'blue')) // undefined
 console.log(imagePlaneGeometry(mosaic.metadata, tiny, 'red')?.width) // 21
-
-for (const run of [
-	() => resolveImagePlaneGeometry(mosaic, tiny, 'blue'),
-	() => resolveImagePlaneGeometry(mono, whole, 'red'),
-	() => resolveImagePlaneGeometry(rgb, whole, 'mono'),
-	() => resolveAnalysisArea({ left: 0, top: 0, right: 7, bottom: 4 }, 6, 4),
-	() => resolveLocalCfaPattern(mono, [1, 0]),
-	() => validateDigitalImageLayout({ ...mono, sampleScale: 'normalized' } as never),
-	() => validateDigitalImageLayout({ ...mono, quantizationStep: 0 }),
-	() => validateDigitalImageLayout({ ...mono, raw: new Float64Array(4) }),
-]) {
-	try {
-		run()
-	} catch (e) {
-		console.log((e as Error).message) // RGGB GRBG undefined
-	}
-}
 ```
 
 ### Image Arithmetic
@@ -8832,41 +9079,6 @@ console.log(divide(a, b, frame([0, 0])).raw) // Float32Array(2) [ 0.25, 0 ] (the
 console.log(plusScalar(a, 0.5, frame([0, 0])).raw, subtractScalar(a, 0.5, frame([0, 0])).raw) // Float32Array(2) [ 1.5, 2.5 ] Float32Array(2) [ 0.5, 1.5 ]
 console.log(multiplyScalar(a, 3, frame([0, 0])).raw, divideScalar(a, 4, frame([0, 0])).raw) // Float32Array(2) [ 3, 6 ] Float32Array(2) [ 0.25, 0.5 ]
 console.log(plus(a, b) === a, a.raw) // true Float32Array(2) [ 5, 2 ]
-
-// The geometry check.
-try {
-	checkDimensions(a, frame([1, 2, 3]))
-} catch (e) {
-	console.log((e as Error).message) // width does not match: 2 != 3
-}
-
-try {
-	checkDimensions(a, frame([1, 2], 'RGGB'))
-} catch (e) {
-	console.log((e as Error).message) // CFA patterns do not match: none != RGGB
-}
-
-// A scalar that is not finite, a null divisor, and an output that is a shifted view of an input.
-try {
-	multiplyScalar(a, Infinity)
-} catch (e) {
-	console.log((e as Error).message) // scalar must be finite: Infinity
-}
-
-try {
-	divideScalar(a, 0)
-} catch (e) {
-	console.log((e as Error).message) // scalar must be non-zero: 0
-}
-
-const memory = new Float32Array(4)
-const view = (offset: number): Image => ({ ...frame([0, 0]), raw: memory.subarray(offset, offset + 2) })
-
-try {
-	plus(view(0), b, view(1))
-} catch (e) {
-	console.log((e as Error).message) // first image and output raw buffers partially overlap
-}
 ```
 
 ### Image Calibration
@@ -8912,21 +9124,6 @@ const rgb = calibrate(make(2, 1, 3, [0.5, 0.4, 0.3, 0.5, 0.4, 0.3]), { flat: mak
 console.log(rgb.raw) // [0.75, 0.6, 0.3, 0.375, 0.3, 0.3] (each channel is divided by its own normalized flat)
 const mosaic = calibrate(make(2, 2, 1, [0.5, 0.5, 0.5, 0.5], {}, 'RGGB'), { flat: make(2, 2, 1, [0.2, 0.4, 0.4, 0.8], {}, 'RGGB') })
 console.log(mosaic.raw) // [0.5, 0.5, 0.5, 0.5]
-
-for (const run of [
-	() => calibrate(make(2, 1, 1, [0.5, 0.5]), { darkFlat: make(2, 1, 1, [0.1, 0.1]) }),
-	() => calibrate(make(2, 1, 1, [0.5, 0.5], { EXPTIME: 30 }), { dark: make(2, 1, 1, [0.1, 0.1], { EXPTIME: 10 }) }),
-	() => calibrate(make(2, 1, 1, [0.5, 0.5]), { dark: make(3, 1, 1, [0.1, 0.1, 0.1]) }),
-	() => calibrate(make(2, 1, 1, [0.5, 0.5], { GAIN: 100 }), { bias: make(2, 1, 1, [0.1, 0.1], { GAIN: 200 }) }),
-	() => calibrate(make(2, 1, 1, [0.5, 0.5]), { flat: make(2, 1, 1, [0.1, 0]) }),
-	() => calibrate(make(2, 1, 1, [0.5, 0.5]), { minimumFlat: -1 }),
-]) {
-	try {
-		run()
-	} catch (e) {
-		console.log((e as Error).message) // darkFlat requires a flat master
-	}
-}
 ```
 
 ### Image Cloning and Copying
@@ -8952,12 +9149,6 @@ console.log(source.raw, source.header.NAXIS1, copy.raw.constructor === source.ra
 // Copy the samples into an existing image of the same shape: the metadata of the destination is kept.
 const target = frame([0, 0])
 console.log(copyInto(source, target) === target, target.raw) // true Float32Array(2) [ 1, 2 ]
-
-try {
-	copyInto(source, frame([0, 0, 0]))
-} catch (e) {
-	console.log((e as Error).message) // width does not match: 2 != 3
-}
 ```
 
 ### Image Convolution
@@ -9030,7 +9221,6 @@ console.log(convolutionKernel([1, 2, 1, 2, 4, 2, 1, 2, 1], 3).divisor, convoluti
 const ones = () => ({ ...frame([]), metadata: { ...frame([]).metadata, width: 3, height: 3, pixelCount: 9, stride: 3 }, raw: new Float64Array(9).fill(1) })
 console.log(Array.from(convolution(ones(), convolutionKernel(new Array(9).fill(1), 3)).raw, (value) => Number(value.toFixed(3)))) // [ 1, 1, 1, 1, 1, 1, 1, 1, 1 ] (the divisor follows the truncated border)
 console.log(Array.from(convolution(ones(), convolutionKernel(new Array(9).fill(1), 3), { dynamicDivisorForEdges: false }).raw, (value) => Number(value.toFixed(3)))) // [ 0.444, 0.667, 0.444, 0.667, 1, 0.667, 0.444, 0.667, 0.444 ]
-console.log(DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS) // { dynamicDivisorForEdges: true, normalize: true } and the same with sigma 1.4 and size 5
 
 // The separable smoothing with the binomial kernel [1, 4, 6, 4, 1] / 16, and with a dilation of 2 pixels.
 const source = new Float64Array(25)
@@ -9050,16 +9240,7 @@ console.log(Array.from(output.slice(10, 15))) // [ 0.125, 0, 0.25, 0, 0.125 ]
 // The row buffer rotation.
 const rows = [[1], [2], [3]]
 shift(rows)
-console.log(rows) // [ [ 2 ], [ 3 ], [ 1 ] ]
-
-// An even kernel, a sigma outside 0.5..5, and a one-dimensional kernel of even length.
-for (const action of [() => convolution(impulse(), convolutionKernel([1, 1, 1, 1], 2)), () => gaussianBlurKernel(6, 5), () => separableSmoothingKernel([1, 1]), () => meanConvolutionKernel(4)]) {
-	try {
-		action()
-	} catch (e) {
-		console.log((e as Error).message) // kernel size must be odd, kernel size bust be in range [0.5..5], separable kernel length must be odd and at least 3 and size must be odd
-	}
-}
+console.log(rows) // [[2], [3], [1]]
 ```
 
 ### Image Intensity Inversion
@@ -9078,12 +9259,6 @@ const image: Image = {
 
 console.log(invert(image) === image, image.raw) // true Float64Array(6) [ 1, 0.9, 0.8, 0.7, 0.6, -0.5 ]
 console.log(invert(image).raw) // Float64Array(6) [ 0, 0.09999999999999998, 0.19999999999999996, 0.30000000000000004, 0.4, 1.5 ]
-
-try {
-	invert({ ...image, metadata: { ...image.metadata, channels: 2 } })
-} catch (e) {
-	console.log((e as Error).message) // image channels must be 1 or 3: 2
-}
 ```
 
 ### Image Mirroring
@@ -9256,12 +9431,6 @@ console.log(lean.finalImage?.raw.constructor.name, lean.coverageMap, lean.weight
 // The drizzle reconstruction at 2x with 70 percent drops: the output grid, its parameters and the denominator map.
 const drizzled = stackFrames(frames, { reconstructionMode: 'drizzle', drizzle: { scale: 2, pixfrac: 0.7 } })
 console.log(drizzled.finalImage?.metadata.width, drizzled.statistics.drizzle, drizzled.weightMap?.channels, drizzled.weightMap?.raw.length) // 192 { scale: 2, pixfrac: 0.7, outputWidth: 192, outputHeight: 192 } 1 36864
-
-try {
-	stackFrames(frames, { reconstructionMode: 'drizzle', combinationMethod: 'median' })
-} catch (e) {
-	console.log((e as Error).message) // Drizzle requires sum, average or weighted-average and global normalization
-}
 ```
 
 ### Image Statistics
@@ -9310,14 +9479,6 @@ console.log(
 const mask = new Uint8Array(width * height)
 mask.fill(1, 0, width)
 console.log(histogram(image, { channel: 'RED', sigmaClip: mask }).count, histogram(image, { channel: 'RED' }).count) // [4032, 39] [4096, 40]
-
-for (const run of [() => histogram(image, { bits: 30 }), () => histogram(image, { sigmaClip: new Uint8Array(3) })]) {
-	try {
-		run()
-	} catch (e) {
-		console.log((e as Error).message) // histogram bits must be between 1 and 24 / sigmaClip must have length 4096
-	}
-}
 ```
 
 ### Image Warp
@@ -9546,15 +9707,6 @@ const color: Image = { header: {}, raw: new Float64Array(width * height * 3), me
 for (let i = 0; i < width * height; i++) for (let c = 0; c < 3; c++) color.raw[i * 3 + c] = reference.raw[i] * (1 + 0.1 * c)
 const colorModel = fitLocalNormalization(color, color, { colorMode: 'luminance' })
 console.log(colorModel.channelCount, colorModel.diagnostics.length) // 3 1 (a luminance model has one plane)
-
-console.log(resolveLocalNormalizationOptions({ gridSize: 4.9, relativeScaleRange: [0.5, 2] }).gridSize, DEFAULT_LOCAL_NORMALIZATION_OPTIONS.gridSize, DEFAULT_LOCAL_NORMALIZATION_OPTIONS.fallback) // 4 16 'global' (a gridSize of 4.9 is truncated)
-for (const run of [() => resolveLocalNormalizationOptions({ gridSize: Number.NaN }), () => resolveLocalNormalizationOptions({ relativeScaleRange: [1.5, 2] }), () => applyLocalNormalization(color, model)]) {
-	try {
-		run()
-	} catch (e) {
-		console.log((e as Error).message) // gridSize must be a finite number, relativeScaleRange must satisfy 0 < min <= 1 <= max, and local normalization model geometry (320x320x1) does not match image (320x320x3)
-	}
-}
 ```
 
 ### Multiscale Linear Transform
@@ -9617,21 +9769,6 @@ console.log(mean(reference), mean(multiscaleLinearTransform(make(), { layers: 5,
 
 // No layers is a no-op, a Float32 image is processed in its own precision and the layer count is limited by the image size.
 console.log(multiscaleLinearTransform(make(), { layers: 0 }).raw[star] === reference.raw[star], multiscaleLinearTransform(make(32), { layers: 100 }).raw.constructor.name) // true 'Float32Array'
-
-// The option helpers.
-console.log(DEFAULT_MLT_OPTIONS, DEFAULT_MLT_LAYER_OPTIONS) // { layers: 3, detailLayers: [], residualGain: 1 } { threshold: 0, amount: 1, bias: 0 }
-console.log(resolveMultiscaleLayers(2.7, 3), resolveMultiscaleLayers(Number.NaN, 3), resolveMultiscaleLayers(-4, 3), resolveMultiscaleResidualGain(undefined, 1)) // 2 3 0 1
-console.log(resolveMultiscaleLayer({ threshold: -1, amount: 5, bias: 0.5 }, DEFAULT_MLT_LAYER_OPTIONS), multiscaleNeedsDenoise([{}, { threshold: 2 }], 2, DEFAULT_MLT_LAYER_OPTIONS)) // { threshold: 0, amount: 1, gain: 1.5 } true
-
-// The robust per-channel scale of the detail between a buffer and its smoothed version.
-const current = Float64Array.from([0, 1, 0, -1, 0, 1, 0, -1])
-const smooth = new Float64Array(8)
-console.log(multiscaleDetailScales(current, smooth, 1, new Float64Array(8), new Float64Array(1))) // [0.7413] (1.4826 times the median absolute coefficient of 0.5)
-try {
-	multiscaleDetailScales(current, smooth, 1, new Float64Array(4), new Float64Array(1))
-} catch (e) {
-	console.log((e as Error).message) // invalid multiscale detail workspaces
-}
 ```
 
 ### Multiscale Median Transform
@@ -9697,7 +9834,6 @@ console.log(multiscaleMedianTransform(make(32)).raw.constructor.name, multiscale
 const constant = make()
 constant.raw.fill(0.25)
 console.log(multiscaleMedianTransform(constant, { layers: 3 }).raw.every((value) => Math.abs(value - 0.25) < 1e-12)) // true
-console.log(DEFAULT_MMT_OPTIONS, DEFAULT_MMT_LAYER_OPTIONS) // { layers: 3, detailLayers: [], residualGain: 1 } { threshold: 0, amount: 1, bias: 0 }
 ```
 
 ### Photon Transfer and Read Noise
@@ -9770,14 +9906,6 @@ console.log(
 	points.map((point) => point.selectedForGainFit),
 	gain?.system,
 ) // [ false, false, true, true, false, false ] 0.5
-
-// With a single usable level the gain is undefined, and an invalid range is rejected.
-console.log(fitPhotonTransferGain(result.photonTransfer.slice(0, 1))[1])
-try {
-	fitPhotonTransferGain(result.photonTransfer, [0.5, 0.2])
-} catch (e) {
-	console.log((e as Error).message) // gain range must be an increasing fraction within 0..1
-}
 ```
 
 ### Pixel Sigma Clipping and Background Levels
@@ -9822,14 +9950,6 @@ console.log(estimateBackground(image), estimateBackground(image, { channel: 'BLU
 
 // The empirical mode: the stars raise the mean, so it falls below the median.
 console.log(estimateBackgroundUsingMode(image, { channel: 'RED' }), estimateBackgroundUsingMode(image, { channel: 'GREEN', bits: 10 })) // 0.18978342214229782 0.24134470347208936
-
-for (const run of [() => sigmaClip(image, { maxIterations: Number.POSITIVE_INFINITY }), () => sigmaClip(image, { mask: new Uint8Array(3) }), () => estimateBackground(image, { bits: 0 })]) {
-	try {
-		run()
-	} catch (e) {
-		console.log((e as Error).message) // maxIterations must be finite / mask must have length 4096 / histogram bits must be between 1 and 24
-	}
-}
 ```
 
 ### PSF Filter
@@ -9870,13 +9990,6 @@ console.log(Array.from(color.raw.slice(center, center + 3), (value) => Number(va
 const tiny = frame(1, () => 0.5)
 const small: Image = { ...tiny, metadata: { ...tiny.metadata, width: 5, height: 5, pixelCount: 25, stride: 5 }, raw: new Float64Array(25).fill(0.5) }
 console.log(psf(small) === small, small.raw[12]) // true 0.5
-
-// A raw mosaic is rejected.
-try {
-	psf({ ...tiny, metadata: { ...tiny.metadata, bayer: 'RGGB' } })
-} catch (e) {
-	console.log((e as Error).message) // PSF filtering requires a non-CFA intensity image
-}
 ```
 
 ### Scalar Surface Fitting
@@ -10104,18 +10217,10 @@ console.log(mosaic.metadata.channels, mosaic.metadata.bayer) // 1 GRBG
 // The channels and the weights.
 console.log(channelIndex('RED'), channelIndex('GREEN'), channelIndex('BLUE'), channelIndex('GRAY'), channelIndex()) // 0 1 2 0 0
 console.log(grayscaleFromChannel(), grayscaleFromChannel('Y'), grayscaleFromChannel({ red: 1, green: 1, blue: 1 })) // BT.709, NTSC and the given weights
-console.log(DEFAULT_GRAYSCALE === BT709_GRAYSCALE, GRAYSCALES.RMY === RMY_GRAYSCALE, GRAYSCALES.RED === RED_GRAYSCALE, GRAYSCALES.GREEN === GREEN_GRAYSCALE, GRAYSCALES.BLUE === BLUE_GRAYSCALE, GRAYSCALES.GRAY === DEFAULT_GRAYSCALE, Y_GRAYSCALE.green, BLUE_GRAYSCALE.blue) // true true true true true true 0.587 1
-console.log(DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS) // { jpeg: { quality: 100, chrominanceSubsampling: "4:4:4" } }
 
 // The CFA: the channel of each raw coordinate of an RGGB tile, and the pattern after a crop with an odd origin.
 console.log(cfaChannelAt('RGGB', 0, 0), cfaChannelAt('RGGB', 1, 0), cfaChannelAt('RGGB', 0, 1), cfaChannelAt('RGGB', 1, 1), cfaChannelAt('RGGB', 3, 2)) // 0 1 1 2 1
 console.log(shiftCfaPattern('RGGB', 1, 0), shiftCfaPattern('RGGB', 0, 1), shiftCfaPattern('RGGB', 1, 1), shiftCfaPattern('RGGB', 2, 4), shiftCfaPattern(undefined, 1, 1)) // GRBG GBRG BGGR RGGB undefined
-
-try {
-	shiftCfaPattern('RGGB', 0.5, 0)
-} catch (e) {
-	console.log((e as Error).message) // CFA offsets must be integers
-}
 
 // Zeroed buffers of a precision, or of the precision of another buffer.
 console.log(makeImageRawTypedArray(32, 4), makeImageRawTypedArray(64, 2), makeImageRawTypedArray(new Float32Array(1), 3)) // Float32Array(4) [ 0, 0, 0, 0 ] Float64Array(2) [ 0, 0 ] Float32Array(3) [ 0, 0, 0 ]
@@ -10164,13 +10269,6 @@ const image = pixels()
 console.log(scnr(image, 'GREEN', 0) === image, round(image.raw)) // true [ 0.1, 0.2, 0.1, 0.5, 0.5, 0.5, 0.05, 0.9, 0.05 ]
 const mono: Image = { ...image, metadata: { ...image.metadata, channels: 1, stride: 3 }, raw: new Float64Array([0.1, 0.2, 0.3]) }
 console.log(scnr(mono) === mono, round(mono.raw)) // true [ 0.1, 0.2, 0.3 ]
-
-// A buffer that does not match the geometry is rejected.
-try {
-	scnr({ ...image, raw: new Float64Array(4) })
-} catch (e) {
-	console.log((e as Error).message) // image raw length does not match metadata: 4 != 9
-}
 ```
 
 ### Screen Transfer Function
@@ -10219,12 +10317,6 @@ console.log(stf(same) === same, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, 
 
 // A midtone of 1 sends everything below the highlight to 0.
 console.log(round(stf(ramp(), 1).raw)) // [ 0, 0, 0, 0, 0, 1 ]
-
-try {
-	stf(ramp(), 0.25, 0.8, 0.2)
-} catch (e) {
-	console.log((e as Error).message) // shadow must be less than or equal to highlight
-}
 ```
 
 ### Sensor Characterization
@@ -10294,14 +10386,6 @@ console.log(
 	mixed.planes.length,
 	mixed.diagnostics.map((d) => d.code),
 ) // 0 planes and mixedOperatingPoint
-
-console.log(DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS) // gainRange [0.05, 0.7], linearityRange [0.05, 0.95], temperatureTolerance 0.5, rejectionSigma 5, spatialDetrend 'emvaHighpass', maps 'none'
-
-try {
-	characterizeSensor({ operatingPoint: {}, bias, flats }, { rejectionSigma: 0 })
-} catch (e) {
-	console.log((e as Error).message) // sensor rejection sigma must be finite and positive
-}
 ```
 
 ### Sensor Fixed-Pattern Noise
@@ -10361,19 +10445,6 @@ const mask = new Uint8Array(width * width)
 const full = measureSensorSpatial(stack(darkRaw), stack(flatRaw), 2, { maps: 'all', spatialBuffers: { mean, variance, mask }, tile: { width: 16, height: 16 } })
 console.log(full.dsnu.map?.length, full.prnu.map?.length, mean[0], variance[0]) // none 0.0202 0.0519 undefined
 console.log(measureSensorSpatial(stack(darkRaw), stack(flatRaw), 2, { area: { left: 0, top: 0, right: 16, bottom: 16 } }).sampleCount) // plane 0.0202 0.0519 0.0200
-
-for (const run of [
-	() => measureSensorSpatial(stack(darkRaw), stack(flatRaw), 0),
-	() => measureSensorSpatial(stack(darkRaw), { ...stack(flatRaw), exposure: 5 }, 2),
-	() => measureSensorSpatial(stack(darkRaw), stack(flatRaw), 2, { tile: { width: 0, height: 4 } }),
-	() => measureSensorSpatial(stack(darkRaw), stack(flatRaw), 2, { spatialDetrend: 'cubic' as never }),
-]) {
-	try {
-		run()
-	} catch (e) {
-		console.log((e as Error).message) // polynomial 0.0202 0.0519 0.0200
-	}
-}
 ```
 
 ### Sensor Linearity
@@ -10470,12 +10541,6 @@ console.log(detectSensorSaturation(rising, gain, 4095)?.method, detectSensorSatu
 const saturation = detectSensorSaturation([...rising, point(3000, 1500, 0.5)], gain)!
 console.log(computeSensorDynamicRange(saturation, readNoise)) // { practical: { ratio: 800, stops: 9.644, decibels: 58.06 }, emva: { ratio: 706.2, stops: 9.464, decibels: 56.98 } }
 console.log(computeSensorDynamicRange(saturation, { digital: 2, pairCount: 1, deviation: 0 })) // undefined (no noise in electrons)
-
-try {
-	measureSensorLinearity(photonTransfer, flats, undefined, gain, [0.9, 0.1])
-} catch (e) {
-	console.log((e as Error).message) // linearity range must be an increasing fraction within 0..1
-}
 ```
 
 ### Sensor Operating-Point Series
@@ -10544,12 +10609,6 @@ console.log(characterizeSensorSeries([profile(0, 0.5), profile(100, 0.8, 10)]).d
 console.log(characterizeSensorSeries([profile(0, 0.5), profile(0, 0.8)]).diagnostics.map((d) => d.code)) // ['invalidConfiguredGain']
 console.log(characterizeSensorSeries([profile(0, 0.5), profile(100, 0.8), profile(200, 0.6)]).diagnostics.map((d) => d.code)) // ['nonMonotonicGainSeries']
 console.log(characterizeSensorSeries([]).diagnostics.map((d) => d.code)) // ['insufficientProfiles']
-
-try {
-	characterizeSensorSeries(profiles, { regimeSlopeRatio: 1 })
-} catch (e) {
-	console.log((e as Error).message) // series regime slope ratio must be finite and greater than one
-}
 ```
 
 ### Sensor Stack Defects
@@ -10617,14 +10676,6 @@ const tolerant = measureSensorDefects(dark, flat, { maps: 'defects', rejectionSi
 console.log(tolerant.hot, tolerant.cold, tolerant.noisy) // 12 10 2 (unchanged)
 const part = measureSensorDefects(dark, flat, { maps: 'defects', area: { left: 0, top: 0, right: 6, bottom: 5 } })!
 console.log(part.mask!.length, part.hot, part.cold, part.columns) // 30 6 5 [4] (a 6x5 plane, with the hot row cut to 6 pixels and the cold column to 5)
-
-for (const run of [() => measureSensorDefects(dark, { ...flat, exposure: 20 }), () => measureSensorDefects(dark, flat, { maps: 'defects', rejectionSigma: 0 }), () => measureSensorDefects(dark, flat, { spatialBuffers: { ...buffers, mask: new Uint8Array(4) } })]) {
-	try {
-		run()
-	} catch (e) {
-		console.log((e as Error).message) // defect dark and flat stacks must have matching finite non-negative exposure
-	}
-}
 ```
 
 ### Sensor Tilt Estimator
@@ -10647,13 +10698,6 @@ console.log(estimatePhysicalSensorTilt(plane, 4000, 3000, scale, { x: 10, y: 10,
 
 // A flat plane has zero tilt, and a negative displacement (the focuser moves the other way) flips the sign of the angles.
 console.log(analyzePhysicalTilt({ gradientX: 0, gradientY: 0, effect: 0 }, 4000, 3000, scale).magnitude, analyzePhysicalTilt(plane, 4000, 3000, { ...scale, focusDisplacement: -0.001 }).x) // 0 and -0.005002 (the sign of the x angle flips with the sign of the displacement)
-
-// A zero displacement is an uncalibrated focuser.
-try {
-	analyzePhysicalTilt(plane, 4000, 3000, { ...scale, focusDisplacement: 0 })
-} catch (e) {
-	console.log((e as Error).message) // finite sensor dimensions, pixel size, and non-zero focus displacement are required
-}
 
 // A synthetic scan: 11 frames every 100 steps of 160 stars on a 1000 by 800 sensor, whose best focus is a tilted plane (4500 steps at the center, 120 along X and 60 along Y).
 const width = 1000
@@ -10720,13 +10764,6 @@ console.log(signalToNoiseRatio(20000, 30, 0, 0, 0).toFixed(3), Math.sqrt(20000).
 
 // The read noise alone matters in a dark sky: the same star with a read noise of 10 e- against 1.6 e-, in a sky of 5 e- per pixel.
 console.log(signalToNoiseRatio(800, 30, 5, 0.1, 1.6).toFixed(3), signalToNoiseRatio(800, 30, 5, 0.1, 10).toFixed(3)) // 24.929 12.724
-
-// Nothing to measure: no signal and no noise has an undefined ratio, which is an error.
-try {
-	signalToNoiseRatio(0, 30, 0, 0, 0)
-} catch (e) {
-	console.log((e as Error).message) // noise variance must be positive
-}
 
 // 25 frames: the ideal gain in the ratio and in the limiting magnitude, and the stack of 4 frames that doubles the ratio.
 console.log(stackingSnrGain(25), stackingMagnitudeGain(25).toFixed(3), stackingSnrGain(4), stackingMagnitudeGain(1)) // 5 1.747 2 0
@@ -11240,37 +11277,6 @@ console.log(detectStreaks(image, { saturationLevel: 0.25 })[0].saturationFractio
 const color = make(3)
 renderSyntheticStreak(color, { start: { x: 20, y: 30 }, end: { x: 140, y: 80 }, width: 3, intensity: 0.2 })
 console.log(detectStreaks(color).length, detectStreaks(color, { plane: 'red' }).length, detectStreaks(color, { plane: 'blue' }).length) // 1 1 1 (the same trail on every plane)
-
-// A reusable workspace (its precision matches the Float64Array of the images) gives the same detections and exposes the counters of the latest call.
-const workspace = createStreakDetectionWorkspace(width, height, { precision: 64 })
-const reused = detectStreaks(image, {}, workspace)
-console.log(JSON.stringify(reused) === JSON.stringify(streaks), workspace.precision, workspace.maximumCandidates, workspace.maximumEdgePoints) // true 64 128 131072
-console.log(workspace.state) // { edgeCount: 1212, candidateCount: 110, edgesTruncated: false, houghCoarseEdgeWork: 8484, houghRefinementEdgeWork: 47045, houghActiveAngles: 90, houghRhoWork: 108270, refinementWork: 3698906, supportedRuns: 180, mergeRefits: 56 }
-for (const test of [
-	() => detectStreaks(make(), {}, createStreakDetectionWorkspace(100, 100, { precision: 64 })),
-	() => detectStreaks(image, {}, createStreakDetectionWorkspace(width, height)),
-	() => detectStreaks(image, { maxWidth: 300 }),
-	() => detectStreaks(image, { maxCandidates: 600 }),
-	() => createStreakDetectionWorkspace(40000, 100),
-]) {
-	try {
-		test()
-	} catch (e) {
-		console.log((e as Error).message) // in order: incompatible streak workspace extent or precision (smaller workspace), incompatible streak workspace extent or precision (precision 32 for 64-bit samples), value must be within [1, 256], value must be within [1, 512], value must be within [1, 32768]
-	}
-}
-
-// The mask of the detections: the capsule of each streak, the dilation and the width scale, and the confidence cutoff.
-const mask = createStreakMask(width, height, streaks)
-console.log(mask.width, mask.height, mask.raw.length, mask.maskedPixels, mask.maskedFraction.toFixed(4), mask.raw[55 * width + 80], mask.raw[0]) // 160 120 19200 416 0.0217 1 0
-console.log(createStreakMask(width, height, streaks, { dilation: 2 }).maskedPixels, createStreakMask(width, height, streaks, { widthScale: 2 }).maskedPixels, createStreakMask(width, height, streaks, { widthScale: 0 }).maskedPixels) // 989 850 0 (dilation 2, a width scale 2, and a zero scale that masks nothing)
-const weak = { ...s, confidence: 0.3 }
-console.log(STREAK_MASK_LOW_CONFIDENCE, createStreakMask(width, height, [weak]).maskedPixels, createStreakMask(width, height, [weak], { includeLowConfidence: false }).maskedPixels, createStreakMask(width, height, [s, s]).maskedPixels === mask.maskedPixels) // 0.5 416 0 true (a weak streak is masked unless the cutoff is on; the same streak twice counts its pixels once)
-try {
-	createStreakMask(0, 10, [])
-} catch (e) {
-	console.log((e as Error).message) // streak mask dimensions must be positive integers whose product fits in one bounded buffer
-}
 ```
 
 ### Streak Classification
@@ -11301,11 +11307,6 @@ const sky = (): Image => ({ header: {}, raw: new Float64Array(160 * 120).fill(0.
 
 // A compact line: the class, the confidence, the alternatives and the evidence metrics (the last one with the id of a track or a radiant).
 const show = (c: StreakClassification) => [c.class, c.confidence.toFixed(3), c.alternatives.map((a) => `${a.class}:${a.score.toFixed(2)}`).join(' ') || '-', c.evidence.map((e) => `${e.kind}:${e.score.toFixed(2)}${e.id === undefined ? '' : '#' + e.id}`).join(' ') || '-']
-
-console.log(
-	DEFAULT_STREAK_CLASSIFIER_OPTIONS,
-	defaultStreakEvidenceProviders.map((p) => p.id),
-) // { minimumScore: 0.62, minimumMargin: 0.12 } and the providers morphology, intensity, trajectory, meteorRadiant, fieldCoherence, optical, sensor
 
 // The shape alone only raises an alternative: a long thin trail leans to a satellite, a short PSF-wide one to a moving object, a broad and poorly linear one to an airplane; none is named.
 const trail = make(10, 20, 150, 60)
@@ -11445,15 +11446,10 @@ console.log(masked.diagnostics[0].streaks) // { detectedCount: 0, maskedPixels: 
 const wide = stackFrames(declared(), { streaks: { enabled: true, mask: { dilation: 3, widthScale: 2 } } })
 console.log(wide.diagnostics[2].streaks?.maskedPixels, createStreakMask(width, height, [streak], { dilation: 3, widthScale: 2 }).maskedPixels) // 1216 1216
 
-// An authoritative frame mask is used as it is, even with streaks supplied; a mask of another size is an error.
+// An authoritative frame mask is used as it is, even with streaks supplied.
 const mask = createStreakMask(width, height, [streak])
 const withMask = stackFrames(declared({ streakMask: mask, streaks: [] }), { streaks: { enabled: true } })
 console.log(withMask.diagnostics[2].streaks, mask.maskedPixels === withMask.diagnostics[2].streaks?.maskedPixels) // { detectedCount: 0, maskedPixels: 264, maskedFraction: 0.0286, classes: undefined } true
-try {
-	stackFrames([{ ...frame(0, 0), streakMask: createStreakMask(10, 10, [streak]) }, frame(3, -2)], { streaks: { enabled: true } })
-} catch (e) {
-	console.log((e as Error).message) // streak mask must match the source image dimensions
-}
 
 // Detection on demand (when neither a mask nor streaks were supplied), with the detector options; the thresholds keep the chains of bright stars of this field from being taken as trails.
 const detected = stackFrames(build(), { streaks: { enabled: true, detection: { minLength: 40, minLinearity: 0.95, minSNR: 20 } } })
@@ -11515,7 +11511,6 @@ console.log(measureSubframeQuality(empty)) // { starCount: 0, medianSNR: 0, medi
 console.log(measureSubframeQuality(sparse).medianEccentricity, measureSubframeQuality(blurred).qualityScore, measureSubframeQuality(blurred).normalizedScore) // undefined 50.56 0.6461
 
 // The score of a set of measurements: the defaults, a percentage, a narrower sharpness range and a missing metric (omitted from the mean).
-console.log(DEFAULT_IMAGE_QUALITY) // { starCount: 100, targetPixels: 2, maximumPixels: 8, maximumEccentricity: 0.8, signalToNoise: 50, maximumBackground: 0.5, maximumNoise: 0.05 }
 console.log(imageQualityScore({ starCount: 100, medianHFD: 2, medianEccentricity: 0, medianSNR: 50, estimatedBackground: 0, noise: 0 })) // 1
 console.log(imageQualityScore({ starCount: 50, medianHFD: 5, medianSNR: 25 }), imageQualityScore({ starCount: 50, medianHFD: 5, medianSNR: 25 }, { scale: 100 })) // 0.5 50
 console.log(imageQualityScore({ starCount: 50, medianHFD: Infinity, medianFWHM: 5 }), imageQualityScore({ starCount: 50, medianHFD: 5 }, { targetPixels: 1, maximumPixels: 5 }), imageQualityScore({ starCount: 0 })) // 0.5 0 0
@@ -11605,24 +11600,227 @@ console.log(at(rgb), at(redder)) // [ 0.0157, 0.0178, 0.0245 ] [ 0.0299, 0.0181,
 
 // Nothing is drawn for a non-positive or non-finite flux, a non-finite position or a pattern entirely off the image.
 console.log(plotBahtinovSpikes(mono, width, height, 1, 100, 100, 0, 0), plotBahtinovSpikes(mono, width, height, 1, Number.NaN, 100, 40, 0), plotBahtinovSpikes(mono, width, height, 1, 1000, 1000, 40, 0)) // false false false
-
-// Invalid input throws before any sample changes.
-for (const test of [() => plotBahtinovSpikes(mono, 0, height, 1, 100, 100, 40, 0), () => plotBahtinovSpikes(mono, width, height, 3, 100, 100, 40, 0), () => plotBahtinovSpikes(mono, width, height, 1, 100, 100, 40, Number.NaN), () => plotBahtinovSpikes(mono, width, height, 1, 100, 100, 40, 0, undefined, { fwhm: -1 })]) {
-	try {
-		test()
-	} catch (e) {
-		console.log((e as Error).message) // width must be a positive integer, buffer length mismatch: expected 120000, received 40000, error must be finite, fwhm must be finite and positive
-	}
-}
 ```
 
 ### Synthetic Defocused Collimation Patterns
 
+`imaging/synthetic/collimation` renders deterministic images of a defocused, centrally obstructed star, for tests, simulators and the collimation analysis (see Defocused Annular Geometry Analysis). A `SyntheticCollimationPattern` describes the image: its `width` and `height` (positive integers), `channels` (1, the default, or 3, interleaved, with optional `channelWeights` that sum to 1 and that default to equal shares) or CFA metadata `bayer` for a mono mosaic, the `outer` boundary and the `obstruction` boundary (each a `SyntheticEllipse` with the `center` in pixels with Y downward, `semiMajor` and `semiMinor` in pixels, `theta` in radians (clockwise, because Y grows downward) and a positive logistic edge `softness` in pixels; the obstruction must stay inside the outer ellipse), the total annulus `signal` (the integral over all pixels and channels, in normalized units times pixels), the constant `background` and the Gaussian `noise` per sample, a `seed` (1 by default, a deterministic generator), the Gaussian `seeing` (a number in pixels or `{ sigmaX, sigmaY }`) and a linear `tracking` blur (`{ length, angle }`), azimuthal `harmonics` (`{ order, amplitude, phase }` cosine terms around the outer ellipse), a `spider` (`{ vanes, angle, width, attenuation }`), a `thermalPlume` (`{ angle, width, strength }`), a `saturation` clamp, `hotPixels` and a half-open `crop` in full-image coordinates. `generateSyntheticCollimationImage(pattern)` returns a fresh normalized `Float32` image: it renders the annulus, applies the blur, adds the background, then the noise, the saturation and the hot pixels, and finally crops (a crop returns local coordinates and records its origin in the header `XORGSUBF` and `YORGSUBF`). The lower-level pieces are exported: `renderSyntheticCollimationPattern(raw, pattern)` adds one annulus to an existing buffer of exactly `width * height * channels` samples and returns `false` when nothing is drawn (the support is outside the frame or the signal is zero), `renderValidatedSyntheticCollimationPattern(raw, pattern)` is the same for a pattern and a buffer that were already validated (it skips every check, for batches of stars), `applySyntheticCollimationBlur(raw, width, height, channels, seeing?, tracking?)` blurs a buffer in place and returns it and `applySyntheticCollimationSaturation(raw, level?)` clamps it in place. Invalid geometry or options throw a `RangeError` before anything is drawn. The pattern is an idealization of a geometric annulus: it has no diffraction rings, no chromatic effects and no optical model, and the harmonics, the spider and the plume are brightness modulations, not physical simulations.
+
+```ts
+import { applySyntheticCollimationBlur, applySyntheticCollimationSaturation, generateSyntheticCollimationImage, renderSyntheticCollimationPattern, renderValidatedSyntheticCollimationPattern, type SyntheticCollimationPattern } from 'nebulosa/src/imaging/synthetic/collimation'
+
+// An annulus of 60 by 58 pixels with an obstruction of 24 by 23 pixels, offset by (4, -2), on 200 by 200 pixels.
+const base: SyntheticCollimationPattern = {
+	width: 200,
+	height: 200,
+	outer: { center: { x: 100, y: 100 }, semiMajor: 60, semiMinor: 58, theta: 0.3, softness: 1.2 },
+	obstruction: { center: { x: 104, y: 98 }, semiMajor: 24, semiMinor: 23, theta: 0.3, softness: 1.2 },
+	signal: 2000,
+	background: 0.05,
+	noise: 0.002,
+}
+
+// The image is normalized Float32: the size, the samples at the center (in the shadow), on the annulus and outside, and the sum of the signal above the background.
+const image = generateSyntheticCollimationImage(base)
+const at = (x: number, y: number) => image.raw[y * 200 + x].toFixed(4)
+console.log(image.metadata.width, image.metadata.channels, image.raw.constructor.name, at(104, 98), at(100, 60), at(5, 5)) // 200 wide, 1 channel, a Float32Array; 0.0469 in the shadow (about the 0.05 background plus noise), 0.2664 on the annulus and 0.0486 outside
+console.log(image.raw.reduce((sum, value) => sum + value - 0.05, 0).toFixed(0)) // 2000: the sum above the background is the signal
+
+// The same pattern and seed give the same image; another seed changes only the noise.
+const again = generateSyntheticCollimationImage(base)
+const other = generateSyntheticCollimationImage({ ...base, seed: 2 })
+console.log(again.raw[100 * 200 + 100] === image.raw[100 * 200 + 100], other.raw[100 * 200 + 100] === image.raw[100 * 200 + 100]) // true then false: the same seed gives the same sample and another seed a different one
+
+// One annulus added to a buffer: it returns true when something was drawn and false for a zero signal or a pattern off the frame.
+const raw = new Float32Array(200 * 200)
+console.log(
+	renderSyntheticCollimationPattern(raw, { ...base, noise: 0, background: 0 }),
+	renderSyntheticCollimationPattern(raw, { ...base, signal: 0 }),
+	renderSyntheticCollimationPattern(raw, { ...base, outer: { ...base.outer, center: { x: 900, y: 900 } }, obstruction: { ...base.obstruction, center: { x: 904, y: 898 } } }),
+) // true, false, false (the second has no signal and the third is off the frame)
+console.log(raw.reduce((a, b) => a + b, 0).toFixed(1)) // 2000.0: the annulus integrates to the signal
+
+// The validated variant does the same without checking the pattern or the buffer, for many stars.
+const stars = new Float32Array(200 * 200)
+renderValidatedSyntheticCollimationPattern(stars, base)
+renderValidatedSyntheticCollimationPattern(stars, base)
+console.log(stars.reduce((a, b) => a + b, 0).toFixed(1)) // 4000.0: two renders add
+
+// The effects on the annulus: a seeing of 2 pixels, a tracking trail of 10 pixels along X and a Gaussian of different sigmas in X and Y. The annulus is a plateau, so the peak does not change and the blur shows at its edge: the row through the center near the left edge of the outer boundary (x = 36, 40 and 44) falls from zero outside to the plateau inside.
+const peak = (buffer: ArrayLike<number>) => Math.max(...Array.from(buffer)).toFixed(4)
+const edge = (buffer: ArrayLike<number>) => [36, 40, 44].map((x) => buffer[100 * 200 + x].toFixed(4))
+const clean = new Float32Array(200 * 200)
+renderSyntheticCollimationPattern(clean, { ...base, background: 0, noise: 0 })
+const seeing = applySyntheticCollimationBlur(clean.slice(), 200, 200, 1, 2)
+const trailed = applySyntheticCollimationBlur(clean.slice(), 200, 200, 1, 0, { length: 10, angle: 0 })
+const anisotropic = applySyntheticCollimationBlur(clean.slice(), 200, 200, 1, { sigmaX: 4, sigmaY: 0 })
+console.log(peak(clean), edge(clean), edge(seeing), edge(trailed), edge(anisotropic)) // peak 0.2174 for all of them; edge samples [0.0068, 0.1006, 0.2084] clean, [0.0164, 0.1021, 0.1962] with a seeing of 2, [0.0329, 0.1052, 0.1789] with a trail of 10 pixels and [0.0387, 0.1052, 0.1740] with sigmaX 4: the edge is softened and the plateau is kept
+
+// The brightness modulations of the annulus (the sample on the annulus at the top, with each effect): a harmonic of order 1, a spider of four vanes, and a thermal plume toward the top.
+const sample = (extra: Partial<SyntheticCollimationPattern>) => generateSyntheticCollimationImage({ ...base, noise: 0, ...extra }).raw[62 * 200 + 100].toFixed(4)
+console.log(sample({}), sample({ harmonics: [{ order: 1, amplitude: 0.5, phase: Math.PI / 2 }] }), sample({ spider: { vanes: 4, angle: Math.PI / 2, width: 4, attenuation: 0.8 } }), sample({ thermalPlume: { angle: -Math.PI / 2, width: 0.5, strength: 0.7 } })) // 0.2674 without effects, 0.1578 with the harmonic, 0.0958 with the spider and 0.1253 with the plume
+
+// The saturation clamps the samples after the noise, and hot pixels are set to the saturation level or the brightest value; the explicit clamp helper does the same on a buffer.
+const copy = clean.slice()
+const hot = generateSyntheticCollimationImage({ ...base, saturation: 0.2, hotPixels: [{ x: 5, y: 5 }] })
+console.log(peak(hot.raw), hot.raw[5 * 200 + 5].toFixed(4), peak(applySyntheticCollimationSaturation(clean.slice(), 0.1)), applySyntheticCollimationSaturation(copy) === copy) // peak 0.2 (the saturation), the hot pixel 0.2, a clamp of 0.1 gives a peak of 0.1 and the helper returns the same buffer (true)
+
+// An RGB image with unequal channel weights and a crop: the cropped size, the origin recorded in the header and the channel ratio on the annulus.
+const rgb = generateSyntheticCollimationImage({ ...base, channels: 3, channelWeights: [0.5, 0.3, 0.2], noise: 0, background: 0, crop: { left: 20, top: 20, right: 180, bottom: 150 } })
+const p = ((60 - 20) * 160 + (100 - 20)) * 3
+console.log(
+	rgb.metadata.width,
+	rgb.metadata.height,
+	rgb.metadata.channels,
+	rgb.header.XORGSUBF,
+	rgb.header.YORGSUBF,
+	[0, 1, 2].map((c) => (rgb.raw[p + c] / rgb.raw[p + 1]).toFixed(3)),
+) // 160 by 130 pixels with 3 channels, the origin 20 and 20, and channel ratios 1.667, 1.000 and 0.667 (0.5, 0.3 and 0.2 over 0.3)
+```
+
 ### Synthetic Flats
+
+`imaging/synthetic/flat` renders deterministic flat-field frames, for tests and simulators of the flat analysis (see Flat-Frame Quality and Flat Sequence Stability). A `SyntheticFlatModel` has the output `width` and `height` (positive integers, in pixels after any binning), the `channels` (1, the default, or 3 interleaved), a CFA `bayer` pattern for a monochrome and unbinned mosaic, the `channelResponse` (red, green and blue multipliers, equal by default), the `bias` (a constant pedestal, added after the multiplicative effects) and the `signal` above it at the illumination center (both in digital numbers when the image is generated, with `signal` non-negative), the `vignetting` (a fractional quadratic falloff at the farthest corner of the sensor, from 0 to 1), the `centerOffset` of the illumination center (as fractions of the half-width and half-height of the sensor), the signed edge-to-edge `gradient` (along X and Y, with the sum of the absolute values at most 2 so that the sensor does not go negative), the `prnu` (the standard deviation of a fixed Gaussian pixel response, as a fraction of the signal), the temporal Gaussian `noise` (same units as the signal), the `seed` and the `frameIndex` (the noise changes with the frame index, the fixed effects never do), the `dustMotes` (Gaussian shadows with `center` in unbinned sensor pixels, `sigmaX`, `sigmaY`, a clockwise `angle` in radians and the `contrast` of the attenuation at the center), `rowBanding` and `columnBanding` (a sinusoidal `amplitude` as a fraction, the `period` in unbinned sensor pixels and a `phase` in radians), and the `lowerClip`, `upperClip` and `quantizationStep` applied last, in this order: quantize, then clip. The `sensor` geometry (`width` and `height` of the full unbinned sensor, the `origin` of the output pixel (0, 0), the `binning` and the selected `extent`) places a crop or a binned frame on the full sensor, and every spatial effect is evaluated in the unbinned sensor coordinates, so the same sensor gives consistent fixed patterns in a crop and in a binned frame. `renderSyntheticFlat(raw, model)` overwrites a caller-owned buffer of exactly `width * height * channels` samples and returns it, and `generateSyntheticFlatImage(model)` allocates a `Float64` digital image whose header has the geometry, the origin (`XORGSUBF`, `YORGSUBF`), the binning, `BAYERPAT` (shifted to the origin), the `digitalRange` (when both clips are given) and the `quantizationStep`. An invalid model throws a `RangeError`. It is a model of a flat in the digital domain: the shot noise of the signal is not simulated (the noise is a constant-sigma Gaussian), and the dust, the banding and the vignetting are descriptive shapes and not an optical simulation.
+
+```ts
+import { generateSyntheticFlatImage, renderSyntheticFlat, type SyntheticFlatModel } from 'nebulosa/src/imaging/synthetic/flat'
+
+const mean = (raw: ArrayLike<number>) => Array.from(raw).reduce((a, b) => a + b, 0) / raw.length
+
+// The plainest flat: a constant 1000 DN pedestal and 30000 DN of signal, with no spatial or random effect.
+const plain = generateSyntheticFlatImage({ width: 8, height: 6, bias: 1000, signal: 30000, vignetting: 0 })
+console.log(plain.raw.constructor.name, plain.raw.length, plain.raw[0], plain.sampleScale, plain.digitalRange, plain.quantizationStep, plain.header, plain.metadata) // Float64Array of 48 samples all equal to 31000 (bias plus signal), sampleScale digital, no digital range and no quantization step; the header has SIMPLE, BITPIX -64, NAXIS 2, NAXIS1 8 and NAXIS2 6 and the optional fields are undefined; the metadata has stride 8, 64 bytes per row, 8 bytes per sample, bitpix -64 and no bayer
+
+// A quadratic vignetting of 30%: the center and the corner (the corner has 70% of the signal) with a centered illumination.
+const vignetted = generateSyntheticFlatImage({ width: 101, height: 101, bias: 0, signal: 1000, vignetting: 0.3 })
+console.log(vignetted.raw[50 * 101 + 50], vignetted.raw[0], vignetted.raw[100]) // 1000 at the center and 700 at both corners shown
+
+// The illumination center displaced to the right by a quarter of the half-width, and a gradient of 20% from the left to the right edge.
+const shifted = generateSyntheticFlatImage({ width: 101, height: 101, bias: 0, signal: 1000, vignetting: 0.3, centerOffset: { x: 0.25, y: 0 } })
+const sloped = generateSyntheticFlatImage({ width: 101, height: 101, bias: 0, signal: 1000, vignetting: 0, gradient: { x: 0.2, y: 0 } })
+console.log(shifted.raw[50 * 101 + 62], shifted.raw[50 * 101 + 38], sloped.raw[50 * 101], sloped.raw[50 * 101 + 50], sloped.raw[50 * 101 + 100]) // 999.99 at 12 pixels right of the center and 971.89 at 12 pixels left (the center moved to about x = 62.5), and 900, 1000 and 1100 along the row for the 20% gradient
+
+// Noise, PRNU and the seed: the frame index changes the noise but never the fixed PRNU pattern.
+const noisy: SyntheticFlatModel = { width: 64, height: 64, bias: 0, signal: 10000, vignetting: 0, noise: 50, prnu: 0.01, seed: 7 }
+const a = generateSyntheticFlatImage(noisy)
+const b = generateSyntheticFlatImage({ ...noisy, frameIndex: 1 })
+const c = generateSyntheticFlatImage(noisy)
+const fixed = generateSyntheticFlatImage({ ...noisy, noise: 0 })
+const fixedNext = generateSyntheticFlatImage({ ...noisy, noise: 0, frameIndex: 1 })
+console.log(a.raw[100] === c.raw[100], a.raw[100] === b.raw[100], fixed.raw[100] === fixedNext.raw[100], mean(a.raw).toFixed(1)) // true, false, true, 9998.9: the same seed and frame index repeat the noise, another frame index changes it, the fixed PRNU is the same, and the mean stays near the 10000 signal
+
+// A dust mote of 6 pixels sigma and 40% contrast at (32, 32), and a row banding of 2% every 8 pixels.
+const dust = generateSyntheticFlatImage({ width: 64, height: 64, bias: 0, signal: 1000, vignetting: 0, dustMotes: [{ center: { x: 32, y: 32 }, sigmaX: 6, sigmaY: 6, contrast: 0.4 }] })
+const banded = generateSyntheticFlatImage({ width: 64, height: 64, bias: 0, signal: 1000, vignetting: 0, rowBanding: { amplitude: 0.02, period: 8 }, columnBanding: { amplitude: 0.01, period: 16, phase: Math.PI / 2 } })
+console.log(dust.raw[32 * 64 + 32], dust.raw[32 * 64 + 50], banded.raw[2 * 64 + 0], banded.raw[6 * 64 + 0], banded.raw[0]) // 600 at the center of the mote (40% less), 995.56 at 18 pixels away, then 1030, 990 and 1010 for the banding (row maximum plus column phase, row minimum plus column, and the column term alone)
+
+// The sample units: quantization to 4 DN steps and the clamps, which also set the digital range of the image.
+const clipped = generateSyntheticFlatImage({ width: 64, height: 64, bias: 100, signal: 70000, vignetting: 0.5, noise: 20, quantizationStep: 4, lowerClip: 0, upperClip: 65535 })
+console.log(
+	clipped.digitalRange,
+	clipped.quantizationStep,
+	Math.max(...Array.from(clipped.raw)),
+	Math.min(...Array.from(clipped.raw)),
+	clipped.raw.every((v) => v % 4 === 0 || v === 65535),
+) // digital range [0, 65535], step 4, a maximum of 65535 (clamped) and a minimum of 35092 (the corner of the vignetting), all samples are multiples of 4 or the upper clip
+
+// An RGB flat with unequal sensitivities, and a mosaic whose CFA pattern is shifted by an odd sensor origin.
+const rgb = generateSyntheticFlatImage({ width: 4, height: 4, channels: 3, channelResponse: [0.9, 1, 0.7], bias: 0, signal: 1000, vignetting: 0 })
+const cfa = generateSyntheticFlatImage({ width: 4, height: 4, bayer: 'RGGB', channelResponse: [0.9, 1, 0.7], bias: 0, signal: 1000, vignetting: 0, sensor: { width: 100, height: 100, origin: { x: 1, y: 0 }, extent: { width: 4, height: 4 } } })
+console.log(rgb.header.NAXIS, rgb.header.NAXIS3, rgb.metadata.stride, Array.from(rgb.raw.subarray(0, 3)), cfa.metadata.bayer, cfa.header.BAYERPAT, cfa.header.XORGSUBF, Array.from(cfa.raw.subarray(0, 4))) // 3 axes, NAXIS3 3, a stride of 12 samples and the first pixel [900, 1000, 700]; the mosaic with an origin x of 1 has the pattern GRBG in the metadata and in BAYERPAT, XORGSUBF 1, and the first row [1000, 900, 1000, 900] (green, red, green, red)
+
+// A crop of a larger sensor and a binned frame: the spatial effects follow the unbinned sensor coordinates.
+const full = generateSyntheticFlatImage({ width: 200, height: 200, bias: 0, signal: 1000, vignetting: 0.4 })
+const crop = generateSyntheticFlatImage({ width: 50, height: 50, bias: 0, signal: 1000, vignetting: 0.4, sensor: { width: 200, height: 200, origin: { x: 100, y: 100 } } })
+const binned = generateSyntheticFlatImage({ width: 100, height: 100, bias: 0, signal: 1000, vignetting: 0.4, sensor: { width: 200, height: 200, binning: [2, 2] } })
+console.log(crop.raw[0] === full.raw[100 * 200 + 100], crop.header.XORGSUBF, binned.header.XBINNING, binned.raw[0].toFixed(3), full.raw[0].toFixed(3), ((full.raw[0] + full.raw[1] + full.raw[200] + full.raw[201]) / 4).toFixed(3)) // true, 100, 2, 604.010, 600.000 and 604.000: the crop equals the pixel of the full sensor, the binned corner is the value at the center of its 2 by 2 block (the mean of four full pixels is 604.000)
+
+// The buffer variant fills a buffer that the caller owns and returns the same buffer.
+const buffer = new Float32Array(16 * 16)
+console.log(renderSyntheticFlat(buffer, { width: 16, height: 16, bias: 10, signal: 100, vignetting: 0 }) === buffer, buffer[0]) // true 110
+```
 
 ### Synthetic Image Noise
 
 ### Synthetic Optical Aberration
+
+`imaging/synthetic/aberration` is a phenomenological model of the optical aberrations that a synthetic star field applies to each star (see Synthetic Star Fields), not an optical simulation: it has no wavefront, no diffraction and no ray tracing, and the sizes are tuning scales. Coordinates and blur sizes are in unbinned sensor pixels and the focus values are focuser steps. `resolveSyntheticAberration(config)` is called once per frame: it takes a `SyntheticAberrationConfig` and returns a `ResolvedSyntheticAberration`. The config has one switch per effect (`sensorTiltEnabled`, `fieldCurvatureEnabled`, `backfocusEnabled`, `comaEnabled`, `astigmatismEnabled`, `decenterEnabled`, `collimationEnabled`) and a general `enabled`; the strengths are the `tilt` (the change of the best focus from the sensor center to the edge in the tilt direction, in steps), the `tiltAngle` (radians, clockwise because Y grows downward), the `curvature` (the change of the best focus from the optical axis to a corner of a centered sensor, in steps), the `backfocus` (signed, clamped to -1..1, the sign selecting radial or tangential elongation) with its `backfocusBlur` (an additional Gaussian half-flux diameter at unit strength and corner radius, in pixels) and `backfocusEllipticity` (at most 0.8), the radial `coma` (0..1), the `astigmatism` (signed, clamped to -0.8..0.8, the sign rotating the major axis by PI/2) with its `astigmatismBlur` (pixels) and `astigmatismAngle` (the offset from the local radial direction, radians), the field-uniform `collimation` coma (0..1) and its `collimationAngle`, the optical-axis displacement `decenterX` and `decenterY` (normalized to the sensor size, clamped to -0.5..0.5) and the `focusRange` (the steps that make a normalized defocus of one, at least 1). A disabled effect or a non-finite number counts as zero, and the resolved context is `enabled` only when the model is enabled and at least one effect is non-zero; `focusEnabled` says that a local best-focus surface (tilt or curvature) replaces the global focus model of the renderer. `evaluateSyntheticAberration(x, y, width, height, currentFocus, bestFocus, config, out)` gives the aberration at the position `(x, y)` of a sensor of `width` by `height` pixels and writes it into `out`, which it returns (it never allocates, so a large catalog can be processed). The `out` has the normalized local `defocus` (0..1, the absolute focus error over the focus range), the `focusOffset` (the local best-focus displacement in steps: `tilt` times the position along the tilt direction, which goes from -1 to 1, plus `curvature` times the square of the normalized radius), the additive Gaussian covariance of the blur (`covarianceXX`, `covarianceXY`, `covarianceYY`, in square pixels, from backfocus and astigmatism, area preserving, with the ellipticity as the axis ratio) and the `coma` strength (0..1, from the radial term, which grows as the radius to the power 1.5, plus the collimation vector) with its `comaTheta` (radians, clockwise). With the model disabled, `out` is zero. The normalized radius is the distance from the (possibly decentered) optical axis over the center-to-corner distance, so the position of the sensor must be given in the same unbinned coordinates as the sensor `width` and `height`.
+
+```ts
+import { evaluateSyntheticAberration, resolveSyntheticAberration, type SyntheticAberrationConfig, type SyntheticStarAberration } from 'nebulosa/src/imaging/synthetic/aberration'
+
+// A configuration with every effect switched on and neutral strengths.
+const base: SyntheticAberrationConfig = {
+	enabled: true,
+	sensorTiltEnabled: true,
+	fieldCurvatureEnabled: true,
+	backfocusEnabled: true,
+	comaEnabled: true,
+	astigmatismEnabled: true,
+	decenterEnabled: true,
+	collimationEnabled: true,
+	decenterX: 0,
+	decenterY: 0,
+	focusRange: 1000,
+	tilt: 0,
+	tiltAngle: 0,
+	curvature: 0,
+	backfocus: 0,
+	backfocusBlur: 4,
+	backfocusEllipticity: 0.4,
+	coma: 0,
+	astigmatism: 0,
+	astigmatismBlur: 4,
+	astigmatismAngle: 0,
+	collimation: 0,
+	collimationAngle: 0,
+}
+
+const out: SyntheticStarAberration = { defocus: 0, focusOffset: 0, covarianceXX: 0, covarianceXY: 0, covarianceYY: 0, coma: 0, comaTheta: 0 }
+const width = 4000
+const height = 3000
+const at = (config: SyntheticAberrationConfig, x: number, y: number, currentFocus: number = 5000, bestFocus: number = 5000) => ({ ...evaluateSyntheticAberration(x, y, width, height, currentFocus, bestFocus, resolveSyntheticAberration(config), { ...out }) })
+
+// With nothing switched on, the context is not enabled and the result is neutral (and the output object is returned).
+const neutral = resolveSyntheticAberration(base)
+console.log(neutral.enabled, neutral.focusEnabled, evaluateSyntheticAberration(100, 100, width, height, 5000, 5000, neutral, out) === out, out) // false, false, true, and an all-zero output: with every strength at zero the context is not enabled
+
+// The best-focus surface: a tilt of 200 steps toward +X and a curvature of 100 steps at a corner. The offset from the best focus at three places, and the local defocus at a global focus that is 100 steps off.
+const surface = { ...base, tilt: 200, tiltAngle: 0, curvature: 100, focusRange: 1000 }
+console.log(
+	resolveSyntheticAberration(surface).focusEnabled,
+	[
+		[2000, 1500],
+		[0, 1500],
+		[3999, 1500],
+		[0, 0],
+	].map(([x, y]) => at(surface, x, y, 5100).focusOffset),
+	at(surface, 3999, 1500, 5100).defocus,
+	at(surface, 2000, 1500, 5100).defocus,
+) // true, then the best-focus offsets -> about 0.05 steps at the center, -150 at the left edge, 250 at the right edge and -100 at the top-left corner (tilt plus curvature); the defocus at the right edge with the global focus 100 steps off is 0.15, and 0.10 at the center
+
+// The defocus is clamped to 1 far from focus.
+console.log(at(surface, 2000, 1500, 9000).defocus) // 1
+
+// Backfocus: the blur and the elongation grow with the square of the radius, radial for a positive sign and tangential for a negative one (the covariance at the right edge, where radial is along X).
+const radial = at({ ...base, backfocus: 0.5 }, 3999, 1500)
+const tangential = at({ ...base, backfocus: -0.5 }, 3999, 1500)
+console.log(radial.covarianceXX > radial.covarianceYY, tangential.covarianceXX < tangential.covarianceYY, radial.covarianceXX, radial.covarianceYY, radial.covarianceXY, at({ ...base, backfocus: 0.5 }, 2000, 1500).covarianceXX) // true, true, with the covariance at the right edge 0.2004 (XX) and 0.1623 (YY) square pixels for the radial case and an xy term of about 1e-5 (zero by symmetry); at the center the blur is zero (about 5e-15)
+
+// Astigmatism: the same, with the major axis rotated by the angle; at a diagonal position the covariance has an xy term.
+console.log(at({ ...base, astigmatism: 0.5 }, 3999, 2999), at({ ...base, astigmatism: 0.5, astigmatismAngle: Math.PI / 2 }, 3999, 1500).covarianceYY > at({ ...base, astigmatism: 0.5, astigmatismAngle: Math.PI / 2 }, 3999, 1500).covarianceXX) // at the bottom-right corner with an astigmatism of 0.5 the covariance is XX 0.9017, YY 0.9017 and XY 0.5410 square pixels (a diagonal major axis) with no coma and a defocus of 0; and true: with an angle of PI/2 the elongation at the right edge turns to the Y axis
+
+// Radial coma grows toward the corners with the direction pointing away from the axis, and the collimation coma is uniform over the field with its own direction.
+console.log(at({ ...base, coma: 0.6 }, 2000, 1500).coma, at({ ...base, coma: 0.6 }, 3999, 2999), at({ ...base, collimation: 0.3, collimationAngle: Math.PI / 2 }, 100, 100), at({ ...base, collimation: 0.3, collimationAngle: Math.PI / 2 }, 3900, 2900).coma) // about 0 coma at the center (3e-6), 0.6 toward the bottom-right corner with a direction of 0.785 rad (the diagonal), 0.3 with a direction of 1.571 rad (+Y) for the collimation at one corner, and the same 0.3 at the opposite corner
+
+// A decentered axis moves the zero of the radial effects: the optical axis at 25% of the width to the right.
+const decentered = { ...base, curvature: 100, decenterX: 0.25 }
+console.log(at(decentered, 3000, 1500).focusOffset, at(decentered, 2000, 1500).focusOffset) // about 0 (1.3e-5) at the new axis, 12.49 steps at the old center, a displacement of 0.25 of the width (curvature grows with the square of the radius from the decentered axis)
+
+// The strengths are clamped and sanitized: coma above 1, a backfocus of 5 and a non-finite tilt behave as their limits and zero.
+const clamped = resolveSyntheticAberration({ ...base, coma: 3, backfocus: 5, astigmatism: -4, collimation: 2, tilt: Number.NaN, decenterX: 3, focusRange: 0 })
+console.log(clamped.coma, clamped.backfocus, clamped.astigmatism, clamped.collimationX, clamped.tilt, clamped.decenterX, clamped.focusRange, clamped.enabled, clamped.focusEnabled) // 1 1 -0.8 1 0 0.5 1 true false: coma and collimation are clamped to 1, the backfocus to 1, the astigmatism to -0.8, the NaN tilt counts as zero, the decenter to 0.5, the focus range to 1, and without tilt or curvature there is no local focus surface
+```
 
 ### Synthetic Star Fields
 
@@ -11707,17 +11905,10 @@ renderSyntheticStreak(nothing, { start: { x: 5, y: 5 }, end: { x: 5, y: 5 }, wid
 renderSyntheticStreak(nothing, { start: { x: 5, y: 10 }, end: { x: 35, y: 10 }, width: 4, intensity: -1 })
 console.log(nothing.raw.some((v) => v !== 0)) // false
 
-// A 32-bit image stores the rounded value, and an inconsistent layout (two channels, or a raw array that is too short) is an error.
+// A 32-bit image stores the rounded value.
 const single = { ...make(40, 20), raw: new Float32Array(800) }
 renderSyntheticStreak(single, { start: { x: 5, y: 10 }, end: { x: 35, y: 10 }, width: 4, intensity: 0.3 })
 console.log(at(single, 20, 10), Math.fround(0.3) === at(single, 20, 10)) // 0.30000001192092896 true
-for (const bad of [make(40, 20, 2), { ...make(40, 20), raw: new Float64Array(10) }]) {
-	try {
-		renderSyntheticStreak(bad, { start: { x: 5, y: 10 }, end: { x: 35, y: 10 }, width: 4, intensity: 1 })
-	} catch (e) {
-		console.log((e as Error).message) // synthetic streak image has inconsistent mono/RGB/CFA layout (printed twice, once for each invalid image)
-	}
-}
 ```
 
 ### Telescope Resolution and Light Grasp
@@ -11733,25 +11924,9 @@ console.log(dawesLimit(200), rayleighLimit(200), limitingMagnitude(200).toFixed(
 // An 80 mm refractor against a 200 mm reflector: the collecting area ratio (and the gap in limiting magnitude, 5 log10 of the aperture ratio).
 console.log(lightGraspRatio(200, 80), (limitingMagnitude(200) - limitingMagnitude(80)).toFixed(2)) // 6.25 1.99
 
-// The ratio must be taken with the larger aperture first.
-try {
-	lightGraspRatio(80, 200)
-} catch (e) {
-	console.log((e as Error).message) // larger aperture must be at least smaller aperture
-}
-
 // A 200 mm reflector with a 70 mm secondary: the obstruction in percent of the diameter, and the equal-area unobstructed aperture (millimeters).
 console.log(obstructionRatio(200, 70), effectiveApertureWithObstruction(200, 70).toFixed(2)) // 35 187.35
 console.log(obstructionRatio(200, 0), effectiveApertureWithObstruction(200, 0), obstructionRatio(200, 200)) // 0 200 100
-
-// The obstruction cannot be as large as the aperture for the effective one, and cannot exceed it for the ratio.
-for (const test of [() => effectiveApertureWithObstruction(200, 200), () => obstructionRatio(200, 250)]) {
-	try {
-		test()
-	} catch (e) {
-		console.log((e as Error).message) // obstruction diameter must be smaller than aperture diameter, then obstruction diameter must be no larger than aperture diameter
-	}
-}
 ```
 
 ### Tone Mapping
@@ -11789,12 +11964,6 @@ console.log(saturation(pixel(), 0).raw, saturation(pixel(), 0, 'Y').raw) // Floa
 console.log(saturation(pixel(), 0.5, { red: 0.5, green: 0.5, blue: 0 }).raw) // Float64Array(3) [ 0.7, 0.5, 0.4 ]
 const mono = ramp()
 console.log(saturation(mono, 2) === mono, mono.raw[2]) // true 0.25
-
-try {
-	saturation(pixel(), 2, { red: 1, green: 1, blue: 1 })
-} catch (e) {
-	console.log((e as Error).message) // grayscale weights must sum to one: 3
-}
 ```
 
 ### Tracking Quality
@@ -11813,11 +11982,6 @@ console.log(starTrailLength(0, 10, 2).toFixed(3), starTrailLength(60 * deg, 10, 
 
 // The exposure that keeps the trail within a pixel, at the equator and at 60 degrees (seconds); at the pole there is no limit and the function throws.
 console.log(maxExposureBeforeTrail(1, 2, 0).toFixed(3), maxExposureBeforeTrail(1, 2, 60 * deg).toFixed(3)) // 0.133 0.266
-try {
-	maxExposureBeforeTrail(1, 2, Math.PI / 2)
-} catch (e) {
-	console.log((e as Error).message) // declination is too close to the celestial pole
-}
 
 // The generic smear: a comet that moves 30 arcseconds per hour (0.00833 arcsec/s) in a 300 s exposure at 1.5 arcsec per pixel, and the limit for a pixel of smear.
 const rate = 30 / 3600
@@ -11986,27 +12150,6 @@ console.log(inField.length, inField[0].area, toDeg(inField[0].declination).toFix
 	console.log(await catalog.get('d05', 1, 2), await catalog.get('d05', 1, 99999)) // { epoch: 2025, recordNumber: 2, area: 1, rightAscension: 5.536277059095688, declination: -1.5525832988238188, magnitude: 5.5, bv: undefined } undefined
 	console.log(await Array.fromAsync(catalog.streamRegion({ kind: 'cone', centerRA: 0, centerDEC: deg(-89.9), radius: deg(0.05) })).then((entries) => entries.length)) // 4
 }
-
-try {
-	openAstapCatalog({ 'd20_0101.1476': file }, 'd05')
-} catch (e) {
-	console.log((e as Error).message) // no .1476 files were found for d05
-}
-
-const closed = new AstapCatalog().open(files, 'd05')
-closed.close()
-
-try {
-	await closed.queryCone(0, 0, 0.1)
-} catch (e) {
-	console.log((e as Error).message) // ASTAP .1476 catalog is not open
-}
-
-try {
-	astap1476AreaFile(1477)
-} catch (e) {
-	console.log((e as Error).message) // invalid .1476 area: 1477
-}
 ```
 
 ### Hipparcos Catalog
@@ -12159,27 +12302,6 @@ console.log(decodeHnsky290Designation((321 << 20) | 12345).label, decodeHnsky290
 using small = openHnskyCatalog({ [`g16_${hnsky290AreaFile(148).fileName}`]: synthetic }, 'g16')
 const found = await small.queryCone(hour(2.02), deg(5.1), deg(0.1))
 console.log(small.database, found.length, found[0].designation?.label, found[0].area, found[0].recordNumber) // g16 1 UCAC4 321-12345 148 1
-
-try {
-	openHnskyCatalog({ [`g16_${hnsky290AreaFile(148).fileName}`]: synthetic }, 'g14')
-} catch (e) {
-	console.log((e as Error).message) // no .290 files were found for g14
-}
-
-const closed = new HnskyCatalog().open({ [`g14_${hnsky290AreaFile(148).fileName}`]: synthetic }, 'g14')
-closed.close()
-
-try {
-	await closed.queryCone(0, 0, 0.1)
-} catch (e) {
-	console.log((e as Error).message) // HNSKY .290 catalog is not open
-}
-
-try {
-	hnsky290AreaFile(291)
-} catch (e) {
-	console.log((e as Error).message) // invalid .290 area: 291
-}
 ```
 
 ### HYG Catalog
@@ -12422,21 +12544,6 @@ console.log(
 	splitRaBox(deg(10), deg(20), -1, 1).length,
 ) // [ [ 0, 10 ], [ 350, 360 ] ] 1 1
 console.log(projectPolygonVertex(deg(11), deg(21), deg(10), deg(20)).map(toDeg), projectPolygonVertex(deg(359), deg(20), deg(1), deg(20)).map(toDeg)) // [ 0.9396926207859083, 1.0000000000000013 ] [ -1.8793852415717955, 0 ]
-
-// The failures of the normalization.
-const invalid = [
-	{ kind: 'cone', centerRA: 0, centerDEC: 0, radius: -1 },
-	{ kind: 'polygon', vertices: [[0, 0]] },
-	{ kind: 'box', minRA: 0, maxRA: 1, minDEC: 1, maxDEC: 0 },
-] as const
-
-for (const query of invalid) {
-	try {
-		normalizeStarCatalogQuery(query)
-	} catch (e) {
-		console.log((e as Error).message) // invalid cone radius: -1. Expected a finite value in [0, pi]; polygon queries require at least three vertices; invalid declination range: [1, 0]
-	}
-}
 ```
 
 ### Stellarium Catalog
@@ -12553,14 +12660,6 @@ console.log(tiles(100, 0)) // [ [ 3, "0202.demo", 1 ] ]
 console.log(tiles(89.5, 0)) // [ [ 3, "0202.demo", 0.75 ], [ 2, "0201.demo", 1 ] ] (the fractions overlap at the border)
 console.log(tiles(0.5, 29)) // [ [ 6, "0301.demo", 0.5 ], [ 2, "0201.demo", 0.459 ], [ 5, "0204.demo", 0.291 ] ]
 
-for (const attempt of [() => createTiledSkyGeometry([1, 1], [0, 1], '.x'), () => lookupTiledStarArea(geometry, 7), () => validateTiledStarRecordNumber(0)]) {
-	try {
-		attempt()
-	} catch (e) {
-		console.log((e as Error).message) // invalid tiling: 2 bands need 3 boundaries, got 2; invalid .demo area: 7; invalid record number: 0
-	}
-}
-
 // The packed designations: UCAC4 when the value is not negative, Tycho-2 (with its component) otherwise.
 console.log(decodeTiledStarDesignation((5 << 20) | 1234).label, decodeTiledStarDesignation(-((100 << 16) | 0x8000 | 55)).label, decodeTiledStarDesignation(-((100 << 16) | 0x40000000 | 55)).label) // UCAC4 5-1234 TYC 100-55-3 TYC 100-55-2
 console.log(TILED_STAR_RA_SCALE, TILED_STAR_DEC_SCALE) // 3.7450705061475256e-7 1.8725353646855748e-7
@@ -12611,31 +12710,12 @@ class DemoCatalog extends TiledStarCatalog<StarCatalogEntry & { area: number }, 
 }
 
 const catalog = new DemoCatalog()
-
-try {
-	await catalog.queryCone(0, deg(-89.5), deg(0.5))
-} catch (e) {
-	console.log((e as Error).message) // demo .1476 catalog is not open
-}
-
-try {
-	catalog.open({ 'other_0101.1476': buffer })
-} catch (e) {
-	console.log((e as Error).message) // no .1476 files were found for d05
-}
-
 catalog.open({ 'd05_0101.1476': buffer })
 console.log(catalog.database, catalog.hasAnyAreaFile(), (await catalog.loadArea(1))?.header.epoch, (await catalog.loadArea(1)) === (await catalog.loadArea(1))) // d05 true 2025 true
 console.log(await catalog.loadArea(2)) // undefined (no file in the collection)
 console.log((await catalog.queryCone(0, deg(-89.5), deg(0.5))).length, (await catalog.queryCone(0, deg(-88.5), deg(1))).length) // 374 1468
 console.log(await catalog.get('d05', 1, 2), await catalog.get('d05', 1, 99999), await catalog.get('d04' as 'd05', 1, 2)) // { epoch: 2025, area: 1, rightAscension: 5.536277059095688, declination: -1.5525832988238188, magnitude: 5.5 } undefined undefined
 catalog.close()
-
-try {
-	await catalog.queryCone(0, deg(-89.5), deg(0.5))
-} catch (e) {
-	console.log((e as Error).message) // demo .1476 catalog is not open
-}
 ```
 
 ### UCAC4 Catalog
@@ -12700,19 +12780,6 @@ console.log((await catalog.queryBox(deg(199), deg(201), deg(0.1), deg(0.2))).map
 const streamed = []
 for await (const entry of catalog.streamRegion({ kind: 'cone', centerRA: deg(10), centerDEC: deg(0.07), radius: deg(1) })) streamed.push(entry.recordNumber)
 console.log(streamed) // [ 1, 2 ]
-
-// The errors.
-try {
-	await catalog.get(901, 1)
-} catch (e) {
-	console.log((e as Error).message) // invalid UCAC4 zone number: 901
-}
-
-try {
-	await openUcac4Catalog(join(root, 'missing'))
-} catch (e) {
-	console.log((e as Error).message.startsWith('unable to access UCAC4 root')) // true
-}
 
 await catalog.close()
 await fs.rm(root, { recursive: true, force: true })
