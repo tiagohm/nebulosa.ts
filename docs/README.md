@@ -7516,6 +7516,84 @@ try {
 
 ### Celestial Streak Tracks
 
+`imaging/analysis/streak/celestial` places a measured streak on the sky and compares it with a predicted track, which is what the `trajectory` and `meteorRadiant` evidence of Streak Classification use. `celestialStreakTrack(streak, wcs)` maps the two endpoints of a `Streak` through the TAN or TAN-SIP header `wcs` (the FITS 1-based `CRPIX` against the 0-based pixel centers of the streak is handled) and returns a `CelestialStreakTrack`: the `start` and `end` as `[rightAscension, declination]` in radians, their unit equatorial vectors, the short-arc great-circle `length` (radians), the `positionAngle` from start to end (radians, east of north, `[0, 2 PI)`), its undirected `axialPositionAngle` (`[0, PI)`) and the unit `normal` of the great circle through the endpoints. The endpoints are in the canonical pixel order of the streak, so the track has no direction of motion: a still image cannot tell which way the object went, and a reversed prediction matches the same line. It returns `undefined` for a streak whose endpoints coincide or that does not define one plane, for a pixel that cannot be projected, and for a header that is not TAN.
+
+`matchPredictedStreakTrack(observed, predicted, exposure?)` compares that track with a `PredictedStreakTrack` (a `start` and an `end` as `[rightAscension, declination]` in radians in the frame of the WCS, an optional `id`, and optional `startTime` and `endTime`, both required to be used) and returns a `CelestialTrackComparison`: the mean great-circle `crossTrack` residual of the observed endpoints and midpoint in radians, the `overlap` of the observed span that lies inside the predicted arc (`0..1`), the `orientation` between the two planes (radians, `0..PI/2`), the `temporalOverlap` when the times could be compared, and the `score`, the product of three ramps of the geometry (a full cross-track credit up to a small residual, with none beyond a larger one, and the same for the overlap and the orientation) and of the temporal overlap. The comparison is geometric: it does not propagate an orbit, an ephemeris or a TLE, the prediction is a segment of a great circle and not a curve, and a short or a long arc differs from a real path. With an `exposure` (`PredictedTrackWindow`, the `start` and `end` of the exposure) and a prediction with times of the same timescale, only the part of the prediction that occurs during the exposure is compared, and the overlap of the windows divided by the shorter one is the `temporalOverlap`, so a prediction inside a long exposure keeps its whole arc and an exposure inside a long prediction keeps only the arc flown meanwhile; times of different timescales are ignored, not converted. It returns `undefined` for a degenerate or an antipodal prediction, which has no unique plane.
+
+```ts
+import { celestialStreakTrack, matchPredictedStreakTrack } from 'nebulosa/src/imaging/analysis/streak/celestial'
+import type { CelestialTrackComparison } from 'nebulosa/src/imaging/analysis/streak/celestial'
+import type { Streak } from 'nebulosa/src/imaging/analysis/streak/types'
+import { Timescale, time } from 'nebulosa/src/astronomy/time/time'
+
+// The measured streak from (10, 20) to (90, 70) pixels (x right, y down); only its endpoints matter here.
+const streak: Streak = {
+	start: { x: 10, y: 20 },
+	end: { x: 90, y: 70 },
+	center: { x: 50, y: 45 },
+	length: Math.hypot(80, 50),
+	width: 3,
+	angle: Math.atan2(50, 80),
+	linearity: 0.99,
+	rmsResidual: 0.3,
+	coverage: 1,
+	supportPixels: 500,
+	clippedAtBorder: false,
+	flux: 50,
+	meanSignal: 0.3,
+	peakSignal: 0.5,
+	snr: 40,
+	confidence: 0.9,
+}
+
+// A TAN header: the reference pixel is (50.5, 50.5) in FITS (1-based) numbering, 0.05 degrees per pixel, east (right ascension) to the left, at the equator and RA 0.
+const wcs = { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 50.5, CRPIX2: 50.5, CRVAL1: 0, CRVAL2: 0, CD1_1: -0.05, CD1_2: 0, CD2_1: 0, CD2_2: 0.05 }
+const deg = 180 / Math.PI
+const rad = Math.PI / 180
+
+// The sky track of the streak: the endpoints in degrees (the start is near RA 2 deg, the end wraps to 358 deg), the length and the position angle.
+const observed = celestialStreakTrack(streak, wcs)!
+console.log(
+	observed.start.map((v) => (v * deg).toFixed(4)),
+	observed.end.map((v) => (v * deg).toFixed(4)),
+) // [1.9742, -1.4738] [357.9758, 1.0243] (RA and Dec in degrees)
+console.log((observed.length * deg).toFixed(4), (observed.positionAngle * deg).toFixed(2), (observed.axialPositionAngle * deg).toFixed(2)) // 4.7143 301.98 121.98 (degrees: the arc, the position angle east of north, and the same axis folded into [0, 180))
+console.log(
+	observed.normal.map((v) => v.toFixed(4)),
+	observed.startVector.map((v) => v.toFixed(4)),
+) // [-0.0036, -0.5300, -0.8480] [0.9991, 0.0344, -0.0257]
+
+// Not projectable or degenerate: a zero-length streak, a header that is not TAN, and an empty header.
+console.log(celestialStreakTrack({ ...streak, end: streak.start }, wcs), celestialStreakTrack(streak, { ...wcs, CTYPE1: 'RA---SIN' }), celestialStreakTrack(streak, {})) // undefined undefined undefined
+
+// The RA/Dec (radians) of a pixel through the same header, to write predictions: the sky position of the pixel center (x, y).
+const skyOf = (x: number, y: number): [number, number] => [-(x - 49.5) * 0.05 * rad, (y - 49.5) * 0.05 * rad]
+const line = (c: CelestialTrackComparison | undefined) => c && [(c.crossTrack * deg).toFixed(4), c.overlap.toFixed(3), (c.orientation * deg).toFixed(3), c.temporalOverlap, c.score.toFixed(3)]
+
+// A prediction that runs along the streak (and extends past both ends): a small residual, a full overlap, the same plane up to a fraction of a degree; reversing it gives the same comparison.
+const along = { start: skyOf(0, 12), end: skyOf(100, 75) }
+console.log(line(matchPredictedStreakTrack(observed, along)), line(matchPredictedStreakTrack(observed, { start: along.end, end: along.start }))) // [0.0638, 1.000, 0.230, undefined, 0.961] twice (the residual and the plane angle are in degrees, there is no temporal overlap, and the reversed prediction is identical)
+
+// A prediction far from the streak, a short prediction that covers only part of it, and a crossing one: the score falls to zero or near it.
+console.log(line(matchPredictedStreakTrack(observed, { start: skyOf(0, 90), end: skyOf(100, 110) }))) // [2.6976, 0.954, 20.836, undefined, 0.000] (a residual of 2.7 degrees, 20.8 degrees apart)
+console.log(line(matchPredictedStreakTrack(observed, { start: skyOf(30, 35), end: skyOf(60, 55) }))) // [0.1386, 0.383, 1.693, undefined, 0.059] (it covers 38% of the streak)
+console.log(line(matchPredictedStreakTrack(observed, { start: skyOf(0, 20), end: skyOf(100, 20) }))) // [1.2510, 1.000, 32.027, undefined, 0.000]
+
+// Timed predictions against a 60 s exposure: inside the exposure (kept whole), a long pass that covers it (only the arc flown in the exposure counts),
+// one that is half inside it, and one an hour later (no overlap in time).
+const start = time(2460000, 0, Timescale.UTC)
+const exposure = { start, end: time(2460000, 60 / 86400, Timescale.UTC) }
+const timed = (from: number, to: number) => ({ ...along, startTime: time(2460000, from / 86400), endTime: time(2460000, to / 86400) })
+console.log(line(matchPredictedStreakTrack(observed, timed(0, 60), exposure)), line(matchPredictedStreakTrack(observed, timed(-600, 600), exposure))) // [0.0638, 1.000, 0.230, 1, 0.961] and [0.0638, 0.063, 0.230, 1, 0.000] (the 20 minute pass only flies 6% of the streak in the exposure, so the overlap and the score collapse)
+console.log(line(matchPredictedStreakTrack(observed, timed(30, 120), exposure)), line(matchPredictedStreakTrack(observed, timed(3600, 3660), exposure))) // [0.0638, 0.283, 0.230, 0.5, 0.000] and [0.0638, 0.000, 0.230, 0, 0.000]
+
+// Without a complete exposure window, or with times of another timescale, the times are not used and the geometry alone decides.
+console.log(line(matchPredictedStreakTrack(observed, timed(0, 60), { start })), line(matchPredictedStreakTrack(observed, { ...along, startTime: time(2460000, 0, Timescale.TT), endTime: time(2460000, 60 / 86400, Timescale.TT) }, exposure))) // [0.0638, 1.000, 0.230, undefined, 0.961] twice
+
+// A degenerate prediction (a point) and an antipodal one have no plane to compare with.
+console.log(matchPredictedStreakTrack(observed, { start: skyOf(10, 20), end: skyOf(10, 20) }), matchPredictedStreakTrack(observed, { start: [0, 0], end: [Math.PI, 0] })) // undefined undefined
+```
+
 ### Collimation Sequence Summary
 
 ### Cosmetic Correction
@@ -7809,6 +7887,29 @@ console.log(debayer(rgb), debayer({ ...gradient, metadata: { ...gradient.metadat
 
 ### Diffraction and Seeing Sampling
 
+`astronomy/formulas` relates the image scale to the size of the star image, to judge whether a camera samples the star well. `samplingRatio(seeingArcsec, arcsecPerPixel)` is `seeing / scale`, the star width (an arcsecond FWHM) in pixels, and `fwhmPixelsToSeeing(fwhmPixels, arcsecPerPixel)` is its inverse, `FWHM * scale`, the seeing in arcseconds implied by a measured star width (see Star Detection and Star Profile Measurement for the measurement; a FWHM from a defocused, trailed or optically limited star is not the seeing). `classifyFWHMSampling(pixels)` labels a width in pixels as `'undersampled'` (below 2), `'optimal'` (from 2 to 3, both included, the usual imaging target) or `'oversampled'` (above 3); the bands are a convention, not a limit of the sensor, and a value that is not a number is `'oversampled'`. `recommendedFocalLength(pixelSizeMicrons, targetSampling, seeingArcsec)` is the focal length in millimeters (`206.265 * pixel * sampling / seeing`) that gives the chosen number of pixels across the seeing FWHM, and it is the inverse of the `pixelScale` of Image Scale and Field of View. For the diffraction limit, `airyDiskSize(wavelengthMicrons, focalRatio)` is the approximate diameter in microns of the Airy disk (`2.44 * wavelength * N`, which is the diameter of the first dark ring of a clear circular aperture, so it is larger than the FWHM) and `airyDiskInPixels(airyDiameterMicrons, pixelSizeMicrons)` converts it to pixels. The diffraction pattern is that of an unobstructed aperture and the seeing is a single number: an obstruction, the aberrations, the guiding and the atmosphere are not combined, and a diffraction limit is not the resolution of the long exposure.
+
+```ts
+import { airyDiskInPixels, airyDiskSize, classifyFWHMSampling, fwhmPixelsToSeeing, recommendedFocalLength, samplingRatio } from 'nebulosa/src/astronomy/formulas'
+
+// A seeing of 2.4 arcseconds sampled at 1.0 arcsecond per pixel: 2.4 pixels across the FWHM, and the same value back as seeing.
+const ratio = samplingRatio(2.4, 1)
+console.log(ratio, fwhmPixelsToSeeing(ratio, 1)) // 2.4 2.4
+
+// The classes: below 2 pixels, the closed band from 2 to 3, and above 3.
+console.log(classifyFWHMSampling(1.5), classifyFWHMSampling(2), classifyFWHMSampling(3), classifyFWHMSampling(3.01)) // undersampled optimal optimal oversampled
+
+// The focal length for 2 pixels across a 2.4 arcsecond seeing with a 3.76 micron pixel (millimeters); the scale it gives is 1.2 arcsec per pixel.
+const focal = recommendedFocalLength(3.76, 2, 2.4)
+console.log(focal.toFixed(1), ((206.265 * 3.76) / focal).toFixed(3)) // 646.3 1.200
+
+// The Airy disk of an f/5 train in green light (0.55 microns) and in red (0.65), and in pixels of 3.76 microns.
+console.log(airyDiskSize(0.55, 5).toFixed(3), airyDiskSize(0.65, 5).toFixed(3), airyDiskInPixels(airyDiskSize(0.55, 5), 3.76).toFixed(3)) // 6.710 7.930 1.785 (microns, microns, pixels)
+
+// A slow f/10 train has a disk twice as large in microns, so the same pixel samples it twice as finely.
+console.log(airyDiskSize(0.55, 10).toFixed(3), airyDiskInPixels(airyDiskSize(0.55, 10), 3.76).toFixed(3)) // 13.420 3.569 (microns, pixels)
+```
+
 ### Display Stretch Parameter Estimation
 
 `adf(image, options?)` estimates the parameters of an automatic screen stretch from the statistics of the image, following the Adaptive Display Function of the XISF specification, and returns the readonly tuple `[midtone, shadow, highlight]`, each in `0..1`, which are the arguments that `stf(image, midtone, shadow, highlight)` takes (see Screen Transfer Function for applying them); `adf` itself never changes the image. It takes the median and the normalized median absolute deviation of the selected channel (see Image Statistics, whose `HistogramOptions` `channel`, `area`, `transform` and `bits` it accepts), so they are histogram estimates at `bits` (16 by default). The two other options are `meanBackground` (0.25), the brightness the median should have after the stretch, and `clippingPoint` (-2.8), in units of the deviation from the median, where the shadows are clipped: `shadow = median + clippingPoint * mad`, clamped to `0..1`, and `highlight` stays at 1. For an image whose median is above 0.5 (inverted, or a bright frame) the roles are mirrored: the highlight is `median - clippingPoint * mad`, the shadow is 0 and the midtone balances the distance from the median to the highlight. The midtone is the midtones transfer function parameter that maps the shifted median `median - shadow` to `meanBackground`. A flat image (a deviation of about half a histogram bin or less) is not clipped, so the shadow is 0 and the highlight 1, and a median at the shadow gives a midtone of 0. A color image is analysed through its grayscale reduction unless a `channel` is given, so one triple serves the three channels (a linked stretch); an unlinked one is made by calling `adf` once per channel. The result depends on the median and the deviation being representative of the sky: a frame mostly covered by a nebula or by a gradient will be stretched for that, not for the sky.
@@ -7947,6 +8048,28 @@ try {
 ### Elliptical Moffat Fitting
 
 ### Eyepiece Magnification and Exit Pupil
+
+`astronomy/formulas` has the visual-observing relations of a telescope and an eyepiece, in millimeters and degrees. They are planning formulas of the ideal optics (the true field of view of `eyepieceView` is the apparent field divided by the magnification, which is the usual approximation and not the exact tangent relation, and the exit pupil takes no obstruction into account), without validation of the inputs. `magnification(telescopeFocalLengthMm, eyepieceFocalLengthMm)` is `F / f`, dimensionless. `exitPupil` has two overloads that look the same to the type system and differ in meaning: `exitPupil(apertureDiameterMm, magnification)` is `D / M` and `exitPupil(eyepieceFocalLengthMm, focalRatio)` is `f / N`, both in millimeters; `exitPupilFromApertureAndMagnification` and `exitPupilFromEyepieceAndFocalRatio` are the named forms of each, which avoid mixing the arguments (the two are the same value for one telescope). `eyepieceTrueFovViaFieldStop(fieldStopDiameterMm, telescopeFocalLengthMm)` is the true field in degrees from the field stop of the eyepiece (`field stop / F`, in the small-angle approximation), which does not need the apparent field. `eyepieceView(telescopeFocalLengthMm, apertureMm, eyepieceFocalLengthMm, apparentFieldOfViewDegrees)` returns an `EyepieceView` with the `magnification`, the `trueFieldOfViewDegrees` (the apparent field over the magnification) and the `exitPupilMm`. An exit pupil larger than the pupil of the eye (about 7 mm, which depends on age) wastes light and one below about 0.5 mm shows the defects of the eye and of the seeing; those limits are not applied here.
+
+```ts
+import { eyepieceTrueFovViaFieldStop, eyepieceView, exitPupil, exitPupilFromApertureAndMagnification, exitPupilFromEyepieceAndFocalRatio, magnification } from 'nebulosa/src/astronomy/formulas'
+
+// A 200 mm f/5 reflector (1000 mm) with a 25 mm eyepiece of 52 degrees of apparent field: 40x.
+const power = magnification(1000, 25)
+console.log(power) // 40
+
+// The exit pupil from the aperture and the magnification, or from the eyepiece and the focal ratio (the same 5 mm), in both forms.
+console.log(exitPupil(200, power), exitPupil(25, 5), exitPupilFromApertureAndMagnification(200, power), exitPupilFromEyepieceAndFocalRatio(25, 5)) // 5 5 5 5
+
+// The true field from the field stop of the eyepiece (a 27 mm field stop, typical of a 2 inch eyepiece), in degrees.
+console.log(eyepieceTrueFovViaFieldStop(27, 1000).toFixed(4)) // 1.5470 (degrees; the apparent-field estimate gives 1.3, so the two disagree for this eyepiece)
+
+// The whole view of the eyepiece: the magnification, the true field (apparent / magnification) and the exit pupil.
+console.log(eyepieceView(1000, 200, 25, 52)) // { magnification: 40, trueFieldOfViewDegrees: 1.3, exitPupilMm: 5 }
+
+// A high-power eyepiece: 5 mm gives 200x, a 1 mm exit pupil and a true field of a quarter of a degree.
+console.log(eyepieceView(1000, 200, 5, 52)) // { magnification: 200, trueFieldOfViewDegrees: 0.26, exitPupilMm: 1 }
+```
 
 ### FFT Image Filter
 
@@ -8558,6 +8681,31 @@ console.log(
 ```
 
 ### Image Scale and Field of View
+
+`astronomy/formulas` collects closed-form planning formulas for an imaging train; these are the ones that relate the optics, the sensor and the sky. They are first-order estimates of the ideal geometry (a thin lens with no distortion, a flat focal plane and the small-angle approximation unless noted), not an optical simulation, and they do no validation of their inputs, so a non-positive focal length or pixel size gives an infinite or negative result. `focalLength(apertureMm, focalRatio)` and `focalRatio(focalLengthMm, apertureMm)` convert between the focal length (millimeters), the aperture (millimeters) and the dimensionless f-number. `plateScale(telescopeFocalLengthMm)` is the focal-plane scale in arcseconds per millimeter (`206265 / F`), and `pixelScale(pixelSizeMicrons, telescopeFocalLengthMm)` is the image scale in arcseconds per pixel (`206.265 * pixel / F`, with the pixel size in microns and the focal length in millimeters; with binning the effective pixel size is the binned one). `sensorFieldOfView(sensorSizeMm, focalLengthMm)` is the field of view along one sensor axis in degrees, in the small-angle approximation (`size / F` in radians), and `sensorDiagonalFov(sensorDiagonal, focalLength)` is the exact `2 atan(d / 2F)` for the diagonal, in radians, with both lengths in the same unit. `mosaicPanelCount(targetFov, cameraFov, overlap)` is the integer number of panels along one axis, `ceil(target / (camera * (1 - overlap)))`, with both fields in the same unit and `overlap` a fraction in `[0, 1)` (a field smaller than one panel is one panel, and an overlap of 1 or more is meaningless, giving an infinite or negative count). The field of view of the sensor is not the usable field: the vignetting and the corrector or reducer of the train are not modeled.
+
+```ts
+import { focalLength, focalRatio, mosaicPanelCount, pixelScale, plateScale, sensorDiagonalFov, sensorFieldOfView } from 'nebulosa/src/astronomy/formulas'
+
+// A 200 mm aperture at f/5 (1000 mm), and the inverse relation.
+const f = focalLength(200, 5)
+console.log(f, focalRatio(f, 200)) // 1000 5
+
+// The scale of the focal plane (arcsec per mm), and of a 3.76 micron pixel (arcsec per pixel) at 1000 mm and with a 2x2 binning (7.52 microns).
+console.log(plateScale(f).toFixed(3), pixelScale(3.76, f).toFixed(4), pixelScale(2 * 3.76, f).toFixed(4)) // 206.265 0.7756 1.5511 (arcsec per mm, then arcsec per pixel unbinned and binned 2x2)
+
+// A 23.5 x 15.7 mm APS-C sensor at 1000 mm: the field along each axis (degrees) and along the 28.26 mm diagonal (radians converted to degrees).
+console.log(sensorFieldOfView(23.5, f).toFixed(4), sensorFieldOfView(15.7, f).toFixed(4), ((sensorDiagonalFov(Math.hypot(23.5, 15.7), f) * 180) / Math.PI).toFixed(4)) // 1.3465 0.8995 1.6192 (degrees)
+
+// The small-angle approximation against the exact angle for a wide field: a 36 mm side at 50 mm (degrees).
+console.log(sensorFieldOfView(36, 50).toFixed(3), ((2 * Math.atan(36 / 100) * 180) / Math.PI).toFixed(3)) // 41.253 39.598 (the approximation overestimates a wide field by 4%)
+
+// A 6 x 4 degree target with a 1.35 x 0.9 degree camera: the panels along each axis for no overlap and for 20% overlap.
+console.log(mosaicPanelCount(6, 1.35, 0), mosaicPanelCount(4, 0.9, 0), mosaicPanelCount(6, 1.35, 0.2), mosaicPanelCount(4, 0.9, 0.2)) // 5 5 6 6
+
+// A target smaller than the camera is one panel; an overlap of 1 is not a usable geometry.
+console.log(mosaicPanelCount(0.5, 1.35, 0.2), mosaicPanelCount(6, 1.35, 1)) // 1 Infinity
+```
 
 ### Image Stacking
 
@@ -10042,6 +10190,40 @@ for (const run of [() => measureSensorDefects(dark, { ...flat, exposure: 20 }), 
 
 ### Signal-to-Noise and Dynamic Range Estimates
 
+`astronomy/formulas` has the CCD equation and the related camera figures, in accumulated electrons, for planning an exposure (the measured counterparts are in Photon Transfer and Read Noise). `signalToNoiseRatio(signalElectrons, pixelCount, backgroundElectronsPerPixel, darkCurrentElectronsPerPixel, readNoiseElectrons)` is `S / sqrt(S + n (B + D + RN^2))`: the shot noise of the signal, plus for each of the `pixelCount` pixels of the measurement aperture the background and the dark electrons accumulated during the exposure (not rates) and the read noise squared (electrons RMS); it throws a `RangeError` when the noise variance is not positive. The model has no flat-field or calibration noise, no scintillation, no quantization noise, and no gain: the inputs must already be electrons, not ADU. `stackingSnrGain(frameCount)` is `sqrt(N)` and `stackingMagnitudeGain(frameCount)` is `1.25 log10(N)`, the gain of `N` equal frames in the signal-to-noise ratio and in the limiting magnitude (it is the ideal gain of a sky- or shot-noise limited stack, the read noise adds as `N` reads, and it does not account for the rejection of a bad frame or a changing sky). `dynamicRange(fullWellElectrons, readNoiseElectrons)` is the ratio of the full well to the read noise and `dynamicRangeInStops(fullWellElectrons, readNoiseElectrons)` is its base-2 logarithm, the usual figure of a single exposure (a camera whose gain is lower than the one at the full well is limited by the converter instead, which this does not see). `saturationTime(fullWellElectrons, signalRateElectronsPerSecond)` is the exposure in seconds that fills the well at a constant rate, and `skyLimitedExposure(readNoiseElectrons, skyRateElectronsPerSecond)` is the rule of thumb `10 RN^2 / sky` for the exposure at which the sky shot noise starts to dominate the read noise (the accumulated sky is about ten times the read variance, so its noise is about three times the read noise), also in seconds. Without a validated input they return what the formula produces (a zero or negative rate gives an infinite or negative time).
+
+```ts
+import { dynamicRange, dynamicRangeInStops, saturationTime, signalToNoiseRatio, skyLimitedExposure, stackingMagnitudeGain, stackingSnrGain } from 'nebulosa/src/astronomy/formulas'
+
+// A star of 20000 e- measured in 30 pixels of 400 e- of sky and 2 e- of dark current each, with 1.6 e- of read noise: the shot noise of the signal plus the background dominate.
+console.log(signalToNoiseRatio(20000, 30, 400, 2, 1.6).toFixed(3)) // 111.565
+
+// With no background, dark current or read noise only the shot noise of the signal is left: sqrt(S). A faint source in the same sky is background limited.
+console.log(signalToNoiseRatio(20000, 30, 0, 0, 0).toFixed(3), Math.sqrt(20000).toFixed(3), signalToNoiseRatio(500, 30, 400, 2, 1.6).toFixed(3)) // 141.421 141.421 4.448
+
+// The read noise alone matters in a dark sky: the same star with a read noise of 10 e- against 1.6 e-, in a sky of 5 e- per pixel.
+console.log(signalToNoiseRatio(800, 30, 5, 0.1, 1.6).toFixed(3), signalToNoiseRatio(800, 30, 5, 0.1, 10).toFixed(3)) // 24.929 12.724
+
+// Nothing to measure: no signal and no noise has an undefined ratio, which is an error.
+try {
+	signalToNoiseRatio(0, 30, 0, 0, 0)
+} catch (e) {
+	console.log((e as Error).message) // noise variance must be positive
+}
+
+// 25 frames: the ideal gain in the ratio and in the limiting magnitude, and the stack of 4 frames that doubles the ratio.
+console.log(stackingSnrGain(25), stackingMagnitudeGain(25).toFixed(3), stackingSnrGain(4), stackingMagnitudeGain(1)) // 5 1.747 2 0
+
+// A 50000 e- well with 1.6 e- of read noise: the ratio and the stops.
+console.log(dynamicRange(50000, 1.6), dynamicRangeInStops(50000, 1.6).toFixed(3)) // 31250 14.932 (stops)
+
+// The well of that camera is full in 125 s with a 400 e-/s source, and the sky-limited exposure for a 1.6 e- read noise under a sky of 0.5 e-/s per pixel.
+console.log(saturationTime(50000, 400), skyLimitedExposure(1.6, 0.5)) // 125 51.2
+
+// A dark sky is slow to limit the exposure; a bright one reaches the limit in seconds.
+console.log(skyLimitedExposure(1.6, 0.05), skyLimitedExposure(1.6, 50)) // 512 0.512
+```
+
 ### Single-Frame Bad-Pixel Map
 
 `detectBadPixels(image, options?)` finds the isolated hot and cold pixels of one frame, without dark or flat calibration frames (for the stacks, see Sensor Stack Defects), and returns a `BadPixelMap`: a row-major `mask` of `width * height` bytes (`0` clean, `BAD_PIXEL_HOT` is 1, `BAD_PIXEL_COLD` is 2) and the counts `hot` and `cold`. The frame is an `Image` in normalized 0..1 samples (see Scientific Image Model) and is not modified. A pixel is a candidate when it exceeds, or falls below, the median of its neighbors by `hotSigma` or `coldSigma` robust noise sigmas (5 by default, zero disables that class), where the noise comes from the background estimate of the frame (see Background Estimate); it is kept only when it is isolated, that is, when no neighbor reaches halfway from the local median to the pixel, which is what tells a one-pixel defect from the peak of a star. The neighborhood is the square of `radius` pixels (1 by default, a value below one is taken as one), a pixel needs at least four finite neighbors (the corners of a radius-1 window are left clean), a color frame is judged on its BT.709 luminance (or the `channel` of the option: `'RED'`, `'GREEN'`, `'BLUE'`, `'GRAY'` or another grayscale weighting) and a Bayer mosaic is judged per color phase with the noise of that phase, so the different pedestals of the colors are not defects.
@@ -10100,6 +10282,100 @@ console.log(detectBadPixels(color, { channel: 'GREEN' }).hot, detectBadPixels(co
 ```
 
 ### Star Detection
+
+`imaging/stars/detector` finds the stars of an image and measures them, with the guiding use case in mind (the algorithm follows PHD2). `detectStars(image, options?)` works on a mono copy of the image (a color image is reduced to its grayscale and a raw CFA mosaic is debayered first), removes hot pixels and 2x2 defect clumps with a 3x3 median, correlates the result with a PSF-matched kernel (see PSF Filter), takes the local maxima of the response away from the border (a margin of 4 pixels plus the kernel, so a star near the edge is not detected) that stand out from the surrounding mean in units of the local standard deviation, and measures every candidate on the original samples (not on the filtered ones). The published `x` and `y` are the flux-weighted centroid of the star (zero-based pixel coordinates of the sample centers: origin at the upper-left sample, x to the right and y down, with a fractional part), found by recentering the aperture at most twice, and the star is described by `flux` (above the sky, in the normalized sample scale, inside a radius of `STAR_SIGNAL_RADIUS`, 4 pixels), `snr`, `hfd` (the half-flux diameter, in pixels, a star below 1 pixel is rejected as noise), `fwhm` (pixels) and, when they can be estimated, the moment shape `eccentricity`, `elongation`, `majorVariance` and `minorVariance` (pixel squared) and `theta` (see Star Shape Statistics). The sky is the median of the annulus between 5 and 7 pixels and the noise its MAD scaled to a standard deviation, so a crowded field or a nebula biases the SNR. The list is sorted by decreasing flux. `maxStars` (500) keeps the strongest candidates, `minSNR` (0) drops the weak ones, and `searchRegion` (0, in pixels) removes the pairs of comparable stars that both fit in one search box of that size plus 5 pixels, the PHD2 uniqueness filter for a guide star (it is not a crop of the frame). When the candidates show a clear break between the stars and the noise, the dim noise tail is trimmed automatically; a frame with no real stars has no such break and returns its noise peaks, so `minSNR` is the filter that always works. The `snr` is `flux / sqrt(flux + pixels * noise^2)` with the flux in the sample scale, which on a normalized image is far smaller than a signal-to-noise ratio in electrons: use it to rank stars and to choose `minSNR` relative to the faintest star wanted. An isolated hot pixel is not a candidate (the median removes it from the response), but the photometry is taken on the original samples, so a hot pixel inside the aperture of a nearby noise peak can be reported as a broad, elongated star: calibrate or fix the bad pixels first (see Single-Frame Bad-Pixel Map). A very crowded or blurred field can have close stars merged (detections closer than 5 pixels are one star). The detector assumes stars of a few pixels of FWHM: a very large, defocused or tiny undersampled star is outside what the kernel matches. An image that is too small to have an interior (less than about 17 pixels on a side) returns no stars.
+
+`measureStarPhotometry(image, x, y, radius)` measures one position, returning `[flux, snr, hfd, fwhm]` with the sky in the annulus from `radius + 1` to `radius + 3` pixels, and zeros when the position or the radius is invalid or the aperture has no positive flux; it does not recenter, so pass the centroid. The module also exports the list that the detector uses internally to keep the candidates sorted by brightness, `StarList` (`add` inserts by height and evicts the dimmest when the `capacity` is exceeded; `addFirst`, `addLast`, `first`, `deleteFirst`, `deleteAfter`, `delete`, `clear`, `array` and the iterator, with `size`), and the two pruning steps that act on it: `mergeVeryCloseStars(list, minLimitSq?)` removes the star that has a neighbor within the distance, in squared pixels (25 by default, so 5 pixels), and `excludeStarsFitWithinRegion(list, searchRegion)` the pairs inside a box, unless one star is at least 5 times brighter than the other.
+
+```ts
+import { detectStars, excludeStarsFitWithinRegion, measureStarPhotometry, mergeVeryCloseStars, STAR_SIGNAL_RADIUS, StarList } from 'nebulosa/src/imaging/stars/detector'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A 128x96 sky of 0.1 with a small deterministic noise and Gaussian stars (sigma 1.6 pixels, FWHM 3.8) of different heights; one hot pixel.
+let seed = 9
+const random = () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return seed / 0xffffffff
+}
+
+const width = 128
+const height = 96
+const make = (stars: readonly (readonly [number, number, number])[], channels = 1): Image => {
+	const raw = new Float64Array(width * height * channels)
+	for (let i = 0; i < raw.length; i++) raw[i] = 0.1 + (random() - 0.5) * 0.004
+	for (const [cx, cy, peak] of stars)
+		for (let y = Math.max(0, Math.floor(cy) - 8); y <= Math.min(height - 1, Math.floor(cy) + 8); y++)
+			for (let x = Math.max(0, Math.floor(cx) - 8); x <= Math.min(width - 1, Math.floor(cx) + 8); x++) for (let c = 0; c < channels; c++) raw[(y * width + x) * channels + c] += peak * Math.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * 1.6 ** 2))
+	return { header: {}, raw, metadata: { width, height, channels, pixelCount: width * height, stride: width * channels, strideInBytes: width * channels * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+}
+
+const truth = [
+	[30.3, 20.7, 0.6],
+	[80.5, 30.2, 0.35],
+	[60.2, 70.6, 0.2],
+	[105.7, 60.4, 0.1],
+	[20.4, 75.3, 0.05],
+] as const
+const image = make(truth)
+image.raw[50 * width + 50] = 1 // a hot pixel
+
+// The detected stars, brightest first, with the centroid, the photometry and the shape of each; the hot pixel is not a star.
+const stars = detectStars(image)
+console.log(stars.length) // 6 (the five stars and a hot pixel that leaks through, the broad elongated row below)
+for (const star of stars) console.log(star.x.toFixed(2), star.y.toFixed(2), star.flux.toFixed(3), star.snr.toFixed(1), star.hfd.toFixed(2), star.fwhm?.toFixed(2), star.eccentricity?.toFixed(3), star.elongation?.toFixed(3), star.theta?.toFixed(3)) // x y flux snr hfd fwhm eccentricity elongation theta: 30.32 20.69 9.143 3.0 3.76 3.47 0.179 1.017 0.758; 80.50 30.22 5.366 2.3 3.78 3.49 0.199 1.020 0.106; 60.22 70.58 3.051 1.7 3.75 3.46 0.169 1.015 0.945; 105.67 60.40 1.529 1.2 3.78 3.48 0.153 1.012 3.001; 49.94 50.08 0.932 1.0 5.62 4.70 0.848 1.888 2.294 (the hot pixel: broad and elongated); 20.41 75.31 0.729 0.9 3.69 3.40 0.183 1.017 1.270
+
+// The options: at most 2 stars, a minimum SNR, and the search-box filter that keeps only the stars that have no comparable neighbor.
+console.log(detectStars(image, { maxStars: 2 }).map((s) => s.flux.toFixed(3))) // [ '9.143', '5.366' ]
+console.log(detectStars(image, { minSNR: 1.5 }).length, detectStars(image, { minSNR: 5 }).length) // 3 0
+const crowded = make([...truth, [42, 26, 0.5]])
+console.log(detectStars(crowded).length, detectStars(crowded, { searchRegion: 20 }).length) // 6 4 (the two close stars of comparable height are removed by the search box)
+
+// A color image (grayscale reduction), an empty sky (which has no stars to separate from the noise, so noise peaks come back), and a frame too small to have an interior.
+console.log(detectStars(make(truth, 3)).length, detectStars(make([])).length, detectStars(make([]), { minSNR: 0.5 }).length) // 5 109 0 (the empty sky returns its noise peaks unless minSNR is set)
+console.log(detectStars({ ...make([]), raw: new Float64Array(8 * 8), metadata: { ...make([]).metadata, width: 8, height: 8, stride: 8, pixelCount: 64 } })) // []
+
+// The photometry of one position: the centroid of the brightest star, a larger radius, an empty sky position and invalid input.
+const [flux, snr, hfd, fwhm] = measureStarPhotometry(image, stars[0].x, stars[0].y, STAR_SIGNAL_RADIUS)
+console.log(STAR_SIGNAL_RADIUS, flux.toFixed(3), snr.toFixed(1), hfd.toFixed(2), fwhm.toFixed(2)) // 4 9.143 3.0 3.77 3.47
+console.log(measureStarPhotometry(image, stars[0].x, stars[0].y, 8), measureStarPhotometry(image, 64, 48, 4), measureStarPhotometry(image, Number.NaN, 5, 4)) // [ 9.69, 3.11, 4.07, 3.86 ] [ 0.015, 0.123, 4.77, 4.25 ] [ 0, 0, 0, 0 ]
+
+// The candidate list: sorted by height with a bounded capacity, and the two pruning steps.
+const list = new StarList(3)
+list.add(10, 10, 5)
+list.add(40, 10, 9)
+list.add(70, 10, 7)
+list.add(100, 10, 1)
+console.log(
+	list.size,
+	list.array().map((s) => s.h),
+) // 3 [ 5, 7, 9 ]
+list.add(200, 10, 8)
+console.log(
+	list.size,
+	[...list].map((s) => s.h),
+	list.first()?.h,
+) // 3 [ 7, 8, 9 ] 7
+const close = new StarList(10)
+close.add(10, 10, 5)
+close.add(12, 11, 6)
+close.add(50, 50, 7)
+mergeVeryCloseStars(close)
+console.log(
+	close.size,
+	close.array().map((s) => s.x),
+) // 2 [ 12, 50 ]
+const pairs = new StarList(10)
+pairs.add(10, 10, 5)
+pairs.add(30, 10, 6)
+pairs.add(100, 80, 7)
+pairs.add(24, 12, 60)
+excludeStarsFitWithinRegion(pairs, 20)
+console.log(
+	pairs.size,
+	pairs.array().map((s) => s.x),
+) // 2 [ 100, 24 ]
+console.log(close.deleteFirst(), close.size, close.delete(close.first()!), close.size, close.deleteFirst(), (close.clear(), close.size)) // true 1 true 0 false 0
+```
 
 ### Star List Registration
 
@@ -10205,11 +10481,383 @@ console.log(toAffineMatrix(inverse) === inverse) // true
 
 ### Star Profile Measurement
 
+`imaging/stars/profile` measures the optical profile of a star with more care, and more flags, than the fast photometry of Star Detection, for focus, tracking and optical-quality work. A star is a position and the profile is measured on a grayscale copy of the image (a color image is reduced with `channel`, a grayscale weighting or one color), with sample values in the normalized scale of the image and distances in pixels. `measureStarProfile(image, star, options?)` estimates the local sky (the median, and a deviation from the scaled MAD, of an annulus from 1 to 3 pixels outside the aperture), takes the positive signal above it in a circular aperture, recenters on its flux-weighted centroid and repeats, starting from `initialRadius` (4 pixels) and growing the aperture to about twice the FWHM (at most `maximumRadius`, 32 pixels) until the outer one-pixel band holds no more than 1% of the flux, for at most `maxIterations` passes. It returns a `StarProfile`: the refined `x` and `y`, `flux`, `snr` (the flux over the sky deviation times the square root of the aperture pixels, in normalized samples, so a Poisson term is not added), `hfd` (the curve-of-growth half-flux diameter in 0.25 pixel radial bins, so it is quantized to that width), the Gaussian-equivalent `fwhm` (the geometric mean of the axes, in pixels), `major` and `minor` (the FWHM along the principal axes), `eccentricity`, `elongation`, `theta` (radians in `[0, PI)`, clockwise from +X because y grows downward, and only defined when the star is at least slightly eccentric), the sky `background` and `deviation`, the `peak` above the sky, a `quality` in `0..1`, the `model` and the `flags`. The profile is `valid` unless a fatal condition holds: `'nonFinite'` (a NaN sample was ignored), `'clipped'` (the aperture reached the image border while still holding flux), `'saturated'` (more than `maximumSaturatedFraction`, 0 by default, of the aperture is at or above `saturationLevel`, 1 by default) or `'lowSignal'` (the SNR below `minSNR`, 3 by default). The other flags reduce the quality without invalidating it: `'nearBorder'` (within `borderMargin`, 4 pixels, of an edge, 0.7), `'blended'` (a separate local maximum of at least a quarter of the peak inside the aperture, 0.5), `'degenerateShape'` (0.8) and `'poorFit'` (0.75); a star that cannot be measured at all (no usable sky, no positive flux, a non-finite position) returns `valid: false`, `quality: 0` and the flags `'invalidBackground'`, `'lowSignal'`, `'invalidCentroid'` or `'nonFinite'`, without numeric fields. The shape is that of the second moments of the aperture, which are biased by a bright companion, by the noise at the aperture edge and by the aperture truncation.
+
+`model: 'moffat'` additionally refines the profile with a single-component elliptical Moffat fit (see Elliptical Moffat Fitting): on success the center, `fwhm`, axes, elongation, eccentricity and `theta` come from the fit and `moffat` carries its diagnostics; when the fit fails (a 'poorFit' flag, quality factor 0.75) the moment profile is kept, with the failure in `moffat`. `measureStarProfiles(image, stars, options?)` measures a list of positions (anything with `x` and `y`, such as `DetectedStar`s) in order, sharing the scratch buffers and the grayscale copy, and sets `sourceIndex` on each result; `detectStarProfiles(image, detectOptions?, profileOptions?)` runs `detectStars` (see Star Detection) and measures what it finds. The measurement is deterministic and does not modify the image, and the options that are not finite or not positive fall back to their defaults.
+
+```ts
+import { detectStarProfiles, measureStarProfile, measureStarProfiles } from 'nebulosa/src/imaging/stars/profile'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A 96x80 sky of 0.1 with a small deterministic noise and elliptical Gaussian stars: [x, y, peak, sigmaMajor, sigmaMinor, angle (radians, from +X toward +Y)].
+let seed = 21
+const random = () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return seed / 0xffffffff
+}
+
+const width = 96
+const height = 80
+const make = (stars: readonly (readonly [number, number, number, number, number, number])[], channels = 1): Image => {
+	const raw = new Float64Array(width * height * channels)
+	for (let i = 0; i < raw.length; i++) raw[i] = 0.1 + (random() - 0.5) * 0.004
+	for (const [cx, cy, peak, sa, sb, angle] of stars) {
+		const c = Math.cos(angle)
+		const s = Math.sin(angle)
+		for (let y = Math.max(0, Math.floor(cy) - 14); y <= Math.min(height - 1, Math.floor(cy) + 14); y++)
+			for (let x = Math.max(0, Math.floor(cx) - 14); x <= Math.min(width - 1, Math.floor(cx) + 14); x++) {
+				const u = (x - cx) * c + (y - cy) * s
+				const v = -(x - cx) * s + (y - cy) * c
+				for (let k = 0; k < channels; k++) raw[(y * width + x) * channels + k] += peak * Math.exp(-0.5 * ((u / sa) ** 2 + (v / sb) ** 2))
+			}
+	}
+	return { header: {}, raw, metadata: { width, height, channels, pixelCount: width * height, stride: width * channels, strideInBytes: width * channels * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+}
+
+// A round star (sigma 1.6, FWHM 3.77) measured from an approximate position: the profile is refined around the true center.
+const image = make([
+	[40.3, 30.6, 0.5, 1.6, 1.6, 0],
+	[70.2, 20.4, 0.4, 3, 1.5, 0.6],
+	[20.5, 60.5, 1.5, 1.6, 1.6, 0],
+])
+const round = measureStarProfile(image, { x: 41, y: 31 })
+console.log(round.valid, round.model, round.flags, round.quality, round.sourceIndex) // true moments [] 1 undefined
+console.log(round.x.toFixed(2), round.y.toFixed(2), round.flux?.toFixed(3), round.snr?.toFixed(0), round.hfd?.toFixed(2), round.fwhm?.toFixed(2)) // 40.30 30.60 8.091 462 3.72 3.88
+console.log(round.major?.toFixed(2), round.minor?.toFixed(2), round.eccentricity?.toFixed(3), round.elongation?.toFixed(3), round.theta, round.background?.toFixed(4), round.deviation?.toFixed(5), round.peak?.toFixed(3)) // 3.90 3.85 0.159 1.013 1.1830523186201807 0.0999 0.00123 0.476
+
+// An elongated star (sigma 3 x 1.5, rotated by 0.6 rad): the axes, the ratio and the orientation (the major axis points at 0.6 rad).
+const long = measureStarProfile(image, { x: 70, y: 20 })
+console.log(long.valid, long.flags, long.major?.toFixed(2), long.minor?.toFixed(2), long.elongation?.toFixed(3), long.eccentricity?.toFixed(3), long.theta?.toFixed(3)) // true [] 7.11 3.73 1.905 0.851 0.606
+
+// A saturated star is invalid (its profile is flattened); the level and the allowed fraction can be changed.
+const saturated = measureStarProfile(image, { x: 20.5, y: 60.5 })
+console.log(saturated.valid, saturated.flags, saturated.quality) // false [ 'saturated' ] 0
+console.log(measureStarProfile(image, { x: 20.5, y: 60.5 }, { saturationLevel: 2 }).valid, measureStarProfile(image, { x: 20.5, y: 60.5 }, { maximumSaturatedFraction: 0.5 }).valid) // true true
+
+// The SNR threshold: a star below it is invalid with 'lowSignal'.
+console.log(measureStarProfile(image, { x: 41, y: 31 }, { minSNR: 1000 }).flags, measureStarProfile(image, { x: 41, y: 31 }, { minSNR: 1000 }).valid) // [ 'lowSignal' ] false
+
+// A star near the edge: the aperture reaches the border, so the profile is clipped (invalid) and near the border; a star with room only loses quality
+// when it is inside the margin, and the margin can be changed.
+const edge = make([
+	[3.5, 40, 0.5, 1.6, 1.6, 0],
+	[10, 20, 0.5, 1.6, 1.6, 0],
+])
+const nearEdge = measureStarProfile(edge, { x: 3.5, y: 40 })
+console.log(nearEdge.valid, nearEdge.flags, nearEdge.quality) // false [ 'nearBorder', 'clipped' ] 0
+console.log(measureStarProfile(edge, { x: 10, y: 20 }).flags, measureStarProfile(edge, { x: 10, y: 20 }, { borderMargin: 12 }).flags, measureStarProfile(edge, { x: 10, y: 20 }, { borderMargin: 12 }).quality) // [] [ 'nearBorder' ] 0.7
+
+// A position without a star is not meaningful: the positive noise of a growing aperture reads as a broad, faint source (here it is flagged blended and clipped, but
+// the flags depend on the noise), so measure detected positions or check the peak against the deviation.
+const empty = measureStarProfile(make([]), { x: 80, y: 60 })
+console.log(empty.valid, empty.flags, empty.snr?.toFixed(0), empty.peak?.toFixed(4), empty.deviation?.toFixed(5), empty.fwhm?.toFixed(1)) // false [ 'blended', 'clipped' ] 16 0.0019 0.00159 37.2
+
+// A companion inside the aperture flags a blend and halves the quality.
+const pair = make([
+	[40, 30, 0.5, 1.6, 1.6, 0],
+	[45, 30, 0.3, 1.6, 1.6, 0],
+])
+console.log(measureStarProfile(pair, { x: 40, y: 30 }).flags, measureStarProfile(pair, { x: 40, y: 30 }).quality) // [ 'blended' ] 0.5
+
+// The Moffat refinement of a star with a Moffat profile (alpha 2.5, beta 3): the center and the axes come from the fit, which keeps the diagnostics.
+const wings = make([])
+for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) wings.raw[y * width + x] += 0.5 * (1 + ((x - 40.3) ** 2 + (y - 30.6) ** 2) / 2.5 ** 2) ** -3
+const fitted = measureStarProfile(wings, { x: 41, y: 31 }, { model: 'moffat' })
+console.log(fitted.model, fitted.valid, fitted.flags, fitted.moffat?.success, fitted.fwhm?.toFixed(2), measureStarProfile(wings, { x: 41, y: 31 }).fwhm?.toFixed(2)) // moffat true [] true 2.55 3.82 (the moments give 3.82, the fit 2.55 of a profile with wings)
+console.log(fitted.moffat?.success && [fitted.moffat.alphaMajor.toFixed(2), fitted.moffat.beta.toFixed(2), fitted.moffat.iterations]) // [ '2.52', '3.03', 6 ]
+
+// A Gaussian star is not a Moffat profile well enough for the residual test: the fit is rejected, the moments are kept and the quality drops.
+const rejected = measureStarProfile(image, { x: 41, y: 31 }, { model: 'moffat' })
+console.log(rejected.model, rejected.valid, rejected.flags, rejected.moffat, rejected.fwhm?.toFixed(2), rejected.quality) // moments true [ 'poorFit' ] { success: false, reason: 'poorResidual', rms: 0.0016, iterations: 48 } 3.88 0.75
+
+// A color image (the grayscale or a channel), a batch with a bad position, and the detector followed by the profile.
+const color = make([[40.3, 30.6, 0.5, 1.6, 1.6, 0]], 3)
+console.log(measureStarProfile(color, { x: 40, y: 31 }).fwhm?.toFixed(2), measureStarProfile(color, { x: 40, y: 31 }, { channel: 'GREEN' }).fwhm?.toFixed(2)) // 3.86 3.89
+const batch = measureStarProfiles(image, [
+	{ x: 41, y: 31 },
+	{ x: Number.NaN, y: 0 },
+	{ x: 5, y: 5 },
+])
+console.log(batch.map((p) => [p.sourceIndex, p.valid, p.flags.join('+') || '-', p.hfd?.toFixed(2)])) // [ [ 0, true, '-', '3.72' ], [ 1, false, 'nonFinite', undefined ], [ 2, true, 'blended', '31.27' ] ] (the third is an empty sky position: do not trust it)
+for (const profile of detectStarProfiles(image)) console.log(profile.sourceIndex, profile.valid, profile.flags.join('+') || '-', profile.x.toFixed(2), profile.y.toFixed(2), profile.hfd?.toFixed(2), profile.fwhm?.toFixed(2)) // 0 false saturated 20.50 60.50 3.45 3.78; 1 true - 70.21 20.40 5.22 5.15; 2 true - 40.30 30.60 3.72 3.88
+console.log(detectStarProfiles(image, { maxStars: 1 }, { minSNR: 1000 }).map((p) => [p.valid, p.flags])) // [ [ false, [ 'saturated' ] ] ] (the brightest star is the saturated one, and it is the only one kept)
+```
+
 ### Star Shape Statistics
+
+`imaging/stars/shape` turns the second moments of a star into a principal-axis shape and summarizes the shapes of a whole star list, which is how the star detector, the profile measurement (see Star Detection and Star Profile Measurement) and the tracking diagnostics read elongation. `starMomentShape(momentXX, momentXY, momentYY)` takes the normalized central second moments of the signal, in pixels squared (the flux-weighted variance along x, the covariance and the variance along y, with y growing downward) and returns `majorVariance` and `minorVariance` (the eigenvalues, in pixels squared), `eccentricity` (`sqrt(1 - minor / major)`, from 0 for a round star toward 1), `elongation` (`sqrt(major / minor)`, at least 1) and `theta`, the major-axis orientation in radians in `[0, PI)`, measured from +X toward +Y (clockwise on the screen). It returns an empty object when a moment is not finite or when either variance is not larger than `Number.EPSILON` (a star one pixel wide has no shape). The orientation of a nearly round star is noise, and the callers only publish it above an eccentricity of 0.05; moments of a clipped or truncated aperture and of a blended pair are biased, and the result describes the moments, not a fitted profile.
+
+`starShapeStatistics(stars, options?)` summarizes anything with the optional `eccentricity`, `elongation` and `theta` of a star (a `DetectedStar` or a `StarProfile`): the `count` of finite eccentricities, their median and the median elongation, and the orientation of the stars that are elongated enough to vote (`minimumOrientationEccentricity`, 0.05), as the axial mean of their angles. Because a major axis at `theta` and at `theta + PI` is the same line, the mean is taken on the doubled angle, so the `orientation` is in `[0, PI)` and the `coherence` is the length of the mean vector, from 0 (no shared axis) to 1 (one axis); a star without an eccentricity or a finite angle does not vote, and neither does a round one. The `assessment` is `'round'` when the median eccentricity is below `roundEccentricity` (0.2), otherwise `'aligned'` when at least `minimumOrientedStars` (5) stars vote with a coherence of at least `alignedCoherence` (0.6), the signature of a tracking error, wind or a flexure, `'mixed'` when they are elongated without a common axis (an optical aberration such as astigmatism, or a tilt, is spatially structured, and the position of the stars is not part of this summary), and `'insufficient'` when there is no median or too few oriented stars. The thresholds are heuristic and should be adjusted to the setup, and the assessment says nothing about the cause.
+
+```ts
+import { starMomentShape, starShapeStatistics } from 'nebulosa/src/imaging/stars/shape'
+import type { StarShapeSample } from 'nebulosa/src/imaging/stars/shape'
+
+// The shape of the moments of a Gaussian with sigma 3 along x and 1.5 along y (variances 9 and 2.25, no covariance): the major axis is x, so theta is 0.
+const flat = starMomentShape(9, 0, 2.25)
+console.log(flat.majorVariance, flat.minorVariance, flat.elongation, flat.eccentricity?.toFixed(4), flat.theta) // 9 2.25 2 0.8660 0
+
+// The same ellipse rotated by 30 degrees toward +Y: the covariance appears, and theta recovers the angle (in radians).
+const angle = Math.PI / 6
+const c = Math.cos(angle)
+const s = Math.sin(angle)
+const xx = 9 * c * c + 2.25 * s * s
+const xy = (9 - 2.25) * c * s
+const yy = 9 * s * s + 2.25 * c * c
+const rotated = starMomentShape(xx, xy, yy)
+console.log(rotated.majorVariance?.toFixed(4), rotated.minorVariance?.toFixed(4), rotated.elongation?.toFixed(4), rotated.theta?.toFixed(4), angle.toFixed(4)) // 9.0000 2.2500 2.0000 0.5236 0.5236
+
+// A major axis along y gives pi/2, a negative angle folds into [0, PI), a round star has an angle that means nothing, and a degenerate or non-finite matrix is empty.
+console.log(starMomentShape(2.25, 0, 9).theta?.toFixed(4), starMomentShape(2, -1.2, 2).theta?.toFixed(4), starMomentShape(4, 0, 4)) // 1.5708 2.3562 { majorVariance: 4, minorVariance: 4, eccentricity: 0, elongation: 1, theta: 0 } (the angle of the round star is only a convention)
+console.log(starMomentShape(0, 0, 0), starMomentShape(4, 4, 4), starMomentShape(Number.NaN, 0, 1)) // {} {} {}
+
+// A field of 8 round stars (the eccentricity of a good frame): the median is below the threshold, so it is round, whatever their angles.
+const roundField: StarShapeSample[] = Array.from({ length: 8 }, (_, i) => ({ eccentricity: 0.1 + 0.01 * i, elongation: 1.01 + 0.002 * i, theta: i * 0.4 }))
+console.log(starShapeStatistics(roundField)) // { count: 8, medianEccentricity: 0.135, medianElongation: 1.017, orientedCount: 8, orientation: 2.971, coherence: 0.0187, assessment: 'round' }
+
+// A field trailed along one direction (tracking error): the stars share an axis near 0.5 rad, with a small scatter, so the field is aligned.
+const trailed: StarShapeSample[] = Array.from({ length: 10 }, (_, i) => ({ eccentricity: 0.6 + 0.01 * (i % 3), elongation: 1.25, theta: 0.5 + 0.05 * Math.sin(i) }))
+const aligned = starShapeStatistics(trailed)
+console.log(aligned.assessment, aligned.count, aligned.medianEccentricity?.toFixed(2), aligned.medianElongation, aligned.orientedCount, aligned.orientation?.toFixed(3), aligned.coherence?.toFixed(3)) // aligned 10 0.61 1.25 10 0.510 0.998
+
+// The angle is axial: stars at 0.05 and at PI - 0.05 (nearly the same line) agree on an orientation near 0, not on PI / 2.
+const wrap = starShapeStatistics([0.05, Math.PI - 0.05, 0.02, Math.PI - 0.02, 0.08].map((theta) => ({ eccentricity: 0.5, elongation: 1.15, theta })))
+console.log(wrap.assessment, wrap.orientation?.toFixed(3), wrap.coherence?.toFixed(3)) // aligned 0.016 0.996
+
+// Elongated stars in every direction: no shared axis, so the field is mixed (an optical or a sensor effect, rather than a tracking one).
+const scattered: StarShapeSample[] = Array.from({ length: 12 }, (_, i) => ({ eccentricity: 0.5, elongation: 1.15, theta: (i * Math.PI) / 12 }))
+const mixed = starShapeStatistics(scattered)
+console.log(mixed.assessment, mixed.orientedCount, mixed.coherence?.toFixed(3)) // mixed 12 0.000
+
+// Too few elongated stars to judge, an empty list, samples without angles or eccentricities, and the options (a looser round limit and alignment).
+console.log(starShapeStatistics(trailed.slice(0, 4)).assessment, starShapeStatistics([]), starShapeStatistics([{ elongation: 1.3 }, { theta: 1 }])) // insufficient { count: 0, medianEccentricity: undefined, medianElongation: undefined, orientedCount: 0, orientation: undefined, coherence: undefined, assessment: 'insufficient' } { count: 0, medianElongation: 1.3, orientedCount: 0, assessment: 'insufficient', ... }
+console.log(starShapeStatistics(trailed, { roundEccentricity: 0.7 }).assessment, starShapeStatistics(trailed, { minimumOrientedStars: 11 }).assessment, starShapeStatistics(scattered, { alignedCoherence: 0 }).assessment, starShapeStatistics(trailed, { minimumOrientationEccentricity: 0.7 }).orientedCount) // round insufficient aligned 0
+```
 
 ### Straight Streak Detection
 
+`imaging/analysis/streak` finds approximately straight luminous trails (satellites, aircraft, meteors, but also diffraction spikes, edges and chains of stars) in a single image, without deciding what they are (see Streak Classification for that). `detectStreaks(image, options?, workspace?)` works on one native plane of the image (`plane: 'auto'` selects the mono channel, the green channel of an RGB image or the first green sample of a CFA mosaic; `'red'`, `'green'`, `'blue'`, `'green1'` and the other sensor planes can be forced) and optionally inside the half-open region `area`. It estimates the background and the noise on a grid of `backgroundCellSize` cells (64 pixels), keeps the pixels brighter than `thresholdSigma` (2.5) local sigmas and the Sobel edges above `gradientSigma` (1.5), votes the edges in a Hough accumulator (`angleStep`, `distanceStep` in pixels, `orientationTolerance`), refines at most `maxCandidates` (128) hypotheses along their axis, merges the fragments that are collinear within `mergeAngleTolerance`, `mergeDistance` (pixels) and `mergeGap` (pixels), suppresses duplicates and returns at most `maxStreaks` (32) streaks sorted deterministically. A streak is kept when its length is at least `minLength` (12 pixels), its equivalent transverse FWHM at most `maxWidth` (16 pixels, up to 256), its covariance anisotropy (`linearity`) at least `minLinearity` (0.8) and, when the noise is measurable, its `snr` at least `minSNR` (5). `allowBorderClipping` (true) decides whether a trail cut by the frame or the `area` is returned, with `clippedAtBorder` set because its length is then truncated, and `saturationLevel` (in the normalized scale of the image) feeds `saturationFraction`.
+
+Every coordinate is in pixels of the received image (origin at the center of the upper-left sample, x to the right and y down) and every angle is axial, in radians in `[0, PI)` from +X toward +Y, so a trail has no direction of motion. A `Streak` carries the canonical `start` and `end` (the one with the smaller x first, and with the smaller y on a vertical trail), the `center`, the `length`, the `width` (the FWHM from the flux moments), the `angle`, the `linearity`, the robust `rmsResidual` of the centroids around the axis, the `coverage` (the fraction of the endpoint interval with support, so a broken trail is below 1), `supportPixels`, the signed `flux`, `meanSignal` and `peakSignal` (above the background, in image units), the `snr` (absent when the noise cannot be measured), and a `confidence` in `[0, 1]`, a quality score of the detection, not a probability that it is a real object. The detector is deterministic and does not modify the image, but it is a straight-line model: curved trails, trails fainter than the noise, a trail shorter than `minLength`, very wide smears and a field crowded with aligned stars (a star chain is reported as a streak, so raise `minLength`, `minLinearity` and `minSNR`) are outside what it separates. The options outside their documented range (a `maxWidth` above 256, a `maxCandidates` above 512, a `maxStreaks` above 4096) and a detection whose refinement would exceed the bounded work budget throw a `RangeError`.
+
+`createStreakDetectionWorkspace(width, height, options?)` (in `imaging/analysis/streak/workspace`) preallocates the buffers of the whole pipeline for images up to that size (at most 32768 on a side and 67108864 pixels), with the `precision` of the residual plane (32 by default, and it must match the storage of the images: 64 for a `Float64Array`, 32 for a `Float32Array`, or the call throws a `RangeError`), `maximumCandidates`, `maximumEdgePoints` and the finest `angleStep` and `distanceStep` it must support; passing it as the third argument of `detectStreaks` avoids the allocation on a series of frames, and its `state` holds the counters of the latest call (the edges, the candidates, whether the edges were truncated, and the work charged to each stage). A workspace smaller than the image throws a `RangeError`, and it is not safe to share between concurrent calls. `createStreakMask(width, height, streaks, options?)` rasterizes the streaks into a new `StreakMask` of bytes (1 masked, 0 clear), a capsule around each segment with radius `width * widthScale / 2 + dilation` pixels (`widthScale` 1 and `dilation` 0 by default), skipping the streaks whose `confidence` is below `STREAK_MASK_LOW_CONFIDENCE` (0.5) when `includeLowConfidence` is false, and reports `maskedPixels` (overlaps counted once) and `maskedFraction`. The mask is what the stacker uses to exclude a trail (see Streak-Aware Stacking).
+
+```ts
+import { detectStreaks } from 'nebulosa/src/imaging/analysis/streak/detector'
+import { createStreakMask, STREAK_MASK_LOW_CONFIDENCE } from 'nebulosa/src/imaging/analysis/streak/mask'
+import { DEFAULT_STREAK_DETECTION_OPTIONS } from 'nebulosa/src/imaging/analysis/streak/types'
+import type { Streak } from 'nebulosa/src/imaging/analysis/streak/types'
+import { createStreakDetectionWorkspace } from 'nebulosa/src/imaging/analysis/streak/workspace'
+import { renderSyntheticStreak } from 'nebulosa/src/imaging/synthetic/streak'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A 160x120 sky of 0.1 with a small deterministic noise (+-0.005), as a mono or RGB image with 64-bit samples.
+let seed = 5
+const random = () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return seed / 0xffffffff
+}
+
+const width = 160
+const height = 120
+const make = (channels = 1): Image => {
+	const raw = new Float64Array(width * height * channels)
+	for (let i = 0; i < raw.length; i++) raw[i] = 0.1 + (random() - 0.5) * 0.01
+	return { header: {}, raw, metadata: { width, height, channels, pixelCount: width * height, stride: width * channels, strideInBytes: width * channels * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+}
+
+// A trail from (20, 30) to (140, 80), 3 pixels wide and 0.2 above the sky; its true angle is atan2(50, 120) = 0.3948 rad.
+const image = make()
+renderSyntheticStreak(image, { start: { x: 20, y: 30 }, end: { x: 140, y: 80 }, width: 3, intensity: 0.2 })
+const row = (s: Streak) => [s.start.x.toFixed(1), s.start.y.toFixed(1), s.end.x.toFixed(1), s.end.y.toFixed(1), s.length.toFixed(1), s.angle.toFixed(3)]
+const streaks = detectStreaks(image)
+console.log(streaks.length, DEFAULT_STREAK_DETECTION_OPTIONS.minLength, DEFAULT_STREAK_DETECTION_OPTIONS.maxStreaks) // 1 12 32 (one streak; the defaults of minLength and maxStreaks)
+const s = streaks[0]
+console.log(row(s), s.center, s.width.toFixed(2), s.linearity.toFixed(3), s.rmsResidual.toFixed(3), s.coverage.toFixed(2), s.supportPixels, s.clippedAtBorder) // [17.6, 29.0, 142.4, 81.0, 135.1, 0.395] { x: 79.99, y: 55.01 } 3.04 0.997 0.175 1.00 1236 false (the true trail is 144.2 long, 3 wide, at 0.3948 rad; the ends are a little short because the Gaussian tails fade into the noise)
+console.log(s.flux.toFixed(2), s.meanSignal.toFixed(3), s.peakSignal.toFixed(3), s.snr?.toFixed(0), s.saturationFraction, s.confidence.toFixed(3)) // 84.48 0.056 0.204 642 undefined 0.984 (no saturation level was given, so saturationFraction is absent)
+
+// A sky without a trail returns nothing; the length, SNR, width and threshold limits reject this trail.
+console.log(detectStreaks(make()).length) // 0
+console.log(detectStreaks(image, { minLength: 200 }).length, detectStreaks(image, { minSNR: 1000 }).length, detectStreaks(image, { maxWidth: 1 }).length, detectStreaks(image, { thresholdSigma: 40, gradientSigma: 40 }).length) // 0 0 0 3 (the trail is rejected by the length, the SNR and the width limits; very high candidate thresholds do not reject it, they only split it into 3 short fragments of about 20 pixels)
+
+// Two trails (a horizontal one and a steep one): the list is sorted deterministically, and maxStreaks truncates it.
+const two = make()
+renderSyntheticStreak(two, { start: { x: 10, y: 100 }, end: { x: 150, y: 100 }, width: 2.5, intensity: 0.3 })
+renderSyntheticStreak(two, { start: { x: 80, y: 5 }, end: { x: 100, y: 110 }, width: 3, intensity: 0.15 })
+console.log(detectStreaks(two).map(row)) // two streaks, [8.0, 99.9, 152.0, 99.9, 144.0, 3.142] and [79.5, 2.9, 100.5, 112.1, 111.2, 1.381]; the horizontal trail is reported 144 pixels long for a true length of 140, and its axial angle near 3.142 (just under PI) is the same line as 0
+console.log(detectStreaks(two, { maxStreaks: 1 }).map(row)) // only the first (the horizontal one), which sorts first
+
+// A region of interest (half-open, in pixels) restricts the analysis, so the trail is measured only inside it.
+console.log(detectStreaks(two, { area: { left: 0, top: 0, right: 160, bottom: 50 } }).map(row)) // [79.6, 3.0, 88.5, 49.0, 46.9, 1.379]: the part of the steep trail inside the first 50 rows, ending at the region boundary
+
+// A trail that leaves the frame is cut at the border (clippedAtBorder), or dropped when clipping is not allowed.
+const clipped = make()
+renderSyntheticStreak(clipped, { start: { x: -30, y: 60 }, end: { x: 100, y: 60 }, width: 3, intensity: 0.3 })
+console.log(
+	detectStreaks(clipped).map((c) => [...row(c), c.clippedAtBorder]),
+	detectStreaks(clipped, { allowBorderClipping: false }).length,
+) // [0.0, 60.0, 103.0, 60.1, 103.0, 0.001, true] and 1 (the trail is cut at x = 0 and flagged; with allowBorderClipping false the clipped candidate is dropped, but a streak that the fragment merge rebuilds is still reported, with start.x 0 and clippedAtBorder false, so do not rely on the flag alone to find trails that touch the border)
+
+// A trail with a gap of 10% of its length: the fragments are merged into one streak with a coverage below 1, or kept apart with mergeGap 0.
+const broken = make()
+renderSyntheticStreak(broken, {
+	start: { x: 10, y: 60 },
+	end: { x: 150, y: 60 },
+	width: 3,
+	intensity: 0.3,
+	profile: {
+		type: 'segments',
+		intervals: [
+			{ start: 0, end: 0.4 },
+			{ start: 0.5, end: 1 },
+		],
+	},
+})
+console.log(detectStreaks(broken).map((c) => [...row(c), c.coverage.toFixed(2)])) // two streaks, [7.0, 60.1, 153.0, 60.1, 146.0] with coverage 0.91 (the gap is bridged) and a spurious fragment of 83 pixels at a different angle with coverage 0.86; a noisy sky can add a false detection next to a real one
+console.log(detectStreaks(broken, { mergeGap: 0 }).map((c) => [...row(c), c.coverage.toFixed(2)])) // two fragments of the trail ([80.0, 60.1, 152.0, 60.0] and [8.0, 57.6, 66.0, 60.1]), the gap is not bridged
+
+// The saturation level (normalized samples): the fraction of the corridor samples at or above it.
+console.log(detectStreaks(image, { saturationLevel: 0.25 })[0].saturationFraction, detectStreaks(image, { saturationLevel: 0.2 })[0].saturationFraction?.toFixed(2)) // 0.17 0.27 (samples at or above 0.25 and 0.2 in the raw scale, since the trail peaks at 0.30)
+
+// An RGB image is analyzed on its green plane by default, and any plane can be forced.
+const color = make(3)
+renderSyntheticStreak(color, { start: { x: 20, y: 30 }, end: { x: 140, y: 80 }, width: 3, intensity: 0.2 })
+console.log(detectStreaks(color).length, detectStreaks(color, { plane: 'red' }).length, detectStreaks(color, { plane: 'blue' }).length) // 1 1 1 (the same trail on every plane)
+
+// A reusable workspace (its precision matches the Float64Array of the images) gives the same detections and exposes the counters of the latest call.
+const workspace = createStreakDetectionWorkspace(width, height, { precision: 64 })
+const reused = detectStreaks(image, {}, workspace)
+console.log(JSON.stringify(reused) === JSON.stringify(streaks), workspace.precision, workspace.maximumCandidates, workspace.maximumEdgePoints) // true 64 128 131072
+console.log(workspace.state) // { edgeCount: 1212, candidateCount: 110, edgesTruncated: false, houghCoarseEdgeWork: 8484, houghRefinementEdgeWork: 47045, houghActiveAngles: 90, houghRhoWork: 108270, refinementWork: 3698906, supportedRuns: 180, mergeRefits: 56 }
+for (const test of [
+	() => detectStreaks(make(), {}, createStreakDetectionWorkspace(100, 100, { precision: 64 })),
+	() => detectStreaks(image, {}, createStreakDetectionWorkspace(width, height)),
+	() => detectStreaks(image, { maxWidth: 300 }),
+	() => detectStreaks(image, { maxCandidates: 600 }),
+	() => createStreakDetectionWorkspace(40000, 100),
+]) {
+	try {
+		test()
+	} catch (e) {
+		console.log((e as Error).message) // in order: incompatible streak workspace extent or precision (smaller workspace), incompatible streak workspace extent or precision (precision 32 for 64-bit samples), value must be within [1, 256], value must be within [1, 512], value must be within [1, 32768]
+	}
+}
+
+// The mask of the detections: the capsule of each streak, the dilation and the width scale, and the confidence cutoff.
+const mask = createStreakMask(width, height, streaks)
+console.log(mask.width, mask.height, mask.raw.length, mask.maskedPixels, mask.maskedFraction.toFixed(4), mask.raw[55 * width + 80], mask.raw[0]) // 160 120 19200 416 0.0217 1 0
+console.log(createStreakMask(width, height, streaks, { dilation: 2 }).maskedPixels, createStreakMask(width, height, streaks, { widthScale: 2 }).maskedPixels, createStreakMask(width, height, streaks, { widthScale: 0 }).maskedPixels) // 989 850 0 (dilation 2, a width scale 2, and a zero scale that masks nothing)
+const weak = { ...s, confidence: 0.3 }
+console.log(STREAK_MASK_LOW_CONFIDENCE, createStreakMask(width, height, [weak]).maskedPixels, createStreakMask(width, height, [weak], { includeLowConfidence: false }).maskedPixels, createStreakMask(width, height, [s, s]).maskedPixels === mask.maskedPixels) // 0.5 416 0 true (a weak streak is masked unless the cutoff is on; the same streak twice counts its pixels once)
+try {
+	createStreakMask(0, 10, [])
+} catch (e) {
+	console.log((e as Error).message) // streak mask dimensions must be positive integers whose product fits in one bounded buffer
+}
+```
+
 ### Streak Classification
+
+`imaging/analysis/streak/classifier` interprets the streaks of Straight Streak Detection as a meteor, a satellite, an airplane, a moving object (an asteroid or a comet), a tracking failure, an optical artifact (a diffraction spike), a sensor artifact (a defective line) or `'unknown'`, from the geometry of the streak and the context that the caller supplies. It is a rule-based vote, not a trained model: each evidence provider adds a score in `[0, 1]` times a weight to one class, either as a primary cue (a geometric or field identification) or as a secondary cue (morphology and intensity), and the scores are uncalibrated weights, not probabilities. A class is named only when its primary total reaches `minimumScore` (0.62) and leads every other primary total by `minimumMargin` (0.12); otherwise the class is `'unknown'` and the morphology stays visible among the `alternatives`. A trail that only looks like a satellite, an airplane or a moving object is therefore never named from its shape alone. No provider performs network or catalog access: the predicted tracks, the radiants, the tracking measurement and the earlier frames come from the caller, and a missing piece of context lowers the confidence instead of being looked up.
+
+`classifyStreaks(streaks, context?, options?)` classifies every streak, in order, and each provider sees the whole set as its `peers` (a spike family needs two streaks), while `classifyStreak(streak, context?, options?)` is the single-streak form without peers. A `StreakClassification` has the `class`, its `confidence` (the total weight of the class, or for `'unknown'` the complement of the strongest competing total), the `alternatives` (the other classes with a positive total, highest first, never `'unknown'`) and the `evidence` of the providers in evaluation order (each item has a `kind`, a `score`, a `description` and, for a track or a radiant, the caller's `id`). The built-in providers (`defaultStreakEvidenceProviders`, in this order) are `morphology` (length, width, linearity, coverage and residual: a long, narrow and continuous trail votes secondarily for a satellite, a short PSF-wide one for a moving object, a broad or bent one for an airplane), `intensity` (the profile along the centerline of `context.image`: periodic knots, a taper or a flare, secondary), `trajectory` (the `satelliteTracks` and `movingObjectTracks` that agree with the streak through the `wcs`, primary, see Celestial Streak Tracks), `meteorRadiant` (a `meteorRadiants` candidate on the great circle of the trail, primary), `fieldCoherence` (the `tracking` snapshot or the elongated `stars`, primary only when the trail length of the stars matches the streak), `optical` (the streak passes through a bright star of `stars`: secondary, and primary when another peer crosses the same star on a different axis) and `sensor` (a thin row or column that spans the frame, or a locus repeated in `priorFrames`, primary). The `context` fields are the `image`, the `stars` (with the optional `theta` and `trailLength` of a `StreakClassificationStar`), the `exposure` (seconds) and `startTime`, the TAN or TAN-SIP `wcs` header of the image, the `tracking` snapshot (`StreakTrackingQuality`), and `priorFrames`. `options.providers` replaces the built-in list, including with an empty one, and a provider is any object with an `id` and a deterministic `evaluate(streak, context, peers)` that returns `StreakEvidenceContribution`s. The weights and the thresholds are heuristic and should be validated on the images of the setup.
+
+```ts
+import { classifyStreak, classifyStreaks } from 'nebulosa/src/imaging/analysis/streak/classifier'
+import { DEFAULT_STREAK_CLASSIFIER_OPTIONS } from 'nebulosa/src/imaging/analysis/streak/classification.types'
+import type { StreakClassification, StreakClassificationContext } from 'nebulosa/src/imaging/analysis/streak/classification.types'
+import { defaultStreakEvidenceProviders } from 'nebulosa/src/imaging/analysis/streak/evidence'
+import type { Streak } from 'nebulosa/src/imaging/analysis/streak/types'
+import { renderSyntheticStreak } from 'nebulosa/src/imaging/synthetic/streak'
+import { Timescale, time } from 'nebulosa/src/astronomy/time/time'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A streak as the detector would report it: the line from (x0, y0) to (x1, y1) in pixels (x right, y down), with the given overrides.
+const make = (x0: number, y0: number, x1: number, y1: number, overrides: Partial<Streak> = {}): Streak => {
+	const length = Math.hypot(x1 - x0, y1 - y0)
+	const angle = (Math.atan2(y1 - y0, x1 - x0) + Math.PI) % Math.PI
+	return { start: { x: x0, y: y0 }, end: { x: x1, y: y1 }, center: { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }, length, width: 3, angle, linearity: 0.99, rmsResidual: 0.3, coverage: 1, supportPixels: length * 3, clippedAtBorder: false, flux: 50, meanSignal: 0.3, peakSignal: 0.5, snr: 40, confidence: 0.9, ...overrides }
+}
+
+// A 160x120 sky of 0.1, flat, to hold the intensity profile of the streaks.
+const sky = (): Image => ({ header: {}, raw: new Float64Array(160 * 120).fill(0.1), metadata: { width: 160, height: 120, channels: 1, pixelCount: 19200, stride: 160, strideInBytes: 1280, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } })
+
+// A compact line: the class, the confidence, the alternatives and the evidence metrics (the last one with the id of a track or a radiant).
+const show = (c: StreakClassification) => [c.class, c.confidence.toFixed(3), c.alternatives.map((a) => `${a.class}:${a.score.toFixed(2)}`).join(' ') || '-', c.evidence.map((e) => `${e.kind}:${e.score.toFixed(2)}${e.id === undefined ? '' : '#' + e.id}`).join(' ') || '-']
+
+console.log(
+	DEFAULT_STREAK_CLASSIFIER_OPTIONS,
+	defaultStreakEvidenceProviders.map((p) => p.id),
+) // { minimumScore: 0.62, minimumMargin: 0.12 } and the providers morphology, intensity, trajectory, meteorRadiant, fieldCoherence, optical, sensor
+
+// The shape alone only raises an alternative: a long thin trail leans to a satellite, a short PSF-wide one to a moving object, a broad and poorly linear one to an airplane; none is named.
+const trail = make(10, 20, 150, 60)
+console.log(show(classifyStreak(trail))) // [unknown, 0.673, satellite:0.33, morphologyLinear:0.93] (the confidence of unknown is 1 minus the strongest total, 0.327)
+console.log(show(classifyStreak(make(10, 20, 22, 26)))) // [unknown, 0.699, movingObject:0.30, morphologyPsf:0.75]
+console.log(show(classifyStreak(make(10, 20, 100, 60, { width: 14, linearity: 0.7 })))) // [unknown, 0.854, airplane:0.15, morphologyBroad:0.73]
+console.log(classifyStreaks([])) // [] (no streaks, no results)
+
+// A thin row that spans the frame is a sensor line: a primary cue, so it is named (the frame supplies the size).
+const frame = sky()
+console.log(show(classifyStreak(make(0, 50, 159, 50, { width: 1.5 }), { image: frame }))) // [sensorArtifact, 0.800, satellite:0.35, morphologyLinear:1.00 sensorLine:1.00]
+
+// The same sensor locus in an earlier frame is a primary cue of persistence; a trail that moved between frames is not.
+console.log(show(classifyStreak(trail, { image: frame, priorFrames: [{ streaks: [make(10, 20, 150, 60)] }] }))) // [sensorArtifact, 0.760, satellite:0.33, morphologyLinear:0.93 sensorPersistence:0.95]
+console.log(show(classifyStreak(trail, { image: frame, priorFrames: [{ streaks: [make(10, 100, 150, 140)] }] }))) // [unknown, 0.673, satellite:0.33, morphologyLinear:0.93] (no repetition, so no sensor vote)
+
+// A tracking measurement of the field (elongated stars sharing the axis and the scale of the streak) names a tracking failure; a snapshot without the axis keeps it secondary.
+const tracking = { starCount: 40, usableStarCount: 30, elongatedFraction: 0.9, directionCoherence: 0.95, angle: trail.angle, medianTrail: 140, score: 0.9 }
+console.log(show(classifyStreak(trail, { tracking }))) // [trackingFailure, 0.720, satellite:0.33, morphologyLinear:0.93 trackingField:0.90]
+console.log(show(classifyStreak(trail, { tracking: { ...tracking, angle: undefined, medianTrail: undefined } }))) // [unknown, 0.280, trackingFailure:0.72 satellite:0.33, morphologyLinear:0.93 trackingField:0.90] (the tracking vote is secondary, so it is listed but does not name the class)
+
+// Two streaks that cross at the same bright star are a diffraction-spike family (a primary cue for both); a single alignment stays an alternative.
+const star = { x: 80, y: 60, hfd: 3, fwhm: 3, snr: 500, flux: 100 }
+const horizontal = make(40, 60, 120, 60)
+const vertical = make(80, 20, 80, 100)
+for (const c of classifyStreaks([horizontal, vertical], { stars: [star] })) console.log(show(c)) // [opticalArtifact, 1.000, satellite:0.15, morphologyLinear:0.43 opticalAlignment:1.00 opticalSpikeFamily:1.00] for each of the two streaks
+console.log(show(classifyStreak(horizontal, { stars: [star] }))) // [unknown, 0.550, opticalArtifact:0.45 satellite:0.15, morphologyLinear:0.43 opticalAlignment:1.00]
+
+// The intensity profile of a dashed trail (equal knots) is secondary evidence of an airplane, and a smooth one is not; the image supplies the samples.
+const dashed = sky()
+const intervals = []
+for (let start = 0; start < 1; start += 16 / 120) intervals.push({ start, end: Math.min(1, start + 8 / 120) })
+renderSyntheticStreak(dashed, { start: { x: 20, y: 40 }, end: { x: 140, y: 40 }, width: 2, intensity: 0.9, profile: { type: 'segments', intervals } })
+console.log(show(classifyStreak(make(20, 40, 140, 40, { width: 2, coverage: 0.5 }), { image: dashed }))) // [unknown, 0.450, airplane:0.55, intensityPeriodic:1.00]
+const smooth = sky()
+renderSyntheticStreak(smooth, { start: { x: 20, y: 40 }, end: { x: 140, y: 40 }, width: 2, intensity: 0.9 })
+console.log(show(classifyStreak(make(20, 40, 140, 40, { width: 2 }), { image: smooth }))) // [unknown, 0.500, satellite:0.50, morphologyLinear:1.00 intensitySmooth:1.00]
+
+// Predicted tracks and radiants are compared on the sky through a TAN header (50.5, 50.5 is the reference pixel, 0.05 degrees per pixel, east to the left), in radians.
+const wcs = { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 50.5, CRPIX2: 50.5, CRVAL1: 0, CRVAL2: 0, CD1_1: -0.05, CD1_2: 0, CD2_1: 0, CD2_2: 0.05 }
+const skyOf = (x: number, y: number): [number, number] => [(-(x - 49.5) * 0.05 * Math.PI) / 180, ((y - 49.5) * 0.05 * Math.PI) / 180]
+const diagonal = make(10, 20, 90, 70)
+const along = { id: 'sat-1', start: skyOf(0, 12), end: skyOf(100, 75) }
+const apart = { id: 'sat-2', start: skyOf(0, 90), end: skyOf(100, 110) }
+const context: StreakClassificationContext = { wcs, satelliteTracks: [along, apart] }
+console.log(show(classifyStreak(diagonal, context))) // [satellite, 0.990, -, morphologyLinear:0.63 predictedTrack:0.96#sat-1] (sat-2 is far from the trail and does not vote)
+console.log(show(classifyStreak(diagonal, { wcs, movingObjectTracks: [along] }))) // [movingObject, 0.769, satellite:0.22, morphologyLinear:0.63 predictedTrack:0.96#sat-1]
+console.log(show(classifyStreak(diagonal, { satelliteTracks: [along] }))) // [unknown, 0.778, satellite:0.22, morphologyLinear:0.63] (without a wcs the tracks cannot be compared)
+
+// A timed prediction must overlap the exposure (the instants share a timescale): the same track passing hours later does not match.
+const start = time(2460000, 0, Timescale.UTC)
+const timed = { ...context, startTime: start, exposure: 30 }
+console.log(show(classifyStreak(diagonal, { ...timed, satelliteTracks: [{ ...along, startTime: start, endTime: time(2460000, 30 / 86400, Timescale.UTC) }] }))) // [satellite, 0.990, -, morphologyLinear:0.63 predictedTrack:0.96#sat-1] (the prediction is inside the exposure)
+console.log(show(classifyStreak(diagonal, { ...timed, satelliteTracks: [{ ...along, startTime: time(2460000, 0.4, Timescale.UTC), endTime: time(2460000, 0.5, Timescale.UTC) }] }))) // [unknown, 0.778, satellite:0.22, morphologyLinear:0.63] (the pass is hours later)
+
+// A radiant on the great circle of the trail (a point on its extension, wrapped to [0, 2 PI)) makes it a meteor; one away from it is recorded as incompatible.
+const [ra, dec] = skyOf(-30, -5)
+console.log(show(classifyStreak(diagonal, { wcs, meteorRadiants: [{ id: 'radiant', rightAscension: (ra + 2 * Math.PI) % (2 * Math.PI), declination: dec }] }))) // [meteor, 0.800, satellite:0.22, morphologyLinear:0.63 meteorRadiant:1.00#radiant]
+console.log(show(classifyStreak(diagonal, { wcs, meteorRadiants: [{ id: 'elsewhere', rightAscension: 0.5, declination: 0.8 }] }))) // [unknown, 0.778, satellite:0.22, morphologyLinear:0.63 meteorRadiantIncompatible:0.00#elsewhere]
+
+// The decision gates: a stricter score leaves the tracking failure unnamed, and an empty provider list leaves nothing to vote.
+console.log(show(classifyStreak(trail, { tracking }, { minimumScore: 0.95 }))) // [unknown, 0.280, trackingFailure:0.72 satellite:0.33, morphologyLinear:0.93 trackingField:0.90] (0.72 is below 0.95)
+console.log(show(classifyStreak(trail, { tracking }, { providers: [] }))) // [unknown, 1.000, -, -]
+
+// A custom provider (deterministic, without input/output): this one always votes for a meteor with a weight of 0.8, enough to name it; it replaces the built-in ones.
+const always = { id: 'always', evaluate: () => [{ class: 'meteor' as const, score: 1, weight: 0.8, tier: 'primary' as const, evidence: [{ kind: 'custom', score: 1 }] }] }
+console.log(show(classifyStreak(trail, {}, { providers: [always] }))) // [meteor, 0.800, -, custom:1.00]
+console.log(show(classifyStreak(trail, {}, { providers: [...defaultStreakEvidenceProviders, always] }))) // [meteor, 0.800, satellite:0.33, morphologyLinear:0.93 custom:1.00]
+```
 
 ### Streak-Aware Stacking
 
@@ -10369,6 +11017,24 @@ for (const r of shape.results) console.log(r.accepted, r.reasons.join(', ')) // 
 
 ### Sub-Exposure and Integration Planning
 
+`astronomy/formulas` has the bookkeeping of a session: how many frames of a given length make a total integration. `totalIntegrationTime(frameCount, exposureTimeSeconds)` is `N * t` in seconds, `subframeCount(totalTimeSeconds, subExposureSeconds)` is `T / t` as a real number without rounding (a fractional count tells how far the plan is from a whole number of frames), and `requiredSubframeCount(totalTimeSeconds, subExposureSeconds)` is its ceiling, the number of whole frames that reach at least the requested time (so the last frame overshoots unless the division is exact). All times are in seconds and none of the functions checks its inputs: a zero sub-exposure gives an infinite count. They do not include the dead time between frames (the readout, the download, the dithering and the autofocus), the frames lost to a bad guiding or a cloud, or the calibration frames, so the clock time of a session is longer than the integration. The choice of the sub-exposure itself (the sky-limited exposure, the saturation time and the stacking gain) is in Signal-to-Noise and Dynamic Range Estimates, and the trailing limit in Trailing and Smear Limits.
+
+```ts
+import { requiredSubframeCount, subframeCount, totalIntegrationTime } from 'nebulosa/src/astronomy/formulas'
+
+// 36 frames of 300 s: 3 hours of integration, in seconds.
+console.log(totalIntegrationTime(36, 300)) // 10800
+
+// The frames for 3 hours in 240 s sub-exposures: 45 exactly, and for 3 hours in 420 s sub-exposures, a fractional count that rounds up to 26.
+console.log(subframeCount(10800, 240), subframeCount(10800, 420).toFixed(3), requiredSubframeCount(10800, 240), requiredSubframeCount(10800, 420)) // 45 25.714 45 26
+
+// The ceiling overshoots: 26 frames of 420 s give 10920 s, 2 minutes more than the plan. A small total is one frame, and nothing needs no frames.
+console.log(totalIntegrationTime(requiredSubframeCount(10800, 420), 420), requiredSubframeCount(60, 300), requiredSubframeCount(0, 300)) // 10920 1 0
+
+// Longer sub-exposures need fewer frames for the same total, which is why the count falls as the exposure grows (the integration is the same).
+console.log([60, 120, 300, 600].map((t) => requiredSubframeCount(7200, t))) // [120, 60, 24, 12]
+```
+
 ### Synthetic Bahtinov Spikes
 
 ### Synthetic Defocused Collimation Patterns
@@ -10383,7 +11049,131 @@ for (const r of shape.results) console.log(r.accepted, r.reasons.join(', ')) // 
 
 ### Synthetic Straight Streaks
 
+`imaging/synthetic/streak` adds an analytic straight trail to an image in place, to test the streak detector, the classifier and the streak-aware stacker (see Straight Streak Detection, Streak Classification and Streak-Aware Stacking) with a known truth. `renderSyntheticStreak(image, streak)` adds to every sample a Gaussian transverse profile of the distance from the pixel center to a finite segment, so the signal at a pixel is `intensity * profile(position) * exp(-d^2 / (2 sigma^2))`, with `sigma = width / (2 sqrt(2 ln 2))`: `intensity` is the peak signal added on the centerline (in the units of the image, so the full width at half maximum is `width`, in pixels), the profile is evaluated at the closest point of the segment, and the ends are rounded by that distance. The `start` and `end` are subpixel positions in the pixel coordinates of the image (origin at the center of the first sample, x to the right, y down), they may lie outside the frame, and the pixels farther than `ceil(4 sigma)` pixels (at least 1) from the segment are not touched. The optional `profile` is the longitudinal modulation, from 0 at `start` to 1 at `end`: `'constant'` (the default, 1), `'linear'` (from `start` to `end`, clamped at 0 from below), `'gaussian'` (a flare, with `center` and `sigma` in the same normalized position, and zero when the sigma is not positive) and `'segments'` (a list of `intervals` of `{ start, end, intensity? }` with the largest intensity of the intervals that contain the position, 1 when it is not given, and 0 outside all of them, for a dashed or an interrupted trail). `saturationLevel` clamps the result after the addition.
+
+The function writes into `image.raw` (the trail is added to the samples that are there, so a second call accumulates and the noise or the sky must be put first), and applies the same signal to every channel of an RGB image, so the trail is white, and to a mono image or a CFA mosaic, whose layout is that of a single channel (the color of a Bayer pixel is not modeled). It adds nothing for a zero-length segment or a non-positive signal, a negative intensity does not subtract, and it does not add noise or the point-spread function of a real trail (the profile is exactly Gaussian, with no wings, no trailing along the track and no atmospheric scintillation). An image whose layout is not a mono or an RGB raster (a `stride` different from `width * channels`, another number of channels, or an `image.raw` shorter than the image) throws a `RangeError`; the typed array keeps its own precision, so a `Float32Array` stores the rounded values.
+
+```ts
+import { renderSyntheticStreak } from 'nebulosa/src/imaging/synthetic/streak'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A zeroed image of width x height pixels with 1 (mono) or 3 (RGB) channels, 64 bits per sample.
+const make = (width: number, height: number, channels = 1): Image => ({ header: {}, raw: new Float64Array(width * height * channels), metadata: { width, height, channels, pixelCount: width * height, stride: width * channels, strideInBytes: width * channels * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } })
+const at = (image: Image, x: number, y: number, channel = 0) => image.raw[(y * image.metadata.width + x) * image.metadata.channels + channel]
+
+// A horizontal trail on row 10 with a FWHM of 4 pixels and a peak of 0.5: the signal is 0.5 on the centerline, 0.25 (the half maximum) 2 pixels away,
+// and the rounded end gives 0.42 one pixel before the start and 0.105 at two.
+const image = make(40, 20)
+renderSyntheticStreak(image, { start: { x: 5, y: 10 }, end: { x: 35, y: 10 }, width: 4, intensity: 0.5 })
+console.log(
+	[
+		[20, 10],
+		[20, 11],
+		[20, 12],
+		[20, 13],
+		[20, 8],
+		[20, 14],
+		[4, 10],
+		[2, 10],
+		[38, 10],
+	].map(([x, y]) => at(image, x, y).toFixed(4)),
+) // [0.5000, 0.4204, 0.2500, 0.1051, 0.2500, 0.0313, 0.4204, 0.1051, 0.1051] (the centerline, 1 and 2 and 3 pixels below, 2 and 4 pixels above, then one and two pixels before the start and past the end)
+console.log(image.raw.filter((v) => v > 0).length) // 600 (the pixels with a positive signal: the band within the 4 sigma cutoff of the 30 pixel trail)
+
+// The call adds to what is there: the second identical call doubles the signal.
+renderSyntheticStreak(image, { start: { x: 5, y: 10 }, end: { x: 35, y: 10 }, width: 4, intensity: 0.5 })
+console.log(at(image, 20, 10)) // 1
+
+// The longitudinal profiles, sampled at x = 5, 12, 20, 28 and 35 (the normalized positions 0, 0.23, 0.5, 0.77 and 1) with a peak of 1.
+const sample = (profile?: Parameters<typeof renderSyntheticStreak>[1]['profile']) => {
+	const test = make(40, 20)
+	renderSyntheticStreak(test, { start: { x: 5, y: 10 }, end: { x: 35, y: 10 }, width: 2, intensity: 1, profile })
+	return [5, 12, 20, 28, 35].map((x) => at(test, x, 10).toFixed(3)).join(' ')
+}
+console.log(sample(), '|', sample({ type: 'linear', start: 1, end: 0 }), '|', sample({ type: 'linear', start: 0.5, end: 2 })) // 1.000 1.000 1.000 1.000 1.000 | 1.000 0.767 0.500 0.233 0.000 | 0.500 0.850 1.250 1.650 2.000 (constant, a fade out, and a ramp up that crosses 1)
+console.log(sample({ type: 'gaussian', center: 0.5, sigma: 0.1 }), '|', sample({ type: 'gaussian', center: 0.5, sigma: 0 })) // 0.000 0.029 1.000 0.029 0.000 | 0.000 0.000 0.000 0.000 0.000 (a flare at the middle, and a flare of zero width, which adds nothing)
+console.log(
+	sample({
+		type: 'segments',
+		intervals: [
+			{ start: 0, end: 0.3 },
+			{ start: 0.6, end: 1, intensity: 2 },
+		],
+	}),
+	'|',
+	sample({ type: 'linear', start: -1, end: 1 }),
+) // 1.000 1.000 0.000 2.000 2.000 | 0.000 0.000 0.000 0.533 1.000 (two intervals with a gap between them and the second twice as bright, and a ramp that is clamped at 0 until the middle)
+
+// Saturation: the sum is clamped after the addition.
+const clipped = make(40, 20)
+renderSyntheticStreak(clipped, { start: { x: 5, y: 10 }, end: { x: 35, y: 10 }, width: 4, intensity: 2, saturationLevel: 1 })
+console.log(at(clipped, 20, 10), at(clipped, 20, 11), at(clipped, 20, 13).toFixed(3)) // 1 1 0.420 (the centerline and the next row clamp at 1; a pixel 3 rows away is not clamped)
+
+// An RGB image receives the same signal in every channel, so the trail is white.
+const color = make(40, 20, 3)
+renderSyntheticStreak(color, { start: { x: 5, y: 10 }, end: { x: 35, y: 10 }, width: 4, intensity: 0.5 })
+console.log(at(color, 20, 10, 0), at(color, 20, 10, 1), at(color, 20, 10, 2), color.raw.length) // 0.5 0.5 0.5 2400
+
+// A diagonal trail from (4.5, 4.5) to (30.5, 30.5), and one that starts outside the frame: the part inside is rendered, and the end at x = 20 is rounded.
+const diagonal = make(40, 40)
+renderSyntheticStreak(diagonal, { start: { x: 4.5, y: 4.5 }, end: { x: 30.5, y: 30.5 }, width: 3, intensity: 1 })
+console.log(at(diagonal, 10, 10).toFixed(3), at(diagonal, 10, 11).toFixed(3), at(diagonal, 10, 12).toFixed(3)) // 1.000 0.857 0.540
+const outside = make(40, 20)
+renderSyntheticStreak(outside, { start: { x: -50, y: 10 }, end: { x: 20, y: 10 }, width: 3, intensity: 1 })
+console.log([0, 19, 21, 25].map((x) => at(outside, x, 10).toFixed(3))) // [1.000, 1.000, 0.735, 0.000] (x = 21 is 1 pixel past the end, and x = 25 is beyond the 4 sigma cutoff)
+
+// A zero-length segment and a negative intensity add nothing.
+const nothing = make(40, 20)
+renderSyntheticStreak(nothing, { start: { x: 5, y: 5 }, end: { x: 5, y: 5 }, width: 3, intensity: 1 })
+renderSyntheticStreak(nothing, { start: { x: 5, y: 10 }, end: { x: 35, y: 10 }, width: 4, intensity: -1 })
+console.log(nothing.raw.some((v) => v !== 0)) // false
+
+// A 32-bit image stores the rounded value, and an inconsistent layout (two channels, or a raw array that is too short) is an error.
+const single = { ...make(40, 20), raw: new Float32Array(800) }
+renderSyntheticStreak(single, { start: { x: 5, y: 10 }, end: { x: 35, y: 10 }, width: 4, intensity: 0.3 })
+console.log(at(single, 20, 10), Math.fround(0.3) === at(single, 20, 10)) // 0.30000001192092896 true
+for (const bad of [make(40, 20, 2), { ...make(40, 20), raw: new Float64Array(10) }]) {
+	try {
+		renderSyntheticStreak(bad, { start: { x: 5, y: 10 }, end: { x: 35, y: 10 }, width: 4, intensity: 1 })
+	} catch (e) {
+		console.log((e as Error).message) // synthetic streak image has inconsistent mono/RGB/CFA layout (printed twice, once for each invalid image)
+	}
+}
+```
+
 ### Telescope Resolution and Light Grasp
+
+`astronomy/formulas` also has the empirical rules of thumb for what an aperture can do. They are conventions of visual observing, not measurements of an instrument, and they ignore the seeing, the optical quality and the sensor. `dawesLimit(apertureMm)` (`116 / D`) and `rayleighLimit(apertureMm)` (`138 / D`) give the approximate resolving power in arcseconds of two equal stars for an aperture in millimeters (the Dawes limit is the empirical visual one and the Rayleigh one the diffraction criterion, so the Rayleigh value is larger). `limitingMagnitude(apertureMm)` is `2.7 + 5 log10(D)`, the approximate visual magnitude of the faintest star under a dark sky, which is not the limit of a long exposure (see Signal-to-Noise and Dynamic Range Estimates and Sub-Exposure and Integration Planning). `lightGraspRatio(larger, smaller)` is `(larger / smaller)^2`, the ratio of the collecting areas of two apertures in millimeters (it throws a `RangeError` if the first is smaller than the second, and it is the only function here with a check). A central obstruction reduces the light and the contrast, and the module has the two helpers for it: `effectiveApertureWithObstruction(aperture, obstruction)` is `sqrt(D^2 - d^2)`, the diameter of the unobstructed circle of the same area, and `obstructionRatio(aperture, obstruction)` is `100 d / D`, the obstruction diameter in percent of the aperture, with both in the same unit (they throw a `RangeError` when the obstruction is not smaller than, or for the ratio larger than, the aperture). Neither models the diffraction pattern of the obstruction or the spider vanes.
+
+```ts
+import { dawesLimit, effectiveApertureWithObstruction, lightGraspRatio, limitingMagnitude, obstructionRatio, rayleighLimit } from 'nebulosa/src/astronomy/formulas'
+
+// A 200 mm aperture: the resolving power by each criterion (arcseconds) and the visual limiting magnitude.
+console.log(dawesLimit(200), rayleighLimit(200), limitingMagnitude(200).toFixed(2)) // 0.58 0.69 14.21
+
+// An 80 mm refractor against a 200 mm reflector: the collecting area ratio (and the gap in limiting magnitude, 5 log10 of the aperture ratio).
+console.log(lightGraspRatio(200, 80), (limitingMagnitude(200) - limitingMagnitude(80)).toFixed(2)) // 6.25 1.99
+
+// The ratio must be taken with the larger aperture first.
+try {
+	lightGraspRatio(80, 200)
+} catch (e) {
+	console.log((e as Error).message) // larger aperture must be at least smaller aperture
+}
+
+// A 200 mm reflector with a 70 mm secondary: the obstruction in percent of the diameter, and the equal-area unobstructed aperture (millimeters).
+console.log(obstructionRatio(200, 70), effectiveApertureWithObstruction(200, 70).toFixed(2)) // 35 187.35
+console.log(obstructionRatio(200, 0), effectiveApertureWithObstruction(200, 0), obstructionRatio(200, 200)) // 0 200 100
+
+// The obstruction cannot be as large as the aperture for the effective one, and cannot exceed it for the ratio.
+for (const test of [() => effectiveApertureWithObstruction(200, 200), () => obstructionRatio(200, 250)]) {
+	try {
+		test()
+	} catch (e) {
+		console.log((e as Error).message) // obstruction diameter must be smaller than aperture diameter, then obstruction diameter must be no larger than aperture diameter
+	}
+}
+```
 
 ### Tone Mapping
 
@@ -10431,6 +11221,35 @@ try {
 ### Tracking Quality
 
 ### Trailing and Smear Limits
+
+`astronomy/formulas` has the planning relations between the exposure time, the image scale and the motion of the image on the sensor. `starTrailLength(declination, exposureSeconds, imageScaleArcsecPerPixel)` is the length in pixels of a star trail of an untracked mount, `SIDEREAL_RATE * cos(dec) * t / scale` (the sidereal rate is about 15.041 arcseconds per second of time, with the declination in radians in `[-PI/2, PI/2]`), and `maxExposureBeforeTrail(trailLimitPixels, imageScaleArcsecPerPixel, declination)` is its inverse, the longest exposure in seconds for a trail budget in pixels; it throws a `RangeError` when the cosine of the declination is not larger than `1e-12` (the celestial pole, where an untracked star does not move and the limit is unbounded). The general case of a body that moves at any rate is `exposureSmearPixels(angularRateArcsecPerSecond, exposureSeconds, arcsecPerPixel)` (the displacement in pixels, with the sign of the rate ignored) and `maxExposureForSmear(angularRateArcsecPerSecond, smearLimitPixels, arcsecPerPixel)` (the exposure in seconds that keeps a smear budget, or `Infinity` for a zero rate), which is what to use for a comet, an asteroid or a satellite (a rate in arcseconds per second, see Mount Tracking Rates for the sidereal, lunar and solar rates). `guidingErrorInPixels(rmsArcsec, imageScaleArcsecPerPixel)` and `periodicErrorInPixels(periodicErrorArcsec, imageScaleArcsecPerPixel)` convert an RMS guiding error and a periodic error of the mount into pixels. All of them are straight proportions of a uniform motion in the small-angle approximation: the atmospheric refraction, the field rotation, the polar misalignment and the non-uniform motion of a real mount are not modeled, and an arcsecond budget is not a statement about the FWHM of the stars.
+
+```ts
+import { exposureSmearPixels, guidingErrorInPixels, maxExposureBeforeTrail, maxExposureForSmear, periodicErrorInPixels, starTrailLength } from 'nebulosa/src/astronomy/formulas'
+
+const deg = Math.PI / 180
+
+// An untracked star at the celestial equator, with a 2 arcsecond per pixel scale: the trail of a 10 s exposure (pixels), and at declination 60 degrees (half as long).
+console.log(starTrailLength(0, 10, 2).toFixed(3), starTrailLength(60 * deg, 10, 2).toFixed(3)) // 75.205 37.603
+
+// The exposure that keeps the trail within a pixel, at the equator and at 60 degrees (seconds); at the pole there is no limit and the function throws.
+console.log(maxExposureBeforeTrail(1, 2, 0).toFixed(3), maxExposureBeforeTrail(1, 2, 60 * deg).toFixed(3)) // 0.133 0.266
+try {
+	maxExposureBeforeTrail(1, 2, Math.PI / 2)
+} catch (e) {
+	console.log((e as Error).message) // declination is too close to the celestial pole
+}
+
+// The generic smear: a comet that moves 30 arcseconds per hour (0.00833 arcsec/s) in a 300 s exposure at 1.5 arcsec per pixel, and the limit for a pixel of smear.
+const rate = 30 / 3600
+console.log(exposureSmearPixels(rate, 300, 1.5).toFixed(3), maxExposureForSmear(rate, 1, 1.5).toFixed(1)) // 1.667 180.0
+
+// The sign of the rate is ignored, a stationary body never smears, and the same relation reproduces the sidereal trail at the equator.
+console.log(exposureSmearPixels(-rate, 300, 1.5).toFixed(3), maxExposureForSmear(0, 1, 1.5), exposureSmearPixels(15.041, 10, 2).toFixed(3)) // 1.667 Infinity 75.205 (the last equals the equatorial trail above)
+
+// The mount errors in pixels at 1.5 arcsec per pixel: a guiding RMS of 0.8 arcsec, and a periodic error of 12 arcsec.
+console.log(guidingErrorInPixels(0.8, 1.5).toFixed(3), periodicErrorInPixels(12, 1.5)) // 0.533 8
+```
 
 ## 🔭 Observation
 
