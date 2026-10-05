@@ -15615,17 +15615,316 @@ console.log(
 
 ### Firmata Accelerometer
 
+`MPU6050` drives the InvenSense MPU-6050 six-axis IMU over I2C and implements both `Accelerometer` (`ax`, `ay`, `az` in m/s²) and `Gyroscope` (`gx`, `gy`, `gz` in rad/s). The constructor takes the `client`, the I2C `address` (`MPU6050.ADDRESS` 0x68 by default, `ALTERNATIVE_ADDRESS` 0x69 when AD0 is high), the `pollingInterval` in milliseconds (`DEFAULT_POLLING_INTERVAL`, never below 10) and `MPU6050Options` with the full-scale ranges (`accelerometerRange` 2, 4, 8 or 16 g, default 2; `gyroscopeRange` 250, 500, 1000 or 2000 °/s, default 250; `DEFAULT_MPU6050_OPTIONS`). `start()` registers the handler, sets the read delay to zero, wakes the chip (power-management register), writes the two range registers, requests the first 14-byte burst (accelerometer, temperature and gyroscope registers from 0x3B) and repeats the request on a timer; `stop()` cancels the timer and detaches. Each burst reply is decoded (big-endian signed 16-bit counts per axis; the temperature word is skipped) and converted with the scale of the configured range: `G` divided by the counts per g (16384, 8192, 4096, 2048) for the acceleration, and 131, 65.5, 32.8 or 16.4 counts per degree per second for the gyroscope. Listeners are notified when any axis changed (see Firmata Peripheral Base), and `calculateAcceleration(raw)` and `calculateAngularVelocity(raw)` expose the conversions. The values are in the sensor frame: no gravity removal, offset calibration or filtering is applied, and the gyroscope offset of an individual chip is not corrected.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { MPU6050 } from 'nebulosa/src/devices/firmata/sensors/accelerometer'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+// The wire form of an I2C reply: each data byte as two 7-bit bytes.
+const reply = (address: number, register: number, data: Buffer) => Buffer.from([0xf0, 0x77, address, 0, register & 0x7f, register >> 7, ...[...data].flatMap((byte) => [byte & 0x7f, byte >> 7]), 0xf7])
+
+console.log(MPU6050.ADDRESS, MPU6050.ALTERNATIVE_ADDRESS) // 104 105
+
+// The default ranges (2 g and 250 deg/s): start() wakes the chip, writes the ranges and requests a burst of 14 bytes.
+const imu = new MPU6050(client)
+imu.addListener((device) => console.log(device.ax, device.ay, device.az, device.gx, device.gy, device.gz))
+imu.start()
+console.log(out()) // [ "f0780000f7", "f07668006b000000f7", "f07668001c000000f7", "f07668001b000000f7", "f07668083b000e00f7" ]
+
+// A burst: 1 g on Z (16384 counts) and a rotation of 10 deg/s on X (1310 counts), the temperature word is ignored.
+const burst = Buffer.alloc(14)
+burst.writeInt16BE(0, 0)
+burst.writeInt16BE(0, 2)
+burst.writeInt16BE(16384, 4)
+burst.writeInt16BE(1310, 8)
+client.process(reply(MPU6050.ADDRESS, 0x3b, burst)) // 0 0 9.80665 0.17453292519943298 0 0
+console.log(imu.ax, imu.az, imu.gx, imu.samples) // 0 9.80665 0.17453292519943298 1
+
+console.log(imu.calculateAcceleration(8192), imu.calculateAngularVelocity(131)) // 4.903325 0.017453292519943295
+imu.stop()
+
+// The widest ranges on the alternative address, polled every 50 ms: +-16 g and +-2000 deg/s.
+const wide = new MPU6050(client, MPU6050.ALTERNATIVE_ADDRESS, 50, { accelerometerRange: 16, gyroscopeRange: 2000 })
+wide.start()
+console.log(out()) // [ "f0780000f7", "f07669006b000000f7", "f07669001c001800f7", "f07669001b001800f7", "f07669083b000e00f7" ]
+client.process(reply(MPU6050.ALTERNATIVE_ADDRESS, 0x3b, burst))
+console.log(wide.az, wide.gx, wide.calculateAcceleration(2048), wide.calculateAngularVelocity(16.4)) // 78.4532 1.3941349512881536 9.80665 0.017453292519943295
+wide.stop()
+```
+
 ### Firmata Ammeter
+
+`ACS712` reads an Allegro ACS712 Hall-effect current sensor on one analog pin and implements `Ammeter` (`current` in amperes, positive and negative depending on the direction of the flow). It is an `ADCPeripheral` (see Firmata Peripheral Base), so `start()` sets the pin to analog mode and enables its reports, and every report is converted: `current = (raw - zeroSteps) * aref / (adcResolution * voltsPerAmp)`, where `zeroSteps` is the ADC count at the zero-current voltage. The `ACS712Options` are the variant `range` (5, 20 or 30 A, which selects 0.185, 0.1 or 0.066 V/A), `aref` in volts (5), `zeroCurrentVoltage` in volts (2.5, half of the supply), `adcResolution` as the largest ADC count (1023) and `voltsPerAmp`, which overrides the range sensitivity (`DEFAULT_ACS712_OPTIONS`). Use the actual ADC reference of the board in `aref` and the measured no-load voltage in `zeroCurrentVoltage`, since the sensor offset varies with supply and unit and no filtering is applied: a reading is the instantaneous value (it does not average an AC waveform). The DC current of a focuser or a dew heater is the typical use.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { ACS712, DEFAULT_ACS712_OPTIONS } from 'nebulosa/src/devices/firmata/sensors/ammeter'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+// A board whose pin 0 is analog channel 0 (10-bit).
+client.process(Buffer.from([0xf0, 0x6c, 2, 10, 127, 0xf7]))
+client.process(Buffer.from([0xf0, 0x6a, 0, 127, 0xf7]))
+out()
+
+console.log(DEFAULT_ACS712_OPTIONS) // { range: 5, aref: 5, zeroCurrentVoltage: 2.5, adcResolution: 1023, voltsPerAmp: 0.185 }
+
+// The 5 A variant with the defaults: zero current is raw 511.5, so raw 600 is about 2.34 A and raw 400 about -2.94 A. start() first commits the cached raw value 0 (-13.5 A).
+const ammeter = new ACS712(client, 0)
+ammeter.addListener((device) => console.log('current', device.current))
+ammeter.start()
+console.log(out()) // [ "f40002", "ef01" ]
+const analog = (raw: number) => client.process(Buffer.from([0xe0, raw & 0x7f, raw >> 7]))
+analog(600)
+analog(400)
+console.log(ammeter.current, ammeter.samples) // -2.945761010277139 3
+ammeter.stop()
+
+// The 30 A variant (0.066 V/A) on a 3.3 V reference with a 12-bit converter and a measured 1.64 V zero.
+const wide = new ACS712(client, 0, { range: 30, aref: 3.3, adcResolution: 4095, zeroCurrentVoltage: 1.64 })
+wide.start()
+analog(2600)
+console.log(wide.current) // 6.897546897546897
+wide.stop()
+
+// An explicit sensitivity overrides the range: a 100 mV/A module.
+const custom = new ACS712(client, 0, { voltsPerAmp: 0.1 })
+custom.start()
+analog(767)
+console.log(custom.current) // 12.48778103616813
+custom.stop()
+```
 
 ### Firmata Analog Thermometer
 
+`LM35` reads a Texas Instruments LM35 analog temperature sensor (10 mV per degree Celsius) on one analog pin and implements `Thermometer` (`temperature` in degrees Celsius). It is an `ADCPeripheral` (see Firmata Peripheral Base): `new LM35(client, pin, aref?)` with `aref` the ADC reference voltage in volts (5 by default), `start()` sets the pin to analog mode and enables its reports, and each report is converted with `temperature = aref * 100 * raw / 1023`, for a 10-bit converter, so the `aref` must match the real reference of the board. The plain LM35 reads from about 2 °C to 150 °C (no negative range without a bias network), no averaging is applied (the ADC noise of the board shows in the reading; average at the consumer), and the cached value is committed once on `start()`. For one-wire digital sensors see Firmata Digital Thermometer.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { LM35 } from 'nebulosa/src/devices/firmata/sensors/thermometer'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+// A board whose pin 0 is analog channel 0 (10-bit).
+client.process(Buffer.from([0xf0, 0x6c, 2, 10, 127, 0xf7]))
+client.process(Buffer.from([0xf0, 0x6a, 0, 127, 0xf7]))
+out()
+
+// A 5 V reference: raw 62 is 30.3 degrees. The listener prints every change, starting with the cached raw value 0.
+const thermometer = new LM35(client, 0)
+thermometer.addListener((device) => console.log('temperature', device.temperature))
+thermometer.start()
+console.log(out()) // [ "f40002", "ef01" ]
+const analog = (raw: number) => client.process(Buffer.from([0xe0, raw & 0x7f, raw >> 7]))
+analog(62)
+analog(62)
+analog(80)
+console.log(thermometer.temperature, thermometer.samples) // 39.100684261974585 4
+thermometer.stop()
+console.log(out()) // [ "ef00" ]
+
+// A 3.3 V reference: raw 77.
+const reference = new LM35(client, 0, 3.3)
+reference.start()
+analog(77)
+console.log(reference.temperature, reference.calculate(100), reference.temperature) // 24.838709677419356 true 32.25806451612903
+reference.stop()
+```
+
 ### Firmata Barometer and Altimeter
+
+`BMP180` and `BMP280` are the Bosch barometric pressure sensors over I2C. Both implement `Barometer` (`pressure` in millibar), `Altimeter` (`altitude`, a `Distance` in astronomical units like every distance of the library, derived from the pressure with the standard atmosphere through `fromPressure`; `toMeter` converts it to metres) and `Thermometer` (`temperature` in degrees Celsius). On `start()` each driver registers the handler, sets the I2C read delay to zero and requests the factory calibration block of the chip (22 bytes from register 0xAA for the BMP180, 24 bytes from 0x88 for the BMP280); only when that block arrives does polling begin, so a board that never answers stays silent. Readings are compensated with the datasheet formulas and delivered to the listeners (see Firmata Peripheral Base).
+
+`BMP180(client, mode?, pollingInterval?)` has the fixed address `BMP180.ADDRESS` (0x77) and takes a `BMP180Mode` oversampling (`ULTRA_LOW_POWER` 0 by default, `STANDARD`, `HIGH_RESOLUTION`, `ULTRA_HIGH_RESOLUTION`). A cycle writes the temperature conversion command, waits 5 ms, reads the 2-byte raw temperature, then writes the pressure command with the oversampling bits, waits 30 ms and reads 3 bytes; the pressure reading fires the listeners. The polling interval never goes below 1000 ms. `calculateTrueTemperature(UT)` (degrees Celsius) and `calculateTruePressure(UP)` (pascal, using the last temperature term) expose the compensation.
+
+`BMP280(client, address?, pollingInterval?, options?)` uses `BMP280.ADDRESS` (0x76) or `BMP280.ALTERNATIVE_ADDRESS` (0x77) and `BMP280Options`: `mode` (`'sleep'`, `'forced'`, `'normal'`), `temperatureSampling` and `pressureSampling` (`'skip'`, `'x1'` to `'x16'`), `filter` (`'off'`, `'x2'` to `'x16'`) and `standbyDuration` in milliseconds; `DEFAULT_BMP280_OPTIONS` is normal mode, 1x sampling, no filter and 1000 ms. `start()` writes the config and control registers, and each cycle requests the 6-byte data frame from 0xF7 (pressure then temperature, 20 bits each); in forced mode it first retriggers the conversion and waits its worst-case duration. The interval never goes below 100 ms. `compensateTemperature(adcT)` and `compensatePressure(adcP)` expose the floating-point compensation and the pressure one depends on the temperature computed just before. The altitude is a pressure altitude, so it changes with the weather with the weather and no sea-level reduction is applied.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { toMeter } from 'nebulosa/src/math/units/distance'
+import { BMP180, BMP180Mode, BMP280, DEFAULT_BMP280_OPTIONS } from 'nebulosa/src/devices/firmata/sensors/barometer'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+// The wire form of an I2C reply: each data byte as two 7-bit bytes.
+const reply = (address: number, register: number, data: Buffer) => client.process(Buffer.from([0xf0, 0x77, address, 0, register & 0x7f, register >> 7, ...[...data].flatMap((byte) => [byte & 0x7f, byte >> 7]), 0xf7]))
+
+console.log(BMP180.ADDRESS, BMP280.ADDRESS, BMP280.ALTERNATIVE_ADDRESS, DEFAULT_BMP280_OPTIONS) // 119 118 119 { mode: "normal", temperatureSampling: "x1", pressureSampling: "x1", filter: "off", standbyDuration: 1000 }
+
+// BMP180 with the calibration of the datasheet example: start() requests the 22-byte block.
+const bmp180 = new BMP180(client, BMP180Mode.ULTRA_LOW_POWER)
+bmp180.addListener((device) => console.log('BMP180', device.temperature, device.pressure, toMeter(device.altitude)))
+bmp180.start()
+console.log(out()) // [ "f0780000f7", "f07677082a011600f7" ]
+
+const calibration180 = Buffer.alloc(22)
+;[408, -72, -14383].forEach((value, i) => calibration180.writeInt16BE(value, i * 2))
+;[32741, 32757, 23153].forEach((value, i) => calibration180.writeUInt16BE(value, 6 + i * 2))
+;[6190, 4, -32768, -8711, 2868].forEach((value, i) => calibration180.writeInt16BE(value, 12 + i * 2))
+reply(BMP180.ADDRESS, 0xaa, calibration180)
+
+// The temperature conversion is started and read after 5 ms: raw 27898 is 15.0 C.
+await Bun.sleep(50)
+console.log(out()) // [ "f076770074012e00f7", "f076770876010200f7" ]
+reply(BMP180.ADDRESS, 0xf6, Buffer.from([0x6c, 0xfa]))
+
+// The pressure conversion is read after 30 ms: raw 23843 (shifted by 8 bits in the 3-byte register).
+await Bun.sleep(80)
+console.log(out()) // [ "f076770074013400f7", "f076770876010300f7" ]
+reply(BMP180.ADDRESS, 0xf6, Buffer.from([0x5d, 0x23, 0x00]))
+console.log(bmp180.temperature, bmp180.pressure, toMeter(bmp180.altitude), bmp180.samples) // 15 699.64 3016.2264051728516 1 (the listener also printed the same three values)
+console.log(bmp180.calculateTrueTemperature(27898), bmp180.calculateTruePressure(23843)) // 15 69964
+bmp180.stop()
+
+// BMP280 with the calibration of the datasheet example.
+const bmp280 = new BMP280(client)
+bmp280.addListener((device) => console.log('BMP280', device.temperature, device.pressure, toMeter(device.altitude)))
+bmp280.start()
+console.log(out()) // [ "f0780000f7", "f076760075012001f7", "f076760074012700f7", "f076760808011800f7" ]
+
+const calibration280 = Buffer.alloc(24)
+calibration280.writeUInt16LE(27504, 0)
+calibration280.writeInt16LE(26435, 2)
+calibration280.writeInt16LE(-1000, 4)
+calibration280.writeUInt16LE(36477, 6)
+;[-10685, 3024, 2855, 140, -7, 15500, -14600, 6000].forEach((value, i) => calibration280.writeInt16LE(value, 8 + i * 2))
+reply(BMP280.ADDRESS, 0x88, calibration280)
+
+// A data frame with raw pressure 415148 and raw temperature 519888, each shifted by 4 bits into 3 bytes.
+await Bun.sleep(50)
+console.log(out()) // [ "f076760877010600f7" ]
+const twenty = (value: number) => [(value >> 12) & 0xff, (value >> 4) & 0xff, (value << 4) & 0xf0]
+reply(BMP280.ADDRESS, 0xf7, Buffer.from([...twenty(415148), ...twenty(519888)]))
+console.log(bmp280.temperature, bmp280.pressure, toMeter(bmp280.altitude), bmp280.samples) // 25.08247793081682 1006.5326677582515 56.067236552213714 1 (the listener also printed the same three values)
+console.log(bmp280.compensateTemperature(519888), bmp280.compensatePressure(415148)) // 25.08247793081682 100653.26677582515
+bmp280.stop()
+
+// A BMP280 on the alternative address in forced mode with 16x sampling, the filter on and 250 ms standby.
+const forced = new BMP280(client, BMP280.ALTERNATIVE_ADDRESS, 1000, { mode: 'forced', temperatureSampling: 'x2', pressureSampling: 'x16', filter: 'x4', standbyDuration: 250 })
+forced.start()
+console.log(out()) // [ "f0780000f7", "f076770075016800f7", "f076770074015500f7", "f076770808011800f7" ]
+forced.stop()
+```
 
 ### Firmata Character Display
 
 ### Firmata DAC
 
+`MCP4725` drives the Microchip MCP4725 12-bit I2C digital-to-analog converter. The constructor takes the `client`, the I2C `address` (`MCP4725.ADDRESS` 0x62 or `ALTERNATIVE_ADDRESS` 0x63, selected by the A0 pin of the board) and `MCP4725Options` with the initial `value` (the 12-bit code, 0 to 4095, rounded and clamped to that range) and the `powerDownMode` (`'normal'` for an active output, or `'1k'`, `'100k'` and `'500k'` for the output pulled to ground through that resistor); `DEFAULT_MCP4725_OPTIONS` is code 0 in normal mode. The output voltage is `value / 4095 * Vdd` and the converter is only a writer: nothing is ever read back from the chip.
+
+`start()` registers the handler, sets the read delay to zero and writes the current state with the fast-mode command (two bytes: the power-down bits and the high nibble of the code, then the low byte); `stop()` detaches the handler and leaves the output as it was. The `value` and `powerDownMode` properties are accessors: a change is normalised, written when the peripheral is started and then notifies the listeners (see Firmata Peripheral Base), while assigning the current value does nothing. Before `start()` a change is only staged and goes out with the first write. `persist()` writes the current code and power-down mode to the EEPROM of the chip with the write-DAC-and-EEPROM command (`WRITE_DAC_EEPROM_CMD`, three bytes), so the output powers up in that state; the EEPROM has a limited number of write cycles and the write takes some milliseconds on the chip, so it is a configuration step and not a per-sample operation. The static members are `MAX_VALUE` (4095) and the bit constants of the two commands.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { DEFAULT_MCP4725_OPTIONS, MCP4725 } from 'nebulosa/src/devices/firmata/components/dac'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+console.log(MCP4725.ADDRESS, MCP4725.ALTERNATIVE_ADDRESS, MCP4725.MAX_VALUE, DEFAULT_MCP4725_OPTIONS) // 98 99 4095 { value: 0, powerDownMode: "normal" }
+
+// Half scale (2048 of 4095, about 1.65 V on a 3.3 V supply): start() writes the two-byte fast-mode frame.
+const dac = new MCP4725(client, MCP4725.ADDRESS, { value: 2048 })
+dac.addListener((device) => console.log('dac', device.value, device.powerDownMode))
+dac.start()
+console.log(out()) // [ "f0780000f7", "f076620008000000f7" ]
+
+// Changing the code writes it and notifies the listeners; the same code again does nothing.
+dac.value = 4095
+dac.value = 4095
+console.log(dac.value, out()) // 4095 [ "f07662000f007f01f7" ] (the listener printed once: dac 4095 normal)
+
+// Non-integer codes are rounded, and the output can be released through a 100 kohm resistor.
+dac.value = 1000.4
+dac.powerDownMode = '100k'
+console.log(dac.value, dac.powerDownMode, out()) // 1000 100k [ "f076620003006801f7", "f076620023006801f7" ] (the listener printed twice)
+
+// Persist the code and the power-down mode to the EEPROM of the chip.
+dac.persist()
+console.log(out()) // [ "f076620064003e000001f7" ]
+dac.stop()
+
+// A staged state on the alternative address goes out with start().
+const staged = new MCP4725(client, MCP4725.ALTERNATIVE_ADDRESS, { value: 100, powerDownMode: '500k' })
+staged.start()
+console.log(out()) // [ "f0780000f7", "f076630030006400f7" ]
+staged.stop()
+```
+
 ### Firmata Digital Thermometer
+
+`DS18B20` reads a Dallas/Maxim DS18B20 1-Wire thermometer through the One-Wire feature of the client (see Firmata One-Wire) and implements `Thermometer` (`temperature` in degrees Celsius, 0.0625 °C per least significant bit of the 16-bit reading). The constructor takes the `client`, the 1-Wire `pin`, the `pollingInterval` in milliseconds (`DEFAULT_POLLING_INTERVAL`, never below 1000) and `DS18B20Options`: the ROM `address` (8 bytes; when given the bus is not searched), `skip` (use SKIP ROM, valid only with a single device on the bus), the `resolution` (9, 10, 11 or 12 bits, default 12, with conversion waits of 94, 188, 375 and 750 ms) and the `powerMode` (`'normal'` or `'parasitic'`); `DEFAULT_DS18B20_OPTIONS` holds the defaults and an address that is not 8 bytes is rejected. `start()` configures the pin and, without an address and without `skip`, searches the bus and adopts the first family-0x28 address of the reply (an alarm search reply is ignored). It then writes the resolution to the scratchpad when it is not 12 bits, and each polling cycle starts a conversion (Convert T), waits the conversion time and requests the 9-byte scratchpad; the reply is accepted only for that read (matched by correlation ID), only with a valid Maxim CRC-8 (`DS18B20.isScratchpadValid`), and then decoded. A read cycle that is still outstanding is not overlapped, and `stop()` invalidates any conversion in flight. A first reading of exactly 0 °C is still delivered to the listeners (see Firmata Peripheral Base). The static members are the command bytes (`CONVERT_T_CMD`, `READ_SCRATCHPAD_CMD`, `WRITE_SCRATCHPAD_CMD`), `FAMILY_CODE`, the default alarm limits and `SCRATCHPAD_SIZE`. The class logs the address it found with `console.info`.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { encodePacked7Bit } from 'nebulosa/src/devices/firmata/codecs/numeric'
+import { CRC } from 'nebulosa/src/io/crc'
+import { DEFAULT_DS18B20_OPTIONS, DS18B20 } from 'nebulosa/src/devices/firmata/sensors/thermometer'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+console.log(DEFAULT_DS18B20_OPTIONS, DS18B20.FAMILY_CODE, DS18B20.SCRATCHPAD_SIZE) // { resolution: 12, powerMode: "normal", skip: false } 40 9
+
+// A scratchpad with temperature 25.0625 C (raw 401 = 0x0191) and its CRC-8 in the ninth byte.
+const scratchpad = (raw: number) => {
+	const data = Buffer.from([raw & 0xff, (raw >> 8) & 0xff, 0x4b, 0x46, 0x7f, 0xff, 0x0c, 0x10, 0])
+	data[8] = CRC.crc8maxim.compute(data, undefined, 0, 8)
+	return data
+}
+const pad = scratchpad(401)
+console.log(pad.toString('hex'), DS18B20.isScratchpadValid(pad)) // 91014b467fff0c1070 true
+
+// With a known ROM address and 9-bit resolution: start() configures the pin, writes the resolution and starts a conversion.
+const rom = Buffer.from([0x28, 0xff, 0x64, 0x1e, 0x0f, 0x16, 0x03, 0x4b])
+const sensor = new DS18B20(client, ESP8266.D4, 1000, { address: rom, resolution: 9 })
+sensor.addListener((device) => console.log('temperature', device.temperature))
+sensor.start()
+console.log(out()) // [ "f073410201f7", "f0732502287e1373714145014b1c2d327403f7", "f0732502287e1373714145014b0801f7" ]
+
+// After the 94 ms conversion the scratchpad is requested (correlation ID 0); the reply is decoded.
+await Bun.sleep(150)
+console.log(out()) // [ "f0732d02287e1373714145014b12000000402ff7" ]
+const reply = (id: number, data: Buffer) => client.process(Buffer.from([0xf0, 0x73, 0x43, ESP8266.D4, ...encodePacked7Bit([id & 0xff, id >> 8, ...data]), 0xf7]))
+reply(0, pad)
+console.log(sensor.temperature, sensor.samples) // 25.0625 1
+
+sensor.stop()
+
+// Without an address the bus is searched and the first DS18B20 (family 0x28) is adopted, then it is measured.
+const found = new DS18B20(client, ESP8266.D4)
+found.start()
+console.log(out()) // [ "f073410201f7", "f0734002f7" ]
+const other = [0x10, 1, 2, 3, 4, 5, 6, 7]
+client.process(Buffer.from([0xf0, 0x73, 0x42, ESP8266.D4, ...encodePacked7Bit([...other, ...rom]), 0xf7]))
+console.log(out()) // [ "f0732502287e1373714145014b0801f7" ]
+found.stop()
+
+// SKIP ROM: a single device on the bus needs no address and no search.
+const single = new DS18B20(client, ESP8266.D4, 1000, { skip: true, powerMode: 'parasitic' })
+single.start()
+console.log(out()) // [ "f073410200f7", "f07323024400f7" ]
+single.stop()
+```
 
 ### Firmata FM Receivers
 
@@ -15633,15 +15932,404 @@ console.log(
 
 ### Firmata Hygrometer
 
+`AM2320` and `SHT21` are I2C humidity and temperature sensors; both implement `Hygrometer` (`humidity`, relative humidity in percent) and `Thermometer` (`temperature` in degrees Celsius) and notify listeners through the common peripheral base (see Firmata Peripheral Base). Both are polled on a timer that never runs faster than once per second, and `start()`/`stop()` register and detach the handler, with `start()` enabling I2C with a zero read delay.
+
+`AM2320(client, pollingInterval?)` lives at `AM2320.ADDRESS` (0x5C). Each cycle wakes the sensor with an empty write, waits `WAKE_UP_DELAY_MS`, writes the read-holding-registers command for four registers from register 0, waits `MEASUREMENT_DELAY_MS` and requests an 8-byte frame. The frame (function code 3, length 4, humidity and temperature as big-endian words in tenths, CRC-16 Modbus little-endian in the last two bytes) is accepted only when its header and CRC match; the temperature uses a sign bit (bit 15) and magnitude, not two's complement. An overlapping cycle is skipped, and a frame that does not validate is ignored.
+
+`SHT21(client, poolingInterval?)` (note the spelling of the option, as in the source) lives at `SHT21.ADDRESS` (0x40). Each cycle reads two bytes from the hold-master temperature command (0xE3) and two from the humidity command (0xE5). The two low status bits are masked and the datasheet formulas are applied, `-46.85 + 175.72 * S / 65536` degrees Celsius and `-6 + 125 * S / 65536` percent, with the humidity clamped to 0..100; the listeners fire when the humidity reply is processed, if either value changed. `reset()` sends the soft-reset command.
+
+Neither driver compensates the humidity for temperature or applies a calibration offset, and neither checks the SHT21 CRC byte (the reply is two bytes).
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { CRC } from 'nebulosa/src/io/crc'
+import { AM2320, SHT21 } from 'nebulosa/src/devices/firmata/sensors/hygrometer'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+// The wire form of an I2C reply: each data byte as two 7-bit bytes.
+const reply = (address: number, register: number, data: Buffer) => client.process(Buffer.from([0xf0, 0x77, address, 0, register & 0x7f, register >> 7, ...[...data].flatMap((byte) => [byte & 0x7f, byte >> 7]), 0xf7]))
+
+console.log(AM2320.ADDRESS, SHT21.ADDRESS) // 92 64
+
+// AM2320: start() wakes the sensor, writes the read command and asks for the 8-byte frame.
+const am2320 = new AM2320(client)
+am2320.addListener((device) => console.log('AM2320', device.humidity, device.temperature))
+am2320.start()
+await Bun.sleep(50)
+console.log(out()) // [ "f0780000f7", "f0765c00f7", "f0765c00030000000400f7", "f0765c080800f7" ]
+
+// A frame with 65.2 % (652) and 25.1 C (251), followed by its CRC-16 Modbus.
+const frame = Buffer.from([0x03, 0x04, 0x02, 0x8c, 0x00, 0xfb, 0, 0])
+frame.writeUInt16LE(CRC.crc16modbus.compute(frame, undefined, 0, 6), 6)
+reply(AM2320.ADDRESS, 0, frame)
+console.log(am2320.humidity, am2320.temperature, am2320.samples) // 65.2 25.1 1 (the listener printed the same two values)
+
+// A negative temperature uses the sign bit: -10.3 C is 0x8067.
+const cold = Buffer.from([0x03, 0x04, 0x01, 0xf4, 0x80, 0x67, 0, 0])
+cold.writeUInt16LE(CRC.crc16modbus.compute(cold, undefined, 0, 6), 6)
+reply(AM2320.ADDRESS, 0, cold)
+console.log(am2320.humidity, am2320.temperature) // 50 -10.3 (the listener printed the same two values)
+am2320.stop()
+
+// SHT21: start() requests the temperature (0xE3) and humidity (0xE5) registers.
+const sht21 = new SHT21(client)
+sht21.addListener((device) => console.log('SHT21', device.humidity, device.temperature))
+sht21.start()
+console.log(out()) // [ "f0780000f7", "f076400863010200f7", "f076400865010200f7" ]
+
+// Raw 26000 (0x6590) is about 22.9 C and raw 31000 (0x7918) about 53.1 %.
+reply(SHT21.ADDRESS, 0xe3, Buffer.from([0x65, 0x90]))
+reply(SHT21.ADDRESS, 0xe5, Buffer.from([0x79, 0x18]))
+console.log(sht21.temperature, sht21.humidity, sht21.samples) // 22.863134765625 53.1278076171875 1 (the listener printed the humidity first, then the temperature)
+
+sht21.reset()
+console.log(out()) // [ "f07640007e01f7" ]
+sht21.stop()
+```
+
 ### Firmata IO Expander
+
+`PCF8574` drives the NXP/TI PCF8574 8-bit I2C I/O expander and implements `IOExpander`. The chip is quasi-bidirectional: a pin is an input when it is written high (released) and an output when it is driven low or high, so the driver stages an output byte plus an input mask and writes the effective byte, `(output & ~inputMask) | inputMask`. The constructor takes the `client`, the I2C `address` (`PCF8574.ADDRESS` 0x20, valid from `MIN_ADDRESS` 0x20 to `MAX_ADDRESS` 0x27 for the PCF8574 and from `ALTERNATIVE_MIN_ADDRESS` 0x38 to `ALTERNATIVE_MAX_ADDRESS` 0x3F for the PCF8574A), the `pollingInterval` in milliseconds (`DEFAULT_POLLING_INTERVAL`; a value of 0 or less disables the timer) and `PCF8574Options` with the initial `output` byte and the `inputMask` (`DEFAULT_PCF8574_OPTIONS`: both 0xFF, every pin released and read as an input). Pins are numbered 0 to 7 (`PIN_COUNT`), pin n being bit n of the port; bytes are truncated and clamped to 0..255.
+
+`start()` registers the handler, enables I2C, writes the staged byte, requests a port snapshot and starts polling; `stop()` cancels the timer and detaches. `pinMode(pin, mode)` sets or clears the input bit (`PinMode.INPUT` makes it an input, any other mode an output) and flushes. `pinWrite(pin, value, flush?)` stages one bit, makes that pin an output and, unless `flush` is `false`, writes the port and requests a snapshot, so several writes can be batched and sent with a final `flush()`. `pinRead(pin)` returns the logic level of the latest snapshot without a bus transaction, `refresh()` requests a fresh snapshot with a registerless one-byte read, and a changed snapshot notifies the listeners (see Firmata Peripheral Base). `pinRead` therefore reflects the chip only after a reply, and a pin written as an output reads back its driven level. An index outside 0..7 is a programming error, and `refresh()` throws before `start()`. The chip has no interrupt handling here: input changes are seen at the polling period.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { DEFAULT_PCF8574_OPTIONS, PCF8574 } from 'nebulosa/src/devices/firmata/components/io'
+import { PinMode } from 'nebulosa/src/devices/firmata/types'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+// The wire form of the registerless one-byte reply of the expander.
+const reply = (address: number, state: number) => client.process(Buffer.from([0xf0, 0x77, address, 0, 0x7f, 0x7f, state & 0x7f, state >> 7, 0xf7]))
+
+console.log(PCF8574.ADDRESS, PCF8574.PIN_COUNT, DEFAULT_PCF8574_OPTIONS) // 32 8 { output: 255, inputMask: 255 }
+
+// All pins released high: start() writes 0xff and requests a snapshot (pollingInterval 0 disables the timer).
+const expander = new PCF8574(client, PCF8574.ADDRESS, 0)
+expander.addListener((device) => console.log('port', device.pinRead(0), device.pinRead(1), device.pinRead(7)))
+expander.start()
+console.log(out()) // [ "f0780000f7", "f07620007f01f7", "f07620080100f7" ]
+
+// Pins 0 and 1 become outputs (written 0 and 1): the written byte keeps the other pins released.
+expander.pinWrite(0, false, false)
+expander.pinWrite(1, true, false)
+expander.flush()
+console.log(out()) // [ "f07620007e01f7", "f07620080100f7" ]
+
+// The chip reports the port 0x7e: pin 0 low (driven), pin 1 high and pin 7 pulled low by a switch.
+reply(PCF8574.ADDRESS, 0x7e)
+console.log(expander.pinRead(0), expander.pinRead(1), expander.pinRead(7)) // false true false (the listener printed the same levels)
+
+// Pin 0 back to an input and a fresh snapshot.
+expander.pinMode(0, PinMode.INPUT)
+expander.refresh()
+console.log(out()) // [ "f07620007f01f7", "f07620080100f7", "f07620080100f7" ]
+expander.stop()
+
+// The PCF8574A range, with an initial output byte of 0x0f on the lower nibble and the upper nibble as inputs.
+const alternative = new PCF8574(client, PCF8574.ALTERNATIVE_MIN_ADDRESS, 0, { output: 0x0f, inputMask: 0xf0 })
+alternative.start()
+console.log(out()) // [ "f0780000f7", "f07638007f01f7", "f07638080100f7" ]
+alternative.stop()
+```
 
 ### Firmata Light Sensors
 
+`BH1750`, `TSL2561`, `MAX44009` (I2C) and `TEMT6000` (analog) report ambient illuminance as `lux` in lux and implement `Luxmeter`; listeners are notified through the common peripheral base (see Firmata Peripheral Base). The conversions are the ones of the datasheets and nothing else: no spectral correction, no cosine correction and no calibration against a reference, so the readings are indicative and suit relative sky-brightness or flat-panel monitoring rather than photometry.
+
+`BH1750(client, address?, pollingInterval?, options?)` uses `BH1750.ADDRESS` (0x23) or `ALTERNATIVE_ADDRESS` (0x5C). The `BH1750Options` are the `mode` (`'continuousHighResolution'`, `'continuousHighResolution2'`, `'continuousLowResolution'` and the three `oneTime...` variants) and the `measurementTime` (the MTreg value, 31 to 254, 69 by default; `DEFAULT_BH1750_OPTIONS`). `start()` powers the chip on, writes the two MTreg commands, starts a measurement, waits the conversion time (180 ms in the high resolution modes and 24 ms in the low one, scaled by MTreg/69) and reads two bytes; the timer period is the larger of that delay and the polling interval. One-time modes repeat the power-on and MTreg writes before every measurement, `stop()` powers the chip down and `reset()` clears the data register. The reading is `raw * (69 / MTreg) / 1.2` (2.4 in the 0.5 lx high resolution mode 2); `raw` holds the last 16-bit value and `calculateLux(raw)` exposes the conversion.
+
+`TSL2561(client, address?, pollingInterval?, options?)` uses `TSL2561.ADDRESS` (0x39, the floating address pin), `LOW_ADDRESS` (0x29) or `HIGH_ADDRESS` (0x49) and `TSL2561Options` with `gain` (1 or 16) and `integrationTime` (13.7, 101 or 402 ms); `DEFAULT_TSL2561_OPTIONS` is 1x and 402 ms. `start()` powers up, writes the timing register and requests the four bytes of the two channels from `COMMAND_BIT | BLOCK_BIT | DATA0LOW_REG` after one integration period, then repeats at the larger of the integration time and the polling interval. A reply is the little-endian `broadband` (channel 0) and `infrared` (channel 1); `calculateLux(broadband, infrared)` applies the datasheet T-package piecewise formula to the counts normalised by the gain and the integration time. When either channel reaches the clip level of the integration time (5047, 37177 or 65535) the result is `SATURATED_LUX` (65536), a sentinel and not a measurement; a ratio of the channels above 1.3 or a zero broadband count gives 0.
+
+`MAX44009(client, address?, pollingInterval?, options?)` uses `MAX44009.ADDRESS` (0x4A) or `ALTERNATIVE_ADDRESS` (0x4B) and `MAX44009Options.continuousMode` (`false` by default). `start()` writes the configuration register and then reads the high lux register with a repeated start every `max(100, pollingInterval)` ms, since the chip does not auto-increment for a burst. The reply is a single byte (exponent in the high nibble, mantissa in the low one) and `calculateLux(high, low?)` gives `2^exponent * mantissa * 0.045`, with the low-nibble precision only when the low byte is supplied; the exponent 15 is the overrange `MAX_LUX` (188006.4).
+
+`TEMT6000(client, pin, options?)` is an `ADCPeripheral` with `TEMT6000Options` `aref` in volts (5), `loadResistance` in ohms (10000), `adcResolution` as the largest count (1023) and `microampsPerLux` (0.5); every report is multiplied by `aref * 1e6 / (loadResistance * adcResolution * microampsPerLux)`. Its `name` is the string `'TEMPT6000'`.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { BH1750, DEFAULT_BH1750_OPTIONS, DEFAULT_MAX44009_OPTIONS, DEFAULT_TEMT6000_OPTIONS, DEFAULT_TSL2561_OPTIONS, MAX44009, TEMT6000, TSL2561 } from 'nebulosa/src/devices/firmata/sensors/luxmeter'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+// The wire form of an I2C reply: each value as two 7-bit bytes, the register included.
+const reply = (address: number, register: number, data: Buffer) => client.process(Buffer.from([0xf0, 0x77, address, 0, register & 0x7f, register >> 7, ...[...data].flatMap((byte) => [byte & 0x7f, byte >> 7]), 0xf7]))
+
+console.log(DEFAULT_BH1750_OPTIONS, DEFAULT_TSL2561_OPTIONS, DEFAULT_MAX44009_OPTIONS, DEFAULT_TEMT6000_OPTIONS) // { mode: "continuousHighResolution", measurementTime: 69 } { gain: 1, integrationTime: 402 } { continuousMode: false } { aref: 5, loadResistance: 10000, adcResolution: 1023, microampsPerLux: 0.5 }
+
+// BH1750 in continuous high resolution: power on, the two MTreg writes, the mode command, then a 2-byte read.
+const bh1750 = new BH1750(client)
+bh1750.addListener((device) => console.log('BH1750', device.lux, device.raw))
+bh1750.start()
+await Bun.sleep(250)
+console.log(out()) // [ "f0780000f7", "f07623000100f7", "f07623004200f7", "f07623006500f7", "f07623001000f7", "f07623080200f7" ]
+reply(BH1750.ADDRESS, 0, Buffer.from([0x01, 0xf4])) // 500 counts
+console.log(bh1750.lux, bh1750.raw, bh1750.samples) // 416.6666666666667 500 1 (the listener printed the same lux and raw)
+console.log(bh1750.calculateLux(12000)) // 10000
+bh1750.stop()
+console.log(out()) // [ "f07623000000f7" ]
+
+// One-time 0.5 lx mode on the alternative address with MTreg 138: counts are scaled by 69 / 138 and divided by 2.4.
+const precise = new BH1750(client, BH1750.ALTERNATIVE_ADDRESS, 1000, { mode: 'oneTimeHighResolution2', measurementTime: 138 })
+console.log(precise.calculateLux(1000)) // 208.33333333333334
+
+// TSL2561 at 16x gain and 101 ms: the first read follows one integration period.
+const tsl2561 = new TSL2561(client, TSL2561.ADDRESS, 1000, { gain: 16, integrationTime: 101 })
+tsl2561.addListener((device) => console.log('TSL2561', device.lux, device.broadband, device.infrared))
+tsl2561.start()
+console.log(out()) // [ "f0780000f7", "f076390000010300f7", "f076390001011100f7" ]
+await Bun.sleep(200)
+console.log(out()) // [ "f07639081c010400f7" ]
+const channels = Buffer.alloc(4)
+channels.writeUInt16LE(1500, 0)
+channels.writeUInt16LE(300, 2)
+reply(TSL2561.ADDRESS, 0x9c, channels)
+console.log(tsl2561.lux, tsl2561.broadband, tsl2561.infrared) // 142.43259178732086 1500 300 (the listener printed the same values)
+console.log(tsl2561.calculateLux(40000, 100), tsl2561.calculateLux(0, 0)) // 65536 0
+tsl2561.stop()
+
+// MAX44009 in continuous mode: the high byte 0x54 is exponent 5 and mantissa 0x40, and the low nibble 0xa adds 0x0a to the mantissa.
+const max44009 = new MAX44009(client, MAX44009.ADDRESS, 1000, { continuousMode: true })
+max44009.addListener((device) => console.log('MAX44009', device.lux))
+max44009.start()
+console.log(out()) // [ "f0780000f7", "f0764a0002000301f7", "f0764a4803000100f7" ]
+reply(MAX44009.ADDRESS, 3, Buffer.from([0x54]))
+console.log(max44009.lux, max44009.calculateLux(0x54, 0x0a), max44009.calculateLux(0xf0)) // 92.16 106.56 188006.4 (the listener printed 92.16)
+max44009.stop()
+
+// TEMT6000 on analog pin 0 with the 5 V front end: one step is about 0.98 lux.
+client.process(Buffer.from([0xf0, 0x6c, 2, 10, 127, 0xf7]))
+client.process(Buffer.from([0xf0, 0x6a, 0, 127, 0xf7]))
+out()
+const temt6000 = new TEMT6000(client, 0)
+temt6000.addListener((device) => console.log('TEMT6000', device.lux))
+temt6000.start()
+console.log(out()) // [ "f40002", "ef01" ] (the listener printed the cached 0)
+client.process(Buffer.from([0xe0, 100 & 0x7f, 100 >> 7]))
+console.log(temt6000.lux, temt6000.calculate(1023), temt6000.name) // 97.75171065493646 true TEMPT6000 (the listener printed 97.75171065493646)
+temt6000.stop()
+```
+
 ### Firmata Magnetometer
+
+`HMC5883L` drives the Honeywell HMC5883L three-axis magnetometer over I2C and implements `Magnetometer` (`x`, `y` and `z` in gauss, in the sensor frame). The constructor takes the `client`, the I2C `address` (`HMC5883L.ADDRESS`, 0x1E), the `pollingInterval` in milliseconds (`DEFAULT_POLLING_INTERVAL`) and `HMC5883LOptions`: `sampleAveraging` (1, 2, 4 or 8 samples per output), `dataRate` (0.75, 1.5, 3, 7.5, 15, 30 or 75 Hz) and the full-scale `range` in gauss (0.88, 1.3, 1.9, 2.5, 4, 4.7, 5.6 or 8.1), with `DEFAULT_HMC5883L_OPTIONS` of 1, 15 Hz and 1.3 gauss. `start()` registers the handler, sets the read delay to zero, writes the two configuration registers and the continuous-measurement mode and requests the six data bytes from register 0x03, repeating on a timer that never runs faster than the data rate (`ceil(1000 / dataRate)` milliseconds); `stop()` cancels the timer. A reply is decoded as big-endian signed 16-bit values in the chip order X, Z, Y and converted with the counts per gauss of the range (1370, 1090, 820, 660, 440, 390, 330 or 230); a sample where any axis is the overflow value -4096 is dropped entirely. `rawToGauss(raw)` exposes the conversion, and listeners are notified when an axis changed (see Firmata Peripheral Base). No hard-iron or soft-iron calibration and no declination is applied, so the reading is the raw field including the offsets of nearby metal and currents, and a heading needs a calibration and a tilt compensation done by the caller.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { DEFAULT_HMC5883L_OPTIONS, HMC5883L } from 'nebulosa/src/devices/firmata/sensors/magnetometer'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+const reply = (data: Buffer) => client.process(Buffer.from([0xf0, 0x77, HMC5883L.ADDRESS, 0, 0x03, 0, ...[...data].flatMap((byte) => [byte & 0x7f, byte >> 7]), 0xf7]))
+const sample = (x: number, z: number, y: number) => {
+	const data = Buffer.alloc(6)
+	data.writeInt16BE(x, 0)
+	data.writeInt16BE(z, 2)
+	data.writeInt16BE(y, 4)
+	return data
+}
+
+console.log(HMC5883L.ADDRESS, DEFAULT_HMC5883L_OPTIONS) // 30 { sampleAveraging: 1, dataRate: 15, range: 1.3 }
+
+// The defaults (no averaging, 15 Hz, 1.3 gauss = 1090 counts per gauss): start() writes the setup and reads 6 bytes.
+const compass = new HMC5883L(client)
+compass.addListener((device) => console.log('field', device.x, device.y, device.z))
+compass.start()
+console.log(out()) // [ "f0780000f7", "f0761e0000001000f7", "f0761e0001002000f7", "f0761e0002000000f7", "f0761e0803000600f7" ]
+
+// The registers are X, Z, Y: 218 counts of X, 109 of Z and -545 of Y (0.2, 0.1 and -0.5 gauss).
+reply(sample(218, 109, -545))
+console.log(compass.x, compass.y, compass.z, compass.samples) // 0.2 -0.5 0.1 1
+
+console.log(compass.rawToGauss(1090)) // 1
+compass.stop()
+
+// Eight-sample averaging at 75 Hz and the widest range (8.1 gauss, 230 counts per gauss).
+const fast = new HMC5883L(client, HMC5883L.ADDRESS, 10, { sampleAveraging: 8, dataRate: 75, range: 8.1 })
+fast.start()
+console.log(out()) // [ "f0780000f7", "f0761e0000007800f7", "f0761e0001006001f7", "f0761e0002000000f7", "f0761e0803000600f7" ]
+reply(sample(230, 0, -115))
+console.log(fast.x, fast.y, fast.rawToGauss(230)) // 1 -0.5 1
+fast.stop()
+```
 
 ### Firmata Peripheral Base
 
+`devices/firmata/peripheral` defines what every Firmata-attached sensor or actuator is and the base classes that implement the common plumbing. A `Peripheral` has a `name`, the owning `client`, `start()` and `stop()` and is `Disposable` (disposing stops it); a `ListenablePeripheral` also reports `samples` and accepts listeners. The measurement contracts are `Thermometer` (`temperature` in degrees Celsius), `Hygrometer` (`humidity` in percent), `Barometer` (`pressure` in hPa), `Altimeter` (`altitude`, a `Distance` in AU), `Luxmeter` (`lux`), `Ammeter` (`current` in amperes), `Accelerometer` (`ax`, `ay`, `az` in m/s²), `Gyroscope` (`gx`, `gy`, `gz` in rad/s), `Magnetometer` (`x`, `y`, `z` in gauss), `RadioTuner`, `RadioTransmitter`, `RealTimeClock`, `IOExpander` and `Display`, each implemented by the classes of the following topics. `PeripheralBase` implements `addListener`, `removeListener`, `samples`, `initialized`, `close` (stops the peripheral when its own client disconnects) and `Symbol.dispose`, and gives subclasses the protected `fire()`, `commit(changed)`, `readTwoWireRegister(address, register, bytes, timeout?)`, `resolvePendingTwoWireRead(...)` and `clearPendingTwoWireReads(error)`. Listeners are called with the peripheral on every change; a listener added later still gets its first reading even when the value did not change (`commit(false)` delivers that first completed read only to the listeners that still wait for one, while `fire()` notifies everyone), and `samples` counts every completed reading, changed or not, so a consumer can tell a sensor that holds a steady value from one that stopped answering. `initialized` is true when there is at least one listener and every listener already received a reading. Adding the same listener twice does not re-arm it. `readTwoWireRegister` queues one register read per address and register pair, sends it with `twoWireRead` and resolves with a copy of the reply data when the subclass forwards the `twoWireMessage` event to `resolvePendingTwoWireRead` (it ignores replies of another client), and rejects after `timeoutMs` (1000 by default, and clearing the queue rejects the pending reads). `ADCPeripheral` is the base of the analog sensors: it declares the analog `pin` and a `calculate(raw)` that stores the derived reading and returns whether it changed; `start()` registers the handler, sets the pin to analog mode, enables the analog report and commits an initial sample from the cached pin value, `stop()` undoes that, and every `pinChange` of the pin commits a new one. `DEFAULT_POLLING_INTERVAL` (5000 ms) is the period used by the peripherals that poll on a timer. The raw reading of an ADC peripheral is the 10-bit-style value of the Firmata analog report, and the conversion to the physical unit is the subclass job.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { ADCPeripheral, DEFAULT_POLLING_INTERVAL, PeripheralBase, type Thermometer } from 'nebulosa/src/devices/firmata/peripheral'
+
+console.log(DEFAULT_POLLING_INTERVAL) // 5000
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+// A board with one analog-capable pin: pin 0 is analog channel 0 and a 10-bit ADC.
+client.process(Buffer.from([0xf0, 0x6c, 2, 10, 127, 0xf7]))
+client.process(Buffer.from([0xf0, 0x6a, 0, 127, 0xf7]))
+out()
+
+// An analog thermistor-like sensor: 10 mV per degree with a 3.3 V reference and a 10-bit converter.
+class Probe extends ADCPeripheral<Probe> implements Thermometer {
+	readonly name = 'Probe'
+	readonly pin = 0
+	temperature = 0
+
+	constructor(readonly client: FirmataClient) {
+		super()
+	}
+
+	calculate(raw: number) {
+		const temperature = ((raw / 1023) * 3.3) / 0.01
+		const changed = temperature !== this.temperature
+		this.temperature = temperature
+		return changed
+	}
+}
+
+const probe = new Probe(client)
+const first = (device: Probe) => console.log('first', device.temperature)
+const second = (device: Probe) => console.log('second', device.temperature)
+probe.addListener(first)
+probe.addListener(first)
+console.log(probe.initialized, probe.samples) // false 0
+
+// start() puts the pin in analog mode, enables its report and commits the cached value (0 here: the first listener still gets its first reading, printing first 0).
+probe.start()
+console.log(out(), probe.initialized, probe.samples) // [ "f40002", "ef01" ] true 1
+
+// An analog report with raw value 77: 77 / 1023 * 330 is about 24.8 degrees.
+client.process(Buffer.from([0xe0, 77, 0]))
+console.log(probe.temperature, probe.samples) // 24.838709677419352 2
+
+// A repeated value does not notify the listener again, but is still a sample; a new listener gets its first reading at the next sample (printing second).
+client.process(Buffer.from([0xe0, 77, 0]))
+probe.addListener(second)
+console.log(probe.initialized, probe.samples) // false 3
+client.process(Buffer.from([0xe0, 77, 0]))
+console.log(probe.initialized, probe.samples) // true 4
+probe.removeListener(first)
+probe.removeListener(second)
+console.log(probe.initialized) // false
+probe.stop()
+console.log(out()) // [ "ef00" ]
+
+// A register-based I2C sensor: queue reads and resolve them from the twoWireMessage events.
+class Register extends PeripheralBase<Register> {
+	readonly name = 'Register'
+
+	constructor(readonly client: FirmataClient) {
+		super()
+		client.addHandler(this)
+	}
+
+	start() {}
+
+	stop() {
+		this.clearPendingTwoWireReads('stopped')
+	}
+
+	read(register: number, bytes: number) {
+		return this.readTwoWireRegister(0x40, register, bytes, 200)
+	}
+
+	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
+		this.resolvePendingTwoWireRead(client, address, register, data)
+	}
+}
+
+const device = new Register(client)
+const read = device.read(0x02, 2)
+console.log(out()) // [ "f076400802000200f7" ]
+client.process(Buffer.from([0xf0, 0x77, 0x40, 0, 0x02, 0, 0x12, 0, 0x34, 0, 0xf7]))
+console.log(await read) // <Buffer 12 34>
+
+// Two reads of the same register are answered in order, one reply each.
+const [a, b] = [device.read(0x03, 1), device.read(0x03, 1)]
+client.process(Buffer.from([0xf0, 0x77, 0x40, 0, 0x03, 0, 0x01, 0, 0xf7]))
+client.process(Buffer.from([0xf0, 0x77, 0x40, 0, 0x03, 0, 0x02, 0, 0xf7]))
+console.log(await a, await b) // <Buffer 01> <Buffer 02>
+
+// Closing the client stops the device through the close hook, and disposal does the same.
+client.disconnect()
+device[Symbol.dispose]()
+```
+
 ### Firmata Real-Time Clock
+
+`DS3231` (temperature-compensated, with a century bit) and `DS1307` are I2C real-time clocks implementing `RealTimeClock`. Both expose the broken-down calendar fields `year` (four digits), `month` (1 to 12), `day`, `dayOfWeek` (0-based: the chip register, 1 to 7, minus one; which weekday is 1 is defined by whoever set the clock), `hour` (0 to 23), `minute`, `second` and `millisecond`, which is always 0 because the chips have no sub-second register. The time is the wall-clock time the chip was programmed with, normally local time, and the drivers carry no time zone or UTC offset.
+
+The constructor takes the `client`, the I2C `address` (`ADDRESS` 0x68 for both) and the `pollingInterval` in milliseconds (1000 by default). `start()` registers the handler, enables I2C and reads the 7-byte calendar block from register 0 immediately and on every period; `stop()` cancels the timer and detaches. A reply is decoded from BCD (the seconds, minutes, day and month with their flag bits masked; a 12-hour hour register is converted to 24 hours using its PM bit) and the listeners are notified only when some field changed (see Firmata Peripheral Base). The DS3231 year is `2000`, plus 100 when the century bit of the month register is set, plus the two BCD digits; the DS1307 has no century bit and always reports 2000 plus the two digits.
+
+`update(year?, month?, day?, dayOfWeek?, hour?, minute?, second?, millisecond?)` writes the time in BCD in 24-hour format and then requests a read; every omitted argument keeps its latest decoded value, and the DS3231 sets the century bit for years from 2100 on. `sync(date?)` calls `update` with the fields of a `Date` in the local time zone of the host (the current time by default); the millisecond is accepted for symmetry but not stored. The DS1307 oscillator can be halted by its seconds-register bit and neither driver manages that bit, the alarms or the DS3231 temperature register.
+
+```ts
+import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { DS1307, DS3231 } from 'nebulosa/src/devices/firmata/components/rtc'
+
+const sent: string[] = []
+const client = new FirmataClient({ write: (data: string | Bun.BufferSource) => sent.push(Buffer.from(data as Uint8Array).toString('hex')), flush: () => {}, close: () => {} }, new ESP8266())
+const out = () => sent.splice(0)
+
+// The wire form of the 7-byte calendar block read from register 0.
+const reply = (data: number[]) => client.process(Buffer.from([0xf0, 0x77, 0x68, 0, 0, 0, ...data.flatMap((byte) => [byte & 0x7f, byte >> 7]), 0xf7]))
+
+console.log(DS3231.ADDRESS, DS1307.ADDRESS) // 104 104
+
+// DS3231: start() requests the 7 calendar bytes.
+const ds3231 = new DS3231(client)
+ds3231.addListener((device) => console.log('DS3231', device.year, device.month, device.day, device.dayOfWeek, device.hour, device.minute, device.second))
+ds3231.start()
+console.log(out()) // [ "f0780000f7", "f076680800000700f7" ]
+
+// 2025-03-14 (a Friday, register 6) 09:26:53 in 24-hour mode: the BCD bytes.
+reply([0x53, 0x26, 0x09, 0x06, 0x14, 0x03, 0x25])
+console.log(ds3231.year, ds3231.month, ds3231.day, ds3231.dayOfWeek, ds3231.hour, ds3231.minute, ds3231.second, ds3231.millisecond, ds3231.samples) // 2025 3 14 5 9 26 53 0 1 (the listener printed the same fields)
+
+// 2125-12-31 11 PM in 12-hour mode (bit 6 set, PM bit 5 set, hour 11): the century bit of the month register selects 2100.
+reply([0x59, 0x59, 0x71, 0x04, 0x31, 0x92, 0x25])
+console.log(ds3231.year, ds3231.month, ds3231.hour) // 2125 12 23 (the listener printed the new fields)
+
+// Set the clock to 2026-10-05 (a Monday, 1) 21:30:15; the time is written and read back.
+ds3231.update(2026, 10, 5, 1, 21, 30, 15)
+console.log(out()) // [ "f0780000f7", "f076680000001500300021000200050010002600f7", "f076680800000700f7" ]
+
+// An omitted argument keeps the decoded value: only the hour is changed here (the chip was read as 2125-12-31).
+ds3231.update(undefined, undefined, undefined, undefined, 3)
+console.log(out()) // [ "f0780000f7", "f076680000005900590003000400310012012500f7", "f076680800000700f7" ]
+ds3231.stop()
+
+// sync() writes the fields of a Date in the host time zone (here a local-time Date built from fields).
+const ds1307 = new DS1307(client, DS1307.ADDRESS, 5000)
+ds1307.start()
+console.log(out()) // [ "f0780000f7", "f076680800000700f7" ]
+ds1307.sync(new Date(2026, 9, 5, 21, 30, 15))
+console.log(out()) // [ "f0780000f7", "f076680000001500300021000200050010002600f7", "f076680800000700f7" ]
+
+// The DS1307 has no century bit: the year is 2000 plus the two digits.
+ds1307.addListener((device) => console.log('DS1307', device.year, device.month, device.day, device.hour, device.minute, device.second))
+reply([0x15, 0x30, 0x21, 0x02, 0x05, 0x10, 0x26])
+console.log(ds1307.year, ds1307.dayOfWeek) // 2026 1 (the listener printed 2026 10 5 21 30 15)
+ds1307.stop()
+```
 
 ### Firmata-to-INDI Bridge
 
@@ -18176,6 +18864,213 @@ client.process(Buffer.from([0x01])) // analog 2 128 (one message split over thre
 
 ### LX200 Telescope Protocol
 
+`Lx200ProtocolServer` is a TCP server that speaks the Meade LX200 serial command set, so planetarium and control software that supports an LX200 mount can drive any mount described by a handler. It frames the `#`-terminated ASCII commands (both `:CMD#` and `#:CMD#` are accepted, also when a command is split across packets), answers the ACK byte (`0x06`) with `G`, and turns each command into a call of the `Lx200ProtocolHandler` you provide. The handler supplies the state of the mount (`rightAscension` and `declination` in J2000 radians, `longitude` and `latitude` in radians with east positive, `dateTime` as a `[Temporal, utcOffsetMinutes]` pair, `tracking`, `parked`, `slewing`) and optional actions (`sync`, `goto`, `move`, `abort`, `slewRate`, plus `connect` and `disconnect` notifications; `disconnect` runs when the last client leaves). The supported commands are the product and firmware queries (`:GVP#`, `:GVN#`, `:GVD#`, `:GVT#`), the coordinate and site reads (`:GR#`, `:GD#`, `:Gg#`, `:Gt#`), the date, time and offset reads (`:GC#`, `:GL#`, `:GG#`), the status (`:GW#`) and slewing (`:D#`) queries, target setting (`:Sr#`, `:Sd#` with the usual `HH:MM:SS` and `sDD*MM:SS` forms), site setting (`:Sg#`, `:St#`), the three-part clock setting (`:SC#` date, `:SL#` time and `:SG#` offset, committed to the handler only after all three arrived), `:CM#` sync, `:MS#` goto, manual motion (`:Mn#`, `:Ms#`, `:Me#`, `:Mw#` and the matching `:Q?#` stops), `:Q#` abort and the slew-rate presets (`:RC#`, `:RG#`, `:RM#`, `:RS#`). Targets are staged by `:Sr#` and `:Sd#` and used by the next `:CM#` or `:MS#`. Responses follow the protocol: sexagesimal text rounded to whole seconds (or minutes for the site), `1` or `0` for set commands, the longitude and the UTC offset with the LX200 west-positive and hours-to-add sign conventions, and no reply at all to motion and abort commands. Unknown commands are logged and ignored. `start(hostname, port)` begins listening (port 0 picks a free one, `port` then returns it) and returns false when already started, `stop()` closes every connection, and the server logs connection events with `console`.
+
+```ts
+import { temporalFromDate, type Temporal } from 'nebulosa/src/astronomy/time/temporal'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+import { Lx200ProtocolServer, type Lx200ProtocolHandler } from 'nebulosa/src/devices/protocols/lx200'
+
+// A tiny mount: J2000 coordinates, a site and a UTC clock (the offset is -180 minutes), with the actions printing what they receive.
+const state = { ra: hour(5.5), dec: deg(-5.4), longitude: deg(-46.6333), latitude: deg(-23.55), dateTime: [temporalFromDate(2025, 3, 21, 22, 30, 15, 0), -180] as readonly [Temporal, number] }
+const handler: Lx200ProtocolHandler = {
+	rightAscension: () => state.ra,
+	declination: () => state.dec,
+	longitude: (_, longitude) => (longitude !== undefined ? (state.longitude = longitude) : state.longitude),
+	latitude: (_, latitude) => (latitude !== undefined ? (state.latitude = latitude) : state.latitude),
+	dateTime: (_, date) => {
+		if (date) state.dateTime = date
+		return state.dateTime
+	},
+	tracking: () => true,
+	parked: () => false,
+	slewing: () => true,
+	slewRate: (_, rate) => console.log('rate', rate),
+	sync: (_, ra, dec) => console.log('sync', ra / hour(1), dec / deg(1)),
+	goto: (_, ra, dec) => console.log('goto', ra / hour(1), dec / deg(1)),
+	move: (_, direction, enabled) => console.log('move', direction, enabled),
+	abort: () => console.log('abort'),
+}
+
+const server = new Lx200ProtocolServer({ handler, name: 'Nebulosa', version: '1.0' })
+console.log(server.start('127.0.0.1', 0), server.start('127.0.0.1', 0), server.port > 0) // true false true
+
+// A client that sends one command and waits for the reply (or a short silence for commands without one).
+const replies: string[] = []
+const socket = await Bun.connect({ hostname: '127.0.0.1', port: server.port, socket: { data: (_, data) => replies.push(data.toString('ascii')), open: () => {}, close: () => {}, error: () => {} } })
+const ask = async (command: string) => {
+	socket.write(command)
+	await Bun.sleep(30)
+	return replies.splice(0).join('')
+}
+
+console.log(await ask('\u0006'), await ask(':GVP#'), await ask(':GVN#'), await ask(':GVD#')) // G Nebulosa# 1.0# Jan 01 2025#
+console.log(await ask(':GR#'), await ask(':GD#'), await ask(':Gg#'), await ask(':Gt#')) // 05:30:00# -05*24:00# +046*38# -23*33#
+console.log(await ask(':GC#'), await ask(':GL#'), await ask(':GG#'), await ask(':GW#'), await ask(':D#')) // 03/21/25# 19:30:15# +03.0# GTH# |#
+
+// Stage a target (RA 10:30:00, Dec +20*15:30), sync and goto to it; a leading '#' is also accepted.
+console.log(await ask(':Sr10:30:00#'), await ask(':Sd+20*15:30#'), await ask(':CM#'), await ask('#:MS#')) // 1 1 # 0 (the handler prints sync and goto with 10.5 hours and 20.258333 degrees)
+
+// Set the site (longitude is west positive on the wire) and the clock: three commands commit the date and time.
+console.log(await ask(':Sg046*38#'), await ask(':St-23*33#'), await ask(':Gg#'), await ask(':Gt#')) // 1 1 +046*38# -23*33#
+console.log(await ask(':SG+03.0#'), await ask(':SL23:15:00#'), await ask(':SC03/22/25#')) // 1 1 1Updating planetary data       #                              #
+console.log(await ask(':GC#'), await ask(':GL#'), await ask(':GG#')) // 03/22/25# 23:15:00# +03.0#
+
+// Manual motion, slew rates and abort have no reply.
+console.log([await ask(':RC#'), await ask(':Mn#'), await ask(':Qn#'), await ask(':Me#'), await ask(':Qe#'), await ask(':RM#'), await ask(':Q#')]) // ["", "", "", "", "", "", ""] (the handler prints rate CENTER, move NORTH true and false, move EAST true and false, rate FIND and abort)
+
+// A command split across packets is reassembled.
+socket.write(':G')
+await Bun.sleep(20)
+console.log(await ask('R#')) // 05:30:00#
+
+socket.end()
+server.stop()
+console.log(server.port) // -1
+```
+
 ### PHD2 Client
 
+`PHD2Client` controls PHD2 (the open-source guiding application) through its event-monitoring server, a TCP connection (port 4400 by default, `DEFAULT_PHD2_PORT`) that exchanges newline-delimited JSON. `connect(hostname, port?)` opens the socket and returns false when it is already open; `close()` (also `Symbol.dispose`) closes it and resolves every pending command as `socketUnavailable`. Every command method is a thin wrapper over `send(method, params?, timeout?)`, which writes one JSON-RPC request with a fresh id and resolves a `PHD2CommandResult`: `{ success: true, result }` with the typed result, or `{ success: false, error }` where the error is the PHD2 `{ code, message }` object, `'timeout'` (15 seconds by default, a non-positive or non-finite timeout falls back to it), `'socketUnavailable'` or `'socketError'`. Replies are matched by id, so several commands may be in flight; everything that is not a reply is an asynchronous event, delivered to the `PHD2ClientHandler` as `event(client, event)` (a union of the `PHD2Events` payloads, keyed by `Event`, with the field names of the PHD2 protocol such as `GuideStep`, `StarLost`, `SettleDone`, `Alert` and `AppState`), while `command(client, command, success, result)` is called for each reply and `close(client, error?)` when the connection ends. `id` is a stable hash of the remote address and port, and the address and port getters expose the socket endpoints. The commands cover the equipment (`getConnected`, `setConnected`, `getCurrentEquipment`, `getProfile`, `getProfiles`, `setProfile` by id or profile), the state (`getAppState`, `getPaused`, `setPaused(paused, full?)`, `getSettling`, `getCalibrated`, `getCalibrationData(which?)`, `clearCalibration(which?)`, `flipCalibration`), the camera (`getExposure`, `setExposure` in milliseconds, `getExposureDurations`, `getCameraBinning`, `getCameraFrameSize`, `getPixelScale` in arcseconds per pixel, `getUseSubframes`, `getSearchRegion`, `startCapture(exposure, roi?)`, `stopCapture`, `saveImage`, `getStarImage` with base64 pixels), the loop and the guide star (`loop`, `findStar(roi?)`, `deselectStar`, `getLockPosition`, `setLockPosition(x, y, exact?)`, the lock shift commands `getLockShiftEnabled`, `setLockShiftEnabled` and `getLockShiftParams`, `setLockShiftParams`), guiding (`guide(recalibrate?, settle?, roi?)`, `dither(amount, raOnly?, settle?, timeout?)`, `guidePulse(amount, direction, which?)` with the amount in milliseconds, `getGuideOutputEnabled`, `setGuideOutputEnabled`, `getDeclinationGuideMode`, `setDeclinationGuideMode`, the algorithm parameters `getAlgorithmParamNames`, `getAlgorithmParam` and `setAlgorithmParam` per `'RA'` or `'DEC'` axis) and `shutdown`. The settle criteria are `{ pixels, time, timeout }` (a distance in pixels held for `time` seconds, giving up after `timeout` seconds) and default to `DEFAULT_PHD2_SETTLE` (1.5 pixels, 10 s, 30 s); a partial settle given to `dither` or `guide` is merged over the defaults. A region of interest is `{ x, y, width, height }` in pixels and is sent only when its width and height are nonzero (`DEFAULT_ROI` is empty, meaning the full frame). Settling progress and the end of a guide or dither request are not in the command reply: they come as `Settling` and `SettleDone` events. The lock shift rate units are chosen from the axes when omitted (`'arcsec/hr'` for `'RA/Dec'`, otherwise `'pixels/hr'`).
+
+```ts
+import { DEFAULT_PHD2_SETTLE, PHD2Client, type PHD2Events } from 'nebulosa/src/devices/guiding/phd2'
+
+// A local mock of PHD2: it replies to every request with a canned result and records what it received.
+const requests: [string, unknown][] = []
+const results: Record<string, unknown> = {
+	get_app_state: 'Guiding',
+	get_connected: true,
+	get_calibrated: true,
+	get_calibration_data: { calibrated: true, xAngle: 0.5, xRate: 0.0165, xParity: '+', yAngle: 2.07, yRate: 0.0158, yParity: '-' },
+	get_camera_binning: 1,
+	get_camera_frame_size: [1280, 960],
+	get_current_equipment: { camera: { name: 'ZWO ASI120MM', connected: true }, mount: { name: 'On-camera', connected: true } },
+	get_dec_guide_mode: 'Auto',
+	get_exposure: 2000,
+	get_exposure_durations: [500, 1000, 2000, 3000],
+	get_guide_output_enabled: true,
+	get_lock_position: [640.5, 480.25],
+	get_lock_shift_enabled: false,
+	get_lock_shift_params: { enabled: false, rate: [0, 0], units: 'arcsec/hr', axes: 'RA/Dec' },
+	get_paused: false,
+	get_pixel_scale: 3.77,
+	get_profile: { id: 2, name: 'Guide scope' },
+	get_profiles: [
+		{ id: 1, name: 'Default', selected: false },
+		{ id: 2, name: 'Guide scope', selected: true },
+	],
+	get_search_region: 15,
+	get_settling: false,
+	get_star_image: { frame: 42, width: 15, height: 15, star_pos: { x: 7.5, y: 7.5 }, pixels: 'AAAA' },
+	get_use_subframes: false,
+	get_algo_param_names: ['Aggressiveness', 'MinMove'],
+	get_algo_param: 0.7,
+	find_star: [640.5, 480.25],
+	save_image: { filename: '/tmp/phd2_guide.fit' },
+}
+const server = Bun.listen({
+	hostname: '127.0.0.1',
+	port: 0,
+	socket: {
+		open: (socket) => socket.write(JSON.stringify({ Event: 'Version', Timestamp: 1, Host: 'mock', Inst: 1, PHDVersion: '2.6.13', PHDSubver: '', OverlapSupport: true, MsgVersion: 1 }) + '\r\n'),
+		data: (socket, data) => {
+			for (const line of data.toString().split('\r\n').filter(Boolean)) {
+				const { id, method, params } = JSON.parse(line)
+				requests.push([method, params])
+				socket.write(JSON.stringify({ jsonrpc: '2.0', id, result: results[method] ?? 0 }) + '\r\n')
+				if (method === 'guide') socket.write(JSON.stringify({ Event: 'SettleDone', Timestamp: 2, Host: 'mock', Inst: 1, Status: 0, TotalFrames: 12, DroppedFrames: 0 }) + '\r\n')
+			}
+		},
+		close: () => {},
+	},
+})
+
+const events: PHD2Events[] = []
+const client = new PHD2Client({ handler: { event: (_, event) => events.push(event) } })
+console.log(await client.connect('127.0.0.1', server.port), await client.connect('127.0.0.1', server.port), client.id?.length) // true false 32
+await Bun.sleep(30)
+console.log(events.shift()) // { Event: "Version", Timestamp: 1, Host: "mock", Inst: 1, PHDVersion: "2.6.13", PHDSubver: "", OverlapSupport: true, MsgVersion: 1 }
+
+// Equipment, profiles and state.
+console.log(await client.getConnected(), await client.getCurrentEquipment()) // { success: true, result: true } { success: true, result: { camera: { name: "ZWO ASI120MM", connected: true }, mount: { name: "On-camera", connected: true } } }
+console.log(await client.getProfile(), await client.getProfiles()) // { success: true, result: { id: 2, name: "Guide scope" } } { success: true, result: [ { id: 1, name: "Default", selected: false }, { id: 2, name: "Guide scope", selected: true } ] }
+console.log(await client.setProfile(2), await client.setProfile({ id: 1, name: 'Default', selected: false }), await client.setConnected(true)) // { success: true, result: 0 } { success: true, result: 0 } { success: true, result: 0 }
+console.log(await client.getAppState(), await client.getPaused(), await client.getSettling(), await client.getCalibrated(), await client.getCalibrationData()) // { success: true, result: "Guiding" } { success: true, result: false } { success: true, result: false } { success: true, result: true } { success: true, result: { calibrated: true, xAngle: 0.5, xRate: 0.0165, xParity: "+", yAngle: 2.07, yRate: 0.0158, yParity: "-" } }
+console.log(await client.setPaused(true), await client.setPaused(false, false), await client.clearCalibration(), await client.clearCalibration('AO'), await client.flipCalibration()) // { success: true, result: 0 } { success: true, result: 0 } { success: true, result: 0 } { success: true, result: 0 } { success: true, result: 0 }
+
+// Camera.
+console.log(await client.getExposure(), await client.getExposureDurations(), await client.getCameraBinning(), await client.getCameraFrameSize(), await client.getPixelScale(), await client.getUseSubframes(), await client.getSearchRegion()) // { success: true, result: 2000 } { success: true, result: [ 500, 1000, 2000, 3000 ] } { success: true, result: 1 } { success: true, result: [ 1280, 960 ] } { success: true, result: 3.77 } { success: true, result: false } { success: true, result: 15 }
+console.log(await client.setExposure(1000), await client.startCapture(1500), await client.startCapture(1500, { x: 100, y: 120, width: 64, height: 64 }), await client.stopCapture()) // { success: true, result: 0 } { success: true, result: 0 } { success: true, result: 0 } { success: true, result: 0 }
+console.log(await client.saveImage(), await client.getStarImage()) // { success: true, result: { filename: "/tmp/phd2_guide.fit" } } { success: true, result: { frame: 42, width: 15, height: 15, star_pos: { x: 7.5, y: 7.5 }, pixels: "AAAA" } }
+
+// Looping, the guide star and the lock position.
+console.log(await client.loop(), await client.findStar(), await client.findStar({ x: 0, y: 0, width: 640, height: 480 }), await client.deselectStar()) // { success: true, result: 0 } { success: true, result: [ 640.5, 480.25 ] } { success: true, result: [ 640.5, 480.25 ] } { success: true, result: 0 }
+console.log(await client.getLockPosition(), await client.setLockPosition(640.5, 480.25), await client.setLockPosition(100, 200, true)) // { success: true, result: [ 640.5, 480.25 ] } { success: true, result: 0 } { success: true, result: 0 }
+console.log(await client.getLockShiftEnabled(), await client.getLockShiftParams(), await client.setLockShiftEnabled(true), await client.setLockShiftParams({ rate: [15, 0], axes: 'RA/Dec' }), await client.setLockShiftParams({ rate: [30, 5], axes: 'X/Y', units: 'pixels/hr' })) // { success: true, result: false } { success: true, result: { enabled: false, rate: [ 0, 0 ], units: "arcsec/hr", axes: "RA/Dec" } } { success: true, result: 0 } { success: true, result: 0 } { success: true, result: 0 }
+
+// Guiding: the settle criteria are merged over the defaults.
+console.log(DEFAULT_PHD2_SETTLE) // { pixels: 1.5, time: 10, timeout: 30 }
+console.log(await client.guide(), await client.guide(true, { pixels: 1, time: 5, timeout: 60 }, { x: 10, y: 20, width: 300, height: 200 }), await client.dither(5), await client.dither(3, true, { pixels: 2 }, 60000)) // { success: true, result: 0 } { success: true, result: 0 } { success: true, result: 0 } { success: true, result: 0 }
+console.log(events.map((event) => [event.Event, 'Status' in event ? event.Status : undefined])) // [ [ "SettleDone", 0 ], [ "SettleDone", 0 ] ]
+console.log(await client.guidePulse(300, 'North'), await client.guidePulse(150, 'East', 'AO'), await client.getGuideOutputEnabled(), await client.setGuideOutputEnabled(false)) // { success: true, result: 0 } { success: true, result: 0 } { success: true, result: true } { success: true, result: 0 }
+console.log(await client.getDeclinationGuideMode(), await client.setDeclinationGuideMode('North')) // { success: true, result: "Auto" } { success: true, result: 0 }
+console.log(await client.getAlgorithmParamNames('RA'), await client.getAlgorithmParam('RA', 'Aggressiveness'), await client.setAlgorithmParam('DEC', 'MinMove', 0.2)) // { success: true, result: [ "Aggressiveness", "MinMove" ] } { success: true, result: 0.7 } { success: true, result: 0 }
+
+// The requests the mock received (method and parameters), in order.
+console.log(requests.filter(([method]) => !method.startsWith('get_')).map(([method, params]) => `${method} ${JSON.stringify(params)}`)) // [ "set_profile [2]", "set_profile [1]", "set_connected [true]", "set_paused [true,\"full\"]", "set_paused [false]", "clear_calibration [\"BOTH\"]", "clear_calibration [\"AO\"]", "flip_calibration undefined", "set_exposure [1000]", "capture_single_frame {\"exposure\":1500}", "capture_single_frame {\"exposure\":1500,\"subframe\":[100,120,64,64]}", "stop_capture undefined", "save_image undefined", "loop undefined", "find_star undefined", "find_star {\"roi\":[0,0,640,480]}", "deselect_star undefined", "set_lock_position [640.5,480.25,false]", "set_lock_position [100,200,true]", "set_lock_shift_enabled [true]", "set_lock_shift_params {\"rate\":[15,0],\"axes\":\"RA/Dec\",\"units\":\"arcsec/hr\"}", "set_lock_shift_params {\"rate\":[30,5],\"axes\":\"X/Y\",\"units\":\"pixels/hr\"}", "guide {\"recalibrate\":false,\"settle\":{\"pixels\":1.5,\"time\":10,\"timeout\":30}}", "guide {\"recalibrate\":true,\"roi\":[10,20,300,200],\"settle\":{\"pixels\":1,\"time\":5,\"timeout\":60}}", "dither {\"amount\":5,\"raOnly\":false,\"settle\":{\"pixels\":1.5,\"time\":10,\"timeout\":30}}", "dither {\"amount\":3,\"raOnly\":true,\"settle\":{\"pixels\":2,\"time\":10,\"timeout\":30}}", "guide_pulse [300,\"North\",\"MOUNT\"]", "guide_pulse [150,\"East\",\"AO\"]", "set_guide_output_enabled [false]", "set_dec_guide_mode [\"North\"]", "set_algo_param [\"DEC\",\"MinMove\",0.2]" ]
+console.log(await client.shutdown()) // { success: true, result: 0 }
+
+client.close()
+server.stop(true)
+```
+
 ### Stellarium Telescope Control Protocol
+
+`StellariumProtocolServer` is a TCP server for the telescope-control protocol of Stellarium, so the planetarium can show where a mount points and send it goto commands. Messages are little-endian and length-prefixed. The server broadcasts the current position with `send(ra, dec)`, in radians (J2000 equatorial), to every connected client as the protocol's 24-byte message with 32-bit fixed-point angles (`0x80000000` is 180 degrees; the right ascension is wrapped to the signed range, so it arrives as an angle in -180..180 degrees). It does nothing when no client is connected. Incoming goto messages (type 0, at least 20 bytes) call the `goto(server, ra, dec)` handler with the right ascension normalized to 0..2π and the declination in radians; other message types are ignored. A partial message is kept until it is complete, and a length field smaller than the 4-byte header or larger than 120 bytes closes the connection, since the stream could no longer be synchronized. The handler can also receive `connect` and `disconnect` notifications (`disconnect` runs for every closing client). `start(hostname, port)` starts listening (port 0 picks a free one, `port` then returns it) and returns false when already started, and `stop()` closes every connection. The server logs connection events with `console`.
+
+```ts
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+import { StellariumProtocolServer } from 'nebulosa/src/devices/protocols/stellarium'
+
+const server = new StellariumProtocolServer({
+	handler: {
+		connect: () => console.log('client connected'),
+		goto: (_, ra, dec) => console.log('goto', ra / hour(1), dec / deg(1)),
+		disconnect: () => console.log('client disconnected'),
+	},
+})
+console.log(server.start('127.0.0.1', 0), server.start('127.0.0.1', 0), server.port > 0) // true false true
+
+// A client collecting the bytes it receives.
+const received: Buffer[] = []
+const socket = await Bun.connect({ hostname: '127.0.0.1', port: server.port, socket: { data: (_, data) => received.push(Buffer.from(data)), open: () => {}, close: () => {}, error: () => {} } })
+await Bun.sleep(30)
+
+// Broadcast the position of the mount: RA 5h35m (83.75 degrees) and Dec -5.4 degrees.
+server.send(hour(5 + 35 / 60), deg(-5.4))
+await Bun.sleep(30)
+const message = received.shift()!
+console.log(message.length, message.readInt16LE(0), message.readInt16LE(2)) // 24 24 0 (length, length field and type)
+console.log((message.readInt32LE(12) / 0x80000000) * 180, (message.readInt32LE(16) / 0x80000000) * 180) // 83.74999995343387 -5.399999963119626 (RA and Dec in degrees)
+
+// A goto request: length 20, type 0, time (8 bytes), RA as unsigned 32-bit and Dec as signed 32-bit fixed point.
+const goto = Buffer.alloc(20)
+goto.writeUInt16LE(20, 0)
+goto.writeUInt16LE(0, 2)
+goto.writeUInt32LE(Math.trunc((hour(10.5) / Math.PI) * 0x80000000), 12)
+goto.writeInt32LE(Math.trunc((deg(20.25) / Math.PI) * 0x80000000), 16)
+socket.write(goto)
+await Bun.sleep(30)
+
+// The same message split in two packets is reassembled.
+socket.write(goto.subarray(0, 9))
+await Bun.sleep(20)
+socket.write(goto.subarray(9))
+await Bun.sleep(30)
+
+socket.end()
+await Bun.sleep(30)
+server.stop()
+console.log(server.port) // -1 (the handler printed client connected, goto 10.5 20.25 twice and client disconnected)
+```
