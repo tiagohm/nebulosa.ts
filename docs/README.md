@@ -12336,9 +12336,159 @@ Evaluate observing conditions and target suitability before scheduling or contro
 
 ### Autofocus
 
+`observation/focus/autofocus` is the state machine of a camera autofocus: it asks the caller to move the focuser and to take one frame at each position, and when the V-curve of the half-flux diameter (HFD, in pixels) against the focuser position (in steps) is sampled well enough, it fits it and returns the best-focus position. It performs no I/O: the caller owns the focuser, the camera and the HFD measurement (see Star Detection for the measurement), and calls `add(position, hfd)` after every capture with the current focuser position and the measured HFD, executing the returned `AutoFocusStep`: `MOVE` with a signed `relative` or an `absolute` number of steps, `COMPLETED` with the `absolute` best position to move to, or `FAILED` with the `absolute` position at the start of the run to restore. The first call (idle) only records the starting position and moves out by `initialOffsetSteps * stepSize` toward the higher positions (the lower ones when `reversed`), then each capture steps back in by `stepSize` for `initialOffsetSteps + 1` samples, ending at the starting position, so a start near the best focus is sampled on its far side first After that the machine checks the trend lines: it keeps adding samples on the side of the minimum that has fewer than `initialOffsetSteps` valid points (an invalid sample counts as support for that side), and gives up when there are no usable points, when the focuser reaches the position 0 or the `maxPosition` (0 disables it), or when the points reach ten times the `initialOffsetSteps`. A non-finite or non-positive HFD (a frame with no star) is stored as an invalid sample and left out of the fits. The `fittingMode` chooses how the best focus is found: `TRENDLINES` (the intersection of the Theil-Sen lines of the two sides of the minimum), `PARABOLIC` (the vertex of a quadratic fit), `HYPERBOLIC` (the minimum of a hyperbola, the actual shape of a defocus curve, see Hyperbolic Regression), and `TREND_PARABOLIC` and `TREND_HYPERBOLIC`, the midpoint between the curve and the trend line intersection; the quadratic is biased on a wide V-shaped curve and the others need enough points. The optional `rmsdThreshold` (0 disables) rejects the run when the RMSD of a used fit divided by the HFD at the best focus is above it, and the result is also rejected when it is not finite and positive or lies outside the sampled range. The getters `minimum` and `maximum` (the first and last sampled points by position), `trendLine`, `parabolic` and `hyperbolic` (the current fits, available after the samples need them) and `focusPoint` (the best point of the mode) can be read at any time for a plot. The class logs its progress and the rejections on the console and does not restore the focuser itself; a focuser with backlash must be moved by the caller in the same direction for every step (see Focuser Backlash Compensation), and a run needs a stable seeing and a star that does not leave the frame.
+
+```ts
+import { AutoFocus, type AutoFocusFittingMode, type AutoFocusStep } from 'nebulosa/src/observation/focus/autofocus'
+
+// A simulated focuser and camera: the best focus is at 5000 steps, with a hyperbolic defocus curve (a minimum HFD of 1.8 pixels and 0.02 pixel per step far from it) and a small deterministic noise.
+const BEST = 5000
+const measure = (position: number) => Math.hypot(1.8, 0.02 * (position - BEST)) + 0.01 * Math.sin(position * 0.37)
+
+// The loop of the caller: the first add() starts the run (the HFD is ignored), then each MOVE is executed and measured.
+const run = (autofocus: AutoFocus, start: number, measureHfd: (position: number) => number = measure) => {
+	let position = start
+	let step: AutoFocusStep = autofocus.add(position, 0)
+	let captures = 0
+	while (step.type === 'MOVE') {
+		position = step.absolute ?? position + step.relative!
+		step = autofocus.add(position, measureHfd(position))
+		captures++
+	}
+	return { step, captures }
+}
+
+// The default scan: 7 steps of 50 on each side of the start, the hyperbolic fit, and a limit on the quality of the fit.
+const autofocus = new AutoFocus({ initialOffsetSteps: 7, stepSize: 50, fittingMode: 'HYPERBOLIC', rmsdThreshold: 0.1, reversed: false, maxPosition: 10000 })
+const result = run(autofocus, 5100)
+console.log(result.step.type, Math.round(result.step.absolute!), result.captures) // COMPLETED 5000 17
+console.log(autofocus.minimum, autofocus.maximum) // { x: 4650, y: 7.2188 } { x: 5450, y: 9.1743 }
+
+// The fits of the run: the hyperbolic minimum (the best focus and its HFD in pixels), the parabolic one is not computed in this mode, and the trend line gives the intersection of the two sides.
+console.log(autofocus.focusPoint!.x.toFixed(1), autofocus.focusPoint!.y.toFixed(3), autofocus.hyperbolic!.minimum.x.toFixed(1), autofocus.parabolic, autofocus.trendLine!.intersection.x.toFixed(1)) // 4999.6 1.806 4999.6 undefined 5004.2
+
+// The other fitting modes on the same curve: the best position and the HFD of each.
+for (const fittingMode of ['TRENDLINES', 'PARABOLIC', 'TREND_PARABOLIC', 'HYPERBOLIC', 'TREND_HYPERBOLIC'] as AutoFocusFittingMode[]) {
+	const other = new AutoFocus({ initialOffsetSteps: 7, stepSize: 50, fittingMode, reversed: false, maxPosition: 0 })
+	const { step } = run(other, 5100)
+	console.log(fittingMode, step.type, Math.round(step.absolute!), other.focusPoint!.y.toFixed(3)) // TRENDLINES COMPLETED 5004 0.829, then PARABOLIC COMPLETED 5007 2.476, then TREND_PARABOLIC COMPLETED 5006 1.653, then HYPERBOLIC COMPLETED 5000 1.806, then TREND_HYPERBOLIC COMPLETED 5002 1.317
+}
+
+// A focuser that moves the other way (reversed): the first move goes to the lower positions, and the same best focus is found.
+const reversed = new AutoFocus({ initialOffsetSteps: 7, stepSize: 50, fittingMode: 'HYPERBOLIC', reversed: true, maxPosition: 0 })
+console.log(reversed.add(5100, 0), run(new AutoFocus({ initialOffsetSteps: 7, stepSize: 50, fittingMode: 'HYPERBOLIC', reversed: true, maxPosition: 0 }), 5100).step.absolute!.toFixed(0)) // { type: 'MOVE', relative: -350 } 5000
+
+// A start far from the focus (800 steps away): the first scan does not reach the minimum, so the machine keeps stepping toward the lower positions until both sides of the minimum are supported.
+const far = new AutoFocus({ initialOffsetSteps: 7, stepSize: 50, fittingMode: 'TREND_HYPERBOLIC', reversed: false, maxPosition: 0 })
+const lost = run(far, 5800)
+console.log(lost.step.type, Math.round(lost.step.absolute!), lost.captures) // COMPLETED 5007 31
+
+// Frames without a star (HFD 0 or NaN) are dropped from the fit: here two positions near the edge of the scan fail to measure, and the result is still found.
+const gaps = new AutoFocus({ initialOffsetSteps: 7, stepSize: 50, fittingMode: 'HYPERBOLIC', reversed: false, maxPosition: 0 })
+const gapped = run(gaps, 5100, (position) => (position === 4750 ? 0 : position === 5450 ? Number.NaN : measure(position)))
+console.log(gapped.step.type, Math.round(gapped.step.absolute!)) // COMPLETED 5000
+```
+
 ### Challis Polar Alignment
 
+`observation/alignment/polaralignment.challis` estimates the polar-axis misalignment of an equatorial mount from the drift in declination of tracked stars, with the Challis and Taki small-angle model, using neither a plate solution nor an image: the input is a series of apparent mount declinations (from the encoders or the hand paddle readings of the mount, after centering a star) against its hour angle. Hour angles are west-positive and may wrap, all angles are radians and the model is `declination = intercept + u cos(H) - v sin(H)`, with one unknown intercept per star (the true declination plus any fixed offset) and the two components `u` and `v` shared by all the stars, with the signs of Taki. `fitChallisPolarAlignment(observations, latitude, options?)` takes the `ChallisObservation` list (the `star` identifier that groups the readings sharing an intercept, the `hourAngle`, the `mountDeclination`, an optional known additive `correction` in declination subtracted before the fit, and an optional non-negative `weight`) and the geographic `latitude`, and fits them by weighted least squares, or by an iteratively reweighted robust loss with `options.robust` of `huber` or `tukey` (and `maxIterations`, `tolerance` and `tuning`) when a reading is wild. The `ChallisPolarAlignmentResult` has the components `u` and `v`, their `magnitude` and `orientation` (`atan2(u, v)` in `[0, TAU)`), the `takiPole` (the normalized `[u, v, 1]` of the Taki frame), the physical pole above the horizon in a local east-north-up frame (`poleEnu`) with its `azimuth` (north through east) and `altitude`, the signed `azimuthError` and `altitudeError` of the geodesic decomposition along the positive directions of the azimuth and altitude knobs, the `totalError` from the celestial pole (all in radians), and the `conditionNumber`, `rankDeficient`, `residuals` (target minus fitted), final `weights` and `warnings`. The azimuth and altitude components are `undefined` when the adjustment is singular, as at a geographic pole, while the total stays. The hemisphere follows the sign of the latitude and the fit works in both. At least `stars + 2` observations with a positive weight are needed (three for a single star), and they must cover distinct hour angles (a rank-deficient design is an error); the warnings say when there are fewer than three distinct hour angles, when the coverage is under 30 degrees, when the matrix is ill-conditioned (above `1e8`), when one reading carries more than half of the weight, when the magnitude is above 5 degrees (outside the small-angle model) and when the components are undefined. `challisRefractionCorrection(hourAngle, declination, latitude, refraction?)` gives the apparent minus true declination caused by the atmospheric refraction model of the library (default parameters when omitted) for a direction, to be put in the `correction` of the observations when the readings are taken on a real sky; it is not defined below -1 degree of altitude. The model is linear in `u` and `v`, so a large error, a star near the pole, a bad latitude or a flexure of the mount that changes the declination with the hour angle are not represented in the fit.
+
+```ts
+import { challisRefractionCorrection, fitChallisPolarAlignment, type ChallisObservation } from 'nebulosa/src/observation/alignment/polaralignment.challis'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+
+const latitude = deg(40)
+const round = (value: number | undefined, digits = 4) => (value === undefined ? undefined : +toDeg(value).toFixed(digits))
+
+// Two stars (declinations 20 and 50 degrees, each with an unknown offset in the mount reading) followed during 120 degrees of hour angle with a true polar error of u = 0.30 and v = -0.15 degrees: the readings follow the model exactly.
+const u = deg(0.3)
+const v = deg(-0.15)
+const intercepts = { alpha: deg(20.1), beta: deg(49.9) }
+const hourAngles = [-60, -40, -20, 0, 20, 40, 60].map(deg)
+const observations: ChallisObservation[] = []
+for (const [star, intercept] of Object.entries(intercepts)) for (const hourAngle of hourAngles) observations.push({ star, hourAngle, mountDeclination: intercept + u * Math.cos(hourAngle) - v * Math.sin(hourAngle) })
+
+// The fit recovers the components (degrees), the magnitude and orientation, and the mount pole: its azimuth (north through east), altitude and the knob errors that bring it to the celestial pole.
+const fit = fitChallisPolarAlignment(observations, latitude)
+console.log(round(fit.u), round(fit.v), round(fit.magnitude), round(fit.orientation, 2)) // 0.3 -0.15 0.3354 116.57
+console.log(round(fit.azimuth, 4), round(fit.altitude, 4), round(fit.azimuthError, 4), round(fit.altitudeError, 4), round(fit.totalError, 4)) // 359.8033 40.2998 0.15 0.3 0.3354
+console.log(
+	fit.takiPole.map((value) => +value.toFixed(6)),
+	fit.poleEnu.map((value) => +value.toFixed(6)),
+) // [ 0.005236, -0.002618, 0.999983 ] [ -0.002618, 0.762666, 0.646788 ]
+console.log(fit.conditionNumber < 100, fit.rankDeficient, fit.residuals.length, Math.max(...fit.residuals.map(Math.abs)) < 1e-12, fit.weights.length, fit.warnings) // true false 14 true 14 []
+
+// Weights: a reading with a weight of zero is ignored, and a heavier one pulls the fit toward it.
+const weighted = observations.map((observation, i) => (i === 0 ? { ...observation, weight: 0 } : observation))
+console.log(round(fitChallisPolarAlignment(weighted, latitude).u)) // 0.3
+
+// A wild reading (a mis-centered star, +0.5 degree in one declination) biases the plain fit, and the Huber and Tukey robust losses reject it, with a zero final weight for the bad point.
+const noisy = observations.map((observation, i) => (i === 3 ? { ...observation, mountDeclination: observation.mountDeclination + deg(0.5) } : observation))
+const plain = fitChallisPolarAlignment(noisy, latitude)
+const huber = fitChallisPolarAlignment(noisy, latitude, { robust: 'huber' })
+const tukey = fitChallisPolarAlignment(noisy, latitude, { robust: 'tukey', maxIterations: 50, tolerance: 1e-10, tuning: 4.685 })
+console.log(round(plain.u), round(huber.u), round(tukey.u), tukey.weights[3] < 0.05) // 0.5214 0.3 0.3 true
+
+// A known additive effect goes in the correction: the refraction increment of a real sky at each point, added to the readings and removed again in the fit.
+const refracted = observations.map((observation) => {
+	const declination = observation.star === 'alpha' ? deg(20) : deg(50)
+	return { ...observation, mountDeclination: observation.mountDeclination + challisRefractionCorrection(observation.hourAngle, declination, latitude), correction: challisRefractionCorrection(observation.hourAngle, declination, latitude) }
+})
+console.log(round(challisRefractionCorrection(0, deg(20), latitude), 5), round(challisRefractionCorrection(deg(60), deg(20), latitude), 5), round(fitChallisPolarAlignment(refracted, latitude).u)) // 0.00578 0.01292 0.3
+
+// The same drift seen from the southern hemisphere (the latitude is negative): the pole is still reported above the horizon, as a south celestial pole.
+const south = fitChallisPolarAlignment(observations, deg(-40))
+console.log(round(south.azimuth, 2), round(south.altitude, 2), round(south.totalError, 4)) // 179.81 39.7 0.3354
+
+// A short run (hour angles within 10 degrees) is reported as weak coverage in the warnings, and a magnitude beyond 5 degrees as outside the small-angle model.
+const short: ChallisObservation[] = Object.entries(intercepts).flatMap(([star, intercept]) => [-10, 0, 10].map(deg).map((hourAngle) => ({ star, hourAngle, mountDeclination: intercept + u * Math.cos(hourAngle) - v * Math.sin(hourAngle) })))
+console.log(fitChallisPolarAlignment(short, latitude).warnings) // [ "hour-angle coverage is small or concentrated" ]
+```
+
 ### DARV Exposure Planning
+
+`observation/alignment/polaralignment.darv` plans a DARV (drift alignment by robert vice) capture: the mount slews at a guide rate in right ascension in one direction, reverses it halfway through the exposure, and a polar error shows as a separation in declination between the outbound and the return trails of one star. The module only computes how long the exposure should be (it does not command the mount or inspect an image; see DARV Image Analysis and DARV Polar Error Estimation). Angles are radians, the times are seconds, the image scale is arcseconds per pixel and the polar errors of a preset are arcminutes. A `DarvExposurePreset` has the wanted RA trail length (`targetTrail`, pixels), the least separation to see between the two legs (`detectableSeparation`, pixels), the smallest polar error to make visible (`targetPolarError`, arcminutes) and the RA guide speed as a multiple of the sidereal rate (`guideRateSidereal`); the built-in ones are `COARSE_DARV_EXPOSURE_PRESET` (150 pixels, 3 pixels, 15 arcminutes, 1x), `MEDIUM_DARV_EXPOSURE_PRESET` (200, 3, 5, 1x) and `FINE_DARV_EXPOSURE_PRESET` (250, 2, 2, 0.5x), collected in `DARV_EXPOSURE_PRESETS` by the names `coarse`, `medium` and `fine`. `estimateDarvExposure(input)` takes a `DarvExposureInput` (the `focalLength` in millimeters, the `pixelSize` in micrometers, the star `declination`, its west-positive `hourAngle`, the observer `latitude`, the `mode` of the knob that is being set, `azimuth` or `altitude`, and a `preset`) and returns a `DarvExposureEstimate`: the `imageScale`, the usable `raVelocity` (arcseconds per second, the sidereal rate times the guide multiple times the cosine of the declination), the `geometryFactor` of the mode, the `driftDec` expected from the target polar error (arcseconds per second), the `raTrailTime` for the trail length, the `driftDetectionTime` for the separation (the two legs separate by twice the drift), the `recommendedLegTime` (the larger of the two) and the `recommendedExposure` (twice the leg time, outbound and return). `darvGeometryFactors(latitude, hourAngle)` gives the signed coefficients `[azimuth, altitude]` that convert the polar errors (radians) to the north drift of a fixed star divided by the sidereal rate: for the azimuth it is proportional to `cos(latitude) cos(H)`, largest for a star on the meridian and zero six hours from it, and for the altitude to `sin(H)`, the other way around, with the sign of the drift (the geometric factor of the estimate is its absolute value, since a separation is seen in both directions). A star in the wrong part of the sky for the chosen mode does not give a longer exposure but a drift that is too small to estimate, as does one very close to the celestial pole (a cosine of the declination under 0.001), and both are reported by the function as an error; choose the star by the hour angle, not by the exposure. The drift per arcminute (`DRIFT_ARCSEC_PER_SECOND_PER_ARCMIN`, 0.004375 arcsecond per second at the best geometry) is a visibility threshold for planning, not a drift model; the factors are valid for small errors, short exposures, no DEC guiding and no refraction (altitude errors refer to the geometric pole), and lose accuracy near the geographic poles.
+
+```ts
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+import { COARSE_DARV_EXPOSURE_PRESET, DARV_EXPOSURE_PRESETS, darvGeometryFactors, DRIFT_ARCSEC_PER_SECOND_PER_ARCMIN, estimateDarvExposure, FINE_DARV_EXPOSURE_PRESET, MEDIUM_DARV_EXPOSURE_PRESET, MIN_RA_COS_DECLINATION, type DarvExposureInput } from 'nebulosa/src/observation/alignment/polaralignment.darv'
+
+const round = (value: number, digits = 3) => +value.toFixed(digits)
+
+// The presets and the constants.
+console.log(COARSE_DARV_EXPOSURE_PRESET, MEDIUM_DARV_EXPOSURE_PRESET, FINE_DARV_EXPOSURE_PRESET === DARV_EXPOSURE_PRESETS.fine, DRIFT_ARCSEC_PER_SECOND_PER_ARCMIN, MIN_RA_COS_DECLINATION) // { targetTrail: 150, detectableSeparation: 3, targetPolarError: 15, guideRateSidereal: 1 } { targetTrail: 200, detectableSeparation: 3, targetPolarError: 5, guideRateSidereal: 1 } true 0.004375 0.001
+
+// The geometry at a latitude of 40 degrees: for a star on the meridian (hour angle 0) the azimuth coefficient is largest in magnitude (cos 40 = 0.766, with a negative sign) and the altitude one is zero; at 6 hours west it is the other way around; the sign follows the direction of the drift.
+console.log(
+	darvGeometryFactors(deg(40), 0).map((value) => round(value)),
+	darvGeometryFactors(deg(40), hour(6)).map((value) => round(value)),
+	darvGeometryFactors(deg(40), hour(-3)).map((value) => round(value)),
+) // [ -0.766, 0 ] [ 0, -1 ] [ -0.542, 0.707 ]
+
+// The exposure to set the azimuth with the medium preset, a 3.76 micrometers camera on a 400 mm telescope, a star on the meridian at a declination of 0 degrees and a latitude of 40 degrees.
+const base: DarvExposureInput = { focalLength: 400, pixelSize: 3.76, declination: 0, hourAngle: 0, latitude: deg(40), mode: 'azimuth', preset: MEDIUM_DARV_EXPOSURE_PRESET }
+const medium = estimateDarvExposure(base)
+console.log(round(medium.imageScale), round(medium.raVelocity), round(medium.geometryFactor), round(medium.driftDec, 5)) // 1.939 15.041 0.766 0.01676
+console.log(round(medium.raTrailTime), round(medium.driftDetectionTime), round(medium.recommendedLegTime), round(medium.recommendedExposure)) // 25.781 173.557 173.557 347.114
+
+// The other presets on the same star: a coarse one is quicker for a large error, and the fine one takes a slower guide rate (half the sidereal) and a smaller error, so its exposure is longer.
+for (const preset of [COARSE_DARV_EXPOSURE_PRESET, FINE_DARV_EXPOSURE_PRESET]) {
+	const estimate = estimateDarvExposure({ ...base, preset })
+	console.log(round(estimate.raTrailTime), round(estimate.driftDetectionTime), round(estimate.recommendedExposure)) // 19.336 57.852 115.705, then 64.453 289.262 578.523
+}
+
+// The altitude mode needs a star far from the meridian: at 5 h 45 min west of the meridian the factor is near 1, while a star on the meridian would not drift in altitude at all.
+const altitude = estimateDarvExposure({ ...base, mode: 'altitude', hourAngle: hour(5.75) })
+console.log(round(altitude.geometryFactor), round(altitude.driftDetectionTime), round(altitude.recommendedExposure)) // 0.998 133.238 266.475
+
+// A star near the celestial pole slows the RA trail (the speed goes with the cosine of the declination), so the trail takes longer: declination 60 degrees against 0.
+const north = estimateDarvExposure({ ...base, declination: deg(60) })
+console.log(round(north.raVelocity), round(north.raTrailTime), round(north.recommendedExposure)) // 7.521 51.563 347.114
+
+// A custom preset: a fast guide rate of four times the sidereal and a 100 pixels trail for a wide-field camera, with the smallest error to see set to 10 arcminutes.
+const custom = estimateDarvExposure({ ...base, focalLength: 135, pixelSize: 5.9, preset: { targetTrail: 100, detectableSeparation: 3, targetPolarError: 10, guideRateSidereal: 4 } })
+console.log(round(custom.imageScale), round(custom.raVelocity), round(custom.driftDetectionTime), round(custom.recommendedExposure)) // 9.015 60.164 403.462 806.924
+```
 
 ### DARV Image Analysis
 
@@ -12965,7 +13115,103 @@ console.log(custom.config.raPulse, custom.config.raDirection, custom.config.decD
 
 ### Meridian Flip Lifecycle
 
+`transitionMeridianFlip(policy, state, event)` of `observation/mount/meridian.flip` is the other half of the engine of Meridian Flip Planning: a pure reducer that advances the persisted `MeridianFlipState` (the `phase`, the number of `attempts`, whether the `preparationCompleted` and the `failure` reason) when the caller reports that an action finished, and returns the next state without mutating the given one. The cycle is `WAITING`, `PREPARING`, `READY`, `FLIPPING`, `VERIFYING_PIER_SIDE`, optionally `RECENTERING` and `SETTLING`, and `COMPLETED`, with `FAILED` reachable from any phase that is not terminal. The events are `PREPARED` (the exposure ended and the guiding was paused; only valid in `READY`, it sets `preparationCompleted` so that the next evaluation starts the flip), `FLIP_STARTED` (from `READY` with the preparation done, or from `FAILED` while a retry is available, it enters `FLIPPING` and counts one more attempt), `FLIP_COMPLETED` (the slew finished, so the pier side must be verified), `PIER_SIDE_CONFIRMED` (the mount reports the post-flip side, then `RECENTERING` when `requireRecentering`, else `SETTLING` when `requireGuidingSettle`, else `COMPLETED`), `RECENTER_COMPLETED` (to `SETTLING` or `COMPLETED`), `GUIDING_SETTLED` (to `COMPLETED`), `FAILED` with an optional `reason` code (`EXECUTION_FAILED` when absent; it is stored in `failure` and the attempts are kept) and `RESET` (back to `WAITING` with no attempts, a new cycle for the next target or the next night). A failed attempt is retried while the `attempts` do not exceed `maxRetries`, and `evaluateMeridianFlip` offers the retry (`RETRY_AVAILABLE`, the start or the pause of the guiding) only while the hour angle still is at or past `flipAt`, otherwise the action is `FAIL` with `RETRY_LIMIT_REACHED`. The decisions of the evaluation in the later phases are what the caller does next: `FLIPPING` is `NONE` (`FLIP_IN_PROGRESS`), `VERIFYING_PIER_SIDE` is `VERIFY_PIER_SIDE`, `RECENTERING` is `RECENTER`, `SETTLING` is `RESUME_GUIDING` and `COMPLETED` is `COMPLETE`. The state is a plain serializable object, so a caller that must survive a restart stores it after every transition and gives it back to the evaluation; it is the caller who runs the exposure, the guiding, the slew, the plate solve and the guiding resume, and who sends the events when they end, so an event received late or twice from an obsolete cycle should be dropped by the caller before it reaches the reducer. The reducer throws a `RangeError` for an event that is not valid in the current phase, and for an invalid policy or state.
+
+```ts
+import { deg } from 'nebulosa/src/math/units/angle'
+import { computeLocalSiderealTime, createMeridianFlipState, evaluateMeridianFlip, transitionMeridianFlip, type MeridianFlipEvent, type MeridianFlipPolicy, type MeridianFlipSnapshot, type MeridianFlipState } from 'nebulosa/src/observation/mount/meridian.flip'
+
+const target = { rightAscension: deg(100) }
+const at = (hourAngleDegrees: number, pierSide: MeridianFlipSnapshot['pierSide'], extra: Partial<MeridianFlipSnapshot> = {}): MeridianFlipSnapshot => ({ localSiderealTime: computeLocalSiderealTime(target.rightAscension, deg(hourAngleDegrees)), target, pierSide, ...extra })
+
+// The policy of the default sequence: recenter and wait for the guiding to settle, and one retry.
+const policy: MeridianFlipPolicy = { enabled: true, prepareAt: deg(-5), flipAt: 0, latestAt: deg(7.5), beforeFlipPierSide: 'EAST', afterFlipPierSide: 'WEST', maxRetries: 1 }
+
+console.log(createMeridianFlipState()) // { phase: 'WAITING', attempts: 0, preparationCompleted: false }
+
+// The successful cycle, step by step: the caller evaluates, executes the action and sends the event. The state is stored between the steps.
+let state: MeridianFlipState = createMeridianFlipState()
+const step = (snapshot: MeridianFlipSnapshot, event?: MeridianFlipEvent) => {
+	const decision = evaluateMeridianFlip(policy, snapshot, state)
+	state = event ? transitionMeridianFlip(policy, decision.state, event) : decision.state
+	console.log(decision.phase, decision.action, decision.reason, '->', state.phase, state.attempts, state.preparationCompleted)
+}
+step(at(-3, 'EAST', { isGuiding: true })) // PREPARING PREPARE PREPARE_WINDOW_REACHED -> PREPARING 0 false
+step(at(0.2, 'EAST', { isGuiding: true })) // READY PAUSE_GUIDING FLIP_THRESHOLD_REACHED -> READY 0 false
+step(at(0.2, 'EAST', { isGuiding: false }), { type: 'PREPARED' }) // READY START_FLIP FLIP_THRESHOLD_REACHED -> READY 0 true
+step(at(0.3, 'EAST'), { type: 'FLIP_STARTED' }) // READY START_FLIP FLIP_THRESHOLD_REACHED -> FLIPPING 1 true
+step(at(0.4, 'EAST', { isSlewing: true }), { type: 'FLIP_COMPLETED' }) // FLIPPING NONE FLIP_IN_PROGRESS -> VERIFYING_PIER_SIDE 1 true
+step(at(0.5, 'WEST'), { type: 'PIER_SIDE_CONFIRMED' }) // VERIFYING_PIER_SIDE VERIFY_PIER_SIDE ALREADY_ON_POST_FLIP_SIDE -> RECENTERING 1 true
+step(at(0.6, 'WEST'), { type: 'RECENTER_COMPLETED' }) // RECENTERING RECENTER RECENTER_REQUIRED -> SETTLING 1 true
+step(at(0.7, 'WEST'), { type: 'GUIDING_SETTLED' }) // SETTLING RESUME_GUIDING GUIDING_SETTLE_REQUIRED -> COMPLETED 1 true
+step(at(0.8, 'WEST')) // COMPLETED COMPLETE FLIP_COMPLETED -> COMPLETED 1 true
+
+// A cycle without recentering and settling goes straight from the verification to the end.
+const quick: MeridianFlipPolicy = { ...policy, requireRecentering: false, requireGuidingSettle: false }
+let flipping = transitionMeridianFlip(quick, transitionMeridianFlip(quick, transitionMeridianFlip(quick, { phase: 'READY', attempts: 0, preparationCompleted: false }, { type: 'PREPARED' }), { type: 'FLIP_STARTED' }), { type: 'FLIP_COMPLETED' })
+console.log(flipping.phase, transitionMeridianFlip(quick, flipping, { type: 'PIER_SIDE_CONFIRMED' }).phase) // VERIFYING_PIER_SIDE COMPLETED
+
+// A failed slew: the failure reason is kept, the evaluation offers a retry while the hour angle is past the flip threshold, FLIP_STARTED enters a second attempt, and a second failure exhausts the single retry.
+let failed = transitionMeridianFlip(policy, { phase: 'FLIPPING', attempts: 1, preparationCompleted: true }, { type: 'FAILED', reason: 'EXECUTION_FAILED' })
+console.log(failed.phase, failed.attempts, failed.failure) // FAILED 1 EXECUTION_FAILED
+const retry = evaluateMeridianFlip(policy, at(1, 'EAST'), failed)
+console.log(retry.phase, retry.action, retry.reason) // FAILED START_FLIP RETRY_AVAILABLE
+const second = transitionMeridianFlip(policy, retry.state, { type: 'FLIP_STARTED' })
+console.log(second.phase, second.attempts) // FLIPPING 2
+failed = transitionMeridianFlip(policy, second, { type: 'FAILED', reason: 'EXECUTION_FAILED' })
+const exhausted = evaluateMeridianFlip(policy, at(1, 'EAST'), failed)
+console.log(exhausted.phase, exhausted.action, exhausted.reason) // FAILED FAIL RETRY_LIMIT_REACHED
+
+// RESET starts a new cycle from any phase, for the next target or the next night.
+console.log(transitionMeridianFlip(policy, failed, { type: 'RESET' })) // { phase: 'WAITING', attempts: 0, preparationCompleted: false }
+```
+
 ### Meridian Flip Planning
+
+`observation/mount/meridian.flip` decides what an application should do about the meridian flip of a German equatorial mount, as a pure function: it opens no device, runs no timer and performs no slew, and the caller feeds it a policy, a telemetry snapshot and the persisted state, and executes the action it returns. Angles are radians, the hour angle is the local apparent sidereal time minus the right ascension, normalized to `(-PI, PI]` and negative on the east side (before the meridian), and the thresholds are hour angles in `[-PI/2, PI/2]`. `computeLocalSiderealTime(greenwichSiderealTime, longitude)` adds an east-positive longitude to the Greenwich apparent sidereal time (see Sidereal Time) and normalizes to `[0, TAU)`, and `computeHourAngle(localSiderealTime, rightAscension)` gives the signed hour angle. `evaluateMeridianFlip(policy, snapshot, state?)` takes the `MeridianFlipPolicy` (`enabled`, the hour angles `prepareAt <= flipAt <= latestAt` where the preparation may start, the flip may start and the latest safe start, the pier sides `beforeFlipPierSide` and `afterFlipPierSide` as the application maps them from the driver, `allowUnknownPierSide`, `maxRetries` (0), `requireRecentering` and `requireGuidingSettle` (both true by default)), a `MeridianFlipSnapshot` (the `localSiderealTime`, the `target` right ascension, the `pierSide` and the booleans `isExposing`, `isGuiding`, `isSlewing` and `isMountSettled`) and the `MeridianFlipState` to persist (a new cycle when omitted), and returns a `MeridianFlipDecision`: the recommended `phase`, the `action` (`NONE`, `PREPARE`, `WAIT_FOR_EXPOSURE`, `ABORT_EXPOSURE`, `PAUSE_GUIDING`, `START_FLIP`, `VERIFY_PIER_SIDE`, `RECENTER`, `RESUME_GUIDING`, `COMPLETE` or `FAIL`), the `reason`, the `hourAngle`, the signed `untilFlip` and `untilLatest` distances in radians (positive before the threshold), `isOverdue` (at or past `latestAt`), `isAlreadyFlipped` (the pier side already is the post-flip one) and the `state` to persist. Before the flip the phases follow the hour angle: `WAITING` before `prepareAt`, `PREPARING` (action `PREPARE`) up to `flipAt`, and `READY` after it, where a running exposure is waited for (`WAIT_FOR_EXPOSURE`) or, when overdue, aborted (`ABORT_EXPOSURE`), the guiding is paused first (`PAUSE_GUIDING`, until the caller confirms with the `PREPARED` event of Meridian Flip Lifecycle), a slewing or unsettled mount is waited for (`NONE`) and then the flip starts (`START_FLIP`); the reason says whether the flip or the latest threshold was reached. When the pier side is the post-flip one the cycle is already completed; with a configured `beforeFlipPierSide` an unknown (`NEITHER` or absent) side fails unless `allowUnknownPierSide`, and a different one is a mismatch. When disabled the phase is `DISABLED`, and the decision still reports the hour angle and the distances. The engine assumes it is evaluated near the upper culmination: any hour angle after `flipAt` up to PI counts as past the flip threshold, so it must not be fed a target far west of the meridian, and the thresholds, the exposure and the guiding state are those of the caller, not read from a device. The function throws a `RangeError` for thresholds out of order or out of range, equal pier sides, a bad `maxRetries`, or a non-finite angle.
+
+```ts
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+import { computeHourAngle, computeLocalSiderealTime, evaluateMeridianFlip, type MeridianFlipPolicy, type MeridianFlipSnapshot } from 'nebulosa/src/observation/mount/meridian.flip'
+
+const degrees = (radians: number) => +((radians * 180) / Math.PI).toFixed(4)
+
+// The local sidereal time from the Greenwich one (10 h) and the longitude of the site (45 degrees west, so -45 degrees = -3 h), and the hour angle of a target at RA 8 h: 10 - 3 - 8 = -1 h (east of the meridian, before it).
+const lst = computeLocalSiderealTime(hour(10), deg(-45))
+console.log(+(lst / hour(1)).toFixed(4), +(computeHourAngle(lst, hour(8)) / hour(1)).toFixed(4), +(computeHourAngle(hour(1), hour(23)) / hour(1)).toFixed(4)) // 7 -1 2
+
+// A policy: prepare at -5 degrees of hour angle, flip at 0 (the meridian), and never after 7.5 degrees; the mount reports EAST before and WEST after the flip.
+const policy: MeridianFlipPolicy = { enabled: true, prepareAt: deg(-5), flipAt: 0, latestAt: deg(7.5), beforeFlipPierSide: 'EAST', afterFlipPierSide: 'WEST' }
+const target = { rightAscension: deg(100) }
+
+// A snapshot at an hour angle (in degrees) with the telemetry; the sidereal time is the right ascension of the target plus the hour angle.
+const at = (hourAngleDegrees: number, extra: Partial<MeridianFlipSnapshot> = {}): MeridianFlipSnapshot => ({ localSiderealTime: computeLocalSiderealTime(target.rightAscension, deg(hourAngleDegrees)), target, pierSide: 'EAST', ...extra })
+const show = (snapshot: MeridianFlipSnapshot, p = policy) => {
+	const d = evaluateMeridianFlip(p, snapshot)
+	console.log(d.phase, d.action, d.reason, degrees(d.hourAngle), degrees(d.untilFlip), degrees(d.untilLatest), d.isOverdue, d.isAlreadyFlipped, d.state.preparationCompleted)
+}
+
+// Far before the window, inside the preparation window, and at the flip threshold with the mount idle: nothing to do, prepare, start the flip.
+show(at(-20)) // WAITING NONE BEFORE_PREPARE_WINDOW -20 20 27.5 false false false
+show(at(-2)) // PREPARING PREPARE PREPARE_WINDOW_REACHED -2 2 9.5 false false false
+show(at(0.5)) // READY START_FLIP FLIP_THRESHOLD_REACHED 0.5 -0.5 7 false false true
+
+// At the flip threshold the exposure is waited for; past the latest threshold it is aborted; with guiding on, it is paused first; and a slewing mount is waited for.
+show(at(0.5, { isExposing: true })) // READY WAIT_FOR_EXPOSURE WAITING_FOR_EXPOSURE 0.5 -0.5 7 false false false
+show(at(8, { isExposing: true })) // READY ABORT_EXPOSURE LATEST_THRESHOLD_REACHED 8 -8 -0.5 true false false
+show(at(0.5, { isGuiding: true })) // READY PAUSE_GUIDING FLIP_THRESHOLD_REACHED 0.5 -0.5 7 false false false
+show(at(0.5, { isSlewing: true })) // READY NONE FLIP_THRESHOLD_REACHED 0.5 -0.5 7 false false true
+
+// The mount that already is on the post-flip side (the flip was done by hand or by the driver) completes the cycle; and a policy that is disabled only reports the geometry.
+show(at(0.5, { pierSide: 'WEST' })) // COMPLETED COMPLETE ALREADY_ON_POST_FLIP_SIDE 0.5 -0.5 7 false true false
+show(at(0.5), { ...policy, enabled: false }) // DISABLED NONE DISABLED 0.5 -0.5 7 false false false
+
+// An adapter that cannot tell the pier side (NEITHER) proceeds when allowUnknownPierSide is true.
+show(at(0.5, { pierSide: 'NEITHER' }), { ...policy, allowUnknownPierSide: true }) // READY START_FLIP FLIP_THRESHOLD_REACHED 0.5 -0.5 7 false false true
+
+// The hour angle wraps across 0 h of right ascension: a sidereal time of 0.01 h and a right ascension of 23.99 h give +0.02 h (0.3 degree), already past the flip threshold.
+show({ localSiderealTime: hour(0.01), target: { rightAscension: hour(23.99) }, pierSide: 'EAST' }) // READY START_FLIP FLIP_THRESHOLD_REACHED 0.3 -0.3 7.2 false false true
+```
 
 ### Mosaic Framing
 
@@ -13182,11 +13428,180 @@ for (let i = 0; i < 3; i++) {
 
 ### Observation Scores
 
+`astronomy/planning` scores one target that has already been reduced to a few numbers, to rank the targets of a night plan; it evaluates no ephemeris, so the altitudes, the solar altitude and the lunar geometry must come from the caller. Angles are radians and the scores are dimensionless on 0..1 (or 0..100 with `scale: 100`). `observationScore(input, options?)` is the geometric mean of the factors that were supplied, so a single zero factor zeroes the score and an omitted optional input is left out instead of counting as a failure. The `ObservationScoreInput` has the `altitude` (always scored: 0 at the horizon, or at `minimumAltitude`, rising linearly to 1 at 60 degrees, `goodAltitude`), the optional `airmass` (derived with Kasten and Young from the altitude when omitted, falling from 1 at the zenith to 0 at airmass 3, `maximumAirmass`, and 0 for a target that is not above the horizon), the `sunAltitude` (0 at -12 degrees and above, rising to 1 at -18 degrees), the `moonInterference` from 0 to 1 (the factor is one minus it) and the `availableDurationHours` with the `requiredDurationHours` (their ratio capped at 1, and a zero requirement counts as satisfied; scored only when both are given). `moonInterference(illumination, moonAltitude, separation)` gives that moon term as the illuminated fraction times the sine of the lunar altitude times a Gaussian of 30 degrees in the angular separation from the target (wrapped to `(-PI, PI]`), clamped to 0..1, and it is 0 for a Moon on or below the horizon or without illumination. The ramps are planning thresholds, not a photometric sky-brightness model: the Moon does not depend on the wavelength or on the sky transparency, the twilight ramp only follows the solar altitude and the airmass is the geometric one, so use the score to order targets and not as a limiting magnitude.
+
+```ts
+import { deg } from 'nebulosa/src/math/units/angle'
+import { moonInterference, observationScore } from 'nebulosa/src/astronomy/planning'
+
+const round = (value: number) => +value.toFixed(4)
+
+// A target at 60 degrees of altitude (the factor saturates) in the middle of the night, with no Moon: only altitude and airmass count, and the airmass from Kasten and Young at 60 degrees is 1.15, so the score is a little below 1.
+console.log(round(observationScore({ altitude: deg(60) }))) // 0.9607
+
+// Altitude ramp: 0 at the horizon, half at 30 degrees, and the same scale as a percentage.
+console.log(observationScore({ altitude: 0 }), round(observationScore({ altitude: deg(30) })), round(observationScore({ altitude: deg(30) }, { scale: 100 }))) // 0 0.5014 50.1425
+
+// The sky factors: a Sun at -15 degrees is in the middle of the twilight ramp (0.5), a Sun at -20 degrees is dark (1).
+console.log(round(observationScore({ altitude: deg(60), sunAltitude: deg(-15) })), round(observationScore({ altitude: deg(60), sunAltitude: deg(-20) }))) // 0.7728 0.9736
+
+// A gibbous Moon (80% lit) 45 degrees high: its interference on a target 20 degrees away, 90 degrees away and on the opposite side.
+const near = moonInterference(0.8, deg(45), deg(20))
+const far = moonInterference(0.8, deg(45), deg(90))
+console.log(round(near), round(far), round(moonInterference(0.8, deg(45), deg(-20))), moonInterference(0.8, deg(-5), 0), moonInterference(0, deg(45), 0)) // 0.453 0.0063 0.453 0 0
+console.log(round(observationScore({ altitude: deg(60), moonInterference: near })), round(observationScore({ altitude: deg(60), moonInterference: far }))) // 0.7963 0.9716
+
+// The separation wraps: 340 degrees is 20 degrees on the other side, and a full Moon at the zenith on the target is 1 (the score is then 0).
+console.log(round(moonInterference(0.8, deg(45), deg(340))), moonInterference(1, deg(90), 0), observationScore({ altitude: deg(60), moonInterference: 1 })) // 0.453 1 0
+
+// The duration: 3 hours available for a 4 hours plan is 0.75; the ratio is capped at 1 and a zero requirement is satisfied.
+console.log(round(observationScore({ altitude: deg(60), availableDurationHours: 3, requiredDurationHours: 4 })), round(observationScore({ altitude: deg(60), availableDurationHours: 9, requiredDurationHours: 4 })), round(observationScore({ altitude: deg(60), availableDurationHours: 0, requiredDurationHours: 0 }))) // 0.8846 0.9736 0.9736
+
+// An airmass measured by the caller (for example from an atmosphere model) replaces the derived one; 2 is in the middle of the airmass ramp.
+console.log(round(observationScore({ altitude: deg(60), airmass: 2 })), round(observationScore({ altitude: deg(60), airmass: 1 }))) // 0.7071 1
+
+// Options: an observatory with a horizon limit at 20 degrees that wants 45 degrees to be the best altitude, and accepts an airmass up to 2.
+console.log(round(observationScore({ altitude: deg(30) }, { minimumAltitude: deg(20), goodAltitude: deg(45), maximumAirmass: 2 }))) // 0.0478
+
+// A full evaluation of a target: 50 degrees high, a Sun at -19 degrees, the same Moon, and a plan that fits only partly.
+console.log(round(observationScore({ altitude: deg(50), sunAltitude: deg(-19), moonInterference: far, availableDurationHours: 3, requiredDurationHours: 4 }, { scale: 100 }))) // 87.9622
+```
+
 ### Pointing Model Fit and Correction
 
 ### Polar Alignment Exposure Estimator
 
+`observation/alignment/polaralignment.exposure` turns the residual polar error of a mount into a limit on the exposure of an unguided frame, or of a guided one: the star motion that remains after a perfect guiding is the rotation of the field around the guide star. It concerns only the polar misalignment, not the periodic error, the flexure or the generic sidereal star-trail formula of a perfectly aligned tracking mount. Directions are unit vectors in the inertial ICRF frame of the plate solutions, angles are radians, rates are radians per second, the exposures are SI seconds, the image scale is radians per pixel, and the allowed trail (`maxTrail`, 0.5 pixel by default as `DEFAULT_POLAR_ALIGNMENT_MAX_TRAIL`) is a displacement in pixels. The mechanical axis is fixed to the Earth, so the model has it turn around the true pole at the sidereal rate while the exposure runs, and a residual angular velocity `omega * (celestialPole - mountPole)` moves every star. The rate functions are instantaneous at the given directions (the sidereal rate by default, and the vectors are normalized): `polarAlignmentResidualAngularVelocity(mountPole, celestialPole, rate?)` returns that velocity vector, `polarAlignmentUnguidedDriftRate(mountPole, celestialPole, target, rate?)` the drift of a target (its component perpendicular to the direction of the target), `polarAlignmentWorstCaseDriftRate(...)` the largest drift for any target (`2 * rate * sin(error / 2)`, independent of the direction) and `polarAlignmentGuidedFieldRotationRate(mountPole, celestialPole, guide, rate?)` the signed field roll for an ideal RA and DEC guiding at the guide direction, or `undefined` when the guide is too close to the mechanical axis. The sampling helpers are `polarAlignmentImageScale(pixelSize, focalLength)` (a pixel size in micrometers and a focal length in millimeters to radians per pixel) and `polarAlignmentFieldRadius(width, height, imageScale)` (the gnomonic angular radius from the guide star at the center of a sensor to its corner, with the sizes in pixels). `polarAlignmentExposureLimit(input)` takes a `PolarAlignmentExposureInput` (the `mountPole`, the `celestialPole`, the `imageScale`, an optional `maxTrail`, an optional `target` direction, an optional `guiding` of a `guide` direction and the `fieldRadius` of the farthest relevant point from it, and the `searchLimit` in seconds, one sidereal day by default) and returns the `polarError`, the `imageScale` and `maxTrail` used, the `unguided` limits (the `worstCaseRate` and the conservative `worstCase` exposure for any target; with a target, its initial `targetRate` and the time-dependent `target` exposure, integrating the changing rate with Simpson's rule until the trail reaches the threshold) and, when guiding is given, the `guided` rate of the roll `rotationRate`, the protected `fieldRadius`, the `exposure` (which scales the roll with the sine of the field radius) and a `singular` flag for a guide near the mechanical axis (with no exposure). An exposure of `Infinity` means that the trail is not reached within the `searchLimit` (an aligned axis always gives it), and not an unlimited exposure physically. `polarAlignmentExposureLimitForResult(input, location?)` does the same from a `ThreePointPolarAlignmentResult` (its `pole` and `time`, transported as Earth-fixed to an optional start `time`, with the true pole computed without refraction), so the target and guide directions must be those of the chosen start epoch. The limits are conservative planning values for a smooth tracking with no other error, and the guided model assumes ideal guiding with both axes and no guider lag.
+
+```ts
+import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { arcmin, deg, toArcmin, toArcsec } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+import { mountAdjustmentAxes } from 'nebulosa/src/observation/alignment/polaralignment'
+import {
+	DEFAULT_POLAR_ALIGNMENT_MAX_TRAIL,
+	polarAlignmentExposureLimit,
+	polarAlignmentExposureLimitForResult,
+	polarAlignmentFieldRadius,
+	polarAlignmentGuidedFieldRotationRate,
+	polarAlignmentImageScale,
+	polarAlignmentResidualAngularVelocity,
+	polarAlignmentUnguidedDriftRate,
+	polarAlignmentWorstCaseDriftRate,
+} from 'nebulosa/src/observation/alignment/polaralignment.exposure'
+import { applyMountAdjustment, celestialPoleVector } from 'nebulosa/src/observation/alignment/polaralignment.util'
+
+const round = (value: number | undefined, digits = 3) => (value === undefined ? undefined : +value.toFixed(digits))
+
+// A mount 30 arcminutes off in azimuth and -20 in altitude at a site of 22 degrees of latitude; the poles in ICRF at an instant.
+const time = timeYMDHMS(2025, 1, 1, 0, 0, 0)
+const location = geodeticLocation(deg(-45), deg(22), meter(800))
+time.location = location
+const { upAxis, eastAxis } = mountAdjustmentAxes(time, location)
+const celestialPole = celestialPoleVector(time, location, false)
+const mountPole = applyMountAdjustment(celestialPole, upAxis, eastAxis, arcmin(30), arcmin(-20))
+
+// The sampling: a 3.76 micrometers pixel behind a 400 mm telescope is 1.94 arcseconds per pixel, and the corner of a 4144 x 2822 sensor is 1.35 degrees from its center.
+const imageScale = polarAlignmentImageScale(3.76, 400)
+console.log(round(toArcsec(imageScale)), round(polarAlignmentFieldRadius(4144, 2822, imageScale) * 57.29577951, 3), DEFAULT_POLAR_ALIGNMENT_MAX_TRAIL) // 1.939 1.35 0.5
+
+// The instantaneous rates, in arcseconds per second: the residual angular velocity components, the drift of a target at RA 100 and Dec 20 degrees, the worst case for any target, and the same drift for a rate argument of half the sidereal rate.
+const target = eraS2c(deg(100), deg(20))
+const guide = eraS2c(deg(103), deg(22))
+console.log(polarAlignmentResidualAngularVelocity(mountPole, celestialPole).map((value) => round(toArcsec(value), 5))) // [ -0.05127, 0.14097, 0.00087 ]
+console.log(round(toArcsec(polarAlignmentUnguidedDriftRate(mountPole, celestialPole, target)), 4), round(toArcsec(polarAlignmentWorstCaseDriftRate(mountPole, celestialPole)), 4), round(toArcsec(polarAlignmentUnguidedDriftRate(mountPole, celestialPole, target, 0.5 * 7.292115855e-5)), 4)) // 0.0561 0.15 0.0281
+
+// The field roll of an ideal guiding at the guide star, in arcseconds per second of the angle of the field.
+console.log(round(toArcsec(polarAlignmentGuidedFieldRotationRate(mountPole, celestialPole, guide)!), 5)) // 0.15995
+
+// The complete estimate with a target and guiding: the sensor corner as the field radius, and the default trail of 0.5 pixel.
+const input = { mountPole, celestialPole, imageScale, target, guiding: { guide, fieldRadius: polarAlignmentFieldRadius(4144, 2822, imageScale) } }
+const limit = polarAlignmentExposureLimit(input)
+console.log(round(toArcmin(limit.polarError)), round(toArcsec(limit.imageScale)), limit.maxTrail) // 34.286 1.939 0.5
+console.log(round(toArcsec(limit.unguided.worstCaseRate), 4), round(limit.unguided.worstCase, 2), round(toArcsec(limit.unguided.targetRate!), 4), round(limit.unguided.target, 2)) // 0.15 6.46 0.0561 17.28
+console.log(round(toArcsec(limit.guided!.rotationRate!), 5), round(limit.guided!.fieldRadius, 5), round(limit.guided!.exposure, 1), limit.guided!.singular) // 0.15995 0.02356 257.6 false
+
+// A tighter trail (a quarter of a pixel) halves the exposures, and a search limit of 3 seconds stops the search before the trail is reached, so the exposure is Infinity.
+const tight = polarAlignmentExposureLimit({ ...input, maxTrail: 0.25 })
+console.log(round(tight.unguided.worstCase, 2), round(tight.unguided.target, 2), round(tight.guided!.exposure, 1)) // 3.23 8.64 128.7
+console.log(polarAlignmentExposureLimit({ ...input, searchLimit: 3 }).unguided.worstCase) // Infinity
+
+// An aligned mount never reaches the trail (Infinity), and a guide star on the mechanical axis is singular for the RA and DEC kinematics: no rotation rate and no exposure.
+const aligned = polarAlignmentExposureLimit({ ...input, mountPole: celestialPole })
+console.log(aligned.unguided.worstCase, aligned.unguided.target, aligned.guided!.exposure) // Infinity Infinity Infinity
+const singular = polarAlignmentExposureLimit({ ...input, guiding: { guide: mountPole, fieldRadius: 0.01 } })
+console.log(singular.guided) // { fieldRadius: 0.01, singular: true }
+
+// From the result of a three-point alignment (its pole and time), the true pole is computed by the function; here the exposure starts at the alignment time.
+const fromResult = polarAlignmentExposureLimitForResult({ alignment: { pole: mountPole, time }, imageScale, target, guiding: input.guiding })
+console.log(round(toArcmin(fromResult.polarError)), round(fromResult.unguided.worstCase, 2), round(fromResult.guided!.exposure, 1)) // 34.286 6.46 257.6
+```
+
 ### Polar Alignment Geometry
+
+`observation/alignment/polaralignment` and `polaralignment.util` hold the geometry shared by every polar-alignment method (see Three-Point Polar Alignment, DARV Polar Error Estimation and Polar Alignment Overlay). Angles are radians, the poles are unit vectors in the inertial ICRF (J2000) frame used by the plate solutions, and the returned vectors are new ones. The mount pole is the mechanical right-ascension axis of the mount, fixed to the Earth between the adjustments of the base: `celestialPoleVector(time, location?, refraction?)` is the celestial pole direction at a time (the geometric one when the refraction is `false`, or the one the observer sees with the atmosphere, by default `DEFAULT_REFRACTION_PARAMETERS`), `polarAlignmentReferenceAltitude(latitude, refraction?)` is the altitude of that target pole above the horizon, `transportEarthFixed(vector, from, to)` carries a direction fixed to the Earth between two instants through the ITRS (it returns the same vector when the time is the same object) and `mountAdjustmentAxes(time, location)` gives the local `upAxis` and `eastAxis` in the inertial frame. The base moves only with two knobs: `applyMountAdjustment(vector, upAxis, eastAxis, azimuth, altitude)` rotates about the local up by the azimuth and then about the east axis carried by the rotated base by the altitude, `applyInverseMountAdjustment` undoes it, `solveAzAltAdjustment(from, to, upAxis, eastAxis)` finds in the small-angle tangent plane the two knob angles that best explain the shift of a star from one direction to another (zeros when the geometry is degenerate) and `decomposePolarErrorGeodesic(currentPole, targetPole, upAxis, eastAxis)` splits a finite spherical error into the `total` separation and the signed `azimuth` and `altitude` components along the tangents of the positive knob rotations, or returns `undefined` for a zero, antipodal or mechanically singular geometry. The azimuth is north through east and the altitude error is the mount pole altitude minus the target altitude in the north (the opposite in the south). `convertPolarAlignmentAltitudeError(error, latitude, from?, to?)` converts an altitude error between a geometric reference (`false`) and a refracted one (by default from the geometric to the default atmosphere), since the refraction raises both the mount pole and the target; it is a small-error conversion and it does not model a changing atmosphere. `polarAlignmentError(rightAscension, declination, latitude, lst, azimuthError, altitudeError)` is the older equatorial two-star formula (Ralph Pass, with the TPoint terms) that predicts the `[rightAscension, declination]` the mount shows at a point for a pole error, and it clamps the declination near the poles. The adjustment functions throw a `RangeError` when the axes are not orthogonal or are zero, a hemisphere change flips the signed convention of the knobs, and a displayed pole with refraction must not be mixed with a geometric one.
+
+```ts
+import { DEFAULT_REFRACTION_PARAMETERS } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { timeShift, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecAngle, vecDot } from 'nebulosa/src/math/linear-algebra/vec3'
+import { arcmin, deg, hour, toArcmin, toDeg } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+import { mountAdjustmentAxes, polarAlignmentError, solveAzAltAdjustment } from 'nebulosa/src/observation/alignment/polaralignment'
+import { applyInverseMountAdjustment, applyMountAdjustment, celestialPoleVector, convertPolarAlignmentAltitudeError, decomposePolarErrorGeodesic, polarAlignmentReferenceAltitude, transportEarthFixed } from 'nebulosa/src/observation/alignment/polaralignment.util'
+
+const round = (value: number, digits = 4) => +value.toFixed(digits)
+
+// A site at 22 degrees of latitude, 45 degrees west and 800 m, and an instant.
+const time = timeYMDHMS(2025, 1, 1, 0, 0, 0)
+const location = geodeticLocation(deg(-45), deg(22), meter(800))
+time.location = location
+
+// The target pole: the reference altitude is the latitude for the geometric pole and a few arcminutes higher with the default atmosphere, and the celestial pole direction as an ICRF unit vector, which is the same with or without refraction (the angle between them, in arcminutes, is zero).
+console.log(round(toDeg(polarAlignmentReferenceAltitude(location.latitude, false)), 4), round(toArcmin(polarAlignmentReferenceAltitude(location.latitude) - location.latitude), 3)) // 22 2.338
+const celestialPole = celestialPoleVector(time, location, false)
+console.log(
+	celestialPole.map((value) => round(value, 5)),
+	round(vecAngle(celestialPole, celestialPoleVector(time, location)) * 3437.7468, 3),
+) // [ 0.00243, 0.00003, 1 ] 0
+
+// The local axes of the base (up and east in the inertial frame at this instant), which are orthogonal unit vectors.
+const { upAxis, eastAxis } = mountAdjustmentAxes(time, location)
+console.log(Math.abs(vecDot(upAxis, eastAxis)) < 1e-12, round(Math.hypot(...upAxis), 12), round(Math.hypot(...eastAxis), 12)) // true 1 1
+
+// A mount whose base is 3 arcminutes off in azimuth and -10 in altitude: its pole is the celestial one rotated by the two knobs, about 10.4 arcminutes from it (not exactly hypot(3, 10), since the altitude axis is carried by the azimuth rotation), and the inverse adjustment brings it back.
+const mountPole = applyMountAdjustment(celestialPole, upAxis, eastAxis, arcmin(3), arcmin(-10))
+console.log(round(toArcmin(vecAngle(celestialPole, mountPole)), 3), round(toArcmin(vecAngle(celestialPole, applyInverseMountAdjustment(mountPole, upAxis, eastAxis, arcmin(3), arcmin(-10)))), 6)) // 10.38 0
+
+// The error of that pole from the target: the total and the signed components of the finite geodesic, in arcminutes (the azimuth knob moves the pole by only cos(latitude) of its angle, so the 3 arcminutes of the knob are 2.785 along the sky), and the same for a mount pole that coincides with the target.
+const error = decomposePolarErrorGeodesic(mountPole, celestialPole, upAxis, eastAxis)!
+console.log(round(toArcmin(error.total), 3), round(toArcmin(error.azimuth), 3), round(toArcmin(error.altitude), 3)) // 10.38 2.785 -10
+console.log(decomposePolarErrorGeodesic(celestialPole, celestialPole, upAxis, eastAxis)) // { total: 0, azimuth: 0, altitude: 0 }
+
+// The knobs from the shift of a star: a star that moves because the base was adjusted by 2 arcminutes of azimuth and -1 of altitude (a mount with no tracking) gives back both values.
+const star: [number, number, number] = [0.6, -0.5, 0.2]
+const length = Math.hypot(...star)
+const from = star.map((value) => value / length) as [number, number, number]
+const to = applyMountAdjustment(from, upAxis, eastAxis, arcmin(2), arcmin(-1))
+const knobs = solveAzAltAdjustment(from, to, upAxis, eastAxis)
+console.log(round(toArcmin(knobs.azimuthAdjustment), 3), round(toArcmin(knobs.altitudeAdjustment), 3)) // 2 -1
+
+// An Earth-fixed direction is the same at the same instant (the same object is returned), and after 6 hours the inertial vector has turned by the rotation of the Earth, here only a fraction of a degree because the pole is close to the axis of rotation.
+const later = timeShift(time, 0.25)
+later.location = location
+console.log(transportEarthFixed(mountPole, time, time) === mountPole, round(toDeg(vecAngle(mountPole, transportEarthFixed(mountPole, time, later))), 3)) // true 0.245
+
+// The altitude error in the geometric reference and in the default atmosphere: a geometric error of 5 arcminutes (the pole 5 arcminutes too high) is displayed a bit smaller; and the inverse conversion recovers it.
+const displayed = convertPolarAlignmentAltitudeError(arcmin(5), location.latitude)
+console.log(round(toArcmin(displayed), 4), round(toArcmin(convertPolarAlignmentAltitudeError(displayed, location.latitude, DEFAULT_REFRACTION_PARAMETERS, false)), 4)) // 4.9904 5
+
+// The two-star formula of Ralph Pass (latitude 42.67 degrees, azimuth error of 32.26 arcminutes and altitude error of 7.39): the position a mount with that pole error shows for a star at RA 3 h and declination 48 degrees, as the offsets in arcminutes, shown minus true, for a local sidereal time of 0.
+const [ra, dec] = polarAlignmentError(hour(3), deg(48), deg(42 + 40 / 60), 0, arcmin(32.26), arcmin(7.39))
+console.log(round(toArcmin(ra - hour(3)), 3), round(toArcmin(dec - deg(48)), 3)) // -9.038 -21.999
+```
 
 ### Polar Alignment Overlay
 
@@ -13228,6 +13643,60 @@ console.log(round(mountDirectionFromEncoders(collimated, { primary: 0, secondary
 ```
 
 ### Three-Point Polar Alignment
+
+`observation/alignment/polaralignment` measures the polar error of an equatorial mount from three plate solves taken while the mount slews only in right ascension, with no knowledge of the stars or of the declination readout: the three directions on the sky lie on a small circle around the mechanical axis, and the normal to their plane is that axis. The inputs are `ThreePointPolarAlignmentInput` tuples `[rightAscension, declination, time]` with the ICRF (J2000) coordinates of the solution in radians and the `Time` of the exposure (with its `location`), and angles are radians. `threePointPolarAlignmentError(p1, p2, p3, refraction?, location?)` carries the first two points to the epoch of the third through the rotation of the Earth (the points may be seconds or minutes apart and the mount may track meanwhile), fits the plane, makes the pole point above the horizon of the hemisphere and returns a `ThreePointPolarAlignmentResult`: the `time` and the unit `pole` in ICRF at it, the observed `azimuth` and `altitude` of the mount pole, the signed `azimuthError` (north through east for the north, reversed for the south) and `altitudeError` (the observed altitude of the pole minus the observed altitude of the target, with the sign reversed in the south, both with the selected refraction, or geometric when `refraction` is `false`) and the `azimuthAdjustment` and `altitudeAdjustment` last inferred for the knobs (zero in the initial estimate); it returns `false` when two points coincide or the three are collinear, as the plane is not defined. The atmosphere (`DEFAULT_REFRACTION_PARAMETERS` by default) changes only the displayed azimuth and altitude, not the mechanical axis, and the declination and the base adjustments must not change between the three exposures. `threePointPolarAlignmentAfterAdjustment(result, from, to, refraction?, location?, trackingRate?)` refreshes the result after the user turned the azimuth and altitude knobs: the `from` is the solution of the last exposure of the previous result and the `to` a new solution of the same field (a plate solve of the latest frame), the Earth-fixed pole is carried to the new epoch, the tracking of the mount about the axis during the elapsed time is removed (at the `trackingRate`, radians per second of time, sidereal by default and 0 when the tracking is off, positive for sidereal tracking in both hemispheres), and the knob rotations that best explain the remaining shift (a small-angle least-squares in the plane of the two knobs) are applied to the pole. The refresh requires no declination motion, guiding, dither, pier side change or change of the rate between the two exposures, it retains the transported pole when there is no residual shift or when the knob geometry is degenerate, and a measurement error is amplified near a singular geometry. `ThreePointPolarAlignment` is the stateful session: `add(rightAscension, declination, time)` takes the first three solves (returning `false` until the third gives an estimate, and `false` when the three are degenerate; after a degenerate third `reset()` is needed) and then each new solve refreshes the result, which is returned after every call, and `reset()` starts over; its constructor takes the `refraction` and the `trackingRate`. The drawing of the correction on the image is the Polar Alignment Overlay, and the geometry used here is in Polar Alignment Geometry.
+
+```ts
+import { eraC2s, eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecAngle, vecRotateByRodrigues } from 'nebulosa/src/math/linear-algebra/vec3'
+import { arcmin, deg, toArcmin, toDeg } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+import { mountAdjustmentAxes, ThreePointPolarAlignment, threePointPolarAlignmentAfterAdjustment, threePointPolarAlignmentError, type ThreePointPolarAlignmentResult } from 'nebulosa/src/observation/alignment/polaralignment'
+import { applyInverseMountAdjustment, applyMountAdjustment, celestialPoleVector } from 'nebulosa/src/observation/alignment/polaralignment.util'
+
+const round = (value: number, digits = 3) => +value.toFixed(digits)
+
+// A mount whose base is 12 arcminutes off in azimuth and -7 arcminutes in altitude at a site of 22 degrees of latitude: three solves while the mount turns about its own axis (rotations of 0, 0.8 and 1.6 radians of a star on the circle it draws) at the same instant.
+const time = timeYMDHMS(2025, 1, 1, 0, 0, 0)
+const location = geodeticLocation(deg(-45), deg(22), meter(800))
+time.location = location
+const { upAxis, eastAxis } = mountAdjustmentAxes(time, location)
+const mountPole = applyMountAdjustment(celestialPoleVector(time, location, false), upAxis, eastAxis, arcmin(12), arcmin(-7))
+const points = [0, 0.8, 1.6].map((angle) => {
+	const [ra, dec] = eraC2s(...vecRotateByRodrigues([1, 0, 0], mountPole, angle))
+	return [ra, dec, time] as const
+})
+
+// The geometric estimate (no refraction): the errors are in arcminutes and recover the base error (-12 in azimuth, since a positive rotation of the base moves the pole to the west, and -7 in altitude), the pole is a unit vector in ICRF at the exposure and its azimuth (359.8 degrees, that is 12 arcminutes west of north) and altitude (degrees) are those of the mount pole, which differs from the true one by 0 arcminutes; the knob adjustments are zero in the first estimate.
+const initial = threePointPolarAlignmentError(points[0], points[1], points[2], false, location) as ThreePointPolarAlignmentResult
+console.log(round(toArcmin(initial.azimuthError)), round(toArcmin(initial.altitudeError)), round(toDeg(initial.azimuth), 4), round(toDeg(initial.altitude), 4), initial.azimuthAdjustment, initial.altitudeAdjustment, initial.time === time) // -12 -7 359.8 21.8833 0 0 true
+console.log(round(toArcmin(vecAngle(initial.pole, mountPole)), 6)) // 0
+
+// With the default atmosphere the displayed altitude error differs by the refraction of both poles (a fraction of an arcminute here, and its altitude in degrees), while the azimuth does not change.
+const refracted = threePointPolarAlignmentError(points[0], points[1], points[2], undefined, location) as ThreePointPolarAlignmentResult
+console.log(round(toArcmin(refracted.azimuthError)), round(toArcmin(refracted.altitudeError)), round(toDeg(refracted.altitude), 4)) // -12 -6.986 21.9225
+
+// The user turns the knobs, undoing the error of the base: the star of the last exposure moves with the base, and a plate solve of the same field gives its new position. The refresh infers the knob rotations (a mount with the tracking off passes a zero rate) and the remaining error of the pole is near zero.
+const [toRa, toDec] = eraC2s(...applyInverseMountAdjustment(eraS2c(points[2][0], points[2][1]), upAxis, eastAxis, arcmin(12), arcmin(-7)))
+const after = threePointPolarAlignmentAfterAdjustment(initial, points[2], [toRa, toDec, time], false, location, 0)
+console.log(round(toArcmin(after.azimuthAdjustment)), round(toArcmin(after.altitudeAdjustment)), round(toArcmin(after.azimuthError), 4), round(toArcmin(after.altitudeError), 4)) // -11.993 7.004 -0.0171 0.0042
+
+// The same field with no shift gives no adjustment and keeps the pole of the previous result.
+const unchanged = threePointPolarAlignmentAfterAdjustment(initial, points[2], points[2], false, location, 0)
+console.log(unchanged.azimuthAdjustment, unchanged.altitudeAdjustment, round(toArcmin(unchanged.azimuthError)), round(toArcmin(unchanged.altitudeError))) // 0 0 -12 -7
+
+// The session class does the same bookkeeping: the first two solves return false, the third the estimate and the next one the refreshed result, which follows the solves of the user between the knob turns. reset() starts a new session.
+const session = new ThreePointPolarAlignment(false, 0)
+console.log(session.add(points[0][0], points[0][1], time), session.add(points[1][0], points[1][1], time)) // false false
+const seeded = session.add(points[2][0], points[2][1], time) as ThreePointPolarAlignmentResult
+console.log(round(toArcmin(seeded.azimuthError)), round(toArcmin(seeded.altitudeError))) // -12 -7
+const refreshed = session.add(toRa, toDec, time) as ThreePointPolarAlignmentResult
+console.log(round(toArcmin(refreshed.azimuthAdjustment)), round(toArcmin(refreshed.altitudeAdjustment)), round(toArcmin(refreshed.azimuthError), 4), round(toArcmin(refreshed.altitudeError), 4)) // -11.993 7.004 -0.0171 0.0042
+session.reset()
+console.log(session.add(points[0][0], points[0][1], time)) // false
+```
 
 ### Tracking Rate Correction
 
@@ -13369,6 +13838,34 @@ console.log(provider.motion(at(75)), provider.generation, estimator.estimate(at(
 ```
 
 ### Weather Quality
+
+`astronomy/weather` turns one reading of a weather station into an imaging quality from 0 to 1, independently of the driver that produced it. `weatherQualityScore(input)` takes a `WeatherQualityInput` whose fields are all optional and in physical units (`cloudCoverPercent`, `humidityPercent`, `windSpeedMetersPerSecond`, `windGustMetersPerSecond`, `dewMarginCelsius` as the ambient temperature minus the dew point, and `rainRateMillimetersPerHour`) and returns the geometric mean of the factors of the sensors that were given, so a sensor that is absent is neither punished nor invented, and one bad factor drags the score down. The cloud factor falls linearly from 1 at 0% to 0 at 100%; the humidity factor stays 1 up to 70% and reaches 0 at 100%; the wind factor uses the faster of the sustained speed and the gust, stays 1 up to 5 m/s and reaches 0 at 15 m/s; the dew factor is one minus the dew risk of the margin (no risk from 5 degrees Celsius of margin, full risk at 0). Any positive rain rate returns 0 by itself, and a reading with no sensors returns 1. The thresholds are planning values for imaging, not a meteorological model or a forecast, they do not know the dome, the wind direction or the telescope, and a reading that is stale (the age of the packet is not a field) should be discarded by the caller.
+
+```ts
+import { weatherQualityScore } from 'nebulosa/src/astronomy/weather'
+
+const round = (value: number) => +value.toFixed(4)
+
+// No sensors score 1 (nothing to penalize), and a clear, dry and calm reading too.
+console.log(weatherQualityScore({}), weatherQualityScore({ cloudCoverPercent: 0, humidityPercent: 50, windSpeedMetersPerSecond: 2, dewMarginCelsius: 8 })) // 1 1
+
+// Each factor alone: cloud cover is linear, humidity is flat up to 70% and then falls, and the wind is flat up to 5 m/s and then falls to 0 at 15 m/s.
+console.log(weatherQualityScore({ cloudCoverPercent: 25 }), weatherQualityScore({ cloudCoverPercent: 100 })) // 0.75 0
+console.log(weatherQualityScore({ humidityPercent: 70 }), weatherQualityScore({ humidityPercent: 85 }), weatherQualityScore({ humidityPercent: 100 })) // 1 0.5 0
+console.log(weatherQualityScore({ windSpeedMetersPerSecond: 5 }), weatherQualityScore({ windSpeedMetersPerSecond: 10 }), weatherQualityScore({ windSpeedMetersPerSecond: 15 })) // 1 0.5 0
+
+// The gust is scored together with the sustained wind by keeping the faster one: a calm 3 m/s wind with 12 m/s gusts scores as 12 m/s, and a gust alone is enough.
+console.log(round(weatherQualityScore({ windSpeedMetersPerSecond: 3, windGustMetersPerSecond: 12 })), round(weatherQualityScore({ windGustMetersPerSecond: 10 }))) // 0.3 0.5
+
+// The dew margin: 5 degrees Celsius or more is safe, and the score falls as the surfaces approach the dew point.
+console.log(weatherQualityScore({ dewMarginCelsius: 5 }), round(weatherQualityScore({ dewMarginCelsius: 2.5 })), weatherQualityScore({ dewMarginCelsius: 0 })) // 1 0.5 0
+
+// The factors combine by the geometric mean: 50% of clouds (0.5) and 85% of humidity (0.5) give 0.5, and with the wind at 10 m/s (0.5) too the score stays 0.5.
+console.log(round(weatherQualityScore({ cloudCoverPercent: 50, humidityPercent: 85 })), round(weatherQualityScore({ cloudCoverPercent: 50, humidityPercent: 85, windSpeedMetersPerSecond: 10 })), round(weatherQualityScore({ cloudCoverPercent: 10, humidityPercent: 60, windSpeedMetersPerSecond: 4 }))) // 0.5 0.5 0.9655
+
+// Any rain wins over everything else, even over a clear sky; a rain sensor that reads zero does not.
+console.log(weatherQualityScore({ cloudCoverPercent: 0, rainRateMillimetersPerHour: 0.1 }), weatherQualityScore({ cloudCoverPercent: 0, rainRateMillimetersPerHour: 0 })) // 0 1
+```
 
 ## 📖 Catalogs
 
