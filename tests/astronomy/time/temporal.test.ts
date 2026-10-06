@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 // oxfmt-ignore
-import { DATE_FORMAT, daysInMonth, formatTemporal, formatTemporalFromPattern, isLeapYear, parseTemporal, temporalNow, temporalUnix, TIME_FORMAT, temporalAdd, temporalDayOfWeek, temporalEndOfDay, temporalFromDate, temporalFromFractionOfYear, temporalFromTime, temporalGet, temporalSet, temporalStartOfDay, temporalSubtract, temporalToDate, zellersCongruence } from '../../../src/astronomy/time/temporal'
+import { DATE_FORMAT, daysInMonth, formatTemporal, formatTemporalFromPattern, isLeapYear, parseTemporal, temporalNow, temporalUnix, TIME_FORMAT, temporalAdd, temporalDayOfWeek, temporalEndOfDay, temporalFromDate, temporalFromFractionOfYear, temporalFromTime, temporalGet, temporalSet, temporalStartOfDay, temporalSubtract, temporalToDate, TIMEZONE, zellersCongruence } from '../../../src/astronomy/time/temporal'
 import { timeToDate, timeYMDHMS } from '../../../src/astronomy/time/time'
 
 test('is leap year', () => {
@@ -408,6 +408,9 @@ describe('format using pattern', () => {
 	test('timezone', () => {
 		expect(formatTemporalFromPattern(date, 'YYYY-MM-DDTHH:mm:ss', 60)).toEqual('2028-08-08T09:09:07')
 		expect(formatTemporalFromPattern(date, 'YYYY-MM-DDTHH:mm:ss', -180)).toEqual('2028-08-08T05:09:07')
+		// Same defaults as formatTemporal: UTC unless the process offset is requested with true.
+		expect(formatTemporalFromPattern(date, 'YYYY-MM-DDTHH:mm:ss')).toEqual(formatTemporalFromPattern(date, 'YYYY-MM-DDTHH:mm:ss', 0))
+		expect(formatTemporalFromPattern(date, 'YYYY-MM-DDTHH:mm:ss', true)).toEqual(formatTemporalFromPattern(date, 'YYYY-MM-DDTHH:mm:ss', TIMEZONE))
 	})
 
 	test('negative timestamp', () => {

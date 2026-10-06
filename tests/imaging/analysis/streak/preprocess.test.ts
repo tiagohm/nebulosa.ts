@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { TAU } from 'nebulosa/src/core/constants'
 import { preprocessStreakImage, STREAK_MASK_INVALID, STREAK_MASK_SATURATED, streakLocalNoise, streakLocalNoiseAtPixel } from '../../../../src/imaging/analysis/streak/preprocess'
 import { createStreakDetectionWorkspace } from '../../../../src/imaging/analysis/streak/workspace'
 import type { Image } from '../../../../src/imaging/model/types'
@@ -20,7 +21,7 @@ function addGaussianNoise(raw: Float32Array, sigmaAt: (x: number, y: number) => 
 		state ^= state << 5
 		const second = (state >>> 0) / 0x1_0000_0000
 		const radius = Math.sqrt(-2 * Math.log(first))
-		const angle = 2 * Math.PI * second
+		const angle = TAU * second
 		const x = index % width
 		const y = Math.floor(index / width)
 		raw[index] += radius * Math.cos(angle) * sigmaAt(x, y)

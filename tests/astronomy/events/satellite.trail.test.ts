@@ -7,7 +7,7 @@ import { predictSatelliteTrails, sensorTrails, type SatelliteTrailPredictionOpti
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
 import { parseTLE, recordFromSgp4Elements, recordFromTLE, type SatRec } from '../../../src/astronomy/orbits/propagation/sgp4'
 import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS, tt, utc } from '../../../src/astronomy/time/time'
-import { ARCSEC_PER_RADIAN, DAYSEC, DEG2RAD, PIOVERTWO, TAU } from '../../../src/core/constants'
+import { ARCSEC_PER_RADIAN, DAYSEC, DEG2RAD, PI, PIOVERTWO, TAU } from '../../../src/core/constants'
 
 // Fixed ISS fixture shared with satellite.test.ts; WGS84 site, longitude east-positive, sea level.
 const TLE = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25544  51.6442  21.4611 0001363  85.7790 274.3535 15.49180547 25697', 'ISS')
@@ -158,7 +158,7 @@ for (const [name, prepared, resonance] of [
 
 test('displaced field misses and empty or reversed intervals return no visits', () => {
 	const [ra, dec] = coordinates(3332)
-	expect(predictSatelliteTrails(ISS, SITE, ra + Math.PI, -dec, FIELD, at(3330), at(3334))).toEqual([])
+	expect(predictSatelliteTrails(ISS, SITE, ra + PI, -dec, FIELD, at(3330), at(3334))).toEqual([])
 	expect(predict(3332, 3332)).toEqual([])
 	expect(predict(3334, 3330)).toEqual([])
 })
@@ -279,7 +279,7 @@ test('near the forward-hemisphere limit the predictor returns finite sensor coor
 	const [ra, dec] = coordinates(3332)
 	// Put the satellite just within the east limb of a nearly 180-degree equatorial sensor.
 	const center = ra - PIOVERTWO + 0.0001
-	const trails = predictSatelliteTrails(ISS, SITE, center, 0, { width: Math.PI - 0.0001, height: Math.PI - 0.0001 }, at(3331.99), at(3332.01), { maxStep: 0.001 })
+	const trails = predictSatelliteTrails(ISS, SITE, center, 0, { width: PI - 0.0001, height: PI - 0.0001 }, at(3331.99), at(3332.01), { maxStep: 0.001 })
 	expect(trails).toHaveLength(1)
 	for (const point of [trails[0].entry, trails[0].exit]) {
 		expect(Number.isFinite(point.sensorX)).toBeTrue()
@@ -290,7 +290,7 @@ test('near the forward-hemisphere limit the predictor returns finite sensor coor
 
 test('a forward-hemisphere transition refines the sensor exit instead of dropping its segment', () => {
 	const [ra] = coordinates(3840)
-	const field = { width: Math.PI - 0.0001, height: Math.PI - 0.0001 }
+	const field = { width: PI - 0.0001, height: PI - 0.0001 }
 	const run = (maxStep: number) => predictSatelliteTrails(ISS, SITE, ra - PIOVERTWO + 0.0001, 0, field, at(3839), at(3841), { maxStep })
 	const reference = run(0.001)
 	const trails = run(1)

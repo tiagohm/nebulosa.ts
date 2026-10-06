@@ -14,7 +14,7 @@ import { radialDopplerShift } from '../../../src/astronomy/formulas'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
 import { parseTLE, recordFromTLE, sgp4 } from '../../../src/astronomy/orbits/propagation/sgp4'
 import { gcrsToItrsRotationMatrix, type Time, Timescale, timeShift, timeSubtract, tt } from '../../../src/astronomy/time/time'
-import { AU_KM, DAYSEC, EARTH_RADIUS_AU, ELLIPSOID_PARAMETERS, ONE_SECOND, SPEED_OF_LIGHT_AU_DAY } from '../../../src/core/constants'
+import { AU_KM, DAYSEC, EARTH_RADIUS_AU, ELLIPSOID_PARAMETERS, ONE_SECOND, PIOVERTWO, SPEED_OF_LIGHT_AU_DAY } from '../../../src/core/constants'
 import { matTransposeMulVec } from '../../../src/math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecAngle, vecLength, vecMinus } from '../../../src/math/linear-algebra/vec3'
 import { clamp } from '../../../src/math/numerical/math'
@@ -367,7 +367,7 @@ test('observer-relative satellite Sun/Moon avoidance paths agree with independen
 
 // Permissive solar/magnitude ceilings isolate individual interval boundaries; the empirical
 // magnitude and altitude remain explicit and are tightened by the tests below.
-const VISIBLE_OPTIONS = { standardMagnitude: -1.8, minimumAltitude: 0, maximumMagnitude: 100, maximumSunAltitude: Math.PI / 2, step: 10 * ONE_SECOND, tolerance: 1e-8 }
+const VISIBLE_OPTIONS = { standardMagnitude: -1.8, minimumAltitude: 0, maximumMagnitude: 100, maximumSunAltitude: PIOVERTWO, step: 10 * ONE_SECOND, tolerance: 1e-8 }
 
 test('visible intervals clip minimum altitude, magnitude and partial-window boundaries', () => {
 	const start = timeShift(EPOCH, 49 / 1440)

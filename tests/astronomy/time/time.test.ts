@@ -155,12 +155,22 @@ test('time convert returns the same object for an unchanged scale', () => {
 test('to date', () => {
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 12, 0, 0))).toEqual([2020, 1, 1, 12, 0, 0, 0])
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59))).toEqual([2020, 1, 1, 23, 59, 59, 0])
-	// 7th field is truncated milliseconds, not nanoseconds (0.5 s → 500, not 5e8).
+	// 7th field is rounded milliseconds, not nanoseconds (0.5 s → 500, not 5e8).
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59.5))).toEqual([2020, 1, 1, 23, 59, 59, 500])
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59.5))[6]).not.toBe(500_000_000)
 	expect(timeToDate(time(2460677, 0.503116, 0))).toEqual([2025, 1, 2, 0, 4, 29, 222])
 	expect(timeToDate(time(2460678, -0.496884, 0))).toEqual([2025, 1, 2, 0, 4, 29, 222])
 	expect(timeToDate(timeJulianYear(2000))).toEqual([2000, 1, 1, 12, 0, 0, 0])
+})
+
+test('to date rounds to the nearest millisecond and carries into the next date', () => {
+	// 1980-01-06 00:00:19 TAI is the GPS epoch; its binary day fraction must not read back as 18.999.
+	expect(timeToDate(timeYMDHMS(1980, 1, 6, 0, 0, 19, Timescale.TAI))).toEqual([1980, 1, 6, 0, 0, 19, 0])
+	expect(timeToDate(timeGPS(0))).toEqual([1980, 1, 6, 0, 0, 19, 0])
+	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59.9996))).toEqual([2020, 1, 2, 0, 0, 0, 0])
+	expect(timeToDate(timeYMDHMS(2020, 12, 31, 23, 59, 59.9996, Timescale.TT))).toEqual([2021, 1, 1, 0, 0, 0, 0])
+	expect(timeToDate(timeYMDHMS(2016, 12, 31, 23, 59, 60.9996))).toEqual([2017, 1, 1, 0, 0, 0, 0])
+	expect(timeToDate(timeYMDHMS(2016, 12, 31, 23, 59, 60.9994))).toEqual([2016, 12, 31, 23, 59, 60, 999])
 })
 
 test('UTC civil times on a leap-second day stay 36 s behind TAI', () => {
@@ -215,12 +225,52 @@ test('TAI to UT1 near a leap second agrees with TAI to UTC to UT1', () => {
 	}
 })
 
+test('UT1 - UTC is looked up at the UTC instant for non-UTC scales', () => {
+	// UT1 - UTC steps by +1 s at 2017-01-01 00:00:00 UTC (JD 2457754.5); the provider reads the instant as UTC.
+	const providers = { dut1: (t: Time) => (toJulianDay(t) < 2457754.5 ? -0.4 : 0.6) }
+
+	// 2016-12-31 23:59:50 UTC is 2017-01-01 00:00:26 TAI, after midnight on the TAI clock.
+	const fromUtc = timeYMDHMS(2016, 12, 31, 23, 59, 50, Timescale.UTC)
+	fromUtc.providers = providers
+	const fromTai = timeYMDHMS(2017, 1, 1, 0, 0, 26, Timescale.TAI)
+	fromTai.providers = providers
+	const fromTt = timeYMDHMS(2017, 1, 1, 0, 0, 58.184, Timescale.TT)
+	fromTt.providers = providers
+
+	expect(dut1(fromTai)).toBe(-0.4)
+	expect(dut1(fromTt)).toBe(-0.4)
+	expect(Math.abs(toJulianDay(ut1(fromTai)) - toJulianDay(ut1(fromUtc))) * DAYSEC).toBeLessThan(1e-3)
+	expect(Math.abs(toJulianDay(ut1(fromTt)) - toJulianDay(ut1(fromUtc))) * DAYSEC).toBeLessThan(1e-3)
+})
+
 test('to unix', () => {
 	expect(timeToUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0))).toBe(1577880000)
 })
 
 test('to unix milliseconds', () => {
 	expect(timeToUnixMillis(timeYMDHMS(2020, 1, 1, 12, 0, 0.005))).toBe(1577880000005)
+})
+
+test('to unix milliseconds keeps civil labels on a leap-second day', () => {
+	expect(timeToUnixMillis(timeYMDHMS(2016, 12, 31, 0, 0, 0))).toBe(Date.UTC(2016, 11, 31, 0, 0, 0))
+	expect(timeToUnixMillis(timeYMDHMS(2016, 12, 31, 12, 0, 0))).toBe(Date.UTC(2016, 11, 31, 12, 0, 0))
+	expect(timeToUnixMillis(timeYMDHMS(2016, 12, 31, 23, 59, 59))).toBe(Date.UTC(2016, 11, 31, 23, 59, 59))
+	expect(timeToUnixMillis(timeYMDHMS(2016, 12, 31, 23, 59, 59.5))).toBe(Date.UTC(2016, 11, 31, 23, 59, 59, 500))
+	// The inserted second has no POSIX label and holds at the next midnight.
+	expect(timeToUnixMillis(timeYMDHMS(2016, 12, 31, 23, 59, 60.5))).toBe(Date.UTC(2017, 0, 1))
+	expect(timeToUnixMillis(timeYMDHMS(2017, 1, 1, 0, 0, 0))).toBe(Date.UTC(2017, 0, 1))
+})
+
+test('time unix keeps civil labels on a leap-second day', () => {
+	for (const fast of [false, true]) {
+		expect(timeToDate(timeUnix(Date.UTC(2016, 11, 31, 12) / 1000, fast))).toEqual([2016, 12, 31, 12, 0, 0, 0])
+		expect(timeToDate(timeUnix(Date.UTC(2016, 11, 31, 23, 59, 59, 500) / 1000, fast))).toEqual([2016, 12, 31, 23, 59, 59, 500])
+		expect(timeToDate(timeUnix(Date.UTC(2017, 0, 1) / 1000, fast))).toEqual([2017, 1, 1, 0, 0, 0, 0])
+	}
+
+	for (const millis of [Date.UTC(2016, 11, 31, 0, 0, 0, 1), Date.UTC(2016, 11, 31, 6, 30, 15, 250), Date.UTC(2016, 11, 31, 23, 59, 59, 999)]) {
+		expect(timeToUnixMillis(timeUnix(millis / 1000))).toBe(millis)
+	}
 })
 
 test('to unix with scale', () => {
@@ -272,7 +322,8 @@ test('tai', () => {
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
 
-	expectTimeClose(ut1(t), { day: 2459130, fraction: -0.0004302293813657407, scale: Timescale.UT1 })
+	// UT1 - UTC is interpolated at the UTC instant (as Astropy does), so TAI -> UT1 equals TAI -> UTC -> UT1.
+	expectTimeClose(ut1(t), { day: 2459130, fraction: -0.0004302293840665322, scale: Timescale.UT1 })
 	expectTimeClose(utc(t), { day: 2459130, fraction: -0.000428240740740715, scale: Timescale.UTC })
 	expectTimeClose(tai(t), { day: 2459130, fraction: 0, scale: Timescale.TAI })
 	expectTimeClose(tt(t), { day: 2459130, fraction: 0.0003725, scale: Timescale.TT })

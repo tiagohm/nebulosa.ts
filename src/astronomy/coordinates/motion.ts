@@ -7,8 +7,9 @@ import { eraS2c } from './erfa/erfa'
 // Angular velocity and acceleration between spherical positions. Longitude and latitude are radians
 // (right ascension and declination when the sphere is the sky). Time is in days, matching the
 // library's ephemeris velocity convention; per-second rates are the same quantities divided by 86400.
-// Longitude differences are unwrapped to (−π, π] before dividing, so a sample that crosses 0h does
-// not invent a nearly full-turn rate. The total angular rate is the great-circle rate,
+// Longitude steps between consecutive time-ordered samples are unwrapped to (−π, π] and accumulated,
+// so a sample that crosses 0h does not invent a nearly full-turn rate and a densely sampled track keeps
+// its full turns. The total angular rate is the great-circle rate,
 // hypot(Δlongitude · cos(latitude), Δlatitude) / Δt, using the mean latitude of the two endpoints.
 
 // Dot-product distance from -1 treated as numerically antipodal. Thirty-two double-precision ulps
@@ -50,37 +51,48 @@ export interface AngularMotion {
 	readonly angularAccelerationPerDaySquared?: Angle
 }
 
-// Picks the sample closest to the mid-time of the first and last entries. The endpoints themselves are not candidates.
-function middleSample(samples: readonly SphericalMotionSample[]) {
-	const first = samples[0]
-	const last = samples.at(-1)
-	if (first === undefined || last === undefined || samples.length < 3) return undefined
+// Index of the sample closest to the mid-time of the first and last entries. The endpoints themselves are not candidates.
+function middleIndex(samples: readonly SphericalMotionSample[]) {
+	const n = samples.length
+	if (n < 3) return undefined
 
-	const midTime = (first.timeDays + last.timeDays) * 0.5
-	let middle = samples[1]
+	const midTime = (samples[0].timeDays + samples[n - 1].timeDays) * 0.5
+	let middle = 1
 	let best = Number.POSITIVE_INFINITY
 
-	for (let i = 1; i < samples.length - 1; i++) {
-		const candidate = samples[i]
-		if (candidate === undefined) continue
-		const distance = Math.abs(candidate.timeDays - midTime)
+	for (let i = 1; i < n - 1; i++) {
+		const distance = Math.abs(samples[i].timeDays - midTime)
 		if (distance < best) {
 			best = distance
-			middle = candidate
+			middle = i
 		}
 	}
 
 	return middle
 }
 
-// Coordinate rates of one leg. Longitude is unwrapped. Returns undefined when the leg has no duration.
-function legRate(from: SphericalMotionSample, to: SphericalMotionSample) {
-	const dt = to.timeDays - from.timeDays
+// Continuous longitudes of time-ordered samples, in radians: each step is wrapped to (−π, π] and
+// accumulated, so a track sampled at least once per half revolution keeps every full turn.
+// Allocates one array of the sample count.
+function unwrapLongitudes(samples: readonly SphericalMotionSample[]) {
+	const longitudes = new Float64Array(samples.length)
+	longitudes[0] = samples[0].longitude
+
+	for (let i = 1; i < samples.length; i++) {
+		longitudes[i] = longitudes[i - 1] + normalizePI(samples[i].longitude - samples[i - 1].longitude)
+	}
+
+	return longitudes
+}
+
+// Coordinate rates of the leg between samples i and j, using the unwrapped longitudes. Returns undefined when the leg has no duration.
+function legRate(samples: readonly SphericalMotionSample[], longitudes: Float64Array, i: number, j: number) {
+	const dt = samples[j].timeDays - samples[i].timeDays
 	if (!(dt !== 0)) return undefined
 
 	return {
-		longitude: normalizePI(to.longitude - from.longitude) / dt,
-		latitude: (to.latitude - from.latitude) / dt,
+		longitude: (longitudes[j] - longitudes[i]) / dt,
+		latitude: (samples[j].latitude - samples[i].latitude) / dt,
 	}
 }
 
@@ -119,7 +131,10 @@ function tangentialAcceleration(first: SphericalMotionSample, middle: SphericalM
 // them and no acceleration is published. With three or more, the rate is the secant from the earliest
 // to the latest, and the acceleration is the change between the leg into the mid-time sample and the
 // leg out of it, divided by half the full span: a = 2 (v₁₂ − v₀₁) / (t₂ − t₀). Samples may arrive
-// unordered; they are sorted by time. Returns undefined when fewer than two samples are finite in
+// unordered; they are sorted by time. Longitude is unwrapped step by step through every sorted sample,
+// so the coordinate rates follow a track that turns more than half a revolution between the endpoints
+// as long as consecutive samples are less than π apart in longitude; the great-circle rate and position
+// angle remain endpoint secant quantities. Returns undefined when fewer than two samples are finite in
 // time or when the endpoints share a time.
 // Differential tracking rate of an ephemeris sampled at two or three equatorial positions.
 // Instantaneous curved motion needs the three-sample acceleration; two samples give a constant rate.
@@ -132,7 +147,9 @@ export function angularMotionOrDifferentialTrackingRate(samples: readonly Spheri
 	const span = last.timeDays - first.timeDays
 	if (!(span !== 0)) return undefined
 
-	const longitudeDelta = normalizePI(last.longitude - first.longitude)
+	const longitudes = unwrapLongitudes(ordered)
+	const lastIndex = ordered.length - 1
+	const longitudeDelta = longitudes[lastIndex] - longitudes[0]
 	const latitudeDelta = last.latitude - first.latitude
 	const longitudeRatePerDay = longitudeDelta / span
 	const latitudeRatePerDay = latitudeDelta / span
@@ -147,10 +164,11 @@ export function angularMotionOrDifferentialTrackingRate(samples: readonly Spheri
 		positionAngle: positionAngleBetween(first.longitude, first.latitude, last.longitude, last.latitude),
 	}
 
-	const middle = middleSample(ordered)
-	if (middle === undefined) return motion
-	const inward = legRate(first, middle)
-	const outward = legRate(middle, last)
+	const m = middleIndex(ordered)
+	if (m === undefined) return motion
+	const middle = ordered[m]
+	const inward = legRate(ordered, longitudes, 0, m)
+	const outward = legRate(ordered, longitudes, m, lastIndex)
 	if (inward === undefined || outward === undefined) return motion
 	const longitudeAccelerationPerDaySquared = (2 * (outward.longitude - inward.longitude)) / span
 	const latitudeAccelerationPerDaySquared = (2 * (outward.latitude - inward.latitude)) / span

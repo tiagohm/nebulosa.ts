@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { deg, normalizePI } from '../../../src/math/units/angle'
 // oxfmt-ignore
 import { AzimuthalEquidistant, Balthasart, Behrmann, Braun, CentralCylindrical, CylindricalEqualArea, CylindricalEquidistant, CylindricalStereographic, EllipsoidalMercator, Gall, GallPeters, Gnomonic, HoboDyer, LambertAzimuthalEqualArea, LambertCylindricalEqualArea, Mercator, Miller, Orthographic, PlateCarree, projectMany, projectPolygon, projectPolyline, Stereographic, TrystanEdwards, WEB_MERCATOR_MAX_LATITUDE, WebMercator, } from '../../../src/astronomy/projections/projection'
-import { PI, PIOVERTWO } from '../../../src/core/constants'
+import { PI, PIOVERFOUR, PIOVERTWO } from '../../../src/core/constants'
 import { sphericalSeparation, type Point } from '../../../src/math/numerical/geometry'
 
 describe('azimuthal projections round-trip', () => {
@@ -318,7 +318,7 @@ test('pole-finite cylindrical projections accept the poles by default', () => {
 	const millerPole = new Miller().project(0, PIOVERTWO)
 	expect(millerPole).toBeDefined()
 	if (millerPole !== undefined) {
-		expect(millerPole.y).toBeCloseTo(1.25 * Math.log(Math.tan(Math.PI / 4 + 0.4 * PIOVERTWO)), 12)
+		expect(millerPole.y).toBeCloseTo(1.25 * Math.log(Math.tan(PIOVERFOUR + 0.4 * PIOVERTWO)), 12)
 	}
 
 	const highLatitude = deg(87)

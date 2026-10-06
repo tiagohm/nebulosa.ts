@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { KeplerOrbit } from '../../../src/astronomy/orbits/asteroid'
 import { moid } from '../../../src/astronomy/orbits/moid'
 import { Timescale, time } from '../../../src/astronomy/time/time'
-import { GM_SUN_PITJEVA_2005 } from '../../../src/core/constants'
+import { GM_SUN_PITJEVA_2005, PI } from '../../../src/core/constants'
 import { matIdentity } from '../../../src/math/linear-algebra/mat3'
 import { type Vec3, vecDot } from '../../../src/math/linear-algebra/vec3'
 import { normalizePI } from '../../../src/math/units/angle'
@@ -79,7 +79,7 @@ test('the MOID of nested coplanar ellipses is the apsidal gap when periapsis is 
 	// Inner a = 1, e = 0.1; outer periapsis 1.2 AU, e = 0.1, ω = π + 1°. The 1° offset puts the closest
 	// apsides off the 2 deg grid, where coplanar parallel tangents used to abort refinement at 0.101 AU.
 	const inner = KeplerOrbit.meanAnomaly(1 * (1 - 0.1 * 0.1), 0.1, 0, 0, 0, 0, EPOCH, GM_SUN_PITJEVA_2005, IDENTITY)
-	const outer = KeplerOrbit.meanAnomaly((1.2 / 0.9) * (1 - 0.1 * 0.1), 0.1, 0, 0, Math.PI + Math.PI / 180, 0, EPOCH, GM_SUN_PITJEVA_2005, IDENTITY)
+	const outer = KeplerOrbit.meanAnomaly((1.2 / 0.9) * (1 - 0.1 * 0.1), 0.1, 0, 0, PI + PI / 180, 0, EPOCH, GM_SUN_PITJEVA_2005, IDENTITY)
 	expect(moid(inner, outer).distance).toBeCloseTo(0.1000088, 6)
 })
 

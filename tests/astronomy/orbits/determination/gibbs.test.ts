@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { KeplerOrbit } from '../../../../src/astronomy/orbits/asteroid'
 import { gibbs, type GibbsWarning } from '../../../../src/astronomy/orbits/determination/gibbs'
 import { Timescale, timeYMDHMS } from '../../../../src/astronomy/time/time'
-import { AU_KM, DEG2RAD, GM_SUN_PITJEVA_2005, GM_SUN_PITJEVA_2005_KM3_S2 } from '../../../../src/core/constants'
+import { AU_KM, DEG2RAD, GM_SUN_PITJEVA_2005, GM_SUN_PITJEVA_2005_KM3_S2, PI, PIOVERTWO } from '../../../../src/core/constants'
 import { matIdentity } from '../../../../src/math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecDistance, vecLength } from '../../../../src/math/linear-algebra/vec3'
 
@@ -49,8 +49,8 @@ test('recovers the middle velocity for a circular half-orbit with an antipodal p
 	const radius = 2
 	const mu = 8
 	const r1 = circularPosition(0, radius)
-	const r2 = circularPosition(Math.PI / 2, radius)
-	const r3 = circularPosition(Math.PI, radius)
+	const r2 = circularPosition(PIOVERTWO, radius)
+	const r3 = circularPosition(PI, radius)
 	const result = gibbs(r1, r2, r3, mu)
 	const expected: Vec3 = [-Math.sqrt(mu / radius), 0, 0]
 
@@ -120,8 +120,8 @@ test('reports weak geometry for angular separations above the recommended range'
 
 test('recovers the middle velocity for an elliptical half-orbit through periapsis, quadrature, and apoapsis', () => {
 	const orbit1 = KeplerOrbit.trueAnomaly(1.8, 0.24, 0.18, 0.4, 0.7, 0, EPOCH, GM_SUN_PITJEVA_2005, IDENTITY_ROTATION)
-	const orbit2 = KeplerOrbit.trueAnomaly(1.8, 0.24, 0.18, 0.4, 0.7, Math.PI / 2, EPOCH, GM_SUN_PITJEVA_2005, IDENTITY_ROTATION)
-	const orbit3 = KeplerOrbit.trueAnomaly(1.8, 0.24, 0.18, 0.4, 0.7, Math.PI, EPOCH, GM_SUN_PITJEVA_2005, IDENTITY_ROTATION)
+	const orbit2 = KeplerOrbit.trueAnomaly(1.8, 0.24, 0.18, 0.4, 0.7, PIOVERTWO, EPOCH, GM_SUN_PITJEVA_2005, IDENTITY_ROTATION)
+	const orbit3 = KeplerOrbit.trueAnomaly(1.8, 0.24, 0.18, 0.4, 0.7, PI, EPOCH, GM_SUN_PITJEVA_2005, IDENTITY_ROTATION)
 	const result = gibbs(orbit1.position, orbit2.position, orbit3.position, GM_SUN_PITJEVA_2005)
 	const speed = vecLength(orbit2.velocity)
 

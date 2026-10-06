@@ -1079,7 +1079,7 @@ describe('Conjunction', () => {
 		// 1991-08-07T05:42:40.908Z
 		const [d, f] = modf(a[0])
 		const { day, fraction } = timeYMD(1991, 8, d)
-		expect(timeToDate(time(day, fraction + f))).toEqual([1991, 8, 7, 5, 42, 40, 907])
+		expect(timeToDate(time(day, fraction + f))).toEqual([1991, 8, 7, 5, 42, 40, 908])
 		expect(formatALT(a[1], true), '+02 08 22')
 	})
 

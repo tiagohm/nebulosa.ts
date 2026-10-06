@@ -5,7 +5,7 @@ import type { Distance } from '../../math/units/distance'
 import type { Pressure } from '../../math/units/pressure'
 import type { Temperature } from '../../math/units/temperature'
 import type { Velocity } from '../../math/units/velocity'
-import type { GeographicCoordinate } from '../observer/location'
+import { Ellipsoid, type GeographicCoordinate, type GeographicPosition } from '../observer/location'
 import { pmAngles, type Time, timeShift, tt, ut1 } from '../time/time'
 import type { CartesianCoordinate, EquatorialCoordinate, SphericalCoordinate } from './coordinate'
 import { type EraAstrom, eraApci13, eraApco13, eraApio13, eraAtciqz, eraAticq, eraAtioq, eraAtoiq, eraC2s, eraEo06a, eraP2s, eraRefco } from './erfa/erfa'
@@ -409,7 +409,10 @@ export function observedToCirs(azimuth: Angle, altitude: Angle, time: Time, refr
 	return eraAtoiq('A', azimuth, PIOVERTWO - altitude, astrom)
 }
 
-export function icrsToObserved(icrs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: PositionAndVelocity, ehp: Vec3 = ebpv[0], refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, location: GeographicCoordinate = time.location!, astrom?: EraAstrom): Observed {
+// Computes the observed place of an ICRS direction for a terrestrial site. `location` defaults to
+// `time.location`; the site ellipsoid is taken from `location` when it is a GeographicPosition, then
+// from `time.location`, and finally defaults to IERS 2010.
+export function icrsToObserved(icrs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: PositionAndVelocity, ehp: Vec3 = ebpv[0], refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, location: GeographicCoordinate | GeographicPosition = time.location!, astrom?: EraAstrom): Observed {
 	if (!astrom) {
 		const a = tt(time)
 		const b = ut1(time)
@@ -419,7 +422,7 @@ export function icrsToObserved(icrs: Vec3 | readonly [Angle, Angle], time: Time,
 		const temperature = refraction === false ? 0 : (refraction.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature)
 		const relativeHumidity = refraction === false ? 0 : (refraction.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity)
 		const wl = refraction === false ? 0 : (refraction.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl)
-		const { radius, flattening } = ELLIPSOID_PARAMETERS[time.location?.ellipsoid ?? 3]
+		const { radius, flattening } = ELLIPSOID_PARAMETERS[('ellipsoid' in location ? location.ellipsoid : undefined) ?? time.location?.ellipsoid ?? Ellipsoid.IERS2010]
 
 		// First set up the astrometry context for observed<->CIRS
 		astrom = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp, radius, flattening)

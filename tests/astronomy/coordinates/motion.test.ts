@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { angularMotionOrDifferentialTrackingRate } from '../../../src/astronomy/coordinates/motion'
-import { DAYSEC, DEG2RAD, PIOVERTWO } from '../../../src/core/constants'
+import { DAYSEC, DEG2RAD, PI, PIOVERTWO, TAU } from '../../../src/core/constants'
 
 test('two equatorial samples give a wrapped rate, a great-circle speed, and a position angle', () => {
 	const east = angularMotionOrDifferentialTrackingRate([
@@ -75,8 +75,8 @@ test('tangential acceleration supports non-uniform samples and longitude wrap', 
 test('antipodal legs omit their undefined tangent without rejecting ordinary long legs', () => {
 	const equatorialAntipode = angularMotionOrDifferentialTrackingRate([
 		{ longitude: 0, latitude: 0, timeDays: 0 },
-		{ longitude: Math.PI, latitude: 0, timeDays: 1 },
-		{ longitude: Math.PI + 0.1, latitude: 0, timeDays: 2 },
+		{ longitude: PI, latitude: 0, timeDays: 1 },
+		{ longitude: PI + 0.1, latitude: 0, timeDays: 2 },
 	])
 	expect(equatorialAntipode?.angularAccelerationPerDaySquared).toBeUndefined()
 
@@ -89,8 +89,8 @@ test('antipodal legs omit their undefined tangent without rejecting ordinary lon
 
 	const longButDefined = angularMotionOrDifferentialTrackingRate([
 		{ longitude: 0, latitude: 0, timeDays: 0 },
-		{ longitude: Math.PI - 1e-5, latitude: 0, timeDays: 1 },
-		{ longitude: Math.PI - 1e-5 + 0.1, latitude: 0, timeDays: 2 },
+		{ longitude: PI - 1e-5, latitude: 0, timeDays: 1 },
+		{ longitude: PI - 1e-5 + 0.1, latitude: 0, timeDays: 2 },
 	])
 	expect(longButDefined?.angularAccelerationPerDaySquared).toBeFinite()
 
@@ -100,4 +100,13 @@ test('antipodal legs omit their undefined tangent without rejecting ordinary lon
 		{ longitude: DEG2RAD, latitude: 0, timeDays: 2 },
 	])
 	expect(wrapped?.angularAccelerationPerDaySquared).toBeDefined()
+})
+
+test('densely sampled longitude keeps full turns beyond half a revolution', () => {
+	// 2 rad/day eastward for 2 days (4 rad > π between endpoints), sampled every 0.1 day and wrapped to [0, 2π).
+	const samples = Array.from({ length: 21 }, (_, i) => ({ longitude: (0.2 * i) % TAU, latitude: 0, timeDays: i * 0.1 }))
+	const motion = angularMotionOrDifferentialTrackingRate(samples)
+
+	expect(motion!.longitudeRatePerDay).toBeCloseTo(2, 12)
+	expect(motion!.longitudeAccelerationPerDaySquared).toBeCloseTo(0, 12)
 })

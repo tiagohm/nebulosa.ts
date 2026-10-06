@@ -348,6 +348,23 @@ test('ICRS to observed matches the explicit ICRS to CIRS to observed pipeline', 
 	expect(direct.equationOfOrigins).toBeCloseTo(viaCirs.equationOfOrigins, 12)
 })
 
+test('ICRS to observed takes the site ellipsoid from an explicit location', () => {
+	const location = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400), Ellipsoid.WGS72)
+	const withSite = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
+	withSite.location = location
+	const withoutSite = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
+	const earth = eraEpv00(tdb(withSite).day, tdb(withSite).fraction)
+	const icrs = [deg(120), deg(-30)] as const
+
+	const expected = icrsToObserved(icrs, withSite, earth[1], earth[0][0], false)
+	const explicit = icrsToObserved(icrs, withoutSite, earth[1], earth[0][0], false, location)
+	const iers2010 = icrsToObserved(icrs, timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC), earth[1], earth[0][0], false, { ...location, ellipsoid: Ellipsoid.IERS2010 })
+
+	expect(explicit).toEqual(expected)
+	// The ellipsoid must actually reach the site model for the comparison above to be meaningful.
+	expect(iers2010.altitude).not.toBe(expected.altitude)
+})
+
 test('unrefractedAltitude inverts refractedAltitude', () => {
 	const refraction = { pressure: 1005, temperature: 7, relativeHumidity: 0.8, wl: 0.574 }
 	for (const trueDeg of [5, 10, 20, 45, 70, 89]) {

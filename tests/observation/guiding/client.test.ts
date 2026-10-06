@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { pixelScale } from '../../../src/astronomy/formulas'
 import { Timescale, time, toJulianDay, type Time } from '../../../src/astronomy/time/time'
-import { DAYSEC, DEG2RAD, PIOVERTWO } from '../../../src/core/constants'
+import { DAYSEC, DEG2RAD, PI, PIOVERTWO } from '../../../src/core/constants'
 import { type Camera, DEFAULT_CAMERA, DEFAULT_GUIDE_OUTPUT, type GuideDirection, type GuideOutput } from '../../../src/devices/indi/device'
 import type { CameraManager } from '../../../src/devices/indi/manager/camera'
 import type { DeviceHandler } from '../../../src/devices/indi/manager/device'
@@ -3051,7 +3051,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 				position: (captureTime, out) => {
 					if (failure === 'provider' && failing) throw new Error('ephemeris unavailable')
 					if (failure === 'angular' && failing) {
-						out.rightAscension = Math.PI
+						out.rightAscension = PI
 						out.declination = 0
 						return out
 					}

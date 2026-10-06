@@ -1,3 +1,4 @@
+import { PI, TAU } from 'nebulosa/src/core/constants'
 import { quickSelect } from './array'
 import type { Point } from './geometry'
 import type { NumberArray } from './math'
@@ -39,12 +40,12 @@ const SMALL_MEDIAN_SORT_LIMIT = 9
 // Non-positive or non-finite inputs return NaN instead of a complex-valued continuation.
 export function logGamma(value: number): number {
 	if (!(value > 0) || !Number.isFinite(value)) return Number.NaN
-	if (value < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * value)) - logGamma(1 - value)
+	if (value < 0.5) return Math.log(PI / Math.sin(PI * value)) - logGamma(1 - value)
 	const shifted = value - 1
 	let sum = LOG_GAMMA_LANCZOS[0]
 	for (let i = 1; i < LOG_GAMMA_LANCZOS.length; i++) sum += LOG_GAMMA_LANCZOS[i] / (shifted + i)
 	const t = shifted + 7.5
-	return 0.5 * Math.log(2 * Math.PI) + (shifted + 0.5) * Math.log(t) - t + Math.log(sum)
+	return 0.5 * Math.log(TAU) + (shifted + 0.5) * Math.log(t) - t + Math.log(sum)
 }
 
 // Computes the regularized lower incomplete gamma P(a, x) for finite positive shape a and x in

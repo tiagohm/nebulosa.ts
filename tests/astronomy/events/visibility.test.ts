@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { PIOVERTWO } from 'nebulosa/src/core/constants'
 import type { PositionOverTime } from '../../../src/astronomy/coordinates/astrometry'
 import { icrs } from '../../../src/astronomy/coordinates/icrs'
 import { earth, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
@@ -77,7 +78,7 @@ test('combined target constraints evaluate the target provider once per epoch', 
 		moonCalls++
 		return vecYAxis()
 	}
-	const windows = visibilityWindows(target, SITE, DAY, timeShift(DAY, 0.01), { minimumAltitude: -Math.PI / 2, minimumMoonSeparation: 0 }, { moonAt: moon, step: 0.005 })
+	const windows = visibilityWindows(target, SITE, DAY, timeShift(DAY, 0.01), { minimumAltitude: -PIOVERTWO, minimumMoonSeparation: 0 }, { moonAt: moon, step: 0.005 })
 	expect(windows).toHaveLength(1)
 	expect(targetCalls).toBeGreaterThan(0)
 	expect(targetCalls).toBe(moonCalls)

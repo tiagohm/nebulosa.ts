@@ -160,6 +160,8 @@ export const NO_POLAR_MOTION: PolarMotion = () => [0, 0]
 // Julian Date day number of the Unix epoch (1970-01-01) and its half-day fraction offset.
 const UNIX_EPOCH_DAY = 2440588
 const UNIX_EPOCH_FRACTION = -0.5
+// Modified Julian Date of the Unix epoch (1970-01-01 00:00:00 UTC).
+const UNIX_EPOCH_MJD = 40587
 // Milliseconds per day.
 const DAYSEC_MS = DAYSEC * 1000
 
@@ -213,14 +215,15 @@ export function timeFromEpoch(epoch: number, unit: number, day: number, fraction
 	return { day, fraction, scale }
 }
 
-// Unix seconds from 1970-01-01 00:00:00 UTC, ignoring leap seconds.
-// For example, 946684800.0 in Unix time is midnight on January 1, 2000.
-// Must be used with UTC dates.
-// This quantity is not exactly unix time and differs from the strict POSIX definition
-// by up to 1 second on days with a leap second. POSIX unix time actually jumps backward by 1
-// second at midnight on leap second days while this class value is monotonically increasing
-// at 86400 seconds per UTC day.
+// UTC instant from POSIX Unix seconds since 1970-01-01 00:00:00 UTC (86400 labelled seconds per
+// day, no leap seconds). For example, 946684800.0 is midnight on January 1, 2000. Each Unix second
+// maps to the civil UTC clock label with the same reading: on a leap-second day the label is
+// placed on the ERFA quasi-JD day of DAYSEC+dleap seconds, so timeToDate reads it back unchanged.
+// POSIX has no representation of 23:59:60, so the inserted second is never produced.
+// `fast` skips the compensated normalization of the day and fraction.
 export function timeUnix(seconds: number, fast: boolean = false) {
+	let unix: Time
+
 	if (fast) {
 		const offsetDays = Math.trunc(seconds / DAYSEC)
 		let day = UNIX_EPOCH_DAY + offsetDays
@@ -234,10 +237,17 @@ export function timeUnix(seconds: number, fast: boolean = false) {
 			fraction++
 		}
 
-		return { day, fraction, scale: Timescale.UTC }
+		unix = { day, fraction, scale: Timescale.UTC }
 	} else {
-		return timeFromEpoch(seconds, DAYSEC, UNIX_EPOCH_DAY, UNIX_EPOCH_FRACTION, Timescale.UTC)
+		unix = timeFromEpoch(seconds, DAYSEC, UNIX_EPOCH_DAY, UNIX_EPOCH_FRACTION, Timescale.UTC)
 	}
+
+	const [year, month, day, civilFraction] = eraJdToCal(unix.day, unix.fraction)
+	const dleap = utcLeapSeconds(year, month, day)
+
+	// Compress the 86400 s POSIX clock onto the stretched UTC day so its labels are preserved.
+	if (dleap === 0) return unix
+	return { day: unix.day, fraction: unix.fraction + civilFraction * (DAYSEC / (DAYSEC + dleap) - 1), scale: Timescale.UTC }
 }
 
 // Current time as Unix time.
@@ -362,43 +372,58 @@ export function timeSubtract(a: Time, b: Time, scale: Timescale = a.scale) {
 	return c.day - d.day + (c.fraction - d.fraction)
 }
 
-// Converts the time to year, month, day, hour, minute, second and truncated
-// millisecond (0-999), not nanosecond. For Timescale.UTC, inverts the ERFA
-// quasi-JD stretch (eraD2dtf) so the clock is the civil HMS, including 23:59:60
-// on a positive leap-second day.
+// Converts the time to year, month, day, hour, minute, second and millisecond
+// (0-999), rounded to the nearest millisecond so an exact civil second such as
+// 00:00:19 does not read back as 00:00:18.999 from binary day-fraction roundoff;
+// a reading that rounds up to the end of the day carries into the next date.
+// For Timescale.UTC, inverts the ERFA quasi-JD stretch (eraD2dtf) so the clock is
+// the civil HMS, including 23:59:60 on a positive leap-second day. Other scales
+// read their own clock with a 86400 s day.
 export function timeToDate(time: Time): [number, number, number, number, number, number, number] {
-	const [year, month, day, rawFraction] = eraJdToCal(time.day, time.fraction)
-	let fraction = rawFraction
-	let dleap = 0
-	if (time.scale === Timescale.UTC) {
-		dleap = utcLeapSeconds(year, month, day)
-		if (dleap !== 0) {
-			// Invert the ERFA stretch, then snap to 1 ms so 12:00:00 does not
-			// become 11:59:59.999 from (DAYSEC+dleap)/DAYSEC roundoff.
-			fraction = Math.round(fraction * (DAYSEC + dleap) * 1000) / (DAYSEC * 1000)
-		}
+	const [calendarYear, calendarMonth, calendarDay, fraction] = eraJdToCal(time.day, time.fraction)
+	let year = calendarYear
+	let month = calendarMonth
+	let day = calendarDay
+	const dleap = time.scale === Timescale.UTC ? utcLeapSeconds(year, month, day) : 0
+	let millis = Math.round(fraction * (DAYSEC + dleap) * 1000)
+
+	if (millis >= (DAYSEC + dleap) * 1000) {
+		// Rounded up to the next civil midnight.
+		;[year, month, day] = eraJdToCal(MJD0 + eraCalToJd(year, month, day) + 1, 0)
+		millis = 0
+	} else if (millis >= DAYSEC_MS) {
+		// Inside the inserted leap second(s).
+		const extra = millis - DAYSEC_MS
+		return [year, month, day, 23, 59, 60 + Math.trunc(extra / 1000), extra % 1000]
 	}
-	if (dleap !== 0 && fraction >= 1) {
-		const extra = (fraction - 1) * DAYSEC
-		const whole = Math.trunc(extra)
-		return [year, month, day, 23, 59, 60 + whole, Math.trunc((extra - whole) * 1000)]
-	}
-	const hour = fraction * 24
-	const minute = ((hour - Math.trunc(hour)) * 60) % 60
-	const second = ((minute - Math.trunc(minute)) * 60) % 60
-	const milli = (second - Math.trunc(second)) * 1000 // 000000
-	return [year, month, day, Math.trunc(hour), Math.trunc(minute), Math.trunc(second), Math.trunc(milli)]
+
+	const hour = Math.trunc(millis / 3600000)
+	millis -= hour * 3600000
+	const minute = Math.trunc(millis / 60000)
+	millis -= minute * 60000
+	const second = Math.trunc(millis / 1000)
+	return [year, month, day, hour, minute, second, millis - second * 1000]
 }
 
-// Converts the time to Unix timestamp.
+// Converts the time to POSIX Unix seconds, truncated toward zero. See timeToUnixMillis.
 export function timeToUnix(time: Time) {
 	return Math.trunc(timeToUnixMillis(time) / 1000)
 }
 
-// Converts the time to Unix timestamp in milliseconds.
+// Converts the time to POSIX Unix milliseconds, truncated toward zero. The instant is converted
+// to UTC, and its civil clock label is counted at 86400 s per day, so every UTC label outside a
+// leap second maps to the same POSIX reading. During an inserted second (23:59:60.x), the result
+// holds at the following midnight, keeping the value non-decreasing.
 export function timeToUnixMillis(time: Time) {
 	const { day, fraction } = utc(time)
-	return Math.trunc((day - UNIX_EPOCH_DAY) * DAYSEC_MS + (fraction - UNIX_EPOCH_FRACTION) * DAYSEC_MS)
+	const [year, month, dayOfMonth, civilFraction] = eraJdToCal(day, fraction)
+	const dleap = utcLeapSeconds(year, month, dayOfMonth)
+
+	if (dleap === 0) return Math.trunc((day - UNIX_EPOCH_DAY) * DAYSEC_MS + (fraction - UNIX_EPOCH_FRACTION) * DAYSEC_MS)
+
+	// Undo the ERFA stretch, snapping to 1 µs so labels such as 12:00:00 do not truncate to 11:59:59.999.
+	const seconds = Math.min(Math.round(civilFraction * (DAYSEC + dleap) * 1e6) / 1e6, DAYSEC)
+	return Math.trunc((eraCalToJd(year, month, dayOfMonth) - UNIX_EPOCH_MJD) * DAYSEC_MS + seconds * 1000)
 }
 
 // Converts the time to Julian day.
@@ -804,7 +829,9 @@ export function instantaneousEarthAngularVelocity(time: Time): Vec3 {
 	return instantaneousEarthAngularVelocity
 }
 
-// Computes UT1 - UTC in seconds at time.
+// Computes UT1 - UTC in seconds at time. The IERS providers index their tables by UTC MJD, so
+// TAI, TT, TCG, TDB, and TCB instants are converted to UTC first; reading them directly would pick
+// the post-leap-second row up to TAI-UTC (plus TT-TAI) seconds early, a 1 s UT1 error.
 export const dut1: TimeDelta = (time) => {
 	const cached = time.cache?.ut1MinusUtc
 	if (cached !== undefined) return cached
@@ -813,7 +840,7 @@ export const dut1: TimeDelta = (time) => {
 
 	// https://github.com/astropy/astropy/blob/71a2eafd6c09f1992f8b4132e6e40ba68a675bde/astropy/time/core.py#L2554
 	// Interpolate UT1-UTC in IERS table
-	let dt = ut1MinusUtc(time)
+	let dt = ut1MinusUtc(time.scale === Timescale.UTC || time.scale === Timescale.UT1 ? time : utc(time))
 
 	// If we interpolated using UT1, we may be off by one
 	// second near leap seconds (and very slightly off elsewhere)

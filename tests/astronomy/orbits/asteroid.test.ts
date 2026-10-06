@@ -234,7 +234,7 @@ test('near-parabolic elliptic mean anomaly construction recovers Kepler state', 
 	// Classical Newton from E = M + e sin M diverges for e → 1^- and small nonzero M.
 	const e = 0.999999
 	const a = 10
-	const M = (0.01 * Math.PI) / 180
+	const M = deg(0.01)
 	const p = a * (1 - e * e)
 	const orbit = KeplerOrbit.meanAnomaly(p, e, 0.1, 0.2, 0.3, M, t)
 	const E = eccentricAnomalyFromMean(M, e)

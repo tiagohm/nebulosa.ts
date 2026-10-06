@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { TAU } from 'nebulosa/src/core/constants'
 import { meteorComparableOrbitFromKepler, meteorDDrummond, meteorDJopek, meteorDSouthworthHawkins, meteorHeliocentricState, meteorOrbitFromRadiant, meteorStreamOrbitNodeEncounters } from '../../../src/astronomy/meteors/orbit'
 import { timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import type { MeteorComparableOrbit, MeteorCompleteStreamOrbit } from '../../../src/astronomy/meteors/types'
@@ -76,7 +77,7 @@ test('Southworth-Hawkins, Drummond and Jopek match the independent MNRAS formula
 })
 
 test('D criteria are periodic in angular elements and undefined at singular orbits', () => {
-	const periodic = { ...SECOND_ORBIT, longitudeOfAscendingNode: SECOND_ORBIT.longitudeOfAscendingNode + 2 * Math.PI, argumentOfPerihelion: SECOND_ORBIT.argumentOfPerihelion - 2 * Math.PI } satisfies MeteorComparableOrbit
+	const periodic = { ...SECOND_ORBIT, longitudeOfAscendingNode: SECOND_ORBIT.longitudeOfAscendingNode + TAU, argumentOfPerihelion: SECOND_ORBIT.argumentOfPerihelion - TAU } satisfies MeteorComparableOrbit
 	expect(meteorDSouthworthHawkins(FIRST_ORBIT, periodic)).toBeCloseTo(meteorDSouthworthHawkins(FIRST_ORBIT, SECOND_ORBIT)!, 14)
 	expect(meteorDDrummond(FIRST_ORBIT, periodic)).toBeCloseTo(meteorDDrummond(FIRST_ORBIT, SECOND_ORBIT)!, 14)
 	expect(meteorDJopek(FIRST_ORBIT, periodic)).toBeCloseTo(meteorDJopek(FIRST_ORBIT, SECOND_ORBIT)!, 14)

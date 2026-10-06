@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
 import { meteorRadiantDegrees, meteorRadiantHorizontal, meteorRadiantJ2000, meteorRadiantMaximumAltitude, meteorRadiantOfDate, meteorRadiantPath, meteorRadiantPathBetween, meteorRadiantPathSegmentsBetween, meteorRadiantRiseTransitSet, meteorRadiantVector, meteorRadiantVisibility } from '../../../src/astronomy/meteors/radiant'
+import { PIOVERTWO, TAU } from 'nebulosa/src/core/constants'
 import { meteorSolarLongitude, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import type { MeteorComputationContext, MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
 import { timeShift, timeSubtract, timeYMDHMS, Timescale, type Time } from '../../../src/astronomy/time/time'
@@ -126,7 +127,7 @@ test('absolute-time radiant paths handle year boundaries, unavailable samples an
 	const path = meteorRadiantPathBetween(decemberReference, start, end, { step: 0.5, maxExtrapolationDays: 20 })
 
 	expect(path.length).toBeLessThan(5)
-	expect(path.every((point) => point.declination <= Math.PI / 2)).toBe(true)
+	expect(path.every((point) => point.declination <= PIOVERTWO)).toBe(true)
 	expect(path.some((point) => point.rightAscension < deg(20))).toBe(true)
 	expect(meteorRadiantPathBetween(decemberReference, start, end, { step: 0.5, maxExtrapolationDays: 0.1 })).toEqual([])
 	expect(meteorRadiantPathBetween(BASE_SOLUTION, end, start)).toEqual([])
@@ -177,7 +178,7 @@ test('radiant maximum altitude refines a visible interval and rejects an always-
 test('daily drift uses the reference longitude inversion and rejects pole crossing', () => {
 	const oneDay = timeYMDHMS(2024, 1, 5, 0, 0, 0, Timescale.UTC)
 	const result = meteorRadiantJ2000(DAILY_DRIFT_SOLUTION, context(oneDay, deg(1)), { solarLongitudeSearch: { step: 7, tolerance: TOLERANCE.time } })!
-	expect(Math.min(result.radiant.rightAscension, 2 * Math.PI - result.radiant.rightAscension)).toBeCloseTo(0, 12)
+	expect(Math.min(result.radiant.rightAscension, TAU - result.radiant.rightAscension)).toBeCloseTo(0, 12)
 	expect(toDeg(result.radiant.declination)).toBeCloseTo(9.75, 3)
 	expect(result.extrapolated).toBe(true)
 	expect(meteorRadiantJ2000(DAILY_DRIFT_SOLUTION, context(oneDay, deg(1)), { maxExtrapolationDays: 0.5, solarLongitudeSearch: { step: 7, tolerance: TOLERANCE.time } })).toBeUndefined()

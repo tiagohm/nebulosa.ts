@@ -294,7 +294,7 @@ function chooseStep(profile: MeteorActivityProfile, activityInterval: MeteorShow
 
 function supportDays(support: MeteorSolarLongitudeInterval): number {
 	if (support.fullCircle) return DAYSPERJY
-	return (((support.end - support.start + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2)) * DAYSPERJY
+	return (((support.end - support.start + TAU) % TAU) / TAU) * DAYSPERJY
 }
 
 // Restricts long, highly oversampled searches to the temporal intersection of catalog and profile

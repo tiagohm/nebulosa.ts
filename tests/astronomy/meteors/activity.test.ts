@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
 import { integrateMeteorZhr, isMeteorShowerActive, meteorActivityFraction, meteorActivityIntervalsAboveFraction, meteorActivityMaximumSolarLongitude, meteorActivityMaximumZhr, meteorActivityPhase, meteorActivityProgress, meteorActivityZhr, meteorExponentialZhr, meteorShowerActivityYearApplies, meteorSolarLongitudeForwardDelta } from '../../../src/astronomy/meteors/activity'
+import { PI } from 'nebulosa/src/core/constants'
 import type { MeteorActivityProfile } from '../../../src/astronomy/meteors/types'
 import { timeYMDHMS, Timescale, tt, tdb } from '../../../src/astronomy/time/time'
 import { deg, toDeg } from '../../../src/math/units/angle'
@@ -142,8 +143,8 @@ test('fraction thresholds include limiting cases and sampled support edges', () 
 	expect(toDeg(intervals[0].end)).toBeCloseTo(10, 8)
 	const fullCircle = meteorActivityIntervalsAboveFraction(SAMPLED_PROFILE, 0)
 	expect(fullCircle).toEqual([{ start: 0, end: 0, fullCircle: true }])
-	expect(isMeteorShowerActive(fullCircle[0], deg(180))).toBe(true)
-	expect(meteorActivityProgress(fullCircle[0], Math.PI)).toBeCloseTo(0.5, 14)
+	expect(isMeteorShowerActive(fullCircle[0], PI)).toBe(true)
+	expect(meteorActivityProgress(fullCircle[0], PI)).toBeCloseTo(0.5, 14)
 	expect(meteorActivityIntervalsAboveFraction(SAMPLED_PROFILE, 1)).toHaveLength(1)
 
 	const empty = { type: 'sampled', support: WRAPPED_INTERVAL, samples: [] } satisfies MeteorActivityProfile

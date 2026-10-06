@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { equatorialPointingError, polarAlignmentPointingModel } from '../../../src/astronomy/coordinates/pointing'
-import { SIDEREAL_DRIFT_RATE } from '../../../src/core/constants'
+import { PIOVERTWO, SIDEREAL_DRIFT_RATE } from '../../../src/core/constants'
 import type { Streak } from '../../../src/imaging/analysis/streak/types'
 import type { Image } from '../../../src/imaging/model/types'
 import { renderSyntheticStreak } from '../../../src/imaging/synthetic/streak'
@@ -76,9 +76,9 @@ function capture(drift = 0.15, outbound = 100, inbound = 100, dwell = 0, angle =
 }
 
 describe('DARV trail measurements', () => {
-	for (const angle of [0, Math.PI / 2, 0.71])
-		for (const parity of [-1, 1])
-			for (const drift of [-0.15, 0.15]) {
+	for (const angle of [0, PIOVERTWO, 0.71] as const)
+		for (const parity of [-1, 1] as const)
+			for (const drift of [-0.15, 0.15] as const) {
 				test(`signed drift under rotation ${angle}, parity ${parity}, drift ${drift}`, () => {
 					const result = analyzeDarvImage(capture(drift, 100, 100, 0, angle, parity))
 					expect(result.status).toBe('ok')
@@ -364,7 +364,7 @@ describe('DARV polar inversion', () => {
 
 	test('rejects nearly singular component and joint geometry', () => {
 		expect(estimateDarvPolarErrorComponent({ drift: 0, latitude: 0.5, hourAngle: 0 }, 'altitude').status).toBe('inconclusive')
-		expect(estimateDarvPolarErrorComponent({ drift: 0, latitude: Math.PI / 2, hourAngle: 0 }, 'azimuth').status).toBe('inconclusive')
+		expect(estimateDarvPolarErrorComponent({ drift: 0, latitude: PIOVERTWO, hourAngle: 0 }, 'azimuth').status).toBe('inconclusive')
 		for (const delta of [0, 1e-6, 0.001])
 			expect(
 				solveDarvPolarError([

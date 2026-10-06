@@ -1,4 +1,4 @@
-import { ARCSEC_PER_RADIAN, DAYSEC } from '../../core/constants'
+import { ARCSEC_PER_RADIAN, DAYSEC, PIOVERTWO } from '../../core/constants'
 import { validatePositiveFinite, validatePositiveInteger } from '../../core/validation'
 import { type Vec3, vecAngle, vecNormalize, vecPlus } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
@@ -174,7 +174,7 @@ export function predictSatelliteTrails(satrec: SatRec, location: GeographicPosit
 		const coordinateError = angularDistance(middle.rightAscension, middle.declination, from.rightAscension + normalizePI(to.rightAscension - from.rightAscension) * 0.5, (from.declination + to.declination) * 0.5)
 
 		// Wide/antipodal arcs have an ambiguous spherical midpoint and must be split first.
-		if (to.time - from.time > maxStep || vecAngle(from.direction, to.direction) > Math.PI / 2 || sphericalError > maxError || coordinateError > maxError || crossesProjectionBoundary(from, middle) || crossesProjectionBoundary(middle, to)) {
+		if (to.time - from.time > maxStep || vecAngle(from.direction, to.direction) > PIOVERTWO || sphericalError > maxError || coordinateError > maxError || crossesProjectionBoundary(from, middle) || crossesProjectionBoundary(middle, to)) {
 			pending.push([middle, to], [from, middle])
 		} else {
 			track.push(middle, to)
