@@ -403,4 +403,35 @@ describe('identity evolution', () => {
 		const later = at(render(SURFACE, { gain: 0.15, offset: 0.4, motion: { dx: 0.3, dy: 0 } }), 2010)
 		expect(later.notes).toContain('keyframe_staged')
 	})
+
+	test('the coarse limb search stays inside the bounded area around the target', () => {
+		// A 768 by 448 detector: a ringed planet whose limb is always rejected, and a larger disk eight times brighter
+		// 440 pixels away, outside the 384-pixel search square around the target but still on the detector. Over the
+		// full frame the distractor would set the half-contrast threshold and be the only component left.
+		const width = 768
+		const height = 448
+		const ringed = diskScene({ x: 180, y: 224, radius: 40, texture: PLANET_TEXTURE, textureAmplitude: 0.3, ring: { inner: 52, outer: 90, axisRatio: 0.35, brightness: 0.8 } })
+		const scene = addScenes(ringed, diskScene({ x: 620, y: 224, radius: 70, brightness: 8 }))
+		const tracker = new SolarSystemTracker({ mode: 'planetary' })
+		const at = (motion: SceneMotion, ctx: GuideTrackerContext = context()) => {
+			const image = renderScene(width, height, scene, { gain: 0.6, offset: 0.1, noise: 0.003, seed: frameId + 1, motion })
+			const result = tracker.track(frame(image, width, height), ctx)
+			if (result.measurement !== undefined) tracker.commit()
+			return result
+		}
+
+		const first = at({ dx: 0, dy: 0 }, context('selected', { preserveIdentity: false, searchPosition: [182, 222] }))
+		expect(first.notes).toContain('apparent_object_anchor')
+		expectPoint(first, 180, 224, 3)
+		const x0 = first.measurement!.x
+		const y0 = first.measurement!.y
+
+		// Without a limb prior every frame searches again, around the prediction instead of over the detector.
+		for (let i = 1; i <= 4; i++) {
+			const result = at({ dx: 0.8 * i, dy: -0.5 * i })
+			expectPoint(result, x0 + 0.8 * i, y0 - 0.5 * i, 0.3)
+			expect(result.measurementMode).toBe('surface')
+			expect(result.solarSystem.limb).toBeUndefined()
+		}
+	})
 })

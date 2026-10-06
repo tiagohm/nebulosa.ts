@@ -45,7 +45,8 @@ export type SolarSystemMeasurementMode = 'surface' | 'limb' | 'hybrid' | 'surfac
 export interface SolarSystemAcquisitionOptions {
 	// Side of the square surfacePoint tracking ROI, in image pixels.
 	readonly areaSize: number
-	// Largest objectCenter tracking ROI side, in image pixels.
+	// Largest objectCenter tracking ROI side, and the side of the coarse limb and bright-object search around a
+	// seed or a prediction without a limb prior, in image pixels.
 	readonly maximumAreaSize: number
 	// Margin added around the object radius for the objectCenter ROI, in image pixels.
 	readonly objectMargin: number
@@ -428,7 +429,8 @@ export class SolarSystemTracker implements GuideTracker {
 	}
 
 	// Builds a new identity around the seed (search position, initial position, configured area center,
-	// object center or frame center) and stages it.
+	// object center or frame center) and stages it. The limb and apparent-object search covers the configured area, or a
+	// maximumAreaSize square around a seed, and the full frame only when no location is known.
 	#acquire(frame: GuideTrackerFrame, image: Image, context: GuideTrackerContext): FrameOutcome {
 		const { acquisition, targetMode, surface, limb: limbOptions } = this.config
 		const { width, height } = frame
@@ -447,7 +449,7 @@ export class SolarSystemTracker implements GuideTracker {
 		const notes: string[] = []
 
 		if (targetMode === 'objectCenter' || acquisition.limbInterval > 0) {
-			const outcome = measureLimb(image, plane, configured ?? full, this.#workspace, limbOptions, seed === undefined ? {} : { seed })
+			const outcome = measureLimb(image, plane, searchArea, this.#workspace, limbOptions, seed === undefined ? {} : { seed })
 			if (outcome.success) limb = outcome.limb
 			else increment(reasons, outcome.reason)
 		}
@@ -458,7 +460,7 @@ export class SolarSystemTracker implements GuideTracker {
 				objectRadius = limb.semiMajor
 			} else {
 				// Rings, crescents and unresolved disks fall back to a stable apparent-object anchor.
-				const object = locateBrightObject(image, plane, configured ?? full, this.#workspace, limbOptions, seed)
+				const object = locateBrightObject(image, plane, searchArea, this.#workspace, limbOptions, seed)
 				if (object === undefined) return failed(reasons, ['acquisition_failed'])
 				target = object.center
 				objectRadius = object.radius
@@ -617,9 +619,8 @@ export class SolarSystemTracker implements GuideTracker {
 
 		if (limbEvery > 0 && (identity.framesSinceLimb + 1 >= limbEvery || registration === undefined)) {
 			limbMeasured = true
-			const full: Rect = { left: 0, top: 0, right: width, bottom: height }
 			const configured = this.config.area === undefined ? undefined : intersectArea(this.config.area, width, height)
-			const area = prior === undefined ? (configured ?? full) : limbArea(prior, limbOptions.searchFraction, width, height)
+			const area = prior === undefined ? (configured ?? this.#limbSearchArea(predicted, identity.objectRadius, width, height)) : limbArea(prior, limbOptions.searchFraction, width, height)
 			const outcome = measureLimb(image, identity.plane, area, this.#workspace, limbOptions, prior === undefined ? { seed: predicted } : { prior, continuity: true })
 			if (outcome.success) limb = outcome.limb
 			else increment(reasons, outcome.reason)
@@ -833,6 +834,16 @@ export class SolarSystemTracker implements GuideTracker {
 		if (outcome.success) return outcome
 		mergeReasons(reasons, outcome.rejectedReasons)
 		return undefined
+	}
+
+	// Coarse limb search area around a predicted object center (image pixels) when no limb prior exists: a square
+	// of maximumAreaSize pixels, widened to the known object diameter plus objectMargin on each side when that is
+	// larger, clipped to the detector. It keeps the connected-component pass and its workspace buffers at the
+	// tracking scale, so a persistently rejected limb (rings, crescents) costs bounded work on every frame and a
+	// brighter object elsewhere on the detector never sets the contrast threshold.
+	#limbSearchArea(center: readonly [number, number], radius: number | undefined, width: number, height: number) {
+		const { maximumAreaSize, objectMargin } = this.config.acquisition
+		return squareArea(center, radius === undefined ? maximumAreaSize : Math.max(maximumAreaSize, 2 * (radius + objectMargin)), width, height)
 	}
 
 	// objectCenter tracking ROI: the object radius plus margin on each side, bounded by the configured sizes.
