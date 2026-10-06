@@ -158,6 +158,16 @@ These rules apply to production code under `src/`. Use concise repository-style 
 
 Tests do not need production-style documentation comments. Add test comments only when they preserve non-obvious fixture provenance, trusted reference versions, numerical intent, lifecycle timing, or a regression's physical reason.
 
+## Public Documentation
+
+Public documentation lives in `docs/README.md` and is governed by `docs/AGENTS.md`.
+
+For every code change, assess documentation impact before finishing. If the change affects a public API or any user-visible/scientific contract — including behavior, inputs/outputs, units, coordinate frames, time scales, signs/wrapping, models/accuracy, failure behavior, mutation/ownership, protocol representation, device lifecycle, or a supported workflow — read and follow `docs/AGENTS.md` and update the owning topic in the same change.
+
+Search for an existing topic before creating a new one. Create a new topic only for a distinct user-facing capability; otherwise update the topic that already owns the behavior.
+
+Internal refactors that preserve the public and scientific contract do not require documentation changes.
+
 ## Validation Policy
 
 The project deliberately performs little runtime validation for trusted, typed inputs. Callers are responsible for satisfying documented preconditions; validation is not a substitute for a precise contract.
