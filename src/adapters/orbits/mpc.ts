@@ -11,7 +11,7 @@ import { validatePositiveInteger } from '../../core/validation'
 import { matIdentity } from '../../math/linear-algebra/mat3'
 import { Matrix } from '../../math/linear-algebra/matrix'
 import type { Vec3 } from '../../math/linear-algebra/vec3'
-import { type Angle, deg, formatAngle, type FormatAngleOptions, parseAngle, toDeg } from '../../math/units/angle'
+import { type Angle, deg, formatAngle, type FormatAngleOptions, normalizeAngle, parseAngle, toDeg } from '../../math/units/angle'
 import { type Distance, kilometer, meter, toKilometer, toMeter } from '../../math/units/distance'
 
 // Client for the Minor Planet Center public HTTP APIs and the local ADES/MPC1992 observation codecs.
@@ -2304,7 +2304,8 @@ function writeSatelliteSecondLine(first: string, observer: MPCSpacecraftObserver
 }
 
 function writeRovingSecondLine(first: string, observer: MPCGeodeticObserver, station: string) {
-	const lon = padNumeric(toDeg(observer.longitude), 10, 6)
+	// The roving second line holds an unsigned east longitude in 0..360 degrees.
+	const lon = padNumeric(toDeg(normalizeAngle(observer.longitude)), 10, 6)
 	const lat = padSignedNumeric(toDeg(observer.latitude), 10, 6)
 	const alt = String(Math.round(toMeter(observer.elevation))).padStart(5, ' ')
 	return `${first.slice(0, 12)} ${first[13]}v${first.slice(15, 32)}1 ${lon} ${lat} ${alt}${' '.repeat(16)}${station}`.slice(0, 80).padEnd(80)

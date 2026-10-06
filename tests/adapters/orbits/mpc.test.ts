@@ -526,6 +526,12 @@ ${mpc80('z9987K06UJ8Y  s2019 07 26.2427421 + 551363.13 -1190783.85 - 650915.72  
 		expect(observation.observer.sys).toBe('WGS84')
 		expect(toDeg(observation.observer.longitude)).toBeCloseTo(288.8716, 4)
 		expect(observation.observer.elevation).toBeCloseTo(meter(690), 12)
+
+		// A west longitude is written as its unsigned 0..360 east equivalent, not with the sign dropped.
+		const west = { ...observation, observer: { ...observation.observer, longitude: deg(-71.1284) } }
+		const [written] = parseMPC80Lines(writeMPC80(west))
+		if (written?.type !== 'optical' || written.observer?.kind !== 'geodetic') throw new Error('expected roving optical')
+		expect(toDeg(written.observer.longitude)).toBeCloseTo(288.8716, 6)
 	})
 
 	test('radar two-line 00433 example and orphan second line', () => {

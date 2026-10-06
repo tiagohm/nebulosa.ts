@@ -44,8 +44,18 @@ export interface StarCatalogEntry extends Readonly<EquatorialCoordinate> {
 	readonly parallax?: Angle
 }
 
+// Optional brightness and size filters shared by every region query.
+export interface StarCatalogQueryFilters {
+	// Inclusive lower (bright) apparent-magnitude bound; entries without a magnitude are excluded when set.
+	readonly magnitudeMin?: number
+	// Inclusive upper (faint) apparent-magnitude bound; entries without a magnitude are excluded when set.
+	readonly magnitudeMax?: number
+	// Maximum number of entries returned or streamed; a value that is not positive yields none.
+	readonly limit?: number
+}
+
 // A circular (cone) region query around a center.
-export interface StarCatalogConeQuery {
+export interface StarCatalogConeQuery extends StarCatalogQueryFilters {
 	readonly kind: 'cone'
 	// Cone center right ascension, radians.
 	readonly centerRA: Angle
@@ -57,7 +67,7 @@ export interface StarCatalogConeQuery {
 
 // A spherical-triangle region query.
 // Uses a local planar approximation except for regions containing a pole, which use great-circle edges.
-export interface StarCatalogTriangleQuery {
+export interface StarCatalogTriangleQuery extends StarCatalogQueryFilters {
 	readonly kind: 'triangle'
 	readonly a: Vertex
 	readonly b: Vertex
@@ -65,7 +75,7 @@ export interface StarCatalogTriangleQuery {
 }
 
 // An RA/Dec rectangular region query (may wrap across RA=0).
-export interface StarCatalogBoxQuery {
+export interface StarCatalogBoxQuery extends StarCatalogQueryFilters {
 	readonly kind: 'box'
 	readonly minRA: Angle
 	readonly maxRA: Angle
@@ -76,7 +86,7 @@ export interface StarCatalogBoxQuery {
 
 // A convex-polygon region query.
 // Ordered vertices use the local planar approximation, or great-circle edges if the region contains a pole.
-export interface StarCatalogPolygonQuery {
+export interface StarCatalogPolygonQuery extends StarCatalogQueryFilters {
 	readonly kind: 'polygon'
 	readonly vertices: readonly Vertex[]
 }
@@ -103,13 +113,7 @@ export interface StarCatalogRaDecBox {
 }
 
 // Shared fields of a normalized query: filters, geometry mode, and coarse preselection metadata.
-interface NormalizedQueryBase {
-	// Lower magnitude bound, if filtering by brightness.
-	readonly magnitudeMin?: number
-	// Upper magnitude bound, if filtering by brightness.
-	readonly magnitudeMax?: number
-	// Maximum number of results to materialize.
-	readonly limit?: number
+interface NormalizedQueryBase extends StarCatalogQueryFilters {
 	// Exact-test strategy.
 	readonly geometryMode: StarCatalogGeometryMode
 	// True when the region wraps across RA=0 (split into multiple boxes).
@@ -191,10 +195,6 @@ export abstract class BaseStarCatalog<T extends StarCatalogEntry> implements Sta
 
 		for await (const entry of this.streamNormalizedRegion(normalized)) {
 			items.push(entry)
-
-			if (normalized.limit !== undefined && items.length >= normalized.limit) {
-				break
-			}
 		}
 
 		return items
@@ -224,11 +224,22 @@ export abstract class BaseStarCatalog<T extends StarCatalogEntry> implements Sta
 		return this.streamNormalizedRegion(normalizeStarCatalogQuery(query))
 	}
 
-	// Streams provider candidates and applies generic exact filtering.
+	// Streams provider candidates and applies the exact geometry, the magnitude bounds, and the limit,
+	// so providers that cannot push those filters to their source still honor them.
 	protected async *streamNormalizedRegion(query: NormalizedStarCatalogQuery) {
+		const { magnitudeMin, magnitudeMax, limit } = query
+		if (limit !== undefined && !(limit > 0)) return
+
+		let count = 0
+
 		for await (const entry of this.streamCandidateEntries(query)) {
 			if (!matchesNormalizedGeometry(entry, query)) continue
+			// A missing magnitude becomes NaN, which fails both inclusive comparisons.
+			const magnitude = entry.magnitude ?? Number.NaN
+			if (magnitudeMin !== undefined && !(magnitude >= magnitudeMin)) continue
+			if (magnitudeMax !== undefined && !(magnitude <= magnitudeMax)) continue
 			yield entry
+			if (limit !== undefined && ++count >= limit) return
 		}
 	}
 }
@@ -309,6 +320,9 @@ function normalizeConeQuery(query: StarCatalogConeQuery): NormalizedConeQuery {
 
 	return {
 		kind: 'cone',
+		magnitudeMin: query.magnitudeMin,
+		magnitudeMax: query.magnitudeMax,
+		limit: query.limit,
 		centerRA,
 		centerDEC,
 		radius,
@@ -338,6 +352,9 @@ function normalizeTriangleQuery(query: StarCatalogTriangleQuery): NormalizedTria
 
 	return {
 		kind: 'triangle',
+		magnitudeMin: query.magnitudeMin,
+		magnitudeMax: query.magnitudeMax,
+		limit: query.limit,
 		edgeNormals: polarGeometry?.edgeNormals,
 		projectedVertices,
 		tangentCenterRA: tangentCenterRA,
@@ -359,6 +376,9 @@ function normalizeBoxQuery(query: StarCatalogBoxQuery): NormalizedBoxQuery {
 
 	return {
 		kind: 'box',
+		magnitudeMin: query.magnitudeMin,
+		magnitudeMax: query.magnitudeMax,
+		limit: query.limit,
 		boxes,
 		geometryMode: 'spherical',
 		wrapAround,
@@ -393,6 +413,9 @@ function normalizePolygonQuery(query: StarCatalogPolygonQuery): NormalizedPolygo
 
 	return {
 		kind: 'polygon',
+		magnitudeMin: query.magnitudeMin,
+		magnitudeMax: query.magnitudeMax,
+		limit: query.limit,
 		edgeNormals: polarGeometry?.edgeNormals,
 		projectedVertices,
 		tangentCenterRA: tangentCenterRA,

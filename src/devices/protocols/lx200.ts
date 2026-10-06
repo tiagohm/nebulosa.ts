@@ -29,7 +29,8 @@ export interface Lx200ProtocolHandler {
 	readonly slewing: (server: Lx200ProtocolServer) => boolean
 	readonly slewRate: (server: Lx200ProtocolServer, rate: SlewRate) => void
 	readonly sync?: (server: Lx200ProtocolServer, rightAscension: Angle, declination: Angle) => void
-	readonly goto?: (server: Lx200ProtocolServer, rightAscension: Angle, declination: Angle) => void
+	// Starts a slew to the staged J2000 target; returning false reports to the client that the slew is not possible.
+	readonly goto?: (server: Lx200ProtocolServer, rightAscension: Angle, declination: Angle) => boolean | void
 	readonly move?: (server: Lx200ProtocolServer, direction: MoveDirection, enabled: boolean) => void
 	readonly abort?: (server: Lx200ProtocolServer) => void
 	readonly disconnect?: (server: Lx200ProtocolServer) => void
@@ -212,9 +213,12 @@ export class Lx200ProtocolServer {
 				this.options.handler.sync?.(this, ...this.#coordinates)
 				return this.#text(socket, '#')
 			// Slew to Target Object
-			case ':MS#':
-				this.options.handler.goto?.(this, ...this.#coordinates)
-				return this.#zero(socket)
+			// Replies 0 when the slew starts, or 1 plus a message when there is no goto handler or it refuses.
+			case ':MS#': {
+				const goto = this.options.handler.goto
+				if (goto !== undefined && goto(this, ...this.#coordinates) !== false) return this.#zero(socket)
+				return this.#text(socket, '1Slew not possible#')
+			}
 			// Move/Halt Telescope
 			case ':Me#':
 			case ':Mn#':

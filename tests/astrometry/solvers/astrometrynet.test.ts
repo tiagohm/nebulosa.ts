@@ -94,6 +94,27 @@ describe.skipIf(SKIP)('nova', () => {
 	}, 300000)
 })
 
+test('nova plate solve sends every request to the configured api url', async () => {
+	const paths: string[] = []
+
+	using server = Bun.serve({
+		port: 0,
+		fetch(req) {
+			const { pathname } = new URL(req.url)
+			paths.push(pathname)
+			if (pathname === '/api/url_upload') return Response.json({ status: 'success', subid: 3 })
+			if (pathname === '/api/submissions/3') return Response.json({ jobs: [7] })
+			if (pathname === '/api/jobs/7') return Response.json({ status: 'success' })
+			return new Response(undefined, { status: 404 })
+		},
+	})
+
+	const solution = await novaAstrometryNetPlateSolve('https://example.com/image.jpg', { apiUrl: server.url.origin, session: 'session' })
+
+	expect(solution).toBeUndefined()
+	expect(paths).toEqual(['/api/url_upload', '/api/submissions/3', '/api/jobs/7', '/wcs_file/7'])
+})
+
 test.skipIf(isLinuxSkipped())('local', async () => {
 	const solution = await localAstrometryNetPlateSolve(join(dirname(__dirname), 'data', 'apod4.jpg'), {
 		executable: 'solve-field',

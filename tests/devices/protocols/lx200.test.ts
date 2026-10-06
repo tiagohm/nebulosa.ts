@@ -115,6 +115,18 @@ test('accepts standard colon-prefixed commands', async () => {
 	expect(slewed[0][1]).toBeCloseTo(dms(45), 12)
 })
 
+test('reports a refused or unsupported goto as not possible', async () => {
+	for (const handler of [makeHandler({ goto: () => false }), makeHandler()]) {
+		await withLx200Server(async (client) => {
+			const response = readUntil(client, (value) => value.endsWith('#'))
+
+			client.write(':MS#', 'ascii')
+
+			expect(await response).toBe('1Slew not possible#')
+		}, handler)
+	}
+})
+
 test('preserves staged target and connection state across clients', async () => {
 	const slewed: number[][] = []
 	let disconnects = 0

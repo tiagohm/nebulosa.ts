@@ -422,7 +422,7 @@ export class TEMT6000 extends ADCPeripheral<TEMT6000> implements Luxmeter {
 	// Precomputed lux per ADC step from the configured front-end parameters.
 	readonly #luxPerStep: number
 
-	readonly name = 'TEMPT6000'
+	readonly name = 'TEMT6000'
 
 	constructor(
 		readonly client: FirmataClient,

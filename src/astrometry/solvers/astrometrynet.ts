@@ -192,17 +192,17 @@ export async function novaAstrometryNetPlateSolve(input: string | Blob, options?
 
 			if (submission?.status === 'success') {
 				while (!timeout.aborted) {
-					const status = await submissionStatus(submission, { session }, wait)
+					const status = await submissionStatus(submission, { session, apiUrl: options?.apiUrl }, wait)
 
 					// A job slot is null until created and a created job stays 'solving' until it finishes,
 					// so wait for a real job id and poll its status instead of grabbing the WCS too early.
 					const jobId = status?.jobs.find((id) => typeof id === 'number')
 
 					if (jobId !== undefined) {
-						const job = await jobStatus(jobId, { session }, wait)
+						const job = await jobStatus(jobId, { session, apiUrl: options?.apiUrl }, wait)
 
 						if (job?.status === 'success') {
-							const blob = await wcsFile(jobId, { session }, wait)
+							const blob = await wcsFile(jobId, { session, apiUrl: options?.apiUrl }, wait)
 
 							if (blob) {
 								const buffer = Buffer.from(await blob.arrayBuffer())

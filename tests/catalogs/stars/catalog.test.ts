@@ -9,8 +9,8 @@ const FIXTURE_STARS = [
 	{ id: 'box-outside-dec', rightAscension: 0, declination: deg(20) },
 	{ id: 'box-outside-ra', rightAscension: deg(20), declination: 0 },
 	{ id: 'box-west', rightAscension: deg(359.9), declination: 0 },
-	{ id: 'cone-center', rightAscension: deg(120), declination: 0 },
-	{ id: 'cone-edge', rightAscension: deg(130), declination: 0 },
+	{ id: 'cone-center', rightAscension: deg(120), declination: 0, magnitude: 5 },
+	{ id: 'cone-edge', rightAscension: deg(130), declination: 0, magnitude: 8 },
 	{ id: 'cone-outside', rightAscension: deg(130.2), declination: 0 },
 	{ id: 'polygon-inside', rightAscension: deg(220), declination: deg(30) },
 	{ id: 'polygon-outside', rightAscension: deg(228), declination: deg(34) },
@@ -55,6 +55,17 @@ test('stream region yields the same matches as the query helpers', async () => {
 		streamed.push(entry.id)
 	}
 	expect(streamed.sort()).toEqual(['cone-center', 'cone-edge'])
+})
+
+test('query region applies magnitude bounds and limit', async () => {
+	const cone = { kind: 'cone', centerRA: deg(120), centerDEC: 0, radius: deg(11) } as const
+	expect(idsOf(await catalog.queryRegion({ ...cone, magnitudeMax: 6 }))).toEqual(['cone-center'])
+	expect(idsOf(await catalog.queryRegion({ ...cone, magnitudeMin: 6 }))).toEqual(['cone-edge'])
+	// cone-outside is inside the wider cone but has no magnitude, so any bound excludes it.
+	expect(idsOf(await catalog.queryRegion({ ...cone, magnitudeMin: 5, magnitudeMax: 8 }))).toEqual(['cone-center', 'cone-edge'])
+	expect(await catalog.queryRegion({ ...cone, limit: 2 })).toHaveLength(2)
+	expect(await catalog.queryRegion({ ...cone, limit: 0 })).toBeEmpty()
+	expect(normalizeStarCatalogQuery({ ...cone, magnitudeMax: 6, limit: 2 })).toMatchObject({ magnitudeMax: 6, limit: 2 })
 })
 
 test('polygon includes every vertex and edge midpoint in either winding', async () => {
