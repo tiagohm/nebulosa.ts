@@ -1,7 +1,7 @@
 import { ECLIPTIC_J2000_MATRIX, GM_SUN_PITJEVA_2005, PI, TAU } from '../../core/constants'
 import type { Writable } from '../../core/types'
 import { type Mat3, matMulVec, matTranspose } from '../../math/linear-algebra/mat3'
-import { type MutVec3, type Vec3, vecAngle, vecCross, vecCrossLength, vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalize, vecPlus } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngle, vecCross, vecCrossLength, vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalize, vecPlus, vecPolarAngle } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import type { PositionAndVelocity, PositionAndVelocityMut } from '../coordinates/astrometry'
@@ -194,7 +194,7 @@ export class KeplerOrbit implements OsculatingElements {
 	get inclination() {
 		if (this.#oe.inclination !== undefined) return this.#oe.inclination
 		const hv = this.#propagation.hv
-		this.#oe.inclination = Math.atan2(Math.hypot(hv[0], hv[1]), hv[2])
+		this.#oe.inclination = vecPolarAngle(hv)
 		return this.#oe.inclination
 	}
 

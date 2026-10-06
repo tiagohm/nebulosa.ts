@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
+import { vecAngle } from 'nebulosa/src/math/linear-algebra/vec3'
 import { enuVectorToHorizontal } from '../../../src/astronomy/coordinates/frame.local'
-import { matDeterminant, matMul, matMulVec, matRodriguesRotation, matTranspose } from '../../../src/math/linear-algebra/mat3'
+import { matDeterminant, matMul, matMulVec, matRodriguesRotation } from '../../../src/math/linear-algebra/mat3'
 import { deg } from '../../../src/math/units/angle'
 import { applyDirectionAlignment, fitDirectionAlignment, fitMountAlignment, predictMountDirection, predictWorldDirection, type DirectionAlignmentSample } from '../../../src/observation/mount/alignment'
 import { createIdealAltAzGeometry, mountDirectionFromEncoders } from '../../../src/observation/mount/kinematics'
@@ -10,14 +11,6 @@ import { createIdealAltAzGeometry, mountDirectionFromEncoders } from '../../../s
 // Compares one three-component vector at the requested decimal precision.
 function expectVectorClose(actual: readonly number[], expected: readonly number[], precision: number = 12): void {
 	for (let i = 0; i < 3; i++) expect(actual[i]).toBeCloseTo(expected[i], precision)
-}
-
-// Measures angular separation between two directions in radians.
-function angularSeparation(a: readonly [number, number, number], b: readonly [number, number, number]): number {
-	const crossX = a[1] * b[2] - a[2] * b[1]
-	const crossY = a[2] * b[0] - a[0] * b[2]
-	const crossZ = a[0] * b[1] - a[1] * b[0]
-	return Math.atan2(Math.hypot(crossX, crossY, crossZ), Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])))
 }
 
 test('two exact non-collinear directions recover a proper TRIAD rotation', () => {
@@ -91,7 +84,7 @@ test('Tukey weighting rejects an outlier and protects the clean rotation', () =>
 	const probe = [0.2, -0.7, 0.5] as const
 	const target = matMulVec(expected, probe)
 
-	expect(angularSeparation(predictWorldDirection(robust, probe), target)).toBeLessThan(angularSeparation(predictWorldDirection(ordinary, probe), target))
+	expect(vecAngle(predictWorldDirection(robust, probe), target)).toBeLessThan(vecAngle(predictWorldDirection(ordinary, probe), target))
 	expect(robust.rejectedCount).toBeGreaterThanOrEqual(1)
 	expect(robust.maximumResidual).toBeGreaterThan(robust.rms)
 })
@@ -108,7 +101,7 @@ test('Tukey weighting rejects an outlier when exact inliers produce zero MAD', (
 		{ robust: 'tukey' },
 	)
 
-	expect(angularSeparation(predictWorldDirection(result, [1, 0, 0]), [1, 0, 0])).toBeLessThan(1e-12)
+	expect(vecAngle(predictWorldDirection(result, [1, 0, 0]), [1, 0, 0])).toBeLessThan(1e-12)
 	expect(result.weights[3]).toBe(0)
 	expect(result.rejectedCount).toBe(1)
 })
