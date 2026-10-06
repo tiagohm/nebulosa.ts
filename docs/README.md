@@ -8183,6 +8183,76 @@ console.log(airyDiskSize(0.55, 5), airyDiskSize(0.65, 5), airyDiskInPixels(airyD
 console.log(airyDiskSize(0.55, 10), airyDiskInPixels(airyDiskSize(0.55, 10), 3.76)) // 13.420 3.569 (microns, pixels)
 ```
 
+### Disk Limb Fitting
+
+The limb is the outer edge of a bright disk (the Sun, the Moon or a planet) against a darker background. Fitting it gives the geometric center of the disk even when the surface features change or rotate. `imaging/analysis/tracking/limb` measures it on one analysis plane of an `Image` (`'mono'`, an RGB channel, or a native CFA plane mapped through its sample step; see [Image Analysis Planes](#image-analysis-planes)) inside an area `Rect` in pixels (left and top inclusive, right and bottom exclusive).
+
+`measureLimb(image, plane, area, workspace, options?, search?)` works in four steps:
+
+1. It casts `rays` radial profiles (96 by default) from a starting center. The center is the `search.prior` geometry (with a window of ±`searchFraction` of its radius), or a coarse threshold-moment initializer near the `search.seed` (±`coarseSearchFraction`). The initializer measures one 8-connected bright component: the one with a sample nearest to the seed, or the largest one without a seed, so a second disk in the area does not pull it.
+2. On each ray it finds the strongest object-to-background transition: a parabolic subpixel derivative extremum, gated by gradient SNR, edge contrast and the outer level. A ray with a competing transition is `ambiguous`, and a ray that leaves the image or reaches invalid samples is `cropped`.
+3. A circle consensus keeps the dominant limb, so terminator, prominence and ring edges do not pull the fit.
+4. The kept edges go to the robust ellipse fit of [Ellipse Fitting](#ellipse-fitting).
+
+On success the `LimbMeasurement` has:
+
+- the `center` in pixels;
+- the `semiMajor` and `semiMinor` axes in pixels;
+- `theta`, the major-axis direction in radians in [0, PI) from +X toward +Y (meaningless for a circle);
+- the fit `rms` in pixels, the ray `coverage`, the largest angular `maximumGap` in radians, and the median `gradientSNR`;
+- a `confidence` from 0 to 1;
+- the per-ray counts in `rays`.
+
+On failure the outcome is `{ success: false, reason }`, where the reason is one of `limb_not_found`, `limb_low_coverage`, `limb_large_gap`, `limb_high_residual` or `limb_geometry_jump`. With `search.continuity`, the center and radius must also stay within `maximumCenterJump` and `maximumRadiusChange` of the prior. `DEFAULT_LIMB_TRACKING_OPTIONS` holds the thresholds; it accepts a minimum coverage of 0.5, a gap of up to TAU/3 and an axis ratio of at least 0.7.
+
+`locateBrightObject(image, plane, area, workspace, options?, seed?)` returns the threshold-moment centroid and equivalent radius of the bright component (above half the contrast) with a sample nearest to the `seed`, or of the largest one without a seed, or `undefined` without contrast. Components under 9 samples are ignored as noise. It is the acquisition bound and the apparent-object fallback, not a physical disk center: a phase, rings or clipping bias it.
+
+Both functions use the reusable buffers of a `SurfaceTrackingWorkspace`, overwritten on each call, and never mutate the image.
+
+The object must be brighter than its background. The measured edge is the steepest transition, so a strongly limb-darkened or blurred disk fits slightly inside its geometric edge. A crescent leaves a large gap and fails rather than guessing a center. [Solar System Guide Tracking](#solar-system-guide-tracking) uses this fit as its absolute anchor.
+
+```ts
+import { DEFAULT_LIMB_TRACKING_OPTIONS, locateBrightObject, measureLimb } from 'nebulosa/src/imaging/analysis/tracking/limb'
+import { SurfaceTrackingWorkspace } from 'nebulosa/src/imaging/analysis/tracking/workspace'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+
+// A 256 by 256 frame: a limb-darkened, slightly oblate planet (semi-axes a and b pixels, major axis along X) centered at (cx, cy), on a dark sky.
+const size = 256
+const planet = (cx: number, cy: number, a: number, b: number): Image => {
+	const raw = new Float64Array(size * size).fill(0.02)
+	for (let y = 0; y < size; y++) {
+		for (let x = 0; x < size; x++) {
+			const r2 = ((x - cx) / a) ** 2 + ((y - cy) / b) ** 2
+			if (r2 < 1) raw[y * size + x] = 0.02 + 0.7 * Math.sqrt(1 - r2)
+		}
+	}
+	return { header: {}, raw, metadata: { width: size, height: size, channels: 1, pixelCount: size * size, stride: size, strideInBytes: size * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+}
+const workspace = new SurfaceTrackingWorkspace()
+const area = { left: 0, top: 0, right: size, bottom: size }
+
+// The coarse bright-object location: a centroid and the equivalent radius of the region above half the contrast, not the limb.
+console.log(locateBrightObject(planet(120.4, 131.7, 60, 56), 'mono', area, workspace)) // { center: [120.42, 131.71], radius: 50.46 }
+
+// The limb ellipse, without a prior.
+const first = measureLimb(planet(120.4, 131.7, 60, 56), 'mono', area, workspace)
+if (first.success) {
+	const { center, semiMajor, semiMinor, theta, rms, coverage, confidence, rays } = first.limb
+	console.log(center, semiMajor, semiMinor, theta, rms, coverage, confidence, rays.accepted) // [120.38, 131.67] 59.55 55.57 3.1415 (along X, theta is in [0, PI)) 0.117 1 0.991 96
+
+	// The next frame, searched around the previous limb with continuity.
+	const next = measureLimb(planet(122.1, 130.9, 60, 56), 'mono', area, workspace, DEFAULT_LIMB_TRACKING_OPTIONS, { prior: first.limb, continuity: true })
+	console.log(next.success && next.limb.center) // [122.08, 130.9]
+
+	// A 30-pixel jump falls outside the prior window, and the measurement fails instead of jumping.
+	console.log(measureLimb(planet(150, 131.7, 60, 56), 'mono', area, workspace, DEFAULT_LIMB_TRACKING_OPTIONS, { prior: first.limb, continuity: true })) // { success: false, reason: 'limb_low_coverage', rays: { accepted: 17, lowContrast: 79, ambiguous: 0, cropped: 0, outliers: 0 } }
+}
+
+// An empty sky has no limb and no bright object.
+const sky = planet(-500, -500, 10, 10)
+console.log(measureLimb(sky, 'mono', area, workspace), locateBrightObject(sky, 'mono', area, workspace)) // { success: false, reason: 'limb_not_found' } undefined
+```
+
 ### Display Stretch Parameter Estimation
 
 `adf(image, options?)` estimates the parameters of an automatic screen stretch from the statistics of the image, following the Adaptive Display Function of the XISF specification, and returns the readonly tuple `[midtone, shadow, highlight]`, each in `0..1`, which are the arguments that `stf(image, midtone, shadow, highlight)` takes (see [Screen Transfer Function](#screen-transfer-function) for applying them); `adf` itself never changes the image. It takes the median and the normalized median absolute deviation of the selected channel (see [Image Statistics](#image-statistics), whose `HistogramOptions` `channel`, `area`, `transform` and `bits` it accepts), so they are histogram estimates at `bits` (16 by default). The two other options are `meanBackground` (0.25), the brightness the median should have after the stretch, and `clippingPoint` (-2.8), in units of the deviation from the median, where the shadows are clipped: `shadow = median + clippingPoint * mad`, clamped to `0..1`, and `highlight` stays at 1. For an image whose median is above 0.5 (inverted, or a bright frame) the roles are mirrored: the highlight is `median - clippingPoint * mad`, the shadow is 0 and the midtone balances the distance from the median to the highlight. The midtone is the midtones transfer function parameter that maps the shifted median `median - shadow` to `meanBackground`. A flat image (a deviation of about half a histogram bin or less) is not clipped, so the shadow is 0 and the highlight 1, and a median at the shadow gives a midtone of 0. A color image is analysed through its grayscale reduction unless a `channel` is given, so one triple serves the three channels (a linked stretch); an unlinked one is made by calling `adf` once per channel. The result depends on the median and the deviation being representative of the sky: a frame mostly covered by a nebula or by a gradient will be stretched for that, not for the sky.
@@ -11399,6 +11469,127 @@ console.log(totalIntegrationTime(requiredSubframeCount(10800, 420), 420), requir
 console.log([60, 120, 300, 600].map((t) => requiredSubframeCount(7200, t))) // [120, 60, 24, 12]
 ```
 
+### Surface Registration
+
+`imaging/analysis/tracking/surface` measures how an extended textured scene (Lunar craters, Solar granulation and active regions, planetary bands) moved between two frames, without detecting stars. The motion is a proper rigid transform `RigidTransform2D`, `q = R(rotation)·p + translation`, which maps a reference image pixel `p` to the current pixel `q`. The `rotation` is in radians from +X toward +Y (clockwise on a displayed image) and the `translation` is in pixels. Pixel centers are at integers, with the origin at the upper left, +X right and +Y down.
+
+`createSurfaceReference(image, area, plane, workspace, options?)` builds a reference over an area `Rect` (left and top inclusive, right and bottom exclusive):
+
+- It stores one robust-normalized analysis plane: mono, an RGB channel, or a native CFA plane sampled with a step of 2. Saturated and non-finite samples are masked, and an illumination plane is removed unless `detrend` is false.
+- It selects up to `maximumPatches` high-structure patches of `patchSize` samples (by the Shi-Tomasi smaller eigenvalue), spread over a 3×3 coverage grid.
+- It caches a downsampled phase spectrum for reacquisition.
+
+The outcome is `{ success: true, reference, candidatePatches, rejectedReasons }`, or a failure with a `reason` such as `low_structure`. The reference keeps only its own bounded buffers, never the image. `selectSurfacePlane(image, area, workspace)` returns the plane with the best score: usable fraction times unsaturated fraction times contrast over second-difference noise. `scoreSurfacePlane` gives that score for one plane, and `surfaceAnalysisPlanes(image)` lists the supported planes.
+
+`registerSurface(reference, image, prediction, workspace, options?)` registers a frame:
+
+- It searches every patch by masked zero-mean normalized cross-correlation (ZNCC), within `searchRadius` samples of where the `prediction` transform puts it.
+- It rejects weak (`minimumCorrelation`), ambiguous (`maximumSecondPeakRatio`) and low-overlap matches.
+- It fits the rigid transform by Tukey-reweighted least squares, so moving features and differential seeing become outliers. The fit falls back to `model: 'translation'` when the patches are too close together to constrain a rotation.
+- It requires `minimumInliers` patches and a `minimumSpatialCoverage` of the grid.
+
+The `SurfaceRegistration` has:
+
+- the reference-to-current `transform` and the `model`;
+- the patch counts and the `spatialCoverage`;
+- the inlier `rmsResidual` and the `deformationRms` (the robust spread of all patches, a differential-seeing proxy), both in pixels;
+- the median correlation and peak-to-sidelobe ratio;
+- a heuristic 1-sigma `uncertainty` in pixels and a `confidence` from 0 to 1.
+
+A displacement beyond the patch search fails, typically with `insufficient_inliers`. `reacquireSurface(reference, image, guess, workspace, options?)` then finds it by coarse phase correlation (up to `coarseShiftFraction` of the coarse area) and registers the patches from there; it returns `reacquired: true`, or fails with `reacquisition_failed`.
+
+The transform helpers are:
+
+- `applyRigidTransform(transform, x, y, out?)`, which allocates when `out` is omitted;
+- `composeRigidTransforms(outer, inner)`, which applies `inner` first;
+- `invertRigidTransform`;
+- `rigidTransformThrough(rotation, x, y, dx, dy)`, the transform with that rotation that moves `(x, y)` by `(dx, dy)`;
+- `IDENTITY_RIGID_TRANSFORM`.
+
+`fitRigidTransform` is the robust fit itself. The `SurfaceTrackingWorkspace` owns grow-only buffers, overwritten by every call, so a steady stream of frames of the same size allocates almost nothing.
+
+The low-level translation primitives of `imaging/analysis/tracking/registration` work on a `RegistrationPlane` (`width`, `height`, row-major `data` and an optional `mask`), in samples. A translation `[dx, dy]` means a reference sample at `(x, y)` appears at `(x + dx, y + dy)`.
+
+- `phaseCorrelate(reference, current, workspace, options?)` measures a whole-plane translation. Its inputs are spectra from `phaseCorrelationSpectrum(plane, workspace)` (mean-removed, Hann-windowed and zero-padded) and a `PhaseCorrelationWorkspace(width, height, maximumShift)`. It refines the peak by a localized DFT (Guizar-Sicairos, `upsampleFactor` 20, so 0.05 sample by default) and rejects weak or ambiguous peaks.
+- `matchPatchZNCC(reference, left, top, width, height, current, predictedX, predictedY, options, scratch)` matches one template within a bounded search, with a quadratic subpixel peak.
+- `refineTranslationECC(...)` refines a translation by enhanced correlation maximization (Evangelidis & Psarakis).
+- `normalizeRegistrationSamples`, `removeLinearTrend` and `hannWindow` are the preprocessing helpers.
+
+Every failure is `{ success: false, reason }` with a stable reason.
+
+The model is rigid: a scale change (focus, a changing apparent diameter) or a large deformation is not fitted. Repeated or featureless texture is rejected rather than matched. [Solar System Guide Tracking](#solar-system-guide-tracking) builds a guide tracker on these functions.
+
+```ts
+import { matchPatchZNCC, PhaseCorrelationWorkspace, phaseCorrelate, phaseCorrelationSpectrum, refineTranslationECC } from 'nebulosa/src/imaging/analysis/tracking/registration'
+// oxfmt-ignore
+import { applyRigidTransform, composeRigidTransforms, createSurfaceReference, DEFAULT_SURFACE_TRACKING_OPTIONS, IDENTITY_RIGID_TRANSFORM, invertRigidTransform, reacquireSurface, registerSurface, rigidTransformThrough, selectSurfacePlane } from 'nebulosa/src/imaging/analysis/tracking/surface'
+import { SurfaceTrackingWorkspace } from 'nebulosa/src/imaging/analysis/tracking/workspace'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+import { mulberry32 } from 'nebulosa/src/math/numerical/random'
+
+// A 320 by 320 Lunar-like surface of random craters, rotated by angle radians about (160, 160) and then shifted by (dx, dy) pixels.
+const size = 320
+const random = mulberry32(21)
+const craters = Array.from({ length: 1200 }, () => ({ x: random() * 400 - 40, y: random() * 400 - 40, sigma: 1.6 + 5 * random() ** 2, amplitude: random() < 0.5 ? -0.08 : 0.08 }))
+const capture = (dx: number, dy: number, angle: number = 0): Image => {
+	const raw = new Float64Array(size * size).fill(0.4)
+	const cos = Math.cos(angle)
+	const sin = Math.sin(angle)
+	for (const crater of craters) {
+		const x = 160 + cos * (crater.x - 160) - sin * (crater.y - 160) + dx
+		const y = 160 + sin * (crater.x - 160) + cos * (crater.y - 160) + dy
+		const reach = Math.ceil(4 * crater.sigma)
+		for (let py = Math.max(0, Math.floor(y) - reach); py <= Math.min(size - 1, Math.floor(y) + reach); py++) {
+			for (let px = Math.max(0, Math.floor(x) - reach); px <= Math.min(size - 1, Math.floor(x) + reach); px++) {
+				raw[py * size + px] += crater.amplitude * Math.exp(-((px - x) ** 2 + (py - y) ** 2) / (2 * crater.sigma * crater.sigma))
+			}
+		}
+	}
+	return { header: {}, raw, metadata: { width: size, height: size, channels: 1, pixelCount: size * size, stride: size, strideInBytes: size * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+}
+
+// A reference over a 256-pixel area, with up to 32 patches of 32 pixels.
+const workspace = new SurfaceTrackingWorkspace()
+const area = { left: 32, top: 32, right: 288, bottom: 288 }
+const plane = selectSurfacePlane(capture(0, 0), area, workspace)!
+const created = createSurfaceReference(capture(0, 0), area, plane, workspace, { ...DEFAULT_SURFACE_TRACKING_OPTIONS, maximumPatches: 32 })
+if (!created.success) throw new Error(created.reason)
+console.log(plane, created.reference.patches.length, created.candidatePatches) // mono 32 225
+
+// The scene rotated by 0.01 rad and shifted by (1.7, -2.2) pixels: the fitted transform and the exact one.
+const registered = registerSurface(created.reference, capture(1.7, -2.2, 0.01), IDENTITY_RIGID_TRANSFORM, workspace)
+const exact = rigidTransformThrough(0.01, 160, 160, 1.7, -2.2)
+if (registered.success) {
+	console.log(registered.model, registered.transform, exact) // rigid, { rotation: 0.00997, translation: [3.300, -3.765] } and { rotation: 0.01, translation: [3.308, -3.792] }
+	console.log(registered.acceptedPatches, registered.spatialCoverage, registered.rmsResidual, registered.uncertainty, registered.confidence) // 32 1 0.045 0.084 0.990
+	console.log(applyRigidTransform(registered.transform, 100, 200), applyRigidTransform(exact, 100, 200)) // [101.301, 197.223] [101.303, 197.198]
+	console.log(composeRigidTransforms(invertRigidTransform(registered.transform), registered.transform)) // { rotation: 0, translation: [0, 0] }
+}
+
+// A jump of (23.6, 17.2) pixels is beyond the patch search; coarse phase correlation recovers it.
+const far = capture(23.6, 17.2)
+const lost = registerSurface(created.reference, far, IDENTITY_RIGID_TRANSFORM, workspace)
+const recovered = reacquireSurface(created.reference, far, IDENTITY_RIGID_TRANSFORM, workspace)
+console.log(lost.success || lost.reason, recovered.success && recovered.transform.translation, recovered.success && recovered.reacquired) // insufficient_inliers [23.604, 17.197] true
+
+// The low-level primitives on 64 by 64 planes cut from the frames, for a shift of (3.4, -1.25) samples.
+const cut = (image: Image) => {
+	const data = new Float64Array(64 * 64)
+	for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) data[y * 64 + x] = image.raw[(y + 128) * size + x + 128]
+	return { width: 64, height: 64, data }
+}
+const reference = cut(capture(0, 0))
+const current = cut(capture(3.4, -1.25))
+const correlation = new PhaseCorrelationWorkspace(64, 64, 16)
+console.log(phaseCorrelate(phaseCorrelationSpectrum(reference, correlation), phaseCorrelationSpectrum(current, correlation), correlation)) // success, a translation of [3.3, -1.2] (0.05-sample steps), a peak of 0.989 and a peak-to-sidelobe ratio of 98
+const patch = matchPatchZNCC(reference, 16, 16, 32, 32, current, 3, -1, { searchRadius: 4 }, new Float64Array(81))
+console.log(patch.success && patch.translation, patch.success && patch.correlation) // [3.392, -1.233] 0.995
+if (patch.success) {
+	const refined = refineTranslationECC(reference, 16, 16, 32, 32, current, patch.translation[0], patch.translation[1], {}, new Float64Array(4 * 32 * 32))
+	console.log(refined.success && refined.translation) // [3.404, -1.258]
+}
+```
+
 ### Synthetic Bahtinov Spikes
 
 `plotBahtinovSpikes(raw, width, height, channels, x, y, flux, error, colorIndex?, options?)` in `imaging/stars/bahtinov` adds the three diffraction spikes of a Bahtinov mask to an existing buffer, for tests and for simulators. `raw` is a mono or interleaved RGB buffer (`channels` 1 or 3, at least `width * height * channels` samples) and is mutated additively: nothing is generated for the background, the noise, the core of the star, the clipping or the saturation, which the caller adds. `(x, y)` is the intersection of the two external spikes in pixel centers, `flux` the nominal integrated signal of the whole pattern (split among the spikes by `strengths`) and `error` the signed offset in pixels of the central spike from that intersection along its normal, which is the sign convention that `analyzeBahtinov` recovers (see [Bahtinov Focus Analysis](#bahtinov-focus-analysis)). `colorIndex` (a B-V color index) weights the three channels of an RGB buffer. The options are `normalAngles` (the normals of the three spikes in radians, `[PI / 12, 0, 11 * PI / 12]` by default, so the external spikes cross at 15 degrees from the central one), `central` (which of the three receives the error, 1 by default), `spike` (render only one of them), `fwhm` (the transverse width in pixels, 2 by default), `halfLength` (60 pixels) and `taperLength` (12 pixels, the fade at each end), `strengths` (relative, `[1, 1, 1]`), `gain`, `cutoffSigma` (the transverse Gaussian cutoff, 4 sigma) and `gammaCompensation` (for the color weights, or `false`). It returns `true` when something was drawn and `false` when nothing was, because the flux or the position is not finite (or the flux is not positive) or the support falls entirely outside the image. It throws a `RangeError` for a size that is not a positive integer, a short buffer, a non-finite error or an invalid option, before it changes any sample. The image is drawn with a Gaussian across each spike and so the pattern is an idealization: no diffraction orders, no star core and no dependence on the mask geometry beyond the angles.
@@ -12735,10 +12926,10 @@ console.log(executed) // [11740, 11800, 11540, 11600, 11340, 11400, 11600, 11800
 
 ### Guide Pulse Loop
 
-`observation/guiding/guider` closes a guiding loop from a stream of tracker results and a calibration matrix, with no device I/O: the `Guider` takes one `GuideFrame` at a time (the `tracking` result of a tracker, see [Guide Star Tracking](#guide-star-tracking), plus the image `width` and `height` in pixels and the optional `timestamp` in ms, `captureMonotonic`, `frameId` and `cadence` in ms) and returns a `GuideCommand` with the `state`, an `AxisPulse` for RA and for DEC (a `direction` of `WEST`, `EAST`, `NORTH` or `SOUTH`, or none, and a `duration` in milliseconds) and the `diagnostics`. The caller sends the pulses (see [Dither Guide Pulses](#dither-guide-pulses) and [INDI Guide Output](#indi-guide-output)) and the calibration comes from [Guiding Calibration](#guiding-calibration): without one the pixel error is not a pulse. The state is `idle` before the first frame, `initializing` while the lock reference is averaged over `lockAveragingFrames` good frames (no pulses are issued; a frame that jumps more than `maxFrameJumpPx` from the previous sample, or that has no measurement or a quality below `minFrameQuality`, is skipped), `guiding` afterwards, and `lost` after `lostStarFrameCount` consecutive bad frames. A frame is bad when there is no measurement, when the quality is below `minFrameQuality`, or when the measurement jumped more than `maxFrameJumpPx` from the last good one (not during a dither settle); a frame whose capture time is not after the previous one is ignored as `duplicate_frame` or `out_of_order`, and a frame whose gap is above `droppedFrameFactor` times `nominalCadence` is noted as `dropped_frame`. The reference is the average of the lock (or the fixed `referencePosition`), the target is the reference plus the dither or lock-shift offset plus the tracker `targetOffset`, and a target outside the image (or the `targetEnvelope` of the frame) puts the guider in `lost` with a `targetLimit` diagnostic. The error `dx, dy` in pixels (measurement minus target) goes through the calibration, `axis = calibration * image` (`applyCalibration`), to the axis errors; each axis applies a deadband (`applyDeadband`, below `minMoveRA` or `minMoveDEC` the error is zero), a hysteresis filter `hysteresis * previous + (1 - hysteresis) * error`, and a pulse of `|filtered| * msPerUnit * aggressiveness * cadenceScale` milliseconds clamped to the minimum and maximum pulse of the axis, where the cadence scale is the frame cadence over `nominalCadence` limited to 0.5 and 2. A positive RA error pulses `raPositiveDirection` and a positive DEC error `decPositiveDirection`. DEC has a `decMode`: `auto`, `north-only`, `south-only` or `off`, and it protects against backlash: a reversal needs the filtered error to reach `decReversalThreshold` and the accumulated opposite error to reach `decBacklashAccumThreshold` before a pulse is issued. `DEFAULT_GUIDER_CONFIG` is the conservative tuning of the `GuiderConfig` (an identity calibration, six lock frames, 12 pixels of jump, 1000 ms cadence, gains near 0.7, 850 ms per unit and pulses from 20 or 30 ms to 2000 or 2500 ms), and the constructor takes a partial one. `validateCalibration(calibration, minDeterminant?)` returns whether the determinant is finite and above the minimum (1e-9), and `invertCalibration` inverts a matrix. The runtime is `currentState`, `lastDiagnostics()` and `reset()`. `startDither(dx, dy)` shifts the target by pixels and marks a settle, `setTargetOffset(dx, dy)` shifts it without marking one (a lock shift), `setDithering(false)` ends the settle and keeps the offset and `stopDither()` returns to the reference. `setNominalCadence(ms)` (a non-positive or non-finite value is ignored), `setDecMode(mode)` and `setCalibration(calibration, options?)` change the tuning without resetting the lock; changing the calibration or a positive direction clears the filter of the axis (after a meridian flip, give the flipped calibration and directions). The constructor and `setCalibration` throw an `Error` for a singular calibration or an invalid configuration. The pulses are a proportional controller with no model of the mount, so the gains and the calibration must match the setup, and `oppositeRA` and `oppositeDEC` give the opposite direction.
+`observation/guiding/guider` closes a guiding loop from a stream of tracker results and a calibration matrix, with no device I/O: the `Guider` takes one `GuideFrame` at a time (the `tracking` result of a tracker, see [Guide Star Tracking](#guide-star-tracking), plus the image `width` and `height` in pixels and the optional `timestamp` in ms, `captureMonotonic`, `frameId` and `cadence` in ms) and returns a `GuideCommand` with the `state`, an `AxisPulse` for RA and for DEC (a `direction` of `WEST`, `EAST`, `NORTH` or `SOUTH`, or none, and a `duration` in milliseconds) and the `diagnostics`. The caller sends the pulses (see [Dither Guide Pulses](#dither-guide-pulses) and [INDI Guide Output](#indi-guide-output)) and the calibration comes from [Guiding Calibration](#guiding-calibration): without one the pixel error is not a pulse. The state is `idle` before the first frame, `initializing` while the lock reference is averaged over `lockAveragingFrames` good frames (no pulses are issued; a frame that jumps more than `maxFrameJumpPx` from the previous sample, or that has no measurement or a quality below `minFrameQuality`, is skipped), `guiding` afterwards, and `lost` after `lostStarFrameCount` consecutive bad frames. A frame is bad when there is no measurement, when the quality is below `minFrameQuality`, or when the measurement jumped more than `maxFrameJumpPx` from the last good one (not during a dither settle); a frame whose capture time is not after the previous one is ignored as `duplicate_frame` or `out_of_order`, and a frame whose gap is above `droppedFrameFactor` times `nominalCadence` is noted as `dropped_frame`. The reference is the average of the lock (or the fixed `referencePosition`), the target is the reference plus the dither or lock-shift offset plus the tracker `targetOffset`, and a target outside the image (or the `targetEnvelope` of the frame, which the guide client copies from the tracker result) puts the guider in `lost` with a `targetLimit` diagnostic. The error `dx, dy` in pixels (measurement minus target) goes through the calibration, `axis = calibration * image` (`applyCalibration`), to the axis errors; each axis applies a deadband (`applyDeadband`, below `minMoveRA` or `minMoveDEC` the error is zero), a hysteresis filter `hysteresis * previous + (1 - hysteresis) * error`, and a pulse of `|filtered| * msPerUnit * aggressiveness * cadenceScale` milliseconds clamped to the minimum and maximum pulse of the axis, where the cadence scale is the frame cadence over `nominalCadence` limited to 0.5 and 2. A positive RA error pulses `raPositiveDirection` and a positive DEC error `decPositiveDirection`. DEC has a `decMode`: `auto`, `north-only`, `south-only` or `off`, and it protects against backlash: a reversal needs the filtered error to reach `decReversalThreshold` and the accumulated opposite error to reach `decBacklashAccumThreshold` before a pulse is issued. `DEFAULT_GUIDER_CONFIG` is the conservative tuning of the `GuiderConfig` (an identity calibration, six lock frames, 12 pixels of jump, 1000 ms cadence, gains near 0.7, 850 ms per unit and pulses from 20 or 30 ms to 2000 or 2500 ms), and the constructor takes a partial one. `validateCalibration(calibration, minDeterminant?)` returns whether the determinant is finite and above the minimum (1e-9), and `invertCalibration` inverts a matrix. The runtime is `currentState`, `lastDiagnostics()` and `reset()`. `startDither(dx, dy)` shifts the target by pixels and marks a settle, `setTargetOffset(dx, dy)` shifts it without marking one (a lock shift), `setDithering(false)` ends the settle and keeps the offset and `stopDither()` returns to the reference. `setNominalCadence(ms)` (a non-positive or non-finite value is ignored), `setDecMode(mode)` and `setCalibration(calibration, options?)` change the tuning without resetting the lock; changing the calibration or a positive direction clears the filter of the axis (after a meridian flip, give the flipped calibration and directions). The constructor and `setCalibration` throw an `Error` for a singular calibration or an invalid configuration. By default every valid frame is corrected (`correctionIntervalMs` 0). When frames arrive much faster than the mount should be corrected, for example a planetary or Lunar camera at tens of frames per second whose measured motion is mostly seeing (see [Solar System Guide Tracking](#solar-system-guide-tracking)), a positive `correctionIntervalMs` gates the corrections on the capture clock (`captureMonotonic`, else `timestamp`; a frame with neither is corrected at once and noted `correction_ungated`). The valid errors are buffered (at most `correctionSampleCapacity`, dropping the oldest) with the note `correction_pending` and no pulse. Once the interval has elapsed since it opened (at the first buffered frame, then at each tick), the buffer is combined into one error by `correctionAggregation`, with the note `correction_tick` and `correctionSamples` in the diagnostics. `'latest'` takes the newest error; `'robust'` takes the quality-weighted mean of the errors within 3 robust sigmas of their 2D median, which is `aggregateGuideErrors(samples, aggregation)`. At a tick the pulse is scaled by the elapsed interval over `correctionIntervalMs` (1 to 2) instead of the frame cadence. The deadbands apply to the combined error, the hysteresis and the DEC backlash memory advance only at ticks, and a lock, a loss, a target limit, a dither or a calibration change empties the buffer. The pulses are a proportional controller with no model of the mount, so the gains and the calibration must match the setup, and `oppositeRA` and `oppositeDEC` give the opposite direction.
 
 ```ts
-import { applyCalibration, applyDeadband, DEFAULT_GUIDER_CONFIG, Guider, invertCalibration, oppositeDEC, oppositeRA, validateCalibration } from 'nebulosa/src/observation/guiding/guider'
+import { aggregateGuideErrors, applyCalibration, applyDeadband, DEFAULT_GUIDER_CONFIG, Guider, invertCalibration, oppositeDEC, oppositeRA, validateCalibration } from 'nebulosa/src/observation/guiding/guider'
 import { trackingResultFromStars } from 'nebulosa/src/observation/guiding/tracker'
 
 // A frame of a 640 by 480 guide camera with one star at (x, y), a quality of 1, and a cadence of 1000 ms.
@@ -12787,6 +12978,25 @@ console.log(northOnly.config.decMode, northOnly.config.nominalCadence, DEFAULT_G
 // After a meridian flip the calibration and the directions are replaced without losing the lock, and the filters of the axis are cleared.
 guider.setCalibration([-1, 0, 0, -1], { raPositiveDirection: 'EAST', decPositiveDirection: 'SOUTH' })
 console.log(guider.config.calibration, guider.config.raPositiveDirection, guider.currentState.state, guider.currentState.filteredRA) // [-1, 0, 0, -1] EAST guiding 0
+
+// Correction cadence: four frames per second, but one correction per second from the robust mean of the buffered errors (the 3-pixel seeing spike is rejected).
+const gated = new Guider({ lockAveragingFrames: 2, hysteresisRA: 0, hysteresisDEC: 0, aggressivenessRA: 1, aggressivenessDEC: 1, msPerRAUnit: 500, msPerDECUnit: 500, correctionIntervalMs: 1000, correctionSampleCapacity: 16, correctionAggregation: 'robust' })
+const fast = (x: number, frameId: number) => ({ ...frame(x, 240, frameId), cadence: 250, captureMonotonic: frameId * 250 })
+gated.processFrame(fast(320, 0))
+gated.processFrame(fast(320, 1))
+for (const [i, error] of [0.5, 0.7, 3, 0.6, 0.6].entries()) {
+	const command = gated.processFrame(fast(320 + error, 2 + i))
+	console.log(command.ra, command.diagnostics.notes, command.diagnostics.correctionSamples) // four empty pulses with ['correction_pending'], then WEST 300 ms (0.6 pixel × 500 ms) with ['correction_tick'] and 5 samples
+}
+console.log(
+	aggregateGuideErrors(
+		[
+			{ dx: 0.5, dy: 0, quality: 1, monotonic: 0 },
+			{ dx: 3, dy: 0.2, quality: 1, monotonic: 500 },
+		],
+		'latest',
+	),
+) // [3, 0.2]
 ```
 
 ### Guide Star Tracking
@@ -13995,6 +14205,153 @@ console.log(pixel(segment.from), pixel(segment.to), segment.visible, segment.cli
 const marker = projectPolarAlignmentOverlayPoint({ x: 300, y: 60 }, frame, 5, { x: 60, y: 60 })!
 const inside = projectPolarAlignmentOverlayPoint({ x: 50, y: 50 }, frame, 5)!
 console.log(pixel(marker.display), marker.onScreen, pixel(marker.direction), pixel(inside.display), inside.onScreen) // [ 105, 60 ] false [ 1, 0 ] [ 50, 50 ] true
+```
+
+### Solar System Guide Tracking
+
+`observation/guiding/tracker.solarsystem` guides on an extended object (a planet, the Moon or the Sun) instead of a star. There is no star detector: the target is measured from the object itself, so the main imaging camera, running short exposures at a high frame rate, can be the guide camera. The `SolarSystemTracker` implements the generic `GuideTracker` contract of [Guide Star Tracking](#guide-star-tracking), so it plugs into the [Guide Pulse Loop](#guide-pulse-loop) and the guide client like the stellar tracker. Frame-to-frame motion comes from [Surface Registration](#surface-registration): many textured patches with a robust rigid fit, so field rotation is measured too, plus a coarse phase-correlation reacquisition after a large jump. When the whole disk is visible, [Disk Limb Fitting](#disk-limb-fitting) anchors the absolute center.
+
+The `mode` picks a preset of `SOLAR_SYSTEM_TRACKING_PRESETS`:
+
+- `planetary`: a 192-pixel area that grows with the disk (twice the radius plus `objectMargin`, up to 384 pixels), a limb fit on every frame, and the `objectCenter` target.
+- `lunar` and `solar`: a 256-pixel texture area with larger patches, no routine limb fit, and the `surfacePoint` target. The Solar preset accepts weaker, granulation-like structure and refreshes keyframes every 30 frames and 15 s instead of 60 frames and 30 s.
+
+The `targetMode` decides what is published:
+
+- `objectCenter` is the limb-fitted center of the disk, blended into the surface motion with a gain of `limbGain` per limb frame. Without a usable limb it is the apparent bright-object center found at acquisition, which is not the physical center of a crescent or a ringed planet.
+- `surfacePoint` is one point of the surface, carried by the anchor-to-current rigid transform. The point is the context `searchPosition`, else its `initialPosition`, else the center of the area.
+
+An `objectCenter` identity gains the capability it lacked at acquisition, outside the `calibrating` phase only, so the calibration measures a fixed point:
+
+- An apparent-object identity adopts the first limb with a confidence of at least 0.8 whose center lies within the semi-minor axis of the surface point (note `limb_anchored`). The published target then converges onto the limb center by `limbGain` per frame, with the measurement mode `hybrid`, instead of jumping by the apparent-to-limb offset.
+- A limb-only identity (no surface anchor, measurement mode `limb`) tries to build a surface anchor around the limb center on the anchor-check cadence (note `surface_anchored`). From the next frame on, it tracks in `hybrid` mode without moving the target.
+
+Constructor options:
+
+- `area`: a `Rect` in pixels, left and top inclusive, right and bottom exclusive.
+- `plane`: `'auto'` picks the plane with the best contrast to noise at acquisition, for example red on a one-shot-color H-alpha frame (see [Image Analysis Planes](#image-analysis-planes)).
+- `surface`, `limb`, `reference` (the anchor and keyframe bank) and `acquisition`: partial overrides, merged over the preset into `config`.
+
+Coordinates are full-frame image pixels with pixel centers at integers, origin at the upper left, +X right and +Y down. Rotations are radians from +X toward +Y.
+
+`track(frame, context)` is synchronous and keeps no reference to the caller's image. It only stages its updates: acquisition, the new transform, limb fits and keyframe promotions become the identity only on `commit()`, which the guide client calls for accepted frames. A rejected frame never advances the reference.
+
+- The first frame with `allowAcquisition` acquires the target, as does any frame with `preserveIdentity` false; the note is `acquired`. The limb and the apparent object are searched in the configured `area`, else in a `maximumAreaSize` square around the context position, and over the whole frame only when no location is known. Without a limb prior, later frames search a square of at least `maximumAreaSize` (or the object diameter plus `objectMargin` on each side) around the predicted target. A brighter object elsewhere on the detector therefore never sets the detection threshold, and a limb that is always rejected, as on a ringed planet, costs bounded work per frame.
+- Later frames register against the newest keyframe and check the anchor directly every `anchorCheckInterval` frames. Keyframes that disagree with the anchor are discarded (`reference_inconsistent`).
+- A frame whose keyframe registers while the direct anchor check fails is unverified (note `anchor_unverified`): the state is `degraded` and no keyframe is promoted, so the chain cannot extend its own drift. In `objectCenter`, a frame fused with the limb rebuilds the anchor at the published point instead (note `reanchored`). After `maximumAnchorCheckFailures` consecutive failures (3 in every preset, 0 to withhold on the first), the measurement is withheld with the reason `anchor_unverified` until the anchor registers again, and the tracker goes `lost` after `lostAfter` such frames.
+- A keyframe is promoted every `keyframeInterval` frames, or sooner when the surface moved by `keyframeShiftFraction` of the area. The cadences also need `keyframeIntervalTime` and `anchorCheckIntervalTime` of capture time (the frame `captureMonotonic`, else its `timestamp`) to elapse since the last promotion or check, so a fast camera does not churn the bank. A value of 0 counts frames only. The presets use 7.5 s and 5 s for `planetary`, 30 s and 7.5 s for `lunar`, and 15 s and 5 s for `solar`, which matches the frame intervals at 2 frames per second.
+- A jump larger than the patch search is reacquired, with the measurement mode `surfaceReacquired`.
+- When the surface fails but a limb is measured, the tracker re-anchors on the limb alone, with the mode `limbReacquired`.
+
+The result is a `SolarSystemTrackerResult`. It has the generic `measurement`, `qualityScore`, `rejectedReasons` and `notes`, and a `measurementMode` (`surface`, `limb`, `hybrid`, `surfaceReacquired` or `limbReacquired`). Its `targetEnvelope` gives the bounds inside which the target stays measurable:
+
+- for `objectCenter`, the disk radius plus `edgeMargin` from every edge;
+- for `surfacePoint`, a quarter of the area.
+
+The guider stops with a target limit instead of pulsing the object off the detector, and a target outside the envelope adds `target_near_edge`.
+
+`solarSystemTrackingOf(result)` reads the `solarSystem` diagnostic:
+
+- the `state`: `acquiring`, `tracking`, `degraded` after a failed frame, or `lost` after `lostAfter` consecutive failures;
+- the `plane`, the `area`, and the anchor-to-current `transform` and `rotation`;
+- the `surface`, `limb` and `reference` evidence; `reference.anchorCheckFailures` counts the consecutive unverified frames.
+
+`select(result, position?)` never mutates the tracker:
+
+- without a position, it returns the published target, or the limb center when an `objectCenter` limb is confident;
+- with a position, it returns the limb center when the position is on the disk (`objectCenter`), otherwise the position itself when it is inside the envelope, otherwise `undefined`.
+
+`reset()` clears everything, and a change of frame size resets the identity. These notes mark the failures: `image_unavailable` (no decoded image), `acquisition_disabled` (no identity and acquisition not allowed) and `measurement_lost`.
+
+The guide client takes the tracker as its third argument: `new GuiderClient(cameraManager, guideOutputManager, tracker, options)`.
+
+- `options.guider` tunes the controller. Pixel thresholds such as `minMoveRA` are converted with the calibrated rates, and an invalid combination throws at construction.
+- `findTarget()` and `getTargetImage()` are the generic names of `findStar()` and `getStarImage()`.
+
+The tracker measures atmospheric tip-tilt as image motion; it is not adaptive optics. Guide with a correction interval of a second or more (`correctionIntervalMs` with `'robust'` aggregation, see [Guide Pulse Loop](#guide-pulse-loop)) and a deadband, so the seeing jitter is averaged and only the mount drift is corrected.
+
+Limitations:
+
+- The motion model is rigid (no scale), so the differential seeing over the area only lowers the confidence.
+- Repeated or featureless texture is rejected as ambiguous.
+- The limb needs an object brighter than its background.
+- A moving terminator or a partial phase biases `objectCenter`.
+
+**Software guiding does not make Solar observation safe. Observe and image the Sun only through appropriate, certified Solar filtration.**
+
+```ts
+import type { Image } from 'nebulosa/src/imaging/model/types'
+import { mulberry32 } from 'nebulosa/src/math/numerical/random'
+import { SOLAR_SYSTEM_TRACKING_PRESETS, SolarSystemTracker, solarSystemTrackingOf } from 'nebulosa/src/observation/guiding/tracker.solarsystem'
+
+// A 320 by 320 mono frame. The scene is either a Lunar-like surface of random craters shifted by (dx, dy) pixels, or a planet given as its center and radius in pixels.
+const size = 320
+const random = mulberry32(21)
+const craters = Array.from({ length: 1200 }, () => ({ x: random() * 400 - 40, y: random() * 400 - 40, sigma: 1.6 + 5 * random() ** 2, amplitude: random() < 0.5 ? -0.08 : 0.08 }))
+const mono = (raw: Float64Array): Image => ({ header: {}, raw, metadata: { width: size, height: size, channels: 1, pixelCount: size * size, stride: size, strideInBytes: size * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } })
+const moon = (dx: number, dy: number) => {
+	const raw = new Float64Array(size * size).fill(0.4)
+	for (const { x, y, sigma, amplitude } of craters) {
+		const reach = Math.ceil(4 * sigma)
+		for (let py = Math.max(0, Math.floor(y + dy) - reach); py <= Math.min(size - 1, Math.floor(y + dy) + reach); py++) {
+			for (let px = Math.max(0, Math.floor(x + dx) - reach); px <= Math.min(size - 1, Math.floor(x + dx) + reach); px++) {
+				raw[py * size + px] += amplitude * Math.exp(-((px - x - dx) ** 2 + (py - y - dy) ** 2) / (2 * sigma * sigma))
+			}
+		}
+	}
+	return mono(raw)
+}
+// A limb-darkened planet of radius 50 pixels with cloud bands, centered at (cx, cy).
+const planet = (cx: number, cy: number) => {
+	const raw = new Float64Array(size * size).fill(0.02)
+	for (let y = 0; y < size; y++) {
+		for (let x = 0; x < size; x++) {
+			const r2 = ((x - cx) ** 2 + (y - cy) ** 2) / 2500
+			if (r2 < 1) raw[y * size + x] = 0.02 + 0.7 * Math.sqrt(1 - r2) * (1 + 0.15 * Math.sin((y - cy) * 0.35))
+		}
+	}
+	return mono(raw)
+}
+const frame = (image: Image | undefined, frameId: number) => ({ image, width: size, height: size, timestamp: frameId * 500, frameId })
+const acquire = { phase: 'looping', allowAcquisition: true, preserveIdentity: false } as const
+const follow = { phase: 'guiding', allowAcquisition: true, preserveIdentity: true } as const
+
+// The Lunar preset follows a surface point: by default the center of its 256-pixel area.
+const lunar = new SolarSystemTracker({ mode: 'lunar' })
+console.log(lunar.config.targetMode, lunar.config.acquisition.areaSize, SOLAR_SYSTEM_TRACKING_PRESETS.planetary.targetMode) // surfacePoint 256 objectCenter
+
+// The first frame acquires the surface, and commit() makes it the anchor.
+const first = lunar.track(frame(moon(0, 0), 0), acquire)
+lunar.commit()
+console.log(first.measurement, first.notes, solarSystemTrackingOf(first)?.area, first.targetEnvelope) // { x: 159.5, y: 159.5, confidence: 1 } ['acquired'], the area { left: 32, top: 32, right: 288, bottom: 288 } and the envelope { minX: 64, maxX: 255, minY: 64, maxY: 255, marginPx: 64 }
+
+// The surface moved by (2.4, -1.3) pixels: the point is carried by the rigid transform fitted to the surface patches.
+const moved = lunar.track(frame(moon(2.4, -1.3), 1), follow)
+lunar.commit()
+const lunarDiagnostic = solarSystemTrackingOf(moved)!
+console.log(moved.measurement, lunarDiagnostic.state, lunarDiagnostic.measurementMode, lunarDiagnostic.transform) // { x: 161.9, y: 158.2, confidence: 0.988 } tracking surface, and a rotation of 0.00001 rad with a translation of [2.402, -1.302]
+console.log(lunarDiagnostic.surface?.acceptedPatches, lunarDiagnostic.surface?.rmsResidual, lunarDiagnostic.surface?.uncertaintyPx, lunarDiagnostic.reference?.bankSize) // 32 inlier patches, an RMS of 0.017 pixels, a 1-sigma uncertainty of 0.096 pixels and 1 reference (the anchor)
+
+// select() never mutates: the published target, a requested point inside the envelope, and undefined for a point outside it.
+console.log(lunar.select(moved), lunar.select(moved, [100, 120]), lunar.select(moved, [2, 2])) // [161.9, 158.2] [100, 120] undefined
+
+// Without a decoded image the frame fails and the tracker degrades; reset() drops the identity.
+console.log(lunar.track(frame(undefined, 2), follow).notes, solarSystemTrackingOf(lunar.lastResult)?.state) // ['image_unavailable'] degraded
+lunar.reset()
+console.log(lunar.lastResult) // undefined
+
+// The planetary preset publishes the limb-fitted center of the disk (objectCenter), fused with the surface motion.
+const planetary = new SolarSystemTracker({ mode: 'planetary' })
+const acquired = planetary.track(frame(planet(150.3, 162.7), 0), acquire)
+planetary.commit()
+const limb = solarSystemTrackingOf(acquired)?.limb
+console.log(acquired.measurement, limb?.semiMajor, limb?.confidence, acquired.targetEnvelope) // { x: 150.29, y: 162.66, confidence: 0.984 }, a radius of 49.57 pixels, a limb confidence of 0.984, and an envelope of 49.57 + 8 = 57.57 pixels from every edge
+const drifted = planetary.track(frame(planet(153.1, 161.2), 1), follow)
+planetary.commit()
+console.log(drifted.measurement, solarSystemTrackingOf(drifted)?.measurementMode) // { x: 153.09, y: 161.17, confidence: 0.883 } hybrid
+
+// On the disk, a requested point selects the limb center; outside the envelope it is declined.
+console.log(planetary.select(drifted, [160, 170]), planetary.select(drifted, [250, 40])) // [153.11, 161.21] undefined
 ```
 
 ### Taki Mount Geometry
@@ -20746,6 +21103,42 @@ const law = powerRegression(
 console.log(law.a, law.b) // 3.000000000000002 1.5
 console.log(law.predict(10)) // 94.86832980505145
 console.log(law.x(30)) // 4.641588833612777
+```
+
+### Fast Fourier Transform
+
+The discrete Fourier transform of `N` complex samples is `X[k] = Σ x[n]·exp(-i·2π·k·n/N)`. `math/numerical/fft` computes it with an in-place radix-2 FFT over split real and imaginary `Float64Array` buffers, so `N` must be a power of two. The forward transform is unscaled. The inverse uses `exp(+i·2π·k·n/N)` and divides by `N`, so a forward-then-inverse round trip restores the input.
+
+- `fftPaddedSize(size)` returns the next power of two (1 for a size of at most 1).
+- `fftPlan(size)` precomputes the bit-reversal and twiddle tables for one power-of-two length.
+- `fftComplex1D(real, imaginary, offset, plan, inverse)` transforms `plan.size` contiguous samples starting at `offset`, in place.
+- `fft2DWorkspace(width, height)` allocates a zero-filled row-major 2D workspace padded to powers of two, with the `real` and `imaginary` buffers, the column scratch and the plans. Write the input into it, zero-padding yourself.
+- `fftComplex2D(workspace, inverse)` transforms every row and then every column in place; the inverse divides by `width·height`.
+
+Plans and workspaces are allocated once and reused: a transform allocates nothing, and its cost grows as N log N. These are the primitives behind the [FFT Image Filter](#fft-image-filter) and the phase correlation of [Surface Registration](#surface-registration).
+
+```ts
+import { fft2DWorkspace, fftComplex1D, fftComplex2D, fftPaddedSize, fftPlan } from 'nebulosa/src/math/numerical/fft'
+
+console.log(fftPaddedSize(100), fftPaddedSize(128), fftPaddedSize(1)) // 128 128 1
+
+// A box of four ones in eight samples: the transform, then the inverse that restores it.
+const plan = fftPlan(8)
+const real = new Float64Array([1, 1, 1, 1, 0, 0, 0, 0])
+const imaginary = new Float64Array(8)
+fftComplex1D(real, imaginary, 0, plan, false)
+console.log(real, imaginary) // real [4, 1, 0, 1, 0, 1, 0, 1] (to rounding) and imaginary [0, -2.4142, 0, -0.4142, 0, 0.4142, 0, 2.4142]
+fftComplex1D(real, imaginary, 0, plan, true)
+console.log(real) // [1, 1, 1, 1, 0, 0, 0, 0] (to rounding)
+
+// A 5 by 3 grid is padded to 8 by 4. A unit impulse at x = 2, y = 1 has the frequency (1, 0) term exp(-i·2π·2/8) = -i.
+const workspace = fft2DWorkspace(5, 3)
+console.log(workspace.width, workspace.height) // 8 4
+workspace.real[1 * workspace.width + 2] = 1
+fftComplex2D(workspace, false)
+console.log(workspace.real[0], workspace.real[1], workspace.imaginary[1]) // 1 0 -1 (to rounding)
+fftComplex2D(workspace, true)
+console.log(workspace.real[1 * workspace.width + 2]) // 1 (to rounding)
 ```
 
 ### Great-Circle Geometry

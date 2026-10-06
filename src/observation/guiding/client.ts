@@ -15,7 +15,7 @@ import { clamp } from '../../math/numerical/math'
 import { GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './assistant'
 import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationConfig, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
 import { DitherGenerator, type DitherMode } from './dither'
-import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, Guider } from './guider'
+import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, Guider, type GuiderConfig } from './guider'
 import type { GuideFrame, GuideTracker, GuideTrackerResult } from './tracker'
 
 // Local autoguiding orchestrator exposing a PHD2-compatible API over INDI camera and guide-output
@@ -161,7 +161,15 @@ export interface GuiderClientOptions {
 	// durations are milliseconds and distances are pixels; an invalid combination throws at
 	// construction. Mounts with a fast guide rate usually only need shorter raPulse/decPulse.
 	readonly calibrator?: Partial<GuidingCalibrationConfig>
+	// Controller tuning merged over DEFAULT_GUIDER_CONFIG for every guider the client builds; an invalid
+	// combination throws at construction. Thresholds (deadbands, DEC reversal and backlash) are pixels and
+	// are converted with the solved axis rates after calibration. Client-owned values (calibration, lock and
+	// initial position, DEC mode, cadence) cannot be overridden.
+	readonly guider?: GuiderClientGuiderOptions
 }
+
+// Guider settings a client caller may tune; calibration-, lock- and cadence-derived fields stay client-owned.
+export type GuiderClientGuiderOptions = Partial<Omit<GuiderConfig, 'calibration' | 'referencePosition' | 'initialPosition' | 'decMode' | 'nominalCadence' | 'msPerRAUnit' | 'msPerDECUnit' | 'raPositiveDirection' | 'decPositiveDirection'>>
 
 // Optics parameters supplied at connect time to derive the guider pixel scale.
 export interface GuiderClientConnectOptions {
@@ -377,9 +385,14 @@ export class GuiderClient {
 		return true
 	}
 
+	// PHD2-compatible alias of findTarget().
+	findStar() {
+		return this.findTarget()
+	}
+
 	// Selects a target from the latest result through the tracker, or its measurement when selection
 	// is unsupported. Stores the image-pixel position as the lock without tracking another frame.
-	findStar() {
+	findTarget() {
 		const tracking = this.#frame?.tracking ?? this.#tracker.lastResult
 		const selected = tracking === undefined ? undefined : this.#tracker.select === undefined ? measurementPositionOf(tracking) : this.#tracker.select(tracking)
 		if (selected === undefined) return undefined
@@ -703,8 +716,14 @@ export class GuiderClient {
 		return this.#settling
 	}
 
-	// Returns the most recent decoded guide frame and star position using the raw in-memory pixel buffer.
+	// PHD2-compatible alias of getTargetImage().
 	getStarImage(): PHD2StarImage<ImageRawType> | undefined {
+		return this.getTargetImage()
+	}
+
+	// Returns the most recent decoded guide frame cropped around the lock target (or latest measurement)
+	// using the raw in-memory pixel buffer, in the PHD2 star-image shape.
+	getTargetImage(): PHD2StarImage<ImageRawType> | undefined {
 		if (this.#image === undefined) return undefined
 
 		const star = this.#frame?.tracking.measurement
@@ -740,7 +759,7 @@ export class GuiderClient {
 		// PHD2 auto-selects a guide star when a guide request arrives with nothing selected. This is a
 		// no-op until a frame has been decoded, matching PHD2's behavior of guiding on the star found
 		// in the frames that follow.
-		if (this.#lockPosition === undefined) this.findStar()
+		if (this.#lockPosition === undefined) this.findTarget()
 
 		this.#paused = false
 		this.#fullPause = true
@@ -1115,6 +1134,7 @@ export class GuiderClient {
 			cadence: this.#inFlightExposure,
 			captureTime: trackerFrame.captureTime,
 			captureMonotonic: trackerFrame.captureMonotonic,
+			targetEnvelope: tracking.targetEnvelope,
 		}
 	}
 
@@ -1689,10 +1709,13 @@ export class GuiderClient {
 		this.#guider = this.#makeGuider(this.#calibration)
 	}
 
-	// Builds a guider instance from the current calibration, axis parity, and DEC mode.
+	// Builds a guider instance from the caller tuning, current calibration, axis parity, and DEC mode.
 	#makeGuider(calibration: GuidingCalibrationResult | undefined) {
+		const tuning = this.options?.guider
+
 		if (calibration === undefined) {
 			return new Guider({
+				...tuning,
 				decMode: toDeclinationGuideMode(this.#declinationGuideMode),
 				referencePosition: this.#guiderReferencePosition,
 				initialPosition: this.#guiderInitialPosition,
@@ -1701,7 +1724,8 @@ export class GuiderClient {
 		}
 
 		return new Guider({
-			...calibratedGuiderOptions(calibration),
+			...tuning,
+			...calibratedGuiderOptions(calibration, tuning),
 			decMode: toDeclinationGuideMode(this.#declinationGuideMode),
 			referencePosition: this.#guiderReferencePosition,
 			initialPosition: this.#guiderInitialPosition,
@@ -1712,7 +1736,7 @@ export class GuiderClient {
 	// Pushes a solved calibration onto the running guider without reconstructing it, so lock,
 	// hysteresis, and dither stay intact.
 	#applyCalibrationToGuider(calibration: GuidingCalibrationResult) {
-		const options = calibratedGuiderOptions(calibration)
+		const options = calibratedGuiderOptions(calibration, this.options?.guider)
 		this.#guider.setCalibration(options.calibration, options)
 	}
 
@@ -1913,14 +1937,15 @@ function toDeclinationGuideMode(mode: PHD2DeclinationGuideMode) {
 // emits millisecond axis errors (the pulse that would cancel the pixel error), so pixel defaults are
 // divided by the solved rate. When the rate is unknown the original threshold is kept so the
 // uncalibrated identity controller is unchanged.
-function calibratedGuiderOptions(calibration: GuidingCalibrationResult) {
+function calibratedGuiderOptions(calibration: GuidingCalibrationResult, tuning: GuiderClientGuiderOptions = {}) {
 	// The solved image-to-axis matrix converts a pixel error into the milliseconds of pulse that
 	// would reproduce it, while the guider expects a matrix that yields the pulse cancelling it,
 	// so the matrix is negated here; feeding it unchanged closes the loop with positive feedback.
 	// Its output is already in milliseconds, so the per-unit scaling must be neutral: keeping the
 	// uncalibrated default would apply the mount rate twice and saturate every correction. Every
 	// pixel-unit controller threshold (dead bands, DEC reversal, DEC backlash accumulation) is
-	// converted with the solved rates so seeing-sized reversals still hold the DEC axis.
+	// converted with the solved rates so seeing-sized reversals still hold the DEC axis. Caller tuning
+	// supplies those pixel thresholds when present.
 	const [m00, m01, m10, m11] = calibration.imageToAxis
 	const raRate = calibration.ra.ratePxPerMs
 	const decRate = calibration.dec.ratePxPerMs
@@ -1929,10 +1954,10 @@ function calibratedGuiderOptions(calibration: GuidingCalibrationResult) {
 		calibration: [-m00, -m01, -m10, -m11] as const,
 		msPerRAUnit: 1,
 		msPerDECUnit: 1,
-		minMoveRA: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.minMoveRA, raRate),
-		minMoveDEC: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.minMoveDEC, decRate),
-		decReversalThreshold: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.decReversalThreshold, decRate),
-		decBacklashAccumThreshold: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.decBacklashAccumThreshold, decRate),
+		minMoveRA: axisUnitThreshold(tuning.minMoveRA ?? DEFAULT_GUIDER_CONFIG.minMoveRA, raRate),
+		minMoveDEC: axisUnitThreshold(tuning.minMoveDEC ?? DEFAULT_GUIDER_CONFIG.minMoveDEC, decRate),
+		decReversalThreshold: axisUnitThreshold(tuning.decReversalThreshold ?? DEFAULT_GUIDER_CONFIG.decReversalThreshold, decRate),
+		decBacklashAccumThreshold: axisUnitThreshold(tuning.decBacklashAccumThreshold ?? DEFAULT_GUIDER_CONFIG.decBacklashAccumThreshold, decRate),
 		raPositiveDirection: calibration.ra.direction,
 		decPositiveDirection: calibration.dec.direction,
 	}

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { pixelScale } from '../../../src/astronomy/formulas'
 import { Timescale, time, toJulianDay, type Time } from '../../../src/astronomy/time/time'
-import { DAYSEC, DEG2RAD, PI, PIOVERTWO } from '../../../src/core/constants'
+import { DAYSEC, DEG2RAD, PI, PIOVERTWO, TAU } from '../../../src/core/constants'
 import { type Camera, DEFAULT_CAMERA, DEFAULT_GUIDE_OUTPUT, type GuideDirection, type GuideOutput } from '../../../src/devices/indi/device'
 import type { CameraManager } from '../../../src/devices/indi/manager/camera'
 import type { DeviceHandler } from '../../../src/devices/indi/manager/device'
@@ -10,14 +10,17 @@ import { writeImageToFits } from '../../../src/imaging/model/image'
 import type { Image } from '../../../src/imaging/model/types'
 import { plotStar } from '../../../src/imaging/stars/generator'
 import { bufferSink } from '../../../src/io/io'
+import { mulberry32 } from '../../../src/math/numerical/random'
 import type { GuidingCalibrationResult } from '../../../src/observation/guiding/calibrator'
 import { GuiderClient, type GuideFrameImage, type GuiderClientConnectOptions, type GuiderClientOptions, type GuiderEvents } from '../../../src/observation/guiding/client'
 import { ditherPulsePlanFromCalibration } from '../../../src/observation/guiding/dither.pulse'
 import type { GuideDirectionDEC, GuideDirectionRA } from '../../../src/observation/guiding/guider'
-import { type GuideTracker, type GuideTrackerResult, trackingResultFromStars } from '../../../src/observation/guiding/tracker'
+import { type GuideTargetEnvelope, type GuideTracker, type GuideTrackerResult, trackingResultFromStars } from '../../../src/observation/guiding/tracker'
 import { NonSiderealTracker, nonSiderealTrackingOf } from '../../../src/observation/guiding/tracker.nonsidereal'
+import { SolarSystemTracker, solarSystemTrackingOf } from '../../../src/observation/guiding/tracker.solarsystem'
 import { StarTracker, starTrackingOf } from '../../../src/observation/guiding/tracker.star'
 import { isTimeConsumingTestSkipped } from '../../util'
+import { renderScene, textureScene } from '../../util/scene'
 
 // One recorded pulse issued through the fake guide-output manager.
 interface PulseRecord {
@@ -421,6 +424,12 @@ describe('construction', () => {
 		expect(() => makeHarness({ calibrator: { raPulse: 0 } })).toThrowError(/invalid guiding calibrator config/)
 		expect(() => makeHarness({ calibrator: { maxRatePxPerMs: 1e-6 } })).toThrowError(/invalid guiding calibrator config/)
 		expect(() => makeHarness({ calibrator: { raPulse: 250, decPulse: 250 } })).not.toThrow()
+	})
+
+	test('rejects guider tuning the guider itself would reject', () => {
+		expect(() => makeHarness({ guider: { correctionSampleCapacity: 0 } })).toThrowError(/invalid guider config/)
+		expect(() => makeHarness({ guider: { correctionIntervalMs: -1 } })).toThrowError(/invalid guider config/)
+		expect(() => makeHarness({ guider: { correctionIntervalMs: 2000, correctionSampleCapacity: 16, correctionAggregation: 'robust', minMoveRA: 0.3 } })).not.toThrow()
 	})
 
 	test('starts stopped, uncalibrated, unpaused and without a lock', () => {
@@ -1183,6 +1192,22 @@ describe('frame-driven behavior', () => {
 		expect(starTrackingOf(frame.tracking)?.primary!.y).toBeCloseTo(inside[1], 1)
 		expect(starTrackingOf(frame.tracking)!.detections).toHaveLength(2)
 		local.client.stopCapture()
+	})
+
+	test('findTarget and getTargetImage are the generic names of findStar and getStarImage', async () => {
+		connect(harness)
+		harness.client.loop()
+		await feedFrame(harness)
+
+		const image = harness.client.getTargetImage()
+		expect(image).toBeDefined()
+		expect(harness.client.getStarImage()).toEqual(image)
+
+		const position = harness.client.findTarget()
+		expect(position).toBeDefined()
+		expect(harness.client.getLockPosition()).toEqual(position)
+		expect(harness.client.findStar()).toEqual(position)
+		harness.client.stopCapture()
 	})
 
 	test('looping frames emit star metadata with the current frame number', async () => {
@@ -2198,6 +2223,35 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 
 		expect(harness.client.getAppState()).toBe('LostLock')
 		expect(state.commitCount()).toBe(commitsBeforeRejectedFrame)
+	})
+
+	test('a tracker-supplied target envelope stops guiding before any pulse leaves it', async () => {
+		const base = new StarTracker()
+		const override: { envelope?: GuideTargetEnvelope } = {}
+		const tracker: GuideTracker = {
+			reset: () => base.reset(),
+			get lastResult() {
+				return base.lastResult
+			},
+			track: (frame, context) => {
+				const result = base.track(frame, context)
+				return override.envelope === undefined ? result : { ...result, targetEnvelope: override.envelope }
+			},
+			select: (result, position) => base.select(result, position),
+			commit: () => base.commit(),
+		}
+		const harness = await calibrateAndGuide({}, undefined, tracker)
+		await establishLockReference(harness)
+		expect(harness.client.getAppState()).toBe('Guiding')
+
+		// An extended-object tracker would publish this when the lock target nears the detector edge.
+		override.envelope = { minX: 0, maxX: 4, minY: 0, maxY: 4, marginPx: 4 }
+		const pulsesBefore = harness.guideOutputManager.pulses.length
+		await feedFrame(harness)
+
+		expect(harness.client.getAppState()).toBe('LostLock')
+		expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+		harness.client.stopCapture()
 	})
 
 	test('calibration with mild measurement jitter still recovers rate and angle', async () => {
@@ -4930,5 +4984,100 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		expect(harness.client.getAppState()).toBe('Guiding')
 		for (let i = 0; i < 4; i++) await feedFrame(harness)
 		expect(harness.guideOutputManager.pulses.length).toBeGreaterThan(pulsesBefore)
+	})
+
+	// Lunar surface wider than the frame by LUNAR_MARGIN on every side, so calibration travel and drift never
+	// expose a texture edge.
+	const LUNAR_MARGIN = 80
+	const LUNAR_SURFACE = textureScene(41, FRAME_WIDTH + 2 * LUNAR_MARGIN, FRAME_HEIGHT + 2 * LUNAR_MARGIN, 1100)
+	// Gaussian seeing tip/tilt added to each rendered frame only, in image pixels per axis (1 sigma).
+	const SEEING_JITTER_PX = 0.5
+	// Wall-clock spacing of guided frame deliveries, in ms. The client stamps captureMonotonic on arrival, so pacing
+	// keeps the number of frames per correction interval independent of rendering and tracking speed.
+	const LUNAR_FRAME_PERIOD_MS = 150
+	// Mount drift per guided frame along RA and DEC, in pixels: 7.2 px of RA travel plus 4.8 px of DEC travel, about
+	// 8.7 px of image displacement, over the 60-frame run.
+	const LUNAR_DRIFT_RA_PX = 0.12
+	const LUNAR_DRIFT_DEC_PX = 0.08
+	const LUNAR_GUIDED_FRAMES = 60
+
+	// Renders the Lunar surface displaced by the mount offset plus this frame's seeing jitter as a FITS buffer.
+	async function buildLunarFrameBuffer(offsetX: number, offsetY: number, seed: number) {
+		const scene = (x: number, y: number) => LUNAR_SURFACE(x - offsetX + LUNAR_MARGIN, y - offsetY + LUNAR_MARGIN)
+		const { raw, metadata } = renderScene(FRAME_WIDTH, FRAME_HEIGHT, scene, { gain: 0.15, offset: 0.4, noise: 0.003, seed })
+		const image: Image = { header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: FRAME_WIDTH, NAXIS2: FRAME_HEIGHT }, metadata, raw }
+		const buffer = Buffer.alloc(FRAME_WIDTH * FRAME_HEIGHT * 4 + 100000)
+		await writeImageToFits(image, bufferSink(buffer))
+		return buffer
+	}
+
+	// Calibrates on the Lunar surface, guides a drifting mount through seeing jitter and returns the true pointing
+	// error (mount offset minus lock offset) after every guided frame plus the commanded pulse travel in pixels.
+	async function lunarClosedLoop(guider: GuiderClientOptions['guider']) {
+		const random = mulberry32(17)
+		const gaussian = () => Math.sqrt(-2 * Math.log(Math.max(1e-12, random()))) * Math.cos(TAU * random())
+		const tracker = new SolarSystemTracker({ mode: 'lunar', plane: 'mono' })
+		const harness = makeHarness({ calibrator: FAST_CALIBRATION, guider }, tracker)
+		let seed = 0
+		let due = 0
+		const lunarFrame = async (jitter: boolean) => {
+			harness.mount.advance(harness.guideOutputManager.pulses)
+			const jx = jitter ? SEEING_JITTER_PX * gaussian() : 0
+			const jy = jitter ? SEEING_JITTER_PX * gaussian() : 0
+			const buffer = await buildLunarFrameBuffer(harness.mount.offsetX + jx, harness.mount.offsetY + jy, ++seed)
+			if (jitter) await Bun.sleep(Math.max(0, due - performance.now()))
+			due = performance.now() + LUNAR_FRAME_PERIOD_MS
+			return await feedBuffer(harness, buffer)
+		}
+
+		connect(harness)
+		harness.client.loop()
+		await lunarFrame(false)
+		expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+		for (let i = 0; i < MAX_CALIBRATION_FRAMES && !harness.client.getCalibrated(); i++) await lunarFrame(false)
+		expect(harness.client.getCalibrated()).toBeTrue()
+
+		// The calibration resolves the 20° camera rotation from surface registration alone.
+		const calibration = harness.client.getCalibrationData()
+		expect(calibration.xRate).toBeCloseTo(MOUNT_RATE_PX_PER_MS, 2)
+		expect(calibration.yRate).toBeCloseTo(MOUNT_RATE_PX_PER_MS, 2)
+		expect(Math.abs(Math.sin(calibration.xAngle - MOUNT_ANGLE))).toBeLessThan(0.05)
+		expect(solarSystemTrackingOf(tracker.lastResult)?.targetMode).toBe('surfacePoint')
+
+		for (let i = 0; i < LOCK_AVERAGING_FRAMES; i++) await lunarFrame(true)
+		const lockX = harness.mount.offsetX
+		const lockY = harness.mount.offsetY
+		harness.mount.driftX = RA_AXIS[0] * LUNAR_DRIFT_RA_PX + DEC_AXIS[0] * LUNAR_DRIFT_DEC_PX
+		harness.mount.driftY = RA_AXIS[1] * LUNAR_DRIFT_RA_PX + DEC_AXIS[1] * LUNAR_DRIFT_DEC_PX
+		const errors: (readonly [number, number])[] = []
+		const from = harness.guideOutputManager.pulses.length
+
+		for (let i = 0; i < LUNAR_GUIDED_FRAMES; i++) {
+			await lunarFrame(true)
+			errors.push([harness.mount.offsetX - lockX, harness.mount.offsetY - lockY])
+		}
+
+		expect(eventsOf(harness.events, 'StarLost')).toBeEmpty()
+		expect(harness.client.getAppState()).toBe('Guiding')
+
+		const travel = harness.guideOutputManager.pulses.slice(from).reduce((sum, { duration }) => sum + duration * MOUNT_RATE_PX_PER_MS, 0)
+		return { errors, travel } as const
+	}
+
+	test('SolarSystemTracker calibrates and guides a drifting Lunar surface without chasing seeing', async () => {
+		// Each correction tick aggregates the three frames delivered within 375 ms with a robust mean.
+		const { errors, travel } = await lunarClosedLoop({ correctionIntervalMs: 375, correctionSampleCapacity: 32, correctionAggregation: 'robust' })
+		const tail = errors.slice(-LUNAR_GUIDED_FRAMES / 2)
+		const meanX = tail.reduce((sum, [x]) => sum + x, 0) / tail.length
+		const meanY = tail.reduce((sum, [, y]) => sum + y, 0) / tail.length
+		const rms = Math.sqrt(tail.reduce((sum, [x, y]) => sum + (x - meanX) ** 2 + (y - meanY) ** 2, 0) / tail.length)
+
+		// The drift is removed: the true pointing stays near the lock instead of walking 8.7 px away.
+		expect(Math.hypot(meanX, meanY)).toBeLessThan(1)
+		expect(Math.max(...errors.map(([x, y]) => Math.hypot(x, y)))).toBeLessThan(2.5)
+		expect(rms).toBeLessThan(SEEING_JITTER_PX)
+		// Seeing is not chased: the commanded travel stays close to the 12 px RA plus DEC drift budget, whereas
+		// correcting every jittered frame commands about 50% more.
+		expect(travel).toBeLessThan(1.25 * LUNAR_GUIDED_FRAMES * (LUNAR_DRIFT_RA_PX + LUNAR_DRIFT_DEC_PX))
 	})
 })

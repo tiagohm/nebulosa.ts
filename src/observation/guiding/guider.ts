@@ -1,6 +1,7 @@
 import type { Writable } from '../../core/types'
 import { Matrix } from '../../math/linear-algebra/matrix'
 import { clamp } from '../../math/numerical/math'
+import { medianBySelectionOf, STANDARD_DEVIATION_SCALE } from '../../math/numerical/statistics'
 import { type GuideFrame, type GuideTargetEnvelope, type GuideTrackerResult, trackingOf } from './tracker'
 import { starTrackingOf } from './tracker.star'
 
@@ -8,7 +9,10 @@ import { starTrackingOf } from './tracker.star'
 // image pixels to mount RA/DEC axes, the Guider averages a lock reference, rejects bad/dropped
 // measurements, and emits RA/DEC pulse commands using deadband, hysteresis smoothing, cadence-aware
 // gain, and DEC backlash/reversal handling. Image coordinates are pixels; pulse durations are
-// milliseconds; calibration is dimensionless.
+// milliseconds; calibration is dimensionless. An optional correction interval decouples the frame rate
+// from the mount-correction rate: valid image-space errors are buffered (bounded) between ticks and
+// aggregated into one calibrated pulse pair, so high-rate extended-object trackers can measure every
+// frame while zero-mean atmospheric tip/tilt is averaged out before it reaches the mount.
 
 // RA correction direction.
 export type GuideDirectionRA = 'WEST' | 'EAST'
@@ -102,6 +106,9 @@ export interface GuideDiagnostics {
 	readonly tracking?: GuideTrackerResult
 	// Structured target-envelope rejection, when the proposed target could not be pulsed safely.
 	readonly targetLimit?: GuideTargetLimitDiagnostic
+	// Samples combined into this frame's correction with an enabled interval; undefined otherwise or
+	// while the interval is still accumulating.
+	readonly correctionSamples?: number
 }
 
 // Structured preflight failure for the combined reference, dither, lock-shift, and tracker target.
@@ -172,6 +179,28 @@ export interface GuiderConfig {
 	readonly decReversalThreshold: number
 	// Accumulated opposite-direction error needed before resuming DEC pulses after a reversal.
 	readonly decBacklashAccumThreshold: number
+	// Minimum capture-clock interval between normal correction ticks, in milliseconds. Zero issues a
+	// correction for every valid frame (the classic per-exposure behavior).
+	readonly correctionIntervalMs: number
+	// Maximum valid measurements buffered between correction ticks; the oldest sample is dropped first.
+	readonly correctionSampleCapacity: number
+	// Interval error estimate: the latest sample, or a quality-weighted robust 2D mean.
+	readonly correctionAggregation: GuideCorrectionAggregation
+}
+
+// Strategy used to combine buffered image-space errors at a correction tick.
+export type GuideCorrectionAggregation = 'latest' | 'robust'
+
+// One valid image-space guide error buffered between correction ticks.
+export interface GuideErrorSample {
+	// Measurement minus target along X, in image pixels.
+	readonly dx: number
+	// Measurement minus target along Y, in image pixels.
+	readonly dy: number
+	// Tracker quality score in [0, 1], used as the robust-mean weight.
+	readonly quality: number
+	// Capture clock of the frame, in milliseconds.
+	readonly monotonic: number
 }
 
 // High-level guider lifecycle state.
@@ -203,6 +232,10 @@ interface GuiderInternalState {
 	filteredDEC: number
 	lastDecDirection?: GuideDirectionDEC
 	oppositeDecErrorAccum: number
+	// Valid errors since the last correction tick, oldest first and bounded by correctionSampleCapacity.
+	correctionSamples: GuideErrorSample[]
+	// Capture clock that opened the current correction interval, in milliseconds.
+	lastCorrectionMonotonic?: number
 	lastDiagnostics: GuideDiagnostics
 }
 
@@ -253,6 +286,9 @@ export const DEFAULT_GUIDER_CONFIG: Readonly<GuiderConfig> = {
 	decMode: 'auto',
 	decReversalThreshold: 0.08,
 	decBacklashAccumThreshold: 0.32,
+	correctionIntervalMs: 0,
+	correctionSampleCapacity: 1,
+	correctionAggregation: 'latest',
 }
 
 // Validates calibration matrix shape and determinant to avoid unstable transforms.
@@ -276,6 +312,10 @@ function validateGuiderConfig(config: GuiderConfig) {
 	if (config.hysteresisRA < 0 || config.hysteresisRA > 1) issues.push({ key: 'hysteresisRA', reason: 'must be within [0, 1]' })
 	if (config.hysteresisDEC < 0 || config.hysteresisDEC > 1) issues.push({ key: 'hysteresisDEC', reason: 'must be within [0, 1]' })
 	if (config.lostStarFrameCount <= 0) issues.push({ key: 'lostStarFrameCount', reason: 'must be > 0' })
+	// A non-finite interval would never tick and silently stop guiding.
+	if (!(config.correctionIntervalMs >= 0 && Number.isFinite(config.correctionIntervalMs))) issues.push({ key: 'correctionIntervalMs', reason: 'must be a finite value >= 0' })
+	// The capacity sizes the sample buffer and the aggregation scratch array.
+	if (!(Number.isInteger(config.correctionSampleCapacity) && config.correctionSampleCapacity >= 1 && config.correctionSampleCapacity <= MAX_CORRECTION_SAMPLES)) issues.push({ key: 'correctionSampleCapacity', reason: `must be an integer within [1, ${MAX_CORRECTION_SAMPLES}]` })
 	return issues
 }
 
@@ -299,6 +339,45 @@ function isCalibrationEquals(left: CalibrationMatrix, right: CalibrationMatrix) 
 // Applies deadband threshold and emits zero when magnitude is below threshold.
 export function applyDeadband(error: number, minMove: number) {
 	return Math.abs(error) < minMove ? 0 : error
+}
+
+// Upper bound of correctionSampleCapacity; 4096 frames cover more than a minute at 60 frames/s.
+const MAX_CORRECTION_SAMPLES = 4096
+
+// Residual cutoff of the robust aggregator, in robust sigmas of the 2D residual distribution.
+const CORRECTION_OUTLIER_SIGMAS = 3
+
+// Combines buffered image-space errors into one [dx, dy] estimate in pixels. 'latest' returns the newest
+// sample. 'robust' starts from the component-wise median, measures each sample's 2D distance to it,
+// rejects distances above CORRECTION_OUTLIER_SIGMAS robust sigmas (median distance scaled by
+// STANDARD_DEVIATION_SCALE) and returns the quality-weighted mean of the inliers; a single sample is
+// returned unchanged. samples must be non-empty; scratch must hold samples.length entries and is overwritten.
+export function aggregateGuideErrors(samples: readonly GuideErrorSample[], aggregation: GuideCorrectionAggregation, scratch: Float64Array = new Float64Array(samples.length)): readonly [number, number] {
+	const n = samples.length
+	const latest = samples[n - 1]
+	if (aggregation === 'latest' || n === 1) return [latest.dx, latest.dy]
+
+	for (let i = 0; i < n; i++) scratch[i] = samples[i].dx
+	const mx = medianBySelectionOf(scratch, n)
+	for (let i = 0; i < n; i++) scratch[i] = samples[i].dy
+	const my = medianBySelectionOf(scratch, n)
+	for (let i = 0; i < n; i++) scratch[i] = Math.hypot(samples[i].dx - mx, samples[i].dy - my)
+	// Identical samples have zero spread; the absolute floor keeps them all as inliers.
+	const limit = Math.max(1e-9, CORRECTION_OUTLIER_SIGMAS * STANDARD_DEVIATION_SCALE * medianBySelectionOf(scratch, n))
+	let sw = 0
+	let sx = 0
+	let sy = 0
+
+	for (let i = 0; i < n; i++) {
+		const sample = samples[i]
+		if (Math.hypot(sample.dx - mx, sample.dy - my) > limit) continue
+		const w = Math.max(1e-3, sample.quality)
+		sw += w
+		sx += w * sample.dx
+		sy += w * sample.dy
+	}
+
+	return sw > 0 ? [sx / sw, sy / sw] : [mx, my]
 }
 
 // Sentinel axis pulse representing no commanded motion on one axis.
@@ -326,6 +405,8 @@ const EMPTY_STATE: Readonly<GuiderInternalState> = {
 	filteredDEC: 0,
 	lastDecDirection: undefined,
 	oppositeDecErrorAccum: 0,
+	correctionSamples: [],
+	lastCorrectionMonotonic: undefined,
 	lastCadence: 0,
 	lastDiagnostics: {
 		totalStars: 0,
@@ -348,6 +429,8 @@ const EMPTY_STATE: Readonly<GuiderInternalState> = {
 export class Guider {
 	readonly config: GuiderConfig
 	readonly state: GuiderInternalState
+	// Aggregation workspace sized by correctionSampleCapacity.
+	readonly #correctionScratch: Float64Array
 
 	constructor(config: Partial<GuiderConfig> = {}) {
 		this.config = { ...DEFAULT_GUIDER_CONFIG, ...config }
@@ -364,6 +447,7 @@ export class Guider {
 
 		this.state = structuredClone(EMPTY_STATE)
 		this.state.lastCadence = this.config.nominalCadence
+		this.#correctionScratch = new Float64Array(this.config.correctionSampleCapacity)
 	}
 
 	// Clears runtime state while preserving immutable config.
@@ -381,14 +465,17 @@ export class Guider {
 		this.state.ditherOffsetY = dy
 	}
 
-	// Starts dithering by shifting lock target and marking the settle in progress.
+	// Starts dithering by shifting lock target and marking the settle in progress. Buffered errors refer to
+	// the previous target and are discarded.
 	startDither(dx: number, dy: number) {
 		this.setTargetOffset(dx, dy)
 		this.state.ditherActive = true
+		this.#clearCorrectionState()
 	}
 
-	// Stops dithering and re-targets lock back to reference center.
+	// Stops dithering and re-targets lock back to reference center, discarding buffered errors.
 	stopDither() {
+		this.#clearCorrectionState()
 		this.setTargetOffset(0, 0)
 		this.state.ditherActive = false
 	}
@@ -431,6 +518,12 @@ export class Guider {
 		this.state.filteredRA = 0
 	}
 
+	// Drops buffered interval errors and restarts the correction interval at the next valid frame.
+	#clearCorrectionState() {
+		this.state.correctionSamples.length = 0
+		this.state.lastCorrectionMonotonic = undefined
+	}
+
 	// Replaces the image-to-axis transform and related pulse scaling without resetting lock or
 	// dither. Axis-controller memory is cleared when that axis's transform or polarity changes:
 	// a meridian flip inverts the RA row and often `raPositiveDirection`, so retaining `filteredRA`
@@ -459,6 +552,7 @@ export class Guider {
 		if (next.decPositiveDirection !== previousDecDirection || calibrationChanged) {
 			this.#clearDecControlState()
 		}
+		if (calibrationChanged) this.#clearCorrectionState()
 	}
 
 	// Processes one frame and returns RA/DEC pulse commands.
@@ -504,6 +598,7 @@ export class Guider {
 				this.state.state = 'lost'
 				this.#clearRaControlState()
 				this.#clearDecControlState()
+				this.#clearCorrectionState()
 			}
 			this.#updateDiagnostics(frame, tracking, undefined, droppedFrame, true, notes)
 			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, tracking }
@@ -522,16 +617,18 @@ export class Guider {
 			this.state.consecutiveBadFrames = this.config.lostStarFrameCount
 			this.#clearRaControlState()
 			this.#clearDecControlState()
+			this.#clearCorrectionState()
 			notes.push('target_limit')
 			this.#updateDiagnostics(frame, tracking, undefined, droppedFrame, true, notes, targetLimit)
 			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, tracking }
 		}
 		const dx = measurement.x - targetX
 		const dy = measurement.y - targetY
-		const axisError = applyCalibration(this.config.calibration, dx, dy)
-		const cadenceScale = this.#cadenceScale(frame)
-		const ra = this.#computeRA(axisError.ra, cadenceScale)
-		const dec = this.#computeDEC(axisError.dec, cadenceScale)
+		const correction = this.#gateCorrection(frame, dx, dy, tracking.qualityScore, notes)
+		const axisError = applyCalibration(this.config.calibration, correction?.dx ?? dx, correction?.dy ?? dy)
+		// Between ticks no controller state changes; hysteresis and DEC memory advance only at a tick.
+		const ra = correction === undefined ? NO_PULSE : this.#computeRA(axisError.ra, correction.scale)
+		const dec = correction === undefined ? NO_PULSE : this.#computeDEC(axisError.dec, correction.scale)
 		this.#updateDiagnostics(
 			frame,
 			tracking,
@@ -551,9 +648,44 @@ export class Guider {
 			droppedFrame,
 			false,
 			notes,
+			undefined,
+			correction?.samples,
 		)
 
 		return { state: this.state.state, ra, dec, diagnostics: this.state.lastDiagnostics, tracking }
+	}
+
+	// Decides whether this valid frame is a correction tick. Without an interval (or without a usable
+	// capture clock) every frame corrects with the frame-cadence gain scale, exactly as before. Otherwise the
+	// error is buffered and, once correctionIntervalMs has elapsed since the interval opened, the buffer is
+	// aggregated and cleared; the gain scale is then the elapsed control interval over correctionIntervalMs,
+	// clamped to [1, 2]. Returns undefined while the interval is still accumulating.
+	#gateCorrection(frame: GuideFrame, dx: number, dy: number, quality: number, notes: string[]) {
+		const interval = this.config.correctionIntervalMs
+		const monotonic = frame.captureMonotonic !== undefined && Number.isFinite(frame.captureMonotonic) ? frame.captureMonotonic : frame.timestamp !== undefined && frame.timestamp > 0 && Number.isFinite(frame.timestamp) ? frame.timestamp : undefined
+
+		if (interval === 0 || monotonic === undefined) {
+			if (interval > 0) notes.push('correction_ungated')
+			return { dx, dy, scale: this.#cadenceScale(frame), samples: undefined }
+		}
+
+		const samples = this.state.correctionSamples
+		samples.push({ dx, dy, quality, monotonic })
+		if (samples.length > this.config.correctionSampleCapacity) samples.shift()
+		this.state.lastCorrectionMonotonic ??= monotonic
+		const elapsed = monotonic - this.state.lastCorrectionMonotonic
+
+		if (elapsed < interval) {
+			notes.push('correction_pending')
+			return undefined
+		}
+
+		const [ex, ey] = aggregateGuideErrors(samples, this.config.correctionAggregation, this.#correctionScratch)
+		const count = samples.length
+		samples.length = 0
+		this.state.lastCorrectionMonotonic = monotonic
+		notes.push('correction_tick')
+		return { dx: ex, dy: ey, scale: clamp(elapsed / interval, 1, 2), samples: count }
 	}
 
 	// Rejects a combined target before any axis controller can turn it into a pulse. The default
@@ -640,6 +772,7 @@ export class Guider {
 		this.state.referenceX = this.config.referencePosition?.[0] ?? sumX / this.state.lockSamples.length
 		this.state.referenceY = this.config.referencePosition?.[1] ?? sumY / this.state.lockSamples.length
 		this.state.state = 'guiding'
+		this.#clearCorrectionState()
 		notes.push('lock_acquired')
 		this.#updateDiagnostics(
 			frame,
@@ -750,7 +883,7 @@ export class Guider {
 	}
 
 	// Updates diagnostics payload for telemetry and testing.
-	#updateDiagnostics(frame: GuideFrame, tracking: GuideTrackerResult, measurement: DiagnosticMeasurement | undefined, droppedFrame: boolean, badFrame: boolean, notes: readonly string[], targetLimit?: GuideTargetLimitDiagnostic) {
+	#updateDiagnostics(frame: GuideFrame, tracking: GuideTrackerResult, measurement: DiagnosticMeasurement | undefined, droppedFrame: boolean, badFrame: boolean, notes: readonly string[], targetLimit?: GuideTargetLimitDiagnostic, correctionSamples?: number) {
 		const stellar = starTrackingOf(tracking)
 		this.state.lastDiagnostics = {
 			frameId: frame.frameId,
@@ -782,6 +915,7 @@ export class Guider {
 			notes,
 			tracking,
 			targetLimit,
+			correctionSamples,
 		}
 	}
 }

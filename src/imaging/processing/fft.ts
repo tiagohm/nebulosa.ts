@@ -1,4 +1,4 @@
-import { TAU } from '../../core/constants'
+import { type FFT2DWorkspace, type FFTPlan, fftComplex2D, fftPaddedSize, fftPlan } from '../../math/numerical/fft'
 import { clamp } from '../../math/numerical/math'
 import type { Image } from '../model/types'
 
@@ -8,18 +8,6 @@ import type { Image } from '../model/types'
 
 // FFT frequency-domain filter direction.
 export type FFTFilterType = 'lowPass' | 'highPass'
-
-// Precomputed radix-2 FFT plan for a given transform length.
-interface FFTPlan {
-	// Transform length (a power of two).
-	readonly size: number
-	// Bit-reversal permutation table.
-	readonly bitReversed: Uint32Array
-	// Real parts of the twiddle factors.
-	readonly twiddleReal: Float64Array
-	// Imaginary parts of the twiddle factors.
-	readonly twiddleImag: Float64Array
-}
 
 // Cached radial frequency-domain mask, keyed by dimensions, cutoff, and filter type.
 interface FFTMaskCache {
@@ -35,56 +23,14 @@ const FFT_BUTTERWORTH_ORDER = 2
 // Skip MaxIm-style range restoration when the low-pass output is nearly flat, to avoid stretching numerical residue into false texture.
 const FFT_MIN_NORMALIZE_RANGE_RATIO = 1e-2
 
-// Returns the next power-of-two FFT length, using one when size is zero or one.
-function fftPaddedSize(size: number) {
-	let padded = 1
-	while (padded < size) padded *= 2
-	return padded
-}
-
 // Clamps padded coordinates to the nearest border pixel to avoid mirrored duplicate stars near image edges.
 function fftPadIndex(index: number, size: number) {
 	if (size <= 1) return 0
 	return index < size ? index : size - 1
 }
 
-// Returns a cached radix-2 FFT plan with bit-reversal and twiddle tables.
-function fftPlan(size: number): FFTPlan {
-	let bits = 0
-
-	for (let n = size; n > 1; n *= 0.5) {
-		bits++
-	}
-
-	const bitReversed = new Uint32Array(size)
-	const twiddleReal = new Float64Array(size > 1 ? size >>> 1 : 0)
-	const twiddleImag = new Float64Array(twiddleReal.length)
-
-	for (let i = 0; i < size; i++) {
-		let source = i
-		let reversed = 0
-
-		for (let bit = 0; bit < bits; bit++) {
-			reversed = (reversed << 1) | (source & 1)
-			source >>>= 1
-		}
-
-		bitReversed[i] = reversed
-	}
-
-	const scale = -TAU / size
-
-	for (let i = 0; i < twiddleReal.length; i++) {
-		const angle = scale * i
-		twiddleReal[i] = Math.cos(angle)
-		twiddleImag[i] = Math.sin(angle)
-	}
-
-	return { size, bitReversed, twiddleReal, twiddleImag }
-}
-
 // Represents a reusable FFT buffers sized for the image dimensions.
-export class FFTWorkspace {
+export class FFTWorkspace implements FFT2DWorkspace {
 	readonly width: number
 	readonly height: number
 	readonly real: Float64Array
@@ -183,86 +129,6 @@ function fftMask(width: number, height: number, filterType: FFTFilterType, cutof
 	return { width, height, filterType, cutoff, mask }
 }
 
-// Runs one in-place radix-2 FFT over a contiguous complex vector.
-function fftVector(real: Float64Array, imaginary: Float64Array, offset: number, plan: FFTPlan, inverse: boolean) {
-	const { size, bitReversed, twiddleReal, twiddleImag } = plan
-
-	for (let i = 0; i < size; i++) {
-		const j = bitReversed[i]
-
-		if (j > i) {
-			const a = offset + i
-			const b = offset + j
-			const realValue = real[a]
-			const imaginaryValue = imaginary[a]
-
-			real[a] = real[b]
-			imaginary[a] = imaginary[b]
-			real[b] = realValue
-			imaginary[b] = imaginaryValue
-		}
-	}
-
-	const twiddleSign = inverse ? -1 : 1
-
-	for (let blockSize = 2; blockSize <= size; blockSize <<= 1) {
-		const halfSize = blockSize >>> 1
-		const twiddleStep = size / blockSize
-
-		for (let blockOffset = 0; blockOffset < size; blockOffset += blockSize) {
-			for (let i = 0, twiddleIndex = 0; i < halfSize; i++, twiddleIndex += twiddleStep) {
-				const a = offset + blockOffset + i
-				const b = a + halfSize
-				const wr = twiddleReal[twiddleIndex]
-				const wi = twiddleImag[twiddleIndex] * twiddleSign
-				const br = real[b]
-				const bi = imaginary[b]
-				const tr = wr * br - wi * bi
-				const ti = wr * bi + wi * br
-				const ar = real[a]
-				const ai = imaginary[a]
-
-				real[a] = ar + tr
-				imaginary[a] = ai + ti
-				real[b] = ar - tr
-				imaginary[b] = ai - ti
-			}
-		}
-	}
-
-	if (inverse) {
-		const scale = 1 / size
-
-		for (let i = 0, j = offset; i < size; i++, j++) {
-			real[j] *= scale
-			imaginary[j] *= scale
-		}
-	}
-}
-
-// Runs a separable 2D FFT over the padded spectrum buffers.
-function fftTransform2D(workspace: FFTWorkspace, inverse: boolean) {
-	const { width, height, real, imaginary, columnReal, columnImaginary, rowPlan, columnPlan } = workspace
-
-	for (let y = 0, offset = 0; y < height; y++, offset += width) {
-		fftVector(real, imaginary, offset, rowPlan, inverse)
-	}
-
-	for (let x = 0; x < width; x++) {
-		for (let y = 0, i = x; y < height; y++, i += width) {
-			columnReal[y] = real[i]
-			columnImaginary[y] = imaginary[i]
-		}
-
-		fftVector(columnReal, columnImaginary, 0, columnPlan, inverse)
-
-		for (let y = 0, i = x; y < height; y++, i += width) {
-			real[i] = columnReal[y]
-			imaginary[i] = columnImaginary[y]
-		}
-	}
-}
-
 // Loads one image channel into the centered FFT plane with replicated-edge power-of-two padding.
 function fftLoadChannel(image: Image, channel: number, workspace: FFTWorkspace) {
 	const { width, height, channels, stride } = image.metadata
@@ -352,7 +218,7 @@ export function fft(image: Image, workspace: FFTWorkspace, filterType: FFTFilter
 
 	for (let channel = 0; channel < channels; channel++) {
 		fftLoadChannel(image, channel, workspace)
-		fftTransform2D(workspace, false)
+		fftComplex2D(workspace, false)
 
 		for (let i = 0; i < mask.length; i++) {
 			const gain = mask[i]
@@ -361,7 +227,7 @@ export function fft(image: Image, workspace: FFTWorkspace, filterType: FFTFilter
 			imaginary[i] *= gain
 		}
 
-		fftTransform2D(workspace, true)
+		fftComplex2D(workspace, true)
 		const [inputMin, inputMax, outputMin, outputMax] = fftStoreChannel(image, channel, workspace, amount)
 		if (filterType === 'lowPass') fftNormalizeChannel(image, channel, inputMin, inputMax, outputMin, outputMax)
 	}

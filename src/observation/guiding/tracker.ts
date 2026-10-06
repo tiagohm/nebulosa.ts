@@ -91,6 +91,8 @@ export interface GuideTrackerResult {
 	readonly measurementMode?: string
 	// Optional tracker-specific telemetry.
 	readonly telemetry?: GuideTrackerTelemetry
+	// Tracker-defined safe envelope for the commanded target, e.g. keeping an extended object measurable.
+	readonly targetEnvelope?: GuideTargetEnvelope
 }
 
 // Valid image-space envelope for a commanded target. Bounds are inclusive pixels and should
