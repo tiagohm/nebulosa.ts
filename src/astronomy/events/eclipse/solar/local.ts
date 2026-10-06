@@ -8,6 +8,7 @@ import { eraGst06a } from '../../../coordinates/erfa/erfa'
 import { F, hourAngleFromLongitude, type SunMoonPosition } from '../eclipse'
 // oxfmt-ignore
 import { besselianSampleAtJulianDay, centralAxisIntersectsEarth, centralLineKind, computePolynomialBesselianElements, evaluateBesselian, findMaximumPoint, projectFundamentalPoint, solarAltitudeAtPoint, SUN_RADIUS_EARTH_RADII, type SolarEclipseGeoPoint, type InstantBesselianElements, type PolynomialBesselianElements } from './map'
+import { NumberComparator } from 'nebulosa/src/core/util'
 import type { Writable } from '../../../../core/types'
 import { type Time, timeAtJulianDay, toJulianDay, tt } from '../../../time/time'
 
@@ -748,11 +749,6 @@ function pushUniqueRoot(roots: number[], root: number) {
 	}
 
 	roots.push(root)
-}
-
-// Ascending numeric sort comparator.
-function NumberComparator(a: number, b: number) {
-	return a - b
 }
 
 // Refines a candidate contact bracket [lo, hi] around a sampled local minimum of a contact function

@@ -62,13 +62,13 @@ export function binarySearchWithComparator<T>(a: readonly T[], comparator: Binar
 }
 
 // Array.sort comparator ordering numbers or bigints ascending.
-export function NumberComparator<T extends number | bigint>(left: T, right: T) {
-	return left < right ? -1 : left > right ? 1 : 0
+export function NumberComparator(left: number, right: number) {
+	return left - right
 }
 
 // Array.sort comparator ordering numbers or bigints descending.
-export function NumberComparatorDescending<T extends number | bigint>(left: T, right: T) {
-	return left < right ? 1 : left > right ? -1 : 0
+export function NumberComparatorDescending(left: number, right: number) {
+	return right - left
 }
 
 // Converts an unknown exception to diagnostic text.

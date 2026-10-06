@@ -2,6 +2,7 @@ import { DAYSEC, DEG2RAD, PI, PIOVERTWO, RAD2DEG, TAU } from '../../../../core/c
 import { type Angle, normalizeAngle, normalizePI } from '../../../../math/units/angle'
 // oxfmt-ignore
 import { bisectRoot, derivativeEarthLimbOmega, earthLimbCircleIntersections, earthLimbExtremes, earthLimbOmega, earthLimbPoint, earthLimbSignedDistance, F, GEOMETRY_TANGENCY_EPSILON, geoPolylinesToSvgPathData, hourAngleFromLongitude, INV_F, longitudeFromHourAngle, normalizeLongitude, refineRoot, type EclipseGeoBranch, type EclipseGeoCurve, type EclipseGeoPoint, type SunMoonPosition, type SunMoonProvider } from '../eclipse'
+import { NumberComparator } from 'nebulosa/src/core/util'
 import type { Writable } from '../../../../core/types'
 import { vecDot, vecLength, vecMinus, vecNormalizeMut } from '../../../../math/linear-algebra/vec3'
 import { sphericalInterpolate, sphericalSeparation, type Point } from '../../../../math/numerical/geometry'
@@ -798,11 +799,6 @@ export function projectClosestEarthLimbPoint(be: BesselianSample, x: number, y: 
 }
 
 // C. CONTACTS AND CENTRAL ENDPOINTS
-
-// Ascending numeric sort comparator.
-function NumberComparator(a: number, b: number) {
-	return a - b
-}
 
 // Number of uniform sub-intervals used to scan the contact search window for sign changes before
 // refinement. A grazing or nearly-tangent contact is easily missed by a single bisection over the whole

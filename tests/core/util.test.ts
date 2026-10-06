@@ -48,6 +48,4 @@ test('binary search with comparator', () => {
 test('number comparator', () => {
 	expect([3, 1, 2].sort(NumberComparator)).toEqual([1, 2, 3])
 	expect([3, 1, 2].sort(NumberComparatorDescending)).toEqual([3, 2, 1])
-	expect([3n, 1n, 2n].sort(NumberComparator)).toEqual([1n, 2n, 3n])
-	expect([3n, 1n, 2n].sort(NumberComparatorDescending)).toEqual([3n, 2n, 1n])
 })
