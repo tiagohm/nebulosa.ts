@@ -7,16 +7,23 @@
 		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 		<link rel="stylesheet" href="//cdn.jsdelivr.net/npm/docsify@5/dist/themes/core.min.css" />
 		<link rel="stylesheet" href="//cdn.jsdelivr.net/npm/docsify@5/dist/themes/addons/core-dark.min.css" />
-		<link rel="stylesheet" href="//cdn.jsdelivr.net/npm/docsify@5/dist/themes/addons/vue.min.css" />
 		<link rel="icon" href="nebulosa.ico" type="image/x-icon" />
 		<style>
 			:root {
-				--theme-color: rgb(20, 140, 187);
-				--cover-color: #111;
+				--theme-color: #2196f3;
+				--cover-color: #212121;
 				--cover-title-color: var(--theme-color);
 				--cover-title-font: 600 var(--font-size-xxxl) var(--font-family);
-				--color-text: #ccc;
-				--heading-color: #eee;
+				--color-text: #bdbdbd;
+				--heading-color: #fafafa;
+				--code-color: #ff7043;
+				--content-max-width: 120ch;
+			}
+
+			html,
+			body,
+			.sidebar-nav {
+				font-size: 14px;
 			}
 
 			.github-corner {
@@ -28,13 +35,40 @@
 				color: #fff;
 			}
 
+			.sidebar {
+				position: sticky;
+			}
+
+			.app-name img {
+				max-width: 92px !important;
+				margin-left: auto;
+				margin-right: auto;
+			}
+
 			.anchor:is(.markdown-section a):hover {
 				text-decoration-color: transparent !important;
 				color: #fff;
 			}
 
+			.markdown-section p {
+				text-align: justify;
+			}
+
+			.markdown-section p code,
+			.markdown-section p a {
+				white-space: nowrap;
+				text-justify: none;
+			}
+
 			section.content {
 				font-family: monospace;
+			}
+
+			section.search {
+				position: sticky;
+				left: var(--plugin-search-margin);
+				top: var(--plugin-search-margin);
+				z-index: 1;
 			}
 
 			a:not(.button) {
@@ -46,38 +80,12 @@
 				text-decoration-line: underline;
 			}
 
-			/* Host for the search plugin, which docsify places in a sidebar that hideSidebar removes. */
-			.sidebar.search-host {
-				visibility: visible;
-				position: fixed;
-				top: 12px;
-				bottom: auto;
-				left: 12px;
-				translate: none;
-				width: min(320px, calc(100vw - 112px));
-				max-height: calc(100vh - 24px);
-				overflow-y: auto;
-				border: none;
-				background: transparent;
-			}
-
-			.sidebar.search-host .search {
-				margin: 0;
-			}
-
-			.sidebar.search-host .results-panel:not(:empty),
-			.sidebar.search-host .results-status:not(:empty) {
-				padding: 0 10px;
-				background: var(--color-bg);
-			}
-
-			/* Close the results overlay once a result is opened or focus leaves the search. */
-			.sidebar.search-host:not(:focus-within) :is(.results-panel, .results-status) {
-				display: none;
+			code.lang-ts {
+				color: #009688 !important;
 			}
 		</style>
 	</head>
-	<body class="loading sidebar-chevron-right">
+	<body class="loading sidebar-chevron-right sidebar-group-box sidebar-toggle-chevron">
 		<div id="app"></div>
 		<script>
 			window.$docsify = {
@@ -85,8 +93,9 @@
 				repo: 'tiagohm/nebulosa.ts',
 				logo: 'nebulosa.ico',
 				coverpage: true,
-				hideSidebar: true,
-				topMargin: 60,
+				executeScript: true,
+				hideSidebar: false,
+				noEmoji: true,
 				search: {
 					paths: 'auto',
 					depth: 3,
@@ -98,19 +107,7 @@
 		</script>
 		<script src="//cdn.jsdelivr.net/npm/docsify@5"></script>
 		<script src="//cdn.jsdelivr.net/npm/docsify@5/dist/plugins/search.min.js"></script>
-		<script>
-			// The search plugin mounts into `.sidebar`, which hideSidebar omits. Registered first, this
-			// mounted hook adds the host after docsify binds its own sidebar events and before search runs.
-			window.$docsify.plugins.unshift(function (hook) {
-				hook.mounted(function () {
-					const host = document.createElement('div')
-					host.className = 'sidebar search-host'
-					document.body.appendChild(host)
-				})
-			})
-		</script>
 		<script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
-		<script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-typescript.min.js"></script>
 		<script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
 	</body>
 </html>
