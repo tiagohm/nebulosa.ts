@@ -11,7 +11,7 @@
 		<link rel="icon" href="nebulosa.ico" type="image/x-icon" />
 		<style>
 			:root {
-				--theme-color: rgb(13, 108, 146);
+				--theme-color: rgb(20, 140, 187);
 				--cover-color: #111;
 				--cover-title-color: var(--theme-color);
 				--cover-title-font: 600 var(--font-size-xxxl) var(--font-family);
@@ -19,7 +19,12 @@
 				--heading-color: #eee;
 			}
 
-			.octo-body {
+			.github-corner {
+				position: fixed;
+			}
+
+			.octo-body,
+			.octo-arm {
 				color: #fff;
 			}
 
@@ -30,6 +35,45 @@
 
 			section.content {
 				font-family: monospace;
+			}
+
+			a:not(.button) {
+				color: var(--link-underline-color);
+				text-decoration-line: none;
+			}
+
+			a:not(.button):hover {
+				text-decoration-line: underline;
+			}
+
+			/* Host for the search plugin, which docsify places in a sidebar that hideSidebar removes. */
+			.sidebar.search-host {
+				visibility: visible;
+				position: fixed;
+				top: 12px;
+				bottom: auto;
+				left: 12px;
+				translate: none;
+				width: min(320px, calc(100vw - 112px));
+				max-height: calc(100vh - 24px);
+				overflow-y: auto;
+				border: none;
+				background: transparent;
+			}
+
+			.sidebar.search-host .search {
+				margin: 0;
+			}
+
+			.sidebar.search-host .results-panel:not(:empty),
+			.sidebar.search-host .results-status:not(:empty) {
+				padding: 0 10px;
+				background: var(--color-bg);
+			}
+
+			/* Close the results overlay once a result is opened or focus leaves the search. */
+			.sidebar.search-host:not(:focus-within) :is(.results-panel, .results-status) {
+				display: none;
 			}
 		</style>
 	</head>
@@ -42,9 +86,29 @@
 				logo: 'nebulosa.ico',
 				coverpage: true,
 				hideSidebar: true,
+				topMargin: 60,
+				search: {
+					paths: 'auto',
+					depth: 3,
+					maxAge: 3600000,
+					placeholder: 'Search topics, APIs, concepts...',
+					noData: 'No matching topic.',
+				},
 			}
 		</script>
 		<script src="//cdn.jsdelivr.net/npm/docsify@5"></script>
+		<script src="//cdn.jsdelivr.net/npm/docsify@5/dist/plugins/search.min.js"></script>
+		<script>
+			// The search plugin mounts into `.sidebar`, which hideSidebar omits. Registered first, this
+			// mounted hook adds the host after docsify binds its own sidebar events and before search runs.
+			window.$docsify.plugins.unshift(function (hook) {
+				hook.mounted(function () {
+					const host = document.createElement('div')
+					host.className = 'sidebar search-host'
+					document.body.appendChild(host)
+				})
+			})
+		</script>
 		<script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
 		<script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-typescript.min.js"></script>
 		<script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
