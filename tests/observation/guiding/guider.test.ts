@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { Image } from '../../../src/imaging/model/types'
 import { plotStar } from '../../../src/imaging/stars/generator'
 import { GuidingCalibrator } from '../../../src/observation/guiding/calibrator'
-import { applyCalibration, applyDeadband, type GuiderConfig, Guider, invertCalibration, validateCalibration } from '../../../src/observation/guiding/guider'
+import { aggregateGuideErrors, applyCalibration, applyDeadband, type GuiderConfig, Guider, invertCalibration, validateCalibration } from '../../../src/observation/guiding/guider'
 import { trackingResultFromStars, type GuideFrame, type GuideTrackerResult } from '../../../src/observation/guiding/tracker'
 import { StarTracker, type GuideStar } from '../../../src/observation/guiding/tracker.star'
 
@@ -851,5 +851,144 @@ describe('deterministic simulation scenarios', () => {
 		}
 
 		expect(reversalCount).toBe(0)
+	})
+})
+
+// Builds a generic measured frame on the monotonic capture clock.
+function measuredFrame(x: number, y: number, monotonic: number, quality: number = 1): GuideFrame {
+	return { tracking: { measurement: { x, y, confidence: quality }, candidateCount: 1, acceptedCount: 1, qualityScore: quality, rejectedReasons: {}, notes: [] }, width: WIDTH, height: HEIGHT, timestamp: 1_700_000_000_000 + monotonic, captureMonotonic: monotonic, frameId: monotonic }
+}
+
+describe('correction cadence and aggregation', () => {
+	const gated = { correctionIntervalMs: 1000, correctionSampleCapacity: 32, correctionAggregation: 'robust' } as const
+
+	test('zero interval reproduces per-frame corrections exactly', () => {
+		const classic = guider()
+		const explicit = guider({ correctionIntervalMs: 0, correctionSampleCapacity: 8, correctionAggregation: 'robust' })
+		const sequence = [0, 0.3, -0.2, 0.5, 0.45, -0.1]
+
+		for (let i = 0; i < sequence.length; i++) {
+			const frame = measuredFrame(100 + sequence[i], 100 - sequence[i] * 0.5, 100 * (i + 1))
+			const a = classic.processFrame(frame)
+			const b = explicit.processFrame(frame)
+			expect(b.ra).toEqual(a.ra)
+			expect(b.dec).toEqual(a.dec)
+			expect(b.diagnostics.correctionSamples).toBeUndefined()
+		}
+	})
+
+	test('frames inside the interval accumulate and one pulse is issued per tick', () => {
+		const g = guider({ ...gated, hysteresisRA: 0.5 })
+		g.processFrame(measuredFrame(100, 100, 0))
+		let pulses = 0
+
+		for (let t = 100; t <= 2000; t += 100) {
+			const cmd = g.processFrame(measuredFrame(100.5, 100, t))
+			if (cmd.ra.duration > 0) pulses++
+
+			if (t < 1100) {
+				expect(cmd.ra.duration).toBe(0)
+				// Hysteresis advances only at control ticks.
+				expect(g.currentState.filteredRA).toBe(0)
+				expect(cmd.diagnostics.notes).toContain('correction_pending')
+			}
+
+			if (t === 1100) {
+				expect(cmd.diagnostics.correctionSamples).toBe(11)
+				expect(cmd.diagnostics.notes).toContain('correction_tick')
+				expect(g.currentState.filteredRA).toBeCloseTo(0.25, 12)
+			}
+		}
+
+		expect(pulses).toBe(1)
+	})
+
+	test('robust aggregation rejects a seeing outlier', () => {
+		const g = guider({ ...gated, minMoveDEC: 1 })
+		g.processFrame(measuredFrame(100, 100, 0))
+		const errors = [0.5, 0.52, 0.48, 0.5, 4, 0.49, 0.51, 0.5, 0.5, 0.5]
+		let cmd = g.processFrame(measuredFrame(100 + errors[0], 100, 100))
+		for (let i = 1; i < errors.length; i++) cmd = g.processFrame(measuredFrame(100 + errors[i], 100, 100 * (i + 1)))
+		cmd = g.processFrame(measuredFrame(100.5, 100, 1100))
+		expect(cmd.ra.duration).toBeCloseTo(50, 0)
+	})
+
+	test('zero-mean jitter is suppressed while slow drift is still corrected', () => {
+		const jitter = guider({ ...gated, minMoveRA: 0.2, minMoveDEC: 0.2 })
+		jitter.processFrame(measuredFrame(100, 100, 0))
+		let pulses = 0
+
+		for (let i = 1; i <= 40; i++) {
+			const cmd = jitter.processFrame(measuredFrame(100 + (i % 2 === 0 ? 0.8 : -0.8), 100 + (i % 4 < 2 ? 0.6 : -0.6), 100 * i))
+			if (cmd.ra.duration > 0 || cmd.dec.duration > 0) pulses++
+		}
+
+		expect(pulses).toBe(0)
+
+		const drift = guider({ ...gated, minMoveRA: 0.2, minMoveDEC: 0.2 })
+		drift.processFrame(measuredFrame(100, 100, 0))
+		let corrected = 0
+
+		for (let i = 1; i <= 30; i++) {
+			const cmd = drift.processFrame(measuredFrame(100 + 0.03 * i + (i % 2 === 0 ? 0.8 : -0.8), 100, 100 * i))
+			if (cmd.ra.duration > 0) corrected++
+		}
+
+		expect(corrected).toBeGreaterThan(0)
+	})
+
+	test('the buffer is bounded and post-tick intervals exclude earlier samples', () => {
+		const g = guider({ ...gated, correctionSampleCapacity: 4, correctionAggregation: 'latest' })
+		g.processFrame(measuredFrame(100, 100, 0))
+		for (let t = 100; t <= 1000; t += 100) g.processFrame(measuredFrame(105, 100, t))
+		expect(g.state.correctionSamples.length).toBe(4)
+		const tick = g.processFrame(measuredFrame(100.3, 100, 1100))
+		expect(tick.diagnostics.correctionSamples).toBe(4)
+		expect(tick.ra.duration).toBeCloseTo(30, 8)
+		expect(g.state.correctionSamples.length).toBe(0)
+		g.processFrame(measuredFrame(100.2, 100, 1200))
+		expect(g.state.correctionSamples.map((sample) => sample.monotonic)).toEqual([1200])
+	})
+
+	test('loss, dither and calibration changes clear the accumulator', () => {
+		const g = guider({ ...gated, lostStarFrameCount: 2 })
+		g.processFrame(measuredFrame(100, 100, 0))
+		g.processFrame(measuredFrame(100.4, 100, 100))
+		expect(g.state.correctionSamples.length).toBe(1)
+		const empty: GuideFrame = { tracking: { candidateCount: 0, acceptedCount: 0, qualityScore: 0, rejectedReasons: {}, notes: [] }, width: WIDTH, height: HEIGHT, captureMonotonic: 200 }
+		g.processFrame(empty)
+		expect(g.state.correctionSamples.length).toBe(1)
+		g.processFrame({ ...empty, captureMonotonic: 300 })
+		expect(g.currentState.state).toBe('lost')
+		expect(g.state.correctionSamples.length).toBe(0)
+		expect(g.state.lastCorrectionMonotonic).toBeUndefined()
+
+		g.processFrame(measuredFrame(100.4, 100, 400))
+		g.startDither(2, 0)
+		expect(g.state.correctionSamples.length).toBe(0)
+		g.processFrame(measuredFrame(100.4, 100, 500))
+		g.setCalibration([0, 1, 1, 0])
+		expect(g.state.correctionSamples.length).toBe(0)
+	})
+
+	test('rejects invalid correction configuration', () => {
+		expect(() => guider({ correctionIntervalMs: Number.NaN })).toThrow('correctionIntervalMs')
+		expect(() => guider({ correctionIntervalMs: Number.POSITIVE_INFINITY })).toThrow('correctionIntervalMs')
+		expect(() => guider({ correctionSampleCapacity: 0 })).toThrow('correctionSampleCapacity')
+		expect(() => guider({ correctionSampleCapacity: 2.5 })).toThrow('correctionSampleCapacity')
+	})
+
+	test('aggregator returns the latest, single and weighted inlier estimates', () => {
+		const samples = [
+			{ dx: 1, dy: 0, quality: 1, monotonic: 0 },
+			{ dx: 3, dy: 0, quality: 0.5, monotonic: 1 },
+			{ dx: 1, dy: 2, quality: 1, monotonic: 2 },
+			{ dx: 40, dy: -40, quality: 1, monotonic: 3 },
+		]
+		expect(aggregateGuideErrors(samples, 'latest')).toEqual([40, -40])
+		expect(aggregateGuideErrors(samples.slice(0, 1), 'robust')).toEqual([1, 0])
+		const [x, y] = aggregateGuideErrors(samples, 'robust')
+		expect(x).toBeCloseTo((1 + 1.5 + 1) / 2.5, 12)
+		expect(y).toBeCloseTo(2 / 2.5, 12)
 	})
 })

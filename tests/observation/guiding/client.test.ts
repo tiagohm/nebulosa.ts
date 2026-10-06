@@ -14,7 +14,7 @@ import type { GuidingCalibrationResult } from '../../../src/observation/guiding/
 import { GuiderClient, type GuideFrameImage, type GuiderClientConnectOptions, type GuiderClientOptions, type GuiderEvents } from '../../../src/observation/guiding/client'
 import { ditherPulsePlanFromCalibration } from '../../../src/observation/guiding/dither.pulse'
 import type { GuideDirectionDEC, GuideDirectionRA } from '../../../src/observation/guiding/guider'
-import { type GuideTracker, type GuideTrackerResult, trackingResultFromStars } from '../../../src/observation/guiding/tracker'
+import { type GuideTargetEnvelope, type GuideTracker, type GuideTrackerResult, trackingResultFromStars } from '../../../src/observation/guiding/tracker'
 import { NonSiderealTracker, nonSiderealTrackingOf } from '../../../src/observation/guiding/tracker.nonsidereal'
 import { StarTracker, starTrackingOf } from '../../../src/observation/guiding/tracker.star'
 import { isTimeConsumingTestSkipped } from '../../util'
@@ -421,6 +421,12 @@ describe('construction', () => {
 		expect(() => makeHarness({ calibrator: { raPulse: 0 } })).toThrowError(/invalid guiding calibrator config/)
 		expect(() => makeHarness({ calibrator: { maxRatePxPerMs: 1e-6 } })).toThrowError(/invalid guiding calibrator config/)
 		expect(() => makeHarness({ calibrator: { raPulse: 250, decPulse: 250 } })).not.toThrow()
+	})
+
+	test('rejects guider tuning the guider itself would reject', () => {
+		expect(() => makeHarness({ guider: { correctionSampleCapacity: 0 } })).toThrowError(/invalid guider config/)
+		expect(() => makeHarness({ guider: { correctionIntervalMs: -1 } })).toThrowError(/invalid guider config/)
+		expect(() => makeHarness({ guider: { correctionIntervalMs: 2000, correctionSampleCapacity: 16, correctionAggregation: 'robust', minMoveRA: 0.3 } })).not.toThrow()
 	})
 
 	test('starts stopped, uncalibrated, unpaused and without a lock', () => {
@@ -1183,6 +1189,22 @@ describe('frame-driven behavior', () => {
 		expect(starTrackingOf(frame.tracking)?.primary!.y).toBeCloseTo(inside[1], 1)
 		expect(starTrackingOf(frame.tracking)!.detections).toHaveLength(2)
 		local.client.stopCapture()
+	})
+
+	test('findTarget and getTargetImage are the generic names of findStar and getStarImage', async () => {
+		connect(harness)
+		harness.client.loop()
+		await feedFrame(harness)
+
+		const image = harness.client.getTargetImage()
+		expect(image).toBeDefined()
+		expect(harness.client.getStarImage()).toEqual(image)
+
+		const position = harness.client.findTarget()
+		expect(position).toBeDefined()
+		expect(harness.client.getLockPosition()).toEqual(position)
+		expect(harness.client.findStar()).toEqual(position)
+		harness.client.stopCapture()
 	})
 
 	test('looping frames emit star metadata with the current frame number', async () => {
@@ -2198,6 +2220,35 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 
 		expect(harness.client.getAppState()).toBe('LostLock')
 		expect(state.commitCount()).toBe(commitsBeforeRejectedFrame)
+	})
+
+	test('a tracker-supplied target envelope stops guiding before any pulse leaves it', async () => {
+		const base = new StarTracker()
+		const override: { envelope?: GuideTargetEnvelope } = {}
+		const tracker: GuideTracker = {
+			reset: () => base.reset(),
+			get lastResult() {
+				return base.lastResult
+			},
+			track: (frame, context) => {
+				const result = base.track(frame, context)
+				return override.envelope === undefined ? result : { ...result, targetEnvelope: override.envelope }
+			},
+			select: (result, position) => base.select(result, position),
+			commit: () => base.commit(),
+		}
+		const harness = await calibrateAndGuide({}, undefined, tracker)
+		await establishLockReference(harness)
+		expect(harness.client.getAppState()).toBe('Guiding')
+
+		// An extended-object tracker would publish this when the lock target nears the detector edge.
+		override.envelope = { minX: 0, maxX: 4, minY: 0, maxY: 4, marginPx: 4 }
+		const pulsesBefore = harness.guideOutputManager.pulses.length
+		await feedFrame(harness)
+
+		expect(harness.client.getAppState()).toBe('LostLock')
+		expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+		harness.client.stopCapture()
 	})
 
 	test('calibration with mild measurement jitter still recovers rate and angle', async () => {
