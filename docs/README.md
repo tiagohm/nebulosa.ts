@@ -8189,7 +8189,7 @@ The limb is the outer edge of a bright disk (the Sun, the Moon or a planet) agai
 
 `measureLimb(image, plane, area, workspace, options?, search?)` works in four steps:
 
-1. It casts `rays` radial profiles (96 by default) from a starting center. The center is the `search.prior` geometry (with a window of ±`searchFraction` of its radius), or a coarse threshold-moment initializer near the `search.seed` (±`coarseSearchFraction`).
+1. It casts `rays` radial profiles (96 by default) from a starting center. The center is the `search.prior` geometry (with a window of ±`searchFraction` of its radius), or a coarse threshold-moment initializer near the `search.seed` (±`coarseSearchFraction`). The initializer measures one 8-connected bright component: the one with a sample nearest to the seed, or the largest one without a seed, so a second disk in the area does not pull it.
 2. On each ray it finds the strongest object-to-background transition: a parabolic subpixel derivative extremum, gated by gradient SNR, edge contrast and the outer level. A ray with a competing transition is `ambiguous`, and a ray that leaves the image or reaches invalid samples is `cropped`.
 3. A circle consensus keeps the dominant limb, so terminator, prominence and ring edges do not pull the fit.
 4. The kept edges go to the robust ellipse fit of [Ellipse Fitting](#ellipse-fitting).
@@ -8205,7 +8205,7 @@ On success the `LimbMeasurement` has:
 
 On failure the outcome is `{ success: false, reason }`, where the reason is one of `limb_not_found`, `limb_low_coverage`, `limb_large_gap`, `limb_high_residual` or `limb_geometry_jump`. With `search.continuity`, the center and radius must also stay within `maximumCenterJump` and `maximumRadiusChange` of the prior. `DEFAULT_LIMB_TRACKING_OPTIONS` holds the thresholds; it accepts a minimum coverage of 0.5, a gap of up to TAU/3 and an axis ratio of at least 0.7.
 
-`locateBrightObject(image, plane, area, workspace, options?, seed?)` returns the threshold-moment centroid and equivalent radius of the dominant bright object, or `undefined` without contrast. It is the acquisition bound and the apparent-object fallback, not a physical disk center: a phase, rings or clipping bias it.
+`locateBrightObject(image, plane, area, workspace, options?, seed?)` returns the threshold-moment centroid and equivalent radius of the bright component (above half the contrast) with a sample nearest to the `seed`, or of the largest one without a seed, or `undefined` without contrast. Components under 9 samples are ignored as noise. It is the acquisition bound and the apparent-object fallback, not a physical disk center: a phase, rings or clipping bias it.
 
 Both functions use the reusable buffers of a `SurfaceTrackingWorkspace`, overwritten on each call, and never mutate the image.
 
@@ -14214,12 +14214,17 @@ console.log(pixel(marker.display), marker.onScreen, pixel(marker.direction), pix
 The `mode` picks a preset of `SOLAR_SYSTEM_TRACKING_PRESETS`:
 
 - `planetary`: a 192-pixel area that grows with the disk (twice the radius plus `objectMargin`, up to 384 pixels), a limb fit on every frame, and the `objectCenter` target.
-- `lunar` and `solar`: a 256-pixel texture area with larger patches, no routine limb fit, and the `surfacePoint` target. The Solar preset accepts weaker, granulation-like structure and refreshes keyframes every 30 frames instead of 60.
+- `lunar` and `solar`: a 256-pixel texture area with larger patches, no routine limb fit, and the `surfacePoint` target. The Solar preset accepts weaker, granulation-like structure and refreshes keyframes every 30 frames and 15 s instead of 60 frames and 30 s.
 
 The `targetMode` decides what is published:
 
 - `objectCenter` is the limb-fitted center of the disk, blended into the surface motion with a gain of `limbGain` per limb frame. Without a usable limb it is the apparent bright-object center found at acquisition, which is not the physical center of a crescent or a ringed planet.
 - `surfacePoint` is one point of the surface, carried by the anchor-to-current rigid transform. The point is the context `searchPosition`, else its `initialPosition`, else the center of the area.
+
+An `objectCenter` identity gains the capability it lacked at acquisition, outside the `calibrating` phase only, so the calibration measures a fixed point:
+
+- An apparent-object identity adopts the first limb with a confidence of at least 0.8 whose center lies within the semi-minor axis of the surface point (note `limb_anchored`). The published target then converges onto the limb center by `limbGain` per frame, with the measurement mode `hybrid`, instead of jumping by the apparent-to-limb offset.
+- A limb-only identity (no surface anchor, measurement mode `limb`) tries to build a surface anchor around the limb center on the anchor-check cadence (note `surface_anchored`). From the next frame on, it tracks in `hybrid` mode without moving the target.
 
 Constructor options:
 
@@ -14232,7 +14237,9 @@ Coordinates are full-frame image pixels with pixel centers at integers, origin a
 `track(frame, context)` is synchronous and keeps no reference to the caller's image. It only stages its updates: acquisition, the new transform, limb fits and keyframe promotions become the identity only on `commit()`, which the guide client calls for accepted frames. A rejected frame never advances the reference.
 
 - The first frame with `allowAcquisition` acquires the target, as does any frame with `preserveIdentity` false; the note is `acquired`.
-- Later frames register against the newest keyframe and check the anchor directly from time to time. Keyframes that disagree with the anchor are discarded (`reference_inconsistent`).
+- Later frames register against the newest keyframe and check the anchor directly every `anchorCheckInterval` frames. Keyframes that disagree with the anchor are discarded (`reference_inconsistent`).
+- A frame whose keyframe registers while the direct anchor check fails is unverified (note `anchor_unverified`): the state is `degraded` and no keyframe is promoted, so the chain cannot extend its own drift. In `objectCenter`, a frame fused with the limb rebuilds the anchor at the published point instead (note `reanchored`). After `maximumAnchorCheckFailures` consecutive failures (3 in every preset, 0 to withhold on the first), the measurement is withheld with the reason `anchor_unverified` until the anchor registers again, and the tracker goes `lost` after `lostAfter` such frames.
+- A keyframe is promoted every `keyframeInterval` frames, or sooner when the surface moved by `keyframeShiftFraction` of the area. The cadences also need `keyframeIntervalTime` and `anchorCheckIntervalTime` of capture time (the frame `captureMonotonic`, else its `timestamp`) to elapse since the last promotion or check, so a fast camera does not churn the bank. A value of 0 counts frames only. The presets use 7.5 s and 5 s for `planetary`, 30 s and 7.5 s for `lunar`, and 15 s and 5 s for `solar`, which matches the frame intervals at 2 frames per second.
 - A jump larger than the patch search is reacquired, with the measurement mode `surfaceReacquired`.
 - When the surface fails but a limb is measured, the tracker re-anchors on the limb alone, with the mode `limbReacquired`.
 
@@ -14247,7 +14254,7 @@ The guider stops with a target limit instead of pulsing the object off the detec
 
 - the `state`: `acquiring`, `tracking`, `degraded` after a failed frame, or `lost` after `lostAfter` consecutive failures;
 - the `plane`, the `area`, and the anchor-to-current `transform` and `rotation`;
-- the `surface`, `limb` and `reference` evidence.
+- the `surface`, `limb` and `reference` evidence; `reference.anchorCheckFailures` counts the consecutive unverified frames.
 
 `select(result, position?)` never mutates the tracker:
 

@@ -8,6 +8,7 @@ const SIZE = 320
 const CENTER = 159.5
 const SURFACE = textureScene(21, SIZE, SIZE, 1400)
 const PLANET_TEXTURE = textureScene(7, SIZE, SIZE, 500, 2, 6)
+const EVOLVED = textureScene(33, SIZE, SIZE, 1400)
 
 let frameId = 0
 
@@ -128,7 +129,7 @@ describe('lunar', () => {
 	})
 
 	test('keyframes are promoted, bounded and stay consistent with the anchor', () => {
-		const tracker = lunarTracker({ reference: { keyframeInterval: 2, maximumKeyframes: 2, anchorCheckInterval: 3 } })
+		const tracker = lunarTracker({ reference: { keyframeInterval: 2, keyframeIntervalTime: 0, maximumKeyframes: 2, anchorCheckInterval: 3, anchorCheckIntervalTime: 0 } })
 		const point = [160, 160] as const
 		track(tracker, render(SURFACE, { gain: 0.15, offset: 0.4 }), context('selected', { preserveIdentity: false, searchPosition: point }))
 		let generation = 0
@@ -265,5 +266,141 @@ describe('lifecycle', () => {
 		expect(tracker.select(result, [240, 200])).toEqual([240, 200])
 		expect(tracker.lastResult).toBe(last)
 		expect(solarSystemTrackingOf({ candidateCount: 0, acceptedCount: 0, qualityScore: 0, rejectedReasons: {}, notes: [] })).toBeUndefined()
+	})
+})
+
+// Appended last: every rendered frame advances the shared noise seed of later tests.
+describe('identity evolution', () => {
+	test('a surface-only apparent anchor is promoted to a converging limb anchor', () => {
+		const tracker = new SolarSystemTracker({ mode: 'planetary' })
+		// Unusable pixels right of x = 175 (clipping, an obstruction) leave a limb gap wider than the limb gate
+		// and pull the apparent-object anchor about 14 px off the true center, while the texture still registers.
+		const clipped = render(planet(), { invalid: (x) => x > 175 })
+		const first = track(tracker, clipped, context('selected', { preserveIdentity: false }))
+		expect(first.notes).toContain('apparent_object_anchor')
+		expect(first.measurementMode).toBe('surface')
+		const initialOffset = 158.3 - first.measurement!.x
+		expect(initialOffset).toBeGreaterThan(5)
+		let promoted = 0
+
+		for (let i = 1; i <= 30; i++) {
+			const result = track(tracker, render(planet()))
+			if (result.measurement === undefined) throw new Error(`no measurement: ${JSON.stringify(result.rejectedReasons)}`)
+			if (result.notes.includes('limb_anchored')) promoted++
+			expect(result.measurementMode).toBe('hybrid')
+			// Fusion moves the surface-transported point by only the limb-gain fraction of its limb offset.
+			const raw = result.solarSystem.rawTarget!
+			const limb = result.solarSystem.limb!.center
+			const step = Math.hypot(result.measurement.x - raw[0], result.measurement.y - raw[1])
+			expect(step).toBeLessThan(0.1 * Math.hypot(limb[0] - raw[0], limb[1] - raw[1]) + 1e-9)
+		}
+
+		expect(promoted).toBe(1)
+		// The surface anchor is kept and the target has converged onto the limb center: 0.9^30 of the offset remains.
+		const last = tracker.lastResult!
+		expect(last.solarSystem.reference!.bankSize).toBeGreaterThan(0)
+		expectPoint(last, 158.3, 161.7, 0.1 * initialOffset + 0.3)
+		expect(last.solarSystem.state).toBe('tracking')
+	})
+
+	test('a limb-only identity gains a surface anchor once structure appears', () => {
+		// The structure floor rejects the curvature of a featureless limb but not cloud bands.
+		const tracker = new SolarSystemTracker({ mode: 'planetary', surface: { minimumStructure: 20 }, reference: { anchorCheckInterval: 2, anchorCheckIntervalTime: 0 } })
+		const smooth = planet(158.3, 161.7, { texture: undefined })
+		const textured = planet(158.3, 161.7, { textureAmplitude: 0.3 })
+		const first = track(tracker, render(smooth), context('selected', { preserveIdentity: false }))
+		expectPoint(first, 158.3, 161.7, 0.3)
+		expect(first.measurementMode).toBe('limb')
+		expect(first.solarSystem.reference!.bankSize).toBe(0)
+
+		expect(track(tracker, render(smooth, { motion: { dx: 0.4, dy: 0 } })).measurementMode).toBe('limb')
+		let anchored: SolarSystemTrackerResult | undefined
+		let dx = 0.4
+
+		for (let i = 2; i <= 4 && anchored === undefined; i++) {
+			dx = 0.4 * i
+			const result = track(tracker, render(textured, { motion: { dx, dy: 0 } }))
+			expectPoint(result, 158.3 + dx, 161.7, 0.3)
+			if (result.notes.includes('surface_anchored')) anchored = result
+		}
+
+		expect(anchored).toBeDefined()
+		expect(anchored!.measurementMode).toBe('limb')
+		expect(anchored!.solarSystem.reference!.bankSize).toBe(1)
+		// The anchor is tied to the published point: an unchanged scene keeps the target where it was.
+		const anchorTarget = anchored!.measurement!
+		const still = track(tracker, render(textured, { motion: { dx, dy: 0 } }))
+		expect(still.measurementMode).toBe('hybrid')
+		expect(Math.abs(still.measurement!.x - anchorTarget.x)).toBeLessThan(0.1)
+		expect(Math.abs(still.measurement!.y - anchorTarget.y)).toBeLessThan(0.1)
+
+		for (let i = 1; i <= 3; i++) {
+			const result = track(tracker, render(textured, { motion: { dx: dx + 0.7 * i, dy: 0 } }))
+			expect(result.measurementMode).toBe('hybrid')
+			expectPoint(result, anchorTarget.x + 0.7 * i, anchorTarget.y, 0.15)
+		}
+	})
+
+	// Adjacent frames stay correlated while the anchor texture fades into a second texture that slides 0.1 px
+	// per frame, so every keyframe generation inherits a small systematic bias the anchor can no longer check.
+	function evolving(i: number): Scene {
+		const weight = Math.min(1, i / 16)
+		const shift = 0.1 * i
+		return (x, y) => (1 - weight) * SURFACE(x, y) + weight * EVOLVED(x - shift, y)
+	}
+
+	function unverifiedChain(maximumAnchorCheckFailures: number, frames: number) {
+		const tracker = lunarTracker({ reference: { keyframeInterval: 2, keyframeIntervalTime: 0, maximumKeyframes: 2, anchorCheckInterval: 3, anchorCheckIntervalTime: 0, maximumAnchorCheckFailures }, acquisition: { lostAfter: 3 } })
+		track(tracker, render(evolving(0), { gain: 0.15, offset: 0.4 }), context('selected', { preserveIdentity: false, searchPosition: [160, 160] }))
+		return Array.from({ length: frames }, (_, i) => track(tracker, render(evolving(i + 1), { gain: 0.15, offset: 0.4 })))
+	}
+
+	test('failed direct anchor checks degrade, freeze promotion and then withhold the drifting chain', () => {
+		const results = unverifiedChain(2, 20)
+		let maximumError = 0
+		let promotedWhileUnverified = false
+
+		for (const result of results) {
+			if (result.measurement !== undefined) maximumError = Math.max(maximumError, Math.hypot(result.measurement.x - 160, result.measurement.y - 160))
+			const unverified = result.solarSystem.reference !== undefined && result.solarSystem.reference.anchorCheckFailures > 0
+			if (unverified) expect(result.solarSystem.state).toBe('degraded')
+			promotedWhileUnverified ||= unverified && result.notes.includes('keyframe_staged')
+		}
+
+		expect(results.some((result) => result.solarSystem.state === 'degraded' && result.notes.includes('anchor_unverified') && result.measurement !== undefined)).toBeTrue()
+		expect(promotedWhileUnverified).toBeFalse()
+		expect(maximumError).toBeLessThan(0.75)
+		const last = results.at(-1)!
+		expect(last.measurement).toBeUndefined()
+		expect(last.rejectedReasons.anchor_unverified).toBe(1)
+		expect(last.solarSystem.state).toBe('lost')
+
+		// Control: without the limit the same unverified chain keeps publishing and walks off the feature.
+		const unlimited = unverifiedChain(Number.POSITIVE_INFINITY, 26).at(-1)!
+		expect(unlimited.measurement!.x - 160).toBeGreaterThan(1.2)
+		expect(unlimited.solarSystem.state).toBe('degraded')
+	})
+
+	test('time-based maintenance throttles high-rate streams', () => {
+		const tracker = lunarTracker({ reference: { keyframeInterval: 2, keyframeIntervalTime: 2000, maximumKeyframes: 2 } })
+		const point = [160, 160] as const
+		const at = (image: Image, ms: number, ctx: GuideTrackerContext = context()) => {
+			const result = tracker.track({ image, width: SIZE, height: SIZE, timestamp: 5e6 + ms, captureMonotonic: ms, frameId: ++frameId }, ctx)
+			if (result.measurement !== undefined) tracker.commit()
+			return result
+		}
+
+		at(render(SURFACE, { gain: 0.15, offset: 0.4 }), 0, context('selected', { preserveIdentity: false, searchPosition: point }))
+		let staged = 0
+
+		// 100 frames/s: the frame count is reached every second frame, but only the elapsed capture time promotes.
+		for (let i = 1; i <= 30; i++) {
+			const result = at(render(SURFACE, { gain: 0.15, offset: 0.4, motion: { dx: 0.01 * i, dy: 0 } }), 10 * i)
+			if (result.notes.includes('keyframe_staged')) staged++
+		}
+
+		expect(staged).toBe(0)
+		const later = at(render(SURFACE, { gain: 0.15, offset: 0.4, motion: { dx: 0.3, dy: 0 } }), 2010)
+		expect(later.notes).toContain('keyframe_staged')
 	})
 })

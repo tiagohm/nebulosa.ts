@@ -9,7 +9,8 @@ import { extractSurfaceSamples, SURFACE_SAMPLE_INVALID } from './surface'
 import type { SurfaceTrackingWorkspace } from './workspace'
 
 // Disk-limb (outer bright-object edge) measurement for Solar, Lunar and planetary guiding. A coarse
-// threshold/moment initializer, used only when no prior geometry exists, bounds the search; radial
+// threshold/moment initializer on one connected bright component, used only when no prior geometry
+// exists, bounds the search; radial
 // profiles from the prior center then locate the strongest object-to-background transition inside a
 // prior window with a parabolic subpixel derivative extremum, a gradient-SNR gate and an ambiguity
 // gate. A deterministic circle consensus isolates the dominant limb from terminator, prominence and ring
@@ -270,43 +271,95 @@ function prepareLimbPlane(image: Image, plane: ImageAnalysisPlane, area: Readonl
 	return { data, mask, width, height, step, originX, originY, background, contrast, noise: Math.max(backgroundNoise, contrast * 1e-3) }
 }
 
-// Threshold-moment object estimate in analysis samples: samples above the half-contrast level are
-// averaged, then re-averaged within 1.5 equivalent-area radii. With a seed (analysis samples) the window
-// is centered on the seed first, so a brighter unrelated object elsewhere in the ROI is ignored. Brightness
-// moments only bound the edge search; they are never a published limb center.
-function coarseLimbObject(prepared: LimbPlane, seedX?: number, seedY?: number) {
+// Smallest 8-connected bright component treated as an object (a 3×3 block), in analysis samples; smaller
+// specks are noise and are never selected.
+const MINIMUM_COMPONENT_SAMPLES = 9
+
+// Threshold-moment object estimate in analysis samples. Samples above the half-contrast level are split
+// into 8-connected components by a bounded breadth-first labeling (each sample is visited once). With a
+// seed (analysis samples) the component nearest to it is selected (distance to its nearest sample, so a
+// component containing the seed wins, ties by size); without a seed, the largest component. Only that
+// component's samples are averaged, then re-averaged within 1.5 equivalent-area radii, so unrelated
+// bright objects in the ROI never define the center or the radius. Brightness moments only bound the edge
+// search; they are never a published limb center. Overwrites the workspace label and queue buffers.
+function coarseLimbObject(prepared: LimbPlane, workspace: SurfaceTrackingWorkspace, seedX?: number, seedY?: number) {
 	const { data, mask, width, height } = prepared
+	const count = width * height
 	const threshold = prepared.background + 0.5 * prepared.contrast
-	let cx = seedX ?? Number.NaN
-	let cy = seedY ?? Number.NaN
+	const labels = workspace.labels(count)
+	const queue = workspace.queue(count)
+	const seeded = seedX !== undefined && seedY !== undefined
+	let label = 0
+	let selected = 0
+	let selectedSize = 0
+	let selectedDistance = Number.POSITIVE_INFINITY
+
+	labels.fill(0)
+
+	for (let start = 0; start < count; start++) {
+		if (labels[start] !== 0 || mask[start] !== 0 || !(data[start] >= threshold)) continue
+
+		labels[start] = ++label
+		queue[0] = start
+		let head = 0
+		let tail = 1
+		let nearest = Number.POSITIVE_INFINITY
+
+		while (head < tail) {
+			const i = queue[head++]
+			const x = i % width
+			const y = (i - x) / width
+
+			if (seeded) {
+				const distance = (x - seedX) ** 2 + (y - seedY) ** 2
+				if (distance < nearest) nearest = distance
+			}
+
+			for (let ny = Math.max(0, y - 1); ny <= Math.min(height - 1, y + 1); ny++) {
+				for (let nx = Math.max(0, x - 1); nx <= Math.min(width - 1, x + 1); nx++) {
+					const j = ny * width + nx
+					if (labels[j] !== 0 || mask[j] !== 0 || !(data[j] >= threshold)) continue
+					labels[j] = label
+					queue[tail++] = j
+				}
+			}
+		}
+
+		// The queue holds each component sample exactly once, so tail is the component size.
+		if (tail < MINIMUM_COMPONENT_SAMPLES) continue
+
+		if (seeded ? nearest < selectedDistance || (nearest === selectedDistance && tail > selectedSize) : tail > selectedSize) {
+			selected = label
+			selectedSize = tail
+			selectedDistance = nearest
+		}
+	}
+
+	if (selected === 0) return undefined
+
+	let cx = 0
+	let cy = 0
 	let radius = Number.POSITIVE_INFINITY
 
 	for (let pass = 0; pass < 3; pass++) {
-		const limit2 = Number.isFinite(cx) && Number.isFinite(radius) ? (1.5 * radius) ** 2 : Number.POSITIVE_INFINITY
+		const limit2 = pass === 0 ? Number.POSITIVE_INFINITY : (1.5 * radius) ** 2
 		let n = 0
 		let sx = 0
 		let sy = 0
 
 		for (let y = 0, i = 0; y < height; y++) {
 			for (let x = 0; x < width; x++, i++) {
-				if (mask[i] !== 0 || !(data[i] >= threshold)) continue
-				if (limit2 !== Number.POSITIVE_INFINITY && (x - cx) ** 2 + (y - cy) ** 2 > limit2) continue
+				if (labels[i] !== selected || (x - cx) ** 2 + (y - cy) ** 2 > limit2) continue
 				n++
 				sx += x
 				sy += y
 			}
 		}
 
-		if (n === 0) return undefined
+		if (n === 0) break
 		cx = sx / n
 		cy = sy / n
 		radius = Math.sqrt(n / PI)
-
-		// With a seed the first pass keeps the seed and only measures the bright extent.
-		if (pass === 0 && seedX !== undefined && seedY !== undefined) {
-			cx = seedX
-			cy = seedY
-		}
 	}
 
 	return { x: cx, y: cy, radius }
@@ -320,20 +373,22 @@ export interface BrightObject {
 	readonly radius: number
 }
 
-// Locates the dominant bright object of an image ROI by threshold moments near an optional seed (image
-// pixels). This is an acquisition bound and apparent-object fallback, not a physical disk center.
-// Returns undefined without significant contrast. Overwrites workspace raw/mask/statistics buffers.
+// Locates one bright object of an image ROI by threshold moments: the connected above-half-contrast
+// component nearest to the optional seed (image pixels), or the largest one without a seed. This is an
+// acquisition bound and apparent-object fallback, not a physical disk center. Returns undefined without
+// significant contrast. Overwrites workspace raw/mask/statistics/label/queue buffers.
 export function locateBrightObject(image: Image, plane: ImageAnalysisPlane, area: Readonly<Rect>, workspace: SurfaceTrackingWorkspace, options: LimbTrackingOptions = DEFAULT_LIMB_TRACKING_OPTIONS, seed?: readonly [number, number]): BrightObject | undefined {
 	const prepared = prepareLimbPlane(image, plane, area, workspace, options)
 	if (prepared === undefined) return undefined
 	const { originX, originY, step } = prepared
-	const object = seed === undefined ? coarseLimbObject(prepared) : coarseLimbObject(prepared, (seed[0] - originX) / step, (seed[1] - originY) / step)
+	const object = seed === undefined ? coarseLimbObject(prepared, workspace) : coarseLimbObject(prepared, workspace, (seed[0] - originX) / step, (seed[1] - originY) / step)
 	return object === undefined ? undefined : { center: [originX + object.x * step, originY + object.y * step], radius: object.radius * step }
 }
 
-// Measures the outer limb of the brightest object in an image ROI (inside the image, image pixels).
-// Without a prior, a threshold-moment initializer bounds the search near the seed (or the bright-sample
-// centroid). Overwrites workspace raw/mask/profile/statistics buffers; never mutates the image.
+// Measures the outer limb of one bright object in an image ROI (inside the image, image pixels). Without a
+// prior, a threshold-moment initializer on the bright component nearest to the seed (or the largest one)
+// bounds the search. Overwrites workspace raw/mask/profile/statistics/label/queue buffers; never mutates
+// the image.
 export function measureLimb(image: Image, plane: ImageAnalysisPlane, area: Readonly<Rect>, workspace: SurfaceTrackingWorkspace, options: LimbTrackingOptions = DEFAULT_LIMB_TRACKING_OPTIONS, search: LimbSearch = {}): LimbOutcome {
 	const prepared = prepareLimbPlane(image, plane, area, workspace, options)
 	if (prepared === undefined) return { success: false, reason: 'limb_not_found' }
@@ -355,7 +410,7 @@ export function measureLimb(image: Image, plane: ImageAnalysisPlane, area: Reado
 		theta = search.prior.theta
 		window = options.searchFraction
 	} else {
-		const object = search.seed === undefined ? coarseLimbObject(prepared) : coarseLimbObject(prepared, (search.seed[0] - originX) / step, (search.seed[1] - originY) / step)
+		const object = search.seed === undefined ? coarseLimbObject(prepared, workspace) : coarseLimbObject(prepared, workspace, (search.seed[0] - originX) / step, (search.seed[1] - originY) / step)
 		if (object === undefined) return { success: false, reason: 'limb_not_found' }
 		centerX = object.x
 		centerY = object.y

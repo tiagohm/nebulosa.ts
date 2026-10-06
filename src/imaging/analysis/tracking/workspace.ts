@@ -22,6 +22,8 @@ export class SurfaceTrackingWorkspace {
 	#refinement = new Float64Array(0)
 	#profile = new Float64Array(0)
 	#fit = new Float64Array(0)
+	#labels = new Int32Array(0)
+	#queue = new Int32Array(0)
 	#phase?: PhaseCorrelationWorkspace
 
 	// Unnormalized analysis samples (NaN where non-finite) with at least count entries.
@@ -76,6 +78,18 @@ export class SurfaceTrackingWorkspace {
 	fit(count: number) {
 		if (this.#fit.length < count) this.#fit = new Float64Array(count)
 		return this.#fit.subarray(0, count)
+	}
+
+	// Connected-component labels with at least count entries; contents are stale until overwritten.
+	labels(count: number) {
+		if (this.#labels.length < count) this.#labels = new Int32Array(count)
+		return this.#labels.subarray(0, count)
+	}
+
+	// Breadth-first sample-index queue with at least count entries.
+	queue(count: number) {
+		if (this.#queue.length < count) this.#queue = new Int32Array(count)
+		return this.#queue.subarray(0, count)
 	}
 
 	// Returns a phase-correlation workspace for the geometry, replacing the cached one on change.

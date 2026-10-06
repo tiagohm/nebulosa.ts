@@ -13,7 +13,14 @@ import type { GuideTargetEnvelope, GuideTracker, GuideTrackerContext, GuideTrack
 // anchors the absolute object center when the whole disk is visible. Two target semantics exist:
 // `surfacePoint` transports a selected image point by the measured anchor-to-current rigid transform, and
 // `objectCenter` publishes the limb-anchored object center (or, without a usable limb, the apparent-object
-// anchor chosen at acquisition, which is not necessarily the physical center).
+// anchor chosen at acquisition, which is not necessarily the physical center). Capabilities are promotable:
+// an apparent-object identity converges onto a later confident limb, and a limb-only identity gains a
+// surface anchor once structure appears, both without a target jump.
+//
+// The immutable anchor bounds keyframe-chain drift through periodic direct checks. Checks that keep failing
+// while a keyframe still registers freeze promotions and degrade the state, then withhold measurements;
+// in `objectCenter`, a limb-verified frame instead rebuilds the anchor. Maintenance cadences require both a
+// committed-frame count and, when configured, an elapsed capture time, so high-rate streams do not churn.
 //
 // Coordinates are received full-frame image pixels with pixel centers at integers, origin upper left,
 // +X right and +Y down; rotations are radians from +X toward +Y. `track()` stages acquisition, transform,
@@ -60,12 +67,22 @@ export interface SolarSystemReferenceOptions {
 	readonly maximumKeyframes: number
 	// Committed frames since the last promotion before a new keyframe may be promoted.
 	readonly keyframeInterval: number
+	// Capture time since the last promotion that must also elapse before a time-due promotion, in
+	// milliseconds; 0 uses the frame count alone. The displacement trigger ignores it.
+	readonly keyframeIntervalTime: number
 	// Working-reference displacement, relative to the smaller ROI side, that also triggers promotion.
 	readonly keyframeShiftFraction: number
 	// Minimum surface confidence of a frame whose samples may become a keyframe, in [0, 1].
 	readonly minimumPromotionConfidence: number
-	// Committed frames between direct anchor consistency checks while a keyframe is in use.
+	// Committed frames between direct anchor consistency checks while a keyframe is in use, and between
+	// surface-anchor creation attempts of a limb-only identity.
 	readonly anchorCheckInterval: number
+	// Capture time that must also elapse between those checks or attempts, in milliseconds; 0 uses the frame
+	// count alone. A failed keyframe registration always checks the anchor immediately.
+	readonly anchorCheckIntervalTime: number
+	// Consecutive failed direct anchor checks tolerated, with promotions frozen and a degraded state, before
+	// measurements are withheld until the anchor registers again; 0 withholds on the first failure.
+	readonly maximumAnchorCheckFailures: number
 }
 
 // User options; omitted groups and fields come from the mode preset.
@@ -123,27 +140,28 @@ export interface SolarSystemTrackingPreset {
 }
 
 // Mode presets. Planets use a compact object ROI and a limb every frame; Lunar and Solar surfaces use larger
-// texture ROIs, more patches and no routine limb, with slower Lunar keyframe aging than Solar.
+// texture ROIs, more patches and no routine limb, with slower Lunar keyframe aging than Solar. Time intervals
+// match the frame intervals at 2 frames/s, so faster streams are throttled to the same maintenance rate.
 export const SOLAR_SYSTEM_TRACKING_PRESETS: Readonly<Record<SolarSystemTrackingMode, SolarSystemTrackingPreset>> = {
 	planetary: {
 		targetMode: 'objectCenter',
 		surface: { patchSize: 24, maximumPatches: 24 },
 		limb: {},
-		reference: { maximumKeyframes: 3, keyframeInterval: 15, keyframeShiftFraction: 0.15, minimumPromotionConfidence: 0.6, anchorCheckInterval: 10 },
+		reference: { maximumKeyframes: 3, keyframeInterval: 15, keyframeIntervalTime: 7500, keyframeShiftFraction: 0.15, minimumPromotionConfidence: 0.6, anchorCheckInterval: 10, anchorCheckIntervalTime: 5000, maximumAnchorCheckFailures: 3 },
 		acquisition: { areaSize: 192, maximumAreaSize: 384, objectMargin: 12, edgeMargin: 8, limbInterval: 1, lostAfter: 5, limbGain: 0.1, consistencyTolerance: 1.5 },
 	},
 	lunar: {
 		targetMode: 'surfacePoint',
 		surface: { patchSize: 32, maximumPatches: 32 },
 		limb: {},
-		reference: { maximumKeyframes: 3, keyframeInterval: 60, keyframeShiftFraction: 0.2, minimumPromotionConfidence: 0.6, anchorCheckInterval: 15 },
+		reference: { maximumKeyframes: 3, keyframeInterval: 60, keyframeIntervalTime: 30000, keyframeShiftFraction: 0.2, minimumPromotionConfidence: 0.6, anchorCheckInterval: 15, anchorCheckIntervalTime: 7500, maximumAnchorCheckFailures: 3 },
 		acquisition: { areaSize: 256, maximumAreaSize: 512, objectMargin: 16, edgeMargin: 8, limbInterval: 0, lostAfter: 5, limbGain: 0.1, consistencyTolerance: 1.5 },
 	},
 	solar: {
 		targetMode: 'surfacePoint',
 		surface: { patchSize: 32, maximumPatches: 32, minimumRelativeStructure: 0.01 },
 		limb: {},
-		reference: { maximumKeyframes: 3, keyframeInterval: 30, keyframeShiftFraction: 0.15, minimumPromotionConfidence: 0.6, anchorCheckInterval: 10 },
+		reference: { maximumKeyframes: 3, keyframeInterval: 30, keyframeIntervalTime: 15000, keyframeShiftFraction: 0.15, minimumPromotionConfidence: 0.6, anchorCheckInterval: 10, anchorCheckIntervalTime: 5000, maximumAnchorCheckFailures: 3 },
 		acquisition: { areaSize: 256, maximumAreaSize: 512, objectMargin: 16, edgeMargin: 8, limbInterval: 0, lostAfter: 5, limbGain: 0.1, consistencyTolerance: 1.5 },
 	},
 }
@@ -200,7 +218,10 @@ export interface SolarSystemReferenceDiagnostic {
 	readonly bankSize: number
 	// Whether the anchor was registered directly on this frame.
 	readonly directAnchorCheck: boolean
-	// Whether this frame rebuilt the anchor (limb reacquisition) or discarded inconsistent keyframes.
+	// Consecutive failed direct anchor checks while a keyframe still registers.
+	readonly anchorCheckFailures: number
+	// Whether this frame built a new anchor (limb reacquisition, limb verification or first surface anchor)
+	// or discarded inconsistent keyframes.
 	readonly reanchored: boolean
 }
 
@@ -246,6 +267,10 @@ export function solarSystemTrackingOf(result: GuideTrackerResult | undefined): S
 	return (result as SolarSystemTrackerResult).solarSystem
 }
 
+// Minimum limb confidence, in [0, 1], for an apparent-object objectCenter identity to adopt the limb as its
+// center authority; stricter than the 0.5 tracking threshold because the promotion is permanent.
+const LIMB_ANCHOR_CONFIDENCE = 0.8
+
 // Surface reference placed in the identity's anchor coordinates.
 interface BankReference {
 	// Preprocessed reference samples and patches.
@@ -264,6 +289,9 @@ interface SolarSystemIdentity {
 	readonly target: readonly [number, number]
 	// Whether the target derives from a fitted limb (objectCenter fusion is enabled).
 	readonly limbAnchored: boolean
+	// Surface-to-limb offset still being converged after a limb promotion, in image pixels; widens the
+	// fusion tolerance and shrinks by the limb gain on every fused frame.
+	readonly limbConvergence: number
 	// Immutable surface anchor, absent for a limb-only identity.
 	readonly anchor?: BankReference
 	// Bounded keyframes, oldest first.
@@ -278,16 +306,24 @@ interface SolarSystemIdentity {
 	readonly generation: number
 	// Committed frames since keyframe promotion.
 	readonly framesSincePromotion: number
+	// Capture clock of the last promotion or anchor creation, in milliseconds, when known.
+	readonly promotionTime?: number
 	// Committed frames since the last limb measurement.
 	readonly framesSinceLimb: number
-	// Committed frames since the last direct anchor registration.
+	// Committed frames since the last direct anchor check or surface-anchor creation attempt.
 	readonly framesSinceAnchorCheck: number
+	// Capture clock of that check or attempt, in milliseconds, when known.
+	readonly anchorCheckTime?: number
+	// Consecutive failed direct anchor checks while a keyframe still registers.
+	readonly anchorCheckFailures: number
 }
 
 // Frame-local outcome assembled before publishing.
 interface FrameOutcome {
 	readonly point?: readonly [number, number]
 	readonly confidence: number
+	// Forces the degraded state for a measurement that is published but not fully verified.
+	readonly degraded?: boolean
 	readonly measurementMode?: SolarSystemMeasurementMode
 	readonly candidateCount: number
 	readonly acceptedCount: number
@@ -429,8 +465,7 @@ export class SolarSystemTracker implements GuideTracker {
 				notes.push('apparent_object_anchor')
 			}
 
-			const side = Math.min(acquisition.maximumAreaSize, Math.max(acquisition.areaSize, 2 * (objectRadius + acquisition.objectMargin)))
-			area = squareArea(target, side, width, height)
+			area = this.#objectArea(target, objectRadius, width, height)
 		} else {
 			target = seed ?? (limb === undefined ? [(width - 1) * 0.5, (height - 1) * 0.5] : limb.center)
 			objectRadius = limb?.semiMajor
@@ -448,7 +483,25 @@ export class SolarSystemTracker implements GuideTracker {
 		const measurementMode: SolarSystemMeasurementMode = targetMode === 'surfacePoint' || limb === undefined ? 'surface' : anchor === undefined ? 'limb' : 'hybrid'
 		const limbGeometry = limb === undefined ? undefined : limbGeometryOf(limb)
 
-		this.#pending = { plane, target, limbAnchored: targetMode === 'objectCenter' && limb !== undefined, anchor, keyframes: [], transform: IDENTITY_RIGID_TRANSFORM, limb: limbGeometry, objectRadius, generation: 0, framesSincePromotion: 0, framesSinceLimb: 0, framesSinceAnchorCheck: 0 }
+		const now = frameClock(frame)
+		this.#pending = {
+			plane,
+			target,
+			limbAnchored: targetMode === 'objectCenter' && limb !== undefined,
+			limbConvergence: 0,
+			anchor,
+			keyframes: [],
+			transform: IDENTITY_RIGID_TRANSFORM,
+			limb: limbGeometry,
+			objectRadius,
+			generation: 0,
+			framesSincePromotion: 0,
+			promotionTime: now,
+			framesSinceLimb: 0,
+			framesSinceAnchorCheck: 0,
+			anchorCheckTime: now,
+			anchorCheckFailures: 0,
+		}
 		notes.unshift('acquired')
 
 		return {
@@ -460,23 +513,39 @@ export class SolarSystemTracker implements GuideTracker {
 			reasons,
 			notes,
 			objectRadius,
-			diagnostic: { measurementMode, plane, area, rawTarget: target, transform: IDENTITY_RIGID_TRANSFORM, rotation: 0, limb: limb === undefined ? undefined : limbDiagnosticOf(limb), reference: { generation: 0, ageFrames: 0, bankSize: anchor === undefined ? 0 : 1, directAnchorCheck: false, reanchored: false } },
+			diagnostic: {
+				measurementMode,
+				plane,
+				area,
+				rawTarget: target,
+				transform: IDENTITY_RIGID_TRANSFORM,
+				rotation: 0,
+				limb: limb === undefined ? undefined : limbDiagnosticOf(limb),
+				reference: { generation: 0, ageFrames: 0, bankSize: anchor === undefined ? 0 : 1, directAnchorCheck: false, anchorCheckFailures: 0, reanchored: false },
+			},
 		}
 	}
 
 	// Registers the frame to the committed references, measures the limb when due, fuses both according to
-	// the target semantics and stages the next identity when a measurement is published.
+	// the target semantics, applies the capability-promotion and anchor-validation policies and stages the
+	// next identity when a measurement is published.
 	#follow(frame: GuideTrackerFrame, image: Image, context: GuideTrackerContext, identity: SolarSystemIdentity): FrameOutcome {
 		const { acquisition, reference: bankOptions, targetMode, limb: limbOptions } = this.config
 		const { width, height } = frame
 		const reasons: Record<string, number> = {}
 		const notes: string[] = []
 		const surface = this.#surfaceOptionsFor(context)
+		const now = frameClock(frame)
+		// Calibration measures pulse response; identity capabilities and anchors change only outside it.
+		const maintaining = context.phase !== 'calibrating'
+		const anchorCheckDue = maintenanceDue(identity.framesSinceAnchorCheck + 1, bankOptions.anchorCheckInterval, now, identity.anchorCheckTime, bankOptions.anchorCheckIntervalTime)
 		const predicted = applyRigidTransform(identity.transform, identity.target[0], identity.target[1])
 		let registration: SurfaceRegistration | undefined
 		let transform: RigidTransform2D | undefined
 		let used: BankReference | undefined
 		let directAnchorCheck = false
+		let anchorChecked = false
+		let anchorCheckFailed = false
 		let reacquired = false
 		let keyframes = identity.keyframes
 
@@ -487,7 +556,8 @@ export class SolarSystemTracker implements GuideTracker {
 			if (registration !== undefined) used = working
 
 			// A failed keyframe falls back to the anchor; a periodic direct check bounds keyframe drift.
-			if (working !== anchor && (registration === undefined || identity.framesSinceAnchorCheck + 1 >= bankOptions.anchorCheckInterval)) {
+			if (working !== anchor && (registration === undefined || anchorCheckDue)) {
+				anchorChecked = true
 				const direct = this.#register(anchor, image, identity.transform, surface, reasons)
 
 				if (direct !== undefined) {
@@ -510,6 +580,9 @@ export class SolarSystemTracker implements GuideTracker {
 							keyframes = []
 						}
 					}
+				} else if (registration !== undefined) {
+					// The keyframe chain still registers but can no longer be verified against the anchor.
+					anchorCheckFailed = true
 				}
 			}
 
@@ -559,10 +632,27 @@ export class SolarSystemTracker implements GuideTracker {
 		let measurementMode: SolarSystemMeasurementMode | undefined
 		let anchor = identity.anchor
 		let generation = identity.generation
+		let limbAnchored = identity.limbAnchored
+		let limbConvergence = identity.limbConvergence
+		let anchorCreated = false
 		let reanchored = keyframes !== identity.keyframes
 		const surfacePoint = transform === undefined ? undefined : applyRigidTransform(transform, target[0], target[1])
+
+		// An apparent-object identity adopts a confident limb whose center lies on the tracked object. The
+		// surface-to-limb offset widens the fusion gate and is removed by the limb gain, so the target converges
+		// onto the limb center without a jump while the surface anchor is kept.
+		if (targetMode === 'objectCenter' && !limbAnchored && maintaining && limb !== undefined && limb.confidence >= LIMB_ANCHOR_CONFIDENCE && surfacePoint !== undefined && registration !== undefined) {
+			const offset = Math.hypot(limb.center[0] - surfacePoint[0], limb.center[1] - surfacePoint[1])
+
+			if (offset <= limb.semiMinor) {
+				limbAnchored = true
+				limbConvergence = offset
+				notes.push('limb_anchored')
+			}
+		}
+
 		// Only a limb-anchored objectCenter identity may be moved by limb geometry.
-		const fuseLimb = targetMode === 'objectCenter' && identity.limbAnchored ? limb : undefined
+		const fuseLimb = targetMode === 'objectCenter' && limbAnchored ? limb : undefined
 
 		if (surfacePoint !== undefined && registration !== undefined && transform !== undefined) {
 			rawTarget = surfacePoint
@@ -570,7 +660,7 @@ export class SolarSystemTracker implements GuideTracker {
 			if (fuseLimb !== undefined) {
 				const dx = fuseLimb.center[0] - surfacePoint[0]
 				const dy = fuseLimb.center[1] - surfacePoint[1]
-				const tolerance = acquisition.consistencyTolerance + 3 * (registration.uncertainty + fuseLimb.rms)
+				const tolerance = acquisition.consistencyTolerance + 3 * (registration.uncertainty + fuseLimb.rms) + limbConvergence
 
 				if (Math.hypot(dx, dy) <= tolerance) {
 					// The anchor-frame target follows the fused point, so limb anchoring never jumps the output.
@@ -578,6 +668,7 @@ export class SolarSystemTracker implements GuideTracker {
 					target = applyRigidTransform(invertRigidTransform(transform), point[0], point[1])
 					confidence = Math.sqrt(registration.confidence * fuseLimb.confidence)
 					measurementMode = 'hybrid'
+					limbConvergence *= 1 - acquisition.limbGain
 				} else {
 					// Strong but conflicting evidence: missing a correction is safer than issuing a wrong one.
 					increment(reasons, 'reference_inconsistent')
@@ -593,24 +684,69 @@ export class SolarSystemTracker implements GuideTracker {
 			point = fuseLimb.center
 			confidence = fuseLimb.confidence
 			measurementMode = 'limb'
+			limbConvergence = 0
 			// Hold the last rotation and move the anchor transform so it maps the target onto the limb center.
 			const rotated = applyRigidTransform({ rotation: identity.transform.rotation, translation: [0, 0] }, target[0], target[1])
 			transform = { rotation: identity.transform.rotation, translation: [point[0] - rotated[0], point[1] - rotated[1]] }
 
-			// Rebuild a lost surface anchor around the absolute limb center, except during calibration.
-			if (identity.anchor !== undefined && context.phase !== 'calibrating') {
-				const side = Math.min(acquisition.maximumAreaSize, Math.max(acquisition.areaSize, 2 * (fuseLimb.semiMajor + acquisition.objectMargin)))
-				const created = createSurfaceReference(image, squareArea(point, side, width, height), identity.plane, this.#workspace, this.config.surface)
+			// A lost surface anchor is rebuilt around the absolute limb center on every frame; a limb-only
+			// identity tries to create its first anchor on the anchor-check cadence. Either keeps the target.
+			const lostAnchor = identity.anchor !== undefined
 
-				if (created.success) {
+			if (maintaining && (lostAnchor || anchorCheckDue)) {
+				anchorChecked = true
+				const created = this.#objectAnchor(image, point, fuseLimb.semiMajor, identity.plane, generation + 1, width, height)
+
+				if (created !== undefined) {
 					generation++
-					anchor = { surface: created.reference, fromAnchor: IDENTITY_RIGID_TRANSFORM, generation }
+					anchor = created
 					keyframes = []
 					target = point
 					transform = IDENTITY_RIGID_TRANSFORM
-					measurementMode = 'limbReacquired'
+					anchorCreated = true
 					reanchored = true
+
+					if (lostAnchor) {
+						measurementMode = 'limbReacquired'
+						notes.push('reanchored')
+					} else {
+						notes.push('surface_anchored')
+					}
+				}
+			}
+		}
+
+		// Failed direct checks accumulate while an unverified keyframe chain is the working reference.
+		let anchorCheckFailures = anchorCreated || directAnchorCheck || (used !== undefined && used === identity.anchor) ? 0 : identity.anchorCheckFailures + (anchorCheckFailed ? 1 : 0)
+		let degraded = false
+
+		if (point !== undefined && anchorCheckFailures > 0) {
+			// The limb is the absolute authority: a limb-verified frame becomes the new anchor at the published point.
+			if (measurementMode === 'hybrid' && fuseLimb !== undefined && maintaining) {
+				const created = this.#objectAnchor(image, point, fuseLimb.semiMajor, identity.plane, generation + 1, width, height)
+
+				if (created !== undefined) {
+					generation++
+					anchor = created
+					keyframes = []
+					target = point
+					transform = IDENTITY_RIGID_TRANSFORM
+					anchorCreated = true
+					reanchored = true
+					anchorCheckFailures = 0
 					notes.push('reanchored')
+				}
+			}
+
+			if (anchorCheckFailures > 0) {
+				notes.push('anchor_unverified')
+
+				if (anchorCheckFailures >= bankOptions.maximumAnchorCheckFailures) {
+					// Unbounded chain drift is never published; the unstaged frame keeps the check due every frame.
+					increment(reasons, 'anchor_unverified')
+					point = undefined
+				} else {
+					degraded = true
 				}
 			}
 		}
@@ -626,17 +762,18 @@ export class SolarSystemTracker implements GuideTracker {
 			return { ...failed(reasons, notes, { ...base, area: currentArea, transform, rotation: transform?.rotation }), candidateCount: registration?.candidatePatches ?? identity.anchor?.surface.patches.length ?? 0, objectRadius }
 		}
 
-		let framesSincePromotion = identity.framesSincePromotion + 1
+		let framesSincePromotion = anchorCreated ? 0 : identity.framesSincePromotion + 1
+		let promotionTime = anchorCreated ? now : identity.promotionTime
 
-		// Promotion is staged here and applied only by commit(); poor frames never become keyframes.
-		if (!reanchored && registration !== undefined && used !== undefined && anchor !== undefined && bankOptions.maximumKeyframes > 0 && registration.confidence >= bankOptions.minimumPromotionConfidence) {
+		// Promotion is staged here and applied only by commit(); poor or unverified frames never become keyframes.
+		if (!reanchored && anchorCheckFailures === 0 && registration !== undefined && used !== undefined && anchor !== undefined && bankOptions.maximumKeyframes > 0 && registration.confidence >= bankOptions.minimumPromotionConfidence) {
 			const reference = used.surface
 			const cx = reference.originX + (reference.width - 1) * 0.5 * reference.step
 			const cy = reference.originY + (reference.height - 1) * 0.5 * reference.step
 			const moved = applyRigidTransform(registration.transform, cx, cy)
 			const side = Math.min(anchor.surface.area.right - anchor.surface.area.left, anchor.surface.area.bottom - anchor.surface.area.top)
 
-			if (framesSincePromotion >= bankOptions.keyframeInterval || Math.hypot(moved[0] - cx, moved[1] - cy) >= bankOptions.keyframeShiftFraction * side) {
+			if (maintenanceDue(framesSincePromotion, bankOptions.keyframeInterval, now, promotionTime, bankOptions.keyframeIntervalTime) || Math.hypot(moved[0] - cx, moved[1] - cy) >= bankOptions.keyframeShiftFraction * side) {
 				const area = centeredArea(point, anchor.surface.area, width, height)
 				const created = createSurfaceReference(image, area, identity.plane, this.#workspace, this.config.surface)
 
@@ -644,33 +781,41 @@ export class SolarSystemTracker implements GuideTracker {
 					generation++
 					keyframes = [...keyframes, { surface: created.reference, fromAnchor: transform, generation }].slice(-bankOptions.maximumKeyframes)
 					framesSincePromotion = 0
+					promotionTime = now
 					notes.push('keyframe_staged')
 				}
 			}
 		}
 
 		const committedLimb = limb === undefined ? prior : limbGeometryOf(limb)
+		const checkReset = anchorChecked || anchorCreated
+
 		this.#pending = {
 			plane: identity.plane,
 			target,
-			limbAnchored: identity.limbAnchored,
+			limbAnchored,
+			limbConvergence,
 			anchor,
 			keyframes,
 			transform,
 			limb: committedLimb,
 			objectRadius,
 			generation,
-			framesSincePromotion: reanchored && measurementMode === 'limbReacquired' ? 0 : framesSincePromotion,
+			framesSincePromotion,
+			promotionTime,
 			framesSinceLimb: limbMeasured ? 0 : identity.framesSinceLimb + 1,
-			framesSinceAnchorCheck: directAnchorCheck ? 0 : identity.framesSinceAnchorCheck + 1,
+			framesSinceAnchorCheck: checkReset ? 0 : identity.framesSinceAnchorCheck + 1,
+			anchorCheckTime: checkReset ? now : identity.anchorCheckTime,
+			anchorCheckFailures,
 		}
 
 		const bankSize = (anchor === undefined ? 0 : 1) + keyframes.length
-		const referenceDiagnostic: SolarSystemReferenceDiagnostic = { generation: used?.generation ?? anchor?.generation ?? 0, ageFrames: framesSincePromotion, bankSize, directAnchorCheck, reanchored }
+		const referenceDiagnostic: SolarSystemReferenceDiagnostic = { generation: anchorCreated ? generation : (used?.generation ?? anchor?.generation ?? 0), ageFrames: framesSincePromotion, bankSize, directAnchorCheck, anchorCheckFailures, reanchored }
 
 		return {
 			point,
 			confidence,
+			degraded,
 			measurementMode,
 			candidateCount: registration?.candidatePatches ?? 0,
 			acceptedCount: registration?.acceptedPatches ?? limb?.rays.accepted ?? 0,
@@ -690,6 +835,19 @@ export class SolarSystemTracker implements GuideTracker {
 		return undefined
 	}
 
+	// objectCenter tracking ROI: the object radius plus margin on each side, bounded by the configured sizes.
+	#objectArea(center: readonly [number, number], radius: number, width: number, height: number) {
+		const { areaSize, maximumAreaSize, objectMargin } = this.config.acquisition
+		return squareArea(center, Math.min(maximumAreaSize, Math.max(areaSize, 2 * (radius + objectMargin))), width, height)
+	}
+
+	// Builds a new anchor around an object center (image pixels) with the given radius, or returns undefined
+	// when the area lacks usable surface structure.
+	#objectAnchor(image: Image, center: readonly [number, number], radius: number, plane: ImageAnalysisPlane, generation: number, width: number, height: number): BankReference | undefined {
+		const created = createSurfaceReference(image, this.#objectArea(center, radius, width, height), plane, this.#workspace, this.config.surface)
+		return created.success ? { surface: created.reference, fromAnchor: IDENTITY_RIGID_TRANSFORM, generation } : undefined
+	}
+
 	// Calibration pulses can exceed the normal patch search; widen it to the calibrator's jump budget.
 	#surfaceOptionsFor(context: GuideTrackerContext): SurfaceTrackingOptions {
 		const surface = this.config.surface
@@ -707,7 +865,7 @@ export class SolarSystemTracker implements GuideTracker {
 			state = this.#identity === undefined ? (this.#failures >= acquisition.lostAfter ? 'lost' : 'acquiring') : this.#failures >= acquisition.lostAfter ? 'lost' : 'degraded'
 		} else {
 			this.#failures = 0
-			state = this.#pending !== undefined && this.#identity === undefined ? 'acquiring' : outcome.confidence >= 0.5 ? 'tracking' : 'degraded'
+			state = this.#pending !== undefined && this.#identity === undefined ? 'acquiring' : outcome.confidence >= 0.5 && outcome.degraded !== true ? 'tracking' : 'degraded'
 		}
 
 		const radius = outcome.objectRadius ?? this.#pending?.objectRadius ?? this.#identity?.objectRadius
@@ -752,6 +910,22 @@ export class SolarSystemTracker implements GuideTracker {
 // Failure outcome with optional partial diagnostic.
 function failed(reasons: Record<string, number>, notes: string[], diagnostic: FrameOutcome['diagnostic'] = {}): FrameOutcome {
 	return { confidence: 0, candidateCount: 0, acceptedCount: 0, reasons, notes, diagnostic }
+}
+
+// Maintenance clock of a frame in milliseconds: the monotonic capture instant, else the wall-clock
+// timestamp. Only differences between frames of one stream are meaningful.
+function frameClock(frame: GuideTrackerFrame) {
+	return frame.captureMonotonic ?? frame.timestamp
+}
+
+// Whether a periodic maintenance action is due: at least `interval` committed frames have elapsed and, when
+// `intervalMs` is positive and the last instant is known, at least `intervalMs` milliseconds of capture time.
+// A backward or non-finite clock difference counts as elapsed so a clock reset never stalls maintenance.
+function maintenanceDue(frames: number, interval: number, now: number, last: number | undefined, intervalMs: number) {
+	if (frames < interval) return false
+	if (!(intervalMs > 0) || last === undefined) return true
+	const elapsed = now - last
+	return !(elapsed >= 0 && elapsed < intervalMs)
 }
 
 // Adds one occurrence of a rejection reason.

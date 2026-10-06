@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { PI } from 'nebulosa/src/core/constants'
-import { DEFAULT_LIMB_TRACKING_OPTIONS, type LimbMeasurement, type LimbOutcome, type LimbSearch, type LimbTrackingOptions, measureLimb } from '../../../../src/imaging/analysis/tracking/limb'
+import { DEFAULT_LIMB_TRACKING_OPTIONS, type LimbMeasurement, type LimbOutcome, type LimbSearch, type LimbTrackingOptions, locateBrightObject, measureLimb } from '../../../../src/imaging/analysis/tracking/limb'
 import { SurfaceTrackingWorkspace } from '../../../../src/imaging/analysis/tracking/workspace'
 import type { Rect } from '../../../../src/math/numerical/geometry'
 import { addScenes, type DiskOptions, diskScene, type RenderOptions, renderScene, spotsScene, textureScene } from '../../../util/scene'
@@ -152,5 +152,28 @@ describe('limb', () => {
 		const area: Rect = { left: 0, top: 0, right: 180, bottom: 180 }
 		const outcome = measure({ x: 90.4, y: 88.7, radius: 50 }, { noise: 0.005 }, { seed: [90, 89] }, {}, area, second)
 		expectLimb(outcome, 90.4, 88.7, 50, 0.3)
+	})
+
+	test('seed selects its own object among several in the ROI', () => {
+		// A larger, brighter disk 62 pixels away would pull a whole-ROI moment window off the small one.
+		const small = { x: 88.6, y: 127.4, radius: 20 } as const
+		const large = { x: 150.6, y: 127.4, radius: 30 } as const
+		const image = renderScene(SIZE, SIZE, addScenes(diskScene(small), diskScene({ ...large, brightness: 1.3 })), { ...BASE, noise: 0.003 })
+		const workspace = new SurfaceTrackingWorkspace()
+
+		for (const [target, seed] of [
+			[small, [92, 125]],
+			[large, [146, 131]],
+		] as const) {
+			const object = locateBrightObject(image, 'mono', FULL, workspace, DEFAULT_LIMB_TRACKING_OPTIONS, seed)!
+			expect(Math.hypot(object.center[0] - target.x, object.center[1] - target.y)).toBeLessThan(0.5)
+			// Equivalent-area radius of the selected component only; merged disks would exceed it by far.
+			expect(Math.abs(object.radius - target.radius)).toBeLessThan(1)
+			expectLimb(measureLimb(image, 'mono', FULL, workspace, DEFAULT_LIMB_TRACKING_OPTIONS, { seed }), target.x, target.y, target.radius, 0.3)
+		}
+
+		// A seed in the dark gap selects the nearer object; without a seed the larger one is dominant.
+		expectLimb(measureLimb(image, 'mono', FULL, workspace, DEFAULT_LIMB_TRACKING_OPTIONS, { seed: [112, 127] }), small.x, small.y, small.radius, 0.3)
+		expectLimb(measureLimb(image, 'mono', FULL, workspace), large.x, large.y, large.radius, 0.3)
 	})
 })
