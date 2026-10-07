@@ -107,8 +107,19 @@
 				content: '⬇️';
 			}
 
-			.hidden {
+			.colapsed {
 				display: none;
+			}
+
+			pre.shiki {
+				padding: 16px;
+				overflow-x: auto;
+				border-radius: 8px;
+			}
+
+			pre.shiki code {
+				background: transparent;
+				padding: 0;
 			}
 		</style>
 	</head>
@@ -130,6 +141,13 @@
 					placeholder: 'Search topics, APIs, concepts...',
 					noData: 'No matching topic.',
 				},
+				markdown: {
+					renderer: {
+						code({ text, lang }) {
+							return `<sh data-lang="${lang}" class="${lang}">${text}</sh>`
+						},
+					},
+				},
 			}
 		</script>
 		<script src="//cdn.jsdelivr.net/npm/docsify@5"></script>
@@ -137,66 +155,10 @@
 		<script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
 		<script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
 		<script>
-			class Expander {
-				#element
-				#siblings = []
-				#state = true
-
-				constructor(element) {
-					this.#element = element
-					let next = element.nextElementSibling
-
-					while (true) {
-						if (next !== null && next.tagName !== 'H3' && next.tagName !== 'H2' && next.tagName !== 'H1') {
-							next.classList.toggle('hidden', true)
-							this.#siblings.push(next)
-							next = next.nextElementSibling
-						} else {
-							break
-						}
-					}
-				}
-
-				#hidden(state) {
-					const hidden = state ?? !this.#state
-
-					for (const element of this.#siblings) {
-						element.classList.toggle('hidden', hidden)
-					}
-
-					this.#state = hidden
-					this.#element.classList.toggle('expanded', !hidden)
-				}
-
-				toggle(event) {
-					this.#hidden(undefined)
-				}
-
-				expand() {
-					this.#hidden(false)
-				}
-
-				colapse() {
-					this.#hidden(true)
-				}
-			}
-
-			const expanders = new Map()
-
-			function load() {
-				const topics = document.getElementById('main')?.getElementsByTagName('h3') ?? []
-
-				for (const topic of topics) {
-					const expander = new Expander(topic)
-					expanders.set(topic.id, expander)
-				}
-
-				expandFromHash()
-			}
-
-			function expandFromHash() {
-				const id = location.hash.replace('#/?id=', '')
-				expanders.get(id)?.expand()
+			function ready() {
+				window.documenter.init()
+				window.documenter.syntaxHighlightWithLang('json')
+				window.documenter.syntaxHighlightWithLang('sh')
 			}
 
 			// The search plugin mounts into `.sidebar`, which hideSidebar omits. Registered first, this
@@ -208,10 +170,11 @@
 					document.body.appendChild(host)
 				})
 
-				hook.ready(load)
+				hook.ready(ready)
 			})
 
-			window.addEventListener('hashchange', expandFromHash)
+			window.addEventListener('hashchange', () => window.documenter.expandFromHash())
 		</script>
+		<script type="module" src="index.mjs"></script>
 	</body>
 </html>
