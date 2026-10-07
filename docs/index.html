@@ -18,11 +18,11 @@
 				--heading-color: #fafafa;
 				--code-color: #ff7043;
 				--content-max-width: 120ch;
+				--scroll-padding-top: 64px;
 			}
 
 			html,
-			body,
-			.sidebar-nav {
+			body {
 				font-size: 14px;
 			}
 
@@ -35,40 +35,23 @@
 				color: #fff;
 			}
 
-			.sidebar {
-				position: sticky;
-			}
-
-			.app-name img {
-				max-width: 92px !important;
-				margin-left: auto;
-				margin-right: auto;
-			}
-
 			.anchor:is(.markdown-section a):hover {
 				text-decoration-color: transparent !important;
 				color: #fff;
 			}
 
-			.markdown-section p {
+			.markdown-section p,
+			.markdown-section li {
 				text-align: justify;
 			}
 
 			.markdown-section p code,
 			.markdown-section p a {
-				white-space: nowrap;
 				text-justify: none;
 			}
 
 			section.content {
 				font-family: monospace;
-			}
-
-			section.search {
-				position: sticky;
-				left: var(--plugin-search-margin);
-				top: var(--plugin-search-margin);
-				z-index: 1;
 			}
 
 			a:not(.button) {
@@ -81,7 +64,51 @@
 			}
 
 			code.lang-ts {
-				color: #009688 !important;
+				color: #bdbdbd !important;
+			}
+
+			/* Host for the search plugin, which docsify places in a sidebar that hideSidebar removes. */
+			.sidebar.search-host {
+				visibility: visible;
+				position: sticky;
+				top: 16px;
+				bottom: auto;
+				left: 16px;
+				translate: none;
+				width: min(320px, calc(100vw - 90px));
+				max-height: calc(100vh - 24px);
+				overflow-y: auto;
+				border: none;
+				background: var(--color-bg);
+			}
+
+			.sidebar.search-host .search {
+				margin: 0;
+			}
+
+			.sidebar.search-host .results-panel:not(:empty),
+			.sidebar.search-host .results-status:not(:empty) {
+				padding: 0 10px;
+				background: var(--color-bg);
+			}
+
+			/* Close the results overlay once a result is opened or focus leaves the search. */
+			.sidebar.search-host:not(:focus-within) :is(.results-panel, .results-status) {
+				display: none;
+			}
+
+			article h3::before {
+				content: '➡️';
+				cursor: pointer;
+				margin-right: 4px;
+			}
+
+			article h3.expanded::before {
+				content: '⬇️';
+			}
+
+			.hidden {
+				display: none;
 			}
 		</style>
 	</head>
@@ -94,7 +121,7 @@
 				logo: 'nebulosa.ico',
 				coverpage: true,
 				executeScript: true,
-				hideSidebar: false,
+				hideSidebar: true,
 				noEmoji: true,
 				search: {
 					paths: 'auto',
@@ -109,5 +136,82 @@
 		<script src="//cdn.jsdelivr.net/npm/docsify@5/dist/plugins/search.min.js"></script>
 		<script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
 		<script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
+		<script>
+			class Expander {
+				#element
+				#siblings = []
+				#state = true
+
+				constructor(element) {
+					this.#element = element
+					let next = element.nextElementSibling
+
+					while (true) {
+						if (next !== null && next.tagName !== 'H3' && next.tagName !== 'H2' && next.tagName !== 'H1') {
+							next.classList.toggle('hidden', true)
+							this.#siblings.push(next)
+							next = next.nextElementSibling
+						} else {
+							break
+						}
+					}
+				}
+
+				#hidden(state) {
+					const hidden = state ?? !this.#state
+
+					for (const element of this.#siblings) {
+						element.classList.toggle('hidden', hidden)
+					}
+
+					this.#state = hidden
+					this.#element.classList.toggle('expanded', !hidden)
+				}
+
+				toggle(event) {
+					this.#hidden(undefined)
+				}
+
+				expand() {
+					this.#hidden(false)
+				}
+
+				colapse() {
+					this.#hidden(true)
+				}
+			}
+
+			const expanders = new Map()
+
+			function load() {
+				const topics = document.getElementById('main')?.getElementsByTagName('h3') ?? []
+
+				for (const topic of topics) {
+					const expander = new Expander(topic)
+					expanders.set(topic.id, expander)
+				}
+
+				expandFromHash()
+			}
+
+			function expandFromHash() {
+				const id = location.hash.replace('#/?id=', '')
+				expanders.get(id)?.expand()
+			}
+
+			// The search plugin mounts into `.sidebar`, which hideSidebar omits. Registered first, this
+			// mounted hook adds the host after docsify binds its own sidebar events and before search runs.
+			window.$docsify.plugins.unshift(function (hook) {
+				hook.mounted(function () {
+					const host = document.createElement('div')
+					host.className = 'sidebar search-host'
+					document.body.appendChild(host)
+				})
+
+				hook.ready(load)
+			})
+
+			window.addEventListener('hashchange', expandFromHash)
+		</script>
 	</body>
 </html>
