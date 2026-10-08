@@ -393,3 +393,32 @@ test('does not complete a flip the mount never started', async () => {
 		device.canFlip = false
 	}
 })
+
+test('stops observing the manager once disposed', () => {
+	const device = getMount()
+	const commander = new MountCommander(mountManager)
+	const updated = spyOn(commander, 'updated')
+
+	mountManager.updated(device, 'name')
+	expect(updated).toHaveBeenCalledTimes(1)
+
+	commander.dispose()
+	commander.dispose()
+	mountManager.updated(device, 'name')
+	expect(updated).toHaveBeenCalledTimes(1)
+
+	const removeHandler = spyOn(mountManager, 'removeHandler')
+
+	try {
+		let scoped: MountCommander | undefined
+
+		{
+			using commander = new MountCommander(mountManager)
+			scoped = commander
+		}
+
+		expect(removeHandler).toHaveBeenCalledWith(scoped)
+	} finally {
+		removeHandler.mockRestore()
+	}
+})

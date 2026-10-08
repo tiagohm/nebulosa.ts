@@ -128,7 +128,7 @@ const UNCANCELABLE = new AbortController().signal
 // Each command opens its own nested scope holding the mount, so a direct endpoint runs it as a whole
 // operation tree while a composite feature, passing its own context, inherits the mount it already owns
 // and gets cancellation and cleanup that do not disturb the feature around it.
-export class MountCommander implements DeviceHandler<Mount> {
+export class MountCommander implements DeviceHandler<Mount>, Disposable {
 	// Waiters per device, fed by the manager callbacks. A mount can be observed by several waits at once,
 	// such as a slew and the settle of a manual motion that is being canceled.
 	readonly #listeners = new Map<Mount, Set<(update: MountUpdate) => void>>()
@@ -139,6 +139,18 @@ export class MountCommander implements DeviceHandler<Mount> {
 	// Registers the commander as a mount observer so waits settle on device events instead of polling.
 	constructor(readonly mountManager: MountManager) {
 		mountManager.addHandler(this)
+	}
+
+	// Stops observing the manager. Call it once the operations that use this commander have settled: a wait
+	// still pending, or started later, no longer sees device events and settles only by its timeout or its
+	// signal. Running operations and the devices themselves are left untouched. Idempotent.
+	dispose() {
+		this.mountManager.removeHandler(this)
+	}
+
+	// Same as dispose, so the commander can be scoped with `using`.
+	[Symbol.dispose]() {
+		this.dispose()
 	}
 
 	// Required by the manager contract; discovery is published by MountHandler.

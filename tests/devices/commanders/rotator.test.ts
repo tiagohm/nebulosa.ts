@@ -206,3 +206,32 @@ test('refuses a second rotator command while the first one owns the device', asy
 	await stop(rotator)
 	await moving
 })
+
+test('stops observing the manager once disposed', () => {
+	const device = getRotator()
+	const commander = new RotatorCommander(rotatorManager)
+	const updated = spyOn(commander, 'updated')
+
+	rotatorManager.updated(device, 'name')
+	expect(updated).toHaveBeenCalledTimes(1)
+
+	commander.dispose()
+	commander.dispose()
+	rotatorManager.updated(device, 'name')
+	expect(updated).toHaveBeenCalledTimes(1)
+
+	const removeHandler = spyOn(rotatorManager, 'removeHandler')
+
+	try {
+		let scoped: RotatorCommander | undefined
+
+		{
+			using commander = new RotatorCommander(rotatorManager)
+			scoped = commander
+		}
+
+		expect(removeHandler).toHaveBeenCalledWith(scoped)
+	} finally {
+		removeHandler.mockRestore()
+	}
+})

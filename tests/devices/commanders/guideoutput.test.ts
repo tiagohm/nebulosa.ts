@@ -195,3 +195,32 @@ test('refuses guide-rate changes while a pulse owns the physical camera', async 
 	await stop(camera)
 	await pulsing
 })
+
+test('stops observing the manager once disposed', () => {
+	const device = getCamera()
+	const commander = new GuideOutputCommander(guideOutputManager)
+	const updated = spyOn(commander, 'updated')
+
+	guideOutputManager.updated(device, 'name')
+	expect(updated).toHaveBeenCalledTimes(1)
+
+	commander.dispose()
+	commander.dispose()
+	guideOutputManager.updated(device, 'name')
+	expect(updated).toHaveBeenCalledTimes(1)
+
+	const removeHandler = spyOn(guideOutputManager, 'removeHandler')
+
+	try {
+		let scoped: GuideOutputCommander | undefined
+
+		{
+			using commander = new GuideOutputCommander(guideOutputManager)
+			scoped = commander
+		}
+
+		expect(removeHandler).toHaveBeenCalledWith(scoped)
+	} finally {
+		removeHandler.mockRestore()
+	}
+})

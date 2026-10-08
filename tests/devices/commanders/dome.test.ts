@@ -165,3 +165,32 @@ test('reports unsupported commands and a disconnected emergency stop', async () 
 	await waitUntil(() => !dome.connected)
 	expect(await domeCommander.stopMotion(dome)).toMatchObject(failedOperationResult('disconnected'))
 })
+
+test('stops observing the manager once disposed', () => {
+	const device = getDome()
+	const commander = new DomeCommander(domeManager)
+	const updated = spyOn(commander, 'updated')
+
+	domeManager.updated(device, 'name')
+	expect(updated).toHaveBeenCalledTimes(1)
+
+	commander.dispose()
+	commander.dispose()
+	domeManager.updated(device, 'name')
+	expect(updated).toHaveBeenCalledTimes(1)
+
+	const removeHandler = spyOn(domeManager, 'removeHandler')
+
+	try {
+		let scoped: DomeCommander | undefined
+
+		{
+			using commander = new DomeCommander(domeManager)
+			scoped = commander
+		}
+
+		expect(removeHandler).toHaveBeenCalledWith(scoped)
+	} finally {
+		removeHandler.mockRestore()
+	}
+})

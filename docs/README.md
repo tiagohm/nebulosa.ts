@@ -15788,7 +15788,7 @@ Every command takes an `OperationScope` first. Passing the `OperationCoordinator
 | `RotatorCommander`     | `moveTo`, `home`, `syncTo`, `reverse`, `stopMotion`                                                                                                                                                                                               | degrees resolved by `rotatorAngle` against the driver limits; default move timeout 120 s                                                                                         |
 | `WheelCommander`       | `moveTo`, `setNames`                                                                                                                                                                                                                              | slots clamped by `wheelSlot`; a wheel cannot be aborted, so a move is only waited for; default timeout 30 s                                                                      |
 
-`MountCommander.goTo` resolves `MountSlewResult` (where the mount stopped) and `flip` resolves `MountFlipResult`, which adds `pierSideVerified`, false when the driver gives no evidence that the side changed. `startManualMove` returns a `ManualMoveHandle` (`DomeManualMoveHandle` for the dome) that holds the device until `stop()` or until the last direction is disabled with `move(direction, false)`. The commanders that wait on device events (cover, dome, focuser, guide output, mount, rotator and wheel) register themselves as handlers of their manager in the constructor, so they are meant to live as long as the manager.
+`MountCommander.goTo` resolves `MountSlewResult` (where the mount stopped) and `flip` resolves `MountFlipResult`, which adds `pierSideVerified`, false when the driver gives no evidence that the side changed. `startManualMove` returns a `ManualMoveHandle` (`DomeManualMoveHandle` for the dome) that holds the device until `stop()` or until the last direction is disabled with `move(direction, false)`. The commanders that wait on device events (cover, dome, focuser, guide output, mount, rotator and wheel) register themselves as handlers of their manager in the constructor and are `Disposable`: `dispose()` (or `[Symbol.dispose]()` through `using`) unregisters the commander and can be called more than once. Dispose a commander only after the operations that use it have settled, since a wait still pending, or started later, no longer sees device events and ends only by its timeout or its signal; disposal neither cancels operations nor stops devices. The other commanders hold no registration and need no disposal.
 
 ```ts
 import { FocuserCommander } from 'nebulosa/src/devices/commanders/focuser'
@@ -15805,7 +15805,7 @@ const arbiter = new ResourceArbiter()
 const coordinator = new OperationCoordinator(arbiter)
 const lifecycle = new DeviceLifecycle(arbiter, coordinator)
 lifecycle.observe(focuserManager)
-const focuserCommander = new FocuserCommander(focuserManager)
+using focuserCommander = new FocuserCommander(focuserManager)
 
 const client = new ClientSimulator('Client Simulator', new IndiClientHandlerSet([focuserManager]))
 const simulator = new FocuserSimulator('Focuser Simulator', client)

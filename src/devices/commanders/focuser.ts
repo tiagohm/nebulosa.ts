@@ -59,7 +59,7 @@ const UNCANCELABLE = new AbortController().signal
 // Each command opens its own nested scope holding the focuser, so a direct endpoint runs it as a whole
 // operation tree while a composite feature, passing its own context, inherits the focuser it already owns
 // and gets cancellation and cleanup that do not disturb the feature around it.
-export class FocuserCommander implements DeviceHandler<Focuser> {
+export class FocuserCommander implements DeviceHandler<Focuser>, Disposable {
 	// Waiters per device, fed by the manager callbacks. A focuser can be observed by several waits at once,
 	// such as a move and the settle of the stop that is canceling it.
 	readonly #listeners = new Map<Focuser, Set<(update: FocuserUpdate) => void>>()
@@ -67,6 +67,18 @@ export class FocuserCommander implements DeviceHandler<Focuser> {
 	// Registers the commander as a focuser observer so waits settle on device events instead of polling.
 	constructor(readonly focuserManager: FocuserManager) {
 		focuserManager.addHandler(this)
+	}
+
+	// Stops observing the manager. Call it once the operations that use this commander have settled: a wait
+	// still pending, or started later, no longer sees device events and settles only by its timeout or its
+	// signal. Running operations and the devices themselves are left untouched. Idempotent.
+	dispose() {
+		this.focuserManager.removeHandler(this)
+	}
+
+	// Same as dispose, so the commander can be scoped with `using`.
+	[Symbol.dispose]() {
+		this.dispose()
 	}
 
 	// Required by the manager contract; discovery is published by FocuserHandler.

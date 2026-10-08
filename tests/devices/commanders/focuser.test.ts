@@ -221,3 +221,32 @@ test('refuses a second command while another operation owns the focuser', async 
 	await stop(device)
 	await moving
 })
+
+test('stops observing the manager once disposed', () => {
+	const device = getFocuser()
+	const commander = new FocuserCommander(focuserManager)
+	const updated = spyOn(commander, 'updated')
+
+	focuserManager.updated(device, 'name')
+	expect(updated).toHaveBeenCalledTimes(1)
+
+	commander.dispose()
+	commander.dispose()
+	focuserManager.updated(device, 'name')
+	expect(updated).toHaveBeenCalledTimes(1)
+
+	const removeHandler = spyOn(focuserManager, 'removeHandler')
+
+	try {
+		let scoped: FocuserCommander | undefined
+
+		{
+			using commander = new FocuserCommander(focuserManager)
+			scoped = commander
+		}
+
+		expect(removeHandler).toHaveBeenCalledWith(scoped)
+	} finally {
+		removeHandler.mockRestore()
+	}
+})

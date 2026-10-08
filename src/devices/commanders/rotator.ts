@@ -56,13 +56,25 @@ const UNCANCELABLE = new AbortController().signal
 // Owns every mutation of a rotator and turns the ones with a physical effect into awaitable operations.
 // Each command opens its own nested scope holding the rotator, so a direct endpoint runs it as a whole
 // operation tree while a composite feature, passing its own context, inherits the rotator it already owns.
-export class RotatorCommander implements DeviceHandler<Rotator> {
+export class RotatorCommander implements DeviceHandler<Rotator>, Disposable {
 	// Waiters per device, fed by the manager callbacks.
 	readonly #listeners = new Map<Rotator, Set<(update: RotatorUpdate) => void>>()
 
 	// Registers the commander as a rotator observer so waits settle on device events instead of polling.
 	constructor(readonly rotatorManager: RotatorManager) {
 		rotatorManager.addHandler(this)
+	}
+
+	// Stops observing the manager. Call it once the operations that use this commander have settled: a wait
+	// still pending, or started later, no longer sees device events and settles only by its timeout or its
+	// signal. Running operations and the devices themselves are left untouched. Idempotent.
+	dispose() {
+		this.rotatorManager.removeHandler(this)
+	}
+
+	// Same as dispose, so the commander can be scoped with `using`.
+	[Symbol.dispose]() {
+		this.dispose()
 	}
 
 	// Required by the manager contract; discovery is published by RotatorHandler.

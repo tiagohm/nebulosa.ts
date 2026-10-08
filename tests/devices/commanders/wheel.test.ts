@@ -191,3 +191,32 @@ test('refuses a second wheel command while the first one owns the device', async
 	await operationCoordinator.cancelByResource(resourceKey(wheel))
 	await moving
 })
+
+test('stops observing the manager once disposed', () => {
+	const device = getWheel()
+	const commander = new WheelCommander(wheelManager)
+	const updated = spyOn(commander, 'updated')
+
+	wheelManager.updated(device, 'name')
+	expect(updated).toHaveBeenCalledTimes(1)
+
+	commander.dispose()
+	commander.dispose()
+	wheelManager.updated(device, 'name')
+	expect(updated).toHaveBeenCalledTimes(1)
+
+	const removeHandler = spyOn(wheelManager, 'removeHandler')
+
+	try {
+		let scoped: WheelCommander | undefined
+
+		{
+			using commander = new WheelCommander(wheelManager)
+			scoped = commander
+		}
+
+		expect(removeHandler).toHaveBeenCalledWith(scoped)
+	} finally {
+		removeHandler.mockRestore()
+	}
+})

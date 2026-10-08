@@ -46,13 +46,25 @@ const MOTION_PROPERTIES = new Set<string>(['position', 'moving'])
 // operations.
 // Each command opens its own nested scope holding the wheel, so a direct endpoint runs it as a whole
 // operation tree while a composite feature, passing its own context, inherits the wheel it already owns.
-export class WheelCommander implements DeviceHandler<Wheel> {
+export class WheelCommander implements DeviceHandler<Wheel>, Disposable {
 	// Waiters per device, fed by the manager callbacks.
 	readonly #listeners = new Map<Wheel, Set<(update: WheelUpdate) => void>>()
 
 	// Registers the commander as a wheel observer so waits settle on device events instead of polling.
 	constructor(readonly wheelManager: WheelManager) {
 		wheelManager.addHandler(this)
+	}
+
+	// Stops observing the manager. Call it once the operations that use this commander have settled: a wait
+	// still pending, or started later, no longer sees device events and settles only by its timeout or its
+	// signal. Running operations and the devices themselves are left untouched. Idempotent.
+	dispose() {
+		this.wheelManager.removeHandler(this)
+	}
+
+	// Same as dispose, so the commander can be scoped with `using`.
+	[Symbol.dispose]() {
+		this.dispose()
 	}
 
 	// Required by the manager contract; discovery is published by WheelHandler.

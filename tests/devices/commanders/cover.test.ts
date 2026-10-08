@@ -141,3 +141,32 @@ test('rejects parking without the capability and stops directly when disconnecte
 	await waitUntil(() => !cover.connected)
 	expect(await coverCommander.stopMotion(cover)).toMatchObject(failedOperationResult('disconnected'))
 })
+
+test('stops observing the manager once disposed', () => {
+	const device = getCover()
+	const commander = new CoverCommander(coverManager)
+	const updated = spyOn(commander, 'updated')
+
+	coverManager.updated(device, 'name')
+	expect(updated).toHaveBeenCalledTimes(1)
+
+	commander.dispose()
+	commander.dispose()
+	coverManager.updated(device, 'name')
+	expect(updated).toHaveBeenCalledTimes(1)
+
+	const removeHandler = spyOn(coverManager, 'removeHandler')
+
+	try {
+		let scoped: CoverCommander | undefined
+
+		{
+			using commander = new CoverCommander(coverManager)
+			scoped = commander
+		}
+
+		expect(removeHandler).toHaveBeenCalledWith(scoped)
+	} finally {
+		removeHandler.mockRestore()
+	}
+})

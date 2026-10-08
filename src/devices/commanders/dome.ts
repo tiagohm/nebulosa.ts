@@ -79,7 +79,7 @@ const UNCANCELABLE = new AbortController().signal
 
 // Owns every mutation of a dome and turns physical operations into awaitable results. Each direct command
 // opens its own scope holding the dome; a composite feature can pass its context and inherit that hold.
-export class DomeCommander implements DeviceHandler<Dome> {
+export class DomeCommander implements DeviceHandler<Dome>, Disposable {
 	// Waiters per device, fed by the manager callbacks.
 	readonly #listeners = new Map<Dome, Set<(update: DomeUpdate) => void>>()
 	// Open-ended manual motions, keyed the same way the resource arbiter keys the physical device.
@@ -88,6 +88,18 @@ export class DomeCommander implements DeviceHandler<Dome> {
 	// Registers the commander as a dome observer so waits settle on device events instead of polling.
 	constructor(readonly domeManager: DomeManager) {
 		domeManager.addHandler(this)
+	}
+
+	// Stops observing the manager. Call it once the operations that use this commander have settled: a wait
+	// still pending, or started later, no longer sees device events and settles only by its timeout or its
+	// signal. Running operations and the devices themselves are left untouched. Idempotent.
+	dispose() {
+		this.domeManager.removeHandler(this)
+	}
+
+	// Same as dispose, so the commander can be scoped with `using`.
+	[Symbol.dispose]() {
+		this.dispose()
 	}
 
 	// Required by the manager contract; discovery is published by DomeHandler.

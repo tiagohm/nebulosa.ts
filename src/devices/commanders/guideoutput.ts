@@ -60,7 +60,7 @@ const OPPOSITE_DIRECTION: Record<GuideDirection, GuideDirection> = {
 // by the scope's cleanup whenever the pulse is canceled instead of being left running under a released
 // device. A guide output is arbitrated under the key of the device providing it, which is why a camera's
 // guide port and the camera itself, or a mount's and the mount itself, are one resource.
-export class GuideOutputCommander implements DeviceHandler<GuideOutput> {
+export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposable {
 	// Waiters per physical resource, fed by the manager callbacks. The key is used instead of the device
 	// object because a pulse may be commanded through the parent device while the manager reports updates
 	// through its guide output proxy, and both resolve to the same key.
@@ -69,6 +69,18 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput> {
 	// Registers the commander as a guide output observer so waits settle on device events instead of polling.
 	constructor(readonly guideOutputManager: GuideOutputManager) {
 		guideOutputManager.addHandler(this)
+	}
+
+	// Stops observing the manager. Call it once the operations that use this commander have settled: a wait
+	// still pending, or started later, no longer sees device events and settles only by its timeout or its
+	// signal. Running operations and the devices themselves are left untouched. Idempotent.
+	dispose() {
+		this.guideOutputManager.removeHandler(this)
+	}
+
+	// Same as dispose, so the commander can be scoped with `using`.
+	[Symbol.dispose]() {
+		this.dispose()
 	}
 
 	// Required by the manager contract; discovery is published by GuideOutputHandler.
