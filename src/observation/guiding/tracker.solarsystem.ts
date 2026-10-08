@@ -1,4 +1,4 @@
-import { PI } from 'nebulosa/src/core/constants'
+import { PI } from '../../core/constants'
 import type { ImageAnalysisPlane } from '../../imaging/analysis/plane'
 import { DEFAULT_LIMB_TRACKING_OPTIONS, type LimbGeometry, type LimbMeasurement, type LimbTrackingOptions, locateBrightObject, measureLimb } from '../../imaging/analysis/tracking/limb'
 // oxfmt-ignore

@@ -1,23 +1,22 @@
-// The Ephemerides of the Martian satellites
-// (adjustement from 1877 to 2005, Version 1.0)
-// by Valery Lainey can be obtained from Valery Lainey:
-
-import type { PositionAndVelocityMut } from 'nebulosa/src/astronomy/coordinates/astrometry'
 import { DAYSPERJC, DEG2RAD } from '../../../../core/constants'
 import { matMulVec } from '../../../../math/linear-algebra/mat3'
+import type { PositionAndVelocityMut } from '../../../coordinates/astrometry'
 import { type Time, tt } from '../../../time/time'
 import { ellipticToRectangularA } from '../../ephemeris'
-
-// V.Lainey (Lainey@oma.be)
-// ROB- 3, Avenue Circulaire, B-1180 Bruxelles (Belgium)
-// IMCCE - 77, Avenue Denfert-Rochereau 75014 Paris (France)
-
-// Based on https://github.com/Stellarium/stellarium/blob/v25.3/src/core/planetsephems/marssat.c
 
 // MARSSAT theory (Lainey) of Phobos and Deimos: Marscentric position (AU) and velocity (AU/day).
 // Trigonometric series perturb the equinoctial elements, which are converted to rectangular
 // coordinates and rotated through the slowly precessing Laplace-plane node/inclination into the
 // equatorial frame. Time argument is days from JD 2445063.5 (TT).
+
+// The Ephemerides of the Martian satellites
+// (adjustement from 1877 to 2005, Version 1.0)
+// by Valery Lainey can be obtained from Valery Lainey:
+// V.Lainey (Lainey@oma.be)
+// ROB- 3, Avenue Circulaire, B-1180 Bruxelles (Belgium)
+// IMCCE - 77, Avenue Denfert-Rochereau 75014 Paris (France)
+
+// Based on https://github.com/Stellarium/stellarium/blob/v25.3/src/core/planetsephems/marssat.c
 
 // One periodic term as [phase, frequency, amplitude]; phase in radians, frequency in rad/day.
 export type MarsSatTerm = readonly [number, number, number] // phase, frequency, amplitude

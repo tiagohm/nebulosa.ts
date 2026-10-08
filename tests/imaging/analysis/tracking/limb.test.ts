@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { PI } from 'nebulosa/src/core/constants'
+import { PI } from '../../../../src/core/constants'
 import { DEFAULT_LIMB_TRACKING_OPTIONS, type LimbMeasurement, type LimbOutcome, type LimbSearch, type LimbTrackingOptions, locateBrightObject, measureLimb } from '../../../../src/imaging/analysis/tracking/limb'
 import { SurfaceTrackingWorkspace } from '../../../../src/imaging/analysis/tracking/workspace'
 import type { Rect } from '../../../../src/math/numerical/geometry'

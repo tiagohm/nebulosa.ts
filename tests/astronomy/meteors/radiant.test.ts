@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
 import { meteorRadiantDegrees, meteorRadiantHorizontal, meteorRadiantJ2000, meteorRadiantMaximumAltitude, meteorRadiantOfDate, meteorRadiantPath, meteorRadiantPathBetween, meteorRadiantPathSegmentsBetween, meteorRadiantRiseTransitSet, meteorRadiantVector, meteorRadiantVisibility } from '../../../src/astronomy/meteors/radiant'
-import { PIOVERTWO, TAU } from 'nebulosa/src/core/constants'
 import { meteorSolarLongitude, timeAtMeteorSolarLongitude } from '../../../src/astronomy/meteors/solar'
 import type { MeteorComputationContext, MeteorShowerSolution } from '../../../src/astronomy/meteors/types'
 import { timeShift, timeSubtract, timeYMDHMS, Timescale, type Time } from '../../../src/astronomy/time/time'
+import { PIOVERTWO, TAU } from '../../../src/core/constants'
 import { deg, toDeg } from '../../../src/math/units/angle'
 import { ASTROPY_HORIZONTAL, ASTROPY_RADIANT_OF_DATE, BASE_SOLUTION, DAILY_DRIFT_SOLUTION, MISSING_RADIANT_SOLUTION, OBSERVER, REFERENCE_UTC, SITE_EPOCH, SITE_EPOCH_END, SOLAR_DRIFT_SOLUTION, TOLERANCE } from './util'
 

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
-import { vecAngle } from 'nebulosa/src/math/linear-algebra/vec3'
 import { enuVectorToHorizontal } from '../../../src/astronomy/coordinates/frame.local'
 import { matDeterminant, matMul, matMulVec, matRodriguesRotation } from '../../../src/math/linear-algebra/mat3'
+import { vecAngle } from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
 import { applyDirectionAlignment, fitDirectionAlignment, fitMountAlignment, predictMountDirection, predictWorldDirection, type DirectionAlignmentSample } from '../../../src/observation/mount/alignment'
 import { createIdealAltAzGeometry, mountDirectionFromEncoders } from '../../../src/observation/mount/kinematics'

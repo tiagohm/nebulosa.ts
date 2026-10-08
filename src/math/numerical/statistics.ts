@@ -1,4 +1,4 @@
-import { PI, TAU } from 'nebulosa/src/core/constants'
+import { PI, TAU } from '../../core/constants'
 import { quickSelect } from './array'
 import type { Point } from './geometry'
 import type { NumberArray } from './math'

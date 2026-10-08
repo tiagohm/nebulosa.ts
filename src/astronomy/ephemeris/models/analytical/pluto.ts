@@ -1,12 +1,12 @@
-// https://github.com/Stellarium/stellarium/blob/v25.3/src/core/planetsephems/pluto.c
-
-import { vecFill, vecZero, type MutVec3 } from 'nebulosa/src/math/linear-algebra/vec3'
 import { COS_OBL_J2000, DAYSPERJC, DEG2RAD, SIN_OBL_J2000 } from '../../../../core/constants'
+import { type MutVec3, vecZero, vecFill } from '../../../../math/linear-algebra/vec3'
 import { type Time, tt } from '../../../time/time'
 
 // Meeus' short Pluto theory (Astronomical Algorithms, chap. 37): heliocentric ICRF position (AU)
 // from 43 periodic terms in the mean longitudes of Jupiter, Saturn, and Pluto. Accurate to ~0.07"
 // in longitude over 1885-2099; the spherical ecliptic result is rotated to the ICRF equatorial frame.
+
+// https://github.com/Stellarium/stellarium/blob/v25.3/src/core/planetsephems/pluto.c
 
 export type ReferenceFrame = 'icrf' | 'eclipticJ2000'
 

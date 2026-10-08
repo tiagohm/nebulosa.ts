@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
 import { integrateMeteorZhr, isMeteorShowerActive, meteorActivityFraction, meteorActivityIntervalsAboveFraction, meteorActivityMaximumSolarLongitude, meteorActivityMaximumZhr, meteorActivityPhase, meteorActivityProgress, meteorActivityZhr, meteorExponentialZhr, meteorShowerActivityYearApplies, meteorSolarLongitudeForwardDelta } from '../../../src/astronomy/meteors/activity'
-import { PI } from 'nebulosa/src/core/constants'
 import type { MeteorActivityProfile } from '../../../src/astronomy/meteors/types'
 import { timeYMDHMS, Timescale, tt, tdb } from '../../../src/astronomy/time/time'
+import { PI } from '../../../src/core/constants'
 import { deg, toDeg } from '../../../src/math/units/angle'
 import { EXPONENTIAL_PROFILE, MULTI_PEAK_PROFILE, REFERENCE_UTC, SAMPLED_PROFILE, WRAPPED_EXPONENTIAL_PROFILE, WRAPPED_INTERVAL, ZERO_WIDTH_INTERVAL } from './util'
 

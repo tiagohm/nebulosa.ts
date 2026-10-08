@@ -1,4 +1,4 @@
-import { PI, PIOVERTWO, TAU } from 'nebulosa/src/core/constants'
+import { PIOVERTWO, PI, TAU } from '../../../core/constants'
 import { type FFT2DWorkspace, fft2DWorkspace, fftComplex2D } from '../../../math/numerical/fft'
 import { medianAbsoluteDeviationOf, medianBySelectionOf } from '../../../math/numerical/statistics'
 
