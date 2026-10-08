@@ -34,8 +34,8 @@ bun add --trust github:tiagohm/nebulosa.ts#<commit>
 ## Import a module
 
 ```ts
-import { formatHMS, hour } from 'nebulosa/src/math/units/angle'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { formatHMS, hour } from 'nebulosa/src/math/units/angle'
 
 // 2026-06-29 00:00:00 UTC, stored as a two-part Julian Date.
 const instant = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
@@ -204,8 +204,8 @@ Two sky positions are separated by the great-circle angle between them, and the 
 `angularDistance` uses an `atan2` form that keeps tiny separations accurate, so prefer it; `angularDistanceHaversine` gives the same quantity with a less stable formulation. `positionAngleBetween` is the position angle of the second point as seen from the first, wrapped to `[0, 2π)`, and 0 when the points coincide. `separationFrom` is the angle between two Cartesian direction vectors instead of equatorial coordinates. All angles are radians.
 
 ```ts
-import { angularDistance, angularDistanceHaversine, positionAngleBetween } from 'nebulosa/src/astronomy/coordinates/coordinate'
 import { separationFrom } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { angularDistance, angularDistanceHaversine, positionAngleBetween } from 'nebulosa/src/astronomy/coordinates/coordinate'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 
 // Right ascension and declination of point 0 and point 1 (radians).
@@ -904,14 +904,14 @@ Differential correction refines an approximate orbit so that it reproduces a set
 `fitOrbit(observations, epoch, position, velocity, options?)` needs at least 3 observations (6 parameters) and throws an `Error` otherwise or when the model cannot be evaluated. An observation is `{ time, rightAscension, declination, observerPosition, raErr?, decErr? }` with angles in radians in the same inertial frame as the state, and `observerPosition` the observer's position at the observation time in that frame and unit system (AU, heliocentric for a heliocentric state). `raErr` and `decErr` are 1-σ uncertainties in radians (default 1″), and the right-ascension residual is weighted by `cos(dec)`. The initial state is the `position` and `velocity` guess in AU and AU/day at `epoch`. Useful `options` are `mu` (gravitational parameter, default the Sun's), `maxIterations` (default 50), `computeCovariance` (default true), and the convergence tolerances `tolerance`, `parameterTolerance`, and `gradientTolerance`. The result has the fitted `state`, the `orbit` as a `KeplerOrbit` in the input frame, the 6×6 parameter `covariance` (ordered `x, y, z, vx, vy, vz`; absent when not requested or too ill-conditioned), `residuals` (normalized in σ units and angular in radians), `chi2`, `reducedChi2` (NaN when there are no degrees of freedom), `rms` (radians), the accepted `iterations`, and `converged`. The covariance is scaled by the reduced χ², and feeds [Orbit Covariance Propagation](#orbit-covariance-propagation).
 
 ```ts
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
 import { KeplerOrbit } from 'nebulosa/src/astronomy/orbits/asteroid'
 import { fitOrbit, type OrbitFitObservation } from 'nebulosa/src/astronomy/orbits/fit'
-import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
 import { Timescale, time } from 'nebulosa/src/astronomy/time/time'
 import { GM_SUN_PITJEVA_2005 } from 'nebulosa/src/core/constants'
 import { matIdentity } from 'nebulosa/src/math/linear-algebra/mat3'
-import { arcsec, toArcsec } from 'nebulosa/src/math/units/angle'
 import { vecLength, vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { arcsec, toArcsec } from 'nebulosa/src/math/units/angle'
 
 // A "true" orbit (Vesta's heliocentric equatorial state at 2025-04-21 12:00 TDB) used to synthesize observations.
 const position = [-1.70317472297052, -1.333843040283118, -0.3086709149679688] as const
@@ -1108,11 +1108,11 @@ Observing a body from another moves through stages, each a distinct kind of posi
 The remaining functions convert a stage. `equatorialPosition(position)` returns `[ra, dec, distance]`, with right ascension in `[0, 2π)` and declination in radians, distance in AU. `directionPositionInFrame(position, frame)` rotates the direction of an astrometric or apparent stage into a frame at its epoch, and `geometricPositionInFrame(position, frame)` rotates a geometric state, including the rotating-frame term. `geometricSphericalPositionAndVelocity(position, frame?)` gives the spherical coordinates and rates of a geometric state (see [Spherical State Rates](#spherical-state-rates)), or `undefined` at zero distance. The optional `out` arguments receive the result and are returned. No precession, nutation, or refraction is applied here: for an observed place use [Topocentric Observed Place](#topocentric-observed-place).
 
 ```ts
+import { ECLIPTIC_J2000 } from 'nebulosa/src/astronomy/coordinates/frame'
 import { Naif } from 'nebulosa/src/astronomy/ephemeris/kernels/naif'
 import { earth, mars, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
 import { ephemerisPath, naifEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from 'nebulosa/src/astronomy/ephemeris/path'
 import { apparentPosition, directionPositionInFrame, ephemerisAt, equatorialPosition, geometricSphericalPositionAndVelocity, observeEphemeris } from 'nebulosa/src/astronomy/ephemeris/position'
-import { ECLIPTIC_J2000 } from 'nebulosa/src/astronomy/coordinates/frame'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { toDeg, toHour } from 'nebulosa/src/math/units/angle'
 
@@ -1509,8 +1509,8 @@ console.log(eraHd2pa(1.1, 1.2, 0.3)) // 1.9062274280019955
 The frames, the proper motion, the geodetic and the tangent-plane routines follow the same pattern.
 
 ```ts
-import { eraFk425, eraG2icrs, eraGc2Gde, eraGd2Gce, eraIcrs2g, eraLtp, eraNut80, eraObl80, eraPlan94, eraPr00, eraPrec76, eraPvstar, eraSepp, eraSeps, eraStarpm, eraStarpv, eraTpsts, eraTpxes } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
 import { eraEpv00 } from 'nebulosa/src/astronomy/coordinates/erfa/earth'
+import { eraFk425, eraG2icrs, eraGc2Gde, eraGd2Gce, eraIcrs2g, eraLtp, eraNut80, eraObl80, eraPlan94, eraPr00, eraPrec76, eraPvstar, eraSepp, eraSeps, eraStarpm, eraStarpv, eraTpsts, eraTpxes } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
 import { eraMoon98 } from 'nebulosa/src/astronomy/coordinates/erfa/moon'
 
 // Geodetic and geocentric coordinates (radius 6378136.6 m, flattening 1/298.25642): [x, y, z] in meters and [longitude, latitude, height].
@@ -1738,8 +1738,8 @@ An observer on the Earth is a point on a reference ellipsoid: geodetic latitude 
 `geodeticLocation(longitude, latitude, elevation, ellipsoid?)` builds a `GeographicPosition` from geodetic coordinates, and `geocentricLocation(x, y, z, ellipsoid?)` from an Earth-centered Cartesian (ITRS) position in AU. Note the argument order: longitude comes before latitude. The returned object caches derived geometry on itself, so reuse one instance per site. `localSiderealTime(time, location?, mean?, tio?)` is the sidereal time at the site: apparent by default (`mean = true` gives mean), using the observer's longitude from a location or from a plain angle, and `location` defaults to `time.location`. `tio: true` also applies polar motion and the TIO locator, and `'sp'` applies only the TIO locator; the default applies neither. `polarRadius(ellipsoid)` is the ellipsoid's polar semi-axis, and `rhoCosPhi` and `rhoSinPhi` are the geocentric parallax terms `ρ·cos φ′` and `ρ·sin φ′` (in Earth equatorial radii) used for topocentric parallax. UT1, hence sidereal time, uses the loaded Earth orientation data; see [Earth Orientation Parameters](#earth-orientation-parameters).
 
 ```ts
-import { Ellipsoid, geocentricLocation, geodeticLocation, localSiderealTime, polarRadius, rhoCosPhi, rhoSinPhi } from 'nebulosa/src/astronomy/observer/location'
 import { itrs } from 'nebulosa/src/astronomy/coordinates/itrs'
+import { Ellipsoid, geocentricLocation, geodeticLocation, localSiderealTime, polarRadius, rhoCosPhi, rhoSinPhi } from 'nebulosa/src/astronomy/observer/location'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { deg, toDeg, toHour } from 'nebulosa/src/math/units/angle'
 import { meter, toKilometer, toMeter } from 'nebulosa/src/math/units/distance'
@@ -2703,8 +2703,8 @@ console.log(gcrsRotationAt(site, time)) // 3x3 row-major rotation, the matrix ap
 The date is a two-part TDB Julian date, `tdb1 + tdb2`, with any split (`tdb1` is often `2400000.5` or `2451545` and `tdb2` the remainder). Time in the series is Julian years from J2000. Pass an `out` pair `[barycentric, heliocentric]` of `PositionAndVelocityMut` to avoid allocation: it is filled, returned, and aliased by the result.
 
 ```ts
-import { eraEpv00 } from 'nebulosa/src/astronomy/coordinates/erfa/earth'
 import { zeroPositionAndVelocity } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { eraEpv00 } from 'nebulosa/src/astronomy/coordinates/erfa/earth'
 
 // The SOFA test epoch: JD 2400000.5 + 53411.52501161 TDB.
 const [barycentric, heliocentric] = eraEpv00(2400000.5, 53411.52501161)
@@ -2728,8 +2728,8 @@ console.log(eraEpv00(2451545, 0, out) === out) // true
 The optional `out` receives the result and is returned. The returned object is aliased to `out`, and a fresh state is allocated when it is omitted.
 
 ```ts
-import { eraMoon98 } from 'nebulosa/src/astronomy/coordinates/erfa/moon'
 import { zeroPositionAndVelocity } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { eraMoon98 } from 'nebulosa/src/astronomy/coordinates/erfa/moon'
 import { AU_KM, DAYSEC } from 'nebulosa/src/core/constants'
 
 // The SOFA test epoch: JD 2400000.5 + 43999.9 TT.
@@ -3762,8 +3762,8 @@ console.log(apparentZenithAngleFromGeocentric(deg(100), speed, entrySpeed)) // u
 `apparentMeteorRadiantHorizontal(radiant, observer, time, options)` takes a geocentric J2000 radiant and returns where it appears for the observer, with the attraction applied to the geometric altitude; the azimuth is unchanged, since the correction acts along the vertical. It returns `undefined` when the geometric radiant is not above the horizon. `geocentricMeteorRadiantFromHorizontal` is the inverse, from an apparent horizontal position (azimuth north through east, altitude, radians) back to the catalog frame, with `undefined` for a non-positive altitude. Both need `options.geocentricSpeed` and `options.entryAltitude`, and refraction is not part of either. In the example, the 41 km/s radiant at an altitude of 47.32° is seen 0.78° higher at 48.10°.
 
 ```ts
-import { apparentMeteorRadiantHorizontal, geocentricMeteorRadiantFromHorizontal } from 'nebulosa/src/astronomy/meteors/trajectory'
 import { meteorRadiantHorizontal } from 'nebulosa/src/astronomy/meteors/radiant'
+import { apparentMeteorRadiantHorizontal, geocentricMeteorRadiantFromHorizontal } from 'nebulosa/src/astronomy/meteors/trajectory'
 import type { MeteorRadiant } from 'nebulosa/src/astronomy/meteors/types'
 import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
 import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
@@ -4076,8 +4076,8 @@ A target is observable when several conditions hold together: it is high enough,
 
 ```ts
 import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
-import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
 import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
 import { visibilityWindows } from 'nebulosa/src/astronomy/events/visibility'
 import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
 import { type Time, Timescale, timeShift, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
@@ -4768,8 +4768,8 @@ A satellite in low orbit spends part of each revolution in the shadow of the Ear
 Both functions take a `sunAt` provider that returns the geocentric Sun position (AU, ICRS) at a time, for example the VSOP87E Sun minus the Earth. `satelliteShadowState(satrec, sunAt, time)` classifies one instant and `isSatelliteSunlit` is true only for `sunlit`, so penumbra counts as not sunlit. `satelliteEclipses(satrec, sunAt, start, stop, options?)` finds the interval during which the satellite is inside the selected boundary, `options.boundary` being `'umbra'` (the default, total eclipse) or `'penumbra'` (any partial obscuration). The signed margin to the boundary is sampled every `options.step` (default 30 s) and its zero crossings give the entries and exits. When the window starts inside the shadow, the first eclipse has no `entry`, and when it ends inside, the last one has no `exit`; in both cases the `duration` (seconds) is clipped to the window. Providing a cheap `sunAt` matters, because it is called at every sample.
 
 ```ts
-import { isSatelliteSunlit, satelliteEclipses, satelliteShadowState } from 'nebulosa/src/astronomy/events/satellite'
 import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { isSatelliteSunlit, satelliteEclipses, satelliteShadowState } from 'nebulosa/src/astronomy/events/satellite'
 import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
 import { type Time, timeShift, timeToDate, utc } from 'nebulosa/src/astronomy/time/time'
 import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
@@ -4857,8 +4857,8 @@ The beta angle of an orbit is the elevation of the Sun above the orbital plane. 
 `satelliteBetaAngle(satrec, sunAt, time)` takes the orbit normal from the SGP4 angular momentum `r × v`, rotates it from TEME to the geocentric ICRS axes and returns `asin(n̂·ŝ)`, in radians in `[−π/2, π/2]`. The sign is positive when the Sun lies on the `+n` side of the plane, that is, on the side of the orbital angular momentum. `sunAt` returns the geocentric Sun position (AU, ICRS) at a time and is not mutated. The beta angle is that of the osculating orbit at `time`, so it drifts slowly with the node precession, and SGP4 should be used only near the epoch of the element set.
 
 ```ts
-import { satelliteBetaAngle } from 'nebulosa/src/astronomy/events/satellite'
 import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { satelliteBetaAngle } from 'nebulosa/src/astronomy/events/satellite'
 import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
 import { type Time, timeShift } from 'nebulosa/src/astronomy/time/time'
 import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
@@ -4984,10 +4984,10 @@ The prediction is geometric and topocentric: the observer is a site on the Earth
 The track is sampled adaptively in uniform TT seconds. A span is bisected until its midpoint residual against the spherical and the right-ascension/declination interpolation is below `options.maxInterpolationError` (default 0.1 arcsecond), and until it is no wider than `options.maxStep` seconds (default 1). That is a local error estimate, not a bound on the time of a grazing contact. `options.maxSamples` (default 65537) bounds the number of propagated instants, and exhausting it throws a `RangeError` instead of returning an undersampled prediction. A reversed or empty window returns `[]`. The `SatRec` is copied internally, so the caller's record is not modified.
 
 ```ts
-import { predictSatelliteTrails } from 'nebulosa/src/astronomy/events/satellite.trail'
 import { customEphemerisEndpoint, relativeEphemerisPath } from 'nebulosa/src/astronomy/ephemeris/path'
 import { earthObserverEphemerisPath, sgp4EphemerisPath } from 'nebulosa/src/astronomy/ephemeris/path.adapter'
 import { ephemerisAt, equatorialPosition } from 'nebulosa/src/astronomy/ephemeris/position'
+import { predictSatelliteTrails } from 'nebulosa/src/astronomy/events/satellite.trail'
 import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
 import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
 import { type Time, timeShift, timeToDate, tt, utc } from 'nebulosa/src/astronomy/time/time'
@@ -5053,8 +5053,8 @@ console.log(trail.lengthPixels) // 1800
 The four margins are scanned independently every `options.step` (default 30 s), and the boundaries are refined by root finding, so each crossing must be resolved by the step. Intervals that touch the window edges are kept and clipped. The result has only the endpoints and the altitude maximum of each interval, as `SatelliteVisibilityEvent`s: the pass event (`time`, `azimuth`, `altitude`, `range`) plus the `magnitude`, the observer's `sunAltitude` and the `shadow` state. An interval can end on an umbra boundary, so its last event can report `umbra`. Refraction, extinction, flares, terrain and penumbral dimming are not modeled. `sunAt` returns the geocentric Sun position (AU, ICRS).
 
 ```ts
-import { satelliteVisibleIntervals } from 'nebulosa/src/astronomy/events/satellite'
 import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { satelliteVisibleIntervals } from 'nebulosa/src/astronomy/events/satellite'
 import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
 import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
 import { type Time, timeShift, timeToDate, utc } from 'nebulosa/src/astronomy/time/time'
@@ -5085,8 +5085,8 @@ console.log(toDeg(interval.culmination.altitude), interval.culmination.magnitude
 The result carries the geometry it was computed from: `phaseAngle` (radians, zero at full phase and π at a thin crescent), the slant `range` (AU) and `illuminated`. A satellite inside the Earth's umbra reflects no sunlight, so the magnitude is only meaningful while `illuminated` is true. Penumbra counts as illuminated. The model has no atmospheric extinction near the horizon, no refraction, no specular flares and no dependence on the orientation of the satellite, so it is a planning estimate rather than a photometric prediction. `sunAt` returns the geocentric Sun position (AU, ICRS).
 
 ```ts
-import { satelliteMagnitude, satellitePasses } from 'nebulosa/src/astronomy/events/satellite'
 import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { satelliteMagnitude, satellitePasses } from 'nebulosa/src/astronomy/events/satellite'
 import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
 import { parseTLE, recordFromTLE } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
 import { type Time, timeShift } from 'nebulosa/src/astronomy/time/time'
@@ -5898,8 +5898,8 @@ Stars move. A catalog gives a star's position at a reference epoch together with
 `star(ra, dec, pmRA?, pmDEC?, parallax?, rv?, epoch?)` returns a `StarPositionAndVelocity`: the catalog values plus the BCRS `[position (AU), velocity (AU/day)]` pair. `ra` and `dec` are radians at `epoch`, which defaults to J2000.0 (TDB). `pmRA` is the proper motion in right ascension as `dα/dt` in radians per year, which is the catalog value `μα*` divided by `cos(dec)`, not `μα*` itself; `pmDEC` is in radians per year, `parallax` in radians, and `rv` in AU/day, positive when receding (`kilometerPerSecond` converts km/s). A zero parallax places the star at a very large distance and a zero proper motion and radial velocity make it fixed. `spaceMotion(star, time, out?)` returns the star's position and velocity propagated to `time`, writing into `out` when given (it is returned). The position is the space-motion-corrected one; the velocity is the constant catalog velocity. The angular position at that time is `equatorial(position)`. For the place an observer sees, with aberration and refraction, see [Observed Catalog Star](#observed-catalog-star).
 
 ```ts
-import { equatorial } from 'nebulosa/src/astronomy/coordinates/astrometry'
 import { spaceMotion, star } from 'nebulosa/src/astronomy/bodies/star'
+import { equatorial } from 'nebulosa/src/astronomy/coordinates/astrometry'
 import { Timescale, timeJulianYear } from 'nebulosa/src/astronomy/time/time'
 import { arcsec, deg, hour, normalizeAngle, toDeg, toHour } from 'nebulosa/src/math/units/angle'
 import { kilometerPerSecond } from 'nebulosa/src/math/units/velocity'
@@ -6060,8 +6060,8 @@ Maxima and minima mark events such as greatest elongation, perihelion and apheli
 `searchExtrema(f, start, stop, options?)` samples `f(time)` at a coarse step and, for each triple of consecutive samples whose middle value is strictly lower or strictly higher than both neighbours, refines the extremum with Brent's minimizer (a maximum minimizes the negated function). It returns chronological `TimeExtremum`s of `{ time, value, kind }`, where `kind` is `'minimum'` or `'maximum'` and `value` is the refined function value, not its negation. `options.step` (days, default 1/24) must be fine enough that the neighbouring samples sit on each side of the extremum, and `options.tolerance` (days, default 1e-6) is the refinement tolerance. An extremum flatter than a step, or sitting on the window's first or last sample, is not reported. A window of zero or negative length returns `[]` and a step too small to advance throws a `RangeError`. `f` must be continuous over the window, with wrapping quantities unwrapped by the caller.
 
 ```ts
-import { searchExtrema } from 'nebulosa/src/astronomy/events/search'
 import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { searchExtrema } from 'nebulosa/src/astronomy/events/search'
 import { type Time, Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { toKilometer } from 'nebulosa/src/math/units/distance'
 
@@ -6088,8 +6088,8 @@ Satellite orbital data comes as a two-line element set (TLE), a text format used
 import { parseTLE, recordFromOMM, recordFromSgp4Elements, recordFromTLE, sgp4, SGP4_WGS84, type OMM } from 'nebulosa/src/astronomy/orbits/propagation/sgp4'
 import { timeToDate } from 'nebulosa/src/astronomy/time/time'
 import { DAYMIN, DEG2RAD, TAU } from 'nebulosa/src/core/constants'
-import { toKilometer } from 'nebulosa/src/math/units/distance'
 import { toDeg } from 'nebulosa/src/math/units/angle'
+import { toKilometer } from 'nebulosa/src/math/units/distance'
 
 // A TLE, as published: two lines and an optional name.
 const tle = parseTLE('1 25544U 98067A   23231.51768399  .00014050  00000+0  25837-3 0  9996', '2 25544  51.6415  14.7889 0003559 325.3396 149.4637 15.49477580411611', 'ISS (ZARYA)')
@@ -6266,8 +6266,8 @@ Twilight is the interval around sunrise and sunset when the Sun is below the hor
 `darknessWindows(sunAt, location, start, end, options?)` returns four lists of `{ start, end }` intervals clipped to the window: `civil`, `nautical`, and `astronomical` (Sun altitude below −6°, −12°, and −18°) and `dark`, which is the astronomical night, further restricted by the Moon when asked. `sunAt` returns the J2000/ICRS geocentric direction of the Sun at a time, `location` is the observer, and `start` and `end` bound the search. The Sun's altitude is geometric and geocentric, as in [Rise, Transit, and Set](#rise-transit-and-set). `options.moonAt` (a Moon direction callback) keeps only the time when the Moon's altitude is at or below `options.maximumMoonAltitude` (radians, default the horizon); `options.moonIlluminationAt` with `options.maximumMoonIllumination` keeps only times when the illuminated fraction, in `[0, 1]`, is at most the limit. A lunar altitude limit without `moonAt`, or an illumination limit without `moonIlluminationAt`, throws a `RangeError` rather than being ignored. `options.step` and `options.tolerance` are the search step and tolerance in days; the step must resolve every crossing. A single night can give two intervals when the window spans an evening and the next morning, and the first and last intervals are clipped at the window edges. It is built on [Time-Constraint Intervals](#time-constraint-intervals).
 
 ```ts
-import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
 import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
 import { darknessWindows } from 'nebulosa/src/astronomy/events/darkness'
 import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
 import { type Time, Timescale, timeShift, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
@@ -7236,8 +7236,8 @@ console.log(buildAberrationField(result.stars, 'hfd', { columns: 3, rows: 3 }).m
 `approximateArcsinhStretchParameters(midtone?, shadow?, highlight?)` searches the `stretchFactor` and `blackPoint` whose mono arcsinh curve is the closest (RMS over 129 samples in 0..1) to the screen transfer function with that midtone, shadow and highlight (see [Screen Transfer Function](#screen-transfer-function)), so an STF that is displayed can be turned into a stretch that preserves color. The black point is searched between 0 and the shadow, and the strength is solved for each candidate so that the STF midpoint lands at 0.5. The result is an approximation of the curve, not an exact match, and the neutral STF (0.5, 0, 1) gives a factor of 1 and a black point of 0.
 
 ```ts
-import { approximateArcsinhStretchParameters, arcsinhStretch, DEFAULT_ARCSINH_STRETCH_OPTIONS } from 'nebulosa/src/imaging/processing/arcsinh'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { approximateArcsinhStretchParameters, arcsinhStretch, DEFAULT_ARCSINH_STRETCH_OPTIONS } from 'nebulosa/src/imaging/processing/arcsinh'
 
 const ramp = (): Image => ({
 	header: { SIMPLE: true, BITPIX: -64, NAXIS: 2, NAXIS1: 5, NAXIS2: 1 },
@@ -7289,9 +7289,9 @@ The fit samples a grid of `gridSize` boxes along the longer axis (2 to 128, 24 b
 `backgroundExclusionMaskFromStars(width, height, stars, options?)` builds a `Uint8Array` mask (1 is excluded) with a disk around each detected star, of radius `max(minRadius, radiusScale * hfd)` pixels (4 and 1.5 by default), to pass as `exclusionMask`. `DEFAULT_BACKGROUND_EXTRACTION_OPTIONS` holds the defaults.
 
 ```ts
+import type { Image } from 'nebulosa/src/imaging/model/types'
 import { applyBackground, automaticBackgroundExtraction, backgroundExclusionMaskFromStars, DEFAULT_BACKGROUND_EXTRACTION_OPTIONS, evaluateBackgroundModel, fitBackgroundSurface } from 'nebulosa/src/imaging/processing/background'
 import type { DetectedStar } from 'nebulosa/src/imaging/stars/detector'
-import type { Image } from 'nebulosa/src/imaging/model/types'
 
 // A 96x64 frame: a sky of 0.10, a linear gradient up to +0.20 along x and two Gaussian stars.
 const width = 96
@@ -7442,8 +7442,8 @@ console.log(estimateBackground(flat)) // { background: 0.25, noise: 0, snr: Infi
 `backgroundNeutralization(image, options?)` removes a color cast from the sky of an interleaved RGB image of normalized 0..1 samples, in place, and returns the same image. For each channel it takes the median of the samples that lie above `lowerLimit` and up to `upperLimit` (the reference range, 0..1; samples exactly at the lower limit, which are clipped blacks, are excluded, with a tiny tolerance of 1e-7 for Float32 and 1e-12 for Float64 buffers), and adds `target - median` to the whole channel, the additive form of the PixInsight tool, so the three channel medians land at the same level. A mono or other non-RGB image is returned unchanged. The shift moves values out of 0..1, and `mode` says what happens next: `'rescaleAsNeeded'` (the default) rescales the whole image affinely from its minimum and maximum to 0..1 only if some value left the range, `'rescale'` always does it, `'truncate'` clamps to 0..1 and the target of the shift is a median of 0 (the background goes to black), and `'targetBackground'` places the common median at `targetBackground` (0.05 by default) and then clamps. The limits are swapped when `lowerLimit` is above `upperLimit`, non-finite options fall back to the defaults, and a `TypeError` is thrown when a channel has no sample in the reference range. The reference range is a brightness range and not a region of the image, so the median is of the whole frame within that range; choose a narrow range around the sky level on an image with large bright areas. A scratch buffer of one 64-bit value per pixel is allocated for the medians.
 
 ```ts
-import { backgroundNeutralization, DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS } from 'nebulosa/src/imaging/processing/neutralization'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { backgroundNeutralization, DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS } from 'nebulosa/src/imaging/processing/neutralization'
 
 // Five pixels over a sky with a magenta cast: the medians are (0.20, 0.10, 0.16), and one pixel is a bright star.
 const pixels = (): Image => ({
@@ -7685,10 +7685,10 @@ console.log(large.median()) // 500 (the same after the reset)
 `matchPredictedStreakTrack(observed, predicted, exposure?)` compares that track with a `PredictedStreakTrack` (a `start` and an `end` as `[rightAscension, declination]` in radians in the frame of the WCS, an optional `id`, and optional `startTime` and `endTime`, both required to be used) and returns a `CelestialTrackComparison`: the mean great-circle `crossTrack` residual of the observed endpoints and midpoint in radians, the `overlap` of the observed span that lies inside the predicted arc (`0..1`), the `orientation` between the two planes (radians, `0..PI/2`), the `temporalOverlap` when the times could be compared, and the `score`, the product of three ramps of the geometry (a full cross-track credit up to a small residual, with none beyond a larger one, and the same for the overlap and the orientation) and of the temporal overlap. The comparison is geometric: it does not propagate an orbit, an ephemeris or a TLE, the prediction is a segment of a great circle and not a curve, and a short or a long arc differs from a real path. With an `exposure` (`PredictedTrackWindow`, the `start` and `end` of the exposure) and a prediction with times of the same timescale, only the part of the prediction that occurs during the exposure is compared, and the overlap of the windows divided by the shorter one is the `temporalOverlap`, so a prediction inside a long exposure keeps its whole arc and an exposure inside a long prediction keeps only the arc flown meanwhile; times of different timescales are ignored, not converted. It returns `undefined` for a degenerate or an antipodal prediction, which has no unique plane.
 
 ```ts
+import { Timescale, time } from 'nebulosa/src/astronomy/time/time'
 import { celestialStreakTrack, matchPredictedStreakTrack } from 'nebulosa/src/imaging/analysis/streak/celestial'
 import type { CelestialTrackComparison } from 'nebulosa/src/imaging/analysis/streak/celestial'
 import type { Streak } from 'nebulosa/src/imaging/analysis/streak/types'
-import { Timescale, time } from 'nebulosa/src/astronomy/time/time'
 
 // The measured streak from (10, 20) to (90, 70) pixels (x right, y down); only its endpoints matter here.
 const streak: Streak = {
@@ -7824,8 +7824,8 @@ There are three detectors. The automatic one flags a pixel that is more than `ho
 On a CFA mosaic (a single channel with `metadata.bayer`) the neighbourhood and the statistics are computed per color phase, at a stride of 2 pixels, so that the alternating colors of a uniform scene are not taken for defects. The method repairs single pixels and thin lines, not clusters, and a window radius larger than the defect cluster is needed to fill a cluster; the repair is a median, so it does not recover the detail that was under the pixel. `DEFAULT_COSMETIC_CORRECTION_OPTIONS` holds the numeric defaults.
 
 ```ts
-import { cosmeticCorrection, DEFAULT_COSMETIC_CORRECTION_OPTIONS } from 'nebulosa/src/imaging/processing/cosmetic'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { cosmeticCorrection, DEFAULT_COSMETIC_CORRECTION_OPTIONS } from 'nebulosa/src/imaging/processing/cosmetic'
 
 // A deterministic noise (sum of four uniforms, standard deviation 0.01) over a sky of 0.2.
 let seed = 777
@@ -7949,8 +7949,8 @@ console.log(criticalFocusZone({ criterion: 'callerProvided', tolerance: 15 })) /
 The curve is evaluated through a lookup table of `2^bits` entries (`bits` is clamped to 8..24 and the table is capped at 16 bits, 16 by default) with linear interpolation between the entries, built with one of four splines from `interpolation`: `'cubicHermite'` (the default, monotone), `'akima'`, `'catmullRom'` and `'naturalCubic'`. The table is clipped to 0..1 and made monotone in the direction of the control points, so a spline overshoot cannot invert the tones of a monotone curve. `DEFAULT_CURVES_TRANSFORMATION_OPTIONS` is the no-op configuration. An unknown interpolation, an unknown channel, weights that do not sum to 1, arrays of different length, non-finite control points or x values that are not increasing throw before the image is changed.
 
 ```ts
-import { curvesTransformation, DEFAULT_CURVES_TRANSFORMATION_OPTIONS } from 'nebulosa/src/imaging/processing/curves'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { curvesTransformation, DEFAULT_CURVES_TRANSFORMATION_OPTIONS } from 'nebulosa/src/imaging/processing/curves'
 
 const ramp = (): Image => ({
 	header: { SIMPLE: true, BITPIX: -64, NAXIS: 2, NAXIS1: 5, NAXIS2: 1 },
@@ -8069,8 +8069,8 @@ console.log(measureSensorDarkCurrent(mosaics, 2, { plane: 'green1', cfaOffset: [
 `debayer(image, pattern?)` reconstructs a three-channel RGB image from a single-channel CFA mosaic (the raw output of a one-shot color sensor), and `bayer(image, pattern)` does the opposite, sampling one color per pixel from an RGB image. Both allocate fresh buffers, keep the sample type (Float32 or Float64) and do not change their input. The patterns are the eight `CfaPattern` values (`'RGGB'`, `'BGGR'`, `'GBRG'`, `'GRBG'`, `'GRGB'`, `'GBGR'`, `'RGBG'` and `'BGRG'`), read as the colors of the 2x2 block at the origin of the buffer, row by row; the origin already includes any region-of-interest phase shift. `debayer` takes the pattern from `image.metadata.bayer` when it is omitted, returns `undefined` for an image that is not mono, has no pattern or is smaller than 2x2, and fills each missing color of a pixel with the average of the nearest samples of that color in its 3x3 neighbourhood (bilinear interpolation), using the available neighbours at the borders. The pixel that already has a sample of a color keeps it. This is a plain bilinear interpolation: no edge-directed or frequency-domain algorithm is applied, so sharp color edges show zippering. The result has `bayer: undefined` and a header without `BAYERPAT`; `bayer` returns `undefined` for an image that is not RGB and sets the pattern in the metadata.
 
 ```ts
-import { bayer, debayer } from 'nebulosa/src/imaging/processing/debayer'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { bayer, debayer } from 'nebulosa/src/imaging/processing/debayer'
 
 // A 4x4 uniform orange frame (R 0.8, G 0.4, B 0.2) sampled with RGGB.
 const rgb: Image = {
@@ -8258,9 +8258,9 @@ console.log(measureLimb(sky, 'mono', area, workspace), locateBrightObject(sky, '
 `adf(image, options?)` estimates the parameters of an automatic screen stretch from the statistics of the image, following the Adaptive Display Function of the XISF specification, and returns the readonly tuple `[midtone, shadow, highlight]`, each in `0..1`, which are the arguments that `stf(image, midtone, shadow, highlight)` takes (see [Screen Transfer Function](#screen-transfer-function) for applying them); `adf` itself never changes the image. It takes the median and the normalized median absolute deviation of the selected channel (see [Image Statistics](#image-statistics), whose `HistogramOptions` `channel`, `area`, `transform` and `bits` it accepts), so they are histogram estimates at `bits` (16 by default). The two other options are `meanBackground` (0.25), the brightness the median should have after the stretch, and `clippingPoint` (-2.8), in units of the deviation from the median, where the shadows are clipped: `shadow = median + clippingPoint * mad`, clamped to `0..1`, and `highlight` stays at 1. For an image whose median is above 0.5 (inverted, or a bright frame) the roles are mirrored: the highlight is `median - clippingPoint * mad`, the shadow is 0 and the midtone balances the distance from the median to the highlight. The midtone is the midtones transfer function parameter that maps the shifted median `median - shadow` to `meanBackground`. A flat image (a deviation of about half a histogram bin or less) is not clipped, so the shadow is 0 and the highlight 1, and a median at the shadow gives a midtone of 0. A color image is analysed through its grayscale reduction unless a `channel` is given, so one triple serves the three channels (a linked stretch); an unlinked one is made by calling `adf` once per channel. The result depends on the median and the deviation being representative of the sky: a frame mostly covered by a nebula or by a gradient will be stretched for that, not for the sky.
 
 ```ts
+import type { Image } from 'nebulosa/src/imaging/model/types'
 import { adf, DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS } from 'nebulosa/src/imaging/processing/computation'
 import { stf } from 'nebulosa/src/imaging/processing/stf'
-import type { Image } from 'nebulosa/src/imaging/model/types'
 
 let seed = 11
 const noise = () => {
@@ -8315,9 +8315,9 @@ Drizzle reconstructs a frame onto a finer output grid by depositing each input p
 `prepareDrizzleFootprint(transform, scaleX, scaleY, pixfrac, width, height)` composes the affine transform from the input to the reference (in the sense of `AffineTransform`, `x' = m00 x + m01 y + tx`) with the output scale and returns the `DrizzleFootprint` of a drop of side `pixfrac` input pixels (in `(0, 1]`: 1 covers the whole pixel, a smaller value shrinks the drop and sharpens the result at the cost of needing more dithered frames to fill the grid), or `undefined` when the drop collapses (a singular transform, or a drop much smaller than the coordinates that it is added to, where it would be a point). `drizzleDropArea(footprint, dx, dy, polygon, clipped)` is the area (in output pixels) of the intersection of the drop, centered at `(dx, dy)` from an output cell center, with that cell, bounded by `0..1`, where `polygon` and `clipped` are Float64Array scratch buffers of 16 values that it overwrites; `drizzleOverlap(transform, width, height, referenceWidth, referenceHeight, polygon, clipped)` is the fraction `0..1` of the reference area that the whole transformed frame covers, which a stacker uses to reject a frame that barely overlaps. `depositDrizzle(state, image, footprint, scales, offsets, weight, generation, rejectionMask?)` adds a frame to the accumulator: a sample `v` is deposited as `v * scale + offset` per channel (the photometric normalization, with `scales` and `offsets` of one entry per channel), each drop adds `weight * area / footprint.area` to the cells that it covers, `generation` (1 for the first frame, at most 2^32 - 1, a `RangeError` otherwise) stamps the coverage so that each cell is counted once per frame, and a nonzero byte of the source-grid `rejectionMask` excludes that sample entirely. `drizzleNormalization(state, reference, target, inverse, mode, colorMode, referenceMask?, targetMask?)` fits the scales and offsets (`NormalizedParameters`) of a target against the reference from a bounded grid of the original, not interpolated, samples (so that the noise reduction of interpolation is not mistaken for a gain): `inverse` maps the reference to the target, `mode` is `'none'` (scale 1, offset 0) or a global estimator of [Global Image Normalization](#global-image-normalization), and, when a mask is given, the result is `undefined` if a plane keeps less than 32 usable pairs (or fewer than all the finite pairs that exist, when the field is smaller); without masks and with no overlapping pair the identity is returned.
 
 ```ts
-import { createDrizzleAccumulator, depositDrizzle, drizzleDropArea, drizzleMemoryBytes, drizzleNormalization, drizzleOverlap, prepareDrizzleFootprint } from 'nebulosa/src/imaging/processing/drizzle'
 import type { AffineTransform } from 'nebulosa/src/astrometry/matching/star.matching'
 import type { CfaPattern, Image } from 'nebulosa/src/imaging/model/types'
+import { createDrizzleAccumulator, depositDrizzle, drizzleDropArea, drizzleMemoryBytes, drizzleNormalization, drizzleOverlap, prepareDrizzleFootprint } from 'nebulosa/src/imaging/processing/drizzle'
 
 const identity: AffineTransform = { m00: 1, m01: 0, tx: 0, m10: 0, m11: 1, ty: 0 }
 
@@ -8468,8 +8468,8 @@ console.log(eyepieceView(1000, 200, 5, 52)) // { magnification: 200, trueFieldOf
 `FFTWorkspace(width, height)` holds the reusable buffers of the transform for an image up to that size: `width` and `height` are rounded up to powers of two (read them back from the instance) and the same workspace serves any image that fits, with a cached radial mask for the last filter type and cutoff (`mask(filterType, cutoff)`). Create one and reuse it for a batch of frames; a workspace smaller than the image makes `fft` throw an `Error`. The transform allocates nothing per call besides what the workspace owns, and its cost grows as N log N with the padded pixel count.
 
 ```ts
-import { fft, FFTWorkspace } from 'nebulosa/src/imaging/processing/fft'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { fft, FFTWorkspace } from 'nebulosa/src/imaging/processing/fft'
 
 // A 30x20 gray frame with a smooth horizontal gradient plus a pseudo-random pattern (fixed seed, so the numbers repeat).
 const width = 30
@@ -8965,8 +8965,8 @@ console.log(NORMALIZATION_SAMPLE_LIMIT, MIN_GLOBAL_NORMALIZATION_SAMPLES) // 819
 `grayscale(image, channel?)` converts an interleaved RGB image into a fresh single-channel image (the input is not modified), or returns a mono input unchanged (the same object). `channel` selects a color channel (`'RED'`, `'GREEN'` or `'BLUE'`), which is extracted without weighting, or a luminance: the named weights `'BT709'` (the default, 0.2125, 0.7154, 0.0721), `'Y'` (NTSC, 0.299, 0.587, 0.114), `'RMY'` (0.5, 0.419, 0.081) and `'GRAY'` (BT.709), or explicit `{ red, green, blue }` weights, whose sum must be 1 within 1e-6 (a `RangeError` otherwise). The raw buffer of the result has the precision of the input, and the header loses the third axis (`NAXIS3` and the keywords tied to it, such as `CTYPE3` and `CRPIX3`), `WCSAXES` becomes 2, `NAXIS` becomes 2 and `BAYERPAT` is removed. The weights are the constants of [Scientific Image Model](#scientific-image-model).
 
 ```ts
-import { grayscale } from 'nebulosa/src/imaging/processing/geometry'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { grayscale } from 'nebulosa/src/imaging/processing/geometry'
 
 // A 2x1 RGB image: a pure red pixel and a (0, 0.5, 1) one.
 const rgb: Image = {
@@ -9053,8 +9053,8 @@ The arithmetic functions combine two images or an image and a scalar sample by s
 `plus`, `subtract`, `multiply` and `divide` take two images, and `plusScalar`, `subtractScalar`, `multiplyScalar` and `divideScalar` an image and a number. Cloning and copying are in [Image Cloning and Copying](#image-cloning-and-copying).
 
 ```ts
-import { checkDimensions, divide, divideScalar, multiply, multiplyScalar, plus, plusScalar, subtract, subtractScalar } from 'nebulosa/src/imaging/processing/arithmetic'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { checkDimensions, divide, divideScalar, multiply, multiplyScalar, plus, plusScalar, subtract, subtractScalar } from 'nebulosa/src/imaging/processing/arithmetic'
 
 // A 2x1 gray frame, with the header and the metadata that a reader would give.
 const frame = (values: number[], bayer?: Image['metadata']['bayer']): Image => ({
@@ -9084,8 +9084,8 @@ console.log(plus(a, b) === a, a.raw) // true Float32Array(2) [ 5, 2 ]
 Everything is validated before the first pixel is written: each master has the geometry and channels of the light, a CFA pattern equal to it (a flat must have the pattern, the others may have none), and the same `XBINNING`, `YBINNING`, `XORGSUBF`, `YORGSUBF`, `XBAYROFF`, `YBAYROFF`, `GAIN` and `OFFSET` header values when both frames have them. Each failure is an `Error` that names the master, as is a dark-flat without a flat, an unsupported scaling and a `minimumFlat` that is negative or not finite. With no dark, flat or bias the light is returned unchanged. The master frames are never modified, and the scaling assumes a dark current linear in time and the same temperature, which the function cannot check.
 
 ```ts
-import { calibrate } from 'nebulosa/src/imaging/processing/calibration'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { calibrate } from 'nebulosa/src/imaging/processing/calibration'
 
 const make = (width: number, height: number, channels: number, values: number[], header: Image['header'] = {}, bayer?: 'RGGB'): Image => ({
 	header,
@@ -9127,8 +9127,8 @@ console.log(mosaic.raw) // [0.5, 0.5, 0.5, 0.5]
 `clone(image)` returns an independent `Image`: the header, the metadata and the raw buffer are copied (the buffer with the same precision, through `slice`), so changing the result never touches the source, and any other property of the image, such as the sample scale, is carried over. `copyInto(from, to)` copies the samples of an image into another one of the same width, height, channels and CFA pattern, leaves the header and the metadata of the destination alone, and returns the destination; copying a buffer over itself, or over a shifted view of the same memory, keeps the values, because the copy is done by `TypedArray.set`. The destination must already have the dense geometry of the source ([Image Arithmetic](#image-arithmetic) describes the check, which is `checkDimensions`), or the call throws.
 
 ```ts
-import { clone, copyInto } from 'nebulosa/src/imaging/processing/arithmetic'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { clone, copyInto } from 'nebulosa/src/imaging/processing/arithmetic'
 
 const frame = (values: number[]): Image => ({
 	header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: values.length, NAXIS2: 1 },
@@ -9156,6 +9156,7 @@ The named filters apply a fixed kernel with `ConvolutionOptions`: `edges` (the 3
 `separableSmoothing(source, output, intermediate, metadata, kernel, options)` is the cheaper path for a dilated ("à trous") smoothing, used by the multiscale transforms: it applies a one-dimensional `SeparableSmoothingKernel` (odd length of at least 3, built by `separableSmoothingKernel(weights, divisor?)`) along rows and then columns, with taps `step` pixels apart (default 1) and the same border rule (`dynamicDivisorForEdges`). The three buffers are separate typed arrays of the same precision and of the length of the image (`metadata.stride * metadata.height`), the result is `output`, and the work is linear in the size of the image whatever the step. `shift(buffer)` is the helper that rotates the row buffer of `convolution` by one slot.
 
 ```ts
+import type { Image } from 'nebulosa/src/imaging/model/types'
 import {
 	blur,
 	blur3x3,
@@ -9180,7 +9181,6 @@ import {
 	shift,
 	sharpen,
 } from 'nebulosa/src/imaging/processing/convolution'
-import type { Image } from 'nebulosa/src/imaging/model/types'
 
 // A 5x5 gray image with a single bright pixel in the center (an impulse), and a printer for its rows.
 const frame = (values: number[]): Image => ({
@@ -9244,8 +9244,8 @@ console.log(rows) // [[2], [3], [1]]
 `invert(image)` replaces every sample `v` of a normalized image with `1 - v`, in place, and returns the same image. It is the negative of an image whose full scale is 1 (the usual input of the processing functions); a sample outside 0..1 maps outside it as well, and the function does not clip. The image must be dense mono or interleaved RGB (1 or 3 channels), with the stride and the buffer length that agree with the geometry, or it throws an `Error`. Applying it twice gives back the original samples up to the rounding of the sample type.
 
 ```ts
-import { invert } from 'nebulosa/src/imaging/processing/geometry'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { invert } from 'nebulosa/src/imaging/processing/geometry'
 
 const image: Image = {
 	header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: 3, NAXIS2: 2 },
@@ -9262,9 +9262,9 @@ console.log(invert(image).raw) // Float64Array(6) [ 0, 0.09999999999999998, 0.19
 `horizontalFlip(image)` mirrors an image across its vertical axis (the columns are reversed, left becomes right) and `verticalFlip(image)` across its horizontal axis (the rows are reversed, the first row becomes the last), both in place, for a dense mono or interleaved RGB image, returning the same image. A flip also keeps the metadata that describes the pixels consistent with them: the FITS WCS keywords of the header (`CRPIX` and the linear transformation terms) are reflected, so the sky coordinates of each star are unchanged after the flip, and the CFA pattern of a raw mosaic is shifted when the reflection moves its origin to an odd pixel (an even width makes the new origin an odd pixel, so `RGGB` becomes `GRBG` after a horizontal flip, and an even height does the same, in rows, for a vertical flip). The header `BAYERPAT` is updated with the metadata. Two flips along the same axis restore the image.
 
 ```ts
-import { horizontalFlip, verticalFlip } from 'nebulosa/src/imaging/processing/geometry'
-import { clone } from 'nebulosa/src/imaging/processing/arithmetic'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { clone } from 'nebulosa/src/imaging/processing/arithmetic'
+import { horizontalFlip, verticalFlip } from 'nebulosa/src/imaging/processing/geometry'
 
 // A 4x2 raw mosaic with a simple WCS: the reference pixel is the first one (FITS counts from 1) and the axes are mirrored in RA.
 const mosaic: Image = {
@@ -9326,9 +9326,9 @@ console.log(mosaicPanelCount(0.5, 1.35, 0.2), mosaicPanelCount(6, 1.35, 1)) // 1
 The reference is the first accepted frame (`batchReference.mode` `'first-accepted'`), the one with the best quality score (`'best-quality'`) or the frame at `batchReference.index` (`'index'`); the other frames are registered to it. Before the combination each frame is normalized to the reference with `normalizationMode`: `'none'`, a global estimator (`'scale'`, `'background-scale'`, the default, or `'percentile'`; see [Global Image Normalization](#global-image-normalization)) or `'local'` (see [Local Image Normalization](#local-image-normalization), with its `localNormalization` options), with `colorHandlingMode` (`'per-channel'`, or a shared `'luminance'` fit). The weight of a frame for `'weighted-average'` comes from `weightingMode`: `'none'` (1, or the `weight` of the frame), `'snr'`, `'inverse-hfd'`, `'stars'` or `'quality'`, all from the quality metrics of the frame, with the supplied `weight` multiplying it. The `combinationMethod` is `'sum'`, `'average'` (the default), `'weighted-average'`, which can be accumulated frame by frame and are therefore also what live stacking and drizzle support, and the methods that keep every sample of a pixel to reject outliers: `'median'`, `'sigma-clip'` (the `sigmaClip` options `sigmaLower` and `sigmaUpper` of 3, `maxIterations` 3, and the `centerMethod` `'median'` and `dispersionMethod` `'mad'`, see [Pixel Sigma Clipping and Background Levels](#pixel-sigma-clipping-and-background-levels)), `'min-max-average'` (`minMaxRejection.low` and `.high`, 1 each, samples discarded at each end), `'winsorized-mean'` (`winsorization` `lower` 0.1 and `upper` 0.9 as fractions of the sorted samples, which are clamped to those percentiles instead of removed) and `'percentile-clip-average'` (`percentileClip`, the same fractions, with the samples outside rejected). These need memory for the whole aligned stack (the frames, in the sample precision of `samplePrecision`, `'auto'` for that of the reference). The `sum` is not normalized to 0..1 and a mean of normalized frames can exceed 1. `cropMode` is `'union'` (the whole reference grid, with the pixels that no frame covers marked invalid) or `'intersection'` (the rectangle that every frame covers, which crops the image and shifts the header), and `minimumCoverage` is the minimum number of frames that a pixel needs to be valid. `allowStarlessReference` (true) accepts a reference without stars, which then cannot register any other frame. The frames are registered and warped one after the other and the combination runs once at the end, so a long stack of large frames is a long synchronous task.
 
 ```ts
+import type { Image } from 'nebulosa/src/imaging/model/types'
 import { stackFrames } from 'nebulosa/src/imaging/processing/stacker'
 import type { StackingFrame } from 'nebulosa/src/imaging/processing/stacker'
-import type { Image } from 'nebulosa/src/imaging/model/types'
 import type { DetectedStar } from 'nebulosa/src/imaging/stars/detector'
 
 // A field of 14 Gaussian stars (sigma 1.5 pixels, so an HFD of about 3.5) on a sky of 0.1 with a small deterministic noise.
@@ -9426,8 +9426,8 @@ console.log(drizzled.finalImage?.metadata.width, drizzled.statistics.drizzle, dr
 The statistics of `imaging/processing/computation` read the normalized `[0, 1]` samples of an `Image` through a histogram of `2^bits` bins (16 bits by default, a `RangeError` for a depth outside 1..24), so every value is quantized to a bin and the median, the mean and the dispersions are histogram estimates, not exact order statistics of the floating-point samples (for the sample-exact quantiles see [Descriptive Statistics](#descriptive-statistics)). All the functions share the `HistogramOptions`: the `channel` (`'RED'`, `'GREEN'`, `'BLUE'`, a grayscale weighting or `'GRAY'`, which is the default luminance reduction of a color image), an `area` (an inclusive rectangle of pixels, `left`, `top`, `right`, `bottom`, with the omitted edges and the out-of-range ones clamped to the image), a `transform` applied to each sample before binning (`(value, flatIndex) => value`), the `bits`, which can also be a caller-owned bin buffer (it is cleared and reused), and a `sigmaClip` mask of one byte per pixel whose nonzero entries are left out (see [Pixel Sigma Clipping and Background Levels](#pixel-sigma-clipping-and-background-levels); a mask of another length is a `RangeError`). `histogram(image, options?)` returns the `Histogram` (with `mean`, `median`, `standardDeviation`, `mode`, `count` and `quantile` as in [Histogram Analysis](#histogram-analysis), all normalized to 0..1, except `mode`, as `[value, count]`, and `count`, as `[total samples, samples of the fullest bin]`), `median(image, options?)` its median, and `medianAbsoluteDeviation(image, center, normalized?, options?)` the median of the absolute deviations from `center`, which is multiplied by 1.4826 (the Gaussian consistency factor) when `normalized` is true so that it is comparable to a standard deviation. The display auto-stretch `adf` is built on these (see [Display Stretch Parameter Estimation](#display-stretch-parameter-estimation)), and the clipped estimators of the sky on top of them. A quantity that is interpolated within a bin, like the median, is exact only to the width of a bin (`2^-bits`).
 
 ```ts
-import { histogram, median, medianAbsoluteDeviation } from 'nebulosa/src/imaging/processing/computation'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { histogram, median, medianAbsoluteDeviation } from 'nebulosa/src/imaging/processing/computation'
 
 // A 64x64 RGB sky of 0.2 (red), 0.25 (green) and 0.3 (blue) with a small deterministic noise and 40 bright stars of 0.9.
 let seed = 5
@@ -9476,8 +9476,8 @@ console.log(histogram(image, { channel: 'RED', sigmaClip: mask }).count, histogr
 The `interpolationMode` is `'nearest'`, `'bilinear'` (the default) or `'bicubic'`; the interpolation attenuates the noise by an amount that depends on the subpixel phase, which matters for any later noise statistics (see [Local Image Normalization](#local-image-normalization)). The `rejectionMask` is one byte per source pixel, nonzero invalidates every output whose kernel support contains it, in every channel, without renormalizing the weights (streak or cosmic-ray masks, for example). `outputRaw` and `validityMask` can be given to reuse the buffers between warps (they are used only when their lengths match the reference, and are overwritten) and then the `image` aliases `outputRaw`. `finitePairSupport` (`limit` positive and `luminance` for one BT.709 plane of an RGB image) additionally counts, per plane and up to `limit`, the pixels where both the warped and the reference samples are finite, before the rejection mask, and returns them as `finitePairCounts`; the count stops as soon as every plane reaches the limit. A singular transform is not detected and produces whatever mapping the matrix defines.
 
 ```ts
-import { toAffineMatrix, warpImage } from 'nebulosa/src/imaging/processing/registration'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { toAffineMatrix, warpImage } from 'nebulosa/src/imaging/processing/registration'
 
 const make = (width: number, height: number, value: (x: number, y: number) => number, channels = 1): Image => {
 	const raw = new Float64Array(width * height * channels)
@@ -9543,9 +9543,9 @@ console.log(warpImage(source, reference, half).finitePairCounts) // undefined
 `LiveStacker` builds a stack one frame at a time, as they arrive from the camera, and can return the current result at any moment, with a memory that depends on the frame size and not on the number of frames. It takes the same `StackingOptions` as `stackFrames` (see [Image Stacking](#image-stacking) for the registration, normalization, weighting and the diagnostics) but it only supports the combinations that can be accumulated exactly: the `'sum'`, `'average'` and `'weighted-average'` methods, which keep a sum and a weight per pixel, with the resampling or the drizzle reconstruction (see [Drizzle Integration](#drizzle-integration)). A frame added with another method is rejected with `'combination-method-not-supported-in-live-mode'`, and `isLiveCombinationMethodSupported(method)` tells whether a method qualifies. `add(frame)` registers the `StackingFrame` to the reference, normalizes it, accumulates it and returns its `FrameAcceptanceResult` (accepted or not, with the `reason`, the fitted `transform`, the `overlapFraction`, the `quality` and the `normalization`; the pixels of the frame are not retained). The first frame that is accepted is the reference (a frame with fewer stars than `minAcceptedStars` is refused when `allowStarlessReference` is false); there is no choice among frames, so `batchReference` has no effect and `cropMode` applies when a snapshot is taken. `snapshot()` returns the current `StackResult` (`undefined` before the first accepted frame) built from copies of the accumulators, so the stack can go on after it and a snapshot is not changed by later frames; it costs a pass over the image, which is the price of every preview. `reset()` forgets the frames, the reference and the diagnostics, and `initialize(options?)` does that with new options (the constructor calls it). The stacker is not safe to call from two places at once: `add` is a synchronous, CPU-bound call, so a long session on large frames is better run away from a UI thread, and the order of the frames is the order of the calls.
 
 ```ts
+import type { Image } from 'nebulosa/src/imaging/model/types'
 import { isLiveCombinationMethodSupported, LiveStacker } from 'nebulosa/src/imaging/processing/stacker'
 import type { StackingFrame } from 'nebulosa/src/imaging/processing/stacker'
-import type { Image } from 'nebulosa/src/imaging/model/types'
 import type { DetectedStar } from 'nebulosa/src/imaging/stars/detector'
 
 // A field of 14 Gaussian stars (sigma 1.5 pixels) on a sky of 0.1 with a small deterministic noise.
@@ -9634,8 +9634,8 @@ Local normalization matches a registered frame to a reference when the differenc
 `options` extends the options of the global estimator (`estimator`, `'background-scale'` by default) with `colorMode` (`'per-channel'`, or `'luminance'` with one model for the three channels of an RGB image), a `validityMask` (a byte per pixel, nonzero is usable, which is also left untouched when applying), the cell geometry (`boxSize`, `maxSamplesPerCell`, `minSamplesPerCell`, `minValidFraction`), the gain gate (`dynamicRangeSigma`, in multiples of the paired noise) and significance (`scaleSignificance`), the surfaces (`surfaceModel`, `offsetDegree` 3, `scaleDegree` 1, `smoothing` for the spline), the outlier rejection (`rejectionSigma`, `rejectionIterations`), the evaluation node spacing and the `fallback` policy for a plane that cannot be modeled: `'global'` (the default, the anchor alone), `'identity'` (the plane is left alone) or `'reject'`, under which `localNormalization` applies nothing and returns `applied: false` so that the caller can drop the frame. `DEFAULT_LOCAL_NORMALIZATION_OPTIONS` has every default and `resolveLocalNormalizationOptions(options)` merges and clamps them (a non-finite `gridSize` is a `TypeError`, a `relativeScaleRange` that is not `0 < min <= 1 <= max` is a `RangeError`). The model records per-plane diagnostics, which `localNormalizationSummary(model)` reduces to a compact record that is cheap to keep for every frame of a stack, `isLocalNormalizationFallback(model)` says whether any plane fell back and `localNormalizationFailureReason(model)` returns the first reason (`'no-valid-overlap'`, `'invalid-global-solution'`, `'insufficient-valid-cells'`, `'insufficient-spatial-coverage'` or `'surface-fit-failed'`). The lower-level `fitLocalNormalizationRaw` and `applyLocalNormalizationInPlace` take raw buffers and a validity mask, and applying a model to an image of another geometry is an `Error`. The fit needs a smooth residual and clean sky: a nebula that fills the frame, or frames that are not registered, will be modeled as gradient.
 
 ```ts
-import { applyLocalNormalization, DEFAULT_LOCAL_NORMALIZATION_OPTIONS, fitLocalNormalization, isLocalNormalizationFallback, localNormalization, localNormalizationFailureReason, localNormalizationSummary, resolveLocalNormalizationOptions } from 'nebulosa/src/imaging/processing/normalization'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { applyLocalNormalization, DEFAULT_LOCAL_NORMALIZATION_OPTIONS, fitLocalNormalization, isLocalNormalizationFallback, localNormalization, localNormalizationFailureReason, localNormalizationSummary, resolveLocalNormalizationOptions } from 'nebulosa/src/imaging/processing/normalization'
 
 const width = 320
 const height = 320
@@ -9699,9 +9699,9 @@ console.log(colorModel.channelCount, colorModel.diagnostics.length) // 3 1 (a lu
 The `options` are `layers` (3 by default, a non-finite value takes the default and a fraction is truncated), `residualGain` (a gain applied to the smooth residual, 1 by default, 0 removes the large-scale component) and `detailLayers`, an array indexed from the finest layer of partial `MultiscaleLinearTransformLayerOptions`: `threshold`, the denoise limit as a multiple of the robust standard deviation of the layer (the median absolute coefficient times 1.4826, per channel, falling back to the RMS when the median is zero), `amount`, the fraction in 0..1 that is removed from the coefficients at or below that limit (1 by default), and `bias`, so that the coefficients are multiplied by `1 + bias` (a positive bias sharpens the layer, a negative one softens it, -1 removes it). Values that are not finite take the default, a negative threshold is zero and the amount is clamped to 0..1. `DEFAULT_MLT_OPTIONS` and `DEFAULT_MLT_LAYER_OPTIONS` hold the defaults, and a layer is denoised only when both `threshold` and `amount` are positive. The helpers shared with the median transform (`resolveMultiscaleLayers`, `resolveMultiscaleResidualGain`, `resolveMultiscaleLayer`, `multiscaleNeedsDenoise` and `multiscaleDetailScales`) live in `imaging/processing/multiscale`; the last one throws a `RangeError` for inconsistent buffers or workspaces. Memory is three copies of the buffer and, for the denoising, one workspace of `pixelCount` values. The transform is linear in the image only without the denoise threshold, which is a soft per-coefficient decision.
 
 ```ts
+import type { Image } from 'nebulosa/src/imaging/model/types'
 import { DEFAULT_MLT_LAYER_OPTIONS, DEFAULT_MLT_OPTIONS, multiscaleLinearTransform } from 'nebulosa/src/imaging/processing/mlt'
 import { multiscaleDetailScales, multiscaleNeedsDenoise, resolveMultiscaleLayer, resolveMultiscaleLayers, resolveMultiscaleResidualGain } from 'nebulosa/src/imaging/processing/multiscale'
-import type { Image } from 'nebulosa/src/imaging/model/types'
 
 let seed = 99
 const noise = () => {
@@ -9761,8 +9761,8 @@ console.log(multiscaleLinearTransform(make(), { layers: 0 }).raw[star] === refer
 The median is computed with a quantized Huang-style histogram: each channel is quantized with 14 bits between its minimum and maximum, and a two-level (fine and coarse) histogram is updated as the window slides, so the cost per pixel does not depend on the radius beyond the update of one window column. The quantization is the precision limit of each median: it is exact to 1 / 16383 of the range of the channel, so an image with a very large dynamic range (a bright star over a faint background) has a coarser median of the background and a layer split that is correspondingly coarse, although the layers still add up exactly to the image (the sum telescopes). A constant channel is returned as it is. `DEFAULT_MMT_OPTIONS` and `DEFAULT_MMT_LAYER_OPTIONS` are the same defaults as the linear transform (three layers, unit residual gain, no denoise, unit gain), and the denoise limit is `threshold` times the robust standard deviation of the layer, as there.
 
 ```ts
-import { DEFAULT_MMT_LAYER_OPTIONS, DEFAULT_MMT_OPTIONS, multiscaleMedianTransform } from 'nebulosa/src/imaging/processing/mmt'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { DEFAULT_MMT_LAYER_OPTIONS, DEFAULT_MMT_OPTIONS, multiscaleMedianTransform } from 'nebulosa/src/imaging/processing/mmt'
 
 let seed = 99
 const noise = () => {
@@ -9896,8 +9896,8 @@ console.log(
 `sigmaClip(image, options?)` iteratively rejects the pixels outside `[center - sigmaLower dispersion, center + sigmaUpper dispersion]` and returns a mask of one byte per pixel (1 is rejected; a color pixel is rejected as a whole when its grayscale value is), computed from the histogram statistics of [Image Statistics](#image-statistics) (whose `channel`, `area`, `transform` and `bits` options it accepts). The `centerMethod` is `'mean'` (the default) or `'median'`, the `dispersionMethod` `'std'` (the default) or `'mad'` (normalized), `sigmaLower` and `sigmaUpper` default to 3, the iteration stops when nothing is rejected, when the center and the dispersion change by less than `tolerance` (1e-3, relative) or after `maxIterations` (5; a non-finite value is a `RangeError`), and a dispersion of zero stops it too. An optional `mask` seeds the rejection (its length must be the pixel count, a `RangeError` otherwise) and is modified in place and returned, and an `area` limits both the sampling and the rejection to a rectangle, leaving the mask untouched outside it. The mean and standard deviation case is computed directly from the samples, the other cases through histograms. A mean and standard deviation clip is itself pulled by the outliers it is meant to reject, so for a sky with bright stars the median and MAD pair converges to the sky with fewer iterations. `estimateBackground(image, options?)` is the median of the pixels that survive a median and MAD clipping (the options are those of `sigmaClip` without the two methods), the level of the sky in the sample scale of the image; `estimateBackgroundUsingMode(image, options?)` is the empirical mode approximation `2.5 median - 1.5 mean` of the whole histogram, with no clipping, which is biased when many pixels are bright and is only meaningful for a unimodal sky. They are different from the quick grid estimator of [Background Estimate](#background-estimate), which samples at most 4096 pixels and also returns the noise, and from the model of [Automatic Background Extraction](#automatic-background-extraction). Rejected pixels stay in the mask for the next call, so a mask can be reused to measure the same sky in another statistic.
 
 ```ts
-import { estimateBackground, estimateBackgroundUsingMode, median, sigmaClip } from 'nebulosa/src/imaging/processing/computation'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { estimateBackground, estimateBackgroundUsingMode, median, sigmaClip } from 'nebulosa/src/imaging/processing/computation'
 
 // A 64x64 RGB sky of 0.2 (red), 0.25 (green) and 0.3 (blue) with a small deterministic noise and 40 bright stars of 0.9.
 let seed = 5
@@ -9940,8 +9940,8 @@ console.log(estimateBackgroundUsingMode(image, { channel: 'RED' }), estimateBack
 `psf(image)` applies the point-spread-function matched filter of the KStars internal guider: a fixed 9x9 stencil (radius 4 pixels) that responds to a star-sized peak and rejects a flat background. The stencil is the sum of rings around the pixel with the weights of KStars (1 for the center, 0.678 for the four nearest neighbours, down to 0.02 for the outermost ring) minus a constant outer weight that makes the sum of all the weights zero, so a uniform region gives 0 (up to rounding) and the result is not a brightness image: it is positive on a star, around zero on the sky and negative next to bright structure. The image is modified in place and the same object is returned; each channel of an RGB image is filtered on its own, the four-pixel border keeps the original values (the stencil does not fit there), and an image smaller than 9x9 is returned unchanged. The image must be a dense mono or interleaved RGB intensity image: a raw CFA mosaic, a stride or buffer that does not agree with the geometry, or a channel count other than 1 or 3 throws an `Error`, because a mosaic has to be converted to a coherent intensity image first. The work is linear in the number of samples, with a sliding sum for the 81 values and a small row buffer.
 
 ```ts
-import { psf } from 'nebulosa/src/imaging/processing/psf'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { psf } from 'nebulosa/src/imaging/processing/psf'
 
 const size = 21
 const frame = (channels: 1 | 3, value: (x: number, y: number, channel: number) => number): Image => {
@@ -10061,12 +10061,12 @@ The readers turn a FITS, XISF or JPEG source into an `Image` (or a `DigitalImage
 The readers differ in what they receive: `readImageFromFits(fits, source, options)` and `readImageFromXisf(xisf, source, options)` take the already parsed container together with its seekable source, `readImageFromJpeg(buffer, raw, format)` takes the bytes of a JPEG (the optional TurboJPEG pixel `format`, such as `'GRAY'` or `'RGB'`, forces the channels), and `readImageFromSource`, `readImageFromBuffer`, `readImageFromFileHandle` and `readImageFromPath` detect FITS, XISF or JPEG by their content. The writers are `writeImageToFormat(image, 'jpeg', options)`, which returns a JPEG `Buffer` (the samples are scaled from 0..1 to 0..255 and clamped, with the `quality` of 0 to 100 and the `chrominanceSubsampling`, 100 and `'4:4:4'` by default), `writeImageToFits(image, output)` and `writeImageToXisf(image, output, format)`, where the output is a `Buffer` that must be large enough, or any `Sink`, and the XISF `format` has the `byteOrder` (`'little'` by default), the `pixelStorage` (`'Planar'` by default) and the `compression` (`false` by default). `truncatePixel(p, max)` is the helper that maps a normalized sample to an integer from 0 to `max`.
 
 ```ts
+import fs from 'fs/promises'
 import { readImageFromBuffer, readImageFromFileHandle, readImageFromFits, readImageFromJpeg, readImageFromPath, readImageFromSource, readImageFromXisf, truncatePixel, writeImageToFits, writeImageToFormat, writeImageToXisf } from 'nebulosa/src/imaging/model/image'
 import { fileHandleSource } from 'nebulosa/src/io/file'
 import { readFits } from 'nebulosa/src/io/formats/fits/fits'
 import { readXisf } from 'nebulosa/src/io/formats/xisf/xisf'
 import { bufferSink, bufferSource } from 'nebulosa/src/io/io'
-import fs from 'fs/promises'
 
 // By path: the format is detected from the content, and 'auto' gives a 64-bit buffer for a 16-bit file.
 const image = (await readImageFromPath('data/NGC3372-16.3.fit'))!
@@ -10203,8 +10203,8 @@ console.log(isImage(small), small.raw[1 * small.metadata.stride + 1]) // true 1
 `scnr(image, channel?, amount?, method?)` is the Subtractive Chromatic Noise Reduction of PixInsight: it attenuates the excess of one color (green by default, `'RED'` and `'BLUE'` are also accepted) in an interleaved RGB image of normalized 0..1 samples, in place, and returns the same image. `amount` (0.5 by default) is the strength from 0 (nothing changes) to 1. The `method` decides how the other two channels protect the pixel: with `'MAXIMUM_MASK'` (the default) and `'ADDITIVE_MASK'` the selected channel `a` becomes `a (1 - amount)(1 - m) + m a`, where `m` is the larger of the other two channels, or their sum clipped to 1, so bright neighbours keep the value and dark ones let it be reduced. The `'AVERAGE_NEUTRAL'`, `'MAXIMUM_NEUTRAL'` and `'MINIMUM_NEUTRAL'` methods only touch the pixels where the selected channel is above the mean, the maximum or the minimum of the other two, and blend it toward that reference by `amount`. A mono image or an `amount` of 0 returns the image unchanged. The layout is validated (positive integer geometry, 1 or 3 channels, a `pixelCount` and `raw` length that agree, and a CFA mosaic must have one channel), and an `Error` is thrown otherwise. The function does not rebalance the other channels or the luminance, so the pixel gets darker where the cast is removed.
 
 ```ts
-import { scnr } from 'nebulosa/src/imaging/processing/scnr'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { scnr } from 'nebulosa/src/imaging/processing/scnr'
 
 // Three pixels: a green-cast sky, a neutral gray and a saturated green one.
 const pixels = (): Image => ({
@@ -10239,8 +10239,8 @@ console.log(scnr(mono) === mono, mono.raw) // true [ 0.1, 0.2, 0.3 ]
 `options.channel` selects what is transformed: `'RED'`, `'GREEN'` or `'BLUE'` transform only that channel of an RGB image, and any other value (the default `'GRAY'`) transforms every stored sample. The curve is evaluated exactly for each sample, with no lookup table, in a single pass, so it also applies to a Float64 buffer without quantization. The function does not estimate the parameters from the data (for that, see [Display Stretch Parameter Estimation](#display-stretch-parameter-estimation)), and it destroys the linear data, so it is applied on a copy used for display.
 
 ```ts
-import { DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, stf } from 'nebulosa/src/imaging/processing/stf'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, stf } from 'nebulosa/src/imaging/processing/stf'
 
 const ramp = (): Image => ({
 	header: { SIMPLE: true, BITPIX: -64, NAXIS: 2, NAXIS1: 6, NAXIS2: 1 },
@@ -10774,8 +10774,8 @@ console.log(detectBadPixels(color, { channel: 'GREEN' }).hot, detectBadPixels(co
 `measureStarPhotometry(image, x, y, radius)` measures one position, returning `[flux, snr, hfd, fwhm]` with the sky in the annulus from `radius + 1` to `radius + 3` pixels, and zeros when the position or the radius is invalid or the aperture has no positive flux; it does not recenter, so pass the centroid. The module also exports the list that the detector uses internally to keep the candidates sorted by brightness, `StarList` (`add` inserts by height and evicts the dimmest when the `capacity` is exceeded; `addFirst`, `addLast`, `first`, `deleteFirst`, `deleteAfter`, `delete`, `clear`, `array` and the iterator, with `size`), and the two pruning steps that act on it: `mergeVeryCloseStars(list, minLimitSq?)` removes the star that has a neighbor within the distance, in squared pixels (25 by default, so 5 pixels), and `excludeStarsFitWithinRegion(list, searchRegion)` the pairs inside a box, unless one star is at least 5 times brighter than the other.
 
 ```ts
-import { detectStars, excludeStarsFitWithinRegion, measureStarPhotometry, mergeVeryCloseStars, STAR_SIGNAL_RADIUS, StarList } from 'nebulosa/src/imaging/stars/detector'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { detectStars, excludeStarsFitWithinRegion, measureStarPhotometry, mergeVeryCloseStars, STAR_SIGNAL_RADIUS, StarList } from 'nebulosa/src/imaging/stars/detector'
 
 // A 128x96 sky of 0.1 with a small deterministic noise and Gaussian stars (sigma 1.6 pixels, FWHM 3.8) of different heights; one hot pixel.
 let seed = 9
@@ -10870,8 +10870,8 @@ console.log(close.deleteFirst(), close.size, close.delete(close.first()!), close
 `registerImage(reference, target, options?)` takes two `ImageRegistrationInput`s (the `image` and its `stars`), validates the shapes (`'invalid-reference-image'`, `'invalid-target-image'`, `'channel-mismatch'`), registers the stars and warps the target onto the reference grid, adding to the success the `image` (a fresh `Image` on the reference grid), the `validityMask` (one byte per output pixel, 1 where the source covered it with an unmasked interpolation support), `coveredPixels` (output centers inside the source), `validPixels` and, when `finitePairSupport: { limit, luminance? }` asks for it, the `finitePairCounts` of the finite reference and warped pairs, capped at `limit`, which the photometric normalization of the stacker uses. `warpImage(source, reference, inverseTransform, options?)` is the resampling alone, from an inverse transform (reference to source) with the options `interpolationMode` (`'nearest'`, `'bilinear'`, the default, or `'bicubic'`), `outputPrecision` (32, 64 or `'auto'`; the storage of the source is kept when omitted), the reusable `outputRaw` and `validityMask` buffers, and a source-grid `rejectionMask` whose nonzero bytes invalidate the whole interpolation support of every output pixel that touches them (without renormalizing the remaining taps). The output has the geometry of the reference, so the pixels outside the source are 0 with a zero mask. `toAffineMatrix(transform)` converts a similarity (including its parity flip) to the affine matrix that maps the same pixel centers, and returns an affine unchanged.
 
 ```ts
-import { registerImage, registerStars, toAffineMatrix, warpImage } from 'nebulosa/src/imaging/processing/registration'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { registerImage, registerStars, toAffineMatrix, warpImage } from 'nebulosa/src/imaging/processing/registration'
 import type { DetectedStar } from 'nebulosa/src/imaging/stars/detector'
 
 // 24 stars of a deterministic field in a 96x96 frame (quality varies so that the matcher can rank them).
@@ -10966,8 +10966,8 @@ console.log(toAffineMatrix(inverse) === inverse) // true
 `model: 'moffat'` additionally refines the profile with a single-component elliptical Moffat fit (see [Elliptical Moffat Fitting](#elliptical-moffat-fitting)): on success the center, `fwhm`, axes, elongation, eccentricity and `theta` come from the fit and `moffat` carries its diagnostics; when the fit fails (a 'poorFit' flag, quality factor 0.75) the moment profile is kept, with the failure in `moffat`. `measureStarProfiles(image, stars, options?)` measures a list of positions (anything with `x` and `y`, such as `DetectedStar`s) in order, sharing the scratch buffers and the grayscale copy, and sets `sourceIndex` on each result; `detectStarProfiles(image, detectOptions?, profileOptions?)` runs `detectStars` (see [Star Detection](#star-detection)) and measures what it finds. The measurement is deterministic and does not modify the image, and the options that are not finite or not positive fall back to their defaults.
 
 ```ts
-import { detectStarProfiles, measureStarProfile, measureStarProfiles } from 'nebulosa/src/imaging/stars/profile'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { detectStarProfiles, measureStarProfile, measureStarProfiles } from 'nebulosa/src/imaging/stars/profile'
 
 // A 96x80 sky of 0.1 with a small deterministic noise and elliptical Gaussian stars: [x, y, peak, sigmaMajor, sigmaMinor, angle (radians, from +X toward +Y)].
 let seed = 21
@@ -11124,8 +11124,8 @@ import { createStreakMask, STREAK_MASK_LOW_CONFIDENCE } from 'nebulosa/src/imagi
 import { DEFAULT_STREAK_DETECTION_OPTIONS } from 'nebulosa/src/imaging/analysis/streak/types'
 import type { Streak } from 'nebulosa/src/imaging/analysis/streak/types'
 import { createStreakDetectionWorkspace } from 'nebulosa/src/imaging/analysis/streak/workspace'
-import { renderSyntheticStreak } from 'nebulosa/src/imaging/synthetic/streak'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { renderSyntheticStreak } from 'nebulosa/src/imaging/synthetic/streak'
 
 // A 160x120 sky of 0.1 with a small deterministic noise (+-0.005), as a mono or RGB image with 64-bit samples.
 let seed = 5
@@ -11208,14 +11208,14 @@ console.log(detectStreaks(color).length, detectStreaks(color, { plane: 'red' }).
 `classifyStreaks(streaks, context?, options?)` classifies every streak, in order, and each provider sees the whole set as its `peers` (a spike family needs two streaks), while `classifyStreak(streak, context?, options?)` is the single-streak form without peers. A `StreakClassification` has the `class`, its `confidence` (the total weight of the class, or for `'unknown'` the complement of the strongest competing total), the `alternatives` (the other classes with a positive total, highest first, never `'unknown'`) and the `evidence` of the providers in evaluation order (each item has a `kind`, a `score`, a `description` and, for a track or a radiant, the caller's `id`). The built-in providers (`defaultStreakEvidenceProviders`, in this order) are `morphology` (length, width, linearity, coverage and residual: a long, narrow and continuous trail votes secondarily for a satellite, a short PSF-wide one for a moving object, a broad or bent one for an airplane), `intensity` (the profile along the centerline of `context.image`: periodic knots, a taper or a flare, secondary), `trajectory` (the `satelliteTracks` and `movingObjectTracks` that agree with the streak through the `wcs`, primary, see [Celestial Streak Tracks](#celestial-streak-tracks)), `meteorRadiant` (a `meteorRadiants` candidate on the great circle of the trail, primary), `fieldCoherence` (the `tracking` snapshot or the elongated `stars`, primary only when the trail length of the stars matches the streak), `optical` (the streak passes through a bright star of `stars`: secondary, and primary when another peer crosses the same star on a different axis) and `sensor` (a thin row or column that spans the frame, or a locus repeated in `priorFrames`, primary). The `context` fields are the `image`, the `stars` (with the optional `theta` and `trailLength` of a `StreakClassificationStar`), the `exposure` (seconds) and `startTime`, the TAN or TAN-SIP `wcs` header of the image, the `tracking` snapshot (`StreakTrackingQuality`), and `priorFrames`. `options.providers` replaces the built-in list, including with an empty one, and a provider is any object with an `id` and a deterministic `evaluate(streak, context, peers)` that returns `StreakEvidenceContribution`s. The weights and the thresholds are heuristic and should be validated on the images of the setup.
 
 ```ts
-import { classifyStreak, classifyStreaks } from 'nebulosa/src/imaging/analysis/streak/classifier'
+import { Timescale, time } from 'nebulosa/src/astronomy/time/time'
 import { DEFAULT_STREAK_CLASSIFIER_OPTIONS } from 'nebulosa/src/imaging/analysis/streak/classification.types'
 import type { StreakClassification, StreakClassificationContext } from 'nebulosa/src/imaging/analysis/streak/classification.types'
+import { classifyStreak, classifyStreaks } from 'nebulosa/src/imaging/analysis/streak/classifier'
 import { defaultStreakEvidenceProviders } from 'nebulosa/src/imaging/analysis/streak/evidence'
 import type { Streak } from 'nebulosa/src/imaging/analysis/streak/types'
-import { renderSyntheticStreak } from 'nebulosa/src/imaging/synthetic/streak'
-import { Timescale, time } from 'nebulosa/src/astronomy/time/time'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { renderSyntheticStreak } from 'nebulosa/src/imaging/synthetic/streak'
 
 // A streak as the detector would report it: the line from (x0, y0) to (x1, y1) in pixels (x right, y down), with the given overrides.
 const make = (x0: number, y0: number, x1: number, y1: number, overrides: Partial<Streak> = {}): Streak => {
@@ -11304,13 +11304,13 @@ console.log(show(classifyStreak(trail, {}, { providers: [...defaultStreakEvidenc
 Streak-aware stacking keeps a satellite or meteor trail out of the integration instead of relying on the pixel rejection of the combination method alone (see [Image Stacking](#image-stacking), where a median or a sigma clip needs enough frames to outvote a trail). It is opt-in: `streaks: { enabled: true, ... }` in the `StackingOptions` of `stackFrames` and `LiveStacker` (see [Live Stacking](#live-stacking)), and no detector or classifier runs while it is disabled, even when a frame carries a mask. For every frame the stacker obtains the source-grid mask in this order: the authoritative `streakMask` of the `StackingFrame` (a `StreakMask` of [Straight Streak Detection](#straight-streak-detection), which must have the size of the image, or a `RangeError`), else the `streaks` already detected for that frame, else the result of `detectStreaks` with `streaks.detection` (and the reusable `workspace`); the detections are rasterized by `createStreakMask` with the `streaks.mask` policy (`dilation` and `widthScale`, in pixels, and `includeLowConfidence`) and when `classes` or `minClassificationConfidence` are set, only the streaks of those classes (see [Streak Classification](#streak-classification), with `streakClassifications` or the `streakClassificationContext` of the frame to avoid repeating the analysis, and `streaks.classification`) with at least that classifier confidence are masked (an empty `classes` list masks nothing). The masked pixels are excluded from the combination, from the interpolation support of the resampling (every output pixel whose kernel touches one is invalid), from the drizzle drops and from the pairs of the photometric normalization, which needs at least 32 pairs per plane (or all the finite pairs of a smaller overlap) or the frame fails with `'normalization-failed'`; the remaining samples are not renormalized. `maxMaskedFraction` (`0..1`) rejects a whole frame as `'streak-contamination-too-high'` when its masked fraction is larger (and a frame is never rejected otherwise), the reference is chosen among the frames that were not rejected, with a score that drops with the masked fraction, and each `FrameAcceptanceResult` carries `streaks`, a compact `FrameStreakDiagnostics` (`detectedCount`, `maskedPixels`, `maskedFraction` of the source image and, when the streaks were classified, the `classes` counts). The masking is in the source frame, before the registration, so it does not depend on the crop mode or on the transform. A frame that supplies neither a mask nor its streaks is analyzed by the detector, which can also report chains of bright stars (use its thresholds), and a trail that the detector misses, or that is fainter than the noise, is not removed.
 
 ```ts
-import { stackFrames } from 'nebulosa/src/imaging/processing/stacker'
-import type { StackingFrame } from 'nebulosa/src/imaging/processing/stacker'
 import { createStreakMask } from 'nebulosa/src/imaging/analysis/streak/mask'
-import { renderSyntheticStreak } from 'nebulosa/src/imaging/synthetic/streak'
 import type { Streak } from 'nebulosa/src/imaging/analysis/streak/types'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { stackFrames } from 'nebulosa/src/imaging/processing/stacker'
+import type { StackingFrame } from 'nebulosa/src/imaging/processing/stacker'
 import type { DetectedStar } from 'nebulosa/src/imaging/stars/detector'
+import { renderSyntheticStreak } from 'nebulosa/src/imaging/synthetic/streak'
 
 // A field of 14 Gaussian stars (sigma 1.5 pixels) on a sky of 0.1 with a small deterministic noise, as in Image Stacking.
 let seed = 3
@@ -11396,9 +11396,9 @@ console.log(off.diagnostics[2].streaks) // undefined
 `imageQualityScore(input, options?)` is the geometric mean of up to six factors, each on `0..1`: the star count (saturating at `starCount`, 100 by default), the sharpness (the median HFD, or the FWHM when the HFD is not finite, falling from 1 at `targetPixels`, 2 by default, to 0 at `maximumPixels`, 8), the eccentricity (1 for a round star and 0 at `maximumEccentricity`, 0.8), the SNR (saturating at `signalToNoise`, 50), the background (0 at `maximumBackground`, 0.5) and the noise (0 at `maximumNoise`, 0.05); the defaults are in `DEFAULT_IMAGE_QUALITY`, a factor whose measurement is absent is left out of the mean, no stars score 0, and `scale: 100` returns a percentage. A single bad factor drags the geometric mean down hard, and the thresholds are tuned for normalized samples and for the pixel scale of the camera, so adjust them to the setup. `selectSubframes(frames, options?)` measures each frame and returns `{ accepted, results }`, where `accepted` holds the passing inputs in their original order and `results` has one entry for every input with its `metrics`, `accepted` and the `reasons` (every failed threshold, in a fixed order). The thresholds of `SubframeSelectionOptions` are `minStars`, `minMedianSNR`, `maxMedianHFD`, `maxMedianFWHM`, `maxMedianEccentricity`, `maxMedianElongation`, `maxBackground`, `maxNoise` and `minNormalizedScore`, and a maximum on a metric that the stars do not provide is rejected as `'median-hfd-unavailable'`, `'median-fwhm-unavailable'`, `'median-eccentricity-unavailable'` or `'median-elongation-unavailable'` instead of being skipped.
 
 ```ts
+import type { Image } from 'nebulosa/src/imaging/model/types'
 import { DEFAULT_IMAGE_QUALITY, imageQualityScore, measureSubframeQuality, selectSubframes } from 'nebulosa/src/imaging/processing/subframe.selector'
 import type { SubframeInput } from 'nebulosa/src/imaging/processing/subframe.selector'
-import type { Image } from 'nebulosa/src/imaging/model/types'
 import type { DetectedStar } from 'nebulosa/src/imaging/stars/detector'
 
 // A 64x64 sky of a given level with a small deterministic noise, as an Image.
@@ -12046,8 +12046,8 @@ console.log(
 The function writes into `image.raw` (the trail is added to the samples that are there, so a second call accumulates and the noise or the sky must be put first), and applies the same signal to every channel of an RGB image, so the trail is white, and to a mono image or a CFA mosaic, whose layout is that of a single channel (the color of a Bayer pixel is not modeled). It adds nothing for a zero-length segment or a non-positive signal, a negative intensity does not subtract, and it does not add noise or the point-spread function of a real trail (the profile is exactly Gaussian, with no wings, no trailing along the track and no atmospheric scintillation). An image whose layout is not a mono or an RGB raster (a `stride` different from `width * channels`, another number of channels, or an `image.raw` shorter than the image) throws a `RangeError`; the typed array keeps its own precision, so a `Float32Array` stores the rounded values.
 
 ```ts
-import { renderSyntheticStreak } from 'nebulosa/src/imaging/synthetic/streak'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { renderSyntheticStreak } from 'nebulosa/src/imaging/synthetic/streak'
 
 // A zeroed image of width x height pixels with 1 (mono) or 3 (RGB) channels, 64 bits per sample.
 const make = (width: number, height: number, channels = 1): Image => ({ header: {}, raw: new Float64Array(width * height * channels), metadata: { width, height, channels, pixelCount: width * height, stride: width * channels, strideInBytes: width * channels * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } })
@@ -12149,8 +12149,8 @@ console.log(obstructionRatio(200, 0), effectiveApertureWithObstruction(200, 0), 
 The tone functions adjust a normalized `Image` in place and return the same object. They work on a dense mono or interleaved RGB image (another channel count, a buffer that does not match the geometry or a CFA image with three channels throws an `Error`) and clip the output to 0..1, so they are meant for the display-ready range after a stretch and not for linear data that must keep values outside it. `brightness(image, value)` multiplies every sample by a finite non-negative factor (1 changes nothing, 0 gives black). `linear(image, slope, intercept)` evaluates `slope * v + intercept` (a slope of 0 fills the image with the clipped intercept). `contrast(image, value)` is the linear map that scales the distance to mid-gray 0.5 by the factor (`linear(image, value, 0.5 - 0.5 * value)`, so 1 changes nothing and 0 gives a flat 0.5). `gamma(image, value)` applies the inverse-gamma encoding `v^(1/value)` to the samples clamped to 0..1, so a value above 1 brightens the midtones (2 is a square root) and a value below 1 darkens them; 0 and negative values are outside its domain. `saturation(image, value, channel = 'GRAY')` scales the chroma of an RGB image around a luminance reference: `gray + (c - gray) * value` for each channel, where `gray` is the weighted sum of the pixel with the weights of `channel` (a named grayscale as in [Scientific Image Model](#scientific-image-model), or explicit weights that sum to 1, otherwise a `RangeError`), 1 changes nothing and 0 gives the gray image; a mono image is returned unchanged.
 
 ```ts
-import { brightness, contrast, gamma, linear, saturation } from 'nebulosa/src/imaging/processing/tone'
 import type { Image } from 'nebulosa/src/imaging/model/types'
+import { brightness, contrast, gamma, linear, saturation } from 'nebulosa/src/imaging/processing/tone'
 
 // A mono ramp of five samples and a one-pixel RGB image, built with the metadata of a reader.
 const ramp = (): Image => ({
@@ -12186,10 +12186,10 @@ console.log(saturation(mono, 2) === mono, mono.raw[2]) // true 0.25
 `measureTrackingQuality(image, stars, options?, context?)` in `imaging/analysis/tracking/quality` judges from the shapes of the stars of one frame whether the mount tracked: it looks for a field-wide, coherent elongation, which is what a drift, a periodic error or a wind gust leaves in every star, and tells it apart from an optical pattern (coma, tilt) that elongates stars with a different direction or only at the edge. The input is a list of already detected `DetectedStar` (see [Star Detection](#star-detection)), and only the `x` and `y` (pixels, origin at the upper left, +X right and +Y down), the `snr`, the `majorVariance` and `minorVariance` (squared pixels) and the `theta` of the major axis (radians, from +X toward +Y) are used; a star without those moments is not usable. The image is read only for its size and, with a `saturationLevel`, for the sample at each star. A uniform trail of length `L` adds `L² / 12` to the major variance, so the trail of a star is `sqrt(12 * (majorVariance - minorVariance))` pixels, a proxy of the shape that is not a sub-pixel measurement of the displacement and is biased by undersampling, asymmetric optics and truncated apertures. The `TrackingQualityOptions` are the `minSNR` (2), the `minTrail` (0.75 pixels), the `minTrailToCrossWidth` (0.25, the trail over the Gaussian FWHM of the minor axis) and the `minElongatedStars` (5), the number of significant stars below which no score is given; the `saturationLevel` excludes stars whose peak sample is at or above it. The `TrackingQualityContext` has the optional `streaks` (see [Straight Streak Detection](#straight-streak-detection): at most the first 32 are checked, so give the strongest first) that remove the stars that sit on an isolated trail, such as a satellite, and either a `wcs` (a TAN or TAN-SIP header whose `CRPIX` is one-based) or a `pixelToSky` matrix (`[east/X, east/Y, north/X, north/Y]` in radians per pixel, which can include rotation, reflection and unequal scales) to express the trail on the sky. The `TrackingQuality` has the `starCount`, the `usableStarCount` (those that pass the cuts, round ones included), the `elongatedFraction`, the `directionCoherence` (0 to 1, the length of the mean of the doubled axial angles), the dominant `angle` of the unoriented image axis in `[0, PI)` radians (present with at least two significant stars and a coherence above 0.2), the `medianTrail`, `p90Trail` and `maxTrail` in pixels, the `medianCrossWidth` in pixels, the `score` from 0 to 1, the optional `sky` (the `angle` east toward north in `[0, PI)`, the `medianTrail` in radians and the signed `east` and `north` displacements, whose signs reverse with the sign chosen for the axis) and the `diagnostics` (`quadrantCoverage`, the `angleDispersion` in radians, the `rejectedStars`, the `opticalPatternSuspected` flag and the `isolatedStreakCount`). Very long trails (far above the median of the field) do not set the trail scale, and with six or more significant stars and a coherent preliminary axis the stars more than 60 degrees (in doubled angle) from it are dropped. The score is the product of the elongated fraction, the coherence, the field coverage (at least two stars in each quadrant is full, and the score reaches one at three quarters of the quadrants) and the trail over three quarters of the cross width, and it is divided by four when the elongation is only at the edge of the field; it is a bounded heuristic and not a calibrated probability, and the optical-pattern flag is a heuristic of the same kind.
 
 ```ts
-import type { Image } from 'nebulosa/src/imaging/model/types'
-import { measureTrackingQuality } from 'nebulosa/src/imaging/analysis/tracking/quality'
-import type { DetectedStar } from 'nebulosa/src/imaging/stars/detector'
 import type { Streak } from 'nebulosa/src/imaging/analysis/streak/types'
+import { measureTrackingQuality } from 'nebulosa/src/imaging/analysis/tracking/quality'
+import type { Image } from 'nebulosa/src/imaging/model/types'
+import type { DetectedStar } from 'nebulosa/src/imaging/stars/detector'
 
 // Only the size of the image matters for the shapes: a 1000 by 800 frame of zeros.
 const width = 1000
@@ -12369,8 +12369,8 @@ console.log(gapped.step.type, gapped.step.absolute!) // COMPLETED 5000
 `observation/alignment/polaralignment.challis` estimates the polar-axis misalignment of an equatorial mount from the drift in declination of tracked stars, with the Challis and Taki small-angle model, using neither a plate solution nor an image: the input is a series of apparent mount declinations (from the encoders or the hand paddle readings of the mount, after centering a star) against its hour angle. Hour angles are west-positive and may wrap, all angles are radians and the model is `declination = intercept + u cos(H) - v sin(H)`, with one unknown intercept per star (the true declination plus any fixed offset) and the two components `u` and `v` shared by all the stars, with the signs of Taki. `fitChallisPolarAlignment(observations, latitude, options?)` takes the `ChallisObservation` list (the `star` identifier that groups the readings sharing an intercept, the `hourAngle`, the `mountDeclination`, an optional known additive `correction` in declination subtracted before the fit, and an optional non-negative `weight`) and the geographic `latitude`, and fits them by weighted least squares, or by an iteratively reweighted robust loss with `options.robust` of `huber` or `tukey` (and `maxIterations`, `tolerance` and `tuning`) when a reading is wild. The `ChallisPolarAlignmentResult` has the components `u` and `v`, their `magnitude` and `orientation` (`atan2(u, v)` in `[0, TAU)`), the `takiPole` (the normalized `[u, v, 1]` of the Taki frame), the physical pole above the horizon in a local east-north-up frame (`poleEnu`) with its `azimuth` (north through east) and `altitude`, the signed `azimuthError` and `altitudeError` of the geodesic decomposition along the positive directions of the azimuth and altitude knobs, the `totalError` from the celestial pole (all in radians), and the `conditionNumber`, `rankDeficient`, `residuals` (target minus fitted), final `weights` and `warnings`. The azimuth and altitude components are `undefined` when the adjustment is singular, as at a geographic pole, while the total stays. The hemisphere follows the sign of the latitude and the fit works in both. At least `stars + 2` observations with a positive weight are needed (three for a single star), and they must cover distinct hour angles (a rank-deficient design is an error); the warnings say when there are fewer than three distinct hour angles, when the coverage is under 30 degrees, when the matrix is ill-conditioned (above `1e8`), when one reading carries more than half of the weight, when the magnitude is above 5 degrees (outside the small-angle model) and when the components are undefined. `challisRefractionCorrection(hourAngle, declination, latitude, refraction?)` gives the apparent minus true declination caused by the atmospheric refraction model of the library (default parameters when omitted) for a direction, to be put in the `correction` of the observations when the readings are taken on a real sky; it is not defined below -1 degree of altitude. The model is linear in `u` and `v`, so a large error, a star near the pole, a bad latitude or a flexure of the mount that changes the declination with the hour angle are not represented in the fit.
 
 ```ts
-import { challisRefractionCorrection, fitChallisPolarAlignment, type ChallisObservation } from 'nebulosa/src/observation/alignment/polaralignment.challis'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { challisRefractionCorrection, fitChallisPolarAlignment, type ChallisObservation } from 'nebulosa/src/observation/alignment/polaralignment.challis'
 
 const latitude = deg(40)
 
@@ -12669,10 +12669,10 @@ console.log(
 ```ts
 import type { GuideOutput } from 'nebulosa/src/devices/indi/device'
 import type { GuideOutputManager } from 'nebulosa/src/devices/indi/manager/guideoutput'
+import { arcsec, deg } from 'nebulosa/src/math/units/angle'
 import type { GuidingCalibrationResult } from 'nebulosa/src/observation/guiding/calibrator'
 import { dispatchDitherPulses } from 'nebulosa/src/observation/guiding/dither.executor'
 import { ditherPulsePlanFromCalibration, ditherPulsePlanFromGuideRate } from 'nebulosa/src/observation/guiding/dither.pulse'
-import { arcsec, deg } from 'nebulosa/src/math/units/angle'
 
 // A calibration reduced to what the conversion reads: 0.01 pixel/ms in RA (a positive offset pulses WEST) and 0.008 pixel/ms in DEC (NORTH).
 const calibration = { ra: { ratePxPerMs: 0.01, direction: 'WEST' }, dec: { ratePxPerMs: 0.008, direction: 'NORTH' } } as unknown as GuidingCalibrationResult
@@ -12765,9 +12765,9 @@ console.log(JSON.stringify(before) === JSON.stringify(show(take(stream, 2, 5))))
 `observation/dome/slit` finds where the optical axis of a telescope pierces a spherical dome, so the slit can be placed in front of the optics even when the telescope is off the center of the dome (as every German equatorial mount is). It is pure geometry with no device or timing state: points and distances are in metres, in a shared east, north, up frame, and the azimuth is north through east in radians. An `OpticalRay` has the `origin` and a non-zero `direction` (its magnitude is ignored). `intersectRaySphere(ray, center, radius)` returns the nearest strictly forward intersection of the ray with a sphere, as a `RaySphereIntersection` with the `point` and the `distance` in metres along the normalized direction, or `undefined` when the line misses the sphere or both roots are behind the origin; a ray that starts inside the sphere hits the far side, and a tangent ray is accepted within a tiny relative tolerance. `solveDomeSlit(ray, dome)` takes a `SphericalDomeGeometry` (the `center` in the same frame, the positive `radius`, and the optional `azimuthOffset` in radians and `azimuthDirection` of plus or minus one that map the geometric azimuth to the command of the controller) and returns the `DomeSlitSolution`: the intersection and the geometric `azimuth` (0 to TAU) and `altitude` (above the horizon of the dome center) of the slit seen from the center of the dome, and the `commandAzimuth` (the direction times the azimuth plus the offset, normalized to 0..TAU). `mountPoseToOpticalRay(pose)` exposes the origin and direction of a `MountPose` as a ray without copying them, and `solveDomeSlitFromMount(geometry, encoders, dome)` chains the forward kinematics of [Mount Kinematics](#mount-kinematics) with the slit solution, so the offsets of the pivots and of the optical origin of the mount are accounted for. `domeAzimuthError(current, target)` is the shortest signed correction in radians (target minus current, wrapped to `[-PI, PI]`), and `isDomeMoveRequired(current, target, tolerance)` says whether its magnitude is strictly above a non-negative tolerance in radians. The dome is a sphere and the slit is a point: the width of the slit, the shadowing of the optics and the dome that is not spherical are not modeled, and a `RangeError` is thrown for a zero ray direction, an azimuth direction that is not 1 or -1 or a negative tolerance.
 
 ```ts
+import { deg } from 'nebulosa/src/math/units/angle'
 import { domeAzimuthError, intersectRaySphere, isDomeMoveRequired, mountPoseToOpticalRay, solveDomeSlit, solveDomeSlitFromMount } from 'nebulosa/src/observation/dome/slit'
 import { createCanonicalEquatorialGeometry, mountPoseFromEncoders } from 'nebulosa/src/observation/mount/kinematics'
-import { deg } from 'nebulosa/src/math/units/angle'
 
 const degrees = (radians: number) => +((radians * 180) / Math.PI)
 
@@ -13639,8 +13639,8 @@ console.log(
 `observation/mount/limits` is a pure check of where a mount is pointing against configured axis limits: nothing here commands, parks or stops a mount. `evaluateMountLimits(position, limits)` takes a `MountLimitPosition` with any of `hourAngle`, `declination`, `altitude` and `azimuth` (all in radians) and a `MountLimits` with the closed `AxisRange` `[min, max]` (radians) of any of the same axes, and returns whether every tested axis is inside its range and the list of `MountLimitViolation` (the `axis`, the supplied `value`, and the `minimum` and `maximum`), in hour angle, declination, altitude and azimuth order. An axis that has no limit, and a limit whose axis was not supplied, are skipped, so a position with no overlapping axis is accepted. The hour angle, declination and altitude are linear intervals: a cable wrap may extend beyond plus or minus PI, and the hour angle that is passed must then be the unwrapped angle that the mount holds, with the usual positive west sign. The azimuth (north through east) is circular by default, so a window that crosses north is written with a minimum above the maximum (after normalization) and a range of a full turn or more accepts everything, while `azimuthWrap: 'linear'` compares the raw azimuth for an unwrapped azimuth cable. The bounds are inclusive, and a `NaN` value fails the test. The check says nothing about the speed, the slew path, the pier side or the horizon profile: a target that is inside the limits can still need a path through a limit.
 
 ```ts
-import { evaluateMountLimits } from 'nebulosa/src/observation/mount/limits'
 import { deg } from 'nebulosa/src/math/units/angle'
+import { evaluateMountLimits } from 'nebulosa/src/observation/mount/limits'
 
 // An equatorial mount that can go 6 hours past the meridian on either side (hour angle in radians), with a declination range and a minimum altitude of 20 degrees.
 const limits = { hourAngle: [-Math.PI / 2, Math.PI / 2], declination: [deg(-85), deg(85)], altitude: [deg(20), deg(90)] } as const
@@ -13669,8 +13669,8 @@ console.log(evaluateMountLimits({ azimuth: deg(400) }, { azimuth: [deg(-90), deg
 `observation/mount/kinematics` is the forward and inverse kinematics of a serial two-axis telescope mount (an equatorial or an altitude-azimuth head), with no device I/O. A `TwoAxisMountGeometry` describes the mount at encoder zero in its own base frame: the `primaryPivot` and `primaryAxis`, the `secondaryPivot` and `secondaryAxis` (before the primary rotation), the `opticalOrigin` and `opticalDirection`, the optional `primaryIndex` and `secondaryIndex` (physical zero offsets in radians) and `primaryDirection` and `secondaryDirection` (the sign, 1 or -1, that maps an encoder angle to a right-handed rotation), and the active rigid transform `baseToWorld` from the base to the world frame. The points are in metres, the axes need not be unit vectors but must be non-zero, and the angles are radians. The primary rotation carries the secondary axis, its pivot and the optics, and then the secondary rotates around its own axis, so an axis offset, a non-orthogonality or a displaced optical origin of a real mount can be described. `createIdealAltAzGeometry(options?)` gives the ideal altitude-azimuth head in an east, north, up frame (the primary is the azimuth, north through east, and the secondary the altitude above the horizon), and `createCanonicalEquatorialGeometry(options?)` an ideal equatorial head in the Taki frame (the primary is the west-positive hour angle and the secondary the declination; see [Taki Mount Geometry](#taki-mount-geometry)); both take the `CanonicalMountGeometryOptions` (`baseToWorld`, the pivots and the optical origin in metres, the zero offsets and the encoder signs that replace the canonical ones). `mountPoseFromEncoders(geometry, encoders)` returns the `MountPose` for the encoders `{ primary, secondary }` in radians: the optical `origin` and the unit `direction` in the world frame, the unit `primaryAxis` and `secondaryAxis` and the `secondaryPivot` (in metres) at that primary angle. `mountDirectionFromEncoders(geometry, encoders, out?)` computes only the unit direction, and writes it into `out` when given (the result aliases `out`; a new vector is allocated otherwise). `solveMountEncoders(geometry, worldDirection, options?)` goes the other way: a damped Gauss-Newton search for encoder angles whose optical direction matches a non-zero world direction (it need not be normalized). It is local: a mount reaches the same direction in several mechanical branches (a German equatorial mount on either side of the pier), and the solver returns the one near the `initial` seed (both encoders at zero by default), so the caller gives the seed of the branch it wants and the optional inclusive unwrapped `primaryRange` and `secondaryRange` that bound it (the angles are clamped to them, and they are not wrapped). The `MountEncoderSolveOptions` also has the `maxIterations` (32), the angular `tolerance` (1e-10 radians) and the `maxStep` of one iteration (PI/12 radians). The `MountEncoderSolution` has the `primary` and `secondary` angles, the `converged` flag, the `iterations` and the `residual` angular separation in radians: when it does not converge (a direction out of the ranges, or a singular configuration such as a target at the pole of the primary axis, where the Jacobian loses rank) the best position found is returned with the flag false, so check `converged` and `residual`. A target exactly opposite to the current direction is a stationary point of the residual, and the solver leaves it by a bounded step on one encoder. A zero axis, an encoder sign that is not 1 or -1, an inverted range, or a non-positive iteration count or step throws a `RangeError`. The geometry is only the kinematic model: it does not model flexure, refraction, speeds or tracking.
 
 ```ts
-import { createCanonicalEquatorialGeometry, createIdealAltAzGeometry, mountDirectionFromEncoders, mountPoseFromEncoders, solveMountEncoders } from 'nebulosa/src/observation/mount/kinematics'
 import { deg } from 'nebulosa/src/math/units/angle'
+import { createCanonicalEquatorialGeometry, createIdealAltAzGeometry, mountDirectionFromEncoders, mountPoseFromEncoders, solveMountEncoders } from 'nebulosa/src/observation/mount/kinematics'
 
 const degrees = (radians: number) => (radians * 180) / Math.PI
 
@@ -13745,8 +13745,8 @@ console.log(convertTrackingRate(convertTrackingRate(7.2921159e-5, 'radiansPerSec
 `observation/guiding/tracker.nonsidereal` lets a guider follow a target that moves against the stars (a comet, an asteroid or a satellite) while the stars stay the visual reference. The `NonSiderealTracker` is a decorator of any `GuideTracker` (see [Guide Star Tracking](#guide-star-tracking)): it calls the base tracker first, then adds to the `targetOffset` of the result the image displacement that the target has had since its anchor, so the guider (see [Guide Pulse Loop](#guide-pulse-loop)) pulses to follow the target instead of locking the star; the base tracker keeps the detection, the identity and the `commit()` timing. Positions are equatorial RA and DEC in radians, offsets are local east and north tangent-plane radians, rates are radians per second and the image offsets are pixels with the origin and axes of the base measurement. The source is a `NonSiderealEphemeris` (a synchronous `position(time, out)` writing RA in 0..TAU and DEC, an optional inclusive `validTime` in Julian days TT and an optional `generation`) or a `NonSiderealMotionProvider` (a local fitted motion, from images, whose `motion(time)` gives a fixed-plane `offset` and an optional `rate`, `acceleration`, `confidence` and `stale` flag, and `reset()`), and the `NonSiderealImageTransform` maps `[east, north]` to `[x, y]` pixels, usually with `calibratedNonSiderealTransform` (the guider scale in arcseconds per pixel, the image unit vectors of positive RA and DEC from the calibration of [Guiding Calibration](#guiding-calibration), and an optional `orientation` matrix from east and north to the axes). `nonSiderealEphemerisFromInterpolator(interpolator)` adapts an ephemeris table (see [Equatorial Ephemeris Interpolation](#equatorial-ephemeris-interpolation)) as an ephemeris with its window as `validTime`, a `generation` that `update()` increments and an error when the time is outside the table, so a tabulated position is never extrapolated or clamped. `arm(source, transform, feedback?)` configures the source and moves the state from `disabled` to `armed`; the anchor is captured at the first frame with a `capture time` after the visual lock (`phase` of `guiding` with `lockEstablished`, or `lostLock` with an anchor), the state is then `active`, and the next frames add the offset from the anchor: no rate is integrated, the position is re-evaluated at each capture time. Frames need an astronomical `captureTime` (preferably the exposure midpoint) and a time that increases (the `captureMonotonic` when present); before the lock and when disabled the base result is returned untouched. The derivative is estimated by finite differences of the ephemeris (`estimateNonSiderealDerivative(ephemeris, time, options)`): a centered five-point stencil with the acceleration when the `validTime` window permits it, then lower-order centered and one-sided stencils at the boundaries (`oneSided` true), with a step of 30 seconds by default clamped to `minStep` and `maxStep`, and `available: false` with a `reason` when the time is outside the window or the provider fails. The `feedback` (a `TrackingRateEstimator` and a `TrackingRateController`, see [Tracking Rate Estimation](#tracking-rate-estimation) and [Tracking Rate Correction](#tracking-rate-correction)) adds a bounded residual rate to the ephemeris one, shown as `effectiveRate` and `rateCorrection`; it is only used with an ephemeris. The `NonSiderealState` is `disabled`, `armed`, `active`, `rateDegraded` (the offsets are valid but there is no rate), `limitReached` and `faulted` (the measurement is removed from the result, the notes gain `non_sidereal_<reason>`, and the tracker stays there until `reset()`, `clear()` or `reanchor()`); the reasons are `outsideValidity`, `invalidPosition`, `invalidTime`, `invalidTransform`, `antipodal`, `angularLimit`, `pixelLimit`, `outOfOrder`, `providerError`, `rateUnavailable`, `rateLimit` and `motionUnavailable`, and the options bound the separation (`geometry.maxAngularSeparation`, just below PI by default), the `maxRate` and the `maxAcceleration`. Each result is a `NonSiderealTrackerResult` with the base fields and a fresh `nonSidereal` diagnostic that `nonSiderealTrackingOf(result)` reads (the state, the reason, the position, the angular offset, the separation, the target offset, the rates, the derivative step and the confidences); a plain result gives `undefined`. `reanchor(time, position?)` takes a new anchor (and clears the residual estimates of the old frame), `reset()` clears the temporal state and keeps the source, `clear()` removes the source and `onCalibrationChanged(transform?)` discards the image fits when the camera orientation changes (a replacement transform keeps the state, none leaves the tracker `faulted` until one is supplied, as after a meridian flip), and `select`, `commit` and `baseTracker` delegate to the base tracker (`baseTrackerOf(tracker)` unwraps a decorated one). The helpers `nonSiderealAngularOffset(anchor, current, options?)`, `nonSiderealUnitVector(position)` and `nonSiderealGenerationOf(source)` are exported, and the defaults are `DEFAULT_NONSIDEREAL_DERIVATIVE_STEP_SECONDS`, `DEFAULT_NONSIDEREAL_MAX_ANGULAR_SEPARATION` and `DEFAULT_NONSIDEREAL_ANTIPODAL_TOLERANCE`. The geometry is a local tangent plane around the anchor with a pure scale-and-rotation image transform: the pointing of the mount, the refraction and the field distortion are not modeled, a position outside the plane of the transform or a long drift needs a new anchor, and the time must be the actual capture time of each frame.
 
 ```ts
-import { time, timeShift, Timescale } from 'nebulosa/src/astronomy/time/time'
 import { linearInterpolator } from 'nebulosa/src/astronomy/ephemeris/interpolation/ephemeris'
+import { time, timeShift, Timescale } from 'nebulosa/src/astronomy/time/time'
 import { arcsec, deg } from 'nebulosa/src/math/units/angle'
 import { trackingResultFromStars, type GuideTracker } from 'nebulosa/src/observation/guiding/tracker'
 import {
@@ -13849,8 +13849,8 @@ for (let i = 0; i < 3; i++) {
 `astronomy/planning` scores one target that has already been reduced to a few numbers, to rank the targets of a night plan; it evaluates no ephemeris, so the altitudes, the solar altitude and the lunar geometry must come from the caller. Angles are radians and the scores are dimensionless on 0..1 (or 0..100 with `scale: 100`). `observationScore(input, options?)` is the geometric mean of the factors that were supplied, so a single zero factor zeroes the score and an omitted optional input is left out instead of counting as a failure. The `ObservationScoreInput` has the `altitude` (always scored: 0 at the horizon, or at `minimumAltitude`, rising linearly to 1 at 60 degrees, `goodAltitude`), the optional `airmass` (derived with Kasten and Young from the altitude when omitted, falling from 1 at the zenith to 0 at airmass 3, `maximumAirmass`, and 0 for a target that is not above the horizon), the `sunAltitude` (0 at -12 degrees and above, rising to 1 at -18 degrees), the `moonInterference` from 0 to 1 (the factor is one minus it) and the `availableDurationHours` with the `requiredDurationHours` (their ratio capped at 1, and a zero requirement counts as satisfied; scored only when both are given). `moonInterference(illumination, moonAltitude, separation)` gives that moon term as the illuminated fraction times the sine of the lunar altitude times a Gaussian of 30 degrees in the angular separation from the target (wrapped to `(-PI, PI]`), clamped to 0..1, and it is 0 for a Moon on or below the horizon or without illumination. The ramps are planning thresholds, not a photometric sky-brightness model: the Moon does not depend on the wavelength or on the sky transparency, the twilight ramp only follows the solar altitude and the airmass is the geometric one, so use the score to order targets and not as a limiting magnitude.
 
 ```ts
-import { deg } from 'nebulosa/src/math/units/angle'
 import { moonInterference, observationScore } from 'nebulosa/src/astronomy/planning'
+import { deg } from 'nebulosa/src/math/units/angle'
 
 // A target at 60 degrees of altitude (the factor saturates) in the middle of the night, with no Moon: only altitude and airmass count, and the airmass from Kasten and Young at 60 degrees is 1.15, so the score is a little below 1.
 console.log(observationScore({ altitude: deg(60) })) // 0.9607
@@ -14359,9 +14359,9 @@ console.log(planetary.select(drifted, [160, 170]), planetary.select(drifted, [25
 `observation/mount/kinematics.taki` turns the three fabrication errors of Toshimi Taki's matrix method into the vector geometry that the two-axis kinematics of [Mount Kinematics](#mount-kinematics) consumes, so that the pointing of a mount with imperfect axes can be computed (or inverted) with the same functions. `applyTakiFabricationErrors(nominal, errors)` takes a nominal `TwoAxisMountGeometry` (the canonical equatorial one, whose primary axis is the polar axis) and the `TakiFabricationErrors`, all optional and in radians: `axisNonPerpendicularity` (Taki D, the departure of the secondary axis from perpendicular to the primary), `collimation` (Taki D', the optical axis away from the plane perpendicular to the secondary axis, applied as a rotation around the primary axis) and `secondaryIndex` (Taki D'', an apparent zero offset of the secondary encoder). It returns a new geometry with the `secondaryAxis` and `opticalDirection` rotated and the `secondaryIndex` increased by the error times the sign of the secondary encoder, and the other fields (the primary axis, the pivots and the encoder signs) are kept; with all errors absent or zero it returns the nominal object itself. The errors are small angles in the sense of the reference (equation 5.3-1 of Matrix Method, revision E), and the sign of each follows that convention and the canonical Taki frame, so errors measured in another convention need to be converted. It models only these three errors and not the polar misalignment, which is a rotation of `baseToWorld`, or a flexure; and it is an adapter, so the pointing is obtained from the functions of Mount Kinematics.
 
 ```ts
+import { deg } from 'nebulosa/src/math/units/angle'
 import { createCanonicalEquatorialGeometry, mountDirectionFromEncoders, solveMountEncoders } from 'nebulosa/src/observation/mount/kinematics'
 import { applyTakiFabricationErrors } from 'nebulosa/src/observation/mount/kinematics.taki'
-import { deg } from 'nebulosa/src/math/units/angle'
 
 const nominal = createCanonicalEquatorialGeometry()
 
@@ -14623,8 +14623,8 @@ The tile functions: `astap1476AreaFile(area)` returns the `{ area, ring, index, 
 
 ```ts
 import { astap1476AreaFile, ASTAP_1476_DEC_BOUNDARIES, AstapCatalog, findAstap1476Areas, findAstap1476Region, findAstap1476Stars, openAstapCatalog, readAstap1476Area, readAstap1476Header } from 'nebulosa/src/catalogs/stars/astap'
-import { deg, hour, normalizeAngle, toDeg } from 'nebulosa/src/math/units/angle'
 import { PIOVERTWO, TAU } from 'nebulosa/src/core/constants'
+import { deg, hour, normalizeAngle, toDeg } from 'nebulosa/src/math/units/angle'
 
 // The tiling: band 18 holds 69 cells and starts at the area 670, and the caps are tiles of their own.
 console.log(astap1476AreaFile(1), astap1476AreaFile(670).fileName, astap1476AreaFile(738).fileName, astap1476AreaFile(1476).fileName) // { area: 1, ring: 1, index: 1, fileName: "0101.1476", fraction: 0 } 1801.1476 1869.1476 3601.1476
@@ -14704,11 +14704,11 @@ The ESA Hipparcos main catalog (`hip_main.dat`, CDS I/239) has about 118 thousan
 `HipparcosCatalog` is a `HealpixIndex` of those entries, so it has the query methods of [HEALPix Object Index](#healpix-object-index) and of [Star Catalog Interface and Spatial Query](#star-catalog-interface-and-spatial-query) (`queryCone`, `queryBox`, `queryTriangle`, `queryPolygon`, `queryRegion`, `streamRegion`), where each result is an index entry whose `metadata` is the `HipparcosCatalogEntry`. `new HipparcosCatalog({ nside, ordering })` defaults to NSIDE 8, `load(source)` reads and indexes every entry, and `get(id)`, `size` and `add` behave as in the index. The positions are the ones at J1991.25: to compare them with a J2000 or current-date sky, apply the proper motion first (see [Stellar Space Motion](#stellar-space-motion)).
 
 ```ts
+import fs from 'fs/promises'
 import { HipparcosCatalog, readHipparcosCatalog } from 'nebulosa/src/catalogs/stars/hipparcos'
 import { fileHandleSource } from 'nebulosa/src/io/file'
 import { bufferSource } from 'nebulosa/src/io/io'
 import { deg, toMas } from 'nebulosa/src/math/units/angle'
-import fs from 'fs/promises'
 
 // Stream the file: nothing but the entry being read is kept in memory.
 let count = 0
@@ -14856,11 +14856,11 @@ The HYG database merges the Hipparcos, Yale Bright Star and Gliese catalogs into
 `HygCatalog` is a `HealpixIndex<HygCatalogEntry>` and so has the queries of [HEALPix Object Index](#healpix-object-index) and [Star Catalog Interface and Spatial Query](#star-catalog-interface-and-spatial-query), with the entry in the `metadata` of each result. `new HygCatalog({ nside, ordering })` uses NSIDE 8 by default, and `load(source)` reads and indexes every row, keyed by the HYG `id` (which is not the HIP number).
 
 ```ts
+import fs from 'fs/promises'
 import { HygCatalog, readHygCatalog } from 'nebulosa/src/catalogs/stars/hyg'
 import { fileHandleSource } from 'nebulosa/src/io/file'
 import { deg, formatDEC, formatRA, toMas } from 'nebulosa/src/math/units/angle'
 import { toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
-import fs from 'fs/promises'
 
 // Stream until Sirius, the star with the HYG id 32263.
 await using source = fileHandleSource(await fs.open('data/hyg_v42.csv', 'r'))
@@ -14895,11 +14895,11 @@ The Smithsonian Astrophysical Observatory (SAO) star catalog has about 259 thous
 `SaoCatalog` is a `HealpixIndex<SaoCatalogEntry>`, with the queries of [HEALPix Object Index](#healpix-object-index) and [Star Catalog Interface and Spatial Query](#star-catalog-interface-and-spatial-query) (the entry is the `metadata` of each result), and a cone is therefore a cone in the B1950 frame. `new SaoCatalog({ nside, ordering })` defaults to NSIDE 8 and `load(source, bigEndian)` reads and indexes every star, keyed by the SAO number.
 
 ```ts
+import fs from 'fs/promises'
 import { readSaoCatalog, SaoCatalog } from 'nebulosa/src/catalogs/stars/sao'
 import { fileHandleSource } from 'nebulosa/src/io/file'
 import { bufferSource } from 'nebulosa/src/io/io'
 import { deg, formatDEC, formatRA, toMas } from 'nebulosa/src/math/units/angle'
-import fs from 'fs/promises'
 
 // The first star and the one of Groombridge 1830 (SAO 62738).
 await using source = fileHandleSource(await fs.open('data/SAO.pc.dat'))
@@ -14908,8 +14908,7 @@ let count = 0
 for await (const star of readSaoCatalog(source, false)) {
 	count++
 
-	if (star.id === 1)
-		console.log(star.epoch, formatRA(star.rightAscension), formatDEC(star.declination), star.magnitude, star.spType) // B1950 00 00 05.10 +82 41 41.82 7.2 A0
+	if (star.id === 1) console.log(star.epoch, formatRA(star.rightAscension), formatDEC(star.declination), star.magnitude, star.spType) // B1950 00 00 05.10 +82 41 41.82 7.2 A0
 	else if (star.id === 62738) console.log(toMas(star.pmRA!), toMas(star.pmDEC!), toMas(star.pmRA! * Math.cos(star.declination))) // about 5080.5 -5806 3999.25 (the last is μα* in mas/yr)
 }
 
@@ -15098,12 +15097,12 @@ Stellarium's deep-sky catalog is a binary `catalog.dat` of about 95 thousand obj
 `readNamesDat(source)` streams the names text, skips the lines that start with `#` and the lines that do not have the form `_("name")`, and yields `{ prefix, id, name }` where `prefix` is the catalog (`NGC`, `M`, `IC`... or empty), `id` the designation as text and `name` the translatable name; an object can have several names. `StellariumCatalog` is a `HealpixIndex<StellariumCatalogEntry>` with the queries of [HEALPix Object Index](#healpix-object-index) and [Star Catalog Interface and Spatial Query](#star-catalog-interface-and-spatial-query); `new StellariumCatalog({ nside, ordering })` defaults to NSIDE 8 and `load(source)` indexes every entry by its `id`, with the entry as `metadata` of each result. Large objects are indexed by their center only, so a cone selects an object when its center is inside, even if its extent crosses the border.
 
 ```ts
+import fs from 'fs/promises'
 import { readCatalogDat, readNamesDat, StellariumCatalog, StellariumObjectType } from 'nebulosa/src/catalogs/stars/stellarium'
 import { fileHandleSource } from 'nebulosa/src/io/file'
 import { BufferSource } from 'nebulosa/src/io/io'
 import { deg, formatDEC, formatRA, toArcmin } from 'nebulosa/src/math/units/angle'
 import { toLightYear } from 'nebulosa/src/math/units/distance'
-import fs from 'fs/promises'
 
 // Read the whole catalog and count the objects of each type.
 await using source = fileHandleSource(await fs.open('data/catalog.dat'))
@@ -15153,6 +15152,66 @@ const text = ['# comment', line('NGC', '40', '_("Bow-Tie Nebula")'), line('IC', 
 console.log(await Array.fromAsync(readNamesDat(new BufferSource(Buffer.from(text))))) // [ { prefix: "NGC", id: "40", name: "Bow-Tie Nebula" }, { prefix: "", id: "49", name: "Norma Star Cloud" } ]
 ```
 
+### Stellarium Star Catalog
+
+Since version 25.1, Stellarium distributes its star catalog (Gaia DR3 merged with Hipparcos) as one binary file per level, `stars_<level>_<type>v<major>_<minor>.cat`, in the `stars/hip_gaia3` directory of the installation, with the manifest `defaultStarsConfig.json` (or the user's `starsConfig.json`) that lists the files and their MD5 checksums. Each level is a faintness slice (level 0 holds the stars brighter than about V = 6, level 5 the ones from V = 12 to about 13.75) indexed by the Stellarium geodesic grid: the icosahedron subdivided `level` times, giving 20 × 4^level triangular zones plus one global zone (index 20 × 4^level) for the stars that Stellarium keeps outside the triangles, such as Sirius. A file is a 28-byte little-endian header (format version, level, lowest magnitude of the file and catalog epoch as a Julian Date), the star count of every zone, and the star records grouped by zone and sorted by increasing magnitude. Levels 0 to 3 use the 48-byte Star1 record (direction vector, vector proper motion, parallax, radial velocity, Hipparcos number), levels 4 to 7 the 32-byte Star2 record (RA, Dec, dα/dt, dδ/dt, parallax) and level 8 the 16-byte Star3 record (position to 0.1″, no motion). The files must be obtained from a Stellarium installation or its download page; Nebulosa does not download them.
+
+`openStellariumStarCatalog(root, options)` (or `new StellariumStarCatalog(options).open(root)`) opens the files in place: it keeps one read-only handle, the header and the zone offsets of each level (about 7 MB for all nine levels), and never loads the records. The first manifest found decides which files are opened, and its files that are absent are reported in `missingLevels`; without a manifest every `stars_<level>_*.cat` file of the directory is opened, and two files of the same level are an error. `open` throws when the directory is not readable or has no star file, when a manifest is malformed or names a file outside the directory, when a header is invalid (unknown or byte-swapped magic, major version above 0, data type outside 0 to 2, level above 10) or its level differs from the file name or manifest entry, when a file size differs from its header and zone table, and when a level of the `requiredLevels` option is missing; a failed open leaves the catalog closed. `levels` describes each opened file (level, record type and size, version, epoch as Julian Date and Julian year, the lowest magnitude from the header, record and zone counts, file name and size, and the manifest magnitude range and checksum). `blockBytes` (48 bytes to 64 MiB, default 128 KiB) is the size of the read buffer of each query.
+
+The queries are the ones of [Star Catalog Interface and Spatial Query](#star-catalog-interface-and-spatial-query) and are asynchronous. A query selects the zones of each level whose bounding cap may touch the region (cones directly on the sphere, boxes, triangles and polygons through their preselection boxes), always adds the global zone, skips the levels whose lowest magnitude is fainter than `magnitudeMax`, reads the records of the selected zones with positional reads, stops each zone at the first star fainter than `magnitudeMax`, and lets the common interface apply the exact geometry, the inclusive magnitude bounds and `limit`. Results come level by level and zone by zone, so `limit` keeps the first matches and not the brightest ones; `streamRegion` keeps the memory bounded for dense fields, while `queryRegion` holds every match. `get(level, zone, recordNumber)` reads one record by its address (zero-based record number inside the zone) and returns `undefined` for an absent level or an address outside the file. `diagnostics` counts the bytes read, read calls, zones and records scanned and entries decoded until `resetDiagnostics()`, and `verifyChecksums()` streams every opened file through MD5 and compares it with the manifest. `close()` (or `await using`) waits for the reads in flight and releases the handles; a stream that continues after `close` throws `Stellarium star catalog is closed`, a query of a closed catalog throws `Stellarium star catalog is not open`, and a file truncated after `open` makes the query throw with the file name and position.
+
+The entries are `StellariumStarCatalogEntry` objects with `rightAscension` in [0, 2π) and `declination` in radians, astrometric ICRS directions at the catalog `epoch` of the file (the Julian year 2016.0 for the current files; the positions are not propagated, so a query selects the stars by their position at that epoch), `magnitude` (the V magnitude of the Stellarium processing, not Gaia G), `bv` (B−V), `pmRA` and `pmDEC` in radians per Julian year (`pmRA` is dα/dt: Star1 stores a tangential vector that is projected on the east and north directions and divided by cos δ, left `undefined` within cos δ < 10⁻⁹ of a pole, and Star2 stores dα/dt directly), `parallax` and `parallaxError` in radians, `rv` in AU/day (Star1 only, positive receding), `gaiaId` as an exact `bigint` (`0n` for Hipparcos stars without a Gaia source), `hipId` and `componentId` (Star1 only; the component letter code, 0 for none, 1 for A, 2 for B...), the raw `spectralIndex` and `objectTypeIndex` into the `stars_hip_sp` and `object_types` tables of the directory (Star1 only, not resolved), and the `level`, `zone` and `recordNumber` of the record. A stored zero means a missing value, as in Stellarium: a zero parallax, parallax error or radial velocity is `undefined`, and so are both proper motion rates when the stored motion is zero. This provider is unrelated to the deep-sky [Stellarium Catalog](#stellarium-catalog).
+
+The geodesic grid is public in `stellarium.geodesic`: `stellariumZoneForPoint(direction, level)` gives the zone of a unit vector with the half-space tests of Stellarium, `stellariumLocalZoneCount(level)` the number of triangular zones (the global zone index), `stellariumZoneTriangle(level, zone)` the corners of a zone, and `stellariumZoneCover(classifier, levels)` with `stellariumConeClassifier` or `stellariumBoxesClassifier` the conservative zone selection used by the queries. `stellarium.star.binary` has the pure header, zone table and record decoders for custom tools.
+
+```ts
+import { stellariumLocalZoneCount, stellariumZoneForPoint } from 'nebulosa/src/catalogs/stars/stellarium.geodesic'
+import { openStellariumStarCatalog } from 'nebulosa/src/catalogs/stars/stellarium.star.catalog'
+import { deg, formatDEC, formatRA, toMas } from 'nebulosa/src/math/units/angle'
+import { toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
+
+// The stars/hip_gaia3 directory of Stellarium 25.x (manifest version 27) with the levels 0 to 5 installed.
+await using catalog = await openStellariumStarCatalog('/path/to/stars/hip_gaia3', { requiredLevels: [0, 1, 2] })
+
+console.log(catalog.levels.map((level) => [level.level, level.recordCount, level.magnitudeMin])) // [ [ 0, 5046, -2 ], [ 1, 21612, 6 ], [ 2, 141738, 7.5 ], [ 3, 418129, 9 ], [ 4, 1741852, 10.5 ], [ 5, 8051935, 12 ] ]
+console.log(catalog.missingLevels, catalog.levels[0].epochJD, catalog.levels[0].epoch) // [ 6, 7, 8 ] 2457389 2016
+
+// Sirius: a Hipparcos star of the level 0 global zone, at the J2016.0 catalog epoch.
+const [sirius] = await catalog.queryRegion({ kind: 'cone', centerRA: deg(101.287), centerDEC: deg(-16.716), radius: deg(0.05), magnitudeMax: 0 })
+console.log(sirius.hipId, sirius.componentId, sirius.gaiaId, sirius.magnitude, sirius.bv) // 32349 1 0n -1.46 0
+console.log(formatRA(sirius.rightAscension), formatDEC(sirius.declination)) // 06 45 08.31 -16 43 17.59
+console.log(toMas(sirius.pmRA!) * Math.cos(sirius.declination), toMas(sirius.pmDEC!)) // -546.06 -1223.15 (mas/yr, μα* and μδ)
+console.log(toMas(sirius.parallax!), toKilometerPerSecond(sirius.rv!)) // 379.2 -5.5 (mas, km/s)
+console.log(sirius.level, sirius.zone, sirius.recordNumber, stellariumLocalZoneCount(0)) // 0 20 0 20
+console.log((await catalog.get(sirius.level, sirius.zone, sirius.recordNumber))?.gaiaId === sirius.gaiaId) // true
+
+// The zone of a direction on the geodesic grid of level 0.
+console.log(stellariumZoneForPoint([Math.cos(sirius.declination) * Math.cos(sirius.rightAscension), Math.cos(sirius.declination) * Math.sin(sirius.rightAscension), Math.sin(sirius.declination)], 0)) // 14
+
+// A streamed field toward the Galactic center: only the zones around it are read.
+catalog.resetDiagnostics()
+let count = 0
+for await (const star of catalog.streamRegion({ kind: 'cone', centerRA: deg(266.4), centerDEC: deg(-29), radius: deg(0.25), magnitudeMax: 12 })) count++
+console.log(count, catalog.diagnostics.zonesScanned, catalog.diagnostics.recordsDecoded) // 32 22 34
+
+// Faint stars come from the Star2 level 5: Gaia identifiers, proper motion, no radial velocity.
+const faint = await catalog.queryRegion({ kind: 'cone', centerRA: deg(266.4), centerDEC: deg(-29), radius: deg(0.25), magnitudeMin: 13, limit: 2 })
+console.log(faint.map((star) => [star.level, star.magnitude, star.gaiaId, star.pmRA !== undefined, star.rv])) // [ [ 5, 13.002, 4057463850869249664n, true, undefined ], [ 5, 13.011, 4057462820077062400n, true, undefined ] ]
+
+// A box across RA 0 and a polygon around the Pleiades.
+console.log((await catalog.queryBox(deg(359.5), deg(0.5), deg(-0.5), deg(0.5))).length) // 91
+const pleiades = await catalog.queryPolygon([
+	[deg(56), deg(23.5)],
+	[deg(57.5), deg(23.5)],
+	[deg(57.5), deg(24.5)],
+	[deg(56), deg(24.5)],
+])
+console.log(pleiades.filter((star) => star.magnitude < 4).map((star) => [star.hipId, star.magnitude])) // [ [ 17702, 2.87 ], [ 17847, 3.63 ], [ 17499, 3.7 ], [ 17573, 3.87 ] ]
+
+// The integrity audit reads the whole files.
+console.log((await catalog.verifyChecksums()).map((result) => result.matches)) // [ true, true, true, true, true, true ]
+```
+
 ### Tiled Sky Catalog
 
 HNSKY and ASTAP distribute their star databases as thousands of small binary files, one per tile of the sky, so that a query reads only the few tiles that it touches. The module `tiled.catalog` is the engine shared by the two formats (the concrete ones are [ASTAP Tiled Catalog](#astap-tiled-catalog) and [HNSKY Tiled Catalog](#hnsky-tiled-catalog)): it describes a tiling, finds the tiles of a field, decodes the packed records and exposes the result as a star catalog. A tiling (`TiledSkyGeometry`) is a list of declination bands from the south to the north pole, each divided in a number of equal right ascension cells; the tiles are numbered from 1, band after band, and a tile file is named by its 1-based band and cell as `BBCC` plus the extension (`0203.1476`). Inside a database the file key is `<database>_<file name>` (`d05_0203.1476`).
@@ -15164,6 +15223,7 @@ Each tile file has a 110-byte header (a description of 108 bytes, the version by
 `TiledStarCatalog<T, DB>` is the abstract `BaseStarCatalog` of the tiles: a subclass calls the protected constructor with a geometry, a default epoch, a label for the messages and a default database, and implements `buildEntry(record, header, area)`. `open(files, database?)` takes a `Map` or an object of files (the tile contents are read when first needed) and throws when none has the database prefix and the extension, `close()` and `[Symbol.dispose]()` drop the cached tiles, `get(database, area, recordNumber)` returns one entry or `undefined`, `loadArea(area)` loads and caches a tile (concurrent calls share one read, a missing file is cached as `undefined` and a failure is not), `hasAnyAreaFile()` tells whether the open collection has a tile, and the region queries of [Star Catalog Interface and Spatial Query](#star-catalog-interface-and-spatial-query) read the touched tiles and keep the stars that pass the exact test. A query on a catalog that was not opened or was closed throws. The positions have the epoch of the tile and are not moved by any proper motion.
 
 ```ts
+import { normalizeStarCatalogQuery, type StarCatalogEntry } from 'nebulosa/src/catalogs/stars/catalog'
 import {
 	createTiledStarRawRecord,
 	createTiledSkyGeometry,
@@ -15185,7 +15245,6 @@ import {
 	validateTiledStarRecordNumber,
 	type TiledStarFileHeader,
 } from 'nebulosa/src/catalogs/stars/tiled.catalog'
-import { normalizeStarCatalogQuery, type StarCatalogEntry } from 'nebulosa/src/catalogs/stars/catalog'
 import { PIOVERTWO } from 'nebulosa/src/core/constants'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 
@@ -15270,11 +15329,11 @@ UCAC4 (the fourth USNO CCD Astrograph Catalog) has about 113 million stars to ro
 `ucac4ZoneForDec(dec)` gives the zone of a declination in radians. `openUcac4Catalog(root)` creates a `Ucac4Catalog` and opens it, and `catalog.open(root)` does the same for an existing instance, throwing when the root is empty or missing, when it is not accessible, when no zone file is found, when the index file does not have the size of 900 × 1440 pairs of 32-bit integers, and when `u4hpm.dat` has a row that does not have eight integers. The queries are the ones of [Star Catalog Interface and Spatial Query](#star-catalog-interface-and-spatial-query) (`queryCone`, `queryBox`, `queryTriangle`, `queryPolygon`, `queryRegion` and `streamRegion`), are asynchronous, and return `Ucac4CatalogEntry` objects with the fields of the interface (`rightAscension` and `declination` in radians, J2000 ICRS, at the epoch of the catalog; `pmRA` and `pmDEC` in radians per year, where `pmRA` is the dα/dt obtained from the stored μα·cos δ; `magnitude`, the UCAC aperture magnitude, or the model one, or the 2MASS J, in this order, when it is not missing) plus the native `zone` and `recordNumber` (starting at 1) of the star. A star whose proper motion is the sentinel and is not in `u4hpm.dat` has `pmRA` and `pmDEC` `undefined`. `get(zone, recordNumber)` returns one entry, or `undefined` for a record beyond the end of the zone, and throws for a zone outside 1 to 900 or a record number that is not an integer of at least 1; `readRawRecord(zone, recordNumber)` is the same lookup, which `get` wraps. `hasAnyZoneFile()` is the asynchronous scan that `open` uses to find zone files and caches them, so it reports only zones not yet discovered and is `false` on an opened catalog, `root` is the opened path, and `close()` releases the handles. A query of a closed catalog throws `UCAC4 catalog is not open`, and a record with a right ascension outside 0° to 360° or a south pole distance outside 0° to 180° throws `invalid UCAC4 coordinates`. The files of the real catalog have to be downloaded from USNO, and the examples below use a small synthetic root built with the layout of the readme of the catalog.
 
 ```ts
-import { openUcac4Catalog, ucac4ZoneForDec } from 'nebulosa/src/catalogs/stars/ucac4'
-import { deg, toDeg, toMas } from 'nebulosa/src/math/units/angle'
 import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { openUcac4Catalog, ucac4ZoneForDec } from 'nebulosa/src/catalogs/stars/ucac4'
+import { deg, toDeg, toMas } from 'nebulosa/src/math/units/angle'
 
 // The zone of a declination: 0.2° strips from the south pole.
 console.log(ucac4ZoneForDec(deg(-90)), ucac4ZoneForDec(deg(0)), ucac4ZoneForDec(deg(0.19)), ucac4ZoneForDec(deg(0.2)), ucac4ZoneForDec(deg(90))) // 1 451 451 452 900
@@ -15337,11 +15396,11 @@ await fs.rm(root, { recursive: true, force: true })
 `devices/alpaca/client` is the consuming side of Alpaca: `AlpacaClient` connects to a remote Alpaca server and presents its devices to the application as if they came from an INDI server, so the same managers (camera, mount, focuser, wheel, cover, flat panel, rotator, dome, safety monitor and weather) work unchanged (see [ASCOM Alpaca REST API](#ascom-alpaca-rest-api) for the HTTP layer it uses and [ASCOM Alpaca Server](#ascom-alpaca-server) for the other direction). It implements the INDI `Client` contract: `type` is `'ALPACA'`, `id` is the MD5 of the URL, and `remoteHost` and `remotePort` come from the URL (80 or 443 when it has no port). The constructor takes the server `url`, the `AlpacaClientOptions` and a `DeviceProvider`, and the options have the `handler` that receives the synthesized INDI property events (an ordinary INDI client handler, so the managers are fed through it), a `poolingInterval` in milliseconds (spelled as in the code, with a minimum and default of 1000) and an optional `schedulePoll` to replace the timer. `start()` reads the configured devices from the management API, wraps each supported one, publishes its properties and starts the polling timer: it returns `true` when it started, and `false` when it already runs, when the server has no device or when it cannot be reached. A device is published under the INDI name `<DeviceName> (<Type> <DeviceNumber>)`, for example `Mount Simulator (Mount 0)`, because an Alpaca station that implements several interfaces lists the same name once per type, so a multi-interface driver arrives as one device per interface. Everything a device reports comes from polling, so a property changes at most once per interval, and a capability (such as the ability to slew or to move a focuser) shows up only after the first polls that follow the connection, so wait for it before commanding. `getProperties` replays the definitions, `sendText`, `sendNumber` and `sendSwitch` route an INDI command to the addressed device and turn it into REST calls, and `enableBlob` does nothing since images are always downloaded as ImageBytes. `stop(server?)` stops the polling, closes and forgets every device, and notifies the handler's `close` (the optional flag tells it the stop came from the server side); it can start again later, and `Symbol.dispose` calls it. Device types without a wrapper (switch and video) are skipped. `makeFitsFromImageBytes(data, time?, camera?, mount?, wheel?, focuser?, rotator?, lastExposureDuration?)` is the conversion used by the camera wrapper: it turns the bytes of an Alpaca ImageBytes download into an in-memory FITS (a new big-endian buffer with planar channels, `data` is not modified), stamping the header from the connected devices that are passed (the mount coordinates are converted from the date `time` to J2000, the exposure duration is in seconds) and ignoring the disconnected ones. It accepts mono and RGB images with 8-bit, signed or unsigned 16/32-bit integer and 32/64-bit float samples; it rejects other encodings (64-bit integers included), inconsistent dimensions, truncated pixels and an error response by throwing, since the data comes from the network. Polling and image download run over plain HTTP, and the date keywords are taken from the clock when the conversion runs.
 
 ```ts
+import { timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { AlpacaClient, makeFitsFromImageBytes } from 'nebulosa/src/devices/alpaca/client'
 import { AlpacaServer, makeImageBytesFromFits } from 'nebulosa/src/devices/alpaca/server'
-import { timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
-import { DEFAULT_CAMERA, DEFAULT_MOUNT } from 'nebulosa/src/devices/indi/device'
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { DEFAULT_CAMERA, DEFAULT_MOUNT } from 'nebulosa/src/devices/indi/device'
 import { FocuserManager } from 'nebulosa/src/devices/indi/manager/focuser'
 import { MountManager } from 'nebulosa/src/devices/indi/manager/mount'
 import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
@@ -15621,9 +15680,9 @@ wide.stop()
 `ACS712` reads an Allegro ACS712 Hall-effect current sensor on one analog pin and implements `Ammeter` (`current` in amperes, positive and negative depending on the direction of the flow). It is an `ADCPeripheral` (see [Firmata Peripheral Base](#firmata-peripheral-base)), so `start()` sets the pin to analog mode and enables its reports, and every report is converted: `current = (raw - zeroSteps) * aref / (adcResolution * voltsPerAmp)`, where `zeroSteps` is the ADC count at the zero-current voltage. The `ACS712Options` are the variant `range` (5, 20 or 30 A, which selects 0.185, 0.1 or 0.066 V/A), `aref` in volts (5), `zeroCurrentVoltage` in volts (2.5, half of the supply), `adcResolution` as the largest ADC count (1023) and `voltsPerAmp`, which overrides the range sensitivity (`DEFAULT_ACS712_OPTIONS`). Use the actual ADC reference of the board in `aref` and the measured no-load voltage in `zeroCurrentVoltage`, since the sensor offset varies with supply and unit and no filtering is applied: a reading is the instantaneous value (it does not average an AC waveform). The DC current of a focuser or a dew heater is the typical use.
 
 ```ts
-import { ACS712, DEFAULT_ACS712_OPTIONS } from 'nebulosa/src/devices/firmata/sensors/ammeter'
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
+import { ACS712, DEFAULT_ACS712_OPTIONS } from 'nebulosa/src/devices/firmata/sensors/ammeter'
 
 // A client over TCP to a board that runs Firmata (the address and port are an example).
 const client = new FirmataClientOverTcp(new ESP8266())
@@ -15687,9 +15746,9 @@ reference.stop()
 `BMP280(client, address?, pollingInterval?, options?)` uses `BMP280.ADDRESS` (0x76) or `BMP280.ALTERNATIVE_ADDRESS` (0x77) and `BMP280Options`: `mode` (`'sleep'`, `'forced'`, `'normal'`), `temperatureSampling` and `pressureSampling` (`'skip'`, `'x1'` to `'x16'`), `filter` (`'off'`, `'x2'` to `'x16'`) and `standbyDuration` in milliseconds; `DEFAULT_BMP280_OPTIONS` is normal mode, 1x sampling, no filter and 1000 ms. `start()` writes the config and control registers, and each cycle requests the 6-byte data frame from 0xF7 (pressure then temperature, 20 bits each); in forced mode it first retriggers the conversion and waits its worst-case duration. The interval never goes below 100 ms. `compensateTemperature(adcT)` and `compensatePressure(adcP)` expose the floating-point compensation and the pressure one depends on the temperature computed just before. The altitude is a pressure altitude, so it changes with the weather with the weather and no sea-level reduction is applied.
 
 ```ts
-import { BMP180, BMP180Mode, BMP280, DEFAULT_BMP280_OPTIONS } from 'nebulosa/src/devices/firmata/sensors/barometer'
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
+import { BMP180, BMP180Mode, BMP280, DEFAULT_BMP280_OPTIONS } from 'nebulosa/src/devices/firmata/sensors/barometer'
 import { toMeter } from 'nebulosa/src/math/units/distance'
 
 // A client over TCP to a board that runs Firmata (the address and port are an example).
@@ -15735,9 +15794,9 @@ forced.stop()
 The operations mirror the Arduino LiquidCrystal API: `clear()`, `home()` (both wait the 2 ms the controller needs), `setCursor(column, row)` (a row beyond the last is clamped to it), `display()`/`noDisplay()`, `cursor()`/`noCursor()`, `blink()`/`noBlink()`, `scrollDisplayLeft()`/`scrollDisplayRight()`, `leftToRight()`/`rightToLeft()`, `autoscroll()`/`noAutoscroll()`, `backlight()`/`noBacklight()` (these two only touch the backlight bit and may be used before `begin()`), `createChar(location, charmap)` (eight 5x8 glyphs, location 0..7 taken modulo 8, one byte per row using the low five bits) and the writers `write(byte)` (one raw byte, returns 1) and `print(value)` (a string or a value converted with `String`; each character is masked to 8 bits, so only the characters of the controller character set, ASCII and the ROM extensions, display properly, and text is not wrapped between lines, so position it with `setCursor`). Every call issues I2C writes through the expander and returns after queuing them, and a display that is not connected simply does not answer: nothing is read back from it.
 
 ```ts
-import { DEFAULT_HD44780_OPTIONS, HD44780 } from 'nebulosa/src/devices/firmata/components/display'
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
+import { DEFAULT_HD44780_OPTIONS, HD44780 } from 'nebulosa/src/devices/firmata/components/display'
 import { PCF8574 } from 'nebulosa/src/devices/firmata/components/io'
 
 // A client over TCP to a board that runs Firmata (the address and port are an example).
@@ -15801,9 +15860,9 @@ wide.stop()
 `start()` registers the handler, sets the read delay to zero and writes the current state with the fast-mode command (two bytes: the power-down bits and the high nibble of the code, then the low byte); `stop()` detaches the handler and leaves the output as it was. The `value` and `powerDownMode` properties are accessors: a change is normalised, written when the peripheral is started and then notifies the listeners (see [Firmata Peripheral Base](#firmata-peripheral-base)), while assigning the current value does nothing. Before `start()` a change is only staged and goes out with the first write. `persist()` writes the current code and power-down mode to the EEPROM of the chip with the write-DAC-and-EEPROM command (`WRITE_DAC_EEPROM_CMD`, three bytes), so the output powers up in that state; the EEPROM has a limited number of write cycles and the write takes some milliseconds on the chip, so it is a configuration step and not a per-sample operation. The static members are `MAX_VALUE` (4095) and the bit constants of the two commands.
 
 ```ts
-import { DEFAULT_MCP4725_OPTIONS, MCP4725 } from 'nebulosa/src/devices/firmata/components/dac'
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
+import { DEFAULT_MCP4725_OPTIONS, MCP4725 } from 'nebulosa/src/devices/firmata/components/dac'
 
 // A client over TCP to a board that runs Firmata (the address and port are an example).
 const client = new FirmataClientOverTcp(new ESP8266())
@@ -15841,9 +15900,9 @@ staged.stop()
 `DS18B20` reads a Dallas/Maxim DS18B20 1-Wire thermometer through the One-Wire feature of the client (see [Firmata One-Wire](#firmata-one-wire)) and implements `Thermometer` (`temperature` in degrees Celsius, 0.0625 °C per least significant bit of the 16-bit reading). The constructor takes the `client`, the 1-Wire `pin`, the `pollingInterval` in milliseconds (`DEFAULT_POLLING_INTERVAL`, never below 1000) and `DS18B20Options`: the ROM `address` (8 bytes; when given the bus is not searched), `skip` (use SKIP ROM, valid only with a single device on the bus), the `resolution` (9, 10, 11 or 12 bits, default 12, with conversion waits of 94, 188, 375 and 750 ms) and the `powerMode` (`'normal'` or `'parasitic'`); `DEFAULT_DS18B20_OPTIONS` holds the defaults and an address that is not 8 bytes is rejected. `start()` configures the pin and, without an address and without `skip`, searches the bus and adopts the first family-0x28 address of the reply (an alarm search reply is ignored). It then writes the resolution to the scratchpad when it is not 12 bits, and each polling cycle starts a conversion (Convert T), waits the conversion time and requests the 9-byte scratchpad; the reply is accepted only for that read (matched by correlation ID), only with a valid Maxim CRC-8 (`DS18B20.isScratchpadValid`), and then decoded. A read cycle that is still outstanding is not overlapped, and `stop()` invalidates any conversion in flight. A first reading of exactly 0 °C is still delivered to the listeners (see [Firmata Peripheral Base](#firmata-peripheral-base)). The static members are the command bytes (`CONVERT_T_CMD`, `READ_SCRATCHPAD_CMD`, `WRITE_SCRATCHPAD_CMD`), `FAMILY_CODE`, the default alarm limits and `SCRATCHPAD_SIZE`. The class logs the address it found with `console.info`.
 
 ```ts
-import { DEFAULT_DS18B20_OPTIONS, DS18B20 } from 'nebulosa/src/devices/firmata/sensors/thermometer'
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
+import { DEFAULT_DS18B20_OPTIONS, DS18B20 } from 'nebulosa/src/devices/firmata/sensors/thermometer'
 
 // A client over TCP to a board that runs Firmata (the address and port are an example).
 const client = new FirmataClientOverTcp(new ESP8266())
@@ -15883,9 +15942,9 @@ single.stop()
 `RDA5807(client, address?, pollingInterval?, options?)` uses `RDA5807.ADDRESS` (0x11, the direct-access address) and `RDA5807Options`: `frequency` (87 MHz), `volume` (0 to 100, mapped onto the 16 chip steps, so values are quantised to multiples of about 6.7), `muted`, `band` (`'usEurope'` 87 to 108 MHz, `'japanWide'` 76 to 91, `'world'` 76 to 108 and `'eastEurope'`), `eastEuropeMode` (`'65_76'` or `'50_65'` MHz), `stereo`, `bassBoost`, `audioOutputHighZ`, `spacing` (25, 50, 100 or 200 kHz), `seekThreshold` (0 to 15 RSSI threshold of the hardware seek) and `wrap` (`DEFAULT_RDA5807_OPTIONS`). Registers are 16-bit and written as register, high byte, low byte (control 0x02, tuning 0x03, audio 0x05, and 0x06/0x07 for the east-Europe band); the status read asks for the four bytes of registers 0x0A and 0x0B (seek/tune complete, seek-fail, stereo and the channel index in 0x0A; RSSI, station and ready flags in 0x0B) and the frequency is `band start + channel * spacing`. Unlike the TEA5767 the seek is done by the chip: `seek()` clears stale seek state, sets the seek, direction and wrap-mode bits and the driver finishes it when a status frame reports seek/tune complete, applying the reported channel and the seek-failed flag; during the seek the previous values are kept. `volume` has the accessors and steps `volumeUp()`/`volumeDown()` (one chip step), and `bassBoost`, `audioOutputHighZ` and `muted` are accessors that rewrite the control register. `stop()` clears the enable bit and any pending read. Both `seek()` methods need the peripheral to be started.
 
 ```ts
-import { DEFAULT_RDA5807_OPTIONS, DEFAULT_TEA5767_OPTIONS, RDA5807, TEA5767 } from 'nebulosa/src/devices/firmata/components/radio'
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
+import { DEFAULT_RDA5807_OPTIONS, DEFAULT_TEA5767_OPTIONS, RDA5807, TEA5767 } from 'nebulosa/src/devices/firmata/components/radio'
 
 // A client over TCP to a board that runs Firmata (the address and port are an example).
 const client = new FirmataClientOverTcp(new ESP8266())
@@ -15965,9 +16024,9 @@ east.stop()
 The constructor takes the `client`, the I2C `address` (`KT0803L.ADDRESS`, 0x3E) and `KT0803LOptions`: `frequency` (89.7 MHz), `muted`, `stereo`, `gain` (the audio PGA in dB, integer steps from -15 to 12), `transmitPower` (the RFGAIN code of the datasheet, 0 to 15, 15 being the highest output; the code is not a calibrated power), `bassBoost` (0, 5, 11 or 17 dB, snapped to the nearest), `preEmphasis` (50 or 75 µs), `pilotToneHigh`, `automaticLevelControl`, `automaticPowerDown` (power down on silence), `powerAmplifierBias`, `deviation` (75 or 112.5 kHz) and `audioEnhancement`; `DEFAULT_KT0803L_OPTIONS` holds the defaults. `start()` registers the handler, enables I2C and writes the whole configuration while holding the chip in standby (registers 0x0B, 0x10, 0x04, 0x0E, 0x17, 0x13, then the frequency registers 0x01, 0x02, 0x00) before releasing the standby with a final write to 0x0B; `stop()` writes the standby bit and detaches. Every property is an accessor: setting a different value rewrites the registers that carry it (only when started) and notifies the listeners (see [Firmata Peripheral Base](#firmata-peripheral-base)), and setting the current value does nothing. `frequencyUp()` and `frequencyDown()` move one 50 kHz channel and wrap at the band edges, and `mute()` and `unmute()` set `muted`. Each register write is a two-byte `[register, value]` I2C write, and the channel is split across registers 0x00, 0x01 and 0x02.
 
 ```ts
-import { DEFAULT_KT0803L_OPTIONS, KT0803L } from 'nebulosa/src/devices/firmata/components/radio'
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
+import { DEFAULT_KT0803L_OPTIONS, KT0803L } from 'nebulosa/src/devices/firmata/components/radio'
 
 // A client over TCP to a board that runs Firmata (the address and port are an example).
 const client = new FirmataClientOverTcp(new ESP8266())
@@ -16033,9 +16092,9 @@ edge.stop()
 Neither driver compensates the humidity for temperature or applies a calibration offset, and neither checks the SHT21 CRC byte (the reply is two bytes).
 
 ```ts
-import { AM2320, SHT21 } from 'nebulosa/src/devices/firmata/sensors/hygrometer'
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
+import { AM2320, SHT21 } from 'nebulosa/src/devices/firmata/sensors/hygrometer'
 
 // A client over TCP to a board that runs Firmata (the address and port are an example).
 const client = new FirmataClientOverTcp(new ESP8266())
@@ -16070,9 +16129,9 @@ sht21.stop()
 `start()` registers the handler, enables I2C, writes the staged byte, requests a port snapshot and starts polling; `stop()` cancels the timer and detaches. `pinMode(pin, mode)` sets or clears the input bit (`PinMode.INPUT` makes it an input, any other mode an output) and flushes. `pinWrite(pin, value, flush?)` stages one bit, makes that pin an output and, unless `flush` is `false`, writes the port and requests a snapshot, so several writes can be batched and sent with a final `flush()`. `pinRead(pin)` returns the logic level of the latest snapshot without a bus transaction, `refresh()` requests a fresh snapshot with a registerless one-byte read, and a changed snapshot notifies the listeners (see [Firmata Peripheral Base](#firmata-peripheral-base)). `pinRead` therefore reflects the chip only after a reply, and a pin written as an output reads back its driven level. An index outside 0..7 is a programming error, and `refresh()` throws before `start()`. The chip has no interrupt handling here: input changes are seen at the polling period.
 
 ```ts
-import { DEFAULT_PCF8574_OPTIONS, PCF8574 } from 'nebulosa/src/devices/firmata/components/io'
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
+import { DEFAULT_PCF8574_OPTIONS, PCF8574 } from 'nebulosa/src/devices/firmata/components/io'
 import { PinMode } from 'nebulosa/src/devices/firmata/types'
 
 // A client over TCP to a board that runs Firmata (the address and port are an example).
@@ -16117,9 +16176,9 @@ alternative.stop()
 `TEMT6000(client, pin, options?)` is an `ADCPeripheral` with `TEMT6000Options` `aref` in volts (5), `loadResistance` in ohms (10000), `adcResolution` as the largest count (1023) and `microampsPerLux` (0.5); every report is multiplied by `aref * 1e6 / (loadResistance * adcResolution * microampsPerLux)`. Its `name` is the string `'TEMPT6000'`.
 
 ```ts
-import { BH1750, DEFAULT_BH1750_OPTIONS, DEFAULT_MAX44009_OPTIONS, DEFAULT_TEMT6000_OPTIONS, DEFAULT_TSL2561_OPTIONS, MAX44009, TEMT6000, TSL2561 } from 'nebulosa/src/devices/firmata/sensors/luxmeter'
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
+import { BH1750, DEFAULT_BH1750_OPTIONS, DEFAULT_MAX44009_OPTIONS, DEFAULT_TEMT6000_OPTIONS, DEFAULT_TSL2561_OPTIONS, MAX44009, TEMT6000, TSL2561 } from 'nebulosa/src/devices/firmata/sensors/luxmeter'
 
 // A client over TCP to a board that runs Firmata (the address and port are an example).
 const client = new FirmataClientOverTcp(new ESP8266())
@@ -16168,9 +16227,9 @@ temt6000.stop()
 `HMC5883L` drives the Honeywell HMC5883L three-axis magnetometer over I2C and implements `Magnetometer` (`x`, `y` and `z` in gauss, in the sensor frame). The constructor takes the `client`, the I2C `address` (`HMC5883L.ADDRESS`, 0x1E), the `pollingInterval` in milliseconds (`DEFAULT_POLLING_INTERVAL`) and `HMC5883LOptions`: `sampleAveraging` (1, 2, 4 or 8 samples per output), `dataRate` (0.75, 1.5, 3, 7.5, 15, 30 or 75 Hz) and the full-scale `range` in gauss (0.88, 1.3, 1.9, 2.5, 4, 4.7, 5.6 or 8.1), with `DEFAULT_HMC5883L_OPTIONS` of 1, 15 Hz and 1.3 gauss. `start()` registers the handler, sets the read delay to zero, writes the two configuration registers and the continuous-measurement mode and requests the six data bytes from register 0x03, repeating on a timer that never runs faster than the data rate (`ceil(1000 / dataRate)` milliseconds); `stop()` cancels the timer. A reply is decoded as big-endian signed 16-bit values in the chip order X, Z, Y and converted with the counts per gauss of the range (1370, 1090, 820, 660, 440, 390, 330 or 230); a sample where any axis is the overflow value -4096 is dropped entirely. `rawToGauss(raw)` exposes the conversion, and listeners are notified when an axis changed (see [Firmata Peripheral Base](#firmata-peripheral-base)). No hard-iron or soft-iron calibration and no declination is applied, so the reading is the raw field including the offsets of nearby metal and currents, and a heading needs a calibration and a tilt compensation done by the caller.
 
 ```ts
-import { DEFAULT_HMC5883L_OPTIONS, HMC5883L } from 'nebulosa/src/devices/firmata/sensors/magnetometer'
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
+import { DEFAULT_HMC5883L_OPTIONS, HMC5883L } from 'nebulosa/src/devices/firmata/sensors/magnetometer'
 
 // A client over TCP to a board that runs Firmata (the address and port are an example).
 const client = new FirmataClientOverTcp(new ESP8266())
@@ -16200,10 +16259,10 @@ fast.stop()
 `devices/firmata/peripheral` defines what every Firmata-attached sensor or actuator is and the base classes that implement the common plumbing. A `Peripheral` has a `name`, the owning `client`, `start()` and `stop()` and is `Disposable` (disposing stops it); a `ListenablePeripheral` also reports `samples` and accepts listeners. The measurement contracts are `Thermometer` (`temperature` in degrees Celsius), `Hygrometer` (`humidity` in percent), `Barometer` (`pressure` in hPa), `Altimeter` (`altitude`, a `Distance` in AU), `Luxmeter` (`lux`), `Ammeter` (`current` in amperes), `Accelerometer` (`ax`, `ay`, `az` in m/s²), `Gyroscope` (`gx`, `gy`, `gz` in rad/s), `Magnetometer` (`x`, `y`, `z` in gauss), `RadioTuner`, `RadioTransmitter`, `RealTimeClock`, `IOExpander` and `Display`, each implemented by the classes of the following topics. `PeripheralBase` implements `addListener`, `removeListener`, `samples`, `initialized`, `close` (stops the peripheral when its own client disconnects) and `Symbol.dispose`, and gives subclasses the protected `fire()`, `commit(changed)`, `readTwoWireRegister(address, register, bytes, timeout?)`, `resolvePendingTwoWireRead(...)` and `clearPendingTwoWireReads(error)`. Listeners are called with the peripheral on every change; a listener added later still gets its first reading even when the value did not change (`commit(false)` delivers that first completed read only to the listeners that still wait for one, while `fire()` notifies everyone), and `samples` counts every completed reading, changed or not, so a consumer can tell a sensor that holds a steady value from one that stopped answering. `initialized` is true when there is at least one listener and every listener already received a reading. Adding the same listener twice does not re-arm it. `readTwoWireRegister` queues one register read per address and register pair, sends it with `twoWireRead` and resolves with a copy of the reply data when the subclass forwards the `twoWireMessage` event to `resolvePendingTwoWireRead` (it ignores replies of another client), and rejects after `timeoutMs` (1000 by default, and clearing the queue rejects the pending reads). `ADCPeripheral` is the base of the analog sensors: it declares the analog `pin` and a `calculate(raw)` that stores the derived reading and returns whether it changed; `start()` registers the handler, sets the pin to analog mode, enables the analog report and commits an initial sample from the cached pin value, `stop()` undoes that, and every `pinChange` of the pin commits a new one. `DEFAULT_POLLING_INTERVAL` (5000 ms) is the period used by the peripherals that poll on a timer. The raw reading of an ADC peripheral is the 10-bit-style value of the Firmata analog report, and the conversion to the physical unit is the subclass job.
 
 ```ts
-import { ADCPeripheral, DEFAULT_POLLING_INTERVAL, PeripheralBase, type Thermometer } from 'nebulosa/src/devices/firmata/peripheral'
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
 import type { FirmataClient } from 'nebulosa/src/devices/firmata/client'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
+import { ADCPeripheral, DEFAULT_POLLING_INTERVAL, PeripheralBase, type Thermometer } from 'nebulosa/src/devices/firmata/peripheral'
 
 console.log(DEFAULT_POLLING_INTERVAL)
 
@@ -16293,9 +16352,9 @@ The constructor takes the `client`, the I2C `address` (`ADDRESS` 0x68 for both) 
 `update(year?, month?, day?, dayOfWeek?, hour?, minute?, second?, millisecond?)` writes the time in BCD in 24-hour format and then requests a read; every omitted argument keeps its latest decoded value, and the DS3231 sets the century bit for years from 2100 on. `sync(date?)` calls `update` with the fields of a `Date` in the local time zone of the host (the current time by default); the millisecond is accepted for symmetry but not stored. The DS1307 oscillator can be halted by its seconds-register bit and neither driver manages that bit, the alarms or the DS3231 temperature register.
 
 ```ts
-import { DS1307, DS3231 } from 'nebulosa/src/devices/firmata/components/rtc'
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
+import { DS1307, DS3231 } from 'nebulosa/src/devices/firmata/components/rtc'
 
 // A client over TCP to a board that runs Firmata (the address and port are an example).
 const client = new FirmataClientOverTcp(new ESP8266())
@@ -16339,10 +16398,10 @@ The constructor takes the `FirmataClient`, a non-empty `name` and `FirmataIndiCl
 The lifecycle is driven by the usual INDI commands. `sendSwitch({ device, name: 'CONNECTION', elements: { CONNECT: true } })` waits for readiness (the connection is Busy meanwhile), attaches the listener, publishes every measurement vector Busy, starts the peripheral and finally sets the connection Idle; a vector settles to Idle with its first real reading, so a value that is not yet known is never presented as a measurement. Later readings publish a `setNumberVector` only when an element changed, except the weather vector, which is also republished every `reportInterval` (when new samples arrived) so its consumers can tell the sensor is alive. A reading outside the declared range of the vector is ignored and the vector keeps its last valid values. `DISCONNECT` removes the vectors and stops the peripheral, a disconnect during a connect cancels it, and a connection that fails leaves `CONNECTION` in the Alert state. `getProperties({ device?, name? })` replays the definitions (the measurements only while connected), `sendText` and `sendNumber` are ignored by the sensors, and `enableBlob` does nothing. On a clock, `sendNumber` for `TIME` writes the given fields (the others keep the current values, and an incomplete write before the first reading is ignored; the day of the week is computed), publishing the accepted values at once, and `TIME_SYNC` writes the host clock. `dispose()` (also `Symbol.dispose`) tears every device down, deletes their properties, detaches from the Firmata client and calls `handler.close(client, false)` once; a device's own `dispose()` removes only that device and frees its name.
 
 ```ts
-import { DS3231 } from 'nebulosa/src/devices/firmata/components/rtc'
+import { FirmataIndiClient } from 'nebulosa/src/devices/firmata/adapters/indi.client'
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
 import { FirmataClientOverTcp } from 'nebulosa/src/devices/firmata/client.tcp'
-import { FirmataIndiClient } from 'nebulosa/src/devices/firmata/adapters/indi.client'
+import { DS3231 } from 'nebulosa/src/devices/firmata/components/rtc'
 import { SHT21 } from 'nebulosa/src/devices/firmata/sensors/hygrometer'
 
 // A Firmata client over TCP to a board (the address and port are an example).
@@ -16916,12 +16975,12 @@ heaters.dutyCycle(cover, 25)
 Every command is ignored when the driver does not have the matching capability, and the motion commands are also ignored while the dome is slaved to a mount. The commands are `moveTo(dome, azimuth)` and `moveToAltitude(dome, altitude)` (absolute, radians), `moveBy(dome, delta)` (signed relative, radians), `move(dome, direction, enabled)` (continuous motion), `speed(dome, rpm)`, `syncTo(dome, azimuth)` (reports a position without moving), `home`, `park`, `unpark`, `setPark` (the current azimuth becomes the park position), `openShutter`, `closeShutter`, `slave(dome, enabled)` (autosync with the active mount, which needs a driver with `DOME_AUTOSYNC`), `stop`, `backlash(dome, enabled)` and `backlashSteps(dome, steps)`. The snippet uses the dome simulator with a mount manager so that slaving is available (see [INDI Dome Simulator](#indi-dome-simulator)).
 
 ```ts
-import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
 import { DomeManager } from 'nebulosa/src/devices/indi/manager/dome'
 import { MountManager } from 'nebulosa/src/devices/indi/manager/mount'
 import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
 import { DomeSimulator } from 'nebulosa/src/devices/indi/simulator/dome'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 
 // Waits until a condition is true, polling every 10 ms.
 async function waitUntil(condition: () => boolean, timeout: number = 5000) {
@@ -17709,8 +17768,8 @@ The simulated clock `utcTime` (milliseconds since the epoch) advances with the r
 
 ```ts
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
-import { MAX_GUIDE_RATE, MAX_QUEUED_GUIDE_PULSES, SLEW_RATES, SLEW_SPEED_FACTOR } from 'nebulosa/src/devices/indi/simulator/constants'
 import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { MAX_GUIDE_RATE, MAX_QUEUED_GUIDE_PULSES, SLEW_RATES, SLEW_SPEED_FACTOR } from 'nebulosa/src/devices/indi/simulator/constants'
 import { MountSimulator } from 'nebulosa/src/devices/indi/simulator/mount'
 import { deg, hour, normalizeAngle, toArcsec, toDeg, toHour } from 'nebulosa/src/math/units/angle'
 import { toMeter } from 'nebulosa/src/math/units/distance'
@@ -19401,8 +19460,8 @@ console.log(new CRC(16, 0x8005, 0x0000, true, 0x0000, true).compute(text).toStri
 `src/io/csv.ts` parses delimited text into rows of strings. `readCsv(input, options?)` parses a whole string, or an array of lines that is joined with line feeds, and returns `CsvRow[]`. `readCsvStream(source, options?)` is an async generator that reads a `Source` (see [Byte-Stream Contracts](#byte-stream-contracts)) in chunks of `bufferSize` bytes (8 KiB by default), decodes them incrementally with a `TextDecoder` so that multi-byte characters survive the chunk boundaries, and yields the rows as they complete, with quoted fields, doubled quotes and line breaks inside quotes reassembled across chunks. `CsvLineParser` is the engine that splits one logical line, and it can be used alone: `parse(line, offset?, row?)` returns the row, or `false` for an empty or comment line. The options are `delimiter` (a character or a list of accepted characters, `,` by default; `CSV_DELIMITER` and `TSV_DELIMITER` are the comma and the tab), `comment` (the marker or markers of the lines that are skipped, `'#'` by default), `quote` (the quote characters, `'"'` by default, or `false` to disable quoting), `forceTrim` (also trims the text inside quotes), `skipFirstLine` (drops the first data row, which is the header, and is `true` by default) and, for the stream, `encoding`, `bufferSize`, `ignoreBOM` and `fatal`. Unquoted fields are trimmed, empty fields are empty strings, and every value is text, so the numbers are converted by the caller. A single string or array of strings in place of the options is the delimiter or the delimiters. The parser does not infer types or names of columns.
 
 ```ts
-import { bufferSource, readableStreamSource } from 'nebulosa/src/io/io'
 import { CSV_DELIMITER, CsvLineParser, DEFAULT_READ_CSV_STREAM_OPTIONS, readCsv, readCsvStream, TSV_DELIMITER } from 'nebulosa/src/io/csv'
+import { bufferSource, readableStreamSource } from 'nebulosa/src/io/io'
 
 console.log(JSON.stringify(CSV_DELIMITER), JSON.stringify(TSV_DELIMITER), DEFAULT_READ_CSV_STREAM_OPTIONS.skipFirstLine, DEFAULT_READ_CSV_STREAM_OPTIONS.bufferSize) // "," "\t" true 8192
 
@@ -22505,11 +22564,11 @@ client.addHandler({
 Firmata is a byte protocol: a one-byte command (the standard digital, analog, report-version and reset messages), or a SysEx frame `START_SYSEX (0xf0)`, a feature ID, a payload of 7-bit bytes and `END_SYSEX (0xf7)`. `src/devices/firmata/protocol` exports every command ID, operation bit and bound as a named constant (for instance `DIGITAL_MESSAGE`, `SET_PIN_MODE`, `CAPABILITY_QUERY`, `TWO_WIRE_REQUEST`, `SCHEDULER_DATA`, the `ONE_WIRE_*` request bits and `MIN_SAMPLING_INTERVAL`/`MAX_SAMPLING_INTERVAL`). Because a wire byte only carries seven data bits, `codecs/numeric` provides the encoders and decoders the other codecs build on: unsigned integers least-significant group first (`encodeUnsigned7`, `decodeUnsigned7`), signed 32-bit variables (`encodeSigned32`, `decodeSigned32`), AccelStepper positions as a sign-magnitude value (`encodeStepperPosition`, `decodeStepperPosition`; -2³¹ is not representable) and speeds as the firmware's decimal float with a 23-bit significand (`encodeStepperFloat`, `decodeStepperFloat`, which keep about seven significant digits), dense packing of seven raw bytes into eight wire bytes (`encodePacked7Bit`, `decodePacked7Bit`), one byte as two 7-bit bytes (`encodeByteAs7Bit`, `decodeByteAs7Bit`) and a 14-bit value as two bytes (`writeValueAsTwo7bitBytes`). `codecs/replies` decodes the payloads that follow the feature ID of the optional replies (`decodeSystemVariableReply`, `decodeSerialReply`, `decodeEncoderPositions`, `decodeStepperReply`, `decodeDhtReport`, `decodeSchedulerReply` and `decodeFrequencyReport`); each returns `undefined` for a truncated or foreign payload and a fresh object otherwise. Incoming bytes are normally decoded by the parser of a `FirmataClient` (see [Firmata Board Client](#firmata-board-client)): `client.process(bytes)` accepts any chunking, including a message split between chunks, and calls the matching callback of every registered handler. Unknown SysEx frames arrive as `customMessage`, and a byte that starts no known message arrives as `error`. SysEx frames larger than the parser buffer (1 MiB) are discarded, and the 14-bit analog and sampling-interval fields cap those values at 16383.
 
 ```ts
-import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
-import { decodeDhtReport, decodeEncoderPositions, decodeFrequencyReport, decodeSchedulerReply, decodeSerialReply, decodeStepperReply, decodeSystemVariableReply } from 'nebulosa/src/devices/firmata/codecs/replies'
-import { decodeByteAs7Bit, decodePacked7Bit, decodeSigned32, decodeStepperFloat, decodeStepperPosition, decodeUnsigned7, encodeByteAs7Bit, encodePacked7Bit, encodeSigned32, encodeStepperFloat, encodeStepperPosition, encodeUnsigned7, writeValueAsTwo7bitBytes } from 'nebulosa/src/devices/firmata/codecs/numeric'
-import * as Firmata from 'nebulosa/src/devices/firmata/protocol'
 import { ESP8266 } from 'nebulosa/src/devices/firmata/board'
+import { FirmataClient } from 'nebulosa/src/devices/firmata/client'
+import { decodeByteAs7Bit, decodePacked7Bit, decodeSigned32, decodeStepperFloat, decodeStepperPosition, decodeUnsigned7, encodeByteAs7Bit, encodePacked7Bit, encodeSigned32, encodeStepperFloat, encodeStepperPosition, encodeUnsigned7, writeValueAsTwo7bitBytes } from 'nebulosa/src/devices/firmata/codecs/numeric'
+import { decodeDhtReport, decodeEncoderPositions, decodeFrequencyReport, decodeSchedulerReply, decodeSerialReply, decodeStepperReply, decodeSystemVariableReply } from 'nebulosa/src/devices/firmata/codecs/replies'
+import * as Firmata from 'nebulosa/src/devices/firmata/protocol'
 
 // A few command IDs and bounds, in hexadecimal.
 console.log(Firmata.START_SYSEX.toString(16), Firmata.END_SYSEX.toString(16), Firmata.SET_PIN_MODE.toString(16), Firmata.CAPABILITY_QUERY.toString(16)) // f0 f7 f4 6b
@@ -22584,8 +22643,8 @@ client.process(Buffer.from([0x01])) // analog 2 128 (one message split over thre
 
 ```ts
 import { temporalFromDate, type Temporal } from 'nebulosa/src/astronomy/time/temporal'
-import { deg, hour } from 'nebulosa/src/math/units/angle'
 import { Lx200ProtocolServer, type Lx200ProtocolHandler } from 'nebulosa/src/devices/protocols/lx200'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
 
 // A tiny mount: J2000 coordinates, a site and a UTC clock (the offset is -180 minutes), with the actions printing what they receive.
 const state = { ra: hour(5.5), dec: deg(-5.4), longitude: deg(-46.6333), latitude: deg(-23.55), dateTime: [temporalFromDate(2025, 3, 21, 22, 30, 15, 0), -180] as readonly [Temporal, number] }
@@ -22664,8 +22723,8 @@ client.close()
 `StellariumProtocolServer` is a TCP server for the telescope-control protocol of Stellarium, so the planetarium can show where a mount points and send it goto commands. Messages are little-endian and length-prefixed. The server broadcasts the current position with `send(ra, dec)`, in radians (J2000 equatorial), to every connected client as the protocol's 24-byte message with 32-bit fixed-point angles (`0x80000000` is 180 degrees; the right ascension is wrapped to the signed range, so it arrives as an angle in -180..180 degrees). It does nothing when no client is connected. Incoming goto messages (type 0, at least 20 bytes) call the `goto(server, ra, dec)` handler with the right ascension normalized to 0..2π and the declination in radians; other message types are ignored. A partial message is kept until it is complete, and a length field smaller than the 4-byte header or larger than 120 bytes closes the connection, since the stream could no longer be synchronized. The handler can also receive `connect` and `disconnect` notifications (`disconnect` runs for every closing client). `start(hostname, port)` starts listening (port 0 picks a free one, `port` then returns it) and returns false when already started, and `stop()` closes every connection. The server logs connection events with `console`.
 
 ```ts
-import { deg, hour } from 'nebulosa/src/math/units/angle'
 import { StellariumProtocolServer } from 'nebulosa/src/devices/protocols/stellarium'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
 
 const server = new StellariumProtocolServer({
 	handler: {
