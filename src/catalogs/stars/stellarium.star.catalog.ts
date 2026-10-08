@@ -17,8 +17,11 @@ import { closeStellariumStarFiles, computeStellariumStarChecksum, openStellarium
 // level by level and zone by zone, which is not a global brightness order. Reads go through a FIFO pool of at
 // most maxConcurrentReads block buffers per open catalog, allocated lazily: an operation holds a buffer only
 // while it reads and decodes, never while a stream consumer is paused, so the buffers and the reads in flight
-// stay bounded however many queries run, and nested queries cannot deadlock. At most maxPendingReads new
-// operations wait for a buffer; more are rejected at once, before a query builds its zone cover. The checksum
+// stay bounded however many queries run, and nested queries cannot deadlock. At most maxActiveStreams queries
+// run at once (a running query keeps its place, but no buffer, while its consumer is paused) and at most
+// maxPendingReads new operations wait for a buffer; beyond either, an operation is rejected at once, before a
+// query builds its zone cover. Resumed queries wait without that limit, so the whole queue stays under
+// maxPendingReads + maxActiveStreams and an admitted query is never rejected for saturation. The checksum
 // audit streams with its own 1 MiB buffer, one audit at a time. Memory per running query is the zone cover;
 // queryRegion materializes every match, so streamRegion suits dense regions.
 // This provider is unrelated to the deep-sky StellariumCatalog of `stellarium.ts`.
@@ -36,12 +39,17 @@ const DEFAULT_MAX_CONCURRENT_READS = 8
 // promise and a suspended frame (a query has not built its cover yet), a few hundred bytes, so the queue stays
 // well under 1 MiB while absorbing bursts of 128 times the default concurrency. Not tuned by benchmark.
 const DEFAULT_MAX_PENDING_READS = 1024
+// Default maximum of queries running at once per open catalog. A running query holds its zone cover and, when
+// resumed, at most one buffer wait, so this also bounds the resumed queries in the queue. Not tuned by benchmark.
+const DEFAULT_MAX_ACTIVE_STREAMS = 256
 // Chunk size of the checksum audit, bytes: large sequential reads, independent of blockBytes.
 const CHECKSUM_CHUNK_BYTES = 1024 * 1024
 // Message of the operations that fail because the catalog was closed under them.
 const CLOSED_MESSAGE = 'Stellarium star catalog is closed'
 // Message of the new operations refused because maxPendingReads operations already wait for a buffer.
 const SATURATED_MESSAGE = 'Stellarium star catalog read queue is full'
+// Message of the queries refused because maxActiveStreams queries are already running.
+const STREAMS_MESSAGE = 'Stellarium star catalog has too many active streams'
 // Coarse-prefilter slack, radians (1 mas). Far above the exact-geometry tolerance, so a record that passes the
 // exact test is never dropped by the prefilter, which uses the same decoded coordinates.
 const PRESELECTION_TOLERANCE = MILLIASEC2RAD
@@ -55,8 +63,15 @@ export interface StellariumStarCatalogOptions {
 	readonly maxConcurrentReads?: number
 	// Maximum number of new queries and get calls waiting for a read buffer; an integer >= 0, default 1024. A new
 	// operation beyond it is rejected at once with "Stellarium star catalog read queue is full". A query already
-	// admitted is never rejected for saturation: when its consumer resumes it, it waits for a buffer regardless.
+	// admitted is never rejected for saturation: when its consumer resumes it, it waits for a buffer regardless,
+	// and these waits are bounded by maxActiveStreams.
 	readonly maxPendingReads?: number
+	// Maximum number of queries running at once, each from its first entry request until it completes, fails or
+	// is returned; an integer >= 1, default 256. A query started beyond it is rejected at once with "Stellarium
+	// star catalog has too many active streams"; it never waits, so a query nested in a running stream cannot
+	// deadlock. A paused stream holds no buffer but keeps its place: finish it, leave its for await loop (break
+	// and throw return the iterator), or call return() on an iterator that is abandoned.
+	readonly maxActiveStreams?: number
 	// Levels that must be present; open throws naming the absent ones. By default any subset of levels is accepted.
 	readonly requiredLevels?: readonly number[]
 }
@@ -111,11 +126,21 @@ export interface StellariumStarCatalogDiagnostics {
 	readonly peakBuffersInUse: number
 	// Largest number of positional reads in flight at once; never above maxConcurrentReads + 1 (the checksum audit).
 	readonly peakConcurrentReads: number
-	// Largest number of new operations waiting for a read buffer at once; never above maxPendingReads.
+	// Largest number of operations waiting for a read buffer at once, new and resumed; never above
+	// maxPendingReads + maxActiveStreams.
 	readonly peakQueuedOperations: number
-	// New operations rejected because the read queue was full.
+	// Largest number of queries running at once; never above maxActiveStreams.
+	readonly peakActiveStreams: number
+	// New operations rejected because the read queue was full or maxActiveStreams queries were running.
 	readonly rejectedOperations: number
+	// Operations waiting for a read buffer now; 0 when closed. Not affected by resetDiagnostics.
+	readonly queuedOperations: number
+	// Queries running now; 0 when closed. Not affected by resetDiagnostics.
+	readonly activeStreams: number
 }
+
+// Cumulative counters and peaks behind StellariumStarCatalogDiagnostics, without the current values.
+type CumulativeDiagnostics = Writable<Omit<StellariumStarCatalogDiagnostics, 'queuedOperations' | 'activeStreams'>>
 
 // Result of the checksum verification of one level file.
 export interface StellariumStarChecksumResult {
@@ -166,30 +191,61 @@ interface ReadSlotWaiter {
 // FIFO pool of the read buffers of one open generation. At most `capacity` buffers exist, allocated lazily,
 // so the buffers held and the positional reads issued at once never exceed it. Requests are served in arrival
 // order; a request prefers the free buffer it released last (keeping its block valid), then a new buffer, then
-// any free one. At most `maxPending` new operations wait; continuations of admitted streams always wait, and
-// they number at most one per admitted stream whose consumer is resuming it. abort rejects every waiter and later
-// request; buffers released afterwards just become free.
+// any free one. At most `maxStreams` streams are active and at most `maxPending` new operations wait;
+// continuations of active streams always wait, one per stream at most, so the waiters never exceed
+// maxPending + maxStreams. abort rejects every waiter and later request; buffers released and streams ended
+// afterwards just update the counts.
 class ReadSlotPool {
 	#allocated = 0
 	#aborted = false
 	// Waiting new operations, never above maxPending.
 	#queuedAdmissions = 0
+	// Streams started and not yet ended, never above maxStreams.
+	#activeStreams = 0
 	readonly #free: ReadSlot[] = []
 	readonly #waiters: ReadSlotWaiter[] = []
 
-	// Creates an empty pool of at most `capacity` buffers of `blockBytes` bytes and at most `maxPending` waiting
-	// new operations; `diagnostics` receives the peaks and rejections.
+	// Creates an empty pool of at most `capacity` buffers of `blockBytes` bytes, `maxPending` waiting new operations
+	// and `maxStreams` active streams; `diagnostics` receives the peaks and rejections.
 	constructor(
 		readonly capacity: number,
 		readonly maxPending: number,
+		readonly maxStreams: number,
 		readonly blockBytes: number,
-		private readonly diagnostics: Writable<StellariumStarCatalogDiagnostics>,
+		private readonly diagnostics: CumulativeDiagnostics,
 	) {}
+
+	// Operations waiting for a buffer now.
+	get queued() {
+		return this.#waiters.length
+	}
+
+	// Streams active now.
+	get activeStreams() {
+		return this.#activeStreams
+	}
+
+	// Registers a starting stream. Returns false, counting a rejection, when maxStreams streams are active; the
+	// caller must then fail without acquiring, and otherwise call endStream exactly once when the stream ends.
+	startStream() {
+		if (this.#activeStreams >= this.maxStreams) {
+			this.diagnostics.rejectedOperations++
+			return false
+		}
+
+		if (++this.#activeStreams > this.diagnostics.peakActiveStreams) this.diagnostics.peakActiveStreams = this.#activeStreams
+		return true
+	}
+
+	// Unregisters an ended stream.
+	endStream() {
+		this.#activeStreams--
+	}
 
 	// Returns a buffer for `owner` immediately when one is free or allocatable and nobody waits, else a promise
 	// of one. A new operation (`admission`) is refused with a rejected promise, without queuing, when maxPending
-	// new operations already wait. The promise also rejects when the pool is or gets aborted. The caller must
-	// release the buffer.
+	// new operations already wait; a continuation (an active stream resuming) always queues. The promise also
+	// rejects when the pool is or gets aborted. The caller must release the buffer.
 	acquire(owner: object, admission: boolean): ReadSlot | Promise<ReadSlot> {
 		if (this.#aborted) return Promise.reject(new Error(CLOSED_MESSAGE))
 
@@ -204,8 +260,11 @@ class ReadSlotPool {
 				return Promise.reject(new Error(SATURATED_MESSAGE))
 			}
 
-			if (++this.#queuedAdmissions > this.diagnostics.peakQueuedOperations) this.diagnostics.peakQueuedOperations = this.#queuedAdmissions
+			this.#queuedAdmissions++
 		}
+
+		const queued = this.#waiters.length + 1
+		if (queued > this.diagnostics.peakQueuedOperations) this.diagnostics.peakQueuedOperations = queued
 
 		return new Promise((resolve, reject) => {
 			this.#waiters.push({ resolve, reject, admission })
@@ -270,6 +329,7 @@ export class StellariumStarCatalog extends BaseStarCatalog<StellariumStarCatalog
 	readonly #blockBytes: number
 	readonly #maxConcurrentReads: number
 	readonly #maxPendingReads: number
+	readonly #maxActiveStreams: number
 	readonly #requiredLevels: readonly number[]
 	#state?: OpenState
 	// Open in progress; cleared when it settles or when close invalidates it.
@@ -281,12 +341,13 @@ export class StellariumStarCatalog extends BaseStarCatalog<StellariumStarCatalog
 	#generation = 0
 	// Reads in flight, awaited by close before the handles are released.
 	readonly #pending = new Set<Promise<void>>()
-	readonly #diagnostics: Writable<StellariumStarCatalogDiagnostics> = { bytesRead: 0, readCalls: 0, coverNodesVisited: 0, zonesScanned: 0, recordsScanned: 0, recordsDecoded: 0, peakBuffersInUse: 0, peakConcurrentReads: 0, peakQueuedOperations: 0, rejectedOperations: 0 }
+	readonly #diagnostics: CumulativeDiagnostics = { bytesRead: 0, readCalls: 0, coverNodesVisited: 0, zonesScanned: 0, recordsScanned: 0, recordsDecoded: 0, peakBuffersInUse: 0, peakConcurrentReads: 0, peakQueuedOperations: 0, peakActiveStreams: 0, rejectedOperations: 0 }
 
 	// Creates a closed catalog. Throws when blockBytes is not an integer in 48..64 MiB, since a smaller block
 	// could not hold a record and a larger one would be an oversized buffer allocation, when maxConcurrentReads
 	// is not an integer >= 1, since a pool without buffers would make every query wait forever, and when
-	// maxPendingReads is not an integer >= 0, since NaN would silently disable the queue bound.
+	// maxPendingReads is not an integer >= 0 or maxActiveStreams not an integer >= 1, since NaN would silently
+	// disable the bound.
 	constructor(options: StellariumStarCatalogOptions = {}) {
 		super()
 
@@ -299,9 +360,13 @@ export class StellariumStarCatalog extends BaseStarCatalog<StellariumStarCatalog
 		const maxPendingReads = options.maxPendingReads ?? DEFAULT_MAX_PENDING_READS
 		if (!(Number.isInteger(maxPendingReads) && maxPendingReads >= 0)) throw new Error(`invalid Stellarium star catalog read queue size: ${maxPendingReads}`)
 
+		const maxActiveStreams = options.maxActiveStreams ?? DEFAULT_MAX_ACTIVE_STREAMS
+		if (!(Number.isInteger(maxActiveStreams) && maxActiveStreams >= 1)) throw new Error(`invalid Stellarium star catalog active stream limit: ${maxActiveStreams}`)
+
 		this.#blockBytes = blockBytes
 		this.#maxConcurrentReads = maxConcurrentReads
 		this.#maxPendingReads = maxPendingReads
+		this.#maxActiveStreams = maxActiveStreams
 		this.#requiredLevels = options.requiredLevels ?? []
 	}
 
@@ -325,15 +390,16 @@ export class StellariumStarCatalog extends BaseStarCatalog<StellariumStarCatalog
 		return this.#state?.set.missingLevels ?? []
 	}
 
-	// Snapshot of the cumulative counters.
+	// Snapshot of the cumulative counters and of the current queue and stream counts.
 	get diagnostics(): StellariumStarCatalogDiagnostics {
-		return { ...this.#diagnostics }
+		const pool = this.#state?.pool
+		return { ...this.#diagnostics, queuedOperations: pool?.queued ?? 0, activeStreams: pool?.activeStreams ?? 0 }
 	}
 
 	// Resets the cumulative counters and peaks to zero.
 	resetDiagnostics() {
 		const d = this.#diagnostics
-		d.bytesRead = d.readCalls = d.coverNodesVisited = d.zonesScanned = d.recordsScanned = d.recordsDecoded = d.peakBuffersInUse = d.peakConcurrentReads = d.peakQueuedOperations = d.rejectedOperations = 0
+		d.bytesRead = d.readCalls = d.coverNodesVisited = d.zonesScanned = d.recordsScanned = d.recordsDecoded = d.peakBuffersInUse = d.peakConcurrentReads = d.peakQueuedOperations = d.peakActiveStreams = d.rejectedOperations = 0
 	}
 
 	// Opens a catalog directory (see openStellariumStarFiles for the discovery rules) and returns this catalog.
@@ -394,7 +460,7 @@ export class StellariumStarCatalog extends BaseStarCatalog<StellariumStarCatalog
 			}
 		})
 
-		this.#state = { set, byLevel, levels, pool: new ReadSlotPool(this.#maxConcurrentReads, this.#maxPendingReads, this.#blockBytes, this.#diagnostics) }
+		this.#state = { set, byLevel, levels, pool: new ReadSlotPool(this.#maxConcurrentReads, this.#maxPendingReads, this.#maxActiveStreams, this.#blockBytes, this.#diagnostics) }
 		return this
 	}
 
@@ -503,11 +569,12 @@ export class StellariumStarCatalog extends BaseStarCatalog<StellariumStarCatalog
 	// Streams the candidate stars of a normalized query: the records of the covered zones of every level whose
 	// header magnitude lower bound does not exceed magnitudeMax, stopping each zone at the first record fainter
 	// than magnitudeMax (zones are sorted by ascending magnitude), skipping records brighter than magnitudeMin
-	// and, outside zones fully inside the query, records outside the preselection boxes. The query is admitted
-	// to the read pool (taking a buffer, waiting, or failing at once when the queue is full) before its zone cover
-	// is built. A buffer is then held until the next yield and released before it; when the consumer resumes, the
-	// scan waits for a buffer without the queue limit, and if another operation used it meanwhile, the current
-	// block is read again.
+	// and, outside zones fully inside the query, records outside the preselection boxes. The query takes an
+	// active-stream place (failing at once when maxActiveStreams queries run) and is admitted to the read pool
+	// (taking a buffer, waiting, or failing at once when the queue is full) before its zone cover is built. A
+	// buffer is then held until the next yield and released before it; when the consumer resumes, the scan waits
+	// for a buffer without the queue limit, and if another operation used it meanwhile, the current block is read
+	// again. The place is released when the scan completes, fails or is returned.
 	protected async *streamCandidateEntries(query: NormalizedStarCatalogQuery) {
 		const state = this.#requireOpen()
 		const generation = this.#generation
@@ -516,13 +583,17 @@ export class StellariumStarCatalog extends BaseStarCatalog<StellariumStarCatalog
 		if (files.length === 0) return
 
 		const { pool } = state
+		if (!pool.startStream()) throw new Error(STREAMS_MESSAGE)
+
 		// Identity of this scan in the pool: a buffer it gets back still owned by it holds its current block.
 		const owner = {}
-		const admitted = pool.acquire(owner, true)
-		let slot: ReadSlot | undefined = admitted instanceof Promise ? await admitted : admitted
-		slot.owner = owner
+		let slot: ReadSlot | undefined
 
 		try {
+			const admitted = pool.acquire(owner, true)
+			slot = admitted instanceof Promise ? await admitted : admitted
+			slot.owner = owner
+
 			const classify = query.kind === 'cone' ? stellariumConeClassifier(eraS2c(query.centerRA, query.centerDEC), query.radius) : stellariumBoxesClassifier(preselectionBoxes)
 			const cover = stellariumZoneCover(
 				classify,
@@ -596,6 +667,7 @@ export class StellariumStarCatalog extends BaseStarCatalog<StellariumStarCatalog
 			}
 		} finally {
 			if (slot !== undefined) pool.release(slot)
+			pool.endStream()
 		}
 	}
 

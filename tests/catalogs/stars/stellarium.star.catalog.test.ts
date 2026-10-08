@@ -216,6 +216,9 @@ describe('open', () => {
 		expect(() => new StellariumStarCatalog({ maxConcurrentReads: 1.5 })).toThrow('read concurrency')
 		expect(() => new StellariumStarCatalog({ maxPendingReads: -1 })).toThrow('read queue size')
 		expect(() => new StellariumStarCatalog({ maxPendingReads: Number.NaN })).toThrow('read queue size')
+		expect(() => new StellariumStarCatalog({ maxActiveStreams: 0 })).toThrow('active stream limit')
+		expect(() => new StellariumStarCatalog({ maxActiveStreams: 1.5 })).toThrow('active stream limit')
+		expect(() => new StellariumStarCatalog({ maxActiveStreams: Number.NaN })).toThrow('active stream limit')
 
 		const catalog = new StellariumStarCatalog()
 		expect(catalog.isOpen).toBeFalse()
@@ -638,6 +641,138 @@ describe('read concurrency', () => {
 		expect(records).toEqual([expected, expected])
 		expect(catalog.diagnostics.rejectedOperations).toBe(1)
 		expect(catalog.diagnostics.peakBuffersInUse).toBe(1)
+	})
+
+	test('resumed streams wait within maxActiveStreams and a get queued among them is served in order', async () => {
+		const maxActiveStreams = 20
+		await using catalog = await openStellariumStarCatalog(rootH, { blockBytes: 32 * 64, maxConcurrentReads: 1, maxPendingReads: 1, maxActiveStreams })
+		const zone = zoneOf(deg(150), deg(20), 5)
+		catalog.resetDiagnostics()
+
+		// Streams admitted one after the other, each paused after its first record without a buffer.
+		const iterators = []
+
+		for (let i = 0; i < maxActiveStreams; i++) {
+			const iterator = catalog.streamRegion(bright)[Symbol.asyncIterator]()
+			expect((await iterator.next()).value?.recordNumber).toBe(0)
+			iterators.push(iterator)
+		}
+
+		expect(catalog.diagnostics.activeStreams).toBe(maxActiveStreams)
+		expect(catalog.diagnostics.queuedOperations).toBe(0)
+
+		// One stream more is refused at once, before it reads or waits.
+		expect(await catalog.queryRegion(bright).then(undefined, (error: unknown) => error)).toEqual(new Error('Stellarium star catalog has too many active streams'))
+		expect(catalog.diagnostics.rejectedOperations).toBe(1)
+
+		// Every stream resumes at once and runs to its end; a get queued behind the first continuations is
+		// served before any stream gets a second turn, so it is not starved by the streams queuing again.
+		let finished = 0
+		let finishedBeforeGet = -1
+
+		async function drain(iterator: AsyncIterator<StellariumStarCatalogEntry>) {
+			const records = [0]
+
+			for (;;) {
+				const result = await iterator.next()
+				if (result.done) break
+				records.push(result.value.recordNumber)
+			}
+
+			finished++
+			return records
+		}
+
+		const drained = iterators.map(drain)
+		const got = catalog.get(5, zone, 999).then((entry) => {
+			finishedBeforeGet = finished
+			return entry?.recordNumber
+		})
+
+		expect(await got).toBe(999)
+		expect(finishedBeforeGet).toBe(0)
+		expect(await Promise.all(drained)).toEqual(Array.from({ length: maxActiveStreams }, () => [0, 1, 2, 3, 4, 5]))
+
+		// The depth counts the waiting continuations, bounded by maxPendingReads + maxActiveStreams, and the queue
+		// and the active streams are empty at the end.
+		const { peakQueuedOperations, peakActiveStreams, queuedOperations, activeStreams, peakBuffersInUse } = catalog.diagnostics
+		expect(peakQueuedOperations).toBeGreaterThanOrEqual(maxActiveStreams - 1)
+		expect(peakQueuedOperations).toBeLessThanOrEqual(1 + maxActiveStreams)
+		expect(peakActiveStreams).toBe(maxActiveStreams)
+		expect(queuedOperations).toBe(0)
+		expect(activeStreams).toBe(0)
+		expect(peakBuffersInUse).toBe(1)
+	})
+
+	test('a stream releases its active place however it ends', async () => {
+		const root = join(base, 'streams')
+		await fs.mkdir(root, { recursive: true })
+		await fs.copyFile(join(rootH, 'stars_5_1v0_6.cat'), join(root, 'stars_5_1v0_6.cat'))
+
+		const catalog = await openStellariumStarCatalog(root, { blockBytes: 32 * 64, maxActiveStreams: 1 })
+		const streams = new Error('Stellarium star catalog has too many active streams')
+
+		async function failure(operation: Promise<unknown> | undefined) {
+			try {
+				await operation
+				return undefined
+			} catch (error) {
+				return error instanceof Error ? error.message : String(error)
+			}
+		}
+
+		async function released() {
+			expect(catalog.diagnostics.activeStreams).toBe(0)
+			expect(await catalog.queryRegion(bright)).toHaveLength(6)
+		}
+
+		// A nested query while the only place is taken is refused at once instead of waiting forever.
+		const paused = catalog.streamRegion(dense)[Symbol.asyncIterator]()
+		expect((await paused.next()).done).toBeFalse()
+		expect(catalog.diagnostics.activeStreams).toBe(1)
+		expect(await catalog.queryRegion(bright).then(undefined, (error: unknown) => error)).toEqual(streams)
+		await paused.return(undefined)
+		await released()
+
+		for await (const entry of catalog.streamRegion(dense)) {
+			expect(entry.recordNumber).toBe(0)
+			break
+		}
+
+		await released()
+
+		async function consumerFails() {
+			for await (const _ of catalog.streamRegion(dense)) throw new Error('consumer failed')
+		}
+
+		expect(await failure(consumerFails())).toBe('consumer failed')
+		await released()
+
+		const thrown = catalog.streamRegion(dense)[Symbol.asyncIterator]()
+		await thrown.next()
+		expect(await failure(thrown.throw?.(new Error('thrown')))).toBe('thrown')
+		await released()
+
+		expect(await catalog.queryRegion(dense)).toHaveLength(1000)
+		await released()
+		expect(await catalog.queryRegion({ ...dense, limit: 3 })).toHaveLength(3)
+		await released()
+
+		// A stream paused across close fails on resume and gives its place back to the old open only.
+		const stale = catalog.streamRegion(dense)[Symbol.asyncIterator]()
+		await stale.next()
+		await catalog.close()
+		expect(catalog.diagnostics.activeStreams).toBe(0)
+		await catalog.open(root)
+		expect(await failure(stale.next())).toBe('Stellarium star catalog is closed')
+		await released()
+
+		// A read failure ends the stream and releases its place.
+		await fs.truncate(join(root, 'stars_5_1v0_6.cat'), 4096)
+		expect(await failure(catalog.queryRegion(dense))).toContain('stars_5_1v0_6.cat (level 5)')
+		expect(catalog.diagnostics.activeStreams).toBe(0)
+		expect(await failure(catalog.queryRegion(dense))).toContain('stars_5_1v0_6.cat (level 5)')
+		await catalog.close()
 	})
 
 	test('the checksum audit reads 1 MiB chunks whatever blockBytes, one audit at a time', async () => {
