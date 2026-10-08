@@ -1,5 +1,5 @@
-import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
-import { vecMulScalar } from 'nebulosa/src/math/linear-algebra/vec3'
+import { eraS2c } from '../../src/astronomy/coordinates/erfa/erfa'
+import { vecMulScalar } from '../../src/math/linear-algebra/vec3'
 import { type Angle, toMas } from '../../src/math/units/angle'
 
 // Synthetic encoders of the Stellarium star catalog binary layout (Star.hpp, ZoneArray.cpp), shared by the

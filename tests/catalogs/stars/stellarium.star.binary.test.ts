@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { PIOVERTWO } from 'nebulosa/src/core/constants'
 import { decodeStellariumStar, parseStellariumStarHeader, parseStellariumStarZoneTable, readStellariumStarMagnitude, readStellariumStarPosition, type StellariumStarDataType, stellariumStarZoneCount } from '../../../src/catalogs/stars/stellarium.star.binary'
+import { PIOVERTWO } from '../../../src/core/constants'
 import type { MutVec2 } from '../../../src/math/linear-algebra/vec2'
 import { deg, mas, toDeg, toMas } from '../../../src/math/units/angle'
 import { toKilometerPerSecond } from '../../../src/math/units/velocity'
@@ -271,4 +271,138 @@ test('raw readers match the decoded entry for every layout and buffer offset', (
 		expect(position[0]).toBe(direct.rightAscension)
 		expect(position[1]).toBe(direct.declination)
 	}
+})
+
+// Real headers and records copied byte for byte from the Stellarium 25.x hip_gaia3 files (manifest version 27):
+// stars_0_0v0_21.cat (MD5 0e8b8bb5d177c5caad433569140597e9), stars_2_0v0_17.cat (23d59734215dcbc539d9bf13eb4ed7f8),
+// stars_3_0v0_10.cat (39c82706afb12b1a3d08eee92ddef5e5), stars_4_1v0_6.cat (f5e57f400291d3d0c247ec669b1a4a07) and
+// stars_5_1v0_6.cat (eb2834985d5885ac03695084cded6897). The records derive from Gaia DR3 (ESA/Gaia/DPAC) and the
+// Hipparcos catalogue (ESA). The references are independent of the Stellarium processing and of the synthetic
+// encoders: gaiadr3.gaia_source at its J2016.0 reference epoch and gaiadr3.hipparcos2_best_neighbour (ESA Gaia
+// archive TAP, queried 2026-10-07) and, for Sirius, the Hipparcos new reduction (VizieR I/311, J1991.25) propagated
+// to J2016.0 with astropy 6.1.7 SkyCoord.apply_space_motion and RV -5.5 km/s. Tolerances are the storage
+// quantization: Star1 positions 0.1 mas (unit vector x 2e9), motions 0.001 mas/yr, parallax 0.01 mas (0.02 mas
+// steps); Star2 α and δ 0.5 mas (integer mas), dα/dt and dδ/dt 0.5 µas/yr, parallax 0.005 mas (0.01 mas steps).
+// No Star3 file (level 6 and above) was available, so Star3 is covered by the synthetic tests only.
+describe('real records', () => {
+	const HEADER0 = '0a045f830000000000000000150000000000000030f8ffffb4fc154a'
+	const HEADER2 = '0a045f83000000000000000011000000020000004c1d0000b4fc154a'
+	const HEADER3 = '0a045f8300000000000000000a0000000300000028230000b4fc154a'
+	const HEADER4 = '0a045f830100000000000000060000000400000004290000b4fc154a'
+	const HEADER5 = '0a045f8301000000000000000600000005000000e02e0000b4fc154a'
+
+	function decode(header: string, record: string, zone: number, recordNumber: number) {
+		return decodeStellariumStar(Buffer.from(record, 'hex'), 0, parseStellariumStarHeader(Buffer.from(header, 'hex')), zone, recordNumber)
+	}
+
+	// Asserts the on-sky offsets Δα cos δ and Δδ from a reference in degrees, mas.
+	function expectPosition(entry: { readonly rightAscension: number; readonly declination: number }, ra: number, dec: number, tolerance: number) {
+		expect(Math.abs(toMas(entry.rightAscension - deg(ra)) * Math.cos(entry.declination))).toBeLessThanOrEqual(tolerance)
+		expect(Math.abs(toMas(entry.declination - deg(dec)))).toBeLessThanOrEqual(tolerance)
+	}
+
+	// Asserts μα* = dα/dt cos δ and μδ against a reference in mas/yr.
+	function expectMotion(entry: { readonly declination: number; readonly pmRA?: number; readonly pmDEC?: number }, pmra: number, pmdec: number, tolerance: number) {
+		expect(Math.abs(toMas(entry.pmRA!) * Math.cos(entry.declination) - pmra)).toBeLessThanOrEqual(tolerance)
+		expect(Math.abs(toMas(entry.pmDEC!) - pmdec)).toBeLessThanOrEqual(tolerance)
+	}
+
+	test('headers', () => {
+		const expected = [
+			[HEADER0, 0, 48, 21, 0, -2],
+			[HEADER2, 0, 48, 17, 2, 7.5],
+			[HEADER3, 0, 48, 10, 3, 9],
+			[HEADER4, 1, 32, 6, 4, 10.5],
+			[HEADER5, 1, 32, 6, 5, 12],
+		] as const
+
+		for (const [hex, dataType, recordSize, minor, level, magnitudeMin] of expected) {
+			const header = parseStellariumStarHeader(Buffer.from(hex, 'hex'))
+			expect([header.dataType, header.recordSize, header.majorVersion, header.minorVersion, header.level, header.magnitudeMin]).toEqual([dataType, recordSize, 0, minor, level, magnitudeMin])
+			expect(header.epochJD).toBe(2457389)
+			expect(header.epoch).toBe(2016)
+			expect(header.zoneCount).toBe(stellariumStarZoneCount(level))
+		}
+	})
+
+	test('star1 Sirius, a Hipparcos star without Gaia source in the global zone', () => {
+		const entry = decode(HEADER0, '000000000000000044c0a8e99814f66f5c75b3ddd4380900465dfcff1f20eeff00004cfa104a9e00c9ffd10521a1cb0f', 20, 0)
+
+		expect(entry.gaiaId).toBe(0n)
+		expect(entry.hipId).toBe(32349)
+		expect(entry.componentId).toBe(1)
+		expect(entry.magnitude).toBe(-1.46)
+		expect(entry.bv).toBe(0)
+		expect(entry.spectralIndex).toBe(1489)
+		expect(entry.objectTypeIndex).toBe(33)
+		expect(toKilometerPerSecond(entry.rv!)).toBeCloseTo(-5.5, 12)
+		// HIP2: parallax 379.21 ± 1.58 mas.
+		expect(Math.abs(toMas(entry.parallax!) - 379.21)).toBeLessThanOrEqual(0.01)
+		expect(toMas(entry.parallaxError!)).toBeCloseTo(1.58, 12)
+		// The propagation of the HIP2 astrometry to J2016.0 bounds the Stellarium one to about 1 mas and 0.1 mas/yr.
+		expectPosition(entry, 101.28462128322414, -16.72155207305028, 1)
+		expectMotion(entry, -546.0917125161423, -1223.1883710241416, 0.1)
+	})
+
+	test('star1 Barnard star with Gaia source, Hipparcos number and radial velocity', () => {
+		const entry = decode(HEADER2, '0025c90020b1123e7a43dbfe5b2d3489737dd90947e5f3ff742e0d00b3939d00c1062725d56a0400b3fbb2102920f02a', 320, 7762)
+
+		expect(entry.gaiaId).toBe(4472832130942575872n)
+		// gaiadr3.hipparcos2_best_neighbour of the source.
+		expect(entry.hipId).toBe(87937)
+		expect(entry.componentId).toBe(0)
+		expect(entry.magnitude).toBe(9.511)
+		expect(entry.bv).toBe(1.729)
+		expect(entry.spectralIndex).toBe(4274)
+		expect(entry.objectTypeIndex).toBe(41)
+		expect([entry.level, entry.zone, entry.recordNumber]).toEqual([2, 320, 7762])
+		expectPosition(entry, 269.44850252543836, 4.739420051112412, 0.1)
+		expectMotion(entry, -801.5509783684709, 10362.394206546573, 0.001)
+		expect(Math.abs(toMas(entry.parallax!) - 546.975939730948)).toBeLessThanOrEqual(0.01)
+		expect(Math.abs(toMas(entry.parallaxError!) - 0.040116355)).toBeLessThanOrEqual(0.005)
+		// Not the Gaia DR3 radial velocity (-110.47 km/s): Stellarium takes it from another source.
+		expect(toKilometerPerSecond(entry.rv!)).toBeCloseTo(-110.1, 12)
+	})
+
+	test('star1 Gaia source without Hipparcos number', () => {
+		const entry = decode(HEADER3, '00fbf416001b1f4264538b1010df674005770f9dab15030021a408000e2406004f05f528cc0801001900000017000000', 801, 252)
+
+		expect(entry.gaiaId).toBe(4764556617980377856n)
+		expect(entry.hipId).toBeUndefined()
+		expect(entry.componentId).toBeUndefined()
+		expect(entry.magnitude).toBe(10.485)
+		expect(entry.bv).toBe(1.359)
+		expectPosition(entry, 75.59361064924794, -56.095187764521555, 0.1)
+		expectMotion(entry, -54.90248719211675, 721.4683244862313, 0.001)
+		expect(Math.abs(toMas(entry.parallax!) - 45.048700628755284)).toBeLessThanOrEqual(0.01)
+		expect(Math.abs(toKilometerPerSecond(entry.rv!) - 2.4832761)).toBeLessThanOrEqual(0.05)
+	})
+
+	test('star2 records near the poles, on RA 360° and with a large proper motion', () => {
+		const cases = [
+			// Northernmost record of level 4: μα* is dα/dt × cos δ with cos δ ≈ 0.003.
+			[HEADER4, '801a1e00e1fcff0fa59d671a66a346132295f5ff4e100000c104662c8e000100', 4885, 71, 1152918072929950336n, 11.366, 1.217, 123.05505036795934, 89.83234830529616, -1.9976801193438884, 4.173698783266151, 1.424114118739336],
+			// RA 359.9999°, just before the wrap to 0.
+			[HEADER4, '80381a00e119182675623f4d7e1b1e015bedffff60e1fffff901f82c19010300', 491, 97, 2744972427042371712n, 11.512, 0.505, 359.99989015231387, 5.208426104846906, -4.753515943026849, -7.840295972872681, 2.8118095128296563],
+			// Fastest record of level 5, 5.2″/yr.
+			[HEADER5, '808f41001179ff2ab94c641a85ace0012b841000b444b2ffc8068232b4390900', 14906, 137, 3098328182579892096n, 12.93, 1.736, 122.99468256110134, 8.750401522062495, 1069.811738087307, -5094.220103378359, 147.72184850183513],
+			// Southernmost record of level 5.
+			[HEADER5, '805f2c005900004885889117fe0cb3ec1ba63f00b220000005032232c7000100', 13226, 117, 5188147152985808768n, 12.834, 0.773, 109.83712126245663, -89.94723600961412, 3.8413636557018354, 8.370251942981383, 1.987918207684147],
+		] as const
+
+		for (const [header, record, zone, recordNumber, gaiaId, magnitude, bv, ra, dec, pmra, pmdec, parallax] of cases) {
+			const entry = decode(header, record, zone, recordNumber)
+
+			expect(entry.gaiaId).toBe(gaiaId)
+			expect(entry.magnitude).toBe(magnitude)
+			expect(entry.bv).toBe(bv)
+			expect(entry.hipId).toBeUndefined()
+			expect(entry.rv).toBeUndefined()
+			// Integer mas in α and δ: 0.5 mas each, compared as coordinates rather than on the sky.
+			expect(Math.abs(toMas(entry.rightAscension - deg(ra)))).toBeLessThanOrEqual(0.5)
+			expect(Math.abs(toMas(entry.declination - deg(dec)))).toBeLessThanOrEqual(0.5)
+			expectMotion(entry, pmra, pmdec, 0.001)
+			expect(Math.abs(toMas(entry.parallax!) - parallax)).toBeLessThanOrEqual(0.005)
+		}
+	})
 })

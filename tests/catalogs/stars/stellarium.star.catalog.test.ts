@@ -1,13 +1,13 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { createHash } from 'crypto'
-import fs from 'fs/promises'
+import fs, { type FileHandle } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import type { StellariumStarCatalogEntry } from 'nebulosa/src/catalogs/stars/stellarium.star.binary'
-import { PI, PIOVERTWO, TAU } from 'nebulosa/src/core/constants'
 import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogQuery } from '../../../src/catalogs/stars/catalog'
 import { stellariumLocalZoneCount, stellariumZoneForPoint } from '../../../src/catalogs/stars/stellarium.geodesic'
+import type { StellariumStarCatalogEntry } from '../../../src/catalogs/stars/stellarium.star.binary'
 import { openStellariumStarCatalog, StellariumStarCatalog } from '../../../src/catalogs/stars/stellarium.star.catalog'
+import { PIOVERTWO, PI, TAU } from '../../../src/core/constants'
 import { type Angle, deg, toMas } from '../../../src/math/units/angle'
 import { buildStarFile, encodeStar1, encodeStar2, encodeStar3 } from '../../util/stellarium.star'
 
@@ -212,6 +212,8 @@ describe('open', () => {
 	test('state errors and options', async () => {
 		expect(() => new StellariumStarCatalog({ blockBytes: 47 })).toThrow('block size')
 		expect(() => new StellariumStarCatalog({ blockBytes: 1000.5 })).toThrow('block size')
+		expect(() => new StellariumStarCatalog({ maxConcurrentReads: 0 })).toThrow('read concurrency')
+		expect(() => new StellariumStarCatalog({ maxConcurrentReads: 1.5 })).toThrow('read concurrency')
 
 		const catalog = new StellariumStarCatalog()
 		expect(catalog.isOpen).toBeFalse()
@@ -444,10 +446,122 @@ describe('lifecycle', () => {
 		await fs.mkdir(root)
 		await fs.writeFile(join(root, 'stars_1_x.cat'), level1)
 
-		await using catalog = await openStellariumStarCatalog(root)
+		await using catalog = await openStellariumStarCatalog(root, { maxConcurrentReads: 1 })
 		await fs.truncate(join(root, 'stars_1_x.cat'), level1.byteLength - 40)
 
 		expect(catalog.queryCone(0, 0, PI)).rejects.toThrow('stars_1_x.cat (level 1)')
 		expect(catalog.verifyChecksums()).rejects.toThrow('unexpected end of file')
+
+		// The failed operations released the only read buffer: a record before the truncation is still readable.
+		expect((await catalog.get(1, zoneOf(ORION_RA, ORION_DEC, 1), 0))?.gaiaId).toBe(11n)
+	})
+
+	test('close during open fails the open and releases its handles', async () => {
+		const handles: FileHandle[] = []
+		const open = fs.open
+		const spy = spyOn(fs, 'open').mockImplementation(async (path, flags, mode) => {
+			const handle = await open.call(fs, path, flags, mode)
+			handles.push(handle)
+			return handle
+		})
+
+		try {
+			const catalog = new StellariumStarCatalog()
+			const opening = catalog.open(rootA).then(
+				() => undefined,
+				(error: unknown) => error,
+			)
+
+			// Both calls start before the open completes; the second shares the work of the first.
+			const first = catalog.close()
+			await catalog.close()
+
+			expect(catalog.isOpen).toBeFalse()
+			expect(handles).toHaveLength(3)
+			expect(handles.every((handle) => handle.fd === -1)).toBeTrue()
+			expect(await opening).toEqual(new Error('Stellarium star catalog was closed while opening'))
+			await first
+
+			// A new open after the invalidated one is a fresh generation.
+			await catalog.open(rootA)
+			expect(catalog.isOpen).toBeTrue()
+			expect((await catalog.queryCone(ORION_RA, ORION_DEC, deg(2))).length).toBeGreaterThan(0)
+			await catalog.close()
+			expect(handles).toHaveLength(6)
+			expect(handles.every((handle) => handle.fd === -1)).toBeTrue()
+		} finally {
+			spy.mockRestore()
+		}
+	})
+
+	test('close rejects the operations waiting for a read buffer', async () => {
+		const catalog = await openStellariumStarCatalog(rootH, { blockBytes: 32 * 64, maxConcurrentReads: 1 })
+		const query = { kind: 'cone', centerRA: deg(150), centerDEC: deg(20), radius: deg(0.2) } as const
+		// The first query reads with the only buffer and the other two wait for it.
+		const queries = Array.from({ length: 3 }, () =>
+			catalog.queryRegion(query).then(
+				() => undefined,
+				(error: unknown) => error,
+			),
+		)
+
+		await catalog.close()
+		expect(await Promise.all(queries)).toEqual([new Error('Stellarium star catalog is closed'), new Error('Stellarium star catalog is closed'), new Error('Stellarium star catalog is closed')])
+
+		await catalog.open(rootH)
+		expect(await catalog.queryRegion(query)).toHaveLength(1000)
+		await catalog.close()
+	})
+})
+
+describe('read concurrency', () => {
+	const dense = { kind: 'cone', centerRA: deg(150), centerDEC: deg(20), radius: deg(0.2) } as const
+	const bright = { ...dense, magnitudeMax: 12.05 } as const
+
+	test('concurrent queries share at most maxConcurrentReads buffers and reads', async () => {
+		await using catalog = await openStellariumStarCatalog(rootH, { blockBytes: 32 * 64, maxConcurrentReads: 2 })
+		const results = await Promise.all(Array.from({ length: 10 }, () => catalog.queryRegion(dense)))
+
+		for (const result of results) {
+			expect(result).toHaveLength(1000)
+			expect(result).toEqual(results[0])
+		}
+
+		expect(catalog.diagnostics.peakBuffersInUse).toBe(2)
+		expect(catalog.diagnostics.peakConcurrentReads).toBe(2)
+	})
+
+	test('a paused stream holds no buffer, so nested and abandoned streams make progress', async () => {
+		await using catalog = await openStellariumStarCatalog(rootH, { blockBytes: 32 * 64, maxConcurrentReads: 1 })
+		const all = await catalog.queryRegion(dense)
+		const brightest = await catalog.queryRegion(bright)
+		expect(brightest).toHaveLength(6)
+
+		// Each nested query takes the only buffer while the outer stream is paused, so the outer stream reads its
+		// block again on resume and still yields every record in order.
+		catalog.resetDiagnostics()
+		const outer: StellariumStarCatalogEntry[] = []
+
+		for await (const entry of catalog.streamRegion(dense)) {
+			outer.push(entry)
+			expect(await catalog.queryRegion(bright)).toEqual(brightest)
+		}
+
+		expect(outer).toEqual(all)
+		expect(catalog.diagnostics.peakBuffersInUse).toBe(1)
+
+		// A paused iterator that is never resumed does not block other queries.
+		const paused = catalog.streamRegion(dense)[Symbol.asyncIterator]()
+		expect((await paused.next()).done).toBeFalse()
+		expect(await catalog.queryRegion(dense)).toEqual(all)
+
+		// Breaking out of a stream releases its buffer.
+		for await (const entry of catalog.streamRegion(dense)) {
+			expect(entry.recordNumber).toBe(0)
+			break
+		}
+
+		expect(await catalog.queryRegion(bright)).toEqual(brightest)
+		await paused.return(undefined)
 	})
 })

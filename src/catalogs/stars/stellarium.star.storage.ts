@@ -19,8 +19,6 @@ const STAR_FILE_PATTERN = /^stars_(\d+)_.*\.cat$/
 const STAR_ID_PATTERN = /^stars(\d+)$/
 // MD5 checksum pattern of the manifest entries.
 const MD5_PATTERN = /^[0-9a-fA-F]{32}$/
-// Chunk size of the checksum stream, bytes.
-const CHECKSUM_CHUNK_BYTES = 1024 * 1024
 
 // One star catalog entry of a manifest.
 export interface StellariumStarManifestEntry {
@@ -211,11 +209,11 @@ export async function readStellariumStarBytes(handle: FileHandle, buffer: Buffer
 	}
 }
 
-// Computes the lowercase hexadecimal MD5 of the first `size` bytes of a file by streaming 1 MiB chunks.
-// `read` performs each positional read (so callers can account for or cancel it) into the given buffer.
-export async function computeStellariumStarChecksum(size: number, read: (buffer: Buffer, length: number, position: number) => Promise<void>) {
+// Computes the lowercase hexadecimal MD5 of the first `size` bytes of a file by streaming chunks of the length
+// of `buffer`, which must be non-empty and is overwritten. `read` performs each positional read (so callers can
+// account for or cancel it) into the given buffer.
+export async function computeStellariumStarChecksum(size: number, buffer: Buffer, read: (buffer: Buffer, length: number, position: number) => Promise<void>) {
 	const hash = createHash('md5')
-	const buffer = Buffer.allocUnsafe(Math.min(CHECKSUM_CHUNK_BYTES, Math.max(1, size)))
 
 	for (let position = 0; position < size;) {
 		const length = Math.min(buffer.byteLength, size - position)

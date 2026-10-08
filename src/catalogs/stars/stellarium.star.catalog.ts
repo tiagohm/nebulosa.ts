@@ -1,5 +1,6 @@
-import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import { MILLIASEC2RAD } from '../../core/constants'
+import type { Writable } from '../../core/types'
 import type { MutVec2 } from '../../math/linear-algebra/vec2'
 import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogRaDecBox } from './catalog'
 import { stellariumBoxesClassifier, stellariumConeClassifier, stellariumLocalZoneCount, stellariumZoneCover, type StellariumZoneRange } from './stellarium.geodesic'
@@ -13,24 +14,35 @@ import { closeStellariumStarFiles, computeStellariumStarChecksum, openStellarium
 // rejects records by their encoded magnitude and coarse position before decoding, and lets BaseStarCatalog
 // apply the exact geometry, the inclusive magnitude bounds and the limit. Positions are astrometric ICRS at the
 // catalog epoch of each file (J2016.0 for the Gaia DR3 files), angles are radians, and the emission order is
-// level by level and zone by zone, which is not a global brightness order. Memory per query is one block
-// buffer and the zone cover; queryRegion materializes every match, so streamRegion suits dense regions.
+// level by level and zone by zone, which is not a global brightness order. Reads go through a FIFO pool of at
+// most maxConcurrentReads block buffers per open catalog, allocated lazily: an operation holds a buffer only
+// while it reads and decodes, never while a stream consumer is paused, so the buffers and the reads in flight
+// stay bounded however many queries run, and nested queries cannot deadlock. Memory per query is the zone
+// cover; queryRegion materializes every match, so streamRegion suits dense regions.
 // This provider is unrelated to the deep-sky StellariumCatalog of `stellarium.ts`.
 
 // Default block size of the record reads, bytes.
 const DEFAULT_BLOCK_BYTES = 128 * 1024
 // Smallest block size, bytes: one record of the largest layout, so every read makes progress.
 const MIN_BLOCK_BYTES = 48
-// Largest block size, bytes; bounds the per-query buffer allocation.
+// Largest block size, bytes; bounds the per-buffer allocation.
 const MAX_BLOCK_BYTES = 64 * 1024 * 1024
+// Default maximum of buffers and positional reads in flight per open catalog: 1 MiB of buffers with the
+// default block size and a short I/O queue. A conservative bound, not tuned by benchmark.
+const DEFAULT_MAX_CONCURRENT_READS = 8
+// Message of the operations that fail because the catalog was closed under them.
+const CLOSED_MESSAGE = 'Stellarium star catalog is closed'
 // Coarse-prefilter slack, radians (1 mas). Far above the exact-geometry tolerance, so a record that passes the
 // exact test is never dropped by the prefilter, which uses the same decoded coordinates.
 const PRESELECTION_TOLERANCE = MILLIASEC2RAD
 
 // Options of a Stellarium star catalog.
 export interface StellariumStarCatalogOptions {
-	// Size of the per-query record buffer, bytes; an integer in 48..64 MiB, default 128 KiB.
+	// Size of each read buffer, bytes; an integer in 48..64 MiB, default 128 KiB.
 	readonly blockBytes?: number
+	// Maximum number of operations (scan steps, get, checksum files) reading at once, and so of block buffers
+	// and positional reads in flight; an integer >= 1, default 8. Further operations wait in request order.
+	readonly maxConcurrentReads?: number
 	// Levels that must be present; open throws naming the absent ones. By default any subset of levels is accepted.
 	readonly requiredLevels?: readonly number[]
 }
@@ -81,6 +93,10 @@ export interface StellariumStarCatalogDiagnostics {
 	readonly recordsScanned: number
 	// Records decoded into entries.
 	readonly recordsDecoded: number
+	// Largest number of read buffers held at once; never above maxConcurrentReads.
+	readonly peakBuffersInUse: number
+	// Largest number of positional reads in flight at once.
+	readonly peakConcurrentReads: number
 }
 
 // Result of the checksum verification of one level file.
@@ -105,6 +121,98 @@ interface OpenState {
 	readonly byLevel: readonly (StellariumStarLevelFile | undefined)[]
 	// Public level descriptions.
 	readonly levels: readonly StellariumStarCatalogLevelInfo[]
+	// Read buffers of this open generation.
+	readonly pool: ReadSlotPool
+}
+
+// One read buffer of the pool.
+interface ReadSlot {
+	// Buffer of blockBytes bytes.
+	readonly buffer: Buffer
+	// Operation whose block the buffer holds; any other holder must treat the content as stale.
+	owner?: object
+}
+
+// Operation waiting for a read buffer.
+interface ReadSlotWaiter {
+	// Hands over a buffer.
+	readonly resolve: (slot: ReadSlot) => void
+	// Fails the wait when the pool is aborted.
+	readonly reject: (error: Error) => void
+}
+
+// FIFO pool of the read buffers of one open generation. At most `capacity` buffers exist, allocated lazily,
+// so the buffers held and the positional reads issued at once never exceed it. Requests are served in arrival
+// order; a request prefers the free buffer it released last (keeping its block valid), then a new buffer, then
+// any free one. abort rejects every waiter and later request; buffers released afterwards just become free.
+class ReadSlotPool {
+	#allocated = 0
+	#aborted = false
+	readonly #free: ReadSlot[] = []
+	readonly #waiters: ReadSlotWaiter[] = []
+
+	// Creates an empty pool of at most `capacity` buffers of `blockBytes` bytes; `diagnostics` receives the peak use.
+	constructor(
+		readonly capacity: number,
+		readonly blockBytes: number,
+		private readonly diagnostics: Writable<StellariumStarCatalogDiagnostics>,
+	) {}
+
+	// Returns a buffer for `owner` immediately when one is free or allocatable and nobody waits, else a promise
+	// of one. The promise rejects when the pool is or gets aborted. The caller must release the buffer.
+	acquire(owner: object): ReadSlot | Promise<ReadSlot> {
+		if (this.#aborted) return Promise.reject(new Error(CLOSED_MESSAGE))
+
+		if (this.#waiters.length === 0) {
+			const slot = this.#take(owner)
+			if (slot !== undefined) return slot
+		}
+
+		return new Promise((resolve, reject) => {
+			this.#waiters.push({ resolve, reject })
+		})
+	}
+
+	// Returns a buffer to the pool, handing it to the oldest waiter if any.
+	release(slot: ReadSlot) {
+		const waiter = this.#waiters.shift()
+		if (waiter === undefined) this.#free.push(slot)
+		else waiter.resolve(slot)
+	}
+
+	// Rejects every waiter and every later request.
+	abort() {
+		this.#aborted = true
+		for (const waiter of this.#waiters.splice(0)) waiter.reject(new Error(CLOSED_MESSAGE))
+	}
+
+	// Takes a buffer without waiting, or undefined when all `capacity` buffers are held.
+	#take(owner: object) {
+		const free = this.#free
+		let slot: ReadSlot | undefined
+
+		for (let i = free.length - 1; i >= 0; i--) {
+			if (free[i].owner === owner) {
+				slot = free[i]
+				free.splice(i, 1)
+				break
+			}
+		}
+
+		if (slot === undefined) {
+			if (this.#allocated < this.capacity) {
+				this.#allocated++
+				slot = { buffer: Buffer.allocUnsafe(this.blockBytes), owner: undefined }
+			} else {
+				slot = free.pop()
+				if (slot === undefined) return undefined
+			}
+		}
+
+		const inUse = this.#allocated - free.length
+		if (inUse > this.diagnostics.peakBuffersInUse) this.diagnostics.peakBuffersInUse = inUse
+		return slot
+	}
 }
 
 // Creates a Stellarium star catalog and opens the catalog directory `root` in one step.
@@ -115,24 +223,34 @@ export async function openStellariumStarCatalog(root: string, options?: Stellari
 // Reads the Stellarium star files of a directory through the generic star catalog contract.
 export class StellariumStarCatalog extends BaseStarCatalog<StellariumStarCatalogEntry> implements AsyncDisposable {
 	readonly #blockBytes: number
+	readonly #maxConcurrentReads: number
 	readonly #requiredLevels: readonly number[]
 	#state?: OpenState
-	#opening = false
-	// Incremented by close; reads and yields of an older generation fail instead of using closed handles.
+	// Open in progress; cleared when it settles or when close invalidates it.
+	#opening?: Promise<this>
+	// Close in progress, shared by concurrent close calls.
+	#closing?: Promise<void>
+	// Incremented by close; opens, reads and yields of an older generation fail instead of publishing state or
+	// using closed handles.
 	#generation = 0
 	// Reads in flight, awaited by close before the handles are released.
 	readonly #pending = new Set<Promise<void>>()
-	readonly #diagnostics = { bytesRead: 0, readCalls: 0, coverNodesVisited: 0, zonesScanned: 0, recordsScanned: 0, recordsDecoded: 0 }
+	readonly #diagnostics: Writable<StellariumStarCatalogDiagnostics> = { bytesRead: 0, readCalls: 0, coverNodesVisited: 0, zonesScanned: 0, recordsScanned: 0, recordsDecoded: 0, peakBuffersInUse: 0, peakConcurrentReads: 0 }
 
 	// Creates a closed catalog. Throws when blockBytes is not an integer in 48..64 MiB, since a smaller block
-	// could not hold a record and a larger one would be an oversized per-query allocation.
+	// could not hold a record and a larger one would be an oversized buffer allocation, and when
+	// maxConcurrentReads is not an integer >= 1, since a pool without buffers would make every query wait forever.
 	constructor(options: StellariumStarCatalogOptions = {}) {
 		super()
 
 		const blockBytes = options.blockBytes ?? DEFAULT_BLOCK_BYTES
 		if (!(Number.isInteger(blockBytes) && blockBytes >= MIN_BLOCK_BYTES && blockBytes <= MAX_BLOCK_BYTES)) throw new Error(`invalid Stellarium star catalog block size: ${blockBytes}`)
 
+		const maxConcurrentReads = options.maxConcurrentReads ?? DEFAULT_MAX_CONCURRENT_READS
+		if (!(Number.isInteger(maxConcurrentReads) && maxConcurrentReads >= 1)) throw new Error(`invalid Stellarium star catalog read concurrency: ${maxConcurrentReads}`)
+
 		this.#blockBytes = blockBytes
+		this.#maxConcurrentReads = maxConcurrentReads
 		this.#requiredLevels = options.requiredLevels ?? []
 	}
 
@@ -161,71 +279,106 @@ export class StellariumStarCatalog extends BaseStarCatalog<StellariumStarCatalog
 		return { ...this.#diagnostics }
 	}
 
-	// Resets the cumulative counters to zero.
+	// Resets the cumulative counters and peaks to zero.
 	resetDiagnostics() {
 		const d = this.#diagnostics
-		d.bytesRead = d.readCalls = d.coverNodesVisited = d.zonesScanned = d.recordsScanned = d.recordsDecoded = 0
+		d.bytesRead = d.readCalls = d.coverNodesVisited = d.zonesScanned = d.recordsScanned = d.recordsDecoded = d.peakBuffersInUse = d.peakConcurrentReads = 0
 	}
 
 	// Opens a catalog directory (see openStellariumStarFiles for the discovery rules) and returns this catalog.
 	// Throws when the catalog is already open or opening, when the directory has no valid star file, when any
-	// file is invalid, or when a required level is absent; a failed open leaves the catalog closed.
+	// file is invalid, when a required level is absent, or when close is called before the open completes; a
+	// failed open leaves the catalog closed and its handles released.
 	async open(root: string) {
-		if (this.#state !== undefined || this.#opening) throw new Error('Stellarium star catalog is already open')
+		if (this.#state !== undefined || this.#opening !== undefined) throw new Error('Stellarium star catalog is already open')
 
-		this.#opening = true
+		const opening = this.#open(root, this.#generation)
+		this.#opening = opening
 
 		try {
-			const set = await openStellariumStarFiles(root)
-			const byLevel: (StellariumStarLevelFile | undefined)[] = []
-
-			for (const file of set.files) byLevel[file.header.level] = file
-
-			const missing = this.#requiredLevels.filter((level) => byLevel[level] === undefined)
-
-			if (missing.length > 0) {
-				await closeStellariumStarFiles(set.files)
-				throw new Error(`missing required Stellarium star catalog levels: ${missing.join(', ')}`)
-			}
-
-			const levels = set.files.map((file): StellariumStarCatalogLevelInfo => {
-				const { header } = file
-				return {
-					level: header.level,
-					dataType: header.dataType,
-					recordSize: header.recordSize,
-					majorVersion: header.majorVersion,
-					minorVersion: header.minorVersion,
-					epochJD: header.epochJD,
-					epoch: header.epoch,
-					magnitudeMin: header.magnitudeMin,
-					recordCount: file.index.recordCount,
-					zoneCount: header.zoneCount,
-					fileName: file.fileName,
-					fileSize: file.fileSize,
-					magnitudeRange: file.manifest?.magnitudeRange,
-					checksum: file.manifest?.checksum,
-				}
-			})
-
-			this.#state = { set, byLevel, levels }
-			return this
+			return await opening
 		} finally {
-			this.#opening = false
+			if (this.#opening === opening) this.#opening = undefined
 		}
 	}
 
-	// Closes the catalog: queries of the current generation fail on their next read or yield, reads in flight
-	// are awaited, and then the handles are closed. Closing a closed catalog does nothing.
+	// Opens the files for `generation` and publishes the state, unless close started a newer generation
+	// meanwhile: then the new handles are closed and the open throws.
+	async #open(root: string, generation: number) {
+		const set = await openStellariumStarFiles(root)
+
+		if (generation !== this.#generation) {
+			await closeStellariumStarFiles(set.files)
+			throw new Error('Stellarium star catalog was closed while opening')
+		}
+
+		const byLevel: (StellariumStarLevelFile | undefined)[] = []
+
+		for (const file of set.files) byLevel[file.header.level] = file
+
+		const missing = this.#requiredLevels.filter((level) => byLevel[level] === undefined)
+
+		if (missing.length > 0) {
+			await closeStellariumStarFiles(set.files)
+			throw new Error(`missing required Stellarium star catalog levels: ${missing.join(', ')}`)
+		}
+
+		const levels = set.files.map((file): StellariumStarCatalogLevelInfo => {
+			const { header } = file
+			return {
+				level: header.level,
+				dataType: header.dataType,
+				recordSize: header.recordSize,
+				majorVersion: header.majorVersion,
+				minorVersion: header.minorVersion,
+				epochJD: header.epochJD,
+				epoch: header.epoch,
+				magnitudeMin: header.magnitudeMin,
+				recordCount: file.index.recordCount,
+				zoneCount: header.zoneCount,
+				fileName: file.fileName,
+				fileSize: file.fileSize,
+				magnitudeRange: file.manifest?.magnitudeRange,
+				checksum: file.manifest?.checksum,
+			}
+		})
+
+		this.#state = { set, byLevel, levels, pool: new ReadSlotPool(this.#maxConcurrentReads, this.#blockBytes, this.#diagnostics) }
+		return this
+	}
+
+	// Closes the catalog, including one still opening: an open in progress fails and releases its handles,
+	// operations waiting for a read buffer fail, queries of the current generation fail on their next read or
+	// yield, reads in flight are awaited, and then the handles are closed. When it resolves, nothing opened
+	// before the call holds a handle. Concurrent calls share the same work; closing a closed catalog only waits
+	// for a close still in progress.
 	async close() {
 		const state = this.#state
-		if (state === undefined) return
+		const opening = this.#opening
 
-		this.#state = undefined
-		this.#generation++
+		if (state !== undefined || opening !== undefined) {
+			this.#state = undefined
+			this.#opening = undefined
+			this.#generation++
+			state?.pool.abort()
 
-		await Promise.allSettled(this.#pending)
-		await closeStellariumStarFiles(state.set.files)
+			const closing = this.#release(state, opening, [...this.#pending], this.#closing)
+			this.#closing = closing
+			void closing.then(() => {
+				if (this.#closing === closing) this.#closing = undefined
+			})
+		}
+
+		await this.#closing
+	}
+
+	// Waits for the previous close, the invalidated open (which closes its own handles) and the reads of the
+	// closed generation, then closes the handles of `state`. Never rejects.
+	async #release(state: OpenState | undefined, opening: Promise<unknown> | undefined, pending: readonly Promise<void>[], previous: Promise<void> | undefined) {
+		await previous
+		if (opening !== undefined) await Promise.allSettled([opening])
+		await Promise.allSettled(pending)
+		if (state !== undefined) await closeStellariumStarFiles(state.set.files)
 	}
 
 	// Closes the catalog at the end of an `await using` scope.
@@ -248,21 +401,37 @@ export class StellariumStarCatalog extends BaseStarCatalog<StellariumStarCatalog
 		const first = index.starts[zone]
 		if (!Number.isInteger(recordNumber) || !(recordNumber >= 0 && recordNumber < index.starts[zone + 1] - first)) return undefined
 
-		const buffer = Buffer.allocUnsafe(header.recordSize)
-		await this.#read(generation, file, buffer, header.recordSize, header.dataOffset + (first + recordNumber) * header.recordSize)
-		this.#diagnostics.recordsDecoded++
-		return decodeStellariumStar(buffer, 0, header, zone, recordNumber)
+		const slot = await state.pool.acquire(state)
+		slot.owner = undefined
+
+		try {
+			await this.#read(generation, file, slot.buffer, header.recordSize, header.dataOffset + (first + recordNumber) * header.recordSize)
+			this.#diagnostics.recordsDecoded++
+			return decodeStellariumStar(slot.buffer, 0, header, zone, recordNumber)
+		} finally {
+			state.pool.release(slot)
+		}
 	}
 
 	// Streams every opened file through MD5 and compares it with the manifest checksum. Reads the whole files,
-	// so it is an explicit integrity audit, never part of open. Throws when the catalog is closed.
+	// so it is an explicit integrity audit, never part of open; each file holds one read buffer of the pool
+	// while it is hashed. Throws when the catalog is closed.
 	async verifyChecksums() {
 		const state = this.#requireOpen()
 		const generation = this.#generation
 		const results: StellariumStarChecksumResult[] = []
 
 		for (const file of state.set.files) {
-			const actual = await computeStellariumStarChecksum(file.fileSize, (buffer, length, position) => this.#read(generation, file, buffer, length, position))
+			const slot = await state.pool.acquire(state)
+			slot.owner = undefined
+			let actual: string
+
+			try {
+				actual = await computeStellariumStarChecksum(file.fileSize, slot.buffer, (buffer, length, position) => this.#read(generation, file, buffer, length, position))
+			} finally {
+				state.pool.release(slot)
+			}
+
 			const expected = file.manifest?.checksum
 			results.push({ level: file.header.level, fileName: file.fileName, expected, actual, matches: expected === undefined ? undefined : expected === actual })
 		}
@@ -273,7 +442,9 @@ export class StellariumStarCatalog extends BaseStarCatalog<StellariumStarCatalog
 	// Streams the candidate stars of a normalized query: the records of the covered zones of every level whose
 	// header magnitude lower bound does not exceed magnitudeMax, stopping each zone at the first record fainter
 	// than magnitudeMax (zones are sorted by ascending magnitude), skipping records brighter than magnitudeMin
-	// and, outside zones fully inside the query, records outside the preselection boxes.
+	// and, outside zones fully inside the query, records outside the preselection boxes. A read buffer of the
+	// pool is held from the first read until the next yield and released before it; when the consumer resumes
+	// and another operation used the buffer meanwhile, the current block is read again.
 	protected async *streamCandidateEntries(query: NormalizedStarCatalogQuery) {
 		const state = this.#requireOpen()
 		const generation = this.#generation
@@ -289,56 +460,77 @@ export class StellariumStarCatalog extends BaseStarCatalog<StellariumStarCatalog
 		const diagnostics = this.#diagnostics
 		diagnostics.coverNodesVisited += cover.visited
 
-		const buffer = Buffer.allocUnsafe(this.#blockBytes)
+		const { pool } = state
+		// Identity of this scan in the pool: a buffer it gets back still owned by it holds its current block.
+		const owner = {}
 		const position: MutVec2 = [0, 0]
+		let slot: ReadSlot | undefined
 
-		for (const file of files) {
-			const { header, index } = file
-			const { dataType, recordSize, dataOffset, level } = header
-			const { starts } = index
-			const capacity = Math.floor(this.#blockBytes / recordSize)
-			const globalZone = stellariumLocalZoneCount(level)
-			const runs: StellariumZoneRange[] = [...(cover.ranges.get(level) ?? []), { start: globalZone, end: globalZone + 1, inside: false }]
-			// Records [windowStart, windowEnd) of the file currently held by the buffer.
-			let windowStart = 0
-			let windowEnd = 0
+		try {
+			for (const file of files) {
+				const { header, index } = file
+				const { dataType, recordSize, dataOffset, level } = header
+				const { starts } = index
+				const capacity = Math.floor(this.#blockBytes / recordSize)
+				const globalZone = stellariumLocalZoneCount(level)
+				const runs: StellariumZoneRange[] = [...(cover.ranges.get(level) ?? []), { start: globalZone, end: globalZone + 1, inside: false }]
+				// Records [windowStart, windowEnd) of the file currently held by the buffer.
+				let windowStart = 0
+				let windowEnd = 0
 
-			for (const run of runs) {
-				const runEnd = starts[run.end]
+				for (const run of runs) {
+					const runEnd = starts[run.end]
 
-				for (let zone = run.start; zone < run.end; zone++) {
-					const zoneStart = starts[zone]
-					const zoneEnd = starts[zone + 1]
-					if (zoneStart === zoneEnd) continue
+					for (let zone = run.start; zone < run.end; zone++) {
+						const zoneStart = starts[zone]
+						const zoneEnd = starts[zone + 1]
+						if (zoneStart === zoneEnd) continue
 
-					diagnostics.zonesScanned++
+						diagnostics.zonesScanned++
 
-					for (let record = zoneStart; record < zoneEnd; record++) {
-						if (record < windowStart || record >= windowEnd) {
-							windowStart = record
-							windowEnd = Math.min(runEnd, record + capacity)
-							await this.#read(generation, file, buffer, (windowEnd - windowStart) * recordSize, dataOffset + windowStart * recordSize)
+						for (let record = zoneStart; record < zoneEnd; record++) {
+							if (slot === undefined) {
+								const acquired = pool.acquire(owner)
+								slot = acquired instanceof Promise ? await acquired : acquired
+
+								if (slot.owner !== owner) {
+									slot.owner = owner
+									windowStart = windowEnd = 0
+								}
+							}
+
+							const { buffer } = slot
+
+							if (record < windowStart || record >= windowEnd) {
+								windowStart = record
+								windowEnd = Math.min(runEnd, record + capacity)
+								await this.#read(generation, file, buffer, (windowEnd - windowStart) * recordSize, dataOffset + windowStart * recordSize)
+							}
+
+							const offset = (record - windowStart) * recordSize
+							const magnitude = readStellariumStarMagnitude(buffer, offset, dataType)
+							diagnostics.recordsScanned++
+
+							if (magnitudeMax !== undefined && !(magnitude <= magnitudeMax)) break
+							if (magnitudeMin !== undefined && !(magnitude >= magnitudeMin)) continue
+
+							if (!run.inside) {
+								readStellariumStarPosition(buffer, offset, dataType, position)
+								if (!insideBoxes(position[0], position[1], preselectionBoxes)) continue
+							}
+
+							diagnostics.recordsDecoded++
+							const entry = decodeStellariumStar(buffer, offset, header, zone, record - zoneStart)
+							if (generation !== this.#generation) throw new Error(CLOSED_MESSAGE)
+							pool.release(slot)
+							slot = undefined
+							yield entry
 						}
-
-						const offset = (record - windowStart) * recordSize
-						const magnitude = readStellariumStarMagnitude(buffer, offset, dataType)
-						diagnostics.recordsScanned++
-
-						if (magnitudeMax !== undefined && !(magnitude <= magnitudeMax)) break
-						if (magnitudeMin !== undefined && !(magnitude >= magnitudeMin)) continue
-
-						if (!run.inside) {
-							readStellariumStarPosition(buffer, offset, dataType, position)
-							if (!insideBoxes(position[0], position[1], preselectionBoxes)) continue
-						}
-
-						diagnostics.recordsDecoded++
-						const entry = decodeStellariumStar(buffer, offset, header, zone, record - zoneStart)
-						if (generation !== this.#generation) throw new Error('Stellarium star catalog is closed')
-						yield entry
 					}
 				}
 			}
+		} finally {
+			if (slot !== undefined) pool.release(slot)
 		}
 	}
 
@@ -353,22 +545,23 @@ export class StellariumStarCatalog extends BaseStarCatalog<StellariumStarCatalog
 	// close can await it. Throws when the generation was closed before or during the read, and names the file
 	// and position on I/O failure or truncation.
 	async #read(generation: number, file: StellariumStarLevelFile, buffer: Buffer, length: number, position: number) {
-		if (generation !== this.#generation) throw new Error('Stellarium star catalog is closed')
+		if (generation !== this.#generation) throw new Error(CLOSED_MESSAGE)
 
 		const read = readStellariumStarBytes(file.handle, buffer, length, position)
 		this.#pending.add(read)
+		if (this.#pending.size > this.#diagnostics.peakConcurrentReads) this.#diagnostics.peakConcurrentReads = this.#pending.size
 
 		try {
 			await read
 		} catch (cause) {
-			if (generation !== this.#generation) throw new Error('Stellarium star catalog is closed', { cause })
+			if (generation !== this.#generation) throw new Error(CLOSED_MESSAGE, { cause })
 			const reason = cause instanceof Error ? cause.message : String(cause)
 			throw new Error(`failed to read Stellarium star file ${file.fileName} (level ${file.header.level}) at byte ${position}: ${reason}`, { cause })
 		} finally {
 			this.#pending.delete(read)
 		}
 
-		if (generation !== this.#generation) throw new Error('Stellarium star catalog is closed')
+		if (generation !== this.#generation) throw new Error(CLOSED_MESSAGE)
 
 		this.#diagnostics.readCalls++
 		this.#diagnostics.bytesRead += length
