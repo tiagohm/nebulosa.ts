@@ -15727,7 +15727,7 @@ A device command usually completes long after it is sent: the driver accepts a m
 
 `abortableDelay(ms, signal)` sleeps for `ms` milliseconds and resolves `successfulOperationResult(undefined)`, or the failure mapped from the signal reason when it aborts first, clearing its timer. `abortReason(signal)` returns the signal's reason when it is an `OperationFailureReason`, and `'aborted'` otherwise. `settlesWithin(promise, ms)` reports whether a promise settles, fulfilled or rejected, within `ms` milliseconds, without cancelling it.
 
-The reasons are `busy` (a resource was refused at start), `aborted` (cancelled by the caller), `disconnected` and `removed` (a held device went away), `timeout`, `alert` (the driver reported `Alert`), `commandFailed` (a command, executor or cleanup threw) and `unexpectedState`. `failedOperationResult(reason, error?)` and `successfulOperationResult(value)` build the two variants of `OperationResult`. A failure omits `error` entirely when there is no detail. These waits usually run inside the signal of a [Device Operations](#device-operations) context.
+The reasons are `busy` (a resource was refused at start), `aborted` (cancelled by the caller), `disconnected` and `removed` (a held device went away), `timeout`, `alert` (the driver reported `Alert`), `commandFailed` (a command, executor or cleanup threw) and `unexpectedState`. `failedOperationResult(reason, error?)` and `successfulOperationResult(value)` build the two variants of `OperationResult`. A failure omits `error` entirely when there is no detail. These waits are the building block of the [Device Commanders](#device-commanders) and usually run inside the signal of a [Device Operations](#device-operations) context.
 
 ```ts
 import { abortableDelay, abortReason, settlesWithin, waitForDeviceState } from 'nebulosa/src/devices/orchestration/operation.wait'
@@ -15767,6 +15767,79 @@ console.log(await delayed, abortReason(controller.signal)) // { ok: false, reaso
 
 console.log(await settlesWithin(Bun.sleep(5), 100)) // true
 console.log(await settlesWithin(new Promise(() => {}), 10)) // false
+```
+
+### Device Commanders
+
+The INDI managers send a command and return at once: `FocuserManager.moveTo` only writes the target, and the model changes later when the driver reports it. Commanders are the operation-aware layer above them. Each one wraps one manager and turns every command into a [Device Operations](#device-operations) step: it acquires the device, checks the capability and connection, sends the command, waits until the driver reports the expected state (see [Device Command Waiting](#device-command-waiting)), and resolves an `OperationResult` without throwing.
+
+Every command takes an `OperationScope` first. Passing the `OperationCoordinator` runs the command as its own operation tree. Passing an `OperationContext` nests it in a larger feature that already holds the device, so it reacquires reentrantly, and passing a [Device Reservations](#device-reservations) scope runs it inside the session's reservation. A device that is moving, leased elsewhere, or not yet verified by the [Device Availability Lifecycle](#device-availability-lifecycle) is refused as `busy`. A disconnected device fails as `disconnected`, an `Alert` on the commanded vector as `alert`, a command that throws as `commandFailed`, and a missing capability, a target the driver does not echo, or a motion that stops elsewhere as `unexpectedState`. The options are milliseconds: `timeout` bounds the wait for the commanded state, and `settleTimeout` bounds the physical stop. When a motion fails, times out, or its operation is cancelled (for example through `coordinator.cancelByDevice(key)` or a disconnect), the commander stops the device and waits for it to settle before the lease is released. `stopMotion` (and `stopPulse` and `stopPulses`) is the emergency stop: it takes no scope and acquires nothing, so it also reaches a device that is moving under another owner.
+
+| Commander              | Commands                                                                                                                                                                                                                                          | Units and notes                                                                                                                                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CameraCommander`      | `cooler`, `temperature`                                                                                                                                                                                                                           | °C setpoint; does not wait for the sensor to reach it                                                                                                                            |
+| `CoverCommander`       | `park` (close), `unpark` (open), `stopMotion`                                                                                                                                                                                                     | default move timeout 60 s                                                                                                                                                        |
+| `DewHeaterCommander`   | `dutyCycle`                                                                                                                                                                                                                                       | PWM level clamped to the device range; no wait                                                                                                                                   |
+| `DomeCommander`        | `moveTo`, `moveToAltitude`, `moveBy`, `move`, `startManualMove`, `manualMove`, `manualMoveOf`, `syncTo`, `home`, `park`, `unpark`, `setPark`, `openShutter`, `closeShutter`, `slave`, `setSpeed`, `setBacklash`, `setBacklashSteps`, `stopMotion` | radians clamped by `domeAzimuth` and `domeAltitude`; speed in driver RPM; backlash in steps; default move timeout 120 s                                                          |
+| `FlatPanelCommander`   | `enable`, `disable`, `toggle`, `intensity`                                                                                                                                                                                                        | intensity clamped to the device range; no wait                                                                                                                                   |
+| `FocuserCommander`     | `moveTo`, `moveIn`, `moveOut`, `syncTo`, `reverse`, `stopMotion`                                                                                                                                                                                  | steps clamped by `focuserPosition`; default move timeout 30 s                                                                                                                    |
+| `GuideOutputCommander` | `pulse`, `pulseAxes`, `setGuideRate`, `stopPulse`, `stopPulses`                                                                                                                                                                                   | durations in ms; `pulseAxes` takes `GuidePulse[]` on perpendicular axes                                                                                                          |
+| `MountCommander`       | `goTo`, `flip`, `sync`, `setTracking`, `park`, `unpark`, `home`, `findHome`, `setHome`, `setPark`, `setTrackMode`, `setSlewRate`, `setGeographicCoordinate`, `setTime`, `startManualMove`, `manualMove`, `manualMoveOf`, `stopMotion`             | targets in any `MountTargetCoordinate` frame, see [INDI Mount Control](#indi-mount-control); `tolerance` (1′) and `arrivalTolerance` (1°) in radians; default slew timeout 600 s |
+| `RotatorCommander`     | `moveTo`, `home`, `syncTo`, `reverse`, `stopMotion`                                                                                                                                                                                               | degrees resolved by `rotatorAngle` against the driver limits; default move timeout 120 s                                                                                         |
+| `WheelCommander`       | `moveTo`, `setNames`                                                                                                                                                                                                                              | slots clamped by `wheelSlot`; a wheel cannot be aborted, so a move is only waited for; default timeout 30 s                                                                      |
+
+`MountCommander.goTo` resolves `MountSlewResult` (where the mount stopped) and `flip` resolves `MountFlipResult`, which adds `pierSideVerified`, false when the driver gives no evidence that the side changed. `startManualMove` returns a `ManualMoveHandle` (`DomeManualMoveHandle` for the dome) that holds the device until `stop()` or until the last direction is disabled with `move(direction, false)`. The commanders that wait on device events (cover, dome, focuser, guide output, mount, rotator and wheel) register themselves as handlers of their manager in the constructor, so they are meant to live as long as the manager.
+
+```ts
+import { FocuserCommander } from 'nebulosa/src/devices/commanders/focuser'
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { FocuserManager } from 'nebulosa/src/devices/indi/manager/focuser'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { FocuserSimulator } from 'nebulosa/src/devices/indi/simulator/focuser'
+import { DeviceLifecycle } from 'nebulosa/src/devices/orchestration/device.lifecycle'
+import { OperationCoordinator, successfulOperationResult } from 'nebulosa/src/devices/orchestration/operation'
+import { ResourceArbiter, resourceKey } from 'nebulosa/src/devices/orchestration/resource'
+
+const focuserManager = new FocuserManager()
+const arbiter = new ResourceArbiter()
+const coordinator = new OperationCoordinator(arbiter)
+const lifecycle = new DeviceLifecycle(arbiter, coordinator)
+lifecycle.observe(focuserManager)
+const focuserCommander = new FocuserCommander(focuserManager)
+
+const client = new ClientSimulator('Client Simulator', new IndiClientHandlerSet([focuserManager]))
+const simulator = new FocuserSimulator('Focuser Simulator', client)
+const focuser = focuserManager.get(client, 'Focuser Simulator')!
+const key = resourceKey(focuser)
+focuserManager.connect(focuser)
+
+// A top-level command: resolves only after the focuser stopped at the target, in steps.
+console.log(await focuserCommander.moveTo(coordinator, focuser, 1000)) // { ok: true, value: undefined }
+console.log(focuser.position.value, focuser.moving) // 1000 false
+
+// Composed: the feature holds the focuser and each step reacquires it reentrantly.
+const scan = coordinator.start('focusScan', [{ key, device: focuser }], async (context) => {
+	for (const position of [1100, 1200]) {
+		const moved = await focuserCommander.moveTo(context, focuser, position)
+		if (!moved.ok) return moved
+	}
+
+	return successfulOperationResult(focuser.position.value)
+})
+
+console.log(await scan.result) // { ok: true, value: 1200 }
+
+// Cancelling the owner stops the motor before the result settles.
+const move = focuserCommander.moveTo(coordinator, focuser, 50000)
+while (!focuser.moving) await Bun.sleep(10)
+await coordinator.cancelByDevice(key)
+console.log(await move, focuser.moving) // { ok: false, reason: 'aborted' } false
+
+// The emergency stop needs no scope; on a focuser at rest it resolves immediately.
+console.log(await focuserCommander.stopMotion(focuser)) // { ok: true, value: undefined }
+
+lifecycle.dispose()
+simulator.dispose()
 ```
 
 ### Device Operations
@@ -17919,13 +17992,13 @@ console.log(mount.alignment.pointCount) // 0
 
 `MountManager` builds a `Mount` device from the INDI Telescope interface and reflects its vectors onto the shared model, which also serves the Alpaca telescope. The model has the capability flags (`canPark`, `canSetPark`, `canAbort`, `canSync`, `canGoTo`, `canFlip`, `canHome`, `canFindHome`, `canSetHome`, `canTracking`, `canMove`), the state (`slewing`, `moving`, `tracking`, `homing`, `parking`, `parked`), the `mountType` (`'ALTAZ'`, `'EQ_FORK'` or `'EQ_GEM'`), the `slewRates` with the selected `slewRate`, the `trackModes` with the `trackMode`, the pier side (`hasPierSide`, `canSetPierSide`, `pierSide` as `'EAST'`, `'WEST'` or `'NEITHER'`), the `equatorialCoordinate` (JNOW, radians, `rightAscension` and `declination`), the site (`geographicCoordinate` with the latitude and longitude in radians and the elevation as a distance in AU, like `meter` and `toMeter` convert, with `hasGPS`) and the UTC `time` (epoch milliseconds and the offset in minutes). As a guide output it also carries the pulse-guiding state (see [INDI Guide Output](#indi-guide-output)) and the `alignment` state belongs to [INDI Mount Alignment Subsystem](#indi-mount-alignment-subsystem).
 
-The commands send the INDI switches and numbers of the driver. `tracking(mount, enabled)`, `slewRate(mount, rate)` and the four `moveNorth`, `moveSouth`, `moveWest` and `moveEast` (`enabled` true starts the motion at the selected slew rate and false stops it) act on the mount, `trackMode(mount, mode)` selects `'SIDEREAL'`, `'SOLAR'`, `'LUNAR'`, `'KING'` or `'CUSTOM'`, and `stop`, `park`, `unpark`, `setPark`, `home`, `findHome` and `setHome` act on the matching property. Except for tracking, the slew rate and the target coordinate, a command is ignored when the driver does not advertise its capability. The targets are `goTo`, `flipTo` and `syncTo` (`rightAscension` and `declination`, radians, JNOW, sent after the `ON_COORD_SET` mode: `TRACK` is chosen over `SLEW` when the driver offers it) and `equatorialCoordinate(mount, rightAscension, declination)`, which sends only the coordinate and therefore uses the mode that was set last. `moveTo(mount, mode, request, client?, time?)` accepts a target in `'J2000'`, `'JNOW'`, `'ALTAZ'`, `'ECLIPTIC'` or `'GALACTIC'`, given as angles or as strings that the parser understands (hours for a right ascension and a longitude in sexagesimal), converts it to JNOW and dispatches `'goto'`, `'flip'` or `'sync'`. `geographicCoordinate(mount, coordinate)` and `time(mount, time)` set the site and the clock of the driver. The model follows the driver: a command does not change it until the driver reports it, and the position of the vector is republished while the mount moves, so read it after the slew has ended.
+The commands send the INDI switches and numbers of the driver. `tracking(mount, enabled)`, `slewRate(mount, rate)` and the four `moveNorth`, `moveSouth`, `moveWest` and `moveEast` (`enabled` true starts the motion at the selected slew rate and false stops it) act on the mount, `trackMode(mount, mode)` selects `'SIDEREAL'`, `'SOLAR'`, `'LUNAR'`, `'KING'` or `'CUSTOM'`, and `stop`, `park`, `unpark`, `setPark`, `home`, `findHome` and `setHome` act on the matching property. Except for tracking, the slew rate and the target coordinate, a command is ignored when the driver does not advertise its capability. The targets are `goTo`, `flipTo` and `syncTo` (`rightAscension` and `declination`, radians, JNOW, sent after the `ON_COORD_SET` mode: `TRACK` is chosen over `SLEW` when the driver offers it) and `equatorialCoordinate(mount, rightAscension, declination)`, which sends only the coordinate and therefore uses the mode that was set last. `moveTo(mount, mode, request, client?, time?)` accepts a target in `'J2000'`, `'JNOW'`, `'ALTAZ'`, `'ECLIPTIC'` or `'GALACTIC'`, given as angles or as strings that the parser understands (hours for a right ascension and a longitude in sexagesimal), converts it to JNOW and dispatches `'goto'`, `'flip'` or `'sync'`. The conversion is `mountTargetEquatorial(mount, request, time?)`, for callers that need the JNOW coordinate without commanding the mount: it returns a fresh `[rightAscension, declination]` in radians with the right ascension in `[0, 2π)`, precesses J2000 and galactic targets to `time` (the current instant when omitted), uses the true obliquity of that date for ecliptic targets and resolves ALTAZ targets at the mount's reported site with the default refraction. `geographicCoordinate(mount, coordinate)` and `time(mount, time)` set the site and the clock of the driver. The model follows the driver: a command does not change it until the driver reports it, and the position of the vector is republished while the mount moves, so read it after the slew has ended.
 
 The snippet uses the mount simulator with the fastest slew rate selected (see [INDI Mount Simulator](#indi-mount-simulator)).
 
 ```ts
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
-import { MountManager } from 'nebulosa/src/devices/indi/manager/mount'
+import { MountManager, mountTargetEquatorial } from 'nebulosa/src/devices/indi/manager/mount'
 import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
 import { MountSimulator } from 'nebulosa/src/devices/indi/simulator/mount'
 import { deg, hour, toDeg, toHour } from 'nebulosa/src/math/units/angle'
@@ -17985,7 +18058,11 @@ await waitUntil(() => mount.slewing)
 await waitUntil(() => !mount.slewing)
 console.log(toHour(mount.equatorialCoordinate.rightAscension), toDeg(mount.equatorialCoordinate.declination)) // 3.6 26
 
-// A J2000 target given as text is converted to JNOW. Abort the slew on its way.
+// A J2000 target given as text is converted to JNOW, here without commanding the mount.
+const [targetRightAscension, targetDeclination] = mountTargetEquatorial(mount, { type: 'J2000', J2000: { x: '05 35 17', y: '-05 23 28' } })
+console.log(toHour(targetRightAscension), toDeg(targetDeclination)) // ≈ 5.610 -5.373 in 2026 — hours and degrees of date
+
+// moveTo applies the same conversion and slews. Abort the slew on its way.
 manager.moveTo(mount, 'goto', { type: 'J2000', J2000: { x: '05 35 17', y: '-05 23 28' } })
 await waitUntil(() => mount.slewing)
 manager.stop(mount)

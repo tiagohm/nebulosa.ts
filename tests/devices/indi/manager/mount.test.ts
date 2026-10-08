@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { equatorialFromJ2000, galacticToEquatorial } from '../../../../src/astronomy/coordinates/coordinate'
+import { equatorialFromJ2000, equatorialToJ2000, galacticToEquatorial } from '../../../../src/astronomy/coordinates/coordinate'
 import { timeJulianYear } from '../../../../src/astronomy/time/time'
 import { CLIENT, DEFAULT_MOUNT } from '../../../../src/devices/indi/device'
-import { MountManager } from '../../../../src/devices/indi/manager/mount'
+import { MountManager, mountTargetEquatorial } from '../../../../src/devices/indi/manager/mount'
 import type { DefNumberVector, DefSwitchVector } from '../../../../src/devices/indi/types'
 import { deg, hour, normalizeAngle, toDeg, toHour } from '../../../../src/math/units/angle'
 import { client, createRecordingClient, defNumber, defSwitch, setupDevice } from './util'
@@ -37,6 +37,26 @@ test('uses the requested epoch for J2000 and galactic target conversions', () =>
 
 	expect(numberCommands[0].elements.RA).toBeCloseTo(toHour(normalizeAngle(galacticRightAscension)), 10)
 	expect(numberCommands[0].elements.DEC).toBeCloseTo(toDeg(galacticDeclination), 10)
+})
+
+test('resolves mount targets into a normalized equinox-of-date coordinate', () => {
+	const mount = structuredClone(DEFAULT_MOUNT)
+	const time = timeJulianYear(2025)
+
+	// JNOW strings are sexagesimal, with right ascension in hours.
+	const [ra, dec] = mountTargetEquatorial(mount, { type: 'JNOW', JNOW: { x: '05:30:00', y: '-10:30:00' } }, time)
+	expect(ra).toBeCloseTo(hour(5.5), 12)
+	expect(dec).toBeCloseTo(deg(-10.5), 12)
+
+	// A negative right ascension wraps into [0, TAU).
+	expect(mountTargetEquatorial(mount, { type: 'JNOW', JNOW: { x: -hour(1), y: 0 } }, time)[0]).toBeCloseTo(hour(23), 12)
+
+	// J2000 is precessed to the date, so converting back recovers the catalog position.
+	const precessed = mountTargetEquatorial(mount, { type: 'J2000', J2000: { x: hour(5), y: deg(23) } }, time)
+	const [j2000RightAscension, j2000Declination] = equatorialToJ2000(...precessed, time)
+	expect(normalizeAngle(j2000RightAscension)).toBeCloseTo(hour(5), 9)
+	expect(j2000Declination).toBeCloseTo(deg(23), 9)
+	expect(precessed[0]).not.toBeCloseTo(hour(5), 4)
 })
 
 test('selects tracking for goto when the driver advertises it', () => {
