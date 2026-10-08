@@ -15667,6 +15667,251 @@ console.log(
 )
 ```
 
+### Device Availability Lifecycle
+
+An INDI device that is listed by its manager is not automatically safe to command: it may be disconnected, or connected but still slewing, exposing, or moving a motor that someone else started. `DeviceLifecycle` closes that gap. It observes the INDI device managers and keeps the `lifecycle` cause of the [Device Resource Arbitration](#device-resource-arbitration) up to date, so a device is acquirable by a [Device Operations](#device-operations) tree only while it is connected and physically quiescent, and every operation holding it is cancelled the moment it disconnects or disappears.
+
+`new DeviceLifecycle(arbiter, coordinator)` takes the shared `ResourceArbiter` and `OperationCoordinator`. `observe(manager, options?)` subscribes to any manager exposing `addHandler`, `removeHandler` and `list` (every INDI device manager does), registers the devices it already lists, and returns an idempotent disposer. Each added device starts unavailable and becomes available only after verification succeeds. A property update re-runs verification only when `affects(device, property)` says it can change the verdict, and a `connected` update to `false` or a removal marks the device unavailable and calls `coordinator.cancelByDevice(key, 'disconnected' | 'removed')` without waiting inside the manager callback. Cancellation reaches every owner of the device, including one holding it under a logical resource key. The defaults are `isDeviceQuiescent`, which requires `connected` and no activity: a camera not `exposuring` and with no `Busy` exposure, a mount not slewing, moving, homing, parking or pulsing, a focuser, wheel or rotator not moving, a guide output not pulsing, a cover not parking, and a dome not slewing, moving, homing, parking or opening/closing its shutter, while other device types only need to be connected. `affectsDeviceQuiescence` is its matching filter (`connected` plus the properties above). A custom `verify` may return a promise: verification results are tagged with a generation, so a result that a newer transition superseded is discarded, and a verifier that throws or rejects leaves the device unavailable. A custom `affects` must cover every property its `verify` reads.
+
+The manager views of one physical device share a hardware key (a camera and the guide output it exposes, a mount and its guide-output subdevice): the key is available only while every live view is quiescent, a removed view still cancels its owners, and the key is disassociated from the arbiter only after the last view is gone. Disposing one observer forgets the views it contributed: a device left without views becomes unavailable, because nothing would cancel its owners on a later disconnect, but running operations are not cancelled. `dispose()` detaches every observer. Whole clients are blocked separately with the arbiter's `markClientUnavailable(clientId)` and `markClientAvailable(clientId)`.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { FocuserManager } from 'nebulosa/src/devices/indi/manager/focuser'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { FocuserSimulator } from 'nebulosa/src/devices/indi/simulator/focuser'
+import { DeviceLifecycle, isDeviceQuiescent } from 'nebulosa/src/devices/orchestration/device.lifecycle'
+import { failedOperationResult, OperationCoordinator, type OperationResult } from 'nebulosa/src/devices/orchestration/operation'
+import { ResourceArbiter, resourceKey } from 'nebulosa/src/devices/orchestration/resource'
+
+const focuserManager = new FocuserManager()
+const arbiter = new ResourceArbiter()
+const coordinator = new OperationCoordinator(arbiter)
+const lifecycle = new DeviceLifecycle(arbiter, coordinator)
+
+// Observe before the client publishes devices; the disposer stops this one observation.
+const stop = lifecycle.observe(focuserManager)
+
+const client = new ClientSimulator('Client Simulator', new IndiClientHandlerSet([focuserManager]))
+const simulator = new FocuserSimulator('Focuser Simulator', client)
+const focuser = focuserManager.get(client, 'Focuser Simulator')!
+const key = resourceKey(focuser)
+
+console.log(arbiter.availability(key)) // 'unavailable' — listed but not connected
+
+focuserManager.connect(focuser)
+console.log(arbiter.availability(key), isDeviceQuiescent(focuser)) // 'available' true
+
+// A move started outside any operation still blocks acquisition until the motor stops.
+focuserManager.moveIn(focuser, 500)
+console.log(arbiter.availability(key)) // 'unavailable'
+
+while (focuser.moving) await Bun.sleep(10)
+console.log(arbiter.availability(key)) // 'available'
+
+// An operation holding the focuser is cancelled when it disconnects.
+const hold = coordinator.start('hold', [{ key, device: focuser }], (context) => new Promise<OperationResult<void>>((resolve) => context.signal.addEventListener('abort', () => resolve(failedOperationResult('aborted')), { once: true })))
+focuserManager.disconnect(focuser)
+console.log(await hold.result) // { ok: false, reason: 'disconnected' }
+
+stop()
+lifecycle.dispose()
+simulator.dispose()
+```
+
+### Device Command Waiting
+
+A device command usually completes long after it is sent: the driver accepts a move and later reports the motor stopped at the target, or reports `Alert`. Waiting for that confirmation has three traps: the confirming update can arrive before the command call returns, the wait must stop on cancellation and on timeout, and a failed wait must stop the hardware before the caller releases it. `waitForDeviceState` handles all three and returns an `OperationResult` instead of throwing.
+
+`waitForDeviceState(options)` installs `subscribe(listener)` first (it must return an unsubscriber), then calls `command(signal)`. Every update goes through `evaluate(update)`, which answers `'pending'`, `'success'` or an `OperationFailureReason`. A decisive verdict that arrives before `command` returns is held until it does, after which `current()` is evaluated once in case the state was already reached. The wait settles on the first decisive verdict, after `timeout` milliseconds (`'timeout'`), when `signal` aborts (its reason mapped by `abortReason`), or when `command` throws (`'commandFailed'`). An `evaluate` that throws gives `'unexpectedState'`. Every non-successful outcome of a dispatched command aborts the command's own signal, waits up to `commandAbortTimeout` milliseconds (1000 by default) for `command` to return, and runs the optional physical `abort()` before settling, so a failed or cancelled move is stopped before the caller can release the device. A subscription that throws settles at once, without `abort`, since nothing was dispatched. The listener and the timer are always removed.
+
+`abortableDelay(ms, signal)` sleeps for `ms` milliseconds and resolves `successfulOperationResult(undefined)`, or the failure mapped from the signal reason when it aborts first, clearing its timer. `abortReason(signal)` returns the signal's reason when it is an `OperationFailureReason`, and `'aborted'` otherwise. `settlesWithin(promise, ms)` reports whether a promise settles, fulfilled or rejected, within `ms` milliseconds, without cancelling it.
+
+The reasons are `busy` (a resource was refused at start), `aborted` (cancelled by the caller), `disconnected` and `removed` (a held device went away), `timeout`, `alert` (the driver reported `Alert`), `commandFailed` (a command, executor or cleanup threw) and `unexpectedState`. `failedOperationResult(reason, error?)` and `successfulOperationResult(value)` build the two variants of `OperationResult`. A failure omits `error` entirely when there is no detail. These waits usually run inside the signal of a [Device Operations](#device-operations) context.
+
+```ts
+import { abortableDelay, abortReason, settlesWithin, waitForDeviceState } from 'nebulosa/src/devices/orchestration/operation.wait'
+
+// A toy device whose position reaches 100 steps 50 ms after the command.
+const listeners = new Set<(position: number) => void>()
+let position = 0
+
+const options = {
+	signal: new AbortController().signal,
+	timeout: 1000, // ms
+	subscribe: (listener: (position: number) => void) => {
+		listeners.add(listener)
+		return () => void listeners.delete(listener)
+	},
+	current: () => position,
+	evaluate: (value: number): 'success' | 'pending' => (value === 100 ? 'success' : 'pending'),
+	command: () => {
+		setTimeout(() => {
+			position = 100
+			for (const listener of listeners) listener(position)
+		}, 50)
+	},
+	abort: () => console.log('halt'), // runs on every non-successful outcome
+}
+
+console.log(await waitForDeviceState(options)) // { ok: true, value: 100 }
+
+// The target is never reached: the physical abort runs, then the timeout settles.
+position = 0
+console.log(await waitForDeviceState({ ...options, timeout: 20, command: () => {} })) // logs 'halt', then { ok: false, reason: 'timeout' }
+
+const controller = new AbortController()
+const delayed = abortableDelay(10000, controller.signal)
+controller.abort('disconnected')
+console.log(await delayed, abortReason(controller.signal)) // { ok: false, reason: 'disconnected' } 'disconnected'
+
+console.log(await settlesWithin(Bun.sleep(5), 100)) // true
+console.log(await settlesWithin(new Promise(() => {}), 10)) // false
+```
+
+### Device Operations
+
+Observatory features compose: an autofocus run moves the focuser and takes exposures, a flat wizard drives a panel and a camera, and either may be cancelled by the user or by a disconnect at any time. `OperationCoordinator` gives each such feature an operation tree that owns its devices for its whole duration, propagates cancellation to every nested step, undoes registered work in reverse order, and only then releases the devices. Every outcome is an `OperationResult` (see [Device Command Waiting](#device-command-waiting) for the reasons), so callers never handle rejections.
+
+`new OperationCoordinator(arbiter)` wraps a [Device Resource Arbitration](#device-resource-arbitration) arbiter. `start(kind, resources, executor)` acquires every requested resource atomically and runs `executor(context)`, or returns a handle whose result is `busy` at once, with the conflicts in `error`, without waiting or queueing. The `OperationHandle` has `id`, `kind`, `signal` (aborted synchronously when cancellation begins), `result` (resolved only after cleanup and release, never rejected) and `cancel(reason = 'aborted')`, which is idempotent and resolves when cleanup has finished. A cancelled operation reports the cancellation reason even when its executor returns a different value, keeping the executor's error detail.
+
+The `OperationContext` passed to the executor has `id`, `kind`, `signal` and:
+
+- `start(kind, resources, executor)`, which opens a nested scope in the same tree. Resources held by an ancestor are reacquired reentrantly, but a sibling scope holding a resource conflicts as `busy`, so two parallel steps cannot command one device. A scope cannot be opened once its parent is cancelled or finishing.
+- `owns(key)`, which reports whether this scope or an ancestor holds the resource.
+- `onCleanup(cleanup)`, which registers a possibly asynchronous cleanup and returns an unregister function. Cleanups run once in LIFO order after the nested scopes have finished, whatever the outcome.
+
+An executor that throws is reported as `commandFailed` with the error message (and logged with `console.error`). A cleanup that throws turns a success into `commandFailed` and appends `cleanup failed: …` to an existing failure, because the device may not be quiescent. `get(id)` returns a live handle and `undefined` once it completed. `cancel(id)`, `cancelByResource(key)`, `cancelByDevice(key)` (every owner of a physical device, including logical resources standing for it), `cancelByClient(clientId)` and `cancelAll()` cancel and await cleanup. Services should take an `OperationScope` (anything with `start`): the coordinator, a context and a [Device Reservations](#device-reservations) scope all qualify, so a service runs identically at top level or composed.
+
+```ts
+import { failedOperationResult, OperationCoordinator, successfulOperationResult, type OperationContext, type OperationResult } from 'nebulosa/src/devices/orchestration/operation'
+import { ResourceArbiter } from 'nebulosa/src/devices/orchestration/resource'
+
+const coordinator = new OperationCoordinator(new ResourceArbiter())
+
+const autoFocus = coordinator.start('autoFocus', [{ key: 'camera' }, { key: 'focuser' }], async (context) => {
+	context.onCleanup(() => console.log('restore focuser'))
+	context.onCleanup(() => console.log('stop exposure')) // runs first
+
+	// A nested scope reacquires the focuser its root already holds.
+	const move = context.start('focuserMove', [{ key: 'focuser' }], (child) => {
+		console.log(child.owns('focuser'), child.owns('camera')) // true true
+		return successfulOperationResult(1200)
+	})
+
+	const moved = await move.result
+	return moved.ok ? successfulOperationResult(moved.value) : moved
+})
+
+console.log(coordinator.get(autoFocus.id) === autoFocus) // true
+console.log(await autoFocus.result) // logs both cleanups, then { ok: true, value: 1200 }
+
+// An executor that stops on cancellation.
+const waitForAbort = (context: OperationContext) => new Promise<OperationResult<void>>((resolve) => context.signal.addEventListener('abort', () => resolve(failedOperationResult('aborted', 'exposure aborted')), { once: true }))
+
+const capture = coordinator.start('capture', [{ key: 'camera' }], waitForAbort)
+console.log(await coordinator.start('capture', [{ key: 'camera' }], waitForAbort).result) // { ok: false, reason: 'busy', error: 'camera is owned by capture <id>' }
+
+await capture.cancel('timeout')
+console.log(await capture.result) // { ok: false, reason: 'timeout', error: 'exposure aborted' }
+
+console.log(
+	await coordinator.start('crash', [], () => {
+		throw new Error('driver crashed')
+	}).result,
+) // { ok: false, reason: 'commandFailed', error: 'driver crashed' }
+```
+
+### Device Reservations
+
+A lease lasts as long as one operation tree, but a session such as an imaging sequence needs its mount and camera for hours, across many operations and pauses, without a manual command slipping in between two of them. A reservation is that durable ownership. It is held by a `ResourceReservationOwner` (`{ id, kind }`), it is not itself an operation, and only operations started with its token may acquire the resources it covers.
+
+`arbiter.reserve(owner, requests)` reserves every resource or none, and returns `{ ok: true, reservation }` or the conflicts. Reserving again for the same owner extends the same reservation. A lease held by another tree, or another owner's reservation, refuses it, while an unavailable device can be reserved but stays unacquirable until it becomes available. `reservation.resources` lists the reserved keys, `reservation.token` is the credential and `reservation.release()` frees them. `availability(key)` reports `'reserved'` and `reservationOwnerOf(key)` the owner. The token is matched by object identity and must never be serialized. A token whose reservation was released refuses every acquisition rather than degrading to an ordinary one.
+
+`coordinator.reservedScope(reservation)` returns an `OperationScope` whose trees acquire under the token, and `tokenScope(token)` does the same from the token alone, for a service that keeps a root operation of its own, such as a guiding session opened on behalf of the sequence. Nested scopes inherit the token. `drainByReservationOwner(owner, reason?, preserve?)` cancels every tree of the reservation and awaits their cleanup, then leaves the reservation open for the work that follows, as in a pause or before a terminal shutdown sequence. `preserve` names one root operation id to leave running. `cancelByReservationOwner(owner, reason?)` does the same but closes the reservation for good: later starts under it fail as `aborted` with `reservation has been cancelled`, so it is the call to make before `release()`. Both close the reservation to new trees during the drain, so no tree can start behind it. Running trees are explained in [Device Operations](#device-operations) and keys and conflicts in [Device Resource Arbitration](#device-resource-arbitration).
+
+```ts
+import { failedOperationResult, OperationCoordinator, successfulOperationResult, type OperationResult } from 'nebulosa/src/devices/orchestration/operation'
+import { ResourceArbiter } from 'nebulosa/src/devices/orchestration/resource'
+
+const arbiter = new ResourceArbiter()
+const coordinator = new OperationCoordinator(arbiter)
+const session = { id: 'sequence-1', kind: 'sequencer' }
+
+const reserved = arbiter.reserve(session, [{ key: 'mount' }, { key: 'camera' }])
+if (!reserved.ok) throw new Error('devices in use')
+const { reservation } = reserved
+
+console.log(reservation.resources, arbiter.availability('mount')) // ['camera', 'mount'] 'reserved'
+
+// Outside the reservation, a manual slew is refused.
+console.log(await coordinator.start('slew', [{ key: 'mount' }], () => successfulOperationResult(undefined)).result) // { ok: false, reason: 'busy', error: 'mount is reserved by sequencer sequence-1' }
+
+// Inside it, the session's own operations acquire normally.
+const scope = coordinator.reservedScope(reservation)
+console.log(await scope.start('slew', [{ key: 'mount' }], () => successfulOperationResult('slewed')).result) // { ok: true, value: 'slewed' }
+
+// Pause: cancel the running capture but keep the reservation usable.
+const capture = scope.start('capture', [{ key: 'camera' }], (context) => new Promise<OperationResult<void>>((resolve) => context.signal.addEventListener('abort', () => resolve(failedOperationResult('aborted')), { once: true })))
+await coordinator.drainByReservationOwner(session)
+console.log(await capture.result) // { ok: false, reason: 'aborted' }
+console.log((await scope.start('capture', [{ key: 'camera' }], () => successfulOperationResult(1)).result).ok) // true
+
+// Stop: close the reservation for good, then release the devices.
+await coordinator.cancelByReservationOwner(session)
+console.log(await scope.start('capture', [{ key: 'camera' }], () => successfulOperationResult(1)).result) // { ok: false, reason: 'aborted', error: 'reservation has been cancelled' }
+reservation.release()
+console.log(arbiter.availability('mount')) // 'available'
+```
+
+### Device Resource Arbitration
+
+Two features must not command the same hardware at once: a filter that turns during an exposure ruins the frame, and a focus move during an exposure trails every star. `ResourceArbiter` is the single authority that decides who may use what. It grants leases atomically and without waiting: a request either gets every resource or none, and a conflict is reported immediately instead of being queued or preempting the holder. Most code reaches it through [Device Operations](#device-operations), which acquire and release leases around each operation tree.
+
+A resource is identified by a string key. `resourceKey(device)` is the device's `hardwareId`, an MD5 digest of client and name that every INDI interface of one physical device shares, so a camera and its integrated wheel, a focuser and the rotator of a combined unit, or a cover and the flat panel of a flip-flat are one resource. Two interfaces of one device therefore cannot be commanded from independent trees. `resourceDevice(device)` returns the physical parent of a subdevice proxy. Resources with no device behind them, such as a remote guiding session, use a `logical:` key prefix. A `ResourceRequest` is `{ key, device? }`: the device associates the key with the physical device and its client, seeds it as unavailable when disconnected, and lets device- and client-wide queries find it.
+
+`acquire(owner, requests, token?)` deduplicates and sorts the keys and returns `{ ok: true, lease }` or `{ ok: false, conflicts }`. The owner is an `{ id, kind }` object compared by identity, and the same owner may acquire a key again reentrantly. `lease.resources` lists the keys and `lease.release()` releases only that acquisition depth, idempotently. Each `ResourceConflict` has `key`, `by` (`'lease'`, `'reservation'` or `'unavailable'`), the blocking `ownerId` and `ownerKind`, and the active `causes`. `availability(key)` is `'unavailable'`, `'leased'`, `'reserved'` or `'available'`, in that precedence, and unknown keys are available. Unavailability has independent causes: `lifecycle` (connectivity and quiescence, maintained by [Device Availability Lifecycle](#device-availability-lifecycle)) and `quarantine` (a pending driver payload that must be discarded first). `markUnavailable(request, cause = 'lifecycle')` and `markAvailable(request, cause)` set and clear one cause without disturbing the others or the current owner. `markDeviceUnavailable(key)` and `markDeviceAvailable(key)` apply `lifecycle` to every record associated with a physical device, and `markClientUnavailable(clientId)` and `markClientAvailable(clientId)` block a whole client. `snapshot(key)` returns the read-only state, `owns(owner, key)`, `ownersOf(key)`, `ownersOfDevice(key)`, `ownersOfClient(clientId)` and `resourcesOf(owner)` answer ownership queries, and `disassociate(key, device)` forgets a removed device's association. Durable ownership across operations is covered by [Device Reservations](#device-reservations).
+
+```ts
+import { ResourceArbiter } from 'nebulosa/src/devices/orchestration/resource'
+
+const arbiter = new ResourceArbiter()
+const capture = { id: 'capture-1', kind: 'capture' }
+const focus = { id: 'focus-1', kind: 'autoFocus' }
+
+// Physical keys normally come from resourceKey(device) and carry the device: { key, device }.
+const camera = 'camera-hardware-id'
+const guider = 'logical:guider:local'
+
+const acquired = arbiter.acquire(capture, [{ key: guider }, { key: camera }, { key: camera }])
+if (!acquired.ok) throw new Error('busy')
+
+console.log(acquired.lease.resources) // ['camera-hardware-id', 'logical:guider:local'] — sorted, deduplicated
+console.log(arbiter.availability(camera)) // 'leased'
+
+// All or nothing: the free focuser is not taken because the camera is refused.
+const refused = arbiter.acquire(focus, [{ key: camera }, { key: 'focuser-hardware-id' }])
+console.log(refused.ok ? [] : refused.conflicts) // [{ key: 'camera-hardware-id', by: 'lease', ownerId: 'capture-1', ownerKind: 'capture', causes: [] }]
+console.log(arbiter.availability('focuser-hardware-id')) // 'available'
+
+// The same owner reacquires reentrantly; releasing the inner lease keeps the outer one.
+const nested = arbiter.acquire(capture, [{ key: camera }])
+if (nested.ok) nested.lease.release()
+console.log(arbiter.owns(capture, camera), arbiter.resourcesOf(capture)) // true ['camera-hardware-id', 'logical:guider:local']
+
+acquired.lease.release()
+console.log(arbiter.availability(camera)) // 'available'
+
+// Causes are independent: clearing quarantine leaves lifecycle in place.
+arbiter.markUnavailable(camera, 'quarantine')
+arbiter.markUnavailable(camera)
+arbiter.markAvailable(camera, 'quarantine')
+console.log(arbiter.snapshot(camera).causes) // ['lifecycle']
+
+const blocked = arbiter.acquire(focus, [{ key: camera }])
+console.log(blocked.ok ? [] : blocked.conflicts) // [{ key: 'camera-hardware-id', by: 'unavailable', ownerId: 'resource-arbiter', ownerKind: 'unavailable', causes: ['lifecycle'] }]
+```
+
 ### Firmata Accelerometer
 
 `MPU6050` drives the InvenSense MPU-6050 six-axis IMU over I2C and implements both `Accelerometer` (`ax`, `ay`, `az` in m/s²) and `Gyroscope` (`gx`, `gy`, `gz` in rad/s). The constructor takes the `client`, the I2C `address` (`MPU6050.ADDRESS` 0x68 by default, `ALTERNATIVE_ADDRESS` 0x69 when AD0 is high), the `pollingInterval` in milliseconds (`DEFAULT_POLLING_INTERVAL`, never below 10) and `MPU6050Options` with the full-scale ranges (`accelerometerRange` 2, 4, 8 or 16 g, default 2; `gyroscopeRange` 250, 500, 1000 or 2000 °/s, default 250; `DEFAULT_MPU6050_OPTIONS`). `start()` registers the handler, sets the read delay to zero, wakes the chip (power-management register), writes the two range registers, requests the first 14-byte burst (accelerometer, temperature and gyroscope registers from 0x3B) and repeats the request on a timer; `stop()` cancels the timer and detaches. Each burst reply is decoded (big-endian signed 16-bit counts per axis; the temperature word is skipped) and converted with the scale of the configured range: `G` divided by the counts per g (16384, 8192, 4096, 2048) for the acceleration, and 131, 65.5, 32.8 or 16.4 counts per degree per second for the gyroscope. Listeners are notified when any axis changed (see [Firmata Peripheral Base](#firmata-peripheral-base)), and `calculateAcceleration(raw)` and `calculateAngularVelocity(raw)` expose the conversions. The values are in the sensor frame: no gravity removal, offset calibration or filtering is applied, and the gyroscope offset of an individual chip is not corrected.
