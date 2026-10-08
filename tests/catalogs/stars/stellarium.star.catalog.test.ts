@@ -214,6 +214,8 @@ describe('open', () => {
 		expect(() => new StellariumStarCatalog({ blockBytes: 1000.5 })).toThrow('block size')
 		expect(() => new StellariumStarCatalog({ maxConcurrentReads: 0 })).toThrow('read concurrency')
 		expect(() => new StellariumStarCatalog({ maxConcurrentReads: 1.5 })).toThrow('read concurrency')
+		expect(() => new StellariumStarCatalog({ maxPendingReads: -1 })).toThrow('read queue size')
+		expect(() => new StellariumStarCatalog({ maxPendingReads: Number.NaN })).toThrow('read queue size')
 
 		const catalog = new StellariumStarCatalog()
 		expect(catalog.isOpen).toBeFalse()
@@ -563,5 +565,102 @@ describe('read concurrency', () => {
 
 		expect(await catalog.queryRegion(bright)).toEqual(brightest)
 		await paused.return(undefined)
+	})
+
+	test('the queue of new operations is bounded per open, served in order, and emptied by close', async () => {
+		const catalog = await openStellariumStarCatalog(rootH, { maxConcurrentReads: 1, maxPendingReads: 2 })
+		const zone = zoneOf(deg(150), deg(20), 5)
+		const closed = new Error('Stellarium star catalog is closed')
+		const full = new Error('Stellarium star catalog read queue is full')
+
+		// The first get reads with the only buffer, the next two wait, and the fourth is refused without queuing.
+		function burst(order: number[]) {
+			return Promise.all(
+				[0, 1, 2, 3].map((i) =>
+					catalog.get(5, zone, i).then(
+						(entry) => {
+							order.push(i)
+							return entry?.recordNumber
+						},
+						(error: unknown) => error,
+					),
+				),
+			)
+		}
+
+		const order: number[] = []
+		expect(await burst(order)).toEqual([0, 1, 2, full])
+		expect(order).toEqual([0, 1, 2])
+		expect(catalog.diagnostics.peakQueuedOperations).toBe(2)
+		expect(catalog.diagnostics.rejectedOperations).toBe(1)
+
+		// Close rejects the admitted waiters; the reopened catalog has a fresh queue of the same size.
+		const waiting = burst([])
+		await catalog.close()
+		expect(await waiting).toEqual([closed, closed, closed, full])
+
+		await catalog.open(rootH)
+		catalog.resetDiagnostics()
+		expect(await burst([])).toEqual([0, 1, 2, full])
+		expect(catalog.diagnostics.peakQueuedOperations).toBe(2)
+		await catalog.close()
+	})
+
+	test('a refused query builds no zone cover and an admitted stream is never refused', async () => {
+		await using catalog = await openStellariumStarCatalog(rootH, { blockBytes: 32 * 64, maxConcurrentReads: 1, maxPendingReads: 0 })
+		const zone = zoneOf(deg(150), deg(20), 5)
+
+		catalog.resetDiagnostics()
+		const holding = catalog.get(5, zone, 0)
+		expect(await catalog.queryRegion(dense).then(undefined, (error: unknown) => error)).toEqual(new Error('Stellarium star catalog read queue is full'))
+		expect(catalog.diagnostics.coverNodesVisited).toBe(0)
+		expect(catalog.diagnostics.rejectedOperations).toBe(1)
+		expect((await holding)?.recordNumber).toBe(0)
+
+		// Two streams admitted one after the other, then resumed at once: one waits for the buffer beyond
+		// maxPendingReads instead of failing.
+		const a = catalog.streamRegion(dense)[Symbol.asyncIterator]()
+		const b = catalog.streamRegion(dense)[Symbol.asyncIterator]()
+		const records: [number[], number[]] = [[], []]
+		const firstA = await a.next()
+		const firstB = await b.next()
+		if (!firstA.done) records[0].push(firstA.value.recordNumber)
+		if (!firstB.done) records[1].push(firstB.value.recordNumber)
+
+		for (;;) {
+			const [ra, rb] = await Promise.all([a.next(), b.next()])
+			if (ra.done && rb.done) break
+			if (!ra.done) records[0].push(ra.value.recordNumber)
+			if (!rb.done) records[1].push(rb.value.recordNumber)
+		}
+
+		const expected = Array.from({ length: 1000 }, (_, i) => i)
+		expect(records).toEqual([expected, expected])
+		expect(catalog.diagnostics.rejectedOperations).toBe(1)
+		expect(catalog.diagnostics.peakBuffersInUse).toBe(1)
+	})
+
+	test('the checksum audit reads 1 MiB chunks whatever blockBytes, one audit at a time', async () => {
+		// An empty level 7 file is 1310752 bytes of header and zone table: two chunks of at most 1 MiB.
+		const root = join(base, 'audit')
+		await fs.mkdir(root, { recursive: true })
+		const file = buildStarFile({ dataType: 2, level: 7 }, new Map())
+		await fs.writeFile(join(root, 'stars_7_2v0_0.cat'), file)
+
+		await using catalog = await openStellariumStarCatalog(root, { blockBytes: 48, maxConcurrentReads: 1 })
+		catalog.resetDiagnostics()
+
+		const [first, second] = await Promise.all([catalog.verifyChecksums(), catalog.verifyChecksums()])
+		expect(first[0].actual).toBe(createHash('md5').update(file).digest('hex'))
+		expect(second).toEqual(first)
+		expect(second).not.toBe(first)
+		// One shared audit of two reads, instead of one read per 48-byte block for each call.
+		expect(catalog.diagnostics.readCalls).toBe(2)
+		expect(catalog.diagnostics.bytesRead).toBe(file.byteLength)
+		expect(catalog.diagnostics.peakBuffersInUse).toBe(0)
+
+		const pending = catalog.verifyChecksums().then(undefined, (error: unknown) => error)
+		await catalog.close()
+		expect(await pending).toEqual(new Error('Stellarium star catalog is closed'))
 	})
 })
