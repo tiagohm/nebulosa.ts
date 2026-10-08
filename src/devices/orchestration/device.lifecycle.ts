@@ -76,12 +76,16 @@ export class DeviceLifecycle {
 			this.#added(device, verify)
 		}
 
+		// A manager may also report devices it does not own, as the guide output manager does for the mount or
+		// camera behind each of its proxies. Those views belong to another observer, whose verify and affects
+		// rules apply to them, so only the views this observer contributed are acted on.
 		const handler: DeviceHandler<D> = {
 			added,
-			updated: (device, property) => this.#updated(device, property, verify, affects),
+			updated: (device, property) => {
+				if (contributed.has(device)) this.#updated(device, property, affects)
+			},
 			removed: (device) => {
-				contributed.delete(device)
-				this.#removed(device)
+				if (contributed.delete(device)) this.#removed(device)
 			},
 		}
 
@@ -146,14 +150,12 @@ export class DeviceLifecycle {
 		this.#validate(key)
 	}
 
-	// Cancels on disconnect and revalidates only the updates that can change quiescence.
-	#updated<D extends Device>(device: D, property: keyof D & string, verify: DeviceAvailabilityVerifier<D>, affects: DeviceQuiescenceFilter<D>) {
+	// Cancels on disconnect and revalidates only the updates that can change quiescence. The view keeps the
+	// verifier it was added with.
+	#updated<D extends Device>(device: D, property: keyof D & string, affects: DeviceQuiescenceFilter<D>) {
 		const key = resourceKey(device)
-		const devices = this.#devices.get(key)
 
-		if (!devices?.has(device)) return
-
-		devices.set(device, { device, verify: () => verify(device) })
+		if (!this.#devices.get(key)?.has(device)) return
 
 		if (property === 'connected' && !device.connected) {
 			this.#invalidate(key, resourceDevice(device), 'disconnected')
@@ -288,7 +290,7 @@ const QUIESCENCE_PROPERTIES: Readonly<Partial<Record<DeviceType, ReadonlySet<str
 	rotator: new Set(['moving']),
 	guideOutput: new Set(['pulsing']),
 	cover: new Set(['parking']),
-	dome: new Set(['slewing', 'moving', 'homing', 'parking']),
+	dome: new Set(['slewing']),
 }
 
 // Reports whether a property change can alter the default quiescence verdict for the device.
@@ -322,10 +324,9 @@ export function isDeviceQuiescent(device: Device) {
 			return !(device as GuideOutput).pulsing
 		case 'cover':
 			return !(device as Cover).parking
-		case 'dome': {
-			const dome = device as Dome
-			return !dome.slewing && !dome.moving && !dome.homing && !dome.parking && dome.shutterState !== 'OPENING' && dome.shutterState !== 'CLOSING'
-		}
+		case 'dome':
+			// The manager aggregates azimuth, altitude, home, park and shutter motion into slewing.
+			return !(device as Dome).slewing
 		default:
 			return true
 	}

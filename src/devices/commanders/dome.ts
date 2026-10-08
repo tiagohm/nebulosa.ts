@@ -568,9 +568,10 @@ export function domeAltitude(dome: Dome, altitude: Angle): Angle {
 	return clamp(altitude, dome.altitude.min, dome.altitude.max)
 }
 
-// Reports whether a dome has stopped azimuth/altitude, home/park, and shutter transitions.
+// Reports whether every part of the dome has stopped; the manager aggregates azimuth, altitude, home, park
+// and shutter motion into slewing.
 function domeQuiescent(dome: Dome) {
-	return !dome.slewing && !dome.moving && !dome.homing && !dome.parking && dome.shutterState !== 'OPENING' && dome.shutterState !== 'CLOSING'
+	return !dome.slewing
 }
 
 // Compares two azimuths using the shortest circular difference in radians.

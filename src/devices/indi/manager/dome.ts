@@ -509,9 +509,10 @@ function domeOTASide(message: DefSwitchVector | SetSwitchVector): DomeOTASide {
 	return 'UNKNOWN'
 }
 
-// Recomputes the aggregate rotational/home/park motion flag after a related property update.
+// Recomputes the aggregate motion flag after a related property update. Like the ASCOM Slewing property,
+// it is true while any part of the dome moves: azimuth or altitude motion, homing, parking, or the shutter.
 function updateDomeSlewing(manager: DeviceManager<Dome>, dome: Dome, state?: PropertyState) {
-	const slewing = dome.moving || dome.homing || dome.parking
+	const slewing = dome.moving || dome.homing || dome.parking || dome.shutterState === 'OPENING' || dome.shutterState === 'CLOSING'
 
 	if (handleSwitchValue(dome, 'slewing', slewing, state)) manager.updated(dome, 'slewing', state)
 }

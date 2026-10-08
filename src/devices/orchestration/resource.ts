@@ -3,8 +3,10 @@ import { CLIENT, type Device, type SubDevice } from '../indi/device'
 // Resource arbitration for device orchestration. A ResourceArbiter grants atomic, non-blocking, reentrant
 // leases over physical devices (keyed by hardware id) and logical resources, tracks durable reservations
 // held by long-lived sessions, and records independent unavailability causes such as lifecycle state.
-// Records are retained across disconnects and discarded once they carry no state, so device churn does
-// not grow memory. Acquisition never waits and never preempts: a conflict is reported immediately.
+// Records are retained across disconnects and discarded once they carry no state. A removed device keeps
+// its lifecycle cause, so its record stays blocked until the device comes back under the same hardware id,
+// which is stable per client endpoint and device name; device churn therefore does not grow memory.
+// Acquisition never waits and never preempts: a conflict is reported immediately.
 
 // Opaque stable identity of one physical or logical resource. A physical key is the device hardware id, an
 // MD5 digest of client and name, so it is unique across clients and shared by every interface the same
@@ -555,6 +557,8 @@ export class ResourceArbiter {
 			if (resource.depth <= 0) {
 				resource.depth = 0
 				resource.owner = undefined
+				// A logical resource, or one disassociated while leased, has nothing left once the lease ends.
+				this.#discard(key, resource)
 			}
 		}
 

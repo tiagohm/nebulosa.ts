@@ -1,10 +1,13 @@
 import { describe, expect, spyOn, test } from 'bun:test'
-import { type Camera, type Cover, type Device, type GuideOutput, type Mount, type SubDevice, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_GUIDE_OUTPUT, DEFAULT_MOUNT } from '../../../src/devices/indi/device'
+import { CLIENT, type Camera, type Cover, type Device, type Dome, type GuideOutput, type Mount, type SubDevice, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_GUIDE_OUTPUT, DEFAULT_MOUNT } from '../../../src/devices/indi/device'
 import type { DeviceHandler } from '../../../src/devices/indi/manager/device'
+import { DomeManager } from '../../../src/devices/indi/manager/dome'
+import type { DefSwitchVector } from '../../../src/devices/indi/types'
 import { DeviceLifecycle, isDeviceQuiescent } from '../../../src/devices/orchestration/device.lifecycle'
 import { failedOperationResult, OperationCoordinator, type OperationContext, type OperationResult } from '../../../src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
 import { flushMicrotasks } from '../../util'
+import { client, defSwitch } from '../indi/manager/util'
 
 class TestDeviceManager<D extends Device> {
 	readonly #devices = new Set<D>()
@@ -84,6 +87,16 @@ function cover(): Cover {
 		...structuredClone(DEFAULT_COVER),
 		id: 'cover-1',
 		name: 'cover-1',
+		connected: true,
+		client: { type: 'SIMULATOR', id: 'client-1' },
+	}
+}
+
+function dome(): Dome {
+	return {
+		...structuredClone(DEFAULT_DOME),
+		id: 'dome-1',
+		name: 'dome-1',
 		connected: true,
 		client: { type: 'SIMULATOR', id: 'client-1' },
 	}
@@ -350,6 +363,39 @@ describe('device lifecycle', () => {
 
 		proxy.pulsing = false
 		guideOutputManager.update(proxy, 'pulsing')
+		expect(arbiter.availability(key)).toBe('available')
+
+		lifecycle.dispose()
+	})
+
+	test('keeps the verifier of the observer that contributed a view', () => {
+		const mountManager = new TestDeviceManager<Mount>()
+		const guideOutputManager = new TestDeviceManager<GuideOutput>()
+		const arbiter = new ResourceArbiter()
+		const coordinator = new OperationCoordinator(arbiter)
+		const lifecycle = new DeviceLifecycle(arbiter, coordinator)
+		const parent = mount()
+		const proxy = guideOutputProxy(parent)
+		const key = resourceKey(parent)
+
+		lifecycle.observe(mountManager, { verify: (device) => isDeviceQuiescent(device) && !device.tracking })
+		lifecycle.observe(guideOutputManager)
+		parent.tracking = true
+		mountManager.add(parent)
+		guideOutputManager.add(proxy)
+		expect(arbiter.availability(key)).toBe('unavailable')
+
+		// The guide output manager also reports the parent behind its proxy, as GuideOutputManager does.
+		proxy.pulsing = true
+		guideOutputManager.update(proxy, 'pulsing')
+		guideOutputManager.update(parent, 'pulsing')
+		proxy.pulsing = false
+		guideOutputManager.update(proxy, 'pulsing')
+		guideOutputManager.update(parent, 'connected')
+		expect(arbiter.availability(key)).toBe('unavailable')
+
+		parent.tracking = false
+		mountManager.update(parent, 'connected')
 		expect(arbiter.availability(key)).toBe('available')
 
 		lifecycle.dispose()
@@ -740,6 +786,50 @@ describe('device lifecycle', () => {
 			error.mockRestore()
 			lifecycle.dispose()
 		}
+	})
+
+	test('keeps a dome unavailable until its shutter stops', () => {
+		const manager = new DomeManager()
+		const arbiter = new ResourceArbiter()
+		const coordinator = new OperationCoordinator(arbiter)
+		const lifecycle = new DeviceLifecycle(arbiter, coordinator)
+		const device = dome()
+		const key = resourceKey(device)
+		Object.defineProperty(device, CLIENT, { value: client })
+		manager.add(device)
+
+		const motion: DefSwitchVector = { device: device.name, name: 'DOME_MOTION', permission: 'rw', rule: 'OneOfMany', state: 'Busy', elements: { DOME_CW: defSwitch('DOME_CW', true), DOME_CCW: defSwitch('DOME_CCW', false) } }
+		const shutter: DefSwitchVector = { device: device.name, name: 'DOME_SHUTTER', permission: 'rw', rule: 'OneOfMany', state: 'Busy', elements: { SHUTTER_OPEN: defSwitch('SHUTTER_OPEN', true), SHUTTER_CLOSE: defSwitch('SHUTTER_CLOSE', false) } }
+
+		lifecycle.observe(manager)
+		expect(arbiter.availability(key)).toBe('available')
+
+		manager.switchVector(client, motion, 'defSwitchVector')
+		manager.switchVector(client, shutter, 'defSwitchVector')
+		expect(arbiter.availability(key)).toBe('unavailable')
+
+		// The rotation ends while the shutter is still opening.
+		manager.switchVector(client, { ...motion, state: 'Ok', elements: { DOME_CW: defSwitch('DOME_CW', false), DOME_CCW: defSwitch('DOME_CCW', false) } }, 'setSwitchVector')
+		expect(device.shutterState).toBe('OPENING')
+		expect(arbiter.availability(key)).toBe('unavailable')
+
+		manager.switchVector(client, { ...shutter, state: 'Ok' }, 'setSwitchVector')
+		expect(device.shutterState).toBe('OPEN')
+		expect(arbiter.availability(key)).toBe('available')
+
+		manager.switchVector(client, { ...shutter, elements: { SHUTTER_OPEN: defSwitch('SHUTTER_OPEN', false), SHUTTER_CLOSE: defSwitch('SHUTTER_CLOSE', true) } }, 'setSwitchVector')
+		expect(device.shutterState).toBe('CLOSING')
+		expect(arbiter.availability(key)).toBe('unavailable')
+
+		lifecycle.dispose()
+	})
+
+	test('treats a slewing dome as busy', () => {
+		const device = dome()
+		expect(isDeviceQuiescent(device)).toBeTrue()
+
+		device.slewing = true
+		expect(isDeviceQuiescent(device)).toBeFalse()
 	})
 
 	test('treats a parking cover as busy', () => {
