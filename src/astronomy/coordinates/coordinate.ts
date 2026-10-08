@@ -1,6 +1,7 @@
 import { ECLIPTIC_J2000_MATRIX, GALACTIC_MATRIX, PI, PIOVERTWO, TAU } from '../../core/constants'
 import { matMulVec, matRotX, matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import type { Vec3 } from '../../math/linear-algebra/vec3'
+import { sphericalSeparation } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 import { localSiderealTime } from '../observer/location'
@@ -57,20 +58,10 @@ export interface GalacticCoordinate {
 	latitude: Angle // The angle north or south of the plane (±90°)
 }
 
-// Computes the angular separation between two equatorial coordinates.
+// Great-circle separation in [0, PI] radians between RA/Dec positions in the same equatorial frame.
+// All parameters are radians; stable near coincidence and antipodes, with no allocation or mutation.
 export function angularDistance(ra0: Angle, dec0: Angle, ra1: Angle, dec1: Angle): Angle {
-	const sinDec0 = Math.sin(dec0)
-	const cosDec0 = Math.cos(dec0)
-	const sinDec1 = Math.sin(dec1)
-	const cosDec1 = Math.cos(dec1)
-	const deltaRightAscension = ra0 - ra1
-	const sinDeltaRightAscension = Math.sin(deltaRightAscension)
-	const cosDeltaRightAscension = Math.cos(deltaRightAscension)
-	// Use a stable atan2 form to preserve tiny separations near zero.
-	const x = cosDec1 * sinDeltaRightAscension
-	const y = cosDec0 * sinDec1 - sinDec0 * cosDec1 * cosDeltaRightAscension
-	const z = sinDec0 * sinDec1 + cosDec0 * cosDec1 * cosDeltaRightAscension
-	return Math.atan2(Math.sqrt(x * x + y * y), z)
+	return sphericalSeparation(ra0, dec0, ra1, dec1)
 }
 
 // Computes the angular separation between two equatorial coordinates using Haversine formula. Less stable.

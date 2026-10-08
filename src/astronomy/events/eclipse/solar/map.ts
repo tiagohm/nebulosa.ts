@@ -1,5 +1,5 @@
 import { DAYSEC, DEG2RAD, PI, PIOVERTWO, RAD2DEG, TAU } from '../../../../core/constants'
-import { type Angle, normalizeAngle, normalizePI } from '../../../../math/units/angle'
+import { type Angle, normalizeAngle, normalizePI, unwrapAngles } from '../../../../math/units/angle'
 // oxfmt-ignore
 import { bisectRoot, derivativeEarthLimbOmega, earthLimbCircleIntersections, earthLimbExtremes, earthLimbOmega, earthLimbPoint, earthLimbSignedDistance, F, GEOMETRY_TANGENCY_EPSILON, geoPolylinesToSvgPathData, hourAngleFromLongitude, INV_F, longitudeFromHourAngle, normalizeLongitude, refineRoot, type EclipseGeoBranch, type EclipseGeoCurve, type EclipseGeoPoint, type SunMoonPosition, type SunMoonProvider } from '../eclipse'
 import type { Writable } from '../../../../core/types'
@@ -432,31 +432,6 @@ function evaluatePolynomialDerivative(coefficients: Readonly<NumberArray>, t: nu
 	return value
 }
 
-// Unwraps a sequence of angles in place so successive values never jump by more than PI (removes
-// 2*PI discontinuities before polynomial fitting).
-function unwrapAngles(values: NumberArray) {
-	let offset = 0
-	let previous = values[0]
-
-	for (let i = 1; i < values.length; i++) {
-		let current = values[i] + offset
-		const delta = current - previous
-
-		if (delta > PI) {
-			current -= TAU
-			offset -= TAU
-		} else if (delta < -PI) {
-			current += TAU
-			offset += TAU
-		}
-
-		values[i] = current
-		previous = current
-	}
-
-	return values
-}
-
 // Least-squares cubic fit, returning the four ascending-power coefficients.
 function fitCubic(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
 	return polynomialRegression(x, y, 3).coefficients
@@ -655,7 +630,7 @@ export function computePolynomialBesselianElements(maximumTime: Time, sunMoonPos
 		l1: fitCubic(t, l1),
 		l2: fitCubic(t, l2),
 		d: fitCubic(t, d),
-		mu: fitCubic(t, unwrapAngles(mu)),
+		mu: fitCubic(t, unwrapAngles(mu, mu)),
 		tanF1: tanF1 / n,
 		tanF2: tanF2 / n,
 	}

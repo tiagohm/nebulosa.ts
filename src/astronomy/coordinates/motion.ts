@@ -1,6 +1,6 @@
 import { DAYSEC } from '../../core/constants'
 import { vecDot } from '../../math/linear-algebra/vec3'
-import { type Angle, normalizePI } from '../../math/units/angle'
+import { type Angle, unwrapAngle } from '../../math/units/angle'
 import { angularDistance, positionAngleBetween } from './coordinate'
 import { eraS2c } from './erfa/erfa'
 
@@ -79,7 +79,7 @@ function unwrapLongitudes(samples: readonly SphericalMotionSample[]) {
 	longitudes[0] = samples[0].longitude
 
 	for (let i = 1; i < samples.length; i++) {
-		longitudes[i] = longitudes[i - 1] + normalizePI(samples[i].longitude - samples[i - 1].longitude)
+		longitudes[i] = unwrapAngle(samples[i].longitude, samples[i - 1].longitude, longitudes[i - 1])
 	}
 
 	return longitudes

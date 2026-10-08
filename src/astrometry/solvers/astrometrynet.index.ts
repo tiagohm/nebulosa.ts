@@ -229,8 +229,7 @@ function normalizeColumnOffset(offset: number) {
 // polar caps and the equatorial belt, including RA wraparound through `phi` normalization.
 // The result is `(bighp * nside + x) * nside + y`, in [0, 12 * nside^2).
 function unitVectorToTile(vx: number, vy: number, vz: number, nside: number): number {
-	let phi = Math.atan2(vy, vx)
-	if (phi < 0) phi += TAU
+	const phi = normalizeAngle(Math.atan2(vy, vx))
 	// Longitude within the current base-pixel column, in [0, PI/2).
 	const phiT = phi % PIOVERTWO
 

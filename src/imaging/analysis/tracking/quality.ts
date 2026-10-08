@@ -1,6 +1,7 @@
 import { tanUnproject } from '../../../astrometry/wcs/fits.wcs'
 import { PI } from '../../../core/constants'
 import { medianBySelectionOf, percentileBySelectionOf } from '../../../math/numerical/statistics'
+import { safeAngularDifference } from '../../../math/units/angle'
 import type { Image } from '../../model/types'
 import { STAR_SIGNAL_RADIUS, type DetectedStar } from '../../stars/detector'
 import { streakAxialAngleDistance } from '../streak/geometry'
@@ -252,7 +253,7 @@ function measureTrackingQualityCore(image: Image, stars: readonly DetectedStar[]
 		const trail = candidateTrails[i]
 		if (trail > trailLimit) continue
 		const doubled = 2 * candidateAngles[i]
-		if (rejectAngleOutliers && Math.abs(Math.atan2(Math.sin(doubled - 2 * preliminaryAngle), Math.cos(doubled - 2 * preliminaryAngle))) > PI / 3) continue
+		if (rejectAngleOutliers && Math.abs(safeAngularDifference(doubled, 2 * preliminaryAngle)) > PI / 3) continue
 		acceptedCosine += Math.cos(doubled)
 		acceptedSine += Math.sin(doubled)
 		acceptedTrails[acceptedCount++] = trail

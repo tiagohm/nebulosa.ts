@@ -1,15 +1,15 @@
-import { PI, TAU } from '../../../core/constants'
 import { chebyshevLeastSquares, type ChebyshevRegression } from '../../../math/numerical/regression'
 import { akimaSpline, catmullRomSpline, cubicHermiteSpline, linearSpline, naturalCubicSpline, pchip } from '../../../math/numerical/spline'
-import { normalizeAngle, type Angle } from '../../../math/units/angle'
+import { normalizeAngle, unwrapAngles, type Angle } from '../../../math/units/angle'
 import type { EquatorialCoordinate } from '../../coordinates/coordinate'
 import { type Time, Timescale, timeConvert } from '../../time/time'
 
 // Time-series interpolation of precomputed apparent/topocentric RA and Dec samples. Supports
 // linear, spline (several cubic variants), and Chebyshev least-squares strategies behind a common
 // interpolator interface, with configurable out-of-range handling and optional RMS diagnostics.
-// RA is unwrapped before fitting to avoid the 0/TAU discontinuity and re-normalized on output;
-// sample times are shifted by the first sample (TT) to keep the interpolation argument small.
+// RA is unwrapped before fitting to avoid the 0/TAU discontinuity and re-normalized on output.
+// Consecutive RA samples must track less than PI of physical motion; half-turn ties choose +PI.
+// Sample times are shifted by the first sample (TT) to keep the interpolation argument small.
 
 // Selectable interpolation algorithm family.
 export type EphemerisInterpolationStrategy = 'linear' | 'spline' | 'chebyshev'
@@ -401,7 +401,7 @@ function prepareSamples(points: readonly EphemerisPoint[], minimumSampleCount: n
 		throw new RangeError('ephemeris sample times must span a non-zero interval')
 	}
 
-	unwrapRA(compactRa)
+	unwrapAngles(compactRa, compactRa)
 
 	const normalizedTimes = new Float64Array(count)
 
@@ -423,28 +423,6 @@ function prepareSamples(points: readonly EphemerisPoint[], minimumSampleCount: n
 function EphemerisSamplesComparator(a: SortableEphemerisPoint, b: SortableEphemerisPoint) {
 	const delta = a.time - b.time
 	return delta || a.order - b.order
-}
-
-function unwrapRA(rightAscension: Float64Array) {
-	let offset = 0
-	let previous = rightAscension[0]
-
-	// RA is unwrapped before fitting so interpolation never crosses the artificial 0/TAU discontinuity.
-	for (let i = 1; i < rightAscension.length; i++) {
-		let current = rightAscension[i] + offset
-		const delta = current - previous
-
-		if (delta > PI) {
-			current -= TAU
-			offset -= TAU
-		} else if (delta < -PI) {
-			current += TAU
-			offset += TAU
-		}
-
-		rightAscension[i] = current
-		previous = current
-	}
 }
 
 function numericTime(time: Time) {

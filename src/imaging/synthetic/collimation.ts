@@ -2,7 +2,7 @@ import { TAU } from '../../core/constants'
 import { maximumNormalizedBoundaryRadiusSquared } from '../../math/numerical/ellipse.geometry'
 import type { Point, Rect } from '../../math/numerical/geometry'
 import { mulberry32 } from '../../math/numerical/random'
-import type { Angle } from '../../math/units/angle'
+import { type Angle, safeAngularDifference } from '../../math/units/angle'
 import { type CfaPattern, type Image, type ImageRawType, makeImageRawTypedArray, shiftCfaPattern } from '../model/types'
 
 // Deterministic rasterization of defocused, centrally obstructed stellar patterns. Geometry is expressed
@@ -409,7 +409,7 @@ function annulusWeight(x: number, y: number, outer: ResolvedEllipse, obstruction
 
 	const plume = pattern.thermalPlume
 	if (plume !== undefined && plume.strength > 0) {
-		const delta = Math.atan2(Math.sin(phi - plume.angle), Math.cos(phi - plume.angle))
+		const delta = safeAngularDifference(phi, plume.angle)
 		weight *= 1 - plume.strength * Math.exp(-(delta * delta) / (2 * plume.width * plume.width))
 	}
 	return weight

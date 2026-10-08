@@ -25,7 +25,7 @@ export function meteorSolarState(time: Time): MeteorSolarState {
 	return { solarLongitude: normalizeAngle(Math.atan2(position[1], position[0])), sun: matTransposeMulVec(ECLIPTIC_J2000_MATRIX, position) }
 }
 
-// Returns the signed shortest angular displacement longitude - reference in [-π, π).
+// Returns the signed shortest angular displacement longitude - reference in (-π, π].
 export function meteorSolarLongitudeDelta(longitude: Angle, reference: Angle): Angle {
 	return normalizePI(longitude - reference)
 }

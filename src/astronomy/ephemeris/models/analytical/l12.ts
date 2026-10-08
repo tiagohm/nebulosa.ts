@@ -1,7 +1,7 @@
-import { DAYSPERJY, TAU } from '../../../../core/constants'
+import { DAYSPERJY } from '../../../../core/constants'
 import { matMulVec } from '../../../../math/linear-algebra/mat3'
 import { vecZero, vecFill } from '../../../../math/linear-algebra/vec3'
-import { pmod } from '../../../../math/numerical/math'
+import { normalizeAngle } from '../../../../math/units/angle'
 import type { PositionAndVelocityMut } from '../../../coordinates/astrometry'
 import { type Time, tt } from '../../../time/time'
 
@@ -716,7 +716,7 @@ export function compute(time: Time, index: number, out?: PositionAndVelocityMut)
 	}
 
 	applyLongPeriodChebyshev(t, index, elem)
-	elem[1] = pmod(elem[1], TAU)
+	elem[1] = normalizeAngle(elem[1])
 
 	const [a, al, k, h, q, p] = elem
 

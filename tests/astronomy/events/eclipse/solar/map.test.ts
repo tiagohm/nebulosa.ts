@@ -3,6 +3,7 @@ import { nearestSolarEclipse, type SolarEclipse, type SolarEclipseType } from '.
 import { deg, parseAngle, type Angle } from '../../../../../src/math/units/angle'
 // oxfmt-ignore
 import { BRANCH_MAX_DRAWABLE_GAP, centralAxisIntersectsEarth, computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, evaluateBesselian, findCentralLineExtremePoint, findCircleIntersections, findCurvePoints, findEclipseCurvePoint, findMaximumPoint, findPenumbraContactPoints, intermediateGreatCircle, projectClosestEarthLimbPoint, projectFundamentalPoint, solarAltitudeAtPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitCentralLineByKind, splitDisconnectedPolylines, type SolarEclipseGeoBranch, type SolarEclipseGeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry } from '../../../../../src/astronomy/events/eclipse/solar/map'
+import { eraGst06a } from '../../../../../src/astronomy/coordinates/erfa/erfa'
 import { DELTA_T_LONGITUDE_FACTOR, EARTH_E2, earthLimbExtremes, earthLimbOmega, sunMoonPosition, type SunMoonPosition } from '../../../../../src/astronomy/events/eclipse/eclipse'
 import { PlateCarree, type ProjectionOptions } from '../../../../../src/astronomy/projections/projection'
 import { time, Timescale, timeSubtract, timeYMD, toJulianDay } from '../../../../../src/astronomy/time/time'
@@ -1821,4 +1822,20 @@ test('1862-11-21 trims the penumbral single-vertex branch switch near S1', () =>
 		expect(catalogBranchRetraces(branch, deg(0.5), deg(5))).toBe(false)
 		expect(maxBranchSegment([branch])).toBeLessThanOrEqual(BRANCH_MAX_DRAWABLE_GAP)
 	}
+})
+
+test('Besselian mu fitting keeps its rate through Greenwich angle zero', () => {
+	const maximum = time(JD0, 0, Timescale.TT)
+	const elements = computePolynomialBesselianElements(maximum, (sampleTime) => {
+		const offsetHours = timeSubtract(sampleTime, maximum) * 24
+		const gast = eraGst06a(sampleTime.day, sampleTime.fraction, sampleTime.day, sampleTime.fraction)
+		const ra = gast - 0.2 * offsetHours
+		return { sun: { rightAscension: ra, declination: 0, distance: 23000 }, moon: { rightAscension: ra, declination: 0, distance: 60 }, deltaT: 0 }
+	})
+	// Collinear Sun and Moon have shadow RA = ra, hence mu = GAST - ra = 0.2*t.
+	// The first sample is TAU - 0.6, selecting the continuous branch TAU + 0.2*t.
+	expect(elements.mu[0]).toBeCloseTo(TAU, 12)
+	expect(elements.mu[1]).toBeCloseTo(0.2, 12)
+	expect(elements.mu[2]).toBeCloseTo(0, 12)
+	expect(elements.mu[3]).toBeCloseTo(0, 12)
 })

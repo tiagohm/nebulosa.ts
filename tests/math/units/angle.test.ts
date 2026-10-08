@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { PI, PIOVERTWO, TAU } from '../../../src/core/constants'
-import { arcmin, arcsec, deg, dms, type FormatAngleOptions, formatALT, formatAngle, formatAZ, formatDEC, formatDMS, formatHMS, formatRA, formatSignedDMS, hms, hour, mas, normalizeAngle, normalizePI, parseAngle, toArcmin, toArcsec, toDeg, toDms, toHms, toHour, toMas } from '../../../src/math/units/angle'
+// oxfmt-ignore
+import { arcmin, arcsec, deg, dms, type FormatAngleOptions, formatALT, formatAngle, formatAZ, formatDEC, formatDMS, formatHMS, formatRA, formatSignedDMS, hms, hour, mas, normalizeAngle, normalizePI, parseAngle, safeAngularDifference, unwrapAngle, unwrapAngles, toArcmin, toArcsec, toDeg, toDms, toHms, toHour, toMas } from '../../../src/math/units/angle'
 
 test('normalize', () => {
 	expect(normalizeAngle(0)).toBeCloseTo(0, 16)
@@ -442,4 +443,137 @@ test('formatALT', () => {
 	expect(formatALT(deg(-10))).toBe('-10 00 00.00')
 	expect(formatALT(deg(-10), false)).toBe('-10 00 00')
 	expect(formatALT(deg(-10), 5)).toBe('-10 00 00.00000')
+})
+
+describe('circular differences and unwrapping', () => {
+	test('wraps degrees and uses the positive signed half-turn tie', () => {
+		expect(normalizeAngle(deg(361))).toBeCloseTo(deg(1), 14)
+		expect(normalizeAngle(deg(-1))).toBeCloseTo(deg(359), 14)
+		expect(normalizePI(deg(359))).toBeCloseTo(deg(-1), 14)
+		expect(normalizePI(3 * PI)).toBeCloseTo(PI, 14)
+		expect(safeAngularDifference(deg(1), deg(359))).toBeCloseTo(deg(2), 14)
+		expect(safeAngularDifference(deg(359), deg(1))).toBeCloseTo(deg(-2), 14)
+		expect(safeAngularDifference(PI, 0)).toBeCloseTo(PI, 14)
+		expect(safeAngularDifference(-PI, 0)).toBeCloseTo(-PI, 14)
+	})
+
+	test('retains small differences and characterizes modular rounding', () => {
+		const tiny = Number.EPSILON / 4
+		expect(safeAngularDifference(tiny, 0)).toBeCloseTo(tiny, 30)
+		// The addition of PI in normalizePI rounds increments below half an ulp of PI to zero.
+		expect(unwrapAngle(tiny, 0, 0)).toBe(0)
+		for (const base of [0, PI, TAU]) {
+			for (const step of [-1e-12, 1e-12]) {
+				const delta = base + step - base
+				expect(Math.abs(safeAngularDifference(base + step, base) - delta)).toBeLessThan(4 * Number.EPSILON)
+				expect(Math.abs(unwrapAngle(base + step, base, base) - (base + step))).toBeLessThan(4 * Number.EPSILON)
+			}
+		}
+	})
+
+	test.each([
+		[
+			[357, 358, 359, 0, 1, 2],
+			[357, 358, 359, 360, 361, 362],
+		],
+		[
+			[2, 1, 0, 359, 358],
+			[2, 1, 0, -1, -2],
+		],
+		[
+			[359, 0, 1, 0, 359],
+			[359, 360, 361, 360, 359],
+		],
+		[
+			[-1, 0, 1],
+			[-1, 0, 1],
+		],
+		[
+			[719, 0, 1],
+			[719, 720, 721],
+		],
+	])('reconstructs a continuous track from %j degrees', (degrees, expected) => {
+		const input = degrees.map(deg)
+		const result = unwrapAngles(input)
+		expect(result).toBeInstanceOf(Float64Array)
+		expect(input).toEqual(degrees.map(deg))
+		const objects = input.map((angle) => ({ angle }))
+		let continuous = objects[0].angle
+		for (let i = 0; i < result.length; i++) {
+			if (i > 0) continuous = unwrapAngle(objects[i].angle, objects[i - 1].angle, continuous)
+			expect(result[i]).toBeCloseTo(deg(expected[i]), 13)
+			expect(continuous).toBeCloseTo(result[i], 14)
+		}
+		const array = [...input]
+		const typed = new Float64Array(input)
+		expect(unwrapAngles(array, array)).toBe(array)
+		expect(unwrapAngles(typed, typed)).toBe(typed)
+		expect(array).toEqual(Array.from(result))
+		expect(typed).toEqual(result)
+	})
+
+	test('uses positive half turns in both directions', () => {
+		expect(Array.from(unwrapAngles([0, PI]))).toEqual([0, PI])
+		expect(Array.from(unwrapAngles([0, -PI]))).toEqual([0, PI])
+		expect(unwrapAngle(deg(1), deg(359), deg(359))).toBeCloseTo(deg(361), 14)
+		expect(unwrapAngle(deg(359), deg(1), deg(1))).toBeCloseTo(deg(-1), 14)
+	})
+
+	test('handles empty/singleton sequences, fresh outputs and a destination tail', () => {
+		expect(unwrapAngles([])).toHaveLength(0)
+		const input = new Float64Array([-1])
+		const fresh = unwrapAngles(input)
+		expect(fresh).not.toBe(input)
+		fresh[0] = 42
+		expect(input[0]).toBe(-1)
+		const out = new Float64Array([0, 22, 33])
+		expect(unwrapAngles(input, out)).toBe(out)
+		expect(Array.from(out)).toEqual([-1, 22, 33])
+		expect(unwrapAngles([], out)).toBe(out)
+		expect(Array.from(out)).toEqual([-1, 22, 33])
+		const array = [0, 22]
+		expect(unwrapAngles(input, array)).toBe(array)
+		expect(array).toEqual([-1, 22])
+	})
+
+	test('rejects truncation and shifted overlaps before mutating storage', () => {
+		expect(() => unwrapAngles([0, 1], new Float64Array(1))).toThrow(RangeError)
+		expect(() => unwrapAngles([0, 1], [0])).toThrow(RangeError)
+		const storage = new Float64Array([6, 0.1, 0.2, 0.3])
+		const original = storage.slice()
+		expect(() => unwrapAngles(storage.subarray(0, 3), storage.subarray(1))).toThrow(RangeError)
+		expect(() => unwrapAngles(storage.subarray(1), storage.subarray(0, 3))).toThrow(RangeError)
+		expect(() => unwrapAngles(storage.subarray(2), storage)).toThrow(RangeError)
+		expect(storage).toEqual(original)
+		expect(unwrapAngles(storage.subarray(2, 2), storage)).toBe(storage)
+		const sameStart = storage.subarray(0, 3)
+		expect(unwrapAngles(sameStart, storage)).toBe(storage)
+		expect(storage[3]).toBe(0.3)
+		const disjoint = new Float64Array([6, 0.1, 0, 0])
+		unwrapAngles(disjoint.subarray(0, 2), disjoint.subarray(2))
+		expect(disjoint[3]).toBeCloseTo(TAU + 0.1, 14)
+	})
+
+	test('deterministic wrap invariance and reconstruction over many turns', () => {
+		let seed = 0x12345678
+		const input = new Float64Array(1000)
+		const expected = new Float64Array(1000)
+		let continuous = 5
+		for (let i = 0; i < input.length; i++) {
+			seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+			// Positive steps in [0.05, 0.55] radians, safely below the ambiguous half turn.
+			if (i > 0) continuous += 0.05 + (seed / 2 ** 32) * 0.5
+			expected[i] = continuous
+			input[i] = normalizeAngle(continuous)
+			for (const turns of [-7, -1, 1, 7]) {
+				expect(normalizeAngle(input[i] + turns * TAU)).toBeCloseTo(input[i], 13)
+			}
+		}
+		const result = unwrapAngles(input)
+		for (let i = 0; i < input.length; i++) {
+			expect(result[i]).toBeCloseTo(expected[i], 11)
+			expect(Math.abs(safeAngularDifference(result[i], input[i]))).toBeLessThan(1e-11)
+		}
+		expect(unwrapAngles(input, input)).toEqual(result)
+	})
 })

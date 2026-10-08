@@ -3,7 +3,7 @@ import type { Vec3 } from '../../math/linear-algebra/vec3'
 import type { Point } from '../../math/numerical/geometry'
 import { floorDiv, modf, pmod, type NumberArray } from '../../math/numerical/math'
 import { brentMinimize } from '../../math/numerical/optimization'
-import { normalizeAngle, secondsOfTime, toDeg, type Angle } from '../../math/units/angle'
+import { normalizeAngle, safeAngularDifference, secondsOfTime, toDeg, type Angle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import { moonMeanAscendingNode } from '../bodies/moon'
 import { deltaT as calculateDeltaT } from '../time/deltat'
@@ -1345,7 +1345,7 @@ export namespace Coords {
 		const b = cDelta * cdAlpha * sgDelta - sDelta * cgDelta
 		const x = atan2(a, b) // (13.7) p. 94
 		// (galactic0Lon1950 + 1.5 * PI) = magic number of 303 deg
-		const lon = (GALACTIC_LON_0 + 1.5 * PI - x) % TAU // (13.8) p. 94
+		const lon = normalizeAngle(GALACTIC_LON_0 + 1.5 * PI - x) // (13.8) p. 94
 		const lat = atan2(sDelta * sgDelta + cDelta * cgDelta * cdAlpha, hypot(a, b))
 		return [lon, lat] as const
 	}
@@ -1549,7 +1549,7 @@ export namespace Rise {
 	// Local signed hour angle (-PI..PI) at UT1 seconds m, for ra/lon in radians and theta0 in sidereal seconds.
 	function localHourAngle(lon: Angle, ra: Angle, theta0: number, m: number) {
 		const angle = ((theta0 + (m * 360.985647) / 360) * TAU) / DAYSEC - lon - ra
-		return atan2(sin(angle), cos(angle))
+		return safeAngularDifference(angle, 0)
 	}
 
 	// Refines approximate events once with Meeus's quadratic three-day interpolation; returns UT1
@@ -1560,9 +1560,8 @@ export namespace Rise {
 	// This is the chapter's single-correction approximation, not a search for rapidly changing polar events.
 	export function times(observer: Observer, deltaT: number, h0: Angle, theta0: number, ra3: readonly [Angle, Angle, Angle], dec3: readonly [Angle, Angle, Angle]): Result {
 		const initial = approxTimes(observer, h0, theta0, ra3[1], dec3[1])
-		// Unwrap one RA sample to the nearest branch around the central sample.
-		const unwrap = (a: Angle) => ra3[1] + atan2(sin(a - ra3[1]), cos(a - ra3[1]))
-		const alpha = new Interpolation.Len3(-DAYSEC, DAYSEC, [unwrap(ra3[0]), ra3[1], unwrap(ra3[2])])
+		// Align each outer RA independently to the central sample's branch.
+		const alpha = new Interpolation.Len3(-DAYSEC, DAYSEC, [ra3[1] + safeAngularDifference(ra3[0], ra3[1]), ra3[1], ra3[1] + safeAngularDifference(ra3[2], ra3[1])])
 		const delta = new Interpolation.Len3(-DAYSEC, DAYSEC, dec3)
 		const transit = pmod(initial.transit - (localHourAngle(observer.lon, alpha.interpolateX(initial.transit + deltaT), theta0, initial.transit) * DAYSEC) / TAU, DAYSEC)
 
@@ -1866,7 +1865,7 @@ export namespace Conjunction {
 	// conjunction branch; dd is unchanged. The five equally spaced rows must bracket a conjunction
 	// (Len5 interpolating factor n in [-2, 2]); Δδ uses the same table domain as zero().
 	function conj(t1: number, t5: number, dr: NumberArray, dd: NumberArray) {
-		for (let i = 1; i < dr.length; i++) dr[i] = dr[i - 1] + atan2(sin(dr[i] - dr[i - 1]), cos(dr[i] - dr[i - 1]))
+		for (let i = 1; i < dr.length; i++) dr[i] = dr[i - 1] + safeAngularDifference(dr[i], dr[i - 1])
 		const shift = TAU * round(dr[2] / TAU)
 		for (let i = 0; i < dr.length; i++) dr[i] -= shift
 		const t = new Interpolation.Len5(t1, t5, dr).zero(true)
@@ -4377,8 +4376,7 @@ export namespace Mars {
 		const [sDeltaPrime, cDeltaPrime] = Base.sincos(deltaPrime)
 		const [sAlpha0PrimealphaPrime, cAlpha0PrimealphaPrime] = Base.sincos(alpha0Prime - alphaPrime)
 		// (42.4) p. 290
-		let P = atan2(cDelta0Prime * sAlpha0PrimealphaPrime, sDelta0Prime * cDeltaPrime - cDelta0Prime * sDeltaPrime * cAlpha0PrimealphaPrime)
-		if (P < 0) P += TAU
+		const P = normalizeAngle(atan2(cDelta0Prime * sAlpha0PrimealphaPrime, sDelta0Prime * cDeltaPrime - cDelta0Prime * sDeltaPrime * cAlpha0PrimealphaPrime))
 		// Step 18
 		const s = l0 + PI
 		const [ss, cs] = Base.sincos(s)
@@ -4502,8 +4500,7 @@ export namespace Jupiter {
 		const [sDelta0Prime, cDelta0Prime] = Base.sincos(delta0Prime)
 		const [sAlpha0PrimealphaPrime, cAlpha0PrimealphaPrime] = Base.sincos(alpha0Prime - alphaPrime)
 		// (42.4) p. 290
-		let P = atan2(cDelta0Prime * sAlpha0PrimealphaPrime, sDelta0Prime * cDeltaPrime - cDelta0Prime * sDeltaPrime * cAlpha0PrimealphaPrime)
-		if (P < 0) P += TAU
+		const P = normalizeAngle(atan2(cDelta0Prime * sAlpha0PrimealphaPrime, sDelta0Prime * cDeltaPrime - cDelta0Prime * sDeltaPrime * cAlpha0PrimealphaPrime))
 		return [DS, DE, omega1, omega2, P]
 	}
 
@@ -5066,7 +5063,7 @@ export namespace SaturnRing {
 		const U1 = atan2(si * sbp + ci * cbp * slp, cbp * clp)
 		const U2 = atan2(si * sb + ci * cb * sin(lambda - omega), cb * cos(lambda - omega))
 		// Wrap before taking the absolute difference: atan2 longitudes can straddle the antimeridian.
-		const deltaU = abs(atan2(sin(U1 - U2), cos(U1 - U2)))
+		const deltaU = abs(safeAngularDifference(U1, U2))
 		const a = (375.35 * ASEC2RAD) / distance
 		const minor = a * abs(sB)
 		const Bp = asin(si * cbp * slp - ci * sbp)
@@ -6037,8 +6034,7 @@ export namespace Moon {
 			const Y = sIRho * cV * this.cEpsilon - cIRho * this.sEpsilon
 			const omega = atan2(X, Y)
 			const [ra] = Coords.eclipticToEquatorial(lambda + this.deltaPsi, beta, this.epsilon)
-			let P = asin(max(-1, min(1, (hypot(X, Y) * cos(ra - omega)) / cos(b))))
-			if (P < 0) P += TAU
+			const P = normalizeAngle(asin(max(-1, min(1, (hypot(X, Y) * cos(ra - omega)) / cos(b)))))
 			return P
 		}
 

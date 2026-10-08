@@ -3,7 +3,7 @@ import { Gnomonic } from '../../../astronomy/projections/projection'
 import type { Time } from '../../../astronomy/time/time'
 import { PIOVERTWO, TAU } from '../../../core/constants'
 import type { Point } from '../../../math/numerical/geometry'
-import { clamp } from '../../../math/numerical/math'
+import { clamp, pmod } from '../../../math/numerical/math'
 import type { Angle } from '../../../math/units/angle'
 import { handleDefLightVector, handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, type IndiClientHandler } from '../client'
 import { type DefNumberVector, type DefSwitchVector, type DefTextVector, selectOnSwitch } from '../types'
@@ -89,11 +89,11 @@ export function applyMultiSwitchValues(vector: DefSwitchVector, elements: Record
 
 // Normalizes a rotator angle to [0, 360) degrees.
 export function wrapRotatorAngle(value: number) {
-	value %= 360
-	return value < 0 ? value + 360 : value
+	return pmod(value, 360)
 }
 
-// Returns the shortest signed angular delta (degrees, in (-180, 180]) from current to target.
+// Shortest signed delta in [-180, 180] degrees from current to target, both in [0, 360].
+// Exact half turns retain the sign of target - current; mechanical travel is handled by callers.
 export function shortestRotatorDelta(target: number, current: number) {
 	let delta = target - current
 

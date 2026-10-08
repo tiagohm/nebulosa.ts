@@ -210,3 +210,10 @@ test('horizontal to equatorial round-trips an object below the horizon', () => {
 	expect(ra).toBeCloseTo(rightAscension, 12)
 	expect(dec).toBeCloseTo(declination, 12)
 })
+
+test('equatorial separation retains subnormal-scale squared components', () => {
+	// On the equator the shortest great-circle arc equals the small RA difference.
+	// Squaring 1e-200 underflows; hypot retains the physical separation.
+	expect(angularDistance(0, 0, 1e-200, 0) / 1e-200).toBeCloseTo(1, 15)
+	expect(angularDistance(0, 0, PI - 1e-12, 0)).toBeCloseTo(PI - 1e-12, 14)
+})

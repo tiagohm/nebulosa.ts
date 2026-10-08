@@ -103,8 +103,8 @@ test('antipodal legs omit their undefined tangent without rejecting ordinary lon
 })
 
 test('densely sampled longitude keeps full turns beyond half a revolution', () => {
-	// 2 rad/day eastward for 2 days (4 rad > π between endpoints), sampled every 0.1 day and wrapped to [0, 2π).
-	const samples = Array.from({ length: 21 }, (_, i) => ({ longitude: (0.2 * i) % TAU, latitude: 0, timeDays: i * 0.1 }))
+	// 2 rad/day eastward for 20 days (40 rad, over six full turns), sampled every 0.1 day and wrapped to [0, 2π).
+	const samples = Array.from({ length: 201 }, (_, i) => ({ longitude: (0.2 * i) % TAU, latitude: 0, timeDays: i * 0.1 }))
 	const motion = angularMotionOrDifferentialTrackingRate(samples)
 
 	expect(motion!.longitudeRatePerDay).toBeCloseTo(2, 12)

@@ -1,6 +1,6 @@
 import { TAU } from '../../core/constants'
-import { type NumberArray, pmod } from '../../math/numerical/math'
-import type { Angle } from '../../math/units/angle'
+import type { NumberArray } from '../../math/numerical/math'
+import { type Angle, normalizeAngle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import type { PositionAndVelocityMut } from '../coordinates/astrometry'
 
@@ -33,7 +33,7 @@ import type { PositionAndVelocityMut } from '../coordinates/astrometry'
 // i = inclination
 // e = eccentricity
 export function ellipticToRectangular(a: Distance, n: Angle, elem: Readonly<NumberArray>, dt: number, out?: PositionAndVelocityMut): PositionAndVelocityMut {
-	const L = pmod(elem[1] + n * dt, TAU)
+	const L = normalizeAngle(elem[1] + n * dt)
 	// solve Keplers equation
 	//    x = L - elem[2]*sin(x) + elem[3]*cos(x)
 	//  not by trivially iterating

@@ -49,6 +49,7 @@ export function canonicalizeBahtinovLine(normalAngle: Angle, distance: number): 
 	if (!Number.isFinite(normalAngle)) throw new RangeError('normalAngle must be finite')
 	if (!Number.isFinite(distance)) throw new RangeError('distance must be finite')
 
+	// Keep signed remainder: rounding a tiny negative angle to TAU selects the flipped-distance branch.
 	let angle = normalAngle % TAU
 	if (angle < 0) angle += TAU
 

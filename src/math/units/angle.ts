@@ -2,8 +2,9 @@ import { AMIN2RAD, ASEC2RAD, DEG2RAD, HOUR2RAD, MILLIASEC2RAD, PI, RAD2DEG, RAD2
 import { pmod } from '../numerical/math'
 
 // Angle type and conversions. The canonical `Angle` is radians; helpers build angles from degrees,
-// hours, arcmin/arcsec/mas or sexagesimal components and convert back, plus wrap-safe normalization
-// and sexagesimal parsing/formatting. Functions that normalize state their target range explicitly.
+// hours, arcmin/arcsec/mas or sexagesimal components and convert back, plus wrap-safe normalization,
+// continuous phase unwrapping and sexagesimal parsing/formatting. Unwrapping allocates only when
+// no sequence output is supplied. Functions that normalize state their target range explicitly.
 
 // Fallback values applied per-field when formatAngle is called without the corresponding option.
 const DEFAULT_FORMAT_ANGLE_OPTIONS: Required<FormatAngleOptions> = {
@@ -48,15 +49,54 @@ export interface FormatAngleOptions {
 	padLength?: number
 }
 
-// Normalizes the angle to the range [0, TAU).
+// Normalizes an angle in radians to [0, TAU), without allocation.
 export function normalizeAngle(angle: Angle): Angle {
 	return pmod(angle, TAU)
 }
 
-// Normalizes the angle to the range (-PI, PI].
+// Normalizes an angle in radians to (-PI, PI], mapping both -PI and +PI to +PI, without allocation.
 export function normalizePI(angle: Angle): Angle {
 	const rem = pmod(angle + PI, TAU)
 	return rem === 0 ? PI : rem - PI
+}
+
+// Adds the smallest circular increment from the original previous sample to current to the
+// previousUnwrapped continuous value; all three parameters and the result are radians. Allocates
+// nothing and leaves the result unwrapped. Increments use (-PI, PI], with a positive half-turn tie.
+// Physical motion is recoverable only when consecutive original samples are less than PI apart;
+// extra turns and the direction of an exact half turn cannot be inferred from wrapped samples.
+export function unwrapAngle(current: Angle, previous: Angle, previousUnwrapped: Angle): Angle {
+	return previousUnwrapped + normalizePI(current - previous)
+}
+
+// Unwraps time-ordered 2*PI-periodic samples in radians, preserving the first value. Physical steps
+// must be smaller than PI; ambiguous half turns use +PI. Returns a fresh Float64Array without out,
+// otherwise writes values.length entries and returns out, preserving its tail. Empty input writes
+// nothing. Supports in-place operation and views with identical starts, but rejects partially
+// overlapping Float64Array views with different starts and destinations shorter than the input.
+// Takes O(n) time and O(1) extra memory with out. No integer or Float32 destinations are supported.
+export function unwrapAngles(values: readonly Angle[] | Float64Array): Float64Array<ArrayBuffer>
+export function unwrapAngles<T extends number[] | Float64Array>(values: readonly Angle[] | Float64Array, out: T): T
+export function unwrapAngles(values: readonly Angle[] | Float64Array, out: number[] | Float64Array | undefined): number[] | Float64Array
+export function unwrapAngles(values: readonly Angle[] | Float64Array, out?: number[] | Float64Array): number[] | Float64Array {
+	// Short typed-array writes are silently discarded, producing a plausible but truncated series.
+	if (out !== undefined && out.length < values.length) throw new RangeError('angle output is too short')
+	// A shifted overlapping destination could overwrite an original sample before it is read.
+	if (values instanceof Float64Array && out instanceof Float64Array && values.length > 0 && values.buffer === out.buffer && values.byteOffset !== out.byteOffset && values.byteOffset < out.byteOffset + out.byteLength && out.byteOffset < values.byteOffset + values.byteLength) {
+		throw new RangeError('angle input and output views overlap with different offsets')
+	}
+	const dest = out ?? new Float64Array(values.length)
+	if (values.length === 0) return dest
+	let previous = values[0]
+	let continuous = previous
+	dest[0] = continuous
+	for (let i = 1; i < values.length; i++) {
+		const current = values[i]
+		continuous = unwrapAngle(current, previous, continuous)
+		dest[i] = continuous
+		previous = current
+	}
+	return dest
 }
 
 // Creates a new Angle from degrees.
@@ -164,7 +204,9 @@ export function toHms(angle: Angle): [number, number, number] {
 	return [Math.trunc(h), Math.trunc(m), s]
 }
 
-// Wrap-safe angular difference in [-PI, PI]; never compare longitudes with a plain subtraction.
+// Smallest signed circular difference a - b in radians, in [-PI, PI], without allocation.
+// atan2(sin, cos) retains the trigonometric sign at antipodal ties (unlike normalizePI's +PI tie).
+// This compares scalar directions, not spherical separation or accumulated mechanical travel.
 export function safeAngularDifference(a: Angle, b: Angle) {
 	return Math.atan2(Math.sin(a - b), Math.cos(a - b))
 }

@@ -3069,10 +3069,10 @@ describe('Rise', () => {
 		expect('rise' in result).toBe(false)
 	})
 
-	test('right ascension and longitude wrapping preserve event times', () => {
+	test.each([1, -1])('right ascension and longitude wrapping preserve event times, direction %i', (direction) => {
 		const p = { lat: deg(30), lon: deg(179) }
-		const wrapped = [deg(359), 0, deg(1)] as const
-		const unwrapped = [deg(-1), 0, deg(1)] as const
+		const wrapped = direction === 1 ? ([deg(359), 0, deg(1)] as const) : ([deg(1), 0, deg(359)] as const)
+		const unwrapped = [deg(-direction), 0, deg(direction)] as const
 		const dec = [deg(10), deg(10), deg(10)] as const
 		const a = Rise.times(p, 60, Rise.stdh0Stellar(), 86000, wrapped, dec)
 		const b = Rise.times({ lat: p.lat, lon: p.lon - TAU }, 60, Rise.stdh0Stellar(), 86000, unwrapped, dec)

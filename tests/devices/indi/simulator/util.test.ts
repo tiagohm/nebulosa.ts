@@ -93,6 +93,9 @@ describe('rotator angle helpers', () => {
 	test('wraps angles into [0, 360)', () => {
 		expect(wrapRotatorAngle(0)).toBe(0)
 		expect(wrapRotatorAngle(360)).toBe(0)
+		expect(wrapRotatorAngle(720)).toBe(0)
+		expect(wrapRotatorAngle(-Number.EPSILON)).toBe(0)
+		expect(wrapRotatorAngle(-720)).toBeCloseTo(0, 12)
 		expect(wrapRotatorAngle(370)).toBeCloseTo(10, 12)
 		expect(wrapRotatorAngle(-10)).toBeCloseTo(350, 12)
 	})
@@ -101,6 +104,8 @@ describe('rotator angle helpers', () => {
 		expect(shortestRotatorDelta(10, 350)).toBeCloseTo(20, 12)
 		expect(shortestRotatorDelta(350, 10)).toBeCloseTo(-20, 12)
 		expect(shortestRotatorDelta(180, 0)).toBe(180)
+		expect(shortestRotatorDelta(0, 180)).toBe(-180)
+		expect(shortestRotatorDelta(360, 0)).toBe(0)
 	})
 })
 

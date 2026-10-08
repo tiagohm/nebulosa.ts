@@ -411,7 +411,9 @@ export function intersectLineAndSphere(endpoint: Vec3, center: Vec3, radius: num
 	return [(minusB - dsqrt) / 2, (minusB + dsqrt) / 2]
 }
 
-// Computes the angular distance between two points on the unit sphere.
+// Great-circle separation in [0, PI] radians between two unit-sphere positions. Longitudes and
+// latitudes are radians in the same frame; atan2/hypot preserves tiny and near-antipodal separations.
+// Allocates nothing and does not mutate inputs.
 export function sphericalSeparation(longitudeA: number, latitudeA: number, longitudeB: number, latitudeB: number) {
 	const dLongitude = longitudeB - longitudeA
 	const sinLatitudeA = Math.sin(latitudeA)

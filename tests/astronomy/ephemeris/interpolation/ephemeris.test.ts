@@ -3,7 +3,7 @@ import { angularDistance } from '../../../../src/astronomy/coordinates/coordinat
 import { type EphemerisPoint, type UpdatableEphemerisInterpolator, chebyshevInterpolator, linearInterpolator, splineInterpolator } from '../../../../src/astronomy/ephemeris/interpolation/ephemeris'
 import { earth, mars } from '../../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { Timescale, time, timeConvert, timeYMDHMS } from '../../../../src/astronomy/time/time'
-import { DAYSEC, TAU } from '../../../../src/core/constants'
+import { DAYSEC, PI, TAU } from '../../../../src/core/constants'
 
 const J0 = 2460000
 const PLANET_START_TIME = timeYMDHMS(2025, 9, 28, 0, 0, 0, Timescale.TT)
@@ -331,4 +331,22 @@ test('rejects invalid input', () => {
 	expect(() => linearInterpolator([point(0, 1, Number.POSITIVE_INFINITY), point(1, 2, 1)])).toThrow('ephemeris Dec must be finite')
 	expect(() => linearInterpolator([{ time: time(Number.POSITIVE_INFINITY), rightAscension: 1, declination: 0 }, point(1, 2, 1)])).toThrow('ephemeris time must be finite')
 	expect(() => splineInterpolator([point(0, 1, 0), point(1, 2, 1), point(2, 3, 2)], 'invalid' as never)).toThrow('spline interpolation must be naturalCubic, cubicHermite, pchip, akima, or catmullRom')
+})
+
+test.each([1, -1])('all strategies preserve RA seam continuity, direction %i', (direction) => {
+	const points = [0, 1, 2, 3, 4].map((i) => point(i, (((direction * (i - 2) * 0.1) % TAU) + TAU) % TAU, i * 0.01))
+	for (const interpolator of [linearInterpolator(points, { computeRmsError: true }), splineInterpolator(points, 'naturalCubic', { computeRmsError: true }), chebyshevInterpolator(points, 2, { computeRmsError: true })]) {
+		expect(interpolator.diagnostics?.rmsRA).toBeLessThan(1e-12)
+		expect(interpolator.diagnostics?.maxAbsRA).toBeLessThan(1e-12)
+		for (const offset of [0.5, 1.5, 2.5, 3.5]) {
+			const expected = (((direction * (offset - 2) * 0.1) % TAU) + TAU) % TAU
+			expect(interpolator.compute(jd(offset))[0]).toBeCloseTo(expected, 12)
+		}
+	}
+})
+
+test.each([PI, -PI])('RA half-turn tie %f selects the positive branch', (next) => {
+	// Legacy interpolation kept -PI negative; shared phase unwrapping deliberately selects +PI.
+	const interpolator = linearInterpolator([point(0, 0, 0), point(1, next, 0)])
+	expect(interpolator.compute(jd(0.5))[0]).toBeCloseTo(PI / 2, 14)
 })
