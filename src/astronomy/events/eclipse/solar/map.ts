@@ -2,8 +2,8 @@ import { DAYSEC, DEG2RAD, PI, PIOVERTWO, RAD2DEG, TAU } from '../../../../core/c
 import { type Angle, normalizeAngle, normalizePI } from '../../../../math/units/angle'
 // oxfmt-ignore
 import { bisectRoot, derivativeEarthLimbOmega, earthLimbCircleIntersections, earthLimbExtremes, earthLimbOmega, earthLimbPoint, earthLimbSignedDistance, F, GEOMETRY_TANGENCY_EPSILON, geoPolylinesToSvgPathData, hourAngleFromLongitude, INV_F, longitudeFromHourAngle, normalizeLongitude, refineRoot, type EclipseGeoBranch, type EclipseGeoCurve, type EclipseGeoPoint, type SunMoonPosition, type SunMoonProvider } from '../eclipse'
-import { NumberComparator } from 'nebulosa/src/core/util'
 import type { Writable } from '../../../../core/types'
+import { NumberComparator } from '../../../../core/util'
 import { vecDot, vecLength, vecMinus, vecNormalizeMut } from '../../../../math/linear-algebra/vec3'
 import { sphericalInterpolate, sphericalSeparation, type Point } from '../../../../math/numerical/geometry'
 import { clamp, type NumberArray } from '../../../../math/numerical/math'

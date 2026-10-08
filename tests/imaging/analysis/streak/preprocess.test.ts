@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { TAU } from 'nebulosa/src/core/constants'
+import { TAU } from '../../../../src/core/constants'
 import { preprocessStreakImage, STREAK_MASK_INVALID, STREAK_MASK_SATURATED, streakLocalNoise, streakLocalNoiseAtPixel } from '../../../../src/imaging/analysis/streak/preprocess'
 import { createStreakDetectionWorkspace } from '../../../../src/imaging/analysis/streak/workspace'
 import type { Image } from '../../../../src/imaging/model/types'

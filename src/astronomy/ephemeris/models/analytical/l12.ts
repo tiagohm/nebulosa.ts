@@ -1,6 +1,6 @@
-import { vecFill, vecZero } from 'nebulosa/src/math/linear-algebra/vec3'
 import { DAYSPERJY, TAU } from '../../../../core/constants'
 import { matMulVec } from '../../../../math/linear-algebra/mat3'
+import { vecZero, vecFill } from '../../../../math/linear-algebra/vec3'
 import { pmod } from '../../../../math/numerical/math'
 import type { PositionAndVelocityMut } from '../../../coordinates/astrometry'
 import { type Time, tt } from '../../../time/time'

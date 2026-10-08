@@ -8,8 +8,8 @@ import { eraGst06a } from '../../../coordinates/erfa/erfa'
 import { F, hourAngleFromLongitude, type SunMoonPosition } from '../eclipse'
 // oxfmt-ignore
 import { besselianSampleAtJulianDay, centralAxisIntersectsEarth, centralLineKind, computePolynomialBesselianElements, evaluateBesselian, findMaximumPoint, projectFundamentalPoint, solarAltitudeAtPoint, SUN_RADIUS_EARTH_RADII, type SolarEclipseGeoPoint, type InstantBesselianElements, type PolynomialBesselianElements } from './map'
-import { NumberComparator } from 'nebulosa/src/core/util'
 import type { Writable } from '../../../../core/types'
+import { NumberComparator } from '../../../../core/util'
 import { type Time, timeAtJulianDay, toJulianDay, tt } from '../../../time/time'
 
 // Local solar eclipse circumstances ("Local View"): for a single geographic point this module resolves

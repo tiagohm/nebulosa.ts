@@ -1,5 +1,5 @@
-import type { PositionAndVelocityMut } from 'nebulosa/src/astronomy/coordinates/astrometry'
 import { matMulVec } from '../../../../math/linear-algebra/mat3'
+import type { PositionAndVelocityMut } from '../../../coordinates/astrometry'
 import { type Time, tt } from '../../../time/time'
 import { ellipticToRectangularN } from '../../ephemeris'
 

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 // oxfmt-ignore
 import { type PhaseCorrelationOptions, PhaseCorrelationWorkspace, type RegistrationPlane, hannWindow, matchPatchZNCC, normalizeRegistrationSamples, phaseCorrelate, phaseCorrelationSpectrum, refineTranslationECC, removeLinearTrend } from '../../../../src/imaging/analysis/tracking/registration'
-import { TAU } from 'nebulosa/src/core/constants'
+import { TAU } from '../../../../src/core/constants'
 import { mulberry32 } from '../../../../src/math/numerical/random'
 import { type Scene, textureScene } from '../../../util/scene'
 

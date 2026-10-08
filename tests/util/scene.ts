@@ -1,4 +1,4 @@
-import { TAU } from 'nebulosa/src/core/constants'
+import { TAU } from '../../src/core/constants'
 import type { CfaPattern, Image } from '../../src/imaging/model/types'
 import { mulberry32 } from '../../src/math/numerical/random'
 
