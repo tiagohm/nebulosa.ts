@@ -1,5 +1,5 @@
 import { PIOVERTWO, PI, TAU, ASEC2RAD } from '../../../core/constants'
-import { type MutVec3, type Vec3, vecAngleUnit, vecLatitude, vecNormalizeMut, vecTripleProduct } from '../../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngleUnit, vecLatitude, vecMidpoint, vecNormalizeMut, vecTripleProduct } from '../../../math/linear-algebra/vec3'
 import type { Angle } from '../../../math/units/angle'
 import type { StarCatalogRaDecBox } from '../catalog'
 
@@ -97,9 +97,9 @@ export function stellariumZoneTriangle(level: number, zone: number): [MutVec3, M
 
 	for (let l = level - 1; l >= 0; l--) {
 		const k = Math.floor(zone / 4 ** l) % 4
-		const e0 = midpoint(c1, c2)
-		const e1 = midpoint(c2, c0)
-		const e2 = midpoint(c0, c1)
+		const e0 = vecMidpoint(c1, c2)
+		const e1 = vecMidpoint(c2, c0)
+		const e2 = vecMidpoint(c0, c1)
 
 		if (k === 0) {
 			c1 = e2
@@ -155,9 +155,9 @@ export function stellariumZoneForPoint(v: Vec3, level: number) {
 	let zone = face
 
 	for (let l = 0; l < level; l++) {
-		const e0 = midpoint(c1, c2)
-		const e1 = midpoint(c2, c0)
-		const e2 = midpoint(c0, c1)
+		const e0 = vecMidpoint(c1, c2)
+		const e1 = vecMidpoint(c2, c0)
+		const e2 = vecMidpoint(c0, c1)
 		zone *= 4
 
 		if (vecTripleProduct(v, e1, e2) <= 0) {
@@ -240,9 +240,9 @@ export function stellariumZoneCover(classify: StellariumCapClassifier, levels: r
 		if (requested[depth] !== undefined) emit(depth, zone, zone + 1, false)
 
 		if (depth < maxLevel) {
-			const e0 = midpoint(c1, c2)
-			const e1 = midpoint(c2, c0)
-			const e2 = midpoint(c0, c1)
+			const e0 = vecMidpoint(c1, c2)
+			const e1 = vecMidpoint(c2, c0)
+			const e2 = vecMidpoint(c0, c1)
 			const child = zone * 4
 			walk(c0, e2, e1, depth + 1, child)
 			walk(e2, c1, e0, depth + 1, child + 1)
@@ -317,13 +317,4 @@ export function stellariumBoxesClassifier(boxes: readonly StarCatalogRaDecBox[])
 
 		return relation
 	}
-}
-
-// Returns the normalized midpoint direction of two unit vectors as a fresh vector.
-function midpoint(a: Vec3, b: Vec3): MutVec3 {
-	const x = a[0] + b[0]
-	const y = a[1] + b[1]
-	const z = a[2] + b[2]
-	const length = Math.hypot(x, y, z)
-	return [x / length, y / length, z / length]
 }

@@ -20342,6 +20342,8 @@ console.log(parser.parse('<enableBLOB device="Camera">Also</enableBLOB>')[0].nam
 
 `math/linear-algebra/vec2` has the two-component vector helpers: a `Vec2` is a readonly `[x, y]` tuple of plain numbers in whatever unit the caller uses, and a `MutVec2` is its mutable form (see [3D Vectors](#_3d-vectors) for the three-component counterpart). Angles are radians. The helpers that build a vector take an optional output `o`: when given, the result is written into it (it may be one of the inputs) and returned, so the return aliases `o`; when omitted, a new vector is allocated. The `...Mut` variants (`vec2NegateMut`, `vec2NormalizeMut`, `vec2RotMut`, `vec2DivScalarMut`) work in place, `vec2Fill` and `vec2FillWith` overwrite a vector, and `vec2Clone`, `vec2Zero`, `vec2XAxis` and `vec2YAxis` create new ones. `vec2Dot`, `vec2Cross` (the z component of the 3D cross product, positive when `b` is counterclockwise from `a`), `vec2CrossLength` (its absolute value), `vec2Length` and `vec2Distance` return numbers. `vec2Angle` is the unsigned angle between two vectors in [0, π] (0 when either is the zero vector) computed with a stable `atan2` formulation, `vec2Longitude` the polar angle from the +x axis normalized to [0, 2π), and `vec2Rot` rotates counterclockwise around the origin. `vec2Normalize` returns the vector unchanged (a copy) when its length is zero instead of producing NaN. The scalar forms (`vec2PlusScalar`, `vec2MinusScalar`, `vec2MulScalar`, `vec2DivScalar`) apply to both components and the element-wise forms (`vec2Plus`, `vec2Minus`, `vec2Mul`, `vec2Div`) pair them.
 
+`vec2Midpoint(a, b, o?)` returns the normalized sum of finite vectors in the same units and frame. For equal-length nonzero vectors it gives the midpoint direction along the minor arc; unequal lengths weight the direction by their magnitudes. It returns zero for an exactly zero sum (no defined direction), and nearly opposite inputs are ill-conditioned. It handles overflowing sums and subnormal norms by scaling and supports an output that aliases either input.
+
 ```ts
 import {
 	vec2Angle,
@@ -20357,6 +20359,7 @@ import {
 	vec2FillWith,
 	vec2Length,
 	vec2Longitude,
+	vec2Midpoint,
 	vec2Minus,
 	vec2MinusScalar,
 	vec2Mul,
@@ -20409,6 +20412,10 @@ console.log(vec2NormalizeMut(m), m) // [ 0.6, 0.8 ] [ 0.6, 0.8 ]
 console.log(vec2NegateMut(m)) // [ -0.6, -0.8 ]
 console.log(vec2DivScalarMut(m, 2)) // [ -0.3, -0.4 ]
 console.log(vec2RotMut(m, Math.PI)) // [ 0.30000000000000004, 0.39999999999999997 ]
+
+// A unit midpoint direction; antipodal inputs have no unique midpoint direction.
+console.log(vec2Midpoint([1, 0], [0, 1]).map((v) => Number(v.toFixed(6)))) // [ 0.707107, 0.707107 ]
+console.log(vec2Midpoint([1, 0], [-1, 0])) // [0, 0]
 ```
 
 ### 2x2 Matrices
@@ -20497,6 +20504,8 @@ console.log(mat2TransposeMulVec(a, [1, 1])) // [ 4, 6 ]
 
 `math/linear-algebra/vec3` has the three-component vector helpers: a `Vec3` is a readonly `[x, y, z]` tuple of plain numbers in the caller's unit and a `MutVec3` its mutable form (see [2D Vectors](#_2d-vectors) for the planar counterpart); names start with `vec` and angles are radians. As in the 2D module, the helpers that build a vector take an optional output `o`, written and returned (aliasing it, and it may be an input) when given and allocated when omitted, and the `...Mut` variants work in place. `vecDot`, `vecCross`, `vecCrossLength` (the length of the cross product without allocating), `vecTripleProduct(a, b, c)` (a · (b × c), the signed volume), `vecLength` and `vecDistance` are the basic products and norms. `vecAngle` is the unsigned angle between two vectors in [0, π] by a stable `atan2` formulation (0 for a zero vector), and `vecAngleUnit` is the faster form for unit vectors. The spherical extractions assume the usual right-handed frame: `vecLongitude` is the azimuth in the xy plane normalized to [0, 2π), `vecLatitude` the angle above the xy plane in [-π/2, π/2] and `vecPolarAngle` the colatitude from +z in [0, π]; all are stable at the poles and do not need a unit vector. `vecRotX`, `vecRotY` and `vecRotZ` rotate by the right-hand rule around an axis (counterclockwise seen from the positive axis), and `vecRotateByRodrigues(v, axis, angle)` rotates around any axis, normalizing it internally and returning a copy of `v` when the axis is zero. `vecPlane(a, b, c)` returns the unnormalized normal of the plane through three points, `(b - a) × (c - a)`, and `vecPositionAngle(a, b)` the position angle of `b` seen from `a` on the sphere, in (-π, π] counterclockwise from the direction of the pole (north) through east. `vecNormalize` returns the vector unchanged when its length is zero, and the scalar and element-wise arithmetic mirrors the 2D set.
 
+`vecMidpoint(a, b, o?)` returns the normalized sum of finite vectors in the same units and frame. For equal-length nonzero vectors it gives the midpoint direction along the minor arc; unequal lengths weight the direction by their magnitudes. It returns zero for an exactly zero sum (no defined direction), and nearly opposite inputs are ill-conditioned. It handles overflowing sums and subnormal norms by scaling and supports an output that aliases either input.
+
 ```ts
 import {
 	type MutVec3,
@@ -20515,6 +20524,7 @@ import {
 	vecLatitude,
 	vecLength,
 	vecLongitude,
+	vecMidpoint,
 	vecMinus,
 	vecMinusScalar,
 	vecMul,
@@ -20596,6 +20606,10 @@ console.log(vecDivScalarMut(m, 2)) // [ -0.5, -0, -0 ]
 console.log(vecRotZMut(m, Math.PI)) // [ 0.5, -6.123233995736766e-17, -0 ]
 console.log(vecRotXMut(m, Math.PI)) // [ 0.5, 6.123233995736766e-17, -7.498798913309288e-33 ]
 console.log(m === vecRotYMut(m, Math.PI)) // true
+
+// A unit midpoint direction; antipodal inputs have no unique midpoint direction.
+console.log(vecMidpoint([1, 0, 0], [0, 1, 0]).map((v) => Number(v.toFixed(6)))) // [ 0.707107, 0.707107, 0 ]
+console.log(vecMidpoint([1, 0, 0], [-1, 0, 0])) // [0, 0, 0]
 ```
 
 ### 3x3 Matrices

@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { PI, PIOVERFOUR, PIOVERTWO } from '../../../src/core/constants'
 import { deg } from '../../../src/math/units/angle'
 // oxfmt-ignore
-import { type MutVec3, type Vec3, vecAngle, vecCross, vecDistance, vecDiv, vecDivScalar, vecDot, vecLatitude, vecLength, vecLongitude, vecMinus, vecMinusScalar, vecMul, vecMulScalar, vecNegate, vecNormalize, vecNormalizeMut, vecPlane, vecPlus, vecPlusScalar, vecPolarAngle, vecPositionAngle, vecRotateByRodrigues, vecRotX, vecRotY, vecRotZ, vecXAxis, vecYAxis, vecZAxis } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngle, vecCross, vecDistance, vecDiv, vecDivScalar, vecDot, vecLatitude, vecLength, vecLongitude, vecMidpoint, vecMinus, vecMinusScalar, vecMul, vecMulScalar, vecNegate, vecNormalize, vecNormalizeMut, vecPlane, vecPlus, vecPlusScalar, vecPolarAngle, vecPositionAngle, vecRotateByRodrigues, vecRotX, vecRotY, vecRotZ, vecXAxis, vecYAxis, vecZAxis } from '../../../src/math/linear-algebra/vec3'
 
 test('angle', () => {
 	expect(vecAngle(vecXAxis(), vecYAxis())).toBe(PIOVERTWO)
@@ -203,4 +203,56 @@ test('rotate around Z', () => {
 
 test('position angle', () => {
 	expect(vecPositionAngle([1, 0.1, 0.2], [-3, 1e-3, 0.2])).toBeCloseTo(0.3671514267841113674, 13)
+})
+
+test('normalized midpoint and output aliasing', () => {
+	const a: MutVec3 = [1, 0, 0]
+	const b: MutVec3 = [0, 1, 0]
+	const result = vecMidpoint(a, b)
+	expect(result).not.toBe(a)
+	expect(result).not.toBe(b)
+	expect(result[0]).toBeCloseTo(Math.SQRT1_2, 15)
+	expect(result[1]).toBeCloseTo(Math.SQRT1_2, 15)
+	expect(Math.hypot(...result)).toBeCloseTo(1, 15)
+	expect(vecAngle(a, result)).toBeCloseTo(PIOVERFOUR, 15)
+	expect(vecAngle(b, result)).toBeCloseTo(PIOVERFOUR, 15)
+	const out: MutVec3 = [0, 0, 0]
+	expect(vecMidpoint(a, b, out)).toBe(out)
+	expect(out).toEqual(result)
+	expect(vecMidpoint(a, b, a)).toBe(a)
+	expect(a).toEqual(result)
+	expect(vecMidpoint([1, 0, 0], b, b)).toBe(b)
+	expect(b).toEqual(result)
+})
+
+test('midpoint degeneracies and extreme finite magnitudes', () => {
+	expect(vecMidpoint([0, 0, 0], [0, 0, 0])).toEqual([0, 0, 0])
+	expect(vecMidpoint([1, 2, 0], [-1, -2, 0])).toEqual([0, 0, 0])
+	expect(vecMidpoint([0, 0, 0], [3, 4, 0])).toEqual([0.6, 0.8, 0])
+	expect(vecMidpoint([1, 0, 0], [-1, Number.MIN_VALUE, 0])).toEqual([0, 1, 0])
+	for (const magnitude of [1, 1e-300, Number.MIN_VALUE, 1e308, Number.MAX_VALUE]) {
+		const same = vecMidpoint([magnitude, magnitude, 0], [magnitude, magnitude, 0])
+		expect(same[0]).toBeCloseTo(Math.SQRT1_2, 15)
+		expect(same[1]).toBeCloseTo(Math.SQRT1_2, 15)
+		expect(Math.hypot(...same)).toBeCloseTo(1, 15)
+	}
+	const residual = vecMidpoint([Number.MAX_VALUE, 1, 0], [-Number.MAX_VALUE, 1, 0])
+	expect(residual).toEqual([0, 1, 0])
+})
+
+test('midpoint uses all three components', () => {
+	const a: Vec3 = [1, 0, 0]
+	const b: Vec3 = [0, 0, 1]
+	const result = vecMidpoint(a, b)
+	expect(result[0]).toBeCloseTo(Math.SQRT1_2, 15)
+	expect(result[1]).toBe(0)
+	expect(result[2]).toBeCloseTo(Math.SQRT1_2, 15)
+	for (const magnitude of [Number.MIN_VALUE, Number.MAX_VALUE]) {
+		const diagonal = vecMidpoint([magnitude, magnitude, magnitude], [magnitude, magnitude, magnitude])
+		for (const component of diagonal) expect(component).toBeCloseTo(1 / Math.sqrt(3), 15)
+	}
+	expect(vecMidpoint([1, 0, 0], [-1, 0, Number.MIN_VALUE])).toEqual([0, 0, 1])
+	const unequal = vecMidpoint([2, 0, 0], [0, 0, 1])
+	expect(unequal[0]).toBeCloseTo(2 / Math.sqrt(5), 15)
+	expect(unequal[2]).toBeCloseTo(1 / Math.sqrt(5), 15)
 })

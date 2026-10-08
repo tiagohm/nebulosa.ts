@@ -1,6 +1,6 @@
 import { type Angle, normalizeAngle } from '../units/angle'
 
-// Two-component vector math: dot product, the scalar 2D cross product, length/distance, normalization,
+// Two-component vector math: dot product, the scalar 2D cross product, length/distance, normalization, normalized midpoints,
 // scalar and element-wise arithmetic, planar rotation, and azimuth extraction. Components are plain
 // numbers in the caller's unit; angle outputs are radians. As in vec3.ts, helpers take an optional
 // output `o?: MutVec2`: when given, the result is written into `o` (which may alias an input) and
@@ -128,6 +128,34 @@ export function vec2DivScalar(a: Vec2, scalar: number, o?: MutVec2): MutVec2 {
 export function vec2Plus(a: Vec2, b: Vec2, o?: MutVec2): MutVec2 {
 	if (o) return vec2Fill(o, a[0] + b[0], a[1] + b[1])
 	else return [a[0] + b[0], a[1] + b[1]]
+}
+
+// Returns the normalized sum of finite vectors a and b in the same units/frame, not their Cartesian average.
+// For equal-length nonzero vectors this is the minor-arc midpoint direction. An exactly zero sum returns
+// zero (no defined direction); nearly opposite inputs retain their represented residual but are ill-conditioned.
+// Overflowing sums are halved before addition; tiny or overflowing norms are scaled before normalization.
+// Writes and returns o when supplied (it may alias either input); otherwise allocates a fresh vector.
+export function vec2Midpoint(a: Vec2, b: Vec2, o?: MutVec2): MutVec2 {
+	let x = a[0] + b[0]
+	let y = a[1] + b[1]
+
+	if (!Number.isFinite(x) || !Number.isFinite(y)) {
+		x = a[0] / 2 + b[0] / 2
+		y = a[1] / 2 + b[1] / 2
+	}
+
+	let length = Math.hypot(x, y)
+	if (length === 0) return vec2Fill(o ?? [0, 0], 0, 0)
+
+	// Normal-size finite norms keep the common unit-vector path to a single hypot.
+	if (!(length >= Number.MIN_VALUE / Number.EPSILON && Number.isFinite(length))) {
+		const scale = Math.max(Math.abs(x), Math.abs(y))
+		x /= scale
+		y /= scale
+		length = Math.hypot(x, y)
+	}
+
+	return vec2Fill(o ?? [0, 0], x / length, y / length)
 }
 
 // Computes the subtraction between the vectors.

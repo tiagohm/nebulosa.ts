@@ -1,6 +1,6 @@
 import { type Angle, normalizeAngle } from '../units/angle'
 
-// Three-component vector math: dot/cross products, length/distance, normalization, scalar and
+// Three-component vector math: dot/cross products, length/distance, normalization, normalized midpoints, scalar and
 // element-wise arithmetic, axis and Rodrigues rotations, and spherical extraction (latitude/longitude/
 // colatitude). Components are plain numbers in whatever unit the caller uses; angle outputs are radians.
 // Convention: many helpers take an optional output `o?: MutVec3`; when supplied the result is written
@@ -165,6 +165,37 @@ export function vecDivScalar(a: Vec3, scalar: number, o?: MutVec3): MutVec3 {
 export function vecPlus(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
 	if (o) return vecFill(o, a[0] + b[0], a[1] + b[1], a[2] + b[2])
 	else return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+// Returns the normalized sum of finite vectors a and b in the same units/frame, not their Cartesian average.
+// For equal-length nonzero vectors this is the minor-arc midpoint direction. An exactly zero sum returns
+// zero (no defined direction); nearly opposite inputs retain their represented residual but are ill-conditioned.
+// Overflowing sums are halved before addition; tiny or overflowing norms are scaled before normalization.
+// Writes and returns o when supplied (it may alias either input); otherwise allocates a fresh vector.
+export function vecMidpoint(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
+	let x = a[0] + b[0]
+	let y = a[1] + b[1]
+	let z = a[2] + b[2]
+
+	if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+		x = a[0] / 2 + b[0] / 2
+		y = a[1] / 2 + b[1] / 2
+		z = a[2] / 2 + b[2] / 2
+	}
+
+	let length = Math.hypot(x, y, z)
+	if (length === 0) return vecFill(o ?? [0, 0, 0], 0, 0, 0)
+
+	// Normal-size finite norms keep the common unit-vector path to a single hypot.
+	if (!(length >= Number.MIN_VALUE / Number.EPSILON && Number.isFinite(length))) {
+		const scale = Math.max(Math.abs(x), Math.abs(y), Math.abs(z))
+		x /= scale
+		y /= scale
+		z /= scale
+		length = Math.hypot(x, y, z)
+	}
+
+	return vecFill(o ?? [0, 0, 0], x / length, y / length, z / length)
 }
 
 // Computes the subtraction between the vectors.
