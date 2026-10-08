@@ -15152,6 +15152,34 @@ const text = ['# comment', line('NGC', '40', '_("Bow-Tie Nebula")'), line('IC', 
 console.log(await Array.fromAsync(readNamesDat(new BufferSource(Buffer.from(text))))) // [ { prefix: "NGC", id: "40", name: "Bow-Tie Nebula" }, { prefix: "", id: "49", name: "Norma Star Cloud" } ]
 ```
 
+### Stellarium Geodesic Grid
+
+The Stellarium geodesic grid divides the unit sphere into 20 icosahedron faces, each recursively split into four spherical triangles. Level L has 20 × 4^L local zones, numbered from zero; the four children of zone z are 4z through 4z + 3. Equatorial Cartesian directions have x toward RA 0, y toward RA 90° and z toward the north pole. Use this module to locate directions or select candidate zones for custom spatial queries; the file-backed reader is documented in [Stellarium Star Catalog](#stellarium-star-catalog).
+
+`stellariumZoneForPoint(direction, level)` accepts a nonzero vector and resolves shared boundaries deterministically with Stellarium's half-space tests and tie order. `stellariumZoneTriangle(level, zone)` returns three freshly allocated unit corner vectors, counterclockwise as seen from outside. Levels are nonnegative integers up to 30, and triangle indices must be smaller than `stellariumLocalZoneCount(level)`. That count also identifies the catalog's extra global zone, which has no triangle: locating a direction on the grid does not determine whether its star record is stored in that global zone.
+
+`stellariumZoneCover(classifier, levels)` walks the subdivision tree without materializing the full grid and returns `ranges`, a map of ascending, non-overlapping local-zone runs `{ start, end, inside }` with an exclusive `end`, and `visited`, the number of classified tree nodes. Levels may be unsorted or repeated; an empty list returns an empty map. The global zone is excluded and must be handled separately by catalog readers. A run with `inside: true` lies wholly inside the classifier region; other runs are candidates that still require an exact per-object test. Bounding caps include a 10″ angular margin for rounding and catalog position quantization.
+
+`stellariumConeClassifier(axis, radius)` uses a unit axis and an angular radius in radians. `stellariumBoxesClassifier(boxes)` selects a union of non-wrapping RA/Dec boxes in radians, with RA within [0, 2π]; split boxes crossing RA 0 into two, or use the preselection boxes from [Star Catalog Interface and Spatial Query](#star-catalog-interface-and-spatial-query). Custom classifiers receive a unit cap center and a radius in radians: return `outside` only when the cap cannot intersect the region, `inside` only when the whole cap passes, and `border` otherwise. Conservative selection can include zones with no matching object.
+
+```ts
+import { stellariumBoxesClassifier, stellariumConeClassifier, stellariumLocalZoneCount, stellariumZoneCover, stellariumZoneForPoint, stellariumZoneTriangle } from 'nebulosa/src/catalogs/stars/stellarium/geodesic'
+import { deg } from 'nebulosa/src/math/units/angle'
+
+const direction = [1, 0, 0] as const // RA 0, Dec 0; unit vector.
+const level = 2
+const zone = stellariumZoneForPoint(direction, level)
+console.log(zone, stellariumLocalZoneCount(level)) // 1 320 — local zone and global-zone index.
+console.log(stellariumZoneTriangle(level, zone).length) // 3 — unit corner vectors.
+
+const cone = stellariumZoneCover(stellariumConeClassifier(direction, deg(1)), [2, 4])
+console.log(cone.ranges.get(2)?.map(({ start, end }) => [start, end])) // [ [ 1, 2 ], [ 4, 5 ], [ 14, 15 ], [ 17, 18 ], [ 20, 21 ], [ 30, 31 ] ]
+console.log(cone.visited) // 100 — classified tree nodes across the requested levels.
+
+const boxes = stellariumZoneCover(stellariumBoxesClassifier([{ minRA: 0, maxRA: deg(1), minDEC: deg(-1), maxDEC: deg(1) }]), [level])
+console.log(boxes.ranges.get(level)?.some(({ start, end }) => zone >= start && zone < end)) // true
+```
+
 ### Stellarium Star Catalog
 
 Since version 25.1, Stellarium distributes its star catalog (Gaia DR3 merged with Hipparcos) as one binary file per level, `stars_<level>_<type>v<major>_<minor>.cat`, in the `stars/hip_gaia3` directory of the installation, with the manifest `defaultStarsConfig.json` (or the user's `starsConfig.json`) that lists the files and their MD5 checksums. Each level is a faintness slice (level 0 holds the stars brighter than about V = 6, level 5 the ones from V = 12 to about 13.75) indexed by the Stellarium geodesic grid: the icosahedron subdivided `level` times, giving 20 × 4^level triangular zones plus one global zone (index 20 × 4^level) for the stars that Stellarium keeps outside the triangles, such as Sirius. A file is a 28-byte little-endian header (format version, level, lowest magnitude of the file and catalog epoch as a Julian Date), the star count of every zone, and the star records grouped by zone and sorted by increasing magnitude. Levels 0 to 3 use the 48-byte Star1 record (direction vector, vector proper motion, parallax, radial velocity, Hipparcos number), levels 4 to 7 the 32-byte Star2 record (RA, Dec, dα/dt, dδ/dt, parallax) and level 8 the 16-byte Star3 record (position to 0.1″, no motion). The files must be obtained from a Stellarium installation or its download page; Nebulosa does not download them.
@@ -15162,10 +15190,9 @@ The queries are the ones of [Star Catalog Interface and Spatial Query](#star-cat
 
 The entries are `StellariumStarCatalogEntry` objects with `rightAscension` in [0, 2π) and `declination` in radians, astrometric ICRS directions at the catalog `epoch` of the file (the Julian year 2016.0 for the current files; the positions are not propagated, so a query selects the stars by their position at that epoch), `magnitude` (the V magnitude of the Stellarium processing, not Gaia G), `bv` (B−V), `pmRA` and `pmDEC` in radians per Julian year (`pmRA` is dα/dt: Star1 stores a tangential vector that is projected on the east and north directions and divided by cos δ, left `undefined` within cos δ < 10⁻⁹ of a pole, and Star2 stores dα/dt directly), `parallax` and `parallaxError` in radians, `rv` in AU/day (Star1 only, positive receding), `gaiaId` as an exact `bigint` (`0n` for Hipparcos stars without a Gaia source), `hipId` and `componentId` (Star1 only; the component letter code, 0 for none, 1 for A, 2 for B...), the raw `spectralIndex` and `objectTypeIndex` into the `stars_hip_sp` and `object_types` tables of the directory (Star1 only, not resolved), and the `level`, `zone` and `recordNumber` of the record. A stored zero means a missing value, as in Stellarium: a zero parallax, parallax error or radial velocity is `undefined`, and so are both proper motion rates when the stored motion is zero. This provider is unrelated to the deep-sky [Stellarium Catalog](#stellarium-catalog).
 
-The geodesic grid is public in `stellarium/geodesic`: `stellariumZoneForPoint(direction, level)` gives the zone of a unit vector with the half-space tests of Stellarium, `stellariumLocalZoneCount(level)` the number of triangular zones (the global zone index), `stellariumZoneTriangle(level, zone)` the corners of a zone, and `stellariumZoneCover(classifier, levels)` with `stellariumConeClassifier` or `stellariumBoxesClassifier` the conservative zone selection used by the queries. `stellarium/star.binary` has the pure header, zone table and record decoders for custom tools.
+For standalone zone lookup and conservative region covers, see [Stellarium Geodesic Grid](#stellarium-geodesic-grid). `stellarium/star.binary` has the pure header, zone table and record decoders for custom tools.
 
 ```ts
-import { stellariumLocalZoneCount, stellariumZoneForPoint } from 'nebulosa/src/catalogs/stars/stellarium/geodesic'
 import { openStellariumStarCatalog } from 'nebulosa/src/catalogs/stars/stellarium/star.catalog'
 import { deg, formatDEC, formatRA, toMas } from 'nebulosa/src/math/units/angle'
 import { toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
@@ -15182,11 +15209,8 @@ console.log(sirius.hipId, sirius.componentId, sirius.gaiaId, sirius.magnitude, s
 console.log(formatRA(sirius.rightAscension), formatDEC(sirius.declination)) // 06 45 08.31 -16 43 17.59
 console.log(toMas(sirius.pmRA!) * Math.cos(sirius.declination), toMas(sirius.pmDEC!)) // -546.06 -1223.15 (mas/yr, μα* and μδ)
 console.log(toMas(sirius.parallax!), toKilometerPerSecond(sirius.rv!)) // 379.2 -5.5 (mas, km/s)
-console.log(sirius.level, sirius.zone, sirius.recordNumber, stellariumLocalZoneCount(0)) // 0 20 0 20
+console.log(sirius.level, sirius.zone, sirius.recordNumber) // 0 20 0 — record in the level 0 global zone.
 console.log((await catalog.get(sirius.level, sirius.zone, sirius.recordNumber))?.gaiaId === sirius.gaiaId) // true
-
-// The zone of a direction on the geodesic grid of level 0.
-console.log(stellariumZoneForPoint([Math.cos(sirius.declination) * Math.cos(sirius.rightAscension), Math.cos(sirius.declination) * Math.sin(sirius.rightAscension), Math.sin(sirius.declination)], 0)) // 14
 
 // A streamed field toward the Galactic center: only the zones around it are read.
 catalog.resetDiagnostics()
