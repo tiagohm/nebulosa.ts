@@ -1,19 +1,19 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
-import { readCatalogDat, readNamesDat, StellariumCatalog, type StellariumCatalogEntry, type StellariumNameEntry, StellariumObjectType } from '../../../src/catalogs/stars/stellarium'
-import { fileHandleSource } from '../../../src/io/file'
-import { BufferSource } from '../../../src/io/io'
-import { sphericalSeparation } from '../../../src/math/numerical/geometry'
-import { deg, parseAngle } from '../../../src/math/units/angle'
-import { toLightYear } from '../../../src/math/units/distance'
-import { downloadPerTag } from '../../download'
+import { readCatalogDat, readNamesDat, StellariumNebulaeCatalog, type StellariumNebulaeCatalogEntry, type StellariumNameEntry, StellariumObjectType } from '../../../../src/catalogs/stars/stellarium/nebulae'
+import { fileHandleSource } from '../../../../src/io/file'
+import { BufferSource } from '../../../../src/io/io'
+import { sphericalSeparation } from '../../../../src/math/numerical/geometry'
+import { deg, parseAngle } from '../../../../src/math/units/angle'
+import { toLightYear } from '../../../../src/math/units/distance'
+import { downloadPerTag } from '../../../download'
 
 await downloadPerTag('stellarium')
 
 test('catalog', async () => {
 	const handle = await fs.open('data/catalog.dat')
 	await using source = fileHandleSource(handle)
-	const entries = new Array<StellariumCatalogEntry>(94659)
+	const entries = new Array<StellariumNebulaeCatalogEntry>(94659)
 	let i = 0
 
 	for await (const entry of readCatalogDat(source)) {
@@ -50,7 +50,7 @@ test('catalog', async () => {
 	expect(NGC281.parallax).toBe(2.908882202245805e-9)
 	expect(toLightYear(NGC281.distance)).toBeCloseTo(5544.6, 0)
 
-	const catalog = new StellariumCatalog()
+	const catalog = new StellariumNebulaeCatalog()
 	catalog.addMany(entries)
 
 	const centerRA = parseAngle('05h 35 16.8')!

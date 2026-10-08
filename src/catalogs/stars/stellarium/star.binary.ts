@@ -1,8 +1,8 @@
-import { DAYSPERJY, J2000, PIOVERTWO } from '../../core/constants'
-import type { MutVec2 } from '../../math/linear-algebra/vec2'
-import { type Angle, mas, normalizeAngle } from '../../math/units/angle'
-import { kilometerPerSecond } from '../../math/units/velocity'
-import type { StarCatalogEntry } from './catalog'
+import { DAYSPERJY, J2000, PIOVERTWO } from '../../../core/constants'
+import type { MutVec2 } from '../../../math/linear-algebra/vec2'
+import { type Angle, mas, normalizeAngle } from '../../../math/units/angle'
+import { kilometerPerSecond } from '../../../math/units/velocity'
+import type { StarCatalogEntry } from '../catalog'
 
 // Pure decoders for the Stellarium Gaia DR3/Hipparcos star catalog files (`stars_<level>_<type>v<major>_<minor>.cat`).
 // A file is a 28-byte little-endian header, a table of `20 × 4^level + 1` unsigned 32-bit star counts (one per

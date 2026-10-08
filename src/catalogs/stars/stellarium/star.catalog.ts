@@ -1,11 +1,11 @@
-import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
-import { MILLIASEC2RAD } from '../../core/constants'
-import type { Writable } from '../../core/types'
-import type { MutVec2 } from '../../math/linear-algebra/vec2'
-import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogRaDecBox } from './catalog'
-import { stellariumBoxesClassifier, stellariumConeClassifier, stellariumLocalZoneCount, stellariumZoneCover, type StellariumZoneRange } from './stellarium.geodesic'
-import { decodeStellariumStar, readStellariumStarMagnitude, readStellariumStarPosition, type StellariumStarCatalogEntry, type StellariumStarDataType, type StellariumStarRecordSize } from './stellarium.star.binary'
-import { closeStellariumStarFiles, computeStellariumStarChecksum, openStellariumStarFiles, readStellariumStarBytes, type StellariumStarFileSet, type StellariumStarLevelFile } from './stellarium.star.storage'
+import { eraS2c } from '../../../astronomy/coordinates/erfa/erfa'
+import { MILLIASEC2RAD } from '../../../core/constants'
+import type { Writable } from '../../../core/types'
+import type { MutVec2 } from '../../../math/linear-algebra/vec2'
+import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogRaDecBox } from '../catalog'
+import { stellariumBoxesClassifier, stellariumConeClassifier, stellariumLocalZoneCount, stellariumZoneCover, type StellariumZoneRange } from './geodesic'
+import { decodeStellariumStar, readStellariumStarMagnitude, readStellariumStarPosition, type StellariumStarCatalogEntry, type StellariumStarDataType, type StellariumStarRecordSize } from './star.binary'
+import { closeStellariumStarFiles, computeStellariumStarChecksum, openStellariumStarFiles, readStellariumStarBytes, type StellariumStarFileSet, type StellariumStarLevelFile } from './star.storage'
 
 // Star catalog provider for the Stellarium Gaia DR3/Hipparcos star files (`stars_<level>_*.cat`, Stellarium
 // 25.1+). It reads the original files in place: opening keeps one read-only handle, the header and the
@@ -24,7 +24,7 @@ import { closeStellariumStarFiles, computeStellariumStarChecksum, openStellarium
 // maxPendingReads + maxActiveStreams and an admitted query is never rejected for saturation. The checksum
 // audit streams with its own 1 MiB buffer, one audit at a time. Memory per running query is the zone cover;
 // queryRegion materializes every match, so streamRegion suits dense regions.
-// This provider is unrelated to the deep-sky StellariumCatalog of `stellarium.ts`.
+// This provider is unrelated to the deep-sky StellariumNebulaeCatalog of `nebulae.ts`.
 
 // Default block size of the record reads, bytes.
 const DEFAULT_BLOCK_BYTES = 128 * 1024

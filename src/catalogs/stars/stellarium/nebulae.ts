@@ -1,15 +1,15 @@
-import { HealpixIndex, type HealpixIndexOptions } from '../../astronomy/sky/spatial/healpix'
-import type { Source } from '../../io/types'
-import { deg, mas, type Angle } from '../../math/units/angle'
-import { parsec, type Distance } from '../../math/units/distance'
-import type { StarCatalogEntry } from './catalog'
+import { HealpixIndex, type HealpixIndexOptions } from '../../../astronomy/sky/spatial/healpix'
+import type { Source } from '../../../io/types'
+import { deg, mas, type Angle } from '../../../math/units/angle'
+import { parsec, type Distance } from '../../../math/units/distance'
+import type { StarCatalogEntry } from '../catalog'
 
 // Reader and HEALPix index for Stellarium's binary deep-sky catalog (catalog.dat) and common-name
 // (names.dat) files. Coordinates are radians; distances are AU and angular sizes are radians.
 
 // One deep-sky object from Stellarium's catalog: position/magnitude, morphology (axes, orientation,
 // redshift, parallax, distance), and cross-catalog identifiers (NGC/IC/Messier and many others).
-export interface StellariumCatalogEntry extends StarCatalogEntry {
+export interface StellariumNebulaeCatalogEntry extends StarCatalogEntry {
 	readonly id: number
 	readonly type: StellariumObjectType
 	readonly majorAxis: Angle
@@ -98,7 +98,7 @@ const STELLARIUM_CATALOG_REFILL_THRESHOLD = STELLARIUM_CATALOG_BUFFER_SIZE - 102
 // Streams deep-sky objects from a Stellarium binary catalog.dat source. Big-endian records carry
 // position (radians), photometry, morphology, and many cross-catalog ids; values are converted to the
 // library's units (degrees→radians, mas, parsec→AU). Magnitude falls back from V to B when V is absent.
-export async function* readCatalogDat(source: Source): AsyncIterable<StellariumCatalogEntry> {
+export async function* readCatalogDat(source: Source): AsyncIterable<StellariumNebulaeCatalogEntry> {
 	const buffer = Buffer.allocUnsafe(STELLARIUM_CATALOG_BUFFER_SIZE)
 	let position = 0
 	let size = 0
@@ -282,7 +282,7 @@ export async function* readNamesDat(source: Source) {
 
 // HEALPix-indexed deep-sky catalog built from a Stellarium catalog.dat source, enabling spatial
 // cone/neighbour queries over the loaded entries. Default nside=8 trades resolution for memory.
-export class StellariumCatalog extends HealpixIndex<StellariumCatalogEntry> {
+export class StellariumNebulaeCatalog extends HealpixIndex<StellariumNebulaeCatalogEntry> {
 	constructor({ nside = 8, ordering }: Partial<HealpixIndexOptions> = {}) {
 		super({ nside, ordering })
 	}

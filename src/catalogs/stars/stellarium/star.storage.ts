@@ -1,7 +1,7 @@
 import { createHash } from 'crypto'
 import fs, { type FileHandle } from 'fs/promises'
 import { join } from 'path'
-import { parseStellariumStarHeader, parseStellariumStarZoneTable, STELLARIUM_STAR_HEADER_SIZE, type StellariumStarFileHeader, type StellariumStarZoneIndex } from './stellarium.star.binary'
+import { parseStellariumStarHeader, parseStellariumStarZoneTable, STELLARIUM_STAR_HEADER_SIZE, type StellariumStarFileHeader, type StellariumStarZoneIndex } from './star.binary'
 
 // File-system layer of the Stellarium star catalog: discovers the `stars_<level>_*.cat` files of a catalog
 // directory (from the starsConfig.json or defaultStarsConfig.json manifest, or by file name when there is no

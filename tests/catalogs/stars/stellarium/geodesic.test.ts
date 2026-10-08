@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { normalizeStarCatalogQuery, type StarCatalogQuery } from '../../../src/catalogs/stars/catalog'
+import { normalizeStarCatalogQuery, type StarCatalogQuery } from '../../../../src/catalogs/stars/catalog'
 // oxfmt-ignore
-import { STELLARIUM_ICOSAHEDRON_CORNERS, STELLARIUM_ICOSAHEDRON_TRIANGLES, type StellariumCapClassifier, stellariumBoxesClassifier, stellariumConeClassifier, stellariumLocalZoneCount, type StellariumZoneCover, stellariumZoneCover, stellariumZoneForPoint, stellariumZoneTriangle } from '../../../src/catalogs/stars/stellarium.geodesic'
-import { eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
-import { TAU, PI, PIOVERTWO } from '../../../src/core/constants'
-import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecDot, vecLength, vecNormalize } from '../../../src/math/linear-algebra/vec3'
-import { mulberry32 } from '../../../src/math/numerical/random'
-import { arcsec, deg } from '../../../src/math/units/angle'
+import { STELLARIUM_ICOSAHEDRON_CORNERS, STELLARIUM_ICOSAHEDRON_TRIANGLES, type StellariumCapClassifier, stellariumBoxesClassifier, stellariumConeClassifier, stellariumLocalZoneCount, type StellariumZoneCover, stellariumZoneCover, stellariumZoneForPoint, stellariumZoneTriangle } from '../../../../src/catalogs/stars/stellarium/geodesic'
+import { eraS2c } from '../../../../src/astronomy/coordinates/erfa/erfa'
+import { TAU, PI, PIOVERTWO } from '../../../../src/core/constants'
+import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecDot, vecLength, vecNormalize } from '../../../../src/math/linear-algebra/vec3'
+import { mulberry32 } from '../../../../src/math/numerical/random'
+import { arcsec, deg } from '../../../../src/math/units/angle'
 
 function randomDirection(random: () => number): MutVec3 {
 	const z = 2 * random() - 1

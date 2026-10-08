@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { decodeStellariumStar, parseStellariumStarHeader, parseStellariumStarZoneTable, readStellariumStarMagnitude, readStellariumStarPosition, type StellariumStarDataType, stellariumStarZoneCount } from '../../../src/catalogs/stars/stellarium.star.binary'
-import { PIOVERTWO } from '../../../src/core/constants'
-import type { MutVec2 } from '../../../src/math/linear-algebra/vec2'
-import { deg, mas, toDeg, toMas } from '../../../src/math/units/angle'
-import { toKilometerPerSecond } from '../../../src/math/units/velocity'
-import { encodeHeader, encodeStar1, encodeStar2, encodeStar3 } from '../../util/stellarium.star'
+import { decodeStellariumStar, parseStellariumStarHeader, parseStellariumStarZoneTable, readStellariumStarMagnitude, readStellariumStarPosition, type StellariumStarDataType, stellariumStarZoneCount } from '../../../../src/catalogs/stars/stellarium/star.binary'
+import { PIOVERTWO } from '../../../../src/core/constants'
+import type { MutVec2 } from '../../../../src/math/linear-algebra/vec2'
+import { deg, mas, toDeg, toMas } from '../../../../src/math/units/angle'
+import { toKilometerPerSecond } from '../../../../src/math/units/velocity'
+import { encodeHeader, encodeStar1, encodeStar2, encodeStar3 } from '../../../util/stellarium.star'
 
 const CONTEXT0 = { dataType: 0, epoch: 2016, level: 0 } as const
 const CONTEXT1 = { dataType: 1, epoch: 2016, level: 4 } as const

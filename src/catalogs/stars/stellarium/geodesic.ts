@@ -1,7 +1,7 @@
-import { PIOVERTWO, PI, TAU, ASEC2RAD } from '../../core/constants'
-import { type MutVec3, type Vec3, vecAngleUnit, vecLatitude, vecNormalizeMut, vecTripleProduct } from '../../math/linear-algebra/vec3'
-import type { Angle } from '../../math/units/angle'
-import type { StarCatalogRaDecBox } from './catalog'
+import { PIOVERTWO, PI, TAU, ASEC2RAD } from '../../../core/constants'
+import { type MutVec3, type Vec3, vecAngleUnit, vecLatitude, vecNormalizeMut, vecTripleProduct } from '../../../math/linear-algebra/vec3'
+import type { Angle } from '../../../math/units/angle'
+import type { StarCatalogRaDecBox } from '../catalog'
 
 // Stellarium geodesic grid: the recursive subdivision of a regular icosahedron used by the Stellarium star
 // catalogs to group stars into zones. Reproduces StelGeodesicGrid.cpp exactly: the 12 corners and the 20
