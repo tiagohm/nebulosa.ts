@@ -15719,6 +15719,76 @@ lifecycle.dispose()
 simulator.dispose()
 ```
 
+### Device Camera Capture
+
+An INDI camera exposure ends in two separate messages: the `CCD_EXPOSURE` vector turning `Ok` and the BLOB carrying the frame, in either order and with no operation id. `CameraCapturer` turns that into a [Device Operations](#device-operations) capture: it acquires the camera, applies the request, exposes frame after frame, pairs each exposure completion with the BLOB of the same generation, decodes and hands over the frame, and stops and quiesces the camera before the lease is released.
+
+`new CameraCapturer(cameraManager, arbiter, options)` registers itself as a handler of the `CameraManager`, so it sees every camera update, removal and BLOB without forwarding, and is `Disposable` like the [Device Commanders](#device-commanders). `options.capturesDir` is the directory of automatic paths. `publish(frame, path, camera)` receives every decoded frame (the decoded buffer itself, not a copy), `write(path, data)` persists auto-saved frames (`Bun.write` by default) and `decode(data)` decodes base64 payloads (a streaming decoder by default). `devices` holds the `MountManager`, `FocuserManager`, `WheelManager` and `RotatorManager` lookups used to resolve the `mount`, `focuser`, `wheel` and `rotator` names of a request on the camera's client; the resolved devices are passed to `cameraManager.snoop` so the driver stamps them into the headers, and are never acquired. `ditherer` (`running(guider)` and `dither(guider, request, { signal, onPhase })`) dithers before each frame when `request.dither` is enabled and names a guider; without a guider name or a ditherer the frame is taken without dithering, and a named guider that is not running fails as `unexpectedState`. `frameGraceTime` (30000), `quiesceTimeout` (5000) and `lateBlobDrainTime` (100) are milliseconds.
+
+`start(scope, camera, request, { listener, rejectedListener })` takes an `OperationScope` first, so a capture runs as its own tree or nested in a feature that already holds the camera. It returns `{ id, started, result, cancel }`: `started` resolves when the first exposure is physically `Busy` (or with the start failure), `result` resolves `{ frames, frameCount }` after cleanup and release, and `cancel()` resolves once the camera is quiescent. Neither promise rejects. `CameraCaptureStart` (start from a copy of `DEFAULT_CAMERA_CAPTURE_START`) gives the exposure in `exposureTimeUnit` (`exposureTimeIn*` convert between units), `exposureMode` (`single`, `fixed` with `count` frames, or `loop` until cancelled), the inter-frame `delay` in seconds, the subframe in unbinned pixels (the full sensor unless `subframe` is set with a positive size), binning, gain, offset, frame type and format, and `transferFormat` (`FITS` or `XISF`). A non-positive or non-finite exposure, a negative or non-finite delay, a `fixed` count that is not a positive integer, and an unusable destination fail as `commandFailed` before anything is commanded, and a camera that is busy, disconnected or not yet verified by the [Device Availability Lifecycle](#device-availability-lifecycle) is refused as `busy`.
+
+Each frame waits at most the exposure plus `frameGraceTime` for both messages (`timeout`). `Alert` fails the capture as `alert`, an exposure going `Idle` before completion as `unexpectedState`, a disconnect or removal as `disconnected` or `removed`, and a failed `write` as `commandFailed`. The listener receives `CameraCaptureEvent` snapshots (`exposureStarted`, `exposing`, `exposureFinished` with the frame path as second argument, `waiting` every 250 ms during delays of 1 s or more, `dithering` and `settling`), with frame and total progress in microseconds, and ends with one `idle` snapshot whose `stopped` tells whether the capture was interrupted (preceded by `error` when it was). A capture refused before it started reports its `error` and `idle` snapshots to `rejectedListener`. When a capture ends with an exposure still running, cleanup stops it and waits up to `quiesceTimeout` for it to go idle, otherwise the camera is left unavailable and the result gains `cleanup failed: …`. A frame that was exposed but whose BLOB never arrived quarantines the camera, because the next capture would otherwise read it: the stale BLOB, an `Alert` or `Idle` exposure, a disconnect or removal, or disposing the capturer ends the quarantine.
+
+A frame not auto-saved is published as `capturesDir/<camera name>.fit` (or `.xisf`). With `autoSave`, the frame is named after the local time it was commanded (`YYYYMMDD.HHmmssSSS`) and written into `savePath` (or `capturesDir` when it is not a directory) under the subfolder `autoSubFolderName(time, mode, timezoneOffset?)` gives: the local date for `midnight`, the local date 12 hours earlier for `noon`, so a whole night stays in the folder of the evening it began, and none for `off`. A caller that already chose the destination passes an absolute `outputPath` and an `outputName` that is a single file name (see [Portable Path Segments](#portable-path-segments)); that name is refused for more than one frame or when the file exists, and `publishPath` publishes the frame under another name, such as the final name of a temporary file. `watch(camera, { updated })` routes the updates of a camera exposed outside any capture, such as a guide camera, to one watcher and returns its remover.
+
+```ts
+import { tmpdir } from 'os'
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { CameraManager } from 'nebulosa/src/devices/indi/manager/camera'
+import { CameraSimulator } from 'nebulosa/src/devices/indi/simulator/camera'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { DeviceLifecycle } from 'nebulosa/src/devices/orchestration/device.lifecycle'
+import { OperationCoordinator } from 'nebulosa/src/devices/orchestration/operation'
+import { ResourceArbiter, resourceKey } from 'nebulosa/src/devices/orchestration/resource'
+import { autoSubFolderName, CameraCapturer } from 'nebulosa/src/devices/runners/camera.capture'
+import { type CameraCaptureStart, DEFAULT_CAMERA_CAPTURE_START } from 'nebulosa/src/devices/runners/camera.capture.types'
+
+const cameraManager = new CameraManager()
+const arbiter = new ResourceArbiter()
+const coordinator = new OperationCoordinator(arbiter)
+const lifecycle = new DeviceLifecycle(arbiter, coordinator)
+lifecycle.observe(cameraManager)
+
+// Decoded frames by the path they are published under.
+const frames = new Map<string, Buffer>()
+using capturer = new CameraCapturer(cameraManager, arbiter, { capturesDir: tmpdir(), publish: (frame, path) => frames.set(path, frame) })
+
+const client = new ClientSimulator('Client Simulator', new IndiClientHandlerSet([cameraManager]))
+const simulator = new CameraSimulator('Camera Simulator', client)
+const camera = cameraManager.get(client, 'Camera Simulator')!
+cameraManager.connect(camera)
+while (arbiter.availability(resourceKey(camera)) !== 'available') await Bun.sleep(10)
+
+// Two 100 ms frames, 0.5 s apart.
+const request: CameraCaptureStart = { ...structuredClone(DEFAULT_CAMERA_CAPTURE_START), exposureTime: 100, exposureTimeUnit: 'millisecond', exposureMode: 'fixed', count: 2, delay: 0.5 }
+
+const capture = capturer.start(coordinator, camera, request, {
+	listener: (event, path) => {
+		if (path !== undefined) console.log(event.generation, path) // 1 <tmpdir>/Camera Simulator.fit, then 2 …
+		else if (event.state === 'idle') console.log(event.elapsedCount, event.totalProgress.progress, event.stopped) // 2 100 false
+	},
+})
+
+console.log(await capture.started) // { ok: true, value: undefined } — the first exposure is Busy
+const result = await capture.result
+console.log(result.ok && result.value.frameCount, frames.size) // 2 1 — both frames share the automatic path
+
+// A loop runs until cancelled; the simulator aborts the exposure to Idle, so the camera is free at once.
+const loop = capturer.start(coordinator, camera, { ...request, exposureMode: 'loop' })
+await loop.started
+await loop.cancel()
+console.log(await loop.result, arbiter.availability(resourceKey(camera))) // { ok: false, reason: 'aborted' } 'available'
+
+console.log(await capturer.start(coordinator, camera, { ...request, exposureTime: 0 }).result) // { ok: false, reason: 'commandFailed', error: 'exposure time must be positive and finite' }
+
+// 02:00 UTC on 2026-10-10 at offset 0 min belongs to the night of October 9.
+console.log(autoSubFolderName(Date.UTC(2026, 9, 10, 2), 'noon', 0)) // '2026-10-09'
+console.log(autoSubFolderName(Date.UTC(2026, 9, 10, 2), 'midnight', 0)) // '2026-10-10'
+
+lifecycle.dispose()
+simulator.dispose()
+```
+
 ### Device Command Waiting
 
 A device command usually completes long after it is sent: the driver accepts a move and later reports the motor stopped at the target, or reports `Alert`. Waiting for that confirmation has three traps: the confirming update can arrive before the command call returns, the wait must stop on cancellation and on timeout, and a failed wait must stop the hardware before the caller releases it. `waitForDeviceState` handles all three and returns an `OperationResult` instead of throwing.
@@ -15777,7 +15847,7 @@ Every command takes an `OperationScope` first. Passing the `OperationCoordinator
 
 | Commander              | Commands                                                                                                                                                                                                                                          | Units and notes                                                                                                                                                                  |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CameraCommander`      | `cooler`, `temperature`                                                                                                                                                                                                                           | °C setpoint; does not wait for the sensor to reach it                                                                                                                            |
+| `CameraCommander`      | `cooler`, `temperature`                                                                                                                                                                                                                           | °C setpoint; does not wait for the sensor to reach it; exposures belong to [Device Camera Capture](#device-camera-capture)                                                       |
 | `CoverCommander`       | `park` (close), `unpark` (open), `stopMotion`                                                                                                                                                                                                     | default move timeout 60 s                                                                                                                                                        |
 | `DewHeaterCommander`   | `dutyCycle`                                                                                                                                                                                                                                       | PWM level clamped to the device range; no wait                                                                                                                                   |
 | `DomeCommander`        | `moveTo`, `moveToAltitude`, `moveBy`, `move`, `startManualMove`, `manualMove`, `manualMoveOf`, `syncTo`, `home`, `park`, `unpark`, `setPark`, `openShutter`, `closeShutter`, `slave`, `setSpeed`, `setBacklash`, `setBacklashSteps`, `stopMotion` | radians clamped by `domeAzimuth` and `domeAltitude`; `arrivalTolerance` (2°) in radians; speed in driver RPM; backlash in steps; default move timeout 120 s                      |
@@ -20344,6 +20414,23 @@ console.log(grayDecoded.format, grayDecoded.data.byteLength) // GRAY 2048
 
 // isJpeg accepts any buffer.
 console.log(isJpeg(Buffer.from('not a jpeg')), isJpeg(new Uint8Array([0xff, 0xd8, 0xff]).buffer)) // false true
+```
+
+### Portable Path Segments
+
+A file name that arrives from outside the process, such as the output name of a capture request, must address exactly one file in the directory the caller named. `isPathSegment(name)` accepts a name only when it is a single portable file name on every common platform, because a request may be written on one operating system and executed on another. It rejects the empty name, `.` and `..`, both separators `/` and `\`, C0 control characters and DEL, the characters Windows forbids (`< > : " | ? *`, where `:` would also open an NTFS alternate data stream), a trailing space or dot (which Windows strips, aliasing another file), the Windows device names `CON`, `PRN`, `AUX`, `NUL`, `COM0`–`COM9` and `LPT0`–`LPT9` (and their superscript-digit variants) in any case and with any extension, and names longer than 255 UTF-8 bytes. Names are not normalized.
+
+`directoryExists(path)` resolves whether `path` is an existing directory, following symbolic links and resolving a relative path against the working directory. A missing path, a regular file, or a path that cannot be inspected resolves `false`; it never rejects.
+
+```ts
+import { tmpdir } from 'os'
+import { directoryExists, isPathSegment } from 'nebulosa/src/io/path'
+
+console.log(isPathSegment('m42-lum-0.fit')) // true
+console.log(isPathSegment('../m42.fit'), isPathSegment('nul.fit'), isPathSegment('m42.fit.')) // false false false
+
+console.log(await directoryExists(tmpdir())) // true
+console.log(await directoryExists('/does/not/exist')) // false
 ```
 
 ### ReadableStream Byte Sources
