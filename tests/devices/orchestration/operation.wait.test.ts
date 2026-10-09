@@ -1,11 +1,36 @@
 import { describe, expect, test } from 'bun:test'
 import { failedOperationResult, successfulOperationResult } from '../../../src/devices/orchestration/operation'
-import { abortableDelay, settlesWithin, waitForDeviceState } from '../../../src/devices/orchestration/operation.wait'
+import { abortableDelay, settleWithSignal, settlesWithin, waitForDeviceState } from '../../../src/devices/orchestration/operation.wait'
 
 function rejectUnknown(value: unknown): Promise<never> {
 	const rejected = Promise.withResolvers<never>()
 	rejected.reject(value)
 	return rejected.promise
+}
+
+function trackAbortListeners(signal: AbortSignal) {
+	const listeners = new Set<unknown>()
+	const add = signal.addEventListener.bind(signal)
+	const remove = signal.removeEventListener.bind(signal)
+
+	signal.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: AddEventListenerOptions | boolean) => {
+		if (type === 'abort') listeners.add(listener)
+		add(type, listener, options)
+	}) as typeof signal.addEventListener
+
+	signal.removeEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: EventListenerOptions | boolean) => {
+		if (type === 'abort') listeners.delete(listener)
+		remove(type, listener, options)
+	}) as typeof signal.removeEventListener
+
+	return listeners
+}
+
+function trackUnhandledRejections() {
+	const reasons: unknown[] = []
+	const listener = (reason: unknown) => reasons.push(reason)
+	process.on('unhandledRejection', listener)
+	return { reasons, dispose: () => process.off('unhandledRejection', listener) }
 }
 
 describe('operation waits', () => {
@@ -370,5 +395,113 @@ describe('operation waits', () => {
 		controller.abort('aborted')
 
 		expect(await result).toEqual(failedOperationResult('aborted', 'abort failed: stop rejected'))
+	})
+
+	test('returns the same promise when no signal is given', () => {
+		const promise = Promise.resolve(1)
+		expect(settleWithSignal(promise)).toBe(promise)
+	})
+
+	test('resolves with the value and removes the abort listener when the signal never aborts', async () => {
+		const controller = new AbortController()
+		const listeners = trackAbortListeners(controller.signal)
+		const settled = settleWithSignal(Promise.resolve(42), controller.signal)
+
+		expect(listeners.size).toBe(1)
+		expect(await settled).toBe(42)
+		expect(listeners.size).toBe(0)
+	})
+
+	test('passes an Error rejection through unchanged and removes the abort listener', async () => {
+		const controller = new AbortController()
+		const listeners = trackAbortListeners(controller.signal)
+		const error = new Error('command failed')
+
+		expect(await settleWithSignal(Promise.reject(error), controller.signal).catch((e: unknown) => e)).toBe(error)
+		expect(listeners.size).toBe(0)
+	})
+
+	test('normalizes a non-Error rejection without reporting an abort', async () => {
+		const controller = new AbortController()
+		const error = await settleWithSignal(rejectUnknown('boom'), controller.signal).catch((e: unknown) => e)
+
+		expect(error).toBeInstanceOf(Error)
+		expect(error).not.toBeInstanceOf(DOMException)
+		expect((error as Error).message).toBe('boom')
+		expect((error as Error).cause).toBe('boom')
+		expect(controller.signal.aborted).toBeFalse()
+	})
+
+	test('rejects with an Error reason when the signal aborts first and ignores the later settlement', async () => {
+		const controller = new AbortController()
+		const pending = Promise.withResolvers<number>()
+		const reason = new Error('disconnected')
+		const settled = settleWithSignal(pending.promise, controller.signal)
+
+		controller.abort(reason)
+		pending.resolve(1)
+
+		expect(await settled.catch((e: unknown) => e)).toBe(reason)
+	})
+
+	test('keeps an operational string reason as the cause of an AbortError', async () => {
+		const controller = new AbortController()
+		const settled = settleWithSignal(new Promise<never>(() => {}), controller.signal)
+
+		controller.abort('timeout')
+
+		const error = await settled.catch((e: unknown) => e)
+		expect(error).toBeInstanceOf(DOMException)
+		expect((error as DOMException).name).toBe('AbortError')
+		expect((error as DOMException).cause).toBe('timeout')
+	})
+
+	test('rejects with the default AbortError reason of a bare abort', async () => {
+		const controller = new AbortController()
+		const settled = settleWithSignal(new Promise<never>(() => {}), controller.signal)
+
+		controller.abort()
+
+		expect(await settled.catch((e: unknown) => e)).toBe(controller.signal.reason)
+		expect((controller.signal.reason as DOMException).name).toBe('AbortError')
+	})
+
+	test('rejects at once on an already aborted signal without leaving the promise unobserved', async () => {
+		const controller = new AbortController()
+		const listeners = trackAbortListeners(controller.signal)
+		const pending = Promise.withResolvers<number>()
+		const unhandled = trackUnhandledRejections()
+		controller.abort('removed')
+
+		try {
+			const error = await settleWithSignal(pending.promise, controller.signal).catch((e: unknown) => e)
+			expect((error as DOMException).name).toBe('AbortError')
+			expect((error as DOMException).cause).toBe('removed')
+			expect(listeners.size).toBe(0)
+
+			pending.reject(new Error('late failure'))
+			await Bun.sleep(10)
+			expect(unhandled.reasons).toBeEmpty()
+		} finally {
+			unhandled.dispose()
+		}
+	})
+
+	test('swallows a rejection that arrives after the signal aborted', async () => {
+		const controller = new AbortController()
+		const pending = Promise.withResolvers<number>()
+		const unhandled = trackUnhandledRejections()
+
+		try {
+			const settled = settleWithSignal(pending.promise, controller.signal)
+			controller.abort('aborted')
+			expect(await settled.catch((e: unknown) => e)).toBeInstanceOf(DOMException)
+
+			pending.reject(new Error('late failure'))
+			await Bun.sleep(10)
+			expect(unhandled.reasons).toBeEmpty()
+		} finally {
+			unhandled.dispose()
+		}
 	})
 })

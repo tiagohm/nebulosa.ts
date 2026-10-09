@@ -15795,12 +15795,12 @@ A device command usually completes long after it is sent: the driver accepts a m
 
 `waitForDeviceState(options)` installs `subscribe(listener)` first (it must return an unsubscriber), then calls `command(signal)`. Every update goes through `evaluate(update)`, which answers `'pending'`, `'success'` or an `OperationFailureReason`. A decisive verdict that arrives before `command` returns is held until it does, after which `current()` is evaluated once in case the state was already reached. The wait settles on the first decisive verdict, after `timeout` milliseconds (`'timeout'`), when `signal` aborts (its reason mapped by `abortReason`), or when `command` throws (`'commandFailed'`). An `evaluate` that throws gives `'unexpectedState'`. Every non-successful outcome of a dispatched command aborts the command's own signal, waits up to `commandAbortTimeout` milliseconds (1000 by default) for `command` to return, and runs the optional physical `abort()` before settling, so a failed or cancelled move is stopped before the caller can release the device. A subscription that throws settles at once, without `abort`, since nothing was dispatched. The listener and the timer are always removed.
 
-`abortableDelay(ms, signal)` sleeps for `ms` milliseconds and resolves `successfulOperationResult(undefined)`, or the failure mapped from the signal reason when it aborts first, clearing its timer. `abortReason(signal)` returns the signal's reason when it is an `OperationFailureReason`, and `'aborted'` otherwise. `settlesWithin(promise, ms)` reports whether a promise settles, fulfilled or rejected, within `ms` milliseconds, without cancelling it.
+`abortableDelay(ms, signal)` sleeps for `ms` milliseconds and resolves `successfulOperationResult(undefined)`, or the failure mapped from the signal reason when it aborts first, clearing its timer. `abortReason(signal)` returns the signal's reason when it is an `OperationFailureReason`, and `'aborted'` otherwise. `settlesWithin(promise, ms)` reports whether a promise settles, fulfilled or rejected, within `ms` milliseconds, without cancelling it. `settleWithSignal(promise, signal?)` is the throwing counterpart for plain promises: it settles like `promise` unless `signal` aborts first, then rejects with the signal reason when it is an `Error`, or with an `AbortError` `DOMException` whose `cause` is the reason (such as `'timeout'`) otherwise. The promise is observed but never cancelled, so a later rejection is swallowed; a non-`Error` rejection becomes an `Error` whose `cause` is the rejected value. Without a signal the promise is returned as is.
 
 The reasons are `busy` (a resource was refused at start), `aborted` (cancelled by the caller), `disconnected` and `removed` (a held device went away), `timeout`, `alert` (the driver reported `Alert`), `commandFailed` (a command, executor or cleanup threw) and `unexpectedState`. `failedOperationResult(reason, error?)` and `successfulOperationResult(value)` build the two variants of `OperationResult`. A failure omits `error` entirely when there is no detail. These waits are the building block of the [Device Commanders](#device-commanders) and usually run inside the signal of a [Device Operations](#device-operations) context.
 
 ```ts
-import { abortableDelay, abortReason, settlesWithin, waitForDeviceState } from 'nebulosa/src/devices/orchestration/operation.wait'
+import { abortableDelay, abortReason, settleWithSignal, settlesWithin, waitForDeviceState } from 'nebulosa/src/devices/orchestration/operation.wait'
 
 // A toy device whose position reaches 100 steps 50 ms after the command.
 const listeners = new Set<(position: number) => void>()
@@ -15837,6 +15837,11 @@ console.log(await delayed, abortReason(controller.signal)) // { ok: false, reaso
 
 console.log(await settlesWithin(Bun.sleep(5), 100)) // true
 console.log(await settlesWithin(new Promise(() => {}), 10)) // false
+
+const capture = new AbortController()
+const exposure = settleWithSignal(new Promise<never>(() => {}), capture.signal)
+capture.abort('timeout')
+console.log(await exposure.catch((e: DOMException) => [e.name, e.cause])) // ['AbortError', 'timeout']
 ```
 
 ### Device Commanders

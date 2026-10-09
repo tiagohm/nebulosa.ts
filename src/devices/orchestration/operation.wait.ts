@@ -50,6 +50,36 @@ export async function settlesWithin(promise: Promise<unknown>, timeout: number):
 	}
 }
 
+// Settles like `promise` unless `signal` aborts first, in which case it rejects with the signal's abort
+// error (see abortReasonOf). The promise is observed, never cancelled: a rejection arriving after the abort
+// is swallowed instead of surfacing as an unhandled rejection. A non-Error rejection is normalized to an
+// Error whose cause is the rejected value. Without a signal the promise is returned unchanged.
+export function settleWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+	if (!signal) return promise
+
+	if (signal.aborted) {
+		void promise.catch(() => {})
+		return Promise.reject(abortReasonOf(signal))
+	}
+
+	return new Promise((resolve, reject) => {
+		const onAbort = () => reject(abortReasonOf(signal))
+
+		signal.addEventListener('abort', onAbort, { once: true })
+
+		void promise.then(
+			(value) => {
+				signal.removeEventListener('abort', onAbort)
+				resolve(value)
+			},
+			(error: unknown) => {
+				signal.removeEventListener('abort', onAbort)
+				reject(error instanceof Error ? error : new Error(errorMessage(error), { cause: error }))
+			},
+		)
+	})
+}
+
 // Waits for a temporal delay in milliseconds and removes its timer/listener on abort.
 export function abortableDelay(ms: number, signal: AbortSignal): Promise<OperationResult<void>> {
 	if (signal.aborted) return Promise.resolve(aborted(signal))
@@ -230,4 +260,13 @@ export function abortReason(signal: AbortSignal): OperationFailureReason {
 // Builds an aborted result using the signal's normalized operational reason.
 function aborted<T>(signal: AbortSignal): OperationResult<T> {
 	return failedOperationResult(abortReason(signal))
+}
+
+// Error reason stored on `signal`, or an AbortError DOMException whose cause keeps a non-Error reason
+// such as the operational strings ('timeout', 'disconnected', ...) accepted by abortReason.
+function abortReasonOf(signal: AbortSignal): Error {
+	if (signal.reason instanceof Error) return signal.reason
+	const error = new DOMException('The operation was aborted.', 'AbortError')
+	error.cause = signal.reason
+	return error
 }
