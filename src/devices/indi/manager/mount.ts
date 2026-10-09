@@ -429,7 +429,7 @@ export class MountManager extends DeviceManager<Mount> {
 					}
 				}
 
-				if (handleSwitchValue(device, 'tracking', elements.TRACK_ON?.value)) {
+				if (handleSwitchValue(device, 'tracking', elements.TRACK_ON?.value, message.state)) {
 					this.updated(device, 'tracking', message.state)
 				}
 
@@ -485,7 +485,7 @@ export class MountManager extends DeviceManager<Mount> {
 				}
 
 				if (elements.GO || elements.FIND) {
-					if (handleSwitchValue(device, 'homing', message.state === 'Busy')) {
+					if (handleSwitchValue(device, 'homing', message.state === 'Busy', message.state)) {
 						this.updated(device, 'homing', message.state)
 					}
 				}
@@ -555,7 +555,7 @@ export class MountManager extends DeviceManager<Mount> {
 				return
 			}
 			case 'EQUATORIAL_EOD_COORD': {
-				if (handleSwitchValue(device, 'slewing', message.state === 'Busy')) {
+				if (handleSwitchValue(device, 'slewing', message.state === 'Busy', message.state)) {
 					this.updated(device, 'slewing', message.state)
 				}
 

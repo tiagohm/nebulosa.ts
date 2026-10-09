@@ -8,14 +8,15 @@ import { resourceKey } from '../orchestration/resource'
 
 // Coordinated mutations of a dust cover or flip-flat.
 // Parking closes the cover and unparking opens it, which is the INDI CAP_PARK convention the device model
-// mirrors. Every duration is in milliseconds. Both motions acquire the cover; the emergency stop does not,
-// so it still runs while the operation that owns the device is being canceled.
+// mirrors. Every duration is in milliseconds. Both motions acquire the cover, send nothing when it already
+// stands at the requested end, and physically abort a failed or canceled motion before settling; the
+// emergency stop does not acquire, so it still runs while the operation that owns the device is canceled.
 
 // Timing overrides for one cover command; every duration is in milliseconds.
 export interface CoverCommandOptions {
 	// Maximum time the commanded motion may take to complete.
 	readonly timeout?: number
-	// Maximum time a canceled or finished motion has to bring the cover to a standstill.
+	// Maximum time a canceled or failed motion has to bring the cover to a standstill.
 	readonly settleTimeout?: number
 }
 
@@ -34,7 +35,7 @@ interface CoverUpdate {
 // travel and a servo flip-flat rather less, so this is generous for either.
 const DEFAULT_MOVE_TIMEOUT = 60000
 
-// Default milliseconds a motion that ended has to be reported as no longer parking.
+// Default milliseconds an aborted motion has to be reported as no longer parking.
 const DEFAULT_SETTLE_TIMEOUT = 15000
 
 // Properties whose Alert state means the commanded motion itself failed. An Alert on an unrelated vector,
@@ -42,9 +43,9 @@ const DEFAULT_SETTLE_TIMEOUT = 15000
 const MOTION_PROPERTIES = new Set<string>(['parking', 'parked'])
 
 // Signal for physical stops issued while the owning operation is already being canceled. Only the
-// emergency stop uses it: cleanup cannot inherit the operation signal, which is aborted by then, and would
-// never send the command it exists for. The motion itself waits on the operation signal, so a stop never
-// has to outlast a device that keeps reporting motion.
+// emergency stop uses it: the abort of a canceled motion cannot inherit the operation signal, which is
+// aborted by then, and would never send the command it exists for. The motion itself waits on the operation
+// signal, so a stop never has to outlast a device that keeps reporting motion.
 const UNCANCELABLE = new AbortController().signal
 
 // Owns every mutation of a cover and turns the ones with a physical effect into awaitable operations.
@@ -107,7 +108,7 @@ export class CoverCommander implements DeviceHandler<Cover>, Disposable {
 
 	// Aborts any motion and waits for the cover to report a standstill.
 	// This is the emergency stop of the commander: it does not acquire the device, precisely because it is
-	// used while the owning operation is being canceled and by cleanup running after the executor returned.
+	// used while the owning operation is being canceled, when the device is still leased to it.
 	// A cover left half way is not an error state here: only the motion is undone, not the position.
 	async stopMotion(cover: Cover, options: CoverCommandOptions = {}): Promise<OperationResult<void>> {
 		if (!cover.connected) return failedOperationResult('disconnected')
@@ -116,17 +117,12 @@ export class CoverCommander implements DeviceHandler<Cover>, Disposable {
 		return await this.#settle(cover, options, () => this.coverManager.stop(cover))
 	}
 
-	// Commands a motion and waits for the cover to stand still at the requested end, aborting it from the
-	// scope's own cleanup so a canceled operation never releases a cover that is still travelling.
+	// Commands a motion and waits for the cover to stand still at the requested end. A cover already standing
+	// there is answered without commanding anything, since the state read right after a command would still
+	// be the one from before it. Every unsuccessful outcome aborts the motion before settling, so a canceled
+	// operation never releases a cover that is still travelling, while a successful one sends nothing more.
 	async #move(context: OperationContext, cover: Cover, options: CoverCommandOptions, command: VoidFunction, parked: boolean): Promise<OperationResult<void>> {
-		// Registered before the command so a cancel arriving during dispatch still finds the stop it needs.
-		context.onCleanup(async () => {
-			const stopped = await this.stopMotion(cover, options)
-
-			// A device that went away is not travelling under our command any more, so only one that stays in
-			// motion is reported as a cleanup failure.
-			if (!stopped.ok && stopped.reason !== 'disconnected') throw new Error(`cover ${cover.name} did not stop moving: ${stopped.reason}`)
-		})
+		if (!cover.parking && cover.parked === parked) return successfulOperationResult(undefined)
 
 		const observed = await waitForDeviceState<CoverUpdate>({
 			signal: context.signal,
@@ -139,9 +135,21 @@ export class CoverCommander implements DeviceHandler<Cover>, Disposable {
 				return !cover.parking && cover.parked === parked ? 'success' : 'pending'
 			},
 			command,
+			abort: () => this.#abortMotion(cover, options),
 		})
 
 		return observed.ok ? successfulOperationResult(undefined) : observed
+	}
+
+	// Physical stop issued whenever a motion concludes unsuccessfully, including a failure the driver itself
+	// reported. A disconnected cover is not travelling under our command any more and cannot be sent
+	// anything, so only a cover that stays in motion is reported as a cleanup failure.
+	async #abortMotion(cover: Cover, options: CoverCommandOptions) {
+		if (!cover.connected) return
+
+		const result = await this.stopMotion(cover, options)
+
+		if (!result.ok) throw new Error(`cover ${cover.name} did not stop moving: ${result.reason}`)
 	}
 
 	// Waits for the cover to report no motion, on a signal of its own so it still runs while the operation

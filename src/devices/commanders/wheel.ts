@@ -85,7 +85,8 @@ export class WheelCommander implements DeviceHandler<Wheel>, Disposable {
 	// The slot is 0-based and resolved against the carousel, so a target the driver would never echo
 	// cannot leave the wait pending until it times out. Nothing is stopped when the move fails: the wheel
 	// exposes no abort, so a canceled move is held instead of interrupted, and the device is only released
-	// once it is observed standing at the commanded slot.
+	// once it is observed standing at the commanded slot, or standing anywhere once the driver has reported
+	// the move as failed.
 	async moveTo(scope: OperationScope, wheel: Wheel, slot: number, options: WheelCommandOptions = {}): Promise<OperationResult<void>> {
 		return await scope.start<void>('wheelMoveTo', [{ key: resourceKey(wheel), device: wheel }], async (context) => {
 			// Capabilities are only published while the device is connected, so a disconnected wheel would
@@ -97,6 +98,9 @@ export class WheelCommander implements DeviceHandler<Wheel>, Disposable {
 			// Whether the slot was actually written, so a move canceled before dispatch is not quarantined
 			// over a carousel that never received a command.
 			let commanded = false
+			// Whether the driver already answered the move with a failure, or the command never went out whole.
+			// Either way the wheel will not reach the slot, so cleanup only waits for it to stand still.
+			let answered = false
 
 			// The wheel keeps turning through a cancel, and the driver echoes the motion after acknowledging
 			// the write: releasing the lease on the state read at that moment would hand a wheel that is about
@@ -105,7 +109,7 @@ export class WheelCommander implements DeviceHandler<Wheel>, Disposable {
 			context.onCleanup(async () => {
 				if (!commanded) return
 
-				const settled = await this.#settle(wheel, target)
+				const settled = await this.#settle(wheel, answered ? undefined : target)
 
 				// A device that went away is not turning under our command any more, so only one that never
 				// reaches the slot is reported as a cleanup failure.
@@ -128,7 +132,11 @@ export class WheelCommander implements DeviceHandler<Wheel>, Disposable {
 				},
 			})
 
-			return observed.ok ? successfulOperationResult(undefined) : observed
+			if (observed.ok) return successfulOperationResult(undefined)
+
+			answered = observed.reason === 'alert' || observed.reason === 'commandFailed'
+
+			return observed
 		}).result
 	}
 
@@ -146,11 +154,11 @@ export class WheelCommander implements DeviceHandler<Wheel>, Disposable {
 		}).result
 	}
 
-	// Waits for the wheel to stand at the slot it was commanded to, on a signal of its own so it still runs
-	// while the operation that owns the device is being canceled. The target is the 1-based INDI position.
-	// Nothing is commanded here: there is no abort to send, so the wait only outlasts the travel the driver
-	// is already performing, bounded by the same allowance a move itself gets.
-	async #settle(wheel: Wheel, target: number): Promise<OperationResult<void>> {
+	// Waits for the wheel to stand at the 0-based slot it was commanded to, or merely to stand still when no
+	// slot is given, on a signal of its own so it still runs while the operation that owns the device is being
+	// canceled. Nothing is commanded here: there is no abort to send, so the wait only outlasts the travel the
+	// driver is already performing, bounded by the same allowance a move itself gets.
+	async #settle(wheel: Wheel, target?: number): Promise<OperationResult<void>> {
 		const settled = await waitForDeviceState<WheelUpdate>({
 			signal: UNCANCELABLE,
 			timeout: DEFAULT_MOVE_TIMEOUT,
@@ -158,7 +166,7 @@ export class WheelCommander implements DeviceHandler<Wheel>, Disposable {
 			current: () => ({ wheel }),
 			// A disconnected device is not turning under our command any more, and nothing further will ever
 			// be reported by a device that stopped talking.
-			evaluate: () => (!wheel.connected || (!wheel.moving && wheel.position === target) ? 'success' : 'pending'),
+			evaluate: () => (!wheel.connected || (!wheel.moving && (target === undefined || wheel.position === target)) ? 'success' : 'pending'),
 			command: () => {},
 		})
 

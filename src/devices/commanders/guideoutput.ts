@@ -8,8 +8,10 @@ import { resourceKey, type ResourceKey } from '../orchestration/resource'
 
 // Coordinated timed pulses of an INDI guide output.
 // A pulse acquires the physical device that provides the guide port, waits its duration in milliseconds,
-// and resolves only after the device reports it is no longer pulsing; a canceled pulse is stopped on its
-// axis before the device is released. Perpendicular pulses of one nudge run together in one operation.
+// and resolves only after the device reports it is no longer pulsing. A canceled pulse is asked to stop
+// with a zero duration, but the standard INDI guider interface and the Alpaca bridge ignore it, so the
+// device is held until the pulse already running has ended. Perpendicular pulses of one nudge run
+// together in one operation.
 
 // One timed guide pulse of a multi-axis nudge.
 export interface GuidePulse {
@@ -21,7 +23,8 @@ export interface GuidePulse {
 
 // Timing overrides for one guide pulse; every duration is in milliseconds.
 export interface GuidePulseOptions {
-	// Maximum time a canceled or finished pulse has to bring the device back to a standstill.
+	// Maximum time a canceled or finished pulse has to bring the device back to a standstill, counted from
+	// the moment the longest pulse commanded on the device is due to end.
 	readonly settleTimeout?: number
 }
 
@@ -54,17 +57,30 @@ const OPPOSITE_DIRECTION: Record<GuideDirection, GuideDirection> = {
 	EAST: 'WEST',
 }
 
+// Per-axis guiding flag of each direction. An Alert on it fails the leg of that axis even while the
+// perpendicular leg keeps the aggregate flag raised.
+const AXIS_PROPERTY: Record<GuideDirection, 'pulsingNS' | 'pulsingWE'> = {
+	NORTH: 'pulsingNS',
+	SOUTH: 'pulsingNS',
+	WEST: 'pulsingWE',
+	EAST: 'pulsingWE',
+}
+
 // Owns every timed pulse of a guide output and turns it into an awaitable operation.
 // The pulse opens its own nested scope holding the physical device behind the guide output, so a
-// composite feature passing its own context inherits the device it already owns, and the axis is stopped
-// by the scope's cleanup whenever the pulse is canceled instead of being left running under a released
-// device. A guide output is arbitrated under the key of the device providing it, which is why a camera's
-// guide port and the camera itself, or a mount's and the mount itself, are one resource.
+// composite feature passing its own context inherits the device it already owns, and the scope's cleanup
+// holds the device until the pulse has ended whenever it is canceled, instead of releasing it while the
+// axis is still being driven. A guide output is arbitrated under the key of the device providing it, which
+// is why a camera's guide port and the camera itself, or a mount's and the mount itself, are one resource.
 export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposable {
 	// Waiters per physical resource, fed by the manager callbacks. The key is used instead of the device
 	// object because a pulse may be commanded through the parent device while the manager reports updates
 	// through its guide output proxy, and both resolve to the same key.
 	readonly #listeners = new Map<ResourceKey, Set<(update: GuideOutputUpdate) => void>>()
+	// Moment, in performance.now() milliseconds, the longest pulse commanded on each physical resource is
+	// due to end. A stop waits at least that long, since the driver may not be able to cut a pulse short.
+	// Entries are dropped with the device, so the map is bounded by the devices seen.
+	readonly #pulseEnds = new Map<ResourceKey, number>()
 
 	// Registers the commander as a guide output observer so waits settle on device events instead of polling.
 	constructor(readonly guideOutputManager: GuideOutputManager) {
@@ -94,6 +110,7 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 	// Wakes every waiter so it reevaluates; removal is reported as a disconnected device by evaluation,
 	// and the operation itself is canceled independently by DeviceLifecycle.
 	removed(device: GuideOutput) {
+		this.#pulseEnds.delete(resourceKey(device))
 		this.#emit({ device })
 	}
 
@@ -101,8 +118,8 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 	// the device reports no guiding motion. Duration is in milliseconds.
 	// The driver times the pulse itself, so the delay is what the caller is waiting for and the device is
 	// observed throughout it: a driver that reports Alert fails the pulse at once instead of at the end of a
-	// leg that is no longer being drawn. A canceled pulse is stopped before the scope releases the device,
-	// so no axis keeps drifting into the next operation.
+	// leg that is no longer being drawn. A canceled pulse is held until it has ended before the scope
+	// releases the device, so no axis keeps drifting into the next operation.
 	async pulse(scope: OperationScope, device: GuideOutput, direction: GuideDirection, duration: number, options: GuidePulseOptions = {}): Promise<OperationResult<void>> {
 		return await scope.start<void>('guidePulse', [{ key: resourceKey(device), device }], async (context) => {
 			// Capabilities are only published while the device is connected, so a disconnected guide output
@@ -160,18 +177,19 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 		}).result
 	}
 
-	// Cancels any pulse in one direction and waits for the device to report a standstill.
+	// Asks any pulse in one direction to stop and waits for the device to report a standstill.
 	// This is the emergency stop of the commander: it does not acquire the device, precisely because it is
 	// used while the owning operation is being canceled and by cleanup running after the executor returned.
 	async stopPulse(device: GuideOutput, direction: GuideDirection, options: GuidePulseOptions = {}): Promise<OperationResult<void>> {
 		return await this.stopPulses(device, [direction], options)
 	}
 
-	// Cancels the pulses of every given direction and waits once for the device to report a standstill.
-	// Both axes have to be zeroed before anything is awaited: the device publishes a single guiding flag, so
-	// stopping one axis and settling on it while the other is still counting down would only wait out the
-	// settle timeout on a device that is legitimately still pulsing. The opposite of each direction is zeroed
-	// as well, since both share one INDI vector and only the pair proves the axis is idle.
+	// Asks the pulses of every given direction to stop and waits once for the device to report a standstill.
+	// A zero duration is sent to both directions of each axis, since both share one INDI vector, and every
+	// axis is zeroed before anything is awaited: the device publishes a single guiding flag, so settling on
+	// one axis while the other is still counting down would only wait out the settle timeout. The zero is a
+	// request, not a guarantee: the standard INDI guider interface and the Alpaca bridge ignore it, so the
+	// wait is also given the time left until the longest pulse this commander sent is due to end.
 	async stopPulses(device: GuideOutput, directions: readonly GuideDirection[], options: GuidePulseOptions = {}): Promise<OperationResult<void>> {
 		if (!device.connected) return failedOperationResult('disconnected')
 		if (!device.canPulseGuide) return successfulOperationResult(undefined)
@@ -188,7 +206,7 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 		})
 	}
 
-	// Registers the stop that runs when the operation owning the pulses is canceled.
+	// Registers the stop that runs when the operation owning the pulses ends.
 	// It is registered before any leg is commanded so a cancel arriving during dispatch still finds the stop
 	// it needs, and it covers every direction of the operation at once because a per-leg cleanup would settle
 	// on a flag the sibling leg still holds.
@@ -205,16 +223,16 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 		})
 	}
 
-	// Commands the pulse and waits out its duration; the axis is stopped by the cleanup the caller registered.
-	// The opposite direction is zeroed before the pulse starts because both directions live in one vector:
-	// a leg commanded while the previous one is still counting down would otherwise be added to a driver
-	// already guiding the other way.
+	// Commands the pulse and waits out its duration; the axis is held by the cleanup the caller registered.
+	// The pulse vector carries a zero for the opposite direction of the axis, and the device can only be
+	// acquired once it stopped pulsing, so no previous leg of this axis can still be counting down.
 	async #pulse(context: OperationContext, device: GuideOutput, direction: GuideDirection, duration: number, options: GuidePulseOptions, signal: AbortSignal = context.signal): Promise<OperationResult<void>> {
 		// The driver times the pulse itself, so the delay is dispatched as part of the command and the wait
 		// around it observes the device for the whole leg instead of only after it. A pulse the driver
 		// refuses would otherwise be invisible: the Alert clears the flag as well, and by the time a
 		// separate settle subscribed it would read a device at rest and call the leg a success.
 		const alerted = new AbortController()
+		const axis = AXIS_PROPERTY[direction]
 		let elapsed = false
 
 		const pulsed = await waitForDeviceState<GuideOutputUpdate>({
@@ -225,7 +243,7 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 			evaluate: (update) => {
 				// Cutting the delay short is what turns the verdict into an immediate failure; the command has
 				// to return before the wait can settle on it.
-				if (update.state === 'Alert' && update.property === 'pulsing') {
+				if (update.state === 'Alert' && (update.property === axis || update.property === 'pulsing')) {
 					alerted.abort('alert')
 					return 'alert'
 				}
@@ -239,7 +257,7 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 				return elapsed && !device.pulsing ? 'success' : 'pending'
 			},
 			command: async (signal) => {
-				this.guideOutputManager.pulse(device, OPPOSITE_DIRECTION[direction], 0)
+				this.#pulseEnding(device, duration)
 				this.guideOutputManager.pulse(device, direction, duration)
 
 				elapsed = (await abortableDelay(duration, AbortSignal.any([signal, alerted.signal]))).ok
@@ -249,12 +267,24 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 		return pulsed.ok ? successfulOperationResult(undefined) : pulsed
 	}
 
+	// Records when a pulse of the given duration, in milliseconds, dispatched now is due to end, keeping the
+	// latest end per physical resource.
+	#pulseEnding(device: GuideOutput, duration: number) {
+		const key = resourceKey(device)
+		const end = performance.now() + Math.max(0, duration)
+
+		if (end > (this.#pulseEnds.get(key) ?? 0)) this.#pulseEnds.set(key, end)
+	}
+
 	// Waits for the device to report no guiding motion, on a signal of its own so it still runs while the
-	// operation that owns the device is being canceled.
+	// operation that owns the device is being canceled. The allowance starts when the longest pulse sent to
+	// the device is due to end, because a driver that ignores the stop keeps pulsing until then.
 	async #settle(device: GuideOutput, options: GuidePulseOptions, command: VoidFunction): Promise<OperationResult<void>> {
+		const remaining = Math.max(0, (this.#pulseEnds.get(resourceKey(device)) ?? 0) - performance.now())
+
 		const settled = await waitForDeviceState<GuideOutputUpdate>({
 			signal: UNCANCELABLE,
-			timeout: options.settleTimeout ?? DEFAULT_SETTLE_TIMEOUT,
+			timeout: remaining + (options.settleTimeout ?? DEFAULT_SETTLE_TIMEOUT),
 			subscribe: (listener) => this.#subscribe(device, listener),
 			current: () => ({ device }),
 			// A disconnected device is not pulsing under our command any more, and nothing further will ever

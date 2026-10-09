@@ -5,6 +5,7 @@ import type { Cover } from '../../../src/devices/indi/device'
 import { CoverManager } from '../../../src/devices/indi/manager/cover'
 import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
 import { CoverSimulator } from '../../../src/devices/indi/simulator/cover'
+import type { SetSwitchVector } from '../../../src/devices/indi/types'
 import { DeviceLifecycle } from '../../../src/devices/orchestration/device.lifecycle'
 import { OperationCoordinator, failedOperationResult } from '../../../src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
@@ -72,16 +73,44 @@ test('parks and unparks only after the cover reports its final state', async () 
 	expect(cover.parking).toBeFalse()
 })
 
-test('resolves a command already at the requested cover state', async () => {
+test('resolves without commanding a cover already at the requested state', async () => {
 	const cover = await connected()
 	const unpark = spyOn(coverManager, 'unpark')
 
 	try {
 		expect(await coverCommander.unpark(operationCoordinator, cover, { timeout: 50 })).toMatchObject({ ok: true })
-		expect(unpark).toHaveBeenCalledWith(cover)
+		expect(unpark).not.toHaveBeenCalled()
 		expect(isFree(cover)).toBeTrue()
 	} finally {
 		unpark.mockRestore()
+	}
+})
+
+test('sends no abort after a motion that completed', async () => {
+	const cover = await connected()
+	const stop = spyOn(coverManager, 'stop')
+
+	try {
+		expect(await coverCommander.park(operationCoordinator, cover, { timeout: 5000 })).toMatchObject({ ok: true })
+		expect(stop).not.toHaveBeenCalled()
+	} finally {
+		stop.mockRestore()
+	}
+})
+
+test('fails a motion the driver refuses without ever reporting it busy', async () => {
+	const cover = await connected()
+	const park = spyOn(coverManager, 'park').mockImplementation(() => {
+		const message: SetSwitchVector = { device: cover.name, name: 'CAP_PARK', state: 'Alert', elements: { PARK: { name: 'PARK', value: false }, UNPARK: { name: 'UNPARK', value: true } } }
+		coverManager.switchVector(client, message, 'setSwitchVector')
+	})
+
+	try {
+		const started = performance.now()
+		expect(await coverCommander.park(operationCoordinator, cover, { timeout: 5000 })).toMatchObject(failedOperationResult('alert'))
+		expect(performance.now() - started).toBeLessThan(1000)
+	} finally {
+		park.mockRestore()
 	}
 })
 

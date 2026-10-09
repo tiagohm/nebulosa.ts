@@ -12,7 +12,8 @@ import type { BlobEncoding, DefNumber, DefSwitchVector, DefText, DefTextVector, 
 // Subscriber to device lifecycle events for a device type.
 export interface DeviceHandler<D extends Device> {
 	readonly added: (device: D) => void
-	// Notified when a device property field changes; `property` is the device field name.
+	// Notified when a device property field changes, or when the driver reports Alert on a motion or state flag
+	// it left unchanged, such as a refused move; `property` is the device field name.
 	readonly updated?: (device: D, property: keyof D & string, state?: PropertyState) => void
 	readonly removed: (device: D) => void
 	// Notified when an image/data BLOB arrives for the device.
@@ -460,7 +461,8 @@ function isSamePropertyValue(left: unknown, right: unknown): boolean {
 }
 
 // Applies a PARK switch vector to a parkable device's canPark/parking/parked fields and notifies on each
-// change. `parking` is inferred from a Busy state.
+// change. `parking` is inferred from a Busy state and is also reported on an Alert that leaves it unchanged,
+// so a refused park reaches its waiters.
 export function handleParkable<D extends Device & Parkable>(manager: DeviceManager<D>, device: D, message: DefSwitchVector | SetSwitchVector, tag: string) {
 	if (tag[0] === 'd') {
 		if (handleSwitchValue<Device & Parkable>(device, 'canPark', (message as DefSwitchVector).permission !== 'ro')) {
@@ -468,7 +470,7 @@ export function handleParkable<D extends Device & Parkable>(manager: DeviceManag
 		}
 	}
 
-	if (handleSwitchValue<Device & Parkable>(device, 'parking', message.state === 'Busy')) {
+	if (handleSwitchValue<Device & Parkable>(device, 'parking', message.state === 'Busy', message.state)) {
 		manager.updated(device, 'parking', message.state)
 	}
 

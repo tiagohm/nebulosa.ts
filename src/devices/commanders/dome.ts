@@ -1,3 +1,4 @@
+import { DEG2RAD } from '../../core/constants'
 import { errorMessage } from '../../core/util'
 import { clamp } from '../../math/numerical/math'
 import { normalizeAngle, safeAngularDifference, type Angle } from '../../math/units/angle'
@@ -11,15 +12,21 @@ import { resourceKey, type ResourceKey } from '../orchestration/resource'
 
 // Coordinated mutations of an INDI dome.
 // Angles are radians in the shared device model, speeds are in the driver's RPM units, backlash values
-// are raw driver steps, and every duration is in milliseconds. Motion commands acquire the dome; the
-// emergency stop does not, so it still runs while the operation that owns the dome is being canceled.
+// are raw driver steps, and every duration is in milliseconds. Motion commands acquire the dome, send
+// nothing when it already stands at the requested position or state, and physically abort a failed or
+// canceled motion before settling; the emergency stop does not acquire, so it still runs while the
+// operation that owns the dome is being canceled.
 
 // Timing overrides for one dome command; every duration is in milliseconds.
 export interface DomeCommandOptions {
 	// Maximum time the commanded state may take to be observed.
 	readonly timeout?: number
-	// Maximum time a canceled or finished motion has to bring the dome to a standstill.
+	// Maximum time a canceled or failed motion has to bring the dome to a standstill.
 	readonly settleTimeout?: number
+	// Angular distance, in radians, within which an azimuth or altitude move that has stopped counts as
+	// having arrived. This is not a positioning budget: a dome stops at the encoder step nearest the
+	// commanded angle, so this only catches a move that stopped somewhere else entirely.
+	readonly arrivalTolerance?: Angle
 }
 
 // Live manual dome motion. The operation scope, and therefore the dome lease, stays open until the
@@ -51,6 +58,10 @@ interface DomeUpdate {
 interface ManualMove {
 	// Public control handle for the open operation.
 	readonly handle: DomeManualMoveHandle
+	// Whether the motion has been ended and is only stopping the dome before releasing it.
+	readonly closed: () => boolean
+	// Settles once the operation of the motion has ended, its cleanup included.
+	readonly settled: Promise<void>
 }
 
 // Default milliseconds a commanded dome motion has to reach its target. A dome can take several minutes
@@ -60,10 +71,13 @@ const DEFAULT_MOVE_TIMEOUT = 120000
 // Default milliseconds a physical stop has to bring the dome and its shutter to a standstill.
 const DEFAULT_SETTLE_TIMEOUT = 15000
 
-// Largest angular difference, in radians, at which a dome is taken to be standing at the commanded
-// azimuth or altitude. The device normally reports the nearest driver step, so an exact comparison would
-// leave a valid move pending until it timed out.
+// Largest angular difference, in radians, at which a dome already stands at the commanded azimuth or
+// altitude, so no command is sent, or has reached it without any motion being observed.
 const ANGLE_TOLERANCE = 1e-3
+
+// Default angular distance, in radians, within which a move that stopped counts as having arrived. Dome
+// encoders often resolve no better than a fraction of a degree, so this leaves room for a whole step.
+const DEFAULT_ARRIVAL_TOLERANCE = 2 * DEG2RAD
 
 // Default milliseconds a switch or setting command has to be reflected by the device.
 const DEFAULT_SWITCH_TIMEOUT = 10000
@@ -124,12 +138,12 @@ export class DomeCommander implements DeviceHandler<Dome>, Disposable {
 
 			const target = domeAzimuth(dome, azimuth)
 
-			return await this.#move(
+			return await this.#moveToPosition(
 				context,
 				dome,
 				options,
 				() => this.domeManager.moveTo(dome, target),
-				() => angularlyAt(dome.azimuth.value, target),
+				() => azimuthSeparation(dome.azimuth.value, target),
 			)
 		}).result
 	}
@@ -142,12 +156,12 @@ export class DomeCommander implements DeviceHandler<Dome>, Disposable {
 
 			const target = domeAltitude(dome, altitude)
 
-			return await this.#move(
+			return await this.#moveToPosition(
 				context,
 				dome,
 				options,
 				() => this.domeManager.moveToAltitude(dome, target),
-				() => Math.abs(dome.altitude.value - target) <= ANGLE_TOLERANCE,
+				() => Math.abs(dome.altitude.value - target),
 			)
 		}).result
 	}
@@ -160,12 +174,12 @@ export class DomeCommander implements DeviceHandler<Dome>, Disposable {
 
 			const target = domeAzimuth(dome, dome.azimuth.value + delta)
 
-			return await this.#move(
+			return await this.#moveToPosition(
 				context,
 				dome,
 				options,
 				() => this.domeManager.moveBy(dome, delta),
-				() => angularlyAt(dome.azimuth.value, target),
+				() => azimuthSeparation(dome.azimuth.value, target),
 			)
 		}).result
 	}
@@ -184,12 +198,20 @@ export class DomeCommander implements DeviceHandler<Dome>, Disposable {
 		const active = this.#manualMoves.get(key)
 
 		if (active !== undefined) {
-			const moved = await active.handle.move(direction, true)
-			return moved.ok ? successfulOperationResult(active.handle) : failedOperationResult(moved.reason, moved.error)
+			if (!active.closed()) {
+				const moved = await active.handle.move(direction, true)
+				return moved.ok ? successfulOperationResult(active.handle) : failedOperationResult(moved.reason, moved.error)
+			}
+
+			// A motion that was just ended still holds the dome while it waits for it to stop. Joining it would
+			// be refused, and a new scope would be refused by its lease, so the new motion starts only once the
+			// previous one has released the dome.
+			await active.settled
 		}
 
 		const stopped = Promise.withResolvers<OperationResult<void>>()
 		const started = Promise.withResolvers<OperationResult<DomeManualMoveHandle>>()
+		const settled = Promise.withResolvers<void>()
 		let currentDirection: DomeDirection | undefined
 
 		const operation = scope.start<void>('domeManualMove', [{ key, device: dome }], (context) => {
@@ -247,7 +269,7 @@ export class DomeCommander implements DeviceHandler<Dome>, Disposable {
 			}
 
 			currentDirection = direction
-			this.#manualMoves.set(key, { handle })
+			this.#manualMoves.set(key, { handle, closed: () => closed, settled: settled.promise })
 
 			context.signal.addEventListener('abort', () => close(failedOperationResult(abortReason(context.signal))), { once: true })
 			started.resolve(successfulOperationResult(handle))
@@ -256,6 +278,7 @@ export class DomeCommander implements DeviceHandler<Dome>, Disposable {
 		})
 
 		void operation.result.then((result) => {
+			settled.resolve()
 			if (!result.ok) started.resolve(result)
 		})
 
@@ -291,7 +314,8 @@ export class DomeCommander implements DeviceHandler<Dome>, Disposable {
 		)
 	}
 
-	// Moves the dome to its configured home position and resolves after it reports at home.
+	// Moves the dome to its configured home position and resolves after it reports at home. A dome already
+	// at home is not commanded, so the homing a driver may start anyway is never left running unowned.
 	async home(scope: OperationScope, dome: Dome, options: DomeCommandOptions = {}): Promise<OperationResult<void>> {
 		return await this.#moveToState(
 			scope,
@@ -450,35 +474,61 @@ export class DomeCommander implements DeviceHandler<Dome>, Disposable {
 		}).result
 	}
 
-	// Runs a home, park, or unpark transition under a scope owning the dome.
+	// Runs a home, park, or unpark transition under a scope owning the dome. A dome already standing in the
+	// requested state is answered without commanding anything, since the state read right after a command
+	// would still be the one from before it.
 	async #moveToState(scope: OperationScope, kind: string, dome: Dome, options: DomeCommandOptions, supported: () => boolean, description: string, arrived: () => boolean, command: VoidFunction): Promise<OperationResult<void>> {
 		return await scope.start<void>(kind, [{ key: resourceKey(dome), device: dome }], async (context) => {
 			if (!dome.connected) return failedOperationResult('disconnected')
 			if (!supported()) return unsupported(dome, description)
+			if (domeQuiescent(dome) && arrived()) return successfulOperationResult(undefined)
 
 			return await this.#move(context, dome, options, command, arrived)
 		}).result
 	}
 
-	// Opens or closes the shutter and waits for the terminal shutter state.
+	// Opens or closes the shutter and waits for the terminal shutter state, sending nothing when the shutter
+	// already stands there.
 	async #shutter(scope: OperationScope, kind: string, dome: Dome, target: Extract<DomeShutterState, 'OPEN' | 'CLOSED'>, options: DomeCommandOptions, command: VoidFunction): Promise<OperationResult<void>> {
 		return await scope.start<void>(kind, [{ key: resourceKey(dome), device: dome }], async (context) => {
 			if (!dome.connected) return failedOperationResult('disconnected')
 			if (!dome.canSetShutter) return unsupported(dome, target === 'OPEN' ? 'open the shutter' : 'close the shutter')
+			if (domeQuiescent(dome) && dome.shutterState === target) return successfulOperationResult(undefined)
 
 			return await this.#move(context, dome, options, command, () => dome.shutterState === target, true)
 		}).result
 	}
 
-	// Commands a physical transition and waits until the dome is quiescent at the requested state. Cleanup
-	// always stops a failed or canceled command before its resource lease can be released.
-	async #move(context: OperationContext, dome: Dome, options: DomeCommandOptions, command: VoidFunction, arrived: () => boolean, shutter = false): Promise<OperationResult<void>> {
-		context.onCleanup(async () => {
-			const stopped = await this.stopMotion(dome, options)
+	// Moves to an azimuth or altitude and verifies where the dome stopped. A dome already within the angle
+	// tolerance is answered without commanding anything. Otherwise the move is complete once motion was
+	// observed and ended, or the angle was reached without the driver ever reporting it busy, and the angle,
+	// in radians, that separation reports must then be within the arrival tolerance.
+	async #moveToPosition(context: OperationContext, dome: Dome, options: DomeCommandOptions, command: VoidFunction, separation: () => number): Promise<OperationResult<void>> {
+		if (domeQuiescent(dome) && separation() <= ANGLE_TOLERANCE) return successfulOperationResult(undefined)
 
-			if (!stopped.ok && stopped.reason !== 'disconnected') throw new Error(`dome ${dome.name} did not stop moving: ${stopped.reason}`)
+		let moved = false
+
+		const observed = await this.#move(context, dome, options, command, () => {
+			if (dome.slewing) moved = true
+			return moved || separation() <= ANGLE_TOLERANCE
 		})
 
+		if (!observed.ok) return observed
+
+		// The manager applies the position before the motion flag of the same vector, so the angle read here
+		// is the one the dome stopped at.
+		const separated = separation()
+
+		if (separated <= (options.arrivalTolerance ?? DEFAULT_ARRIVAL_TOLERANCE)) return observed
+
+		return failedOperationResult('unexpectedState', `dome ${dome.name} stopped ${(separated / DEG2RAD).toFixed(3)}° away from the target`)
+	}
+
+	// Commands a physical transition and waits until the dome is quiescent at the requested state. Every
+	// unsuccessful outcome stops the dome before settling, so a canceled operation never releases a dome that
+	// is still moving, while a successful one sends nothing more. The acceptance predicate is consulted on
+	// every update, not only once the dome stands still, because it may be latching the motion it waits for.
+	async #move(context: OperationContext, dome: Dome, options: DomeCommandOptions, command: VoidFunction, arrived: () => boolean, shutter = false): Promise<OperationResult<void>> {
 		const observed = await waitForDeviceState<DomeUpdate>({
 			signal: context.signal,
 			timeout: options.timeout ?? DEFAULT_MOVE_TIMEOUT,
@@ -488,12 +538,25 @@ export class DomeCommander implements DeviceHandler<Dome>, Disposable {
 				if (!dome.connected) return 'disconnected'
 				if (update.state === 'Alert' && update.property !== undefined && MOTION_PROPERTIES.has(update.property)) return 'alert'
 				if (shutter && dome.shutterState === 'ERROR') return 'alert'
-				return domeQuiescent(dome) && arrived() ? 'success' : 'pending'
+				const reached = arrived()
+				return domeQuiescent(dome) && reached ? 'success' : 'pending'
 			},
 			command,
+			abort: () => this.#abortMotion(dome, options),
 		})
 
 		return observed.ok ? successfulOperationResult(undefined) : observed
+	}
+
+	// Physical stop issued whenever a motion concludes unsuccessfully, including a failure the driver itself
+	// reported. A disconnected dome is not moving under our command any more and cannot be sent anything, so
+	// only a dome that stays in motion is reported as a cleanup failure.
+	async #abortMotion(dome: Dome, options: DomeCommandOptions) {
+		if (!dome.connected) return
+
+		const result = await this.stopMotion(dome, options)
+
+		if (!result.ok) throw new Error(`dome ${dome.name} did not stop: ${result.reason}`)
 	}
 
 	// Sends a stop command and waits for all dome and shutter motion to end, on a signal of its own so it
@@ -574,9 +637,9 @@ function domeQuiescent(dome: Dome) {
 	return !dome.slewing
 }
 
-// Compares two azimuths using the shortest circular difference in radians.
-function angularlyAt(current: Angle, target: Angle) {
-	return Math.abs(safeAngularDifference(current, target)) <= ANGLE_TOLERANCE
+// Shortest circular distance between two azimuths, in radians within 0..PI.
+function azimuthSeparation(current: Angle, target: Angle) {
+	return Math.abs(safeAngularDifference(current, target))
 }
 
 // Builds the typed failure used when the dome cannot perform an operation.

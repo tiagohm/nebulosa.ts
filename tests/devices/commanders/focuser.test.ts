@@ -91,14 +91,14 @@ test('moves inward and outward by relative steps', async () => {
 	expect(device.position.value).toBe(51000)
 })
 
-test('inverts the relative direction while the focuser is reversed', async () => {
+test('keeps inward decreasing the position while the focuser is reversed', async () => {
 	const device = await connected()
 
 	expect(await focuserCommander.reverse(operationCoordinator, device, true)).toMatchObject({ ok: true })
 
 	try {
 		expect(await focuserCommander.moveIn(operationCoordinator, device, 500)).toMatchObject({ ok: true })
-		expect(device.position.value).toBe(50500)
+		expect(device.position.value).toBe(49500)
 	} finally {
 		await focuserCommander.reverse(operationCoordinator, device, false)
 	}
@@ -179,6 +179,23 @@ test('reports a driver Alert and releases the focuser', async () => {
 
 	try {
 		expect(await focuserCommander.moveTo(operationCoordinator, device, 51000)).toMatchObject(failedOperationResult('alert'))
+		await waitUntil(() => isFree(device))
+	} finally {
+		moveTo.mockRestore()
+	}
+})
+
+test('fails a move the driver refuses without ever reporting it busy', async () => {
+	const device = await connected()
+	// The driver answers with the unchanged position in Alert, which the manager has to forward.
+	const moveTo = spyOn(focuserManager, 'moveTo').mockImplementation(() => {
+		focuserManager.numberVector(client, { device: device.name, name: 'ABS_FOCUS_POSITION', state: 'Alert', elements: { FOCUS_ABSOLUTE_POSITION: { name: 'FOCUS_ABSOLUTE_POSITION', value: device.position.value } } }, 'setNumberVector')
+	})
+
+	try {
+		const started = performance.now()
+		expect(await focuserCommander.moveTo(operationCoordinator, device, 51000, { timeout: 5000 })).toMatchObject(failedOperationResult('alert'))
+		expect(performance.now() - started).toBeLessThan(1000)
 		await waitUntil(() => isFree(device))
 	} finally {
 		moveTo.mockRestore()

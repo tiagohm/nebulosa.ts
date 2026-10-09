@@ -7,8 +7,9 @@ import type { DeviceProvider } from '../../../src/devices/indi/manager/device'
 import { GuideOutputManager } from '../../../src/devices/indi/manager/guideoutput'
 import { CameraSimulator } from '../../../src/devices/indi/simulator/camera'
 import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
+import type { PropertyState } from '../../../src/devices/indi/types'
 import { DeviceLifecycle } from '../../../src/devices/orchestration/device.lifecycle'
-import { OperationCoordinator, failedOperationResult } from '../../../src/devices/orchestration/operation'
+import { OperationCoordinator, failedOperationResult, successfulOperationResult } from '../../../src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
 import { waitUntil } from '../../util'
 
@@ -55,6 +56,11 @@ async function connected() {
 	await waitUntil(() => camera.connected && camera.canPulseGuide)
 	camera.canSetGuideRate = true
 	return camera
+}
+
+// Feeds one timed-guide vector through the manager, as the driver would publish it.
+function guideVector(camera: Camera, name: 'TELESCOPE_TIMED_GUIDE_NS' | 'TELESCOPE_TIMED_GUIDE_WE', state: PropertyState) {
+	guideOutputManager.numberVector(client, { device: camera.name, name, state, elements: {} }, 'setNumberVector')
 }
 
 async function stop(camera: Camera) {
@@ -137,8 +143,8 @@ test('fails a pulse immediately when the driver reports an Alert', async () => {
 
 	try {
 		expect(await guideOutputCommander.pulse(operationCoordinator, camera, 'EAST', 100, { settleTimeout: 100 })).toMatchObject(failedOperationResult('alert'))
-		expect(pulse).toHaveBeenCalledWith(camera, 'WEST', 0)
-		expect(pulse).toHaveBeenCalledWith(camera, 'EAST', 100)
+		// The pulse vector already zeroes the opposite direction, so nothing is sent before it.
+		expect(pulse.mock.calls[0]).toEqual([camera, 'EAST', 100])
 		expect(isFree(camera)).toBeTrue()
 	} finally {
 		pulse.mockRestore()
@@ -168,6 +174,85 @@ test('cancels sibling pulses when one axis reports an Alert', async () => {
 		expect(camera.pulsing).toBeFalse()
 		await waitUntil(() => isFree(camera))
 	} finally {
+		pulse.mockRestore()
+	}
+})
+
+test('fails a pulse the driver refuses without ever reporting it busy', async () => {
+	const camera = await connected()
+	const pulse = spyOn(guideOutputManager, 'pulse').mockImplementation((device, direction, duration) => {
+		if (duration > 0) guideVector(camera, 'TELESCOPE_TIMED_GUIDE_WE', 'Alert')
+	})
+
+	try {
+		const started = performance.now()
+		expect(await guideOutputCommander.pulse(operationCoordinator, camera, 'WEST', 1000, { settleTimeout: 100 })).toMatchObject(failedOperationResult('alert'))
+		expect(performance.now() - started).toBeLessThan(500)
+	} finally {
+		pulse.mockRestore()
+	}
+})
+
+test('fails a diagonal nudge when one axis reports an Alert while the other is still pulsing', async () => {
+	const camera = await connected()
+	const timers: Timer[] = []
+	const pulse = spyOn(guideOutputManager, 'pulse').mockImplementation((device, direction, duration) => {
+		if (duration <= 0) return
+
+		if (direction === 'NORTH') {
+			guideVector(camera, 'TELESCOPE_TIMED_GUIDE_NS', 'Busy')
+			timers.push(setTimeout(() => guideVector(camera, 'TELESCOPE_TIMED_GUIDE_NS', 'Alert'), 20))
+		} else {
+			guideVector(camera, 'TELESCOPE_TIMED_GUIDE_WE', 'Busy')
+			timers.push(setTimeout(() => guideVector(camera, 'TELESCOPE_TIMED_GUIDE_WE', 'Ok'), duration))
+		}
+	})
+
+	try {
+		const result = await guideOutputCommander.pulseAxes(
+			operationCoordinator,
+			camera,
+			[
+				{ direction: 'NORTH', duration: 200 },
+				{ direction: 'WEST', duration: 300 },
+			],
+			{ settleTimeout: 500 },
+		)
+
+		expect(result).toMatchObject(failedOperationResult('alert'))
+		expect(camera.pulsing).toBeFalse()
+	} finally {
+		for (const timer of timers) clearTimeout(timer)
+		pulse.mockRestore()
+	}
+})
+
+test('waits out a pulse the driver cannot cut short when stopping it', async () => {
+	const camera = await connected()
+	const timers: Timer[] = []
+	// Like the standard INDI guider interface, a zero duration is ignored and the pulse runs to its end.
+	const pulse = spyOn(guideOutputManager, 'pulse').mockImplementation((device, direction, duration) => {
+		if (duration <= 0) return
+		guideVector(camera, 'TELESCOPE_TIMED_GUIDE_NS', 'Busy')
+		timers.push(setTimeout(() => guideVector(camera, 'TELESCOPE_TIMED_GUIDE_NS', 'Ok'), duration))
+	})
+
+	try {
+		const started = performance.now()
+		const pulsing = guideOutputCommander.pulse(operationCoordinator, camera, 'NORTH', 600)
+
+		await waitUntil(() => camera.pulsing)
+
+		// The stop's own allowance counts from the end of the pulse, so it outlasts the pulse instead of
+		// failing while the axis is still legitimately being driven.
+		expect(await guideOutputCommander.stopPulse(camera, 'NORTH', { settleTimeout: 100 })).toEqual(successfulOperationResult(undefined))
+		expect(performance.now() - started).toBeGreaterThanOrEqual(550)
+		expect(camera.pulsing).toBeFalse()
+
+		expect(await pulsing).toEqual(successfulOperationResult(undefined))
+		await waitUntil(() => isFree(camera))
+	} finally {
+		for (const timer of timers) clearTimeout(timer)
 		pulse.mockRestore()
 	}
 })

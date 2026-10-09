@@ -7,9 +7,9 @@ import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
 import { MountSimulator } from '../../../src/devices/indi/simulator/mount'
 import type { PropertyState, SetSwitchVector } from '../../../src/devices/indi/types'
 import { DeviceLifecycle } from '../../../src/devices/orchestration/device.lifecycle'
-import { OperationCoordinator, failedOperationResult } from '../../../src/devices/orchestration/operation'
+import { OperationCoordinator, failedOperationResult, successfulOperationResult } from '../../../src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
-import { hour, deg } from '../../../src/math/units/angle'
+import { deg, hour, toDeg, toHour } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 import { waitUntil } from '../../util'
 
@@ -146,6 +146,63 @@ test('reports a driver Alert and releases the mount', async () => {
 	}
 })
 
+test('fails a goto the driver rejects without moving', async () => {
+	const device = await connected()
+	const RA = toHour(device.equatorialCoordinate.rightAscension)
+	const DEC = toDeg(device.equatorialCoordinate.declination)
+	const eod = (state: PropertyState) => mountManager.numberVector(client, { device: device.name, name: 'EQUATORIAL_EOD_COORD', state, elements: { RA: { name: 'RA', value: RA }, DEC: { name: 'DEC', value: DEC } } }, 'setNumberVector')
+
+	// Published once beforehand so the rejection below repeats exactly the coordinate the mount holds.
+	eod('Ok')
+
+	// A driver that cannot reach the target republishes the coordinate it already had, in Alert.
+	const goTo = spyOn(mountManager, 'goTo').mockImplementation(() => eod('Alert'))
+
+	try {
+		const started = performance.now()
+		expect(await mountCommander.goTo(operationCoordinator, device, { type: 'JNOW', JNOW: { x: '05:00:00', y: '-28:00:00' } }, { timeout: 5000 })).toMatchObject(failedOperationResult('alert'))
+		expect(performance.now() - started).toBeLessThan(1000)
+		await waitUntil(() => isFree(device))
+	} finally {
+		goTo.mockRestore()
+	}
+})
+
+test('reports a mount that disconnected under a composite operation without commanding it', async () => {
+	const device = await connected()
+	const goTo = spyOn(mountManager, 'goTo')
+	const tracking = spyOn(mountManager, 'tracking')
+	const slewRate = spyOn(mountManager, 'slewRate')
+
+	try {
+		// The feature already holds the mount, so its nested commands inherit the lease instead of being
+		// refused by the arbiter, and only the commander can notice the device went away.
+		const result = await operationCoordinator.start('feature', [{ key: resourceKey(device), device }], async (context) => {
+			device.connected = false
+
+			try {
+				expect(await mountCommander.goTo(context, device, targetCoordinate())).toMatchObject(failedOperationResult('disconnected'))
+				expect(await mountCommander.setTracking(context, device, true)).toMatchObject(failedOperationResult('disconnected'))
+				expect(await mountCommander.park(context, device)).toMatchObject(failedOperationResult('disconnected'))
+				expect(await mountCommander.setSlewRate(context, device, 'SPEED_1')).toMatchObject(failedOperationResult('disconnected'))
+			} finally {
+				device.connected = true
+			}
+
+			return successfulOperationResult(undefined)
+		}).result
+
+		expect(result).toMatchObject({ ok: true })
+		expect(goTo).not.toHaveBeenCalled()
+		expect(tracking).not.toHaveBeenCalled()
+		expect(slewRate).not.toHaveBeenCalled()
+	} finally {
+		slewRate.mockRestore()
+		tracking.mockRestore()
+		goTo.mockRestore()
+	}
+})
+
 test('refuses a second command while another operation owns the mount', async () => {
 	const device = await connected()
 	const slewing = mountCommander.goTo(operationCoordinator, device, { type: 'JNOW', JNOW: { x: '05:00:00', y: '30:00:00' } })
@@ -181,6 +238,28 @@ test('holds the mount through a manual move until every axis is stopped', async 
 	expect(await handle.stop()).toMatchObject({ ok: true })
 	expect(device.slewing).toBeFalse()
 	expect(mountCommander.manualMoveOf(device)).toBeUndefined()
+	await waitUntil(() => isFree(device))
+})
+
+test('starts a new manual move while the previous one is still stopping', async () => {
+	const device = await connected()
+	const first = await mountCommander.startManualMove(operationCoordinator, device, 'NORTH')
+
+	expect(first.ok).toBeTrue()
+	if (!first.ok) return
+
+	await waitUntil(() => device.slewing)
+
+	const stopping = first.value.stop()
+	const second = await mountCommander.startManualMove(operationCoordinator, device, 'SOUTH')
+
+	expect(await stopping).toMatchObject({ ok: true })
+	expect(second.ok).toBeTrue()
+	if (!second.ok) return
+
+	expect(second.value.id).not.toBe(first.value.id)
+	expect(second.value.directions()).toEqual(['SOUTH'])
+	expect(await second.value.stop()).toMatchObject({ ok: true })
 	await waitUntil(() => isFree(device))
 })
 

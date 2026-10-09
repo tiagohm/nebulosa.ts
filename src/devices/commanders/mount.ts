@@ -90,6 +90,10 @@ interface ManualMove {
 	readonly handle: ManualMoveHandle
 	// Directions currently commanded on the device.
 	readonly directions: Set<MountMoveDirection>
+	// Whether the motion has been ended and is only stopping the mount before releasing it.
+	readonly closed: () => boolean
+	// Settles once the operation of the motion has ended, its cleanup included.
+	readonly settled: Promise<void>
 }
 
 // Default milliseconds a slew, a flip, or a homing move has to complete.
@@ -170,6 +174,7 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 	// Slews to a target and resolves only after the mount has stopped there, or after it has been stopped.
 	async goTo(scope: OperationScope, mount: Mount, target: MountTargetCoordinate<string | Angle>, options: MountCommandOptions = {}): Promise<OperationResult<MountSlewResult>> {
 		return await scope.start<MountSlewResult>('mountGoTo', [{ key: resourceKey(mount), device: mount }], async (context) => {
+			if (!mount.connected) return failedOperationResult('disconnected')
 			if (!mount.canGoTo) return unsupported(mount, 'go to a target')
 
 			const [rightAscension, declination] = resolveTarget(mount, target)
@@ -182,6 +187,7 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 	// Flips to a target across the meridian and reports whether the pier side change could be confirmed.
 	async flip(scope: OperationScope, mount: Mount, target: MountTargetCoordinate<string | Angle>, options: MountCommandOptions = {}): Promise<OperationResult<MountFlipResult>> {
 		return await scope.start<MountFlipResult>('mountFlip', [{ key: resourceKey(mount), device: mount }], async (context) => {
+			if (!mount.connected) return failedOperationResult('disconnected')
 			if (!mount.canFlip) return unsupported(mount, 'flip')
 
 			const initialPierSide = mount.pierSide
@@ -204,6 +210,7 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 	// there is no observable transition to wait for.
 	async sync(scope: OperationScope, mount: Mount, target: MountTargetCoordinate<string | Angle>): Promise<OperationResult<void>> {
 		return await scope.start<void>('mountSync', [{ key: resourceKey(mount), device: mount }], () => {
+			if (!mount.connected) return failedOperationResult('disconnected')
 			if (!mount.canSync) return unsupported(mount, 'sync')
 
 			const [rightAscension, declination] = resolveTarget(mount, target)
@@ -217,6 +224,7 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 	// composite operation never starts its next step against a mount that silently ignored the switch.
 	async setTracking(scope: OperationScope, mount: Mount, enabled: boolean, options: MountCommandOptions = {}): Promise<OperationResult<void>> {
 		return await scope.start<void>('mountTracking', [{ key: resourceKey(mount), device: mount }], async (context) => {
+			if (!mount.connected) return failedOperationResult('disconnected')
 			if (!mount.canTracking) return unsupported(mount, 'change tracking')
 
 			const observed = await waitForDeviceState<MountUpdate>({
@@ -354,16 +362,24 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 		const key = resourceKey(mount)
 		const active = this.#manualMoves.get(key)
 
-		// North/south and west/east are independent axes, so a second direction joins the open motion. A
-		// second scope would only be refused by the lease the first one already holds.
 		if (active !== undefined) {
-			const moved = await active.handle.move(direction, true)
-			return moved.ok ? successfulOperationResult(active.handle) : moved
+			// North/south and west/east are independent axes, so a second direction joins the open motion. A
+			// second scope would only be refused by the lease the first one already holds.
+			if (!active.closed()) {
+				const moved = await active.handle.move(direction, true)
+				return moved.ok ? successfulOperationResult(active.handle) : moved
+			}
+
+			// A motion that was just ended still holds the mount while it waits for the axes to stop. Joining
+			// it would be refused, and a new scope would be refused by its lease, so the new motion starts
+			// only once the previous one has released the mount.
+			await active.settled
 		}
 
 		const directions = new Set<MountMoveDirection>()
 		const stopped = Promise.withResolvers<OperationResult<void>>()
 		const started = Promise.withResolvers<OperationResult<ManualMoveHandle>>()
+		const settled = Promise.withResolvers<void>()
 
 		const operation = scope.start<void>('mountManualMove', [{ key, device: mount }], (context) => {
 			// The motion is over as soon as anything decides to end it. A normal stop does not abort the
@@ -443,7 +459,7 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 				return failure
 			}
 
-			this.#manualMoves.set(key, { handle, directions })
+			this.#manualMoves.set(key, { handle, directions, closed: () => closed, settled: settled.promise })
 
 			// Cancellation aborts the signal but still waits for the executor to return, so the motion has to
 			// end itself here; nothing else would ever resolve the promise below.
@@ -459,6 +475,7 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 		// A scope refused for busy or disconnected devices never runs its executor, so the failure has to
 		// be taken from the operation itself.
 		void operation.result.then((result) => {
+			settled.resolve()
 			if (!result.ok) started.resolve(result)
 		})
 
@@ -573,6 +590,7 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 	// Commands parking or unparking and waits for the parked flag to settle.
 	async #parkable(scope: OperationScope, kind: string, mount: Mount, parked: boolean, options: MountCommandOptions) {
 		return await scope.start<void>(kind, [{ key: resourceKey(mount), device: mount }], async (context) => {
+			if (!mount.connected) return failedOperationResult('disconnected')
 			if (!mount.canPark) return unsupported(mount, 'park')
 
 			const observed = await waitForDeviceState<MountUpdate>({
@@ -596,6 +614,7 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 	// Commands a homing move and waits for the mount to finish it.
 	async #homing(scope: OperationScope, kind: string, mount: Mount, command: (mount: Mount) => void, supported: () => boolean, options: MountCommandOptions) {
 		return await scope.start<void>(kind, [{ key: resourceKey(mount), device: mount }], async (context) => {
+			if (!mount.connected) return failedOperationResult('disconnected')
 			if (!supported()) return unsupported(mount, 'home')
 			if (mount.parked) return failedOperationResult('unexpectedState', `mount ${mount.name} is parked`)
 
@@ -629,6 +648,7 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 	// interleaved with a slew or with any other operation already holding the device.
 	async #mutate(scope: OperationScope, kind: string, mount: Mount, supported: () => boolean, description: string, command: VoidFunction): Promise<OperationResult<void>> {
 		return await scope.start<void>(kind, [{ key: resourceKey(mount), device: mount }], () => {
+			if (!mount.connected) return failedOperationResult('disconnected')
 			if (!supported()) return unsupported(mount, description)
 
 			command()
@@ -707,8 +727,8 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 		}
 	}
 
-	// Notifies the waiters of one device, over a copy so a waiter that unsubscribes while settling does
-	// not disturb the iteration.
+	// Notifies the waiters of one device. The live set is iterated: a waiter that unsubscribes while
+	// settling is removed from it, which Set iteration tolerates without skipping the remaining waiters.
 	#emit(update: MountUpdate) {
 		const listeners = this.#listeners.get(update.mount)
 		if (listeners === undefined) return

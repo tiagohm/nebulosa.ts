@@ -128,8 +128,9 @@ export class FocuserCommander implements DeviceHandler<Focuser>, Disposable {
 		)
 	}
 
-	// Inverts what inward and outward mean at the driver. This acquires the focuser like any other command:
-	// it silently redefines the direction of every later relative move, which a move in flight would read.
+	// Inverts the motor direction at the driver, for a focuser mounted so that inward would otherwise drive it
+	// outward; the reported position keeps decreasing inward. This acquires the focuser like any other
+	// command: it silently changes the physical sense of every later move, which a move in flight would feel.
 	async reverse(scope: OperationScope, focuser: Focuser, enabled: boolean): Promise<OperationResult<void>> {
 		return await this.#mutate(
 			scope,
@@ -164,10 +165,9 @@ export class FocuserCommander implements DeviceHandler<Focuser>, Disposable {
 			// switch, so a negative or zero amount has no command to express it.
 			if (!(steps > 0)) return failedOperationResult('unexpectedState', `focuser ${focuser.name} cannot move ${steps} steps`)
 
-			// Reverse mode inverts what the motion switch means at the driver, so the target has to be
-			// predicted with the same inversion the device is going to apply.
-			const direction = (inward ? -1 : 1) * (focuser.reversed ? -1 : 1)
-			const target = focuserPosition(focuser, focuser.position.value + steps * direction)
+			// Inward decreases the reported position whether or not reverse mode is on: reverse inverts the
+			// motor at the controller, and the INDI focuser interface bounds relative moves on that basis.
+			const target = focuserPosition(focuser, focuser.position.value + (inward ? -steps : steps))
 			// A move that its own range clamps is commanded by the amount that actually remains, so the
 			// driver stops where the wait expects it to.
 			const commanded = Math.abs(target - focuser.position.value)

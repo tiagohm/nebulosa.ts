@@ -9,15 +9,20 @@ import { resourceKey } from '../orchestration/resource'
 // Coordinated mutations of a rotator.
 // Angles are in degrees, the unit the INDI ABS_ROTATOR_ANGLE vector and the device model both publish, and
 // are resolved against the driver's own limits before being commanded. Every duration is in milliseconds.
-// Motion commands acquire the rotator; the emergency stop does not, so it still runs while the operation
-// that owns the device is being canceled.
+// Motion commands acquire the rotator and resolve once the motion they started has stopped; a failed or
+// canceled motion is physically aborted first. The emergency stop does not acquire, so it still runs while
+// the operation that owns the device is being canceled.
 
 // Timing overrides for one rotator command; every duration is in milliseconds.
 export interface RotatorCommandOptions {
 	// Maximum time the commanded angle may take to be reached.
 	readonly timeout?: number
-	// Maximum time a canceled or finished motion has to bring the rotator to a standstill.
+	// Maximum time a canceled or failed motion has to bring the rotator to a standstill.
 	readonly settleTimeout?: number
+	// Angular distance, in degrees, within which a rotation that has stopped counts as having arrived. This
+	// is not a positioning budget: a driver stops at the step nearest the commanded angle, a fraction of a
+	// step away from it, so this only catches a rotation that stopped somewhere else entirely.
+	readonly arrivalTolerance?: number
 }
 
 // One observed rotator transition. The device is passed live rather than snapshotted because evaluation
@@ -38,10 +43,12 @@ const DEFAULT_MOVE_TIMEOUT = 120000
 // Default milliseconds a motion that ended has to be reported as no longer moving.
 const DEFAULT_SETTLE_TIMEOUT = 15000
 
-// Largest angular difference, in degrees, at which the rotator is taken to be standing at the commanded
-// angle. Drivers report the mechanical position, which settles a fraction of a step away from the target,
-// so an exact comparison would leave every move pending until it times out.
+// Largest angular difference, in degrees, at which the rotator already stands at the commanded angle, so
+// no command is sent, or has reached it without any motion being observed.
 const ANGLE_TOLERANCE = 1e-3
+
+// Default angular distance, in degrees, within which a rotation that stopped counts as having arrived.
+const DEFAULT_ARRIVAL_TOLERANCE = 1
 
 // Properties whose Alert state means the commanded motion itself failed. An Alert on an unrelated vector,
 // such as the reverse switch, must not fail a move that is otherwise progressing.
@@ -91,7 +98,11 @@ export class RotatorCommander implements DeviceHandler<Rotator>, Disposable {
 		this.#emit({ rotator })
 	}
 
-	// Rotates to an absolute angle, in degrees, and resolves only after the rotator reports standing there.
+	// Rotates to an absolute angle, in degrees, and resolves only after the rotator has stopped there.
+	// A rotator already standing at the angle is answered without commanding anything, since the state read
+	// right after a command would still be the one from before it. Otherwise the rotation is complete once
+	// motion was observed and ended, or the angle was reached without the driver ever reporting it busy, and
+	// the angle it stopped at must then be within the arrival tolerance.
 	async moveTo(scope: OperationScope, rotator: Rotator, angle: number, options: RotatorCommandOptions = {}): Promise<OperationResult<void>> {
 		return await scope.start<void>('rotatorMoveTo', [{ key: resourceKey(rotator), device: rotator }], async (context) => {
 			// Limits are only published while the device is connected, so a disconnected rotator would
@@ -100,13 +111,30 @@ export class RotatorCommander implements DeviceHandler<Rotator>, Disposable {
 
 			const target = rotatorAngle(rotator, angle)
 
-			return await this.#move(
+			if (!rotator.moving && angularSeparation(rotator.angle.value, target) <= ANGLE_TOLERANCE) return successfulOperationResult(undefined)
+
+			let moved = false
+
+			const rotated = await this.#move(
 				context,
 				rotator,
 				options,
 				() => this.rotatorManager.moveTo(rotator, target),
-				() => Math.abs(rotator.angle.value - target) <= ANGLE_TOLERANCE,
+				() => {
+					if (rotator.moving) moved = true
+					return moved || angularSeparation(rotator.angle.value, target) <= ANGLE_TOLERANCE
+				},
 			)
+
+			if (!rotated.ok) return rotated
+
+			// The manager applies the angle before the motion flag of the same vector, so the angle read here
+			// is the one the rotator stopped at.
+			const separation = angularSeparation(rotator.angle.value, target)
+
+			if (separation <= (options.arrivalTolerance ?? DEFAULT_ARRIVAL_TOLERANCE)) return rotated
+
+			return failedOperationResult('unexpectedState', `rotator ${rotator.name} stopped ${separation.toFixed(3)}° away from the target`)
 		}).result
 	}
 
@@ -115,7 +143,7 @@ export class RotatorCommander implements DeviceHandler<Rotator>, Disposable {
 	// zero, so completion is the standstill alone and not a target angle. What separates that standstill from
 	// the one the rotator is still standing in is the motion observed in between: the command is only
 	// dispatched, and a driver that publishes Busy after acknowledging it would otherwise be read as a
-	// rotator that already homed, ending the operation while it starts to turn and aborting it from cleanup.
+	// rotator that already homed, ending the operation and releasing the device while it starts to turn.
 	async home(scope: OperationScope, rotator: Rotator, options: RotatorCommandOptions = {}): Promise<OperationResult<void>> {
 		return await scope.start<void>('rotatorHome', [{ key: resourceKey(rotator), device: rotator }], async (context) => {
 			if (!rotator.connected) return failedOperationResult('disconnected')
@@ -172,20 +200,12 @@ export class RotatorCommander implements DeviceHandler<Rotator>, Disposable {
 		return await this.#settle(rotator, options, () => this.rotatorManager.stop(rotator))
 	}
 
-	// Commands a motion and waits for the rotator to stand still at a state the caller accepts, aborting it
-	// from the scope's own cleanup so a canceled operation never releases a rotator that is still turning.
+	// Commands a motion and waits for the rotator to stand still at a state the caller accepts. Every
+	// unsuccessful outcome stops the rotator before settling, so a canceled operation never releases a
+	// rotator that is still turning, while a successful one sends nothing more.
 	// The acceptance predicate is consulted on every update and not only once the rotator stands still,
 	// because it may be the one latching the motion that has to be observed before a standstill counts.
 	async #move(context: OperationContext, rotator: Rotator, options: RotatorCommandOptions, command: VoidFunction, arrived: () => boolean): Promise<OperationResult<void>> {
-		// Registered before the command so a cancel arriving during dispatch still finds the stop it needs.
-		context.onCleanup(async () => {
-			const stopped = await this.stopMotion(rotator, options)
-
-			// A device that went away is not turning under our command any more, so only one that stays in
-			// motion is reported as a cleanup failure.
-			if (!stopped.ok && stopped.reason !== 'disconnected') throw new Error(`rotator ${rotator.name} did not stop moving: ${stopped.reason}`)
-		})
-
 		const observed = await waitForDeviceState<RotatorUpdate>({
 			signal: context.signal,
 			timeout: options.timeout ?? DEFAULT_MOVE_TIMEOUT,
@@ -199,9 +219,21 @@ export class RotatorCommander implements DeviceHandler<Rotator>, Disposable {
 				return !rotator.moving && reached ? 'success' : 'pending'
 			},
 			command,
+			abort: () => this.#abortMotion(rotator, options),
 		})
 
 		return observed.ok ? successfulOperationResult(undefined) : observed
+	}
+
+	// Physical stop issued whenever a motion concludes unsuccessfully, including a failure the driver itself
+	// reported. A disconnected rotator is not turning under our command any more and cannot be sent anything,
+	// so only a rotator that stays in motion is reported as a cleanup failure.
+	async #abortMotion(rotator: Rotator, options: RotatorCommandOptions) {
+		if (!rotator.connected) return
+
+		const result = await this.stopMotion(rotator, options)
+
+		if (!result.ok) throw new Error(`rotator ${rotator.name} did not stop: ${result.reason}`)
 	}
 
 	// Waits for the rotator to report no motion, on a signal of its own so it still runs while the
@@ -245,6 +277,13 @@ export class RotatorCommander implements DeviceHandler<Rotator>, Disposable {
 		if (listeners === undefined) return
 		for (const listener of listeners) listener(update)
 	}
+}
+
+// Shortest angular distance, in degrees within 0..180, between two rotator angles. An angle is a direction
+// that repeats every 360°, so 359.99° and 0° are 0.01° apart whichever representative the driver reports.
+function angularSeparation(a: number, b: number) {
+	const difference = Math.abs(a - b) % 360
+	return difference > 180 ? 360 - difference : difference
 }
 
 // Resolves a requested angle, in degrees, to one the rotator can be commanded to and will report back. An

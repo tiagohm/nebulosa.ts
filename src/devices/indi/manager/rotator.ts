@@ -58,7 +58,7 @@ export class RotatorManager extends DeviceManager<Rotator> {
 					}
 				}
 
-				if (handleSwitchValue(device, 'moving', message.state === 'Busy' || this.properties.get(device)?.ABS_ROTATOR_ANGLE?.state === 'Busy')) {
+				if (handleSwitchValue(device, 'moving', message.state === 'Busy' || this.properties.get(device)?.ABS_ROTATOR_ANGLE?.state === 'Busy', message.state)) {
 					this.updated(device, 'moving', message.state)
 				}
 
@@ -94,7 +94,7 @@ export class RotatorManager extends DeviceManager<Rotator> {
 					this.updated(device, 'angle', message.state)
 				}
 
-				if (handleSwitchValue(device, 'moving', message.state === 'Busy' || this.properties.get(device)?.ROTATOR_HOME?.state === 'Busy')) {
+				if (handleSwitchValue(device, 'moving', message.state === 'Busy' || this.properties.get(device)?.ROTATOR_HOME?.state === 'Busy', message.state)) {
 					this.updated(device, 'moving', message.state)
 				}
 

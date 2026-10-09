@@ -5,8 +5,9 @@ import type { Dome } from '../../../src/devices/indi/device'
 import { DomeManager } from '../../../src/devices/indi/manager/dome'
 import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
 import { DomeSimulator } from '../../../src/devices/indi/simulator/dome'
+import type { PropertyState } from '../../../src/devices/indi/types'
 import { DeviceLifecycle } from '../../../src/devices/orchestration/device.lifecycle'
-import { OperationCoordinator, failedOperationResult } from '../../../src/devices/orchestration/operation'
+import { OperationCoordinator, failedOperationResult, successfulOperationResult } from '../../../src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
 import { deg } from '../../../src/math/units/angle'
 import { waitUntil } from '../../util'
@@ -75,6 +76,84 @@ test('moves to absolute and relative azimuths and waits for standstill', async (
 	await waitUntil(() => isFree(dome))
 })
 
+// Feeds one azimuth vector, in degrees, through the manager, as the driver would publish it.
+function azimuthVector(dome: Dome, state: PropertyState, azimuth: number) {
+	domeManager.numberVector(client, { device: dome.name, name: 'ABS_DOME_POSITION', state, elements: { DOME_ABSOLUTE_POSITION: { name: 'DOME_ABSOLUTE_POSITION', value: azimuth } } }, 'setNumberVector')
+}
+
+test('accepts a move that stops at the encoder step nearest the commanded azimuth', async () => {
+	const dome = await connected()
+	const timers: Timer[] = []
+	// A dome with a half-degree encoder stops at 42.5° for 42°.
+	const moveTo = spyOn(domeManager, 'moveTo').mockImplementation(() => {
+		azimuthVector(dome, 'Busy', 10)
+		timers.push(setTimeout(() => azimuthVector(dome, 'Ok', 42.5), 50))
+	})
+	const stop = spyOn(domeManager, 'stop')
+
+	try {
+		expect(await domeCommander.moveTo(operationCoordinator, dome, deg(42), { timeout: 2000 })).toEqual(successfulOperationResult(undefined))
+		// A successful move sends no abort afterwards.
+		expect(stop).not.toHaveBeenCalled()
+	} finally {
+		for (const timer of timers) clearTimeout(timer)
+		stop.mockRestore()
+		moveTo.mockRestore()
+	}
+})
+
+test('fails a move that stops far from the commanded azimuth', async () => {
+	const dome = await connected()
+	const timers: Timer[] = []
+	const moveTo = spyOn(domeManager, 'moveTo').mockImplementation(() => {
+		azimuthVector(dome, 'Busy', 10)
+		timers.push(setTimeout(() => azimuthVector(dome, 'Ok', 30), 50))
+	})
+
+	try {
+		const result = await domeCommander.moveTo(operationCoordinator, dome, deg(90), { timeout: 2000 })
+		expect(result).toMatchObject(failedOperationResult('unexpectedState'))
+		expect(result.ok ? '' : result.error).toContain('away from the target')
+	} finally {
+		for (const timer of timers) clearTimeout(timer)
+		moveTo.mockRestore()
+	}
+})
+
+test('fails a move the driver refuses without ever reporting it busy', async () => {
+	const dome = await connected()
+	const moveTo = spyOn(domeManager, 'moveTo').mockImplementation(() => azimuthVector(dome, 'Alert', (dome.azimuth.value * 180) / Math.PI))
+
+	try {
+		const started = performance.now()
+		expect(await domeCommander.moveTo(operationCoordinator, dome, deg(90), { timeout: 5000 })).toMatchObject(failedOperationResult('alert'))
+		expect(performance.now() - started).toBeLessThan(1000)
+	} finally {
+		moveTo.mockRestore()
+	}
+})
+
+test('resolves without commanding a dome already in the requested state', async () => {
+	const dome = await connected()
+
+	expect(await domeCommander.home(operationCoordinator, dome, { timeout: 3000 })).toMatchObject({ ok: true })
+	expect(dome.atHome).toBeTrue()
+
+	const home = spyOn(domeManager, 'home')
+	const moveTo = spyOn(domeManager, 'moveTo')
+
+	try {
+		expect(await domeCommander.home(operationCoordinator, dome, { timeout: 50 })).toEqual(successfulOperationResult(undefined))
+		expect(await domeCommander.moveTo(operationCoordinator, dome, dome.azimuth.value, { timeout: 50 })).toEqual(successfulOperationResult(undefined))
+		expect(home).not.toHaveBeenCalled()
+		expect(moveTo).not.toHaveBeenCalled()
+		expect(dome.homing).toBeFalse()
+	} finally {
+		moveTo.mockRestore()
+		home.mockRestore()
+	}
+})
+
 test('synchronizes and updates dome configuration through scoped commands', async () => {
 	const dome = await connected()
 
@@ -134,6 +213,28 @@ test('keeps a manual motion leased until it is stopped', async () => {
 	expect(await started.value.stop()).toMatchObject({ ok: true })
 	expect(dome.moving).toBeFalse()
 	expect(domeCommander.manualMoveOf(dome)).toBeUndefined()
+	await waitUntil(() => isFree(dome))
+})
+
+test('starts a new manual motion while the previous one is still stopping', async () => {
+	const dome = await connected()
+	const first = await domeCommander.startManualMove(operationCoordinator, dome, 'CLOCKWISE', { settleTimeout: 500 })
+
+	expect(first.ok).toBeTrue()
+	if (!first.ok) return
+
+	await waitUntil(() => dome.moving)
+
+	const stopping = first.value.stop()
+	const second = await domeCommander.startManualMove(operationCoordinator, dome, 'COUNTER_CLOCKWISE', { settleTimeout: 500 })
+
+	expect(await stopping).toMatchObject({ ok: true })
+	expect(second.ok).toBeTrue()
+	if (!second.ok) return
+
+	expect(second.value.id).not.toBe(first.value.id)
+	expect(second.value.direction()).toBe('COUNTER_CLOCKWISE')
+	expect(await second.value.stop()).toMatchObject({ ok: true })
 	await waitUntil(() => isFree(dome))
 })
 

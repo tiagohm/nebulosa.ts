@@ -5,8 +5,9 @@ import type { Rotator } from '../../../src/devices/indi/device'
 import { RotatorManager } from '../../../src/devices/indi/manager/rotator'
 import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
 import { RotatorSimulator } from '../../../src/devices/indi/simulator/rotator'
+import type { PropertyState } from '../../../src/devices/indi/types'
 import { DeviceLifecycle } from '../../../src/devices/orchestration/device.lifecycle'
-import { OperationCoordinator, failedOperationResult } from '../../../src/devices/orchestration/operation'
+import { OperationCoordinator, failedOperationResult, successfulOperationResult } from '../../../src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
 import { waitUntil } from '../../util'
 
@@ -71,13 +72,68 @@ test('moves to an angle and resolves after the rotator stops there', async () =>
 	await waitUntil(() => isFree(rotator))
 })
 
-test('resolves immediately when the rotator already holds the requested angle', async () => {
+test('resolves without commanding when the rotator already holds the requested angle', async () => {
 	const rotator = await connected()
 	const moveTo = spyOn(rotatorManager, 'moveTo')
 
 	try {
 		expect(await rotatorCommander.moveTo(operationCoordinator, rotator, 0, { timeout: 50 })).toMatchObject({ ok: true })
-		expect(moveTo).toHaveBeenCalledWith(rotator, 0)
+		expect(moveTo).not.toHaveBeenCalled()
+	} finally {
+		moveTo.mockRestore()
+	}
+})
+
+// Feeds one angle vector through the manager, as the driver would publish it.
+function angleVector(rotator: Rotator, state: PropertyState, angle: number) {
+	rotatorManager.numberVector(client, { device: rotator.name, name: 'ABS_ROTATOR_ANGLE', state, elements: { ANGLE: { name: 'ANGLE', value: angle } } }, 'setNumberVector')
+}
+
+test('accepts a rotation that stops at the step nearest the commanded angle', async () => {
+	const rotator = await connected()
+	const timers: Timer[] = []
+	// A driver with 0.01° resolution stops at 123.46° for 123.456°.
+	const moveTo = spyOn(rotatorManager, 'moveTo').mockImplementation(() => {
+		angleVector(rotator, 'Busy', rotator.angle.value)
+		timers.push(setTimeout(() => angleVector(rotator, 'Ok', 123.46), 50))
+	})
+	const stop = spyOn(rotatorManager, 'stop')
+
+	try {
+		expect(await rotatorCommander.moveTo(operationCoordinator, rotator, 123.456, { timeout: 2000 })).toEqual(successfulOperationResult(undefined))
+		// A successful rotation sends no abort afterwards.
+		expect(stop).not.toHaveBeenCalled()
+	} finally {
+		for (const timer of timers) clearTimeout(timer)
+		stop.mockRestore()
+		moveTo.mockRestore()
+	}
+})
+
+test('fails a rotation that stops far from the commanded angle', async () => {
+	const rotator = await connected()
+	const timers: Timer[] = []
+	const moveTo = spyOn(rotatorManager, 'moveTo').mockImplementation(() => {
+		angleVector(rotator, 'Busy', rotator.angle.value)
+		timers.push(setTimeout(() => angleVector(rotator, 'Ok', 30), 50))
+	})
+
+	try {
+		expect(await rotatorCommander.moveTo(operationCoordinator, rotator, 90, { timeout: 2000 })).toMatchObject(failedOperationResult('unexpectedState'))
+	} finally {
+		for (const timer of timers) clearTimeout(timer)
+		moveTo.mockRestore()
+	}
+})
+
+test('fails a rotation the driver refuses without ever reporting it busy', async () => {
+	const rotator = await connected()
+	const moveTo = spyOn(rotatorManager, 'moveTo').mockImplementation(() => angleVector(rotator, 'Alert', rotator.angle.value))
+
+	try {
+		const started = performance.now()
+		expect(await rotatorCommander.moveTo(operationCoordinator, rotator, 90, { timeout: 5000 })).toMatchObject(failedOperationResult('alert'))
+		expect(performance.now() - started).toBeLessThan(1000)
 	} finally {
 		moveTo.mockRestore()
 	}

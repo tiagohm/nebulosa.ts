@@ -5,6 +5,7 @@ import type { Wheel } from '../../../src/devices/indi/device'
 import { WheelManager } from '../../../src/devices/indi/manager/wheel'
 import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
 import { WheelSimulator } from '../../../src/devices/indi/simulator/wheel'
+import type { PropertyState } from '../../../src/devices/indi/types'
 import { DeviceLifecycle } from '../../../src/devices/orchestration/device.lifecycle'
 import { OperationCoordinator, failedOperationResult } from '../../../src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
@@ -153,6 +154,41 @@ test('reports a wheel Alert without leaving a cleanup wait behind', async () => 
 		expect(await wheelCommander.moveTo(operationCoordinator, wheel, 4, { timeout: 50 })).toMatchObject(failedOperationResult('alert'))
 		expect(moveTo).toHaveBeenCalledTimes(1)
 		expect(isFree(wheel)).toBeTrue()
+	} finally {
+		moveTo.mockRestore()
+	}
+})
+
+test('releases the wheel as soon as the driver fails a move away from the target', async () => {
+	const wheel = await connected()
+	const timers: Timer[] = []
+	const slot = (state: PropertyState) => wheelManager.numberVector(client, { device: wheel.name, name: 'FILTER_SLOT', state, elements: { FILTER_SLOT_VALUE: { name: 'FILTER_SLOT_VALUE', value: wheel.position + 1 } } }, 'setNumberVector')
+	const moveTo = spyOn(wheelManager, 'moveTo').mockImplementation(() => {
+		slot('Busy')
+		timers.push(setTimeout(() => slot('Alert'), 50))
+	})
+
+	try {
+		const started = performance.now()
+		expect(await wheelCommander.moveTo(operationCoordinator, wheel, (wheel.position + 2) % wheel.count)).toEqual(failedOperationResult('alert'))
+		expect(performance.now() - started).toBeLessThan(1000)
+		expect(isFree(wheel)).toBeTrue()
+	} finally {
+		for (const timer of timers) clearTimeout(timer)
+		moveTo.mockRestore()
+	}
+})
+
+test('fails a move the driver refuses without ever reporting it busy', async () => {
+	const wheel = await connected()
+	const moveTo = spyOn(wheelManager, 'moveTo').mockImplementation(() => {
+		wheelManager.numberVector(client, { device: wheel.name, name: 'FILTER_SLOT', state: 'Alert', elements: { FILTER_SLOT_VALUE: { name: 'FILTER_SLOT_VALUE', value: wheel.position + 1 } } }, 'setNumberVector')
+	})
+
+	try {
+		const started = performance.now()
+		expect(await wheelCommander.moveTo(operationCoordinator, wheel, (wheel.position + 2) % wheel.count)).toEqual(failedOperationResult('alert'))
+		expect(performance.now() - started).toBeLessThan(1000)
 	} finally {
 		moveTo.mockRestore()
 	}

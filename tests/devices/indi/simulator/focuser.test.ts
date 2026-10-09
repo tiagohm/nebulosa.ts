@@ -63,9 +63,10 @@ describe.skipIf(SKIP)('focuser simulator', () => {
 
 		focuserManager.reverse(focuser, true)
 		await waitUntil(() => focuser.reversed)
+		// Reverse inverts the motor, not the counter, so inward still decreases the position.
 		focuserManager.moveIn(focuser, 1000)
 		await waitUntil(() => !focuser.moving, 3000)
-		expect(focuser.position.value).toBeCloseTo(61000, 6)
+		expect(focuser.position.value).toBeCloseTo(59000, 6)
 
 		focuserManager.syncTo(focuser, 12345)
 		await waitUntil(() => focuser.position.value === 12345)
