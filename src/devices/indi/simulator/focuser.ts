@@ -23,8 +23,9 @@ export interface FocuserSimulatorOptions extends DeviceSimulatorOptions {
 	readonly backlashOut?: number
 }
 
-// Simulated focuser. Models absolute/relative moves at a fixed rate, reverse, a sinusoidal temperature,
-// direction-dependent backlash, and temperature compensation, advancing the position each tick.
+// Simulated focuser. Models absolute/relative moves at a fixed rate, a sinusoidal temperature,
+// direction-dependent backlash, and temperature compensation, advancing the position each tick. The reverse
+// switch is kept but, as on a real controller, only inverts the motor and not the reported position.
 export class FocuserSimulator extends DeviceSimulator {
 	readonly type = 'focuser'
 
@@ -330,10 +331,11 @@ export class FocuserSimulator extends DeviceSimulator {
 		}
 	}
 
-	// Resolves the current relative-motion direction after reverse mode is applied.
+	// Resolves the current relative-motion direction of the position counter. Reverse mode is ignored: it
+	// inverts the motor of a real controller so that inward still decreases the position, which is what the
+	// INDI focuser interface assumes when it bounds a relative move against the absolute range.
 	#relativeDirection() {
-		const direction = this.#motion.elements.FOCUS_INWARD.value ? -1 : 1
-		return this.#reverse.elements.INDI_ENABLED.value ? -direction : direction
+		return this.#motion.elements.FOCUS_INWARD.value ? -1 : 1
 	}
 
 	// Advances the simulated ambient temperature with a smooth periodic waveform.

@@ -99,12 +99,12 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 					const property = message.name === 'TELESCOPE_TIMED_GUIDE_NS' ? 'pulsingNS' : 'pulsingWE'
 					const parent = (device as SubDevice<GuideOutput, GuideOutput>).parent
 
-					if (handleSwitchValue(device, property, message.state === 'Busy')) {
+					if (handleSwitchValue(device, property, message.state === 'Busy', message.state)) {
 						this.updated(device, property, message.state)
 						this.updated(parent, property, message.state)
 					}
 
-					if (handleSwitchValue(device, 'pulsing', device.pulsingNS || device.pulsingWE)) {
+					if (handleSwitchValue(device, 'pulsing', device.pulsingNS || device.pulsingWE, message.state)) {
 						this.updated(device, 'pulsing', message.state)
 						this.updated(parent, 'pulsing', message.state)
 					}

@@ -92,10 +92,24 @@ test('DomeManager maps motion, angular ranges, shutter, and measurements', () =>
 	expect(dome.hasShutter).toBeTrue()
 	expect(dome.canSetShutter).toBeTrue()
 	expect(dome.shutterState).toBe('OPENING')
-	expect(dome.slewing).toBeFalse()
+	expect(dome.slewing).toBeTrue()
 
 	manager.switchVector(recordingClient, { ...shutter, state: 'Ok', elements: { SHUTTER_OPEN: defSwitch('SHUTTER_OPEN', true), SHUTTER_CLOSE: defSwitch('SHUTTER_CLOSE', false) } }, 'setSwitchVector')
 	expect(dome.shutterState).toBe('OPEN')
+	expect(dome.slewing).toBeFalse()
+
+	manager.switchVector(recordingClient, { ...shutter, state: 'Busy', elements: { SHUTTER_OPEN: defSwitch('SHUTTER_OPEN', false), SHUTTER_CLOSE: defSwitch('SHUTTER_CLOSE', true) } }, 'setSwitchVector')
+	expect(dome.shutterState).toBe('CLOSING')
+	expect(dome.slewing).toBeTrue()
+
+	// Rotation and shutter motion overlap: slewing ends only once both have stopped.
+	manager.switchVector(recordingClient, motion, 'setSwitchVector')
+	manager.switchVector(recordingClient, { ...shutter, state: 'Ok', elements: { SHUTTER_OPEN: defSwitch('SHUTTER_OPEN', false), SHUTTER_CLOSE: defSwitch('SHUTTER_CLOSE', true) } }, 'setSwitchVector')
+	expect(dome.shutterState).toBe('CLOSED')
+	expect(dome.moving).toBeTrue()
+	expect(dome.slewing).toBeTrue()
+
+	manager.switchVector(recordingClient, { ...motion, state: 'Ok', elements: { DOME_CW: defSwitch('DOME_CW', false), DOME_CCW: defSwitch('DOME_CCW', false) } }, 'setSwitchVector')
 	expect(dome.slewing).toBeFalse()
 
 	const measurements: DefNumberVector = {

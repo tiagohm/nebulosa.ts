@@ -15667,6 +15667,399 @@ console.log(
 )
 ```
 
+### Device Availability Lifecycle
+
+An INDI device that is listed by its manager is not automatically safe to command: it may be disconnected, or connected but still slewing, exposing, or moving a motor that someone else started. `DeviceLifecycle` closes that gap. It observes the INDI device managers and keeps the `lifecycle` cause of the [Device Resource Arbitration](#device-resource-arbitration) up to date, so a device is acquirable by a [Device Operations](#device-operations) tree only while it is connected and physically quiescent, and every operation holding it is cancelled the moment it disconnects or disappears.
+
+`new DeviceLifecycle(arbiter, coordinator)` takes the shared `ResourceArbiter` and `OperationCoordinator`. `observe(manager, options?)` subscribes to any manager exposing `addHandler`, `removeHandler` and `list` (every INDI device manager does), registers the devices it already lists, and returns an idempotent disposer. Each added device starts unavailable and becomes available only after verification succeeds. A property update re-runs verification only when `affects(device, property)` says it can change the verdict, and a `connected` update to `false` or a removal marks the device unavailable and calls `coordinator.cancelByDevice(key, 'disconnected' | 'removed')` without waiting inside the manager callback. Cancellation reaches every owner of the device, including one holding it under a logical resource key. The defaults are `isDeviceQuiescent`, which requires `connected` and no activity: a camera not `exposuring` and with no `Busy` exposure, a mount not slewing, moving, homing, parking or pulsing, a focuser, wheel or rotator not moving, a guide output not pulsing, a cover not parking, and a dome not slewing (which covers rotation, homing, parking and shutter motion), while other device types only need to be connected. `affectsDeviceQuiescence` is its matching filter (`connected` plus the properties above). A custom `verify` may return a promise: verification results are tagged with a generation, so a result that a newer transition superseded is discarded, and a verifier that throws or rejects leaves the device unavailable. A custom `affects` must cover every property its `verify` reads. An observer acts only on the views its manager added: a manager that also reports another manager's device, as the guide output manager does for the mount or camera behind each proxy, leaves that view to the verifier and filter it was registered with.
+
+The manager views of one physical device share a hardware key (a camera and the guide output it exposes, a mount and its guide-output subdevice): the key is available only while every live view is quiescent, a removed view still cancels its owners, and the key is disassociated from the arbiter only after the last view is gone. Disposing one observer forgets the views it contributed: a device left without views becomes unavailable, because nothing would cancel its owners on a later disconnect, but running operations are not cancelled. `dispose()` detaches every observer. Whole clients are blocked separately with the arbiter's `markClientUnavailable(clientId)` and `markClientAvailable(clientId)`.
+
+```ts
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { FocuserManager } from 'nebulosa/src/devices/indi/manager/focuser'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { FocuserSimulator } from 'nebulosa/src/devices/indi/simulator/focuser'
+import { DeviceLifecycle, isDeviceQuiescent } from 'nebulosa/src/devices/orchestration/device.lifecycle'
+import { failedOperationResult, OperationCoordinator, type OperationResult } from 'nebulosa/src/devices/orchestration/operation'
+import { ResourceArbiter, resourceKey } from 'nebulosa/src/devices/orchestration/resource'
+
+const focuserManager = new FocuserManager()
+const arbiter = new ResourceArbiter()
+const coordinator = new OperationCoordinator(arbiter)
+const lifecycle = new DeviceLifecycle(arbiter, coordinator)
+
+// Observe before the client publishes devices; the disposer stops this one observation.
+const stop = lifecycle.observe(focuserManager)
+
+const client = new ClientSimulator('Client Simulator', new IndiClientHandlerSet([focuserManager]))
+const simulator = new FocuserSimulator('Focuser Simulator', client)
+const focuser = focuserManager.get(client, 'Focuser Simulator')!
+const key = resourceKey(focuser)
+
+console.log(arbiter.availability(key)) // 'unavailable' — listed but not connected
+
+focuserManager.connect(focuser)
+console.log(arbiter.availability(key), isDeviceQuiescent(focuser)) // 'available' true
+
+// A move started outside any operation still blocks acquisition until the motor stops.
+focuserManager.moveIn(focuser, 500)
+console.log(arbiter.availability(key)) // 'unavailable'
+
+while (focuser.moving) await Bun.sleep(10)
+console.log(arbiter.availability(key)) // 'available'
+
+// An operation holding the focuser is cancelled when it disconnects.
+const hold = coordinator.start('hold', [{ key, device: focuser }], (context) => new Promise<OperationResult<void>>((resolve) => context.signal.addEventListener('abort', () => resolve(failedOperationResult('aborted')), { once: true })))
+focuserManager.disconnect(focuser)
+console.log(await hold.result) // { ok: false, reason: 'disconnected' }
+
+stop()
+lifecycle.dispose()
+simulator.dispose()
+```
+
+### Device Camera Capture
+
+An INDI camera exposure ends in two separate messages: the `CCD_EXPOSURE` vector turning `Ok` and the BLOB carrying the frame, in either order and with no operation id. `CameraCapturer` turns that into a [Device Operations](#device-operations) capture: it acquires the camera, applies the request, exposes frame after frame, pairs each exposure completion with the BLOB of the same generation, decodes and hands over the frame, and stops and quiesces the camera before the lease is released.
+
+`new CameraCapturer(cameraManager, arbiter, options)` registers itself as a handler of the `CameraManager`, so it sees every camera update, removal and BLOB without forwarding, and is `Disposable` like the [Device Commanders](#device-commanders). `options.capturesDir` is the directory of automatic paths. `publish(frame, path, camera)` receives every decoded frame (the decoded buffer itself, not a copy), `write(path, data)` persists auto-saved frames (`Bun.write` by default) and `decode(data)` decodes base64 payloads (a streaming decoder by default). `devices` holds the `MountManager`, `FocuserManager`, `WheelManager` and `RotatorManager` lookups used to resolve the `mount`, `focuser`, `wheel` and `rotator` names of a request on the camera's client; the resolved devices are passed to `cameraManager.snoop` so the driver stamps them into the headers, and are never acquired. `ditherer` (`running(guider)` and `dither(guider, request, { signal, onPhase })`) dithers before each frame when `request.dither` is enabled and names a guider; without a guider name or a ditherer the frame is taken without dithering, and a named guider that is not running fails as `unexpectedState`. `frameGraceTime` (30000), `quiesceTimeout` (5000) and `lateBlobDrainTime` (100) are milliseconds.
+
+`start(scope, camera, request, { listener, rejectedListener })` takes an `OperationScope` first, so a capture runs as its own tree or nested in a feature that already holds the camera. It returns `{ id, started, result, cancel }`: `started` resolves when the first exposure is physically `Busy` (or with the start failure), `result` resolves `{ frames, frameCount }` after cleanup and release, and `cancel()` resolves once the camera is quiescent. Neither promise rejects. `CameraCaptureStart` (start from a copy of `DEFAULT_CAMERA_CAPTURE_START`) gives the exposure in `exposureTimeUnit` (`exposureTimeIn*` convert between units), `exposureMode` (`single`, `fixed` with `count` frames, or `loop` until cancelled), the inter-frame `delay` in seconds, the subframe in unbinned pixels (the full sensor unless `subframe` is set with a positive size), binning, gain, offset, frame type and format, and `transferFormat` (`FITS` or `XISF`). A non-positive or non-finite exposure, a negative or non-finite delay, a `fixed` count that is not a positive integer, and an unusable destination fail as `commandFailed` before anything is commanded, and a camera that is busy, disconnected or not yet verified by the [Device Availability Lifecycle](#device-availability-lifecycle) is refused as `busy`.
+
+Each frame waits at most the exposure plus `frameGraceTime` for both messages (`timeout`). `Alert` fails the capture as `alert`, an exposure going `Idle` before completion as `unexpectedState`, a disconnect or removal as `disconnected` or `removed`, and a failed `write` as `commandFailed`. The listener receives `CameraCaptureEvent` snapshots (`exposureStarted`, `exposing`, `exposureFinished` with the frame path as second argument, `waiting` every 250 ms during delays of 1 s or more, `dithering` and `settling`), with frame and total progress in microseconds, and ends with one `idle` snapshot whose `stopped` tells whether the capture was interrupted (preceded by `error` when it was). A capture refused before it started reports its `error` and `idle` snapshots to `rejectedListener`. When a capture ends with an exposure still running, cleanup stops it and waits up to `quiesceTimeout` for it to go idle, otherwise the camera is left unavailable and the result gains `cleanup failed: …`. A frame that was exposed but whose BLOB never arrived quarantines the camera, because the next capture would otherwise read it: the stale BLOB, an `Alert` or `Idle` exposure, a disconnect or removal, or disposing the capturer ends the quarantine.
+
+A frame not auto-saved is published as `capturesDir/<camera name>.fit` (or `.xisf`). With `autoSave`, the frame is named after the local time it was commanded (`YYYYMMDD.HHmmssSSS`) and written into `savePath` (or `capturesDir` when it is not a directory) under the subfolder `autoSubFolderName(time, mode, timezoneOffset?)` gives: the local date for `midnight`, the local date 12 hours earlier for `noon`, so a whole night stays in the folder of the evening it began, and none for `off`. A caller that already chose the destination passes an absolute `outputPath` and an `outputName` that is a single file name (see [Portable Path Segments](#portable-path-segments)); that name is refused for more than one frame or when the file exists, and `publishPath` publishes the frame under another name, such as the final name of a temporary file. `watch(camera, { updated })` routes the updates of a camera exposed outside any capture, such as a guide camera, to one watcher and returns its remover.
+
+```ts
+import { tmpdir } from 'os'
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { CameraManager } from 'nebulosa/src/devices/indi/manager/camera'
+import { CameraSimulator } from 'nebulosa/src/devices/indi/simulator/camera'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { DeviceLifecycle } from 'nebulosa/src/devices/orchestration/device.lifecycle'
+import { OperationCoordinator } from 'nebulosa/src/devices/orchestration/operation'
+import { ResourceArbiter, resourceKey } from 'nebulosa/src/devices/orchestration/resource'
+import { autoSubFolderName, CameraCapturer } from 'nebulosa/src/devices/runners/camera.capture'
+import { type CameraCaptureStart, DEFAULT_CAMERA_CAPTURE_START } from 'nebulosa/src/devices/runners/camera.capture.types'
+
+const cameraManager = new CameraManager()
+const arbiter = new ResourceArbiter()
+const coordinator = new OperationCoordinator(arbiter)
+const lifecycle = new DeviceLifecycle(arbiter, coordinator)
+lifecycle.observe(cameraManager)
+
+// Decoded frames by the path they are published under.
+const frames = new Map<string, Buffer>()
+using capturer = new CameraCapturer(cameraManager, arbiter, { capturesDir: tmpdir(), publish: (frame, path) => frames.set(path, frame) })
+
+const client = new ClientSimulator('Client Simulator', new IndiClientHandlerSet([cameraManager]))
+const simulator = new CameraSimulator('Camera Simulator', client)
+const camera = cameraManager.get(client, 'Camera Simulator')!
+cameraManager.connect(camera)
+while (arbiter.availability(resourceKey(camera)) !== 'available') await Bun.sleep(10)
+
+// Two 100 ms frames, 0.5 s apart.
+const request: CameraCaptureStart = { ...structuredClone(DEFAULT_CAMERA_CAPTURE_START), exposureTime: 100, exposureTimeUnit: 'millisecond', exposureMode: 'fixed', count: 2, delay: 0.5 }
+
+const capture = capturer.start(coordinator, camera, request, {
+	listener: (event, path) => {
+		if (path !== undefined) console.log(event.generation, path) // 1 <tmpdir>/Camera Simulator.fit, then 2 …
+		else if (event.state === 'idle') console.log(event.elapsedCount, event.totalProgress.progress, event.stopped) // 2 100 false
+	},
+})
+
+console.log(await capture.started) // { ok: true, value: undefined } — the first exposure is Busy
+const result = await capture.result
+console.log(result.ok && result.value.frameCount, frames.size) // 2 1 — both frames share the automatic path
+
+// A loop runs until cancelled; the simulator aborts the exposure to Idle, so the camera is free at once.
+const loop = capturer.start(coordinator, camera, { ...request, exposureMode: 'loop' })
+await loop.started
+await loop.cancel()
+console.log(await loop.result, arbiter.availability(resourceKey(camera))) // { ok: false, reason: 'aborted' } 'available'
+
+console.log(await capturer.start(coordinator, camera, { ...request, exposureTime: 0 }).result) // { ok: false, reason: 'commandFailed', error: 'exposure time must be positive and finite' }
+
+// 02:00 UTC on 2026-10-10 at offset 0 min belongs to the night of October 9.
+console.log(autoSubFolderName(Date.UTC(2026, 9, 10, 2), 'noon', 0)) // '2026-10-09'
+console.log(autoSubFolderName(Date.UTC(2026, 9, 10, 2), 'midnight', 0)) // '2026-10-10'
+
+lifecycle.dispose()
+simulator.dispose()
+```
+
+### Device Command Waiting
+
+A device command usually completes long after it is sent: the driver accepts a move and later reports the motor stopped at the target, or reports `Alert`. Waiting for that confirmation has three traps: the confirming update can arrive before the command call returns, the wait must stop on cancellation and on timeout, and a failed wait must stop the hardware before the caller releases it. `waitForDeviceState` handles all three and returns an `OperationResult` instead of throwing.
+
+`waitForDeviceState(options)` installs `subscribe(listener)` first (it must return an unsubscriber), then calls `command(signal)`. Every update goes through `evaluate(update)`, which answers `'pending'`, `'success'` or an `OperationFailureReason`. A decisive verdict that arrives before `command` returns is held until it does, after which `current()` is evaluated once in case the state was already reached. The wait settles on the first decisive verdict, after `timeout` milliseconds (`'timeout'`), when `signal` aborts (its reason mapped by `abortReason`), or when `command` throws (`'commandFailed'`). An `evaluate` that throws gives `'unexpectedState'`. Every non-successful outcome of a dispatched command aborts the command's own signal, waits up to `commandAbortTimeout` milliseconds (1000 by default) for `command` to return, and runs the optional physical `abort()` before settling, so a failed or cancelled move is stopped before the caller can release the device. A subscription that throws settles at once, without `abort`, since nothing was dispatched. The listener and the timer are always removed.
+
+`abortableDelay(ms, signal)` sleeps for `ms` milliseconds and resolves `successfulOperationResult(undefined)`, or the failure mapped from the signal reason when it aborts first, clearing its timer. `abortReason(signal)` returns the signal's reason when it is an `OperationFailureReason`, and `'aborted'` otherwise. `settlesWithin(promise, ms)` reports whether a promise settles, fulfilled or rejected, within `ms` milliseconds, without cancelling it. `settleWithSignal(promise, signal?)` is the throwing counterpart for plain promises: it settles like `promise` unless `signal` aborts first, then rejects with the signal reason when it is an `Error`, or with an `AbortError` `DOMException` whose `cause` is the reason (such as `'timeout'`) otherwise. The promise is observed but never cancelled, so a later rejection is swallowed; a non-`Error` rejection becomes an `Error` whose `cause` is the rejected value. Without a signal the promise is returned as is.
+
+The reasons are `busy` (a resource was refused at start), `aborted` (cancelled by the caller), `disconnected` and `removed` (a held device went away), `timeout`, `alert` (the driver reported `Alert`), `commandFailed` (a command, executor or cleanup threw) and `unexpectedState`. `failedOperationResult(reason, error?)` and `successfulOperationResult(value)` build the two variants of `OperationResult`. A failure omits `error` entirely when there is no detail. These waits are the building block of the [Device Commanders](#device-commanders) and usually run inside the signal of a [Device Operations](#device-operations) context.
+
+```ts
+import { abortableDelay, abortReason, settleWithSignal, settlesWithin, waitForDeviceState } from 'nebulosa/src/devices/orchestration/operation.wait'
+
+// A toy device whose position reaches 100 steps 50 ms after the command.
+const listeners = new Set<(position: number) => void>()
+let position = 0
+
+const options = {
+	signal: new AbortController().signal,
+	timeout: 1000, // ms
+	subscribe: (listener: (position: number) => void) => {
+		listeners.add(listener)
+		return () => void listeners.delete(listener)
+	},
+	current: () => position,
+	evaluate: (value: number): 'success' | 'pending' => (value === 100 ? 'success' : 'pending'),
+	command: () => {
+		setTimeout(() => {
+			position = 100
+			for (const listener of listeners) listener(position)
+		}, 50)
+	},
+	abort: () => console.log('halt'), // runs on every non-successful outcome
+}
+
+console.log(await waitForDeviceState(options)) // { ok: true, value: 100 }
+
+// The target is never reached: the physical abort runs, then the timeout settles.
+position = 0
+console.log(await waitForDeviceState({ ...options, timeout: 20, command: () => {} })) // logs 'halt', then { ok: false, reason: 'timeout' }
+
+const controller = new AbortController()
+const delayed = abortableDelay(10000, controller.signal)
+controller.abort('disconnected')
+console.log(await delayed, abortReason(controller.signal)) // { ok: false, reason: 'disconnected' } 'disconnected'
+
+console.log(await settlesWithin(Bun.sleep(5), 100)) // true
+console.log(await settlesWithin(new Promise(() => {}), 10)) // false
+
+const capture = new AbortController()
+const exposure = settleWithSignal(new Promise<never>(() => {}), capture.signal)
+capture.abort('timeout')
+console.log(await exposure.catch((e: DOMException) => [e.name, e.cause])) // ['AbortError', 'timeout']
+```
+
+### Device Commanders
+
+The INDI managers send a command and return at once: `FocuserManager.moveTo` only writes the target, and the model changes later when the driver reports it. Commanders are the operation-aware layer above them. Each one wraps one manager and turns every command into a [Device Operations](#device-operations) step: it acquires the device, checks the capability and connection, sends the command, waits until the driver reports the expected state (see [Device Command Waiting](#device-command-waiting)), and resolves an `OperationResult` without throwing.
+
+Every command takes an `OperationScope` first. Passing the `OperationCoordinator` runs the command as its own operation tree. Passing an `OperationContext` nests it in a larger feature that already holds the device, so it reacquires reentrantly, and passing a [Device Reservations](#device-reservations) scope runs it inside the session's reservation. A device that is moving, leased elsewhere, or not yet verified by the [Device Availability Lifecycle](#device-availability-lifecycle) is refused as `busy`. A disconnected device fails as `disconnected`, an `Alert` on the commanded vector as `alert` (also when the driver refuses the command by republishing the unchanged value in Alert, since the managers report that Alert too), a command that throws as `commandFailed`, and a missing capability, a target the driver does not echo, or a motion that stops elsewhere as `unexpectedState`. The options are milliseconds: `timeout` bounds the wait for the commanded state, and `settleTimeout` bounds the physical stop. When a motion fails, times out, or its operation is cancelled (for example through `coordinator.cancelByDevice(key)` or a disconnect), the commander stops the device and waits for it to settle before the lease is released; a motion that completed sends nothing more. The cover, the dome, the mount `goTo` and the rotator `moveTo` send no command at all when the device already stands at the requested position or state, so a driver that would start a short motion anyway is never left moving after the lease is released. `stopMotion` (and `stopPulse` and `stopPulses`) is the emergency stop: it takes no scope and acquires nothing, so it also reaches a device that is moving under another owner.
+
+| Commander              | Commands                                                                                                                                                                                                                                          | Units and notes                                                                                                                                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CameraCommander`      | `cooler`, `temperature`                                                                                                                                                                                                                           | °C setpoint; does not wait for the sensor to reach it; exposures belong to [Device Camera Capture](#device-camera-capture)                                                       |
+| `CoverCommander`       | `park` (close), `unpark` (open), `stopMotion`                                                                                                                                                                                                     | default move timeout 60 s                                                                                                                                                        |
+| `DewHeaterCommander`   | `dutyCycle`                                                                                                                                                                                                                                       | PWM level clamped to the device range; no wait                                                                                                                                   |
+| `DomeCommander`        | `moveTo`, `moveToAltitude`, `moveBy`, `move`, `startManualMove`, `manualMove`, `manualMoveOf`, `syncTo`, `home`, `park`, `unpark`, `setPark`, `openShutter`, `closeShutter`, `slave`, `setSpeed`, `setBacklash`, `setBacklashSteps`, `stopMotion` | radians clamped by `domeAzimuth` and `domeAltitude`; `arrivalTolerance` (2°) in radians; speed in driver RPM; backlash in steps; default move timeout 120 s                      |
+| `FlatPanelCommander`   | `enable`, `disable`, `toggle`, `intensity`                                                                                                                                                                                                        | intensity clamped to the device range; no wait                                                                                                                                   |
+| `FocuserCommander`     | `moveTo`, `moveIn`, `moveOut`, `syncTo`, `reverse`, `stopMotion`                                                                                                                                                                                  | steps clamped by `focuserPosition`; inward decreases the position, also while `reverse` inverts the motor; default move timeout 30 s                                             |
+| `GuideOutputCommander` | `pulse`, `pulseAxes`, `setGuideRate`, `stopPulse`, `stopPulses`                                                                                                                                                                                   | durations in ms; `pulseAxes` takes `GuidePulse[]` on perpendicular axes; a stop waits until the longest pulse sent is due to end, then up to `settleTimeout`                     |
+| `MountCommander`       | `goTo`, `flip`, `sync`, `setTracking`, `park`, `unpark`, `home`, `findHome`, `setHome`, `setPark`, `setTrackMode`, `setSlewRate`, `setGeographicCoordinate`, `setTime`, `startManualMove`, `manualMove`, `manualMoveOf`, `stopMotion`             | targets in any `MountTargetCoordinate` frame, see [INDI Mount Control](#indi-mount-control); `tolerance` (1′) and `arrivalTolerance` (1°) in radians; default slew timeout 600 s |
+| `RotatorCommander`     | `moveTo`, `home`, `syncTo`, `reverse`, `stopMotion`                                                                                                                                                                                               | degrees resolved by `rotatorAngle` against the driver limits; `arrivalTolerance` (1°) in degrees; default move timeout 120 s                                                     |
+| `WheelCommander`       | `moveTo`, `setNames`                                                                                                                                                                                                                              | slots clamped by `wheelSlot`; a wheel cannot be aborted, so a move is only waited for; default timeout 30 s                                                                      |
+
+`MountCommander.goTo` resolves `MountSlewResult` (where the mount stopped) and `flip` resolves `MountFlipResult`, which adds `pierSideVerified`, false when the driver gives no evidence that the side changed. `startManualMove` returns a `ManualMoveHandle` (`DomeManualMoveHandle` for the dome) that holds the device until `stop()` or until the last direction is disabled with `move(direction, false)`; a start while the previous motion is still stopping waits for it to release the device and then opens a new motion. A guide pulse cannot always be cut short: the stop sends a zero duration, which the standard INDI guider interface and the Alpaca bridge ignore, so a cancelled pulse keeps the device until it has ended. The arrival tolerances of the dome, mount and rotator only catch a motion that stopped somewhere else; a device stopping at the encoder step nearest the target is accepted. The commanders that wait on device events (cover, dome, focuser, guide output, mount, rotator and wheel) register themselves as handlers of their manager in the constructor and are `Disposable`: `dispose()` (or `[Symbol.dispose]()` through `using`) unregisters the commander and can be called more than once. Dispose a commander only after the operations that use it have settled, since a wait still pending, or started later, no longer sees device events and ends only by its timeout or its signal; disposal neither cancels operations nor stops devices. The other commanders hold no registration and need no disposal.
+
+```ts
+import { FocuserCommander } from 'nebulosa/src/devices/commanders/focuser'
+import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
+import { FocuserManager } from 'nebulosa/src/devices/indi/manager/focuser'
+import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
+import { FocuserSimulator } from 'nebulosa/src/devices/indi/simulator/focuser'
+import { DeviceLifecycle } from 'nebulosa/src/devices/orchestration/device.lifecycle'
+import { OperationCoordinator, successfulOperationResult } from 'nebulosa/src/devices/orchestration/operation'
+import { ResourceArbiter, resourceKey } from 'nebulosa/src/devices/orchestration/resource'
+
+const focuserManager = new FocuserManager()
+const arbiter = new ResourceArbiter()
+const coordinator = new OperationCoordinator(arbiter)
+const lifecycle = new DeviceLifecycle(arbiter, coordinator)
+lifecycle.observe(focuserManager)
+using focuserCommander = new FocuserCommander(focuserManager)
+
+const client = new ClientSimulator('Client Simulator', new IndiClientHandlerSet([focuserManager]))
+const simulator = new FocuserSimulator('Focuser Simulator', client)
+const focuser = focuserManager.get(client, 'Focuser Simulator')!
+const key = resourceKey(focuser)
+focuserManager.connect(focuser)
+
+// A top-level command: resolves only after the focuser stopped at the target, in steps.
+console.log(await focuserCommander.moveTo(coordinator, focuser, 1000)) // { ok: true, value: undefined }
+console.log(focuser.position.value, focuser.moving) // 1000 false
+
+// Composed: the feature holds the focuser and each step reacquires it reentrantly.
+const scan = coordinator.start('focusScan', [{ key, device: focuser }], async (context) => {
+	for (const position of [1100, 1200]) {
+		const moved = await focuserCommander.moveTo(context, focuser, position)
+		if (!moved.ok) return moved
+	}
+
+	return successfulOperationResult(focuser.position.value)
+})
+
+console.log(await scan.result) // { ok: true, value: 1200 }
+
+// Cancelling the owner stops the motor before the result settles.
+const move = focuserCommander.moveTo(coordinator, focuser, 50000)
+while (!focuser.moving) await Bun.sleep(10)
+await coordinator.cancelByDevice(key)
+console.log(await move, focuser.moving) // { ok: false, reason: 'aborted' } false
+
+// The emergency stop needs no scope; on a focuser at rest it resolves immediately.
+console.log(await focuserCommander.stopMotion(focuser)) // { ok: true, value: undefined }
+
+lifecycle.dispose()
+simulator.dispose()
+```
+
+### Device Operations
+
+Observatory features compose: an autofocus run moves the focuser and takes exposures, a flat wizard drives a panel and a camera, and either may be cancelled by the user or by a disconnect at any time. `OperationCoordinator` gives each such feature an operation tree that owns its devices for its whole duration, propagates cancellation to every nested step, undoes registered work in reverse order, and only then releases the devices. Every outcome is an `OperationResult` (see [Device Command Waiting](#device-command-waiting) for the reasons), so callers never handle rejections.
+
+`new OperationCoordinator(arbiter)` wraps a [Device Resource Arbitration](#device-resource-arbitration) arbiter. `start(kind, resources, executor)` acquires every requested resource atomically and runs `executor(context)`, or returns a handle whose result is `busy` at once, with the conflicts in `error`, without waiting or queueing. The `OperationHandle` has `id`, `kind`, `signal` (aborted synchronously when cancellation begins), `result` (resolved only after cleanup and release, never rejected) and `cancel(reason = 'aborted')`, which is idempotent and resolves when cleanup has finished. A cancelled operation reports the cancellation reason even when its executor returns a different value, keeping the executor's error detail.
+
+The `OperationContext` passed to the executor has `id`, `kind`, `signal` and:
+
+- `start(kind, resources, executor)`, which opens a nested scope in the same tree. Resources held by an ancestor are reacquired reentrantly, but a sibling scope holding a resource conflicts as `busy`, so two parallel steps cannot command one device. A scope cannot be opened once its parent is cancelled or finishing.
+- `owns(key)`, which reports whether this scope or an ancestor holds the resource.
+- `onCleanup(cleanup)`, which registers a possibly asynchronous cleanup and returns an unregister function. Cleanups run once in LIFO order after the nested scopes have finished, whatever the outcome.
+
+An executor that throws is reported as `commandFailed` with the error message (and logged with `console.error`). A cleanup that throws turns a success into `commandFailed` and appends `cleanup failed: …` to an existing failure, because the device may not be quiescent. `get(id)` returns a live handle and `undefined` once it completed. `cancel(id)`, `cancelByResource(key)`, `cancelByDevice(key)` (every owner of a physical device, including logical resources standing for it), `cancelByClient(clientId)` and `cancelAll()` cancel and await cleanup. Services should take an `OperationScope` (anything with `start`): the coordinator, a context and a [Device Reservations](#device-reservations) scope all qualify, so a service runs identically at top level or composed.
+
+```ts
+import { failedOperationResult, OperationCoordinator, successfulOperationResult, type OperationContext, type OperationResult } from 'nebulosa/src/devices/orchestration/operation'
+import { ResourceArbiter } from 'nebulosa/src/devices/orchestration/resource'
+
+const coordinator = new OperationCoordinator(new ResourceArbiter())
+
+const autoFocus = coordinator.start('autoFocus', [{ key: 'camera' }, { key: 'focuser' }], async (context) => {
+	context.onCleanup(() => console.log('restore focuser'))
+	context.onCleanup(() => console.log('stop exposure')) // runs first
+
+	// A nested scope reacquires the focuser its root already holds.
+	const move = context.start('focuserMove', [{ key: 'focuser' }], (child) => {
+		console.log(child.owns('focuser'), child.owns('camera')) // true true
+		return successfulOperationResult(1200)
+	})
+
+	const moved = await move.result
+	return moved.ok ? successfulOperationResult(moved.value) : moved
+})
+
+console.log(coordinator.get(autoFocus.id) === autoFocus) // true
+console.log(await autoFocus.result) // logs both cleanups, then { ok: true, value: 1200 }
+
+// An executor that stops on cancellation.
+const waitForAbort = (context: OperationContext) => new Promise<OperationResult<void>>((resolve) => context.signal.addEventListener('abort', () => resolve(failedOperationResult('aborted', 'exposure aborted')), { once: true }))
+
+const capture = coordinator.start('capture', [{ key: 'camera' }], waitForAbort)
+console.log(await coordinator.start('capture', [{ key: 'camera' }], waitForAbort).result) // { ok: false, reason: 'busy', error: 'camera is owned by capture <id>' }
+
+await capture.cancel('timeout')
+console.log(await capture.result) // { ok: false, reason: 'timeout', error: 'exposure aborted' }
+
+console.log(
+	await coordinator.start('crash', [], () => {
+		throw new Error('driver crashed')
+	}).result,
+) // { ok: false, reason: 'commandFailed', error: 'driver crashed' }
+```
+
+### Device Reservations
+
+A lease lasts as long as one operation tree, but a session such as an imaging sequence needs its mount and camera for hours, across many operations and pauses, without a manual command slipping in between two of them. A reservation is that durable ownership. It is held by a `ResourceReservationOwner` (`{ id, kind }`), it is not itself an operation, and only operations started with its token may acquire the resources it covers.
+
+`arbiter.reserve(owner, requests)` reserves every resource or none, and returns `{ ok: true, reservation }` or the conflicts. Reserving again for the same owner extends the same reservation. A lease held by another tree, or another owner's reservation, refuses it, while an unavailable device can be reserved but stays unacquirable until it becomes available. `reservation.resources` lists the reserved keys, `reservation.token` is the credential and `reservation.release()` frees them. `availability(key)` reports `'reserved'` and `reservationOwnerOf(key)` the owner. The token is matched by object identity and must never be serialized. A token whose reservation was released refuses every acquisition rather than degrading to an ordinary one.
+
+`coordinator.reservedScope(reservation)` returns an `OperationScope` whose trees acquire under the token, and `tokenScope(token)` does the same from the token alone, for a service that keeps a root operation of its own, such as a guiding session opened on behalf of the sequence. Nested scopes inherit the token. `drainByReservationOwner(owner, reason?, preserve?)` cancels every tree of the reservation and awaits their cleanup, then leaves the reservation open for the work that follows, as in a pause or before a terminal shutdown sequence. `preserve` names one root operation id to leave running. `cancelByReservationOwner(owner, reason?)` does the same but closes the reservation for good: later starts under it fail as `aborted` with `reservation has been cancelled`, so it is the call to make before `release()`. Both close the reservation to new trees during the drain, so no tree can start behind it. Running trees are explained in [Device Operations](#device-operations) and keys and conflicts in [Device Resource Arbitration](#device-resource-arbitration).
+
+```ts
+import { failedOperationResult, OperationCoordinator, successfulOperationResult, type OperationResult } from 'nebulosa/src/devices/orchestration/operation'
+import { ResourceArbiter } from 'nebulosa/src/devices/orchestration/resource'
+
+const arbiter = new ResourceArbiter()
+const coordinator = new OperationCoordinator(arbiter)
+const session = { id: 'sequence-1', kind: 'sequencer' }
+
+const reserved = arbiter.reserve(session, [{ key: 'mount' }, { key: 'camera' }])
+if (!reserved.ok) throw new Error('devices in use')
+const { reservation } = reserved
+
+console.log(reservation.resources, arbiter.availability('mount')) // ['camera', 'mount'] 'reserved'
+
+// Outside the reservation, a manual slew is refused.
+console.log(await coordinator.start('slew', [{ key: 'mount' }], () => successfulOperationResult(undefined)).result) // { ok: false, reason: 'busy', error: 'mount is reserved by sequencer sequence-1' }
+
+// Inside it, the session's own operations acquire normally.
+const scope = coordinator.reservedScope(reservation)
+console.log(await scope.start('slew', [{ key: 'mount' }], () => successfulOperationResult('slewed')).result) // { ok: true, value: 'slewed' }
+
+// Pause: cancel the running capture but keep the reservation usable.
+const capture = scope.start('capture', [{ key: 'camera' }], (context) => new Promise<OperationResult<void>>((resolve) => context.signal.addEventListener('abort', () => resolve(failedOperationResult('aborted')), { once: true })))
+await coordinator.drainByReservationOwner(session)
+console.log(await capture.result) // { ok: false, reason: 'aborted' }
+console.log((await scope.start('capture', [{ key: 'camera' }], () => successfulOperationResult(1)).result).ok) // true
+
+// Stop: close the reservation for good, then release the devices.
+await coordinator.cancelByReservationOwner(session)
+console.log(await scope.start('capture', [{ key: 'camera' }], () => successfulOperationResult(1)).result) // { ok: false, reason: 'aborted', error: 'reservation has been cancelled' }
+reservation.release()
+console.log(arbiter.availability('mount')) // 'available'
+```
+
+### Device Resource Arbitration
+
+Two features must not command the same hardware at once: a filter that turns during an exposure ruins the frame, and a focus move during an exposure trails every star. `ResourceArbiter` is the single authority that decides who may use what. It grants leases atomically and without waiting: a request either gets every resource or none, and a conflict is reported immediately instead of being queued or preempting the holder. Most code reaches it through [Device Operations](#device-operations), which acquire and release leases around each operation tree.
+
+A resource is identified by a string key. `resourceKey(device)` is the device's `hardwareId`, an MD5 digest of client and name that every INDI interface of one physical device shares, so a camera and its integrated wheel, a focuser and the rotator of a combined unit, or a cover and the flat panel of a flip-flat are one resource. Two interfaces of one device therefore cannot be commanded from independent trees. `resourceDevice(device)` returns the physical parent of a subdevice proxy. Resources with no device behind them, such as a remote guiding session, use a `logical:` key prefix. A `ResourceRequest` is `{ key, device? }`: the device associates the key with the physical device and its client, seeds it as unavailable when disconnected, and lets device- and client-wide queries find it.
+
+`acquire(owner, requests, token?)` deduplicates and sorts the keys and returns `{ ok: true, lease }` or `{ ok: false, conflicts }`. The owner is an `{ id, kind }` object compared by identity, and the same owner may acquire a key again reentrantly. `lease.resources` lists the keys and `lease.release()` releases only that acquisition depth, idempotently. Each `ResourceConflict` has `key`, `by` (`'lease'`, `'reservation'` or `'unavailable'`), the blocking `ownerId` and `ownerKind`, and the active `causes`. `availability(key)` is `'unavailable'`, `'leased'`, `'reserved'` or `'available'`, in that precedence, and unknown keys are available. Unavailability has independent causes: `lifecycle` (connectivity and quiescence, maintained by [Device Availability Lifecycle](#device-availability-lifecycle)) and `quarantine` (a pending driver payload that must be discarded first). `markUnavailable(request, cause = 'lifecycle')` and `markAvailable(request, cause)` set and clear one cause without disturbing the others or the current owner. `markDeviceUnavailable(key)` and `markDeviceAvailable(key)` apply `lifecycle` to every record associated with a physical device, and `markClientUnavailable(clientId)` and `markClientAvailable(clientId)` block a whole client. `snapshot(key)` returns the read-only state, `owns(owner, key)`, `ownersOf(key)`, `ownersOfDevice(key)`, `ownersOfClient(clientId)` and `resourcesOf(owner)` answer ownership queries, and `disassociate(key, device)` forgets a removed device's association. Durable ownership across operations is covered by [Device Reservations](#device-reservations).
+
+```ts
+import { ResourceArbiter } from 'nebulosa/src/devices/orchestration/resource'
+
+const arbiter = new ResourceArbiter()
+const capture = { id: 'capture-1', kind: 'capture' }
+const focus = { id: 'focus-1', kind: 'autoFocus' }
+
+// Physical keys normally come from resourceKey(device) and carry the device: { key, device }.
+const camera = 'camera-hardware-id'
+const guider = 'logical:guider:local'
+
+const acquired = arbiter.acquire(capture, [{ key: guider }, { key: camera }, { key: camera }])
+if (!acquired.ok) throw new Error('busy')
+
+console.log(acquired.lease.resources) // ['camera-hardware-id', 'logical:guider:local'] — sorted, deduplicated
+console.log(arbiter.availability(camera)) // 'leased'
+
+// All or nothing: the free focuser is not taken because the camera is refused.
+const refused = arbiter.acquire(focus, [{ key: camera }, { key: 'focuser-hardware-id' }])
+console.log(refused.ok ? [] : refused.conflicts) // [{ key: 'camera-hardware-id', by: 'lease', ownerId: 'capture-1', ownerKind: 'capture', causes: [] }]
+console.log(arbiter.availability('focuser-hardware-id')) // 'available'
+
+// The same owner reacquires reentrantly; releasing the inner lease keeps the outer one.
+const nested = arbiter.acquire(capture, [{ key: camera }])
+if (nested.ok) nested.lease.release()
+console.log(arbiter.owns(capture, camera), arbiter.resourcesOf(capture)) // true ['camera-hardware-id', 'logical:guider:local']
+
+acquired.lease.release()
+console.log(arbiter.availability(camera)) // 'available'
+
+// Causes are independent: clearing quarantine leaves lifecycle in place.
+arbiter.markUnavailable(camera, 'quarantine')
+arbiter.markUnavailable(camera)
+arbiter.markAvailable(camera, 'quarantine')
+console.log(arbiter.snapshot(camera).causes) // ['lifecycle']
+
+const blocked = arbiter.acquire(focus, [{ key: camera }])
+console.log(blocked.ok ? [] : blocked.conflicts) // [{ key: 'camera-hardware-id', by: 'unavailable', ownerId: 'resource-arbiter', ownerKind: 'unavailable', causes: ['lifecycle'] }]
+```
+
 ### Firmata Accelerometer
 
 `MPU6050` drives the InvenSense MPU-6050 six-axis IMU over I2C and implements both `Accelerometer` (`ax`, `ay`, `az` in m/s²) and `Gyroscope` (`gx`, `gy`, `gz` in rad/s). The constructor takes the `client`, the I2C `address` (`MPU6050.ADDRESS` 0x68 by default, `ALTERNATIVE_ADDRESS` 0x69 when AD0 is high), the `pollingInterval` in milliseconds (`DEFAULT_POLLING_INTERVAL`, never below 10) and `MPU6050Options` with the full-scale ranges (`accelerometerRange` 2, 4, 8 or 16 g, default 2; `gyroscopeRange` 250, 500, 1000 or 2000 °/s, default 250; `DEFAULT_MPU6050_OPTIONS`). `start()` registers the handler, sets the read delay to zero, wakes the chip (power-management register), writes the two range registers, requests the first 14-byte burst (accelerometer, temperature and gyroscope registers from 0x3B) and repeats the request on a timer; `stop()` cancels the timer and detaches. Each burst reply is decoded (big-endian signed 16-bit counts per axis; the temperature word is skipped) and converted with the scale of the configured range: `G` divided by the counts per g (16384, 8192, 4096, 2048) for the acceleration, and 131, 65.5, 32.8 or 16.4 counts per degree per second for the gyroscope. Listeners are notified when any axis changed (see [Firmata Peripheral Base](#firmata-peripheral-base)), and `calculateAcceleration(raw)` and `calculateAngularVelocity(raw)` expose the conversions. The values are in the sensor frame: no gravity removal, offset calibration or filtering is applied, and the gyroscope offset of an individual chip is not corrected.
@@ -16994,7 +17387,7 @@ heaters.dutyCycle(cover, 25)
 
 ### INDI Dome and Roof
 
-`DomeManager` builds a `Dome` device from the INDI Dome interface and reflects its vectors onto the shared model, which also serves the roll-off roof and the ASCOM dome of the Alpaca backend. Positions are radians in the model (the driver uses degrees) and the speed is in RPM. The state has `slewing`, `moving`, `homing`, `atHome`, `parking`, `parked`, `direction` (`'CLOCKWISE'` or `'COUNTER_CLOCKWISE'` while the continuous motion runs), the capability flags (`canSetAzimuth`, `canSetAltitude`, `canSync`, `canPark`, `canHome`, `canAbort` and the like), `hasShutter` with `shutterState` (`'OPEN'`, `'OPENING'`, `'CLOSED'`, `'CLOSING'`, `'ERROR'` or `'UNKNOWN'`), `slaved`, the `MinMaxValueProperty` objects `azimuth`, `altitude`, `speed`, `homePosition`, `parkPosition` and `autoSyncThreshold`, the backlash settings (`backlashEnabled` and `backlash`, a property in steps) and, when the driver publishes `DOME_MEASUREMENTS`, `hasMeasurements` with `measurements` (`radius`, `shutterWidth`, `northDisplacement`, `eastDisplacement`, `upDisplacement` and `otaOffset` in metres, plus `otaSide`).
+`DomeManager` builds a `Dome` device from the INDI Dome interface and reflects its vectors onto the shared model, which also serves the roll-off roof and the ASCOM dome of the Alpaca backend. Positions are radians in the model (the driver uses degrees) and the speed is in RPM. The state has `slewing` (true while any part of the dome moves, like the ASCOM `Slewing`: azimuth or altitude motion, homing, parking or the shutter opening or closing), `moving` (azimuth or altitude motion), `homing`, `atHome`, `parking`, `parked`, `direction` (`'CLOCKWISE'` or `'COUNTER_CLOCKWISE'` while the continuous motion runs), the capability flags (`canSetAzimuth`, `canSetAltitude`, `canSync`, `canPark`, `canHome`, `canAbort` and the like), `hasShutter` with `shutterState` (`'OPEN'`, `'OPENING'`, `'CLOSED'`, `'CLOSING'`, `'ERROR'` or `'UNKNOWN'`), `slaved`, the `MinMaxValueProperty` objects `azimuth`, `altitude`, `speed`, `homePosition`, `parkPosition` and `autoSyncThreshold`, the backlash settings (`backlashEnabled` and `backlash`, a property in steps) and, when the driver publishes `DOME_MEASUREMENTS`, `hasMeasurements` with `measurements` (`radius`, `shutterWidth`, `northDisplacement`, `eastDisplacement`, `upDisplacement` and `otaOffset` in metres, plus `otaSide`).
 
 Every command is ignored when the driver does not have the matching capability, and the motion commands are also ignored while the dome is slaved to a mount. The commands are `moveTo(dome, azimuth)` and `moveToAltitude(dome, altitude)` (absolute, radians), `moveBy(dome, delta)` (signed relative, radians), `move(dome, direction, enabled)` (continuous motion), `speed(dome, rpm)`, `syncTo(dome, azimuth)` (reports a position without moving), `home`, `park`, `unpark`, `setPark` (the current azimuth becomes the park position), `openShutter`, `closeShutter`, `slave(dome, enabled)` (autosync with the active mount, which needs a driver with `DOME_AUTOSYNC`), `stop`, `backlash(dome, enabled)` and `backlashSteps(dome, steps)`. The snippet uses the dome simulator with a mount manager so that slaving is available (see [INDI Dome Simulator](#indi-dome-simulator)).
 
@@ -17077,9 +17470,9 @@ console.log(dome.parked) // false
 // The shutter is asynchronous.
 manager.openShutter(dome)
 await waitUntil(() => dome.shutterState === 'OPENING')
-console.log(dome.shutterState) // OPENING
+console.log(dome.shutterState, dome.slewing) // OPENING true
 await waitUntil(() => dome.shutterState === 'OPEN')
-console.log(dome.shutterState) // OPEN
+console.log(dome.shutterState, dome.slewing) // OPEN false
 manager.closeShutter(dome)
 await waitUntil(() => dome.shutterState === 'CLOSED')
 console.log(dome.shutterState) // CLOSED
@@ -17421,14 +17814,14 @@ await waitUntil(() => focuser.moving)
 await waitUntil(() => !focuser.moving)
 console.log(focuser.position.value) // 51500
 
-// Reverse inverts the direction of the relative moves.
+// Reverse inverts the motor, not the reported position: outward still increases it.
 manager.reverse(focuser, true)
 await Bun.sleep(50)
 console.log(focuser.reversed) // true
 manager.moveOut(focuser, 500)
 await waitUntil(() => focuser.moving)
 await waitUntil(() => !focuser.moving)
-console.log(focuser.position.value) // 51000
+console.log(focuser.position.value) // 52000
 manager.reverse(focuser, false)
 await Bun.sleep(50)
 
@@ -17452,7 +17845,7 @@ console.log(focuser.connected) // false
 
 ### INDI Focuser Simulator
 
-`FocuserSimulator(name, client, options?)` simulates an absolute focuser with a position between 0 and `FOCUSER_MAX_POSITION` (100000 steps), initially `FOCUSER_INITIAL_POSITION` (50000), moving at `FOCUSER_MOVE_RATE` (20000 steps per second) in ticks of `TICK_INTERVAL_MS`. On connection it defines `ABS_FOCUS_POSITION`, `REL_FOCUS_POSITION`, `FOCUS_MOTION` (inward or outward, outward by default), `FOCUS_ABORT_MOTION`, `FOCUS_REVERSE_MOTION`, `FOCUS_SYNC`, `FOCUS_TEMPERATURE`, `FOCUS_TEMPERATURE_COMPENSATION` and the simulator-only `SIMULATOR_BACKLASH` vector. The absolute and relative vectors are Busy during a move. A target is clamped to the range, a relative move uses the selected direction (inverted when the motion is reversed) and is clamped as well, a move to the current position only stops, and a sync is applied immediately.
+`FocuserSimulator(name, client, options?)` simulates an absolute focuser with a position between 0 and `FOCUSER_MAX_POSITION` (100000 steps), initially `FOCUSER_INITIAL_POSITION` (50000), moving at `FOCUSER_MOVE_RATE` (20000 steps per second) in ticks of `TICK_INTERVAL_MS`. On connection it defines `ABS_FOCUS_POSITION`, `REL_FOCUS_POSITION`, `FOCUS_MOTION` (inward or outward, outward by default), `FOCUS_ABORT_MOTION`, `FOCUS_REVERSE_MOTION`, `FOCUS_SYNC`, `FOCUS_TEMPERATURE`, `FOCUS_TEMPERATURE_COMPENSATION` and the simulator-only `SIMULATOR_BACKLASH` vector. The absolute and relative vectors are Busy during a move. A target is clamped to the range, a relative move uses the selected direction, inward decreasing the position whether or not the motion is reversed (the reverse switch models the motor wiring, as in the INDI focuser interface), and is clamped as well, a move to the current position only stops, and a sync is applied immediately.
 
 The temperature is a sinusoid of 4 °C of amplitude and 40 s of period around the ambient temperature of the camera simulator, updated when it changes by at least 0.1 °C. With the temperature compensation enabled and no move in progress, the simulator nudges the focus by -250 steps per °C of drift (truncated to whole steps) once the temperature has moved by at least 0.05 °C since the last adjustment, which is a simple model and not a calibrated focuser.
 
@@ -17674,13 +18067,13 @@ console.log(mount.alignment.pointCount) // 0
 
 `MountManager` builds a `Mount` device from the INDI Telescope interface and reflects its vectors onto the shared model, which also serves the Alpaca telescope. The model has the capability flags (`canPark`, `canSetPark`, `canAbort`, `canSync`, `canGoTo`, `canFlip`, `canHome`, `canFindHome`, `canSetHome`, `canTracking`, `canMove`), the state (`slewing`, `moving`, `tracking`, `homing`, `parking`, `parked`), the `mountType` (`'ALTAZ'`, `'EQ_FORK'` or `'EQ_GEM'`), the `slewRates` with the selected `slewRate`, the `trackModes` with the `trackMode`, the pier side (`hasPierSide`, `canSetPierSide`, `pierSide` as `'EAST'`, `'WEST'` or `'NEITHER'`), the `equatorialCoordinate` (JNOW, radians, `rightAscension` and `declination`), the site (`geographicCoordinate` with the latitude and longitude in radians and the elevation as a distance in AU, like `meter` and `toMeter` convert, with `hasGPS`) and the UTC `time` (epoch milliseconds and the offset in minutes). As a guide output it also carries the pulse-guiding state (see [INDI Guide Output](#indi-guide-output)) and the `alignment` state belongs to [INDI Mount Alignment Subsystem](#indi-mount-alignment-subsystem).
 
-The commands send the INDI switches and numbers of the driver. `tracking(mount, enabled)`, `slewRate(mount, rate)` and the four `moveNorth`, `moveSouth`, `moveWest` and `moveEast` (`enabled` true starts the motion at the selected slew rate and false stops it) act on the mount, `trackMode(mount, mode)` selects `'SIDEREAL'`, `'SOLAR'`, `'LUNAR'`, `'KING'` or `'CUSTOM'`, and `stop`, `park`, `unpark`, `setPark`, `home`, `findHome` and `setHome` act on the matching property. Except for tracking, the slew rate and the target coordinate, a command is ignored when the driver does not advertise its capability. The targets are `goTo`, `flipTo` and `syncTo` (`rightAscension` and `declination`, radians, JNOW, sent after the `ON_COORD_SET` mode: `TRACK` is chosen over `SLEW` when the driver offers it) and `equatorialCoordinate(mount, rightAscension, declination)`, which sends only the coordinate and therefore uses the mode that was set last. `moveTo(mount, mode, request, client?, time?)` accepts a target in `'J2000'`, `'JNOW'`, `'ALTAZ'`, `'ECLIPTIC'` or `'GALACTIC'`, given as angles or as strings that the parser understands (hours for a right ascension and a longitude in sexagesimal), converts it to JNOW and dispatches `'goto'`, `'flip'` or `'sync'`. `geographicCoordinate(mount, coordinate)` and `time(mount, time)` set the site and the clock of the driver. The model follows the driver: a command does not change it until the driver reports it, and the position of the vector is republished while the mount moves, so read it after the slew has ended.
+The commands send the INDI switches and numbers of the driver. `tracking(mount, enabled)`, `slewRate(mount, rate)` and the four `moveNorth`, `moveSouth`, `moveWest` and `moveEast` (`enabled` true starts the motion at the selected slew rate and false stops it) act on the mount, `trackMode(mount, mode)` selects `'SIDEREAL'`, `'SOLAR'`, `'LUNAR'`, `'KING'` or `'CUSTOM'`, and `stop`, `park`, `unpark`, `setPark`, `home`, `findHome` and `setHome` act on the matching property. Except for tracking, the slew rate and the target coordinate, a command is ignored when the driver does not advertise its capability. The targets are `goTo`, `flipTo` and `syncTo` (`rightAscension` and `declination`, radians, JNOW, sent after the `ON_COORD_SET` mode: `TRACK` is chosen over `SLEW` when the driver offers it) and `equatorialCoordinate(mount, rightAscension, declination)`, which sends only the coordinate and therefore uses the mode that was set last. `moveTo(mount, mode, request, client?, time?)` accepts a target in `'J2000'`, `'JNOW'`, `'ALTAZ'`, `'ECLIPTIC'` or `'GALACTIC'`, given as angles or as strings that the parser understands (hours for a right ascension and a longitude in sexagesimal), converts it to JNOW and dispatches `'goto'`, `'flip'` or `'sync'`. The conversion is `mountTargetEquatorial(mount, request, time?)`, for callers that need the JNOW coordinate without commanding the mount: it returns a fresh `[rightAscension, declination]` in radians with the right ascension in `[0, 2π)`, precesses J2000 and galactic targets to `time` (the current instant when omitted), uses the true obliquity of that date for ecliptic targets and resolves ALTAZ targets at the mount's reported site with the default refraction. `geographicCoordinate(mount, coordinate)` and `time(mount, time)` set the site and the clock of the driver. The model follows the driver: a command does not change it until the driver reports it, and the position of the vector is republished while the mount moves, so read it after the slew has ended.
 
 The snippet uses the mount simulator with the fastest slew rate selected (see [INDI Mount Simulator](#indi-mount-simulator)).
 
 ```ts
 import { IndiClientHandlerSet } from 'nebulosa/src/devices/indi/client'
-import { MountManager } from 'nebulosa/src/devices/indi/manager/mount'
+import { MountManager, mountTargetEquatorial } from 'nebulosa/src/devices/indi/manager/mount'
 import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
 import { MountSimulator } from 'nebulosa/src/devices/indi/simulator/mount'
 import { deg, hour, toDeg, toHour } from 'nebulosa/src/math/units/angle'
@@ -17740,7 +18133,11 @@ await waitUntil(() => mount.slewing)
 await waitUntil(() => !mount.slewing)
 console.log(toHour(mount.equatorialCoordinate.rightAscension), toDeg(mount.equatorialCoordinate.declination)) // 3.6 26
 
-// A J2000 target given as text is converted to JNOW. Abort the slew on its way.
+// A J2000 target given as text is converted to JNOW, here without commanding the mount.
+const [targetRightAscension, targetDeclination] = mountTargetEquatorial(mount, { type: 'J2000', J2000: { x: '05 35 17', y: '-05 23 28' } })
+console.log(toHour(targetRightAscension), toDeg(targetDeclination)) // ≈ 5.610 -5.373 in 2026 — hours and degrees of date
+
+// moveTo applies the same conversion and slews. Abort the slew on its way.
 manager.moveTo(mount, 'goto', { type: 'J2000', J2000: { x: '05 35 17', y: '-05 23 28' } })
 await waitUntil(() => mount.slewing)
 manager.stop(mount)
@@ -20022,6 +20419,23 @@ console.log(grayDecoded.format, grayDecoded.data.byteLength) // GRAY 2048
 
 // isJpeg accepts any buffer.
 console.log(isJpeg(Buffer.from('not a jpeg')), isJpeg(new Uint8Array([0xff, 0xd8, 0xff]).buffer)) // false true
+```
+
+### Portable Path Segments
+
+A file name that arrives from outside the process, such as the output name of a capture request, must address exactly one file in the directory the caller named. `isPathSegment(name)` accepts a name only when it is a single portable file name on every common platform, because a request may be written on one operating system and executed on another. It rejects the empty name, `.` and `..`, both separators `/` and `\`, C0 control characters and DEL, the characters Windows forbids (`< > : " | ? *`, where `:` would also open an NTFS alternate data stream), a trailing space or dot (which Windows strips, aliasing another file), the Windows device names `CON`, `PRN`, `AUX`, `NUL`, `COM0`–`COM9` and `LPT0`–`LPT9` (and their superscript-digit variants) in any case and with any extension, and names longer than 255 UTF-8 bytes. Names are not normalized.
+
+`directoryExists(path)` resolves whether `path` is an existing directory, following symbolic links and resolving a relative path against the working directory. A missing path, a regular file, or a path that cannot be inspected resolves `false`; it never rejects.
+
+```ts
+import { tmpdir } from 'os'
+import { directoryExists, isPathSegment } from 'nebulosa/src/io/path'
+
+console.log(isPathSegment('m42-lum-0.fit')) // true
+console.log(isPathSegment('../m42.fit'), isPathSegment('nul.fit'), isPathSegment('m42.fit.')) // false false false
+
+console.log(await directoryExists(tmpdir())) // true
+console.log(await directoryExists('/does/not/exist')) // false
 ```
 
 ### ReadableStream Byte Sources

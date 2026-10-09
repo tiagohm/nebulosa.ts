@@ -50,6 +50,12 @@ export async function waitUntil(predicate: () => boolean, timeout: number = 5000
 	}
 }
 
+// Lets two microtask hops run, enough for a resolved promise chain to deliver its continuation.
+export async function flushMicrotasks() {
+	await Promise.resolve()
+	await Promise.resolve()
+}
+
 // Matchers
 
 export function expectNumberArrayToBeCloseTo(a: Readonly<NumberArray> | undefined | null, b: Readonly<NumberArray>, numDigits: number) {

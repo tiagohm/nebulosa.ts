@@ -34,6 +34,32 @@ type MountMotionState = {
 // other alignment element, so it must be spelled exactly like this.
 const ALIGNMENT_SUBSYSTEM_ACTIVE = 'ALIGNMENT SUBSYSTEM ACTIVE'
 
+// Converts a mount target given in any supported frame into the equinox-of-date (JNOW) equatorial
+// coordinate that every mount command takes. String components are parsed as sexagesimal, with JNOW and
+// J2000 right ascension read in hours. J2000 and galactic targets are precessed to the date, ecliptic
+// targets use the true obliquity of the date, and ALTAZ targets are observed positions at the mount's
+// reported site with default refraction. time defaults to the current UTC instant. Returns a fresh
+// [rightAscension, declination] tuple in radians, with right ascension normalized to [0, TAU).
+export function mountTargetEquatorial(mount: Mount, target: MountTargetCoordinate<string | Angle>, time: Time = timeNow(true)): [Angle, Angle] {
+	const { type } = target
+	const { x, y } = target[type]!
+	const equatorial: [Angle, Angle] = [typeof x === 'string' ? parseAngle(x, type === 'JNOW' || type === 'J2000' ? true : undefined)! : x, typeof y === 'string' ? parseAngle(y)! : y]
+
+	if (type === 'J2000') {
+		Object.assign(equatorial, equatorialFromJ2000(...equatorial, time))
+	} else if (type === 'ALTAZ') {
+		Object.assign(equatorial, observedToCirs(...equatorial, time, undefined, mount.geographicCoordinate))
+	} else if (type === 'ECLIPTIC') {
+		Object.assign(equatorial, eclipticToEquatorial(...equatorial, time))
+	} else if (type === 'GALACTIC') {
+		Object.assign(equatorial, equatorialFromJ2000(...galacticToEquatorial(...equatorial), time))
+	}
+
+	equatorial[0] = normalizeAngle(equatorial[0])
+
+	return equatorial
+}
+
 // Manager for mounts/telescopes. Command methods slew/sync/goto (converting target frames to the mount's
 // equatorial frame), track, park/home, move axes, and pulse-guide; property handling maps coordinate,
 // tracking, pier-side, site/time, and capability vectors onto the Mount state. Angles are radians.
@@ -132,19 +158,7 @@ export class MountManager extends DeviceManager<Mount> {
 	}
 
 	moveTo(mount: Mount, mode: 'goto' | 'flip' | 'sync', req: MountTargetCoordinate<string | Angle>, client = mount[CLIENT]!, time?: Time) {
-		const { type } = req
-		const { x, y } = req[type]!
-		const equatorial: [number, number] = [typeof x === 'string' ? parseAngle(x, type === 'JNOW' || type === 'J2000' ? true : undefined)! : x, typeof y === 'string' ? parseAngle(y)! : y]
-
-		if (type === 'J2000') {
-			Object.assign(equatorial, equatorialFromJ2000(...equatorial, time))
-		} else if (type === 'ALTAZ') {
-			Object.assign(equatorial, observedToCirs(...equatorial, time ?? timeNow(true), undefined, mount.geographicCoordinate))
-		} else if (type === 'ECLIPTIC') {
-			Object.assign(equatorial, eclipticToEquatorial(...equatorial, time))
-		} else if (type === 'GALACTIC') {
-			Object.assign(equatorial, equatorialFromJ2000(...galacticToEquatorial(...equatorial), time))
-		}
+		const equatorial = mountTargetEquatorial(mount, req, time)
 
 		if (mode === 'goto') this.goTo(mount, ...equatorial, client)
 		else if (mode === 'flip') this.flipTo(mount, ...equatorial, client)
@@ -415,7 +429,7 @@ export class MountManager extends DeviceManager<Mount> {
 					}
 				}
 
-				if (handleSwitchValue(device, 'tracking', elements.TRACK_ON?.value)) {
+				if (handleSwitchValue(device, 'tracking', elements.TRACK_ON?.value, message.state)) {
 					this.updated(device, 'tracking', message.state)
 				}
 
@@ -471,7 +485,7 @@ export class MountManager extends DeviceManager<Mount> {
 				}
 
 				if (elements.GO || elements.FIND) {
-					if (handleSwitchValue(device, 'homing', message.state === 'Busy')) {
+					if (handleSwitchValue(device, 'homing', message.state === 'Busy', message.state)) {
 						this.updated(device, 'homing', message.state)
 					}
 				}
@@ -541,7 +555,7 @@ export class MountManager extends DeviceManager<Mount> {
 				return
 			}
 			case 'EQUATORIAL_EOD_COORD': {
-				if (handleSwitchValue(device, 'slewing', message.state === 'Busy')) {
+				if (handleSwitchValue(device, 'slewing', message.state === 'Busy', message.state)) {
 					this.updated(device, 'slewing', message.state)
 				}
 

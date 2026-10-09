@@ -35,7 +35,7 @@ export class WheelManager extends DeviceManager<Wheel> {
 					this.updated(device, 'position', message.state)
 				}
 
-				if (handleSwitchValue(device, 'moving', message.state === 'Busy')) {
+				if (handleSwitchValue(device, 'moving', message.state === 'Busy', message.state)) {
 					this.updated(device, 'moving', message.state)
 				}
 		}
