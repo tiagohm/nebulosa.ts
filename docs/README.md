@@ -4,11 +4,11 @@ Welcome. Nebulosa is a Bun-first, ESM-only TypeScript toolkit for numerical astr
 
 Nebulosa runs on [Bun](https://bun.com). Install it from the Git repository; Bun fetches that repository directly. Imports use the path under `nebulosa/src/` and omit the `.ts` extension.
 
-## Requirements
+## 💥 Requirements
 
 - Install [Bun](https://bun.com/docs/installation).
 
-## Add the package
+## 📦 Add the package
 
 ```sh
 bun add --trust github:tiagohm/nebulosa.ts
@@ -31,20 +31,7 @@ Append `#` and a commit or tag to stay on one revision:
 bun add --trust github:tiagohm/nebulosa.ts#<commit>
 ```
 
-## Import a module
-
-```ts
-import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
-import { formatHMS, hour } from 'nebulosa/src/math/units/angle'
-
-// 2026-06-29 00:00:00 UTC, stored as a two-part Julian Date.
-const instant = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
-
-console.log(formatHMS(hour(12), false)) // 12:00:00
-console.log(instant.day + instant.fraction) // 2461220.5
-```
-
-## Native libraries
+## 📚 Native libraries
 
 The [postinstall](https://github.com/tiagohm/nebulosa.ts/blob/main/postinstall.ts) script extracts the shared libraries for this platform from zips shipped in `native/`:
 
@@ -57,8 +44,6 @@ The native libraries are built at [nebulosa.native](https://github.com/tiagohm/n
 # 📄 Documentation
 
 Jump to: [Astronomy](#-astronomy) · [Astrometry](#-astrometry) · [Imaging](#-imaging) · [Observation](#-observation) · [Catalogs](#-catalogs) · [Devices](#-devices) · [External Services](#-external-services) · [I/O and Data Formats](#-io-and-data-formats) · [Numerical](#-numerical) · [Protocols](#-protocols)
-
-> **Example data**: paths such as `data/de440s.bsp` or `data/NGC3372-16.3.fit` refer to fixture files in a checkout of the Nebulosa repository and only make the examples concrete. They are not installed into the working directory of a project that depends on Nebulosa, so replace them with your own files.
 
 ## ⭐ Astronomy
 

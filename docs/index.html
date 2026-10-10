@@ -68,7 +68,7 @@
 			}
 
 			/* Host for the search plugin, which docsify places in a sidebar that hideSidebar removes. */
-			.sidebar.search-host {
+			.searchbar {
 				visibility: visible;
 				position: sticky;
 				top: 16px;
@@ -82,18 +82,18 @@
 				background: var(--color-bg);
 			}
 
-			.sidebar.search-host .search {
+			.searchbar .search {
 				margin: 0;
 			}
 
-			.sidebar.search-host .results-panel:not(:empty),
-			.sidebar.search-host .results-status:not(:empty) {
+			.searchbar .results-panel:not(:empty),
+			.searchbar .results-status:not(:empty) {
 				padding: 0 10px;
 				background: var(--color-bg);
 			}
 
 			/* Close the results overlay once a result is opened or focus leaves the search. */
-			.sidebar.search-host:not(:focus-within) :is(.results-panel, .results-status) {
+			.searchbar:not(:focus-within) :is(.results-panel, .results-status) {
 				display: none;
 			}
 
@@ -108,7 +108,7 @@
 			}
 
 			.colapsed {
-				display: none;
+				display: none !important;
 			}
 
 			pre.shiki {
@@ -166,7 +166,7 @@
 			window.$docsify.plugins.unshift(function (hook) {
 				hook.mounted(function () {
 					const host = document.createElement('div')
-					host.className = 'sidebar search-host'
+					host.className = 'sidebar searchbar'
 					document.body.appendChild(host)
 				})
 

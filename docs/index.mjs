@@ -22,24 +22,25 @@ export class Capability {
 		this.element.addEventListener('click', this.toggle.bind(this))
 	}
 
-	colapsed(enabled) {
+	colapsed(enabled, event) {
 		const colapsed = enabled ?? !this.#colapsed
 		for (const element of this.#siblings) element.classList.toggle('colapsed', colapsed)
 		this.#colapsed = colapsed
 		this.element.classList.toggle('expanded', !colapsed)
+		if (colapsed) event?.preventDefault()
 	}
 
-	toggle() {
-		this.colapsed(undefined)
+	toggle(event) {
+		this.colapsed(undefined, event)
 	}
 
-	expand() {
-		this.colapsed(false)
+	expand(event) {
+		this.colapsed(false, event)
 		this.syntaxHighlight()
 	}
 
-	colapse() {
-		this.colapsed(true)
+	colapse(event) {
+		this.colapsed(true, event)
 	}
 
 	async syntaxHighlight() {
