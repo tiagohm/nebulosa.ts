@@ -7,7 +7,9 @@ import { type Angle, deg, normalizeAngle, normalizePI } from '../../math/units/a
 // FITS WCS handling for the gnomonic (TAN / TAN-SIP) projection. Reads the CD/PC/CDELT+CROTA keyword
 // variants into a unified row-major CD matrix, builds a compact tangent-plane descriptor (tanHeader),
 // and provides forward/inverse sky↔pixel transforms (tanProject/tanUnproject) including SIP distortion
-// polynomials. Angles are radians; FITS keyword values are in degrees and converted on read.
+// polynomials, whose orders and coefficients are validated on every read (sipOrdersValid, sipKeywordsValid).
+// Angles are radians; FITS keyword values are in degrees and converted on read. References: FITS Standard 4.0
+// §8, WCS Papers I/II (Greisen & Calabretta 2002; Calabretta & Greisen 2002) and the SIP convention.
 
 // Matches direct CD-matrix keywords (CDi_j).
 const DIRECT_CD_KEY_PATTERN = /^CD\d+_\d+$/
@@ -95,11 +97,48 @@ export const DEC_TAN = 'DEC--TAN'
 // CTYPE value for a gnomonic declination axis with SIP distortion.
 export const DEC_TAN_SIP = 'DEC--TAN-SIP'
 
-// Returns true when both axes are gnomonic (TAN or TAN-SIP), treating empty CTYPEs as acceptable.
-function hasTanAxes(header: FitsHeader) {
+// Largest SIP polynomial order accepted, forward or reverse. It bounds the O(order²) evaluation of an order
+// read from a file; astrometry.net writes at most SIP_MAXORDER - 1 = 9.
+const SIP_MAX_ORDER = 9
+// Smallest forward SIP order: the constant and linear terms belong to CRPIX and the CD matrix, so a forward
+// polynomial only carries terms of degree 2 and up.
+const SIP_MIN_FORWARD_ORDER = 2
+
+// Projection a CTYPE pair declares: plain gnomonic, gnomonic with SIP distortion, or none of them.
+type TanAxes = 'tan' | 'sip'
+
+// Forward and reverse SIP polynomials of a validated TAN-SIP header, packed in one array: the A, B, AP and
+// BP blocks follow each other from their offsets, each indexed p · (order + 1) + q for the term u^p · v^q and
+// holding zero for every term the header omits. An absent reverse polynomial has order -1 and an empty block.
+interface SipPolynomials {
+	readonly aOrder: number
+	readonly bOrder: number
+	readonly apOrder: number
+	readonly bpOrder: number
+	readonly coefficients: Float64Array
+	readonly bOffset: number
+	readonly apOffset: number
+	readonly bpOffset: number
+}
+
+// Tangent-plane descriptor with the SIP polynomials of a TAN-SIP header, read and validated together once per
+// projection call. A FitsHeader is mutable, so nothing is cached across calls.
+interface TanDescriptor {
+	readonly tan: TanHeader
+	readonly sip?: SipPolynomials
+}
+
+// Returns the projection the CTYPE pair declares. Only the exact pairs (RA---TAN, DEC--TAN) and
+// (RA---TAN-SIP, DEC--TAN-SIP) are gnomonic; a mixed pair, a single declared axis or another projection is
+// none. Two empty CTYPEs are read as plain TAN, the convention of the synthetic headers built internally,
+// although FITS would make them linear axes; plateSolutionFrom requires them declared.
+function tanAxes(header: FitsHeader): TanAxes | undefined {
 	const ctype1 = tanAxisType(header, 'CTYPE1')
 	const ctype2 = tanAxisType(header, 'CTYPE2')
-	return (!ctype1 || ctype1 === RA_TAN || ctype1 === RA_TAN_SIP) && (!ctype2 || ctype2 === DEC_TAN || ctype2 === DEC_TAN_SIP)
+	if (!ctype1 && !ctype2) return 'tan'
+	if (ctype1 === RA_TAN && ctype2 === DEC_TAN) return 'tan'
+	if (ctype1 === RA_TAN_SIP && ctype2 === DEC_TAN_SIP) return 'sip'
+	return undefined
 }
 
 // Returns true when both axes declare SIP distortion (TAN-SIP).
@@ -107,17 +146,135 @@ function hasSipAxes(header: FitsHeader) {
 	return tanAxisType(header, 'CTYPE1') === RA_TAN_SIP && tanAxisType(header, 'CTYPE2') === DEC_TAN_SIP
 }
 
-// Reads a SIP polynomial order keyword as a non-negative integer.
-function sipOrder(header: FitsHeader, key: 'A_ORDER' | 'B_ORDER' | 'AP_ORDER' | 'BP_ORDER') {
-	return Math.trunc(numericKeyword(header, key, 0))
+// Returns true when CUNIT1 and CUNIT2 are absent or degrees (trimmed, any case), the only unit the CRVAL and CD
+// readers assume.
+function hasDegreeUnits(header: FitsHeader) {
+	return isDegreeUnit(header, 'CUNIT1') && isDegreeUnit(header, 'CUNIT2')
 }
 
-// https://fits.gsfc.nasa.gov/registry/sip/SIP_distortion_v1_0.pdf
+// Returns true when one CUNIT keyword is absent or degrees.
+function isDegreeUnit(header: FitsHeader, key: 'CUNIT1' | 'CUNIT2') {
+	return header[key] === undefined || textKeyword(header, key).trim().toLowerCase() === 'deg'
+}
 
-// Evaluates a SIP distortion polynomial sum(coeff_pq · u^p · v^q) for p+q ≤ order at pixel offset (u, v).
-function sipPolynomial(header: FitsHeader, prefix: 'A_' | 'B_' | 'AP_' | 'BP_', order: number, u: number, v: number) {
+// Reads a SIP order keyword when it is an integer in [minimum, SIP_MAX_ORDER], otherwise undefined.
+function sipOrderKeyword(header: FitsHeader, key: 'A_ORDER' | 'B_ORDER' | 'AP_ORDER' | 'BP_ORDER', minimum: number) {
+	const value = header[key]
+	return typeof value === 'number' && Number.isInteger(value) && value >= minimum && value <= SIP_MAX_ORDER ? value : undefined
+}
+
+// Returns whether the SIP orders of a TAN-SIP header are usable, in O(1): A_ORDER and B_ORDER integers in
+// [2, 9], and AP_ORDER and BP_ORDER both absent or both integers in [0, 9] (0 leaves the reverse map to the
+// iterative inversion of the forward polynomial). The bound 9 keeps an order read from a file, such as
+// A_ORDER = 1e6, from turning every projection into an unbounded polynomial evaluation.
+// Convention: https://fits.gsfc.nasa.gov/registry/sip/SIP_distortion_v1_0.pdf (Shupe et al. 2005).
+export function sipOrdersValid(header: FitsHeader) {
+	if (sipOrderKeyword(header, 'A_ORDER', SIP_MIN_FORWARD_ORDER) === undefined || sipOrderKeyword(header, 'B_ORDER', SIP_MIN_FORWARD_ORDER) === undefined) return false
+	if (header.AP_ORDER === undefined && header.BP_ORDER === undefined) return true
+	return sipOrderKeyword(header, 'AP_ORDER', 0) !== undefined && sipOrderKeyword(header, 'BP_ORDER', 0) !== undefined
+}
+
+// Returns whether every SIP coefficient of a TAN-SIP header fits its declared order, after sipOrdersValid: one
+// scan of the keys. A coefficient must be a finite number, its degree p + q at most the order of its
+// polynomial, and a reverse coefficient needs a declared reverse order. A forward term of degree below 2 is
+// only accepted when exactly zero (astrometry.net writes them zeroed), since a non-zero one would repeat CRPIX
+// or the CD matrix; reverse constant and linear terms are legitimate and kept. A malformed SIP is never read
+// as plain TAN.
+export function sipKeywordsValid(header: FitsHeader) {
+	return sipOrdersValid(header) && sipPolynomials(header) !== undefined
+}
+
+// Upper bound of a decoded SIP power; a larger one is saturated, which is already above every accepted order.
+const SIP_POWER_LIMIT = 1023
+
+// Decodes a SIP coefficient key `{A|B|AP|BP}_p_q` (the keys SIP_COEFFICIENT_KEY_PATTERN matches) into
+// prefix · 2^20 + p · 2^10 + q, prefix 0 to 3 for A, B, AP and BP and the powers saturated at SIP_POWER_LIMIT,
+// or -1 for any other key. Decoded by hand because a regular expression per key dominated the cost of a
+// projection, which validates every coefficient on each call.
+function sipCoefficientKey(key: string) {
+	const first = key.charCodeAt(0)
+	let prefix = first === 65 ? 0 : first === 66 ? 1 : -1 // A, B
+	if (prefix < 0) return -1
+
+	let i = 1
+
+	if (key.charCodeAt(1) === 80) {
+		// P
+		prefix += 2
+		i = 2
+	}
+
+	if (key.charCodeAt(i++) !== 95) return -1 // _
+
+	let p = 0
+	let start = i
+
+	for (; i < key.length; i++) {
+		const digit = key.charCodeAt(i) - 48
+		if (!(digit >= 0 && digit <= 9)) break
+		p = Math.min(p * 10 + digit, SIP_POWER_LIMIT)
+	}
+
+	if (i === start || key.charCodeAt(i++) !== 95) return -1 // _
+
+	let q = 0
+	start = i
+
+	for (; i < key.length; i++) {
+		const digit = key.charCodeAt(i) - 48
+		if (!(digit >= 0 && digit <= 9)) return -1
+		q = Math.min(q * 10 + digit, SIP_POWER_LIMIT)
+	}
+
+	return i === start ? -1 : prefix * 1048576 + p * 1024 + q
+}
+
+// Reads the SIP polynomials of a header whose orders passed sipOrdersValid, validating every coefficient as
+// sipKeywordsValid describes; undefined when one is malformed. Allocates the packed coefficient array.
+function sipPolynomials(header: FitsHeader): SipPolynomials | undefined {
+	const aOrder = header.A_ORDER as number
+	const bOrder = header.B_ORDER as number
+	const apOrder = header.AP_ORDER === undefined ? -1 : (header.AP_ORDER as number)
+	const bpOrder = header.BP_ORDER === undefined ? -1 : (header.BP_ORDER as number)
+	const bOffset = (aOrder + 1) * (aOrder + 1)
+	const apOffset = bOffset + (bOrder + 1) * (bOrder + 1)
+	const bpOffset = apOffset + (apOrder + 1) * (apOrder + 1)
+	const coefficients = new Float64Array(bpOffset + (bpOrder + 1) * (bpOrder + 1))
+
+	for (const key in header) {
+		const code = sipCoefficientKey(key)
+		if (code < 0) continue
+
+		const value = header[key]
+		if (value === undefined) continue
+		if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+
+		const prefix = code >> 20
+		const p = (code >> 10) & SIP_POWER_LIMIT
+		const q = code & SIP_POWER_LIMIT
+		const order = prefix === 0 ? aOrder : prefix === 1 ? bOrder : prefix === 2 ? apOrder : bpOrder
+
+		if (!(p + q <= order)) return undefined
+
+		// Forward (A, B) terms below degree 2 repeat CRPIX and the CD matrix.
+		if (prefix < 2 && p + q < SIP_MIN_FORWARD_ORDER) {
+			if (value !== 0) return undefined
+			continue
+		}
+
+		const offset = prefix === 0 ? 0 : prefix === 1 ? bOffset : prefix === 2 ? apOffset : bpOffset
+		coefficients[offset + p * (order + 1) + q] = value
+	}
+
+	return { aOrder, bOrder, apOrder, bpOrder, coefficients, bOffset, apOffset, bpOffset }
+}
+
+// Evaluates a SIP polynomial sum(coeff_pq · u^p · v^q) for p + q ≤ order at the pixel offset (u, v), from the
+// block of `coefficients` starting at `offset`.
+function sipPolynomial(coefficients: Float64Array, offset: number, order: number, u: number, v: number) {
 	if (order <= 0) return 0
 
+	const stride = order + 1
 	let value = 0
 	let up = 1
 
@@ -125,7 +282,7 @@ function sipPolynomial(header: FitsHeader, prefix: 'A_' | 'B_' | 'AP_' | 'BP_', 
 		let vq = 1
 
 		for (let q = 0; p + q <= order; q++) {
-			value += numericKeyword(header, `${prefix}${p}_${q}`, 0) * up * vq
+			value += coefficients[offset + p * stride + q] * up * vq
 			vq *= v
 		}
 
@@ -136,24 +293,25 @@ function sipPolynomial(header: FitsHeader, prefix: 'A_' | 'B_' | 'AP_' | 'BP_', 
 }
 
 // Applies the forward SIP correction, mapping raw pixel offsets (u, v) to distortion-corrected (U, V).
-function forwardSip(header: FitsHeader, u: number, v: number, aOrder: number, bOrder: number) {
-	return [u + sipPolynomial(header, 'A_', aOrder, u, v), v + sipPolynomial(header, 'B_', bOrder, u, v)] as const
+function forwardSip(sip: SipPolynomials | undefined, u: number, v: number) {
+	if (sip === undefined) return [u, v] as const
+	return [u + sipPolynomial(sip.coefficients, 0, sip.aOrder, u, v), v + sipPolynomial(sip.coefficients, sip.bOffset, sip.bOrder, u, v)] as const
 }
 
 // Applies the inverse SIP polynomials (AP/BP), mapping corrected (U, V) back to raw pixel offsets.
-function inverseSip(header: FitsHeader, U: number, V: number, apOrder: number, bpOrder: number) {
-	return [U + sipPolynomial(header, 'AP_', apOrder, U, V), V + sipPolynomial(header, 'BP_', bpOrder, U, V)] as const
+function inverseSip(sip: SipPolynomials, U: number, V: number) {
+	return [U + sipPolynomial(sip.coefficients, sip.apOffset, sip.apOrder, U, V), V + sipPolynomial(sip.coefficients, sip.bpOffset, sip.bpOrder, U, V)] as const
 }
 
 // Inverts the forward SIP map by fixed-point iteration when no AP/BP inverse polynomials are present.
 // Returns undefined on non-finite iterates; otherwise stops at SIP_TOLERANCE or SIP_MAX_ITERATIONS.
-function invertForwardSip(header: FitsHeader, U: number, V: number, aOrder: number, bOrder: number) {
+function invertForwardSip(sip: SipPolynomials, U: number, V: number) {
 	let u = U
 	let v = V
 
 	for (let i = 0; i < SIP_MAX_ITERATIONS; i++) {
-		const nextU = U - sipPolynomial(header, 'A_', aOrder, u, v)
-		const nextV = V - sipPolynomial(header, 'B_', bOrder, u, v)
+		const nextU = U - sipPolynomial(sip.coefficients, 0, sip.aOrder, u, v)
+		const nextV = V - sipPolynomial(sip.coefficients, sip.bOffset, sip.bOrder, u, v)
 
 		if (!Number.isFinite(nextU) || !Number.isFinite(nextV)) return undefined
 		if (Math.abs(nextU - u) <= SIP_TOLERANCE && Math.abs(nextV - v) <= SIP_TOLERANCE) return [nextU, nextV] as const
@@ -166,11 +324,27 @@ function invertForwardSip(header: FitsHeader, U: number, V: number, aOrder: numb
 }
 
 // Builds the packed tangent-plane descriptor from a FITS header, or undefined when the axes are not
-// gnomonic or the CD matrix is missing/degenerate. Reference values are converted to radians and the
-// LONPOLE-derived pole rotation is precomputed for the projection hot path. When LONPOLE is omitted,
+// gnomonic, a CUNIT is not degrees, the SIP of a TAN-SIP pair is malformed (see sipOrdersValid and
+// sipKeywordsValid) or the CD matrix is missing/degenerate. Reference values are converted to radians and
+// the LONPOLE-derived pole rotation is precomputed for the projection hot path. When LONPOLE is omitted,
 // TAN uses the FITS WCS Paper II default: 0° if CRVAL2 ≥ 90° (north celestial pole) and 180° otherwise.
+// An absent reverse SIP order is packed as 0.
 export function tanHeader(header: FitsHeader): TanHeader | undefined {
-	if (!hasTanAxes(header)) return undefined
+	return tanDescriptor(header)?.tan
+}
+
+// Builds the tangent-plane descriptor and, for a TAN-SIP pair, its validated polynomials (see tanHeader).
+function tanDescriptor(header: FitsHeader): TanDescriptor | undefined {
+	const axes = tanAxes(header)
+	if (axes === undefined || !hasDegreeUnits(header)) return undefined
+
+	let sip: SipPolynomials | undefined
+
+	if (axes === 'sip') {
+		if (!sipOrdersValid(header)) return undefined
+		sip = sipPolynomials(header)
+		if (sip === undefined) return undefined
+	}
 
 	const crpix1 = numericKeyword(header, 'CRPIX1', Number.NaN)
 	const crpix2 = numericKeyword(header, 'CRPIX2', Number.NaN)
@@ -184,11 +358,6 @@ export function tanHeader(header: FitsHeader): TanHeader | undefined {
 	const poleRotation = normalizePI(lonpole - PI)
 	const cosPoleRotation = Math.cos(poleRotation)
 	const sinPoleRotation = Math.sin(poleRotation)
-	const sip = hasSipAxes(header)
-	const aOrder = sip ? sipOrder(header, 'A_ORDER') : 0
-	const bOrder = sip ? sipOrder(header, 'B_ORDER') : 0
-	const apOrder = sip ? sipOrder(header, 'AP_ORDER') : 0
-	const bpOrder = sip ? sipOrder(header, 'BP_ORDER') : 0
 
 	if (!Number.isFinite(crpix1) || !Number.isFinite(crpix2) || !Number.isFinite(crval1) || !Number.isFinite(crval2) || !Number.isFinite(determinant) || !(scale > 0) || Math.abs(determinant) <= Number.EPSILON * scale * scale) {
 		return undefined
@@ -196,7 +365,8 @@ export function tanHeader(header: FitsHeader): TanHeader | undefined {
 
 	crval2 = deg(crval2)
 
-	return [crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, determinant, cosPoleRotation, sinPoleRotation, aOrder, bOrder, apOrder, bpOrder]
+	const tan: TanHeader = [crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, determinant, cosPoleRotation, sinPoleRotation, sip?.aOrder ?? 0, sip?.bOrder ?? 0, Math.max(0, sip?.apOrder ?? 0), Math.max(0, sip?.bpOrder ?? 0)]
+	return { tan, sip }
 }
 
 // Reports whether the header contains enough WCS terms to build a CD matrix directly.
@@ -354,21 +524,8 @@ export function scaleAndCropFitsWcs(header: FitsHeader, scaleX: number, scaleY: 
 		}
 	}
 
-	if (sip) {
-		for (const prefix of ['A', 'B', 'AP', 'BP']) {
-			const order = header[`${prefix}_ORDER`]
-			const required = prefix === 'A' || prefix === 'B'
-			if (required || order !== undefined) supported &&= typeof order === 'number' && Number.isInteger(order) && order >= 0
-		}
-
-		if ((header.AP_ORDER === undefined) !== (header.BP_ORDER === undefined)) supported = false
-
-		for (const key in header) {
-			if (header[key] === undefined) continue
-			const match = SIP_COEFFICIENT_KEY_PATTERN.exec(key)
-			if (match && !(+match[2] + +match[3] <= numericKeyword(header, `${match[1]}_ORDER`, -1))) supported = false
-		}
-	}
+	// The same SIP rules as every projection, so a resized header is never one tanHeader would refuse.
+	if (sip) supported &&= sipKeywordsValid(header)
 
 	if (!supported) {
 		for (const key in header) if (RESIZED_WCS_KEY_PATTERN.test(key)) delete header[key]
@@ -402,11 +559,13 @@ export function scaleAndCropFitsWcs(header: FitsHeader, scaleX: number, scaleY: 
 }
 
 // Projects equatorial coordinates onto FITS TAN pixel coordinates using the header WCS.
+// Undefined when tanHeader refuses the header or the coordinate is on the far hemisphere.
 export function tanProject(header: FitsHeader, rightAscension: Angle, declination: Angle) {
-	const tan = tanHeader(header)
-	if (!tan) return undefined
+	const descriptor = tanDescriptor(header)
+	if (!descriptor) return undefined
 
-	const [crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, determinant, cosPoleRotation, sinPoleRotation, aOrder, bOrder, apOrder, bpOrder] = tan
+	const { tan, sip } = descriptor
+	const [crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, determinant, cosPoleRotation, sinPoleRotation, , , apOrder, bpOrder] = tan
 	const deltaRa = normalizePI(rightAscension - crval1)
 	const sinDec = Math.sin(declination)
 	const cosDec = Math.cos(declination)
@@ -423,18 +582,20 @@ export function tanProject(header: FitsHeader, rightAscension: Angle, declinatio
 	const yIntermediate = (xi * sinPoleRotation + eta * cosPoleRotation) * RAD2DEG
 	const U = (cd22 * xIntermediate - cd12 * yIntermediate) / determinant
 	const V = (-cd21 * xIntermediate + cd11 * yIntermediate) / determinant
-	const distorted = apOrder > 0 && bpOrder > 0 ? inverseSip(header, U, V, apOrder, bpOrder) : invertForwardSip(header, U, V, aOrder, bOrder)
+	const distorted = sip === undefined ? ([U, V] as const) : apOrder > 0 && bpOrder > 0 ? inverseSip(sip, U, V) : invertForwardSip(sip, U, V)
 	if (!distorted) return undefined
 	return [crpix1 + distorted[0], crpix2 + distorted[1]] as const
 }
 
 // Unprojects FITS TAN pixel coordinates into equatorial coordinates using the header WCS.
+// Undefined when tanHeader refuses the header.
 export function tanUnproject(header: FitsHeader, x: number, y: number) {
-	const tan = tanHeader(header)
-	if (!tan) return undefined
+	const descriptor = tanDescriptor(header)
+	if (!descriptor) return undefined
 
-	const [crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, , cosPoleRotation, sinPoleRotation, aOrder, bOrder] = tan
-	const [U, V] = forwardSip(header, x - crpix1, y - crpix2, aOrder, bOrder)
+	const { tan, sip } = descriptor
+	const [crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, , cosPoleRotation, sinPoleRotation] = tan
+	const [U, V] = forwardSip(sip, x - crpix1, y - crpix2)
 	const xIntermediate = deg(cd11 * U + cd12 * V)
 	const yIntermediate = deg(cd21 * U + cd22 * V)
 	const xi = xIntermediate * cosPoleRotation + yIntermediate * sinPoleRotation
