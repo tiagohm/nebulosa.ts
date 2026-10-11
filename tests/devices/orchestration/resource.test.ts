@@ -184,6 +184,27 @@ describe('resource arbiter', () => {
 		expect(arbiter.availability(CAMERA)).toBe('available')
 	})
 
+	test('clears each cause only through its own writer, including a dispatched guide pulse', () => {
+		const arbiter = new ResourceArbiter()
+		const device = camera(true)
+		const key = device.hardwareId
+
+		arbiter.markUnavailable({ key: key, device }, 'guidePulse')
+		arbiter.markUnavailable(key, 'quarantine')
+		arbiter.markDeviceUnavailable(key)
+		expect(arbiter.snapshot(key).causes).toEqual(['guidePulse', 'lifecycle', 'quarantine'])
+
+		// Lifecycle revalidation clears only the lifecycle cause.
+		arbiter.markDeviceAvailable(key)
+		expect(arbiter.snapshot(key).causes).toEqual(['guidePulse', 'quarantine'])
+
+		arbiter.markAvailable(key, 'quarantine')
+		expect(arbiter.acquire(owner('owner-1'), [{ key: key, device }])).toMatchObject({ ok: false, conflicts: [{ key: key, by: 'unavailable', causes: ['guidePulse'] }] })
+
+		arbiter.markAvailable(key, 'guidePulse')
+		expect(arbiter.availability(key)).toBe('available')
+	})
+
 	test('keeps a client-blocked lease owned until the client reconnects', () => {
 		const arbiter = new ResourceArbiter()
 		const device = camera(true)
