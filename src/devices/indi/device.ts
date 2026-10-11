@@ -217,6 +217,9 @@ export interface Camera extends GuideOutput, Thermometer {
 export interface GPS extends Device {
 	readonly type: 'gps' | 'mount'
 	hasGPS: boolean
+	// Whether the driver published a finite site in the current connection. Until then geographicCoordinate holds
+	// zero defaults, which are not a location.
+	hasGeographicCoordinate: boolean
 	readonly geographicCoordinate: GeographicCoordinate
 	readonly time: UTCTime
 }
@@ -312,6 +315,9 @@ export interface Mount extends GuideOutput, GPS, Parkable {
 	hasPierSide: boolean
 	canSetPierSide: boolean
 	pierSide: PierSide
+	// Whether the driver published a finite equatorial coordinate in the current connection. Until then
+	// equatorialCoordinate holds zero defaults, which are not a position.
+	hasEquatorialCoordinate: boolean
 	readonly equatorialCoordinate: EquatorialCoordinate
 	readonly alignment: MountAlignmentState
 }
@@ -578,6 +584,7 @@ export const DEFAULT_MOUNT: Mount = {
 		rightAscension: 0,
 		declination: 0,
 	},
+	hasEquatorialCoordinate: false,
 	equatorialCoordinate: {
 		rightAscension: 0,
 		declination: 0,
@@ -602,6 +609,7 @@ export const DEFAULT_MOUNT: Mount = {
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 	client: structuredClone(DEFAULT_CLIENT_INFO),
 	hasGPS: false,
+	hasGeographicCoordinate: false,
 	geographicCoordinate: {
 		latitude: 0,
 		longitude: 0,

@@ -412,7 +412,8 @@ export class MountManager extends DeviceManager<Mount> {
 					if (element.value) {
 						const trackMode = element.name.replace('TRACK_', '') as TrackMode
 
-						if (device.trackMode !== trackMode) {
+						// An Alert is reported even with the mode unchanged, since it is how a driver refuses a new one.
+						if (device.trackMode !== trackMode || message.state === 'Alert') {
 							device.trackMode = trackMode
 							this.updated(device, 'trackMode', message.state)
 						}
@@ -561,8 +562,16 @@ export class MountManager extends DeviceManager<Mount> {
 
 				const { equatorialCoordinate } = device
 
-				let updated = handleNumberValue(equatorialCoordinate, 'rightAscension', message.elements.RA?.value, undefined, hour)
-				updated = handleNumberValue(equatorialCoordinate, 'declination', message.elements.DEC?.value, undefined, deg) || updated
+				const { RA, DEC } = message.elements
+				let updated = handleNumberValue(equatorialCoordinate, 'rightAscension', RA?.value, undefined, hour)
+				updated = handleNumberValue(equatorialCoordinate, 'declination', DEC?.value, undefined, deg) || updated
+
+				// The first finite pair is what makes the coordinate real, so it is reported even when it equals the
+				// zero defaults.
+				if (RA !== undefined && DEC !== undefined && Number.isFinite(RA.value) && Number.isFinite(DEC.value) && handleSwitchValue(device, 'hasEquatorialCoordinate', true)) {
+					this.updated(device, 'hasEquatorialCoordinate', message.state)
+					updated = true
+				}
 
 				if (updated) {
 					this.updated(device, 'equatorialCoordinate', message.state)
@@ -573,9 +582,17 @@ export class MountManager extends DeviceManager<Mount> {
 			case 'GEOGRAPHIC_COORD': {
 				const { geographicCoordinate } = device
 
-				let updated = handleNumberValue(geographicCoordinate, 'longitude', message.elements.LONG?.value, undefined, (value) => normalizePI(deg(value)))
-				updated = handleNumberValue(geographicCoordinate, 'latitude', message.elements.LAT?.value, undefined, deg) || updated
+				const { LAT, LONG } = message.elements
+				let updated = handleNumberValue(geographicCoordinate, 'longitude', LONG?.value, undefined, (value) => normalizePI(deg(value)))
+				updated = handleNumberValue(geographicCoordinate, 'latitude', LAT?.value, undefined, deg) || updated
 				updated = handleNumberValue(geographicCoordinate, 'elevation', message.elements.ELEV?.value, undefined, meter) || updated
+
+				// The first finite latitude and longitude are what make the site real, so they are reported even
+				// when they equal the zero defaults.
+				if (LAT !== undefined && LONG !== undefined && Number.isFinite(LAT.value) && Number.isFinite(LONG.value) && handleSwitchValue(device, 'hasGeographicCoordinate', true)) {
+					this.updated(device, 'hasGeographicCoordinate', message.state)
+					updated = true
+				}
 
 				if (updated) {
 					this.updated(device, 'geographicCoordinate', message.state)
@@ -709,9 +726,11 @@ export class MountManager extends DeviceManager<Mount> {
 		}
 		if (full || name === 'EQUATORIAL_EOD_COORD') {
 			resetDeviceValue(this, device, 'slewing', DEFAULT_MOUNT.slewing)
+			resetDeviceValue(this, device, 'hasEquatorialCoordinate', DEFAULT_MOUNT.hasEquatorialCoordinate)
 			resetDeviceValue(this, device, 'equatorialCoordinate', DEFAULT_MOUNT.equatorialCoordinate)
 		}
 		if (full || name === 'GEOGRAPHIC_COORD') {
+			resetDeviceValue(this, device, 'hasGeographicCoordinate', DEFAULT_MOUNT.hasGeographicCoordinate)
 			resetDeviceValue(this, device, 'geographicCoordinate', DEFAULT_MOUNT.geographicCoordinate)
 		}
 		if (full || name === 'TIME_UTC') {
