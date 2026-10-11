@@ -22,7 +22,9 @@ export type ResourceAvailability = 'available' | 'reserved' | 'leased' | 'unavai
 // becomes acquirable again only after every cause has been resolved.
 // - lifecycle: device connectivity and physical quiescence, owned by DeviceLifecycle.
 // - quarantine: an outstanding driver payload that must be discarded before the device is safe.
-export type ResourceUnavailableCause = 'lifecycle' | 'quarantine'
+// - guidePulse: a dispatched guide pulse whose end was not physically observed yet, owned by the
+//   GuideOutputCommander that dispatched or assumed it.
+export type ResourceUnavailableCause = 'lifecycle' | 'quarantine' | 'guidePulse'
 
 // One resource requested atomically by an operation.
 export interface ResourceRequest {

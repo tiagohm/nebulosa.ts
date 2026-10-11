@@ -7,4 +7,4 @@ exact = true
 root = "./tests"
 preload = ["./tests/setup.ts"]
 coverageSkipTestFiles = true
-retry = 2
+retry = 0

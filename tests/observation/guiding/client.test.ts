@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import { pixelScale } from '../../../src/astronomy/formulas'
 import { Timescale, time, toJulianDay, type Time } from '../../../src/astronomy/time/time'
 import { DAYSEC, DEG2RAD, PI, PIOVERTWO, TAU } from '../../../src/core/constants'
+import { type GuidePulseQuiescenceWindow, guidePulseWindow } from '../../../src/devices/commanders/guideoutput'
 import { type Camera, DEFAULT_CAMERA, DEFAULT_GUIDE_OUTPUT, type GuideDirection, type GuideOutput } from '../../../src/devices/indi/device'
 import type { CameraManager } from '../../../src/devices/indi/manager/camera'
 import type { DeviceHandler } from '../../../src/devices/indi/manager/device'
@@ -12,9 +13,9 @@ import { plotStar } from '../../../src/imaging/stars/generator'
 import { bufferSink } from '../../../src/io/io'
 import { mulberry32 } from '../../../src/math/numerical/random'
 import type { GuidingCalibrationResult } from '../../../src/observation/guiding/calibrator'
-import { GuiderClient, type GuideFrameImage, type GuiderClientConnectOptions, type GuiderClientOptions, type GuiderEvents } from '../../../src/observation/guiding/client'
+import { GuiderClient, type GuideFrameImage, type GuiderClientConnectOptions, type GuiderClientHandler, type GuiderClientOptions, type GuiderEvents } from '../../../src/observation/guiding/client'
 import { ditherPulsePlanFromCalibration } from '../../../src/observation/guiding/dither.pulse'
-import type { GuideDirectionDEC, GuideDirectionRA } from '../../../src/observation/guiding/guider'
+import { DEFAULT_GUIDER_CONFIG, type GuideDirectionDEC, type GuideDirectionRA } from '../../../src/observation/guiding/guider'
 import { type GuideTargetEnvelope, type GuideTracker, type GuideTrackerResult, trackingResultFromStars } from '../../../src/observation/guiding/tracker'
 import { NonSiderealTracker, nonSiderealTrackingOf } from '../../../src/observation/guiding/tracker.nonsidereal'
 import { SolarSystemTracker, solarSystemTrackingOf } from '../../../src/observation/guiding/tracker.solarsystem'
@@ -69,6 +70,8 @@ class FakeCameraManager {
 // Records every pulse the GuiderClient routes through the guide output.
 class FakeGuideOutputManager {
 	readonly pulses: PulseRecord[] = []
+	// `performance.now()` at which each recorded pulse reached the manager, parallel to `pulses`.
+	readonly dispatchedAt: number[] = []
 	// Extra milliseconds the fake guide output stays Busy after the commanded pulse duration, to
 	// model INDI driver latency after Busy has already been reported.
 	pulseBusyOverhangMs = 0
@@ -88,6 +91,7 @@ class FakeGuideOutputManager {
 
 	pulse(device: GuideOutput, direction: GuideDirection, duration: number) {
 		this.pulses.push({ direction, duration })
+		this.dispatchedAt.push(performance.now())
 		const ackLag = this.pulseBusyAckLagMs
 		const scaledDuration = duration * this.pulseHoldScale
 		const hold = scaledDuration + this.pulseBusyOverhangMs
@@ -291,21 +295,19 @@ interface Harness {
 	frameCount: number
 }
 
+// Client options plus an observer registered before the event recorder.
+interface HarnessOptions extends GuiderClientOptions {
+	readonly handler?: GuiderClientHandler
+}
+
 // Creates a fresh client wired to fake managers and an event recorder.
-function makeHarness(options: GuiderClientOptions = {}, tracker: GuideTracker = new StarTracker()): Harness {
+function makeHarness({ handler, ...options }: HarnessOptions = {}, tracker: GuideTracker = new StarTracker()): Harness {
 	const cameraManager = new FakeCameraManager()
 	const guideOutputManager = new FakeGuideOutputManager()
 	const events: GuiderEvents[] = []
-	const client = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, tracker, {
-		...options,
-		handler: {
-			event: (client, event) => {
-				options.handler?.event?.(client, event)
-				events.push(event)
-			},
-			frame: options.handler?.frame,
-		},
-	})
+	const client = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, tracker, options)
+	if (handler !== undefined) client.addHandler(handler)
+	client.addHandler({ event: (_client, event) => events.push(event) })
 
 	return { client, cameraManager, guideOutputManager, events, camera: makeCamera(), guideOutput: makeGuideOutput(), mount: new MountSimulator(), frameCount: 0 }
 }
@@ -784,6 +786,284 @@ describe('guidePulse', () => {
 		connect(harness)
 		expect(harness.client.guidePulse(0.2, 'West')).toBeTrue()
 		expect(harness.guideOutputManager.pulses.at(-1)).toEqual({ direction: 'WEST', duration: 1 })
+	})
+})
+
+describe('handlers', () => {
+	test('every handler receives every event and frame in registration order', async () => {
+		const calls: string[] = []
+		const local = makeHarness()
+		local.client.addHandler({ event: (_client, event) => calls.push(`a:${event.Event}`), frame: () => calls.push('a:frame') })
+		local.client.addHandler({ event: (_client, event) => calls.push(`b:${event.Event}`), frame: () => calls.push('b:frame') })
+		connect(local)
+		local.client.loop()
+		await feedFrame(local)
+		local.client.stopCapture()
+
+		expect(calls).toContain('a:frame')
+		expect(calls.length % 2).toBe(0)
+		for (let i = 0; i < calls.length; i += 2) {
+			expect(calls[i].startsWith('a:')).toBeTrue()
+			expect(calls[i + 1]).toBe(`b:${calls[i].slice(2)}`)
+		}
+		expect(calls.filter((call) => call !== 'a:frame' && call.startsWith('a:'))).toHaveLength(local.events.length)
+	})
+
+	test('a throwing handler neither stops the others nor the exposure loop', async () => {
+		const frames: GuideFrameImage[] = []
+		const local = makeHarness()
+		const fail = () => {
+			throw new Error('handler boom')
+		}
+		local.client.addHandler({ event: fail, frame: fail })
+		local.client.addHandler({ frame: (_client, frame) => frames.push(frame) })
+		connect(local)
+		local.client.loop()
+		await feedFrame(local)
+		await feedFrame(local)
+		local.client.stopCapture()
+
+		expect(frames).toHaveLength(2)
+		expect(local.events.length).toBeGreaterThan(0)
+	})
+
+	test('a handler is registered once, and removing it is idempotent and safe while it is being called', () => {
+		const calls: string[] = []
+		const self: GuiderClientHandler = {
+			event: (client, event) => {
+				calls.push(`self:${event.Event}`)
+				client.removeHandler(self)
+			},
+		}
+		const twice: GuiderClientHandler = { event: (_client, event) => calls.push(`twice:${event.Event}`) }
+		harness.client.addHandler(self)
+		harness.client.addHandler(twice)
+		harness.client.addHandler(twice)
+
+		harness.client.setDeclinationGuideMode('North')
+		harness.client.removeHandler(self)
+		harness.client.setDeclinationGuideMode('South')
+		harness.client.removeHandler(twice)
+		harness.client.removeHandler(twice)
+		harness.client.setDeclinationGuideMode('Auto')
+
+		expect(calls).toEqual(['self:GuideParamChange', 'twice:GuideParamChange', 'twice:ConfigurationChange', 'twice:GuideParamChange', 'twice:ConfigurationChange'])
+		expect(eventsOf(harness.events, 'GuideParamChange')).toHaveLength(3)
+	})
+
+	test('frames are processed without a frame handler and published once one is added', async () => {
+		const frames: GuideFrameImage[] = []
+		const local = makeHarness()
+		connect(local)
+		local.client.loop()
+
+		expect(await feedFrame(local)).toBeDefined()
+		const frameHandler: GuiderClientHandler = { frame: (_client, frame) => frames.push(frame) }
+		local.client.addHandler(frameHandler)
+		expect(await feedFrame(local)).toBeDefined()
+		local.client.removeHandler(frameHandler)
+		expect(await feedFrame(local)).toBeDefined()
+		local.client.stopCapture()
+
+		expect(frames).toHaveLength(1)
+		expect(frames[0].frameId).toBe(2)
+	})
+})
+
+// Quiescence window of every pulse the fake manager recorded, each from its own record instant.
+function recordedPulseWindow(manager: FakeGuideOutputManager): GuidePulseQuiescenceWindow | undefined {
+	let window: GuidePulseQuiescenceWindow | undefined
+
+	for (let i = 0; i < manager.pulses.length; i++) {
+		const next = guidePulseWindow(manager.dispatchedAt[i], manager.pulses[i].duration)
+		window = window === undefined ? next : { busyAckDeadline: Math.max(window.busyAckDeadline, next.busyAckDeadline), endsBy: Math.max(window.endsBy, next.endsBy) }
+	}
+
+	return window
+}
+
+// The client reads its dispatch instant just before calling the manager, which records its own right after,
+// so both windows agree within a fraction of a millisecond.
+function expectPulseWindow(harness: Harness) {
+	const actual = harness.client.pulseQuiescenceWindow()
+	const expected = recordedPulseWindow(harness.guideOutputManager)
+	expect(actual === undefined).toBe(expected === undefined)
+	if (actual === undefined || expected === undefined) return
+	expect(Math.abs(actual.busyAckDeadline - expected.busyAckDeadline)).toBeLessThan(1)
+	expect(Math.abs(actual.endsBy - expected.endsBy)).toBeLessThan(1)
+}
+
+describe('pulse admission', () => {
+	test('maxPulseDuration is the rounded largest guider limit, calibration pulse or backlash pulse', () => {
+		expect(harness.client.maxPulseDuration()).toBe(Math.max(DEFAULT_GUIDER_CONFIG.maxPulseMsRA, DEFAULT_GUIDER_CONFIG.maxPulseMsDEC))
+
+		const guider = { maxPulseMsRA: 300, maxPulseMsDEC: 400 }
+		const local = makeHarness({ guider })
+		expect(local.client.maxPulseDuration()).toBe(650) // calibration pulses
+		guider.maxPulseMsDEC = 1800.4
+		expect(local.client.maxPulseDuration()).toBe(1800)
+		guider.maxPulseMsRA = 3000.6
+		expect(local.client.maxPulseDuration()).toBe(3001)
+
+		expect(makeHarness({ guider: { maxPulseMsRA: 40, maxPulseMsDEC: 40 }, calibrator: { raPulse: 50, decPulse: 70 } }).client.maxPulseDuration()).toBe(100) // backlash pulse
+		expect(makeHarness({ guider: { maxPulseMsRA: 40, maxPulseMsDEC: 40 }, calibrator: { raPulse: 50, decPulse: 700.5 } }).client.maxPulseDuration()).toBe(701)
+	})
+
+	test('admitPulses hands out one closed admission at a time with a rounded fixed ceiling', () => {
+		expect(harness.client.maxPulseDuration()).toBe(2500)
+		expect(harness.client.admitPulses(1000)).toBeUndefined()
+		expect(harness.client.admitPulses(2499.4)).toBeUndefined()
+
+		const admission = harness.client.admitPulses(2500.4)!
+		expect(admission.maximumDuration).toBe(2500)
+		expect(admission.isOpen).toBeFalse()
+		expect(harness.client.admitPulses(2500)).toBeUndefined()
+		expect(harness.client.admitPulses(5000)).toBeUndefined()
+
+		admission[Symbol.dispose]()
+		admission[Symbol.dispose]()
+		admission.open()
+		expect(admission.isOpen).toBeFalse()
+
+		using next = harness.client.admitPulses(2500)!
+		expect(next.maximumDuration).toBe(2500)
+		admission[Symbol.dispose]()
+		expect(harness.client.admitPulses(2500)).toBeUndefined()
+	})
+
+	test('admitPulses throws for a ceiling no pulse could fit, without changing any state', () => {
+		for (const ceiling of [Number.NaN, Number.POSITIVE_INFINITY, 0, 0.5, -1]) {
+			expect(() => harness.client.admitPulses(ceiling)).toThrow(/invalid pulse ceiling/)
+		}
+
+		using admission = harness.client.admitPulses(2500)!
+		expect(admission.isOpen).toBeFalse()
+	})
+
+	test('guidePulse is refused while the admission is closed or above its ceiling', () => {
+		connect(harness)
+		using admission = harness.client.admitPulses(2500)!
+
+		expect(harness.client.guidePulse(100, 'North')).toBeFalse()
+		admission.open()
+		expect(harness.client.guidePulse(2501, 'North')).toBeFalse()
+		expect(harness.client.guidePulse(60000, 'East')).toBeFalse()
+		expect(harness.client.guidePulse(2500.6, 'East')).toBeFalse()
+		expect(harness.guideOutputManager.pulses).toHaveLength(0)
+		expect(harness.client.pulseQuiescenceWindow()).toBeUndefined()
+
+		expect(harness.client.guidePulse(2500, 'North')).toBeTrue()
+		expect(harness.client.guidePulse(2500.4, 'South')).toBeTrue()
+		admission.close()
+		expect(harness.client.guidePulse(100, 'West')).toBeFalse()
+		expect(harness.guideOutputManager.pulses).toEqual([
+			{ direction: 'NORTH', duration: 2500 },
+			{ direction: 'SOUTH', duration: 2500 },
+		])
+	})
+
+	test('guidePulse is unbounded without an admission and after it is disposed', () => {
+		connect(harness)
+		expect(harness.client.guidePulse(60000, 'West')).toBeTrue()
+
+		const admission = harness.client.admitPulses(2500)!
+		expect(harness.client.guidePulse(60000, 'West')).toBeFalse()
+		admission[Symbol.dispose]()
+		expect(harness.client.guidePulse(60000, 'East')).toBeTrue()
+		expect(harness.guideOutputManager.pulses.map((pulse) => pulse.duration)).toEqual([60000, 60000])
+	})
+
+	test('guidePulse is refused while paused, with and without an admission', () => {
+		connect(harness)
+
+		for (const full of [true, false]) {
+			harness.client.setPaused(true, full)
+			expect(harness.client.guidePulse(100, 'North')).toBeFalse()
+
+			using admission = harness.client.admitPulses(2500)!
+			admission.open()
+			expect(harness.client.guidePulse(100, 'North')).toBeFalse()
+
+			harness.client.setPaused(false)
+			expect(harness.client.guidePulse(100, 'North')).toBeTrue()
+		}
+
+		expect(harness.guideOutputManager.pulses).toHaveLength(2)
+	})
+
+	test('no guidePulse ever exceeds the ceiling or leaves while paused or closed', () => {
+		connect(harness)
+		const random = mulberry32(29)
+		const ceiling = 2500
+		const admission = harness.client.admitPulses(ceiling)!
+		const delivered: { readonly duration: number; readonly paused: boolean; readonly open: boolean }[] = []
+		const pulse = harness.guideOutputManager.pulse.bind(harness.guideOutputManager)
+		harness.guideOutputManager.pulse = (device, direction, duration) => {
+			delivered.push({ duration, paused: harness.client.getPaused(), open: admission.isOpen })
+			pulse(device, direction, duration)
+		}
+
+		for (let i = 0; i < 200; i++) {
+			const action = random()
+
+			if (action < 0.05) harness.client.setPaused(true, random() < 0.5)
+			else if (action < 0.2) harness.client.setPaused(false)
+			else if (action < 0.25) admission.close()
+			else if (action < 0.4) admission.open()
+			else {
+				const amount = (1 - random()) * 3 * ceiling
+				const window = harness.client.pulseQuiescenceWindow()
+				const accepted = !harness.client.getPaused() && admission.isOpen && Math.max(1, Math.round(amount)) <= ceiling
+				expect(harness.client.guidePulse(amount, random() < 0.5 ? 'North' : 'West')).toBe(accepted)
+				if (!accepted) expect(harness.client.pulseQuiescenceWindow()).toBe(window)
+			}
+		}
+
+		admission[Symbol.dispose]()
+		expect(delivered.length).toBeGreaterThan(10)
+		expect(delivered.every((pulse) => pulse.duration <= ceiling && !pulse.paused && pulse.open)).toBeTrue()
+		expectPulseWindow(harness)
+	})
+
+	test('pulseQuiescenceWindow keeps the latest deadlines of every delivered pulse', async () => {
+		connect(harness)
+		expect(harness.client.pulseQuiescenceWindow()).toBeUndefined()
+
+		expect(harness.client.guidePulse(2000, 'North')).toBeTrue()
+		expectPulseWindow(harness)
+		const long = harness.client.pulseQuiescenceWindow()!
+
+		await Bun.sleep(5)
+		expect(harness.client.guidePulse(10, 'West')).toBeTrue()
+		expect(harness.client.pulseQuiescenceWindow()).toEqual(long)
+		expectPulseWindow(harness)
+
+		harness.client.setPaused(true)
+		expect(harness.client.guidePulse(3000, 'North')).toBeFalse()
+		expect(harness.client.pulseQuiescenceWindow()).toEqual(long)
+	})
+
+	test('every pulse goes through one dispatcher sharing the window arithmetic of the guide output commander', async () => {
+		const root = Bun.fileURLToPath(new URL('../../../', import.meta.url))
+		const source = await Bun.file(`${root}/src/observation/guiding/client.ts`).text()
+		const calls = [...source.matchAll(/guideOutputManager\.pulse\(/g)]
+		expect(calls).toHaveLength(1)
+		const dispatcher = source.indexOf('\t#dispatchPulse(direction: GuideDirection, duration: number) {')
+		expect(dispatcher).toBeGreaterThan(0)
+		expect(calls[0].index).toBeGreaterThan(dispatcher)
+		expect(calls[0].index).toBeLessThan(source.indexOf('\n\t}\n', dispatcher))
+		expect(source).not.toMatch(/\b250\b/)
+		expect(source).not.toContain('PULSE_IDLE_MARGIN_MS')
+
+		let scanned = 0
+
+		for await (const path of new Bun.Glob('src/**/*.ts').scan({ cwd: root })) {
+			if (path.replaceAll('\\', '/') === 'src/devices/commanders/guideoutput.ts') continue
+			expect(await Bun.file(`${root}/${path}`).text()).not.toMatch(/2\s*[*×]\s*GUIDE_PULSE_ACK_MARGIN|GUIDE_PULSE_ACK_MARGIN\s*[*×]\s*2/)
+			scanned++
+		}
+
+		expect(scanned).toBeGreaterThan(100)
 	})
 })
 
@@ -1566,12 +1846,11 @@ describe.skipIf(isTimeConsumingTestSkipped())('frame processing robustness', () 
 		const cameraManager = new FakeCameraManager()
 		const guideOutputManager = new FakeGuideOutputManager()
 		const events: GuiderEvents[] = []
-		const client = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, new StarTracker(), {
-			handler: {
-				event: (_client, event) => {
-					events.push(event)
-					throw new Error('handler boom')
-				},
+		const client = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, new StarTracker())
+		client.addHandler({
+			event: (_client, event) => {
+				events.push(event)
+				throw new Error('handler boom')
 			},
 		})
 		const local: Harness = { client, cameraManager, guideOutputManager, events, camera: makeCamera(), guideOutput: makeGuideOutput(), mount: new MountSimulator(), frameCount: 0 }
@@ -1835,9 +2114,14 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	// while the client is guiding. Every test owns its harness so the sessions, which spend nearly all
 	// of their wall time asleep waiting for commanded pulses, can run concurrently without sharing
 	// state through the module-level harness.
-	async function calibrateAndGuide(options: GuiderClientOptions = {}, connectOptions?: GuiderClientConnectOptions, tracker: GuideTracker = new StarTracker()) {
+	async function calibrateAndGuide(options: HarnessOptions = {}, connectOptions?: GuiderClientConnectOptions, tracker: GuideTracker = new StarTracker()) {
 		const harness = makeHarness({ ...options, calibrator: FAST_CALIBRATION }, tracker)
+		await calibrate(harness, connectOptions)
+		return harness
+	}
 
+	// Connects the harness, starts looping and calibrates against its simulated mount until it guides.
+	async function calibrate(harness: Harness, connectOptions?: GuiderClientConnectOptions) {
 		connect(harness, connectOptions)
 		harness.client.loop()
 		await feedFrame(harness)
@@ -1845,7 +2129,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 
 		for (let i = 0; i < MAX_CALIBRATION_FRAMES; i++) {
 			await feedFrame(harness)
-			if (harness.client.getCalibrated()) return harness
+			if (harness.client.getCalibrated()) return
 		}
 
 		throw new Error('calibration did not converge against the simulated mount')
@@ -3181,6 +3465,68 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 
 		harness.client.disconnect()
 		tracker.clear()
+	})
+
+	test('an admission bounds calibration, guiding and backlash pulses and records their quiescence window', async () => {
+		// Guider limits below the calibration pulses make the 650 ms calibration pulse the configured maximum.
+		const guider = { maxPulseMsRA: 300, maxPulseMsDEC: 300, hysteresisRA: 0, aggressivenessRA: 1 }
+		const harness = makeHarness({ calibrator: FAST_CALIBRATION, guider })
+		const ceiling = harness.client.maxPulseDuration()
+		expect(ceiling).toBe(650)
+		const admission = harness.client.admitPulses(ceiling)!
+		admission.open()
+
+		// Raised after the admission: the guider rebuilt by the calibration may ask for more, but never sends it.
+		guider.maxPulseMsRA = 2000
+		expect(harness.client.maxPulseDuration()).toBe(2000)
+		await calibrate(harness)
+		await establishLockReference(harness)
+		expect(harness.guideOutputManager.pulses.some((pulse) => pulse.duration === ceiling)).toBeTrue()
+		expectPulseWindow(harness)
+
+		// About 870 ms of RA correction: refused, never shortened to the ceiling.
+		const before = harness.guideOutputManager.pulses.length
+		harness.mount.offsetX += RA_AXIS[0] * 10
+		harness.mount.offsetY += RA_AXIS[1] * 10
+		await feedFrame(harness)
+		expect(harness.guideOutputManager.pulses.slice(before).filter((pulse) => pulse.direction === 'WEST' || pulse.direction === 'EAST')).toBeEmpty()
+
+		expect(harness.client.startGuidingAssistant({ backlashPulse: ceiling + 1 })).toBeFalse()
+		expect(eventsOf(harness.events, 'GuidingAssistantStarted')).toBeEmpty()
+		expect(harness.client.startGuidingAssistant({ measureBacklash: true, backlashPulse: 300 })).toBeTrue()
+		await feedFrame(harness)
+		expect(harness.client.stopGuidingAssistant()?.status).toBe('backlash')
+		const backlash = harness.guideOutputManager.pulses.length
+		await feedFrame(harness)
+		expect(harness.guideOutputManager.pulses.slice(backlash)).toEqual([{ direction: 'NORTH', duration: 300 }])
+		expectPulseWindow(harness)
+		harness.client.stopGuidingAssistant()
+
+		expect(harness.guideOutputManager.pulses.every((pulse) => pulse.duration <= ceiling)).toBeTrue()
+
+		// The refused correction was real: without the admission it leaves at full length.
+		admission[Symbol.dispose]()
+		const after = harness.guideOutputManager.pulses.length
+		for (let i = 0; i < 3 && !harness.guideOutputManager.pulses.slice(after).some((pulse) => pulse.duration > ceiling); i++) await feedFrame(harness)
+		expect(harness.guideOutputManager.pulses.slice(after).some((pulse) => pulse.duration > ceiling)).toBeTrue()
+		expectPulseWindow(harness)
+		harness.client.stopCapture()
+	})
+
+	test('a closed admission keeps calibration from pulsing', async () => {
+		const harness = makeHarness({ calibrator: FAST_CALIBRATION })
+		using admission = harness.client.admitPulses(harness.client.maxPulseDuration())!
+		connect(harness)
+		harness.client.loop()
+		await feedFrame(harness)
+		expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+		for (let i = 0; i < 4; i++) await feedFrame(harness)
+
+		expect(admission.isOpen).toBeFalse()
+		expect(harness.client.getAppState()).toBe('Calibrating')
+		expect(harness.guideOutputManager.pulses).toBeEmpty()
+		expect(harness.client.pulseQuiescenceWindow()).toBeUndefined()
+		harness.client.stopCapture()
 	})
 
 	test('startGuidingAssistant is allowed after a settled dither', async () => {

@@ -2,6 +2,7 @@ import { pixelScale } from '../../astronomy/formulas'
 import { timeUnix, type Time } from '../../astronomy/time/time'
 import type { PartialOnly, Writable } from '../../core/types'
 import { errorMessage } from '../../core/util'
+import { guidePulseWindow, type GuidePulseQuiescenceWindow } from '../../devices/commanders/guideoutput'
 import { DEFAULT_PHD2_SETTLE, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2EventType, type PHD2GuideDirection, type PHD2GuideStepEvent, type PHD2LockShiftParams, type PHD2Settle, type PHD2StarImage } from '../../devices/guiding/phd2'
 import type { Camera, GuideDirection, GuideOutput } from '../../devices/indi/device'
 import type { CameraManager } from '../../devices/indi/manager/camera'
@@ -12,7 +13,7 @@ import { readImageFromBuffer, readImageFromSource } from '../../imaging/model/im
 import { type Image, type ImageRawType, makeImageRawTypedArray } from '../../imaging/model/types'
 import { base64Source, bufferSource } from '../../io/io'
 import { clamp } from '../../math/numerical/math'
-import { GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './assistant'
+import { DEFAULT_GUIDING_ASSISTANT_CONFIG, GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './assistant'
 import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationConfig, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
 import { DitherGenerator, type DitherMode } from './dither'
 import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, Guider, type GuiderConfig } from './guider'
@@ -23,8 +24,10 @@ import type { GuideFrame, GuideTracker, GuideTrackerResult } from './tracker'
 // Tracker construction and configuration belong to the caller. It drives the GuidingCalibrator and
 // Guider state machines and reproduces PHD2 behaviors — app-state lifecycle, lock position, dithering (random and
 // spiral), lock-shift drift compensation, settle tracking, meridian-flip calibration flip, and the
-// guiding assistant — while emitting PHD2-shaped events. Distances are pixels; pulse durations and
-// timing are milliseconds; pixel scale is arcsec/pixel.
+// guiding assistant — while emitting PHD2-shaped events to every registered handler. Every guide pulse,
+// whatever path issued it, goes through one dispatcher that refuses it while paused and, under an active pulse
+// admission, while the admission is closed or when the pulse exceeds its ceiling. Distances are pixels; pulse
+// durations and timing are milliseconds of `performance.now()`; pixel scale is arcsec/pixel.
 
 // Default guide exposure when none has been set, in milliseconds.
 const DEFAULT_GUIDER_EXPOSURE = 1000
@@ -40,10 +43,6 @@ const PHD2_SUBVER = ''
 const PHD2_MSG_VERSION = 1
 // Overlapping exposures are not implemented by the local guider.
 const PHD2_OVERLAP_SUPPORT = false
-// Extra time, in milliseconds, to wait for TELESCOPE_TIMED_GUIDE_* Busy acknowledgement and the
-// later Idle after the nominal pulse duration. Covers INDI network/driver latency so a delayed
-// Busy cannot start the mount after the next exposure has already begun.
-const PULSE_IDLE_MARGIN_MS = 250
 // Floor for the missing-BLOB watchdog, in milliseconds. The timeout is max(3 × exposure, this) so a
 // short cadence still waits long enough for a slow INDI round-trip before retrying.
 const EXPOSURE_WATCHDOG_MIN_MS = 5000
@@ -142,10 +141,8 @@ export interface GuideFrameImage {
 	readonly searchRegion: number
 }
 
-// Construction options for a GuiderClient.
+// Construction options for a GuiderClient. Observers are registered with `addHandler`.
 export interface GuiderClientOptions {
-	// Optional event handler receiving PHD2-shaped notifications.
-	readonly handler?: GuiderClientHandler
 	// Whether to reverse DEC output after flipping the calibration on a meridian flip.
 	readonly reverseDecOutputAfterMeridianFlip?: boolean
 	// Star-image search-region side, in pixels (clamped to [16, 128]).
@@ -179,14 +176,69 @@ export interface GuiderClientConnectOptions {
 	readonly pixelSize?: number // Unbinned guider pixel size in um; camera metadata is used when omitted.
 }
 
-// Callbacks for observing client activity.
+// Callbacks for observing client activity, registered with `GuiderClient.addHandler`. Every handler receives
+// every notification in registration order; an exception thrown by one is caught and logged, so a failing UI
+// can neither break the exposure loop nor keep the other handlers from being called.
 export interface GuiderClientHandler {
 	// Invoked for every emitted PHD2-shaped event.
 	readonly event?: (client: GuiderClient, event: PHD2Events) => void
 	// Invoked once per successfully decoded exposure, after the frame has been processed and after the
-	// PHD2 events for that frame were emitted. Not called when the BLOB fails to decode. Exceptions
-	// thrown here are caught and logged so a failing UI cannot break the exposure loop.
+	// PHD2 events for that frame were emitted. Not called when the BLOB fails to decode. The frame image is
+	// only assembled while at least one handler has this callback.
 	readonly frame?: (client: GuiderClient, frame: GuideFrameImage) => void
+}
+
+// Ceiling imposed on every pulse the client dispatches while the admission is active, and the emission gate
+// only its owner controls. One admission at a time per client; the ceiling never changes during its life. It
+// is created closed.
+export interface GuidePulseAdmission extends Disposable {
+	// Longest pulse admitted, in milliseconds: an integer ≥ 1, already rounded like a dispatched pulse.
+	readonly maximumDuration: number
+	// Whether the gate lets pulses up to the ceiling through; a paused client refuses them all the same.
+	readonly isOpen: boolean
+	// Lets pulses up to the ceiling through.
+	readonly open: () => void
+	// Refuses every pulse, from any path, until the next `open()`.
+	readonly close: () => void
+}
+
+// Admission handed out by `GuiderClient.admitPulses`. Disposing it closes the gate for good and lets the
+// client admit another one.
+class PulseAdmission implements GuidePulseAdmission {
+	// Whether the owner opened the gate and has not closed or disposed it since.
+	#open = false
+	// Whether the admission was disposed, after which it can never be opened again.
+	#disposed = false
+	// Detaches the admission from its client; called once on disposal.
+	readonly #release: (admission: PulseAdmission) => void
+
+	// Creates a closed admission with a ceiling in milliseconds and the callback detaching it from its client.
+	constructor(
+		readonly maximumDuration: number,
+		release: (admission: PulseAdmission) => void,
+	) {
+		this.#release = release
+	}
+
+	get isOpen() {
+		return this.#open
+	}
+
+	open() {
+		if (!this.#disposed) this.#open = true
+	}
+
+	close() {
+		this.#open = false
+	}
+
+	// Closes the gate and detaches the admission from its client. Idempotent.
+	[Symbol.dispose]() {
+		if (this.#disposed) return
+		this.#disposed = true
+		this.#open = false
+		this.#release(this)
+	}
 }
 
 // GuiderClient adapts local INDI camera/guide-output devices to a PHD2-like API.
@@ -270,8 +322,13 @@ export class GuiderClient {
 	#pixelSize = 0
 	readonly #searchRegion: number
 	readonly #lockShiftParams = { ...DEFAULT_LOCK_SHIFT_PARAMS }
-	readonly #eventHandler?: GuiderClientHandler['event']
-	readonly #frameHandler?: GuiderClientHandler['frame']
+	// Observers of events and frames, notified in registration order.
+	readonly #handlers = new Set<GuiderClientHandler>()
+	// Active pulse admission, absent outside an admitted run.
+	#admission?: PulseAdmission
+	// Quiescence window of every pulse delivered so far: the latest busyAckDeadline and endsBy, in
+	// `performance.now()` milliseconds. Absent before the first delivered pulse.
+	#pulseWindow?: GuidePulseQuiescenceWindow
 
 	readonly #cameraHandler: DeviceHandler<Camera> = {
 		// Ignores manager-level add callbacks because connect binds one camera explicitly.
@@ -308,8 +365,6 @@ export class GuiderClient {
 		this.#searchRegion = clamp(options?.searchRegion || DEFAULT_SEARCH_REGION, 16, 128)
 		this.#stickyLockPosition = options?.stickyLockPosition === true
 		this.#dither = new DitherGenerator({ mode: options?.ditherMode })
-		this.#eventHandler = options?.handler?.event
-		this.#frameHandler = options?.handler?.frame
 	}
 
 	get camera() {
@@ -324,12 +379,64 @@ export class GuiderClient {
 		return this.#id
 	}
 
+	// Registers the client itself as a handler of the camera manager, so it receives the camera BLOBs and
+	// updates. Unrelated to `addHandler`, which registers an observer of this client.
 	attachHandler() {
 		this.cameraManager.addHandler(this.#cameraHandler)
 	}
 
+	// Unregisters the client from the camera manager.
 	detachHandler() {
 		this.cameraManager.removeHandler(this.#cameraHandler)
+	}
+
+	// Registers an observer of the events and frames of this client. Registering the same handler twice
+	// changes nothing; a handler added while a notification is being delivered may receive it.
+	addHandler(handler: GuiderClientHandler) {
+		this.#handlers.add(handler)
+	}
+
+	// Unregisters an observer; idempotent, and safe while a notification is being delivered.
+	removeHandler(handler: GuiderClientHandler) {
+		this.#handlers.delete(handler)
+	}
+
+	// Activates the exclusive pulse admission with a ceiling of `maximumDuration` milliseconds, rounded like a
+	// dispatched pulse. While it is active every pulse, from guiding, calibration, the guiding assistant or
+	// `guidePulse`, is refused unless the admission is open and the pulse fits the ceiling. Returns undefined
+	// when another admission is active or when the current configuration already allows a longer pulse
+	// (`maxPulseDuration() > ceiling`). The admission starts closed. Throws for a ceiling that is not a finite
+	// number ≥ 1, since no pulse could ever fit it.
+	admitPulses(maximumDuration: number): GuidePulseAdmission | undefined {
+		if (!(maximumDuration >= 1 && Number.isFinite(maximumDuration))) throw new Error(`invalid pulse ceiling: ${maximumDuration}`)
+		if (this.#admission !== undefined) return undefined
+
+		const ceiling = Math.max(1, Math.round(maximumDuration))
+		if (this.maxPulseDuration() > ceiling) return undefined
+
+		const admission = new PulseAdmission(ceiling, (released) => {
+			if (this.#admission === released) this.#admission = undefined
+		})
+
+		this.#admission = admission
+		return admission
+	}
+
+	// Returns the quiescence window of the pulses delivered so far, in `performance.now()` milliseconds: the
+	// latest busyAckDeadline and endsBy over every delivered pulse, each from `guidePulseWindow`. Undefined
+	// before the first delivered pulse; refused pulses never change it.
+	pulseQuiescenceWindow(): GuidePulseQuiescenceWindow | undefined {
+		return this.#pulseWindow
+	}
+
+	// Longest pulse, in milliseconds, the current configuration can emit: the guider limits of both axes, the
+	// calibration pulses of both axes and the guiding assistant backlash pulse, rounded like a dispatched pulse.
+	// Only the default of an admission ceiling and the refusal of an admission rely on it.
+	maxPulseDuration() {
+		const guider = { ...DEFAULT_GUIDER_CONFIG, ...this.options?.guider }
+		const calibrator = this.#calibrator.config
+		const backlashPulse = this.#guidingAssistant?.config.backlashPulse ?? DEFAULT_GUIDING_ASSISTANT_CONFIG.backlashPulse
+		return Math.max(1, Math.round(Math.max(guider.maxPulseMsRA, guider.maxPulseMsDEC, calibrator.raPulse, calibrator.decPulse, backlashPulse)))
 	}
 
 	// Binds the active camera and guide output, enables image BLOBs, and starts listening.
@@ -624,12 +731,16 @@ export class GuiderClient {
 		return this.#guideOutputEnabled
 	}
 
-	// Starts a PHD2-style guiding assistant run while ordinary guide output is disabled.
+	// Starts a PHD2-style guiding assistant run while ordinary guide output is disabled. Under an active pulse
+	// admission, a backlash pulse longer than its ceiling refuses the run before anything starts.
 	startGuidingAssistant(config: Partial<GuidingAssistantConfig> = {}) {
 		const appState = this.#appState === 'Paused' && !this.#fullPause ? this.#resumeState : this.#appState
 		const guiderState = this.#guider.currentState
 
 		if (this.#guidingAssistant !== undefined || this.#settling || guiderState.state !== 'guiding' || (appState !== 'Guiding' && appState !== 'LostLock')) return false
+
+		const backlashPulse = Math.max(1, Math.round(config.backlashPulse ?? DEFAULT_GUIDING_ASSISTANT_CONFIG.backlashPulse))
+		if (this.#admission !== undefined && backlashPulse > this.#admission.maximumDuration) return false
 
 		const imageScale = this.getPixelScale()
 		const exposure = this.getExposure()
@@ -800,13 +911,11 @@ export class GuiderClient {
 		return true
 	}
 
-	// Sends a direct single-axis pulse through the active guide output.
+	// Sends a direct single-axis pulse of `amount` milliseconds through the active guide output. Returns false,
+	// sending nothing, while paused, while an active admission is closed, or above its ceiling.
 	guidePulse(amount: number, direction: PHD2GuideDirection) {
 		if (this.#guideOutput === undefined || !this.#guideOutputActive || amount <= 0 || !Number.isFinite(amount)) return false
-
-		this.guideOutputManager.pulse(this.#guideOutput, direction.toUpperCase() as GuideDirection, Math.max(1, Math.round(amount)))
-
-		return true
+		return this.#dispatchPulse(direction.toUpperCase() as GuideDirection, amount) > 0
 	}
 
 	// Starts continuous exposure looping without issuing guide pulses.
@@ -1138,15 +1247,17 @@ export class GuiderClient {
 		}
 	}
 
-	// Publishes the decoded frame and its overlay geometry to the frame handler. Called after the
+	// Publishes the decoded frame and its overlay geometry to every frame handler. Called after the
 	// frame has been processed so the lock target, the tracked star, and the app state already
-	// reflect this exposure instead of the previous one. Handler failures are contained here because
-	// this runs inside the exposure loop.
+	// reflect this exposure instead of the previous one. The snapshot is only assembled when a handler wants
+	// it, and handler failures are contained here because this runs inside the exposure loop.
 	#emitFrameImage(frame: GuideFrame, image: Image) {
-		if (this.#frameHandler === undefined) return
+		let frameImage: GuideFrameImage | undefined
 
-		try {
-			this.#frameHandler(this, {
+		for (const handler of this.#handlers) {
+			if (handler.frame === undefined) continue
+
+			frameImage ??= {
 				frameId: frame.frameId ?? 0,
 				timestamp: frame.timestamp ?? Date.now(),
 				captureTime: frame.captureTime,
@@ -1157,9 +1268,13 @@ export class GuiderClient {
 				lockPosition: this.#lockPosition,
 				searchPosition: this.#lockSearchPosition ?? this.#lockPosition,
 				searchRegion: this.#searchRegion,
-			})
-		} catch (e) {
-			console.error('guide frame handler failed:', e)
+			}
+
+			try {
+				handler.frame(this, frameImage)
+			} catch (e) {
+				console.error('guide frame handler failed:', e)
+			}
 		}
 	}
 
@@ -1261,9 +1376,29 @@ export class GuiderClient {
 	#pulseAxis(direction?: AxisPulse['direction'], duration?: number, force: boolean = false) {
 		if (this.#guideOutput === undefined || this.#paused || (!force && !this.#guideOutputActive) || direction === undefined || duration === undefined || duration <= 0 || !Number.isFinite(duration)) return 0
 
-		const pulseDuration = Math.max(1, Math.round(duration))
-		this.guideOutputManager.pulse(this.#guideOutput, direction.toUpperCase() as GuideDirection, pulseDuration)
+		const pulseDuration = this.#dispatchPulse(direction.toUpperCase() as GuideDirection, duration)
 		this.#pulseMsIssued = Math.max(this.#pulseMsIssued, pulseDuration)
+
+		return pulseDuration
+	}
+
+	// The only sender of guide pulses: rounds the duration, in milliseconds, to a whole millisecond of at least
+	// one, refuses it while paused, while an active admission is closed, or above its ceiling, and records the
+	// window of a delivered pulse. Returns the delivered duration, or 0 when nothing was sent. A correction
+	// refused for its length is lost, never shortened.
+	#dispatchPulse(direction: GuideDirection, duration: number) {
+		const guideOutput = this.#guideOutput
+		if (guideOutput === undefined || this.#paused) return 0
+
+		const pulseDuration = Math.max(1, Math.round(duration))
+		const admission = this.#admission
+		if (admission !== undefined && (!admission.isOpen || pulseDuration > admission.maximumDuration)) return 0
+
+		const window = guidePulseWindow(performance.now(), pulseDuration)
+		this.guideOutputManager.pulse(guideOutput, direction, pulseDuration)
+
+		const previous = this.#pulseWindow
+		this.#pulseWindow = previous === undefined ? window : { busyAckDeadline: Math.max(previous.busyAckDeadline, window.busyAckDeadline), endsBy: Math.max(previous.endsBy, window.endsBy) }
 
 		return pulseDuration
 	}
@@ -1624,35 +1759,27 @@ export class GuiderClient {
 		return this.#connected && this.#camera !== undefined && this.#camera.connected === true && this.#appState !== 'Stopped' && !(this.#appState === 'Paused' && this.#fullPause)
 	}
 
-	// Waits out the commanded pulse, the INDI Busy acknowledgement, and the later Idle. GuideOutput
-	// pulse() only sends the timed-guide vector; `device.pulsing` is updated later by numberVector.
-	// The Idle wait is measured from when Busy is observed, not from a single absolute deadline, so a
-	// Busy that arrives near the acknowledgement margin still blocks capture until the mount stops.
+	// Waits out a pulse of `duration` milliseconds dispatched now, on the window `guidePulseWindow` gives it:
+	// GuideOutput pulse() only sends the timed-guide vector, and `device.pulsing` is updated later by
+	// numberVector. A Busy is waited for until the window's busyAckDeadline, and once Busy the Idle until its
+	// endsBy, so a Busy that arrives at the end of the acknowledgement margin still blocks capture until the mount
+	// stops, without ever waiting past the window.
 	async #waitForPulseToComplete(duration: number): Promise<void> {
 		if (duration <= 0) return
 
-		const started = performance.now()
-		const ackDeadline = started + duration + PULSE_IDLE_MARGIN_MS
+		const { busyAckDeadline, endsBy } = guidePulseWindow(performance.now(), duration)
 		const isBusy = () => this.#guideOutput?.pulsing === true
 
-		while (performance.now() < started + duration) {
-			if (isBusy()) break
-			const remaining = started + duration - performance.now()
-			if (remaining <= 0) break
+		while (!isBusy()) {
+			const remaining = busyAckDeadline - performance.now()
+			if (remaining <= 0) return
 			await Bun.sleep(Math.min(10, remaining))
 		}
 
-		if (!isBusy()) {
-			while (!isBusy() && performance.now() < ackDeadline) {
-				await Bun.sleep(10)
-			}
-		}
-
-		if (!isBusy()) return
-
-		const idleDeadline = performance.now() + duration + PULSE_IDLE_MARGIN_MS
-		while (isBusy() && performance.now() < idleDeadline) {
-			await Bun.sleep(10)
+		while (isBusy()) {
+			const remaining = endsBy - performance.now()
+			if (remaining <= 0) return
+			await Bun.sleep(Math.min(10, remaining))
 		}
 	}
 
@@ -1740,8 +1867,10 @@ export class GuiderClient {
 		this.#guider.setCalibration(options.calibration, options)
 	}
 
-	// Emits one callback event if the caller provided an event handler.
+	// Emits one event to every registered event handler, in registration order.
 	emitEvent<T extends keyof GuiderEventMap>(Event: T, data?: Omit<GuiderEventMap[T], 'Event' | 'Timestamp' | 'Host' | 'Inst'>) {
+		if (this.#handlers.size === 0) return
+
 		const event = {
 			...data,
 			Event,
@@ -1750,12 +1879,14 @@ export class GuiderClient {
 			Inst: 1, // There is no PHD2 instance index in this local client, so Inst defaults to 1-based instance number.
 		} as PHD2Events
 
-		try {
-			this.#eventHandler?.(this, event)
-		} catch (e) {
-			// Event callbacks are user code; a throw must not unwind the exposure loop or skip the
-			// remaining notifications for this frame.
-			console.error('guide event handler failed:', e)
+		for (const handler of this.#handlers) {
+			try {
+				handler.event?.(this, event)
+			} catch (e) {
+				// Event callbacks are user code; a throw must not unwind the exposure loop or skip the
+				// remaining notifications for this frame.
+				console.error('guide event handler failed:', e)
+			}
 		}
 	}
 

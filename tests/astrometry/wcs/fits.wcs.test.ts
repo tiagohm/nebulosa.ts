@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { cd, cdFromCdelt, cdMatrix, DEC_TAN_SIP, hasCd, isWcsFitsKeyword, pc2cd, RA_TAN_SIP, reflectFitsWcs, scaleAndCropFitsWcs, tanProject, tanUnproject } from '../../../src/astrometry/wcs/fits.wcs'
+import { plateSolutionFrom } from '../../../src/astrometry/solvers/platesolver'
+import { cd, cdFromCdelt, cdMatrix, DEC_TAN, DEC_TAN_SIP, hasCd, isWcsFitsKeyword, pc2cd, RA_TAN, RA_TAN_SIP, reflectFitsWcs, scaleAndCropFitsWcs, sipKeywordsValid, sipOrdersValid, tanHeader, tanProject, tanUnproject } from '../../../src/astrometry/wcs/fits.wcs'
 import { Wcs } from '../../../src/bindings/astrometry/libwcs'
 import { PIOVERTWO } from '../../../src/core/constants'
 import type { FitsHeader } from '../../../src/io/formats/fits/fits'
@@ -465,4 +466,212 @@ describe('tan project/unproject round-trip', () => {
 			expect(pixel[1]).toBeCloseTo(entry.y, entry.precision)
 		})
 	}
+})
+
+// https://nova.astrometry.net/user_images/12367041: a 9176 by 6870 TAN-SIP solution with zeroed forward linear
+// terms, non-zero reverse constant and linear terms and a reference pixel far from the image center.
+const M101_HEADER: FitsHeader = {
+	CTYPE1: RA_TAN_SIP,
+	CTYPE2: DEC_TAN_SIP,
+	EQUINOX: 2000,
+	LONPOLE: 180,
+	LATPOLE: 0,
+	CRVAL1: 211.789996831,
+	CRVAL2: 54.3250783745,
+	CRPIX1: 6844.54215495,
+	CRPIX2: 2924.71455892,
+	CUNIT1: 'deg',
+	CUNIT2: 'deg',
+	CD1_1: 0.00024098759167,
+	CD1_2: -5.0386872296e-5,
+	CD2_1: 5.05049438425e-5,
+	CD2_2: 0.000241100662196,
+	IMAGEW: 9176,
+	IMAGEH: 6870,
+	A_ORDER: 2,
+	A_0_0: 0,
+	A_0_1: 0,
+	A_0_2: -1.19977665955e-8,
+	A_1_0: 0,
+	A_1_1: 3.64583422462e-7,
+	A_2_0: 4.56030084803e-8,
+	B_ORDER: 2,
+	B_0_0: 0,
+	B_0_1: 0,
+	B_0_2: 6.99507235566e-8,
+	B_1_0: 0,
+	B_1_1: 1.19143632657e-7,
+	B_2_0: -1.51089049833e-8,
+	AP_ORDER: 2,
+	AP_0_0: 0.00125507380633,
+	AP_0_1: 5.41386160049e-7,
+	AP_0_2: 1.1640011409e-8,
+	AP_1_0: 8.29305028907e-7,
+	AP_1_1: -3.64848349812e-7,
+	AP_2_0: -4.55456767661e-8,
+	BP_ORDER: 2,
+	BP_0_0: 0.000512324546753,
+	BP_0_1: 2.3090891984e-7,
+	BP_0_2: -7.00930378576e-8,
+	BP_1_0: 2.92061162221e-7,
+	BP_1_1: -1.19102625774e-7,
+	BP_2_0: 1.51337539596e-8,
+}
+
+// The center and three corners of the M101 image, in FITS 1-based pixels.
+const M101_POINTS = [
+	[4588.5, 3435.5],
+	[1, 1],
+	[9176, 1],
+	[1, 6870],
+] as const
+
+// Expects every path to refuse a header: the descriptor, both projections at the center and at a corner, and the
+// plate solution.
+function expectRefused(header: FitsHeader) {
+	expect(tanHeader(header)).toBeUndefined()
+	expect(tanUnproject(header, 4588.5, 3435.5)).toBeUndefined()
+	expect(tanUnproject(header, 1, 1)).toBeUndefined()
+	expect(tanProject(header, deg(211), deg(54))).toBeUndefined()
+	expect(plateSolutionFrom(header)).toBeUndefined()
+}
+
+// Expects every path to accept a header.
+function expectAccepted(header: FitsHeader) {
+	expect(tanHeader(header)).toBeDefined()
+	expect(tanUnproject(header, 4588.5, 3435.5)).toBeDefined()
+	expect(tanProject(header, deg(211), deg(54))).toBeDefined()
+	expect(plateSolutionFrom(header)).toBeDefined()
+}
+
+describe('SIP validation', () => {
+	test('only matching TAN or TAN-SIP pairs are gnomonic', () => {
+		expectAccepted(M101_HEADER)
+		expectAccepted({ ...M101_HEADER, CTYPE1: RA_TAN, CTYPE2: DEC_TAN })
+		expectRefused({ ...M101_HEADER, CTYPE2: DEC_TAN })
+		expectRefused({ ...M101_HEADER, CTYPE1: RA_TAN })
+		expectRefused({ ...M101_HEADER, CTYPE1: undefined })
+
+		// Two empty CTYPEs stay lenient for internally built headers, which are never plate solutions.
+		const empty = { ...M101_HEADER, CTYPE1: undefined, CTYPE2: undefined }
+		expect(tanUnproject(empty, 4588.5, 3435.5)).toBeDefined()
+		expect(plateSolutionFrom(empty)).toBeUndefined()
+	})
+
+	test('forward orders must be integers from 2 to 9 on both axes', () => {
+		for (const order of [undefined, 0, 1, 10, 2.5, -2, Number.NaN, Number.POSITIVE_INFINITY, '2']) {
+			expect(sipOrdersValid({ ...M101_HEADER, A_ORDER: order })).toBeFalse()
+			expectRefused({ ...M101_HEADER, A_ORDER: order })
+		}
+
+		expectRefused({ ...M101_HEADER, B_ORDER: 1 })
+		expect(sipOrdersValid({ ...M101_HEADER, A_ORDER: 9, B_ORDER: 9 })).toBeTrue()
+		expectAccepted({ ...M101_HEADER, A_ORDER: 9, B_ORDER: 9 })
+	})
+
+	test('a huge order is refused at once, before any polynomial is evaluated', () => {
+		const header = { ...M101_HEADER, A_ORDER: 1e6, B_ORDER: 1e6 }
+		const started = performance.now()
+		expectRefused(header)
+		expect(performance.now() - started).toBeLessThan(10)
+	})
+
+	test('a non-zero forward constant or linear term is refused, while zeros are accepted', () => {
+		for (const key of ['A_1_0', 'A_0_1', 'A_0_0', 'B_0_1', 'B_1_0', 'B_0_0']) {
+			expectRefused({ ...M101_HEADER, [key]: 1e-6 })
+			expectAccepted({ ...M101_HEADER, [key]: -0 })
+		}
+	})
+
+	test('a coefficient above its order or without one is refused', () => {
+		expectAccepted({ ...M101_HEADER, A_2_0: 1e-8, A_1_1: 1e-8, A_0_2: 1e-8 })
+
+		for (const extra of [{ A_3_0: 1e-9 }, { B_0_3: 1e-9 }, { AP_2_1: 1e-9 }, { BP_1_2: 1e-9 }, { A_10_0: 0 }, { A_2_0: Number.NaN }, { B_1_1: '1e-7' }]) {
+			expect(sipKeywordsValid({ ...M101_HEADER, ...extra })).toBeFalse()
+			expectRefused({ ...M101_HEADER, ...extra })
+		}
+
+		const { AP_ORDER, BP_ORDER, ...withoutReverseOrders } = M101_HEADER
+		expect(AP_ORDER).toBe(BP_ORDER)
+		expectRefused(withoutReverseOrders)
+	})
+
+	test('reverse polynomials keep their constant and linear terms and must be declared on both axes', () => {
+		const withoutReverse = Object.fromEntries(Object.entries(M101_HEADER).filter(([key]) => !/^(AP|BP)_/.test(key)))
+
+		// The reverse polynomials fit the inverse of the forward ones, so both reverse paths land on the same pixel.
+		const sky = tanUnproject(M101_HEADER, 100, 200)!
+		const fitted = tanProject(M101_HEADER, ...sky)!
+		const iterated = tanProject({ ...withoutReverse, AP_ORDER: 0, BP_ORDER: 0 }, ...sky)!
+		expect(Math.hypot(iterated[0] - 100, iterated[1] - 200)).toBeLessThan(1e-6)
+		expect(Math.hypot(fitted[0] - 100, fitted[1] - 200)).toBeLessThan(0.015)
+		expect(tanProject(withoutReverse, ...sky)).toEqual(iterated)
+
+		// Astropy 7.1.0 accepts reverse orders of 10 and evaluates the forward map alone; nebulosa.ts stops at 9.
+		expectRefused({ ...M101_HEADER, AP_ORDER: 10, BP_ORDER: 10 })
+		expectRefused({ ...M101_HEADER, BP_ORDER: undefined })
+		expectRefused({ ...M101_HEADER, AP_ORDER: undefined })
+	})
+
+	test('units must be degrees', () => {
+		expectRefused({ ...M101_HEADER, CUNIT1: 'rad' })
+		expectRefused({ ...M101_HEADER, CUNIT2: 'arcsec' })
+		expectAccepted({ ...M101_HEADER, CUNIT1: ' DEG ', CUNIT2: undefined })
+		expectRefused({ ...TAN_HEADER, CUNIT1: 'rad', NAXIS1: 800, NAXIS2: 600 })
+	})
+
+	test('the projection matches Astropy at the center and the corners', () => {
+		// Astropy 7.1.0, numpy 2.2.6: WCS.pixel_to_world_values at the FITS pixels minus one.
+		const withSip = [
+			[210.81342485450145, 54.330288289427784],
+			[209.2839147862296, 53.249392829888684],
+			[212.9878012758693, 53.73177805160949],
+			[208.574251119693, 54.88708022716851],
+		] as const
+		const withoutSip = [
+			[210.81348555910475, 54.3303456789751],
+			[209.280415117246, 53.24829998218111],
+			[212.9887343553913, 53.73195835441583],
+			[208.57721814000246, 54.88824147860589],
+		] as const
+		const linear = { ...Object.fromEntries(Object.entries(M101_HEADER).filter(([key]) => !/^(A|B|AP|BP)_/.test(key))), CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN' }
+
+		for (let i = 0; i < M101_POINTS.length; i++) {
+			const [x, y] = M101_POINTS[i]
+			const [ra, dec] = tanUnproject(M101_HEADER, x, y)!
+			expect(Math.hypot((ra - deg(withSip[i][0])) * Math.cos(dec), dec - deg(withSip[i][1]))).toBeLessThan(deg(0.01 / 3600))
+			const [linearRa, linearDec] = tanUnproject(linear, x, y)!
+			expect(Math.hypot((linearRa - deg(withoutSip[i][0])) * Math.cos(dec), linearDec - deg(withoutSip[i][1]))).toBeLessThan(deg(0.01 / 3600))
+		}
+
+		// Without its SIP the M101 center moves by about 0.24″.
+		const [ra, dec] = tanUnproject(M101_HEADER, 4588.5, 3435.5)!
+		const [linearRa, linearDec] = tanUnproject(linear, 4588.5, 3435.5)!
+		expect(Math.hypot((ra - linearRa) * Math.cos(dec), dec - linearDec) / deg(1 / 3600)).toBeCloseTo(0.24, 2)
+	})
+
+	test('the reverse polynomials invert the forward ones within their fit error', () => {
+		// The astrometry.net reverse fit of M101 inverts the forward one to 0.015 px over the whole image (measured: 3e-6 px
+		// at the center, 0.0021 px at two corners and 0.0100 px, the maximum over a 10 by 10 grid, at the other two).
+		for (const [x, y] of [...M101_POINTS, [9176, 6870] as const]) {
+			const [ra, dec] = tanUnproject(M101_HEADER, x, y)!
+			const [px, py] = tanProject(M101_HEADER, ra, dec)!
+			expect(Math.hypot(px - x, py - y)).toBeLessThan(0.015)
+		}
+	})
+
+	test('scaling and cropping keeps only well-formed SIP', () => {
+		const preserved: FitsHeader = { ...M101_HEADER }
+		scaleAndCropFitsWcs(preserved, 2, 2, 0, 0)
+		expect(preserved.A_ORDER).toBe(2)
+		expect(preserved.AP_0_0).toBeCloseTo((M101_HEADER.AP_0_0 as number) * 2, 14)
+
+		for (const malformed of [{ A_ORDER: 1 }, { A_1_0: 1e-6 }]) {
+			const header: FitsHeader = { ...M101_HEADER, ...malformed }
+			scaleAndCropFitsWcs(header, 2, 2, 0, 0)
+			expect(header.CTYPE1).toBeUndefined()
+			expect(header.A_ORDER).toBeUndefined()
+			expect(header.CD1_1).toBeUndefined()
+		}
+	})
 })

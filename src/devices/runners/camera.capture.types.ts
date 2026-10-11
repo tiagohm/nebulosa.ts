@@ -1,8 +1,9 @@
 import type { CameraTransferFormat, FrameType } from '../indi/device'
 
-// Request, progress, and frame shapes of a camera capture, with the exposure-time unit conversions they rely
-// on. Exposure times travel in the unit the caller chose, the inter-frame delay is in seconds, and every
-// progress time in a capture event is in microseconds. Nothing here allocates beyond the values it returns.
+// Request, progress, clock, and frame shapes of a camera capture, with the exposure-time unit conversions they
+// rely on. Exposure times travel in the unit the caller chose, the inter-frame delay is in seconds, every
+// progress time in a capture event is in microseconds, and frame instants are milliseconds of the capture clock.
+// Nothing here allocates beyond the values it returns.
 
 // Unit of a requested exposure time.
 export type CameraExposureTimeUnit = 'minute' | 'second' | 'millisecond' | 'microsecond'
@@ -19,26 +20,24 @@ export type CameraAutoSubFolderMode = 'off' | 'noon' | 'midnight'
 // - exposureStarted: a frame generation opened and its exposure was dispatched.
 // - exposing: the driver reports the exposure Busy.
 // - waiting: the inter-frame delay is running.
-// - dithering, settling: the guider is dithering before the next frame.
 // - pausing, paused: reserved for features that pause a capture.
 // - exposureFinished: the driver reported the exposure Ok.
 // - error: the capture did not run to its end; always followed by idle.
-export type CameraCaptureState = 'idle' | 'exposureStarted' | 'exposing' | 'waiting' | 'settling' | 'dithering' | 'pausing' | 'paused' | 'exposureFinished' | 'error'
+export type CameraCaptureState = 'idle' | 'exposureStarted' | 'exposing' | 'waiting' | 'pausing' | 'paused' | 'exposureFinished' | 'error'
 
-// Progress of one guider dither, reported back to the capture that asked for it.
-export type CameraDitherPhase = 'dithering' | 'dithered' | 'settling' | 'settled'
+// Clock a capture reads its frame instants from. Two domains, never compared with each other: wall time
+// stamps instants a human or a durable record reads, and monotonic time measures windows and durations.
+export interface CameraCaptureClock {
+	// Epoch UTC, in Unix milliseconds. It may jump in either direction when the system clock is corrected.
+	readonly wallNow: () => number
+	// Milliseconds from an arbitrary origin of the process; never decreases and never survives a restart.
+	readonly monotonicNow: () => number
+}
 
-// Dither a capture asks for before each frame.
-export interface CameraDither {
-	// Whether the capture dithers at all.
-	enabled: boolean
-	// Dither amplitude in guide-camera pixels.
-	amount: number
-	// Whether the dither moves only in right ascension.
-	raOnly: boolean
-	// Id of the guider session that must dither. Empty means no guider was chosen, and the capture then
-	// exposes without dithering: with several sessions open, picking one would be a guess.
-	guider?: string
+// Clock a capture uses when its caller supplies none: `Date.now` and `performance.now`.
+export const SYSTEM_CAMERA_CAPTURE_CLOCK: CameraCaptureClock = {
+	wallNow: () => Date.now(),
+	monotonicNow: () => performance.now(),
 }
 
 // Capture request. It is copied when a capture starts, so mutating it afterwards never alters a running capture.
@@ -100,8 +99,6 @@ export interface CameraCaptureStart {
 	focuser?: string
 	// Name of the rotator whose state the driver stamps into the frame headers.
 	rotator?: string
-	// Dither performed before each frame.
-	dither: CameraDither
 	// Payload format the driver transfers.
 	transferFormat: CameraTransferFormat
 	// Whether the driver compresses the payload.
@@ -162,6 +159,22 @@ export interface CameraFrameEvent {
 	readonly camera: string
 	// Path the frame is published under.
 	readonly path: string
+	// Wall instant, in Unix milliseconds, read immediately before the exposure command was sent, with nothing
+	// awaited in between. A conservative lower bound of the physical start; absent when the frame was opened by
+	// an exposure nobody here dispatched.
+	readonly exposureDispatchedAt?: number
+	// Monotonic counterpart of `exposureDispatchedAt`, in milliseconds of the capture clock.
+	readonly exposureDispatchedMonotonic?: number
+	// Wall instant, in Unix milliseconds, at which the first Busy of the exposure was observed. It arrives after
+	// the shutter opened, so it approximates the physical start from above; use it to estimate the exposure
+	// midpoint, never to open a window that must contain the whole exposure.
+	readonly exposureStartedAt: number
+	// Monotonic counterpart of `exposureStartedAt`, in milliseconds of the capture clock.
+	readonly exposureStartedMonotonic: number
+	// Wall instant, in Unix milliseconds, at which the driver reported the exposure Ok.
+	readonly exposureFinishedAt: number
+	// Monotonic counterpart of `exposureFinishedAt`, in milliseconds of the capture clock.
+	readonly exposureFinishedMonotonic: number
 }
 
 // Request defaults; callers clone it before changing fields. The zero exposure time must be replaced.
@@ -184,11 +197,6 @@ export const DEFAULT_CAMERA_CAPTURE_START: CameraCaptureStart = {
 	offset: 0,
 	autoSave: false,
 	autoSubFolderMode: 'off',
-	dither: {
-		enabled: false,
-		amount: 5,
-		raOnly: false,
-	},
 	transferFormat: 'FITS',
 	compressed: false,
 }

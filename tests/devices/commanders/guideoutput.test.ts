@@ -1,5 +1,5 @@
-import { afterAll, afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
-import { GuideOutputCommander } from '../../../src/devices/commanders/guideoutput'
+import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
+import { GUIDE_PULSE_ACK_MARGIN, GUIDE_PULSE_STOP_SETTLE_TIMEOUT, GuideOutputCommander, guidePulseReleaseBound, guidePulseWindow } from '../../../src/devices/commanders/guideoutput'
 import { IndiClientHandlerSet } from '../../../src/devices/indi/client'
 import type { GuideOutput, Camera } from '../../../src/devices/indi/device'
 import { CameraManager } from '../../../src/devices/indi/manager/camera'
@@ -18,7 +18,7 @@ const guideOutputProvider: DeviceProvider<GuideOutput> = { get: (client, name) =
 const guideOutputManager = new GuideOutputManager(guideOutputProvider)
 const resourceArbiter = new ResourceArbiter()
 const operationCoordinator = new OperationCoordinator(resourceArbiter)
-const guideOutputCommander = new GuideOutputCommander(guideOutputManager)
+const guideOutputCommander = new GuideOutputCommander(guideOutputManager, resourceArbiter)
 const deviceLifecycle = new DeviceLifecycle(resourceArbiter, operationCoordinator)
 deviceLifecycle.observe(cameraManager)
 deviceLifecycle.observe(guideOutputManager)
@@ -53,7 +53,8 @@ function isFree(camera: Camera) {
 async function connected() {
 	const camera = getCamera()
 	cameraManager.connect(camera)
-	await waitUntil(() => camera.connected && camera.canPulseGuide)
+	// A pulse of an earlier test may still be running in the simulator across the reconnection.
+	await waitUntil(() => camera.connected && camera.canPulseGuide && !camera.pulsing)
 	camera.canSetGuideRate = true
 	return camera
 }
@@ -153,8 +154,11 @@ test('fails a pulse immediately when the driver reports an Alert', async () => {
 
 test('cancels sibling pulses when one axis reports an Alert', async () => {
 	const camera = await connected()
+	// The driver refuses the north leg and honors the zero that stops the east one.
 	const pulse = spyOn(guideOutputManager, 'pulse').mockImplementation((device, direction, duration) => {
-		if (direction === 'NORTH' && duration > 0) guideOutputCommander.updated(device, 'pulsing', 'Alert')
+		if (direction === 'NORTH' && duration > 0) guideVector(camera, 'TELESCOPE_TIMED_GUIDE_NS', 'Alert')
+		else if (direction === 'EAST' && duration > 0) guideVector(camera, 'TELESCOPE_TIMED_GUIDE_WE', 'Busy')
+		else if ((direction === 'EAST' || direction === 'WEST') && duration === 0 && camera.pulsingWE) guideVector(camera, 'TELESCOPE_TIMED_GUIDE_WE', 'Ok')
 	})
 
 	try {
@@ -283,7 +287,7 @@ test('refuses guide-rate changes while a pulse owns the physical camera', async 
 
 test('stops observing the manager once disposed', () => {
 	const device = getCamera()
-	const commander = new GuideOutputCommander(guideOutputManager)
+	const commander = new GuideOutputCommander(guideOutputManager, resourceArbiter)
 	const updated = spyOn(commander, 'updated')
 
 	guideOutputManager.updated(device, 'name')
@@ -300,7 +304,7 @@ test('stops observing the manager once disposed', () => {
 		let scoped: GuideOutputCommander | undefined
 
 		{
-			using commander = new GuideOutputCommander(guideOutputManager)
+			using commander = new GuideOutputCommander(guideOutputManager, resourceArbiter)
 			scoped = commander
 		}
 
@@ -308,4 +312,364 @@ test('stops observing the manager once disposed', () => {
 	} finally {
 		removeHandler.mockRestore()
 	}
+})
+
+// The guide output view the manager registered for the camera.
+function getView() {
+	const view = guideOutputManager.get(client, simulator.name)
+	expect(view).toBeDefined()
+	return view!
+}
+
+// Stands in for a driver that publishes nothing on its own: pulses are only recorded, and the test publishes
+// the timed-guide states itself.
+function silentDriver() {
+	const pulses: [string, number][] = []
+	const spy = spyOn(guideOutputManager, 'pulse').mockImplementation((_, direction, duration) => {
+		pulses.push([direction, duration])
+	})
+	return { pulses, spy } as const
+}
+
+function causesOf(camera: Camera) {
+	return resourceArbiter.snapshot(resourceKey(camera)).causes
+}
+
+describe('pulse window', () => {
+	test('derives every window from the dispatch, the duration and the acknowledgement margin', () => {
+		expect(GUIDE_PULSE_ACK_MARGIN).toBe(250)
+		expect(GUIDE_PULSE_STOP_SETTLE_TIMEOUT).toBe(15000)
+		expect(guidePulseWindow(0, 2000)).toEqual({ busyAckDeadline: 2250, endsBy: 4500 })
+		expect(guidePulseWindow(1000, 1)).toEqual({ busyAckDeadline: 1251, endsBy: 1502 })
+		expect(guidePulseWindow(10, 0)).toEqual({ busyAckDeadline: 260, endsBy: 510 })
+		expect(guidePulseReleaseBound(2500)).toBe(20500)
+		expect(guidePulseReleaseBound(1)).toBe(2 + 500 + 15000)
+	})
+})
+
+describe('dispatched pulse evidence', () => {
+	test('resolves a leg without Busy only after the Busy deadline', async () => {
+		const camera = await connected()
+		const driver = silentDriver()
+
+		try {
+			const started = performance.now()
+			expect(await guideOutputCommander.pulse(operationCoordinator, camera, 'NORTH', 200, { settleTimeout: 0 })).toEqual(successfulOperationResult(undefined))
+			// A Busy could still begin until the pulse plus the margin, so nothing earlier proves it ended.
+			expect(performance.now() - started).toBeGreaterThanOrEqual(200 + GUIDE_PULSE_ACK_MARGIN - 5)
+			expect(guideOutputCommander.dispatchedPulseWindow(camera)).toBeUndefined()
+			expect(causesOf(camera)).not.toContain('guidePulse')
+		} finally {
+			driver.spy.mockRestore()
+		}
+	})
+
+	test('waits for the Idle of a Busy that arrives after the nominal end of the pulse', async () => {
+		const camera = await connected()
+		const driver = silentDriver()
+		const timers = [setTimeout(() => guideVector(camera, 'TELESCOPE_TIMED_GUIDE_NS', 'Busy'), 300), setTimeout(() => guideVector(camera, 'TELESCOPE_TIMED_GUIDE_NS', 'Ok'), 600)]
+
+		try {
+			const started = performance.now()
+			expect(await guideOutputCommander.pulse(operationCoordinator, camera, 'NORTH', 200, { settleTimeout: 0 })).toEqual(successfulOperationResult(undefined))
+			expect(performance.now() - started).toBeGreaterThanOrEqual(595)
+			expect(camera.pulsingNS).toBeFalse()
+			await waitUntil(() => isFree(camera))
+		} finally {
+			for (const timer of timers) clearTimeout(timer)
+			driver.spy.mockRestore()
+		}
+	})
+
+	test('does not declare a standstill before the observation window a stop asks for', async () => {
+		const camera = await connected()
+		const started = performance.now()
+
+		expect(await guideOutputCommander.stopPulses(camera, ['NORTH'], { busyAckDeadline: started + 200, settleTimeout: 1000 })).toEqual(successfulOperationResult(undefined))
+		expect(performance.now() - started).toBeGreaterThanOrEqual(195)
+	})
+
+	test('concludes each leg of asymmetric axes on its own flag', async () => {
+		const camera = await connected()
+		const driver = silentDriver()
+		const ends: Record<string, number> = {}
+		const timers: Timer[] = []
+		const updated = spyOn(guideOutputCommander, 'updated')
+
+		driver.spy.mockImplementation((_, direction, duration) => {
+			if (duration <= 0) return
+			const vector = direction === 'NORTH' || direction === 'SOUTH' ? 'TELESCOPE_TIMED_GUIDE_NS' : 'TELESCOPE_TIMED_GUIDE_WE'
+			guideVector(camera, vector, 'Busy')
+			timers.push(
+				setTimeout(() => {
+					ends[direction] = performance.now()
+					guideVector(camera, vector, 'Ok')
+				}, duration),
+			)
+		})
+
+		try {
+			const started = performance.now()
+			const result = await guideOutputCommander.pulseAxes(
+				operationCoordinator,
+				camera,
+				[
+					{ direction: 'WEST', duration: 100 },
+					{ direction: 'NORTH', duration: 600 },
+				],
+				{ settleTimeout: 0 },
+			)
+
+			expect(result).toEqual(successfulOperationResult(undefined))
+			expect(ends.WEST - started).toBeLessThan(400)
+			expect(ends.NORTH - started).toBeGreaterThanOrEqual(595)
+			expect(camera.pulsingNS || camera.pulsingWE || camera.pulsing).toBeFalse()
+		} finally {
+			for (const timer of timers) clearTimeout(timer)
+			updated.mockRestore()
+			driver.spy.mockRestore()
+		}
+	})
+
+	test('gives a short leg the window of the longest one when a bridge mirrors one flag on both axes', async () => {
+		const camera = await connected()
+		const driver = silentDriver()
+		const timers: Timer[] = []
+
+		driver.spy.mockImplementation((_, __, duration) => {
+			if (duration <= 0) return
+			// Like the Alpaca bridge, a single IsPulseGuiding is mirrored on both vectors.
+			guideVector(camera, 'TELESCOPE_TIMED_GUIDE_NS', 'Busy')
+			guideVector(camera, 'TELESCOPE_TIMED_GUIDE_WE', 'Busy')
+
+			if (duration >= 600) {
+				timers.push(
+					setTimeout(() => {
+						guideVector(camera, 'TELESCOPE_TIMED_GUIDE_NS', 'Ok')
+						guideVector(camera, 'TELESCOPE_TIMED_GUIDE_WE', 'Ok')
+					}, duration),
+				)
+			}
+		})
+
+		try {
+			const result = await guideOutputCommander.pulseAxes(
+				operationCoordinator,
+				camera,
+				[
+					{ direction: 'EAST', duration: 50 },
+					{ direction: 'SOUTH', duration: 600 },
+				],
+				{ settleTimeout: 0 },
+			)
+
+			expect(result).toEqual(successfulOperationResult(undefined))
+			expect(camera.pulsing).toBeFalse()
+		} finally {
+			for (const timer of timers) clearTimeout(timer)
+			driver.spy.mockRestore()
+		}
+	})
+
+	test('keeps the evidence of a pulse whose end a disconnect hid, and blocks the key', async () => {
+		const camera = await connected()
+		const driver = silentDriver()
+		let dispatchedAt = Number.NaN
+		driver.spy.mockImplementation((_, __, duration) => {
+			if (duration > 0) dispatchedAt = performance.now()
+		})
+
+		try {
+			const pulsing = guideOutputCommander.pulse(operationCoordinator, camera, 'WEST', 1000, { settleTimeout: 0 })
+			await waitUntil(() => !Number.isNaN(dispatchedAt), 5000, 5)
+			cameraManager.disconnect(camera)
+
+			const result = await pulsing
+			expect(result).toMatchObject(failedOperationResult('disconnected'))
+
+			const window = guideOutputCommander.dispatchedPulseWindow(camera)
+			expect(window).toBeDefined()
+			expect(window!.busyAckDeadline).toBeCloseTo(guidePulseWindow(dispatchedAt, 1000).busyAckDeadline, 0)
+			expect(window!.endsBy).toBeCloseTo(guidePulseWindow(dispatchedAt, 1000).endsBy, 0)
+			expect(causesOf(camera)).toContain('guidePulse')
+			// The lease was released all the same.
+			expect(resourceArbiter.ownersOf(resourceKey(camera))).toBeEmpty()
+		} finally {
+			driver.spy.mockRestore()
+		}
+
+		// Reconnecting republishes both axes stopped, which ends the evidence once the Busy deadline passed.
+		await connected()
+		await waitUntil(() => guideOutputCommander.dispatchedPulseWindow(camera) === undefined, 5000, 10)
+		expect(causesOf(camera)).not.toContain('guidePulse')
+		await waitUntil(() => isFree(camera))
+	})
+
+	test('ends the evidence only through continuous observation by a registered view', async () => {
+		const camera = await connected()
+		const view = getView()
+		const driver = silentDriver()
+
+		try {
+			// Forgetting the view breaks the continuity the connection published.
+			guideOutputCommander.removed(view)
+			guideOutputCommander.added(view)
+
+			const window = guideOutputCommander.assumeDispatchedPulse(camera, 50)
+			await waitUntil(() => performance.now() > window.busyAckDeadline + 20, 5000, 10)
+
+			// Past the deadline, but nothing was published since: the frozen flags prove nothing.
+			expect(camera.pulsing).toBeFalse()
+			expect(guideOutputCommander.dispatchedPulseWindow(camera)).toBeDefined()
+
+			// Notifications without a state, such as a reset or a guide rate, are not evidence either.
+			guideOutputCommander.updated(view, 'pulsingNS')
+			guideOutputCommander.updated(view, 'guideRate', 'Ok')
+			expect(guideOutputCommander.dispatchedPulseWindow(camera)).toBeDefined()
+
+			// One axis stopped does not prove the other.
+			guideVector(camera, 'TELESCOPE_TIMED_GUIDE_NS', 'Idle')
+			expect(guideOutputCommander.dispatchedPulseWindow(camera)).toBeDefined()
+
+			guideVector(camera, 'TELESCOPE_TIMED_GUIDE_WE', 'Idle')
+			expect(guideOutputCommander.dispatchedPulseWindow(camera)).toBeUndefined()
+			expect(causesOf(camera)).not.toContain('guidePulse')
+		} finally {
+			driver.spy.mockRestore()
+		}
+	})
+
+	test('keeps the evidence while an axis of the key was last published Busy', async () => {
+		const camera = await connected()
+		const driver = silentDriver()
+
+		try {
+			const window = guideOutputCommander.assumeDispatchedPulse(camera, 50)
+			guideVector(camera, 'TELESCOPE_TIMED_GUIDE_WE', 'Busy')
+			await waitUntil(() => performance.now() > window.busyAckDeadline + 20, 5000, 10)
+			expect(guideOutputCommander.dispatchedPulseWindow(camera)).toBeDefined()
+
+			guideVector(camera, 'TELESCOPE_TIMED_GUIDE_WE', 'Ok')
+			expect(guideOutputCommander.dispatchedPulseWindow(camera)).toBeUndefined()
+		} finally {
+			driver.spy.mockRestore()
+		}
+	})
+
+	test('ignores the notifications of an unregistered view and of a stopped state followed by a disconnect', async () => {
+		const camera = await connected()
+		const view = getView()
+		const driver = silentDriver()
+
+		try {
+			guideOutputCommander.removed(view)
+			const window = guideOutputCommander.assumeDispatchedPulse(camera, 50)
+			guideVector(camera, 'TELESCOPE_TIMED_GUIDE_NS', 'Idle')
+			guideVector(camera, 'TELESCOPE_TIMED_GUIDE_WE', 'Idle')
+			await waitUntil(() => performance.now() > window.busyAckDeadline + 20, 5000, 10)
+			expect(guideOutputCommander.dispatchedPulseWindow(camera)).toBeDefined()
+
+			guideOutputCommander.added(view)
+			guideVector(camera, 'TELESCOPE_TIMED_GUIDE_NS', 'Idle')
+			guideVector(camera, 'TELESCOPE_TIMED_GUIDE_WE', 'Idle')
+			expect(guideOutputCommander.dispatchedPulseWindow(camera)).toBeUndefined()
+
+			// Stopped states published before a disconnect say nothing about the time after it.
+			const second = guideOutputCommander.assumeDispatchedPulse(camera, 50)
+			guideVector(camera, 'TELESCOPE_TIMED_GUIDE_NS', 'Idle')
+			guideVector(camera, 'TELESCOPE_TIMED_GUIDE_WE', 'Idle')
+			view.connected = false
+			guideOutputCommander.updated(view, 'connected')
+			view.connected = true
+			await waitUntil(() => performance.now() > second.busyAckDeadline + 20, 5000, 10)
+			expect(guideOutputCommander.dispatchedPulseWindow(camera)).toBeDefined()
+		} finally {
+			driver.spy.mockRestore()
+			guideVector(camera, 'TELESCOPE_TIMED_GUIDE_NS', 'Idle')
+			guideVector(camera, 'TELESCOPE_TIMED_GUIDE_WE', 'Idle')
+		}
+	})
+
+	test('requires every axis a diagonal nudge dispatched', async () => {
+		const camera = await connected()
+		const driver = silentDriver()
+
+		try {
+			// The cleanup of a silent driver has nothing to observe beyond the stopped states of the connection.
+			guideOutputCommander.removed(getView())
+			guideOutputCommander.added(getView())
+
+			const pulsing = guideOutputCommander.pulseAxes(
+				operationCoordinator,
+				camera,
+				[
+					{ direction: 'NORTH', duration: 20 },
+					{ direction: 'EAST', duration: 20 },
+				],
+				{ settleTimeout: 0 },
+			)
+
+			await waitUntil(() => guideOutputCommander.dispatchedPulseWindow(camera) !== undefined, 5000, 5)
+			guideVector(camera, 'TELESCOPE_TIMED_GUIDE_NS', 'Idle')
+			await waitUntil(() => performance.now() > guideOutputCommander.dispatchedPulseWindow(camera)!.busyAckDeadline + 20, 5000, 10)
+			expect(guideOutputCommander.dispatchedPulseWindow(camera)).toBeDefined()
+
+			guideVector(camera, 'TELESCOPE_TIMED_GUIDE_WE', 'Idle')
+			expect(await pulsing).toEqual(successfulOperationResult(undefined))
+			expect(guideOutputCommander.dispatchedPulseWindow(camera)).toBeUndefined()
+		} finally {
+			driver.spy.mockRestore()
+		}
+	})
+
+	test('records a barrier for pulses of a previous runtime without commanding anything', async () => {
+		const camera = await connected()
+		const pulse = spyOn(guideOutputManager, 'pulse')
+		const ask = spyOn(guideOutputManager, 'ask')
+
+		try {
+			const before = performance.now()
+			const window = guideOutputCommander.assumeDispatchedPulse(camera, 100)
+			const after = performance.now()
+
+			expect(window.busyAckDeadline).toBeGreaterThanOrEqual(guidePulseWindow(before, 100).busyAckDeadline)
+			expect(window.busyAckDeadline).toBeLessThanOrEqual(guidePulseWindow(after, 100).busyAckDeadline)
+			expect(window.endsBy - window.busyAckDeadline).toBe(100 + GUIDE_PULSE_ACK_MARGIN)
+			expect(causesOf(camera)).toContain('guidePulse')
+			expect(ask).toHaveBeenCalledWith(camera, 'TELESCOPE_TIMED_GUIDE_NS')
+			expect(ask).toHaveBeenCalledWith(camera, 'TELESCOPE_TIMED_GUIDE_WE')
+			expect(pulse).not.toHaveBeenCalled()
+
+			// The driver republishes both axes stopped and no Busy comes, so the barrier ends at its deadline.
+			await waitUntil(() => guideOutputCommander.dispatchedPulseWindow(camera) === undefined, 5000, 10)
+			expect(performance.now()).toBeGreaterThanOrEqual(window.busyAckDeadline - 1)
+			expect(causesOf(camera)).not.toContain('guidePulse')
+		} finally {
+			pulse.mockRestore()
+			ask.mockRestore()
+		}
+	})
+
+	test('keeps the guidePulse cause independent from the other causes and lifts only its own on dispose', async () => {
+		const camera = await connected()
+		const key = resourceKey(camera)
+		const commander = new GuideOutputCommander(guideOutputManager, resourceArbiter)
+
+		try {
+			commander.assumeDispatchedPulse(camera, 60000)
+			resourceArbiter.markUnavailable(key, 'quarantine')
+			expect(causesOf(camera)).toEqual(['guidePulse', 'quarantine'])
+
+			// Lifecycle revalidation only clears its own cause.
+			resourceArbiter.markDeviceAvailable(key)
+			resourceArbiter.markAvailable(key)
+			expect(causesOf(camera)).toEqual(['guidePulse', 'quarantine'])
+
+			commander.dispose()
+			expect(causesOf(camera)).toEqual(['quarantine'])
+		} finally {
+			commander.dispose()
+			resourceArbiter.markAvailable(key, 'quarantine')
+		}
+	})
 })

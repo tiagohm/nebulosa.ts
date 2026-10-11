@@ -4,7 +4,9 @@ import { type CameraCaptureEvent, type CameraCaptureState, DEFAULT_CAMERA_CAPTUR
 
 // Presentation state of one camera driven by a feature: the mutable capture snapshot, its frame and aggregate
 // progress arithmetic, and the translation of INDI exposure states into capture states. Every time is in
-// microseconds. Each emission hands the listener a fresh structured clone, so listeners may keep it.
+// microseconds. Each emission hands the listener a fresh structured clone, so listeners may keep it. A frame a
+// feature dispatches itself is prepared before the exposure command and committed only after the command was
+// accepted, so a refused or failed dispatch never publishes a generation.
 
 // Receives presentation snapshots and, with a processed frame, the path that frame is published under.
 export type CameraCaptureListener = (event: CameraCaptureEvent, path?: string) => void
@@ -60,6 +62,14 @@ export class CameraCaptureReporter {
 	#frameOpen = false
 	// Whether the open generation has been physically observed as Busy at least once.
 	#exposing = false
+	// Whether the open generation is prepared but not committed: updates are classified, not published.
+	#prepared = false
+	// Exposure of the prepared generation, in microseconds, applied when it is committed.
+	#preparedExposureTime = 0
+	// Last presentation a prepared generation would have published, replayed when it is committed.
+	#retained?: 'exposing' | 'exposureFinished'
+	// Remaining exposure of the last retained Busy, in microseconds.
+	#retainedRemainingTime = 0
 
 	// Creates a reporter over one camera and the listener of whoever is driving it. Emits nothing until the
 	// first frame or state change; the session id is a fresh UUIDv7.
@@ -84,12 +94,13 @@ export class CameraCaptureReporter {
 		return this.#event.session
 	}
 
-	// Frame generation currently open, or the last one when none is.
+	// Last committed frame generation, which is the open one once committed. A prepared generation is not
+	// counted until it is committed.
 	get generation() {
 		return this.#event.generation
 	}
 
-	// Frames still to be produced.
+	// Frames still to be produced, counting only committed generations.
 	get remainingCount() {
 		return this.#event.remainingCount
 	}
@@ -99,10 +110,41 @@ export class CameraCaptureReporter {
 		return this.#event.frameExposureTime
 	}
 
-	// Opens the next frame generation, resets frame progress, and emits its exposureStarted snapshot. The
-	// exposure time, in microseconds, overrides the requested one for this frame onwards, which is how a loop
-	// whose exposure was changed meanwhile reports the frame actually being taken. Returns the new generation.
+	// Opens and commits the next frame generation at once, emitting its exposureStarted snapshot. Used for a
+	// frame whose exposure is already known to exist, such as the first Busy of an exposure nobody here
+	// dispatched. The exposure time, in microseconds, overrides the requested one for this frame onwards, which is
+	// how a loop whose exposure was changed meanwhile reports the frame actually being taken. Returns the new
+	// generation.
 	beginFrame(frameExposureTime = this.#event.frameExposureTime) {
+		this.prepareFrame(frameExposureTime)
+		return this.commitFrame()
+	}
+
+	// Opens the next generation for routing only, before its exposure is dispatched. Exposure updates are
+	// classified against it from now on, so a Busy delivered synchronously by the dispatch is seen, but nothing
+	// is emitted and the snapshot, generation and counters stay those of the last committed generation until
+	// `commitFrame`. The exposure time, in microseconds, is applied on commit. Replaces a prepared generation that
+	// was never committed.
+	prepareFrame(frameExposureTime = this.#event.frameExposureTime) {
+		this.#preparedExposureTime = frameExposureTime
+		this.#prepared = true
+		this.#retained = undefined
+		this.#frameOpen = true
+		this.#exposing = false
+	}
+
+	// Confirms the prepared generation once its exposure exists: advances the generation and counters, resets
+	// frame progress, and emits exposureStarted followed by the last presentation an update retained meanwhile
+	// (exposing, or exposureFinished when Ok already arrived). exposureStarted therefore precedes every other
+	// snapshot of the generation. Returns the committed generation, or the current one when nothing was prepared.
+	commitFrame() {
+		if (!this.#prepared) return this.#event.generation
+
+		this.#prepared = false
+		const frameExposureTime = this.#preparedExposureTime
+		const retained = this.#retained
+		this.#retained = undefined
+
 		this.#event.frameExposureTime = frameExposureTime
 		this.#event.generation++
 		this.#event.state = 'exposureStarted'
@@ -111,17 +153,33 @@ export class CameraCaptureReporter {
 		this.#event.frameProgress.remainingTime = frameExposureTime
 		this.#event.frameProgress.elapsedTime = 0
 		this.#event.frameProgress.progress = 0
-		this.#frameOpen = true
-		this.#exposing = false
 		this.#emit()
+
+		if (retained === 'exposing') {
+			this.#publishExposing(this.#retainedRemainingTime)
+		} else if (retained === 'exposureFinished') {
+			this.#publishFinished()
+		}
+
 		return this.#event.generation
+	}
+
+	// Closes a prepared generation without emitting anything, leaving the snapshot, generation and counters as
+	// they were, so the next prepared generation reuses the number. Only valid while no physical update of the
+	// prepared generation was observed; a later update is ignored. Does nothing without a prepared generation.
+	discardFrame() {
+		if (!this.#prepared) return
+		this.#prepared = false
+		this.#retained = undefined
+		this.#closeFrame()
 	}
 
 	// Applies one exposure property update to the open generation and classifies it.
 	//
 	// A terminal state closes the generation, so a late update belonging to it cannot advance progress
 	// afterwards. Only Busy and Ok publish: the remaining states are failures whose presentation belongs to the
-	// feature that has to decide what they mean.
+	// feature that has to decide what they mean. A prepared generation is classified the same way, but its
+	// presentation is retained until it is committed.
 	applyExposureUpdate(state?: PropertyState): CameraExposureTransition {
 		if (state === 'Busy') {
 			const remainingTime = this.#camera.exposure.value * 1000000
@@ -135,9 +193,14 @@ export class CameraCaptureReporter {
 
 			const started = !this.#exposing
 			this.#exposing = true
-			this.#event.state = 'exposing'
-			this.#updateProgress(remainingTime, Math.max(0, this.#event.frameExposureTime - remainingTime))
-			this.#emit()
+
+			if (this.#prepared) {
+				this.#retained = 'exposing'
+				this.#retainedRemainingTime = remainingTime
+			} else {
+				this.#publishExposing(remainingTime)
+			}
+
 			return started ? 'started' : 'exposing'
 		}
 
@@ -145,9 +208,8 @@ export class CameraCaptureReporter {
 
 		if (state === 'Ok') {
 			this.#closeFrame()
-			this.#event.state = 'exposureFinished'
-			this.#updateProgress(0, this.#event.frameExposureTime)
-			this.#emit()
+			if (this.#prepared) this.#retained = 'exposureFinished'
+			else this.#publishFinished()
 			return 'finished'
 		}
 
@@ -164,7 +226,7 @@ export class CameraCaptureReporter {
 		return 'ignored'
 	}
 
-	// Applies and emits a presentation state that no exposure update produces, such as dithering or settling.
+	// Applies and emits a presentation state that no exposure update produces, such as pausing or paused.
 	setState(state: CameraCaptureState) {
 		this.#event.state = state
 		this.#emit()
@@ -191,8 +253,11 @@ export class CameraCaptureReporter {
 		this.#advanceTotal(waitingTime)
 	}
 
-	// Emits the terminal presentation, preceded by an error snapshot when the capture did not run to its end.
+	// Emits the terminal presentation, preceded by an error snapshot when the capture did not run to its end. A
+	// prepared generation that was never committed is dropped without being published.
 	terminal(stopped: boolean) {
+		this.#prepared = false
+		this.#retained = undefined
 		this.#closeFrame()
 
 		if (stopped) {
@@ -209,6 +274,20 @@ export class CameraCaptureReporter {
 	#closeFrame() {
 		this.#frameOpen = false
 		this.#exposing = false
+	}
+
+	// Publishes the exposing state of the open generation with `remainingTime` microseconds left.
+	#publishExposing(remainingTime: number) {
+		this.#event.state = 'exposing'
+		this.#updateProgress(remainingTime, Math.max(0, this.#event.frameExposureTime - remainingTime))
+		this.#emit()
+	}
+
+	// Publishes the completed exposure of the generation that just closed.
+	#publishFinished() {
+		this.#event.state = 'exposureFinished'
+		this.#updateProgress(0, this.#event.frameExposureTime)
+		this.#emit()
 	}
 
 	// Moves aggregate progress forward by one finished exposure or delay, in microseconds.
