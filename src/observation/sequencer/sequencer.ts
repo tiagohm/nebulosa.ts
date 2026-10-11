@@ -160,7 +160,8 @@ export type SequencerFrameGroup = SequencerScheduledFrameGroup | SequencerTrigge
 // Order in which scheduled groups receive slots:
 // - sequential: exhausts the first enabled group before the next;
 // - roundRobin: one slot per unfinished group, in declared order, wrapping;
-// - weightedRoundRobin: deterministic smooth weighted round robin over the group weights.
+// - weightedRoundRobin: deterministic weighted round robin over the group weights (Tijdeman's chairman assignment):
+//   while the set of unfinished groups does not change, every group stays within one selection of its share.
 export type SequencerCaptureOrder = 'sequential' | 'roundRobin' | 'weightedRoundRobin'
 
 // Bounded retry of one operation. Attempt 1 is the initial execution; an abort never becomes a retry.
@@ -789,6 +790,41 @@ export interface SequencerTriggerAnchors {
 	recenter: SequencerActionAnchor
 	// Anchor of each triggered group, by group id.
 	calibration: Record<string, SequencerCalibrationAnchor>
+}
+
+// Calibration batch fired by a triggered group, persisted until every slot is done. Its slots are the ordinals
+// [firstOrdinal, firstOrdinal + size − 1] of the group, completed in order. Camera settings and filter are frozen
+// when the batch fires, so a resumed session exposes exactly the same frames.
+export interface SequencerCalibrationBatch {
+	// Triggered group of the batch.
+	readonly groupId: string
+	// 1-based ordinal of the first slot; ordinals keep growing across the batches of a group.
+	readonly firstOrdinal: number
+	// Slots of the batch; ≥ 1 and already limited by the free capacity of the group when it fired.
+	readonly size: number
+	// Effective camera settings of every slot, inheritance already applied.
+	readonly capture: SequencerCameraCapture
+	// Effective filter of every slot: the opaque filter of a 'filter' optical path, the group filter otherwise.
+	readonly filter?: SequencerFilterReference
+	// Slot of the light that fired the batch; absent for the session-boundary triggers.
+	readonly triggeredBy?: string
+}
+
+// Persisted state of the frame scheduler, mutated in place by the selection. It is JSON-serializable and restored
+// only under the configuration id and revision that produced it. The current slot and the per-group progress are
+// kept apart, in the runtime state.
+export interface SequencerSchedulerState {
+	// Group id of the last scheduled selection (round-robin cursor); absent before the first one.
+	cursor?: string
+	// Weighted round-robin credit of each group of the current rotation (the unfinished scheduled groups), by group
+	// id; empty before the first weighted selection and reset when the rotation changes. 'weightedRoundRobin' only.
+	credits: Record<string, number>
+	// Pending calibration batches in fire order (FIFO); the head may be in progress.
+	batches: SequencerCalibrationBatch[]
+	// Whether the 'sessionStart' batches were enqueued.
+	sessionStartQueued: boolean
+	// Whether the 'sessionEnd' batches were enqueued.
+	sessionEndQueued: boolean
 }
 
 // Logical baseline of the focus offsets, persisted.

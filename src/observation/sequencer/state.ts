@@ -1,7 +1,7 @@
 import type { FrameType } from '../../devices/indi/device'
 import { createMeridianFlipState, type MeridianFlipState } from '../mount/meridian.flip'
 // oxfmt-ignore
-import type { SequencerConfiguration, SequencerCorrectiveIntents, SequencerFailure, SequencerFilterFocusOffsets, SequencerFocusBaseline, SequencerFrameSlot, SequencerFrameSlotSnapshot, SequencerIntents, SequencerPhase, SequencerSafetyState, SequencerSessionState, SequencerSnapshot, SequencerTaskId, SequencerTerminalState, SequencerTriggerAnchors } from './sequencer'
+import type { SequencerConfiguration, SequencerCorrectiveIntents, SequencerFailure, SequencerFilterFocusOffsets, SequencerFocusBaseline, SequencerFrameSlot, SequencerFrameSlotSnapshot, SequencerIntents, SequencerPhase, SequencerSafetyState, SequencerSchedulerState, SequencerSessionState, SequencerSnapshot, SequencerTaskId, SequencerTerminalState, SequencerTriggerAnchors } from './sequencer'
 
 // Runtime state of one Sequencer session and its pure transitions: the lifecycle state machine, the control
 // requests (pause, resume, stop) recorded as desired state, the logical counters persisted between processes,
@@ -59,6 +59,8 @@ export interface SequencerRuntimeState {
 	// Persisted logical state.
 	// Progress per group.
 	capture: SequencerCaptureProgress
+	// Scheduler cursor, credits and pending calibration batches.
+	scheduler: SequencerSchedulerState
 	// Trigger anchors.
 	anchors: SequencerTriggerAnchors
 	// Pending corrective intents.
@@ -196,6 +198,12 @@ export function createSequencerCaptureProgress(configuration: SequencerConfigura
 	return progress
 }
 
+// Fresh scheduler state: no scheduled selection yet (no cursor, no weighted rotation), no batch pending and no
+// session-boundary batch enqueued.
+export function createSequencerSchedulerState(): SequencerSchedulerState {
+	return { credits: {}, batches: [], sessionStartQueued: false, sessionEndQueued: false }
+}
+
 // Runtime state of a new session at the wall instant `at` (Unix ms): starting, nothing captured, nothing
 // pending, focus baseline unset and no meridian flip started. Restoring a checkpoint replaces the persisted
 // fields afterwards.
@@ -204,6 +212,7 @@ export function createSequencerRuntimeState(configuration: SequencerConfiguratio
 		state: 'starting',
 		desired: 'running',
 		capture: createSequencerCaptureProgress(configuration),
+		scheduler: createSequencerSchedulerState(),
 		anchors: createSequencerTriggerAnchors(configuration),
 		intents: createSequencerIntents(),
 		focus: { kind: 'unset' },

@@ -154,6 +154,7 @@ describe('logical state', () => {
 		expect(runtime.intents).toEqual({ autofocus: false, recenter: false, recoverGuiding: false })
 		expect(runtime.anchors).toEqual({ lightExposures: 0, autofocus: { lightExposures: 0 }, dither: { lightExposures: 0 }, recenter: { lightExposures: 0 }, calibration: { dark: { lightExposures: 0, batches: 0 } } })
 		expect(runtime.meridianFlip).toEqual({ phase: 'WAITING', attempts: 0, preparationCompleted: false })
+		expect(runtime.scheduler).toEqual({ credits: {}, batches: [], sessionStartQueued: false, sessionEndQueued: false })
 		expect([...runtime.capture.keys()]).toEqual(['L', 'R', 'dark'])
 		expect(runtime.capture.get('L')).toEqual({ accepted: 0, forced: 0, discarded: 0, skipped: 0 })
 	})
