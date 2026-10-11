@@ -271,9 +271,9 @@ describe('progress accumulation', () => {
 		expect(events[0].frameProgress.progress).toBeCloseTo(25, 6)
 		expect(events[0].totalProgress.elapsedTime).toBe(250_000)
 
-		reporter.setState('settling')
+		reporter.setState('paused')
 
-		expect(events[1].state).toBe('settling')
+		expect(events[1].state).toBe('paused')
 
 		reporter.completeDelay(1_000_000)
 		reporter.waiting(500_000, 0, 500_000)
@@ -289,9 +289,9 @@ describe('progress accumulation', () => {
 		reporter.beginFrame()
 		events[0].state = 'error'
 		events[0].frameProgress.progress = 99
-		reporter.setState('dithering')
+		reporter.setState('pausing')
 
-		expect(events[1].state).toBe('dithering')
+		expect(events[1].state).toBe('pausing')
 		expect(events[1].frameProgress.progress).toBe(0)
 	})
 })
@@ -319,5 +319,106 @@ describe('terminal presentation', () => {
 		expect(events).toHaveLength(1)
 		expect(events[0].state).toBe('idle')
 		expect(events[0].stopped).toBeFalse()
+	})
+})
+
+describe('prepared generations', () => {
+	test('prepares a generation without emitting or counting it', () => {
+		const { reporter, events } = createHarness()
+
+		reporter.prepareFrame()
+
+		expect(events).toBeEmpty()
+		expect(reporter.generation).toBe(0)
+		expect(reporter.remainingCount).toBe(2)
+	})
+
+	test('classifies a Busy of the prepared generation and publishes it only on commit', () => {
+		const { reporter, events, exposing } = createHarness()
+
+		reporter.prepareFrame()
+
+		expect(exposing(0.75)).toBe('started')
+		expect(exposing(0.5)).toBe('exposing')
+		expect(events).toBeEmpty()
+
+		expect(reporter.commitFrame()).toBe(1)
+		expect(events.map((event) => event.state)).toEqual(['exposureStarted', 'exposing'])
+		expect(events[0].generation).toBe(1)
+		expect(events[0].elapsedCount).toBe(1)
+		expect(events[0].remainingCount).toBe(1)
+		// Only the last retained progress is published.
+		expect(events[1].frameProgress.remainingTime).toBe(500_000)
+		expect(events[1].frameProgress.progress).toBeCloseTo(50, 6)
+
+		expect(exposing(0.25)).toBe('exposing')
+		expect(events.at(-1)!.frameProgress.remainingTime).toBe(250_000)
+	})
+
+	test('publishes exposureStarted then exposureFinished when Ok arrived before the commit', () => {
+		const { reporter, events, exposing } = createHarness()
+
+		reporter.prepareFrame()
+		exposing(0.5)
+
+		expect(reporter.applyExposureUpdate('Ok')).toBe('finished')
+		expect(events).toBeEmpty()
+
+		reporter.commitFrame()
+
+		expect(events.map((event) => event.state)).toEqual(['exposureStarted', 'exposureFinished'])
+		expect(events[1].frameProgress.progress).toBe(100)
+		expect(exposing(0.5)).toBe('ignored')
+	})
+
+	test('commits a generation nobody observed with exposureStarted alone', () => {
+		const { reporter, events } = createHarness()
+
+		reporter.prepareFrame(3_000_000)
+		reporter.commitFrame()
+
+		expect(events).toHaveLength(1)
+		expect(events[0].state).toBe('exposureStarted')
+		expect(events[0].frameExposureTime).toBe(3_000_000)
+		// Committing again without a prepared generation changes nothing.
+		expect(reporter.commitFrame()).toBe(1)
+		expect(events).toHaveLength(1)
+	})
+
+	test('discards a prepared generation and reuses its number for the next one', () => {
+		const { reporter, events, exposing } = createHarness()
+
+		reporter.prepareFrame()
+		reporter.discardFrame()
+
+		expect(events).toBeEmpty()
+		expect(reporter.generation).toBe(0)
+		expect(reporter.remainingCount).toBe(2)
+		expect(exposing(0.5)).toBe('ignored')
+		expect(reporter.applyExposureUpdate('Ok')).toBe('ignored')
+
+		reporter.prepareFrame()
+
+		expect(reporter.commitFrame()).toBe(1)
+		expect(events[0].generation).toBe(1)
+	})
+
+	test('drops a prepared generation on terminal without publishing it', () => {
+		const { reporter, events } = createHarness()
+
+		reporter.prepareFrame()
+		reporter.terminal(true)
+		reporter.commitFrame()
+
+		expect(events.map((event) => event.state)).toEqual(['error', 'idle'])
+		expect(events.at(-1)!.generation).toBe(0)
+	})
+
+	test('still opens a generation on the first Busy of a frame nobody here dispatched', () => {
+		const { reporter, events, exposing } = createHarness({ autoFrame: true })
+
+		expect(exposing(2)).toBe('started')
+		expect(reporter.generation).toBe(1)
+		expect(events.map((event) => event.state)).toEqual(['exposureStarted', 'exposing'])
 	})
 })

@@ -20,9 +20,9 @@ import type { BlobEncoding, PropertyState } from '../../../src/devices/indi/type
 import { DeviceLifecycle } from '../../../src/devices/orchestration/device.lifecycle'
 import { failedOperationResult, OperationCoordinator, type OperationResult, successfulOperationResult } from '../../../src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
-import { autoSubFolderName, type CameraCaptureResult, CameraCapturer, type CameraCapturerOptions, type CameraDitherer, type CameraDitherOptions, decodeCameraBlobFromBase64 } from '../../../src/devices/runners/camera.capture'
+import { autoSubFolderName, type CameraCaptureResult, CameraCapturer, type CameraCapturerOptions, type CameraExposureAttempt, decodeCameraBlobFromBase64 } from '../../../src/devices/runners/camera.capture'
 import type { CameraCaptureListener } from '../../../src/devices/runners/camera.capture.reporter'
-import { type CameraCaptureEvent, type CameraCaptureStart, type CameraDither, DEFAULT_CAMERA_CAPTURE_START } from '../../../src/devices/runners/camera.capture.types'
+import { type CameraCaptureEvent, type CameraCaptureStart, DEFAULT_CAMERA_CAPTURE_START } from '../../../src/devices/runners/camera.capture.types'
 import { readImageFromBuffer, readImageFromPath } from '../../../src/imaging/model/image'
 import { isFits } from '../../../src/io/formats/fits/fits'
 import { isXisf, readXisf } from '../../../src/io/formats/xisf/xisf'
@@ -34,8 +34,6 @@ import { waitUntil } from '../../util'
 // Every capture runs on the INDI simulators. Only driver misbehaviour the simulator cannot produce, such as an
 // exposure command that never turns Busy, a stop that never quiesces, or a BLOB that is late, is staged by
 // intercepting the real manager command or the callback the manager delivers to the capturer.
-
-type CaptureOverrides = Omit<Partial<CameraCaptureStart>, 'dither'> & { readonly dither?: Partial<CameraDither> }
 
 interface CaptureRecord {
 	readonly event: CameraCaptureEvent
@@ -115,10 +113,9 @@ async function connected() {
 	return camera
 }
 
-function request(overrides: CaptureOverrides = {}): CameraCaptureStart {
+function request(overrides: Partial<CameraCaptureStart> = {}): CameraCaptureStart {
 	const value = structuredClone(DEFAULT_CAMERA_CAPTURE_START)
 	Object.assign(value, { exposureTime: 100, exposureTimeUnit: 'millisecond', x: 0, y: 0, width: 16, height: 16, subframe: true, frameFormat: 'MONO' }, overrides)
-	value.dither = { ...DEFAULT_CAMERA_CAPTURE_START.dither, ...overrides.dither }
 	return value
 }
 
@@ -287,7 +284,21 @@ describe('successful captures', () => {
 
 		const path = join(capturesDir, `${camera.name}.fit`)
 		expect(result.value.frameCount).toBe(1)
-		expect(result.value.frames).toEqual([{ operation: handle.id, session: recording.events[0].session, generation: 1, camera: camera.id, path }])
+		expect(result.value.frames).toEqual([
+			{
+				operation: handle.id,
+				session: recording.events[0].session,
+				generation: 1,
+				camera: camera.id,
+				path,
+				exposureDispatchedAt: expect.any(Number),
+				exposureDispatchedMonotonic: expect.any(Number),
+				exposureStartedAt: expect.any(Number),
+				exposureStartedMonotonic: expect.any(Number),
+				exposureFinishedAt: expect.any(Number),
+				exposureFinishedMonotonic: expect.any(Number),
+			},
+		])
 		expect(recording.paths).toEqual([path])
 		expect(recording.events.every((event) => event.operation === handle.id && event.camera === camera.id)).toBeTrue()
 		expect(recording.events[0].generation).toBe(1)
@@ -1508,166 +1519,453 @@ describe('operation trees', () => {
 	})
 })
 
-describe('dithering', () => {
-	test('dithers before each exposure when the named guider is guiding', async () => {
+describe('exposure dispatch', () => {
+	test('takes requests without any dither and consults no guider', async () => {
 		const camera = await connected()
-		const calls: [string, CameraDither, AbortSignal | undefined][] = []
-		const ditherer: CameraDitherer = {
-			running: () => true,
-			dither: (guider, dither, options) => {
-				calls.push([guider, dither, options?.signal])
-				options?.onPhase?.('dithered')
-				options?.onPhase?.('settling')
-				options?.onPhase?.('settled')
-				return Promise.resolve(successfulOperationResult(undefined))
-			},
-		}
-		const own = createCapturer({ ditherer })
-		const recording = recorder()
-		const capture = request({ exposureMode: 'fixed', count: 2, dither: { enabled: true, guider: 'guider-1', amount: 3, raOnly: true } })
+
+		expect('dither' in DEFAULT_CAMERA_CAPTURE_START).toBeFalse()
+		expect((await capturer.start(coordinator, camera, request()).result).ok).toBeTrue()
+	})
+
+	test('stamps the dispatch, the first Busy and the completion of each frame', async () => {
+		const camera = await connected()
+		const before = performance.now()
+		const result = await capturer.start(coordinator, camera, request({ exposureTime: 300 })).result
+		const after = performance.now()
+
+		expect(result.ok).toBeTrue()
+		if (!result.ok) return
+
+		const [frame] = result.value.frames
+		expect(frame.exposureDispatchedAt).toBeDefined()
+		expect(frame.exposureDispatchedMonotonic).toBeDefined()
+		expect(frame.exposureDispatchedMonotonic!).toBeGreaterThanOrEqual(before)
+		expect(frame.exposureStartedMonotonic).toBeGreaterThanOrEqual(frame.exposureDispatchedMonotonic!)
+		expect(frame.exposureFinishedMonotonic).toBeGreaterThanOrEqual(frame.exposureStartedMonotonic)
+		expect(frame.exposureFinishedMonotonic).toBeLessThanOrEqual(after)
+		// The simulator notices the end of the exposure on its own 100 ms tick.
+		expect(frame.exposureFinishedMonotonic - frame.exposureStartedMonotonic).toBeGreaterThanOrEqual(300 - 1)
+		expect(frame.exposureFinishedMonotonic - frame.exposureStartedMonotonic).toBeLessThanOrEqual(300 + 150)
+	})
+
+	test('asks beforeExposure once per frame after configuring the camera and right before the exposure', async () => {
+		const camera = await connected()
+		const order: string[] = []
+		const commands = ['enableBlob', 'frame', 'frameType', 'frameFormat', 'bin', 'gain', 'offset', 'transferFormat', 'compression', 'startExposure'] as const
+		const spies = commands.map((name) => {
+			const original = (cameraManager[name] as (...args: unknown[]) => unknown).bind(cameraManager)
+
+			return spyOn(cameraManager, name).mockImplementation((...args: unknown[]) => {
+				order.push(name)
+				return original(...args)
+			})
+		})
+		const attempts: CameraExposureAttempt[] = []
 
 		try {
-			expect((await own.start(coordinator, camera, capture, { listener: recording.listener }).result).ok).toBeTrue()
+			const result = await capturer.start(coordinator, camera, request({ exposureMode: 'fixed', count: 2 }), {
+				beforeExposure: (attempt) => {
+					order.push('beforeExposure')
+					attempts.push(attempt)
+					return undefined
+				},
+			}).result
 
-			expect(calls).toHaveLength(2)
-			expect(calls[0][0]).toBe('guider-1')
-			expect(calls[0][1]).toEqual(capture.dither)
-			expect(calls[0][2]).toBeInstanceOf(AbortSignal)
-			expect(recording.states[0]).toBe('dithering')
-			expect(recording.states.indexOf('settling')).toBeLessThan(recording.states.indexOf('exposureStarted'))
-			expectSuccessfulEventFlow(
-				recording.records.filter(({ event }) => event.state !== 'dithering' && event.state !== 'settling'),
-				2,
-			)
+			expect(result.ok).toBeTrue()
+			const frame = ['enableBlob', 'frame', 'frameType', 'frameFormat', 'bin', 'gain', 'offset', 'transferFormat', 'compression', 'beforeExposure', 'startExposure']
+			expect(order).toEqual([...frame, ...frame])
+			expect(attempts).toEqual([
+				{ path: join(capturesDir, `${camera.name}.fit`), generation: 1 },
+				{ path: join(capturesDir, `${camera.name}.fit`), generation: 2 },
+			])
 		} finally {
-			own.dispose()
+			for (const spy of spies) spy.mockRestore()
 		}
 	})
 
-	test('does not expose when the dither fails', async () => {
+	test('ends the capture with the refusal of beforeExposure without dispatching', async () => {
 		const camera = await connected()
-		const ditherer: CameraDitherer = { running: () => true, dither: () => Promise.resolve(failedOperationResult('timeout', 'settle timed out')) }
-		const own = createCapturer({ ditherer })
+		const directory = await mkdtemp(join(capturesDir, 'refused-'))
 		const startExposure = spyOn(cameraManager, 'startExposure')
 		const recording = recorder()
+		const generations: number[] = []
 
 		try {
-			const result = await own.start(coordinator, camera, request({ dither: { enabled: true, guider: 'guider-1' } }), { listener: recording.listener }).result
+			const handle = capturer.start(coordinator, camera, request({ autoSave: true, outputPath: directory, outputName: 'frame.fit' }), {
+				listener: recording.listener,
+				beforeExposure: ({ generation }) => {
+					generations.push(generation)
+					return failedOperationResult('aborted', 'stop requested')
+				},
+			})
 
-			expect(result).toEqual(failedOperationResult('commandFailed', 'settle timed out'))
+			expect(await handle.started).toEqual(failedOperationResult('aborted', 'stop requested'))
+			expect(await handle.result).toEqual(failedOperationResult('aborted', 'stop requested'))
+			expect(generations).toEqual([1])
 			expect(startExposure).not.toHaveBeenCalled()
-			expect(recording.states).toEqual(['dithering', 'error', 'idle'])
+			expect(recording.states).toEqual(['error', 'idle'])
+			const final = recording.events.at(-1)!
+			expect(final.generation).toBe(0)
+			expect(final.elapsedCount).toBe(0)
+			expect(final.remainingCount).toBe(1)
+			expect(await Bun.file(join(directory, 'frame.fit')).exists()).toBeFalse()
+			// Nothing was exposed, so nothing is owed and the camera is free for the next owner at once.
+			expect(arbiter.availability(keyOf(camera))).toBe('available')
+			expect((await capturer.start(coordinator, camera, request()).result).ok).toBeTrue()
 		} finally {
 			startExposure.mockRestore()
-			own.dispose()
 		}
 	})
 
-	test('fails a dither the guider abandoned on its own instead of reporting a cancellation', async () => {
+	test('stops a fixed capture at the frame beforeExposure refuses, and refuses a frame whose hook throws', async () => {
 		const camera = await connected()
-		const ditherer: CameraDitherer = { running: () => true, dither: () => Promise.resolve(failedOperationResult('aborted', 'guider stopped')) }
-		const own = createCapturer({ ditherer })
+		const recording = recorder()
+		let calls = 0
 
-		try {
-			const result = await own.start(coordinator, camera, request({ dither: { enabled: true, guider: 'guider-1' } })).result
-			expect(result).toEqual(failedOperationResult('commandFailed', 'guider stopped'))
-		} finally {
-			own.dispose()
-		}
-	})
+		const result = await capturer.start(coordinator, camera, request({ exposureMode: 'fixed', count: 3 }), {
+			listener: recording.listener,
+			beforeExposure: () => (++calls === 2 ? failedOperationResult('unexpectedState', 'meridian limit') : undefined),
+		}).result
 
-	test('fails a dither that throws', async () => {
-		const camera = await connected()
-		const ditherer: CameraDitherer = {
-			running: () => true,
-			dither: () => {
-				throw new Error('guider unreachable')
-			},
-		}
-		const own = createCapturer({ ditherer })
+		expect(result).toEqual(failedOperationResult('unexpectedState', 'meridian limit'))
+		expect(recording.paths).toHaveLength(1)
+		expect(recording.states.filter((state) => state === 'exposureStarted')).toHaveLength(1)
+		expect(recording.events.at(-1)!.generation).toBe(1)
+		expect(recording.events.at(-1)!.elapsedCount).toBe(1)
+		expect(recording.events.at(-1)!.remainingCount).toBe(2)
 
-		try {
-			expect(await own.start(coordinator, camera, request({ dither: { enabled: true, guider: 'guider-1' } })).result).toEqual(failedOperationResult('commandFailed', 'guider unreachable'))
-		} finally {
-			own.dispose()
-		}
-	})
-
-	test('does not expose when the named guider is not guiding', async () => {
-		const camera = await connected()
-		let dithered = false
-		const ditherer: CameraDitherer = {
-			running: () => false,
-			dither: () => {
-				dithered = true
-				return Promise.resolve(successfulOperationResult(undefined))
-			},
-		}
-		const own = createCapturer({ ditherer })
+		const throwing = recorder()
 		const startExposure = spyOn(cameraManager, 'startExposure')
 
 		try {
-			const result = await own.start(coordinator, camera, request({ dither: { enabled: true, guider: 'guider-1' } })).result
+			const thrown = await capturer.start(coordinator, camera, request(), {
+				listener: throwing.listener,
+				beforeExposure: () => {
+					throw new Error('safety source failed')
+				},
+			}).result
 
-			expect(result).toEqual(failedOperationResult('unexpectedState', 'guider guider-1 is not guiding'))
-			expect(dithered).toBeFalse()
+			expect(thrown).toEqual(failedOperationResult('commandFailed', 'safety source failed'))
 			expect(startExposure).not.toHaveBeenCalled()
+			expect(throwing.states).toEqual(['error', 'idle'])
+			expect(arbiter.availability(keyOf(camera))).toBe('available')
 		} finally {
 			startExposure.mockRestore()
-			own.dispose()
 		}
 	})
 
-	test('skips the dither without failing when no guider was chosen or dithering is disabled', async () => {
+	test('lets beforeExposure see a stop requested while the previous frame was written', async () => {
 		const camera = await connected()
-		const ditherer: CameraDitherer = {
-			running: () => {
-				throw new Error('the capture must not ask about a guider it did not name')
-			},
-			dither: () => Promise.resolve(failedOperationResult('commandFailed')),
-		}
-		const own = createCapturer({ ditherer })
+		let stopRequested = false
+		const startExposure = spyOn(cameraManager, 'startExposure')
 
 		try {
-			for (const dither of [{ enabled: true }, { enabled: false, guider: 'guider-1' }]) {
-				const recording = recorder()
-				expect((await own.start(coordinator, camera, request({ dither }), { listener: recording.listener }).result).ok).toBeTrue()
-				expect(recording.states).not.toContain('dithering')
-			}
+			const result = await capturer.start(coordinator, camera, request({ exposureMode: 'fixed', count: 3, autoSave: true }), {
+				write: async (path, data) => {
+					await Bun.write(path, data)
+					stopRequested = true
+				},
+				beforeExposure: () => (stopRequested ? failedOperationResult('aborted', 'stop requested') : undefined),
+			}).result
 
-			// Without a ditherer there is nobody to ask, which is the same as not dithering.
-			expect((await capturer.start(coordinator, camera, request({ dither: { enabled: true, guider: 'guider-1' } })).result).ok).toBeTrue()
+			expect(result).toEqual(failedOperationResult('aborted', 'stop requested'))
+			expect(startExposure).toHaveBeenCalledTimes(1)
+		} finally {
+			startExposure.mockRestore()
+		}
+	})
+
+	test('fails a dispatch that throws without any physical update and opens no generation', async () => {
+		const camera = await connected()
+		const recording = recorder()
+		const startExposure = spyOn(cameraManager, 'startExposure').mockImplementation(() => {
+			throw new Error('transport closed')
+		})
+
+		try {
+			const handle = capturer.start(coordinator, camera, request(), { listener: recording.listener })
+			const begin = performance.now()
+
+			expect(await handle.result).toEqual(failedOperationResult('commandFailed', 'transport closed'))
+			// Nothing was exposed, so nothing waits for a BLOB.
+			expect(performance.now() - begin).toBeLessThan(1000)
+			expect(recording.states).toEqual(['error', 'idle'])
+			expect(recording.events.at(-1)!.generation).toBe(0)
+			expect(recording.events.at(-1)!.elapsedCount).toBe(0)
+			expect(recording.events.at(-1)!.remainingCount).toBe(1)
+			expect(arbiter.availability(keyOf(camera))).toBe('available')
+		} finally {
+			startExposure.mockRestore()
+		}
+
+		const original = cameraManager.startExposure.bind(cameraManager)
+		let dispatches = 0
+		const second = spyOn(cameraManager, 'startExposure').mockImplementation((device, time) => {
+			if (++dispatches === 2) throw new Error('transport closed')
+			original(device, time)
+		})
+		const fixed = recorder()
+
+		try {
+			expect(await capturer.start(coordinator, camera, request({ exposureMode: 'fixed', count: 3 }), { listener: fixed.listener }).result).toEqual(failedOperationResult('commandFailed', 'transport closed'))
+			const final = fixed.events.at(-1)!
+			expect(final.generation).toBe(1)
+			expect(final.elapsedCount).toBe(1)
+			expect(final.remainingCount).toBe(2)
+			expect(fixed.states.filter((state) => state === 'exposureStarted')).toHaveLength(1)
+		} finally {
+			second.mockRestore()
+		}
+	})
+
+	test('commits the generation of a dispatch that throws after the exposure went Busy, and settles its BLOB', async () => {
+		const camera = await connected()
+		const key = keyOf(camera)
+		const recording = recorder()
+		const blobs = holdBlobs(capturer)
+		// A driver that does not report its abort as Idle leaves the payload owed.
+		const idle = holdExposureUpdates(capturer, 'Idle')
+		const stopExposure = spyOn(cameraManager, 'stopExposure')
+		const original = cameraManager.startExposure.bind(cameraManager)
+		const startExposure = spyOn(cameraManager, 'startExposure').mockImplementation((device, time) => {
+			original(device, time)
+			throw new Error('acknowledgement lost')
+		})
+
+		try {
+			const result = await capturer.start(coordinator, camera, request({ exposureTime: 2, exposureTimeUnit: 'second' }), { listener: recording.listener }).result
+
+			expect(result).toEqual(failedOperationResult('commandFailed', 'acknowledgement lost'))
+			expect(recording.states.slice(0, 2)).toEqual(['exposureStarted', 'exposing'])
+			expect(recording.states.slice(-2)).toEqual(['error', 'idle'])
+			expect(recording.events.at(-1)!.generation).toBe(1)
+			expect(stopExposure).toHaveBeenCalledTimes(1)
+			// The exposure existed, so the payload it may still produce blocks the camera until it is observed.
+			expect(arbiter.availability(key)).toBe('unavailable')
+			blobs.spy.mockRestore()
+			capturer.blobReceived(camera, Buffer.from('stale frame'), 'raw')
+			expect(arbiter.availability(key)).toBe('available')
+		} finally {
+			startExposure.mockRestore()
+			stopExposure.mockRestore()
+			idle.spy.mockRestore()
+			blobs.spy.mockRestore()
+		}
+	})
+
+	test('retains the presentation of a Busy delivered during the dispatch until it returns', async () => {
+		const camera = await connected()
+		const log: string[] = []
+		const original = cameraManager.startExposure.bind(cameraManager)
+		const startExposure = spyOn(cameraManager, 'startExposure').mockImplementation((device, time) => {
+			original(device, time)
+			// The simulator turned the exposure Busy inside the command.
+			log.push(`returned:${device.exposure.state}`)
+		})
+
+		try {
+			const result = await capturer.start(coordinator, camera, request(), { listener: (event) => log.push(event.state) }).result
+
+			expect(result.ok).toBeTrue()
+			expect(log[0]).toBe('returned:Busy')
+			expect(log.slice(1, 3)).toEqual(['exposureStarted', 'exposing'])
+		} finally {
+			startExposure.mockRestore()
+		}
+	})
+
+	test('reads every frame instant from the clock of the capture', async () => {
+		const camera = await connected()
+		// Wall and monotonic domains far from the system clocks, so a value read elsewhere stands out.
+		const clock = { wallNow: () => Date.now() + 1e12, monotonicNow: () => performance.now() + 1e9 }
+		const result = await capturer.start(coordinator, camera, request(), { clock }).result
+
+		expect(result.ok).toBeTrue()
+		if (!result.ok) return
+
+		const [frame] = result.value.frames
+		for (const instant of [frame.exposureDispatchedAt!, frame.exposureStartedAt, frame.exposureFinishedAt]) expect(instant).toBeGreaterThan(1e12)
+
+		for (const instant of [frame.exposureDispatchedMonotonic!, frame.exposureStartedMonotonic, frame.exposureFinishedMonotonic]) {
+			expect(instant).toBeGreaterThan(1e9)
+			expect(instant).toBeLessThan(1e10)
+		}
+	})
+
+	test('reads the dispatch instant immediately before the exposure command, ahead of a late Busy', async () => {
+		const camera = await connected()
+		let wall = 1_800_000_000_000
+		let monotonic = 5_000
+		const clock = { wallNow: () => wall, monotonicNow: () => monotonic }
+		const busy = holdExposureUpdates(capturer, 'Busy')
+		const original = cameraManager.startExposure.bind(cameraManager)
+		let entry = Number.NaN
+		const startExposure = spyOn(cameraManager, 'startExposure').mockImplementation((device, time) => {
+			entry = monotonic
+			original(device, time)
+		})
+
+		try {
+			const handle = capturer.start(coordinator, camera, request({ exposureTime: 300 }), { clock })
+			await waitUntil(() => busy.held.length > 0, 5000, 5)
+			// The first Busy reaches the capture 100 ms after the command left.
+			wall += 100
+			monotonic += 100
+			busy.spy.mockRestore()
+			busy.release()
+			const result = await handle.result
+
+			expect(result.ok).toBeTrue()
+			if (!result.ok) return
+
+			const [frame] = result.value.frames
+			expect(frame.exposureDispatchedMonotonic).toBe(entry)
+			expect(frame.exposureStartedMonotonic - frame.exposureDispatchedMonotonic!).toBe(100)
+			expect(frame.exposureStartedAt - frame.exposureDispatchedAt!).toBe(100)
+		} finally {
+			busy.spy.mockRestore()
+			startExposure.mockRestore()
+		}
+	})
+
+	test('keeps the monotonic duration when the wall clock jumps back during the exposure', async () => {
+		const camera = await connected()
+		let offset = 0
+		const clock = { wallNow: () => Date.now() + offset, monotonicNow: () => performance.now() }
+		const listener: CameraCaptureListener = (event) => {
+			if (event.state === 'exposing' && offset === 0) offset = -5000
+		}
+
+		const result = await capturer.start(coordinator, camera, request({ exposureTime: 300 }), { listener, clock }).result
+
+		expect(result.ok).toBeTrue()
+		if (!result.ok) return
+
+		const [frame] = result.value.frames
+		expect(frame.exposureFinishedAt).toBeLessThan(frame.exposureStartedAt)
+		expect(frame.exposureFinishedMonotonic - frame.exposureStartedMonotonic).toBeGreaterThanOrEqual(300 - 1)
+		expect(frame.exposureFinishedMonotonic - frame.exposureStartedMonotonic).toBeLessThanOrEqual(300 + 150)
+	})
+})
+
+describe('frame writers', () => {
+	test('writes with the writer of each capture, falling back to the writer of the capturer', async () => {
+		const camera = await connected()
+		const defaults: [string, Buffer][] = []
+		const durable: [string, Buffer][] = []
+		const own = createCapturer({
+			write: (path, data) => {
+				defaults.push([path, data])
+				return Bun.write(path, data)
+			},
+		})
+		const durableWrite = async (path: string, data: Buffer) => {
+			durable.push([path, data])
+			await Bun.write(path, data)
+		}
+
+		try {
+			expect((await own.start(coordinator, camera, request({ autoSave: true })).result).ok).toBeTrue()
+			expect(defaults).toHaveLength(1)
+			expect(durable).toBeEmpty()
+
+			const writing = Promise.withResolvers<void>()
+			let settled = false
+			const handle = own.start(coordinator, camera, request({ autoSave: true }), {
+				write: async (path, data) => {
+					await durableWrite(path, data)
+					await writing.promise
+				},
+			})
+			void handle.result.then(() => {
+				settled = true
+			})
+			await waitUntil(() => durable.length === 1, 5000, 10)
+			await Bun.sleep(20)
+			// The result waits for the writer of the capture.
+			expect(settled).toBeFalse()
+			writing.resolve()
+			const result = await handle.result
+
+			expect(result.ok).toBeTrue()
+			if (result.ok) expect(durable[0][0]).toBe(result.value.frames[0].path)
+			expect(durable[0][1]).toBe(published.get(durable[0][0])!)
+			expect(defaults).toHaveLength(1)
+
+			// The next capture has no override and goes back to the writer of the capturer.
+			expect((await own.start(coordinator, camera, request({ autoSave: true })).result).ok).toBeTrue()
+			expect(defaults).toHaveLength(2)
+
+			expect((await own.start(coordinator, camera, request({ autoSave: true, exposureMode: 'fixed', count: 3 }), { write: durableWrite }).result).ok).toBeTrue()
+			expect(durable).toHaveLength(4)
+			expect(defaults).toHaveLength(2)
+
+			// Without auto-save nothing is written by anyone.
+			expect((await own.start(coordinator, camera, request(), { write: durableWrite }).result).ok).toBeTrue()
+			expect(durable).toHaveLength(4)
+			expect(defaults).toHaveLength(2)
 		} finally {
 			own.dispose()
 		}
 	})
 
-	test('aborts the dither when the capture stops', async () => {
+	test('falls back to Bun.write without a writer', async () => {
 		const camera = await connected()
-		let signal: AbortSignal | undefined
-		const ditherer: CameraDitherer = {
-			running: () => true,
-			dither: (_, __, options?: CameraDitherOptions) => {
-				signal = options?.signal
-				return new Promise((resolve) => {
-					options?.signal?.addEventListener('abort', () => resolve(failedOperationResult('aborted')), { once: true })
-				})
-			},
+		const own = createCapturer({ write: undefined })
+		const write = spyOn(Bun, 'write')
+
+		try {
+			expect((await own.start(coordinator, camera, request({ autoSave: true })).result).ok).toBeTrue()
+			expect(write).toHaveBeenCalledTimes(1)
+		} finally {
+			write.mockRestore()
+			own.dispose()
 		}
-		const own = createCapturer({ ditherer })
+	})
+
+	test('fails the frame when the writer of the capture rejects', async () => {
+		const camera = await connected()
 		const recording = recorder()
 
-		try {
-			const handle = own.start(coordinator, camera, request({ dither: { enabled: true, guider: 'guider-1' } }), { listener: recording.listener })
-			await waitUntil(() => recording.states.includes('dithering'), 5000, 10)
-			await handle.cancel()
+		const result = await capturer.start(coordinator, camera, request({ autoSave: true }), { listener: recording.listener, write: () => Promise.reject(new Error('fsync failed')) }).result
 
-			expect(await handle.result).toEqual(failedOperationResult('aborted'))
-			expect(signal?.aborted).toBeTrue()
-			expect(recording.states).not.toContain('exposureStarted')
-			expect(recording.events.some((event) => event.state === 'idle' && event.stopped)).toBeTrue()
+		expect(result).toEqual(failedOperationResult('commandFailed', 'fsync failed'))
+		expect(recording.paths).toBeEmpty()
+		expect(arbiter.availability(keyOf(camera))).toBe('available')
+	})
+
+	test('never crosses the writers of concurrent captures on different cameras', async () => {
+		const camera = await connected()
+		const secondSimulator = new CameraSimulator('Camera Simulator 2', client, { mountManager, focuserManager, rotatorManager, wheelManager })
+		const second = cameraManager.get(client, 'Camera Simulator 2')!
+		const first: string[] = []
+		const other: string[] = []
+
+		try {
+			cameraManager.connect(second)
+			await waitUntil(() => second.connected && second.frame.width.max > 0 && arbiter.availability(keyOf(second)) === 'available', 5000, 10)
+
+			const [a, b] = await Promise.all([
+				capturer.start(coordinator, camera, request({ autoSave: true, exposureMode: 'fixed', count: 2 }), {
+					write: (path, data) => {
+						first.push(path)
+						return Bun.write(path, data)
+					},
+				}).result,
+				capturer.start(coordinator, second, request({ autoSave: true, exposureMode: 'fixed', count: 2 }), {
+					write: (path, data) => {
+						other.push(path)
+						return Bun.write(path, data)
+					},
+				}).result,
+			])
+
+			expect(a.ok && b.ok).toBeTrue()
+			if (a.ok) expect(first).toEqual(a.value.frames.map((frame) => frame.path))
+			if (b.ok) expect(other).toEqual(b.value.frames.map((frame) => frame.path))
 		} finally {
-			own.dispose()
+			cameraManager.disconnect(second)
+			secondSimulator.dispose()
 		}
 	})
 })
