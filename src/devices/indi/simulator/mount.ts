@@ -39,7 +39,7 @@ export class MountSimulator extends DeviceSimulator {
 	readonly type = 'mount'
 	readonly #trackModes = ['SIDEREAL', 'SOLAR', 'LUNAR', 'KING'] as const
 
-	readonly #onCoordSet = makeSwitchVector('', 'ON_COORD_SET', 'On Set', MAIN_CONTROL, 'OneOfMany', 'rw', ['SLEW', 'Slew', false], ['FLIP', 'Flip', false], ['SYNC', 'Sync', false])
+	readonly #onCoordSet = makeSwitchVector('', 'ON_COORD_SET', 'On Set', MAIN_CONTROL, 'OneOfMany', 'rw', ['SLEW', 'Slew', false], ['TRACK', 'Track', false], ['FLIP', 'Flip', false], ['SYNC', 'Sync', false])
 	readonly #equatorialCoordinate = makeNumberVector('', 'EQUATORIAL_EOD_COORD', 'Eq. Coordinates', MAIN_CONTROL, 'rw', ['RA', 'RA (hours)', 0, 0, 24, 0.1, '%10.6f'], ['DEC', 'DEC (deg)', 0, -90, 90, 0.1, '%10.6f'])
 	readonly #abort = makeSwitchVector('', 'TELESCOPE_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
 	readonly #trackMode = makeSwitchVector('', 'TELESCOPE_TRACK_MODE', 'Track Mode', MAIN_CONTROL, 'OneOfMany', 'rw', ['TRACK_SIDEREAL', 'Sidereal', true], ['TRACK_SOLAR', 'Solar', false], ['TRACK_LUNAR', 'Lunar', false], ['TRACK_KING', 'King', false])
@@ -189,6 +189,8 @@ export class MountSimulator extends DeviceSimulator {
 	#coordSetMode: CoordSetMode = 'SLEW'
 	#slewMode?: SlewMode
 	#slewTarget?: EquatorialCoordinate
+	// Whether the active GOTO turns tracking on when it reaches its destination (ON_COORD_SET TRACK).
+	#slewTracks = false
 	// Pier side committed only after the active slew reaches its destination.
 	#slewTargetPierSide?: PierSide
 	// Physical speed of the active coordinate slew, in radians per second.
@@ -678,7 +680,7 @@ export class MountSimulator extends DeviceSimulator {
 
 				if (this.#coordSetMode === 'SYNC') this.syncTo(rightAscension, declination)
 				else if (this.#coordSetMode === 'FLIP') this.flipTo(rightAscension, declination)
-				else this.goTo(rightAscension, declination)
+				else this.goTo(rightAscension, declination, this.#coordSetMode === 'TRACK')
 
 				return
 			}
@@ -1058,6 +1060,7 @@ export class MountSimulator extends DeviceSimulator {
 			case 'ON_COORD_SET':
 				if (vector.elements.SYNC === true) this.#coordSetMode = 'SYNC'
 				else if (vector.elements.FLIP === true) this.#coordSetMode = 'FLIP'
+				else if (vector.elements.TRACK === true) this.#coordSetMode = 'TRACK'
 				else if (vector.elements.SLEW === true) this.#coordSetMode = 'SLEW'
 		}
 	}
@@ -1108,14 +1111,17 @@ export class MountSimulator extends DeviceSimulator {
 	//
 	// The target is given in reported coordinates, which is what a client commands, so it is converted
 	// back through the encoder offsets into the mechanical orientation the axes must reach for the
-	// controller to end up reporting it.
-	goTo(rightAscension: Angle, declination: Angle) {
+	// controller to end up reporting it. With `track` the mount behaves as ON_COORD_SET TRACK and turns
+	// tracking on once it arrives; otherwise, as SLEW, the tracking state is left untouched. A slew that is
+	// aborted or replaced before arriving does not change tracking.
+	goTo(rightAscension: Angle, declination: Angle, track: boolean = false) {
 		if (!this.isConnected || this.isParked) return
 
 		const target = { rightAscension: normalizeAngle(rightAscension - this.#indexErrorRightAscension), declination: clampDeclination(declination - this.#indexErrorDeclination) }
 		const targetPierSide = this.#gotoPierSide(target)
 		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
 		this.#startCoordinateSlew('GOTO', target, targetPierSide, changesPierSide, false)
+		this.#slewTracks = track
 	}
 
 	// Selects the side on which a GOTO target will be valid when the axes actually arrive.
@@ -1899,6 +1905,7 @@ export class MountSimulator extends DeviceSimulator {
 			}
 
 			const mode = this.#slewMode
+			const tracks = this.#slewTracks
 			this.#resetAutomaticFlipHourAngle(endTime - remaining * 1000)
 			this.#slewMode = undefined
 			this.#slewTarget = undefined
@@ -1919,6 +1926,7 @@ export class MountSimulator extends DeviceSimulator {
 				this.setTrackingEnabled(false)
 			} else {
 				this.#setParking(false)
+				if (tracks) this.setTrackingEnabled(true)
 			}
 
 			return remaining
@@ -2297,8 +2305,10 @@ export class MountSimulator extends DeviceSimulator {
 		this.#resetSettlingState()
 	}
 
-	// Clears transient travel and speed belonging to a superseded or completed slew without changing the side.
+	// Clears transient travel, speed, and arrival tracking belonging to a superseded or completed slew without
+	// changing the side.
 	#clearFlipMotion() {
+		this.#slewTracks = false
 		this.#slewTargetPierSide = undefined
 		this.#slewSpeed = 0
 		this.#flipTravelRemaining = 0

@@ -5,8 +5,8 @@ import { makeBlobVector, makeLightVector, makeNumberVector, makeSwitchVector, ma
 
 // Public contracts shared by the in-process INDI device simulators.
 
-// Whether an On Coord Set selects a slew-to, forced pier-side flip, or sync-to operation.
-export type CoordSetMode = 'SLEW' | 'FLIP' | 'SYNC'
+// Whether an On Coord Set selects a slew-to, slew-and-track, forced pier-side flip, or sync-to operation.
+export type CoordSetMode = 'SLEW' | 'TRACK' | 'FLIP' | 'SYNC'
 
 // Kind of automatic slew in progress.
 export type SlewMode = 'GOTO' | 'FLIP' | 'HOME' | 'PARK'

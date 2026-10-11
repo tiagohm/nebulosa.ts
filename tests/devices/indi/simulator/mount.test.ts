@@ -363,6 +363,42 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('turns tracking on after a TRACK slew arrives and leaves it untouched after SLEW', () => {
+		const { client, manager, mount, simulator } = makeMeridianFlipMount('mount.coord.track')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			simulator.setTrackingEnabled(false)
+			const target = { rightAscension: normalizeAngle(lst + hour(2)), declination: deg(30) }
+			const duration = deg(15) / FAST_SLEW_SPEED
+
+			// The manager prefers TRACK once the driver advertises it.
+			manager.goTo(mount, target.rightAscension, target.declination)
+			expect(simulator.isSlewing).toBeTrue()
+			simulator.advance(duration / 2)
+			expect(simulator.isTracking).toBeFalse()
+			manager.stop(mount)
+			expect(simulator.isTracking).toBeFalse()
+
+			manager.goTo(mount, target.rightAscension, target.declination)
+			simulator.advance(duration + 1e-6)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.isTracking).toBeTrue()
+			expect(normalizePI(simulator.rightAscension - target.rightAscension)).toBeCloseTo(0, 12)
+			expect(simulator.declination).toBeCloseTo(target.declination, 12)
+
+			simulator.setTrackingEnabled(false)
+			client.sendSwitch({ device: simulator.name, name: 'ON_COORD_SET', elements: { SLEW: true } })
+			manager.equatorialCoordinate(mount, normalizeAngle(lst + hour(1)), deg(20))
+			simulator.advance(duration + 1e-6)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.isTracking).toBeFalse()
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('reverses the right ascension shaft when undoing an explicit flip', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.explicit.reverse')
 
