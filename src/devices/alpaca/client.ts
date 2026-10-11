@@ -1250,6 +1250,8 @@ class AlpacaTelescope extends AlpacaDevice {
 	readonly #guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
 
 	readonly #now = timeNow() // Used in the conversion from J2000 to JNOW. Changes in precession/nutation angles are negligible.
+	// Invalidates the reply of a slew/sync when a newer target supersedes it.
+	#moveSequence = 0
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice, name: string) {
 		super(client, device, client.options.handler, name)
@@ -1573,7 +1575,7 @@ class AlpacaTelescope extends AlpacaDevice {
 		switch (vector.name) {
 			case 'EQUATORIAL_EOD_COORD':
 				if (vector.elements.RA !== undefined || vector.elements.DEC !== undefined) {
-					void this.#moveToTarget(vector.elements.RA, vector.elements.DEC)
+					void this.#moveToTarget(vector.elements.RA, vector.elements.DEC).catch(console.error)
 				}
 
 				break
@@ -1638,6 +1640,10 @@ class AlpacaTelescope extends AlpacaDevice {
 
 	// Slews or syncs to the requested equatorial target (RA hours, Dec degrees). Converts JNOW input to
 	// J2000 when the mount reports a J2000 equatorial system; the slew/sync choice follows ON_COORD_SET.
+	// A refused or failed call, such as a slew while AtPark or not Tracking, publishes EQUATORIAL_EOD_COORD
+	// as Alert, since no Slewing transition will ever follow it. Success publishes nothing: the polled
+	// Slewing and coordinates report the motion. Replies superseded by a newer target or an ended session
+	// are ignored.
 	async #moveToTarget(rightAscension?: number, declination?: number) {
 		if (rightAscension !== undefined && declination !== undefined) {
 			if (this.state.EquatorialSystem === 2) {
@@ -1645,8 +1651,20 @@ class AlpacaTelescope extends AlpacaDevice {
 				rightAscension = toHour(normalizeAngle(ra))
 				declination = toDeg(dec)
 			}
-			if (this.#onCoordSet.elements.SLEW?.value === true) await this.api.slewToCoordinatesAsync(this.id, rightAscension, declination)
-			else if (this.#onCoordSet.elements.SYNC?.value === true) await this.api.syncToCoordinates(this.id, rightAscension, declination)
+
+			const session = this.session
+			const sequence = ++this.#moveSequence
+
+			let result: AlpacaRequestResult<void>
+			if (this.#onCoordSet.elements.SLEW?.value === true) result = await this.api.slewToCoordinatesAsync(this.id, rightAscension, declination)
+			else if (this.#onCoordSet.elements.SYNC?.value === true) result = await this.api.syncToCoordinates(this.id, rightAscension, declination)
+			else return
+
+			if (result.ok || session !== this.session || sequence !== this.#moveSequence) return
+
+			// Sent even when the vector already reads Alert, so every refused command is reported.
+			this.updatePropertyState(this.#equatorialCoordinate, 'Alert')
+			this.sendSetProperty(this.#equatorialCoordinate)
 		}
 	}
 }
