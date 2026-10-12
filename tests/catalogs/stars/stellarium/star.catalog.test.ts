@@ -630,7 +630,7 @@ describe('read concurrency', () => {
 		if (!firstA.done) records[0].push(firstA.value.recordNumber)
 		if (!firstB.done) records[1].push(firstB.value.recordNumber)
 
-		while(true) {
+		while (true) {
 			const [ra, rb] = await Promise.all([a.next(), b.next()])
 			if (ra.done && rb.done) break
 			if (!ra.done) records[0].push(ra.value.recordNumber)
@@ -673,7 +673,7 @@ describe('read concurrency', () => {
 		async function drain(iterator: AsyncIterator<StellariumStarCatalogEntry>) {
 			const records = [0]
 
-			while(true) {
+			while (true) {
 				const result = await iterator.next()
 				if (result.done) break
 				records.push(result.value.recordNumber)

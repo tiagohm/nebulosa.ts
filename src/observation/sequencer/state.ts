@@ -1,15 +1,15 @@
 import type { FrameType } from '../../devices/indi/device'
 import { createMeridianFlipState, type MeridianFlipState } from '../mount/meridian.flip'
 // oxfmt-ignore
-import type { SequencerConfiguration, SequencerCorrectiveIntents, SequencerFailure, SequencerFilterFocusOffsets, SequencerFocusBaseline, SequencerFrameSlot, SequencerFrameSlotSnapshot, SequencerIntents, SequencerPhase, SequencerSafetyState, SequencerSchedulerState, SequencerSessionState, SequencerSnapshot, SequencerTaskId, SequencerTerminalState, SequencerTriggerAnchors } from './sequencer'
+import type { SequencerCheckpoint, SequencerCheckpointSlot, SequencerConfiguration, SequencerCorrectiveIntents, SequencerFailure, SequencerFilterFocusOffsets, SequencerFocusBaseline, SequencerFrameSlot, SequencerFrameSlotSnapshot, SequencerIntents, SequencerMountRiskObservation, SequencerPhase, SequencerSafetyState, SequencerSchedulerState, SequencerSessionState, SequencerSnapshot, SequencerTaskId, SequencerTerminalState, SequencerTriggerAnchors } from './sequencer'
 
 // Runtime state of one Sequencer session and its pure transitions: the lifecycle state machine, the control
-// requests (pause, resume, stop) recorded as desired state, the logical counters persisted between processes,
-// the projection into the public snapshot, the focus-offset baseline (bootstrap, absolute targets, update after
-// autofocus) and the safety-window query over the runtime transition history. Nothing here touches devices,
-// clocks or storage: callers pass wall instants (Unix ms) and monotonic instants (ms) explicitly. Helpers that
-// update the runtime state mutate it in place and document it; the snapshot and the other derivations allocate
-// fresh objects and never alias mutable runtime fields.
+// requests (pause, resume, stop) recorded as desired state, the logical counters persisted between processes and
+// their checkpoint form, the projection into the public snapshot, the focus-offset baseline (bootstrap, absolute
+// targets, update after autofocus) and the safety-window query over the runtime transition history. Nothing here
+// touches devices, clocks or storage: callers pass wall instants (Unix ms) and monotonic instants (ms) explicitly.
+// Helpers that update the runtime state mutate it in place and document it; the snapshot, the checkpoint and the
+// other derivations allocate fresh objects and never alias mutable runtime fields.
 
 // State the controls asked for; honored only at safe points.
 export type SequencerDesiredState = 'running' | 'paused'
@@ -69,6 +69,10 @@ export interface SequencerRuntimeState {
 	focus: SequencerFocusBaseline
 	// FLIP_STARTED transitions accepted in the session, across processes; saved before each one.
 	meridianFlipAttempts: number
+	// Wall instant (Unix ms) of the upper transit anchoring the meridian cycle; absent without meridian flip.
+	meridianTransitAt?: number
+	// Last observation of the meridian supervisor, copied into every checkpoint.
+	mountRiskObservation?: SequencerMountRiskObservation
 	// Consecutive discarded frames across slots (circuit breaker).
 	consecutiveDiscards: number
 
@@ -287,6 +291,58 @@ export function sequencerSnapshot(sessionId: string, configuration: SequencerCon
 		updatedAt,
 		...(failure !== undefined && { failure }),
 	}
+}
+
+// Checkpoint of the persisted part of a runtime state: `currentSlot` is the slot in progress (undefined between
+// slots), `sequence` its order and `updatedAt` the wall instant of the save (Unix ms). A deep copy that never aliases
+// the runtime, so the runtime may keep changing while it is written; optional fields are absent rather than undefined.
+export function sequencerCheckpointOf(sessionId: string, configuration: SequencerConfiguration, runtime: SequencerRuntimeState, currentSlot: SequencerCheckpointSlot | undefined, sequence: number, updatedAt: number): SequencerCheckpoint {
+	const { meridianTransitAt, mountRiskObservation } = runtime
+	// `Object.fromEntries` defines own properties, so any group id (even `__proto__`) is a plain key.
+	const capture = Object.fromEntries(Array.from(runtime.capture, ([groupId, counters]) => [groupId, { ...counters }]))
+
+	return {
+		version: 1,
+		sessionId,
+		configurationId: configuration.id,
+		configurationRevision: configuration.revision,
+		capture,
+		scheduler: structuredClone(runtime.scheduler),
+		anchors: structuredClone(runtime.anchors),
+		intents: { ...runtime.intents },
+		focus: { ...runtime.focus },
+		meridianFlipAttempts: runtime.meridianFlipAttempts,
+		...(meridianTransitAt !== undefined && { meridianTransitAt }),
+		...(mountRiskObservation !== undefined && { mountRiskObservation: { ...mountRiskObservation } }),
+		...(currentSlot !== undefined && { currentSlot: { ...currentSlot } }),
+		consecutiveDiscards: runtime.consecutiveDiscards,
+		sequence,
+		updatedAt,
+	}
+}
+
+// Replaces the persisted part of a runtime state with a checkpoint of the same configuration, in place, as a deep
+// copy that never aliases the checkpoint: progress (a configured group missing from it counts zero, a group the
+// configuration lacks is dropped), scheduler, anchors, intents, focus baseline, meridian counters and consecutive
+// discards. The current slot and the runtime-only state (meridian flip phase, acquired target) are left to the
+// caller, which resolves the slot against the configuration and rebuilds the rest on a restart.
+export function applySequencerCheckpoint(runtime: SequencerRuntimeState, configuration: SequencerConfiguration, checkpoint: SequencerCheckpoint) {
+	runtime.capture = createSequencerCaptureProgress(configuration)
+
+	for (const [groupId, counters] of runtime.capture) {
+		if (!Object.hasOwn(checkpoint.capture, groupId)) continue
+		const { accepted, forced, discarded, skipped } = checkpoint.capture[groupId]
+		Object.assign(counters, { accepted, forced, discarded, skipped })
+	}
+
+	runtime.scheduler = structuredClone(checkpoint.scheduler)
+	runtime.anchors = structuredClone(checkpoint.anchors)
+	runtime.intents = { ...checkpoint.intents }
+	runtime.focus = { ...checkpoint.focus }
+	runtime.meridianFlipAttempts = checkpoint.meridianFlipAttempts
+	runtime.meridianTransitAt = checkpoint.meridianTransitAt
+	runtime.mountRiskObservation = checkpoint.mountRiskObservation === undefined ? undefined : { ...checkpoint.mountRiskObservation }
+	runtime.consecutiveDiscards = checkpoint.consecutiveDiscards
 }
 
 // Known focus offset of a filter, in steps: 0 for the reference, the configured entry otherwise. A filter without

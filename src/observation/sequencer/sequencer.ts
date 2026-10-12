@@ -8,10 +8,11 @@ import type { CameraCaptureClock, CameraCaptureStart, CameraExposureTimeUnit } f
 import { isPathSegment } from '../../io/path'
 import type { Angle } from '../../math/units/angle'
 import type { AutoFocusFittingMode, AutoFocusOptions } from '../focus/autofocus'
+import type { SequencerStorage } from './storage'
 
 // Public contracts of the acquisition Sequencer: the declarative, JSON-serializable session configuration,
 // the resolved devices it runs against, its clock and safety boundaries, the frame-slot identity, the logical
-// state persisted between processes (intents, trigger anchors, focus baseline), and the observable surface
+// state persisted between processes (intents, trigger anchors, focus baseline, the checkpoint and its store), and the observable surface
 // (snapshot, events, failure, result, handle). It also holds the structural validation of a configuration
 // that arrives from outside the process (JSON, HTTP), which never touches devices.
 //
@@ -644,6 +645,10 @@ export interface SequencerSafetySource {
 export interface SequencerRunnerServices {
 	// Orchestration core of the process.
 	readonly coordinator: OperationCoordinator
+	// Artifact protocol of the session: its directory lock, journal and frame files. Its session id is the session id.
+	readonly storage: SequencerStorage
+	// Durable checkpoints; absent persists nothing and resumes nothing.
+	readonly checkpointStore?: SequencerCheckpointStore
 	// Moves the focuser back when a focuser compensation runs.
 	readonly focuserCommander?: FocuserCommander
 	// Moves the wheel back when a wheel compensation runs.
@@ -850,6 +855,98 @@ export interface SequencerSchedulerState {
 // - unknown: inspected with a physical filter without known offset; nothing is derived until an autofocus;
 // - known: `referencePosition` is the absolute focuser position (steps) at which the reference filter is in focus.
 export type SequencerFocusBaseline = { readonly kind: 'unset' } | { readonly kind: 'unknown' } | { readonly kind: 'known'; readonly referencePosition: number }
+
+// Done-slot counters of one group, as persisted.
+export interface SequencerGroupCounters {
+	// Frames accepted by their quality, excluding forced ones.
+	readonly accepted: number
+	// Discarded frames promoted as accepted by `keepLast`.
+	readonly forced: number
+	// Discarded frames.
+	readonly discarded: number
+	// Slots ended without an accepted frame.
+	readonly skipped: number
+}
+
+// Last physical observation of the meridian supervisor, persisted with every checkpoint while it supervises and
+// read only when a restart arms it again (the gap between two runtimes).
+export interface SequencerMountRiskObservation {
+	// Wall instant of the observation, in Unix ms.
+	readonly at: number
+	// Physical hour angle of the mount, in radians in (−π, π].
+	readonly hourAngle: Angle
+	// Pier side read with it.
+	readonly pierSide: PierSide
+	// Whether the mount tracked.
+	readonly tracking: boolean
+}
+
+// Counters of the slot in progress, persisted while it is current (retake or retry pending). `attempt` is the
+// physical attempt the slot is at and has not consumed yet: a capture failure or a discard persists `attempt + 1`.
+export interface SequencerCheckpointSlot {
+	// Stable slot id `frame[{groupId}][{ordinal}]`.
+	readonly id: string
+	// Next physical attempt to prepare, 1-based.
+	readonly attempt: number
+	// Discards of the slot in total.
+	readonly discardedTotal: number
+	// Discards counted against the slot budget.
+	readonly discardBudgetUsed: number
+	// Consecutive failed captures.
+	readonly captureFailures: number
+}
+
+// Minimal logical state to continue a session, never a position in a list of instructions. Bound exactly to the
+// configuration id and revision that produced it; JSON-serializable. Phase, task, acquired target, guiding, filter,
+// rotator and focuser positions, and operation ids are never persisted: the next pre-capture reconciles them.
+export interface SequencerCheckpoint {
+	// Schema of this shape.
+	readonly version: 1
+	// Session the checkpoint belongs to.
+	readonly sessionId: string
+	// Id of the configuration that produced it.
+	readonly configurationId: string
+	// Revision of the configuration that produced it.
+	readonly configurationRevision: number
+	// Done-slot counters per group id.
+	readonly capture: Readonly<Record<string, SequencerGroupCounters>>
+	// Scheduler cursor, credits and pending calibration batches (camera settings frozen).
+	readonly scheduler: SequencerSchedulerState
+	// Trigger anchors.
+	readonly anchors: SequencerTriggerAnchors
+	// Pending corrective intents.
+	readonly intents: SequencerIntents
+	// Logical baseline of the focus offsets; `unset` only before the bootstrap.
+	readonly focus: SequencerFocusBaseline
+	// Started meridian flips (FLIP_STARTED) of the session across processes, saved before each one; the flip phase is
+	// never persisted.
+	readonly meridianFlipAttempts: number
+	// Wall instant (Unix ms) of the upper transit that anchors the single meridian cycle; absent without meridian flip.
+	readonly meridianTransitAt?: number
+	// Last observation of the meridian supervisor; absent without meridian flip and before the first save.
+	readonly mountRiskObservation?: SequencerMountRiskObservation
+	// Slot in progress (retake or retry pending); absent between slots.
+	readonly currentSlot?: SequencerCheckpointSlot
+	// Consecutive discarded frames across slots.
+	readonly consecutiveDiscards: number
+	// Strictly increasing per session; a store refuses a sequence not above the persisted one. Each frame transaction
+	// of the journal carries the checkpoint it produces, so the highest committed one above the persisted sequence is
+	// the correct checkpoint after a crash.
+	readonly sequence: number
+	// Wall instant of the save, in Unix ms; diagnostic only, never a duration.
+	readonly updatedAt: number
+}
+
+// Durable store of the checkpoints of sessions. The runner depends only on this interface.
+export interface SequencerCheckpointStore {
+	// Latest checkpoint of a session, or undefined when none was saved. Rejects when it cannot be read or is malformed.
+	readonly load: (sessionId: string) => Promise<SequencerCheckpoint | undefined>
+	// Replaces the checkpoint of its session durably. Rejects, persisting nothing, when its sequence is not above the
+	// persisted one or the write failed.
+	readonly save: (checkpoint: SequencerCheckpoint) => Promise<void>
+	// Removes the checkpoint of a session.
+	readonly remove?: (sessionId: string) => Promise<void>
+}
 
 // Progress of one group in a snapshot or result.
 export interface SequencerGroupProgressSnapshot {
