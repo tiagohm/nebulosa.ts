@@ -1,4 +1,4 @@
-import type { SequencerActionAnchor, SequencerAutofocusTriggers, SequencerIntents, SequencerRecenterConfiguration, SequencerTriggerAnchors } from './sequencer'
+import type { SequencerActionAnchor, SequencerAutofocusTriggers, SequencerDitherConfiguration, SequencerIntents, SequencerRecenterConfiguration, SequencerTriggerAnchors } from './sequencer'
 import type { SequencerRuntimeState } from './state'
 
 // Pure trigger predicates of the Sequencer and the anchors they read. A periodic action is due by the light exposures
@@ -64,6 +64,23 @@ export function recenterDue(configuration: SequencerRecenterConfiguration | unde
 	const { afterFrames, interval } = configuration
 	if (afterFrames !== undefined && lightExposuresSince(anchors, anchors.recenter) >= afterFrames) return true
 	return interval !== undefined && elapsed !== undefined && elapsed >= interval * 1000
+}
+
+// Whether the periodic dither is due before a LIGHT frame: `afterFrames` light exposures (accepted or discarded) since
+// the last successful dither, exactly at N. Never before the first light of the session (no light exposed), nor before a
+// light was exposed after the last motion of the mount for the target (`heldAt`, the light exposures at that motion):
+// the first light after an acquisition, a recenter or a flip is never dithered, and the due dither runs before the next
+// one. Pure.
+export function ditherDue(configuration: Pick<SequencerDitherConfiguration, 'afterFrames'>, anchors: Pick<SequencerTriggerAnchors, 'lightExposures' | 'dither'>, heldAt: number | undefined) {
+	if (anchors.lightExposures === 0) return false
+	if (heldAt !== undefined && anchors.lightExposures <= heldAt) return false
+	return lightExposuresSince(anchors, anchors.dither) >= configuration.afterFrames
+}
+
+// Records, in place, that the mount just moved for the target (acquisition, recenter, meridian flip), so no dither runs
+// before the next light was exposed.
+export function holdSequencerDither(runtime: Pick<SequencerRuntimeState, 'anchors' | 'ditherHeldAt'>) {
+	runtime.ditherHeldAt = runtime.anchors.lightExposures
 }
 
 // Advances the anchor of `action` after it succeeded, in place: its light exposures to the current count, its wall

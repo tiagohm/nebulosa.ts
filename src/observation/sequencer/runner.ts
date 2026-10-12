@@ -2,6 +2,7 @@ import { errorMessage } from '../../core/util'
 import type { Device } from '../../devices/indi/device'
 import { type FailedOperationResult, failedOperationResult, type OperationContext, type OperationExecutor, type OperationHandle, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
 import { type ResourceConflict, type ResourceRequest, type ResourceReservation, type ResourceReservationOwner, resourceKey } from '../../devices/orchestration/resource'
+import { MountDitherer } from '../guiding/ditherer'
 import { createMeridianFlipState } from '../mount/meridian.flip'
 import { restoreSequencerFrameSlot, selectNextFrame, selectNextFrameOnStop, type SequencerTriggerEvent } from './scheduler'
 // oxfmt-ignore
@@ -62,6 +63,9 @@ export interface SequencerContext extends SequencerTaskView {
 	readonly scope: OperationContext
 	// Cancellation signal of the root.
 	readonly signal: AbortSignal
+	// Opens roots of the session reservation, for a collaborator whose operation outlives the task (the root `guiding`
+	// of a guiding session). It refuses with 'aborted', like the task roots, once the signal of the phase aborted.
+	readonly reservation: OperationScope
 	// Emits a session event of the task synchronously; the session stamps and delivers it.
 	readonly emit: (event: SequencerEventBody) => void
 	// Persists the current logical state (anchors, intents, baseline the task just updated) as the next checkpoint. A
@@ -199,6 +203,26 @@ export function sequencerResourceRequests(configuration: SequencerConfiguration,
 	return requests
 }
 
+// Resources of the guiding session and of the ditherer of the enabled guiding and dither features: `reserve` joins the
+// reservation of the session; `hold` is what they lease by themselves, which must never be a device the session
+// commands (section 14.1). A ditherer that is the guiding session is counted once.
+export function sequencerAdapterResources(configuration: Pick<SequencerConfiguration, 'guiding' | 'dither'>, services: Pick<SequencerRunnerServices, 'guiding' | 'ditherer'>) {
+	const reserve: ResourceRequest[] = []
+	const hold: ResourceRequest[] = []
+
+	const add = (resources: { readonly reserve: readonly ResourceRequest[]; readonly hold: readonly ResourceRequest[] } | undefined) => {
+		if (resources === undefined) return
+		reserve.push(...resources.reserve)
+		hold.push(...resources.hold)
+	}
+
+	const guiding = configuration.guiding === undefined ? undefined : services.guiding
+	if (guiding !== undefined) add(guiding.resources())
+	if (configuration.dither !== undefined && services.ditherer !== undefined && (services.ditherer as unknown) !== guiding) add(services.ditherer.resources())
+
+	return { reserve, hold }
+}
+
 // Delay before the retry number `retry` (1-based), in ms: `delay × backoff^(retry − 1)` seconds, capped at
 // `maximumDelay`.
 export function sequencerRetryDelay(policy: SequencerRetryPolicy, retry: number) {
@@ -317,6 +341,8 @@ export class SequencerRunner {
 	// Attempt whose exposure `beforeExposure` approved last; while it is the open attempt of the storage it is never
 	// deferred.
 	#dispatched?: SequencerFrameDestination
+	// End of the guiding run, registered once `beginRun` succeeded and called exactly once by the terminalization.
+	#endRun?: VoidFunction
 
 	constructor(options: SequencerRunnerOptions) {
 		const { configuration, devices, services, phases, disposeSignal } = options
@@ -450,11 +476,50 @@ export class SequencerRunner {
 		if (this.#runtime.stop !== undefined || this.#failing || !(await this.#resume())) return false
 		if (this.#runtime.stop !== undefined || this.#failing) return false
 
-		const reserved = this.#services.coordinator.arbiter.reserve(this.#owner, sequencerResourceRequests(this.#configuration, this.#devices))
+		// What a guiding session or a ditherer leases by itself is never a device the session commands.
+		const commanded = sequencerResourceRequests(this.#configuration, this.#devices)
+		const adapters = sequencerAdapterResources(this.#configuration, this.#services)
+		const keys = new Set(commanded.map((request) => request.key))
+		const held = adapters.hold.find((request) => keys.has(request.key))
+		if (held !== undefined) return this.#refuse({ kind: 'configuration', detail: `the guiding or the ditherer holds ${held.device?.name ?? held.key}, a device the session commands` })
+
+		const reserved = this.#services.coordinator.arbiter.reserve(this.#owner, [...commanded, ...adapters.reserve])
 		if (!reserved.ok) return this.#refuse({ kind: 'operation', reason: 'busy', detail: formatConflicts(reserved.conflicts) })
 
 		this.#reservation = reserved.reservation
 		this.#scope = this.#services.coordinator.reservedScope(reserved.reservation)
+
+		// Synchronously after the reservation and before any command: the run admission of the guiding, then the barrier of
+		// the pulses a previous process may have dispatched through a pulse mount ditherer.
+		if (!this.#beginRun()) {
+			await this.#services.coordinator.cancelByReservationOwner(this.#owner, 'aborted')
+			this.#reservation.release()
+			this.#reservation = undefined
+			this.#scope = undefined
+			return false
+		}
+
+		const { ditherer } = this.#services
+		if (this.#configuration.dither !== undefined && ditherer instanceof MountDitherer) ditherer.assumeDispatchedPulses()
+
+		return true
+	}
+
+	// Begins the guiding run of section 18 step 0a, synchronously and without commanding anything; on success `endRun`
+	// is registered for the terminalization. A refusal fails the session ('busy' when another owner holds the pulse
+	// admission, 'configuration' otherwise) without any command. Returns whether the run may go on.
+	#beginRun() {
+		const { guiding } = this.#services
+		if (this.#configuration.guiding === undefined || guiding?.beginRun === undefined) return true
+
+		const begun = guiding.beginRun()
+
+		if (!begun.ok) {
+			const detail = `the guiding run could not begin${begun.error === undefined ? '' : `: ${begun.error}`}`
+			return this.#refuse(begun.reason === 'busy' ? { kind: 'operation', reason: 'busy', detail } : { kind: 'configuration', detail })
+		}
+
+		this.#endRun = () => guiding.endRun?.()
 		return true
 	}
 
@@ -688,7 +753,7 @@ export class SequencerRunner {
 		}
 
 		const view = this.#view(frame)
-		const handle = this.startTask('sequencer.captureFrame', (scope) => this.#phases.capture({ ...view, scope, signal: scope.signal, emit: this.#emitter, saveCheckpoint: this.#saver, destination, beforeExposure, exposureStarted }))
+		const handle = this.startTask('sequencer.captureFrame', (scope) => this.#phases.capture({ ...view, scope, signal: scope.signal, reservation: this.#runReservation, emit: this.#emitter, saveCheckpoint: this.#saver, destination, beforeExposure, exposureStarted }))
 		const current = this.#begin(handle, 'capture', 'captureFrame')
 		const result = await handle.result
 		this.#end()
@@ -924,9 +989,22 @@ export class SequencerRunner {
 			this.#shutdownFailed = true
 		} finally {
 			await this.#services.coordinator.cancelByReservationOwner(this.#owner, 'aborted')
+			this.#endGuidingRun()
 			this.#reservation?.release()
 			await this.#storage.release()
 			this.#terminate(this.#failing || this.#shutdownFailed ? 'failed' : this.#runtime.stop !== undefined ? 'stopped' : 'completed')
+		}
+	}
+
+	// Ends the guiding run exactly once, after the shutdown and the terminal drain and before the release.
+	#endGuidingRun() {
+		const endRun = this.#endRun
+		this.#endRun = undefined
+
+		try {
+			endRun?.()
+		} catch (error) {
+			console.error('guiding endRun failed:', this.id, error)
 		}
 	}
 
@@ -963,7 +1041,7 @@ export class SequencerRunner {
 				continue
 			}
 
-			const handle = this.#startRoot(this.#shutdown.signal, `sequencer.${step.id}`, (scope) => step.run({ ...this.#view(), scope, signal: scope.signal, emit: this.#emitter, saveCheckpoint: this.#saver }).then(successfulOperationResult))
+			const handle = this.#startRoot(this.#shutdown.signal, `sequencer.${step.id}`, (scope) => step.run({ ...this.#view(), scope, signal: scope.signal, reservation: this.#shutdownReservation, emit: this.#emitter, saveCheckpoint: this.#saver }).then(successfulOperationResult))
 			this.#runtime.task = step.id
 			this.#emit({ type: 'taskStarted', task: step.id, phase: 'shutdown' })
 			const result = await this.#bounded(handle, prefix ? undefined : Math.min(stepTimeout * 1000, remaining), this.#shutdown.signal)
@@ -996,7 +1074,7 @@ export class SequencerRunner {
 
 		for (let attempt = 1; ; attempt++) {
 			if (this.#run.signal.aborted) return INTERRUPTED
-			const handle = this.startTask(`sequencer.${task.id}`, (scope) => task.run({ ...view, scope, signal: scope.signal, emit: this.#emitter, saveCheckpoint: this.#saver }).then(successfulOperationResult))
+			const handle = this.startTask(`sequencer.${task.id}`, (scope) => task.run({ ...view, scope, signal: scope.signal, reservation: this.#runReservation, emit: this.#emitter, saveCheckpoint: this.#saver }).then(successfulOperationResult))
 			const current = this.#begin(handle, phase, task.id)
 			const result = await handle.result
 			this.#end()
@@ -1166,11 +1244,12 @@ export class SequencerRunner {
 	}
 
 	// Stage 2 of the drain after an interruption (the cancelled root already finished: stage 1 is the await of its
-	// result by the loop), then every pending compensation. The drain reopens the reservation tokens when it ends.
+	// result by the loop), then every pending compensation. The drain reopens the reservation tokens when it ends and
+	// preserves the root of the guiding session, whose lifetime is the session's (section 16.4).
 	async #quiesce() {
 		if (this.#drainPending) {
 			this.#drainPending = false
-			await this.#services.coordinator.drainByReservationOwner(this.#owner, 'aborted')
+			await this.#services.coordinator.drainByReservationOwner(this.#owner, 'aborted', this.#services.guiding?.operationId?.())
 		}
 
 		while (this.#runtime.compensations.length > 0) {
@@ -1251,11 +1330,17 @@ export class SequencerRunner {
 		}
 	}
 
-	// Opens a root of the reservation unless `signal` aborted or nothing is reserved.
-	#startRoot<T>(signal: AbortSignal, kind: string, executor: OperationExecutor<T>): OperationHandle<T> {
+	// Opens a root of the reservation, leasing `resources`, unless `signal` aborted or nothing is reserved.
+	#startRoot<T>(signal: AbortSignal, kind: string, executor: OperationExecutor<T>, resources: readonly ResourceRequest[] = []): OperationHandle<T> {
 		if (this.#scope === undefined || signal.aborted) return refusedHandle(kind)
-		return this.#scope.start(kind, [], executor)
+		return this.#scope.start(kind, resources, executor)
 	}
+
+	// Reservation scope of the run tasks, refused once the run aborted.
+	readonly #runReservation: OperationScope = { start: (kind, resources, executor) => this.#startRoot(this.#run.signal, kind, executor, resources) }
+
+	// Reservation scope of the shutdown steps, refused once the shutdown aborted.
+	readonly #shutdownReservation: OperationScope = { start: (kind, resources, executor) => this.#startRoot(this.#shutdown.signal, kind, executor, resources) }
 
 	// Records the root the run waits for and announces its task.
 	#begin(handle: OperationHandle<unknown>, phase: SequencerPhase, task: SequencerTaskId) {

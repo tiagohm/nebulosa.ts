@@ -6,6 +6,8 @@ import { failedOperationResult } from '../../devices/orchestration/operation'
 import type { CooperativeJobHealth } from '../../devices/orchestration/operation.wait'
 import type { CameraCapturer } from '../../devices/runners/camera.capture'
 import { type AutoFocusRunOptions, runAutoFocus } from '../focus/autofocus.runner'
+import type { GuidingSession } from '../guiding/session'
+import { pauseGuidingOf, sequencerClosesOpticalPath } from './guiding'
 import { configurationFailure, failedTask, missingDependency } from './lifecycle'
 import type { SequencerContext, SequencerFailedTaskResult, SequencerTask, SequencerTaskPolicy, SequencerTaskResult, SequencerTaskView } from './runner'
 // oxfmt-ignore
@@ -46,6 +48,8 @@ export interface SequencerFocusServices {
 	readonly focusMeasurer?: SequencerFocusMeasurer
 	// Auxiliary namespace of the session.
 	readonly storage?: Pick<SequencerStorage, 'auxiliaryDirectory'>
+	// Guiding session paused before the wheel closes the optical path of a calibration frame.
+	readonly guiding?: GuidingSession
 }
 
 // 0-based slot of a filter reference on `wheel`: a slot inside the carousel, or the first slot named exactly so.
@@ -186,7 +190,8 @@ export function bootstrapFocusBaselineTask(): SequencerTask {
 // and darks and biases never apply a focus offset. Every check runs before anything moves: an unresolvable filter or a
 // light filter without a known offset fails with 'configuration', a focus position outside the focuser range with
 // 'unexpectedState'. A wheel or focuser already in place is not commanded; the task runs only when something must
-// move or a check fails. Its failure fails the session.
+// move or a check fails. Before the wheel moves to the opaque filter of a calibration frame, the guiding of the session
+// is paused (bounded by `guiding.pauseTimeout`). Its failure fails the session.
 export function prepareOpticalPathTask(services: SequencerFocusServices): SequencerTask {
 	return {
 		id: 'prepareOpticalPath',
@@ -207,6 +212,11 @@ export function prepareOpticalPathTask(services: SequencerFocusServices): Sequen
 			const moveWheel = slot !== undefined && !isWheelAt(wheel!, slot)
 			if (moveWheel && wheelCommander === undefined) return missingDependency('wheel commander')
 			if (focuserPosition !== undefined && focuserCommander === undefined) return missingDependency('focuser commander')
+
+			if (moveWheel && sequencerClosesOpticalPath(context.configuration, context.frame!)) {
+				const paused = await pauseGuidingOf(context, services.guiding)
+				if (!paused.ok) return paused
+			}
 
 			if (moveWheel) {
 				const moved = await wheelCommander!.moveTo(context.scope, wheel!, slot)

@@ -9,6 +9,8 @@ import { isPathSegment } from '../../io/path'
 import type { Angle } from '../../math/units/angle'
 import type { AutoFocusFittingMode, AutoFocusOptions } from '../focus/autofocus'
 import type { AutoFocusMeasurer } from '../focus/autofocus.runner'
+import type { Ditherer } from '../guiding/ditherer'
+import type { GuidingSession } from '../guiding/session'
 import type { CenteringSolver } from '../mount/centering'
 import type { SequencerStorage } from './storage'
 
@@ -668,6 +670,12 @@ export interface SequencerRunnerServices {
 	readonly focuserCommander?: FocuserCommander
 	// Moves the wheel back when a wheel compensation runs.
 	readonly wheelCommander?: WheelCommander
+	// Guiding session of the guiding feature: its resources join the reservation, its run is begun right after the
+	// reservation and ended once by the terminalization, and its root `guiding` survives the drains of the session.
+	readonly guiding?: GuidingSession
+	// Ditherer of the dither feature: its resources join the reservation, and a pulse mount ditherer gets the barrier of
+	// the pulses inherited from a previous process right after the reservation. Often the guiding session itself.
+	readonly ditherer?: Ditherer
 	// Operational clock; default `SYSTEM_SEQUENCER_CLOCK`. Always the three members together.
 	readonly clock?: SequencerClock
 	// Receives the session events synchronously, in emission order.
