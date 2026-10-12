@@ -2,7 +2,9 @@ import { spyOn } from 'bun:test'
 import * as fsp from 'node:fs/promises'
 import { tmpdir } from 'os'
 import { join, sep } from 'path'
+import { CameraCommander } from '../../../src/devices/commanders/camera'
 import { CoverCommander } from '../../../src/devices/commanders/cover'
+import { DomeCommander } from '../../../src/devices/commanders/dome'
 import { FlatPanelCommander } from '../../../src/devices/commanders/flatpanel'
 import { FocuserCommander } from '../../../src/devices/commanders/focuser'
 import { GuideOutputCommander } from '../../../src/devices/commanders/guideoutput'
@@ -10,20 +12,23 @@ import { MountCommander } from '../../../src/devices/commanders/mount'
 import { RotatorCommander } from '../../../src/devices/commanders/rotator'
 import { WheelCommander } from '../../../src/devices/commanders/wheel'
 import { IndiClientHandlerSet } from '../../../src/devices/indi/client'
-import type { Camera, Cover, Device, FlatPanel, Focuser, GuideOutput, Mount, Rotator, SafetyMonitor, Wheel } from '../../../src/devices/indi/device'
+import type { Camera, Cover, Device, Dome, FlatPanel, Focuser, GuideOutput, Mount, Rotator, SafetyMonitor, Wheel } from '../../../src/devices/indi/device'
 import { CameraManager } from '../../../src/devices/indi/manager/camera'
 import { CoverManager } from '../../../src/devices/indi/manager/cover'
 import type { DeviceManager } from '../../../src/devices/indi/manager/device'
+import { DomeManager } from '../../../src/devices/indi/manager/dome'
 import { FlatPanelManager } from '../../../src/devices/indi/manager/flatpanel'
 import { FocuserManager } from '../../../src/devices/indi/manager/focuser'
 import { GuideOutputManager } from '../../../src/devices/indi/manager/guideoutput'
 import { MountManager } from '../../../src/devices/indi/manager/mount'
 import { RotatorManager } from '../../../src/devices/indi/manager/rotator'
 import { SafetyMonitorManager } from '../../../src/devices/indi/manager/safetymonitor'
+import { ThermometerManager } from '../../../src/devices/indi/manager/thermometer'
 import { WheelManager } from '../../../src/devices/indi/manager/wheel'
 import { CameraSimulator } from '../../../src/devices/indi/simulator/camera'
 import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
 import { CoverSimulator } from '../../../src/devices/indi/simulator/cover'
+import { DomeSimulator } from '../../../src/devices/indi/simulator/dome'
 import { FlatPanelSimulator } from '../../../src/devices/indi/simulator/flatpanel'
 import { FocuserSimulator } from '../../../src/devices/indi/simulator/focuser'
 import { MountSimulator } from '../../../src/devices/indi/simulator/mount'
@@ -151,6 +156,7 @@ export const RIG_DEVICE_NAMES = {
 	focuser: 'Focuser Simulator',
 	rotator: 'Rotator Simulator',
 	cover: 'Cover Simulator',
+	dome: 'Dome Simulator',
 	flatPanel: 'Flat Panel Simulator',
 	safetyMonitor: 'Safety Monitor Simulator',
 } as const
@@ -166,9 +172,11 @@ export interface SequencerRigManagers {
 	readonly focuser: FocuserManager
 	readonly rotator: RotatorManager
 	readonly cover: CoverManager
+	readonly dome: DomeManager
 	readonly flatPanel: FlatPanelManager
 	readonly safetyMonitor: SafetyMonitorManager
 	readonly guideOutput: GuideOutputManager
+	readonly thermometer: ThermometerManager
 }
 
 // Simulators of the rig.
@@ -179,17 +187,20 @@ export interface SequencerRigSimulators {
 	readonly focuser: FocuserSimulator
 	readonly rotator: RotatorSimulator
 	readonly cover: CoverSimulator
+	readonly dome: DomeSimulator
 	readonly flatPanel: FlatPanelSimulator
 	readonly safetyMonitor: SafetyMonitorSimulator
 }
 
 // Commanders of the rig.
 export interface SequencerRigCommanders {
+	readonly camera: CameraCommander
 	readonly mount: MountCommander
 	readonly wheel: WheelCommander
 	readonly focuser: FocuserCommander
 	readonly rotator: RotatorCommander
 	readonly cover: CoverCommander
+	readonly dome: DomeCommander
 	readonly flatPanel: FlatPanelCommander
 	readonly guideOutput: GuideOutputCommander
 }
@@ -202,13 +213,15 @@ export interface SequencerRigDevices {
 	readonly focuser: Focuser
 	readonly rotator: Rotator
 	readonly cover: Cover
+	readonly dome: Dome
 	readonly flatPanel: FlatPanel
 	readonly safetyMonitor: SafetyMonitor
 	readonly guideOutput: GuideOutput
 }
 
 // The INDI simulator rig of the Sequencer tests, the assembly of the camera capture tests extended with the cover,
-// the flat panel, the safety monitor and the mount guide output. Created once per file and disposed after it.
+// the dome, the thermometer views, the flat panel, the safety monitor and the mount guide output. Created once per
+// file and disposed after it.
 export interface SequencerRig extends AsyncDisposable {
 	readonly client: ClientSimulator
 	readonly managers: SequencerRigManagers
@@ -232,11 +245,13 @@ export async function createSequencerRig(): Promise<SequencerRig> {
 	const focuser = new FocuserManager()
 	const rotator = new RotatorManager()
 	const cover = new CoverManager()
+	const dome = new DomeManager()
 	const flatPanel = new FlatPanelManager()
-	const primary: readonly DeviceManager<Device>[] = [camera, mount, wheel, focuser, rotator, cover, flatPanel] as never
+	const primary: readonly DeviceManager<Device>[] = [camera, mount, wheel, focuser, rotator, cover, dome, flatPanel] as never
 	const safetyMonitor = new SafetyMonitorManager({ get: (client, name) => primary.map((manager) => manager.get(client, name)).find((device) => device !== undefined) })
 	const guideOutput = new GuideOutputManager({ get: (client, name) => mount.get(client, name) ?? camera.get(client, name) })
-	const managers: SequencerRigManagers = { camera, mount, wheel, focuser, rotator, cover, flatPanel, safetyMonitor, guideOutput }
+	const thermometer = new ThermometerManager({ get: (client, name) => camera.get(client, name) ?? focuser.get(client, name) })
+	const managers: SequencerRigManagers = { camera, mount, wheel, focuser, rotator, cover, dome, flatPanel, safetyMonitor, guideOutput, thermometer }
 
 	const arbiter = new ResourceArbiter()
 	const coordinator = new OperationCoordinator(arbiter)
@@ -250,17 +265,20 @@ export async function createSequencerRig(): Promise<SequencerRig> {
 		focuser: new FocuserSimulator(RIG_DEVICE_NAMES.focuser, client),
 		rotator: new RotatorSimulator(RIG_DEVICE_NAMES.rotator, client),
 		cover: new CoverSimulator(RIG_DEVICE_NAMES.cover, client),
+		dome: new DomeSimulator(RIG_DEVICE_NAMES.dome, client),
 		flatPanel: new FlatPanelSimulator(RIG_DEVICE_NAMES.flatPanel, client),
 		safetyMonitor: new SafetyMonitorSimulator(RIG_DEVICE_NAMES.safetyMonitor, client),
 		camera: new CameraSimulator(RIG_DEVICE_NAMES.camera, client, { mountManager: mount, focuserManager: focuser, rotatorManager: rotator, wheelManager: wheel, guideOutputManager: guideOutput }),
 	}
 
 	const commanders: SequencerRigCommanders = {
+		camera: new CameraCommander(camera),
 		mount: new MountCommander(mount),
 		wheel: new WheelCommander(wheel),
 		focuser: new FocuserCommander(focuser),
 		rotator: new RotatorCommander(rotator),
 		cover: new CoverCommander(cover),
+		dome: new DomeCommander(dome),
 		flatPanel: new FlatPanelCommander(flatPanel),
 		guideOutput: new GuideOutputCommander(guideOutput, arbiter),
 	}
@@ -281,6 +299,7 @@ export async function createSequencerRig(): Promise<SequencerRig> {
 		focuser: require(focuser, RIG_DEVICE_NAMES.focuser),
 		rotator: require(rotator, RIG_DEVICE_NAMES.rotator),
 		cover: require(cover, RIG_DEVICE_NAMES.cover),
+		dome: require(dome, RIG_DEVICE_NAMES.dome),
 		flatPanel: require(flatPanel, RIG_DEVICE_NAMES.flatPanel),
 		safetyMonitor: require(safetyMonitor, RIG_DEVICE_NAMES.safetyMonitor),
 		guideOutput: require(guideOutput, RIG_DEVICE_NAMES.mount),
@@ -319,6 +338,7 @@ export async function connectSequencerRig(rig: SequencerRig) {
 		[managers.focuser, RIG_DEVICE_NAMES.focuser],
 		[managers.rotator, RIG_DEVICE_NAMES.rotator],
 		[managers.cover, RIG_DEVICE_NAMES.cover],
+		[managers.dome, RIG_DEVICE_NAMES.dome],
 		[managers.flatPanel, RIG_DEVICE_NAMES.flatPanel],
 		[managers.safetyMonitor, RIG_DEVICE_NAMES.safetyMonitor],
 		[managers.camera, RIG_DEVICE_NAMES.camera],
@@ -431,19 +451,43 @@ export type DeviceLogEntry = DeviceCommandEntry | DeviceTransitionEntry | Device
 
 // Commands recorded per manager.
 const RECORDED_COMMANDS: { readonly [K in keyof SequencerRigManagers]: readonly string[] } = {
-	camera: ['startExposure', 'stopExposure', 'cooler', 'frameType'],
+	camera: ['startExposure', 'stopExposure', 'cooler', 'temperature', 'frameType'],
 	mount: ['goTo', 'flipTo', 'syncTo', 'park', 'unpark', 'tracking', 'trackMode', 'stop', 'moveNorth', 'moveSouth', 'moveWest', 'moveEast', 'home', 'findHome'],
 	wheel: ['moveTo'],
 	focuser: ['moveTo', 'moveIn', 'moveOut', 'stop'],
 	rotator: ['moveTo', 'stop'],
 	cover: ['park', 'unpark', 'stop'],
+	dome: ['openShutter', 'closeShutter', 'park', 'unpark', 'slave', 'stop'],
 	flatPanel: ['enable', 'disable', 'toggle', 'intensity'],
 	safetyMonitor: [],
 	guideOutput: ['pulse', 'pulseNorth', 'pulseSouth', 'pulseWest', 'pulseEast'],
+	thermometer: [],
 }
 
 // Device fields whose observed transitions are recorded, with their value at that moment.
-const RECORDED_TRANSITIONS = new Set(['pulsing', 'pulsingNS', 'pulsingWE', 'parked', 'parking', 'enabled', 'position', 'moving', 'pierSide', 'tracking', 'trackMode', 'slewing', 'equatorialCoordinate', 'geographicCoordinate', 'hasEquatorialCoordinate', 'hasGeographicCoordinate', 'safe', 'exposuring', 'connected'])
+const RECORDED_TRANSITIONS = new Set([
+	'pulsing',
+	'pulsingNS',
+	'pulsingWE',
+	'parked',
+	'parking',
+	'enabled',
+	'position',
+	'moving',
+	'pierSide',
+	'tracking',
+	'trackMode',
+	'slewing',
+	'equatorialCoordinate',
+	'geographicCoordinate',
+	'hasEquatorialCoordinate',
+	'hasGeographicCoordinate',
+	'safe',
+	'exposuring',
+	'connected',
+	'shutterState',
+	'cooler',
+])
 
 // Recorder of one rig: the entries in order and the call that stops recording.
 export interface DeviceRecorder extends Disposable {
@@ -451,7 +495,7 @@ export interface DeviceRecorder extends Disposable {
 }
 
 // Records, in one sequence, every manager command of RECORDED_COMMANDS before it runs and every observed transition
-// of RECORDED_TRANSITIONS (guide pulses per axis with their state, cover, flat panel, wheel, focuser, pier side,
+// of RECORDED_TRANSITIONS (guide pulses per axis with their state, cover, dome shutter, cooler, flat panel, wheel, focuser, pier side,
 // tracking, track mode, slewing, published coordinates and their flags, safety, exposure, connection), plus device
 // additions and removals. Commands still reach the managers.
 export function recordDevices(rig: SequencerRig, clock: RecorderClock = SYSTEM_RECORDER_CLOCK, sequence: TestSequence = createTestSequence()): DeviceRecorder {
@@ -665,7 +709,7 @@ function isMountMotion(entry: DeviceCommandEntry) {
 
 // Whether a command opens the optical path or the observatory to the sky, the subject of I15.
 function isOpening(entry: DeviceCommandEntry) {
-	return (entry.manager === 'cover' && entry.command === 'unpark') || (entry.manager === 'mount' && entry.command === 'unpark')
+	return (entry.manager === 'cover' && entry.command === 'unpark') || (entry.manager === 'mount' && entry.command === 'unpark') || (entry.manager === 'dome' && (entry.command === 'unpark' || entry.command === 'openShutter'))
 }
 
 // Checks the invariants a log of device commands, transitions and file operations can prove, and throws an Error
@@ -674,7 +718,7 @@ function isOpening(entry: DeviceCommandEntry) {
 //   that exposure, observed as its camera `exposuring` turning false;
 // - I14: no mount motion while any guide output reports `pulsing` (the Sequencer half, pause() resolved before the
 //   motion, joins the oracle with the guiding events);
-// - I15: no opening (cover or mount unpark) while the last safety snapshot is unsafe, or unknown with
+// - I15: no opening (dome unpark or shutter opening, cover or mount unpark) while the last safety snapshot is unsafe, or unknown with
 //   `unknownIsUnsafe`.
 export function assertSequencerInvariants(log: readonly SequencerLogEntry[], options: SequencerOracleOptions = {}) {
 	const entries = [...log].sort((a, b) => a.sequence - b.sequence)
