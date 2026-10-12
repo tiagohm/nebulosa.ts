@@ -147,8 +147,6 @@ export async function waitForStableTemperature(camera: Pick<Camera, 'name' | 'co
 
 // Temperature updates of `camera`: its sensor temperature as the thermometer manager publishes it (on the camera
 // itself, the parent of its thermometer view), and its connection changes and removal as the camera manager does.
-// The thermometer manager rounds the temperature to whole °C, so a tolerance below 0.5 °C only accepts the reading
-// equal to a whole setpoint.
 export function cameraTemperatureUpdates(cameraManager: DeviceManager<Camera>, thermometerManager: DeviceManager<Thermometer>, camera: Camera): SequencerTemperatureUpdates {
 	return (listener) => {
 		const thermometer: DeviceHandler<Thermometer> = {

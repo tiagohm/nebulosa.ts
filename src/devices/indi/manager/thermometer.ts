@@ -51,8 +51,10 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 				if (device !== undefined) {
 					const { elements } = message
 
-					// Math.round is used to reduce temperature changes to 1°C.
-					if (handleNumberValue(device, 'temperature', elements.TEMPERATURE?.value ?? elements.CCD_TEMPERATURE_VALUE?.value, message.state, Math.round)) {
+					// The reading is kept at the precision of the driver and notified on every change (or repeated Alert):
+					// event-driven consumers such as the cooling stability wait and the DARK thermal guard compare it with a
+					// sub-degree tolerance, and only sample it on these notifications. The rate is bounded by the driver.
+					if (handleNumberValue(device, 'temperature', elements.TEMPERATURE?.value ?? elements.CCD_TEMPERATURE_VALUE?.value, message.state)) {
 						this.updated(device, 'temperature', message.state)
 
 						const parent = (device as SubDevice<Thermometer, Thermometer>).parent
