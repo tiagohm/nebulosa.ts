@@ -95,6 +95,12 @@ export interface SequencerRuntimeState {
 	// Monotonic instants (ms) of the last success of each periodic action in this process, derived once from the
 	// persisted wall anchors after a restart; elapsed-time triggers read only these.
 	elapsedAnchors: SequencerElapsedAnchors
+	// Value of `anchors.lightExposures` when the mount last moved for the target in this process (acquisition, recenter,
+	// meridian flip): no dither runs before a light was exposed after it, so the first light after a slew is never
+	// dithered and the due dither is postponed, not lost. Absent before the first such motion.
+	ditherHeldAt?: number
+	// Whether the session started guiding in this process; only the first start recalibrates when configured.
+	guidingStarted: boolean
 	// Pending compensations, in registration order (run in reverse).
 	compensations: SequencerCompensation[]
 	// Pending meridian protection: a graceful request of the supervisor, its execution, or the hard path.
@@ -261,6 +267,7 @@ export function createSequencerRuntimeState(configuration: SequencerConfiguratio
 		resumedSinceAutofocus: false,
 		flippedSinceAutofocus: false,
 		elapsedAnchors: {},
+		guidingStarted: false,
 		compensations: [],
 		startedAt: at,
 		updatedAt: at,

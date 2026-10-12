@@ -37,10 +37,13 @@ import { SafetyMonitorSimulator } from '../../../src/devices/indi/simulator/safe
 import { WheelSimulator } from '../../../src/devices/indi/simulator/wheel'
 import type { PropertyState } from '../../../src/devices/indi/types'
 import { DeviceLifecycle } from '../../../src/devices/orchestration/device.lifecycle'
-import { failedOperationResult, OperationCoordinator, type OperationFailureReason, type OperationHandle, type OperationResult, type OperationScope, successfulOperationResult } from '../../../src/devices/orchestration/operation'
-import { ResourceArbiter, type ResourceReservation, type ResourceReservationOwner, resourceKey } from '../../../src/devices/orchestration/resource'
+import { failedOperationResult, type OperationContext, OperationCoordinator, type OperationFailureReason, type OperationHandle, type OperationResult, type OperationScope, successfulOperationResult } from '../../../src/devices/orchestration/operation'
+import { ResourceArbiter, type ResourceRequest, type ResourceReservation, type ResourceReservationOwner, resourceKey } from '../../../src/devices/orchestration/resource'
 import { CameraCapturer } from '../../../src/devices/runners/camera.capture'
 import { deg, hour } from '../../../src/math/units/angle'
+import type { Ditherer, DitherPhase, DitherRequest, DitherResult } from '../../../src/observation/guiding/ditherer'
+// oxfmt-ignore
+import { type GuidingInterruption, GuidingInterruptionHistory, type GuidingSession, type GuidingSessionState, type GuidingSettle, type GuidingStartOptions } from '../../../src/observation/guiding/session'
 import type { SequencerEvent, SequencerListener, SequencerTaskId } from '../../../src/observation/sequencer/sequencer'
 import type { SequencerJournalEntry } from '../../../src/observation/sequencer/storage'
 import { waitUntil } from '../../util'
@@ -1035,5 +1038,182 @@ export function assertJournalInvariants(journal: readonly SequencerJournalEntry[
 		const key = `${event.slot}#${event.attempt}`
 		const final = finals.get(key)
 		if (committed.get(event.slot) !== key || final === undefined || !event.path.split(sep).join('/').endsWith(`/${final}`)) throw new Error(`I4: frameAccepted ${key} at ${event.path} without its committed line`)
+	}
+}
+
+// Behaviour of one command of a scripted guiding session: its result, possibly after a wait the test controls.
+export type ScriptedGuidingStep = (scope: OperationContext) => OperationResult<void> | Promise<OperationResult<void>>
+
+// One command the scripted guiding session received, in the shared sequence of the test.
+export interface ScriptedGuidingEntry {
+	readonly sequence: number
+	readonly command: 'beginRun' | 'endRun' | 'start' | 'stop' | 'pause' | 'resume' | 'flipCalibration' | 'dither'
+	// Recalibration of a start.
+	readonly recalibrate?: boolean
+}
+
+// Options of a scripted guiding session.
+export interface ScriptedGuidingSessionOptions {
+	// Resources reserved; default one logical guider resource.
+	readonly reserve?: readonly ResourceRequest[]
+	// Resources held by the root `guiding`; default the reserved ones.
+	readonly hold?: readonly ResourceRequest[]
+	// Whether the session has a run admission (`beginRun`/`endRun`); default true.
+	readonly run?: boolean
+	// Pulse quiescence bound, in ms; default 1000.
+	readonly bound?: number
+	// Capacity of the interruption history; default 256.
+	readonly capacity?: number
+}
+
+// Guiding session and ditherer of the unit and e2e tests (50.1): a state machine without devices whose commands follow a
+// script, open a real root `guiding` under the reservation they are given, settle at once by default, and record every
+// command in the shared sequence. Interruptions are recorded by `interrupt`.
+export class ScriptedGuidingSession implements GuidingSession, Ditherer {
+	readonly log: ScriptedGuidingEntry[] = []
+	readonly beginRun?: () => OperationResult<void>
+	readonly endRun?: () => void
+	current: GuidingSessionState = 'stopped'
+	beginRunResult: OperationResult<void> = successfulOperationResult(undefined)
+	onStart: ScriptedGuidingStep = () => successfulOperationResult(undefined)
+	onPause: ScriptedGuidingStep = () => successfulOperationResult(undefined)
+	onResume: ScriptedGuidingStep = () => successfulOperationResult(undefined)
+	onDither: ScriptedGuidingStep = () => successfulOperationResult(undefined)
+	// Successful starts that still leave the session lost (recoveries that do not hold).
+	loseAfterStart = 0
+	readonly #history: GuidingInterruptionHistory
+	readonly #sequence: TestSequence
+	#root?: { readonly handle: OperationHandle<void>; readonly id: string; readonly finish: VoidFunction }
+
+	constructor(
+		readonly options: ScriptedGuidingSessionOptions = {},
+		sequence: TestSequence = createTestSequence(),
+	) {
+		this.#sequence = sequence
+		this.#history = new GuidingInterruptionHistory(options.capacity)
+
+		if (options.run !== false) {
+			this.beginRun = () => {
+				this.#record('beginRun')
+				return this.beginRunResult
+			}
+			this.endRun = () => this.#record('endRun')
+		}
+	}
+
+	// Commands received, in order.
+	commands() {
+		return this.log.map((entry) => entry.command)
+	}
+
+	resources() {
+		const reserve = this.options.reserve ?? [{ key: 'logical:scripted-guider' }]
+		return { reserve, hold: this.options.hold ?? reserve }
+	}
+
+	state() {
+		return this.current
+	}
+
+	async start(task: OperationScope, reservation: OperationScope, options: GuidingStartOptions) {
+		this.#record('start', options.recalibrate)
+
+		if (this.#root === undefined) {
+			let opened: { readonly id: string; readonly finish: VoidFunction } | undefined
+			const handle = reservation.start<void>(
+				'guiding',
+				this.resources().hold,
+				(context) =>
+					new Promise((resolve) => {
+						opened = { id: context.id, finish: () => resolve(successfulOperationResult(undefined)) }
+						context.signal.addEventListener(
+							'abort',
+							() => {
+								this.current = 'lost'
+								this.#root = undefined
+								resolve(failedOperationResult('aborted'))
+							},
+							{ once: true },
+						)
+					}),
+			)
+			if (opened === undefined) return await handle.result
+			this.#root = { handle, ...opened }
+		}
+
+		const started = await task.start('scriptedStart', [], (context) => this.onStart(context)).result
+		if (started.ok) this.current = this.loseAfterStart-- > 0 ? 'lost' : 'guiding'
+		return started
+	}
+
+	async stop() {
+		this.#record('stop')
+		this.current = 'stopped'
+		const root = this.#root
+		this.#root = undefined
+		root?.finish()
+		if (root !== undefined) await root.handle.result
+		return successfulOperationResult(undefined)
+	}
+
+	async pause(scope: OperationScope) {
+		this.#record('pause')
+		const paused = await scope.start('scriptedPause', [], (context) => this.onPause(context)).result
+		if (paused.ok && (this.current === 'guiding' || this.current === 'settling' || this.current === 'calibrating')) this.current = 'paused'
+		return paused
+	}
+
+	pulseQuiescenceBound() {
+		return this.options.bound ?? 1000
+	}
+
+	async resume(scope: OperationScope, _settle: GuidingSettle) {
+		this.#record('resume')
+		const resumed = await scope.start('scriptedResume', [], (context) => this.onResume(context)).result
+		if (resumed.ok) this.current = 'guiding'
+		return resumed
+	}
+
+	flipCalibration() {
+		this.#record('flipCalibration')
+		return Promise.resolve(successfulOperationResult(undefined))
+	}
+
+	interruptions(fromMonotonic: number, toMonotonic: number) {
+		return this.#history.query(fromMonotonic, toMonotonic)
+	}
+
+	// Records one interruption.
+	interrupt(interruption: GuidingInterruption) {
+		this.#history.record(interruption)
+	}
+
+	operationId() {
+		return this.#root?.id
+	}
+
+	accepts(_request: DitherRequest) {
+		return true
+	}
+
+	ready() {
+		return this.current === 'guiding' || this.current === 'settling'
+	}
+
+	async dither(scope: OperationScope, _request: DitherRequest, onPhase?: (phase: DitherPhase) => void): Promise<OperationResult<DitherResult>> {
+		this.#record('dither')
+		onPhase?.('dithering')
+		const dithered = await scope.start('scriptedDither', [], (context) => {
+			onPhase?.('dithered')
+			onPhase?.('settling')
+			return this.onDither(context)
+		}).result
+		if (!dithered.ok) return dithered
+		onPhase?.('settled')
+		return successfulOperationResult<DitherResult>({ kind: 'guider', lockShift: [1, 1] })
+	}
+
+	#record(command: ScriptedGuidingEntry['command'], recalibrate?: boolean) {
+		this.log.push(recalibrate === undefined ? { sequence: this.#sequence.next(), command } : { sequence: this.#sequence.next(), command, recalibrate })
 	}
 }

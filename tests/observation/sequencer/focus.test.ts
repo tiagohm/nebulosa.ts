@@ -17,6 +17,7 @@ import { createSequencerRuntimeState } from '../../../src/observation/sequencer/
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
 // oxfmt-ignore
 import { assertJournalInvariants, assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, expectNoSequencerLeaks, recordDevices, recordRunner, resetSequencerRig, type RunnerLogEntry, type TestSequence } from './util'
+import { isTimeConsumingTestSkipped } from '../../util'
 
 // Filter, focus offsets and autofocus of the Sequencer on the INDI simulator rig, with the real commanders, the real
 // CameraCapturer, the filesystem storage and checkpoint store, and the e2e clock (the simulated UTC of the mount as wall
@@ -322,7 +323,7 @@ async function runOpticalPath(configuration: SequencerConfiguration, capture: Se
 	try {
 		const due = await task.shouldRun(view)
 		if (!due) return { due, result: OK, commands: commandsOf(recorder.entries) }
-		const handle = rig.coordinator.start('test.prepareOpticalPath', [], async (scope) => successfulOperationResult(await task.run({ ...view, scope, signal: scope.signal, emit: () => {}, saveCheckpoint: () => Promise.resolve(OK) })))
+		const handle = rig.coordinator.start('test.prepareOpticalPath', [], async (scope) => successfulOperationResult(await task.run({ ...view, scope, signal: scope.signal, reservation: rig.coordinator, emit: () => {}, saveCheckpoint: () => Promise.resolve(OK) })))
 		const result = await handle.result
 		return { due, result: result.ok ? result.value : result, commands: commandsOf(recorder.entries) }
 	} finally {
@@ -415,9 +416,9 @@ describe('49.8 focus baseline', () => {
 		expect(baselines(session).every((focus) => focus.kind === 'known' && focus.referencePosition === 10000)).toBeTrue()
 		await expectLightsInFocus(session, 10000)
 		await assertOracles(session)
-	}, 60000)
+	})
 
-	test('6, 32 (I23, I29): an uncalibrated filter derives unknown, saved before moving; the wheel goes to L without the focuser; an autofocus establishes the baseline before the first light', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('6, 32 (I23, I29): an uncalibrated filter derives unknown, saved before moving; the wheel goes to L without the focuser; an autofocus establishes the baseline before the first light', async () => {
 		await place(SLOT.Dark, 10100)
 		const session = await runSession(configurationOf([scheduledGroup('L', 'L', 2)], { autofocus: AUTOFOCUS }))
 		const { result, devices, roots, saves, measures } = session
@@ -442,9 +443,9 @@ describe('49.8 focus baseline', () => {
 
 		await expectLightsInFocus(session, referencePosition)
 		await assertOracles(session)
-	}, 90000)
+	})
 
-	test('9: with an unknown baseline darks run without autofocus; the autofocus runs before the first light only', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('9: with an unknown baseline darks run without autofocus; the autofocus runs before the first light only', async () => {
 		await place(SLOT.Dark, 10100)
 		const session = await runSession(configurationOf([scheduledGroup('D', 'Dark', 2, DARK), scheduledGroup('L', 'L', 1)], { autofocus: AUTOFOCUS }))
 		const { result, roots, requests } = session
@@ -456,9 +457,9 @@ describe('49.8 focus baseline', () => {
 		expect(darks.every((request) => request.sequence < autofocus)).toBeTrue()
 		expect(eventSequences(roots, (event) => event.type === 'taskStarted' && event.task === 'autofocus')).toHaveLength(1)
 		await assertOracles(session)
-	}, 90000)
+	})
 
-	test('9: a failed autofocus keeps the baseline unknown and never exposes a light, even with skip', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('9: a failed autofocus keeps the baseline unknown and never exposes a light, even with skip', async () => {
 		await place(SLOT.Dark, 10100)
 		const session = await runSession(configurationOf([scheduledGroup('L', 'L', 1)], { autofocus: { ...AUTOFOCUS, onFailure: 'skip' } }), { hfd: () => undefined })
 
@@ -468,7 +469,7 @@ describe('49.8 focus baseline', () => {
 		// The run restored the focuser where it started.
 		expect(rig.devices().focuser.position.value).toBe(10100)
 		await assertOracles(session)
-	}, 90000)
+	})
 
 	test('9: an unknown baseline without autofocus and with lights fails as configuration at the bootstrap, with zero movements and nothing saved', async () => {
 		await place(SLOT.Dark, 10100)
@@ -479,9 +480,9 @@ describe('49.8 focus baseline', () => {
 		expect(commandsOf(session.devices, 'focuser')).toEqual([])
 		expect(session.saves).toEqual([])
 		await assertOracles(session)
-	}, 60000)
+	})
 
-	test('7: the persisted baseline is authoritative: a resumed session never derives it again from a moved wheel', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('7: the persisted baseline is authoritative: a resumed session never derives it again from a moved wheel', async () => {
 		await place(SLOT.R, 10100)
 		const configuration = configurationOf([scheduledGroup('L', 'L', 2)])
 		const first = await runSession(configuration, {
@@ -499,7 +500,7 @@ describe('49.8 focus baseline', () => {
 		expect(commandsOf(second.devices, 'focuser', 'moveTo').map((command) => command.args[0])).toEqual([10000])
 		await expectLightsInFocus(second, 10000)
 		await assertOracles(second)
-	}, 90000)
+	})
 
 	test('8, 13, 29: a crash between the wheel and the focuser is reconciled once by the absolute target; a crash after the focuser commands nothing', async () => {
 		const configuration = configurationOf([scheduledGroup('R', 'R', 1)])
@@ -541,11 +542,11 @@ describe('49.8 focus baseline', () => {
 		} finally {
 			spy.mockRestore()
 		}
-	}, 120000)
+	})
 })
 
 describe('49.8 autofocus with focus offsets', () => {
-	test('10, 15: a dedicated filter from an unknown baseline: no move before the run, the baseline from G, the frame filter and focus restored absolutely', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('10, 15: a dedicated filter from an unknown baseline: no move before the run, the baseline from G, the frame filter and focus restored absolutely', async () => {
 		await place(SLOT.Dark, 10100)
 		const session = await runSession(configurationOf([scheduledGroup('R', 'R', 1)], { autofocus: { ...AUTOFOCUS, filter: { kind: 'name', name: 'G' } } }))
 		const { result, devices, roots, measures, saves } = session
@@ -564,7 +565,7 @@ describe('49.8 autofocus with focus offsets', () => {
 		expect(session.roots.some((entry) => entry.kind === 'root' && entry.operation.startsWith('sequencer.compensate.'))).toBeFalse()
 		await expectLightsInFocus(session, known.referencePosition)
 		await assertOracles(session)
-	}, 90000)
+	})
 
 	test('15: once the new baseline is saved, a stop during the filter restore compensates only the wheel', async () => {
 		await place(SLOT.L, 10010)
@@ -589,7 +590,7 @@ describe('49.8 autofocus with focus offsets', () => {
 		} finally {
 			spy.mockRestore()
 		}
-	}, 90000)
+	})
 
 	test('14: a crash between the saved baseline and the restore of the dedicated filter resumes with the new baseline, without another autofocus', async () => {
 		await place(SLOT.L, 10100)
@@ -610,7 +611,7 @@ describe('49.8 autofocus with focus offsets', () => {
 		expect(commandsOf(second.devices, 'wheel', 'moveTo').map((command) => command.args[0])).toEqual([SLOT.L])
 		await expectLightsInFocus(second, known.referencePosition)
 		await assertOracles(second)
-	}, 90000)
+	})
 
 	test('14: a crash in the middle of the autofocus resumes at the previous absolute focus and runs it again', async () => {
 		await place(SLOT.R, 10100)
@@ -637,7 +638,7 @@ describe('49.8 autofocus with focus offsets', () => {
 		expect(restore.sequence).toBeLessThan(autofocus)
 		expect(second.measures[0].position).toBe(10000 + ALGORITHM.initialOffsetSteps * ALGORITHM.stepSize)
 		await assertOracles(second)
-	}, 120000)
+	})
 
 	test('16: a failed restore of the frame filter is fatal: the light is never exposed, even with skip', async () => {
 		await place(SLOT.L, 10010)
@@ -655,14 +656,14 @@ describe('49.8 autofocus with focus offsets', () => {
 		} finally {
 			spy.mockRestore()
 		}
-	}, 90000)
+	})
 })
 
 // Runner of the test that needs it before its first event.
 const holder: { runner?: SequencerRunner } = {}
 
 describe('49.9 autofocus of the session', () => {
-	test('1, 4, 50.3 6: first frame and every N lights; darks never trigger nor count; the focus lands within a step of the ideal', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('1, 4, 50.3 6: first frame and every N lights; darks never trigger nor count; the focus lands within a step of the ideal', async () => {
 		await place(SLOT.L, 10200)
 		const autofocus = { ...AUTOFOCUS, triggers: { ...NO_TRIGGERS, onStart: true, afterFrames: 2 } }
 		const session = await runSession(configurationOf([scheduledGroup('L', 'L', 4), scheduledGroup('D', 'Dark', 2, DARK)], { autofocus, order: 'roundRobin' }))
@@ -683,9 +684,9 @@ describe('49.9 autofocus of the session', () => {
 		for (const light of lights) expect(Math.abs(light.position - 10010)).toBeLessThan(ALGORITHM.stepSize)
 		expect(lights.at(-1)!.position).toBe((saves.at(-1)!.checkpoint.focus as { readonly referencePosition: number }).referencePosition)
 		await assertOracles(session)
-	}, 120000)
+	})
 
-	test('2: a failed autofocus restores the focuser and advances nothing; the next success advances the anchor and the intent stays clear', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('2: a failed autofocus restores the focuser and advances nothing; the next success advances the anchor and the intent stays clear', async () => {
 		await place(SLOT.L, 10000)
 		let runs = 0
 		const autofocus = { ...AUTOFOCUS, triggers: { ...NO_TRIGGERS, onStart: true, afterFrames: 1 }, onFailure: 'skip' as const }
@@ -707,7 +708,7 @@ describe('49.9 autofocus of the session', () => {
 		expect(beforeSuccess.every((save) => save.checkpoint.focus.kind === 'known' && save.checkpoint.focus.referencePosition === 10000)).toBeTrue()
 		expect(saves.at(-1)!.checkpoint).toMatchObject({ anchors: { autofocus: { lightExposures: 1, filter: 'L' } }, intents: { autofocus: false } })
 		await assertOracles(session)
-	}, 120000)
+	})
 
 	test('3 (49.8 15, 50.3 21): a stop during the autofocus cancels it, waits for quiescence and moves the focuser back by compensation before the release', async () => {
 		await place(SLOT.L, 10000)
@@ -735,7 +736,7 @@ describe('49.9 autofocus of the session', () => {
 		expect(rig.devices().focuser.position.value).toBe(10000)
 		expect(events.some((event) => event.type === 'exposureStarted')).toBeFalse()
 		await assertOracles(session)
-	}, 90000)
+	})
 
 	test('5: a protection in the middle of the autofocus cancels it, restores the focuser, runs, and the still-due autofocus runs afterwards', async () => {
 		await place(SLOT.L, 10000)
@@ -763,7 +764,7 @@ describe('49.9 autofocus of the session', () => {
 		expect(compensations).toHaveLength(1)
 		await expectLightsInFocus(session, (session.saves.at(-1)!.checkpoint.focus as { readonly referencePosition: number }).referencePosition)
 		await assertOracles(session)
-	}, 120000)
+	})
 
 	test('auxiliary frames are FITS in auxiliary/autofocus, measured after their result and removed; the light keeps its own destination', async () => {
 		await place(SLOT.L, 10000)
@@ -780,7 +781,7 @@ describe('49.9 autofocus of the session', () => {
 		expect(measures.every((measure, i) => measure.sequence > auxiliary[i].sequence)).toBeTrue()
 		expect(await Array.fromAsync(new Bun.Glob('*').scan(directory))).toEqual([])
 		await assertOracles(session)
-	}, 90000)
+	})
 
 	test('a restart resumes and triggers afterResume before the next light', async () => {
 		await place(SLOT.L, 10000)
@@ -796,11 +797,11 @@ describe('49.9 autofocus of the session', () => {
 		expect(second.result).toMatchObject({ state: 'completed' })
 		expect(second.events.filter((event) => event.type === 'taskCompleted' && event.task === 'autofocus')).toHaveLength(1)
 		await assertOracles(second)
-	}, 90000)
+	})
 })
 
 describe('50.3 3', () => {
-	test('roundRobin L/R/G/B ×2: every light starts at reference + offset[filter], in the same order on every run', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('roundRobin L/R/G/B ×2: every light starts at reference + offset[filter], in the same order on every run', async () => {
 		const configuration = configurationOf([scheduledGroup('L', 'L', 2), scheduledGroup('R', 'R', 2), scheduledGroup('G', 'G', 2), scheduledGroup('B', 'B', 2)], { order: 'roundRobin' })
 		const orders: string[][] = []
 
@@ -815,5 +816,5 @@ describe('50.3 3', () => {
 
 		expect(orders[0]).toEqual(['L', 'R', 'G', 'B', 'L', 'R', 'G', 'B'])
 		expect(orders[1]).toEqual(orders[0])
-	}, 120000)
+	})
 })

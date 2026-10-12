@@ -7,13 +7,15 @@ import type { Rotator } from '../../devices/indi/device'
 import { failedOperationResult } from '../../devices/orchestration/operation'
 import type { CameraCapturer } from '../../devices/runners/camera.capture'
 import { type Angle, normalizePI, toDeg } from '../../math/units/angle'
+import type { GuidingSession } from '../guiding/session'
 import { centerTarget, type CenteringOptions, type CenteringServices } from '../mount/centering'
+import { pauseGuidingOf } from './guiding'
 import { configurationFailure, failedTask, missingDependency, reconcileTracking } from './lifecycle'
 import type { SequencerContext, SequencerFailedTaskResult, SequencerTask, SequencerTaskPolicy, SequencerTaskResult, SequencerTaskView } from './runner'
 // oxfmt-ignore
 import { DEFAULT_SEQUENCER_COLLABORATOR_ABORT_GRACE, DEFAULT_SEQUENCER_MERIDIAN_FLIP, type SequencerCenteringConfiguration, type SequencerConfiguration, type SequencerPlateSolver, type SequencerPointingConfiguration, type SequencerRotatorConfiguration, type SequencerTarget } from './sequencer'
 import type { SequencerStorage } from './storage'
-import { recenterDue, recordSequencerActionSuccess, sequencerElapsedSince } from './trigger'
+import { holdSequencerDither, recenterDue, recordSequencerActionSuccess, sequencerElapsedSince } from './trigger'
 
 // Pointing tasks of the Sequencer pre-capture: target acquisition and recenter (`acquireOrRecenterTarget`, section
 // 20.3) and field rotation (`rotateField`, section 20.4), for LIGHT frames only. The centering algorithm itself is the
@@ -29,8 +31,11 @@ import { recenterDue, recordSequencerActionSuccess, sequencerElapsedSince } from
 // anchor, persisted at once. The target is never assumed acquired after a restart: `targetAcquired` is runtime-only.
 //
 // Conventions: angles in radians (degrees only at the rotator commander), configured durations in seconds turned into
-// milliseconds at the clock or a commander, wall instants in Unix ms. Pausing guiding around mount motion belongs to
-// the guiding stage.
+// milliseconds at the clock or a commander, wall instants in Unix ms.
+//
+// Every mount motion of the acquisition (slew, corrective slews and syncs of the centering) happens only after the
+// guiding session of the session paused and proved its pulses ended; the guiding resumes and settles later, in
+// `ensureGuiding`. A motion also postpones the next due dither past the next light.
 
 // Services of the pointing tasks; a task whose dependency is absent fails with a 'configuration' failure before
 // commanding anything.
@@ -45,6 +50,8 @@ export interface SequencerPointingServices {
 	readonly storage?: Pick<SequencerStorage, 'auxiliaryDirectory'>
 	// Field rotation.
 	readonly rotatorCommander?: RotatorCommander
+	// Guiding session paused before every mount motion; absent or without guiding configured nothing is paused.
+	readonly guiding?: GuidingSession
 }
 
 // Options of every mount command the pointing supervises: with a meridian flip, the settle of a stopped slew is bounded
@@ -158,6 +165,11 @@ async function acquireOrRecenterTarget(context: SequencerContext, services: Sequ
 	}
 
 	const acquiring = !state.targetAcquired
+
+	// The mount moves only once guiding is paused and its pulses ended; a failed pause moves nothing.
+	const paused = await pauseGuidingOf(context, services.guiding)
+	if (!paused.ok) return paused
+	holdSequencerDither(state)
 
 	if (acquiring || centering === undefined) {
 		const slewed = await mountCommander.goTo(context.scope, mount, j2000(target), { ...sequencerMountCommandOptions(configuration), time: timeUnix(clock.wallNow() / 1000) })
