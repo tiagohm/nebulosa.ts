@@ -14,7 +14,7 @@ import { type SequencerCaptureContext, type SequencerCapturedFrame, type Sequenc
 // oxfmt-ignore
 import type { SequencerCameraCapture, SequencerCaptureConfiguration, SequencerConfiguration, SequencerDevices, SequencerEvent, SequencerFailure, SequencerFrameGroup, SequencerResult, SequencerSessionState, SequencerShutdownStepPolicy, SequencerTaskId, SequencerTriggeredFrameGroup } from '../../../src/observation/sequencer/sequencer'
 import { pushSequencerCompensation } from '../../../src/observation/sequencer/state'
-import { FileSystemSequencerStorage, prepareFrameDestinationTask } from '../../../src/observation/sequencer/storage'
+import { FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
 // oxfmt-ignore
 import { assertRunnerInvariants, connectSequencerRig, createSequencerRig, ManualSequencerClock, type RunnerLogEntry, type RunnerOracleOptions, type RunnerRecorder, recordRunner, resetSequencerRig } from './util'
@@ -85,7 +85,8 @@ const FRAME = Buffer.from('SIMPLE  =                    T')
 function captured(context: SequencerContext): OperationResult<SequencerCapturedFrame> {
 	writeFileSync((context as SequencerCaptureContext).destination.temporary, FRAME)
 	const at = context.clock.wallNow()
-	return successfulOperationResult({ exposureStartedAt: at, exposureFinishedAt: at })
+	const monotonic = context.clock.monotonicNow()
+	return successfulOperationResult({ exposureDispatchedAt: at, exposureDispatchedMonotonic: monotonic, exposureStartedAt: at, exposureStartedMonotonic: monotonic, exposureFinishedAt: at, exposureFinishedMonotonic: monotonic })
 }
 
 // Fake task lists, given to the runner as its phases (read when each phase runs): every execution is traced as
@@ -115,9 +116,14 @@ class Script implements SequencerRunnerPhases {
 		return { id, shouldRun, run, policy }
 	}
 
+	// Capture step that asks `beforeExposure` first, as the capturer does right before dispatching: a refusal ends it
+	// with that failure, otherwise the exposure counts as commanded and the behaviour plays it.
 	captureStep(behaviour: Behaviour<OperationResult<SequencerCapturedFrame>> = captured): SequencerCaptureStep {
 		return async (context) => {
 			this.trace.push(`capture@${context.frame!.id}#${context.frame!.attempt}`)
+			const refusal = context.beforeExposure()
+			if (refusal !== undefined) return refusal
+			context.exposureStarted()
 			return await behaviour(context)
 		}
 	}
@@ -1048,6 +1054,109 @@ describe('protection requests', () => {
 		blocked.settle(captured(blocked.context))
 		await finish(harness)
 		expect(harness.runner.requestProtection(action(script))).toBeFalse()
+	})
+})
+
+describe('commanded exposures (I37)', () => {
+	async function journalOf(harness: Harness) {
+		return await readSequencerJournal(join(STORAGE_ROOT, harness.runner.id, 'journal.jsonl'))
+	}
+
+	test('a refusal of beforeExposure closes the attempt with deferred and holds; the resumed pre-capture prepares the same attempt', async () => {
+		const script = new Script()
+		script.preCapture = [script.task('prepareOpticalPath')]
+		let calls = 0
+		script.capture = (context) => {
+			script.trace.push(`capture@${context.frame!.id}#${context.frame!.attempt}`)
+			// The pause arrives after the pre-capture, while the capturer configures the camera.
+			if (++calls === 1) void harness.runner.handle.pause()
+			const refusal = context.beforeExposure()
+			if (refusal !== undefined) return Promise.resolve(refusal)
+			context.exposureStarted()
+			return Promise.resolve(captured(context))
+		}
+		const harness = start(configurationOf(), script)
+
+		await waitState(harness, 'paused')
+		expect(harness.runner.snapshot().currentFrame).toMatchObject({ id: 'frame[L][1]', attempt: 1, captureFailures: 0 })
+		expect((await journalOf(harness)).map((entry) => entry.kind)).toEqual(['prepared', 'deferred'])
+		expect((await journalOf(harness)).at(-1)).toMatchObject({ attempt: 1, reason: 'beforeExposure' })
+		expect(events(harness).some((event) => event.type === 'exposureStarted')).toBeFalse()
+
+		expect(harness.runner.handle.resume()).toBeTrue()
+		expect((await finish(harness)).state).toBe('completed')
+		expect(script.trace).toEqual(['prepareOpticalPath@frame[L][1]', 'capture@frame[L][1]#1', 'prepareOpticalPath@frame[L][1]', 'capture@frame[L][1]#1'])
+		expect(events(harness).filter((event) => event.type === 'exposureStarted')).toMatchObject([{ slot: 'frame[L][1]', attempt: 1 }])
+		expect((await journalOf(harness)).map((entry) => entry.kind)).toEqual(['prepared', 'deferred', 'prepared', 'promoting', 'committed'])
+	})
+
+	test('a capture failing before anything was commanded consumes no attempt: its capture policy applies at once, without retry', async () => {
+		for (const onFailure of ['fail', 'skipFrame', 'pause'] as const) {
+			const script = new Script()
+			let calls = 0
+			// The capturer refuses before the veto, as for an unavailable camera.
+			script.capture = (context) => {
+				script.trace.push(`capture@${context.frame!.id}#${context.frame!.attempt}`)
+				if (++calls === 1) return Promise.resolve(failedOperationResult('busy', 'camera unavailable'))
+				context.beforeExposure()
+				return Promise.resolve(captured(context))
+			}
+			const harness = start(configurationOf([scheduled('L', 2)], { onFailure, retry: { maxAttempts: 3, delay: 0, backoff: 1, maximumDelay: 0, retryOn: ['busy'] } }), script)
+
+			if (onFailure === 'pause') {
+				await waitState(harness, 'paused')
+				expect(harness.runner.snapshot().currentFrame).toMatchObject({ id: 'frame[L][1]', attempt: 1, captureFailures: 0 })
+				expect((await journalOf(harness)).at(-1)).toMatchObject({ kind: 'deferred', attempt: 1, reason: 'pause' })
+				harness.runner.handle.resume()
+			}
+
+			const result = await finish(harness)
+			const journal = await journalOf(harness)
+			expect(journal.some((entry) => entry.kind === 'abandoned')).toBeFalse()
+			expect(journal[1]).toMatchObject({ kind: 'deferred', slot: 'frame[L][1]', attempt: 1 })
+
+			switch (onFailure) {
+				case 'fail':
+					expect(result).toMatchObject({ state: 'failed', failure: { kind: 'operation', reason: 'busy', task: 'captureFrame' } })
+					expect(script.trace).toEqual(['capture@frame[L][1]#1'])
+					break
+				case 'skipFrame':
+					expect(result.state).toBe('completed')
+					expect(progressOf(result, 'L')).toMatchObject({ accepted: 1, skipped: 1 })
+					expect(script.trace).toEqual(['capture@frame[L][1]#1', 'capture@frame[L][2]#1'])
+					break
+				case 'pause':
+					expect(result.state).toBe('completed')
+					expect(script.trace).toEqual(['capture@frame[L][1]#1', 'capture@frame[L][1]#1', 'capture@frame[L][2]#1'])
+					expect(
+						events(harness)
+							.filter((event) => event.type === 'frameSelected')
+							.map((event) => (event.type === 'frameSelected' ? event.frame.captureFailures : -1)),
+					).toEqual([0, 0, 0])
+			}
+		}
+	})
+
+	test('a protection before the approval defers the attempt and re-enters it without counting a failure', async () => {
+		const script = new Script()
+		script.preCapture = [script.task('prepareOpticalPath')]
+		let calls = 0
+		// The first capture is still configuring the camera (nothing approved yet) when the protection comes.
+		script.capture = (context) => {
+			script.trace.push(`capture@${context.frame!.id}#${context.frame!.attempt}`)
+			if (++calls > 1) return Promise.resolve(context.beforeExposure() ?? captured(context))
+			return new Promise((resolve) => {
+				context.signal.addEventListener('abort', () => resolve(failedOperationResult('aborted')), { once: true })
+			})
+		}
+		const harness = start(configurationOf(), script)
+
+		await waitUntil(() => script.trace.length === 2, 2000, 1)
+		expect(harness.runner.requestProtection(script.task('meridianFlip'))).toBeTrue()
+
+		expect((await finish(harness)).state).toBe('completed')
+		expect(script.trace).toEqual(['prepareOpticalPath@frame[L][1]', 'capture@frame[L][1]#1', 'meridianFlip@frame[L][1]', 'prepareOpticalPath@frame[L][1]', 'capture@frame[L][1]#1'])
+		expect((await journalOf(harness)).map((entry) => (entry.kind === 'deferred' ? `deferred ${entry.reason}` : entry.kind))).toEqual(['prepared', 'deferred meridian', 'prepared', 'promoting', 'committed'])
 	})
 })
 
