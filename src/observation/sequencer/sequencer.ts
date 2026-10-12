@@ -1,6 +1,8 @@
 import { PI, PIOVERTWO, SIDEREAL_DRIFT_RATE, TAU } from '../../core/constants'
+import type { FocuserCommander } from '../../devices/commanders/focuser'
+import type { WheelCommander } from '../../devices/commanders/wheel'
 import type { Camera, Cover, Dome, FlatPanel, Focuser, FrameType, Mount, PierSide, Rotator, TrackMode, Wheel } from '../../devices/indi/device'
-import type { OperationFailureReason, OperationResult } from '../../devices/orchestration/operation'
+import type { OperationCoordinator, OperationFailureReason, OperationResult } from '../../devices/orchestration/operation'
 import { abortableDelay } from '../../devices/orchestration/operation.wait'
 import type { CameraCaptureClock, CameraCaptureStart, CameraExposureTimeUnit } from '../../devices/runners/camera.capture.types'
 import { isPathSegment } from '../../io/path'
@@ -636,6 +638,22 @@ export interface SequencerSafetySource {
 	readonly subscribe: (listener: (snapshot: SequencerSafetySnapshot) => void) => VoidFunction
 }
 
+// Services a session runs with, resolved by the caller. The arbiter of the coordinator holds the one reservation
+// of the session; every physical operation is a root of its reserved scope, so the session never creates another
+// coordinator. Services of disabled features are not required.
+export interface SequencerRunnerServices {
+	// Orchestration core of the process.
+	readonly coordinator: OperationCoordinator
+	// Moves the focuser back when a focuser compensation runs.
+	readonly focuserCommander?: FocuserCommander
+	// Moves the wheel back when a wheel compensation runs.
+	readonly wheelCommander?: WheelCommander
+	// Operational clock; default `SYSTEM_SEQUENCER_CLOCK`. Always the three members together.
+	readonly clock?: SequencerClock
+	// Receives the session events synchronously, in emission order.
+	readonly listener?: SequencerListener
+}
+
 // Phase of the session run loop; observability only, never a persisted instruction pointer.
 export type SequencerPhase = 'startup' | 'preCapture' | 'capture' | 'postCapture' | 'shutdown'
 
@@ -925,8 +943,11 @@ export interface SequencerResult {
 	readonly stopCause?: 'user' | 'safety' | 'policy'
 	// Primary failure, kept apart from the shutdown failures.
 	readonly failure?: SequencerFailure
-	// Every failed shutdown step.
+	// Every failed shutdown step, in execution order. A failed 'required' step makes the session 'failed'.
 	readonly shutdownFailures: readonly SequencerFailure[]
+	// Every failed compensation, in execution order, each naming the interrupted task it undid. Reported only:
+	// it never changes the terminal state.
+	readonly compensationFailures: readonly SequencerFailure[]
 }
 
 // Public control of a running session. No method rejects.

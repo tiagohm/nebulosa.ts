@@ -147,6 +147,12 @@ export function requestSequencerPause(runtime: SequencerRuntimeState) {
 	return true
 }
 
+// Records, in place, that the session holds at a safe point, whether a pause was requested or a policy (a failure
+// action 'pause', an exhausted capture budget) paused it, so `resume()` is accepted for both.
+export function requestSequencerHold(runtime: SequencerRuntimeState) {
+	runtime.desired = 'paused'
+}
+
 // Records a resume request, in place. Accepted only while a pause is pending or held and no stop was requested;
 // the runner then leaves the hold (or skips it) and moves a paused session back to running.
 export function requestSequencerResume(runtime: SequencerRuntimeState) {
@@ -168,6 +174,22 @@ export function requestSequencerStop(runtime: SequencerRuntimeState, mode: Seque
 // Whether the next safe point must hold: a pause is desired and no stop is pending.
 export function shouldHoldSequencer(runtime: SequencerRuntimeState) {
 	return runtime.desired === 'paused' && runtime.stop === undefined
+}
+
+// Registers a pending compensation at the top of the stack, in place, before the mutation it undoes. Returns the
+// function the task calls once the compensation is no longer due (the task succeeded, or a failure that was not
+// a cancellation restored the device by itself); it removes exactly this entry and is idempotent. An entry left
+// behind is run by the runner after the drain, in LIFO order.
+export function pushSequencerCompensation(runtime: SequencerRuntimeState, compensation: SequencerCompensation): VoidFunction {
+	runtime.compensations.push(compensation)
+	let registered = true
+
+	return () => {
+		if (!registered) return
+		registered = false
+		const index = runtime.compensations.lastIndexOf(compensation)
+		if (index >= 0) runtime.compensations.splice(index, 1)
+	}
 }
 
 // Fresh intents with nothing pending.
