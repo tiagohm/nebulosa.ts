@@ -1023,7 +1023,8 @@ type CaptureBehaviour = (context: SequencerCaptureContext, storage: FileSystemSe
 const writeFrame: CaptureBehaviour = async (context, storage) => {
 	await storage.writeDurably(context.destination.temporary, FRAME)
 	const at = context.clock.wallNow()
-	return successfulOperationResult({ exposureStartedAt: at, exposureFinishedAt: at })
+	const monotonic = context.clock.monotonicNow()
+	return successfulOperationResult({ exposureDispatchedAt: at, exposureDispatchedMonotonic: monotonic, exposureStartedAt: at, exposureStartedMonotonic: monotonic, exposureFinishedAt: at, exposureFinishedMonotonic: monotonic })
 }
 
 // Capture that never ends by itself: it writes part of the frame, then waits for its root to abort.
@@ -1078,8 +1079,12 @@ function startProcess(sessionId: string, options: SessionProcessOptions = {}): S
 	const phases = {
 		startup: [],
 		preCapture: [prepareFrameDestinationTask(storage), ...(options.afterPrepare ?? [])],
+		// The capture asks `beforeExposure` first, as the capturer does right before dispatching.
 		capture: (context: SequencerCaptureContext) => {
 			captures.push(`${context.frame!.id}#${context.frame!.attempt}`)
+			const refusal = context.beforeExposure()
+			if (refusal !== undefined) return Promise.resolve(refusal)
+			context.exposureStarted()
 			return capture(context, storage)
 		},
 		shutdown: options.shutdown ?? [],

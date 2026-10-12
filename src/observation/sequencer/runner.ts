@@ -1,6 +1,6 @@
 import { errorMessage } from '../../core/util'
 import type { Device } from '../../devices/indi/device'
-import { failedOperationResult, type OperationContext, type OperationExecutor, type OperationHandle, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
+import { type FailedOperationResult, failedOperationResult, type OperationContext, type OperationExecutor, type OperationHandle, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
 import { type ResourceConflict, type ResourceRequest, type ResourceReservation, type ResourceReservationOwner, resourceKey } from '../../devices/orchestration/resource'
 import { createMeridianFlipState } from '../mount/meridian.flip'
 import { restoreSequencerFrameSlot, selectNextFrame, selectNextFrameOnStop, type SequencerTriggerEvent } from './scheduler'
@@ -22,9 +22,11 @@ import type { SequencerDeferReason, SequencerFrameDestination, SequencerStorage 
 // selected, after each capture failure (before its `abandoned` line), after a resume that renews a counter and
 // after an intent changes; a captured frame is one logical transaction, computed before its file is touched,
 // journaled with the promotion, applied and then saved. A prepared attempt that is not dispatched is closed by
-// `deferred` before any wait or re-entry. A persistence failure fails the session with a 'storage' failure: no new
-// exposure starts and nothing advances in memory as if it had been saved. The lock is released after the
-// reservation, right before the terminalization.
+// `deferred` before any wait or re-entry. The capture asks the session synchronously, right before dispatching,
+// whether the exposure may go (a pending stop, pause or protection refuses it); only an approved exposure is a
+// commanded attempt that may count as a capture failure. A persistence failure fails the session with a 'storage'
+// failure: no new exposure starts and nothing advances in memory as if it had been saved. The lock is released after
+// the reservation, right before the terminalization.
 //
 // Every physical task is a root `sequencer.{taskId}` opened through `startTask`, which refuses once the run was
 // aborted; tasks pass the root context to commanders, so cancelling the root cancels everything they commanded.
@@ -91,18 +93,39 @@ export interface SequencerShutdownTask extends Omit<SequencerTask, 'policy'> {
 	readonly policy: SequencerShutdownStepPolicy
 }
 
-// What the exposure of one frame produced. The frame itself is the temporary of the destination.
+// What the exposure of one frame produced, with its physical instants read from the session clock. The frame itself
+// is the temporary of the destination. Wall instants (`...At`, Unix ms) stamp the journal and the events and give
+// the astronomical midpoint; monotonic instants (`...Monotonic`, ms) bound the exposure window [dispatch, end] of
+// the safety and guiding criteria. The two domains are never compared with each other.
 export interface SequencerCapturedFrame {
-	// Wall instant of the first Busy of the exposure, in Unix ms.
+	// Wall instant read immediately before the exposure command; a lower bound of the physical start.
+	readonly exposureDispatchedAt?: number
+	// Monotonic counterpart of `exposureDispatchedAt`, where the exposure window starts.
+	readonly exposureDispatchedMonotonic?: number
+	// Wall instant of the first Busy of the exposure, in Unix ms; an upper bound of the physical start.
 	readonly exposureStartedAt: number
+	// Monotonic counterpart of `exposureStartedAt`.
+	readonly exposureStartedMonotonic: number
 	// Wall instant of the Ok of the exposure, in Unix ms.
 	readonly exposureFinishedAt: number
+	// Monotonic counterpart of `exposureFinishedAt`, where the exposure window ends.
+	readonly exposureFinishedMonotonic: number
 }
 
-// Execution context of the capture: the task context plus the prepared destination of the attempt.
+// Execution context of the capture: the task context plus the prepared destination of the attempt and the two
+// callbacks that tie the exposure to the session.
 export interface SequencerCaptureContext extends SequencerContext {
 	// Destination of the attempt; the frame is written durably to its temporary, never to its final.
 	readonly destination: SequencerFrameDestination
+	// Last decision of the session, called synchronously right before the exposure is dispatched (the
+	// `beforeExposure` hook of the capturer): undefined approves it, a failure refuses it (a stop, a pause or a
+	// protection is pending) and the capture must end with that failure without dispatching. It reads only the
+	// session state, never awaits and never commands. Only an approved exposure is a commanded attempt: a capture
+	// that fails before the approval consumes no attempt and counts no capture failure.
+	readonly beforeExposure: () => FailedOperationResult | undefined
+	// Reports that the approved exposure was dispatched (the `exposureStarted` of the capturer); emits the
+	// `exposureStarted` event of the session.
+	readonly exposureStarted: VoidFunction
 }
 
 // Exposure of exactly one frame, inside its root `sequencer.captureFrame`.
@@ -174,11 +197,20 @@ const FAIL_POLICY: SequencerTaskPolicy = { onFailure: 'fail' }
 // - failed: its retries are exhausted and `action` applies.
 type TaskOutcome = { readonly kind: 'done' } | { readonly kind: 'interrupted' } | { readonly kind: 'failed'; readonly failure: SequencerFailure; readonly action: SequencerOptionalFailureAction }
 
-// Outcome of the capture of one frame.
+// Outcome of the capture of one frame. Only an exposure `beforeExposure` approved was commanded and may count.
 // - captured: the exposure produced a frame;
-// - failed: no frame; `protection` when the runner cancelled it for a protection request;
-// - interrupted: cancelled by a stop or a disposal; nothing is counted.
-type CaptureOutcome = { readonly kind: 'captured'; readonly frame: SequencerCapturedFrame } | { readonly kind: 'failed'; readonly failure: SequencerFailure; readonly protection: boolean } | { readonly kind: 'interrupted' }
+// - failed: the commanded exposure produced no frame; `protection` when the runner cancelled it for a protection;
+// - interrupted: the commanded exposure was cancelled by a stop or a disposal; nothing is counted;
+// - deferred: nothing was commanded (a refusal of `beforeExposure`, or a stop or a protection before it); the
+//   attempt is closed by `deferred` with `reason` and prepared again by the next pre-capture;
+// - undispatched: the capture failed before anything was commanded (camera unavailable or disconnected); the
+//   capture policy applies at once without consuming the attempt, since nothing bounds a retry of it.
+type CaptureOutcome =
+	| { readonly kind: 'captured'; readonly frame: SequencerCapturedFrame }
+	| { readonly kind: 'failed'; readonly failure: SequencerFailure; readonly protection: boolean }
+	| { readonly kind: 'interrupted' }
+	| { readonly kind: 'deferred'; readonly reason: SequencerDeferReason }
+	| { readonly kind: 'undispatched'; readonly failure: SequencerFailure }
 
 // What follows an applied failure action: the next task ('skip'), the same step again after a resume ('retry'),
 // or the end of the phase ('end').
@@ -265,7 +297,8 @@ export class SequencerRunner {
 	// Whether the attempt of the current slot was consumed (failed or discarded), so its next selection is a retake
 	// with `attempt + 1`; false for a slot just selected or restored, whose attempt is still to run.
 	#consumed = false
-	// Last attempt dispatched to the capture; while it is the open attempt of the storage it is never deferred.
+	// Attempt whose exposure `beforeExposure` approved last; while it is the open attempt of the storage it is never
+	// deferred.
 	#dispatched?: SequencerFrameDestination
 
 	constructor(options: SequencerRunnerOptions) {
@@ -594,13 +627,12 @@ export class SequencerRunner {
 		}
 	}
 
-	// Exposure of the frame in its root, into the temporary of the attempt the pre-capture prepared. A stop lets it
-	// finish unless immediate; a protection cancels it.
+	// Exposure of the frame in its root, into the temporary of the attempt the pre-capture prepared. The capture asks
+	// `beforeExposure` right before dispatching, which refuses while a stop, a pause or a protection is pending; only
+	// an approved exposure counts as a commanded attempt. A stop lets an approved exposure finish unless immediate; a
+	// protection cancels it.
 	async #capture(frame: SequencerFrameSlot): Promise<CaptureOutcome> {
-		if (this.#abandons(frame) || this.#run.signal.aborted) {
-			await this.#defer('stop')
-			return { kind: 'interrupted' }
-		}
+		if (this.#abandons(frame) || this.#run.signal.aborted) return { kind: 'deferred', reason: 'stop' }
 
 		const destination = this.#storage.prepared
 
@@ -610,34 +642,84 @@ export class SequencerRunner {
 		}
 
 		this.#setPhase('capture')
-		this.#dispatched = destination
+		this.#dispatched = undefined
+		let decision: 'approved' | 'refused' | undefined
+
+		const beforeExposure = () => {
+			if (decision !== undefined) return decision === 'approved' ? undefined : failedOperationResult('aborted', 'the exposure was already refused')
+			const refusal = this.#exposureRefusal(frame)
+
+			if (refusal === undefined) {
+				decision = 'approved'
+				this.#dispatched = destination
+				return undefined
+			}
+
+			decision = 'refused'
+			return failedOperationResult('aborted', refusal)
+		}
+
+		const exposureStarted = () => {
+			if (decision === 'approved') this.#emit({ type: 'exposureStarted', slot: frame.id, attempt: frame.attempt })
+		}
+
 		const view = this.#view(frame)
-		const handle = this.startTask('sequencer.captureFrame', (scope) => this.#phases.capture({ ...view, scope, signal: scope.signal, destination }))
+		const handle = this.startTask('sequencer.captureFrame', (scope) => this.#phases.capture({ ...view, scope, signal: scope.signal, destination, beforeExposure, exposureStarted }))
 		const current = this.#begin(handle, 'capture', 'captureFrame')
 		const result = await handle.result
 		this.#end()
 
-		if (!result.ok) {
-			const failure = operationFailure('captureFrame', result)
-			this.#emit({ type: 'taskFailed', task: 'captureFrame', phase: 'capture', failure })
-			const protection = current.interrupted && this.#protection !== undefined && !this.#run.signal.aborted
-			if ((current.interrupted || this.#run.signal.aborted) && !protection) return { kind: 'interrupted' }
-			return { kind: 'failed', failure, protection }
+		if (result.ok) {
+			this.#emit({ type: 'taskCompleted', task: 'captureFrame', phase: 'capture' })
+			return { kind: 'captured', frame: result.value }
 		}
 
-		this.#emit({ type: 'taskCompleted', task: 'captureFrame', phase: 'capture' })
-		return { kind: 'captured', frame: result.value }
+		const failure = operationFailure('captureFrame', result)
+		this.#emit({ type: 'taskFailed', task: 'captureFrame', phase: 'capture', failure })
+		if (decision === 'refused') return { kind: 'deferred', reason: 'beforeExposure' }
+
+		const cancelled = current.interrupted || this.#run.signal.aborted
+		const protection = current.interrupted && this.#protection !== undefined && !this.#run.signal.aborted
+
+		if (decision === undefined) {
+			if (protection) return { kind: 'deferred', reason: 'meridian' }
+			if (cancelled) return { kind: 'deferred', reason: 'stop' }
+			return { kind: 'undispatched', failure }
+		}
+
+		if (cancelled && !protection) return { kind: 'interrupted' }
+		return { kind: 'failed', failure, protection }
+	}
+
+	// Why the exposure of `frame` must not be dispatched now, or undefined when it may: a stop that abandons it, a
+	// pending protection or a pending pause. Synchronous: it reads only the session state.
+	#exposureRefusal(frame: SequencerFrameSlot) {
+		if (this.#abandons(frame) || this.#run.signal.aborted) return 'a stop was requested'
+		if (this.#protection !== undefined) return 'a meridian protection is pending'
+		if (shouldHoldSequencer(this.#runtime)) return 'a pause was requested'
+		return undefined
 	}
 
 	// Post-capture: records the outcome of the attempt, never commands a device. A captured frame whose temporary
 	// holds data is accepted and completes its slot in one transaction (section 26). A failed capture keeps the slot
 	// current with one more failure, persisted before its `abandoned` line: retried through the pre-capture while its
 	// reason is retryable (a protection always is) and the budget lasts, otherwise the capture failure policy applies.
-	// An interrupted capture is closed without counting anything.
+	// An interrupted capture is closed without counting anything; one that commanded nothing is deferred, and when it
+	// failed by itself (camera unavailable) the capture policy applies without consuming the attempt.
 	async #postCapture(frame: SequencerFrameSlot, outcome: CaptureOutcome) {
 		if (outcome.kind === 'interrupted') {
 			const abandoned = await this.#storage.abandon('interrupted')
 			if (!abandoned.ok) this.#fail(abandoned.failure)
+			return
+		}
+
+		if (outcome.kind === 'deferred') {
+			await this.#defer(outcome.reason)
+			return
+		}
+
+		if (outcome.kind === 'undispatched') {
+			await this.#undispatched(frame, outcome.failure)
 			return
 		}
 
@@ -697,6 +779,34 @@ export class SequencerRunner {
 				return
 			case 'skipFrame':
 				this.#emit({ type: 'slotSkipped', slot: frame.id, reason: 'captureFailures' })
+		}
+	}
+
+	// A capture that failed before anything was commanded (camera unavailable, disconnected or removed): the attempt
+	// is closed by `deferred` and the capture policy applies at once, consuming neither the attempt nor a capture
+	// failure, since only commanded exposures count (section 25.2) and nothing would bound a retry of it. 'pause'
+	// holds and, after `resume()`, prepares the same attempt again, which re-evaluates the availability.
+	async #undispatched(frame: SequencerFrameSlot, failure: SequencerFailure) {
+		const { onFailure } = this.#configuration.capture
+		await this.#defer(onFailure === 'pause' ? 'pause' : 'stop')
+		if (this.#failing) return
+
+		switch (onFailure) {
+			case 'fail':
+				this.#fail(failure)
+				return
+			case 'stop':
+				this.#policyStop(failure)
+				return
+			case 'pause':
+				await this.#hold('policy')
+				return
+			case 'skipFrame': {
+				const progress = this.#runtime.capture.get(frame.groupId)
+				if (progress !== undefined) progress.skipped++
+				this.#runtime.currentFrame = undefined
+				if (await this.#persist()) this.#emit({ type: 'slotSkipped', slot: frame.id, reason: 'captureFailures' })
+			}
 		}
 	}
 
