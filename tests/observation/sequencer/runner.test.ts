@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import { afterAll, afterEach, describe, expect, spyOn, test } from 'bun:test'
+import { writeFileSync } from 'fs'
+import { mkdtemp, rm } from 'fs/promises'
+import { tmpdir } from 'os'
+import { basename, join } from 'path'
 import type { FocuserCommander } from '../../../src/devices/commanders/focuser'
 import type { WheelCommander } from '../../../src/devices/commanders/wheel'
 import { type Camera, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Device, type Dome, type FlatPanel, type Focuser, type Mount, type Rotator, type Wheel } from '../../../src/devices/indi/device'
@@ -6,11 +10,12 @@ import { failedOperationResult, OperationCoordinator, type OperationContext, typ
 import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
 import { mulberry32, type Random } from '../../../src/math/numerical/random'
 // oxfmt-ignore
-import { type SequencerCapturedFrame, type SequencerCaptureStep, type SequencerContext, type SequencerRunner, type SequencerRunnerPhases, sequencerResourceRequests, sequencerRetryDelay, type SequencerShutdownTask, type SequencerTask, type SequencerTaskPolicy, type SequencerTaskResult, startSequencerRunner } from '../../../src/observation/sequencer/runner'
+import { type SequencerCaptureContext, type SequencerCapturedFrame, type SequencerCaptureStep, type SequencerContext, type SequencerRunner, type SequencerRunnerPhases, sequencerResourceRequests, sequencerRetryDelay, type SequencerShutdownTask, type SequencerTask, type SequencerTaskPolicy, type SequencerTaskResult, startSequencerRunner } from '../../../src/observation/sequencer/runner'
 // oxfmt-ignore
 import type { SequencerCameraCapture, SequencerCaptureConfiguration, SequencerConfiguration, SequencerDevices, SequencerEvent, SequencerFailure, SequencerFrameGroup, SequencerResult, SequencerSessionState, SequencerShutdownStepPolicy, SequencerTaskId, SequencerTriggeredFrameGroup } from '../../../src/observation/sequencer/sequencer'
 import { pushSequencerCompensation } from '../../../src/observation/sequencer/state'
-import { waitUntil } from '../../util'
+import { FileSystemSequencerStorage, prepareFrameDestinationTask } from '../../../src/observation/sequencer/storage'
+import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
 // oxfmt-ignore
 import { assertRunnerInvariants, connectSequencerRig, createSequencerRig, ManualSequencerClock, type RunnerLogEntry, type RunnerOracleOptions, type RunnerRecorder, recordRunner, resetSequencerRig } from './util'
 
@@ -73,10 +78,14 @@ interface Blocked {
 	readonly settle: (value: SequencerTaskResult | OperationResult<SequencerCapturedFrame>) => void
 }
 
-// Successful capture of the frame of the context.
+// Bytes of a fake frame.
+const FRAME = Buffer.from('SIMPLE  =                    T')
+
+// Successful capture of the frame of the context, written to the temporary of its destination.
 function captured(context: SequencerContext): OperationResult<SequencerCapturedFrame> {
+	writeFileSync((context as SequencerCaptureContext).destination.temporary, FRAME)
 	const at = context.clock.wallNow()
-	return successfulOperationResult({ path: `${context.frame!.id}.fit`, exposureStartedAt: at, exposureFinishedAt: at })
+	return successfulOperationResult({ exposureStartedAt: at, exposureFinishedAt: at })
 }
 
 // Fake task lists, given to the runner as its phases (read when each phase runs): every execution is traced as
@@ -162,8 +171,15 @@ interface Harness {
 
 const recorders: RunnerRecorder[] = []
 
+// Root of the session directories of this file.
+const STORAGE_ROOT = await mkdtemp(join(tmpdir(), 'nebulosa-sequencer-runner-'))
+
 afterEach(() => {
 	for (const recorder of recorders.splice(0)) recorder[Symbol.dispose]()
+})
+
+afterAll(async () => {
+	await rm(STORAGE_ROOT, { recursive: true, force: true })
 })
 
 interface HarnessOptions {
@@ -182,8 +198,25 @@ function start(configuration: SequencerConfiguration, script: Script, options: H
 	const recorder = recordRunner(coordinator)
 	recorders.push(recorder)
 	const { focuserCommander, wheelCommander, disposeSignal } = options
-	const services = { coordinator, clock, listener: recorder.listener, ...(focuserCommander !== undefined && { focuserCommander }), ...(wheelCommander !== undefined && { wheelCommander }) }
-	const runner = startSequencerRunner({ configuration, devices, services, phases: script, ...(disposeSignal !== undefined && { disposeSignal }) })
+	const storage = new FileSystemSequencerStorage({ root: STORAGE_ROOT, sessionId: Bun.randomUUIDv7(), wallNow: clock.wallNow })
+	const services = { coordinator, storage, clock, listener: recorder.listener, ...(focuserCommander !== undefined && { focuserCommander }), ...(wheelCommander !== undefined && { wheelCommander }) }
+	// The script is read when each phase runs; the frame destination is always prepared last.
+	const prepare = prepareFrameDestinationTask(storage)
+	const phases: SequencerRunnerPhases = {
+		get startup() {
+			return script.startup
+		},
+		get preCapture() {
+			return [...script.preCapture, prepare]
+		},
+		get capture() {
+			return script.capture
+		},
+		get shutdown() {
+			return script.shutdown
+		},
+	}
+	const runner = startSequencerRunner({ configuration, devices, services, phases, ...(disposeSignal !== undefined && { disposeSignal }) })
 	return { runner, script, coordinator, recorder, clock, devices }
 }
 
@@ -309,11 +342,7 @@ describe('49.4 lifecycle', () => {
 
 		const phases = events(harness).flatMap((event) => (event.type === 'phaseChanged' ? [event.phase] : []))
 		expect(phases).toEqual(['startup', 'preCapture', 'capture', 'postCapture', 'preCapture', 'capture', 'postCapture', 'preCapture', 'capture', 'postCapture', 'shutdown'])
-		expect(
-			events(harness)
-				.filter((event) => event.type === 'frameAccepted')
-				.map((event) => event.type === 'frameAccepted' && event.path),
-		).toEqual(['frame[L][1].fit', 'frame[L][2].fit', 'frame[R][1].fit'])
+		expect(events(harness).flatMap((event) => (event.type === 'frameAccepted' ? [basename(event.path)] : []))).toEqual(['frame[L][1].fit', 'frame[L][2].fit', 'frame[R][1].fit'])
 		expect(events(harness).at(-1)).toMatchObject({ type: 'sessionCompleted', sessionId: harness.runner.id, result })
 	})
 
@@ -1110,63 +1139,72 @@ describe('model-based', () => {
 		}
 	}
 
-	const flush = () =>
-		new Promise<void>((resolve) => {
+	// Lets the continuations run, then waits until the session waits on something the test controls (a blocked fake, a
+	// manual delay, the hold) or ended, so its storage I/O never races the step budget.
+	const flush = async (harness: Harness, session: { readonly done: boolean }) => {
+		await new Promise<void>((resolve) => {
 			setImmediate(resolve)
 		})
 
-	test('random controls at random points always terminate coherently and leak nothing', async () => {
-		for (let seed = 1; seed <= SEEDS; seed++) {
-			const random = mulberry32(seed)
-			const configuration = randomConfiguration(random)
-			const script = randomScript(random)
-			const harness = start(configuration, script)
-			const { runner } = harness
-			const pauses: Promise<SequencerSessionState>[] = []
-			const session = { done: false }
-			void runner.handle.result.then(() => (session.done = true))
+		await waitUntil(() => session.done || harness.script.blocked.length > 0 || harness.clock.pending > 0 || harness.runner.snapshot().state === 'paused', 5000, 1)
+	}
 
-			for (let step = 0; step < 400 && !session.done; step++) {
-				const roll = random()
+	test.skipIf(isTimeConsumingTestSkipped())(
+		'random controls at random points always terminate coherently and leak nothing',
+		async () => {
+			for (let seed = 1; seed <= SEEDS; seed++) {
+				const random = mulberry32(seed)
+				const configuration = randomConfiguration(random)
+				const script = randomScript(random)
+				const harness = start(configuration, script)
+				const { runner } = harness
+				const pauses: Promise<SequencerSessionState>[] = []
+				const session = { done: false }
+				void runner.handle.result.then(() => (session.done = true))
 
-				if (step >= 300 || roll < 0.03) void runner.handle.stop('immediate')
-				else if (roll < 0.08) void runner.handle.stop('graceful')
-				else if (roll < 0.14) pauses.push(runner.handle.pause())
-				else if (roll < 0.22) runner.handle.resume()
-				else if (roll < 0.25) runner.requestProtection(script.task('meridianFlip', script.blockTask(), { onFailure: pick(random, ['fail', 'pause', 'stop'] as const) }))
-				else if (roll < 0.35 && harness.clock.pending > 0) await harness.clock.advance(1000)
-				else if (script.blocked.length > 0) settleRandomly(random, pick(random, script.blocked))
+				for (let step = 0; step < 400 && !session.done; step++) {
+					const roll = random()
 
-				await flush()
-			}
+					if (step >= 300 || roll < 0.03) void runner.handle.stop('immediate')
+					else if (roll < 0.08) void runner.handle.stop('graceful')
+					else if (roll < 0.14) pauses.push(runner.handle.pause())
+					else if (roll < 0.22) runner.handle.resume()
+					else if (roll < 0.25) runner.requestProtection(script.task('meridianFlip', script.blockTask(), { onFailure: pick(random, ['fail', 'pause', 'stop'] as const) }))
+					else if (roll < 0.35 && harness.clock.pending > 0) await harness.clock.advance(1000)
+					else if (script.blocked.length > 0) settleRandomly(random, pick(random, script.blocked))
 
-			for (let step = 0; !session.done; step++) {
-				if (step > 200) throw new Error(`seed ${seed}: the session did not terminate in state ${runner.snapshot().state}`)
-				void runner.handle.stop('immediate')
-				while (script.blocked.length > 0) script.blocked[0].settle(script.blocked[0].capture ? captured(script.blocked[0].context) : OK)
-				if (harness.clock.pending > 0) await harness.clock.advance(60000)
-				await flush()
-			}
-
-			try {
-				const result = await finish(harness)
-				const settled = await Promise.all(pauses)
-				for (const state of settled) expect(['paused', 'running', 'completed', 'stopped', 'failed']).toContain(state)
-
-				if (result.state === 'completed') {
-					expect(result.failure).toBeUndefined()
-					for (const group of result.capture.groups) if (group.kind === 'scheduled') expect(group.accepted + group.skipped).toBe(group.requested)
+					await flush(harness, session)
 				}
 
-				if (result.state === 'stopped') expect(result.stopCause).toBeDefined()
-				expect(events(harness).filter((event) => event.type === 'sessionCompleted' || event.type === 'sessionStopped' || event.type === 'sessionFailed')).toHaveLength(1)
-			} catch (error) {
-				throw new Error(`seed ${seed}: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
-			}
+				for (let step = 0; !session.done; step++) {
+					if (step > 200) throw new Error(`seed ${seed}: the session did not terminate in state ${runner.snapshot().state}`)
+					void runner.handle.stop('immediate')
+					while (script.blocked.length > 0) script.blocked[0].settle(script.blocked[0].capture ? captured(script.blocked[0].context) : OK)
+					if (harness.clock.pending > 0) await harness.clock.advance(60000)
+					await flush(harness, session)
+				}
 
-			for (const recorder of recorders.splice(0)) recorder[Symbol.dispose]()
-		}
-	}, 60000)
+				try {
+					const result = await finish(harness)
+					const settled = await Promise.all(pauses)
+					for (const state of settled) expect(['paused', 'running', 'completed', 'stopped', 'failed']).toContain(state)
+
+					if (result.state === 'completed') {
+						expect(result.failure).toBeUndefined()
+						for (const group of result.capture.groups) if (group.kind === 'scheduled') expect(group.accepted + group.skipped).toBe(group.requested)
+					}
+
+					if (result.state === 'stopped') expect(result.stopCause).toBeDefined()
+					expect(events(harness).filter((event) => event.type === 'sessionCompleted' || event.type === 'sessionStopped' || event.type === 'sessionFailed')).toHaveLength(1)
+				} catch (error) {
+					throw new Error(`seed ${seed}: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
+				}
+
+				for (const recorder of recorders.splice(0)) recorder[Symbol.dispose]()
+			}
+		},
+		60000,
+	)
 })
 
 describe('rig compensation', () => {

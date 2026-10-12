@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { mulberry32, type Random } from '../../../src/math/numerical/random'
-import { completedSlotsOf, consumedSlotsOf, enqueueCalibrationBatch, type SequencerTriggerEvent, selectNextFrame, selectNextFrameOnStop, sequencerFrameSlotId } from '../../../src/observation/sequencer/scheduler'
+import { completedSlotsOf, consumedSlotsOf, enqueueCalibrationBatch, restoreSequencerFrameSlot, type SequencerTriggerEvent, selectNextFrame, selectNextFrameOnStop, sequencerFrameSlotId } from '../../../src/observation/sequencer/scheduler'
 // oxfmt-ignore
 import type { SequencerCameraCapture, SequencerCaptureConfiguration, SequencerCaptureOrder, SequencerConfiguration, SequencerFrameGroup, SequencerFrameGroupTrigger, SequencerFrameSlot, SequencerScheduledFrameGroup, SequencerSchedulerState, SequencerTriggeredFrameGroup } from '../../../src/observation/sequencer/sequencer'
 import { createSequencerCaptureProgress, createSequencerSchedulerState, type SequencerCaptureProgress } from '../../../src/observation/sequencer/state'
@@ -475,6 +475,40 @@ describe('graceful stop', () => {
 		complete(session, selectNextFrameOnStop(session.capture, session.scheduler, session.progress)!, 'accept')
 		expect(selectNextFrameOnStop(session.capture, session.scheduler, session.progress)).toBeUndefined()
 		expect(session.events.map((event) => event.groupId)).toEqual(['darks', 'biases'])
+	})
+})
+
+describe('restored slot', () => {
+	const counters = { attempt: 3, discardedTotal: 1, discardBudgetUsed: 1, captureFailures: 1 }
+
+	test('a scheduled slot takes its group settings and the persisted counters, unchanged by a selection', () => {
+		const capture = captureOf('roundRobin', [scheduled('L', 3, { filter: { kind: 'name', name: 'Red' } }), scheduled('R', 2)])
+		const scheduler = createSequencerSchedulerState()
+		const slot = restoreSequencerFrameSlot(capture, scheduler, { id: 'frame[L][2]', ...counters })
+
+		expect(slot).toEqual({ id: 'frame[L][2]', groupId: 'L', kind: 'scheduled', ordinal: 2, ...counters, capture: LIGHT, filter: { kind: 'name', name: 'Red' } })
+		expect(scheduler).toEqual(createSequencerSchedulerState())
+		// The restored slot is the pending slot of a retake: the next selection is its next attempt.
+		expect(selectNextFrame(capture, scheduler, createSequencerCaptureProgress(configurationOf(capture)), slot)).toMatchObject({ id: 'frame[L][2]', attempt: 4 })
+	})
+
+	test('a triggered slot takes the settings frozen in the pending batch holding its ordinal', () => {
+		const capture = captureOf('sequential', [scheduled('L', 1), triggered('dark', { kind: 'afterFrames', frames: 1 }, { inherit: 'triggeringFrame', batchSize: 2 })])
+		const scheduler = createSequencerSchedulerState()
+		const progress = createSequencerCaptureProgress(configurationOf(capture))
+		const light: SequencerFrameSlot = { id: 'frame[L][1]', groupId: 'L', kind: 'scheduled', ordinal: 1, attempt: 1, discardedTotal: 0, discardBudgetUsed: 0, captureFailures: 0, capture: { ...LIGHT, gain: 250 } }
+		enqueueCalibrationBatch(scheduler, progress, capture.groups[1] as SequencerTriggeredFrameGroup, light)
+
+		expect(restoreSequencerFrameSlot(capture, scheduler, { id: 'frame[dark][2]', ...counters })).toEqual({ id: 'frame[dark][2]', groupId: 'dark', kind: 'triggered', ordinal: 2, ...counters, capture: { ...LIGHT, gain: 250, frameType: 'DARK' }, triggeredBy: 'frame[L][1]' })
+		expect(restoreSequencerFrameSlot(capture, scheduler, { id: 'frame[dark][3]', ...counters })).toBeUndefined()
+	})
+
+	test('a group id with brackets parses by its last ordinal; an unknown, disabled or malformed id restores nothing', () => {
+		const capture = captureOf('sequential', [scheduled('a][1', 2), scheduled('off', 1, { enabled: false })])
+		const scheduler = createSequencerSchedulerState()
+
+		expect(restoreSequencerFrameSlot(capture, scheduler, { id: sequencerFrameSlotId('a][1', 2), ...counters })).toMatchObject({ groupId: 'a][1', ordinal: 2 })
+		for (const id of ['frame[x][1]', 'frame[off][1]', 'frame[a][1][0]', 'frame[a][1]x', 'slot[a][1]']) expect(restoreSequencerFrameSlot(capture, scheduler, { id, ...counters })).toBeUndefined()
 	})
 })
 

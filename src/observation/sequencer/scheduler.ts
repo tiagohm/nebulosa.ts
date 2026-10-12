@@ -1,5 +1,5 @@
 // oxfmt-ignore
-import type { SequencerCalibrationBatch, SequencerCameraCapture, SequencerCaptureConfiguration, SequencerEventBody, SequencerFrameGroup, SequencerFrameGroupTrigger, SequencerFrameSlot, SequencerScheduledFrameGroup, SequencerSchedulerState, SequencerTriggeredFrameGroup } from './sequencer'
+import type { SequencerCalibrationBatch, SequencerCameraCapture, SequencerCaptureConfiguration, SequencerCheckpointSlot, SequencerEventBody, SequencerFrameGroup, SequencerFrameGroupTrigger, SequencerFrameSlot, SequencerScheduledFrameGroup, SequencerSchedulerState, SequencerTriggeredFrameGroup } from './sequencer'
 import type { SequencerCaptureProgress } from './state'
 
 // Pure frame selection of the Sequencer: which slot the next safe point prepares and exposes. It applies a fixed
@@ -9,7 +9,8 @@ import type { SequencerCaptureProgress } from './state'
 // counters, file names or timestamps. The persisted scheduler state (cursor, credits, batch queue, session-boundary
 // flags) is mutated in place; per-group progress is only read. A slot is done when it is accepted, forced or
 // skipped, and the slots of a group are done in ordinal order, so the next ordinal of a group is always derived
-// from its progress and the queue, never from a separate counter. Every selection is O(groups + batches) and
+// from its progress and the queue, never from a separate counter; the slot a checkpoint persisted as in progress is
+// rebuilt from its id the same way. Every selection is O(groups + batches) and
 // allocates the returned slot plus small per-group scratch; nothing here touches devices, clocks or storage.
 
 // Trigger events produced when a calibration batch is enqueued, in the exact shape the runner emits.
@@ -138,6 +139,34 @@ export function selectNextFrameOnStop(capture: SequencerCaptureConfiguration, sc
 	}
 
 	return undefined
+}
+
+// Pattern of a slot id: the group id (which may itself contain brackets) and the 1-based ordinal, always last.
+const SLOT_ID_PATTERN = /^frame\[(.+)\]\[([1-9][0-9]*)\]$/s
+
+// Rebuilds the slot a checkpoint persisted as in progress, with its persisted counters and `attempt` the attempt it
+// has not consumed yet: a scheduled slot takes the settings of its group, a triggered one those frozen in the pending
+// batch that holds its ordinal. Undefined when the id names no enabled group of the configuration or no pending
+// batch, which only a checkpoint of another configuration produces. Reads `scheduler` without changing it.
+export function restoreSequencerFrameSlot(capture: SequencerCaptureConfiguration, scheduler: SequencerSchedulerState, slot: SequencerCheckpointSlot): SequencerFrameSlot | undefined {
+	const match = SLOT_ID_PATTERN.exec(slot.id)
+	if (match === null) return undefined
+
+	const groupId = match[1]
+	const ordinal = +match[2]
+	const group = capture.groups.find((group) => group.id === groupId)
+	if (group === undefined || !group.enabled) return undefined
+
+	const { attempt, discardedTotal, discardBudgetUsed, captureFailures } = slot
+	const counters = { attempt, discardedTotal, discardBudgetUsed, captureFailures }
+
+	if (group.kind === 'scheduled') return { ...scheduledSlot(group, ordinal), ...counters }
+
+	const batch = scheduler.batches.find((batch) => batch.groupId === groupId && ordinal >= batch.firstOrdinal && ordinal < batch.firstOrdinal + batch.size)
+	if (batch === undefined) return undefined
+
+	const { capture: settings, filter, triggeredBy } = batch
+	return { id: slot.id, groupId, kind: 'triggered', ordinal, ...counters, capture: settings, ...(filter !== undefined && { filter }), ...(triggeredBy !== undefined && { triggeredBy }) }
 }
 
 // Camera settings of a calibration slot inheriting from the light that fired it: every setting of the light, the

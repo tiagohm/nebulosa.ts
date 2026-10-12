@@ -37,6 +37,7 @@ import { ResourceArbiter, type ResourceReservation, type ResourceReservationOwne
 import { CameraCapturer } from '../../../src/devices/runners/camera.capture'
 import { deg, hour } from '../../../src/math/units/angle'
 import type { SequencerEvent, SequencerListener, SequencerTaskId } from '../../../src/observation/sequencer/sequencer'
+import type { SequencerJournalEntry } from '../../../src/observation/sequencer/storage'
 import { waitUntil } from '../../util'
 
 // Shared infrastructure of the Sequencer tests: a manual clock over the wall and monotonic domains, the INDI
@@ -527,6 +528,11 @@ export interface FileSystemFaultOptions {
 	readonly code?: string
 	// For a failing copyFile, bytes of the source written to the destination before the failure (a partial copy).
 	readonly partialCopyBytes?: number
+	// Error code every `link` throws, uncounted, as on a volume without hard links (EPERM).
+	readonly linkError?: string
+	// Paths whose operations (when every path an operation touches is spared) are neither counted nor failed, such as
+	// the session lock a simulated crash must still release so the same process can play the next one.
+	readonly spare?: (path: string) => boolean
 	readonly sequence?: TestSequence
 }
 
@@ -539,8 +545,11 @@ export interface FileSystemFaults extends Disposable {
 
 // Wraps the functions of node:fs/promises (named imports included) so the counted operations are logged and the
 // `failAt`-th one throws an Error carrying `code`; handles from `open` get their `write` and `sync` wrapped too.
+// Only named imports of `fs/promises` are intercepted: a module reaching them through the default export (`fs.link`)
+// escapes the injector. Injectors never nest: a second one replaces the first until it is disposed, which also
+// removes the first.
 export function injectFileSystemFaults(options: FileSystemFaultOptions = {}): FileSystemFaults {
-	const { failAt, mode = 'once', code = 'EIO', partialCopyBytes } = options
+	const { failAt, mode = 'once', code = 'EIO', partialCopyBytes, linkError, spare } = options
 	const counted = new Set(options.operations ?? DURABLE_FILE_SYSTEM_OPERATIONS)
 	const sequence = options.sequence ?? createTestSequence()
 	const entries: FileSystemEntry[] = []
@@ -549,19 +558,25 @@ export function injectFileSystemFaults(options: FileSystemFaultOptions = {}): Fi
 
 	// Logs one operation and returns whether it must fail.
 	const enter = (operation: FileSystemOperation, paths: readonly string[]) => {
-		const step = counted.has(operation) ? ++steps : undefined
+		const spared = spare !== undefined && paths.every(spare)
+		const step = counted.has(operation) && !spared ? ++steps : undefined
 		const failed = step !== undefined && failAt !== undefined && (mode === 'crash' ? step >= failAt : step === failAt)
 		entries.push({ kind: 'fs', sequence: sequence.next(), operation, paths, step, failed })
 		return failed
 	}
 
-	const injected = (operation: FileSystemOperation, paths: readonly string[]) => Object.assign(new Error(`injected ${code} on ${operation} ${paths.join(' ')}`), { code })
+	const injected = (operation: FileSystemOperation, paths: readonly string[], error = code) => Object.assign(new Error(`injected ${error} on ${operation} ${paths.join(' ')}`), { code: error })
 
 	const wrap = (operation: Exclude<FileSystemOperation, 'sync' | 'write'>, paths: (args: readonly unknown[]) => readonly string[]) => {
 		const target = fsp as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>
 		const original = target[operation]
 		const spy = spyOn(target, operation).mockImplementation(async (...args: unknown[]) => {
 			const touched = paths(args)
+
+			if (operation === 'link' && linkError !== undefined) {
+				entries.push({ kind: 'fs', sequence: sequence.next(), operation, paths: touched, failed: true })
+				throw injected(operation, touched, linkError)
+			}
 
 			if (enter(operation, touched)) {
 				if (operation === 'copyFile' && partialCopyBytes !== undefined) {
@@ -908,5 +923,73 @@ export function assertRunnerInvariants(log: readonly RunnerLogEntry[], options: 
 				}
 			}
 		}
+	}
+}
+
+// Checks the invariants a session journal, with the events of the same session when given, can prove, and throws an
+// Error starting with the invariant id on the first violation:
+// - I11: at most one committed final per slot and per final path, always the final its prepared line reserved;
+// - I36: no attempt is prepared while another one is still open (its last line `prepared`), and no attempt is deferred
+//   once it produced a transaction;
+// - I49: every final and discarded destination ends in `.fit` but not `.partial.fit`, every temporary in
+//   `.partial.fit`, and the final of an attempt never changes between prepared, promoting and committed;
+// - I4 (journal half): every frameAccepted event has the committed line of its attempt, with its final.
+export function assertJournalInvariants(journal: readonly SequencerJournalEntry[], events: readonly SequencerEvent[] = []) {
+	const finals = new Map<string, string>()
+	const committedSlots = new Set<string>()
+	const committedFinals = new Set<string>()
+	const committed = new Map<string, string>()
+	const transactions = new Set<string>()
+	let open: string | undefined
+
+	const isFinal = (path: string) => path.endsWith('.fit') && !path.endsWith('.partial.fit')
+
+	for (const [i, entry] of journal.entries()) {
+		if (entry.kind === 'lockReclaimed') continue
+		const key = `${entry.slot}#${entry.attempt}`
+
+		switch (entry.kind) {
+			case 'prepared':
+				if (open !== undefined && open !== key) throw new Error(`I36: ${key} prepared (line ${i + 1}) while ${open} is open`)
+				if (!entry.temporary.endsWith('.partial.fit') || !isFinal(entry.final)) throw new Error(`I49: ${key} prepared with ${entry.temporary} and ${entry.final} (line ${i + 1})`)
+				if (finals.has(key) && finals.get(key) !== entry.final) throw new Error(`I49: final of ${key} changed to ${entry.final} (line ${i + 1})`)
+				finals.set(key, entry.final)
+				open = key
+				break
+			case 'deferred':
+				if (transactions.has(key)) throw new Error(`I36: ${key} deferred after its transaction (line ${i + 1})`)
+				if (open === key) open = undefined
+				break
+			case 'promoting':
+			case 'committed':
+				if (entry.final !== finals.get(key)) throw new Error(`I49: ${entry.kind} of ${key} with final ${entry.final} instead of ${finals.get(key)} (line ${i + 1})`)
+				transactions.add(key)
+				if (open === key) open = undefined
+
+				if (entry.kind === 'committed') {
+					if (committedSlots.has(entry.slot) && committed.get(entry.slot) !== key) throw new Error(`I11: second committed final of ${entry.slot} (line ${i + 1})`)
+					if (committedFinals.has(entry.final) && committed.get(entry.slot) !== key) throw new Error(`I11: ${entry.final} committed twice (line ${i + 1})`)
+					committedSlots.add(entry.slot)
+					committedFinals.add(entry.final)
+					committed.set(entry.slot, key)
+				}
+
+				break
+			case 'disposing':
+				if (entry.destination !== undefined && !isFinal(entry.destination)) throw new Error(`I49: ${key} disposed of to ${entry.destination} (line ${i + 1})`)
+				transactions.add(key)
+				if (open === key) open = undefined
+				break
+			case 'disposed':
+			case 'abandoned':
+				if (open === key) open = undefined
+		}
+	}
+
+	for (const event of events) {
+		if (event.type !== 'frameAccepted') continue
+		const key = `${event.slot}#${event.attempt}`
+		const final = finals.get(key)
+		if (committed.get(event.slot) !== key || final === undefined || !event.path.split(sep).join('/').endsWith(`/${final}`)) throw new Error(`I4: frameAccepted ${key} at ${event.path} without its committed line`)
 	}
 }

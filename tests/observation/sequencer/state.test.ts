@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { SequencerCameraCapture, SequencerConfiguration, SequencerFilterFocusOffsets, SequencerFrameSlot, SequencerSessionState } from '../../../src/observation/sequencer/sequencer'
 // oxfmt-ignore
-import { applyCorrectiveIntents, bootstrapFocusBaseline, canTransitionSequencerState, createSequencerRuntimeState, focusBaselineAfterAutofocus, focusBaselineRequiresAutofocus, focusOffsetOf, focusPositionFor, isTerminalSequencerState, requestSequencerPause, requestSequencerResume, requestSequencerStop, type SequencerSafetyHistory, type SequencerSafetyTransition, safetyUnsafeWithin, sequencerSnapshot, shouldHoldSequencer, transitionSequencerState } from '../../../src/observation/sequencer/state'
+import { applyCorrectiveIntents, applySequencerCheckpoint, bootstrapFocusBaseline, canTransitionSequencerState, createSequencerRuntimeState, focusBaselineAfterAutofocus, focusBaselineRequiresAutofocus, focusOffsetOf, focusPositionFor, isTerminalSequencerState, requestSequencerPause, requestSequencerResume, requestSequencerStop, type SequencerSafetyHistory, type SequencerSafetyTransition, safetyUnsafeWithin, sequencerCheckpointOf, sequencerSnapshot, shouldHoldSequencer, transitionSequencerState } from '../../../src/observation/sequencer/state'
 
 const LIGHT: SequencerCameraCapture = { exposureTime: 60, exposureTimeUnit: 'second', frameType: 'LIGHT', x: 0, y: 0, width: 0, height: 0, subframe: false, binX: 1, binY: 1, frameFormat: '', gain: 0, offset: 0, compressed: false }
 
@@ -164,6 +164,69 @@ describe('logical state', () => {
 		const { calibration } = createSequencerRuntimeState(configuration, STARTED_AT).anchors
 		expect(Object.hasOwn(calibration, '__proto__')).toBe(true)
 		expect(Object.getPrototypeOf(calibration)).toBe(Object.prototype)
+	})
+
+	test('a checkpoint copies the persisted state deeply and restores it into a new runtime without aliasing', () => {
+		const runtime = createSequencerRuntimeState(CONFIGURATION, STARTED_AT)
+		runtime.capture.get('L')!.accepted = 4
+		runtime.scheduler.cursor = 'L'
+		runtime.scheduler.batches.push({ groupId: 'dark', firstOrdinal: 1, size: 1, capture: { ...LIGHT, frameType: 'DARK' }, triggeredBy: 'frame[L][4]' })
+		runtime.anchors.lightExposures = 4
+		runtime.intents.recenter = true
+		runtime.focus = { kind: 'known', referencePosition: 40000 }
+		runtime.meridianFlipAttempts = 1
+		runtime.meridianTransitAt = STARTED_AT + 3600000
+		runtime.consecutiveDiscards = 2
+		runtime.targetAcquired = true
+		const slot = { id: 'frame[L][5]', attempt: 2, discardedTotal: 1, discardBudgetUsed: 1, captureFailures: 0 }
+
+		const checkpoint = sequencerCheckpointOf('session-1', CONFIGURATION, runtime, slot, 7, STARTED_AT + 1)
+		expect(checkpoint).toEqual({
+			version: 1,
+			sessionId: 'session-1',
+			configurationId: 'session',
+			configurationRevision: 1,
+			capture: { L: { accepted: 4, forced: 0, discarded: 0, skipped: 0 }, R: { accepted: 0, forced: 0, discarded: 0, skipped: 0 }, dark: { accepted: 0, forced: 0, discarded: 0, skipped: 0 } },
+			scheduler: runtime.scheduler,
+			anchors: runtime.anchors,
+			intents: { autofocus: false, recenter: true, recoverGuiding: false },
+			focus: { kind: 'known', referencePosition: 40000 },
+			meridianFlipAttempts: 1,
+			meridianTransitAt: STARTED_AT + 3600000,
+			currentSlot: slot,
+			consecutiveDiscards: 2,
+			sequence: 7,
+			updatedAt: STARTED_AT + 1,
+		})
+		expect(checkpoint).not.toHaveProperty('mountRiskObservation')
+		expect(JSON.parse(JSON.stringify(checkpoint))).toEqual(checkpoint)
+
+		// The runtime keeps changing while the checkpoint is written.
+		Object.assign(runtime.scheduler.batches[0], { size: 9 })
+		runtime.anchors.lightExposures = 5
+		runtime.capture.get('L')!.accepted = 5
+		expect(checkpoint).toMatchObject({ scheduler: { batches: [{ size: 1 }] }, anchors: { lightExposures: 4 }, capture: { L: { accepted: 4 } } })
+
+		const restored = createSequencerRuntimeState(CONFIGURATION, STARTED_AT)
+		applySequencerCheckpoint(restored, CONFIGURATION, checkpoint)
+		expect(restored).toMatchObject({ scheduler: checkpoint.scheduler, anchors: checkpoint.anchors, intents: checkpoint.intents, focus: checkpoint.focus, meridianFlipAttempts: 1, meridianTransitAt: STARTED_AT + 3600000, consecutiveDiscards: 2, targetAcquired: false })
+		expect(restored.capture.get('L')).toEqual({ accepted: 4, forced: 0, discarded: 0, skipped: 0 })
+		expect(restored.currentFrame).toBeUndefined()
+		Object.assign(restored.scheduler.batches[0], { size: 3 })
+		restored.intents.autofocus = true
+		expect(checkpoint).toMatchObject({ scheduler: { batches: [{ size: 1 }] }, intents: { autofocus: false } })
+	})
+
+	test('a checkpoint missing a configured group restores it at zero and drops groups the configuration lacks', () => {
+		const runtime = createSequencerRuntimeState(CONFIGURATION, STARTED_AT)
+		const checkpoint = sequencerCheckpointOf('session-1', CONFIGURATION, runtime, undefined, 1, STARTED_AT)
+		const { L } = checkpoint.capture
+		applySequencerCheckpoint(runtime, CONFIGURATION, { ...checkpoint, capture: { L: { ...L, skipped: 2 }, gone: { ...L, accepted: 3 } } })
+
+		expect([...runtime.capture.keys()]).toEqual(['L', 'R', 'dark'])
+		expect(runtime.capture.get('L')).toEqual({ accepted: 0, forced: 0, discarded: 0, skipped: 2 })
+		expect(runtime.capture.get('dark')).toEqual({ accepted: 0, forced: 0, discarded: 0, skipped: 0 })
+		expect(checkpoint).not.toHaveProperty('currentSlot')
 	})
 
 	test('corrective intents only set, never clear', () => {
