@@ -39,8 +39,8 @@ class FakeFocuser {
 	readonly moves: number[] = []
 	// Failure of the move to this position, once.
 	failAt?: { readonly position: number; readonly result: OperationResult<void> }
-	// Whether the next move waits for the cancellation of its scope.
-	hangNext = false
+	// 1-based ordinal of the move that waits for the cancellation of its scope instead of completing.
+	hangAt?: number
 
 	constructor(position: number, min = 0, max = 100000) {
 		this.focuser = { name: 'Fake Focuser', type: 'focuser', connected: true, moving: false, position: { value: position, min, max } } as Focuser
@@ -60,8 +60,7 @@ class FakeFocuser {
 				return result
 			}
 
-			if (this.hangNext) {
-				this.hangNext = false
+			if (this.moves.length === this.hangAt) {
 				const { signal } = scope as OperationContext
 				await new Promise((resolve) => {
 					signal.addEventListener('abort', resolve, { once: true })
@@ -257,13 +256,13 @@ describe('autofocus run', () => {
 
 	test('a cancellation resolves aborted, opens nothing more and leaves the focuser where the cancellation found it', async () => {
 		const { focuser, captures, coordinator, run } = harness()
-		focuser.hangNext = false
+		// The fourth move (after three captures) never completes by itself, so the cancellation always finds it in flight.
+		focuser.hangAt = 4
 		let cancelled = false
 		const handle = coordinator.start('parent', [], (context) => run({}, context))
 
-		await waitUntil(() => captures.length === 3, 5000, 1)
-		focuser.hangNext = true
 		await waitUntil(() => focuser.moves.length === 4, 5000, 1)
+		expect(captures).toHaveLength(3)
 		const moves = focuser.moves.length
 		const capturesBefore = captures.length
 		void handle.cancel('aborted').then(() => {
