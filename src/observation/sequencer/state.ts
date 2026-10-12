@@ -86,6 +86,12 @@ export interface SequencerRuntimeState {
 	trackingStoppedForMeridianProtection: boolean
 	// Whether the session closed the optical path for calibration; after a restart the cover and wheel replace it.
 	opticalPathClosed: boolean
+	// Whether the session resumed (`resume()` out of a hold, or a restart from a checkpoint) since its last successful
+	// autofocus; read by the `afterResume` autofocus trigger, cleared by the next successful autofocus.
+	resumedSinceAutofocus: boolean
+	// Whether the session completed a meridian flip since its last successful autofocus; read by the `afterFlip`
+	// autofocus trigger, cleared by the next successful autofocus.
+	flippedSinceAutofocus: boolean
 	// Monotonic instants (ms) of the last success of each periodic action in this process, derived once from the
 	// persisted wall anchors after a restart; elapsed-time triggers read only these.
 	elapsedAnchors: SequencerElapsedAnchors
@@ -252,6 +258,8 @@ export function createSequencerRuntimeState(configuration: SequencerConfiguratio
 		meridianFlip: createMeridianFlipState(0),
 		trackingStoppedForMeridianProtection: false,
 		opticalPathClosed: false,
+		resumedSinceAutofocus: false,
+		flippedSinceAutofocus: false,
 		elapsedAnchors: {},
 		compensations: [],
 		startedAt: at,
