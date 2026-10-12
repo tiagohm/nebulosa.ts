@@ -32,10 +32,11 @@ import { SafetyMonitorSimulator } from '../../../src/devices/indi/simulator/safe
 import { WheelSimulator } from '../../../src/devices/indi/simulator/wheel'
 import type { PropertyState } from '../../../src/devices/indi/types'
 import { DeviceLifecycle } from '../../../src/devices/orchestration/device.lifecycle'
-import { failedOperationResult, OperationCoordinator, type OperationResult, successfulOperationResult } from '../../../src/devices/orchestration/operation'
-import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
+import { failedOperationResult, OperationCoordinator, type OperationFailureReason, type OperationHandle, type OperationResult, type OperationScope, successfulOperationResult } from '../../../src/devices/orchestration/operation'
+import { ResourceArbiter, type ResourceReservation, type ResourceReservationOwner, resourceKey } from '../../../src/devices/orchestration/resource'
 import { CameraCapturer } from '../../../src/devices/runners/camera.capture'
 import { deg, hour } from '../../../src/math/units/angle'
+import type { SequencerEvent, SequencerListener, SequencerTaskId } from '../../../src/observation/sequencer/sequencer'
 import { waitUntil } from '../../util'
 
 // Shared infrastructure of the Sequencer tests: a manual clock over the wall and monotonic domains, the INDI
@@ -691,5 +692,221 @@ export function assertSequencerInvariants(log: readonly SequencerLogEntry[], opt
 		}
 
 		if (entry.manager === 'camera' && entry.command === 'startExposure') exposing.add(entry.device)
+	}
+}
+
+// Root operation of the reservation as the runner recorder saw it.
+export interface RunnerRootEntry {
+	readonly kind: 'root'
+	readonly sequence: number
+	readonly event: 'start' | 'cancel' | 'end'
+	// Operation id.
+	readonly id: string
+	// Operation kind, such as `sequencer.autofocus` or `sequencer.compensate.focuserPosition`.
+	readonly operation: string
+	// Reason of a cancel, or of a failed end.
+	readonly reason?: OperationFailureReason
+	// Detail of a failed end.
+	readonly error?: string
+	// Whether an ended root succeeded.
+	readonly ok?: boolean
+}
+
+// Drain of the reservation: `terminal` is cancelByReservationOwner, otherwise drainByReservationOwner.
+export interface RunnerDrainEntry {
+	readonly kind: 'drain'
+	readonly sequence: number
+	readonly event: 'begin' | 'end'
+	readonly terminal: boolean
+}
+
+// Release of the session reservation.
+export interface RunnerReleaseEntry {
+	readonly kind: 'release'
+	readonly sequence: number
+}
+
+// Event of the session.
+export interface RunnerEventEntry {
+	readonly kind: 'event'
+	readonly sequence: number
+	readonly event: SequencerEvent
+}
+
+// Entry of the runner log.
+export type RunnerLogEntry = RunnerRootEntry | RunnerDrainEntry | RunnerReleaseEntry | RunnerEventEntry
+
+// Recorder of one runner: the entries in order, the listener to give the session, and the call that stops recording.
+export interface RunnerRecorder extends Disposable {
+	readonly entries: RunnerLogEntry[]
+	readonly listener: SequencerListener
+	// Owner of the first reservation the session took; absent before it.
+	readonly reservationOwner?: ResourceReservationOwner
+}
+
+// Records, in one sequence, the roots the session opens in its reserved scopes (start, cancel through the handle,
+// end with its result), the drains of the reservation, the release of the reservation and the session events, by
+// wrapping the coordinator and its arbiter. The wrappers only observe.
+export function recordRunner(coordinator: OperationCoordinator, sequence: TestSequence = createTestSequence()): RunnerRecorder {
+	const entries: RunnerLogEntry[] = []
+	let owner: ResourceReservationOwner | undefined
+	const restores: VoidFunction[] = []
+	const push = (entry: Omit<RunnerRootEntry, 'sequence'> | Omit<RunnerDrainEntry, 'sequence'> | Omit<RunnerReleaseEntry, 'sequence'>) => entries.push({ ...entry, sequence: sequence.next() })
+
+	const wrapHandle = <T>(handle: OperationHandle<T>): OperationHandle<T> => {
+		const operation = handle.kind
+		push({ kind: 'root', event: 'start', id: handle.id, operation })
+		void handle.result.then((result) => push({ kind: 'root', event: 'end', id: handle.id, operation, ok: result.ok, ...(!result.ok && { reason: result.reason, error: result.error }) }))
+
+		return Object.freeze({
+			...handle,
+			cancel: (reason: OperationFailureReason = 'aborted') => {
+				push({ kind: 'root', event: 'cancel', id: handle.id, operation, reason })
+				return handle.cancel(reason)
+			},
+		})
+	}
+
+	const reservedScope = coordinator.reservedScope.bind(coordinator)
+	const scopeSpy = spyOn(coordinator, 'reservedScope').mockImplementation((reservation: ResourceReservation): OperationScope => {
+		const scope = reservedScope(reservation)
+		return { start: (kind, resources, executor) => wrapHandle(scope.start(kind, resources, executor)) }
+	})
+	restores.push(() => scopeSpy.mockRestore())
+
+	const drain = coordinator.drainByReservationOwner.bind(coordinator)
+	const drainSpy = spyOn(coordinator, 'drainByReservationOwner').mockImplementation(async (...args: Parameters<typeof drain>) => {
+		push({ kind: 'drain', event: 'begin', terminal: false })
+		await drain(...args)
+		push({ kind: 'drain', event: 'end', terminal: false })
+	})
+	restores.push(() => drainSpy.mockRestore())
+
+	const cancel = coordinator.cancelByReservationOwner.bind(coordinator)
+	const cancelSpy = spyOn(coordinator, 'cancelByReservationOwner').mockImplementation(async (...args: Parameters<typeof cancel>) => {
+		push({ kind: 'drain', event: 'begin', terminal: true })
+		await cancel(...args)
+		push({ kind: 'drain', event: 'end', terminal: true })
+	})
+	restores.push(() => cancelSpy.mockRestore())
+
+	const reserve = coordinator.arbiter.reserve.bind(coordinator.arbiter)
+	const reserveSpy = spyOn(coordinator.arbiter, 'reserve').mockImplementation((...args: Parameters<typeof reserve>) => {
+		const reserved = reserve(...args)
+		if (!reserved.ok) return reserved
+		owner ??= args[0]
+		const { reservation } = reserved
+		let released = false
+
+		return {
+			ok: true,
+			reservation: {
+				ownerId: reservation.ownerId,
+				token: reservation.token,
+				get resources() {
+					return reservation.resources
+				},
+				release: () => {
+					if (!released) push({ kind: 'release' })
+					released = true
+					reservation.release()
+				},
+			},
+		}
+	})
+	restores.push(() => reserveSpy.mockRestore())
+
+	return {
+		entries,
+		get reservationOwner() {
+			return owner
+		},
+		listener: (event) => entries.push({ kind: 'event', sequence: sequence.next(), event }),
+		[Symbol.dispose]: () => {
+			for (const restore of restores.toReversed()) restore()
+		},
+	}
+}
+
+// Shutdown tasks, whose roots are never cancelled by a stop.
+const SHUTDOWN_TASKS = new Set<string>(['pauseGuiding', 'stopTracking', 'stopGuiding', 'closeCover', 'parkMount', 'closeOrParkDome', 'turnOffFlatPanel', 'warmCamera'] satisfies SequencerTaskId[])
+
+// Whether a root kind is a shutdown step.
+function isShutdownRoot(operation: string) {
+	return operation.startsWith('sequencer.') && SHUTDOWN_TASKS.has(operation.slice('sequencer.'.length))
+}
+
+// Whether a root kind is a run task: neither a compensation, a protection nor a shutdown step.
+function isRunRoot(operation: string) {
+	return operation.startsWith('sequencer.') && !operation.startsWith('sequencer.compensate.') && !operation.startsWith('sequencer.protect.') && !isShutdownRoot(operation)
+}
+
+// What the runner oracle needs to know about the run.
+export interface RunnerOracleOptions {
+	// Whether the session was disposed, which may cancel the shutdown.
+	readonly disposed?: boolean
+}
+
+// Checks the invariants a runner log can prove, and throws an Error starting with the invariant id on the first
+// violation:
+// - I12: one terminal event at most, after the single release; the release comes after the terminal drain and
+//   after every root ended; no root starts after it;
+// - I13: no shutdown root is cancelled for anything but its timeout, unless the session was disposed;
+// - I17: every compensation root starts with no run task root alive, before any shutdown root and before the release;
+// - I42 (drain half): no drainByReservationOwner begins while a cancelled run task root has not ended yet.
+export function assertRunnerInvariants(log: readonly RunnerLogEntry[], options: RunnerOracleOptions = {}) {
+	const entries = [...log].sort((a, b) => a.sequence - b.sequence)
+	const started = entries.some((entry) => entry.kind === 'event' && entry.event.type === 'sessionStarted')
+	const alive = new Map<string, string>()
+	const cancelled = new Set<string>()
+	let released = false
+	let terminalDrained = false
+	let shutdownStarted = false
+	let terminals = 0
+
+	for (const entry of entries) {
+		switch (entry.kind) {
+			case 'root':
+				if (entry.event === 'start') {
+					if (released) throw new Error(`I12: root ${entry.operation} (#${entry.sequence}) started after the release`)
+
+					if (entry.operation.startsWith('sequencer.compensate.')) {
+						const run = [...alive.values()].find(isRunRoot)
+						if (run !== undefined) throw new Error(`I17: compensation ${entry.operation} (#${entry.sequence}) started while ${run} is alive`)
+						if (shutdownStarted) throw new Error(`I17: compensation ${entry.operation} (#${entry.sequence}) started after the shutdown`)
+					}
+
+					if (isShutdownRoot(entry.operation)) shutdownStarted = true
+					alive.set(entry.id, entry.operation)
+				} else if (entry.event === 'cancel') {
+					if (isShutdownRoot(entry.operation) && entry.reason !== 'timeout' && options.disposed !== true) throw new Error(`I13: shutdown root ${entry.operation} (#${entry.sequence}) cancelled with ${entry.reason}`)
+					if (alive.has(entry.id)) cancelled.add(entry.id)
+				} else {
+					alive.delete(entry.id)
+					cancelled.delete(entry.id)
+				}
+				break
+			case 'drain':
+				if (entry.event === 'begin' && !entry.terminal) {
+					const pending = [...cancelled].map((id) => alive.get(id) ?? '').find(isRunRoot)
+					if (pending !== undefined) throw new Error(`I42: drain (#${entry.sequence}) began before the cancelled root ${pending} ended`)
+				}
+				if (entry.event === 'end' && entry.terminal) terminalDrained = true
+				break
+			case 'release':
+				if (released) throw new Error(`I12: reservation released twice (#${entry.sequence})`)
+				if (!terminalDrained) throw new Error(`I12: reservation released (#${entry.sequence}) before the terminal drain`)
+				if (alive.size > 0) throw new Error(`I12: reservation released (#${entry.sequence}) while ${[...alive.values()].join(', ')} is alive`)
+				released = true
+				break
+			case 'event': {
+				const { type } = entry.event
+
+				if (type === 'sessionCompleted' || type === 'sessionStopped' || type === 'sessionFailed') {
+					if (++terminals > 1) throw new Error(`I12: second terminal event ${type} (#${entry.sequence})`)
+					if (started && !released) throw new Error(`I12: terminal event ${type} (#${entry.sequence}) before the release`)
+				}
+			}
+		}
 	}
 }

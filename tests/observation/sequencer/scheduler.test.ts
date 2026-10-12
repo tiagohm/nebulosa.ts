@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { mulberry32, type Random } from '../../../src/math/numerical/random'
-import { completedSlotsOf, consumedSlotsOf, enqueueCalibrationBatch, type SequencerTriggerEvent, selectNextFrame, sequencerFrameSlotId } from '../../../src/observation/sequencer/scheduler'
+import { completedSlotsOf, consumedSlotsOf, enqueueCalibrationBatch, type SequencerTriggerEvent, selectNextFrame, selectNextFrameOnStop, sequencerFrameSlotId } from '../../../src/observation/sequencer/scheduler'
 // oxfmt-ignore
 import type { SequencerCameraCapture, SequencerCaptureConfiguration, SequencerCaptureOrder, SequencerConfiguration, SequencerFrameGroup, SequencerFrameGroupTrigger, SequencerFrameSlot, SequencerScheduledFrameGroup, SequencerSchedulerState, SequencerTriggeredFrameGroup } from '../../../src/observation/sequencer/sequencer'
 import { createSequencerCaptureProgress, createSequencerSchedulerState, type SequencerCaptureProgress } from '../../../src/observation/sequencer/state'
@@ -434,6 +434,47 @@ describe('triggered groups', () => {
 		expect(enqueueCalibrationBatch(restored.scheduler, restored.progress, dark, light)).toMatchObject({ type: 'triggerFired', slots: 1 })
 		expect(enqueueCalibrationBatch(restored.scheduler, restored.progress, dark, light)).toMatchObject({ type: 'triggerSuppressed' })
 		expect(drain(restored)).toEqual(['frame[D][2]', 'frame[D][3]', 'frame[L][2]', 'frame[L][3]'])
+	})
+})
+
+describe('graceful stop', () => {
+	const groups = () => [scheduled('L', 3), triggered('after', { kind: 'afterFrames', frames: 1 }), triggered('darks', { kind: 'sessionEnd', onStop: true }, { batchSize: 2, maxFrames: 2 }), triggered('biases', { kind: 'sessionEnd', onStop: false }, { capture: BIAS })]
+
+	test('selects only the session-end groups with onStop, enqueued once, and keeps the other batches queued', () => {
+		const session = sessionOf(captureOf('sequential', groups()))
+		const light = select(session)!
+		expect(enqueueCalibrationBatch(session.scheduler, session.progress, session.capture.groups[1] as SequencerTriggeredFrameGroup, light)?.type).toBe('triggerFired')
+		complete(session, light, 'accept')
+
+		const ids: string[] = []
+
+		for (let slot = selectNextFrameOnStop(session.capture, session.scheduler, session.progress, session.current, session.events); slot !== undefined; slot = selectNextFrameOnStop(session.capture, session.scheduler, session.progress, session.current, session.events)) {
+			ids.push(slot.id)
+			complete(session, slot, 'accept')
+		}
+
+		expect(ids).toEqual(['frame[darks][1]', 'frame[darks][2]'])
+		expect(session.events.map((event) => event.groupId)).toEqual(['darks'])
+		expect(session.scheduler.batches.map((batch) => batch.groupId)).toEqual(['after'])
+		expect(session.scheduler.sessionEndQueued).toBeTrue()
+	})
+
+	test('retries a pending onStop slot with a new attempt, never a scheduled one', () => {
+		const session = sessionOf(captureOf('sequential', groups()))
+		const light = select(session)!
+		expect(selectNextFrameOnStop(session.capture, session.scheduler, session.progress, { ...light, captureFailures: 1 })?.id).toBe('frame[darks][1]')
+
+		const dark = selectNextFrameOnStop(session.capture, session.scheduler, session.progress)!
+		expect(selectNextFrameOnStop(session.capture, session.scheduler, session.progress, { ...dark, captureFailures: 1 })).toMatchObject({ id: 'frame[darks][1]', attempt: 2, captureFailures: 1 })
+	})
+
+	test('after the natural end, a stop keeps only the onStop batches already enqueued', () => {
+		const session = sessionOf(captureOf('sequential', [scheduled('L', 0), triggered('darks', { kind: 'sessionEnd', onStop: true }), triggered('biases', { kind: 'sessionEnd', onStop: false }, { capture: BIAS })]))
+		expect(select(session)?.id).toBe('frame[darks][1]')
+		expect(selectNextFrameOnStop(session.capture, session.scheduler, session.progress)?.id).toBe('frame[darks][1]')
+		complete(session, selectNextFrameOnStop(session.capture, session.scheduler, session.progress)!, 'accept')
+		expect(selectNextFrameOnStop(session.capture, session.scheduler, session.progress)).toBeUndefined()
+		expect(session.events.map((event) => event.groupId)).toEqual(['darks', 'biases'])
 	})
 })
 

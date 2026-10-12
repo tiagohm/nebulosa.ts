@@ -1,16 +1,16 @@
 // oxfmt-ignore
-import type { SequencerCameraCapture, SequencerCaptureConfiguration, SequencerEventBody, SequencerFrameGroup, SequencerFrameGroupTrigger, SequencerFrameSlot, SequencerScheduledFrameGroup, SequencerSchedulerState, SequencerTriggeredFrameGroup } from './sequencer'
+import type { SequencerCalibrationBatch, SequencerCameraCapture, SequencerCaptureConfiguration, SequencerEventBody, SequencerFrameGroup, SequencerFrameGroupTrigger, SequencerFrameSlot, SequencerScheduledFrameGroup, SequencerSchedulerState, SequencerTriggeredFrameGroup } from './sequencer'
 import type { SequencerCaptureProgress } from './state'
 
 // Pure frame selection of the Sequencer: which slot the next safe point prepares and exposes. It applies a fixed
 // order (the pending slot of a retake or retry, then the calibration batches in fire order, then the scheduled
-// groups by `capture.order`, then the session-end batches) and builds stable slot identities `frame[{groupId}][{ordinal}]`
-// that never depend on array positions, counters, file names or timestamps. The persisted scheduler state (cursor,
-// credits, batch queue, session-boundary flags) is mutated in place; per-group progress is only read. A slot is
-// done when it is accepted, forced or skipped, and the slots of a group are done in ordinal order, so the next
-// ordinal of a group is always derived from its progress and the queue, never from a separate counter. Every
-// selection is O(groups + batches) and allocates the returned slot plus small per-group scratch; nothing here
-// touches devices, clocks or storage.
+// groups by `capture.order`, then the session-end batches; after a graceful stop only the session-end groups with
+// `onStop`) and builds stable slot identities `frame[{groupId}][{ordinal}]` that never depend on array positions,
+// counters, file names or timestamps. The persisted scheduler state (cursor, credits, batch queue, session-boundary
+// flags) is mutated in place; per-group progress is only read. A slot is done when it is accepted, forced or
+// skipped, and the slots of a group are done in ordinal order, so the next ordinal of a group is always derived
+// from its progress and the queue, never from a separate counter. Every selection is O(groups + batches) and
+// allocates the returned slot plus small per-group scratch; nothing here touches devices, clocks or storage.
 
 // Trigger events produced when a calibration batch is enqueued, in the exact shape the runner emits.
 export type SequencerTriggerEvent = Extract<SequencerEventBody, { readonly type: 'triggerFired' | 'triggerSuppressed' }>
@@ -94,6 +94,52 @@ export function selectNextFrame(capture: SequencerCaptureConfiguration, schedule
 	return nextCalibrationSlot(scheduler, progress)
 }
 
+// Selects the slot the next safe point prepares once a graceful stop was requested: only the 'sessionEnd' groups
+// with `onStop` still produce frames, and nothing else is ever selected (no scheduled slot, no other batch).
+// 1. `current`, when it belongs to such a group, returned with `attempt + 1` like a retake or retry;
+// 2. the 'sessionEnd' batches are enqueued once if the scheduled groups were not exhausted yet, for the `onStop`
+//    groups only (a group already enqueued at the natural end is never enqueued again);
+// 3. the next pending slot of the `onStop` batches, in fire order, skipping every other batch, which stays queued;
+// 4. undefined: the session shuts down.
+// Mutates `scheduler` in place (session-end flag and batches, finished `onStop` batches removed); `progress` and
+// `current` are only read. The trigger events of the enqueued batches are appended to `events` when given.
+export function selectNextFrameOnStop(capture: SequencerCaptureConfiguration, scheduler: SequencerSchedulerState, progress: SequencerCaptureProgress, current?: SequencerFrameSlot, events?: SequencerTriggerEvent[]): SequencerFrameSlot | undefined {
+	const onStop = new Set<string>()
+
+	for (const group of capture.groups) {
+		if (group.kind === 'triggered' && group.enabled && group.trigger.kind === 'sessionEnd' && group.trigger.onStop) onStop.add(group.id)
+	}
+
+	if (current !== undefined && onStop.has(current.groupId)) return { ...current, attempt: current.attempt + 1 }
+
+	if (!scheduler.sessionEndQueued) {
+		scheduler.sessionEndQueued = true
+
+		for (const group of capture.groups) {
+			if (group.kind !== 'triggered' || !onStop.has(group.id)) continue
+			const event = enqueueCalibrationBatch(scheduler, progress, group)
+			if (event !== undefined) events?.push(event)
+		}
+	}
+
+	const { batches } = scheduler
+
+	for (let i = 0; i < batches.length;) {
+		const batch = batches[i]
+
+		if (!onStop.has(batch.groupId)) {
+			i++
+			continue
+		}
+
+		const slot = pendingBatchSlot(batch, progress)
+		if (slot !== undefined) return slot
+		batches.splice(i, 1)
+	}
+
+	return undefined
+}
+
 // Camera settings of a calibration slot inheriting from the light that fired it: every setting of the light, the
 // frame type of the group. A fresh object, so later changes of the light never alter the batch.
 function calibrationCapture(light: SequencerCameraCapture, group: SequencerCameraCapture): SequencerCameraCapture {
@@ -115,18 +161,20 @@ function nextCalibrationSlot(scheduler: SequencerSchedulerState, progress: Seque
 	const { batches } = scheduler
 
 	while (batches.length > 0) {
-		const batch = batches[0]
-		const ordinal = Math.max(batch.firstOrdinal, completedSlotsOf(progress, batch.groupId) + 1)
-
-		if (ordinal < batch.firstOrdinal + batch.size) {
-			const { groupId, capture, filter, triggeredBy } = batch
-			return { id: sequencerFrameSlotId(groupId, ordinal), groupId, kind: 'triggered', ordinal, attempt: 1, discardedTotal: 0, discardBudgetUsed: 0, captureFailures: 0, capture, ...(filter !== undefined && { filter }), ...(triggeredBy !== undefined && { triggeredBy }) }
-		}
-
+		const slot = pendingBatchSlot(batches[0], progress)
+		if (slot !== undefined) return slot
 		batches.shift()
 	}
 
 	return undefined
+}
+
+// Fresh first attempt of the next pending slot of a batch, or undefined once every slot of the batch is done.
+function pendingBatchSlot(batch: SequencerCalibrationBatch, progress: SequencerCaptureProgress): SequencerFrameSlot | undefined {
+	const ordinal = Math.max(batch.firstOrdinal, completedSlotsOf(progress, batch.groupId) + 1)
+	if (ordinal >= batch.firstOrdinal + batch.size) return undefined
+	const { groupId, capture, filter, triggeredBy } = batch
+	return { id: sequencerFrameSlotId(groupId, ordinal), groupId, kind: 'triggered', ordinal, attempt: 1, discardedTotal: 0, discardBudgetUsed: 0, captureFailures: 0, capture, ...(filter !== undefined && { filter }), ...(triggeredBy !== undefined && { triggeredBy }) }
 }
 
 // Fresh first attempt of the slot `ordinal` of a scheduled group.
