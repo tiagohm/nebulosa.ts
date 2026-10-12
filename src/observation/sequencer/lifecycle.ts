@@ -12,7 +12,7 @@ import type { DeviceHandler, DeviceManager } from '../../devices/indi/manager/de
 import { type FailedOperationResult, failedOperationResult, type OperationResult, successfulOperationResult } from '../../devices/orchestration/operation'
 import { abortReason } from '../../devices/orchestration/operation.wait'
 import type { Angle } from '../../math/units/angle'
-import type { SequencerContext, SequencerShutdownTask, SequencerTask, SequencerTaskPolicy, SequencerTaskResult } from './runner'
+import type { SequencerContext, SequencerFailedTaskResult, SequencerShutdownTask, SequencerTask, SequencerTaskPolicy, SequencerTaskResult } from './runner'
 // oxfmt-ignore
 import { DEFAULT_SEQUENCER_MERIDIAN_FLIP, type SequencerClock, type SequencerConfiguration, type SequencerCoolingConfiguration, type SequencerMeridianFlipConfiguration, type SequencerShutdownConfiguration, type SequencerShutdownStepPolicy } from './sequencer'
 
@@ -188,18 +188,18 @@ export function coolCameraTask(services: SequencerLifecycleServices, cooling: Se
 		run: async (context) => {
 			const { cameraCommander, thermometerManager } = services
 			const { camera } = context.devices
-			if (cameraCommander === undefined) return missing('camera commander')
-			if (cooling.waitForTemperature && thermometerManager === undefined) return missing('thermometer manager')
-			if (!camera.connected) return failed(failedOperationResult('disconnected'))
+			if (cameraCommander === undefined) return missingDependency('camera commander')
+			if (cooling.waitForTemperature && thermometerManager === undefined) return missingDependency('thermometer manager')
+			if (!camera.connected) return failedTask(failedOperationResult('disconnected'))
 			if (!camera.canSetTemperature) return configurationFailure(`camera ${camera.name} cannot set its temperature`)
 
 			if (camera.hasCoolerControl && !camera.cooler) {
 				const cooler = await cameraCommander.cooler(context.scope, camera, true)
-				if (!cooler.ok) return failed(cooler)
+				if (!cooler.ok) return failedTask(cooler)
 			}
 
 			const setpoint = await cameraCommander.temperature(context.scope, camera, cooling.setpoint)
-			if (!setpoint.ok) return failed(setpoint)
+			if (!setpoint.ok) return failedTask(setpoint)
 			if (!cooling.waitForTemperature) return DONE
 
 			return taskResult(await waitForStableTemperature(camera, cameraTemperatureUpdates(cameraCommander.cameraManager, thermometerManager!, camera), cooling, context.clock, context.signal))
@@ -216,12 +216,12 @@ export function openDomeTask(services: SequencerLifecycleServices): SequencerTas
 		run: async (context) => {
 			const { domeCommander } = services
 			const { dome } = context.devices
-			if (dome === undefined) return missing('dome')
-			if (domeCommander === undefined) return missing('dome commander')
+			if (dome === undefined) return missingDependency('dome')
+			if (domeCommander === undefined) return missingDependency('dome commander')
 
 			if (dome.parked || dome.parking) {
 				const unparked = await domeCommander.unpark(context.scope, dome)
-				if (!unparked.ok) return failed(unparked)
+				if (!unparked.ok) return failedTask(unparked)
 			}
 
 			if (dome.hasShutter && dome.shutterState !== 'OPEN') return taskResult(await domeCommander.openShutter(context.scope, dome))
@@ -238,8 +238,8 @@ export function openCoverTask(services: SequencerLifecycleServices): SequencerTa
 		run: async (context) => {
 			const { coverCommander } = services
 			const { cover } = context.devices
-			if (cover === undefined) return missing('cover')
-			if (coverCommander === undefined) return missing('cover commander')
+			if (cover === undefined) return missingDependency('cover')
+			if (coverCommander === undefined) return missingDependency('cover commander')
 			return taskResult(await coverCommander.unpark(context.scope, cover))
 		},
 	}
@@ -254,8 +254,8 @@ export function unparkMountTask(services: SequencerLifecycleServices): Sequencer
 		run: async (context) => {
 			const { mountCommander } = services
 			const { mount } = context.devices
-			if (mount === undefined) return missing('mount')
-			if (mountCommander === undefined) return missing('mount commander')
+			if (mount === undefined) return missingDependency('mount')
+			if (mountCommander === undefined) return missingDependency('mount commander')
 			return taskResult(await mountCommander.unpark(context.scope, mount))
 		},
 	}
@@ -271,8 +271,8 @@ export function configureTrackingTask(services: SequencerLifecycleServices, mode
 		run: async (context) => {
 			const { mountCommander } = services
 			const { mount } = context.devices
-			if (mount === undefined) return missing('mount')
-			if (mountCommander === undefined) return missing('mount commander')
+			if (mount === undefined) return missingDependency('mount')
+			if (mountCommander === undefined) return missingDependency('mount commander')
 			return await selectTrackMode(context, mountCommander, mount, mode)
 		},
 	}
@@ -292,7 +292,7 @@ export function ensureTrackingTask(services: SequencerLifecycleServices, configu
 		shouldRun: ({ configuration, devices }) => devices.mount !== undefined && (configuration.target !== undefined || configuration.meridianFlip?.enabled === true),
 		run: async (context) => {
 			const { mountCommander } = services
-			if (mountCommander === undefined) return missing('mount commander')
+			if (mountCommander === undefined) return missingDependency('mount commander')
 			return await reconcileTracking(context, mountCommander)
 		},
 		policy,
@@ -308,9 +308,9 @@ export function ensureTrackingTask(services: SequencerLifecycleServices, configu
 export async function reconcileTracking(context: SequencerContext, mountCommander: MountCommander): Promise<SequencerTaskResult> {
 	const { configuration, devices, state, clock } = context
 	const { mount } = devices
-	if (mount === undefined) return missing('mount')
-	if (!mount.connected) return failed(failedOperationResult('disconnected'))
-	if (mount.parked || mount.parking) return failed(failedOperationResult('unexpectedState', `mount ${mount.name} is parked`))
+	if (mount === undefined) return missingDependency('mount')
+	if (!mount.connected) return failedTask(failedOperationResult('disconnected'))
+	if (mount.parked || mount.parking) return failedTask(failedOperationResult('unexpectedState', `mount ${mount.name} is parked`))
 
 	const mode = await selectTrackMode(context, mountCommander, mount, 'SIDEREAL')
 	if (!mode.ok || mount.tracking) return mode
@@ -325,9 +325,9 @@ export async function reconcileTracking(context: SequencerContext, mountCommande
 			context.emit({ type: 'trackingDeferred', reason: 'meridianZone', mountHourAngle: hourAngle! })
 			return DONE
 		case 'blocked':
-			return failed(failedOperationResult('unexpectedState', `mount ${mount.name} is on its pre-flip side past the graceful meridian deadline; tracking stays off`))
+			return failedTask(failedOperationResult('unexpectedState', `mount ${mount.name} is on its pre-flip side past the graceful meridian deadline; tracking stays off`))
 		case 'unobserved':
-			return failed(failedOperationResult('unexpectedState', `mount ${mount.name} publishes no site or position; tracking stays off`))
+			return failedTask(failedOperationResult('unexpectedState', `mount ${mount.name} publishes no site or position; tracking stays off`))
 	}
 }
 
@@ -341,7 +341,7 @@ export function stopTrackingTask(services: SequencerLifecycleServices, policy: S
 		run: async (context) => {
 			const { mountCommander } = services
 			const { mount } = context.devices
-			if (mountCommander === undefined) return missing('mount commander')
+			if (mountCommander === undefined) return missingDependency('mount commander')
 			const { meridianFlip, shutdown } = context.configuration
 			const timeout = meridianFlip?.enabled === true ? (meridianFlip.hardProtection?.trackingTimeout ?? DEFAULT_SEQUENCER_MERIDIAN_FLIP.hardProtection.trackingTimeout) : shutdown.stepTimeout
 			return taskResult(await mountCommander.setTracking(context.scope, mount!, false, { timeout: timeout * 1000 }))
@@ -359,8 +359,8 @@ export function closeCoverTask(services: SequencerLifecycleServices, policy: Seq
 		run: async (context) => {
 			const { coverCommander } = services
 			const { cover } = context.devices
-			if (cover === undefined) return missing('cover')
-			if (coverCommander === undefined) return missing('cover commander')
+			if (cover === undefined) return missingDependency('cover')
+			if (coverCommander === undefined) return missingDependency('cover commander')
 			return taskResult(await coverCommander.park(context.scope, cover, { timeout: stepTimeout(context) }))
 		},
 		policy,
@@ -375,8 +375,8 @@ export function parkMountTask(services: SequencerLifecycleServices, policy: Sequ
 		run: async (context) => {
 			const { mountCommander } = services
 			const { mount } = context.devices
-			if (mount === undefined) return missing('mount')
-			if (mountCommander === undefined) return missing('mount commander')
+			if (mount === undefined) return missingDependency('mount')
+			if (mountCommander === undefined) return missingDependency('mount commander')
 			return taskResult(await mountCommander.park(context.scope, mount, { timeout: stepTimeout(context) }))
 		},
 		policy,
@@ -393,8 +393,8 @@ export function closeOrParkDomeTask(services: SequencerLifecycleServices, policy
 		run: async (context) => {
 			const { domeCommander } = services
 			const { dome } = context.devices
-			if (dome === undefined) return missing('dome')
-			if (domeCommander === undefined) return missing('dome commander')
+			if (dome === undefined) return missingDependency('dome')
+			if (domeCommander === undefined) return missingDependency('dome commander')
 
 			const timeout = stepTimeout(context)
 			let failure: FailedOperationResult | undefined
@@ -410,7 +410,7 @@ export function closeOrParkDomeTask(services: SequencerLifecycleServices, policy
 				if (!parked.ok) failure ??= parked
 			}
 
-			return failure === undefined ? DONE : failed(failure)
+			return failure === undefined ? DONE : failedTask(failure)
 		},
 		policy,
 	}
@@ -424,8 +424,8 @@ export function turnOffFlatPanelTask(services: SequencerLifecycleServices, polic
 		run: async (context) => {
 			const { flatPanelCommander } = services
 			const { flatPanel } = context.devices
-			if (flatPanel === undefined) return missing('flat panel')
-			if (flatPanelCommander === undefined) return missing('flat panel commander')
+			if (flatPanel === undefined) return missingDependency('flat panel')
+			if (flatPanelCommander === undefined) return missingDependency('flat panel commander')
 			return taskResult(await flatPanelCommander.disable(context.scope, flatPanel))
 		},
 		policy,
@@ -440,7 +440,7 @@ export function warmCameraTask(services: SequencerLifecycleServices, policy: Seq
 		shouldRun: ({ devices: { camera } }) => !camera.connected || (camera.hasCoolerControl && camera.cooler),
 		run: async (context) => {
 			const { cameraCommander } = services
-			if (cameraCommander === undefined) return missing('camera commander')
+			if (cameraCommander === undefined) return missingDependency('camera commander')
 			return taskResult(await cameraCommander.cooler(context.scope, context.devices.camera, false))
 		},
 		policy,
@@ -516,21 +516,21 @@ function stepTimeout(context: SequencerContext) {
 }
 
 // Task result of a commander result.
-function taskResult(result: OperationResult<unknown>): SequencerTaskResult {
-	return result.ok ? DONE : failed(result)
+export function taskResult(result: OperationResult<unknown>): SequencerTaskResult {
+	return result.ok ? DONE : failedTask(result)
 }
 
 // Operation failure of a failed commander result.
-function failed(result: FailedOperationResult): SequencerTaskResult {
+export function failedTask(result: FailedOperationResult): SequencerFailedTaskResult {
 	return { ok: false, failure: result.error === undefined ? { kind: 'operation', reason: result.reason } : { kind: 'operation', reason: result.reason, detail: result.error } }
 }
 
 // Configuration failure of a task that cannot run with the given devices or services.
-function configurationFailure(detail: string): SequencerTaskResult {
+export function configurationFailure(detail: string): SequencerFailedTaskResult {
 	return { ok: false, failure: { kind: 'configuration', detail } }
 }
 
 // Configuration failure of a missing device or commander.
-function missing(what: string) {
+export function missingDependency(what: string) {
 	return configurationFailure(`no ${what} for the task`)
 }

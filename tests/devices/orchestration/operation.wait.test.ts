@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { failedOperationResult, successfulOperationResult } from '../../../src/devices/orchestration/operation'
-import { abortableDelay, settleWithSignal, settlesWithin, waitForDeviceState } from '../../../src/devices/orchestration/operation.wait'
+import { failedOperationResult, type OperationResult, successfulOperationResult } from '../../../src/devices/orchestration/operation'
+import { abortableDelay, awaitCooperativeJob, type CooperativeJobHealth, type CooperativeJobOutcome, settleWithSignal, settlesWithin, waitForDeviceState } from '../../../src/devices/orchestration/operation.wait'
 
 function rejectUnknown(value: unknown): Promise<never> {
 	const rejected = Promise.withResolvers<never>()
@@ -503,5 +503,170 @@ describe('operation waits', () => {
 		} finally {
 			unhandled.dispose()
 		}
+	})
+})
+
+// Delays that only resolve when the test advances time, in deadline order.
+function manualDelays() {
+	let now = 0
+	const pending: { deadline: number; resolve: (result: OperationResult<void>) => void; signal: AbortSignal; abort: VoidFunction }[] = []
+
+	const delay = (ms: number, signal: AbortSignal) => {
+		if (signal.aborted) return Promise.resolve<OperationResult<void>>(failedOperationResult('aborted'))
+		const { promise, resolve } = Promise.withResolvers<OperationResult<void>>()
+		const entry = {
+			deadline: now + ms,
+			resolve,
+			signal,
+			abort: () => {
+				pending.splice(pending.indexOf(entry), 1)
+				resolve(failedOperationResult('aborted'))
+			},
+		}
+		signal.addEventListener('abort', entry.abort, { once: true })
+		pending.push(entry)
+		pending.sort((a, b) => a.deadline - b.deadline)
+		return promise
+	}
+
+	const advance = async (ms: number) => {
+		const target = now + ms
+		while (pending.length > 0 && pending[0].deadline <= target) {
+			const entry = pending.shift()!
+			now = entry.deadline
+			entry.signal.removeEventListener('abort', entry.abort)
+			entry.resolve(successfulOperationResult(undefined))
+			await flush()
+		}
+		now = target
+		await flush()
+	}
+
+	return { delay, advance, pending: () => pending.length }
+}
+
+async function flush() {
+	for (let i = 0; i < 10; i++) await Promise.resolve()
+}
+
+// Job that never looks at its signal and ends only when the test releases it.
+function stubbornJob<T>() {
+	const { promise, resolve } = Promise.withResolvers<T>()
+	let calls = 0
+	let signal: AbortSignal | undefined
+	const job = (received: AbortSignal) => {
+		calls++
+		signal = received
+		return promise
+	}
+	return { job, release: resolve, calls: () => calls, signal: () => signal }
+}
+
+describe('cooperative jobs', () => {
+	test('a job that settles first ends with its value or its rejection; a synchronous throw is a rejection', async () => {
+		const { delay, pending } = manualDelays()
+		const options = { signal: new AbortController().signal, timeout: 1000, abortGrace: 500, delay }
+
+		expect(await awaitCooperativeJob(() => Promise.resolve(42), options)).toEqual({ kind: 'resolved', value: 42 })
+		expect(await awaitCooperativeJob(() => Promise.reject(new Error('no stars')), options)).toMatchObject({ kind: 'rejected', error: new Error('no stars') })
+		expect(
+			await awaitCooperativeJob(() => {
+				throw new Error('sync')
+			}, options),
+		).toMatchObject({ kind: 'rejected', error: new Error('sync') })
+		expect(pending()).toBe(0)
+	})
+
+	test('the timeout aborts the signal and the job is awaited to its end; its late value is discarded', async () => {
+		const { delay, advance, pending } = manualDelays()
+		const stubborn = stubbornJob<number>()
+		let outcome: CooperativeJobOutcome<number> | undefined
+		void awaitCooperativeJob(stubborn.job, { signal: new AbortController().signal, timeout: 1000, abortGrace: 5000, delay }).then((value) => (outcome = value))
+
+		await advance(999)
+		expect(stubborn.signal()!.aborted).toBeFalse()
+		await advance(1)
+		expect(stubborn.signal()!.aborted).toBeTrue()
+		expect(stubborn.signal()!.reason).toBe('timeout')
+		// The job ignores the abort and ends 2 s later, within the grace: no report, no fault.
+		await advance(2000)
+		expect(outcome).toBeUndefined()
+		stubborn.release(7)
+		await flush()
+		expect(outcome).toEqual({ kind: 'timeout', unresponsive: false })
+		expect(pending()).toBe(0)
+	})
+
+	test('a job still running abortGrace after the abort is reported once, then faults the collaborator when it ends', async () => {
+		const { delay, advance, pending } = manualDelays()
+		const stubborn = stubbornJob<number>()
+		const reports: string[] = []
+		const health: CooperativeJobHealth = { faulted: false, onUnresponsive: () => reports.push('unresponsive'), onFaulted: () => reports.push('faulted') }
+		let outcome: CooperativeJobOutcome<number> | undefined
+		void awaitCooperativeJob(stubborn.job, { signal: new AbortController().signal, timeout: 1000, abortGrace: 5000, delay, health }).then((value) => (outcome = value))
+
+		await advance(1000 + 4999)
+		expect(reports).toEqual([])
+		await advance(1)
+		expect(reports).toEqual(['unresponsive'])
+		expect(health.faulted).toBeFalse()
+		// No limit: an hour later it still waits.
+		await advance(3_600_000)
+		expect(outcome).toBeUndefined()
+		expect(reports).toEqual(['unresponsive'])
+
+		stubborn.release(1)
+		await flush()
+		expect(outcome).toEqual({ kind: 'timeout', unresponsive: true })
+		expect(health.faulted).toBeTrue()
+		expect(reports).toEqual(['unresponsive', 'faulted'])
+		expect(pending()).toBe(0)
+
+		// A faulted collaborator is never called again.
+		const next = stubbornJob<number>()
+		expect(await awaitCooperativeJob(next.job, { signal: new AbortController().signal, timeout: 1000, abortGrace: 5000, delay, health })).toEqual({ kind: 'faulted' })
+		expect(next.calls()).toBe(0)
+	})
+
+	test('the caller abort ends as aborted after the job; an already aborted caller never calls the job', async () => {
+		const { delay, advance, pending } = manualDelays()
+		const controller = new AbortController()
+		let aborted: AbortSignal | undefined
+		let outcome: CooperativeJobOutcome<string> | undefined
+		void awaitCooperativeJob(
+			(signal) => {
+				aborted = signal
+				return new Promise<string>((_, reject) => {
+					signal.addEventListener('abort', () => reject(new Error('killed')), { once: true })
+				})
+			},
+			{ signal: controller.signal, timeout: 1000, abortGrace: 500, delay },
+		).then((value) => (outcome = value))
+
+		await advance(100)
+		controller.abort()
+		await flush()
+		expect(aborted!.reason).toBe('aborted')
+		expect(outcome).toEqual({ kind: 'aborted', unresponsive: false })
+		expect(pending()).toBe(0)
+
+		const never = stubbornJob<string>()
+		expect(await awaitCooperativeJob(never.job, { signal: controller.signal, timeout: 1000, abortGrace: 500, delay })).toEqual({ kind: 'aborted', unresponsive: false })
+		expect(never.calls()).toBe(0)
+	})
+
+	test('a job that settles in the same tick as its timeout has exactly one outcome', async () => {
+		const { delay, advance } = manualDelays()
+		const outcomes: CooperativeJobOutcome<number>[] = []
+		const job = (signal: AbortSignal) =>
+			new Promise<number>((resolve) => {
+				void delay(1000, new AbortController().signal).then(() => resolve(signal.aborted ? -1 : 1))
+			})
+		void awaitCooperativeJob(job, { signal: new AbortController().signal, timeout: 1000, abortGrace: 500, delay }).then((value) => outcomes.push(value))
+
+		await advance(1000)
+		await advance(1000)
+		expect(outcomes).toHaveLength(1)
+		expect(outcomes[0]).toEqual(outcomes[0].kind === 'resolved' ? { kind: 'resolved', value: 1 } : { kind: 'timeout', unresponsive: false })
 	})
 })

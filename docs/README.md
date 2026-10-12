@@ -13936,6 +13936,51 @@ console.log(observationScore({ altitude: deg(30) }, { minimumAltitude: deg(20), 
 console.log(observationScore({ altitude: deg(50), sunAltitude: deg(-19), moonInterference: far, availableDurationHours: 3, requiredDurationHours: 4 }, { scale: 100 })) // 87.9622
 ```
 
+### Plate-Solved Centering
+
+A slew lands where the mount believes the target is; the pointing error of the mount (polar misalignment, flexure, cone, a stale sync) puts the field arcminutes away. Centering measures that error on the sky: it exposes a short auxiliary frame, plate solves it, and corrects until a solve **after** the last correction shows the solved center within tolerance of the target. A slew is never taken as proof of arrival.
+
+`centerTarget(scope, mount, camera, target, options, services)` runs as an operation `centering` of `scope` (it leases nothing itself; the capturer and the commander lease the camera and the mount per command) and resolves an `OperationResult<CenteringResult>` without throwing. The target is a fixed `{ frame: 'J2000', rightAscension, declination }` in radians, where J2000 means ICRS; JNOW is not accepted, a caller holding an equinox-of-date coordinate converts it first. Each iteration captures one FITS frame (`exposureMode: 'single'`, `count: 1`, `transferFormat: 'FITS'`, the camera settings of `options.capture`, the mount snooped) at `services.auxiliaryPath(attempt)` with the default writer of the [Device Camera Capture](#device-camera-capture) capturer, then hands the solver only `{ path, observedAt }`, after the capture result: `observedAt` is the astronomical midpoint, the first observed Busy plus half the requested exposure (`exposureMidpoint`), never the mean with the reported end. The solved center is compared directly with the target by great-circle distance, so the solver must return the ICRS center of a TAN/TAN-SIP solution, as [Plate Solution](#plate-solution) produces; a solution without a finite center, `undefined` or a rejection count as a frame that did not solve and consume their attempt without commanding anything. Off target, the correction converts J2000 at `services.clock.wallNow()` (`MountCommandOptions.time`): with `syncMount` the mount is synced to the solved center and sent to the target; without it, it is sent from the position it reports, moved against the measured error in the tangent plane (`applyPointingOffset` of [Pointing Model Fit and Correction](#pointing-model-fit-and-correction)). The corrective `goTo` carries the centering `tolerance` and `options.slew` (`timeout`, `settleTimeout`, ms), then waits `settle` seconds on `services.clock.delay`.
+
+The solver is a function of the caller (ASTAP, astrometry.net, a Worker, a process): it must yield the event loop, honor its signal and stop reading the file once it settled. Its signal is the one of the `centering` operation, never the capture's. The timeout is cooperative: after `solveTimeout` seconds the signal is aborted and the solve is still awaited to its end, so the auxiliary file is removed (`auxiliary: 'delete'`, the default) or kept (`'keep'`) only once the solver finished, also after a failure or a cancellation. `abortGrace` seconds after the abort a solve that still runs is reported once through `services.solverHealth.onUnresponsive`; when it finally ends the health becomes `faulted` (`onFaulted`) and every later centering with that health fails without calling the solver. Failures: the capture or mount failure as is, `timeout` for a solve past its timeout, `commandFailed` when no attempt solved, `unexpectedState` when the last solution is still off target (after `maximumAttempts`) or the solver is faulted, and the reason of the scope when cancelled.
+
+```ts
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { astapPlateSolve } from 'nebulosa/src/astrometry/solvers/astap'
+import { abortableDelay } from 'nebulosa/src/devices/orchestration/operation.wait'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+import { centerTarget } from 'nebulosa/src/observation/mount/centering'
+
+// coordinator, mountCommander, cameraCapturer, mount and camera as in Device Commanders and Device Camera Capture.
+const target = { frame: 'J2000', rightAscension: hour(5.5881), declination: deg(-5.3911) } as const
+
+const result = await centerTarget(
+	coordinator,
+	mount,
+	camera,
+	target,
+	{
+		tolerance: deg(1 / 60), // rad
+		maximumAttempts: 3,
+		settle: 2, // s after each corrective slew
+		syncMount: true,
+		capture: { exposureTime: 5, exposureTimeUnit: 'second', frameType: 'LIGHT', x: 0, y: 0, width: 0, height: 0, subframe: false, binX: 2, binY: 2, frameFormat: '', gain: 100, offset: 10, compressed: false },
+		solveTimeout: 60, // s
+		abortGrace: 5, // s
+	},
+	{
+		mountCommander,
+		cameraCapturer,
+		solver: (frame, signal) => astapPlateSolve(frame.path, { rightAscension: target.rightAscension, declination: target.declination, radius: deg(4) }, signal),
+		auxiliaryPath: (attempt) => join(tmpdir(), `centering.${attempt}.fit`),
+		clock: { wallNow: () => Date.now(), monotonicNow: () => performance.now(), delay: abortableDelay },
+	},
+)
+
+console.log(result) // { ok: true, value: { attempts: 2, separation: 2.1e-5, solution } } — separation in radians (≈ 4″)
+```
+
 ### Pointing Model Fit and Correction
 
 `observation/mount/pointing` fits the systematic pointing error of a telescope mount from pairs of commanded and plate-solved sky positions, predicts that error for a new target and inverts it so that a command lands on the requested position. The error is a local tangent-plane offset at the target in radians (`dx` toward east and `dy` toward north, defined as `solved - target`), and the three fitting strategies are a TPOINT-style semi-physical model (`semiPhysical`: collimation `CH`, hour-angle and declination index `IH` and `ID`, non-perpendicularity `NP`, polar-axis azimuth and elevation `MA` and `ME` and tube flexure `TF`), a linear empirical feature model (`empirical`, bias, sine and cosine of hour angle, declination and altitude, cross, pier-side and polynomial terms) and the default `hybrid`, which is the semi-physical model plus an empirical residual block (`POINTING_MODEL_STRATEGIES` lists them in the order `selectPointingStrategy` tries them, and `POINTING_ERROR_REPRESENTATIONS` the two representations, the gnomonic `vectorTangent` by default and the linearized `smallAngle` with `dRA cos(Dec)` and `dDec`). A `PointingSample` has the commanded target and the solved position (radians), and, for the hour angle, altitude and flexure terms, the `time` (with the `latitude` and the east-positive `longitude` of the site in radians), the `pierSide`, the radial `uncertainty` of the solve in radians (weights go with its inverse square) and the declared `frame` (`apparentTopocentric` by default, `apparentTopocentricRefracted` or `icrs`; a sample in another frame than the fit is rejected rather than mixed, since the difference would enter as mechanical error). `computePointingError(targetRa, targetDec, solvedRa, solvedDec, representation?)` returns the offsets with the great-circle `angularSeparation`, the `representationUsed` (it falls back to `smallAngle` when the projection is singular) and both representations in `comparison`, and `applyPointingOffset(rightAscension, declination, dx, dy, representation?)` is its inverse, with the right ascension in `0..TAU` and the declination clamped to `±PI/2`. `fitPointingModel(samples, options?)` validates the samples (the `PointingValidationOptions`: `minimumAltitude` of 10 degrees, `maximumSampleSeparation` of 5 degrees, `duplicateTolerance` of 5 arcminutes between same-side targets and a `minimumSamples` recommendation of 12), keeps the richest observing context that most of the samples can supply (it rejects the stragglers, `insufficient observing context`, instead of zero-filling), drops the terms that the context or a minimum sample-to-parameter ratio (`minimumSampleRatio`, 3) cannot support, and fits by weighted ridge-regularized least squares with a Huber IRLS (`robust`: `method`, `maxIterations`, `tolerance` and `tuning`; `ridge` and `ridgeEmpirical` are relative to the column energy; `semiPhysicalTerms`, `featureConfiguration`, `errorRepresentation`, `frame` and the `local` residual layer of [Local Pointing Residuals](#local-pointing-residuals) are also options). The `FittedPointingModel` carries the `strategy`, the resolved configuration, a `usable` flag (false when underdetermined or with a condition number above 1e8, and then every prediction is a zero offset with a warning), the `physical`, `empirical`, `residual` and `local` components, the `coverage` of the sky, the `supportSet` of training directions and the `diagnostics`: the sample counts, the residual RMS in each axis and the radial `angularRms`, the median and the 50, 90 and 95 percentiles, the `conditionNumber`, the counts per pier side, the rejection reasons, the `droppedTerms`, the `warnings` and the leave-one-out RMS and percentiles (`looRms`, from a real refit per sample, the number to compare strategies with since the in-sample RMS can only fall as parameters are added). `selectPointingStrategy(samples, options?)` fits every strategy on the same samples and returns the one with the smallest leave-one-out RMS (the in-sample RMS only when no candidate produced one; unusable models are never chosen). `predictPointingModelError(model, input)` returns a `PredictedPointingError`: the `dx` and `dy` of the sum of the components, the `offsetMagnitude`, the `components` and a `quality` (the distances to the nearest and to the 4th-nearest training samples, a `support` in [0, 1] that stays at 1 as long as the target is as well surrounded as a typical sample and then decays, the `extrapolating` flag below 0.35, whether the pier side was trained and warnings, including a frame mismatch). `correctPointingCoordinate(model, input, options?)` solves `command + error(command) = target` by a fixed-point iteration in the tangent plane (re-deriving the hour angle, altitude and pier side at each command, `damping` 1, `maxIterations` 8, `tolerance` 1e-9 radians and `maximumCorrection` of 5 degrees, which clamps a wildly extrapolating model instead of sending the mount away) and returns the corrected coordinate, the `predictedError` at it, `converged`, `iterations`, `clamped` and the gnomonic `residual`. `MountPointing` is the stateful collector: `add(sample)` and `model(sample, { fit, fitOptions })` store samples (the latter can refit), `fit(options?)` fits with the constructor `defaults`, `predictError(input)` and `correctCoordinate(input, options?)` use the latest model (an identity prediction with no model), `export({ includeSamples })` and `import(serialized)` move a model (and, optionally, its dataset) in and out as a structured clone, and `state` and `diagnostics` summarize it. The model describes the mechanics and not the atmosphere: keep samples and predictions in one frame, refraction belongs to the astrometric layer, a term that the sky coverage does not constrain is not trustworthy, the sign of the terms and of the correction is the one in `signConvention` (the correction subtracts the predicted error) and a mount without a calibration run of well spread targets on both pier sides should not use the local layer or the hybrid empirical block.
@@ -15863,8 +15908,10 @@ A device command usually completes long after it is sent: the driver accepts a m
 
 The reasons are `busy` (a resource was refused at start), `aborted` (cancelled by the caller), `disconnected` and `removed` (a held device went away), `timeout`, `alert` (the driver reported `Alert`), `commandFailed` (a command, executor or cleanup threw) and `unexpectedState`. `failedOperationResult(reason, error?)` and `successfulOperationResult(value)` build the two variants of `OperationResult`. A failure omits `error` entirely when there is no detail. These waits are the building block of the [Device Commanders](#device-commanders) and usually run inside the signal of a [Device Operations](#device-operations) context.
 
+`awaitCooperativeJob(job, { signal, timeout, abortGrace, delay?, health? })` runs work the caller does not control, such as a plate solver or an HFD measurer reading a file, with a strictly cooperative timeout: `job(signal)` is called with a signal of its own, aborted after `timeout` ms (or when the caller's `signal` aborts), and the job is then awaited without limit, so a file it reads is never moved while it still runs. It resolves exactly one `CooperativeJobOutcome`: `resolved` or `rejected` when the job settled first (a synchronous throw is a rejection), `timeout` or `aborted` once an aborted job ended (its value discarded), with `unresponsive` when it was still running `abortGrace` ms after the abort, or `faulted` without calling the job. A `CooperativeJobHealth` shared across calls (one per collaborator) is told once per job through `onUnresponsive` at the grace, becomes `faulted` with `onFaulted` when that late job ends, and is never called again. A caller already aborted does not call the job. `delay` (default `abortableDelay`) measures both waits, so a manual clock drives them in tests.
+
 ```ts
-import { abortableDelay, abortReason, settleWithSignal, settlesWithin, waitForDeviceState } from 'nebulosa/src/devices/orchestration/operation.wait'
+import { abortableDelay, abortReason, awaitCooperativeJob, settleWithSignal, settlesWithin, waitForDeviceState } from 'nebulosa/src/devices/orchestration/operation.wait'
 
 // A toy device whose position reaches 100 steps 50 ms after the command.
 const listeners = new Set<(position: number) => void>()
@@ -15906,6 +15953,11 @@ const capture = new AbortController()
 const exposure = settleWithSignal(new Promise<never>(() => {}), capture.signal)
 capture.abort('timeout')
 console.log(await exposure.catch((e: DOMException) => [e.name, e.cause])) // ['AbortError', 'timeout']
+
+// A job that ignores its signal: aborted at 50 ms, awaited until it ends at 120 ms, reported unresponsive at 100 ms.
+const health = { faulted: false, onUnresponsive: () => console.log('unresponsive') }
+console.log(await awaitCooperativeJob(() => Bun.sleep(120), { signal: new AbortController().signal, timeout: 50, abortGrace: 50, health })) // logs 'unresponsive', then { kind: 'timeout', unresponsive: true }
+console.log(health.faulted, await awaitCooperativeJob(() => Bun.sleep(1), { signal: new AbortController().signal, timeout: 50, abortGrace: 50, health })) // true { kind: 'faulted' }
 ```
 
 ### Device Commanders

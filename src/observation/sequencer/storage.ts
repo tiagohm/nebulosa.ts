@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve, sep } from 'path'
 import { errorMessage } from '../../core/util'
 import { isPathSegment } from '../../io/path'
 import type { SequencerTask } from './runner'
-import type { SequencerCheckpoint, SequencerCheckpointStore, SequencerFailure, SequencerFrameDiscardPolicy, SequencerFrameSlot } from './sequencer'
+import type { SequencerAuxiliaryArtifact, SequencerCheckpoint, SequencerCheckpointStore, SequencerFailure, SequencerFrameDiscardPolicy, SequencerFrameSlot } from './sequencer'
 
 // Artifact protocol of the Sequencer over the filesystem: the exclusive lock of a session directory, the write-ahead
 // journal that proves which file belongs to which slot attempt, the temporary → final promotion that never
@@ -18,6 +18,7 @@ import type { SequencerCheckpoint, SequencerCheckpointStore, SequencerFailure, S
 //   {group}/.{slot id}.{attempt}.partial.fit   hidden temporary of an attempt, in the directory of its final
 //   rejected/{group}/{slot id}.{attempt}.fit   discarded frames ('moveToRejected')
 //   rejected/incomplete/{group}/...  attempts the recovery moved aside
+//   auxiliary/{centering|autofocus}/  auxiliary frames of centering and autofocus, outside the journal
 //
 // Every file is FITS and ends in `.fit`. Identity is the journal, never a file name: paths are recorded relative to
 // the session directory (with `/` separators, so a session can be moved or read on another platform) and compared as
@@ -213,7 +214,14 @@ export interface SequencerStorage {
 	readonly dispose: (artifact: SequencerDiscardArtifact, next: SequencerCheckpoint) => Promise<SequencerStorageResult<string | undefined>>
 	// Removes the temporary of the open attempt, if any, and closes it.
 	readonly abandon: (reason: Exclude<SequencerAbandonReason, 'crash'>) => Promise<SequencerStorageResult<void>>
+	// Auxiliary namespace, required by centering and autofocus: the directory of the auxiliary frames of `kind`, created
+	// while locked. With `artifact` 'delete' the first call for `kind` removes the frames a previous process left there.
+	// Auxiliary frames never enter the journal nor the reconciliation and never count anywhere.
+	readonly auxiliaryDirectory?: (kind: SequencerAuxiliaryKind, artifact: SequencerAuxiliaryArtifact) => Promise<SequencerStorageResult<string>>
 }
+
+// Feature an auxiliary frame belongs to, also the name of its directory under `auxiliary/`.
+export type SequencerAuxiliaryKind = 'centering' | 'autofocus'
 
 // Process-wide registry of the session locks this JS realm holds: canonical session directory (realpath) → owner
 // token. An entry is created before the lock file and removed only after it was unlinked, so two storages of the
@@ -227,6 +235,7 @@ const JOURNAL_FILE = 'journal.jsonl'
 const CHECKPOINT_FILE = 'checkpoint.json'
 const CHECKPOINT_TEMPORARY_FILE = 'checkpoint.json.tmp'
 const REJECTED_DIRECTORY = 'rejected'
+const AUXILIARY_DIRECTORY = 'auxiliary'
 const INCOMPLETE_DIRECTORY = 'incomplete'
 const FRAME_EXTENSION = '.fit'
 const PARTIAL_EXTENSION = '.partial.fit'
@@ -281,6 +290,8 @@ export class FileSystemSequencerStorage implements SequencerStorage {
 	#token?: string
 	#method: SequencerPromotionMethod = 'link'
 	#prepared?: SequencerFrameDestination
+	// Auxiliary kinds whose leftovers were removed during the current lock.
+	readonly #auxiliaryCleared = new Set<SequencerAuxiliaryKind>()
 
 	constructor(options: FileSystemSequencerStorageOptions) {
 		this.sessionId = options.sessionId
@@ -385,6 +396,7 @@ export class FileSystemSequencerStorage implements SequencerStorage {
 		this.#directory = undefined
 		this.#token = undefined
 		this.#prepared = undefined
+		this.#auxiliaryCleared.clear()
 	}
 
 	async prepare(slot: SequencerFrameSlot): Promise<SequencerStorageResult<SequencerFrameDestination>> {
@@ -502,6 +514,30 @@ export class FileSystemSequencerStorage implements SequencerStorage {
 
 		this.#prepared = undefined
 		return OK
+	}
+
+	// Creates `{session}/auxiliary/{kind}`. The first call for a kind with 'delete' removes the `.fit` files left there by
+	// an earlier process (or an earlier lock of this one); files that cannot be removed are left for the next run.
+	async auxiliaryDirectory(kind: SequencerAuxiliaryKind, artifact: SequencerAuxiliaryArtifact): Promise<SequencerStorageResult<string>> {
+		const directory = this.#directory
+		if (directory === undefined) return storageFailure('the session directory is not locked')
+
+		const path = join(directory, AUXILIARY_DIRECTORY, kind)
+
+		try {
+			await makeDirectory(path)
+
+			if (artifact === 'delete' && !this.#auxiliaryCleared.has(kind)) {
+				for (const entry of await readdir(path, { withFileTypes: true })) {
+					if (entry.isFile() && entry.name.endsWith(FRAME_EXTENSION)) await removeQuietly(join(path, entry.name))
+				}
+			}
+		} catch (error) {
+			return storageFailure(`auxiliary ${kind}: ${errorMessage(error)}`)
+		}
+
+		if (artifact === 'delete') this.#auxiliaryCleared.add(kind)
+		return { ok: true, value: path }
 	}
 
 	// Reconciliation of section 36.6. Transactions are resolved first, in journal order (their sequences increase
@@ -734,11 +770,12 @@ export class FileSystemSequencerStorage implements SequencerStorage {
 		}
 	}
 
-	// Reports every frame file of the group directories that no journal line names; it is never touched.
+	// Reports every frame file of the group directories that no journal line names; it is never touched. Discarded and
+	// auxiliary frames live outside the group directories.
 	async #reportUnknownFiles(directory: string, referenced: ReadonlySet<string>, warnings: string[]) {
 		for (const entry of await readdir(directory, { recursive: true })) {
 			const relative = entry.split(sep).join('/')
-			if (!relative.endsWith(FRAME_EXTENSION) || relative.startsWith(`${REJECTED_DIRECTORY}/`) || referenced.has(relative)) continue
+			if (!relative.endsWith(FRAME_EXTENSION) || relative.startsWith(`${REJECTED_DIRECTORY}/`) || relative.startsWith(`${AUXILIARY_DIRECTORY}/`) || referenced.has(relative)) continue
 			const stats = await statIfExists(join(directory, entry))
 			if (stats?.isFile()) warnings.push(`unknown file ${relative} left untouched`)
 		}

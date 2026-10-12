@@ -1375,5 +1375,5 @@ describe('rig compensation', () => {
 		expect([focuser.position.value, wheel.position]).toEqual([42000, 0])
 		await finish(holding)
 		await resetSequencerRig(rig, 40000)
-	}, 30000)
+	})
 })

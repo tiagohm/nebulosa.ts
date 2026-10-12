@@ -9,6 +9,7 @@ import { type SequencerCheckpoint, type SequencerCheckpointSlot, type SequencerC
 // oxfmt-ignore
 import { applySequencerCheckpoint, createSequencerRuntimeState, isTerminalSequencerState, requestSequencerHold, requestSequencerPause, requestSequencerResume, requestSequencerStop, type SequencerCompensation, type SequencerRuntimeState, type SequencerStopMode, sequencerCaptureProgressSnapshot, sequencerCheckpointOf, sequencerFrameSlotSnapshot, sequencerSnapshot, shouldHoldSequencer, transitionSequencerState } from './state'
 import type { SequencerDeferReason, SequencerFrameDestination, SequencerStorage } from './storage'
+import { bootstrapSequencerElapsedAnchors } from './trigger'
 
 // Runner of one Sequencer session: the only owner of its execution. It admits the session, holds one resource
 // reservation for its whole lifetime, runs the startup, the frame loop (select → pre-capture → capture →
@@ -19,14 +20,14 @@ import type { SequencerDeferReason, SequencerFrameDestination, SequencerStorage 
 // Admission locks the session directory before anything else, then resumes: the checkpoint is loaded, bound to the
 // configuration id and revision, reconciled with the journal and the disk, and restored (the slot in progress
 // included), all before the reservation. Persistence follows section 34.2: a checkpoint is saved when a new slot is
-// selected, after each capture failure (before its `abandoned` line), after a resume that renews a counter and
-// after an intent changes; a captured frame is one logical transaction, computed before its file is touched,
-// journaled with the promotion, applied and then saved. A prepared attempt that is not dispatched is closed by
-// `deferred` before any wait or re-entry. The capture asks the session synchronously, right before dispatching,
-// whether the exposure may go (a pending stop, pause or protection refuses it); only an approved exposure is a
-// commanded attempt that may count as a capture failure. A persistence failure fails the session with a 'storage'
-// failure: no new exposure starts and nothing advances in memory as if it had been saved. The lock is released after
-// the reservation, right before the terminalization.
+// selected, after each capture failure (before its `abandoned` line), after a resume that renews a counter, after an
+// intent changes and when a task advanced an anchor or cleared an intent (`saveCheckpoint`); a captured frame is one
+// logical transaction, computed before its file is touched, journaled with the promotion, applied and then saved.
+// A prepared attempt that is not dispatched is closed by `deferred` before any wait or re-entry. The capture asks the
+// session synchronously, right before dispatching, whether the exposure may go (a pending stop, pause or protection
+// refuses it); only an approved exposure is a commanded attempt that may count as a capture failure. A persistence
+// failure fails the session with a 'storage' failure: no new exposure starts and nothing advances in memory as if it
+// had been saved. The lock is released after the reservation, right before the terminalization.
 //
 // Every physical task is a root `sequencer.{taskId}` opened through `startTask`, which refuses once the run was
 // aborted; tasks pass the root context to commanders, so cancelling the root cancels everything they commanded.
@@ -63,10 +64,20 @@ export interface SequencerContext extends SequencerTaskView {
 	readonly signal: AbortSignal
 	// Emits a session event of the task synchronously; the session stamps and delivers it.
 	readonly emit: (event: SequencerEventBody) => void
+	// Persists the current logical state (anchors, intents, baseline the task just updated) as the next checkpoint. A
+	// failed save fails the session with its 'storage' failure, which is also returned for the task to end with.
+	readonly saveCheckpoint: () => Promise<SequencerTaskResult>
 }
 
 // Outcome of one task execution. A failure carries the session failure the phase policy applies to.
-export type SequencerTaskResult = { readonly ok: true } | { readonly ok: false; readonly failure: SequencerFailure }
+export type SequencerTaskResult = { readonly ok: true } | SequencerFailedTaskResult
+
+// Failed outcome of one task execution.
+export interface SequencerFailedTaskResult {
+	readonly ok: false
+	// Session failure the phase policy applies to.
+	readonly failure: SequencerFailure
+}
 
 // Retry and failure action of a startup or pre-capture task, from the configuration of its feature.
 export interface SequencerTaskPolicy {
@@ -407,6 +418,11 @@ export class SequencerRunner {
 
 		this.#emit({ type: 'sessionStarted', configurationId: this.#configuration.id, configurationRevision: this.#configuration.revision })
 
+		// Elapsed-time triggers of a resumed session restart from the persisted wall anchors, once per process.
+		for (const { anchor, deltaMs } of bootstrapSequencerElapsedAnchors(this.#runtime, this.#clock.wallNow(), this.#clock.monotonicNow())) {
+			this.#emit({ type: 'wallClockAnomaly', anchor, deltaMs })
+		}
+
 		try {
 			if (await this.#startup()) {
 				if (this.#runtime.state === 'starting') this.#transition('running')
@@ -666,7 +682,7 @@ export class SequencerRunner {
 		}
 
 		const view = this.#view(frame)
-		const handle = this.startTask('sequencer.captureFrame', (scope) => this.#phases.capture({ ...view, scope, signal: scope.signal, emit: this.#emitter, destination, beforeExposure, exposureStarted }))
+		const handle = this.startTask('sequencer.captureFrame', (scope) => this.#phases.capture({ ...view, scope, signal: scope.signal, emit: this.#emitter, saveCheckpoint: this.#saver, destination, beforeExposure, exposureStarted }))
 		const current = this.#begin(handle, 'capture', 'captureFrame')
 		const result = await handle.result
 		this.#end()
@@ -941,7 +957,7 @@ export class SequencerRunner {
 				continue
 			}
 
-			const handle = this.#startRoot(this.#shutdown.signal, `sequencer.${step.id}`, (scope) => step.run({ ...this.#view(), scope, signal: scope.signal, emit: this.#emitter }).then(successfulOperationResult))
+			const handle = this.#startRoot(this.#shutdown.signal, `sequencer.${step.id}`, (scope) => step.run({ ...this.#view(), scope, signal: scope.signal, emit: this.#emitter, saveCheckpoint: this.#saver }).then(successfulOperationResult))
 			this.#runtime.task = step.id
 			this.#emit({ type: 'taskStarted', task: step.id, phase: 'shutdown' })
 			const result = await this.#bounded(handle, prefix ? undefined : Math.min(stepTimeout * 1000, remaining), this.#shutdown.signal)
@@ -973,7 +989,7 @@ export class SequencerRunner {
 
 		for (let attempt = 1; ; attempt++) {
 			if (this.#run.signal.aborted) return INTERRUPTED
-			const handle = this.startTask(`sequencer.${task.id}`, (scope) => task.run({ ...view, scope, signal: scope.signal, emit: this.#emitter }).then(successfulOperationResult))
+			const handle = this.startTask(`sequencer.${task.id}`, (scope) => task.run({ ...view, scope, signal: scope.signal, emit: this.#emitter, saveCheckpoint: this.#saver }).then(successfulOperationResult))
 			const current = this.#begin(handle, phase, task.id)
 			const result = await handle.result
 			this.#end()
@@ -1375,6 +1391,14 @@ export class SequencerRunner {
 
 	// Event emission handed to the task contexts.
 	readonly #emitter = (body: SequencerEventBody) => this.#emit(body)
+
+	// Checkpoint save handed to the task contexts.
+	readonly #saver = async (): Promise<SequencerTaskResult> => {
+		const failure = await this.#saveCheckpoint()
+		if (failure === undefined) return { ok: true }
+		this.#fail(failure)
+		return { ok: false, failure }
+	}
 
 	// Stamps and delivers an event. A throwing listener is reported and never breaks the session.
 	#emit(body: SequencerEventBody) {
