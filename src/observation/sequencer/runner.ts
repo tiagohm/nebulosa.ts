@@ -77,6 +77,10 @@ export interface SequencerFailedTaskResult {
 	readonly ok: false
 	// Session failure the phase policy applies to.
 	readonly failure: SequencerFailure
+	// Whether no exposure of this safe point may start after the failure (a failed restore of the filter or of the
+	// focuser, a light whose focus baseline stays unknown): once the retries are exhausted, a 'skip' action applies
+	// 'fail' instead.
+	readonly fatal?: boolean
 }
 
 // Retry and failure action of a startup or pre-capture task, from the configuration of its feature.
@@ -486,6 +490,8 @@ export class SequencerRunner {
 
 		applySequencerCheckpoint(this.#runtime, this.#configuration, checkpoint)
 		this.#runtime.meridianFlip = createMeridianFlipState(checkpoint.meridianFlipAttempts)
+		// A restart is a resume for the autofocus trigger of that name.
+		this.#runtime.resumedSinceAutofocus = true
 		this.#sequence = checkpoint.sequence
 
 		const slot = checkpoint.currentSlot
@@ -976,7 +982,8 @@ export class SequencerRunner {
 	}
 
 	// Runs one startup or pre-capture task with its retries. Retries never follow an interruption, a non-operation
-	// failure or an `aborted` reason, and wait `sequencerRetryDelay` on the run signal.
+	// failure or an `aborted` reason; they run the compensations the failed execution left pending, then wait
+	// `sequencerRetryDelay` on the run signal.
 	async #runTask(task: SequencerTask, phase: SequencerPhase, policy: SequencerTaskPolicy, frame?: SequencerFrameSlot): Promise<TaskOutcome> {
 		const view = this.#view(frame)
 		const due = await shouldRun(task, view)
@@ -1005,12 +1012,16 @@ export class SequencerRunner {
 
 			if (current.interrupted || this.#run.signal.aborted) return INTERRUPTED
 
-			const { retry } = policy
+			const { retry, onFailure } = policy
 
 			if (retry === undefined || attempt >= retry.maxAttempts || failure.kind !== 'operation' || failure.reason === 'aborted' || !retry.retryOn.includes(failure.reason)) {
-				return { kind: 'failed', failure, action: policy.onFailure }
+				// A fatal failure is never skipped: the safe point cannot expose from the state it left.
+				const fatal = result.ok && !result.value.ok && result.value.fatal === true
+				return { kind: 'failed', failure, action: fatal && onFailure === 'skip' ? 'fail' : onFailure }
 			}
 
+			// What the failed execution left to undo is undone before the retry starts from a known state.
+			await this.#quiesce()
 			if (!(await this.#wait(sequencerRetryDelay(retry, attempt)))) return INTERRUPTED
 		}
 	}
@@ -1072,6 +1083,7 @@ export class SequencerRunner {
 
 			if (this.#runtime.desired === 'running') {
 				this.#transition('running')
+				this.#runtime.resumedSinceAutofocus = true
 
 				if (cause === 'capture') {
 					this.#capturePause = false

@@ -514,6 +514,71 @@ describe('failure policies', () => {
 		expect(script.trace).toEqual(['autofocus@frame[L][1]'])
 	})
 
+	test('a fatal failure is never skipped: its skip action fails the session instead of exposing', async () => {
+		const script = new Script()
+		let attempts = 0
+		const fatal: SequencerTaskResult = { ok: false, failure: { kind: 'operation', reason: 'commandFailed' }, fatal: true }
+		script.preCapture = [script.task('autofocus', () => (++attempts, fatal), { retry, onFailure: 'skip' }), script.task('ensureGuiding')]
+		const result = await finish(start(configurationOf(), script))
+
+		expect(result).toMatchObject({ state: 'failed', failure: { kind: 'operation', reason: 'commandFailed', task: 'autofocus' } })
+		expect(attempts).toBe(1)
+		expect(script.trace).toEqual(['autofocus@frame[L][1]'])
+	})
+
+	test('a retry first runs the compensations the failed execution left pending', async () => {
+		const script = new Script()
+		const pending: number[] = []
+		let attempts = 0
+		script.preCapture = [
+			script.task(
+				'autofocus',
+				(context) => {
+					pending.push(context.state.compensations.length)
+					if (++attempts > 1) return OK
+					pushSequencerCompensation(context.state, { kind: 'focuserPosition', task: 'autofocus', position: 1234 })
+					return { ok: false, failure: { kind: 'operation', reason: 'timeout' }, fatal: true }
+				},
+				{ retry, onFailure: 'skip' },
+			),
+		]
+		const moves: number[] = []
+		const focuser = fakeDevice<Focuser>(DEFAULT_FOCUSER, 'Focuser')
+		const focuserCommander = { moveTo: (_scope: OperationContext, _focuser: Focuser, position: number) => (moves.push(position), Promise.resolve(successfulOperationResult(undefined))) } as unknown as FocuserCommander
+		const harness = start(configurationOf(undefined, { focusOffsets: { reference: 'L', offsets: {} } }), script, { devices: { camera: CAMERA, focuser }, focuserCommander })
+
+		await waitUntil(() => harness.clock.pending === 1, 2000, 1)
+		expect(moves).toEqual([1234])
+		await harness.clock.advance(1000)
+
+		expect((await finish(harness)).state).toBe('completed')
+		expect(pending).toEqual([0, 0])
+	})
+
+	test('a fatal failure with a pause action holds as configured', async () => {
+		const script = new Script()
+		let attempts = 0
+		script.preCapture = [script.task('autofocus', () => (++attempts === 1 ? { ok: false, failure: { kind: 'operation', reason: 'commandFailed' }, fatal: true } : OK), { retry, onFailure: 'pause' })]
+		const harness = start(configurationOf(), script)
+
+		await waitState(harness, 'paused')
+		expect(attempts).toBe(1)
+		expect(harness.runner.handle.resume()).toBeTrue()
+		expect((await finish(harness)).state).toBe('completed')
+	})
+
+	test('resume() marks the session resumed since its last autofocus', async () => {
+		const script = new Script()
+		const seen: boolean[] = []
+		script.preCapture = [script.task('autofocus', (context) => (seen.push(context.state.resumedSinceAutofocus), seen.length === 1 ? failure('alert') : OK), { onFailure: 'pause' })]
+		const harness = start(configurationOf(), script)
+
+		await waitState(harness, 'paused')
+		expect(harness.runner.handle.resume()).toBeTrue()
+		expect((await finish(harness)).state).toBe('completed')
+		expect(seen).toEqual([false, true])
+	})
+
 	test('pause holds; resume re-enters the pre-capture from its first task without a new attempt', async () => {
 		const script = new Script()
 		let attempts = 0

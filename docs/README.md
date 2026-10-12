@@ -12355,6 +12355,40 @@ const gapped = run(gaps, 5100, (position) => (position === 4750 ? 0 : position =
 console.log(gapped.step.type, gapped.step.absolute!) // COMPLETED 5000
 ```
 
+### Autofocus Runner
+
+`observation/focus/autofocus.runner` runs that loop on real devices. `runAutoFocus(scope, focuser, camera, options, services)` opens an operation `autofocus` of `scope` (it leases nothing itself; the [Device Commanders](#device-commanders) focuser commander and the [Device Camera Capture](#device-camera-capture) capturer lease per command) and resolves an `OperationResult<AutoFocusRunResult>` without throwing: `{ position, hfd, initialPosition, captures }`, the best focus rounded to whole steps (the focuser stands there), the fitted HFD in pixels, the start and the number of frames. The state machine gets `options.algorithm` with `maxPosition` taken from the focuser range. Every position it asks for is checked against `focuser.position.min..max` before anything moves (outside it the run fails with `unexpectedState`), then one FITS frame is captured (`exposureMode: 'single'`, `count: 1`, `transferFormat: 'FITS'`, the camera settings of `options.capture`, the focuser snooped so FOCUSPOS is in the header) at `services.auxiliaryPath(capture)` with the default writer of the capturer. After the capture result, the caller's `measurer({ path }, signal)` receives only the path of the complete file and the signal of the `autofocus` operation; it returns the HFD in pixels, and `undefined`, a non-finite or non-positive value, or a rejection is an invalid point of the curve, never an error. Its timeout is cooperative, as with `awaitCooperativeJob` of [Device Command Waiting](#device-command-waiting): after `measureTimeout` seconds the signal is aborted and the measurement is still awaited, so the frame is removed (`auxiliary: 'delete'`, the default) or kept (`'keep'`) only once the measurer finished; `abortGrace` seconds later a measurement still running is reported through `services.measurerHealth.onUnresponsive`, and the health becomes `faulted` when it ends. A failure that is not a cancellation (`commandFailed` for a rejected curve, `timeout` for a measurement, `unexpectedState` for a position out of range or a faulted measurer, or the move or capture failure as is) moves the focuser back to the start before resolving, and a failed restore is appended to the error. A cancelled run commands nothing more: the focuser is left stopped at an unknown position, so a caller that needs the original one reads it before and moves back afterwards. Star detection is the measurer's job (see [Star Detection](#star-detection)), run where it does not block the event loop.
+
+```ts
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { abortableDelay } from 'nebulosa/src/devices/orchestration/operation.wait'
+import { runAutoFocus } from 'nebulosa/src/observation/focus/autofocus.runner'
+
+// coordinator, focuserCommander, cameraCapturer, focuser and camera as in Device Commanders and Device Camera Capture;
+// measureHfd(path, signal) is the caller's star measurement, for example in a Worker.
+const result = await runAutoFocus(
+	coordinator,
+	focuser,
+	camera,
+	{
+		algorithm: { initialOffsetSteps: 7, stepSize: 50, fittingMode: 'HYPERBOLIC', rmsdThreshold: 0.1, reversed: false },
+		capture: { exposureTime: 3, exposureTimeUnit: 'second', frameType: 'LIGHT', x: 0, y: 0, width: 0, height: 0, subframe: false, binX: 2, binY: 2, frameFormat: '', gain: 100, offset: 10, compressed: false },
+		measureTimeout: 30, // s
+		abortGrace: 5, // s
+	},
+	{
+		focuserCommander,
+		cameraCapturer,
+		measurer: (frame, signal) => measureHfd(frame.path, signal),
+		auxiliaryPath: (capture) => join(tmpdir(), `autofocus.${capture}.fit`),
+		clock: { wallNow: () => Date.now(), monotonicNow: () => performance.now(), delay: abortableDelay },
+	},
+)
+
+console.log(result) // { ok: true, value: { position: 25012, hfd: 1.84, initialPosition: 25100, captures: 17 } }
+```
+
 ### Challis Polar Alignment
 
 `observation/alignment/polaralignment.challis` estimates the polar-axis misalignment of an equatorial mount from the drift in declination of tracked stars, with the Challis and Taki small-angle model, using neither a plate solution nor an image: the input is a series of apparent mount declinations (from the encoders or the hand paddle readings of the mount, after centering a star) against its hour angle. Hour angles are west-positive and may wrap, all angles are radians and the model is `declination = intercept + u cos(H) - v sin(H)`, with one unknown intercept per star (the true declination plus any fixed offset) and the two components `u` and `v` shared by all the stars, with the signs of Taki. `fitChallisPolarAlignment(observations, latitude, options?)` takes the `ChallisObservation` list (the `star` identifier that groups the readings sharing an intercept, the `hourAngle`, the `mountDeclination`, an optional known additive `correction` in declination subtracted before the fit, and an optional non-negative `weight`) and the geographic `latitude`, and fits them by weighted least squares, or by an iteratively reweighted robust loss with `options.robust` of `huber` or `tukey` (and `maxIterations`, `tolerance` and `tuning`) when a reading is wild. The `ChallisPolarAlignmentResult` has the components `u` and `v`, their `magnitude` and `orientation` (`atan2(u, v)` in `[0, TAU)`), the `takiPole` (the normalized `[u, v, 1]` of the Taki frame), the physical pole above the horizon in a local east-north-up frame (`poleEnu`) with its `azimuth` (north through east) and `altitude`, the signed `azimuthError` and `altitudeError` of the geodesic decomposition along the positive directions of the azimuth and altitude knobs, the `totalError` from the celestial pole (all in radians), and the `conditionNumber`, `rankDeficient`, `residuals` (target minus fitted), final `weights` and `warnings`. The azimuth and altitude components are `undefined` when the adjustment is singular, as at a geographic pole, while the total stays. The hemisphere follows the sign of the latitude and the fit works in both. At least `stars + 2` observations with a positive weight are needed (three for a single star), and they must cover distinct hour angles (a rank-deficient design is an error); the warnings say when there are fewer than three distinct hour angles, when the coverage is under 30 degrees, when the matrix is ill-conditioned (above `1e8`), when one reading carries more than half of the weight, when the magnitude is above 5 degrees (outside the small-angle model) and when the components are undefined. `challisRefractionCorrection(hourAngle, declination, latitude, refraction?)` gives the apparent minus true declination caused by the atmospheric refraction model of the library (default parameters when omitted) for a direction, to be put in the `correction` of the observations when the readings are taken on a real sky; it is not defined below -1 degree of altitude. The model is linear in `u` and `v`, so a large error, a star near the pole, a bad latitude or a flexure of the mount that changes the declination with the hour angle are not represented in the fit.

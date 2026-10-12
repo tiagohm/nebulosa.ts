@@ -8,6 +8,7 @@ import type { CameraCaptureClock, CameraCaptureStart, CameraExposureTimeUnit } f
 import { isPathSegment } from '../../io/path'
 import type { Angle } from '../../math/units/angle'
 import type { AutoFocusFittingMode, AutoFocusOptions } from '../focus/autofocus'
+import type { AutoFocusMeasurer } from '../focus/autofocus.runner'
 import type { CenteringSolver } from '../mount/centering'
 import type { SequencerStorage } from './storage'
 
@@ -361,13 +362,15 @@ export interface SequencerAutofocusTriggers {
 	readonly afterResume: boolean
 	// After a meridian flip completed by the session.
 	readonly afterFlip: boolean
-	// When the light filter differs from the filter of the last autofocus.
+	// When the filter in place for the light differs, by name, from the one of the light the last autofocus ran for;
+	// never due before a first successful autofocus.
 	readonly onFilterChange: boolean
 	// Light exposures between autofocus runs; safe integer ≥ 1.
 	readonly afterFrames?: number
-	// Time between autofocus runs, in seconds (monotonic in runtime); finite > 0.
+	// Time between autofocus runs, in seconds (monotonic in runtime); finite > 0. Never due before a first success.
 	readonly interval?: number
-	// Focuser temperature change since the last autofocus, in °C; finite > 0.
+	// Focuser temperature change since the last autofocus, in °C; finite > 0. Never due before a first success nor
+	// with a focuser that publishes no temperature.
 	readonly temperatureDelta?: number
 }
 
@@ -612,6 +615,11 @@ export const DEFAULT_SEQUENCER_COLLABORATOR_ABORT_GRACE = 5
 // a TAN/TAN-SIP solution with known dimensions) or undefined. Isolating its CPU work is the caller's responsibility.
 export type SequencerPlateSolver = CenteringSolver
 
+// HFD measurer of the autofocus, provided by the caller: an async function over the path of a complete auxiliary FITS
+// that honors the signal and resolves the half-flux diameter in pixels, or undefined (a non-finite or non-positive value
+// too) for a frame without a usable star. Isolating its CPU work is the caller's responsibility.
+export type SequencerFocusMeasurer = AutoFocusMeasurer
+
 // Operational clock of the session, with two explicit domains and the wait of the monotonic one. Never
 // compare a wall instant with a monotonic one. Scientific time is always `timeUnix(wallNow() / 1000)`.
 export interface SequencerClock extends CameraCaptureClock {
@@ -672,6 +680,7 @@ export type SequencerPhase = 'startup' | 'preCapture' | 'capture' | 'postCapture
 // Built-in tasks of the session, in the fixed lists of the runner. Telemetry identity only; there is no registry.
 export type SequencerTaskId =
 	// Startup.
+	| 'bootstrapFocusBaseline'
 	| 'quiesceGuiding'
 	| 'quiesceDitherPulses'
 	| 'coolCamera'
