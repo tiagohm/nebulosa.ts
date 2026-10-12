@@ -919,6 +919,29 @@ describe('reconciliation (one row of section 36.6 per test)', () => {
 		await recovered.release()
 	})
 
+	test('auxiliary frames are outside the journal: never reported; delete clears the leftovers of a previous process once, keep keeps them', async () => {
+		const storage = await lockedStorage()
+		expect(await storage.auxiliaryDirectory('centering', 'keep')).toEqual({ ok: true, value: join(storage.directory!, 'auxiliary', 'centering') })
+		writeFileSync(join(storage.directory!, 'auxiliary', 'centering', 'a.1.fit'), FRAME)
+		await storage.release()
+		expect(await storage.auxiliaryDirectory('centering', 'delete')).toMatchObject({ ok: false, failure: { kind: 'storage' } })
+
+		const { storage: recovered, recovery } = await recoverIn(storage, undefined)
+		expect(recovery).toMatchObject({ ok: true, value: { warnings: [] } })
+		expect(await recovered.auxiliaryDirectory('centering', 'keep')).toMatchObject({ ok: true })
+		expect(filesOf(recovered.directory!)).toContain('auxiliary/centering/a.1.fit')
+
+		const directory = join(recovered.directory!, 'auxiliary', 'centering')
+		expect(await recovered.auxiliaryDirectory('centering', 'delete')).toEqual({ ok: true, value: directory })
+		expect(readdirSync(directory)).toEqual([])
+		// Cleared once per lock: a frame of this process survives the next call.
+		writeFileSync(join(directory, 'b.1.fit'), FRAME)
+		expect(await recovered.auxiliaryDirectory('centering', 'delete')).toMatchObject({ ok: true })
+		expect(readdirSync(directory)).toEqual(['b.1.fit'])
+		expect(kindsOf(await readSequencerJournal(join(recovered.directory!, 'journal.jsonl')))).toEqual([])
+		await recovered.release()
+	})
+
 	test('committed with its final missing or differing: storage failure, never captured again over it', async () => {
 		for (const finalState of ['missing', 'differing'] as const) {
 			const storage = await lockedStorage()

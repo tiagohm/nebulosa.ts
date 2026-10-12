@@ -2,6 +2,7 @@ import type { FrameType } from '../../devices/indi/device'
 import { createMeridianFlipState, type MeridianFlipState } from '../mount/meridian.flip'
 // oxfmt-ignore
 import type { SequencerCheckpoint, SequencerCheckpointSlot, SequencerConfiguration, SequencerCorrectiveIntents, SequencerFailure, SequencerFilterFocusOffsets, SequencerFocusBaseline, SequencerFrameSlot, SequencerFrameSlotSnapshot, SequencerIntents, SequencerMountRiskObservation, SequencerPhase, SequencerSafetyState, SequencerSchedulerState, SequencerSessionState, SequencerSnapshot, SequencerTaskId, SequencerTerminalState, SequencerTriggerAnchors } from './sequencer'
+import type { SequencerElapsedAnchors } from './trigger'
 
 // Runtime state of one Sequencer session and its pure transitions: the lifecycle state machine, the control
 // requests (pause, resume, stop) recorded as desired state, the logical counters persisted between processes and
@@ -85,6 +86,9 @@ export interface SequencerRuntimeState {
 	trackingStoppedForMeridianProtection: boolean
 	// Whether the session closed the optical path for calibration; after a restart the cover and wheel replace it.
 	opticalPathClosed: boolean
+	// Monotonic instants (ms) of the last success of each periodic action in this process, derived once from the
+	// persisted wall anchors after a restart; elapsed-time triggers read only these.
+	elapsedAnchors: SequencerElapsedAnchors
 	// Pending compensations, in registration order (run in reverse).
 	compensations: SequencerCompensation[]
 	// Pending meridian protection: a graceful request of the supervisor, its execution, or the hard path.
@@ -248,6 +252,7 @@ export function createSequencerRuntimeState(configuration: SequencerConfiguratio
 		meridianFlip: createMeridianFlipState(0),
 		trackingStoppedForMeridianProtection: false,
 		opticalPathClosed: false,
+		elapsedAnchors: {},
 		compensations: [],
 		startedAt: at,
 		updatedAt: at,

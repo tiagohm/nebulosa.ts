@@ -8,6 +8,7 @@ import type { CameraCaptureClock, CameraCaptureStart, CameraExposureTimeUnit } f
 import { isPathSegment } from '../../io/path'
 import type { Angle } from '../../math/units/angle'
 import type { AutoFocusFittingMode, AutoFocusOptions } from '../focus/autofocus'
+import type { CenteringSolver } from '../mount/centering'
 import type { SequencerStorage } from './storage'
 
 // Public contracts of the acquisition Sequencer: the declarative, JSON-serializable session configuration,
@@ -333,9 +334,10 @@ export interface SequencerPointingConfiguration {
 	readonly onFailure: SequencerFailureAction
 }
 
-// Field rotation before autofocus.
+// Field rotation before autofocus, of LIGHT frames only.
 export interface SequencerRotatorConfiguration {
-	// Sky position angle of the rotator, in radians, in [0, 2π).
+	// Mechanical angle of the rotator, in radians, in [0, 2π); converted to degrees only for the rotator commander,
+	// which maps it into the range the driver publishes.
 	readonly angle: Angle
 	// Accepted angular distance (wrapped) from `angle`, in radians; finite > 0.
 	readonly tolerance: Angle
@@ -604,6 +606,11 @@ export const DEFAULT_SEQUENCER_CAMERA_RECOVERY = { timeout: 300, pollInterval: 1
 // Default watchdog, in seconds, between aborting a frame collaborator (quality analyzer, plate solver, HFD
 // measurer) and reporting it unresponsive.
 export const DEFAULT_SEQUENCER_COLLABORATOR_ABORT_GRACE = 5
+
+// Plate solver of the centering, provided by the caller: an async function over the path of a complete auxiliary
+// FITS and its exposure midpoint that honors the signal and resolves the `plateSolutionFrom` solution (ICRS center of
+// a TAN/TAN-SIP solution with known dimensions) or undefined. Isolating its CPU work is the caller's responsibility.
+export type SequencerPlateSolver = CenteringSolver
 
 // Operational clock of the session, with two explicit domains and the wait of the monotonic one. Never
 // compare a wall instant with a monotonic one. Scientific time is always `timeUnix(wallNow() / 1000)`.

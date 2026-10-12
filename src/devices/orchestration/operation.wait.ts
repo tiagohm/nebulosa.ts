@@ -1,10 +1,12 @@
 import { errorMessage } from '../../core/util'
 import { failedOperationResult, successfulOperationResult, type OperationFailureReason, type OperationResult } from './operation'
 
-// Cancellable waiting primitives for device commands. Waits subscribe before commanding, settle on the
-// first decisive device state, a timeout, or an abort signal, and always remove their timers and listeners.
-// Every non-successful outcome of a dispatched command runs a physical abort before it settles, so a
-// caller never releases a device that may still be moving. Durations are milliseconds.
+// Cancellable waiting primitives for device commands and for cooperative jobs. Waits subscribe before
+// commanding, settle on the first decisive device state, a timeout, or an abort signal, and always remove their
+// timers and listeners. Every non-successful outcome of a dispatched command runs a physical abort before it
+// settles, so a caller never releases a device that may still be moving. A cooperative job (a caller-provided
+// plate solver, HFD measurer or quality analyzer) is aborted by its timeout but always awaited to its end, so
+// nothing it reads moves before it finished. Durations are milliseconds.
 
 // Everything needed to command a device and wait for the physical state that proves the command took
 // effect. The device itself is not a field: subscribe, current, and command already close over it.
@@ -101,6 +103,120 @@ export function abortableDelay(ms: number, signal: AbortSignal): Promise<Operati
 	const timer = setTimeout(() => finish(successfulOperationResult(undefined)), Math.max(0, ms))
 	signal.addEventListener('abort', onAbort, { once: true })
 	return delayed.promise
+}
+
+// Abortable wait in milliseconds with the contract of `abortableDelay`; injectable so a manual clock drives it.
+export type AbortableDelay = (ms: number, signal: AbortSignal) => Promise<OperationResult<void>>
+
+// Health of one collaborator across its calls, owned by the caller (one per service and session) and mutated in
+// place by `awaitCooperativeJob`.
+export interface CooperativeJobHealth {
+	// Set once a job outlived its abort grace and then ended; a faulted collaborator is never called again.
+	faulted: boolean
+	// Called once per job when it is still running `abortGrace` after its abort.
+	readonly onUnresponsive?: VoidFunction
+	// Called once, when such a job finally ended and the collaborator became faulted.
+	readonly onFaulted?: VoidFunction
+}
+
+// Bounds of one cooperative job.
+export interface CooperativeJobOptions {
+	// Cancellation of the caller; its abort aborts the job and ends as 'aborted'.
+	readonly signal: AbortSignal
+	// Time after which the job is aborted and ends as 'timeout', in ms (monotonic, through `delay`).
+	readonly timeout: number
+	// Watchdog after the abort before the job is reported unresponsive, in ms; it never shortens the wait.
+	readonly abortGrace: number
+	// Wait of the timeout and of the watchdog. Default `abortableDelay`.
+	readonly delay?: AbortableDelay
+	// Health of the collaborator; absent treats this call alone.
+	readonly health?: CooperativeJobHealth
+}
+
+// Outcome of a cooperative job.
+// - resolved / rejected: the job settled before any abort (a synchronous throw is a rejection);
+// - timeout / aborted: the job was aborted by its timeout or by the caller and then awaited to its end; whatever it
+//   produced is discarded. `unresponsive` reports that it outlived the abort grace (the collaborator is now faulted);
+// - faulted: the collaborator was already faulted and was not called.
+// A job whose caller was already aborted is not called either and ends as 'aborted'.
+export type CooperativeJobOutcome<T> = { readonly kind: 'resolved'; readonly value: T } | { readonly kind: 'rejected'; readonly error: unknown } | { readonly kind: 'timeout' | 'aborted'; readonly unresponsive: boolean } | { readonly kind: 'faulted' }
+
+// Runs a cooperative job with its own abort signal and a strictly cooperative timeout: the timeout or the caller
+// aborts the signal, and the job is then awaited without limit, so a file it reads is never moved or removed while
+// it still runs. `abortGrace` is only a watchdog: still running then, the job is reported once through
+// `health.onUnresponsive`, and when it finally ends the collaborator is marked faulted (`health.onFaulted`, once).
+// Exactly one outcome, decided by whichever of the settlement and the abort was observed first. Leaves no pending
+// delay or listener behind. Never rejects.
+export async function awaitCooperativeJob<T>(job: (signal: AbortSignal) => Promise<T>, options: CooperativeJobOptions): Promise<CooperativeJobOutcome<T>> {
+	const { signal, timeout, abortGrace, delay = abortableDelay, health } = options
+	if (health?.faulted === true) return { kind: 'faulted' }
+	if (signal.aborted) return { kind: 'aborted', unresponsive: false }
+
+	const controller = new AbortController()
+	const timer = new AbortController()
+	const aborted = Promise.withResolvers<undefined>()
+	let cause: 'timeout' | 'aborted' | undefined
+	// Set by the settlement itself, so neither a later abort nor the watchdog can contradict it.
+	let finished = false
+
+	const abort = (reason: 'timeout' | 'aborted') => {
+		if (cause !== undefined || finished) return
+		cause = reason
+		controller.abort(reason)
+		aborted.resolve(undefined)
+	}
+
+	const onAbort = () => abort('aborted')
+
+	signal.addEventListener('abort', onAbort, { once: true })
+
+	void delay(timeout, timer.signal).then((elapsed) => {
+		if (elapsed.ok) abort('timeout')
+	})
+
+	// Called synchronously; a synchronous throw becomes a rejection.
+	const running = new Promise<T>((resolve) => {
+		resolve(job(controller.signal))
+	})
+
+	const settled = running.then(
+		(value): CooperativeJobOutcome<T> => {
+			finished = true
+			return { kind: 'resolved', value }
+		},
+		(error: unknown): CooperativeJobOutcome<T> => {
+			finished = true
+			return { kind: 'rejected', error }
+		},
+	)
+
+	try {
+		const first = await Promise.race([settled, aborted.promise])
+		if (cause === undefined && first !== undefined) return first
+
+		// Aborted: the job is awaited to its end; the watchdog only reports it.
+		const watchdog = new AbortController()
+		let unresponsive = false
+
+		void delay(abortGrace, watchdog.signal).then((elapsed) => {
+			if (!elapsed.ok || finished) return
+			unresponsive = true
+			health?.onUnresponsive?.()
+		})
+
+		await settled
+		watchdog.abort()
+
+		if (unresponsive && health !== undefined) {
+			health.faulted = true
+			health.onFaulted?.()
+		}
+
+		return { kind: cause ?? 'aborted', unresponsive }
+	} finally {
+		timer.abort()
+		signal.removeEventListener('abort', onAbort)
+	}
 }
 
 // Subscribes before commanding a device and settles only after any canceled command has stopped.
