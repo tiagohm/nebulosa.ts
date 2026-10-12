@@ -61,6 +61,8 @@ export interface SequencerContext extends SequencerTaskView {
 	readonly scope: OperationContext
 	// Cancellation signal of the root.
 	readonly signal: AbortSignal
+	// Emits a session event of the task synchronously; the session stamps and delivers it.
+	readonly emit: (event: SequencerEventBody) => void
 }
 
 // Outcome of one task execution. A failure carries the session failure the phase policy applies to.
@@ -664,7 +666,7 @@ export class SequencerRunner {
 		}
 
 		const view = this.#view(frame)
-		const handle = this.startTask('sequencer.captureFrame', (scope) => this.#phases.capture({ ...view, scope, signal: scope.signal, destination, beforeExposure, exposureStarted }))
+		const handle = this.startTask('sequencer.captureFrame', (scope) => this.#phases.capture({ ...view, scope, signal: scope.signal, emit: this.#emitter, destination, beforeExposure, exposureStarted }))
 		const current = this.#begin(handle, 'capture', 'captureFrame')
 		const result = await handle.result
 		this.#end()
@@ -939,7 +941,7 @@ export class SequencerRunner {
 				continue
 			}
 
-			const handle = this.#startRoot(this.#shutdown.signal, `sequencer.${step.id}`, (scope) => step.run({ ...this.#view(), scope, signal: scope.signal }).then(successfulOperationResult))
+			const handle = this.#startRoot(this.#shutdown.signal, `sequencer.${step.id}`, (scope) => step.run({ ...this.#view(), scope, signal: scope.signal, emit: this.#emitter }).then(successfulOperationResult))
 			this.#runtime.task = step.id
 			this.#emit({ type: 'taskStarted', task: step.id, phase: 'shutdown' })
 			const result = await this.#bounded(handle, prefix ? undefined : Math.min(stepTimeout * 1000, remaining), this.#shutdown.signal)
@@ -971,7 +973,7 @@ export class SequencerRunner {
 
 		for (let attempt = 1; ; attempt++) {
 			if (this.#run.signal.aborted) return INTERRUPTED
-			const handle = this.startTask(`sequencer.${task.id}`, (scope) => task.run({ ...view, scope, signal: scope.signal }).then(successfulOperationResult))
+			const handle = this.startTask(`sequencer.${task.id}`, (scope) => task.run({ ...view, scope, signal: scope.signal, emit: this.#emitter }).then(successfulOperationResult))
 			const current = this.#begin(handle, phase, task.id)
 			const result = await handle.result
 			this.#end()
@@ -1370,6 +1372,9 @@ export class SequencerRunner {
 		const view = { sessionId: this.id, configuration: this.#configuration, devices: this.#devices, clock: this.#clock, state: this.#runtime }
 		return frame === undefined ? view : { ...view, frame }
 	}
+
+	// Event emission handed to the task contexts.
+	readonly #emitter = (body: SequencerEventBody) => this.#emit(body)
 
 	// Stamps and delivers an event. A throwing listener is reported and never breaks the session.
 	#emit(body: SequencerEventBody) {

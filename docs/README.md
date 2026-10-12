@@ -17168,7 +17168,7 @@ simulator.startExposure(20)
 simulator.abortExposure()
 console.log(simulator.isExposuring, image) // false undefined
 
-// Cooling, read through the thermometer (whole degrees Celsius). The power is in percent.
+// Cooling, read through the thermometer (degrees Celsius). The power is in percent.
 const thermometer = thermometers.get(client, simulator.name)!
 console.log(thermometer.temperature, camera.coolerPower) // 18 0
 simulator.setTargetTemperature(-10)
@@ -18741,7 +18741,7 @@ console.log(monitor.safe) // false
 
 ### INDI Thermometer
 
-`ThermometerManager(provider)` exposes the temperature sensor of a camera or a focuser as an independent `Thermometer` device. The `provider` resolves the parent by client, name and type (`'camera'` for `CCD_TEMPERATURE` and `'focuser'` for `FOCUS_TEMPERATURE`), so it is usually a small object that asks the camera manager and the focuser manager. When the temperature vector is defined for a known parent, the manager marks it with `hasThermometer` and creates a `'thermometer'` proxy device over it; the proxy shares the connection state of the parent and its `temperature` (°C) follows the vector (`TEMPERATURE` for a focuser and `CCD_TEMPERATURE_VALUE` for a camera). The manager keeps the temperature at whole degrees, reporting a change only when that integer changes, on the proxy and on the parent alike. Deleting the vector resets the temperature and the capability and removes the proxy. The manager has no commands, since the sensors are read-only.
+`ThermometerManager(provider)` exposes the temperature sensor of a camera or a focuser as an independent `Thermometer` device. The `provider` resolves the parent by client, name and type (`'camera'` for `CCD_TEMPERATURE` and `'focuser'` for `FOCUS_TEMPERATURE`), so it is usually a small object that asks the camera manager and the focuser manager. When the temperature vector is defined for a known parent, the manager marks it with `hasThermometer` and creates a `'thermometer'` proxy device over it; the proxy shares the connection state of the parent and its `temperature` (°C) follows the vector (`TEMPERATURE` for a focuser and `CCD_TEMPERATURE_VALUE` for a camera). The manager keeps the temperature at the precision the driver reports, and notifies a change (on the proxy and on the parent alike) whenever the value changes or the vector is in Alert, so the rate of notifications is the rate at which the driver publishes a new reading. Deleting the vector resets the temperature and the capability and removes the proxy. The manager has no commands, since the sensors are read-only.
 
 The focuser simulator publishes `FOCUS_TEMPERATURE` (see [INDI Focuser Simulator](#indi-focuser-simulator)), so the snippet uses it as the parent.
 
@@ -18768,9 +18768,9 @@ await Bun.sleep(100)
 const thermometer = thermometers.get(client, simulator.name)!
 console.log(thermometer.type, thermometer.hasThermometer, focuser.hasThermometer, thermometer.connected, thermometer.temperature, focuser.temperature) // thermometer true true true 18 18
 
-// A new reading from the driver, in degrees Celsius. The value is kept at whole degrees.
+// A new reading from the driver, in degrees Celsius, kept as reported.
 handler.numberVector(client, { device: simulator.name, name: 'FOCUS_TEMPERATURE', permission: 'ro', state: 'Ok', elements: { TEMPERATURE: { name: 'TEMPERATURE', format: '%6.2f', min: -50, max: 70, step: 0.1, value: 12.6 } } }, 'setNumberVector')
-console.log(thermometer.temperature, focuser.temperature) // 13 13
+console.log(thermometer.temperature, focuser.temperature) // 12.6 12.6
 
 // Disconnecting the parent deletes the property and removes the proxy.
 focusers.disconnect(focuser)
