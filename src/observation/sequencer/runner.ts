@@ -1,12 +1,12 @@
 import { errorMessage } from '../../core/util'
 import type { Device } from '../../devices/indi/device'
-import { type FailedOperationResult, failedOperationResult, type OperationContext, type OperationExecutor, type OperationHandle, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
-import { type ResourceConflict, type ResourceRequest, type ResourceReservation, type ResourceReservationOwner, resourceKey } from '../../devices/orchestration/resource'
+import { type FailedOperationResult, failedOperationResult, type OperationContext, type OperationCoordinator, type OperationExecutor, type OperationHandle, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
+import { type ResourceConflict, type ResourceKey, type ResourceRequest, type ResourceReservation, type ResourceReservationOwner, resourceKey } from '../../devices/orchestration/resource'
 import { MountDitherer } from '../guiding/ditherer'
 import { createMeridianFlipState } from '../mount/meridian.flip'
 import { restoreSequencerFrameSlot, selectNextFrame, selectNextFrameOnStop, type SequencerTriggerEvent } from './scheduler'
 // oxfmt-ignore
-import { type SequencerCheckpoint, type SequencerCheckpointSlot, type SequencerClock, type SequencerConfiguration, type SequencerDevices, type SequencerEventBody, type SequencerFailure, type SequencerFrameSlot, type SequencerHandle, type SequencerOptionalFailureAction, type SequencerPhase, type SequencerResult, type SequencerRetryPolicy, type SequencerRunnerServices, type SequencerSessionState, type SequencerShutdownStepPolicy, type SequencerSnapshot, type SequencerTaskId, type SequencerTerminalState, SYSTEM_SEQUENCER_CLOCK } from './sequencer'
+import { type SequencerCheckpoint, type SequencerCheckpointSlot, type SequencerClock, type SequencerConfiguration, type SequencerDevices, type SequencerEventBody, type SequencerFailure, type SequencerFailureAction, type SequencerFrameSlot, type SequencerHandle, type SequencerOptionalFailureAction, type SequencerPhase, type SequencerResult, type SequencerRetryPolicy, type SequencerRunnerServices, type SequencerSessionState, type SequencerShutdownStepPolicy, type SequencerSnapshot, type SequencerTaskId, type SequencerTerminalState, SYSTEM_SEQUENCER_CLOCK } from './sequencer'
 // oxfmt-ignore
 import { applySequencerCheckpoint, createSequencerRuntimeState, isTerminalSequencerState, requestSequencerHold, requestSequencerPause, requestSequencerResume, requestSequencerStop, type SequencerCompensation, type SequencerRuntimeState, type SequencerStopMode, sequencerCaptureProgressSnapshot, sequencerCheckpointOf, sequencerFrameSlotSnapshot, sequencerSnapshot, shouldHoldSequencer, transitionSequencerState } from './state'
 import type { SequencerDeferReason, SequencerFrameDestination, SequencerStorage } from './storage'
@@ -34,6 +34,13 @@ import { bootstrapSequencerElapsedAnchors } from './trigger'
 // aborted; tasks pass the root context to commanders, so cancelling the root cancels everything they commanded.
 // The run signal covers startup, pre-capture, capture and post-capture; the shutdown has a signal of its own that
 // only `dispose()` aborts, so an immediate stop never cancels the steps that leave the observatory safe.
+//
+// A supervisor (the meridian limit) is armed right after the reservation and the guiding run admission, before any
+// command, and only asks for protections: a graceful one runs as a task at the next safe point; a critical one
+// (`protectCritically`) cancels the current task at once and runs as a single-flight critical root while that task
+// still quiesces, and no task, drain, compensation or shutdown step starts before its outcome. The final guard may ask
+// the pre-capture to re-enter instead of exposing; past `SEQUENCER_REENTRY_LIMIT` re-entries without an exposure the
+// session fails instead of looping.
 //
 // The task lists are explicit arrays the session builds in its fixed physical order; there is no registry and no
 // instruction pointer. Durations of the configuration are seconds and become milliseconds only at the clock; every
@@ -73,8 +80,65 @@ export interface SequencerContext extends SequencerTaskView {
 	readonly saveCheckpoint: () => Promise<SequencerTaskResult>
 }
 
-// Outcome of one task execution. A failure carries the session failure the phase policy applies to.
-export type SequencerTaskResult = { readonly ok: true } | SequencerFailedTaskResult
+// Outcome of one task execution. A failure carries the session failure the phase policy applies to; a success may ask
+// the pre-capture to re-enter instead of exposing (`reenter`, the refusal of the final exposure guard).
+export type SequencerTaskResult = { readonly ok: true; readonly reenter?: SequencerReentry } | SequencerFailedTaskResult
+
+// Re-entry of the pre-capture asked by a task that succeeded without letting the frame be exposed now. It counts
+// against the limit of re-entries without progress (`SEQUENCER_REENTRY_LIMIT`) and consumes no attempt.
+export interface SequencerReentry {
+	// Why the frame may not be exposed now; diagnostic.
+	readonly reason: string
+	// Wait before the re-entry, in ms of the monotonic clock; a safe point for pause, stop and protections.
+	readonly wait?: number
+}
+
+// Re-entries of the pre-capture of one slot without an exposure in between (guard and `beforeExposure` refusals) above
+// which the session fails as a logic bug instead of looping (section 43). Re-entries of a meridian protection never count.
+export const SEQUENCER_REENTRY_LIMIT = 3
+
+// Root of the run that may move the mount: its task and the resource keys whose lease can move it (section 24.5).
+export interface SequencerMotionOwner {
+	// Task of the root.
+	readonly task: SequencerTaskId
+	// Mount or movement keys the root may lease.
+	readonly keys: readonly ResourceKey[]
+}
+
+// Outcome of a critical protection: success, or the failure with the session action to apply.
+export type SequencerProtectionOutcome = { readonly ok: true } | { readonly ok: false; readonly failure: SequencerFailure; readonly action: SequencerFailureAction }
+
+// What the runner offers a supervisor (the meridian limit supervision) while it is armed.
+export interface SequencerSupervisorHost {
+	// Live view of the session, with the slot in progress.
+	readonly view: () => SequencerTaskView
+	// Emits a session event synchronously.
+	readonly emit: (event: SequencerEventBody) => void
+	// Asks for a graceful protection run as a task at the next safe point (`SequencerRunner.requestProtection`).
+	readonly requestProtection: (action: SequencerTask) => boolean
+	// Runs `protect` at once as the critical root `kind`, single-flight (see `SequencerRunner.protectCritically`).
+	readonly protectCritically: (kind: string, protect: OperationExecutor<SequencerProtectionOutcome>) => Promise<SequencerProtectionOutcome>
+	// Fails the session with `failure` (a configuration failure such as `meridianCycleExceeded`).
+	readonly fail: (failure: SequencerFailure) => void
+	// Living roots of the run that may move the mount, by root id; a root being started, whose first synchronous stretch
+	// runs before its id is known, is listed under a provisional key.
+	readonly motionOwners: ReadonlyMap<string, SequencerMotionOwner>
+	// Orchestration core of the session.
+	readonly coordinator: OperationCoordinator
+}
+
+// Continuous supervision of a session (the meridian limit), armed synchronously right after the reservation and the
+// guiding run admission (step 0b), before any command, and disarmed by the terminalization at the latest.
+export interface SequencerSupervisor {
+	// Arms the supervision; never awaits.
+	readonly arm: (host: SequencerSupervisorHost) => void
+	// Motion keys of the roots of `task` (`mountKeyHolders`); empty when it moves nothing.
+	readonly motionKeys: (task: SequencerTaskId) => readonly ResourceKey[]
+	// A safe point passed: re-evaluate.
+	readonly safePoint: VoidFunction
+	// Ends the supervision; idempotent.
+	readonly disarm: VoidFunction
+}
 
 // Failed outcome of one task execution.
 export interface SequencerFailedTaskResult {
@@ -162,6 +226,12 @@ export interface SequencerRunnerPhases {
 	readonly capture: SequencerCaptureStep
 	// Equipment shutdown, always run once the reservation was taken.
 	readonly shutdown: readonly SequencerShutdownTask[]
+	// Continuous supervision (the meridian limit) armed at step 0b; absent supervises nothing.
+	readonly supervisor?: SequencerSupervisor
+	// Last synchronous check of the session right before an exposure is dispatched (the final exposure guard repeated by
+	// `beforeExposure`): why the exposure of the frame of `view` must not go now, or undefined. It reads the devices and
+	// the session state only; it never awaits nor commands.
+	readonly exposureRefusal?: (view: SequencerTaskView) => string | undefined
 }
 
 // Input of one session runner.
@@ -233,10 +303,10 @@ export function sequencerRetryDelay(policy: SequencerRetryPolicy, retry: number)
 const FAIL_POLICY: SequencerTaskPolicy = { onFailure: 'fail' }
 
 // Outcome of one task after its retries.
-// - done: it succeeded or did not need to run;
+// - done: it succeeded or did not need to run; `reenter` when it asked the pre-capture to re-enter;
 // - interrupted: the runner cancelled it (stop, protection, disposal); never retried;
 // - failed: its retries are exhausted and `action` applies.
-type TaskOutcome = { readonly kind: 'done' } | { readonly kind: 'interrupted' } | { readonly kind: 'failed'; readonly failure: SequencerFailure; readonly action: SequencerOptionalFailureAction }
+type TaskOutcome = { readonly kind: 'done'; readonly reenter?: SequencerReentry } | { readonly kind: 'interrupted' } | { readonly kind: 'failed'; readonly failure: SequencerFailure; readonly action: SequencerOptionalFailureAction }
 
 // Outcome of the capture of one frame. Only an exposure `beforeExposure` approved was commanded and may count.
 // - captured: the exposure produced a frame;
@@ -343,6 +413,20 @@ export class SequencerRunner {
 	#dispatched?: SequencerFrameDestination
 	// End of the guiding run, registered once `beginRun` succeeded and called exactly once by the terminalization.
 	#endRun?: VoidFunction
+	// Critical protection in flight (single-flight); every task, drain and shutdown step waits for it.
+	#critical?: Promise<SequencerProtectionOutcome>
+	// Living roots of the run that may move the mount, by root id (a provisional key while the root starts).
+	readonly #motionOwners = new Map<string, SequencerMotionOwner>()
+	// Provisional keys of the motion owners being started.
+	#startingMotion = 0
+	// Re-entries of the pre-capture of the current slot without an exposure (guard and `beforeExposure` refusals).
+	#reentries = 0
+	// Wait of a guard re-entry, also interrupted by a pause request.
+	#pausableWait?: AbortController
+	// Whether a failed critical protection asked to hold at the next safe point, the startup included.
+	#policyHold = false
+	// What the supervisor of the session may use while armed.
+	readonly #host: SequencerSupervisorHost
 
 	constructor(options: SequencerRunnerOptions) {
 		const { configuration, devices, services, phases, disposeSignal } = options
@@ -356,6 +440,15 @@ export class SequencerRunner {
 		this.#runtime = createSequencerRuntimeState(configuration, this.#clock.wallNow())
 		this.#owner = { id: this.id, kind: 'sequencer' }
 		this.#disposeSignal = disposeSignal
+		this.#host = Object.freeze({
+			view: () => this.#view(this.#runtime.currentFrame),
+			emit: this.#emitter,
+			requestProtection: (action: SequencerTask) => this.requestProtection(action),
+			protectCritically: (kind: string, protect: OperationExecutor<SequencerProtectionOutcome>) => this.protectCritically(kind, protect),
+			fail: (failure: SequencerFailure) => this.#fail(failure),
+			motionOwners: this.#motionOwners,
+			coordinator: services.coordinator,
+		})
 
 		this.handle = Object.freeze({
 			id: this.id,
@@ -408,6 +501,40 @@ export class SequencerRunner {
 		this.#wake?.()
 
 		return true
+	}
+
+	// Critical protection (the hard meridian path of section 24.5, the safety one of section 32.4): stage 1 of the drain
+	// at once (the current task, a capture included, is cancelled without waiting for it, and a wait of the run is
+	// interrupted), then `protect` runs as the critical root `kind`, gated only by the disposal, while the cancelled task
+	// still quiesces. Single-flight: a call arriving with one in flight gets its outcome and starts nothing. Until it
+	// ends no task, compensation, drain or shutdown step starts; afterwards the interrupted flow goes on (stage 2 of the
+	// drain, compensations, re-entry or re-execution of the startup step). A failed outcome applies its action: 'fail',
+	// 'stop' (graceful) or 'pause' (a hold at the next safe point, the startup included). Never rejects.
+	protectCritically(kind: string, protect: OperationExecutor<SequencerProtectionOutcome>): Promise<SequencerProtectionOutcome> {
+		if (this.#critical !== undefined) return this.#critical
+
+		// Nothing to protect without the reservation (before the admission, after the release): refused, nothing applied.
+		if (this.#reservation === undefined || isTerminalSequencerState(this.#runtime.state)) {
+			return Promise.resolve({ ok: false, failure: { kind: 'operation', reason: 'aborted', detail: 'the session holds no reservation' }, action: 'fail' })
+		}
+
+		const run = async (): Promise<SequencerProtectionOutcome> => {
+			this.#runtime.meridianProtection = 'hard'
+			this.#interrupt(true)
+
+			const result = await this.startCriticalTask(kind, protect).result
+			const outcome: SequencerProtectionOutcome = result.ok ? result.value : { ok: false, failure: result.error === undefined ? { kind: 'operation', reason: result.reason } : { kind: 'operation', reason: result.reason, detail: result.error }, action: 'fail' }
+			this.#runtime.meridianProtection = this.#protection !== undefined ? 'requested' : undefined
+			if (!outcome.ok) this.#applyProtectionFailure(outcome)
+			return outcome
+		}
+
+		const critical = run().finally(() => {
+			this.#critical = undefined
+		})
+
+		this.#critical = critical
+		return critical
 	}
 
 	// Persists one more started meridian flip before FLIP_STARTED is applied and the flip commanded (section 34.2): the
@@ -501,6 +628,9 @@ export class SequencerRunner {
 
 		const { ditherer } = this.#services
 		if (this.#configuration.dither !== undefined && ditherer instanceof MountDitherer) ditherer.assumeDispatchedPulses()
+
+		// Step 0b, still without any await since the reservation: the supervision is armed before the first command.
+		this.#phases.supervisor?.arm(this.#host)
 
 		return true
 	}
@@ -600,6 +730,11 @@ export class SequencerRunner {
 				continue
 			}
 
+			if (this.#policyHold) {
+				if (!(await this.#hold('policy'))) return false
+				continue
+			}
+
 			const outcome = await this.#runTask(tasks[i], 'startup', tasks[i].policy ?? policy)
 
 			if (outcome.kind === 'done') i++
@@ -651,6 +786,7 @@ export class SequencerRunner {
 
 			this.#runtime.currentFrame = frame
 			this.#consumed = false
+			if (frame.id !== previous?.id) this.#reentries = 0
 
 			// A new slot changed the scheduler state: it is persisted, with the slot in progress, before anything is
 			// prepared for it, so a restart selects exactly the same slot.
@@ -676,6 +812,7 @@ export class SequencerRunner {
 
 		reentry: while (true) {
 			this.#setPhase('preCapture')
+			this.#phases.supervisor?.safePoint()
 
 			for (let i = 0; i <= tasks.length; i++) {
 				if (this.#abandons(frame)) {
@@ -700,8 +837,17 @@ export class SequencerRunner {
 				const outcome = await this.#runTask(tasks[i], 'preCapture', tasks[i].policy ?? FAIL_POLICY, frame)
 
 				if (outcome.kind === 'interrupted') {
-					await this.#defer(this.#protection !== undefined ? 'meridian' : 'stop')
+					await this.#defer(this.#protecting() ? 'meridian' : 'stop')
 					await this.#quiesce()
+					continue reentry
+				}
+
+				if (outcome.kind === 'done' && outcome.reenter !== undefined) {
+					// The guard refused the frame: the attempt is closed before waiting, and the safe point starts over.
+					await this.#defer('guard')
+					if (this.#failing || !this.#countReentry(tasks[i].id, outcome.reenter.reason)) return false
+					const { wait } = outcome.reenter
+					if (wait !== undefined && !this.#abandons(frame)) await this.#wait(wait, true)
 					continue reentry
 				}
 
@@ -721,6 +867,7 @@ export class SequencerRunner {
 	// an approved exposure counts as a commanded attempt. A stop lets an approved exposure finish unless immediate; a
 	// protection cancels it.
 	async #capture(frame: SequencerFrameSlot): Promise<CaptureOutcome> {
+		await this.#awaitCritical()
 		if (this.#abandons(frame) || this.#run.signal.aborted) return { kind: 'deferred', reason: 'stop' }
 
 		const destination = this.#storage.prepared
@@ -733,15 +880,26 @@ export class SequencerRunner {
 		this.#setPhase('capture')
 		this.#dispatched = undefined
 		let decision: 'approved' | 'refused' | undefined
+		// Whether the refusal came from the exposure guard, which counts as a re-entry without progress.
+		let guarded = false
 
 		const beforeExposure = () => {
 			if (decision !== undefined) return decision === 'approved' ? undefined : failedOperationResult('aborted', 'the exposure was already refused')
 			const refusal = this.#exposureRefusal(frame)
 
 			if (refusal === undefined) {
-				decision = 'approved'
-				this.#dispatched = destination
-				return undefined
+				const guard = this.#phases.exposureRefusal?.(this.#view(frame))
+
+				if (guard === undefined) {
+					decision = 'approved'
+					this.#dispatched = destination
+					this.#reentries = 0
+					return undefined
+				}
+
+				guarded = true
+				decision = 'refused'
+				return failedOperationResult('aborted', guard)
 			}
 
 			decision = 'refused'
@@ -753,7 +911,7 @@ export class SequencerRunner {
 		}
 
 		const view = this.#view(frame)
-		const handle = this.startTask('sequencer.captureFrame', (scope) => this.#phases.capture({ ...view, scope, signal: scope.signal, reservation: this.#runReservation, emit: this.#emitter, saveCheckpoint: this.#saver, destination, beforeExposure, exposureStarted }))
+		const handle = this.#startTracked('captureFrame', () => this.startTask('sequencer.captureFrame', (scope) => this.#phases.capture({ ...view, scope, signal: scope.signal, reservation: this.#runReservation, emit: this.#emitter, saveCheckpoint: this.#saver, destination, beforeExposure, exposureStarted })))
 		const current = this.#begin(handle, 'capture', 'captureFrame')
 		const result = await handle.result
 		this.#end()
@@ -765,10 +923,15 @@ export class SequencerRunner {
 
 		const failure = operationFailure('captureFrame', result)
 		this.#emit({ type: 'taskFailed', task: 'captureFrame', phase: 'capture', failure })
-		if (decision === 'refused') return { kind: 'deferred', reason: 'beforeExposure' }
+
+		if (decision === 'refused') {
+			// A refusal of the guard is a re-entry without progress; past the limit the session fails.
+			if (guarded) this.#countReentry('finalExposureGuard', failure.kind === 'operation' ? (failure.detail ?? failure.reason) : failure.kind)
+			return { kind: 'deferred', reason: 'beforeExposure' }
+		}
 
 		const cancelled = current.interrupted || this.#run.signal.aborted
-		const protection = current.interrupted && this.#protection !== undefined && !this.#run.signal.aborted
+		const protection = current.interrupted && this.#protecting() && !this.#run.signal.aborted
 
 		if (decision === undefined) {
 			if (protection) return { kind: 'deferred', reason: 'meridian' }
@@ -784,7 +947,8 @@ export class SequencerRunner {
 	// pending protection or a pending pause. Synchronous: it reads only the session state.
 	#exposureRefusal(frame: SequencerFrameSlot) {
 		if (this.#abandons(frame) || this.#run.signal.aborted) return 'a stop was requested'
-		if (this.#protection !== undefined) return 'a meridian protection is pending'
+		if (this.#protecting()) return 'a meridian protection is pending'
+		if (this.#policyHold) return 'a protection failure holds the session'
 		if (shouldHoldSequencer(this.#runtime)) return 'a pause was requested'
 		return undefined
 	}
@@ -988,6 +1152,7 @@ export class SequencerRunner {
 			this.#shutdownFailures.push({ kind: 'operation', reason: 'commandFailed', detail: errorMessage(error) })
 			this.#shutdownFailed = true
 		} finally {
+			this.#phases.supervisor?.disarm()
 			await this.#services.coordinator.cancelByReservationOwner(this.#owner, 'aborted')
 			this.#endGuidingRun()
 			this.#reservation?.release()
@@ -1016,6 +1181,9 @@ export class SequencerRunner {
 		const deadline = this.#clock.monotonicNow() + totalTimeout * 1000
 
 		for (const step of this.#phases.shutdown) {
+			// A critical protection in flight is the tracking prefix already running: it is awaited, never duplicated.
+			await this.#awaitCritical()
+
 			if (this.#shutdown.signal.aborted) {
 				this.#shutdownFailures.push({ kind: 'operation', reason: 'aborted', task: step.id, detail: 'disposed' })
 				this.#shutdownFailed = true
@@ -1041,7 +1209,7 @@ export class SequencerRunner {
 				continue
 			}
 
-			const handle = this.#startRoot(this.#shutdown.signal, `sequencer.${step.id}`, (scope) => step.run({ ...this.#view(), scope, signal: scope.signal, reservation: this.#shutdownReservation, emit: this.#emitter, saveCheckpoint: this.#saver }).then(successfulOperationResult))
+			const handle = this.#startTracked(step.id, () => this.#startRoot(this.#shutdown.signal, `sequencer.${step.id}`, (scope) => step.run({ ...this.#view(), scope, signal: scope.signal, reservation: this.#shutdownReservation, emit: this.#emitter, saveCheckpoint: this.#saver }).then(successfulOperationResult)))
 			this.#runtime.task = step.id
 			this.#emit({ type: 'taskStarted', task: step.id, phase: 'shutdown' })
 			const result = await this.#bounded(handle, prefix ? undefined : Math.min(stepTimeout * 1000, remaining), this.#shutdown.signal)
@@ -1073,8 +1241,16 @@ export class SequencerRunner {
 		}
 
 		for (let attempt = 1; ; attempt++) {
+			// No task starts while a critical protection runs: nothing else may command before its tracking off. A
+			// protection whose failure action decided the flow meanwhile (a stop, a failure, a hold) leaves the task
+			// unstarted, so the phase honours that action first.
+			const critical = this.#critical !== undefined
+			const stop = this.#runtime.stop
+			const holding = shouldHoldSequencer(this.#runtime)
+			await this.#awaitCritical()
 			if (this.#run.signal.aborted) return INTERRUPTED
-			const handle = this.startTask(`sequencer.${task.id}`, (scope) => task.run({ ...view, scope, signal: scope.signal, reservation: this.#runReservation, emit: this.#emitter, saveCheckpoint: this.#saver }).then(successfulOperationResult))
+			if (critical && (this.#runtime.stop !== stop || this.#failing || (!holding && shouldHoldSequencer(this.#runtime)))) return INTERRUPTED
+			const handle = this.#startTracked(task.id, () => this.startTask(`sequencer.${task.id}`, (scope) => task.run({ ...view, scope, signal: scope.signal, reservation: this.#runReservation, emit: this.#emitter, saveCheckpoint: this.#saver }).then(successfulOperationResult)))
 			const current = this.#begin(handle, phase, task.id)
 			const result = await handle.result
 			this.#end()
@@ -1083,7 +1259,8 @@ export class SequencerRunner {
 
 			if (failure === undefined) {
 				this.#emit({ type: 'taskCompleted', task: task.id, phase })
-				return DONE
+				const reenter = result.ok && result.value.ok ? result.value.reenter : undefined
+				return reenter === undefined ? DONE : { kind: 'done', reenter }
 			}
 
 			this.#emit({ type: 'taskFailed', task: task.id, phase, failure })
@@ -1143,6 +1320,7 @@ export class SequencerRunner {
 	// protection request; a protection runs as a task and the hold continues. The reservation stays. Returns whether
 	// the session resumed (then 'running', with the capture budget renewed after a capture-policy pause).
 	async #hold(cause: HoldCause) {
+		this.#policyHold = false
 		await this.#quiesce()
 		if (this.#runtime.stop !== undefined || this.#failing) return false
 
@@ -1247,6 +1425,9 @@ export class SequencerRunner {
 	// result by the loop), then every pending compensation. The drain reopens the reservation tokens when it ends and
 	// preserves the root of the guiding session, whose lifetime is the session's (section 16.4).
 	async #quiesce() {
+		// Stage 2 and the compensations never start before a critical protection reached its outcome.
+		await this.#awaitCritical()
+
 		if (this.#drainPending) {
 			this.#drainPending = false
 			await this.#services.coordinator.drainByReservationOwner(this.#owner, 'aborted', this.#services.guiding?.operationId?.())
@@ -1312,8 +1493,9 @@ export class SequencerRunner {
 		}
 	}
 
-	// Abortable wait of the run in the monotonic domain; false when interrupted.
-	async #wait(ms: number) {
+	// Abortable wait of the run in the monotonic domain, also interrupted by a protection and, when `pausable`, by a
+	// pause request; false when interrupted.
+	async #wait(ms: number, pausable = false) {
 		if (!(ms > 0)) return true
 		if (this.#run.signal.aborted) return false
 
@@ -1321,13 +1503,23 @@ export class SequencerRunner {
 		const abort = () => controller.abort()
 		this.#run.signal.addEventListener('abort', abort, { once: true })
 		this.#waiting = controller
+		if (pausable) this.#pausableWait = controller
 
 		try {
 			return (await this.#clock.delay(ms, controller.signal)).ok
 		} finally {
 			this.#run.signal.removeEventListener('abort', abort)
 			this.#waiting = undefined
+			if (this.#pausableWait === controller) this.#pausableWait = undefined
 		}
+	}
+
+	// Counts one re-entry of the pre-capture without progress; past `SEQUENCER_REENTRY_LIMIT` the session fails with a
+	// logic failure of `task` instead of looping. Returns whether the pre-capture may re-enter.
+	#countReentry(task: SequencerTaskId, reason: string) {
+		if (++this.#reentries <= SEQUENCER_REENTRY_LIMIT) return true
+		this.#fail({ kind: 'operation', reason: 'unexpectedState', task, detail: `the pre-capture re-entered ${this.#reentries} times without exposing: ${reason}` })
+		return false
 	}
 
 	// Opens a root of the reservation, leasing `resources`, unless `signal` aborted or nothing is reserved.
@@ -1377,6 +1569,9 @@ export class SequencerRunner {
 		if (!requestSequencerPause(this.#runtime)) return this.#result.promise.then((result) => result.state)
 		if (state === 'paused') return Promise.resolve<SequencerSessionState>('paused')
 
+		// The wait of a guard re-entry is a safe point: the pause is honored without waiting it out.
+		this.#pausableWait?.abort()
+
 		this.#pause = Promise.withResolvers()
 		return this.#pause.promise
 	}
@@ -1410,6 +1605,55 @@ export class SequencerRunner {
 		}
 
 		return this.#result.promise
+	}
+
+	// Applies the action of a failed critical protection: fail, stop gracefully, or hold at the next safe point.
+	#applyProtectionFailure(outcome: Extract<SequencerProtectionOutcome, { readonly ok: false }>) {
+		switch (outcome.action) {
+			case 'fail':
+				this.#fail(outcome.failure)
+				return
+			case 'stop':
+				this.#policyStop(outcome.failure)
+				return
+			case 'pause':
+				if (this.#runtime.stop !== undefined || this.#failing) return
+				requestSequencerHold(this.#runtime)
+				this.#policyHold = true
+		}
+	}
+
+	// Waits until no critical protection is in flight.
+	async #awaitCritical() {
+		while (this.#critical !== undefined) await this.#critical
+	}
+
+	// Whether the run is interrupted for a protection: a graceful request pending or running, or a critical one in flight.
+	#protecting() {
+		return this.#protection !== undefined || this.#critical !== undefined
+	}
+
+	// Opens the root of a run or shutdown task through `start` and records it as a motion owner while it lives when its
+	// task may move the mount. The owner is recorded before the root starts, under a provisional key until its id is
+	// known: the first synchronous stretch of the task runs inside `start` and may already command the mount.
+	#startTracked<T>(task: SequencerTaskId, start: () => OperationHandle<T>): OperationHandle<T> {
+		const keys = this.#phases.supervisor?.motionKeys(task) ?? []
+		if (keys.length === 0) return start()
+
+		const owner: SequencerMotionOwner = { task, keys }
+		const provisional = `starting#${++this.#startingMotion}`
+		this.#motionOwners.set(provisional, owner)
+		let handle: OperationHandle<T>
+
+		try {
+			handle = start()
+		} finally {
+			this.#motionOwners.delete(provisional)
+		}
+
+		this.#motionOwners.set(handle.id, owner)
+		void handle.result.then(() => this.#motionOwners.delete(handle.id))
+		return handle
 	}
 
 	// Graceful stop requested by a failure action 'stop'.

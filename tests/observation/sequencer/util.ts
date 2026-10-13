@@ -2,17 +2,20 @@ import { spyOn } from 'bun:test'
 import * as fsp from 'node:fs/promises'
 import { tmpdir } from 'os'
 import { join, sep } from 'path'
+import { equatorialToJ2000 } from '../../../src/astronomy/coordinates/coordinate'
+import { localSiderealTime } from '../../../src/astronomy/observer/location'
+import { timeUnix } from '../../../src/astronomy/time/time'
 import { CameraCommander } from '../../../src/devices/commanders/camera'
 import { CoverCommander } from '../../../src/devices/commanders/cover'
 import { DomeCommander } from '../../../src/devices/commanders/dome'
 import { FlatPanelCommander } from '../../../src/devices/commanders/flatpanel'
 import { FocuserCommander } from '../../../src/devices/commanders/focuser'
 import { GuideOutputCommander } from '../../../src/devices/commanders/guideoutput'
-import { MountCommander } from '../../../src/devices/commanders/mount'
+import { MountCommander, type MountCommandOptions, type MountFlipResult, type MountSlewResult } from '../../../src/devices/commanders/mount'
 import { RotatorCommander } from '../../../src/devices/commanders/rotator'
 import { WheelCommander } from '../../../src/devices/commanders/wheel'
 import { IndiClientHandlerSet } from '../../../src/devices/indi/client'
-import type { Camera, Cover, Device, Dome, FlatPanel, Focuser, GuideOutput, Mount, Rotator, SafetyMonitor, Wheel } from '../../../src/devices/indi/device'
+import { type Camera, type Cover, DEFAULT_MOUNT, type Device, type Dome, type FlatPanel, type Focuser, type GuideOutput, type Mount, type MountTargetCoordinate, type PierSide, type Rotator, type SafetyMonitor, type TrackMode, type Wheel } from '../../../src/devices/indi/device'
 import { CameraManager } from '../../../src/devices/indi/manager/camera'
 import { CoverManager } from '../../../src/devices/indi/manager/cover'
 import type { DeviceManager } from '../../../src/devices/indi/manager/device'
@@ -20,7 +23,7 @@ import { DomeManager } from '../../../src/devices/indi/manager/dome'
 import { FlatPanelManager } from '../../../src/devices/indi/manager/flatpanel'
 import { FocuserManager } from '../../../src/devices/indi/manager/focuser'
 import { GuideOutputManager } from '../../../src/devices/indi/manager/guideoutput'
-import { MountManager } from '../../../src/devices/indi/manager/mount'
+import { MountManager, mountTargetEquatorial } from '../../../src/devices/indi/manager/mount'
 import { RotatorManager } from '../../../src/devices/indi/manager/rotator'
 import { SafetyMonitorManager } from '../../../src/devices/indi/manager/safetymonitor'
 import { ThermometerManager } from '../../../src/devices/indi/manager/thermometer'
@@ -40,11 +43,11 @@ import { DeviceLifecycle } from '../../../src/devices/orchestration/device.lifec
 import { failedOperationResult, type OperationContext, OperationCoordinator, type OperationFailureReason, type OperationHandle, type OperationResult, type OperationScope, successfulOperationResult } from '../../../src/devices/orchestration/operation'
 import { ResourceArbiter, type ResourceRequest, type ResourceReservation, type ResourceReservationOwner, resourceKey } from '../../../src/devices/orchestration/resource'
 import { CameraCapturer } from '../../../src/devices/runners/camera.capture'
-import { deg, hour } from '../../../src/math/units/angle'
+import { type Angle, deg, hour, normalizeAngle, normalizePI } from '../../../src/math/units/angle'
 import type { Ditherer, DitherPhase, DitherRequest, DitherResult } from '../../../src/observation/guiding/ditherer'
 // oxfmt-ignore
 import { type GuidingInterruption, GuidingInterruptionHistory, type GuidingSession, type GuidingSessionState, type GuidingSettle, type GuidingStartOptions } from '../../../src/observation/guiding/session'
-import type { SequencerEvent, SequencerListener, SequencerTaskId } from '../../../src/observation/sequencer/sequencer'
+import type { SequencerClock, SequencerEvent, SequencerListener, SequencerTarget, SequencerTaskId } from '../../../src/observation/sequencer/sequencer'
 import type { SequencerJournalEntry } from '../../../src/observation/sequencer/storage'
 import { waitUntil } from '../../util'
 
@@ -502,21 +505,33 @@ export interface DeviceRecorder extends Disposable {
 // tracking, track mode, slewing, published coordinates and their flags, safety, exposure, connection), plus device
 // additions and removals. Commands still reach the managers.
 export function recordDevices(rig: SequencerRig, clock: RecorderClock = SYSTEM_RECORDER_CLOCK, sequence: TestSequence = createTestSequence()): DeviceRecorder {
+	return recordManagers(rig.managers, clock, sequence)
+}
+
+// Records like `recordDevices` over the given managers only, such as the camera and guide output managers of a test
+// without the rig.
+export function recordManagers(managers: Partial<SequencerRigManagers>, clock: RecorderClock = SYSTEM_RECORDER_CLOCK, sequence: TestSequence = createTestSequence()): DeviceRecorder {
 	const entries: DeviceLogEntry[] = []
 	const restores: VoidFunction[] = []
 	const stamp = () => ({ sequence: sequence.next(), wallNow: clock.wallNow(), monotonicNow: clock.monotonicNow() })
 
 	for (const key of Object.keys(RECORDED_COMMANDS) as (keyof SequencerRigManagers)[]) {
-		const manager = rig.managers[key] as unknown as Record<string, (...args: never[]) => unknown>
+		if (managers[key] === undefined) continue
+		const manager = managers[key] as unknown as Record<string, (...args: never[]) => unknown>
 
 		for (const command of RECORDED_COMMANDS[key]) {
-			const original = manager[command].bind(manager)
-			const spy = spyOn(manager, command).mockImplementation((...args: never[]) => {
+			// A plain wrapper, not a spy: it layers over a fault-injecting spy of the test, and a later spy layers over it.
+			const own = Object.hasOwn(manager, command)
+			const original = manager[command]
+			manager[command] = (...args: never[]) => {
 				const [device, ...rest] = args as unknown as [Device, ...unknown[]]
 				entries.push({ kind: 'command', ...stamp(), device: device.name, manager: key, command, args: rest.filter((arg) => !isClient(arg)) })
-				return original(...args)
+				return original.apply(manager, args)
+			}
+			restores.push(() => {
+				if (own) manager[command] = original
+				else delete manager[command]
 			})
-			restores.push(() => spy.mockRestore())
 		}
 
 		const handler = {
@@ -527,7 +542,7 @@ export function recordDevices(rig: SequencerRig, clock: RecorderClock = SYSTEM_R
 			},
 		}
 
-		const observed = rig.managers[key] as unknown as DeviceManager<Device>
+		const observed = managers[key] as unknown as DeviceManager<Device>
 		observed.addHandler(handler)
 		restores.push(() => observed.removeHandler(handler))
 	}
@@ -772,6 +787,8 @@ export interface RunnerRootEntry {
 	readonly error?: string
 	// Whether an ended root succeeded.
 	readonly ok?: boolean
+	// Wall instant of the entry, with a recorder clock.
+	readonly wallNow?: number
 }
 
 // Drain of the reservation: `terminal` is cancelByReservationOwner, otherwise drainByReservationOwner.
@@ -793,6 +810,8 @@ export interface RunnerEventEntry {
 	readonly kind: 'event'
 	readonly sequence: number
 	readonly event: SequencerEvent
+	// Wall instant of the entry, with a recorder clock.
+	readonly wallNow?: number
 }
 
 // Entry of the runner log.
@@ -808,12 +827,14 @@ export interface RunnerRecorder extends Disposable {
 
 // Records, in one sequence, the roots the session opens in its reserved scopes (start, cancel through the handle,
 // end with its result), the drains of the reservation, the release of the reservation and the session events, by
-// wrapping the coordinator and its arbiter. The wrappers only observe.
-export function recordRunner(coordinator: OperationCoordinator, sequence: TestSequence = createTestSequence()): RunnerRecorder {
+// wrapping the coordinator and its arbiter. The wrappers only observe. With `clock`, roots and events carry the wall
+// instant they were recorded at.
+export function recordRunner(coordinator: OperationCoordinator, sequence: TestSequence = createTestSequence(), clock?: Pick<RecorderClock, 'wallNow'>): RunnerRecorder {
 	const entries: RunnerLogEntry[] = []
 	let owner: ResourceReservationOwner | undefined
 	const restores: VoidFunction[] = []
-	const push = (entry: Omit<RunnerRootEntry, 'sequence'> | Omit<RunnerDrainEntry, 'sequence'> | Omit<RunnerReleaseEntry, 'sequence'>) => entries.push({ ...entry, sequence: sequence.next() })
+	const stamp = () => (clock === undefined ? {} : { wallNow: clock.wallNow() })
+	const push = (entry: Omit<RunnerRootEntry, 'sequence'> | Omit<RunnerDrainEntry, 'sequence'> | Omit<RunnerReleaseEntry, 'sequence'>) => entries.push({ ...entry, sequence: sequence.next(), ...(entry.kind === 'root' && stamp()) })
 
 	const wrapHandle = <T>(handle: OperationHandle<T>): OperationHandle<T> => {
 		const operation = handle.kind
@@ -883,7 +904,7 @@ export function recordRunner(coordinator: OperationCoordinator, sequence: TestSe
 		get reservationOwner() {
 			return owner
 		},
-		listener: (event) => entries.push({ kind: 'event', sequence: sequence.next(), event }),
+		listener: (event) => entries.push({ kind: 'event', sequence: sequence.next(), event, ...stamp() }),
 		[Symbol.dispose]: () => {
 			for (const restore of restores.toReversed()) restore()
 		},
@@ -1216,4 +1237,228 @@ export class ScriptedGuidingSession implements GuidingSession, Ditherer {
 	#record(command: ScriptedGuidingEntry['command'], recalibrate?: boolean) {
 		this.log.push(recalibrate === undefined ? { sequence: this.#sequence.next(), command } : { sequence: this.#sequence.next(), command, recalibrate })
 	}
+}
+
+// Shared order of the fakes of a test file (mount commands, checkpoint saves), increasing across tests.
+let fakeOrder = 0
+
+// Next value of the shared order of the fakes.
+export function nextFakeOrder() {
+	return ++fakeOrder
+}
+
+// Mount command as the fake recorded it.
+export interface FakeCommand {
+	readonly command: 'tracking' | 'trackMode' | 'flipTo' | 'goTo' | 'stop'
+	readonly args: readonly unknown[]
+	readonly wallNow: number
+	readonly order: number
+}
+
+// Behaviour of one flip command of the fake.
+export type FlipBehaviour = (context: OperationContext, target: MountTargetCoordinate<string | Angle>, options: MountCommandOptions) => OperationResult<MountFlipResult> | Promise<OperationResult<MountFlipResult>>
+
+// Fake mount at a published site of longitude 0, with its commander and change notifications: it reports the hour
+// angle it was placed at for the current wall instant of `clock`, tracking at the sidereal rate, and leases itself for
+// every command like the real commander. Commands are stamped with `nextFakeOrder`.
+export class FakeMount<C extends Pick<SequencerClock, 'wallNow'> = ManualSequencerClock> {
+	readonly mount: Mount
+	readonly commands: FakeCommand[] = []
+	// Device log of the fake in `sequence`, as the rig recorder would write it: every command before it acts and every
+	// change of a recorded field, stamped with the wall instant of the clock in both domains.
+	readonly entries: DeviceLogEntry[] = []
+	// State of the mount when the fake was created, the start of its log.
+	readonly initial: Readonly<Pick<Mount, 'tracking' | 'pierSide' | 'trackMode'>> & { readonly rightAscension: Angle; readonly longitude: Angle }
+	readonly #listeners = new Set<VoidFunction>()
+	// Failure of every tracking switch while set.
+	trackingFailure?: OperationResult<void>
+	flipBehaviour: FlipBehaviour = () => this.succeed()
+	// Whether the driver turns tracking on with every slew (TRACK in its ON_COORD_SET).
+	trackOnSlew = false
+	// Duration, ms, of a goTo slew on the delay of the clock; 0 arrives at once.
+	slewTime = 0
+
+	constructor(
+		readonly clock: C,
+		hourAngle: Angle,
+		state: Partial<Pick<Mount, 'tracking' | 'pierSide' | 'trackMode'>> = {},
+		readonly sequence: TestSequence = createTestSequence(),
+	) {
+		this.mount = {
+			...DEFAULT_MOUNT,
+			id: 'Mount',
+			name: 'Mount',
+			hardwareId: 'Mount',
+			connected: true,
+			canFlip: true,
+			canTracking: true,
+			canAbort: true,
+			canGoTo: true,
+			hasPierSide: true,
+			hasGeographicCoordinate: true,
+			hasEquatorialCoordinate: true,
+			trackModes: ['SIDEREAL', 'LUNAR', 'CUSTOM'],
+			trackMode: state.trackMode ?? 'SIDEREAL',
+			tracking: state.tracking ?? false,
+			pierSide: state.pierSide ?? 'WEST',
+			geographicCoordinate: { latitude: 0, longitude: 0, elevation: 0 },
+			equatorialCoordinate: { rightAscension: 0, declination: deg(-30) },
+		}
+		this.place(hourAngle)
+		this.initial = { tracking: this.mount.tracking, pierSide: this.mount.pierSide, trackMode: this.mount.trackMode, rightAscension: this.mount.equatorialCoordinate.rightAscension, longitude: this.mount.geographicCoordinate.longitude }
+		this.entries.length = 0
+	}
+
+	// Apparent local sidereal time at the clock.
+	lst() {
+		return localSiderealTime(timeUnix(this.clock.wallNow() / 1000), this.mount.geographicCoordinate.longitude)
+	}
+
+	// Physical hour angle at the clock.
+	hourAngle() {
+		return normalizePI(this.lst() - this.mount.equatorialCoordinate.rightAscension)
+	}
+
+	// Publishes the position whose hour angle is `hourAngle` now.
+	place(hourAngle: Angle) {
+		;(this.mount.equatorialCoordinate as { rightAscension: Angle }).rightAscension = normalizeAngle(this.lst() - hourAngle)
+		this.#transition('equatorialCoordinate')
+		this.notify()
+	}
+
+	set(patch: Partial<Mount>) {
+		const fields = this.mount as unknown as Record<string, unknown>
+		const changed = Object.entries(patch).filter(([field, value]) => RECORDED_TRANSITIONS.has(field) && fields[field] !== value)
+		Object.assign(this.mount, patch)
+		for (const [field] of changed) this.#transition(field)
+		this.notify()
+	}
+
+	notify() {
+		for (const listener of this.#listeners) listener()
+	}
+
+	// J2000 target at the current position, converted at the clock.
+	target(): SequencerTarget {
+		const { rightAscension, declination } = this.mount.equatorialCoordinate
+		const [ra, dec] = equatorialToJ2000(rightAscension, declination, timeUnix(this.clock.wallNow() / 1000))
+		return { frame: 'J2000', rightAscension: normalizeAngle(ra), declination: dec }
+	}
+
+	of(command: FakeCommand['command']) {
+		return this.commands.filter((entry) => entry.command === command)
+	}
+
+	readonly updates = (_: Mount, listener: VoidFunction) => {
+		this.#listeners.add(listener)
+		return () => this.#listeners.delete(listener)
+	}
+
+	get listeners() {
+		return this.#listeners.size
+	}
+
+	// Successful flip to the post-flip side, observed by the commander.
+	succeed(): OperationResult<MountFlipResult> {
+		this.set({ pierSide: 'EAST' })
+		const { rightAscension, declination } = this.mount.equatorialCoordinate
+		return successfulOperationResult({ rightAscension, declination, pierSide: 'EAST', initialPierSide: 'WEST', pierSideVerified: true })
+	}
+
+	// Flip that only ends, aborted, with its operation.
+	hang(context: OperationContext, onAbort?: VoidFunction) {
+		return new Promise<OperationResult<MountFlipResult>>((resolve) => {
+			context.signal.addEventListener(
+				'abort',
+				() => {
+					onAbort?.()
+					resolve(failedOperationResult('aborted'))
+				},
+				{ once: true },
+			)
+		})
+	}
+
+	#record(command: FakeCommand['command'], args: readonly unknown[]) {
+		const wallNow = this.clock.wallNow()
+		this.commands.push({ command, args, wallNow, order: nextFakeOrder() })
+		this.entries.push({ kind: 'command', sequence: this.sequence.next(), wallNow, monotonicNow: wallNow, device: this.mount.name, manager: 'mount', command, args })
+	}
+
+	#transition(property: string) {
+		const wallNow = this.clock.wallNow()
+		const value = structuredClone((this.mount as unknown as Record<string, unknown>)[property])
+		this.entries.push({ kind: 'transition', sequence: this.sequence.next(), wallNow, monotonicNow: wallNow, device: this.mount.name, manager: 'mount', property, value })
+	}
+
+	readonly commander = {
+		setTracking: (scope: OperationScope, mount: Mount, enabled: boolean, options?: MountCommandOptions) =>
+			scope.start<void>('mountTracking', [{ key: 'Mount', device: mount }], () => {
+				this.#record('tracking', [enabled, options])
+				if (this.trackingFailure !== undefined) return this.trackingFailure
+				this.set({ tracking: enabled })
+				return successfulOperationResult(undefined)
+			}).result,
+		setTrackMode: (scope: OperationScope, mount: Mount, mode: TrackMode) =>
+			scope.start<void>('mountTrackMode', [{ key: 'Mount', device: mount }], () => {
+				this.#record('trackMode', [mode])
+				this.set({ trackMode: mode })
+				return successfulOperationResult(undefined)
+			}).result,
+		flip: (scope: OperationScope, mount: Mount, target: MountTargetCoordinate<string | Angle>, options: MountCommandOptions = {}) =>
+			scope.start<MountFlipResult>('mountFlip', [{ key: 'Mount', device: mount }], (context) => {
+				this.#record('flipTo', [target, options])
+				return this.flipBehaviour(context, target, options)
+			}).result,
+		// Slews to the target converted at `options.time` on the same pier side, recorded like the device command (the
+		// coordinates of date), during `slewTime`; a mount already there (within 1″) answers at once without any command,
+		// as the fast path of the commander.
+		goTo: (scope: OperationScope, mount: Mount, target: MountTargetCoordinate<string | Angle>, options: MountCommandOptions = {}) =>
+			scope.start<MountSlewResult>('mountGoTo', [{ key: 'Mount', device: mount }], async (context) => {
+				const [rightAscension, declination] = mountTargetEquatorial(this.mount, target, options.time ?? timeUnix(this.clock.wallNow() / 1000))
+				const position = this.mount.equatorialCoordinate
+				const there = Math.abs(normalizePI(position.rightAscension - rightAscension)) < deg(1 / 3600) && Math.abs(position.declination - declination) < deg(1 / 3600)
+
+				if (!there) {
+					this.#record('goTo', [rightAscension, declination, options])
+					this.set({ slewing: true })
+					const { delay } = this.clock as Partial<Pick<SequencerClock, 'delay'>>
+					if (this.slewTime > 0 && delay !== undefined) await delay(this.slewTime, context.signal)
+					Object.assign(this.mount.equatorialCoordinate, { rightAscension, declination })
+					this.#transition('equatorialCoordinate')
+					this.set({ slewing: false, ...(this.trackOnSlew && { tracking: true }) })
+				}
+
+				return successfulOperationResult({ rightAscension, declination, pierSide: this.mount.pierSide })
+			}).result,
+		stopMotion: (_: Mount, options?: MountCommandOptions) => {
+			this.#record('stop', [options])
+			this.set({ slewing: false, moving: false })
+			return Promise.resolve(successfulOperationResult(undefined))
+		},
+	} as unknown as MountCommander
+}
+
+// Lease granted by the arbiter: the kind of the root operation that holds it and its keys.
+export interface LeaseEntry {
+	readonly root: string
+	readonly keys: readonly string[]
+}
+
+// Recorder of the leases the arbiter grants.
+export interface LeaseRecorder extends Disposable {
+	readonly entries: LeaseEntry[]
+}
+
+// Records every lease `arbiter` grants, by the kind of its root (every scope of a tree acquires under the root's
+// context). The wrapper only observes.
+export function recordLeases(arbiter: ResourceArbiter): LeaseRecorder {
+	const entries: LeaseEntry[] = []
+	const acquire = arbiter.acquire.bind(arbiter)
+	const spy = spyOn(arbiter, 'acquire').mockImplementation((...args: Parameters<typeof acquire>) => {
+		const acquired = acquire(...args)
+		if (acquired.ok) entries.push({ root: args[0].kind, keys: args[1].map((request) => request.key) })
+		return acquired
+	})
+	return { entries, [Symbol.dispose]: () => spy.mockRestore() }
 }

@@ -8,6 +8,7 @@ import { failedTask, taskResult } from './lifecycle'
 import type { SequencerContext, SequencerShutdownTask, SequencerTask, SequencerTaskResult } from './runner'
 // oxfmt-ignore
 import { DEFAULT_SEQUENCER_MERIDIAN_FLIP, type SequencerClock, type SequencerConfiguration, type SequencerConfigurationDiagnostic, type SequencerDevices, type SequencerDitherConfiguration, type SequencerFrameSlot, type SequencerGuidingConfiguration, type SequencerShutdownConfiguration, type SequencerShutdownStepPolicy } from './sequencer'
+import { advanceSequencerMeridianFlip, toMeridianFlipPolicy } from './state'
 import { ditherDue, recordSequencerActionSuccess } from './trigger'
 
 // Guiding and dither of the Sequencer: the `GuidingSession` and the `Ditherer` of the caller driven at the safe points
@@ -106,7 +107,7 @@ export function ensureGuidingTask(guiding: GuidingSession, configuration: Sequen
 			const { frame } = view
 			if (frame === undefined) return false
 			const state = guiding.state()
-			if (frame.capture.frameType === 'LIGHT') return view.state.intents.recoverGuiding || state !== 'guiding'
+			if (frame.capture.frameType === 'LIGHT') return view.state.intents.recoverGuiding || state !== 'guiding' || view.state.meridianFlip.phase === 'SETTLING'
 			return sequencerClosesOpticalPath(view.configuration, frame) && ACTIVE_GUIDING.has(state)
 		},
 		run: async (context) => {
@@ -154,7 +155,7 @@ export function pauseGuidingTask(guiding: GuidingSession, configuration: Sequenc
 			const paused = await pauseSequencerGuiding(context.scope, guiding, configuration.pauseTimeout, context.clock)
 			if (paused.ok) return DONE
 
-			await within(guiding.stop(context.scope), guidingStopTimeout(context.configuration) * 1000, context.clock)
+			await awaitAtMost(guiding.stop(context.scope), guidingStopTimeout(context.configuration) * 1000, context.clock)
 			return quiescenceResult(paused, 'guidingNotQuiescent')
 		},
 		policy: 'required',
@@ -280,15 +281,29 @@ export function sequencerDitherRequest(configuration: SequencerDitherConfigurati
 
 const DONE: SequencerTaskResult = { ok: true }
 
-// Light frame guiding: resume, start or recover, each ending on a settle.
+// Light frame guiding: resume, start or recover, each ending on a settle. After a meridian flip of the session the
+// guiding calibration is flipped first, once, when configured and supported; a settled guiding completes the guiding
+// settle the flip waits for (SETTLING → GUIDING_SETTLED).
 async function ensureGuiding(context: SequencerContext, guiding: GuidingSession, configuration: SequencerGuidingConfiguration): Promise<SequencerTaskResult> {
 	const { state, clock } = context
 	const { settle, maxRecoveries, recalibrate } = configuration
 	let last: OperationResult<void> | undefined
 
+	if (state.flipCalibrationPending && configuration.flipCalibration && guiding.flipCalibration !== undefined) {
+		const flipped = await guiding.flipCalibration(context.scope)
+		if (!flipped.ok) return failedTask(flipped)
+		state.flipCalibrationPending = false
+	}
+
 	for (let attempt = 0; attempt <= maxRecoveries; attempt++) {
 		const current = guiding.state()
 		if (current === 'lost') context.emit({ type: 'guidingInterrupted', detail: 'guiding lost' })
+
+		// Guiding that went on through the flip only completes the settle the flip waits for.
+		if (current === 'guiding' && !state.intents.recoverGuiding && last === undefined) {
+			settleMeridianFlip(context)
+			return DONE
+		}
 
 		if (current === 'paused' && !state.intents.recoverGuiding && last === undefined) {
 			last = await guiding.resume(context.scope, settle)
@@ -298,6 +313,7 @@ async function ensureGuiding(context: SequencerContext, guiding: GuidingSession,
 		}
 
 		if (last.ok && guiding.state() !== 'lost') {
+			settleMeridianFlip(context)
 			if (!state.intents.recoverGuiding) return DONE
 			state.intents.recoverGuiding = false
 			return await context.saveCheckpoint()
@@ -307,6 +323,15 @@ async function ensureGuiding(context: SequencerContext, guiding: GuidingSession,
 	}
 
 	return last === undefined || last.ok ? failedTask(failedOperationResult('unexpectedState', 'guiding was lost again after its recoveries')) : failedTask(last)
+}
+
+// Completes the guiding settle a meridian flip of the session waits for, emitting its completion.
+function settleMeridianFlip(context: SequencerContext) {
+	const { configuration, state } = context
+	const flip = configuration.meridianFlip
+	if (flip?.enabled !== true || state.meridianFlip.phase !== 'SETTLING') return
+	const completed = advanceSequencerMeridianFlip(state, toMeridianFlipPolicy(flip, configuration), { type: 'GUIDING_SETTLED' })
+	if (completed !== undefined) context.emit(completed)
 }
 
 // Task result of a quiescence proof, its failure detail naming the protection outcome.
@@ -322,8 +347,9 @@ function guidingStopTimeout(configuration: Pick<SequencerConfiguration, 'meridia
 	return meridianFlip?.enabled === true ? (meridianFlip.hardProtection?.guidingStopTimeout ?? DEFAULT_SEQUENCER_MERIDIAN_FLIP.hardProtection.guidingStopTimeout) : shutdown.stepTimeout
 }
 
-// Awaits `promise` at most `ms` milliseconds of the monotonic clock; a late outcome is dropped.
-async function within(promise: Promise<unknown>, ms: number, clock: SequencerClock) {
+// Awaits `promise` at most `ms` milliseconds of the monotonic clock; a late outcome is dropped. Leaves no pending
+// delay behind.
+export async function awaitAtMost(promise: Promise<unknown>, ms: number, clock: SequencerClock) {
 	const timer = new AbortController()
 
 	try {

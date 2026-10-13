@@ -7,14 +7,16 @@ import { abortableDelay } from '../../../src/devices/orchestration/operation.wai
 import { deg, hour, normalizeAngle, normalizePI } from '../../../src/math/units/angle'
 import { awaitCameraRecoveryTask, captureFrameStep } from '../../../src/observation/sequencer/capture'
 // oxfmt-ignore
-import { ensureTrackingTask, meridianGracefulDeadline, type SequencerLifecycleServices, sequencerMountHourAngle, sequencerShutdownLifecycleTasks, sequencerStartupLifecycleTasks, sequencerStartupTrackMode, sequencerTrackingDecision, thermalStableSince, waitForStableTemperature } from '../../../src/observation/sequencer/lifecycle'
+import { ensureTrackingTask, isSequencerMountOffTarget, meridianGracefulDeadline, type SequencerLifecycleServices, sequencerMountHourAngle, sequencerShutdownLifecycleTasks, sequencerStartupLifecycleTasks, sequencerFrameHourAngleSpan, sequencerStartupTrackMode, sequencerTrackingDecision, thermalStableSince, waitForStableTemperature } from '../../../src/observation/sequencer/lifecycle'
+import { sequencerMountMotionBounds } from '../../../src/observation/sequencer/pointing'
 import { startSequencerRunner } from '../../../src/observation/sequencer/runner'
 // oxfmt-ignore
 import type { SequencerCameraCapture, SequencerClock, SequencerConfiguration, SequencerCoolingConfiguration, SequencerEvent, SequencerMeridianFlipConfiguration, SequencerResult, SequencerShutdownConfiguration, SequencerStartupConfiguration } from '../../../src/observation/sequencer/sequencer'
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask } from '../../../src/observation/sequencer/storage'
 import { waitUntil } from '../../util'
 // oxfmt-ignore
-import { assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, expectNoSequencerLeaks, ManualSequencerClock, recordDevices, recordRunner, resetSequencerRig, type RunnerLogEntry } from './util'
+import { assertMountKeyClosure } from './meridian.util'
+import { assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, expectNoSequencerLeaks, ManualSequencerClock, recordDevices, recordLeases, recordRunner, resetSequencerRig, type RunnerLogEntry } from './util'
 
 // Equipment lifecycle of the Sequencer: the thermal stability wait and the pure meridian rule of `ensureTracking`
 // with a manual clock, then startup, pre-capture tracking and shutdown on the INDI simulator rig with the real
@@ -161,6 +163,34 @@ describe('tracking rule', () => {
 		for (const [flip, pierSide, hourAngle, awaiting, expected] of cases) expect(sequencerTrackingDecision(flip, pierSide, hourAngle, awaiting)).toBe(expected)
 	})
 
+	test('a mount off its target still to be acquired keeps tracking off before the graceful deadline', () => {
+		expect(sequencerTrackingDecision(FLIP, 'EAST', deadline - 1e-3, true, true)).toBe('defer')
+		// Without a pending acquisition, or on the post-flip side, being off target does not matter.
+		expect(sequencerTrackingDecision(FLIP, 'EAST', deadline - 1e-3, false, true)).toBe('enable')
+		expect(sequencerTrackingDecision(FLIP, 'WEST', deadline, true, true)).toBe('enable')
+	})
+
+	test('off target: the frame reaches the graceful deadline before the flip of the target comes due', () => {
+		const span = 40 * SIDEREAL_DRIFT_RATE
+		const s = SIDEREAL_DRIFT_RATE
+		// The frame fits before the deadline.
+		expect(isSequencerMountOffTarget(FLIP, deadline - 41 * s, deg(-30), span)).toBeFalse()
+		// It does not, and the target flips hours later.
+		expect(isSequencerMountOffTarget(FLIP, deadline - 39 * s, deg(-30), span)).toBeTrue()
+		// It does not, but the target reaches flipAt before the mount reaches the deadline: the guard flips it.
+		expect(isSequencerMountOffTarget(FLIP, deadline - 39 * s, FLIP.flipAt - 38 * s, span)).toBeFalse()
+		expect(isSequencerMountOffTarget(FLIP, deadline - 39 * s, FLIP.flipAt - 40 * s, span)).toBeTrue()
+		// A target past flipAt is flipped, never treated as off target.
+		expect(isSequencerMountOffTarget(FLIP, deadline + s, FLIP.flipAt, span)).toBeFalse()
+	})
+
+	test('frame hour angle span is the exposure plus the guard margin at the sidereal rate', () => {
+		const frame = { capture: { exposureTime: 10, exposureTimeUnit: 'second' } } as const
+		expect(sequencerFrameHourAngleSpan({ meridianFlip: { ...FLIP, exposureMargin: 30 } }, frame)).toBeCloseTo(40 * SIDEREAL_DRIFT_RATE, 15)
+		expect(sequencerFrameHourAngleSpan({ meridianFlip: { ...FLIP, enabled: false } }, frame)).toBe(0)
+		expect(sequencerFrameHourAngleSpan({ meridianFlip: FLIP }, undefined)).toBe(0)
+	})
+
 	test('startup track mode: the configured one, SIDEREAL with a target or meridian flip, none otherwise', () => {
 		const startup: SequencerStartupConfiguration = { onFailure: 'fail' }
 		const target = { frame: 'J2000', rightAscension: 1, declination: 0.5 } as const
@@ -247,6 +277,7 @@ describe('on the simulator rig', () => {
 		const sequence = createTestSequence()
 		const devices = recordDevices(rig, clock, sequence)
 		const roots = recordRunner(rig.coordinator, sequence)
+		const leases = recordLeases(rig.arbiter)
 		const storage = new FileSystemSequencerStorage({ root: ROOT, sessionId: Bun.randomUUIDv7(), wallNow: clock.wallNow })
 		const events: SequencerEvent[] = []
 		const phases = {
@@ -265,10 +296,13 @@ describe('on the simulator rig', () => {
 
 		try {
 			const result = await runner.handle.result
+			// 61: every lifecycle root that leased the mount has its row in the motion table.
+			assertMountKeyClosure(leases.entries, sequencerMountMotionBounds(configuration, { mount }, undefined))
 			return { result, events, devices: devices.entries, roots: roots.entries }
 		} finally {
 			devices[Symbol.dispose]()
 			roots[Symbol.dispose]()
+			leases[Symbol.dispose]()
 		}
 	}
 

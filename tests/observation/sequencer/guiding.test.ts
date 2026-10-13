@@ -15,7 +15,7 @@ import { captureFrameStep } from '../../../src/observation/sequencer/capture'
 // oxfmt-ignore
 import { pauseSequencerGuiding, preflightSequencerGuiding, sequencerGuidingStartupTasks, sequencerGuidingTasks, sequencerShutdownTasks, type SequencerGuidingServices } from '../../../src/observation/sequencer/guiding'
 import { sequencerShutdownLifecycleTasks, sequencerStartupLifecycleTasks, ensureTrackingTask } from '../../../src/observation/sequencer/lifecycle'
-import { sequencerPointingTasks } from '../../../src/observation/sequencer/pointing'
+import { sequencerMountMotionBounds, sequencerPointingTasks } from '../../../src/observation/sequencer/pointing'
 // oxfmt-ignore
 import { type SequencerCaptureContext, type SequencerCapturedFrame, type SequencerCaptureStep, type SequencerContext, type SequencerRunner, type SequencerRunnerPhases, sequencerAdapterResources, sequencerResourceRequests, type SequencerShutdownTask, type SequencerTask, type SequencerTaskResult, startSequencerRunner } from '../../../src/observation/sequencer/runner'
 // oxfmt-ignore
@@ -24,7 +24,25 @@ import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepare
 import { holdSequencerDither } from '../../../src/observation/sequencer/trigger'
 import { waitUntil } from '../../util'
 // oxfmt-ignore
-import { assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceCommandEntry, expectNoSequencerLeaks, ManualSequencerClock, recordDevices, recordRunner, resetSequencerRig, RIG_INITIAL_POINTING, type RunnerRecorder, ScriptedGuidingSession, type TestSequence } from './util'
+import { assertMountKeyClosure } from './meridian.util'
+import {
+	assertRunnerInvariants,
+	assertSequencerInvariants,
+	connectSequencerRig,
+	createSequencerRig,
+	createTestSequence,
+	type DeviceCommandEntry,
+	expectNoSequencerLeaks,
+	ManualSequencerClock,
+	recordDevices,
+	recordLeases,
+	recordRunner,
+	resetSequencerRig,
+	RIG_INITIAL_POINTING,
+	type RunnerRecorder,
+	ScriptedGuidingSession,
+	type TestSequence,
+} from './util'
 
 // Guiding and dither of the Sequencer: the tasks of sequencer/guiding.ts driven by the real runner over fake devices,
 // a manual clock and a scripted guiding session (startup quiescence, ensureGuiding, ditherAndSettle, the shutdown
@@ -518,6 +536,7 @@ describe('sessions on the simulators', () => {
 	async function run(configuration: SequencerConfiguration, services: SequencerGuidingServices, sequence: TestSequence, extra: { readonly startup?: readonly SequencerTask[]; readonly pointing?: boolean } = {}) {
 		const devices = recordDevices(rig, clock, sequence)
 		const roots = recordRunner(rig.coordinator, sequence)
+		const leases = recordLeases(rig.arbiter)
 		const storage = new FileSystemSequencerStorage({ root: ROOT, sessionId: Bun.randomUUIDv7(), wallNow: clock.wallNow })
 		const lifecycle = { mountCommander: rig.commanders.mount }
 		const { camera, mount } = rig.devices()
@@ -532,10 +551,14 @@ describe('sessions on the simulators', () => {
 
 		try {
 			const result = await runner.handle.result
-			return { result, devices: devices.entries, roots: roots.entries }
+			// 61: every root that leased the mount or a movement key of the ditherer has its row in the motion table; the
+			// camera only carries the ST4 port, so its captures are no motion.
+			assertMountKeyClosure(leases.entries, sequencerMountMotionBounds(configuration, { mount }, services.ditherer), [resourceKey(camera)])
+			return { result, devices: devices.entries, roots: roots.entries, leases: leases.entries }
 		} finally {
 			devices[Symbol.dispose]()
 			roots[Symbol.dispose]()
+			leases[Symbol.dispose]()
 		}
 	}
 
