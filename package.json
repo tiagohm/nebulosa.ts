@@ -6,18 +6,11 @@
 	"module": "main.ts",
 	"scripts": {
 		"postinstall": "bun run postinstall.ts",
-		"lint": "oxlint",
-		"lint:fix": "oxlint --fix",
-		"fmt": "oxfmt",
-		"fmt:check": "oxfmt --check",
 		"index": "bun run scripts/codebase.index.ts",
 		"review": "bun run scripts/review/review.ts",
 		"docs": "docsify serve ./docs"
 	},
 	"devDependencies": {
-		"@types/bun": "latest",
-		"oxfmt": "latest",
-		"oxlint": "latest",
-		"oxlint-tsgolint": "latest"
+		"@types/bun": "latest"
 	}
 }

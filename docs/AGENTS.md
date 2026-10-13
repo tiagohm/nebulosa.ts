@@ -870,7 +870,7 @@ For documentation-only changes, follow the root `AGENTS.md` verification policy.
 At minimum:
 
 ```sh
-bun run fmt:check
+bun fmt --check
 git diff --check
 ```
 

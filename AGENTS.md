@@ -86,11 +86,11 @@ Project layout conventions:
 Use Bun for installs, scripts, tests, and local execution.
 
 - Install: `bun install`
-- Format touched paths: `bun run fmt -- <explicit paths>`
-- Format the repository: `bun run fmt`
-- Check formatting: `bun run fmt:check`
-- Lint and type-check: `bun run lint`
-- Lint with fixes: `bun run lint:fix`
+- Format touched paths: `bun fmt <explicit paths>`
+- Format the repository: `bun fmt`
+- Check formatting: `bun fmt --check`
+- Lint and type-check: `bun lint`
+- Lint with fixes: `bun lint --fix`
 - Refresh the code graph: `bun run index`
 - Run the full suite: `bun test --only-failures --timeout 30000 --parallel`
 - Run test files affected by uncommited changes: `bun test --only-failures --bail --timeout 30000 --parallel --changed`
@@ -275,10 +275,10 @@ Before accepting a performance-sensitive change, verify complexity, allocation b
 Verification is proportional to the change, but the touched area must have zero introduced TypeScript errors, passing relevant tests, and no obvious correctness or performance regression.
 
 - Documentation-only changes: format-check the touched files, validate referenced paths and commands, and run `git diff --check`.
-- TypeScript changes: run the closest targeted tests, `bun run lint`, `bun run fmt:check`, and `git diff --check`.
+- TypeScript changes: run the closest targeted tests, `bun lint`, `bun fmt --check`, and `git diff --check`.
 - Cross-cutting shared primitives, test infrastructure, broad refactors, or high-risk numerical, or runtime changes: also run `bun test --only-failures --bail --timeout 30000 --parallel --changed`.
 - Native-binding changes: run the relevant native-backed tests and state any platform/library limitation.
-- Prefer `bun run fmt -- <explicit paths>` when the worktree contains unrelated edits. Use repository-wide `bun run fmt` only when its entire output is in scope, then inspect every formatted change.
+- Prefer `bun fmt <explicit paths>` when the worktree contains unrelated edits. Use repository-wide `bun fmt` only when its entire output is in scope, then inspect every formatted change.
 - Re-run tests after any fix made in response to a failed check.
 - Distinguish failures introduced by the task from pre-existing, fixture, network, timing, or platform failures. Establish overlap with touched code before treating a full-suite failure as a task regression.
 - Do not commit with introduced failures or unresolved errors in the touched area.
