@@ -5957,7 +5957,7 @@ A body (an asteroid, or the Moon treated as a sphere) occults a star when its di
 
 `target` and `observer` are samplers of position and velocity (`PositionAndVelocityOverTime`) in the same origin and frame, normally barycentric ICRS; the topocentric observer state, for example from `observerState`, is what includes the diurnal parallax, which decides which sites see the event. `star` is the ICRS direction to the star, and does not need to be a unit vector; fold proper motion and parallax into it first, as the track is only as wide as the body. Light time to the body is iterated `options.lightTimeIterations` times (default 2, enough for interplanetary distances; 0 gives the geometric position), which samples the `target` before `start` by up to the light travel time, while the observer is only sampled inside the window. Annual and diurnal aberration are omitted because they shift the star and the body almost equally and cancel in the differential separation. The accuracy is set by the ephemeris of the body and the astrometry of the star, not by this geometry.
 
-`options.radius` is the physical radius of the body in AU (default 0, which makes every appulse a near miss), `options.maxSeparation` (radians) discards wider appulses, and `options.step` (default 60 s) must be finer than the approach one wants to catch; it is capped at a quarter of the window, so a short window is still sampled. The candidate carries the `separation` and `angularRadius` (radians), the topocentric `distance` (AU), the `relativeAngularSpeed` (radians/day) and, for a true occultation, the `duration` in seconds: the chord across the disk at that impact parameter divided by the speed. Candidates are chronological.
+`options.radius` is the physical radius of the body in AU (default 0, which makes every appulse a near miss), `options.maxSeparation` (radians) discards wider appulses, and `options.step` (default 60 s) must be finer than the approach one wants to catch; it is capped at a quarter of the window, so a short window is still sampled. The candidate carries the `separation` and `angularRadius` (radians), the topocentric `distance` (AU), the `relativeAngularSpeed` (radians/day) and, for a true occultation, the `duration` in seconds: the chord across the disk at that impact parameter divided by the speed. Candidates are chronological. To map where on Earth the event is visible, see [Stellar Occultation Ground Tracks](#stellar-occultation-ground-tracks).
 
 The first example is a synthetic encounter whose result has a closed form: a body 2 AU away drifts transversely at 2·10⁻⁴ AU/day past a star on the +x axis, with a miss distance of 10⁻⁶ AU, and the observer is fixed at the origin.
 
@@ -6009,6 +6009,7 @@ import { KeplerOrbit } from 'nebulosa/src/astronomy/orbits/asteroid'
 import { Timescale, time, timeShift, timeSubtract, type Time } from 'nebulosa/src/astronomy/time/time'
 import { AU_KM, DAYSEC, GM_SUN_PITJEVA_2005 } from 'nebulosa/src/core/constants'
 import { matIdentity } from 'nebulosa/src/math/linear-algebra/mat3'
+import { vecPlus } from 'nebulosa/src/math/linear-algebra/vec3'
 import { deg, toArcsec } from 'nebulosa/src/math/units/angle'
 import { kilometer, toKilometer } from 'nebulosa/src/math/units/distance'
 
@@ -6020,10 +6021,7 @@ const site = geodeticLocation(deg(-46.633), deg(-23.55), kilometer(0.76), Ellips
 const target: PositionAndVelocityOverTime = (t) => {
 	const [sunPosition, sunVelocity] = sun(t)
 	const [position, velocity] = orbit.at(t)
-	return [
-		[sunPosition[0] + position[0], sunPosition[1] + position[1], sunPosition[2] + position[2]],
-		[sunVelocity[0] + velocity[0], sunVelocity[1] + velocity[1], sunVelocity[2] + velocity[2]],
-	]
+	return [vecPlus(sunPosition, position), vecPlus(sunVelocity, velocity)]
 }
 const observer: PositionAndVelocityOverTime = (t) => observerState(t, earth(t), site)
 
@@ -6039,6 +6037,72 @@ console.log(appulse.occultation) // true
 console.log(toArcsec(appulse.separation)) // 0.00026
 console.log(toKilometer(appulse.distance)) // 559365738 — km
 console.log(toArcsec(appulse.relativeAngularSpeed) / DAYSEC) // 0.0171 — arcsec/s
+```
+
+### Stellar Occultation Ground Tracks
+
+The shadow that a body casts from a point source sweeps a corridor across the Earth: inside it the source disappears, on its edges it grazes the limb. Where [Stellar and Asteroidal Occultations](#stellar-and-asteroidal-occultations) answers whether one site sees the event, `occultationPath` solves where on Earth it is seen. At each reception instant it forms the shadow in BCRS (a cylinder for a source at infinity, a cone for a point source at finite distance), rotates it into ITRS with the full GCRS → ITRS matrix and intersects the centerline, the two limit lines and, optionally, two uncertainty-corridor lines with the reference ellipsoid. Only causal geometry counts: the light must pass the body before reaching the ground, so a body on the far side of the Earth from the source, or a finite source lying between the Earth and the body, casts no shadow. The body is a sphere and the source a point: refraction, topography, the stellar diameter, diffraction and limb profiles are not modelled.
+
+`target` (the occulting body) and `earth` (the geocenter) are barycentric ICRS samplers in AU and AU/day, evaluated at TDB instants. `source` is the ICRS direction to a source at infinity (a star with its proper motion and parallax already applied; it need not be a unit vector) or a barycentric sampler of a finite-distance point source, such as a star from `spaceMotion` or the Sun's centre. `start` and `stop` may use any timescale; Earth orientation is evaluated from it (UT1 through the time's Earth-orientation providers), and all returned times use the timescale of `start`. `options.radius` (AU) is the body radius; `step` (days, default 10 s) must resolve every limb crossing; `tolerance` (days, default ~1 ms) controls contact refinement; `ellipsoid` defaults to `Ellipsoid.IERS2010`, and `height` (AU) inflates both semi-axes to approximate a uniform site elevation. `lightTimeIterations` (default 3) retards the body and a finite source.
+
+`mode: 'rigorous'` (the default) solves light time to the shadow plane, tilts the instantaneous axis by the light-time aberration of the moving shadow (about `v / c`, worth a few hundred metres on the ground), varies the cone radius with depth, places the limits on the true envelope of the shadow moving over the rotating ground and, when `sun` is given, applies the differential solar light deflection of source and body (omit `sun` when the source is the Sun). `mode: 'approximate'` is the classical fundamental-plane construction: geocentric light time, an untilted axis and limits offset perpendicular to the shadow motion relative to the geocenter; it can be off by up to about a kilometre. In both modes the accuracy is usually set by the body ephemeris and the star position, not by the geometry. Against the NASA path table of the 2024-04-08 total solar eclipse (the Sun's centre occulted by the Moon, with DE440s positions) the rigorous central line agrees within 0.6′ at the 17–19 h UT rows and at the sunrise endpoint, close to the ~1 km lunar centre-of-figure and ephemeris differences of the published table. Against the RASNZ path tables for (307) Nike on 2022-09-23, rebuilt from the published OrbFit elements, Gaia star position and DE440s, the centre, limits and error limits agree within 0.25 km and the times within 0.3 s; for (347) Pariana on 2019-11-28, whose table predates the posted elements, the corridor keeps its published shape within 0.5 km under a rigid ~8.5 km offset. Elements published with such predictions are referred to the ecliptic with the IAU 1976 obliquity of 84381.448″, while `asteroid` and the default `KeplerOrbit` rotation use 84381.411″; that 0.037″ difference moves a main-belt shadow by tens of kilometres, so build those orbits with `KeplerOrbit.meanAnomaly(..., mu, matTranspose(matRotX(arcsec(84381.448))))`.
+
+The result has the `shadow` intervals (first to last external contact of the shadow with the Earth) and the `central` intervals (when the axis meets the Earth), and chronological `samples` covering each shadow interval on the step grid, plus refined samples where a line meets or leaves the limb. Each sample has optional `center`, `left` and `right` ground points (geodetic `longitude` east-positive in (−π, π], `latitude`, and the geometric `altitude` of the source, 0 on the limb), the shadow `radius` (AU), the `speed` of the shadow relative to the ground in the fundamental plane (AU/day), the central `duration` (s), the ground `width` between the simultaneous limit points (AU) and the centerline `groundVelocity` (`speed` in AU/day, `azimuth` from north toward east). Left and right are relative to the direction of the shadow motion, seen from above with the source overhead.
+
+`uncertainty` takes the covariance of the body barycentric position (`body`, AU², row-major 3 × 3, ICRS axes) and of the source direction (`source`, rad², row-major 2 × 2 over east `Δα·cos δ` and north `Δδ`), both assumed constant over the event and independent, and a multiplier `sigma` (default 1). Each sample then reports the one-sigma `crossTrack` and `alongTrack` spread of the axis in the fundamental plane (AU), the `timing` sigma (s) and the `left` and `right` corridor lines, which sit `sigma` cross-track sigmas outside the limits; like every line, they are only sampled while the nominal shadow touches the Earth. The corridor never moves the nominal centerline, and the same fundamental-plane spread can map to different ground distances on either side near the limb. Without any covariance, samples carry no uncertainty.
+
+`occultationPathPolylines(path, line, unwrap?)` extracts `'center'`, `'left'`, `'right'`, `'corridorLeft'` or `'corridorRight'` as polylines, broken where the line leaves the Earth and between separate `shadow` intervals, so two passes are never joined. By default longitudes stay in [−π, π] and a polyline is split at the antimeridian with an interpolated vertex on each side of the seam; `unwrap: true` keeps continuous unwrapped longitudes instead. Rendering (SVG, GeoJSON) is left to the caller.
+
+The example reuses the Ceres orbit of the previous topic and anchors a synthetic star on the light-time-corrected geocentric direction of Ceres at 07:12 UTC, so the centerline passes under Ceres at that instant; it does not predict a real event.
+
+```ts
+import { type PositionAndVelocityOverTime, topocentricDirection } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { occultationPath, occultationPathPolylines } from 'nebulosa/src/astronomy/events/occultation.path'
+import { KeplerOrbit } from 'nebulosa/src/astronomy/orbits/asteroid'
+import { Timescale, time, timeShift, timeSubtract, timeToDate } from 'nebulosa/src/astronomy/time/time'
+import { DAYSEC, GM_SUN_PITJEVA_2005 } from 'nebulosa/src/core/constants'
+import { matIdentity } from 'nebulosa/src/math/linear-algebra/mat3'
+import { vecPlus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { mas, toDeg } from 'nebulosa/src/math/units/angle'
+import { kilometer, toKilometer } from 'nebulosa/src/math/units/distance'
+
+const epoch = time(2461200.5, 0, Timescale.TDB)
+const orbit = new KeplerOrbit([1.414905393343522, 2.2479053286939, 7.722476360317566e-1], [-9.08092698547858e-3, 3.499459682146027e-3, 3.499457832664595e-3], epoch, GM_SUN_PITJEVA_2005, matIdentity())
+
+// Barycentric Ceres: the VSOP87E Sun plus its heliocentric Kepler state.
+const ceres: PositionAndVelocityOverTime = (t) => {
+	const [sunPosition, sunVelocity] = sun(t)
+	const [position, velocity] = orbit.at(t)
+	return [vecPlus(sunPosition, position), vecPlus(sunVelocity, velocity)]
+}
+
+const anchor = time(2461200.5, 0.3, Timescale.UTC)
+const star = topocentricDirection(ceres, earth, anchor, 3)
+
+// Ceres radius 469 km; 1 mas star error and 20 km body error (1 sigma per axis); 2-sigma corridor.
+const error = kilometer(20)
+const path = occultationPath(ceres, star, earth, timeShift(anchor, -240 / DAYSEC), timeShift(anchor, 240 / DAYSEC), {
+	radius: kilometer(469),
+	step: 20 / DAYSEC,
+	uncertainty: { body: [error ** 2, 0, 0, 0, error ** 2, 0, 0, 0, error ** 2], source: [mas(1) ** 2, 0, 0, mas(1) ** 2], sigma: 2 },
+})
+
+console.log(timeToDate(path.central[0].start)) // [2026, 6, 9, 7, 9, 42, 130] — UTC, the axis first meets the Earth
+console.log(timeToDate(path.central[0].end)) // [2026, 6, 9, 7, 14, 17, 870]
+
+// The sample on the step grid at the anchor instant.
+const sample = path.samples.find((s) => Math.abs(timeSubtract(s.time, anchor)) < 1e-9)!
+console.log(toDeg(sample.center!.longitude), toDeg(sample.center!.latitude)) // 57.551 18.392 — degrees
+console.log(toDeg(sample.center!.altitude)) // 89.89 — Ceres almost at the zenith
+console.log(toKilometer(sample.width!)) // 938.0 — km, the shadow diameter at the zenith
+console.log(toKilometer(sample.speed) / DAYSEC, sample.duration) // 45.83 20.47 — km/s and s
+console.log(toDeg(sample.groundVelocity!.azimuth)) // 76.03 — moving east-northeast
+console.log(toKilometer(sample.uncertainty!.crossTrack), sample.uncertainty!.timing) // 20.18 0.44 — km and s
+console.log(toDeg(sample.left!.latitude), toDeg(sample.uncertainty!.left!.latitude)) // 22.504 22.858
+
+const [centerline] = occultationPathPolylines(path, 'center')
+console.log(centerline.length) // 23 — vertices from limb to limb
 ```
 
 ### Stellar Space Motion
