@@ -25,6 +25,7 @@ import { searchIntervals, searchRoots, type TimeInterval, type TimeSearchOptions
 // plane; azimuth runs north through east in [0, TAU). Smooth-ellipsoid mode cannot predict terrain
 // shadows. An optional caller-supplied terrain horizon mask, in the same local frame, adds horizon
 // occlusion at its own resolution and provenance; it does not model cast-shadow length.
+// surface.terrain derives masks, facets and shadow rays from a caller-supplied DEM.
 
 // A solar-center crossing of a body-surface reference horizon.
 export interface BodySurfaceSunEvent {
