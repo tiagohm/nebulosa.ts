@@ -22,7 +22,7 @@ import { createMeridianFlipState, evaluateMeridianFlip, type MeridianFlipPolicy,
 import { awaitAtMost, pauseGuidingOf, pauseSequencerGuiding } from './guiding'
 import { configurationFailure, failedTask, isSequencerMountOffTarget, missingDependency, reconcileTracking, sequencerFrameHourAngleSpan, sequencerStartupTrackMode } from './lifecycle'
 // oxfmt-ignore
-import type { SequencerContext, SequencerFailedTaskResult, SequencerProtectionOutcome, SequencerShutdownTask, SequencerSupervisor, SequencerSupervisorHost, SequencerTask, SequencerTaskPolicy, SequencerTaskResult, SequencerTaskView } from './runner'
+import type { SequencerContext, SequencerFailedTaskResult, SequencerProtectionOutcome, SequencerShutdownTask, SequencerSupervisor, SequencerSupervisorHost, SequencerTask, SequencerTaskPolicy, SequencerTaskResult, SequencerTaskView, SequencerTrackingProtection } from './runner'
 // oxfmt-ignore
 import { DEFAULT_SEQUENCER_COLLABORATOR_ABORT_GRACE, DEFAULT_SEQUENCER_MERIDIAN_FLIP, type SequencerCenteringConfiguration, type SequencerConfiguration, type SequencerConfigurationDiagnostic, type SequencerDevices, type SequencerFailureAction, type SequencerMeridianFlipConfiguration, type SequencerMeridianProtectionFailure, type SequencerPlateSolver, type SequencerPointingConfiguration, type SequencerRotatorConfiguration, type SequencerTarget, type SequencerTaskId } from './sequencer'
 import { advanceSequencerMeridianFlip, isWithinSequencerMeridianCycle, SEQUENCER_MERIDIAN_HALF_CYCLE, type SequencerRuntimeState, sequencerMeridianTransitAt, toMeridianFlipPolicy } from './state'
@@ -767,6 +767,164 @@ export interface SequencerMeridianServices {
 	readonly mountUpdates?: SequencerMountUpdates
 }
 
+// What the tracking protection reads of the session it protects: its live view, its orchestration core and the living
+// roots of its run that may move the mount.
+export type SequencerTrackingProtectionHost = Pick<SequencerSupervisorHost, 'view' | 'motionOwners' | 'coordinator'>
+
+// Tracking protection prefix of section 24.5 (`protectMountTracking`: 2a guiding pause, 2b motion release, 2c tracking
+// off) of one session, with the timings of `mountTrackingProtectionTimings` resolved once. Its three callers share it:
+// the hard meridian path of the supervisor, the safety critical protection of the runner (section 32.4), which needs no
+// meridian flip, and the shutdown, whose steps `pauseGuiding` and `stopTracking` are no-ops while the tracking off of a
+// clean prefix holds (`shutdownStep`). Every caller runs it as a critical root, single-flight through the runner.
+export class SequencerMountTrackingProtection implements SequencerTrackingProtection {
+	// Timings of the prefix.
+	readonly timings: SequencerMountTrackingProtectionTimings
+	// Motion bounds of the session.
+	readonly bounds: SequencerMountMotionBounds
+	// Whether the last prefix ended clean and tracking was not observed on since (the meridian supervisor clears it when it
+	// observes tracking), so the shutdown steps of the prefix have nothing left to do.
+	trackingProtected = false
+
+	constructor(
+		configuration: SequencerConfiguration,
+		devices: Pick<SequencerDevices, 'mount'>,
+		readonly services: SequencerMeridianServices,
+	) {
+		this.timings = mountTrackingProtectionTimings(configuration, devices, services)
+		this.bounds = sequencerMountMotionBounds(configuration, devices, services.ditherer)
+	}
+
+	// Wraps a shutdown step of the prefix (`pauseGuiding`, `stopTracking`): it is a no-op while `trackingProtected`.
+	shutdownStep(step: SequencerShutdownTask): SequencerShutdownTask {
+		return { ...step, shouldRun: (view) => !this.trackingProtected && step.shouldRun(view) }
+	}
+
+	// Runs the prefix inside `context` for the session of `host`: 2a pauses the guiding within `pause` (a failure stops it
+	// within `guidingStop` and goes on), 2b waits for the release of the mount by every root of the run and of the movement
+	// keys by their motion owners, stopping at once a motion nobody of the run owns, then for the quiescence of the mount
+	// and of the movement guide outputs, all within `mountMotionReleaseBound`, and 2c turns tracking off within `tracking`,
+	// always attempted. Without a mount only 2a runs. Then tracking counts as stopped by the protection, the target as not
+	// acquired, and `trackingProtected` holds when nothing failed. Resolves the first failure of the steps (`cause` first),
+	// undefined when clean, with the physical hour angle at the end.
+	async protect(context: OperationContext, host: SequencerTrackingProtectionHost, cause?: SequencerMeridianProtectionFailure): Promise<{ readonly failure?: SequencerMeridianProtectionFailure; readonly hourAngle?: Angle }> {
+		const { configuration, devices, state, clock } = host.view()
+		const { guiding, mountCommander } = this.services
+		const failures: SequencerMeridianProtectionFailure[] = cause === undefined ? [] : [cause]
+
+		if (configuration.guiding !== undefined && guiding !== undefined) {
+			const paused = await pauseSequencerGuiding(context, guiding, this.timings.pause / 1000, clock)
+
+			if (!paused.ok) {
+				await awaitAtMost(guiding.stop(context), this.timings.guidingStop, clock)
+				failures.push('guidingNotQuiescent')
+			}
+
+			// Tracking stopped under the guide star: the next light starts guiding again, never from the old lock position.
+			state.intents.recoverGuiding = true
+		}
+
+		const { mount } = devices
+
+		if (mount !== undefined && mountCommander !== undefined) {
+			const motion = await this.#releaseMotion(context, host, mount, mountCommander)
+			if (motion !== undefined) failures.push(motion)
+
+			const off = await mountCommander.setTracking(context, mount, false, { timeout: this.timings.tracking })
+			if (!off.ok) failures.push('trackingNotStopped')
+		}
+
+		state.trackingStoppedForMeridianProtection = true
+		state.targetAcquired = false
+		this.trackingProtected = failures.length === 0
+
+		const hourAngle = mount === undefined ? undefined : observeSequencerMeridian(mount, configuration.target, clock.wallNow()).mountHourAngle
+		return { ...(failures.length > 0 && { failure: failures[0] }), ...(hourAngle !== undefined && { hourAngle }) }
+	}
+
+	// Step 2b: within `mountMotionReleaseBound` from its start, without acquiring anything, waits for the release of the
+	// mount by any root of the run and of each other movement key by the motion owners holding it (a co-resident lease
+	// that is not motion is never waited), stops at once a motion of the mount nobody of the run owns, then waits for the
+	// quiescence of the mount and of the movement guide outputs (no dispatched pulse window left, no pulse of a connected
+	// view). Resolves the failure, if any.
+	async #releaseMotion(context: OperationContext, host: SequencerTrackingProtectionHost, mount: Mount, mountCommander: MountCommander): Promise<SequencerMeridianProtectionFailure | undefined> {
+		const { clock } = host.view()
+		const { coordinator } = host
+		const deadline = clock.monotonicNow() + this.timings.mountMotionReleaseBound
+		const mountKey = resourceKey(mount)
+
+		const external = (mount.slewing || mount.moving) && !ownsSequencerMountMotion(host.motionOwners, mount) ? mountCommander.stopMotion(mount, { settleTimeout: this.timings.mountSettle }) : undefined
+
+		const releases: Promise<unknown>[] = []
+
+		for (const owner of coordinator.arbiter.ownersOf(mountKey)) {
+			const handle = coordinator.get(owner.id)
+			if (handle !== undefined) releases.push(handle.result)
+		}
+
+		for (const movement of this.bounds.ditherMovement) {
+			const { key } = movement.request
+			if (key === mountKey) continue
+
+			for (const owner of coordinator.arbiter.ownersOf(key)) {
+				const handle = host.motionOwners.get(owner.id)?.keys.includes(key) === true ? coordinator.get(owner.id) : undefined
+				if (handle !== undefined) releases.push(handle.result)
+			}
+		}
+
+		let quiescent = await settledBefore(Promise.all(releases), deadline, clock, context.signal)
+		if (quiescent) quiescent = await this.#awaitQuiescence(mount, deadline, clock, context.signal)
+		if (external !== undefined) await external
+
+		if (external !== undefined) return 'externalMotion'
+		return quiescent ? undefined : 'mountNotQuiescent'
+	}
+
+	// Polls the motion quiescence of the mount and of the movement guide outputs until the monotonic `deadline` (ms).
+	async #awaitQuiescence(mount: Mount, deadline: number, clock: SequencerTaskView['clock'], signal: AbortSignal) {
+		while (true) {
+			if (this.#isMotionQuiescent(mount)) return true
+			const remaining = deadline - clock.monotonicNow()
+			if (!(remaining > 0) || signal.aborted) return false
+			await clock.delay(Math.min(remaining, MOTION_QUIESCENCE_POLL_INTERVAL), signal)
+		}
+	}
+
+	// Whether the mount is quiescent and no movement guide output has a dispatched pulse window or a pulse on a connected view.
+	#isMotionQuiescent(mount: Mount) {
+		if (!isDeviceQuiescent(mount)) return false
+
+		for (const movement of this.bounds.ditherMovement) {
+			const device = movement.request.device
+			if (device === undefined || device === (mount as Device)) continue
+			const guideOutput = device as GuideOutput
+			if (this.services.guideOutputCommander?.dispatchedPulseWindow(guideOutput) !== undefined) return false
+			if (guideOutput.connected && guideOutput.pulsing) return false
+		}
+
+		return true
+	}
+}
+
+// Whether `promise` settles before the monotonic `deadline` (ms); never rejects.
+async function settledBefore(promise: Promise<unknown>, deadline: number, clock: SequencerTaskView['clock'], signal: AbortSignal) {
+	const timer = new AbortController()
+	const remaining = deadline - clock.monotonicNow()
+	if (!(remaining > 0)) return false
+
+	try {
+		return await Promise.race([promise.then(() => true), clock.delay(remaining, AbortSignal.any([timer.signal, signal])).then(() => false)])
+	} finally {
+		timer.abort()
+	}
+}
+
+// Whether a living root of the run among `motionOwners` holds the motion of the mount.
+function ownsSequencerMountMotion(motionOwners: SequencerSupervisorHost['motionOwners'], mount: Mount) {
+	const key = resourceKey(mount)
+	for (const owner of motionOwners.values()) if (owner.keys.includes(key)) return true
+	return false
+}
+
 // Risk epoch of the supervisor: born when a pre-flip mount starts tracking (or at arming), ended when the risk is removed
 // physically (tracking off or post-flip side observed). Phase changes of the runner never end it.
 interface MeridianRiskEpoch {
@@ -799,6 +957,8 @@ export class SequencerMeridianSupervisor implements SequencerSupervisor {
 	readonly settings: SequencerMeridianFlipSettings
 	// Policy of the pure state machine.
 	readonly policy: MeridianFlipPolicy
+	// Tracking protection prefix of the session, run by the hard path and shared with the safety protection.
+	readonly protection: SequencerMountTrackingProtection
 	// Timings of the tracking protection.
 	readonly timings: SequencerMountTrackingProtectionTimings
 	// Hard protection lead and its parts.
@@ -828,8 +988,6 @@ export class SequencerMeridianSupervisor implements SequencerSupervisor {
 	#pierSideVerified = false
 	// Whether a hard protection is in flight.
 	#protecting = false
-	// Whether the last hard protection turned tracking off and tracking was not observed on since.
-	#trackingProtected = false
 	// Whether the end of the cycle was reported.
 	#cycleExceeded = false
 
@@ -840,16 +998,17 @@ export class SequencerMeridianSupervisor implements SequencerSupervisor {
 	) {
 		this.settings = sequencerMeridianFlipSettings(configuration.meridianFlip)
 		this.policy = toMeridianFlipPolicy(configuration.meridianFlip, configuration)
-		this.timings = mountTrackingProtectionTimings(configuration, devices, services)
+		this.protection = new SequencerMountTrackingProtection(configuration, devices, services)
+		this.timings = this.protection.timings
 		this.lead = meridianHardProtectionLead(this.timings)
-		this.bounds = sequencerMountMotionBounds(configuration, devices, services.ditherer)
+		this.bounds = this.protection.bounds
 		this.flipTask = { id: 'meridianFlip', shouldRun: ({ devices }) => devices.mount !== undefined, run: (context) => this.#flip(context), policy: { onFailure: this.settings.onFailure } }
 	}
 
-	// Whether the tracking protection prefix already holds: the last hard protection turned tracking off and nothing
+	// Whether the tracking protection prefix already holds: the last protection turned tracking off cleanly and nothing
 	// turned it on since, so the shutdown steps of the prefix have nothing left to do.
 	get trackingProtected() {
-		return this.#trackingProtected
+		return this.protection.trackingProtected
 	}
 
 	// Motion keys of the roots of `task`.
@@ -899,52 +1058,16 @@ export class SequencerMeridianSupervisor implements SequencerSupervisor {
 		this.#wake = undefined
 	}
 
-	// Wraps a shutdown step of the tracking prefix (`pauseGuiding`, `stopTracking`): it is a no-op once a hard protection
-	// already turned tracking off.
+	// Wraps a shutdown step of the tracking prefix (`pauseGuiding`, `stopTracking`): it is a no-op once a protection
+	// already turned tracking off (`SequencerMountTrackingProtection.shutdownStep`).
 	shutdownStep(step: SequencerShutdownTask): SequencerShutdownTask {
-		return { ...step, shouldRun: (view) => !this.#trackingProtected && step.shouldRun(view) }
+		return this.protection.shutdownStep(step)
 	}
 
-	// Tracking protection prefix of section 24.5 (`protectMountTracking`) inside `context`: 2a pauses the guiding within
-	// `pause` (a failure stops it within `guidingStop` and goes on), 2b waits for the release of the mount by every root
-	// of the run and of the movement keys by their motion owners, stopping at once a motion nobody of the run owns, then
-	// for the quiescence of the mount and of the movement guide outputs, all within `mountMotionReleaseBound`, and 2c
-	// turns tracking off within `tracking`, always attempted. Then tracking counts as stopped by the protection and the
-	// target as not acquired. Resolves the first failure of the steps (`cause` first), undefined when clean, with the
-	// physical hour angle at the end.
-	async protectMountTracking(context: OperationContext, cause?: SequencerMeridianProtectionFailure): Promise<{ readonly failure?: SequencerMeridianProtectionFailure; readonly hourAngle?: Angle }> {
-		const host = this.#host!
-		const { configuration, devices, state, clock } = host.view()
-		const { guiding, mountCommander } = this.services
-		const failures: SequencerMeridianProtectionFailure[] = cause === undefined ? [] : [cause]
-
-		if (configuration.guiding !== undefined && guiding !== undefined) {
-			const paused = await pauseSequencerGuiding(context, guiding, this.timings.pause / 1000, clock)
-
-			if (!paused.ok) {
-				await awaitAtMost(guiding.stop(context), this.timings.guidingStop, clock)
-				failures.push('guidingNotQuiescent')
-			}
-
-			// Tracking stopped under the guide star: the next light starts guiding again, never from the old lock position.
-			state.intents.recoverGuiding = true
-		}
-
-		const { mount } = devices
-
-		if (mount !== undefined && mountCommander !== undefined) {
-			const motion = await this.#releaseMotion(context, mount, mountCommander)
-			if (motion !== undefined) failures.push(motion)
-
-			const off = await mountCommander.setTracking(context, mount, false, { timeout: this.timings.tracking })
-			if (!off.ok) failures.push('trackingNotStopped')
-		}
-
-		state.trackingStoppedForMeridianProtection = true
-		state.targetAcquired = false
-
-		const hourAngle = mount === undefined ? undefined : observeSequencerMeridian(mount, configuration.target, clock.wallNow()).mountHourAngle
-		return { ...(failures.length > 0 && { failure: failures[0] }), ...(hourAngle !== undefined && { hourAngle }) }
+	// Tracking protection prefix of section 24.5 (`protectMountTracking`) inside `context` for the armed session (see
+	// `SequencerMountTrackingProtection.protect`).
+	protectMountTracking(context: OperationContext, cause?: SequencerMeridianProtectionFailure) {
+		return this.protection.protect(context, this.#host!, cause)
 	}
 
 	// Meridian flip task (section 24.2): see `flipTask`.
@@ -1250,9 +1373,9 @@ export class SequencerMeridianSupervisor implements SequencerSupervisor {
 		if (mount.slewing && this.#flipDispatched !== undefined) this.#flipSlewObserved = true
 
 		// A motion nobody of the run owns invalidates the acquired target.
-		if (moving && !this.#ownsMountMotion(host, mount)) state.targetAcquired = false
+		if (moving && !ownsSequencerMountMotion(host.motionOwners, mount)) state.targetAcquired = false
 
-		if (observation.tracking) this.#trackingProtected = false
+		if (observation.tracking) this.protection.trackingProtected = false
 
 		const risk = observation.tracking && observation.pierSide !== this.settings.afterFlipPierSide
 
@@ -1378,7 +1501,7 @@ export class SequencerMeridianSupervisor implements SequencerSupervisor {
 			.protectCritically('sequencer.protect.meridianHard', (context) => this.#hardProtection(context, late, cause))
 			.then((outcome) => {
 				this.#protecting = false
-				this.#trackingProtected = outcome.ok
+				this.protection.trackingProtected = outcome.ok
 				this.#evaluate()
 			})
 	}
@@ -1414,90 +1537,6 @@ export class SequencerMeridianSupervisor implements SequencerSupervisor {
 
 		host.emit({ type: 'meridianProtectionFailed', reason: failure, lateStart: late, hourAngle })
 		return successfulOperationResult({ ok: false, failure: { kind: 'operation', reason: 'unexpectedState', detail: `meridian protection failed: ${failure}` }, action: this.settings.onFailure })
-	}
-
-	// Step 2b: within `mountMotionReleaseBound` from its start, without acquiring anything, waits for the release of the
-	// mount by any root of the run and of each other movement key by the motion owners holding it (a co-resident lease
-	// that is not motion is never waited), stops at once a motion of the mount nobody of the run owns, then waits for the
-	// quiescence of the mount and of the movement guide outputs (no dispatched pulse window left, no pulse of a connected
-	// view). Resolves the failure, if any.
-	async #releaseMotion(context: OperationContext, mount: Mount, mountCommander: MountCommander): Promise<SequencerMeridianProtectionFailure | undefined> {
-		const host = this.#host!
-		const { clock } = host.view()
-		const { coordinator } = host
-		const deadline = clock.monotonicNow() + this.timings.mountMotionReleaseBound
-		const mountKey = resourceKey(mount)
-
-		const external = (mount.slewing || mount.moving) && !this.#ownsMountMotion(host, mount) ? mountCommander.stopMotion(mount, { settleTimeout: this.timings.mountSettle }) : undefined
-
-		const releases: Promise<unknown>[] = []
-
-		for (const owner of coordinator.arbiter.ownersOf(mountKey)) {
-			const handle = coordinator.get(owner.id)
-			if (handle !== undefined) releases.push(handle.result)
-		}
-
-		for (const movement of this.bounds.ditherMovement) {
-			const { key } = movement.request
-			if (key === mountKey) continue
-
-			for (const owner of coordinator.arbiter.ownersOf(key)) {
-				const handle = host.motionOwners.get(owner.id)?.keys.includes(key) === true ? coordinator.get(owner.id) : undefined
-				if (handle !== undefined) releases.push(handle.result)
-			}
-		}
-
-		let quiescent = await this.#settledBefore(Promise.all(releases), deadline, clock, context.signal)
-		if (quiescent) quiescent = await this.#awaitQuiescence(mount, deadline, clock, context.signal)
-		if (external !== undefined) await external
-
-		if (external !== undefined) return 'externalMotion'
-		return quiescent ? undefined : 'mountNotQuiescent'
-	}
-
-	// Whether `promise` settles before the monotonic `deadline` (ms); never rejects.
-	async #settledBefore(promise: Promise<unknown>, deadline: number, clock: SequencerTaskView['clock'], signal: AbortSignal) {
-		const timer = new AbortController()
-		const remaining = deadline - clock.monotonicNow()
-		if (!(remaining > 0)) return false
-
-		try {
-			return await Promise.race([promise.then(() => true), clock.delay(remaining, AbortSignal.any([timer.signal, signal])).then(() => false)])
-		} finally {
-			timer.abort()
-		}
-	}
-
-	// Polls the motion quiescence of the mount and of the movement guide outputs until the monotonic `deadline` (ms).
-	async #awaitQuiescence(mount: Mount, deadline: number, clock: SequencerTaskView['clock'], signal: AbortSignal) {
-		while (true) {
-			if (this.#isMotionQuiescent(mount)) return true
-			const remaining = deadline - clock.monotonicNow()
-			if (!(remaining > 0) || signal.aborted) return false
-			await clock.delay(Math.min(remaining, MOTION_QUIESCENCE_POLL_INTERVAL), signal)
-		}
-	}
-
-	// Whether the mount is quiescent and no movement guide output has a dispatched pulse window or a pulse on a connected view.
-	#isMotionQuiescent(mount: Mount) {
-		if (!isDeviceQuiescent(mount)) return false
-
-		for (const movement of this.bounds.ditherMovement) {
-			const device = movement.request.device
-			if (device === undefined || device === (mount as Device)) continue
-			const guideOutput = device as GuideOutput
-			if (this.services.guideOutputCommander?.dispatchedPulseWindow(guideOutput) !== undefined) return false
-			if (guideOutput.connected && guideOutput.pulsing) return false
-		}
-
-		return true
-	}
-
-	// Whether a living root of the run holds the motion of the mount.
-	#ownsMountMotion(host: SequencerSupervisorHost, mount: Mount) {
-		const key = resourceKey(mount)
-		for (const owner of host.motionOwners.values()) if (owner.keys.includes(key)) return true
-		return false
 	}
 
 	// Whether the root of the flip task of the session lives.

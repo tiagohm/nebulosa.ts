@@ -289,6 +289,10 @@ export interface SequencerShutdownConfiguration {
 	readonly turnOffFlatPanel?: SequencerShutdownStepPolicy
 	// Warms the camera and disables the cooler.
 	readonly warmCamera?: SequencerShutdownStepPolicy
+	// Interlock of an enclosure that must never close over an unparked telescope (a roll-off roof): the dome or roof
+	// closes only once the mount is observed parked, and a safety critical protection that defers the park defers the
+	// closing with it. Default false.
+	readonly domeRequiresParkedMount?: boolean
 }
 
 // Disposition of an auxiliary (centering or autofocus) FITS once its collaborator finished.
@@ -504,10 +508,13 @@ export interface SequencerMeridianFlipConfiguration {
 	readonly onFailure?: SequencerFailureAction
 }
 
-// Session action when safety turns unsafe.
-// - pauseAfterFrame: the current frame finishes, then the session pauses;
-// - stopAfterFrame: the current frame finishes, then the session stops;
-// - shutdownImmediately: the run is aborted and the critical shutdown steps start at once.
+// Session action when safety turns unsafe (or 'unknown' with `unknownIsUnsafe`) after the startup; in the startup only
+// `shutdownImmediately` applies, `onUnsafeAtStartup` otherwise. No exposure is dispatched while unsafe.
+// - pauseAfterFrame: the current frame finishes, then the safety gate of the next safe point waits until safe;
+// - stopAfterFrame: the current frame finishes, then the session stops (`stopCause: 'safety'`);
+// - shutdownImmediately: the run is aborted and the critical protection starts at once, without waiting for the
+//   interrupted task: the tracking protection prefix, then the configured shutdown steps whose device no living root of
+//   the run leases; the full shutdown follows the drain (`stopCause: 'safety'`).
 export type SequencerUnsafeAction = 'pauseAfterFrame' | 'stopAfterFrame' | 'shutdownImmediately'
 
 // Safety policy over the caller-provided safety source.
@@ -722,8 +729,10 @@ export interface SequencerRunnerServices {
 	readonly ditherer?: Ditherer
 	// Quality analyzer of the primary frames; requires `capture.quality`. Absent classifies every frame 'unknown'.
 	readonly qualityAnalyzer?: SequencerQualityAnalyzer
-	// Safety source, subscribed from the startup to the terminalization; its transitions, recorded in the monotonic
-	// domain, decide the `unsafeDuringExposure` criterion. Without it no window is covered and the criterion discards.
+	// Safety source, subscribed after the reservation and before the first startup task, then read by `current()`, until
+	// the terminalization; its changes apply the safety policy (never during the shutdown, where they are only recorded),
+	// and its transitions, recorded in the monotonic domain, decide the `unsafeDuringExposure` criterion. Without it no
+	// window is covered and the criterion discards.
 	readonly safety?: SequencerSafetySource
 	// Operational clock; default `SYSTEM_SEQUENCER_CLOCK`. Always the three members together.
 	readonly clock?: SequencerClock
@@ -1703,6 +1712,8 @@ function validateShutdown(v: ConfigurationValidator, shutdown: unknown, path: st
 	for (const step of SHUTDOWN_STEPS) {
 		if (shutdown[step] !== undefined) v.member(SHUTDOWN_STEP_POLICIES, shutdown[step], `${path}.${step}`)
 	}
+
+	if (shutdown.domeRequiresParkedMount !== undefined) v.boolean(shutdown.domeRequiresParkedMount, `${path}.domeRequiresParkedMount`)
 }
 
 // Target acquisition, centering and recenter.
