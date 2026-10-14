@@ -146,7 +146,7 @@ test('disabling aberration leaves the astrometric direction unchanged', () => {
 
 test('aberration matches eraAb and stays on the ~20 arcsec annual scale', () => {
 	const tdbTime = tdb(TIME)
-	const [heliocentric, barycentric] = eraEpv00(tdbTime.day, tdbTime.fraction)
+	const [barycentric, heliocentric] = eraEpv00(tdbTime.day, tdbTime.fraction)
 	const earth = constantPv(barycentric[0], barycentric[1])
 	const sun = constantPv([barycentric[0][0] - heliocentric[0][0], barycentric[0][1] - heliocentric[0][1], barycentric[0][2] - heliocentric[0][2]])
 	const direction = vecNormalize([0, 1, 0])
@@ -172,7 +172,7 @@ test('aberration matches eraAb and stays on the ~20 arcsec annual scale', () => 
 
 test('a topocentric observer includes the diurnal aberration term', () => {
 	const tdbTime = tdb(TIME)
-	const [heliocentric, barycentric] = eraEpv00(tdbTime.day, tdbTime.fraction)
+	const [barycentric, heliocentric] = eraEpv00(tdbTime.day, tdbTime.fraction)
 	const sun = constantPv([barycentric[0][0] - heliocentric[0][0], barycentric[0][1] - heliocentric[0][1], barycentric[0][2] - heliocentric[0][2]])
 	const direction = vecNormalize([0, 1, 0.2])
 	const target = farTarget(barycentric[0], direction, 1e6)

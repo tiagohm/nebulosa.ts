@@ -268,6 +268,11 @@ export class IersAB implements Iers {
 		return this.#table(time).xy(time)
 	}
 
+	// Checks whether either table covers the UTC-indexed time; false means lookups clamp to an edge or return 0.
+	covers(time: Time) {
+		return this.b.covers(time) || this.a.covers(time)
+	}
+
 	load(source: Source | readonly string[]): Promise<void> {
 		throw new Error('not supported')
 	}
