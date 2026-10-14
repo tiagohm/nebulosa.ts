@@ -12,13 +12,13 @@ import { mulberry32, type Random } from '../../../src/math/numerical/random'
 // oxfmt-ignore
 import { SEQUENCER_REENTRY_LIMIT, type SequencerCaptureContext, type SequencerCapturedFrame, type SequencerCaptureStep, type SequencerContext, type SequencerProtectionOutcome, type SequencerRunner, type SequencerRunnerPhases, sequencerResourceRequests, sequencerRetryDelay, type SequencerShutdownTask, type SequencerSupervisor, type SequencerSupervisorHost, type SequencerTask, type SequencerTaskPolicy, type SequencerTaskResult, startSequencerRunner } from '../../../src/observation/sequencer/runner'
 // oxfmt-ignore
-import type { SequencerCameraCapture, SequencerCaptureConfiguration, SequencerCheckpointStore, SequencerConfiguration, SequencerDevices, SequencerEvent, SequencerFailure, SequencerFrameDiscardPolicy, SequencerFrameGroup, SequencerFrameSlotSnapshot, SequencerQualityAnalyzer, SequencerQualityFrame, SequencerQualityResult, SequencerResult, SequencerSafetySnapshot, SequencerSafetySource, SequencerSessionState, SequencerShutdownStepPolicy, SequencerTaskId, SequencerTriggeredFrameGroup } from '../../../src/observation/sequencer/sequencer'
+import type { SequencerCameraCapture, SequencerCaptureConfiguration, SequencerCheckpointStore, SequencerConfiguration, SequencerDevices, SequencerEvent, SequencerFailure, SequencerFrameDiscardPolicy, SequencerFrameGroup, SequencerFrameSlotSnapshot, SequencerQualityAnalyzer, SequencerQualityFrame, SequencerQualityResult, SequencerResult, SequencerSafetySource, SequencerSessionState, SequencerShutdownStepPolicy, SequencerTaskId, SequencerTriggeredFrameGroup } from '../../../src/observation/sequencer/sequencer'
 import { mountKeyHolders } from '../../../src/observation/sequencer/pointing'
 import { pushSequencerCompensation } from '../../../src/observation/sequencer/state'
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
 // oxfmt-ignore
-import { assertJournalInvariants, assertRunnerInvariants, connectSequencerRig, createSequencerRig, injectFileSystemFaults, ManualSequencerClock, type RunnerLogEntry, type RunnerOracleOptions, type RunnerRecorder, recordRunner, resetSequencerRig, ScriptedGuidingSession } from './util'
+import { assertJournalInvariants, assertRunnerInvariants, connectSequencerRig, createSequencerRig, injectFileSystemFaults, ManualSequencerClock, type RunnerLogEntry, type RunnerOracleOptions, type RunnerRecorder, recordRunner, resetSequencerRig, ScriptedGuidingSession, ScriptedSafetySource } from './util'
 
 const LIGHT: SequencerCameraCapture = { exposureTime: 60, exposureTimeUnit: 'second', frameType: 'LIGHT', x: 0, y: 0, width: 0, height: 0, subframe: false, binX: 1, binY: 1, frameFormat: '', gain: 100, offset: 10, compressed: false }
 const DARK: SequencerCameraCapture = { ...LIGHT, frameType: 'DARK' }
@@ -1674,39 +1674,6 @@ describe('rig compensation', () => {
 		await resetSequencerRig(rig, 40000)
 	})
 })
-
-// Safety source of the runner tests: `publish` notifies the subscribers synchronously; reads and live subscriptions are
-// counted.
-class ScriptedSafetySource implements SequencerSafetySource {
-	#snapshot: SequencerSafetySnapshot
-	readonly #listeners = new Set<(snapshot: SequencerSafetySnapshot) => void>()
-	reads = 0
-
-	constructor(state: SequencerSafetySnapshot['state'] = 'safe') {
-		this.#snapshot = { state }
-	}
-
-	get subscriptions() {
-		return this.#listeners.size
-	}
-
-	readonly current = () => {
-		this.reads++
-		return this.#snapshot
-	}
-
-	readonly subscribe = (listener: (snapshot: SequencerSafetySnapshot) => void) => {
-		this.#listeners.add(listener)
-		return () => {
-			this.#listeners.delete(listener)
-		}
-	}
-
-	publish(state: SequencerSafetySnapshot['state']) {
-		this.#snapshot = { state }
-		for (const listener of this.#listeners) listener(this.#snapshot)
-	}
-}
 
 describe('49.3 discard', () => {
 	const QUALITY_LIMITS = { timeout: 10, abortGrace: 5 } as const

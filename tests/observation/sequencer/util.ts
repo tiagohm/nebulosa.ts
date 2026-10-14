@@ -47,7 +47,7 @@ import { type Angle, deg, hour, normalizeAngle, normalizePI } from '../../../src
 import type { Ditherer, DitherPhase, DitherRequest, DitherResult } from '../../../src/observation/guiding/ditherer'
 // oxfmt-ignore
 import { type GuidingInterruption, GuidingInterruptionHistory, type GuidingSession, type GuidingSessionState, type GuidingSettle, type GuidingStartOptions } from '../../../src/observation/guiding/session'
-import type { SequencerClock, SequencerConfiguration, SequencerEvent, SequencerListener, SequencerTarget, SequencerTaskId } from '../../../src/observation/sequencer/sequencer'
+import type { SequencerClock, SequencerConfiguration, SequencerEvent, SequencerListener, SequencerSafetySnapshot, SequencerSafetySource, SequencerTarget, SequencerTaskId } from '../../../src/observation/sequencer/sequencer'
 import type { SequencerJournalEntry } from '../../../src/observation/sequencer/storage'
 import { waitUntil } from '../../util'
 
@@ -1291,6 +1291,42 @@ export class ScriptedGuidingSession implements GuidingSession, Ditherer {
 
 	#record(command: ScriptedGuidingEntry['command'], recalibrate?: boolean) {
 		this.log.push(recalibrate === undefined ? { sequence: this.#sequence.next(), command } : { sequence: this.#sequence.next(), command, recalibrate })
+	}
+}
+
+// Safety source of the unit and e2e tests (50.1): `publish` notifies the subscribers synchronously, in subscription
+// order, and `current()` always returns the last published snapshot; reads and live subscriptions are counted. It never
+// replays the current state to a new subscriber, as the contract of the source requires.
+export class ScriptedSafetySource implements SequencerSafetySource {
+	#snapshot: SequencerSafetySnapshot
+	readonly #listeners = new Set<(snapshot: SequencerSafetySnapshot) => void>()
+	reads = 0
+
+	constructor(state: SequencerSafetySnapshot['state'] = 'safe') {
+		this.#snapshot = { state }
+	}
+
+	// Live subscriptions.
+	get subscriptions() {
+		return this.#listeners.size
+	}
+
+	readonly current = () => {
+		this.reads++
+		return this.#snapshot
+	}
+
+	readonly subscribe = (listener: (snapshot: SequencerSafetySnapshot) => void) => {
+		this.#listeners.add(listener)
+		return () => {
+			this.#listeners.delete(listener)
+		}
+	}
+
+	// Publishes `state` (with an optional `detail`) to every subscriber.
+	publish(state: SequencerSafetySnapshot['state'], detail?: string) {
+		this.#snapshot = detail === undefined ? { state } : { state, detail }
+		for (const listener of Array.from(this.#listeners)) listener(this.#snapshot)
 	}
 }
 

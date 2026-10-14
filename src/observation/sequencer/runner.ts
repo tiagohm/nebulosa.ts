@@ -5,11 +5,12 @@ import { awaitCooperativeJob } from '../../devices/orchestration/operation.wait'
 import { type ResourceConflict, type ResourceKey, type ResourceRequest, type ResourceReservation, type ResourceReservationOwner, resourceKey } from '../../devices/orchestration/resource'
 import { MountDitherer } from '../guiding/ditherer'
 import { createMeridianFlipState } from '../mount/meridian.flip'
+import { isSequencerSafetyGated } from './safety'
 import { fireCalibrationTriggers, restoreSequencerFrameSlot, selectNextFrame, selectNextFrameOnStop, type SequencerTriggerEvent } from './scheduler'
 // oxfmt-ignore
-import { DEFAULT_SEQUENCER_COLLABORATOR_ABORT_GRACE, type SequencerCheckpoint, type SequencerCheckpointSlot, type SequencerClock, type SequencerConfiguration, type SequencerCorrectiveIntents, type SequencerDevices, type SequencerEventBody, type SequencerFailure, type SequencerFailureAction, type SequencerFrameDecision, type SequencerFrameDiscardPolicy, type SequencerFrameGroup, type SequencerFrameSlot, type SequencerHandle, type SequencerOptionalFailureAction, type SequencerPhase, type SequencerQualityOutcome, type SequencerQualityResult, type SequencerResult, type SequencerRetryPolicy, type SequencerRunnerServices, type SequencerSafetySnapshot, type SequencerSessionState, type SequencerShutdownStepPolicy, type SequencerSnapshot, type SequencerTaskId, type SequencerTerminalState, SYSTEM_SEQUENCER_CLOCK } from './sequencer'
+import { DEFAULT_SEQUENCER_COLLABORATOR_ABORT_GRACE, type SequencerCheckpoint, type SequencerCheckpointSlot, type SequencerClock, type SequencerConfiguration, type SequencerCorrectiveIntents, type SequencerDevices, type SequencerEventBody, type SequencerFailure, type SequencerFailureAction, type SequencerFrameDecision, type SequencerFrameDiscardPolicy, type SequencerFrameGroup, type SequencerFrameSlot, type SequencerHandle, type SequencerMeridianProtectionFailure, type SequencerOptionalFailureAction, type SequencerPhase, type SequencerQualityOutcome, type SequencerQualityResult, type SequencerResult, type SequencerRetryPolicy, type SequencerRunnerServices, type SequencerSafetySnapshot, type SequencerSessionState, type SequencerShutdownStepPolicy, type SequencerSnapshot, type SequencerTaskId, type SequencerTerminalState, SYSTEM_SEQUENCER_CLOCK } from './sequencer'
 // oxfmt-ignore
-import { applyCorrectiveIntents, applySequencerCheckpoint, classifySequencerFrame, createSequencerRuntimeState, decideFrameOutcome, exhaustedDiscardAction, isTerminalSequencerState, recordSequencerSafetyTransition, requestSequencerHold, requestSequencerPause, requestSequencerResume, requestSequencerStop, type SequencerCompensation, type SequencerFrameClassification, type SequencerFrameEvidence, type SequencerRuntimeState, type SequencerSafetyTransition, type SequencerStopMode, safetyUnsafeWithin, sequencerCaptureProgressSnapshot, sequencerCheckpointOf, sequencerFrameSlotSnapshot, sequencerSnapshot, shouldHoldSequencer, transitionSequencerState } from './state'
+import { applyCorrectiveIntents, applySequencerCheckpoint, classifySequencerFrame, createSequencerRuntimeState, decideFrameOutcome, exhaustedDiscardAction, isSequencerSafetyBlocking, isTerminalSequencerState, recordSequencerSafetyTransition, requestSequencerHold, requestSequencerPause, requestSequencerResume, requestSequencerStop, type SequencerCompensation, type SequencerFrameClassification, type SequencerFrameEvidence, type SequencerRuntimeState, type SequencerSafetyTransition, type SequencerStopMode, safetyUnsafeWithin, sequencerCaptureProgressSnapshot, sequencerCheckpointOf, sequencerFrameSlotSnapshot, sequencerSnapshot, shouldHoldSequencer, transitionSequencerState } from './state'
 import type { SequencerDeferReason, SequencerFrameDestination, SequencerStorage } from './storage'
 import { bootstrapSequencerElapsedAnchors } from './trigger'
 
@@ -185,6 +186,18 @@ export interface SequencerTask {
 export interface SequencerShutdownTask extends Omit<SequencerTask, 'policy'> {
 	// Whether a failure of the step makes the session 'failed' or is only reported.
 	readonly policy: SequencerShutdownStepPolicy
+	// Device the step commands; a safety critical protection defers the step while a living root of the run leases it.
+	readonly device?: (devices: SequencerDevices) => Device | undefined
+	// Earlier steps the enclosure interlocks this one with: a safety critical protection that deferred one of them
+	// defers this one too, so both run, in order, in the full shutdown.
+	readonly interlock?: readonly SequencerTaskId[]
+}
+
+// Tracking protection prefix of a session (`protectMountTracking`, section 24.5: guiding pause, release of the mount
+// motion, tracking off), run first by the safety critical protection (section 32.4) and by the hard meridian path.
+export interface SequencerTrackingProtection {
+	// Runs the prefix inside `context` for the session `host` describes; resolves its first failure, absent when clean.
+	readonly protect: (context: OperationContext, host: SequencerSupervisorHost) => Promise<{ readonly failure?: SequencerMeridianProtectionFailure }>
 }
 
 // What the exposure of one frame produced, with its physical instants read from the session clock. The frame itself
@@ -240,6 +253,9 @@ export interface SequencerRunnerPhases {
 	readonly shutdown: readonly SequencerShutdownTask[]
 	// Continuous supervision (the meridian limit) armed at step 0b; absent supervises nothing.
 	readonly supervisor?: SequencerSupervisor
+	// Tracking protection prefix of the safety critical protection, the very one of the supervisor when there is one;
+	// absent pauses no guiding and stops no tracking before the free shutdown steps.
+	readonly trackingProtection?: SequencerTrackingProtection
 	// Last synchronous check of the session right before an exposure is dispatched (the final exposure guard repeated by
 	// `beforeExposure`): why the exposure of the frame of `view` must not go now, or undefined. It reads the devices and
 	// the session state only; it never awaits nor commands.
@@ -413,7 +429,9 @@ export class SequencerRunner {
 	// Whether a required shutdown step failed or the shutdown ran out of time.
 	#shutdownFailed = false
 	// Why a stopped session stopped.
-	#stopCause?: 'user' | 'policy'
+	#stopCause?: SequencerResult['stopCause']
+	// Whether the terminal pipeline began: from then on safety transitions are only recorded.
+	#finishing = false
 	// Capture failure policy 'pause' applied to a failure that is not retried.
 	#capturePause = false
 	// Delay before the next pre-capture of a retried capture, in ms.
@@ -452,6 +470,11 @@ export class SequencerRunner {
 	readonly #safetyHistory: SequencerSafetyTransition[] = []
 	// Ends the subscription of the safety source.
 	#unsubscribeSafety?: VoidFunction
+	// Whether safety already shut the session down immediately (section 32.1); it happens once per session.
+	#safetyShutdown = false
+	// Safety critical protection in flight (section 32.4): the tracking prefix, then the free shutdown steps. Every task,
+	// drain, compensation and shutdown step waits for it, like for `#critical`.
+	#safetyProtection?: Promise<void>
 
 	constructor(options: SequencerRunnerOptions) {
 		const { configuration, devices, services, phases, disposeSignal } = options
@@ -536,6 +559,13 @@ export class SequencerRunner {
 	// drain, compensations, re-entry or re-execution of the startup step). A failed outcome applies its action: 'fail',
 	// 'stop' (graceful) or 'pause' (a hold at the next safe point, the startup included). Never rejects.
 	protectCritically(kind: string, protect: OperationExecutor<SequencerProtectionOutcome>): Promise<SequencerProtectionOutcome> {
+		return this.#protectCritically(kind, protect, true)
+	}
+
+	// Single-flight critical root of `protectCritically`. A meridian one marks the meridian protection of the runtime
+	// and applies the action of a failed outcome; a safety one (the tracking prefix of a session already stopping
+	// immediately) only resolves its outcome for the shutdown failures.
+	#protectCritically(kind: string, protect: OperationExecutor<SequencerProtectionOutcome>, meridian: boolean): Promise<SequencerProtectionOutcome> {
 		if (this.#critical !== undefined) return this.#critical
 
 		// Nothing to protect without the reservation (before the admission, after the release): refused, nothing applied.
@@ -544,13 +574,17 @@ export class SequencerRunner {
 		}
 
 		const run = async (): Promise<SequencerProtectionOutcome> => {
-			this.#runtime.meridianProtection = 'hard'
+			if (meridian) this.#runtime.meridianProtection = 'hard'
 			this.#interrupt(true)
 
 			const result = await this.startCriticalTask(kind, protect).result
 			const outcome: SequencerProtectionOutcome = result.ok ? result.value : { ok: false, failure: result.error === undefined ? { kind: 'operation', reason: result.reason } : { kind: 'operation', reason: result.reason, detail: result.error }, action: 'fail' }
-			this.#runtime.meridianProtection = this.#protection !== undefined ? 'requested' : undefined
-			if (!outcome.ok) this.#applyProtectionFailure(outcome)
+
+			if (meridian) {
+				this.#runtime.meridianProtection = this.#protection !== undefined ? 'requested' : undefined
+				if (!outcome.ok) this.#applyProtectionFailure(outcome)
+			}
+
 			return outcome
 		}
 
@@ -692,9 +726,129 @@ export class SequencerRunner {
 		recordSequencerSafetyTransition(this.#safetyHistory, this.#clock.monotonicNow(), safety.current().state)
 	}
 
-	// Records a safety change at its reception instant, in the monotonic domain, and reports it.
+	// Records a safety change at its reception instant, in the monotonic domain, reports it and applies the safety policy.
 	readonly #onSafety = (snapshot: SequencerSafetySnapshot) => {
-		if (recordSequencerSafetyTransition(this.#safetyHistory, this.#clock.monotonicNow(), snapshot.state)) this.#emit({ type: 'safetyChanged', snapshot })
+		if (!recordSequencerSafetyTransition(this.#safetyHistory, this.#clock.monotonicNow(), snapshot.state)) return
+		this.#emit({ type: 'safetyChanged', snapshot })
+		this.#applySafety(snapshot)
+	}
+
+	// Policy of a change to a blocking safety state (sections 18 and 32.1), synchronously in the callback of the source.
+	// Only recorded before the reservation, once the terminal pipeline began and without a safety policy. Otherwise
+	// `shutdownImmediately` stops at once with the critical protection, in any phase; in the startup `onUnsafeAtStartup`
+	// 'stop' stops gracefully (the shutdown closes what was opened) and 'wait' cancels an opening in progress, which runs
+	// again after its gate; afterwards `stopAfterFrame` stops gracefully (the exposure in flight finishes) and
+	// `pauseAfterFrame` needs nothing more: `beforeExposure` refuses every dispatch while blocking and the gate of the
+	// next safe point waits until safe.
+	#applySafety(snapshot: SequencerSafetySnapshot) {
+		const safety = this.#configuration.safety
+		if (safety === undefined || !isSequencerSafetyBlocking(snapshot.state, safety.unknownIsUnsafe)) return
+		if (this.#reservation === undefined || this.#finishing || this.#runtime.phase === 'shutdown' || isTerminalSequencerState(this.#runtime.state)) return
+
+		const failure: SequencerFailure = { kind: 'safety', detail: snapshot.detail ?? `safety is ${snapshot.state}` }
+
+		if (safety.unsafeAction === 'shutdownImmediately') {
+			this.#shutdownForSafety(failure)
+		} else if (this.#runtime.phase === 'startup' || this.#runtime.phase === undefined) {
+			if (safety.onUnsafeAtStartup === 'stop') this.#safetyStop(failure, 'graceful')
+			else if (this.#current?.phase === 'startup' && isSequencerSafetyGated(this.#runtime.task)) this.#interrupt(false)
+		} else if (safety.unsafeAction === 'stopAfterFrame') {
+			this.#safetyStop(failure, 'graceful')
+		}
+	}
+
+	// Whether the safety policy forbids an exposure now: the current state of the source is blocking.
+	#safetyBlocks() {
+		const safety = this.#configuration.safety
+		const source = this.#services.safety
+		return safety !== undefined && source !== undefined && isSequencerSafetyBlocking(source.current().state, safety.unknownIsUnsafe)
+	}
+
+	// Stop forced by safety, with its failure and the cause 'safety' unless another cause came first.
+	#safetyStop(failure: SequencerFailure, mode: SequencerStopMode) {
+		this.#runtime.failure ??= failure
+		this.#stopCause ??= 'safety'
+		void this.#requestStop(mode)
+	}
+
+	// `shutdownImmediately` (section 32.1), once per session: an immediate stop aborts the run and cancels the current task
+	// without waiting for it (stage 1), then the critical protection runs at once while that task still quiesces. Stage 2
+	// of the drain, the compensations and the full shutdown wait for the protection.
+	#shutdownForSafety(failure: SequencerFailure) {
+		if (this.#safetyShutdown) return
+		this.#safetyShutdown = true
+		this.#safetyStop(failure, 'immediate')
+
+		const protection = this.#protectForSafety().finally(() => {
+			if (this.#safetyProtection === protection) this.#safetyProtection = undefined
+		})
+
+		this.#safetyProtection = protection
+	}
+
+	// Critical protection of safety (section 32.4), with the reservation, the coordinator and the steps of the shutdown:
+	// the tracking prefix as the single-flight critical root `sequencer.protect.mountTracking` (absorbed by a hard meridian
+	// path in flight), whose failure is a failure of the shutdown, then the free steps.
+	async #protectForSafety() {
+		const protection = this.#phases.trackingProtection
+
+		if (protection !== undefined) {
+			const outcome = await this.#protectCritically(
+				'sequencer.protect.mountTracking',
+				async (context) => {
+					const { failure } = await protection.protect(context, this.#host)
+					return successfulOperationResult<SequencerProtectionOutcome>(failure === undefined ? { ok: true } : { ok: false, failure: { kind: 'operation', reason: 'unexpectedState', task: 'stopTracking', detail: `tracking protection failed: ${failure}` }, action: 'stop' })
+				},
+				false,
+			)
+
+			if (!outcome.ok) {
+				this.#shutdownFailures.push(outcome.failure)
+				this.#shutdownFailed = true
+			}
+		}
+
+		await this.#protectFreeSteps()
+	}
+
+	// The configured shutdown steps after the tracking prefix, in their order, each as the root `sequencer.protect.{step}`
+	// with the shutdown signal and `shutdown.stepTimeout`, sequential and best-effort. Right before each step the arbiter
+	// is asked whether a living root of the run other than the guiding root leases its device: such a step is deferred,
+	// with every later step its interlock ties to it, and nothing is ever acquired from a living root. A step already
+	// satisfied is skipped by its predicate; a failure is only reported, since the full shutdown runs every step again
+	// after the drain, where satisfied steps are no-ops.
+	async #protectFreeSteps() {
+		const timeout = this.#configuration.shutdown.stepTimeout * 1000
+		const deferred = new Set<SequencerTaskId>()
+
+		for (const step of this.#phases.shutdown) {
+			if (step.id === 'pauseGuiding' || step.id === 'stopTracking') continue
+			if (this.#shutdown.signal.aborted) return
+
+			if (step.interlock?.some((id) => deferred.has(id)) === true) {
+				deferred.add(step.id)
+				continue
+			}
+
+			if ((await shouldRun(step, this.#view())) !== true) continue
+
+			if (this.#leasedByRun(step)) {
+				deferred.add(step.id)
+				continue
+			}
+
+			const handle = this.#startRoot(this.#shutdown.signal, `sequencer.protect.${step.id}`, (scope) => step.run({ ...this.#view(), scope, signal: scope.signal, reservation: this.#shutdownReservation, emit: this.#emitter, saveCheckpoint: this.#saver }).then(successfulOperationResult))
+			const failure = taskFailure(step.id, await this.#bounded(handle, timeout, this.#shutdown.signal))
+			if (failure !== undefined) this.#emit({ type: 'taskFailed', task: step.id, phase: 'shutdown', failure })
+		}
+	}
+
+	// Whether a living root of the run other than the guiding root leases the device of a shutdown step.
+	#leasedByRun(step: SequencerShutdownTask) {
+		const device = step.device?.(this.#devices)
+		if (device === undefined) return false
+		const guiding = this.#services.guiding?.operationId?.()
+		return this.#services.coordinator.arbiter.ownersOf(resourceKey(device)).some((owner) => owner.id !== guiding)
 	}
 
 	// Ends the safety subscription once; a throwing unsubscription is reported and never breaks the terminalization.
@@ -770,8 +924,9 @@ export class SequencerRunner {
 		return false
 	}
 
-	// Startup tasks in order. A protection or a pause re-executes the interrupted step from its beginning; any stop
-	// or failure ends the startup without frames. Returns whether the frame loop runs.
+	// Startup tasks in order. A protection, a pause or an unsafe change re-executes the interrupted step from its beginning,
+	// an opening from its safety gate; any stop or failure ends the startup without frames. Returns whether the frame loop
+	// runs.
 	async #startup() {
 		this.#setPhase('startup')
 		const { retry, onFailure } = this.#configuration.startup
@@ -798,7 +953,11 @@ export class SequencerRunner {
 				const next = await this.#applyFailure(outcome)
 				if (next === 'end') return false
 				if (next === 'skip') i++
-			} else await this.#quiesce()
+			} else {
+				// An interrupted opening runs again from its safety gate, never past it.
+				if (i > 0 && tasks[i - 1].id === 'safetyGate') i--
+				await this.#quiesce()
+			}
 		}
 
 		return !(this.#runtime.stop !== undefined || this.#failing)
@@ -920,9 +1079,9 @@ export class SequencerRunner {
 	}
 
 	// Exposure of the frame in its root, into the temporary of the attempt the pre-capture prepared. The capture asks
-	// `beforeExposure` right before dispatching, which refuses while a stop, a pause or a protection is pending; only
-	// an approved exposure counts as a commanded attempt. A stop lets an approved exposure finish unless immediate; a
-	// protection cancels it.
+	// `beforeExposure` right before dispatching, which refuses while a stop, a pause or a protection is pending or safety
+	// blocks (deferred 'safety'); only an approved exposure counts as a commanded attempt. A stop lets an approved exposure
+	// finish unless immediate; a protection cancels it.
 	async #capture(frame: SequencerFrameSlot): Promise<CaptureOutcome> {
 		await this.#awaitCritical()
 		if (this.#abandons(frame) || this.#run.signal.aborted) return { kind: 'deferred', reason: 'stop' }
@@ -939,12 +1098,21 @@ export class SequencerRunner {
 		let decision: 'approved' | 'refused' | undefined
 		// Whether the refusal came from the exposure guard, which counts as a re-entry without progress.
 		let guarded = false
+		// Why a refused attempt is deferred: safety, or any other refusal of `beforeExposure`.
+		let deferral: SequencerDeferReason = 'beforeExposure'
 
 		const beforeExposure = () => {
 			if (decision !== undefined) return decision === 'approved' ? undefined : failedOperationResult('aborted', 'the exposure was already refused')
 			const refusal = this.#exposureRefusal(frame)
 
 			if (refusal === undefined) {
+				// Never exposed while blocking: the pre-capture re-enters and its safety gate waits until safe.
+				if (this.#safetyBlocks()) {
+					decision = 'refused'
+					deferral = 'safety'
+					return failedOperationResult('aborted', 'safety forbids the exposure')
+				}
+
 				const guard = this.#phases.exposureRefusal?.(this.#view(frame))
 
 				if (guard === undefined) {
@@ -984,7 +1152,7 @@ export class SequencerRunner {
 		if (decision === 'refused') {
 			// A refusal of the guard is a re-entry without progress; past the limit the session fails.
 			if (guarded) this.#countReentry('finalExposureGuard', failure.kind === 'operation' ? (failure.detail ?? failure.reason) : failure.kind)
-			return { kind: 'deferred', reason: 'beforeExposure' }
+			return { kind: 'deferred', reason: deferral }
 		}
 
 		const cancelled = current.interrupted || this.#run.signal.aborted
@@ -1336,6 +1504,8 @@ export class SequencerRunner {
 	// signal, cancel every root of the reservation and await its cleanups, release the reservation and the lock, then
 	// terminalize. Always releases.
 	async #finish() {
+		this.#finishing = true
+
 		try {
 			await this.#quiesce()
 			await this.#defer('stop')
@@ -1798,8 +1968,10 @@ export class SequencerRunner {
 		if (!requestSequencerPause(this.#runtime)) return this.#result.promise.then((result) => result.state)
 		if (state === 'paused') return Promise.resolve<SequencerSessionState>('paused')
 
-		// The wait of a guard re-entry is a safe point: the pause is honored without waiting it out.
+		// The wait of a guard re-entry and the wait of a safety gate of the pre-capture are safe points: the pause is honored
+		// without waiting them out.
 		this.#pausableWait?.abort()
+		if (this.#current?.phase === 'preCapture' && this.#runtime.task === 'safetyGate') this.#interrupt(false)
 
 		this.#pause = Promise.withResolvers()
 		return this.#pause.promise
@@ -1852,9 +2024,12 @@ export class SequencerRunner {
 		}
 	}
 
-	// Waits until no critical protection is in flight.
+	// Waits until no critical protection, meridian or safety, is in flight.
 	async #awaitCritical() {
-		while (this.#critical !== undefined) await this.#critical
+		while (this.#critical !== undefined || this.#safetyProtection !== undefined) {
+			await this.#critical
+			await this.#safetyProtection
+		}
 	}
 
 	// Whether the run is interrupted for a protection: a graceful request pending or running, or a critical one in flight.
@@ -1885,10 +2060,10 @@ export class SequencerRunner {
 		return handle
 	}
 
-	// Graceful stop requested by a failure action 'stop'.
+	// Graceful stop requested by a failure action 'stop'; a safety failure (a safety gate) stops with the cause 'safety'.
 	#policyStop(failure: SequencerFailure) {
 		this.#runtime.failure ??= failure
-		this.#stopCause ??= 'policy'
+		this.#stopCause ??= failure.kind === 'safety' ? 'safety' : 'policy'
 		if (requestSequencerStop(this.#runtime, 'graceful')) this.#stopping()
 	}
 

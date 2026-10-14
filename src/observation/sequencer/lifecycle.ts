@@ -491,6 +491,7 @@ export function stopTrackingTask(services: SequencerLifecycleServices, policy: S
 			const timeout = meridianFlip?.enabled === true ? (meridianFlip.hardProtection?.trackingTimeout ?? DEFAULT_SEQUENCER_MERIDIAN_FLIP.hardProtection.trackingTimeout) : shutdown.stepTimeout
 			return taskResult(await mountCommander.setTracking(context.scope, mount!, false, { timeout: timeout * 1000 }))
 		},
+		device: (devices) => devices.mount,
 		policy,
 	}
 }
@@ -508,6 +509,7 @@ export function closeCoverTask(services: SequencerLifecycleServices, policy: Seq
 			if (coverCommander === undefined) return missingDependency('cover commander')
 			return taskResult(await coverCommander.park(context.scope, cover, { timeout: stepTimeout(context) }))
 		},
+		device: (devices) => devices.cover,
 		policy,
 	}
 }
@@ -524,22 +526,27 @@ export function parkMountTask(services: SequencerLifecycleServices, policy: Sequ
 			if (mountCommander === undefined) return missingDependency('mount commander')
 			return taskResult(await mountCommander.park(context.scope, mount, { timeout: stepTimeout(context) }))
 		},
+		device: (devices) => devices.mount,
 		policy,
 	}
 }
 
 // Shutdown task `closeOrParkDome`: closes the shutter of the dome or roof, then parks it when it can park (turning
 // driver slaving off first, which a park refuses), each command within `shutdown.stepTimeout`. Both are attempted;
-// the first failure is reported. It runs only while the dome is not closed and parked.
-export function closeOrParkDomeTask(services: SequencerLifecycleServices, policy: SequencerShutdownStepPolicy): SequencerShutdownTask {
+// the first failure is reported. It runs only while the dome is not closed and parked. With `requiresParkedMount`
+// (`shutdown.domeRequiresParkedMount`), the interlock of an enclosure that must never close over an unparked telescope,
+// it commands nothing and fails unless the mount of the session is observed parked, and it is interlocked with
+// `parkMount`.
+export function closeOrParkDomeTask(services: SequencerLifecycleServices, policy: SequencerShutdownStepPolicy, requiresParkedMount: boolean = false): SequencerShutdownTask {
 	return {
 		id: 'closeOrParkDome',
 		shouldRun: ({ devices: { dome } }) => dome === undefined || !isDomeClosed(dome),
 		run: async (context) => {
 			const { domeCommander } = services
-			const { dome } = context.devices
+			const { dome, mount } = context.devices
 			if (dome === undefined) return missingDependency('dome')
 			if (domeCommander === undefined) return missingDependency('dome commander')
+			if (requiresParkedMount && mount !== undefined && !isParkableAt(mount, true)) return failedTask(failedOperationResult('unexpectedState', `${dome.name} closes only over the parked mount ${mount.name}`))
 
 			const timeout = stepTimeout(context)
 			let failure: FailedOperationResult | undefined
@@ -557,6 +564,8 @@ export function closeOrParkDomeTask(services: SequencerLifecycleServices, policy
 
 			return failure === undefined ? DONE : failedTask(failure)
 		},
+		device: (devices) => devices.dome,
+		...(requiresParkedMount && { interlock: ['parkMount'] }),
 		policy,
 	}
 }
@@ -573,6 +582,7 @@ export function turnOffFlatPanelTask(services: SequencerLifecycleServices, polic
 			if (flatPanelCommander === undefined) return missingDependency('flat panel commander')
 			return taskResult(await flatPanelCommander.disable(context.scope, flatPanel))
 		},
+		device: (devices) => devices.flatPanel,
 		policy,
 	}
 }
@@ -588,6 +598,7 @@ export function warmCameraTask(services: SequencerLifecycleServices, policy: Seq
 			if (cameraCommander === undefined) return missingDependency('camera commander')
 			return taskResult(await cameraCommander.cooler(context.scope, context.devices.camera, false))
 		},
+		device: (devices) => devices.camera,
 		policy,
 	}
 }
@@ -612,13 +623,13 @@ export function sequencerStartupLifecycleTasks(configuration: Pick<SequencerConf
 // configured policy: tracking off, cover, mount park, dome or roof, flat panel, camera warming. The guiding pause and
 // stop around the tracking off are not part of it.
 export function sequencerShutdownLifecycleTasks(shutdown: SequencerShutdownConfiguration, services: SequencerLifecycleServices): SequencerShutdownTask[] {
-	const { stopTracking, closeCover, parkMount, closeOrParkDome, turnOffFlatPanel, warmCamera } = shutdown
+	const { stopTracking, closeCover, parkMount, closeOrParkDome, turnOffFlatPanel, warmCamera, domeRequiresParkedMount } = shutdown
 	const tasks: SequencerShutdownTask[] = []
 
 	if (stopTracking !== undefined) tasks.push(stopTrackingTask(services, stopTracking))
 	if (closeCover !== undefined) tasks.push(closeCoverTask(services, closeCover))
 	if (parkMount !== undefined) tasks.push(parkMountTask(services, parkMount))
-	if (closeOrParkDome !== undefined) tasks.push(closeOrParkDomeTask(services, closeOrParkDome))
+	if (closeOrParkDome !== undefined) tasks.push(closeOrParkDomeTask(services, closeOrParkDome, domeRequiresParkedMount === true))
 	if (turnOffFlatPanel !== undefined) tasks.push(turnOffFlatPanelTask(services, turnOffFlatPanel))
 	if (warmCamera !== undefined) tasks.push(warmCameraTask(services, warmCamera))
 

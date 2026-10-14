@@ -503,6 +503,12 @@ export interface SequencerSafetyHistory {
 	readonly transitions: readonly SequencerSafetyTransition[]
 }
 
+// Whether a safety state forbids what safety gates: 'unsafe' always, 'unknown' (no data, stale data) only when
+// `unknownIsUnsafe`. Pure.
+export function isSequencerSafetyBlocking(state: SequencerSafetyState, unknownIsUnsafe: boolean) {
+	return state === 'unsafe' || (state === 'unknown' && unknownIsUnsafe)
+}
+
 // Classification of an exposure window against the safety history.
 // - safe: the window is covered and never unsafe;
 // - unsafe: the window is covered and unsafe (or unknown with `unknownIsUnsafe`) at some instant;
@@ -531,8 +537,7 @@ export function safetyUnsafeWithin(history: SequencerSafetyHistory, from: number
 	if (low === 0) return 'truncated'
 
 	for (let i = low - 1; i < transitions.length && (i === low - 1 || transitions[i].receivedMonotonic <= to); i++) {
-		const { state } = transitions[i]
-		if (state === 'unsafe' || (state === 'unknown' && unknownIsUnsafe)) return 'unsafe'
+		if (isSequencerSafetyBlocking(transitions[i].state, unknownIsUnsafe)) return 'unsafe'
 	}
 
 	return 'safe'
