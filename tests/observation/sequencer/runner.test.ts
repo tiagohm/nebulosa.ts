@@ -1,8 +1,8 @@
 import { afterAll, afterEach, describe, expect, spyOn, test } from 'bun:test'
-import { writeFileSync } from 'fs'
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'fs'
 import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
-import { basename, join } from 'path'
+import { basename, join, sep } from 'path'
 import type { FocuserCommander } from '../../../src/devices/commanders/focuser'
 import type { WheelCommander } from '../../../src/devices/commanders/wheel'
 import { type Camera, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Device, type Dome, type FlatPanel, type Focuser, type Mount, type Rotator, type Wheel } from '../../../src/devices/indi/device'
@@ -12,13 +12,13 @@ import { mulberry32, type Random } from '../../../src/math/numerical/random'
 // oxfmt-ignore
 import { SEQUENCER_REENTRY_LIMIT, type SequencerCaptureContext, type SequencerCapturedFrame, type SequencerCaptureStep, type SequencerContext, type SequencerProtectionOutcome, type SequencerRunner, type SequencerRunnerPhases, sequencerResourceRequests, sequencerRetryDelay, type SequencerShutdownTask, type SequencerSupervisor, type SequencerSupervisorHost, type SequencerTask, type SequencerTaskPolicy, type SequencerTaskResult, startSequencerRunner } from '../../../src/observation/sequencer/runner'
 // oxfmt-ignore
-import type { SequencerCameraCapture, SequencerCaptureConfiguration, SequencerConfiguration, SequencerDevices, SequencerEvent, SequencerFailure, SequencerFrameGroup, SequencerResult, SequencerSessionState, SequencerShutdownStepPolicy, SequencerTaskId, SequencerTriggeredFrameGroup } from '../../../src/observation/sequencer/sequencer'
+import type { SequencerCameraCapture, SequencerCaptureConfiguration, SequencerCheckpointStore, SequencerConfiguration, SequencerDevices, SequencerEvent, SequencerFailure, SequencerFrameDiscardPolicy, SequencerFrameGroup, SequencerFrameSlotSnapshot, SequencerQualityAnalyzer, SequencerQualityFrame, SequencerQualityResult, SequencerResult, SequencerSafetySnapshot, SequencerSafetySource, SequencerSessionState, SequencerShutdownStepPolicy, SequencerTaskId, SequencerTriggeredFrameGroup } from '../../../src/observation/sequencer/sequencer'
 import { mountKeyHolders } from '../../../src/observation/sequencer/pointing'
 import { pushSequencerCompensation } from '../../../src/observation/sequencer/state'
-import { FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
+import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
 // oxfmt-ignore
-import { assertRunnerInvariants, connectSequencerRig, createSequencerRig, ManualSequencerClock, type RunnerLogEntry, type RunnerOracleOptions, type RunnerRecorder, recordRunner, resetSequencerRig } from './util'
+import { assertJournalInvariants, assertRunnerInvariants, connectSequencerRig, createSequencerRig, injectFileSystemFaults, ManualSequencerClock, type RunnerLogEntry, type RunnerOracleOptions, type RunnerRecorder, recordRunner, resetSequencerRig, ScriptedGuidingSession } from './util'
 
 const LIGHT: SequencerCameraCapture = { exposureTime: 60, exposureTimeUnit: 'second', frameType: 'LIGHT', x: 0, y: 0, width: 0, height: 0, subframe: false, binX: 1, binY: 1, frameFormat: '', gain: 100, offset: 10, compressed: false }
 const DARK: SequencerCameraCapture = { ...LIGHT, frameType: 'DARK' }
@@ -174,6 +174,7 @@ interface Harness {
 	readonly recorder: RunnerRecorder
 	readonly clock: ManualSequencerClock
 	readonly devices: SequencerDevices
+	readonly storage: FileSystemSequencerStorage
 }
 
 const recorders: RunnerRecorder[] = []
@@ -204,6 +205,16 @@ interface HarnessOptions {
 	readonly onEvent?: (event: SequencerEvent, runner: SequencerRunner) => void
 	// Meridian supervisor of the session.
 	readonly supervisor?: SequencerSupervisor
+	// Quality analyzer of the primary frames.
+	readonly qualityAnalyzer?: SequencerQualityAnalyzer
+	// Safety source of the session.
+	readonly safety?: SequencerSafetySource
+	// Guiding session of the guiding feature.
+	readonly guiding?: ScriptedGuidingSession
+	// Checkpoint store; none by default.
+	readonly checkpointStore?: SequencerCheckpointStore
+	// Session to run (a restart of an earlier one); a new one by default.
+	readonly sessionId?: string
 }
 
 function start(configuration: SequencerConfiguration, script: Script, options: HarnessOptions = {}): Harness {
@@ -212,14 +223,15 @@ function start(configuration: SequencerConfiguration, script: Script, options: H
 	const devices = options.devices ?? DEVICES
 	const recorder = recordRunner(coordinator)
 	recorders.push(recorder)
-	const { focuserCommander, wheelCommander, disposeSignal } = options
-	const storage = new FileSystemSequencerStorage({ root: STORAGE_ROOT, sessionId: Bun.randomUUIDv7(), wallNow: clock.wallNow })
+	const { focuserCommander, wheelCommander, disposeSignal, qualityAnalyzer, safety, guiding, checkpointStore } = options
+	const storage = new FileSystemSequencerStorage({ root: STORAGE_ROOT, sessionId: options.sessionId ?? Bun.randomUUIDv7(), wallNow: clock.wallNow })
 	const session: { runner?: SequencerRunner } = {}
 	const listener = (event: SequencerEvent) => {
 		recorder.listener(event)
 		if (session.runner !== undefined) options.onEvent?.(event, session.runner)
 	}
-	const services = { coordinator, storage, clock, listener, ...(focuserCommander !== undefined && { focuserCommander }), ...(wheelCommander !== undefined && { wheelCommander }) }
+	// oxfmt-ignore
+	const services = { coordinator, storage, clock, listener, ...(focuserCommander !== undefined && { focuserCommander }), ...(wheelCommander !== undefined && { wheelCommander }), ...(qualityAnalyzer !== undefined && { qualityAnalyzer }), ...(safety !== undefined && { safety }), ...(guiding !== undefined && { guiding }), ...(checkpointStore !== undefined && { checkpointStore }) }
 	// The script is read when each phase runs; the frame destination is always prepared last.
 	const prepare = prepareFrameDestinationTask(storage)
 	const phases: SequencerRunnerPhases = {
@@ -240,7 +252,7 @@ function start(configuration: SequencerConfiguration, script: Script, options: H
 	}
 	const runner = startSequencerRunner({ configuration, devices, services, phases, ...(disposeSignal !== undefined && { disposeSignal }) })
 	session.runner = runner
-	return { runner, script, coordinator, recorder, clock, devices }
+	return { runner, script, coordinator, recorder, clock, devices, storage }
 }
 
 function events(harness: Harness): SequencerEvent[] {
@@ -1661,4 +1673,820 @@ describe('rig compensation', () => {
 		await finish(holding)
 		await resetSequencerRig(rig, 40000)
 	})
+})
+
+// Safety source of the runner tests: `publish` notifies the subscribers synchronously; reads and live subscriptions are
+// counted.
+class ScriptedSafetySource implements SequencerSafetySource {
+	#snapshot: SequencerSafetySnapshot
+	readonly #listeners = new Set<(snapshot: SequencerSafetySnapshot) => void>()
+	reads = 0
+
+	constructor(state: SequencerSafetySnapshot['state'] = 'safe') {
+		this.#snapshot = { state }
+	}
+
+	get subscriptions() {
+		return this.#listeners.size
+	}
+
+	readonly current = () => {
+		this.reads++
+		return this.#snapshot
+	}
+
+	readonly subscribe = (listener: (snapshot: SequencerSafetySnapshot) => void) => {
+		this.#listeners.add(listener)
+		return () => {
+			this.#listeners.delete(listener)
+		}
+	}
+
+	publish(state: SequencerSafetySnapshot['state']) {
+		this.#snapshot = { state }
+		for (const listener of this.#listeners) listener(this.#snapshot)
+	}
+}
+
+describe('49.3 discard', () => {
+	const QUALITY_LIMITS = { timeout: 10, abortGrace: 5 } as const
+	const QUALITY_ONLY = { quality: true, guidingInterruption: false, unsafeDuringExposure: false } as const
+	const GUIDING = { settle: { pixels: 1.5, time: 1, timeout: 10 }, pauseTimeout: 5, maxRecoveries: 1, recalibrate: false, flipCalibration: false, onFailure: 'fail' } as const
+
+	function discardPolicy(patch: Partial<SequencerFrameDiscardPolicy> = {}): SequencerFrameDiscardPolicy {
+		return { criteria: QUALITY_ONLY, maxDiscardsPerSlot: 1, onExhausted: 'skipSlot', artifact: 'moveToRejected', ...patch }
+	}
+
+	// One scheduled light group `L` judged by `policy`, with the quality limits.
+	function judged(count: number, policy: SequencerFrameDiscardPolicy | undefined = discardPolicy(), patch: Partial<SequencerConfiguration> = {}) {
+		return configurationOf([{ ...scheduled('L', count), ...(policy !== undefined && { discard: policy }) }], { quality: QUALITY_LIMITS }, patch)
+	}
+
+	// Analyzer resolving the scripted results in call order ('accepted' once they run out), recording every frame and
+	// the analyses in flight.
+	function analyzerOf(...results: readonly (SequencerQualityResult['classification'] | SequencerQualityResult)[]) {
+		const calls: SequencerQualityFrame[] = []
+		const analyzer: SequencerQualityAnalyzer = (frame) => {
+			calls.push(frame)
+			const result = results[calls.length - 1] ?? 'accepted'
+			return Promise.resolve(typeof result === 'string' ? { classification: result } : result)
+		}
+		return { analyzer, calls }
+	}
+
+	function discardedEvents(harness: Harness) {
+		return events(harness).filter((event) => event.type === 'frameDiscarded')
+	}
+
+	function qualityOutcomes(harness: Harness) {
+		return events(harness).flatMap((event) => (event.type === 'frameCaptured' ? [event.quality] : []))
+	}
+
+	async function journalKinds(harness: Harness) {
+		const journal = await readSequencerJournal(join(STORAGE_ROOT, harness.runner.id, 'journal.jsonl'))
+		assertJournalInvariants(journal, events(harness))
+		return journal.map((entry): string => entry.kind)
+	}
+
+	// Every file of the session directory, relative with `/` separators, sorted; the lock and the journal excluded.
+	function framesOf(harness: Harness) {
+		const directory = join(STORAGE_ROOT, harness.runner.id)
+		return (readdirSync(directory, { recursive: true }) as string[])
+			.map((path) => path.split(sep).join('/'))
+			.filter((path) => path.endsWith('.fit') && statSync(join(directory, path)).isFile())
+			.sort()
+	}
+
+	// Capture of the frame of the context whose exposure window is [dispatch, dispatch + length] of the monotonic clock,
+	// each window well after the previous one although the manual clock stands still; `during` runs before the result.
+	function windowCapture(length: number, during?: (dispatch: number) => void) {
+		let shift = 0
+
+		return (context: SequencerContext): OperationResult<SequencerCapturedFrame> => {
+			writeFileSync((context as SequencerCaptureContext).destination.temporary, FRAME)
+			const dispatch = context.clock.monotonicNow() + shift
+			shift += 10 * length
+			during?.(dispatch)
+			const at = context.clock.wallNow()
+			return successfulOperationResult({ exposureDispatchedAt: at, exposureDispatchedMonotonic: dispatch, exposureStartedAt: at, exposureStartedMonotonic: dispatch, exposureFinishedAt: at + length, exposureFinishedMonotonic: dispatch + length })
+		}
+	}
+
+	test('an analyzer without quality limits is a configuration refusal before anything runs', async () => {
+		const script = new Script()
+		script.startup = [script.task('coolCamera')]
+		const harness = start(configurationOf(), script, { qualityAnalyzer: analyzerOf().analyzer })
+		const result = await harness.runner.handle.result
+		expect(result).toMatchObject({ state: 'failed', failure: { kind: 'configuration' } })
+		expect(script.trace).toEqual([])
+	})
+
+	test('9: a retake keeps the slot id, consumes the attempt and runs the pre-capture again from its first task', async () => {
+		const script = new Script()
+		script.preCapture = [script.task('safetyGate')]
+		const { analyzer, calls } = analyzerOf('rejected')
+		const harness = start(judged(1, discardPolicy({ maxDiscardsPerSlot: 2 })), script, { qualityAnalyzer: analyzer })
+		const result = await finish(harness)
+
+		expect(result.state).toBe('completed')
+		expect(progressOf(result, 'L')).toMatchObject({ accepted: 1, forced: 0, discarded: 1, skipped: 0 })
+		expect(script.trace).toEqual(['safetyGate@frame[L][1]', 'capture@frame[L][1]#1', 'safetyGate@frame[L][1]', 'capture@frame[L][1]#2'])
+		expect(calls.map((call) => [call.slot.id, call.slot.attempt, basename(call.path)])).toEqual([
+			['frame[L][1]', 1, '.frame[L][1].1.partial.fit'],
+			['frame[L][1]', 2, '.frame[L][1].2.partial.fit'],
+		])
+		expect(discardedEvents(harness)).toMatchObject([{ slot: 'frame[L][1]', attempt: 1, reasons: ['quality'], truncated: false, decision: 'retake', remainingDiscards: 1 }])
+		expect(events(harness).flatMap((event) => (event.type === 'frameSelected' ? [[event.frame.attempt, event.frame.discardedTotal, event.frame.discardBudgetUsed, event.frame.captureFailures]] : []))).toEqual([
+			[1, 0, 0, 0],
+			[2, 1, 1, 0],
+		])
+		expect(await journalKinds(harness)).toEqual(['prepared', 'disposing', 'disposed', 'prepared', 'promoting', 'committed'])
+	})
+
+	test('10: a discarded frame never reaches the final: rejected/, kept beside it under another name, or deleted', async () => {
+		const expected = { moveToRejected: ['L/frame[L][1].fit', 'rejected/L/frame[L][1].1.fit'], keepInPlace: ['L/frame[L][1].1.discarded.fit', 'L/frame[L][1].fit'], delete: ['L/frame[L][1].fit'] } as const
+
+		for (const artifact of ['moveToRejected', 'keepInPlace', 'delete'] as const) {
+			const script = new Script()
+			const harness = start(judged(1, discardPolicy({ artifact })), script, { qualityAnalyzer: analyzerOf('rejected').analyzer })
+			expect((await finish(harness)).state).toBe('completed')
+			expect(framesOf(harness)).toEqual([...expected[artifact]])
+		}
+	})
+
+	test('11: the decision comes before the disposition: a forced frame is promoted intact and never goes through rejected/', async () => {
+		for (const artifact of ['delete', 'moveToRejected', 'keepInPlace'] as const) {
+			for (const maxDiscardsPerSlot of [0, 2]) {
+				const script = new Script()
+				const harness = start(judged(1, discardPolicy({ maxDiscardsPerSlot, onExhausted: 'keepLast', artifact })), script, { qualityAnalyzer: analyzerOf('rejected', 'rejected', 'rejected').analyzer })
+				const result = await finish(harness)
+
+				expect(result.state).toBe('completed')
+				expect(progressOf(result, 'L')).toMatchObject({ accepted: 0, forced: 1, discarded: maxDiscardsPerSlot, skipped: 0 })
+				expect(events(harness).filter((event) => event.type === 'frameAccepted')).toMatchObject([{ slot: 'frame[L][1]', attempt: maxDiscardsPerSlot + 1, forced: true }])
+				expect(readFileSync(join(STORAGE_ROOT, harness.runner.id, 'L', 'frame[L][1].fit'))).toEqual(FRAME)
+
+				const discarded = framesOf(harness).filter((path) => path !== 'L/frame[L][1].fit')
+				expect(discarded).toHaveLength(artifact === 'delete' ? 0 : maxDiscardsPerSlot)
+				expect(discarded.some((path) => path.includes(`.${maxDiscardsPerSlot + 1}.`))).toBeFalse()
+
+				const kinds = await journalKinds(harness)
+				expect(kinds).toEqual([...Array.from({ length: maxDiscardsPerSlot }, () => ['prepared', 'disposing', 'disposed']).flat(), 'prepared', 'promoting', 'committed'])
+				const journal = await readSequencerJournal(join(STORAGE_ROOT, harness.runner.id, 'journal.jsonl'))
+				expect(journal.find((entry) => entry.kind === 'promoting')).toMatchObject({ forced: true, size: FRAME.byteLength })
+			}
+		}
+	})
+
+	test('3: skipSlot ends the slot without an accepted frame and the group finishes with fewer frames', async () => {
+		const script = new Script()
+		const harness = start(judged(2, discardPolicy({ maxDiscardsPerSlot: 0 })), script, { qualityAnalyzer: analyzerOf('rejected').analyzer })
+		const result = await finish(harness)
+
+		expect(result.state).toBe('completed')
+		expect(progressOf(result, 'L')).toMatchObject({ accepted: 1, discarded: 1, skipped: 1 })
+		expect(script.trace).toEqual(['capture@frame[L][1]#1', 'capture@frame[L][2]#1'])
+		expect(discardedEvents(harness)).toMatchObject([{ decision: 'skipSlot', remainingDiscards: 0 }])
+		expect(events(harness).filter((event) => event.type === 'slotSkipped')).toMatchObject([{ slot: 'frame[L][1]', reason: 'discardBudget' }])
+	})
+
+	test('3: fail ends the session with a quality failure; a circuit breaker stop ends it stopped by policy', async () => {
+		const failed = await finish(start(judged(2, discardPolicy({ maxDiscardsPerSlot: 0, onExhausted: 'fail' })), new Script(), { qualityAnalyzer: analyzerOf('rejected').analyzer }))
+		expect(failed).toMatchObject({ state: 'failed', failure: { kind: 'quality' } })
+		expect(progressOf(failed, 'L')).toMatchObject({ accepted: 0, discarded: 1 })
+
+		const stopped = await finish(start(judged(2, discardPolicy({ maxDiscardsPerSlot: 5, maxConsecutiveDiscards: 0, onConsecutiveExhausted: 'stop' })), new Script(), { qualityAnalyzer: analyzerOf('rejected').analyzer }))
+		expect(stopped).toMatchObject({ state: 'stopped', stopCause: 'policy', failure: { kind: 'quality' } })
+		expect(progressOf(stopped, 'L')).toMatchObject({ accepted: 0, discarded: 1 })
+	})
+
+	test('4: pause holds before the next exposure; resume() renews only the slot budget, durably, and the slot needs maxDiscardsPerSlot + 1 discards again', async () => {
+		const store = new FileSystemSequencerCheckpointStore(STORAGE_ROOT)
+		const script = new Script()
+		const harness = start(judged(1, discardPolicy({ maxDiscardsPerSlot: 1, onExhausted: 'pause' })), script, { qualityAnalyzer: analyzerOf('rejected', 'rejected', 'rejected', 'rejected').analyzer, checkpointStore: store })
+
+		await waitState(harness, 'paused')
+		expect(script.trace).toEqual(['capture@frame[L][1]#1', 'capture@frame[L][1]#2'])
+		expect(harness.runner.snapshot().currentFrame).toMatchObject({ attempt: 2, discardedTotal: 2, discardBudgetUsed: 2 })
+		expect((await store.load(harness.runner.id))?.currentSlot).toEqual({ id: 'frame[L][1]', attempt: 3, discardedTotal: 2, discardBudgetUsed: 2, captureFailures: 0 })
+
+		expect(harness.runner.handle.resume()).toBeTrue()
+		await waitUntil(() => script.trace.length === 4 && harness.runner.snapshot().state === 'paused', 2000, 1)
+		expect(script.trace).toEqual(['capture@frame[L][1]#1', 'capture@frame[L][1]#2', 'capture@frame[L][1]#3', 'capture@frame[L][1]#4'])
+		expect(harness.runner.snapshot().currentFrame).toMatchObject({ attempt: 4, discardedTotal: 4, discardBudgetUsed: 2 })
+		expect(discardedEvents(harness).map((event) => event.decision)).toEqual(['retake', 'pause', 'retake', 'pause'])
+
+		expect(harness.runner.handle.resume()).toBeTrue()
+		expect((await finish(harness)).state).toBe('completed')
+		expect(script.trace).toHaveLength(5)
+	})
+
+	test('5, 6: the circuit breaker comes before the slot budget, an acceptance resets it, and resume() renews it alone', async () => {
+		const policy = discardPolicy({ maxDiscardsPerSlot: 5, maxConsecutiveDiscards: 1, onConsecutiveExhausted: 'pause' })
+		const store = new FileSystemSequencerCheckpointStore(STORAGE_ROOT)
+		// L1: rejected (retake), accepted; L2: rejected (retake), rejected (2 consecutive > 1: pause), accepted.
+		const script = new Script()
+		const harness = start(judged(2, policy), script, { qualityAnalyzer: analyzerOf('rejected', 'accepted', 'rejected', 'rejected').analyzer, checkpointStore: store })
+
+		await waitState(harness, 'paused')
+		expect(discardedEvents(harness).map((event) => event.decision)).toEqual(['retake', 'retake', 'pause'])
+		expect((await store.load(harness.runner.id))?.consecutiveDiscards).toBe(2)
+
+		expect(harness.runner.handle.resume()).toBeTrue()
+		const result = await finish(harness)
+		expect(result.state).toBe('completed')
+		const checkpoint = await store.load(harness.runner.id)
+		expect(checkpoint?.consecutiveDiscards).toBe(0)
+		expect(progressOf(result, 'L')).toMatchObject({ accepted: 2, discarded: 3 })
+		expect(script.trace).toEqual(['capture@frame[L][1]#1', 'capture@frame[L][1]#2', 'capture@frame[L][2]#1', 'capture@frame[L][2]#2', 'capture@frame[L][2]#3'])
+	})
+
+	test('12: the budget survives a restart and a restart never renews a pause: the new process holds before exposing', async () => {
+		const store = new FileSystemSequencerCheckpointStore(STORAGE_ROOT)
+		const configuration = judged(1, discardPolicy({ maxDiscardsPerSlot: 1, onExhausted: 'pause' }))
+		const first = start(configuration, new Script(), { qualityAnalyzer: analyzerOf('rejected', 'rejected').analyzer, checkpointStore: store })
+		await waitState(first, 'paused')
+		first.runner.dispose()
+		await finish(first)
+
+		const script = new Script()
+		script.capture = script.captureStep(async (context) => {
+			// resume() saved the renewed budget before this exposure.
+			expect((await store.load(context.sessionId))?.currentSlot).toMatchObject({ attempt: 3, discardedTotal: 2, discardBudgetUsed: 0 })
+			return captured(context)
+		})
+		const second = start(configuration, script, { qualityAnalyzer: analyzerOf().analyzer, checkpointStore: store, sessionId: first.runner.id })
+		await waitState(second, 'paused')
+		expect(script.trace).toEqual([])
+		expect(second.runner.snapshot().currentFrame).toMatchObject({ id: 'frame[L][1]', attempt: 3, discardedTotal: 2, discardBudgetUsed: 2 })
+
+		expect(second.runner.handle.resume()).toBeTrue()
+		const result = await finish(second)
+		expect(result.state).toBe('completed')
+		expect(progressOf(result, 'L')).toMatchObject({ accepted: 1, discarded: 2 })
+		expect(script.trace).toEqual(['capture@frame[L][1]#3'])
+	})
+
+	test('12: a restored slot that exhausted its budget with fail fails again before exposing', async () => {
+		const store = new FileSystemSequencerCheckpointStore(STORAGE_ROOT)
+		// The first process fails on the discard of the third slot attempt, the second must not expose it again.
+		const configuration = judged(1, discardPolicy({ maxDiscardsPerSlot: 1, onExhausted: 'fail' }))
+		const first = start(configuration, new Script(), { qualityAnalyzer: analyzerOf('rejected', 'rejected').analyzer, checkpointStore: store })
+		expect(await finish(first)).toMatchObject({ state: 'failed', failure: { kind: 'quality' } })
+		expect((await store.load(first.runner.id))?.currentSlot).toEqual({ id: 'frame[L][1]', attempt: 3, discardedTotal: 2, discardBudgetUsed: 2, captureFailures: 0 })
+
+		const script = new Script()
+		const second = start(configuration, script, { qualityAnalyzer: analyzerOf().analyzer, checkpointStore: store, sessionId: first.runner.id })
+		expect(await finish(second)).toMatchObject({ state: 'failed', failure: { kind: 'quality' } })
+		expect(script.trace).toEqual([])
+	})
+
+	test('13: a graceful stop during the analysis keeps the frame durable and retakes nothing', async () => {
+		const script = new Script()
+		let release: ((result: SequencerQualityResult) => void) | undefined
+		const analyzer: SequencerQualityAnalyzer = () =>
+			new Promise((resolve) => {
+				release = resolve
+			})
+		const harness = start(judged(2, discardPolicy({ maxDiscardsPerSlot: 3 })), script, { qualityAnalyzer: analyzer })
+
+		await waitUntil(() => release !== undefined, 2000, 1)
+		void harness.runner.handle.stop('graceful')
+		release!({ classification: 'rejected' })
+
+		const result = await finish(harness)
+		expect(result).toMatchObject({ state: 'stopped', stopCause: 'user' })
+		expect(progressOf(result, 'L')).toMatchObject({ accepted: 0, discarded: 1 })
+		expect(discardedEvents(harness)).toMatchObject([{ decision: 'discardFinal' }])
+		expect(script.trace).toEqual(['capture@frame[L][1]#1'])
+		expect(framesOf(harness)).toEqual(['rejected/L/frame[L][1].1.fit'])
+	})
+
+	test('14, I33: a guiding interruption inside [dispatch, end] discards a light; one outside does not', async () => {
+		const policy = discardPolicy({ criteria: { quality: false, guidingInterruption: true, unsafeDuringExposure: false }, maxDiscardsPerSlot: 2 })
+
+		for (const [offset, discarded] of [
+			[-1, false],
+			[0, true],
+			[500, true],
+			[1000, true],
+			[1001, false],
+		] as const) {
+			const guiding = new ScriptedGuidingSession()
+			const script = new Script()
+			let calls = 0
+			script.capture = script.captureStep(windowCapture(1000, (dispatch) => calls++ === 0 && guiding.interrupt({ kind: 'starLost', receivedMonotonic: dispatch + offset, receivedAt: 0 })))
+			const harness = start(judged(1, policy, { guiding: GUIDING }), script, { guiding })
+			const result = await finish(harness)
+
+			expect(result.state).toBe('completed')
+			expect(progressOf(result, 'L')).toMatchObject({ accepted: 1, discarded: discarded ? 1 : 0 })
+			if (discarded) expect(discardedEvents(harness)).toMatchObject([{ reasons: ['guidingInterruption'], truncated: false }])
+		}
+	})
+
+	test('14: a guided light whose window the interruption history no longer covers is discarded (fail-closed)', async () => {
+		const guiding = new ScriptedGuidingSession({ capacity: 1 })
+		const script = new Script()
+		let calls = 0
+		// Two interruptions inside the first window overflow a history of one.
+		script.capture = script.captureStep(
+			windowCapture(1000, (dispatch) => {
+				if (calls++ > 0) return
+				guiding.interrupt({ kind: 'starLost', receivedMonotonic: dispatch + 100, receivedAt: 0 })
+				guiding.interrupt({ kind: 'lockPositionLost', receivedMonotonic: dispatch + 200, receivedAt: 0 })
+			}),
+		)
+		const harness = start(judged(1, discardPolicy({ criteria: { quality: false, guidingInterruption: true, unsafeDuringExposure: false } }), { guiding: GUIDING }), script, { guiding })
+		expect((await finish(harness)).state).toBe('completed')
+		expect(discardedEvents(harness)).toMatchObject([{ reasons: ['guidingInterruption'] }])
+	})
+
+	test('I27, I40: safety unsafe at any instant of [dispatch, end] discards a light, a wall jump changes nothing, and darks are never judged by it', async () => {
+		const policy = discardPolicy({ criteria: { quality: false, guidingInterruption: false, unsafeDuringExposure: true }, maxDiscardsPerSlot: 2 })
+
+		for (const [unsafeAt, safeAt, discarded] of [
+			// Unsafe from 1 ms before the dispatch to the dispatch itself: in force at the dispatch.
+			[-1, 0, false],
+			[-1, 1, true],
+			[500, 600, true],
+			[1000, 1001, true],
+			[1001, 1002, false],
+		] as const) {
+			const safety = new ScriptedSafetySource()
+			const script = new Script()
+			let calls = 0
+			const harness: Harness = start(judged(1, policy), script, { safety })
+			script.capture = script.captureStep(async (context) => {
+				const first = calls++ === 0
+				const dispatch = context.clock.monotonicNow() + 1
+				if (first) {
+					await harness.clock.advance(1 + unsafeAt)
+					safety.publish('unsafe')
+					harness.clock.jumpWall(-3_600_000)
+					await harness.clock.advance(safeAt - unsafeAt)
+					safety.publish('safe')
+					harness.clock.jumpWall(7_200_000)
+				}
+				writeFileSync((context as SequencerCaptureContext).destination.temporary, FRAME)
+				const at = context.clock.wallNow()
+				return successfulOperationResult({ exposureDispatchedAt: at, exposureDispatchedMonotonic: dispatch, exposureStartedAt: at, exposureStartedMonotonic: dispatch, exposureFinishedAt: at, exposureFinishedMonotonic: dispatch + 1000 })
+			})
+			const result = await finish(harness)
+
+			expect(result.state).toBe('completed')
+			expect(progressOf(result, 'L')).toMatchObject({ accepted: 1, discarded: discarded ? 1 : 0 })
+			if (discarded) expect(discardedEvents(harness)).toMatchObject([{ reasons: ['unsafeDuringExposure'], truncated: false }])
+			expect(events(harness).filter((event) => event.type === 'safetyChanged')).toHaveLength(2)
+			expect(safety.subscriptions).toBe(0)
+		}
+	})
+
+	test('I27: without a safety source no window is covered and the criterion fails the light closed', async () => {
+		const harness = start(judged(1, discardPolicy({ criteria: { quality: false, guidingInterruption: false, unsafeDuringExposure: true }, maxDiscardsPerSlot: 0 })), new Script())
+		const result = await finish(harness)
+		expect(progressOf(result, 'L')).toMatchObject({ accepted: 0, skipped: 1 })
+		expect(discardedEvents(harness)).toMatchObject([{ reasons: ['unsafeDuringExposure'], truncated: true }])
+	})
+
+	test('the safety source is subscribed and read before the first startup task and released by the terminalization', async () => {
+		const safety = new ScriptedSafetySource('unknown')
+		const script = new Script()
+		script.startup = [
+			script.task('coolCamera', () => {
+				expect(safety.subscriptions).toBe(1)
+				expect(safety.reads).toBe(1)
+				return OK
+			}),
+		]
+		const harness = start(configurationOf(), script, { safety })
+		expect((await finish(harness)).state).toBe('completed')
+		expect(script.trace).toEqual(['coolCamera', 'capture@frame[L][1]#1'])
+		expect(safety.subscriptions).toBe(0)
+	})
+
+	test('missingDispatch: a frame without its dispatch instant fails the window criteria closed', async () => {
+		const script = new Script()
+		let calls = 0
+		script.capture = script.captureStep((context) => {
+			const result = captured(context)
+			if (calls++ > 0 || !result.ok) return result
+			const { exposureStartedAt, exposureStartedMonotonic, exposureFinishedAt, exposureFinishedMonotonic } = result.value
+			return successfulOperationResult({ exposureStartedAt, exposureStartedMonotonic, exposureFinishedAt, exposureFinishedMonotonic })
+		})
+		const harness = start(judged(1, discardPolicy({ criteria: { quality: false, guidingInterruption: false, unsafeDuringExposure: true } })), script, { safety: new ScriptedSafetySource() })
+		expect((await finish(harness)).state).toBe('completed')
+		expect(discardedEvents(harness)).toMatchObject([{ reasons: ['unsafeDuringExposure'], detail: 'missingDispatch' }])
+	})
+
+	test('15: corrective intents of a discarded frame are persisted and seen by the retake', async () => {
+		const script = new Script()
+		const seen: boolean[] = []
+		script.preCapture = [
+			script.task('autofocus', (context) => {
+				seen.push(context.state.intents.autofocus)
+				return OK
+			}),
+		]
+		const harness = start(judged(1, discardPolicy({ maxDiscardsPerSlot: 2 })), script, { qualityAnalyzer: analyzerOf({ classification: 'rejected', intents: { autofocus: true } }).analyzer })
+		expect((await finish(harness)).state).toBe('completed')
+		expect(seen).toEqual([false, true])
+		expect(harness.runner.snapshot().intents).toMatchObject({ autofocus: true })
+	})
+
+	test('16: the analyzer reads only the path of the durable temporary, after the capture result, once per attempt', async () => {
+		const script = new Script()
+		const order: string[] = []
+		script.capture = script.captureStep((context) => {
+			const result = captured(context)
+			order.push('result')
+			return result
+		})
+		const analyzer: SequencerQualityAnalyzer = (frame) => {
+			order.push('analyze')
+			expect(Object.keys(frame).sort()).toEqual(['exposureFinishedAt', 'exposureStartedAt', 'path', 'slot'])
+			expect(readFileSync(frame.path)).toEqual(FRAME)
+			expect(frame.path.endsWith('.partial.fit')).toBeTrue()
+			return Promise.resolve({ classification: 'accepted', metrics: { hfd: 2.5, stars: 120 } })
+		}
+		const harness = start(judged(2), script, { qualityAnalyzer: analyzer })
+		expect((await finish(harness)).state).toBe('completed')
+		expect(order).toEqual(['result', 'analyze', 'result', 'analyze'])
+		expect(qualityOutcomes(harness)).toEqual([
+			{ kind: 'analyzed', result: { classification: 'accepted', metrics: { hfd: 2.5, stars: 120 } } },
+			{ kind: 'analyzed', result: { classification: 'accepted', metrics: { hfd: 2.5, stars: 120 } } },
+		])
+	})
+
+	test('17: the camera is not leased by the session while the analyzer runs', async () => {
+		let leased: readonly unknown[] | undefined
+		const harness: Harness = start(judged(1), new Script(), {
+			qualityAnalyzer: () => {
+				leased = harness.coordinator.arbiter.ownersOf(resourceKey(CAMERA))
+				return Promise.resolve({ classification: 'accepted' })
+			},
+		})
+		expect((await finish(harness)).state).toBe('completed')
+		expect(leased).toEqual([])
+	})
+
+	// Cooperative analyzer that settles with `result` only when its signal aborts or `release` is called, counting the
+	// analyses in flight.
+	class SlowAnalyzer {
+		readonly frames: SequencerQualityFrame[] = []
+		inFlight = 0
+		maxInFlight = 0
+		release?: (result: SequencerQualityResult) => void
+
+		constructor(
+			readonly cooperative: boolean,
+			readonly result: SequencerQualityResult,
+		) {}
+
+		readonly analyze: SequencerQualityAnalyzer = (frame, signal) => {
+			this.frames.push(frame)
+			this.maxInFlight = Math.max(this.maxInFlight, ++this.inFlight)
+
+			return new Promise<SequencerQualityResult>((resolve) => {
+				const settle = (result: SequencerQualityResult) => {
+					this.release = undefined
+					this.inFlight--
+					resolve(result)
+				}
+
+				this.release = settle
+				if (this.cooperative) signal.addEventListener('abort', () => settle(this.result), { once: true })
+			})
+		}
+	}
+
+	// Asserts that no analysis is in flight whenever the storage touches the temporary.
+	function guardStorage(harness: Harness, analyzer: SlowAnalyzer) {
+		const touched: string[] = []
+		const { storage } = harness
+		const promote = storage.promote.bind(storage)
+		const dispose = storage.dispose.bind(storage)
+		spyOn(storage, 'promote').mockImplementation((...args) => {
+			touched.push(`promote ${analyzer.inFlight}`)
+			return promote(...args)
+		})
+		spyOn(storage, 'dispose').mockImplementation((...args) => {
+			touched.push(`dispose ${analyzer.inFlight}`)
+			return dispose(...args)
+		})
+		return touched
+	}
+
+	test('18, 18a: a cooperative timeout aborts the analysis; the file moves only after it ended, the frame is accepted as unknown', async () => {
+		const analyzer = new SlowAnalyzer(true, { classification: 'rejected' })
+		const harness = start(judged(3, discardPolicy({ maxDiscardsPerSlot: 3 })), new Script(), { qualityAnalyzer: analyzer.analyze })
+		const touched = guardStorage(harness, analyzer)
+
+		for (let frame = 1; frame <= 3; frame++) {
+			await waitUntil(() => analyzer.frames.length === frame, 2000, 1)
+			await harness.clock.advance(QUALITY_LIMITS.timeout * 1000 - 1)
+			expect(touched).toHaveLength(frame - 1)
+			await harness.clock.advance(1)
+		}
+
+		const result = await finish(harness)
+		expect(result.state).toBe('completed')
+		expect(progressOf(result, 'L')).toMatchObject({ accepted: 3, discarded: 0 })
+		expect(touched).toEqual(['promote 0', 'promote 0', 'promote 0'])
+		expect(analyzer.maxInFlight).toBe(1)
+		expect(qualityOutcomes(harness)).toEqual([{ kind: 'timeout' }, { kind: 'timeout' }, { kind: 'timeout' }])
+		expect(events(harness).filter((event) => event.type === 'qualityTimeout')).toMatchObject([{ attempt: 1 }, { attempt: 1 }, { attempt: 1 }])
+	})
+
+	test('18b: an analyzer ignoring the signal that ends 2 s after the abort is awaited, never faulted, and called again', async () => {
+		const harness = start(judged(2), new Script(), {
+			qualityAnalyzer: () => harness.clock.delay(12000, new AbortController().signal).then(() => ({ classification: 'rejected' })),
+		})
+		await waitUntil(() => harness.clock.pending === 2, 2000, 1)
+		await harness.clock.advance(10000)
+		expect(await journalKinds(harness)).toEqual(['prepared'])
+		await harness.clock.advance(2000)
+		await waitUntil(() => harness.clock.pending === 2, 2000, 1)
+		await harness.clock.advance(12000)
+
+		expect((await finish(harness)).state).toBe('completed')
+		expect(qualityOutcomes(harness)).toEqual([{ kind: 'timeout' }, { kind: 'timeout' }])
+		expect(events(harness).some((event) => event.type === 'collaboratorUnresponsive' || event.type === 'qualityAnalyzerFaulted')).toBeFalse()
+	})
+
+	test('18c: an analyzer that never yields is awaited without limit, reported once at abortGrace, then faulted and never called again', async () => {
+		const analyzer = new SlowAnalyzer(false, { classification: 'rejected' })
+		const harness = start(judged(2), new Script(), { qualityAnalyzer: analyzer.analyze })
+		const touched = guardStorage(harness, analyzer)
+		const unresponsive = () => events(harness).filter((event) => event.type === 'collaboratorUnresponsive')
+
+		await waitUntil(() => analyzer.frames.length === 1, 2000, 1)
+		await harness.clock.advance(QUALITY_LIMITS.timeout * 1000)
+		await harness.clock.advance(QUALITY_LIMITS.abortGrace * 1000 - 1)
+		expect(unresponsive()).toHaveLength(0)
+		await harness.clock.advance(1)
+		expect(unresponsive()).toMatchObject([{ service: 'quality', slot: 'frame[L][1]', attempt: 1 }])
+		expect(harness.runner.snapshot().waitingFor).toBe('qualityAnalyzer')
+
+		await harness.clock.advance(3_600_000)
+		expect(unresponsive()).toHaveLength(1)
+		expect(touched).toEqual([])
+		expect(analyzer.inFlight).toBe(1)
+		expect(await journalKinds(harness)).toEqual(['prepared'])
+
+		analyzer.release!({ classification: 'rejected' })
+		const result = await finish(harness)
+		expect(result.state).toBe('completed')
+		expect(analyzer.frames).toHaveLength(1)
+		expect(touched).toEqual(['promote 0', 'promote 0'])
+		expect(qualityOutcomes(harness)).toEqual([{ kind: 'timeout' }, { kind: 'error', detail: 'the quality analyzer is faulted' }])
+		expect(events(harness).filter((event) => event.type === 'qualityAnalyzerFaulted')).toHaveLength(1)
+		expect(harness.runner.snapshot().waitingFor).toBeUndefined()
+	})
+
+	test('18d: an immediate stop during a cooperative analysis promotes the frame as unknown without retake, then shuts down', async () => {
+		const analyzer = new SlowAnalyzer(true, { classification: 'rejected' })
+		const script = new Script()
+		script.shutdown = [script.shutdownTask('warmCamera')]
+		const harness = start(judged(2, discardPolicy({ maxDiscardsPerSlot: 3 })), script, { qualityAnalyzer: analyzer.analyze })
+
+		await waitUntil(() => analyzer.frames.length === 1, 2000, 1)
+		const result = await harness.runner.handle.stop('immediate')
+		await finish(harness)
+
+		expect(result).toMatchObject({ state: 'stopped', stopCause: 'user' })
+		expect(progressOf(result, 'L')).toMatchObject({ accepted: 1, discarded: 0 })
+		expect(qualityOutcomes(harness)).toEqual([{ kind: 'aborted' }])
+		expect(script.trace).toEqual(['capture@frame[L][1]#1', 'warmCamera'])
+	})
+
+	test('18d: with an analyzer ignoring the signal, the immediate stop waits for it before disposing of the file', async () => {
+		const analyzer = new SlowAnalyzer(false, { classification: 'rejected' })
+		const harness = start(judged(2), new Script(), { qualityAnalyzer: analyzer.analyze })
+		const session = { done: false }
+		void harness.runner.handle.result.then(() => (session.done = true))
+
+		await waitUntil(() => analyzer.frames.length === 1, 2000, 1)
+		void harness.runner.handle.stop('immediate')
+		await harness.clock.advance(3_600_000)
+		expect(session.done).toBeFalse()
+		expect(await journalKinds(harness)).toEqual(['prepared'])
+
+		analyzer.release!({ classification: 'accepted' })
+		const result = await finish(harness)
+		expect(result.state).toBe('stopped')
+		expect(qualityOutcomes(harness)).toEqual([{ kind: 'aborted' }])
+	})
+
+	test('18e: an analysis settling in the same tick as its timeout has exactly one outcome', async () => {
+		for (let run = 0; run < 3; run++) {
+			const harness = start(judged(1, discardPolicy({ maxDiscardsPerSlot: 3 })), new Script(), {
+				qualityAnalyzer: () => harness.clock.delay(QUALITY_LIMITS.timeout * 1000, new AbortController().signal).then(() => ({ classification: 'rejected' })),
+			})
+			await waitUntil(() => harness.clock.pending === 2, 2000, 1)
+			await harness.clock.advance(QUALITY_LIMITS.timeout * 1000)
+
+			expect((await finish(harness)).state).toBe('completed')
+			expect(qualityOutcomes(harness)).toEqual([{ kind: 'timeout' }])
+			expect(events(harness).filter((event) => event.type === 'frameAccepted' || event.type === 'frameDiscarded')).toHaveLength(1)
+		}
+	})
+
+	test('19: an analyzer that throws, rejects or resolves a malformed result never fails the capture: error, accepted', async () => {
+		const analyzers: readonly [SequencerQualityAnalyzer, string][] = [
+			[
+				() => {
+					throw new Error('sync')
+				},
+				'sync',
+			],
+			[() => Promise.reject(new Error('async')), 'async'],
+			[() => Promise.resolve({ classification: 'great' } as never), 'unknown quality classification great'],
+			[() => Promise.resolve({ classification: 'rejected', metrics: { hfd: Number.NaN } }), 'malformed quality metric hfd'],
+			[() => Promise.resolve({ classification: 'rejected', intents: { autofocus: 'yes' } } as never), 'malformed corrective intents'],
+			[() => Promise.resolve(undefined as never), 'the quality analyzer resolved no result'],
+		]
+
+		for (const [analyzer, detail] of analyzers) {
+			const harness = start(judged(1), new Script(), { qualityAnalyzer: analyzer })
+			const result = await finish(harness)
+			expect(result.state).toBe('completed')
+			expect(progressOf(result, 'L')).toMatchObject({ accepted: 1, discarded: 0 })
+			expect(qualityOutcomes(harness)).toEqual([{ kind: 'error', detail }])
+		}
+	})
+
+	test('20: without analyzer the outcome is skipped, without any wait or quality event', async () => {
+		const harness = start(judged(2), new Script())
+		expect((await finish(harness)).state).toBe('completed')
+		expect(qualityOutcomes(harness)).toEqual([{ kind: 'skipped' }, { kind: 'skipped' }])
+		expect(events(harness).some((event) => event.type === 'qualityTimeout' || event.type === 'collaboratorUnresponsive')).toBeFalse()
+	})
+
+	test('21: with criteria.quality false the analyzer still runs and its intents apply, but it never discards', async () => {
+		const { analyzer, calls } = analyzerOf({ classification: 'rejected', intents: { recenter: true, recoverGuiding: true } }, 'rejected')
+		const harness = start(judged(2, discardPolicy({ criteria: { ...QUALITY_ONLY, quality: false } })), new Script(), { qualityAnalyzer: analyzer })
+		const result = await finish(harness)
+		expect(progressOf(result, 'L')).toMatchObject({ accepted: 2, discarded: 0 })
+		expect(calls).toHaveLength(2)
+		expect(harness.runner.snapshot().intents).toEqual({ autofocus: false, recenter: true, recoverGuiding: true })
+	})
+
+	test('light exposures count discarded lights and never darks', async () => {
+		const store = new FileSystemSequencerCheckpointStore(STORAGE_ROOT)
+		const groups: SequencerFrameGroup[] = [
+			{ ...scheduled('L', 1), discard: discardPolicy({ maxDiscardsPerSlot: 2 }) },
+			{ ...scheduled('D', 1), capture: DARK },
+		]
+		const harness = start(configurationOf(groups, { quality: QUALITY_LIMITS }), new Script(), { qualityAnalyzer: analyzerOf('rejected', 'rejected').analyzer, checkpointStore: store })
+		expect((await finish(harness)).state).toBe('completed')
+		expect((await store.load(harness.runner.id))?.anchors.lightExposures).toBe(3)
+	})
+})
+
+describe('P7 discard budgets across restarts', () => {
+	// Whether a path is the lock of a session, which a simulated crash still releases.
+	function isLockPath(path: string) {
+		return /(?:^|[\\/])(?:session\.lock|session\.lock\.reclaim|\.session\.lock\..+\.tmp)$/.test(path)
+	}
+
+	// Plays the death of the process: every durable operation but the lock fails from now on, the runner is disposed
+	// and its end awaited.
+	async function crash(harness: Harness) {
+		using _ = injectFileSystemFaults({ failAt: 1, mode: 'crash', spare: isLockPath })
+		const { warn } = console
+		console.warn = () => {}
+
+		try {
+			harness.runner.dispose()
+			await harness.runner.handle.result
+		} finally {
+			console.warn = warn
+		}
+	}
+
+	test.skipIf(isTimeConsumingTestSkipped())(
+		'between two resume() calls, across crashes with or without an exposure in flight, no slot exceeds (1 + maxDiscardsPerSlot) × retry.maxAttempts attempts and no counter goes back',
+		async () => {
+			const store = new FileSystemSequencerCheckpointStore(STORAGE_ROOT)
+			// What the seeds exercised, so a change of the driver cannot silently stop covering it.
+			const covered = { crashes: 0, restores: 0, discards: 0, resumes: 0 }
+
+			for (let seed = 1; seed <= 150; seed++) {
+				const random = mulberry32(seed)
+				const maxDiscardsPerSlot = Math.floor(random() * 3)
+				const maxAttempts = 1 + Math.floor(random() * 3)
+				const onExhausted = (['pause', 'skipSlot', 'keepLast', 'pause'] as const)[Math.floor(random() * 4)]
+				const consecutive = random() < 0.4 ? { maxConsecutiveDiscards: Math.floor(random() * 3), onConsecutiveExhausted: 'pause' as const } : {}
+				const policy: SequencerFrameDiscardPolicy = { criteria: { quality: true, guidingInterruption: false, unsafeDuringExposure: false }, maxDiscardsPerSlot, onExhausted, artifact: 'moveToRejected', ...consecutive }
+				const configuration = configurationOf([{ ...scheduled('L', 1 + Math.floor(random() * 3)), discard: policy }], { quality: { timeout: 10 }, retry: { maxAttempts, delay: 0, backoff: 1, maximumDelay: 0, retryOn: ['timeout'] }, onFailure: random() < 0.5 ? 'pause' : 'skipFrame' })
+				const bound = (1 + maxDiscardsPerSlot) * maxAttempts
+				// Distinct attempts exposed per slot since the last resume(), and the last attempt and total exposed per slot.
+				const attempts = new Map<string, Set<number>>()
+				const last = new Map<string, { attempt: number; discardedTotal: number }>()
+				let sessionId: string | undefined
+				let ended = false
+
+				try {
+					for (let process = 0; process < 12 && !ended; process++) {
+						const persisted = sessionId === undefined ? undefined : (await store.load(sessionId))?.currentSlot
+						const script = new Script()
+						const pending: { readonly settle: (result: SequencerQualityResult) => void }[] = []
+						// Slot the process restored, read when it started.
+						let restored: SequencerFrameSlotSnapshot | undefined
+
+						script.capture = script.captureStep(async (context) => {
+							const { id, attempt, discardedTotal } = context.frame!
+							const seen = attempts.get(id) ?? new Set<number>()
+							seen.add(attempt)
+							attempts.set(id, seen)
+							if (seen.size > bound) throw new Error(`${id}: ${seen.size} attempts since the last resume, above ${bound}`)
+
+							const previous = last.get(id)
+							if (previous !== undefined && (attempt < previous.attempt || discardedTotal < previous.discardedTotal)) throw new Error(`${id}: attempt or total went back`)
+							last.set(id, { attempt, discardedTotal })
+							return await script.blockCapture()(context)
+						})
+
+						const analyzer: SequencerQualityAnalyzer = (_, signal) =>
+							new Promise((resolve) => {
+								const entry = { settle: (result: SequencerQualityResult) => resolve(result) }
+								pending.push(entry)
+								signal.addEventListener('abort', () => resolve({ classification: 'accepted' }), { once: true })
+							})
+
+						const harness = start(configuration, script, {
+							qualityAnalyzer: analyzer,
+							checkpointStore: store,
+							...(sessionId !== undefined && { sessionId }),
+							onEvent: (event, runner) => {
+								if (event.type === 'sessionStarted') restored = runner.snapshot().currentFrame
+							},
+						})
+						sessionId = harness.runner.id
+						const session = { done: false }
+						void harness.runner.handle.result.then(() => (session.done = true))
+
+						// A restart never renews a counter: the restored slot holds at least what was persisted.
+						await waitUntil(() => session.done || events(harness).some((event) => event.type === 'sessionStarted'), 5000, 1)
+						const current = restored
+
+						if (persisted !== undefined && current !== undefined && current.id === persisted.id) {
+							covered.restores++
+							expect(current.attempt).toBeGreaterThanOrEqual(persisted.attempt)
+							expect(current.discardedTotal).toBeGreaterThanOrEqual(persisted.discardedTotal)
+							expect(current.discardBudgetUsed).toBeGreaterThanOrEqual(persisted.discardBudgetUsed)
+							expect(current.captureFailures).toBeGreaterThanOrEqual(persisted.captureFailures)
+						}
+
+						let crashed = false
+
+						for (let step = 0; step < 60 && !session.done && !crashed; step++) {
+							await new Promise<void>((resolve) => {
+								setImmediate(resolve)
+							})
+							await waitUntil(() => session.done || script.blocked.length > 0 || pending.length > 0 || harness.clock.pending > 0 || harness.runner.snapshot().state === 'paused', 5000, 1)
+							if (session.done) break
+							const roll = random()
+
+							if (roll < 0.06) {
+								await crash(harness)
+								covered.crashes++
+								crashed = true
+							} else if (harness.runner.snapshot().state === 'paused') {
+								// resume() renews the counter that paused: a new window of the bound starts.
+								covered.resumes++
+								attempts.clear()
+								harness.runner.handle.resume()
+							} else if (script.blocked.length > 0) {
+								const blocked = script.blocked[0]
+								blocked.settle(random() < 0.75 ? captured(blocked.context) : failedOperationResult('timeout'))
+							} else if (pending.length > 0) {
+								pending.shift()!.settle({ classification: random() < 0.6 ? 'rejected' : 'accepted' })
+							} else if (harness.clock.pending > 0) {
+								await harness.clock.advance(1000)
+							}
+						}
+
+						if (!crashed && !session.done) await crash(harness)
+						const result = await harness.runner.handle.result
+						assertRunnerInvariants(harness.recorder.entries)
+						covered.discards += events(harness).filter((event) => event.type === 'frameDiscarded').length
+						if (!crashed && session.done && result.state !== 'failed') ended = true
+						for (const recorder of recorders.splice(0)) recorder[Symbol.dispose]()
+					}
+
+					assertJournalInvariants(await readSequencerJournal(join(STORAGE_ROOT, sessionId!, 'journal.jsonl')))
+				} catch (error) {
+					throw new Error(`seed ${seed}: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
+				}
+			}
+
+			expect(covered.crashes).toBeGreaterThan(50)
+			expect(covered.restores).toBeGreaterThan(50)
+			expect(covered.discards).toBeGreaterThan(200)
+			expect(covered.resumes).toBeGreaterThan(150)
+		},
+		120000,
+	)
 })

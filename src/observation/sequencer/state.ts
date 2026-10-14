@@ -3,14 +3,15 @@ import type { FrameType, PierSide } from '../../devices/indi/device'
 import type { Angle } from '../../math/units/angle'
 import { createMeridianFlipState, type MeridianFlipEvent, type MeridianFlipPolicy, type MeridianFlipState, transitionMeridianFlip } from '../mount/meridian.flip'
 // oxfmt-ignore
-import { DEFAULT_SEQUENCER_MERIDIAN_FLIP, type SequencerCheckpoint, type SequencerCheckpointSlot, type SequencerConfiguration, type SequencerCorrectiveIntents, type SequencerFailure, type SequencerFilterFocusOffsets, type SequencerFocusBaseline, type SequencerFrameSlot, type SequencerFrameSlotSnapshot, type SequencerIntents, type SequencerMeridianFlipCompletedEvent, type SequencerMeridianFlipConfiguration, type SequencerMountRiskObservation, type SequencerPhase, type SequencerSafetyState, type SequencerSchedulerState, type SequencerSessionState, type SequencerSnapshot, type SequencerTaskId, type SequencerTerminalState, type SequencerTriggerAnchors } from './sequencer'
+import { DEFAULT_SEQUENCER_MERIDIAN_FLIP, type SequencerCheckpoint, type SequencerCheckpointSlot, type SequencerConfiguration, type SequencerCorrectiveIntents, type SequencerDiscardCriteria, type SequencerDiscardReason, type SequencerFailure, type SequencerFilterFocusOffsets, type SequencerFocusBaseline, type SequencerFrameDecision, type SequencerFrameDiscardPolicy, type SequencerFrameSlot, type SequencerFrameSlotSnapshot, type SequencerIntents, type SequencerMeridianFlipCompletedEvent, type SequencerMeridianFlipConfiguration, type SequencerMountRiskObservation, type SequencerPhase, type SequencerQualityResult, type SequencerSafetyState, type SequencerSchedulerState, type SequencerSessionState, type SequencerSnapshot, type SequencerTaskId, type SequencerTerminalState, type SequencerTriggerAnchors } from './sequencer'
 import type { SequencerElapsedAnchors } from './trigger'
 
 // Runtime state of one Sequencer session and its pure transitions: the lifecycle state machine, the control
 // requests (pause, resume, stop) recorded as desired state, the logical counters persisted between processes and
 // their checkpoint form, the projection into the public snapshot, the focus-offset baseline (bootstrap, absolute
-// targets, update after autofocus), the meridian flip policy, transitions and single cycle of the session, and the
-// safety-window query over the runtime transition history. Nothing here touches devices, clocks or storage: callers
+// targets, update after autofocus), the meridian flip policy, transitions and single cycle of the session, the
+// bounded runtime safety history with its window query, and the classification of a completed exposure with the
+// definitive discard decision and the exhausted discard counters. Nothing here touches devices, clocks or storage: callers
 // pass wall instants (Unix ms) and monotonic instants (ms) explicitly. Helpers that update the runtime state mutate it
 // in place and document it; the snapshot, the checkpoint and the other derivations allocate fresh objects and never
 // alias mutable runtime fields.
@@ -535,4 +536,123 @@ export function safetyUnsafeWithin(history: SequencerSafetyHistory, from: number
 	}
 
 	return 'safe'
+}
+
+// Transitions kept by the runtime safety history of a session. Only changes are recorded, so overflowing it within an
+// exposure takes over a thousand safety changes during that exposure.
+export const SEQUENCER_SAFETY_HISTORY_CAPACITY = 1024
+
+// Records the safety state received at `receivedMonotonic` (ms, never decreasing between calls), in place: the first
+// state is always appended, later ones only when they differ from the last retained one. Beyond `capacity` the oldest
+// transitions are evicted first, so a window whose initial state was evicted (more than `capacity` changes after its
+// start) is reported 'truncated' by `safetyUnsafeWithin`, which fails it closed. Returns whether it was recorded.
+export function recordSequencerSafetyTransition(transitions: SequencerSafetyTransition[], receivedMonotonic: number, state: SequencerSafetyState, capacity: number = SEQUENCER_SAFETY_HISTORY_CAPACITY) {
+	if (transitions.at(-1)?.state === state) return false
+	transitions.push({ receivedMonotonic, state })
+	if (transitions.length > capacity) transitions.splice(0, transitions.length - capacity)
+	return true
+}
+
+// What the post-capture knows about one completed exposure when it classifies it.
+export interface SequencerFrameEvidence {
+	// Frame type of the slot; darks and biases are judged only by the quality criterion.
+	readonly frameType: FrameType
+	// Classification of the quality outcome: the analyzed one, 'unknown' for every other outcome.
+	readonly quality: SequencerQualityResult['classification']
+	// Whether the exposure has its monotonic dispatch instant, where the exposure window starts. A frame without it is a
+	// logic bug and fails every enabled window criterion closed (`missingDispatch`).
+	readonly dispatched: boolean
+	// Whether the frame was guided (a LIGHT of a session with guiding); an unguided frame has nothing to interrupt.
+	readonly guided: boolean
+	// Guiding interruptions of the window [dispatch, end], monotonic domain; absent for a guided frame means no history
+	// covers the window, which counts as truncated.
+	readonly guiding?: { readonly interrupted: boolean; readonly truncated: boolean }
+	// Safety of the window [dispatch, end] from the transition history; absent means no history covers it ('truncated').
+	readonly safety?: SequencerSafetyVerdict
+}
+
+// Classification of a completed exposure: discarded when `reasons` is not empty, accepted otherwise.
+export interface SequencerFrameClassification {
+	// Why the frame is discarded, in criterion order; empty when accepted.
+	readonly reasons: readonly SequencerDiscardReason[]
+	// Whether a window criterion discarded it because its history no longer covered the window (fail-closed).
+	readonly truncated: boolean
+	// Diagnostic: 'missingDispatch' when the dispatch instant was missing.
+	readonly detail?: string
+}
+
+// Classifies a completed exposure against the discard criteria of its group (none accepts every frame): a 'rejected'
+// quality with the quality criterion; for lights only, a guiding interruption, or a window the interruption history no
+// longer covers, of a guided frame with the guiding criterion; an unsafe or truncated safety window with the safety
+// criterion; and every enabled window criterion when the dispatch instant is missing. 'unknown' never discards. A fresh
+// object; pure.
+export function classifySequencerFrame(criteria: SequencerDiscardCriteria | undefined, evidence: SequencerFrameEvidence): SequencerFrameClassification {
+	if (criteria === undefined) return { reasons: [], truncated: false }
+
+	const reasons: SequencerDiscardReason[] = []
+	if (criteria.quality && evidence.quality === 'rejected') reasons.push('quality')
+	if (evidence.frameType !== 'LIGHT') return { reasons, truncated: false }
+
+	const guidingCriterion = criteria.guidingInterruption && evidence.guided
+
+	if (!evidence.dispatched) {
+		if (guidingCriterion) reasons.push('guidingInterruption')
+		if (criteria.unsafeDuringExposure) reasons.push('unsafeDuringExposure')
+		return guidingCriterion || criteria.unsafeDuringExposure ? { reasons, truncated: false, detail: 'missingDispatch' } : { reasons, truncated: false }
+	}
+
+	let truncated = false
+
+	if (guidingCriterion) {
+		const guiding = evidence.guiding ?? { interrupted: false, truncated: true }
+
+		if (guiding.interrupted || guiding.truncated) {
+			reasons.push('guidingInterruption')
+			truncated ||= guiding.truncated
+		}
+	}
+
+	if (criteria.unsafeDuringExposure) {
+		const safety = evidence.safety ?? 'truncated'
+
+		if (safety !== 'safe') {
+			reasons.push('unsafeDuringExposure')
+			truncated ||= safety === 'truncated'
+		}
+	}
+
+	return { reasons, truncated }
+}
+
+// Definitive decision about a discarded frame (section 8.3), taken before its file is touched, from the counters before
+// this discard: the circuit breaker first (`consecutiveDiscards + 1 > maxConsecutiveDiscards` applies
+// `onConsecutiveExhausted`), then the slot budget (`discardBudgetUsed + 1 > maxDiscardsPerSlot` applies `onExhausted`:
+// 'keepLast' → 'forced', 'skipSlot', 'pause', 'fail'), otherwise a 'retake'. `stopRequested` (a stop abandons the slot)
+// turns a retake, a pause and a circuit-breaker stop into 'discardFinal': a stopping session never retakes nor pauses.
+// 'forced' happens only with 'keepLast' and an exhausted budget. Pure.
+export function decideFrameOutcome(policy: SequencerFrameDiscardPolicy, slot: Pick<SequencerFrameSlot, 'discardBudgetUsed'>, consecutiveDiscards: number, stopRequested: boolean): Exclude<SequencerFrameDecision, 'accepted'> {
+	let decision: Exclude<SequencerFrameDecision, 'accepted'> = 'retake'
+
+	if (policy.maxConsecutiveDiscards !== undefined && policy.onConsecutiveExhausted !== undefined && consecutiveDiscards + 1 > policy.maxConsecutiveDiscards) {
+		decision = policy.onConsecutiveExhausted
+	} else if (slot.discardBudgetUsed + 1 > policy.maxDiscardsPerSlot) {
+		decision = policy.onExhausted === 'keepLast' ? 'forced' : policy.onExhausted
+	}
+
+	return stopRequested && (decision === 'retake' || decision === 'pause' || decision === 'stop') ? 'discardFinal' : decision
+}
+
+// Session action a slot that stays current still owes to an exhausted discard counter, evaluated in the order of
+// `decideFrameOutcome`: the circuit breaker (`consecutiveDiscards > maxConsecutiveDiscards`), then the slot budget
+// (`discardBudgetUsed > maxDiscardsPerSlot`) when its action keeps the slot ('pause' or 'fail'). The runner derives
+// from it, never from a persisted flag, the pause pending at the first safe point and the stop or failure a restart
+// applies again before exposing: a restart is not a `resume()` and renews nothing. Undefined without policy or when no
+// counter is exhausted. Pure.
+export function exhaustedDiscardAction(policy: SequencerFrameDiscardPolicy | undefined, slot: Pick<SequencerFrameSlot, 'discardBudgetUsed'>, consecutiveDiscards: number): { readonly counter: 'consecutive' | 'slot'; readonly action: 'pause' | 'stop' | 'fail' } | undefined {
+	if (policy === undefined) return undefined
+
+	const { maxConsecutiveDiscards, onConsecutiveExhausted, maxDiscardsPerSlot, onExhausted } = policy
+	if (maxConsecutiveDiscards !== undefined && onConsecutiveExhausted !== undefined && consecutiveDiscards > maxConsecutiveDiscards) return { counter: 'consecutive', action: onConsecutiveExhausted }
+	if (slot.discardBudgetUsed > maxDiscardsPerSlot && (onExhausted === 'pause' || onExhausted === 'fail')) return { counter: 'slot', action: onExhausted }
+	return undefined
 }

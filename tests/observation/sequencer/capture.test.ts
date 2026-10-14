@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
-import { join, sep } from 'path'
+import { basename, join, sep } from 'path'
 import { resourceKey } from '../../../src/devices/orchestration/resource'
 import { type CameraCaptureHooks, CameraCapturer } from '../../../src/devices/runners/camera.capture'
 import { type CameraCaptureStart, DEFAULT_CAMERA_CAPTURE_START } from '../../../src/devices/runners/camera.capture.types'
@@ -9,7 +9,7 @@ import { awaitCameraRecoveryTask, captureFrameStep, type SequencerCaptureService
 import { type SequencerCaptureStep, type SequencerRunner, startSequencerRunner } from '../../../src/observation/sequencer/runner'
 import { sequencerFrameSlotId } from '../../../src/observation/sequencer/scheduler'
 // oxfmt-ignore
-import type { SequencerCameraCapture, SequencerCaptureConfiguration, SequencerCheckpointStore, SequencerClock, SequencerConfiguration, SequencerDevices, SequencerEvent, SequencerFrameSlot, SequencerResult } from '../../../src/observation/sequencer/sequencer'
+import type { SequencerCameraCapture, SequencerCaptureConfiguration, SequencerCheckpointStore, SequencerClock, SequencerConfiguration, SequencerDevices, SequencerEvent, SequencerFrameSlot, SequencerQualityAnalyzer, SequencerQualityFrame, SequencerResult } from '../../../src/observation/sequencer/sequencer'
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal, sequencerFrameDestination } from '../../../src/observation/sequencer/storage'
 import { waitUntil } from '../../util'
 // oxfmt-ignore
@@ -75,6 +75,8 @@ interface SessionOptions {
 	readonly onEvent?: (event: SequencerEvent, session: Session) => void
 	// Checkpoint store of the process; one over ROOT by default.
 	readonly checkpointStore?: SequencerCheckpointStore
+	// Quality analyzer of the primary frames.
+	readonly qualityAnalyzer?: SequencerQualityAnalyzer
 }
 
 // Starts the next process of the session `sessionId`, camera-only, with the real capturer.
@@ -91,7 +93,7 @@ function startSession(sessionId: string, options: SessionOptions = {}): Session 
 		events.push(event)
 		options.onEvent?.(event, session)
 	}
-	const services = { coordinator: rig.coordinator, storage, checkpointStore: options.checkpointStore ?? new FileSystemSequencerCheckpointStore(ROOT), clock, listener }
+	const services = { coordinator: rig.coordinator, storage, checkpointStore: options.checkpointStore ?? new FileSystemSequencerCheckpointStore(ROOT), clock, listener, ...(options.qualityAnalyzer !== undefined && { qualityAnalyzer: options.qualityAnalyzer }) }
 	const runner = startSequencerRunner({ configuration, devices: { camera: camera() }, services, phases })
 	const session: Session = { runner, storage, events, result: runner.handle.result, done: false }
 	void session.result.then(() => (session.done = true))
@@ -345,6 +347,86 @@ describe('durable writer', () => {
 		])
 		expect(journal.some((entry) => entry.kind === 'promoting' && entry.attempt === 1)).toBeFalse()
 		expect(filesOf(sessionId).filter((path) => path.endsWith('.fit'))).toEqual(['L/frame[L][1].fit', 'rejected/incomplete/L/.frame[L][1].1.partial.fit'])
+	})
+})
+
+describe('49.3 quality analyzer over the real capture', () => {
+	// Format an analyzer picks by the extension of the path, as a caller's parser dispatch does.
+	function formatOf(path: string) {
+		return path.endsWith('.fit') || path.endsWith('.fits') ? 'fits' : path.endsWith('.xisf') ? 'xisf' : undefined
+	}
+
+	test('16, 17, I45: the analyzer reads the complete temporary FITS by path, after the durable writer and the result, with the camera free', async () => {
+		const sequence = createTestSequence()
+		const marks: [string, number][] = []
+		const mark = (name: string) => marks.push([name, sequence.next()])
+		using faults = injectFileSystemFaults({ sequence })
+		const sessionId = Bun.randomUUIDv7()
+		const frames: SequencerQualityFrame[] = []
+		const owners: (readonly unknown[])[] = []
+
+		const session = startSession(sessionId, {
+			configuration: configurationOf(2, { quality: { timeout: 30 } }),
+			writer: (storage) => ({
+				writeDurably: async (path, data) => {
+					await storage.writeDurably(path, data)
+					mark('writer')
+				},
+			}),
+			capture: (step) => async (context) => {
+				const result = await step(context)
+				mark('result')
+				return result
+			},
+			qualityAnalyzer: async (frame) => {
+				mark('analyze')
+				frames.push(frame)
+				owners.push(rig.arbiter.ownersOf(cameraKey()))
+				// Only the path reaches the analyzer, never the bytes of the frame.
+				if (Object.values(frame).some((value) => Buffer.isBuffer(value) || ArrayBuffer.isView(value))) throw new Error('bytes handed to the analyzer')
+				const data = Buffer.from(await Bun.file(frame.path).arrayBuffer())
+				return { classification: formatOf(frame.path) === 'fits' && isFits(data) ? 'accepted' : 'rejected', metrics: { size: data.byteLength } }
+			},
+		})
+
+		expect((await session.result).state).toBe('completed')
+		expect(marks.map(([name]) => name)).toEqual(['writer', 'result', 'analyze', 'writer', 'result', 'analyze'])
+		expect(frames.map((frame) => [basename(frame.path), frame.slot.id, frame.slot.attempt, frame.slot.capture.frameType])).toEqual([
+			['.frame[L][1].1.partial.fit', 'frame[L][1]', 1, 'LIGHT'],
+			['.frame[L][2].1.partial.fit', 'frame[L][2]', 1, 'LIGHT'],
+		])
+		for (const frame of frames) expect(frame.exposureStartedAt).toBeLessThanOrEqual(frame.exposureFinishedAt)
+		expect(owners).toEqual([[], []])
+
+		const sync = faults.entries.find((entry) => entry.operation === 'sync' && entry.paths.some((path) => path.endsWith('.frame[L][1].1.partial.fit')))!.sequence
+		expect(sync).toBeLessThan(marks[2][1])
+
+		const outcomes = session.events.flatMap((event) => (event.type === 'frameCaptured' ? [event.quality] : []))
+		expect(outcomes).toMatchObject([
+			{ kind: 'analyzed', result: { classification: 'accepted' } },
+			{ kind: 'analyzed', result: { classification: 'accepted' } },
+		])
+		expect(kindsOf(await journalOf(sessionId))).toEqual(['prepared', 'promoting', 'committed', 'prepared', 'promoting', 'committed'])
+	})
+
+	test('18i: an analyzer that picks its parser by the extension classifies every temporary (2 variants)', async () => {
+		const sessionId = Bun.randomUUIDv7()
+		const formats: (string | undefined)[] = []
+		const session = startSession(sessionId, {
+			configuration: configurationOf(2, { quality: { timeout: 30 } }),
+			qualityAnalyzer: (frame) => {
+				const format = formatOf(frame.path)
+				formats.push(format)
+				if (format === undefined) return Promise.reject(new Error(`unknown format of ${frame.path}`))
+				return Promise.resolve({ classification: 'accepted' })
+			},
+		})
+
+		expect((await session.result).state).toBe('completed')
+		expect(formats).toEqual(['fits', 'fits'])
+		expect(session.events.flatMap((event) => (event.type === 'frameCaptured' ? [event.quality.kind] : []))).toEqual(['analyzed', 'analyzed'])
+		// Incorrect variant: a temporary named after the old `.{name}.fit.{attempt}.partial` scheme defeats the dispatch.
+		expect(formatOf('.frame[L][1].fit.1.partial')).toBeUndefined()
 	})
 })
 
