@@ -140,6 +140,11 @@ const MICRORADIAN_PER_SECOND = 86400e-6
 // Degrees per day to radians per day.
 const DEGREE_PER_DAY = Math.PI / 180
 
+// Relative rounding allowance, as a fraction of R^2, on the line-of-sight discriminant
+// R^2 - D^2 sin^2(elongation). Exact tangents computed through asin, tan, rotation and
+// normalization land up to about 7 ulps below zero; 16 ulps keeps them on the limb.
+const LIMB_TANGENT_TOLERANCE = 16 * Number.EPSILON
+
 // Howard, Harvey & Forgach (1990), small magnetic features: A, B, C = 2.894, -0.428, -0.370 µrad/s
 // sidereal, as tabulated by SunPy 8.0.1 sunpy.sun.models.differential_rotation ('howard', its default).
 export const HOWARD_1990_DIFFERENTIAL_ROTATION: SolarDifferentialRotation = { a: 2.894 * MICRORADIAN_PER_SECOND, b: -0.428 * MICRORADIAN_PER_SECOND, c: -0.37 * MICRORADIAN_PER_SECOND }
@@ -297,7 +302,9 @@ function imageRotation(geometry: SolarDiskGeometry, calibration: SolarImageCalib
 // Intersects the observer ray (dx west, dy north, dz toward the Sun centre; any positive length)
 // with the solar sphere. With q = sqrt(R^2 - D^2 sin^2(elongation)) the near-side range is
 // t = D cos - q and the heliocentric depth is sz = D sin^2 + q cos, which avoids subtracting the
-// nearly equal D and t; mu reduces to q / R.
+// nearly equal D and t; mu reduces to q / R. An exact tangent has a zero discriminant (a double
+// root), so rounding up to LIMB_TANGENT_TOLERANCE * R^2 below zero still counts as a limb contact
+// with mu = 0; that widens the disk by under 1e-17 rad.
 function lineOfSightToHeliographic(dx: number, dy: number, dz: number, geometry: SolarDiskGeometry): SolarDiskPoint {
 	const n = Math.sqrt(dx * dx + dy * dy + dz * dz)
 	const ux = dx / n
@@ -305,11 +312,12 @@ function lineOfSightToHeliographic(dx: number, dy: number, dz: number, geometry:
 	const uz = dz / n
 	const sideways = ux * ux + uy * uy
 	const distance = geometry.distance
-	const discriminant = SUN_RADIUS_AU * SUN_RADIUS_AU - distance * distance * sideways
+	const radiusSquared = SUN_RADIUS_AU * SUN_RADIUS_AU
+	const discriminant = radiusSquared - distance * distance * sideways
 
-	if (!(uz > 0 && discriminant >= 0)) return { onDisk: false, elongation: Math.atan2(Math.sqrt(sideways), uz) }
+	if (!(uz > 0 && discriminant >= -LIMB_TANGENT_TOLERANCE * radiusSquared)) return { onDisk: false, elongation: Math.atan2(Math.sqrt(sideways), uz) }
 
-	const q = Math.sqrt(discriminant)
+	const q = Math.sqrt(Math.max(0, discriminant))
 	const t = distance * uz - q
 	// Heliocentric Cartesian: X west, Y projected solar north, Z toward the observer.
 	const sx = t * ux

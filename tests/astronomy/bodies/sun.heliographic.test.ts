@@ -1,20 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import {
-	ALLEN_DIFFERENTIAL_ROTATION,
-	approximateSolarDiskGeometry,
-	HOWARD_1990_DIFFERENTIAL_ROTATION,
-	heliographicToHelioprojective,
-	heliographicToSolarImage,
-	helioprojectiveToHeliographic,
-	rotateCarringtonLongitude,
-	SNODGRASS_1983_DIFFERENTIAL_ROTATION,
-	type SolarDiskGeometry,
-	type SolarImageCalibration,
-	solarDiskGeometry,
-	solarImageScale,
-	solarImageToHeliographic,
-	solarRotationRate,
-} from '../../../src/astronomy/bodies/sun.heliographic'
+// oxfmt-ignore
+import { ALLEN_DIFFERENTIAL_ROTATION, approximateSolarDiskGeometry, HOWARD_1990_DIFFERENTIAL_ROTATION, heliographicToHelioprojective, heliographicToSolarImage, helioprojectiveToHeliographic, rotateCarringtonLongitude, SNODGRASS_1983_DIFFERENTIAL_ROTATION, type SolarDiskGeometry, type SolarImageCalibration, solarDiskGeometry, solarImageScale, solarImageToHeliographic, solarRotationRate } from '../../../src/astronomy/bodies/sun.heliographic'
 import { observerState } from '../../../src/astronomy/coordinates/correction'
 import { earth, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { geodeticLocation } from '../../../src/astronomy/observer/location'
@@ -162,6 +148,37 @@ describe('helioprojective mapping', () => {
 
 		// A ray pointing away from the Sun never meets the sphere.
 		expect(helioprojectiveToHeliographic(Math.PI, 0, GEOMETRY).onDisk).toBeFalse()
+	})
+
+	test('exact limb tangents stay on the disk despite rounding', () => {
+		// semidiameter = asin(R / D) is the exact tangent; its zero discriminant rounds to either sign.
+		for (const ref of SUNPY) {
+			const [year, month, day, hour] = ref.date
+			const g = geocentric(timeYMDHMS(year, month, day, hour, 0, 0, Timescale.UTC))
+			const s = g.semidiameter
+
+			for (const [tx, ty] of [
+				[s, 0],
+				[-s, 0],
+				[0, s],
+				[0, -s],
+			]) {
+				const limb = helioprojectiveToHeliographic(tx, ty, g)
+				expect(limb.onDisk).toBeTrue()
+				if (limb.onDisk) expect(limb.mu).toBeLessThan(1e-7)
+				expect(helioprojectiveToHeliographic(tx * (1 + 1e-12), ty * (1 + 1e-12), g).onDisk).toBeFalse()
+			}
+
+			const cal: SolarImageCalibration = { centerX: 512, centerY: 512, scale: solarImageScale(g, 480), positionAngle: deg(33) }
+			for (const [x, y] of [
+				[992, 512],
+				[32, 512],
+				[512, 32],
+				[512, 992],
+			]) {
+				expect(solarImageToHeliographic(x, y, g, cal).onDisk).toBeTrue()
+			}
+		}
 	})
 
 	test('far-side points and the hidden pole are flagged', () => {
