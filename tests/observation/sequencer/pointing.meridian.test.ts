@@ -7,7 +7,7 @@ import { type Time, timeNow, timeUnix } from '../../../src/astronomy/time/time'
 import { SIDEREAL_DRIFT_RATE, TAU } from '../../../src/core/constants'
 import { guidePulseReleaseBound } from '../../../src/devices/commanders/guideoutput'
 import type { MountCommandOptions } from '../../../src/devices/commanders/mount'
-import { DEFAULT_CAMERA, DEFAULT_DOME, DEFAULT_MOUNT, type Camera, type Device, type Dome, type GuideOutput, type Mount, type MountTargetCoordinate, type PierSide } from '../../../src/devices/indi/device'
+import { DEFAULT_CAMERA, DEFAULT_DOME, DEFAULT_MOUNT, type Camera, type Device, type Dome, type Mount, type MountTargetCoordinate, type PierSide } from '../../../src/devices/indi/device'
 import type { CameraManager } from '../../../src/devices/indi/manager/camera'
 import { mountTargetEquatorial } from '../../../src/devices/indi/manager/mount'
 import { abortableDelay } from '../../../src/devices/orchestration/operation.wait'
@@ -20,6 +20,7 @@ import { LocalGuidingSession } from '../../../src/observation/guiding/session.cl
 import { StarTracker } from '../../../src/observation/guiding/tracker.star'
 import { createMeridianFlipState, type MeridianFlipStatePhase } from '../../../src/observation/mount/meridian.flip'
 import { captureFrameStep } from '../../../src/observation/sequencer/capture'
+import { prepareOpticalPathTask } from '../../../src/observation/sequencer/focus'
 import { sequencerGuidingStartupTasks, sequencerShutdownTasks } from '../../../src/observation/sequencer/guiding'
 import { ensureTrackingTask, type SequencerLifecycleServices, sequencerShutdownLifecycleTasks, sequencerStartupLifecycleTasks } from '../../../src/observation/sequencer/lifecycle'
 // oxfmt-ignore
@@ -29,7 +30,7 @@ import { type SequencerRunner, type SequencerTask, type SequencerTaskView, start
 import { DEFAULT_SEQUENCER_MERIDIAN_FLIP, type SequencerCameraCapture, type SequencerClock, type SequencerConfiguration, type SequencerDevices, type SequencerEvent, type SequencerMeridianFlipConfiguration, type SequencerResult, type SequencerTaskId, type SequencerTarget } from '../../../src/observation/sequencer/sequencer'
 import { advanceSequencerMeridianFlip, createSequencerRuntimeState, isWithinSequencerMeridianCycle, SEQUENCER_MERIDIAN_HALF_CYCLE, sequencerCheckpointOf, sequencerMeridianTransitAt, toMeridianFlipPolicy } from '../../../src/observation/sequencer/state'
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
-import { waitUntil } from '../../util'
+import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
 import { assertMeridianProtectionInvariants, assertMountKeyClosure, type MeridianMountState, runtimeEntries } from './meridian.util'
 // oxfmt-ignore
 import { assertJournalInvariants, assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, expectNoSequencerLeaks, type LeaseEntry, RIG_INITIAL_POINTING, recordDevices, recordLeases, recordRunner, resetSequencerRig, type RunnerLogEntry } from './util'
@@ -128,6 +129,8 @@ interface SessionOptions {
 	readonly guiding?: GuidingSession
 	// Mount ditherer of the dither feature (its movement, its inherited pulse barrier and the startup task waiting it).
 	readonly ditherer?: MountDitherer
+	// Devices of the session besides the camera and the mount.
+	readonly devices?: Omit<SequencerDevices, 'camera' | 'mount'>
 }
 
 interface Session {
@@ -155,7 +158,7 @@ async function runSession(configuration: SequencerConfiguration, options: Sessio
 	const storage = new FileSystemSequencerStorage({ root: ROOT, sessionId, wallNow: clock.wallNow })
 	const events: SequencerEvent[] = []
 	const { mount, camera } = rig.devices()
-	const sessionDevices: SequencerDevices = { camera, mount }
+	const sessionDevices: SequencerDevices = { camera, mount, ...options.devices }
 	const { guiding, ditherer } = options
 	const services = { mountCommander: rig.commanders.mount, guideOutputCommander: rig.commanders.guideOutput, ...(guiding !== undefined && { guiding }), ...(ditherer !== undefined && { ditherer }) }
 	expect(preflightSequencerMeridian(configuration, sessionDevices, services)).toEqual([])
@@ -300,6 +303,7 @@ describe('motion table, timings and lead', () => {
 			'autofocus',
 			'ensureGuiding',
 			'ditherAndSettle',
+			'awaitDarkTemperature',
 			'prepareFrameDestination',
 			'finalExposureGuard',
 			'captureFrame',
@@ -611,7 +615,51 @@ describe('sessions', () => {
 		const leasing = new Set(session.leases.filter((lease) => lease.keys.includes(resourceKey(rig.devices().mount))).map((lease) => lease.root))
 		for (const root of ['sequencer.meridianFlip', 'sequencer.acquireOrRecenterTarget', 'sequencer.ensureTracking']) expect(leasing).toContain(root)
 		await assertOracles(session)
-	}, 60000)
+	})
+
+	test('50.3 18: a flip during a cover dark verifies the side without centering; the next light opens the cover, then recenters', async () => {
+		const placed = await placeMount(-1 * SECOND, true)
+		const flip = meridianFlipOf(placed.hourAngle, 0.5, MARGIN + 5)
+		const DARK: SequencerCameraCapture = { ...LIGHT, exposureTime: 10, frameType: 'DARK' }
+		const base = configurationOf(placed.target, flip, { pointing: { settle: 0.1, onFailure: 'fail' } })
+		const groups: SequencerConfiguration['capture']['groups'] = [{ kind: 'triggered', id: 'D', enabled: true, capture: DARK, trigger: { kind: 'sessionStart' }, batchSize: 1, maxFrames: 1, inherit: 'none', opticalPath: { kind: 'cover' } }, ...base.capture.groups]
+		const configuration: SequencerConfiguration = { ...base, capture: { ...base.capture, groups } }
+		const { cover } = rig.devices()
+		const opticalPath = prepareOpticalPathTask({ coverCommander: rig.commanders.cover })
+		const session = await runSession(configuration, { extra: [opticalPath], devices: { cover } })
+		const { result, events, devices, roots } = session
+
+		expect(result).toMatchObject({ state: 'completed' })
+		expect(rig.devices().mount.pierSide).toBe('EAST')
+		const selected = (slot: string) => eventSequence(roots, (event) => event.type === 'frameSelected' && event.frame.id === slot)
+		const exposure = (frameType: string) => devices.find((entry) => entry.kind === 'command' && entry.manager === 'camera' && entry.command === 'frameType' && entry.args[0] === frameType)!.sequence
+		const [darkSelected, lightSelected] = [selected('frame[D][1]'), selected('frame[L][1]')]
+
+		// The flip and its side verification ran in the pre-capture of the dark (re-entered by the guard until the flip was
+		// due), which closed the cover and never centered.
+		const flips = commandsOf(devices, 'flipTo')
+		expect(flips).toHaveLength(1)
+		expect(flips[0].sequence).toBeGreaterThan(darkSelected)
+		expect(flips[0].sequence).toBeLessThan(exposure('DARK'))
+		const park = devices.find((entry) => entry.kind === 'command' && entry.manager === 'cover' && entry.command === 'park')!
+		expect(park.sequence).toBeGreaterThan(darkSelected)
+		expect(park.sequence).toBeLessThan(exposure('DARK'))
+		const pointed = roots.filter((entry) => entry.kind === 'event' && entry.event.type === 'taskStarted' && entry.event.task === 'acquireOrRecenterTarget').map((entry) => entry.sequence)
+		expect(pointed.filter((sequence) => sequence > darkSelected && sequence < lightSelected)).toEqual([])
+
+		// The light opened the cover before its recenter, and the flip completed only then, before the light was exposed.
+		const unpark = devices.find((entry) => entry.kind === 'command' && entry.manager === 'cover' && entry.command === 'unpark')!
+		const recenter = pointed.find((sequence) => sequence > lightSelected)!
+		expect(unpark.sequence).toBeGreaterThan(lightSelected)
+		expect(unpark.sequence).toBeLessThan(recenter)
+		const completed = eventSequence(roots, (event) => event.type === 'meridianFlipCompleted')
+		expect(completed).toBeGreaterThan(recenter)
+		expect(completed).toBeLessThan(exposure('LIGHT'))
+		expect(events.filter((event) => event.type === 'meridianFlipCompleted')).toEqual([expect.objectContaining({ pierSide: 'EAST', pierSideVerified: true })])
+
+		assertSequencerInvariants(devices, { coverDarks: true })
+		await assertOracles(session)
+	})
 
 	test('49.7 8: a session in 2031 on a 2026 host converts every target at the wall instant of its command, as the guard does', async () => {
 		const { mount } = rig.devices()
@@ -684,7 +732,7 @@ describe('sessions', () => {
 			rig.managers.mount.time(mount, { utc: Date.now(), offset: 0 })
 			await waitUntil(() => Math.abs(clock.wallNow() - Date.now()) < 60000, 5000, 10)
 		}
-	}, 60000)
+	})
 
 	test('a task that ignores its cancellation never delays the hard path: tracking goes off before latestAt, then the flip runs with tracking off', async () => {
 		const placed = await placeMount(-1 * SECOND, false)
@@ -729,7 +777,7 @@ describe('sessions', () => {
 		expect(events.filter((event) => event.type === 'meridianFlipCompleted')).toHaveLength(1)
 		expect(events.filter((event) => event.type === 'exposureStarted')).toHaveLength(1)
 		await assertOracles(session)
-	}, 60000)
+	})
 
 	test('arming with less than the lead left starts the hard path before any command and reports a late start', async () => {
 		const placed = await placeMount(-1 * SECOND, true)
@@ -751,7 +799,7 @@ describe('sessions', () => {
 		expect(commandsOf(devices, 'flipTo')).toHaveLength(1)
 		expect(events.filter((event) => event.type === 'exposureStarted')).toHaveLength(1)
 		await assertOracles(session)
-	}, 60000)
+	})
 
 	test('paused across the graceful deadline, whilePaused stopTracking turns tracking off and the session stays paused', async () => {
 		const placed = await placeMount(-1 * SECOND, true)
@@ -781,7 +829,7 @@ describe('sessions', () => {
 		expect(commandsOf(devices, 'flipTo')).toHaveLength(0)
 		expect(events.some((event) => event.type === 'exposureStarted')).toBeFalse()
 		await assertOracles(session)
-	}, 60000)
+	})
 
 	test('a non-sidereal track mode on a tracking pre-flip mount starts the hard path in the same tick', async () => {
 		const placed = await placeMount(-1 * SECOND, true)
@@ -805,7 +853,7 @@ describe('sessions', () => {
 		expect(mount.tracking).toBeFalse()
 		await assertOracles(session)
 		expect(await rig.commanders.mount.setTrackMode(rig.coordinator, mount, 'SIDEREAL')).toMatchObject({ ok: true })
-	}, 60000)
+	})
 
 	test('a restart out of its meridian cycle fails as configuration before any tracking on or flip', async () => {
 		const placed = await placeMount(-1 * SECOND, false)
@@ -826,7 +874,7 @@ describe('sessions', () => {
 		expect(commandsOf(devices, 'tracking').filter((entry) => entry.args[0] === true)).toHaveLength(0)
 		expect(events.some((event) => event.type === 'exposureStarted')).toBeFalse()
 		await assertOracles(session)
-	}, 60000)
+	})
 
 	test('51, 52: armed late before any guiding start, the gate of the run refuses every pulse of the client; 2a pauses it outside guiding', async () => {
 		const { guideOutput } = rig.devices()
@@ -874,9 +922,9 @@ describe('sessions', () => {
 			client.stopCapture()
 			client.disconnect()
 		}
-	}, 60000)
+	})
 
-	test('67: with the GuideOutput view of the mount ST4 removed, the barrier keeps the mount unavailable: 2b fails, 2c is refused', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('67: with the GuideOutput view of the mount ST4 removed, the barrier keeps the mount unavailable: 2b fails, 2c is refused', async () => {
 		const { mount, guideOutput } = rig.devices()
 		const key = resourceKey(mount)
 		// The ST4 port of the mount simulator: the guide output and the mount are one hardware.
@@ -925,7 +973,7 @@ describe('sessions', () => {
 
 		// The epoch was armed late: its crossing of latestAt is reported as meridianProtectionFailed { lateStart } (I18 a).
 		await assertMeridianOracle(session)
-	}, 60000)
+	})
 
 	test('incorrect variant: without the supervisor a paused session tracks past latestAt, and the oracle rejects it', async () => {
 		const placed = await placeMount(-1 * SECOND, true)
@@ -953,5 +1001,5 @@ describe('sessions', () => {
 		expect((rejected as Error).message).toMatch(/^I41/)
 		const log = [...session.devices, ...runtimeEntries(session.roots, session.sessionId)]
 		expect(() => assertMeridianProtectionInvariants(log, { mount: mount.name, flip: sequencerMeridianFlipSettings(flip), initial: session.initial })).toThrow(/^I18/)
-	}, 60000)
+	})
 })

@@ -47,7 +47,7 @@ import { type Angle, deg, hour, normalizeAngle, normalizePI } from '../../../src
 import type { Ditherer, DitherPhase, DitherRequest, DitherResult } from '../../../src/observation/guiding/ditherer'
 // oxfmt-ignore
 import { type GuidingInterruption, GuidingInterruptionHistory, type GuidingSession, type GuidingSessionState, type GuidingSettle, type GuidingStartOptions } from '../../../src/observation/guiding/session'
-import type { SequencerClock, SequencerEvent, SequencerListener, SequencerTarget, SequencerTaskId } from '../../../src/observation/sequencer/sequencer'
+import type { SequencerClock, SequencerConfiguration, SequencerEvent, SequencerListener, SequencerTarget, SequencerTaskId } from '../../../src/observation/sequencer/sequencer'
 import type { SequencerJournalEntry } from '../../../src/observation/sequencer/storage'
 import { waitUntil } from '../../util'
 
@@ -695,6 +695,11 @@ export type SequencerLogEntry = DeviceLogEntry | FileSystemEntry
 export interface SequencerOracleOptions {
 	// Whether a safety snapshot that is not known counts as unsafe, as the Sequencer safety option of that name.
 	readonly unknownIsUnsafe?: boolean
+	// 0-based wheel slots of the opaque filters of the session; no LIGHT exposure starts on one (I8, I16).
+	readonly opaqueSlots?: readonly number[]
+	// Whether the darks of the session close the cover ('cover' optical path); no DARK starts unless the cover was
+	// observed closed (I8).
+	readonly coverDarks?: boolean
 }
 
 // Mount commands that move it.
@@ -737,16 +742,30 @@ function isOpening(entry: DeviceCommandEntry) {
 // - I14: no mount motion while any guide output reports `pulsing` (the Sequencer half, pause() resolved before the
 //   motion, joins the oracle with the guiding events);
 // - I15: no opening (dome unpark or shutter opening, cover or mount unpark) while the last safety snapshot is unsafe, or unknown with
-//   `unknownIsUnsafe`.
+//   `unknownIsUnsafe`;
+// - I8 and I16: no exposure of frame type LIGHT (primary, centering or autofocus alike) starts with a cover observed
+//   closed, a flat panel observed lit, or a wheel observed on one of `opaqueSlots`; with `coverDarks`, no
+//   DARK starts unless every cover was observed closed. The frame type of an exposure is the last one commanded to its
+//   camera; a state never observed in the log counts as the open path the rig reset leaves.
 export function assertSequencerInvariants(log: readonly SequencerLogEntry[], options: SequencerOracleOptions = {}) {
 	const entries = [...log].sort((a, b) => a.sequence - b.sequence)
 	const exposing = new Set<string>()
 	const pulsing = new Set<string>()
+	const frameTypes = new Map<string, unknown>()
+	const covers = new Map<string, boolean>()
+	const lit = new Set<string>()
+	const wheels = new Map<string, unknown>()
+	const opaque = new Set(options.opaqueSlots)
 	let safe: boolean | undefined
 
 	for (const entry of entries) {
 		if (entry.kind === 'transition') {
-			if (entry.property === 'exposuring' && entry.value === false) exposing.delete(entry.device)
+			if (entry.manager === 'cover' && entry.property === 'parked') covers.set(entry.device, entry.value === true)
+			else if (entry.manager === 'flatPanel' && entry.property === 'enabled') {
+				if (entry.value === true) lit.add(entry.device)
+				else lit.delete(entry.device)
+			} else if (entry.manager === 'wheel' && entry.property === 'position') wheels.set(entry.device, entry.value)
+			else if (entry.property === 'exposuring' && entry.value === false) exposing.delete(entry.device)
 			else if (entry.property === 'pulsing') {
 				if (entry.value === true) pulsing.add(entry.device)
 				else pulsing.delete(entry.device)
@@ -768,7 +787,23 @@ export function assertSequencerInvariants(log: readonly SequencerLogEntry[], opt
 			throw new Error(`I15: ${entry.manager} ${entry.command} on ${entry.device} (#${entry.sequence}) with the safety ${safe === undefined ? 'unknown' : 'unsafe'}`)
 		}
 
-		if (entry.manager === 'camera' && entry.command === 'startExposure') exposing.add(entry.device)
+		if (entry.manager === 'camera' && entry.command === 'frameType') frameTypes.set(entry.device, entry.args[0])
+
+		if (entry.manager === 'camera' && entry.command === 'startExposure') {
+			const frameType = frameTypes.get(entry.device)
+
+			if (frameType === 'LIGHT') {
+				const closed = [...covers].find(([, parked]) => parked)?.[0]
+				if (closed !== undefined) throw new Error(`I8: LIGHT exposure on ${entry.device} (#${entry.sequence}) with the cover ${closed} closed`)
+				if (lit.size > 0) throw new Error(`I8: LIGHT exposure on ${entry.device} (#${entry.sequence}) with the flat panel ${[...lit].join(', ')} lit`)
+				const blocked = [...wheels].find(([, position]) => opaque.has(position as number))?.[0]
+				if (blocked !== undefined) throw new Error(`I8: LIGHT exposure on ${entry.device} (#${entry.sequence}) with the wheel ${blocked} on an opaque filter`)
+			} else if (frameType === 'DARK' && options.coverDarks === true && (covers.size === 0 || [...covers.values()].some((parked) => !parked))) {
+				throw new Error(`I8: DARK exposure on ${entry.device} (#${entry.sequence}) without the cover observed closed`)
+			}
+
+			exposing.add(entry.device)
+		}
 	}
 }
 
@@ -1001,8 +1036,10 @@ export function assertRunnerInvariants(log: readonly RunnerLogEntry[], options: 
 //   once it produced a transaction;
 // - I49: every final and discarded destination ends in `.fit` but not `.partial.fit`, every temporary in
 //   `.partial.fit`, and the final of an attempt never changes between prepared, promoting and committed;
-// - I4 (journal half): every frameAccepted event has the committed line of its attempt, with its final.
-export function assertJournalInvariants(journal: readonly SequencerJournalEntry[], events: readonly SequencerEvent[] = []) {
+// - I4 (journal half): every frameAccepted event has the committed line of its attempt, with its final;
+// - I20 (with `configuration`): the slots selected for a triggered group (by frameSelected events) and the batches its
+//   triggerFired events enqueued never exceed its `maxFrames`, and no ordinal of it lies beyond.
+export function assertJournalInvariants(journal: readonly SequencerJournalEntry[], events: readonly SequencerEvent[] = [], configuration?: Pick<SequencerConfiguration, 'capture'>) {
 	const finals = new Map<string, string>()
 	const committedSlots = new Set<string>()
 	const committedFinals = new Set<string>()
@@ -1059,6 +1096,24 @@ export function assertJournalInvariants(journal: readonly SequencerJournalEntry[
 		const key = `${event.slot}#${event.attempt}`
 		const final = finals.get(key)
 		if (committed.get(event.slot) !== key || final === undefined || !event.path.split(sep).join('/').endsWith(`/${final}`)) throw new Error(`I4: frameAccepted ${key} at ${event.path} without its committed line`)
+	}
+
+	if (configuration === undefined) return
+
+	for (const group of configuration.capture.groups) {
+		if (group.kind !== 'triggered') continue
+		const slots = new Set<string>()
+		let enqueued = 0
+
+		for (const event of events) {
+			if (event.type === 'frameSelected' && event.frame.groupId === group.id) {
+				slots.add(event.frame.id)
+				if (event.frame.ordinal > group.maxFrames) throw new Error(`I20: ${event.frame.id} beyond the ${group.maxFrames} frames of ${group.id}`)
+			} else if (event.type === 'triggerFired' && event.groupId === group.id) enqueued += event.slots
+		}
+
+		if (slots.size > group.maxFrames) throw new Error(`I20: ${slots.size} slots of ${group.id} beyond its ${group.maxFrames} frames`)
+		if (enqueued > group.maxFrames) throw new Error(`I20: ${enqueued} slots enqueued for ${group.id} beyond its ${group.maxFrames} frames`)
 	}
 }
 

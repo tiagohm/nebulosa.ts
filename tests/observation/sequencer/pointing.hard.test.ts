@@ -27,7 +27,7 @@ import { type SequencerCaptureStep, type SequencerMotionOwner, type SequencerPro
 import type { SequencerCameraCapture, SequencerClock, SequencerConfiguration, SequencerEvent, SequencerEventBody, SequencerMeridianFlipConfiguration, SequencerTaskId } from '../../../src/observation/sequencer/sequencer'
 import { createSequencerRuntimeState } from '../../../src/observation/sequencer/state'
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask } from '../../../src/observation/sequencer/storage'
-import { waitUntil } from '../../util'
+import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
 import { assertMeridianProtectionInvariants, guidingEntries, type MeridianRunnerEntry, runtimeEntries } from './meridian.util'
 import { createTestSequence, FakeMount, recordManagers, recordRunner, ScriptedGuidingSession } from './util'
 
@@ -366,7 +366,7 @@ describe('2b and the dither pulses', () => {
 		expect(guideOutputCommander.dispatchedPulseWindow(guideOutput)).toBeUndefined()
 	})
 
-	test('64: without the reconnection the evidence outlives the release bound: mountNotQuiescent, tracking still turned off', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('64: without the reconnection the evidence outlives the release bound: mountNotQuiescent, tracking still turned off', async () => {
 		const guideOutput = await connected()
 		const pulses = silentDriver()
 		const s = armed({ guideOutput })
@@ -383,7 +383,7 @@ describe('2b and the dither pulses', () => {
 		expect(protection.offAt! - protection.startedAt).toBeGreaterThanOrEqual(guidePulseReleaseBound(MAX_PULSE) - SLACK)
 		expect(s.fake.mount.tracking).toBeFalse()
 		expect(s.runtime.trackingStoppedForMeridianProtection).toBeTrue()
-	}, 30000)
+	})
 
 	test('49, 57: a pulse flag nobody of the run dispatched holds 2b until the guide output reports the axis stopped', async () => {
 		const guideOutput = await connected()
@@ -773,7 +773,7 @@ describe('inherited pulse barrier', () => {
 		oracle()
 	})
 
-	test('70: armed late with a Busy of the barrier that never ends, 2c turns tracking off but 2b fails the late protection', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('70: armed late with a Busy of the barrier that never ends, 2c turns tracking off but 2b fails the late protection', async () => {
 		const guideOutput = await connected()
 		silentDriver()
 		const { runner, events, fake, oracle } = restart(guideOutput, 5)
@@ -788,9 +788,9 @@ describe('inherited pulse barrier', () => {
 		expect(events.some((entry) => entry.event.type === 'taskStarted' && entry.event.task === 'quiesceDitherPulses')).toBeFalse()
 		oracle()
 		guideVector(guideOutput, 'TELESCOPE_TIMED_GUIDE_NS', 'Ok')
-	}, 30000)
+	})
 
-	test('72: a Busy that never returns to Idle fails the startup as mountNotQuiescent: dispatchedPulseUnobserved', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('72: a Busy that never returns to Idle fails the startup as mountNotQuiescent: dispatchedPulseUnobserved', async () => {
 		const guideOutput = await connected()
 		silentDriver()
 		const { runner, completedAt, oracle } = restart(guideOutput)
@@ -803,5 +803,5 @@ describe('inherited pulse barrier', () => {
 		expect(completedAt()).toBeUndefined()
 		oracle()
 		guideVector(guideOutput, 'TELESCOPE_TIMED_GUIDE_WE', 'Ok')
-	}, 30000)
+	})
 })

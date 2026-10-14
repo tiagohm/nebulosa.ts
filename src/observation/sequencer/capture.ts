@@ -73,7 +73,8 @@ export function sequencerCaptureRequest(frame: SequencerFrameSlot, destination: 
 // the step so cancelling the root cancels the capture and waits for its cleanup. The hooks of the capture are the
 // session clock, the durable writer of the storage, `context.beforeExposure` as the synchronous veto right before the
 // dispatch, and a listener that reports the dispatched exposure (`exposureStarted` of the capturer) to the session.
-// Resolves the physical instants of the frame once it was written and fsynced, or the failure of the capture (a
+// Resolves the physical instants of the frame once it was written and fsynced, with the sensor temperature the camera
+// reports then (absent without a thermometer or while it is not a finite number), or the failure of the capture (a
 // refusal of `beforeExposure` included, which the runner tells apart). Never rejects.
 export function captureFrameStep(services: SequencerCaptureServices): SequencerCaptureStep {
 	const { cameraCapturer, storage } = services
@@ -96,6 +97,7 @@ export function captureFrameStep(services: SequencerCaptureServices): SequencerC
 		if (frames.length !== 1) return failedOperationResult('unexpectedState', `a single capture produced ${frames.length} frames`)
 
 		const { exposureDispatchedAt, exposureDispatchedMonotonic, exposureStartedAt, exposureStartedMonotonic, exposureFinishedAt, exposureFinishedMonotonic } = frames[0]
+		const sensorTemperature = sequencerSensorTemperature(context.devices.camera)
 
 		return successfulOperationResult({
 			...(exposureDispatchedAt !== undefined && { exposureDispatchedAt }),
@@ -104,8 +106,15 @@ export function captureFrameStep(services: SequencerCaptureServices): SequencerC
 			exposureStartedMonotonic,
 			exposureFinishedAt,
 			exposureFinishedMonotonic,
+			...(sensorTemperature !== undefined && { sensorTemperature }),
 		})
 	}
+}
+
+// Sensor temperature of `camera`, in °C: undefined without a thermometer, while disconnected, or when it is not a finite
+// number, so an unavailable reading never fires nor anchors a temperature trigger.
+export function sequencerSensorTemperature(camera: Pick<SequencerDevices['camera'], 'connected' | 'hasThermometer' | 'temperature'>) {
+	return camera.connected && camera.hasThermometer && Number.isFinite(camera.temperature) ? camera.temperature : undefined
 }
 
 // Whether the camera of a session is quarantined: a terminated exposure left a frame payload the capturer still

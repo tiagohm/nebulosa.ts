@@ -1,5 +1,5 @@
 // oxfmt-ignore
-import type { SequencerCalibrationBatch, SequencerCameraCapture, SequencerCaptureConfiguration, SequencerCheckpointSlot, SequencerEventBody, SequencerFrameGroup, SequencerFrameGroupTrigger, SequencerFrameSlot, SequencerScheduledFrameGroup, SequencerSchedulerState, SequencerTriggeredFrameGroup } from './sequencer'
+import type { SequencerCalibrationAnchor, SequencerCalibrationBatch, SequencerCameraCapture, SequencerCaptureConfiguration, SequencerCheckpointSlot, SequencerEventBody, SequencerFrameGroup, SequencerFrameGroupTrigger, SequencerFrameSlot, SequencerScheduledFrameGroup, SequencerSchedulerState, SequencerTriggerAnchors, SequencerTriggeredFrameGroup } from './sequencer'
 import type { SequencerCaptureProgress } from './state'
 
 // Pure frame selection of the Sequencer: which slot the next safe point prepares and exposes. It applies a fixed
@@ -10,8 +10,10 @@ import type { SequencerCaptureProgress } from './state'
 // flags) is mutated in place; per-group progress is only read. A slot is done when it is accepted, forced or
 // skipped, and the slots of a group are done in ordinal order, so the next ordinal of a group is always derived
 // from its progress and the queue, never from a separate counter; the slot a checkpoint persisted as in progress is
-// rebuilt from its id the same way. Every selection is O(groups + batches) and
-// allocates the returned slot plus small per-group scratch; nothing here touches devices, clocks or storage.
+// rebuilt from its id the same way. Calibration batches are enqueued by the session-boundary triggers here and by the
+// light triggers ('afterFrames', 'temperatureChange') through `fireCalibrationTriggers`, which the post-capture calls
+// on the copy of the state its frame transaction journals. Every selection is O(groups + batches) and allocates the
+// returned slot plus small per-group scratch; nothing here touches devices, clocks or storage.
 
 // Trigger events produced when a calibration batch is enqueued, in the exact shape the runner emits.
 export type SequencerTriggerEvent = Extract<SequencerEventBody, { readonly type: 'triggerFired' | 'triggerSuppressed' }>
@@ -60,6 +62,64 @@ export function enqueueCalibrationBatch(scheduler: SequencerSchedulerState, prog
 	scheduler.batches.push({ groupId: group.id, firstOrdinal: consumed + 1, size, capture, ...(filter !== undefined && { filter }), ...(triggeredBy !== undefined && { triggeredBy }) })
 
 	return { type: 'triggerFired', groupId: group.id, slots: size, ...(triggeredBy !== undefined && { triggeredBy }) }
+}
+
+// Fires the light triggers of the triggered groups (section 8A.2) for one completed (accepted or discarded) exposure
+// of `light`, a slot of a scheduled LIGHT group, in declared group order. A group listens to the lights of its
+// `sourceGroups`, or to every scheduled LIGHT group when they are absent; disabled groups and session-boundary
+// triggers never fire here, and calibration frames never fire anything (the caller passes only scheduled lights).
+// - 'afterFrames' counts the light in its anchor and fires when the count reaches `frames` (exactly at N), restarting
+//   it at 0 whether the batch was enqueued or suppressed;
+// - 'temperatureChange' compares `sensorTemperature` (°C, the sensor at the end of the exposure; undefined or not
+//   finite never fires nor anchors) with the anchor: the first light with a temperature only anchors it, and a change
+//   of at least `delta` fires; only an enqueued batch moves the anchor to this temperature.
+// A fired trigger enqueues through `enqueueCalibrationBatch` with `light` as the triggering frame (capacity reserved
+// at enqueue, inheritance frozen), counts the enqueued batch in the anchor and appends its 'triggerFired' or
+// 'triggerSuppressed' event to `events`. Mutates `scheduler` and `anchors.calibration` in place (an anchor missing
+// for a group is created); `progress` is only read. Pure otherwise.
+export function fireCalibrationTriggers(capture: SequencerCaptureConfiguration, scheduler: SequencerSchedulerState, progress: SequencerCaptureProgress, anchors: Pick<SequencerTriggerAnchors, 'calibration'>, light: SequencerFrameSlot, sensorTemperature: number | undefined, events: SequencerTriggerEvent[]) {
+	const temperature = sensorTemperature !== undefined && Number.isFinite(sensorTemperature) ? sensorTemperature : undefined
+
+	for (const group of capture.groups) {
+		if (group.kind !== 'triggered' || !group.enabled) continue
+		const { trigger } = group
+		if (trigger.kind !== 'afterFrames' && trigger.kind !== 'temperatureChange') continue
+		if (trigger.sourceGroups !== undefined && !trigger.sourceGroups.includes(light.groupId)) continue
+
+		const anchor = calibrationAnchorOf(anchors, group.id)
+
+		if (trigger.kind === 'afterFrames') {
+			if (++anchor.lightExposures < trigger.frames) continue
+			anchor.lightExposures = 0
+		} else {
+			if (temperature === undefined) continue
+
+			if (anchor.sensorTemperature === undefined) {
+				anchor.sensorTemperature = temperature
+				continue
+			}
+
+			if (!(Math.abs(temperature - anchor.sensorTemperature) >= trigger.delta)) continue
+		}
+
+		const event = enqueueCalibrationBatch(scheduler, progress, group, light)
+		if (event === undefined) continue
+
+		if (event.type === 'triggerFired') {
+			anchor.batches++
+			if (trigger.kind === 'temperatureChange') anchor.sensorTemperature = temperature
+		}
+
+		events.push(event)
+	}
+}
+
+// Anchor of a triggered group, created in place when the anchors lack it (never the case for anchors built from the
+// same configuration; a fresh anchor is the neutral one). `Object.defineProperty` defines an own data property, so any
+// group id (even `__proto__`) is a plain key.
+function calibrationAnchorOf(anchors: Pick<SequencerTriggerAnchors, 'calibration'>, groupId: string): SequencerCalibrationAnchor {
+	if (!Object.hasOwn(anchors.calibration, groupId)) Object.defineProperty(anchors.calibration, groupId, { value: { lightExposures: 0, batches: 0 }, enumerable: true, writable: true, configurable: true })
+	return anchors.calibration[groupId]
 }
 
 // Selects the slot the next safe point prepares, in the fixed order:
