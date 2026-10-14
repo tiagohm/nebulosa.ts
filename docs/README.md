@@ -575,7 +575,7 @@ console.log(toKilometer(ecliptic.bt), toKilometer(ecliptic.br)) // -22880 -14871
 
 Light from a distant source reaches the Earth earlier or later than it would reach the Solar-System barycenter (BJD) or the Sun's center (HJD), depending on where the observer sits along the line of sight. The light-travel-time correction is `(r_obs · n) / c`, with `r_obs` the observer's position relative to the chosen center and `n` the unit direction to the source. Timing work such as eclipse or pulsar timing adds it to the observed time.
 
-`lightTravelTime` returns that correction in days, positive when the observer lies on the source's side of the center. You choose the reference center through the Earth state you pass: a barycentric Earth state gives the barycentric correction and a heliocentric one the heliocentric correction. The correction is first-order and not fully relativistic. `observerState` builds the observer's `[position (AU), velocity (AU/day)]` that both this and [Radial Velocity Correction](#radial-velocity-correction) use: it adds the site's topocentric offset and diurnal rotation to the Earth state, or returns a copy of the Earth state when no location is given. `location` defaults to `time.location`. Source direction is ICRS right ascension and declination in radians.
+`lightTravelTime` returns that correction in days, positive when the observer lies on the source's side of the center. You choose the reference center through the Earth state you pass: a barycentric Earth state gives the barycentric correction and a heliocentric one the heliocentric correction. The correction is first-order and not fully relativistic; for a complete BJD_TDB with the TDB conversion, the Shapiro delay, and quality diagnostics, see [Barycentric Julian Date](#barycentric-julian-date). `observerState` builds the observer's `[position (AU), velocity (AU/day)]` that both this and [Radial Velocity Correction](#radial-velocity-correction) use: it adds the site's topocentric offset and diurnal rotation to the Earth state, or returns a copy of the Earth state when no location is given. `location` defaults to `time.location`. Source direction is ICRS right ascension and declination in radians.
 
 ```ts
 import { lightTravelTime, observerState } from 'nebulosa/src/astronomy/coordinates/correction'
@@ -589,9 +589,9 @@ import { meter } from 'nebulosa/src/math/units/distance'
 const location = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
 const time = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.UTC)
 
-// Earth's [heliocentric, barycentric] state (AU, AU/day) at the TDB instant.
+// Earth's [barycentric, heliocentric] state (AU, AU/day) at the TDB instant.
 const t = tdb(time)
-const [heliocentric, barycentric] = eraEpv00(t.day, t.fraction)
+const [barycentric, heliocentric] = eraEpv00(t.day, t.fraction)
 
 // Source at RA 5.5 h, Dec -5°.
 const ra = hour(5.5)
@@ -599,15 +599,69 @@ const dec = deg(-5)
 
 const bjd = lightTravelTime(ra, dec, time, barycentric, location)
 
-console.log(bjd * 86400) // 410.68 — seconds to add for the barycentric reference
-console.log(lightTravelTime(ra, dec, time, heliocentric, location) * 86400) // 413.66 — seconds, heliocentric reference
-console.log(lightTravelTime(ra, dec, time, barycentric) * 86400) // 410.67 — seconds, geocentric observer (no site)
+console.log(bjd * 86400) // 413.66 — seconds to add for the barycentric reference
+console.log(lightTravelTime(ra, dec, time, heliocentric, location) * 86400) // 410.68 — seconds, heliocentric reference
+console.log(lightTravelTime(ra, dec, time, barycentric) * 86400) // 413.65 — seconds, geocentric observer (no site)
 
 // Observer state used internally: Earth state plus the site's offset and diurnal velocity.
 const [position, velocity] = observerState(time, barycentric, location)
 
-console.log(position) // [-0.16633, 0.88918, 0.38543] — AU, barycentric ICRS axes
-console.log(velocity) // [-0.017353, -0.002531, -0.001185] — AU/day
+console.log(position) // [-0.17013, 0.89600, 0.38841] — AU, barycentric ICRS axes
+console.log(velocity) // [-0.017362, -0.002533, -0.001186] — AU/day
+```
+
+### Barycentric Julian Date
+
+BJD_TDB is the instant a signal would reach the Solar System barycenter, read on the Barycentric Dynamical Time clock. It removes the observer's orbital and diurnal motion from a time series, which is why transit, eclipse, and pulsar timings are published in it:
+
+```text
+BJD_TDB = TDB(t) + Δ_Rømer + Δ_Shapiro
+```
+
+The reception instant `t` is first converted to TDB (the Einstein delay). The Rømer delay `(r · n) / c` is the geometric light time between the observer at barycentric position `r` and the barycenter along the source direction `n`; it reaches about ±8.5 min. The solar Shapiro delay is the extra light time of a ray passing the Sun, tens of microseconds within a few tens of degrees of the Sun and about 112 µs at the solar limb.
+
+`barycentricJulianDate(time, direction, observer, options?)` takes the reception `Time` in any scale (UTC goes through the leap-second table, and `time.location` adds the topocentric TDB−TT term of up to about 2 µs), the ICRS direction to the source at the observation epoch (normalized internally; apply proper motion first), and an SSB-centered `EphemerisPath` for the observer. For a ground site compose an SSB-to-Earth path with `earthObserverEphemerisPath` (see [Ephemeris Path Composition](#ephemeris-path-composition)); for a spacecraft pass its own barycentric path. A path with another center throws, because a Sun-centered one would produce an HJD labelled as BJD; path errors, such as an SPK segment that does not cover the date, propagate. `options.sun`, an SSB-to-Sun path, applies the solar Shapiro term in the TEMPO2 form `−2GM☉/c³ · ln((|s| + s · n) / 1 AU)` with `s` the Sun-to-observer vector; a line of sight through the solar disk is clamped at the limb and flagged. `options.distance` (AU) replaces the plane-wave Rømer term with the exact spherical-wavefront one; the curvature it adds is at most `(1 AU)² / (2cd)`, about 120 µs at 10 pc. `options.timestampUncertainty` (seconds) enters the error budget; see [Exposure Timing](#exposure-timing) for the instant and uncertainty of an exposure.
+
+`time` in the result is BJD_TDB as a two-part TDB `Time`, not UTC and not TCB; `reception` is the same instant on TDB before the correction. `romer`, `shapiro`, and `correction` are seconds to add. `model` records the terms applied (`romer: 'planeWave' | 'sphericalWave'`, `shapiro`, and `tdb: 'input' | 'topocentric' | 'geocentric'`). `quality.earthOrientation` is `'notRequired'` for a geocentric observer, `'tabulated'` when the IERS tables cover the date, `'missing'` when they do not and UT1−UTC falls back to an edge value or 0, and `'custom'` for overridden providers; `quality.sunElongation` (radians) and `quality.occultedBySun` describe the solar geometry, measured from the SSB when no Sun path is given. `errorBudget` lists, in seconds, the timestamp uncertainty, the missing-EOP bound (about 1.4 µs), the omitted topocentric TDB term (about 2 µs), and the magnitude of an omitted Shapiro term, with their root-sum-square in `total`; planetary Shapiro delays (below about 0.2 µs) and an omitted wavefront curvature are not included. The ephemeris sets the floor of the Rømer term: each kilometer of observer position error is 3.3 µs, so use an SPK kernel rather than the analytical `eraEpv00` Earth for microsecond work.
+
+```ts
+import fs from 'fs/promises'
+import { barycentricJulianDate } from 'nebulosa/src/astronomy/coordinates/correction'
+import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { readDaf } from 'nebulosa/src/astronomy/ephemeris/kernels/daf'
+import { Naif } from 'nebulosa/src/astronomy/ephemeris/kernels/naif'
+import { readSpk } from 'nebulosa/src/astronomy/ephemeris/kernels/spk'
+import { composeEphemerisPaths, customEphemerisEndpoint } from 'nebulosa/src/astronomy/ephemeris/path'
+import { earthObserverEphemerisPath, spkEphemerisPath } from 'nebulosa/src/astronomy/ephemeris/path.adapter'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { exposureInterval } from 'nebulosa/src/astronomy/time/exposure'
+import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { fileHandleSource } from 'nebulosa/src/io/file'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+await using source = fileHandleSource(await fs.open('data/de421.bsp'))
+const spk = readSpk(await readDaf(source))
+
+// SSB -> Earth from DE421, then Earth -> La Silla; and SSB -> Sun for the Shapiro term.
+const earth = composeEphemerisPaths((await spkEphemerisPath(spk, Naif.SSB, Naif.EMB))!, (await spkEphemerisPath(spk, Naif.EMB, Naif.EARTH))!)
+const sun = (await spkEphemerisPath(spk, Naif.SSB, Naif.SUN))!
+const location = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
+const observer = composeEphemerisPaths(earth, earthObserverEphemerisPath(location, customEphemerisEndpoint('la-silla')))
+
+// A 300 s exposure stamped at the open command, with 0.12 s shutter latency and a 5 ms timestamp error.
+const start = timeYMDHMS(2024, 3, 10, 3, 0, 0, Timescale.UTC)
+start.location = location
+const exposure = exposureInterval({ time: start, reference: 'start', duration: 300, openLatency: 0.12, uncertainty: 0.005 })
+
+// Source at RA 5.5 h, Dec -5°.
+const bjd = barycentricJulianDate(exposure.midpoint, eraS2c(hour(5.5), deg(-5)), observer, { sun, timestampUncertainty: exposure.uncertainty })
+
+console.log(bjd.time.day, bjd.time.fraction) // 2460380 -0.37232562 — BJD_TDB = 2460379.62767438
+console.log(bjd.romer, bjd.shapiro) // 11.82055 2.0e-7 — seconds to add
+console.log(bjd.model) // { romer: 'planeWave', shapiro: true, tdb: 'topocentric' }
+console.log(bjd.quality.earthOrientation) // 'missing' — no IERS tables loaded
+console.log(bjd.errorBudget.earthOrientation, bjd.errorBudget.total) // 1.4e-6 0.005 — seconds
 ```
 
 ### Binary PCK Rotation
@@ -1542,6 +1596,39 @@ The remaining routines, by family:
 - Astrometry parameters: `eraApci13`, `eraApci`, `eraApcg`, `eraApcs`, `eraApco`, `eraApco13`, `eraApio13`, `eraApio`, `eraPvtob`, `eraRefco`; transformations `eraAtccq`, `eraAtciq`, `eraAtciqz`, `eraAtciqn`, `eraAtioq`, `eraAtoiq`, `eraAticq`, `eraAticqn`, `eraAtci13`, `eraAtco13`, `eraAtoc13`, `eraAtio13`, `eraAtoi13`, `eraAtic13` and `eraAtcc13`.
 - Horizontal and tangent plane: `eraAe2hd`, `eraHd2ae`, `eraHd2pa`, `eraTpsts`, `eraTpstv`, `eraTpors`, `eraTporv`, `eraTpxes`, `eraTpxev`; the geodetic routines `eraGc2Gde`, `eraGd2Gce` take the ellipsoid radius and flattening as arguments.
 - Planets and Moon: `eraPlan94` (`np` from 0 for Mercury to 7 for Neptune, with the Earth–Moon barycentre as 2; an index outside 0 to 7 throws a TypeError), `eraEpv00` and `eraMoon98`.
+
+### Exposure Timing
+
+A camera timestamp usually marks a command, not the light: the shutter opens some latency after the open command and closes some latency after the close command. Timing work needs the actual photon-collection interval and, above all, its midpoint, the instant to refer a measurement to (for example in [Barycentric Julian Date](#barycentric-julian-date)).
+
+`exposureInterval(exposure)` accepts either a recorded `time` in any scale with the `reference` it labels (`'start'` for the open command, `'midpoint'` for the commanded midpoint, `'end'` for the close command) and the commanded `duration`, or the recorded open and close command timestamps as `start` and `end`, possibly in different scales, whose commanded duration is measured on TAI. A span cannot also carry a `duration`, so a contradictory exposure time next to start and end timestamps is a type error rather than a silent choice. Both forms take optional `openLatency`, `closeLatency`, and clock `uncertainty`, all in seconds and defaulting to 0. It returns the collection `start`, `midpoint`, and `end` as fresh two-part `Time`s in the scale of the timestamp (of `start` for a span), keeping its `location` and providers, with the effective `duration` (commanded duration − `openLatency` + `closeLatency`) and the `uncertainty` carried unchanged, since both timestamps come from one clock.
+
+The midpoint is the nominal temporal midpoint of the collection interval, not a photon-weighted one: it is the flux-weighted mean time only for constant flux. A shutter that takes a finite time to uncover the aperture can be modeled by adding half its opening (closing) time to `openLatency` (`closeLatency`) when the aperture changes linearly. All offsets are SI seconds: UTC timestamps are offset in TAI, so an exposure across a leap second keeps its SI length and can start, end, or be centered on 23:59:60, and microsecond offsets survive because the day fraction resolves about 1e-11 s.
+
+```ts
+import { exposureInterval } from 'nebulosa/src/astronomy/time/exposure'
+import { Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+// A 300 s exposure stamped when the shutter was commanded closed.
+const stamped = exposureInterval({ time: timeYMDHMS(2024, 3, 10, 3, 5, 0, Timescale.UTC), reference: 'end', duration: 300 })
+
+console.log(timeToDate(stamped.start)) // [2024, 3, 10, 3, 0, 0, 0]
+console.log(timeToDate(stamped.midpoint)) // [2024, 3, 10, 3, 2, 30, 0]
+
+// 1 s commanded at 23:59:59.5 UTC on the 2016-12-31 leap-second day, with shutter latencies.
+const leap = exposureInterval({ time: timeYMDHMS(2016, 12, 31, 23, 59, 59.5, Timescale.UTC), reference: 'start', duration: 1, openLatency: 0.1, closeLatency: 0.02, uncertainty: 0.002 })
+
+console.log(timeToDate(leap.start)) // [2016, 12, 31, 23, 59, 59, 600]
+console.log(timeToDate(leap.midpoint)) // [2016, 12, 31, 23, 59, 60, 60] — inside the leap second
+console.log(timeToDate(leap.end)) // [2016, 12, 31, 23, 59, 60, 520]
+console.log(leap.duration, leap.uncertainty) // 0.92 0.002 — seconds
+
+// DATE-BEG and DATE-END style span: 1 s apart on the clock labels, 2 SI seconds across the leap second.
+const span = exposureInterval({ start: timeYMDHMS(2016, 12, 31, 23, 59, 59.5, Timescale.UTC), end: timeYMDHMS(2017, 1, 1, 0, 0, 0.5, Timescale.UTC) })
+
+console.log(span.duration.toFixed(6)) // 2.000000 — seconds
+console.log(timeToDate(span.midpoint)) // [2016, 12, 31, 23, 59, 60, 500]
+```
 
 ### FK5 Precession and ICRS Frame Bias
 
@@ -4038,8 +4125,8 @@ const time = timeYMDHMS(2025, 7, 1, 3, 0, 0, Timescale.UTC)
 
 time.location = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
 
-// The Earth's [heliocentric, barycentric] state at that TDB instant.
-const [heliocentric, barycentric] = eraEpv00(tdb(time).day, tdb(time).fraction)
+// The Earth's [barycentric, heliocentric] state at that TDB instant.
+const [barycentric, heliocentric] = eraEpv00(tdb(time).day, tdb(time).fraction)
 
 const observed = observeStar(barnard, time, barycentric, heliocentric[0])
 
@@ -4602,14 +4689,14 @@ import { toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
 const location = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
 const time = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.UTC)
 const t = tdb(time)
-const [heliocentric, barycentric] = eraEpv00(t.day, t.fraction)
+const [barycentric, heliocentric] = eraEpv00(t.day, t.fraction)
 
 // Source at RA 5.5 h, Dec -5°. Earth state sets the reference center.
 const correction = radialVelocityCorrection(hour(5.5), deg(-5), time, barycentric, location)
 
-console.log(toKilometerPerSecond(correction)) // -8.056 — km/s, barycentric
-console.log(toKilometerPerSecond(radialVelocityCorrection(hour(5.5), deg(-5), time, heliocentric, location))) // -8.061 — km/s, heliocentric
-console.log(toKilometerPerSecond(radialVelocityCorrection(hour(5.5), deg(-5), time, barycentric))) // -8.381 — km/s, geocentric (no diurnal term)
+console.log(toKilometerPerSecond(correction)) // -8.061 — km/s, barycentric
+console.log(toKilometerPerSecond(radialVelocityCorrection(hour(5.5), deg(-5), time, heliocentric, location))) // -8.056 — km/s, heliocentric
+console.log(toKilometerPerSecond(radialVelocityCorrection(hour(5.5), deg(-5), time, barycentric))) // -8.386 — km/s, geocentric (no diurnal term)
 ```
 
 ### Refractive Displacement
@@ -6149,9 +6236,9 @@ import { meter } from 'nebulosa/src/math/units/distance'
 const location = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400)) // longitude, latitude, elevation
 const time = timeYMDHMS(2026, 6, 29, 4, 0, 0, Timescale.UTC)
 
-// Earth's [heliocentric, barycentric] state at the TDB instant.
+// Earth's [barycentric, heliocentric] state at the TDB instant.
 const t = tdb(time)
-const [heliocentric, barycentric] = eraEpv00(t.day, t.fraction)
+const [barycentric, heliocentric] = eraEpv00(t.day, t.fraction)
 
 // ICRS RA 16 h, Dec -26°, with the default refraction.
 const star = [hour(16), deg(-26)] as const

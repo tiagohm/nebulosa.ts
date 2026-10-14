@@ -161,6 +161,24 @@ test('iersAB prefers B in range and otherwise picks the nearest edge table', () 
 	expectXY(iers.xy(t), arcsec(2), arcsec(3))
 })
 
+test('iersAB covers a date inside either table and not the gaps beyond them', () => {
+	const a = new IersATest()
+	const b = new IersBTest()
+	a.set([60002, 60003], [2, 2], [3, 3], [4, 4])
+	b.set([60000, 60001], [0, 0], [0, 0], [0, 0])
+
+	const iers = new IersAB(a, b)
+
+	expect(iers.covers(timeMJD(60000.5, Timescale.UTC))).toBe(true)
+	expect(iers.covers(timeMJD(60003, Timescale.UTC))).toBe(true)
+	expect(iers.covers(timeMJD(60001.5, Timescale.UTC))).toBe(false)
+	expect(iers.covers(timeMJD(59999, Timescale.UTC))).toBe(false)
+	expect(iers.covers(timeMJD(60004, Timescale.UTC))).toBe(false)
+
+	iers.clear()
+	expect(iers.covers(timeMJD(60000.5, Timescale.UTC))).toBe(false)
+})
+
 test('iersAB clear empties both source tables and load is unsupported', () => {
 	const a = new IersATest()
 	const b = new IersBTest()
