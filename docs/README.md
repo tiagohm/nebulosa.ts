@@ -1601,7 +1601,9 @@ The remaining routines, by family:
 
 A camera timestamp usually marks a command, not the light: the shutter opens some latency after the open command and closes some latency after the close command. Timing work needs the actual photon-collection interval and, above all, its midpoint, the instant to refer a measurement to (for example in [Barycentric Julian Date](#barycentric-julian-date)).
 
-`exposureInterval(exposure)` takes the recorded `time` in any scale, the `reference` it labels (`'start'` for the open command, `'midpoint'` for the commanded midpoint, `'end'` for the close command), the commanded `duration`, and optional `openLatency`, `closeLatency`, and timestamp `uncertainty`, all in seconds and defaulting to 0. It returns the collection `start`, `midpoint`, and `end` as fresh `Time`s in the scale of the timestamp, keeping its `location` and providers, with the effective `duration` (`duration − openLatency + closeLatency`) and the `uncertainty` carried over. The midpoint is the center of the interval, which assumes constant illumination. UTC timestamps are offset in TAI, so an exposure across a leap second keeps its SI length and can start, end, or be centered on 23:59:60.
+`exposureInterval(exposure)` accepts either a recorded `time` in any scale with the `reference` it labels (`'start'` for the open command, `'midpoint'` for the commanded midpoint, `'end'` for the close command) and the commanded `duration`, or the recorded open and close command timestamps as `start` and `end`, possibly in different scales, whose commanded duration is measured on TAI. A span cannot also carry a `duration`, so a contradictory exposure time next to start and end timestamps is a type error rather than a silent choice. Both forms take optional `openLatency`, `closeLatency`, and clock `uncertainty`, all in seconds and defaulting to 0. It returns the collection `start`, `midpoint`, and `end` as fresh two-part `Time`s in the scale of the timestamp (of `start` for a span), keeping its `location` and providers, with the effective `duration` (commanded duration − `openLatency` + `closeLatency`) and the `uncertainty` carried unchanged, since both timestamps come from one clock.
+
+The midpoint is the nominal temporal midpoint of the collection interval, not a photon-weighted one: it is the flux-weighted mean time only for constant flux. A shutter that takes a finite time to uncover the aperture can be modeled by adding half its opening (closing) time to `openLatency` (`closeLatency`) when the aperture changes linearly. All offsets are SI seconds: UTC timestamps are offset in TAI, so an exposure across a leap second keeps its SI length and can start, end, or be centered on 23:59:60, and microsecond offsets survive because the day fraction resolves about 1e-11 s.
 
 ```ts
 import { exposureInterval } from 'nebulosa/src/astronomy/time/exposure'
@@ -1620,6 +1622,12 @@ console.log(timeToDate(leap.start)) // [2016, 12, 31, 23, 59, 59, 600]
 console.log(timeToDate(leap.midpoint)) // [2016, 12, 31, 23, 59, 60, 60] — inside the leap second
 console.log(timeToDate(leap.end)) // [2016, 12, 31, 23, 59, 60, 520]
 console.log(leap.duration, leap.uncertainty) // 0.92 0.002 — seconds
+
+// DATE-BEG and DATE-END style span: 1 s apart on the clock labels, 2 SI seconds across the leap second.
+const span = exposureInterval({ start: timeYMDHMS(2016, 12, 31, 23, 59, 59.5, Timescale.UTC), end: timeYMDHMS(2017, 1, 1, 0, 0, 0.5, Timescale.UTC) })
+
+console.log(span.duration.toFixed(6)) // 2.000000 — seconds
+console.log(timeToDate(span.midpoint)) // [2016, 12, 31, 23, 59, 60, 500]
 ```
 
 ### FK5 Precession and ICRS Frame Bias
