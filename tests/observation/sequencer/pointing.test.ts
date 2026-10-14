@@ -13,6 +13,7 @@ import { bufferSource } from '../../../src/io/io'
 import { type Angle, deg, normalizeAngle, toDeg } from '../../../src/math/units/angle'
 import { applyPointingOffset } from '../../../src/observation/mount/pointing'
 import { awaitCameraRecoveryTask, captureFrameStep } from '../../../src/observation/sequencer/capture'
+import { prepareOpticalPathTask } from '../../../src/observation/sequencer/focus'
 import { ensureTrackingTask, type SequencerLifecycleServices, sequencerShutdownLifecycleTasks, sequencerStartupLifecycleTasks } from '../../../src/observation/sequencer/lifecycle'
 import { type SequencerPointingServices, sequencerCenteringOptions, sequencerMountCommandOptions, sequencerPointingTasks } from '../../../src/observation/sequencer/pointing'
 import { type SequencerRunner, startSequencerRunner } from '../../../src/observation/sequencer/runner'
@@ -21,7 +22,7 @@ import type { SequencerCameraCapture, SequencerCenteringConfiguration, Sequencer
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
 import { waitUntil } from '../../util'
 // oxfmt-ignore
-import { assertJournalInvariants, assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, expectNoSequencerLeaks, RIG_INITIAL_POINTING, recordDevices, recordRunner, resetSequencerRig, type RunnerLogEntry } from './util'
+import { assertJournalInvariants, assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, type DeviceTransitionEntry, expectNoSequencerLeaks, RIG_INITIAL_POINTING, recordDevices, recordRunner, resetSequencerRig, type RunnerLogEntry } from './util'
 
 // Pointing tasks of the Sequencer on the INDI simulator rig, with the real commanders, the real CameraCapturer, the
 // filesystem storage and the e2e clock (the simulated UTC of the mount as wall time): acquisition and centering
@@ -93,6 +94,8 @@ interface SessionOptions {
 	readonly solver?: (calls: SolveCall[], next: () => number) => SequencerPlateSolver
 	readonly pointing?: Partial<SequencerPointingServices>
 	readonly onEvent?: (event: SequencerEvent, runner: SequencerRunner) => void
+	// Whether the pre-capture prepares the optical path (wheel) before the pointing.
+	readonly opticalPath?: boolean
 }
 
 interface Session {
@@ -141,18 +144,24 @@ async function runSession(configuration: SequencerConfiguration, options: Sessio
 	const pointing: SequencerPointingServices = { mountCommander: rig.commanders.mount, cameraCapturer: rig.capturer, plateSolver: (options.solver ?? rigSolver)(solves, sequence.next), storage, rotatorCommander: rig.commanders.rotator, ...options.pointing }
 	const phases = {
 		startup: sequencerStartupLifecycleTasks(configuration, lifecycle),
-		preCapture: [ensureTrackingTask(lifecycle, configuration), awaitCameraRecoveryTask(rig.arbiter, configuration.capture.cameraRecovery), ...sequencerPointingTasks(configuration, pointing), prepareFrameDestinationTask(storage)],
+		preCapture: [
+			ensureTrackingTask(lifecycle, configuration),
+			awaitCameraRecoveryTask(rig.arbiter, configuration.capture.cameraRecovery),
+			...(options.opticalPath === true ? [prepareOpticalPathTask({ wheelCommander: rig.commanders.wheel })] : []),
+			...sequencerPointingTasks(configuration, pointing),
+			prepareFrameDestinationTask(storage),
+		],
 		capture: captureFrameStep({ cameraCapturer: rig.capturer, storage }),
 		shutdown: sequencerShutdownLifecycleTasks(configuration.shutdown, lifecycle),
 	}
-	const { mount, camera, rotator } = rig.devices()
+	const { mount, camera, rotator, wheel } = rig.devices()
 	const session: { runner?: SequencerRunner } = {}
 	const listener = (event: SequencerEvent) => {
 		roots.listener(event)
 		events.push(event)
 		if (session.runner !== undefined) options.onEvent?.(event, session.runner)
 	}
-	const runner = startSequencerRunner({ configuration, devices: { camera, mount, rotator }, services: { coordinator: rig.coordinator, storage, checkpointStore: new FileSystemSequencerCheckpointStore(ROOT), clock, listener }, phases })
+	const runner = startSequencerRunner({ configuration, devices: { camera, mount, rotator, wheel }, services: { coordinator: rig.coordinator, storage, checkpointStore: new FileSystemSequencerCheckpointStore(ROOT), clock, listener }, phases })
 
 	try {
 		session.runner = runner
@@ -299,6 +308,34 @@ describe('recenter', () => {
 
 		const checkpoint = await new FileSystemSequencerCheckpointStore(ROOT).load(session.sessionId)
 		expect(checkpoint!.anchors.recenter.lightExposures).toBe(1)
+		await assertOracles(session)
+	}, 60000)
+})
+
+describe('calibration', () => {
+	test('50.3 19: after a dark of an opaque filter the recenter of the next light captures through the filter of the light', async () => {
+		const base = configurationOf({ count: 2, pointing: { ...POINTING, recenter: { afterFrames: 1 } } })
+		const groups: SequencerConfiguration['capture']['groups'] = [
+			{ ...base.capture.groups[0], filter: { kind: 'name', name: 'R' } },
+			{ kind: 'triggered', id: 'D', enabled: true, capture: DARK, trigger: { kind: 'afterFrames', frames: 1 }, batchSize: 1, maxFrames: 1, inherit: 'none', opticalPath: { kind: 'filter', filter: { kind: 'name', name: 'Dark' } } },
+		]
+		const configuration: SequencerConfiguration = { ...base, capture: { ...base.capture, groups } }
+		const session = await runSession(configuration, { opticalPath: true })
+		const { result, events, devices, requests } = session
+
+		expect(result).toMatchObject({ state: 'completed' })
+		expect(events.flatMap((event) => (event.type === 'frameSelected' ? [event.frame.id] : []))).toEqual(['frame[G0][1]', 'frame[D][1]', 'frame[G0][2]'])
+		expect(events.filter((event) => event.type === 'taskCompleted' && event.task === 'acquireOrRecenterTarget')).toHaveLength(2)
+
+		// The dark went through the Dark slot; every centering capture, the recenter after it included, through R.
+		const wheelAt = (sequence: number) => devices.findLast((entry): entry is DeviceTransitionEntry => entry.kind === 'transition' && entry.manager === 'wheel' && entry.property === 'position' && entry.sequence < sequence)?.value
+		const auxiliary = requests.filter((request) => request.outputPath?.endsWith(join('auxiliary', 'centering')))
+		const dark = requests.find((request) => request.frameType === 'DARK')!
+		expect(wheelAt(dark.sequence)).toBe(7)
+		expect(auxiliary.filter((request) => request.sequence > dark.sequence).length).toBeGreaterThan(0)
+		for (const request of auxiliary) expect(wheelAt(request.sequence)).toBe(1)
+
+		assertSequencerInvariants(devices, { opaqueSlots: [7] })
 		await assertOracles(session)
 	}, 60000)
 })

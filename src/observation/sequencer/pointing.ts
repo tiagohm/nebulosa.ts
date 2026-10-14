@@ -418,6 +418,7 @@ export function mountKeyHolders(task: SequencerTaskId, bounds: SequencerMountMot
 		case 'rotateField':
 		case 'autofocus':
 		case 'ensureGuiding':
+		case 'awaitDarkTemperature':
 		case 'prepareFrameDestination':
 		case 'finalExposureGuard':
 		case 'captureFrame':

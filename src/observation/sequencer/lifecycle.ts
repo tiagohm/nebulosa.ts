@@ -17,15 +17,17 @@ import type { Angle } from '../../math/units/angle'
 import type { SequencerContext, SequencerFailedTaskResult, SequencerShutdownTask, SequencerTask, SequencerTaskPolicy, SequencerTaskResult } from './runner'
 import { isWithinSequencerMeridianCycle } from './state'
 // oxfmt-ignore
-import { DEFAULT_SEQUENCER_MERIDIAN_FLIP, type SequencerClock, type SequencerConfiguration, type SequencerCoolingConfiguration, type SequencerFrameSlot, type SequencerMeridianFlipConfiguration, type SequencerShutdownConfiguration, type SequencerShutdownStepPolicy, type SequencerTarget } from './sequencer'
+import { DEFAULT_SEQUENCER_MERIDIAN_FLIP, type SequencerClock, type SequencerConfiguration, type SequencerConfigurationDiagnostic, type SequencerCoolingConfiguration, type SequencerDevices, type SequencerFrameGroup, type SequencerFrameSlot, type SequencerMeridianFlipConfiguration, type SequencerShutdownConfiguration, type SequencerShutdownStepPolicy, type SequencerStartupConfiguration, type SequencerTarget } from './sequencer'
 
 // Equipment lifecycle tasks of the Sequencer: the startup (camera cooling with its optional thermal stabilization,
 // dome or roof opening, cover opening, mount unpark, tracking mode), the shutdown (tracking off, cover closing, mount
-// park, dome or roof closing, flat panel off, camera warming) and the pre-capture `ensureTracking`, the only rule that
-// turns a stopped tracking back on during a session. Every task commands through the commanders, inside the root of
-// its task, and checks the physical state first: a device already where the task would leave it is answered without
-// commanding anything (section 31.2), so a restart, a partial startup, a repeated stop or a shutdown after a critical
-// protection never duplicates a command.
+// park, dome or roof closing, flat panel off, camera warming), the pre-capture `ensureTracking`, the only rule that
+// turns a stopped tracking back on during a session, the cover half of the pre-capture optical path (closed for the
+// calibration frames of a 'cover' optical path, open again with the flat panel off before any light,
+// section 20.2A) and the thermal stability of the DARK frames (`awaitDarkTemperature`, section 8A.6).
+// Every task commands through the commanders, inside the root of its task, and checks the physical state first: a device
+// already where the task would leave it is answered without commanding anything (section 31.2), so a restart, a partial
+// startup, a repeated stop or a shutdown after a critical protection never duplicates a command.
 //
 // The startup never turns tracking on (section 18): `ensureTracking` does it in the pre-capture, after the meridian
 // decision of its safe point (section 20.0), and only after the SIDEREAL track mode was observed whenever there is a
@@ -208,6 +210,106 @@ export function cameraTemperatureUpdates(cameraManager: DeviceManager<Camera>, t
 			cameraManager.removeHandler(connection)
 		}
 	}
+}
+
+// Where the optical path of a frame needs the cover: closed for a calibration frame of a 'cover' optical path; open for
+// a LIGHT of a session that manages the cover (it opens it at startup or closes it for calibration), so a light, a
+// centering or an autofocus is never taken through a closed cover; undefined leaves the cover alone.
+export type SequencerCoverPlan = 'open' | 'close' | undefined
+
+// Cover plan of `frame` (see `SequencerCoverPlan`). Pure over the configuration.
+export function sequencerCoverPlan(configuration: Pick<SequencerConfiguration, 'capture' | 'startup'>, frame: Pick<SequencerFrameSlot, 'groupId' | 'kind' | 'capture'>): SequencerCoverPlan {
+	if (frame.capture.frameType === 'LIGHT') return configuration.startup.cover?.open === true || configuration.capture.groups.some(isCoverCalibrationGroup) ? 'open' : undefined
+	if (frame.kind !== 'triggered') return undefined
+	const group = configuration.capture.groups.find((group) => group.id === frame.groupId)
+	return group !== undefined && isCoverCalibrationGroup(group) ? 'close' : undefined
+}
+
+// Whether the cover stands, connected and still, where `plan` wants it, with a flat panel connected and off.
+// Reads the devices only, never the logical state. True for an undefined plan.
+export function isSequencerCoverPathReady(devices: Pick<SequencerDevices, 'cover' | 'flatPanel'>, plan: SequencerCoverPlan) {
+	if (plan === undefined) return true
+	const { cover, flatPanel } = devices
+	return cover !== undefined && isParkableAt(cover, plan === 'close') && (flatPanel === undefined || (flatPanel.connected && !flatPanel.enabled))
+}
+
+// Brings the cover where `plan` wants it inside the task of `context` (section 20.2A): turns a flat panel
+// off first, then closes (parks) or opens (unparks) the cover, each only when it is not there yet. Pausing the guiding
+// before a closing is the caller's, since it also covers an opaque filter. A failure to open the path is fatal for the
+// safe point (no light may be exposed after it); a failure to close it follows the policy of the phase.
+export async function prepareSequencerCoverPath(context: SequencerContext, services: Pick<SequencerLifecycleServices, 'coverCommander' | 'flatPanelCommander'>, plan: SequencerCoverPlan): Promise<SequencerTaskResult> {
+	if (plan === undefined) return DONE
+	const { cover, flatPanel } = context.devices
+	const failed = (result: SequencerFailedTaskResult): SequencerFailedTaskResult => (plan === 'open' ? { ...result, fatal: true } : result)
+	if (cover === undefined) return failed(missingDependency('cover'))
+	if (services.coverCommander === undefined) return failed(missingDependency('cover commander'))
+
+	if (flatPanel !== undefined && (!flatPanel.connected || flatPanel.enabled)) {
+		if (services.flatPanelCommander === undefined) return failed(missingDependency('flat panel commander'))
+		const disabled = await services.flatPanelCommander.disable(context.scope, flatPanel)
+		if (!disabled.ok) return failed(failedTask(disabled))
+	}
+
+	if (isParkableAt(cover, plan === 'close')) return DONE
+	const moved = plan === 'close' ? await services.coverCommander.park(context.scope, cover) : await services.coverCommander.unpark(context.scope, cover)
+	return moved.ok ? DONE : failed(failedTask(moved))
+}
+
+// Pre-capture task `awaitDarkTemperature` (section 8A.6), the thermal part of the final guard of a DARK frame, placed right
+// before the frame destination so no prepared attempt is held across the wait: with `startup.cooling` configured it waits
+// until the sensor stayed within `cooling.tolerance` of `cooling.setpoint` for `cooling.stableFor` seconds
+// (`waitForStableTemperature`, bounded by `cooling.timeout`), cancellable by its root. The session observes no
+// temperature between safe points, so every dark proves its own stability window. Its failure applies the startup
+// policy (retry and action) the cooling belongs to. Biases and lights never wait; without cooling no task is built and
+// the measured temperature only goes to the journal.
+export function awaitDarkTemperatureTask(services: SequencerLifecycleServices, startup: Pick<SequencerStartupConfiguration, 'cooling' | 'retry' | 'onFailure'>): SequencerTask | undefined {
+	const { cooling, retry, onFailure } = startup
+	if (cooling === undefined) return undefined
+
+	return {
+		id: 'awaitDarkTemperature',
+		shouldRun: ({ frame }) => frame?.capture.frameType === 'DARK',
+		run: async (context) => {
+			const { cameraCommander, thermometerManager } = services
+			const { camera } = context.devices
+			if (cameraCommander === undefined) return missingDependency('camera commander')
+			if (thermometerManager === undefined) return missingDependency('thermometer manager')
+			return taskResult(await waitForStableTemperature(camera, cameraTemperatureUpdates(cameraCommander.cameraManager, thermometerManager, camera), cooling, context.clock, context.signal))
+		},
+		policy: retry === undefined ? { onFailure } : { retry, onFailure },
+	}
+}
+
+// Lifecycle part of the runtime preflight (section 41.2) against the resolved devices; it never commands. A cooling
+// needs a camera that sets its temperature; a dome step needs a dome; a cover step or an enabled calibration group of a
+// 'cover' optical path needs a cover. Every problem is a diagnostic of the configuration path it concerns.
+export function preflightSequencerLifecycle(configuration: Pick<SequencerConfiguration, 'capture' | 'startup' | 'shutdown'>, devices: SequencerDevices): SequencerConfigurationDiagnostic[] {
+	const { capture, startup, shutdown } = configuration
+	const diagnostics: SequencerConfigurationDiagnostic[] = []
+	const report = (path: string, message: string) => diagnostics.push({ path, message })
+
+	if (startup.cooling !== undefined && !devices.camera.canSetTemperature) report('startup.cooling', `camera ${devices.camera.name} cannot set its temperature`)
+
+	if (devices.dome === undefined) {
+		if (startup.dome !== undefined) report('startup.dome', 'requires a dome')
+		if (shutdown.closeOrParkDome !== undefined) report('shutdown.closeOrParkDome', 'requires a dome')
+	}
+
+	if (devices.cover === undefined) {
+		if (startup.cover !== undefined) report('startup.cover', 'requires a cover')
+		if (shutdown.closeCover !== undefined) report('shutdown.closeCover', 'requires a cover')
+
+		for (const [i, group] of capture.groups.entries()) {
+			if (isCoverCalibrationGroup(group)) report(`capture.groups[${i}].opticalPath`, 'requires a cover')
+		}
+	}
+
+	return diagnostics
+}
+
+// Whether a group is an enabled calibration group whose optical path closes the cover.
+function isCoverCalibrationGroup(group: SequencerFrameGroup) {
+	return group.enabled && group.kind === 'triggered' && group.opticalPath.kind === 'cover'
 }
 
 // Startup task `coolCamera` (section 18.1): switches the cooler on when the camera controls it and it is off, sends

@@ -278,6 +278,12 @@ describe('filter resolution and preflight', () => {
 		])
 	})
 
+	test('an opaque calibration filter requires a filter on every enabled light group', () => {
+		const dark = { kind: 'triggered', id: 'D', enabled: true, capture: DARK, trigger: { kind: 'afterFrames', frames: 1 }, batchSize: 1, maxFrames: 1, inherit: 'none', opticalPath: { kind: 'filter', filter: { kind: 'name', name: 'Dark' } } } as const
+		const configuration = configurationOf([scheduledGroup('L', 'L', 1), scheduledGroup('X', undefined, 1), { ...scheduledGroup('Y', undefined, 1), enabled: false }, scheduledGroup('Z', undefined, 1, DARK), dark])
+		expect(preflightSequencerFocus(configuration, { wheel, focuser })).toEqual([{ path: 'capture.groups[1].filter', message: 'is required with an opaque calibration filter' }])
+	})
+
 	test('missing devices and an unknown reference filter', () => {
 		const configuration = configurationOf([scheduledGroup('R', 'R', 1)], { autofocus: AUTOFOCUS, offsets: { reference: 'Lum', offsets: { R: 100 } } })
 		expect(preflightSequencerFocus(configuration, { wheel })).toEqual([
@@ -392,6 +398,20 @@ describe('49.8 optical path', () => {
 		const outside = await runOpticalPath(configuration, LIGHT, name('L'), known(100500))
 		expect(outside.result).toMatchObject({ ok: false, failure: { kind: 'operation', reason: 'unexpectedState', detail: 'focus position 100500 is outside the range [0, 100000] of Focuser Simulator' } })
 		expect(outside.commands).toEqual([])
+	})
+
+	test('a light without a filter never stays behind the opaque filter of a calibration group: fatal before moving', async () => {
+		const dark = { kind: 'triggered', id: 'D', enabled: true, capture: DARK, trigger: { kind: 'afterFrames', frames: 1 }, batchSize: 1, maxFrames: 1, inherit: 'none', opticalPath: { kind: 'filter', filter: name('Dark') } } as const
+		const withDark = configurationOf([scheduledGroup('L', undefined, 1), dark])
+		await place(SLOT.Dark, 10000)
+
+		const blocked = await runOpticalPath(withDark, LIGHT, undefined, known(10000))
+		expect(blocked).toMatchObject({ due: true, result: { ok: false, failure: { kind: 'configuration', detail: expect.stringContaining('opaque slot 7') }, fatal: true }, commands: [] })
+		// A dark stays there, and a light with a filter takes the wheel off.
+		expect((await runOpticalPath(withDark, DARK, undefined, known(10000))).due).toBeFalse()
+		const off = await runOpticalPath(withDark, LIGHT, name('L'), known(10000))
+		expect(off.result).toEqual(OK)
+		expect(off.commands.map((command) => [command.manager, command.args[0]])).toEqual([['wheel', SLOT.L]])
 	})
 
 	test('an unknown baseline moves only the wheel; an unset one is refused', async () => {

@@ -102,6 +102,8 @@ export interface SequencerJournalPromoting extends SequencerJournalAttemptLine {
 	readonly forced: boolean
 	// Checkpoint the frame produces, with `sequence` one above the persisted one.
 	readonly next: SequencerCheckpoint
+	// Sensor temperature the camera reported at the end of the exposure, in °C; absent without a thermometer.
+	readonly sensorTemperature?: number
 }
 
 // The final exists and is verified; the transaction of `sequence` is durable.
@@ -130,6 +132,8 @@ export interface SequencerJournalDisposing extends SequencerJournalAttemptLine {
 	readonly destination?: string
 	// Checkpoint the discard produces.
 	readonly next: SequencerCheckpoint
+	// Sensor temperature the camera reported at the end of the exposure, in °C; absent without a thermometer.
+	readonly sensorTemperature?: number
 }
 
 // The disposition is done; the transaction of `sequence` is durable.
@@ -208,10 +212,12 @@ export interface SequencerStorage {
 	readonly defer: (reason: SequencerDeferReason) => Promise<SequencerStorageResult<void>>
 	// Size in bytes of the temporary of the open attempt; a failure when it is missing or empty.
 	readonly verify: () => Promise<SequencerStorageResult<number>>
-	// Promotes the temporary of the open attempt to its final with the transaction `next`; resolves the final path.
-	readonly promote: (next: SequencerCheckpoint, forced: boolean) => Promise<SequencerStorageResult<string>>
-	// Disposes of the temporary of the open attempt with the transaction `next`; resolves where it went.
-	readonly dispose: (artifact: SequencerDiscardArtifact, next: SequencerCheckpoint) => Promise<SequencerStorageResult<string | undefined>>
+	// Promotes the temporary of the open attempt to its final with the transaction `next`, journaling the measured sensor
+	// temperature (°C) when given; resolves the final path.
+	readonly promote: (next: SequencerCheckpoint, forced: boolean, sensorTemperature?: number) => Promise<SequencerStorageResult<string>>
+	// Disposes of the temporary of the open attempt with the transaction `next`, journaling the measured sensor
+	// temperature (°C) when given; resolves where it went.
+	readonly dispose: (artifact: SequencerDiscardArtifact, next: SequencerCheckpoint, sensorTemperature?: number) => Promise<SequencerStorageResult<string | undefined>>
 	// Removes the temporary of the open attempt, if any, and closes it.
 	readonly abandon: (reason: Exclude<SequencerAbandonReason, 'crash'>) => Promise<SequencerStorageResult<void>>
 	// Auxiliary namespace, required by centering and autofocus: the directory of the auxiliary frames of `kind`, created
@@ -459,7 +465,7 @@ export class FileSystemSequencerStorage implements SequencerStorage {
 	// Promotion of section 36.4: size (and digest for a copy) decided before the destination is touched, `promoting`
 	// with the transaction, the link or the verified exclusive copy, `committed`, and only then the temporary of a copy
 	// is removed. An existing final is never overwritten.
-	async promote(next: SequencerCheckpoint, forced: boolean): Promise<SequencerStorageResult<string>> {
+	async promote(next: SequencerCheckpoint, forced: boolean, sensorTemperature?: number): Promise<SequencerStorageResult<string>> {
 		const open = this.#prepared
 		if (open === undefined) return storageFailure('no attempt is open')
 
@@ -468,7 +474,7 @@ export class FileSystemSequencerStorage implements SequencerStorage {
 			const size = (await stat(temporary)).size
 			const method = this.#method
 			const digest = method === 'copy' ? await sha256(temporary) : undefined
-			const promoting: SequencerJournalPromoting = { kind: 'promoting', slot, attempt, temporary: this.#relative(temporary), final: this.#relative(final), method, size, ...(digest !== undefined && { digest }), forced, next, at: this.#wallNow() }
+			const promoting: SequencerJournalPromoting = { kind: 'promoting', slot, attempt, temporary: this.#relative(temporary), final: this.#relative(final), method, size, ...(digest !== undefined && { digest }), forced, next, ...(sensorTemperature !== undefined && { sensorTemperature }), at: this.#wallNow() }
 			await this.#append(promoting)
 			await this.#promote(promoting)
 		} catch (error) {
@@ -479,7 +485,7 @@ export class FileSystemSequencerStorage implements SequencerStorage {
 		return { ok: true, value: open.final }
 	}
 
-	async dispose(artifact: SequencerDiscardArtifact, next: SequencerCheckpoint): Promise<SequencerStorageResult<string | undefined>> {
+	async dispose(artifact: SequencerDiscardArtifact, next: SequencerCheckpoint, sensorTemperature?: number): Promise<SequencerStorageResult<string | undefined>> {
 		const directory = this.#directory
 		const open = this.#prepared
 		if (directory === undefined || open === undefined) return storageFailure('no attempt is open')
@@ -488,7 +494,7 @@ export class FileSystemSequencerStorage implements SequencerStorage {
 		const destination = discardDestination(directory, groupId, slot, attempt, artifact)
 
 		try {
-			const disposing: SequencerJournalDisposing = { kind: 'disposing', slot, attempt, temporary: this.#relative(temporary), artifact, ...(destination !== undefined && { destination: this.#relative(destination) }), next, at: this.#wallNow() }
+			const disposing: SequencerJournalDisposing = { kind: 'disposing', slot, attempt, temporary: this.#relative(temporary), artifact, ...(destination !== undefined && { destination: this.#relative(destination) }), next, ...(sensorTemperature !== undefined && { sensorTemperature }), at: this.#wallNow() }
 			await this.#append(disposing)
 			await this.#dispose(disposing, [])
 			await this.#append({ kind: 'disposed', slot, attempt, sequence: next.sequence, at: this.#wallNow() })
@@ -1302,11 +1308,11 @@ function parseJournalEntry(value: unknown): SequencerJournalEntry | undefined {
 			case 'deferred':
 				return DEFER_REASONS.has(value.reason)
 			case 'promoting':
-				return isJournalPath(value.temporary) && isJournalPath(value.final) && isMethod(value.method) && isCount(value.size) && isOptional(value.digest, isString) && typeof value.forced === 'boolean' && parseSequencerCheckpoint(value.next) !== undefined
+				return isJournalPath(value.temporary) && isJournalPath(value.final) && isMethod(value.method) && isCount(value.size) && isOptional(value.digest, isString) && typeof value.forced === 'boolean' && parseSequencerCheckpoint(value.next) !== undefined && isOptional(value.sensorTemperature, isFiniteNumber)
 			case 'committed':
 				return isJournalPath(value.final) && isMethod(value.method) && isCount(value.size) && isOptional(value.digest, isString) && isCount(value.sequence)
 			case 'disposing':
-				return isJournalPath(value.temporary) && DISCARD_ARTIFACTS.has(value.artifact) && isOptional(value.destination, isJournalPath) && parseSequencerCheckpoint(value.next) !== undefined
+				return isJournalPath(value.temporary) && DISCARD_ARTIFACTS.has(value.artifact) && isOptional(value.destination, isJournalPath) && parseSequencerCheckpoint(value.next) !== undefined && isOptional(value.sensorTemperature, isFiniteNumber)
 			case 'disposed':
 				return isCount(value.sequence)
 			case 'abandoned':

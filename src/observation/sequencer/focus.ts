@@ -1,4 +1,6 @@
 import { join } from 'path'
+import type { CoverCommander } from '../../devices/commanders/cover'
+import type { FlatPanelCommander } from '../../devices/commanders/flatpanel'
 import type { FocuserCommander } from '../../devices/commanders/focuser'
 import type { WheelCommander } from '../../devices/commanders/wheel'
 import type { Focuser, Wheel } from '../../devices/indi/device'
@@ -8,7 +10,7 @@ import type { CameraCapturer } from '../../devices/runners/camera.capture'
 import { type AutoFocusRunOptions, runAutoFocus } from '../focus/autofocus.runner'
 import type { GuidingSession } from '../guiding/session'
 import { pauseGuidingOf, sequencerClosesOpticalPath } from './guiding'
-import { configurationFailure, failedTask, missingDependency } from './lifecycle'
+import { configurationFailure, failedTask, isSequencerCoverPathReady, missingDependency, prepareSequencerCoverPath, sequencerCoverPlan } from './lifecycle'
 import type { SequencerContext, SequencerFailedTaskResult, SequencerTask, SequencerTaskPolicy, SequencerTaskResult, SequencerTaskView } from './runner'
 // oxfmt-ignore
 import { DEFAULT_SEQUENCER_COLLABORATOR_ABORT_GRACE, type SequencerAutofocusConfiguration, type SequencerConfiguration, type SequencerConfigurationDiagnostic, type SequencerDevices, type SequencerFilterReference, type SequencerFocusBaseline, type SequencerFocusMeasurer } from './sequencer'
@@ -16,8 +18,9 @@ import { bootstrapFocusBaseline, focusBaselineAfterAutofocus, focusBaselineRequi
 import type { SequencerStorage } from './storage'
 import { autofocusDue, recordSequencerAutofocusSuccess, type SequencerAutofocusObservation, sequencerElapsedSince } from './trigger'
 
-// Filter and focus of the Sequencer: the focus-baseline bootstrap of the startup (`bootstrapFocusBaseline`), the filter
-// and absolute focus offset of the pre-capture optical path (`prepareOpticalPath`, section 20.5) and the pre-capture
+// Filter and focus of the Sequencer: the focus-baseline bootstrap of the startup (`bootstrapFocusBaseline`), the
+// pre-capture optical path (`prepareOpticalPath`, sections 20.2A and 20.5: the cover through its lifecycle helpers, then
+// the filter and its absolute focus offset) and the pre-capture
 // autofocus (`autofocus`, sections 20.6 and 22.1), plus the focus part of the runtime preflight. The autofocus loop
 // itself is the reusable operation of `observation/focus/autofocus.runner.ts`; this module decides when it runs and
 // wires it to the session: the dedicated autofocus filter, the auxiliary namespace of the storage, the session clock,
@@ -48,8 +51,12 @@ export interface SequencerFocusServices {
 	readonly focusMeasurer?: SequencerFocusMeasurer
 	// Auxiliary namespace of the session.
 	readonly storage?: Pick<SequencerStorage, 'auxiliaryDirectory'>
-	// Guiding session paused before the wheel closes the optical path of a calibration frame.
+	// Guiding session paused before the cover or the wheel closes the optical path of a calibration frame.
 	readonly guiding?: GuidingSession
+	// Closing and opening of the cover of the optical path.
+	readonly coverCommander?: CoverCommander
+	// Light of a flat panel, turned off before the optical path is used.
+	readonly flatPanelCommander?: FlatPanelCommander
 }
 
 // 0-based slot of a filter reference on `wheel`: a slot inside the carousel, or the first slot named exactly so.
@@ -73,7 +80,8 @@ const UNSET_BASELINE: SequencerFocusBaseline = { kind: 'unset' }
 // persisted baseline (`unset` for a new session). It never commands anything. Every problem is returned as a
 // diagnostic of the configuration path it concerns:
 // - every filter of an enabled group, the opaque filter of a 'filter' optical path and the dedicated autofocus filter
-//   resolve on the wheel; the dedicated autofocus filter is never an opaque slot;
+//   resolve on the wheel; the dedicated autofocus filter is never an opaque slot; with such an optical path every
+//   enabled LIGHT group has a filter, which takes the wheel off the opaque one;
 // - an autofocus has a focuser;
 // - focus offsets need a focuser that moves to absolute positions, a wheel naming the reference filter, and a known
 //   offset for the filter of every enabled LIGHT group and for the dedicated autofocus filter;
@@ -115,6 +123,12 @@ export function preflightSequencerFocus(configuration: Pick<SequencerConfigurati
 		if (group.kind === 'triggered' && group.opticalPath.kind === 'filter') {
 			const closed = resolve(group.opticalPath.filter, `${at}.opticalPath.filter`)
 			if (closed !== undefined) opaque.add(closed)
+		}
+	}
+
+	if (opaque.size > 0) {
+		for (const [i, group] of capture.groups.entries()) {
+			if (group.enabled && group.capture.frameType === 'LIGHT' && group.filter === undefined) report(`capture.groups[${i}].filter`, 'is required with an opaque calibration filter')
 		}
 	}
 
@@ -183,44 +197,66 @@ export function bootstrapFocusBaselineTask(): SequencerTask {
 	}
 }
 
-// Pre-capture task `prepareOpticalPath` (sections 20.2A and 20.5), before the pointing: moves the wheel to the filter of
-// the frame (a group without a filter leaves the wheel where it is; a calibration frame of a 'filter' optical path has
-// its opaque filter), then, for a LIGHT frame with focus offsets and a `known` baseline, the focuser to
+// Pre-capture task `prepareOpticalPath` (sections 20.2A and 20.5), after the meridian flip and before the pointing, so a
+// centering or an autofocus never captures through a closed path. The cover goes first (`sequencerCoverPlan`): a
+// calibration frame of a 'cover' optical path turns a flat panel off and closes the cover; a light of a
+// session that manages the cover turns that panel off and opens the cover. Then the wheel moves to the filter of the
+// frame (a group without a filter leaves the wheel where it is; a calibration frame of a 'filter' optical path has its
+// opaque filter) and, for a LIGHT frame with focus offsets and a `known` baseline, the focuser to
 // `referencePosition + offsets[filter]`. With an `unknown` baseline the focuser is not commanded (the autofocus decides),
 // and darks and biases never apply a focus offset. Every check runs before anything moves: an unresolvable filter or a
 // light filter without a known offset fails with 'configuration', a focus position outside the focuser range with
-// 'unexpectedState'. A wheel or focuser already in place is not commanded; the task runs only when something must
-// move or a check fails. Before the wheel moves to the opaque filter of a calibration frame, the guiding of the session
-// is paused (bounded by `guiding.pauseTimeout`). Its failure fails the session.
+// 'unexpectedState'. The cover and the wheel are reconciled from their physical state, never from the logical one; a
+// device already in place is not commanded, and the task runs only when something must move or a check fails. Before
+// the cover or the wheel closes the optical path of a calibration frame, the guiding of the session is paused (bounded
+// by `guiding.pauseTimeout`). A failure to reopen the cover or to take the wheel off an opaque filter for a light is
+// fatal for the safe point; every failure fails the session (`state.opticalPathClosed` records what the session closed).
 export function prepareOpticalPathTask(services: SequencerFocusServices): SequencerTask {
 	return {
 		id: 'prepareOpticalPath',
 		shouldRun: (view) => {
-			if (view.frame === undefined) return false
+			const { frame, configuration, devices } = view
+			if (frame === undefined) return false
+			if (!isSequencerCoverPathReady(devices, sequencerCoverPlan(configuration, frame))) return true
 			const planned = opticalPathPlan(view)
 			if (!planned.ok) return true
 			const { slot, focuserPosition } = planned.plan
-			return (slot !== undefined && !isWheelAt(view.devices.wheel!, slot)) || (focuserPosition !== undefined && !isFocuserAt(view.devices.focuser!, focuserPosition))
+			return (slot !== undefined && !isWheelAt(devices.wheel!, slot)) || (focuserPosition !== undefined && !isFocuserAt(devices.focuser!, focuserPosition))
 		},
 		run: async (context) => {
+			const { configuration, devices, state } = context
+			const frame = context.frame!
 			const planned = opticalPathPlan(context)
 			if (!planned.ok) return planned
 
 			const { slot, focuserPosition } = planned.plan
-			const { wheel, focuser } = context.devices
+			const { wheel, focuser } = devices
 			const { wheelCommander, focuserCommander } = services
+			const cover = sequencerCoverPlan(configuration, frame)
+			const moveCover = !isSequencerCoverPathReady(devices, cover)
 			const moveWheel = slot !== undefined && !isWheelAt(wheel!, slot)
-			if (moveWheel && wheelCommander === undefined) return missingDependency('wheel commander')
+			const light = frame.capture.frameType === 'LIGHT'
+			// Taking the wheel off an opaque filter reopens the path of a light, so its failure is fatal too.
+			const opening = light && moveWheel && sequencerOpaqueSlots(configuration, wheel!).has(wheel!.position)
+			if (moveWheel && wheelCommander === undefined) return { ...missingDependency('wheel commander'), fatal: opening }
 			if (focuserPosition !== undefined && focuserCommander === undefined) return missingDependency('focuser commander')
 
-			if (moveWheel && sequencerClosesOpticalPath(context.configuration, context.frame!)) {
+			if ((moveCover || moveWheel) && sequencerClosesOpticalPath(configuration, frame)) {
 				const paused = await pauseGuidingOf(context, services.guiding)
 				if (!paused.ok) return paused
 			}
 
+			if (moveCover) {
+				const prepared = await prepareSequencerCoverPath(context, services, cover)
+				if (!prepared.ok) return prepared
+				state.opticalPathClosed = cover === 'close'
+			}
+
 			if (moveWheel) {
 				const moved = await wheelCommander!.moveTo(context.scope, wheel!, slot)
-				if (!moved.ok) return failedTask(moved)
+				if (!moved.ok) return { ...failedTask(moved), fatal: opening }
+				if (sequencerClosesOpticalPath(configuration, frame)) state.opticalPathClosed = true
+				else if (opening) state.opticalPathClosed = false
 			}
 
 			if (focuserPosition !== undefined && !isFocuserAt(focuser!, focuserPosition)) {
@@ -231,6 +267,20 @@ export function prepareOpticalPathTask(services: SequencerFocusServices): Sequen
 			return DONE
 		},
 	}
+}
+
+// 0-based wheel slots of the opaque filters of the enabled calibration groups of a 'filter' optical path; an
+// unresolvable filter is left out (the preflight reports it).
+export function sequencerOpaqueSlots(configuration: Pick<SequencerConfiguration, 'capture'>, wheel: Pick<Wheel, 'count' | 'names'>) {
+	const slots = new Set<number>()
+
+	for (const group of configuration.capture.groups) {
+		if (!group.enabled || group.kind !== 'triggered' || group.opticalPath.kind !== 'filter') continue
+		const slot = resolveSequencerFilter(wheel, group.opticalPath.filter)
+		if (slot !== undefined) slots.add(slot)
+	}
+
+	return slots
 }
 
 // Whether an autofocus is due before the frame of `view` (section 20.6): only for a LIGHT frame of a session with
@@ -303,6 +353,9 @@ function opticalPathPlan(view: SequencerTaskView): { readonly ok: true; readonly
 		if (!wheel.connected) return failedTask(failedOperationResult('disconnected', `wheel ${wheel.name} is disconnected`))
 		slot = resolveSequencerFilter(wheel, frame.filter)
 		if (slot === undefined) return configurationFailure(`${describeFilter(frame.filter)} is not a filter of ${wheel.name}`)
+	} else if (frame?.capture.frameType === 'LIGHT' && wheel !== undefined && sequencerOpaqueSlots(configuration, wheel).has(wheel.position)) {
+		// A light without a filter would stay behind the opaque filter a calibration frame left in place.
+		return { ...configurationFailure(`the light has no filter to take ${wheel.name} off its opaque slot ${wheel.position}`), fatal: true }
 	}
 
 	if (focusOffsets === undefined || frame?.capture.frameType !== 'LIGHT') return { ok: true, plan: { slot } }

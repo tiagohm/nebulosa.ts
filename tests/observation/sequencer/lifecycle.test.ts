@@ -1,22 +1,23 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { join } from 'path'
 import { SIDEREAL_DRIFT_RATE } from '../../../src/core/constants'
-import type { PierSide } from '../../../src/devices/indi/device'
+import { DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, type PierSide } from '../../../src/devices/indi/device'
 import { failedOperationResult, type OperationResult } from '../../../src/devices/orchestration/operation'
 import { abortableDelay } from '../../../src/devices/orchestration/operation.wait'
 import { deg, hour, normalizeAngle, normalizePI } from '../../../src/math/units/angle'
 import { awaitCameraRecoveryTask, captureFrameStep } from '../../../src/observation/sequencer/capture'
 // oxfmt-ignore
-import { ensureTrackingTask, isSequencerMountOffTarget, meridianGracefulDeadline, type SequencerLifecycleServices, sequencerMountHourAngle, sequencerShutdownLifecycleTasks, sequencerStartupLifecycleTasks, sequencerFrameHourAngleSpan, sequencerStartupTrackMode, sequencerTrackingDecision, thermalStableSince, waitForStableTemperature } from '../../../src/observation/sequencer/lifecycle'
+import { awaitDarkTemperatureTask, ensureTrackingTask, isSequencerCoverPathReady, isSequencerMountOffTarget, meridianGracefulDeadline, preflightSequencerLifecycle, type SequencerLifecycleServices, sequencerCoverPlan, sequencerMountHourAngle, sequencerShutdownLifecycleTasks, sequencerStartupLifecycleTasks, sequencerFrameHourAngleSpan, sequencerStartupTrackMode, sequencerTrackingDecision, thermalStableSince, waitForStableTemperature } from '../../../src/observation/sequencer/lifecycle'
 import { sequencerMountMotionBounds } from '../../../src/observation/sequencer/pointing'
-import { startSequencerRunner } from '../../../src/observation/sequencer/runner'
+import { type SequencerTask, type SequencerTaskView, startSequencerRunner } from '../../../src/observation/sequencer/runner'
 // oxfmt-ignore
-import type { SequencerCameraCapture, SequencerClock, SequencerConfiguration, SequencerCoolingConfiguration, SequencerEvent, SequencerMeridianFlipConfiguration, SequencerResult, SequencerShutdownConfiguration, SequencerStartupConfiguration } from '../../../src/observation/sequencer/sequencer'
+import type { SequencerCameraCapture, SequencerClock, SequencerConfiguration, SequencerCoolingConfiguration, SequencerEvent, SequencerFrameSlot, SequencerMeridianFlipConfiguration, SequencerResult, SequencerShutdownConfiguration, SequencerStartupConfiguration, SequencerTriggeredFrameGroup } from '../../../src/observation/sequencer/sequencer'
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask } from '../../../src/observation/sequencer/storage'
 import { waitUntil } from '../../util'
 // oxfmt-ignore
 import { assertMountKeyClosure } from './meridian.util'
-import { assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, expectNoSequencerLeaks, ManualSequencerClock, recordDevices, recordLeases, recordRunner, resetSequencerRig, type RunnerLogEntry } from './util'
+// oxfmt-ignore
+import { assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, type DeviceTransitionEntry, expectNoSequencerLeaks, ManualSequencerClock, recordDevices, recordLeases, recordRunner, resetSequencerRig, type RunnerLogEntry } from './util'
 
 // Equipment lifecycle of the Sequencer: the thermal stability wait and the pure meridian rule of `ensureTracking`
 // with a manual clock, then startup, pre-capture tracking and shutdown on the INDI simulator rig with the real
@@ -217,6 +218,92 @@ describe('tracking rule', () => {
 	})
 })
 
+describe('calibration optical path', () => {
+	const capture: SequencerCameraCapture = { exposureTime: 1, exposureTimeUnit: 'second', frameType: 'LIGHT', x: 0, y: 0, width: 0, height: 0, subframe: false, binX: 1, binY: 1, frameFormat: '', gain: 0, offset: 0, compressed: false }
+	const darkGroup = (id: string, opticalPath: SequencerTriggeredFrameGroup['opticalPath'], enabled = true): SequencerTriggeredFrameGroup => ({
+		kind: 'triggered',
+		id,
+		enabled,
+		capture: { ...capture, frameType: 'DARK' },
+		trigger: { kind: 'afterFrames', frames: 1 },
+		batchSize: 1,
+		maxFrames: 4,
+		inherit: 'none',
+		opticalPath,
+	})
+	const frame = (groupId: string, kind: SequencerFrameSlot['kind'], frameType: SequencerCameraCapture['frameType']) => ({ groupId, kind, capture: { ...capture, frameType } })
+	const FAIL_STARTUP: SequencerStartupConfiguration = { onFailure: 'fail' }
+	const configurationOf = (groups: readonly SequencerTriggeredFrameGroup[], startup = FAIL_STARTUP): Pick<SequencerConfiguration, 'capture' | 'startup'> => ({
+		capture: { order: 'sequential', groups: [{ kind: 'scheduled', id: 'L', enabled: true, capture, count: 1 }, ...groups], retry: { maxAttempts: 1, delay: 0, backoff: 1, maximumDelay: 0, retryOn: [] }, onFailure: 'fail', cameraRecovery: { onTimeout: 'stop' } },
+		startup,
+	})
+
+	test('a cover dark closes the cover; a light reopens it only when the session manages the cover', () => {
+		const cover = configurationOf([darkGroup('DC', { kind: 'cover' }), darkGroup('DF', { kind: 'filter', filter: { kind: 'name', name: 'Dark' } })])
+		expect(sequencerCoverPlan(cover, frame('DC', 'triggered', 'DARK'))).toBe('close')
+		expect(sequencerCoverPlan(cover, frame('DF', 'triggered', 'DARK'))).toBeUndefined()
+		expect(sequencerCoverPlan(cover, frame('L', 'scheduled', 'LIGHT'))).toBe('open')
+		expect(sequencerCoverPlan(cover, frame('L', 'scheduled', 'DARK'))).toBeUndefined()
+
+		const filterOnly = configurationOf([darkGroup('DF', { kind: 'filter', filter: { kind: 'slot', slot: 7 } }), darkGroup('DC', { kind: 'cover' }, false)])
+		expect(sequencerCoverPlan(filterOnly, frame('L', 'scheduled', 'LIGHT'))).toBeUndefined()
+		expect(sequencerCoverPlan(filterOnly, frame('DC', 'triggered', 'DARK'))).toBeUndefined()
+		expect(sequencerCoverPlan(configurationOf([], { cover: { open: true }, onFailure: 'fail' }), frame('L', 'scheduled', 'LIGHT'))).toBe('open')
+	})
+
+	test('the cover path is ready only with the cover still where the plan wants it and a panel off', () => {
+		const cover = { ...DEFAULT_COVER, name: 'Cover', hardwareId: 'cover', connected: true, parked: true }
+		const panel = { ...DEFAULT_FLAT_PANEL, name: 'Panel', hardwareId: 'cover', connected: true, enabled: false }
+		const elsewhere = { ...panel, hardwareId: 'panel', enabled: true }
+
+		expect(isSequencerCoverPathReady({ cover }, undefined)).toBeTrue()
+		expect(isSequencerCoverPathReady({}, 'close')).toBeFalse()
+		expect(isSequencerCoverPathReady({ cover, flatPanel: panel }, 'close')).toBeTrue()
+		expect(isSequencerCoverPathReady({ cover, flatPanel: panel }, 'open')).toBeFalse()
+		expect(isSequencerCoverPathReady({ cover, flatPanel: { ...panel, enabled: true } }, 'close')).toBeFalse()
+		expect(isSequencerCoverPathReady({ cover, flatPanel: elsewhere }, 'close')).toBeFalse()
+		expect(isSequencerCoverPathReady({ cover: { ...cover, parking: true } }, 'close')).toBeFalse()
+		expect(isSequencerCoverPathReady({ cover: { ...cover, connected: false } }, 'close')).toBeFalse()
+		expect(isSequencerCoverPathReady({ cover: { ...cover, parked: false } }, 'open')).toBeTrue()
+	})
+
+	test('preflight: a cover dark, a cover step or a dome step without the device, a cooling without temperature control', () => {
+		const camera = { ...DEFAULT_CAMERA, name: 'Camera', canSetTemperature: false }
+		const configuration = {
+			...configurationOf([darkGroup('DC', { kind: 'cover' }), darkGroup('off', { kind: 'cover' }, false)], { cooling: COOLING, cover: { open: true }, dome: { open: true }, onFailure: 'fail' }),
+			shutdown: { stepTimeout: 1, totalTimeout: 1, closeCover: 'required', closeOrParkDome: 'required' },
+		} as const
+
+		expect(preflightSequencerLifecycle(configuration, { camera }).map((diagnostic) => diagnostic.path)).toEqual(['startup.cooling', 'startup.dome', 'shutdown.closeOrParkDome', 'startup.cover', 'shutdown.closeCover', 'capture.groups[1].opticalPath'])
+		expect(preflightSequencerLifecycle({ ...configurationOf([darkGroup('DC', { kind: 'cover' })]), shutdown: { stepTimeout: 1, totalTimeout: 1 } }, { camera, cover: { ...DEFAULT_COVER, name: 'Cover' } })).toEqual([])
+	})
+
+	test('awaitDarkTemperature: built only with a cooling, runs only for darks, with the startup policy', () => {
+		expect(awaitDarkTemperatureTask({}, { onFailure: 'fail' })).toBeUndefined()
+		const retry = { maxAttempts: 2, delay: 0, backoff: 1, maximumDelay: 0, retryOn: ['timeout' as const] }
+		const task = awaitDarkTemperatureTask({}, { cooling: COOLING, retry, onFailure: 'stop' })!
+		expect(task.id).toBe('awaitDarkTemperature')
+		expect(task.policy).toEqual({ retry, onFailure: 'stop' })
+		const view = (frameType?: SequencerCameraCapture['frameType']) => ({ frame: frameType === undefined ? undefined : { capture: { ...capture, frameType } } }) as SequencerTaskView
+		expect([view('DARK'), view('BIAS'), view('LIGHT'), view()].map((value) => task.shouldRun(value))).toEqual([true, false, false, false])
+	})
+
+	test('oracle I8, I16: no light through a closed cover, a lit panel or an opaque filter; no cover dark with the cover open', () => {
+		let sequence = 0
+		const command = (manager: DeviceCommandEntry['manager'], name: string, ...args: unknown[]): DeviceCommandEntry => ({ kind: 'command', sequence: ++sequence, wallNow: 0, monotonicNow: 0, device: manager, manager, command: name, args })
+		const transition = (manager: DeviceTransitionEntry['manager'], property: string, value: unknown): DeviceTransitionEntry => ({ kind: 'transition', sequence: ++sequence, wallNow: 0, monotonicNow: 0, device: manager, manager, property, value })
+		const expose = (frameType: string) => [command('camera', 'frameType', frameType), command('camera', 'startExposure', 1), transition('camera', 'exposuring', false)]
+
+		assertSequencerInvariants([...expose('LIGHT'), transition('cover', 'parked', true), ...expose('DARK'), transition('cover', 'parked', false), transition('wheel', 'position', 7), ...expose('DARK'), transition('wheel', 'position', 1), ...expose('LIGHT')], { opaqueSlots: [7] })
+		expect(() => assertSequencerInvariants([transition('cover', 'parked', true), ...expose('LIGHT')])).toThrow(/^I8: LIGHT exposure on camera \(#\d+\) with the cover cover closed/)
+		expect(() => assertSequencerInvariants([transition('flatPanel', 'enabled', true), ...expose('LIGHT')])).toThrow(/^I8: .* with the flat panel flatPanel lit/)
+		expect(() => assertSequencerInvariants([transition('wheel', 'position', 7), ...expose('LIGHT')], { opaqueSlots: [7] })).toThrow(/^I8: .* with the wheel wheel on an opaque filter/)
+		expect(() => assertSequencerInvariants(expose('DARK'), { coverDarks: true })).toThrow(/^I8: DARK exposure .* without the cover observed closed/)
+		expect(() => assertSequencerInvariants([transition('cover', 'parked', true), transition('cover', 'parked', false), ...expose('DARK')], { coverDarks: true })).toThrow(/^I8: DARK/)
+		assertSequencerInvariants([transition('cover', 'parked', true), ...expose('DARK'), ...expose('BIAS')], { coverDarks: true })
+	})
+})
+
 // Rig of the simulator scenarios, created once for the file.
 const rig = await createSequencerRig()
 const ROOT = join(rig.capturesDir, 'sessions')
@@ -272,8 +359,8 @@ describe('on the simulator rig', () => {
 	}
 
 	// Runs a session with the lifecycle startup and shutdown of its configuration, `ensureTracking`, the camera
-	// recovery wait and the frame destination in the pre-capture, and the real capture.
-	async function runSession(configuration: SequencerConfiguration, onEvent?: (event: SequencerEvent) => void): Promise<Session> {
+	// recovery wait, `extra` and the frame destination in the pre-capture, and the real capture.
+	async function runSession(configuration: SequencerConfiguration, onEvent?: (event: SequencerEvent) => void, extra: readonly SequencerTask[] = []): Promise<Session> {
 		const sequence = createTestSequence()
 		const devices = recordDevices(rig, clock, sequence)
 		const roots = recordRunner(rig.coordinator, sequence)
@@ -282,7 +369,7 @@ describe('on the simulator rig', () => {
 		const events: SequencerEvent[] = []
 		const phases = {
 			startup: sequencerStartupLifecycleTasks(configuration, services),
-			preCapture: [ensureTrackingTask(services, configuration), awaitCameraRecoveryTask(rig.arbiter, configuration.capture.cameraRecovery), prepareFrameDestinationTask(storage)],
+			preCapture: [ensureTrackingTask(services, configuration), awaitCameraRecoveryTask(rig.arbiter, configuration.capture.cameraRecovery), ...extra, prepareFrameDestinationTask(storage)],
 			capture: captureFrameStep({ cameraCapturer: rig.capturer, storage }),
 			shutdown: sequencerShutdownLifecycleTasks(configuration.shutdown, services),
 		}
@@ -481,6 +568,32 @@ describe('on the simulator rig', () => {
 		expect(events.some((event) => event.type === 'taskCompleted' && event.task === 'coolCamera')).toBeTrue()
 		expect(temperatures).toHaveLength(1)
 		expect(Math.abs(temperatures[0] - 15)).toBeLessThanOrEqual(1)
+		await waitUntil(() => !camera.cooler, 5000, 10)
+	}, 60000)
+
+	test('8A.6: a dark waits for the thermal stability of the cooling before its exposure; a light never does', async () => {
+		// The setpoint, 3 °C below the sensor, is only sent at startup; the darks of the session prove the stability by
+		// themselves.
+		const { camera } = rig.devices()
+		const setpoint = Math.round(camera.temperature) - 3
+		const startup: SequencerStartupConfiguration = { cooling: { setpoint, tolerance: 0.5, stableFor: 0.5, timeout: 30, waitForTemperature: false }, onFailure: 'fail' }
+		const configuration = configurationOf({ startup, shutdown: { stepTimeout: 30, totalTimeout: 300, warmCamera: 'required' }, frames: [LIGHT, DARK] })
+		const temperatures: number[] = []
+		const dark = awaitDarkTemperatureTask(services, startup)!
+		const { result, events } = await runSession(
+			configuration,
+			(event) => {
+				if (event.type === 'exposureStarted') temperatures.push(camera.temperature)
+			},
+			[dark],
+		)
+
+		expect(result).toMatchObject({ state: 'completed' })
+		expect(events.filter((event) => event.type === 'taskCompleted' && event.task === 'awaitDarkTemperature')).toHaveLength(1)
+		expect(temperatures).toHaveLength(2)
+		// The light went out while the sensor still cooled; the dark only within tolerance.
+		expect(temperatures[0]).toBeGreaterThan(setpoint + 0.5)
+		expect(Math.abs(temperatures[1] - setpoint)).toBeLessThanOrEqual(0.5)
 		await waitUntil(() => !camera.cooler, 5000, 10)
 	}, 60000)
 

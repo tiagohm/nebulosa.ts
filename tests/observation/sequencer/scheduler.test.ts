@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { mulberry32, type Random } from '../../../src/math/numerical/random'
-import { completedSlotsOf, consumedSlotsOf, enqueueCalibrationBatch, restoreSequencerFrameSlot, type SequencerTriggerEvent, selectNextFrame, selectNextFrameOnStop, sequencerFrameSlotId } from '../../../src/observation/sequencer/scheduler'
 // oxfmt-ignore
-import type { SequencerCameraCapture, SequencerCaptureConfiguration, SequencerCaptureOrder, SequencerConfiguration, SequencerFrameGroup, SequencerFrameGroupTrigger, SequencerFrameSlot, SequencerScheduledFrameGroup, SequencerSchedulerState, SequencerTriggeredFrameGroup } from '../../../src/observation/sequencer/sequencer'
-import { createSequencerCaptureProgress, createSequencerSchedulerState, type SequencerCaptureProgress } from '../../../src/observation/sequencer/state'
+import { completedSlotsOf, consumedSlotsOf, enqueueCalibrationBatch, fireCalibrationTriggers, restoreSequencerFrameSlot, type SequencerTriggerEvent, selectNextFrame, selectNextFrameOnStop, sequencerFrameSlotId } from '../../../src/observation/sequencer/scheduler'
+// oxfmt-ignore
+import type { SequencerCameraCapture, SequencerCaptureConfiguration, SequencerCaptureOrder, SequencerConfiguration, SequencerFrameDiscardPolicy, SequencerFrameGroup, SequencerFrameGroupTrigger, SequencerFrameSlot, SequencerScheduledFrameGroup, SequencerSchedulerState, SequencerTriggerAnchors, SequencerTriggeredFrameGroup } from '../../../src/observation/sequencer/sequencer'
+import { createSequencerCaptureProgress, createSequencerSchedulerState, createSequencerTriggerAnchors, decideFrameOutcome, type SequencerCaptureProgress } from '../../../src/observation/sequencer/state'
 
 const LIGHT: SequencerCameraCapture = { exposureTime: 120, exposureTimeUnit: 'second', frameType: 'LIGHT', x: 0, y: 0, width: 0, height: 0, subframe: false, binX: 1, binY: 1, frameFormat: '', gain: 100, offset: 10, compressed: false }
 const DARK: SequencerCameraCapture = { ...LIGHT, exposureTime: 1, frameType: 'DARK' }
@@ -437,6 +438,127 @@ describe('triggered groups', () => {
 	})
 })
 
+describe('light triggers', () => {
+	// Session with the trigger anchors the post-capture keeps.
+	function triggerSessionOf(capture: SequencerCaptureConfiguration) {
+		return { ...sessionOf(capture), anchors: createSequencerTriggerAnchors(configurationOf(capture)) }
+	}
+
+	// Exposes the next slot with `outcome` and fires the light triggers of a scheduled light at `temperature`; returns
+	// the slot and the trigger events of its post-capture.
+	function expose(session: Session & { readonly anchors: SequencerTriggerAnchors }, outcome: Outcome = 'accept', temperature?: number) {
+		const slot = select(session)!
+		complete(session, slot, outcome)
+		const events: SequencerTriggerEvent[] = []
+		if (slot.kind === 'scheduled' && slot.capture.frameType === 'LIGHT') fireCalibrationTriggers(session.capture, session.scheduler, session.progress, session.anchors, slot, temperature, events)
+		return { slot, events }
+	}
+
+	test('afterFrames fires exactly at N completed lights, discarded ones included, and restarts its count', () => {
+		const dark = triggered('D', { kind: 'afterFrames', frames: 3 })
+		const session = triggerSessionOf(captureOf('sequential', [scheduled('L', 6), dark]))
+
+		expect(expose(session).events).toEqual([])
+		expect(expose(session, 'retake').events).toEqual([])
+		expect(session.anchors.calibration.D).toEqual({ lightExposures: 2, batches: 0 })
+		expect(expose(session).events).toEqual([{ type: 'triggerFired', groupId: 'D', slots: 1, triggeredBy: 'frame[L][2]' }])
+		expect(session.anchors.calibration.D).toEqual({ lightExposures: 0, batches: 1 })
+
+		expect(expose(session).slot.id).toBe('frame[D][1]')
+		expect(session.anchors.calibration.D.lightExposures).toBe(0)
+		expect(expose(session).events).toEqual([])
+		expect(expose(session).events).toEqual([])
+		expect(expose(session).events).toEqual([{ type: 'triggerFired', groupId: 'D', slots: 1, triggeredBy: 'frame[L][5]' }])
+	})
+
+	test('a suppressed afterFrames trigger restarts its count too', () => {
+		const dark = triggered('D', { kind: 'afterFrames', frames: 2 }, { maxFrames: 1 })
+		const session = triggerSessionOf(captureOf('sequential', [scheduled('L', 6), dark]))
+		const events = Array.from({ length: 7 }, () => expose(session).events).flat()
+
+		expect(events).toEqual([
+			{ type: 'triggerFired', groupId: 'D', slots: 1, triggeredBy: 'frame[L][2]' },
+			{ type: 'triggerSuppressed', groupId: 'D', triggeredBy: 'frame[L][4]' },
+			{ type: 'triggerSuppressed', groupId: 'D', triggeredBy: 'frame[L][6]' },
+		])
+		expect(session.anchors.calibration.D).toEqual({ lightExposures: 0, batches: 1 })
+	})
+
+	test('sourceGroups ignores the lights of other groups; without them every scheduled light counts', () => {
+		const onlyR = triggered('DR', { kind: 'afterFrames', frames: 1, sourceGroups: ['R'] })
+		const every = triggered('DA', { kind: 'afterFrames', frames: 2 })
+		const session = triggerSessionOf(captureOf('roundRobin', [scheduled('L', 2), scheduled('R', 2), onlyR, every]))
+
+		expect(expose(session).events).toEqual([])
+		expect(expose(session).events).toEqual([
+			{ type: 'triggerFired', groupId: 'DR', slots: 1, triggeredBy: 'frame[R][1]' },
+			{ type: 'triggerFired', groupId: 'DA', slots: 1, triggeredBy: 'frame[R][1]' },
+		])
+		expect(session.anchors.calibration).toEqual({ DR: { lightExposures: 0, batches: 1 }, DA: { lightExposures: 0, batches: 1 } })
+	})
+
+	test('temperatureChange: the first light anchors, a change of delta either way fires, only an enqueued batch moves the anchor', () => {
+		const dark = triggered('D', { kind: 'temperatureChange', delta: 0.5 }, { maxFrames: 2 })
+		const session = triggerSessionOf(captureOf('sequential', [scheduled('L', 8), dark]))
+
+		expect(expose(session, 'accept', -10).events).toEqual([])
+		expect(session.anchors.calibration.D).toEqual({ lightExposures: 0, sensorTemperature: -10, batches: 0 })
+		expect(expose(session, 'accept', -10.25).events).toEqual([])
+		expect(expose(session, 'retake', -9.5).events).toEqual([{ type: 'triggerFired', groupId: 'D', slots: 1, triggeredBy: 'frame[L][3]' }])
+		expect(session.anchors.calibration.D).toEqual({ lightExposures: 0, sensorTemperature: -9.5, batches: 1 })
+
+		// The retake comes first, then the dark.
+		expect(expose(session, 'accept', -9.5).slot.id).toBe('frame[L][3]')
+		expect(expose(session).slot.id).toBe('frame[D][1]')
+		expect(expose(session, 'accept', -10).events).toEqual([{ type: 'triggerFired', groupId: 'D', slots: 1, triggeredBy: 'frame[L][4]' }])
+		expect(expose(session).slot.id).toBe('frame[D][2]')
+
+		// The group is full: the suppressed trigger leaves the anchor at -10, so every later change fires again.
+		expect(expose(session, 'accept', -11).events).toEqual([{ type: 'triggerSuppressed', groupId: 'D', triggeredBy: 'frame[L][5]' }])
+		expect(expose(session, 'accept', -11).events).toEqual([{ type: 'triggerSuppressed', groupId: 'D', triggeredBy: 'frame[L][6]' }])
+		expect(session.anchors.calibration.D).toEqual({ lightExposures: 0, sensorTemperature: -10, batches: 2 })
+	})
+
+	test('an unavailable sensor temperature never fires nor anchors, without throwing', () => {
+		const dark = triggered('D', { kind: 'temperatureChange', delta: 0.1 })
+		const session = triggerSessionOf(captureOf('sequential', [scheduled('L', 4), dark]))
+
+		for (const temperature of [undefined, Number.NaN, Number.POSITIVE_INFINITY]) expect(expose(session, 'accept', temperature).events).toEqual([])
+		expect(session.anchors.calibration.D).toEqual({ lightExposures: 0, batches: 0 })
+		expect(expose(session, 'accept', 5).events).toEqual([])
+		expect(session.anchors.calibration.D.sensorTemperature).toBe(5)
+	})
+
+	test('disabled groups and session-boundary triggers never fire after a light; batches inherit the light, frozen', () => {
+		const disabled = triggered('X', { kind: 'afterFrames', frames: 1 }, { enabled: false })
+		const start = triggered('S', { kind: 'sessionStart' }, { capture: BIAS })
+		const end = triggered('E', { kind: 'sessionEnd', onStop: false }, { capture: BIAS })
+		const dark = triggered('D', { kind: 'afterFrames', frames: 1 }, { inherit: 'triggeringFrame', batchSize: 2 })
+		const session = triggerSessionOf(captureOf('sequential', [disabled, start, scheduled('L', 1, { capture: { ...LIGHT, exposureTime: 300, gain: 139 } }), end, dark]))
+
+		expect(expose(session).slot.id).toBe('frame[S][1]')
+		const { slot, events } = expose(session)
+		expect(slot.id).toBe('frame[L][1]')
+		expect(events).toEqual([{ type: 'triggerFired', groupId: 'D', slots: 2, triggeredBy: 'frame[L][1]' }])
+		expect(session.scheduler.batches).toEqual([{ groupId: 'D', firstOrdinal: 1, size: 2, capture: { ...LIGHT, exposureTime: 300, gain: 139, frameType: 'DARK' }, triggeredBy: 'frame[L][1]' }])
+		expect(session.anchors.calibration.X).toEqual({ lightExposures: 0, batches: 0 })
+		expect(drain(session)).toEqual(['frame[D][1]', 'frame[D][2]', 'frame[E][1]'])
+	})
+
+	test('an anchor missing for a group is created as a fresh own key', () => {
+		const dark = triggered('__proto__', { kind: 'afterFrames', frames: 1 })
+		const capture = captureOf('sequential', [scheduled('L', 1), dark])
+		const session = { ...sessionOf(capture), anchors: { calibration: {} } }
+		const light = select(session)!
+		const events: SequencerTriggerEvent[] = []
+
+		fireCalibrationTriggers(capture, session.scheduler, session.progress, session.anchors, light, undefined, events)
+		expect(Object.hasOwn(session.anchors.calibration, '__proto__')).toBeTrue()
+		expect(JSON.stringify(session.anchors.calibration)).toBe('{"__proto__":{"lightExposures":0,"batches":1}}')
+		expect(events).toEqual([{ type: 'triggerFired', groupId: '__proto__', slots: 1, triggeredBy: 'frame[L][1]' }])
+	})
+})
+
 describe('graceful stop', () => {
 	const groups = () => [scheduled('L', 3), triggered('after', { kind: 'afterFrames', frames: 1 }), triggered('darks', { kind: 'sessionEnd', onStop: true }, { batchSize: 2, maxFrames: 2 }), triggered('biases', { kind: 'sessionEnd', onStop: false }, { capture: BIAS })]
 
@@ -642,6 +764,75 @@ describe('properties', () => {
 
 				expect(tail).toEqual(trace.slice(k))
 			}
+		}
+	})
+
+	test('P6: synthetic sessions never exceed maxFrames per triggered group nor the exposure bound of section 8.4', () => {
+		const random = mulberry32(0x5eed06)
+		const integer = (min: number, max: number) => min + Math.floor(random() * (max - min + 1))
+		const pick = <T>(items: readonly T[]) => items[Math.floor(random() * items.length)]
+
+		for (let i = 0; i < 500; i++) {
+			const policyOf = (): SequencerFrameDiscardPolicy | undefined => (random() < 0.25 ? undefined : { criteria: { quality: true, guidingInterruption: false, unsafeDuringExposure: false }, maxDiscardsPerSlot: integer(0, 2), onExhausted: pick(['keepLast', 'skipSlot'] as const), artifact: 'moveToRejected' })
+			const lights = Array.from({ length: integer(1, 4) }, (_, k) => scheduled(`L${k}`, integer(0, 8), { discard: policyOf(), weight: 0.5 + random() * 4 }))
+			const darks = Array.from({ length: integer(1, 3) }, (_, k): SequencerTriggeredFrameGroup => {
+				const trigger = pick<SequencerFrameGroupTrigger>([{ kind: 'afterFrames', frames: integer(1, 3), ...(random() < 0.3 && { sourceGroups: [lights[0].id] }) }, { kind: 'temperatureChange', delta: 0.2 + random() }, { kind: 'sessionStart' }, { kind: 'sessionEnd', onStop: false }])
+				const batchSize = integer(1, 3)
+				return triggered(`D${k}`, trigger, { batchSize, maxFrames: integer(batchSize, 6), inherit: trigger.kind === 'sessionStart' || random() < 0.5 ? 'none' : 'triggeringFrame', enabled: random() < 0.9, discard: policyOf() })
+			})
+			const capture: SequencerCaptureConfiguration = { ...captureOf(pick(ORDERS), [...lights, ...darks]), retry: { maxAttempts: integer(1, 3), delay: 0, backoff: 1, maximumDelay: 0, retryOn: ['timeout'] }, onFailure: 'skipFrame' }
+			const session = { ...sessionOf(capture), anchors: createSequencerTriggerAnchors(configurationOf(capture)) }
+			const slots = new Map<string, Set<string>>()
+			let exposures = 0
+			let consecutive = 0
+			let temperature = -10
+
+			for (let slot = select(session); slot !== undefined; slot = select(session)) {
+				const group = capture.groups.find((group) => group.id === slot.groupId)!
+				const counters = session.progress.get(slot.groupId)!
+				if (!slots.has(slot.groupId)) slots.set(slot.groupId, new Set())
+				slots.get(slot.groupId)!.add(slot.id)
+				exposures++
+				session.current = undefined
+
+				// A capture failure without frame: retried while the budget lasts, then the slot is skipped.
+				if (random() < 0.15) {
+					const captureFailures = slot.captureFailures + 1
+					if (captureFailures < capture.retry.maxAttempts) session.current = { ...slot, captureFailures }
+					else counters.skipped++
+					continue
+				}
+
+				temperature += (random() - 0.5) * 0.6
+				const policy = group.discard
+				const decision = policy === undefined || random() < 0.6 ? 'accepted' : decideFrameOutcome(policy, slot, consecutive, false)
+
+				if (decision === 'accepted') counters.accepted++
+				else if (decision === 'forced') counters.forced++
+				else {
+					counters.discarded++
+					if (decision === 'skipSlot') counters.skipped++
+					else session.current = { ...slot, discardedTotal: slot.discardedTotal + 1, discardBudgetUsed: slot.discardBudgetUsed + 1, captureFailures: 0 }
+				}
+
+				consecutive = decision === 'accepted' || decision === 'forced' ? 0 : consecutive + 1
+				if (slot.kind === 'scheduled') fireCalibrationTriggers(capture, session.scheduler, session.progress, session.anchors, slot, random() < 0.1 ? undefined : temperature, session.events)
+				if (exposures > 10000) throw new Error('the session did not terminate')
+			}
+
+			let bound = 0
+
+			for (const group of capture.groups) {
+				const attempts = (1 + (group.discard?.maxDiscardsPerSlot ?? 0)) * capture.retry.maxAttempts
+				if (group.kind === 'scheduled') bound += group.count * attempts
+				else {
+					bound += group.maxFrames * attempts
+					expect(slots.get(group.id)?.size ?? 0).toBeLessThanOrEqual(group.maxFrames)
+					expect(consumedSlotsOf(session.scheduler, session.progress, group.id)).toBeLessThanOrEqual(group.maxFrames)
+				}
+			}
+
+			expect(exposures).toBeLessThanOrEqual(bound)
 		}
 	})
 

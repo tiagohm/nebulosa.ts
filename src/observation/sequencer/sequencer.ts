@@ -139,7 +139,7 @@ export type SequencerFrameGroupTrigger =
 export type SequencerCalibrationOpticalPath =
 	// The camera shutter, or darkness the user guarantees; nothing is commanded.
 	| { readonly kind: 'none' }
-	// Closes the cover (and turns off a co-resident flat panel); reopened before the next light.
+	// Closes the cover (and turns off a flat panel); reopened before the next light.
 	| { readonly kind: 'cover' }
 	// Moves the wheel to an opaque slot, without focus offset.
 	| { readonly kind: 'filter'; readonly filter: SequencerFilterReference }
@@ -587,7 +587,7 @@ export interface SequencerDevices {
 	readonly cover?: Cover
 	// Dome or roof.
 	readonly dome?: Dome
-	// Flat panel, turned off when co-resident with the cover in use.
+	// Flat panel, turned off with the cover in use.
 	readonly flatPanel?: FlatPanel
 }
 
@@ -756,6 +756,7 @@ export type SequencerTaskId =
 	| 'autofocus'
 	| 'ensureGuiding'
 	| 'ditherAndSettle'
+	| 'awaitDarkTemperature'
 	| 'prepareFrameDestination'
 	| 'finalExposureGuard'
 	// Capture.
@@ -863,13 +864,15 @@ export interface SequencerAutofocusAnchor extends SequencerActionAnchor {
 	filter?: string
 }
 
-// Anchor of one triggered group.
+// Anchor of one triggered group, advanced only by the post-capture of a completed light of its source groups.
 export interface SequencerCalibrationAnchor {
-	// Value of `lightExposures` when the last batch fired.
+	// 'afterFrames': completed (accepted or discarded) light exposures of the source groups since the trigger last fired
+	// (enqueued or suppressed), or since the session start; back to 0 each time it reaches `frames`.
 	lightExposures: number
-	// Sensor temperature at the last accepted batch, in °C.
+	// 'temperatureChange': sensor temperature, in °C, of the light that enqueued the last batch, or of the first source
+	// light exposed with a reported temperature; absent before it. A suppressed batch leaves it.
 	sensorTemperature?: number
-	// Batches fired so far (bounded by `maxFrames`).
+	// Batches enqueued so far; never more than `maxFrames`.
 	batches: number
 }
 

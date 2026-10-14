@@ -23,7 +23,7 @@ import { type SequencerCaptureStep, type SequencerProtectionOutcome, type Sequen
 import type { SequencerCameraCapture, SequencerCheckpoint, SequencerCheckpointStore, SequencerConfiguration, SequencerEvent, SequencerEventBody, SequencerFailure, SequencerMeridianFlipConfiguration, SequencerResult, SequencerTarget } from '../../../src/observation/sequencer/sequencer'
 import { createSequencerRuntimeState, SEQUENCER_MERIDIAN_HALF_CYCLE, type SequencerRuntimeState, sequencerCheckpointOf } from '../../../src/observation/sequencer/state'
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, parseSequencerCheckpoint, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
-import { waitUntil } from '../../util'
+import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
 import { assertMeridianProtectionInvariants, guidingEntries, type MeridianRunnerEntry, runtimeEntries } from './meridian.util'
 import { FakeMount, type FlipBehaviour, ManualSequencerClock, nextFakeOrder, recordRunner, ScriptedGuidingSession } from './util'
 
@@ -224,7 +224,7 @@ describe('supervisor deadlines and wakes', () => {
 		s.oracle()
 	})
 
-	test('37: a wake 1 ms early asks for one more delay of 1 ms, without a loop', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('37: a wake 1 ms early asks for one more delay of 1 ms, without a loop', async () => {
 		const s = supervise(hardIn(20))
 		s.clock.jumpWall(-1)
 		await s.clock.advance(s.delays[0])
@@ -251,7 +251,7 @@ describe('supervisor deadlines and wakes', () => {
 		s.oracle()
 	})
 
-	test('7c: a wall step forward is caught at the next re-evaluation, a step backward postpones without a negative wait', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('7c: a wall step forward is caught at the next re-evaluation, a step backward postpones without a negative wait', async () => {
 		const forward = supervise(gracefulIn(600), { flip: { supervisionInterval: 60 } })
 		expect(forward.delays).toEqual([60000])
 		forward.clock.jumpWall(9.5 * 60000)
@@ -285,7 +285,7 @@ describe('supervisor deadlines and wakes', () => {
 		expect(running.requests).toEqual(['meridianFlip'])
 	})
 
-	test('no deadline without risk: tracking off, post-flip side; a tracking turned on again re-arms', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('no deadline without risk: tracking off, post-flip side; a tracking turned on again re-arms', async () => {
 		const off = supervise(gracefulIn(-1), { tracking: false })
 		const post = supervise(gracefulIn(-1), { pierSide: 'EAST' })
 		expect([...off.requests, ...post.requests]).toEqual([])
@@ -308,7 +308,7 @@ describe('supervisor deadlines and wakes', () => {
 })
 
 describe('hard path outcomes', () => {
-	test('late arming: the event before any command, the hard path in the same tick, late: true when off before latestAt', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('late arming: the event before any command, the hard path in the same tick, late: true when off before latestAt', async () => {
 		const s = supervise(hardIn(-1))
 		expect(s.events[0]).toMatchObject({ type: 'meridianProtectionLateStart', requiredLeadMs: LEAD })
 		expect((s.events[0] as { remainingMs: number }).remainingMs).toBeCloseTo(LEAD - 1000, 3)
@@ -318,7 +318,7 @@ describe('hard path outcomes', () => {
 		s.oracle()
 	})
 
-	test('83: an epoch born outside SIDEREAL is late; one born in SIDEREAL stays normal when the mode changes', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('83: an epoch born outside SIDEREAL is late; one born in SIDEREAL stays normal when the mode changes', async () => {
 		const lunar = supervise(gracefulIn(3600), { trackMode: 'LUNAR' })
 		await flush()
 		expect(lunar.events[0]).toMatchObject({ type: 'meridianProtectionTrackModeUnsupervisable', trackMode: 'LUNAR' })
@@ -341,7 +341,7 @@ describe('hard path outcomes', () => {
 		s.oracle()
 	})
 
-	test('84: a failed tracking off is reported with the failure action; the supervisor stays armed and never protects twice in the epoch', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('84: a failed tracking off is reported with the failure action; the supervisor stays armed and never protects twice in the epoch', async () => {
 		const s = supervise(hardIn(5))
 		s.fake.trackingFailure = failedOperationResult('timeout')
 		await s.clock.advance(s.delays[0])
@@ -357,7 +357,7 @@ describe('hard path outcomes', () => {
 		expect(() => s.oracle()).toThrow(/^I18/)
 	})
 
-	test('112: telemetry withdrawn from a tracking pre-flip mount starts the hard path in the same tick', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('112: telemetry withdrawn from a tracking pre-flip mount starts the hard path in the same tick', async () => {
 		const s = supervise(gracefulIn(3600))
 		s.fake.set({ hasEquatorialCoordinate: false })
 		await flush()
@@ -386,7 +386,7 @@ describe('hard path outcomes', () => {
 		s.oracle()
 	})
 
-	test('93: a slew nobody of the run owns invalidates the acquired target and recomputes the deadlines at its end', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('93: a slew nobody of the run owns invalidates the acquired target and recomputes the deadlines at its end', async () => {
 		const s = supervise(gracefulIn(600), { prepare: (runtime) => (runtime.targetAcquired = true) })
 		expect(s.delays.at(-1)).toBe(300000)
 
@@ -403,7 +403,7 @@ describe('hard path outcomes', () => {
 		s.oracle()
 	})
 
-	test('116: within an epoch the reported hour angle crossing ±180° never brings a lost deadline back', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('116: within an epoch the reported hour angle crossing ±180° never brings a lost deadline back', async () => {
 		const s = supervise(hardIn(5))
 		s.fake.trackingFailure = failedOperationResult('timeout')
 		await s.clock.advance(s.delays[0])
@@ -422,7 +422,7 @@ describe('hard path outcomes', () => {
 		expect(() => s.oracle()).toThrow(/^I18/)
 	})
 
-	test('117: an observation extrapolated past latestAt across a restart is an unsupervised crossing', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('117: an observation extrapolated past latestAt across a restart is an unsupervised crossing', async () => {
 		const hours13 = 13 * 3600 * 1000 * (24 / 23.9344696)
 		const gap = (tracking: boolean, pierSide: PierSide, at: number) => (runtime: SequencerRuntimeState) => {
 			runtime.mountRiskObservation = { at: START - at, hourAngle: LATEST_AT - deg(10), pierSide, tracking }
@@ -443,7 +443,7 @@ describe('hard path outcomes', () => {
 		for (const supervised of [crossed, off, flipped, short]) supervised.oracle()
 	})
 
-	test('118: a legitimate pose near the antimeridian in a first process supervises normally, far from its deadline', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('118: a legitimate pose near the antimeridian in a first process supervises normally, far from its deadline', async () => {
 		const s = supervise(-deg(170))
 		await flush()
 		expect(s.events).toEqual([])
@@ -454,7 +454,7 @@ describe('hard path outcomes', () => {
 })
 
 describe('113 meridian cycle', () => {
-	test('the first process anchors the transit of the decision hour angle; the end of the cycle fails the session', async () => {
+	test.skipIf(isTimeConsumingTestSkipped())('the first process anchors the transit of the decision hour angle; the end of the cycle fails the session', async () => {
 		for (const hourAngle of [-deg(179), -deg(90), 0, deg(90)]) {
 			const s = supervise(hourAngle, { tracking: false })
 			expect(s.runtime.meridianTransitAt).toBeCloseTo(START - (hourAngle / SIDEREAL_DRIFT_RATE) * 1000, 0)

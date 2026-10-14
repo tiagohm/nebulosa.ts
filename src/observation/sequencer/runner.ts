@@ -5,7 +5,7 @@ import { awaitCooperativeJob } from '../../devices/orchestration/operation.wait'
 import { type ResourceConflict, type ResourceKey, type ResourceRequest, type ResourceReservation, type ResourceReservationOwner, resourceKey } from '../../devices/orchestration/resource'
 import { MountDitherer } from '../guiding/ditherer'
 import { createMeridianFlipState } from '../mount/meridian.flip'
-import { restoreSequencerFrameSlot, selectNextFrame, selectNextFrameOnStop, type SequencerTriggerEvent } from './scheduler'
+import { fireCalibrationTriggers, restoreSequencerFrameSlot, selectNextFrame, selectNextFrameOnStop, type SequencerTriggerEvent } from './scheduler'
 // oxfmt-ignore
 import { DEFAULT_SEQUENCER_COLLABORATOR_ABORT_GRACE, type SequencerCheckpoint, type SequencerCheckpointSlot, type SequencerClock, type SequencerConfiguration, type SequencerCorrectiveIntents, type SequencerDevices, type SequencerEventBody, type SequencerFailure, type SequencerFailureAction, type SequencerFrameDecision, type SequencerFrameDiscardPolicy, type SequencerFrameGroup, type SequencerFrameSlot, type SequencerHandle, type SequencerOptionalFailureAction, type SequencerPhase, type SequencerQualityOutcome, type SequencerQualityResult, type SequencerResult, type SequencerRetryPolicy, type SequencerRunnerServices, type SequencerSafetySnapshot, type SequencerSessionState, type SequencerShutdownStepPolicy, type SequencerSnapshot, type SequencerTaskId, type SequencerTerminalState, SYSTEM_SEQUENCER_CLOCK } from './sequencer'
 // oxfmt-ignore
@@ -35,8 +35,8 @@ import { bootstrapSequencerElapsedAnchors } from './trigger'
 // strictly cooperative timeout (the file never moves before the analysis settled), classifies the frame from that
 // outcome, the guiding interruptions and the recorded safety transitions of its monotonic window [dispatch, end],
 // decides it (accepted, forced, retake, skipSlot, pause, stop, fail, discardFinal) before touching the file, and
-// journals the complete next checkpoint (progress, light exposures, discard counters, corrective intents) with the
-// promotion or the disposition. A pause or a stop owed to an exhausted discard counter is derived from the persisted
+// journals the complete next checkpoint (progress, light exposures, discard counters, corrective intents, calibration
+// batches its light triggers enqueued) with the promotion or the disposition. A pause or a stop owed to an exhausted discard counter is derived from the persisted
 // counters, so a restart applies it again before exposing; only `resume()` renews the counter that paused.
 //
 // Every physical task is a root `sequencer.{taskId}` opened through `startTask`, which refuses once the run was
@@ -204,6 +204,9 @@ export interface SequencerCapturedFrame {
 	readonly exposureFinishedAt: number
 	// Monotonic counterpart of `exposureFinishedAt`, where the exposure window ends.
 	readonly exposureFinishedMonotonic: number
+	// Sensor temperature the camera reported when the frame arrived, in °C; absent without a thermometer. It drives the
+	// 'temperatureChange' calibration triggers and is journaled with the frame transaction.
+	readonly sensorTemperature?: number
 }
 
 // Execution context of the capture: the task context plus the prepared destination of the attempt and the two
@@ -1120,9 +1123,11 @@ export class SequencerRunner {
 	// Completes a captured frame as one logical transaction (sections 8.3 and 26): the quality analysis of its durable
 	// temporary, the classification, then the definitive decision, before the file is touched. The next checkpoint
 	// (progress of the group, light exposures, discard counters of a slot that stays current with its attempt consumed,
-	// consecutive discards, corrective intents) is computed without being applied and journaled with the promotion
-	// ('accepted', 'forced') or the disposition (every other decision); only then the state is applied, the checkpoint
-	// saved, the events emitted and the session action of the decision applied. A pause is not applied here: it is
+	// consecutive discards, corrective intents, and the calibration batches the light triggers of a scheduled light
+	// enqueued, accepted or discarded alike, section 8A.2) is computed without being applied and journaled, with the
+	// measured sensor temperature, with the promotion ('accepted', 'forced') or the disposition (every other decision);
+	// only then the state is applied, the checkpoint saved, the events emitted and the session action of the decision
+	// applied. A stopping session fires no trigger: its batches would never run. A pause is not applied here: it is
 	// derived from the exhausted counter at the next safe point.
 	async #complete(frame: SequencerFrameSlot, captured: SequencerCapturedFrame) {
 		const quality = await this.#analyze(frame, captured)
@@ -1138,6 +1143,13 @@ export class SequencerRunner {
 		const intents = { ...base.intents }
 		if (quality.kind === 'analyzed' && quality.result.intents !== undefined) applyCorrectiveIntents(intents, quality.result.intents)
 
+		const light = frame.capture.frameType === 'LIGHT'
+		// Discarded lights count too: drift, focus and dither depend on time and motion, not on quality.
+		const anchors = light ? { ...base.anchors, lightExposures: base.anchors.lightExposures + 1 } : base.anchors
+		const triggers: SequencerTriggerEvent[] = []
+		// The checkpoint holds deep copies, so the triggers mutate only the transaction.
+		if (light && frame.kind === 'scheduled' && this.#runtime.stop === undefined) fireCalibrationTriggers(this.#configuration.capture, base.scheduler, this.#runtime.capture, anchors, frame, captured.sensorTemperature, triggers)
+
 		const next: SequencerCheckpoint = {
 			...base,
 			// A computed key defines an own property, so any group id (even `__proto__`) is a plain key.
@@ -1145,40 +1157,40 @@ export class SequencerRunner {
 				counters === undefined
 					? base.capture
 					: { ...base.capture, [frame.groupId]: { accepted: counters.accepted + (decision === 'accepted' ? 1 : 0), forced: counters.forced + (decision === 'forced' ? 1 : 0), discarded: counters.discarded + (promoted ? 0 : 1), skipped: counters.skipped + (decision === 'skipSlot' ? 1 : 0) } },
-			// Discarded lights count too: drift, focus and dither depend on time and motion, not on quality.
-			anchors: frame.capture.frameType === 'LIGHT' ? { ...base.anchors, lightExposures: base.anchors.lightExposures + 1 } : base.anchors,
+			anchors,
 			intents,
 			consecutiveDiscards: promoted ? 0 : base.consecutiveDiscards + 1,
 			...(slot !== undefined && { currentSlot: { id: slot.id, attempt: slot.attempt + 1, discardedTotal: slot.discardedTotal, discardBudgetUsed: slot.discardBudgetUsed, captureFailures: 0 } }),
 		}
 
 		if (decision === 'accepted' || decision === 'forced' || policy === undefined) {
-			const promotion = await this.#storage.promote(next, decision === 'forced')
+			const promotion = await this.#storage.promote(next, decision === 'forced', captured.sensorTemperature)
 
 			if (!promotion.ok) {
 				this.#fail(promotion.failure)
 				return
 			}
 
-			await this.#commit(frame, captured, quality, next, slot)
+			await this.#commit(frame, captured, quality, next, slot, triggers)
 			this.#emit({ type: 'frameAccepted', slot: frame.id, attempt: frame.attempt, path: promotion.value, forced: decision === 'forced' })
 			return
 		}
 
-		const disposition = await this.#storage.dispose(policy.artifact, next)
+		const disposition = await this.#storage.dispose(policy.artifact, next, captured.sensorTemperature)
 
 		if (!disposition.ok) {
 			this.#fail(disposition.failure)
 			return
 		}
 
-		await this.#commit(frame, captured, quality, next, slot)
+		await this.#commit(frame, captured, quality, next, slot, triggers)
 		this.#discarded(frame, policy, classification, decision, next.consecutiveDiscards)
 	}
 
 	// Applies a frame transaction whose file was already promoted or disposed of, saves its checkpoint and reports the
-	// captured frame. `slot` is the slot that stays current, its attempt consumed, or undefined when the slot is done.
-	async #commit(frame: SequencerFrameSlot, captured: SequencerCapturedFrame, quality: SequencerQualityOutcome, next: SequencerCheckpoint, slot: SequencerFrameSlot | undefined) {
+	// captured frame, then the trigger events of the batches the transaction enqueued. `slot` is the slot that stays
+	// current, its attempt consumed, or undefined when the slot is done.
+	async #commit(frame: SequencerFrameSlot, captured: SequencerCapturedFrame, quality: SequencerQualityOutcome, next: SequencerCheckpoint, slot: SequencerFrameSlot | undefined, triggers: readonly SequencerTriggerEvent[]) {
 		applySequencerCheckpoint(this.#runtime, this.#configuration, next)
 		this.#runtime.currentFrame = slot
 		this.#consumed = slot !== undefined
@@ -1186,6 +1198,7 @@ export class SequencerRunner {
 		await this.#persist(next)
 		const { exposureStartedAt, exposureFinishedAt } = captured
 		this.#emit({ type: 'frameCaptured', slot: frame.id, attempt: frame.attempt, exposureStartedAt, exposureFinishedAt, quality })
+		for (const event of triggers) this.#emit(event)
 	}
 
 	// Reports a discarded frame and applies the session action of its decision: a skipped slot is reported, 'stop' and

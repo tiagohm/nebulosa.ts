@@ -169,6 +169,22 @@ describe('names', () => {
 		await storage.release()
 	})
 
+	test('8A.6: the measured sensor temperature is journaled with the transaction and read back; without one it is absent', async () => {
+		const storage = await lockedStorage()
+		await captureInto(storage, slotOf('L', 1))
+		await storage.dispose('delete', checkpointOf(storage.sessionId, 1), -10.25)
+		await captureInto(storage, slotOf('L', 1, 2))
+		await storage.promote(checkpointOf(storage.sessionId, 2), false, 3.5)
+		await captureInto(storage, slotOf('L', 2))
+		await storage.promote(checkpointOf(storage.sessionId, 3), false)
+
+		const journal = await journalOf(storage)
+		expect(journal.filter((entry) => entry.kind === 'disposing' || entry.kind === 'promoting').map((entry) => (entry as { sensorTemperature?: number }).sensorTemperature)).toEqual([-10.25, 3.5, undefined])
+		expect(journal.find((entry) => entry.kind === 'promoting' && entry.slot === 'frame[L][2]')).not.toHaveProperty('sensorTemperature')
+		assertJournalInvariants(journal)
+		await storage.release()
+	})
+
 	test('a keepInPlace discard stays in the group directory and a deleted one is removed', async () => {
 		const storage = await lockedStorage()
 		await captureInto(storage, slotOf('L', 1))
@@ -1567,6 +1583,17 @@ describe('journal oracle', () => {
 		expect(() => assertJournalInvariants([{ ...prepared(A, 1), temporary: 'L/x.fit' } as SequencerJournalEntry])).toThrow(/^I49:/)
 		expect(() => assertJournalInvariants([prepared(A, 1), promoting(A, 1, 'L/other.fit')])).toThrow(/^I49: promoting of frame\[L\]\[1\]#1 with final L\/other.fit/)
 		expect(() => assertJournalInvariants([prepared(A, 1), { kind: 'disposing', slot: A, attempt: 1, temporary: `L/.${A}.1.partial.fit`, artifact: 'moveToRejected', destination: 'rejected/L/x.partial.fit', next, at: 0 }])).toThrow(/^I49:/)
+	})
+
+	test('I20: slots selected or enqueued for a triggered group beyond its maxFrames', () => {
+		const dark: SequencerFrameGroup = { kind: 'triggered', id: 'D', enabled: true, capture: { ...LIGHT, frameType: 'DARK' }, trigger: { kind: 'afterFrames', frames: 1 }, batchSize: 2, maxFrames: 2, inherit: 'none', opticalPath: { kind: 'none' } }
+		const capture = configurationOf([scheduled('L', 3), dark])
+		const selected = (ordinal: number): SequencerEvent => ({ type: 'frameSelected', frame: { id: `frame[D][${ordinal}]`, groupId: 'D', kind: 'triggered', ordinal, attempt: 1, discardedTotal: 0, discardBudgetUsed: 0, captureFailures: 0, frameType: 'DARK' }, sessionId: 's', at: 0 })
+		const fired = (slots: number): SequencerEvent => ({ type: 'triggerFired', groupId: 'D', slots, sessionId: 's', at: 0 })
+
+		assertJournalInvariants([], [fired(2), selected(1), selected(1), selected(2)], capture)
+		expect(() => assertJournalInvariants([], [selected(1), selected(2), selected(3)], capture)).toThrow(/^I20: frame\[D\]\[3\] beyond the 2 frames of D/)
+		expect(() => assertJournalInvariants([], [fired(2), fired(1)], capture)).toThrow(/^I20: 3 slots enqueued for D beyond its 2 frames/)
 	})
 
 	test('I4: a frameAccepted without the committed line of its attempt and final', () => {
