@@ -26,11 +26,11 @@ bun add --trust github:tiagohm/nebulosa.ts
 ## Development
 
 ```sh
-bun install          # install dependencies
-bun test --parallel  # run the test suite
-bun run lint         # lint and type-check
-bun run fmt:check    # check formatting
-bun run fmt          # format the project
+bun i                                   # install dependencies
+bun test --parallel --timeout=30000     # run the test suite
+bun lint                                # lint and type-check
+bun fmt --check                         # check formatting
+bun fmt                                 # format the project
 ```
 
 ## Inspired by

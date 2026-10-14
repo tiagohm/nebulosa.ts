@@ -897,7 +897,7 @@ export class MountPointing {
 		// The dataset is split off the model rather than cloned into it, so an instance imported from a
 		// sample-carrying export exposes the same model shape as one imported from a bare export.
 		const { samples, ...rest } = serialized
-		const model = structuredClone(rest) as FittedPointingModel
+		const model = structuredClone(rest)
 
 		this.#fittedModel = model
 		this.#diagnostics = model.diagnostics
