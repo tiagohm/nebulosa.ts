@@ -691,7 +691,7 @@ console.log(high.map((e) => timeSubtract(e.time, epoch))) // [4.091, 18.075] —
 
 The Carrington system numbers the Sun's rotations by a fixed synodic period of about 27.2753 days, as seen from Earth, counted from a conventional epoch in 1853. Solar maps and datasets are usually labeled by Carrington rotation number.
 
-`carringtonRotationNumber` returns the integer rotation number whose span contains the given `Time`. It is a linear count with that fixed period; it does not compute the central meridian longitude within the rotation.
+`carringtonRotationNumber` returns the integer rotation number whose span contains the given `Time`. It is a linear count with that fixed period; it does not compute the central meridian longitude within the rotation. For the observed Carrington longitude of the disk center (L0), see [Solar Disk Geometry and Heliographic Coordinates](#solar-disk-geometry-and-heliographic-coordinates).
 
 ```ts
 import { carringtonRotationNumber } from 'nebulosa/src/astronomy/bodies/sun'
@@ -5266,6 +5266,79 @@ console.log(toDeg(ellipse.positionAngle)) // 73.5 — degrees, major axis from n
 console.log(toArcsec(ephemerisUncertaintyEllipse(covariance, geocentric, { sigma: 3 }).semiMajor)) // 19.8 — arcseconds
 ```
 
+### Solar Disk Geometry and Heliographic Coordinates
+
+The orientation of the solar disk is described by three angles: P, the position angle of the solar north pole measured from celestial north toward east; B0, the heliographic latitude of the disk center; and L0, the Carrington longitude of the disk center. Heliographic latitude is positive toward solar north. Stonyhurst longitude is measured from the observer's central meridian, positive toward the west limb (the direction of rotation), in `(−π, π]`. Carrington longitude is fixed to the Sun rotating rigidly at 14.1844°/day (the IAU `SUN_ROTATION` prime meridian), in `[0, 2π)`, so Carrington = Stonyhurst + L0 and L0 decreases by about 13.2°/day. L0 is not the fractional [Carrington Rotation](#carrington-rotation) number.
+
+`solarDiskGeometry(time, observer, sun)` takes barycentric ICRS states (AU, AU/day): the Earth for a geocentric observer, or `observerState` for a site (see [Barycentric and Heliocentric Light-Time Correction](#barycentric-and-heliocentric-light-time-correction)). B0 and L0 use the IAU rotation retarded by the light time from the nearest surface point and exclude aberration, matching SunPy's defaults; the Astronomical Almanac L0 includes aberration and is about 0.006° smaller. `p` is referred to the true equator and equinox of date at the aberrated disk center, and `pIcrs` to ICRS north, which is what a J2000/ICRS plate solution measures; they differ by precession and nutation, up to about 0.16° in 2026. `approximateSolarDiskGeometry(time)` is the geocentric Meeus chapter 29 model: P and B0 agree with the IAU result to a few thousandths of a degree, but its L0 departs by a few hundredths. Both return `distance` (AU) and `semidiameter` (radians) for the IAU nominal solar radius.
+
+The mapping functions place a line of sight on the solar sphere seen from that observer at its finite distance. `helioprojectiveToHeliographic(tx, ty, geometry)` takes angles from the disk center, `tx` toward solar west and `ty` toward solar north; `solarImageToHeliographic(x, y, geometry, calibration)` takes pixels (origin upper left, +X right, +Y down) of an ideal gnomonic image centered on the disk, without lens distortion. Both return `onDisk: true` with the latitude, both longitudes and `mu` (cosine of the heliocentric angle, 1 at disk center and 0 at the limb), or `onDisk: false` with the angular `elongation` from the disk center. The calibration's `positionAngle` is the direction of image "up" from celestial north toward east, measured from the north named by `north` (`'date'` by default, or `'icrs'`); `mirrored` swaps east and west, and `solarImageScale(geometry, radius)` derives the scale from a measured disk radius in pixels. The inverses `heliographicToHelioprojective` and `heliographicToSolarImage` accept a Stonyhurst or Carrington longitude and flag far-side points with `visible: false`.
+
+`rotateCarringtonLongitude(longitude, latitude, from, to, model?)` moves a feature by differential rotation, ω = A + B sin²φ + C sin⁴φ (sidereal), relative to the rigid Carrington rate over the TDB interval; `solarRotationRate(latitude, model?)` returns ω in radians per day. The default is `HOWARD_1990_DIFFERENTIAL_ROTATION`; `SNODGRASS_1983_DIFFERENTIAL_ROTATION` and `ALLEN_DIFFERENTIAL_ROTATION` use the SunPy coefficient tables. Latitude is kept, so map the new Carrington longitude through the geometry of the later time.
+
+```ts
+import {
+	approximateSolarDiskGeometry,
+	heliographicToHelioprojective,
+	heliographicToSolarImage,
+	helioprojectiveToHeliographic,
+	rotateCarringtonLongitude,
+	SNODGRASS_1983_DIFFERENTIAL_ROTATION,
+	solarDiskGeometry,
+	solarImageScale,
+	solarImageToHeliographic,
+	solarRotationRate,
+} from 'nebulosa/src/astronomy/bodies/sun.heliographic'
+import { observerState } from 'nebulosa/src/astronomy/coordinates/correction'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { Timescale, timeShift, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { arcsec, deg, toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
+
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
+
+// Geocentric observer: barycentric Earth and Sun states.
+const geometry = solarDiskGeometry(time, earth(time), sun(time))
+
+console.log(toDeg(geometry.p), toDeg(geometry.b0), toDeg(geometry.l0)) // -3.6155 2.6155 96.8428 — degrees, P, B0, L0
+console.log(toDeg(geometry.pIcrs), toArcsec(geometry.semidiameter)) // -3.7758 943.64 — P from ICRS north (degrees), radius (arcseconds)
+
+// Topocentric observer at 45° W, 23° S.
+const site = geodeticLocation(deg(-45), deg(-23), 0)
+console.log(toDeg(solarDiskGeometry(time, observerState(time, earth(time), site), sun(time)).l0)) // 96.8412 — degrees
+
+// Geocentric Meeus approximation.
+console.log(toDeg(approximateSolarDiskGeometry(time).l0)) // 96.885 — degrees
+
+// A line of sight 300″ west and 200″ north of the disk center, and back.
+const point = helioprojectiveToHeliographic(arcsec(300), arcsec(200), geometry)
+
+if (point.onDisk) {
+	console.log(toDeg(point.stonyhurstLongitude), toDeg(point.latitude), toDeg(point.carringtonLongitude)) // 19.100 14.657 115.943 — degrees
+	console.log(point.mu) // 0.924
+}
+
+const projected = heliographicToHelioprojective(deg(30), deg(20), 'stonyhurst', geometry)
+console.log(toArcsec(projected.tx), toArcsec(projected.ty), projected.visible) // 445.05 288.45 true — arcseconds
+
+// A plate-solved image: disk center at (1024, 1024), radius 960 px, ICRS north up.
+const calibration = { centerX: 1024, centerY: 1024, scale: solarImageScale(geometry, 960), positionAngle: 0, north: 'icrs' } as const
+const spot = solarImageToHeliographic(1300, 900, geometry, calibration)
+
+if (spot.onDisk) {
+	console.log(toDeg(spot.stonyhurstLongitude), toDeg(spot.latitude)) // 16.399 10.973 — degrees
+
+	// Two days later the spot has rotated about 26° west.
+	const later = timeShift(time, 2)
+	const laterGeometry = solarDiskGeometry(later, earth(later), sun(later))
+	const carrington = rotateCarringtonLongitude(spot.carringtonLongitude, spot.latitude, time, later)
+	console.log(heliographicToSolarImage(carrington, spot.latitude, 'carrington', laterGeometry, calibration)) // { x: 1675.47, y: 907.61, visible: true }
+}
+
+console.log(solarImageToHeliographic(100, 100, geometry, calibration)) // { onDisk: false, elongation: 0.00623 } — beyond the limb, radians from the disk center
+console.log(toDeg(solarRotationRate(deg(30))), toDeg(solarRotationRate(deg(30), SNODGRASS_1983_DIFFERENTIAL_ROTATION))) // 13.682 13.542 — degrees/day
+```
+
 ### Solar Eclipse Besselian Elements
 
 The Besselian elements describe a solar eclipse in the fundamental plane, the plane through the Earth's center perpendicular to the Moon's shadow axis. `x` and `y` are the coordinates of the shadow axis in that plane, `d` and `mu` are the declination of the axis and the Greenwich hour angle of its direction (radians), `l1` and `l2` are the radii of the penumbral and umbral cones in the fundamental plane (`l2` is negative for a total eclipse, positive for an annular one), and `tanF1` and `tanF2` are the tangents of the half-angles of those cones. `x`, `y`, `l1` and `l2` are in equatorial Earth radii. Every other solar eclipse routine of the library (the ground track, the local circumstances) is built on them.
@@ -5915,7 +5988,7 @@ console.log(spaceMotion(fixed, timeJulianYear(2025, Timescale.TDB))[0]) // the s
 
 The sub-observer point is the spot on a body's surface directly beneath the observer, the center of the disk as seen; its longitude is the central meridian. The sub-solar point is the spot directly beneath the Sun. Their latitudes are the tilt of the pole toward the observer or the Sun, and the longitude difference is the phase geometry. The orientation is evaluated one light time earlier, since the body turned while the light was in flight, which matters for fast rotators like Jupiter, whose prime meridian advances about 18° over the light time.
 
-`subObserverPoint(elements, time, bodyToObserver)` returns `{ longitude, latitude }` in radians, planetocentric and east-positive, with longitude in `[0, 2π)`. `bodyToObserver` is the vector from the body's center to the observer in AU, in ICRF axes: its length sets the light-time delay and its direction sets the point. `subSolarPoint(elements, time, bodyToObserver, bodyToSun)` takes the same and the body-to-Sun vector, whose small change over the light time is neglected, and returns the point beneath the Sun as the observer sees it. For west-positive (planetographic) longitudes of a prograde body use `2π − longitude`, as `jupiterCentralMeridian` does. `positionAngleOfPole(elements, time, bodyToObserver)` returns the position angle of the body's north pole on the sky, measured at the disk center from celestial north toward east, in `(−π, π]`; for the Sun it is the classical P angle. It is referred to the true equator and equinox of date and neglects aberration of the disk-center direction. The rotation elements come from [IAU Body Orientation](#iau-body-orientation).
+`subObserverPoint(elements, time, bodyToObserver)` returns `{ longitude, latitude }` in radians, planetocentric and east-positive, with longitude in `[0, 2π)`. `bodyToObserver` is the vector from the body's center to the observer in AU, in ICRF axes: its length sets the light-time delay and its direction sets the point. `subSolarPoint(elements, time, bodyToObserver, bodyToSun)` takes the same and the body-to-Sun vector, whose small change over the light time is neglected, and returns the point beneath the Sun as the observer sees it. For west-positive (planetographic) longitudes of a prograde body use `2π − longitude`, as `jupiterCentralMeridian` does. `positionAngleOfPole(elements, time, bodyToObserver)` returns the position angle of the body's north pole on the sky, measured at the disk center from celestial north toward east, in `(−π, π]`; for the Sun it is the classical P angle. It is referred to the true equator and equinox of date and neglects aberration of the disk-center direction. The rotation elements come from [IAU Body Orientation](#iau-body-orientation). For the Sun's P, B0 and L0 together, with aberration and image mapping, see [Solar Disk Geometry and Heliographic Coordinates](#solar-disk-geometry-and-heliographic-coordinates).
 
 ```ts
 import { positionAngleOfPole, subObserverPoint, subSolarPoint } from 'nebulosa/src/astronomy/bodies/orientation'
