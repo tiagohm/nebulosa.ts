@@ -8,7 +8,7 @@ import { Naif } from '../../../src/astronomy/ephemeris/kernels/naif'
 import { readSpk } from '../../../src/astronomy/ephemeris/kernels/spk'
 import { earth, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { occultationCandidates } from '../../../src/astronomy/events/occultation'
-import { type OccultationPath, type OccultationPathLine, type OccultationPathMode, occultationPath, occultationPathPolylines } from '../../../src/astronomy/events/occultation.path'
+import { type OccultationPath, type OccultationPathLine, type OccultationPathMode, type OccultationPathSample, occultationPath, occultationPathPolylines } from '../../../src/astronomy/events/occultation.path'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
 import { KeplerOrbit } from '../../../src/astronomy/orbits/asteroid'
 import { gcrsToItrsRotationMatrix, NO_POLAR_MOTION, type Time, Timescale, time, timeMJD, timeShift, timeSubtract, timeYMDHMS, toJulianDay } from '../../../src/astronomy/time/time'
@@ -261,6 +261,120 @@ test('solar light deflection moves the shadow by the differential deflection', (
 	// (away from the Sun), so the shadow moves south by roughly a km.
 	expect(toKilometer(shift)).toBeLessThan(-0.2)
 	expect(toKilometer(shift)).toBeGreaterThan(-3)
+})
+
+describe('causal ray order', () => {
+	const MODES = ['rigorous', 'approximate'] as OccultationPathMode[]
+
+	// Static barycentric body at `position` (AU); records the latest epoch it was sampled at.
+	function staticBody(position: Vec3) {
+		const state = { latest: Number.NEGATIVE_INFINITY }
+		const sampler: PositionAndVelocityOverTime = (t) => {
+			state.latest = Math.max(state.latest, timeSubtract(t, T0))
+			return [position, [0, 0, 0]]
+		}
+		return { sampler, state }
+	}
+
+	for (const mode of MODES) {
+		test(`a body behind the Earth casts no shadow on it (${mode})`, () => {
+			// Light from the star on +x reaches the Earth before the body at -1 AU, so nothing is occulted.
+			const { sampler, state } = staticBody([-1, 0, 0])
+			const stop = timeShift(T0, 60 / DAYSEC)
+			const path = occultationPath(sampler, [1, 0, 0], geocenter, T0, stop, { radius: RADIUS, mode })
+			expect(path.shadow).toHaveLength(0)
+			expect(path.central).toHaveLength(0)
+			expect(path.samples).toHaveLength(0)
+			// The body is never sampled after the window: a negative light time is not used.
+			expect(state.latest).toBeLessThanOrEqual(timeSubtract(stop, T0))
+		})
+
+		test(`the same body in front of the Earth casts a central shadow (${mode})`, () => {
+			const path = occultationPath(staticBody([1, 0, 0]).sampler, [1, 0, 0], geocenter, T0, timeShift(T0, 60 / DAYSEC), { radius: RADIUS, mode })
+			expect(path.shadow).toHaveLength(1)
+			expect(path.central).toHaveLength(1)
+			// The sub-body point sees the star at the zenith.
+			expect(toDeg(path.samples[0].center!.altitude)).toBeGreaterThan(89)
+		})
+
+		test(`a body just behind the limb casts no shadow (${mode})`, () => {
+			// The axis grazes the Earth inside the limb, but the body sits half an Earth radius downstream of the
+			// geocenter, so the ray would hit the ground before reaching it.
+			const body = syntheticBody([-0.5 * A, 0.95 * A, 0], [0, 0, 0])
+			const path = occultationPath(body, syntheticStar([1, 0, 0]), geocenter, T0, timeShift(T0, 60 / DAYSEC), { radius: RADIUS, mode, lightTimeIterations: 0 })
+			expect(path.shadow).toHaveLength(0)
+			expect(path.samples).toHaveLength(0)
+		})
+
+		test(`a finite source must lie beyond the body (${mode})`, () => {
+			// Source at +1 AU and body at +2 AU: the light travels away from the Earth after passing the body.
+			const source: PositionAndVelocityOverTime = () => [
+				[1, 0, 0],
+				[0, 0, 0],
+			]
+			const behind = occultationPath(staticBody([2, 0, 0]).sampler, source, geocenter, T0, timeShift(T0, 60 / DAYSEC), { radius: RADIUS, mode })
+			expect(behind.shadow).toHaveLength(0)
+			expect(behind.samples).toHaveLength(0)
+
+			const beyond: PositionAndVelocityOverTime = () => [
+				[2, 0, 0],
+				[0, 0, 0],
+			]
+			const front = occultationPath(staticBody([1, 0, 0]).sampler, beyond, geocenter, T0, timeShift(T0, 60 / DAYSEC), { radius: RADIUS, mode })
+			expect(front.central).toHaveLength(1)
+			// The cone from a source 1 AU behind the body doubles its radius at the Earth.
+			expect(front.samples[0].radius / RADIUS).toBeCloseTo(2, 6)
+		})
+	}
+})
+
+describe('separate passes', () => {
+	// A body whose shadow swings north-south across the Earth twice: z = 1.5 A cos(2 PI t / 120 s) at 1 AU, sampled
+	// without light time so the passes fall around t = 30 s and t = 90 s.
+	const PERIOD = 120 / DAYSEC
+	const target: PositionAndVelocityOverTime = (t) => {
+		const phase = (2 * PI * timeSubtract(t, T0)) / PERIOD
+		const position = matTransposeMulVec(ROTATION, [RANGE, 0, 1.5 * A * Math.cos(phase)])
+		const velocity = matTransposeMulVec(ROTATION, [0, 0, ((-1.5 * A * 2 * PI) / PERIOD) * Math.sin(phase)])
+		return [position, velocity]
+	}
+
+	test('two shadow intervals give two polylines per line', () => {
+		const sigma = kilometer(30)
+		const body = gcrsCovariance([sigma * sigma, 0, 0, 0, sigma * sigma, 0, 0, 0, sigma * sigma])
+		const path = occultationPath(target, syntheticStar([1, 0, 0]), geocenter, T0, timeShift(T0, PERIOD), { radius: RADIUS, mode: 'approximate', step: 1 / DAYSEC, lightTimeIterations: 0, uncertainty: { body } })
+		expect(path.shadow).toHaveLength(2)
+		expect(timeSubtract(path.shadow[0].start, T0)).toBeGreaterThan(0)
+		expect(timeSubtract(path.shadow[1].end, T0)).toBeLessThan(PERIOD)
+		expect(path.central).toHaveLength(2)
+
+		for (const line of ['center', 'left', 'right', 'corridorLeft', 'corridorRight'] as const) {
+			expect(occultationPathPolylines(path, line)).toHaveLength(2)
+			expect(occultationPathPolylines(path, line, true)).toHaveLength(2)
+		}
+	})
+
+	test('a pass boundary breaks a line even when both sides have points', () => {
+		const point = (longitude: number) => ({ longitude: deg(longitude), latitude: 0, altitude: deg(45) })
+		const sample = (minutes: number, longitude: number): OccultationPathSample => ({ time: timeShift(T0, minutes / 1440), center: point(longitude), radius: RADIUS, speed: 1 })
+		const interval = (from: number, to: number) => ({ start: timeShift(T0, from / 1440), end: timeShift(T0, to / 1440) })
+		// The first pass crosses the antimeridian; the second is far away and later.
+		const path: OccultationPath = {
+			mode: 'rigorous',
+			samples: [sample(0, 178), sample(1, -178), sample(10, 10), sample(11, 20)],
+			shadow: [interval(0, 1), interval(10, 11)],
+			central: [interval(0, 1), interval(10, 11)],
+		}
+
+		const split = occultationPathPolylines(path, 'center')
+		expect(split.map((polyline) => polyline.length)).toEqual([2, 2, 2])
+		expect(split[2][0].longitude).toBe(deg(10))
+
+		const unwrapped = occultationPathPolylines(path, 'center', true)
+		expect(unwrapped.map((polyline) => polyline.length)).toEqual([2, 2])
+		expect(toDeg(unwrapped[0][1].longitude)).toBeCloseTo(182, 12)
+		expect(unwrapped[1][0].longitude).toBe(deg(10))
+	})
 })
 
 test('rejects an invalid light-time iteration count', () => {

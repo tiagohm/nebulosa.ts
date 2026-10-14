@@ -26,7 +26,9 @@ import { searchIntervals, type TimeInterval } from './search'
 // with the full GCRS -> ITRS matrix at t (precession-nutation from TT, sidereal angle from UT1 through the
 // time's Earth-orientation providers, polar motion), and the axis, the limit lines and the corridor lines are
 // intersected in closed form with the ellipsoid, optionally inflated by a uniform height. The intersection on
-// the source-facing side is the ground point; a line that misses the ellipsoid has no ground point at t.
+// the source-facing side is the ground point; a line that misses the ellipsoid has no ground point at t. The
+// ray must also be causal, source -> body -> ground: a body downstream of the Earth (or a finite source between
+// the Earth and the body) casts no shadow, and a ground point upstream of the body is not occulted.
 //
 // Modes. 'rigorous' (default) retards the body and a finite source by fixed-point light time, tilts the
 // instantaneous shadow axis by the light-time aberration of the moving shadow (direction ~ s + v_body / c,
@@ -207,7 +209,8 @@ interface ShadowAxis {
 	readonly radius: number
 	// Radius decrease per unit depth toward the source (tangent of the cone half-angle), 0 for a cylinder.
 	readonly slope: number
-	// Distance from the body to the anchor along the ray, AU.
+	// Signed depth of the body above the geocenter's fundamental plane, toward the source along the ray, AU: the
+	// light path from the body to that plane. It is negative when the Earth is upstream of the body.
 	readonly distance: number
 	// Lateral displacement of the axis at the anchor per radian of source-direction error, AU.
 	readonly sourceLever: number
@@ -285,6 +288,22 @@ function intersectGround(origin: Vec3, axis: Vec3, a: number, b: number, out: Mu
 	out[1] = origin[1] + mu * axis[1]
 	out[2] = origin[2] + mu * axis[2]
 	return discriminant / (4 * qa)
+}
+
+// Ground point of the line origin + mu * axis (see intersectGround) with a causal margin: the light must pass the
+// body before the ground point (source -> body -> ground), i.e. the body lies deeper toward the source than the
+// point. The returned margin is the smaller of the scaled discriminant and that depth difference in equatorial
+// radii, so it is non-negative exactly for a causal hit and stays continuous through tangency and through the
+// causal boundary. Coordinates are ITRS AU with the geocenter at the origin.
+function groundLine(context: ShadowContext, current: ShadowAxis, origin: Vec3, out: MutVec3): number {
+	const discriminant = intersectGround(origin, current.axis, context.equatorialRadius, context.polarRadius, out)
+	return Math.min(discriminant, causalDepth(current, out) / context.equatorialRadius)
+}
+
+// Height of the body above `point` (ITRS AU) along the axis toward the source, AU: positive when the light
+// reaches the point after passing the body.
+function causalDepth(current: ShadowAxis, point: Vec3) {
+	return current.distance - vecDot(point, current.axis)
 }
 
 // Radial distance (AU) from the axis to the Earth's silhouette in the fundamental plane, negative inside it.
@@ -373,8 +392,10 @@ function shadowAxis(context: ShadowContext, time: Time, rotation: Mat3 = gcrsToI
 		const bx = body[0] - ex
 		const by = body[1] - ey
 		const bz = body[2] - ez
-		// Rigorous: light time to the geocenter's depth plane along the ray; approximate: geocentric range.
-		lt = (rigorous ? -(bx * u[0] + by * u[1] + bz * u[2]) : Math.sqrt(bx * bx + by * by + bz * bz)) / SPEED_OF_LIGHT_AU_DAY
+		// Rigorous: light time to the geocenter's depth plane along the ray; approximate: geocentric range. A body
+		// downstream of the Earth casts no shadow on it; its light time is held at zero rather than sampling the
+		// body in the future, and the causal margin of groundLine rejects the geometry.
+		lt = (rigorous ? Math.max(0, -(bx * u[0] + by * u[1] + bz * u[2])) : Math.sqrt(bx * bx + by * by + bz * bz)) / SPEED_OF_LIGHT_AU_DAY
 	}
 
 	// Axis direction toward the source (GCRS) before deflection.
@@ -543,7 +564,7 @@ function solveLimit(context: ShadowContext, before: ShadowAxis, current: ShadowA
 		origin[0] = anchor[0] + offset * normal[0]
 		origin[1] = anchor[1] + offset * normal[1]
 		origin[2] = anchor[2] + offset * normal[2]
-		margin = intersectGround(origin, axis, context.equatorialRadius, context.polarRadius, point)
+		margin = groundLine(context, current, origin, point)
 	}
 
 	return { point, margin, normal }
@@ -590,11 +611,10 @@ function evaluateSample(context: ShadowContext, time: Time, offset: number, scal
 	const current = shadowAxis(context, time)
 	const before = shadowAxis(context, timeShift(time, -VELOCITY_STEP), matRotZ(-ANGVEL_PER_DAY * VELOCITY_STEP, matClone(current.rotation)))
 	const after = shadowAxis(context, timeShift(time, VELOCITY_STEP), matRotZ(ANGVEL_PER_DAY * VELOCITY_STEP, matClone(current.rotation)))
-	const { equatorialRadius, polarRadius } = context
 	const margins = [Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY]
 
 	const centerPoint: MutVec3 = [0, 0, 0]
-	margins[0] = intersectGround(current.anchor, current.axis, equatorialRadius, polarRadius, centerPoint)
+	margins[0] = groundLine(context, current, current.anchor, centerPoint)
 	const hit = margins[0] >= 0
 
 	const velocity = shadowVelocity(context, before, current, after, centerPoint)
@@ -619,7 +639,7 @@ function evaluateSample(context: ShadowContext, time: Time, offset: number, scal
 		const pb: MutVec3 = [0, 0, 0]
 		const pa: MutVec3 = [0, 0, 0]
 
-		if (intersectGround(before.anchor, before.axis, equatorialRadius, polarRadius, pb) >= 0 && intersectGround(after.anchor, after.axis, equatorialRadius, polarRadius, pa) >= 0) {
+		if (groundLine(context, before, before.anchor, pb) >= 0 && groundLine(context, after, after.anchor, pa) >= 0) {
 			const scaleVelocity = 1 / (2 * VELOCITY_STEP)
 			const vx = (pa[0] - pb[0]) * scaleVelocity
 			const vy = (pa[1] - pb[1]) * scaleVelocity
@@ -772,11 +792,22 @@ export function occultationPath(target: PositionAndVelocityOverTime, source: Vec
 		if (axis === undefined) scanned.set(key, (axis = shadowAxis(context, time)))
 		return axis
 	}
+	// The silhouette margins are gated by the causal depth at the axis point (its ground hit or closest approach),
+	// so a body downstream of the Earth yields no contact. For a body within an Earth radius of the fundamental
+	// plane the gate uses that single point, and the per-line margins of the samples decide each ground point.
+	const axisPoint: MutVec3 = [0, 0, 0]
+	const causalMargin = (axis: ShadowAxis) => {
+		intersectGround(axis.anchor, axis.axis, context.equatorialRadius, context.polarRadius, axisPoint)
+		return causalDepth(axis, axisPoint)
+	}
 	const shadowMargin = (time: Time) => {
 		const axis = scannedAxis(time)
-		return axis.radius - silhouetteDistance(context, axis)
+		return Math.min(axis.radius - silhouetteDistance(context, axis), causalMargin(axis))
 	}
-	const centralMargin = (time: Time) => -silhouetteDistance(context, scannedAxis(time))
+	const centralMargin = (time: Time) => {
+		const axis = scannedAxis(time)
+		return Math.min(-silhouetteDistance(context, axis), causalMargin(axis))
+	}
 
 	const shadow = searchIntervals([shadowMargin], begin, end, { step, tolerance })
 	const central = searchIntervals([centralMargin], begin, end, { step, tolerance })
@@ -793,8 +824,12 @@ export function occultationPath(target: PositionAndVelocityOverTime, source: Vec
 
 		let previous: EvaluatedSample | undefined
 
-		for (const offset of offsets) {
-			const current = evaluateSample(context, timeShift(begin, offset), offset, scale)
+		for (let i = 0; i < offsets.length; i++) {
+			const offset = offsets[i]
+			// The interval endpoints are evaluated at the refined contact instants themselves, so the first and last
+			// samples of a pass carry exactly the times reported in `shadow`.
+			const time = i === 0 ? interval.start : i === offsets.length - 1 ? interval.end : timeShift(begin, offset)
+			const current = evaluateSample(context, time, offset, scale)
 
 			if (previous !== undefined) {
 				for (let index = 0; index < LINES.length; index++) {
@@ -832,8 +867,10 @@ function linePoint(sample: OccultationPathSample, line: OccultationPathLine) {
 }
 
 // Extracts one line family of a path as polylines for mapping. A polyline breaks wherever the line leaves the
-// Earth. With `unwrap` false (default) longitudes stay in [-PI, PI] and a polyline is also split where it
-// crosses the antimeridian, ending and restarting on the seam at a latitude and time interpolated linearly in
+// Earth and between two passes: a sample opens a new polyline when it belongs to a later `shadow` interval than
+// the previous one, so separate passes are never joined across the time when no shadow touches the Earth. With
+// `unwrap` false (default) longitudes stay in [-PI, PI] and a polyline is also split where it crosses the
+// antimeridian, ending and restarting on the seam at a latitude and time interpolated linearly in
 // longitude between the two samples. With `unwrap` true each polyline keeps continuous unwrapped longitudes.
 // A track passing directly over a pole has a longitude jump near PI between the two samples bracketing it,
 // which is preserved. Rendering (SVG, GeoJSON) is left to the caller.
@@ -841,9 +878,19 @@ export function occultationPathPolylines(path: OccultationPath, line: Occultatio
 	const polylines: OccultationPathVertex[][] = []
 	let polyline: OccultationPathVertex[] | undefined
 	let previous: OccultationPathVertex | undefined
+	// Index of the shadow interval holding the current sample; samples are chronological, so it only advances.
+	let pass = 0
 
 	for (const sample of path.samples) {
 		const point = linePoint(sample, line)
+		let next = pass
+		while (next + 1 < path.shadow.length && timeSubtract(sample.time, path.shadow[next + 1].start) >= 0) next++
+
+		if (next !== pass) {
+			pass = next
+			polyline = undefined
+			previous = undefined
+		}
 
 		if (point === undefined) {
 			polyline = undefined
