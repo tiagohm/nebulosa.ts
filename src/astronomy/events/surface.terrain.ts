@@ -1,6 +1,6 @@
 import { PI, TAU } from '../../core/constants'
-import { validatePositiveFinite } from '../../core/validation'
-import { type MutVec3, type Vec3, vecAngle, vecDot, vecLength, vecNormalizeMut } from '../../math/linear-algebra/vec3'
+import { validatePositiveFinite, validatePositiveInteger } from '../../core/validation'
+import { type MutVec3, type Vec3, vecAngle, vecCross, vecDivScalarMut, vecDot, vecLatitude, vecLength, vecLongitude, vecMinus, vecMulScalar, vecNormalizeMut, vecZero } from '../../math/linear-algebra/vec3'
 import { clamp } from '../../math/numerical/math'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
@@ -18,14 +18,17 @@ import type { SurfaceFeature } from './surface'
 // cell-centered grid reaches the poles. NaN marks missing data.
 //
 // From a feature prepared by surfaceFeature, the module derives the terrain horizon mask by marching
-// great circles along azimuths, the facet slope/aspect by central differences, and the first terrain
-// crossing of a straight ray toward a local altitude/azimuth, which gives point-Sun shadowing and the
-// cast-shadow length of a summit. Rays and horizon profiles sample the terrain at a fixed step, so
-// relief narrower than the step or the grid spacing can be missed or smoothed; results are no better
+// the feature's vertical plane toward each azimuth (so samples keep their azimuth on tri-axial
+// bodies), never below the limb of the body's lowest surface; the facet slope/aspect by central
+// differences in the same planes; and the first terrain crossing of a straight ray toward a local
+// altitude/azimuth, which gives point-Sun shadowing and the cast-shadow length of a summit. Rays and
+// horizon profiles sample the terrain at a fixed step, so relief narrower than the step or the grid spacing can be missed or smoothed; results are no better
 // than the DEM resolution and its own accuracy. Off the grid and on NaN cells the reference surface
 // (zero elevation) stands in, which horizon samples report as incomplete. The Sun is a point at the
 // direction supplied: penumbra from its finite disk is not modeled. Nothing here mutates the grid or
-// the feature; the grid is never copied, and each march reuses scalar workspaces only.
+// the feature; the grid is never copied, and each march reuses scalar workspaces only. Sample
+// counts are bounded (MAX_RAY_SAMPLES per ray or azimuth, MAX_HORIZON_SAMPLES per horizon) so a
+// tiny step or a huge azimuth count fails fast instead of scanning without practical bound.
 
 // A gridded DEM in body-fixed planetocentric coordinates. Node (column i, row j) is the center of a
 // cell at longitude + i·longitudeStep and latitude + j·latitudeStep, stored row-major at
@@ -80,8 +83,10 @@ export interface TerrainFacet {
 
 // A terrain horizon sample with the geometry that set it.
 export interface TerrainHorizonSample extends HorizonSample {
-	// Surface distance from the feature to the terrain point that sets the horizon, AU: the
-	// feature's reference radius times the central angle; zero when the march had no sample.
+	// Distance from the feature to the point that sets the horizon, AU: the arc of its vertical plane
+	// at the vantage's distance from the plane's center (the vantage radius on a sphere). When no
+	// terrain sample rises above the body's own limb, it is the distance to that limb, zero for a
+	// vantage on a smooth sphere.
 	readonly distance: Distance
 	// Whether every sample along this azimuth came from finite DEM data; false when the march left
 	// the grid or crossed NaN cells and the reference surface was used there.
@@ -90,14 +95,16 @@ export interface TerrainHorizonSample extends HorizonSample {
 
 // Controls for terrainHorizon.
 export interface TerrainHorizonOptions {
-	// Number of azimuths, evenly spaced from north through east starting at zero; defaults to 360.
+	// Number of azimuths, a positive integer, evenly spaced from north through east starting at zero;
+	// defaults to 360.
 	readonly azimuths?: number
 	// Surface distance between samples along each azimuth, AU; defaults to half the ground spacing
 	// (spacing × feature radius / 2). Ridges narrower than the step can be missed.
 	readonly step?: Distance
-	// Surface distance at which the march stops, AU. Defaults to the reach beyond which terrain
-	// within the grid's elevation range is hidden by the body itself (from spheres through the
-	// smallest and largest semi-axes offset by the elevation extremes); capped at half a great circle.
+	// Surface distance at which the march stops, AU, with the last sample exactly there. Defaults to
+	// the reach beyond which terrain within the grid's elevation range is hidden by the body itself
+	// (from spheres through the smallest and largest semi-axes offset by the elevation extremes);
+	// capped at half a turn of section angle.
 	readonly maxDistance?: Distance
 }
 
@@ -222,130 +229,285 @@ function outerRadius(model: TerrainModel, shape: BodyShape) {
 	return Math.max(a, b, c) + Math.max(model.maximumElevation, 0)
 }
 
-// Unit tangent toward a local azimuth (radians, north through east), made exactly perpendicular to
-// the feature's radial direction so it spans a great circle with it. Allocates the result.
-function greatCircleTangent(feature: SurfaceFeature, radial: Vec3, azimuth: Angle): MutVec3 {
-	const { north, east } = feature
-	const cosAzimuth = Math.cos(azimuth)
-	const sinAzimuth = Math.sin(azimuth)
-	const x = cosAzimuth * north[0] + sinAzimuth * east[0]
-	const y = cosAzimuth * north[1] + sinAzimuth * east[1]
-	const z = cosAzimuth * north[2] + sinAzimuth * east[2]
-	const along = x * radial[0] + y * radial[1] + z * radial[2]
-	return vecNormalizeMut([x - along * radial[0], y - along * radial[1], z - along * radial[2]])
+// Most terrain samples one horizon azimuth or one ray may take; pass a longer step or shorter
+// maxDistance to stay below it.
+const MAX_RAY_SAMPLES = 1e6
+
+// Most terrain samples one terrainHorizon call may take (azimuths × samples per azimuth), which keeps
+// a call to seconds rather than an unbounded scan.
+const MAX_HORIZON_SAMPLES = 1e8
+
+// The vertical plane through a feature toward one local azimuth: spanned by the feature's zenith
+// and the horizontal direction at that azimuth. Its points are offset·normal + ρ·(cos θ·a + sin θ·b),
+// where a and b are orthonormal in the parallel plane through the body center, a toward the feature
+// and b toward the azimuth. Every point of the plane seen from the feature lies at that azimuth, even
+// on a tri-axial body, where great circles through the radial direction would drift off it.
+interface VerticalSection {
+	// Unit plane normal, horizontal and perpendicular to the azimuth, body-fixed axes.
+	readonly normal: Vec3
+	// Signed distance of the plane from the body center along normal, AU; zero on a sphere.
+	readonly offset: Distance
+	// Unit in-plane direction from the section center toward the feature, body-fixed axes.
+	readonly a: Vec3
+	// Unit in-plane direction perpendicular to a, toward the azimuth, body-fixed axes.
+	readonly b: Vec3
+	// Distance of the feature from the section center (offset·normal), AU.
+	readonly range: Distance
 }
 
-// Terrain horizon mask of a feature, by ray marching the DEM. The vantage point is the feature's
+// Builds the vertical section of a feature toward azimuth (radians, north through east). point is
+// the feature's body-fixed position (AU). Allocates the section.
+function verticalSection(feature: SurfaceFeature, point: Vec3, azimuth: Angle): VerticalSection {
+	const { up, north, east } = feature
+	const cosAzimuth = Math.cos(azimuth)
+	const sinAzimuth = Math.sin(azimuth)
+	const h: MutVec3 = [cosAzimuth * north[0] + sinAzimuth * east[0], cosAzimuth * north[1] + sinAzimuth * east[1], cosAzimuth * north[2] + sinAzimuth * east[2]]
+	// h and up are orthonormal, so h × up is already a unit vector.
+	const normal = vecCross(h, up)
+	const offset = vecDot(normal, point)
+	const a = vecMulScalar(normal, offset)
+	vecMinus(point, a, a)
+	const range = vecLength(a)
+	vecDivScalarMut(a, range)
+	const b = vecMulScalar(a, vecDot(h, a))
+	vecNormalizeMut(vecMinus(h, b, b))
+	return { normal, offset, a, b, range }
+}
+
+// Secant iterations that move a vertical-section sample onto the terrain; each costs one DEM lookup.
+// A sphere needs none. Otherwise each sample starts from the previous sample's radius, so a few
+// suffice even on strongly tri-axial shapes; the last iterate is kept if the bound is hit.
+const MAX_SECTION_ITERATIONS = 8
+
+// Radius residual, relative to the section range, below which a section sample is on the terrain.
+const SECTION_TOLERANCE = 1e-12
+
+// Scratch state of the section solver, reused across samples of one march.
+interface SectionWork {
+	// DEM elevation (AU) at the last evaluated point; NaN off the grid or next to missing data.
+	elevation: number
+	// Section radius ρ (AU) of the last solved sample, the start for the next one.
+	rho: number
+}
+
+// Radius residual (AU) of the section point offset·normal + rho·u: its distance from the body center
+// minus the terrain radius in its direction (reference radius plus DEM elevation, zero elevation
+// standing in for missing data). Positive above the terrain. Writes the DEM elevation into work.
+function sectionResidual(model: TerrainModel, ia: number, ib: number, ic: number, section: VerticalSection, ux: number, uy: number, uz: number, rho: number, work: SectionWork) {
+	const { normal, offset } = section
+	const x = offset * normal[0] + rho * ux
+	const y = offset * normal[1] + rho * uy
+	const z = offset * normal[2] + rho * uz
+	const r = Math.hypot(x, y, z)
+	const elevation = sampleElevation(model, Math.atan2(y, x), Math.atan2(z, Math.hypot(x, y)))
+	work.elevation = elevation
+	return r - referenceRadius(ia, ib, ic, x / r, y / r, z / r) - (Number.isNaN(elevation) ? 0 : elevation)
+}
+
+// Fixed-point update of a section radius: the ρ at which the terrain radius just found at rho (its
+// distance minus residual) would be met. Always finite and non-negative.
+function sectionFixedPoint(offset: Distance, rho: Distance, residual: Distance) {
+	const terrainRadius = Math.sqrt(offset * offset + rho * rho) - residual
+	return Math.sqrt(Math.max(terrainRadius * terrainRadius - offset * offset, 0))
+}
+
+// Moves the section sample at angle θ (given by its cosine and sine) onto the terrain and writes the
+// body-fixed point (AU) into out. With a zero offset (a sphere) the terrain radius straight along u
+// is exact in one DEM lookup. Otherwise the solve starts from work.rho, the previous sample's radius
+// along the same march (the section range for the first), takes a fixed-point step and refines with
+// secant iterations on sectionResidual, falling back to a fixed-point step whenever the secant
+// leaves positive radii. Following the previous root keeps the march on one continuous terrain
+// profile; on strongly tri-axial shapes, relief steep enough to give one section ray several
+// terrain crossings can leave it on the ground crossing and miss that relief. Stores the solved
+// radius in work.rho and returns the DEM elevation at the final point, NaN off the grid or next to
+// missing data, where the reference surface stands in. Hot path: no allocation.
+function sectionTerrainPoint(model: TerrainModel, ia: number, ib: number, ic: number, section: VerticalSection, cosAngle: number, sinAngle: number, work: SectionWork, out: MutVec3) {
+	const { normal, offset, a, b } = section
+	const ux = cosAngle * a[0] + sinAngle * b[0]
+	const uy = cosAngle * a[1] + sinAngle * b[1]
+	const uz = cosAngle * a[2] + sinAngle * b[2]
+	const tolerance = SECTION_TOLERANCE * section.range
+	let elevation: number
+	let rho: number
+
+	if (Math.abs(offset) <= tolerance) {
+		elevation = sampleElevation(model, Math.atan2(uy, ux), Math.atan2(uz, Math.hypot(ux, uy)))
+		rho = referenceRadius(ia, ib, ic, ux, uy, uz) + (Number.isNaN(elevation) ? 0 : elevation)
+	} else {
+		let previousRho = work.rho
+		let previousResidual = sectionResidual(model, ia, ib, ic, section, ux, uy, uz, previousRho, work)
+		elevation = work.elevation
+		rho = previousRho
+
+		if (Math.abs(previousResidual) > tolerance) {
+			rho = sectionFixedPoint(offset, previousRho, previousResidual)
+
+			for (let i = 0; i < MAX_SECTION_ITERATIONS; i++) {
+				const residual = sectionResidual(model, ia, ib, ic, section, ux, uy, uz, rho, work)
+				elevation = work.elevation
+				if (Math.abs(residual) <= tolerance) break
+				let next = rho - (residual * (rho - previousRho)) / (residual - previousResidual)
+				if (!(next > 0 && Number.isFinite(next))) next = sectionFixedPoint(offset, rho, residual)
+				previousRho = rho
+				previousResidual = residual
+				rho = next
+			}
+		}
+	}
+
+	work.rho = rho
+	out[0] = offset * normal[0] + rho * ux
+	out[1] = offset * normal[1] + rho * uy
+	out[2] = offset * normal[2] + rho * uz
+	return elevation
+}
+
+// Altitude (radians) above the feature's reference tangent plane of the direction from point to
+// target, both body-fixed AU; the zenith-or-nadir and coincident cases return ±PI/2 or zero.
+function altitudeFrom(up: Vec3, point: Vec3, target: Vec3) {
+	const wx = target[0] - point[0]
+	const wy = target[1] - point[1]
+	const wz = target[2] - point[2]
+	const vertical = wx * up[0] + wy * up[1] + wz * up[2]
+	return Math.atan2(vertical, Math.sqrt(Math.max(wx * wx + wy * wy + wz * wz - vertical * vertical, 0)))
+}
+
+// Number of samples, endpoint included, for a march of length span (AU) at stride; throws RangeError
+// when that exceeds MAX_RAY_SAMPLES, which would scan without practical bound. A
+// non-positive or NaN span has none.
+function raySampleCount(span: number, stride: number) {
+	if (!(span > 0)) return 0
+	const count = Math.ceil(span / stride)
+	if (!(count <= MAX_RAY_SAMPLES)) throw new RangeError(`terrain march needs more than ${MAX_RAY_SAMPLES} samples; increase step or reduce maxDistance`)
+	return count
+}
+
+// Terrain horizon mask of a feature, by marching the DEM. The vantage point is the feature's
 // body-fixed position, so build its location with terrainSurfaceLocation (optionally with a small
-// height) to stand on the terrain. Along each azimuth the march follows the great circle through
-// the feature's radial direction and the local horizontal toward that azimuth (the vertical plane on
-// a sphere), samples terrain points every step out to maxDistance, and keeps the highest altitude
-// above the feature's reference tangent plane, with curvature included. The DEM elevations must be
-// relative to feature.location.shape. Returns options.azimuths fresh samples ordered by azimuth,
-// directly usable as SurfaceFeatureOptions.horizon. Throws RangeError for a non-positive or
-// non-finite step, which would never finish. Cost is azimuths × maxDistance / step DEM samples.
+// height) to stand on the terrain. Along each azimuth the march follows the terrain's intersection
+// with the feature's vertical plane toward that azimuth, so every sample is seen at that azimuth on a
+// tri-axial body too. Distances along an azimuth are arcs of that section at the vantage's distance
+// from the section center (the vantage radius on a sphere). The march samples every step out to
+// maxDistance, the last sample landing exactly there, and keeps the highest altitude above the
+// feature's reference tangent plane, with curvature included; the first sample is a full step out,
+// so ground curving away from the vantage reads up to about step / (2 × curvature radius) low. The
+// mask never drops below the limb of the body's lowest possible surface (smallest semi-axis plus the
+// lowest elevation) seen from the vantage in that plane: zero for a vantage on a smooth sphere and
+// -acos(R / (R + h)) at height h, whatever the step. The DEM elevations must be relative to
+// feature.location.shape. Returns options.azimuths fresh samples ordered by azimuth, directly usable as SurfaceFeatureOptions.horizon. Throws for a
+// non-integer or non-positive azimuth count, a non-positive or non-finite step, or a march over
+// MAX_RAY_SAMPLES samples per azimuth or MAX_HORIZON_SAMPLES in total, which would never finish or
+// scan without practical bound. Cost is azimuths × maxDistance / step DEM samples, a few times more
+// on a non-spherical shape.
 export function terrainHorizon(model: TerrainModel, feature: SurfaceFeature, { azimuths = 360, step, maxDistance }: TerrainHorizonOptions = {}): TerrainHorizonSample[] {
+	validatePositiveInteger(azimuths)
 	const stride = validatePositiveFinite(step ?? (model.spacing * feature.radius) / 2)
 	const { up, location } = feature
 	const shape = location.shape
 	const [ia, ib, ic] = inverseSquaredRadii(shape)
 	const point = bodyFixedPosition(location)
-	const range = vecLength(point)
-	const radial: Vec3 = [point[0] / range, point[1] / range, point[2] / range]
-
-	// Terrain past the vantage tangent to the inner sphere and the outer sphere's tangent beyond it is
-	// below the body's own limb, so it can never set the horizon.
 	const inner = Math.min(shape.radii[0], shape.radii[1], shape.radii[2]) + Math.min(model.minimumElevation, 0)
 	const outer = outerRadius(model, shape)
-	const reach = Math.acos(clamp(inner / range, -1, 1)) + Math.acos(clamp(inner / outer, -1, 1))
-	const limit = Math.min(maxDistance === undefined ? reach : maxDistance / feature.radius, PI)
-	const count = Math.max(0, Math.floor((limit * feature.radius) / stride))
 
-	// Central angles are shared by every azimuth.
-	const cosines = new Float64Array(count)
-	const sines = new Float64Array(count)
-	for (let k = 0; k < count; k++) {
-		const angle = ((k + 1) * stride) / feature.radius
-		cosines[k] = Math.cos(angle)
-		sines[k] = Math.sin(angle)
-	}
+	// Bound the work before any march. A section's offset is at most the vantage's distance from its
+	// zenith line through the center; both tangent angles of the default reach grow with the offset,
+	// and the section range is at most the vantage's distance from the center.
+	const distance2 = vecDot(point, point)
+	const along = vecDot(point, up)
+	const offsetBound = Math.sqrt(Math.max(distance2 - along * along, 0))
+	const reachBound = sectionReach(inner, outer, offsetBound, Math.sqrt(Math.max(distance2 - offsetBound * offsetBound, 0)))
+	const lengthBound = maxDistance ?? Math.min(reachBound, PI) * Math.sqrt(distance2)
+	const countBound = raySampleCount(lengthBound, stride)
+	if (!(countBound * azimuths <= MAX_HORIZON_SAMPLES)) throw new RangeError(`terrain horizon needs more than ${MAX_HORIZON_SAMPLES} samples; increase step, reduce azimuths or reduce maxDistance`)
 
 	const samples: TerrainHorizonSample[] = []
+	const terrain: MutVec3 = [0, 0, 0]
+	const work: SectionWork = { elevation: 0, rho: 0 }
 
 	for (let i = 0; i < azimuths; i++) {
 		const azimuth = (i * TAU) / azimuths
-		const tangent = greatCircleTangent(feature, radial, azimuth)
-		let best = -PI / 2
-		let bestIndex = -1
+		const section = verticalSection(feature, point, azimuth)
+		const { range, offset } = section
+
+		// Limb of the inner circle of this section: rays below it enter the solid body.
+		const innerCircle = Math.sqrt(Math.max(inner * inner - offset * offset, 0))
+		const limb = Math.acos(clamp(innerCircle / range, -1, 1))
+		let best: number
+
+		if (limb > 0) {
+			const c = innerCircle * Math.cos(limb)
+			const s = innerCircle * Math.sin(limb)
+			terrain[0] = offset * section.normal[0] + c * section.a[0] + s * section.b[0]
+			terrain[1] = offset * section.normal[1] + c * section.a[1] + s * section.b[1]
+			terrain[2] = offset * section.normal[2] + c * section.a[2] + s * section.b[2]
+			best = altitudeFrom(up, point, terrain)
+		} else {
+			// The vantage is on the inner circle: its limb is the section's tangent there.
+			best = Math.asin(clamp(vecDot(section.b, up), -1, 1))
+		}
+
+		// Section angles: every step, ending exactly at the limit.
+		const delta = stride / range
+		const limit = Math.min(maxDistance === undefined ? sectionReach(inner, outer, offset, range) : maxDistance / range, PI)
+		const steps = raySampleCount(limit, delta)
+		let bestAngle = limb
 		let complete = true
+		work.rho = range
 
-		for (let k = 0; k < count; k++) {
-			const c = cosines[k]
-			const s = sines[k]
-			const ux = c * radial[0] + s * tangent[0]
-			const uy = c * radial[1] + s * tangent[1]
-			const uz = c * radial[2] + s * tangent[2]
-			let elevation = sampleElevation(model, Math.atan2(uy, ux), Math.atan2(uz, Math.hypot(ux, uy)))
-
-			if (Number.isNaN(elevation)) {
-				complete = false
-				elevation = 0
-			}
-
-			const r = referenceRadius(ia, ib, ic, ux, uy, uz) + elevation
-			const wx = r * ux - point[0]
-			const wy = r * uy - point[1]
-			const wz = r * uz - point[2]
-			const vertical = wx * up[0] + wy * up[1] + wz * up[2]
-			const altitude = Math.atan2(vertical, Math.sqrt(Math.max(wx * wx + wy * wy + wz * wz - vertical * vertical, 0)))
+		for (let k = 1; k <= steps; k++) {
+			const angle = Math.min(k * delta, limit)
+			if (Number.isNaN(sectionTerrainPoint(model, ia, ib, ic, section, Math.cos(angle), Math.sin(angle), work, terrain))) complete = false
+			const altitude = altitudeFrom(up, point, terrain)
 
 			if (altitude > best) {
 				best = altitude
-				bestIndex = k
+				bestAngle = angle
 			}
 		}
 
-		samples.push({ azimuth, minimumAltitude: best, distance: (bestIndex + 1) * stride, complete })
+		samples.push({ azimuth, minimumAltitude: best, distance: bestAngle * range, complete })
 	}
 
 	return samples
 }
 
-// Body-fixed terrain point (AU) at central angle `angle` from the feature's radial direction toward
-// a unit great-circle tangent, or undefined off the grid or next to missing data. Allocates the result.
-function terrainPointAlong(model: TerrainModel, shape: BodyShape, radial: Vec3, tangent: Vec3, angle: Angle): MutVec3 | undefined {
-	const c = Math.cos(angle)
-	const s = Math.sin(angle)
-	const ux = c * radial[0] + s * tangent[0]
-	const uy = c * radial[1] + s * tangent[1]
-	const uz = c * radial[2] + s * tangent[2]
-	const elevation = sampleElevation(model, Math.atan2(uy, ux), Math.atan2(uz, Math.hypot(ux, uy)))
-	if (Number.isNaN(elevation)) return undefined
-	const [ia, ib, ic] = inverseSquaredRadii(shape)
-	const r = referenceRadius(ia, ib, ic, ux, uy, uz) + elevation
-	return [r * ux, r * uy, r * uz]
+// Section angle (radians) beyond which terrain cannot set a horizon: the vantage's tangent to the
+// inner circle of the section plus the outer circle's tangent beyond it. inner and outer are sphere
+// radii (AU) bounding the solid body and the terrain; offset is the section's distance from the
+// body center and range the vantage's distance from the section center (AU).
+function sectionReach(inner: Distance, outer: Distance, offset: Distance, range: Distance) {
+	const innerCircle = Math.sqrt(Math.max(inner * inner - offset * offset, 0))
+	const outerCircle = Math.sqrt(Math.max(outer * outer - offset * offset, 0))
+	return Math.acos(clamp(innerCircle / range, -1, 1)) + Math.acos(clamp(innerCircle / outerCircle, -1, 1))
 }
 
 // Facet slope and aspect of the DEM at a feature, from the normal of the two central-difference
-// chords between terrain points baseline (AU) north/south and east/west of it along great circles.
-// The default baseline is one ground spacing (spacing × feature radius); a longer one averages
-// over more relief. Slope is measured from the feature's reference-ellipsoid zenith; curvature
-// cancels in the symmetric differences. Returns undefined when any of the four points is off the
-// grid or next to missing data.
+// chords between terrain points baseline (AU) north/south and east/west of it, each in the feature's
+// vertical plane toward that azimuth. The default baseline is one ground spacing (spacing × feature
+// radius); a longer one averages over more relief. Slope is measured from the feature's
+// reference-ellipsoid zenith; curvature cancels in the symmetric differences. Returns undefined when
+// any of the four points is off the grid or next to missing data.
 export function terrainSlope(model: TerrainModel, feature: SurfaceFeature, baseline: Distance = model.spacing * feature.radius): TerrainFacet | undefined {
 	const { up, north, east, location } = feature
 	const point = bodyFixedPosition(location)
-	const range = vecLength(point)
-	const radial: Vec3 = [point[0] / range, point[1] / range, point[2] / range]
-	const angle = baseline / feature.radius
-	const northTangent = greatCircleTangent(feature, radial, 0)
-	const eastTangent = greatCircleTangent(feature, radial, PI / 2)
+	const [ia, ib, ic] = inverseSquaredRadii(location.shape)
+	const northward = verticalSection(feature, point, 0)
+	const eastward = verticalSection(feature, point, PI / 2)
+	const northAngle = baseline / northward.range
+	const eastAngle = baseline / eastward.range
 
-	const n0 = terrainPointAlong(model, location.shape, radial, northTangent, angle)
-	const n1 = terrainPointAlong(model, location.shape, radial, northTangent, -angle)
-	const e0 = terrainPointAlong(model, location.shape, radial, eastTangent, angle)
-	const e1 = terrainPointAlong(model, location.shape, radial, eastTangent, -angle)
-	if (n0 === undefined || n1 === undefined || e0 === undefined || e1 === undefined) return undefined
+	const work: SectionWork = { elevation: 0, rho: northward.range }
+	const n0: MutVec3 = [0, 0, 0]
+	const n1: MutVec3 = [0, 0, 0]
+	const e0: MutVec3 = [0, 0, 0]
+	const e1: MutVec3 = [0, 0, 0]
+	if (Number.isNaN(sectionTerrainPoint(model, ia, ib, ic, northward, Math.cos(northAngle), Math.sin(northAngle), work, n0))) return undefined
+	work.rho = northward.range
+	if (Number.isNaN(sectionTerrainPoint(model, ia, ib, ic, northward, Math.cos(northAngle), -Math.sin(northAngle), work, n1))) return undefined
+	work.rho = eastward.range
+	if (Number.isNaN(sectionTerrainPoint(model, ia, ib, ic, eastward, Math.cos(eastAngle), Math.sin(eastAngle), work, e0))) return undefined
+	work.rho = eastward.range
+	if (Number.isNaN(sectionTerrainPoint(model, ia, ib, ic, eastward, Math.cos(eastAngle), -Math.sin(eastAngle), work, e1))) return undefined
 
 	// Upward normal: (east chord) × (north chord), since east × north = up.
 	const ex = e0[0] - e1[0]
@@ -364,12 +526,14 @@ export function terrainSlope(model: TerrainModel, feature: SurfaceFeature, basel
 
 // First terrain crossing of the straight ray from the feature point toward a local altitude and
 // azimuth (radians; altitude above the reference tangent plane, azimuth north through east).
-// Samples the clearance (point radius minus terrain radius) every step and interpolates linearly
-// between the last positive sample and the first non-positive one. The feature point itself is not
-// tested, so a feature standing on the terrain is not its own occluder; a crossing within the first
-// step is reported at the interpolated range. Missing data and off-grid points use the reference
-// surface. Throws RangeError for a non-positive or non-finite step, which would never finish.
-// Returns undefined when the ray stays clear out to options.maxDistance or the enclosing sphere.
+// Samples the clearance (point radius minus terrain radius) every step, with a final sample exactly
+// at the end of the ray, and interpolates linearly over the actual length of the segment between the
+// last positive sample and the first non-positive one. The feature point itself is not tested, so a
+// feature standing on the terrain is not its own occluder; a crossing within the first step is
+// reported at the interpolated range. Missing data and off-grid points use the reference surface.
+// Throws RangeError for a non-positive or non-finite step, or a ray over MAX_RAY_SAMPLES samples,
+// which would never finish or scan without practical bound. Returns undefined when the ray stays
+// clear out to options.maxDistance or the enclosing sphere.
 export function terrainOcclusion(model: TerrainModel, feature: SurfaceFeature, altitude: Angle, azimuth: Angle, { step, maxDistance }: TerrainRayOptions = {}): TerrainRayHit | undefined {
 	const stride = validatePositiveFinite(step ?? (model.spacing * feature.radius) / 2)
 	const { up, north, east, location } = feature
@@ -391,44 +555,43 @@ export function terrainOcclusion(model: TerrainModel, feature: SurfaceFeature, a
 	if (!(discriminant > 0)) return undefined
 	let end = -b + Math.sqrt(discriminant)
 	if (maxDistance !== undefined) end = Math.min(end, maxDistance)
+	const count = raySampleCount(end, stride)
 
 	// Clearance of the point at range t; writes the sampled direction and elevation into the workspace.
-	let ux = 0
-	let uy = 0
-	let uz = 0
+	const u = vecZero()
 	let longitude = 0
 	let latitude = 0
 	let elevation = 0
 
 	function clearanceAt(t: number) {
-		const x = point[0] + t * dx
-		const y = point[1] + t * dy
-		const z = point[2] + t * dz
-		const r = Math.sqrt(x * x + y * y + z * z)
-		ux = x / r
-		uy = y / r
-		uz = z / r
-		longitude = Math.atan2(uy, ux)
-		latitude = Math.atan2(uz, Math.hypot(ux, uy))
+		u[0] = point[0] + t * dx
+		u[1] = point[1] + t * dy
+		u[2] = point[2] + t * dz
+		const r = vecLength(u)
+		vecDivScalarMut(u, r)
+		longitude = vecLongitude(u)
+		latitude = vecLatitude(u)
 		elevation = sampleElevation(model, longitude, latitude)
 		if (Number.isNaN(elevation)) elevation = 0
-		return r - referenceRadius(ia, ib, ic, ux, uy, uz) - elevation
+		return r - referenceRadius(ia, ib, ic, u[0], u[1], u[2]) - elevation
 	}
 
 	let previous = Math.max(clearanceAt(0), 0)
+	let previousRange = 0
 
-	for (let k = 1; k * stride <= end; k++) {
-		const clearance = clearanceAt(k * stride)
+	for (let k = 1; k <= count; k++) {
+		const range = Math.min(k * stride, end)
+		const clearance = clearanceAt(range)
 
 		if (clearance <= 0) {
 			const drop = previous - clearance
-			const range = (k - 1) * stride + (drop > 0 ? (stride * previous) / drop : 0)
-			clearanceAt(range)
-			const hit: Vec3 = [ux, uy, uz]
-			return { range, distance: feature.radius * vecAngle(point, hit), longitude: normalizeAngle(longitude), latitude, elevation }
+			const crossing = previousRange + (drop > 0 ? ((range - previousRange) * previous) / drop : 0)
+			clearanceAt(crossing)
+			return { range: crossing, distance: feature.radius * vecAngle(point, u), longitude: normalizeAngle(longitude), latitude, elevation }
 		}
 
 		previous = clearance
+		previousRange = range
 	}
 
 	return undefined

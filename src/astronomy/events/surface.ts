@@ -96,7 +96,7 @@ export interface SurfaceFeature {
 	// Reference-surface radius below the feature (body-fixed position length minus elevation), AU.
 	readonly radius: Distance
 	// Interpolated terrain horizon altitude (radians) by local azimuth (radians); undefined in
-	// smooth-ellipsoid mode, where the reference tangent plane is the horizon.
+	// smooth-ellipsoid mode (no mask or an empty one), where the reference tangent plane is the horizon.
 	readonly horizonAltitudeAt?: (azimuth: Angle) => Angle
 }
 
@@ -108,8 +108,11 @@ export interface SurfaceFeatureOptions {
 	// defaults to zero and is irrelevant when slope is zero.
 	readonly aspect?: Angle
 	// Terrain horizon mask seen from the feature in its local horizon frame (altitude above the
-	// reference tangent plane by azimuth north through east, radians). Its resolution and source,
-	// such as a DEM-derived profile, are the caller's responsibility.
+	// reference tangent plane by azimuth north through east, radians). A non-empty mask replaces the
+	// reference tangent plane as the horizon, so it must include the body's own limb, as
+	// terrainHorizon masks do; negative altitudes are kept for elevated vantage points. An empty mask
+	// adds no obstruction and keeps smooth-ellipsoid mode. Its resolution and source, such as a
+	// DEM-derived profile, are the caller's responsibility.
 	readonly horizon?: readonly HorizonSample[]
 }
 
@@ -200,7 +203,8 @@ export function surfaceFeature(location: BodySurfaceLocation, { slope = 0, aspec
 	const normal = vecNormalizeMut([cosSlope * up[0] + n * north[0] + e * east[0], cosSlope * up[1] + n * north[1] + e * east[1], cosSlope * up[2] + n * north[2] + e * east[2]])
 
 	const radius = vecLength(bodyFixedPosition(location)) - location.elevation
-	const horizonAltitudeAt = horizon === undefined ? undefined : horizonMinimumAltitudeLookup(horizon)
+	// An empty mask would interpolate to -PI/2 and drop the body's own horizon, so it keeps the reference plane.
+	const horizonAltitudeAt = horizon === undefined || horizon.length === 0 ? undefined : horizonMinimumAltitudeLookup(horizon)
 
 	return { location, up, north, east, normal, radius, horizonAltitudeAt }
 }

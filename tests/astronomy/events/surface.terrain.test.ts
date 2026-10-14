@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test'
 import { ICRS } from '../../../src/astronomy/coordinates/frame'
-import { surfaceFeature } from '../../../src/astronomy/events/surface'
+import { surfaceFeature, surfaceFeatureIllumination } from '../../../src/astronomy/events/surface'
 import { type ElevationGrid, terrainElevation, terrainHorizon, terrainModel, terrainOcclusion, terrainShadowTip, terrainSlope, terrainSurfaceLocation } from '../../../src/astronomy/events/surface.terrain'
 import { bodyShape, bodySurfaceLocation } from '../../../src/astronomy/observer/body'
+import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { PI, PIOVERTWO, TAU } from '../../../src/core/constants'
 import { type Angle, deg, toDeg } from '../../../src/math/units/angle'
 import { type Distance, kilometer } from '../../../src/math/units/distance'
@@ -213,4 +214,147 @@ test('off-grid rays fall back to the reference surface', () => {
 	expect(hit.elevation).toBe(0)
 	expect(terrainOcclusion(patch, feature, deg(1), deg(90), { step: kilometer(0.5) })).toBeUndefined()
 	expect(terrainOcclusion(patch, feature, PI / 2, 0)).toBeUndefined()
+})
+
+// Flat 1° cell-centered global DEM at the reference sphere.
+const FLAT = terrainModel({ elevations: new Float64Array(360 * 180), width: 360, height: 180, longitude: deg(0.5), latitude: deg(89.5), longitudeStep: deg(1), latitudeStep: deg(-1), source: 'synthetic flat global' })
+
+test('a flat DEM gives the geometric horizon of the body, not an empty mask', () => {
+	const feature = surfaceFeature(bodySurfaceLocation(0, 0, 0, MOON, ICRS))
+	const horizon = terrainHorizon(FLAT, feature, { azimuths: 8 })
+	expect(horizon).toHaveLength(8)
+
+	for (const sample of horizon) {
+		expect(sample.minimumAltitude).toBeCloseTo(0, 9)
+		expect(sample.distance).toBeCloseTo(0, 12)
+		expect(sample.complete).toBeTrue()
+	}
+
+	// An east-facing 30° facet with the Sun 10° below the eastern horizon faces the Sun but is behind the body.
+	const sunAt = () => [1e9 * Math.sin(deg(-10)), 1e9 * Math.cos(deg(-10)), 0] as const
+	const time = timeYMDHMS(2024, 1, 1, 0, 0, 0, Timescale.TDB)
+	for (const options of [{}, { horizon }, { horizon: [] }]) {
+		const result = surfaceFeatureIllumination(surfaceFeature(feature.location, { slope: deg(30), aspect: deg(90), ...options }), sunAt, sunAt, time)
+		expect(toDeg(result.incidence)).toBeCloseTo(70, 6)
+		expect(result.solarHorizon).toBeCloseTo(0, 9)
+		expect(result.sunlit).toBeFalse()
+	}
+})
+
+test('an elevated vantage sees the dip of the limb, even without a sample there', () => {
+	const height = kilometer(1)
+	const dip = -Math.acos(RADIUS / (RADIUS + height))
+	const feature = surfaceFeature(bodySurfaceLocation(deg(10), deg(-20), height, MOON, ICRS))
+
+	for (const options of [{}, { maxDistance: kilometer(5) }, { step: kilometer(7) }]) {
+		for (const sample of terrainHorizon(FLAT, feature, { azimuths: 6, ...options })) {
+			expect(sample.minimumAltitude).toBeCloseTo(dip, 9)
+			expect(sample.minimumAltitude).toBeLessThan(0)
+			expect(sample.distance).toBeCloseTo(-dip * RADIUS, 9)
+		}
+	}
+
+	// Real relief still rises above the dip: the crater rim seen from 1 km above the floor.
+	const floor = terrainSurfaceLocation(CRATER, 0, 0, MOON, ICRS, height)!
+	const rimAltitude = sphereAltitude(RADIUS - DEPTH + height, RADIUS, RIM / RADIUS)
+	for (const sample of terrainHorizon(CRATER, surfaceFeature(floor), { azimuths: 4, maxDistance: kilometer(11) })) expect(Math.abs(sample.minimumAltitude - rimAltitude)).toBeLessThan(deg(0.05))
+})
+
+test('rays sample their final partial step and interpolate over its real length', () => {
+	const feature = surfaceFeature(bodySurfaceLocation(0, 0, kilometer(1.5), MOON, ICRS))
+
+	// Straight down from 1.5 km: steps of 1 km end at 1.7 km, so the ground lies in the last partial step.
+	const nadir = terrainOcclusion(FLAT, feature, -PIOVERTWO, 0, { step: kilometer(1), maxDistance: kilometer(1.7) })!
+	expect(nadir.range).toBeCloseTo(kilometer(1.5), 15)
+	// A single step longer than the whole ray.
+	expect(terrainOcclusion(FLAT, feature, -PIOVERTWO, 0, { step: kilometer(5), maxDistance: kilometer(2) })!.range).toBeCloseTo(kilometer(1.5), 15)
+	// The ray stops short of the ground.
+	expect(terrainOcclusion(FLAT, feature, -PIOVERTWO, 0, { step: kilometer(1), maxDistance: kilometer(1.4) })).toBeUndefined()
+
+	// A shadow tip in the last partial step of a ray whose length the step does not divide.
+	const summit = surfaceFeature(terrainSurfaceLocation(CONE, 0, 0, MOON, ICRS)!)
+	const reference = terrainShadowTip(CONE, summit, deg(12), deg(90))!
+	const partial = terrainShadowTip(CONE, summit, deg(12), deg(90), { step: kilometer(1), maxDistance: reference.range + kilometer(0.01) })!
+	expect(reference.range % kilometer(1)).toBeLessThan(kilometer(0.99))
+	expect(Math.abs(partial.distance - reference.distance)).toBeLessThan(kilometer(0.002))
+})
+
+test('horizon samples on a tri-axial body keep their declared azimuth', () => {
+	// The strongly tri-axial case where great circles through the radial direction drift by degrees.
+	const shape = bodyShape([kilometer(2000), kilometer(1000), kilometer(500)])
+	const station = bodySurfaceLocation(deg(45), 0.3, 0, shape, ICRS)
+	const feature = surfaceFeature(station)
+	const point = station.bodyFixed!
+
+	// Hill center 0.04 rad along the great circle through the radial direction toward azimuth 120°.
+	const nominal = deg(120)
+	const range = Math.hypot(point[0], point[1], point[2])
+	const radial = [point[0] / range, point[1] / range, point[2] / range] as const
+	const horizontal = [0, 1, 2].map((i) => Math.cos(nominal) * feature.north[i] + Math.sin(nominal) * feature.east[i])
+	const along = horizontal[0] * radial[0] + horizontal[1] * radial[1] + horizontal[2] * radial[2]
+	const tangent = [0, 1, 2].map((i) => horizontal[i] - along * radial[i])
+	const scale = Math.hypot(tangent[0], tangent[1], tangent[2])
+	const center = [0, 1, 2].map((i) => Math.cos(0.04) * radial[i] + (Math.sin(0.04) * tangent[i]) / scale)
+	const longitude = Math.atan2(center[1], center[0])
+	const latitude = Math.atan2(center[2], Math.hypot(center[0], center[1]))
+
+	// A smooth 6 km Gaussian hill 10 mrad wide on a 0.02° grid around the station and the hill.
+	const height = kilometer(6)
+	const sigma = 0.01
+	const step = deg(0.02)
+	const width = 501
+	const rows = 501
+	const elevations = new Float64Array(width * rows)
+
+	for (let j = 0; j < rows; j++) {
+		for (let i = 0; i < width; i++) {
+			const lon = deg(42) + i * step
+			const lat = deg(12) + j * step
+			const cosine = Math.cos(lat) * Math.cos(latitude) * Math.cos(lon - longitude) + Math.sin(lat) * Math.sin(latitude)
+			const angle = Math.acos(Math.min(cosine, 1))
+			elevations[j * width + i] = height * Math.exp(-(angle * angle) / (2 * sigma * sigma))
+		}
+	}
+
+	const grid = { width, height: rows, longitude: deg(42), latitude: deg(12), longitudeStep: step, latitudeStep: step }
+	const model = terrainModel({ ...grid, elevations, source: 'synthetic hill on a [2000, 1000, 500] km ellipsoid' })
+	// The vantage stands on the hill's far tail, about 2 m up.
+	const onTerrain = surfaceFeature(terrainSurfaceLocation(model, deg(45), 0.3, shape, ICRS)!)
+	const horizon = terrainHorizon(model, onTerrain, { azimuths: 72, step: kilometer(0.25), maxDistance: kilometer(80) })
+	let checked = 0
+
+	// Independent check by straight rays: just below each hill-set horizon the ray toward that very
+	// azimuth meets the terrain, and just above it the ray clears.
+	for (const sample of horizon) {
+		if (!(sample.minimumAltitude > deg(0.5))) continue
+		const options = { step: kilometer(0.1), maxDistance: kilometer(90) }
+		expect(terrainOcclusion(model, onTerrain, sample.minimumAltitude - deg(0.1), sample.azimuth, options)).toBeDefined()
+		expect(terrainOcclusion(model, onTerrain, sample.minimumAltitude + deg(0.1), sample.azimuth, options)).toBeUndefined()
+		checked++
+	}
+
+	expect(checked).toBeGreaterThan(5)
+
+	// A level DEM on the same convex body stays within the first step's curvature drop of the tangent plane.
+	const level = terrainModel({ ...grid, elevations: new Float64Array(width * rows), source: 'synthetic level patch' })
+	for (const sample of terrainHorizon(level, feature, { azimuths: 12, step: kilometer(0.25), maxDistance: kilometer(50) })) {
+		expect(sample.minimumAltitude).toBeLessThanOrEqual(0)
+		expect(sample.minimumAltitude).toBeGreaterThan(-deg(0.1))
+	}
+
+	// The slope of the level DEM is the reference ellipsoid itself.
+	expect(terrainSlope(level, feature)!.slope).toBeCloseTo(0, 6)
+})
+
+test('azimuth counts and sample totals are bounded before any work', () => {
+	const feature = surfaceFeature(bodySurfaceLocation(0, 0, 0, MOON, ICRS))
+	expect(() => terrainHorizon(FLAT, feature, { azimuths: Number.POSITIVE_INFINITY })).toThrow()
+	expect(() => terrainHorizon(FLAT, feature, { azimuths: 2.5 })).toThrow()
+	expect(() => terrainHorizon(FLAT, feature, { azimuths: 0 })).toThrow()
+	expect(() => terrainHorizon(FLAT, feature, { azimuths: 1e9, maxDistance: kilometer(100) })).toThrow(RangeError)
+	expect(() => terrainHorizon(FLAT, feature, { step: 1e-30, maxDistance: kilometer(100) })).toThrow(RangeError)
+	expect(() => terrainOcclusion(FLAT, feature, deg(-1), 0, { step: 1e-30 })).toThrow(RangeError)
+
+	const horizon = terrainHorizon(FLAT, feature, { azimuths: 7, maxDistance: kilometer(20) })
+	expect(horizon.map((sample) => sample.azimuth)).toEqual([0, 1, 2, 3, 4, 5, 6].map((i) => (i * TAU) / 7))
 })
