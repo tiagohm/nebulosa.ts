@@ -705,7 +705,7 @@ On a rotating body, the local Sun altitude at a surface point is the angle betwe
 
 `bodySurfaceSolarAltitude(location, sunAt, time)` returns the altitude of the Sun's center in radians. `bodySurfaceSunEvents(location, sunAt, start, stop, options)` returns the chronological sunrise and sunset crossings in a window, each with its refined `time`, `kind` (`'sunrise'` while the altitude rises, `'sunset'` while it falls), and the `altitude` there. `options.horizon` is the altitude in radians that defines the crossing (default 0, the geometric horizon); `options.step` and `options.tolerance` are the coarse scan step and refinement tolerance in days (defaults one hour and about 0.09 s). The step must be small enough that no two crossings share a step. Tangential touches are omitted, so an empty list can mean polar day or night.
 
-`location` is a `BodySurfaceLocation` (see [Planetary Surface Locations](#planetary-surface-locations)), whose frame orients the rotating body. `sunAt` is a function of `Time` returning the body-center-to-Sun vector in the library's base axes. It is treated as parallel across the body, so there is no terrain, refraction, solar radius, or surface parallax, and the altitude refers to the solar center. The scan evaluates `sunAt` slightly beyond the window edges to classify each root.
+`location` is a `BodySurfaceLocation` (see [Planetary Surface Locations](#planetary-surface-locations)), whose frame orients the rotating body. `sunAt` is a function of `Time` returning the body-center-to-Sun vector in the library's base axes. It is treated as parallel across the body, so there is no terrain, refraction, solar radius, or surface parallax, and the altitude refers to the solar center. The scan evaluates `sunAt` slightly beyond the window edges to classify each root. For a feature's incidence, emission, observer visibility, terrain mask, DEM shadows and light-angle windows, see [Surface Feature Illumination](#surface-feature-illumination).
 
 ```ts
 import { bodyFixedFrame, MOON_ROTATION } from 'nebulosa/src/astronomy/bodies/orientation'
@@ -2391,10 +2391,10 @@ console.log(toDeg(equatorialToHorizontal(lst, latitude, latitude, lst)[1])) // 9
 
 A real observing site rarely has a flat, clear horizon: trees, buildings, and hills hide the sky below some altitude that depends on azimuth. A horizon mask records that as a list of azimuths with the minimum altitude a target must reach there to be seen. Between samples the minimum altitude is interpolated linearly around the circle, so the segment from the last azimuth back to the first is included.
 
-A mask is an array of `HorizonSample`s, `{ azimuth, minimumAltitude }` in radians with azimuth north through east. It may be empty (nothing is hidden), unordered, or have repeated azimuths (the higher altitude is kept); a single sample applies at every azimuth. `horizonMinimumAltitude(samples, azimuth)` returns the interpolated minimum altitude at an azimuth, or −π/2 for an empty mask. `isAboveHorizon(samples, altitude, azimuth)` is true when the altitude is at least that. `horizonCrossings(path, horizon)` finds where a sampled path crosses behind or out from behind the mask. A path is an array of `{ time, altitude, azimuth }` samples, with time in any uniform unit (the crossing keeps it) and angles in radians, sorted by time or not. It returns the `HorizonCrossing`s in time order as `{ time, altitude, azimuth, kind }`, where `kind` is `'set'` when the target goes behind the mask and `'rise'` when it emerges. Each path segment is split at the mask's azimuth samples so that a peak or valley inside it still gives its crossings; the samples must be dense enough that each step is the short azimuth arc. A path of fewer than two samples has no crossings. To make a path from an ephemeris, sample the altitude and azimuth of the target (see [Local Horizon Coordinates](#local-horizon-coordinates)).
+A mask is an array of `HorizonSample`s, `{ azimuth, minimumAltitude }` in radians with azimuth north through east. It may be empty (nothing is hidden), unordered, or have repeated azimuths (the higher altitude is kept); a single sample applies at every azimuth. `horizonMinimumAltitude(samples, azimuth)` returns the interpolated minimum altitude at an azimuth, or −π/2 for an empty mask. `horizonMinimumAltitudeLookup(samples)` prepares the mask once and returns an `(azimuth) => altitude` function with the same rules, for repeated lookups; it copies the samples. `isAboveHorizon(samples, altitude, azimuth)` is true when the altitude is at least that. `horizonCrossings(path, horizon)` finds where a sampled path crosses behind or out from behind the mask. A path is an array of `{ time, altitude, azimuth }` samples, with time in any uniform unit (the crossing keeps it) and angles in radians, sorted by time or not. It returns the `HorizonCrossing`s in time order as `{ time, altitude, azimuth, kind }`, where `kind` is `'set'` when the target goes behind the mask and `'rise'` when it emerges. Each path segment is split at the mask's azimuth samples so that a peak or valley inside it still gives its crossings; the samples must be dense enough that each step is the short azimuth arc. A path of fewer than two samples has no crossings. To make a path from an ephemeris, sample the altitude and azimuth of the target (see [Local Horizon Coordinates](#local-horizon-coordinates)).
 
 ```ts
-import { horizonCrossings, horizonMinimumAltitude, isAboveHorizon, type HorizonSample, type HorizontalPathSample } from 'nebulosa/src/astronomy/observer/horizon'
+import { horizonCrossings, horizonMinimumAltitude, horizonMinimumAltitudeLookup, isAboveHorizon, type HorizonSample, type HorizontalPathSample } from 'nebulosa/src/astronomy/observer/horizon'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 
 // Obstructions every 90° of azimuth: 10° to the north, 25° to the east, 5° to the south, 15° to the west.
@@ -2409,6 +2409,11 @@ const mask: HorizonSample[] = [
 console.log(toDeg(horizonMinimumAltitude(mask, deg(45)))) // 17.5 — degrees
 console.log(toDeg(horizonMinimumAltitude(mask, deg(315)))) // 12.5 — degrees
 console.log(toDeg(horizonMinimumAltitude([], deg(45)))) // -90 — an empty mask hides nothing
+
+// Prepared once for many lookups.
+const lookup = horizonMinimumAltitudeLookup(mask)
+
+console.log(toDeg(lookup(deg(45)))) // 17.5 — degrees
 
 console.log(isAboveHorizon(mask, deg(20), deg(45))) // true — 20° is above the 17.5° there
 console.log(isAboveHorizon(mask, deg(15), deg(60))) // false — the mask is about 20° at that azimuth
@@ -6105,6 +6110,164 @@ const sunToEarth = (t: Time) => vecMinus(earth(t)[0], sun(t)[0])
 
 console.log(toDeg(positionAngleOfPole(SUN_ROTATION, time, sunToEarth(time)))) // -3.61 — degrees, the P angle
 console.log(toDeg(subObserverPoint(SUN_ROTATION, time, sunToEarth(time)).latitude)) // 2.62 — degrees, B0
+```
+
+### Surface Feature Illumination
+
+Planning an image of a lunar crater or any other surface feature depends on its local lighting and on whether it faces the observer. At the feature, the Sun has an altitude and azimuth on the local horizon. The incidence is the angle between the surface normal and the Sun, the emission is the angle between the normal and the observer, and the phase is the Sun–feature–observer angle. Low Sun (grazing light) brings out relief. Libration moves features near the limb in and out of view.
+
+`surfaceFeature(location, options)` prepares a `BodySurfaceLocation` (see [Planetary Surface Locations](#planetary-surface-locations)) once. It builds the local horizon frame: up is the reference ellipsoid normal, north is the body's +Z axis projected onto the tangent plane, and azimuth runs north through east in `[0, 2π)`. Exactly at a pole, north is the limit along the location's meridian. `options.slope` and `options.aspect` (radians; aspect is the azimuth the facet faces) tilt the facet normal used for incidence and emission, for example a crater wall. `options.horizon` is a terrain horizon mask in the same local frame, in the `HorizonSample` format of [Local Horizon Mask](#local-horizon-mask). A non-empty mask replaces the reference tangent plane as the horizon, so it must include the body's own limb, as `terrainHorizon` masks do. Negative altitudes are kept for elevated vantage points. An empty mask adds no obstruction and leaves the reference plane in place. You supply the mask, so its resolution and source (for example a DEM-derived profile) are yours to state.
+
+`surfaceFeatureIllumination(feature, sunAt, observerAt, time)` returns the geometry at one instant. `sunAt` and `observerAt` give the vectors from the body's center to the Sun and to the observer, in AU and the library's base axes. Both are taken from the feature point, so observer parallax is included (up to about 0.26° for the Earth seen from the Moon). No light time or aberration is applied beyond what the providers include. All results refer to the solar center:
+
+- `solarAltitude`, `solarAzimuth`, `observerAltitude` and `observerAzimuth`, in radians;
+- `incidence`, `emission` and `phase`, in radians in `[0, π]`;
+- `solarAngularRadius`, for thresholds on the Sun's limb;
+- `solarHorizon` and `observerHorizon`, the mask altitude at each azimuth (0 without a mask);
+- `terminatorDistance`, the signed surface distance to the terminator in AU (radius × solar altitude, positive in daylight). It is exact for a sphere and a local approximation on a tri-axial body;
+- `sunlit`, true when the Sun clears the horizon and the incidence is below 90°, and `visible`, the same test for the observer and emission.
+
+`surfaceFeatureWindows(feature, sunAt, observerAt, start, stop, options)` returns the intervals `{ start, end }` where every constraint holds. The solar constraints always apply: `minSolarAltitude` (default 0), an optional `maxSolarAltitude`, `maxIncidence` (default π/2), and clearance of the terrain mask. With an `observerAt`, the observer must also meet `minObserverAltitude` (default 0), `maxEmission` (default π/2) and the mask; pass `undefined` instead for Sun-only windows. Set `minSolarAltitude: -π/2` and `maxIncidence: π` to drop the solar constraints. The search follows [Time-Constraint Intervals](#time-constraint-intervals): `step` and `tolerance` are in days, and the step must resolve every crossing.
+
+Without a mask, the feature sits on a smooth ellipsoid, so crater-rim and relief shadows are not predicted. A mask adds occlusion by distant terrain but does not compute cast-shadow lengths; for those, and for masks and slopes derived from a DEM, see below. Against SPICE `ilumin`, `azlcpo` and `gfilum` with the same DE421 and MOON_ME kernels, the tests check the angles to 5e-7° and window edges to about half a second.
+
+```ts
+import { bodyFixedFrame, MOON_ROTATION } from 'nebulosa/src/astronomy/bodies/orientation'
+import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { surfaceFeature, surfaceFeatureIllumination, surfaceFeatureWindows } from 'nebulosa/src/astronomy/events/surface'
+import { bodyShape, bodySurfaceLocation } from 'nebulosa/src/astronomy/observer/body'
+import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { kilometer, toKilometer } from 'nebulosa/src/math/units/distance'
+
+const epoch = timeYMDHMS(2024, 1, 15, 0, 0, 0, Timescale.TDB)
+
+// Copernicus crater: 20.08° W, 9.62° N, on a sphere of radius 1737.4 km.
+const radius = kilometer(1737.4)
+const copernicus = bodySurfaceLocation(deg(-20.08), deg(9.62), 0, bodyShape([radius, radius, radius]), bodyFixedFrame(MOON_ROTATION))
+
+// Moon-center to Sun and to the geocenter, in AU and base axes (geometric).
+const sunAt = (time: Time) => vecMinus(vecMinus(sun(time)[0], earth(time)[0]), moon(time)[0])
+const earthAt = (time: Time) => vecMinus([0, 0, 0], moon(time)[0])
+
+const feature = surfaceFeature(copernicus)
+const now = surfaceFeatureIllumination(feature, sunAt, earthAt, timeShift(epoch, 5.6))
+
+console.log(toDeg(now.solarAltitude), toDeg(now.solarAzimuth)) // 3.99 92.23 — degrees, a low morning Sun in the east
+console.log(toDeg(now.incidence), toDeg(now.emission), toDeg(now.phase)) // 86.01 29.50 59.60 — degrees
+console.log(toDeg(now.observerAltitude), toDeg(now.observerAzimuth)) // 60.50 117.16 — degrees, the Earth in the local sky
+console.log(toKilometer(now.terminatorDistance)) // 121.0 — km on the day side of the terminator
+console.log(now.sunlit, now.visible) // true true
+
+// Grazing-light windows: solar altitude between 2° and 10° while the Earth sees the crater.
+const grazing = surfaceFeatureWindows(feature, sunAt, earthAt, epoch, timeShift(epoch, 32), { minSolarAltitude: deg(2), maxSolarAltitude: deg(10), step: 0.25 })
+
+console.log(grazing.map((w) => [timeSubtract(w.start, epoch), timeSubtract(w.end, epoch)])) // [[5.434, 6.103], [19.216, 19.883]] — days, morning and evening
+
+// An east-facing wall tilted 25°, behind terrain 4° high to the east and 1° high to the west.
+const wall = surfaceFeature(copernicus, {
+	slope: deg(25),
+	aspect: deg(90),
+	horizon: [
+		{ azimuth: deg(90), minimumAltitude: deg(4) },
+		{ azimuth: deg(270), minimumAltitude: deg(1) },
+	],
+})
+const lit = surfaceFeatureIllumination(wall, sunAt, earthAt, timeShift(epoch, 5.6))
+
+console.log(toDeg(lit.incidence), toDeg(lit.solarHorizon), lit.sunlit) // 61.03 3.96 true — degrees; the Sun just clears the mask
+
+// Sun-only windows for the wall: it loses the Sun once the Sun moves behind its face.
+const wallLit = surfaceFeatureWindows(wall, sunAt, undefined, epoch, timeShift(epoch, 32), { step: 0.25 })
+
+console.log(wallLit.map((w) => [timeSubtract(w.start, epoch), timeSubtract(w.end, epoch)])) // [[5.598, 17.971]] — days
+```
+
+With a digital elevation model (DEM) the relief itself sets the horizon, the facet and the shadows. `terrainModel(grid)` prepares an `ElevationGrid`: a typed array of elevations in AU, row-major on a planetocentric longitude/latitude grid, with the longitude and latitude of the first node, signed steps in radians (their sizes are the resolution), and a `source` string for provenance. Nodes are cell centers, read in place and never copied. The elevations are radial heights above the same reference ellipsoid as the feature's location: for LOLA products, convert meters above the 1737.4 km sphere to AU. Values are interpolated bilinearly. A grid spanning 360° of longitude wraps, and values within half a step outside the first or last node are held at the edge, so a global grid reaches the poles. NaN marks missing data. `terrainElevation(model, longitude, latitude)` returns the interpolated elevation, or `undefined` off the grid or next to missing data. `terrainSurfaceLocation(model, longitude, latitude, shape, frame, height?)` builds a location standing on the terrain, optionally `height` AU above it.
+
+From a feature prepared with `surfaceFeature` on such a location:
+
+- `terrainHorizon(model, feature, options)` marches the feature's vertical plane toward each of `azimuths` evenly spaced directions (a positive integer, default 360, starting at north). It keeps the highest terrain altitude above the reference tangent plane, with the body's curvature included. Every sample lies in that plane, so it is seen at its own azimuth, on a tri-axial body too. The march samples every `step` (default half the grid spacing on the ground), with the last sample exactly at `maxDistance` (default: the distance beyond which terrain in the grid's elevation range is hidden by the body itself). The mask never drops below the limb of the body's lowest possible surface: 0 for a vantage on a smooth sphere, and the dip `−acos(R / (R + h))` at height `h`. Each sample is a `HorizonSample` for `options.horizon`, plus the `distance` to the point that sets it and a `complete` flag. On a sphere `step`, `maxDistance` and `distance` are arcs at the vantage's distance from the center. On other shapes they are horizontal distances along the azimuth, and each sample is the highest terrain on the vertical line there. It is bracketed between scaled copies of the reference ellipsoid and refined by Brent's method, so a smooth convex body never gives a positive horizon. The flag is false where the march left the grid or crossed missing data, where the zero-elevation reference surface was used instead.
+- `terrainSlope(model, feature, baseline?)` returns `{ slope, aspect }` from central differences between terrain points `baseline` AU (default one grid spacing) north, south, east and west, ready to spread into the `surfaceFeature` options; `undefined` when any of those points has no data.
+- `terrainOcclusion(model, feature, altitude, azimuth, options)` follows the straight ray toward a local altitude and azimuth. It samples every `step` (default half the grid spacing), takes a last sample exactly at the end of the ray, and interpolates the first crossing into the terrain. It returns `{ range, distance, longitude, latitude, elevation }`, where `range` is along the ray and `distance` along the surface, or `undefined` when the ray stays clear. With the Sun's direction it tells whether the point is in a shadow cast by any terrain the DEM holds.
+- `terrainShadowTip(model, feature, solarAltitude, solarAzimuth, options)` follows the sunlight that grazes the feature down-Sun. Placed on a summit or rim, `distance` is the length of the shadow it casts along the surface. Ground between the feature and the tip may still be lit where it rises into the light. When the Sun is higher than the down-Sun slope, the tip is at the feature itself.
+
+The altitude and azimuth are in the feature's own local frame. For a parallel Sun they change from point to point (by about 1° per 30 km on the Moon), so take them from `surfaceFeatureIllumination` at each feature. The Sun is a point at the direction given: to bracket the penumbra, pass the solar altitude plus or minus `solarAngularRadius`. All results are only as good as the DEM. Ridges, walls and peaks narrower than the step or the grid spacing can be missed or smoothed, and bilinear interpolation rounds sharp rims. The first horizon sample is a full step out, so ground curving away reads slightly low, by up to about step / (2 × curvature radius). On non-spherical shapes each vertical line is first scanned at an eighth of the height of the shell holding the DEM's elevation range, so relief crossing one line several times closer than that can be read at a lower crossing. Each such sample costs a few dozen DEM lookups instead of one. A march over a million samples per azimuth or ray, or over 10⁸ for a whole horizon, throws `RangeError`: increase `step` or reduce `maxDistance` or `azimuths`. Tests with synthetic DEMs (a flat-floored crater and a conical peak on a 1737.4 km sphere) match the analytic horizon within 0.05° on a 60 m grid and the shadow tip of the peak within 2 m on a 120 m grid.
+
+```ts
+import { bodyFixedFrame, MOON_ROTATION } from 'nebulosa/src/astronomy/bodies/orientation'
+import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { surfaceFeature, surfaceFeatureIllumination, surfaceFeatureWindows } from 'nebulosa/src/astronomy/events/surface'
+import { terrainElevation, terrainHorizon, terrainModel, terrainOcclusion, terrainShadowTip, terrainSlope, terrainSurfaceLocation } from 'nebulosa/src/astronomy/events/surface.terrain'
+import { bodyShape } from 'nebulosa/src/astronomy/observer/body'
+import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { kilometer, toKilometer } from 'nebulosa/src/math/units/distance'
+
+const epoch = timeYMDHMS(2024, 1, 15, 0, 0, 0, Timescale.TDB)
+const radius = kilometer(1737.4)
+const shape = bodyShape([radius, radius, radius])
+const frame = bodyFixedFrame(MOON_ROTATION)
+const sunAt = (time: Time) => vecMinus(vecMinus(sun(time)[0], earth(time)[0]), moon(time)[0])
+const earthAt = (time: Time) => vecMinus([0, 0, 0], moon(time)[0])
+
+// A synthetic crater at Copernicus on a 0.02° grid (about 600 m): a flat floor 3.8 km deep and
+// 30 km in radius, a straight wall up to the rim 46 km from the center, then level ground.
+// A real DEM tile is passed the same way, with its heights converted to AU.
+const longitude = deg(-20.08)
+const latitude = deg(9.62)
+const step = deg(0.02)
+const elevations = new Float32Array(201 * 201)
+
+for (let j = 0; j < 201; j++) {
+	for (let i = 0; i < 201; i++) {
+		const lon = longitude + (i - 100) * step
+		const lat = latitude + (j - 100) * step
+		const haversine = Math.sin((lat - latitude) / 2) ** 2 + Math.cos(lat) * Math.cos(latitude) * Math.sin((lon - longitude) / 2) ** 2
+		const km = 1737.4 * 2 * Math.asin(Math.sqrt(haversine)) // distance from the center, km
+		elevations[j * 201 + i] = kilometer(km <= 30 ? -3.8 : km >= 46 ? 0 : (-3.8 * (46 - km)) / 16)
+	}
+}
+
+const dem = terrainModel({ elevations, width: 201, height: 201, longitude: longitude - 100 * step, latitude: latitude - 100 * step, longitudeStep: step, latitudeStep: step, source: 'synthetic crater, 0.02° grid, heights above 1737.4 km' })
+
+console.log(toKilometer(terrainElevation(dem, longitude, latitude)!)) // -3.8 — km, the floor
+
+// The floor center, its terrain horizon every 5°, and a feature using both horizon and facet.
+const floor = surfaceFeature(terrainSurfaceLocation(dem, longitude, latitude, shape, frame)!)
+const horizon = terrainHorizon(dem, floor, { azimuths: 72 })
+
+console.log(toDeg(horizon[18].minimumAltitude), toKilometer(horizon[18].distance)) // 3.95 46.1 — degrees and km, the east rim
+console.log(horizon[18].complete) // false — the march ran past the grid edge onto the reference sphere
+
+const feature = surfaceFeature(floor.location, { ...terrainSlope(dem, floor), horizon })
+const now = surfaceFeatureIllumination(feature, sunAt, earthAt, timeShift(epoch, 5.5))
+
+console.log(toDeg(now.solarAltitude), toDeg(now.solarHorizon), now.sunlit) // 2.79 3.94 false — degrees; the Sun is behind the east rim
+
+// The same answer by ray tracing the DEM, with where the sunlight is blocked.
+const blocked = terrainOcclusion(dem, feature, now.solarAltitude, now.solarAzimuth)!
+
+console.log(toKilometer(blocked.distance), toKilometer(blocked.elevation)) // 40.2 -1.37 — km, on the east wall
+
+// Sun-only windows on the floor center, now limited by the rim.
+const lit = surfaceFeatureWindows(feature, sunAt, undefined, epoch, timeShift(epoch, 32), { step: 0.25 })
+
+console.log(lit.map((w) => [timeSubtract(w.start, epoch), timeSubtract(w.end, epoch)])) // [[5.596, 19.721]] — days
+
+// The shadow the east rim casts across the floor as the Sun rises.
+const rim = surfaceFeature(terrainSurfaceLocation(dem, longitude + kilometer(46) / radius / Math.cos(latitude), latitude, shape, frame)!)
+
+for (const days of [5.5, 6, 6.5]) {
+	const light = surfaceFeatureIllumination(rim, sunAt, earthAt, timeShift(epoch, days))
+	const tip = terrainShadowTip(dem, rim, light.solarAltitude, light.solarAzimuth)!
+
+	console.log(toDeg(light.solarAltitude), toKilometer(tip.distance)) // 4.31 68.1, then 10.29 21.7, then 16.26 0.0 — degrees and km
+}
 ```
 
 ### TEME and ITRF Conversion
