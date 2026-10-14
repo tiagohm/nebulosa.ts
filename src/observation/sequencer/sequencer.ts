@@ -622,6 +622,50 @@ export type SequencerPlateSolver = CenteringSolver
 // too) for a frame without a usable star. Isolating its CPU work is the caller's responsibility.
 export type SequencerFocusMeasurer = AutoFocusMeasurer
 
+// Primary frame handed to the quality analyzer: the durable FITS temporary of its attempt, once the durable writer
+// resolved and the capture produced its result, never its bytes. Read-only for the analyzer: the file does not move
+// before the analysis settles.
+export interface SequencerQualityFrame {
+	// Slot of the frame, with its frame type (`capture.frameType`) and attempt; the analyzer never applies stellar criteria
+	// to darks and biases.
+	readonly slot: SequencerFrameSlot
+	// Path of the complete temporary FITS of the attempt (`.{slot id}.{attempt}.partial.fit`).
+	readonly path: string
+	// Wall instant of the first Busy of the exposure, in Unix ms.
+	readonly exposureStartedAt: number
+	// Wall instant of the end of the exposure, in Unix ms.
+	readonly exposureFinishedAt: number
+}
+
+// What the quality analyzer concluded about one primary frame.
+export interface SequencerQualityResult {
+	// 'rejected' discards the frame when the quality criterion is enabled; 'unknown' never discards.
+	readonly classification: 'accepted' | 'rejected' | 'unknown'
+	// Measurements, opaque to the Sequencer; reported in the `frameCaptured` event. Finite numbers.
+	readonly metrics?: Readonly<Record<string, number>>
+	// Corrective intents to persist, whatever the classification and the criteria.
+	readonly intents?: SequencerCorrectiveIntents
+}
+
+// Quality analyzer of the primary frames, provided by the caller: an async function over the path of the complete
+// temporary FITS that honors the signal (aborted by `capture.quality.timeout` or by an immediate stop). Isolating its CPU
+// work (a Worker, a process) is the caller's responsibility; it must yield the event loop at once.
+export type SequencerQualityAnalyzer = (frame: SequencerQualityFrame, signal: AbortSignal) => Promise<SequencerQualityResult>
+
+// Outcome of the quality analysis of one frame; the post-capture classifies only from it. Every kind but 'analyzed' is
+// the classification 'unknown', which never discards.
+export type SequencerQualityOutcome =
+	// The analyzer resolved a well-formed result in time.
+	| { readonly kind: 'analyzed'; readonly result: SequencerQualityResult }
+	// `capture.quality.timeout` aborted the analysis; it was awaited to its end and its result discarded.
+	| { readonly kind: 'timeout' }
+	// A stop or a failure of the session aborted the analysis; it was awaited to its end and its result discarded.
+	| { readonly kind: 'aborted' }
+	// The analyzer threw, rejected, resolved a malformed result, or is faulted since an earlier unresponsive analysis.
+	| { readonly kind: 'error'; readonly detail: string }
+	// No analyzer.
+	| { readonly kind: 'skipped' }
+
 // Operational clock of the session, with two explicit domains and the wait of the monotonic one. Never
 // compare a wall instant with a monotonic one. Scientific time is always `timeUnix(wallNow() / 1000)`.
 export interface SequencerClock extends CameraCaptureClock {
@@ -676,6 +720,11 @@ export interface SequencerRunnerServices {
 	// Ditherer of the dither feature: its resources join the reservation, and a pulse mount ditherer gets the barrier of
 	// the pulses inherited from a previous process right after the reservation. Often the guiding session itself.
 	readonly ditherer?: Ditherer
+	// Quality analyzer of the primary frames; requires `capture.quality`. Absent classifies every frame 'unknown'.
+	readonly qualityAnalyzer?: SequencerQualityAnalyzer
+	// Safety source, subscribed from the startup to the terminalization; its transitions, recorded in the monotonic
+	// domain, decide the `unsafeDuringExposure` criterion. Without it no window is covered and the criterion discards.
+	readonly safety?: SequencerSafetySource
 	// Operational clock; default `SYSTEM_SEQUENCER_CLOCK`. Always the three members together.
 	readonly clock?: SequencerClock
 	// Receives the session events synchronously, in emission order.
@@ -1191,8 +1240,9 @@ export type SequencerEventBody =
 	| { readonly type: 'taskFailed'; readonly task: SequencerTaskId; readonly phase: SequencerPhase; readonly failure: SequencerFailure }
 	| { readonly type: 'frameSelected'; readonly frame: SequencerFrameSlotSnapshot }
 	| { readonly type: 'exposureStarted'; readonly slot: string; readonly attempt: number }
-	// `exposureStartedAt`/`exposureFinishedAt` are wall instants of the first Busy and of the Ok.
-	| { readonly type: 'frameCaptured'; readonly slot: string; readonly attempt: number; readonly exposureStartedAt: number; readonly exposureFinishedAt: number }
+	// `exposureStartedAt`/`exposureFinishedAt` are wall instants of the first Busy and of the Ok; `quality` is the outcome
+	// of the analysis the frame was classified from.
+	| { readonly type: 'frameCaptured'; readonly slot: string; readonly attempt: number; readonly exposureStartedAt: number; readonly exposureFinishedAt: number; readonly quality: SequencerQualityOutcome }
 	// `path` is the final destination of the frame.
 	| { readonly type: 'frameAccepted'; readonly slot: string; readonly attempt: number; readonly path: string; readonly forced: boolean }
 	// `truncated` reports a window the history no longer covered; `remainingDiscards` is left in the slot budget.

@@ -1,14 +1,15 @@
 import { errorMessage } from '../../core/util'
 import type { Device } from '../../devices/indi/device'
 import { type FailedOperationResult, failedOperationResult, type OperationContext, type OperationCoordinator, type OperationExecutor, type OperationHandle, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
+import { awaitCooperativeJob } from '../../devices/orchestration/operation.wait'
 import { type ResourceConflict, type ResourceKey, type ResourceRequest, type ResourceReservation, type ResourceReservationOwner, resourceKey } from '../../devices/orchestration/resource'
 import { MountDitherer } from '../guiding/ditherer'
 import { createMeridianFlipState } from '../mount/meridian.flip'
 import { restoreSequencerFrameSlot, selectNextFrame, selectNextFrameOnStop, type SequencerTriggerEvent } from './scheduler'
 // oxfmt-ignore
-import { type SequencerCheckpoint, type SequencerCheckpointSlot, type SequencerClock, type SequencerConfiguration, type SequencerDevices, type SequencerEventBody, type SequencerFailure, type SequencerFailureAction, type SequencerFrameSlot, type SequencerHandle, type SequencerOptionalFailureAction, type SequencerPhase, type SequencerResult, type SequencerRetryPolicy, type SequencerRunnerServices, type SequencerSessionState, type SequencerShutdownStepPolicy, type SequencerSnapshot, type SequencerTaskId, type SequencerTerminalState, SYSTEM_SEQUENCER_CLOCK } from './sequencer'
+import { DEFAULT_SEQUENCER_COLLABORATOR_ABORT_GRACE, type SequencerCheckpoint, type SequencerCheckpointSlot, type SequencerClock, type SequencerConfiguration, type SequencerCorrectiveIntents, type SequencerDevices, type SequencerEventBody, type SequencerFailure, type SequencerFailureAction, type SequencerFrameDecision, type SequencerFrameDiscardPolicy, type SequencerFrameGroup, type SequencerFrameSlot, type SequencerHandle, type SequencerOptionalFailureAction, type SequencerPhase, type SequencerQualityOutcome, type SequencerQualityResult, type SequencerResult, type SequencerRetryPolicy, type SequencerRunnerServices, type SequencerSafetySnapshot, type SequencerSessionState, type SequencerShutdownStepPolicy, type SequencerSnapshot, type SequencerTaskId, type SequencerTerminalState, SYSTEM_SEQUENCER_CLOCK } from './sequencer'
 // oxfmt-ignore
-import { applySequencerCheckpoint, createSequencerRuntimeState, isTerminalSequencerState, requestSequencerHold, requestSequencerPause, requestSequencerResume, requestSequencerStop, type SequencerCompensation, type SequencerRuntimeState, type SequencerStopMode, sequencerCaptureProgressSnapshot, sequencerCheckpointOf, sequencerFrameSlotSnapshot, sequencerSnapshot, shouldHoldSequencer, transitionSequencerState } from './state'
+import { applyCorrectiveIntents, applySequencerCheckpoint, classifySequencerFrame, createSequencerRuntimeState, decideFrameOutcome, exhaustedDiscardAction, isTerminalSequencerState, recordSequencerSafetyTransition, requestSequencerHold, requestSequencerPause, requestSequencerResume, requestSequencerStop, type SequencerCompensation, type SequencerFrameClassification, type SequencerFrameEvidence, type SequencerRuntimeState, type SequencerSafetyTransition, type SequencerStopMode, safetyUnsafeWithin, sequencerCaptureProgressSnapshot, sequencerCheckpointOf, sequencerFrameSlotSnapshot, sequencerSnapshot, shouldHoldSequencer, transitionSequencerState } from './state'
 import type { SequencerDeferReason, SequencerFrameDestination, SequencerStorage } from './storage'
 import { bootstrapSequencerElapsedAnchors } from './trigger'
 
@@ -29,6 +30,14 @@ import { bootstrapSequencerElapsedAnchors } from './trigger'
 // refuses it); only an approved exposure is a commanded attempt that may count as a capture failure. A persistence
 // failure fails the session with a 'storage' failure: no new exposure starts and nothing advances in memory as if it
 // had been saved. The lock is released after the reservation, right before the terminalization.
+//
+// The post-capture never commands a device. It awaits the caller's quality analyzer on the durable temporary with a
+// strictly cooperative timeout (the file never moves before the analysis settled), classifies the frame from that
+// outcome, the guiding interruptions and the recorded safety transitions of its monotonic window [dispatch, end],
+// decides it (accepted, forced, retake, skipSlot, pause, stop, fail, discardFinal) before touching the file, and
+// journals the complete next checkpoint (progress, light exposures, discard counters, corrective intents) with the
+// promotion or the disposition. A pause or a stop owed to an exhausted discard counter is derived from the persisted
+// counters, so a restart applies it again before exposing; only `resume()` renews the counter that paused.
 //
 // Every physical task is a root `sequencer.{taskId}` opened through `startTask`, which refuses once the run was
 // aborted; tasks pass the root context to commanders, so cancelling the root cancels everything they commanded.
@@ -327,9 +336,16 @@ type CaptureOutcome =
 // or the end of the phase ('end').
 type FailureContinuation = 'skip' | 'retry' | 'end'
 
-// Why the session holds: a user pause, a failure action 'pause', or the capture failure policy (whose resume
-// renews `captureFailures`).
-type HoldCause = 'user' | 'policy' | 'capture'
+// Why the session holds: a user pause, a failure action 'pause', the capture failure policy (whose resume renews
+// `captureFailures`), the exhausted discard budget of the slot (renews `discardBudgetUsed`) or the circuit breaker
+// (renews `consecutiveDiscards`).
+type HoldCause = 'user' | 'policy' | 'capture' | 'discard' | 'circuit'
+
+// Outcome of an absent analyzer.
+const SKIPPED_QUALITY: SequencerQualityOutcome = { kind: 'skipped' }
+
+// Classifications a quality analyzer may resolve.
+const QUALITY_CLASSIFICATIONS = new Set<unknown>(['accepted', 'rejected', 'unknown'] satisfies SequencerQualityResult['classification'][])
 
 // Root of a run task the runner is waiting for.
 interface CurrentTask {
@@ -427,6 +443,12 @@ export class SequencerRunner {
 	#policyHold = false
 	// What the supervisor of the session may use while armed.
 	readonly #host: SequencerSupervisorHost
+	// Whether the quality analyzer outlived the abort grace of an analysis; it is never called again in the session.
+	#qualityFaulted = false
+	// Safety transitions received since the startup, in the monotonic domain (section 32.3); runtime only.
+	readonly #safetyHistory: SequencerSafetyTransition[] = []
+	// Ends the subscription of the safety source.
+	#unsubscribeSafety?: VoidFunction
 
 	constructor(options: SequencerRunnerOptions) {
 		const { configuration, devices, services, phases, disposeSignal } = options
@@ -581,6 +603,8 @@ export class SequencerRunner {
 		}
 
 		try {
+			this.#subscribeSafety()
+
 			if (await this.#startup()) {
 				if (this.#runtime.state === 'starting') this.#transition('running')
 				await this.#frames()
@@ -597,6 +621,9 @@ export class SequencerRunner {
 	// without shutdown, 'stopped' after a stop and 'failed' with the refusal as its failure.
 	async #admit() {
 		if (this.#runtime.stop !== undefined || this.#failing) return false
+
+		// The cooperative limits of an analyzer are not optional: an analysis without them could never be aborted.
+		if (this.#services.qualityAnalyzer !== undefined && this.#configuration.capture.quality === undefined) return this.#refuse({ kind: 'configuration', detail: 'a quality analyzer requires capture.quality' })
 
 		const locked = await this.#storage.lock()
 		if (!locked.ok) return this.#refuse(locked.failure)
@@ -651,6 +678,32 @@ export class SequencerRunner {
 
 		this.#endRun = () => guiding.endRun?.()
 		return true
+	}
+
+	// Subscribes to the safety source before the first startup task, then records its current state: `subscribe` never
+	// replays it, and a change between the two is recorded by the listener first. Active until the terminalization.
+	#subscribeSafety() {
+		const safety = this.#services.safety
+		if (safety === undefined) return
+		this.#unsubscribeSafety = safety.subscribe(this.#onSafety)
+		recordSequencerSafetyTransition(this.#safetyHistory, this.#clock.monotonicNow(), safety.current().state)
+	}
+
+	// Records a safety change at its reception instant, in the monotonic domain, and reports it.
+	readonly #onSafety = (snapshot: SequencerSafetySnapshot) => {
+		if (recordSequencerSafetyTransition(this.#safetyHistory, this.#clock.monotonicNow(), snapshot.state)) this.#emit({ type: 'safetyChanged', snapshot })
+	}
+
+	// Ends the safety subscription once; a throwing unsubscription is reported and never breaks the terminalization.
+	#endSafetySubscription() {
+		const unsubscribe = this.#unsubscribeSafety
+		this.#unsubscribeSafety = undefined
+
+		try {
+			unsubscribe?.()
+		} catch (error) {
+			console.error('safety unsubscription failed:', this.id, error)
+		}
 	}
 
 	// Resume of section 34.1: loads the checkpoint of the session, refuses one of another configuration id or revision,
@@ -753,6 +806,7 @@ export class SequencerRunner {
 	// groups with `onStop`; an immediate stop or a failure ends the loop.
 	async #frames() {
 		await this.#reapplyExhaustedCapture()
+		this.#reapplyExhaustedDiscards()
 
 		while (true) {
 			if (this.#runtime.stop === 'immediate' || this.#failing || this.#framesEnded) return
@@ -954,7 +1008,7 @@ export class SequencerRunner {
 	}
 
 	// Post-capture: records the outcome of the attempt, never commands a device. A captured frame whose temporary
-	// holds data is accepted and completes its slot in one transaction (section 26). A failed capture keeps the slot
+	// holds data is analyzed, classified and decided in one transaction (section 26). A failed capture keeps the slot
 	// current with one more failure, persisted before its `abandoned` line: retried through the pre-capture while its
 	// reason is retryable (a protection always is) and the budget lasts, otherwise the capture failure policy applies.
 	// An interrupted capture is closed without counting anything; one that commanded nothing is deferred, and when it
@@ -982,7 +1036,7 @@ export class SequencerRunner {
 			const written = await this.#storage.verify()
 
 			if (written.ok) {
-				await this.#accept(frame, outcome.frame)
+				await this.#complete(frame, outcome.frame)
 				return
 			}
 
@@ -1063,35 +1117,165 @@ export class SequencerRunner {
 		}
 	}
 
-	// Accepts a captured frame as one logical transaction: the next checkpoint (slot done, group progress, light
-	// exposures, consecutive discards reset) is computed without being applied, journaled with the promotion, the
-	// temporary is promoted to its final, and only then the state is applied and the checkpoint saved.
-	async #accept(frame: SequencerFrameSlot, captured: SequencerCapturedFrame) {
+	// Completes a captured frame as one logical transaction (sections 8.3 and 26): the quality analysis of its durable
+	// temporary, the classification, then the definitive decision, before the file is touched. The next checkpoint
+	// (progress of the group, light exposures, discard counters of a slot that stays current with its attempt consumed,
+	// consecutive discards, corrective intents) is computed without being applied and journaled with the promotion
+	// ('accepted', 'forced') or the disposition (every other decision); only then the state is applied, the checkpoint
+	// saved, the events emitted and the session action of the decision applied. A pause is not applied here: it is
+	// derived from the exhausted counter at the next safe point.
+	async #complete(frame: SequencerFrameSlot, captured: SequencerCapturedFrame) {
+		const quality = await this.#analyze(frame, captured)
+		const policy = this.#groupOf(frame)?.discard
+		const classification = classifySequencerFrame(policy?.criteria, this.#evidence(frame, captured, quality))
+		const decision: SequencerFrameDecision = policy === undefined || classification.reasons.length === 0 ? 'accepted' : decideFrameOutcome(policy, frame, this.#runtime.consecutiveDiscards, this.#abandons(frame))
+		const promoted = decision === 'accepted' || decision === 'forced'
+		// A discarded frame keeps its slot current, except a skipped one; its attempt is consumed by the retake.
+		const slot: SequencerFrameSlot | undefined = promoted || decision === 'skipSlot' ? undefined : { ...frame, discardedTotal: frame.discardedTotal + 1, discardBudgetUsed: frame.discardBudgetUsed + 1, captureFailures: 0 }
+
 		const base = this.#checkpoint(this.#sequence + 1, undefined)
 		const counters = base.capture[frame.groupId]
-		const light = frame.capture.frameType === 'LIGHT'
+		const intents = { ...base.intents }
+		if (quality.kind === 'analyzed' && quality.result.intents !== undefined) applyCorrectiveIntents(intents, quality.result.intents)
+
 		const next: SequencerCheckpoint = {
 			...base,
 			// A computed key defines an own property, so any group id (even `__proto__`) is a plain key.
-			capture: counters === undefined ? base.capture : { ...base.capture, [frame.groupId]: { ...counters, accepted: counters.accepted + 1 } },
-			anchors: light ? { ...base.anchors, lightExposures: base.anchors.lightExposures + 1 } : base.anchors,
-			consecutiveDiscards: 0,
+			capture:
+				counters === undefined
+					? base.capture
+					: { ...base.capture, [frame.groupId]: { accepted: counters.accepted + (decision === 'accepted' ? 1 : 0), forced: counters.forced + (decision === 'forced' ? 1 : 0), discarded: counters.discarded + (promoted ? 0 : 1), skipped: counters.skipped + (decision === 'skipSlot' ? 1 : 0) } },
+			// Discarded lights count too: drift, focus and dither depend on time and motion, not on quality.
+			anchors: frame.capture.frameType === 'LIGHT' ? { ...base.anchors, lightExposures: base.anchors.lightExposures + 1 } : base.anchors,
+			intents,
+			consecutiveDiscards: promoted ? 0 : base.consecutiveDiscards + 1,
+			...(slot !== undefined && { currentSlot: { id: slot.id, attempt: slot.attempt + 1, discardedTotal: slot.discardedTotal, discardBudgetUsed: slot.discardBudgetUsed, captureFailures: 0 } }),
 		}
 
-		const promoted = await this.#storage.promote(next, false)
+		if (decision === 'accepted' || decision === 'forced' || policy === undefined) {
+			const promotion = await this.#storage.promote(next, decision === 'forced')
 
-		if (!promoted.ok) {
-			this.#fail(promoted.failure)
+			if (!promotion.ok) {
+				this.#fail(promotion.failure)
+				return
+			}
+
+			await this.#commit(frame, captured, quality, next, slot)
+			this.#emit({ type: 'frameAccepted', slot: frame.id, attempt: frame.attempt, path: promotion.value, forced: decision === 'forced' })
 			return
 		}
 
+		const disposition = await this.#storage.dispose(policy.artifact, next)
+
+		if (!disposition.ok) {
+			this.#fail(disposition.failure)
+			return
+		}
+
+		await this.#commit(frame, captured, quality, next, slot)
+		this.#discarded(frame, policy, classification, decision, next.consecutiveDiscards)
+	}
+
+	// Applies a frame transaction whose file was already promoted or disposed of, saves its checkpoint and reports the
+	// captured frame. `slot` is the slot that stays current, its attempt consumed, or undefined when the slot is done.
+	async #commit(frame: SequencerFrameSlot, captured: SequencerCapturedFrame, quality: SequencerQualityOutcome, next: SequencerCheckpoint, slot: SequencerFrameSlot | undefined) {
 		applySequencerCheckpoint(this.#runtime, this.#configuration, next)
-		this.#runtime.currentFrame = undefined
+		this.#runtime.currentFrame = slot
+		this.#consumed = slot !== undefined
 		// The transaction is durable in the journal even when this save fails; the recovery reapplies it.
 		await this.#persist(next)
 		const { exposureStartedAt, exposureFinishedAt } = captured
-		this.#emit({ type: 'frameCaptured', slot: frame.id, attempt: frame.attempt, exposureStartedAt, exposureFinishedAt })
-		this.#emit({ type: 'frameAccepted', slot: frame.id, attempt: frame.attempt, path: promoted.value, forced: false })
+		this.#emit({ type: 'frameCaptured', slot: frame.id, attempt: frame.attempt, exposureStartedAt, exposureFinishedAt, quality })
+	}
+
+	// Reports a discarded frame and applies the session action of its decision: a skipped slot is reported, 'stop' and
+	// 'fail' end the session with a 'quality' failure; 'retake', 'pause' (derived at the next safe point) and
+	// 'discardFinal' need nothing more. `consecutiveDiscards` is the count after this discard.
+	#discarded(frame: SequencerFrameSlot, policy: SequencerFrameDiscardPolicy, classification: SequencerFrameClassification, decision: Exclude<SequencerFrameDecision, 'accepted' | 'forced'>, consecutiveDiscards: number) {
+		const { reasons, truncated, detail } = classification
+		const remainingDiscards = Math.max(0, policy.maxDiscardsPerSlot - (frame.discardBudgetUsed + 1))
+		this.#emit({ type: 'frameDiscarded', slot: frame.id, attempt: frame.attempt, reasons, truncated, decision, remainingDiscards, ...(detail !== undefined && { detail }) })
+
+		const circuit = policy.maxConsecutiveDiscards !== undefined && consecutiveDiscards > policy.maxConsecutiveDiscards
+		const failure: SequencerFailure = { kind: 'quality', detail: `${frame.id}#${frame.attempt} was discarded (${reasons.join(', ')}) past ${circuit ? 'the consecutive discards' : 'the discards of its slot'} allowed` }
+
+		switch (decision) {
+			case 'skipSlot':
+				this.#emit({ type: 'slotSkipped', slot: frame.id, reason: 'discardBudget' })
+				return
+			case 'stop':
+				this.#policyStop(failure)
+				return
+			case 'fail':
+				this.#fail(failure)
+		}
+	}
+
+	// Quality analysis of the durable temporary of the attempt (section 33): the caller's analyzer receives only its path,
+	// after the durable writer resolved and the capture produced its result, outside any lease of the camera, with a
+	// signal aborted by `capture.quality.timeout` or by the run (an immediate stop, a failure). The analysis is awaited to
+	// its end in every case, so the file never moves while it may still be read; `abortGrace` only reports an analyzer
+	// still running then (`collaboratorUnresponsive`, the snapshot `waitingFor`), which is faulted and never called again
+	// once that late analysis ended. Without analyzer the outcome is 'skipped', without any wait. Never rejects.
+	async #analyze(frame: SequencerFrameSlot, captured: SequencerCapturedFrame): Promise<SequencerQualityOutcome> {
+		const analyzer = this.#services.qualityAnalyzer
+		const limits = this.#configuration.capture.quality
+		const path = this.#storage.prepared?.temporary
+		if (analyzer === undefined || limits === undefined || path === undefined) return SKIPPED_QUALITY
+
+		const { exposureStartedAt, exposureFinishedAt } = captured
+		const qualityFrame = { slot: frame, path, exposureStartedAt, exposureFinishedAt }
+		const health = {
+			faulted: this.#qualityFaulted,
+			onUnresponsive: () => {
+				this.#runtime.waitingFor = 'qualityAnalyzer'
+				this.#emit({ type: 'collaboratorUnresponsive', service: 'quality', slot: frame.id, attempt: frame.attempt })
+			},
+			onFaulted: () => {
+				this.#qualityFaulted = true
+				if (this.#runtime.waitingFor === 'qualityAnalyzer') this.#runtime.waitingFor = undefined
+				this.#emit({ type: 'qualityAnalyzerFaulted' })
+			},
+		}
+
+		const abortGrace = (limits.abortGrace ?? DEFAULT_SEQUENCER_COLLABORATOR_ABORT_GRACE) * 1000
+		const job = await awaitCooperativeJob((signal) => analyzer(qualityFrame, signal), { signal: this.#run.signal, timeout: limits.timeout * 1000, abortGrace, delay: this.#clock.delay, health })
+
+		switch (job.kind) {
+			case 'resolved':
+				return qualityOutcomeOf(job.value)
+			case 'rejected':
+				return { kind: 'error', detail: errorMessage(job.error) }
+			case 'timeout':
+				this.#emit({ type: 'qualityTimeout', slot: frame.id, attempt: frame.attempt })
+				return { kind: 'timeout' }
+			case 'aborted':
+				return { kind: 'aborted' }
+			case 'faulted':
+				return { kind: 'error', detail: 'the quality analyzer is faulted' }
+		}
+	}
+
+	// Evidence the classification of a completed exposure reads: the quality classification, and for a light the guiding
+	// interruptions and the safety verdict of its monotonic window [dispatch, end], each queried only when its criterion
+	// is enabled. A frame is guided when it is a light of a session with guiding.
+	#evidence(frame: SequencerFrameSlot, captured: SequencerCapturedFrame, quality: SequencerQualityOutcome): SequencerFrameEvidence {
+		const { frameType } = frame.capture
+		const guiding = this.#configuration.guiding === undefined ? undefined : this.#services.guiding
+		const from = captured.exposureDispatchedMonotonic
+		const evidence: SequencerFrameEvidence = { frameType, quality: quality.kind === 'analyzed' ? quality.result.classification : 'unknown', dispatched: from !== undefined, guided: guiding !== undefined && frameType === 'LIGHT' }
+		const criteria = this.#groupOf(frame)?.discard?.criteria
+		if (criteria === undefined || from === undefined || frameType !== 'LIGHT') return evidence
+
+		const to = captured.exposureFinishedMonotonic
+		const interruptions = criteria.guidingInterruption && guiding !== undefined ? guiding.interruptions(from, to) : undefined
+		const safety = criteria.unsafeDuringExposure ? safetyUnsafeWithin({ transitions: this.#safetyHistory }, from, to, this.#configuration.safety?.unknownIsUnsafe ?? false) : undefined
+		return { ...evidence, ...(interruptions !== undefined && { guiding: { interrupted: interruptions.interruptions.length > 0, truncated: interruptions.truncated } }), ...(safety !== undefined && { safety }) }
+	}
+
+	// Configured group of a slot.
+	#groupOf(frame: SequencerFrameSlot): SequencerFrameGroup | undefined {
+		return this.#configuration.capture.groups.find((group) => group.id === frame.groupId)
 	}
 
 	// Closes the open attempt of the storage as not dispatched, before a wait, a re-entry or an exit of the
@@ -1155,6 +1339,7 @@ export class SequencerRunner {
 			this.#phases.supervisor?.disarm()
 			await this.#services.coordinator.cancelByReservationOwner(this.#owner, 'aborted')
 			this.#endGuidingRun()
+			this.#endSafetySubscription()
 			this.#reservation?.release()
 			await this.#storage.release()
 			this.#terminate(this.#failing || this.#shutdownFailed ? 'failed' : this.#runtime.stop !== undefined ? 'stopped' : 'completed')
@@ -1341,12 +1526,21 @@ export class SequencerRunner {
 				this.#transition('running')
 				this.#runtime.resumedSinceAutofocus = true
 
-				if (cause === 'capture') {
-					this.#capturePause = false
-					const frame = this.#runtime.currentFrame
-					if (frame !== undefined) this.#runtime.currentFrame = { ...frame, captureFailures: 0 }
-					// The renewed budget is durable before the next exposure; a restart never renews it by itself.
-					return await this.#persist()
+				// Each policy pause renews only the counter that caused it, durably before the next exposure; a restart never
+				// renews it by itself.
+				const frame = this.#runtime.currentFrame
+
+				switch (cause) {
+					case 'capture':
+						this.#capturePause = false
+						if (frame !== undefined) this.#runtime.currentFrame = { ...frame, captureFailures: 0 }
+						return await this.#persist()
+					case 'discard':
+						if (frame !== undefined) this.#runtime.currentFrame = { ...frame, discardBudgetUsed: 0 }
+						return await this.#persist()
+					case 'circuit':
+						this.#runtime.consecutiveDiscards = 0
+						return await this.#persist()
 				}
 
 				return true
@@ -1386,13 +1580,35 @@ export class SequencerRunner {
 		}
 	}
 
-	// Hold due at the loop safe point: a pending user pause, or the capture policy 'pause' (applied, or derived from
-	// the persisted budget of the current slot).
+	// Hold due at the loop safe point: the capture policy 'pause' (applied, or derived from the persisted budget of the
+	// current slot), a discard policy 'pause' derived from an exhausted discard counter (the circuit breaker, then the
+	// slot budget), or a pending user pause.
 	#pendingHold(): HoldCause | undefined {
 		const frame = this.#runtime.currentFrame
 		const { retry, onFailure } = this.#configuration.capture
 		if (this.#capturePause || (onFailure === 'pause' && frame !== undefined && frame.captureFailures >= retry.maxAttempts)) return 'capture'
+
+		if (frame !== undefined) {
+			const exhausted = exhaustedDiscardAction(this.#groupOf(frame)?.discard, frame, this.#runtime.consecutiveDiscards)
+			if (exhausted?.action === 'pause') return exhausted.counter === 'consecutive' ? 'circuit' : 'discard'
+		}
+
 		return shouldHoldSequencer(this.#runtime) ? 'user' : undefined
+	}
+
+	// A restored slot that still owes a stop or a failure to an exhausted discard counter (the circuit breaker, or a slot
+	// budget whose action is 'fail') never exposes again: the action applies before the first frame, as right after the
+	// discard. A restart is not a `resume()` and renews no counter; 'pause' is derived at the safe point instead.
+	#reapplyExhaustedDiscards() {
+		const frame = this.#runtime.currentFrame
+		if (frame === undefined) return
+
+		const exhausted = exhaustedDiscardAction(this.#groupOf(frame)?.discard, frame, this.#runtime.consecutiveDiscards)
+		if (exhausted === undefined || exhausted.action === 'pause') return
+
+		const failure: SequencerFailure = { kind: 'quality', detail: `${frame.id} already exhausted ${exhausted.counter === 'consecutive' ? 'the consecutive discards' : 'the discards of its slot'} allowed` }
+		if (exhausted.action === 'fail') this.#fail(failure)
+		else this.#policyStop(failure)
 	}
 
 	// Next slot: a restored slot whose attempt is still to run as is, otherwise the scheduler order, or only the
@@ -1775,6 +1991,45 @@ function taskFailure(task: SequencerTaskId, result: OperationResult<SequencerTas
 // Operation failure of a task root.
 function operationFailure(task: SequencerTaskId, result: Extract<OperationResult<unknown>, { readonly ok: false }>): SequencerFailure {
 	return result.error === undefined ? { kind: 'operation', reason: result.reason, task } : { kind: 'operation', reason: result.reason, task, detail: result.error }
+}
+
+// Outcome of what a quality analyzer resolved, validated at that caller boundary: 'analyzed' with a fresh copy of a
+// well-formed result (a known classification, finite metrics, boolean intents), 'error' otherwise.
+function qualityOutcomeOf(value: unknown): SequencerQualityOutcome {
+	if (typeof value !== 'object' || value === null) return { kind: 'error', detail: 'the quality analyzer resolved no result' }
+
+	const { classification, metrics, intents } = value as Record<string, unknown>
+	if (!QUALITY_CLASSIFICATIONS.has(classification)) return { kind: 'error', detail: `unknown quality classification ${String(classification)}` }
+
+	let copiedMetrics: Record<string, number> | undefined
+
+	if (metrics !== undefined) {
+		if (typeof metrics !== 'object' || metrics === null) return { kind: 'error', detail: 'malformed quality metrics' }
+		copiedMetrics = {}
+
+		for (const [name, metric] of Object.entries(metrics)) {
+			if (typeof metric !== 'number' || !Number.isFinite(metric)) return { kind: 'error', detail: `malformed quality metric ${name}` }
+			// `Object.defineProperty` keeps any metric name (even `__proto__`) a plain key.
+			Object.defineProperty(copiedMetrics, name, { value: metric, enumerable: true, writable: true, configurable: true })
+		}
+	}
+
+	let copiedIntents: SequencerCorrectiveIntents | undefined
+
+	if (intents !== undefined) {
+		if (typeof intents !== 'object' || intents === null) return { kind: 'error', detail: 'malformed corrective intents' }
+		const { autofocus, recenter, recoverGuiding } = intents as Record<string, unknown>
+		if (!isOptionalBoolean(autofocus) || !isOptionalBoolean(recenter) || !isOptionalBoolean(recoverGuiding)) return { kind: 'error', detail: 'malformed corrective intents' }
+		copiedIntents = { ...(autofocus !== undefined && { autofocus }), ...(recenter !== undefined && { recenter }), ...(recoverGuiding !== undefined && { recoverGuiding }) }
+	}
+
+	const result: SequencerQualityResult = { classification: classification as SequencerQualityResult['classification'], ...(copiedMetrics !== undefined && { metrics: copiedMetrics }), ...(copiedIntents !== undefined && { intents: copiedIntents }) }
+	return { kind: 'analyzed', result }
+}
+
+// Whether a value is a boolean or absent.
+function isOptionalBoolean(value: unknown): value is boolean | undefined {
+	return value === undefined || typeof value === 'boolean'
 }
 
 // Settled handle of a root that was never opened.

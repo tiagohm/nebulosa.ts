@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import type { SequencerCameraCapture, SequencerConfiguration, SequencerFilterFocusOffsets, SequencerFrameSlot, SequencerSessionState } from '../../../src/observation/sequencer/sequencer'
+import type { SequencerCameraCapture, SequencerConfiguration, SequencerDiscardCriteria, SequencerFilterFocusOffsets, SequencerFrameDiscardPolicy, SequencerFrameSlot, SequencerSessionState } from '../../../src/observation/sequencer/sequencer'
 // oxfmt-ignore
-import { applyCorrectiveIntents, applySequencerCheckpoint, bootstrapFocusBaseline, canTransitionSequencerState, createSequencerRuntimeState, focusBaselineAfterAutofocus, focusBaselineRequiresAutofocus, focusOffsetOf, focusPositionFor, isTerminalSequencerState, requestSequencerPause, requestSequencerResume, requestSequencerStop, type SequencerSafetyHistory, type SequencerSafetyTransition, safetyUnsafeWithin, sequencerCheckpointOf, sequencerSnapshot, shouldHoldSequencer, transitionSequencerState } from '../../../src/observation/sequencer/state'
+import { applyCorrectiveIntents, applySequencerCheckpoint, bootstrapFocusBaseline, canTransitionSequencerState, classifySequencerFrame, createSequencerRuntimeState, decideFrameOutcome, exhaustedDiscardAction, focusBaselineAfterAutofocus, focusBaselineRequiresAutofocus, focusOffsetOf, focusPositionFor, isTerminalSequencerState, recordSequencerSafetyTransition, requestSequencerPause, requestSequencerResume, requestSequencerStop, type SequencerFrameEvidence, type SequencerSafetyHistory, type SequencerSafetyTransition, safetyUnsafeWithin, sequencerCheckpointOf, sequencerSnapshot, shouldHoldSequencer, transitionSequencerState } from '../../../src/observation/sequencer/state'
 
 const LIGHT: SequencerCameraCapture = { exposureTime: 60, exposureTimeUnit: 'second', frameType: 'LIGHT', x: 0, y: 0, width: 0, height: 0, subframe: false, binX: 1, binY: 1, frameFormat: '', gain: 0, offset: 0, compressed: false }
 
@@ -394,5 +394,163 @@ describe('safety window', () => {
 		expect(safetyUnsafeWithin(safetyHistory, FROM, TO, true)).toBe('safe')
 		expect(safetyUnsafeWithin(safetyHistory, FROM, 3000, true)).toBe('unsafe')
 		expect(safetyUnsafeWithin(safetyHistory, 4000, 5000, true)).toBe('safe')
+	})
+})
+
+describe('safety history', () => {
+	test('records the first state and every change, never a repetition, and evicts the oldest beyond the capacity', () => {
+		const transitions: SequencerSafetyTransition[] = []
+		expect(recordSequencerSafetyTransition(transitions, 0, 'safe', 3)).toBeTrue()
+		expect(recordSequencerSafetyTransition(transitions, 10, 'safe', 3)).toBeFalse()
+		expect(recordSequencerSafetyTransition(transitions, 20, 'unsafe', 3)).toBeTrue()
+		expect(recordSequencerSafetyTransition(transitions, 30, 'unknown', 3)).toBeTrue()
+		expect(transitions).toEqual([
+			{ receivedMonotonic: 0, state: 'safe' },
+			{ receivedMonotonic: 20, state: 'unsafe' },
+			{ receivedMonotonic: 30, state: 'unknown' },
+		])
+
+		expect(recordSequencerSafetyTransition(transitions, 40, 'safe', 3)).toBeTrue()
+		expect(transitions.map((transition) => transition.receivedMonotonic)).toEqual([20, 30, 40])
+	})
+
+	test('a window whose initial state was evicted by the changes inside it is truncated (fail-closed)', () => {
+		const transitions: SequencerSafetyTransition[] = []
+		recordSequencerSafetyTransition(transitions, 0, 'safe', 4)
+		// The exposure starts at 100; five changes inside it overflow a history of four.
+		for (let i = 1; i <= 5; i++) recordSequencerSafetyTransition(transitions, 100 + i, i % 2 === 0 ? 'safe' : 'unknown', 4)
+		expect(safetyUnsafeWithin({ transitions }, 100, 200, false)).toBe('truncated')
+		// A window starting after the oldest retained change is still covered.
+		expect(safetyUnsafeWithin({ transitions }, 103, 200, false)).toBe('safe')
+	})
+})
+
+describe('49.3 discard decision', () => {
+	const CRITERIA = { quality: true, guidingInterruption: false, unsafeDuringExposure: false } as const
+
+	function policyOf(onExhausted: SequencerFrameDiscardPolicy['onExhausted'], maxDiscardsPerSlot: number, consecutive?: { readonly max: number; readonly action: 'pause' | 'stop' | 'fail' }, artifact: SequencerFrameDiscardPolicy['artifact'] = 'moveToRejected'): SequencerFrameDiscardPolicy {
+		return { criteria: CRITERIA, maxDiscardsPerSlot, onExhausted, artifact, ...(consecutive !== undefined && { maxConsecutiveDiscards: consecutive.max, onConsecutiveExhausted: consecutive.action }) }
+	}
+
+	test('1: maxDiscardsPerSlot = 0 never retakes: the first discard applies onExhausted', () => {
+		expect(decideFrameOutcome(policyOf('skipSlot', 0), { discardBudgetUsed: 0 }, 0, false)).toBe('skipSlot')
+		expect(decideFrameOutcome(policyOf('keepLast', 0), { discardBudgetUsed: 0 }, 0, false)).toBe('forced')
+	})
+
+	test('2: N discards retake, the N+1th applies onExhausted', () => {
+		const policy = policyOf('fail', 2)
+		expect(decideFrameOutcome(policy, { discardBudgetUsed: 0 }, 0, false)).toBe('retake')
+		expect(decideFrameOutcome(policy, { discardBudgetUsed: 1 }, 1, false)).toBe('retake')
+		expect(decideFrameOutcome(policy, { discardBudgetUsed: 2 }, 2, false)).toBe('fail')
+	})
+
+	test('3: each onExhausted maps to its decision', () => {
+		expect(decideFrameOutcome(policyOf('keepLast', 1), { discardBudgetUsed: 1 }, 0, false)).toBe('forced')
+		expect(decideFrameOutcome(policyOf('skipSlot', 1), { discardBudgetUsed: 1 }, 0, false)).toBe('skipSlot')
+		expect(decideFrameOutcome(policyOf('pause', 1), { discardBudgetUsed: 1 }, 0, false)).toBe('pause')
+		expect(decideFrameOutcome(policyOf('fail', 1), { discardBudgetUsed: 1 }, 0, false)).toBe('fail')
+	})
+
+	test('4: a renewed budget needs maxDiscardsPerSlot + 1 discards to exhaust again', () => {
+		const policy = policyOf('pause', 2)
+		// After resume() the slot budget is 0 again, whatever the total.
+		expect(decideFrameOutcome(policy, { discardBudgetUsed: 0 }, 0, false)).toBe('retake')
+		expect(decideFrameOutcome(policy, { discardBudgetUsed: 1 }, 0, false)).toBe('retake')
+		expect(decideFrameOutcome(policy, { discardBudgetUsed: 2 }, 0, false)).toBe('pause')
+	})
+
+	test('6: the circuit breaker is evaluated before the slot budget', () => {
+		const policy = policyOf('keepLast', 0, { max: 2, action: 'stop' })
+		expect(decideFrameOutcome(policy, { discardBudgetUsed: 0 }, 1, false)).toBe('forced')
+		expect(decideFrameOutcome(policy, { discardBudgetUsed: 0 }, 2, false)).toBe('stop')
+		expect(decideFrameOutcome(policyOf('skipSlot', 5, { max: 0, action: 'pause' }), { discardBudgetUsed: 0 }, 0, false)).toBe('pause')
+	})
+
+	test('8: total over onExhausted × artifact × maxDiscardsPerSlot × circuit breaker × stop; forced only with keepLast and an exhausted budget', () => {
+		const decisions = new Set<string>(['forced', 'retake', 'skipSlot', 'pause', 'stop', 'fail', 'discardFinal'])
+
+		for (const onExhausted of ['keepLast', 'skipSlot', 'pause', 'fail'] as const) {
+			for (const artifact of ['moveToRejected', 'keepInPlace', 'delete'] as const) {
+				for (const max of [0, 1, 2]) {
+					for (const consecutive of [undefined, { max: 1, action: 'pause' as const }, { max: 1, action: 'stop' as const }, { max: 1, action: 'fail' as const }]) {
+						for (const tripped of [false, true]) {
+							for (const stop of [false, true]) {
+								for (let used = 0; used <= max; used++) {
+									const policy = policyOf(onExhausted, max, consecutive, artifact)
+									const decision = decideFrameOutcome(policy, { discardBudgetUsed: used }, tripped ? 1 : 0, stop)
+									expect(decisions.has(decision)).toBeTrue()
+
+									const circuit = consecutive !== undefined && tripped
+									const exhausted = used + 1 > max
+									let expected: string = circuit ? consecutive.action : exhausted ? (onExhausted === 'keepLast' ? 'forced' : onExhausted) : 'retake'
+									if (stop && (expected === 'retake' || expected === 'pause' || expected === 'stop')) expected = 'discardFinal'
+									expect(decision as string).toBe(expected)
+									if (decision === 'forced') expect(onExhausted === 'keepLast' && exhausted && !circuit).toBeTrue()
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	})
+
+	test('5: the exhausted counter a held or restored slot still owes; renewing one counter never touches the other', () => {
+		const policy = policyOf('pause', 1, { max: 2, action: 'stop' })
+		expect(exhaustedDiscardAction(undefined, { discardBudgetUsed: 9 }, 9)).toBeUndefined()
+		expect(exhaustedDiscardAction(policy, { discardBudgetUsed: 1 }, 2)).toBeUndefined()
+		expect(exhaustedDiscardAction(policy, { discardBudgetUsed: 2 }, 2)).toEqual({ counter: 'slot', action: 'pause' })
+		expect(exhaustedDiscardAction(policy, { discardBudgetUsed: 2 }, 3)).toEqual({ counter: 'consecutive', action: 'stop' })
+		// resume() after the circuit breaker zeroes consecutiveDiscards only: the slot budget still holds the session.
+		expect(exhaustedDiscardAction(policy, { discardBudgetUsed: 2 }, 0)).toEqual({ counter: 'slot', action: 'pause' })
+		// resume() after the slot budget zeroes discardBudgetUsed only.
+		expect(exhaustedDiscardAction(policy, { discardBudgetUsed: 0 }, 2)).toBeUndefined()
+		expect(exhaustedDiscardAction(policyOf('fail', 0), { discardBudgetUsed: 1 }, 0)).toEqual({ counter: 'slot', action: 'fail' })
+		// keepLast and skipSlot end the slot when they apply, so a current slot never owes them.
+		expect(exhaustedDiscardAction(policyOf('skipSlot', 0), { discardBudgetUsed: 3 }, 0)).toBeUndefined()
+		expect(exhaustedDiscardAction(policyOf('keepLast', 0), { discardBudgetUsed: 3 }, 0)).toBeUndefined()
+	})
+})
+
+describe('49.3 classification', () => {
+	const ALL: SequencerDiscardCriteria = { quality: true, guidingInterruption: true, unsafeDuringExposure: true }
+	const CLEAN: SequencerFrameEvidence = { frameType: 'LIGHT', quality: 'accepted', dispatched: true, guided: true, guiding: { interrupted: false, truncated: false }, safety: 'safe' }
+
+	test('without criteria every completed frame is accepted', () => {
+		expect(classifySequencerFrame(undefined, { ...CLEAN, quality: 'rejected', safety: 'unsafe' })).toEqual({ reasons: [], truncated: false })
+	})
+
+	test('7: unknown never discards; a disabled criterion never discards', () => {
+		expect(classifySequencerFrame(ALL, { ...CLEAN, quality: 'unknown' }).reasons).toEqual([])
+		expect(classifySequencerFrame({ ...ALL, quality: false }, { ...CLEAN, quality: 'rejected' }).reasons).toEqual([])
+		expect(classifySequencerFrame({ ...ALL, guidingInterruption: false }, { ...CLEAN, guiding: { interrupted: true, truncated: true } }).reasons).toEqual([])
+		expect(classifySequencerFrame({ ...ALL, unsafeDuringExposure: false }, { ...CLEAN, safety: 'unsafe' }).reasons).toEqual([])
+	})
+
+	test('every reason in criterion order; a truncated window is reported', () => {
+		expect(classifySequencerFrame(ALL, { ...CLEAN, quality: 'rejected', guiding: { interrupted: true, truncated: false }, safety: 'unsafe' })).toEqual({ reasons: ['quality', 'guidingInterruption', 'unsafeDuringExposure'], truncated: false })
+		expect(classifySequencerFrame(ALL, { ...CLEAN, guiding: { interrupted: false, truncated: true } })).toEqual({ reasons: ['guidingInterruption'], truncated: true })
+		expect(classifySequencerFrame(ALL, { ...CLEAN, safety: 'truncated' })).toEqual({ reasons: ['unsafeDuringExposure'], truncated: true })
+	})
+
+	test('7: darks and biases only by quality', () => {
+		for (const frameType of ['DARK', 'BIAS'] as const) {
+			expect(classifySequencerFrame(ALL, { ...CLEAN, frameType, dispatched: false, guiding: { interrupted: true, truncated: true }, safety: 'unsafe' }).reasons).toEqual([])
+			expect(classifySequencerFrame(ALL, { ...CLEAN, frameType, quality: 'rejected' }).reasons).toEqual(['quality'])
+		}
+	})
+
+	test('an unguided light has nothing to interrupt; a guided one without coverage is truncated', () => {
+		expect(classifySequencerFrame(ALL, { frameType: 'LIGHT', quality: 'accepted', dispatched: true, guided: false, safety: 'safe' }).reasons).toEqual([])
+		expect(classifySequencerFrame(ALL, { frameType: 'LIGHT', quality: 'accepted', dispatched: true, guided: true, safety: 'safe' })).toEqual({ reasons: ['guidingInterruption'], truncated: true })
+	})
+
+	test('no safety history covering the window counts as truncated', () => {
+		expect(classifySequencerFrame(ALL, { frameType: 'LIGHT', quality: 'accepted', dispatched: true, guided: false })).toEqual({ reasons: ['unsafeDuringExposure'], truncated: true })
+	})
+
+	test('a missing dispatch fails every enabled window criterion closed', () => {
+		expect(classifySequencerFrame(ALL, { ...CLEAN, dispatched: false })).toEqual({ reasons: ['guidingInterruption', 'unsafeDuringExposure'], truncated: false, detail: 'missingDispatch' })
+		expect(classifySequencerFrame({ ...ALL, unsafeDuringExposure: false }, { ...CLEAN, dispatched: false, guided: false })).toEqual({ reasons: [], truncated: false })
 	})
 })
