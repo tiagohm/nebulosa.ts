@@ -9,7 +9,7 @@ import { awaitCameraRecoveryTask, captureFrameStep, type SequencerCaptureService
 import { type SequencerCaptureStep, type SequencerRunner, startSequencerRunner } from '../../../src/observation/sequencer/runner'
 import { sequencerFrameSlotId } from '../../../src/observation/sequencer/scheduler'
 // oxfmt-ignore
-import type { SequencerCameraCapture, SequencerCaptureConfiguration, SequencerClock, SequencerConfiguration, SequencerDevices, SequencerEvent, SequencerFrameSlot, SequencerResult } from '../../../src/observation/sequencer/sequencer'
+import type { SequencerCameraCapture, SequencerCaptureConfiguration, SequencerCheckpointStore, SequencerClock, SequencerConfiguration, SequencerDevices, SequencerEvent, SequencerFrameSlot, SequencerResult } from '../../../src/observation/sequencer/sequencer'
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal, sequencerFrameDestination } from '../../../src/observation/sequencer/storage'
 import { waitUntil } from '../../util'
 // oxfmt-ignore
@@ -73,6 +73,8 @@ interface SessionOptions {
 	// Wraps the capture step.
 	readonly capture?: (step: SequencerCaptureStep) => SequencerCaptureStep
 	readonly onEvent?: (event: SequencerEvent, session: Session) => void
+	// Checkpoint store of the process; one over ROOT by default.
+	readonly checkpointStore?: SequencerCheckpointStore
 }
 
 // Starts the next process of the session `sessionId`, camera-only, with the real capturer.
@@ -89,7 +91,7 @@ function startSession(sessionId: string, options: SessionOptions = {}): Session 
 		events.push(event)
 		options.onEvent?.(event, session)
 	}
-	const services = { coordinator: rig.coordinator, storage, checkpointStore: new FileSystemSequencerCheckpointStore(ROOT), clock, listener }
+	const services = { coordinator: rig.coordinator, storage, checkpointStore: options.checkpointStore ?? new FileSystemSequencerCheckpointStore(ROOT), clock, listener }
 	const runner = startSequencerRunner({ configuration, devices: { camera: camera() }, services, phases })
 	const session: Session = { runner, storage, events, result: runner.handle.result, done: false }
 	void session.result.then(() => (session.done = true))
@@ -415,6 +417,46 @@ describe('beforeExposure', () => {
 		const second = startSession(sessionId)
 		expect((await second.result).state).toBe('completed')
 		expect((await journalOf(sessionId)).filter((entry) => entry.kind === 'committed')).toMatchObject([{ attempt: 1 }])
+	})
+
+	test('49.7 15: a dispatch that throws counts one capture failure, saved before the retry, which exposes exactly once (I26)', async () => {
+		const sessionId = Bun.randomUUIDv7()
+		const order: string[] = []
+		const manager = rig.managers.camera
+		const startExposure = manager.startExposure.bind(manager)
+		const dispatch = spyOn(manager, 'startExposure').mockImplementation((...args: Parameters<typeof startExposure>) => {
+			order.push('startExposure')
+			if (order.filter((entry) => entry === 'startExposure').length === 1) throw new Error('driver exploded')
+			startExposure(...args)
+		})
+
+		// Checkpoint store recording the current slot of every save in the same order.
+		const inner = new FileSystemSequencerCheckpointStore(ROOT)
+		const checkpointStore: SequencerCheckpointStore = {
+			load: (id) => inner.load(id),
+			save: async (checkpoint) => {
+				await inner.save(checkpoint)
+				if (checkpoint.currentSlot !== undefined) order.push(`save ${checkpoint.currentSlot.attempt}/${checkpoint.currentSlot.captureFailures}`)
+			},
+		}
+
+		try {
+			const retry = { maxAttempts: 3, delay: 0, backoff: 1, maximumDelay: 0, retryOn: ['commandFailed' as const] }
+			const session = startSession(sessionId, { configuration: configurationOf(1, { retry }), checkpointStore })
+			expect((await session.result).state).toBe('completed')
+
+			// The failure was saved before the second dispatch; the retry exposed once, the thrown dispatch never.
+			const dispatches = order.flatMap((entry, i) => (entry === 'startExposure' ? [i] : []))
+			expect(dispatches).toHaveLength(2)
+			expect(order.slice(dispatches[0], dispatches[1]).some((entry) => entry === 'save 2/1')).toBeTrue()
+			expect(session.events.filter((event) => event.type === 'exposureStarted')).toEqual([expect.objectContaining({ slot: 'frame[L][1]', attempt: 2 })])
+			// Nothing was owed for the thrown dispatch: no temporary left, no quarantine, no payload.
+			expect(rig.arbiter.snapshot(cameraKey()).causes).toEqual([])
+			expect(filesOf(sessionId).filter((path) => path.endsWith('.fit'))).toEqual(['L/frame[L][1].fit'])
+			assertJournalInvariants(await journalOf(sessionId), session.events)
+		} finally {
+			dispatch.mockRestore()
+		}
 	})
 
 	test('an approved exposure emits exposureStarted once, after the dispatch', async () => {

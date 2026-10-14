@@ -9,12 +9,15 @@ import type { FlatPanelCommander } from '../../devices/commanders/flatpanel'
 import type { MountCommander } from '../../devices/commanders/mount'
 import type { Camera, Cover, Dome, Mount, PierSide, Thermometer, TrackMode } from '../../devices/indi/device'
 import type { DeviceHandler, DeviceManager } from '../../devices/indi/manager/device'
+import { mountTargetEquatorial } from '../../devices/indi/manager/mount'
 import { type FailedOperationResult, failedOperationResult, type OperationResult, successfulOperationResult } from '../../devices/orchestration/operation'
 import { abortReason } from '../../devices/orchestration/operation.wait'
+import { exposureTimeInSeconds } from '../../devices/runners/camera.capture.types'
 import type { Angle } from '../../math/units/angle'
 import type { SequencerContext, SequencerFailedTaskResult, SequencerShutdownTask, SequencerTask, SequencerTaskPolicy, SequencerTaskResult } from './runner'
+import { isWithinSequencerMeridianCycle } from './state'
 // oxfmt-ignore
-import { DEFAULT_SEQUENCER_MERIDIAN_FLIP, type SequencerClock, type SequencerConfiguration, type SequencerCoolingConfiguration, type SequencerMeridianFlipConfiguration, type SequencerShutdownConfiguration, type SequencerShutdownStepPolicy } from './sequencer'
+import { DEFAULT_SEQUENCER_MERIDIAN_FLIP, type SequencerClock, type SequencerConfiguration, type SequencerCoolingConfiguration, type SequencerFrameSlot, type SequencerMeridianFlipConfiguration, type SequencerShutdownConfiguration, type SequencerShutdownStepPolicy, type SequencerTarget } from './sequencer'
 
 // Equipment lifecycle tasks of the Sequencer: the startup (camera cooling with its optional thermal stabilization,
 // dome or roof opening, cover opening, mount unpark, tracking mode), the shutdown (tracking off, cover closing, mount
@@ -79,15 +82,45 @@ export function sequencerMountHourAngle(mount: Pick<Mount, 'hasGeographicCoordin
 	return hourAngle(lst, mount.equatorialCoordinate.rightAscension)
 }
 
+// Hour angle of the J2000 `target` at the wall instant `wallNow` (Unix ms, UTC), in radians in (−π, π]: the local
+// apparent sidereal time at the published longitude minus the right ascension `mountTargetEquatorial` converts the
+// target to for `mount` at the same instant. The mount must have published its site.
+export function sequencerTargetHourAngle(mount: Mount, target: SequencerTarget, wallNow: number): Angle {
+	const time = timeUnix(wallNow / 1000)
+	const [rightAscension] = mountTargetEquatorial(mount, { type: 'J2000', J2000: { x: target.rightAscension, y: target.declination } }, time)
+	return hourAngle(localSiderealTime(time, mount.geographicCoordinate.longitude), rightAscension)
+}
+
+// Whether a pre-flip mount whose target is not acquired yet stands off that target in the meridian zone (section 24.1):
+// its physical `mountHourAngle` plus `span` (the frame, `sequencerFrameHourAngleSpan`) reaches the graceful deadline,
+// and the target, at `targetHourAngle`, reaches `flipAt` no earlier than the mount reaches that deadline. Tracking on
+// such a mount would only carry it into the hard protection, since no flip of the target comes due first; a target whose
+// flip comes due first is flipped by the guard instead. Hour angles in radians, compared linearly as the flip engine
+// does. Pure.
+export function isSequencerMountOffTarget(flip: Pick<SequencerMeridianFlipConfiguration, 'flipAt' | 'latestAt' | 'protectionMargin'>, mountHourAngle: Angle, targetHourAngle: Angle, span: Angle) {
+	const deadline = meridianGracefulDeadline(flip)
+	return mountHourAngle + span >= deadline && targetHourAngle < flip.flipAt && flip.flipAt - targetHourAngle >= deadline - mountHourAngle
+}
+
 // Meridian rule of `ensureTracking` for a stopped tracking (section 20.0): without an enabled meridian flip tracking
 // may always go on; with one, only on the observed post-flip side or with the physical `hourAngle` (radians, (−π, π],
-// compared linearly as the flip engine does) before the graceful deadline. Past it, a session still waiting for its
-// target acquisition defers the tracking to the acquisition; otherwise tracking stays off. Pure.
-export function sequencerTrackingDecision(flip: SequencerMeridianFlipConfiguration | undefined, pierSide: PierSide, hourAngle: Angle | undefined, awaitingAcquisition: boolean): SequencerTrackingDecision {
+// compared linearly as the flip engine does) before the graceful deadline, unless the target is still to be acquired
+// and the mount stands off it (`offTarget`, `isSequencerMountOffTarget`). Otherwise a session still waiting for its
+// target acquisition defers the tracking to the acquisition, and tracking stays off. Pure.
+export function sequencerTrackingDecision(flip: SequencerMeridianFlipConfiguration | undefined, pierSide: PierSide, hourAngle: Angle | undefined, awaitingAcquisition: boolean, offTarget: boolean = false): SequencerTrackingDecision {
 	if (flip?.enabled !== true || pierSide === flip.afterFlipPierSide) return 'enable'
 	if (hourAngle === undefined) return 'unobserved'
-	if (hourAngle < meridianGracefulDeadline(flip)) return 'enable'
+	if (hourAngle < meridianGracefulDeadline(flip) && !(awaitingAcquisition && offTarget)) return 'enable'
 	return awaitingAcquisition ? 'defer' : 'blocked'
+}
+
+// Hour angle, in radians, that the exposure of `frame` plus the guard margin (`meridianFlip.exposureMargin`) take at the
+// sidereal rate; 0 without an enabled meridian flip or without a frame. The final guard compares the same span.
+export function sequencerFrameHourAngleSpan(configuration: Pick<SequencerConfiguration, 'meridianFlip'>, frame: { readonly capture: Pick<SequencerFrameSlot['capture'], 'exposureTime' | 'exposureTimeUnit'> } | undefined): Angle {
+	const flip = configuration.meridianFlip
+	if (flip?.enabled !== true || frame === undefined) return 0
+	const { exposureTime, exposureTimeUnit } = frame.capture
+	return (exposureTimeInSeconds(exposureTime, exposureTimeUnit) + (flip.exposureMargin ?? DEFAULT_SEQUENCER_MERIDIAN_FLIP.exposureMargin)) * SIDEREAL_DRIFT_RATE
 }
 
 // Track mode the startup configures: the configured one, or SIDEREAL when there is a target or an enabled meridian
@@ -315,8 +348,18 @@ export async function reconcileTracking(context: SequencerContext, mountCommande
 	const mode = await selectTrackMode(context, mountCommander, mount, 'SIDEREAL')
 	if (!mode.ok || mount.tracking) return mode
 
-	const hourAngle = sequencerMountHourAngle(mount, clock.wallNow())
-	const decision = sequencerTrackingDecision(configuration.meridianFlip, mount.pierSide, hourAngle, configuration.target !== undefined && !state.targetAcquired)
+	const wallNow = clock.wallNow()
+
+	// Outside the single meridian cycle of the session tracking never goes on.
+	if (configuration.meridianFlip?.enabled === true && state.meridianTransitAt !== undefined && !isWithinSequencerMeridianCycle(state.meridianTransitAt, wallNow)) {
+		return { ...configurationFailure('meridianCycleExceeded: the session left its single meridian cycle'), fatal: true }
+	}
+
+	const { meridianFlip, target } = configuration
+	const hourAngle = sequencerMountHourAngle(mount, wallNow)
+	const awaitingAcquisition = target !== undefined && !state.targetAcquired
+	const offTarget = awaitingAcquisition && meridianFlip?.enabled === true && hourAngle !== undefined && isSequencerMountOffTarget(meridianFlip, hourAngle, sequencerTargetHourAngle(mount, target, wallNow), sequencerFrameHourAngleSpan(configuration, context.frame))
+	const decision = sequencerTrackingDecision(meridianFlip, mount.pierSide, hourAngle, awaitingAcquisition, offTarget)
 
 	switch (decision) {
 		case 'enable':

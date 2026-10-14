@@ -1,16 +1,19 @@
-import type { FrameType } from '../../devices/indi/device'
-import { createMeridianFlipState, type MeridianFlipState } from '../mount/meridian.flip'
+import { SIDEREAL_DAYSEC, SIDEREAL_DRIFT_RATE } from '../../core/constants'
+import type { FrameType, PierSide } from '../../devices/indi/device'
+import type { Angle } from '../../math/units/angle'
+import { createMeridianFlipState, type MeridianFlipEvent, type MeridianFlipPolicy, type MeridianFlipState, transitionMeridianFlip } from '../mount/meridian.flip'
 // oxfmt-ignore
-import type { SequencerCheckpoint, SequencerCheckpointSlot, SequencerConfiguration, SequencerCorrectiveIntents, SequencerFailure, SequencerFilterFocusOffsets, SequencerFocusBaseline, SequencerFrameSlot, SequencerFrameSlotSnapshot, SequencerIntents, SequencerMountRiskObservation, SequencerPhase, SequencerSafetyState, SequencerSchedulerState, SequencerSessionState, SequencerSnapshot, SequencerTaskId, SequencerTerminalState, SequencerTriggerAnchors } from './sequencer'
+import { DEFAULT_SEQUENCER_MERIDIAN_FLIP, type SequencerCheckpoint, type SequencerCheckpointSlot, type SequencerConfiguration, type SequencerCorrectiveIntents, type SequencerFailure, type SequencerFilterFocusOffsets, type SequencerFocusBaseline, type SequencerFrameSlot, type SequencerFrameSlotSnapshot, type SequencerIntents, type SequencerMeridianFlipCompletedEvent, type SequencerMeridianFlipConfiguration, type SequencerMountRiskObservation, type SequencerPhase, type SequencerSafetyState, type SequencerSchedulerState, type SequencerSessionState, type SequencerSnapshot, type SequencerTaskId, type SequencerTerminalState, type SequencerTriggerAnchors } from './sequencer'
 import type { SequencerElapsedAnchors } from './trigger'
 
 // Runtime state of one Sequencer session and its pure transitions: the lifecycle state machine, the control
 // requests (pause, resume, stop) recorded as desired state, the logical counters persisted between processes and
 // their checkpoint form, the projection into the public snapshot, the focus-offset baseline (bootstrap, absolute
-// targets, update after autofocus) and the safety-window query over the runtime transition history. Nothing here
-// touches devices, clocks or storage: callers pass wall instants (Unix ms) and monotonic instants (ms) explicitly.
-// Helpers that update the runtime state mutate it in place and document it; the snapshot, the checkpoint and the
-// other derivations allocate fresh objects and never alias mutable runtime fields.
+// targets, update after autofocus), the meridian flip policy, transitions and single cycle of the session, and the
+// safety-window query over the runtime transition history. Nothing here touches devices, clocks or storage: callers
+// pass wall instants (Unix ms) and monotonic instants (ms) explicitly. Helpers that update the runtime state mutate it
+// in place and document it; the snapshot, the checkpoint and the other derivations allocate fresh objects and never
+// alias mutable runtime fields.
 
 // State the controls asked for; honored only at safe points.
 export type SequencerDesiredState = 'running' | 'paused'
@@ -82,6 +85,12 @@ export interface SequencerRuntimeState {
 	targetAcquired: boolean
 	// Meridian flip phase, recreated from `meridianFlipAttempts` in each process and never reset in the session.
 	meridianFlip: MeridianFlipState
+	// Pier-side verification of the flip the session commanded in this process, recorded at PIER_SIDE_CONFIRMED and
+	// reported once by `meridianFlipCompleted` when the flip reaches COMPLETED.
+	meridianFlipVerification?: SequencerMeridianFlipVerification
+	// Whether a flip completed by the session still owes the flip of the guiding calibration (`guiding.flipCalibration`),
+	// done once before guiding resumes after it.
+	flipCalibrationPending: boolean
 	// Whether the meridian protection turned tracking off; after a restart `mount.tracking` replaces it.
 	trackingStoppedForMeridianProtection: boolean
 	// Whether the session closed the optical path for calibration; after a restart the cover and wheel replace it.
@@ -262,6 +271,7 @@ export function createSequencerRuntimeState(configuration: SequencerConfiguratio
 		consecutiveDiscards: 0,
 		targetAcquired: false,
 		meridianFlip: createMeridianFlipState(0),
+		flipCalibrationPending: false,
 		trackingStoppedForMeridianProtection: false,
 		opticalPathClosed: false,
 		resumedSinceAutofocus: false,
@@ -406,6 +416,75 @@ export function focusBaselineAfterAutofocus(offsets: SequencerFilterFocusOffsets
 // LIGHT frames do; darks and biases proceed. No anchor suppresses it.
 export function focusBaselineRequiresAutofocus(baseline: SequencerFocusBaseline, frameType: FrameType) {
 	return baseline.kind === 'unknown' && frameType === 'LIGHT'
+}
+
+// Pier-side verification of a flip the session commanded, as `meridianFlipCompleted` reports it.
+export interface SequencerMeridianFlipVerification {
+	// Decision hour angle of the target at the verification, in radians in (−π, π].
+	readonly hourAngle: Angle
+	// Pier side read at the verification; always `afterFlipPierSide`.
+	readonly pierSide: PierSide
+	// Whether the commander observed the side change from a known side.
+	readonly pierSideVerified: boolean
+}
+
+// Policy of the pure meridian flip state machine for a session, the only conversion of section 24.1A: thresholds and
+// pier sides as configured, `allowUnknownPierSide` always false (a NEITHER side is waited for, never accepted), the
+// retry budget with its default, a recentering by default only when the session can recenter (a target with
+// pointing), and a guiding settle by default only with guiding. A fresh object.
+export function toMeridianFlipPolicy(flip: SequencerMeridianFlipConfiguration, configuration: Pick<SequencerConfiguration, 'target' | 'pointing' | 'guiding'>): MeridianFlipPolicy {
+	const { enabled, prepareAt, flipAt, latestAt, beforeFlipPierSide, afterFlipPierSide } = flip
+
+	return {
+		enabled,
+		prepareAt,
+		flipAt,
+		latestAt,
+		beforeFlipPierSide,
+		afterFlipPierSide,
+		allowUnknownPierSide: false,
+		maxRetries: flip.maxRetries ?? DEFAULT_SEQUENCER_MERIDIAN_FLIP.maxRetries,
+		requireRecentering: flip.requireRecentering ?? (configuration.target !== undefined && configuration.pointing !== undefined),
+		requireGuidingSettle: flip.requireGuidingSettle ?? configuration.guiding !== undefined,
+	}
+}
+
+// Applies a verified event to the flip state of the session, in place. When the event takes a flip the session
+// started (attempts > 0) into COMPLETED, the post-flip effects apply exactly once: the `afterFlip` autofocus becomes
+// due, the target counts as acquired, the next due dither is postponed past the next light, and the verification
+// recorded at PIER_SIDE_CONFIRMED is returned as the `meridianFlipCompleted` event to emit. A state that reaches
+// COMPLETED without a started flip (only ever on the post-flip side) has no effect. An invalid transition is a logic
+// bug of the caller and throws the RangeError of the state machine.
+export function advanceSequencerMeridianFlip(runtime: Pick<SequencerRuntimeState, 'meridianFlip' | 'meridianFlipVerification' | 'flippedSinceAutofocus' | 'targetAcquired' | 'ditherHeldAt' | 'anchors'>, policy: MeridianFlipPolicy, event: MeridianFlipEvent): SequencerMeridianFlipCompletedEvent | undefined {
+	const previous = runtime.meridianFlip.phase
+	runtime.meridianFlip = transitionMeridianFlip(policy, runtime.meridianFlip, event)
+	const { phase, attempts } = runtime.meridianFlip
+	if (phase !== 'COMPLETED' || previous === 'COMPLETED' || attempts === 0) return undefined
+
+	const verification = runtime.meridianFlipVerification
+	runtime.meridianFlipVerification = undefined
+	runtime.flippedSinceAutofocus = true
+	runtime.targetAcquired = true
+	runtime.ditherHeldAt = runtime.anchors.lightExposures
+	if (verification === undefined) return undefined
+
+	return { type: 'meridianFlipCompleted', attempts, hourAngle: verification.hourAngle, pierSide: verification.pierSide, pierSideVerified: verification.pierSideVerified }
+}
+
+// Half of the single meridian cycle of a session, in ms: half a sidereal day.
+export const SEQUENCER_MERIDIAN_HALF_CYCLE = SIDEREAL_DAYSEC * 500
+
+// Wall instant (Unix ms) of the upper transit nearest to `wallNow` (Unix ms) of a target whose hour angle is
+// `hourAngle` radians in (−π, π] at that instant: `wallNow − hourAngle / SIDEREAL_DRIFT_RATE`.
+export function sequencerMeridianTransitAt(wallNow: number, hourAngle: Angle) {
+	return wallNow - (hourAngle / SIDEREAL_DRIFT_RATE) * 1000
+}
+
+// Whether the wall instant `wallNow` (Unix ms) lies in the single meridian cycle anchored at `transitAt` (Unix ms):
+// `[transitAt − half a sidereal day, transitAt + half a sidereal day)`, inside which the normalized hour angle of the
+// target equals the unwrapped one.
+export function isWithinSequencerMeridianCycle(transitAt: number, wallNow: number) {
+	return wallNow >= transitAt - SEQUENCER_MERIDIAN_HALF_CYCLE && wallNow < transitAt + SEQUENCER_MERIDIAN_HALF_CYCLE
 }
 
 // One recorded safety change. Runtime-only, never persisted.

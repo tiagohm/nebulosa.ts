@@ -10,9 +10,10 @@ import { failedOperationResult, OperationCoordinator, type OperationContext, typ
 import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
 import { mulberry32, type Random } from '../../../src/math/numerical/random'
 // oxfmt-ignore
-import { type SequencerCaptureContext, type SequencerCapturedFrame, type SequencerCaptureStep, type SequencerContext, type SequencerRunner, type SequencerRunnerPhases, sequencerResourceRequests, sequencerRetryDelay, type SequencerShutdownTask, type SequencerTask, type SequencerTaskPolicy, type SequencerTaskResult, startSequencerRunner } from '../../../src/observation/sequencer/runner'
+import { SEQUENCER_REENTRY_LIMIT, type SequencerCaptureContext, type SequencerCapturedFrame, type SequencerCaptureStep, type SequencerContext, type SequencerProtectionOutcome, type SequencerRunner, type SequencerRunnerPhases, sequencerResourceRequests, sequencerRetryDelay, type SequencerShutdownTask, type SequencerSupervisor, type SequencerSupervisorHost, type SequencerTask, type SequencerTaskPolicy, type SequencerTaskResult, startSequencerRunner } from '../../../src/observation/sequencer/runner'
 // oxfmt-ignore
 import type { SequencerCameraCapture, SequencerCaptureConfiguration, SequencerConfiguration, SequencerDevices, SequencerEvent, SequencerFailure, SequencerFrameGroup, SequencerResult, SequencerSessionState, SequencerShutdownStepPolicy, SequencerTaskId, SequencerTriggeredFrameGroup } from '../../../src/observation/sequencer/sequencer'
+import { mountKeyHolders } from '../../../src/observation/sequencer/pointing'
 import { pushSequencerCompensation } from '../../../src/observation/sequencer/state'
 import { FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
@@ -195,6 +196,14 @@ interface HarnessOptions {
 	readonly focuserCommander?: FocuserCommander
 	readonly wheelCommander?: WheelCommander
 	readonly disposeSignal?: AbortSignal
+	// Pre-capture tasks after the frame destination (the final guard).
+	readonly afterPrepare?: readonly SequencerTask[]
+	// Synchronous check right before the dispatch.
+	readonly exposureRefusal?: SequencerRunnerPhases['exposureRefusal']
+	// Called synchronously with each event, after the recorder.
+	readonly onEvent?: (event: SequencerEvent, runner: SequencerRunner) => void
+	// Meridian supervisor of the session.
+	readonly supervisor?: SequencerSupervisor
 }
 
 function start(configuration: SequencerConfiguration, script: Script, options: HarnessOptions = {}): Harness {
@@ -205,7 +214,12 @@ function start(configuration: SequencerConfiguration, script: Script, options: H
 	recorders.push(recorder)
 	const { focuserCommander, wheelCommander, disposeSignal } = options
 	const storage = new FileSystemSequencerStorage({ root: STORAGE_ROOT, sessionId: Bun.randomUUIDv7(), wallNow: clock.wallNow })
-	const services = { coordinator, storage, clock, listener: recorder.listener, ...(focuserCommander !== undefined && { focuserCommander }), ...(wheelCommander !== undefined && { wheelCommander }) }
+	const session: { runner?: SequencerRunner } = {}
+	const listener = (event: SequencerEvent) => {
+		recorder.listener(event)
+		if (session.runner !== undefined) options.onEvent?.(event, session.runner)
+	}
+	const services = { coordinator, storage, clock, listener, ...(focuserCommander !== undefined && { focuserCommander }), ...(wheelCommander !== undefined && { wheelCommander }) }
 	// The script is read when each phase runs; the frame destination is always prepared last.
 	const prepare = prepareFrameDestinationTask(storage)
 	const phases: SequencerRunnerPhases = {
@@ -213,7 +227,7 @@ function start(configuration: SequencerConfiguration, script: Script, options: H
 			return script.startup
 		},
 		get preCapture() {
-			return [...script.preCapture, prepare]
+			return [...script.preCapture, prepare, ...(options.afterPrepare ?? [])]
 		},
 		get capture() {
 			return script.capture
@@ -221,8 +235,11 @@ function start(configuration: SequencerConfiguration, script: Script, options: H
 		get shutdown() {
 			return script.shutdown
 		},
+		...(options.exposureRefusal !== undefined && { exposureRefusal: options.exposureRefusal }),
+		...(options.supervisor !== undefined && { supervisor: options.supervisor }),
 	}
 	const runner = startSequencerRunner({ configuration, devices, services, phases, ...(disposeSignal !== undefined && { disposeSignal }) })
+	session.runner = runner
 	return { runner, script, coordinator, recorder, clock, devices }
 }
 
@@ -1119,6 +1136,209 @@ describe('protection requests', () => {
 		blocked.settle(captured(blocked.context))
 		await finish(harness)
 		expect(harness.runner.requestProtection(action(script))).toBeFalse()
+	})
+})
+
+describe('43 re-entries of the guard', () => {
+	const refuse = (wait?: number): SequencerTaskResult => ({ ok: true, reenter: { reason: 'the meridian flip is due', ...(wait !== undefined && { wait }) } })
+
+	test('a guard that keeps refusing fails the session after the limit, with every attempt deferred and nothing exposed', async () => {
+		const script = new Script()
+		const harness = start(configurationOf(), script, { afterPrepare: [script.task('finalExposureGuard', () => refuse())] })
+		const result = await finish(harness)
+
+		expect(result).toMatchObject({ state: 'failed', failure: { kind: 'operation', reason: 'unexpectedState', task: 'finalExposureGuard', detail: expect.stringContaining('re-entered 4 times') } })
+		expect(script.trace).toEqual(new Array(SEQUENCER_REENTRY_LIMIT + 1).fill('finalExposureGuard@frame[L][1]'))
+		const journal = await readSequencerJournal(join(STORAGE_ROOT, harness.runner.id, 'journal.jsonl'))
+		expect(journal.filter((entry) => entry.kind === 'deferred').map((entry) => entry.reason)).toEqual(new Array(SEQUENCER_REENTRY_LIMIT + 1).fill('guard'))
+		// The attempt was never consumed.
+		expect(journal.filter((entry) => entry.kind === 'prepared').every((entry) => entry.attempt === 1)).toBeTrue()
+	})
+
+	test('the wait of a refusal is monotonic, a safe point for a pause, and the pre-capture re-enters after it', async () => {
+		const script = new Script()
+		let refusals = 2
+		const harness = start(configurationOf(), script, { afterPrepare: [script.task('finalExposureGuard', () => (refusals-- > 0 ? refuse(5000) : OK))] })
+
+		await waitUntil(() => harness.clock.pending === 1, 2000, 1)
+		harness.clock.jumpWall(-60000)
+		await harness.clock.advance(4999)
+		expect(script.trace).toHaveLength(1)
+		await harness.clock.advance(1)
+		await waitUntil(() => script.trace.length === 2 && harness.clock.pending === 1, 2000, 1)
+
+		// The second wait is cut by a pause; the resumed pre-capture runs the guard again at once.
+		expect(await harness.runner.handle.pause()).toBe('paused')
+		expect(harness.runner.handle.resume()).toBeTrue()
+		expect((await finish(harness)).state).toBe('completed')
+		expect(script.trace).toEqual(['finalExposureGuard@frame[L][1]', 'finalExposureGuard@frame[L][1]', 'finalExposureGuard@frame[L][1]', 'capture@frame[L][1]#1'])
+	})
+
+	test('a refusal of the guard right before the dispatch counts too; an exposure resets the count', async () => {
+		const script = new Script()
+		let refusals = SEQUENCER_REENTRY_LIMIT
+		const harness = start(configurationOf([scheduled('L', 2)]), script, { exposureRefusal: () => (refusals-- > 0 ? 'the meridian flip is due' : undefined) })
+		const result = await finish(harness)
+
+		expect(result.state).toBe('completed')
+		expect(script.trace.filter((entry) => entry.startsWith('capture'))).toEqual(['capture@frame[L][1]#1', 'capture@frame[L][1]#1', 'capture@frame[L][1]#1', 'capture@frame[L][1]#1', 'capture@frame[L][2]#1'])
+		expect(events(harness).filter((event) => event.type === 'exposureStarted')).toHaveLength(2)
+
+		// One more refusal than the limit fails the session.
+		const failing = new Script()
+		const failed = await finish(start(configurationOf(), failing, { exposureRefusal: () => 'the meridian flip is due' }))
+		expect(failed).toMatchObject({ state: 'failed', failure: { kind: 'operation', reason: 'unexpectedState', task: 'finalExposureGuard' } })
+		expect(failing.trace).toEqual(new Array(SEQUENCER_REENTRY_LIMIT + 1).fill('capture@frame[L][1]#1'))
+	})
+})
+
+describe('24.5 critical protection', () => {
+	const outcome = (value: SequencerProtectionOutcome) => successfulOperationResult(value)
+
+	test('cancels the current task at once, runs while it still quiesces, single-flight, and no task starts before its outcome', async () => {
+		const script = new Script()
+		const stuck = script.blockTask(true)
+		let runs = 0
+		script.preCapture = [script.task('autofocus', (context) => (++runs === 1 ? stuck(context) : OK))]
+		const harness = start(configurationOf(), script)
+		const blocked = await script.waitBlocked('autofocus')
+
+		let release!: VoidFunction
+		const order: string[] = []
+		const protection = harness.runner.protectCritically('sequencer.protect.meridianHard', async (context) => {
+			order.push(`protect ${blocked.context.signal.aborted}`)
+			await new Promise<void>((resolve) => {
+				release = resolve
+			})
+			order.push(`off ${context.kind}`)
+			return outcome({ ok: true })
+		})
+
+		// Stage 1 happened synchronously; a second call shares the protection in flight.
+		expect(blocked.context.signal.aborted).toBeTrue()
+		expect(harness.runner.protectCritically('sequencer.protect.other', () => outcome({ ok: true }))).toBe(protection)
+		await waitUntil(() => order.length === 1, 2000, 1)
+		expect(harness.runner.snapshot().task).toBe('autofocus')
+
+		// The stuck task ends; nothing starts, no drain begins, until the outcome.
+		blocked.settle(ABORTED)
+		for (let i = 0; i < 20; i++) {
+			await new Promise((resolve) => {
+				setImmediate(resolve)
+			})
+		}
+		expect(script.trace).toEqual(['autofocus@frame[L][1]'])
+		const drains = () => harness.recorder.entries.filter((entry) => entry.kind === 'drain' && !entry.terminal).length
+		expect(drains()).toBe(0)
+
+		release()
+		expect(await protection).toEqual({ ok: true })
+		expect((await finish(harness)).state).toBe('completed')
+		expect(order).toEqual(['protect true', 'off sequencer.protect.meridianHard'])
+		expect(script.trace).toEqual(['autofocus@frame[L][1]', 'autofocus@frame[L][1]', 'capture@frame[L][1]#1'])
+		const root = sequenceOf(harness, (entry) => entry.kind === 'root' && entry.operation === 'sequencer.protect.meridianHard' && entry.event === 'start')
+		const stuckEnd = sequenceOf(harness, (entry) => entry.kind === 'root' && entry.operation === 'sequencer.autofocus' && entry.event === 'end')
+		expect(root).toBeLessThan(stuckEnd)
+	})
+
+	test('a failed outcome applies its action: pause holds at the next safe point, the startup included', async () => {
+		const script = new Script()
+		const block = script.blockTask()
+		let runs = 0
+		script.startup = [script.task('coolCamera', (context) => (++runs === 1 ? block(context) : OK))]
+		const harness = start(configurationOf(), script)
+		await script.waitBlocked('coolCamera')
+
+		const failure: SequencerFailure = { kind: 'operation', reason: 'unexpectedState', detail: 'meridian protection failed: trackingNotStopped' }
+		expect(await harness.runner.protectCritically('sequencer.protect.meridianHard', () => outcome({ ok: false, failure, action: 'pause' }))).toEqual({ ok: false, failure, action: 'pause' })
+		await waitState(harness, 'paused')
+		expect(script.trace).toEqual(['coolCamera'])
+
+		expect(harness.runner.handle.resume()).toBeTrue()
+		expect((await finish(harness)).state).toBe('completed')
+		expect(script.trace).toEqual(['coolCamera', 'coolCamera', 'capture@frame[L][1]#1'])
+	})
+
+	test('58: the motion owners are the roots of the mount movers and of the dither movement while they live, nothing else', async () => {
+		const bounds = { mount: 'Mount', mountSettle: 500, ditherMovement: [{ request: { key: 'GuideOutput' }, releaseBound: 1000 }] }
+		let host: SequencerSupervisorHost | undefined
+		const supervisor: SequencerSupervisor = { arm: (armed) => (host = armed), motionKeys: (task) => mountKeyHolders(task, bounds)?.keys ?? [], safePoint: () => {}, disarm: () => {} }
+		const seen: string[] = []
+		const owners = (id: SequencerTaskId) => {
+			seen.push(`${id}: ${[...host!.motionOwners.values()].map((owner) => `${owner.task}[${owner.keys.join(',')}]`).join(' ')}`)
+			return OK
+		}
+
+		const script = new Script()
+		script.startup = [script.task('unparkMount', () => owners('unparkMount')), script.task('configureTracking', () => owners('configureTracking'))]
+		script.preCapture = [script.task('acquireOrRecenterTarget', () => owners('acquireOrRecenterTarget')), script.task('ensureTracking', () => owners('ensureTracking')), script.task('ditherAndSettle', () => owners('ditherAndSettle')), script.task('autofocus', () => owners('autofocus'))]
+		script.shutdown = [script.shutdownTask('stopTracking', 'required', () => owners('stopTracking')), script.shutdownTask('parkMount', 'required', () => owners('parkMount'))]
+		const harness = start(configurationOf(), script, { supervisor })
+
+		expect((await finish(harness)).state).toBe('completed')
+		expect(seen).toEqual(['unparkMount: unparkMount[Mount]', 'configureTracking: ', 'acquireOrRecenterTarget: acquireOrRecenterTarget[Mount]', 'ensureTracking: ', 'ditherAndSettle: ditherAndSettle[GuideOutput]', 'autofocus: ', 'stopTracking: ', 'parkMount: parkMount[Mount]'])
+		// Every entry left with its root.
+		expect(host!.motionOwners.size).toBe(0)
+	})
+
+	test('a task waiting for a critical protection never starts once its failure stopped, failed or held the session', async () => {
+		for (const action of ['stop', 'fail', 'pause'] as const) {
+			const script = new Script()
+			script.startup = [script.task('coolCamera', () => OK), script.task('openDome', () => OK)]
+			const failure: SequencerFailure = { kind: 'operation', reason: 'unexpectedState', detail: 'meridian protection failed: mountNotQuiescent' }
+			let release: VoidFunction | undefined
+			let protection: Promise<SequencerProtectionOutcome> | undefined
+
+			// The protection begins between the two startup tasks: the second one enters and waits for its outcome.
+			const harness = start(configurationOf(), script, {
+				onEvent: (event, runner) => {
+					if (event.type !== 'taskCompleted' || event.task !== 'coolCamera' || protection !== undefined) return
+					protection = runner.protectCritically('sequencer.protect.meridianHard', async () => {
+						await new Promise<void>((resolve) => {
+							release = resolve
+						})
+						return outcome({ ok: false, failure, action })
+					})
+				},
+			})
+
+			await waitUntil(() => release !== undefined, 2000, 1)
+			for (let i = 0; i < 20; i++) {
+				await new Promise((resolve) => {
+					setImmediate(resolve)
+				})
+			}
+
+			release!()
+			await protection
+			if (action === 'pause') {
+				await waitState(harness, 'paused')
+				void harness.runner.handle.stop()
+			}
+
+			const result = await finish(harness)
+			expect(result.state).toBe(action === 'fail' ? 'failed' : 'stopped')
+			// openDome waited for the protection and never started a root.
+			expect(script.trace).toEqual(['coolCamera'])
+		}
+	})
+
+	test('a failed outcome with stop or fail ends the session through the shutdown', async () => {
+		for (const action of ['stop', 'fail'] as const) {
+			const script = new Script()
+			script.preCapture = [script.task('autofocus', script.blockTask())]
+			script.shutdown = [script.shutdownTask('stopTracking')]
+			const harness = start(configurationOf(), script)
+			await script.waitBlocked('autofocus')
+
+			const failure: SequencerFailure = { kind: 'operation', reason: 'unexpectedState', detail: 'meridian protection failed: guidingNotQuiescent' }
+			await harness.runner.protectCritically('sequencer.protect.meridianHard', () => outcome({ ok: false, failure, action }))
+			const result = await finish(harness)
+
+			expect(result).toMatchObject({ state: action === 'stop' ? 'stopped' : 'failed', failure })
+			if (action === 'stop') expect(result.stopCause).toBe('policy')
+			expect(script.trace).toEqual(['autofocus@frame[L][1]', 'stopTracking'])
+		}
 	})
 })
 
