@@ -346,6 +346,103 @@ test('horizon samples on a tri-axial body keep their declared azimuth', () => {
 	expect(terrainSlope(level, feature)!.slope).toBeCloseTo(0, 6)
 })
 
+// Strongly tri-axial reference body for the vertical-section solver.
+const TRIAXIAL_BODY = bodyShape([kilometer(2000), kilometer(1000), kilometer(500)])
+
+// Unit horizontal direction toward a local azimuth (radians) of a prepared feature.
+function horizontalToward(feature: ReturnType<typeof surfaceFeature>, azimuth: Angle) {
+	return [0, 1, 2].map((i) => Math.cos(azimuth) * feature.north[i] + Math.sin(azimuth) * feature.east[i])
+}
+
+test('a zero-relief tri-axial body never gives a positive horizon', () => {
+	// On a convex body every other surface point lies below the tangent plane; the horizon is 0° in
+	// the limit and slightly negative at a finite step, never above it.
+	const feature = surfaceFeature(bodySurfaceLocation(-0.5, -0.05, 0, TRIAXIAL_BODY, ICRS))
+	expect(terrainHorizon(FLAT, feature, { azimuths: 8, step: kilometer(20), maxDistance: kilometer(600) })[7].minimumAltitude).toBeLessThanOrEqual(1e-12)
+
+	// Finer steps converge on the tangent plane from below.
+	let previous = Number.NEGATIVE_INFINITY
+	for (const step of [kilometer(50), kilometer(20), kilometer(10), kilometer(5)]) {
+		const altitude = terrainHorizon(FLAT, feature, { azimuths: 8, step, maxDistance: kilometer(600) })[7].minimumAltitude
+		expect(Number.isFinite(altitude)).toBeTrue()
+		expect(altitude).toBeLessThanOrEqual(1e-12)
+		expect(altitude).toBeGreaterThanOrEqual(previous)
+		previous = altitude
+	}
+	expect(previous).toBeGreaterThan(-deg(0.5))
+
+	// Every emitted horizon point lies on the ellipsoid, including the eccentric 300°–320° sections.
+	const [a, b, c] = TRIAXIAL_BODY.radii
+	const point = feature.location.bodyFixed!
+	for (const sample of terrainHorizon(FLAT, feature, { azimuths: 72, step: kilometer(20), maxDistance: kilometer(600) })) {
+		if (!(sample.azimuth >= deg(300) && sample.azimuth <= deg(320))) continue
+		const h = horizontalToward(feature, sample.azimuth)
+		const lift = sample.distance * Math.tan(sample.minimumAltitude)
+		const [x, y, z] = [0, 1, 2].map((i) => point[i] + sample.distance * h[i] + lift * feature.up[i])
+		expect((x / a) ** 2 + (y / b) ** 2 + (z / c) ** 2).toBeCloseTo(1, 9)
+	}
+
+	// The same holds over the body, high latitudes included, out to the limb.
+	for (const longitude of [deg(-180), deg(-90), 0, deg(45), deg(135)]) {
+		for (const latitude of [deg(-80), deg(-40), 0, deg(40), deg(80)]) {
+			const station = surfaceFeature(bodySurfaceLocation(longitude, latitude, 0, TRIAXIAL_BODY, ICRS))
+			for (const sample of terrainHorizon(FLAT, station, { azimuths: 36, step: kilometer(20), maxDistance: kilometer(2000) })) {
+				expect(sample.minimumAltitude).toBeLessThanOrEqual(1e-12)
+				expect(sample.minimumAltitude).toBeGreaterThan(-deg(10))
+			}
+		}
+	}
+})
+
+test('a steep pillar on a tri-axial body sets the horizon at the azimuth of its top', () => {
+	// Pillar center 0.04 rad along the great circle through the radial direction toward azimuth 120°,
+	// where that great circle is seen about 5° off; a 6 km Gaussian 1 mrad wide on a 0.01° grid.
+	const base = surfaceFeature(bodySurfaceLocation(deg(45), 0.3, 0, TRIAXIAL_BODY, ICRS))
+	const basePoint = base.location.bodyFixed!
+	const range = Math.hypot(basePoint[0], basePoint[1], basePoint[2])
+	const radial = [0, 1, 2].map((i) => basePoint[i] / range)
+	const horizontal = horizontalToward(base, deg(120))
+	const along = horizontal[0] * radial[0] + horizontal[1] * radial[1] + horizontal[2] * radial[2]
+	const tangent = [0, 1, 2].map((i) => horizontal[i] - along * radial[i])
+	const scale = Math.hypot(tangent[0], tangent[1], tangent[2])
+	const center = [0, 1, 2].map((i) => Math.cos(0.04) * radial[i] + (Math.sin(0.04) * tangent[i]) / scale)
+	const longitude = Math.atan2(center[1], center[0])
+	const latitude = Math.atan2(center[2], Math.hypot(center[0], center[1]))
+	const height = kilometer(6)
+	const step = deg(0.01)
+	const width = 601
+	const rows = 801
+	const elevations = new Float64Array(width * rows)
+
+	for (let j = 0; j < rows; j++) {
+		for (let i = 0; i < width; i++) {
+			const lon = deg(42) + i * step
+			const lat = deg(14) + j * step
+			const cosine = Math.cos(lat) * Math.cos(latitude) * Math.cos(lon - longitude) + Math.sin(lat) * Math.sin(latitude)
+			const angle = Math.acos(Math.min(cosine, 1))
+			elevations[j * width + i] = height * Math.exp(-(angle * angle) / (2 * 0.001 * 0.001))
+		}
+	}
+
+	const model = terrainModel({ elevations, width, height: rows, longitude: deg(42), latitude: deg(14), longitudeStep: step, latitudeStep: step, source: 'synthetic pillar on a [2000, 1000, 500] km ellipsoid' })
+	const feature = surfaceFeature(terrainSurfaceLocation(model, deg(45), 0.3, TRIAXIAL_BODY, ICRS)!)
+	const point = feature.location.bodyFixed!
+	const top = bodySurfaceLocation(longitude, latitude, height, TRIAXIAL_BODY, ICRS).bodyFixed!
+	const toward = [0, 1, 2].map((i) => top[i] - point[i])
+	const dot = (v: readonly number[]) => toward[0] * v[0] + toward[1] * v[1] + toward[2] * v[2]
+	const expectedAzimuth = Math.atan2(dot(feature.east), dot(feature.north))
+	const expectedAltitude = Math.atan2(dot(feature.up), Math.hypot(dot(feature.north), dot(feature.east)))
+	expect(toDeg(expectedAzimuth) - 120).toBeGreaterThan(3)
+
+	const horizon = terrainHorizon(model, feature, { azimuths: 1440, step: kilometer(0.25), maxDistance: kilometer(50) })
+	let peak = horizon[0]
+	for (const sample of horizon) if (sample.minimumAltitude > peak.minimumAltitude) peak = sample
+	expect(Math.abs(toDeg(peak.azimuth - expectedAzimuth))).toBeLessThan(0.2)
+	expect(Math.abs(toDeg(peak.minimumAltitude - expectedAltitude))).toBeLessThan(0.1)
+	expect(Math.abs(peak.distance - kilometer(41.5))).toBeLessThan(kilometer(1))
+	expect(peak.complete).toBeTrue()
+})
+
 test('azimuth counts and sample totals are bounded before any work', () => {
 	const feature = surfaceFeature(bodySurfaceLocation(0, 0, 0, MOON, ICRS))
 	expect(() => terrainHorizon(FLAT, feature, { azimuths: Number.POSITIVE_INFINITY })).toThrow()
