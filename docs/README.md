@@ -4888,11 +4888,80 @@ console.log(curved?.longitudeAccelerationPerDaySquared) // 0.027925 — radians/
 console.log(angularMotionOrDifferentialTrackingRate([samples[0]])) // undefined — a single sample has no rate
 ```
 
+### Satellite Collision Probability
+
+The probability of collision (Pc) of a satellite conjunction is the chance that the two objects, whose positions at the time of closest approach (TCA) are uncertain, come within their combined hard-body radius R. In the short-encounter model (Foster & Estes 1992, Chan 1997, Alfano 2005) the relative motion is a straight line during the brief encounter, the position errors are independent Gaussians with combined covariance C = C1 + C2, and the problem collapses onto the **encounter plane** perpendicular to the relative velocity: Pc is the mass of the projected 2D Gaussian, centred at the miss vector, inside a disk of radius R. The covariance comes from orbit determination, typically delivered in a CCSDS Conjunction Data Message (CDM); it is never derived from TLEs, so an SGP4 screen with [Satellite Conjunctions](#satellite-conjunctions) can find a candidate but cannot supply its Pc.
+
+`parseCDM(text)` reads a CCSDS 508.0-B-1 CDM, version 1.0, in KVN form. It is a strict boundary for untrusted text: it rejects XML CDMs, other message types and versions, keywords outside the standard or out of its fixed order, missing obligatory items, wrong or missing units designators, malformed numbers and time tags (including a 23:59:60 second on a day without a positive leap second in the UTC leap-second table), partial covariance rows, and objects whose `REF_FRAME` or `ORBIT_CENTER` differ. Each rejection throws a `CDMParseError` whose `code` (`'unsupportedFormat'`, `'unsupportedVersion'`, `'syntax'`, `'unknownKeyword'`, `'order'`, `'duplicate'`, `'missing'`, `'unit'`, `'value'` or `'frame'`), `line` and `keyword` identify the problem. The message is converted to library units: positions, miss distance and screening volume in AU, velocities in AU/day, the 6x6 RTN covariance in AU², AU²/day and AU²/day², time tags as UTC `Time`. Areas, mass, A/m ratios and other physical parameters keep their CDM SI units, and the optional drag, SRP and thrust covariance rows keep their consider-parameter factor in CDM units.
+
+`cdmEncounterStates(cdm)` turns the two objects into `EncounterObjectState`s in the axes of the message `REF_FRAME` at TCA. Each RTN covariance (R radial, N along the inertial orbit normal, T = N×R) is rotated into those axes with `rotateStateCovariance` and `rtnRotation`. EME2000 and GCRF states are used as given. For ITRF the Earth-spin term ω×r is added to the velocity, because RTN is defined by the inertial orbit plane. Pc does not change under a rotation of the shared frame, so no conversion to GCRF is needed.
+
+`collisionProbability(primary, secondary, hardBodyRadius, options?)` estimates Pc from two states in the same frame at the same epoch. `cdmCollisionProbability(cdm, hardBodyRadius, options?)` does the same from a parsed CDM. The CDM carries no hard-body radius, so the caller supplies R in AU. `options.method` selects the estimator:
+
+- `'quadrature'` (default) integrates the disk to `options.relativeTolerance` (default 1e-10) with adaptive Gauss-Kronrod quadrature. It is accurate for the short-encounter model only; it does not model curved relative motion, a covariance that changes during the encounter, or velocity uncertainty.
+- `'smallObject'` uses the density at the disk centre times πR². It is only valid when R is much smaller than the minor plane sigma and the density barely varies across the disk; `smallObjectValidity` reports whether that holds.
+
+The result is a discriminated union. A `'failure'` is returned for a zero relative velocity, an indefinite position covariance (any negative variance included), or an encounter-plane covariance that cannot be certified positive definite once each of its entries is widened by the rounding error of projecting the 3D covariance onto the plane. A strongly elongated plane, or one with a large uncertainty along the relative velocity, is integrated as long as its transverse block is resolved. Along-track variance only limits that resolution when the frame axes are oblique to the encounter axes. An `'estimate'` carries:
+
+- the probability, and the algorithmic quadrature `error` and `converged` flag (`0` and `true` for `'smallObject'`). Neither describes the error of the approximation or of the short-encounter model;
+- the encounter geometry: relative state (secondary minus primary), plane axes, projected miss and covariance, principal sigmas, Mahalanobis distance, and the offset of the rectilinear closest approach from the state epoch;
+- covariance checks for both objects and the combined position covariance: definiteness and condition number of each correlation matrix;
+- short-encounter diagnostics: `encounterDuration` (seconds, ±`encounterSigma` along-track sigmas, default 5), the `orbitalArc` swept during it, and the relative-velocity direction uncertainty `velocityAngle`. `valid` is false when either angle exceeds its maximum (both default to 0.01 rad). These are screening heuristics, not error bounds;
+- small-object diagnostics, reported for both estimators: `radiusRatio` = R/σ_minor and the signed `relativeCorrection` c2 + c4, the second- and fourth-order terms of the mean-value expansion of the density over the disk, (R²/8)·∇²f/f and (R⁴/192)·∇⁴f/f. It estimates (exact − smallObject)/smallObject only while both terms are small. `valid` requires `radiusRatio < 1` and |c2| + |c4| at most `options.maximumSmallObjectCorrection` (default 0.01). Summing the magnitudes catches the ring where c2 vanishes. `valid` is a domain heuristic, not a bound on the error.
+
+The example uses the obligatory-keyword CDM of CCSDS 508.0-B-1 section 3.6.2. That message illustrates two things the checks report: Object1's published 6x6 covariance is not positive semidefinite (|corr(R, Ṫ)| > 1), although its position block is, and with R close to the minor plane sigma the small-object approximation is off by a factor of about 3.
+
+```ts
+import { CDMParseError, parseCDM } from 'nebulosa/src/astronomy/orbits/cdm'
+import { cdmCollisionProbability, cdmEncounterStates, collisionProbability } from 'nebulosa/src/astronomy/orbits/collision'
+import { meter, toMeter } from 'nebulosa/src/math/units/distance'
+
+// CCSDS 508.0-B-1 section 3.6.2 example message, saved as KVN text.
+const text = await Bun.file('conjunction.cdm').text()
+const cdm = parseCDM(text)
+
+console.log(toMeter(cdm.relative.missDistance)) // 715 — reported miss distance, m
+console.log(cdm.objects[1].name, cdm.objects[1].referenceFrame) // FENGYUN 1C DEB EME2000
+
+const result = cdmCollisionProbability(cdm, meter(20)) // combined hard-body radius 20 m
+
+if (result.kind === 'estimate') {
+	console.log(result.probability) // 4.7428e-7
+	console.log(toMeter(result.geometry.plane.miss[0])) // 715.75 — miss in the encounter plane, m
+	console.log(toMeter(result.geometry.plane.sigmaMajor), toMeter(result.geometry.plane.sigmaMinor)) // 207.49 20.943 — m
+	console.log(result.covariance.primaryState.definiteness) // indefinite — published Object1 6x6 covariance
+	console.log(result.covariance.primaryPosition.definiteness) // positiveDefinite
+	console.log(result.validity.valid, result.validity.encounterDuration) // true 1.064 — s
+}
+
+const approximate = cdmCollisionProbability(cdm, meter(20), { method: 'smallObject' })
+if (approximate.kind === 'estimate') {
+	console.log(approximate.probability) // 1.642e-7 — about 2.9 times too small
+	console.log(approximate.error, approximate.converged) // 0 true — no algorithmic error, says nothing about the approximation
+	console.log(approximate.smallObjectValidity) // { radiusRatio: 0.955, relativeCorrection: 1.865, valid: false }
+}
+
+// With R = 1 m the approximation is in its domain: the predicted correction 0.003546 matches the actual one.
+const tiny = cdmCollisionProbability(cdm, meter(1), { method: 'smallObject' })
+console.log(tiny.kind === 'estimate' && tiny.smallObjectValidity.valid) // true
+
+// The same estimate from explicit states, for a 5 m radius.
+const [primary, secondary] = cdmEncounterStates(cdm)
+const small = collisionProbability(primary, secondary, meter(5))
+console.log(small.kind === 'estimate' && small.probability) // 1.119e-8
+
+try {
+	parseCDM(text.replace('CCSDS_CDM_VERS = 1.0', 'CCSDS_CDM_VERS = 2.0'))
+} catch (e) {
+	if (e instanceof CDMParseError) console.log(e.code, e.line) // unsupportedVersion 1
+}
+```
+
 ### Satellite Conjunctions
 
 `satelliteConjunctions(a, b, start, stop, options?)` screens two satellites for close approaches. Both are propagated with SGP4 in the shared TEME frame, so their separation is the direct difference of the two position vectors and needs no frame conversion. The squared separation is sampled every `options.step` (default 30 s), its local minima are bracketed by the shared extrema search and refined with Brent's minimizer, and each one is reported as a `SatelliteConjunction`: the `time` of closest approach, the true `distance` (AU) and the `relativeSpeed` (AU/day) at that instant. Only minima at or below `options.threshold` (AU, default no limit) are returned, in chronological order.
 
-This is a geometric screen of the SGP4 states, not a collision probability: it has no covariance and no uncertainty on the element sets. SGP4 is only valid near each TLE epoch, so `start` and `stop` should stay within a few days of the epochs of both objects. The step must be finer than the approach one wants to catch, because a deep and brief minimum between two coarse samples can be missed, which matters for close approaches at high relative speed.
+This is a geometric screen of the SGP4 states, not a collision probability: it has no covariance and no uncertainty on the element sets. For a probability from orbit-determination covariances, see [Satellite Collision Probability](#satellite-collision-probability). SGP4 is only valid near each TLE epoch, so `start` and `stop` should stay within a few days of the epochs of both objects. The step must be finer than the approach one wants to catch, because a deep and brief minimum between two coarse samples can be missed, which matters for close approaches at high relative speed.
 
 The example uses a synthetic companion, the ISS elements with the ascending node shifted by +10°. The two orbital planes then cross and the separation has two minima per revolution; they are not a real close approach.
 

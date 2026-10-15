@@ -1,7 +1,30 @@
 import { expect, test } from 'bun:test'
 import { TAU } from '../../../src/core/constants'
 // oxfmt-ignore
-import { Histogram, chiSquareCdf, chiSquareQuantile, fDistributionSurvival, geometricMeanOf, geometricMedian, logGamma, maxOf, meanOf, medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, minOf, pearsonCorrelationOf, percentileBySelectionOf, percentileOf, regularizedGammaP, regularizedIncompleteBeta, rmsOf, standardDeviationOf } from '../../../src/math/numerical/statistics'
+import { Histogram, chiSquareCdf, chiSquareQuantile, erfc, fDistributionSurvival, geometricMeanOf, geometricMedian, logGamma, maxOf, meanOf, medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, minOf, pearsonCorrelationOf, percentileBySelectionOf, percentileOf, regularizedGammaP, regularizedIncompleteBeta, rmsOf, standardDeviationOf } from '../../../src/math/numerical/statistics'
+
+test('erfc keeps relative accuracy from the core into the far tail', () => {
+	// mpmath 1.3.0 erfc at 30 digits (SciPy 1.16.2 special.erfc agrees).
+	const reference = [
+		[0, 1],
+		[0.3, 0.67137324054087258381],
+		[1, 0.15729920705028513066],
+		[1.9999, 0.0046798020929706083079],
+		[2, 0.0046777349810472658379],
+		[1.5, 0.033894853524689272933],
+		[2.5, 0.00040695201744495893956],
+		[5, 1.5374597944280348502e-12],
+		[10, 2.088487583762544757e-45],
+		[26, 5.6631924088561428465e-296],
+		[-1.5, 1.9661051464753107271],
+	] as const
+
+	for (const [x, value] of reference) expect(Math.abs(erfc(x) / value - 1)).toBeLessThan(1e-14)
+	expect(erfc(30)).toBe(0)
+	expect(erfc(Number.POSITIVE_INFINITY)).toBe(0)
+	expect(erfc(Number.NEGATIVE_INFINITY)).toBe(2)
+	expect(erfc(Number.NaN)).toBeNaN()
+})
 
 test('distribution functions match closed-form and SciPy 1.18.1 references', () => {
 	expect(logGamma(5)).toBeCloseTo(Math.log(24), 14)
