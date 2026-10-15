@@ -26,6 +26,10 @@ export interface CsvLineParserOptions {
 	quote?: string | readonly string[] | false
 	// When true, trims whitespace even inside quoted fields.
 	forceTrim?: boolean
+	// When true, malformed quoting throws an Error instead of being repaired, so a truncated or corrupt
+	// document is not taken as data: text between a closing quote and the next delimiter, and (for
+	// readCsv and readCsvStream) input that ends inside a quoted field. Defaults to false.
+	strict?: boolean
 }
 
 // Options for parsing a full CSV input.
@@ -48,6 +52,7 @@ export const DEFAULT_READ_CSV_STREAM_OPTIONS: Readonly<Required<ReadCsvStreamOpt
 	comment: '#',
 	quote: '"',
 	skipFirstLine: true,
+	strict: false,
 	encoding: 'utf-8',
 	ignoreBOM: true,
 	fatal: false,
@@ -72,6 +77,7 @@ export class CsvLineParser {
 	readonly #isQuoteChar: (c: string) => boolean
 	readonly #isWhitespace: (c: string) => boolean
 	readonly #forceTrim: boolean
+	readonly #strict: boolean
 
 	constructor(options: string | readonly string[] | CsvLineParserOptions = DEFAULT_READ_CSV_STREAM_OPTIONS) {
 		const delimiter = typeof options === 'string' || Array.isArray(options) || options instanceof Array ? options : (options.delimiter ?? DEFAULT_READ_CSV_STREAM_OPTIONS.delimiter)
@@ -79,6 +85,7 @@ export class CsvLineParser {
 		const quote = options.quote ?? DEFAULT_READ_CSV_STREAM_OPTIONS.quote
 		this.#comment = options.comment ?? DEFAULT_READ_CSV_STREAM_OPTIONS.comment
 		this.#forceTrim = options.forceTrim ?? false
+		this.#strict = options.strict ?? false
 
 		if (typeof delimiter === 'string') this.#isDelimiter = (c) => c === delimiter
 		else this.#isDelimiter = (c) => delimiter.includes(c)
@@ -92,6 +99,7 @@ export class CsvLineParser {
 
 	// Parses `line` (from `offset`) into fields appended to `row` (created if omitted). Returns the row,
 	// or false for an empty or comment line. Quoted fields keep embedded delimiters and doubled quotes.
+	// Text after a closing quote is dropped up to the next delimiter, or throws an Error when strict.
 	parse(line: string, offset: number = 0, row?: CsvRow) {
 		const info: ParseColumnInfo = { offset, quoted: false }
 
@@ -120,6 +128,12 @@ export class CsvLineParser {
 
 			const text = this.#parseColumn(line, info)
 			row.push(info.quoted && !this.#forceTrim ? text : text.trim())
+
+			if (this.#strict && info.quoted) {
+				this.#skipIfBlank(line, info)
+				if (info.offset < line.length && !this.#isDelimiter(line[info.offset])) throw new Error('CSV quoted field is followed by text before the delimiter')
+			}
+
 			this.#skipUntilDelimiter(line, info)
 		}
 
@@ -267,11 +281,13 @@ export class CsvLineParser {
 }
 
 // Parses an entire CSV document (a string, or an array of lines joined with '\n') into rows.
-// Empty and comment lines are skipped; quoted fields may span multiple physical lines.
+// Empty and comment lines are skipped; quoted fields may span multiple physical lines. With
+// options.strict, malformed quoting (see CsvLineParserOptions.strict) throws an Error.
 export function readCsv(input: string | readonly string[], options: string | readonly string[] | ReadCsvOptions = DEFAULT_READ_CSV_STREAM_OPTIONS): CsvRow[] {
 	input = Array.isArray(input) || input instanceof Array ? input.join('\n') : input
 
 	let skipFirstLine = typeof options === 'object' && 'skipFirstLine' in options ? options.skipFirstLine : DEFAULT_READ_CSV_STREAM_OPTIONS.skipFirstLine
+	const strict = typeof options === 'object' && 'strict' in options && options.strict === true
 	const parser = new CsvLineParser(options)
 	const rows: CsvRow[] = []
 
@@ -283,6 +299,7 @@ export function readCsv(input: string | readonly string[], options: string | rea
 
 	while (offset < input.length) {
 		const [index, next, nextQuoted, nextAtLineStart, nextInComment, nextAtFieldStart] = parser.scanLineBreak(input, offset, quoted, atLineStart, inComment, atFieldStart)
+		if (strict && index < 0 && nextQuoted) throw new Error('CSV input ends inside a quoted field')
 		const row = parser.parse(index >= 0 ? input.slice(offset, index) : input.slice(offset))
 
 		if (index >= 0) {
@@ -311,13 +328,16 @@ const STREAM_TEXT_DECODE_OPTIONS: TextDecodeOptions = {
 }
 
 // Streams CSV rows from a byte `source`, reading and decoding in chunks and yielding each parsed row as
-// it becomes available. Fields and quoted regions spanning chunk boundaries are reassembled.
+// it becomes available. Fields and quoted regions spanning chunk boundaries are reassembled. With
+// options.strict, malformed quoting throws an Error; a source that ends inside a quoted field throws
+// after the complete rows.
 export async function* readCsvStream(source: Source, options: string | string[] | ReadCsvStreamOptions = DEFAULT_READ_CSV_STREAM_OPTIONS) {
 	const parser = new CsvLineParser(options)
 
 	const encoding = typeof options === 'object' && 'encoding' in options ? options.encoding : 'utf-8'
 	const bufferSize = typeof options === 'object' && 'bufferSize' in options && options.bufferSize ? options.bufferSize : DEFAULT_READ_CSV_STREAM_OPTIONS.bufferSize
 	let skipFirstLine = typeof options === 'object' && 'skipFirstLine' in options ? options.skipFirstLine : DEFAULT_READ_CSV_STREAM_OPTIONS.skipFirstLine
+	const strict = typeof options === 'object' && 'strict' in options && options.strict === true
 	const textDecoderOptions = typeof options === 'object' && !Array.isArray(options) ? options : undefined
 
 	const buffer = Buffer.allocUnsafe(bufferSize)
@@ -373,6 +393,8 @@ export async function* readCsvStream(source: Source, options: string | string[] 
 		// End of stream
 		if (n <= 0) break
 	}
+
+	if (strict && quoted) throw new Error('CSV input ends inside a quoted field')
 
 	if (line.length > 0) {
 		// Parse the line into a CSV row
