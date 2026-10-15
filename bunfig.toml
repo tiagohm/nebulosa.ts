@@ -7,4 +7,5 @@ exact = true
 root = "./tests"
 preload = ["./tests/setup.ts"]
 coverageSkipTestFiles = true
-retry = 2
+onlyFailures = true
+concurrentTestGlob = "**/{adapters,astrometry,astronomy,bindings,core,imaging,io,math}/**"
