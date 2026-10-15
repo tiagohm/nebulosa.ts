@@ -25,8 +25,9 @@ const DEFAULT_TIMEOUT = 60000
 const DEFAULT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 
 // CSV dialect of the archive: comma-separated, double-quoted strings, header row first, no comment
-// lines (a field starting with '#' is data), and quoted text kept untrimmed.
-const EXOPLANET_ARCHIVE_CSV_OPTIONS: ReadCsvOptions = { delimiter: CSV_DELIMITER, quote: '"', comment: [], skipFirstLine: false, forceTrim: false }
+// lines (a field starting with '#' is data), quoted text kept untrimmed, and malformed quoting rejected
+// (strict) so a truncated or corrupt body is never taken as data.
+const EXOPLANET_ARCHIVE_CSV_OPTIONS: ReadCsvOptions = { delimiter: CSV_DELIMITER, quote: '"', comment: [], skipFirstLine: false, forceTrim: false, strict: true }
 
 // Transit-ephemeris columns selected from both tables, in projection order.
 const COMMON_COLUMNS = ['pl_name', 'ra', 'dec', 'pl_tranmid', 'pl_tranmiderr1', 'pl_tranmiderr2', 'pl_orbper', 'pl_orbpererr1', 'pl_orbpererr2', 'pl_trandur', 'pl_trandurerr1', 'pl_trandurerr2'] as const
@@ -68,8 +69,9 @@ export interface ExoplanetArchiveTapResult {
 }
 
 // What failed in an archive request: 'network' (the request could not be sent or the body could not be
-// read), 'http' (a non-2xx status), 'service' (a TAP error document, such as an ADQL error), 'format'
-// (an empty, non-CSV, or malformed body, or a header that does not match the requested columns), or
+// read), 'http' (a non-2xx status), 'service' (a VOTable or plain-text TAP error, such as an ADQL
+// error, with a successful status), 'format' (an empty, non-CSV, or malformed body, including malformed
+// quoting, or a header that does not match the requested columns), or
 // 'size' (the body exceeded maxResponseBytes).
 export type ExoplanetArchiveTapErrorKind = 'network' | 'http' | 'service' | 'format' | 'size'
 
@@ -236,6 +238,9 @@ async function fetchCsv(adql: string, { baseUrl, timeout = DEFAULT_TIMEOUT, sign
 			throw new ExoplanetArchiveTapError('format', 'received markup instead of CSV', response.status)
 		}
 
+		// A plain-text error would otherwise parse as a one-column header with no records.
+		if (PLAIN_TEXT_ERROR_PATTERN.test(text)) throw new ExoplanetArchiveTapError('service', tapErrorMessage(text) ?? 'unknown TAP error', response.status)
+
 		return text
 	} finally {
 		clearTimeout(timer)
@@ -274,22 +279,35 @@ async function readBody(response: Response, maxBytes: number) {
 	return text + decoder.decode()
 }
 
-// TAP error status in a VOTable or plain-text error document.
-const QUERY_STATUS_ERROR_PATTERN = /<INFO\b[^>]*\bname\s*=\s*"QUERY_STATUS"[^>]*\bvalue\s*=\s*"ERROR"[^>]*>([\s\S]*?)<\/INFO>/i
+// TAP error status of a VOTable error document: an INFO element with name QUERY_STATUS and value ERROR,
+// in either attribute order and with single or double quotes.
+const QUERY_STATUS_ERROR_PATTERN = /<INFO\b(?=[^>]*\bname\s*=\s*(["'])QUERY_STATUS\1)(?=[^>]*\bvalue\s*=\s*(["'])ERROR\2)[^>]*>([\s\S]*?)<\/INFO>/i
+
+// First line of a plain-text TAP or database error ('ERROR: …', 'ORA-00904: …', 'QUERY_STATUS=ERROR').
+// A CSV header cannot start this way: archive column names are ADQL regular identifiers, without ':' or '-'.
+const PLAIN_TEXT_ERROR_PATTERN = /^\s*(?:ERROR\s*:|ORA-\d{5}\s*:|QUERY_STATUS\s*[=:]\s*ERROR\b)/i
 
 // Extracts the message of a TAP error document, or a short plain-text body; undefined for markup without one.
 function tapErrorMessage(text: string) {
 	const match = QUERY_STATUS_ERROR_PATTERN.exec(text)
-	if (match) return match[1].trim() || 'unknown TAP error'
+	if (match) return match[3].trim() || 'unknown TAP error'
 	const trimmed = text.trim()
 	if (trimmed === '' || trimmed.startsWith('<')) return undefined
 	return trimmed.length > 200 ? `${trimmed.slice(0, 200)}…` : trimmed
 }
 
-// Parses the CSV body into header-keyed records, rejecting a missing header, duplicate or empty column
-// names, and records whose width differs from the header.
+// Parses the CSV body into header-keyed records, rejecting malformed quoting (an unterminated quoted
+// field or text after a closing quote), a missing header, duplicate or empty column names, and records
+// whose width differs from the header.
 function parseCsv(text: string): ExoplanetArchiveTapResult {
-	const rows = readCsv(text, EXOPLANET_ARCHIVE_CSV_OPTIONS)
+	let rows: CsvRow[]
+
+	try {
+		rows = readCsv(text, EXOPLANET_ARCHIVE_CSV_OPTIONS)
+	} catch (cause) {
+		throw new ExoplanetArchiveTapError('format', `malformed CSV: ${cause instanceof Error ? cause.message : String(cause)}`, undefined, cause)
+	}
+
 	if (rows.length === 0) throw new ExoplanetArchiveTapError('format', 'empty response without a CSV header')
 
 	const header = rows[0]

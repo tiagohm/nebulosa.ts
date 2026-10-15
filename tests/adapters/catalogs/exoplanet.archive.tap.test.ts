@@ -251,6 +251,28 @@ describe('CSV records', () => {
 			})
 		}
 	})
+
+	test('a body ending inside a quoted field is malformed, not a valid row', async () => {
+		// Only the closing quote of "BJD-TDB" is missing, at EOF: the field count and numbers still look valid.
+		const truncated = `${PS_HEADER}\n${WASP12_DEFAULT.slice(0, -1)}`
+
+		await withCsv(truncated, async (baseUrl) => {
+			const rows = await tapError(exoplanetArchiveRows({ table: 'ps', solution: 'default', limit: 1 }, { baseUrl }))
+			expect(rows.kind).toBe('format')
+			expect(rows.message).toContain('quoted field')
+
+			const raw = await tapError(exoplanetArchiveTapQuery('select 1', { baseUrl }))
+			expect(raw.kind).toBe('format')
+		})
+
+		// An unclosed quote in an earlier record swallows the rest of the body: up to EOF, or up to a later
+		// quote that then leaves text before the next delimiter, which would otherwise yield a 13-field record.
+		for (const tail of [WASP12_EMPTY.replace('"WASP-12 b"', 'WASP-12 b'), WASP12_BJD]) {
+			await withCsv(`${PS_HEADER}\n"WASP-12 b,97.6366450\n${tail}\n`, async (baseUrl) => {
+				expect((await tapError(exoplanetArchiveTapQuery('select 1', { baseUrl }))).kind).toBe('format')
+			})
+		}
+	})
 })
 
 describe('failures', () => {
@@ -291,6 +313,42 @@ describe('failures', () => {
 				expect(error.message).toContain('invalid identifier')
 			},
 		)
+
+		// Single-quoted attributes in either order are recognized too.
+		await withArchive(
+			() => new Response(`<VOTABLE><RESOURCE><INFO value='ERROR' name='QUERY_STATUS'>table not found</INFO></RESOURCE></VOTABLE>`),
+			async (baseUrl) => {
+				const error = await tapError(exoplanetArchiveTapQuery('select 1 from nope', { baseUrl }))
+				expect(error.kind).toBe('service')
+				expect(error.message).toContain('table not found')
+			},
+		)
+	})
+
+	test('plain-text errors with a successful status are service errors, not empty results', async () => {
+		for (const body of ['ORA-00904: invalid identifier\n', 'ERROR: invalid identifier', '  error : invalid identifier\n', 'QUERY_STATUS=ERROR invalid identifier\n']) {
+			await withArchive(
+				() => new Response(body, { headers: { 'content-type': 'text/plain' } }),
+				async (baseUrl) => {
+					const error = await tapError(exoplanetArchiveTapQuery('select invalid_field from ps', { baseUrl }))
+					expect(error.kind).toBe('service')
+					expect(error.status).toBe(200)
+					expect(error.message).toContain('invalid identifier')
+				},
+			)
+		}
+
+		// Valid one-column CSV answers, including columns named like error words, stay results.
+		for (const [body, columns] of [
+			['pl_name\n', ['pl_name']],
+			['error\n', ['error']],
+			['error,ora\n', ['error', 'ora']],
+			['error_flag\n', ['error_flag']],
+		] as const) {
+			await withCsv(body, async (baseUrl) => {
+				expect(await exoplanetArchiveTapQuery('select 1', { baseUrl })).toEqual({ columns: [...columns], records: [] })
+			})
+		}
 	})
 
 	test('an unreachable host is a network error', async () => {

@@ -218,6 +218,48 @@ describe('quoted edge cases', () => {
 	test('empty input yields no rows', () => {
 		expect(readCsv('', { skipFirstLine: false })).toEqual([])
 	})
+
+	test('strict mode rejects input ending inside a quoted field', async () => {
+		const unterminated = `"HIP","NOTE"\n"1","line 1\nline 2`
+
+		// The lenient default keeps the partial field.
+		expect(readCsv(unterminated, { skipFirstLine: false })).toEqual([
+			['HIP', 'NOTE'],
+			['1', 'line 1\nline 2'],
+		])
+		expect(() => readCsv(unterminated, { skipFirstLine: false, strict: true })).toThrow('CSV input ends inside a quoted field')
+		expect(() => readCsv(`"a","b`, { strict: true })).toThrow('CSV input ends inside a quoted field')
+		const streamError = await readCsvRows(Buffer.from(unterminated), { skipFirstLine: false, strict: true, bufferSize: 3 }).catch((error: unknown) => error)
+		expect(streamError).toBeInstanceOf(Error)
+		expect((streamError as Error).message).toBe('CSV input ends inside a quoted field')
+
+		// Closed quotes, escaped quotes, newlines, and trailing line breaks stay valid.
+		expect(readCsv(`${CSV_QUOTED_MULTILINE}\n`, { skipFirstLine: false, strict: true })).toEqual([
+			['HIP', 'NOTE'],
+			['1', 'line 1\nline 2'],
+		])
+		expect(readCsv(CSV_QUOTED_ESCAPED, { skipFirstLine: false, strict: true })).toEqual([
+			['HIP', 'NOTE'],
+			['1', 'said "hello"'],
+		])
+		expect(await readCsvRows(Buffer.from(CSV_QUOTED_MULTILINE), { skipFirstLine: false, strict: true, bufferSize: 2 })).toEqual([
+			['HIP', 'NOTE'],
+			['1', 'line 1\nline 2'],
+		])
+	})
+
+	test('strict mode rejects text between a closing quote and the delimiter', () => {
+		// The lenient default drops the text after the closing quote.
+		expect(readCsv('"a"b,c', { skipFirstLine: false })).toEqual([['a', 'c']])
+		expect(() => readCsv('"a"b,c', { skipFirstLine: false, strict: true })).toThrow('CSV quoted field is followed by text before the delimiter')
+		expect(() => readCsv('x,"a" b', { skipFirstLine: false, strict: true })).toThrow('CSV quoted field is followed by text before the delimiter')
+
+		// Whitespace after a closing quote is allowed.
+		expect(readCsv('"a" ,"b"  \n"c",d', { skipFirstLine: false, strict: true })).toEqual([
+			['a', 'b'],
+			['c', 'd'],
+		])
+	})
 })
 
 describe('comment lines with quotes', () => {
