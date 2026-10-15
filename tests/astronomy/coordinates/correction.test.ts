@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
-import { annualAberration, barycentricJulianDate, lightTravelTime, observerState, radialVelocityCorrection } from '../../../src/astronomy/coordinates/correction'
+import { annualAberration, barycentricJulianDate, lightTravelTime, observerState, radialVelocityCorrection, receptionFromBarycentricJulianDate } from '../../../src/astronomy/coordinates/correction'
 import { eraEpv00 } from '../../../src/astronomy/coordinates/erfa/earth'
 import { eraAb, eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { readDaf } from '../../../src/astronomy/ephemeris/kernels/daf'
@@ -10,7 +10,7 @@ import { composeEphemerisPaths, customEphemerisEndpoint, ephemerisPath, naifEphe
 import { earthObserverEphemerisPath, spkEphemerisPath } from '../../../src/astronomy/ephemeris/path.adapter'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
 import { exposureInterval } from '../../../src/astronomy/time/exposure'
-import { type Time, tdb, Timescale, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { type Time, tdb, Timescale, timeNormalize, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { DAYSEC, PI, SCHWARZSCHILD_RADIUS_OF_THE_SUN, SPEED_OF_LIGHT_AU_DAY, SUN_RADIUS_AU } from '../../../src/core/constants'
 import { fileHandleSource } from '../../../src/io/file'
 import { vecAngle, vecClone, vecCross, vecDot, vecLength, vecMinus, vecMulScalar, vecNegate, vecNormalize, vecRotateByRodrigues, vecZero } from '../../../src/math/linear-algebra/vec3'
@@ -245,6 +245,36 @@ test('BJD_TDB stays continuous across a leap second', () => {
 	expect(bjdSeconds(before.time, inside.time)).toBeCloseTo(1, 3)
 	expect(bjdSeconds(inside.time, after.time)).toBeCloseTo(1, 3)
 	expect(bjdSeconds(before.reception, after.reception)).toBeCloseTo(2, 6)
+})
+
+// Reference: Astropy 7.1.0 (pyerfa 2.0.1.5, builtin ephemeris, auto_download off) iterating
+// t.tdb + ((get_body_barycentric('earth', t.tdb) + loc.get_gcrs_posvel(t.tdb)[0]) · n) / c = B for La
+// Silla, n = ICRS (97.636645°, 29.6722662°) of WASP-12, and B = cycle 3414 of T0 = 2457607.519305
+// BJD_TDB, P = 1.091418901 d (Leonardi et al. 2024): UTC 2026-10-20T02:53:51.444.
+test('BJD_TDB inverts to the UTC reception instant of Astropy', () => {
+	const wasp12 = eraS2c(deg(97.636645), deg(29.6722662))
+	const bjd = timeNormalize(2461334, -0.3765669860003982, 0, Timescale.TDB)
+	const reception = receptionFromBarycentricJulianDate(bjd, wasp12, LA_SILLA_PATH, LA_SILLA)
+
+	expect(reception.scale).toBe(Timescale.UTC)
+	expect(reception.location).toBe(LA_SILLA)
+	expect(bjdSeconds(timeNormalize(2461334, -0.3792656964579523, 0, Timescale.UTC), reception)).toBeCloseTo(0, 6)
+	expect(bjdSeconds(bjd, barycentricJulianDate(reception, wasp12, LA_SILLA_PATH).time)).toBeCloseTo(0, 6)
+
+	// The Shapiro term and a geocentric clock round-trip through the same options.
+	const shapiro = receptionFromBarycentricJulianDate(bjd, wasp12, LA_SILLA_PATH, LA_SILLA, { sun: EPV00_SUN })
+	expect(bjdSeconds(bjd, barycentricJulianDate(shapiro, wasp12, LA_SILLA_PATH, { sun: EPV00_SUN }).time)).toBeCloseTo(0, 6)
+	const geocentric = receptionFromBarycentricJulianDate(bjd, wasp12, EPV00_EARTH)
+	expect(geocentric.location).toBeUndefined()
+	expect(bjdSeconds(bjd, barycentricJulianDate(geocentric, wasp12, EPV00_EARTH).time)).toBeCloseTo(0, 6)
+
+	expect(() =>
+		receptionFromBarycentricJulianDate(
+			bjd,
+			wasp12,
+			ephemerisPath(naifEphemerisEndpoint(Naif.SUN), naifEphemerisEndpoint(Naif.EARTH), () => [vecZero(), vecZero()]),
+		),
+	).toThrow('SSB-centered')
 })
 
 test('shutter latency and timestamp uncertainty flow from the exposure midpoint into BJD_TDB', () => {

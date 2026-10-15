@@ -8,7 +8,7 @@ import { Naif } from '../ephemeris/kernels/naif'
 import { type EphemerisPath, naifEphemerisEndpoint, sameEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from '../ephemeris/path'
 import type { GeographicPosition } from '../observer/location'
 import { dut1, iersab, xy } from '../time/iers'
-import { gcrsToItrsRotationMatrix, type Time, TIME_PROVIDERS, Timescale, tdb, timeNormalize, utc } from '../time/time'
+import { gcrsToItrsRotationMatrix, type Time, TIME_PROVIDERS, Timescale, tdb, timeNormalize, timeShift, timeSubtract, utc } from '../time/time'
 import type { PositionAndVelocity, PositionAndVelocityMut } from './astrometry'
 import { eraAb, eraS2c } from './erfa/erfa'
 import { itrs } from './itrs'
@@ -18,8 +18,9 @@ import { itrs } from './itrs'
 // when a location is given), the radial-velocity correction projected onto a source direction, the
 // first-order light-travel-time correction for barycentric/heliocentric date (BJD/HJD), and the
 // two-part BJD_TDB service with Rømer and optional solar Shapiro delays, model flags, data-quality
-// diagnostics, and an error budget. Positions are AU, velocities AU/day, in ICRS/BCRS axes; timing
-// corrections are days for lightTravelTime and seconds for barycentricJulianDate.
+// diagnostics, and an error budget, plus its inverse from BJD_TDB to the UTC reception instant.
+// Positions are AU, velocities AU/day, in ICRS/BCRS axes; timing corrections are days for
+// lightTravelTime and seconds for barycentricJulianDate.
 
 // Computes the observer position (AU) and velocity (AU/day) in BCRS/ICRS axes,
 // referred to the solar-system barycenter ('barycentric') or the Sun's center
@@ -278,6 +279,38 @@ export function barycentricJulianDate(time: Time, direction: Vec3, observer: Eph
 		quality: { earthOrientation, sunElongation: solar.elongation, occultedBySun: solar.occulted },
 		errorBudget: { timestamp, earthOrientation: eopError, tdb: tdbError, shapiro: shapiroError, total: Math.hypot(timestamp, eopError, tdbError, shapiroError) },
 	}
+}
+
+// Convergence tolerance of the BJD_TDB light-time inversion, in days (≈ 0.86 µs).
+const RECEPTION_TOLERANCE = 1e-11
+
+// Iteration cap of the BJD_TDB light-time inversion. Each step shrinks the error by the rate of
+// change of the correction, |dΔ/dt| ≲ 1e-4 for a ground or near-Earth observer, so three steps
+// already reach the tolerance from a ±8.5 min start.
+const RECEPTION_ITERATIONS = 8
+
+// Inverts barycentricJulianDate: finds the instant at which a signal whose barycentric arrival is
+// `bjd` reaches the observer, so that barycentricJulianDate(reception) = bjd within ≈ 1 µs.
+//
+// `bjd` is converted to TDB (it is normally already a BJD_TDB Time). `direction`, `observer`, and
+// `options` have the same meaning as in barycentricJulianDate; options.timestampUncertainty is
+// irrelevant here. `location` is the observing site used for the topocentric TDB-TT term of both the
+// iteration and the final UTC conversion; omit it for a geocentric clock. The fixed-point iteration
+// starts at reception = bjd and repeatedly subtracts the residual BJD error, which contracts by the
+// small rate of change of the light time. Returns a fresh UTC Time carrying `location`. Path errors
+// propagate, and a non-SSB observer path throws, as in barycentricJulianDate.
+export function receptionFromBarycentricJulianDate(bjd: Time, direction: Vec3, observer: EphemerisPath, location?: GeographicPosition, options?: BarycentricJulianDateOptions): Time {
+	const target = tdb(bjd)
+	let reception = timeShift(target, 0)
+	reception.location = location
+
+	for (let i = 0; i < RECEPTION_ITERATIONS; i++) {
+		const error = timeSubtract(target, barycentricJulianDate(reception, direction, observer, options).time)
+		reception = timeShift(reception, error)
+		if (!(Math.abs(error) > RECEPTION_TOLERANCE)) break
+	}
+
+	return utc(reception)
 }
 
 // Computes the solar Shapiro correction in seconds to add (the negated excess delay) for an
