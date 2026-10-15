@@ -1,11 +1,13 @@
-import { AU_KM, DEG2RAD, EARTH_RADIUS_AU, RAD2DEG } from '../../core/constants'
+import { AU_KM, DEG2RAD, RAD2DEG } from '../../core/constants'
+import { matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type Vec3, vecAngle, vecLength, vecMinus, vecNegate } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizePI } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import type { PositionOverTime } from '../coordinates/astrometry'
+import { itrs } from '../coordinates/itrs'
 import { altitudeOf } from '../events/horizon'
 import type { GeographicPosition } from '../observer/location'
-import type { Time } from '../time/time'
+import { gcrsToItrsRotationMatrix, type Time } from '../time/time'
 
 // Photometric night-sky surface brightness from the Krisciunas & Schaefer (1991, PASP 103, 1033)
 // scattered-moonlight model. The sky is the flux sum of three separate components: the natural dark
@@ -14,7 +16,9 @@ import type { Time } from '../time/time'
 // fluxes are in nanolamberts, the linear unit of the model. Angles are radians and distances are AU.
 //
 // The scattering function, lunar illuminance and nL conversion are calibrated in the Johnson V band
-// at Mauna Kea, and the authors report 8–23% rms agreement with their observations. The model has no
+// at Mauna Kea, and the authors report 8–23% rms agreement with their observations. Only V moonlight
+// is a physical prediction: another band shifts both scattering processes by one colour offset, while
+// the real Rayleigh/Mie ratio changes with wavelength and with separation. The model has no
 // solar term, so it does not describe twilight, and its plane-parallel airmass saturates at 5 on the
 // horizon. Results are reported together with the warnings that mark these regimes. Every call
 // allocates a fresh result; nothing is cached or mutated.
@@ -29,8 +33,13 @@ const NANOLAMBERT_MAGNITUDE_SCALE = 0.92104
 const SCATTERING_AIRMASS_COEFFICIENT = 0.96
 // Rayleigh term 10^5.36 of the K&S eq. 21 scattering function, nL per (foot-candle-equivalent illuminance).
 const RAYLEIGH_SCATTERING = 10 ** 5.36
-// Separation, in degrees, below which K&S use the eq. 19 aureole term 6.2e7/ρ² instead of the eq. 21 Mie term.
+// Separation, in degrees, below which K&S use the eq. 19 aureole term 6.2e7/ρ² instead of the eq. 21 Mie
+// term. The two published fits do not meet: at 10° the aerosol term jumps from 6.2e5 to 7.9e5, which can
+// shift the total by more than 0.1 mag, so the brightness is not a smooth function of separation there.
 const MIE_MINIMUM_SEPARATION_DEGREES = 10
+// Separation below which this module flags the Moon as close (15°, a Nebulosa bound). It covers the
+// aureole regime and the region just above the 10° seam, where a small separation error crosses it.
+const MOON_CLOSE_SEPARATION: Angle = 15 * DEG2RAD
 // Coefficient of the eq. 19 aureole term, nL·deg² per unit illuminance.
 const AUREOLE_SCATTERING = 6.2e7
 // Smallest separation used by the aureole term, in degrees: the lunar radius. Keeps 1/ρ² finite on the disk.
@@ -56,7 +65,9 @@ export interface SkyBrightnessModel {
 	// Artificial skyglow at the zenith, in mag/arcsec². Omitted means a site without light pollution.
 	readonly lightPollutionZenith?: number
 	// Scattered-moonlight colour offset, in magnitudes: the passband brightness minus the K&S V-band
-	// brightness of the same moonlight. Zero for V; for another band it must be calibrated by the caller.
+	// brightness of the same moonlight. Zero for V. A non-zero offset is a heuristic extrapolation: it
+	// scales the Rayleigh and Mie terms together, so it holds at most at the separation it was fitted at,
+	// and every moonlit evaluation that uses it carries the 'moonColorExtrapolated' warning.
 	readonly moonOffset: number
 }
 
@@ -91,8 +102,10 @@ export interface SkyBrightnessGeometry {
 // Regimes in which the model is outside its calibration. 'twilight': the Sun is above −18° and the
 // unmodelled solar term may dominate. 'belowHorizon': the target is on or below the horizon.
 // 'highAirmass': the target is below 20°. 'moonHighAirmass': the Moon is up but below 20°.
-// 'moonClose': the target is within 10° of the Moon, where the aureole term is poorly constrained.
-export type SkyBrightnessWarning = 'twilight' | 'belowHorizon' | 'highAirmass' | 'moonHighAirmass' | 'moonClose'
+// 'moonClose': the target is within 15° of the Moon, covering the poorly constrained aureole term below
+// 10° and the discontinuity of the scattering function at 10°. 'moonColorExtrapolated': the Moon
+// contributes through a non-zero moonOffset, outside the V calibration.
+export type SkyBrightnessWarning = 'twilight' | 'belowHorizon' | 'highAirmass' | 'moonHighAirmass' | 'moonClose' | 'moonColorExtrapolated'
 
 // Linear component fluxes of one evaluation, in nanolamberts. Absent components are 0.
 export interface SkyBrightnessFluxes {
@@ -231,7 +244,8 @@ export function skyBrightness(geometry: SkyBrightnessGeometry, model: SkyBrightn
 		moonAirmass = scatteringAirmass(geometry.moon.altitude)
 		moon = scatteredMoonlight(geometry.moon, airmass, moonAirmass, extinction) * 10 ** (-0.4 * model.moonOffset)
 		if (geometry.moon.altitude < MINIMUM_RELIABLE_ALTITUDE) warnings.push('moonHighAirmass')
-		if (Math.abs(normalizePI(geometry.moon.separation)) < MIE_MINIMUM_SEPARATION_DEGREES * DEG2RAD) warnings.push('moonClose')
+		if (Math.abs(normalizePI(geometry.moon.separation)) < MOON_CLOSE_SEPARATION) warnings.push('moonClose')
+		if (model.moonOffset !== 0) warnings.push('moonColorExtrapolated')
 	}
 
 	const total = natural + lightPollution + moon
@@ -258,7 +272,8 @@ export function skyBrightness(geometry: SkyBrightnessGeometry, model: SkyBrightn
 // zenith fixed and attributes the excess flux to light pollution. The zenith glow L minimizes the
 // relative flux residuals Σ ((B_measured − B_natural − B_moon − L·g) / B_measured)², g being the eq. 2
 // gradient, which is a magnitude-like weighting. Measurements carrying any warning (twilight, low
-// altitude, close Moon) or a non-finite value are rejected. Returns undefined when no measurement is usable.
+// altitude, close Moon, moonlight through a non-zero moonOffset) or a non-finite value are rejected.
+// Returns undefined when no measurement is usable.
 export function fitSkyBaseline(measurements: readonly SkyBrightnessMeasurement[], model: SkyBrightnessModel = KRISCIUNAS_SCHAEFER_V): SkyBaselineFit | undefined {
 	const base: SkyBrightnessModel = { extinction: model.extinction, naturalZenith: model.naturalZenith, moonOffset: model.moonOffset }
 	const usable: SkyBrightnessMeasurement[] = []
@@ -296,22 +311,23 @@ export function fitSkyBaseline(measurements: readonly SkyBrightnessMeasurement[]
 // Reduces an observer, an epoch and a target to the geometry of skyBrightness.
 // Parameters: target is the J2000/ICRS direction of the target (its length is irrelevant); time is the
 // epoch; location is the observer; sources returns the geocentric J2000 Sun and optional Moon positions
-// in AU at that time. Altitudes are geometric (no refraction) from altitudeOf. The lunar altitude gets
-// the topocentric parallax of a spherical Earth, tan h' = (sin h − R⊕/d) / cos h; the separation, the
-// phase angle and the distance stay geocentric, which errs by up to the ~1° lunar parallax and ~1.7%
-// in distance. Returns a fresh geometry.
+// in AU at that time. The observer's geocentric offset is its ITRS position rotated into GCRS axes at the
+// epoch (the observerState convention), and it is subtracted from the Sun and the Moon, so the lunar
+// altitude, distance, separation and phase angle all describe the same topocentric Moon. Altitudes are
+// geometric (no refraction) from altitudeOf. Returns a fresh geometry.
 export function skyBrightnessGeometryAt(target: Vec3, time: Time, location: GeographicPosition, sources: SkyBrightnessSources): SkyBrightnessGeometry {
+	const observer = matTransposeMulVec(gcrsToItrsRotationMatrix(time), itrs(location))
 	const altitude = altitudeOf(target, time, location)
-	const sun = sources.sunAt(time)
+	// Fresh topocentric vectors, so a provider that reuses its output buffer is never read after a later call.
+	const sun = vecMinus(sources.sunAt(time), observer)
 	const sunAltitude = altitudeOf(sun, time, location)
 	if (sources.moonAt === undefined) return { altitude, sunAltitude }
 
-	const moon = sources.moonAt(time)
-	const distance = vecLength(moon)
-	const geocentricAltitude = altitudeOf(moon, time, location)
-	const moonAltitude = Math.atan2(Math.sin(geocentricAltitude) - EARTH_RADIUS_AU / distance, Math.cos(geocentricAltitude))
+	const moon = vecMinus(sources.moonAt(time), observer)
+	const moonAltitude = altitudeOf(moon, time, location)
+	// Moon→Sun is the same from any origin; Moon→observer is the reversed topocentric Moon.
 	const phaseAngle = vecAngle(vecMinus(sun, moon), vecNegate(moon))
 	const separation = vecAngle(moon, target)
 
-	return { altitude, sunAltitude, moon: { altitude: moonAltitude, phaseAngle, separation, distance } }
+	return { altitude, sunAltitude, moon: { altitude: moonAltitude, phaseAngle, separation, distance: vecLength(moon) } }
 }
