@@ -174,10 +174,10 @@ export type CollisionProbabilityFailureReason =
 	// A position covariance has a negative variance, an impossible zero-variance coupling, or a negative
 	// correlation eigenvalue beyond the tolerance.
 	| 'indefiniteCovariance'
-	// The projected encounter-plane covariance is singular within the rounding of its projection: the minor
-	// eigenvalue does not exceed the error bound of the 2x2 entries (PROJECTION_ROUNDING times the
-	// absolute-value quadratic forms), so its positivity cannot be resolved. A merely elongated plane, or one
-	// whose along-track variance is large, is still estimated when its transverse block is resolved.
+	// The projected encounter-plane covariance cannot be certified positive definite within the rounding of
+	// its projection: some 2x2 matrix whose entries lie within their error bounds (PROJECTION_ROUNDING times
+	// the absolute-value quadratic forms) is singular or indefinite. A merely elongated plane, or one whose
+	// along-track variance is large, is still estimated when its transverse block is resolved.
 	| 'degenerateEncounterCovariance'
 
 // A failed collision probability estimate.
@@ -237,9 +237,9 @@ const DEFAULT_MAXIMUM_SMALL_OBJECT_CORRECTION = 0.01
 
 // Relative rounding bound of a projected entry aᵀCb: the 9-term sum costs about 9ε times Σ|aᵢ||Cᵢⱼ||bⱼ|
 // (Higham's γ₉), and the few-ulp error of the computed unit axes leaks C through the same absolute form,
-// so 16ε bounds both. It also covers forming det/λmax, whose error is ε times the plane scale. Large
-// along-track entries enter only through axis components that are not exactly zero, i.e. only when the
-// frame is oblique to the encounter axes, which is exactly when they can corrupt the plane block.
+// so 16ε bounds both. Large along-track entries enter only through axis components that are not exactly
+// zero, i.e. only when the frame is oblique to the encounter axes, which is exactly when they can corrupt
+// the plane block.
 const PROJECTION_ROUNDING = 16 * Number.EPSILON
 
 // Jacobi sweep cap; cyclic Jacobi converges quadratically, so 9x9 matrices need far fewer sweeps.
@@ -358,11 +358,11 @@ export function cdmCollisionProbability(cdm: ConjunctionDataMessage, hardBodyRad
 // hard-body disk of radius `hardBodyRadius` (AU, positive) with the selected estimator. Both states must be
 // in the same frame and at the same epoch. Covariance definiteness is checked on correlation matrices;
 // an indefinite position covariance (including any negative variance), a zero relative velocity or a plane
-// covariance whose minor eigenvalue is below the rounding of its projection return a failure instead of a
-// number; strongly anisotropic or along-track-dominated positive-definite planes are integrated. The
-// validity diagnostics flag encounters that are too slow or whose relative-velocity direction is too
-// uncertain for the short-encounter model; the probability is still returned for them, and the caller
-// decides whether to trust it.
+// covariance that cannot be certified positive definite within its projection rounding return a failure
+// instead of a number; strongly anisotropic or along-track-dominated positive-definite planes are
+// integrated. The validity diagnostics flag encounters that are too slow or whose relative-velocity
+// direction is too uncertain for the short-encounter model; the probability is still returned for them,
+// and the caller decides whether to trust it.
 export function collisionProbability(primary: EncounterObjectState, secondary: EncounterObjectState, hardBodyRadius: Distance, options: CollisionProbabilityOptions = {}): CollisionProbabilityResult {
 	const method = options.method ?? 'quadrature'
 	const tolerance = options.covarianceTolerance ?? DEFAULT_COVARIANCE_TOLERANCE
@@ -430,12 +430,19 @@ export function collisionProbability(primary: EncounterObjectState, secondary: E
 	}
 
 	if (covariance.primaryPosition.definiteness === 'indefinite' || covariance.secondaryPosition.definiteness === 'indefinite' || covariance.combinedPosition.definiteness === 'indefinite') return { kind: 'failure', reason: 'indefiniteCovariance', covariance, geometry }
-	// Weyl: rounding perturbs the minor eigenvalue by at most the Frobenius norm of the entry errors.
-	const exx = absoluteQuadraticForm(combined, xAxis, xAxis)
-	const exy = absoluteQuadraticForm(combined, xAxis, yAxis)
-	const eyy = absoluteQuadraticForm(combined, yAxis, yAxis)
-	const resolution = PROJECTION_ROUNDING * Math.sqrt(exx * exx + 2 * exy * exy + eyy * eyy)
-	if (!(minor > resolution)) return { kind: 'failure', reason: 'degenerateEncounterCovariance', covariance, geometry }
+	// Certify positive definiteness for every symmetric 2x2 matrix within the entry error bounds δ: its
+	// smallest diagonal entries and determinant over that box are cxx - δxx, cyy - δyy and
+	// (cxx - δxx)(cyy - δyy) - (|cxy| + δxy)². Unlike a global eigenvalue perturbation bound, this keeps an
+	// axis-aligned, extremely elongated plane whose small variance is resolved by itself, and still rejects
+	// a plane made near singular by cancellation between cxx·cyy and cxy². The margin it demands also
+	// exceeds the rounding of the determinant, so the computed minor eigenvalue is positive.
+	const dxx = PROJECTION_ROUNDING * absoluteQuadraticForm(combined, xAxis, xAxis)
+	const dxy = PROJECTION_ROUNDING * absoluteQuadraticForm(combined, xAxis, yAxis)
+	const dyy = PROJECTION_ROUNDING * absoluteQuadraticForm(combined, yAxis, yAxis)
+	const lowerXX = cxx - dxx
+	const lowerYY = cyy - dyy
+	const upperXY = Math.abs(cxy) + dxy
+	if (!(lowerXX > 0 && lowerYY > 0 && lowerXX * lowerYY > upperXY * upperXY && minor > 0)) return { kind: 'failure', reason: 'degenerateEncounterCovariance', covariance, geometry }
 
 	const validity = shortEncounterValidity(primary, secondary, combined, combinedVelocity, zAxis, xAxis, yAxis, relativeSpeed, hardBodyRadius, options)
 

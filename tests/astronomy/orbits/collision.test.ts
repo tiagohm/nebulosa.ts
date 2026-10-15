@@ -369,11 +369,34 @@ describe('collisionProbability', () => {
 		expect(unresolved.kind === 'failure' && unresolved.reason).toBe('degenerateEncounterCovariance')
 	})
 
-	test('plane covariance singular within double precision is a failure', () => {
-		// σ_minor² = 1e-14 m² is below the 16ε·1e4 m² ≈ 3.6e-12 m² rounding of the projected entries.
-		const result = collisionProbability(...encounter(0, 0, 1e4, 0, 1e-14), meter(1))
-		expect(result.kind === 'failure' && result.reason).toBe('degenerateEncounterCovariance')
-		expect(result.covariance.combinedPosition.definiteness).toBe('positiveDefinite')
+	test('axis-aligned extreme anisotropy is resolved by its own variance', () => {
+		// σ_major = 100 m, σ_along = 100 m and σ_minor down to 0.1 µm (λmin/λmax = 1e-18): the plane is diagonal,
+		// so cyy is exact and the probability converges to the line limit erf(1/(100√2)).
+		const limit = 0.0079787126292632074036
+		const diagonal = pc(encounter(0, 0, 1e4, 0, 2.5e-11, 1e4), 1)
+		expect(diagonal.probability).toBeCloseTo(limit, 12)
+		expect(toMeter(diagonal.geometry.plane.sigmaMinor)).toBeCloseTo(5e-6, 15)
+
+		let previous = Number.POSITIVE_INFINITY
+		for (const sigma of [1e-4, 5e-6, 1e-7]) {
+			const distance = Math.abs(pc(encounter(0, 0, 1e4, 0, sigma * sigma, 1e4), 1).probability - limit)
+			expect(distance).toBeLessThanOrEqual(previous)
+			previous = distance
+		}
+
+		expect(previous / limit).toBeLessThan(1e-9)
+	})
+
+	test('plane covariance that rounding makes unresolvable is a failure', () => {
+		// The same σ 100 m by 0.1 µm plane rotated 45°: every entry is ~5e3 m² and rounds at ~1e-12 m², far above
+		// the 1e-14 m² minor variance, so cxx·cyy - cxy² cannot be certified positive.
+		const rotated = collisionProbability(...rotateEncounter(encounter(0, 0, 1e4, 0, 1e-14, 1e4), matRotZ(Math.PI / 4)), meter(1))
+		expect(rotated.kind === 'failure' && rotated.reason).toBe('degenerateEncounterCovariance')
+		expect(rotated.covariance.combinedPosition.definiteness).not.toBe('indefinite')
+
+		// Correlation 1 - 1e-15 between the plane axes: det = 2e-11 m⁴ is below the rounding of cxx·cyy and cxy².
+		const correlated = collisionProbability(...encounter(0, 0, 100, 100 * (1 - 1e-15), 100), meter(1), { covarianceTolerance: 1e-20 })
+		expect(correlated.kind === 'failure' && correlated.reason).toBe('degenerateEncounterCovariance')
 	})
 
 	test('small-object domain diagnostics', () => {
