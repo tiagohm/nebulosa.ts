@@ -5479,6 +5479,65 @@ console.log(toDeg(WEB_MERCATOR_MAX_LATITUDE)) // 85.05 — degrees
 console.log(new WebMercator().project(0, deg(90))) // { x: 0, y: 3.1416 }
 ```
 
+### Sky Surface Brightness (Krisciunas and Schaefer)
+
+The brightness of the night sky sets the background of every exposure. `astronomy/sky/brightness` predicts it in mag/arcsec² with the scattered-moonlight model of Krisciunas and Schaefer (1991, PASP 103, 1033). The sky is the flux sum of three components kept separate in the result: the natural dark sky (airglow, zodiacal light and faint stars), an artificial light-pollution baseline and the moonlight scattered by Rayleigh and aerosol (Mie) processes. The dark components grow toward the horizon as `B(X) = B_zen · X · 10^(-0.4·k·(X - 1))`, with the scattering airmass `X = (1 - 0.96·sin²Z)^-1/2` (1 at the zenith, 5 on the horizon), and the moonlight follows the K&S lunar phase law (with the +35% opposition surge inside 7 degrees of full Moon and the inverse square of the lunar distance), their scattering function of the Moon–target separation and the extinction of both lines of sight. The two published aerosol fits do not meet at 10 degrees of separation, so the brightness jumps there (by 0.15 mag in the example below) and should not be treated as a smooth function of the separation. Fluxes are in nanolamberts, `B = 34.08 · exp(20.7233 - 0.92104·m)`, which `skyMagnitudeToNanolamberts` and `nanolambertsToSkyMagnitude` convert.
+
+`skyBrightness(geometry, model?)` takes the geometric altitudes of the target and of the Sun, and optionally the Moon's topocentric altitude, phase angle (0 at full Moon, PI at new Moon), separation from the target and distance in AU (the mean 384 400 km when omitted). A Moon left out or not above the horizon adds nothing. The `model` is the passband and site calibration: the extinction `k` in mag/airmass, the natural zenith brightness, an optional light-pollution zenith brightness and a `moonOffset` in magnitudes added to the moonlight. `KRISCIUNAS_SCHAEFER_V` is the published V calibration for Mauna Kea (k = 0.172, a 21.587 mag/arcsec² zenith, no light pollution), and the authors report 8–23% rms agreement with their observations. The moonlight is a physical prediction only in V: a non-zero `moonOffset` shifts the Rayleigh and Mie terms together, while their real ratio changes with wavelength and separation, so it is a heuristic extrapolation that holds at most at the separation where it was fitted. The dark-sky extinction and zenith can be set for any band. The result has the `total`, `natural`, `lightPollution` and `moon` brightness (the last two `undefined` when absent), the `moonDelta` of the Moon on the total, the `fluxes`, both airmasses and the `warnings` of the regimes the model does not describe: `twilight` (Sun above -18 degrees, there is no solar term), `belowHorizon`, `highAirmass` and `moonHighAirmass` (below 20 degrees, a Nebulosa reliability bound), `moonClose` (within 15 degrees of the Moon, covering the poorly constrained aureole below 10 degrees and the jump at 10 degrees) and `moonColorExtrapolated` (moonlight through a non-zero `moonOffset`). The light pollution shares the airmass gradient of the natural sky, so it is isotropic, not a dome brighter toward a city.
+
+`fitSkyBaseline(measurements, model?)` calibrates a site from sky-quality-meter readings or calibrated image backgrounds, each with its geometry and `measured` brightness in the model passband. Because the natural and artificial components have the same gradient, the measurements constrain only their sum: the fit keeps the natural zenith and fits the light-pollution zenith that minimizes the relative flux residuals after the predicted moonlight is removed. Readings with warnings or non-finite values are rejected, a sky darker than the natural model leaves `lightPollutionZenith` undefined, and no usable reading returns `undefined`. `skyBrightnessGeometryAt(target, time, location, sources)` builds the geometry for an observer and epoch from a J2000 target direction and geocentric J2000 Sun and Moon positions in AU (the callbacks of [Twilight and Darkness Windows](#twilight-and-darkness-windows)); the observer's geocentric offset (its ITRS position rotated into GCRS axes at the epoch) is subtracted from the Sun and the Moon, so the lunar altitude, separation, phase angle and distance all describe the topocentric Moon, and the altitudes are geometric (no refraction). Unlike the [Observation Scores](#observation-scores), which rank targets with dimensionless ramps, this is a photometric prediction.
+
+```ts
+import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { fitSkyBaseline, KRISCIUNAS_SCHAEFER_V, nanolambertsToSkyMagnitude, skyBrightness, skyBrightnessGeometryAt, skyMagnitudeToNanolamberts } from 'nebulosa/src/astronomy/sky/brightness'
+import { type Time, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+import { kilometer } from 'nebulosa/src/math/units/distance'
+
+// The dark zenith of the V calibration, and its linear flux.
+console.log(skyBrightness({ altitude: deg(90), sunAltitude: deg(-30) }).total) // 21.587 — mag/arcsec²
+console.log(skyMagnitudeToNanolamberts(21.587), nanolambertsToSkyMagnitude(79)) // 79.006 21.587 — nL, mag/arcsec²
+
+// A target 60 degrees high, 45 degrees from a gibbous Moon (phase angle 40 degrees) 40 degrees high.
+const geometry = { altitude: deg(60), sunAltitude: deg(-25), moon: { altitude: deg(40), phaseAngle: deg(40), separation: deg(45) } }
+const sky = skyBrightness(geometry)
+
+console.log(sky.total, sky.natural, sky.moon) // 19.131 21.463 19.266 — mag/arcsec²
+console.log(sky.moonDelta, sky.airmass, sky.warnings) // -2.332 1.147 [] — mag, scattering airmass
+console.log(skyBrightness({ ...geometry, moon: { ...geometry.moon, separation: deg(90) } }).total) // 19.695 — farther from the Moon
+console.log(skyBrightness({ ...geometry, moon: { ...geometry.moon, separation: deg(10) } }).total) // 18.282 — the aureole fit
+console.log(skyBrightness({ ...geometry, moon: { ...geometry.moon, separation: deg(10.001) } }).total) // 18.129 — the Mie fit, flagged moonClose
+console.log(skyBrightness(geometry, { ...KRISCIUNAS_SCHAEFER_V, extinction: 0.25 }).total) // 18.913 — a hazier sky scatters more
+console.log(skyBrightness({ altitude: deg(15), sunAltitude: deg(-14) }).warnings) // [ 'twilight', 'highAirmass' ]
+console.log(skyBrightness(geometry, { ...KRISCIUNAS_SCHAEFER_V, moonOffset: 0.6 }).warnings) // [ 'moonColorExtrapolated' ]
+
+// SQM readings of a suburban site; the twilight reading is rejected.
+const fit = fitSkyBaseline([
+	{ altitude: deg(90), sunAltitude: deg(-30), measured: 20.2 },
+	{ altitude: deg(45), sunAltitude: deg(-25), measured: 19.85 },
+	{ altitude: deg(70), sunAltitude: deg(-10), measured: 18.5 },
+])!
+
+console.log(fit.model.lightPollutionZenith, fit.residualRms, fit.used, fit.rejected) // 20.514 0.031 2 1 — mag/arcsec², mag
+
+const suburban = skyBrightness(geometry, fit.model)
+
+console.log(suburban.total, suburban.lightPollution, suburban.moonDelta) // 18.835 20.390 -1.212 — the Moon matters less there
+
+// The Large Magellanic Cloud from Cerro Pachón, 12 minutes before the full Moon of 2026-10-26 at 04:12 UTC.
+const site = geodeticLocation(deg(-70.7375), deg(-30.24), kilometer(2.2), Ellipsoid.WGS84)
+const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0])
+const moonAt = (time: Time) => moon(time)[0]
+const time = timeYMDHMS(2026, 10, 26, 4, 0, 0, Timescale.UTC)
+const lmc = skyBrightness(skyBrightnessGeometryAt(eraS2c(hour(5.5), deg(-69.75)), time, site, { sunAt, moonAt }))
+
+console.log(lmc.total, lmc.moonDelta, lmc.warnings) // 18.424 -2.784 [] — target at 38.9°, Moon at 42.1° and 94.8° away
+```
+
 ### Sky-Plane Uncertainty Ellipses
 
 An orbit's position uncertainty is a 3D ellipsoid, but an observer sees only its projection on the plane of the sky. That projection is an error ellipse around the predicted position, which tells you how large a field must be to catch the object. The linear position spread is divided by the distance to give angles, and the ellipse axes are the eigenvalues of the 2×2 covariance along East (increasing right ascension) and North (increasing declination).
@@ -14372,7 +14431,7 @@ for (let i = 0; i < 3; i++) {
 
 ### Observation Scores
 
-`astronomy/planning` scores one target that has already been reduced to a few numbers, to rank the targets of a night plan; it evaluates no ephemeris, so the altitudes, the solar altitude and the lunar geometry must come from the caller. Angles are radians and the scores are dimensionless on 0..1 (or 0..100 with `scale: 100`). `observationScore(input, options?)` is the geometric mean of the factors that were supplied, so a single zero factor zeroes the score and an omitted optional input is left out instead of counting as a failure. The `ObservationScoreInput` has the `altitude` (always scored: 0 at the horizon, or at `minimumAltitude`, rising linearly to 1 at 60 degrees, `goodAltitude`), the optional `airmass` (derived with Kasten and Young from the altitude when omitted, falling from 1 at the zenith to 0 at airmass 3, `maximumAirmass`, and 0 for a target that is not above the horizon), the `sunAltitude` (0 at -12 degrees and above, rising to 1 at -18 degrees), the `moonInterference` from 0 to 1 (the factor is one minus it) and the `availableDurationHours` with the `requiredDurationHours` (their ratio capped at 1, and a zero requirement counts as satisfied; scored only when both are given). `moonInterference(illumination, moonAltitude, separation)` gives that moon term as the illuminated fraction times the sine of the lunar altitude times a Gaussian of 30 degrees in the angular separation from the target (wrapped to `(-PI, PI]`), clamped to 0..1, and it is 0 for a Moon on or below the horizon or without illumination. The ramps are planning thresholds, not a photometric sky-brightness model: the Moon does not depend on the wavelength or on the sky transparency, the twilight ramp only follows the solar altitude and the airmass is the geometric one, so use the score to order targets and not as a limiting magnitude.
+`astronomy/planning` scores one target that has already been reduced to a few numbers, to rank the targets of a night plan; it evaluates no ephemeris, so the altitudes, the solar altitude and the lunar geometry must come from the caller. Angles are radians and the scores are dimensionless on 0..1 (or 0..100 with `scale: 100`). `observationScore(input, options?)` is the geometric mean of the factors that were supplied, so a single zero factor zeroes the score and an omitted optional input is left out instead of counting as a failure. The `ObservationScoreInput` has the `altitude` (always scored: 0 at the horizon, or at `minimumAltitude`, rising linearly to 1 at 60 degrees, `goodAltitude`), the optional `airmass` (derived with Kasten and Young from the altitude when omitted, falling from 1 at the zenith to 0 at airmass 3, `maximumAirmass`, and 0 for a target that is not above the horizon), the `sunAltitude` (0 at -12 degrees and above, rising to 1 at -18 degrees), the `moonInterference` from 0 to 1 (the factor is one minus it) and the `availableDurationHours` with the `requiredDurationHours` (their ratio capped at 1, and a zero requirement counts as satisfied; scored only when both are given). `moonInterference(illumination, moonAltitude, separation)` gives that moon term as the illuminated fraction times the sine of the lunar altitude times a Gaussian of 30 degrees in the angular separation from the target (wrapped to `(-PI, PI]`), clamped to 0..1, and it is 0 for a Moon on or below the horizon or without illumination. The ramps are planning thresholds, not a photometric sky-brightness model: the Moon does not depend on the wavelength or on the sky transparency, the twilight ramp only follows the solar altitude and the airmass is the geometric one, so use the score to order targets and not as a limiting magnitude; [Sky Surface Brightness (Krisciunas and Schaefer)](#sky-surface-brightness-krisciunas-and-schaefer) predicts the sky background itself.
 
 ```ts
 import { moonInterference, observationScore } from 'nebulosa/src/astronomy/planning'
