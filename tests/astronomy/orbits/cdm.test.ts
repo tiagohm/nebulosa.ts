@@ -229,7 +229,13 @@ describe('parseCDM', () => {
 		const leap = parseCDM(replaceLine(CDM_EXAMPLE, 'TCA', ['TCA = 2016-12-31T23:59:60.5Z']))
 		expect(timeSubtract(timeYMDHMS(2017, 1, 1), leap.relative.tca, Timescale.TAI) * DAYSEC).toBeCloseTo(0.5, 6)
 
-		for (const tca of ['2010-02-29T00:00:00', '2010-13-01T00:00:00', '2010-366T00:00:00', '2010-03-13T24:00:00', '2010-03-13T12:00:60', '2010-03-13 22:37:52', '2010-03-13T22:37']) {
+		// 23:59:60 exists only on a positive leap-second day, in calendar and ordinal form alike.
+		const june = parseCDM(replaceLine(CDM_EXAMPLE, 'TCA', ['TCA = 2015-06-30T23:59:60']))
+		expect(timeSubtract(timeYMDHMS(2015, 7, 1), june.relative.tca, Timescale.TAI) * DAYSEC).toBeCloseTo(1, 6)
+		const ordinalLeap = parseCDM(replaceLine(CDM_EXAMPLE, 'TCA', ['TCA = 2016-366T23:59:60.5']))
+		expect(timeSubtract(ordinalLeap.relative.tca, leap.relative.tca, Timescale.TAI) * DAYSEC).toBeCloseTo(0, 6)
+
+		for (const tca of ['2010-03-13T23:59:60.5', '2015-06-29T23:59:60', '2016-12-30T23:59:60', '2016-365T23:59:60', '2016-12-31T23:59:61', '2010-02-29T00:00:00', '2010-13-01T00:00:00', '2010-366T00:00:00', '2010-03-13T24:00:00', '2010-03-13T12:00:60', '2010-03-13 22:37:52', '2010-03-13T22:37']) {
 			expectRejected(replaceLine(CDM_EXAMPLE, 'TCA', [`TCA = ${tca}`]), 'value', 'TCA')
 		}
 	})

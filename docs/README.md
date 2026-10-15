@@ -4807,21 +4807,22 @@ console.log(angularMotionOrDifferentialTrackingRate([samples[0]])) // undefined 
 
 The probability of collision (Pc) of a satellite conjunction is the chance that the two objects, whose positions at the time of closest approach (TCA) are uncertain, come within their combined hard-body radius R. In the short-encounter model (Foster & Estes 1992, Chan 1997, Alfano 2005) the relative motion is a straight line during the brief encounter, the position errors are independent Gaussians with combined covariance C = C1 + C2, and the problem collapses onto the **encounter plane** perpendicular to the relative velocity: Pc is the mass of the projected 2D Gaussian, centred at the miss vector, inside a disk of radius R. The covariance comes from orbit determination, typically delivered in a CCSDS Conjunction Data Message (CDM); it is never derived from TLEs, so an SGP4 screen with [Satellite Conjunctions](#satellite-conjunctions) can find a candidate but cannot supply its Pc.
 
-`parseCDM(text)` reads a CCSDS 508.0-B-1 CDM, version 1.0, in KVN form. It is a strict boundary for untrusted text: it rejects XML CDMs, other message types and versions, keywords outside the standard or out of its fixed order, missing obligatory items, wrong or missing units designators, malformed numbers and time tags, partial covariance rows, and objects whose `REF_FRAME` or `ORBIT_CENTER` differ. Each rejection throws a `CDMParseError` whose `code` (`'unsupportedFormat'`, `'unsupportedVersion'`, `'syntax'`, `'unknownKeyword'`, `'order'`, `'duplicate'`, `'missing'`, `'unit'`, `'value'` or `'frame'`), `line` and `keyword` identify the problem. The message is converted to library units: positions, miss distance and screening volume in AU, velocities in AU/day, the 6x6 RTN covariance in AU², AU²/day and AU²/day², time tags as UTC `Time`. Areas, mass, A/m ratios and other physical parameters keep their CDM SI units, and the optional drag, SRP and thrust covariance rows keep their consider-parameter factor in CDM units.
+`parseCDM(text)` reads a CCSDS 508.0-B-1 CDM, version 1.0, in KVN form. It is a strict boundary for untrusted text: it rejects XML CDMs, other message types and versions, keywords outside the standard or out of its fixed order, missing obligatory items, wrong or missing units designators, malformed numbers and time tags (including a 23:59:60 second on a day without a positive leap second in the UTC leap-second table), partial covariance rows, and objects whose `REF_FRAME` or `ORBIT_CENTER` differ. Each rejection throws a `CDMParseError` whose `code` (`'unsupportedFormat'`, `'unsupportedVersion'`, `'syntax'`, `'unknownKeyword'`, `'order'`, `'duplicate'`, `'missing'`, `'unit'`, `'value'` or `'frame'`), `line` and `keyword` identify the problem. The message is converted to library units: positions, miss distance and screening volume in AU, velocities in AU/day, the 6x6 RTN covariance in AU², AU²/day and AU²/day², time tags as UTC `Time`. Areas, mass, A/m ratios and other physical parameters keep their CDM SI units, and the optional drag, SRP and thrust covariance rows keep their consider-parameter factor in CDM units.
 
 `cdmEncounterStates(cdm)` turns the two objects into `EncounterObjectState`s in the axes of the message `REF_FRAME` at TCA. Each RTN covariance (R radial, N along the inertial orbit normal, T = N×R) is rotated into those axes with `rotateStateCovariance` and `rtnRotation`. EME2000 and GCRF states are used as given. For ITRF the Earth-spin term ω×r is added to the velocity, because RTN is defined by the inertial orbit plane. Pc does not change under a rotation of the shared frame, so no conversion to GCRF is needed.
 
 `collisionProbability(primary, secondary, hardBodyRadius, options?)` estimates Pc from two states in the same frame at the same epoch. `cdmCollisionProbability(cdm, hardBodyRadius, options?)` does the same from a parsed CDM. The CDM carries no hard-body radius, so the caller supplies R in AU. `options.method` selects the estimator:
 
 - `'quadrature'` (default) integrates the disk to `options.relativeTolerance` (default 1e-10) with adaptive Gauss-Kronrod quadrature. It is accurate for the short-encounter model only; it does not model curved relative motion, a covariance that changes during the encounter, or velocity uncertainty.
-- `'smallObject'` uses the density at the disk centre times πR². It is only valid when R is much smaller than the minor plane sigma.
+- `'smallObject'` uses the density at the disk centre times πR². It is only valid when R is much smaller than the minor plane sigma and the density barely varies across the disk; `smallObjectValidity` reports whether that holds.
 
-The result is a discriminated union. A `'failure'` is returned for a zero relative velocity, an indefinite position covariance or a singular encounter-plane covariance. An `'estimate'` carries:
+The result is a discriminated union. A `'failure'` is returned for a zero relative velocity, an indefinite position covariance (any negative variance included), or an encounter-plane covariance whose minor eigenvalue cannot be told from zero in double precision (at most 64ε times the trace of the combined position covariance). A strongly elongated plane covariance that is still positive definite is integrated, not rejected. An `'estimate'` carries:
 
-- the probability and the quadrature error and convergence;
+- the probability, and the algorithmic quadrature `error` and `converged` flag (`0` and `true` for `'smallObject'`). Neither describes the error of the approximation or of the short-encounter model;
 - the encounter geometry: relative state (secondary minus primary), plane axes, projected miss and covariance, principal sigmas, Mahalanobis distance, and the offset of the rectilinear closest approach from the state epoch;
 - covariance checks for both objects and the combined position covariance: definiteness and condition number of each correlation matrix;
-- short-encounter diagnostics: `encounterDuration` (seconds, ±`encounterSigma` along-track sigmas, default 5), the `orbitalArc` swept during it, and the relative-velocity direction uncertainty `velocityAngle`. `valid` is false when either angle exceeds its maximum (both default to 0.01 rad). These are screening heuristics, not error bounds.
+- short-encounter diagnostics: `encounterDuration` (seconds, ±`encounterSigma` along-track sigmas, default 5), the `orbitalArc` swept during it, and the relative-velocity direction uncertainty `velocityAngle`. `valid` is false when either angle exceeds its maximum (both default to 0.01 rad). These are screening heuristics, not error bounds;
+- small-object diagnostics, reported for both estimators: `radiusRatio` = R/σ_minor and the signed leading-order `relativeCorrection` (R²/8)·(‖C⁻¹m‖² − tr C⁻¹), an estimate of (exact − smallObject)/smallObject that holds only while it is small. `valid` requires `radiusRatio < 1` and |`relativeCorrection`| at most `options.maximumSmallObjectCorrection` (default 0.01).
 
 The example uses the obligatory-keyword CDM of CCSDS 508.0-B-1 section 3.6.2. That message illustrates two things the checks report: Object1's published 6x6 covariance is not positive semidefinite (|corr(R, Ṫ)| > 1), although its position block is, and with R close to the minor plane sigma the small-object approximation is off by a factor of about 3.
 
@@ -4849,7 +4850,15 @@ if (result.kind === 'estimate') {
 }
 
 const approximate = cdmCollisionProbability(cdm, meter(20), { method: 'smallObject' })
-console.log(approximate.kind === 'estimate' && approximate.probability) // 1.642e-7 — R ≈ σ_minor, so the approximation fails
+if (approximate.kind === 'estimate') {
+	console.log(approximate.probability) // 1.642e-7 — about 2.9 times too small
+	console.log(approximate.error, approximate.converged) // 0 true — no algorithmic error, says nothing about the approximation
+	console.log(approximate.smallObjectValidity) // { radiusRatio: 0.955, relativeCorrection: 1.417, valid: false }
+}
+
+// With R = 1 m the approximation is in its domain: the predicted correction 0.00354 matches the actual one.
+const tiny = cdmCollisionProbability(cdm, meter(1), { method: 'smallObject' })
+console.log(tiny.kind === 'estimate' && tiny.smallObjectValidity.valid) // true
 
 // The same estimate from explicit states, for a 5 m radius.
 const [primary, secondary] = cdmEncounterStates(cdm)

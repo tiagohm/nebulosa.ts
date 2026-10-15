@@ -2,7 +2,7 @@ import { AU_M, DAYSEC } from '../../core/constants'
 import { Matrix } from '../../math/linear-algebra/matrix'
 import { type Vec3, vecCrossLength, vecLength } from '../../math/linear-algebra/vec3'
 import type { Distance } from '../../math/units/distance'
-import { type Time, Timescale, timeYMDHMS } from '../time/time'
+import { type Time, Timescale, timeYMDHMS, utcLeapSeconds } from '../time/time'
 
 // Strict reader for the CCSDS Conjunction Data Message (CDM), Blue Book CCSDS 508.0-B-1 (June 2013,
 // with Cor. 1 2018 and Cor. 2 2021), version 1.0, in the KVN (keyword = value) encoding. The XML
@@ -454,8 +454,10 @@ function daysInMonth(year: number, month: number) {
 	return DAYS_BEFORE_MONTH[month] - DAYS_BEFORE_MONTH[month - 1] + (month === 2 && isLeapYear(year) ? 1 : 0)
 }
 
-// Parses a CDM UTC time tag in calendar or ordinal form; a 60.x second is accepted only at 23:59, where
-// a positive leap second may occur.
+// Parses a CDM UTC time tag in calendar or ordinal form. The last minute of a UTC day has 60 + dleap
+// seconds, with dleap from the UTC leap-second table (utcLeapSeconds, as ERFA eraDtf2d): 23:59:60.x exists
+// only on a positive leap-second day and 23:59:59.x is missing on a negative one. Any other second at or
+// beyond 60 is a civil label that never occurred and is rejected rather than rolled into the next day.
 function parseTimeTag(value: string, line: number, keyword: string): Time {
 	let year: number
 	let month: number
@@ -485,7 +487,8 @@ function parseTimeTag(value: string, line: number, keyword: string): Time {
 	const hour = +clock[0]
 	const minute = +clock[1]
 	const second = +clock[2]
-	if (!(hour <= 23 && minute <= 59 && (second < 60 || (hour === 23 && minute === 59 && second < 61)))) throw new CDMParseError('value', `invalid time of day "${value}"`, line, keyword)
+	const secondsInMinute = hour === 23 && minute === 59 ? 60 + utcLeapSeconds(year, month, day) : 60
+	if (!(hour <= 23 && minute <= 59 && second < secondsInMinute)) throw new CDMParseError('value', `invalid time of day "${value}"`, line, keyword)
 
 	return timeYMDHMS(year, month, day, hour, minute, second, Timescale.UTC)
 }

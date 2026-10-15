@@ -282,7 +282,9 @@ export function timeBesselianYear(epoch: number, scale: Timescale = Timescale.TT
 // and 0h tomorrow after removing any pre-1972 linear drift. Post-1972 this is +1,
 // 0, or -1 and is the extra length of that UTC day in seconds. eraDtf2d uses
 // DAYSEC+dleap as the UTC day length; eraUtcTai unspreads the same quantity.
-function utcLeapSeconds(year: number, month: number, day: number): number {
+// The last minute of that day therefore has 60+dleap seconds. Dates after the
+// last tabulated leap second report 0 (no future leap seconds are assumed).
+export function utcLeapSeconds(year: number, month: number, day: number): number {
 	const dat0 = eraDat(year, month, day, 0)
 	const dat12 = eraDat(year, month, day, 0.5)
 	const calt = eraJdToCal(MJD0 + eraCalToJd(year, month, day), 1.5)

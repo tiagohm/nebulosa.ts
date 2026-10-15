@@ -273,6 +273,110 @@ describe('collisionProbability', () => {
 		expect(rankOne.covariance.primaryPosition.definiteness).toBe('positiveSemidefinite')
 	})
 
+	test('negative variances are indefinite even without covariances', () => {
+		// Primary position variances [-1, 100, 100] m², secondary [2, 0, 0] m²: the combined block is positive
+		// definite, but no Gaussian has the primary's covariance.
+		const [primary, secondary] = encounter(30, 0, -1, 0, 100, 100)
+		secondary.covariance.set(0, 0, 2 / (AU_M * AU_M))
+		const result = collisionProbability(primary, secondary, meter(10))
+		expect(result.kind === 'failure' && result.reason).toBe('indefiniteCovariance')
+		expect(result.covariance.primaryPosition.definiteness).toBe('indefinite')
+		expect(result.covariance.primaryPosition.minimumEigenvalue).toBe(Number.NEGATIVE_INFINITY)
+		expect(result.covariance.primaryPosition.conditionNumber).toBe(Number.POSITIVE_INFINITY)
+		expect(result.covariance.secondaryPosition.definiteness).toBe('positiveSemidefinite')
+		expect(result.covariance.combinedPosition.definiteness).toBe('positiveDefinite')
+
+		// A NaN variance is not a variance either.
+		const [nan] = encounter(30, 0, 100, 0, 100)
+		nan.covariance.set(1, 1, Number.NaN)
+		expect(collisionProbability(nan, secondary, meter(10)).covariance.primaryPosition.definiteness).toBe('indefinite')
+
+		// A negative velocity variance invalidates the state covariance; the position-only Pc is still estimated.
+		const [velocity, other] = encounter(30, 0, 100, 0, 100)
+		velocity.covariance.set(4, 4, -1e-6 * M_S * M_S)
+		const positionOnly = pc([velocity, other], 10)
+		expect(positionOnly.covariance.primaryState.definiteness).toBe('indefinite')
+		expect(positionOnly.covariance.primaryPosition.definiteness).toBe('positiveDefinite')
+
+		// An exactly zero variance with no covariance stays semidefinite (CDM 5.2.8).
+		const [zero, partner] = encounter(30, 0, 100, 0, 100)
+		zero.covariance.set(5, 5, 0)
+		expect(pc([zero, partner], 10).covariance.primaryState.definiteness).toBe('positiveSemidefinite')
+	})
+
+	test('strongly anisotropic plane covariances are estimated, not called singular', () => {
+		// σ_major = 100 m, σ_minor = 0.1 mm, R = 1 m: positive definite with λmin/λmax = 1e-12 (40-digit mpmath
+		// Cartesian quadrature; the σ_minor -> 0 line limit is 2Φ(1/100) - 1 = 0.0079787126292632).
+		const states = encounter(0, 0, 1e4, 0, 1e-8)
+		const result = pc(states, 1)
+		expectRelative(result.probability, 0.0079787125893709737258, 1e-9)
+		expect(toMeter(result.geometry.plane.sigmaMinor)).toBeCloseTo(1e-4, 9)
+		expect(result.covariance.combinedPosition.conditionNumber).toBe(1)
+
+		// Rotating the plane by 45° (and the whole frame) leaves the probability unchanged.
+		expectRelative(pc(rotateEncounter(states, matRotZ(Math.PI / 4)), 1).probability, result.probability, 1e-9)
+		expectRelative(pc(rotateEncounter(states, matMul(matRotZ(0.4), matMul(matRotY(1.2), matRotX(-0.8)))), 1).probability, result.probability, 1e-9)
+
+		// λmin/λmax = 5e-11, just below the PSD tolerance that the plane check used to borrow.
+		expectRelative(pc(encounter(0, 0, 1e4, 0, 5e-7), 1).probability, 0.0079787106346507904181, 1e-9)
+	})
+
+	test('narrowing minor axis converges to the line limit', () => {
+		// Miss of 0.5 m along the minor axis: the limit is P(|u| <= √0.75 m) for u ~ N(0, 100² m²).
+		const limit = 0.006909796616861035371
+		const references = [
+			[1e-2, 0.0069091822525992541571],
+			[1e-3, 0.0069097904748416078109],
+			[1e-4, 0.006909796555441003252],
+		] as const
+
+		let previous = Number.POSITIVE_INFINITY
+		for (const [sigma, reference] of references) {
+			const probability = pc(encounter(0, 0.5, 1e4, 0, sigma * sigma), 1).probability
+			expectRelative(probability, reference, 1e-9)
+			const distance = Math.abs(probability - limit)
+			expect(distance).toBeLessThan(previous)
+			previous = distance
+		}
+
+		expect(previous / limit).toBeLessThan(1e-8)
+	})
+
+	test('plane covariance singular within double precision is a failure', () => {
+		// σ_minor² = 1e-14 m² is below 64ε·tr C ≈ 2.8e-10 m², where it cannot be told apart from zero.
+		const result = collisionProbability(...encounter(0, 0, 1e4, 0, 1e-14), meter(1))
+		expect(result.kind === 'failure' && result.reason).toBe('degenerateEncounterCovariance')
+		expect(result.covariance.combinedPosition.definiteness).toBe('positiveDefinite')
+	})
+
+	test('small-object domain diagnostics', () => {
+		// Centred isotropic case: the leading correction -R²/4σ² matches the exact ratio (1 - e^-x)/x - 1.
+		const centred = encounter(0, 0, 1, 0, 1)
+		const small = pc(centred, 0.01)
+		expect(small.smallObjectValidity.radiusRatio).toBeCloseTo(0.01, 12)
+		expect(small.smallObjectValidity.relativeCorrection).toBeCloseTo(-0.000025, 12)
+		expect(small.probability / pc(centred, 0.01, { method: 'smallObject' }).probability - 1).toBeCloseTo(small.smallObjectValidity.relativeCorrection, 9)
+		expect(small.smallObjectValidity.valid).toBeTrue()
+
+		// A small radius far in the tail: the density varies across the disk (correction (0.01/8)·(400 - 2)).
+		const tail = pc(encounter(20, 0, 1, 0, 1), 0.1, { method: 'smallObject' })
+		expect(tail.smallObjectValidity.relativeCorrection).toBeCloseTo(0.4975, 10)
+		expect(tail.smallObjectValidity.valid).toBeFalse()
+		expect(pc(encounter(20, 0, 1, 0, 1), 0.1, { method: 'smallObject', maximumSmallObjectCorrection: 0.5 }).smallObjectValidity.valid).toBeTrue()
+
+		// Published example with R = 20 m ≈ 0.955 σ_minor: the approximation is off by a factor of ~2.9, which
+		// the diagnostics flag even though error = 0, converged and the short-encounter validity all pass.
+		const cdm = parseCDM(CDM_EXAMPLE)
+		const approximate = estimate(cdmCollisionProbability(cdm, meter(20), { method: 'smallObject' }))
+		expect(approximate.error).toBe(0)
+		expect(approximate.converged).toBeTrue()
+		expect(approximate.validity.valid).toBeTrue()
+		expect(approximate.smallObjectValidity.radiusRatio).toBeCloseTo(0.955, 3)
+		expect(approximate.smallObjectValidity.relativeCorrection).toBeGreaterThan(1)
+		expect(approximate.smallObjectValidity.valid).toBeFalse()
+		expect(estimate(cdmCollisionProbability(cdm, meter(20))).probability / approximate.probability).toBeCloseTo(2.89, 2)
+	})
+
 	test('near-singular covariances stay finite and conditioned', () => {
 		// Correlation 1 - 1e-9 between x and y: positive definite but ill-conditioned.
 		const result = pc(encounter(30, 0, 100, 100 * (1 - 1e-9), 100), 10, { covarianceTolerance: 1e-12 })

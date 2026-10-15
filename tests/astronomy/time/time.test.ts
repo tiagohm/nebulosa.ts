@@ -4,7 +4,7 @@ import { ANGVEL_PER_DAY, DAYSEC, J2000, PI } from '../../../src/core/constants'
 import { deg, hour } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 // oxfmt-ignore
-import { earthRotationAngle, equationOfEquinoxes, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthAngularVelocity, instantaneousEarthRotationMatrix, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, taiMinusUtc, tcb, tcg, tdb, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, toJulianEpoch, tt, ut1, utc, TIME_PROVIDERS, dut1 } from '../../../src/astronomy/time/time'
+import { earthRotationAngle, equationOfEquinoxes, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthAngularVelocity, instantaneousEarthRotationMatrix, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, taiMinusUtc, tcb, tcg, tdb, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, utcLeapSeconds, toJulianEpoch, tt, ut1, utc, TIME_PROVIDERS, dut1 } from '../../../src/astronomy/time/time'
 import { downloadPerTag } from '../../download'
 import { expectNumberArrayToBeCloseTo } from '../../util'
 
@@ -24,6 +24,14 @@ test('time', () => {
 	expect(t.day).toBe(2449354)
 	expect(t.fraction).toBeCloseTo(-0.377, 3)
 	expect(t.scale).toBe(Timescale.TT)
+})
+
+test('UTC leap-second days', () => {
+	expect(utcLeapSeconds(2016, 12, 31)).toBe(1)
+	expect(utcLeapSeconds(2015, 6, 30)).toBe(1)
+	expect(utcLeapSeconds(2016, 12, 30)).toBe(0)
+	expect(utcLeapSeconds(2015, 6, 29)).toBe(0)
+	expect(utcLeapSeconds(2010, 3, 13)).toBe(0)
 })
 
 test('time unix', () => {

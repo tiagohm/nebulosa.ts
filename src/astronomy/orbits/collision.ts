@@ -27,7 +27,8 @@ import type { CDMObject, ConjunctionDataMessage } from './cdm'
 //     short-encounter model, not of the physics: it does not capture nonlinear relative motion, covariance
 //     evolution through the encounter or velocity uncertainty);
 //   - 'smallObject': the density at the disk centre times the disk area, πR²·N(0; m, C), whose relative
-//     error grows like R²/σ_minor² and is only usable when R ≪ σ_minor (approximate mode).
+//     error grows like R²/σ_minor² and is only usable when R ≪ σ_minor (approximate mode); its leading
+//     correction is reported for both estimators so the caller can see when it is out of its domain.
 // Short-encounter validity is reported as diagnostics, never assumed; failures are discriminated results.
 // No orbital covariance is ever synthesised from TLEs: SGP4 screening (satelliteConjunctions) can find a
 // candidate but cannot supply the covariance this estimator needs. All results are freshly allocated.
@@ -53,7 +54,8 @@ export interface CovarianceCheck {
 	// Definiteness within the eigenvalue tolerance; a zero-variance row and column that is otherwise empty
 	// is discounted (CDM 5.2.8) and makes the matrix at most semidefinite.
 	readonly definiteness: CovarianceDefiniteness
-	// Smallest eigenvalue of the correlation matrix D^-1/2 C D^-1/2 (dimensionless, at most 1).
+	// Smallest eigenvalue of the correlation matrix D^-1/2 C D^-1/2 (dimensionless, at most 1); -Infinity when
+	// a variance is negative or a zero variance has a non-zero covariance, where no correlation exists.
 	readonly minimumEigenvalue: number
 	// Ratio of the largest to the smallest correlation eigenvalue; Infinity when the smallest is not positive.
 	readonly conditionNumber: number
@@ -126,6 +128,18 @@ export interface ShortEncounterValidity {
 	readonly valid: boolean
 }
 
+// Domain diagnostics of the small-object approximation πR²·N(0; m, C), reported for both estimators.
+export interface SmallObjectValidity {
+	// Hard-body radius over the minor plane sigma, R/σ_minor (dimensionless).
+	readonly radiusRatio: number
+	// Signed leading-order relative correction of the approximation, (R²/8)·(‖C⁻¹m‖² - tr C⁻¹): the disk
+	// average of the density minus its centre value, divided by the centre value. It estimates
+	// (exact - smallObject)/smallObject only while |correction| ≪ 1; higher orders are ignored.
+	readonly relativeCorrection: number
+	// Whether radiusRatio < 1 and |relativeCorrection| is within maximumSmallObjectCorrection.
+	readonly valid: boolean
+}
+
 // A successful collision probability estimate.
 export interface CollisionProbabilityEstimate {
 	// Discriminant.
@@ -134,10 +148,11 @@ export interface CollisionProbabilityEstimate {
 	readonly method: CollisionProbabilityMethod
 	// Probability of collision in [0, 1].
 	readonly probability: number
-	// Estimated absolute quadrature error; 0 for the closed-form smallObject estimate (whose model error
-	// is not estimated).
+	// Estimated absolute quadrature (algorithmic) error; 0 for the closed-form smallObject estimate, which
+	// has no algorithmic error but an approximation error reported by smallObjectValidity.
 	readonly error: number
-	// Whether the quadrature met its tolerance within the panel budget; always true for smallObject.
+	// Whether the quadrature met its tolerance within the panel budget; always true for smallObject. It
+	// says nothing about the approximation or short-encounter model error.
 	readonly converged: boolean
 	// Encounter geometry.
 	readonly geometry: EncounterGeometry
@@ -145,15 +160,20 @@ export interface CollisionProbabilityEstimate {
 	readonly covariance: EncounterCovarianceChecks
 	// Short-encounter validity diagnostics.
 	readonly validity: ShortEncounterValidity
+	// Small-object approximation diagnostics; also useful to decide whether 'smallObject' would suffice.
+	readonly smallObjectValidity: SmallObjectValidity
 }
 
 // Why no probability could be estimated.
 export type CollisionProbabilityFailureReason =
 	// The relative velocity is zero, so no encounter plane exists.
 	| 'zeroRelativeVelocity'
-	// A position covariance has a negative correlation eigenvalue beyond the tolerance.
+	// A position covariance has a negative variance, an impossible zero-variance coupling, or a negative
+	// correlation eigenvalue beyond the tolerance.
 	| 'indefiniteCovariance'
-	// The projected encounter-plane covariance is singular, so the 2D Gaussian has no density.
+	// The projected encounter-plane covariance is singular within double-precision resolution (minor
+	// eigenvalue at most PLANE_RESOLUTION times the combined position trace), so the 2D Gaussian has no
+	// resolvable density; a merely elongated but positive-definite plane covariance is still estimated.
 	| 'degenerateEncounterCovariance'
 
 // A failed collision probability estimate.
@@ -179,8 +199,8 @@ export interface CollisionProbabilityOptions {
 	readonly relativeTolerance?: number
 	// Maximum number of quadrature panels, default 1000; reaching it reports converged = false.
 	readonly maxPanels?: number
-	// Correlation-eigenvalue tolerance separating definite, semidefinite and indefinite covariances, and
-	// the minor/major eigenvalue ratio below which the plane covariance is degenerate; default 1e-10.
+	// Correlation-eigenvalue tolerance separating definite, semidefinite and indefinite covariances; default
+	// 1e-10. It does not limit the anisotropy of the encounter-plane covariance.
 	readonly covarianceTolerance?: number
 	// Sigma multiple k of the along-track uncertainty used for the encounter duration, default 5.
 	readonly encounterSigma?: number
@@ -188,6 +208,8 @@ export interface CollisionProbabilityOptions {
 	readonly maximumOrbitalArc?: Angle
 	// Largest relative-velocity direction uncertainty for a valid short encounter, radians, default 0.01.
 	readonly maximumVelocityAngle?: Angle
+	// Largest |relativeCorrection| for a valid small-object approximation, default 0.01.
+	readonly maximumSmallObjectCorrection?: number
 }
 
 // Default relative quadrature tolerance on Pc.
@@ -205,6 +227,14 @@ const DEFAULT_ENCOUNTER_SIGMA = 5
 // Default maximum orbital arc (radians) and velocity-direction uncertainty (radians) of a short encounter.
 const DEFAULT_MAXIMUM_ORBITAL_ARC = 0.01
 const DEFAULT_MAXIMUM_VELOCITY_ANGLE = 0.01
+
+// Default maximum leading-order relative correction of a valid small-object approximation.
+const DEFAULT_MAXIMUM_SMALL_OBJECT_CORRECTION = 0.01
+
+// Plane minor eigenvalue, relative to the combined 3x3 position-covariance trace, below which the plane
+// covariance is numerically singular. Projecting the 3x3 covariance and forming det/λmax each round at
+// a few ε·tr C, so a smaller minor eigenvalue cannot be distinguished from zero (64ε ≈ 1.4e-14).
+const PLANE_RESOLUTION = 64 * Number.EPSILON
 
 // Jacobi sweep cap; cyclic Jacobi converges quadratically, so 9x9 matrices need far fewer sweeps.
 const JACOBI_SWEEPS = 64
@@ -321,10 +351,11 @@ export function cdmCollisionProbability(cdm: ConjunctionDataMessage, hardBodyRad
 // combined position covariance C1 + C2 and the miss vector onto it, and integrates the 2D Gaussian over the
 // hard-body disk of radius `hardBodyRadius` (AU, positive) with the selected estimator. Both states must be
 // in the same frame and at the same epoch. Covariance definiteness is checked on correlation matrices;
-// an indefinite position covariance, a zero relative velocity or a singular plane covariance return a
-// failure instead of a number. The validity diagnostics flag encounters that are too slow or whose
-// relative-velocity direction is too uncertain for the short-encounter model; the probability is still
-// returned for them, and the caller decides whether to trust it.
+// an indefinite position covariance (including any negative variance), a zero relative velocity or a plane
+// covariance that is singular within double precision return a failure instead of a number; strongly
+// anisotropic positive-definite plane covariances are integrated. The validity diagnostics flag encounters
+// that are too slow or whose relative-velocity direction is too uncertain for the short-encounter model;
+// the probability is still returned for them, and the caller decides whether to trust it.
 export function collisionProbability(primary: EncounterObjectState, secondary: EncounterObjectState, hardBodyRadius: Distance, options: CollisionProbabilityOptions = {}): CollisionProbabilityResult {
 	const method = options.method ?? 'quadrature'
 	const tolerance = options.covarianceTolerance ?? DEFAULT_COVARIANCE_TOLERANCE
@@ -392,20 +423,27 @@ export function collisionProbability(primary: EncounterObjectState, secondary: E
 	}
 
 	if (covariance.primaryPosition.definiteness === 'indefinite' || covariance.secondaryPosition.definiteness === 'indefinite' || covariance.combinedPosition.definiteness === 'indefinite') return { kind: 'failure', reason: 'indefiniteCovariance', covariance, geometry }
-	if (!(minor > tolerance * major)) return { kind: 'failure', reason: 'degenerateEncounterCovariance', covariance, geometry }
+	if (!(minor > PLANE_RESOLUTION * (combined[0] + combined[4] + combined[8]))) return { kind: 'failure', reason: 'degenerateEncounterCovariance', covariance, geometry }
 
 	const validity = shortEncounterValidity(primary, secondary, combined, combinedVelocity, zAxis, xAxis, yAxis, relativeSpeed, hardBodyRadius, options)
 
+	// Second-order Taylor term of the density averaged over the disk: (R²/8)·∇²f/f at the disk centre, with
+	// ∇²f/f = ‖C⁻¹m‖² - tr C⁻¹ for the Gaussian f centred at m = (missLength, 0).
+	const inverseMissSquared = (missLength * missLength * (cyy * cyy + cxy * cxy)) / (determinant * determinant)
+	const relativeCorrection = ((hardBodyRadius * hardBodyRadius) / 8) * (inverseMissSquared - (cxx + cyy) / determinant)
+	const radiusRatio = hardBodyRadius / geometry.plane.sigmaMinor
+	const smallObjectValidity: SmallObjectValidity = { radiusRatio, relativeCorrection, valid: radiusRatio < 1 && Math.abs(relativeCorrection) <= (options.maximumSmallObjectCorrection ?? DEFAULT_MAXIMUM_SMALL_OBJECT_CORRECTION) }
+
 	if (method === 'smallObject') {
 		const probability = Math.min(1, ((hardBodyRadius * hardBodyRadius) / (2 * Math.sqrt(determinant))) * Math.exp(-0.5 * mahalanobisDistance * mahalanobisDistance))
-		return { kind: 'estimate', method, probability, error: 0, converged: true, geometry, covariance, validity }
+		return { kind: 'estimate', method, probability, error: 0, converged: true, geometry, covariance, validity, smallObjectValidity }
 	}
 
 	// Principal axes: u along the major axis, w along the minor axis; the miss vector lies on xAxis.
 	const cos = Math.cos(majorAxisAngle)
 	const sin = Math.sin(majorAxisAngle)
 	const integral = diskGaussianIntegral((missLength * cos) / hardBodyRadius, (-missLength * sin) / hardBodyRadius, Math.sqrt(major) / hardBodyRadius, Math.sqrt(minor) / hardBodyRadius, options.relativeTolerance ?? DEFAULT_RELATIVE_TOLERANCE, options.maxPanels ?? DEFAULT_MAX_PANELS)
-	return { kind: 'estimate', method, probability: Math.min(1, integral.value), error: integral.error, converged: integral.converged, geometry, covariance, validity }
+	return { kind: 'estimate', method, probability: Math.min(1, integral.value), error: integral.error, converged: integral.converged, geometry, covariance, validity, smallObjectValidity }
 }
 
 // Short-encounter diagnostics from the combined covariances and both orbital rates.
@@ -457,19 +495,25 @@ function anyPerpendicular(v: Vec3, out?: MutVec3) {
 // columns, judged on its correlation matrix so mixed position/velocity units do not bias the eigenvalues.
 function covarianceCheck(data: ArrayLike<number>, size: number, stride: number, tolerance: number): CovarianceCheck {
 	const kept: number[] = []
-	let zeroVarianceCoupled = false
+	let impossible = false
 
 	for (let i = 0; i < size; i++) {
-		if (data[i * stride + i] > 0) {
-			kept.push(i)
-			continue
-		}
+		const variance = data[i * stride + i]
 
-		// A zero variance with a non-zero covariance is impossible for any distribution.
-		for (let j = 0; j < size; j++) if (j !== i && data[i * stride + j] !== 0) zeroVarianceCoupled = true
+		if (variance > 0) {
+			kept.push(i)
+		} else if (!(variance === 0)) {
+			// A negative (or NaN) variance makes eᵢᵀ C eᵢ < 0, so C has a negative eigenvalue whatever the
+			// rest of the matrix; it must never be discounted like a zero variance.
+			impossible = true
+		} else {
+			// A zero variance with a non-zero covariance is impossible for any distribution; a zero row and
+			// column is discounted (CDM 5.2.8).
+			for (let j = 0; j < size; j++) if (j !== i && data[i * stride + j] !== 0) impossible = true
+		}
 	}
 
-	if (zeroVarianceCoupled) return { definiteness: 'indefinite', minimumEigenvalue: Number.NEGATIVE_INFINITY, conditionNumber: Number.POSITIVE_INFINITY }
+	if (impossible) return { definiteness: 'indefinite', minimumEigenvalue: Number.NEGATIVE_INFINITY, conditionNumber: Number.POSITIVE_INFINITY }
 	if (kept.length === 0) return { definiteness: 'positiveSemidefinite', minimumEigenvalue: 0, conditionNumber: Number.POSITIVE_INFINITY }
 
 	const n = kept.length
