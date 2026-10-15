@@ -342,8 +342,35 @@ describe('collisionProbability', () => {
 		expect(previous / limit).toBeLessThan(1e-8)
 	})
 
+	test('large along-track uncertainty does not make the encounter plane singular', () => {
+		// σ_x = σ_y = 0.5 mm across the relative velocity, σ_z = 10 km along it, R = 0.5 mm, zero miss: the plane
+		// Gaussian is isotropic, so Pc = 1 - e^-1/2, and the encounter is still short (orbital arc ≈ 0.0071 rad).
+		const result = pc(encounter(0, 0, 2.5e-7, 0, 2.5e-7, 1e8, 15000), 0.0005)
+		expectRelative(result.probability, -Math.expm1(-0.5), 1e-10)
+		expect(result.validity.orbitalArc).toBeCloseTo(0.00714, 5)
+		expect(result.validity.valid).toBeTrue()
+
+		// Growing σ_along from 1 m to 10 km changes neither the plane block nor the probability.
+		for (const along of [1, 1e2, 1e4, 1e6, 1e8]) {
+			const swept = pc(encounter(0, 0, 2.5e-7, 0, 2.5e-7, along, 15000), 0.0005)
+			expect(swept.probability).toBe(result.probability)
+			expect(swept.geometry.plane.covariance).toEqual(result.geometry.plane.covariance)
+		}
+
+		// σ_along = 1 km and σ_across = 0.5 m stay resolved in an oblique frame, and the probability is invariant.
+		const moderate = encounter(0, 0, 0.25, 0, 0.25, 1e6, 15000)
+		const oblique = rotateEncounter(moderate, matMul(matRotZ(0.4), matMul(matRotY(1.2), matRotX(-0.8))))
+		expectRelative(pc(moderate, 0.5).probability, -Math.expm1(-0.5), 1e-10)
+		expectRelative(pc(oblique, 0.5).probability, -Math.expm1(-0.5), 1e-8)
+
+		// In that oblique frame the 10 km along-track variance swamps a 0.5 mm transverse one: every frame
+		// entry is ~1e8 m² and rounds at ~1e-8 m², so the plane block cannot be resolved and no Pc is returned.
+		const unresolved = collisionProbability(...rotateEncounter(encounter(0, 0, 2.5e-7, 0, 2.5e-7, 1e8, 15000), matMul(matRotZ(0.4), matMul(matRotY(1.2), matRotX(-0.8)))), meter(0.0005))
+		expect(unresolved.kind === 'failure' && unresolved.reason).toBe('degenerateEncounterCovariance')
+	})
+
 	test('plane covariance singular within double precision is a failure', () => {
-		// σ_minor² = 1e-14 m² is below 64ε·tr C ≈ 2.8e-10 m², where it cannot be told apart from zero.
+		// σ_minor² = 1e-14 m² is below the 16ε·1e4 m² ≈ 3.6e-12 m² rounding of the projected entries.
 		const result = collisionProbability(...encounter(0, 0, 1e4, 0, 1e-14), meter(1))
 		expect(result.kind === 'failure' && result.reason).toBe('degenerateEncounterCovariance')
 		expect(result.covariance.combinedPosition.definiteness).toBe('positiveDefinite')
@@ -354,15 +381,28 @@ describe('collisionProbability', () => {
 		const centred = encounter(0, 0, 1, 0, 1)
 		const small = pc(centred, 0.01)
 		expect(small.smallObjectValidity.radiusRatio).toBeCloseTo(0.01, 12)
-		expect(small.smallObjectValidity.relativeCorrection).toBeCloseTo(-0.000025, 12)
+		// Through fourth order: -R²/4 + R⁴/24, the expansion of (1 - e^-x)/x - 1 with x = R²/2.
+		expect(small.smallObjectValidity.relativeCorrection).toBeCloseTo(-0.000025 + 1e-8 / 24, 15)
 		expect(small.probability / pc(centred, 0.01, { method: 'smallObject' }).probability - 1).toBeCloseTo(small.smallObjectValidity.relativeCorrection, 9)
 		expect(small.smallObjectValidity.valid).toBeTrue()
 
-		// A small radius far in the tail: the density varies across the disk (correction (0.01/8)·(400 - 2)).
+		// A small radius far in the tail: the density varies across the disk; c2 = (0.01/8)·(400 - 2) and
+		// c4 = (1e-4/192)·(398² - 4·400 + 4).
 		const tail = pc(encounter(20, 0, 1, 0, 1), 0.1, { method: 'smallObject' })
-		expect(tail.smallObjectValidity.relativeCorrection).toBeCloseTo(0.4975, 10)
+		expect(tail.smallObjectValidity.relativeCorrection).toBeCloseTo(0.4975 + (1e-4 * (398 * 398 - 1600 + 4)) / 192, 10)
 		expect(tail.smallObjectValidity.valid).toBeFalse()
-		expect(pc(encounter(20, 0, 1, 0, 1), 0.1, { method: 'smallObject', maximumSmallObjectCorrection: 0.5 }).smallObjectValidity.valid).toBeTrue()
+		expect(pc(encounter(20, 0, 1, 0, 1), 0.1, { method: 'smallObject', maximumSmallObjectCorrection: 0.6 }).smallObjectValidity.valid).toBeTrue()
+
+		// On the ring d = √2σ the second-order term vanishes, yet R = 0.95σ is off by 1.46% (50-digit Marcum-Q
+		// series 0.16357847418427715 against πR²·f(0) = 0.16600559782861335); the fourth-order term flags it.
+		const ring = encounter(Math.SQRT2, 0, 1, 0, 1)
+		const ringExact = pc(ring, 0.95)
+		const ringApproximate = pc(ring, 0.95, { method: 'smallObject' })
+		expectRelative(ringExact.probability, 0.16357847418427715378, 1e-9)
+		expectRelative(ringApproximate.probability, 0.16600559782861334762, 1e-12)
+		expect(ringApproximate.smallObjectValidity.radiusRatio).toBeLessThan(1)
+		expect(ringApproximate.smallObjectValidity.relativeCorrection).toBeCloseTo((-4 * 0.95 ** 4) / 192, 6)
+		expect(ringApproximate.smallObjectValidity.valid).toBeFalse()
 
 		// Published example with R = 20 m ≈ 0.955 σ_minor: the approximation is off by a factor of ~2.9, which
 		// the diagnostics flag even though error = 0, converged and the short-encounter validity all pass.

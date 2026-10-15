@@ -4816,13 +4816,13 @@ The probability of collision (Pc) of a satellite conjunction is the chance that 
 - `'quadrature'` (default) integrates the disk to `options.relativeTolerance` (default 1e-10) with adaptive Gauss-Kronrod quadrature. It is accurate for the short-encounter model only; it does not model curved relative motion, a covariance that changes during the encounter, or velocity uncertainty.
 - `'smallObject'` uses the density at the disk centre times πR². It is only valid when R is much smaller than the minor plane sigma and the density barely varies across the disk; `smallObjectValidity` reports whether that holds.
 
-The result is a discriminated union. A `'failure'` is returned for a zero relative velocity, an indefinite position covariance (any negative variance included), or an encounter-plane covariance whose minor eigenvalue cannot be told from zero in double precision (at most 64ε times the trace of the combined position covariance). A strongly elongated plane covariance that is still positive definite is integrated, not rejected. An `'estimate'` carries:
+The result is a discriminated union. A `'failure'` is returned for a zero relative velocity, an indefinite position covariance (any negative variance included), or an encounter-plane covariance whose minor eigenvalue is within the rounding error of projecting the 3D covariance onto the plane, so its positivity cannot be resolved. A strongly elongated plane, or one with a large uncertainty along the relative velocity, is integrated as long as its transverse block is resolved. Along-track variance only limits that resolution when the frame axes are oblique to the encounter axes. An `'estimate'` carries:
 
 - the probability, and the algorithmic quadrature `error` and `converged` flag (`0` and `true` for `'smallObject'`). Neither describes the error of the approximation or of the short-encounter model;
 - the encounter geometry: relative state (secondary minus primary), plane axes, projected miss and covariance, principal sigmas, Mahalanobis distance, and the offset of the rectilinear closest approach from the state epoch;
 - covariance checks for both objects and the combined position covariance: definiteness and condition number of each correlation matrix;
 - short-encounter diagnostics: `encounterDuration` (seconds, ±`encounterSigma` along-track sigmas, default 5), the `orbitalArc` swept during it, and the relative-velocity direction uncertainty `velocityAngle`. `valid` is false when either angle exceeds its maximum (both default to 0.01 rad). These are screening heuristics, not error bounds;
-- small-object diagnostics, reported for both estimators: `radiusRatio` = R/σ_minor and the signed leading-order `relativeCorrection` (R²/8)·(‖C⁻¹m‖² − tr C⁻¹), an estimate of (exact − smallObject)/smallObject that holds only while it is small. `valid` requires `radiusRatio < 1` and |`relativeCorrection`| at most `options.maximumSmallObjectCorrection` (default 0.01).
+- small-object diagnostics, reported for both estimators: `radiusRatio` = R/σ_minor and the signed `relativeCorrection` c2 + c4, the second- and fourth-order terms of the mean-value expansion of the density over the disk, (R²/8)·∇²f/f and (R⁴/192)·∇⁴f/f. It estimates (exact − smallObject)/smallObject only while both terms are small. `valid` requires `radiusRatio < 1` and |c2| + |c4| at most `options.maximumSmallObjectCorrection` (default 0.01). Summing the magnitudes catches the ring where c2 vanishes. `valid` is a domain heuristic, not a bound on the error.
 
 The example uses the obligatory-keyword CDM of CCSDS 508.0-B-1 section 3.6.2. That message illustrates two things the checks report: Object1's published 6x6 covariance is not positive semidefinite (|corr(R, Ṫ)| > 1), although its position block is, and with R close to the minor plane sigma the small-object approximation is off by a factor of about 3.
 
@@ -4853,10 +4853,10 @@ const approximate = cdmCollisionProbability(cdm, meter(20), { method: 'smallObje
 if (approximate.kind === 'estimate') {
 	console.log(approximate.probability) // 1.642e-7 — about 2.9 times too small
 	console.log(approximate.error, approximate.converged) // 0 true — no algorithmic error, says nothing about the approximation
-	console.log(approximate.smallObjectValidity) // { radiusRatio: 0.955, relativeCorrection: 1.417, valid: false }
+	console.log(approximate.smallObjectValidity) // { radiusRatio: 0.955, relativeCorrection: 1.865, valid: false }
 }
 
-// With R = 1 m the approximation is in its domain: the predicted correction 0.00354 matches the actual one.
+// With R = 1 m the approximation is in its domain: the predicted correction 0.003546 matches the actual one.
 const tiny = cdmCollisionProbability(cdm, meter(1), { method: 'smallObject' })
 console.log(tiny.kind === 'estimate' && tiny.smallObjectValidity.valid) // true
 
