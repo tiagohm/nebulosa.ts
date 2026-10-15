@@ -136,10 +136,50 @@ test('rows that cannot give a transit ephemeris are rejected with a reason', () 
 	expect(exoplanetArchiveTransitEphemeris({ ...WASP12, pl_trandur: 0 })).toEqual({ success: false, reason: 'invalidValue' })
 })
 
-test('a composite-parameter row without a reference uses the supplied one', () => {
+test('non-finite epochs from external payloads are rejected', () => {
+	// 400 nines match the decimal pattern but overflow a double to Infinity.
+	for (const pl_tranmid of ['9'.repeat(400), `${'9'.repeat(400)}.5`, '1e309', '-1e309', 'Infinity', '-Infinity', 'NaN', Number.POSITIVE_INFINITY, Number.NaN]) {
+		expect(exoplanetArchiveTransitEphemeris({ ...WASP12, pl_tranmid })).toEqual({ success: false, reason: 'invalidValue' })
+	}
+
+	expect(exoplanetArchiveTransitEphemeris({ ...WASP12, pl_tranmid: '' })).toEqual({ success: false, reason: 'missingEpoch' })
+	expect(exoplanetArchiveTransitEphemeris({ ...WASP12, pl_tranmid: '  ' })).toEqual({ success: false, reason: 'missingEpoch' })
+
+	// A long fraction keeps its integer day; exponent notation falls back to a double.
+	const long = exoplanetArchiveTransitEphemeris({ ...WASP12, pl_tranmid: '2457607.51930500000000000000000001' })
+	if (!long.success) throw new Error(long.reason)
+	expect(long.ephemeris.epoch.day).toBe(2457608)
+	expect(long.ephemeris.epoch.fraction).toBe(0.519305 - 1)
+	const exponent = exoplanetArchiveTransitEphemeris({ ...WASP12, pl_tranmid: '2.457607519305e6' })
+	if (!exponent.success) throw new Error(exponent.reason)
+	expect(exponent.ephemeris.epoch.day + exponent.ephemeris.epoch.fraction).toBe(2457607.519305)
+})
+
+test('a composite-parameter row reads pl_tranmid_systemref', () => {
+	// WASP-12 b in `pscomppars` (queried 2026-10-15) has pl_tranmid_systemref and no pl_tsystemref.
+	const composite = { ...WASP12, pl_tsystemref: undefined, pl_tranmid_systemref: 'BJD-TDB' }
+	const result = exoplanetArchiveTransitEphemeris(composite, { timeReference: 'HJD' })
+	if (!result.success) throw new Error(result.reason)
+	expect(result.ephemeris.epoch.scale).toBe(Timescale.TDB)
+	expect(result.ephemeris.reference).toBe('barycentric')
+	expect(result.timeReferenceSource).toBe('pl_tranmid_systemref')
+
+	const table = exoplanetArchiveTransitEphemeris(WASP12)
+	if (!table.success) throw new Error(table.reason)
+	expect(table.timeReferenceSource).toBe('pl_tsystemref')
+
+	// Matching labels in both columns agree; different clocks or origins are never mixed.
+	expect(exoplanetArchiveTransitEphemeris({ ...WASP12, pl_tranmid_systemref: 'bjd_tdb' }).success).toBe(true)
+	expect(exoplanetArchiveTransitEphemeris({ ...WASP12, pl_tranmid_systemref: 'BJD-UTC' })).toEqual({ success: false, reason: 'conflictingTimeReference' })
+	expect(exoplanetArchiveTransitEphemeris({ ...WASP12, pl_tranmid_systemref: 'HJD' })).toEqual({ success: false, reason: 'conflictingTimeReference' })
+})
+
+test('a row without any reference uses the supplied one', () => {
 	const row = { ...WASP12, pl_tsystemref: undefined }
 	const result = exoplanetArchiveTransitEphemeris(row, { timeReference: 'BJD-TDB' })
 	if (!result.success) throw new Error(result.reason)
 	expect(result.ephemeris.epoch.scale).toBe(Timescale.TDB)
 	expect(result.assumedScale).toBe(false)
+	expect(result.timeReferenceSource).toBe('option')
+	expect(exoplanetArchiveTransitEphemeris(row)).toEqual({ success: false, reason: 'missingTimeReference' })
 })

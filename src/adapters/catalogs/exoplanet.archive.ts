@@ -2,16 +2,17 @@ import type { TransitEphemeris, TransitEpochReference } from '../../astronomy/ev
 import { Timescale, time } from '../../astronomy/time/time'
 import { type Angle, deg } from '../../math/units/angle'
 
-// NASA Exoplanet Archive ingestion: converts one row of the Planetary Systems (`ps`) table into the
-// linear TransitEphemeris consumed by exoplanetTransits. Rows come from TAP queries in JSON (numbers
-// and nulls) or CSV (strings); this module performs no network access. Archive epochs are Julian
-// Dates labelled by `pl_tsystemref`, periods are days, durations are hours, coordinates are degrees.
+// NASA Exoplanet Archive ingestion: converts one row of the Planetary Systems (`ps`) or Composite
+// Parameters (`pscomppars`) table into the linear TransitEphemeris consumed by exoplanetTransits.
+// Rows come from TAP queries in JSON (numbers and nulls) or CSV (strings); this module performs no
+// network access. Archive epochs are Julian Dates labelled by `pl_tsystemref` (`ps`) or
+// `pl_tranmid_systemref` (`pscomppars`), periods are days, durations are hours, coordinates are degrees.
 // The archive publishes asymmetric errors and no epoch-period covariance, so the larger error
 // magnitude becomes the 1σ value and the covariance is left undefined.
 
 // https://exoplanetarchive.ipac.caltech.edu/docs/API_PS_columns.html
 
-// One `ps` table row. Only the transit-ephemeris columns are read; others may be present.
+// One `ps` or `pscomppars` table row. Only the transit-ephemeris columns are read; others may be present.
 export interface ExoplanetArchiveRow {
 	// Planet name.
 	readonly pl_name?: string | null
@@ -19,7 +20,7 @@ export interface ExoplanetArchiveRow {
 	readonly ra?: number | string | null
 	// Declination in degrees.
 	readonly dec?: number | string | null
-	// Mid-transit epoch T0, as a Julian Date on the clock named by pl_tsystemref.
+	// Mid-transit epoch T0, as a Julian Date on the clock named by the time reference.
 	readonly pl_tranmid?: number | string | null
 	// Upper (+) error of T0, in days.
 	readonly pl_tranmiderr1?: number | string | null
@@ -37,13 +38,19 @@ export interface ExoplanetArchiveRow {
 	readonly pl_trandurerr1?: number | string | null
 	// Lower (−) error of the duration, in hours.
 	readonly pl_trandurerr2?: number | string | null
-	// Time reference of pl_tranmid, for example 'BJD-TDB', 'BJD-UTC', 'BJD', or 'HJD'.
+	// Time reference of the `ps` table, for example 'BJD-TDB', 'BJD-UTC', 'BJD', or 'HJD'.
 	readonly pl_tsystemref?: string | null
+	// Time reference of pl_tranmid in the `pscomppars` table, with the same labels.
+	readonly pl_tranmid_systemref?: string | null
 }
 
-// Why a row cannot become a transit ephemeris. 'invalidValue' covers non-numeric or non-finite
-// fields, a non-positive period, and a duration outside (0, period).
-export type ExoplanetArchiveTransitFailureReason = 'missingEpoch' | 'missingPeriod' | 'missingDuration' | 'missingTimeReference' | 'unsupportedTimeReference' | 'invalidValue'
+// Why a row cannot become a transit ephemeris. 'conflictingTimeReference' means pl_tsystemref and
+// pl_tranmid_systemref name different clocks or origins. 'invalidValue' covers non-numeric or
+// non-finite fields, a non-positive period, and a duration outside (0, period).
+export type ExoplanetArchiveTransitFailureReason = 'missingEpoch' | 'missingPeriod' | 'missingDuration' | 'missingTimeReference' | 'conflictingTimeReference' | 'unsupportedTimeReference' | 'invalidValue'
+
+// Where the time reference of a converted row came from.
+export type ExoplanetArchiveTimeReferenceSource = 'pl_tsystemref' | 'pl_tranmid_systemref' | 'option'
 
 // A converted row.
 export interface ExoplanetArchiveTransitSuccess {
@@ -59,6 +66,8 @@ export interface ExoplanetArchiveTransitSuccess {
 	// The reference did not name a time scale ('BJD' or 'HJD'), so one was assumed: TDB for BJD and
 	// UTC for HJD.
 	readonly assumedScale: boolean
+	// Column or option that supplied the time reference.
+	readonly timeReferenceSource: ExoplanetArchiveTimeReferenceSource
 }
 
 // A rejected row.
@@ -73,7 +82,7 @@ export type ExoplanetArchiveTransitResult = ExoplanetArchiveTransitSuccess | Exo
 
 // Options of exoplanetArchiveTransitEphemeris.
 export interface ExoplanetArchiveTransitOptions {
-	// Time reference used when the row has none, as composite-parameter rows lack pl_tsystemref.
+	// Time reference used when the row carries neither pl_tsystemref nor pl_tranmid_systemref.
 	readonly timeReference?: string
 }
 
@@ -125,6 +134,8 @@ function julianDate(value: number | string | null | undefined): readonly [number
 		if (match !== null) {
 			const day = Number(match[1])
 			const fraction = match[2] === undefined ? 0 : Number(`0${match[2]}`)
+			// An integer part beyond the double range parses as Infinity and would become a non-finite Time.
+			if (!Number.isFinite(day) || !Number.isFinite(fraction)) return [Number.NaN, Number.NaN]
 			return [day, match[1].startsWith('-') ? -fraction : fraction]
 		}
 	}
@@ -133,17 +144,24 @@ function julianDate(value: number | string | null | undefined): readonly [number
 	return parsed === undefined ? undefined : [parsed, 0]
 }
 
+// Canonical key of a time-reference label: upper case without separators or whitespace.
+function timeReferenceKey(label: string) {
+	return label.toUpperCase().replaceAll(/[\s_/-]+/g, '')
+}
+
 // Larger magnitude of an asymmetric error pair; undefined when both are absent.
 function symmetricError(upper: number | undefined, lower: number | undefined) {
 	if (upper === undefined && lower === undefined) return undefined
 	return Math.max(Math.abs(upper ?? 0), Math.abs(lower ?? 0))
 }
 
-// Converts one NASA Exoplanet Archive `ps` row into a TransitEphemeris.
-// Parameters: row holds the archive columns as numbers or strings. options.timeReference supplies the
-// time reference of rows that carry none. Returns the ephemeris with T0 on the scale and origin named
-// by pl_tsystemref (a decimal-string T0 is split into day and fraction without rounding), the period in days, T14 converted from hours to days, 1σ uncertainties taken as
-// the larger magnitude of each asymmetric pair (undefined when both are absent), no covariance, and
+// Converts one NASA Exoplanet Archive `ps` or `pscomppars` row into a TransitEphemeris.
+// Parameters: row holds the archive columns as numbers or strings. The time reference is read from
+// pl_tsystemref, then pl_tranmid_systemref; when both are present they must name the same clock and
+// origin. options.timeReference supplies the reference of rows that carry neither. Returns the
+// ephemeris with T0 on the scale and origin named by the reference (a finite decimal-string T0 is
+// split into day and fraction without rounding), the period in days, T14 converted from hours to
+// days, 1σ uncertainties taken as the larger magnitude of each asymmetric pair (undefined when both are absent), no covariance, and
 // the coordinates in radians when present. Rejects a row with a missing epoch, period, duration, or
 // time reference, an unsupported reference such as plain 'JD', or an invalid value, instead of
 // guessing. Separators and case of the reference are ignored ('BJD_TDB' = 'BJD-TDB' = 'bjd/tdb').
@@ -155,9 +173,13 @@ export function exoplanetArchiveTransitEphemeris(row: ExoplanetArchiveRow, optio
 	if (period === undefined) return { success: false, reason: 'missingPeriod' }
 	if (hours === undefined) return { success: false, reason: 'missingDuration' }
 
-	const label = row.pl_tsystemref?.trim() || options.timeReference?.trim()
+	const tableReference = row.pl_tsystemref?.trim()
+	const compositeReference = row.pl_tranmid_systemref?.trim()
+	if (tableReference && compositeReference && timeReferenceKey(tableReference) !== timeReferenceKey(compositeReference)) return { success: false, reason: 'conflictingTimeReference' }
+	const timeReferenceSource: ExoplanetArchiveTimeReferenceSource = tableReference ? 'pl_tsystemref' : compositeReference ? 'pl_tranmid_systemref' : 'option'
+	const label = tableReference || compositeReference || options.timeReference?.trim()
 	if (!label) return { success: false, reason: 'missingTimeReference' }
-	const timeReference = TIME_REFERENCES[label.toUpperCase().replaceAll(/[\s_/-]+/g, '')]
+	const timeReference = TIME_REFERENCES[timeReferenceKey(label)]
 	if (timeReference === undefined) return { success: false, reason: 'unsupportedTimeReference' }
 
 	const errors = [row.pl_tranmiderr1, row.pl_tranmiderr2, row.pl_orbpererr1, row.pl_orbpererr2, row.pl_trandurerr1, row.pl_trandurerr2].map(numeric)
@@ -188,5 +210,6 @@ export function exoplanetArchiveTransitEphemeris(row: ExoplanetArchiveRow, optio
 		rightAscension: ra === undefined ? undefined : deg(ra),
 		declination: dec === undefined ? undefined : deg(dec),
 		assumedScale: timeReference.assumed,
+		timeReferenceSource,
 	}
 }

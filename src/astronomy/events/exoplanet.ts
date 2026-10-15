@@ -1,4 +1,4 @@
-import { SPEED_OF_LIGHT_AU_DAY } from '../../core/constants'
+import { ELB, ELG, SPEED_OF_LIGHT_AU_DAY } from '../../core/constants'
 import { type Vec3, vecDot, vecNormalize } from '../../math/linear-algebra/vec3'
 import type { PositionOverTime } from '../coordinates/astrometry'
 import { barycentricJulianDate, receptionFromBarycentricJulianDate } from '../coordinates/correction'
@@ -7,9 +7,10 @@ import type { GeographicPosition } from '../observer/location'
 import { type Time, Timescale, tdb, time, timeShift, timeSubtract, utc } from '../time/time'
 import { type VisibilityConstraints, type VisibilityInterval, type VisibilitySources, visibilityWindows } from './visibility'
 
-// Observable exoplanet transits from a published linear ephemeris Tn = T0 + n·P. Mid-transit, ingress
-// (first contact), and egress (fourth contact) are predicted on BJD_TDB, the barycentric clock of the
-// ephemeris, with the 1σ timing uncertainty σ²(Tn) = σ²(T0) + n²σ²(P) + 2n·Cov(T0, P). Each event is
+// Observable exoplanet transits from a published linear ephemeris Tn = T0 + n·P. The cycles advance on
+// the ephemeris' own clock and origin, and each mid-transit, ingress (first contact), and egress (fourth
+// contact) is then converted to BJD_TDB at its own instant, with the 1σ timing uncertainty
+// σ²(Tn) = σ²(T0) + n²σ²(P) + 2n·Cov(T0, P). Each event is
 // then mapped to the UTC instant its light reaches the observer by inverting the BJD_TDB correction,
 // and the required observing span (transit plus baselines plus a timing margin) is cut by the
 // visibilityWindows limits. Times are days unless documented otherwise, angles are radians, and the
@@ -23,14 +24,18 @@ export type TransitEpochReference = 'barycentric' | 'heliocentric'
 // A published linear transit ephemeris. External catalogs are converted into this shape by their
 // adapters; the prediction itself never parses catalog fields.
 export interface TransitEphemeris {
-	// Reference mid-transit epoch T0. Its scale names the clock: TDB for BJD_TDB, while UTC, TT, and
-	// TCB stamps are converted to TDB at T0 before cycles are counted.
+	// Reference mid-transit epoch T0. Its scale names the clock of the ephemeris: TDB for BJD_TDB.
+	// UTC, TAI, TT, and UT1 epochs are moved to TDB at T0 and their days are taken as TDB days (leap
+	// seconds are clock labels, not elapsed time); TCB and TCG days are rescaled to TDB by 1 − L_B or
+	// 1 − L_G, together with the duration, uncertainties, and covariance.
 	readonly epoch: Time
-	// Origin of T0's light-time correction. A heliocentric epoch needs an SSB-to-Sun path.
+	// Origin of the light-time correction of every predicted instant. A heliocentric (HJD) ephemeris
+	// is propagated on the Sun's clock and each instant is moved to BJD with the Sun's position at that
+	// instant, so it needs an SSB-to-Sun path.
 	readonly reference: TransitEpochReference
-	// Orbital period P in days, positive.
+	// Orbital period P in days of the epoch's scale, positive.
 	readonly period: number
-	// Total transit duration T14 (first to fourth contact) in days, in (0, period).
+	// Total transit duration T14 (first to fourth contact) in days of the epoch's scale, in (0, period).
 	readonly duration: number
 	// 1σ uncertainty of T0 in days. Omitted means 0 and is flagged.
 	readonly epochUncertainty?: number
@@ -82,17 +87,18 @@ export interface ExoplanetTransitEvent {
 	readonly coverage: number
 	// Visible fraction of observed ingress to observed egress, on [0, 1].
 	readonly transitCoverage: number
-	// Coverage reaches options.minimumCoverage and the timing uncertainty is acceptable.
+	// Part of the transit itself is visible, transitCoverage reaches options.minimumTransitCoverage,
+	// coverage reaches options.minimumCoverage, and the timing uncertainty is acceptable.
 	readonly feasible: boolean
 	// Every reason that removed part of the required span or disqualified the event, in the
-	// ExoplanetTransitLimitation declaration order. Possibly non-empty for a feasible event when
-	// minimumCoverage is below 1.
+	// ExoplanetTransitLimitation declaration order. Possibly non-empty for a feasible event when a
+	// minimum coverage is below 1.
 	readonly limitations: readonly ExoplanetTransitLimitation[]
 }
 
 // Transit predictions over a search window.
 export interface ExoplanetTransitPrediction {
-	// T0 converted to BJD_TDB, the origin of every cycle.
+	// T0 converted to BJD_TDB.
 	readonly epoch: Time
 	// Chronological events whose required span overlaps the search window, feasible or not.
 	readonly events: readonly ExoplanetTransitEvent[]
@@ -107,8 +113,8 @@ export interface ExoplanetTransitOptions extends VisibilitySources {
 	readonly constraints?: VisibilityConstraints
 	// ICRS-oriented direction of the star for the visibility limits. Defaults to the fixed `direction`.
 	readonly targetAt?: PositionOverTime
-	// SSB-to-Sun path (AU). Applies the solar Shapiro term to the light-time inversion and converts a
-	// heliocentric T0; required for a heliocentric epoch.
+	// SSB-to-Sun path (AU). Applies the solar Shapiro term to the light-time inversion and moves the
+	// instants of a heliocentric ephemeris to BJD; required for a heliocentric ephemeris.
 	readonly sun?: EphemerisPath
 	// Non-negative out-of-transit baseline before ingress, in days. Defaults to 0.
 	readonly baselineBefore?: number
@@ -118,6 +124,9 @@ export interface ExoplanetTransitOptions extends VisibilitySources {
 	readonly timingSigma?: number
 	// Fraction of the required span, on [0, 1], that must be visible for a feasible event. Defaults to 1.
 	readonly minimumCoverage?: number
+	// Fraction of ingress to egress, on (0, 1], that must be visible for a feasible event. Defaults to 1.
+	// Some of the transit must be visible even when this is 0, so baselines alone never qualify.
+	readonly minimumTransitCoverage?: number
 	// Largest acceptable 1σ mid-transit uncertainty, in days. Omitted means unlimited.
 	readonly maximumUncertainty?: number
 	// Most events a search may return. Defaults to 10000.
@@ -130,6 +139,19 @@ const DEFAULT_MAXIMUM_EVENTS = 10000
 // Shortest constrained loss, in days (≈ 86 µs), that counts as removing time from a span. Rounding
 // of an unconstrained window is far below it, and any real constraint crossing is far above it.
 const LOSS_TOLERANCE = 1e-9
+
+// Rate d(TDB)/d(scale) that turns days of an ephemeris clock into TDB days. TCB and TCG run faster by
+// the IAU 2006 B3 and 2000 B1.9 defining constants L_B and L_G; the other scales tick SI seconds at
+// the TT rate, which TDB matches on average up to its ±1.7 ms periodic terms.
+function tdbRate(scale: Timescale) {
+	return scale === Timescale.TCB ? 1 - ELB : scale === Timescale.TCG ? 1 - ELG : 1
+}
+
+// Visible fraction of a span, snapped to 1 when the loss is below LOSS_TOLERANCE so rounding cannot
+// fail a full-coverage requirement.
+function coverageFraction(covered: number, total: number) {
+	return total - covered < LOSS_TOLERANCE ? 1 : covered / total
+}
 
 // 1σ uncertainty in days of the mid-transit time of cycle `cycle` of a linear ephemeris:
 // σ²(Tn) = σ²(T0) + n²σ²(P) + 2n·Cov(T0, P). epochUncertainty and periodUncertainty are 1σ in days and
@@ -172,38 +194,49 @@ function coveredDays(intervals: readonly VisibilityInterval[], from?: Time, to?:
 // Predicts the transits of an exoplanet whose required observing span overlaps [start, end] and
 // classifies their local observability.
 //
-// ephemeris is the linear ephemeris; T0 is converted to TDB and, for a heliocentric epoch, shifted to
-// BJD by (r☉ · n) / c with r☉ the SSB-to-Sun position at T0. direction is the ICRS direction of the
-// star, normalized here, used for the light time and, unless options.targetAt is given, for the
-// visibility limits. observer is the SSB-centered path of the site (as for barycentricJulianDate) and
-// location the same site for the topocentric TDB-TT term and the horizon. start and end bound the
-// search in any scale; they are converted to UTC at the site.
+// ephemeris is the linear ephemeris. Its T0 is moved to TDB and its days to TDB days (see
+// TransitEphemeris.epoch); cycle offsets then advance on that clock at the ephemeris' origin. A
+// barycentric instant is already BJD_TDB; a heliocentric instant h becomes h + (r☉(h) · n) / c with
+// r☉ the SSB-to-Sun position at h, so the Sun's reflex motion is applied cycle by cycle. direction is
+// the ICRS direction of the star, normalized here, used for the light time and, unless
+// options.targetAt is given, for the visibility limits. observer is the SSB-centered path of the site
+// (as for barycentricJulianDate) and location the same site for the topocentric TDB-TT term and the
+// horizon. start and end bound the search in any scale; they are converted to UTC at the site.
 //
-// Each cycle's contacts are offset on BJD_TDB by T14/2 from the center, and the required span adds
-// the baselines and timingSigma·contactUncertainty outside them. Span endpoints and contacts are mapped
-// to UTC reception instants with receptionFromBarycentricJulianDate; since BJD_TDB grows monotonically
-// with reception time, the overlap with the search window is decided on BJD_TDB without margins. The
-// visible part of each span is visibilityWindows over the span clipped to the window; when a
-// constraint removes time, each constraint group is searched alone to name the limitation. The coarse
-// step must resolve every constraint crossing inside a span.
+// Each cycle's contacts are offset by T14/2 from the center, and the required span adds the
+// baselines and timingSigma·contactUncertainty outside them. Contacts and span edges are converted to
+// BJD_TDB at their own instants and mapped to UTC reception instants with
+// receptionFromBarycentricJulianDate. Span edges grow monotonically with the cycle on BJD_TDB, and
+// BJD_TDB grows monotonically with reception time, so the overlap with the search window is decided
+// exactly on BJD_TDB by stepping the cycle bounds. The visible part of each span is visibilityWindows
+// over the span clipped to the window; when a constraint removes time, each constraint group is
+// searched alone to name the limitation. The coarse step must resolve every constraint crossing inside
+// a span. An event is feasible only when some of the transit itself is visible, so baselines alone
+// never qualify.
 //
 // Throws RangeError for a non-positive or non-finite period, a duration outside (0, period), a
 // covariance larger than σ(T0)·σ(P), a timing margin k·σ(P) not below P (event spans would no longer
-// be ordered), a heliocentric epoch without options.sun, a solar or lunar limit without its direction
-// callback, or more than options.maximumEvents events; a non-SSB-centered path throws Error. An empty
-// or reversed search window returns no events.
+// be ordered), a heliocentric ephemeris without options.sun, a solar or lunar limit without its
+// direction callback, or more than options.maximumEvents events; a non-SSB-centered path throws Error.
+// An empty or reversed search window returns no events.
 export function exoplanetTransits(ephemeris: TransitEphemeris, direction: Vec3, observer: EphemerisPath, location: GeographicPosition, start: Time, end: Time, options: ExoplanetTransitOptions = {}): ExoplanetTransitPrediction {
-	const { period, duration, reference } = ephemeris
-	const epochUncertainty = ephemeris.epochUncertainty ?? 0
-	const periodUncertainty = ephemeris.periodUncertainty ?? 0
-	const covariance = ephemeris.covariance ?? 0
-	const durationUncertainty = ephemeris.durationUncertainty ?? 0
-	const { constraints = {}, sun, baselineBefore = 0, baselineAfter = 0, timingSigma = 1, minimumCoverage = 1, maximumUncertainty, maximumEvents = DEFAULT_MAXIMUM_EVENTS } = options
+	const { reference } = ephemeris
+	const { constraints = {}, sun, baselineBefore = 0, baselineAfter = 0, timingSigma = 1, minimumCoverage = 1, minimumTransitCoverage = 1, maximumUncertainty, maximumEvents = DEFAULT_MAXIMUM_EVENTS } = options
 
 	// A non-positive period never advances the cycle scan, and a contact pair wider than the period
 	// would let neighbouring events swap order.
-	if (!(period > 0 && Number.isFinite(period))) throw new RangeError('transit period must be positive and finite')
-	if (!(duration > 0 && duration < period)) throw new RangeError('transit duration must be within (0, period)')
+	if (!(ephemeris.period > 0 && Number.isFinite(ephemeris.period))) throw new RangeError('transit period must be positive and finite')
+	if (!(ephemeris.duration > 0 && ephemeris.duration < ephemeris.period)) throw new RangeError('transit duration must be within (0, period)')
+
+	// Every interval of the ephemeris in TDB days.
+	const rate = tdbRate(ephemeris.epoch.scale)
+	const period = ephemeris.period * rate
+	const duration = ephemeris.duration * rate
+	const epochUncertainty = (ephemeris.epochUncertainty ?? 0) * rate
+	const periodUncertainty = (ephemeris.periodUncertainty ?? 0) * rate
+	const covariance = (ephemeris.covariance ?? 0) * rate * rate
+	const durationUncertainty = (ephemeris.durationUncertainty ?? 0) * rate
+
 	// An over-unity correlation makes the variance negative for some cycles: a silent 0 or NaN uncertainty.
 	if (!(covariance * covariance <= epochUncertainty * epochUncertainty * periodUncertainty * periodUncertainty * (1 + 1e-12))) throw new RangeError('transit epoch-period covariance exceeds the product of the uncertainties')
 	// Span edges must grow with the cycle for the bounded cycle scan to terminate on the right cycles.
@@ -221,10 +254,16 @@ export function exoplanetTransits(ephemeris: TransitEphemeris, direction: Vec3, 
 
 	const n = vecNormalize(direction)
 	const lightTime = sun === undefined ? undefined : { sun }
-	// A barycentric instant has no site: drop any location so no topocentric TDB term leaks in.
+	// T0 on TDB at the ephemeris' origin. A barycentric instant has no site: drop any location so no
+	// topocentric TDB term leaks in.
 	const t0 = tdb(ephemeris.epoch)
-	let epoch = time(t0.day, t0.fraction, Timescale.TDB)
-	if (reference === 'heliocentric') epoch = timeShift(epoch, vecDot(sun!.stateAt(epoch)[0], n) / SPEED_OF_LIGHT_AU_DAY)
+	const origin = time(t0.day, t0.fraction, Timescale.TDB)
+
+	// BJD_TDB of the ephemeris instant `offset` TDB days after T0, as days after T0. The Sun moves by
+	// about 13 m/s around the SSB, so the heliocentric shift is evaluated at each instant.
+	const barycentric = reference === 'heliocentric' ? (offset: number) => offset + vecDot(sun!.stateAt(timeShift(origin, offset))[0], n) / SPEED_OF_LIGHT_AU_DAY : (offset: number) => offset
+	const bjd = (offset: number) => timeShift(origin, barycentric(offset))
+	const epoch = bjd(0)
 
 	const from = timeShift(utc(start), 0)
 	from.location = location
@@ -232,48 +271,53 @@ export function exoplanetTransits(ephemeris: TransitEphemeris, direction: Vec3, 
 	to.location = location
 	if (!(timeSubtract(to, from) > 0)) return { epoch, events: [], flags }
 
-	// Search window on BJD_TDB, as day offsets from T0.
-	const lower = timeSubtract(barycentricJulianDate(from, n, observer, lightTime).time, epoch)
-	const upper = timeSubtract(barycentricJulianDate(to, n, observer, lightTime).time, epoch)
+	// Search window on BJD_TDB, as day offsets from the TDB origin.
+	const lower = timeSubtract(barycentricJulianDate(from, n, observer, lightTime).time, origin)
+	const upper = timeSubtract(barycentricJulianDate(to, n, observer, lightTime).time, origin)
 
 	const halfDuration = duration / 2
 	const contactSigma = (cycle: number) => Math.hypot(transitTimingUncertainty(cycle, epochUncertainty, periodUncertainty, covariance), durationUncertainty / 2)
-	// Span edges relative to T0; both grow with the cycle because timingSigma·σ(P) < P.
+	// Span edges on the ephemeris clock; both grow with the cycle because timingSigma·σ(P) < P.
 	const spanEnd = (cycle: number) => cycle * period + halfDuration + baselineAfter + timingSigma * contactSigma(cycle)
 	const spanStart = (cycle: number) => cycle * period - halfDuration - baselineBefore - timingSigma * contactSigma(cycle)
 
-	// The margin-free guesses bound the first cycle from above and the last from below; widening steps
-	// add the timing margin and are counted against the event cap.
+	// The margin-free guesses land within a few cycles of the bounds; stepping on the BJD_TDB edges
+	// makes them exact and is counted against the event cap.
 	let first = Math.ceil((lower - halfDuration - baselineAfter) / period)
 	let last = Math.floor((upper + halfDuration + baselineBefore) / period)
 	let steps = 0
-	while (spanEnd(first - 1) >= lower && ++steps <= maximumEvents) first--
-	while (spanStart(last + 1) <= upper && ++steps <= maximumEvents) last++
+	while (barycentric(spanEnd(first)) < lower && ++steps <= maximumEvents) first++
+	while (barycentric(spanEnd(first - 1)) >= lower && ++steps <= maximumEvents) first--
+	while (barycentric(spanStart(last)) > upper && ++steps <= maximumEvents) last--
+	while (barycentric(spanStart(last + 1)) <= upper && ++steps <= maximumEvents) last++
 	if (steps > maximumEvents || last - first + 1 > maximumEvents) throw new RangeError('too many transit events in the search window')
 
 	const targetAt = options.targetAt ?? (() => n)
 	const groups = constraintGroups(constraints)
 	const events: ExoplanetTransitEvent[] = []
 
-	const reception = (offset: number) => receptionFromBarycentricJulianDate(timeShift(epoch, offset), n, observer, location, lightTime)
+	const reception = (instant: Time) => receptionFromBarycentricJulianDate(instant, n, observer, location, lightTime)
 
 	for (let cycle = first; cycle <= last; cycle++) {
 		const centerOffset = cycle * period
 		const centerUncertainty = transitTimingUncertainty(cycle, epochUncertainty, periodUncertainty, covariance)
 		const contactUncertainty = contactSigma(cycle)
-		const startOffset = spanStart(cycle)
-		const endOffset = spanEnd(cycle)
+		const startOffset = barycentric(spanStart(cycle))
+		const endOffset = barycentric(spanEnd(cycle))
 
-		const observedIngress = reception(centerOffset - halfDuration)
-		const observedCenter = reception(centerOffset)
-		const observedEgress = reception(centerOffset + halfDuration)
-		const spanStartTime = reception(startOffset)
-		const spanEndTime = reception(endOffset)
+		const center = bjd(centerOffset)
+		const ingress = bjd(centerOffset - halfDuration)
+		const egress = bjd(centerOffset + halfDuration)
+		const observedIngress = reception(ingress)
+		const observedCenter = reception(center)
+		const observedEgress = reception(egress)
+		const spanStartTime = reception(timeShift(origin, startOffset))
+		const spanEndTime = reception(timeShift(origin, endOffset))
 
 		const limitations: ExoplanetTransitLimitation[] = []
+		const clipped = startOffset < lower || endOffset > upper
 		const clippedStart = startOffset < lower ? from : spanStartTime
 		const clippedEnd = endOffset > upper ? to : spanEndTime
-		const clipped = startOffset < lower || endOffset > upper
 		const clippedLength = timeSubtract(clippedEnd, clippedStart)
 		const visible = clippedLength > 0 ? visibilityWindows(targetAt, location, clippedStart, clippedEnd, constraints, options) : []
 		const removed = clippedLength > 0 && coveredDays(visible) < clippedLength - LOSS_TOLERANCE
@@ -290,15 +334,14 @@ export function exoplanetTransits(ephemeris: TransitEphemeris, direction: Vec3, 
 		const uncertain = maximumUncertainty !== undefined && !(centerUncertainty <= maximumUncertainty)
 		if (uncertain) limitations.push('timingUncertainty')
 
-		// An unclipped span without losses is exactly covered; rounding must not fail a full-coverage requirement.
-		const coverage = !clipped && !removed ? 1 : Math.min(1, coveredDays(visible) / timeSubtract(spanEndTime, spanStartTime))
-		const transitCoverage = !clipped && !removed ? 1 : Math.min(1, coveredDays(visible, observedIngress, observedEgress) / timeSubtract(observedEgress, observedIngress))
+		const coverage = coverageFraction(coveredDays(visible), timeSubtract(spanEndTime, spanStartTime))
+		const transitCoverage = coverageFraction(coveredDays(visible, observedIngress, observedEgress), timeSubtract(observedEgress, observedIngress))
 
 		events.push({
 			cycle,
-			center: timeShift(epoch, centerOffset),
-			ingress: timeShift(epoch, centerOffset - halfDuration),
-			egress: timeShift(epoch, centerOffset + halfDuration),
+			center,
+			ingress,
+			egress,
 			centerUncertainty,
 			contactUncertainty,
 			observedIngress,
@@ -309,7 +352,7 @@ export function exoplanetTransits(ephemeris: TransitEphemeris, direction: Vec3, 
 			visible,
 			coverage,
 			transitCoverage,
-			feasible: !uncertain && coverage >= minimumCoverage,
+			feasible: !uncertain && transitCoverage > 0 && transitCoverage >= minimumTransitCoverage && coverage >= minimumCoverage,
 			limitations,
 		})
 	}

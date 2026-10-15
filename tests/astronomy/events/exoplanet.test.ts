@@ -12,8 +12,8 @@ import { exoplanetTransits, type TransitEphemeris, transitTimingUncertainty } fr
 import { altitudeOf } from '../../../src/astronomy/events/horizon'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
 import { type Time, Timescale, tdb, timeNormalize, timeShift, timeSubtract, timeToDate, timeYMDHMS } from '../../../src/astronomy/time/time'
-import { DAYSEC, SPEED_OF_LIGHT_AU_DAY } from '../../../src/core/constants'
-import { vecDot, vecMinus } from '../../../src/math/linear-algebra/vec3'
+import { DAYSEC, ELB, SPEED_OF_LIGHT_AU_DAY } from '../../../src/core/constants'
+import { vecDot, vecMinus, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 
@@ -221,6 +221,26 @@ describe('exoplanet transits', () => {
 			expect(event.feasible).toBe(false)
 			expect(event.limitations).toEqual(['targetAltitude', 'sunAltitude'])
 		}
+
+		// No visible second is never feasible, whatever the coverage requirements.
+		const relaxed = exoplanetTransits(wasp12(), WASP12_DIRECTION, LA_SILLA_PATH, LA_SILLA, start, timeShift(start, 2), { constraints, sunAt, minimumCoverage: 0, minimumTransitCoverage: 0 }).events
+		expect(relaxed.map((e) => e.feasible)).toEqual([false, false])
+	})
+
+	test('visible baselines alone never make a transit feasible', () => {
+		const ephemeris = wasp12()
+		const day = timeYMDHMS(2026, 10, 19, 12, 0, 0)
+		const options = { baselineBefore: 1 / 24, baselineAfter: 1 / 24, minimumCoverage: 0.05, minimumTransitCoverage: 0 }
+		const [event] = exoplanetTransits(ephemeris, WASP12_DIRECTION, LA_SILLA_PATH, LA_SILLA, day, timeShift(day, 1), options).events
+
+		// The window opens ten minutes after egress, leaving 50 min of the post-egress baseline.
+		const late = timeShift(event.observedEgress, 600 / DAYSEC)
+		const [baseline] = exoplanetTransits(ephemeris, WASP12_DIRECTION, LA_SILLA_PATH, LA_SILLA, late, timeShift(late, 1), options).events
+		expect(baseline.cycle).toBe(event.cycle)
+		expect(baseline.transitCoverage).toBe(0)
+		expect(baseline.coverage).toBeGreaterThan(0.05)
+		expect(baseline.feasible).toBe(false)
+		expect(baseline.limitations).toEqual(['searchWindow'])
 	})
 
 	test('the Moon on the line of sight excludes the event', () => {
@@ -248,7 +268,9 @@ describe('exoplanet transits', () => {
 		expect(clipped.transitCoverage).toBeCloseTo(1 - 600 / seconds(clipped.observedIngress, clipped.observedEgress), 9)
 		expect(clipped.coverage).toBeCloseTo(seconds(late, clipped.end) / seconds(clipped.start, clipped.end), 9)
 		expect(clipped.feasible).toBe(false)
-		expect(exoplanetTransits(ephemeris, WASP12_DIRECTION, LA_SILLA_PATH, LA_SILLA, late, timeShift(late, 1), { minimumCoverage: 0.9 }).events[0].feasible).toBe(true)
+		// Partial contacts qualify only when the transit requirement is relaxed as well.
+		expect(exoplanetTransits(ephemeris, WASP12_DIRECTION, LA_SILLA_PATH, LA_SILLA, late, timeShift(late, 1), { minimumCoverage: 0.9 }).events[0].feasible).toBe(false)
+		expect(exoplanetTransits(ephemeris, WASP12_DIRECTION, LA_SILLA_PATH, LA_SILLA, late, timeShift(late, 1), { minimumCoverage: 0.9, minimumTransitCoverage: 0.9 }).events[0].feasible).toBe(true)
 
 		// A window ending one second before the required span misses the event; one second after catches its edge.
 		const before = timeShift(event.start, -1 / DAYSEC)
@@ -261,19 +283,73 @@ describe('exoplanet transits', () => {
 		expect(edge.limitations).toEqual(['searchWindow'])
 	})
 
-	test('a heliocentric epoch is shifted by the Sun-barycenter light time', () => {
+	test('a heliocentric ephemeris applies the Sun-barycenter light time at each instant', () => {
 		const barycentric = wasp12()
 		const heliocentric: TransitEphemeris = { ...barycentric, reference: 'heliocentric' }
 		const start = timeYMDHMS(2026, 10, 19, 12, 0, 0)
 		const a = exoplanetTransits(barycentric, WASP12_DIRECTION, LA_SILLA_PATH, LA_SILLA, start, timeShift(start, 1), { sun: EPV00_SUN })
 		const b = exoplanetTransits(heliocentric, WASP12_DIRECTION, LA_SILLA_PATH, LA_SILLA, start, timeShift(start, 1), { sun: EPV00_SUN })
-		const shift = (vecDot(EPV00_SUN.stateAt(a.epoch)[0], WASP12_DIRECTION) / SPEED_OF_LIGHT_AU_DAY) * DAYSEC
+		const lightTime = (time: Time) => (vecDot(EPV00_SUN.stateAt(time)[0], WASP12_DIRECTION) / SPEED_OF_LIGHT_AU_DAY) * DAYSEC
 
-		expect(Math.abs(shift)).toBeGreaterThan(0.1)
-		expect(seconds(a.epoch, b.epoch)).toBeCloseTo(shift, 6)
-		expect(seconds(a.events[0].center, b.events[0].center)).toBeCloseTo(shift, 6)
-		expect(seconds(a.events[0].observedCenter, b.events[0].observedCenter)).toBeCloseTo(shift, 2)
+		// The Sun's reflex motion moves BJD - HJD from +1.22 s at T0 (2016) to -2.44 s ten years later.
+		expect(seconds(a.epoch, b.epoch)).toBeCloseTo(lightTime(a.epoch), 6)
+		expect(lightTime(a.epoch)).toBeCloseTo(1.223, 3)
+		expect(seconds(a.events[0].center, b.events[0].center)).toBeCloseTo(lightTime(a.events[0].center), 6)
+		expect(lightTime(a.events[0].center)).toBeCloseTo(-2.437, 3)
+		expect(seconds(a.events[0].egress, b.events[0].egress)).toBeCloseTo(lightTime(a.events[0].egress), 6)
+		expect(seconds(a.events[0].observedCenter, b.events[0].observedCenter)).toBeCloseTo(lightTime(a.events[0].center), 2)
 		expect(() => exoplanetTransits(heliocentric, WASP12_DIRECTION, LA_SILLA_PATH, LA_SILLA, start, timeShift(start, 1))).toThrow('sun path is required')
+	})
+
+	test('a moving Sun shifts distant heliocentric cycles and the window selection', () => {
+		const origin = timeNormalize(2461000, 0, 0, Timescale.TDB)
+		const ephemeris: TransitEphemeris = { epoch: origin, reference: 'heliocentric', period: 1, duration: 0.1, epochUncertainty: 0, periodUncertainty: 0, covariance: 0, durationUncertainty: 0 }
+		// The Sun leaves the SSB along the line of sight and is 0.005 AU toward the star after 300 days.
+		const solar = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.SUN), (time) => {
+			const d = (0.005 * timeSubtract(time, origin)) / 300
+			return [[d * WASP12_DIRECTION[0], d * WASP12_DIRECTION[1], d * WASP12_DIRECTION[2]], vecZero()]
+		})
+		const shift = (0.005 / SPEED_OF_LIGHT_AU_DAY) * DAYSEC
+
+		const day = timeShift(origin, 299.5)
+		const prediction = exoplanetTransits(ephemeris, WASP12_DIRECTION, LA_SILLA_PATH, LA_SILLA, day, timeShift(day, 1), { sun: solar })
+		expect(seconds(origin, prediction.epoch)).toBe(0)
+		expect(prediction.events).toHaveLength(1)
+
+		const [event] = prediction.events
+		expect(event.cycle).toBe(300)
+		expect(shift).toBeCloseTo(2.495, 3)
+		expect(seconds(timeShift(origin, 300), event.center)).toBeCloseTo(shift, 6)
+		expect(seconds(timeShift(origin, 299.95), event.ingress)).toBeCloseTo((shift * 299.95) / 300, 6)
+		expect(seconds(event.center, barycentricJulianDate(event.observedCenter, WASP12_DIRECTION, LA_SILLA_PATH, { sun: solar }).time)).toBeCloseTo(0, 6)
+
+		// A window opening 1 s before the shifted span end still holds the event, though a correction
+		// frozen at T0 would end the span 2.5 s earlier; 1 s after the end it is gone.
+		const opening = timeShift(event.end, -1 / DAYSEC)
+		const [edge] = exoplanetTransits(ephemeris, WASP12_DIRECTION, LA_SILLA_PATH, LA_SILLA, opening, timeShift(opening, 0.2), { sun: solar }).events
+		expect(edge.cycle).toBe(300)
+		expect(edge.limitations).toEqual(['searchWindow'])
+		expect(edge.coverage * seconds(edge.start, edge.end)).toBeCloseTo(1, 3)
+		const closed = timeShift(event.end, 1 / DAYSEC)
+		expect(exoplanetTransits(ephemeris, WASP12_DIRECTION, LA_SILLA_PATH, LA_SILLA, closed, timeShift(closed, 0.2), { sun: solar }).events).toEqual([])
+	})
+
+	test('a BJD_TCB ephemeris advances in TCB days', () => {
+		const origin = timeNormalize(2457000, 0.25, 0, Timescale.TCB)
+		const ephemeris: TransitEphemeris = { epoch: origin, reference: 'barycentric', period: 1, duration: 0.1, epochUncertainty: 1e-4, periodUncertainty: 1e-7, covariance: 5e-12, durationUncertainty: 1e-3 }
+		const day = timeShift(tdb(origin), 3651.5)
+		const [event] = exoplanetTransits(ephemeris, WASP12_DIRECTION, LA_SILLA_PATH, LA_SILLA, day, timeShift(day, 1)).events
+
+		// ERFA TCB -> TDB of T0 + n·P counted on TCB; the TDB-day shortcut drifts by L_B·n days.
+		expect(event.cycle).toBe(3652)
+		expect(seconds(tdb(timeShift(origin, 3652)), event.center)).toBeCloseTo(0, 6)
+		expect(seconds(tdb(timeShift(origin, 3652.05)), event.egress)).toBeCloseTo(0, 6)
+		expect(seconds(timeShift(tdb(origin), 3652), event.center)).toBeCloseTo(-ELB * 3652 * DAYSEC, 4)
+		expect(ELB * 3652 * DAYSEC).toBeCloseTo(4.89, 2)
+
+		// Uncertainties and covariance are rescaled to TDB days with the same rate.
+		expect((event.centerUncertainty / transitTimingUncertainty(3652, 1e-4, 1e-7, 5e-12) - 1) / ELB).toBeCloseTo(-1, 4)
+		expect((event.contactUncertainty / Math.hypot(transitTimingUncertainty(3652, 1e-4, 1e-7, 5e-12), 5e-4) - 1) / ELB).toBeCloseTo(-1, 4)
 	})
 
 	test('a UTC-stamped barycentric epoch is moved to TDB before cycles are counted', () => {
