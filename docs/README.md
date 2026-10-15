@@ -622,11 +622,13 @@ The reception instant `t` is first converted to TDB (the Einstein delay). The R�
 
 `barycentricJulianDate(time, direction, observer, options?)` takes the reception `Time` in any scale (UTC goes through the leap-second table, and `time.location` adds the topocentric TDB−TT term of up to about 2 µs), the ICRS direction to the source at the observation epoch (normalized internally; apply proper motion first), and an SSB-centered `EphemerisPath` for the observer. For a ground site compose an SSB-to-Earth path with `earthObserverEphemerisPath` (see [Ephemeris Path Composition](#ephemeris-path-composition)); for a spacecraft pass its own barycentric path. A path with another center throws, because a Sun-centered one would produce an HJD labelled as BJD; path errors, such as an SPK segment that does not cover the date, propagate. `options.sun`, an SSB-to-Sun path, removes the solar Shapiro propagation delay in the TEMPO2/PINT form `−2GM☉/c³ · ln((|s| + s · n) / 1 AU)` with `s` the Sun-to-observer vector, so `shapiro` is `+2GM☉/c³ · ln((|s| + s · n) / 1 AU)`, negative near the Sun; a line of sight through the solar disk is clamped at the limb and flagged. `options.distance` (AU) replaces the plane-wave Rømer term with the exact spherical-wavefront one; the curvature it adds is at most `(1 AU)² / (2cd)`, about 120 µs at 10 pc. `options.timestampUncertainty` (seconds) enters the error budget; see [Exposure Timing](#exposure-timing) for the instant and uncertainty of an exposure.
 
+`receptionFromBarycentricJulianDate(bjd, direction, observer, location?, options?)` is the inverse: it finds the UTC instant at which a signal with the given BJD_TDB reaches the observer, so that `barycentricJulianDate` of that instant returns `bjd` within about 1 µs. It iterates `reception = bjd − Δ(reception)`, which converges in a few steps because the correction changes by at most about 1e-4 s per second; `location` supplies the topocentric TDB−TT term and is attached to the returned UTC `Time`. Use it to turn published BJD_TDB event times, such as transit centers, into local clock times; see [Exoplanet Transit Prediction](#exoplanet-transit-prediction).
+
 `time` in the result is BJD_TDB as a two-part TDB `Time`, not UTC and not TCB; `reception` is the same instant on TDB before the correction. `romer`, `shapiro`, and `correction` are seconds to add. `model` records the terms applied (`romer: 'planeWave' | 'sphericalWave'`, `shapiro`, and `tdb: 'input' | 'topocentric' | 'geocentric'`). `quality.earthOrientation` is `'notRequired'` for a geocentric observer, `'tabulated'` when the IERS tables cover the date, `'missing'` when they do not and UT1−UTC falls back to an edge value or 0, and `'custom'` for overridden providers; `quality.sunElongation` (radians) and `quality.occultedBySun` describe the solar geometry, measured from the SSB when no Sun path is given. `errorBudget` lists, in seconds, the timestamp uncertainty, the missing-EOP bound (about 1.4 µs), the omitted topocentric TDB term (about 2 µs), and, without `options.sun`, a worst-case bound on the omitted solar Shapiro term over every Sun position within 0.011 AU of the SSB (about 0.2 µs at quadrature, 7 µs at opposition, and 113 µs at the limb), since the observer path alone does not fix where the Sun is. `total` is their root-sum-square, a heuristic scale that mixes a 1σ uncertainty with worst-case bounds rather than a confidence interval or a guaranteed limit; planetary Shapiro delays (below about 0.2 µs) and an omitted wavefront curvature are not included. The ephemeris sets the floor of the Rømer term: each kilometer of observer position error is 3.3 µs, so use an SPK kernel rather than the analytical `eraEpv00` Earth for microsecond work.
 
 ```ts
 import fs from 'fs/promises'
-import { barycentricJulianDate } from 'nebulosa/src/astronomy/coordinates/correction'
+import { barycentricJulianDate, receptionFromBarycentricJulianDate } from 'nebulosa/src/astronomy/coordinates/correction'
 import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
 import { readDaf } from 'nebulosa/src/astronomy/ephemeris/kernels/daf'
 import { Naif } from 'nebulosa/src/astronomy/ephemeris/kernels/naif'
@@ -635,7 +637,7 @@ import { composeEphemerisPaths, customEphemerisEndpoint } from 'nebulosa/src/ast
 import { earthObserverEphemerisPath, spkEphemerisPath } from 'nebulosa/src/astronomy/ephemeris/path.adapter'
 import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
 import { exposureInterval } from 'nebulosa/src/astronomy/time/exposure'
-import { Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
 import { fileHandleSource } from 'nebulosa/src/io/file'
 import { deg, hour } from 'nebulosa/src/math/units/angle'
 import { meter } from 'nebulosa/src/math/units/distance'
@@ -662,6 +664,11 @@ console.log(bjd.romer, bjd.shapiro) // 11.82055 2.0e-7 — seconds to add
 console.log(bjd.model) // { romer: 'planeWave', shapiro: true, tdb: 'topocentric' }
 console.log(bjd.quality.earthOrientation) // 'missing' — no IERS tables loaded
 console.log(bjd.errorBudget.earthOrientation, bjd.errorBudget.total) // 1.4e-6 0.005 — seconds
+
+// Back from BJD_TDB to the UTC reception instant: the exposure midpoint, 03:02:30.06.
+const reception = receptionFromBarycentricJulianDate(bjd.time, eraS2c(hour(5.5), deg(-5)), observer, location, { sun })
+
+console.log(timeToDate(reception)) // [2024, 3, 10, 3, 2, 30, 60] — UTC
 ```
 
 ### Binary PCK Rotation
@@ -1596,6 +1603,84 @@ The remaining routines, by family:
 - Astrometry parameters: `eraApci13`, `eraApci`, `eraApcg`, `eraApcs`, `eraApco`, `eraApco13`, `eraApio13`, `eraApio`, `eraPvtob`, `eraRefco`; transformations `eraAtccq`, `eraAtciq`, `eraAtciqz`, `eraAtciqn`, `eraAtioq`, `eraAtoiq`, `eraAticq`, `eraAticqn`, `eraAtci13`, `eraAtco13`, `eraAtoc13`, `eraAtio13`, `eraAtoi13`, `eraAtic13` and `eraAtcc13`.
 - Horizontal and tangent plane: `eraAe2hd`, `eraHd2ae`, `eraHd2pa`, `eraTpsts`, `eraTpstv`, `eraTpors`, `eraTporv`, `eraTpxes`, `eraTpxev`; the geodetic routines `eraGc2Gde`, `eraGd2Gce` take the ellipsoid radius and flattening as arguments.
 - Planets and Moon: `eraPlan94` (`np` from 0 for Mercury to 7 for Neptune, with the Earth–Moon barycentre as 2; an index outside 0 to 7 throws a TypeError), `eraEpv00` and `eraMoon98`.
+
+### Exoplanet Transit Prediction
+
+A transiting exoplanet dims its star once per orbit. Published ephemerides give a reference mid-transit epoch `T0`, usually in BJD_TDB (see [Barycentric Julian Date](#barycentric-julian-date)), a period `P`, and a total duration `T14` from first to fourth contact. Cycle `n` is centered at `Tn = T0 + n·P`, and its 1σ timing uncertainty grows with the distance from `T0`:
+
+```text
+σ²(Tn) = σ²(T0) + n²·σ²(P) + 2n·Cov(T0, P)
+```
+
+`exoplanetTransits(ephemeris, direction, observer, location, start, end, options?)` lists every transit whose required observing span overlaps the search window and says whether it can be observed. `ephemeris` is a `TransitEphemeris`: `epoch` (a `Time` whose scale names the clock; UTC, TT, and TCB stamps are converted to TDB at `T0`), `reference` (`'barycentric'` for BJD or `'heliocentric'` for HJD, which needs `options.sun` and is shifted to BJD by the Sun's barycentric light time), `period` and `duration` in days, and optional 1σ `epochUncertainty`, `periodUncertainty`, `durationUncertainty` (days) and `covariance` (days²). `direction` is the ICRS direction of the star (apply proper motion first), `observer` the SSB-centered path of the site as for `barycentricJulianDate`, and `location` the same site, used for the horizon and the topocentric TDB term; `start` and `end` are converted to UTC. The ephemeris is strictly periodic: transit-timing variations and orbital decay are not modeled.
+
+Each event keeps `center`, `ingress`, and `egress` on BJD_TDB, the ephemeris clock, with `centerUncertainty` and `contactUncertainty = √(σ²(Tn) + σ²(T14)/4)` in days. `observedIngress`, `observedCenter`, and `observedEgress` are the UTC instants the light reaches the site, from `receptionFromBarycentricJulianDate`; the observed transit differs from `T14` by the change of the light time across it, about 1 s for a 3 h transit. `start` and `end` (UTC) bound the required span: ingress minus `options.baselineBefore`, egress plus `options.baselineAfter` (days, default 0), and `options.timingSigma` (default 1) times `contactUncertainty` on each side. `options.constraints` takes the limits of [Observing Visibility Windows](#observing-visibility-windows), with `sunAt`, `moonAt`, `step`, and `tolerance` passed in the same options; `visible` lists the UTC stretches of the span that satisfy all of them inside the search window. `coverage` is the visible fraction of the whole span and `transitCoverage` that of ingress to egress. `feasible` requires `coverage ≥ options.minimumCoverage` (default 1) and, when `options.maximumUncertainty` (days) is set, a `centerUncertainty` within it. `limitations` names every cause that removed time or disqualified the event: `'searchWindow'`, `'targetAltitude'` (altitude or airmass), `'sunAltitude'`, `'sunSeparation'`, `'moonSeparation'`, or `'timingUncertainty'`; it can be non-empty for a feasible event when `minimumCoverage` is below 1. `flags` reports missing uncertainty inputs taken as 0. A non-positive period, a duration outside `(0, P)`, a covariance above `σ(T0)·σ(P)`, a margin `timingSigma·σ(P)` not below `P`, a heliocentric epoch without `options.sun`, a solar or lunar limit without its callback, or more than `options.maximumEvents` (default 10000) events throws a `RangeError`; an empty window returns no events. `transitTimingUncertainty(n, σT0, σP, cov)` evaluates the uncertainty formula alone.
+
+`exoplanetArchiveTransitEphemeris(row, options?)` converts one NASA Exoplanet Archive `ps` row (TAP JSON numbers or CSV strings) into a `TransitEphemeris`. `pl_tsystemref` sets the clock and origin, ignoring case and separators: `BJD-TDB`, `BJD-TT`, `BJD-UTC`, `BJD-TCB`, `HJD-UTC`, and `HJD-TDB` are explicit; plain `BJD` is taken as BJD_TDB and plain `HJD` as HJD_UTC, with `assumedScale: true`; `JD` and other labels are rejected. Rows without a reference, such as composite-parameter rows, can be given one with `options.timeReference`. The duration is converted from hours, each asymmetric error pair becomes its larger magnitude, and the covariance stays undefined because the archive does not publish it. A decimal-string `pl_tranmid` keeps every digit; a JSON number is already a double, good to about 40 µs. Missing or invalid fields give `{ success: false, reason }`.
+
+```ts
+import { exoplanetArchiveTransitEphemeris } from 'nebulosa/src/adapters/catalogs/exoplanet.archive'
+import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { Naif } from 'nebulosa/src/astronomy/ephemeris/kernels/naif'
+import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { composeEphemerisPaths, customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from 'nebulosa/src/astronomy/ephemeris/path'
+import { earthObserverEphemerisPath } from 'nebulosa/src/astronomy/ephemeris/path.adapter'
+import { exoplanetTransits, transitTimingUncertainty } from 'nebulosa/src/astronomy/events/exoplanet'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { type Time, Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+// WASP-12 b from the archive `ps` table (Leonardi et al. 2024).
+const result = exoplanetArchiveTransitEphemeris({
+	ra: 97.636645,
+	dec: 29.6722662,
+	pl_tranmid: '2457607.519305',
+	pl_tranmiderr1: 0.000032,
+	pl_tranmiderr2: -0.000032,
+	pl_orbper: 1.091418901,
+	pl_orbpererr1: 0.000000018,
+	pl_orbpererr2: -0.000000018,
+	pl_trandur: 3.001,
+	pl_trandurerr1: 0.0043,
+	pl_trandurerr2: -0.0043,
+	pl_tsystemref: 'BJD-TDB',
+})
+
+if (!result.success) throw new Error(result.reason)
+const { ephemeris, rightAscension, declination } = result
+
+// Teide, with the SSB -> site path from VSOP87E and the Sun and Moon directions for the limits.
+const site = geodeticLocation(deg(-16.5097), deg(28.3), meter(2390))
+const earthPath = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.EARTH), earth)
+const observer = composeEphemerisPaths(earthPath, earthObserverEphemerisPath(site, customEphemerisEndpoint('teide')))
+const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0])
+const moonAt = (time: Time) => moon(time)[0]
+
+// Two nights, each spanning midnight: above 30°, astronomical darkness, 20° from the Moon, 1 h baselines.
+const start = timeYMDHMS(2026, 10, 18, 19, 0, 0, Timescale.UTC)
+const end = timeYMDHMS(2026, 10, 20, 7, 0, 0, Timescale.UTC)
+const constraints = { minimumAltitude: deg(30), maximumSunAltitude: deg(-18), minimumMoonSeparation: deg(20) }
+const { events, flags } = exoplanetTransits(ephemeris, eraS2c(rightAscension!, declination!), observer, site, start, end, { constraints, sunAt, moonAt, baselineBefore: 1 / 24, baselineAfter: 1 / 24, minimumCoverage: 0.8 })
+
+console.log(flags) // ['missingCovariance'] — the archive has no Cov(T0, P)
+console.log(events.map((e) => e.cycle)) // [3413, 3414]
+
+const [first, second] = events
+console.log(second.center.day, second.center.fraction) // 2461334 -0.376566986 — BJD_TDB
+console.log(second.centerUncertainty * 86400, second.contactUncertainty * 86400) // 5.99 9.78 — seconds
+console.log(timeToDate(second.observedIngress).slice(0, 6)) // [2026, 10, 20, 1, 23, 50] — UTC
+console.log(timeToDate(second.observedEgress).slice(0, 6)) // [2026, 10, 20, 4, 23, 52] — UTC
+
+// Cycle 3413 rises through 30° only at 01:09 UTC; cycle 3414 loses just the start of its baseline.
+console.log(first.coverage, first.transitCoverage, first.feasible, first.limitations) // 0.410 0.350 false ['targetAltitude']
+console.log(second.coverage, second.transitCoverage, second.feasible, second.limitations) // 0.861 1 true ['targetAltitude']
+
+// Ten thousand cycles out, the period error dominates.
+console.log(transitTimingUncertainty(10000, 0.000032, 0.000000018) * 86400) // 15.80 — seconds
+```
 
 ### Exposure Timing
 
