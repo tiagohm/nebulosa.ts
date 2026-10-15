@@ -171,13 +171,17 @@ export interface OccultationPathSample {
 export interface OccultationPath {
 	// Model used.
 	readonly mode: OccultationPathMode
-	// Samples in chronological order, covering every interval in which the shadow touches the Earth, including
-	// refined samples where a line meets or leaves the limb.
+	// Samples in chronological order, covering every `coverage` interval, including refined samples where a line
+	// meets or leaves the limb.
 	readonly samples: readonly OccultationPathSample[]
 	// Intervals in which any part of the shadow touches the Earth (first to last external contact).
 	readonly shadow: readonly TimeInterval[]
 	// Intervals in which the shadow axis meets the Earth (central start to central end).
 	readonly central: readonly TimeInterval[]
+	// Intervals spanned by the samples, one per pass: the `shadow` intervals, or, with `uncertainty`, the wider
+	// intervals in which the N-sigma corridor may touch the Earth, so the corridor lines are not cut at the nominal
+	// contacts. Samples outside `shadow` carry only the line points that genuinely meet the Earth.
+	readonly coverage: readonly TimeInterval[]
 }
 
 // Line families that can be extracted as polylines.
@@ -604,6 +608,26 @@ function projectedSigma(context: ShadowContext, current: ShadowAxis, direction: 
 	return Math.sqrt(Math.max(variance, 0))
 }
 
+// Upper bound (AU) of how far beyond the shadow edge a corridor line can sit: sigma times a bound of the
+// cross-track sigma. The cross-track variance is a quadratic form of the in-plane covariance along one direction,
+// so it never exceeds the trace of that covariance projected on the fundamental plane (body) or of the tangent-
+// plane covariance (source), each scaled by its lever arm. Conservative by up to sqrt(2) for isotropic errors.
+function corridorReach(context: ShadowContext, current: ShadowAxis) {
+	if (context.uncertainty === undefined) return 0
+	const { body, source } = context.uncertainty
+	let variance = 0
+
+	if (body !== undefined) {
+		const trace = body[0] + body[4] + body[8]
+		const along = vecDot(current.axisGcrs, matMulVec(body, current.axisGcrs))
+		variance += (trace - along) * current.bodyLever * current.bodyLever
+	}
+
+	if (source !== undefined) variance += (source[0] + source[3]) * current.sourceLever * current.sourceLever
+
+	return context.sigma * Math.sqrt(Math.max(variance, 0))
+}
+
 // Evaluates every line family at the TDB epoch `time` (an `offset` days after the TDB start).
 function evaluateSample(context: ShadowContext, time: Time, offset: number, scale: Time['scale']): EvaluatedSample {
 	// Over the ±1 s stencil only the Earth rotation angle changes appreciably (precession, nutation and polar
@@ -808,14 +832,21 @@ export function occultationPath(target: PositionAndVelocityOverTime, source: Vec
 		const axis = scannedAxis(time)
 		return Math.min(-silhouetteDistance(context, axis), causalMargin(axis))
 	}
+	// The widest offset a line can reach: the cone radius at the near side of the Earth plus the corridor reach.
+	const coverageMargin = (time: Time) => {
+		const axis = scannedAxis(time)
+		const reach = axis.radius + context.equatorialRadius * axis.slope + corridorReach(context, axis)
+		return Math.min(reach - silhouetteDistance(context, axis), causalMargin(axis))
+	}
 
 	const shadow = searchIntervals([shadowMargin], begin, end, { step, tolerance })
 	const central = searchIntervals([centralMargin], begin, end, { step, tolerance })
+	const coverage = context.uncertainty === undefined ? shadow : searchIntervals([coverageMargin], begin, end, { step, tolerance })
 	scanned.clear()
 
 	const evaluated: EvaluatedSample[] = []
 
-	for (const interval of shadow) {
+	for (const interval of coverage) {
 		const first = timeSubtract(interval.start, begin)
 		const last = timeSubtract(interval.end, begin)
 		const offsets = [first]
@@ -827,7 +858,7 @@ export function occultationPath(target: PositionAndVelocityOverTime, source: Vec
 		for (let i = 0; i < offsets.length; i++) {
 			const offset = offsets[i]
 			// The interval endpoints are evaluated at the refined contact instants themselves, so the first and last
-			// samples of a pass carry exactly the times reported in `shadow`.
+			// samples of a pass carry exactly the times reported in `coverage`.
 			const time = i === 0 ? interval.start : i === offsets.length - 1 ? interval.end : timeShift(begin, offset)
 			const current = evaluateSample(context, time, offset, scale)
 
@@ -847,7 +878,8 @@ export function occultationPath(target: PositionAndVelocityOverTime, source: Vec
 	for (let i = 0; i < evaluated.length; i++) if (i === 0 || evaluated[i].offset !== evaluated[i - 1].offset) samples.push(evaluated[i].sample)
 
 	const convert = (interval: TimeInterval): TimeInterval => ({ start: timeConvert(interval.start, scale), end: timeConvert(interval.end, scale) })
-	return { mode, samples, shadow: shadow.map(convert), central: central.map(convert) }
+	const convertedShadow = shadow.map(convert)
+	return { mode, samples, shadow: convertedShadow, central: central.map(convert), coverage: coverage === shadow ? convertedShadow : coverage.map(convert) }
 }
 
 // Selects the ground point of a line family from a sample.
@@ -867,24 +899,24 @@ function linePoint(sample: OccultationPathSample, line: OccultationPathLine) {
 }
 
 // Extracts one line family of a path as polylines for mapping. A polyline breaks wherever the line leaves the
-// Earth and between two passes: a sample opens a new polyline when it belongs to a later `shadow` interval than
-// the previous one, so separate passes are never joined across the time when no shadow touches the Earth. With
-// `unwrap` false (default) longitudes stay in [-PI, PI] and a polyline is also split where it crosses the
-// antimeridian, ending and restarting on the seam at a latitude and time interpolated linearly in
-// longitude between the two samples. With `unwrap` true each polyline keeps continuous unwrapped longitudes.
+// Earth and between two passes: a sample opens a new polyline when it belongs to a later `coverage` interval
+// than the previous one, so separate passes are never joined across a time when neither the shadow nor its
+// corridor touches the Earth. With `unwrap` false (default) longitudes stay in [-PI, PI] and a polyline is also
+// split where it crosses the antimeridian, ending and restarting on the seam at a latitude and time interpolated
+// linearly in longitude between the two samples. With `unwrap` true each polyline keeps continuous unwrapped longitudes.
 // A track passing directly over a pole has a longitude jump near PI between the two samples bracketing it,
 // which is preserved. Rendering (SVG, GeoJSON) is left to the caller.
 export function occultationPathPolylines(path: OccultationPath, line: OccultationPathLine, unwrap: boolean = false): OccultationPathVertex[][] {
 	const polylines: OccultationPathVertex[][] = []
 	let polyline: OccultationPathVertex[] | undefined
 	let previous: OccultationPathVertex | undefined
-	// Index of the shadow interval holding the current sample; samples are chronological, so it only advances.
+	// Index of the coverage interval holding the current sample; samples are chronological, so it only advances.
 	let pass = 0
 
 	for (const sample of path.samples) {
 		const point = linePoint(sample, line)
 		let next = pass
-		while (next + 1 < path.shadow.length && timeSubtract(sample.time, path.shadow[next + 1].start) >= 0) next++
+		while (next + 1 < path.coverage.length && timeSubtract(sample.time, path.coverage[next + 1].start) >= 0) next++
 
 		if (next !== pass) {
 			pass = next

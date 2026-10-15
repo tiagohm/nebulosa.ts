@@ -239,6 +239,45 @@ describe('uncertainty corridor', () => {
 		expect(uncertainty.alongTrack / (RANGE * error)).toBeCloseTo(1, 6)
 	})
 
+	test('a corridor line is sampled before and after the nominal contacts', () => {
+		// The shadow crosses the disk toward +y at z = A / 2; the 3-sigma right corridor line, 400 km further south,
+		// cuts a longer chord and meets the limb before the shadow edge does and leaves after it.
+		const target = syntheticBody([RANGE, -kilometer(8000), A / 2], [0, SPEED, 0])
+		const body = gcrsCovariance([sigma * sigma * 100, 0, 0, 0, sigma * sigma * 100, 0, 0, 0, sigma * sigma * 100])
+		const path = occultationPath(target, star, geocenter, T0, timeShift(T0, 1600 / DAYSEC), { radius: RADIUS, mode: 'approximate', step: 5 / DAYSEC, uncertainty: { body, sigma: 3 } })
+
+		expect(path.shadow).toHaveLength(1)
+		expect(timeSubtract(path.shadow[0].start, T0)).toBeGreaterThan(0)
+		expect(path.coverage).toHaveLength(1)
+		expect(timeSubtract(path.coverage[0].start, path.shadow[0].start)).toBeLessThan(0)
+		expect(timeSubtract(path.coverage[0].end, path.shadow[0].end)).toBeGreaterThan(0)
+
+		const corridor = path.samples.filter((sample) => sample.uncertainty?.right !== undefined)
+		expect(timeSubtract(corridor[0].time, path.shadow[0].start)).toBeLessThan(0)
+		expect(timeSubtract(corridor.at(-1)!.time, path.shadow[0].end)).toBeGreaterThan(0)
+		// Outside the nominal shadow only corridor points exist.
+		for (const sample of path.samples) {
+			if (timeSubtract(sample.time, path.shadow[0].start) < 0) expect(sample.center ?? sample.left ?? sample.right).toBeUndefined()
+		}
+		expect(occultationPathPolylines(path, 'corridorRight')).toHaveLength(1)
+	})
+
+	test('a corridor reaches the Earth when the nominal shadow just misses it', () => {
+		// The shadow passes 20 km beyond the North Pole; its 3 x 20 km right corridor line still crosses the cap.
+		const target = syntheticBody([RANGE, 0, B + RADIUS + sigma * 2], [0, SPEED, 0])
+		const body = gcrsCovariance([sigma * sigma * 4, 0, 0, 0, sigma * sigma * 4, 0, 0, 0, sigma * sigma * 4])
+		const path = occultationPath(target, star, geocenter, T0, timeShift(T0, 60 / DAYSEC), { radius: RADIUS, uncertainty: { body, sigma: 3 } })
+
+		expect(path.shadow).toHaveLength(0)
+		expect(path.central).toHaveLength(0)
+		expect(path.coverage).toHaveLength(1)
+		expect(path.samples.length).toBeGreaterThan(0)
+		for (const sample of path.samples) expect(sample.center ?? sample.left ?? sample.right).toBeUndefined()
+		expect(occultationPathPolylines(path, 'corridorRight')).toHaveLength(1)
+		expect(occultationPathPolylines(path, 'corridorLeft')).toHaveLength(0)
+		expect(occultationPathPolylines(path, 'right')).toHaveLength(0)
+	})
+
 	test('is omitted without covariance', () => {
 		const target = syntheticBody([RANGE, 0, kilometer(3000)], [0, SPEED, 0])
 		const path = occultationPath(target, star, geocenter, T0, timeShift(T0, 10 / DAYSEC), { radius: RADIUS, uncertainty: { sigma: 3 } })
@@ -364,6 +403,7 @@ describe('separate passes', () => {
 			samples: [sample(0, 178), sample(1, -178), sample(10, 10), sample(11, 20)],
 			shadow: [interval(0, 1), interval(10, 11)],
 			central: [interval(0, 1), interval(10, 11)],
+			coverage: [interval(0, 1), interval(10, 11)],
 		}
 
 		const split = occultationPathPolylines(path, 'center')
