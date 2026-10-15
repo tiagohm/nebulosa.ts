@@ -1,5 +1,6 @@
-import { ELB, ELG, SPEED_OF_LIGHT_AU_DAY } from '../../core/constants'
+import { DAYSEC, ELB, ELG, SPEED_OF_LIGHT_AU_DAY } from '../../core/constants'
 import { type Vec3, vecDot, vecNormalize } from '../../math/linear-algebra/vec3'
+import { twoProduct } from '../../math/numerical/math'
 import type { PositionOverTime } from '../coordinates/astrometry'
 import { barycentricJulianDate, receptionFromBarycentricJulianDate } from '../coordinates/correction'
 import { type EphemerisPath, SOLAR_SYSTEM_BARYCENTER, sameEphemerisEndpoint } from '../ephemeris/path'
@@ -15,7 +16,8 @@ import { type VisibilityConstraints, type VisibilityInterval, type VisibilitySou
 // and the required observing span (transit plus baselines plus a timing margin) is cut by the
 // visibilityWindows limits. Times are days unless documented otherwise, angles are radians, and the
 // star is a fixed ICRS direction. The model is strictly periodic: transit-timing variations, orbital
-// decay, and apsidal precession are not modeled. Results are freshly allocated.
+// decay, and apsidal precession are not modeled. transitEphemerisUncertainty predicts a single cycle
+// on the ephemeris' own clock, without conversion. Results are freshly allocated.
 
 // Origin of the light-time correction applied to the reference epoch: the solar-system barycenter
 // (BJD) or the Sun's center (HJD).
@@ -163,6 +165,93 @@ export function transitTimingUncertainty(cycle: number, epochUncertainty: number
 	return Math.sqrt(Math.max(0, variance))
 }
 
+// Whether |Cov(T0, P)| ≤ σ(T0)·σ(P), with a relative slack of 1e-12 on the squares for the rounding
+// of a fully correlated pair. A larger covariance makes the variance negative for some cycles.
+function covarianceWithinBounds(epochUncertainty: number, periodUncertainty: number, covariance: number) {
+	return covariance * covariance <= epochUncertainty * epochUncertainty * periodUncertainty * periodUncertainty * (1 + 1e-12)
+}
+
+// Missing-uncertainty diagnostics of an ephemeris, in the ExoplanetTransitFlag declaration order.
+function missingUncertaintyFlags(ephemeris: TransitEphemeris) {
+	const flags: ExoplanetTransitFlag[] = []
+	if (ephemeris.epochUncertainty === undefined) flags.push('missingEpochUncertainty')
+	if (ephemeris.periodUncertainty === undefined) flags.push('missingPeriodUncertainty')
+	if (ephemeris.covariance === undefined && ephemeris.periodUncertainty !== undefined) flags.push('missingCovariance')
+	if (ephemeris.durationUncertainty === undefined) flags.push('missingDurationUncertainty')
+	return flags
+}
+
+// Diagnostic flags of a single-cycle ephemeris prediction: the missing-uncertainty flags, and
+// 'covarianceOutOfBounds' when |Cov(T0, P)| exceeds σ(T0)·σ(P) beyond rounding.
+export type TransitEphemerisFlag = ExoplanetTransitFlag | 'covarianceOutOfBounds'
+
+// Mid-transit and contacts of one cycle of a linear ephemeris, on the ephemeris' own clock.
+export interface TransitEphemerisPrediction {
+	// Integer cycle number n relative to T0; negative before T0.
+	readonly cycle: number
+	// Mid-transit Tn = T0 + n·P, in the scale and light-time reference of the epoch (BJD_TDB for a
+	// BJD_TDB ephemeris), with the epoch's providers and location.
+	readonly center: Time
+	// First contact Tn − T14/2, on the same clock as center.
+	readonly ingress: Time
+	// Fourth contact Tn + T14/2, on the same clock as center.
+	readonly egress: Time
+	// 1σ uncertainty of center, √(σ²(T0) + n²σ²(P) + 2n·Cov(T0, P)), in seconds of the epoch's scale.
+	// NaN when the covariance is out of bounds.
+	readonly centerUncertainty: number
+	// 1σ uncertainty of ingress and of egress, √(σ²(Tn) + σ²(T14)/4), in seconds of the epoch's scale.
+	// Undefined when the duration uncertainty is not given, since T14 is then not known to be
+	// independent of T0 and P; NaN when the covariance is out of bounds.
+	readonly contactUncertainty?: number
+	// False when the covariance is out of bounds and the uncertainties are NaN.
+	readonly valid: boolean
+	// Missing-input and validity diagnostics, in the TransitEphemerisFlag declaration order.
+	readonly flags: readonly TransitEphemerisFlag[]
+}
+
+// Predicts mid-transit and contacts of cycle n of a linear ephemeris with the 1σ timing uncertainty
+// σ²(Tn) = σ²(T0) + n²σ²(P) + 2n·Cov(T0, P), keeping the epoch's own clock: no scale conversion, TCB
+// or TCG rescaling, or light-time reference change is applied (see exoplanetTransits for BJD_TDB
+// output and local reception). ephemeris.period, duration, and uncertainties are days of the epoch's
+// scale and covariance days². cycle must be a safe integer.
+//
+// n·P is formed exactly with twoProduct and split into whole days, added to the epoch's day part,
+// and a remainder added to its fraction, so a far-future cycle keeps the two-part precision of T0 (a
+// rounding of about 1e-16 day instead of the ulp of n·P). Uncertainties are returned in seconds; a
+// variance below zero only through rounding is clamped to 0, while a covariance beyond σ(T0)·σ(P)
+// gives NaN uncertainties, valid false, and the 'covarianceOutOfBounds' flag. Missing uncertainties
+// count as 0 and are flagged. Results are freshly allocated.
+//
+// Throws RangeError for a non-integer cycle, which would silently name an instant that is not a transit.
+export function transitEphemerisUncertainty(ephemeris: TransitEphemeris, cycle: number): TransitEphemerisPrediction {
+	if (!Number.isSafeInteger(cycle)) throw new RangeError('transit cycle must be a safe integer')
+
+	const { epoch, period, duration, epochUncertainty = 0, periodUncertainty = 0, covariance = 0, durationUncertainty } = ephemeris
+
+	const [product, error] = twoProduct(cycle, period)
+	const days = Math.round(product)
+	const offset = product - days + error
+	const halfDuration = duration / 2
+
+	const flags: TransitEphemerisFlag[] = missingUncertaintyFlags(ephemeris)
+	const valid = covarianceWithinBounds(epochUncertainty, periodUncertainty, covariance)
+	if (!valid) flags.push('covarianceOutOfBounds')
+
+	const centerSigma = valid ? transitTimingUncertainty(cycle, epochUncertainty, periodUncertainty, covariance) : Number.NaN
+	const contactSigma = durationUncertainty === undefined ? undefined : Math.hypot(centerSigma, durationUncertainty / 2)
+
+	return {
+		cycle,
+		center: timeShift(epoch, offset, days),
+		ingress: timeShift(epoch, offset - halfDuration, days),
+		egress: timeShift(epoch, offset + halfDuration, days),
+		centerUncertainty: centerSigma * DAYSEC,
+		contactUncertainty: contactSigma === undefined ? undefined : contactSigma * DAYSEC,
+		valid,
+		flags,
+	}
+}
+
 // Constraint groups attributed separately, in the ExoplanetTransitLimitation order.
 type ConstraintGroup = readonly [ExoplanetTransitLimitation, VisibilityConstraints]
 
@@ -238,7 +327,7 @@ export function exoplanetTransits(ephemeris: TransitEphemeris, direction: Vec3, 
 	const durationUncertainty = (ephemeris.durationUncertainty ?? 0) * rate
 
 	// An over-unity correlation makes the variance negative for some cycles: a silent 0 or NaN uncertainty.
-	if (!(covariance * covariance <= epochUncertainty * epochUncertainty * periodUncertainty * periodUncertainty * (1 + 1e-12))) throw new RangeError('transit epoch-period covariance exceeds the product of the uncertainties')
+	if (!covarianceWithinBounds(epochUncertainty, periodUncertainty, covariance)) throw new RangeError('transit epoch-period covariance exceeds the product of the uncertainties')
 	// Span edges must grow with the cycle for the bounded cycle scan to terminate on the right cycles.
 	if (!(timingSigma * periodUncertainty < period)) throw new RangeError('timing margin per cycle must be smaller than the period')
 	if (reference === 'heliocentric' && sun === undefined) throw new RangeError('sun path is required for a heliocentric transit epoch')
@@ -246,11 +335,7 @@ export function exoplanetTransits(ephemeris: TransitEphemeris, direction: Vec3, 
 	if ((constraints.maximumSunAltitude !== undefined || constraints.minimumSunSeparation !== undefined) && options.sunAt === undefined) throw new RangeError('sun direction is required when a solar limit is set')
 	if (constraints.minimumMoonSeparation !== undefined && options.moonAt === undefined) throw new RangeError('moon direction is required when a lunar separation limit is set')
 
-	const flags: ExoplanetTransitFlag[] = []
-	if (ephemeris.epochUncertainty === undefined) flags.push('missingEpochUncertainty')
-	if (ephemeris.periodUncertainty === undefined) flags.push('missingPeriodUncertainty')
-	if (ephemeris.covariance === undefined && ephemeris.periodUncertainty !== undefined) flags.push('missingCovariance')
-	if (ephemeris.durationUncertainty === undefined) flags.push('missingDurationUncertainty')
+	const flags = missingUncertaintyFlags(ephemeris)
 
 	const n = vecNormalize(direction)
 	const lightTime = sun === undefined ? undefined : { sun }

@@ -4,7 +4,7 @@ import { ANGVEL_PER_DAY, DAYSEC, J2000, PI } from '../../../src/core/constants'
 import { deg, hour } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 // oxfmt-ignore
-import { earthRotationAngle, equationOfEquinoxes, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthAngularVelocity, instantaneousEarthRotationMatrix, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, taiMinusUtc, tcb, tcg, tdb, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, utcLeapSeconds, toJulianEpoch, tt, ut1, utc, TIME_PROVIDERS, dut1 } from '../../../src/astronomy/time/time'
+import { earthRotationAngle, equationOfEquinoxes, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthAngularVelocity, instantaneousEarthRotationMatrix, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, taiMinusUtc, tcb, tcg, tdb, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeShift, timeSubtract, timeToDate, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, utcLeapSeconds, toJulianEpoch, tt, ut1, utc, TIME_PROVIDERS, dut1 } from '../../../src/astronomy/time/time'
 import { downloadPerTag } from '../../download'
 import { expectNumberArrayToBeCloseTo } from '../../util'
 
@@ -507,6 +507,20 @@ describe('normalize time', () => {
 			expect(result.fraction).toBeCloseTo(fraction, 15)
 		}
 	})
+})
+
+test('shift by whole days keeps the fraction exact', () => {
+	const t = timeNormalize(2457608, -0.480695, 0, Timescale.TDB)
+	t.location = geodeticLocation(deg(-70), deg(-30), meter(2400), Ellipsoid.WGS84)
+	const shifted = timeShift(t, 0.25, 1e9)
+
+	expect(shifted.day).toBe(1002457608)
+	expect(shifted.fraction).toBe(-0.480695 + 0.25)
+	expect(shifted.scale).toBe(Timescale.TDB)
+	expect(shifted.location).toBe(t.location)
+
+	// The same shift as a single day offset loses the fraction to the ulp of 1e9 days (~1e-7 day).
+	expect(Math.abs(timeShift(t, 1e9 + 0.25).fraction - shifted.fraction)).toBeGreaterThan(1e-9)
 })
 
 test('location', () => {

@@ -8,10 +8,10 @@ import { moon } from '../../../src/astronomy/ephemeris/models/analytical/elpmpp0
 import { earth, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { composeEphemerisPaths, customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from '../../../src/astronomy/ephemeris/path'
 import { earthObserverEphemerisPath } from '../../../src/astronomy/ephemeris/path.adapter'
-import { exoplanetTransits, type TransitEphemeris, transitTimingUncertainty } from '../../../src/astronomy/events/exoplanet'
+import { exoplanetTransits, type TransitEphemeris, transitEphemerisUncertainty, transitTimingUncertainty } from '../../../src/astronomy/events/exoplanet'
 import { altitudeOf } from '../../../src/astronomy/events/horizon'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
-import { type Time, Timescale, tdb, timeNormalize, timeShift, timeSubtract, timeToDate, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { type Time, Timescale, tdb, timeConvert, timeNormalize, timeShift, timeSubtract, timeToDate, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { DAYSEC, ELB, SPEED_OF_LIGHT_AU_DAY } from '../../../src/core/constants'
 import { vecDot, vecMinus, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
@@ -94,6 +94,118 @@ describe('timing uncertainty', () => {
 	test('a fully anti-correlated pair vanishes at n = σ(T0)/σ(P) without NaN', () => {
 		expect(transitTimingUncertainty(100, 1e-4, 1e-6, -1e-10)).toBeCloseTo(0, 10)
 		expect(transitTimingUncertainty(200, 1e-4, 1e-6, -1e-10)).toBeCloseTo(1e-4, 15)
+	})
+})
+
+describe('transit ephemeris uncertainty', () => {
+	// WASP-12 b with T0 split exactly as 2457608 − 0.480695 on BJD_TDB.
+	const ephemeris: TransitEphemeris = { epoch: timeNormalize(2457608, -0.480695, 0, Timescale.TDB), reference: 'barycentric', period: 1.091418901, duration: 3.001 / 24, epochUncertainty: 3.2e-5, periodUncertainty: 1.8e-8, covariance: 0, durationUncertainty: 0.0043 / 24 }
+
+	test('cycle 0 is the epoch itself', () => {
+		const prediction = transitEphemerisUncertainty(ephemeris, 0)
+		expect(prediction.center.day).toBe(2457608)
+		expect(prediction.center.fraction).toBe(-0.480695)
+		expect(prediction.center.scale).toBe(Timescale.TDB)
+		expect(prediction.centerUncertainty).toBeCloseTo(3.2e-5 * DAYSEC, 12)
+		expect(prediction.contactUncertainty!).toBeCloseTo(Math.hypot(3.2e-5, 0.0043 / 48) * DAYSEC, 12)
+		expect(seconds(prediction.ingress, prediction.egress)).toBeCloseTo(3.001 * 3600, 6)
+		expect(seconds(prediction.ingress, prediction.center)).toBeCloseTo(3.001 * 1800, 6)
+		expect(prediction.valid).toBe(true)
+		expect(prediction.flags).toEqual([])
+	})
+
+	test('far cycles keep two-part precision', () => {
+		// Exact decimal sums: 2457607.519305 ± 10^6 × 1.091418901. The double P differs from the decimal
+		// by ≤ 1.1e-16 day, i.e. ≤ 10 µs after 10^6 cycles (~3000 years).
+		const future = transitEphemerisUncertainty(ephemeris, 1000000)
+		expect(future.center.day).toBe(3549026)
+		expect(Math.abs(future.center.fraction - 0.420305) * DAYSEC).toBeLessThan(1e-5)
+		const past = transitEphemerisUncertainty(ephemeris, -1000000)
+		expect(past.center.day).toBe(1366189)
+		expect(Math.abs(past.center.fraction + 0.381695) * DAYSEC).toBeLessThan(1e-5)
+
+		// An exactly representable period is reproduced exactly at n = 123456789.
+		const exact = transitEphemerisUncertainty({ ...ephemeris, epoch: timeNormalize(2457608, 0.1, 0, Timescale.TDB), period: 1.25 }, 123456789)
+		expect(exact.center.day).toBe(2457608 + 154320986)
+		expect(exact.center.fraction).toBe(0.1 + 0.25)
+
+		// σ is dominated by n·σ(P) and symmetric in n without covariance.
+		expect(future.centerUncertainty).toBeCloseTo(Math.hypot(3.2e-5, 1.8e-2) * DAYSEC, 6)
+		expect(past.centerUncertainty).toBe(future.centerUncertainty)
+	})
+
+	test('a far-future epoch matches a decade of cycles to within a second', () => {
+		// Cycle 3414 of WASP-12 b from the archive row, as predicted by exoplanetTransits for 2026-10-20.
+		const prediction = transitEphemerisUncertainty(wasp12(), 3414)
+		expect(prediction.center.day).toBe(2461334)
+		expect(Math.abs(prediction.center.fraction + 0.376566986) * DAYSEC).toBeLessThan(1e-3)
+		expect(prediction.centerUncertainty).toBeCloseTo(5.99, 2)
+		expect(prediction.flags).toEqual(['missingCovariance'])
+	})
+
+	test('follows the covariance sign', () => {
+		const bound = 3.2e-5 * 1.8e-8
+		const independent = transitEphemerisUncertainty(ephemeris, 1000).centerUncertainty
+		const positive = transitEphemerisUncertainty({ ...ephemeris, covariance: 0.5 * bound }, 1000)
+		const negative = transitEphemerisUncertainty({ ...ephemeris, covariance: -0.5 * bound }, 1000)
+		expect(positive.centerUncertainty).toBeGreaterThan(independent)
+		expect(negative.centerUncertainty).toBeLessThan(independent)
+		expect(positive.centerUncertainty).toBeCloseTo(transitTimingUncertainty(1000, 3.2e-5, 1.8e-8, 0.5 * bound) * DAYSEC, 12)
+		// Before T0 the roles swap.
+		expect(transitEphemerisUncertainty({ ...ephemeris, covariance: 0.5 * bound }, -1000).centerUncertainty).toBeCloseTo(negative.centerUncertainty, 12)
+		expect(positive.valid && negative.valid).toBe(true)
+	})
+
+	test('zero period uncertainty keeps σ(T0) for every cycle', () => {
+		const fixed = { ...ephemeris, periodUncertainty: 0 }
+		for (const cycle of [-100000, -1, 0, 1, 100000]) expect(transitEphemerisUncertainty(fixed, cycle).centerUncertainty).toBeCloseTo(3.2e-5 * DAYSEC, 12)
+	})
+
+	test('missing inputs are flagged and the contact uncertainty is not propagated', () => {
+		const prediction = transitEphemerisUncertainty({ epoch: ephemeris.epoch, reference: 'barycentric', period: 1, duration: 0.1 }, 10)
+		expect(prediction.centerUncertainty).toBe(0)
+		expect(prediction.contactUncertainty).toBeUndefined()
+		expect(prediction.valid).toBe(true)
+		expect(prediction.flags).toEqual(['missingEpochUncertainty', 'missingPeriodUncertainty', 'missingDurationUncertainty'])
+		expect(transitEphemerisUncertainty({ ...ephemeris, covariance: undefined }, 10).flags).toEqual(['missingCovariance'])
+	})
+
+	test('keeps the scale, location, and roundtrips through TDB', () => {
+		const location = LA_SILLA
+		const epoch = timeNormalize(2457608, -0.480695, 0, Timescale.TT)
+		epoch.location = location
+		const prediction = transitEphemerisUncertainty({ ...ephemeris, epoch }, 3414)
+		expect(prediction.center.scale).toBe(Timescale.TT)
+		expect(prediction.center.location).toBe(location)
+
+		// TT -> TDB -> TT returns the same instant.
+		expect(seconds(prediction.center, timeConvert(tdb(prediction.center), Timescale.TT))).toBeCloseTo(0, 6)
+
+		// Counting on TDB from the same instant differs only by the periodic TDB − TT change between T0 and Tn (≤ 3.4 ms).
+		const viaTdb = transitEphemerisUncertainty({ ...ephemeris, epoch: tdb(epoch) }, 3414)
+		expect(viaTdb.center.scale).toBe(Timescale.TDB)
+		expect(Math.abs(seconds(viaTdb.center, tdb(prediction.center)))).toBeLessThan(3.4e-3)
+	})
+
+	test('a variance below zero by rounding is clamped and an over-unity covariance is flagged', () => {
+		// Fully anti-correlated at n = σ(T0)/σ(P) = 100: σ²(Tn) = 0 analytically.
+		const rounding = transitEphemerisUncertainty({ ...ephemeris, epochUncertainty: 1e-4, periodUncertainty: 1e-6, covariance: -1e-10 * (1 + 1e-13) }, 100)
+		expect(rounding.valid).toBe(true)
+		expect(rounding.centerUncertainty).toBeGreaterThanOrEqual(0)
+		expect(rounding.centerUncertainty).toBeLessThan(1e-3)
+
+		const invalid = transitEphemerisUncertainty({ ...ephemeris, epochUncertainty: 1e-4, periodUncertainty: 1e-6, covariance: -2e-10 }, 100)
+		expect(invalid.valid).toBe(false)
+		expect(invalid.centerUncertainty).toBeNaN()
+		expect(invalid.contactUncertainty!).toBeNaN()
+		expect(invalid.flags).toEqual(['covarianceOutOfBounds'])
+		// The predicted instant itself does not depend on the uncertainties.
+		expect(seconds(rounding.center, invalid.center)).toBe(0)
+	})
+
+	test('a non-integer cycle throws', () => {
+		expect(() => transitEphemerisUncertainty(ephemeris, 0.5)).toThrow('transit cycle must be a safe integer')
+		expect(() => transitEphemerisUncertainty(ephemeris, Number.NaN)).toThrow('transit cycle must be a safe integer')
 	})
 })
 

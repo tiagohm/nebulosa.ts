@@ -438,8 +438,10 @@ function setTimeProviders(time: Time, value: TimeProviders | undefined | null) {
 }
 
 // Clones a nearby sample instant while preserving custom Earth-orientation providers.
-export function timeShift(time: Time, fraction: number): Time {
-	const normalized = timeNormalize(time.day, time.fraction + fraction, undefined, time.scale)
+// fraction is a day offset; days is an optional integer day offset added exactly to the day part, so
+// a long shift split into whole and fractional days keeps the two-part precision of the fraction.
+export function timeShift(time: Time, fraction: number, days: number = 0): Time {
+	const normalized = timeNormalize(time.day + days, time.fraction + fraction, undefined, time.scale)
 	setTimeProviders(normalized, time.providers)
 	normalized.location = time.location
 	return normalized
