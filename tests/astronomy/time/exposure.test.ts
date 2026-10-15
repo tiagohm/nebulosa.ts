@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
 import { geodeticLocation } from '../../../src/astronomy/observer/location'
 import { exposureInterval } from '../../../src/astronomy/time/exposure'
-import { type Time, Timescale, tai, timeSubtract, timeToDate, timeYMDHMS, utc } from '../../../src/astronomy/time/time'
-import { DAYSEC } from '../../../src/core/constants'
+import { type Time, Timescale, tai, tcb, tcg, timeConvert, timeSubtract, timeToDate, timeYMDHMS, ut1, utc } from '../../../src/astronomy/time/time'
+import { DAYSEC, ELG } from '../../../src/core/constants'
 
 // Elapsed SI seconds from a to b, measured on TAI.
 function elapsed(a: Time, b: Time) {
@@ -51,15 +51,58 @@ test('an exposure spanning a leap second keeps its SI length', () => {
 	expect(elapsed(interval.start, interval.end)).toBeCloseTo(2, 6)
 })
 
-test('non-UTC timestamps are shifted in their own scale and keep their location', () => {
+// TCG and TCB seconds are shorter than TAI seconds by L_G ≈ 7.0e-10 and L_B ≈ 1.55e-8 (≈ 2.5 µs and
+// ≈ 56 µs per hour), and TDB and UT1 drift against TAI, so the same physical instant must give the same
+// physical interval whatever scale labels it, also across the 2016-12-31 leap second in UTC.
+test('every timescale gives the same physical interval for the same instant', () => {
 	const location = geodeticLocation()
-	const open = timeYMDHMS(2024, 3, 10, 2, 0, 0, Timescale.TDB)
-	open.location = location
-	const interval = exposureInterval({ time: open, reference: 'end', duration: 10 })
+	const scales = [Timescale.UTC, Timescale.TAI, Timescale.TT, Timescale.TCG, Timescale.TDB, Timescale.TCB, Timescale.UT1] as const
 
-	expect(interval.midpoint.scale).toBe(Timescale.TDB)
-	expect(interval.midpoint.location).toBe(location)
-	expect(timeSubtract(open, interval.midpoint) * DAYSEC).toBeCloseTo(5, 6)
+	for (const open of [timeYMDHMS(2024, 3, 10, 2, 0, 0, Timescale.TAI), tai(timeYMDHMS(2016, 12, 31, 23, 30, 0, Timescale.UTC))] as const) {
+		open.location = location
+
+		for (const duration of [3600, 21600] as const) {
+			const exposure = { reference: 'end', duration, openLatency: 0.1, closeLatency: 0.05 } as const
+			const reference = exposureInterval({ time: open, ...exposure })
+
+			for (const scale of scales) {
+				const interval = exposureInterval({ time: timeConvert(open, scale), ...exposure })
+
+				expect(interval.start.scale).toBe(scale)
+				expect(interval.midpoint.scale).toBe(scale)
+				expect(interval.end.scale).toBe(scale)
+				expect(interval.midpoint.location).toBe(location)
+				expect(interval.duration).toBeCloseTo(duration - 0.05, 9)
+				expect(elapsed(interval.start, interval.end)).toBeCloseTo(duration - 0.05, 9)
+				expect(elapsed(reference.start, interval.start)).toBeCloseTo(0, 9)
+				expect(elapsed(reference.midpoint, interval.midpoint)).toBeCloseTo(0, 9)
+				expect(elapsed(reference.end, interval.end)).toBeCloseTo(0, 9)
+				expect(elapsed(interval.end, open)).toBeCloseTo(-0.05, 9)
+			}
+		}
+	}
+
+	// In their own seconds the TCG and TCB hours are longer: L_G / (1 - L_G) · 3600 s and ≈ L_B · 3600 s,
+	// the TCB one blurred by up to ~1.2 µs of periodic TDB-TT drift.
+	const start = timeYMDHMS(2024, 3, 10, 2, 0, 0, Timescale.TAI)
+	const fromTcg = exposureInterval({ time: tcg(start), reference: 'start', duration: 3600 })
+	const fromTcb = exposureInterval({ time: tcb(start), reference: 'start', duration: 3600 })
+	expect((timeSubtract(fromTcg.end, fromTcg.start) * DAYSEC - 3600) * 1e6).toBeCloseTo((ELG / (1 - ELG)) * 3600 * 1e6, 3)
+	expect(Math.abs((timeSubtract(fromTcb.end, fromTcb.start) * DAYSEC - 3600) * 1e6 - 55.82)).toBeLessThan(1.5)
+})
+
+// A custom UT1-UTC drifting 1 ms/day stretches one TAI hour by 1/24 ms of UT1, so the provider must be
+// carried into the TAI round trip and onto the returned instants.
+test('UT1 timestamps use their custom Earth-orientation provider', () => {
+	const providers = { dut1: (time: Time) => 0.1 + 0.001 * (time.day - 2460380 + time.fraction) }
+	const open = timeYMDHMS(2024, 3, 10, 2, 0, 0, Timescale.UTC)
+	open.providers = providers
+	const interval = exposureInterval({ time: ut1(open), reference: 'start', duration: 3600 })
+
+	expect(interval.end.scale).toBe(Timescale.UT1)
+	expect(interval.end.providers?.dut1).toBe(providers.dut1)
+	expect(elapsed(interval.start, interval.end)).toBeCloseTo(3600, 9)
+	expect(timeSubtract(interval.end, interval.start) * DAYSEC).toBeCloseTo(3600 + 0.001 / 24, 9)
 })
 
 // DATE-BEG 23:59:59.5 and DATE-END 00:00:00.5 across the 2016-12-31 leap second read 1 s apart on

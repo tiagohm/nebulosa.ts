@@ -1,13 +1,13 @@
 import { DAYSEC } from '../../core/constants'
-import { type Time, Timescale, tai, timeShift, timeSubtract, utc } from './time'
+import { type Time, Timescale, tai, timeConvert, timeShift, timeSubtract } from './time'
 
 // Exposure timing semantics: converts recorded camera timestamps, either one timestamp labelling the
 // commanded shutter open, close, or midpoint plus a duration, or the commanded open and close
 // timestamps, into the actual photon-collection interval, correcting for shutter latency. Durations,
-// latencies, and uncertainties are SI seconds. All arithmetic is done in SI seconds: UTC offsets are
-// applied on TAI and an open/close span is measured on TAI, so a leap second inside the exposure is
-// counted. Returned instants keep the scale, providers, and location of the reference timestamp and
-// its two-part Julian Date precision. The midpoint is the nominal temporal midpoint of the collection
+// latencies, and uncertainties are SI seconds of the recording clock: offsets are applied on TAI and
+// an open/close span is measured on TAI, so a leap second inside the exposure is counted and the rate
+// of TCG, TDB, TCB, and UT1 relative to TAI is honored. Returned instants keep the scale, providers,
+// and location of the reference timestamp and its two-part Julian Date precision. The midpoint is the nominal temporal midpoint of the collection
 // interval, the single mid-exposure instant used by barycentric timing (see barycentricJulianDate).
 // Every call allocates fresh Times.
 
@@ -79,10 +79,12 @@ export interface ExposureInterval {
 //
 // The midpoint is the nominal temporal midpoint (start + end) / 2 of the collection interval, not
 // a photon-weighted one: it equals the flux-weighted mean time only for constant flux and a shutter
-// whose transit is folded into the latencies. UTC instants are shifted in TAI, so an interval that
-// spans an inserted leap second keeps its SI length and may start, end, or center on 23:59:60;
-// other scales are shifted directly by SI seconds. Exposures down to microseconds keep their
-// offsets, since a day fraction resolves about 1e-11 s.
+// whose transit is folded into the latencies. Instants are shifted on TAI and converted back to the
+// reference scale, so the same physical timestamp in any scale gives the same physical interval: a
+// UTC interval that spans an inserted leap second keeps its SI length and may start, end, or center
+// on 23:59:60, and a TCB, TCG, TDB, or UT1 interval lasts its SI duration on TAI rather than in the
+// reference scale's own seconds (a TCB hour is ≈ 56 µs longer). Exposures down to microseconds keep
+// their offsets, since a day fraction resolves about 1e-11 s.
 export function exposureInterval(exposure: ExposureTimestamp | ExposureSpan): ExposureInterval {
 	const { openLatency = 0, closeLatency = 0, uncertainty = 0 } = exposure
 	let time: Time
@@ -111,8 +113,10 @@ export function exposureInterval(exposure: ExposureTimestamp | ExposureSpan): Ex
 	}
 }
 
-// Shifts a time by SI seconds, going through TAI for UTC so leap seconds are counted.
+// Shifts a time by SI seconds counted on TAI, keeping its scale, providers, and location. TAI and TT
+// differ by a constant offset and are shifted directly; other scales go through TAI so that UTC leap
+// seconds and the TCG, TDB, TCB, and UT1 rates relative to TAI are honored.
 function shiftSeconds(time: Time, seconds: number) {
-	if (time.scale !== Timescale.UTC) return timeShift(time, seconds / DAYSEC)
-	return utc(timeShift(tai(time), seconds / DAYSEC))
+	if (time.scale === Timescale.TAI || time.scale === Timescale.TT) return timeShift(time, seconds / DAYSEC)
+	return timeConvert(timeShift(tai(time), seconds / DAYSEC), time.scale)
 }

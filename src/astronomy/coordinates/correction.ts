@@ -118,6 +118,11 @@ const MISSING_EOP_BOUND = (0.9 * ANGVEL * IERS2010_RADIUS * AU_M) / SPEED_OF_LIG
 // SOFA/ERFA dtdb series (3.17679e-10 s/km) times the equatorial radius in km, ≈ 2.0 µs.
 const TOPOCENTRIC_TDB_BOUND = 3.17679e-10 * IERS2010_RADIUS * AU_KM
 
+// Bound in AU on the Sun's distance from the solar-system barycenter: Σ (m_i / M☉) · Q_i over
+// Jupiter, Saturn, Uranus, and Neptune at aphelion Q_i is ≈ 0.0106 AU (≈ 2.3 R☉); the terrestrial
+// planets add ≈ 1e-5 AU. Rounded up to 0.011 AU.
+const SUN_BARYCENTER_OFFSET_BOUND = 0.011
+
 // The Earth geocenter endpoint, an observer that needs no Earth-orientation data.
 const GEOCENTER = naifEphemerisEndpoint(Naif.EARTH)
 
@@ -173,9 +178,12 @@ export interface BarycentricJulianDateErrorBudget {
 	readonly earthOrientation: number
 	// Bound for the omitted topocentric TDB-TT term of a non-geocentric observer (≈ 2.0 µs, otherwise 0).
 	readonly tdb: number
-	// Magnitude of the solar Shapiro delay when it is not applied (otherwise 0).
+	// Worst-case bound on the omitted solar Shapiro correction when no Sun path is given, over every
+	// Sun position within 0.011 AU of the SSB (≈ 0.2 µs at quadrature, ≈ 7 µs at opposition, ≈ 113 µs
+	// at the limb); 0 when the Sun path is supplied and the term is applied.
 	readonly shapiro: number
-	// Root-sum-square of the contributions.
+	// Root-sum-square of the contributions: a heuristic scale that mixes the 1σ timestamp uncertainty
+	// with worst-case model bounds, not a confidence interval or a guaranteed limit.
 	readonly total: number
 }
 
@@ -209,10 +217,12 @@ export interface BarycentricJulianDate {
 // direction to the source at the observation epoch (proper motion already applied); it is
 // normalized here. The Rømer delay is (r · n) / c for a source at infinity, or the exact
 // (d - |d·n - r|) / c when options.distance supplies d, both positive when the observer lies on the
-// source side of the barycenter. With options.sun, the solar Shapiro delay of the TEMPO2/PINT form
-// -2GM☉/c³ · ln((|s| + s · n) / 1 AU), s = Sun -> observer, is subtracted; a line of sight through
-// the solar disk is clamped at the limb and flagged. Planetary Shapiro delays, the source's motion
-// during the light time, and dispersion are not modeled.
+// source side of the barycenter. With options.sun, the solar Shapiro propagation delay of the
+// TEMPO2/PINT form -2GM☉/c³ · ln((|s| + s · n) / 1 AU) ≥ 0 near the Sun, s = Sun -> observer, is
+// removed, so Δ_Shapiro = 2GM☉/c³ · ln((|s| + s · n) / 1 AU); a line of sight through the solar disk
+// is clamped at the limb and flagged. Without options.sun the term is omitted and only bounded in the
+// error budget, since the SSB -> observer vector alone does not fix the Sun's position. Planetary
+// Shapiro delays, the source's motion during the light time, and dispersion are not modeled.
 //
 // `observer` must be SSB-centered: another center (for example the Sun, which would give HJD)
 // throws, as does an options.sun path that is not SSB-centered. Path evaluation errors, such as
@@ -243,7 +253,7 @@ export function barycentricJulianDate(time: Time, direction: Vec3, observer: Eph
 
 	romer = (romer / SPEED_OF_LIGHT_AU_DAY) * DAYSEC
 
-	// Sun -> observer vector; the SSB stands in for the Sun when no Sun path is given.
+	// Sun -> observer vector; without a Sun path the SSB stands in for the Sun in the diagnostics only.
 	const s = sun === undefined ? r : vecMinus(r, sun.stateAt(reception)[0], r)
 	const solar = solarShapiro(s, n)
 	const shapiro = sun === undefined ? 0 : solar.correction
@@ -256,7 +266,7 @@ export function barycentricJulianDate(time: Time, direction: Vec3, observer: Eph
 	const timestamp = options?.timestampUncertainty ?? 0
 	const eopError = earthOrientation === 'missing' ? MISSING_EOP_BOUND : 0
 	const tdbError = tdbModel === 'geocentric' && !geocentric ? TOPOCENTRIC_TDB_BOUND : 0
-	const shapiroError = sun === undefined ? Math.abs(solar.correction) : 0
+	const shapiroError = sun === undefined ? unmodeledSolarShapiroBound(r, n) : 0
 
 	return {
 		time: timeNormalize(reception.day, reception.fraction + correction / DAYSEC, 0, Timescale.TDB),
@@ -281,6 +291,21 @@ function solarShapiro(s: Vec3, n: Vec3) {
 	const occulted = elongation < limb
 	const half = Math.sin(0.5 * (occulted ? limb : elongation))
 	return { correction: SOLAR_SHAPIRO_SCALE * Math.log(2 * distance * half * half), elongation, occulted }
+}
+
+// Bounds in seconds the solar Shapiro correction omitted for an observer at SSB -> observer `r` (AU)
+// and unit source direction `n`. The Sun lies within SUN_BARYCENTER_OFFSET_BOUND δ of the SSB, and
+// f(s) = |s| + s · n changes by at most 2 per unit change of s, so f(Sun -> observer) lies within
+// f(r) ± 2δ, floored at the limb clamp |s| - sqrt(|s|² - R☉²) of the farthest Sun, |s| = |r| + δ.
+// Returns the largest |2GM☉/c³ · ln f| over that range.
+function unmodeledSolarShapiroBound(r: Vec3, n: Vec3) {
+	const distance = vecLength(r)
+	const f = distance + vecDot(r, n)
+	const far = distance + SUN_BARYCENTER_OFFSET_BOUND
+	const limb = (SUN_RADIUS_AU * SUN_RADIUS_AU) / (far + Math.sqrt(far * far - SUN_RADIUS_AU * SUN_RADIUS_AU))
+	const lower = Math.max(f - 2 * SUN_BARYCENTER_OFFSET_BOUND, limb)
+	const upper = f + 2 * SUN_BARYCENTER_OFFSET_BOUND
+	return SOLAR_SHAPIRO_SCALE * Math.max(-Math.log(lower), Math.log(upper))
 }
 
 // Classifies the Earth-orientation data behind a ground-site observer at the time.

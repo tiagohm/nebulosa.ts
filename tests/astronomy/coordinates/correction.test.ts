@@ -294,10 +294,10 @@ test('solar Shapiro delay follows the logarithmic elongation law and is clamped 
 	expect(near.shapiro * 1e6).toBeCloseTo(-86.75, 1)
 	expect(near.quality.occultedBySun).toBe(false)
 
-	// Without the Sun path the same geometry is only budgeted, using the SSB as the Sun proxy.
+	// Without the Sun path the same geometry is only budgeted, by a bound covering the applied term.
 	const unmodeled = barycentricJulianDate(time, vecRotateByRodrigues(toSun, perpendicular, deg(1)), LA_SILLA_PATH)
 	expect(unmodeled.shapiro).toBe(0)
-	expect(unmodeled.errorBudget.shapiro).toBeGreaterThan(5e-5)
+	expect(unmodeled.errorBudget.shapiro).toBeGreaterThan(Math.abs(near.shapiro))
 
 	// Straight through the Sun center: finite, flagged, and clamped at the limb (≈ -112 µs).
 	const behind = barycentricJulianDate(time, toSun, LA_SILLA_PATH, { sun: EPV00_SUN })
@@ -311,6 +311,47 @@ test('solar Shapiro delay follows the logarithmic elongation law and is clamped 
 
 // d - |d·n - r| converges to r · n for a distant source; at 1 pc the wavefront curvature reaches
 // (1 AU)² / (2 c · 1 pc) ≈ 1.2 ms, here 0.36 ms. Its second-order form misses a ~1e-9 s cubic term.
+// Observer at SSB -> [1, 0, 0] AU and the Sun at SSB -> [0, 0.01, 0] AU. Reference: PINT 1.1.8 (astropy
+// 8.0.1) SolarSystemShapiro.ss_obj_shapiro_delay(observer -> Sun, n, GM☉/c³), whose delay is the
+// negated correction. With the SSB as the Sun proxy the quadrature term would read exactly 0 and the
+// 1° term -86.6 µs, so the omitted term is budgeted by a bound over every Sun within 0.011 AU of the SSB.
+test('solar Shapiro correction matches PINT and its omission is bounded for a Sun off the barycenter', () => {
+	const time = timeYMDHMS(2024, 3, 10, 0, 0, 0, Timescale.TDB)
+	const observer = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, customEphemerisEndpoint('probe'), () => [
+		[1, 0, 0],
+		[0, 0, 0],
+	])
+	const sun = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.SUN), () => [
+		[0, 0.01, 0],
+		[0, 0, 0],
+	])
+	const cases = [
+		// Quadrature to the SSB, 90.57° from the Sun: bound 2GM☉/c³ · -ln(1 - 0.022).
+		[[0, 1, 0], 9.850817719638852e-8, 2.1914e-7],
+		// 1° from the SSB toward the Sun side, 1.57° from the Sun: bound floored at the limb of a Sun at 1.011 AU.
+		[[-Math.cos(deg(1)), Math.sin(deg(1)), 0], 1.0334873124294841e-4, 1.12751e-4],
+		// Opposition: bound 2GM☉/c³ · ln(2 + 0.022).
+		[[1, 0, 0], -6.828426591774754e-6, 6.936e-6],
+	] as const
+
+	for (const [n, pintDelay, bound] of cases) {
+		const modeled = barycentricJulianDate(time, n, observer, { sun })
+		const omitted = barycentricJulianDate(time, n, observer)
+
+		expect(modeled.shapiro).toBeCloseTo(-pintDelay, 12)
+		expect(modeled.errorBudget.shapiro).toBe(0)
+		expect(modeled.errorBudget.total).toBe(0)
+		expect(modeled.romer).toBe(omitted.romer)
+		expect(modeled.correction).toBe(modeled.romer + modeled.shapiro)
+
+		expect(omitted.shapiro).toBe(0)
+		expect(omitted.model.shapiro).toBe(false)
+		expect(omitted.errorBudget.shapiro).toBeGreaterThan(Math.abs(modeled.shapiro))
+		expect(omitted.errorBudget.shapiro).toBeCloseTo(bound, 9)
+		expect(omitted.errorBudget.total).toBe(omitted.errorBudget.shapiro)
+	}
+})
+
 test('a finite source distance applies the exact spherical-wavefront Rømer delay', () => {
 	const time = laSilla(0)
 	const plane = barycentricJulianDate(time, SOURCE, LA_SILLA_PATH)
