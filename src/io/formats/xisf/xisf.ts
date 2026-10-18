@@ -5,7 +5,7 @@ import { deflate, inflate } from '../../compression'
 import { readUntil, writeFully } from '../../io'
 import type { Source, Seekable, Sink } from '../../types'
 import { SimpleXmlParser, type XmlNode } from '../../xml'
-import { Bitpix, type FitsHeader, type FitsHeaderValue } from '../fits/fits'
+import type { Bitpix, FitsHeader, FitsHeaderValue } from '../fits/fits'
 import { bitpixInBytes, formatFitsHeaderValue, unescapeQuotedText } from '../fits/util'
 
 // https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html
@@ -42,6 +42,9 @@ export type XisfChecksumAlgorithm = 'sha-1' | 'sha-256' | 'sha-512' | 'sha3-256'
 
 // Scalar property value type used in XISF property elements.
 export type XisfPropertyType = 'UInt8' | 'UInt16' | 'UInt32' | 'UInt64' | 'Float32' | 'Float64' | 'Int8' | 'Int16' | 'Int32' | 'Int64' | 'Boolean' | 'String'
+
+// "low:high" sample value range of a floating-point XISF image; every stored sample lies within it and low < high.
+export type XisfImageBounds = `${number}:${number}`
 
 // Magic signature at the start of a monolithic XISF file.
 export const XISF_SIGNATURE = 'XISF0100'
@@ -137,7 +140,7 @@ export interface XisfParsedImage {
 	// Sample data type.
 	readonly sampleFormat: XisfSampleFormat
 	// "low:high" sample value bounds (for floating-point images).
-	readonly bounds: `${number}:${number}`
+	readonly bounds: XisfImageBounds
 	// Color space name.
 	readonly colorSpace: XisfColorSpace
 	// "attachment:offset:size" data block location.
@@ -222,33 +225,13 @@ interface XisfWriteEntry {
 	readonly dataSize: number
 	readonly encoded?: XisfEncodedBlock
 	// "low:high" bounds attribute of a floating-point image; undefined for integer samples.
-	readonly bounds?: `${number}:${number}`
+	readonly bounds?: XisfImageBounds
 }
 
-// Returns the bounds a floating-point image declares: 0:1 when every finite sample lies in that range,
-// otherwise the finite sample range, so samples outside 0..1 are written without being out of bounds.
-// The upper bound of a flat range is one more than the lower one, since XISF requires low < high.
-// Samples stored as Float32 are measured after that rounding, which may move them past a 64-bit extreme.
-function floatingPointBounds(raw: ImageRawType, bitpix: Bitpix.FLOAT | Bitpix.DOUBLE): `${number}:${number}` {
-	let low = Infinity
-	let high = -Infinity
-
-	if (bitpix === Bitpix.FLOAT) {
-		for (let i = 0; i < raw.length; i++) {
-			const sample = Math.fround(raw[i])
-			if (sample < low) low = sample
-			if (sample > high) high = sample
-		}
-	} else {
-		for (let i = 0; i < raw.length; i++) {
-			const sample = raw[i]
-			if (sample < low) low = sample
-			if (sample > high) high = sample
-		}
-	}
-
-	if (!(low <= high) || (low >= 0 && high <= 1)) return '0:1'
-	return `${low}:${high > low ? high : low + 1}`
+// An image handed to writeXisf: its header and samples, plus the bounds a floating-point image declares.
+export interface XisfWriteImage extends Readonly<Pick<Image, 'header' | 'raw' | 'sampleScale'>> {
+	// "low:high" range enclosing every stored floating-point sample (default 0:1); ignored for integer samples.
+	readonly bounds?: XisfImageBounds
 }
 
 // An encoded image data block plus its compression descriptor (absent when stored uncompressed).
@@ -567,7 +550,7 @@ async function writeUncompressedXisfImage(sink: Sink, input: ImageRawType, bitpi
 
 // Writes images to `sink` as a monolithic XISF file: compressed blocks are staged to determine their
 // sizes, while uncompressed blocks are streamed after the XML offsets stabilize. Returns total bytes.
-export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image, 'header' | 'raw' | 'sampleScale'>>[], format: XisfWriteFormat = DEFAULT_WRITE_XISF_FORMAT) {
+export async function writeXisf(sink: Sink, images: readonly XisfWriteImage[], format: XisfWriteFormat = DEFAULT_WRITE_XISF_FORMAT) {
 	const options = { ...DEFAULT_WRITE_XISF_FORMAT, ...format }
 	const entries: XisfWriteEntry[] = []
 
@@ -589,7 +572,7 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 
 		const encoded = options.compression ? await new XisfImageWriter({ byteOrder: options.byteOrder, pixelStorage: options.pixelStorage, bitpix, geometry: { width, height, channels } }, options.compression).encode(image.raw) : undefined
 		const dataSize = encoded?.data.byteLength ?? width * height * channels * bitpixInBytes(bitpix)
-		const bounds = bitpix === Bitpix.FLOAT || bitpix === Bitpix.DOUBLE ? floatingPointBounds(image.raw, bitpix) : undefined
+		const bounds = bitpix === -64 || bitpix === -32 ? (image.bounds ?? '0:1') : undefined
 		entries.push({ bitpix, width, height, channels, sampleFormat, colorSpace, fitsKeywords, raw: image.raw, dataSize, encoded, bounds })
 	}
 

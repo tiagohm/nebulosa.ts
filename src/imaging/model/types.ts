@@ -60,6 +60,13 @@ export interface DigitalImageReadOptions {
 // Discriminated image-reader options for normalized or digital samples.
 export type ImageReadOptions = NormalizedImageReadOptions | DigitalImageReadOptions
 
+// Options for writing an Image to FITS or XISF.
+export interface WriteImageOptions {
+	// Writes samples in the scale of the source: undoes the min-max rescale recorded in metadata.normalization
+	// (sample * range + minimum) on a copy. No effect on an image without normalization. Default false.
+	readonly sourceScale?: boolean
+}
+
 // Per-format options when serializing an image.
 export interface WriteImageToFormatOptions {
 	jpeg: {
