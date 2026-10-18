@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { Jpeg } from '../../../src/bindings/imaging/libturbojpeg'
-import { readImageFromFits, readImageFromJpeg, readImageFromPath, readImageFromSource, readImageFromXisf, writeImageToFits, writeImageToXisf } from '../../../src/imaging/model/image'
+import { denormalize, readImageFromFits, readImageFromJpeg, readImageFromPath, readImageFromSource, readImageFromXisf, writeImageToFits, writeImageToXisf } from '../../../src/imaging/model/image'
 import { approximateArcsinhStretchParameters, arcsinhStretch } from '../../../src/imaging/processing/arcsinh'
 import { clone } from '../../../src/imaging/processing/arithmetic'
 import { calibrate } from '../../../src/imaging/processing/calibration'
@@ -87,6 +87,47 @@ test('does not min-max stretch leftover samples past a FITS image', async () => 
 	for (const value of image!.raw) {
 		expect(value).toBeCloseTo(midScale, 6)
 	}
+})
+
+// Writes a 4x1 32-bit floating-point FITS image holding samples and returns its bytes.
+async function floatFits(samples: readonly number[]) {
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 2, 0)
+	const header = { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: samples.length, NAXIS2: 1 }
+	await writeFits(bufferSink(buffer), [{ header, raw: new Float32Array(samples) }], { type: false })
+	return buffer
+}
+
+test('records the min-max rescale of an out-of-range source and denormalize restores its scale', async () => {
+	const buffer = await floatFits([100, 350, 600, 1100])
+	const image = (await readImageFromSource(bufferSource(buffer), 32))!
+
+	expect(image.metadata.normalization).toEqual({ minimum: 100, range: 1000 })
+	expect([...image.raw]).toEqual([0, 0.25, 0.5, 1])
+
+	const restored = denormalize(image)
+	expect(restored.raw).toBeInstanceOf(Float32Array)
+	expect([...restored.raw]).toEqual([100, 350, 600, 1100])
+	expect(restored.metadata.normalization).toBeUndefined()
+	expect([...image.raw]).toEqual([0, 0.25, 0.5, 1])
+
+	const output = Buffer.alloc(FITS_BLOCK_SIZE * 2, 0)
+	await writeImageToFits(restored, bufferSink(output))
+	const reread = (await readImageFromSource(bufferSource(output), { raw: 64, sampleScale: 'digital' }))!
+	expect([...reread.raw]).toEqual([100, 350, 600, 1100])
+})
+
+test('a flat out-of-range source records a zero range', async () => {
+	const image = (await readImageFromSource(bufferSource(await floatFits([5, 5, 5, 5])), 64))!
+
+	expect(image.metadata.normalization).toEqual({ minimum: 5, range: 0 })
+	expect([...denormalize(image).raw]).toEqual([5, 5, 5, 5])
+})
+
+test('an in-range source records no rescale', async () => {
+	const image = (await readImageFromSource(bufferSource(await floatFits([0, 0.25, 0.5, 1])), 64))!
+
+	expect(image.metadata.normalization).toBeUndefined()
+	expect(denormalize(image)).toBe(image)
 })
 
 test('drops leftover samples past a multichannel JPEG image', () => {

@@ -9,7 +9,21 @@ import { readXisf, writeXisf, type Xisf, type XisfImage, XisfImageReader, type X
 import { bufferSink, bufferSource, readRemaining, readUntil } from '../../io/io'
 import type { Source, Seekable, Sink } from '../../io/types'
 import { clamp } from '../../math/numerical/math'
-import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, makeImageRawTypedArray, type DigitalImage, type DigitalImageReadOptions, type Image, type ImageFormat, type ImageRawPrecision, type ImageRawType, type ImageReadOptions, type ImageSampleScale, type NormalizedImageReadOptions, type WriteImageToFormatOptions } from './types'
+import {
+	DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS,
+	makeImageRawTypedArray,
+	type DigitalImage,
+	type DigitalImageReadOptions,
+	type Image,
+	type ImageFormat,
+	type ImageNormalization,
+	type ImageRawPrecision,
+	type ImageRawType,
+	type ImageReadOptions,
+	type ImageSampleScale,
+	type NormalizedImageReadOptions,
+	type WriteImageToFormatOptions,
+} from './types'
 
 // Image input/output for the imaging model: reads FITS, XISF, and JPEG sources (auto-detected) into a
 // normalized in-memory Image or a DigitalImage preserving source digital numbers, and writes an Image
@@ -114,9 +128,9 @@ export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & S
 	const metadata = { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer }
 	if (sampleScale === 'digital') return { header, raw, metadata, sampleScale, ...fitsDigitalProperties(header, bitpix) }
 
-	normalize(raw)
+	const normalization = normalize(raw)
 
-	return { header, raw, metadata }
+	return { header, raw, metadata: normalization ? { ...metadata, normalization } : metadata }
 }
 
 // Reads an XISF image while preserving source digital numbers.
@@ -156,9 +170,9 @@ export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source &
 	const metadata = { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer }
 	if (sampleScale === 'digital') return { header, raw, metadata, sampleScale, ...xisfDigitalProperties(bitpix) }
 
-	normalize(raw)
+	const normalization = normalize(raw)
 
-	return { header, raw, metadata }
+	return { header, raw, metadata: normalization ? { ...metadata, normalization } : metadata }
 }
 
 // Decodes a JPEG buffer into a normalized Image. When `format` is omitted, TurboJPEG selects the
@@ -293,9 +307,25 @@ export function truncatePixel(p: number, max: number) {
 	return clamp(Math.trunc(p * max), 0, max)
 }
 
+// Returns a copy of an image read in the normalized scale with its min-max rescale undone, so its samples
+// are back in the source's normalized full-scale unit (sample * range + minimum, see
+// ImageNormalization), with the same precision and no normalization in its metadata. Writing the copy
+// keeps the scale of the source. An image without normalization is returned as is.
+export function denormalize(image: Image): Image {
+	const { normalization } = image.metadata
+	if (!normalization) return image
+
+	const { minimum, range } = normalization
+	const { raw } = image
+	const output = makeImageRawTypedArray(raw, raw.length)
+	for (let i = 0; i < raw.length; i++) output[i] = raw[i] * range + minimum
+
+	return { ...image, metadata: { ...image.metadata, normalization: undefined }, raw: output }
+}
+
 // Rescales the raw buffer into [0, 1] in place when its values fall outside that range; a flat image
-// (range below 1e-12) is zeroed.
-function normalize(raw: ImageRawType) {
+// (range below 1e-12) is zeroed. Returns the rescale applied, or undefined when the buffer was kept.
+function normalize(raw: ImageRawType): ImageNormalization | undefined {
 	const n = raw.length
 	let min = raw[0]
 	let max = raw[0]
@@ -311,10 +341,15 @@ function normalize(raw: ImageRawType) {
 
 		if (rangeDelta <= 1e-12) {
 			raw.fill(0)
-		} else {
-			for (let i = 0; i < n; i++) {
-				raw[i] = (raw[i] - min) / rangeDelta
-			}
+			return { minimum: min, range: 0 }
 		}
+
+		for (let i = 0; i < n; i++) {
+			raw[i] = (raw[i] - min) / rangeDelta
+		}
+
+		return { minimum: min, range: rangeDelta }
 	}
+
+	return undefined
 }

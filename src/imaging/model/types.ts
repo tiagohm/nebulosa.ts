@@ -112,6 +112,19 @@ export interface ImageMetadata extends Readonly<Size> {
 	readonly bitpix: Bitpix
 	// Bayer pattern if the data is a raw CFA mosaic, otherwise undefined.
 	readonly bayer: CfaPattern | undefined
+	// Min-max rescale a normalized reader applied because the source left 0..1; absent when none was.
+	readonly normalization?: ImageNormalization
+}
+
+// Min-max rescale of a normalized read: each source sample s became (s - minimum) / range, so
+// s = sample * range + minimum restores it. Source samples are in the reader's normalized full-scale
+// unit (integer data divided by 2^bitpix - 1, floating-point data as stored, both after BZERO/BSCALE).
+// A range of 0 marks a flat source, whose samples were all set to 0.
+export interface ImageNormalization {
+	// Smallest source sample, mapped to 0.
+	readonly minimum: number
+	// Source sample span mapped to 1 (maximum - minimum), or 0 for a flat source.
+	readonly range: number
 }
 
 // BT.709 / sRGB luminance weights.
