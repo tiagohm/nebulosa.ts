@@ -8,4 +8,3 @@ root = "./tests"
 preload = ["./tests/setup.ts"]
 coverageSkipTestFiles = true
 onlyFailures = true
-concurrentTestGlob = "**/{adapters,astrometry,astronomy,bindings,core,imaging,io,math}/**"
