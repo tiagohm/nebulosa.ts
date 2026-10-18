@@ -316,6 +316,25 @@ describe('write', () => {
 		expect(image?.header.OBJECT).toBe(value)
 	})
 
+	test('declares the sample range as bounds of floating-point samples outside 0..1', async () => {
+		const cases = [
+			[-32, new Float64Array([100.1, 350, 600, 1100.1]), `${Math.fround(100.1)}:${Math.fround(1100.1)}`],
+			[-64, new Float64Array([100.1, 350, 600, 1100.1]), '100.1:1100.1'],
+			[-64, new Float64Array([5, 5, 5, 5]), '5:6'],
+			[-32, new Float64Array([0, 0.25, 0.5, 1]), '0:1'],
+		] as const
+
+		for (const [bitpix, raw, bounds] of cases) {
+			const output = Buffer.alloc(4096)
+			const size = await writeXisf(bufferSink(output), [{ header: { SIMPLE: true, BITPIX: bitpix, NAXIS: 2, NAXIS1: 4, NAXIS2: 1 }, raw }])
+			const xisf = (await readXisf(bufferSource(output.subarray(0, size))))!
+			const image = (await readImageFromXisf(xisf, bufferSource(output.subarray(0, size)), { sampleScale: 'digital', raw: 64 }))!
+
+			expect(output.toString('utf8', 16, 16 + output.readUInt32LE(8)).match(/bounds="([^"]*)"/)?.[1]).toBe(bounds)
+			expect(Array.from(image.raw)).toEqual(Array.from(bitpix === -32 ? raw.map(Math.fround) : raw))
+		}
+	})
+
 	test('clamps overflowing normalized samples to the unsigned XISF range', async () => {
 		const cases = [false, { format: 'zstd' as const }, { format: 'zstd' as const, shuffled: true }] as const
 

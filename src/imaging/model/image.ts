@@ -9,21 +9,8 @@ import { readXisf, writeXisf, type Xisf, type XisfImage, XisfImageReader, type X
 import { bufferSink, bufferSource, readRemaining, readUntil } from '../../io/io'
 import type { Source, Seekable, Sink } from '../../io/types'
 import { clamp } from '../../math/numerical/math'
-import {
-	DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS,
-	makeImageRawTypedArray,
-	type DigitalImage,
-	type DigitalImageReadOptions,
-	type Image,
-	type ImageFormat,
-	type ImageNormalization,
-	type ImageRawPrecision,
-	type ImageRawType,
-	type ImageReadOptions,
-	type ImageSampleScale,
-	type NormalizedImageReadOptions,
-	type WriteImageToFormatOptions,
-} from './types'
+// oxfmt-ignore
+import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, makeImageRawTypedArray, type DigitalImage, type DigitalImageReadOptions, type Image, type ImageFormat, type ImageNormalization, type ImageRawPrecision, type ImageRawType, type ImageReadOptions, type ImageSampleScale, type NormalizedImageReadOptions, type WriteImageToFormatOptions } from './types'
 
 // Image input/output for the imaging model: reads FITS, XISF, and JPEG sources (auto-detected) into a
 // normalized in-memory Image or a DigitalImage preserving source digital numbers, and writes an Image
