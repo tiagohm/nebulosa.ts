@@ -414,7 +414,8 @@ export function aperturePhotometry(image: Image | DigitalImage, positions: reado
 function sampleVariance(value: number, pixel: number, uncertainty: PhotometryPixelUncertainty | undefined, offset: number, inverseGain: number, readVariance: number) {
 	if (uncertainty === undefined) return Math.max(value - offset, 0) * inverseGain + readVariance
 	const data = uncertainty.data[pixel]
-	return uncertainty.kind === 'variance' ? (data >= 0 ? data : Number.NaN) : data > 0 ? 1 / data : Number.NaN
+	// An infinite weight would invert to a finite zero variance, so it is rejected before the inversion.
+	return uncertainty.kind === 'variance' ? (data >= 0 ? data : Number.NaN) : data > 0 && data < Number.POSITIVE_INFINITY ? 1 / data : Number.NaN
 }
 
 // Converts an aperture to its semi-axes, rotation and bounding box.

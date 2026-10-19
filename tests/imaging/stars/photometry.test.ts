@@ -259,6 +259,26 @@ describe('uncertainty', () => {
 		expect(result.fluxError).toBeCloseTo(Math.sqrt(4 * (n - 1)), 12)
 	})
 
+	test('only finite positive weights are valid inverse variances', () => {
+		const pixel = 25 * 50 + 26
+		for (const weight of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0, -0.25]) {
+			const data = new Float64Array(2500).fill(0.25)
+			data[pixel] = weight
+			const result = aperturePhotometry(flat, at, aperture, { method: 'center', background: { level: 0 }, uncertainty: { kind: 'inverseVariance', data } })[0]
+			expect(result.maskedArea).toBe(1)
+			expect(result.area).toBe(n - 1)
+			expect(result.sum).toBe(S * (n - 1))
+			expect(result.fluxError).toBeCloseTo(Math.sqrt(4 * (n - 1)), 12)
+			expect(result.flags).toContain('masked')
+		}
+		const valid = aperturePhotometry(flat, at, aperture, { method: 'center', background: { level: 0 }, uncertainty: { kind: 'inverseVariance', data: new Float64Array(2500).fill(0.25) } })[0]
+		expect(valid.maskedArea).toBe(0)
+		expect(valid.fluxError).toBeCloseTo(Math.sqrt(4 * n), 12)
+		const zero = aperturePhotometry(flat, at, aperture, { method: 'center', background: { level: 0 }, uncertainty: { kind: 'variance', data: new Float64Array(2500) } })[0]
+		expect(zero.maskedArea).toBe(0)
+		expect(zero.fluxError).toBe(0)
+	})
+
 	describe('annulus', () => {
 		// 31x31 frame centered at (15, 15): the 'center' method gives 25 aperture pixels for r < 3 and 140 sky samples for 6 <= r < 9.
 		const size = 31
@@ -307,6 +327,15 @@ describe('uncertainty', () => {
 			const result = aperturePhotometry(saturated, at, aperture, { method: 'center', mask, saturationLevel: 5000, uncertainty: { kind: 'variance', data: variance } })[0]
 			expect(result.backgroundCount).toBe(140 - 3)
 			expect(result.background).toBe(50)
+
+			// An infinite weight excludes its sky sample instead of giving it zero variance.
+			const outlier = makeImage(size, size, (x, y) => (x === 15 && y === 7 ? 10000 : 100))
+			const weights = map(() => 1)
+			weights[7 * size + 15] = Number.POSITIVE_INFINITY
+			const infinite = aperturePhotometry(outlier, at, aperture, { method: 'center', backgroundStatistic: 'mean', clipIterations: 0, uncertainty: { kind: 'inverseVariance', data: weights } })[0]
+			expect(infinite.backgroundCount).toBe(139)
+			expect(infinite.background).toBe(100)
+			expect(infinite.flux).toBe(0)
 		})
 
 		test('the sky error is propagated from the noise model of a constant annulus', () => {
