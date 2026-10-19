@@ -8,7 +8,7 @@ import { eraGd2Gce, eraJdToCal } from '../coordinates/erfa/erfa'
 import { itrs } from '../coordinates/itrs'
 import { Ellipsoid, type GeographicPosition, geocentricLocation, geodeticLocation } from '../observer/location'
 import type { ExposureShutter, ExposureSpan, ExposureTimestamp } from './exposure'
-import { type Time, Timescale, tai, time, timeConvert, timeShift, timeSubtract, timeYMDHMS, utc, utcLeapSeconds } from './time'
+import { type Time, Timescale, tai, time, timeConvert, timeShift, timeSubtract, timeYMDHMS, tt, utc, utcLeapSeconds } from './time'
 
 // FITS observation timing and observatory metadata (FITS Standard 4.0 §4.4.2.2, §8.4.1 and §9): a pure
 // parse/serialize layer between header keywords and two-part `Time` instants. The reader resolves the
@@ -75,10 +75,11 @@ export interface FitsTimeMetadata {
 	// TELAPSE, elapsed time between start and end, in seconds.
 	readonly elapsed?: number
 	// Whether start and end bound one continuous exposure. True only with positive evidence: an exposure
-	// equal to end - start within their resolutions, and timestamps fine enough to resolve the exposure
-	// (their resolutions plus the tolerance are smaller than it). False when end precedes start or the
-	// exposure differs from the span (dead time, co-added frames, or a conflict). Undefined when start,
-	// end or the exposure is unknown, or when the resolutions are too coarse to tell.
+	// equal to end - start within their resolutions, and values fine enough to resolve the exposure (the
+	// resolutions of start, end and the exposure plus the tolerance are smaller than it, so the span is
+	// positive). False when end precedes start or the exposure differs from the span (dead time, co-added
+	// frames, or a conflict). Undefined when start, end or the exposure is unknown, or when the
+	// resolutions are too coarse to tell (an integer XPOSURE = 1 is known only to 1 s).
 	readonly continuous?: boolean
 	// TIMSYER, absolute (systematic) time error, in seconds.
 	readonly systematicError?: number
@@ -124,7 +125,9 @@ export interface FitsTimeInput {
 	readonly ephemeris?: string
 	// Observatory, written to OBSGEO-X/Y/Z (meters) and SITELAT/SITELONG/SITEELEV (degrees, east-positive,
 	// meters). It is the single location of the output: every instant is evaluated at it for the
-	// topocentric TDB-TT term, replacing any other location the instant carries. Omitted, the location of
+	// topocentric TDB-TT term, replacing any other location the instant carries (a TDB or TCB instant is
+	// rebased through TT; with a non-topocentric referencePosition it is kept as given and the location is
+	// only recorded). Omitted, the location of
 	// the first instant that has one (start, midpoint, end) takes its place, so the header always records
 	// the site the conversion used.
 	readonly location?: GeographicPosition
@@ -455,12 +458,13 @@ export function writeFitsTime(header: FitsHeader, input: FitsTimeInput) {
 	const scale = input.scale ?? input.start?.scale ?? input.midpoint?.scale ?? input.end?.scale ?? Timescale.UTC
 	const digits = input.digits ?? 6
 	const location = input.location ?? input.start?.location ?? input.midpoint?.location ?? input.end?.location
-	const start = input.start && timeConvert(locate(input.start, location), scale)
-	const midpoint = input.midpoint && timeConvert(locate(input.midpoint, location), scale)
-	const end = input.end && timeConvert(locate(input.end, location), scale)
+	const referencePosition = input.referencePosition ?? (scale === Timescale.TCG || scale === Timescale.TDB || scale === Timescale.TCB ? 'topocenter' : undefined)
+	const topocentric = referencePosition === undefined || referencePosition === 'topocenter'
+	const start = input.start && timeConvert(locate(input.start, location, topocentric), scale)
+	const midpoint = input.midpoint && timeConvert(locate(input.midpoint, location, topocentric), scale)
+	const end = input.end && timeConvert(locate(input.end, location, topocentric), scale)
 	const elapsed = start && end && elapsedSeconds(start, end)
 	const position = location && itrs(location)
-	const referencePosition = input.referencePosition ?? (scale === Timescale.TCG || scale === Timescale.TDB || scale === Timescale.TCB ? 'topocenter' : undefined)
 	const values: Record<FitsHeaderKey, FitsHeaderValue> = {
 		TIMESYS: SCALE_CODES[scale],
 		TIMEUNIT: input.exposure !== undefined || elapsed !== undefined || input.systematicError !== undefined || input.randomError !== undefined ? 's' : undefined,
@@ -499,10 +503,16 @@ export function writeFitsTime(header: FitsHeader, input: FitsTimeInput) {
 
 // Returns `time` itself when it already carries `location` or none is given, else a fresh uncached copy
 // carrying `location` (replacing any other), so that a scale conversion evaluates the topocentric TDB-TT
-// term at the observatory written to the header. The input is never mutated.
-function locate(time: Time, location: GeographicPosition | undefined) {
+// term at the observatory written to the header. A TDB or TCB instant already holds the term of its own
+// location (none: geocentric), so for `topocentric` output it is first brought back to TT with that
+// location and then relocated, giving the value a TT clock reading at `location` would have; for any other
+// declared origin it is returned unchanged, since its value is not tied to the observatory. The input is
+// never mutated.
+function locate(time: Time, location: GeographicPosition | undefined, topocentric: boolean) {
 	if (location === undefined || time.location === location) return time
-	const located = timeShift(time, 0)
+	const coordinate = time.scale === Timescale.TDB || time.scale === Timescale.TCB
+	if (coordinate && !topocentric) return time
+	const located = timeShift(coordinate ? tt(time) : time, 0)
 	located.location = location
 	return located
 }
@@ -836,9 +846,11 @@ function compareDurations(context: ReadContext, kept: Duration, other: Duration)
 // Checks that the instants and durations describe one interval: start <= end, the midpoint inside it,
 // TELAPSE equal to its length, and an exposure no longer than it. Returns whether start and end bound
 // one continuous exposure (see FitsTimeMetadata.continuous). Two endpoints alone never prove it, since
-// FITS 4.0 §9.7 separates the accumulated XPOSURE from the elapsed window; and when the timestamp
-// resolutions plus the tolerance are not smaller than the exposure, a window of up to twice the
-// integration time is just as consistent.
+// FITS 4.0 §9.7 separates the accumulated XPOSURE from the elapsed window. The resolutions (one unit of
+// the last written digit, of the timestamps and of the exposure, whose trailing zeros are lost when the
+// header is parsed) plus the tolerance bound the representation error: a larger difference is a
+// conflict, but a smaller one proves equality only when that bound is smaller than the exposure itself;
+// otherwise a window of up to twice the integration time, or of zero length, is just as consistent.
 function checkInterval(context: ReadContext, start?: FitsTimeValue, midpoint?: FitsTimeValue, end?: FitsTimeValue, exposure?: Duration, elapsed?: Duration) {
 	const { diagnostics, tolerance } = context
 	let continuous: boolean | undefined
@@ -863,7 +875,9 @@ function checkInterval(context: ReadContext, start?: FitsTimeValue, midpoint?: F
 		if (continuous === undefined && exposure !== undefined) {
 			const bound = slack + exposure.resolution
 			if (Math.abs(exposure.value - span) > bound) continuous = false
-			else if (slack < exposure.value) continuous = true
+			// The bound only rules out a conflict. Equality is proven when it is smaller than the exposure,
+			// which also forces a positive span; XPOSURE = 1 (known to 1 s) next to a 0 s window is not.
+			else if (bound < exposure.value) continuous = true
 		}
 	}
 

@@ -4,7 +4,7 @@ import { itrs } from '../../../src/astronomy/coordinates/itrs'
 import { geodeticLocation } from '../../../src/astronomy/observer/location'
 import { exposureInterval } from '../../../src/astronomy/time/exposure'
 import { FITS_TIME_KEYWORDS, type FitsTimeMetadata, fitsExposure, formatFitsDateTime, readFitsTime, writeFitsTime } from '../../../src/astronomy/time/fits'
-import { type Time, Timescale, tai, tdb, timeSubtract, timeToDate, timeYMDHMS, tt } from '../../../src/astronomy/time/time'
+import { type Time, Timescale, tai, tcb, tdb, timeSubtract, timeToDate, timeYMDHMS, tt } from '../../../src/astronomy/time/time'
 import { DAYSEC } from '../../../src/core/constants'
 import { fileHandleSource } from '../../../src/io/file'
 import { FitsKeywordReader, FitsKeywordWriter, type FitsHeader, readFits } from '../../../src/io/formats/fits/fits'
@@ -412,7 +412,28 @@ describe('exposure', () => {
 		const header = { TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-03-10T03:00:00', 'DATE-END': '2024-03-10T03:00:01' }
 		expect(readFitsTime({ ...header, XPOSURE: 1 }).continuous).toBeUndefined()
 		expect(readFitsTime({ ...header, 'DATE-END': '2024-03-10T03:01:00', XPOSURE: 60 }).continuous).toBe(true)
-		expect(readFitsTime({ ...header, 'DATE-BEG': '2024-03-10T03:00:00.000', 'DATE-END': '2024-03-10T03:00:01.000', XPOSURE: 1 }).continuous).toBe(true)
+		// An integer XPOSURE is known only to 1 s, so even millisecond timestamps cannot prove a 1 s exposure.
+		const fine = { ...header, 'DATE-BEG': '2024-03-10T03:00:00.000', 'DATE-END': '2024-03-10T03:00:01.000' }
+		expect(readFitsTime({ ...fine, XPOSURE: 1 }).continuous).toBeUndefined()
+		expect(readFitsTime({ ...fine, 'DATE-END': '2024-03-10T03:00:01.500', XPOSURE: 1.5 }).continuous).toBe(true)
+	})
+
+	test('a zero-length window never becomes a continuous exposure', () => {
+		const header = { TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-03-10T03:00:00.000', 'DATE-END': '2024-03-10T03:00:00.000', XPOSURE: 1 }
+		const zero = readFitsTime(header)
+		expect(zero.continuous).not.toBe(true)
+		expect(fitsExposure(zero)).toBeUndefined()
+
+		for (const end of ['2024-03-10T03:00:00.100', '2024-03-10T03:00:00.200']) {
+			const short = readFitsTime({ ...header, 'DATE-END': end })
+			expect(short.continuous).not.toBe(true)
+			expect(fitsExposure(short)).toBeUndefined()
+		}
+
+		// A finer exposure exposes the mismatch as a conflict.
+		const conflict = readFitsTime({ ...header, XPOSURE: 1.0001 })
+		expect(conflict.continuous).toBe(false)
+		expect(findings(conflict)).toEqual(['conflict:XPOSURE'])
 	})
 
 	test('timestamp quantization and both time errors reach the interval', () => {
@@ -549,5 +570,27 @@ describe('writing', () => {
 		const own = writeFitsTime({}, { scale: Timescale.TDB, start: at(a), digits: 9 })
 		expect(toMeter(Math.hypot(...itrs(readFitsTime(own).location!).map((e, i) => e - itrs(a)[i])))).toBeLessThan(1e-3)
 		expect(findings(readFitsTime(own))).toEqual(['incompatible:TREFPOS'])
+	})
+
+	test('a TDB instant from another site is rebased through TT to the written location', () => {
+		const a = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
+		const b = geodeticLocation(deg(17.8792), deg(28.7606), meter(2396))
+		const at = (location: typeof a) => {
+			const instant = timeYMDHMS(2026, 1, 1, 6, 0, 0, Timescale.UTC)
+			instant.location = location
+			return instant
+		}
+
+		const atA = tdb(at(a))
+		const expected = writeFitsTime({}, { scale: Timescale.TDB, start: at(b), digits: 9 })['DATE-BEG']
+		expect(writeFitsTime({}, { scale: Timescale.TDB, start: atA, location: b, digits: 9 })['DATE-BEG']).toBe(expected)
+		expect(writeFitsTime({}, { scale: Timescale.TDB, start: tcb(at(a)), location: b, digits: 9 })['DATE-BEG']).toBe(expected)
+		expect(atA.location).toBe(a)
+
+		// A barycentric TDB is not tied to the observatory: its value is kept and the location only recorded.
+		const barycentric = writeFitsTime({}, { start: atA, location: b, referencePosition: 'barycenter', digits: 9 })
+		expect(barycentric['DATE-BEG']).toBe(formatFitsDateTime(atA, 9))
+		expect(barycentric['DATE-BEG']).not.toBe(expected)
+		expect(toMeter(Math.hypot(...itrs(readFitsTime(barycentric).location!).map((e, i) => e - itrs(b)[i])))).toBeLessThan(1e-3)
 	})
 })
