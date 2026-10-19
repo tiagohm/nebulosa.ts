@@ -278,21 +278,23 @@ export function writeImageToFormat(image: Image, format: Exclude<ImageFormat, 'f
 }
 
 // Writes an Image to a FITS file via a buffer or sink. With `sourceScale`, an image whose read recorded a
-// min-max rescale is written with it undone (see WriteImageOptions); the image itself is not modified.
+// min-max rescale is written with it undone (see WriteImageOptions) by the FITS writer while it converts
+// samples, so neither the image nor a copy of its samples is modified or allocated.
 export function writeImageToFits(image: Image, output: Buffer | Sink, options?: WriteImageOptions) {
 	if (Buffer.isBuffer(output)) output = bufferSink(output)
 	const normalization = options?.sourceScale ? image.metadata.normalization : undefined
-	return writeFits(output, [normalization ? { ...image, raw: restoreSourceScale(image.raw, normalization) } : image])
+	return writeFits(output, [{ header: image.header, raw: image.raw, normalization }])
 }
 
 // Writes an Image to an XISF file via a buffer or sink. With `sourceScale`, an image whose read recorded a
-// min-max rescale is written with it undone (see WriteImageOptions) and, when floating-point, declares the
-// source range as its bounds instead of 0:1; the image itself is not modified.
+// min-max rescale is written with it undone (see WriteImageOptions) by the XISF writer while it converts
+// samples and, when floating-point, declares the source range as its bounds instead of 0:1; neither the
+// image nor a copy of its samples is modified or allocated.
 export function writeImageToXisf(image: Image, output: Buffer | Sink, format?: XisfWriteFormat, options?: WriteImageOptions) {
 	if (Buffer.isBuffer(output)) output = bufferSink(output)
 	const normalization = options?.sourceScale ? image.metadata.normalization : undefined
 	if (!normalization) return writeXisf(output, [image], format)
-	return writeXisf(output, [{ ...image, raw: restoreSourceScale(image.raw, normalization), bounds: sourceScaleBounds(normalization, image.header.BITPIX === -32) }], format)
+	return writeXisf(output, [{ header: image.header, raw: image.raw, normalization, bounds: sourceScaleBounds(normalization, image.header.BITPIX === -32) }], format)
 }
 
 // Scales a normalized pixel `p` (0..1) to an integer 0..max, truncating and clamping.
@@ -300,16 +302,7 @@ export function truncatePixel(p: number, max: number) {
 	return clamp(Math.trunc(p * max), 0, max)
 }
 
-// Returns a copy of normalized samples with a recorded min-max rescale undone (sample * range + minimum),
-// in the same precision, so they are back in the source's normalized full-scale unit (see ImageNormalization).
-function restoreSourceScale(raw: ImageRawType, normalization: ImageNormalization) {
-	const { minimum, range } = normalization
-	const output = makeImageRawTypedArray(raw, raw.length)
-	for (let i = 0; i < raw.length; i++) output[i] = raw[i] * range + minimum
-	return output
-}
-
-// Returns the XISF bounds enclosing samples restored by restoreSourceScale from the 0..1 scale: minimum to
+// Returns the XISF bounds enclosing samples restored (sample * range + minimum) from the 0..1 scale: minimum to
 // minimum + range, both rounded to Float32 when `float32` (rounding is monotonic, so every stored sample stays
 // within them). The upper bound of a flat source, or of a range lost to that rounding, is one more than the
 // lower one, since XISF requires low < high.

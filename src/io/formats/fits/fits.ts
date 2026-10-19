@@ -3,7 +3,7 @@ import { type FitsKeyword, KEYWORDS } from './headers'
 import { bitpixInBytes, bitpixKeyword, computeHduDataSize, escapeQuotedText, heightKeyword, isCommentKeyword, isCommentStyleCard, isCompressedImageHeader, isRiceCompressedImageHeader, numberOfChannelsKeyword, numericKeyword, RICE_1_COMPRESSION_TYPE, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, unescapeQuotedText, widthKeyword } from './util'
 import type { Writable } from '../../../core/types'
 import { validatePositiveInteger } from '../../../core/validation'
-import type { Image, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
+import type { Image, ImageNormalization, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
 import { clamp, type NumberArray } from '../../../math/numerical/math'
 import { readUntil, writeFully } from '../../io'
 import { type Source, type Seekable, type Sink, isSeekable } from '../../types'
@@ -312,13 +312,18 @@ function shouldUseRiceCompression(header: Readonly<FitsHeader>, compression: Fit
 	return isRiceCompressedImageHeader(header)
 }
 
-// Computes the multiplier and bias that invert FITS BZERO/BSCALE for normalized input samples.
-function fitsWriteScaling(header: Readonly<FitsHeader>, bitpix: BitpixOrZero) {
+// Computes the multiplier and bias (stored = sample * multiplier - bias) that invert FITS BZERO/BSCALE for
+// normalized input samples. With `normalization`, its min-max rescale (sample * range + minimum) is folded
+// into the same affine map, so samples are written in the source scale without a restored copy.
+function fitsWriteScaling(header: Readonly<FitsHeader>, bitpix: BitpixOrZero, normalization?: ImageNormalization) {
 	const zero = numericKeyword(header, 'BZERO', bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : 0)
 	const scale = numericKeyword(header, 'BSCALE', 1)
 	const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1
 	const divisor = Number.isFinite(scale) && scale !== 0 ? scale : 1
-	return [factor / divisor, zero / divisor] as const
+	const multiplier = factor / divisor
+	const bias = zero / divisor
+	if (normalization === undefined) return [multiplier, bias] as const
+	return [normalization.range * multiplier, bias - normalization.minimum * multiplier] as const
 }
 
 // Numeric typed views constructed over FITS image buffers; ordinary number arrays are never used here.
@@ -439,8 +444,9 @@ interface RiceImageLayout {
 	readonly rows: Buffer
 }
 
-// Prepares Rice tile geometry and the descriptor table. Does not compress pixels.
-function createRiceImageLayout(header: Readonly<FitsHeader>, raw: ImageRawType, options: Readonly<FitsCompressionOptions>): RiceImageLayout {
+// Prepares Rice tile geometry and the descriptor table. Does not compress pixels. `normalization` is undone
+// while quantizing, as in fitsWriteScaling.
+function createRiceImageLayout(header: Readonly<FitsHeader>, raw: ImageRawType, options: Readonly<FitsCompressionOptions>, normalization?: ImageNormalization): RiceImageLayout {
 	const bitpix = uncompressedBitpixKeyword(header, 0)
 	const width = uncompressedWidthKeyword(header, 0)
 	const height = uncompressedHeightKeyword(header, 0)
@@ -455,7 +461,7 @@ function createRiceImageLayout(header: Readonly<FitsHeader>, raw: ImageRawType, 
 
 	const tileHeight = Math.min(height, tileHeightOption)
 	const ImageTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : Int32Array
-	const [multiplier, bias] = fitsWriteScaling(header, bitpix)
+	const [multiplier, bias] = fitsWriteScaling(header, bitpix, normalization)
 	const rowSize = 8
 	const rowCount = Math.ceil(height / tileHeight) * channels
 
@@ -585,10 +591,17 @@ async function compressRiceImageTiles(layout: RiceImageLayout, onTile?: (tile: U
 	return { heapPages, heapSize }
 }
 
+// An image HDU handed to writeFits: its header and normalized samples, plus an optional rescale to undo.
+export interface FitsWriteImage extends Readonly<Pick<Image, 'header' | 'raw'>> {
+	// Min-max rescale undone while writing (sample * range + minimum), so the file keeps the source scale;
+	// the samples themselves are not modified or copied.
+	readonly normalization?: ImageNormalization
+}
+
 // Writes a sequence of image HDUs to `sink`, padding each header and data segment to FITS block
 // boundaries. The first HDU becomes the primary HDU; when compression is requested each image is written
 // as a Rice-compressed BINTABLE extension preceded once by an empty primary header.
-export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly Readonly<Pick<Image, 'header' | 'raw' | 'sampleScale'>>[], options: FitsCompressionOptions = {}) {
+export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly FitsWriteImage[], options: FitsCompressionOptions = {}) {
 	let buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE * 4)
 	const headerWriter = new FitsKeywordWriter()
 
@@ -616,7 +629,7 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly R
 	let hasPrimaryHdu = false
 
 	for (const hdu of hdus) {
-		const { header, raw } = hdu
+		const { header, raw, normalization } = hdu
 
 		if (shouldUseRiceCompression(header, options.type)) {
 			if (!hasPrimaryHdu) {
@@ -624,7 +637,7 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly R
 				hasPrimaryHdu = true
 			}
 
-			const layout = createRiceImageLayout(header, raw, options)
+			const layout = createRiceImageLayout(header, raw, options, normalization)
 			const streamHeap = isSeekable(sink)
 
 			if (streamHeap) {
@@ -661,7 +674,7 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly R
 
 		await writeHeader(buildImageHeaderCards(header, !hasPrimaryHdu, hdus.length > 1))
 		const imageWriter = new FitsImageWriter(header)
-		const offset = fillWithRemainingBytes(await imageWriter.write(raw, sink), 0, FITS_DATA_PADDING)
+		const offset = fillWithRemainingBytes(await imageWriter.write(raw, sink, normalization), 0, FITS_DATA_PADDING)
 		if (offset > 0) await writeFully(sink, buffer, offset)
 		hasPrimaryHdu = true
 	}
@@ -1520,15 +1533,16 @@ export class FitsImageWriter {
 		this.#buffer = imageBufferView(buffer, buffer === undefined ? fitsImageChunkSize(size, bitpix) : size)
 	}
 
-	// Writes FITS-format image from RGB-interleaved array into sink
-	async write(input: ImageRawType, sink: Sink) {
+	// Writes FITS-format image from RGB-interleaved array into sink. With `normalization`, its min-max rescale
+	// is undone on the fly (sample * range + minimum) without modifying or copying `input`.
+	async write(input: ImageRawType, sink: Sink, normalization?: ImageNormalization) {
 		const bitpix = uncompressedBitpixKeyword(this.header, 0)
 		const pixelInBytes = bitpixInBytes(bitpix)
 		const width = uncompressedWidthKeyword(this.header, 0)
 		const height = uncompressedHeightKeyword(this.header, 0)
 		const channels = uncompressedNumberOfChannelsKeyword(this.header, 1)
 		const numberOfPixels = width * height
-		const [multiplier, bias] = fitsWriteScaling(this.header, bitpix)
+		const [multiplier, bias] = fitsWriteScaling(this.header, bitpix, normalization)
 		const chunkSamples = pixelInBytes > 0 ? Math.trunc(this.#buffer.length / pixelInBytes) : 0
 		let written = 0
 

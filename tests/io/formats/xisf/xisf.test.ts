@@ -330,6 +330,27 @@ describe('write', () => {
 		}
 	})
 
+	test('undoes a min-max rescale while writing without modifying the samples', async () => {
+		const raw = new Float64Array([0, 0.5, 1, 0.25, 0.75, 0])
+		const normalization = { minimum: 0.25, range: 0.5 }
+		const expected = [...raw].map((value) => value * 0.5 + 0.25)
+		const compressions = [false, { format: 'zstd' as const }, { format: 'zlib' as const, shuffled: true }] as const
+
+		for (const bitpix of [16, -64] as const) {
+			for (const pixelStorage of ['Normal', 'Planar'] as const) {
+				for (const compression of compressions) {
+					const output = Buffer.alloc(4096)
+					const header = { SIMPLE: true, BITPIX: bitpix, NAXIS: 3, NAXIS1: 2, NAXIS2: 1, NAXIS3: 3 }
+					const size = await writeXisf(bufferSink(output), [{ header, raw, normalization }], { byteOrder: 'big', pixelStorage, compression })
+					const image = (await readImageFromBuffer(output.subarray(0, size), { raw: 64, sampleScale: 'digital' }))!
+					expect([...image.raw]).toEqual(bitpix === 16 ? expected.map((value) => Math.round(value * 65535)) : expected)
+				}
+			}
+		}
+
+		expect([...raw]).toEqual([0, 0.5, 1, 0.25, 0.75, 0])
+	})
+
 	test('clamps overflowing normalized samples to the unsigned XISF range', async () => {
 		const cases = [false, { format: 'zstd' as const }, { format: 'zstd' as const, shuffled: true }] as const
 
@@ -378,7 +399,7 @@ describe('write', () => {
 			},
 		}
 
-		const size = await writeXisf(sink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1 }, raw, sampleScale: 'normalized' }])
+		const size = await writeXisf(sink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1 }, raw }])
 		const output = await readImageFromBuffer(buffer.subarray(0, size))
 
 		expect(size).toBe(delegate.position)
@@ -393,7 +414,7 @@ describe('write', () => {
 		const encoded = Buffer.alloc(4096)
 		const sink = base64Sink(bufferSink(encoded))
 
-		await writeXisf(sink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1 }, raw, sampleScale: 'normalized' }])
+		await writeXisf(sink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1 }, raw }])
 		await sink.end()
 		const decoded = Buffer.from(encoded.subarray(0, sink.encodedSize).toString('ascii'), 'base64')
 		const output = await readImageFromBuffer(decoded)
@@ -422,7 +443,7 @@ describe('write', () => {
 				return base.write(chunk, offset, size, encoding)
 			},
 		}
-		const size = await writeXisf(sink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: 1 }, raw, sampleScale: 'normalized' }], {
+		const size = await writeXisf(sink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: 1 }, raw }], {
 			byteOrder: 'big',
 			pixelStorage: 'Normal',
 		})

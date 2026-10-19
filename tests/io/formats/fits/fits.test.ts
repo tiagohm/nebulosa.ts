@@ -748,6 +748,25 @@ test('inverts FITS affine scaling when writing normalized samples', async () => 
 	expect(stored.readInt16BE()).toBe(0)
 })
 
+test('undoes a min-max rescale while writing without modifying the samples', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1, BSCALE: 1, BZERO: 32768 }
+	const raw = new Float64Array([0, 0.5, 1])
+	const normalization = { minimum: 0.25, range: 0.5 }
+	const expected = [0.25, 0.5, 0.75]
+
+	for (const type of [false, 'RICE_1'] as const) {
+		const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 3)
+		await writeFits(bufferSink(buffer), [{ header, raw, normalization }], { type })
+		const image = (await readImageFromBuffer(buffer, { raw: 64, sampleScale: 'digital' }))!
+		expect([...image.raw]).toEqual(expected.map((value) => Math.round(value * 65535)))
+	}
+
+	const stored = Buffer.alloc(24)
+	await new FitsImageWriter({ ...header, BITPIX: -64, BZERO: 0 }).write(raw, bufferSink(stored), normalization)
+	expect([0, 8, 16].map((offset) => stored.readDoubleBE(offset))).toEqual(expected)
+	expect([...raw]).toEqual([0, 0.5, 1])
+})
+
 test('clamps overflowing normalized samples to the integer FITS range', async () => {
 	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1, BSCALE: 1, BZERO: 32768 }
 	const stored = Buffer.alloc(6)

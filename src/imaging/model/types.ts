@@ -62,8 +62,9 @@ export type ImageReadOptions = NormalizedImageReadOptions | DigitalImageReadOpti
 
 // Options for writing an Image to FITS or XISF.
 export interface WriteImageOptions {
-	// Writes samples in the scale of the source: undoes the min-max rescale recorded in metadata.normalization
-	// (sample * range + minimum) on a copy. No effect on an image without normalization. Default false.
+	// Writes samples in the scale of the source: the FITS/XISF writer undoes the min-max rescale recorded in
+	// metadata.normalization (sample * range + minimum) while converting, without copying the samples. No
+	// effect on an image without normalization. Default false.
 	readonly sourceScale?: boolean
 }
 
