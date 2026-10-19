@@ -75,11 +75,13 @@ export interface FitsTimeMetadata {
 	// TELAPSE, elapsed time between start and end, in seconds.
 	readonly elapsed?: number
 	// Whether start and end bound one continuous exposure. True only with positive evidence: an exposure
-	// equal to end - start within their resolutions, and values fine enough to resolve the exposure (the
-	// resolutions of start, end and the exposure plus the tolerance are smaller than it, so the span is
-	// positive). False when end precedes start or the exposure differs from the span (dead time, co-added
-	// frames, or a conflict). Undefined when start, end or the exposure is unknown, or when the
-	// resolutions are too coarse to tell (an integer XPOSURE = 1 is known only to 1 s).
+	// that differs from end - start by less than the quantization of the two timestamps (half their summed
+	// resolutions), and values fine enough to resolve the exposure (the resolutions of start, end and the
+	// exposure plus the tolerance are smaller than it, so the span is positive). False when end precedes
+	// start or the exposure differs from the span beyond all resolutions (dead time, co-added frames, or a
+	// conflict). Undefined when start, end or the exposure is unknown, when the resolutions are too coarse
+	// to tell (an integer XPOSURE = 1 is known only to 1 s), or when the difference is compatible with the
+	// resolutions but not with the timestamps alone (XPOSURE = 30 inside a 32 s window of whole seconds).
 	readonly continuous?: boolean
 	// TIMSYER, absolute (systematic) time error, in seconds.
 	readonly systematicError?: number
@@ -849,8 +851,10 @@ function compareDurations(context: ReadContext, kept: Duration, other: Duration)
 // FITS 4.0 §9.7 separates the accumulated XPOSURE from the elapsed window. The resolutions (one unit of
 // the last written digit, of the timestamps and of the exposure, whose trailing zeros are lost when the
 // header is parsed) plus the tolerance bound the representation error: a larger difference is a
-// conflict, but a smaller one proves equality only when that bound is smaller than the exposure itself;
-// otherwise a window of up to twice the integration time, or of zero length, is just as consistent.
+// conflict, but a smaller one is only compatible. Continuity needs a stricter match: the exposure must
+// differ from the span by less than the quantization of the two timestamps (half their summed
+// resolutions, less the tolerance, or within the tolerance itself), and that bound must be smaller than
+// the exposure; otherwise dead time, or a window of zero length, is just as consistent.
 function checkInterval(context: ReadContext, start?: FitsTimeValue, midpoint?: FitsTimeValue, end?: FitsTimeValue, exposure?: Duration, elapsed?: Duration) {
 	const { diagnostics, tolerance } = context
 	let continuous: boolean | undefined
@@ -873,11 +877,16 @@ function checkInterval(context: ReadContext, start?: FitsTimeValue, midpoint?: F
 		}
 
 		if (continuous === undefined && exposure !== undefined) {
+			const difference = Math.abs(exposure.value - span)
 			const bound = slack + exposure.resolution
-			if (Math.abs(exposure.value - span) > bound) continuous = false
-			// The bound only rules out a conflict. Equality is proven when it is smaller than the exposure,
-			// which also forces a positive span; XPOSURE = 1 (known to 1 s) next to a 0 s window is not.
-			else if (bound < exposure.value) continuous = true
+			// Half the summed timestamp resolutions bounds the error of the written span, rounded or truncated.
+			const quantum = (start.resolution + end.resolution) / 2
+			if (difference > bound) continuous = false
+			// The bound only rules out a conflict. Continuity is proven when the written span reproduces the
+			// exposure within the timestamp quantization alone, so the 1 s resolution of an integer XPOSURE
+			// cannot hide dead time (30 s inside a 32 s window), and when the bound is smaller than the
+			// exposure, which also forces a positive span (XPOSURE = 1 next to a 0 s window is not).
+			else if ((difference <= tolerance || difference < quantum - tolerance) && bound < exposure.value) continuous = true
 		}
 	}
 

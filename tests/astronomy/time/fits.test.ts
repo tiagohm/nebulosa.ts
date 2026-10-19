@@ -418,6 +418,30 @@ describe('exposure', () => {
 		expect(readFitsTime({ ...fine, 'DATE-END': '2024-03-10T03:00:01.500', XPOSURE: 1.5 }).continuous).toBe(true)
 	})
 
+	test('dead time within the exposure resolution is not taken as a continuous exposure', () => {
+		const base = { TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-03-10T03:00:00', 'DATE-END': '2024-03-10T03:00:32', XPOSURE: 30, TELAPSE: 32 }
+
+		// 30 s of integration inside a 32 s window of whole seconds: compatible, but not proven continuous.
+		const overhead = readFitsTime(base)
+		expect(overhead.exposure).toBe(30)
+		expect(overhead.elapsed).toBe(32)
+		expect(overhead.continuous).toBeUndefined()
+		expect(findings(overhead)).toBeEmpty()
+		expect(fitsExposure(overhead)).toBeUndefined()
+
+		const fine = readFitsTime({ ...base, 'DATE-BEG': '2024-03-10T03:00:00.000', 'DATE-END': '2024-03-10T03:00:30.900', TELAPSE: 30.9 })
+		expect(fine.continuous).toBeUndefined()
+		expect(findings(fine)).toBeEmpty()
+		expect(fitsExposure(fine)).toBeUndefined()
+
+		// One whole second of difference is already beyond the quantization of whole-second timestamps.
+		expect(readFitsTime({ ...base, 'DATE-END': '2024-03-10T03:00:31', TELAPSE: 31 }).continuous).toBeUndefined()
+
+		const exact = readFitsTime({ ...base, 'DATE-END': '2024-03-10T03:00:30', TELAPSE: 30 })
+		expect(exact.continuous).toBe(true)
+		expect(exposureInterval(fitsExposure(exact)!).duration).toBeCloseTo(30, 9)
+	})
+
 	test('a zero-length window never becomes a continuous exposure', () => {
 		const header = { TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-03-10T03:00:00.000', 'DATE-END': '2024-03-10T03:00:00.000', XPOSURE: 1 }
 		const zero = readFitsTime(header)
