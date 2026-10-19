@@ -72,6 +72,10 @@ export interface FitsTimeMetadata {
 	readonly exposureKeyword?: FitsHeaderKey
 	// TELAPSE, elapsed time between start and end, in seconds.
 	readonly elapsed?: number
+	// Whether start and end bound one continuous exposure: true when both are known and the exposure is
+	// absent or equals end - start within their resolutions, false when it differs (dead time, co-added
+	// frames, or a conflict), undefined when start or end is unknown.
+	readonly continuous?: boolean
 	// TIMSYER, absolute (systematic) time error, in seconds.
 	readonly systematicError?: number
 	// TIMRDER, relative (random) time error between time stamps, in seconds.
@@ -105,13 +109,17 @@ export interface FitsTimeInput {
 	readonly end?: Time
 	// Effective exposure in seconds, written to XPOSURE and EXPTIME.
 	readonly exposure?: number
-	// TREFPOS; omitted leaves it to the reader's default for the scale.
+	// TREFPOS: where the given instants are valid. Converting to `scale` changes only the clock, never
+	// this origin, so 'barycenter' must be given only for instants already light-time corrected. Omitted
+	// writes TOPOCENTER for TCG, TDB, and TCB, whose reader default (geocenter, barycenter) would
+	// mislabel recorded times, and leaves TREFPOS absent (topocenter) for the other scales.
 	readonly referencePosition?: FitsTimeReferencePosition
 	// TREFDIR, e.g. 'RA,DEC'.
 	readonly referenceDirection?: string
 	// PLEPHEM, e.g. 'DE440'.
 	readonly ephemeris?: string
-	// Observatory, written to OBSGEO-X/Y/Z (meters) and SITELAT/SITELONG/SITEELEV (degrees, east-positive, meters).
+	// Observatory, written to OBSGEO-X/Y/Z (meters) and SITELAT/SITELONG/SITEELEV (degrees, east-positive,
+	// meters), and attached to instants without a location before the topocentric TDB-TT term is evaluated.
 	readonly location?: GeographicPosition
 	// TIMSYER in seconds.
 	readonly systematicError?: number
@@ -368,7 +376,7 @@ export function readFitsTime(header: FitsHeader, options?: FitsTimeReadOptions):
 	const systematicError = readDuration(context, 'TIMSYER', true)
 	const randomError = readDuration(context, 'TIMRDER', true)
 
-	checkInterval(context, start, midpoint, end, exposure, elapsed)
+	const continuous = checkInterval(context, start, midpoint, end, exposure, elapsed)
 
 	return {
 		timeSystem: system,
@@ -384,6 +392,7 @@ export function readFitsTime(header: FitsHeader, options?: FitsTimeReadOptions):
 		exposure: exposure?.value,
 		exposureKeyword: exposure?.keyword,
 		elapsed: elapsed?.value,
+		continuous,
 		systematicError: systematicError?.value,
 		randomError: randomError?.value,
 		location: site?.position,
@@ -393,20 +402,33 @@ export function readFitsTime(header: FitsHeader, options?: FitsTimeReadOptions):
 }
 
 // Builds the exposureInterval input for the metadata: the DATE-BEG/DATE-END style span when start and
-// end are both known, else a timestamp labelling the start, midpoint, or end (in that order) with the
-// exposure duration. `shutter` supplies latencies and the clock uncertainty, which defaults to TIMSYER.
-// Returns undefined when neither a span nor a timestamp with an exposure is available. The returned
-// timestamps are the metadata's own Time objects.
+// end bound one continuous exposure, else a timestamp labelling the start, midpoint, or end (in that
+// order) with the exposure duration. Returns undefined when start and end are known but the exposure
+// differs from their span (`continuous` is false): integration time and observing window are then
+// distinct quantities and no single collection interval follows from them. Also returns undefined when
+// neither a span nor a timestamp with an exposure is available. A DATE-AVG next to a span is not used:
+// its averaging method is undefined, while the interval midpoint is the temporal one.
+//
+// The default clock `uncertainty` is the 1σ quadrature sum of TIMSYER and TIMRDER, since the absolute
+// error of one timestamp includes both (absent when neither is given), and the default `resolution` is
+// the coarsest written resolution of the timestamps used, a quantization bound kept apart from the 1σ
+// error (86400 s for a DATE-OBS without time). `shutter` supplies latencies and overrides either
+// default. The returned timestamps are the metadata's own Time objects.
 export function fitsExposure(metadata: FitsTimeMetadata, shutter?: ExposureShutter): ExposureTimestamp | ExposureSpan | undefined {
-	const { start, midpoint, end, exposure } = metadata
-	const base: ExposureShutter = { uncertainty: metadata.systematicError, ...shutter }
+	const { start, midpoint, end, exposure, systematicError, randomError } = metadata
+	const uncertainty = systematicError === undefined && randomError === undefined ? undefined : Math.hypot(systematicError ?? 0, randomError ?? 0)
 
-	if (start !== undefined && end !== undefined) return { ...base, start: start.time, end: end.time }
+	if (start !== undefined && end !== undefined) {
+		if (!metadata.continuous) return undefined
+		return { uncertainty, resolution: Math.max(start.resolution, end.resolution), ...shutter, start: start.time, end: end.time }
+	}
+
 	if (exposure === undefined) return undefined
-	if (start !== undefined) return { ...base, time: start.time, reference: 'start', duration: exposure }
-	if (midpoint !== undefined) return { ...base, time: midpoint.time, reference: 'midpoint', duration: exposure }
-	if (end !== undefined) return { ...base, time: end.time, reference: 'end', duration: exposure }
-	return undefined
+
+	const timestamp = start ?? midpoint ?? end
+	if (timestamp === undefined) return undefined
+	const reference = timestamp === start ? 'start' : timestamp === midpoint ? 'midpoint' : 'end'
+	return { uncertainty, resolution: timestamp.resolution, ...shutter, time: timestamp.time, reference, duration: exposure }
 }
 
 // Writes timing and location metadata into `header` in place and returns it. Every keyword of
@@ -417,19 +439,22 @@ export function fitsExposure(metadata: FitsTimeMetadata, shutter?: ExposureShutt
 // into the next day, and reading 23:59:60.x inside a UTC leap second) and as MJD-xxxx with the full
 // double precision. TIMEUNIT is written as 's' whenever a duration in TIMEUNIT is written. Derived
 // values are rounded to drop conversion noise: TELAPSE to 1 ns, OBSGEO-X/Y/Z and SITEELEV to 1 µm,
-// SITELAT and SITELONG to 1e-10 degree.
+// SITELAT and SITELONG to 1e-10 degree. Only the clock scale is converted, never the reference
+// position: no light-time correction is applied, and TREFPOS is written so that the reader's scale
+// default cannot relabel recorded times as geocentric or barycentric (see FitsTimeInput.referencePosition).
 export function writeFitsTime(header: FitsHeader, input: FitsTimeInput) {
 	const scale = input.scale ?? input.start?.scale ?? input.midpoint?.scale ?? input.end?.scale ?? Timescale.UTC
 	const digits = input.digits ?? 6
-	const start = input.start && timeConvert(input.start, scale)
-	const midpoint = input.midpoint && timeConvert(input.midpoint, scale)
-	const end = input.end && timeConvert(input.end, scale)
+	const start = input.start && timeConvert(locate(input.start, input.location), scale)
+	const midpoint = input.midpoint && timeConvert(locate(input.midpoint, input.location), scale)
+	const end = input.end && timeConvert(locate(input.end, input.location), scale)
 	const elapsed = start && end && elapsedSeconds(start, end)
 	const position = input.location && itrs(input.location)
+	const referencePosition = input.referencePosition ?? (scale === Timescale.TCG || scale === Timescale.TDB || scale === Timescale.TCB ? 'topocenter' : undefined)
 	const values: Record<FitsHeaderKey, FitsHeaderValue> = {
 		TIMESYS: SCALE_CODES[scale],
 		TIMEUNIT: input.exposure !== undefined || elapsed !== undefined || input.systematicError !== undefined || input.randomError !== undefined ? 's' : undefined,
-		TREFPOS: input.referencePosition && REFERENCE_POSITION_CODES[input.referencePosition],
+		TREFPOS: referencePosition && REFERENCE_POSITION_CODES[referencePosition],
 		TREFDIR: input.referenceDirection,
 		PLEPHEM: input.ephemeris,
 		'DATE-OBS': start && formatFitsDateTime(start, digits),
@@ -460,6 +485,15 @@ export function writeFitsTime(header: FitsHeader, input: FitsTimeInput) {
 	}
 
 	return header
+}
+
+// Returns `time` itself when it has a location or none is given, else a fresh uncached copy carrying
+// `location`, so that a scale conversion evaluates the topocentric TDB-TT term at the observatory.
+function locate(time: Time, location: GeographicPosition | undefined) {
+	if (time.location !== undefined || location === undefined) return time
+	const located = timeShift(time, 0)
+	located.location = location
+	return located
 }
 
 // Formats an instant as a FITS datetime in its own scale: '[±C]CCYY-MM-DDThh:mm:ss[.s...]' with `digits`
@@ -516,6 +550,12 @@ function lastDigitUnit(value: number) {
 	const dot = mantissa.indexOf('.')
 	const decimals = (dot < 0 ? 0 : mantissa.length - dot - 1) - (exponent === undefined ? 0 : Number(exponent))
 	return 10 ** -decimals
+}
+
+// Spacing of doubles at `value` (one unit in the last place), 0 for 0: the representation error of an
+// exactly defined number such as a reference epoch.
+function doubleStep(value: number) {
+	return value === 0 ? 0 : Number.EPSILON * 2 ** Math.floor(Math.log2(Math.abs(value)))
 }
 
 // Elapsed seconds from a to b: on TAI for UTC (counting leap seconds), else in the scale of `a`.
@@ -682,7 +722,9 @@ function readInstantPair(context: ReadContext, dateKey: FitsHeaderKey, mjdKey: F
 	return mjd.resolution < date.value.resolution ? { value: mjd, undefinedRole: false } : { value: date.value, undefinedRole: date.undefinedRole }
 }
 
-// Resolves the MJDREF/JDREF/DATEREF reference instant plus TIMEOFFS, once per read.
+// Resolves the MJDREF/JDREF/DATEREF reference instant plus TIMEOFFS, once per read. The reference is an
+// epoch defined by its keywords, not a measurement: its resolution is only the double-precision step of
+// the values (0 for DATEREF), never the unit of their last written digit, so MJDREFF = 0 is exact.
 function readReference(context: ReadContext) {
 	if (context.reference !== undefined) return context.reference ?? undefined
 
@@ -700,19 +742,20 @@ function readReference(context: ReadContext) {
 		const integer = finiteMetadataKeyword(header, 'MJDREFI', diagnostics)
 		const fraction = finiteMetadataKeyword(header, 'MJDREFF', diagnostics)
 
-		if (integer !== undefined && fraction !== undefined) reference = { time: julianInstant(context, 2400000 + integer, 0.5 + fraction), keyword: 'MJDREFI', resolution: lastDigitUnit(fraction) * DAYSEC }
-		else if (single !== undefined) reference = { time: mjdInstant(context, single), keyword: 'MJDREF', resolution: lastDigitUnit(single) * DAYSEC }
-		else if ((integer ?? fraction) !== undefined) reference = { time: julianInstant(context, 2400000 + (integer ?? 0), 0.5 + (fraction ?? 0)), keyword: integer === undefined ? 'MJDREFF' : 'MJDREFI', resolution: lastDigitUnit(fraction ?? 0) * DAYSEC }
+		if (integer !== undefined && fraction !== undefined) reference = { time: julianInstant(context, 2400000 + integer, 0.5 + fraction), keyword: 'MJDREFI', resolution: (doubleStep(integer) + doubleStep(fraction)) * DAYSEC }
+		else if (single !== undefined) reference = { time: mjdInstant(context, single), keyword: 'MJDREF', resolution: doubleStep(single) * DAYSEC }
+		else if ((integer ?? fraction) !== undefined) reference = { time: julianInstant(context, 2400000 + (integer ?? 0), 0.5 + (fraction ?? 0)), keyword: integer === undefined ? 'MJDREFF' : 'MJDREFI', resolution: (doubleStep(integer ?? 0) + doubleStep(fraction ?? 0)) * DAYSEC }
 	} else if (hasKeyword(header, 'JDREF') || hasKeyword(header, 'JDREFI') || hasKeyword(header, 'JDREFF')) {
 		const single = finiteMetadataKeyword(header, 'JDREF', diagnostics)
 		const integer = finiteMetadataKeyword(header, 'JDREFI', diagnostics)
 		const fraction = finiteMetadataKeyword(header, 'JDREFF', diagnostics)
 
-		if (integer !== undefined && fraction !== undefined) reference = { time: julianInstant(context, integer, fraction), keyword: 'JDREFI', resolution: lastDigitUnit(fraction) * DAYSEC }
-		else if (single !== undefined) reference = { time: julianInstant(context, single, 0), keyword: 'JDREF', resolution: lastDigitUnit(single) * DAYSEC }
+		if (integer !== undefined && fraction !== undefined) reference = { time: julianInstant(context, integer, fraction), keyword: 'JDREFI', resolution: (doubleStep(integer) + doubleStep(fraction)) * DAYSEC }
+		else if (single !== undefined) reference = { time: julianInstant(context, single, 0), keyword: 'JDREF', resolution: doubleStep(single) * DAYSEC }
 		else if (integer !== undefined || fraction !== undefined) diagnostics.push({ kind: 'missing', keyword: integer === undefined ? 'JDREFI' : 'JDREFF', message: 'JDREFI and JDREFF must be given together' })
 	} else if (hasKeyword(header, 'DATEREF')) {
-		reference = readDateKeyword(context, 'DATEREF')?.value
+		const date = readDateKeyword(context, 'DATEREF')?.value
+		if (date !== undefined) reference = { time: date.time, keyword: 'DATEREF', resolution: 0 }
 	} else {
 		diagnostics.push({ kind: 'defaulted', keyword: 'MJDREF', message: 'no reference time keyword is present; MJDREF = 0 is assumed' })
 		reference = { time: julianInstant(context, 2400000, 0.5), keyword: 'MJDREF', resolution: 0 }
@@ -720,7 +763,7 @@ function readReference(context: ReadContext) {
 
 	if (reference !== undefined && context.unit !== undefined) {
 		const offset = finiteMetadataKeyword(header, 'TIMEOFFS', diagnostics)
-		if (offset !== undefined) reference = { time: shiftSeconds(reference.time, offset * context.unit), keyword: reference.keyword, resolution: reference.resolution + lastDigitUnit(offset) * context.unit }
+		if (offset !== undefined) reference = { time: shiftSeconds(reference.time, offset * context.unit), keyword: reference.keyword, resolution: reference.resolution + doubleStep(offset) * context.unit }
 	}
 
 	context.reference = reference ?? null
@@ -776,9 +819,11 @@ function compareDurations(context: ReadContext, kept: Duration, other: Duration)
 }
 
 // Checks that the instants and durations describe one interval: start <= end, the midpoint inside it,
-// TELAPSE equal to its length, and an exposure no longer than it.
+// TELAPSE equal to its length, and an exposure no longer than it. Returns whether start and end bound
+// one continuous exposure (see FitsTimeMetadata.continuous), or undefined when either is unknown.
 function checkInterval(context: ReadContext, start?: FitsTimeValue, midpoint?: FitsTimeValue, end?: FitsTimeValue, exposure?: Duration, elapsed?: Duration) {
 	const { diagnostics, tolerance } = context
+	let continuous: boolean | undefined
 
 	if (start !== undefined && end !== undefined) {
 		const span = elapsedSeconds(start.time, end.time)
@@ -793,6 +838,8 @@ function checkInterval(context: ReadContext, start?: FitsTimeValue, midpoint?: F
 		if (exposure !== undefined && exposure.value > span + slack + exposure.resolution) {
 			diagnostics.push({ kind: 'conflict', keyword: exposure.keyword, message: `${exposure.keyword} is longer than ${end.keyword} - ${start.keyword} = ${span} s` })
 		}
+
+		continuous = exposure === undefined || Math.abs(exposure.value - span) <= slack + exposure.resolution
 	}
 
 	if (midpoint !== undefined) {
@@ -800,6 +847,8 @@ function checkInterval(context: ReadContext, start?: FitsTimeValue, midpoint?: F
 		const afterEnd = end !== undefined && elapsedSeconds(midpoint.time, end.time) < -(end.resolution + midpoint.resolution + tolerance)
 		if (beforeStart || afterEnd) diagnostics.push({ kind: 'conflict', keyword: midpoint.keyword, message: `${midpoint.keyword} lies outside the start-end interval` })
 	}
+
+	return continuous
 }
 
 // A location candidate and the keyword set it came from.

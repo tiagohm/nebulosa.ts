@@ -9,7 +9,7 @@ import type { BitpixOrZero, FitsCompressionType, FitsHeader, FitsHeaderCard, Fit
 // where the same datum appears under several conventions - tries the alternative keywords in priority
 // order (e.g. RA / OBJCTRA / RA_OBJ / CRVAL1). Also covers tile-compression (ZIMAGE/ZCMPTYPE) detection,
 // HDU data-size computation, and header-card value formatting/escaping. Angles are returned in radians.
-// The metadata readers (fits.provenance.ts, astronomy/time/fits.time.ts) share the diagnostic types, the
+// The metadata readers (provenance.ts, astronomy/time/fits.ts) share the diagnostic types, the
 // absent-versus-invalid numeric and text accessors, and the FITS datetime field parser defined here.
 
 // Returns true when `key` is present in the header with a defined value.

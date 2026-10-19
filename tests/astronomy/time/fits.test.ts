@@ -215,6 +215,21 @@ describe('instants', () => {
 		expect(findings(readFitsTime({ TIMESYS: 'TT', TREFPOS: 'GEOCENTER', TIMEUNIT: 'ta', TSTART: 1, XPOSURE: 1 }))).toEqual(['unsupported:TIMEUNIT', 'missing:DATE-OBS'])
 	})
 
+	test('reference epochs are exact, so a short written fraction does not hide a conflict', () => {
+		const base = { TIMESYS: 'TT', TREFPOS: 'GEOCENTER', TSTART: 0 }
+		// MJD 60000 starts at 2023-02-25T00:00 TT; DATE-BEG is one hour later.
+		const zero = readFitsTime({ ...base, MJDREFI: 60000, MJDREFF: 0, 'DATE-BEG': '2023-02-25T01:00:00' })
+		expect(findings(zero)).toEqual(['conflict:DATE-BEG'])
+		expect(findings(readFitsTime({ ...base, MJDREFI: 60000, MJDREFF: 0, TSTART: 3600, 'DATE-BEG': '2023-02-25T01:00:00' }))).toBeEmpty()
+		expect(findings(readFitsTime({ ...base, MJDREFI: 60000, MJDREFF: 0.5, 'DATE-BEG': '2023-02-25T13:00:00' }))).toEqual(['conflict:DATE-BEG'])
+		expect(findings(readFitsTime({ ...base, MJDREF: 60000, 'DATE-BEG': '2023-02-25T00:00:03' }))).toEqual(['conflict:DATE-BEG'])
+		// JD 2460000.0 is 2023-02-24T12:00 TT.
+		expect(findings(readFitsTime({ ...base, JDREFI: 2460000, JDREFF: 0, 'DATE-BEG': '2023-02-24T13:00:00' }))).toEqual(['conflict:DATE-BEG'])
+		expect(findings(readFitsTime({ ...base, JDREF: 2460000, 'DATE-BEG': '2023-02-24T12:00:00' }))).toBeEmpty()
+		expect(findings(readFitsTime({ ...base, DATEREF: '2023-02-25', 'DATE-BEG': '2023-02-25T01:00:00' }))).toEqual(['conflict:DATE-BEG'])
+		expect(findings(readFitsTime({ ...base, MJDREFI: 60000, MJDREFF: 1e-20, TIMEOFFS: 0, 'DATE-BEG': '2023-02-25T00:00:03' }))).toEqual(['conflict:DATE-BEG'])
+	})
+
 	test('the two-digit DATE-OBS has no start role', () => {
 		const metadata = readFitsTime({ TREFPOS: 'GEOCENTER', 'DATE-OBS': '15/01/99' })
 		expect(timeToDate(metadata.observation!.time)).toEqual([1999, 1, 15, 0, 0, 0, 0])
@@ -329,6 +344,44 @@ describe('exposure', () => {
 
 		expect(fitsExposure(readFitsTime({ TIMESYS: 'UTC', 'DATE-OBS': '2024-03-10T03:00:00' }))).toBeUndefined()
 	})
+
+	test('an exposure shorter than the start-end window is not turned into a collection interval', () => {
+		const base = { TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-03-10T03:00:00', 'DATE-END': '2024-03-10T03:01:00', TELAPSE: 60 }
+
+		// 30 s of integration inside a 60 s window: dead time or co-added frames.
+		const deadTime = readFitsTime({ ...base, XPOSURE: 30, 'DATE-AVG': '2024-03-10T03:00:20' })
+		expect(deadTime.continuous).toBe(false)
+		expect(deadTime.exposure).toBe(30)
+		expect(deadTime.elapsed).toBe(60)
+		expect(findings(deadTime)).toBeEmpty()
+		expect(fitsExposure(deadTime)).toBeUndefined()
+
+		const continuous = readFitsTime({ ...base, XPOSURE: 60 })
+		expect(continuous.continuous).toBe(true)
+		expect(exposureInterval(fitsExposure(continuous)!).duration).toBeCloseTo(60, 9)
+
+		const unknown = readFitsTime(base)
+		expect(unknown.continuous).toBe(true)
+		expect(readFitsTime({ TIMESYS: 'UTC', 'DATE-OBS': '2024-03-10T03:00:00', EXPTIME: 60 }).continuous).toBeUndefined()
+	})
+
+	test('timestamp quantization and both time errors reach the interval', () => {
+		const dateOnly = exposureInterval(fitsExposure(readFitsTime({ TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-OBS': '2024-01-01', EXPTIME: 60 }))!)
+		expect(dateOnly.resolution).toBe(86400)
+		expect(dateOnly.uncertainty).toBe(0)
+
+		const random = fitsExposure(readFitsTime({ TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-OBS': '2024-01-01T00:00:00.1', EXPTIME: 60, TIMRDER: 0.2 }))!
+		expect(random.uncertainty).toBe(0.2)
+		expect(random.resolution).toBeCloseTo(0.1, 15)
+
+		const both = fitsExposure(readFitsTime({ TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-OBS': '2024-01-01T00:00:00', EXPTIME: 60, TIMSYER: 0.3, TIMRDER: 0.4 }))!
+		expect(both.uncertainty).toBeCloseTo(0.5, 15)
+
+		// The coarser of two timestamps bounds the span; the shutter overrides the defaults.
+		const mixed = readFitsTime({ TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-01-01T00:00:00.001', 'DATE-END': '2024-01-01T00:01:00', TIMSYER: 0.3 })
+		expect(exposureInterval(fitsExposure(mixed)!).resolution).toBe(1)
+		expect(exposureInterval(fitsExposure(mixed, { uncertainty: 0.01, resolution: 0 })!)).toMatchObject({ uncertainty: 0.01, resolution: 0 })
+	})
 })
 
 describe('writing', () => {
@@ -388,5 +441,36 @@ describe('writing', () => {
 		expect(header.EXPOSURE).toBeUndefined()
 		expect(header.TIMEUNIT).toBeUndefined()
 		for (const key of Object.keys(header)) expect(FITS_TIME_KEYWORDS).toContain(key)
+	})
+
+	test('a clock conversion to TDB stays topocentric unless the barycenter is declared', () => {
+		const location = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
+		const start = timeYMDHMS(2026, 1, 1, 0, 0, 0, Timescale.UTC)
+
+		const topocentric = writeFitsTime({}, { scale: Timescale.TDB, start, location })
+		expect(topocentric.TREFPOS).toBe('TOPOCENTER')
+		const read = readFitsTime(topocentric)
+		expect(read.referencePosition).toBe('topocenter')
+		expect(findings(read)).toEqual(['incompatible:TREFPOS'])
+
+		expect(writeFitsTime({}, { scale: Timescale.TCG, start }).TREFPOS).toBe('TOPOCENTER')
+		expect(writeFitsTime({}, { scale: Timescale.TT, start }).TREFPOS).toBeUndefined()
+
+		// A BJD_TDB already light-time corrected elsewhere keeps its declared origin.
+		const barycentric = writeFitsTime({}, { start: tdb(start), referencePosition: 'barycenter' })
+		expect(barycentric.TREFPOS).toBe('BARYCENTER')
+		expect(readFitsTime(barycentric).referencePosition).toBe('barycenter')
+	})
+
+	test('the separate location enters the topocentric TDB-TT term without mutating the input', () => {
+		const location = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
+		const start = timeYMDHMS(2026, 1, 1, 6, 0, 0, Timescale.UTC)
+		const located = timeYMDHMS(2026, 1, 1, 6, 0, 0, Timescale.UTC)
+		located.location = location
+
+		const separate = writeFitsTime({}, { scale: Timescale.TDB, start, location, digits: 9 })
+		expect(start.location).toBeUndefined()
+		expect(separate['DATE-BEG']).toBe(writeFitsTime({}, { scale: Timescale.TDB, start: located, digits: 9 })['DATE-BEG'])
+		expect(separate['DATE-BEG']).not.toBe(writeFitsTime({}, { scale: Timescale.TDB, start, digits: 9 })['DATE-BEG'])
 	})
 })
