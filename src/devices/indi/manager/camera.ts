@@ -5,6 +5,14 @@ import { DeviceManager, handleMinMaxValue, handleNumberValue, handleSwitchValue,
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/indiccd.cpp
 
+// Transfer formats a camera can be asked for, the suffixes of the CCD_TRANSFER_FORMAT elements.
+const CAMERA_TRANSFER_FORMATS: ReadonlySet<string> = new Set<CameraTransferFormat>(['FITS', 'XISF', 'NATIVE'])
+
+// Whether a CCD_TRANSFER_FORMAT element suffix is a known transfer format.
+function isCameraTransferFormat(format: string): format is CameraTransferFormat {
+	return CAMERA_TRANSFER_FORMATS.has(format)
+}
+
 // Manager for cameras. Command methods drive exposure, cooling, frame/subframe, binning, gain/offset and
 // frame type; property handling maps the corresponding INDI vectors (including the CCD image BLOB) onto
 // the Camera state. Temperatures are degrees Celsius, exposures seconds, pixel sizes micrometres.
@@ -85,7 +93,8 @@ export class CameraManager extends DeviceManager<Camera> {
 		camera[CLIENT]!.sendText({ device: camera.name, name: 'ACTIVE_DEVICES', elements: { ACTIVE_TELESCOPE: mount?.name ?? '', ACTIVE_ROTATOR: rotator?.name ?? '', ACTIVE_FOCUSER: focuser?.name ?? '', ACTIVE_FILTER: wheel?.name ?? '' } })
 	}
 
-	// Applies camera switch vectors: cooler on/off, capture/readout format, abort exposure, and frame type.
+	// Applies camera switch vectors: cooler on/off, capture/readout format, transfer formats, abort exposure, and
+	// frame type.
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -126,6 +135,16 @@ export class CameraManager extends DeviceManager<Camera> {
 
 				return
 			}
+			case 'CCD_TRANSFER_FORMAT':
+				if (tag[0] === 'd') {
+					// Elements are FORMAT_<format>; one the type does not know is a driver extension nobody can request.
+					device.transferFormats = Object.keys((message as DefSwitchVector).elements)
+						.map((name) => name.slice(7))
+						.filter(isCameraTransferFormat)
+					this.updated(device, 'transferFormats', message.state)
+				}
+
+				return
 			case 'CCD_ABORT_EXPOSURE':
 				if (tag[0] === 'd') {
 					if (handleSwitchValue(device, 'canAbort', (message as DefSwitchVector).permission !== 'ro')) {
@@ -319,6 +338,9 @@ export class CameraManager extends DeviceManager<Camera> {
 		if (full || name === 'CCD_CAPTURE_FORMAT') {
 			resetDeviceValue(this, device, 'frameFormats', DEFAULT_CAMERA.frameFormats)
 			resetDeviceValue(this, device, 'frameFormat', DEFAULT_CAMERA.frameFormat)
+		}
+		if (full || name === 'CCD_TRANSFER_FORMAT') {
+			resetDeviceValue(this, device, 'transferFormats', DEFAULT_CAMERA.transferFormats)
 		}
 		if (full || name === 'CCD_ABORT_EXPOSURE') {
 			resetDeviceValue(this, device, 'canAbort', DEFAULT_CAMERA.canAbort)

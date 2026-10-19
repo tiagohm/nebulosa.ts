@@ -29,3 +29,14 @@ test('round-trips between every pair of units', () => {
 		expect(exposureTimeIn(3.25, from, from)).toBe(3.25)
 	}
 })
+
+test('converts whole sub-second times to the nearest seconds', () => {
+	expect(exposureTimeInSeconds(100, 'microsecond')).toBe(0.0001)
+	expect(exposureTimeIn(100, 'microsecond', 'second')).toBe(0.0001)
+	expect(exposureTimeInSeconds(1, 'microsecond')).toBe(0.000001)
+	expect(exposureTimeInMicroseconds(0.0001, 'second')).toBe(100)
+
+	for (let i = 1; i <= 10000; i++) {
+		expect(exposureTimeInSeconds(i, 'microsecond')).toBe(i / 1000000)
+	}
+})

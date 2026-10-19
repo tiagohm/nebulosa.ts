@@ -182,6 +182,9 @@ export interface Camera extends GuideOutput, Thermometer {
 	dewHeater: boolean
 	frameFormats: readonly NameAndLabel[]
 	frameFormat: NameAndLabel['name']
+	// Payload formats the driver offers in CCD_TRANSFER_FORMAT, in its order. Empty when it defines none, as an
+	// Alpaca camera does, and then only the FITS payload every driver produces by default can be relied on.
+	transferFormats: readonly CameraTransferFormat[]
 	frameType: FrameType
 	canAbort: boolean
 	readonly cfa: {
@@ -496,6 +499,7 @@ export const DEFAULT_CAMERA: Camera = {
 	dewHeater: false,
 	frameFormats: [],
 	frameFormat: '',
+	transferFormats: [],
 	frameType: 'LIGHT',
 	canAbort: false,
 	cfa: {

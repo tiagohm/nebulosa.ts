@@ -30,3 +30,30 @@ test('resets deleted INDI properties to defaults', () => {
 	expect(device.exposure).toEqual(DEFAULT_CAMERA.exposure)
 	expect(device.exposuring).toBe(DEFAULT_CAMERA.exposuring)
 })
+
+test('reports the transfer formats the driver defines', () => {
+	const manager = new CameraManager()
+	const device = setupDevice(structuredClone(DEFAULT_CAMERA))
+
+	manager.add(device)
+
+	manager.switchVector(
+		client,
+		{
+			device: device.name,
+			name: 'CCD_TRANSFER_FORMAT',
+			label: 'Transfer Format',
+			group: 'Main Control',
+			state: 'Idle',
+			permission: 'rw',
+			rule: 'OneOfMany',
+			timeout: 0,
+			elements: { FORMAT_FITS: { name: 'FORMAT_FITS', value: true }, FORMAT_XISF: { name: 'FORMAT_XISF', value: false }, FORMAT_RAW: { name: 'FORMAT_RAW', value: false } },
+		},
+		'defSwitchVector',
+	)
+	expect(device.transferFormats).toEqual(['FITS', 'XISF'])
+
+	manager.delProperty(client, { device: device.name, name: 'CCD_TRANSFER_FORMAT' })
+	expect(device.transferFormats).toEqual(DEFAULT_CAMERA.transferFormats)
+})
