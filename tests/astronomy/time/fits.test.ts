@@ -468,17 +468,31 @@ describe('exposure', () => {
 	test('a wider tolerance never widens the proof of a continuous exposure', () => {
 		const header = { TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-03-10T03:00:00.000', 'DATE-END': '2024-03-10T03:00:31.000', XPOSURE: 30.1, TELAPSE: 31 }
 
-		for (const tolerance of [undefined, 1e-3, 1]) {
+		// Millisecond timestamps prove 0.9 s of dead time whatever slack the diagnostics are given.
+		for (const tolerance of [undefined, 1e-3, 1, 5]) {
 			const loose = readFitsTime(header, { tolerance })
 			expect(loose.exposure).toBe(30.1)
 			expect(loose.elapsed).toBe(31)
-			expect(loose.continuous).toBe(tolerance === 1 ? undefined : false)
+			expect(loose.continuous).toBe(false)
 			expect(fitsExposure(loose)).toBeUndefined()
 
 			const exact = readFitsTime({ ...header, 'DATE-END': '2024-03-10T03:00:30.100', TELAPSE: 30.1 }, { tolerance })
 			expect(exact.continuous).toBe(true)
 			expect(exposureInterval(fitsExposure(exact)!).duration).toBeCloseTo(30.1, 9)
 		}
+
+		// A tolerance longer than a short exposure neither hides its exact match nor a proven inversion.
+		const short = { TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-03-10T03:00:00.000', 'DATE-END': '2024-03-10T03:00:01.500', XPOSURE: 1.5 }
+		for (const tolerance of [undefined, 1, 2, 5]) {
+			const metadata = readFitsTime(short, { tolerance })
+			expect(metadata.continuous).toBe(true)
+			expect(exposureInterval(fitsExposure(metadata)!).duration).toBeCloseTo(1.5, 9)
+		}
+
+		const inverted = readFitsTime({ ...short, 'DATE-BEG': '2024-03-10T03:00:01.000', 'DATE-END': '2024-03-10T03:00:00.000' }, { tolerance: 3 })
+		expect(findings(inverted)).toBeEmpty()
+		expect(inverted.continuous).toBe(false)
+		expect(fitsExposure(inverted)).toBeUndefined()
 
 		// Microsecond timestamps 0.3 µs away from an exposure written to 0.1 µs do not reproduce it, even within the default 1 µs tolerance.
 		const micro = { TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-03-10T03:00:00.000000', 'DATE-END': '2024-03-10T03:00:30.123457' }

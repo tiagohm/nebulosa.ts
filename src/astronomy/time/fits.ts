@@ -77,9 +77,10 @@ export interface FitsTimeMetadata {
 	// Whether start and end bound one continuous exposure. True only with positive evidence: an exposure
 	// that differs from end - start by less than both the quantization of the two timestamps (half their
 	// summed resolutions) and its own resolution, so the span never contradicts the written exposure, and
-	// values fine enough to resolve the exposure (the resolutions of start, end and the exposure plus the
-	// tolerance are smaller than it, so the span is positive). False when end precedes start or the
-	// exposure differs from the span beyond all resolutions (dead time, co-added frames, or a conflict).
+	// values fine enough to resolve the exposure (the resolutions of start, end and the exposure plus a
+	// fixed 1 µs rounding margin are smaller than it, so the span is positive). False when end precedes start
+	// or the exposure differs from the span beyond all resolutions and that margin (dead time, co-added
+	// frames, or a conflict). Independent of FitsTimeReadOptions.tolerance, which only widens diagnostics.
 	// Undefined when start, end or the exposure is unknown, when the resolutions are too coarse to tell
 	// (an integer XPOSURE = 1 is known only to 1 s), or when the difference is compatible with the
 	// resolutions but not with the timestamps or the exposure alone (XPOSURE = 30 inside a 32 s window of
@@ -100,8 +101,8 @@ export interface FitsTimeMetadata {
 // Tolerances of readFitsTime.
 export interface FitsTimeReadOptions {
 	// Absolute slack in seconds added to the written resolutions when comparing two instants or
-	// durations (default 1e-6, the double-precision step of an MJD). It widens conflict checks only; the
-	// match that proves `continuous` is bound by the written resolutions alone.
+	// durations (default 1e-6, the double-precision step of an MJD). It widens conflict diagnostics only;
+	// `continuous` is decided by the written resolutions alone.
 	readonly tolerance?: number
 	// Largest distance in meters accepted between two location keyword sets (default 100).
 	readonly locationTolerance?: number
@@ -191,7 +192,7 @@ export const FITS_TIME_KEYWORDS: readonly FitsHeaderKey[] = [
 const DEFAULT_TOLERANCE = 1e-6
 // Largest rounding error, in seconds, of the difference between an exposure and a decoded span (about the
 // double-precision step of an MJD, the coarsest decoding). Fixed, unlike the tolerance, so that a wider
-// comparison slack never widens the proof of a continuous exposure.
+// comparison slack never changes whether an exposure is classified continuous, contradicted or unknown.
 const SPAN_ROUNDING = 1e-6
 // Default largest distance, in meters, between two location keyword sets before they conflict.
 const DEFAULT_LOCATION_TOLERANCE = 100
@@ -857,25 +858,28 @@ function compareDurations(context: ReadContext, kept: Duration, other: Duration)
 // one continuous exposure (see FitsTimeMetadata.continuous). Two endpoints alone never prove it, since
 // FITS 4.0 §9.7 separates the accumulated XPOSURE from the elapsed window. The resolutions (one unit of
 // the last written digit, of the timestamps and of the exposure, whose trailing zeros are lost when the
-// header is parsed) plus the tolerance bound the representation error: a larger difference is a
-// conflict, but a smaller one is only compatible. Continuity needs a stricter match: the exposure must
-// differ from the span by less than both the quantization of the two timestamps (half their summed
-// resolutions) and its own resolution, less the rounding of the computed difference (SPAN_ROUNDING, at
-// most half that limit), and the conflict bound must be smaller than the exposure; otherwise dead time, a
-// window of zero length, or a span that would replace a finer exposure with a different duration is just
-// as consistent. The tolerance only widens the conflict bound, never the continuity match.
+// header is parsed) bound the representation error: a larger difference is a contradiction, but a
+// smaller one is only compatible. Plus the tolerance they decide the conflict diagnostics; plus the fixed
+// SPAN_ROUNDING they decide `continuous`, so a wider tolerance silences diagnostics without changing it.
+// Continuity needs a stricter match: the exposure must differ from the span by less than both the
+// quantization of the two timestamps (half their summed resolutions) and its own resolution, less the
+// rounding of the computed difference (SPAN_ROUNDING, at most half that limit), and the contradiction
+// bound must be smaller than the exposure; otherwise dead time, a window of zero length, or a span that
+// would replace a finer exposure with a different duration is just as consistent.
 function checkInterval(context: ReadContext, start?: FitsTimeValue, midpoint?: FitsTimeValue, end?: FitsTimeValue, exposure?: Duration, elapsed?: Duration) {
 	const { diagnostics, tolerance } = context
 	let continuous: boolean | undefined
 
 	if (start !== undefined && end !== undefined) {
 		const span = elapsedSeconds(start.time, end.time)
-		const slack = start.resolution + end.resolution + tolerance
+		const resolution = start.resolution + end.resolution
+		// Slack of the conflict diagnostics, widened by the caller's tolerance.
+		const slack = resolution + tolerance
+		// Slack of the written values alone, independent of the tolerance, for `continuous`.
+		const evidence = resolution + SPAN_ROUNDING
 
-		if (span < -slack) {
-			diagnostics.push({ kind: 'conflict', keyword: end.keyword, message: `${end.keyword} is ${-span} s before ${start.keyword}` })
-			continuous = false
-		}
+		if (span < -slack) diagnostics.push({ kind: 'conflict', keyword: end.keyword, message: `${end.keyword} is ${-span} s before ${start.keyword}` })
+		if (span < -evidence) continuous = false
 
 		if (elapsed !== undefined && Math.abs(elapsed.value - span) > slack + elapsed.resolution) {
 			diagnostics.push({ kind: 'conflict', keyword: elapsed.keyword, message: `${elapsed.keyword} differs from ${end.keyword} - ${start.keyword} = ${span} s` })
@@ -887,15 +891,15 @@ function checkInterval(context: ReadContext, start?: FitsTimeValue, midpoint?: F
 
 		if (continuous === undefined && exposure !== undefined) {
 			const difference = Math.abs(exposure.value - span)
-			const bound = slack + exposure.resolution
+			const bound = evidence + exposure.resolution
 			// Half the summed timestamp resolutions bounds the error of the written span, rounded or truncated.
 			// The span replaces the exposure once continuous, so it must also stay within one exposure digit.
-			const quantum = Math.min((start.resolution + end.resolution) / 2, exposure.resolution)
+			const quantum = Math.min(resolution / 2, exposure.resolution)
 			// Rounding keeps a difference of exactly one quantum (30 s against 31 s) from passing, and is
 			// capped so that an exact match still passes when the quantum itself is below it.
 			const match = quantum - Math.min(SPAN_ROUNDING, quantum / 2)
 			if (difference > bound) continuous = false
-			// The bound only rules out a conflict. Continuity is proven when the written span reproduces the
+			// The bound only rules out a contradiction. Continuity is proven when the written span reproduces the
 			// exposure within the timestamp quantization and the exposure resolution, so the 1 s resolution
 			// of an integer XPOSURE cannot hide dead time (30 s inside a 32 s window) and whole-second
 			// timestamps cannot override a finer XPOSURE (30.1 s inside a 31 s window), and when the bound is
