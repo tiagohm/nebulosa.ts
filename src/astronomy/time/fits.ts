@@ -52,7 +52,9 @@ export interface FitsTimeMetadata {
 	// Library scale of every returned Time: the TIMESYS scale, TAI for GPS (TAI = GPS + 19 s), and
 	// undefined for LOCAL or an unrecognized TIMESYS, in which case no instant is returned.
 	readonly scale?: Timescale
-	// TREFPOS (or the legacy TIMEREF), defaulted by time scale when absent; undefined when unrecognized.
+	// TREFPOS (or the legacy TIMEREF) as declared; when both are absent, the barycenter for TDB and TCB and
+	// the geocenter for TCG (FITS 4.0 §4.4.2.2, unlike the TOPOCENTER default of §9.2.3), else the
+	// topocenter. Undefined when unrecognized.
 	readonly referencePosition?: FitsTimeReferencePosition
 	// TREFDIR as written: the keyword names of the longitude and latitude of the light-time reference direction.
 	readonly referenceDirection?: string
@@ -72,9 +74,11 @@ export interface FitsTimeMetadata {
 	readonly exposureKeyword?: FitsHeaderKey
 	// TELAPSE, elapsed time between start and end, in seconds.
 	readonly elapsed?: number
-	// Whether start and end bound one continuous exposure: true when both are known and the exposure is
-	// absent or equals end - start within their resolutions, false when it differs (dead time, co-added
-	// frames, or a conflict), undefined when start or end is unknown.
+	// Whether start and end bound one continuous exposure. True only with positive evidence: an exposure
+	// equal to end - start within their resolutions, and timestamps fine enough to resolve the exposure
+	// (their resolutions plus the tolerance are smaller than it). False when end precedes start or the
+	// exposure differs from the span (dead time, co-added frames, or a conflict). Undefined when start,
+	// end or the exposure is unknown, or when the resolutions are too coarse to tell.
 	readonly continuous?: boolean
 	// TIMSYER, absolute (systematic) time error, in seconds.
 	readonly systematicError?: number
@@ -119,7 +123,10 @@ export interface FitsTimeInput {
 	// PLEPHEM, e.g. 'DE440'.
 	readonly ephemeris?: string
 	// Observatory, written to OBSGEO-X/Y/Z (meters) and SITELAT/SITELONG/SITEELEV (degrees, east-positive,
-	// meters), and attached to instants without a location before the topocentric TDB-TT term is evaluated.
+	// meters). It is the single location of the output: every instant is evaluated at it for the
+	// topocentric TDB-TT term, replacing any other location the instant carries. Omitted, the location of
+	// the first instant that has one (start, midpoint, end) takes its place, so the header always records
+	// the site the conversion used.
 	readonly location?: GeographicPosition
 	// TIMSYER in seconds.
 	readonly systematicError?: number
@@ -403,9 +410,11 @@ export function readFitsTime(header: FitsHeader, options?: FitsTimeReadOptions):
 
 // Builds the exposureInterval input for the metadata: the DATE-BEG/DATE-END style span when start and
 // end bound one continuous exposure, else a timestamp labelling the start, midpoint, or end (in that
-// order) with the exposure duration. Returns undefined when start and end are known but the exposure
-// differs from their span (`continuous` is false): integration time and observing window are then
-// distinct quantities and no single collection interval follows from them. Also returns undefined when
+// order) with the exposure duration. Returns undefined when start and end are known but do not bound a
+// proven continuous exposure (`continuous` is false or undefined: an exposure that differs from their
+// span, end before start, no exposure keyword, or timestamps too coarse to resolve it): integration
+// time and observing window are then distinct or unknown and no single collection interval follows
+// from them; the timestamps stay available on the metadata. Also returns undefined when
 // neither a span nor a timestamp with an exposure is available. A DATE-AVG next to a span is not used:
 // its averaging method is undefined, while the interval midpoint is the temporal one.
 //
@@ -419,7 +428,7 @@ export function fitsExposure(metadata: FitsTimeMetadata, shutter?: ExposureShutt
 	const uncertainty = systematicError === undefined && randomError === undefined ? undefined : Math.hypot(systematicError ?? 0, randomError ?? 0)
 
 	if (start !== undefined && end !== undefined) {
-		if (!metadata.continuous) return undefined
+		if (metadata.continuous !== true) return undefined
 		return { uncertainty, resolution: Math.max(start.resolution, end.resolution), ...shutter, start: start.time, end: end.time }
 	}
 
@@ -445,11 +454,12 @@ export function fitsExposure(metadata: FitsTimeMetadata, shutter?: ExposureShutt
 export function writeFitsTime(header: FitsHeader, input: FitsTimeInput) {
 	const scale = input.scale ?? input.start?.scale ?? input.midpoint?.scale ?? input.end?.scale ?? Timescale.UTC
 	const digits = input.digits ?? 6
-	const start = input.start && timeConvert(locate(input.start, input.location), scale)
-	const midpoint = input.midpoint && timeConvert(locate(input.midpoint, input.location), scale)
-	const end = input.end && timeConvert(locate(input.end, input.location), scale)
+	const location = input.location ?? input.start?.location ?? input.midpoint?.location ?? input.end?.location
+	const start = input.start && timeConvert(locate(input.start, location), scale)
+	const midpoint = input.midpoint && timeConvert(locate(input.midpoint, location), scale)
+	const end = input.end && timeConvert(locate(input.end, location), scale)
 	const elapsed = start && end && elapsedSeconds(start, end)
-	const position = input.location && itrs(input.location)
+	const position = location && itrs(location)
 	const referencePosition = input.referencePosition ?? (scale === Timescale.TCG || scale === Timescale.TDB || scale === Timescale.TCB ? 'topocenter' : undefined)
 	const values: Record<FitsHeaderKey, FitsHeaderValue> = {
 		TIMESYS: SCALE_CODES[scale],
@@ -473,9 +483,9 @@ export function writeFitsTime(header: FitsHeader, input: FitsTimeInput) {
 		'OBSGEO-X': position && roundToNthDecimal(toMeter(position[0]), 6),
 		'OBSGEO-Y': position && roundToNthDecimal(toMeter(position[1]), 6),
 		'OBSGEO-Z': position && roundToNthDecimal(toMeter(position[2]), 6),
-		SITELAT: input.location && roundToNthDecimal(toDeg(input.location.latitude), 10),
-		SITELONG: input.location && roundToNthDecimal(toDeg(input.location.longitude), 10),
-		SITEELEV: input.location && roundToNthDecimal(toMeter(input.location.elevation), 6),
+		SITELAT: location && roundToNthDecimal(toDeg(location.latitude), 10),
+		SITELONG: location && roundToNthDecimal(toDeg(location.longitude), 10),
+		SITEELEV: location && roundToNthDecimal(toMeter(location.elevation), 6),
 	}
 
 	for (const key of FITS_TIME_KEYWORDS) {
@@ -487,10 +497,11 @@ export function writeFitsTime(header: FitsHeader, input: FitsTimeInput) {
 	return header
 }
 
-// Returns `time` itself when it has a location or none is given, else a fresh uncached copy carrying
-// `location`, so that a scale conversion evaluates the topocentric TDB-TT term at the observatory.
+// Returns `time` itself when it already carries `location` or none is given, else a fresh uncached copy
+// carrying `location` (replacing any other), so that a scale conversion evaluates the topocentric TDB-TT
+// term at the observatory written to the header. The input is never mutated.
 function locate(time: Time, location: GeographicPosition | undefined) {
-	if (time.location !== undefined || location === undefined) return time
+	if (location === undefined || time.location === location) return time
 	const located = timeShift(time, 0)
 	located.location = location
 	return located
@@ -598,9 +609,12 @@ function readTimeSystem(header: FitsHeader, diagnostics: FitsMetadataDiagnostic[
 	return { system, realization }
 }
 
-// Reads TREFPOS (or the legacy TIMEREF). When both are absent the default follows FITS 4.0 §4.4.2.2:
-// the barycenter for TDB and TCB, the geocenter for TCG, and the topocenter otherwise. Flags the
-// combinations FITS 4.0 Table 32 advises against.
+// Reads TREFPOS (or the legacy TIMEREF); a declared value always prevails. When both are absent the
+// observation-time convention of FITS 4.0 §4.4.2.2 is followed: coordinate times are light-time
+// corrected to their spatial origin, the barycenter for TDB and TCB and the geocenter for TCG, and
+// other scales are at the topocenter. For coordinate times this departs from the general TREFPOS
+// default of §9.2.3 (TOPOCENTER), and the diagnostic says so. No light-time correction is applied.
+// Flags the combinations FITS 4.0 Table 32 advises against.
 function readReferencePosition(header: FitsHeader, system: FitsTimeSystem | undefined, diagnostics: FitsMetadataDiagnostic[]) {
 	const value = textMetadataKeyword(header, 'TREFPOS')
 	const legacy = textMetadataKeyword(header, 'TIMEREF')
@@ -615,7 +629,8 @@ function readReferencePosition(header: FitsHeader, system: FitsTimeSystem | unde
 		else diagnostics.push({ kind: 'nonStandard', keyword: 'TIMEREF', message: `TIMEREF ${legacy} is read as TREFPOS ${REFERENCE_POSITION_CODES[position]}` })
 	} else {
 		position = system === 'TDB' || system === 'TCB' ? 'barycenter' : system === 'TCG' ? 'geocenter' : 'topocenter'
-		diagnostics.push({ kind: 'defaulted', keyword: 'TREFPOS', message: `TREFPOS is absent; ${REFERENCE_POSITION_CODES[position]} is assumed` })
+		const message = position === 'topocenter' ? 'TREFPOS is absent; TOPOCENTER is assumed (FITS 4.0 §9.2.3)' : `TREFPOS is absent; ${REFERENCE_POSITION_CODES[position]} is assumed for the ${system} coordinate time (FITS 4.0 §4.4.2.2), unlike the TOPOCENTER default of §9.2.3`
+		diagnostics.push({ kind: 'defaulted', keyword: 'TREFPOS', message })
 		return position
 	}
 
@@ -820,7 +835,10 @@ function compareDurations(context: ReadContext, kept: Duration, other: Duration)
 
 // Checks that the instants and durations describe one interval: start <= end, the midpoint inside it,
 // TELAPSE equal to its length, and an exposure no longer than it. Returns whether start and end bound
-// one continuous exposure (see FitsTimeMetadata.continuous), or undefined when either is unknown.
+// one continuous exposure (see FitsTimeMetadata.continuous). Two endpoints alone never prove it, since
+// FITS 4.0 §9.7 separates the accumulated XPOSURE from the elapsed window; and when the timestamp
+// resolutions plus the tolerance are not smaller than the exposure, a window of up to twice the
+// integration time is just as consistent.
 function checkInterval(context: ReadContext, start?: FitsTimeValue, midpoint?: FitsTimeValue, end?: FitsTimeValue, exposure?: Duration, elapsed?: Duration) {
 	const { diagnostics, tolerance } = context
 	let continuous: boolean | undefined
@@ -829,7 +847,10 @@ function checkInterval(context: ReadContext, start?: FitsTimeValue, midpoint?: F
 		const span = elapsedSeconds(start.time, end.time)
 		const slack = start.resolution + end.resolution + tolerance
 
-		if (span < -slack) diagnostics.push({ kind: 'conflict', keyword: end.keyword, message: `${end.keyword} is ${-span} s before ${start.keyword}` })
+		if (span < -slack) {
+			diagnostics.push({ kind: 'conflict', keyword: end.keyword, message: `${end.keyword} is ${-span} s before ${start.keyword}` })
+			continuous = false
+		}
 
 		if (elapsed !== undefined && Math.abs(elapsed.value - span) > slack + elapsed.resolution) {
 			diagnostics.push({ kind: 'conflict', keyword: elapsed.keyword, message: `${elapsed.keyword} differs from ${end.keyword} - ${start.keyword} = ${span} s` })
@@ -839,7 +860,11 @@ function checkInterval(context: ReadContext, start?: FitsTimeValue, midpoint?: F
 			diagnostics.push({ kind: 'conflict', keyword: exposure.keyword, message: `${exposure.keyword} is longer than ${end.keyword} - ${start.keyword} = ${span} s` })
 		}
 
-		continuous = exposure === undefined || Math.abs(exposure.value - span) <= slack + exposure.resolution
+		if (continuous === undefined && exposure !== undefined) {
+			const bound = slack + exposure.resolution
+			if (Math.abs(exposure.value - span) > bound) continuous = false
+			else if (slack < exposure.value) continuous = true
+		}
 	}
 
 	if (midpoint !== undefined) {

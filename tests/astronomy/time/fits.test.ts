@@ -82,6 +82,22 @@ describe('time scale and reference position', () => {
 		expect(readFitsTime({ TIMESYS: 'TCG' }).referencePosition).toBe('geocenter')
 	})
 
+	test('the coordinate-time default names its departure from the TREFPOS keyword default', () => {
+		const message = (header: FitsHeader) => readFitsTime(header).diagnostics.find((e) => e.keyword === 'TREFPOS')!.message
+		expect(message({ TIMESYS: 'TDB' })).toContain('§4.4.2.2')
+		expect(message({ TIMESYS: 'TDB' })).toContain('TOPOCENTER default of §9.2.3')
+		expect(message({ TIMESYS: 'TCB' })).toContain('BARYCENTER')
+		expect(message({ TIMESYS: 'TCG' })).toContain('GEOCENTER')
+		expect(message({ TIMESYS: 'TT' })).toBe('TREFPOS is absent; TOPOCENTER is assumed (FITS 4.0 §9.2.3)')
+		expect(message({ TIMESYS: 'UTC' })).toBe('TREFPOS is absent; TOPOCENTER is assumed (FITS 4.0 §9.2.3)')
+
+		// A declared position always prevails over the scale convention.
+		const declared = readFitsTime({ TIMESYS: 'TDB', TREFPOS: 'TOPOCENTER', 'OBSGEO-X': 1838458, 'OBSGEO-Y': -5259021, 'OBSGEO-Z': -3099890, 'DATE-BEG': '2026-01-01T00:00:00' })
+		expect(declared.referencePosition).toBe('topocenter')
+		expect(findings(declared)).toEqual(['incompatible:TREFPOS'])
+		expect(readFitsTime({ TIMESYS: 'TT', TREFPOS: 'BARYCENTER' }).referencePosition).toBe('barycenter')
+	})
+
 	test('incompatible scale and reference position combinations are flagged', () => {
 		expect(findings(readFitsTime({ TIMESYS: 'UTC', TREFPOS: 'BARYCENTER', 'DATE-BEG': '2024-03-10T03:00:00' }))).toEqual(['incompatible:TREFPOS'])
 		expect(findings(readFitsTime({ TIMESYS: 'TDB', TREFPOS: 'TOPOCENTER', 'DATE-BEG': '2024-03-10T03:00:00' }))).toEqual(['incompatible:TREFPOS', 'missing:OBSGEO-X'])
@@ -259,6 +275,8 @@ describe('instants', () => {
 		expect(findings(contradictory)).toEqual(['conflict:XPOSURE', 'conflict:DATE-END', 'conflict:XPOSURE', 'conflict:DATE-AVG'])
 		expect(contradictory.exposure).toBe(30)
 		expect(contradictory.exposureKeyword).toBe('XPOSURE')
+		expect(contradictory.continuous).toBe(false)
+		expect(fitsExposure(contradictory)).toBeUndefined()
 	})
 })
 
@@ -360,9 +378,41 @@ describe('exposure', () => {
 		expect(continuous.continuous).toBe(true)
 		expect(exposureInterval(fitsExposure(continuous)!).duration).toBeCloseTo(60, 9)
 
+		// Two endpoints and TELAPSE without an integration time do not prove a continuous exposure.
 		const unknown = readFitsTime(base)
-		expect(unknown.continuous).toBe(true)
+		expect(unknown.continuous).toBeUndefined()
+		expect(fitsExposure(unknown)).toBeUndefined()
 		expect(readFitsTime({ TIMESYS: 'UTC', 'DATE-OBS': '2024-03-10T03:00:00', EXPTIME: 60 }).continuous).toBeUndefined()
+	})
+
+	test('an inverted window is never a collection interval', () => {
+		const base = { TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-03-10T03:01:00', 'DATE-END': '2024-03-10T03:00:00' }
+
+		const bare = readFitsTime(base)
+		expect(findings(bare)).toEqual(['conflict:DATE-END'])
+		expect(bare.continuous).toBe(false)
+		expect(fitsExposure(bare)).toBeUndefined()
+
+		expect(fitsExposure(readFitsTime({ ...base, XPOSURE: 60 }))).toBeUndefined()
+
+		// A 0.5 s inversion is detected once both endpoints are written to 0.1 s.
+		const fine = readFitsTime({ TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-03-10T03:00:00.5', 'DATE-END': '2024-03-10T03:00:00.0', XPOSURE: 0 })
+		expect(findings(fine)).toEqual(['conflict:DATE-END'])
+		expect(fine.continuous).toBe(false)
+		expect(fitsExposure(fine)).toBeUndefined()
+	})
+
+	test('timestamps too coarse to resolve the exposure leave continuity undetermined', () => {
+		// Date-only endpoints are known to a day each, so a 30 s XPOSURE neither matches nor contradicts the day.
+		const dateOnly = readFitsTime({ TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-01-01', 'DATE-END': '2024-01-02', XPOSURE: 30 })
+		expect(dateOnly.continuous).toBeUndefined()
+		expect(fitsExposure(dateOnly)).toBeUndefined()
+
+		// Whole seconds resolve a 60 s exposure, but not a 1 s one.
+		const header = { TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-03-10T03:00:00', 'DATE-END': '2024-03-10T03:00:01' }
+		expect(readFitsTime({ ...header, XPOSURE: 1 }).continuous).toBeUndefined()
+		expect(readFitsTime({ ...header, 'DATE-END': '2024-03-10T03:01:00', XPOSURE: 60 }).continuous).toBe(true)
+		expect(readFitsTime({ ...header, 'DATE-BEG': '2024-03-10T03:00:00.000', 'DATE-END': '2024-03-10T03:00:01.000', XPOSURE: 1 }).continuous).toBe(true)
 	})
 
 	test('timestamp quantization and both time errors reach the interval', () => {
@@ -378,7 +428,7 @@ describe('exposure', () => {
 		expect(both.uncertainty).toBeCloseTo(0.5, 15)
 
 		// The coarser of two timestamps bounds the span; the shutter overrides the defaults.
-		const mixed = readFitsTime({ TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-01-01T00:00:00.001', 'DATE-END': '2024-01-01T00:01:00', TIMSYER: 0.3 })
+		const mixed = readFitsTime({ TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-01-01T00:00:00.001', 'DATE-END': '2024-01-01T00:01:00', XPOSURE: 60, TIMSYER: 0.3 })
 		expect(exposureInterval(fitsExposure(mixed)!).resolution).toBe(1)
 		expect(exposureInterval(fitsExposure(mixed, { uncertainty: 0.01, resolution: 0 })!)).toMatchObject({ uncertainty: 0.01, resolution: 0 })
 	})
@@ -472,5 +522,32 @@ describe('writing', () => {
 		expect(start.location).toBeUndefined()
 		expect(separate['DATE-BEG']).toBe(writeFitsTime({}, { scale: Timescale.TDB, start: located, digits: 9 })['DATE-BEG'])
 		expect(separate['DATE-BEG']).not.toBe(writeFitsTime({}, { scale: Timescale.TDB, start, digits: 9 })['DATE-BEG'])
+	})
+
+	test('the written location is the one the TDB conversion used', () => {
+		// Two sites about a quarter turn apart in longitude, so their topocentric TDB-TT terms differ by microseconds.
+		const a = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
+		const b = geodeticLocation(deg(17.8792), deg(28.7606), meter(2396))
+		const at = (location?: typeof a) => {
+			const instant = timeYMDHMS(2026, 1, 1, 6, 0, 0, Timescale.UTC)
+			instant.location = location
+			return instant
+		}
+
+		const start = at(a)
+		const overridden = writeFitsTime({}, { scale: Timescale.TDB, start, location: b, digits: 9 })
+		expect(start.location).toBe(a)
+		expect(overridden['DATE-BEG']).toBe(writeFitsTime({}, { scale: Timescale.TDB, start: at(b), digits: 9 })['DATE-BEG'])
+		expect(overridden['DATE-BEG']).not.toBe(writeFitsTime({}, { scale: Timescale.TDB, start: at(a), digits: 9 })['DATE-BEG'])
+		expect(toMeter(Math.hypot(...itrs(readFitsTime(overridden).location!).map((e, i) => e - itrs(b)[i])))).toBeLessThan(1e-3)
+
+		// Swapping the sites moves the written instant by the same microseconds.
+		const swapped = writeFitsTime({}, { scale: Timescale.TDB, start: at(b), location: a, digits: 9 })
+		expect(swapped['DATE-BEG']).toBe(writeFitsTime({}, { scale: Timescale.TDB, start: at(a), digits: 9 })['DATE-BEG'])
+
+		// Without input.location, the instant's own site is recorded in the header.
+		const own = writeFitsTime({}, { scale: Timescale.TDB, start: at(a), digits: 9 })
+		expect(toMeter(Math.hypot(...itrs(readFitsTime(own).location!).map((e, i) => e - itrs(a)[i])))).toBeLessThan(1e-3)
+		expect(findings(readFitsTime(own))).toEqual(['incompatible:TREFPOS'])
 	})
 })
