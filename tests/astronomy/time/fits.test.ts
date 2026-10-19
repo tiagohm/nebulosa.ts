@@ -442,6 +442,29 @@ describe('exposure', () => {
 		expect(exposureInterval(fitsExposure(exact)!).duration).toBeCloseTo(30, 9)
 	})
 
+	test('coarse timestamps never replace a finer explicit exposure', () => {
+		const base = { TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-03-10T03:00:00', 'DATE-END': '2024-03-10T03:00:31', XPOSURE: 30.1, TELAPSE: 31 }
+
+		// Whole-second timestamps round a 30.1 s exposure to 31 s just as well as they hide 0.9 s of overhead.
+		const coarse = readFitsTime(base)
+		expect(coarse.exposure).toBe(30.1)
+		expect(coarse.elapsed).toBe(31)
+		expect(coarse.continuous).toBeUndefined()
+		expect(findings(coarse)).toBeEmpty()
+		expect(fitsExposure(coarse)).toBeUndefined()
+
+		expect(readFitsTime({ ...base, 'DATE-END': '2024-03-10T03:00:30', TELAPSE: 30, XPOSURE: 29.1 }).continuous).toBeUndefined()
+		expect(readFitsTime({ ...base, 'DATE-END': '2024-03-10T03:00:30', TELAPSE: 30 }).continuous).toBeUndefined()
+		expect(readFitsTime({ ...base, 'DATE-END': '2024-03-10T03:00:33', TELAPSE: 33 }).continuous).toBe(false)
+
+		// Millisecond timestamps reproduce the exposure to its last digit, or reveal a mismatch beyond it.
+		const fine = { TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-03-10T03:00:00.000', XPOSURE: 30.1 }
+		const exact = readFitsTime({ ...fine, 'DATE-END': '2024-03-10T03:00:30.100' })
+		expect(exact.continuous).toBe(true)
+		expect(exposureInterval(fitsExposure(exact)!).duration).toBeCloseTo(30.1, 9)
+		expect(readFitsTime({ ...fine, 'DATE-END': '2024-03-10T03:00:30.150' }).continuous).toBeUndefined()
+	})
+
 	test('a zero-length window never becomes a continuous exposure', () => {
 		const header = { TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-03-10T03:00:00.000', 'DATE-END': '2024-03-10T03:00:00.000', XPOSURE: 1 }
 		const zero = readFitsTime(header)
