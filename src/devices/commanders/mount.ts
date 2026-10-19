@@ -358,6 +358,7 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 		// otherwise be reported as one that cannot move at all.
 		if (!mount.connected) return failedOperationResult('disconnected')
 		if (!mount.canMove) return unsupported(mount, 'move manually')
+		if (!canMoveTowards(mount, direction)) return unsupported(mount, `move ${direction.toLowerCase()}`)
 
 		const key = resourceKey(mount)
 		const active = this.#manualMoves.get(key)
@@ -397,6 +398,9 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 				if (closed || context.signal.aborted) return failedOperationResult('aborted', 'manual move is no longer running')
 				if (!mount.connected) return failedOperationResult('disconnected')
 				if (directions.has(direction) === enabled) return successfulOperationResult(undefined)
+				// Starting an axis the driver does not define would be silently dropped by the manager, leaving
+				// a direction recorded as moving that nothing commanded. Stopping one is never refused.
+				if (enabled && !canMoveTowards(mount, direction)) return unsupported(mount, `move ${direction.toLowerCase()}`)
 
 				try {
 					this.#commandMove(mount, direction, enabled)
@@ -752,6 +756,11 @@ function separation(mount: Mount, rightAscension: Angle, declination: Angle) {
 function slewResult(mount: Mount): MountSlewResult {
 	const { rightAscension, declination } = mount.equatorialCoordinate
 	return { rightAscension, declination, pierSide: mount.pierSide }
+}
+
+// Whether the driver defines the motion vector of the axis a direction moves along.
+function canMoveTowards(mount: Mount, direction: MountMoveDirection) {
+	return direction === 'NORTH' || direction === 'SOUTH' ? mount.canMoveNS : mount.canMoveWE
 }
 
 // Reports a capability the driver does not expose as an expected failure rather than an exception.

@@ -306,7 +306,12 @@ export interface Mount extends GuideOutput, GPS, Parkable {
 	canFindHome: boolean
 	canSetHome: boolean
 	canTracking: boolean
+	// Whether at least one axis accepts manual motion: canMoveNS || canMoveWE
 	canMove: boolean
+	// Whether the north/south axis accepts manual motion (TELESCOPE_MOTION_NS is defined)
+	canMoveNS: boolean
+	// Whether the west/east axis accepts manual motion (TELESCOPE_MOTION_WE is defined)
+	canMoveWE: boolean
 	slewRates: readonly NameAndLabel[]
 	slewRate?: NameAndLabel['name']
 	mountType: MountType
@@ -569,6 +574,8 @@ export const DEFAULT_MOUNT: Mount = {
 	canSetPark: false,
 	canTracking: false,
 	canMove: false,
+	canMoveNS: false,
+	canMoveWE: false,
 	slewRates: [],
 	mountType: 'EQ_GEM',
 	trackModes: [],

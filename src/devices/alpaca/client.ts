@@ -1190,7 +1190,10 @@ class AlpacaCamera extends AlpacaDevice {
 interface AlpacaClientTelescopeState extends AlpacaClientDeviceState {
 	readonly CanHome: boolean
 	readonly CanPark: boolean
-	readonly CanMoveAxis: boolean
+	// Whether MoveAxis accepts the primary (right ascension/azimuth, west/east) axis.
+	readonly CanMovePrimaryAxis: boolean
+	// Whether MoveAxis accepts the secondary (declination/altitude, north/south) axis.
+	readonly CanMoveSecondaryAxis: boolean
 	readonly CanPulseGuide: boolean
 	readonly CanTrack: boolean
 	// Whether SlewToCoordinatesAsync is supported; synchronous slew capability is irrelevant here.
@@ -1227,8 +1230,8 @@ class AlpacaTelescope extends AlpacaDevice {
 	protected readonly api: AlpacaTelescopeApi
 	// https://ascom-standards.org/newdocs/telescope.html#Telescope.DeviceState
 	// oxfmt-ignore
-	protected readonly state: AlpacaClientTelescopeState = { Connected: false, Step: 0, CanTrack: false, CanHome: false, CanPark: false, CanMoveAxis: false, CanPulseGuide: false, CanSlew: false, CanSync: false, CanSetGuideRate: false, CanSetSideOfPier: false, Tracking: false, AtPark: false, IsPulseGuiding: false, Slewing: false, RightAscension: 0, Declination: 0, LastUTCDateUpdate: 0, EquatorialSystem: 1 }
-	protected readonly initialEndpoints = ['CanHome', 'CanPark', 'CanMoveAxis', 'CanPulseGuide', 'CanTrack', 'CanSlew', 'CanSync', 'CanSetGuideRate', 'SlewRates', 'TrackingRates', 'CanSetSideOfPier', 'EquatorialSystem'] as const
+	protected readonly state: AlpacaClientTelescopeState = { Connected: false, Step: 0, CanTrack: false, CanHome: false, CanPark: false, CanMovePrimaryAxis: false, CanMoveSecondaryAxis: false, CanPulseGuide: false, CanSlew: false, CanSync: false, CanSetGuideRate: false, CanSetSideOfPier: false, Tracking: false, AtPark: false, IsPulseGuiding: false, Slewing: false, RightAscension: 0, Declination: 0, LastUTCDateUpdate: 0, EquatorialSystem: 1 }
+	protected readonly initialEndpoints = ['CanHome', 'CanPark', 'CanMovePrimaryAxis', 'CanMoveSecondaryAxis', 'CanPulseGuide', 'CanTrack', 'CanSlew', 'CanSync', 'CanSetGuideRate', 'SlewRates', 'TrackingRates', 'CanSetSideOfPier', 'EquatorialSystem'] as const
 	protected readonly deviceStateEndpoints = ['AtPark', 'Declination', 'IsPulseGuiding', 'RightAscension', 'SideOfPier', 'Slewing', 'Tracking'] as const
 	protected readonly runningEndpoints = ['TrackingRate', 'GuideRateRA', 'GuideRateDEC', 'Latitude', 'Longitude', 'Elevation', 'UTCDate'] as const
 
@@ -1275,24 +1278,12 @@ class AlpacaTelescope extends AlpacaDevice {
 		this.#guideNS.device = this.name
 		this.#guideWE.device = this.name
 
-		// The mount can be moved by hand when either axis accepts MoveAxis.
-		async function canMoveAxis(id: number): Promise<AlpacaRequestResult<boolean>> {
-			const primary = await api.canMoveAxis(id, 0)
-
-			if (primary.ok && primary.value) return primary
-
-			const secondary = await api.canMoveAxis(id, 1)
-
-			// Report the first failure rather than a bogus false, so a transient fault is not mistaken for
-			// a mount that cannot move.
-			if (!primary.ok) return secondary.ok && secondary.value ? secondary : primary
-
-			return secondary
-		}
-
 		this.registerEndpoint('CanHome', () => api.canFindHome(this.id), false)
 		this.registerEndpoint('CanPark', () => api.canPark(this.id), false)
-		this.registerEndpoint('CanMoveAxis', () => canMoveAxis(this.id), false)
+		// Each axis is probed on its own, so a mount that moves only one of them defines only that motion
+		// vector instead of advertising manual motion on an axis that would ignore it.
+		this.registerEndpoint('CanMovePrimaryAxis', () => api.canMoveAxis(this.id, 0), false)
+		this.registerEndpoint('CanMoveSecondaryAxis', () => api.canMoveAxis(this.id, 1), false)
 		this.registerEndpoint('CanPulseGuide', () => api.canPulseGuide(this.id), false)
 		this.registerEndpoint('CanTrack', () => api.canSetTracking(this.id), false)
 		this.registerEndpoint('CanSlew', () => api.canSlewAsync(this.id), false)
@@ -1326,7 +1317,7 @@ class AlpacaTelescope extends AlpacaDevice {
 	protected handleEndpointsAfterRun() {
 		if (!super.handleEndpointsAfterRun()) return false
 
-		const { Step, CanTrack, CanHome, CanPark, CanSlew, CanSync, CanMoveAxis, CanPulseGuide, CanSetGuideRate, CanSetSideOfPier, Tracking, AtPark, IsPulseGuiding, Slewing } = this.state
+		const { Step, CanTrack, CanHome, CanPark, CanSlew, CanSync, CanMovePrimaryAxis, CanMoveSecondaryAxis, CanPulseGuide, CanSetGuideRate, CanSetSideOfPier, Tracking, AtPark, IsPulseGuiding, Slewing } = this.state
 		const { RightAscension, Declination, SlewRates, TrackingRates, TrackingRate, SideOfPier, UTCDate, Latitude, Longitude, Elevation, GuideRateRA, GuideRateDEC, EquatorialSystem } = this.state
 		const { LastRightAscension, LastDeclination } = this.state
 		// Alpaca and INDI are both east-positive, but INDI publishes longitude in [0, 360).
@@ -1343,10 +1334,8 @@ class AlpacaTelescope extends AlpacaDevice {
 			if (CanHome) this.sendDefProperty(this.#home)
 			if (CanPark) this.sendDefProperty(this.#park)
 			if (CanTrack) this.sendDefProperty(this.#tracking)
-			if (CanMoveAxis) {
-				this.sendDefProperty(this.#motionNS)
-				this.sendDefProperty(this.#motionWE)
-			}
+			if (CanMoveSecondaryAxis) this.sendDefProperty(this.#motionNS)
+			if (CanMovePrimaryAxis) this.sendDefProperty(this.#motionWE)
 			if (CanPulseGuide) {
 				if (GuideRateRA !== undefined && GuideRateDEC !== undefined) {
 					if (CanSetGuideRate) {
@@ -1499,11 +1488,13 @@ class AlpacaTelescope extends AlpacaDevice {
 			}
 			case 'TELESCOPE_MOTION_NS':
 			case 'TELESCOPE_MOTION_WE': {
-				if (this.state.CanMoveAxis && this.state.SlewRates?.length) {
+				const northSouth = vector.name.endsWith('S')
+
+				if ((northSouth ? this.state.CanMoveSecondaryAxis : this.state.CanMovePrimaryAxis) && this.state.SlewRates?.length) {
 					const { MOTION_NORTH, MOTION_SOUTH, MOTION_WEST, MOTION_EAST } = vector.elements
 					const { Maximum } = this.state.SlewRates[+findOnSwitch(this.#slewRate)[0].slice(5)]
 
-					if (vector.name.endsWith('S')) {
+					if (northSouth) {
 						if (MOTION_NORTH === true || MOTION_SOUTH === true) {
 							void this.api.moveAxis(this.id, 1, MOTION_NORTH === true ? Maximum : -Maximum)
 						} else if (MOTION_NORTH === false || MOTION_SOUTH === false) {

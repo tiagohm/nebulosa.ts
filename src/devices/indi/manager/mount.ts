@@ -7,7 +7,7 @@ import { TAU } from '../../../core/constants'
 import { type Angle, deg, hour, normalizeAngle, normalizePI, parseAngle, toDeg, toHour } from '../../../math/units/angle'
 import { meter, toMeter } from '../../../math/units/distance'
 import { CLIENT, type Client, DEFAULT_MOUNT, DeviceInterfaceType, type GPS, type Mount, type MountTargetCoordinate, type NameAndLabel, type TrackMode } from '../device'
-import { findOnSwitch, type DefNumberVector, type DefSwitch, type DefSwitchVector, type DefTextVector, type DelProperty, type SetNumberVector, type SetSwitchVector, type SetTextVector } from '../types'
+import { findOnSwitch, type DefNumberVector, type DefSwitch, type DefSwitchVector, type DefTextVector, type DelProperty, type PropertyState, type SetNumberVector, type SetSwitchVector, type SetTextVector } from '../types'
 import { DeviceManager, handleNumberValue, handleParkable, handleSwitchValue, handleTextValue, resetDeviceValue } from './device'
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/inditelescope.cpp
@@ -516,10 +516,7 @@ export class MountManager extends DeviceManager<Mount> {
 				if (tag[0] === 'd') {
 					const motion = this.#getMountMotionState(device)
 					motion.defined[source] = true
-
-					if (handleSwitchValue(device, 'canMove', motion.defined.NS || motion.defined.WE)) {
-						this.updated(device, 'canMove', message.state)
-					}
+					this.#updateMotionCapabilities(device, motion, message.state)
 				}
 
 				const motion = this.#getMountMotionState(device)
@@ -697,13 +694,15 @@ export class MountManager extends DeviceManager<Mount> {
 				this.#motionStates.delete(device)
 				resetDeviceValue(this, device, 'moving', DEFAULT_MOUNT.moving)
 				resetDeviceValue(this, device, 'canMove', DEFAULT_MOUNT.canMove)
+				resetDeviceValue(this, device, 'canMoveNS', DEFAULT_MOUNT.canMoveNS)
+				resetDeviceValue(this, device, 'canMoveWE', DEFAULT_MOUNT.canMoveWE)
 			} else {
 				const source: MountMotionSource = name === 'TELESCOPE_MOTION_NS' ? 'NS' : 'WE'
 				const motion = this.#getMountMotionState(device)
 				motion.defined[source] = false
 				motion.moving[source] = false
 
-				if (handleSwitchValue(device, 'canMove', motion.defined.NS || motion.defined.WE)) this.updated(device, 'canMove')
+				this.#updateMotionCapabilities(device, motion)
 				if (handleSwitchValue(device, 'moving', motion.moving.NS || motion.moving.WE)) this.updated(device, 'moving')
 			}
 		}
@@ -719,6 +718,15 @@ export class MountManager extends DeviceManager<Mount> {
 		}
 
 		super.delProperty(client, message)
+	}
+
+	// Publishes the manual-motion capabilities from the motion vectors the driver currently defines: each
+	// axis flag follows its own vector, and canMove holds while either is defined. The per-axis flags are
+	// applied first, so a handler notified of canMove already reads the axes that caused it.
+	#updateMotionCapabilities(mount: Mount, motion: MountMotionState, state?: PropertyState) {
+		if (handleSwitchValue(mount, 'canMoveNS', motion.defined.NS)) this.updated(mount, 'canMoveNS', state)
+		if (handleSwitchValue(mount, 'canMoveWE', motion.defined.WE)) this.updated(mount, 'canMoveWE', state)
+		if (handleSwitchValue(mount, 'canMove', motion.defined.NS || motion.defined.WE)) this.updated(mount, 'canMove', state)
 	}
 
 	// Returns the per-axis motion state for a mount, creating a zeroed state on first use.

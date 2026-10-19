@@ -241,6 +241,27 @@ test('holds the mount through a manual move until every axis is stopped', async 
 	await waitUntil(() => isFree(device))
 })
 
+test('refuses manual motion along an axis the driver does not define', async () => {
+	const device = await connected()
+	mountManager.delProperty(client, { device: device.name, name: 'TELESCOPE_MOTION_WE' })
+
+	expect(device.canMove).toBeTrue()
+	expect(device.canMoveWE).toBeFalse()
+	expect(await mountCommander.startManualMove(operationCoordinator, device, 'EAST')).toMatchObject(failedOperationResult('unexpectedState'))
+	expect(isFree(device)).toBeTrue()
+
+	const started = await mountCommander.startManualMove(operationCoordinator, device, 'NORTH')
+
+	expect(started.ok).toBeTrue()
+
+	if (!started.ok) return
+
+	expect(await started.value.move('WEST', true)).toMatchObject(failedOperationResult('unexpectedState'))
+	expect(started.value.directions()).toEqual(['NORTH'])
+	expect(await started.value.stop()).toMatchObject({ ok: true })
+	await waitUntil(() => isFree(device))
+})
+
 test('starts a new manual move while the previous one is still stopping', async () => {
 	const device = await connected()
 	const first = await mountCommander.startManualMove(operationCoordinator, device, 'NORTH')
