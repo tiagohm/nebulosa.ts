@@ -54,6 +54,7 @@ export const NAXIS2: FitsKeyword = { type: 'INTEGER', comment: 'Next to fastest 
 export const NAXIS3: FitsKeyword = { type: 'INTEGER', comment: 'Next to slowest changing axis' }
 export const OBJECT: FitsKeyword = { type: 'STRING', comment: 'Name of observed object' }
 export const OBSERVER: FitsKeyword = { type: 'STRING', comment: 'Observer(s) who acquired the data' }
+export const ORIGIN: FitsKeyword = { type: 'STRING', comment: 'Organization responsible for the data' }
 export const RADESYS: FitsKeyword = { type: 'STRING', comment: 'Celestial coordinate reference frame' }
 export const SIMPLE: FitsKeyword = { type: 'LOGICAL', comment: 'Primary HDU' }
 export const TELESCOP: FitsKeyword = { type: 'STRING', comment: 'Name of telescope / observatory' }
@@ -72,6 +73,7 @@ export const RA: FitsKeyword = { type: 'STRING', comment: 'Right Ascension of th
 export const SUNANGLE: FitsKeyword = { type: 'REAL', comment: 'Angle between the observation and the sun' }
 
 export const FILTER: FitsKeyword = { type: 'STRING', comment: 'Name of filter used during the observation' }
+export const DETECTOR: FitsKeyword = { type: 'STRING', comment: 'Name of the detector used' }
 
 export const DATE_END: FitsKeyword = { type: 'STRING', comment: 'Date of the end of observation' }
 export const EXPOSURE: FitsKeyword = { type: 'REAL', comment: 'Duration of exposure in seconds' }
@@ -84,6 +86,7 @@ export const BAYERPAT: FitsKeyword = { type: 'STRING', comment: 'Bayer color pat
 export const CBLACK: FitsKeyword = { type: 'REAL', comment: 'Indicates the black point used when displaying the image' }
 export const CSTRETCH: FitsKeyword = { type: 'STRING', comment: 'Initial display screen stretch mode' }
 export const CCD_TEMP: FitsKeyword = { type: 'REAL', comment: 'Actual measured sensor temperature at the start of exposure in deg C' }
+export const CALSTAT: FitsKeyword = { type: 'STRING', comment: 'Calibration applied: B bias, D dark, F flat' }
 export const COLORTYP: FitsKeyword = { type: 'REAL', comment: 'Type of color sensor Bayer array or zero for monochrome' }
 export const CWHITE: FitsKeyword = { type: 'REAL', comment: 'Indicates the white point used when displaying the image' }
 export const DATE_OBS: FitsKeyword = { type: 'STRING', comment: 'Date of observation in the ISO standard 8601 format' }
@@ -111,6 +114,7 @@ export const PIERSIDE: FitsKeyword = { type: 'STRING', comment: 'Indicates side-
 export const READOUTM: FitsKeyword = { type: 'STRING', comment: 'Records the selected Readout Mode for the camera' }
 export const ROTATANG: FitsKeyword = { type: 'REAL', comment: 'Rotator angle in deg' }
 export const ROWORDER: FitsKeyword = { type: 'STRING', comment: 'Pixel row readout order' }
+export const SET_TEMP: FitsKeyword = { type: 'REAL', comment: 'Sensor temperature set point in deg C' }
 export const SITELAT: FitsKeyword = { type: 'REAL', comment: 'Latitude at observing site in deg' }
 export const SITELONG: FitsKeyword = { type: 'REAL', comment: 'Longitude at observing site in deg' }
 export const XBAYROFF: FitsKeyword = { type: 'REAL', comment: 'X offset of Bayer array on imaging sensor' }
@@ -130,6 +134,28 @@ export const OFFSET: FitsKeyword = { type: 'REAL', comment: 'Camera offset setti
 export const PIXSIZE1: FitsKeyword = { type: 'REAL', comment: 'Unbinned X pixel size of the sensor in microns' }
 export const PIXSIZE2: FitsKeyword = { type: 'REAL', comment: 'Unbinned Y pixel size of the sensor in microns' }
 export const SITEELEV: FitsKeyword = { type: 'REAL', comment: 'Elevation at observing site in m' }
+export const PROGRAM: FitsKeyword = { type: 'STRING', comment: 'Software that created this HDU' }
+
+// FITS 4.0 time and observatory-location keywords (Sect. 8.4.1 and 9): https://fits.gsfc.nasa.gov/fits_standard.html
+
+export const TIMESYS: FitsKeyword = { type: 'STRING', comment: 'Time scale of the time-related keywords' }
+export const TIMEUNIT: FitsKeyword = { type: 'STRING', comment: 'Unit of time durations and relative times' }
+export const TREFPOS: FitsKeyword = { type: 'STRING', comment: 'Spatial location at which the times are valid' }
+export const TREFDIR: FitsKeyword = { type: 'STRING', comment: 'Keywords of the light-time reference direction' }
+export const PLEPHEM: FitsKeyword = { type: 'STRING', comment: 'Solar System ephemeris used for time corrections' }
+export const DATE_BEG: FitsKeyword = { type: 'STRING', comment: 'Start time of data acquisition in TIMESYS' }
+export const DATE_AVG: FitsKeyword = { type: 'STRING', comment: 'Mid-observation time in TIMESYS' }
+export const MJD_OBS: FitsKeyword = { type: 'REAL', comment: 'MJD of the start of observation in TIMESYS' }
+export const MJD_BEG: FitsKeyword = { type: 'REAL', comment: 'MJD of the start of data acquisition in TIMESYS' }
+export const MJD_AVG: FitsKeyword = { type: 'REAL', comment: 'MJD of the mid-observation time in TIMESYS' }
+export const MJD_END: FitsKeyword = { type: 'REAL', comment: 'MJD of the end of data acquisition in TIMESYS' }
+export const XPOSURE: FitsKeyword = { type: 'REAL', comment: 'Effective exposure duration in TIMEUNIT' }
+export const TELAPSE: FitsKeyword = { type: 'REAL', comment: 'Elapsed time from start to end in TIMEUNIT' }
+export const TIMSYER: FitsKeyword = { type: 'REAL', comment: 'Absolute (systematic) time error in TIMEUNIT' }
+export const TIMRDER: FitsKeyword = { type: 'REAL', comment: 'Relative (random) time error in TIMEUNIT' }
+export const OBSGEO_X: FitsKeyword = { type: 'REAL', comment: 'ITRS X coordinate of the observatory in m' }
+export const OBSGEO_Y: FitsKeyword = { type: 'REAL', comment: 'ITRS Y coordinate of the observatory in m' }
+export const OBSGEO_Z: FitsKeyword = { type: 'REAL', comment: 'ITRS Z coordinate of the observatory in m' }
 
 // Keywords defined by the FITS Standard.
 export const STANDARD_KEYWORDS = {
@@ -169,6 +195,7 @@ export const STANDARD_KEYWORDS = {
 	NAXIS3,
 	OBJECT,
 	OBSERVER,
+	ORIGIN,
 	RADESYS,
 	SIMPLE,
 	TELESCOP,
@@ -190,6 +217,7 @@ export const OBSERVATION_KEYWORDS = {
 
 // Instrument-related keywords.
 export const INSTRUMENT_KEYWORDS = {
+	DETECTOR,
 	FILTER,
 } as const
 
@@ -201,6 +229,7 @@ const MAXIMDL_KEYWORDS = {
 	CBLACK,
 	CSTRETCH,
 	'CCD-TEMP': CCD_TEMP,
+	CALSTAT,
 	COLORTYP,
 	CWHITE,
 	'DATE-OBS': DATE_OBS,
@@ -228,6 +257,7 @@ const MAXIMDL_KEYWORDS = {
 	READOUTM,
 	ROTATANG,
 	ROWORDER,
+	'SET-TEMP': SET_TEMP,
 	SITELAT,
 	SITELONG,
 	XBAYROFF,
@@ -254,10 +284,33 @@ export const OTHER_KEYWORDS = {
 	PIXSIZE1,
 	PIXSIZE2,
 	SITEELEV,
+	PROGRAM,
+} as const
+
+// FITS 4.0 time and observatory-location keywords.
+export const TIME_KEYWORDS = {
+	TIMESYS,
+	TIMEUNIT,
+	TREFPOS,
+	TREFDIR,
+	PLEPHEM,
+	'DATE-BEG': DATE_BEG,
+	'DATE-AVG': DATE_AVG,
+	'MJD-OBS': MJD_OBS,
+	'MJD-BEG': MJD_BEG,
+	'MJD-AVG': MJD_AVG,
+	'MJD-END': MJD_END,
+	XPOSURE,
+	TELAPSE,
+	TIMSYER,
+	TIMRDER,
+	'OBSGEO-X': OBSGEO_X,
+	'OBSGEO-Y': OBSGEO_Y,
+	'OBSGEO-Z': OBSGEO_Z,
 } as const
 
 // Union of every known keyword group, keyed by the exact header name.
-export const KEYWORDS = { ...STANDARD_KEYWORDS, ...OBSERVATION_KEYWORDS, ...INSTRUMENT_KEYWORDS, ...MAXIMDL_KEYWORDS, ...DURATION_KEYWORDS, ...OTHER_KEYWORDS } as const
+export const KEYWORDS = { ...STANDARD_KEYWORDS, ...OBSERVATION_KEYWORDS, ...INSTRUMENT_KEYWORDS, ...MAXIMDL_KEYWORDS, ...DURATION_KEYWORDS, ...OTHER_KEYWORDS, ...TIME_KEYWORDS } as const
 
 // Every recognized header keyword name.
 export type FitsKeywords = keyof typeof KEYWORDS

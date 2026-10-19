@@ -4,7 +4,7 @@ import { readImageFromBuffer, readImageFromFits, readImageFromPath } from '../..
 import { fileHandleSource } from '../../../../src/io/file'
 import { FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHdu, type FitsHeader, type FitsHeaderCard, FitsImageReader, FitsImageWriter, FitsKeywordReader, FitsKeywordWriter, isFits, readFits, writeFits } from '../../../../src/io/formats/fits/fits'
 import { KEYWORDS } from '../../../../src/io/formats/fits/headers'
-import { computeHduDataSize, declinationKeyword, heightKeyword, observationDateKeyword, rightAscensionKeyword, widthKeyword } from '../../../../src/io/formats/fits/util'
+import { computeHduDataSize, declinationKeyword, type FitsMetadataDiagnostic, finiteMetadataKeyword, heightKeyword, observationDateKeyword, parseFitsDateTimeFields, rightAscensionKeyword, textMetadataKeyword, widthKeyword } from '../../../../src/io/formats/fits/util'
 import { base64Sink, bufferSink, bufferSource } from '../../../../src/io/io'
 import type { Source, Seekable, Sink } from '../../../../src/io/types'
 import { dms, hms } from '../../../../src/math/units/angle'
@@ -892,4 +892,27 @@ test('observation date keywords', () => {
 	expect(observationDateKeyword({ 'DATE-OBS': '2023-01-15T01:27:05.460Z' })).toBe(1673746025460)
 	expect(observationDateKeyword({ 'DATE-OBS': 'not-a-date', 'DATE-END': '2023-01-15T01:27:05.460' })).toBe(1673746025460)
 	expect(observationDateKeyword({ 'DATE-OBS': 'garbage' })).toBeUndefined()
+})
+
+test('FITS datetime fields', () => {
+	expect(parseFitsDateTimeFields('2023-01-15T01:27:05.460')).toEqual({ year: 2023, month: 1, day: 15, hour: 1, minute: 27, second: 5.46, resolution: 0.001, twoDigitYear: false, zone: false })
+	expect(parseFitsDateTimeFields(' 2023-01-15 ')).toEqual({ year: 2023, month: 1, day: 15, hour: 0, minute: 0, second: 0, resolution: 86400, twoDigitYear: false, zone: false })
+	expect(parseFitsDateTimeFields('2016-12-31T23:59:60.5Z')).toMatchObject({ second: 60.5, resolution: 0.1, zone: true })
+	expect(parseFitsDateTimeFields('+12000-02-29T00:00:00')).toMatchObject({ year: 12000, resolution: 1 })
+	expect(parseFitsDateTimeFields('-04713-11-24T12:00:00')).toMatchObject({ year: -4713, month: 11, day: 24, hour: 12 })
+	expect(parseFitsDateTimeFields('15/01/99')).toMatchObject({ year: 1999, month: 1, day: 15, twoDigitYear: true })
+
+	for (const text of ['2023-02-29', '2023-13-01', '2023-01-15T24:00:00', '2023-01-15T01:60:00', '2023-01-15T01:27:61', '2023-01-15T01:27', '12023-01-15', '2023-01-15T01:27:05+01:00', '31/02/99']) {
+		expect(parseFitsDateTimeFields(text)).toBeUndefined()
+	}
+})
+
+test('metadata keywords distinguish absent from invalid values', () => {
+	const diagnostics: FitsMetadataDiagnostic[] = []
+	const header = { A: 1.5, B: ' 2.5 ', C: '', D: true, E: 'x', F: '  ', G: 7 }
+	expect([finiteMetadataKeyword(header, 'A', diagnostics), finiteMetadataKeyword(header, 'B', diagnostics), finiteMetadataKeyword(header, 'Z', diagnostics)]).toEqual([1.5, 2.5, undefined])
+	expect(diagnostics).toBeEmpty()
+	expect([finiteMetadataKeyword(header, 'C', diagnostics), finiteMetadataKeyword(header, 'D', diagnostics), finiteMetadataKeyword(header, 'E', diagnostics)]).toEqual([undefined, undefined, undefined])
+	expect(diagnostics.map((e) => `${e.kind}:${e.keyword}`)).toEqual(['invalid:C', 'invalid:D', 'invalid:E'])
+	expect([textMetadataKeyword(header, 'B'), textMetadataKeyword(header, 'F'), textMetadataKeyword(header, 'G'), textMetadataKeyword(header, 'Z')]).toEqual(['2.5', undefined, '7', undefined])
 })

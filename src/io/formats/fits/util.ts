@@ -1,4 +1,5 @@
 import { daysInMonth, temporalFromDate } from '../../../astronomy/time/temporal'
+import { DAYSEC } from '../../../core/constants'
 import type { CfaPattern } from '../../../imaging/model/types'
 import { type Angle, deg, parseAngle } from '../../../math/units/angle'
 import type { BitpixOrZero, FitsCompressionType, FitsHeader, FitsHeaderCard, FitsHeaderKey, FitsHeaderValue } from './fits'
@@ -8,6 +9,8 @@ import type { BitpixOrZero, FitsCompressionType, FitsHeader, FitsHeaderCard, Fit
 // where the same datum appears under several conventions - tries the alternative keywords in priority
 // order (e.g. RA / OBJCTRA / RA_OBJ / CRVAL1). Also covers tile-compression (ZIMAGE/ZCMPTYPE) detection,
 // HDU data-size computation, and header-card value formatting/escaping. Angles are returned in radians.
+// The metadata readers (provenance.ts, astronomy/time/fits.ts) share the diagnostic types, the
+// absent-versus-invalid numeric and text accessors, and the FITS datetime field parser defined here.
 
 // Returns true when `key` is present in the header with a defined value.
 export function hasKeyword(header: FitsHeader, key: FitsHeaderKey) {
@@ -162,6 +165,107 @@ export function observationDateKeyword(header: FitsHeader) {
 		if (parsed !== undefined) return parsed
 	}
 	return undefined
+}
+
+// How a metadata reader treated one header keyword:
+// - defaulted: the keyword is absent and the FITS default was applied;
+// - assumed: the keyword is present and a conventional interpretation was applied;
+// - missing: information the result needs is absent and has no default;
+// - invalid: the keyword is present but unreadable or out of range, and was ignored;
+// - unsupported: the value is well formed but cannot be represented or is not recognized;
+// - nonStandard: a deprecated or non-standard form was accepted;
+// - conflict: two keywords disagree beyond their written precision;
+// - incompatible: a combination the FITS Standard advises against.
+export type FitsMetadataDiagnosticKind = 'defaulted' | 'assumed' | 'missing' | 'invalid' | 'unsupported' | 'nonStandard' | 'conflict' | 'incompatible'
+
+// One finding of a metadata reader about an externally supplied header.
+export interface FitsMetadataDiagnostic {
+	// Category of the finding.
+	readonly kind: FitsMetadataDiagnosticKind
+	// Header keyword the finding is about (the governing one for a conflict).
+	readonly keyword: FitsHeaderKey
+	// Human-readable explanation.
+	readonly message: string
+}
+
+// Reads `key` as a finite number for a metadata reader. Numbers and numeric strings are accepted;
+// an absent keyword returns undefined, and a present but non-numeric, blank, logical, or non-finite
+// value is reported as invalid in `diagnostics` and also returns undefined.
+export function finiteMetadataKeyword(header: FitsHeader, key: FitsHeaderKey, diagnostics: FitsMetadataDiagnostic[]) {
+	const value = header[key]
+	if (value === undefined) return undefined
+	const number = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : Number.NaN
+	if (Number.isFinite(number)) return number
+	diagnostics.push({ kind: 'invalid', keyword: key, message: `${key} is not a finite number` })
+	return undefined
+}
+
+// Reads `key` as trimmed text for a metadata reader, or undefined when absent or blank.
+export function textMetadataKeyword(header: FitsHeader, key: FitsHeaderKey) {
+	return textKeyword(header, key).trim() || undefined
+}
+
+// Calendar fields of a FITS datetime string, not yet tied to a time scale.
+export interface FitsDateTimeFields {
+	// Astronomical year (year 0 is 1 BCE).
+	readonly year: number
+	// Month, 1..12.
+	readonly month: number
+	// Day of month, 1..28-31.
+	readonly day: number
+	// Hour, 0..23.
+	readonly hour: number
+	// Minute, 0..59.
+	readonly minute: number
+	// Seconds including the fraction, 0 <= second < 61; 60.x is only meaningful inside a UTC leap second.
+	readonly second: number
+	// One unit of the last written digit, in seconds: 86400 for a date without time, 1 for whole
+	// seconds, 0.001 for three decimals. A clock reading may be truncated or rounded to it.
+	readonly resolution: number
+	// The legacy two-digit 'DD/MM/YY' form (1900-1999), whose start/middle/end role is undefined.
+	readonly twoDigitYear: boolean
+	// The string ended with the ISO time-zone designator 'Z', which FITS does not allow.
+	readonly zone: boolean
+}
+
+// FITS 4.0 §9.1.1 datetime: 'CCYY-MM-DD' or '[±C]CCYY-MM-DD' optionally followed by 'Thh:mm:ss[.s...]',
+// tolerating a trailing 'Z'. The year is either unsigned four digits or signed five digits.
+const FITS_DATE_TIME_FIELDS = /^(\d{4}|[+-]\d{5})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2}(?:\.(\d*))?))?(Z?)$/
+// FITS 4.0 §4.4.2.2 legacy 'DD/MM/YY' observation date for 1900-1999.
+const FITS_TWO_DIGIT_DATE = /^(\d{2})\/(\d{2})\/(\d{2})$/
+
+// Parses a FITS datetime string into calendar fields, checking the month, the day of month in the
+// proleptic Gregorian calendar, the hour, and the minute, and limiting the seconds to below 61. Whether
+// 60.x is a valid UTC leap second depends on the time scale and the leap-second table, so it is left to
+// the caller. Returns undefined when the string is not a FITS datetime.
+export function parseFitsDateTimeFields(value: string): FitsDateTimeFields | undefined {
+	const text = value.trim()
+	const legacy = FITS_TWO_DIGIT_DATE.exec(text)
+
+	if (legacy) {
+		const year = 1900 + Number(legacy[3])
+		const month = Number(legacy[2])
+		const day = Number(legacy[1])
+		if (!(month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth(year, month))) return undefined
+		return { year, month, day, hour: 0, minute: 0, second: 0, resolution: DAYSEC, twoDigitYear: true, zone: false }
+	}
+
+	const match = FITS_DATE_TIME_FIELDS.exec(text)
+	if (!match) return undefined
+
+	const year = Number(match[1])
+	const month = Number(match[2])
+	const day = Number(match[3])
+	const hasTime = match[4] !== undefined
+	const hour = hasTime ? Number(match[4]) : 0
+	const minute = hasTime ? Number(match[5]) : 0
+	const second = hasTime ? Number(match[6]) : 0
+	const decimals = match[7]?.length ?? 0
+
+	if (!(month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth(year, month))) return undefined
+	if (!(hour <= 23 && minute <= 59 && second < 61)) return undefined
+
+	return { year, month, day, hour, minute, second, resolution: hasTime ? 10 ** -decimals : DAYSEC, twoDigitYear: false, zone: match[8] === 'Z' }
 }
 
 // Converts a BITPIX code to the number of bytes per pixel (|bitpix| / 8).

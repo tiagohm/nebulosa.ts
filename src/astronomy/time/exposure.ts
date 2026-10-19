@@ -26,6 +26,10 @@ export interface ExposureShutter {
 	// (default 0). Open and close timestamps are taken as read from one clock, so the error is
 	// common to both and carried unchanged to every returned instant.
 	readonly uncertainty?: number
+	// Quantization of the recorded timestamps, in seconds (default 0): they may be truncated or rounded
+	// to this step, e.g. 86400 for a date without time. A bound, not a 1σ error, so it is kept apart from
+	// `uncertainty` and carried unchanged to the result.
+	readonly resolution?: number
 }
 
 // A recorded exposure timestamp with its commanded duration.
@@ -69,6 +73,8 @@ export interface ExposureInterval {
 	readonly duration: number
 	// 1σ uncertainty of each returned instant, carried from the clock uncertainty, in seconds.
 	readonly uncertainty: number
+	// Quantization of the recorded timestamps, carried from the input, in seconds.
+	readonly resolution: number
 }
 
 // Computes the photon-collection interval of an exposure from its recorded timestamps.
@@ -86,7 +92,7 @@ export interface ExposureInterval {
 // reference scale's own seconds (a TCB hour is ≈ 56 µs longer). Exposures down to microseconds keep
 // their offsets, since a day fraction resolves about 1e-11 s.
 export function exposureInterval(exposure: ExposureTimestamp | ExposureSpan): ExposureInterval {
-	const { openLatency = 0, closeLatency = 0, uncertainty = 0 } = exposure
+	const { openLatency = 0, closeLatency = 0, uncertainty = 0, resolution = 0 } = exposure
 	let time: Time
 	let open: number
 	let duration: number
@@ -110,6 +116,7 @@ export function exposureInterval(exposure: ExposureTimestamp | ExposureSpan): Ex
 		end: shiftSeconds(time, endOffset),
 		duration: endOffset - startOffset,
 		uncertainty,
+		resolution,
 	}
 }
 

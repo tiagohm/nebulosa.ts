@@ -259,7 +259,7 @@ export function timeNow(fast: boolean = false) {
 // This represents the number of days since midnight on November 17, 1858.
 // For example, 51544.0 in MJD is midnight on January 1, 2000.
 export function timeMJD(mjd: number, scale: Timescale = Timescale.UTC) {
-	return time(mjd + MJD0, 0, scale)
+	return time(mjd + 2400000, 0.5, scale)
 }
 
 // Julian epoch year as floating point value like 2000.0.
