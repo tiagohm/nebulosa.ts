@@ -1691,7 +1691,7 @@ console.log(cycle.valid, cycle.flags) // true ['missingCovariance']
 
 ### Exposure Timing
 
-A camera timestamp usually marks a command, not the light: the shutter opens some latency after the open command and closes some latency after the close command. Timing work needs the actual photon-collection interval and, above all, its midpoint, the instant to refer a measurement to (for example in [Barycentric Julian Date](#barycentric-julian-date)).
+A camera timestamp usually marks a command, not the light: the shutter opens some latency after the open command and closes some latency after the close command. Timing work needs the actual photon-collection interval and, above all, its midpoint, the instant to refer a measurement to (for example in [Barycentric Julian Date](#barycentric-julian-date)). `fitsExposure` builds this function's input from FITS header keywords; see [FITS Observation Timing and Location](#fits-observation-timing-and-location).
 
 `exposureInterval(exposure)` accepts either a recorded `time` in any scale with the `reference` it labels (`'start'` for the open command, `'midpoint'` for the commanded midpoint, `'end'` for the close command) and the commanded `duration`, or the recorded open and close command timestamps as `start` and `end`, possibly in different scales, whose commanded duration is measured on TAI. A span cannot also carry a `duration`, so a contradictory exposure time next to start and end timestamps is a type error rather than a silent choice. Both forms take optional `openLatency`, `closeLatency`, and clock `uncertainty`, all in seconds and defaulting to 0. It returns the collection `start`, `midpoint`, and `end` as fresh two-part `Time`s in the scale of the timestamp (of `start` for a span), keeping its `location` and providers, with the effective `duration` (commanded duration − `openLatency` + `closeLatency`) and the `uncertainty` carried unchanged, since both timestamps come from one clock.
 
@@ -20721,7 +20721,7 @@ console.log(tiled.hdus[1].header.ZCMPTYPE, tiled.hdus[1].header.ZBITPIX, tiled.h
 
 ### FITS Header Cards and Metadata
 
-A header is a list of cards, `[key, value?, comment?]`, and the parsed form is the object `FitsHeader`, which maps each keyword to its value (a string, a number or a boolean). `FitsKeywordWriter` formats one card into the 80 characters of the file: `write(card, out, offset)` returns the bytes written, `writeAll(header, out, offset)` writes the cards of a whole header (an object or a list of cards), and `writeEnd(out, offset)` writes the `END` card; the padding to the block is done by `writeFits`. Strings are quoted with the quote character doubled, numbers are written in the exponential form of the format, booleans as `T` and `F`, and when a card has no comment the default one of the keyword table (`FitsKeywordWriter.keywords`, the `KEYWORDS` object of `headers.ts`, which has the standard, the observation and the instrument keywords) is used. `COMMENT` and `HISTORY` cards that do not fit in one card are wrapped over several, and a string that does not fit in the value field is split in `CONTINUE` cards. `FitsKeywordReader` is the inverse: `read(buffer, offset)` parses one card and `readAll(buffer, offset)` parses until `END`, joining the commentary cards with a line break and rebuilding the continued strings. The accessors of `util.ts` read a header with a default for a missing key: `hasKeyword`, `numericKeyword`, `booleanKeyword` and `textKeyword`, and the metadata readers `numberOfAxesKeyword`, `widthKeyword`, `heightKeyword`, `numberOfChannelsKeyword`, `bitpixKeyword`, `exposureTimeKeyword` (`EXPTIME`, or `EXPOSURE`), `cfaPatternKeyword` (`BAYERPAT`, trimmed), `rightAscensionKeyword`, `declinationKeyword` and `observationDateKeyword`. The coordinates are returned in radians and the date in milliseconds since the epoch (UTC); the right ascension is tried in the order `RA` (degrees), `OBJCTRA` (sexagesimal hours), `RA_OBJ` and `CRVAL1` (degrees), the declination in the order `DEC`, `OBJCTDEC` (sexagesimal degrees), `DEC_OBJ` and `CRVAL2`, and the date in the order `DATE-OBS`, `DATE-END` and `DATE`, skipping a value that is not a FITS date-time (`CCYY-MM-DD` with an optional `Thh:mm:ss[.sss]` and `Z`). The helpers `formatFitsHeaderValue`, `escapeQuotedText`, `unescapeQuotedText`, `isCommentKeyword`, `isCommentStyleCard` and `bitpixInBytes` support the reader and the writer. The keywords of the compressed images are described in [FITS Pixel I/O and Rice Tiles](#fits-pixel-io-and-rice-tiles).
+A header is a list of cards, `[key, value?, comment?]`, and the parsed form is the object `FitsHeader`, which maps each keyword to its value (a string, a number or a boolean). `FitsKeywordWriter` formats one card into the 80 characters of the file: `write(card, out, offset)` returns the bytes written, `writeAll(header, out, offset)` writes the cards of a whole header (an object or a list of cards), and `writeEnd(out, offset)` writes the `END` card; the padding to the block is done by `writeFits`. Strings are quoted with the quote character doubled, numbers are written in the exponential form of the format, booleans as `T` and `F`, and when a card has no comment the default one of the keyword table (`FitsKeywordWriter.keywords`, the `KEYWORDS` object of `headers.ts`, which has the standard, the observation and the instrument keywords) is used. `COMMENT` and `HISTORY` cards that do not fit in one card are wrapped over several, and a string that does not fit in the value field is split in `CONTINUE` cards. `FitsKeywordReader` is the inverse: `read(buffer, offset)` parses one card and `readAll(buffer, offset)` parses until `END`, joining the commentary cards with a line break and rebuilding the continued strings. The accessors of `util.ts` read a header with a default for a missing key: `hasKeyword`, `numericKeyword`, `booleanKeyword` and `textKeyword`, and the metadata readers `numberOfAxesKeyword`, `widthKeyword`, `heightKeyword`, `numberOfChannelsKeyword`, `bitpixKeyword`, `exposureTimeKeyword` (`EXPTIME`, or `EXPOSURE`), `cfaPatternKeyword` (`BAYERPAT`, trimmed), `rightAscensionKeyword`, `declinationKeyword` and `observationDateKeyword`. The coordinates are returned in radians and the date in milliseconds since the epoch (UTC); the right ascension is tried in the order `RA` (degrees), `OBJCTRA` (sexagesimal hours), `RA_OBJ` and `CRVAL1` (degrees), the declination in the order `DEC`, `OBJCTDEC` (sexagesimal degrees), `DEC_OBJ` and `CRVAL2`, and the date in the order `DATE-OBS`, `DATE-END` and `DATE`, skipping a value that is not a FITS date-time (`CCYY-MM-DD` with an optional `Thh:mm:ss[.sss]` and `Z`). The helpers `formatFitsHeaderValue`, `escapeQuotedText`, `unescapeQuotedText`, `isCommentKeyword`, `isCommentStyleCard` and `bitpixInBytes` support the reader and the writer. The typed metadata readers of [FITS Instrument Provenance](#fits-instrument-provenance) and [FITS Observation Timing and Location](#fits-observation-timing-and-location) share three helpers that, unlike the accessors above, tell an absent keyword from an unreadable one: `finiteMetadataKeyword(header, key, diagnostics)` returns a finite number (numeric strings included) or `undefined`, pushing an `invalid` `FitsMetadataDiagnostic` for a present but unreadable value; `textMetadataKeyword` returns trimmed text, or `undefined` when blank; and `parseFitsDateTimeFields(text)` splits a FITS datetime (four-digit or signed five-digit year, the legacy `DD/MM/YY`, a tolerated `Z`) into calendar fields with the `resolution` of its last written digit in seconds, leaving the time scale and the leap-second check to the timing reader. The keywords of the compressed images are described in [FITS Pixel I/O and Rice Tiles](#fits-pixel-io-and-rice-tiles).
 
 ```ts
 import { FitsKeywordReader, FitsKeywordWriter } from 'nebulosa/src/io/formats/fits/fits'
@@ -20734,6 +20734,8 @@ import {
 	declinationKeyword,
 	escapeQuotedText,
 	exposureTimeKeyword,
+	type FitsMetadataDiagnostic,
+	finiteMetadataKeyword,
 	formatFitsHeaderValue,
 	hasKeyword,
 	heightKeyword,
@@ -20743,8 +20745,10 @@ import {
 	numberOfChannelsKeyword,
 	numericKeyword,
 	observationDateKeyword,
+	parseFitsDateTimeFields,
 	rightAscensionKeyword,
 	textKeyword,
+	textMetadataKeyword,
 	unescapeQuotedText,
 	widthKeyword,
 } from 'nebulosa/src/io/formats/fits/util'
@@ -20759,7 +20763,7 @@ let size = writer.write(['EXPTIME', 120.5], buffer, 0)
 console.log(size, JSON.stringify(buffer.toString('latin1', 0, 80))) // 80 "EXPTIME = 1.20500000000000000000E+2 / Duration of exposure in seconds           "
 size += writer.write(['OBJECT', "Barnard's Star", 'target'], buffer, size)
 console.log(JSON.stringify(buffer.toString('latin1', 80, 160))) // "OBJECT  = 'Barnard''s Star'    / target                                         "
-console.log(Object.keys(KEYWORDS).length, EXPTIME, FitsKeywordWriter.keywords.GAIN) // 101 { type: "REAL", comment: "Duration of exposure in seconds" } { type: "REAL", comment: "Amplifier gain in electrons per analog unit" }
+console.log(Object.keys(KEYWORDS).length, EXPTIME, FitsKeywordWriter.keywords.GAIN) // 124 { type: "REAL", comment: "Duration of exposure in seconds" } { type: "REAL", comment: "Amplifier gain in electrons per analog unit" }
 
 // Booleans, commentary and long strings.
 size += writer.write(['TRACKING', true], buffer, size)
@@ -20797,6 +20801,88 @@ console.log(formatFitsHeaderValue(true), formatFitsHeaderValue(1.5), formatFitsH
 console.log(escapeQuotedText("it's"), unescapeQuotedText("it''s")) // it''s it's
 console.log(isCommentKeyword('HISTORY'), isCommentKeyword('OBJECT'), isCommentStyleCard(['COMMENT'])) // true false true
 console.log(bitpixInBytes(-64), bitpixInBytes(16), bitpixInBytes(8)) // 8 2 1
+
+// The metadata helpers: absent versus invalid values, and the fields of a datetime.
+const diagnostics: FitsMetadataDiagnostic[] = []
+console.log(finiteMetadataKeyword({ GAIN: '120' }, 'GAIN', diagnostics), finiteMetadataKeyword({ GAIN: 'high' }, 'GAIN', diagnostics), finiteMetadataKeyword({}, 'GAIN', diagnostics), diagnostics.length) // 120 undefined undefined 1
+console.log(textMetadataKeyword({ OBSERVER: '   ' }, 'OBSERVER'), textMetadataKeyword({ OBJECT: ' M42 ' }, 'OBJECT')) // undefined M42
+console.log(parseFitsDateTimeFields('2016-12-31T23:59:60.5')) // { year: 2016, month: 12, day: 31, hour: 23, minute: 59, second: 60.5, resolution: 0.1, twoDigitYear: false, zone: false }
+console.log(parseFitsDateTimeFields('2023-02-29')) // undefined
+```
+
+### FITS Instrument Provenance
+
+Besides the pixels, a FITS header says which telescope, camera and sensor took the frame, which filter was in the beam, the frame's role in calibration, the sensor settings, and which calibration steps were already applied. The Standard defines only a few of these keywords (`TELESCOP`, `INSTRUME`, `OBSERVER`, `OBJECT`, `ORIGIN`); capture software adds the rest with varying spellings, such as `IMAGETYP = 'Light Frame'` or `FRAME = 'Light'`.
+
+`readFitsProvenance(header)` (`src/io/formats/fits/fits.provenance.ts`) returns a typed record with the instrument names, `detector`, `filter`, `software` (`PROGRAM`, else `SWCREATE`, else `CREATOR`), `frameType` normalized to `'light'`, `'dark'`, `'flat'`, `'bias'` or `'darkFlat'` (from `IMAGETYP`, else `FRAME`), `binning` as `[x, y]`, `sensorTemperature` (`CCD-TEMP`) and `setTemperature` (`SET-TEMP`) in °C, `gain`, `offset`, `electronGain` (`EGAIN`, e⁻/ADU), `readoutMode`, `calibration` (the `CALSTAT` letters as `'bias'`, `'dark'`, `'flat'`), and `pedestal` (ADU). `GAIN` is returned as written: capture software stores the camera's gain setting there, while NOAO-style headers store e⁻/ADU, so use `electronGain` for a conversion factor. Blank strings count as absent. Values are not trusted: a non-numeric temperature, a non-positive binning, an unknown frame type or `CALSTAT` letter, and an `IMAGETYP` that contradicts `FRAME` are left out or resolved and listed in `diagnostics` with the same kinds as [FITS Observation Timing and Location](#fits-observation-timing-and-location); a lone `XBINNING` or `YBINNING` is applied to both axes and reported as assumed.
+
+`writeFitsProvenance(header, fields)` writes the record back in place. It owns the keywords of `FITS_PROVENANCE_KEYWORDS`: those the input defines are rewritten in their existing position, the rest are deleted, so a stale `FRAME` or `SWCREATE` cannot contradict the new `IMAGETYP` (MaxIm DL spelling, such as `'Light Frame'`) or `PROGRAM`. Other keywords pass through. Observation times and the site are read by [FITS Observation Timing and Location](#fits-observation-timing-and-location).
+
+```ts
+import { readFitsProvenance, writeFitsProvenance } from 'nebulosa/src/io/formats/fits/fits.provenance'
+
+const header = { SIMPLE: true, INSTRUME: 'ZWO CCD ASI294MM Pro', TELESCOP: 'iOptronV3', IMAGETYP: 'Light Frame', FRAME: 'Light', FILTER: 'L', XBINNING: 4, YBINNING: 4, 'CCD-TEMP': -10.1, 'SET-TEMP': -10, GAIN: 120, OFFSET: 30, EGAIN: 1.0022, CALSTAT: 'BD', OBSERVER: '  ' }
+const provenance = readFitsProvenance(header)
+
+console.log(provenance.instrument, provenance.telescope, provenance.observer) // ZWO CCD ASI294MM Pro iOptronV3 undefined
+console.log(provenance.frameType, provenance.filter, provenance.binning) // light L [4, 4]
+console.log(provenance.sensorTemperature, provenance.setTemperature, provenance.electronGain) // -10.1 -10 1.0022 — °C, °C, e⁻/ADU
+console.log(provenance.calibration, provenance.diagnostics) // ["bias", "dark"] []
+
+// A conflicting role is resolved in favor of IMAGETYP and reported.
+const conflict = readFitsProvenance({ IMAGETYP: 'Flat Field', FRAME: 'Dark', XBINNING: 2 })
+console.log(
+	conflict.frameType,
+	conflict.binning,
+	conflict.diagnostics.map((e) => `${e.kind} ${e.keyword}`),
+) // flat [2, 2] ["conflict IMAGETYP", "assumed YBINNING"]
+
+// Writing replaces the owned keywords and keeps the others.
+writeFitsProvenance(header, { ...provenance, frameType: 'dark', software: 'nebulosa' })
+console.log(header.IMAGETYP, header.FRAME, header.PROGRAM, header.CALSTAT, header.SIMPLE) // Dark Frame undefined nebulosa BD true
+```
+
+### FITS Observation Timing and Location
+
+A FITS header records when and where an exposure was taken through several overlapping conventions. FITS 4.0 defines the time scale `TIMESYS` (UTC when absent), the place where the times are valid `TREFPOS` (the topocenter by default), the instants `DATE-BEG`/`MJD-BEG`, `DATE-AVG`/`MJD-AVG` and `DATE-END`/`MJD-END`, the older `DATE-OBS`/`MJD-OBS` (the start unless its comment says otherwise), times relative to `MJDREF`/`JDREF`/`DATEREF` (`TSTART`, `TSTOP`, `TIMEOFFS` in `TIMEUNIT`), the durations `XPOSURE` and `TELAPSE`, the errors `TIMSYER` and `TIMRDER`, and the observatory as ITRS `OBSGEO-X/Y/Z` in meters or geodetic `OBSGEO-B/L/H` on the IAU 1976 ellipsoid; capture software adds `EXPTIME`, `EXPOSURE` and `SITELAT`/`SITELONG`/`SITEELEV`.
+
+`readFitsTime(header, options?)` (`src/astronomy/time/fits.time.ts`) reads all of them into one typed record without changing the header. Each instant is a `FitsTimeValue`: a fresh two-part `Time` in the header's scale (GPS is carried on TAI, 19 s ahead), the `keyword` that supplied it, and its `resolution`, one unit of the last written digit in seconds (0.001 for `05.460`, 86400 for a date without time). The precedence is that of the Standard: a `DATE-xxxx` and `MJD-xxxx` pair that agrees within the two resolutions plus `options.tolerance` (1 µs by default) keeps the finer value, and a disagreeing MJD wins with a conflict; `start` is `DATE-BEG`/`MJD-BEG`, else `DATE-OBS`/`MJD-OBS` (reported as assumed; the two-digit `DD/MM/YY` form, whose role is undefined, is only `observation`), else `TSTART`; `DATE-OBS` is never taken as the midpoint. `exposure` comes from `XPOSURE`, else `EXPTIME`, else `EXPOSURE`, in seconds. A UTC value may read `23:59:60.x` only inside a leap second, and relative UTC times are counted on TAI, so both keep SI seconds across a leap second. The `location` is a `GeographicPosition` from `OBSGEO-X/Y/Z`, else `OBSGEO-B/L/H`, else the `SITE` keywords (read as WGS84 degrees with east-positive longitude); for topocentric times it is also attached to every returned `Time`, which enables the topocentric TDB−TT term. When `TREFPOS` is absent, TDB and TCB refer to the barycenter and TCG to the geocenter, as FITS prescribes. `DATE`, the file creation date, is not an observation time and is ignored.
+
+Nothing is corrected: a barycentric TDB time is returned as written, and an exposure timestamp is not moved to its midpoint. `fitsExposure(metadata, shutter?)` hands the instants to [Exposure Timing](#exposure-timing) (a span when start and end are known, else a timestamp with its role and the exposure, with `TIMSYER` as the default clock uncertainty), and [Barycentric Julian Date](#barycentric-julian-date) does the light-time correction. Headers are untrusted input, so `readFitsTime` never throws on bad values: `diagnostics` lists every `defaulted` keyword, `assumed` interpretation, `missing`, `invalid` or `unsupported` value (an unknown or `LOCAL` time scale returns no instants), accepted `nonStandard` form (`TDT`, a trailing `Z`), `conflict` between keywords, and `incompatible` scale and position combination, each with its `keyword` and a message. Location sets farther apart than `options.locationTolerance` (100 m) conflict.
+
+`writeFitsTime(header, input)` is the inverse and updates the header in place: it converts the instants to `input.scale` (the scale of the first instant by default) and writes `TIMESYS`, `DATE-OBS`, `DATE-BEG`, `DATE-AVG`, `DATE-END` with `digits` decimals (6 by default) and the matching `MJD-xxxx`, `XPOSURE` and `EXPTIME`, `TELAPSE`, `TREFPOS`, `TREFDIR`, `PLEPHEM`, the errors, and both `OBSGEO-X/Y/Z` and `SITELAT`/`SITELONG`/`SITEELEV` for a location. Every keyword in `FITS_TIME_KEYWORDS` that the input does not define is deleted, so stale `MJDREF`, `TSTART` or `OBSGEO-B` values cannot contradict the new ones; other keywords pass through, and existing keywords keep their position. `formatFitsDateTime(time, digits?)` is the datetime formatter it uses, in the scale of the `Time`.
+
+```ts
+import { exposureInterval } from 'nebulosa/src/astronomy/time/exposure'
+import { fitsExposure, formatFitsDateTime, readFitsTime, writeFitsTime } from 'nebulosa/src/astronomy/time/fits.time'
+import { tdb, timeToDate } from 'nebulosa/src/astronomy/time/time'
+
+// A capture-software header: DATE-OBS at the shutter opening, a 60 s EXPTIME and the site.
+const header = { TIMESYS: 'UTC', 'DATE-OBS': '2016-12-31T23:59:30.250', EXPTIME: 60, SITELAT: '-29 15 22.7', SITELONG: -70.7313, SITEELEV: 2400, OBJECT: 'WASP-12' }
+const metadata = readFitsTime(header)
+
+console.log(metadata.timeSystem, metadata.referencePosition, metadata.locationSource) // UTC topocenter site
+console.log(metadata.start!.keyword, metadata.start!.resolution, timeToDate(metadata.start!.time)) // DATE-OBS 0.001 [2016, 12, 31, 23, 59, 30, 250]
+console.log(metadata.exposure, metadata.exposureKeyword) // 60 EXPTIME — seconds
+console.log(metadata.diagnostics.map((e) => `${e.kind} ${e.keyword}`)) // ["defaulted TREFPOS", "assumed SITELAT", "assumed DATE-OBS"]
+
+// The exposure spans the 2016-12-31 leap second: its midpoint is 23:59:60.25 UTC.
+const interval = exposureInterval(fitsExposure(metadata)!)
+console.log(timeToDate(interval.midpoint)) // [2016, 12, 31, 23, 59, 60, 250]
+console.log(formatFitsDateTime(tdb(interval.midpoint))) // 2017-01-01T00:01:08.433951 — TDB, topocentric
+
+// Writing the actual interval back with the FITS 4.0 keywords; OBJECT passes through.
+const out = writeFitsTime({ OBJECT: 'WASP-12' }, { start: interval.start, end: interval.end, exposure: interval.duration, referencePosition: 'topocenter', location: metadata.location, digits: 3 })
+console.log(out['DATE-BEG'], out['DATE-END'], out.TELAPSE, out['MJD-BEG']) // 2016-12-31T23:59:30.250 2017-01-01T00:00:29.250 60 57753.99964410134
+console.log(out['OBSGEO-X'], out['OBSGEO-Y'], out['OBSGEO-Z']) // 1838457.35309 -5259018.260543 -3099889.749916 — meters
+
+// Contradictory metadata is reported, not thrown.
+const bad = readFitsTime({ TIMESYS: 'TT', TREFPOS: 'BARYCENTER', 'DATE-BEG': '2024-03-10T03:00:00Z', 'DATE-END': '2024-03-10T02:59:00' })
+console.log(bad.diagnostics.map((e) => `${e.kind} ${e.keyword}`)) // ["incompatible TREFPOS", "conflict DATE-BEG", "conflict DATE-END"]
+
+// Chandra-style relative time: TSTART seconds after MJDREFI + MJDREFF, in TT.
+const relative = readFitsTime({ TIMESYS: 'TT', TREFPOS: 'GEOCENTER', MJDREFI: 50814, MJDREFF: 7.428703703703703e-4, TSTART: 600000000 })
+console.log(relative.start!.keyword, formatFitsDateTime(relative.start!.time, 3)) // TSTART 2017-01-05T10:41:04.184
 ```
 
 ### FITS Pixel I/O and Rice Tiles
