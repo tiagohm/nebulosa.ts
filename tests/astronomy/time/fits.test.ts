@@ -465,6 +465,29 @@ describe('exposure', () => {
 		expect(readFitsTime({ ...fine, 'DATE-END': '2024-03-10T03:00:30.150' }).continuous).toBeUndefined()
 	})
 
+	test('a wider tolerance never widens the proof of a continuous exposure', () => {
+		const header = { TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-03-10T03:00:00.000', 'DATE-END': '2024-03-10T03:00:31.000', XPOSURE: 30.1, TELAPSE: 31 }
+
+		for (const tolerance of [undefined, 1e-3, 1]) {
+			const loose = readFitsTime(header, { tolerance })
+			expect(loose.exposure).toBe(30.1)
+			expect(loose.elapsed).toBe(31)
+			expect(loose.continuous).toBe(tolerance === 1 ? undefined : false)
+			expect(fitsExposure(loose)).toBeUndefined()
+
+			const exact = readFitsTime({ ...header, 'DATE-END': '2024-03-10T03:00:30.100', TELAPSE: 30.1 }, { tolerance })
+			expect(exact.continuous).toBe(true)
+			expect(exposureInterval(fitsExposure(exact)!).duration).toBeCloseTo(30.1, 9)
+		}
+
+		// Microsecond timestamps 0.3 µs away from an exposure written to 0.1 µs do not reproduce it, even within the default 1 µs tolerance.
+		const micro = { TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-03-10T03:00:00.000000', 'DATE-END': '2024-03-10T03:00:30.123457' }
+		const finer = readFitsTime({ ...micro, XPOSURE: 30.1234567 })
+		expect(finer.continuous).toBeUndefined()
+		expect(fitsExposure(finer)).toBeUndefined()
+		expect(readFitsTime({ ...micro, XPOSURE: 30.123457 }).continuous).toBe(true)
+	})
+
 	test('a zero-length window never becomes a continuous exposure', () => {
 		const header = { TIMESYS: 'UTC', TREFPOS: 'GEOCENTER', 'DATE-BEG': '2024-03-10T03:00:00.000', 'DATE-END': '2024-03-10T03:00:00.000', XPOSURE: 1 }
 		const zero = readFitsTime(header)

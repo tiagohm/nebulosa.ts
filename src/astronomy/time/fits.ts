@@ -100,7 +100,8 @@ export interface FitsTimeMetadata {
 // Tolerances of readFitsTime.
 export interface FitsTimeReadOptions {
 	// Absolute slack in seconds added to the written resolutions when comparing two instants or
-	// durations (default 1e-6, the double-precision step of an MJD).
+	// durations (default 1e-6, the double-precision step of an MJD). It widens conflict checks only; the
+	// match that proves `continuous` is bound by the written resolutions alone.
 	readonly tolerance?: number
 	// Largest distance in meters accepted between two location keyword sets (default 100).
 	readonly locationTolerance?: number
@@ -188,6 +189,10 @@ export const FITS_TIME_KEYWORDS: readonly FitsHeaderKey[] = [
 
 // Default absolute slack, in seconds, when comparing values (about the double-precision step of an MJD).
 const DEFAULT_TOLERANCE = 1e-6
+// Largest rounding error, in seconds, of the difference between an exposure and a decoded span (about the
+// double-precision step of an MJD, the coarsest decoding). Fixed, unlike the tolerance, so that a wider
+// comparison slack never widens the proof of a continuous exposure.
+const SPAN_ROUNDING = 1e-6
 // Default largest distance, in meters, between two location keyword sets before they conflict.
 const DEFAULT_LOCATION_TOLERANCE = 100
 // TAI - GPS, in seconds (FITS 4.0 Table 30).
@@ -855,9 +860,10 @@ function compareDurations(context: ReadContext, kept: Duration, other: Duration)
 // header is parsed) plus the tolerance bound the representation error: a larger difference is a
 // conflict, but a smaller one is only compatible. Continuity needs a stricter match: the exposure must
 // differ from the span by less than both the quantization of the two timestamps (half their summed
-// resolutions) and its own resolution, less the tolerance, or within the tolerance itself, and that
-// bound must be smaller than the exposure; otherwise dead time, a window of zero length, or a span
-// that would replace a finer exposure with a different duration is just as consistent.
+// resolutions) and its own resolution, less the rounding of the computed difference (SPAN_ROUNDING, at
+// most half that limit), and the conflict bound must be smaller than the exposure; otherwise dead time, a
+// window of zero length, or a span that would replace a finer exposure with a different duration is just
+// as consistent. The tolerance only widens the conflict bound, never the continuity match.
 function checkInterval(context: ReadContext, start?: FitsTimeValue, midpoint?: FitsTimeValue, end?: FitsTimeValue, exposure?: Duration, elapsed?: Duration) {
 	const { diagnostics, tolerance } = context
 	let continuous: boolean | undefined
@@ -885,13 +891,16 @@ function checkInterval(context: ReadContext, start?: FitsTimeValue, midpoint?: F
 			// Half the summed timestamp resolutions bounds the error of the written span, rounded or truncated.
 			// The span replaces the exposure once continuous, so it must also stay within one exposure digit.
 			const quantum = Math.min((start.resolution + end.resolution) / 2, exposure.resolution)
+			// Rounding keeps a difference of exactly one quantum (30 s against 31 s) from passing, and is
+			// capped so that an exact match still passes when the quantum itself is below it.
+			const match = quantum - Math.min(SPAN_ROUNDING, quantum / 2)
 			if (difference > bound) continuous = false
 			// The bound only rules out a conflict. Continuity is proven when the written span reproduces the
 			// exposure within the timestamp quantization and the exposure resolution, so the 1 s resolution
 			// of an integer XPOSURE cannot hide dead time (30 s inside a 32 s window) and whole-second
 			// timestamps cannot override a finer XPOSURE (30.1 s inside a 31 s window), and when the bound is
 			// smaller than the exposure, which also forces a positive span (XPOSURE = 1 next to a 0 s window is not).
-			else if ((difference <= tolerance || difference < quantum - tolerance) && bound < exposure.value) continuous = true
+			else if (difference < match && bound < exposure.value) continuous = true
 		}
 	}
 
