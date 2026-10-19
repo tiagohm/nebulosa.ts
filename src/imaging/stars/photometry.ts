@@ -10,12 +10,14 @@ import { channelIndex, type DigitalImage, type Image, type ImageChannel, type Im
 // per source from a sigma-clipped annulus. The flux uncertainty combines the per-pixel variance
 // (supplied variance or inverse-variance map, a CCD noise model with Poisson source+sky, read noise
 // and dark current, or the empirical annulus scatter) with the uncertainty of the sky estimate, which
-// is common to every aperture pixel. Pixel coordinates are zero-based sample centers: origin at the
+// is common to every aperture pixel and is propagated from the annulus variances when a map or noise model
+// is given, else from the annulus scatter. Pixel coordinates are zero-based sample centers: origin at the
 // upper-left sample, +X right, +Y down, so pixel (i, j) covers [i - 0.5, i + 0.5] x [j - 0.5, j + 0.5];
 // this matches the star detector and Photutils. Fluxes and levels use the sample unit of the image
 // (DN for a DigitalImage, the normalized scale for an Image). Pixels are assumed statistically
 // independent unless a noise-correlation factor is supplied. The image, mask and maps are never
-// mutated; results are fresh objects and one annulus sample buffer is allocated and reused per batch.
+// mutated; results are fresh objects and the annulus sample, variance and scratch buffers are allocated
+// and reused per batch.
 
 // How the fraction of a pixel inside an aperture is computed.
 // 'exact' integrates the geometric overlap of the pixel square with the ellipse.
@@ -29,7 +31,8 @@ export type PhotometryBackgroundStatistic = 'median' | 'mean'
 // Per-source quality flags.
 // 'truncated': part of the aperture lies outside the image (see truncatedArea).
 // 'masked': aperture pixels were excluded by the mask, a non-finite sample or an invalid uncertainty.
-// 'saturated': an aperture pixel is at or above the saturation level; the flux is a lower limit.
+// 'saturated': an aperture pixel is at or above the saturation level; the flux is a lower limit and
+// fluxError and snr describe the clipped samples, not the source, so they are not quantitative.
 // 'noBackground': the annulus has no usable sample, so no flux is reported.
 // 'empty': no usable pixel overlaps the aperture.
 export type AperturePhotometryFlag = 'truncated' | 'masked' | 'saturated' | 'noBackground' | 'empty'
@@ -75,7 +78,8 @@ export type PhotometryAperture = CircularPhotometryAperture | EllipticalPhotomet
 // Per-pixel uncertainty map of the selected channel, row-major with width * height entries.
 export interface PhotometryPixelUncertainty {
 	// 'variance' in squared sample units, or 'inverseVariance' (weight) in inverse squared sample units.
-	// A non-finite or negative variance, or a non-finite or non-positive weight, masks the pixel.
+	// A non-finite or negative variance, or a non-finite or non-positive weight, masks the pixel in the
+	// aperture and excludes it from the annulus.
 	readonly kind: 'variance' | 'inverseVariance'
 	// Map values; the map must already be the total per-pixel variance of the samples.
 	readonly data: Readonly<ImageRawType>
@@ -165,7 +169,8 @@ export interface AperturePhotometry extends Readonly<Point> {
 	readonly backgroundRejected: number
 	// Net flux, sum - background * area, undefined when the sky is unknown.
 	readonly flux?: number
-	// Standard uncertainty of the net flux, undefined when no variance source is available.
+	// Standard uncertainty of the net flux, undefined when no variance source is available. Not
+	// quantitative for a 'saturated' source, whose clipped samples underestimate the shot noise.
 	readonly fluxError?: number
 	// Signal-to-noise ratio flux / fluxError, undefined when fluxError is undefined or zero.
 	readonly snr?: number
@@ -204,14 +209,18 @@ interface ApertureEllipse {
 // Measures aperture photometry for a batch of sources. positions are zero-based pixel centers (for
 // example detectStars results); apertures is one aperture shared by all sources or one per position.
 // Each source gets the weighted aperture sum, the sky from its annulus (sigma-clipped median or mean of
-// the samples whose centers fall in the annulus, excluding masked and saturated pixels) or the fixed
-// background, the net flux and its uncertainty:
+// the samples whose centers fall in the annulus, excluding masked, non-finite, saturated and invalid
+// uncertainty-map pixels) or the fixed background, the net flux and its uncertainty:
 //   fluxError^2 = noiseCorrelation * (sum(w_i^2 v_i) + area^2 backgroundError^2)
 // where w_i is the overlap weight and v_i the per-pixel variance: the uncertainty map, else the noise
 // model max(x_i - offset, 0) / gain + (readNoise^2 + dark) / gain^2, else the squared annulus
-// deviation (sky noise only, without the source shot noise). backgroundError is the deviation divided
-// by sqrt(count), times sqrt(PI / 2) for the median. Photutils sums w_i v_i instead of w_i^2 v_i, so its
-// error is larger on partial pixels; both agree for the 'center' method. Masked pixels are excluded
+// deviation (sky noise only, without the source shot noise). With a map or noise model, backgroundError
+// is propagated from the variances v_j of the N clipped annulus samples, sqrt(sum(v_j)) / N for the mean
+// (exact for independent samples) times sqrt(PI / 2) for the median (the Gaussian asymptotic ratio,
+// approximate for small N or unequal variances), so a featureless annulus still carries its noise.
+// Otherwise it is the annulus deviation divided by sqrt(N), times sqrt(PI / 2) for the median.
+// Photutils sums w_i v_i instead of w_i^2 v_i, so its error is larger on partial pixels; both agree
+// for the 'center' method. Masked pixels are excluded
 // without correcting the flux for the missing area. Throws RangeError when the aperture list, mask or
 // uncertainty map does not match the positions or the image, when the channel does not exist, or when
 // subpixels is not a positive integer.
@@ -233,7 +242,11 @@ export function aperturePhotometry(image: Image | DigitalImage, positions: reado
 	const readVariance = noise === undefined ? 0 : ((noise.readNoise ?? 0) ** 2 + (noise.dark === undefined ? 0 : noise.dark.current * noise.dark.exposureTime)) / (noise.gain * noise.gain)
 	const offset = noise?.offset ?? 0
 	const inverseGain = noise === undefined ? 0 : 1 / noise.gain
+	const hasVarianceModel = uncertainty !== undefined || noise !== undefined
 	const results = new Array<AperturePhotometry>(positions.length)
+	// Annulus samples and their variances in scan order, and the scratch copy reordered by clipping and the median.
+	let values = new Float64Array(0)
+	let variances = new Float64Array(0)
 	let samples = new Float64Array(0)
 
 	for (let i = 0; i < positions.length; i++) {
@@ -260,7 +273,12 @@ export function aperturePhotometry(image: Image | DigitalImage, positions: reado
 			const y0 = Math.max(0, Math.ceil(y - ellipse.halfHeight * (outer / ellipse.a)))
 			const y1 = Math.min(height - 1, Math.floor(y + ellipse.halfHeight * (outer / ellipse.a)))
 			const capacity = Math.max(0, x1 - x0 + 1) * Math.max(0, y1 - y0 + 1)
-			if (samples.length < capacity) samples = new Float64Array(capacity)
+
+			if (samples.length < capacity) {
+				samples = new Float64Array(capacity)
+				values = new Float64Array(capacity)
+				variances = new Float64Array(capacity)
+			}
 
 			const innerSq = annulus.inner * annulus.inner
 			const outerSq = outer * outer
@@ -280,22 +298,49 @@ export function aperturePhotometry(image: Image | DigitalImage, positions: reado
 					if (mask?.[pixel]) continue
 					const value = raw[py * stride + px * channels + channel]
 					if (!Number.isFinite(value) || value >= saturationLevel) continue
-					samples[count++] = value
+					const variance = sampleVariance(value, pixel, uncertainty, offset, inverseGain, readVariance)
+					if (!Number.isFinite(variance)) continue
+					values[count] = value
+					variances[count++] = variance
 				}
 			}
 
 			if (count > 0) {
+				samples.set(values.subarray(0, count))
 				const clipped = sigmaClipPrefix(samples, count, clipSigma, clipIterations)
 				backgroundRejected = count - clipped
 				backgroundCount = clipped
 				let mean = 0
-				for (let k = 0; k < clipped; k++) mean += samples[k]
+				let low = Number.POSITIVE_INFINITY
+				let high = Number.NEGATIVE_INFINITY
+
+				for (let k = 0; k < clipped; k++) {
+					const value = samples[k]
+					mean += value
+					if (value < low) low = value
+					if (value > high) high = value
+				}
+
 				mean /= clipped
 				let m2 = 0
 				for (let k = 0; k < clipped; k++) m2 += (samples[k] - mean) ** 2
 				deviation = Math.sqrt(m2 / clipped)
 				level = backgroundStatistic === 'mean' ? mean : medianBySelectionOf(samples, clipped)
-				levelError = deviation * Math.sqrt((backgroundStatistic === 'mean' ? 1 : MEDIAN_VARIANCE_FACTOR) / clipped)
+				const factor = backgroundStatistic === 'mean' ? 1 : MEDIAN_VARIANCE_FACTOR
+
+				if (hasVarianceModel) {
+					// Each clipping pass keeps a value interval, so the survivors are exactly the samples in [low, high].
+					let varianceSum = 0
+
+					for (let k = 0; k < count; k++) {
+						const value = values[k]
+						if (value >= low && value <= high) varianceSum += variances[k]
+					}
+
+					levelError = Math.sqrt(factor * varianceSum) / clipped
+				} else {
+					levelError = deviation * Math.sqrt(factor / clipped)
+				}
 			}
 		}
 
@@ -319,15 +364,7 @@ export function aperturePhotometry(image: Image | DigitalImage, positions: reado
 				if (w <= 0) continue
 				const pixel = py * width + px
 				const value = raw[py * stride + px * channels + channel]
-
-				let variance = 0
-
-				if (uncertainty !== undefined) {
-					const data = uncertainty.data[pixel]
-					variance = uncertainty.kind === 'variance' ? (data >= 0 ? data : Number.NaN) : data > 0 ? 1 / data : Number.NaN
-				} else if (noise !== undefined) {
-					variance = Math.max(value - offset, 0) * inverseGain + readVariance
-				}
+				const variance = sampleVariance(value, pixel, uncertainty, offset, inverseGain, readVariance)
 
 				if (mask?.[pixel] || !Number.isFinite(value) || !Number.isFinite(variance)) {
 					maskedArea += w
@@ -356,7 +393,7 @@ export function aperturePhotometry(image: Image | DigitalImage, positions: reado
 
 		if (level !== undefined) {
 			flux = sum - level * area
-			const pixelVariance = uncertainty !== undefined || noise !== undefined ? varianceSum : deviation === undefined ? undefined : deviation * deviation * weightSq
+			const pixelVariance = hasVarianceModel ? varianceSum : deviation === undefined ? undefined : deviation * deviation * weightSq
 
 			if (pixelVariance !== undefined && levelError !== undefined) {
 				fluxError = Math.sqrt(noiseCorrelation * (pixelVariance + area * area * levelError * levelError))
@@ -368,6 +405,16 @@ export function aperturePhotometry(image: Image | DigitalImage, positions: reado
 	}
 
 	return results
+}
+
+// Variance of one sample, squared sample units, at the row-major pixel index of the selected channel:
+// the uncertainty map entry when given (NaN for a negative or non-finite variance, or a non-positive or
+// non-finite weight, which masks the pixel), else the noise model max(value - offset, 0) * inverseGain +
+// readVariance, which is 0 when no noise model was supplied (inverseGain and readVariance both 0).
+function sampleVariance(value: number, pixel: number, uncertainty: PhotometryPixelUncertainty | undefined, offset: number, inverseGain: number, readVariance: number) {
+	if (uncertainty === undefined) return Math.max(value - offset, 0) * inverseGain + readVariance
+	const data = uncertainty.data[pixel]
+	return uncertainty.kind === 'variance' ? (data >= 0 ? data : Number.NaN) : data > 0 ? 1 / data : Number.NaN
 }
 
 // Converts an aperture to its semi-axes, rotation and bounding box.

@@ -258,6 +258,97 @@ describe('uncertainty', () => {
 		expect(result.maskedArea).toBe(1)
 		expect(result.fluxError).toBeCloseTo(Math.sqrt(4 * (n - 1)), 12)
 	})
+
+	describe('annulus', () => {
+		// 31x31 frame centered at (15, 15): the 'center' method gives 25 aperture pixels for r < 3 and 140 sky samples for 6 <= r < 9.
+		const size = 31
+		const at = [{ x: 15, y: 15 }]
+		const aperture: PhotometryAperture = { shape: 'circle', radius: 3, annulus: { inner: 6, outer: 9 } }
+		const inAnnulus = (x: number, y: number) => (x - 15) ** 2 + (y - 15) ** 2 >= 36 && (x - 15) ** 2 + (y - 15) ** 2 < 81
+		const map = (value: (x: number, y: number) => number) => {
+			const data = new Float64Array(size * size)
+			for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) data[y * size + x] = value(x, y)
+			return data
+		}
+
+		test('invalid uncertainty entries are excluded from the sky', () => {
+			const image = makeImage(size, size, (x, y) => (inAnnulus(x, y) ? 1000 : 10))
+			const all = aperturePhotometry(image, at, aperture, { method: 'center', backgroundStatistic: 'mean', uncertainty: { kind: 'variance', data: map((x, y) => (inAnnulus(x, y) ? Number.NaN : 1)) } })[0]
+			expect(all.area).toBe(25)
+			expect(all.backgroundCount).toBe(0)
+			expect(all.background).toBeUndefined()
+			expect(all.flux).toBeUndefined()
+			expect(all.flags).toEqual(['noBackground'])
+
+			// The left half of the annulus is bright and invalid; only the 50 DN right half is sky.
+			const half = makeImage(size, size, (x, y) => (inAnnulus(x, y) ? (x < 15 ? 1000 : 50) : 10))
+			let valid = 0
+			for (let y = 0; y < size; y++) for (let x = 15; x < size; x++) if (inAnnulus(x, y)) valid++
+			for (const uncertainty of [
+				{ kind: 'variance', data: map((x, y) => (x < 15 && inAnnulus(x, y) ? -1 : 1)) },
+				{ kind: 'inverseVariance', data: map((x, y) => (x < 15 && inAnnulus(x, y) ? 0 : 1)) },
+			] as const) {
+				for (const backgroundStatistic of ['mean', 'median'] as const) {
+					const result = aperturePhotometry(half, at, aperture, { method: 'center', backgroundStatistic, uncertainty })[0]
+					expect(result.backgroundCount).toBe(valid)
+					expect(result.background).toBe(50)
+					expect(result.flux).toBe(25 * (10 - 50))
+					expect(result.flags).toEqual([])
+				}
+			}
+
+			// Mask, saturation and an invalid map entry each remove their pixel once.
+			const mask = new Uint8Array(size * size)
+			mask[15 * size + 21] = 1
+			const saturated = makeImage(size, size, (x, y) => (x === 9 && y === 15 ? 5000 : 50))
+			const variance = map(() => 1)
+			variance[21 * size + 15] = Number.POSITIVE_INFINITY
+			variance[15 * size + 21] = Number.NaN
+			const result = aperturePhotometry(saturated, at, aperture, { method: 'center', mask, saturationLevel: 5000, uncertainty: { kind: 'variance', data: variance } })[0]
+			expect(result.backgroundCount).toBe(140 - 3)
+			expect(result.background).toBe(50)
+		})
+
+		test('the sky error is propagated from the noise model of a constant annulus', () => {
+			// 100 DN everywhere, 1 e-/DN and 10 e- read noise: every pixel has a variance of 100 + 100 = 200 DN^2.
+			const flat = makeImage(size, size, () => 100)
+			const noise = { gain: 1, readNoise: 10 }
+			const mean = aperturePhotometry(flat, at, aperture, { method: 'center', backgroundStatistic: 'mean', noise })[0]
+			expect(mean.area).toBe(25)
+			expect(mean.backgroundCount).toBe(140)
+			expect(mean.backgroundDeviation).toBe(0)
+			expect(mean.backgroundError).toBeCloseTo(Math.sqrt(200 / 140), 14)
+			expect(mean.fluxError).toBeCloseTo(Math.sqrt(25 * 200 + 625 * (200 / 140)), 12)
+			const median = aperturePhotometry(flat, at, aperture, { method: 'center', noise })[0]
+			expect(median.backgroundError).toBeCloseTo(Math.sqrt((Math.PI / 2) * (200 / 140)), 14)
+			const correlated = aperturePhotometry(flat, at, aperture, { method: 'center', backgroundStatistic: 'mean', noise, noiseCorrelation: 4 })[0]
+			expect(correlated.fluxError).toBeCloseTo(2 * mean.fluxError!, 12)
+		})
+
+		test('heteroscedastic sky variances follow the clipped samples', () => {
+			// Sky of 100 DN with two cosmic rays that the clip rejects; their huge variances must not enter the sky error.
+			const image = makeImage(size, size, (x, y) => ((x === 15 && y === 7) || (x === 23 && y === 15) ? 10000 : 100))
+			const data = map((x, y) => ((x === 15 && y === 7) || (x === 23 && y === 15) ? 1e6 : 1 + (x % 5)))
+			const mask = new Uint8Array(size * size)
+			mask[22 * size + 15] = 1
+			let sum = 0
+			let count = 0
+			for (let y = 0; y < size; y++) {
+				for (let x = 0; x < size; x++) {
+					if (!inAnnulus(x, y) || data[y * size + x] >= 1e6 || mask[y * size + x]) continue
+					sum += data[y * size + x]
+					count++
+				}
+			}
+			const result = aperturePhotometry(image, at, aperture, { method: 'center', backgroundStatistic: 'mean', mask, uncertainty: { kind: 'variance', data } })[0]
+			expect(result.backgroundRejected).toBe(2)
+			expect(result.backgroundCount).toBe(count)
+			expect(result.background).toBe(100)
+			expect(result.backgroundError).toBeCloseTo(Math.sqrt(sum) / count, 14)
+			const weighted = aperturePhotometry(image, at, aperture, { method: 'center', backgroundStatistic: 'mean', mask, uncertainty: { kind: 'inverseVariance', data: data.map((v) => 1 / v) } })[0]
+			expect(weighted.backgroundError).toBeCloseTo(result.backgroundError!, 14)
+		})
+	})
 })
 
 describe('inputs', () => {
