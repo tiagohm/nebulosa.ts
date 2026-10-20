@@ -264,9 +264,9 @@ const TUKEY_TUNING = 4.685
 // The uncertainty of the median normalization, common to every epoch, is not included. Frames and
 // comparisons linked by shared measurements form connected ensembles, each with an independent scale;
 // only one is reported, and the frames of the others are flagged 'disconnected'. The reported ensemble
-// has the most frames with a usable target measurement (zero or negative flux included), then the most
-// frames with a transparency, then the earliest frame; the target never links ensembles, since it may
-// vary. Connectivity is evaluated after variable rejection and
+// is one with a positive target flux, which can be normalized, when any is; then the one with the most
+// frames with a usable target measurement (zero or negative flux included), then the most frames with a
+// transparency, then the earliest frame; the target never links ensembles, since it may vary. Connectivity is evaluated after variable rejection and
 // clipping. A single shared frame or comparison is enough to link two ensembles, but the reference
 // fluxes are treated as exact, so the uncertainty of such a weak link is not included. Supplied errors
 // are assumed realistic up to a fractional excess common to the comparisons; underestimated errors make
@@ -588,10 +588,12 @@ export function differentialLightCurve(frames: readonly DifferentialPhotometryFr
 	// measurement unchanged, so their relative transmission is unmeasured. The connected components of the
 	// bipartite graph of frames and active comparisons, joined by every measurement combined in a frame
 	// with a transparency, are found by union-find over frameCount + comparisonCount nodes. The target
-	// is not a node: it may vary, so it cannot carry the scale between components. The reference ensemble
-	// is the component with the most frames with a usable target measurement, the curve being about the
-	// target, then the most frames with a transparency, then the earliest frame; the other frames lose
-	// their transparency.
+	// is not a node: it may vary, so it cannot carry the scale between components. The curve being about
+	// the target, the reference ensemble is a component with a positive target flux when any is, since
+	// only those have a normalization and a relative flux (the transparency is positive, so the corrected
+	// flux has the sign of the target flux); then the one with the most frames with a usable target
+	// measurement, then the most frames with a transparency, then the earliest frame. The other frames
+	// lose their transparency.
 	const parent = new Int32Array(frameCount + comparisonCount)
 	for (let n = 0; n < parent.length; n++) parent[n] = n
 
@@ -615,6 +617,7 @@ export function differentialLightCurve(frames: readonly DifferentialPhotometryFr
 
 	const componentSize = new Int32Array(frameCount + comparisonCount)
 	const componentTargets = new Int32Array(frameCount + comparisonCount)
+	const componentPositive = new Uint8Array(frameCount + comparisonCount)
 	let referenceRoot = -1
 
 	for (let j = 0; j < frameCount; j++) {
@@ -622,12 +625,18 @@ export function differentialLightCurve(frames: readonly DifferentialPhotometryFr
 		const r = root(j)
 		componentSize[r]++
 		if (Number.isFinite(targetFlux[j])) componentTargets[r]++
+		if (targetFlux[j] > 0) componentPositive[r] = 1
+	}
+
+	// Whether component root a strictly outranks root b; a full tie keeps the earlier one.
+	function outranks(a: number, b: number) {
+		if (componentPositive[a] !== componentPositive[b]) return componentPositive[a] > componentPositive[b]
+		if (componentTargets[a] !== componentTargets[b]) return componentTargets[a] > componentTargets[b]
+		return componentSize[a] > componentSize[b]
 	}
 
 	for (let j = 0; j < frameCount; j++) {
-		if (!(weightSum[j] > 0)) continue
-		const r = root(j)
-		if (referenceRoot < 0 || componentTargets[r] > componentTargets[referenceRoot] || (componentTargets[r] === componentTargets[referenceRoot] && componentSize[r] > componentSize[referenceRoot])) referenceRoot = r
+		if (weightSum[j] > 0 && (referenceRoot < 0 || outranks(root(j), referenceRoot))) referenceRoot = root(j)
 	}
 
 	const disconnected = new Uint8Array(frameCount)

@@ -383,7 +383,7 @@ describe('missing data', () => {
 		}
 	})
 
-	test('the reference ensemble is ranked by target frames, then by frames, then by the earliest frame', () => {
+	test('the reference ensemble is ranked by a positive target, then target frames, then frames, then the earliest frame', () => {
 		// Ensembles A (frames 0..2), B (frames 3..6) and C (frames 7..10); target in frames 1..2, 3..4 and 7..9.
 		const ensemble = (j: number) => (j < 3 ? 'A' : j < 7 ? 'B' : 'C')
 		const series = (target: (j: number) => number | undefined) =>
@@ -401,10 +401,28 @@ describe('missing data', () => {
 		expect(reported((j) => (j === 1 || j === 2 || j === 3 || j === 4 || (j >= 7 && j <= 9) ? 100 : undefined))).toBe('C')
 		// Two target frames each: B has more frames than A, and C as many as B but later.
 		expect(reported((j) => (j === 1 || j === 2 || j === 3 || j === 4 || j === 7 || j === 8 ? 100 : undefined))).toBe('B')
-		// A zero or negative target flux is a measurement: A has two, B one.
-		expect(reported((j) => (j === 1 ? -50 : j === 2 ? 0 : j === 3 ? 100 : undefined))).toBe('A')
+		// A zero or negative target flux is a measurement: A has three, one positive, and B two.
+		expect(reported((j) => (j === 0 ? 100 : j === 1 ? -50 : j === 2 ? 0 : j === 3 || j === 4 ? 100 : undefined))).toBe('A')
+		// But an ensemble with a positive target, which can be normalized, wins over more non-positive ones.
+		expect(reported((j) => (j === 0 || j === 2 ? 0 : j === 1 ? -50 : j === 3 || j === 4 ? 100 : undefined))).toBe('B')
+		// Without a positive target anywhere the target frames still rank: A has three, B two.
+		expect(reported((j) => (j < 3 ? 0 : j === 3 || j === 4 ? -50 : undefined))).toBe('A')
 		// Without the target the most frames win: B and C have four, B is earlier.
 		expect(reported(() => undefined)).toBe('B')
+	})
+
+	test('the ensemble with a positive target is reported over a larger one with a zero target', () => {
+		// A is seen in frames 0..4 with a zero target flux, and B in frames 5..8 with a positive one.
+		const frames = Array.from({ length: 9 }, (_, j) => ({
+			time: time(2460600, j * 0.01, Timescale.TT),
+			stars: [j < 5 ? { id: 'A', flux: 1000, fluxError: 1 } : { id: 'B', flux: 500, fluxError: 1 }, { id: 't', flux: j < 5 ? 0 : 100, fluxError: 1 }],
+		}))
+
+		const curve = differentialLightCurve(frames, 't')
+		expect(curve.normalization).toBeCloseTo(100, 12)
+		expect(curve.comparisons.map((c) => c.status)).toEqual(['disconnected', 'used'])
+		for (const point of curve.points.slice(0, 5)) expect(point.flags).toEqual(['targetNonPositive', 'disconnected'])
+		for (const point of curve.points.slice(5)) expect(point.relativeFlux).toBeCloseTo(1, 12)
 	})
 
 	test('comparison sets sharing a frame are linked', () => {
