@@ -10,7 +10,10 @@ import type { AperturePhotometryFlag } from './photometry'
 // not bias the ensemble, and the normalized fluxes are averaged with inverse-variance weights that add
 // each comparison's excess (intrinsic) fractional variance to its measurement variance. The ensemble is
 // a per-frame transparency (relative transmission, median 1 over the frames) that absorbs every change
-// common to all stars: clouds, extinction, exposure time and gain. The reference fluxes, weights and
+// common to all stars: clouds, extinction, exposure time and gain. The reference fluxes tie the
+// transparencies of frames sharing comparisons to one scale, so only frames linked to the reference
+// ensemble by a chain of shared comparisons are reported; the transmission of a set of frames observed
+// with entirely different comparisons is unmeasured relative to the rest. The reference fluxes, weights and
 // excess variances (DerSimonian & Laird 1986 moment estimates) are iterated to convergence; a
 // comparison whose robust scatter against the leave-one-out ensemble of the others is significantly
 // larger than its errors predict is rejected as variable, and a comparison deviating from the others in
@@ -36,15 +39,20 @@ export type DifferentialDetrendCovariate = 'airmass' | 'fwhm' | 'x' | 'y'
 // 'targetNonPositive': the target flux is zero or negative; the relative flux is kept but no magnitude.
 // 'noComparisons': fewer than minComparisons comparisons survived in the frame, so the transparency and
 // every corrected value are undefined.
+// 'disconnected': the comparisons combined in the frame share no chain of common frames with the
+// reference ensemble, so the transmission of the frame relative to the series is unmeasured and the
+// transparency and every corrected value are undefined.
 // 'comparisonClipped': at least one comparison was clipped as an outlier in this frame.
 // 'notDetrended': detrending was requested but the epoch lacks a covariate, the fit is unavailable or
 // the model is not positive, so it has no detrended value.
-export type DifferentialLightCurveFlag = 'targetMissing' | 'targetNonPositive' | 'noComparisons' | 'comparisonClipped' | 'notDetrended'
+export type DifferentialLightCurveFlag = 'targetMissing' | 'targetNonPositive' | 'noComparisons' | 'disconnected' | 'comparisonClipped' | 'notDetrended'
 
 // Classification of a comparison star after the ensemble iteration.
 // 'used': contributes to the ensemble. 'variable': rejected because its scatter against the other
 // comparisons exceeds variabilityLimit. 'missing': has no usable measurement in any frame.
-export type DifferentialComparisonStatus = 'used' | 'variable' | 'missing'
+// 'disconnected': combined only in frames outside the reference ensemble, so its reference flux is
+// unmeasured on the scale of the series and it contributes to no reported transparency.
+export type DifferentialComparisonStatus = 'used' | 'variable' | 'missing' | 'disconnected'
 
 // Flux measurement of one star in one frame, compatible with an AperturePhotometry spread with an id.
 export interface DifferentialPhotometryStar {
@@ -120,8 +128,8 @@ export interface DifferentialLightCurvePoint {
 	// Raw target flux and its uncertainty, input unit.
 	readonly targetFlux?: number
 	readonly targetFluxError?: number
-	// Ensemble transparency, the relative transmission of the frame (median 1 over the frames), and its
-	// one-sigma uncertainty.
+	// Ensemble transparency, the relative transmission of the frame (median 1 over the frames of the
+	// reference ensemble), and its one-sigma uncertainty.
 	readonly transparency?: number
 	readonly transparencyError?: number
 	// Number of comparisons combined in the frame.
@@ -152,7 +160,8 @@ export interface DifferentialComparisonStar {
 	readonly id: PhotometryStarId
 	// Final classification.
 	readonly status: DifferentialComparisonStatus
-	// Flux at transparency 1, input unit; undefined when missing.
+	// Flux at transparency 1, input unit; undefined when missing or disconnected, or for a variable
+	// comparison with no usable measurement in a frame of the reference ensemble.
 	readonly referenceFlux?: number
 	// Number of frames with a usable measurement.
 	readonly frameCount: number
@@ -217,7 +226,8 @@ export interface DifferentialLightCurve {
 	readonly normalization?: number
 	// Ensemble iterations performed.
 	readonly iterations: number
-	// Whether the transparencies stabilized, relative to their mean, to 1e-6 of their uncertainty within maxIterations.
+	// Whether the transparencies stabilized, relative to their mean, to 1e-6 of their uncertainty within
+	// maxIterations; false when no frame has a transparency, as there is no solution to settle.
 	readonly converged: boolean
 	// Detrending diagnostics, present only when detrending was requested.
 	readonly detrending?: DifferentialDetrending
@@ -251,7 +261,12 @@ const TUKEY_TUNING = 4.685
 // weights 1 / ((fluxError / referenceFlux)^2 + excess^2 transparency^2); its variance is the inverse of
 // the weight sum. The corrected flux is targetFlux / transparency with variance
 // (targetFluxError / T)^2 + (targetFlux / T^2)^2 var(T), assuming independent target and comparison errors.
-// The uncertainty of the median normalization, common to every epoch, is not included. Supplied errors
+// The uncertainty of the median normalization, common to every epoch, is not included. Frames and
+// comparisons linked by shared measurements form connected ensembles, each with an independent scale;
+// only the one with the most frames (the earliest frame breaking ties) is reported, and the frames of
+// the others are flagged 'disconnected'. Connectivity is evaluated after variable rejection and
+// clipping. A single shared frame or comparison is enough to link two ensembles, but the reference
+// fluxes are treated as exact, so the uncertainty of such a weak link is not included. Supplied errors
 // are assumed realistic up to a fractional excess common to the comparisons; underestimated errors make
 // faint comparisons look variable. Throws RangeError when the frames mix timescales or a frame repeats a
 // star id, TypeError when maxIterations is not a positive integer.
@@ -426,9 +441,12 @@ export function differentialLightCurve(frames: readonly DifferentialPhotometryFr
 
 	// Re-derives each reference flux as the weighted least-squares scale of flux = reference * transparency
 	// over the frames where the comparison was combined (every usable frame once it is rejected), with
-	// the measurement weights. Unlike a median it varies smoothly, so the iteration does not cycle.
-	function updateReferences() {
+	// the measurement weights. Unlike a median it varies smoothly, so the iteration does not cycle. With
+	// rejectedOnly only the rejected comparisons are refitted, and one without a frame with a
+	// transparency gets an undefined (NaN) reference instead of keeping a stale one.
+	function updateReferences(rejectedOnly: boolean = false) {
 		for (let i = 0; i < comparisonCount; i++) {
+			if (rejectedOnly && active[i]) continue
 			let numerator = 0
 			let denominator = 0
 
@@ -440,6 +458,7 @@ export function differentialLightCurve(frames: readonly DifferentialPhotometryFr
 			}
 
 			if (denominator > 0) reference[i] = numerator / denominator
+			else if (rejectedOnly) reference[i] = Number.NaN
 		}
 	}
 
@@ -536,10 +555,17 @@ export function differentialLightCurve(frames: readonly DifferentialPhotometryFr
 		const mean = meanTransparency(transparency)
 		const previousMean = meanTransparency(previousTransparency)
 		let change = 0
+		let solved = false
 
 		for (let j = 0; j < frameCount; j++) {
-			if (Number.isFinite(transparency[j])) change = Math.max(change, Math.abs(transparency[j] / mean - previousTransparency[j] / previousMean) / (Math.sqrt(transparencyVariance[j]) / mean))
+			if (Number.isFinite(transparency[j])) {
+				change = Math.max(change, Math.abs(transparency[j] / mean - previousTransparency[j] / previousMean) / (Math.sqrt(transparencyVariance[j]) / mean))
+				solved = true
+			}
 		}
+
+		// Without any transparency there is no solution: further passes cannot change it, and it has not converged.
+		if (!solved) break
 
 		if (iterations > 1 && !(change > CONVERGENCE_TOLERANCE)) {
 			converged = true
@@ -552,6 +578,69 @@ export function differentialLightCurve(frames: readonly DifferentialPhotometryFr
 		updateReferences()
 		ensemble()
 		measureScatter()
+	}
+
+	// Within a set of frames and comparisons linked by shared measurements the reference fluxes fix every
+	// transparency to one scale, but two unlinked sets each admit an independent one: multiplying the
+	// transparencies of one set by k and dividing its reference fluxes by k leaves every comparison
+	// measurement unchanged, so their relative transmission is unmeasured. The connected components of the
+	// bipartite graph of frames and active comparisons, joined by every measurement combined in a frame
+	// with a transparency, are found by union-find over frameCount + comparisonCount nodes. The reference
+	// ensemble is the component with the most such frames, the earliest frame breaking ties; the other
+	// frames lose their transparency.
+	const parent = new Int32Array(frameCount + comparisonCount)
+	for (let n = 0; n < parent.length; n++) parent[n] = n
+
+	// Root of node n, halving the path on the way.
+	function root(n: number) {
+		while (parent[n] !== n) {
+			parent[n] = parent[parent[n]]
+			n = parent[n]
+		}
+
+		return n
+	}
+
+	for (let i = 0; i < comparisonCount; i++) {
+		if (!active[i]) continue
+
+		for (let j = 0, k = i * frameCount; j < frameCount; j++, k++) {
+			if (accepted[k] && weightSum[j] > 0) parent[root(j)] = root(frameCount + i)
+		}
+	}
+
+	const componentSize = new Int32Array(frameCount + comparisonCount)
+	let referenceRoot = -1
+
+	for (let j = 0; j < frameCount; j++) if (weightSum[j] > 0) componentSize[root(j)]++
+
+	for (let j = 0; j < frameCount; j++) {
+		if (weightSum[j] > 0 && (referenceRoot < 0 || componentSize[root(j)] > componentSize[referenceRoot])) referenceRoot = root(j)
+	}
+
+	const disconnected = new Uint8Array(frameCount)
+	let disconnectedCount = 0
+
+	for (let j = 0; j < frameCount; j++) {
+		if (weightSum[j] > 0 && root(j) !== referenceRoot) {
+			disconnected[j] = 1
+			disconnectedCount++
+			weightSum[j] = 0
+			weightedSum[j] = 0
+			transparency[j] = Number.NaN
+			transparencyVariance[j] = Number.NaN
+		}
+	}
+
+	if (disconnectedCount > 0) {
+		// A comparison combined only in the frames of another ensemble has no reference on the series scale.
+		for (let i = 0; i < comparisonCount; i++) {
+			const r = root(frameCount + i)
+			if (active[i] && r !== referenceRoot && componentSize[r] > 0) status[i] = 'disconnected'
+		}
+
+		// The rejected comparisons were fitted against every frame; refit them on the reference ensemble.
+		updateReferences(true)
 	}
 
 	// Fixes the free scale shared by the transparencies and the reference fluxes to a unit median transparency.
@@ -597,7 +686,8 @@ export function differentialLightCurve(frames: readonly DifferentialPhotometryFr
 		const hasTransparency = Number.isFinite(transparency[j])
 		if (!hasTarget) flags.push('targetMissing')
 		else if (!(targetFlux[j] > 0)) flags.push('targetNonPositive')
-		if (!hasTransparency) flags.push('noComparisons')
+		if (disconnected[j]) flags.push('disconnected')
+		else if (!hasTransparency) flags.push('noComparisons')
 		if (clippedComparisonIds.length > 0) flags.push('comparisonClipped')
 
 		const value = corrected[j]
@@ -651,7 +741,7 @@ export function differentialLightCurve(frames: readonly DifferentialPhotometryFr
 		comparisons[i] = {
 			id: ids[i],
 			status: status[i],
-			referenceFlux: status[i] === 'missing' ? undefined : reference[i] * scale,
+			referenceFlux: status[i] === 'disconnected' || !Number.isFinite(reference[i]) ? undefined : reference[i] * scale,
 			frameCount: frameCountUsable,
 			clippedCount,
 			weight: weightFrames > 0 ? weightTotal / weightFrames : 0,

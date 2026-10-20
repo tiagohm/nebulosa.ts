@@ -314,6 +314,121 @@ describe('missing data', () => {
 		// Normalizing every comparison by its own reference keeps the ensemble unbiased when some are
 		// missing; the iteration refining the references stops at 1e-6 of the transparency uncertainty.
 		for (const j of [0, 10, 25, 30, 35, 59]) expect(curve.points[j].relativeFlux).toBeCloseTo(1, 8)
+		// The remaining comparisons link the frames where c1 and c3 are missing to the others.
+		expect(curve.points.some((point) => point.flags.includes('disconnected'))).toBeFalse()
+	})
+
+	test('comparison sets without a common frame are not linked', () => {
+		// A constant target under a cloud halving every star in frames 3..5, while comparison A is seen
+		// only in frames 0..2 and B only in frames 3..5: the cloud is indistinguishable from B being fainter.
+		const frames = Array.from({ length: 6 }, (_, j) => ({
+			time: time(2460600, j * 0.01, Timescale.TT),
+			stars: [{ id: 't', flux: j < 3 ? 100 : 50, fluxError: 1 }, j < 3 ? { id: 'A', flux: 1000, fluxError: 1 } : { id: 'B', flux: 500, fluxError: 1 }],
+		}))
+
+		const curve = differentialLightCurve(frames, 't')
+		// Both ensembles have three frames; the earliest one is the reference.
+		for (const point of curve.points.slice(0, 3)) {
+			expect(point.transparency).toBeCloseTo(1, 12)
+			expect(point.relativeFlux).toBeCloseTo(1, 12)
+			expect(point.flags).toEqual([])
+		}
+
+		for (const point of curve.points.slice(3)) {
+			expect(point.flags).toEqual(['disconnected'])
+			expect(point.targetFlux).toBe(50)
+			expect(point.transparency).toBeUndefined()
+			expect(point.flux).toBeUndefined()
+			expect(point.relativeFlux).toBeUndefined()
+			expect(point.magnitude).toBeUndefined()
+			expect(point.comparisonCount).toBe(0)
+		}
+
+		expect(curve.normalization).toBeCloseTo(100, 12)
+		expect(curve.comparisons.map((c) => [c.id, c.status, c.referenceFlux, c.weight])).toEqual([
+			['A', 'used', 1000, 1],
+			['B', 'disconnected', undefined, 0],
+		])
+	})
+
+	test('comparison sets sharing a frame are linked', () => {
+		// A is seen in frames 0..3 and B in frames 2..5, both at transmission 1 in frame 2 and 0.5 in frame 3.
+		const transmission = [1, 1, 1, 0.5, 0.5, 0.5]
+		const frames = transmission.map((t, j) => ({
+			time: time(2460600, j * 0.01, Timescale.TT),
+			stars: [{ id: 't', flux: 100 * t, fluxError: 1 }, ...(j <= 3 ? [{ id: 'A', flux: 1000 * t, fluxError: 1 }] : []), ...(j >= 2 ? [{ id: 'B', flux: 400 * t, fluxError: 1 }] : [])],
+		}))
+
+		const curve = differentialLightCurve(frames, 't')
+		expect(curve.converged).toBeTrue()
+		expect(curve.comparisons.map((c) => c.status)).toEqual(['used', 'used'])
+		// The median transmission is 0.75.
+		expect(curve.comparisons[0].referenceFlux).toBeCloseTo(750, 6)
+		expect(curve.comparisons[1].referenceFlux).toBeCloseTo(300, 6)
+
+		for (let j = 0; j < 6; j++) {
+			const point = curve.points[j]
+			expect(point.flags).toEqual([])
+			expect(point.transparency).toBeCloseTo(transmission[j] / 0.75, 8)
+			expect(point.relativeFlux).toBeCloseTo(1, 8)
+		}
+
+		// sigma(T) / T = 1 / sqrt(sum of the comparison fluxes squared) with unit errors, and the target adds 1 / flux.
+		const relativeError = (target: number, ...comparisons: number[]) => Math.hypot(1 / target, 1 / Math.hypot(...comparisons))
+		expect(curve.points[0].relativeFluxError).toBeCloseTo(relativeError(100, 1000), 8)
+		expect(curve.points[2].relativeFluxError).toBeCloseTo(relativeError(100, 1000, 400), 8)
+		expect(curve.points[3].relativeFluxError).toBeCloseTo(relativeError(50, 500, 200), 8)
+		expect(curve.points[5].relativeFluxError).toBeCloseTo(relativeError(50, 200), 8)
+	})
+
+	test('a rejected measurement can break the only link between comparison sets', () => {
+		// As above, but B is saturated in frame 3, the only frame where it was linked to A.
+		const transmission = [1, 1, 1, 0.5, 0.5, 0.5]
+		const frames = transmission.map((t, j) => ({
+			time: time(2460600, j * 0.01, Timescale.TT),
+			stars: [{ id: 't', flux: 100 * t, fluxError: 1 }, ...(j <= 3 ? [{ id: 'A', flux: 1000 * t, fluxError: 1 }] : []), ...(j >= 3 ? [{ id: 'B', flux: 400 * t, fluxError: 1, flags: j === 3 ? (['saturated'] as const) : [] }] : [])],
+		}))
+
+		const curve = differentialLightCurve(frames, 't')
+		expect(curve.points.map((point) => point.flags)).toEqual([[], [], [], [], ['disconnected'], ['disconnected']])
+		for (const point of curve.points.slice(0, 4)) expect(point.relativeFlux).toBeCloseTo(1, 12)
+		expect(curve.comparisons.map((c) => c.status)).toEqual(['used', 'disconnected'])
+
+		// Accepting the flag restores the link; a single shared frame is a weak link that needs more iterations.
+		expect(differentialLightCurve(frames, 't', undefined, { rejectFlags: [] }).converged).toBeFalse()
+		const linked = differentialLightCurve(frames, 't', undefined, { rejectFlags: [], maxIterations: 100 })
+		expect(linked.converged).toBeTrue()
+		expect(linked.points.every((point) => point.flags.length === 0 && Math.abs(point.relativeFlux! - 1) < 1e-7)).toBeTrue()
+	})
+
+	test('a rejected variable comparison can break the only link between comparison sets', () => {
+		// A1 and A2 are seen in frames 0..39 and B1 and B2 in frames 40..79; the variable V, seen in every
+		// frame, is the only link, and a cloud dims frames 40..79 by 30%.
+		const signal = (j: number) => 1 + 0.08 * Math.sin(j / 3)
+		const stars = [
+			{ id: 't', flux: 40000 },
+			{ id: 'A1', flux: 80000 },
+			{ id: 'A2', flux: 60000 },
+			{ id: 'B1', flux: 70000 },
+			{ id: 'B2', flux: 50000 },
+			{ id: 'V', flux: 90000, signal },
+		]
+		const frames = simulate({ frameCount: 80, stars, transmission: (j) => (j < 40 ? 1 : 0.7), seed: 31 })
+		for (let j = 0; j < 80; j++) frames[j] = { ...frames[j], stars: frames[j].stars.filter((star) => !String(star.id).startsWith(j < 40 ? 'B' : 'A')) }
+
+		const curve = differentialLightCurve(frames, 't')
+		expect(curve.rejectedComparisonIds).toEqual(['V'])
+		expect(curve.points.slice(0, 40).every((point) => point.flags.length === 0)).toBeTrue()
+		expect(curve.points.slice(40).every((point) => point.flags.includes('disconnected') && point.relativeFlux === undefined)).toBeTrue()
+		expect(curve.comparisons.map((c) => [c.id, c.status])).toEqual([
+			['A1', 'used'],
+			['A2', 'used'],
+			['V', 'variable'],
+			['B1', 'disconnected'],
+			['B2', 'disconnected'],
+		])
+		// The variable comparison is refitted on the reference frames only, at transmission 1.
+		expect(curve.comparisons[2].referenceFlux! / 90000).toBeCloseTo(1, 2)
 	})
 
 	test('minimum comparisons per frame', () => {
@@ -362,10 +477,30 @@ describe('missing data', () => {
 		expect(empty.points).toEqual([])
 		expect(empty.timescale).toBeUndefined()
 		expect(empty.normalization).toBeUndefined()
+		expect(empty.converged).toBeFalse()
 
 		const lonely = differentialLightCurve(simulate({ frameCount: 3, stars: [{ id: 't', flux: 100 }] }), 't')
 		expect(lonely.comparisons).toEqual([])
 		expect(lonely.points.every((point) => point.flags.includes('noComparisons') && point.flux === undefined)).toBeTrue()
+		// No transparency in any frame is no solution, not a converged one.
+		expect(lonely.converged).toBeFalse()
+		expect(lonely.iterations).toBe(1)
+	})
+
+	test('unusable comparisons do not converge', () => {
+		const frames = simulate({ frameCount: 4, stars: [{ id: 't', flux: 100 }, ...COMPARISONS.slice(0, 2)] })
+		for (let j = 0; j < 4; j++) frames[j] = { ...frames[j], stars: frames[j].stars.map((star) => (star.id === 't' ? star : { ...star, flags: ['saturated'] as const })) }
+
+		const curve = differentialLightCurve(frames, 't')
+		expect(curve.converged).toBeFalse()
+		expect(curve.points.every((point) => point.flags.length === 1 && point.flags[0] === 'noComparisons')).toBeTrue()
+
+		// One frame with a transparency is a solution.
+		frames[2] = { ...frames[2], stars: frames[2].stars.map((star) => ({ ...star, flags: undefined })) }
+		const single = differentialLightCurve(frames, 't')
+		expect(single.converged).toBeTrue()
+		expect(single.points.map((point) => point.flags)).toEqual([['noComparisons'], ['noComparisons'], [], ['noComparisons']])
+		expect(single.points[2].relativeFlux).toBeCloseTo(1, 12)
 	})
 })
 
