@@ -8802,6 +8802,59 @@ const wide = analyzeCollimation({ image: generateSyntheticCollimationImage(patte
 if (wide.success) console.log(wide.geometry.offset, wide.outer.sectors) // offset (4.002, -1.998) with 720 sectors, the same as with the defaults
 ```
 
+### Differential Photometry and Light Curves
+
+Differential photometry measures a target against comparison stars in the same frames, so that clouds, extinction, exposure time and gain, which dim every star by the same factor, cancel in the ratio. Ensemble photometry combines several comparisons into an artificial comparison star, which lowers its noise and keeps working when one comparison is missing or variable.
+
+`imaging/stars/photometry.differential` builds a light curve with `differentialLightCurve(frames, targetId, comparisonIds?, options?)`. Each frame has a `time` (a `Time` in any timescale, the same for every frame; it is passed through unchanged, so a light curve in TDB or BJD needs TDB epochs) and the `stars` measured in it, `{ id, flux, fluxError, x?, y?, flags? }` in any order, matched across frames by their stable `id` (a string or a number), not by position; an [Aperture Photometry](#aperture-photometry) result spread with an `id` fits directly. Fluxes are in any linear unit consistent for each star across frames. A measurement is unusable when its flux is not finite (or not positive, for a comparison), its `fluxError` is not finite and positive or it has a flag listed in `rejectFlags` (every aperture photometry flag by default); an unusable or absent star, or a frame with no stars, keeps its epoch in the light curve with flags explaining the missing values. Without `comparisonIds` every other star is a candidate; the target is never its own comparison.
+
+Each comparison is divided by its reference flux, so a missing comparison does not bias the ensemble, and the per-frame transparency is the inverse-variance weighted mean of these ratios, each weight `1 / ((fluxError / referenceFlux)^2 + excess^2 transparency^2)` adding the comparison's excess fractional variance, the DerSimonian-Laird estimate of the scatter its errors do not explain (Broeg, Fernández & Neuhäuser 2005). The reference fluxes, weights and excesses are iterated to convergence (`maxIterations` 20; `converged` reports whether the transparencies settled, and is `false` when no frame has a transparency). A comparison whose robust scatter against the ensemble of the others exceeds `variabilityLimit` (3) times the scatter predicted by its errors and the median excess of the comparisons is rejected as variable, and in each frame a comparison more than `clipSigma` (4) standard deviations from the mean of the others is clipped from that frame only; both need at least 3 comparisons, because 2 cannot tell which one deviates. A frame with fewer than `minComparisons` (1) surviving comparisons has no transparency. The reference fluxes tie together only frames linked by a chain of shared comparisons: if the comparisons of some frames are never measured in the same frame as the others (a complete change of comparison stars, or the only shared measurement rejected or clipped), the transmission between the two sets is unmeasured, and a cloud would be indistinguishable from fainter comparisons. Only one linked set is reported: one where the target has a positive flux, so that the curve can be normalized, when any does; then the one with the most frames where the target was measured (a zero or negative flux counts), then the most frames, then the earliest frame; the target never links two sets, as it may be variable; the other frames are flagged `'disconnected'` with no transparency or corrected values, and comparisons used only there have the status `'disconnected'`. A single shared frame is enough to link two sets, but it is a weak link: the iteration converges more slowly (raise `maxIterations` when `converged` is `false`) and its uncertainty is not included in the errors. Supplied errors are assumed realistic up to an excess common to the comparisons (such as scintillation); errors underestimated by a large factor make faint comparisons look variable.
+
+Each point has the raw `targetFlux` and `targetFluxError`, the `transparency` (relative transmission, median 1 over the reported frames) and `transparencyError`, the `comparisonCount` and `clippedComparisonIds`, the corrected `flux = targetFlux / transparency` and `fluxError` (`(targetFluxError / T)^2 + (flux / T)^2 transparencyError^2`, first order with independent errors), the `relativeFlux` and `relativeFluxError` (divided by `normalization`, the median positive corrected flux), the differential `magnitude = -2.5 log10(relativeFlux)` (0 at the median level, positive when fainter) and `magnitudeError`, and the `flags`: `'targetMissing'`, `'targetNonPositive'` (a zero or negative target flux keeps its relative flux but has no magnitude), `'noComparisons'`, `'disconnected'`, `'comparisonClipped'` and `'notDetrended'`. The uncertainty of the normalization, common to every point, is not included. `comparisons` reports per comparison its `status` (`'used'`, `'variable'`, `'missing'` or `'disconnected'`), `referenceFlux` at transparency 1, `frameCount`, `clippedCount`, mean fractional `weight`, robust `scatter`, `expectedScatter`, `excessScatter` and `variability`; `rejectedComparisonIds` lists the variable ones. A `RangeError` is thrown when the frames mix timescales or a frame repeats a star id.
+
+The optional `detrend: { covariates, method? }` fits `relativeFlux = intercept + sum(coefficient * (covariate - mean))` against `'airmass'` and `'fwhm'` (frame properties, pixels for the FWHM) and the target centroid `'x'` and `'y'` (pixels), weighted by the inverse variance, with a robust `'huber'` loss by default (`'tukey'` rejects an eclipse or a transit, `'none'` is ordinary least squares). Each epoch with every covariate gets `detrended` values, `relativeFlux * intercept / model`, which keep the level at the mean covariates; the model uncertainty is not propagated. The original series is never modified, and `detrending` reports the `fit` (`intercept`, `coefficients`, `means`, `conditionNumber`, `rankDeficient`, `scatterBefore`, `scatterAfter`), undefined when the epochs do not outnumber the model coefficients. The fit also absorbs any astrophysical variability correlated with the covariates.
+
+```ts
+import { Timescale, time } from 'nebulosa/src/astronomy/time/time'
+import { differentialLightCurve, type DifferentialPhotometryFrame } from 'nebulosa/src/imaging/stars/photometry.differential'
+
+// Six frames at TDB Julian Dates. A cloud halves every star in frame 3, comparison 'B' is missing in frame 4 and frame 5 was dropped.
+const transmission = [1, 1, 1, 0.5, 1, 1]
+const star = (id: string, flux: number, t: number) => ({ id, flux: flux * t, fluxError: Math.sqrt(flux * t) }) // Poisson errors
+
+function series(target: (j: number) => number, variable: readonly number[]): DifferentialPhotometryFrame[] {
+	return transmission.map((t, j) => ({
+		time: time(2460600, j * 0.002, Timescale.TDB),
+		airmass: 1.2 + 0.1 * j,
+		stars: j === 5 ? [] : [star('V', 20000 * target(j), t), star('A', 50000, t), ...(j === 4 ? [] : [star('B', 30000, t)]), star('C', 40000 * variable[j], t), star('D', 45000, t)],
+	}))
+}
+
+// 'V' dims by 10% in frames 2 and 3; comparison 'C' is a variable star.
+const curve = differentialLightCurve(
+	series((j) => (j === 2 || j === 3 ? 0.9 : 1), [1, 1.2, 0.8, 1.15, 0.85, 1.1]),
+	'V',
+)
+console.log(curve.timescale === Timescale.TDB, curve.rejectedComparisonIds, curve.normalization) // true [ 'C' ] 20000
+const [, , eclipse, cloudy, partial, dropped] = curve.points
+console.log(eclipse.relativeFlux, eclipse.relativeFluxError, eclipse.magnitude) // 0.9 0.00717 0.1144 (mag)
+console.log(cloudy.transparency, cloudy.transparencyError, cloudy.relativeFlux, cloudy.relativeFluxError) // 0.5 0.002 0.9 0.0101 (the cloud costs precision, not accuracy)
+console.log(partial.comparisonCount, partial.relativeFlux) // 2 1
+console.log(dropped.time.fraction, dropped.flags) // 0.01 [ 'targetMissing', 'noComparisons' ]
+console.log(curve.comparisons.map((c) => [c.id, c.status, c.weight])) // A used 0.425, B used 0.24, C variable 0, D used 0.383
+
+// Redder than the comparisons, 'V' loses 3% per airmass; detrend it against airmass using the constant comparisons only.
+const trend = differentialLightCurve(
+	series((j) => 1 - 0.03 * (0.1 * j), [1, 1, 1, 1, 1, 1]),
+	'V',
+	['A', 'B', 'D'],
+	{ detrend: { covariates: ['airmass'] } },
+)
+console.log(trend.detrending!.fit!.coefficients, trend.detrending!.fit!.means) // [ -0.0302 ] [ 1.4 ] (relative flux per airmass)
+console.log(trend.points.map((p) => p.relativeFlux)) // 1.0060 1.0030 1 0.9970 0.9940 undefined (preserved)
+console.log(trend.points.map((p) => p.detrended?.relativeFlux)) // 1 1 1 1 1 undefined
+```
+
 ### Diffraction and Seeing Sampling
 
 `astronomy/formulas` relates the image scale to the size of the star image, to judge whether a camera samples the star well. `samplingRatio(seeingArcsec, arcsecPerPixel)` is `seeing / scale`, the star width (an arcsecond FWHM) in pixels, and `fwhmPixelsToSeeing(fwhmPixels, arcsecPerPixel)` is its inverse, `FWHM * scale`, the seeing in arcseconds implied by a measured star width (see [Star Detection](#star-detection) and [Star Profile Measurement](#star-profile-measurement) for the measurement; a FWHM from a defocused, trailed or optically limited star is not the seeing). `classifyFWHMSampling(pixels)` labels a width in pixels as `'undersampled'` (below 2), `'optimal'` (from 2 to 3, both included, the usual imaging target) or `'oversampled'` (above 3); the bands are a convention, not a limit of the sensor, and a value that is not a number is `'oversampled'`. `recommendedFocalLength(pixelSizeMicrons, targetSampling, seeingArcsec)` is the focal length in millimeters (`206.265 * pixel * sampling / seeing`) that gives the chosen number of pixels across the seeing FWHM, and it is the inverse of the `pixelScale` of [Image Scale and Field of View](#image-scale-and-field-of-view). For the diffraction limit, `airyDiskSize(wavelengthMicrons, focalRatio)` is the approximate diameter in microns of the Airy disk (`2.44 * wavelength * N`, which is the diameter of the first dark ring of a clear circular aperture, so it is larger than the FWHM) and `airyDiskInPixels(airyDiameterMicrons, pixelSizeMicrons)` converts it to pixels. The diffraction pattern is that of an unobstructed aperture and the seeing is a single number: an obstruction, the aberrations, the guiding and the atmosphere are not combined, and a diffraction limit is not the resolution of the long exposure.
