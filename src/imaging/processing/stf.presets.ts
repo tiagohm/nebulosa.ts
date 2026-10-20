@@ -7,7 +7,7 @@ import { adf, DEFAULT_CLIPPING_POINT, DEFAULT_MEAN_BACKGROUND, histogram, type H
 // planet profiles anchor the same midtones transfer function on histogram quantiles of the sampled
 // pixels and solve the midtone so that a pivot quantile maps exactly to a target display level. Every
 // call builds the histograms of the selected channel/region once per statistic and allocates only the
-// returned tuple and the bin buffer when one is not supplied.
+// returned tuple, a few three-element scratch arrays and the bin buffer when one is not supplied.
 
 // Named automatic stretch profile. 'low', 'medium' and 'high' suit sky frames; 'moon' and 'planet'
 // expect a region or mask that mostly covers the target.
@@ -86,19 +86,41 @@ export function autoStf(image: Image, preset: AutoStfPreset = 'medium', options:
 // Anchors the shadow, pivot and highlight on the histogram quantiles c0 < v < c1 and solves the midtone
 // m analytically so that stf() maps v exactly to the target: with u = (v - c0) / (c1 - c0), the
 // midtones transfer function T_m(u) = (m - 1) u / ((2m - 1) u - m) equals t for m = T_t(u), which lies
-// in (0, 1) for u and t in (0, 1). The quantiles interpolate linearly inside a bin, so they are exact
-// only to the bin width and the identity [0.5, 0, 1] is returned when the accepted samples are empty or
-// occupy a single bin (interpolation would invent a spread inside it) or when the anchors collapse,
-// typically a pivot that reaches the saturated top bin.
+// in (0, 1) for u and t in (0, 1). The three quantiles come from one cumulative scan with the same
+// in-bin linear interpolation as Histogram.quantile(), so they are exact only to the bin width. The
+// identity [0.5, 0, 1] is returned when no sample is accepted, when the black and white anchors fall in
+// the same occupied bin (interpolation would invent a spread inside it, even if outliers occupy other
+// bins) or when the anchors collapse, typically a pivot that reaches the saturated top bin.
 function quantileStf(image: Image, parameters: AutoStfQuantilePreset, options: AutoStfOptions) {
 	const h = histogram(image, options)
+	const total = h.count[0]
 
-	if (h.count[0] > 0 && h.minimum[0] < h.maximum[0]) {
-		const shadow = h.quantile(parameters.black)
-		const pivot = h.quantile(parameters.pivot)
-		const highlight = h.quantile(parameters.white)
+	if (total > 0) {
+		const { histogram: bins, max } = h
+		const thresholds = [parameters.black * total, parameters.pivot * total, parameters.white * total]
+		const quantiles = [0, 0, 0]
+		const anchorBins = [0, 0, 0]
+		const n = bins.length
+		let k = 0
+		let cumulative = 0
 
-		if (shadow < pivot && pivot < highlight) {
+		for (let i = 0; i < n && k < 3; i++) {
+			const frequency = bins[i]
+			if (frequency === 0) continue
+			const previous = cumulative
+			cumulative += frequency
+
+			// Probabilities are increasing, so several anchors may be resolved by the same bin.
+			for (; k < 3 && cumulative >= thresholds[k]; k++) {
+				const position = i + (thresholds[k] - previous) / frequency
+				quantiles[k] = position >= max ? 1 : position / max
+				anchorBins[k] = i
+			}
+		}
+
+		const [shadow, pivot, highlight] = quantiles
+
+		if (anchorBins[0] !== anchorBins[2] && shadow < pivot && pivot < highlight) {
 			const u = (pivot - shadow) / (highlight - shadow)
 			const t = parameters.target
 			return [((t - 1) * u) / ((2 * t - 1) * u - t), shadow, highlight] as const

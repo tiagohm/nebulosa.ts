@@ -147,6 +147,51 @@ describe('quantile presets', () => {
 		expect(autoStf(image, 'planet')).toEqual([0.5, 0, 1])
 	})
 
+	test('quantile preset ignores outliers outside a single background bin', () => {
+		// 9999 samples at 0.3 keep the black, pivot and white anchors in one bin; the outlier is below both cuts.
+		for (const outlier of [1, 0]) {
+			const raw = new Float32Array(10000).fill(0.3)
+			raw[4321] = outlier
+			const image = makeImage(100, 100, 1, raw)
+			const before = new Float32Array(raw)
+			const mask = new Uint8Array(10000)
+			mask[4321] = 1
+
+			for (const bits of [8, 12, 16]) {
+				const h = histogram(image, { bits })
+				expect(h.minimum[0]).toBeLessThan(h.maximum[0])
+
+				for (const preset of ['moon', 'planet'] as const) {
+					expect(autoStf(image, preset, { bits })).toEqual([0.5, 0, 1])
+					expect(autoStf(image, preset, { bits, sigmaClip: mask })).toEqual([0.5, 0, 1])
+				}
+			}
+
+			expect(image.raw).toEqual(before)
+		}
+	})
+
+	test('quantile preset keeps the curve when black and white anchors occupy distinct bins', () => {
+		// Two adjacent-level populations: the anchors sit in different bins although only two bins are occupied.
+		const raw = new Float32Array(1000)
+		for (let i = 0; i < 1000; i++) raw[i] = i < 500 ? 0.3 : 0.5
+		const image = makeImage(100, 10, 1, raw)
+
+		for (const preset of ['moon', 'planet'] as const) {
+			const { pivot, target } = AUTO_STF_PRESETS[preset] as AutoStfQuantilePreset
+			const [m, shadow, highlight] = autoStf(image, preset)
+			// The pivot lies within a bin of an anchor, so the curve is steep: evaluate the MTF in double
+			// precision rather than through the Float32 samples of stf().
+			const u = (histogram(image).quantile(pivot) - shadow) / (highlight - shadow)
+
+			expect(shadow).toBeLessThan(0.31)
+			expect(highlight).toBeGreaterThan(0.49)
+			expect(m).toBeGreaterThan(0)
+			expect(m).toBeLessThan(1)
+			expect(((m - 1) * u) / ((2 * m - 1) * u - m)).toBeCloseTo(target, 9)
+		}
+	})
+
 	test('quantile preset handles empty accepted sample population', () => {
 		const image = makeMoon()
 		expect(autoStf(image, 'moon', { sigmaClip: new Uint8Array(image.metadata.pixelCount).fill(1) })).toEqual([0.5, 0, 1])
