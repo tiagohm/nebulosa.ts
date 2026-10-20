@@ -351,6 +351,62 @@ describe('missing data', () => {
 		])
 	})
 
+	test('the ensemble measuring the target is reported over a larger one without it', () => {
+		// A is seen in frames 0..4, where the target is missing, and B with the target in frames 5..8.
+		const frames = Array.from({ length: 9 }, (_, j) => ({
+			time: time(2460600, j * 0.01, Timescale.TT),
+			stars:
+				j < 5
+					? [{ id: 'A', flux: 1000, fluxError: 1 }]
+					: [
+							{ id: 't', flux: 100, fluxError: 1 },
+							{ id: 'B', flux: 500, fluxError: 1 },
+						],
+		}))
+
+		const curve = differentialLightCurve(frames, 't')
+		expect(curve.normalization).toBeCloseTo(100, 12)
+		expect(curve.comparisons.map((c) => [c.id, c.status, c.referenceFlux])).toEqual([
+			['A', 'disconnected', undefined],
+			['B', 'used', 500],
+		])
+
+		for (const point of curve.points.slice(0, 5)) {
+			expect(point.flags).toEqual(['targetMissing', 'disconnected'])
+			expect(point.transparency).toBeUndefined()
+		}
+
+		for (const point of curve.points.slice(5)) {
+			expect(point.flags).toEqual([])
+			expect(point.transparency).toBeCloseTo(1, 12)
+			expect(point.relativeFlux).toBeCloseTo(1, 12)
+		}
+	})
+
+	test('the reference ensemble is ranked by target frames, then by frames, then by the earliest frame', () => {
+		// Ensembles A (frames 0..2), B (frames 3..6) and C (frames 7..10); target in frames 1..2, 3..4 and 7..9.
+		const ensemble = (j: number) => (j < 3 ? 'A' : j < 7 ? 'B' : 'C')
+		const series = (target: (j: number) => number | undefined) =>
+			Array.from({ length: 11 }, (_, j) => {
+				const flux = target(j)
+				return { time: time(2460600, j * 0.01, Timescale.TT), stars: [{ id: ensemble(j), flux: 1000, fluxError: 1 }, ...(flux === undefined ? [] : [{ id: 't', flux, fluxError: 1 }])] }
+			})
+		const reported = (target: (j: number) => number | undefined) =>
+			differentialLightCurve(series(target), 't')
+				.points.map((point, j) => (point.flags.includes('disconnected') ? '' : ensemble(j)))
+				.join('')
+				.replaceAll(/(.)\1+/g, '$1')
+
+		// Most target frames: C has three.
+		expect(reported((j) => (j === 1 || j === 2 || j === 3 || j === 4 || (j >= 7 && j <= 9) ? 100 : undefined))).toBe('C')
+		// Two target frames each: B has more frames than A, and C as many as B but later.
+		expect(reported((j) => (j === 1 || j === 2 || j === 3 || j === 4 || j === 7 || j === 8 ? 100 : undefined))).toBe('B')
+		// A zero or negative target flux is a measurement: A has two, B one.
+		expect(reported((j) => (j === 1 ? -50 : j === 2 ? 0 : j === 3 ? 100 : undefined))).toBe('A')
+		// Without the target the most frames win: B and C have four, B is earlier.
+		expect(reported(() => undefined)).toBe('B')
+	})
+
 	test('comparison sets sharing a frame are linked', () => {
 		// A is seen in frames 0..3 and B in frames 2..5, both at transmission 1 in frame 2 and 0.5 in frame 3.
 		const transmission = [1, 1, 1, 0.5, 0.5, 0.5]

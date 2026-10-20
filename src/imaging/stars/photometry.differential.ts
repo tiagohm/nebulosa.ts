@@ -263,8 +263,10 @@ const TUKEY_TUNING = 4.685
 // (targetFluxError / T)^2 + (targetFlux / T^2)^2 var(T), assuming independent target and comparison errors.
 // The uncertainty of the median normalization, common to every epoch, is not included. Frames and
 // comparisons linked by shared measurements form connected ensembles, each with an independent scale;
-// only the one with the most frames (the earliest frame breaking ties) is reported, and the frames of
-// the others are flagged 'disconnected'. Connectivity is evaluated after variable rejection and
+// only one is reported, and the frames of the others are flagged 'disconnected'. The reported ensemble
+// has the most frames with a usable target measurement (zero or negative flux included), then the most
+// frames with a transparency, then the earliest frame; the target never links ensembles, since it may
+// vary. Connectivity is evaluated after variable rejection and
 // clipping. A single shared frame or comparison is enough to link two ensembles, but the reference
 // fluxes are treated as exact, so the uncertainty of such a weak link is not included. Supplied errors
 // are assumed realistic up to a fractional excess common to the comparisons; underestimated errors make
@@ -585,9 +587,11 @@ export function differentialLightCurve(frames: readonly DifferentialPhotometryFr
 	// transparencies of one set by k and dividing its reference fluxes by k leaves every comparison
 	// measurement unchanged, so their relative transmission is unmeasured. The connected components of the
 	// bipartite graph of frames and active comparisons, joined by every measurement combined in a frame
-	// with a transparency, are found by union-find over frameCount + comparisonCount nodes. The reference
-	// ensemble is the component with the most such frames, the earliest frame breaking ties; the other
-	// frames lose their transparency.
+	// with a transparency, are found by union-find over frameCount + comparisonCount nodes. The target
+	// is not a node: it may vary, so it cannot carry the scale between components. The reference ensemble
+	// is the component with the most frames with a usable target measurement, the curve being about the
+	// target, then the most frames with a transparency, then the earliest frame; the other frames lose
+	// their transparency.
 	const parent = new Int32Array(frameCount + comparisonCount)
 	for (let n = 0; n < parent.length; n++) parent[n] = n
 
@@ -610,12 +614,20 @@ export function differentialLightCurve(frames: readonly DifferentialPhotometryFr
 	}
 
 	const componentSize = new Int32Array(frameCount + comparisonCount)
+	const componentTargets = new Int32Array(frameCount + comparisonCount)
 	let referenceRoot = -1
 
-	for (let j = 0; j < frameCount; j++) if (weightSum[j] > 0) componentSize[root(j)]++
+	for (let j = 0; j < frameCount; j++) {
+		if (!(weightSum[j] > 0)) continue
+		const r = root(j)
+		componentSize[r]++
+		if (Number.isFinite(targetFlux[j])) componentTargets[r]++
+	}
 
 	for (let j = 0; j < frameCount; j++) {
-		if (weightSum[j] > 0 && (referenceRoot < 0 || componentSize[root(j)] > componentSize[referenceRoot])) referenceRoot = root(j)
+		if (!(weightSum[j] > 0)) continue
+		const r = root(j)
+		if (referenceRoot < 0 || componentTargets[r] > componentTargets[referenceRoot] || (componentTargets[r] === componentTargets[referenceRoot] && componentSize[r] > componentSize[referenceRoot])) referenceRoot = r
 	}
 
 	const disconnected = new Uint8Array(frameCount)
