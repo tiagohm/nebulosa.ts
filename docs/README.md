@@ -22207,6 +22207,51 @@ console.log(toMeter(fromPressure(pressureFrom(meter(2000))))) // 2000.0000000000
 console.log(toMeter(fromPressure(pressureFrom(meter(5000), 10), 10))) // 4999.999999999996
 ```
 
+### Box Least Squares Transit Search
+
+A transit or an eclipse is a short, flat-bottomed dip repeating with the orbital period, which a sinusoidal periodogram detects poorly. Box Least Squares (Kovács, Zucker & Mazeh 2002) fits instead a two-level box: a constant out-of-transit flux and a lower in-transit flux during one trial duration repeating with one trial period. Both levels are inverse-variance weighted means, so the depth is `outOfTransitLevel - inTransitLevel` with uncertainty `sqrt(1/Σw_in + 1/Σw_out)`, and the objective, the `power`, is the improvement in log-likelihood (half the chi-square improvement) over a constant level, `snr² / 2`.
+
+`math/numerical/bls` searches with `boxLeastSquares(time, flux, fluxError, options)`. The samples, in any order, have times in one uniform unit and timescale (BJD_TDB days for a [Differential Photometry and Light Curves](#differential-photometry-and-light-curves) result converted to numbers, for example), fluxes in any linear unit and one-sigma errors (an array or one value for every sample); a sample with a non-finite time or flux, or a non-finite or non-positive error, is skipped, so a missing value can be `NaN`. A large time offset, such as a Julian Date, is removed before folding. Periods, `durations`, epochs and the `baseline` are in the time unit. For every trial period the samples are folded into equal phase bins of `period / ceil(period * oversample / min(durations))` (`oversample` 10), at most `min(durations) / oversample` wide, each duration is rounded to whole bins of that period (so the reported `duration` is within half a bin of the requested one) and every bin is tried as the box start, as in Astropy's `BoxLeastSquares`. When every period is a whole number of bins, with `minTransits` and `minInTransitPoints` of 1, the periodogram matches the per-period snr, depth, duration and transit time of Astropy 8.0.2's `snr` objective, except for boxes that straddle phase 0 by more than `oversample` bins, which Astropy does not scan. Without explicit `periods`, the grid is uniform in frequency from `minPeriod` (twice the longest duration) with the step `frequencyFactor * min(durations) / baseline²`, for as many steps as fit before `maxPeriod` (`baseline / (minTransits - 1)`, the longest period holding `minTransits` events, or the baseline when `minTransits` is 1); every period lies in `[minPeriod, maxPeriod]`. The weights are normalized by the smallest error and the bin sums are compensated, so errors spanning many orders of magnitude neither overflow nor cancel; `power` overflows to `Infinity` only above an snr of about 1e154. Every duration must be at most half the shortest period. Only dips (positive depth) are detected, and BLS is a detector, not a physical transit model: the box ignores the limb darkening and the ingress and egress shape.
+
+Every box of the search must hold `minInTransitPoints` (3) samples from at least `minTransits` (2) distinct transit events, counted exactly, and at least one out-of-transit sample; a period without such a box has `power` and `snr` 0 and `NaN` `depth`, `duration` and `epoch` in the `periodogram`. The `candidates` (at most `maxCandidates`, 5) are the periodogram peaks by decreasing snr, each re-measured from the samples with the box the search scored: the samples in `epoch - duration/2 <= time < epoch + duration/2` modulo the period, up to the placement of a sample exactly on a bin edge. A weaker peak whose phase drifts from a stronger examined one by less than that one's duration across the baseline belongs to it. The `status` is `'ok'`, `'noCandidate'` (for example a constant light curve) or `'insufficientData'` (no more samples than `minInTransitPoints`, a zero baseline, or a default range that cannot hold `minTransits` events; there is no periodogram). The work, about `periods * (samples + phaseBins * (durations + 2))` plus the event counting (twice the phase bins per duration for `minTransits` 2, four times the samples per duration from 3 on, so a larger `minTransits` uses more of the budget), is estimated conservatively before allocating: above `maxOperations` (5e8), or with more than 2^21 phase bins in one period, a `RangeError` is thrown instead of running for an unbounded time; a duration above half the shortest period, swapped `minPeriod` and `maxPeriod`, or arrays of different lengths also throw.
+
+Each candidate has the `period`, the mid-transit `epoch` of a reference event in `[firstTime, firstTime + period)`, the `duration` (a whole number of bins), `depth`, `depthError`, `snr`, `power`, the signal detection efficiency `sde` (`(snr - mean) / std` of the periodogram snr, a relative figure of merit rather than a false-alarm probability), `inTransitLevel`, `outOfTransitLevel`, `inTransitCount`, and the sampling: `transitCount` events with in-transit samples out of `expectedTransitCount` overlapping the baseline, `coverage` (the fraction of the phase bins inside the box holding a sample, low when only an ingress was observed) and the `events` (`index` from the epoch, `time`, `sampleCount`, `depth`, `depthError`, `snr`). The diagnostics flag, at `diagnosticSigma` (3) standard deviations, `'oddEvenMismatch'` (`evenDepth` and `oddDepth` differ, `oddEvenSigma`: an eclipsing binary found at half its period), `'secondaryEclipse'` (a dip of `secondaryDepth` half a period away, to one bin) and `'singleEventDominated'` (`snrWithoutStrongestEvent` below the threshold: an outlier or one systematic carries the detection); `'halfPeriodAlias'` when the box folded at `period / 2` (`halfPeriodSnr`) is at least as significant and `'doublePeriodAlias'` when a box at `2 * period` on only the odd or only the even events (`doublePeriodSnr`) is more significant. `aliasOf` and `aliasRatio` link a candidate to a stronger one whose period times a ratio of integers up to 3 (1/2, 2, 2/3, 3/2, 1/3 or 3) equals its own. With nightly gaps, aliases at such ratios can fold exactly the same in-transit samples: their snr is then identical and only more data can decide.
+
+```ts
+import { boxLeastSquares } from 'nebulosa/src/math/numerical/bls'
+
+// Ten days at 10 min cadence (BJD_TDB days) with a 1% deep, 2.4 h transit every 2.5 d centered at 2460000.75
+// and a 0.1% ripple standing in for noise; one sample was dropped.
+const time: number[] = []
+const flux: number[] = []
+
+for (let i = 0; i < 1440; i++) {
+	const t = 2460000 + i / 144
+	const phase = (t - 2460000.75) / 2.5 - Math.round((t - 2460000.75) / 2.5)
+	time.push(t)
+	flux.push(1 + 0.001 * Math.sin(97 * t) - (Math.abs(phase * 2.5) < 0.05 ? 0.01 : 0))
+}
+
+flux[100] = Number.NaN
+
+// Flux errors of 0.001; periods from 0.3 d (twice the longest duration) to 5 d.
+const result = boxLeastSquares(time, flux, 0.001, { durations: [0.05, 0.1, 0.15], maxPeriod: 5 })
+console.log(result.status, result.sampleCount, result.rejectedSampleCount, result.periodogram!.periods.length) // ok 1439 1 6258
+
+const [best, ...others] = result.candidates
+console.log(best.period, best.epoch, best.duration) // 2.5015 2460000.7490 0.09986 (days; the grid step limits the period)
+console.log(best.depth, best.depthError, best.snr, best.sde) // 0.00999 0.000134 74.5 7.07
+console.log(best.transitCount, best.expectedTransitCount, best.coverage, best.oddEvenSigma, best.flags) // 4 4 1 1.05 []
+console.log(best.events.map((e) => [e.index, e.sampleCount])) // [0, 15] [1, 15] [2, 14] [3, 14]
+
+// The other peaks are aliases of the transit, with diagnostics that say so.
+console.log(others.map((c) => [c.period, c.aliasOf, c.aliasRatio, c.flags]))
+// 1.2495 0 0.5 [oddEvenMismatch, doublePeriodAlias]: every other event is empty
+// 4.9879 0 2 [secondaryEclipse, halfPeriodAlias]: the transit falls at phase 0.5 too
+// 3.7513 0 1.5 [oddEvenMismatch, doublePeriodAlias]
+// 0.8327 0 0.333 []
+```
+
 ### Clamping and Tolerant Equality
 
 `clamp(value, min, max)` limits a value to the inclusive range `[min, max]` (it expects `min <= max`) and maps a `NaN` value to `min`, so a corrupted reading never leaves the range as `NaN`. `isNearlyEqual(a, b, relativeTolerance?, absoluteTolerance?)` tells whether two numbers are equal within a tolerance that is the larger of the absolute tolerance and `max(|a|, |b|) · relativeTolerance`; both default to `Number.EPSILON` (about 2.2e-16), which only forgives rounding errors of a few ulps near 1, so pick tolerances that match the scale and the conditioning of the data. Identical values are equal (including two infinities of the same sign), and when either operand is `NaN` or only one is infinite the result is `false`. The two tolerances answer different questions: the relative one scales with the magnitude of the operands and the absolute one protects comparisons close to zero, where a relative tolerance would require an exact match.
