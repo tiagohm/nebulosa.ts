@@ -266,8 +266,9 @@ const TUKEY_TUNING = 4.685
 // only one is reported, and the frames of the others are flagged 'disconnected'. The reported ensemble
 // is one with a positive target flux, which can be normalized, when any is; then the one with the most
 // frames with a usable target measurement (zero or negative flux included), then the most frames with a
-// transparency, then the earliest frame; the target never links ensembles, since it may vary. Connectivity is evaluated after variable rejection and
-// clipping. A single shared frame or comparison is enough to link two ensembles, but the reference
+// transparency, then the earliest frame; the target never links ensembles, since it may vary.
+// Connectivity is evaluated after variable rejection and clipping. A single shared frame or comparison
+// is enough to link two ensembles, but the reference
 // fluxes are treated as exact, so the uncertainty of such a weak link is not included. Supplied errors
 // are assumed realistic up to a fractional excess common to the comparisons; underestimated errors make
 // faint comparisons look variable. Throws RangeError when the frames mix timescales or a frame repeats a
