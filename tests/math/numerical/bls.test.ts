@@ -555,6 +555,20 @@ describe('search exactness and conditioning', () => {
 		}
 	})
 
+	test('a huge default grid is rejected before its periods are generated', () => {
+		const time = [0, 2.5, 5, 7.5, 10]
+		const flux = [1, 1, 1, 1, 1]
+
+		// 49 million periods from 0.2 to 10 d: only 2.45e8 sample passes, but their ranking alone exceeds 5e8.
+		expect(() => boxLeastSquares(time, flux, 1, { durations: [0.1], frequencyFactor: 1e-4 })).toThrow(/at least .* operations/)
+		// 1e11 periods pass a samples-only budget of 1e12 but would need 800 GB; the lower bound fails first.
+		expect(() => boxLeastSquares(time, flux, 1, { durations: [0.1], frequencyFactor: 4.9e-8, maxOperations: 1e12 })).toThrow(/at least .* operations/)
+		// An underflowing step means infinitely many periods.
+		expect(() => boxLeastSquares(time, flux, 1, { durations: [0.1], frequencyFactor: 1e-320 })).toThrow(/at least .* operations/)
+		// Inside the budget the grid is generated as before: 1 + floor((5 - 0.1) / 5e-4) periods.
+		expect(boxLeastSquares(time, flux, 1, { durations: [0.1], frequencyFactor: 0.5, minInTransitPoints: 1 }).periodogram!.periods.length).toBe(9801)
+	})
+
 	test('extreme weights keep the out-of-transit group', () => {
 		// The in-transit weight 1e16 + 1 would swallow the out-of-transit weight 2 in a total minus the box.
 		const result = boxLeastSquares([0, 0.5, 1, 1.5], [0.9, 1, 0.9, 1], [1e-8, 1, 1, 1], { periods: [1], durations: [0.25], minTransits: 1, minInTransitPoints: 1 })

@@ -323,21 +323,33 @@ export function boxLeastSquares(time: Readonly<NumberArray>, flux: Readonly<Numb
 	if (2 * maxDuration > minPeriod) throw new RangeError('durations must not exceed half the shortest period')
 	if (!(samples.baseline > 0) || samples.count <= minInTransitPoints) return insufficient
 
+	let grid: FrequencyGrid | undefined
+
 	if (periods === undefined) {
 		const longest = maxPeriod ?? (minTransits > 1 ? samples.baseline / (minTransits - 1) : samples.baseline)
 		if (!(longest >= minPeriod)) return insufficient
-		periods = frequencyGrid(minPeriod, longest, (frequencyFactor * minDuration) / (samples.baseline * samples.baseline), samples.count, maxOperations)
+		grid = frequencyGrid(minPeriod, longest, (frequencyFactor * minDuration) / (samples.baseline * samples.baseline))
 	}
 
 	const binWidth = minDuration / oversample
 	const count = samples.count
 	const boxCount = durations.length
-	let operations = periods.length * RANKING_OPERATIONS_PER_PERIOD + 2 * maxCandidates * count * MEASUREMENT_OPERATIONS_PER_SAMPLE
+	const periodCount = periods?.length ?? grid!.count
+	const fixedOperations = 2 * maxCandidates * count * MEASUREMENT_OPERATIONS_PER_SAMPLE
+
+	// Every period costs at least its ranking, one pass over the samples and the scan of the bins of the
+	// shortest period. This lower bound of the estimate below takes O(1), so a huge default grid is rejected
+	// before its periods are generated or stored.
+	const minimumOperations = fixedOperations + periodCount * (RANKING_OPERATIONS_PER_PERIOD + count + (Math.ceil(minPeriod / binWidth) + 1) * (boxCount + 2))
+	if (!(minimumOperations <= maxOperations)) throw new RangeError(`the search needs at least ${minimumOperations.toExponential(2)} operations, more than maxOperations`)
+
+	let operations = fixedOperations + periodCount * RANKING_OPERATIONS_PER_PERIOD
 	let capacity = 0
 
-	for (let p = 0; p < periods.length; p++) {
-		const bins = Math.ceil(periods[p] / binWidth)
-		const size = bins + Math.max(1, Math.round((maxDuration * bins) / periods[p]))
+	for (let p = 0; p < periodCount; p++) {
+		const period = periods !== undefined ? periods[p] : gridPeriod(grid!, p)
+		const bins = Math.ceil(period / binWidth)
+		const size = bins + Math.max(1, Math.round((maxDuration * bins) / period))
 
 		if (size > capacity) capacity = size
 		// Folding, the compensated prefix sums and the box scan.
@@ -352,6 +364,7 @@ export function boxLeastSquares(time: Readonly<NumberArray>, flux: Readonly<Numb
 	if (!(operations <= maxOperations)) throw new RangeError(`the search needs about ${operations.toExponential(2)} operations, more than maxOperations`)
 	if (capacity > MAX_PHASE_BINS) throw new RangeError('the longest period has too many phase bins; raise the shortest duration or lower oversample')
 
+	periods ??= gridPeriods(grid!)
 	const { periodogram, boxes } = searchPeriods(samples, periods, binWidth, durations, minInTransitPoints, minTransits, capacity)
 	const candidates = rankCandidates(samples, periodogram, boxes, maxCandidates, diagnosticSigma)
 
@@ -401,19 +414,36 @@ function usableSamples(time: Readonly<NumberArray>, flux: Readonly<NumberArray>,
 	return { t, w, wz, count, firstTime, mean, scale, baseline: t[count - 1] }
 }
 
-// Builds periods ascending from minPeriod toward maxPeriod, uniform in frequency with step frequencyStep
-// (Astropy's autoperiod rule), keeping only the steps that do not pass maxPeriod; rounding at both ends is
-// clamped into [minPeriod, maxPeriod]. Throws before allocating when the grid alone would exceed the budget.
-function frequencyGrid(minPeriod: number, maxPeriod: number, frequencyStep: number, sampleCount: number, maxOperations: number) {
+// Default period grid, uniform in frequency, described without materializing its periods.
+interface FrequencyGrid {
+	// Number of periods; Infinity when the step underflows.
+	readonly count: number
+	// Bounds of the periods, time unit.
+	readonly minPeriod: number
+	readonly maxPeriod: number
+	// 1 / minPeriod and the frequency step, per time unit.
+	readonly maxFrequency: number
+	readonly step: number
+}
+
+// Describes the periods ascending from minPeriod toward maxPeriod, uniform in frequency with step
+// frequencyStep (Astropy's autoperiod rule), keeping only the steps that do not pass maxPeriod.
+function frequencyGrid(minPeriod: number, maxPeriod: number, frequencyStep: number): FrequencyGrid {
 	const minFrequency = 1 / maxPeriod
 	const maxFrequency = 1 / minPeriod
 	const count = maxFrequency > minFrequency ? 1 + Math.floor((maxFrequency - minFrequency) / frequencyStep) : 1
+	return { count, minPeriod, maxPeriod, maxFrequency, step: frequencyStep }
+}
 
-	// Each period costs at least one pass over the samples; a huge count must not reach the allocation.
-	if (!(count * sampleCount <= maxOperations)) throw new RangeError(`the period grid has ${count.toExponential(2)} periods, more than maxOperations allows`)
+// Period i of the grid, with the rounding at both ends clamped into [minPeriod, maxPeriod].
+function gridPeriod(grid: FrequencyGrid, i: number) {
+	return Math.min(grid.maxPeriod, Math.max(grid.minPeriod, 1 / (grid.maxFrequency - grid.step * i)))
+}
 
-	const periods = new Float64Array(count)
-	for (let i = 0; i < count; i++) periods[i] = Math.min(maxPeriod, Math.max(minPeriod, 1 / (maxFrequency - frequencyStep * i)))
+// Allocates and fills the periods of the grid; called only once its work estimate is within the budget.
+function gridPeriods(grid: FrequencyGrid) {
+	const periods = new Float64Array(grid.count)
+	for (let i = 0; i < grid.count; i++) periods[i] = gridPeriod(grid, i)
 	return periods
 }
 
