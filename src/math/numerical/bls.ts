@@ -6,14 +6,19 @@ import type { NumberArray } from './math'
 // a constant out-of-transit flux and a lower in-transit flux inside a box of one trial duration
 // repeating with one trial period; both levels are inverse-variance weighted means, so the box with
 // the largest improvement in chi-square over a constant level is the best fit. For every trial period
-// the samples are folded into phase bins of minDuration / oversample, every trial duration is rounded
-// to a whole number of bins and every bin edge is tried as the box start, which makes the search
-// O(periods * (samples + bins * durations)); the ranked candidates are then re-measured exactly from the
-// samples with diagnostics against eclipsing binaries, aliases and sparse sampling. Times may be in any
-// uniform unit and timescale (for example BJD_TDB days); periods, durations and epochs are in that same
-// unit, and fluxes are in any linear unit. BLS is a detector, not a physical transit model. Pure
-// function: inputs are never mutated; the work arrays are typed arrays allocated per call, sized by the
-// sample count and by the phase bins of the longest period, both bounded before allocation.
+// the samples are folded into equal phase bins of period / ceil(period / (minDuration / oversample)),
+// every trial duration is rounded to a whole number of those bins and every bin edge is tried as the box
+// start; a box is eligible only with minInTransitPoints samples from minTransits distinct events, which
+// sliding windows count exactly in time linear in the bins (and in the samples when minTransits >= 3).
+// The ranked candidates are re-measured from the samples with the box the search scored, adding
+// diagnostics against eclipsing binaries, aliases and sparse sampling. Weights are normalized by the
+// smallest flux error and the phase-bin sums are compensated prefix sums whose in- and out-of-transit
+// parts are both differences of prefixes, so weights spanning many orders of magnitude neither overflow
+// nor cancel. Times may be in any uniform unit and timescale (for example BJD_TDB days); periods,
+// durations and epochs are in that same unit, and fluxes are in any linear unit. BLS is a detector, not
+// a physical transit model. Pure function: inputs are never mutated; the work arrays are typed arrays
+// allocated per call, sized by the sample count and by the phase bins of the longest period, both
+// bounded before allocation.
 
 // Default phase bins per shortest trial duration (Astropy's default).
 const DEFAULT_OVERSAMPLE = 10
@@ -34,14 +39,21 @@ const DEFAULT_DIAGNOSTIC_SIGMA = 3
 // work on a desktop CPU).
 const DEFAULT_MAX_OPERATIONS = 5e8
 
-// Largest number of phase bins of one trial period; bounds the five work arrays to about 150 MB.
-const MAX_PHASE_BINS = 1 << 22
+// Largest number of phase bins (with the wrap-around copies) of one trial period; bounds the work
+// arrays to about 150 MB.
+const MAX_PHASE_BINS = 1 << 21
+
+// Estimated work per trial period of ranking the periodogram peaks (sorting and merging).
+const RANKING_OPERATIONS_PER_PERIOD = 64
+
+// Estimated work per sample of one exact candidate measurement.
+const MEASUREMENT_OPERATIONS_PER_SAMPLE = 4
 
 // Largest numerator or denominator of the period ratios tested when marking a candidate as an alias.
 const MAX_ALIAS_ORDER = 3
 
 // Outcome of the search.
-// 'ok': at least one candidate passed the constraints.
+// 'ok': at least one candidate was found.
 // 'noCandidate': the search ran, but no box with a positive depth satisfied minTransits and
 // minInTransitPoints (for example a constant light curve).
 // 'insufficientData': too few usable samples for a box with minInTransitPoints samples and at least one
@@ -63,13 +75,14 @@ export type BoxLeastSquaresFlag = 'oddEvenMismatch' | 'secondaryEclipse' | 'half
 
 // Options of boxLeastSquares. Periods, durations and times share the unit of the input times.
 export interface BoxLeastSquaresOptions {
-	// Trial box durations, positive, at most half the shortest trial period; at least one. Each is rounded to
-	// a whole number of phase bins of min(durations) / oversample.
+	// Trial box durations, positive, at most half the shortest trial period; at least one. For each period
+	// each is rounded to a whole number of its phase bins (at least one).
 	readonly durations: Readonly<NumberArray>
 	// Explicit trial periods, positive, at least one, in any order (sorted ascending in the periodogram).
-	// When omitted, a grid uniform in frequency is built from minPeriod to maxPeriod with the step
+	// When omitted, a grid uniform in frequency is built from minPeriod with the step
 	// frequencyFactor * min(durations) / baseline^2, fine enough that the phase drift across the baseline
-	// between neighbors is a fraction of the shortest duration.
+	// between neighbors is a fraction of the shortest duration, for as many steps as fit before maxPeriod;
+	// every period lies in [minPeriod, maxPeriod], and a step wider than the range leaves minPeriod alone.
 	readonly periods?: Readonly<NumberArray>
 	// Shortest period of the default grid, positive. Defaults to twice the longest duration.
 	readonly minPeriod?: number
@@ -81,9 +94,8 @@ export interface BoxLeastSquaresOptions {
 	// Phase bins per shortest duration, a positive integer; larger resolves epochs and durations more
 	// finely at a proportional cost. Defaults to 10.
 	readonly oversample?: number
-	// Minimum number of distinct transit events with in-transit samples, a positive integer. A box whose
-	// samples come from fewer events is skipped in the periodogram (only the 1-versus-2 distinction is
-	// enforced there) and a candidate with fewer events is rejected. Defaults to 2.
+	// Minimum number of distinct transit events with in-transit samples of a box, a positive integer,
+	// enforced exactly for every box of the search. Defaults to 2.
 	readonly minTransits?: number
 	// Minimum number of in-transit samples of a box, a positive integer. Defaults to 3.
 	readonly minInTransitPoints?: number
@@ -92,25 +104,27 @@ export interface BoxLeastSquaresOptions {
 	// Threshold, in standard deviations, of the oddEvenMismatch, secondaryEclipse and singleEventDominated
 	// flags. Defaults to 3.
 	readonly diagnosticSigma?: number
-	// Bound on the estimated work, sum over periods of samples + (phase bins) * (durations + 1). A grid
-	// above it, or a period with more than 2^22 phase bins, throws a RangeError before any allocation
-	// instead of running for an unbounded time. Defaults to 5e8.
+	// Bound on the estimated work: per period, the folding, the box scan over (phase bins) * (durations + 2)
+	// and the exact event counting, plus the ranking and the candidate measurements. A grid above it, or a
+	// period with more than 2^21 phase bins, throws a RangeError before any allocation instead of running for
+	// an unbounded time. Defaults to 5e8.
 	readonly maxOperations?: number
 }
 
-// Best box of each trial period, binned. Every array has one entry per period; a period without a box
-// satisfying minInTransitPoints, a positive depth and (for minTransits >= 2) two events has power and
-// snr 0 and NaN depth, duration and epoch.
+// Best box of each trial period. Every array has one entry per period; a period without a box
+// satisfying minInTransitPoints, minTransits, at least one out-of-transit sample and a positive depth
+// has power and snr 0 and NaN depth, duration and epoch.
 export interface BoxLeastSquaresPeriodogram {
 	// Trial periods, ascending, time unit.
 	readonly periods: Float64Array
-	// Improvement in log-likelihood over a constant level, snr^2 / 2, dimensionless; the objective.
+	// Improvement in log-likelihood over a constant level, snr^2 / 2, dimensionless; the objective. It
+	// overflows to Infinity only above an snr of about 1e154.
 	readonly power: Float64Array
 	// Depth over its one-sigma uncertainty.
 	readonly snr: Float64Array
 	// Out-of-transit minus in-transit level, flux unit, positive for a dip.
 	readonly depth: Float64Array
-	// Box duration, a whole number of phase bins, time unit.
+	// Box duration, a whole number of phase bins of the period, time unit.
 	readonly duration: Float64Array
 	// Mid-transit time of the box, in [firstTime, firstTime + period), time unit.
 	readonly epoch: Float64Array
@@ -131,8 +145,9 @@ export interface BoxLeastSquaresEvent {
 	readonly snr: number
 }
 
-// A ranked candidate, measured exactly from the samples with in-transit membership
-// epoch - duration / 2 <= time < epoch + duration / 2 modulo the period.
+// A ranked candidate, measured from the samples with the box of the search: the samples whose phase bin
+// lies in the duration starting duration / 2 before the epoch, modulo the period. Up to the floating-point
+// placement of a sample on a bin edge this is epoch - duration / 2 <= time < epoch + duration / 2.
 export interface BoxLeastSquaresCandidate {
 	// Period, mid-transit time of a reference event in [firstTime, firstTime + period) and box
 	// duration, time unit.
@@ -145,7 +160,8 @@ export interface BoxLeastSquaresCandidate {
 	readonly depthError: number
 	// depth / depthError.
 	readonly snr: number
-	// Improvement in log-likelihood (half the chi-square improvement) over a constant level, snr^2 / 2.
+	// Improvement in log-likelihood (half the chi-square improvement) over a constant level, snr^2 / 2;
+	// Infinity only above an snr of about 1e154.
 	readonly power: number
 	// Signal detection efficiency (snr - mean) / standard deviation of the periodogram snr over the
 	// periods with a box, at the candidate's periodogram peak; undefined with fewer than 2 such periods
@@ -159,9 +175,8 @@ export interface BoxLeastSquaresCandidate {
 	// Events with in-transit samples, and events whose window overlaps the time span of the samples.
 	readonly transitCount: number
 	readonly expectedTransitCount: number
-	// Fraction of the search phase bins (min(durations) / oversample wide) inside the box holding at least
-	// one sample, in (0, 1];
-	// low when only part of the transit (for example the ingress) was observed.
+	// Fraction of the phase bins inside the box holding at least one sample, in (0, 1]; low when only part
+	// of the transit (for example the ingress) was observed.
 	readonly coverage: number
 	// Depth of the even-numbered (index 0, 2, ...) and odd-numbered events against the common
 	// out-of-transit level, with one-sigma uncertainties; undefined without samples of that parity.
@@ -171,8 +186,9 @@ export interface BoxLeastSquaresCandidate {
 	readonly oddDepthError?: number
 	// |evenDepth - oddDepth| over its one-sigma uncertainty; undefined without both parities.
 	readonly oddEvenSigma?: number
-	// Depth of a box of the same duration at phase 0.5 against the remaining out-of-transit samples, and its
-	// uncertainty; undefined without samples there. Negative when that phase is brighter.
+	// Depth of a box of the same duration half a period away (to one phase bin) against the remaining
+	// out-of-transit samples, and its uncertainty; undefined without samples there. Negative when that
+	// phase is brighter.
 	readonly secondaryDepth?: number
 	readonly secondaryDepthError?: number
 	// Signed snr of the box folded at period / 2 through the same epoch (in-transit samples plus phase 0.5);
@@ -206,35 +222,40 @@ export interface BoxLeastSquaresResult {
 	readonly baseline: number
 	// Best box per trial period; undefined for 'insufficientData'.
 	readonly periodogram?: BoxLeastSquaresPeriodogram
-	// Candidates by decreasing power, at most maxCandidates, each a distinct periodogram peak: a period
+	// Candidates by decreasing snr, at most maxCandidates, each a distinct periodogram peak: a period
 	// whose phase drifts from a stronger examined peak by less than that peak's duration across the
 	// baseline belongs to it.
 	readonly candidates: readonly BoxLeastSquaresCandidate[]
-	// Periodogram peaks examined and rejected for fewer than minTransits events or minInTransitPoints
-	// samples, or a non-positive exact depth.
-	readonly rejectedCandidateCount: number
 }
 
-// Usable samples relative to the first time, with the flux centered on its weighted mean.
+// Usable samples sorted by time, relative to the first time, with normalized weights and fluxes.
 interface BoxLeastSquaresSamples {
-	// Times minus firstTime, time unit, non-negative.
+	// Times minus firstTime, ascending, time unit, non-negative.
 	readonly t: Float64Array
-	// Flux minus the weighted mean flux, flux unit.
-	readonly y: Float64Array
-	// Inverse-variance weights.
+	// (scale / fluxError)^2, in (0, 1].
 	readonly w: Float64Array
+	// w * (flux - mean) / scale.
+	readonly wz: Float64Array
 	// Number of usable samples.
 	readonly count: number
 	// Earliest usable time, time unit.
 	readonly firstTime: number
 	// Weighted mean flux, flux unit.
 	readonly mean: number
+	// Smallest flux error, flux unit; the unit of the normalized fluxes.
+	readonly scale: number
 	// Time span of the usable samples, time unit.
 	readonly baseline: number
-	// Sum of the weights.
-	readonly sumW: number
-	// Sum of weight * centered flux (zero up to rounding).
-	readonly sumWY: number
+}
+
+// Box geometry of one trial period, in its phase bins.
+interface PeriodBox {
+	// Number of equal phase bins of the period.
+	readonly bins: number
+	// First bin of the box, 0-based, in [0, bins).
+	readonly start: number
+	// Box length in bins, at least 1.
+	readonly length: number
 }
 
 // Candidate measurement before ranking and alias marking.
@@ -248,14 +269,13 @@ type MeasuredCandidate = Omit<BoxLeastSquaresCandidate, 'sde' | 'aliasOf' | 'ali
 // internally before folding. Only dips (positive depth) are detected. Throws a TypeError or RangeError
 // when an option is out of its documented domain, and a RangeError when the array lengths differ, when
 // a duration exceeds half the shortest period, when an explicit minPeriod exceeds maxPeriod, or when the
-// grid exceeds maxOperations or the phase bins of one period exceed 2^22.
+// grid exceeds maxOperations or the phase bins of one period exceed 2^21.
 export function boxLeastSquares(time: Readonly<NumberArray>, flux: Readonly<NumberArray>, fluxError: Readonly<NumberArray> | number, options: BoxLeastSquaresOptions): BoxLeastSquaresResult {
 	const n = time.length
 
 	// Mismatched arrays would silently pair a time with another sample's flux.
 	if (flux.length !== n || (typeof fluxError !== 'number' && fluxError.length !== n)) throw new RangeError('time, flux and fluxError must have equal lengths')
 
-	const { durations } = options
 	const oversample = validatePositiveInteger(options.oversample ?? DEFAULT_OVERSAMPLE)
 	const minTransits = validatePositiveInteger(options.minTransits ?? DEFAULT_MIN_TRANSITS)
 	const minInTransitPoints = validatePositiveInteger(options.minInTransitPoints ?? DEFAULT_MIN_IN_TRANSIT_POINTS)
@@ -264,20 +284,17 @@ export function boxLeastSquares(time: Readonly<NumberArray>, flux: Readonly<Numb
 	const maxOperations = validatePositiveFinite(options.maxOperations ?? DEFAULT_MAX_OPERATIONS)
 
 	// An empty or non-positive duration list leaves no box to fit and no phase-bin width.
-	if (durations.length === 0) throw new RangeError('durations must not be empty')
+	if (options.durations.length === 0) throw new RangeError('durations must not be empty')
 
-	let minDuration = Infinity
-	let maxDuration = 0
+	const durations = new Float64Array(options.durations.length)
+	for (let i = 0; i < durations.length; i++) durations[i] = validatePositiveFinite(options.durations[i])
+	durations.sort()
 
-	for (let i = 0; i < durations.length; i++) {
-		const duration = validatePositiveFinite(durations[i])
-		if (duration < minDuration) minDuration = duration
-		if (duration > maxDuration) maxDuration = duration
-	}
-
+	const minDuration = durations[0]
+	const maxDuration = durations.at(-1)!
 	const samples = usableSamples(time, flux, fluxError)
 	const rejectedSampleCount = n - samples.count
-	const insufficient = { status: 'insufficientData', sampleCount: samples.count, rejectedSampleCount, baseline: samples.baseline, candidates: [], rejectedCandidateCount: 0 } as const
+	const insufficient = { status: 'insufficientData', sampleCount: samples.count, rejectedSampleCount, baseline: samples.baseline, candidates: [] } as const
 
 	let periods: Float64Array | undefined
 	let minPeriod: number
@@ -302,7 +319,7 @@ export function boxLeastSquares(time: Readonly<NumberArray>, flux: Readonly<Numb
 	}
 
 	// A box longer than half the period would leave the dip as the majority state and overlap its own
-	// phase 0.5 diagnostics; the pad of the folded bins also relies on it.
+	// phase 0.5 diagnostics; the wrap-around copies of the folded bins also rely on it.
 	if (2 * maxDuration > minPeriod) throw new RangeError('durations must not exceed half the shortest period')
 	if (!(samples.baseline > 0) || samples.count <= minInTransitPoints) return insufficient
 
@@ -313,189 +330,265 @@ export function boxLeastSquares(time: Readonly<NumberArray>, flux: Readonly<Numb
 	}
 
 	const binWidth = minDuration / oversample
-	const durationBins = uniqueDurationBins(durations, binWidth)
-	const maxDurationBins = durationBins.at(-1)!
-
-	let operations = 0
-	let maxBins = 0
+	const count = samples.count
+	const boxCount = durations.length
+	let operations = periods.length * RANKING_OPERATIONS_PER_PERIOD + 2 * maxCandidates * count * MEASUREMENT_OPERATIONS_PER_SAMPLE
+	let capacity = 0
 
 	for (let p = 0; p < periods.length; p++) {
 		const bins = Math.ceil(periods[p] / binWidth)
-		if (bins > maxBins) maxBins = bins
-		operations += samples.count + (bins + maxDurationBins) * (durationBins.length + 1)
+		const size = bins + Math.max(1, Math.round((maxDuration * bins) / periods[p]))
+
+		if (size > capacity) capacity = size
+		// Folding, the compensated prefix sums and the box scan.
+		operations += count + size * (boxCount + 2)
+		// The exact event counting: sliding minimum and maximum, or the event ids, their bin order and the
+		// sliding counters, which add and remove every (bin, event) pair once per duration.
+		if (minTransits === 2) operations += 2 * size * boxCount
+		else if (minTransits > 2) operations += 2 * count + boxCount * (4 * count + size)
 	}
 
 	// Bounds the run time and the work arrays before allocating them.
 	if (!(operations <= maxOperations)) throw new RangeError(`the search needs about ${operations.toExponential(2)} operations, more than maxOperations`)
-	if (maxBins > MAX_PHASE_BINS) throw new RangeError('the longest period has too many phase bins; raise the shortest duration or lower oversample')
+	if (capacity > MAX_PHASE_BINS) throw new RangeError('the longest period has too many phase bins; raise the shortest duration or lower oversample')
 
-	const { periodogram, phases } = searchPeriods(samples, periods, binWidth, durationBins, minInTransitPoints, minTransits > 1)
-	const { candidates, rejectedCandidateCount } = rankCandidates(samples, periodogram, phases, binWidth, minTransits, minInTransitPoints, maxCandidates, diagnosticSigma)
+	const { periodogram, boxes } = searchPeriods(samples, periods, binWidth, durations, minInTransitPoints, minTransits, capacity)
+	const candidates = rankCandidates(samples, periodogram, boxes, maxCandidates, diagnosticSigma)
 
-	return { status: candidates.length > 0 ? 'ok' : 'noCandidate', sampleCount: samples.count, rejectedSampleCount, baseline: samples.baseline, periodogram, candidates, rejectedCandidateCount }
+	return { status: candidates.length > 0 ? 'ok' : 'noCandidate', sampleCount: count, rejectedSampleCount, baseline: samples.baseline, periodogram, candidates }
 }
 
-// Collects the usable samples relative to the earliest time, with inverse-variance weights and the flux
-// centered on its weighted mean so that the binned sums do not cancel.
+// Collects the usable samples sorted by time and relative to the earliest time. The weights are
+// normalized by the smallest error, (scale / error)^2 in (0, 1], so they cannot overflow, and the fluxes
+// are centered on their weighted mean and expressed in units of that error so that the sums stay small.
 function usableSamples(time: Readonly<NumberArray>, flux: Readonly<NumberArray>, fluxError: Readonly<NumberArray> | number): BoxLeastSquaresSamples {
 	const n = time.length
-	const t = new Float64Array(n)
-	const y = new Float64Array(n)
-	const w = new Float64Array(n)
-	let count = 0
-	let firstTime = Infinity
-	let lastTime = -Infinity
+	const usable: number[] = []
+	let scale = Infinity
+
+	for (let i = 0; i < n; i++) {
+		const error = typeof fluxError === 'number' ? fluxError : fluxError[i]
+		if (!Number.isFinite(time[i]) || !Number.isFinite(flux[i]) || !Number.isFinite(error) || !(error > 0)) continue
+		usable.push(i)
+		if (error < scale) scale = error
+	}
+
+	const count = usable.length
+	const t = new Float64Array(count)
+	const w = new Float64Array(count)
+	const wz = new Float64Array(count)
+
+	if (count === 0) return { t, w, wz, count, firstTime: 0, mean: 0, scale: 1, baseline: 0 }
+
+	usable.sort((a, b) => time[a] - time[b])
+
+	const firstTime = time[usable[0]]
 	let sumW = 0
 	let sumWY = 0
 
-	for (let i = 0; i < n; i++) {
-		const ti = time[i]
-		const yi = flux[i]
-		const error = typeof fluxError === 'number' ? fluxError : fluxError[i]
-
-		if (!Number.isFinite(ti) || !Number.isFinite(yi) || !Number.isFinite(error) || !(error > 0)) continue
-
-		const wi = 1 / (error * error)
-		t[count] = ti
-		y[count] = yi
-		w[count] = wi
-		count++
-		if (ti < firstTime) firstTime = ti
-		if (ti > lastTime) lastTime = ti
-		sumW += wi
-		sumWY += wi * yi
+	for (let j = 0; j < count; j++) {
+		const i = usable[j]
+		const ratio = scale / (typeof fluxError === 'number' ? fluxError : fluxError[i])
+		t[j] = time[i] - firstTime
+		w[j] = ratio * ratio
+		sumW += w[j]
+		sumWY += w[j] * flux[i]
 	}
-
-	if (count === 0) return { t, y, w, count, firstTime: 0, mean: 0, baseline: 0, sumW: 0, sumWY: 0 }
 
 	const mean = sumWY / sumW
-	sumWY = 0
+	for (let j = 0; j < count; j++) wz[j] = (w[j] * (flux[usable[j]] - mean)) / scale
 
-	for (let i = 0; i < count; i++) {
-		t[i] -= firstTime
-		y[i] -= mean
-		sumWY += w[i] * y[i]
-	}
-
-	return { t: t.subarray(0, count), y: y.subarray(0, count), w: w.subarray(0, count), count, firstTime, mean, baseline: lastTime - firstTime, sumW, sumWY }
+	return { t, w, wz, count, firstTime, mean, scale, baseline: t[count - 1] }
 }
 
-// Builds periods ascending from minPeriod to maxPeriod, uniform in frequency with step frequencyStep
-// (Astropy's autoperiod rule). Throws before allocating when the grid alone would exceed the budget.
+// Builds periods ascending from minPeriod toward maxPeriod, uniform in frequency with step frequencyStep
+// (Astropy's autoperiod rule), keeping only the steps that do not pass maxPeriod; rounding at both ends is
+// clamped into [minPeriod, maxPeriod]. Throws before allocating when the grid alone would exceed the budget.
 function frequencyGrid(minPeriod: number, maxPeriod: number, frequencyStep: number, sampleCount: number, maxOperations: number) {
 	const minFrequency = 1 / maxPeriod
 	const maxFrequency = 1 / minPeriod
-	const count = 1 + Math.round((maxFrequency - minFrequency) / frequencyStep)
+	const count = maxFrequency > minFrequency ? 1 + Math.floor((maxFrequency - minFrequency) / frequencyStep) : 1
 
 	// Each period costs at least one pass over the samples; a huge count must not reach the allocation.
 	if (!(count * sampleCount <= maxOperations)) throw new RangeError(`the period grid has ${count.toExponential(2)} periods, more than maxOperations allows`)
 
 	const periods = new Float64Array(count)
-	for (let i = 0; i < count; i++) periods[i] = 1 / (maxFrequency - frequencyStep * i)
+	for (let i = 0; i < count; i++) periods[i] = Math.min(maxPeriod, Math.max(minPeriod, 1 / (maxFrequency - frequencyStep * i)))
 	return periods
 }
 
-// Rounds every duration to a whole number of phase bins, at least 1, and returns the distinct counts ascending.
-function uniqueDurationBins(durations: Readonly<NumberArray>, binWidth: number) {
-	const bins = new Set<number>()
-	for (let i = 0; i < durations.length; i++) bins.add(Math.max(1, Math.round(durations[i] / binWidth)))
-	return Int32Array.from(bins).sort()
+// Rounds the ascending durations to whole bins of width, at least 1, writing the distinct counts
+// ascending into out; returns how many were written.
+function durationBins(durations: Float64Array, width: number, out: Int32Array) {
+	let count = 0
+
+	for (let i = 0; i < durations.length; i++) {
+		const k = Math.max(1, Math.round(durations[i] / width))
+		if (count === 0 || k !== out[count - 1]) out[count++] = k
+	}
+
+	return count
 }
 
-// Phase-binned sums of one trial period, as 1-based prefix sums after foldSamples. Allocated once per
-// search for the longest period and overwritten for every period.
+// Error of the floating-point sum = fl(a + b) (Knuth's TwoSum), so that a + b = sum + error exactly.
+function sumError(a: number, b: number, sum: number) {
+	const bb = sum - a
+	return a - (sum - bb) + (b - bb)
+}
+
+// Phase-binned sums of one trial period, allocated once per search for the longest period and
+// overwritten for every period. Bins are 1-based; index 0 is the empty prefix.
 interface PhaseBins {
-	// Prefix sums of weight * centered flux, of weight and of sample count.
-	readonly sumY: Float64Array
-	readonly sumWeight: Float64Array
+	// Compensated prefix sums of weight and of weight * normalized flux: each prefix is hi + lo.
+	readonly wHi: Float64Array
+	readonly wLo: Float64Array
+	readonly yHi: Float64Array
+	readonly yLo: Float64Array
+	// Prefix counts of samples.
 	readonly sampleCount: Int32Array
-	// Smallest and largest event number of the samples of each bin (not prefix sums); +-Infinity when empty.
-	readonly firstEvent: Float64Array
-	readonly lastEvent: Float64Array
+	// Whether the box starting at each 0-based bin has samples from minTransits events.
+	readonly eligible: Uint8Array
 }
 
-// Folds the samples at every trial period into phase bins and finds the box of each duration and start
-// bin with the largest log-likelihood improvement. Also returns the mid-transit phases relative to
-// firstTime, which keep the precision a large time offset would remove.
-function searchPeriods(samples: BoxLeastSquaresSamples, periods: Float64Array, binWidth: number, durationBins: Int32Array, minInTransitPoints: number, needTwoEvents: boolean) {
-	const { count, sumW, sumWY, firstTime } = samples
-	const pad = durationBins.at(-1)!
-	const capacity = Math.ceil(periods.at(-1)! / binWidth) + pad + 1
-	const workspace: PhaseBins = { sumY: new Float64Array(capacity), sumWeight: new Float64Array(capacity), sampleCount: new Int32Array(capacity), firstEvent: new Float64Array(capacity), lastEvent: new Float64Array(capacity) }
-	const { sumY, sumWeight, sampleCount, firstEvent, lastEvent } = workspace
-	const wy = new Float64Array(count)
-	for (let i = 0; i < count; i++) wy[i] = samples.w[i] * samples.y[i]
+// Event bookkeeping for minTransits = 2: the smallest and largest event number of each bin.
+interface EventSpan {
+	readonly first: Float64Array
+	readonly last: Float64Array
+	// Monotonic deques of bin indices for the sliding minimum of first and maximum of last.
+	readonly minQueue: Int32Array
+	readonly maxQueue: Int32Array
+}
+
+// Event bookkeeping for minTransits >= 3. Samples are in time order, so their event numbers never
+// decrease and get dense ids: 2d for the d-th distinct event, and for the wrap-around copy (the same
+// samples seen as the end of the previous event) the id of the previous event when it has samples, or a
+// fresh odd id 2d - 1 when it does not.
+interface EventIds {
+	// Dense id of each sample's event and of its wrap-around copy.
+	readonly id: Int32Array
+	readonly wrapId: Int32Array
+	// 0-based bin of each sample.
+	readonly bin: Int32Array
+	// Samples grouped by bin (time order inside a bin) and the first position of each 0-based bin, with
+	// binStart[bins] the sample count.
+	readonly order: Int32Array
+	readonly binStart: Int32Array
+	// Samples of each id inside the sliding window; all zero between windows.
+	readonly counter: Int32Array
+}
+
+// Folds the samples at every trial period into equal phase bins and finds the eligible box of each
+// duration and start bin with the largest log-likelihood improvement. Also returns the box geometry of
+// each period's best box, so that candidates are measured with exactly the box the search scored.
+function searchPeriods(samples: BoxLeastSquaresSamples, periods: Float64Array, binWidth: number, durations: Float64Array, minInTransitPoints: number, minTransits: number, capacity: number) {
+	const { t, w, wz, count, firstTime, scale } = samples
+	const size = capacity + 1
+	const phaseBins: PhaseBins = { wHi: new Float64Array(size), wLo: new Float64Array(size), yHi: new Float64Array(size), yLo: new Float64Array(size), sampleCount: new Int32Array(size), eligible: new Uint8Array(size) }
+	const span: EventSpan | undefined = minTransits === 2 ? { first: new Float64Array(size), last: new Float64Array(size), minQueue: new Int32Array(size), maxQueue: new Int32Array(size) } : undefined
+	const ids: EventIds | undefined = minTransits > 2 ? { id: new Int32Array(count), wrapId: new Int32Array(count), bin: new Int32Array(count), order: new Int32Array(count), binStart: new Int32Array(size), counter: new Int32Array(2 * count + 2) } : undefined
+	const { wHi, wLo, yHi, yLo, sampleCount, eligible } = phaseBins
+	const lengths = new Int32Array(durations.length)
 
 	const power = new Float64Array(periods.length)
 	const snr = new Float64Array(periods.length)
 	const depth = new Float64Array(periods.length).fill(Number.NaN)
 	const duration = new Float64Array(periods.length).fill(Number.NaN)
 	const epoch = new Float64Array(periods.length).fill(Number.NaN)
-	const phases = new Float64Array(periods.length).fill(Number.NaN)
+	const boxes: (PeriodBox | undefined)[] = new Array(periods.length)
 
 	for (let p = 0; p < periods.length; p++) {
 		const period = periods[p]
 		const bins = Math.ceil(period / binWidth)
-		foldSamples(samples.t, samples.w, wy, period, bins, binWidth, pad, workspace)
+		const width = period / bins
+		const boxCount = durationBins(durations, width, lengths)
+
+		foldSamples(t, w, wz, period, bins, lengths[boxCount - 1], phaseBins, span, ids)
 
 		let best = 0
-		let bestDepth = Number.NaN
+		let bestDepth = 0
 		let bestStart = 0
-		let bestBins = 0
+		let bestLength = 0
 
-		for (let d = 0; d < durationBins.length; d++) {
-			const k = durationBins[d]
+		for (let d = 0; d < boxCount; d++) {
+			const k = lengths[d]
+
+			if (span !== undefined) markTwoEventWindows(span, bins, k, eligible)
+			else if (ids !== undefined) markEventWindows(ids, bins, k, minTransits, eligible)
 
 			for (let start = 0; start < bins; start++) {
-				const inCount = sampleCount[start + k] - sampleCount[start]
-				if (inCount < minInTransitPoints || inCount >= count) continue
+				const end = start + k
+				const inCount = sampleCount[end] - sampleCount[start]
+				if (inCount < minInTransitPoints || inCount >= count || (minTransits > 1 && eligible[start] === 0)) continue
 
-				const wIn = sumWeight[start + k] - sumWeight[start]
-				const yIn = sumY[start + k] - sumY[start]
-				const wOut = sumW - wIn
-				const boxDepth = (sumWY - yIn) / wOut - yIn / wIn
+				const wIn = wHi[end] - wHi[start] + (wLo[end] - wLo[start])
+				const yIn = yHi[end] - yHi[start] + (yLo[end] - yLo[start])
+				let wOut: number
+				let yOut: number
+
+				// The out-of-transit bins are a prefix difference too, never the total minus the box, which
+				// would cancel when the box holds almost all the weight.
+				if (end <= bins) {
+					wOut = wHi[start] + wLo[start] + (wHi[bins] - wHi[end] + (wLo[bins] - wLo[end]))
+					yOut = yHi[start] + yLo[start] + (yHi[bins] - yHi[end] + (yLo[bins] - yLo[end]))
+				} else {
+					const wrapped = end - bins
+					wOut = wHi[start] - wHi[wrapped] + (wLo[start] - wLo[wrapped])
+					yOut = yHi[start] - yHi[wrapped] + (yLo[start] - yLo[wrapped])
+				}
+
+				const boxDepth = yOut / wOut - yIn / wIn
 				if (!(boxDepth > 0)) continue
 
-				const boxPower = (0.5 * boxDepth * boxDepth * wIn * wOut) / sumW
+				const boxPower = (0.5 * boxDepth * boxDepth * wIn * wOut) / (wIn + wOut)
 
-				if (boxPower > best && (!needTwoEvents || spansTwoEvents(firstEvent, lastEvent, start, k))) {
+				if (boxPower > best) {
 					best = boxPower
 					bestDepth = boxDepth
 					bestStart = start
-					bestBins = k
+					bestLength = k
 				}
 			}
 		}
 
 		if (best > 0) {
-			let mid = (bestStart + 0.5 * bestBins) * binWidth
+			let mid = (bestStart + 0.5 * bestLength) * width
 			if (mid >= period) mid -= period
 			power[p] = best
 			snr[p] = Math.sqrt(2 * best)
-			depth[p] = bestDepth
-			duration[p] = bestBins * binWidth
+			depth[p] = bestDepth * scale
+			duration[p] = bestLength * width
 			epoch[p] = firstTime + mid
-			phases[p] = mid
+			boxes[p] = { bins, start: bestStart, length: bestLength }
 		}
 	}
 
 	const periodogram: BoxLeastSquaresPeriodogram = { periods, power, snr, depth, duration, epoch }
-	return { periodogram, phases }
+	return { periodogram, boxes }
 }
 
-// Accumulates the samples folded at period into bins phase bins of binWidth (the last one possibly
-// narrower) and converts the sums to 1-based prefix sums. The first pad bins are repeated after the last
-// one, with their event numbers lowered by one, so a box can straddle phase 0 and still count the samples
-// of one event as one event; pad must not exceed bins.
-function foldSamples(t: Float64Array, w: Float64Array, wy: Float64Array, period: number, bins: number, binWidth: number, pad: number, workspace: PhaseBins) {
-	const { sumY, sumWeight, sampleCount, firstEvent, lastEvent } = workspace
+// Folds the time-sorted samples at period into bins equal phase bins and builds the compensated prefix
+// sums. The first pad bins are repeated after the last one, as the start of the next period seen from the
+// end of this one, so a box can straddle phase 0; pad must not exceed bins. Fills the event bookkeeping
+// that the minTransits constraint needs.
+function foldSamples(t: Float64Array, w: Float64Array, wz: Float64Array, period: number, bins: number, pad: number, phaseBins: PhaseBins, span: EventSpan | undefined, ids: EventIds | undefined) {
+	const { wHi, wLo, yHi, yLo, sampleCount } = phaseBins
+	const width = period / bins
 	const size = bins + pad
 
-	sumY.fill(0, 0, size + 1)
-	sumWeight.fill(0, 0, size + 1)
+	wHi.fill(0, 0, size + 1)
+	wLo.fill(0, 0, size + 1)
+	yHi.fill(0, 0, size + 1)
+	yLo.fill(0, 0, size + 1)
 	sampleCount.fill(0, 0, size + 1)
-	firstEvent.fill(Infinity, 0, size + 1)
-	lastEvent.fill(-Infinity, 0, size + 1)
+
+	if (span !== undefined) {
+		span.first.fill(Infinity, 0, size + 1)
+		span.last.fill(-Infinity, 0, size + 1)
+	}
+
+	let previousEvent = Number.NaN
+	let dense = 0
+	let wrapId = 0
 
 	for (let i = 0; i < t.length; i++) {
 		let event = Math.floor(t[i] / period)
@@ -504,49 +597,132 @@ function foldSamples(t: Float64Array, w: Float64Array, wy: Float64Array, period:
 		if (phase >= period) {
 			phase -= period
 			event++
+		} else if (phase < 0) {
+			phase += period
+			event--
 		}
 
-		const bin = Math.min(Math.floor(phase / binWidth), bins - 1) + 1
-		sumY[bin] += wy[i]
-		sumWeight[bin] += w[i]
+		const bin = Math.min(Math.floor(phase / width), bins - 1) + 1
+		wHi[bin] += w[i]
+		yHi[bin] += wz[i]
 		sampleCount[bin]++
-		if (event < firstEvent[bin]) firstEvent[bin] = event
-		if (event > lastEvent[bin]) lastEvent[bin] = event
+
+		if (span !== undefined) {
+			if (event < span.first[bin]) span.first[bin] = event
+			if (event > span.last[bin]) span.last[bin] = event
+		} else if (ids !== undefined) {
+			if (event !== previousEvent) {
+				dense++
+				wrapId = event === previousEvent + 1 ? 2 * (dense - 1) : 2 * dense - 1
+				previousEvent = event
+			}
+
+			ids.id[i] = 2 * dense
+			ids.wrapId[i] = wrapId
+			ids.bin[i] = bin - 1
+		}
+	}
+
+	if (ids !== undefined) {
+		// Counting sort of the samples by bin, keeping time order inside a bin.
+		const { binStart, order, bin } = ids
+		binStart[0] = 0
+		for (let j = 1; j <= bins; j++) binStart[j] = binStart[j - 1] + sampleCount[j]
+		for (let i = 0; i < t.length; i++) order[binStart[bin[i]]++] = i
+		for (let j = bins; j > 0; j--) binStart[j] = binStart[j - 1]
+		binStart[0] = 0
 	}
 
 	for (let m = 1; m <= pad; m++) {
 		const j = bins + m
-		sumY[j] = sumY[m]
-		sumWeight[j] = sumWeight[m]
+		wHi[j] = wHi[m]
+		yHi[j] = yHi[m]
 		sampleCount[j] = sampleCount[m]
-		firstEvent[j] = firstEvent[m] - 1
-		lastEvent[j] = lastEvent[m] - 1
+
+		if (span !== undefined) {
+			span.first[j] = span.first[m] - 1
+			span.last[j] = span.last[m] - 1
+		}
 	}
 
 	for (let j = 1; j <= size; j++) {
-		sumY[j] += sumY[j - 1]
-		sumWeight[j] += sumWeight[j - 1]
+		const wSum = wHi[j - 1] + wHi[j]
+		const ySum = yHi[j - 1] + yHi[j]
+		wLo[j] = wLo[j - 1] + sumError(wHi[j - 1], wHi[j], wSum)
+		yLo[j] = yLo[j - 1] + sumError(yHi[j - 1], yHi[j], ySum)
+		wHi[j] = wSum
+		yHi[j] = ySum
 		sampleCount[j] += sampleCount[j - 1]
 	}
 }
 
-// Whether the bins start + 1 .. start + k hold samples of at least two distinct events.
-function spansTwoEvents(firstEvent: Float64Array, lastEvent: Float64Array, start: number, k: number) {
-	let first = Infinity
-	let last = -Infinity
+// Marks the boxes of k bins starting at each 0-based bin whose samples come from at least two events:
+// the largest event number of the window exceeds the smallest. Monotonic deques give the sliding extrema
+// in O(bins + k).
+function markTwoEventWindows(span: EventSpan, bins: number, k: number, eligible: Uint8Array) {
+	const { first, last, minQueue, maxQueue } = span
+	let minHead = 0
+	let minTail = 0
+	let maxHead = 0
+	let maxTail = 0
 
-	for (let j = start + 1; j <= start + k; j++) {
-		if (firstEvent[j] < first) first = firstEvent[j]
-		if (lastEvent[j] > last) last = lastEvent[j]
+	// The window of start covers the bins start + 1 .. start + k.
+	for (let j = 1; j < bins + k; j++) {
+		while (minTail > minHead && first[minQueue[minTail - 1]] >= first[j]) minTail--
+		minQueue[minTail++] = j
+		while (maxTail > maxHead && last[maxQueue[maxTail - 1]] <= last[j]) maxTail--
+		maxQueue[maxTail++] = j
+
+		const start = j - k
+		if (start < 0) continue
+
+		while (minQueue[minHead] <= start) minHead++
+		while (maxQueue[maxHead] <= start) maxHead++
+		eligible[start] = last[maxQueue[maxHead]] > first[minQueue[minHead]] ? 1 : 0
 	}
-
-	return last > first
 }
 
-// Picks the periodogram peaks by decreasing power, measures each exactly, rejects those failing the
-// event and sample constraints, merges weaker peaks within the width of an examined one, and marks
-// period aliases. phases are the mid-transit phases relative to firstTime.
-function rankCandidates(samples: BoxLeastSquaresSamples, periodogram: BoxLeastSquaresPeriodogram, phases: Float64Array, binWidth: number, minTransits: number, minInTransitPoints: number, maxCandidates: number, diagnosticSigma: number) {
+// Marks the boxes of k bins starting at each 0-based bin whose samples come from at least minTransits
+// distinct events, with a sliding count of the samples of every event id. Each (bin, event) pair enters
+// and leaves the window once, so the work is O(samples + bins + k); the counters are zero again on return.
+function markEventWindows(ids: EventIds, bins: number, k: number, minTransits: number, eligible: Uint8Array) {
+	let distinct = 0
+
+	// The window of start covers the bins start + 1 .. start + k.
+	for (let j = 1; j <= k; j++) distinct += updateWindow(ids, bins, j, 1)
+
+	for (let start = 0; start < bins; start++) {
+		eligible[start] = distinct >= minTransits ? 1 : 0
+		distinct += updateWindow(ids, bins, start + 1, -1)
+		distinct += updateWindow(ids, bins, start + k + 1, 1)
+	}
+
+	for (let j = bins + 1; j <= bins + k; j++) updateWindow(ids, bins, j, -1)
+}
+
+// Adds (delta 1) or removes (delta -1) the samples of the 1-based bin j, a wrap-around copy when j > bins,
+// to the sliding counters, and returns the change in the number of distinct ids.
+function updateWindow(ids: EventIds, bins: number, j: number, delta: number) {
+	const { order, binStart, counter } = ids
+	const wrap = j > bins
+	const bin = (wrap ? j - bins : j) - 1
+	const source = wrap ? ids.wrapId : ids.id
+	let change = 0
+
+	for (let p = binStart[bin]; p < binStart[bin + 1]; p++) {
+		const id = source[order[p]]
+		const before = counter[id]
+		counter[id] = before + delta
+		if (before === 0) change++
+		else if (before + delta === 0) change--
+	}
+
+	return change
+}
+
+// Picks the periodogram peaks by decreasing snr, measures each with its box, merges weaker peaks within
+// the width of an examined one, and marks period aliases.
+function rankCandidates(samples: BoxLeastSquaresSamples, periodogram: BoxLeastSquaresPeriodogram, boxes: readonly (PeriodBox | undefined)[], maxCandidates: number, diagnosticSigma: number) {
 	const { periods, power, snr, duration } = periodogram
 	const peaks: number[] = []
 	let valid = 0
@@ -560,21 +736,23 @@ function rankCandidates(samples: BoxLeastSquaresSamples, periodogram: BoxLeastSq
 		sum += snr[p]
 		sumSquares += snr[p] * snr[p]
 
-		const left = p === 0 ? 0 : power[p - 1]
-		const right = p === periods.length - 1 ? 0 : power[p + 1]
-		if (power[p] > left && power[p] >= right) peaks.push(p)
+		const left = p === 0 ? 0 : snr[p - 1]
+		const right = p === periods.length - 1 ? 0 : snr[p + 1]
+		if (snr[p] > left && snr[p] >= right) peaks.push(p)
 	}
 
-	peaks.sort((a, b) => power[b] - power[a] || a - b)
+	peaks.sort((a, b) => snr[b] - snr[a] || a - b)
 
 	const snrMean = valid > 0 ? sum / valid : 0
 	const snrDeviation = valid > 1 ? Math.sqrt(Math.max(0, (sumSquares - valid * snrMean * snrMean) / (valid - 1))) : 0
 	// Periods inside the width of an examined peak; each period is claimed once, so merging is linear.
 	const claimed = new Uint8Array(periods.length)
 	const accepted: { candidate: MeasuredCandidate; sde?: number }[] = []
-	let rejectedCandidateCount = 0
+	let measured = 0
 
-	for (let i = 0; i < peaks.length && accepted.length < maxCandidates; i++) {
+	// The measurement repeats the scored box, so it fails only when rounding leaves no positive depth; the
+	// bound on measurements keeps even that case within the work estimate.
+	for (let i = 0; i < peaks.length && accepted.length < maxCandidates && measured < 2 * maxCandidates; i++) {
 		const p = peaks[i]
 		if (claimed[p]) continue
 
@@ -584,17 +762,12 @@ function rankCandidates(samples: BoxLeastSquaresSamples, periodogram: BoxLeastSq
 		for (let q = p - 1; q >= 0 && !claimed[q] && samePeak(period, periods[q], boxDuration, samples.baseline); q--) claimed[q] = 1
 		for (let q = p + 1; q < periods.length && !claimed[q] && samePeak(period, periods[q], boxDuration, samples.baseline); q++) claimed[q] = 1
 
-		const candidate = measureCandidate(samples, period, phases[p], boxDuration, binWidth, diagnosticSigma)
-
-		if (candidate === undefined || candidate.transitCount < minTransits || candidate.inTransitCount < minInTransitPoints) {
-			rejectedCandidateCount++
-			continue
-		}
-
-		accepted.push({ candidate, sde: snrDeviation > 0 ? (snr[p] - snrMean) / snrDeviation : undefined })
+		measured++
+		const candidate = measureCandidate(samples, period, boxes[p]!, diagnosticSigma)
+		if (candidate !== undefined) accepted.push({ candidate, sde: snrDeviation > 0 ? (snr[p] - snrMean) / snrDeviation : undefined })
 	}
 
-	accepted.sort((a, b) => b.candidate.power - a.candidate.power || a.candidate.period - b.candidate.period)
+	accepted.sort((a, b) => b.candidate.snr - a.candidate.snr || a.candidate.period - b.candidate.period)
 
 	const candidates: BoxLeastSquaresCandidate[] = []
 
@@ -614,7 +787,7 @@ function rankCandidates(samples: BoxLeastSquaresSamples, periodogram: BoxLeastSq
 		candidates.push({ ...candidate, sde, aliasOf, aliasRatio })
 	}
 
-	return { candidates, rejectedCandidateCount }
+	return candidates
 }
 
 // Whether two periods belong to the same periodogram peak: their phase drift across the baseline,
@@ -643,42 +816,53 @@ function greatestCommonDivisor(a: number, b: number) {
 }
 
 // Signed snr of the two-level box with in-transit sums (wIn, yIn) and out-of-transit sums (wOut, yOut),
-// using centered fluxes; undefined when either side is empty.
+// in normalized weights and fluxes; undefined when either side has no weight.
 function boxSnr(wIn: number, yIn: number, wOut: number, yOut: number) {
 	if (!(wIn > 0) || !(wOut > 0)) return undefined
 	return (yOut / wOut - yIn / wIn) / Math.sqrt(1 / wIn + 1 / wOut)
 }
 
-// In-transit sums of one event.
-interface EventSums {
+// Weighted sums of a group of samples, in normalized weights and fluxes.
+interface GroupSums {
 	w: number
 	y: number
 	n: number
 }
 
-// Measures the box of period, relative epoch (from firstTime) and duration exactly from the samples, with
-// its diagnostics. Returns undefined when the box has no in-transit or no out-of-transit sample, or a
-// non-positive depth.
-function measureCandidate(samples: BoxLeastSquaresSamples, period: number, epoch: number, duration: number, binWidth: number, diagnosticSigma: number): MeasuredCandidate | undefined {
-	const { t, y, w, count, sumW, sumWY, mean, firstTime, baseline } = samples
-	const start = epoch - 0.5 * duration
-	const half = 0.5 * period
-	const coverageBins = Math.max(1, Math.round(duration / binWidth))
-	const covered = new Uint8Array(coverageBins)
-	const events = new Map<number, EventSums>()
-	let wIn = 0
-	let yIn = 0
-	let inCount = 0
-	let wSecondary = 0
-	let ySecondary = 0
-	let secondaryCount = 0
-	const wParity = [0, 0]
-	const yParity = [0, 0]
+// Adds sample i to a group.
+function addToGroup(group: GroupSums, samples: BoxLeastSquaresSamples, i: number) {
+	group.w += samples.w[i]
+	group.y += samples.wz[i]
+	group.n++
+}
+
+// Measures the box of the search, in the same phase bins, from the samples with its diagnostics. Every
+// group (in transit, by parity and by event, half a period away and the rest) is accumulated directly, so
+// no level is a difference of nearly equal sums. Returns undefined when the box has no in-transit or no
+// out-of-transit sample, or a non-positive depth.
+function measureCandidate(samples: BoxLeastSquaresSamples, period: number, box: PeriodBox, diagnosticSigma: number): MeasuredCandidate | undefined {
+	const { t, count, mean, scale, firstTime, baseline } = samples
+	const { bins, start, length } = box
+	const width = period / bins
+	const half = Math.floor(bins / 2)
+	let mid = (start + 0.5 * length) * width
+	// Events are numbered from the cycle of the box start; a mid-transit past the period belongs to the next.
+	const shift = mid >= period ? 1 : 0
+	mid -= shift * period
+
+	const covered = new Uint8Array(length)
+	const events = new Map<number, GroupSums>()
+	const inside: GroupSums = { w: 0, y: 0, n: 0 }
+	const secondary: GroupSums = { w: 0, y: 0, n: 0 }
+	const rest: GroupSums = { w: 0, y: 0, n: 0 }
+	const parity: GroupSums[] = [
+		{ w: 0, y: 0, n: 0 },
+		{ w: 0, y: 0, n: 0 },
+	]
 
 	for (let i = 0; i < count; i++) {
-		const r = t[i] - start
-		let event = Math.floor(r / period)
-		let phase = r - event * period
+		let event = Math.floor(t[i] / period)
+		let phase = t[i] - event * period
 
 		if (phase >= period) {
 			phase -= period
@@ -688,43 +872,46 @@ function measureCandidate(samples: BoxLeastSquaresSamples, period: number, epoch
 			event--
 		}
 
-		if (phase < duration) {
-			const parity = ((event % 2) + 2) % 2
-			wIn += w[i]
-			yIn += w[i] * y[i]
-			inCount++
-			wParity[parity] += w[i]
-			yParity[parity] += w[i] * y[i]
-			covered[Math.min(Math.floor(phase / binWidth), coverageBins - 1)] = 1
+		let offset = Math.min(Math.floor(phase / width), bins - 1) - start
 
-			const sums = events.get(event)
+		// A bin before the start is inside the box only as the wrapped end of the previous cycle's box.
+		if (offset < 0) {
+			offset += bins
+			event--
+		}
 
-			if (sums === undefined) {
-				events.set(event, { w: w[i], y: w[i] * y[i], n: 1 })
-			} else {
-				sums.w += w[i]
-				sums.y += w[i] * y[i]
-				sums.n++
+		if (offset < length) {
+			const index = event + shift
+			addToGroup(inside, samples, i)
+			addToGroup(parity[((index % 2) + 2) % 2], samples, i)
+			covered[offset] = 1
+
+			let group = events.get(index)
+
+			if (group === undefined) {
+				group = { w: 0, y: 0, n: 0 }
+				events.set(index, group)
 			}
-		} else if (phase >= half && phase < half + duration) {
-			wSecondary += w[i]
-			ySecondary += w[i] * y[i]
-			secondaryCount++
+
+			addToGroup(group, samples, i)
+		} else {
+			const opposite = offset >= half ? offset - half : offset - half + bins
+			addToGroup(opposite < length ? secondary : rest, samples, i)
 		}
 	}
 
-	if (inCount === 0 || inCount === count) return undefined
+	if (inside.n === 0 || inside.n === count) return undefined
 
-	const wOut = sumW - wIn
-	const yOut = sumWY - yIn
+	const wOut = secondary.w + rest.w
+	const yOut = secondary.y + rest.y
 	const outLevel = yOut / wOut
-	const inLevel = yIn / wIn
+	const inLevel = inside.y / inside.w
 	const depth = outLevel - inLevel
 
 	if (!(depth > 0)) return undefined
 
-	const depthError = Math.sqrt(1 / wIn + 1 / wOut)
-	const snr = depth / depthError
+	const depthSigma = Math.sqrt(1 / inside.w + 1 / wOut)
+	const snr = depth / depthSigma
 	const flags: BoxLeastSquaresFlag[] = []
 
 	let evenDepth: number | undefined
@@ -733,39 +920,39 @@ function measureCandidate(samples: BoxLeastSquaresSamples, period: number, epoch
 	let oddDepthError: number | undefined
 	let oddEvenSigma: number | undefined
 
-	if (wParity[0] > 0) {
-		evenDepth = outLevel - yParity[0] / wParity[0]
-		evenDepthError = Math.sqrt(1 / wParity[0] + 1 / wOut)
+	if (parity[0].n > 0) {
+		evenDepth = (outLevel - parity[0].y / parity[0].w) * scale
+		evenDepthError = Math.sqrt(1 / parity[0].w + 1 / wOut) * scale
 	}
 
-	if (wParity[1] > 0) {
-		oddDepth = outLevel - yParity[1] / wParity[1]
-		oddDepthError = Math.sqrt(1 / wParity[1] + 1 / wOut)
+	if (parity[1].n > 0) {
+		oddDepth = (outLevel - parity[1].y / parity[1].w) * scale
+		oddDepthError = Math.sqrt(1 / parity[1].w + 1 / wOut) * scale
 	}
 
-	if (evenDepth !== undefined && oddDepth !== undefined) {
+	if (parity[0].n > 0 && parity[1].n > 0) {
 		// The common out-of-transit level cancels in the difference.
-		oddEvenSigma = Math.abs(evenDepth - oddDepth) / Math.sqrt(1 / wParity[0] + 1 / wParity[1])
+		oddEvenSigma = Math.abs(parity[1].y / parity[1].w - parity[0].y / parity[0].w) / Math.sqrt(1 / parity[0].w + 1 / parity[1].w)
 		if (oddEvenSigma > diagnosticSigma) flags.push('oddEvenMismatch')
 	}
 
 	let secondaryDepth: number | undefined
 	let secondaryDepthError: number | undefined
 
-	if (secondaryCount > 0 && inCount + secondaryCount < count) {
-		const wRest = wOut - wSecondary
-		secondaryDepth = (yOut - ySecondary) / wRest - ySecondary / wSecondary
-		secondaryDepthError = Math.sqrt(1 / wSecondary + 1 / wRest)
-		if (secondaryDepth > diagnosticSigma * secondaryDepthError) flags.push('secondaryEclipse')
+	if (secondary.n > 0 && rest.n > 0) {
+		secondaryDepth = (rest.y / rest.w - secondary.y / secondary.w) * scale
+		secondaryDepthError = Math.sqrt(1 / secondary.w + 1 / rest.w) * scale
+		if (boxSnr(secondary.w, secondary.y, rest.w, rest.y)! > diagnosticSigma) flags.push('secondaryEclipse')
 	}
 
-	const halfPeriodSnr = inCount + secondaryCount < count ? boxSnr(wIn + wSecondary, yIn + ySecondary, wOut - wSecondary, yOut - ySecondary) : undefined
+	const halfPeriodSnr = rest.n > 0 ? boxSnr(inside.w + secondary.w, inside.y + secondary.y, rest.w, rest.y) : undefined
 	if (halfPeriodSnr !== undefined && halfPeriodSnr >= snr) flags.push('halfPeriodAlias')
 
 	let doublePeriodSnr: number | undefined
 
-	for (let parity = 0; parity < 2; parity++) {
-		const value = boxSnr(wParity[parity], yParity[parity], sumW - wParity[parity], sumWY - yParity[parity])
+	for (let p = 0; p < 2; p++) {
+		const other = parity[1 - p]
+		const value = parity[p].n > 0 ? boxSnr(parity[p].w, parity[p].y, wOut + other.w, yOut + other.y) : undefined
 		if (value !== undefined && (doublePeriodSnr === undefined || value > doublePeriodSnr)) doublePeriodSnr = value
 	}
 
@@ -773,48 +960,64 @@ function measureCandidate(samples: BoxLeastSquaresSamples, period: number, epoch
 
 	const indices = Array.from(events.keys()).sort((a, b) => a - b)
 	const eventList: BoxLeastSquaresEvent[] = new Array(indices.length)
-	let strongest: EventSums | undefined
+	let strongest = 0
 	let strongestSnr = -Infinity
 
 	for (let e = 0; e < indices.length; e++) {
 		const index = indices[e]
-		const sums = events.get(index)!
-		const eventDepth = outLevel - sums.y / sums.w
-		const eventDepthError = Math.sqrt(1 / sums.w + 1 / wOut)
-		const eventSnr = eventDepth / eventDepthError
-		eventList[e] = { index, time: firstTime + epoch + index * period, sampleCount: sums.n, depth: eventDepth, depthError: eventDepthError, snr: eventSnr }
+		const group = events.get(index)!
+		const eventDepth = outLevel - group.y / group.w
+		const eventSigma = Math.sqrt(1 / group.w + 1 / wOut)
+		const eventSnr = eventDepth / eventSigma
+		eventList[e] = { index, time: firstTime + mid + index * period, sampleCount: group.n, depth: eventDepth * scale, depthError: eventSigma * scale, snr: eventSnr }
 
 		if (eventSnr > strongestSnr) {
 			strongestSnr = eventSnr
-			strongest = sums
+			strongest = e
 		}
 	}
 
-	// The strongest event is dropped from the in-transit sums; the out-of-transit level stays the same.
-	const snrWithoutStrongestEvent = indices.length > 1 ? boxSnr(wIn - strongest!.w, yIn - strongest!.y, wOut, yOut) : undefined
+	let snrWithoutStrongestEvent: number | undefined
+
+	if (indices.length > 1) {
+		// The other events are summed again rather than subtracting the strongest from the total.
+		let wOthers = 0
+		let yOthers = 0
+
+		for (let e = 0; e < indices.length; e++) {
+			if (e === strongest) continue
+			const group = events.get(indices[e])!
+			wOthers += group.w
+			yOthers += group.y
+		}
+
+		snrWithoutStrongestEvent = boxSnr(wOthers, yOthers, wOut, yOut)
+	}
+
 	if (snrWithoutStrongestEvent === undefined || snrWithoutStrongestEvent < diagnosticSigma) flags.push('singleEventDominated')
 
 	let coveredBins = 0
-	for (let j = 0; j < coverageBins; j++) coveredBins += covered[j]
+	for (let j = 0; j < length; j++) coveredBins += covered[j]
 
-	// Events whose window [start + c * period, start + c * period + duration) overlaps [0, baseline].
-	const firstExpected = Math.floor((-start - duration) / period) + 1
-	const lastExpected = Math.floor((baseline - start) / period)
+	// Cycles c whose box [c * period + start * width, c * period + (start + length) * width) overlaps
+	// [0, baseline] in time relative to the first sample.
+	const firstExpected = Math.floor((-(start + length) * width) / period) + 1
+	const lastExpected = Math.floor((baseline - start * width) / period)
 
 	return {
 		period,
-		epoch: firstTime + epoch,
-		duration,
-		depth,
-		depthError,
+		epoch: firstTime + mid,
+		duration: length * width,
+		depth: depth * scale,
+		depthError: depthSigma * scale,
 		snr,
 		power: 0.5 * snr * snr,
-		inTransitLevel: mean + inLevel,
-		outOfTransitLevel: mean + outLevel,
-		inTransitCount: inCount,
+		inTransitLevel: mean + inLevel * scale,
+		outOfTransitLevel: mean + outLevel * scale,
+		inTransitCount: inside.n,
 		transitCount: indices.length,
 		expectedTransitCount: Math.max(0, lastExpected - firstExpected + 1),
-		coverage: coveredBins / coverageBins,
+		coverage: coveredBins / length,
 		evenDepth,
 		evenDepthError,
 		oddDepth,
