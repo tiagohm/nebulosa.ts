@@ -370,3 +370,110 @@ test('scheduling is deterministic and does not mutate its inputs', () => {
 	expectChronological(a)
 	expect(a.unscheduled).toEqual([])
 })
+
+// Pointing whose hour angle reaches 0 (the meridian at deg(-45) longitude) the given seconds after START.
+function crossingAfter(seconds: number): SchedulePointing {
+	return { rightAscension: normalizeAngle(greenwichApparentSiderealTime(START) + deg(-45) + SIDEREAL_DRIFT_RATE * seconds), declination: deg(20) }
+}
+
+test('a meridian crossed during the setup flips before the first frame', () => {
+	// The meridian is crossed 60 s after the start, while the 120 s setup is still running.
+	const pointing = crossingAfter(60)
+	const meridian = { longitude: deg(-45) }
+	const setups: ['focus' | 'slew' | 'filterChange', ScheduleOptions][] = [
+		['focus', { costs: { focus: 120, meridianFlip: 600 }, meridian, initial: { pointing } }],
+		['slew', { costs: { slewSettle: 120, meridianFlip: 600 }, meridian, initial: { pointing: M42 } }],
+		['filterChange', { costs: { filterChange: 120, meridianFlip: 600 }, meridian, initial: { pointing, filter: 'R' } }],
+	]
+
+	for (const [cost, options] of setups) {
+		const plan = scheduleSession([target('T', [{ id: 'T', exposure: 300, count: 1, filter: 'L' }], { pointing, windows: [windowOf(0, 1800)] })], START, END, { ...options, initial: { filter: 'L', ...options.initial } })
+		expect(plan.blocks).toHaveLength(1)
+		const [block] = plan.blocks
+		expect(offset(block.meridianFlip!)).toBeCloseTo(120, 6)
+		expect(offset(block.exposureStart)).toBeCloseTo(720, 6)
+		expect(offset(block.end)).toBeCloseTo(1020, 6)
+		expect(block.overhead.meridianFlip).toBe(600)
+		expect(block.overhead[cost]).toBe(120)
+		expect(block.overhead.total).toBe(720)
+		expect(block.flags).toContain('meridianFlip')
+		expectChronological(plan)
+	}
+
+	// The flip at the end of the setup also has to fit in the window.
+	const short = scheduleSession([target('T', [{ id: 'T', exposure: 300, count: 1 }], { pointing, windows: [windowOf(0, 1000)] })], START, END, setups[0][1])
+	expect(short.unscheduled[0].reason).toBe('windowTooShort')
+})
+
+test('the dither cadence continues across a meridian flip inside a chunk', () => {
+	// Four 600 s frames dithering after every third frame, crossing the meridian during the second frame:
+	// 2400 s of frames, one 15 s dither and one 300 s flip need 2715 s.
+	const pointing = crossingAfter(750)
+	const options: ScheduleOptions = { costs: { dither: 15, meridianFlip: 300 }, meridian: { longitude: deg(-45) }, initial: { pointing } }
+	const block = { id: 'B', exposure: 600, count: 4, ditherEvery: 3 }
+
+	const tight = scheduleSession([target('T', [block], { pointing, windows: [windowOf(0, 2700)] })], START, END, options)
+	expect(tight.blocks).toEqual([])
+	expect(tight.unscheduled[0].reason).toBe('windowTooShort')
+
+	for (const divisible of [false, true]) {
+		const plan = scheduleSession([target('T', [{ ...block, divisible }], { pointing, windows: [windowOf(0, 2715)] })], START, END, options)
+		expect(plan.blocks).toHaveLength(1)
+		const [chunk] = plan.blocks
+		expect(chunk.frames).toBe(4)
+		expect(chunk.overhead.dither).toBe(15)
+		expect(chunk.overhead.meridianFlip).toBe(300)
+		expect(offset(chunk.meridianFlip!)).toBeCloseTo(1200, 6)
+		expect(offset(chunk.end)).toBeCloseTo(2715, 6)
+	}
+
+	// Independent sequential model: frames, a dither after every m-th frame but the last, and the flip
+	// before the first frame that would start after the crossing.
+	for (const crossing of [150, 750, 1350]) {
+		for (const m of [1, 2, 3]) {
+			let time = 0
+			let flip: number | undefined
+			let dithers = 0
+
+			for (let k = 0; k < 4; k++) {
+				if (flip === undefined && time >= crossing) {
+					flip = time
+					time += 300
+				}
+
+				time += 600
+
+				if (k < 3 && (k + 1) % m === 0) {
+					time += 15
+					dithers++
+				}
+			}
+
+			const plan = scheduleSession([target('T', [{ ...block, ditherEvery: m }], { pointing: crossingAfter(crossing) })], START, END, { ...options, initial: { pointing: crossingAfter(crossing) } })
+			const [chunk] = plan.blocks
+			expect(chunk.frames).toBe(4)
+			expect(offset(chunk.meridianFlip!)).toBeCloseTo(flip!, 6)
+			expect(chunk.overhead.dither).toBe(dithers * 15)
+			expect(offset(chunk.end)).toBeCloseTo(time, 6)
+			expectChronological(plan)
+		}
+	}
+})
+
+test('frame fitting stays bounded by the requested frames for extremely short frames', () => {
+	// Without the bound, floor(28800 / 1e-12) exceeds 2^53, where n + 1 === n and the fit never ends.
+	const tiny = { id: 'X', exposure: 1e-12, count: 1 }
+	expect(scheduleSession([target('X', [tiny])], START, END).blocks[0].frames).toBe(1)
+	expect(scheduleSession([target('X', [{ ...tiny, ditherEvery: 2 }])], START, END, { costs: { dither: 1e-12 } }).blocks[0].frames).toBe(1)
+	expect(scheduleSession([target('X', [{ ...tiny, divisible: true }])], START, END).blocks[0].frames).toBe(1)
+
+	// The frames started before a distant meridian crossing are bounded the same way.
+	const pointing = crossingAfter(1800)
+	const flipping = scheduleSession([target('X', [{ ...tiny, count: 3 }], { pointing })], START, END, { meridian: { longitude: deg(-45) }, initial: { pointing } })
+	expect(flipping.blocks[0].frames).toBe(3)
+	expect(flipping.blocks[0].meridianFlip).toBeUndefined()
+
+	// A count beyond the integer precision of a double is fitted up to MAX_SAFE_INTEGER frames per chunk.
+	const huge = scheduleSession([target('X', [{ ...tiny, count: 2 ** 60, divisible: true }])], START, END)
+	expect(huge.blocks[0].frames).toBe(Number.MAX_SAFE_INTEGER)
+})

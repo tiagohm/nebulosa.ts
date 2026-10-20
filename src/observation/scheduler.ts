@@ -49,7 +49,8 @@ export interface ScheduleBlockRequest {
 	readonly count: number
 	// Filter name. Omitted keeps the filter wheel where it is.
 	readonly filter?: string
-	// Frames between dithers inside one scheduled chunk. Omitted or zero never dithers.
+	// Frames between dithers inside one scheduled chunk, counted across a meridian flip inside it. Omitted
+	// or zero never dithers.
 	readonly ditherEvery?: number
 	// Whether the frames may be split across several chunks. Defaults to false: all remaining frames
 	// must fit in one contiguous chunk or the block is not scheduled.
@@ -127,7 +128,8 @@ export interface ScheduleMeridianPolicy {
 	// East-positive geodetic longitude of the site, in radians.
 	readonly longitude: Angle
 	// Hour angle, in radians, at which a pre-flip block flips. Defaults to 0 (the meridian). The frame in
-	// progress at that hour angle is completed first, so leave margin for one exposure.
+	// progress at that hour angle, and any dither due after it, is completed first, so leave margin for one
+	// exposure; a threshold reached during the slew, filter change or focus flips before the first frame.
 	readonly flipAt?: Angle
 }
 
@@ -437,13 +439,20 @@ export function scheduleSession(targets: readonly ScheduleTarget[], start: Time,
 	}
 
 	// Number of dithers inside a run of n frames: one after every ditherEvery frames, none after the last.
+	// The cadence counts frames from the start of the chunk and continues across a flip inside it.
 	const ditherCount = (entry: Entry, n: number) => (entry.ditherEvery > 0 && n > 0 ? Math.floor((n - 1) / entry.ditherEvery) : 0)
 	// Duration of a run of n frames with readout and dithers, in seconds.
 	const framesDuration = (entry: Entry, n: number) => n * entry.cycle + ditherCount(entry, n) * ditherCost
+	// Start of frame k (0-based) relative to the first frame of a run without flip, in seconds: after k
+	// frames and every dither due after them, including one due right after frame k.
+	const frameStart = (entry: Entry, k: number) => k * entry.cycle + (entry.ditherEvery > 0 ? Math.floor(k / entry.ditherEvery) : 0) * ditherCost
 
-	// Largest frame count whose run fits in the available seconds.
-	const fit = (entry: Entry, available: number) => {
+	// Largest frame count, at most most, whose run fits in the available seconds. Capping at the requested
+	// frames bounds the work, and capping at MAX_SAFE_INTEGER keeps n + 1 distinct from n, so a tiny frame
+	// cycle in a long window cannot stall the off-by-one correction below.
+	const fit = (entry: Entry, available: number, most: number) => {
 		if (!(available >= -FIT_EPSILON)) return 0
+		const cap = Math.min(most, Number.MAX_SAFE_INTEGER)
 		const limit = available + FIT_EPSILON
 		const m = entry.ditherEvery
 		let n: number
@@ -457,18 +466,20 @@ export function scheduleSession(targets: readonly ScheduleTarget[], start: Time,
 			n = Math.floor(available / entry.cycle)
 		}
 
+		n = Math.max(0, Math.min(cap, n))
+
 		// The closed form may be off by one at floating-point boundaries.
-		while (framesDuration(entry, n + 1) <= limit) n++
+		while (n < cap && framesDuration(entry, n + 1) <= limit) n++
 		while (n > 0 && framesDuration(entry, n) > limit) n--
 		return n
 	}
 
-	// Number of frames whose exposure starts before an instant offset seconds after the first frame.
-	const framesStartedBefore = (entry: Entry, offset: number) => {
+	// Number of frames, at most most, whose exposure starts before an instant offset seconds after the
+	// first frame.
+	const framesStartedBefore = (entry: Entry, offset: number, most: number) => {
 		if (!(offset > 0)) return 0
-		const n = fit(entry, offset)
-		const nextStart = framesDuration(entry, n) + (entry.ditherEvery > 0 && n > 0 && n % entry.ditherEvery === 0 ? ditherCost : 0)
-		return nextStart < offset ? n + 1 : n
+		const n = fit(entry, offset, most)
+		return n < most && frameStart(entry, n) < offset ? n + 1 : n
 	}
 
 	// Frames of a block required in one chunk: all remaining ones unless the block is divisible.
@@ -516,21 +527,40 @@ export function scheduleSession(targets: readonly ScheduleTarget[], start: Time,
 
 			const focusNeeded = entry.sky && focusCost > 0 && (state.lastFocus === undefined || start - state.lastFocus >= focusInterval || (focusOnFilterChange && filterChanged))
 			const focus = focusNeeded ? focusCost : 0
-			const exposureStart = start + slew + meridianFlip + filterChange + focus
-			const available = Math.min(span.end, deadline) - exposureStart
+			const setupEnd = start + slew + meridianFlip + filterChange + focus
+			let exposureStart = setupEnd
+			let flipPending = false
+			let before = 0
 
-			// Frames exposed before the hour angle reaches the flip threshold; the rest follow the flip.
-			const flipping = meridian !== undefined && pointing !== undefined && !postFlip
-			const before = flipping ? framesStartedBefore(entry, (flipAt - hourAngleAt(exposureStart, pointing)) / SIDEREAL_DRIFT_RATE) : 0
-			let frames = Math.min(most, fit(entry, available))
+			if (meridian !== undefined && pointing !== undefined && !postFlip) {
+				// Seconds from the end of the setup until the hour angle reaches the flip threshold.
+				const untilFlip = (flipAt - hourAngleAt(setupEnd, pointing)) / SIDEREAL_DRIFT_RATE
+
+				if (untilFlip > 0) {
+					// Frames exposed before the threshold; the rest follow a flip inside the run.
+					flipPending = true
+					before = framesStartedBefore(entry, untilFlip, most)
+				} else {
+					// The threshold was reached during the slew, filter change or focus: flip before the first frame.
+					meridianFlip += flipCost
+					flip = setupEnd
+					exposureStart += flipCost
+					postFlip = true
+				}
+			}
+
+			const available = Math.min(span.end, deadline) - exposureStart
+			let frames = fit(entry, available, most)
 			let flipInRun = false
 
-			if (flipping && frames > before) {
-				const afterFlip = fit(entry, available - framesDuration(entry, before) - flipCost)
-				frames = Math.min(most, before + afterFlip)
+			if (flipPending && frames > before) {
+				// The flip replaces the start of frame before + 1, after any dither due there, and the dither
+				// cadence continues across it, so the run only grows by the flip time.
+				const withFlip = fit(entry, available - flipCost, most)
 
-				if (frames > before) {
-					flip = exposureStart + framesDuration(entry, before)
+				if (withFlip > before) {
+					frames = withFlip
+					flip = exposureStart + frameStart(entry, before)
 					flipInRun = true
 					meridianFlip += flipCost
 					postFlip = true
@@ -541,8 +571,8 @@ export function scheduleSession(targets: readonly ScheduleTarget[], start: Time,
 
 			if (frames < need) continue
 
-			const run = flipInRun ? framesDuration(entry, before) + flipCost + framesDuration(entry, frames - before) : framesDuration(entry, frames)
-			const dithers = flipInRun ? ditherCount(entry, before) + ditherCount(entry, frames - before) : ditherCount(entry, frames)
+			const run = framesDuration(entry, frames) + (flipInRun ? flipCost : 0)
+			const dithers = ditherCount(entry, frames)
 			const blockEnd = exposureStart + run
 			const value = target.priority * frames * entry.cycle
 
@@ -551,7 +581,7 @@ export function scheduleSession(targets: readonly ScheduleTarget[], start: Time,
 				pointing: pointing ?? state.pointing,
 				postFlip,
 				filter: block.filter ?? state.filter,
-				lastFocus: focusNeeded ? exposureStart : state.lastFocus,
+				lastFocus: focusNeeded ? setupEnd : state.lastFocus,
 			}
 
 			return { entry, start, exposureStart, end: blockEnd, frames, flip, slew, filterChange, changedFilter: filterChanged, focus, meridianFlip, readout: frames * readout, dither: dithers * ditherCost, unknownPointing, value, after }
@@ -572,7 +602,7 @@ export function scheduleSession(targets: readonly ScheduleTarget[], start: Time,
 
 		for (const span of entry.allowed) {
 			if (span.end <= state.time) continue
-			const fitting = fit(entry, span.end - Math.max(span.start, state.time))
+			const fitting = fit(entry, span.end - Math.max(span.start, state.time), entry.remaining)
 			if (fitting >= need) frames += fitting
 			if (frames >= entry.remaining) break
 		}
