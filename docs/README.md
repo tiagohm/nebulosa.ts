@@ -8952,6 +8952,56 @@ flat.raw.fill(0.3)
 console.log(adf(flat)) // [0.5624999999999999, 0, 1]
 ```
 
+`autoStf(image, preset?, options?)` from `imaging/processing/stf.presets` picks the parameters by a named profile and returns the same readonly `[midtone, shadow, highlight]` tuple for `stf`, without changing the image; apply it to a display copy, and estimate again from the original rather than from a frame that was already stretched. The coefficients of every profile are in `AUTO_STF_PRESETS` and are starting values to be calibrated, not values of another program. `'low'` (`meanBackground` 0.13, `clippingPoint` -3.5), `'medium'` (the default, exactly `adf` with its defaults) and `'high'` (0.35, -2) are `adf` with those coefficients, for sky frames: a stronger profile lifts the background and clips more of the shadows, although for a bright frame `adf` takes its mirrored branch and the order is no longer guaranteed. `'moon'` and `'planet'` do not use the median and the deviation; they take three quantiles of the histogram (`black`, `pivot` and `white` probabilities of 0.01, 0.5 and 0.995 for the Moon, 0.02, 0.55 and 0.998 for a planet) as the shadow, a pivot and the highlight, and solve the midtone so that `stf` sends the pivot exactly to a `target` level (0.5 and 0.45): with `u = (pivot - shadow) / (highlight - shadow)` the midtone is `(target - 1) u / ((2 target - 1) u - target)`. They assume the sampled pixels mostly belong to the target, so pass an `area` around the disk or a mask of the sky: over a whole frame of black sky the shadow and the pivot fall into the empty bin. The quantiles are histogram estimates interpolated inside a bin, exact only to the bin width; when no pixel is accepted, when the `black` and `white` quantiles fall in the same bin (a constant frame, or a nearly constant one with a few outliers, where the interpolation would invent a spread) or when the anchors collapse (typically a pivot in the saturated top bin) the identity `[0.5, 0, 1]` is returned. The `options` are the `channel`, `area`, `bits` (depth or reusable bin buffer) and `sigmaClip` (one byte per pixel, nonzero excluded, for example a hot pixel mask) of [Image Statistics](#image-statistics); a color image is measured through its grayscale reduction unless a `channel` is given, so one linked curve serves the three channels, and a raw CFA mosaic is measured as a single mono plane that mixes its filter phases.
+
+```ts
+import type { Image } from 'nebulosa/src/imaging/model/types'
+import { stf } from 'nebulosa/src/imaging/processing/stf'
+import { AUTO_STF_PRESETS, autoStf } from 'nebulosa/src/imaging/processing/stf.presets'
+
+let seed = 11
+const noise = () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return (seed / 0xffffffff - 0.5) * 0.01
+}
+
+const width = 64
+const height = 64
+const frame = (fill: (x: number, y: number) => number): Image => {
+	const raw = new Float64Array(width * height)
+	for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) raw[y * width + x] = fill(x, y)
+	return { header: {}, raw, metadata: { width, height, channels: 1, pixelCount: width * height, stride: width, strideInBytes: width * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+}
+
+// A faint sky of 0.02: the sky profiles are the adaptive display function with fixed coefficients ('medium' is adf(sky)).
+const sky = frame(() => 0.02 + noise())
+console.log(autoStf(sky, 'low')) // [0.07940661529550432, 0.007369418753920838, 1]
+console.log(autoStf(sky)) // [0.02993016484327826, 0.009914379895179092, 1]
+console.log(autoStf(sky, 'high')) // [0.013420233063850009, 0.012822906913759952, 1]
+
+// A bright disk of radius 20 over black sky, measured inside a region around the disk: the median of the region is sent to 0.5.
+const moon = frame((x, y) => ((x - 32) ** 2 + (y - 32) ** 2 <= 400 ? 0.5 + 0.3 * Math.sin(x / 3) * Math.cos(y / 4) : 0))
+const area = { left: 18, top: 18, right: 46, bottom: 46 }
+const [midtone, shadow, highlight] = autoStf(moon, 'moon', { area })
+console.log(midtone, shadow, highlight, AUTO_STF_PRESETS.moon) // 0.4982231836796671 0.20974151216906997 0.7945951781490806 { strategy: 'quantile', black: 0.01, pivot: 0.5, white: 0.995, target: 0.5 }
+
+// Apply the parameters to a display copy; the source frame keeps its samples.
+const display = stf({ ...moon, raw: moon.raw.slice() }, midtone, shadow, highlight)
+console.log(display.raw[32 * width + 32], moon.raw[32 * width + 32]) // 0.5686700207061692 0.541310184384882
+
+// Without the region the black sky dominates the low quantiles.
+console.log(autoStf(moon, 'planet')) // [0.00001794733985386983, 4.403025973150303e-7, 0.7945953765163652]
+
+// A constant frame, or a mask that rejects every pixel, gives the identity.
+console.log(
+	autoStf(
+		frame(() => 0.4),
+		'moon',
+	),
+	autoStf(moon, 'moon', { sigmaClip: new Uint8Array(width * height).fill(1) }),
+) // [0.5, 0, 1] [0.5, 0, 1]
+```
+
 ### Drizzle Integration
 
 Drizzle reconstructs a frame onto a finer output grid by depositing each input pixel as a shrunken square drop, whose area overlapping every output cell is the weight of its contribution, instead of interpolating the frame; this avoids the correlated noise of resampling and, with a dithered stack, recovers resolution (the algorithm of Fruchter and Hook, arXiv astro-ph/9808087). The module `imaging/processing/drizzle` has the primitives, which `stackFrames` and `LiveStacker` use for their `'drizzle'` and `'cfaDrizzle'` reconstruction (see [Image Stacking](#image-stacking) and [Live Stacking](#live-stacking), which take `drizzle: { scale, pixfrac, maxMemoryBytes }`). Coordinates are zero-based pixel centers, x to the right and y down. `createDrizzleAccumulator(width, height, channels, cfa, scale, countCoverage, exposeMaps, sampleBytes, maxMemoryBytes)` allocates the fixed output grid (the reference size times `scale`, rounded, so the effective `scaleX` and `scaleY` can differ slightly from `scale`) with `sum`, the Float64 sums of the deposited samples, and `weights`, the dimensionless denominators; the mean of a pixel is `sum / weights`. `channels` is 1 or 3; `cfa` routes the photosites of a raw mosaic to RGB without interpolation and keeps one denominator for each color; `countCoverage` adds the per-frame `coverage` counts. The allocation is checked against `maxMemoryBytes` (the peak of `drizzleMemoryBytes(pixels, channels, weightChannels, countCoverage, exposeMaps, sampleBytes)`, in bytes, which includes one result of `sampleBytes` 4 or 8) and a `RangeError` is thrown before anything is allocated.
