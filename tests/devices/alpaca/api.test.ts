@@ -690,7 +690,7 @@ describe('telescope', () => {
 	test('canMoveAxis', async () => {
 		expectOk(await api.telescope.canMoveAxis(ID, AlpacaTelescopeAxis.PRIMARY), true)
 		expectOk(await api.telescope.canMoveAxis(ID, AlpacaTelescopeAxis.SECONDARY), true)
-		expectOk(await api.telescope.canMoveAxis(ID, AlpacaTelescopeAxis.TERTIARY), true)
+		expectOk(await api.telescope.canMoveAxis(ID, AlpacaTelescopeAxis.TERTIARY), false)
 	})
 
 	test('getDestinationSideOfPier', async () => {

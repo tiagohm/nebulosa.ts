@@ -1,4 +1,5 @@
-import { mkdir } from 'fs/promises'
+import { constants } from 'fs'
+import { copyFile, link, mkdir, rm } from 'fs/promises'
 import { isAbsolute, join } from 'path'
 import { formatTemporal, temporalAdd, temporalSubtract } from '../../astronomy/time/temporal'
 import { errorMessage } from '../../core/util'
@@ -19,9 +20,12 @@ import { type CameraAutoSubFolderMode, type CameraCaptureClock, type CameraCaptu
 // synchronously right before dispatch, waits for both the exposure completion and the BLOB of the same
 // generation, decodes, publishes and optionally writes the frame, and quiesces the camera before the lease is
 // released. A BLOB left behind by a terminated exposure quarantines the camera until it is observed, because
-// BLOBs carry no operation id and the next capture would read it. Exposure progress is in microseconds,
-// timeouts in milliseconds, the inter-frame delay in seconds, frame instants in milliseconds of the capture
-// clock, and frame paths are absolute or relative to the configured captures directory.
+// BLOBs carry no operation id and the next capture would read it. A capture ends at its last frame, when
+// stopped (the exposure in flight finishes and no other one starts), or when cancelled (the exposure in flight
+// is aborted). By default a saved frame is written to a temporary file and only then given its name, which is
+// never an existing file. Exposure progress is in microseconds, timeouts in milliseconds, the inter-frame delay
+// in seconds, frame instants in milliseconds of the capture clock, and frame paths are absolute or relative to
+// the configured captures directory.
 
 // Minimum inter-frame delay that publishes waiting progress, in microseconds. Shorter delays are waited silently.
 const MINIMUM_WAITING_TIME = 1000000
@@ -54,8 +58,13 @@ export interface CameraCaptureHandle {
 	readonly started: Promise<OperationResult<void>>
 	// Resolves after terminal cleanup and camera lease release; never rejects.
 	readonly result: Promise<OperationResult<CameraCaptureResult>>
-	// Cancels this exact capture and waits for quiescence and lease release.
+	// Cancels this exact capture and waits for quiescence and lease release. The exposure in flight is aborted
+	// and its frame is lost; the result fails as aborted.
 	readonly cancel: () => Promise<void>
+	// Stops this capture after the exposure in flight: that frame is still processed and written, a running
+	// inter-frame delay ends at once, and no further exposure starts. The result succeeds with the
+	// frames processed so far. Idempotent, and a no-op once the capture ended; `result` reports the end.
+	readonly stop: VoidFunction
 }
 
 // Device lookups used to resolve the devices a request names for the driver to stamp into frame headers.
@@ -81,8 +90,9 @@ export interface CameraCapturerOptions {
 	readonly publish?: (frame: Buffer, path: string, camera: Camera) => void
 	// Decodes a base64 transport payload into its binary frame; defaults to a streaming decoder.
 	readonly decode?: (data: Buffer) => Promise<Buffer>
-	// Persists an auto-saved frame and resolves only after the write completed; defaults to `Bun.write`. The
-	// camera lease is retained until it settles. A capture can replace it with `CameraCaptureHooks.write`.
+	// Persists an auto-saved frame and resolves only after the write completed; defaults to
+	// `writeFrameExclusively`. The camera lease is retained until it settles, and a rejection fails the capture.
+	// A capture can replace it with `CameraCaptureHooks.write`.
 	readonly write?: CameraFrameWriter
 	// Resolves the devices a request names for header snooping. Without a lookup, its device is not snooped.
 	readonly devices?: CameraCaptureDevices
@@ -126,6 +136,21 @@ export interface CameraCaptureHooks {
 	readonly write?: CameraFrameWriter
 	// Clock the frame instants are read from; `SYSTEM_CAMERA_CAPTURE_CLOCK` when absent.
 	readonly clock?: CameraCaptureClock
+	// Resolves the absolute path each auto-saved frame is written to, before its exposure is commanded, in
+	// place of the automatic directory and timestamp name. It is not consulted when the request names its own
+	// `outputPath` and `outputName`, nor for frames that are not saved. A path that already exists fails the
+	// capture instead of being overwritten.
+	readonly framePath?: (frame: CameraFramePathRequest) => string | Promise<string>
+}
+
+// Frame whose destination a `framePath` resolver is asked for.
+export interface CameraFramePathRequest {
+	// Generation the frame will have, starting at 1 for the first frame of the session.
+	readonly generation: number
+	// Unix time the exposure is about to be commanded at, in milliseconds.
+	readonly time: number
+	// Camera taking the frame.
+	readonly camera: Camera
 }
 
 // Receives the device callbacks of a camera driven outside a capture session, such as the guide camera of a
@@ -157,6 +182,8 @@ interface CameraCaptureSessionContext {
 	readonly write: CameraFrameWriter
 	// Clock the frame instants are read from.
 	readonly clock: CameraCaptureClock
+	// Resolves the path of each auto-saved frame, when the caller supplied one.
+	readonly framePath?: CameraCaptureHooks['framePath']
 	// Settles the exposure-start milestone exactly once.
 	readonly settleStarted: (result: OperationResult<void>) => void
 	// Applies availability transitions to the owned camera.
@@ -249,11 +276,13 @@ export class CameraCapturer implements DeviceHandler<Camera>, Disposable {
 	// pre-session rejection separately. The request is copied, so mutating it afterwards changes nothing. A
 	// composite feature passes its own context so the capture nests inside the operation already owning the
 	// camera; the coordinator starts a new operation tree. The hooks belong to this capture only: its writer is
-	// `hooks.write`, else `options.write`, else `Bun.write`.
-	start(scope: OperationScope, camera: Camera, request: CameraCaptureStart, { listener = () => {}, rejectedListener = listener, beforeExposure, write, clock = SYSTEM_CAMERA_CAPTURE_CLOCK }: CameraCaptureHooks = {}): CameraCaptureHandle {
+	// `hooks.write`, else `options.write`, else `writeFrameExclusively`.
+	start(scope: OperationScope, camera: Camera, request: CameraCaptureStart, { listener = () => {}, rejectedListener = listener, beforeExposure, write, clock = SYSTEM_CAMERA_CAPTURE_CLOCK, framePath }: CameraCaptureHooks = {}): CameraCaptureHandle {
 		const key = resourceKey(camera)
 		const started = Promise.withResolvers<OperationResult<void>>()
 		let session: CameraCaptureSession | undefined
+		// A stop can arrive before the coordinator built the session, which then starts already stopped.
+		let stopRequested = false
 
 		let startedSettled = false
 		const settleStarted = (result: OperationResult<void>) => {
@@ -262,7 +291,7 @@ export class CameraCapturer implements DeviceHandler<Camera>, Disposable {
 			started.resolve(result)
 		}
 
-		const frameWriter = write ?? this.options.write ?? Bun.write
+		const frameWriter = write ?? this.options.write ?? writeFrameExclusively
 
 		const operation = scope.start<CameraCaptureResult>('cameraCapture', [{ key, device: camera }], (context) => {
 			const current = new CameraCaptureSession(context, camera, structuredClone(request), {
@@ -272,6 +301,7 @@ export class CameraCapturer implements DeviceHandler<Camera>, Disposable {
 				beforeExposure,
 				write: frameWriter,
 				clock,
+				framePath,
 				settleStarted,
 				availability: {
 					markUnavailable: () => this.arbiter.markUnavailable({ key, device: camera }),
@@ -281,6 +311,7 @@ export class CameraCapturer implements DeviceHandler<Camera>, Disposable {
 
 			session = current
 			this.#sessions.set(key, current)
+			if (stopRequested) current.stop()
 
 			context.onCleanup(async () => {
 				await current.cleanup()
@@ -314,6 +345,10 @@ export class CameraCapturer implements DeviceHandler<Camera>, Disposable {
 			started: started.promise,
 			result,
 			cancel: () => operation.cancel('aborted'),
+			stop: () => {
+				stopRequested = true
+				session?.stop()
+			},
 		})
 	}
 
@@ -393,6 +428,8 @@ class CameraCaptureSession {
 	readonly #terminalFailure = Promise.withResolvers<OperationResult<never>>()
 	// Aborted with the first failure reason, so a running inter-frame delay stops when the camera goes away.
 	readonly #failureController = new AbortController()
+	// Aborted by stop(), ending a running delay without aborting the exposure in flight.
+	readonly #stopController = new AbortController()
 	// Rendezvous of the exposure currently in flight, absent before the first frame.
 	#attempt?: FrameAttempt
 	// Whether the session stopped accepting device callbacks and frame emissions.
@@ -451,13 +488,14 @@ class CameraCaptureSession {
 			return this.#finishFailure('commandFailed', errorMessage(error))
 		}
 
-		while (this.#reporter.remainingCount > 0 && !this.operationContext.signal.aborted) {
+		while (this.#reporter.remainingCount > 0 && !this.operationContext.signal.aborted && !this.#stopController.signal.aborted) {
 			// A device failure recorded outside a rendezvous, such as while the frame path is resolved, only
 			// surfaces here.
 			if (this.#failureResult !== undefined) return this.#finish(this.#failureResult)
 
 			const frame = await this.#captureFrame()
 			if (!frame.ok) return this.#finish(frame)
+			if (frame.value === undefined) break
 
 			if (this.#reporter.remainingCount > 0) {
 				const delayed = await this.#delay()
@@ -469,7 +507,15 @@ class CameraCaptureSession {
 			return this.#finish(failedOperationResult(abortReason(this.operationContext.signal)))
 		}
 
+		// A capture stopped before its first exposure never became Busy, which is not the capture failing.
+		if (this.#frames.length === 0) this.sessionContext.settleStarted(failedOperationResult('aborted', 'capture stopped before its first exposure'))
+
 		return this.#finish(successfulOperationResult(undefined))
+	}
+
+	// Ends the session after the exposure in flight, interrupting a running delay. Idempotent.
+	stop() {
+		this.#stopController.abort()
 	}
 
 	// Applies camera progress and terminal property updates to the current generation.
@@ -609,8 +655,8 @@ class CameraCaptureSession {
 	// Configuration, veto, preparation, dispatch and commit run synchronously back to back, so nothing the caller
 	// verified in `beforeExposure` can change before the exposure command leaves. The generation is committed only
 	// once the exposure exists, so a refused or failed dispatch publishes no exposureStarted and consumes no
-	// generation.
-	async #captureFrame(): Promise<OperationResult<CameraFrameEvent>> {
+	// generation. Resolves an undefined frame when the capture was stopped before its exposure was dispatched.
+	async #captureFrame(): Promise<OperationResult<CameraFrameEvent | undefined>> {
 		if (this.operationContext.signal.aborted) return failedOperationResult(abortReason(this.operationContext.signal))
 
 		// The destination is resolved before the exposure is commanded, so the identity of the frame exists before
@@ -625,6 +671,8 @@ class CameraCaptureSession {
 		}
 
 		if (this.operationContext.signal.aborted) return failedOperationResult(abortReason(this.operationContext.signal))
+		// Resolving the path is the last wait before dispatch, so a stop that arrived meanwhile takes no frame.
+		if (this.#stopController.signal.aborted) return successfulOperationResult(undefined)
 
 		// The rendezvous exists before the frame is prepared, because the attempt has to be routable the moment the
 		// exposure is dispatched, which may deliver its updates synchronously.
@@ -756,25 +804,38 @@ class CameraCaptureSession {
 
 	// Resolves the final path of the next frame, creating the dated subfolder it is written into.
 	//
-	// A caller that decided the destination provides both halves and nothing here is derived. Otherwise the
-	// automatic directory and the timestamp name are used, and the timestamp is the instant the exposure is
-	// commanded rather than the instant its payload arrived: a name has to exist before the data.
+	// A caller that decided the destination provides both halves and nothing here is derived; a caller with a
+	// `framePath` resolver decides the path of every saved frame. Otherwise the automatic directory and the
+	// timestamp name are used, and the timestamp is the instant the exposure is commanded rather than the instant
+	// its payload arrived: a name has to exist before the data. An automatic name that is already taken, such as
+	// by a frame of the same millisecond, gets the first free `_<n>` suffix.
 	async #resolveFramePath() {
 		const request = this.#request
+		const framePath = this.sessionContext.framePath
 		let path: string
+		let chosen = request.outputName !== undefined
 
 		if (request.outputPath && request.outputName) {
 			path = join(request.outputPath, request.outputName)
+		} else if (request.autoSave && !chosen && framePath !== undefined) {
+			path = await framePath({ generation: this.#reporter.generation + 1, time: Date.now(), camera: this.camera })
+			chosen = true
 		} else {
 			const now = Date.now()
 			const name = request.autoSave ? formatTemporal(now, 'YYYYMMDD.HHmmssSSS', localTimezoneOffset(now)) : this.camera.name
 			const extension = request.transferFormat === 'XISF' ? 'xisf' : 'fit'
-			path = join(request.outputPath ?? (await this.#automaticDirectory(now)), request.outputName ?? `${name}.${extension}`)
+			const directory = request.outputPath ?? (await this.#automaticDirectory(now))
+			path = join(directory, request.outputName ?? `${name}.${extension}`)
+
+			// A frame that is not saved is only published under its name, so only a written one needs a free name.
+			if (request.autoSave && !chosen) {
+				for (let suffix = 2; await Bun.file(path).exists(); suffix++) path = join(directory, `${name}_${suffix}.${extension}`)
+			}
 		}
 
 		// A caller-supplied name addresses one specific file, and the frame has to be what creates it. Silently
 		// overwriting turns a capture request into a write over a file that was never a frame.
-		if (request.outputName !== undefined && (await Bun.file(path).exists())) throw new Error(`the output file "${path}" already exists`)
+		if (chosen && (await Bun.file(path).exists())) throw new Error(`the output file "${path}" already exists`)
 
 		return path
 	}
@@ -831,14 +892,15 @@ class CameraCaptureSession {
 		}
 	}
 
-	// Waits between frames, stopping on cancellation or on a device failure. Delays of at least one second
+	// Waits between frames, stopping on cancellation, on a device failure, or on stop(), which ends the wait
+	// successfully so the capture finishes instead of starting the next frame. Delays of at least one second
 	// publish waiting progress every 250 ms; shorter ones are waited silently. Both advance the aggregate progress.
 	async #delay(): Promise<OperationResult<void>> {
 		const waitingTime = this.#waitingTime
-		if (waitingTime <= 0) return successfulOperationResult(undefined)
+		if (waitingTime <= 0 || this.#stopController.signal.aborted) return successfulOperationResult(undefined)
 
 		const progress = waitingTime >= MINIMUM_WAITING_TIME
-		const signal = AbortSignal.any([this.operationContext.signal, this.#failureController.signal])
+		const signal = AbortSignal.any([this.operationContext.signal, this.#failureController.signal, this.#stopController.signal])
 		let remaining = waitingTime
 
 		while (remaining > 0) {
@@ -846,7 +908,7 @@ class CameraCaptureSession {
 
 			const step = progress ? Math.min(WAITING_PROGRESS_STEP, remaining) : remaining
 			const delayed = await abortableDelay(step / 1000, signal)
-			if (!delayed.ok) return this.#failureResult ?? delayed
+			if (!delayed.ok) return this.#failureResult ?? (this.operationContext.signal.aborted ? delayed : successfulOperationResult(undefined))
 			remaining -= step
 		}
 
@@ -942,6 +1004,41 @@ export function autoSubFolderName(time: number, mode: CameraAutoSubFolderMode, t
 	if (mode === 'off') return undefined
 	const local = temporalAdd(time, timezoneOffset, 'm')
 	return formatTemporal(mode === 'midnight' ? local : temporalSubtract(local, 12, 'h'), 'YYYY-MM-DD')
+}
+
+// Writes a frame to `path` only if no file exists there, and only once it is complete. The bytes go to a
+// temporary file next to it first, which is then hard-linked to the final name, an operation that fails
+// instead of replacing an existing file; a filesystem without hard links, such as exFAT, gets an exclusive
+// copy instead. The temporary file is always removed, so a failure leaves neither it nor a partial frame
+// behind. Rejects when the file exists or cannot be written.
+export async function writeFrameExclusively(path: string, data: Buffer) {
+	const temporary = `${path}.${Bun.randomUUIDv7()}.tmp`
+
+	try {
+		await Bun.write(temporary, data)
+
+		try {
+			await link(temporary, path)
+		} catch (error) {
+			if (errorCode(error) === 'EEXIST') throw new Error(`the output file "${path}" already exists`, { cause: error })
+
+			try {
+				await copyFile(temporary, path, constants.COPYFILE_EXCL)
+			} catch (copyError) {
+				if (errorCode(copyError) === 'EEXIST') throw new Error(`the output file "${path}" already exists`, { cause: copyError })
+				// A copy that failed after creating the file would leave a partial frame under the final name.
+				await rm(path, { force: true })
+				throw copyError
+			}
+		}
+	} finally {
+		await rm(temporary, { force: true })
+	}
+}
+
+// System error code of a failed filesystem call, such as EEXIST, or undefined for any other error.
+function errorCode(error: unknown) {
+	return Error.isError(error) && 'code' in error && typeof error.code === 'string' ? error.code : undefined
 }
 
 // Computes the decoded byte length of a base64 payload without internal whitespace, padded or not.

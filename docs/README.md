@@ -464,7 +464,7 @@ console.log(first[0][0] === kept[0]) // false — the borrowed state changed und
 
 Differences and offsets between instants are only meaningful inside one time scale. UTC has leap seconds, so a UTC "day" can be 86401 s long, while TAI and TT run uniformly.
 
-`timeSubtract(a, b, scale?)` returns `a − b` in days after converting both instants to `scale`, which defaults to the scale of `a`. In UTC the difference counts civil days on the quasi-Julian-Date axis and ignores a leap second; pass `Timescale.TAI` or `Timescale.TT` for elapsed physical time. `timeShift(time, days)` returns a new `Time` in the same scale, moved by a number of days, and keeps the `providers` and `location` of the original. `timeAtJulianDay(reference, jd)` builds the instant at an absolute Julian Date (days) in the scale of `reference`, with the same providers and location. Neither carries the cache over, so derived values are recomputed for the new instant.
+`timeSubtract(a, b, scale?)` returns `a − b` in days after converting both instants to `scale`, which defaults to the scale of `a`. In UTC the difference counts civil days on the quasi-Julian-Date axis and ignores a leap second; pass `Timescale.TAI` or `Timescale.TT` for elapsed physical time. `timeShift(time, days, wholeDays?)` returns a new `Time` in the same scale, moved by a number of days, and keeps the `providers` and `location` of the original; the optional integer `wholeDays` is added exactly to the day part, so a shift of millions of days split into whole and fractional days keeps the two-part precision. `timeAtJulianDay(reference, jd)` builds the instant at an absolute Julian Date (days) in the scale of `reference`, with the same providers and location. Neither carries the cache over, so derived values are recomputed for the new instant.
 
 ```ts
 import { Timescale, timeAtJulianDay, timeShift, timeSubtract, timeToDate, timeYMD, timeYMDHMS, tt } from 'nebulosa/src/astronomy/time/time'
@@ -575,7 +575,7 @@ console.log(toKilometer(ecliptic.bt), toKilometer(ecliptic.br)) // -22880 -14871
 
 Light from a distant source reaches the Earth earlier or later than it would reach the Solar-System barycenter (BJD) or the Sun's center (HJD), depending on where the observer sits along the line of sight. The light-travel-time correction is `(r_obs · n) / c`, with `r_obs` the observer's position relative to the chosen center and `n` the unit direction to the source. Timing work such as eclipse or pulsar timing adds it to the observed time.
 
-`lightTravelTime` returns that correction in days, positive when the observer lies on the source's side of the center. You choose the reference center through the Earth state you pass: a barycentric Earth state gives the barycentric correction and a heliocentric one the heliocentric correction. The correction is first-order and not fully relativistic. `observerState` builds the observer's `[position (AU), velocity (AU/day)]` that both this and [Radial Velocity Correction](#radial-velocity-correction) use: it adds the site's topocentric offset and diurnal rotation to the Earth state, or returns a copy of the Earth state when no location is given. `location` defaults to `time.location`. Source direction is ICRS right ascension and declination in radians.
+`lightTravelTime` returns that correction in days, positive when the observer lies on the source's side of the center. You choose the reference center through the Earth state you pass: a barycentric Earth state gives the barycentric correction and a heliocentric one the heliocentric correction. The correction is first-order and not fully relativistic; for a complete BJD_TDB with the TDB conversion, the Shapiro delay, and quality diagnostics, see [Barycentric Julian Date](#barycentric-julian-date). `observerState` builds the observer's `[position (AU), velocity (AU/day)]` that both this and [Radial Velocity Correction](#radial-velocity-correction) use: it adds the site's topocentric offset and diurnal rotation to the Earth state, or returns a copy of the Earth state when no location is given. `location` defaults to `time.location`. Source direction is ICRS right ascension and declination in radians.
 
 ```ts
 import { lightTravelTime, observerState } from 'nebulosa/src/astronomy/coordinates/correction'
@@ -589,9 +589,9 @@ import { meter } from 'nebulosa/src/math/units/distance'
 const location = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
 const time = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.UTC)
 
-// Earth's [heliocentric, barycentric] state (AU, AU/day) at the TDB instant.
+// Earth's [barycentric, heliocentric] state (AU, AU/day) at the TDB instant.
 const t = tdb(time)
-const [heliocentric, barycentric] = eraEpv00(t.day, t.fraction)
+const [barycentric, heliocentric] = eraEpv00(t.day, t.fraction)
 
 // Source at RA 5.5 h, Dec -5°.
 const ra = hour(5.5)
@@ -599,15 +599,76 @@ const dec = deg(-5)
 
 const bjd = lightTravelTime(ra, dec, time, barycentric, location)
 
-console.log(bjd * 86400) // 410.68 — seconds to add for the barycentric reference
-console.log(lightTravelTime(ra, dec, time, heliocentric, location) * 86400) // 413.66 — seconds, heliocentric reference
-console.log(lightTravelTime(ra, dec, time, barycentric) * 86400) // 410.67 — seconds, geocentric observer (no site)
+console.log(bjd * 86400) // 413.66 — seconds to add for the barycentric reference
+console.log(lightTravelTime(ra, dec, time, heliocentric, location) * 86400) // 410.68 — seconds, heliocentric reference
+console.log(lightTravelTime(ra, dec, time, barycentric) * 86400) // 413.65 — seconds, geocentric observer (no site)
 
 // Observer state used internally: Earth state plus the site's offset and diurnal velocity.
 const [position, velocity] = observerState(time, barycentric, location)
 
-console.log(position) // [-0.16633, 0.88918, 0.38543] — AU, barycentric ICRS axes
-console.log(velocity) // [-0.017353, -0.002531, -0.001185] — AU/day
+console.log(position) // [-0.17013, 0.89600, 0.38841] — AU, barycentric ICRS axes
+console.log(velocity) // [-0.017362, -0.002533, -0.001186] — AU/day
+```
+
+### Barycentric Julian Date
+
+BJD_TDB is the instant a signal would reach the Solar System barycenter, read on the Barycentric Dynamical Time clock. It removes the observer's orbital and diurnal motion from a time series, which is why transit, eclipse, and pulsar timings are published in it:
+
+```text
+BJD_TDB = TDB(t) + Δ_Rømer + Δ_Shapiro
+```
+
+The reception instant `t` is first converted to TDB (the Einstein delay). The Rømer delay `(r · n) / c` is the geometric light time between the observer at barycentric position `r` and the barycenter along the source direction `n`; it reaches about ±8.5 min. The solar Shapiro delay is the extra light time of a ray passing the Sun, tens of microseconds within a few tens of degrees of the Sun and about 112 µs at the solar limb.
+
+`barycentricJulianDate(time, direction, observer, options?)` takes the reception `Time` in any scale (UTC goes through the leap-second table, and `time.location` adds the topocentric TDB−TT term of up to about 2 µs), the ICRS direction to the source at the observation epoch (normalized internally; apply proper motion first), and an SSB-centered `EphemerisPath` for the observer. For a ground site compose an SSB-to-Earth path with `earthObserverEphemerisPath` (see [Ephemeris Path Composition](#ephemeris-path-composition)); for a spacecraft pass its own barycentric path. A path with another center throws, because a Sun-centered one would produce an HJD labelled as BJD; path errors, such as an SPK segment that does not cover the date, propagate. `options.sun`, an SSB-to-Sun path, removes the solar Shapiro propagation delay in the TEMPO2/PINT form `−2GM☉/c³ · ln((|s| + s · n) / 1 AU)` with `s` the Sun-to-observer vector, so `shapiro` is `+2GM☉/c³ · ln((|s| + s · n) / 1 AU)`, negative near the Sun; a line of sight through the solar disk is clamped at the limb and flagged. `options.distance` (AU) replaces the plane-wave Rømer term with the exact spherical-wavefront one; the curvature it adds is at most `(1 AU)² / (2cd)`, about 120 µs at 10 pc. `options.timestampUncertainty` (seconds) enters the error budget; see [Exposure Timing](#exposure-timing) for the instant and uncertainty of an exposure.
+
+`receptionFromBarycentricJulianDate(bjd, direction, observer, location?, options?)` is the inverse: it finds the UTC instant at which a signal with the given BJD_TDB reaches the observer, so that `barycentricJulianDate` of that instant returns `bjd` within about 1 µs. It iterates `reception = bjd − Δ(reception)`, which converges in a few steps because the correction changes by at most about 1e-4 s per second; `location` supplies the topocentric TDB−TT term and is attached to the returned UTC `Time`. Use it to turn published BJD_TDB event times, such as transit centers, into local clock times; see [Exoplanet Transit Prediction](#exoplanet-transit-prediction).
+
+`time` in the result is BJD_TDB as a two-part TDB `Time`, not UTC and not TCB; `reception` is the same instant on TDB before the correction. `romer`, `shapiro`, and `correction` are seconds to add. `model` records the terms applied (`romer: 'planeWave' | 'sphericalWave'`, `shapiro`, and `tdb: 'input' | 'topocentric' | 'geocentric'`). `quality.earthOrientation` is `'notRequired'` for a geocentric observer, `'tabulated'` when the IERS tables cover the date, `'missing'` when they do not and UT1−UTC falls back to an edge value or 0, and `'custom'` for overridden providers; `quality.sunElongation` (radians) and `quality.occultedBySun` describe the solar geometry, measured from the SSB when no Sun path is given. `errorBudget` lists, in seconds, the timestamp uncertainty, the missing-EOP bound (about 1.4 µs), the omitted topocentric TDB term (about 2 µs), and, without `options.sun`, a worst-case bound on the omitted solar Shapiro term over every Sun position within 0.011 AU of the SSB (about 0.2 µs at quadrature, 7 µs at opposition, and 113 µs at the limb), since the observer path alone does not fix where the Sun is. `total` is their root-sum-square, a heuristic scale that mixes a 1σ uncertainty with worst-case bounds rather than a confidence interval or a guaranteed limit; planetary Shapiro delays (below about 0.2 µs) and an omitted wavefront curvature are not included. The ephemeris sets the floor of the Rømer term: each kilometer of observer position error is 3.3 µs, so use an SPK kernel rather than the analytical `eraEpv00` Earth for microsecond work.
+
+```ts
+import fs from 'fs/promises'
+import { barycentricJulianDate, receptionFromBarycentricJulianDate } from 'nebulosa/src/astronomy/coordinates/correction'
+import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { readDaf } from 'nebulosa/src/astronomy/ephemeris/kernels/daf'
+import { Naif } from 'nebulosa/src/astronomy/ephemeris/kernels/naif'
+import { readSpk } from 'nebulosa/src/astronomy/ephemeris/kernels/spk'
+import { composeEphemerisPaths, customEphemerisEndpoint } from 'nebulosa/src/astronomy/ephemeris/path'
+import { earthObserverEphemerisPath, spkEphemerisPath } from 'nebulosa/src/astronomy/ephemeris/path.adapter'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { exposureInterval } from 'nebulosa/src/astronomy/time/exposure'
+import { Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { fileHandleSource } from 'nebulosa/src/io/file'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+await using source = fileHandleSource(await fs.open('data/de421.bsp'))
+const spk = readSpk(await readDaf(source))
+
+// SSB -> Earth from DE421, then Earth -> La Silla; and SSB -> Sun for the Shapiro term.
+const earth = composeEphemerisPaths((await spkEphemerisPath(spk, Naif.SSB, Naif.EMB))!, (await spkEphemerisPath(spk, Naif.EMB, Naif.EARTH))!)
+const sun = (await spkEphemerisPath(spk, Naif.SSB, Naif.SUN))!
+const location = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
+const observer = composeEphemerisPaths(earth, earthObserverEphemerisPath(location, customEphemerisEndpoint('la-silla')))
+
+// A 300 s exposure stamped at the open command, with 0.12 s shutter latency and a 5 ms timestamp error.
+const start = timeYMDHMS(2024, 3, 10, 3, 0, 0, Timescale.UTC)
+start.location = location
+const exposure = exposureInterval({ time: start, reference: 'start', duration: 300, openLatency: 0.12, uncertainty: 0.005 })
+
+// Source at RA 5.5 h, Dec -5°.
+const bjd = barycentricJulianDate(exposure.midpoint, eraS2c(hour(5.5), deg(-5)), observer, { sun, timestampUncertainty: exposure.uncertainty })
+
+console.log(bjd.time.day, bjd.time.fraction) // 2460380 -0.37232562 — BJD_TDB = 2460379.62767438
+console.log(bjd.romer, bjd.shapiro) // 11.82055 2.0e-7 — seconds to add
+console.log(bjd.model) // { romer: 'planeWave', shapiro: true, tdb: 'topocentric' }
+console.log(bjd.quality.earthOrientation) // 'missing' — no IERS tables loaded
+console.log(bjd.errorBudget.earthOrientation, bjd.errorBudget.total) // 1.4e-6 0.005 — seconds
+
+// Back from BJD_TDB to the UTC reception instant: the exposure midpoint, 03:02:30.06.
+const reception = receptionFromBarycentricJulianDate(bjd.time, eraS2c(hour(5.5), deg(-5)), observer, location, { sun })
+
+console.log(timeToDate(reception)) // [2024, 3, 10, 3, 2, 30, 60] — UTC
 ```
 
 ### Binary PCK Rotation
@@ -651,7 +712,7 @@ On a rotating body, the local Sun altitude at a surface point is the angle betwe
 
 `bodySurfaceSolarAltitude(location, sunAt, time)` returns the altitude of the Sun's center in radians. `bodySurfaceSunEvents(location, sunAt, start, stop, options)` returns the chronological sunrise and sunset crossings in a window, each with its refined `time`, `kind` (`'sunrise'` while the altitude rises, `'sunset'` while it falls), and the `altitude` there. `options.horizon` is the altitude in radians that defines the crossing (default 0, the geometric horizon); `options.step` and `options.tolerance` are the coarse scan step and refinement tolerance in days (defaults one hour and about 0.09 s). The step must be small enough that no two crossings share a step. Tangential touches are omitted, so an empty list can mean polar day or night.
 
-`location` is a `BodySurfaceLocation` (see [Planetary Surface Locations](#planetary-surface-locations)), whose frame orients the rotating body. `sunAt` is a function of `Time` returning the body-center-to-Sun vector in the library's base axes. It is treated as parallel across the body, so there is no terrain, refraction, solar radius, or surface parallax, and the altitude refers to the solar center. The scan evaluates `sunAt` slightly beyond the window edges to classify each root.
+`location` is a `BodySurfaceLocation` (see [Planetary Surface Locations](#planetary-surface-locations)), whose frame orients the rotating body. `sunAt` is a function of `Time` returning the body-center-to-Sun vector in the library's base axes. It is treated as parallel across the body, so there is no terrain, refraction, solar radius, or surface parallax, and the altitude refers to the solar center. The scan evaluates `sunAt` slightly beyond the window edges to classify each root. For a feature's incidence, emission, observer visibility, terrain mask, DEM shadows and light-angle windows, see [Surface Feature Illumination](#surface-feature-illumination).
 
 ```ts
 import { bodyFixedFrame, MOON_ROTATION } from 'nebulosa/src/astronomy/bodies/orientation'
@@ -691,7 +752,7 @@ console.log(high.map((e) => timeSubtract(e.time, epoch))) // [4.091, 18.075] —
 
 The Carrington system numbers the Sun's rotations by a fixed synodic period of about 27.2753 days, as seen from Earth, counted from a conventional epoch in 1853. Solar maps and datasets are usually labeled by Carrington rotation number.
 
-`carringtonRotationNumber` returns the integer rotation number whose span contains the given `Time`. It is a linear count with that fixed period; it does not compute the central meridian longitude within the rotation.
+`carringtonRotationNumber` returns the integer rotation number whose span contains the given `Time`. It is a linear count with that fixed period; it does not compute the central meridian longitude within the rotation. For the observed Carrington longitude of the disk center (L0), see [Solar Disk Geometry and Heliographic Coordinates](#solar-disk-geometry-and-heliographic-coordinates).
 
 ```ts
 import { carringtonRotationNumber } from 'nebulosa/src/astronomy/bodies/sun'
@@ -1543,6 +1604,124 @@ The remaining routines, by family:
 - Horizontal and tangent plane: `eraAe2hd`, `eraHd2ae`, `eraHd2pa`, `eraTpsts`, `eraTpstv`, `eraTpors`, `eraTporv`, `eraTpxes`, `eraTpxev`; the geodetic routines `eraGc2Gde`, `eraGd2Gce` take the ellipsoid radius and flattening as arguments.
 - Planets and Moon: `eraPlan94` (`np` from 0 for Mercury to 7 for Neptune, with the Earth–Moon barycentre as 2; an index outside 0 to 7 throws a TypeError), `eraEpv00` and `eraMoon98`.
 
+### Exoplanet Transit Prediction
+
+A transiting exoplanet dims its star once per orbit. Published ephemerides give a reference mid-transit epoch `T0`, usually in BJD_TDB (see [Barycentric Julian Date](#barycentric-julian-date)), a period `P`, and a total duration `T14` from first to fourth contact. Cycle `n` is centered at `Tn = T0 + n·P`, and its 1σ timing uncertainty grows with the distance from `T0`:
+
+```text
+σ²(Tn) = σ²(T0) + n²·σ²(P) + 2n·Cov(T0, P)
+```
+
+`exoplanetTransits(ephemeris, direction, observer, location, start, end, options?)` lists every transit whose required observing span overlaps the search window and says whether it can be observed. `ephemeris` is a `TransitEphemeris`: `epoch` (a `Time` whose scale names the clock of the ephemeris), `reference` (`'barycentric'` for BJD or `'heliocentric'` for HJD), `period` and `duration` in days of that clock, and optional 1σ `epochUncertainty`, `periodUncertainty`, `durationUncertainty` (days) and `covariance` (days²). A TDB epoch is used as is. UTC, TAI, TT, and UT1 epochs are moved to TDB at `T0` and their days are taken as TDB days, so leap seconds after `T0` are not counted as elapsed time. TCB and TCG days run faster than TDB days by `L_B = 1.550519768e-8` and `L_G = 6.969290134e-10`, so their period, duration, uncertainties, and covariance are rescaled by `1 − L_B` or `1 − L_G`; otherwise a one-day BJD_TCB period would drift by about 4.9 s in ten years. A heliocentric ephemeris advances `T0 + n·P` on the Sun's clock and moves each predicted instant `h` to BJD by `(r☉(h) · n) / c` with the Sun's position at that instant, so it needs `options.sun`; the Sun's reflex motion changes that shift by several seconds over a decade. `direction` is the ICRS direction of the star (apply proper motion first), `observer` the SSB-centered path of the site as for `barycentricJulianDate`, and `location` the same site, used for the horizon and the topocentric TDB term; `start` and `end` are converted to UTC. The ephemeris is strictly periodic: transit-timing variations and orbital decay are not modeled.
+
+Each event keeps `center`, `ingress`, and `egress` on BJD_TDB, the ephemeris clock, with `centerUncertainty` and `contactUncertainty = √(σ²(Tn) + σ²(T14)/4)` in days. `observedIngress`, `observedCenter`, and `observedEgress` are the UTC instants the light reaches the site, from `receptionFromBarycentricJulianDate`; the observed transit differs from `T14` by the change of the light time across it, about 1 s for a 3 h transit. `start` and `end` (UTC) bound the required span: ingress minus `options.baselineBefore`, egress plus `options.baselineAfter` (days, default 0), and `options.timingSigma` (default 1) times `contactUncertainty` on each side. `options.constraints` takes the limits of [Observing Visibility Windows](#observing-visibility-windows), with `sunAt`, `moonAt`, `step`, and `tolerance` passed in the same options; `visible` lists the UTC stretches of the span that satisfy all of them inside the search window. `coverage` is the visible fraction of the whole span and `transitCoverage` that of ingress to egress. `feasible` requires some of the transit itself to be visible, `transitCoverage ≥ options.minimumTransitCoverage` (default 1), `coverage ≥ options.minimumCoverage` (default 1), and, when `options.maximumUncertainty` (days) is set, a `centerUncertainty` within it; visible baselines alone never make an event feasible, even with both minimums at 0. `limitations` names every cause that removed time or disqualified the event: `'searchWindow'`, `'targetAltitude'` (altitude or airmass), `'sunAltitude'`, `'sunSeparation'`, `'moonSeparation'`, or `'timingUncertainty'`; it can be non-empty for a feasible event when a minimum coverage is below 1. `flags` reports missing uncertainty inputs taken as 0. A non-positive period, a duration outside `(0, P)`, a covariance above `σ(T0)·σ(P)`, a margin `timingSigma·σ(P)` not below `P`, a heliocentric epoch without `options.sun`, a solar or lunar limit without its callback, or more than `options.maximumEvents` (default 10000) events throws a `RangeError`; an empty window returns no events. `transitTimingUncertainty(n, σT0, σP, cov)` evaluates the uncertainty formula alone, in days.
+
+`transitEphemerisUncertainty(ephemeris, n)` predicts one cycle on the ephemeris' own clock, without any scale, `L_B`/`L_G`, or light-time conversion: `center = T0 + n·P`, `ingress`, and `egress` keep the scale, reference, providers, and location of `epoch` (BJD_TDB for a BJD_TDB ephemeris). `n·P` is formed exactly and its whole days are added to the day part of `T0`, so `n = 10⁶` keeps microsecond precision instead of the ulp of a single-double Julian Date. `centerUncertainty` is `σ(Tn)` in seconds of that scale; `contactUncertainty = √(σ²(Tn) + σ²(T14)/4)`, also in seconds, is given only when `durationUncertainty` is, since only then is `T14` known to be independent of `T0` and `P`. A variance below zero only through rounding of a fully correlated pair is clamped to 0. A covariance above `σ(T0)·σ(P)` gives `valid: false`, NaN uncertainties, and the `'covarianceOutOfBounds'` flag; `flags` also lists missing uncertainties taken as 0. A non-integer `n` throws a `RangeError`.
+
+`exoplanetArchiveTransitEphemeris(row, options?)` converts one NASA Exoplanet Archive `ps` or `pscomppars` row (TAP JSON numbers or CSV strings) into a `TransitEphemeris`. The time reference comes from `pl_tsystemref` (`ps`) or `pl_tranmid_systemref` (`pscomppars`), recorded in `timeReferenceSource`; a row whose two columns name different clocks or origins is rejected as `'conflictingTimeReference'`, and a row with neither can be given one with `options.timeReference`. Labels ignore case and separators: `BJD-TDB`, `BJD-TT`, `BJD-UTC`, `BJD-TCB`, `HJD-UTC`, and `HJD-TDB` are explicit; plain `BJD` is taken as BJD_TDB and plain `HJD` as HJD_UTC, with `assumedScale: true`; `JD` and other labels are rejected. The duration is converted from hours, each asymmetric error pair becomes its larger magnitude, and the covariance stays undefined because the archive does not publish it. A decimal-string `pl_tranmid` keeps every digit; a JSON number is already a double, good to about 40 µs. Missing, non-numeric, or non-finite fields, including a decimal string that overflows a double, give `{ success: false, reason }`. [NASA Exoplanet Archive TAP Queries](#nasa-exoplanet-archive-tap-queries) fetches such rows as CSV strings.
+
+```ts
+import { exoplanetArchiveTransitEphemeris } from 'nebulosa/src/adapters/catalogs/exoplanet.archive'
+import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { Naif } from 'nebulosa/src/astronomy/ephemeris/kernels/naif'
+import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { composeEphemerisPaths, customEphemerisEndpoint, ephemerisPath, naifEphemerisEndpoint, SOLAR_SYSTEM_BARYCENTER } from 'nebulosa/src/astronomy/ephemeris/path'
+import { earthObserverEphemerisPath } from 'nebulosa/src/astronomy/ephemeris/path.adapter'
+import { exoplanetTransits, transitEphemerisUncertainty, transitTimingUncertainty } from 'nebulosa/src/astronomy/events/exoplanet'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { type Time, Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg } from 'nebulosa/src/math/units/angle'
+import { meter } from 'nebulosa/src/math/units/distance'
+
+// WASP-12 b from the archive `ps` table (Leonardi et al. 2024).
+const result = exoplanetArchiveTransitEphemeris({
+	ra: 97.636645,
+	dec: 29.6722662,
+	pl_tranmid: '2457607.519305',
+	pl_tranmiderr1: 0.000032,
+	pl_tranmiderr2: -0.000032,
+	pl_orbper: 1.091418901,
+	pl_orbpererr1: 0.000000018,
+	pl_orbpererr2: -0.000000018,
+	pl_trandur: 3.001,
+	pl_trandurerr1: 0.0043,
+	pl_trandurerr2: -0.0043,
+	pl_tsystemref: 'BJD-TDB',
+})
+
+if (!result.success) throw new Error(result.reason)
+const { ephemeris, rightAscension, declination } = result
+
+// Teide, with the SSB -> site path from VSOP87E and the Sun and Moon directions for the limits.
+const site = geodeticLocation(deg(-16.5097), deg(28.3), meter(2390))
+const earthPath = ephemerisPath(SOLAR_SYSTEM_BARYCENTER, naifEphemerisEndpoint(Naif.EARTH), earth)
+const observer = composeEphemerisPaths(earthPath, earthObserverEphemerisPath(site, customEphemerisEndpoint('teide')))
+const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0])
+const moonAt = (time: Time) => moon(time)[0]
+
+// Two nights, each spanning midnight: above 30°, astronomical darkness, 20° from the Moon, 1 h baselines.
+const start = timeYMDHMS(2026, 10, 18, 19, 0, 0, Timescale.UTC)
+const end = timeYMDHMS(2026, 10, 20, 7, 0, 0, Timescale.UTC)
+const constraints = { minimumAltitude: deg(30), maximumSunAltitude: deg(-18), minimumMoonSeparation: deg(20) }
+const { events, flags } = exoplanetTransits(ephemeris, eraS2c(rightAscension!, declination!), observer, site, start, end, { constraints, sunAt, moonAt, baselineBefore: 1 / 24, baselineAfter: 1 / 24, minimumCoverage: 0.8 })
+
+console.log(flags) // ['missingCovariance'] — the archive has no Cov(T0, P)
+console.log(events.map((e) => e.cycle)) // [3413, 3414]
+
+const [first, second] = events
+console.log(second.center.day, second.center.fraction) // 2461334 -0.376566986 — BJD_TDB
+console.log(second.centerUncertainty * 86400, second.contactUncertainty * 86400) // 5.99 9.78 — seconds
+console.log(timeToDate(second.observedIngress).slice(0, 6)) // [2026, 10, 20, 1, 23, 50] — UTC
+console.log(timeToDate(second.observedEgress).slice(0, 6)) // [2026, 10, 20, 4, 23, 52] — UTC
+
+// Cycle 3413 rises through 30° only at 01:09 UTC; cycle 3414 loses just the start of its baseline.
+console.log(first.coverage, first.transitCoverage, first.feasible, first.limitations) // 0.410 0.350 false ['targetAltitude']
+console.log(second.coverage, second.transitCoverage, second.feasible, second.limitations) // 0.861 1 true ['targetAltitude']
+
+// Ten thousand cycles out, the period error dominates.
+console.log(transitTimingUncertainty(10000, 0.000032, 0.000000018) * 86400) // 15.80 — seconds
+
+// One cycle on the ephemeris' own clock, with σ in seconds.
+const cycle = transitEphemerisUncertainty(ephemeris, 3414)
+console.log(cycle.center.day, cycle.center.fraction, cycle.centerUncertainty) // 2461334 -0.376566986 5.99 — BJD_TDB, seconds
+console.log(cycle.valid, cycle.flags) // true ['missingCovariance']
+```
+
+### Exposure Timing
+
+A camera timestamp usually marks a command, not the light: the shutter opens some latency after the open command and closes some latency after the close command. Timing work needs the actual photon-collection interval and, above all, its midpoint, the instant to refer a measurement to (for example in [Barycentric Julian Date](#barycentric-julian-date)). `fitsExposure` builds this function's input from FITS header keywords; see [FITS Observation Timing and Location](#fits-observation-timing-and-location).
+
+`exposureInterval(exposure)` accepts either a recorded `time` in any scale with the `reference` it labels (`'start'` for the open command, `'midpoint'` for the commanded midpoint, `'end'` for the close command) and the commanded `duration`, or the recorded open and close command timestamps as `start` and `end`, possibly in different scales, whose commanded duration is measured on TAI. A span cannot also carry a `duration`, so a contradictory exposure time next to start and end timestamps is a type error rather than a silent choice. Both forms take optional `openLatency`, `closeLatency`, and clock `uncertainty` (1σ), and the timestamp `resolution` (a quantization bound, such as 86400 s for a date without time), all in seconds and defaulting to 0. It returns the collection `start`, `midpoint`, and `end` as fresh two-part `Time`s in the scale of the timestamp (of `start` for a span), keeping its `location` and providers, with the effective `duration` (commanded duration − `openLatency` + `closeLatency`) and the `uncertainty` and `resolution` carried unchanged, since both timestamps come from one clock.
+
+The midpoint is the nominal temporal midpoint of the collection interval, not a photon-weighted one: it is the flux-weighted mean time only for constant flux. A shutter that takes a finite time to uncover the aperture can be modeled by adding half its opening (closing) time to `openLatency` (`closeLatency`) when the aperture changes linearly. All offsets are SI seconds of the recording clock, applied on TAI and converted back to the timestamp's scale, so the same physical instant gives the same physical interval in every scale: a UTC exposure across a leap second keeps its SI length and can start, end, or be centered on 23:59:60, and a TCG, TDB, TCB, or UT1 timestamp is not offset in that scale's own seconds (a TCB hour is about 56 µs longer than a TAI hour). Microsecond offsets survive because the day fraction resolves about 1e-11 s.
+
+```ts
+import { exposureInterval } from 'nebulosa/src/astronomy/time/exposure'
+import { Timescale, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+
+// A 300 s exposure stamped when the shutter was commanded closed.
+const stamped = exposureInterval({ time: timeYMDHMS(2024, 3, 10, 3, 5, 0, Timescale.UTC), reference: 'end', duration: 300 })
+
+console.log(timeToDate(stamped.start)) // [2024, 3, 10, 3, 0, 0, 0]
+console.log(timeToDate(stamped.midpoint)) // [2024, 3, 10, 3, 2, 30, 0]
+
+// 1 s commanded at 23:59:59.5 UTC on the 2016-12-31 leap-second day, with shutter latencies.
+const leap = exposureInterval({ time: timeYMDHMS(2016, 12, 31, 23, 59, 59.5, Timescale.UTC), reference: 'start', duration: 1, openLatency: 0.1, closeLatency: 0.02, uncertainty: 0.002 })
+
+console.log(timeToDate(leap.start)) // [2016, 12, 31, 23, 59, 59, 600]
+console.log(timeToDate(leap.midpoint)) // [2016, 12, 31, 23, 59, 60, 60] — inside the leap second
+console.log(timeToDate(leap.end)) // [2016, 12, 31, 23, 59, 60, 520]
+console.log(leap.duration, leap.uncertainty) // 0.92 0.002 — seconds
+
+// DATE-BEG and DATE-END style span: 1 s apart on the clock labels, 2 SI seconds across the leap second.
+const span = exposureInterval({ start: timeYMDHMS(2016, 12, 31, 23, 59, 59.5, Timescale.UTC), end: timeYMDHMS(2017, 1, 1, 0, 0, 0.5, Timescale.UTC) })
+
+console.log(span.duration.toFixed(6)) // 2.000000 — seconds
+console.log(timeToDate(span.midpoint)) // [2016, 12, 31, 23, 59, 60, 500]
+```
+
 ### FK5 Precession and ICRS Frame Bias
 
 FK5 is the J2000 mean-equator-and-equinox catalog frame. ICRS differs from it by a small constant frame bias of a few tens of milliarcseconds, and FK5 positions at another equinox differ by precession. Both are rotations, so they preserve the length of a vector.
@@ -2304,10 +2483,10 @@ console.log(toDeg(equatorialToHorizontal(lst, latitude, latitude, lst)[1])) // 9
 
 A real observing site rarely has a flat, clear horizon: trees, buildings, and hills hide the sky below some altitude that depends on azimuth. A horizon mask records that as a list of azimuths with the minimum altitude a target must reach there to be seen. Between samples the minimum altitude is interpolated linearly around the circle, so the segment from the last azimuth back to the first is included.
 
-A mask is an array of `HorizonSample`s, `{ azimuth, minimumAltitude }` in radians with azimuth north through east. It may be empty (nothing is hidden), unordered, or have repeated azimuths (the higher altitude is kept); a single sample applies at every azimuth. `horizonMinimumAltitude(samples, azimuth)` returns the interpolated minimum altitude at an azimuth, or −π/2 for an empty mask. `isAboveHorizon(samples, altitude, azimuth)` is true when the altitude is at least that. `horizonCrossings(path, horizon)` finds where a sampled path crosses behind or out from behind the mask. A path is an array of `{ time, altitude, azimuth }` samples, with time in any uniform unit (the crossing keeps it) and angles in radians, sorted by time or not. It returns the `HorizonCrossing`s in time order as `{ time, altitude, azimuth, kind }`, where `kind` is `'set'` when the target goes behind the mask and `'rise'` when it emerges. Each path segment is split at the mask's azimuth samples so that a peak or valley inside it still gives its crossings; the samples must be dense enough that each step is the short azimuth arc. A path of fewer than two samples has no crossings. To make a path from an ephemeris, sample the altitude and azimuth of the target (see [Local Horizon Coordinates](#local-horizon-coordinates)).
+A mask is an array of `HorizonSample`s, `{ azimuth, minimumAltitude }` in radians with azimuth north through east. It may be empty (nothing is hidden), unordered, or have repeated azimuths (the higher altitude is kept); a single sample applies at every azimuth. `horizonMinimumAltitude(samples, azimuth)` returns the interpolated minimum altitude at an azimuth, or −π/2 for an empty mask. `horizonMinimumAltitudeLookup(samples)` prepares the mask once and returns an `(azimuth) => altitude` function with the same rules, for repeated lookups; it copies the samples. `isAboveHorizon(samples, altitude, azimuth)` is true when the altitude is at least that. `horizonCrossings(path, horizon)` finds where a sampled path crosses behind or out from behind the mask. A path is an array of `{ time, altitude, azimuth }` samples, with time in any uniform unit (the crossing keeps it) and angles in radians, sorted by time or not. It returns the `HorizonCrossing`s in time order as `{ time, altitude, azimuth, kind }`, where `kind` is `'set'` when the target goes behind the mask and `'rise'` when it emerges. Each path segment is split at the mask's azimuth samples so that a peak or valley inside it still gives its crossings; the samples must be dense enough that each step is the short azimuth arc. A path of fewer than two samples has no crossings. To make a path from an ephemeris, sample the altitude and azimuth of the target (see [Local Horizon Coordinates](#local-horizon-coordinates)).
 
 ```ts
-import { horizonCrossings, horizonMinimumAltitude, isAboveHorizon, type HorizonSample, type HorizontalPathSample } from 'nebulosa/src/astronomy/observer/horizon'
+import { horizonCrossings, horizonMinimumAltitude, horizonMinimumAltitudeLookup, isAboveHorizon, type HorizonSample, type HorizontalPathSample } from 'nebulosa/src/astronomy/observer/horizon'
 import { deg, toDeg } from 'nebulosa/src/math/units/angle'
 
 // Obstructions every 90° of azimuth: 10° to the north, 25° to the east, 5° to the south, 15° to the west.
@@ -2322,6 +2501,11 @@ const mask: HorizonSample[] = [
 console.log(toDeg(horizonMinimumAltitude(mask, deg(45)))) // 17.5 — degrees
 console.log(toDeg(horizonMinimumAltitude(mask, deg(315)))) // 12.5 — degrees
 console.log(toDeg(horizonMinimumAltitude([], deg(45)))) // -90 — an empty mask hides nothing
+
+// Prepared once for many lookups.
+const lookup = horizonMinimumAltitudeLookup(mask)
+
+console.log(toDeg(lookup(deg(45)))) // 17.5 — degrees
 
 console.log(isAboveHorizon(mask, deg(20), deg(45))) // true — 20° is above the 17.5° there
 console.log(isAboveHorizon(mask, deg(15), deg(60))) // false — the mask is about 20° at that azimuth
@@ -4038,8 +4222,8 @@ const time = timeYMDHMS(2025, 7, 1, 3, 0, 0, Timescale.UTC)
 
 time.location = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
 
-// The Earth's [heliocentric, barycentric] state at that TDB instant.
-const [heliocentric, barycentric] = eraEpv00(tdb(time).day, tdb(time).fraction)
+// The Earth's [barycentric, heliocentric] state at that TDB instant.
+const [barycentric, heliocentric] = eraEpv00(tdb(time).day, tdb(time).fraction)
 
 const observed = observeStar(barnard, time, barycentric, heliocentric[0])
 
@@ -4602,14 +4786,14 @@ import { toKilometerPerSecond } from 'nebulosa/src/math/units/velocity'
 const location = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
 const time = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.UTC)
 const t = tdb(time)
-const [heliocentric, barycentric] = eraEpv00(t.day, t.fraction)
+const [barycentric, heliocentric] = eraEpv00(t.day, t.fraction)
 
 // Source at RA 5.5 h, Dec -5°. Earth state sets the reference center.
 const correction = radialVelocityCorrection(hour(5.5), deg(-5), time, barycentric, location)
 
-console.log(toKilometerPerSecond(correction)) // -8.056 — km/s, barycentric
-console.log(toKilometerPerSecond(radialVelocityCorrection(hour(5.5), deg(-5), time, heliocentric, location))) // -8.061 — km/s, heliocentric
-console.log(toKilometerPerSecond(radialVelocityCorrection(hour(5.5), deg(-5), time, barycentric))) // -8.381 — km/s, geocentric (no diurnal term)
+console.log(toKilometerPerSecond(correction)) // -8.061 — km/s, barycentric
+console.log(toKilometerPerSecond(radialVelocityCorrection(hour(5.5), deg(-5), time, heliocentric, location))) // -8.056 — km/s, heliocentric
+console.log(toKilometerPerSecond(radialVelocityCorrection(hour(5.5), deg(-5), time, barycentric))) // -8.386 — km/s, geocentric (no diurnal term)
 ```
 
 ### Refractive Displacement
@@ -4711,11 +4895,80 @@ console.log(curved?.longitudeAccelerationPerDaySquared) // 0.027925 — radians/
 console.log(angularMotionOrDifferentialTrackingRate([samples[0]])) // undefined — a single sample has no rate
 ```
 
+### Satellite Collision Probability
+
+The probability of collision (Pc) of a satellite conjunction is the chance that the two objects, whose positions at the time of closest approach (TCA) are uncertain, come within their combined hard-body radius R. In the short-encounter model (Foster & Estes 1992, Chan 1997, Alfano 2005) the relative motion is a straight line during the brief encounter, the position errors are independent Gaussians with combined covariance C = C1 + C2, and the problem collapses onto the **encounter plane** perpendicular to the relative velocity: Pc is the mass of the projected 2D Gaussian, centred at the miss vector, inside a disk of radius R. The covariance comes from orbit determination, typically delivered in a CCSDS Conjunction Data Message (CDM); it is never derived from TLEs, so an SGP4 screen with [Satellite Conjunctions](#satellite-conjunctions) can find a candidate but cannot supply its Pc.
+
+`parseCDM(text)` reads a CCSDS 508.0-B-1 CDM, version 1.0, in KVN form. It is a strict boundary for untrusted text: it rejects XML CDMs, other message types and versions, keywords outside the standard or out of its fixed order, missing obligatory items, wrong or missing units designators, malformed numbers and time tags (including a 23:59:60 second on a day without a positive leap second in the UTC leap-second table), partial covariance rows, and objects whose `REF_FRAME` or `ORBIT_CENTER` differ. Each rejection throws a `CDMParseError` whose `code` (`'unsupportedFormat'`, `'unsupportedVersion'`, `'syntax'`, `'unknownKeyword'`, `'order'`, `'duplicate'`, `'missing'`, `'unit'`, `'value'` or `'frame'`), `line` and `keyword` identify the problem. The message is converted to library units: positions, miss distance and screening volume in AU, velocities in AU/day, the 6x6 RTN covariance in AU², AU²/day and AU²/day², time tags as UTC `Time`. Areas, mass, A/m ratios and other physical parameters keep their CDM SI units, and the optional drag, SRP and thrust covariance rows keep their consider-parameter factor in CDM units.
+
+`cdmEncounterStates(cdm)` turns the two objects into `EncounterObjectState`s in the axes of the message `REF_FRAME` at TCA. Each RTN covariance (R radial, N along the inertial orbit normal, T = N×R) is rotated into those axes with `rotateStateCovariance` and `rtnRotation`. EME2000 and GCRF states are used as given. For ITRF the Earth-spin term ω×r is added to the velocity, because RTN is defined by the inertial orbit plane. Pc does not change under a rotation of the shared frame, so no conversion to GCRF is needed.
+
+`collisionProbability(primary, secondary, hardBodyRadius, options?)` estimates Pc from two states in the same frame at the same epoch. `cdmCollisionProbability(cdm, hardBodyRadius, options?)` does the same from a parsed CDM. The CDM carries no hard-body radius, so the caller supplies R in AU. `options.method` selects the estimator:
+
+- `'quadrature'` (default) integrates the disk to `options.relativeTolerance` (default 1e-10) with adaptive Gauss-Kronrod quadrature. It is accurate for the short-encounter model only; it does not model curved relative motion, a covariance that changes during the encounter, or velocity uncertainty.
+- `'smallObject'` uses the density at the disk centre times πR². It is only valid when R is much smaller than the minor plane sigma and the density barely varies across the disk; `smallObjectValidity` reports whether that holds.
+
+The result is a discriminated union. A `'failure'` is returned for a zero relative velocity, an indefinite position covariance (any negative variance included), or an encounter-plane covariance that cannot be certified positive definite once each of its entries is widened by the rounding error of projecting the 3D covariance onto the plane. A strongly elongated plane, or one with a large uncertainty along the relative velocity, is integrated as long as its transverse block is resolved. Along-track variance only limits that resolution when the frame axes are oblique to the encounter axes. An `'estimate'` carries:
+
+- the probability, and the algorithmic quadrature `error` and `converged` flag (`0` and `true` for `'smallObject'`). Neither describes the error of the approximation or of the short-encounter model;
+- the encounter geometry: relative state (secondary minus primary), plane axes, projected miss and covariance, principal sigmas, Mahalanobis distance, and the offset of the rectilinear closest approach from the state epoch;
+- covariance checks for both objects and the combined position covariance: definiteness and condition number of each correlation matrix;
+- short-encounter diagnostics: `encounterDuration` (seconds, ±`encounterSigma` along-track sigmas, default 5), the `orbitalArc` swept during it, and the relative-velocity direction uncertainty `velocityAngle`. `valid` is false when either angle exceeds its maximum (both default to 0.01 rad). These are screening heuristics, not error bounds;
+- small-object diagnostics, reported for both estimators: `radiusRatio` = R/σ_minor and the signed `relativeCorrection` c2 + c4, the second- and fourth-order terms of the mean-value expansion of the density over the disk, (R²/8)·∇²f/f and (R⁴/192)·∇⁴f/f. It estimates (exact − smallObject)/smallObject only while both terms are small. `valid` requires `radiusRatio < 1` and |c2| + |c4| at most `options.maximumSmallObjectCorrection` (default 0.01). Summing the magnitudes catches the ring where c2 vanishes. `valid` is a domain heuristic, not a bound on the error.
+
+The example uses the obligatory-keyword CDM of CCSDS 508.0-B-1 section 3.6.2. That message illustrates two things the checks report: Object1's published 6x6 covariance is not positive semidefinite (|corr(R, Ṫ)| > 1), although its position block is, and with R close to the minor plane sigma the small-object approximation is off by a factor of about 3.
+
+```ts
+import { CDMParseError, parseCDM } from 'nebulosa/src/astronomy/orbits/cdm'
+import { cdmCollisionProbability, cdmEncounterStates, collisionProbability } from 'nebulosa/src/astronomy/orbits/collision'
+import { meter, toMeter } from 'nebulosa/src/math/units/distance'
+
+// CCSDS 508.0-B-1 section 3.6.2 example message, saved as KVN text.
+const text = await Bun.file('conjunction.cdm').text()
+const cdm = parseCDM(text)
+
+console.log(toMeter(cdm.relative.missDistance)) // 715 — reported miss distance, m
+console.log(cdm.objects[1].name, cdm.objects[1].referenceFrame) // FENGYUN 1C DEB EME2000
+
+const result = cdmCollisionProbability(cdm, meter(20)) // combined hard-body radius 20 m
+
+if (result.kind === 'estimate') {
+	console.log(result.probability) // 4.7428e-7
+	console.log(toMeter(result.geometry.plane.miss[0])) // 715.75 — miss in the encounter plane, m
+	console.log(toMeter(result.geometry.plane.sigmaMajor), toMeter(result.geometry.plane.sigmaMinor)) // 207.49 20.943 — m
+	console.log(result.covariance.primaryState.definiteness) // indefinite — published Object1 6x6 covariance
+	console.log(result.covariance.primaryPosition.definiteness) // positiveDefinite
+	console.log(result.validity.valid, result.validity.encounterDuration) // true 1.064 — s
+}
+
+const approximate = cdmCollisionProbability(cdm, meter(20), { method: 'smallObject' })
+if (approximate.kind === 'estimate') {
+	console.log(approximate.probability) // 1.642e-7 — about 2.9 times too small
+	console.log(approximate.error, approximate.converged) // 0 true — no algorithmic error, says nothing about the approximation
+	console.log(approximate.smallObjectValidity) // { radiusRatio: 0.955, relativeCorrection: 1.865, valid: false }
+}
+
+// With R = 1 m the approximation is in its domain: the predicted correction 0.003546 matches the actual one.
+const tiny = cdmCollisionProbability(cdm, meter(1), { method: 'smallObject' })
+console.log(tiny.kind === 'estimate' && tiny.smallObjectValidity.valid) // true
+
+// The same estimate from explicit states, for a 5 m radius.
+const [primary, secondary] = cdmEncounterStates(cdm)
+const small = collisionProbability(primary, secondary, meter(5))
+console.log(small.kind === 'estimate' && small.probability) // 1.119e-8
+
+try {
+	parseCDM(text.replace('CCSDS_CDM_VERS = 1.0', 'CCSDS_CDM_VERS = 2.0'))
+} catch (e) {
+	if (e instanceof CDMParseError) console.log(e.code, e.line) // unsupportedVersion 1
+}
+```
+
 ### Satellite Conjunctions
 
 `satelliteConjunctions(a, b, start, stop, options?)` screens two satellites for close approaches. Both are propagated with SGP4 in the shared TEME frame, so their separation is the direct difference of the two position vectors and needs no frame conversion. The squared separation is sampled every `options.step` (default 30 s), its local minima are bracketed by the shared extrema search and refined with Brent's minimizer, and each one is reported as a `SatelliteConjunction`: the `time` of closest approach, the true `distance` (AU) and the `relativeSpeed` (AU/day) at that instant. Only minima at or below `options.threshold` (AU, default no limit) are returned, in chronological order.
 
-This is a geometric screen of the SGP4 states, not a collision probability: it has no covariance and no uncertainty on the element sets. SGP4 is only valid near each TLE epoch, so `start` and `stop` should stay within a few days of the epochs of both objects. The step must be finer than the approach one wants to catch, because a deep and brief minimum between two coarse samples can be missed, which matters for close approaches at high relative speed.
+This is a geometric screen of the SGP4 states, not a collision probability: it has no covariance and no uncertainty on the element sets. For a probability from orbit-determination covariances, see [Satellite Collision Probability](#satellite-collision-probability). SGP4 is only valid near each TLE epoch, so `start` and `stop` should stay within a few days of the epochs of both objects. The step must be finer than the approach one wants to catch, because a deep and brief minimum between two coarse samples can be missed, which matters for close approaches at high relative speed.
 
 The example uses a synthetic companion, the ISS elements with the ascending node shifted by +10°. The two orbital planes then cross and the separation has two minima per revolution; they are not a real close approach.
 
@@ -5233,6 +5486,65 @@ console.log(toDeg(WEB_MERCATOR_MAX_LATITUDE)) // 85.05 — degrees
 console.log(new WebMercator().project(0, deg(90))) // { x: 0, y: 3.1416 }
 ```
 
+### Sky Surface Brightness (Krisciunas and Schaefer)
+
+The brightness of the night sky sets the background of every exposure. `astronomy/sky/brightness` predicts it in mag/arcsec² with the scattered-moonlight model of Krisciunas and Schaefer (1991, PASP 103, 1033). The sky is the flux sum of three components kept separate in the result: the natural dark sky (airglow, zodiacal light and faint stars), an artificial light-pollution baseline and the moonlight scattered by Rayleigh and aerosol (Mie) processes. The dark components grow toward the horizon as `B(X) = B_zen · X · 10^(-0.4·k·(X - 1))`, with the scattering airmass `X = (1 - 0.96·sin²Z)^-1/2` (1 at the zenith, 5 on the horizon), and the moonlight follows the K&S lunar phase law (with the +35% opposition surge inside 7 degrees of full Moon and the inverse square of the lunar distance), their scattering function of the Moon–target separation and the extinction of both lines of sight. The two published aerosol fits do not meet at 10 degrees of separation, so the brightness jumps there (by 0.15 mag in the example below) and should not be treated as a smooth function of the separation. Fluxes are in nanolamberts, `B = 34.08 · exp(20.7233 - 0.92104·m)`, which `skyMagnitudeToNanolamberts` and `nanolambertsToSkyMagnitude` convert.
+
+`skyBrightness(geometry, model?)` takes the geometric altitudes of the target and of the Sun, and optionally the Moon's topocentric altitude, phase angle (0 at full Moon, PI at new Moon), separation from the target and distance in AU (the mean 384 400 km when omitted). A Moon left out or not above the horizon adds nothing. The `model` is the passband and site calibration: the extinction `k` in mag/airmass, the natural zenith brightness, an optional light-pollution zenith brightness and a `moonOffset` in magnitudes added to the moonlight. `KRISCIUNAS_SCHAEFER_V` is the published V calibration for Mauna Kea (k = 0.172, a 21.587 mag/arcsec² zenith, no light pollution), and the authors report 8–23% rms agreement with their observations. The moonlight is a physical prediction only in V: a non-zero `moonOffset` shifts the Rayleigh and Mie terms together, while their real ratio changes with wavelength and separation, so it is a heuristic extrapolation that holds at most at the separation where it was fitted. The dark-sky extinction and zenith can be set for any band. The result has the `total`, `natural`, `lightPollution` and `moon` brightness (the last two `undefined` when absent), the `moonDelta` of the Moon on the total, the `fluxes`, both airmasses and the `warnings` of the regimes the model does not describe: `twilight` (Sun above -18 degrees, there is no solar term), `belowHorizon`, `highAirmass` and `moonHighAirmass` (below 20 degrees, a Nebulosa reliability bound), `moonClose` (within 15 degrees of the Moon, covering the poorly constrained aureole below 10 degrees and the jump at 10 degrees) and `moonColorExtrapolated` (moonlight through a non-zero `moonOffset`). The light pollution shares the airmass gradient of the natural sky, so it is isotropic, not a dome brighter toward a city.
+
+`fitSkyBaseline(measurements, model?)` calibrates a site from sky-quality-meter readings or calibrated image backgrounds, each with its geometry and `measured` brightness in the model passband. Because the natural and artificial components have the same gradient, the measurements constrain only their sum: the fit keeps the natural zenith and fits the light-pollution zenith that minimizes the relative flux residuals after the predicted moonlight is removed. Readings with warnings or non-finite values are rejected, a sky darker than the natural model leaves `lightPollutionZenith` undefined, and no usable reading returns `undefined`. `skyBrightnessGeometryAt(target, time, location, sources)` builds the geometry for an observer and epoch from a J2000 target direction and geocentric J2000 Sun and Moon positions in AU (the callbacks of [Twilight and Darkness Windows](#twilight-and-darkness-windows)); the observer's geocentric offset (its ITRS position rotated into GCRS axes at the epoch) is subtracted from the Sun and the Moon, so the lunar altitude, separation, phase angle and distance all describe the topocentric Moon, and the altitudes are geometric (no refraction). Unlike the [Observation Scores](#observation-scores), which rank targets with dimensionless ramps, this is a photometric prediction.
+
+```ts
+import { eraS2c } from 'nebulosa/src/astronomy/coordinates/erfa/erfa'
+import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { Ellipsoid, geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { fitSkyBaseline, KRISCIUNAS_SCHAEFER_V, nanolambertsToSkyMagnitude, skyBrightness, skyBrightnessGeometryAt, skyMagnitudeToNanolamberts } from 'nebulosa/src/astronomy/sky/brightness'
+import { type Time, Timescale, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+import { kilometer } from 'nebulosa/src/math/units/distance'
+
+// The dark zenith of the V calibration, and its linear flux.
+console.log(skyBrightness({ altitude: deg(90), sunAltitude: deg(-30) }).total) // 21.587 — mag/arcsec²
+console.log(skyMagnitudeToNanolamberts(21.587), nanolambertsToSkyMagnitude(79)) // 79.006 21.587 — nL, mag/arcsec²
+
+// A target 60 degrees high, 45 degrees from a gibbous Moon (phase angle 40 degrees) 40 degrees high.
+const geometry = { altitude: deg(60), sunAltitude: deg(-25), moon: { altitude: deg(40), phaseAngle: deg(40), separation: deg(45) } }
+const sky = skyBrightness(geometry)
+
+console.log(sky.total, sky.natural, sky.moon) // 19.131 21.463 19.266 — mag/arcsec²
+console.log(sky.moonDelta, sky.airmass, sky.warnings) // -2.332 1.147 [] — mag, scattering airmass
+console.log(skyBrightness({ ...geometry, moon: { ...geometry.moon, separation: deg(90) } }).total) // 19.695 — farther from the Moon
+console.log(skyBrightness({ ...geometry, moon: { ...geometry.moon, separation: deg(10) } }).total) // 18.282 — the aureole fit
+console.log(skyBrightness({ ...geometry, moon: { ...geometry.moon, separation: deg(10.001) } }).total) // 18.129 — the Mie fit, flagged moonClose
+console.log(skyBrightness(geometry, { ...KRISCIUNAS_SCHAEFER_V, extinction: 0.25 }).total) // 18.913 — a hazier sky scatters more
+console.log(skyBrightness({ altitude: deg(15), sunAltitude: deg(-14) }).warnings) // [ 'twilight', 'highAirmass' ]
+console.log(skyBrightness(geometry, { ...KRISCIUNAS_SCHAEFER_V, moonOffset: 0.6 }).warnings) // [ 'moonColorExtrapolated' ]
+
+// SQM readings of a suburban site; the twilight reading is rejected.
+const fit = fitSkyBaseline([
+	{ altitude: deg(90), sunAltitude: deg(-30), measured: 20.2 },
+	{ altitude: deg(45), sunAltitude: deg(-25), measured: 19.85 },
+	{ altitude: deg(70), sunAltitude: deg(-10), measured: 18.5 },
+])!
+
+console.log(fit.model.lightPollutionZenith, fit.residualRms, fit.used, fit.rejected) // 20.514 0.031 2 1 — mag/arcsec², mag
+
+const suburban = skyBrightness(geometry, fit.model)
+
+console.log(suburban.total, suburban.lightPollution, suburban.moonDelta) // 18.835 20.390 -1.212 — the Moon matters less there
+
+// The Large Magellanic Cloud from Cerro Pachón, 12 minutes before the full Moon of 2026-10-26 at 04:12 UTC.
+const site = geodeticLocation(deg(-70.7375), deg(-30.24), kilometer(2.2), Ellipsoid.WGS84)
+const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0])
+const moonAt = (time: Time) => moon(time)[0]
+const time = timeYMDHMS(2026, 10, 26, 4, 0, 0, Timescale.UTC)
+const lmc = skyBrightness(skyBrightnessGeometryAt(eraS2c(hour(5.5), deg(-69.75)), time, site, { sunAt, moonAt }))
+
+console.log(lmc.total, lmc.moonDelta, lmc.warnings) // 18.424 -2.784 [] — target at 38.9°, Moon at 42.1° and 94.8° away
+```
+
 ### Sky-Plane Uncertainty Ellipses
 
 An orbit's position uncertainty is a 3D ellipsoid, but an observer sees only its projection on the plane of the sky. That projection is an error ellipse around the predicted position, which tells you how large a field must be to catch the object. The linear position spread is divided by the distance to give angles, and the ellipse axes are the eigenvalues of the 2×2 covariance along East (increasing right ascension) and North (increasing declination).
@@ -5264,6 +5576,79 @@ console.log(toDeg(ellipse.positionAngle)) // 73.5 — degrees, major axis from n
 
 // The 3-sigma ellipse.
 console.log(toArcsec(ephemerisUncertaintyEllipse(covariance, geocentric, { sigma: 3 }).semiMajor)) // 19.8 — arcseconds
+```
+
+### Solar Disk Geometry and Heliographic Coordinates
+
+The orientation of the solar disk is described by three angles: P, the position angle of the solar north pole measured from celestial north toward east; B0, the heliographic latitude of the disk center; and L0, the Carrington longitude of the disk center. Heliographic latitude is positive toward solar north. Stonyhurst longitude is measured from the observer's central meridian, positive toward the west limb (the direction of rotation), in `(−π, π]`. Carrington longitude is fixed to the Sun rotating rigidly at 14.1844°/day (the IAU `SUN_ROTATION` prime meridian), in `[0, 2π)`, so Carrington = Stonyhurst + L0 and L0 decreases by about 13.2°/day. L0 is not the fractional [Carrington Rotation](#carrington-rotation) number.
+
+`solarDiskGeometry(time, observer, sun)` takes barycentric ICRS states (AU, AU/day): the Earth for a geocentric observer, or `observerState` for a site (see [Barycentric and Heliocentric Light-Time Correction](#barycentric-and-heliocentric-light-time-correction)). B0 and L0 use the IAU rotation retarded by the light time from the nearest surface point and exclude aberration, matching SunPy's defaults; the Astronomical Almanac L0 includes aberration and is about 0.006° smaller. `p` is referred to the true equator and equinox of date at the aberrated disk center, and `pIcrs` to ICRS north, which is what a J2000/ICRS plate solution measures; they differ by precession and nutation, up to about 0.16° in 2026. `approximateSolarDiskGeometry(time)` is the geocentric Meeus chapter 29 model: P and B0 agree with the IAU result to a few thousandths of a degree, but its L0 departs by a few hundredths. Both return `distance` (AU) and `semidiameter` (radians) for the IAU nominal solar radius.
+
+The mapping functions place a line of sight on the solar sphere seen from that observer at its finite distance. `helioprojectiveToHeliographic(tx, ty, geometry)` takes angles from the disk center, `tx` toward solar west and `ty` toward solar north; `solarImageToHeliographic(x, y, geometry, calibration)` takes pixels (origin upper left, +X right, +Y down) of an ideal gnomonic image centered on the disk, without lens distortion. Both return `onDisk: true` with the latitude, both longitudes and `mu` (cosine of the heliocentric angle, 1 at disk center and 0 at the limb; an exactly tangent line of sight counts as on the disk despite rounding), or `onDisk: false` with the angular `elongation` from the disk center. The calibration's `positionAngle` is the direction of image "up" from celestial north toward east, measured from the north named by `north` (`'date'` by default, or `'icrs'`); `mirrored` swaps east and west, and `solarImageScale(geometry, radius)` derives the scale from a measured disk radius in pixels. The inverses `heliographicToHelioprojective` and `heliographicToSolarImage` accept a Stonyhurst or Carrington longitude and flag far-side points with `visible: false`.
+
+`rotateCarringtonLongitude(longitude, latitude, from, to, model?)` moves a feature by differential rotation, ω = A + B sin²φ + C sin⁴φ (sidereal), relative to the rigid Carrington rate over the TDB interval; `solarRotationRate(latitude, model?)` returns ω in radians per day. The default is `HOWARD_1990_DIFFERENTIAL_ROTATION`; `SNODGRASS_1983_DIFFERENTIAL_ROTATION` and `ALLEN_DIFFERENTIAL_ROTATION` use the SunPy coefficient tables. Latitude is kept, so map the new Carrington longitude through the geometry of the later time.
+
+```ts
+import {
+	approximateSolarDiskGeometry,
+	heliographicToHelioprojective,
+	heliographicToSolarImage,
+	helioprojectiveToHeliographic,
+	rotateCarringtonLongitude,
+	SNODGRASS_1983_DIFFERENTIAL_ROTATION,
+	solarDiskGeometry,
+	solarImageScale,
+	solarImageToHeliographic,
+	solarRotationRate,
+} from 'nebulosa/src/astronomy/bodies/sun.heliographic'
+import { observerState } from 'nebulosa/src/astronomy/coordinates/correction'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { geodeticLocation } from 'nebulosa/src/astronomy/observer/location'
+import { Timescale, timeShift, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { arcsec, deg, toArcsec, toDeg } from 'nebulosa/src/math/units/angle'
+
+const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
+
+// Geocentric observer: barycentric Earth and Sun states.
+const geometry = solarDiskGeometry(time, earth(time), sun(time))
+
+console.log(toDeg(geometry.p), toDeg(geometry.b0), toDeg(geometry.l0)) // -3.6155 2.6155 96.8428 — degrees, P, B0, L0
+console.log(toDeg(geometry.pIcrs), toArcsec(geometry.semidiameter)) // -3.7758 943.64 — P from ICRS north (degrees), radius (arcseconds)
+
+// Topocentric observer at 45° W, 23° S.
+const site = geodeticLocation(deg(-45), deg(-23), 0)
+console.log(toDeg(solarDiskGeometry(time, observerState(time, earth(time), site), sun(time)).l0)) // 96.8412 — degrees
+
+// Geocentric Meeus approximation.
+console.log(toDeg(approximateSolarDiskGeometry(time).l0)) // 96.885 — degrees
+
+// A line of sight 300″ west and 200″ north of the disk center, and back.
+const point = helioprojectiveToHeliographic(arcsec(300), arcsec(200), geometry)
+
+if (point.onDisk) {
+	console.log(toDeg(point.stonyhurstLongitude), toDeg(point.latitude), toDeg(point.carringtonLongitude)) // 19.100 14.657 115.943 — degrees
+	console.log(point.mu) // 0.924
+}
+
+const projected = heliographicToHelioprojective(deg(30), deg(20), 'stonyhurst', geometry)
+console.log(toArcsec(projected.tx), toArcsec(projected.ty), projected.visible) // 445.05 288.45 true — arcseconds
+
+// A plate-solved image: disk center at (1024, 1024), radius 960 px, ICRS north up.
+const calibration = { centerX: 1024, centerY: 1024, scale: solarImageScale(geometry, 960), positionAngle: 0, north: 'icrs' } as const
+const spot = solarImageToHeliographic(1300, 900, geometry, calibration)
+
+if (spot.onDisk) {
+	console.log(toDeg(spot.stonyhurstLongitude), toDeg(spot.latitude)) // 16.399 10.973 — degrees
+
+	// Two days later the spot has rotated about 26° west.
+	const later = timeShift(time, 2)
+	const laterGeometry = solarDiskGeometry(later, earth(later), sun(later))
+	const carrington = rotateCarringtonLongitude(spot.carringtonLongitude, spot.latitude, time, later)
+	console.log(heliographicToSolarImage(carrington, spot.latitude, 'carrington', laterGeometry, calibration)) // { x: 1675.47, y: 907.61, visible: true }
+}
+
+console.log(solarImageToHeliographic(100, 100, geometry, calibration)) // { onDisk: false, elongation: 0.00623 } — beyond the limb, radians from the disk center
+console.log(toDeg(solarRotationRate(deg(30))), toDeg(solarRotationRate(deg(30), SNODGRASS_1983_DIFFERENTIAL_ROTATION))) // 13.682 13.542 — degrees/day
 ```
 
 ### Solar Eclipse Besselian Elements
@@ -5792,7 +6177,7 @@ A body (an asteroid, or the Moon treated as a sphere) occults a star when its di
 
 `target` and `observer` are samplers of position and velocity (`PositionAndVelocityOverTime`) in the same origin and frame, normally barycentric ICRS; the topocentric observer state, for example from `observerState`, is what includes the diurnal parallax, which decides which sites see the event. `star` is the ICRS direction to the star, and does not need to be a unit vector; fold proper motion and parallax into it first, as the track is only as wide as the body. Light time to the body is iterated `options.lightTimeIterations` times (default 2, enough for interplanetary distances; 0 gives the geometric position), which samples the `target` before `start` by up to the light travel time, while the observer is only sampled inside the window. Annual and diurnal aberration are omitted because they shift the star and the body almost equally and cancel in the differential separation. The accuracy is set by the ephemeris of the body and the astrometry of the star, not by this geometry.
 
-`options.radius` is the physical radius of the body in AU (default 0, which makes every appulse a near miss), `options.maxSeparation` (radians) discards wider appulses, and `options.step` (default 60 s) must be finer than the approach one wants to catch; it is capped at a quarter of the window, so a short window is still sampled. The candidate carries the `separation` and `angularRadius` (radians), the topocentric `distance` (AU), the `relativeAngularSpeed` (radians/day) and, for a true occultation, the `duration` in seconds: the chord across the disk at that impact parameter divided by the speed. Candidates are chronological.
+`options.radius` is the physical radius of the body in AU (default 0, which makes every appulse a near miss), `options.maxSeparation` (radians) discards wider appulses, and `options.step` (default 60 s) must be finer than the approach one wants to catch; it is capped at a quarter of the window, so a short window is still sampled. The candidate carries the `separation` and `angularRadius` (radians), the topocentric `distance` (AU), the `relativeAngularSpeed` (radians/day) and, for a true occultation, the `duration` in seconds: the chord across the disk at that impact parameter divided by the speed. Candidates are chronological. To map where on Earth the event is visible, see [Stellar Occultation Ground Tracks](#stellar-occultation-ground-tracks).
 
 The first example is a synthetic encounter whose result has a closed form: a body 2 AU away drifts transversely at 2·10⁻⁴ AU/day past a star on the +x axis, with a miss distance of 10⁻⁶ AU, and the observer is fixed at the origin.
 
@@ -5844,6 +6229,7 @@ import { KeplerOrbit } from 'nebulosa/src/astronomy/orbits/asteroid'
 import { Timescale, time, timeShift, timeSubtract, type Time } from 'nebulosa/src/astronomy/time/time'
 import { AU_KM, DAYSEC, GM_SUN_PITJEVA_2005 } from 'nebulosa/src/core/constants'
 import { matIdentity } from 'nebulosa/src/math/linear-algebra/mat3'
+import { vecPlus } from 'nebulosa/src/math/linear-algebra/vec3'
 import { deg, toArcsec } from 'nebulosa/src/math/units/angle'
 import { kilometer, toKilometer } from 'nebulosa/src/math/units/distance'
 
@@ -5855,10 +6241,7 @@ const site = geodeticLocation(deg(-46.633), deg(-23.55), kilometer(0.76), Ellips
 const target: PositionAndVelocityOverTime = (t) => {
 	const [sunPosition, sunVelocity] = sun(t)
 	const [position, velocity] = orbit.at(t)
-	return [
-		[sunPosition[0] + position[0], sunPosition[1] + position[1], sunPosition[2] + position[2]],
-		[sunVelocity[0] + velocity[0], sunVelocity[1] + velocity[1], sunVelocity[2] + velocity[2]],
-	]
+	return [vecPlus(sunPosition, position), vecPlus(sunVelocity, velocity)]
 }
 const observer: PositionAndVelocityOverTime = (t) => observerState(t, earth(t), site)
 
@@ -5874,6 +6257,72 @@ console.log(appulse.occultation) // true
 console.log(toArcsec(appulse.separation)) // 0.00026
 console.log(toKilometer(appulse.distance)) // 559365738 — km
 console.log(toArcsec(appulse.relativeAngularSpeed) / DAYSEC) // 0.0171 — arcsec/s
+```
+
+### Stellar Occultation Ground Tracks
+
+The shadow that a body casts from a point source sweeps a corridor across the Earth: inside it the source disappears, on its edges it grazes the limb. Where [Stellar and Asteroidal Occultations](#stellar-and-asteroidal-occultations) answers whether one site sees the event, `occultationPath` solves where on Earth it is seen. At each reception instant it forms the shadow in BCRS (a cylinder for a source at infinity, a cone for a point source at finite distance), rotates it into ITRS with the full GCRS → ITRS matrix and intersects the centerline, the two limit lines and, optionally, two uncertainty-corridor lines with the reference ellipsoid. Only causal geometry counts: the light must pass the body before reaching the ground, so a body on the far side of the Earth from the source, or a finite source lying between the Earth and the body, casts no shadow. The body is a sphere and the source a point: refraction, topography, the stellar diameter, diffraction and limb profiles are not modelled.
+
+`target` (the occulting body) and `earth` (the geocenter) are barycentric ICRS samplers in AU and AU/day, evaluated at TDB instants. `source` is the ICRS direction to a source at infinity (a star with its proper motion and parallax already applied; it need not be a unit vector) or a barycentric sampler of a finite-distance point source, such as a star from `spaceMotion` or the Sun's centre. `start` and `stop` may use any timescale; Earth orientation is evaluated from it (UT1 through the time's Earth-orientation providers), and all returned times use the timescale of `start`. `options.radius` (AU) is the body radius; `step` (days, default 10 s) must resolve every limb crossing; `tolerance` (days, default ~1 ms) controls contact refinement; `ellipsoid` defaults to `Ellipsoid.IERS2010`, and `height` (AU) inflates both semi-axes to approximate a uniform site elevation. `lightTimeIterations` (default 3) retards the body and a finite source.
+
+`mode: 'rigorous'` (the default) solves light time to the shadow plane, tilts the instantaneous axis by the light-time aberration of the moving shadow (about `v / c`, worth a few hundred metres on the ground), varies the cone radius with depth, places the limits on the true envelope of the shadow moving over the rotating ground and, when `sun` is given, applies the differential solar light deflection of source and body (omit `sun` when the source is the Sun). `mode: 'approximate'` is the classical fundamental-plane construction: geocentric light time, an untilted axis and limits offset perpendicular to the shadow motion relative to the geocenter; it can be off by up to about a kilometre. In both modes the accuracy is usually set by the body ephemeris and the star position, not by the geometry. Against the NASA path table of the 2024-04-08 total solar eclipse (the Sun's centre occulted by the Moon, with DE440s positions) the rigorous central line agrees within 0.6′ at the 17–19 h UT rows and at the sunrise endpoint, close to the ~1 km lunar centre-of-figure and ephemeris differences of the published table. Against the RASNZ path tables for (307) Nike on 2022-09-23, rebuilt from the published OrbFit elements, Gaia star position and DE440s, the centre, limits and error limits agree within 0.25 km and the times within 0.3 s; for (347) Pariana on 2019-11-28, whose table predates the posted elements, the corridor keeps its published shape within 0.5 km under a rigid ~8.5 km offset. Elements published with such predictions are referred to the ecliptic with the IAU 1976 obliquity of 84381.448″, while `asteroid` and the default `KeplerOrbit` rotation use 84381.411″; that 0.037″ difference moves a main-belt shadow by tens of kilometres, so build those orbits with `KeplerOrbit.meanAnomaly(..., mu, matTranspose(matRotX(arcsec(84381.448))))`.
+
+The result has the `shadow` intervals (first to last external contact of the shadow with the Earth), the `central` intervals (when the axis meets the Earth) and the `coverage` intervals, one per pass, spanned by the chronological `samples` on the step grid, plus refined samples where a line meets or leaves the limb. Without `uncertainty`, `coverage` equals `shadow`. Each sample has optional `center`, `left` and `right` ground points (geodetic `longitude` east-positive in (−π, π], `latitude`, and the geometric `altitude` of the source, 0 on the limb), the shadow `radius` (AU), the `speed` of the shadow relative to the ground in the fundamental plane (AU/day), the central `duration` (s), the ground `width` between the simultaneous limit points (AU) and the centerline `groundVelocity` (`speed` in AU/day, `azimuth` from north toward east). Left and right are relative to the direction of the shadow motion, seen from above with the source overhead.
+
+`uncertainty` takes the covariance of the body barycentric position (`body`, AU², row-major 3 × 3, ICRS axes) and of the source direction (`source`, rad², row-major 2 × 2 over east `Δα·cos δ` and north `Δδ`), both assumed constant over the event and independent, and a multiplier `sigma` (default 1). Each sample then reports the one-sigma `crossTrack` and `alongTrack` spread of the axis in the fundamental plane (AU), the `timing` sigma (s) and the `left` and `right` corridor lines, which sit `sigma` cross-track sigmas outside the limits. `coverage` then widens to wherever the corridor may touch the Earth, using a conservative bound of the cross-track sigma, so the corridor lines continue past the nominal contacts and are kept even when the nominal shadow misses the Earth; samples outside `shadow` normally carry only corridor points. The corridor never moves the nominal centerline, and the same fundamental-plane spread can map to different ground distances on either side near the limb. Without any covariance, samples carry no uncertainty.
+
+`occultationPathPolylines(path, line, unwrap?)` extracts `'center'`, `'left'`, `'right'`, `'corridorLeft'` or `'corridorRight'` as polylines, broken where the line leaves the Earth and between separate `coverage` intervals, so two passes are never joined. By default longitudes stay in [−π, π] and a polyline is split at the antimeridian with an interpolated vertex on each side of the seam; `unwrap: true` keeps continuous unwrapped longitudes instead. Rendering (SVG, GeoJSON) is left to the caller.
+
+The example reuses the Ceres orbit of the previous topic and anchors a synthetic star on the light-time-corrected geocentric direction of Ceres at 07:12 UTC, so the centerline passes under Ceres at that instant; it does not predict a real event.
+
+```ts
+import { type PositionAndVelocityOverTime, topocentricDirection } from 'nebulosa/src/astronomy/coordinates/astrometry'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { occultationPath, occultationPathPolylines } from 'nebulosa/src/astronomy/events/occultation.path'
+import { KeplerOrbit } from 'nebulosa/src/astronomy/orbits/asteroid'
+import { Timescale, time, timeShift, timeSubtract, timeToDate } from 'nebulosa/src/astronomy/time/time'
+import { DAYSEC, GM_SUN_PITJEVA_2005 } from 'nebulosa/src/core/constants'
+import { matIdentity } from 'nebulosa/src/math/linear-algebra/mat3'
+import { vecPlus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { mas, toDeg } from 'nebulosa/src/math/units/angle'
+import { kilometer, toKilometer } from 'nebulosa/src/math/units/distance'
+
+const epoch = time(2461200.5, 0, Timescale.TDB)
+const orbit = new KeplerOrbit([1.414905393343522, 2.2479053286939, 7.722476360317566e-1], [-9.08092698547858e-3, 3.499459682146027e-3, 3.499457832664595e-3], epoch, GM_SUN_PITJEVA_2005, matIdentity())
+
+// Barycentric Ceres: the VSOP87E Sun plus its heliocentric Kepler state.
+const ceres: PositionAndVelocityOverTime = (t) => {
+	const [sunPosition, sunVelocity] = sun(t)
+	const [position, velocity] = orbit.at(t)
+	return [vecPlus(sunPosition, position), vecPlus(sunVelocity, velocity)]
+}
+
+const anchor = time(2461200.5, 0.3, Timescale.UTC)
+const star = topocentricDirection(ceres, earth, anchor, 3)
+
+// Ceres radius 469 km; 1 mas star error and 20 km body error (1 sigma per axis); 2-sigma corridor.
+const error = kilometer(20)
+const path = occultationPath(ceres, star, earth, timeShift(anchor, -240 / DAYSEC), timeShift(anchor, 240 / DAYSEC), {
+	radius: kilometer(469),
+	step: 20 / DAYSEC,
+	uncertainty: { body: [error ** 2, 0, 0, 0, error ** 2, 0, 0, 0, error ** 2], source: [mas(1) ** 2, 0, 0, mas(1) ** 2], sigma: 2 },
+})
+
+console.log(timeToDate(path.central[0].start)) // [2026, 6, 9, 7, 9, 42, 130] — UTC, the axis first meets the Earth
+console.log(timeToDate(path.central[0].end)) // [2026, 6, 9, 7, 14, 17, 870]
+
+// The sample on the step grid at the anchor instant.
+const sample = path.samples.find((s) => Math.abs(timeSubtract(s.time, anchor)) < 1e-9)!
+console.log(toDeg(sample.center!.longitude), toDeg(sample.center!.latitude)) // 57.551 18.392 — degrees
+console.log(toDeg(sample.center!.altitude)) // 89.89 — Ceres almost at the zenith
+console.log(toKilometer(sample.width!)) // 938.0 — km, the shadow diameter at the zenith
+console.log(toKilometer(sample.speed) / DAYSEC, sample.duration) // 45.83 20.47 — km/s and s
+console.log(toDeg(sample.groundVelocity!.azimuth)) // 76.03 — moving east-northeast
+console.log(toKilometer(sample.uncertainty!.crossTrack), sample.uncertainty!.timing) // 20.18 0.44 — km and s
+console.log(toDeg(sample.left!.latitude), toDeg(sample.uncertainty!.left!.latitude)) // 22.504 22.858
+
+const [centerline] = occultationPathPolylines(path, 'center')
+console.log(centerline.length) // 23 — vertices from limb to limb
 ```
 
 ### Stellar Space Motion
@@ -5915,7 +6364,7 @@ console.log(spaceMotion(fixed, timeJulianYear(2025, Timescale.TDB))[0]) // the s
 
 The sub-observer point is the spot on a body's surface directly beneath the observer, the center of the disk as seen; its longitude is the central meridian. The sub-solar point is the spot directly beneath the Sun. Their latitudes are the tilt of the pole toward the observer or the Sun, and the longitude difference is the phase geometry. The orientation is evaluated one light time earlier, since the body turned while the light was in flight, which matters for fast rotators like Jupiter, whose prime meridian advances about 18° over the light time.
 
-`subObserverPoint(elements, time, bodyToObserver)` returns `{ longitude, latitude }` in radians, planetocentric and east-positive, with longitude in `[0, 2π)`. `bodyToObserver` is the vector from the body's center to the observer in AU, in ICRF axes: its length sets the light-time delay and its direction sets the point. `subSolarPoint(elements, time, bodyToObserver, bodyToSun)` takes the same and the body-to-Sun vector, whose small change over the light time is neglected, and returns the point beneath the Sun as the observer sees it. For west-positive (planetographic) longitudes of a prograde body use `2π − longitude`, as `jupiterCentralMeridian` does. `positionAngleOfPole(elements, time, bodyToObserver)` returns the position angle of the body's north pole on the sky, measured at the disk center from celestial north toward east, in `(−π, π]`; for the Sun it is the classical P angle. It is referred to the true equator and equinox of date and neglects aberration of the disk-center direction. The rotation elements come from [IAU Body Orientation](#iau-body-orientation).
+`subObserverPoint(elements, time, bodyToObserver)` returns `{ longitude, latitude }` in radians, planetocentric and east-positive, with longitude in `[0, 2π)`. `bodyToObserver` is the vector from the body's center to the observer in AU, in ICRF axes: its length sets the light-time delay and its direction sets the point. `subSolarPoint(elements, time, bodyToObserver, bodyToSun)` takes the same and the body-to-Sun vector, whose small change over the light time is neglected, and returns the point beneath the Sun as the observer sees it. For west-positive (planetographic) longitudes of a prograde body use `2π − longitude`, as `jupiterCentralMeridian` does. `positionAngleOfPole(elements, time, bodyToObserver)` returns the position angle of the body's north pole on the sky, measured at the disk center from celestial north toward east, in `(−π, π]`; for the Sun it is the classical P angle. It is referred to the true equator and equinox of date and neglects aberration of the disk-center direction. The rotation elements come from [IAU Body Orientation](#iau-body-orientation). For the Sun's P, B0 and L0 together, with aberration and image mapping, see [Solar Disk Geometry and Heliographic Coordinates](#solar-disk-geometry-and-heliographic-coordinates).
 
 ```ts
 import { positionAngleOfPole, subObserverPoint, subSolarPoint } from 'nebulosa/src/astronomy/bodies/orientation'
@@ -5945,6 +6394,164 @@ const sunToEarth = (t: Time) => vecMinus(earth(t)[0], sun(t)[0])
 
 console.log(toDeg(positionAngleOfPole(SUN_ROTATION, time, sunToEarth(time)))) // -3.61 — degrees, the P angle
 console.log(toDeg(subObserverPoint(SUN_ROTATION, time, sunToEarth(time)).latitude)) // 2.62 — degrees, B0
+```
+
+### Surface Feature Illumination
+
+Planning an image of a lunar crater or any other surface feature depends on its local lighting and on whether it faces the observer. At the feature, the Sun has an altitude and azimuth on the local horizon. The incidence is the angle between the surface normal and the Sun, the emission is the angle between the normal and the observer, and the phase is the Sun–feature–observer angle. Low Sun (grazing light) brings out relief. Libration moves features near the limb in and out of view.
+
+`surfaceFeature(location, options)` prepares a `BodySurfaceLocation` (see [Planetary Surface Locations](#planetary-surface-locations)) once. It builds the local horizon frame: up is the reference ellipsoid normal, north is the body's +Z axis projected onto the tangent plane, and azimuth runs north through east in `[0, 2π)`. Exactly at a pole, north is the limit along the location's meridian. `options.slope` and `options.aspect` (radians; aspect is the azimuth the facet faces) tilt the facet normal used for incidence and emission, for example a crater wall. `options.horizon` is a terrain horizon mask in the same local frame, in the `HorizonSample` format of [Local Horizon Mask](#local-horizon-mask). A non-empty mask replaces the reference tangent plane as the horizon, so it must include the body's own limb, as `terrainHorizon` masks do. Negative altitudes are kept for elevated vantage points. An empty mask adds no obstruction and leaves the reference plane in place. You supply the mask, so its resolution and source (for example a DEM-derived profile) are yours to state.
+
+`surfaceFeatureIllumination(feature, sunAt, observerAt, time)` returns the geometry at one instant. `sunAt` and `observerAt` give the vectors from the body's center to the Sun and to the observer, in AU and the library's base axes. Both are taken from the feature point, so observer parallax is included (up to about 0.26° for the Earth seen from the Moon). No light time or aberration is applied beyond what the providers include. All results refer to the solar center:
+
+- `solarAltitude`, `solarAzimuth`, `observerAltitude` and `observerAzimuth`, in radians;
+- `incidence`, `emission` and `phase`, in radians in `[0, π]`;
+- `solarAngularRadius`, for thresholds on the Sun's limb;
+- `solarHorizon` and `observerHorizon`, the mask altitude at each azimuth (0 without a mask);
+- `terminatorDistance`, the signed surface distance to the terminator in AU (radius × solar altitude, positive in daylight). It is exact for a sphere and a local approximation on a tri-axial body;
+- `sunlit`, true when the Sun clears the horizon and the incidence is below 90°, and `visible`, the same test for the observer and emission.
+
+`surfaceFeatureWindows(feature, sunAt, observerAt, start, stop, options)` returns the intervals `{ start, end }` where every constraint holds. The solar constraints always apply: `minSolarAltitude` (default 0), an optional `maxSolarAltitude`, `maxIncidence` (default π/2), and clearance of the terrain mask. With an `observerAt`, the observer must also meet `minObserverAltitude` (default 0), `maxEmission` (default π/2) and the mask; pass `undefined` instead for Sun-only windows. Set `minSolarAltitude: -π/2` and `maxIncidence: π` to drop the solar constraints. The search follows [Time-Constraint Intervals](#time-constraint-intervals): `step` and `tolerance` are in days, and the step must resolve every crossing.
+
+Without a mask, the feature sits on a smooth ellipsoid, so crater-rim and relief shadows are not predicted. A mask adds occlusion by distant terrain but does not compute cast-shadow lengths; for those, and for masks and slopes derived from a DEM, see below. Against SPICE `ilumin`, `azlcpo` and `gfilum` with the same DE421 and MOON_ME kernels, the tests check the angles to 5e-7° and window edges to about half a second.
+
+```ts
+import { bodyFixedFrame, MOON_ROTATION } from 'nebulosa/src/astronomy/bodies/orientation'
+import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { surfaceFeature, surfaceFeatureIllumination, surfaceFeatureWindows } from 'nebulosa/src/astronomy/events/surface'
+import { bodyShape, bodySurfaceLocation } from 'nebulosa/src/astronomy/observer/body'
+import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { kilometer, toKilometer } from 'nebulosa/src/math/units/distance'
+
+const epoch = timeYMDHMS(2024, 1, 15, 0, 0, 0, Timescale.TDB)
+
+// Copernicus crater: 20.08° W, 9.62° N, on a sphere of radius 1737.4 km.
+const radius = kilometer(1737.4)
+const copernicus = bodySurfaceLocation(deg(-20.08), deg(9.62), 0, bodyShape([radius, radius, radius]), bodyFixedFrame(MOON_ROTATION))
+
+// Moon-center to Sun and to the geocenter, in AU and base axes (geometric).
+const sunAt = (time: Time) => vecMinus(vecMinus(sun(time)[0], earth(time)[0]), moon(time)[0])
+const earthAt = (time: Time) => vecMinus([0, 0, 0], moon(time)[0])
+
+const feature = surfaceFeature(copernicus)
+const now = surfaceFeatureIllumination(feature, sunAt, earthAt, timeShift(epoch, 5.6))
+
+console.log(toDeg(now.solarAltitude), toDeg(now.solarAzimuth)) // 3.99 92.23 — degrees, a low morning Sun in the east
+console.log(toDeg(now.incidence), toDeg(now.emission), toDeg(now.phase)) // 86.01 29.50 59.60 — degrees
+console.log(toDeg(now.observerAltitude), toDeg(now.observerAzimuth)) // 60.50 117.16 — degrees, the Earth in the local sky
+console.log(toKilometer(now.terminatorDistance)) // 121.0 — km on the day side of the terminator
+console.log(now.sunlit, now.visible) // true true
+
+// Grazing-light windows: solar altitude between 2° and 10° while the Earth sees the crater.
+const grazing = surfaceFeatureWindows(feature, sunAt, earthAt, epoch, timeShift(epoch, 32), { minSolarAltitude: deg(2), maxSolarAltitude: deg(10), step: 0.25 })
+
+console.log(grazing.map((w) => [timeSubtract(w.start, epoch), timeSubtract(w.end, epoch)])) // [[5.434, 6.103], [19.216, 19.883]] — days, morning and evening
+
+// An east-facing wall tilted 25°, behind terrain 4° high to the east and 1° high to the west.
+const wall = surfaceFeature(copernicus, {
+	slope: deg(25),
+	aspect: deg(90),
+	horizon: [
+		{ azimuth: deg(90), minimumAltitude: deg(4) },
+		{ azimuth: deg(270), minimumAltitude: deg(1) },
+	],
+})
+const lit = surfaceFeatureIllumination(wall, sunAt, earthAt, timeShift(epoch, 5.6))
+
+console.log(toDeg(lit.incidence), toDeg(lit.solarHorizon), lit.sunlit) // 61.03 3.96 true — degrees; the Sun just clears the mask
+
+// Sun-only windows for the wall: it loses the Sun once the Sun moves behind its face.
+const wallLit = surfaceFeatureWindows(wall, sunAt, undefined, epoch, timeShift(epoch, 32), { step: 0.25 })
+
+console.log(wallLit.map((w) => [timeSubtract(w.start, epoch), timeSubtract(w.end, epoch)])) // [[5.598, 17.971]] — days
+```
+
+With a digital elevation model (DEM) the relief itself sets the horizon, the facet and the shadows. `terrainModel(grid)` prepares an `ElevationGrid`: a typed array of elevations in AU, row-major on a planetocentric longitude/latitude grid, with the longitude and latitude of the first node, signed steps in radians (their sizes are the resolution), and a `source` string for provenance. Nodes are cell centers, read in place and never copied. The elevations are radial heights above the same reference ellipsoid as the feature's location: for LOLA products, convert meters above the 1737.4 km sphere to AU. Values are interpolated bilinearly. A grid spanning 360° of longitude wraps, and values within half a step outside the first or last node are held at the edge, so a global grid reaches the poles. NaN marks missing data. `terrainElevation(model, longitude, latitude)` returns the interpolated elevation, or `undefined` off the grid or next to missing data. `terrainSurfaceLocation(model, longitude, latitude, shape, frame, height?)` builds a location standing on the terrain, optionally `height` AU above it.
+
+From a feature prepared with `surfaceFeature` on such a location:
+
+- `terrainHorizon(model, feature, options)` marches the feature's vertical plane toward each of `azimuths` evenly spaced directions (a positive integer, default 360, starting at north). It keeps the highest terrain altitude above the reference tangent plane, with the body's curvature included. Every sample lies in that plane, so it is seen at its own azimuth, on a tri-axial body too. The march samples every `step` (default half the grid spacing on the ground), with the last sample exactly at `maxDistance` (default: the distance beyond which terrain in the grid's elevation range is hidden by the body itself). The mask never drops below the limb of the body's lowest possible surface: 0 for a vantage on a smooth sphere, and the dip `−acos(R / (R + h))` at height `h`. Each sample is a `HorizonSample` for `options.horizon`, plus the `distance` to the point that sets it and a `complete` flag. On a sphere `step`, `maxDistance` and `distance` are arcs at the vantage's distance from the center. On other shapes they are horizontal distances along the azimuth, and each sample is the highest terrain on the vertical line there. It is bracketed between scaled copies of the reference ellipsoid and refined by Brent's method, so a smooth convex body never gives a positive horizon. The flag is false where the march left the grid or crossed missing data, where the zero-elevation reference surface was used instead.
+- `terrainSlope(model, feature, baseline?)` returns `{ slope, aspect }` from central differences between terrain points `baseline` AU (default one grid spacing) north, south, east and west, ready to spread into the `surfaceFeature` options; `undefined` when any of those points has no data.
+- `terrainOcclusion(model, feature, altitude, azimuth, options)` follows the straight ray toward a local altitude and azimuth. It samples every `step` (default half the grid spacing), takes a last sample exactly at the end of the ray, and interpolates the first crossing into the terrain. It returns `{ range, distance, longitude, latitude, elevation }`, where `range` is along the ray and `distance` along the surface, or `undefined` when the ray stays clear. With the Sun's direction it tells whether the point is in a shadow cast by any terrain the DEM holds.
+- `terrainShadowTip(model, feature, solarAltitude, solarAzimuth, options)` follows the sunlight that grazes the feature down-Sun. Placed on a summit or rim, `distance` is the length of the shadow it casts along the surface. Ground between the feature and the tip may still be lit where it rises into the light. When the Sun is higher than the down-Sun slope, the tip is at the feature itself.
+
+The altitude and azimuth are in the feature's own local frame. For a parallel Sun they change from point to point (by about 1° per 30 km on the Moon), so take them from `surfaceFeatureIllumination` at each feature. The Sun is a point at the direction given: to bracket the penumbra, pass the solar altitude plus or minus `solarAngularRadius`. All results are only as good as the DEM. Ridges, walls and peaks narrower than the step or the grid spacing can be missed or smoothed, and bilinear interpolation rounds sharp rims. The first horizon sample is a full step out, so ground curving away reads slightly low, by up to about step / (2 × curvature radius). On non-spherical shapes each vertical line is first scanned at an eighth of the height of the shell holding the DEM's elevation range, so relief crossing one line several times closer than that can be read at a lower crossing. Each such sample costs a few dozen DEM lookups instead of one. A march over a million samples per azimuth or ray, or over 10⁸ for a whole horizon, throws `RangeError`: increase `step` or reduce `maxDistance` or `azimuths`. Tests with synthetic DEMs (a flat-floored crater and a conical peak on a 1737.4 km sphere) match the analytic horizon within 0.05° on a 60 m grid and the shadow tip of the peak within 2 m on a 120 m grid.
+
+```ts
+import { bodyFixedFrame, MOON_ROTATION } from 'nebulosa/src/astronomy/bodies/orientation'
+import { moon } from 'nebulosa/src/astronomy/ephemeris/models/analytical/elpmpp02'
+import { earth, sun } from 'nebulosa/src/astronomy/ephemeris/models/analytical/vsop87e'
+import { surfaceFeature, surfaceFeatureIllumination, surfaceFeatureWindows } from 'nebulosa/src/astronomy/events/surface'
+import { terrainElevation, terrainHorizon, terrainModel, terrainOcclusion, terrainShadowTip, terrainSlope, terrainSurfaceLocation } from 'nebulosa/src/astronomy/events/surface.terrain'
+import { bodyShape } from 'nebulosa/src/astronomy/observer/body'
+import { type Time, Timescale, timeShift, timeSubtract, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { vecMinus } from 'nebulosa/src/math/linear-algebra/vec3'
+import { deg, toDeg } from 'nebulosa/src/math/units/angle'
+import { kilometer, toKilometer } from 'nebulosa/src/math/units/distance'
+
+const epoch = timeYMDHMS(2024, 1, 15, 0, 0, 0, Timescale.TDB)
+const radius = kilometer(1737.4)
+const shape = bodyShape([radius, radius, radius])
+const frame = bodyFixedFrame(MOON_ROTATION)
+const sunAt = (time: Time) => vecMinus(vecMinus(sun(time)[0], earth(time)[0]), moon(time)[0])
+const earthAt = (time: Time) => vecMinus([0, 0, 0], moon(time)[0])
+
+// A synthetic crater at Copernicus on a 0.02° grid (about 600 m): a flat floor 3.8 km deep and
+// 30 km in radius, a straight wall up to the rim 46 km from the center, then level ground.
+// A real DEM tile is passed the same way, with its heights converted to AU.
+const longitude = deg(-20.08)
+const latitude = deg(9.62)
+const step = deg(0.02)
+const elevations = new Float32Array(201 * 201)
+
+for (let j = 0; j < 201; j++) {
+	for (let i = 0; i < 201; i++) {
+		const lon = longitude + (i - 100) * step
+		const lat = latitude + (j - 100) * step
+		const haversine = Math.sin((lat - latitude) / 2) ** 2 + Math.cos(lat) * Math.cos(latitude) * Math.sin((lon - longitude) / 2) ** 2
+		const km = 1737.4 * 2 * Math.asin(Math.sqrt(haversine)) // distance from the center, km
+		elevations[j * 201 + i] = kilometer(km <= 30 ? -3.8 : km >= 46 ? 0 : (-3.8 * (46 - km)) / 16)
+	}
+}
+
+const dem = terrainModel({ elevations, width: 201, height: 201, longitude: longitude - 100 * step, latitude: latitude - 100 * step, longitudeStep: step, latitudeStep: step, source: 'synthetic crater, 0.02° grid, heights above 1737.4 km' })
+
+console.log(toKilometer(terrainElevation(dem, longitude, latitude)!)) // -3.8 — km, the floor
+
+// The floor center, its terrain horizon every 5°, and a feature using both horizon and facet.
+const floor = surfaceFeature(terrainSurfaceLocation(dem, longitude, latitude, shape, frame)!)
+const horizon = terrainHorizon(dem, floor, { azimuths: 72 })
+
+console.log(toDeg(horizon[18].minimumAltitude), toKilometer(horizon[18].distance)) // 3.95 46.1 — degrees and km, the east rim
+console.log(horizon[18].complete) // false — the march ran past the grid edge onto the reference sphere
+
+const feature = surfaceFeature(floor.location, { ...terrainSlope(dem, floor), horizon })
+const now = surfaceFeatureIllumination(feature, sunAt, earthAt, timeShift(epoch, 5.5))
+
+console.log(toDeg(now.solarAltitude), toDeg(now.solarHorizon), now.sunlit) // 2.79 3.94 false — degrees; the Sun is behind the east rim
+
+// The same answer by ray tracing the DEM, with where the sunlight is blocked.
+const blocked = terrainOcclusion(dem, feature, now.solarAltitude, now.solarAzimuth)!
+
+console.log(toKilometer(blocked.distance), toKilometer(blocked.elevation)) // 40.2 -1.37 — km, on the east wall
+
+// Sun-only windows on the floor center, now limited by the rim.
+const lit = surfaceFeatureWindows(feature, sunAt, undefined, epoch, timeShift(epoch, 32), { step: 0.25 })
+
+console.log(lit.map((w) => [timeSubtract(w.start, epoch), timeSubtract(w.end, epoch)])) // [[5.596, 19.721]] — days
+
+// The shadow the east rim casts across the floor as the Sun rises.
+const rim = surfaceFeature(terrainSurfaceLocation(dem, longitude + kilometer(46) / radius / Math.cos(latitude), latitude, shape, frame)!)
+
+for (const days of [5.5, 6, 6.5]) {
+	const light = surfaceFeatureIllumination(rim, sunAt, earthAt, timeShift(epoch, days))
+	const tip = terrainShadowTip(dem, rim, light.solarAltitude, light.solarAzimuth)!
+
+	console.log(toDeg(light.solarAltitude), toKilometer(tip.distance)) // 4.31 68.1, then 10.29 21.7, then 16.26 0.0 — degrees and km
+}
 ```
 
 ### TEME and ITRF Conversion
@@ -6149,9 +6756,9 @@ import { meter } from 'nebulosa/src/math/units/distance'
 const location = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400)) // longitude, latitude, elevation
 const time = timeYMDHMS(2026, 6, 29, 4, 0, 0, Timescale.UTC)
 
-// Earth's [heliocentric, barycentric] state at the TDB instant.
+// Earth's [barycentric, heliocentric] state at the TDB instant.
 const t = tdb(time)
-const [heliocentric, barycentric] = eraEpv00(t.day, t.fraction)
+const [barycentric, heliocentric] = eraEpv00(t.day, t.fraction)
 
 // ICRS RA 16 h, Dec -26°, with the default refraction.
 const star = [hour(16), deg(-26)] as const
@@ -7220,6 +7827,58 @@ console.log(summaries.map((region) => [region.id, region.inputStarCount, region.
 console.log(buildAberrationField(result.stars, 'hfd', { columns: 3, rows: 3 }).map((cell) => [cell.column, cell.row, cell.value, cell.count])) // the 3 by 3 medians in row order, 5.61, 4.32, 5.04 / 4.59, 3.16, 4.07 / 5.19, 3.74, 5.23, with 11 to 20 stars each, equal to the regions of the inspection
 ```
 
+### Aperture Photometry
+
+Aperture photometry measures the light of a source as the sum of the pixels inside an aperture minus the sky level times the aperture area, `flux = sum - background * area`. Its uncertainty follows the CCD equation (Merline & Howell 1995): the shot noise of the source and the sky, the read noise and the dark shot noise of every aperture pixel, plus the uncertainty of the sky estimate, which is common to all the pixels of the aperture and so grows with the square of the area.
+
+`imaging/stars/photometry` measures a batch of sources with `aperturePhotometry(image, positions, apertures, options?)`. `positions` are zero-based pixel centers (origin at the upper-left sample, x to the right and y down, so pixel `(i, j)` covers `[i - 0.5, i + 0.5]`; the same convention as [Star Detection](#star-detection), whose results can be passed directly, and as Photutils). `apertures` is one aperture shared by all the sources or one per position: `{ shape: 'circle', radius }` or `{ shape: 'ellipse', a, b, theta? }` (semi-axes in pixels, `b <= a`, the major axis at `theta` radians from +X toward +Y, the convention of the detector's `theta`), each with an optional `annulus: { inner, outer }` (radii, or semi-major axes for an ellipse, keeping its axis ratio and orientation). The weight of a pixel is its `'exact'` geometric overlap with the aperture (the default), the fraction of `subpixels` x `subpixels` cell centers inside it (`'subpixel'`, 5 by default) or 1 when its center is inside (`'center'`). The sky is taken from the samples whose centers lie in the annulus (`inner <= r < outer`), excluding the masked, non-finite and saturated pixels and those with an invalid `uncertainty` entry, after an iterative sigma clip about the median (`clipSigma` 3 standard deviations, `clipIterations` 10, 0 disables it) that rejects stars and cosmic rays in the annulus; `backgroundStatistic` is `'median'` (the default) or `'mean'` of the survivors. An aperture without an annulus uses the fixed `background` (`{ level, error? }`, level 0 by default). The aperture sums, areas, truncated areas and clipped annulus statistics agree with Photutils.
+
+Fluxes and levels are in the sample unit of the image: DN for a `DigitalImage` read with `sampleScale: 'digital'` (see [Scientific Image Loading and Export](#scientific-image-loading-and-export)), which is the natural input, or the normalized scale for an `Image`. The per-pixel variance comes from, in order of precedence, the `uncertainty` map (`{ kind: 'variance' | 'inverseVariance', data }`, `width * height` values of the total variance of the samples), the `noise` model (`gain` in electrons per sample unit, which for DN is the conversion gain of [Photon Transfer and Read Noise](#photon-transfer-and-read-noise); `readNoise` in electrons; `dark: { current, exposureTime }` in electrons per pixel per second and seconds, the dark signal subtracted from the samples whose shot noise remains; `offset`, a pedestal still present in the samples), giving `max(x - offset, 0) / gain + (readNoise^2 + current * exposureTime) / gain^2`, or else the scatter of the annulus (sky noise only, without the source shot noise). Without any of them `fluxError` and `snr` are `undefined`. A pixel weight enters the variance squared (`sum(w^2 v)`), which is the variance of the weighted sum; Photutils sums `w v`, so its error is larger on the partial pixels (both agree for `'center'`). The sky error is propagated from the variances of the `N` clipped annulus samples when an `uncertainty` map or `noise` model is given, `sqrt(sum(v)) / N` for the mean (exact for independent samples) times `sqrt(PI / 2)` for the median (the Gaussian asymptotic ratio, approximate for a small annulus or unequal variances), so a smooth annulus still carries its noise; otherwise it is the deviation of the clipped annulus divided by `sqrt(N)`, times `sqrt(PI / 2)` for the median. Pixels are assumed independent: a resampled, interpolated, registered or drizzled frame has correlated noise, so pass `noiseCorrelation`, the ratio of the true variance of a sum of pixels to the independent-pixel variance (a factor multiplying the whole variance), or the errors are underestimated.
+
+Each `AperturePhotometry` has the `x` and `y`, the weighted `sum`, the effective `area` (the weights of the usable in-image pixels), the `maskedArea` (pixels excluded by the `mask` of `width * height` bytes, a non-finite sample or an invalid uncertainty), the exact `truncatedArea` outside the image, the `saturatedCount` of aperture pixels at or above `saturationLevel` (kept in the sum, so the flux is a lower limit and its `fluxError` and `snr` describe the clipped samples, not the source, and are not quantitative), the `background`, `backgroundDeviation`, `backgroundError`, `backgroundCount` and `backgroundRejected` (clipped samples), the `flux`, `fluxError` and `snr`, and the `flags`: `'truncated'`, `'masked'`, `'saturated'`, `'noBackground'` (the annulus has no usable sample, so `flux` and the sky are `undefined`) and `'empty'`. Masked and truncated pixels are not replaced or extrapolated, so a flagged flux misses their light. A color image is measured on one `channel` (the first by default) and a raw CFA mosaic as it is. A `RangeError` is thrown when the aperture list, the mask or the uncertainty map does not match the positions or the image, or when the channel does not exist; `subpixels` must be a positive integer. Unlike `measureStarPhotometry` of [Star Detection](#star-detection), whose SNR ranks stars on the normalized scale, this API is meant for calibrated measurements with physical uncertainties.
+
+```ts
+import type { DigitalImage } from 'nebulosa/src/imaging/model/types'
+import { aperturePhotometry } from 'nebulosa/src/imaging/stars/photometry'
+
+// A 64x64 calibrated frame in DN: a sky of 200 DN with a small deterministic ripple and two Gaussian stars (sigma 1.5 pixels) of 20000 and 5000 DN.
+const width = 64
+const height = 64
+const star = (x: number, y: number, cx: number, cy: number, flux: number) => (flux / (2 * Math.PI * 1.5 ** 2)) * Math.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * 1.5 ** 2))
+const raw = new Float64Array(width * height)
+for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) raw[y * width + x] = 200 + 3 * Math.sin(1.7 * x + 0.9 * y) + star(x, y, 20.4, 30.8, 20000) + star(x, y, 44.6, 25.1, 5000)
+const image: DigitalImage = { header: {}, raw, sampleScale: 'digital', metadata: { width, height, channels: 1, pixelCount: width * height, stride: width, strideInBytes: width * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+
+// Circular apertures of 6 pixels with a sky annulus from 9 to 14 pixels, and a CCD noise model: 1.5 e-/DN, 8 e- read noise, 0.02 e-/s/pixel of dark over 300 s.
+const positions = [
+	{ x: 20.4, y: 30.8 },
+	{ x: 44.6, y: 25.1 },
+]
+const noise = { gain: 1.5, readNoise: 8, dark: { current: 0.02, exposureTime: 300 } }
+const [bright, faint] = aperturePhotometry(image, positions, { shape: 'circle', radius: 6, annulus: { inner: 9, outer: 14 } }, { noise })
+console.log(bright.flux, bright.fluxError, bright.snr, bright.area) // 20018 200.2 100.0 113.097 (DN, DN, -, pixels^2: pi 6^2)
+console.log(bright.background, bright.backgroundError, bright.backgroundCount, bright.backgroundRejected, bright.flags) // 199.80 0.846 361 0 [] (DN per pixel)
+console.log(faint.flux, faint.fluxError, faint.snr) // 5017 173.1 29.0
+
+// One aperture per source: an ellipse with its major axis 30 degrees from +X toward +Y, the subpixel method, a masked pixel and a saturation level.
+const mask = new Uint8Array(width * height)
+mask[31 * width + 22] = 1
+const apertures = [
+	{ shape: 'ellipse', a: 7, b: 5, theta: Math.PI / 6, annulus: { inner: 10, outer: 15 } },
+	{ shape: 'circle', radius: 5, annulus: { inner: 9, outer: 14 } },
+] as const
+const [elliptical, circular] = aperturePhotometry(image, positions, apertures, { method: 'subpixel', subpixels: 8, mask, saturationLevel: 1500, noise })
+console.log(elliptical.flux, elliptical.area, elliptical.maskedArea, elliptical.saturatedCount, elliptical.flags) // 19176 109 1 1 [ 'masked', 'saturated' ] (the masked pixel's light is missing)
+console.log(circular.flux, circular.flags) // 4977 []
+
+// A source at the border with a fixed sky and no variance source, then an inverse-variance map of a resampled frame with correlated noise.
+const edge = aperturePhotometry(image, [{ x: 1.5, y: 2 }], { shape: 'circle', radius: 4 }, { background: { level: 200, error: 0.5 } })[0]
+console.log(edge.area, edge.truncatedArea, edge.flux, edge.fluxError, edge.flags) // 34.52 15.74 -0.21 undefined [ 'truncated' ]
+const weight = raw.map((value) => 1 / (value / 1.5 + 64 / 2.25))
+const resampled = aperturePhotometry(image, positions, { shape: 'circle', radius: 6, annulus: { inner: 9, outer: 14 } }, { uncertainty: { kind: 'inverseVariance', data: weight }, noiseCorrelation: 2 })
+console.log(resampled[0].fluxError) // 281.5 (DN)
+```
+
 ### Arcsinh Stretch
 
 `arcsinhStretch(image, options?)` applies the PixInsight-style arcsinh stretch to the normalized 0..1 buffer of an `Image`, in place, and returns the same image. A mono image is stretched per sample. An RGB image is stretched through its luminance (the mean of the three channels, or the weights of `rgbWorkingSpace` when `useRgbWorkingSpace` is set), and the three channels are multiplied by the same factor, so the color ratios above the black point are kept. `stretchFactor` (1 or more, 1 by default) sets the strength and `blackPoint` (0..1, 0 by default) is clipped to 0 and the remaining range is renormalized to 0..1 before the stretch. With `protectHighlights` the pixels that exceed 1 after the stretch are not clipped per channel: the whole image is divided by the largest value, so the ratios survive at the cost of a darker image. Non-finite options fall back to the defaults, and a stretch factor of 1 with a black point of 0 returns the image untouched (`DEFAULT_ARCSINH_STRETCH_OPTIONS`). The image is not validated: it must be a mono or interleaved RGB buffer in 0..1.
@@ -8149,6 +8808,59 @@ const wide = analyzeCollimation({ image: generateSyntheticCollimationImage(patte
 if (wide.success) console.log(wide.geometry.offset, wide.outer.sectors) // offset (4.002, -1.998) with 720 sectors, the same as with the defaults
 ```
 
+### Differential Photometry and Light Curves
+
+Differential photometry measures a target against comparison stars in the same frames, so that clouds, extinction, exposure time and gain, which dim every star by the same factor, cancel in the ratio. Ensemble photometry combines several comparisons into an artificial comparison star, which lowers its noise and keeps working when one comparison is missing or variable.
+
+`imaging/stars/photometry.differential` builds a light curve with `differentialLightCurve(frames, targetId, comparisonIds?, options?)`. Each frame has a `time` (a `Time` in any timescale, the same for every frame; it is passed through unchanged, so a light curve in TDB or BJD needs TDB epochs) and the `stars` measured in it, `{ id, flux, fluxError, x?, y?, flags? }` in any order, matched across frames by their stable `id` (a string or a number), not by position; an [Aperture Photometry](#aperture-photometry) result spread with an `id` fits directly. Fluxes are in any linear unit consistent for each star across frames. A measurement is unusable when its flux is not finite (or not positive, for a comparison), its `fluxError` is not finite and positive or it has a flag listed in `rejectFlags` (every aperture photometry flag by default); an unusable or absent star, or a frame with no stars, keeps its epoch in the light curve with flags explaining the missing values. Without `comparisonIds` every other star is a candidate; the target is never its own comparison.
+
+Each comparison is divided by its reference flux, so a missing comparison does not bias the ensemble, and the per-frame transparency is the inverse-variance weighted mean of these ratios, each weight `1 / ((fluxError / referenceFlux)^2 + excess^2 transparency^2)` adding the comparison's excess fractional variance, the DerSimonian-Laird estimate of the scatter its errors do not explain (Broeg, Fernández & Neuhäuser 2005). The reference fluxes, weights and excesses are iterated to convergence (`maxIterations` 20; `converged` reports whether the transparencies settled, and is `false` when no frame has a transparency). A comparison whose robust scatter against the ensemble of the others exceeds `variabilityLimit` (3) times the scatter predicted by its errors and the median excess of the comparisons is rejected as variable, and in each frame a comparison more than `clipSigma` (4) standard deviations from the mean of the others is clipped from that frame only; both need at least 3 comparisons, because 2 cannot tell which one deviates. A frame with fewer than `minComparisons` (1) surviving comparisons has no transparency. The reference fluxes tie together only frames linked by a chain of shared comparisons: if the comparisons of some frames are never measured in the same frame as the others (a complete change of comparison stars, or the only shared measurement rejected or clipped), the transmission between the two sets is unmeasured, and a cloud would be indistinguishable from fainter comparisons. Only one linked set is reported: one where the target has a positive flux, so that the curve can be normalized, when any does; then the one with the most frames where the target was measured (a zero or negative flux counts), then the most frames, then the earliest frame; the target never links two sets, as it may be variable; the other frames are flagged `'disconnected'` with no transparency or corrected values, and comparisons used only there have the status `'disconnected'`. A single shared frame is enough to link two sets, but it is a weak link: the iteration converges more slowly (raise `maxIterations` when `converged` is `false`) and its uncertainty is not included in the errors. Supplied errors are assumed realistic up to an excess common to the comparisons (such as scintillation); errors underestimated by a large factor make faint comparisons look variable.
+
+Each point has the raw `targetFlux` and `targetFluxError`, the `transparency` (relative transmission, median 1 over the reported frames) and `transparencyError`, the `comparisonCount` and `clippedComparisonIds`, the corrected `flux = targetFlux / transparency` and `fluxError` (`(targetFluxError / T)^2 + (flux / T)^2 transparencyError^2`, first order with independent errors), the `relativeFlux` and `relativeFluxError` (divided by `normalization`, the median positive corrected flux), the differential `magnitude = -2.5 log10(relativeFlux)` (0 at the median level, positive when fainter) and `magnitudeError`, and the `flags`: `'targetMissing'`, `'targetNonPositive'` (a zero or negative target flux keeps its relative flux but has no magnitude), `'noComparisons'`, `'disconnected'`, `'comparisonClipped'` and `'notDetrended'`. The uncertainty of the normalization, common to every point, is not included. `comparisons` reports per comparison its `status` (`'used'`, `'variable'`, `'missing'` or `'disconnected'`), `referenceFlux` at transparency 1, `frameCount`, `clippedCount`, mean fractional `weight`, robust `scatter`, `expectedScatter`, `excessScatter` and `variability`; `rejectedComparisonIds` lists the variable ones. A `RangeError` is thrown when the frames mix timescales or a frame repeats a star id.
+
+The optional `detrend: { covariates, method? }` fits `relativeFlux = intercept + sum(coefficient * (covariate - mean))` against `'airmass'` and `'fwhm'` (frame properties, pixels for the FWHM) and the target centroid `'x'` and `'y'` (pixels), weighted by the inverse variance, with a robust `'huber'` loss by default (`'tukey'` rejects an eclipse or a transit, `'none'` is ordinary least squares). Each epoch with every covariate gets `detrended` values, `relativeFlux * intercept / model`, which keep the level at the mean covariates; the model uncertainty is not propagated. The original series is never modified, and `detrending` reports the `fit` (`intercept`, `coefficients`, `means`, `conditionNumber`, `rankDeficient`, `scatterBefore`, `scatterAfter`), undefined when the epochs do not outnumber the model coefficients. The fit also absorbs any astrophysical variability correlated with the covariates.
+
+```ts
+import { Timescale, time } from 'nebulosa/src/astronomy/time/time'
+import { differentialLightCurve, type DifferentialPhotometryFrame } from 'nebulosa/src/imaging/stars/photometry.differential'
+
+// Six frames at TDB Julian Dates. A cloud halves every star in frame 3, comparison 'B' is missing in frame 4 and frame 5 was dropped.
+const transmission = [1, 1, 1, 0.5, 1, 1]
+const star = (id: string, flux: number, t: number) => ({ id, flux: flux * t, fluxError: Math.sqrt(flux * t) }) // Poisson errors
+
+function series(target: (j: number) => number, variable: readonly number[]): DifferentialPhotometryFrame[] {
+	return transmission.map((t, j) => ({
+		time: time(2460600, j * 0.002, Timescale.TDB),
+		airmass: 1.2 + 0.1 * j,
+		stars: j === 5 ? [] : [star('V', 20000 * target(j), t), star('A', 50000, t), ...(j === 4 ? [] : [star('B', 30000, t)]), star('C', 40000 * variable[j], t), star('D', 45000, t)],
+	}))
+}
+
+// 'V' dims by 10% in frames 2 and 3; comparison 'C' is a variable star.
+const curve = differentialLightCurve(
+	series((j) => (j === 2 || j === 3 ? 0.9 : 1), [1, 1.2, 0.8, 1.15, 0.85, 1.1]),
+	'V',
+)
+console.log(curve.timescale === Timescale.TDB, curve.rejectedComparisonIds, curve.normalization) // true [ 'C' ] 20000
+const [, , eclipse, cloudy, partial, dropped] = curve.points
+console.log(eclipse.relativeFlux, eclipse.relativeFluxError, eclipse.magnitude) // 0.9 0.00717 0.1144 (mag)
+console.log(cloudy.transparency, cloudy.transparencyError, cloudy.relativeFlux, cloudy.relativeFluxError) // 0.5 0.002 0.9 0.0101 (the cloud costs precision, not accuracy)
+console.log(partial.comparisonCount, partial.relativeFlux) // 2 1
+console.log(dropped.time.fraction, dropped.flags) // 0.01 [ 'targetMissing', 'noComparisons' ]
+console.log(curve.comparisons.map((c) => [c.id, c.status, c.weight])) // A used 0.425, B used 0.24, C variable 0, D used 0.383
+
+// Redder than the comparisons, 'V' loses 3% per airmass; detrend it against airmass using the constant comparisons only.
+const trend = differentialLightCurve(
+	series((j) => 1 - 0.03 * (0.1 * j), [1, 1, 1, 1, 1, 1]),
+	'V',
+	['A', 'B', 'D'],
+	{ detrend: { covariates: ['airmass'] } },
+)
+console.log(trend.detrending!.fit!.coefficients, trend.detrending!.fit!.means) // [ -0.0302 ] [ 1.4 ] (relative flux per airmass)
+console.log(trend.points.map((p) => p.relativeFlux)) // 1.0060 1.0030 1 0.9970 0.9940 undefined (preserved)
+console.log(trend.points.map((p) => p.detrended?.relativeFlux)) // 1 1 1 1 1 undefined
+```
+
 ### Diffraction and Seeing Sampling
 
 `astronomy/formulas` relates the image scale to the size of the star image, to judge whether a camera samples the star well. `samplingRatio(seeingArcsec, arcsecPerPixel)` is `seeing / scale`, the star width (an arcsecond FWHM) in pixels, and `fwhmPixelsToSeeing(fwhmPixels, arcsecPerPixel)` is its inverse, `FWHM * scale`, the seeing in arcseconds implied by a measured star width (see [Star Detection](#star-detection) and [Star Profile Measurement](#star-profile-measurement) for the measurement; a FWHM from a defocused, trailed or optically limited star is not the seeing). `classifyFWHMSampling(pixels)` labels a width in pixels as `'undersampled'` (below 2), `'optimal'` (from 2 to 3, both included, the usual imaging target) or `'oversampled'` (above 3); the bands are a convention, not a limit of the sensor, and a value that is not a number is `'oversampled'`. `recommendedFocalLength(pixelSizeMicrons, targetSampling, seeingArcsec)` is the focal length in millimeters (`206.265 * pixel * sampling / seeing`) that gives the chosen number of pixels across the seeing FWHM, and it is the inverse of the `pixelScale` of [Image Scale and Field of View](#image-scale-and-field-of-view). For the diffraction limit, `airyDiskSize(wavelengthMicrons, focalRatio)` is the approximate diameter in microns of the Airy disk (`2.44 * wavelength * N`, which is the diameter of the first dark ring of a clear circular aperture, so it is larger than the FWHM) and `airyDiskInPixels(airyDiameterMicrons, pixelSizeMicrons)` converts it to pixels. The diffraction pattern is that of an unobstructed aperture and the seeing is a single number: an obstruction, the aberrations, the guiding and the atmosphere are not combined, and a diffraction limit is not the resolution of the long exposure.
@@ -8297,6 +9009,56 @@ console.log(adf(make(0.7))) // [0.9688568108727716, 0, 0.7107156084472682]
 const flat = make(0.3)
 flat.raw.fill(0.3)
 console.log(adf(flat)) // [0.5624999999999999, 0, 1]
+```
+
+`autoStf(image, preset?, options?)` from `imaging/processing/stf.presets` picks the parameters by a named profile and returns the same readonly `[midtone, shadow, highlight]` tuple for `stf`, without changing the image; apply it to a display copy, and estimate again from the original rather than from a frame that was already stretched. The coefficients of every profile are in `AUTO_STF_PRESETS` and are starting values to be calibrated, not values of another program. `'low'` (`meanBackground` 0.13, `clippingPoint` -3.5), `'medium'` (the default, exactly `adf` with its defaults) and `'high'` (0.35, -2) are `adf` with those coefficients, for sky frames: a stronger profile lifts the background and clips more of the shadows, although for a bright frame `adf` takes its mirrored branch and the order is no longer guaranteed. `'moon'` and `'planet'` do not use the median and the deviation; they take three quantiles of the histogram (`black`, `pivot` and `white` probabilities of 0.01, 0.5 and 0.995 for the Moon, 0.02, 0.55 and 0.998 for a planet) as the shadow, a pivot and the highlight, and solve the midtone so that `stf` sends the pivot exactly to a `target` level (0.5 and 0.45): with `u = (pivot - shadow) / (highlight - shadow)` the midtone is `(target - 1) u / ((2 target - 1) u - target)`. They assume the sampled pixels mostly belong to the target, so pass an `area` around the disk or a mask of the sky: over a whole frame of black sky the shadow and the pivot fall into the empty bin. The quantiles are histogram estimates interpolated inside a bin, exact only to the bin width; when no pixel is accepted, when the `black` and `white` quantiles fall in the same bin (a constant frame, or a nearly constant one with a few outliers, where the interpolation would invent a spread) or when the anchors collapse (typically a pivot in the saturated top bin) the identity `[0.5, 0, 1]` is returned. The `options` are the `channel`, `area`, `bits` (depth or reusable bin buffer) and `sigmaClip` (one byte per pixel, nonzero excluded, for example a hot pixel mask) of [Image Statistics](#image-statistics); a color image is measured through its grayscale reduction unless a `channel` is given, so one linked curve serves the three channels, and a raw CFA mosaic is measured as a single mono plane that mixes its filter phases.
+
+```ts
+import type { Image } from 'nebulosa/src/imaging/model/types'
+import { stf } from 'nebulosa/src/imaging/processing/stf'
+import { AUTO_STF_PRESETS, autoStf } from 'nebulosa/src/imaging/processing/stf.presets'
+
+let seed = 11
+const noise = () => {
+	seed = (seed * 1664525 + 1013904223) >>> 0
+	return (seed / 0xffffffff - 0.5) * 0.01
+}
+
+const width = 64
+const height = 64
+const frame = (fill: (x: number, y: number) => number): Image => {
+	const raw = new Float64Array(width * height)
+	for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) raw[y * width + x] = fill(x, y)
+	return { header: {}, raw, metadata: { width, height, channels: 1, pixelCount: width * height, stride: width, strideInBytes: width * 8, pixelSizeInBytes: 8, bitpix: -64, bayer: undefined } }
+}
+
+// A faint sky of 0.02: the sky profiles are the adaptive display function with fixed coefficients ('medium' is adf(sky)).
+const sky = frame(() => 0.02 + noise())
+console.log(autoStf(sky, 'low')) // [0.07940661529550432, 0.007369418753920838, 1]
+console.log(autoStf(sky)) // [0.02993016484327826, 0.009914379895179092, 1]
+console.log(autoStf(sky, 'high')) // [0.013420233063850009, 0.012822906913759952, 1]
+
+// A bright disk of radius 20 over black sky, measured inside a region around the disk: the median of the region is sent to 0.5.
+const moon = frame((x, y) => ((x - 32) ** 2 + (y - 32) ** 2 <= 400 ? 0.5 + 0.3 * Math.sin(x / 3) * Math.cos(y / 4) : 0))
+const area = { left: 18, top: 18, right: 46, bottom: 46 }
+const [midtone, shadow, highlight] = autoStf(moon, 'moon', { area })
+console.log(midtone, shadow, highlight, AUTO_STF_PRESETS.moon) // 0.4982231836796671 0.20974151216906997 0.7945951781490806 { strategy: 'quantile', black: 0.01, pivot: 0.5, white: 0.995, target: 0.5 }
+
+// Apply the parameters to a display copy; the source frame keeps its samples.
+const display = stf({ ...moon, raw: moon.raw.slice() }, midtone, shadow, highlight)
+console.log(display.raw[32 * width + 32], moon.raw[32 * width + 32]) // 0.5686700207061692 0.541310184384882
+
+// Without the region the black sky dominates the low quantiles.
+console.log(autoStf(moon, 'planet')) // [0.00001794733985386983, 4.403025973150303e-7, 0.7945953765163652]
+
+// A constant frame, or a mask that rejects every pixel, gives the identity.
+console.log(
+	autoStf(
+		frame(() => 0.4),
+		'moon',
+	),
+	autoStf(moon, 'moon', { sigmaClip: new Uint8Array(width * height).fill(1) }),
+) // [0.5, 0, 1] [0.5, 0, 1]
 ```
 
 ### Drizzle Integration
@@ -10047,15 +10809,15 @@ console.log(fitScalarSurface(band, width, height, { degree: 2 }).ok, fitScalarSu
 
 ### Scientific Image Loading and Export
 
-The readers turn a FITS, XISF or JPEG source into an `Image` (or a `DigitalImage`, see [Scientific Image Model](#scientific-image-model)) and the writers serialize an `Image` back. A reader takes either the legacy positional `raw` argument (an existing `Float32Array` or `Float64Array`, or the precision `32`, `64` or `'auto'`, which is a 32-bit buffer for 8-bit sources and a 64-bit one for the others) or an options object `{ raw, sampleScale }`, where `sampleScale: 'digital'` keeps the digital numbers after the scaling of the format, and the default `'normalized'` rescales a source whose samples are outside 0..1 by its minimum and maximum. A buffer supplied by the caller is reused (the image is a view of its first samples) and must have room for `width * height * channels` samples; a smaller one makes the reader return `undefined`, as does a source that is not an image, and JPEG has no digital mode. The first HDU that is a Rice-compressed image or an uncompressed 2-D IMAGE or primary raster is the one that is read.
+The readers turn a FITS, XISF or JPEG source into an `Image` (or a `DigitalImage`, see [Scientific Image Model](#scientific-image-model)) and the writers serialize an `Image` back. A reader takes either the legacy positional `raw` argument (an existing `Float32Array` or `Float64Array`, or the precision `32`, `64` or `'auto'`, which is a 32-bit buffer for 8-bit sources and a 64-bit one for the others) or an options object `{ raw, sampleScale }`, where `sampleScale: 'digital'` keeps the digital numbers after the scaling of the format, and the default `'normalized'` rescales a source whose samples are outside 0..1 by its minimum and maximum. That rescale is recorded as `metadata.normalization` (`{ minimum, range }`, the source sample being `sample * range + minimum`, with a `range` of 0 for a flat source whose samples became 0). An `Image` always holds the rescaled 0..1 samples; `writeImageToFits(image, output, { sourceScale: true })` and `writeImageToXisf(image, output, format, { sourceScale: true })` write the samples with the rescale undone, so the file keeps the scale of the source (the writer folds the rescale into its sample conversion, so no copy of the samples is made and the image is not modified), and a floating-point XISF then declares `bounds="minimum:minimum+range"` (rounded to Float32 for a 32-bit image, the upper bound one more than the lower for a flat source) instead of `0:1`. Without `sourceScale`, or for an image that was not rescaled, the samples are written as they are. A buffer supplied by the caller is reused (the image is a view of its first samples) and must have room for `width * height * channels` samples; a smaller one makes the reader return `undefined`, as does a source that is not an image, and JPEG has no digital mode. The first HDU that is a Rice-compressed image or an uncompressed 2-D IMAGE or primary raster is the one that is read.
 
-The readers differ in what they receive: `readImageFromFits(fits, source, options)` and `readImageFromXisf(xisf, source, options)` take the already parsed container together with its seekable source, `readImageFromJpeg(buffer, raw, format)` takes the bytes of a JPEG (the optional TurboJPEG pixel `format`, such as `'GRAY'` or `'RGB'`, forces the channels), and `readImageFromSource`, `readImageFromBuffer`, `readImageFromFileHandle` and `readImageFromPath` detect FITS, XISF or JPEG by their content. The writers are `writeImageToFormat(image, 'jpeg', options)`, which returns a JPEG `Buffer` (the samples are scaled from 0..1 to 0..255 and clamped, with the `quality` of 0 to 100 and the `chrominanceSubsampling`, 100 and `'4:4:4'` by default), `writeImageToFits(image, output)` and `writeImageToXisf(image, output, format)`, where the output is a `Buffer` that must be large enough, or any `Sink`, and the XISF `format` has the `byteOrder` (`'little'` by default), the `pixelStorage` (`'Planar'` by default) and the `compression` (`false` by default). `truncatePixel(p, max)` is the helper that maps a normalized sample to an integer from 0 to `max`.
+The readers differ in what they receive: `readImageFromFits(fits, source, options)` and `readImageFromXisf(xisf, source, options)` take the already parsed container together with its seekable source, `readImageFromJpeg(buffer, raw, format)` takes the bytes of a JPEG (the optional TurboJPEG pixel `format`, such as `'GRAY'` or `'RGB'`, forces the channels), and `readImageFromSource`, `readImageFromBuffer`, `readImageFromFileHandle` and `readImageFromPath` detect FITS, XISF or JPEG by their content. The writers are `writeImageToFormat(image, 'jpeg', options)`, which returns a JPEG `Buffer` (the samples are scaled from 0..1 to 0..255 and clamped, with the `quality` of 0 to 100 and the `chrominanceSubsampling`, 100 and `'4:4:4'` by default), `writeImageToFits(image, output, options)` and `writeImageToXisf(image, output, format, options)` (`options.sourceScale`, `false` by default, as above), where the output is a `Buffer` that must be large enough, or any `Sink`, and the XISF `format` has the `byteOrder` (`'little'` by default), the `pixelStorage` (`'Planar'` by default) and the `compression` (`false` by default). `truncatePixel(p, max)` is the helper that maps a normalized sample to an integer from 0 to `max`.
 
 ```ts
 import fs from 'fs/promises'
 import { readImageFromBuffer, readImageFromFileHandle, readImageFromFits, readImageFromJpeg, readImageFromPath, readImageFromSource, readImageFromXisf, truncatePixel, writeImageToFits, writeImageToFormat, writeImageToXisf } from 'nebulosa/src/imaging/model/image'
 import { fileHandleSource } from 'nebulosa/src/io/file'
-import { readFits } from 'nebulosa/src/io/formats/fits/fits'
+import { readFits, writeFits } from 'nebulosa/src/io/formats/fits/fits'
 import { readXisf } from 'nebulosa/src/io/formats/xisf/xisf'
 import { bufferSink, bufferSource } from 'nebulosa/src/io/io'
 
@@ -10077,6 +10839,19 @@ console.log((await readImageFromFileHandle(handle))!.metadata.width) // 1037
 await handle.close()
 
 console.log((await readImageFromSource(bufferSource(bytes), { raw: 64, sampleScale: 'normalized' }))!.raw.constructor.name) // Float64Array
+
+// A 16-bit file is within 0..1 once normalized, so nothing was rescaled.
+const scaled = (await readImageFromBuffer(bytes, 32))!
+console.log(scaled.metadata.normalization) // undefined
+
+// A Float32 source in ADU leaves 0..1, so it is rescaled; sourceScale writes it back in ADU.
+const adu = Buffer.alloc(5760)
+await writeFits(bufferSink(adu), [{ header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: 4, NAXIS2: 1 }, raw: new Float32Array([100, 350, 600, 1100]) }])
+const rescaled = (await readImageFromBuffer(adu))!
+console.log(rescaled.metadata.normalization, [...rescaled.raw]) // { minimum: 100, range: 1000 } [ 0, 0.25, 0.5, 1 ]
+const restored = Buffer.alloc(5760)
+await writeImageToFits(rescaled, restored, { sourceScale: true })
+console.log([...(await readImageFromBuffer(restored, { sampleScale: 'digital' }))!.raw]) // [ 100, 350, 600, 1100 ]
 
 // A caller buffer larger than the image is reused: the image is a view of its first samples.
 const shared = new Float32Array(1037 * 706 + 10)
@@ -10126,7 +10901,7 @@ console.log(truncatePixel(0.5, 255), truncatePixel(1.5, 255), truncatePixel(-1, 
 
 Every imaging function works on an `Image`: a FITS-compatible `header`, the `metadata` that the header implies and a flat `raw` buffer (`Float32Array` or `Float64Array`) of the samples. The layout is row-major, with the origin at the first sample of the first row of the buffer and the channels of a pixel interleaved (`raw[(y * width + x) * channels + c]`, so `stride` is `width * channels`); an image has 1 (grayscale) or 3 (RGB) channels, or a single channel that is a color filter array mosaic when `metadata.bayer` is set. The samples of an `Image` are in a normalized full-scale unit, where 0..1 is the nominal range of an input, and the results of processing may leave that range. A `DigitalImage` is the read-only counterpart for measurements: its samples keep the digital numbers of the source after the scaling of the format (`BZERO` and `BSCALE` of FITS), with the representable `digitalRange` and the `quantizationStep` (both in DN, and only for integer sources). It is not an input of the writers, and `isImage` is `false` for it.
 
-`ImageMetadata` has `width`, `height`, `channels`, `stride` (samples of a row), `pixelCount` (per channel), `strideInBytes` and `pixelSizeInBytes` (of the source), `bitpix` (the FITS code of the source) and `bayer`. The configuration types are the tuples that the operations share: `ImageChannel` (`'RED'`, `'GREEN'` or `'BLUE'`), `ImageChannelOrGray`, `GrayscaleAlgorithm` (`'BT709'`, `'RMY'`, `'Y'` or explicit weights), `CfaPattern` (the 2x2 tile read row by row, like `'RGGB'`), `ImageRawType`, `ImageRawPrecision` (`32`, `64` or `'auto'`) and the options of the readers and the writers. The helpers are `isImage(value)`, `channelIndex(channel)` (0 for red, gray or undefined, 1 for green, 2 for blue), `grayscaleFromChannel(channel)` (the weights of a channel or named algorithm, BT.709 by default), `makeImageRawTypedArray(source, size)` (a new zeroed buffer of the precision of a typed array or of 32 or 64), `cfaChannelAt(pattern, x, y)` (the channel 0, 1 or 2 of a raw coordinate, the pattern describing the origin of the buffer) and `shiftCfaPattern(pattern, offsetX, offsetY)` (the pattern of an image whose origin is moved by an integer offset of unbinned pixels, which throws a `RangeError` for a fraction), and the constants `BT709_GRAYSCALE`, `RMY_GRAYSCALE`, `Y_GRAYSCALE`, `RED_GRAYSCALE`, `GREEN_GRAYSCALE`, `BLUE_GRAYSCALE`, `DEFAULT_GRAYSCALE`, `GRAYSCALES` and `DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS`.
+`ImageMetadata` has `width`, `height`, `channels`, `stride` (samples of a row), `pixelCount` (per channel), `strideInBytes` and `pixelSizeInBytes` (of the source), `bitpix` (the FITS code of the source), `bayer` and `normalization` (an `ImageNormalization`, present only when a normalized reader rescaled the source, see [Scientific Image Loading and Export](#scientific-image-loading-and-export)). The configuration types are the tuples that the operations share: `ImageChannel` (`'RED'`, `'GREEN'` or `'BLUE'`), `ImageChannelOrGray`, `GrayscaleAlgorithm` (`'BT709'`, `'RMY'`, `'Y'` or explicit weights), `CfaPattern` (the 2x2 tile read row by row, like `'RGGB'`), `ImageRawType`, `ImageRawPrecision` (`32`, `64` or `'auto'`) and the options of the readers and the writers. The helpers are `isImage(value)`, `channelIndex(channel)` (0 for red, gray or undefined, 1 for green, 2 for blue), `grayscaleFromChannel(channel)` (the weights of a channel or named algorithm, BT.709 by default), `makeImageRawTypedArray(source, size)` (a new zeroed buffer of the precision of a typed array or of 32 or 64), `cfaChannelAt(pattern, x, y)` (the channel 0, 1 or 2 of a raw coordinate, the pattern describing the origin of the buffer) and `shiftCfaPattern(pattern, offsetX, offsetY)` (the pattern of an image whose origin is moved by an integer offset of unbinned pixels, which throws a `RangeError` for a fraction), and the constants `BT709_GRAYSCALE`, `RMY_GRAYSCALE`, `Y_GRAYSCALE`, `RED_GRAYSCALE`, `GREEN_GRAYSCALE`, `BLUE_GRAYSCALE`, `DEFAULT_GRAYSCALE`, `GRAYSCALES` and `DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS`.
 
 ```ts
 import { readImageFromPath } from 'nebulosa/src/imaging/model/image'
@@ -10762,7 +11537,7 @@ console.log(detectBadPixels(color, { channel: 'GREEN' }).hot, detectBadPixels(co
 
 `imaging/stars/detector` finds the stars of an image and measures them, with the guiding use case in mind (the algorithm follows PHD2). `detectStars(image, options?)` works on a mono copy of the image (a color image is reduced to its grayscale and a raw CFA mosaic is debayered first), removes hot pixels and 2x2 defect clumps with a 3x3 median, correlates the result with a PSF-matched kernel (see [PSF Filter](#psf-filter)), takes the local maxima of the response away from the border (a margin of 4 pixels plus the kernel, so a star near the edge is not detected) that stand out from the surrounding mean in units of the local standard deviation, and measures every candidate on the original samples (not on the filtered ones). The published `x` and `y` are the flux-weighted centroid of the star (zero-based pixel coordinates of the sample centers: origin at the upper-left sample, x to the right and y down, with a fractional part), found by recentering the aperture at most twice, and the star is described by `flux` (above the sky, in the normalized sample scale, inside a radius of `STAR_SIGNAL_RADIUS`, 4 pixels), `snr`, `hfd` (the half-flux diameter, in pixels, a star below 1 pixel is rejected as noise), `fwhm` (pixels) and, when they can be estimated, the moment shape `eccentricity`, `elongation`, `majorVariance` and `minorVariance` (pixel squared) and `theta` (see [Star Shape Statistics](#star-shape-statistics)). The sky is the median of the annulus between 5 and 7 pixels and the noise its MAD scaled to a standard deviation, so a crowded field or a nebula biases the SNR. The list is sorted by decreasing flux. `maxStars` (500) keeps the strongest candidates, `minSNR` (0) drops the weak ones, and `searchRegion` (0, in pixels) removes the pairs of comparable stars that both fit in one search box of that size plus 5 pixels, the PHD2 uniqueness filter for a guide star (it is not a crop of the frame). When the candidates show a clear break between the stars and the noise, the dim noise tail is trimmed automatically; a frame with no real stars has no such break and returns its noise peaks, so `minSNR` is the filter that always works. The `snr` is `flux / sqrt(flux + pixels * noise^2)` with the flux in the sample scale, which on a normalized image is far smaller than a signal-to-noise ratio in electrons: use it to rank stars and to choose `minSNR` relative to the faintest star wanted. An isolated hot pixel is not a candidate (the median removes it from the response), but the photometry is taken on the original samples, so a hot pixel inside the aperture of a nearby noise peak can be reported as a broad, elongated star: calibrate or fix the bad pixels first (see [Single-Frame Bad-Pixel Map](#single-frame-bad-pixel-map)). A very crowded or blurred field can have close stars merged (detections closer than 5 pixels are one star). The detector assumes stars of a few pixels of FWHM: a very large, defocused or tiny undersampled star is outside what the kernel matches. An image that is too small to have an interior (less than about 17 pixels on a side) returns no stars.
 
-`measureStarPhotometry(image, x, y, radius)` measures one position, returning `[flux, snr, hfd, fwhm]` with the sky in the annulus from `radius + 1` to `radius + 3` pixels, and zeros when the position or the radius is invalid or the aperture has no positive flux; it does not recenter, so pass the centroid. The module also exports the list that the detector uses internally to keep the candidates sorted by brightness, `StarList` (`add` inserts by height and evicts the dimmest when the `capacity` is exceeded; `addFirst`, `addLast`, `first`, `deleteFirst`, `deleteAfter`, `delete`, `clear`, `array` and the iterator, with `size`), and the two pruning steps that act on it: `mergeVeryCloseStars(list, minLimitSq?)` removes the star that has a neighbor within the distance, in squared pixels (25 by default, so 5 pixels), and `excludeStarsFitWithinRegion(list, searchRegion)` the pairs inside a box, unless one star is at least 5 times brighter than the other.
+`measureStarPhotometry(image, x, y, radius)` measures one position, returning `[flux, snr, hfd, fwhm]` with the sky in the annulus from `radius + 1` to `radius + 3` pixels, and zeros when the position or the radius is invalid or the aperture has no positive flux; it does not recenter, so pass the centroid. For calibrated photometry with masks, elliptical apertures and propagated uncertainties, use [Aperture Photometry](#aperture-photometry). The module also exports the list that the detector uses internally to keep the candidates sorted by brightness, `StarList` (`add` inserts by height and evicts the dimmest when the `capacity` is exceeded; `addFirst`, `addLast`, `first`, `deleteFirst`, `deleteAfter`, `delete`, `clear`, `array` and the iterator, with `size`), and the two pruning steps that act on it: `mergeVeryCloseStars(list, minLimitSq?)` removes the star that has a neighbor within the distance, in squared pixels (25 by default, so 5 pixels), and `excludeStarsFitWithinRegion(list, searchRegion)` the pairs inside a box, unless one star is at least 5 times brighter than the other.
 
 ```ts
 import type { Image } from 'nebulosa/src/imaging/model/types'
@@ -13993,7 +14768,7 @@ for (let i = 0; i < 3; i++) {
 
 ### Observation Scores
 
-`astronomy/planning` scores one target that has already been reduced to a few numbers, to rank the targets of a night plan; it evaluates no ephemeris, so the altitudes, the solar altitude and the lunar geometry must come from the caller. Angles are radians and the scores are dimensionless on 0..1 (or 0..100 with `scale: 100`). `observationScore(input, options?)` is the geometric mean of the factors that were supplied, so a single zero factor zeroes the score and an omitted optional input is left out instead of counting as a failure. The `ObservationScoreInput` has the `altitude` (always scored: 0 at the horizon, or at `minimumAltitude`, rising linearly to 1 at 60 degrees, `goodAltitude`), the optional `airmass` (derived with Kasten and Young from the altitude when omitted, falling from 1 at the zenith to 0 at airmass 3, `maximumAirmass`, and 0 for a target that is not above the horizon), the `sunAltitude` (0 at -12 degrees and above, rising to 1 at -18 degrees), the `moonInterference` from 0 to 1 (the factor is one minus it) and the `availableDurationHours` with the `requiredDurationHours` (their ratio capped at 1, and a zero requirement counts as satisfied; scored only when both are given). `moonInterference(illumination, moonAltitude, separation)` gives that moon term as the illuminated fraction times the sine of the lunar altitude times a Gaussian of 30 degrees in the angular separation from the target (wrapped to `(-PI, PI]`), clamped to 0..1, and it is 0 for a Moon on or below the horizon or without illumination. The ramps are planning thresholds, not a photometric sky-brightness model: the Moon does not depend on the wavelength or on the sky transparency, the twilight ramp only follows the solar altitude and the airmass is the geometric one, so use the score to order targets and not as a limiting magnitude.
+`astronomy/planning` scores one target that has already been reduced to a few numbers, to rank the targets of a night plan; it evaluates no ephemeris, so the altitudes, the solar altitude and the lunar geometry must come from the caller. Angles are radians and the scores are dimensionless on 0..1 (or 0..100 with `scale: 100`). `observationScore(input, options?)` is the geometric mean of the factors that were supplied, so a single zero factor zeroes the score and an omitted optional input is left out instead of counting as a failure. The `ObservationScoreInput` has the `altitude` (always scored: 0 at the horizon, or at `minimumAltitude`, rising linearly to 1 at 60 degrees, `goodAltitude`), the optional `airmass` (derived with Kasten and Young from the altitude when omitted, falling from 1 at the zenith to 0 at airmass 3, `maximumAirmass`, and 0 for a target that is not above the horizon), the `sunAltitude` (0 at -12 degrees and above, rising to 1 at -18 degrees), the `moonInterference` from 0 to 1 (the factor is one minus it) and the `availableDurationHours` with the `requiredDurationHours` (their ratio capped at 1, and a zero requirement counts as satisfied; scored only when both are given). `moonInterference(illumination, moonAltitude, separation)` gives that moon term as the illuminated fraction times the sine of the lunar altitude times a Gaussian of 30 degrees in the angular separation from the target (wrapped to `(-PI, PI]`), clamped to 0..1, and it is 0 for a Moon on or below the horizon or without illumination. The ramps are planning thresholds, not a photometric sky-brightness model: the Moon does not depend on the wavelength or on the sky transparency, the twilight ramp only follows the solar altitude and the airmass is the geometric one, so use the score to order targets and not as a limiting magnitude; [Sky Surface Brightness (Krisciunas and Schaefer)](#sky-surface-brightness-krisciunas-and-schaefer) predicts the sky background itself.
 
 ```ts
 import { moonInterference, observationScore } from 'nebulosa/src/astronomy/planning'
@@ -14073,6 +14848,68 @@ const result = await centerTarget(
 )
 
 console.log(result) // { ok: true, value: { attempts: 2, separation: 2.1e-5, solution } } — separation in radians (≈ 4″)
+```
+
+### Observing Session Scheduling
+
+`scheduleSession(targets, start, end, options?)` of `observation/scheduler` allocates one observing session, typically a night, to the exposure blocks of several targets and returns a plan; it is pure, opens no device, and leaves execution, aborts and retries to the sequencer. Each `ScheduleTarget` has an `id`, a positive `priority`, the `windows` in which it may be observed (usually from [Observing Visibility Windows](#observing-visibility-windows); overlapping or unordered intervals are merged), an optional apparent `pointing` (`rightAscension` compatible with the local sidereal time and `declination`, radians; omitted for dark, bias or panel-flat frames, which leave the mount where it is), `sky` (true by default; false blocks ignore `'sky'` exclusions and skip autofocus) and its `blocks`. A `ScheduleBlockRequest` has an `id` unique across the session, the `exposure` of one frame in seconds (0 is valid for bias frames), the integer frame `count`, an optional `filter` and `ditherEvery` (frames between dithers inside a chunk, counted across a meridian flip inside it), and `divisible` (false by default: all remaining frames must fit in one contiguous chunk, as a transit needs; true allows chunks between `minimumFrames`, 1, and `maximumFrames`, unlimited, so focus, priorities and flips are re-evaluated between chunks), with optional `notBefore` and `notAfter` limits. The whole block, setup included, must fit inside one allowed interval: the slew, a pending meridian flip, the filter change and the autofocus happen with the target observable, so a time-critical block should open `notBefore` early enough to absorb them. The `costs` are explicit seconds (all 0 when omitted): `slewRate` in radians per second over the great-circle separation plus a fixed `slewSettle` (a slew from an unknown pointing is charged as a PI-radian slew and flagged `unknownPointing`), `readout` per frame, `dither`, `filterChange`, `focus` with `focusInterval` and `focusOnFilterChange` (decided at block boundaries only), and `meridianFlip` (the flip with recentering and settling). `exclusions` are supplied weather or safety intervals, never predictions: scope `'sky'` stops sky blocks only, `'all'` (the default) stops every block. `meridian` gives the east-positive `longitude` of a German equatorial mount and the `flipAt` hour angle (0 by default); a pre-flip block whose hour angle reaches it flips after the frame in progress and any dither due after it, so leave one exposure of margin, as for `latestAt` in [Meridian Flip Planning](#meridian-flip-planning); when the threshold is reached during the slew, filter change or focus, the flip ends the setup and `exposureStart` follows it. The hour angle extrapolates the apparent sidereal time at `start` at the sidereal rate. Omit `meridian` for mounts that never flip.
+
+The algorithm is a deterministic greedy dispatcher with a one-step look-ahead. At each step every pending block is placed at its earliest feasible start, and divisible ones are also tried truncated at the start of each other candidate they would overlap. Every variant is charged with the priority-weighted acquisition time (priority × frames × (exposure + readout)) it `displaced` from the other blocks' remaining windows, and scored as (value − displaced) per second elapsed, so overhead and idle waiting lower the score. A variant that can start at the earliest instant with a positive score is preferred, which keeps the night busy, otherwise the best score wins, which may wait for a time-critical block. It is a heuristic, not an optimal schedule. Each `ScheduledBlock` has the `start` of its setup, the `exposureStart`, the `end`, the `frames`, the total `exposure`, the `overhead` by category, the preceding `idle` seconds, the `meridianFlip` instant when one is predicted, the `score`, the `displaced` value and `flags` (`partial`, `meridianFlip`, `filterChange`, `focus`, `unknownPointing`, `waited`). Instants are `Time` values in the time scale of `start`, and offsets are measured in that scale, so pass TT for uniform seconds across a UTC leap second. A night across 0h UTC needs nothing special. `unscheduled` lists the blocks with frames left and a `reason`: `skipped`, `noWindow`, `excluded` (every window is excluded), `windowTooShort` (it cannot fit even alone), `partial` or `conflict` (it fits alone but lost its time). The `diagnostics` give the `duration`, `exposure`, `overhead`, `idle`, `efficiency`, `objective`, `maximumObjective`, `completeness`, `meridianFlips` and `iterations`. To replan after an interruption, call it again from the new horizon with `initial` (`pointing`, `postFlip`, `filter`, `lastFocus`, the `completedFrames` by block id and the `skip` list). The inputs are not mutated. Duplicate block ids and a frame with no duration (exposure plus readout) throw a `RangeError`, and a count that is not a non-negative integer throws a `TypeError`.
+
+```ts
+import { timeShift, timeToDate, timeYMDHMS } from 'nebulosa/src/astronomy/time/time'
+import { deg, hour } from 'nebulosa/src/math/units/angle'
+import { scheduleSession, type ScheduleTarget } from 'nebulosa/src/observation/scheduler'
+
+// The night runs from 22:00 UTC to 06:00 UTC of the next day; at(h) is h hours after the start.
+const start = timeYMDHMS(2026, 1, 15, 22, 0, 0)
+const end = timeYMDHMS(2026, 1, 16, 6, 0, 0)
+const at = (hours: number) => timeShift(start, hours / 24)
+const hhmm = (time: typeof start) =>
+	timeToDate(time)
+		.slice(3, 5)
+		.map((v) => `${v}`.padStart(2, '0'))
+		.join(':')
+
+// Windows would normally come from visibilityWindows; here they cover the night.
+const targets: ScheduleTarget[] = [
+	// A long divisible integration in 1 h chunks.
+	{ id: 'M42', priority: 1, windows: [{ start, end }], pointing: { rightAscension: hour(5.59), declination: deg(-5.4) }, blocks: [{ id: 'M42-L', filter: 'L', exposure: 300, count: 120, divisible: true, maximumFrames: 12, ditherEvery: 3 }] },
+	// A transit: 2 h of 60 s frames between 01:00 and 03:15 UTC.
+	{ id: 'WASP-12', priority: 10, windows: [{ start, end }], pointing: { rightAscension: hour(6.51), declination: deg(29.67) }, blocks: [{ id: 'transit', filter: 'V', exposure: 60, count: 120, notBefore: at(3), notAfter: at(5.25) }] },
+	// Darks need neither the sky nor the mount.
+	{ id: 'darks', priority: 1, windows: [{ start, end }], sky: false, blocks: [{ id: 'darks-300', exposure: 300, count: 10 }] },
+]
+
+const options = {
+	costs: { slewRate: deg(3), slewSettle: 60, readout: 3, dither: 15, filterChange: 8, focus: 180, focusInterval: 2 * 3600 },
+	// Clouds forecast by the caller from 23:30 to 00:30 UTC: no sky work, but darks are possible.
+	exclusions: [{ start: at(1.5), end: at(2.5), scope: 'sky' as const }],
+	meridian: { longitude: deg(-45), flipAt: deg(2) },
+	initial: { filter: 'L' },
+}
+
+const plan = scheduleSession(targets, start, end, options)
+
+for (const b of plan.blocks) console.log(b.blockId, hhmm(b.start), hhmm(b.end), b.frames, Math.round(b.overhead.total), b.flags.join(','))
+// M42-L 22:00 23:06 12 381 partial,focus,unknownPointing
+// M42-L 23:06 23:26 4 27 partial
+// darks-300 23:26 00:17 10 30
+// M42-L 00:30 00:58 5 210 partial,focus,waited
+// transit 01:00 03:07 120 440 meridianFlip,filterChange,waited
+// M42-L 03:07 04:13 12 341 partial,filterChange,focus
+// M42-L 04:13 05:14 12 81 partial
+// M42-L 05:14 05:58 8 234 partial,focus
+
+console.log(plan.unscheduled) // [{ targetId: 'M42', blockId: 'M42-L', remainingFrames: 67, scheduledFrames: 53, reason: 'partial' }]
+console.log(plan.diagnostics.exposure, Math.round(plan.diagnostics.overhead.total), plan.diagnostics.efficiency.toFixed(3), plan.diagnostics.meridianFlips) // 26100 1745 0.906 1 — exposure (s), overhead (s), exposure/duration, flips
+
+// The sequencer aborted the transit and resumes at 02:00 UTC with 30 frames of M42 done.
+const initial = { pointing: targets[1].pointing, filter: 'V', lastFocus: at(3), completedFrames: { 'M42-L': 30, 'darks-300': 10 }, skip: ['transit'] }
+const replan = scheduleSession(targets, at(4), end, { ...options, initial })
+
+console.log(replan.blocks.map((b) => `${hhmm(b.start)} ${b.frames}`)) // ['02:00 12', '03:02 12', '04:07 12', '05:08 9']
+console.log(replan.unscheduled.map((u) => `${u.blockId} ${u.reason}`)) // ['M42-L partial', 'transit skipped']
 ```
 
 ### Pointing Model Fit and Correction
@@ -15915,13 +16752,13 @@ simulator.dispose()
 
 An INDI camera exposure ends in two separate messages: the `CCD_EXPOSURE` vector turning `Ok` and the BLOB carrying the frame, in either order and with no operation id. `CameraCapturer` turns that into a [Device Operations](#device-operations) capture: it acquires the camera, applies the request, exposes frame after frame, pairs each exposure completion with the BLOB of the same generation, decodes and hands over the frame, and stops and quiesces the camera before the lease is released.
 
-`new CameraCapturer(cameraManager, arbiter, options)` registers itself as a handler of the `CameraManager`, so it sees every camera update, removal and BLOB without forwarding, and is `Disposable` like the [Device Commanders](#device-commanders). `options.capturesDir` is the directory of automatic paths. `publish(frame, path, camera)` receives every decoded frame (the decoded buffer itself, not a copy), `write(path, data)` persists auto-saved frames (`Bun.write` by default) and `decode(data)` decodes base64 payloads (a streaming decoder by default). `devices` holds the `MountManager`, `FocuserManager`, `WheelManager` and `RotatorManager` lookups used to resolve the `mount`, `focuser`, `wheel` and `rotator` names of a request on the camera's client; the resolved devices are passed to `cameraManager.snoop` so the driver stamps them into the headers, and are never acquired. `frameGraceTime` (30000), `quiesceTimeout` (5000) and `lateBlobDrainTime` (100) are milliseconds. The capturer never dithers: a dither belongs to whoever sequences the frames and runs before the capture starts.
+`new CameraCapturer(cameraManager, arbiter, options)` registers itself as a handler of the `CameraManager`, so it sees every camera update, removal and BLOB without forwarding, and is `Disposable` like the [Device Commanders](#device-commanders). `options.capturesDir` is the directory of automatic paths. `publish(frame, path, camera)` receives every decoded frame (the decoded buffer itself, not a copy), `write(path, data)` persists auto-saved frames (`writeFrameExclusively` by default, which writes a temporary file next to the target and then hard-links it to the final name, or copies it exclusively on a filesystem without hard links, so an existing file is never replaced, a failure leaves no partial frame, and the temporary is always removed) and `decode(data)` decodes base64 payloads (a streaming decoder by default). `devices` holds the `MountManager`, `FocuserManager`, `WheelManager` and `RotatorManager` lookups used to resolve the `mount`, `focuser`, `wheel` and `rotator` names of a request on the camera's client; the resolved devices are passed to `cameraManager.snoop` so the driver stamps them into the headers, and are never acquired. `frameGraceTime` (30000), `quiesceTimeout` (5000) and `lateBlobDrainTime` (100) are milliseconds. The capturer never dithers: a dither belongs to whoever sequences the frames and runs before the capture starts.
 
-`start(scope, camera, request, hooks)` takes an `OperationScope` first, so a capture runs as its own tree or nested in a feature that already holds the camera. It returns `{ id, started, result, cancel }`: `started` resolves when the first exposure is physically `Busy` (or with the start failure), `result` resolves `{ frames, frameCount }` after cleanup and release, and `cancel()` resolves once the camera is quiescent. The `CameraCaptureHooks` apply to that capture only: `listener` and `rejectedListener` receive its snapshots, `write(path, data)` replaces `options.write` for its auto-saved frames (the result is delivered only after it resolved, so a writer that syncs to disk makes the frame durable), and `clock` (`{ wallNow, monotonicNow }`, `SYSTEM_CAMERA_CAPTURE_CLOCK` by default) is where its frame instants are read. `beforeExposure({ path, generation })` is called synchronously after every configuration command of a frame and immediately before its exposure command, with nothing awaited in between: returning a `FailedOperationResult` ends the capture with it without exposing (no `exposureStarted`, no generation consumed, no file, no BLOB owed, and the camera is released), and a hook that throws refuses the frame as `commandFailed`. Neither promise rejects. `CameraCaptureStart` (start from a copy of `DEFAULT_CAMERA_CAPTURE_START`) gives the exposure in `exposureTimeUnit` (`exposureTimeIn*` convert between units), `exposureMode` (`single`, `fixed` with `count` frames, or `loop` until cancelled), the inter-frame `delay` in seconds, the subframe in unbinned pixels (the full sensor unless `subframe` is set with a positive size), binning, gain, offset, frame type and format, and `transferFormat` (`FITS` or `XISF`). A non-positive or non-finite exposure, a negative or non-finite delay, a `fixed` count that is not a positive integer, and an unusable destination fail as `commandFailed` before anything is commanded, and a camera that is busy, disconnected or not yet verified by the [Device Availability Lifecycle](#device-availability-lifecycle) is refused as `busy`.
+`start(scope, camera, request, hooks)` takes an `OperationScope` first, so a capture runs as its own tree or nested in a feature that already holds the camera. It returns `{ id, started, result, cancel, stop }`: `started` resolves when the first exposure is physically `Busy` (or with the start failure), `result` resolves `{ frames, frameCount }` after cleanup and release, `cancel()` aborts the exposure in flight, losing its frame, fails the capture as `aborted` and resolves once the camera is quiescent, and `stop()` ends the capture after the exposure in flight instead: that frame is still processed and written, a running inter-frame delay ends at once, no further exposure starts, and the capture succeeds with the frames taken so far (a stop before the first exposure takes none and settles `started` as `aborted`). `stop()` is idempotent and does nothing once the capture ended. The `CameraCaptureHooks` apply to that capture only: `listener` and `rejectedListener` receive its snapshots, `write(path, data)` replaces `options.write` for its auto-saved frames (the result is delivered only after it resolved, so a writer that syncs to disk makes the frame durable), and `clock` (`{ wallNow, monotonicNow }`, `SYSTEM_CAMERA_CAPTURE_CLOCK` by default) is where its frame instants are read. `beforeExposure({ path, generation })` is called synchronously after every configuration command of a frame and immediately before its exposure command, with nothing awaited in between: returning a `FailedOperationResult` ends the capture with it without exposing (no `exposureStarted`, no generation consumed, no file, no BLOB owed, and the camera is released), and a hook that throws refuses the frame as `commandFailed`. Neither promise rejects. `CameraCaptureStart` (start from a copy of `DEFAULT_CAMERA_CAPTURE_START`) gives the exposure in `exposureTimeUnit` (`exposureTimeIn*` convert between units), `exposureMode` (`single`, `fixed` with `count` frames, or `loop` until stopped or cancelled), the inter-frame `delay` in seconds (waited after a frame was processed and written, never before the first frame nor after the last), the subframe in unbinned pixels (the full sensor unless `subframe` is set with a positive size), binning, gain, offset, frame type and format, and `transferFormat` (`FITS` or `XISF`). A non-positive or non-finite exposure, a negative or non-finite delay, a `fixed` count that is not a positive integer, and an unusable destination fail as `commandFailed` before anything is commanded, and a camera that is busy, disconnected or not yet verified by the [Device Availability Lifecycle](#device-availability-lifecycle) is refused as `busy`.
 
 Each frame waits at most the exposure plus `frameGraceTime` for both messages (`timeout`). `Alert` fails the capture as `alert`, an exposure going `Idle` before completion as `unexpectedState`, a disconnect or removal as `disconnected` or `removed`, and a failed `write` or exposure command as `commandFailed`. A frame generation is committed only once its exposure exists: an exposure command that throws without any update of the exposure publishes nothing and consumes no generation, while one that throws after the exposure went `Busy` is committed and cleaned up like any running exposure. Each `CameraFrameEvent` carries the frame instants in milliseconds of the capture clock: `exposureDispatchedAt`/`exposureDispatchedMonotonic`, read immediately before the exposure command and so a conservative lower bound of the physical start (use it to open a window that must contain the whole exposure), `exposureStartedAt`/`exposureStartedMonotonic` at the first observed `Busy`, which arrives after the shutter opened (use it for the exposure midpoint), and `exposureFinishedAt`/`exposureFinishedMonotonic` at `Ok`. The `…At` fields are wall time in Unix milliseconds and may jump with the system clock; durations come only from the `…Monotonic` fields. The listener receives `CameraCaptureEvent` snapshots (`exposureStarted`, which always precedes every other snapshot of its generation, `exposing`, `exposureFinished` with the frame path as second argument, and `waiting` every 250 ms during delays of 1 s or more), with frame and total progress in microseconds, and ends with one `idle` snapshot whose `stopped` tells whether the capture was interrupted (preceded by `error` when it was). A capture refused before it started reports its `error` and `idle` snapshots to `rejectedListener`. When a capture ends with an exposure still running, cleanup stops it and waits up to `quiesceTimeout` for it to go idle, otherwise the camera is left unavailable and the result gains `cleanup failed: …`. A frame that was exposed but whose BLOB never arrived quarantines the camera, because the next capture would otherwise read it: the stale BLOB, an `Alert` or `Idle` exposure, a disconnect or removal, or disposing the capturer ends the quarantine.
 
-A frame not auto-saved is published as `capturesDir/<camera name>.fit` (or `.xisf`). With `autoSave`, the frame is named after the local time it was commanded (`YYYYMMDD.HHmmssSSS`) and written into `savePath` (or `capturesDir` when it is not a directory) under the subfolder `autoSubFolderName(time, mode, timezoneOffset?)` gives: the local date for `midnight`, the local date 12 hours earlier for `noon`, so a whole night stays in the folder of the evening it began, and none for `off`. A caller that already chose the destination passes an absolute `outputPath` and an `outputName` that is a single file name (see [Portable Path Segments](#portable-path-segments)); that name is refused for more than one frame or when the file exists, and `publishPath` publishes the frame under another name, such as the final name of a temporary file. `watch(camera, { updated })` routes the updates of a camera exposed outside any capture, such as a guide camera, to one watcher and returns its remover.
+A frame not auto-saved is published as `capturesDir/<camera name>.fit` (or `.xisf`). With `autoSave`, the frame is named after the local time it was commanded (`YYYYMMDD.HHmmssSSS`, with the first free `_2`, `_3`… suffix when that name is taken) and written into `savePath` (or `capturesDir` when it is not a directory) under the subfolder `autoSubFolderName(time, mode, timezoneOffset?)` gives: the local date for `midnight`, the local date 12 hours earlier for `noon`, so a whole night stays in the folder of the evening it began, and none for `off`. A caller that already chose the destination passes an absolute `outputPath` and an `outputName` that is a single file name (see [Portable Path Segments](#portable-path-segments)); that name is refused for more than one frame or when the file exists, and `publishPath` publishes the frame under another name, such as the final name of a temporary file. A caller naming every frame of a sequence passes `framePath({ generation, time, camera })` to `start` instead: it is asked for the absolute path of each auto-saved frame before its exposure is commanded (`time` in Unix milliseconds, `generation` from 1), and a path that already exists fails the capture. `watch(camera, { updated })` routes the updates of a camera exposed outside any capture, such as a guide camera, to one watcher and returns its remover.
 
 ```ts
 import { tmpdir } from 'os'
@@ -15965,7 +16802,14 @@ console.log(await capture.started) // { ok: true, value: undefined } — the fir
 const result = await capture.result
 console.log(result.ok && result.value.frameCount, frames.size) // 2 1 — both frames share the automatic path
 
-// A loop runs until cancelled; the simulator aborts the exposure to Idle, so the camera is free at once.
+// A loop runs until stopped: the frame being exposed is still taken, and no other one starts.
+const stopped = capturer.start(coordinator, camera, { ...request, exposureMode: 'loop' })
+await stopped.started
+stopped.stop()
+const taken = await stopped.result
+console.log(taken.ok && taken.value.frameCount) // 1
+
+// Cancelling aborts the exposure instead; the simulator aborts it to Idle, so the camera is free at once.
 const loop = capturer.start(coordinator, camera, { ...request, exposureMode: 'loop' })
 await loop.started
 await loop.cancel()
@@ -16073,7 +16917,7 @@ Every command takes an `OperationScope` first. Passing the `OperationCoordinator
 | `RotatorCommander`     | `moveTo`, `home`, `syncTo`, `reverse`, `stopMotion`                                                                                                                                                                                               | degrees resolved by `rotatorAngle` against the driver limits; `arrivalTolerance` (1°) in degrees; default move timeout 120 s                                                                                                  |
 | `WheelCommander`       | `moveTo`, `setNames`                                                                                                                                                                                                                              | slots clamped by `wheelSlot`; a wheel cannot be aborted, so a move is only waited for; default timeout 30 s                                                                                                                   |
 
-`MountCommander.goTo` resolves `MountSlewResult` (where the mount stopped) and `flip` resolves `MountFlipResult`, which adds `pierSideVerified`, false when the driver gives no evidence that the side changed. `goTo`, `flip` and `sync` convert a time-dependent target (J2000, ALTAZ, ECLIPTIC, GALACTIC) to the equinox of date at `options.time`, so a caller that compares the commanded coordinate with its own computations passes the instant it used; without it the host clock is read when the command starts, and a JNOW target is used as given. `setTrackMode` resolves only after the mount reports the requested `trackMode`, with `alert` for an Alert on the track mode and `timeout` (10 s by default) for a driver that ignores it. `startManualMove` returns a `ManualMoveHandle` (`DomeManualMoveHandle` for the dome) that holds the device until `stop()` or until the last direction is disabled with `move(direction, false)`; a start while the previous motion is still stopping waits for it to release the device and then opens a new motion. A guide pulse cannot always be cut short: the stop sends a zero duration, which the standard INDI guider interface and the Alpaca bridge ignore, so a cancelled pulse keeps the device until it has ended. `new GuideOutputCommander(guideOutputManager, arbiter)` models a pulse of `d` ms dispatched at `t` (milliseconds of `performance.now()`) with `guidePulseWindow(t, d)`: a Busy may still begin until `busyAckDeadline = t + d + GUIDE_PULSE_ACK_MARGIN` (250 ms), and a driver that reports Busy at that instant and ignores the zero reports Idle by `endsBy = t + 2d + 2·GUIDE_PULSE_ACK_MARGIN`; `guidePulseReleaseBound(maximum)` adds `GUIDE_PULSE_STOP_SETTLE_TIMEOUT` (15000 ms) to that window and bounds how long releasing a guide output can take. A leg concludes on the flag of its own axis: after a Busy once it stops, and without one only after `busyAckDeadline`; `pulseAxes` gives every leg the window of the longest one and succeeds only with `pulsing` down. Every pulse the commander dispatches is kept as evidence until its end is physically observed on a registered and connected guide output view, per axis: a whole Busy → stopped cycle (or an Alert refusing it), or the axis published stopped continuously until `busyAckDeadline`, with no axis left Busy. A disconnect, a removed view or a value nobody published is never taken as the end of a pulse, so a cleanup that ends with the evidence open fails (`did not observe the end of a dispatched pulse` when the device went away) and blocks the key with the `guidePulse` cause, lifted in the same turn as the observation that closes the evidence. `dispatchedPulseWindow(device)` returns the open window or `undefined`, `assumeDispatchedPulse(device, maximumDuration)` records a pulse a previous process may have left running on both axes, blocks the key and asks the driver to republish both vectors without commanding anything, and `stopPulses(device, directions, { busyAckDeadline })` never declares a standstill before that instant, for pulses sent by someone else. `dispose()` also lifts the `guidePulse` causes this commander set. The arrival tolerances of the dome, mount and rotator only catch a motion that stopped somewhere else; a device stopping at the encoder step nearest the target is accepted. The commanders that wait on device events (cover, dome, focuser, guide output, mount, rotator and wheel) register themselves as handlers of their manager in the constructor and are `Disposable`: `dispose()` (or `[Symbol.dispose]()` through `using`) unregisters the commander and can be called more than once. Dispose a commander only after the operations that use it have settled, since a wait still pending, or started later, no longer sees device events and ends only by its timeout or its signal; disposal neither cancels operations nor stops devices. The other commanders hold no registration and need no disposal.
+`MountCommander.goTo` resolves `MountSlewResult` (where the mount stopped) and `flip` resolves `MountFlipResult`, which adds `pierSideVerified`, false when the driver gives no evidence that the side changed. `goTo`, `flip` and `sync` convert a time-dependent target (J2000, ALTAZ, ECLIPTIC, GALACTIC) to the equinox of date at `options.time`, so a caller that compares the commanded coordinate with its own computations passes the instant it used; without it the host clock is read when the command starts, and a JNOW target is used as given. `setTrackMode` resolves only after the mount reports the requested `trackMode`, with `alert` for an Alert on the track mode and `timeout` (10 s by default) for a driver that ignores it. `startManualMove` refuses a mount direction whose axis the driver does not define (`canMoveNS` or `canMoveWE`) and returns a `ManualMoveHandle` (`DomeManualMoveHandle` for the dome) that holds the device until `stop()` or until the last direction is disabled with `move(direction, false)`; a start while the previous motion is still stopping waits for it to release the device and then opens a new motion. A guide pulse cannot always be cut short: the stop sends a zero duration, which the standard INDI guider interface and the Alpaca bridge ignore, so a cancelled pulse keeps the device until it has ended. `new GuideOutputCommander(guideOutputManager, arbiter)` models a pulse of `d` ms dispatched at `t` (milliseconds of `performance.now()`) with `guidePulseWindow(t, d)`: a Busy may still begin until `busyAckDeadline = t + d + GUIDE_PULSE_ACK_MARGIN` (250 ms), and a driver that reports Busy at that instant and ignores the zero reports Idle by `endsBy = t + 2d + 2·GUIDE_PULSE_ACK_MARGIN`; `guidePulseReleaseBound(maximum)` adds `GUIDE_PULSE_STOP_SETTLE_TIMEOUT` (15000 ms) to that window and bounds how long releasing a guide output can take. A leg concludes on the flag of its own axis: after a Busy once it stops, and without one only after `busyAckDeadline`; `pulseAxes` gives every leg the window of the longest one and succeeds only with `pulsing` down. Every pulse the commander dispatches is kept as evidence until its end is physically observed on a registered and connected guide output view, per axis: a whole Busy → stopped cycle (or an Alert refusing it), or the axis published stopped continuously until `busyAckDeadline`, with no axis left Busy. A disconnect, a removed view or a value nobody published is never taken as the end of a pulse, so a cleanup that ends with the evidence open fails (`did not observe the end of a dispatched pulse` when the device went away) and blocks the key with the `guidePulse` cause, lifted in the same turn as the observation that closes the evidence. `dispatchedPulseWindow(device)` returns the open window or `undefined`, `assumeDispatchedPulse(device, maximumDuration)` records a pulse a previous process may have left running on both axes, blocks the key and asks the driver to republish both vectors without commanding anything, and `stopPulses(device, directions, { busyAckDeadline })` never declares a standstill before that instant, for pulses sent by someone else. `dispose()` also lifts the `guidePulse` causes this commander set. The arrival tolerances of the dome, mount and rotator only catch a motion that stopped somewhere else; a device stopping at the encoder step nearest the target is accepted. The commanders that wait on device events (cover, dome, focuser, guide output, mount, rotator and wheel) register themselves as handlers of their manager in the constructor and are `Disposable`: `dispose()` (or `[Symbol.dispose]()` through `using`) unregisters the commander and can be called more than once. Dispose a commander only after the operations that use it have settled, since a wait still pending, or started later, no longer sees device events and ends only by its timeout or its signal; disposal neither cancels operations nor stops devices. The other commanders hold no registration and need no disposal.
 
 ```ts
 import { FocuserCommander } from 'nebulosa/src/devices/commanders/focuser'
@@ -17109,7 +17953,7 @@ console.log(bridge.ready)
 
 ### INDI Camera Control
 
-`CameraManager` builds a `Camera` device from the INDI CCD interface and reflects its vectors onto the shared model, which also serves the Alpaca camera. The model has the cooler (`hasCooler` and `canSetTemperature` from `CCD_TEMPERATURE`, `hasCoolerControl` and `cooler` from `CCD_COOLER`, `coolerPower` in percent), the exposure (`exposuring`, and `exposure` with the remaining `value` in seconds and its `min`, `max` and `step`), `canAbort`, the frame type (`frameType` as `'LIGHT'`, `'DARK'`, `'FLAT'` or `'BIAS'`), the readout modes (`frameFormats` and the selected `frameFormat`), the subframe (`canSubFrame` and `frame.x`, `frame.y`, `frame.width` and `frame.height`, each a property in unbinned pixels), the binning (`canBin`, `bin.x` and `bin.y`), `gain` and `offset` (properties, in the units of the driver), the `pixelSize` (micrometres), the colour filter array (`cfa` with `offsetX`, `offsetY` and `type`, such as `'RGGB'`) and the guide output (see [INDI Guide Output](#indi-guide-output)). The temperature of the sensor is not part of this manager: it is read through the thermometer (see [INDI Thermometer](#indi-thermometer)), and the dew heater is described in [INDI Dew Heater](#indi-dew-heater).
+`CameraManager` builds a `Camera` device from the INDI CCD interface and reflects its vectors onto the shared model, which also serves the Alpaca camera. The model has the cooler (`hasCooler` and `canSetTemperature` from `CCD_TEMPERATURE`, `hasCoolerControl` and `cooler` from `CCD_COOLER`, `coolerPower` in percent), the exposure (`exposuring`, and `exposure` with the remaining `value` in seconds and its `min`, `max` and `step`), `canAbort`, the frame type (`frameType` as `'LIGHT'`, `'DARK'`, `'FLAT'` or `'BIAS'`), the readout modes (`frameFormats` and the selected `frameFormat`), the payload formats the driver offers (`transferFormats`, from the elements of `CCD_TRANSFER_FORMAT`, such as `['FITS', 'XISF']`; empty when the driver defines none, as an Alpaca camera does, and then only FITS can be relied on), the subframe (`canSubFrame` and `frame.x`, `frame.y`, `frame.width` and `frame.height`, each a property in unbinned pixels), the binning (`canBin`, `bin.x` and `bin.y`), `gain` and `offset` (properties, in the units of the driver), the `pixelSize` (micrometres), the colour filter array (`cfa` with `offsetX`, `offsetY` and `type`, such as `'RGGB'`) and the guide output (see [INDI Guide Output](#indi-guide-output)). The temperature of the sensor is not part of this manager: it is read through the thermometer (see [INDI Thermometer](#indi-thermometer)), and the dew heater is described in [INDI Dew Heater](#indi-dew-heater).
 
 The commands are `cooler(camera, enabled)`, `temperature(camera, celsius)` (the target of the cooler, when `canSetTemperature`), `frameType`, `frameFormat` (only a name in `frameFormats` is sent), `frame(camera, x, y, width, height)` (when `canSubFrame`), `bin(camera, x, y)` (when `canBin`), `gain`, `offset` (sent to the vector that the driver publishes: `CCD_CONTROLS` of the ZWO and SVBony drivers, or `CCD_GAIN` and `CCD_OFFSET`, and ignored when there is none), `compression(camera, enabled)`, `transferFormat(camera, 'FITS' | 'XISF' | 'NATIVE')`, `startExposure(camera, seconds)`, `stopExposure(camera)` and `snoop(camera, mount?, focuser?, wheel?, rotator?)`, which tells the driver which devices it should read (the simulator renders its frames from them). The image arrives as the `CCD1` BLOB, which the manager forwards to the handlers added with `addHandler` as `blobReceived(camera, data, encoding)` (a `Buffer`, and the encoding of the transfer, `'raw'` for the simulator), after BLOB delivery was enabled with `enableBlob(camera)`; `disableBlob(camera)` stops it. The state follows the driver, so a command is visible only after the driver reports it. The snippet uses the camera simulator with a mount (see [INDI Camera Simulator](#indi-camera-simulator)).
 
@@ -18275,7 +19119,7 @@ console.log(mount.alignment.pointCount) // 0
 
 ### INDI Mount Control
 
-`MountManager` builds a `Mount` device from the INDI Telescope interface and reflects its vectors onto the shared model, which also serves the Alpaca telescope. The model has the capability flags (`canPark`, `canSetPark`, `canAbort`, `canSync`, `canGoTo`, `canFlip`, `canHome`, `canFindHome`, `canSetHome`, `canTracking`, `canMove`), the state (`slewing`, `moving`, `tracking`, `homing`, `parking`, `parked`), the `mountType` (`'ALTAZ'`, `'EQ_FORK'` or `'EQ_GEM'`), the `slewRates` with the selected `slewRate`, the `trackModes` with the `trackMode`, the pier side (`hasPierSide`, `canSetPierSide`, `pierSide` as `'EAST'`, `'WEST'` or `'NEITHER'`), the `equatorialCoordinate` (JNOW, radians, `rightAscension` and `declination`), the site (`geographicCoordinate` with the latitude and longitude in radians and the elevation as a distance in AU, like `meter` and `toMeter` convert, with `hasGPS`); `hasEquatorialCoordinate` and `hasGeographicCoordinate` become true with the first finite coordinate or site the driver publishes in the connection (also when it equals the zero defaults, which is notified) and false again when the vector is deleted, so a zero coordinate before them is a default and not a position and the UTC `time` (epoch milliseconds and the offset in minutes). As a guide output it also carries the pulse-guiding state (see [INDI Guide Output](#indi-guide-output)) and the `alignment` state belongs to [INDI Mount Alignment Subsystem](#indi-mount-alignment-subsystem).
+`MountManager` builds a `Mount` device from the INDI Telescope interface and reflects its vectors onto the shared model, which also serves the Alpaca telescope. The model has the capability flags (`canPark`, `canSetPark`, `canAbort`, `canSync`, `canGoTo`, `canFlip`, `canHome`, `canFindHome`, `canSetHome`, `canTracking`, `canMove`, and per axis `canMoveNS` and `canMoveWE`, which follow whether the driver defines `TELESCOPE_MOTION_NS` and `TELESCOPE_MOTION_WE`; `canMove` holds while either does), the state (`slewing`, `moving`, `tracking`, `homing`, `parking`, `parked`), the `mountType` (`'ALTAZ'`, `'EQ_FORK'` or `'EQ_GEM'`), the `slewRates` with the selected `slewRate`, the `trackModes` with the `trackMode`, the pier side (`hasPierSide`, `canSetPierSide`, `pierSide` as `'EAST'`, `'WEST'` or `'NEITHER'`), the `equatorialCoordinate` (JNOW, radians, `rightAscension` and `declination`), the site (`geographicCoordinate` with the latitude and longitude in radians and the elevation as a distance in AU, like `meter` and `toMeter` convert, with `hasGPS`); `hasEquatorialCoordinate` and `hasGeographicCoordinate` become true with the first finite coordinate or site the driver publishes in the connection (also when it equals the zero defaults, which is notified) and false again when the vector is deleted, so a zero coordinate before them is a default and not a position and the UTC `time` (epoch milliseconds and the offset in minutes). As a guide output it also carries the pulse-guiding state (see [INDI Guide Output](#indi-guide-output)) and the `alignment` state belongs to [INDI Mount Alignment Subsystem](#indi-mount-alignment-subsystem).
 
 The commands send the INDI switches and numbers of the driver. `tracking(mount, enabled)`, `slewRate(mount, rate)` and the four `moveNorth`, `moveSouth`, `moveWest` and `moveEast` (`enabled` true starts the motion at the selected slew rate and false stops it) act on the mount, `trackMode(mount, mode)` selects `'SIDEREAL'`, `'SOLAR'`, `'LUNAR'`, `'KING'` or `'CUSTOM'` (an Alert on the track mode is notified even when the mode is unchanged, since that is how a driver refuses one), and `stop`, `park`, `unpark`, `setPark`, `home`, `findHome` and `setHome` act on the matching property. Except for tracking, the slew rate and the target coordinate, a command is ignored when the driver does not advertise its capability. The targets are `goTo`, `flipTo` and `syncTo` (`rightAscension` and `declination`, radians, JNOW, sent after the `ON_COORD_SET` mode: `TRACK` is chosen over `SLEW` when the driver offers it) and `equatorialCoordinate(mount, rightAscension, declination)`, which sends only the coordinate and therefore uses the mode that was set last. `moveTo(mount, mode, request, client?, time?)` accepts a target in `'J2000'`, `'JNOW'`, `'ALTAZ'`, `'ECLIPTIC'` or `'GALACTIC'`, given as angles or as strings that the parser understands (hours for a right ascension and a longitude in sexagesimal), converts it to JNOW and dispatches `'goto'`, `'flip'` or `'sync'`. The conversion is `mountTargetEquatorial(mount, request, time?)`, for callers that need the JNOW coordinate without commanding the mount: it returns a fresh `[rightAscension, declination]` in radians with the right ascension in `[0, 2π)`, precesses J2000 and galactic targets to `time` (the current instant when omitted), uses the true obliquity of that date for ecliptic targets and resolves ALTAZ targets at the mount's reported site with the default refraction. `geographicCoordinate(mount, coordinate)` and `time(mount, time)` set the site and the clock of the driver. The model follows the driver: a command does not change it until the driver reports it, and the position of the vector is republished while the mount moves, so read it after the slew has ended.
 
@@ -19685,6 +20529,35 @@ if (occulted.type === 'occultation') console.log(toDeg(occulted.rightAscension!)
 console.log(parseMPC80(writeMPC80(yr4)).provisionalId, parseMPC80Lines(text.replaceAll('\n', '\r\n')).length) // 2024 YR4 7
 ```
 
+### NASA Exoplanet Archive TAP Queries
+
+The NASA Exoplanet Archive publishes two tables of planet parameters. `ps` (Planetary Systems) has one row per published solution, each self-consistent, with `default_flag = 1` on the solution the archive picks as default; `pscomppars` (Planetary Systems Composite Parameters) has one row per planet whose columns can come from different publications, so its epoch, period, and duration are not necessarily one fit. The mid-transit epoch `pl_tranmid` is a Julian Date whose clock and origin are named by `pl_tsystemref` in `ps` and by `pl_tranmid_systemref` in `pscomppars`.
+
+`exoplanetArchiveRows(query, options?)` (`src/adapters/catalogs/exoplanet.archive.tap.ts`) fetches the transit-ephemeris columns (`pl_name`, `ra`, `dec`, `pl_tranmid`, `pl_orbper`, `pl_trandur`, their error pairs, and the table's own time-reference column) from the synchronous TAP endpoint `EXOPLANET_ARCHIVE_URL` plus `TAP/sync`, with a `GET` of `query` and `format=csv`. `query.table` is `'ps'` or `'pscomppars'`; `planetName` and `hostName` are exact matches on `pl_name` and `hostname` (ANDed, with apostrophes escaped); `ps` requires `solution`, `'default'` for the default solution of each planet or `'all'` for every solution as its own row; and `limit` is the number of rows wanted. The query asks for `limit + 1` rows ordered by planet name (then by publication in `ps`), so `truncated: true` says that more rows matched than were returned. Every value stays the string the archive sent and an empty column is `null`, so `pl_tranmid` keeps all its digits and `0` stays distinct from a missing value; the rows go to `exoplanetArchiveTransitEphemeris` (see [Exoplanet Transit Prediction](#exoplanet-transit-prediction)), which decides which of them are usable and why the others are rejected. Nothing is merged, chosen, filtered, or defaulted here: rows with empty ephemeris columns are returned too, and no time scale is assumed.
+
+`exoplanetArchiveTapQuery(adql, options?)` is the underlying call for any ADQL text, which is trusted and sent verbatim (quote your own literals); it returns the CSV `columns` and the `records` keyed by column name, with string or `null` values. The options are `baseUrl`, `timeout` (milliseconds, 60000 by default and 0 for none, covering the whole download), a caller `signal` that works together with the timeout, `maxResponseBytes` (16 MiB by default), and `headers`. An empty selection is an empty result; every failure throws instead: an `ExoplanetArchiveTapError` whose `kind` is `'network'`, `'http'` (with `status` and the TAP message when there is one), `'service'` (a VOTable or plain-text TAP error, such as `ORA-00904: …`, sent with a successful status), `'format'` (an empty, non-CSV, or malformed body, including an unterminated quoted field or text after a closing quote, or, for `exoplanetArchiveRows`, a header that is not exactly the requested columns), or `'size'`, while cancellation and timeout reject with the signal's reason (a `DOMException` named `TimeoutError` for the timeout). The archive is live data: values and default solutions change as publications are added. Asynchronous TAP jobs, paging, and bulk downloads are not supported.
+
+```ts
+import { exoplanetArchiveTransitEphemeris } from 'nebulosa/src/adapters/catalogs/exoplanet.archive'
+import { ExoplanetArchiveTapError, exoplanetArchiveRows, exoplanetArchiveTapQuery } from 'nebulosa/src/adapters/catalogs/exoplanet.archive.tap'
+
+// The default `ps` solution of one planet.
+const { rows, truncated } = await exoplanetArchiveRows({ table: 'ps', planetName: 'WASP-12 b', solution: 'default', limit: 1 })
+console.log(truncated, rows[0].pl_tranmid, rows[0].pl_tsystemref) // false '2457607.51930500' 'BJD-TDB' — strings as published
+
+// Every published solution: some cannot give an ephemeris, and the converter says why.
+const all = await exoplanetArchiveRows({ table: 'ps', planetName: 'WASP-12 b', solution: 'all', limit: 100 })
+
+for (const row of all.rows) {
+	const result = exoplanetArchiveTransitEphemeris(row)
+	console.log(result.success ? result.ephemeris.period : result.reason) // 1.091418901 — days, or 'missingEpoch'
+}
+
+// The composite row of each planet of a host, which carries pl_tranmid_systemref instead.
+const composite = await exoplanetArchiveRows({ table: 'pscomppars', hostName: 'TRAPPIST-1', limit: 10 }, { timeout: 30000 })
+console.log(composite.rows.map((row) => [row.pl_name, row.pl_tranmid_systemref]))
+```
+
 ### SIMBAD Object Types
 
 `SIMBAD_OBJECT_TYPES` (`src/adapters/catalogs/simbad.ts`) is the object-type taxonomy of SIMBAD (the one of the VizieR object-type page) as a constant object of 153 entries, keyed by a name in upper case such as `STAR`, `QUASAR` or `GLOBULAR_CLUSTER`. Each value is a `SimbadObjectTypeInfo` with the numeric `id`, the `description`, the broad `classification` (`'STAR'`, `'SET_OF_STARS'`, `'GALAXY'`, `'SET_OF_GALAXIES'`, `'INTERSTELLAR_MEDIUM'`, `'SPECTRAL'`, `'GRAVITATION'` or `'OTHER'`) and the short `codes` of the type, where a code ending in `?` marks a candidate (`'QSO'` and `'Q?'` for a quasar, for example). The ids are unique and grouped by classification: 0 to 66 for stars, 100 to 105 for sets of stars, 200 to 218 for galaxies, 300 to 307 for sets of galaxies, 400 to 415 for the interstellar medium, 500 to 521 for spectral objects, 600 to 608 for gravitation phenomena and 700 to 705 for the other objects. The types `SimbadObjectType` (a key), `SimbadObjectClassification` and `SimbadObjectCode` (a code, as a literal union) follow from the table. `findSimbadObjectTypeInfoById(id)` and `findSimbadObjectTypeInfoByCode(code)` look a type up in a precomputed map and return the info, or `undefined` when the key is not in the table; both candidate and confirmed codes resolve to the same entry. The `type` of a SIMBAD catalog entry (see [SIMBAD Star Catalog](#simbad-star-catalog)) is such a code, and the `otype` column of a TAP query is the same short code.
@@ -20089,7 +20962,7 @@ console.log(new CRC(16, 0x8005, 0x0000, true, 0x0000, true).compute(text).toStri
 
 ### CSV Parsing
 
-`src/io/csv.ts` parses delimited text into rows of strings. `readCsv(input, options?)` parses a whole string, or an array of lines that is joined with line feeds, and returns `CsvRow[]`. `readCsvStream(source, options?)` is an async generator that reads a `Source` (see [Byte-Stream Contracts](#byte-stream-contracts)) in chunks of `bufferSize` bytes (8 KiB by default), decodes them incrementally with a `TextDecoder` so that multi-byte characters survive the chunk boundaries, and yields the rows as they complete, with quoted fields, doubled quotes and line breaks inside quotes reassembled across chunks. `CsvLineParser` is the engine that splits one logical line, and it can be used alone: `parse(line, offset?, row?)` returns the row, or `false` for an empty or comment line. The options are `delimiter` (a character or a list of accepted characters, `,` by default; `CSV_DELIMITER` and `TSV_DELIMITER` are the comma and the tab), `comment` (the marker or markers of the lines that are skipped, `'#'` by default), `quote` (the quote characters, `'"'` by default, or `false` to disable quoting), `forceTrim` (also trims the text inside quotes), `skipFirstLine` (drops the first data row, which is the header, and is `true` by default) and, for the stream, `encoding`, `bufferSize`, `ignoreBOM` and `fatal`. Unquoted fields are trimmed, empty fields are empty strings, and every value is text, so the numbers are converted by the caller. A single string or array of strings in place of the options is the delimiter or the delimiters. The parser does not infer types or names of columns.
+`src/io/csv.ts` parses delimited text into rows of strings. `readCsv(input, options?)` parses a whole string, or an array of lines that is joined with line feeds, and returns `CsvRow[]`. `readCsvStream(source, options?)` is an async generator that reads a `Source` (see [Byte-Stream Contracts](#byte-stream-contracts)) in chunks of `bufferSize` bytes (8 KiB by default), decodes them incrementally with a `TextDecoder` so that multi-byte characters survive the chunk boundaries, and yields the rows as they complete, with quoted fields, doubled quotes and line breaks inside quotes reassembled across chunks. `CsvLineParser` is the engine that splits one logical line, and it can be used alone: `parse(line, offset?, row?)` returns the row, or `false` for an empty or comment line. The options are `delimiter` (a character or a list of accepted characters, `,` by default; `CSV_DELIMITER` and `TSV_DELIMITER` are the comma and the tab), `comment` (the marker or markers of the lines that are skipped, `'#'` by default), `quote` (the quote characters, `'"'` by default, or `false` to disable quoting), `forceTrim` (also trims the text inside quotes), `skipFirstLine` (drops the first data row, which is the header, and is `true` by default), `strict` (`false` by default; when `true`, text between a closing quote and the next delimiter, or an input that ends inside a quoted field, throws an `Error` instead of being repaired, so a truncated or corrupt document is not taken as data) and, for the stream, `encoding`, `bufferSize`, `ignoreBOM` and `fatal`. Unquoted fields are trimmed, empty fields are empty strings, and every value is text, so the numbers are converted by the caller. A single string or array of strings in place of the options is the delimiter or the delimiters. The parser does not infer types or names of columns.
 
 ```ts
 import { CSV_DELIMITER, CsvLineParser, DEFAULT_READ_CSV_STREAM_OPTIONS, readCsv, readCsvStream, TSV_DELIMITER } from 'nebulosa/src/io/csv'
@@ -20106,6 +20979,13 @@ Canopus,-0.74,Carina
 Arcturus,-0.05,Boötes`
 console.log(readCsv(csv)) // [ [ "Sirius", "-1.46", "Canis Major" ], [ "Canopus", "-0.74", "Carina" ], [ "Arcturus", "-0.05", "Boötes" ] ]
 console.log(readCsv(csv, { skipFirstLine: false }).length) // 4
+
+// strict rejects malformed quoting, such as a truncated quoted field, instead of repairing it.
+try {
+	readCsv('name,note\nSirius,"brightest', { strict: true })
+} catch (error) {
+	console.log((error as Error).message) // CSV input ends inside a quoted field
+}
 
 // An array of lines is joined with line feeds, and a delimiter alone can replace the options.
 console.log(readCsv(['id;name', '1;Vega', '2;Altair'], ';')) // [ [ "1", "Vega" ], [ "2", "Altair" ] ]
@@ -20291,7 +21171,7 @@ console.log(tiled.hdus[1].header.ZCMPTYPE, tiled.hdus[1].header.ZBITPIX, tiled.h
 
 ### FITS Header Cards and Metadata
 
-A header is a list of cards, `[key, value?, comment?]`, and the parsed form is the object `FitsHeader`, which maps each keyword to its value (a string, a number or a boolean). `FitsKeywordWriter` formats one card into the 80 characters of the file: `write(card, out, offset)` returns the bytes written, `writeAll(header, out, offset)` writes the cards of a whole header (an object or a list of cards), and `writeEnd(out, offset)` writes the `END` card; the padding to the block is done by `writeFits`. Strings are quoted with the quote character doubled, numbers are written in the exponential form of the format, booleans as `T` and `F`, and when a card has no comment the default one of the keyword table (`FitsKeywordWriter.keywords`, the `KEYWORDS` object of `headers.ts`, which has the standard, the observation and the instrument keywords) is used. `COMMENT` and `HISTORY` cards that do not fit in one card are wrapped over several, and a string that does not fit in the value field is split in `CONTINUE` cards. `FitsKeywordReader` is the inverse: `read(buffer, offset)` parses one card and `readAll(buffer, offset)` parses until `END`, joining the commentary cards with a line break and rebuilding the continued strings. The accessors of `util.ts` read a header with a default for a missing key: `hasKeyword`, `numericKeyword`, `booleanKeyword` and `textKeyword`, and the metadata readers `numberOfAxesKeyword`, `widthKeyword`, `heightKeyword`, `numberOfChannelsKeyword`, `bitpixKeyword`, `exposureTimeKeyword` (`EXPTIME`, or `EXPOSURE`), `cfaPatternKeyword` (`BAYERPAT`, trimmed), `rightAscensionKeyword`, `declinationKeyword` and `observationDateKeyword`. The coordinates are returned in radians and the date in milliseconds since the epoch (UTC); the right ascension is tried in the order `RA` (degrees), `OBJCTRA` (sexagesimal hours), `RA_OBJ` and `CRVAL1` (degrees), the declination in the order `DEC`, `OBJCTDEC` (sexagesimal degrees), `DEC_OBJ` and `CRVAL2`, and the date in the order `DATE-OBS`, `DATE-END` and `DATE`, skipping a value that is not a FITS date-time (`CCYY-MM-DD` with an optional `Thh:mm:ss[.sss]` and `Z`). The helpers `formatFitsHeaderValue`, `escapeQuotedText`, `unescapeQuotedText`, `isCommentKeyword`, `isCommentStyleCard` and `bitpixInBytes` support the reader and the writer. The keywords of the compressed images are described in [FITS Pixel I/O and Rice Tiles](#fits-pixel-io-and-rice-tiles).
+A header is a list of cards, `[key, value?, comment?]`, and the parsed form is the object `FitsHeader`, which maps each keyword to its value (a string, a number or a boolean). `FitsKeywordWriter` formats one card into the 80 characters of the file: `write(card, out, offset)` returns the bytes written, `writeAll(header, out, offset)` writes the cards of a whole header (an object or a list of cards), and `writeEnd(out, offset)` writes the `END` card; the padding to the block is done by `writeFits`. Strings are quoted with the quote character doubled, numbers are written in the exponential form of the format, booleans as `T` and `F`, and when a card has no comment the default one of the keyword table (`FitsKeywordWriter.keywords`, the `KEYWORDS` object of `headers.ts`, which has the standard, the observation and the instrument keywords) is used. `COMMENT` and `HISTORY` cards that do not fit in one card are wrapped over several, and a string that does not fit in the value field is split in `CONTINUE` cards. `FitsKeywordReader` is the inverse: `read(buffer, offset)` parses one card and `readAll(buffer, offset)` parses until `END`, joining the commentary cards with a line break and rebuilding the continued strings. The accessors of `util.ts` read a header with a default for a missing key: `hasKeyword`, `numericKeyword`, `booleanKeyword` and `textKeyword`, and the metadata readers `numberOfAxesKeyword`, `widthKeyword`, `heightKeyword`, `numberOfChannelsKeyword`, `bitpixKeyword`, `exposureTimeKeyword` (`EXPTIME`, or `EXPOSURE`), `cfaPatternKeyword` (`BAYERPAT`, trimmed), `rightAscensionKeyword`, `declinationKeyword` and `observationDateKeyword`. The coordinates are returned in radians and the date in milliseconds since the epoch (UTC); the right ascension is tried in the order `RA` (degrees), `OBJCTRA` (sexagesimal hours), `RA_OBJ` and `CRVAL1` (degrees), the declination in the order `DEC`, `OBJCTDEC` (sexagesimal degrees), `DEC_OBJ` and `CRVAL2`, and the date in the order `DATE-OBS`, `DATE-END` and `DATE`, skipping a value that is not a FITS date-time (`CCYY-MM-DD` with an optional `Thh:mm:ss[.sss]` and `Z`). The helpers `formatFitsHeaderValue`, `escapeQuotedText`, `unescapeQuotedText`, `isCommentKeyword`, `isCommentStyleCard` and `bitpixInBytes` support the reader and the writer. The typed metadata readers of [FITS Instrument Provenance](#fits-instrument-provenance) and [FITS Observation Timing and Location](#fits-observation-timing-and-location) share three helpers that, unlike the accessors above, tell an absent keyword from an unreadable one: `finiteMetadataKeyword(header, key, diagnostics)` returns a finite number (numeric strings included) or `undefined`, pushing an `invalid` `FitsMetadataDiagnostic` for a present but unreadable value; `textMetadataKeyword` returns trimmed text, or `undefined` when blank; and `parseFitsDateTimeFields(text)` splits a FITS datetime (four-digit or signed five-digit year, the legacy `DD/MM/YY`, a tolerated `Z`) into calendar fields with the `resolution` of its last written digit in seconds, leaving the time scale and the leap-second check to the timing reader. The keywords of the compressed images are described in [FITS Pixel I/O and Rice Tiles](#fits-pixel-io-and-rice-tiles).
 
 ```ts
 import { FitsKeywordReader, FitsKeywordWriter } from 'nebulosa/src/io/formats/fits/fits'
@@ -20304,6 +21184,8 @@ import {
 	declinationKeyword,
 	escapeQuotedText,
 	exposureTimeKeyword,
+	type FitsMetadataDiagnostic,
+	finiteMetadataKeyword,
 	formatFitsHeaderValue,
 	hasKeyword,
 	heightKeyword,
@@ -20313,8 +21195,10 @@ import {
 	numberOfChannelsKeyword,
 	numericKeyword,
 	observationDateKeyword,
+	parseFitsDateTimeFields,
 	rightAscensionKeyword,
 	textKeyword,
+	textMetadataKeyword,
 	unescapeQuotedText,
 	widthKeyword,
 } from 'nebulosa/src/io/formats/fits/util'
@@ -20329,7 +21213,7 @@ let size = writer.write(['EXPTIME', 120.5], buffer, 0)
 console.log(size, JSON.stringify(buffer.toString('latin1', 0, 80))) // 80 "EXPTIME = 1.20500000000000000000E+2 / Duration of exposure in seconds           "
 size += writer.write(['OBJECT', "Barnard's Star", 'target'], buffer, size)
 console.log(JSON.stringify(buffer.toString('latin1', 80, 160))) // "OBJECT  = 'Barnard''s Star'    / target                                         "
-console.log(Object.keys(KEYWORDS).length, EXPTIME, FitsKeywordWriter.keywords.GAIN) // 101 { type: "REAL", comment: "Duration of exposure in seconds" } { type: "REAL", comment: "Amplifier gain in electrons per analog unit" }
+console.log(Object.keys(KEYWORDS).length, EXPTIME, FitsKeywordWriter.keywords.GAIN) // 124 { type: "REAL", comment: "Duration of exposure in seconds" } { type: "REAL", comment: "Amplifier gain in electrons per analog unit" }
 
 // Booleans, commentary and long strings.
 size += writer.write(['TRACKING', true], buffer, size)
@@ -20367,11 +21251,93 @@ console.log(formatFitsHeaderValue(true), formatFitsHeaderValue(1.5), formatFitsH
 console.log(escapeQuotedText("it's"), unescapeQuotedText("it''s")) // it''s it's
 console.log(isCommentKeyword('HISTORY'), isCommentKeyword('OBJECT'), isCommentStyleCard(['COMMENT'])) // true false true
 console.log(bitpixInBytes(-64), bitpixInBytes(16), bitpixInBytes(8)) // 8 2 1
+
+// The metadata helpers: absent versus invalid values, and the fields of a datetime.
+const diagnostics: FitsMetadataDiagnostic[] = []
+console.log(finiteMetadataKeyword({ GAIN: '120' }, 'GAIN', diagnostics), finiteMetadataKeyword({ GAIN: 'high' }, 'GAIN', diagnostics), finiteMetadataKeyword({}, 'GAIN', diagnostics), diagnostics.length) // 120 undefined undefined 1
+console.log(textMetadataKeyword({ OBSERVER: '   ' }, 'OBSERVER'), textMetadataKeyword({ OBJECT: ' M42 ' }, 'OBJECT')) // undefined M42
+console.log(parseFitsDateTimeFields('2016-12-31T23:59:60.5')) // { year: 2016, month: 12, day: 31, hour: 23, minute: 59, second: 60.5, resolution: 0.1, twoDigitYear: false, zone: false }
+console.log(parseFitsDateTimeFields('2023-02-29')) // undefined
+```
+
+### FITS Instrument Provenance
+
+Besides the pixels, a FITS header says which telescope, camera and sensor took the frame, which filter was in the beam, the frame's role in calibration, the sensor settings, and which calibration steps were already applied. The Standard defines only a few of these keywords (`TELESCOP`, `INSTRUME`, `OBSERVER`, `OBJECT`, `ORIGIN`); capture software adds the rest with varying spellings, such as `IMAGETYP = 'Light Frame'` or `FRAME = 'Light'`.
+
+`readFitsProvenance(header)` (`src/io/formats/fits/provenance.ts`) returns a typed record with the instrument names, `detector`, `filter`, `software` (`PROGRAM`, else `SWCREATE`, else `CREATOR`), `frameType` normalized to `'light'`, `'dark'`, `'flat'`, `'bias'` or `'darkFlat'` (from `IMAGETYP`, else `FRAME`), `binning` as `[x, y]`, `sensorTemperature` (`CCD-TEMP`) and `setTemperature` (`SET-TEMP`) in °C, `gain`, `offset`, `electronGain` (`EGAIN`, e⁻/ADU), `readoutMode`, `calibration` (the `CALSTAT` letters as `'bias'`, `'dark'`, `'flat'`), and `pedestal` (ADU). `GAIN` is returned as written: capture software stores the camera's gain setting there, while NOAO-style headers store e⁻/ADU, so use `electronGain` for a conversion factor. Blank strings count as absent. Values are not trusted: a non-numeric temperature, a non-positive binning, an unknown frame type or `CALSTAT` letter, and an `IMAGETYP` that contradicts `FRAME` are left out or resolved and listed in `diagnostics` with the same kinds as [FITS Observation Timing and Location](#fits-observation-timing-and-location); a lone `XBINNING` or `YBINNING` is applied to both axes and reported as assumed.
+
+`writeFitsProvenance(header, fields)` writes the record back in place. It owns the keywords of `FITS_PROVENANCE_KEYWORDS`: those the input defines are rewritten in their existing position, the rest are deleted, so a stale `FRAME` or `SWCREATE` cannot contradict the new `IMAGETYP` (MaxIm DL spelling, such as `'Light Frame'`) or `PROGRAM`. Other keywords pass through. Observation times and the site are read by [FITS Observation Timing and Location](#fits-observation-timing-and-location).
+
+```ts
+import { readFitsProvenance, writeFitsProvenance } from 'nebulosa/src/io/formats/fits/provenance'
+
+const header = { SIMPLE: true, INSTRUME: 'ZWO CCD ASI294MM Pro', TELESCOP: 'iOptronV3', IMAGETYP: 'Light Frame', FRAME: 'Light', FILTER: 'L', XBINNING: 4, YBINNING: 4, 'CCD-TEMP': -10.1, 'SET-TEMP': -10, GAIN: 120, OFFSET: 30, EGAIN: 1.0022, CALSTAT: 'BD', OBSERVER: '  ' }
+const provenance = readFitsProvenance(header)
+
+console.log(provenance.instrument, provenance.telescope, provenance.observer) // ZWO CCD ASI294MM Pro iOptronV3 undefined
+console.log(provenance.frameType, provenance.filter, provenance.binning) // light L [4, 4]
+console.log(provenance.sensorTemperature, provenance.setTemperature, provenance.electronGain) // -10.1 -10 1.0022 — °C, °C, e⁻/ADU
+console.log(provenance.calibration, provenance.diagnostics) // ["bias", "dark"] []
+
+// A conflicting role is resolved in favor of IMAGETYP and reported.
+const conflict = readFitsProvenance({ IMAGETYP: 'Flat Field', FRAME: 'Dark', XBINNING: 2 })
+console.log(
+	conflict.frameType,
+	conflict.binning,
+	conflict.diagnostics.map((e) => `${e.kind} ${e.keyword}`),
+) // flat [2, 2] ["conflict IMAGETYP", "assumed YBINNING"]
+
+// Writing replaces the owned keywords and keeps the others.
+writeFitsProvenance(header, { ...provenance, frameType: 'dark', software: 'nebulosa' })
+console.log(header.IMAGETYP, header.FRAME, header.PROGRAM, header.CALSTAT, header.SIMPLE) // Dark Frame undefined nebulosa BD true
+```
+
+### FITS Observation Timing and Location
+
+A FITS header records when and where an exposure was taken through several overlapping conventions. FITS 4.0 defines the time scale `TIMESYS` (UTC when absent), the place where the times are valid `TREFPOS` (the topocenter by default), the instants `DATE-BEG`/`MJD-BEG`, `DATE-AVG`/`MJD-AVG` and `DATE-END`/`MJD-END`, the older `DATE-OBS`/`MJD-OBS` (the start unless its comment says otherwise), times relative to `MJDREF`/`JDREF`/`DATEREF` (`TSTART`, `TSTOP`, `TIMEOFFS` in `TIMEUNIT`), the durations `XPOSURE` and `TELAPSE`, the errors `TIMSYER` and `TIMRDER`, and the observatory as ITRS `OBSGEO-X/Y/Z` in meters or geodetic `OBSGEO-B/L/H` on the IAU 1976 ellipsoid; capture software adds `EXPTIME`, `EXPOSURE` and `SITELAT`/`SITELONG`/`SITEELEV`.
+
+`readFitsTime(header, options?)` (`src/astronomy/time/fits.ts`) reads all of them into one typed record without changing the header. Each instant is a `FitsTimeValue`: a fresh two-part `Time` in the header's scale (GPS is carried on TAI, 19 s ahead), the `keyword` that supplied it, and its `resolution`, one unit of the last written digit in seconds (0.001 for `05.460`, 86400 for a date without time). A `TSTART`/`TSTOP` adds its own digit to its reference epoch, which is exact by definition: `MJDREF`, `JDREF`, their split parts, `DATEREF` and `TIMEOFFS` only carry their double-precision step, so `MJDREFF = 0` does not widen the comparison by a day. The precedence is that of the Standard: a `DATE-xxxx` and `MJD-xxxx` pair that agrees within the two resolutions plus `options.tolerance` (1 µs by default) keeps the finer value, and a disagreeing MJD wins with a conflict; `start` is `DATE-BEG`/`MJD-BEG`, else `DATE-OBS`/`MJD-OBS` (reported as assumed; the two-digit `DD/MM/YY` form, whose role is undefined, is only `observation`), else `TSTART`; `DATE-OBS` is never taken as the midpoint. `exposure` comes from `XPOSURE`, else `EXPTIME`, else `EXPOSURE`, in seconds, and `continuous` tells whether `start` and `end` bound one continuous exposure. It is `true` only when the exposure differs from their span by less than both the quantization of the two timestamps (half their summed resolutions) and the exposure's own resolution, less a fixed 1 µs rounding margin (at most half that limit), so the span `fitsExposure` hands on as the integration time never contradicts the written exposure, and all resolutions (of both timestamps and of the exposure, read as one unit of its last written digit) are fine enough to resolve it, which also requires a positive span; `false` when end precedes start or the exposure differs from the span beyond all resolutions (dead time or co-added frames); and `undefined` when there is no exposure keyword, the timestamps are too coarse to tell (date-only endpoints and a 30 s `XPOSURE`, or an integer `XPOSURE = 1`, known only to 1 s, next to millisecond timestamps), or the difference fits the exposure's resolution but not the timestamps' (an integer `XPOSURE = 30` inside a 32 s window of whole seconds may hide 2 s of overhead, and `XPOSURE = 30.1` inside a 31 s window of whole seconds would turn into a 31 s integration), since two endpoints alone give the elapsed window, not the integration time. `options.tolerance` widens only the conflict diagnostics, never this classification, which uses the written resolutions and the fixed 1 µs margin alone: a larger slack cannot turn a 31 s window into a continuous `XPOSURE = 30.1`, keep an exactly matching 1.5 s exposure from being continuous, or hide an end 1 s before a millisecond start. Neither dead time nor an undetermined result is a `conflict`; that diagnostic is kept for contradictions, such as an exposure longer than the span or an end before the start. A UTC value may read `23:59:60.x` only inside a leap second, and relative UTC times are counted on TAI, so both keep SI seconds across a leap second. The `location` is a `GeographicPosition` from `OBSGEO-X/Y/Z`, else `OBSGEO-B/L/H`, else the `SITE` keywords (read as WGS84 degrees with east-positive longitude); for topocentric times it is also attached to every returned `Time`, which enables the topocentric TDB−TT term. A declared `TREFPOS` (or the legacy `TIMEREF`) always prevails. When both are absent, TDB and TCB refer to the barycenter and TCG to the geocenter, following the observation-time convention of FITS 4.0 §4.4.2.2 for coordinate times; this departs from the general `TREFPOS` default of §9.2.3 (TOPOCENTER), which applies to the other scales, and the `defaulted` diagnostic names the section used. `DATE`, the file creation date, is not an observation time and is ignored.
+
+Nothing is corrected: a barycentric TDB time is returned as written, and an exposure timestamp is not moved to its midpoint. `fitsExposure(metadata, shutter?)` hands the instants to [Exposure Timing](#exposure-timing) (a span when start and end bound a continuous exposure, else a timestamp with its role and the exposure; `undefined` when start and end are known but `continuous` is not `true`, since integration time and observing window then give no single collection interval; the timestamps remain on the metadata). Its default 1σ clock `uncertainty` is the quadrature sum of `TIMSYER` and `TIMRDER`, and its default `resolution` the coarsest written resolution of the timestamps used, kept apart from the 1σ error, so a `DATE-OBS` without time yields an interval with an 86400 s resolution rather than false precision, and [Barycentric Julian Date](#barycentric-julian-date) does the light-time correction. Headers are untrusted input, so `readFitsTime` never throws on bad values: `diagnostics` lists every `defaulted` keyword, `assumed` interpretation, `missing`, `invalid` or `unsupported` value (an unknown or `LOCAL` time scale returns no instants), accepted `nonStandard` form (`TDT`, a trailing `Z`), `conflict` between keywords, and `incompatible` scale and position combination, each with its `keyword` and a message. Location sets farther apart than `options.locationTolerance` (100 m) conflict.
+
+`writeFitsTime(header, input)` is the inverse and updates the header in place: it converts the instants to `input.scale` (the scale of the first instant by default) and writes `TIMESYS`, `DATE-OBS`, `DATE-BEG`, `DATE-AVG`, `DATE-END` with `digits` decimals (6 by default) and the matching `MJD-xxxx`, `XPOSURE` and `EXPTIME`, `TELAPSE`, `TREFPOS`, `TREFDIR`, `PLEPHEM`, the errors, and both `OBSGEO-X/Y/Z` and `SITELAT`/`SITELONG`/`SITEELEV` for a location. Only the clock scale is converted, never the origin: when `referencePosition` is omitted, TCG, TDB and TCB are written with `TREFPOS = 'TOPOCENTER'`, because the §4.4.2.2 defaults (geocenter, barycenter) would label recorded times as corrected; FITS 4.0 Table 32 advises against TDB at the topocenter, so prefer TT or UTC for local times and declare `'barycenter'` only for instants already light-time corrected, for example by [Barycentric Julian Date](#barycentric-julian-date). The header has one location: `input.location`, else the location of the first instant that carries one. Every instant is evaluated at it for the topocentric TDB−TT term, replacing any other location the instant carries (the inputs are not mutated), so the written `OBSGEO-X/Y/Z` is always the site the conversion used. A TDB or TCB instant computed at another site (or geocentrically) is first brought back to TT with its own location and then evaluated at the header location, the value its TT clock reading has there; with a non-topocentric `referencePosition`, such as `'barycenter'`, it is written unchanged and the location is only recorded. Every keyword in `FITS_TIME_KEYWORDS` that the input does not define is deleted, so stale `MJDREF`, `TSTART` or `OBSGEO-B` values cannot contradict the new ones; other keywords pass through, and existing keywords keep their position. `formatFitsDateTime(time, digits?)` is the datetime formatter it uses, in the scale of the `Time`.
+
+```ts
+import { exposureInterval } from 'nebulosa/src/astronomy/time/exposure'
+import { fitsExposure, formatFitsDateTime, readFitsTime, writeFitsTime } from 'nebulosa/src/astronomy/time/fits'
+import { tdb, timeToDate } from 'nebulosa/src/astronomy/time/time'
+
+// A capture-software header: DATE-OBS at the shutter opening, a 60 s EXPTIME and the site.
+const header = { TIMESYS: 'UTC', 'DATE-OBS': '2016-12-31T23:59:30.250', EXPTIME: 60, SITELAT: '-29 15 22.7', SITELONG: -70.7313, SITEELEV: 2400, OBJECT: 'WASP-12' }
+const metadata = readFitsTime(header)
+
+console.log(metadata.timeSystem, metadata.referencePosition, metadata.locationSource) // UTC topocenter site
+console.log(metadata.start!.keyword, metadata.start!.resolution, timeToDate(metadata.start!.time)) // DATE-OBS 0.001 [2016, 12, 31, 23, 59, 30, 250]
+console.log(metadata.exposure, metadata.exposureKeyword) // 60 EXPTIME — seconds
+console.log(metadata.diagnostics.map((e) => `${e.kind} ${e.keyword}`)) // ["defaulted TREFPOS", "assumed SITELAT", "assumed DATE-OBS"]
+
+// The exposure spans the 2016-12-31 leap second: its midpoint is 23:59:60.25 UTC.
+const interval = exposureInterval(fitsExposure(metadata)!)
+console.log(timeToDate(interval.midpoint)) // [2016, 12, 31, 23, 59, 60, 250]
+console.log(formatFitsDateTime(tdb(interval.midpoint))) // 2017-01-01T00:01:08.433949 — TDB, topocentric
+
+// Writing the actual interval back with the FITS 4.0 keywords; OBJECT passes through.
+const out = writeFitsTime({ OBJECT: 'WASP-12' }, { start: interval.start, end: interval.end, exposure: interval.duration, referencePosition: 'topocenter', location: metadata.location, digits: 3 })
+console.log(out['DATE-BEG'], out['DATE-END'], out.TELAPSE, out['MJD-BEG']) // 2016-12-31T23:59:30.250 2017-01-01T00:00:29.250 60 57753.99964410134
+console.log(out['OBSGEO-X'], out['OBSGEO-Y'], out['OBSGEO-Z']) // 1838457.35309 -5259018.260543 -3099889.749916 — meters
+
+// Contradictory metadata is reported, not thrown.
+const bad = readFitsTime({ TIMESYS: 'TT', TREFPOS: 'BARYCENTER', 'DATE-BEG': '2024-03-10T03:00:00Z', 'DATE-END': '2024-03-10T02:59:00' })
+console.log(bad.diagnostics.map((e) => `${e.kind} ${e.keyword}`)) // ["incompatible TREFPOS", "conflict DATE-BEG", "conflict DATE-END"]
+
+// Chandra-style relative time: TSTART seconds after MJDREFI + MJDREFF, in TT.
+const relative = readFitsTime({ TIMESYS: 'TT', TREFPOS: 'GEOCENTER', MJDREFI: 50814, MJDREFF: 7.428703703703703e-4, TSTART: 600000000 })
+console.log(relative.start!.keyword, formatFitsDateTime(relative.start!.time, 3)) // TSTART 2017-01-05T10:41:04.184
 ```
 
 ### FITS Pixel I/O and Rice Tiles
 
-`FitsImageReader` and `FitsImageWriter` (`src/io/formats/fits/fits.ts`) convert between the planar big-endian data of a FITS unit and the channel-interleaved arrays of the imaging code (`Float32Array` or `Float64Array`, the samples of each pixel next to each other). `new FitsImageReader(hdu, buffer?)` is prepared with an HDU from `readFits` (see [FITS Containers and HDUs](#fits-containers-and-hdus)), and `read(source, output, sampleScale?)` reads and converts the pixels into `output`, which must hold `width * height * channels` samples, and returns `true` when the unit was an image that could be read. The `sampleScale` is `'normalized'` (the default, samples from 0 to 1 after applying `BSCALE` and `BZERO`, the full integer range of an integer BITPIX being mapped to the unit interval) or `'digital'` (the integer values of the unsigned range, such as 0 to 65535 for 16 bits). Floating-point BITPIX values (-32 and -64) are read as they are in the normalized scale. The default scratch buffer is small and reused for planar chunks, so a large image is converted in a bounded memory; a buffer passed by the caller must cover the whole data segment of the unit. A binary table with `ZIMAGE` and `ZCMPTYPE = 'RICE_1'` is read through the same call: the reader looks up the tile table and the heap, decodes each tile with the Rice decoder of [FITS Rice Compression](#fits-rice-compression), applies `ZSCALE` and `ZZERO` and reassembles the tiles; the dimensions come from the `Z` keywords (`ZNAXIS1`, `ZNAXIS2`, `ZBITPIX`), and a compressed image of another `ZCMPTYPE` is not supported. `new FitsImageWriter(header, buffer?)` writes the same layout in the other direction: `write(raw, sink)` converts the interleaved samples to the BITPIX and dimensions declared in the header, writes the data segment and returns the number of bytes written. It writes only the data, with no header and no padding, which is what `writeFits` composes with the cards. The scale of the samples written is the one of the header: for a 16-bit unit with `BZERO` 32768 and `BSCALE` 1 the normalized interval maps to 0 to 65535.
+`FitsImageReader` and `FitsImageWriter` (`src/io/formats/fits/fits.ts`) convert between the planar big-endian data of a FITS unit and the channel-interleaved arrays of the imaging code (`Float32Array` or `Float64Array`, the samples of each pixel next to each other). `new FitsImageReader(hdu, buffer?)` is prepared with an HDU from `readFits` (see [FITS Containers and HDUs](#fits-containers-and-hdus)), and `read(source, output, sampleScale?)` reads and converts the pixels into `output`, which must hold `width * height * channels` samples, and returns `true` when the unit was an image that could be read. The `sampleScale` is `'normalized'` (the default, samples from 0 to 1 after applying `BSCALE` and `BZERO`, the full integer range of an integer BITPIX being mapped to the unit interval) or `'digital'` (the integer values of the unsigned range, such as 0 to 65535 for 16 bits). Floating-point BITPIX values (-32 and -64) are read as they are in the normalized scale. The default scratch buffer is small and reused for planar chunks, so a large image is converted in a bounded memory; a buffer passed by the caller must cover the whole data segment of the unit. A binary table with `ZIMAGE` and `ZCMPTYPE = 'RICE_1'` is read through the same call: the reader looks up the tile table and the heap, decodes each tile with the Rice decoder of [FITS Rice Compression](#fits-rice-compression), applies `ZSCALE` and `ZZERO` and reassembles the tiles; the dimensions come from the `Z` keywords (`ZNAXIS1`, `ZNAXIS2`, `ZBITPIX`), and a compressed image of another `ZCMPTYPE` is not supported. `new FitsImageWriter(header, buffer?)` writes the same layout in the other direction: `write(raw, sink, normalization?)` converts the interleaved samples to the BITPIX and dimensions declared in the header, writes the data segment and returns the number of bytes written; with a `normalization` (`{ minimum, range }`, see [Image Input and Output](#scientific-image-loading-and-export)) each sample is written as `sample * range + minimum` without modifying or copying `raw`. `writeFits` takes the same optional `normalization` on each HDU it writes, plain or Rice-compressed. It writes only the data, with no header and no padding, which is what `writeFits` composes with the cards. The scale of the samples written is the one of the header: for a 16-bit unit with `BZERO` 32768 and `BSCALE` 1 the normalized interval maps to 0 to 65535.
 
 ```ts
 import { FitsImageReader, FitsImageWriter, readFits, writeFits } from 'nebulosa/src/io/formats/fits/fits'
@@ -20806,7 +21772,7 @@ for await (const line of readLines(source, 16, { emptyLines: false })) console.l
 
 ### XISF Containers and Metadata
 
-An XISF monolithic file (`src/io/formats/xisf/xisf.ts`) starts with the signature `XISF0100`, a 32-bit little-endian length of the XML header and 4 reserved bytes, then the XML header (UTF-8) and the attached data blocks that its `location="attachment:offset:size"` attributes point to. `isXisf(bytes)` checks the signature. `readXisf(source)` reads the XML of a seekable source (see [Byte-Stream Contracts](#byte-stream-contracts)) and returns `{ images }`, or `undefined` when the signature is missing or the declared header is longer than `XISF_MAX_HEADER_LENGTH` (8 MiB); the pixel blocks are not read, only located. `parseXisfHeader(xml)` is the parser it uses on the XML buffer. Each `XisfImage` has the `geometry` (`width`, `height` and `channels`), the `sampleFormat` and its `bitpix` equivalent (`bitpixFromSampleFormat` maps `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float32` and `Float64` to 8, 16, 32, 64, -32 and -64), the `colorSpace` (`Gray` or `RGB`, a missing one being gray), the `pixelStorage` (`Planar` or `Normal`, which is interleaved), the `byteOrder` (`little` unless the file says `big`), the `imageType` (`Light` by default), the `location` of the block (offset and size in bytes, the size being the compressed one), the `compression` descriptor when there is one, and a FITS-style `header` built from the geometry, the sample format and the `FITSKeyword` elements, so the metadata accessors of [FITS Header Cards and Metadata](#fits-header-cards-and-metadata) work on it. Images that are not attached, are `CIELab`, `UInt64`, have an invalid geometry or an unknown compression are skipped. `writeXisf(sink, images, format?)` writes the images (`header`, `raw` and `sampleScale`, as in [FITS Containers and HDUs](#fits-containers-and-hdus)) as a monolithic file and returns the bytes written: the geometry, the sample format (from `BITPIX`, which is 64-bit float when absent) and the header cards are written to the XML, the cards `SIMPLE`, `BITPIX` and `NAXIS*` being dropped as redundant. The `format` selects the `byteOrder` (little by default), the `pixelStorage` (`Planar` by default) and the `compression` (see [XISF Pixel I/O and Compression](#xisf-pixel-io-and-compression)). The data blocks follow the header without padding.
+An XISF monolithic file (`src/io/formats/xisf/xisf.ts`) starts with the signature `XISF0100`, a 32-bit little-endian length of the XML header and 4 reserved bytes, then the XML header (UTF-8) and the attached data blocks that its `location="attachment:offset:size"` attributes point to. `isXisf(bytes)` checks the signature. `readXisf(source)` reads the XML of a seekable source (see [Byte-Stream Contracts](#byte-stream-contracts)) and returns `{ images }`, or `undefined` when the signature is missing or the declared header is longer than `XISF_MAX_HEADER_LENGTH` (8 MiB); the pixel blocks are not read, only located. `parseXisfHeader(xml)` is the parser it uses on the XML buffer. Each `XisfImage` has the `geometry` (`width`, `height` and `channels`), the `sampleFormat` and its `bitpix` equivalent (`bitpixFromSampleFormat` maps `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float32` and `Float64` to 8, 16, 32, 64, -32 and -64), the `colorSpace` (`Gray` or `RGB`, a missing one being gray), the `pixelStorage` (`Planar` or `Normal`, which is interleaved), the `byteOrder` (`little` unless the file says `big`), the `imageType` (`Light` by default), the `location` of the block (offset and size in bytes, the size being the compressed one), the `compression` descriptor when there is one, and a FITS-style `header` built from the geometry, the sample format and the `FITSKeyword` elements, so the metadata accessors of [FITS Header Cards and Metadata](#fits-header-cards-and-metadata) work on it. Images that are not attached, are `CIELab`, `UInt64`, have an invalid geometry or an unknown compression are skipped. `writeXisf(sink, images, format?)` writes the images (`header`, `raw` and `sampleScale`, as in [FITS Containers and HDUs](#fits-containers-and-hdus)) as a monolithic file and returns the bytes written: the geometry, the sample format (from `BITPIX`, which is 64-bit float when absent) and the header cards are written to the XML, the cards `SIMPLE`, `BITPIX` and `NAXIS*` being dropped as redundant. A floating-point image declares its optional `bounds` (`"low:high"`, which must enclose every stored sample with low < high), `bounds="0:1"` when it has none; integer images declare no bounds. The `format` selects the `byteOrder` (little by default), the `pixelStorage` (`Planar` by default) and the `compression` (see [XISF Pixel I/O and Compression](#xisf-pixel-io-and-compression)). The data blocks follow the header without padding.
 
 ```ts
 import { bitpixFromSampleFormat, isXisf, parseXisfHeader, readXisf, writeXisf, XISF_MAX_HEADER_LENGTH, XISF_SIGNATURE } from 'nebulosa/src/io/formats/xisf/xisf'
@@ -20857,7 +21823,7 @@ console.log(images.map((e) => [e.sampleFormat, e.location.offset, e.location.siz
 
 ### XISF Pixel I/O and Compression
 
-`XisfImageReader` and `XisfImageWriter` (`src/io/formats/xisf/xisf.ts`) move the pixels of one XISF image between its data block and the channel-interleaved `Float32Array` or `Float64Array` of the imaging code. `new XisfImageReader(image, buffer?)` takes an image from `readXisf` (see [XISF Containers and Metadata](#xisf-containers-and-metadata)), and `read(source, output, sampleScale?)` seeks to the block, decompresses it if needed, undoes the byte shuffling, the byte order and the planar layout, and fills `output` (`width * height * channels` samples), returning `true` when the block has the size that the geometry and the sample type imply. `sampleScale` is `'normalized'` (the default, integers mapped to 0 to 1) or `'digital'` (the integer values, such as 0 to 65535 for `UInt16`); floating-point formats are read as stored. `new XisfImageWriter(xisf, compression?, buffer?)` encodes an image described by `{ byteOrder, bitpix, geometry, pixelStorage, compression }`: `encode(raw)` returns `{ data, compression? }` with the block bytes and the descriptor to write in the XML, and `write(raw, sink)` writes the block and returns the bytes written. The compression is `false` (none) or `{ format, shuffled?, level? }`, where `format` is `'zlib'` (the codec of [Deflate Compression](#deflate-compression)) or `'zstd'` (through Bun) and `shuffled` applies the byte shuffle of [Byte Shuffling](#byte-shuffling) on the multi-byte samples before compressing, which is declared as `zlib+sh` or `zstd+sh` with the item size; the type names `lz4` and `lz4hc` too, but they are not implemented for writing, and a block with a codec that is not zlib or zstd cannot be decompressed. `level` is the level of the codec. Integer sample formats quantize the floats to their range, so the round trip of a 16-bit file is accurate to one step (1/65535), while a floating-point file round-trips exactly. In `writeXisf` the same options go in its `format` argument.
+`XisfImageReader` and `XisfImageWriter` (`src/io/formats/xisf/xisf.ts`) move the pixels of one XISF image between its data block and the channel-interleaved `Float32Array` or `Float64Array` of the imaging code. `new XisfImageReader(image, buffer?)` takes an image from `readXisf` (see [XISF Containers and Metadata](#xisf-containers-and-metadata)), and `read(source, output, sampleScale?)` seeks to the block, decompresses it if needed, undoes the byte shuffling, the byte order and the planar layout, and fills `output` (`width * height * channels` samples), returning `true` when the block has the size that the geometry and the sample type imply. `sampleScale` is `'normalized'` (the default, integers mapped to 0 to 1) or `'digital'` (the integer values, such as 0 to 65535 for `UInt16`); floating-point formats are read as stored. `new XisfImageWriter(xisf, compression?, buffer?)` encodes an image described by `{ byteOrder, bitpix, geometry, pixelStorage, compression }`: `encode(raw, normalization?)` returns `{ data, compression? }` with the block bytes and the descriptor to write in the XML, and `write(raw, sink, normalization?)` writes the block and returns the bytes written; a `normalization` (`{ minimum, range }`) writes each sample as `sample * range + minimum` without modifying or copying `raw`, and `writeXisf` takes it on each image too, next to the `bounds` that should then enclose the restored range. The compression is `false` (none) or `{ format, shuffled?, level? }`, where `format` is `'zlib'` (the codec of [Deflate Compression](#deflate-compression)) or `'zstd'` (through Bun) and `shuffled` applies the byte shuffle of [Byte Shuffling](#byte-shuffling) on the multi-byte samples before compressing, which is declared as `zlib+sh` or `zstd+sh` with the item size; the type names `lz4` and `lz4hc` too, but they are not implemented for writing, and a block with a codec that is not zlib or zstd cannot be decompressed. `level` is the level of the codec. Integer sample formats quantize the floats to their range, so the round trip of a 16-bit file is accurate to one step (1/65535), while a floating-point file round-trips exactly. In `writeXisf` the same options go in its `format` argument.
 
 ```ts
 import { bitpixFromSampleFormat, readXisf, writeXisf, XisfImageReader, XisfImageWriter } from 'nebulosa/src/io/formats/xisf/xisf'
@@ -21465,6 +22431,51 @@ console.log(toMeter(fromPressure(800, 0))) // 1847.5321616937347
 // It inverts pressureFrom in the troposphere, at the same sea-level temperature.
 console.log(toMeter(fromPressure(pressureFrom(meter(2000))))) // 2000.0000000000023
 console.log(toMeter(fromPressure(pressureFrom(meter(5000), 10), 10))) // 4999.999999999996
+```
+
+### Box Least Squares Transit Search
+
+A transit or an eclipse is a short, flat-bottomed dip repeating with the orbital period, which a sinusoidal periodogram detects poorly. Box Least Squares (Kovács, Zucker & Mazeh 2002) fits instead a two-level box: a constant out-of-transit flux and a lower in-transit flux during one trial duration repeating with one trial period. Both levels are inverse-variance weighted means, so the depth is `outOfTransitLevel - inTransitLevel` with uncertainty `sqrt(1/Σw_in + 1/Σw_out)`, and the objective, the `power`, is the improvement in log-likelihood (half the chi-square improvement) over a constant level, `snr² / 2`.
+
+`math/numerical/bls` searches with `boxLeastSquares(time, flux, fluxError, options)`. The samples, in any order, have times in one uniform unit and timescale (BJD_TDB days for a [Differential Photometry and Light Curves](#differential-photometry-and-light-curves) result converted to numbers, for example), fluxes in any linear unit and one-sigma errors (an array or one value for every sample); a sample with a non-finite time or flux, or a non-finite or non-positive error, is skipped, so a missing value can be `NaN`. A large time offset, such as a Julian Date, is removed before folding. Periods, `durations`, epochs and the `baseline` are in the time unit. For every trial period the samples are folded into equal phase bins of `period / ceil(period * oversample / min(durations))` (`oversample` 10), at most `min(durations) / oversample` wide, each duration is rounded to whole bins of that period (so the reported `duration` is within half a bin of the requested one) and every bin is tried as the box start, as in Astropy's `BoxLeastSquares`. When every period is a whole number of bins, with `minTransits` and `minInTransitPoints` of 1, the periodogram matches the per-period snr, depth, duration and transit time of Astropy 8.0.2's `snr` objective, except for boxes that straddle phase 0 by more than `oversample` bins, which Astropy does not scan. Without explicit `periods`, the grid is uniform in frequency from `minPeriod` (twice the longest duration) with the step `frequencyFactor * min(durations) / baseline²`, for as many steps as fit before `maxPeriod` (`baseline / (minTransits - 1)`, the longest period holding `minTransits` events, or the baseline when `minTransits` is 1); every period lies in `[minPeriod, maxPeriod]`. The weights are normalized by the smallest error and the bin sums are compensated, so errors spanning many orders of magnitude neither overflow nor cancel; `power` overflows to `Infinity` only above an snr of about 1e154. Every duration must be at most half the shortest period. Only dips (positive depth) are detected, and BLS is a detector, not a physical transit model: the box ignores the limb darkening and the ingress and egress shape.
+
+Every box of the search must hold `minInTransitPoints` (3) samples from at least `minTransits` (2) distinct transit events, counted exactly, and at least one out-of-transit sample; a period without such a box has `power` and `snr` 0 and `NaN` `depth`, `duration` and `epoch` in the `periodogram`. The `candidates` (at most `maxCandidates`, 5) are the periodogram peaks by decreasing snr, each re-measured from the samples with the box the search scored: the samples in `epoch - duration/2 <= time < epoch + duration/2` modulo the period, up to the placement of a sample exactly on a bin edge. A weaker peak whose phase drifts from a stronger examined one by less than that one's duration across the baseline belongs to it. The `status` is `'ok'`, `'noCandidate'` (for example a constant light curve) or `'insufficientData'` (no more samples than `minInTransitPoints`, a zero baseline, or a default range that cannot hold `minTransits` events; there is no periodogram). The work, about `periods * (samples + phaseBins * (durations + 2))` plus the event counting (twice the phase bins per duration for `minTransits` 2, four times the samples per duration from 3 on, so a larger `minTransits` uses more of the budget), is estimated conservatively before allocating: above `maxOperations` (5e8), or with more than 2^21 phase bins in one period, a `RangeError` is thrown instead of running for an unbounded time; a duration above half the shortest period, swapped `minPeriod` and `maxPeriod`, or arrays of different lengths also throw.
+
+Each candidate has the `period`, the mid-transit `epoch` of a reference event in `[firstTime, firstTime + period)`, the `duration` (a whole number of bins), `depth`, `depthError`, `snr`, `power`, the signal detection efficiency `sde` (`(snr - mean) / std` of the periodogram snr, a relative figure of merit rather than a false-alarm probability), `inTransitLevel`, `outOfTransitLevel`, `inTransitCount`, and the sampling: `transitCount` events with in-transit samples out of `expectedTransitCount` overlapping the baseline, `coverage` (the fraction of the phase bins inside the box holding a sample, low when only an ingress was observed) and the `events` (`index` from the epoch, `time`, `sampleCount`, `depth`, `depthError`, `snr`). The diagnostics flag, at `diagnosticSigma` (3) standard deviations, `'oddEvenMismatch'` (`evenDepth` and `oddDepth` differ, `oddEvenSigma`: an eclipsing binary found at half its period), `'secondaryEclipse'` (a dip of `secondaryDepth` half a period away, to one bin) and `'singleEventDominated'` (`snrWithoutStrongestEvent` below the threshold: an outlier or one systematic carries the detection); `'halfPeriodAlias'` when the box folded at `period / 2` (`halfPeriodSnr`) is at least as significant and `'doublePeriodAlias'` when a box at `2 * period` on only the odd or only the even events (`doublePeriodSnr`) is more significant. `aliasOf` and `aliasRatio` link a candidate to a stronger one whose period times a ratio of integers up to 3 (1/2, 2, 2/3, 3/2, 1/3 or 3) equals its own. With nightly gaps, aliases at such ratios can fold exactly the same in-transit samples: their snr is then identical and only more data can decide.
+
+```ts
+import { boxLeastSquares } from 'nebulosa/src/math/numerical/bls'
+
+// Ten days at 10 min cadence (BJD_TDB days) with a 1% deep, 2.4 h transit every 2.5 d centered at 2460000.75
+// and a 0.1% ripple standing in for noise; one sample was dropped.
+const time: number[] = []
+const flux: number[] = []
+
+for (let i = 0; i < 1440; i++) {
+	const t = 2460000 + i / 144
+	const phase = (t - 2460000.75) / 2.5 - Math.round((t - 2460000.75) / 2.5)
+	time.push(t)
+	flux.push(1 + 0.001 * Math.sin(97 * t) - (Math.abs(phase * 2.5) < 0.05 ? 0.01 : 0))
+}
+
+flux[100] = Number.NaN
+
+// Flux errors of 0.001; periods from 0.3 d (twice the longest duration) to 5 d.
+const result = boxLeastSquares(time, flux, 0.001, { durations: [0.05, 0.1, 0.15], maxPeriod: 5 })
+console.log(result.status, result.sampleCount, result.rejectedSampleCount, result.periodogram!.periods.length) // ok 1439 1 6258
+
+const [best, ...others] = result.candidates
+console.log(best.period, best.epoch, best.duration) // 2.5015 2460000.7490 0.09986 (days; the grid step limits the period)
+console.log(best.depth, best.depthError, best.snr, best.sde) // 0.00999 0.000134 74.5 7.07
+console.log(best.transitCount, best.expectedTransitCount, best.coverage, best.oddEvenSigma, best.flags) // 4 4 1 1.05 []
+console.log(best.events.map((e) => [e.index, e.sampleCount])) // [0, 15] [1, 15] [2, 14] [3, 14]
+
+// The other peaks are aliases of the transit, with diagnostics that say so.
+console.log(others.map((c) => [c.period, c.aliasOf, c.aliasRatio, c.flags]))
+// 1.2495 0 0.5 [oddEvenMismatch, doublePeriodAlias]: every other event is empty
+// 4.9879 0 2 [secondaryEclipse, halfPeriodAlias]: the transit falls at phase 0.5 too
+// 3.7513 0 1.5 [oddEvenMismatch, doublePeriodAlias]
+// 0.8327 0 0.333 []
 ```
 
 ### Clamping and Tolerant Equality

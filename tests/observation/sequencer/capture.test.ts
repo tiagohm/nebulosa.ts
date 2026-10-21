@@ -223,8 +223,11 @@ describe('durable writer', () => {
 			const session = startSession(sessionId)
 			expect((await session.result).state).toBe('completed')
 
-			// The manual capture was written by Bun.write, never through a durable open + fsync.
-			expect(faults.entries.filter((entry) => entry.paths.some((path) => path.includes('manual.fit')))).toEqual([])
+			// The manual capture was written by the exclusive default writer (temporary + link), never through a
+			// durable open + fsync.
+			const manualOperations = faults.entries.filter((entry) => entry.paths.some((path) => path.includes('manual.fit'))).map((entry) => entry.operation)
+			expect(manualOperations).not.toContain('open')
+			expect(manualOperations).not.toContain('sync')
 
 			const durable = faults.entries.filter((entry) => entry.paths.some((path) => path.endsWith('.frame[L][1].1.partial.fit')))
 			expect(durable.map((entry) => entry.operation)).toContain('sync')

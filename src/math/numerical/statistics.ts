@@ -25,6 +25,18 @@ const GAMMA_TOLERANCE = 3e-15
 // Iteration cap for the regularized incomplete beta continued fraction.
 const BETA_CONTINUED_FRACTION_ITERATIONS = 200
 
+// Argument at which erfc switches from 1 - erf(series) to the Laplace continued fraction: below it the
+// subtraction loses at most about 1.5 digits, above it the fraction converges in at most about 100 iterations.
+const ERFC_SERIES_LIMIT = 1.5
+// Iteration cap of the erf series and erfc continued fraction; both converge far earlier.
+const ERFC_ITERATIONS = 500
+// Relative convergence tolerance of the erf series and erfc continued fraction.
+const ERFC_TOLERANCE = 1e-17
+// 2/sqrt(π), the erf series prefactor.
+const TWO_OVER_SQRT_PI = 1.1283791670955126
+// 1/sqrt(π), the erfc continued-fraction prefactor.
+const INV_SQRT_PI = 0.5641895835477563
+
 // Modified Weiszfeld iterations; every accepted result also passes a convex subgradient criterion.
 const GEOMETRIC_MEDIAN_ITERATIONS = 512
 // Sum-of-unit-vectors stationarity tolerance per sample, independent of coordinate units.
@@ -96,6 +108,49 @@ export function regularizedIncompleteBeta(x: number, a: number, b: number): numb
 	if (!Number.isFinite(front)) return x < (a + 1) / (a + b + 2) ? 0 : 1
 	if (x < (a + 1) / (a + b + 2)) return (front * betaContinuedFraction(x, a, b)) / a
 	return 1 - (Math.exp(b * Math.log(1 - x) + a * Math.log(x) - logBeta) * betaContinuedFraction(1 - x, b, a)) / b
+}
+
+// Computes the complementary error function erfc(x) = 1 - erf(x) of a dimensionless x, keeping full
+// relative accuracy in the upper tail where 1 - erf(x) would cancel.
+//
+// For 0 <= x < 1.5 it is 1 - erf(x) with the non-alternating series
+// erf(x) = 2/√π·e^(-x²)·Σ (2x²)ⁿ x / (1·3···(2n+1)); from 1.5 upward it is the Laplace continued fraction
+// erfc(x) = e^(-x²)/√π / (x + (1/2)/(x + 1/(x + (3/2)/(x + ...)))) evaluated by the modified Lentz method,
+// underflowing to 0 beyond x ≈ 26.5. Negative arguments use erfc(-x) = 2 - erfc(x); NaN propagates.
+export function erfc(x: number): number {
+	if (x < 0) return 2 - erfc(-x)
+	if (Number.isNaN(x)) return x
+
+	if (x < ERFC_SERIES_LIMIT) {
+		const x2 = 2 * x * x
+		let term = x
+		let sum = x
+		for (let n = 1; n < ERFC_ITERATIONS; n++) {
+			term *= x2 / (2 * n + 1)
+			sum += term
+			if (term <= sum * ERFC_TOLERANCE) break
+		}
+		return 1 - TWO_OVER_SQRT_PI * Math.exp(-x * x) * sum
+	}
+
+	const front = INV_SQRT_PI * Math.exp(-x * x)
+	if (front === 0) return 0
+
+	let fraction = x
+	let c = x
+	let d = 0
+	for (let j = 1; j < ERFC_ITERATIONS; j++) {
+		const aj = 0.5 * j
+		d = x + aj * d
+		d = d === 0 ? 1e300 : 1 / d
+		c = x + aj / c
+		if (c === 0) c = 1e-300
+		const delta = c * d
+		fraction *= delta
+		if (Math.abs(delta - 1) <= ERFC_TOLERANCE) break
+	}
+
+	return front / fraction
 }
 
 // Computes the chi-square CDF for a non-negative statistic and positive degrees of freedom.

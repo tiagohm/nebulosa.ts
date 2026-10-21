@@ -68,8 +68,9 @@ function planetocentricPosition(location: BodySurfaceLocation): MutVec3 {
 	return [r * ux, r * uy, r * uz]
 }
 
-// Cached body-fixed Cartesian position of `location`, computing it on first use.
-function bodyFixedPosition(location: BodySurfaceLocation): Vec3 {
+// Cached body-fixed Cartesian position (AU) of `location`, computing and storing it in
+// location.bodyFixed on first use. The returned vector is that shared cache; do not mutate it.
+export function bodyFixedPosition(location: BodySurfaceLocation): Vec3 {
 	return (location.bodyFixed ??= planetocentricPosition(location))
 }
 

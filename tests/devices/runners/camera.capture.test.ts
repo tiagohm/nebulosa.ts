@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from '
 import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { basename, dirname, join, sep } from 'path'
-import { parseTemporal } from '../../../src/astronomy/time/temporal'
+import { formatTemporal, parseTemporal } from '../../../src/astronomy/time/temporal'
 import { IndiClientHandlerSet } from '../../../src/devices/indi/client'
 import type { Camera } from '../../../src/devices/indi/device'
 import { CameraManager } from '../../../src/devices/indi/manager/camera'
@@ -20,7 +20,7 @@ import type { BlobEncoding, PropertyState } from '../../../src/devices/indi/type
 import { DeviceLifecycle } from '../../../src/devices/orchestration/device.lifecycle'
 import { failedOperationResult, OperationCoordinator, type OperationResult, successfulOperationResult } from '../../../src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
-import { autoSubFolderName, type CameraCaptureResult, CameraCapturer, type CameraCapturerOptions, type CameraExposureAttempt, decodeCameraBlobFromBase64 } from '../../../src/devices/runners/camera.capture'
+import { autoSubFolderName, type CameraCaptureResult, CameraCapturer, type CameraCapturerOptions, type CameraExposureAttempt, type CameraFramePathRequest, decodeCameraBlobFromBase64, writeFrameExclusively } from '../../../src/devices/runners/camera.capture'
 import type { CameraCaptureListener } from '../../../src/devices/runners/camera.capture.reporter'
 import { type CameraCaptureEvent, type CameraCaptureStart, DEFAULT_CAMERA_CAPTURE_START } from '../../../src/devices/runners/camera.capture.types'
 import { readImageFromBuffer, readImageFromPath } from '../../../src/imaging/model/image'
@@ -717,7 +717,180 @@ describe('successful captures', () => {
 	})
 })
 
+describe('stopping', () => {
+	test('stop during the inter-frame delay ends the capture at once with the frames taken', async () => {
+		const camera = await connected()
+		const recording = recorder()
+
+		const handle = capturer.start(coordinator, camera, request({ exposureMode: 'fixed', count: 3, delay: 30 }), { listener: recording.listener })
+		await waitUntil(() => recording.states.includes('waiting'), 5000, 10)
+		const stoppedAt = performance.now()
+		handle.stop()
+		const result = await handle.result
+
+		expect(performance.now() - stoppedAt).toBeLessThan(2000)
+		expect(result.ok).toBeTrue()
+		if (result.ok) expect(result.value.frameCount).toBe(1)
+		expect(recording.states.at(-1)).toBe('idle')
+		expect(recording.states).not.toContain('error')
+		expect(recording.events.at(-1)!.stopped).toBeFalse()
+		expect(arbiter.availability(keyOf(camera))).toBe('available')
+	})
+
+	test('stop during an exposure lets that frame finish and starts no other', async () => {
+		const camera = await connected()
+		const recording = recorder()
+		const startExposure = spyOn(cameraManager, 'startExposure')
+
+		try {
+			const handle = capturer.start(coordinator, camera, request({ exposureMode: 'loop', exposureTime: 500 }), { listener: recording.listener })
+			await waitUntil(() => recording.states.includes('exposing'), 5000, 10)
+			handle.stop()
+			handle.stop()
+			const result = await handle.result
+
+			expect(result.ok).toBeTrue()
+			if (result.ok) expect(result.value.frames.map((frame) => frame.generation)).toEqual([1])
+			expect(recording.paths).toHaveLength(1)
+			expect(startExposure).toHaveBeenCalledTimes(1)
+		} finally {
+			startExposure.mockRestore()
+		}
+	})
+
+	test('stop before the first exposure takes no frame', async () => {
+		const camera = await connected()
+		const startExposure = spyOn(cameraManager, 'startExposure')
+
+		try {
+			const handle = capturer.start(coordinator, camera, request({ exposureMode: 'loop' }))
+			handle.stop()
+
+			expect(await handle.started).toEqual(failedOperationResult('aborted', 'capture stopped before its first exposure'))
+			expect(await handle.result).toEqual(successfulOperationResult({ frames: [], frameCount: 0 }))
+			expect(startExposure).not.toHaveBeenCalled()
+		} finally {
+			startExposure.mockRestore()
+		}
+	})
+
+	test('stop after the capture ended changes nothing', async () => {
+		const camera = await connected()
+		const handle = capturer.start(coordinator, camera, request())
+		const result = await handle.result
+
+		handle.stop()
+		expect(result.ok).toBeTrue()
+		expect(await handle.result).toBe(result)
+	})
+
+	test('waits no delay after the last frame', async () => {
+		const camera = await connected()
+		const recording = recorder()
+		const startedAt = performance.now()
+
+		const result = await capturer.start(coordinator, camera, request({ exposureMode: 'fixed', count: 1, delay: 30 }), { listener: recording.listener }).result
+
+		expect(result.ok).toBeTrue()
+		expect(performance.now() - startedAt).toBeLessThan(5000)
+		expect(recording.states).not.toContain('waiting')
+	})
+
+	test('commands a 100 µs exposure as 0.0001 s', async () => {
+		const camera = await connected()
+		const startExposure = spyOn(cameraManager, 'startExposure')
+
+		try {
+			const handle = capturer.start(coordinator, camera, request({ exposureTime: 100, exposureTimeUnit: 'microsecond' }))
+			await handle.result
+			expect(startExposure.mock.calls[0][1]).toBe(0.0001)
+		} finally {
+			startExposure.mockRestore()
+		}
+	})
+})
+
 describe('caller destinations', () => {
+	test('writes every frame of a sequence to the path the resolver gives it', async () => {
+		const camera = await connected()
+		const directory = await mkdtemp(join(capturesDir, 'resolved-'))
+		const requests: number[] = []
+
+		const framePath = ({ generation, time, camera: target }: CameraFramePathRequest) => {
+			expect(target).toBe(camera)
+			expect(Number.isFinite(time)).toBeTrue()
+			requests.push(generation)
+			return join(directory, `frame-${generation}.fit`)
+		}
+
+		const result = await capturer.start(coordinator, camera, request({ exposureMode: 'fixed', count: 3, autoSave: true }), { framePath }).result
+
+		expect(result.ok).toBeTrue()
+		expect(requests).toEqual([1, 2, 3])
+		if (result.ok) expect(result.value.frames.map((frame) => frame.path)).toEqual([1, 2, 3].map((generation) => join(directory, `frame-${generation}.fit`)))
+		for (const generation of [1, 2, 3]) expect(await Bun.file(join(directory, `frame-${generation}.fit`)).exists()).toBeTrue()
+		expect((await Array.fromAsync(new Bun.Glob('*.tmp').scan(directory))).length).toBe(0)
+	})
+
+	test('refuses a resolved path that already exists', async () => {
+		const camera = await connected()
+		const directory = await mkdtemp(join(capturesDir, 'resolved-'))
+		const path = join(directory, 'taken.fit')
+		await Bun.write(path, 'a frame that is not this one')
+
+		const result = await capturer.start(coordinator, camera, request({ autoSave: true }), { framePath: () => path }).result
+
+		expect(result).toEqual(failedOperationResult('commandFailed', `the output file "${path}" already exists`))
+		expect(await Bun.file(path).text()).toBe('a frame that is not this one')
+	})
+
+	test('does not consult the resolver for frames that are not saved', async () => {
+		const camera = await connected()
+		let consulted = false
+
+		const result = await capturer.start(coordinator, camera, request(), {
+			framePath: () => {
+				consulted = true
+				return join(capturesDir, 'never.fit')
+			},
+		}).result
+
+		expect(result.ok).toBeTrue()
+		expect(consulted).toBeFalse()
+	})
+
+	test('writes a frame exclusively and completely', async () => {
+		const directory = await mkdtemp(join(capturesDir, 'exclusive-'))
+		const path = join(directory, 'frame.fit')
+
+		await writeFrameExclusively(path, Buffer.from('first'))
+		expect(await Bun.file(path).text()).toBe('first')
+
+		await expect(writeFrameExclusively(path, Buffer.from('second'))).rejects.toThrow(`the output file "${path}" already exists`)
+		expect(await Bun.file(path).text()).toBe('first')
+		expect(await Array.fromAsync(new Bun.Glob('*').scan(directory))).toEqual(['frame.fit'])
+	})
+
+	test('gives an automatic name already taken the first free suffix', async () => {
+		const camera = await connected()
+		const directory = await mkdtemp(join(capturesDir, 'automatic-'))
+		const now = Date.now()
+		const name = formatTemporal(now, 'YYYYMMDD.HHmmssSSS', -new Date(now).getTimezoneOffset())
+		const now$ = spyOn(Date, 'now').mockReturnValue(now)
+
+		try {
+			await Bun.write(join(directory, `${name}.fit`), 'taken')
+			// The clock is frozen only until the frame opens, which happens after its path was resolved.
+			const result = await capturer.start(coordinator, camera, request({ autoSave: true, savePath: directory, autoSubFolderMode: 'off' }), { listener: () => now$.mockRestore() }).result
+
+			expect(result.ok).toBeTrue()
+			if (result.ok) expect(result.value.frames.map((frame) => frame.path)).toEqual([join(directory, `${name}_2.fit`)])
+			expect(await Bun.file(join(directory, `${name}.fit`)).text()).toBe('taken')
+		} finally {
+			now$.mockRestore()
+		}
+	})
+
 	test('writes the frame to the destination the caller decided', async () => {
 		const camera = await connected()
 		const directory = await mkdtemp(join(capturesDir, 'session-'))
@@ -1909,14 +2082,18 @@ describe('frame writers', () => {
 		}
 	})
 
-	test('falls back to Bun.write without a writer', async () => {
+	test('falls back to the exclusive writer without a writer', async () => {
 		const camera = await connected()
 		const own = createCapturer({ write: undefined })
 		const write = spyOn(Bun, 'write')
 
 		try {
-			expect((await own.start(coordinator, camera, request({ autoSave: true })).result).ok).toBeTrue()
+			const result = await own.start(coordinator, camera, request({ autoSave: true })).result
+			expect(result.ok).toBeTrue()
+			// The bytes go to a temporary that is then linked to the frame name.
 			expect(write).toHaveBeenCalledTimes(1)
+			expect(write.mock.calls[0][0]).toEndWith('.tmp')
+			if (result.ok) expect(await Bun.file(result.value.frames[0].path).exists()).toBeTrue()
 		} finally {
 			write.mockRestore()
 			own.dispose()

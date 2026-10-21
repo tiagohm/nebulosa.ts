@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { horizonCrossings, horizonMinimumAltitude, isAboveHorizon } from '../../../src/astronomy/observer/horizon'
+import { horizonCrossings, horizonMinimumAltitude, horizonMinimumAltitudeLookup, isAboveHorizon } from '../../../src/astronomy/observer/horizon'
 import { DEG2RAD, PI, PIOVERFOUR, PIOVERTWO, TAU } from '../../../src/core/constants'
 
 test('horizon altitude interpolates around the circle and an empty mask clears the sky', () => {
@@ -13,6 +13,18 @@ test('horizon altitude interpolates around the circle and an empty mask clears t
 	expect(isAboveHorizon(mask, 20 * DEG2RAD, PIOVERTWO)).toBeTrue()
 	expect(isAboveHorizon(mask, 19 * DEG2RAD, PIOVERTWO)).toBeFalse()
 	expect(isAboveHorizon([], 0, 0)).toBeTrue()
+})
+
+test('a prepared horizon lookup matches the one-shot interpolation and ignores later sample edits', () => {
+	const mask = [
+		{ azimuth: PI, minimumAltitude: 30 * DEG2RAD },
+		{ azimuth: 0, minimumAltitude: 10 * DEG2RAD },
+	]
+	const lookup = horizonMinimumAltitudeLookup(mask)
+	for (const azimuth of [0, PIOVERFOUR, PIOVERTWO, PI, -PIOVERTWO, TAU + 0.3]) expect(lookup(azimuth)).toBeCloseTo(horizonMinimumAltitude(mask, azimuth), 15)
+	mask[0] = { azimuth: PI, minimumAltitude: 0 }
+	expect(lookup(PI)).toBeCloseTo(30 * DEG2RAD, 15)
+	expect(horizonMinimumAltitudeLookup([])(1)).toBe(-PIOVERTWO)
 })
 
 test('a path reports the instants it passes behind the mask and comes back out', () => {

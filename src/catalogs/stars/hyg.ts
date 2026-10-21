@@ -35,6 +35,8 @@ export interface HygCatalogEntry extends Required<Omit<StarCatalogEntry, 'parall
 	readonly distance: Distance
 	// Spectral type, if any.
 	readonly spType?: string
+	// B-V color index in magnitudes, if any.
+	readonly bv?: number
 	// IAU constellation the star lies in.
 	readonly constellation: Constellation
 }
@@ -59,6 +61,7 @@ function processRow(row: CsvRow): HygCatalogEntry {
 	const rv = kilometerPerSecond(+row[12])
 	const magnitude = row[13] ? +row[13] : 99
 	const spType = row[15] || undefined
+	const bv = row[16] ? +row[16] : undefined
 	const rightAscension = +row[23]
 	const declination = +row[24]
 	// HYG's pmrarad is μα·cosδ (proper motion on the sky), but StarCatalogEntry.pmRA and ERFA's star
@@ -70,7 +73,7 @@ function processRow(row: CsvRow): HygCatalogEntry {
 	const flamsteed = +row[28]
 	const constellation = row[29].toUpperCase() as Constellation
 
-	return { id, epoch: 2000, hip, hd, hr, bayer, flamsteed, name, rightAscension, declination, pmRA, pmDEC, rv, magnitude, distance, spType, constellation }
+	return { id, epoch: 2000, hip, hd, hr, bayer, flamsteed, name, rightAscension, declination, pmRA, pmDEC, rv, magnitude, distance, spType, bv, constellation }
 }
 
 // HEALPix spatial index over HYG entries, queryable by region. Default NSIDE 8.

@@ -259,7 +259,7 @@ export function timeNow(fast: boolean = false) {
 // This represents the number of days since midnight on November 17, 1858.
 // For example, 51544.0 in MJD is midnight on January 1, 2000.
 export function timeMJD(mjd: number, scale: Timescale = Timescale.UTC) {
-	return time(mjd + MJD0, 0, scale)
+	return time(mjd + 2400000, 0.5, scale)
 }
 
 // Julian epoch year as floating point value like 2000.0.
@@ -282,7 +282,9 @@ export function timeBesselianYear(epoch: number, scale: Timescale = Timescale.TT
 // and 0h tomorrow after removing any pre-1972 linear drift. Post-1972 this is +1,
 // 0, or -1 and is the extra length of that UTC day in seconds. eraDtf2d uses
 // DAYSEC+dleap as the UTC day length; eraUtcTai unspreads the same quantity.
-function utcLeapSeconds(year: number, month: number, day: number): number {
+// The last minute of that day therefore has 60+dleap seconds. Dates after the
+// last tabulated leap second report 0 (no future leap seconds are assumed).
+export function utcLeapSeconds(year: number, month: number, day: number): number {
 	const dat0 = eraDat(year, month, day, 0)
 	const dat12 = eraDat(year, month, day, 0.5)
 	const calt = eraJdToCal(MJD0 + eraCalToJd(year, month, day), 1.5)
@@ -436,8 +438,10 @@ function setTimeProviders(time: Time, value: TimeProviders | undefined | null) {
 }
 
 // Clones a nearby sample instant while preserving custom Earth-orientation providers.
-export function timeShift(time: Time, fraction: number): Time {
-	const normalized = timeNormalize(time.day, time.fraction + fraction, undefined, time.scale)
+// fraction is a day offset; days is an optional integer day offset added exactly to the day part, so
+// a long shift split into whole and fractional days keeps the two-part precision of the fraction.
+export function timeShift(time: Time, fraction: number, days: number = 0): Time {
+	const normalized = timeNormalize(time.day + days, time.fraction + fraction, undefined, time.scale)
 	setTimeProviders(normalized, time.providers)
 	normalized.location = time.location
 	return normalized

@@ -160,14 +160,52 @@ test('aggregates independent north-south and west-east motion', () => {
 
 	expect(mount.moving).toBeTrue()
 	expect(mount.canMove).toBeTrue()
+	expect(mount.canMoveNS).toBeTrue()
+	expect(mount.canMoveWE).toBeTrue()
 
 	manager.delProperty(recordingClient, { device: mount.name, name: 'TELESCOPE_MOTION_WE' })
 	expect(mount.moving).toBeTrue()
 	expect(mount.canMove).toBeTrue()
+	expect(mount.canMoveNS).toBeTrue()
+	expect(mount.canMoveWE).toBeFalse()
 
 	manager.delProperty(recordingClient, { device: mount.name, name: 'TELESCOPE_MOTION_NS' })
 	expect(mount.moving).toBeFalse()
 	expect(mount.canMove).toBeFalse()
+	expect(mount.canMoveNS).toBeFalse()
+	expect(mount.canMoveWE).toBeFalse()
+})
+
+test('reports the manual-motion capability of each axis from its own vector', () => {
+	const manager = new MountManager()
+	const mount = setupTestMount(manager)
+	const updates: string[] = []
+	manager.addHandler({ added: () => {}, updated: (_, property) => updates.push(property), removed: () => {} })
+
+	manager.switchVector(
+		recordingClient,
+		{
+			device: mount.name,
+			name: 'TELESCOPE_MOTION_WE',
+			permission: 'rw',
+			rule: 'AtMostOne',
+			state: 'Idle',
+			elements: {
+				MOTION_WEST: defSwitch('MOTION_WEST', false),
+				MOTION_EAST: defSwitch('MOTION_EAST', false),
+			},
+		},
+		'defSwitchVector',
+	)
+
+	expect(mount.canMove).toBeTrue()
+	expect(mount.canMoveNS).toBeFalse()
+	expect(mount.canMoveWE).toBeTrue()
+	expect(updates.filter((property) => property.startsWith('canMove'))).toEqual(['canMoveWE', 'canMove'])
+
+	manager.delProperty(recordingClient, { device: mount.name })
+	expect(mount.canMove).toBeFalse()
+	expect(mount.canMoveWE).toBeFalse()
 })
 
 test('preserves the sign of colon-separated UTC offsets', () => {

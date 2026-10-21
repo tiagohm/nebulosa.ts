@@ -1707,8 +1707,12 @@ export class AlpacaServer {
 		return makeAlpacaResponse(this.#telescope(id).device.slewRates.map(mapSlewRateToAlpacaAxisRate))
 	}
 
+	// Answers per axis: the primary axis is west/east and the secondary north/south, matching MoveAxis; a
+	// mount has no tertiary (rotator) axis to move.
 	#mountCanMoveAxis(id: number, data: { Axis: string }) {
-		return makeAlpacaResponse(this.#telescope(id).device.canMove)
+		const { device } = this.#telescope(id)
+		const axis = +data.Axis
+		return makeAlpacaResponse(axis === 0 ? device.canMoveWE : axis === 1 ? device.canMoveNS : false)
 	}
 
 	// Predicts the destination pier side from Alpaca RA (hours), Dec (degrees), and local sidereal time.

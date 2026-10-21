@@ -89,6 +89,65 @@ test('does not min-max stretch leftover samples past a FITS image', async () => 
 	}
 })
 
+// Writes a 4x1 32-bit floating-point FITS image holding samples and returns its bytes.
+async function floatFits(samples: readonly number[]) {
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 2, 0)
+	const header = { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: samples.length, NAXIS2: 1 }
+	await writeFits(bufferSink(buffer), [{ header, raw: new Float32Array(samples) }], { type: false })
+	return buffer
+}
+
+// Writes `image` as XISF, returning the declared bounds and the samples read back as stored.
+async function sourceScaleXisf(image: Image, sourceScale: boolean) {
+	const output = Buffer.alloc(4096)
+	const size = await writeImageToXisf(image, bufferSink(output), undefined, { sourceScale })
+	const bounds = output.toString('utf8', 16, 16 + output.readUInt32LE(8)).match(/bounds="([^"]*)"/)?.[1]
+	const reread = (await readImageFromSource(bufferSource(output.subarray(0, size)), { raw: 64, sampleScale: 'digital' }))!
+	return { bounds, raw: [...reread.raw] }
+}
+
+test('records the min-max rescale of an out-of-range source and writes it undone in the source scale', async () => {
+	const buffer = await floatFits([100, 350, 600, 1100])
+	const image = (await readImageFromSource(bufferSource(buffer), 32))!
+
+	expect(image.metadata.normalization).toEqual({ minimum: 100, range: 1000 })
+	expect([...image.raw]).toEqual([0, 0.25, 0.5, 1])
+
+	for (const sourceScale of [false, true]) {
+		const output = Buffer.alloc(FITS_BLOCK_SIZE * 2, 0)
+		await writeImageToFits(image, bufferSink(output), { sourceScale })
+		const reread = (await readImageFromSource(bufferSource(output), { raw: 64, sampleScale: 'digital' }))!
+		expect([...reread.raw]).toEqual(sourceScale ? [100, 350, 600, 1100] : [0, 0.25, 0.5, 1])
+	}
+
+	expect(await sourceScaleXisf(image, false)).toEqual({ bounds: '0:1', raw: [0, 0.25, 0.5, 1] })
+	expect(await sourceScaleXisf(image, true)).toEqual({ bounds: '100:1100', raw: [100, 350, 600, 1100] })
+	expect([...image.raw]).toEqual([0, 0.25, 0.5, 1])
+})
+
+test('declares Float32-rounded source bounds that enclose the stored samples', async () => {
+	const image = (await readImageFromSource(bufferSource(await floatFits([100.1, 350, 1100.1])), 64))!
+	const { bounds, raw } = await sourceScaleXisf(image, true)
+	const [low, high] = bounds!.split(':').map(Number)
+
+	expect(bounds).toBe(`${Math.fround(100.1)}:${Math.fround(1100.1)}`)
+	expect(raw.every((sample) => sample >= low && sample <= high)).toBeTrue()
+})
+
+test('a flat out-of-range source records a zero range', async () => {
+	const image = (await readImageFromSource(bufferSource(await floatFits([5, 5, 5, 5])), 64))!
+
+	expect(image.metadata.normalization).toEqual({ minimum: 5, range: 0 })
+	expect(await sourceScaleXisf(image, true)).toEqual({ bounds: '5:6', raw: [5, 5, 5, 5] })
+})
+
+test('an in-range source records no rescale', async () => {
+	const image = (await readImageFromSource(bufferSource(await floatFits([0, 0.25, 0.5, 1])), 64))!
+
+	expect(image.metadata.normalization).toBeUndefined()
+	expect(await sourceScaleXisf(image, true)).toEqual({ bounds: '0:1', raw: [0, 0.25, 0.5, 1] })
+})
+
 test('drops leftover samples past a multichannel JPEG image', () => {
 	const width = 2
 	const height = 2

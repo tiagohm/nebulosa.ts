@@ -1,4 +1,4 @@
-import type { Image, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
+import type { Image, ImageNormalization, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
 import type { Size } from '../../../math/numerical/geometry'
 import { clamp, type NumberArray } from '../../../math/numerical/math'
 import { deflate, inflate } from '../../compression'
@@ -42,6 +42,9 @@ export type XisfChecksumAlgorithm = 'sha-1' | 'sha-256' | 'sha-512' | 'sha3-256'
 
 // Scalar property value type used in XISF property elements.
 export type XisfPropertyType = 'UInt8' | 'UInt16' | 'UInt32' | 'UInt64' | 'Float32' | 'Float64' | 'Int8' | 'Int16' | 'Int32' | 'Int64' | 'Boolean' | 'String'
+
+// "low:high" sample value range of a floating-point XISF image; every stored sample lies within it and low < high.
+export type XisfImageBounds = `${number}:${number}`
 
 // Magic signature at the start of a monolithic XISF file.
 export const XISF_SIGNATURE = 'XISF0100'
@@ -137,7 +140,7 @@ export interface XisfParsedImage {
 	// Sample data type.
 	readonly sampleFormat: XisfSampleFormat
 	// "low:high" sample value bounds (for floating-point images).
-	readonly bounds: `${number}:${number}`
+	readonly bounds: XisfImageBounds
 	// Color space name.
 	readonly colorSpace: XisfColorSpace
 	// "attachment:offset:size" data block location.
@@ -203,6 +206,16 @@ const INTEGER_XISF_MAX: Readonly<Record<number, number>> = {
 	32: 4294967295,
 }
 
+// Computes the multiplier and offset (stored = sample * multiplier + offset, then integer quantization) that map
+// normalized samples to XISF codes: the full unsigned range for integer BITPIX, identity for floating-point.
+// With `normalization`, its min-max rescale (sample * range + minimum) is folded into the same affine map, so
+// samples are written in the source scale without a restored copy.
+function xisfWriteScaling(bitpix: Bitpix, normalization?: ImageNormalization) {
+	const factor = INTEGER_XISF_MAX[bitpix] ?? 1
+	if (normalization === undefined) return [factor, 0] as const
+	return [normalization.range * factor, normalization.minimum * factor] as const
+}
+
 // Rounds and saturates a stored unsigned integer sample so BITPIX assignment cannot wrap.
 function quantizeXisfIntegerSample(value: number, max: number) {
 	return clamp(Math.round(value), 0, max)
@@ -219,8 +232,21 @@ interface XisfWriteEntry {
 	readonly colorSpace: XisfColorSpace
 	readonly fitsKeywords: readonly string[]
 	readonly raw: ImageRawType
+	// Min-max rescale undone while streaming uncompressed samples.
+	readonly normalization?: ImageNormalization
 	readonly dataSize: number
 	readonly encoded?: XisfEncodedBlock
+	// "low:high" bounds attribute of a floating-point image; undefined for integer samples.
+	readonly bounds?: XisfImageBounds
+}
+
+// An image handed to writeXisf: its header and samples, plus the bounds a floating-point image declares.
+export interface XisfWriteImage extends Readonly<Pick<Image, 'header' | 'raw'>> {
+	// "low:high" range enclosing every stored floating-point sample (default 0:1); ignored for integer samples.
+	readonly bounds?: XisfImageBounds
+	// Min-max rescale undone while writing (sample * range + minimum), so the file keeps the source scale;
+	// the samples themselves are not modified or copied. `bounds` should then enclose the restored range.
+	readonly normalization?: ImageNormalization
 }
 
 // An encoded image data block plus its compression descriptor (absent when stored uncompressed).
@@ -364,8 +390,9 @@ function readShuffledXisfSamples(input: Buffer, output: ImageRawType, bitpix: Bi
 }
 
 // Converts interleaved normalized samples directly into XISF byte planes in serialized byte order,
-// avoiding a separate native-layout image buffer and subsequent shuffle pass.
-function writeShuffledXisfSamples(input: ImageRawType, output: Buffer, bitpix: Bitpix, byteOrder: XisfByteOrder, pixelStorage: XisfPixelStorageModel, geometry: XisfGeometry) {
+// avoiding a separate native-layout image buffer and subsequent shuffle pass. `normalization` is undone
+// on the fly, as in xisfWriteScaling.
+function writeShuffledXisfSamples(input: ImageRawType, output: Buffer, bitpix: Bitpix, byteOrder: XisfByteOrder, pixelStorage: XisfPixelStorageModel, geometry: XisfGeometry, normalization?: ImageNormalization) {
 	const pixelInBytes = bitpixInBytes(bitpix)
 	const { width, height, channels } = geometry
 	const numberOfPixels = width * height
@@ -373,7 +400,8 @@ function writeShuffledXisfSamples(input: ImageRawType, output: Buffer, bitpix: B
 	if (output.byteLength !== total * pixelInBytes) throw new Error('invalid XISF image buffer size')
 
 	const max = INTEGER_XISF_MAX[bitpix]
-	const factor = max ?? 1
+	const [multiplier, offset] = xisfWriteScaling(bitpix, normalization)
+	const identity = multiplier === 1 && offset === 0
 	const little = byteOrder !== 'big'
 	const planar = pixelStorage === 'Planar'
 	const bits = new DataView(new ArrayBuffer(8))
@@ -383,17 +411,18 @@ function writeShuffledXisfSamples(input: ImageRawType, output: Buffer, bitpix: B
 
 	for (let stored = 0; stored < total; stored++) {
 		const source = planar ? index : stored
+		const value = identity ? input[source] : input[source] * multiplier + offset
 
 		if (pixelInBytes === 1) {
-			output[stored] = quantizeXisfIntegerSample(input[source] * factor, max ?? 255)
+			output[stored] = quantizeXisfIntegerSample(value, max ?? 255)
 		} else if (pixelInBytes === 2) {
-			const code = quantizeXisfIntegerSample(input[source] * factor, max ?? 65535)
+			const code = quantizeXisfIntegerSample(value, max ?? 65535)
 			const lo = code & 0xff
 			const hi = code >>> 8
 			output[stored] = little ? lo : hi
 			output[total + stored] = little ? hi : lo
 		} else if (pixelInBytes === 4 && max !== undefined) {
-			const code = quantizeXisfIntegerSample(input[source] * factor, max) >>> 0
+			const code = quantizeXisfIntegerSample(value, max) >>> 0
 			const b0 = code & 0xff
 			const b1 = (code >>> 8) & 0xff
 			const b2 = (code >>> 16) & 0xff
@@ -403,7 +432,7 @@ function writeShuffledXisfSamples(input: ImageRawType, output: Buffer, bitpix: B
 			output[total * 2 + stored] = little ? b2 : b1
 			output[total * 3 + stored] = little ? b3 : b0
 		} else if (pixelInBytes === 4) {
-			bits.setFloat32(0, input[source], true)
+			bits.setFloat32(0, value, true)
 			const b0 = bits.getUint8(0)
 			const b1 = bits.getUint8(1)
 			const b2 = bits.getUint8(2)
@@ -413,7 +442,7 @@ function writeShuffledXisfSamples(input: ImageRawType, output: Buffer, bitpix: B
 			output[total * 2 + stored] = little ? b2 : b1
 			output[total * 3 + stored] = little ? b3 : b0
 		} else if (pixelInBytes === 8 && bitpix < 0) {
-			bits.setFloat64(0, input[source], little)
+			bits.setFloat64(0, value, little)
 			output[stored] = bits.getUint8(0)
 			output[total + stored] = bits.getUint8(1)
 			output[total * 2 + stored] = bits.getUint8(2)
@@ -479,8 +508,9 @@ function escapeXml(text: string) {
 }
 
 // Converts and writes an uncompressed image through a bounded buffer, preserving planar or interleaved
-// sample order and the requested byte order. Returns the number of pixel-block bytes written.
-async function writeUncompressedXisfImage(sink: Sink, input: ImageRawType, bitpix: Bitpix, width: number, height: number, channels: number, byteOrder: XisfByteOrder, pixelStorage: XisfPixelStorageModel) {
+// sample order and the requested byte order, undoing `normalization` on the fly as in xisfWriteScaling.
+// Returns the number of pixel-block bytes written.
+async function writeUncompressedXisfImage(sink: Sink, input: ImageRawType, bitpix: Bitpix, width: number, height: number, channels: number, byteOrder: XisfByteOrder, pixelStorage: XisfPixelStorageModel, normalization?: ImageNormalization) {
 	const pixelInBytes = bitpixInBytes(bitpix)
 	const numberOfPixels = width * height
 	const total = numberOfPixels * channels
@@ -488,8 +518,9 @@ async function writeUncompressedXisfImage(sink: Sink, input: ImageRawType, bitpi
 	const buffer = xisfBufferView(undefined, xisfImageChunkSize(size, bitpix), bitpix)
 	const data = xisfDataView(buffer, bitpix)
 	const max = INTEGER_XISF_MAX[bitpix]
-	const factor = max ?? 1
-	const identity = max === undefined
+	const [multiplier, offset] = xisfWriteScaling(bitpix, normalization)
+	const float = max === undefined
+	const identity = float && multiplier === 1 && offset === 0
 	if (total > 0 && data.length === 0) return 0
 
 	let written = 0
@@ -504,7 +535,8 @@ async function writeUncompressedXisfImage(sink: Sink, input: ImageRawType, bitpi
 
 				if (identity && channels === 1) data.set(input.subarray(startPixel, startPixel + count))
 				else if (identity) for (let i = 0; i < count; i++, source += channels) data[i] = input[source]
-				else for (let i = 0; i < count; i++, source += channels) data[i] = quantizeXisfIntegerSample(input[source] * factor, max)
+				else if (float) for (let i = 0; i < count; i++, source += channels) data[i] = input[source] * multiplier + offset
+				else for (let i = 0; i < count; i++, source += channels) data[i] = quantizeXisfIntegerSample(input[source] * multiplier + offset, max)
 				if (byteOrder === 'big') {
 					if (pixelInBytes === 2) chunk.swap16()
 					else if (pixelInBytes === 4) chunk.swap32()
@@ -522,7 +554,8 @@ async function writeUncompressedXisfImage(sink: Sink, input: ImageRawType, bitpi
 			const chunk = byteCount === buffer.length ? buffer : buffer.subarray(0, byteCount)
 
 			if (identity) data.set(input.subarray(start, start + count))
-			else for (let i = 0; i < count; i++) data[i] = quantizeXisfIntegerSample(input[start + i] * factor, max)
+			else if (float) for (let i = 0; i < count; i++) data[i] = input[start + i] * multiplier + offset
+			else for (let i = 0; i < count; i++) data[i] = quantizeXisfIntegerSample(input[start + i] * multiplier + offset, max)
 			if (byteOrder === 'big') {
 				if (pixelInBytes === 2) chunk.swap16()
 				else if (pixelInBytes === 4) chunk.swap32()
@@ -539,7 +572,7 @@ async function writeUncompressedXisfImage(sink: Sink, input: ImageRawType, bitpi
 
 // Writes images to `sink` as a monolithic XISF file: compressed blocks are staged to determine their
 // sizes, while uncompressed blocks are streamed after the XML offsets stabilize. Returns total bytes.
-export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image, 'header' | 'raw' | 'sampleScale'>>[], format: XisfWriteFormat = DEFAULT_WRITE_XISF_FORMAT) {
+export async function writeXisf(sink: Sink, images: readonly XisfWriteImage[], format: XisfWriteFormat = DEFAULT_WRITE_XISF_FORMAT) {
 	const options = { ...DEFAULT_WRITE_XISF_FORMAT, ...format }
 	const entries: XisfWriteEntry[] = []
 
@@ -559,16 +592,18 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 			fitsKeywords.push(`<FITSKeyword name="${escapeXml(key)}" value="${escapeXml(formatFitsHeaderValue(value))}" comment=""/>`)
 		}
 
-		const encoded = options.compression ? await new XisfImageWriter({ byteOrder: options.byteOrder, pixelStorage: options.pixelStorage, bitpix, geometry: { width, height, channels } }, options.compression).encode(image.raw) : undefined
+		const { raw, normalization } = image
+		const encoded = options.compression ? await new XisfImageWriter({ byteOrder: options.byteOrder, pixelStorage: options.pixelStorage, bitpix, geometry: { width, height, channels } }, options.compression).encode(raw, normalization) : undefined
 		const dataSize = encoded?.data.byteLength ?? width * height * channels * bitpixInBytes(bitpix)
-		entries.push({ bitpix, width, height, channels, sampleFormat, colorSpace, fitsKeywords, raw: image.raw, dataSize, encoded })
+		const bounds = bitpix === -64 || bitpix === -32 ? (image.bounds ?? '0:1') : undefined
+		entries.push({ bitpix, width, height, channels, sampleFormat, colorSpace, fitsKeywords, raw, normalization, dataSize, encoded, bounds })
 	}
 
 	const buildHeader = (offset: number) => {
 		let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<xisf version="1.0">'
 
 		for (const entry of entries) {
-			const bounds = entry.bitpix === -64 || entry.bitpix === -32 ? ' bounds="0:1"' : ''
+			const bounds = entry.bounds ? ` bounds="${entry.bounds}"` : ''
 			const byteOrder = entry.bitpix === 8 ? '' : ` byteOrder="${options.byteOrder}"`
 			const compression = entry.encoded?.compression ? ` compression="${formatCompression(entry.encoded.compression)}"` : ''
 			xml += `<Image geometry="${entry.width}:${entry.height}:${entry.channels}" sampleFormat="${entry.sampleFormat}" colorSpace="${entry.colorSpace}" location="attachment:${offset}:${entry.dataSize}" pixelStorage="${options.pixelStorage}"${byteOrder}${bounds}${compression}>`
@@ -603,7 +638,7 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 
 	for (const entry of entries) {
 		if (entry.encoded) size += await writeFully(sink, entry.encoded.data)
-		else size += await writeUncompressedXisfImage(sink, entry.raw, entry.bitpix, entry.width, entry.height, entry.channels, options.byteOrder, options.pixelStorage)
+		else size += await writeUncompressedXisfImage(sink, entry.raw, entry.bitpix, entry.width, entry.height, entry.channels, options.byteOrder, options.pixelStorage, entry.normalization)
 	}
 
 	return size
@@ -973,8 +1008,9 @@ export class XisfImageWriter {
 		this.#shuffled = shuffled ? xisfBufferView(buffer, size, 8) : undefined
 	}
 
-	// Encodes XISF-format image from RGB-interleaved array into a block buffer
-	async encode(input: ImageRawType): Promise<XisfEncodedBlock> {
+	// Encodes XISF-format image from RGB-interleaved array into a block buffer. With `normalization`, its
+	// min-max rescale is undone on the fly (sample * range + minimum) without modifying or copying `input`.
+	async encode(input: ImageRawType, normalization?: ImageNormalization): Promise<XisfEncodedBlock> {
 		const { bitpix, geometry, byteOrder, pixelStorage } = this.xisf
 		const { width, height, channels } = geometry
 		const pixelInBytes = bitpixInBytes(bitpix)
@@ -987,7 +1023,7 @@ export class XisfImageWriter {
 				throw new Error(`unsupported XISF compression format: ${compression && compression.format}`)
 			}
 
-			writeShuffledXisfSamples(input, this.#shuffled, bitpix, byteOrder, pixelStorage, geometry)
+			writeShuffledXisfSamples(input, this.#shuffled, bitpix, byteOrder, pixelStorage, geometry, normalization)
 			const compressed = await compress(this.#shuffled, compression)
 
 			return {
@@ -1002,20 +1038,23 @@ export class XisfImageWriter {
 		}
 
 		const max = INTEGER_XISF_MAX[bitpix]
-		const factor = max ?? 1
+		const [multiplier, offset] = xisfWriteScaling(bitpix, normalization)
+		const identity = max === undefined && multiplier === 1 && offset === 0
 		const data = this.#data!
 
-		if (max === undefined && (pixelStorage === 'Normal' || channels === 1)) {
+		if (identity && (pixelStorage === 'Normal' || channels === 1)) {
 			data.set(input.subarray(0, total))
 		} else if (pixelStorage === 'Planar') {
 			for (let c = 0, p = 0; c < channels; c++) {
 				for (let i = 0, m = c; i < numberOfPixels; i++, m += channels) {
-					data[p++] = max === undefined ? input[m] : quantizeXisfIntegerSample(input[m] * factor, max)
+					data[p++] = identity ? input[m] : max === undefined ? input[m] * multiplier + offset : quantizeXisfIntegerSample(input[m] * multiplier + offset, max)
 				}
 			}
+		} else if (max === undefined) {
+			for (let i = 0; i < total; i++) data[i] = input[i] * multiplier + offset
 		} else {
 			for (let i = 0; i < total; i++) {
-				data[i] = quantizeXisfIntegerSample(input[i] * factor, max)
+				data[i] = quantizeXisfIntegerSample(input[i] * multiplier + offset, max)
 			}
 		}
 
@@ -1042,9 +1081,9 @@ export class XisfImageWriter {
 		}
 	}
 
-	// Writes XISF-format image from RGB-interleaved array into sink
-	async write(input: ImageRawType, sink: Sink) {
-		const encoded = await this.encode(input)
+	// Writes XISF-format image from RGB-interleaved array into sink, undoing `normalization` as in encode.
+	async write(input: ImageRawType, sink: Sink, normalization?: ImageNormalization) {
+		const encoded = await this.encode(input, normalization)
 		return await writeFully(sink, encoded.data)
 	}
 }

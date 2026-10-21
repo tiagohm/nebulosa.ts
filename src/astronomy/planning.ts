@@ -63,7 +63,8 @@ function ramp(value: number, start: number, end: number) {
 // moonAltitude is the geometric lunar altitude in radians. separation is the angular distance from
 // the Moon to the target, in radians; values outside (−π, π] are wrapped before use. Returns 0 when
 // the Moon is on or below the horizon or the illumination is not positive. A full Moon at the zenith
-// sitting on the target scores 1. The separation weight is a Gaussian of width 30°.
+// sitting on the target scores 1. The separation weight is a Gaussian of width 30°. This is a relative
+// ranking heuristic, not a sky brightness; skyBrightness in sky/brightness predicts the photometric sky.
 export function moonInterference(illumination: number, moonAltitude: Angle, separation: Angle): number {
 	const altitudeWeight = Math.sin(moonAltitude)
 	if (!(altitudeWeight > 0) || !(illumination > 0)) return 0

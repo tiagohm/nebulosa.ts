@@ -20,6 +20,7 @@ test('read', async () => {
 
 	expect(data[0].id).toBe(0)
 	expect(data[0].name).toBe('Sol')
+	expect(data[0].bv).toBe(0.656)
 
 	expect(data[32263].id).toBe(32263)
 	expect(data[32263].name).toBe('Sirius')
@@ -31,6 +32,7 @@ test('read', async () => {
 	expect(data[32263].magnitude).toBe(-1.44)
 	expect(data[32263].constellation).toBe('CMA')
 	expect(data[32263].spType).toBe('A0m...')
+	expect(data[32263].bv).toBe(0.009)
 	expect(data[32263].distance).toBeCloseTo(543940.9205, 3)
 	// HYG reports μα·cosδ (-546.0099 mas/yr); pmRA is stored as dα/dt, so pmRA·cosδ recovers it.
 	expect(toMas(data[32263].pmRA) * Math.cos(data[32263].declination)).toBeCloseTo(-546.0099, 3)

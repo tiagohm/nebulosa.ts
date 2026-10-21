@@ -227,7 +227,9 @@ export const DEFAULT_CAMERA_CAPTURE_EVENT: CameraCaptureEvent = {
 	stopped: false,
 }
 
-// Number of `unit` in one minute.
+// Number of `unit` in one minute. The conversions below multiply by the target factor before dividing by the
+// source one: for a whole number of a smaller unit, such as 100 µs, the product is exact and the quotient is
+// rounded once, so it is the nearest double to 0.0001 s instead of a value scaled by an already rounded 1e-6.
 export function exposureTimeUnitFactor(unit: CameraExposureTimeUnit) {
 	switch (unit) {
 		case 'minute':
@@ -248,20 +250,20 @@ export function exposureTimeInMinutes(time: number, unit: CameraExposureTimeUnit
 
 // Converts an exposure time in `unit` to seconds.
 export function exposureTimeInSeconds(time: number, unit: CameraExposureTimeUnit) {
-	return unit === 'second' ? time : time * (60 / exposureTimeUnitFactor(unit))
+	return unit === 'second' ? time : (time * 60) / exposureTimeUnitFactor(unit)
 }
 
 // Converts an exposure time in `unit` to milliseconds.
 export function exposureTimeInMilliseconds(time: number, unit: CameraExposureTimeUnit) {
-	return unit === 'millisecond' ? time : time * (60000 / exposureTimeUnitFactor(unit))
+	return unit === 'millisecond' ? time : (time * 60000) / exposureTimeUnitFactor(unit)
 }
 
 // Converts an exposure time in `unit` to microseconds.
 export function exposureTimeInMicroseconds(time: number, unit: CameraExposureTimeUnit) {
-	return unit === 'microsecond' ? time : time * (60000000 / exposureTimeUnitFactor(unit))
+	return unit === 'microsecond' ? time : (time * 60000000) / exposureTimeUnitFactor(unit)
 }
 
 // Converts an exposure time from unit `from` to unit `to`.
 export function exposureTimeIn(time: number, from: CameraExposureTimeUnit, to: CameraExposureTimeUnit) {
-	return from === to ? time : time * (exposureTimeUnitFactor(to) / exposureTimeUnitFactor(from))
+	return from === to ? time : (time * exposureTimeUnitFactor(to)) / exposureTimeUnitFactor(from)
 }

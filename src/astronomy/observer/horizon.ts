@@ -96,6 +96,14 @@ export function horizonMinimumAltitude(samples: readonly HorizonSample[], azimut
 	return preparedMinimumAltitude(prepareHorizonProfile(samples), azimuth)
 }
 
+// Prepares a horizon mask once and returns a reusable minimum-altitude lookup by azimuth (radians,
+// north through east), with the same interpolation and empty/single/duplicate rules as
+// horizonMinimumAltitude. The samples are copied, so later changes to them are not seen.
+export function horizonMinimumAltitudeLookup(samples: readonly HorizonSample[]): (azimuth: Angle) => Angle {
+	const prepared = prepareHorizonProfile(samples)
+	return (azimuth) => preparedMinimumAltitude(prepared, azimuth)
+}
+
 // Whether a target at this altitude and azimuth is above the horizon mask.
 // Parameters: samples are the mask. altitude and azimuth are radians. Returns true when the altitude
 // is at least the interpolated minimum. An empty mask returns true.

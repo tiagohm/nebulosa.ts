@@ -5,11 +5,12 @@ import { type Bitpix, type Fits, type FitsHdu, FitsImageReader, readFits, writeF
 // oxfmt-ignore
 import { bitpixInBytes, cfaPatternKeyword, heightKeyword, isCompressedImageHeader, isRiceCompressedImageHeader, numberOfAxesKeyword, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, widthKeyword } from '../../io/formats/fits/util'
 import { fileHandleSource } from '../../io/file'
-import { readXisf, writeXisf, type Xisf, type XisfImage, XisfImageReader, type XisfWriteFormat } from '../../io/formats/xisf/xisf'
+import { readXisf, writeXisf, type Xisf, type XisfImage, type XisfImageBounds, XisfImageReader, type XisfWriteFormat } from '../../io/formats/xisf/xisf'
 import { bufferSink, bufferSource, readRemaining, readUntil } from '../../io/io'
 import type { Source, Seekable, Sink } from '../../io/types'
 import { clamp } from '../../math/numerical/math'
-import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, makeImageRawTypedArray, type DigitalImage, type DigitalImageReadOptions, type Image, type ImageFormat, type ImageRawPrecision, type ImageRawType, type ImageReadOptions, type ImageSampleScale, type NormalizedImageReadOptions, type WriteImageToFormatOptions } from './types'
+// oxfmt-ignore
+import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, makeImageRawTypedArray, type DigitalImage, type DigitalImageReadOptions, type Image, type ImageFormat, type ImageNormalization, type ImageRawPrecision, type ImageRawType, type ImageReadOptions, type ImageSampleScale, type NormalizedImageReadOptions, type WriteImageOptions, type WriteImageToFormatOptions } from './types'
 
 // Image input/output for the imaging model: reads FITS, XISF, and JPEG sources (auto-detected) into a
 // normalized in-memory Image or a DigitalImage preserving source digital numbers, and writes an Image
@@ -114,9 +115,9 @@ export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & S
 	const metadata = { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer }
 	if (sampleScale === 'digital') return { header, raw, metadata, sampleScale, ...fitsDigitalProperties(header, bitpix) }
 
-	normalize(raw)
+	const normalization = normalize(raw)
 
-	return { header, raw, metadata }
+	return { header, raw, metadata: normalization ? { ...metadata, normalization } : metadata }
 }
 
 // Reads an XISF image while preserving source digital numbers.
@@ -156,9 +157,9 @@ export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source &
 	const metadata = { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer }
 	if (sampleScale === 'digital') return { header, raw, metadata, sampleScale, ...xisfDigitalProperties(bitpix) }
 
-	normalize(raw)
+	const normalization = normalize(raw)
 
-	return { header, raw, metadata }
+	return { header, raw, metadata: normalization ? { ...metadata, normalization } : metadata }
 }
 
 // Decodes a JPEG buffer into a normalized Image. When `format` is omitted, TurboJPEG selects the
@@ -276,16 +277,24 @@ export function writeImageToFormat(image: Image, format: Exclude<ImageFormat, 'f
 	return undefined
 }
 
-// Writes an Image to a FITS file via a buffer or sink.
-export function writeImageToFits(image: Image, output: Buffer | Sink) {
+// Writes an Image to a FITS file via a buffer or sink. With `sourceScale`, an image whose read recorded a
+// min-max rescale is written with it undone (see WriteImageOptions) by the FITS writer while it converts
+// samples, so neither the image nor a copy of its samples is modified or allocated.
+export function writeImageToFits(image: Image, output: Buffer | Sink, options?: WriteImageOptions) {
 	if (Buffer.isBuffer(output)) output = bufferSink(output)
-	return writeFits(output, [image])
+	const normalization = options?.sourceScale ? image.metadata.normalization : undefined
+	return writeFits(output, [{ header: image.header, raw: image.raw, normalization }])
 }
 
-// Writes an Image to an XISF file via a buffer or sink.
-export function writeImageToXisf(image: Image, output: Buffer | Sink, format?: XisfWriteFormat) {
+// Writes an Image to an XISF file via a buffer or sink. With `sourceScale`, an image whose read recorded a
+// min-max rescale is written with it undone (see WriteImageOptions) by the XISF writer while it converts
+// samples and, when floating-point, declares the source range as its bounds instead of 0:1; neither the
+// image nor a copy of its samples is modified or allocated.
+export function writeImageToXisf(image: Image, output: Buffer | Sink, format?: XisfWriteFormat, options?: WriteImageOptions) {
 	if (Buffer.isBuffer(output)) output = bufferSink(output)
-	return writeXisf(output, [image], format)
+	const normalization = options?.sourceScale ? image.metadata.normalization : undefined
+	if (!normalization) return writeXisf(output, [image], format)
+	return writeXisf(output, [{ header: image.header, raw: image.raw, normalization, bounds: sourceScaleBounds(normalization, image.header.BITPIX === -32) }], format)
 }
 
 // Scales a normalized pixel `p` (0..1) to an integer 0..max, truncating and clamping.
@@ -293,28 +302,44 @@ export function truncatePixel(p: number, max: number) {
 	return clamp(Math.trunc(p * max), 0, max)
 }
 
+// Returns the XISF bounds enclosing samples restored (sample * range + minimum) from the 0..1 scale: minimum to
+// minimum + range, both rounded to Float32 when `float32` (rounding is monotonic, so every stored sample stays
+// within them). The upper bound of a flat source, or of a range lost to that rounding, is one more than the
+// lower one, since XISF requires low < high.
+function sourceScaleBounds(normalization: ImageNormalization, float32: boolean): XisfImageBounds {
+	const { minimum, range } = normalization
+	const low = float32 ? Math.fround(minimum) : minimum
+	const high = float32 ? Math.fround(minimum + range) : minimum + range
+	return `${low}:${high > low ? high : low + 1}`
+}
+
 // Rescales the raw buffer into [0, 1] in place when its values fall outside that range; a flat image
-// (range below 1e-12) is zeroed.
-function normalize(raw: ImageRawType) {
+// (range below 1e-12) is zeroed. Returns the rescale applied, or undefined when the buffer was kept.
+function normalize(raw: ImageRawType): ImageNormalization | undefined {
 	const n = raw.length
-	let min = raw[0]
-	let max = raw[0]
+	let minimum = raw[0]
+	let maximum = raw[0]
 
 	for (let i = 0; i < n; i++) {
 		const p = raw[i]
-		if (p < min) min = p
-		else if (p > max) max = p
+		if (p < minimum) minimum = p
+		else if (p > maximum) maximum = p
 	}
 
-	if (min < 0 || max > 1) {
-		const rangeDelta = Math.abs(max - min)
+	if (minimum < 0 || maximum > 1) {
+		const range = Math.abs(maximum - minimum)
 
-		if (rangeDelta <= 1e-12) {
+		if (range <= 1e-12) {
 			raw.fill(0)
-		} else {
-			for (let i = 0; i < n; i++) {
-				raw[i] = (raw[i] - min) / rangeDelta
-			}
+			return { minimum, range: 0 }
 		}
+
+		for (let i = 0; i < n; i++) {
+			raw[i] = (raw[i] - minimum) / range
+		}
+
+		return { minimum, range }
 	}
+
+	return undefined
 }
