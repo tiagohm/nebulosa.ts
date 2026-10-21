@@ -8,7 +8,7 @@ import { OperationCoordinator, successfulOperationResult } from '../../../src/de
 import { ResourceArbiter } from '../../../src/devices/orchestration/resource'
 import { arcsec } from '../../../src/math/units/angle'
 import type { DitherPhase, DitherRequest } from '../../../src/observation/guiding/ditherer'
-import type { GuidingSession, GuidingSettle } from '../../../src/observation/guiding/session'
+import type { GuidingSettle } from '../../../src/observation/guiding/session'
 import { DEFAULT_PHD2_PAUSED_EVENT_ALLOWANCE, PHD2GuidingSession, type PHD2GuidingSessionOptions, phd2ResourceKey } from '../../../src/observation/guiding/session.phd2'
 import { waitUntil } from '../../util'
 import { ManualSequencerClock } from '../sequencer/util'
@@ -146,7 +146,6 @@ describe('49.11 PHD2 guiding session', () => {
 		const key = phd2ResourceKey('127.0.0.1', server.port)
 		expect(session.resources()).toEqual({ reserve: [{ key }], hold: [{ key }] })
 		expect(session.pulseQuiescenceBound()).toBe(2500 + DEFAULT_PHD2_PAUSED_EVENT_ALLOWANCE)
-		expect((session as GuidingSession).beginRun).toBeUndefined()
 
 		const observed = new PHD2GuidingSession(new PHD2Client(), { host: '127.0.0.1', maxGuidePulse: 1000, pausedEventAllowance: 500, guideOutput: { device: { ...DEFAULT_GUIDE_OUTPUT }, manager: fakeManager().manager } })
 		expect(observed.pulseQuiescenceBound()).toBe(1000 + 500 + GUIDE_PULSE_STOP_SETTLE_TIMEOUT)

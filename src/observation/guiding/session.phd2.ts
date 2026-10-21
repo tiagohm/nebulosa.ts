@@ -95,6 +95,19 @@ export class PHD2GuidingSession implements GuidingSession, Ditherer {
 		this.#port = options.port ?? DEFAULT_PHD2_PORT
 	}
 
+	beginRun() {
+		return successfulOperationResult(undefined)
+	}
+
+	endRun() {}
+
+	// Reports a PHD2 session needs a finite positive pulse premise and Paused allowance.
+	preflight(report: (message: string) => void) {
+		const { maxGuidePulse, pausedEventAllowance } = this.options
+		if (!(maxGuidePulse > 0 && Number.isFinite(maxGuidePulse))) report('the PHD2 session needs a finite positive maxGuidePulse')
+		if (pausedEventAllowance !== undefined && !(pausedEventAllowance > 0 && Number.isFinite(pausedEventAllowance))) report('the PHD2 session needs a finite positive pausedEventAllowance')
+	}
+
 	// Reserves and holds only the logical resource of the PHD2 server.
 	resources(): GuidingSessionResources {
 		const server: ResourceRequest = { key: phd2ResourceKey(this.options.host, this.#port) }

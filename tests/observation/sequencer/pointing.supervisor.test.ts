@@ -1103,7 +1103,7 @@ describe('49.5 5 pause across the meridian', () => {
 	const pausedSession = (options: { readonly flip?: Partial<SequencerMeridianFlipConfiguration> } = {}) => {
 		const clock = new ManualSequencerClock(START)
 		const fake = new FakeMount(clock, gracefulIn(30), { tracking: true })
-		const guiding = new ScriptedGuidingSession({ run: false }, fake.sequence)
+		const guiding = new ScriptedGuidingSession({}, fake.sequence)
 		guiding.current = 'guiding'
 		const configuration = configurationOf(flipOf(options.flip), { guiding: { settle: { pixels: 1, time: 1, timeout: 10 }, pauseTimeout: 2, maxRecoveries: 0, recalibrate: false, flipCalibration: false, onFailure: 'fail' } }, LIGHT)
 		const process = startProcess(configuration, fake, { sessionId: Bun.randomUUIDv7(), guiding })
@@ -1117,7 +1117,7 @@ describe('49.5 5 pause across the meridian', () => {
 		await waitUntil(() => process.events.some((event) => event.type === 'taskCompleted' && event.task === 'protectMeridianWhilePaused'), 2000, 1)
 
 		expect(process.runner.snapshot().state).toBe('paused')
-		expect(guiding.commands()).toEqual(['pause'])
+		expect(guiding.commands()).toEqual(['beginRun', 'pause'])
 		expect(fake.of('tracking').map((entry) => entry.args[0])).toEqual([false])
 		expect(fake.hourAngle()).toBeLessThan(LATEST_AT)
 
@@ -1140,7 +1140,7 @@ describe('49.5 5 pause across the meridian', () => {
 		await clock.advance(30000)
 
 		expect(await process.result).toMatchObject({ state: 'stopped' })
-		expect(guiding.commands().slice(0, 2)).toEqual(['pause', 'stop'])
+		expect(guiding.commands().slice(0, 3)).toEqual(['beginRun', 'pause', 'stop'])
 		expect(fake.of('tracking')[0].args[0]).toBeFalse()
 		expect(process.events.find((event) => event.type === 'meridianProtectionFailed')).toMatchObject({ reason: 'guidingNotQuiescent', lateStart: false })
 		assertOracle(fake, configuration, [process.log], { guiding })
@@ -1161,7 +1161,7 @@ describe('49.5 5 pause across the meridian', () => {
 		expect(process.exposures).toEqual(['frame[F][1]#1'])
 		// Guiding was paused by the protection, paused again right before the flip moved the mount, and recovered by a new
 		// start (never a resume of the old lock position); the shutdown pauses it before the tracking off and stops it.
-		expect(guiding.commands()).toEqual(['pause', 'pause', 'start', 'pause', 'stop'])
+		expect(guiding.commands()).toEqual(['beginRun', 'pause', 'pause', 'start', 'pause', 'stop', 'endRun'])
 		expect(process.events.filter((event) => event.type === 'meridianFlipCompleted')).toHaveLength(1)
 		assertOracle(fake, configuration, [process.log], { guiding })
 	})

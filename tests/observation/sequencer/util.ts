@@ -1134,8 +1134,6 @@ export interface ScriptedGuidingSessionOptions {
 	readonly reserve?: readonly ResourceRequest[]
 	// Resources held by the root `guiding`; default the reserved ones.
 	readonly hold?: readonly ResourceRequest[]
-	// Whether the session has a run admission (`beginRun`/`endRun`); default true.
-	readonly run?: boolean
 	// Pulse quiescence bound, in ms; default 1000.
 	readonly bound?: number
 	// Capacity of the interruption history; default 256.
@@ -1147,8 +1145,6 @@ export interface ScriptedGuidingSessionOptions {
 // command in the shared sequence. Interruptions are recorded by `interrupt`.
 export class ScriptedGuidingSession implements GuidingSession, Ditherer {
 	readonly log: ScriptedGuidingEntry[] = []
-	readonly beginRun?: () => OperationResult<void>
-	readonly endRun?: () => void
 	current: GuidingSessionState = 'stopped'
 	beginRunResult: OperationResult<void> = successfulOperationResult(undefined)
 	onStart: ScriptedGuidingStep = () => successfulOperationResult(undefined)
@@ -1167,20 +1163,23 @@ export class ScriptedGuidingSession implements GuidingSession, Ditherer {
 	) {
 		this.#sequence = sequence
 		this.#history = new GuidingInterruptionHistory(options.capacity)
-
-		if (options.run !== false) {
-			this.beginRun = () => {
-				this.#record('beginRun')
-				return this.beginRunResult
-			}
-			this.endRun = () => this.#record('endRun')
-		}
 	}
 
 	// Commands received, in order.
 	commands() {
 		return this.log.map((entry) => entry.command)
 	}
+
+	beginRun() {
+		this.#record('beginRun')
+		return this.beginRunResult
+	}
+
+	endRun() {
+		this.#record('endRun')
+	}
+
+	preflight(report: (message: string) => void) {}
 
 	resources() {
 		const reserve = this.options.reserve ?? [{ key: 'logical:scripted-guider' }]

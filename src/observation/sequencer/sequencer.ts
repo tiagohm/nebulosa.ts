@@ -402,7 +402,7 @@ export interface SequencerAutofocusConfiguration {
 	readonly onFailure: SequencerOptionalFailureAction
 }
 
-// Settle condition of guiding, in the shape of a PHD2 settle.
+// Settle condition of guiding.
 export interface SequencerGuidingSettle {
 	// Accepted guide error, in guide-camera pixels; finite > 0.
 	readonly pixels: number

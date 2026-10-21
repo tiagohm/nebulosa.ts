@@ -613,7 +613,7 @@ describe('2a and the guiding pause', () => {
 	const guided = () => configurationOf({ guiding: { settle: { pixels: 1, time: 1, timeout: 10 }, pauseTimeout: 0.6, maxRecoveries: 0, recalibrate: false, flipCalibration: false, onFailure: 'fail' } })
 
 	test('45: a pause that ends within pauseTimeout precedes the tracking off', async () => {
-		const guiding = new ScriptedGuidingSession({ run: false }, sequence)
+		const guiding = new ScriptedGuidingSession({}, sequence)
 		guiding.current = 'guiding'
 		let pausedAt = Number.NaN
 		guiding.onPause = () =>
@@ -633,7 +633,7 @@ describe('2a and the guiding pause', () => {
 	})
 
 	test('47: a pause that never ends is cut at pauseTimeout, guiding is stopped, tracking still goes off: guidingNotQuiescent', async () => {
-		const guiding = new ScriptedGuidingSession({ run: false }, sequence)
+		const guiding = new ScriptedGuidingSession({}, sequence)
 		guiding.current = 'guiding'
 		guiding.onPause = (context) => untilAborted(context.signal)
 		const s = armed({ configuration: guided(), guiding })

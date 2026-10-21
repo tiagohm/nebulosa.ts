@@ -2,8 +2,6 @@ import { failedOperationResult, type OperationResult, type OperationScope } from
 import { resourceKey } from '../../devices/orchestration/resource'
 import { type Ditherer, type DitherRequest, MountDitherer } from '../guiding/ditherer'
 import type { GuidingSession, GuidingSessionState } from '../guiding/session'
-import { LocalGuidingSession } from '../guiding/session.client'
-import { PHD2GuidingSession } from '../guiding/session.phd2'
 import { failedTask, taskResult } from './lifecycle'
 import type { SequencerContext, SequencerShutdownTask, SequencerTask, SequencerTaskResult } from './runner'
 // oxfmt-ignore
@@ -12,8 +10,8 @@ import { advanceSequencerMeridianFlip, toMeridianFlipPolicy } from './state'
 import { ditherDue, recordSequencerActionSuccess } from './trigger'
 
 // Guiding and dither of the Sequencer: the `GuidingSession` and the `Ditherer` of the caller driven at the safe points
-// of the session, independent of each other and of PHD2 or the local GuiderClient. The startup proves the quiescence of
-// pulses dispatched before the run (`quiesceGuiding` for a session with a run admission, `quiesceDitherPulses` for a
+// of the session, independent of each other and of the local GuiderClient. The startup proves the quiescence of pulses
+// dispatched before the run (`quiesceGuiding` for the guiding session and its run admission, `quiesceDitherPulses` for a
 // pulse mount ditherer, whose inherited-pulse barrier the runner installs right after the reservation); the pre-capture
 // ensures guiding before every light (start, resume or recovery, always ending on a settle) and keeps it paused for a
 // calibration frame whose optical path is closed, then dithers when due (`ditherAndSettle`, which ends only after its
@@ -69,13 +67,13 @@ export async function pauseGuidingOf(context: SequencerContext, guiding: Guiding
 	return quiescenceResult(await pauseSequencerGuiding(context.scope, guiding, configuration.pauseTimeout, context.clock), 'guidingNotQuiescent')
 }
 
-// Startup task `quiesceGuiding` (0c), first physical command of a run whose guiding session installed a run admission:
-// pauses the guiding, proving the end of the pulses dispatched before the run within `pulseQuiescenceBound()` ≤
-// `pauseTimeout`. Its failure applies the startup policy.
+// Startup task `quiesceGuiding` (0c), first physical command of a guided run, once its guiding session installed the run
+// admission: pauses the guiding, proving the end of the pulses dispatched before the run within
+// `pulseQuiescenceBound()` ≤ `pauseTimeout`. Its failure applies the startup policy.
 export function quiesceGuidingTask(guiding: GuidingSession, configuration: SequencerGuidingConfiguration): SequencerTask {
 	return {
 		id: 'quiesceGuiding',
-		shouldRun: () => guiding.beginRun !== undefined,
+		shouldRun: () => true,
 		run: async (context) => quiescenceResult(await pauseSequencerGuiding(context.scope, guiding, configuration.pauseTimeout, context.clock), 'guidingNotQuiescent'),
 	}
 }
@@ -174,7 +172,7 @@ export function stopGuidingTask(guiding: GuidingSession, policy: SequencerShutdo
 }
 
 // Startup tasks of the guiding and the dither in their fixed order (section 42), before every lifecycle task: the
-// guiding quiescence of a session with a run admission, then the pulse quiescence of a pulse mount ditherer.
+// guiding quiescence of the guiding session, then the pulse quiescence of a pulse mount ditherer.
 export function sequencerGuidingStartupTasks(configuration: Pick<SequencerConfiguration, 'guiding' | 'dither'>, services: SequencerGuidingServices): SequencerTask[] {
 	const tasks: SequencerTask[] = []
 	if (configuration.guiding !== undefined && services.guiding !== undefined) tasks.push(quiesceGuidingTask(services.guiding, configuration.guiding))
@@ -209,8 +207,7 @@ export function sequencerShutdownTasks(configuration: Pick<SequencerConfiguratio
 // services of the caller. It never commands anything. Every problem is returned as a diagnostic of the configuration
 // path it concerns:
 // - guiding needs a guiding session whose `pulseQuiescenceBound()` fits `guiding.pauseTimeout`; a local session needs
-//   a pulse ceiling the guider configuration does not exceed; a PHD2 session needs a finite positive pulse premise and
-//   Paused allowance;
+//   a pulse ceiling the guider configuration does not exceed;
 // - dither needs a ditherer that accepts the configured request; a mount ditherer never dithers a guided session, and
 //   by pulse it needs both positive directions, a finite positive longest pulse and a guide output that pulses;
 // - nothing the guiding or the ditherer holds for itself is a device the session commands (the guide camera on the
@@ -224,19 +221,13 @@ export function preflightSequencerGuiding(configuration: SequencerConfiguration,
 	if (guiding !== undefined) {
 		const session = services.guiding
 
-		if (session === undefined) report('guiding', 'requires a guiding session')
-		else {
+		if (session === undefined) {
+			report('guiding', 'requires a guiding session')
+		} else {
 			const bound = session.pulseQuiescenceBound()
 			if (!(guiding.pauseTimeout * 1000 >= bound)) report('guiding.pauseTimeout', `must be at least ${bound / 1000} s, the pulse quiescence bound of the guiding session`)
 
-			if (session instanceof LocalGuidingSession) {
-				const longest = session.client.maxPulseDuration()
-				if (longest > session.pulseCeiling) report('guiding', `the guider allows ${longest} ms pulses, above the pulse ceiling of ${session.pulseCeiling} ms`)
-			} else if (session instanceof PHD2GuidingSession) {
-				const { maxGuidePulse, pausedEventAllowance } = session.options
-				if (!(maxGuidePulse > 0 && Number.isFinite(maxGuidePulse))) report('guiding', 'the PHD2 session needs a finite positive maxGuidePulse')
-				if (pausedEventAllowance !== undefined && !(pausedEventAllowance > 0 && Number.isFinite(pausedEventAllowance))) report('guiding', 'the PHD2 session needs a finite positive pausedEventAllowance')
-			}
+			session.preflight((message) => report('guiding', message))
 
 			for (const request of session.resources().hold) {
 				if (keys.has(request.key)) report('guiding', `holds ${request.device?.name ?? request.key}, a device the session commands`)

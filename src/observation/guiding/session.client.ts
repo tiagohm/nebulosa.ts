@@ -150,6 +150,12 @@ export class LocalGuidingSession implements GuidingSession, Ditherer {
 		this.#admission = undefined
 	}
 
+	// Reports a local session needs a pulse ceiling the guider configuration does not exceed.
+	preflight(report: (message: string) => void) {
+		const longest = this.client.maxPulseDuration()
+		if (longest > this.pulseCeiling) report(`the guider allows ${longest} ms pulses, above the pulse ceiling of ${this.pulseCeiling} ms`)
+	}
+
 	// Connects the client when needed, opens the root `guiding` when it does not live, then, in one synchronous block,
 	// opens the gate and asks the client to guide (closing the gate again when it refuses), and waits for the settle
 	// after that call as a child of `task`. 'unexpectedState' without a begun run. The gate stays open after a settle

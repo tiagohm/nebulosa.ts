@@ -101,7 +101,7 @@ function startProcess(configuration: SequencerConfiguration, options: ProcessOpt
 	const sequence = createTestSequence()
 	const devices = recordDevices(rig, clock, sequence)
 	const roots = recordRunner(rig.coordinator, sequence)
-	const guiding = options.guiding === true ? new ScriptedGuidingSession({ run: false }, sequence) : undefined
+	const guiding = options.guiding === true ? new ScriptedGuidingSession({}, sequence) : undefined
 	const guidingServices = guiding === undefined ? {} : { guiding, ditherer: guiding }
 	const requests: CameraCaptureStart[] = []
 	const start = rig.capturer.start.bind(rig.capturer)

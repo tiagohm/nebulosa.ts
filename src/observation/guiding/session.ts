@@ -83,13 +83,16 @@ export interface GuidingSession {
 	// Current state, read synchronously.
 	readonly state: () => GuidingSessionState
 
+	// Reports every problem found as a diagnostic.
+	readonly preflight: (report: (message: string) => void) => void
+
 	// Delimit one run of an observation session. `beginRun` is synchronous and acquisition only: it installs what makes
 	// `pulseQuiescenceBound()` true for every pulse of the run (the closed pulse admission of the local guider) and
 	// never commands a device nor waits. It fails 'busy' when another owner holds what it installs, and with any other
 	// reason when the configuration refuses it; nothing survives a failure. After a success `endRun` is called exactly
-	// once when the run ends, whatever the outcome; it is idempotent. Absent when the guider needs neither (PHD2).
-	readonly beginRun?: () => OperationResult<void>
-	readonly endRun?: () => void
+	// once when the run ends, whatever the outcome; it is idempotent.
+	readonly beginRun: () => OperationResult<void>
+	readonly endRun: () => void
 
 	// Starts or recovers the guiding and resolves only after its settle (SettleDone with status 0) or with the failure.
 	// `task` is the scope of the caller: the commands of the start and the wait of the settle run as its children

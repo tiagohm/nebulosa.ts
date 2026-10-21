@@ -704,7 +704,7 @@ export class SequencerRunner {
 	// admission, 'configuration' otherwise) without any command. Returns whether the run may go on.
 	#beginRun() {
 		const { guiding } = this.#services
-		if (this.#configuration.guiding === undefined || guiding?.beginRun === undefined) return true
+		if (this.#configuration.guiding === undefined || guiding === undefined) return true
 
 		const begun = guiding.beginRun()
 
@@ -713,7 +713,7 @@ export class SequencerRunner {
 			return this.#refuse(begun.reason === 'busy' ? { kind: 'operation', reason: 'busy', detail } : { kind: 'configuration', detail })
 		}
 
-		this.#endRun = () => guiding.endRun?.()
+		this.#endRun = () => guiding.endRun()
 		return true
 	}
 
