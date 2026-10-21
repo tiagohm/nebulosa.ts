@@ -218,9 +218,13 @@ export function computeHourAngle(localSiderealTime: Angle, rightAscension: Angle
 	return hourAngle(localSiderealTime, rightAscension)
 }
 
-// Creates the initial persisted lifecycle state for one Meridian Flip cycle.
-export function createMeridianFlipState(): MeridianFlipState {
-	return { phase: 'WAITING', attempts: 0, preparationCompleted: false }
+// Creates the initial persisted lifecycle state for one Meridian Flip cycle. `attempts` is the number of
+// FLIP_STARTED events already accepted for this cycle, for example restored after a restart, so the retry budget
+// spans every process of the cycle; it must be a non-negative safe integer and defaults to 0.
+export function createMeridianFlipState(attempts: number = 0): MeridianFlipState {
+	const state: MeridianFlipState = { phase: 'WAITING', attempts, preparationCompleted: false }
+	validateState(state)
+	return state
 }
 
 // Evaluates the current policy, telemetry snapshot, and lifecycle state without side effects.
@@ -245,7 +249,8 @@ export function evaluateMeridianFlip(policy: MeridianFlipPolicy, snapshot: Merid
 		return decision('COMPLETED', 'COMPLETE', 'ALREADY_ON_POST_FLIP_SIDE', hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, updateState(state, 'COMPLETED', state.attempts, state.preparationCompleted))
 	}
 
-	if (state.phase === 'COMPLETED') return decision('COMPLETED', 'COMPLETE', 'FLIP_COMPLETED', hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, state)
+	// A cycle completed without any started flip only ever found the mount on its post-flip side.
+	if (state.phase === 'COMPLETED') return decision('COMPLETED', 'COMPLETE', state.attempts > 0 ? 'FLIP_COMPLETED' : 'ALREADY_ON_POST_FLIP_SIDE', hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, state)
 	if (state.phase === 'FAILED') return evaluateFailedState(resolved, snapshot, state, hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped)
 
 	if (isPreFlipPhase(state.phase)) {
@@ -277,7 +282,7 @@ export function transitionMeridianFlip(policy: MeridianFlipPolicy, state: Meridi
 	}
 
 	if (event.type === 'FLIP_STARTED') {
-		if (state.phase === 'READY' && state.preparationCompleted) return updateState(state, 'FLIPPING', state.attempts + 1, true)
+		if (state.phase === 'READY' && state.preparationCompleted && state.attempts <= resolved.maxRetries) return updateState(state, 'FLIPPING', state.attempts + 1, true)
 		if (state.phase === 'FAILED' && state.attempts >= 1 && state.attempts <= resolved.maxRetries) return updateState(state, 'FLIPPING', state.attempts + 1, true)
 		throwInvalidTransition()
 	}
@@ -407,8 +412,14 @@ function evaluatePreFlipThresholds(resolved: ResolvedMeridianFlipPolicy, snapsho
 		return decision('READY', isOverdue ? 'ABORT_EXPOSURE' : 'WAIT_FOR_EXPOSURE', isOverdue ? 'LATEST_THRESHOLD_REACHED' : 'WAITING_FOR_EXPOSURE', hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, updateState(state, 'READY', state.attempts, state.preparationCompleted))
 	}
 
-	if (!state.preparationCompleted && snapshot.isGuiding === true) return decision('READY', 'PAUSE_GUIDING', reason, hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, updateState(state, 'READY', state.attempts, false))
+	// A cycle restored with its retry budget already spent never starts another flip.
+	const exhausted = state.attempts > resolved.maxRetries
+	if (!state.preparationCompleted && snapshot.isGuiding === true) {
+		if (exhausted) return failedDecision(state, 'RETRY_LIMIT_REACHED', hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped)
+		return decision('READY', 'PAUSE_GUIDING', reason, hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, updateState(state, 'READY', state.attempts, false))
+	}
 	if (!isMountReadyForFlip(snapshot)) return decision('READY', 'NONE', reason, hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, updateState(state, 'READY', state.attempts, true))
+	if (exhausted) return failedDecision(state, 'RETRY_LIMIT_REACHED', hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped)
 	return decision('READY', 'START_FLIP', reason, hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, updateState(state, 'READY', state.attempts, true))
 }
 

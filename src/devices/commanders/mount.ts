@@ -1,6 +1,6 @@
 import { angularDistance } from '../../astronomy/coordinates/coordinate'
 import type { GeographicCoordinate } from '../../astronomy/observer/location'
-import { timeNow } from '../../astronomy/time/time'
+import { type Time, timeNow } from '../../astronomy/time/time'
 import { DEG2RAD } from '../../core/constants'
 import { errorMessage } from '../../core/util'
 import type { Angle } from '../../math/units/angle'
@@ -26,6 +26,11 @@ export type MountMoveDirection = 'NORTH' | 'SOUTH' | 'WEST' | 'EAST'
 
 // Timing and precision overrides for one mount command; every duration is in milliseconds.
 export interface MountCommandOptions {
+	// Instant at which a target in a time-dependent frame (J2000, ALTAZ, ECLIPTIC, GALACTIC) is converted to the
+	// equinox-of-date coordinate the mount takes. A JNOW target is used as given. Defaults to the host clock
+	// when the command starts; a caller that compares the commanded coordinate with its own computations passes
+	// the instant it used for them, so both come from the same conversion.
+	readonly time?: Time
 	// Maximum time the commanded state may take to be observed.
 	readonly timeout?: number
 	// Angular distance, in radians, under which the mount already counts as pointing at the target.
@@ -177,7 +182,7 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 			if (!mount.connected) return failedOperationResult('disconnected')
 			if (!mount.canGoTo) return unsupported(mount, 'go to a target')
 
-			const [rightAscension, declination] = resolveTarget(mount, target)
+			const [rightAscension, declination] = resolveTarget(mount, target, options.time)
 			const slewed = await this.#slew(context, mount, rightAscension, declination, 'goto', options)
 
 			return slewed.ok ? successfulOperationResult(slewResult(mount)) : slewed
@@ -191,7 +196,7 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 			if (!mount.canFlip) return unsupported(mount, 'flip')
 
 			const initialPierSide = mount.pierSide
-			const [rightAscension, declination] = resolveTarget(mount, target)
+			const [rightAscension, declination] = resolveTarget(mount, target, options.time)
 			const slewed = await this.#slew(context, mount, rightAscension, declination, 'flip', options)
 
 			if (!slewed.ok) return slewed
@@ -207,13 +212,13 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 	}
 
 	// Redefines the mount's idea of where it is pointing. The driver applies it without any movement, so
-	// there is no observable transition to wait for.
-	async sync(scope: OperationScope, mount: Mount, target: MountTargetCoordinate<string | Angle>): Promise<OperationResult<void>> {
+	// there is no observable transition to wait for. Only `options.time` applies.
+	async sync(scope: OperationScope, mount: Mount, target: MountTargetCoordinate<string | Angle>, options: MountCommandOptions = {}): Promise<OperationResult<void>> {
 		return await scope.start<void>('mountSync', [{ key: resourceKey(mount), device: mount }], () => {
 			if (!mount.connected) return failedOperationResult('disconnected')
 			if (!mount.canSync) return unsupported(mount, 'sync')
 
-			const [rightAscension, declination] = resolveTarget(mount, target)
+			const [rightAscension, declination] = resolveTarget(mount, target, options.time)
 			this.mountManager.syncTo(mount, rightAscension, declination)
 
 			return successfulOperationResult(undefined)
@@ -302,16 +307,29 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 		)
 	}
 
-	// Selects the tracking rate applied while the mount is tracking.
-	async setTrackMode(scope: OperationScope, mount: Mount, mode: TrackMode): Promise<OperationResult<void>> {
-		return await this.#mutate(
-			scope,
-			'mountTrackMode',
-			mount,
-			() => mount.canTracking,
-			'change the track mode',
-			() => this.mountManager.trackMode(mount, mode),
-		)
+	// Selects the tracking rate applied while the mount is tracking and resolves only after the mount reports
+	// it, so a caller never starts tracking at a rate the driver ignored or refused. An Alert on the track mode
+	// fails it as `alert`; `options.timeout` bounds the wait.
+	async setTrackMode(scope: OperationScope, mount: Mount, mode: TrackMode, options: MountCommandOptions = {}): Promise<OperationResult<void>> {
+		return await scope.start<void>('mountTrackMode', [{ key: resourceKey(mount), device: mount }], async (context) => {
+			if (!mount.connected) return failedOperationResult('disconnected')
+			if (!mount.canTracking) return unsupported(mount, 'change the track mode')
+
+			const observed = await waitForDeviceState<MountUpdate>({
+				signal: context.signal,
+				timeout: options.timeout ?? DEFAULT_SWITCH_TIMEOUT,
+				subscribe: (listener) => this.#subscribe(mount, listener),
+				current: () => ({ mount }),
+				evaluate: (update) => {
+					if (!mount.connected) return 'disconnected'
+					if (update.state === 'Alert' && update.property === 'trackMode') return 'alert'
+					return mount.trackMode === mode ? 'success' : 'pending'
+				},
+				command: () => this.mountManager.trackMode(mount, mode),
+			})
+
+			return observed.ok ? successfulOperationResult(undefined) : observed
+		}).result
 	}
 
 	// Selects the speed preset used by manual motion.
@@ -741,10 +759,10 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 }
 
 // Converts a target expressed in any supported frame into the equinox-of-date coordinate the mount
-// commands take, at the site the mount reports. The host clock is used, as not every mount keeps its
-// own time up to date.
-function resolveTarget(mount: Mount, target: MountTargetCoordinate<string | Angle>) {
-	return mountTargetEquatorial(mount, target, timeNow(true))
+// commands take, at the site the mount reports and at `time`. Without it the host clock is used, as not
+// every mount keeps its own time up to date.
+function resolveTarget(mount: Mount, target: MountTargetCoordinate<string | Angle>, time: Time = timeNow(true)) {
+	return mountTargetEquatorial(mount, target, time)
 }
 
 // Angular distance in radians between where the mount points and the requested target.

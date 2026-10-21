@@ -1245,7 +1245,8 @@ export class MountSimulator extends DeviceSimulator {
 		this.#refreshSlewingState()
 		this.#setHoming(false)
 		this.#setParking(false)
-		this.#setMechanical(rightAscension - this.#indexErrorRightAscension, declination - this.#indexErrorDeclination)
+		// Published at once: a sync is a discontinuity, and a tracking mount would otherwise never republish it.
+		this.#setMechanical(rightAscension - this.#indexErrorRightAscension, declination - this.#indexErrorDeclination, true, true)
 		// A sync is also how this simulator places the axes, so it is one of the moments the side of the
 		// pier is decided rather than inherited.
 		this.#refreshPierSide()
@@ -2396,6 +2397,14 @@ export class MountSimulator extends DeviceSimulator {
 	#setPulsing(pulsingNS: boolean, pulsingWE: boolean) {
 		const stateNS = pulsingNS ? 'Busy' : 'Idle'
 		const stateWE = pulsingWE ? 'Busy' : 'Idle'
+
+		// A pulse that ended leaves the axes where it moved them. The coordinate is published before the Idle, as a driver
+		// polling its position does, so a tracking mount, which stands still afterwards, does not keep the last value the
+		// rate limit let through during the pulse.
+		if ((this.#guideNS.state === 'Busy' && !pulsingNS) || (this.#guideWE.state === 'Busy' && !pulsingWE)) {
+			this.#notifyCoordinateLastTime = this.#utcTime
+			this.notify(this.#equatorialCoordinate)
+		}
 
 		if (this.#guideNS.state !== stateNS) {
 			this.#guideNS.state = stateNS

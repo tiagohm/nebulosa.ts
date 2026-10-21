@@ -279,6 +279,63 @@ test('resets deleted INDI properties to defaults', () => {
 	expect(device.time).toEqual(DEFAULT_MOUNT.time)
 })
 
+test('reports the coordinates as published only once the driver sends finite values', () => {
+	const manager = new MountManager()
+	const mount = setupTestMount(manager)
+	const updates: string[] = []
+	manager.addHandler({ added: () => {}, removed: () => {}, updated: (_, property) => updates.push(property) })
+
+	expect(mount.hasEquatorialCoordinate).toBeFalse()
+	expect(mount.hasGeographicCoordinate).toBeFalse()
+
+	const equatorial = (RA: number, DEC: number) => ({ device: mount.name, name: 'EQUATORIAL_EOD_COORD', permission: 'rw', state: 'Idle', elements: { RA: defNumber('RA', RA, 0, 24), DEC: defNumber('DEC', DEC, -90, 90) } }) as const
+	const geographic = (LAT: number, LONG: number) => ({ device: mount.name, name: 'GEOGRAPHIC_COORD', permission: 'rw', state: 'Idle', elements: { LAT: defNumber('LAT', LAT, -90, 90), LONG: defNumber('LONG', LONG), ELEV: defNumber('ELEV', 0, -200, 10000) } }) as const
+
+	// A non-finite or partial message is not a published coordinate.
+	manager.numberVector(recordingClient, equatorial(Number.NaN, 0), 'defNumberVector')
+	manager.numberVector(recordingClient, { device: mount.name, name: 'EQUATORIAL_EOD_COORD', state: 'Idle', elements: { RA: { name: 'RA', value: 0 } } }, 'setNumberVector')
+	manager.numberVector(recordingClient, geographic(0, Number.POSITIVE_INFINITY), 'defNumberVector')
+	expect(mount.hasEquatorialCoordinate).toBeFalse()
+	expect(mount.hasGeographicCoordinate).toBeFalse()
+
+	// Values equal to the zero defaults are reported, since only now are they real.
+	updates.length = 0
+	manager.numberVector(recordingClient, equatorial(0, 0), 'defNumberVector')
+	manager.numberVector(recordingClient, geographic(0, 0), 'defNumberVector')
+	expect(mount.hasEquatorialCoordinate).toBeTrue()
+	expect(mount.hasGeographicCoordinate).toBeTrue()
+	expect(mount.equatorialCoordinate).toEqual({ rightAscension: 0, declination: 0 })
+	expect(updates).toEqual(['hasEquatorialCoordinate', 'equatorialCoordinate', 'hasGeographicCoordinate', 'geographicCoordinate'])
+
+	// Unchanged values publish nothing more, and deleting the vectors withdraws the coordinates.
+	updates.length = 0
+	manager.numberVector(recordingClient, equatorial(0, 0), 'setNumberVector')
+	expect(updates).toBeEmpty()
+	manager.delProperty(recordingClient, { device: mount.name, name: 'EQUATORIAL_EOD_COORD' })
+	manager.delProperty(recordingClient, { device: mount.name, name: 'GEOGRAPHIC_COORD' })
+	expect(mount.hasEquatorialCoordinate).toBeFalse()
+	expect(mount.hasGeographicCoordinate).toBeFalse()
+
+	// A set after the deletion publishes them again.
+	manager.numberVector(recordingClient, equatorial(5, 30), 'setNumberVector')
+	expect(mount.hasEquatorialCoordinate).toBeTrue()
+	expect(mount.equatorialCoordinate.rightAscension).toBeCloseTo(hour(5), 12)
+})
+
+test('reports an Alert on the track mode even when the mode is unchanged', () => {
+	const manager = new MountManager()
+	const mount = setupTestMount(manager)
+	const updates: [string, string | undefined][] = []
+	manager.addHandler({ added: () => {}, removed: () => {}, updated: (_, property, state) => updates.push([property, state]) })
+	const trackMode = (state: 'Idle' | 'Alert') => ({ device: mount.name, name: 'TELESCOPE_TRACK_MODE', state, elements: { TRACK_SIDEREAL: { name: 'TRACK_SIDEREAL', value: true }, TRACK_LUNAR: { name: 'TRACK_LUNAR', value: false } } }) as const
+
+	manager.switchVector(recordingClient, trackMode('Idle'), 'setSwitchVector')
+	expect(updates).toBeEmpty()
+	manager.switchVector(recordingClient, trackMode('Alert'), 'setSwitchVector')
+	expect(updates).toEqual([['trackMode', 'Alert']])
+	expect(mount.trackMode).toBe('SIDEREAL')
+})
+
 describe('INDI alignment', () => {
 	function setupMount(manager: MountManager) {
 		const mount = structuredClone(DEFAULT_MOUNT)

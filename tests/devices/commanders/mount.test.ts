@@ -1,8 +1,9 @@
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
+import { timeYMDHMS } from '../../../src/astronomy/time/time'
 import { MountCommander } from '../../../src/devices/commanders/mount'
 import { IndiClientHandlerSet } from '../../../src/devices/indi/client'
 import type { Mount, MountTargetCoordinate } from '../../../src/devices/indi/device'
-import { MountManager } from '../../../src/devices/indi/manager/mount'
+import { MountManager, mountTargetEquatorial } from '../../../src/devices/indi/manager/mount'
 import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
 import { MountSimulator } from '../../../src/devices/indi/simulator/mount'
 import type { PropertyState, SetSwitchVector } from '../../../src/devices/indi/types'
@@ -456,6 +457,92 @@ test('dispatches synchronization and mount configuration commands', async () => 
 
 	expect(await mountCommander.setHome(operationCoordinator, device)).toMatchObject({ ok: true })
 	expect(await mountCommander.setPark(operationCoordinator, device)).toMatchObject({ ok: true })
+})
+
+test('converts the target at the instant the caller gives', async () => {
+	const device = await connected()
+	const target: MountTargetCoordinate<number> = { type: 'J2000', J2000: { x: hour(5), y: deg(-29) } }
+	const time = timeYMDHMS(2031, 3, 20, 3, 0, 0)
+	const expected = mountTargetEquatorial(device, target, time)
+	const host = mountTargetEquatorial(device, target)
+	const commanded: [string, number, number][] = []
+	const record = (kind: string) => (_: Mount, rightAscension: number, declination: number) => {
+		commanded.push([kind, rightAscension, declination])
+		mountCommander.updated(device, 'slewing', 'Alert')
+	}
+	const goTo = spyOn(mountManager, 'goTo').mockImplementation(record('goTo'))
+	const flipTo = spyOn(mountManager, 'flipTo').mockImplementation(record('flipTo'))
+	const syncTo = spyOn(mountManager, 'syncTo').mockImplementation(record('syncTo'))
+	device.canFlip = true
+
+	try {
+		await mountCommander.goTo(operationCoordinator, device, target, { time })
+		await mountCommander.flip(operationCoordinator, device, target, { time })
+		await mountCommander.sync(operationCoordinator, device, target, { time })
+		expect(commanded).toEqual([
+			['goTo', ...expected],
+			['flipTo', ...expected],
+			['syncTo', ...expected],
+		])
+
+		// Years of precession apart from the host clock, far beyond any rounding.
+		expect(Math.abs(expected[0] - host[0])).toBeGreaterThan(deg(0.02))
+
+		// Without a time the host clock is used, and a JNOW target is used as given whatever the time.
+		commanded.length = 0
+		await mountCommander.sync(operationCoordinator, device, target)
+		await mountCommander.sync(operationCoordinator, device, targetCoordinate(), { time })
+		expect(commanded[0][1]).toBeCloseTo(host[0], 6)
+		expect(commanded[1].slice(1)).toEqual(mountTargetEquatorial(device, targetCoordinate()))
+	} finally {
+		syncTo.mockRestore()
+		flipTo.mockRestore()
+		goTo.mockRestore()
+	}
+})
+
+test('selects a track mode only once the mount reports it', async () => {
+	const device = await connected()
+
+	expect(await mountCommander.setTrackMode(operationCoordinator, device, 'LUNAR')).toMatchObject({ ok: true })
+	expect(device.trackMode).toBe('LUNAR')
+	expect(await mountCommander.setTrackMode(operationCoordinator, device, 'SIDEREAL')).toMatchObject({ ok: true })
+	expect(device.trackMode).toBe('SIDEREAL')
+	expect(isFree(device)).toBeTrue()
+})
+
+test('fails a track mode the mount ignores, refuses or loses', async () => {
+	const device = await connected()
+	const trackModeVector = (state: PropertyState) => mountManager.switchVector(client, { device: device.name, name: 'TELESCOPE_TRACK_MODE', state, elements: { TRACK_SIDEREAL: { name: 'TRACK_SIDEREAL', value: device.trackMode === 'SIDEREAL' } } }, 'setSwitchVector')
+	const trackMode = spyOn(mountManager, 'trackMode').mockImplementation(() => {})
+
+	try {
+		expect(device.trackMode).toBe('SIDEREAL')
+		expect(await mountCommander.setTrackMode(operationCoordinator, device, 'SOLAR', { timeout: 100 })).toMatchObject(failedOperationResult('timeout'))
+		expect(device.trackMode).toBe('SIDEREAL')
+
+		trackMode.mockImplementation(() => trackModeVector('Alert'))
+		expect(await mountCommander.setTrackMode(operationCoordinator, device, 'SOLAR', { timeout: 5000 })).toMatchObject(failedOperationResult('alert'))
+
+		trackMode.mockImplementation(() => {
+			device.connected = false
+			mountCommander.updated(device, 'connected')
+		})
+		expect(await mountCommander.setTrackMode(operationCoordinator, device, 'SOLAR', { timeout: 5000 })).toMatchObject(failedOperationResult('disconnected'))
+		device.connected = true
+
+		// A canceled wait settles at the abort, long before its timeout.
+		trackMode.mockImplementation(() => {})
+		const started = performance.now()
+		const pending = mountCommander.setTrackMode(operationCoordinator, device, 'SOLAR', { timeout: 60000 })
+		await Bun.sleep(10)
+		await operationCoordinator.cancelByResource(resourceKey(device))
+		expect((await pending).ok).toBeFalse()
+		expect(performance.now() - started).toBeLessThan(1000)
+		await waitUntil(() => isFree(device))
+	} finally {
+		trackMode.mockRestore()
+	}
 })
 
 test('parks and unparks after the driver reports both transitions', async () => {

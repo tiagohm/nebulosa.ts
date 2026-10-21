@@ -1204,8 +1204,9 @@ interface AlpacaClientTelescopeState extends AlpacaClientDeviceState {
 	readonly AtPark: boolean
 	readonly IsPulseGuiding: boolean
 	readonly Slewing: boolean
-	readonly RightAscension: number
-	readonly Declination: number
+	// Polled position, in the mount's equatorial system; absent until read in the current connection.
+	RightAscension?: number
+	Declination?: number
 	readonly SlewRates?: readonly AlpacaAxisRate[]
 	readonly TrackingRates?: readonly AlpacaTelescopeTrackingRate[]
 	TrackingRate?: AlpacaTelescopeTrackingRate
@@ -1230,7 +1231,7 @@ class AlpacaTelescope extends AlpacaDevice {
 	protected readonly api: AlpacaTelescopeApi
 	// https://ascom-standards.org/newdocs/telescope.html#Telescope.DeviceState
 	// oxfmt-ignore
-	protected readonly state: AlpacaClientTelescopeState = { Connected: false, Step: 0, CanTrack: false, CanHome: false, CanPark: false, CanMovePrimaryAxis: false, CanMoveSecondaryAxis: false, CanPulseGuide: false, CanSlew: false, CanSync: false, CanSetGuideRate: false, CanSetSideOfPier: false, Tracking: false, AtPark: false, IsPulseGuiding: false, Slewing: false, RightAscension: 0, Declination: 0, LastUTCDateUpdate: 0, EquatorialSystem: 1 }
+	protected readonly state: AlpacaClientTelescopeState = { Connected: false, Step: 0, CanTrack: false, CanHome: false, CanPark: false, CanMovePrimaryAxis: false, CanMoveSecondaryAxis: false, CanPulseGuide: false, CanSlew: false, CanSync: false, CanSetGuideRate: false, CanSetSideOfPier: false, Tracking: false, AtPark: false, IsPulseGuiding: false, Slewing: false, LastUTCDateUpdate: 0, EquatorialSystem: 1 }
 	protected readonly initialEndpoints = ['CanHome', 'CanPark', 'CanMovePrimaryAxis', 'CanMoveSecondaryAxis', 'CanPulseGuide', 'CanTrack', 'CanSlew', 'CanSync', 'CanSetGuideRate', 'SlewRates', 'TrackingRates', 'CanSetSideOfPier', 'EquatorialSystem'] as const
 	protected readonly deviceStateEndpoints = ['AtPark', 'Declination', 'IsPulseGuiding', 'RightAscension', 'SideOfPier', 'Slewing', 'Tracking'] as const
 	protected readonly runningEndpoints = ['TrackingRate', 'GuideRateRA', 'GuideRateDEC', 'Latitude', 'Longitude', 'Elevation', 'UTCDate'] as const
@@ -1255,6 +1256,10 @@ class AlpacaTelescope extends AlpacaDevice {
 	readonly #now = timeNow() // Used in the conversion from J2000 to JNOW. Changes in precession/nutation angles are negligible.
 	// Invalidates the reply of a slew/sync when a newer target supersedes it.
 	#moveSequence = 0
+	// Whether EQUATORIAL_EOD_COORD and GEOGRAPHIC_COORD were defined in the current connection. Each is only
+	// defined once its values have been read, so a client never takes the zero defaults for a position or a site.
+	#equatorialCoordinateDefined = false
+	#geographicCoordinateDefined = false
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice, name: string) {
 		super(client, device, client.options.handler, name)
@@ -1317,15 +1322,12 @@ class AlpacaTelescope extends AlpacaDevice {
 	protected handleEndpointsAfterRun() {
 		if (!super.handleEndpointsAfterRun()) return false
 
-		const { Step, CanTrack, CanHome, CanPark, CanSlew, CanSync, CanMovePrimaryAxis, CanMoveSecondaryAxis, CanPulseGuide, CanSetGuideRate, CanSetSideOfPier, Tracking, AtPark, IsPulseGuiding, Slewing } = this.state
-		const { RightAscension, Declination, SlewRates, TrackingRates, TrackingRate, SideOfPier, UTCDate, Latitude, Longitude, Elevation, GuideRateRA, GuideRateDEC, EquatorialSystem } = this.state
-		const { LastRightAscension, LastDeclination } = this.state
-		// Alpaca and INDI are both east-positive, but INDI publishes longitude in [0, 360).
-		const longitude = Longitude !== undefined && Longitude < 0 ? Longitude + 360 : Longitude
+		const { Step, CanTrack, CanHome, CanPark, CanSlew, CanSync, CanMovePrimaryAxis, CanMoveSecondaryAxis, CanPulseGuide, CanSetGuideRate, CanSetSideOfPier, Tracking, AtPark, IsPulseGuiding } = this.state
+		const { SlewRates, TrackingRates, TrackingRate, SideOfPier, UTCDate, GuideRateRA, GuideRateDEC } = this.state
 
 		// Initial
 		if (Step === 1) {
-			this.sendDefProperty(this.#equatorialCoordinate)
+			this.#publishEquatorialCoordinate()
 			this.sendDefProperty(this.#abort)
 
 			if (!CanSync) delete this.#onCoordSet.elements.SYNC
@@ -1388,10 +1390,7 @@ class AlpacaTelescope extends AlpacaDevice {
 				}
 			}
 
-			this.#geographicCoordinate.elements.LAT.value = Latitude ?? 0
-			this.#geographicCoordinate.elements.LONG.value = longitude ?? 0
-			this.#geographicCoordinate.elements.ELEV.value = Elevation ?? 0
-			this.sendDefProperty(this.#geographicCoordinate)
+			this.#publishGeographicCoordinate()
 
 			this.sendDefProperty(this.#pierSide)
 
@@ -1433,15 +1432,7 @@ class AlpacaTelescope extends AlpacaDevice {
 				this.state.GuideRateDEC = undefined
 			}
 
-			if (Latitude !== undefined && Longitude !== undefined) {
-				let updated = this.updatePropertyValue(this.#geographicCoordinate, 'LAT', Latitude)
-				updated = this.updatePropertyValue(this.#geographicCoordinate, 'LONG', longitude) || updated
-				if (Elevation !== undefined) updated = this.updatePropertyValue(this.#geographicCoordinate, 'ELEV', Elevation) || updated
-				updated && this.sendSetProperty(this.#geographicCoordinate)
-				this.state.Latitude = undefined
-				this.state.Longitude = undefined
-				this.state.Elevation = undefined
-			}
+			this.#publishGeographicCoordinate()
 
 			if (UTCDate !== undefined) {
 				this.#time.elements.UTC.value = UTCDate.slice(0, 19)
@@ -1449,27 +1440,81 @@ class AlpacaTelescope extends AlpacaDevice {
 				this.state.UTCDate = undefined
 			}
 
-			if (RightAscension !== LastRightAscension || Declination !== LastDeclination) {
-				this.state.LastRightAscension = RightAscension
-				this.state.LastDeclination = Declination
-
-				let rightAscension = RightAscension
-				let declination = Declination
-
-				if (EquatorialSystem === 2) {
-					const [ra, dec] = equatorialFromJ2000(hour(RightAscension), deg(Declination), this.#now)
-					rightAscension = toHour(normalizeAngle(ra))
-					declination = toDeg(dec)
-				}
-
-				let updated = this.updatePropertyState(this.#equatorialCoordinate, Slewing ? 'Busy' : 'Idle')
-				updated = this.updatePropertyValue(this.#equatorialCoordinate, 'RA', rightAscension) || updated
-				updated = this.updatePropertyValue(this.#equatorialCoordinate, 'DEC', declination) || updated
-				updated && this.sendSetProperty(this.#equatorialCoordinate)
-			}
+			this.#publishEquatorialCoordinate()
 		}
 
 		return true
+	}
+
+	// Forgets the coordinates of the previous connection along with the rest of the handshake, so the next one
+	// defines its vectors only from values it has read itself.
+	protected override reset() {
+		super.reset()
+		this.state.RightAscension = undefined
+		this.state.Declination = undefined
+		this.state.LastRightAscension = undefined
+		this.state.LastDeclination = undefined
+		this.state.Latitude = undefined
+		this.state.Longitude = undefined
+		this.state.Elevation = undefined
+		this.#equatorialCoordinateDefined = false
+		this.#geographicCoordinateDefined = false
+	}
+
+	// Publishes the polled position, converted to JNOW when the mount reports J2000: defines the vector on the
+	// first read and then sends it whenever the position changes. Nothing is sent before both axes were read.
+	#publishEquatorialCoordinate() {
+		const { RightAscension, Declination, EquatorialSystem, Slewing, LastRightAscension, LastDeclination } = this.state
+
+		if (RightAscension === undefined || Declination === undefined) return
+		if (this.#equatorialCoordinateDefined && RightAscension === LastRightAscension && Declination === LastDeclination) return
+
+		this.state.LastRightAscension = RightAscension
+		this.state.LastDeclination = Declination
+
+		let rightAscension = RightAscension
+		let declination = Declination
+
+		if (EquatorialSystem === 2) {
+			const [ra, dec] = equatorialFromJ2000(hour(RightAscension), deg(Declination), this.#now)
+			rightAscension = toHour(normalizeAngle(ra))
+			declination = toDeg(dec)
+		}
+
+		let updated = this.updatePropertyState(this.#equatorialCoordinate, Slewing ? 'Busy' : 'Idle')
+		updated = this.updatePropertyValue(this.#equatorialCoordinate, 'RA', rightAscension) || updated
+		updated = this.updatePropertyValue(this.#equatorialCoordinate, 'DEC', declination) || updated
+
+		if (!this.#equatorialCoordinateDefined) {
+			this.#equatorialCoordinateDefined = true
+			this.sendDefProperty(this.#equatorialCoordinate)
+		} else if (updated) {
+			this.sendSetProperty(this.#equatorialCoordinate)
+		}
+	}
+
+	// Publishes the polled site: defines the vector once latitude and longitude were both read, then sends it
+	// whenever they or the elevation change. The elevation keeps its previous value, zero at first, until read.
+	#publishGeographicCoordinate() {
+		const { Latitude, Longitude, Elevation } = this.state
+
+		if (Latitude === undefined || Longitude === undefined) return
+
+		// Alpaca and INDI are both east-positive, but INDI publishes longitude in [0, 360).
+		let updated = this.updatePropertyValue(this.#geographicCoordinate, 'LAT', Latitude)
+		updated = this.updatePropertyValue(this.#geographicCoordinate, 'LONG', Longitude < 0 ? Longitude + 360 : Longitude) || updated
+		if (Elevation !== undefined) updated = this.updatePropertyValue(this.#geographicCoordinate, 'ELEV', Elevation) || updated
+
+		if (!this.#geographicCoordinateDefined) {
+			this.#geographicCoordinateDefined = true
+			this.sendDefProperty(this.#geographicCoordinate)
+		} else if (updated) {
+			this.sendSetProperty(this.#geographicCoordinate)
+		}
+
+		this.state.Latitude = undefined
+		this.state.Longitude = undefined
+		this.state.Elevation = undefined
 	}
 
 	// Handles mount switch commands: slew rate, slew/sync mode, abort, track mode/state, home, axis
@@ -1653,7 +1698,13 @@ class AlpacaTelescope extends AlpacaDevice {
 
 			if (result.ok || session !== this.session || sequence !== this.#moveSequence) return
 
-			// Sent even when the vector already reads Alert, so every refused command is reported.
+			// Sent even when the vector already reads Alert, so every refused command is reported. A vector not
+			// defined yet has no read position to carry the Alert with, and the refusal is only logged.
+			if (!this.#equatorialCoordinateDefined) {
+				console.warn(this.name, 'refused a coordinate command before its position was read')
+				return
+			}
+
 			this.updatePropertyState(this.#equatorialCoordinate, 'Alert')
 			this.sendSetProperty(this.#equatorialCoordinate)
 		}

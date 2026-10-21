@@ -99,10 +99,12 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 					const property = message.name === 'TELESCOPE_TIMED_GUIDE_NS' ? 'pulsingNS' : 'pulsingWE'
 					const parent = (device as SubDevice<GuideOutput, GuideOutput>).parent
 
-					if (handleSwitchValue(device, property, message.state === 'Busy', message.state)) {
-						this.updated(device, property, message.state)
-						this.updated(parent, property, message.state)
-					}
+					// Every definition and update of an axis is reported with its state, even when the flag is
+					// unchanged: a published stopped state is evidence that a pulse is not running on that axis,
+					// which an unchanged default could never be.
+					handleSwitchValue(device, property, message.state === 'Busy', message.state)
+					this.updated(device, property, message.state)
+					this.updated(parent, property, message.state)
 
 					if (handleSwitchValue(device, 'pulsing', device.pulsingNS || device.pulsingWE, message.state)) {
 						this.updated(device, 'pulsing', message.state)

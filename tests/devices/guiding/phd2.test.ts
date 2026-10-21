@@ -6,11 +6,10 @@ import { isBinaryTestSkipped } from '../../util'
 test.skipIf(isBinaryTestSkipped() && process.env.PHD2 !== 'true')(
 	'client',
 	async () => {
-		const client = new PHD2Client({
-			handler: {
-				event: (_, event) => {
-					console.info('EVENT:', event)
-				},
+		const client = new PHD2Client()
+		client.addHandler({
+			event: (_, event) => {
+				console.info('EVENT:', event)
 			},
 		})
 
@@ -75,11 +74,10 @@ test('reconnect discards a partial message from the previous socket', async () =
 			},
 		},
 	})
-	const client = new PHD2Client({
-		handler: {
-			close: () => firstClosed.resolve(),
-			event: (_, event) => eventReceived.resolve(event.Event),
-		},
+	const client = new PHD2Client()
+	client.addHandler({
+		close: () => firstClosed.resolve(),
+		event: (_, event) => eventReceived.resolve(event.Event),
 	})
 
 	try {

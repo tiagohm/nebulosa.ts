@@ -75,7 +75,7 @@ Preserve these boundaries:
 Project layout conventions:
 
 - Add modules to the existing domain folder that owns the responsibility. Do not create a new top-level `src/` category without a clear architectural need.
-- Keep `tests/` aligned with `src/`; shared `setup.ts`, `download.ts`, and `*.util.ts` files stay at the tests root.
+- Keep `tests/` aligned with `src/`; shared `setup.ts`, `download.ts` files stay at the tests root; shared files stay at `tests/util` directory.
 - Prefer dot-separated related filenames within a domain, such as `firmata.barometer.ts`, rather than adding shallow one-file subdirectories.
 - Use direct relative imports without `.ts` extensions. Do not add a barrel or broad `export *` surface unless an aggregated entry point is the task.
 - Reuse existing math, time, image, catalog, coordinate, and I/O modules before creating helpers.

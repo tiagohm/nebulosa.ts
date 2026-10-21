@@ -16,7 +16,7 @@ function temperatureVector(device: string, name: 'CCD_TEMPERATURE' | 'FOCUS_TEMP
 	}
 }
 
-test('preserves rounded camera and focuser temperatures', () => {
+test('preserves fractional camera and focuser temperatures', () => {
 	const { recordingClient } = createRecordingClient()
 
 	const cameraManager = new CameraManager()
@@ -27,19 +27,30 @@ test('preserves rounded camera and focuser temperatures', () => {
 	cameraThermometerManager.numberVector(recordingClient, temperatureVector(camera.name, 'CCD_TEMPERATURE', 'CCD_TEMPERATURE_VALUE', -10.4), 'defNumberVector')
 	const cameraThermometer = cameraThermometerManager.get(recordingClient, camera.name)!
 
-	expect(camera.temperature).toBe(-10)
-	expect(cameraThermometer.temperature).toBe(-10)
+	expect(camera.temperature).toBe(-10.4)
+	expect(cameraThermometer.temperature).toBe(-10.4)
 
 	cameraThermometerManager.numberVector(recordingClient, temperatureVector(camera.name, 'CCD_TEMPERATURE', 'CCD_TEMPERATURE_VALUE', 0.4), 'setNumberVector')
-	expect(camera.temperature).toBe(0)
+	expect(camera.temperature).toBe(0.4)
 
 	cameraThermometerManager.numberVector(recordingClient, temperatureVector(camera.name, 'CCD_TEMPERATURE', 'CCD_TEMPERATURE_VALUE', -10.5), 'setNumberVector')
-	expect(camera.temperature).toBe(-10)
+	expect(camera.temperature).toBe(-10.5)
 
 	const updates: string[] = []
 	cameraThermometerManager.addHandler({ added: () => {}, removed: () => {}, updated: (_, property) => updates.push(property) })
-	cameraThermometerManager.numberVector(recordingClient, temperatureVector(camera.name, 'CCD_TEMPERATURE', 'CCD_TEMPERATURE_VALUE', -10.5, 'Alert'), 'setNumberVector')
+
+	// A repeated reading does not notify.
+	cameraThermometerManager.numberVector(recordingClient, temperatureVector(camera.name, 'CCD_TEMPERATURE', 'CCD_TEMPERATURE_VALUE', -10.5), 'setNumberVector')
+	expect(updates).toBeEmpty()
+
+	// A sub-degree change notifies on the thermometer view and on the parent camera.
+	cameraThermometerManager.numberVector(recordingClient, temperatureVector(camera.name, 'CCD_TEMPERATURE', 'CCD_TEMPERATURE_VALUE', -10.2), 'setNumberVector')
+	expect(camera.temperature).toBe(-10.2)
 	expect(updates).toEqual(['temperature', 'temperature'])
+
+	// A repeated reading in Alert still notifies.
+	cameraThermometerManager.numberVector(recordingClient, temperatureVector(camera.name, 'CCD_TEMPERATURE', 'CCD_TEMPERATURE_VALUE', -10.2, 'Alert'), 'setNumberVector')
+	expect(updates).toEqual(['temperature', 'temperature', 'temperature', 'temperature'])
 
 	const focuserManager = new FocuserManager()
 	const focuser = setupDevice(structuredClone(DEFAULT_FOCUSER), recordingClient)
@@ -49,6 +60,6 @@ test('preserves rounded camera and focuser temperatures', () => {
 	focuserThermometerManager.numberVector(recordingClient, temperatureVector(focuser.name, 'FOCUS_TEMPERATURE', 'TEMPERATURE', 18.6), 'defNumberVector')
 	const focuserThermometer = focuserThermometerManager.get(recordingClient, focuser.name)!
 
-	expect(focuser.temperature).toBe(19)
-	expect(focuserThermometer.temperature).toBe(19)
+	expect(focuser.temperature).toBe(18.6)
+	expect(focuserThermometer.temperature).toBe(18.6)
 })

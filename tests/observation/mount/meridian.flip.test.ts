@@ -361,3 +361,63 @@ test('flip start beyond the retry limit is rejected', () => {
 	const exhausted: MeridianFlipState = { phase: 'FAILED', attempts: 2, preparationCompleted: true, failure: 'EXECUTION_FAILED' }
 	expect(() => transitionMeridianFlip(policy, exhausted, { type: 'FLIP_STARTED' })).toThrow(RangeError)
 })
+
+test('a restored cycle starts with the retry budget already consumed', () => {
+	expect(createMeridianFlipState()).toEqual({ phase: 'WAITING', attempts: 0, preparationCompleted: false })
+	expect(createMeridianFlipState(2)).toEqual({ phase: 'WAITING', attempts: 2, preparationCompleted: false })
+
+	for (const attempts of [-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
+		expect(() => createMeridianFlipState(attempts)).toThrow(RangeError)
+	}
+})
+
+test('a cycle beyond its retry budget fails instead of pausing guiding or starting a flip', () => {
+	const policy = basePolicy({ maxRetries: 1 })
+
+	for (const attempts of [2, 3]) {
+		for (const isGuiding of [false, true]) {
+			const restored = evaluateMeridianFlip(policy, snapshotAt(deg(2), { isGuiding }), createMeridianFlipState(attempts))
+			expectDecision(restored, 'FAILED', 'FAIL', 'RETRY_LIMIT_REACHED')
+			expect(restored.state).toEqual({ phase: 'FAILED', attempts, preparationCompleted: false, failure: 'RETRY_LIMIT_REACHED' })
+
+			const ready = evaluateMeridianFlip(policy, snapshotAt(deg(2), { isGuiding }), { phase: 'READY', attempts, preparationCompleted: true })
+			expectDecision(ready, 'FAILED', 'FAIL', 'RETRY_LIMIT_REACHED')
+			expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(2)), ready.state), 'FAILED', 'FAIL', 'RETRY_LIMIT_REACHED')
+		}
+	}
+
+	// Within the budget the restored cycle still flips, and before the threshold nothing fails.
+	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(2)), createMeridianFlipState(1)), 'READY', 'START_FLIP', 'FLIP_THRESHOLD_REACHED')
+	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(2), { isGuiding: true }), createMeridianFlipState(1)), 'READY', 'PAUSE_GUIDING', 'FLIP_THRESHOLD_REACHED')
+	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(-3)), createMeridianFlipState(2)), 'WAITING', 'NONE', 'BEFORE_PREPARE_WINDOW')
+	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(0)), createMeridianFlipState(2)), 'PREPARING', 'PREPARE', 'PREPARE_WINDOW_REACHED')
+})
+
+test('an exhausted cycle already on its post-flip side completes without failing', () => {
+	const policy = basePolicy({ maxRetries: 0, beforeFlipPierSide: 'EAST', afterFlipPierSide: 'WEST' })
+	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(3), { pierSide: 'WEST' }), createMeridianFlipState(1)), 'COMPLETED', 'COMPLETE', 'ALREADY_ON_POST_FLIP_SIDE')
+	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(3), { pierSide: 'EAST' }), createMeridianFlipState(1)), 'FAILED', 'FAIL', 'RETRY_LIMIT_REACHED')
+})
+
+test('a flip start from READY requires the retry budget', () => {
+	const policy = basePolicy({ maxRetries: 1 })
+
+	for (const attempts of [2, 5]) {
+		const exhausted = Object.freeze({ phase: 'READY', attempts, preparationCompleted: true }) as MeridianFlipState
+		expect(() => transitionMeridianFlip(policy, exhausted, { type: 'FLIP_STARTED' })).toThrow(RangeError)
+		expect(exhausted).toEqual({ phase: 'READY', attempts, preparationCompleted: true })
+	}
+
+	for (const attempts of [0, 1]) {
+		expect(transitionMeridianFlip(policy, { phase: 'READY', attempts, preparationCompleted: true }, { type: 'FLIP_STARTED' })).toEqual({ phase: 'FLIPPING', attempts: attempts + 1, preparationCompleted: true })
+	}
+})
+
+test('a completed cycle reports a flip only when one was started', () => {
+	const policy = basePolicy({ beforeFlipPierSide: 'EAST', afterFlipPierSide: 'WEST' })
+
+	const found = evaluateMeridianFlip(policy, snapshotAt(deg(-3), { pierSide: 'WEST' }))
+	expectDecision(found, 'COMPLETED', 'COMPLETE', 'ALREADY_ON_POST_FLIP_SIDE')
+	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(3), { pierSide: 'WEST' }), found.state), 'COMPLETED', 'COMPLETE', 'ALREADY_ON_POST_FLIP_SIDE')
+	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(3), { pierSide: 'WEST' }), { phase: 'COMPLETED', attempts: 1, preparationCompleted: true }), 'COMPLETED', 'COMPLETE', 'FLIP_COMPLETED')
+})

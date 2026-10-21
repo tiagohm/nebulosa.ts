@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { type CameraExposureTimeUnit, exposureTimeIn, exposureTimeInMicroseconds, exposureTimeInMilliseconds, exposureTimeInMinutes, exposureTimeInSeconds, exposureTimeUnitFactor } from '../../../src/devices/runners/camera.capture.types'
+import { type CameraExposureTimeUnit, exposureTimeUnitFactor, exposureTimeInMinutes, exposureTimeInSeconds, exposureTimeInMilliseconds, exposureTimeInMicroseconds, exposureTimeIn } from '../../../src/observation/capture/types'
 
 const UNITS: readonly CameraExposureTimeUnit[] = ['minute', 'second', 'millisecond', 'microsecond']
 

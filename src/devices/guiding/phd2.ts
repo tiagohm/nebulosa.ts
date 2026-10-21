@@ -4,7 +4,7 @@ import type { Point, Size } from '../../math/numerical/geometry'
 
 // Client for PHD2's TCP event-monitoring / JSON-RPC interface. Defines the PHD2 event and result types
 // and a PHD2Client that issues RPC commands (each a thin wrapper over send()) and dispatches async events
-// and command replies to a handler. Field names mirror the PHD2 protocol.
+// and command replies to every registered handler. Field names mirror the PHD2 protocol.
 
 // Default PHD2 server TCP port.
 export const DEFAULT_PHD2_PORT = 4400
@@ -366,12 +366,9 @@ export interface PHD2StarImage<P extends string | ImageRawType> extends Readonly
 	readonly pixels: P
 }
 
-// Options for a PHD2Client.
-export interface PHD2ClientOptions {
-	handler?: PHD2ClientHandler
-}
-
-// Callbacks for PHD2 events, command replies, and connection close.
+// Callbacks for PHD2 events, command replies, and connection close, registered with `PHD2Client.addHandler`.
+// Every handler receives every notification in registration order; an exception thrown by one is caught and
+// logged, so a failing observer can neither break the socket parsing nor keep the other handlers from being called.
 export interface PHD2ClientHandler {
 	readonly event?: (client: PHD2Client, event: PHD2Events) => void
 	readonly command?: (client: PHD2Client, command: PHD2Command, success: boolean, result: unknown) => void
@@ -403,15 +400,15 @@ interface PendingPHD2Command<T> {
 }
 
 // PHD2 JSON-RPC client over TCP. Connects to PHD2, sends commands and correlates their replies by id,
-// and dispatches asynchronous events to the handler. The command methods below are thin, self-describing
-// wrappers over send(); only the connection/transport internals are commented in detail.
+// and dispatches asynchronous events to every registered handler. The command methods below are thin,
+// self-describing wrappers over send(); only the connection/transport internals are commented in detail.
 export class PHD2Client implements Disposable {
 	readonly #commands = new Map<string, PendingPHD2Command<unknown>>()
 	#socket?: Bun.Socket
 	#buffer?: Buffer
 	#id?: string
-
-	constructor(readonly options?: PHD2ClientOptions) {}
+	// Observers of events, command replies and closes, notified in registration order.
+	readonly #handlers = new Set<PHD2ClientHandler>()
 
 	get remoteAddress() {
 		return this.#socket?.remoteAddress
@@ -431,6 +428,17 @@ export class PHD2Client implements Disposable {
 
 	get id() {
 		return this.#id
+	}
+
+	// Registers an observer of this client. Registering the same handler twice changes nothing; a handler added
+	// while a notification is being delivered may receive it.
+	addHandler(handler: PHD2ClientHandler) {
+		this.#handlers.add(handler)
+	}
+
+	// Unregisters an observer; idempotent, and safe while a notification is being delivered.
+	removeHandler(handler: PHD2ClientHandler) {
+		this.#handlers.delete(handler)
 	}
 
 	// Connects to the PHD2 server, wiring socket events into the line parser. Returns false if already connected.
@@ -453,7 +461,7 @@ export class PHD2Client implements Disposable {
 				},
 				close: (_, error) => {
 					console.info('connection closed:', error?.message)
-					this.options?.handler?.close?.(this, error)
+					this.#notify('close', (handler) => handler.close?.(this, error))
 					this.close()
 				},
 			},
@@ -766,14 +774,26 @@ export class PHD2Client implements Disposable {
 
 				if (error) {
 					command.promise.resolve({ success: false, error })
-					this.options?.handler?.command?.(this, command.command, false, error)
+					this.#notify('command', (handler) => handler.command?.(this, command.command, false, error))
 				} else {
 					command.promise.resolve({ success: true, result })
-					this.options?.handler?.command?.(this, command.command, true, result)
+					this.#notify('command', (handler) => handler.command?.(this, command.command, true, result))
 				}
 			}
 		} else {
-			this.options?.handler?.event?.(this, event)
+			this.#notify('event', (handler) => handler.event?.(this, event))
+		}
+	}
+
+	// Calls `notify` for every registered handler in registration order. Handlers are user code: a throw is
+	// logged under `kind` and must neither unwind the socket parsing nor skip the remaining handlers.
+	#notify(kind: keyof PHD2ClientHandler, notify: (handler: PHD2ClientHandler) => void) {
+		for (const handler of this.#handlers) {
+			try {
+				notify(handler)
+			} catch (e) {
+				console.error(`PHD2 ${kind} handler failed:`, e)
+			}
 		}
 	}
 }

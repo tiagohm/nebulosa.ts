@@ -155,3 +155,42 @@ test('remains pulsing until both timed-guide axes finish', () => {
 	expect(mount.pulsingNS).toBeFalse()
 	expect(mount.pulsingWE).toBeFalse()
 })
+
+test('reports every timed-guide definition and update with its state, even when the flag is unchanged', () => {
+	const mountManager = new MountManager()
+	const mount = structuredClone(DEFAULT_MOUNT)
+	mount.id = Bun.randomUUIDv7()
+	mount.name = 'Mount'
+	Object.defineProperty(mount, CLIENT, { value: client })
+	mountManager.add(mount)
+
+	const manager = new GuideOutputManager(mountManager)
+	const notifications: [string, string, string | undefined][] = []
+	manager.addHandler({ added: () => {}, removed: () => {}, updated: (device, property, state) => notifications.push([device === mount ? 'mount' : 'view', property, state]) })
+	const timedGuide = (name: 'TELESCOPE_TIMED_GUIDE_NS' | 'TELESCOPE_TIMED_GUIDE_WE', state: DefNumberVector['state']): DefNumberVector => ({ device: mount.name, name, permission: 'rw', state, elements: {} })
+
+	manager.numberVector(client, timedGuide('TELESCOPE_TIMED_GUIDE_NS', 'Idle'), 'defNumberVector')
+	notifications.length = 0
+
+	// The flag is already false, but the published state is evidence and is reported; the aggregate is not.
+	manager.numberVector(client, timedGuide('TELESCOPE_TIMED_GUIDE_NS', 'Idle'), 'setNumberVector')
+	expect(notifications).toEqual([
+		['view', 'pulsingNS', 'Idle'],
+		['mount', 'pulsingNS', 'Idle'],
+	])
+
+	notifications.length = 0
+	manager.numberVector(client, timedGuide('TELESCOPE_TIMED_GUIDE_NS', 'Busy'), 'setNumberVector')
+	expect(notifications).toEqual([
+		['view', 'pulsingNS', 'Busy'],
+		['mount', 'pulsingNS', 'Busy'],
+		['view', 'pulsing', 'Busy'],
+		['mount', 'pulsing', 'Busy'],
+	])
+
+	// A deleted vector resets the flags without any state, which is not a published observation.
+	notifications.length = 0
+	manager.delProperty(client, { device: mount.name, name: 'TELESCOPE_TIMED_GUIDE_NS' })
+	expect(notifications.filter(([, property]) => property === 'pulsingNS').every(([, , state]) => state === undefined)).toBeTrue()
+	expect(notifications.some(([, property]) => property === 'pulsingNS')).toBeTrue()
+})

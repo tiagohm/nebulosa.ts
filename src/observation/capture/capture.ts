@@ -3,28 +3,29 @@ import { copyFile, link, mkdir, rm } from 'fs/promises'
 import { isAbsolute, join } from 'path'
 import { formatTemporal, temporalAdd, temporalSubtract } from '../../astronomy/time/temporal'
 import { errorMessage } from '../../core/util'
+import { type Camera, CLIENT, type Focuser, type Mount, type Rotator, type Wheel } from '../../devices/indi/device'
+import type { CameraManager } from '../../devices/indi/manager/camera'
+import type { DeviceHandler, DeviceProvider } from '../../devices/indi/manager/device'
+import type { BlobEncoding, PropertyState } from '../../devices/indi/types'
+import { type FailedOperationResult, failedOperationResult, type OperationContext, type OperationFailureReason, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
+import { abortableDelay, abortReason } from '../../devices/orchestration/operation.wait'
+import { type ResourceArbiter, resourceKey } from '../../devices/orchestration/resource'
 import { base64Source, bufferSource } from '../../io/io'
 import { directoryExists, isPathSegment } from '../../io/path'
-import { type Camera, CLIENT, type Focuser, type Mount, type Rotator, type Wheel } from '../indi/device'
-import type { CameraManager } from '../indi/manager/camera'
-import type { DeviceHandler, DeviceProvider } from '../indi/manager/device'
-import type { BlobEncoding, PropertyState } from '../indi/types'
-import { type FailedOperationResult, failedOperationResult, type OperationContext, type OperationFailureReason, type OperationResult, type OperationScope, successfulOperationResult } from '../orchestration/operation'
-import { abortableDelay, abortReason } from '../orchestration/operation.wait'
-import { type ResourceArbiter, resourceKey } from '../orchestration/resource'
-import { type CameraCaptureListener, CameraCaptureReporter } from './camera.capture.reporter'
-import { type CameraAutoSubFolderMode, type CameraCaptureStart, type CameraDither, type CameraDitherPhase, type CameraFrameEvent, DEFAULT_CAMERA_CAPTURE_EVENT, exposureTimeInMicroseconds, exposureTimeInSeconds } from './camera.capture.types'
+import { type CameraCaptureListener, CameraCaptureReporter } from './reporter'
+import { type CameraAutoSubFolderMode, type CameraCaptureClock, type CameraCaptureStart, type CameraFrameEvent, DEFAULT_CAMERA_CAPTURE_EVENT, exposureTimeInMicroseconds, exposureTimeInSeconds, SYSTEM_CAMERA_CAPTURE_CLOCK } from './types'
 
 // Operation-backed camera capture over an INDI CameraManager. A capture acquires the camera through an
-// operation scope, dispatches each exposure only after its frame path is known, waits for both the exposure
-// completion and the BLOB of the same generation, decodes, publishes and optionally writes the frame, and
-// quiesces the camera before the lease is released. A BLOB left behind by a terminated exposure quarantines
-// the camera until it is observed, because BLOBs carry no operation id and the next capture would read it.
-// A capture ends at its last frame, when stopped (the exposure in flight finishes and no other one starts), or
-// when cancelled (the exposure in flight is aborted). A saved frame is written to a temporary file and only
-// then given its name, which is never an existing file.
-// Exposure progress is in microseconds, timeouts in milliseconds, the inter-frame delay in seconds, and
-// frame paths are absolute or relative to the configured captures directory.
+// operation scope, configures each exposure only after its frame path is known, lets the caller veto it
+// synchronously right before dispatch, waits for both the exposure completion and the BLOB of the same
+// generation, decodes, publishes and optionally writes the frame, and quiesces the camera before the lease is
+// released. A BLOB left behind by a terminated exposure quarantines the camera until it is observed, because
+// BLOBs carry no operation id and the next capture would read it. A capture ends at its last frame, when
+// stopped (the exposure in flight finishes and no other one starts), or when cancelled (the exposure in flight
+// is aborted). By default a saved frame is written to a temporary file and only then given its name, which is
+// never an existing file. Exposure progress is in microseconds, timeouts in milliseconds, the inter-frame delay
+// in seconds, frame instants in milliseconds of the capture clock, and frame paths are absolute or relative to
+// the configured captures directory.
 
 // Minimum inter-frame delay that publishes waiting progress, in microseconds. Shorter delays are waited silently.
 const MINIMUM_WAITING_TIME = 1000000
@@ -61,28 +62,9 @@ export interface CameraCaptureHandle {
 	// and its frame is lost; the result fails as aborted.
 	readonly cancel: () => Promise<void>
 	// Stops this capture after the exposure in flight: that frame is still processed and written, a running
-	// inter-frame delay or dither ends at once, and no further exposure starts. The result succeeds with the
+	// inter-frame delay ends at once, and no further exposure starts. The result succeeds with the
 	// frames processed so far. Idempotent, and a no-op once the capture ended; `result` reports the end.
 	readonly stop: VoidFunction
-}
-
-// Optional integration used to dither before frames without coupling capture to a guider implementation. The
-// capture only passes its signal: the guider session stays the owner of its own devices and serializes the
-// command, so cancelling a dither never disconnects the session that ran it.
-export interface CameraDitherer {
-	// Whether the named guider session is currently able to dither.
-	readonly running: (guider: string) => boolean
-	// Requests a dither on one session and settles only after it reports its terminal result. Progress comes
-	// back through this call, so the capture never observes the dither of a session it did not ask for.
-	readonly dither: (guider: string, request: CameraDither, options?: CameraDitherOptions) => Promise<OperationResult<void>>
-}
-
-// Per-call collaborators handed to the guider when a capture dithers.
-export interface CameraDitherOptions {
-	// Cancels the dither when the capture stops, without ending the guider session that runs it.
-	readonly signal?: AbortSignal
-	// Receives the phases of this dither only.
-	readonly onPhase?: (phase: CameraDitherPhase) => void
 }
 
 // Device lookups used to resolve the devices a request names for the driver to stamp into frame headers.
@@ -110,9 +92,8 @@ export interface CameraCapturerOptions {
 	readonly decode?: (data: Buffer) => Promise<Buffer>
 	// Persists an auto-saved frame and resolves only after the write completed; defaults to
 	// `writeFrameExclusively`. The camera lease is retained until it settles, and a rejection fails the capture.
-	readonly write?: (path: string, data: Buffer) => Promise<unknown>
-	// Dithers before a frame when the request asks for it.
-	readonly ditherer?: CameraDitherer
+	// A capture can replace it with `CameraCaptureHooks.write`.
+	readonly write?: CameraFrameWriter
 	// Resolves the devices a request names for header snooping. Without a lookup, its device is not snooped.
 	readonly devices?: CameraCaptureDevices
 	// Time allowed after the requested exposure for the exposure completion and BLOB rendezvous. Default 30000.
@@ -123,12 +104,38 @@ export interface CameraCapturerOptions {
 	readonly lateBlobDrainTime?: number
 }
 
-// Optional collaborators supplied per capture by whoever started it.
-export interface CameraCaptureListeners {
+// Persists an auto-saved frame at `path` and resolves once its durability guarantee holds. `data` is the
+// decoded payload, not a copy, and must not be retained beyond the call.
+export type CameraFrameWriter = (path: string, data: Buffer) => Promise<unknown>
+
+// Frame about to be dispatched, as shown to `CameraCaptureHooks.beforeExposure`.
+export interface CameraExposureAttempt {
+	// Path the frame will be written to, already resolved.
+	readonly path: string
+	// Generation the frame opens if it is dispatched; the first frame of a capture is 1.
+	readonly generation: number
+}
+
+// Optional collaborators supplied per capture by whoever started it. They apply to that capture only: the next
+// capture resolves its own.
+export interface CameraCaptureHooks {
 	// Receives the presentation events of the accepted session.
 	readonly listener?: CameraCaptureListener
 	// Receives the terminal events of a capture rejected before a session exists; defaults to listener.
 	readonly rejectedListener?: CameraCaptureListener
+	// Last decision before each exposure is dispatched, called synchronously after every camera configuration
+	// command and immediately before the exposure command, with nothing awaited and no device commanded in
+	// between. Returning a failure ends the capture with it without dispatching: no exposure is commanded, no
+	// generation opens, no file is written and no BLOB is owed; the configuration already sent stays on the
+	// camera, which is released. A hook that throws refuses the frame as `commandFailed`. It must not await,
+	// command devices, or do I/O.
+	readonly beforeExposure?: (attempt: CameraExposureAttempt) => FailedOperationResult | undefined
+	// Writer of the auto-saved frames of this capture, replacing `CameraCapturerOptions.write`. The result of a
+	// capture with `autoSave` is delivered only after it resolved, so the durability of the frame is whatever it
+	// guarantees.
+	readonly write?: CameraFrameWriter
+	// Clock the frame instants are read from; `SYSTEM_CAMERA_CAPTURE_CLOCK` when absent.
+	readonly clock?: CameraCaptureClock
 	// Resolves the absolute path each auto-saved frame is written to, before its exposure is commanded, in
 	// place of the automatic directory and timestamp name. It is not consulted when the request names its own
 	// `outputPath` and `outputName`, nor for frames that are not saved. A path that already exists fails the
@@ -169,8 +176,14 @@ interface CameraCaptureSessionContext {
 	readonly options: CameraCapturerOptions
 	// Receives presentation events.
 	readonly listener: CameraCaptureListener
+	// Synchronous veto right before each exposure is dispatched.
+	readonly beforeExposure?: (attempt: CameraExposureAttempt) => FailedOperationResult | undefined
+	// Writer of auto-saved frames, resolved once for the whole capture.
+	readonly write: CameraFrameWriter
+	// Clock the frame instants are read from.
+	readonly clock: CameraCaptureClock
 	// Resolves the path of each auto-saved frame, when the caller supplied one.
-	readonly framePath?: CameraCaptureListeners['framePath']
+	readonly framePath?: CameraCaptureHooks['framePath']
 	// Settles the exposure-start milestone exactly once.
 	readonly settleStarted: (result: OperationResult<void>) => void
 	// Applies availability transitions to the owned camera.
@@ -191,10 +204,26 @@ interface FrameAttempt {
 	exposureState?: PropertyState
 	// Whether this attempt no longer accepts device callbacks.
 	terminal: boolean
-	// Whether the exposure command returned successfully, even if Busy was never observed.
+	// Whether the exposure exists: the command returned, even if Busy was never observed, or it threw after a
+	// physical update of the exposure was observed.
 	dispatched: boolean
+	// Whether any exposure update of the prepared generation was observed, which is physical evidence that the
+	// exposure exists even when the command throws.
+	observed: boolean
 	// Whether physical Busy was observed after command dispatch.
 	started: boolean
+	// Wall instant, in Unix milliseconds, read immediately before the exposure command.
+	dispatchedAt?: number
+	// Monotonic instant, in milliseconds of the capture clock, read immediately before the exposure command.
+	dispatchedMonotonic?: number
+	// Wall instant, in Unix milliseconds, of the first observed Busy; zero until then.
+	startedAt: number
+	// Monotonic instant, in milliseconds of the capture clock, of the first observed Busy; zero until then.
+	startedMonotonic: number
+	// Wall instant, in Unix milliseconds, of the observed Ok; zero until then.
+	finishedAt: number
+	// Monotonic instant, in milliseconds of the capture clock, of the observed Ok; zero until then.
+	finishedMonotonic: number
 }
 
 // Raw camera payload and transport encoding captured by a FrameAttempt.
@@ -204,9 +233,6 @@ interface CameraBlob {
 	// Transport encoding applied to the payload.
 	readonly encoding: BlobEncoding
 }
-
-// Internal session state; terminal states never transition back into active work.
-type CameraCaptureSessionState = 'created' | 'dithering' | 'startingExposure' | 'exposing' | 'awaitingFrame' | 'processingFrame' | 'interFrameDelay' | 'stopping' | 'succeeded' | 'failed' | 'cancelled'
 
 // Starts camera captures and routes the camera device callbacks to the one session entitled to them.
 //
@@ -249,8 +275,9 @@ export class CameraCapturer implements DeviceHandler<Camera>, Disposable {
 	// Starts one capture in the given scope, routing accepted-session events to its listener and reporting
 	// pre-session rejection separately. The request is copied, so mutating it afterwards changes nothing. A
 	// composite feature passes its own context so the capture nests inside the operation already owning the
-	// camera; the coordinator starts a new operation tree.
-	start(scope: OperationScope, camera: Camera, request: CameraCaptureStart, { listener = () => {}, rejectedListener = listener, framePath }: CameraCaptureListeners = {}): CameraCaptureHandle {
+	// camera; the coordinator starts a new operation tree. The hooks belong to this capture only: its writer is
+	// `hooks.write`, else `options.write`, else `writeFrameExclusively`.
+	start(scope: OperationScope, camera: Camera, request: CameraCaptureStart, { listener = () => {}, rejectedListener = listener, beforeExposure, write, clock = SYSTEM_CAMERA_CAPTURE_CLOCK, framePath }: CameraCaptureHooks = {}): CameraCaptureHandle {
 		const key = resourceKey(camera)
 		const started = Promise.withResolvers<OperationResult<void>>()
 		let session: CameraCaptureSession | undefined
@@ -264,11 +291,16 @@ export class CameraCapturer implements DeviceHandler<Camera>, Disposable {
 			started.resolve(result)
 		}
 
+		const frameWriter = write ?? this.options.write ?? writeFrameExclusively
+
 		const operation = scope.start<CameraCaptureResult>('cameraCapture', [{ key, device: camera }], (context) => {
 			const current = new CameraCaptureSession(context, camera, structuredClone(request), {
 				cameraManager: this.cameraManager,
 				options: this.options,
 				listener,
+				beforeExposure,
+				write: frameWriter,
+				clock,
 				framePath,
 				settleStarted,
 				availability: {
@@ -396,10 +428,8 @@ class CameraCaptureSession {
 	readonly #terminalFailure = Promise.withResolvers<OperationResult<never>>()
 	// Aborted with the first failure reason, so a running inter-frame delay stops when the camera goes away.
 	readonly #failureController = new AbortController()
-	// Aborted by stop(), ending a running delay or dither without aborting the exposure in flight.
+	// Aborted by stop(), ending a running delay without aborting the exposure in flight.
 	readonly #stopController = new AbortController()
-	// Internal lifecycle position; terminal values never transition back into active work.
-	#state: CameraCaptureSessionState = 'created'
 	// Rendezvous of the exposure currently in flight, absent before the first frame.
 	#attempt?: FrameAttempt
 	// Whether the session stopped accepting device callbacks and frame emissions.
@@ -447,7 +477,7 @@ class CameraCaptureSession {
 		})
 	}
 
-	// Snoops the named devices, then executes frames through dither, exposure+BLOB processing and delay.
+	// Snoops the named devices, then executes frames through exposure+BLOB processing and delay.
 	async run(): Promise<OperationResult<CameraCaptureResult>> {
 		if (!this.camera.connected) return this.#finishFailure('disconnected')
 		if (this.#requestFailure !== undefined) return this.#finishFailure('commandFailed', this.#requestFailure)
@@ -459,15 +489,13 @@ class CameraCaptureSession {
 		}
 
 		while (this.#reporter.remainingCount > 0 && !this.operationContext.signal.aborted && !this.#stopController.signal.aborted) {
-			// A device failure recorded outside a rendezvous, such as during a dither, only surfaces here.
+			// A device failure recorded outside a rendezvous, such as while the frame path is resolved, only
+			// surfaces here.
 			if (this.#failureResult !== undefined) return this.#finish(this.#failureResult)
-
-			const dither = await this.#dither()
-			if (!dither.ok) return this.#finish(dither)
-			if (this.#stopController.signal.aborted) break
 
 			const frame = await this.#captureFrame()
 			if (!frame.ok) return this.#finish(frame)
+			if (frame.value === undefined) break
 
 			if (this.#reporter.remainingCount > 0) {
 				const delayed = await this.#delay()
@@ -485,7 +513,7 @@ class CameraCaptureSession {
 		return this.#finish(successfulOperationResult(undefined))
 	}
 
-	// Ends the session after the exposure in flight, interrupting a running delay or dither. Idempotent.
+	// Ends the session after the exposure in flight, interrupting a running delay. Idempotent.
 	stop() {
 		this.#stopController.abort()
 	}
@@ -509,14 +537,19 @@ class CameraCaptureSession {
 		if (property !== 'exposure' || this.#attempt === undefined || this.#attempt.terminal) return
 
 		const attempt = this.#attempt
+		const transition = this.#reporter.applyExposureUpdate(state)
+		if (transition !== 'ignored') attempt.observed = true
 
-		switch (this.#reporter.applyExposureUpdate(state)) {
+		switch (transition) {
 			case 'started':
 				attempt.started = true
-				this.#state = 'exposing'
+				attempt.startedAt = this.sessionContext.clock.wallNow()
+				attempt.startedMonotonic = this.sessionContext.clock.monotonicNow()
 				this.sessionContext.settleStarted(successfulOperationResult(undefined))
 				break
 			case 'finished':
+				attempt.finishedAt = this.sessionContext.clock.wallNow()
+				attempt.finishedMonotonic = this.sessionContext.clock.monotonicNow()
 				attempt.exposureState = 'Ok'
 				attempt.exposureCompleted.resolve('Ok')
 				break
@@ -574,7 +607,6 @@ class CameraCaptureSession {
 		const pendingBlob = this.#attempt?.dispatched === true && this.#attempt.blob === undefined
 		const requiresBlobBoundary = pendingBlob && this.#attempt?.exposureState !== 'Alert' && this.#attempt?.exposureState !== 'Idle'
 		this.#terminal = true
-		this.#state = 'stopping'
 		if (this.#attempt !== undefined) this.#attempt.terminal = true
 
 		const canCommand = this.#deviceUnavailableReason === undefined && this.camera.connected
@@ -617,39 +649,14 @@ class CameraCaptureSession {
 		this.sessionContext.cameraManager.snoop(this.camera, mount, focuser, wheel, rotator)
 	}
 
-	// Dithers before a frame only when requested and a guider session was named.
-	async #dither(): Promise<OperationResult<void>> {
-		const ditherer = this.sessionContext.options.ditherer
-		const guider = this.#request.dither.guider
-
-		// No guider named means none was chosen, which is a request not to dither rather than a failure.
-		if (!this.#request.dither.enabled || !guider || ditherer === undefined) return successfulOperationResult(undefined)
-
-		// A named session that is gone or not guiding is a different matter: the capture asked for this exact
-		// guider, so exposing without it would be pretending a dither happened.
-		if (!ditherer.running(guider)) return failedOperationResult('unexpectedState', `guider ${guider} is not guiding`)
-
-		this.#state = 'dithering'
-		this.#reporter.setState('dithering')
-
-		const signal = this.operationContext.signal
-
-		try {
-			const result = await ditherer.dither(guider, this.#request.dither, { signal: AbortSignal.any([signal, this.#stopController.signal]), onPhase: this.#guiderDithered })
-			if (result.ok) return successfulOperationResult(undefined)
-			// A dither interrupted by stop() is a capture that ends now, before its next exposure.
-			if (this.#stopController.signal.aborted && !signal.aborted) return successfulOperationResult(undefined)
-			// Only the capture's own cancellation makes the capture cancelled. A dither the guider abandoned on its
-			// own, even one reported as aborted, is a failed command of a capture nobody stopped.
-			if (signal.aborted) return failedOperationResult(abortReason(signal))
-			return failedOperationResult('commandFailed', result.error ?? result.reason)
-		} catch (error) {
-			return failedOperationResult('commandFailed', errorMessage(error))
-		}
-	}
-
-	// Creates the frame attempt before dispatch and awaits exposure+BLOB rendezvous before processing.
-	async #captureFrame(): Promise<OperationResult<CameraFrameEvent>> {
+	// Configures the camera, lets the caller veto the frame, dispatches the exposure, and awaits the
+	// exposure+BLOB rendezvous before processing.
+	//
+	// Configuration, veto, preparation, dispatch and commit run synchronously back to back, so nothing the caller
+	// verified in `beforeExposure` can change before the exposure command leaves. The generation is committed only
+	// once the exposure exists, so a refused or failed dispatch publishes no exposureStarted and consumes no
+	// generation. Resolves an undefined frame when the capture was stopped before its exposure was dispatched.
+	async #captureFrame(): Promise<OperationResult<CameraFrameEvent | undefined>> {
 		if (this.operationContext.signal.aborted) return failedOperationResult(abortReason(this.operationContext.signal))
 
 		// The destination is resolved before the exposure is commanded, so the identity of the frame exists before
@@ -664,8 +671,10 @@ class CameraCaptureSession {
 		}
 
 		if (this.operationContext.signal.aborted) return failedOperationResult(abortReason(this.operationContext.signal))
+		// Resolving the path is the last wait before dispatch, so a stop that arrived meanwhile takes no frame.
+		if (this.#stopController.signal.aborted) return successfulOperationResult(undefined)
 
-		// The rendezvous exists before the frame is opened, because the attempt has to be routable the moment the
+		// The rendezvous exists before the frame is prepared, because the attempt has to be routable the moment the
 		// exposure is dispatched, which may deliver its updates synchronously.
 		const attempt: FrameAttempt = {
 			path,
@@ -673,22 +682,59 @@ class CameraCaptureSession {
 			blobReceived: Promise.withResolvers<CameraBlob>(),
 			terminal: false,
 			dispatched: false,
+			observed: false,
 			started: false,
+			startedAt: 0,
+			startedMonotonic: 0,
+			finishedAt: 0,
+			finishedMonotonic: 0,
 		}
 
 		this.#attempt = attempt
-		this.#state = 'startingExposure'
-		this.#reporter.beginFrame()
 
 		try {
-			this.#startExposure()
-			attempt.dispatched = true
+			this.#configureExposure()
 		} catch (error) {
+			attempt.terminal = true
 			return failedOperationResult('commandFailed', errorMessage(error))
 		}
 
-		this.#state = 'awaitingFrame'
-		const timeout = exposureTimeInSeconds(this.#request.exposureTime, this.#request.exposureTimeUnit) * 1000 + Math.max(0, this.sessionContext.options.frameGraceTime ?? DEFAULT_FRAME_GRACE_TIME)
+		const refusal = this.#beforeExposure(attempt)
+
+		if (refusal !== undefined) {
+			attempt.terminal = true
+			return refusal
+		}
+
+		const { cameraManager, clock } = this.sessionContext
+		const request = this.#request
+		const exposureTime = exposureTimeInSeconds(request.exposureTime, request.exposureTimeUnit)
+
+		this.#reporter.prepareFrame()
+		attempt.dispatchedAt = clock.wallNow()
+		attempt.dispatchedMonotonic = clock.monotonicNow()
+
+		try {
+			cameraManager.startExposure(this.camera, exposureTime)
+		} catch (error) {
+			// An update of the prepared generation proves the exposure exists despite the error, so it is committed
+			// and cleanup aborts it and settles its BLOB like any dispatched exposure. Without one nothing exists:
+			// the generation is dropped unpublished and no BLOB is owed.
+			if (attempt.observed) {
+				attempt.dispatched = true
+				this.#reporter.commitFrame()
+			} else {
+				attempt.terminal = true
+				this.#reporter.discardFrame()
+			}
+
+			return failedOperationResult('commandFailed', errorMessage(error))
+		}
+
+		attempt.dispatched = true
+		this.#reporter.commitFrame()
+
+		const timeout = exposureTime * 1000 + Math.max(0, this.sessionContext.options.frameGraceTime ?? DEFAULT_FRAME_GRACE_TIME)
 		const rendezvous = await this.#awaitRendezvous(attempt, timeout)
 
 		if (!rendezvous.ok) {
@@ -701,8 +747,7 @@ class CameraCaptureSession {
 			return failedOperationResult('unexpectedState', 'exposure completed without a Busy state')
 		}
 
-		this.#state = 'processingFrame'
-		const processed = await this.#processBlob(rendezvous.value, attempt.path)
+		const processed = await this.#processBlob(rendezvous.value, attempt)
 		attempt.terminal = true
 
 		if (!processed.ok) return processed
@@ -712,8 +757,8 @@ class CameraCaptureSession {
 		return this.#failureResult ?? processed
 	}
 
-	// Applies the request options and dispatches one exposure after the attempt exists.
-	#startExposure() {
+	// Sends every camera configuration command of the request, but not the exposure itself.
+	#configureExposure() {
 		const request = this.#request
 		const cameraManager = this.sessionContext.cameraManager
 		cameraManager.enableBlob(this.camera)
@@ -726,7 +771,19 @@ class CameraCaptureSession {
 		cameraManager.offset(this.camera, request.offset)
 		cameraManager.transferFormat(this.camera, request.transferFormat)
 		cameraManager.compression(this.camera, request.compressed)
-		cameraManager.startExposure(this.camera, exposureTimeInSeconds(request.exposureTime, request.exposureTimeUnit))
+	}
+
+	// Asks the caller whether the configured frame may be dispatched, synchronously. Returns the refusal, or
+	// undefined when the frame may go; a hook that throws refuses it as `commandFailed`.
+	#beforeExposure(attempt: FrameAttempt): FailedOperationResult | undefined {
+		const beforeExposure = this.sessionContext.beforeExposure
+		if (beforeExposure === undefined) return undefined
+
+		try {
+			return beforeExposure({ path: attempt.path, generation: this.#reporter.generation + 1 })
+		} catch (error) {
+			return failedOperationResult('commandFailed', errorMessage(error))
+		}
 	}
 
 	// Waits for both physical completion and one BLOB, or the first terminal failure, abort, or timeout in ms.
@@ -801,13 +858,15 @@ class CameraCaptureSession {
 
 	// Decodes, publishes, and optionally writes one BLOB while retaining the camera lease.
 	//
-	// The file is written to `path`. The frame is published under `publishPath` when the caller asked for one,
-	// which is how a frame can land in a temporary without a consumer ever seeing that name.
-	async #processBlob(blob: CameraBlob, path: string): Promise<OperationResult<CameraFrameEvent>> {
+	// The file is written to the attempt path by the writer of this capture. The frame is published under
+	// `publishPath` when the caller asked for one, which is how a frame can land in a temporary without a
+	// consumer ever seeing that name.
+	async #processBlob(blob: CameraBlob, attempt: FrameAttempt): Promise<OperationResult<CameraFrameEvent>> {
 		try {
 			const buffer = blob.encoding === 'raw' ? blob.data : await (this.sessionContext.options.decode ?? decodeCameraBlobFromBase64)(blob.data)
 			if (this.operationContext.signal.aborted) return failedOperationResult(abortReason(this.operationContext.signal))
 
+			const path = attempt.path
 			const published = this.#request.publishPath ?? path
 
 			const frame: CameraFrameEvent = {
@@ -816,10 +875,16 @@ class CameraCaptureSession {
 				generation: this.#reporter.generation,
 				camera: this.camera.id,
 				path: published,
+				exposureDispatchedAt: attempt.dispatchedAt,
+				exposureDispatchedMonotonic: attempt.dispatchedMonotonic,
+				exposureStartedAt: attempt.startedAt,
+				exposureStartedMonotonic: attempt.startedMonotonic,
+				exposureFinishedAt: attempt.finishedAt,
+				exposureFinishedMonotonic: attempt.finishedMonotonic,
 			}
 
 			this.sessionContext.options.publish?.(buffer, published, this.camera)
-			if (this.#request.autoSave) await (this.sessionContext.options.write ?? writeFrameExclusively)(path, buffer)
+			if (this.#request.autoSave) await this.sessionContext.write(path, buffer)
 			if (this.operationContext.signal.aborted) return failedOperationResult(abortReason(this.operationContext.signal))
 			return successfulOperationResult(frame)
 		} catch (error) {
@@ -834,7 +899,6 @@ class CameraCaptureSession {
 		const waitingTime = this.#waitingTime
 		if (waitingTime <= 0 || this.#stopController.signal.aborted) return successfulOperationResult(undefined)
 
-		this.#state = 'interFrameDelay'
 		const progress = waitingTime >= MINIMUM_WAITING_TIME
 		const signal = AbortSignal.any([this.operationContext.signal, this.#failureController.signal, this.#stopController.signal])
 		let remaining = waitingTime
@@ -877,13 +941,6 @@ class CameraCaptureSession {
 		}
 	}
 
-	// Mirrors the progress of the dither this capture asked for. The guider hands each phase back through the
-	// call itself, so no other session can reach this one and nothing has to be matched against a session id.
-	readonly #guiderDithered = (phase: CameraDitherPhase) => {
-		if (this.#terminal || this.#state !== 'dithering') return
-		this.#reporter.setState(phase === 'settling' || phase === 'settled' ? 'settling' : 'dithering')
-	}
-
 	// Records the first session failure and releases every pending rendezvous race and delay.
 	#fail(reason: OperationFailureReason, error?: string) {
 		if (this.#failureResult !== undefined) return
@@ -906,7 +963,6 @@ class CameraCaptureSession {
 		// run() is the only caller and stops at the first terminal result, so this only guards cleanup racing a late frame.
 		if (this.#terminal) return this.#failureResult ?? failedOperationResult('aborted')
 		this.#terminal = true
-		this.#state = result.ok ? 'succeeded' : result.reason === 'aborted' ? 'cancelled' : 'failed'
 		if (!result.ok) this.sessionContext.settleStarted(result)
 		this.#reporter.terminal(!result.ok)
 		return result.ok ? successfulOperationResult({ frames: this.#frames, frameCount: this.#frames.length }) : result

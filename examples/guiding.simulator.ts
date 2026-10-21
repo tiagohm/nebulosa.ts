@@ -106,10 +106,11 @@ export class GuidingSimulation {
 		this.client = new GuiderClient(this.cameraManager, this.guideOutputManager, this.tracker, {
 			calibrator: { clearingMoveEnabled: false, settleFramesAfterMove: 1, raPulse: 1000, decPulse: 1000, minMovePerStepPx: 0.05, minNetRaTravelPx: 0.5, minNetDecTravelPx: 0.5, maxRaNoMotionSteps: 10, maxDecNoMotionSteps: 10 },
 			timeFactory: options.timeFactory,
-			handler: {
-				event: (_client, event) => this.#handleEvent(event),
-				frame: (_client, frame) => this.#handleFrame(frame),
-			},
+		})
+
+		this.client.addHandler({
+			event: (_client, event) => this.#handleEvent(event),
+			frame: (_client, frame) => this.#handleFrame(frame),
 		})
 
 		this.cameraManager.snoop(this.camera, this.mount)
