@@ -12,9 +12,8 @@ import { type MountManager, mountTargetEquatorial } from '../../devices/indi/man
 import { isDeviceQuiescent } from '../../devices/orchestration/device.lifecycle'
 import { type FailedOperationResult, failedOperationResult, type OperationContext, type OperationResult, successfulOperationResult } from '../../devices/orchestration/operation'
 import { type ResourceKey, resourceKey } from '../../devices/orchestration/resource'
-import type { CameraCapturer } from '../../devices/runners/camera.capture'
-import { exposureTimeInSeconds } from '../../devices/runners/camera.capture.types'
 import { type Angle, normalizeAngle, normalizePI, toDeg } from '../../math/units/angle'
+import type { CameraCapturer } from '../capture/capture'
 import { type Ditherer, MountDitherer, type MountMovementResource } from '../guiding/ditherer'
 import type { GuidingSession } from '../guiding/session'
 import { centerTarget, type CenteringOptions, type CenteringServices } from '../mount/centering'
@@ -25,6 +24,7 @@ import { configurationFailure, failedTask, isSequencerMountOffTarget, missingDep
 import type { SequencerContext, SequencerFailedTaskResult, SequencerProtectionOutcome, SequencerShutdownTask, SequencerSupervisor, SequencerSupervisorHost, SequencerTask, SequencerTaskPolicy, SequencerTaskResult, SequencerTaskView, SequencerTrackingProtection } from './runner'
 // oxfmt-ignore
 import { DEFAULT_SEQUENCER_COLLABORATOR_ABORT_GRACE, DEFAULT_SEQUENCER_MERIDIAN_FLIP, type SequencerCenteringConfiguration, type SequencerConfiguration, type SequencerConfigurationDiagnostic, type SequencerDevices, type SequencerFailureAction, type SequencerMeridianFlipConfiguration, type SequencerMeridianProtectionFailure, type SequencerPlateSolver, type SequencerPointingConfiguration, type SequencerRotatorConfiguration, type SequencerTarget, type SequencerTaskId } from './sequencer'
+import { exposureTimeInSeconds } from '../capture/types'
 import { advanceSequencerMeridianFlip, isWithinSequencerMeridianCycle, SEQUENCER_MERIDIAN_HALF_CYCLE, type SequencerRuntimeState, sequencerMeridianTransitAt, toMeridianFlipPolicy } from './state'
 import type { SequencerStorage } from './storage'
 import { holdSequencerDither, recenterDue, recordSequencerActionSuccess, sequencerElapsedSince } from './trigger'

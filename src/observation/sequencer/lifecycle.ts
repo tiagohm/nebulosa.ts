@@ -12,12 +12,12 @@ import type { DeviceHandler, DeviceManager } from '../../devices/indi/manager/de
 import { mountTargetEquatorial } from '../../devices/indi/manager/mount'
 import { type FailedOperationResult, failedOperationResult, type OperationResult, successfulOperationResult } from '../../devices/orchestration/operation'
 import { abortReason } from '../../devices/orchestration/operation.wait'
-import { exposureTimeInSeconds } from '../../devices/runners/camera.capture.types'
 import type { Angle } from '../../math/units/angle'
 import type { SequencerContext, SequencerFailedTaskResult, SequencerShutdownTask, SequencerTask, SequencerTaskPolicy, SequencerTaskResult } from './runner'
 import { isWithinSequencerMeridianCycle } from './state'
 // oxfmt-ignore
 import { DEFAULT_SEQUENCER_MERIDIAN_FLIP, type SequencerClock, type SequencerConfiguration, type SequencerConfigurationDiagnostic, type SequencerCoolingConfiguration, type SequencerDevices, type SequencerFrameGroup, type SequencerFrameSlot, type SequencerMeridianFlipConfiguration, type SequencerShutdownConfiguration, type SequencerShutdownStepPolicy, type SequencerStartupConfiguration, type SequencerTarget } from './sequencer'
+import { exposureTimeInSeconds } from '../capture/types'
 
 // Equipment lifecycle tasks of the Sequencer: the startup (camera cooling with its optional thermal stabilization,
 // dome or roof opening, cover opening, mount unpark, tracking mode), the shutdown (tracking off, cover closing, mount

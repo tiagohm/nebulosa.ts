@@ -1,6 +1,6 @@
-import type { Camera } from '../indi/device'
-import type { PropertyState } from '../indi/types'
-import { type CameraCaptureEvent, type CameraCaptureState, DEFAULT_CAMERA_CAPTURE_EVENT } from './camera.capture.types'
+import type { Camera } from '../../devices/indi/device'
+import type { PropertyState } from '../../devices/indi/types'
+import { DEFAULT_CAMERA_CAPTURE_EVENT, type CameraCaptureEvent, type CameraCaptureState } from './types'
 
 // Presentation state of one camera driven by a feature: the mutable capture snapshot, its frame and aggregate
 // progress arithmetic, and the translation of INDI exposure states into capture states. Every time is in

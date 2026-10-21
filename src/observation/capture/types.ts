@@ -1,4 +1,4 @@
-import type { CameraTransferFormat, FrameType } from '../indi/device'
+import type { CameraTransferFormat, FrameType } from '../../devices/indi/device'
 
 // Request, progress, clock, and frame shapes of a camera capture, with the exposure-time unit conversions they
 // rely on. Exposure times travel in the unit the caller chose, the inter-frame delay is in seconds, every

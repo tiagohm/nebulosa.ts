@@ -5,8 +5,8 @@ import { CameraManager } from '../../../src/devices/indi/manager/camera'
 import type { DeviceHandler } from '../../../src/devices/indi/manager/device'
 import { CameraSimulator } from '../../../src/devices/indi/simulator/camera'
 import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
-import { CameraCaptureReporter, type CameraCaptureReporterOptions, type CameraExposureTransition } from '../../../src/devices/runners/camera.capture.reporter'
-import type { CameraCaptureEvent } from '../../../src/devices/runners/camera.capture.types'
+import { CameraCaptureReporter, type CameraCaptureReporterOptions, type CameraExposureTransition } from '../../../src/observation/capture/reporter'
+import type { CameraCaptureEvent } from '../../../src/observation/capture/types'
 import { waitUntil } from '../../util'
 
 const cameraManager = new CameraManager()

@@ -5,8 +5,8 @@ import type { Camera, GuideDirection, GuideOutput } from '../../devices/indi/dev
 import { failedOperationResult, type OperationContext, type OperationHandle, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
 import { type AbortableDelay, abortableDelay, abortReason } from '../../devices/orchestration/operation.wait'
 import { type ResourceRequest, resourceKey } from '../../devices/orchestration/resource'
-import type { CameraCaptureClock } from '../../devices/runners/camera.capture.types'
 import { toArcsec } from '../../math/units/angle'
+import type { CameraCaptureClock } from '../capture/types'
 import type { GuidePulseAdmission, GuiderClient, GuiderClientConnectOptions, GuiderClientHandler } from './client'
 import { type Ditherer, type DitherPhase, type DitherRequest, type DitherResult, settleOnAbort } from './ditherer'
 // oxfmt-ignore

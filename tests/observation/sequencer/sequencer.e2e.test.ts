@@ -2,7 +2,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, spyOn, test } from 
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { abortableDelay } from '../../../src/devices/orchestration/operation.wait'
-import type { CameraCaptureStart } from '../../../src/devices/runners/camera.capture.types'
 import { isFits } from '../../../src/io/formats/fits/fits'
 import { awaitCameraRecoveryTask, captureFrameStep } from '../../../src/observation/sequencer/capture'
 import { type SequencerRunner, startSequencerRunner } from '../../../src/observation/sequencer/runner'
@@ -10,6 +9,7 @@ import type { SequencerCameraCapture, SequencerClock, SequencerConfiguration, Se
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
 // oxfmt-ignore
 import { assertJournalInvariants, assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceRecorder, expectNoSequencerLeaks, type RunnerRecorder, recordDevices, recordRunner, resetSequencerRig } from './util'
+import type { CameraCaptureStart } from '../../../src/observation/capture/types'
 
 // End-to-end scenarios of section 50.3 on the INDI simulator rig, with the real CameraCapturer, the filesystem
 // storage and checkpoint store, and the clock of the e2e tests: the simulated UTC of the mount as wall time, the

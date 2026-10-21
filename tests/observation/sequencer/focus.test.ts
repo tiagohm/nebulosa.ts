@@ -4,7 +4,6 @@ import { join } from 'path'
 import { DEFAULT_FOCUSER, DEFAULT_WHEEL, type Focuser, type Wheel } from '../../../src/devices/indi/device'
 import { failedOperationResult, successfulOperationResult } from '../../../src/devices/orchestration/operation'
 import { abortableDelay } from '../../../src/devices/orchestration/operation.wait'
-import type { CameraCaptureStart } from '../../../src/devices/runners/camera.capture.types'
 import { readFits } from '../../../src/io/formats/fits/fits'
 import { bufferSource } from '../../../src/io/io'
 import { awaitCameraRecoveryTask, captureFrameStep } from '../../../src/observation/sequencer/capture'
@@ -17,6 +16,7 @@ import { createSequencerRuntimeState } from '../../../src/observation/sequencer/
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
 // oxfmt-ignore
 import { assertJournalInvariants, assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, expectNoSequencerLeaks, recordDevices, recordRunner, resetSequencerRig, type RunnerLogEntry, type TestSequence } from './util'
+import type { CameraCaptureStart } from '../../../src/observation/capture/types'
 import { isTimeConsumingTestSkipped } from '../../util'
 
 // Filter, focus offsets and autofocus of the Sequencer on the INDI simulator rig, with the real commanders, the real

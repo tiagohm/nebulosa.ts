@@ -2,7 +2,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, spyOn, test } from 
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { abortableDelay } from '../../../src/devices/orchestration/operation.wait'
-import type { CameraCaptureStart } from '../../../src/devices/runners/camera.capture.types'
 import { readFits } from '../../../src/io/formats/fits/fits'
 import { bufferSource } from '../../../src/io/io'
 import { awaitCameraRecoveryTask, captureFrameStep } from '../../../src/observation/sequencer/capture'
@@ -15,6 +14,7 @@ import type { SequencerCameraCapture, SequencerClock, SequencerConfiguration, Se
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
 // oxfmt-ignore
 import { assertJournalInvariants, assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, expectNoSequencerLeaks, type RunnerLogEntry, recordDevices, recordRunner, resetSequencerRig, ScriptedGuidingSession, type SequencerOracleOptions } from './util'
+import type { CameraCaptureStart } from '../../../src/observation/capture/types'
 import { isTimeConsumingTestSkipped } from '../../util'
 
 // End-to-end scenarios of the interleaved calibration frames (section 8A, 50.3 7–9 and the pending batch of 50.3 14) on

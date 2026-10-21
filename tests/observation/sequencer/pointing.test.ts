@@ -7,7 +7,6 @@ import { angularDistance, equatorialToJ2000 } from '../../../src/astronomy/coord
 import { timeUnix } from '../../../src/astronomy/time/time'
 import { mountTargetEquatorial } from '../../../src/devices/indi/manager/mount'
 import { abortableDelay } from '../../../src/devices/orchestration/operation.wait'
-import type { CameraCaptureStart } from '../../../src/devices/runners/camera.capture.types'
 import { type FitsHeader, isFits, readFits } from '../../../src/io/formats/fits/fits'
 import { bufferSource } from '../../../src/io/io'
 import { type Angle, deg, normalizeAngle, toDeg } from '../../../src/math/units/angle'
@@ -23,6 +22,7 @@ import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepare
 import { waitUntil } from '../../util'
 // oxfmt-ignore
 import { assertJournalInvariants, assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, type DeviceTransitionEntry, expectNoSequencerLeaks, RIG_INITIAL_POINTING, recordDevices, recordRunner, resetSequencerRig, type RunnerLogEntry } from './util'
+import type { CameraCaptureStart } from '../../../src/observation/capture/types'
 
 // Pointing tasks of the Sequencer on the INDI simulator rig, with the real commanders, the real CameraCapturer, the
 // filesystem storage and the e2e clock (the simulated UTC of the mount as wall time): acquisition and centering

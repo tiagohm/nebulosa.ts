@@ -2,7 +2,7 @@ import { errorMessage } from '../../core/util'
 import { failedOperationResult, type OperationFailureReason, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
 import { type AbortableDelay, abortReason } from '../../devices/orchestration/operation.wait'
 import type { ResourceRequest } from '../../devices/orchestration/resource'
-import type { CameraCaptureClock } from '../../devices/runners/camera.capture.types'
+import type { CameraCaptureClock } from '../capture/types'
 import type { DitherPhase } from './ditherer'
 
 // Guiding boundary of observation sessions: the `GuidingSession` contract implemented by the PHD2 and the local

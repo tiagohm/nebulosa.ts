@@ -7,9 +7,9 @@ import type { MountCommander, MountCommandOptions } from '../../devices/commande
 import type { Camera, Mount } from '../../devices/indi/device'
 import { failedOperationResult, type OperationContext, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
 import { type AbortableDelay, abortReason, awaitCooperativeJob, type CooperativeJobHealth, type CooperativeJobOutcome } from '../../devices/orchestration/operation.wait'
-import type { CameraCapturer } from '../../devices/runners/camera.capture'
-import { type CameraCaptureClock, type CameraCaptureStart, type CameraFrameEvent, DEFAULT_CAMERA_CAPTURE_START, exposureTimeInMilliseconds } from '../../devices/runners/camera.capture.types'
 import { type Angle, toDeg } from '../../math/units/angle'
+import type { CameraCapturer } from '../capture/capture'
+import { type CameraCaptureStart, type CameraCaptureClock, DEFAULT_CAMERA_CAPTURE_START, type CameraFrameEvent, exposureTimeInMilliseconds } from '../capture/types'
 import { applyPointingOffset, computePointingError } from './pointing'
 
 // Plate-solved centering of a mount on a fixed ICRS target, reusable outside the Sequencer: capture an auxiliary FITS,

@@ -2,9 +2,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from 'b
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
 import { basename, join, sep } from 'path'
 import { resourceKey } from '../../../src/devices/orchestration/resource'
-import { type CameraCaptureHooks, CameraCapturer } from '../../../src/devices/runners/camera.capture'
-import { type CameraCaptureStart, DEFAULT_CAMERA_CAPTURE_START } from '../../../src/devices/runners/camera.capture.types'
 import { isFits } from '../../../src/io/formats/fits/fits'
+import { type CameraCaptureHooks, CameraCapturer } from '../../../src/observation/capture/capture'
 import { awaitCameraRecoveryTask, captureFrameStep, type SequencerCaptureServices, sequencerCaptureRequest } from '../../../src/observation/sequencer/capture'
 import { type SequencerCaptureStep, type SequencerRunner, startSequencerRunner } from '../../../src/observation/sequencer/runner'
 import { sequencerFrameSlotId } from '../../../src/observation/sequencer/scheduler'
@@ -14,6 +13,7 @@ import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepare
 import { waitUntil } from '../../util'
 // oxfmt-ignore
 import { assertJournalInvariants, connectSequencerRig, createSequencerRig, createTestSequence, expectNoSequencerLeaks, injectFileSystemFaults, ManualSequencerClock } from './util'
+import { DEFAULT_CAMERA_CAPTURE_START, type CameraCaptureStart } from '../../../src/observation/capture/types'
 
 // The primary capture of the Sequencer over the real CameraCapturer and the INDI simulators: the request it commands,
 // the durable writer of the storage passed per capture, the refusal of `beforeExposure`, and the wait for a camera

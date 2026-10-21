@@ -5,8 +5,8 @@ import type { DeviceHandler, DeviceManager } from '../../devices/indi/manager/de
 import { failedOperationResult, type OperationContext, type OperationHandle, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
 import { type AbortableDelay, abortableDelay, abortReason, waitForDeviceState } from '../../devices/orchestration/operation.wait'
 import type { ResourceRequest } from '../../devices/orchestration/resource'
-import type { CameraCaptureClock } from '../../devices/runners/camera.capture.types'
 import { toArcsec } from '../../math/units/angle'
+import type { CameraCaptureClock } from '../capture/types'
 import { type Ditherer, type DitherPhase, type DitherRequest, type DitherResult, settleOnAbort } from './ditherer'
 // oxfmt-ignore
 import { DEFAULT_GUIDING_CLOCK, type GuidingInterruptionKind, GuidingInterruptionHistory, type GuidingSession, type GuidingSessionResources, type GuidingSessionState, type GuidingSettle, GuidingSettleListeners, type GuidingStartOptions, guidingSettleWaitTimeout, waitForGuidingSettle } from './session'

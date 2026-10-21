@@ -4,8 +4,8 @@ import type { FocuserCommander, FocuserCommandOptions } from '../../devices/comm
 import type { Camera, Focuser } from '../../devices/indi/device'
 import { type FailedOperationResult, failedOperationResult, type OperationContext, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
 import { type AbortableDelay, abortReason, awaitCooperativeJob, type CooperativeJobHealth, type CooperativeJobOutcome } from '../../devices/orchestration/operation.wait'
-import type { CameraCapturer } from '../../devices/runners/camera.capture'
-import { type CameraCaptureClock, type CameraCaptureStart, DEFAULT_CAMERA_CAPTURE_START } from '../../devices/runners/camera.capture.types'
+import type { CameraCapturer } from '../capture/capture'
+import { type CameraCaptureStart, type CameraCaptureClock, DEFAULT_CAMERA_CAPTURE_START } from '../capture/types'
 import { AutoFocus, type AutoFocusOptions, type AutoFocusStep } from './autofocus'
 
 // Physical loop of a camera autofocus, reusable outside the Sequencer: the `AutoFocus` state machine decides every

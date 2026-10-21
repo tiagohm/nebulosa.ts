@@ -20,15 +20,15 @@ import type { BlobEncoding, PropertyState } from '../../../src/devices/indi/type
 import { DeviceLifecycle } from '../../../src/devices/orchestration/device.lifecycle'
 import { failedOperationResult, OperationCoordinator, type OperationResult, successfulOperationResult } from '../../../src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
-import { autoSubFolderName, type CameraCaptureResult, CameraCapturer, type CameraCapturerOptions, type CameraExposureAttempt, type CameraFramePathRequest, decodeCameraBlobFromBase64, writeFrameExclusively } from '../../../src/devices/runners/camera.capture'
-import type { CameraCaptureListener } from '../../../src/devices/runners/camera.capture.reporter'
-import { type CameraCaptureEvent, type CameraCaptureStart, DEFAULT_CAMERA_CAPTURE_START } from '../../../src/devices/runners/camera.capture.types'
 import { readImageFromBuffer, readImageFromPath } from '../../../src/imaging/model/image'
 import { isFits } from '../../../src/io/formats/fits/fits'
 import { isXisf, readXisf } from '../../../src/io/formats/xisf/xisf'
 import { bufferSource } from '../../../src/io/io'
 import { deg, hour } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
+import { autoSubFolderName, type CameraCaptureResult, CameraCapturer, type CameraCapturerOptions, type CameraExposureAttempt, type CameraFramePathRequest, decodeCameraBlobFromBase64, writeFrameExclusively } from '../../../src/observation/capture/capture'
+import type { CameraCaptureListener } from '../../../src/observation/capture/reporter'
+import { type CameraCaptureEvent, type CameraCaptureStart, DEFAULT_CAMERA_CAPTURE_START } from '../../../src/observation/capture/types'
 import { waitUntil } from '../../util'
 
 // Every capture runs on the INDI simulators. Only driver misbehaviour the simulator cannot produce, such as an
@@ -866,7 +866,7 @@ describe('caller destinations', () => {
 		await writeFrameExclusively(path, Buffer.from('first'))
 		expect(await Bun.file(path).text()).toBe('first')
 
-		await expect(writeFrameExclusively(path, Buffer.from('second'))).rejects.toThrow(`the output file "${path}" already exists`)
+		expect(writeFrameExclusively(path, Buffer.from('second'))).rejects.toThrow(`the output file "${path}" already exists`)
 		expect(await Bun.file(path).text()).toBe('first')
 		expect(await Array.fromAsync(new Bun.Glob('*').scan(directory))).toEqual(['frame.fit'])
 	})
