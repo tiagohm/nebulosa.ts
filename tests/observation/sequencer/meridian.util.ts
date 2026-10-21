@@ -6,7 +6,8 @@ import type { PierSide, TrackMode } from '../../../src/devices/indi/device'
 import { type Angle, normalizePI } from '../../../src/math/units/angle'
 import { mountKeyHolders, type SequencerHardProtectionLead, type SequencerMeridianFlipSettings, type SequencerMountMotionBounds } from '../../../src/observation/sequencer/pointing'
 import type { SequencerEvent, SequencerTaskId } from '../../../src/observation/sequencer/sequencer'
-import type { DeviceCommandEntry, DeviceLogEntry, DeviceTransitionEntry, LeaseEntry, RunnerLogEntry, ScriptedGuidingEntry } from './util'
+import type { DeviceCommandEntry, DeviceLogEntry, DeviceTransitionEntry } from '../../util/rig'
+import type { LeaseEntry, RunnerLogEntry, ScriptedGuidingEntry } from './util'
 
 // Oracle of the meridian protection of the Sequencer (section 24, invariants I18, I30, I31, I41, I47, I54, I58–I60 and
 // I62–I69). It replays one log merged from the device recorder (or the device log of a fake mount), the runner

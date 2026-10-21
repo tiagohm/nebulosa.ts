@@ -25,24 +25,8 @@ import { holdSequencerDither } from '../../../src/observation/sequencer/trigger'
 import { waitUntil } from '../../util'
 // oxfmt-ignore
 import { assertMountKeyClosure } from './meridian.util'
-import {
-	assertRunnerInvariants,
-	assertSequencerInvariants,
-	connectSequencerRig,
-	createSequencerRig,
-	createTestSequence,
-	type DeviceCommandEntry,
-	expectNoSequencerLeaks,
-	ManualSequencerClock,
-	recordDevices,
-	recordLeases,
-	recordRunner,
-	resetSequencerRig,
-	RIG_INITIAL_POINTING,
-	type RunnerRecorder,
-	ScriptedGuidingSession,
-	type TestSequence,
-} from './util'
+import { connectSimulatorRig, createSimulatorRig, createTestSequence, type DeviceCommandEntry, expectNoRigLeaks, ManualClock, recordDevices, resetSimulatorRig, RIG_INITIAL_POINTING, type TestSequence } from '../../util/rig'
+import { assertRunnerInvariants, assertSequencerInvariants, recordLeases, recordRunner, type RunnerRecorder, ScriptedGuidingSession } from './util'
 
 // Guiding and dither of the Sequencer: the tasks of sequencer/guiding.ts driven by the real runner over fake devices,
 // a manual clock and a scripted guiding session (startup quiescence, ensureGuiding, ditherAndSettle, the shutdown
@@ -88,7 +72,7 @@ interface Harness {
 	readonly guiding: ScriptedGuidingSession
 	readonly coordinator: OperationCoordinator
 	readonly recorder: RunnerRecorder
-	readonly clock: ManualSequencerClock
+	readonly clock: ManualClock
 	readonly trace: { readonly sequence: number; readonly label: string }[]
 }
 
@@ -116,7 +100,7 @@ afterEach(() => {
 function start(configuration: SequencerConfiguration, options: HarnessOptions = {}): Harness {
 	const sequence = options.sequence ?? createTestSequence()
 	const coordinator = options.coordinator ?? new OperationCoordinator(new ResourceArbiter())
-	const clock = new ManualSequencerClock()
+	const clock = new ManualClock()
 	const recorder = recordRunner(coordinator, sequence)
 	recorders.push(recorder)
 	const guiding = options.guiding ?? new ScriptedGuidingSession({}, sequence)
@@ -433,7 +417,7 @@ describe('49.11 75: ownership of the run', () => {
 
 	test('a pause that never quiesces is cut at guiding.pauseTimeout', async () => {
 		const coordinator = new OperationCoordinator(new ResourceArbiter())
-		const clock = new ManualSequencerClock()
+		const clock = new ManualClock()
 		const guiding = new ScriptedGuidingSession()
 		guiding.onPause = (scope) =>
 			new Promise((resolve) => {
@@ -499,12 +483,12 @@ describe('preflight', () => {
 })
 
 // The INDI simulator rig, created once for the sessions below and the preflight that needs real devices.
-let rigInstance: Awaited<ReturnType<typeof createSequencerRig>> | undefined
+let rigInstance: Awaited<ReturnType<typeof createSimulatorRig>> | undefined
 
 async function createRig() {
 	if (rigInstance === undefined) {
-		rigInstance = await createSequencerRig()
-		await connectSequencerRig(rigInstance)
+		rigInstance = await createSimulatorRig()
+		await connectSimulatorRig(rigInstance)
 	}
 
 	return rigInstance
@@ -515,7 +499,7 @@ afterAll(async () => {
 })
 
 describe('sessions on the simulators', () => {
-	let rig: Awaited<ReturnType<typeof createSequencerRig>>
+	let rig: Awaited<ReturnType<typeof createSimulatorRig>>
 	let clock: SequencerClock
 	const ROOT = join(STORAGE_ROOT, 'rig')
 
@@ -525,11 +509,11 @@ describe('sessions on the simulators', () => {
 	})
 
 	beforeEach(async () => {
-		await resetSequencerRig(rig, rig.devices().focuser.position.value)
+		await resetSimulatorRig(rig, rig.devices().focuser.position.value)
 	})
 
 	afterEach(async () => {
-		await expectNoSequencerLeaks(rig)
+		await expectNoRigLeaks(rig)
 	})
 
 	// Runs one session on the rig with the given guiding services, startup and pre-capture tasks.

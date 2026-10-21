@@ -28,8 +28,9 @@ import type { SequencerCameraCapture, SequencerClock, SequencerConfiguration, Se
 import { createSequencerRuntimeState } from '../../../src/observation/sequencer/state'
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask } from '../../../src/observation/sequencer/storage'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
+import { createTestSequence, recordManagers } from '../../util/rig'
 import { assertMeridianProtectionInvariants, guidingEntries, type MeridianRunnerEntry, runtimeEntries } from './meridian.util'
-import { createTestSequence, FakeMount, recordManagers, recordRunner, ScriptedGuidingSession } from './util'
+import { FakeMount, recordRunner, ScriptedGuidingSession } from './util'
 
 // Hard path of the meridian protection (section 24.5, steps 2a–2c) and the inherited pulse barrier of the startup over
 // the real guide output commander, resource arbiter, operation coordinator and device lifecycle, with the ST4 port of

@@ -33,7 +33,8 @@ import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepare
 import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
 import { assertMeridianProtectionInvariants, assertMountKeyClosure, type MeridianMountState, runtimeEntries } from './meridian.util'
 // oxfmt-ignore
-import { assertJournalInvariants, assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, expectNoSequencerLeaks, type LeaseEntry, RIG_INITIAL_POINTING, recordDevices, recordLeases, recordRunner, resetSequencerRig, type RunnerLogEntry } from './util'
+import { connectSimulatorRig, createSimulatorRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, expectNoRigLeaks, RIG_INITIAL_POINTING, recordDevices, resetSimulatorRig } from '../../util/rig'
+import { assertJournalInvariants, assertRunnerInvariants, assertSequencerInvariants, type LeaseEntry, recordLeases, recordRunner, type RunnerLogEntry } from './util'
 
 // Meridian flip of the Sequencer (section 24): the pure helpers (settings, policy, motion table, protection timings and
 // lead, deadlines, guard, decision hour angle, cycle, preflight) and sessions on the INDI simulator rig with the e2e
@@ -50,13 +51,13 @@ const MARGIN = 3
 // One second of time as an hour angle, in radians.
 const SECOND = SIDEREAL_DRIFT_RATE
 
-const rig = await createSequencerRig()
+const rig = await createSimulatorRig()
 const ROOT = join(rig.capturesDir, 'sessions')
 const clock: SequencerClock = { wallNow: () => rig.simulators.mount.utcTime, monotonicNow: () => performance.now(), delay: abortableDelay }
 const lifecycle: SequencerLifecycleServices = { mountCommander: rig.commanders.mount, cameraCommander: rig.commanders.camera }
 
 beforeAll(async () => {
-	await connectSequencerRig(rig)
+	await connectSimulatorRig(rig)
 	expect(await rig.commanders.mount.setSlewRate(rig.coordinator, rig.devices().mount, 'SPEED_7')).toMatchObject({ ok: true })
 })
 
@@ -65,13 +66,13 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-	await resetSequencerRig(rig, rig.devices().focuser.position.value)
+	await resetSimulatorRig(rig, rig.devices().focuser.position.value)
 	const { mount } = rig.devices()
 	if (mount.trackMode !== 'SIDEREAL') expect(await rig.commanders.mount.setTrackMode(rig.coordinator, mount, 'SIDEREAL')).toMatchObject({ ok: true })
 })
 
 afterEach(async () => {
-	await expectNoSequencerLeaks(rig)
+	await expectNoRigLeaks(rig)
 })
 
 // Apparent local sidereal time of the rig mount at its clock.

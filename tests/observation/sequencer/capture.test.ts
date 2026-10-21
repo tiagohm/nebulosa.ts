@@ -12,8 +12,9 @@ import type { SequencerCameraCapture, SequencerCaptureConfiguration, SequencerCh
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal, sequencerFrameDestination } from '../../../src/observation/sequencer/storage'
 import { waitUntil } from '../../util'
 // oxfmt-ignore
-import { assertJournalInvariants, connectSequencerRig, createSequencerRig, createTestSequence, expectNoSequencerLeaks, injectFileSystemFaults, ManualSequencerClock } from './util'
+import { connectSimulatorRig, createSimulatorRig, createTestSequence, expectNoRigLeaks, ManualClock } from '../../util/rig'
 import { DEFAULT_CAMERA_CAPTURE_START, type CameraCaptureStart } from '../../../src/observation/capture/types'
+import { assertJournalInvariants, injectFileSystemFaults } from './util'
 
 // The primary capture of the Sequencer over the real CameraCapturer and the INDI simulators: the request it commands,
 // the durable writer of the storage passed per capture, the refusal of `beforeExposure`, and the wait for a camera
@@ -23,12 +24,12 @@ import { DEFAULT_CAMERA_CAPTURE_START, type CameraCaptureStart } from '../../../
 
 const LIGHT: SequencerCameraCapture = { exposureTime: 10, exposureTimeUnit: 'millisecond', frameType: 'LIGHT', x: 0, y: 0, width: 64, height: 64, subframe: true, binX: 2, binY: 2, frameFormat: 'MONO', gain: 10, offset: 5, compressed: false }
 
-const rig = await createSequencerRig()
+const rig = await createSimulatorRig()
 // Session directories live inside the captures directory, so the leak check sees their partial files.
 const ROOT = join(rig.capturesDir, 'sessions')
 
 beforeAll(async () => {
-	await connectSequencerRig(rig)
+	await connectSimulatorRig(rig)
 })
 
 afterAll(async () => {
@@ -36,7 +37,7 @@ afterAll(async () => {
 })
 
 afterEach(async () => {
-	await expectNoSequencerLeaks(rig)
+	await expectNoRigLeaks(rig)
 })
 
 function configurationOf(count: number = 1, capture: Partial<SequencerCaptureConfiguration> = {}): SequencerConfiguration {
@@ -82,7 +83,7 @@ interface SessionOptions {
 // Starts the next process of the session `sessionId`, camera-only, with the real capturer.
 function startSession(sessionId: string, options: SessionOptions = {}): Session {
 	const configuration = options.configuration ?? configurationOf()
-	const clock = options.clock ?? new ManualSequencerClock()
+	const clock = options.clock ?? new ManualClock()
 	const storage = new FileSystemSequencerStorage({ root: ROOT, sessionId, wallNow: clock.wallNow })
 	const events: SequencerEvent[] = []
 	const capturer = options.capturer ?? rig.capturer
@@ -604,7 +605,7 @@ describe('49.17 2: camera quarantine', () => {
 
 	test('a timed-out exposure counts one failure; the retry waits for the stale payload without counting or commanding anything (I37)', async () => {
 		await withQuarantine(async (capturer, payloads) => {
-			const clock = new ManualSequencerClock()
+			const clock = new ManualClock()
 			const sessionId = Bun.randomUUIDv7()
 			const exposures = spyStartExposure()
 
@@ -671,7 +672,7 @@ describe('49.17 2: camera quarantine', () => {
 	test('a quarantine that never ends applies cameraRecovery.onTimeout once', async () => {
 		for (const onTimeout of ['stop', 'fail'] as const) {
 			await withQuarantine(async (capturer) => {
-				const clock = new ManualSequencerClock()
+				const clock = new ManualClock()
 				const sessionId = Bun.randomUUIDv7()
 				const session = startSession(sessionId, { configuration: configurationOf(1, { cameraRecovery: { timeout: 5, pollInterval: 1, onTimeout } }), clock, capturer })
 				await waitUntil(() => clock.pending > 0, 5000, 5)
@@ -691,7 +692,7 @@ describe('49.17 2: camera quarantine', () => {
 
 	test('onTimeout pause: the resumed pre-capture waits again with a new deadline', async () => {
 		await withQuarantine(async (capturer, payloads) => {
-			const clock = new ManualSequencerClock()
+			const clock = new ManualClock()
 			const sessionId = Bun.randomUUIDv7()
 			const session = startSession(sessionId, { configuration: configurationOf(1, { cameraRecovery: { timeout: 5, pollInterval: 1, onTimeout: 'pause' } }), clock, capturer })
 			await waitUntil(() => clock.pending > 0, 5000, 5)
@@ -715,7 +716,7 @@ describe('49.17 2: camera quarantine', () => {
 
 	test('a disconnection during the wait ends it without another failure; the capture policy takes over', async () => {
 		await withQuarantine(async (capturer, payloads) => {
-			const clock = new ManualSequencerClock()
+			const clock = new ManualClock()
 			const sessionId = Bun.randomUUIDv7()
 			const exposures = spyStartExposure()
 			const device = camera()
@@ -753,7 +754,7 @@ describe('49.17 2: camera quarantine', () => {
 
 	test('pause and stop during the wait are honored', async () => {
 		await withQuarantine(async (capturer) => {
-			const clock = new ManualSequencerClock()
+			const clock = new ManualClock()
 			const sessionId = Bun.randomUUIDv7()
 			const session = startSession(sessionId, { configuration: RECOVERY, clock, capturer })
 			await waitUntil(() => clock.pending > 0, 5000, 5)

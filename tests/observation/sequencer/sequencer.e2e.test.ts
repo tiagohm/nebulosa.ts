@@ -8,8 +8,9 @@ import { type SequencerRunner, startSequencerRunner } from '../../../src/observa
 import type { SequencerCameraCapture, SequencerClock, SequencerConfiguration, SequencerEvent, SequencerResult } from '../../../src/observation/sequencer/sequencer'
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
 // oxfmt-ignore
-import { assertJournalInvariants, assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceRecorder, expectNoSequencerLeaks, type RunnerRecorder, recordDevices, recordRunner, resetSequencerRig } from './util'
+import { connectSimulatorRig, createSimulatorRig, createTestSequence, type DeviceRecorder, expectNoRigLeaks, recordDevices, resetSimulatorRig } from '../../util/rig'
 import type { CameraCaptureStart } from '../../../src/observation/capture/types'
+import { assertJournalInvariants, assertRunnerInvariants, assertSequencerInvariants, type RunnerRecorder, recordRunner } from './util'
 
 // End-to-end scenarios of section 50.3 on the INDI simulator rig, with the real CameraCapturer, the filesystem
 // storage and checkpoint store, and the clock of the e2e tests: the simulated UTC of the mount as wall time, the
@@ -18,12 +19,12 @@ import type { CameraCaptureStart } from '../../../src/observation/capture/types'
 
 const LIGHT: SequencerCameraCapture = { exposureTime: 10, exposureTimeUnit: 'millisecond', frameType: 'LIGHT', x: 0, y: 0, width: 64, height: 64, subframe: true, binX: 2, binY: 2, frameFormat: 'MONO', gain: 10, offset: 5, compressed: false }
 
-const rig = await createSequencerRig()
+const rig = await createSimulatorRig()
 const ROOT = join(rig.capturesDir, 'sessions')
 const clock: SequencerClock = { wallNow: () => rig.simulators.mount.utcTime, monotonicNow: () => performance.now(), delay: abortableDelay }
 
 beforeAll(async () => {
-	await connectSequencerRig(rig)
+	await connectSimulatorRig(rig)
 })
 
 afterAll(async () => {
@@ -31,11 +32,11 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-	await resetSequencerRig(rig, rig.devices().focuser.position.value)
+	await resetSimulatorRig(rig, rig.devices().focuser.position.value)
 })
 
 afterEach(async () => {
-	await expectNoSequencerLeaks(rig)
+	await expectNoRigLeaks(rig)
 })
 
 function configurationOf(count: number): SequencerConfiguration {

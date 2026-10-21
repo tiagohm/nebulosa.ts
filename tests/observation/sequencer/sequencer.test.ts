@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'fs'
+import { join } from 'path'
 import { SIDEREAL_DRIFT_RATE } from '../../../src/core/constants'
 import { deg, hour } from '../../../src/math/units/angle'
 // oxfmt-ignore
@@ -389,4 +391,23 @@ test('system clock reads both domains and waits on the monotonic one', async () 
 	const start = performance.now()
 	expect(await SYSTEM_SEQUENCER_CLOCK.delay(5, new AbortController().signal)).toEqual({ ok: true, value: undefined })
 	expect(performance.now() - start).toBeGreaterThanOrEqual(4)
+})
+
+test('the frames of the Sequencer never configure their transfer format', () => {
+	// @ts-expect-error the transfer format is not part of a Sequencer capture.
+	const capture: SequencerCameraCapture = { ...LIGHT, transferFormat: 'NATIVE' }
+	expect(capture.exposureTime).toBe(120)
+})
+
+test('I46: the Sequencer imports no solver, star detector or binding and creates no Worker', () => {
+	const root = join(__dirname, '..', '..', '..', 'src', 'observation', 'sequencer')
+	const sources = Array.from(new Bun.Glob('*.ts').scanSync(root), (name) => join(root, name))
+	expect(sources.length).toBeGreaterThan(5)
+
+	for (const source of sources) {
+		const text = readFileSync(source, 'utf8')
+		const imports = [...text.matchAll(/from '([^']+)'/g)].map((match) => match[1])
+		expect(imports.filter((path) => /solvers\/(?!platesolver$)|bindings\/|imaging\/stars\//.test(path))).toEqual([])
+		expect(text).not.toMatch(/new Worker\b/)
+	}
 })

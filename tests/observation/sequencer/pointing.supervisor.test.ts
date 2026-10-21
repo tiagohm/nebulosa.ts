@@ -24,8 +24,9 @@ import type { SequencerCameraCapture, SequencerCheckpoint, SequencerCheckpointSt
 import { createSequencerRuntimeState, SEQUENCER_MERIDIAN_HALF_CYCLE, type SequencerRuntimeState, sequencerCheckpointOf } from '../../../src/observation/sequencer/state'
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, parseSequencerCheckpoint, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
+import { ManualClock } from '../../util/rig'
 import { assertMeridianProtectionInvariants, guidingEntries, type MeridianRunnerEntry, runtimeEntries } from './meridian.util'
-import { FakeMount, type FlipBehaviour, ManualSequencerClock, nextFakeOrder, recordRunner, ScriptedGuidingSession } from './util'
+import { FakeMount, type FlipBehaviour, nextFakeOrder, recordRunner, ScriptedGuidingSession } from './util'
 
 // Meridian supervision and flip driver of the Sequencer over a fake mount and the manual clock: the deadlines and wakes
 // of the supervisor (49.12 33–37, 7c), the hard path and its outcomes (79–85, 112, 116–118), the cycle (113), the
@@ -95,7 +96,7 @@ function gracefulIn(seconds: number, margin = 120) {
 // failures, the critical protections with their outcomes and every delay the supervisor asked the clock for.
 interface Supervised {
 	readonly fake: FakeMount
-	readonly clock: ManualSequencerClock
+	readonly clock: ManualClock
 	readonly runtime: SequencerRuntimeState
 	readonly supervisor: SequencerMeridianSupervisor
 	readonly events: SequencerEventBody[]
@@ -129,7 +130,7 @@ afterEach(() => {
 
 // Arms a supervisor at the hour angle `hourAngle` over a fake host.
 function supervise(hourAngle: Angle, options: SuperviseOptions = {}): Supervised {
-	const clock = new ManualSequencerClock(START)
+	const clock = new ManualClock(START)
 	const fake = new FakeMount(clock, hourAngle, { tracking: options.tracking ?? true, pierSide: options.pierSide ?? 'WEST', trackMode: options.trackMode ?? 'SIDEREAL' })
 	const configuration = configurationOf(flipOf(options.flip), options.target === undefined ? {} : { target: options.target(fake) })
 	const runtime = createSequencerRuntimeState(configuration, clock.wallNow())
@@ -637,7 +638,7 @@ class RecordingStore implements SequencerCheckpointStore {
 }
 
 // Saves the checkpoint of a previous process of `sessionId`.
-async function previousProcess(configuration: SequencerConfiguration, sessionId: string, clock: ManualSequencerClock, patch: Partial<SequencerRuntimeState>) {
+async function previousProcess(configuration: SequencerConfiguration, sessionId: string, clock: ManualClock, patch: Partial<SequencerRuntimeState>) {
 	const runtime = createSequencerRuntimeState(configuration, clock.wallNow())
 	Object.assign(runtime, patch)
 	await new FileSystemSequencerCheckpointStore(ROOT).save(sequencerCheckpointOf(sessionId, configuration, runtime, undefined, 1, clock.wallNow()))
@@ -645,7 +646,7 @@ async function previousProcess(configuration: SequencerConfiguration, sessionId:
 
 describe('49.12 durable flip budget', () => {
 	test('5, 9: a flip that always fails is commanded maxRetries + 1 times, each after its incremented budget was saved', async () => {
-		const clock = new ManualSequencerClock(START)
+		const clock = new ManualClock(START)
 		const fake = new FakeMount(clock, deg(1))
 		fake.flipBehaviour = () => failedOperationResult('commandFailed', 'slew refused')
 		const store = new RecordingStore()
@@ -661,7 +662,7 @@ describe('49.12 durable flip budget', () => {
 	})
 
 	test('6, 7: crashes after the dispatch or right after the saved budget never exceed maxRetries + 1 flips', async () => {
-		const clock = new ManualSequencerClock(START)
+		const clock = new ManualClock(START)
 		const fake = new FakeMount(clock, deg(1))
 		const configuration = configurationOf(flipOf())
 		const sessionId = Bun.randomUUIDv7()
@@ -695,7 +696,7 @@ describe('49.12 durable flip budget', () => {
 	})
 
 	test('8: a failed save of the budget commands no flip and fails with storage', async () => {
-		const clock = new ManualSequencerClock(START)
+		const clock = new ManualClock(START)
 		const fake = new FakeMount(clock, deg(1))
 		const store = new RecordingStore()
 		store.failWhen = (checkpoint) => checkpoint.meridianFlipAttempts > 0
@@ -706,7 +707,7 @@ describe('49.12 durable flip budget', () => {
 	})
 
 	test('10: a restart already on the post-flip side with the budget spent commands nothing and fails nothing', async () => {
-		const clock = new ManualSequencerClock(START)
+		const clock = new ManualClock(START)
 		const fake = new FakeMount(clock, deg(1), { pierSide: 'EAST' })
 		const configuration = configurationOf(flipOf())
 		const sessionId = Bun.randomUUIDv7()
@@ -723,7 +724,7 @@ describe('49.12 durable flip budget', () => {
 		const random = mulberry32(20311020)
 
 		for (let run = 0; run < 25; run++) {
-			const clock = new ManualSequencerClock(START)
+			const clock = new ManualClock(START)
 			const fake = new FakeMount(clock, deg(1))
 			const maxRetries = Math.floor(random() * 3)
 			const configuration = configurationOf(flipOf({ maxRetries }))
@@ -774,7 +775,7 @@ describe('49.12 durable flip budget', () => {
 
 describe('49.12 pier side and destination', () => {
 	test('108: a flip ending on NEITHER waits for the post-flip side and reports it unverified', async () => {
-		const clock = new ManualSequencerClock(START)
+		const clock = new ManualClock(START)
 		const fake = new FakeMount(clock, deg(1))
 		fake.flipBehaviour = () => {
 			fake.set({ pierSide: 'NEITHER' })
@@ -797,7 +798,7 @@ describe('49.12 pier side and destination', () => {
 	})
 
 	test('109: a pier side that stays NEITHER fails the flip after pierSideTimeout, exposing nothing', async () => {
-		const clock = new ManualSequencerClock(START)
+		const clock = new ManualClock(START)
 		const fake = new FakeMount(clock, deg(1), { pierSide: 'NEITHER' })
 		const process = startProcess(configurationOf(flipOf({ pierSideTimeout: 10 })), fake, { sessionId: Bun.randomUUIDv7() })
 		await waitUntil(() => clock.pending >= 2, 2000, 1)
@@ -810,7 +811,7 @@ describe('49.12 pier side and destination', () => {
 	})
 
 	test('110: a restart with a transient NEITHER commands no flip and completes once the post-flip side is read', async () => {
-		const clock = new ManualSequencerClock(START)
+		const clock = new ManualClock(START)
 		const fake = new FakeMount(clock, deg(1), { pierSide: 'NEITHER' })
 		const configuration = configurationOf(flipOf({ pierSideTimeout: 10 }))
 		const sessionId = Bun.randomUUIDv7()
@@ -827,7 +828,7 @@ describe('49.12 pier side and destination', () => {
 
 	test('111: the pre-flip side read in COMPLETED recreates the state from the budget: a new flip with budget, a failure without', async () => {
 		for (const maxRetries of [1, 0]) {
-			const clock = new ManualSequencerClock(START)
+			const clock = new ManualClock(START)
 			const fake = new FakeMount(clock, deg(1))
 			const configuration = configurationOf(flipOf({ maxRetries }), {}, DARK, 2)
 			const process = startProcess(configuration, fake, {
@@ -852,7 +853,7 @@ describe('49.12 pier side and destination', () => {
 	})
 
 	test('115: without a target the flip goes to the published position of date; with one, to the J2000 target at the session instant', async () => {
-		const clock = new ManualSequencerClock(Date.UTC(2040, 0, 1))
+		const clock = new ManualClock(Date.UTC(2040, 0, 1))
 		const fake = new FakeMount(clock, deg(1))
 		const { rightAscension, declination } = fake.mount.equatorialCoordinate
 		expect(await startProcess(configurationOf(flipOf()), fake, { sessionId: Bun.randomUUIDv7() }).result).toMatchObject({ state: 'completed' })
@@ -874,7 +875,7 @@ describe('49.12 pier side and destination', () => {
 describe('49.12 flip slews and the hard deadline', () => {
 	// Flip due, tracking, graceful and hard deadlines together 10 s ahead (protectionMargin = lead), flipTimeout 30 s.
 	const slewing = (behaviour: (fake: FakeMount) => FlipBehaviour) => {
-		const clock = new ManualSequencerClock(START)
+		const clock = new ManualClock(START)
 		const fake = new FakeMount(clock, hardIn(10), { tracking: true })
 		fake.flipBehaviour = behaviour(fake)
 		const flip = flipOf({ protectionMargin: LEAD / 1000, flipAt: hardIn(20), prepareAt: hardIn(30), flipTimeout: 30 })
@@ -937,7 +938,7 @@ describe('49.12 flip slews and the hard deadline', () => {
 
 describe('49.7 12 beforeExposure and the meridian', () => {
 	test('a deadline elapsed between the guard and the dispatch exposes nothing; the pre-capture re-enters, flips, then exposes', async () => {
-		const clock = new ManualSequencerClock(START)
+		const clock = new ManualClock(START)
 		const fake = new FakeMount(clock, -deg(30))
 		const configuration = configurationOf(flipOf())
 		const flipsAtExposure: number[] = []
@@ -973,7 +974,7 @@ describe('49.12 96, 97 tracking reconciled after the acquisition', () => {
 
 	// A mount tracking off its target in the meridian zone (ensureTracking defers) and the J2000 target at −30°.
 	const offTarget = (state: Partial<Pick<Mount, 'trackMode' | 'tracking'>> = {}) => {
-		const clock = new ManualSequencerClock(START)
+		const clock = new ManualClock(START)
 		const fake = new FakeMount(clock, -deg(30), { trackMode: state.trackMode ?? 'SIDEREAL' })
 		const target = fake.target()
 		fake.set({ tracking: state.tracking ?? false })
@@ -1014,7 +1015,7 @@ describe('49.12 96, 97 tracking reconciled after the acquisition', () => {
 	})
 
 	test('96: the fast path of the commander, already on the target, reconciles tracking all the same', async () => {
-		const clock = new ManualSequencerClock(START)
+		const clock = new ManualClock(START)
 		const fake = new FakeMount(clock, -deg(30), { trackMode: 'LUNAR' })
 		const configuration = configurationOf(flipOf(), { target: fake.target(), pointing: POINTING }, LIGHT)
 		// No ensureTracking before the acquisition: only its reconciliation turns tracking on.
@@ -1030,7 +1031,7 @@ describe('49.12 96, 97 tracking reconciled after the acquisition', () => {
 	})
 
 	test('97: a destination the slew brought into the meridian zone gets no tracking on; acquired, the flip is decided before any light', async () => {
-		const clock = new ManualSequencerClock(START)
+		const clock = new ManualClock(START)
 		// The target is 3 s before the graceful deadline when the goTo is commanded; the slew takes 10 s.
 		const fake = new FakeMount(clock, gracefulIn(3))
 		const target = fake.target()
@@ -1061,7 +1062,7 @@ describe('49.12 96, 97 tracking reconciled after the acquisition', () => {
 
 describe('49.12 97 incorrect variant', () => {
 	test('a goTo commanded with the target already past the graceful deadline on the pre-flip side is rejected by the oracle', async () => {
-		const clock = new ManualSequencerClock(START)
+		const clock = new ManualClock(START)
 		const fake = new FakeMount(clock, gracefulIn(-5))
 		const target = fake.target()
 		fake.place(-deg(30))
@@ -1076,7 +1077,7 @@ describe('49.12 97 incorrect variant', () => {
 
 describe('49.12 94 mount off its target', () => {
 	test('a tracking mount in the meridian zone whose target flip is not due stops tracking, flips nothing, and the dark is exposed', async () => {
-		const clock = new ManualSequencerClock(START)
+		const clock = new ManualClock(START)
 		const fake = new FakeMount(clock, -deg(30))
 		const target = fake.target()
 		// The mount tracks elsewhere, 20 s before the graceful deadline of its own hour angle: the 10 s dark and the 30 s
@@ -1101,7 +1102,7 @@ describe('49.12 94 mount off its target', () => {
 
 describe('49.5 5 pause across the meridian', () => {
 	const pausedSession = (options: { readonly flip?: Partial<SequencerMeridianFlipConfiguration> } = {}) => {
-		const clock = new ManualSequencerClock(START)
+		const clock = new ManualClock(START)
 		const fake = new FakeMount(clock, gracefulIn(30), { tracking: true })
 		const guiding = new ScriptedGuidingSession({}, fake.sequence)
 		guiding.current = 'guiding'

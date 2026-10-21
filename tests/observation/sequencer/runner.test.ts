@@ -18,7 +18,8 @@ import { pushSequencerCompensation } from '../../../src/observation/sequencer/st
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
 // oxfmt-ignore
-import { assertJournalInvariants, assertRunnerInvariants, connectSequencerRig, createSequencerRig, injectFileSystemFaults, ManualSequencerClock, type RunnerLogEntry, type RunnerOracleOptions, type RunnerRecorder, recordRunner, resetSequencerRig, ScriptedGuidingSession, ScriptedSafetySource } from './util'
+import { connectSimulatorRig, createSimulatorRig, ManualClock, resetSimulatorRig } from '../../util/rig'
+import { assertJournalInvariants, assertRunnerInvariants, injectFileSystemFaults, type RunnerLogEntry, type RunnerOracleOptions, type RunnerRecorder, recordRunner, ScriptedGuidingSession, ScriptedSafetySource } from './util'
 
 const LIGHT: SequencerCameraCapture = { exposureTime: 60, exposureTimeUnit: 'second', frameType: 'LIGHT', x: 0, y: 0, width: 0, height: 0, subframe: false, binX: 1, binY: 1, frameFormat: '', gain: 100, offset: 10, compressed: false }
 const DARK: SequencerCameraCapture = { ...LIGHT, frameType: 'DARK' }
@@ -172,7 +173,7 @@ interface Harness {
 	readonly script: Script
 	readonly coordinator: OperationCoordinator
 	readonly recorder: RunnerRecorder
-	readonly clock: ManualSequencerClock
+	readonly clock: ManualClock
 	readonly devices: SequencerDevices
 	readonly storage: FileSystemSequencerStorage
 }
@@ -193,7 +194,7 @@ afterAll(async () => {
 interface HarnessOptions {
 	readonly devices?: SequencerDevices
 	readonly coordinator?: OperationCoordinator
-	readonly clock?: ManualSequencerClock
+	readonly clock?: ManualClock
 	readonly focuserCommander?: FocuserCommander
 	readonly wheelCommander?: WheelCommander
 	readonly disposeSignal?: AbortSignal
@@ -219,7 +220,7 @@ interface HarnessOptions {
 
 function start(configuration: SequencerConfiguration, script: Script, options: HarnessOptions = {}): Harness {
 	const coordinator = options.coordinator ?? new OperationCoordinator(new ResourceArbiter())
-	const clock = options.clock ?? new ManualSequencerClock()
+	const clock = options.clock ?? new ManualClock()
 	const devices = options.devices ?? DEVICES
 	const recorder = recordRunner(coordinator)
 	recorders.push(recorder)
@@ -1615,9 +1616,9 @@ describe('model-based', () => {
 
 describe('rig compensation', () => {
 	test('2, 2a, 2b: graceful during autofocus moves the wheel then the focuser back in new roots, a busy focuser fails its compensation', async () => {
-		await using rig = await createSequencerRig()
-		await connectSequencerRig(rig)
-		await resetSequencerRig(rig, 40000)
+		await using rig = await createSimulatorRig()
+		await connectSimulatorRig(rig)
+		await resetSimulatorRig(rig, 40000)
 		const { focuser, wheel, camera } = rig.devices()
 		const devices: SequencerDevices = { camera, focuser, wheel }
 
@@ -1671,7 +1672,7 @@ describe('rig compensation', () => {
 		expect(holding.runner.snapshot().intents.autofocus).toBeTrue()
 		expect([focuser.position.value, wheel.position]).toEqual([42000, 0])
 		await finish(holding)
-		await resetSequencerRig(rig, 40000)
+		await resetSimulatorRig(rig, 40000)
 	})
 })
 

@@ -16,7 +16,8 @@ import { createSequencerIntents, createSequencerSchedulerState, createSequencerT
 // oxfmt-ignore
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, type FileSystemSequencerStorageOptions, prepareFrameDestinationTask, readSequencerJournal, type SequencerJournalEntry, sequencerFrameDestination } from '../../../src/observation/sequencer/storage'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
-import { assertJournalInvariants, injectFileSystemFaults, ManualSequencerClock } from './util'
+import { ManualClock } from '../../util/rig'
+import { assertJournalInvariants, injectFileSystemFaults } from './util'
 
 const LIGHT: SequencerCameraCapture = { exposureTime: 60, exposureTimeUnit: 'second', frameType: 'LIGHT', x: 0, y: 0, width: 0, height: 0, subframe: false, binX: 1, binY: 1, frameFormat: '', gain: 100, offset: 10, compressed: false }
 const DARK: SequencerCameraCapture = { ...LIGHT, frameType: 'DARK' }
@@ -1078,7 +1079,7 @@ const inFlight: CaptureBehaviour = async (context) => {
 interface SessionProcess {
 	readonly runner: SequencerRunner
 	readonly storage: FileSystemSequencerStorage
-	readonly clock: ManualSequencerClock
+	readonly clock: ManualClock
 	readonly events: SequencerEvent[]
 	// Slot attempts handed to the capture, `{slot}#{attempt}`.
 	readonly captures: string[]
@@ -1093,14 +1094,14 @@ interface SessionProcessOptions {
 	readonly afterPrepare?: readonly SequencerTask[]
 	readonly shutdown?: SequencerShutdownTask[]
 	readonly store?: SequencerCheckpointStore
-	readonly clock?: ManualSequencerClock
+	readonly clock?: ManualClock
 	// Sees every event after it was recorded.
 	readonly onEvent?: (event: SequencerEvent) => void
 }
 
 // Starts the next process of the session `sessionId`; the checkpoints live in ROOT unless another store is given.
 function startProcess(sessionId: string, options: SessionProcessOptions = {}): SessionProcess {
-	const clock = options.clock ?? new ManualSequencerClock()
+	const clock = options.clock ?? new ManualClock()
 	const storage = new FileSystemSequencerStorage({ root: ROOT, sessionId, wallNow: clock.wallNow })
 	const events: SequencerEvent[] = []
 	const captures: string[] = []

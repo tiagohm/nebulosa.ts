@@ -3,7 +3,7 @@ import { OperationCoordinator, successfulOperationResult, failedOperationResult 
 import { ResourceArbiter } from '../../../src/devices/orchestration/resource'
 import type { DitherPhase } from '../../../src/observation/guiding/ditherer'
 import { type GuidingInterruption, GuidingInterruptionHistory, GuidingSettleListeners, waitForGuidingSettle } from '../../../src/observation/guiding/session'
-import { ManualSequencerClock } from '../sequencer/util'
+import { ManualClock } from '../../util/rig'
 
 function interruption(receivedMonotonic: number, kind: GuidingInterruption['kind'] = 'starLost'): GuidingInterruption {
 	return { kind, receivedMonotonic, receivedAt: Date.UTC(2026, 0, 1) + receivedMonotonic }
@@ -58,7 +58,7 @@ describe('49.11 interruption history', () => {
 	})
 
 	test('13: the history is in the monotonic domain only, so a wall jump changes no window', () => {
-		const clock = new ManualSequencerClock()
+		const clock = new ManualClock()
 		const history = new GuidingInterruptionHistory(4)
 		const record = () => history.record({ kind: 'starLost', receivedMonotonic: clock.monotonicNow(), receivedAt: clock.wallNow() })
 
@@ -76,7 +76,7 @@ describe('settle wait', () => {
 	const coordinator = new OperationCoordinator(new ResourceArbiter())
 
 	test('only a settle end delivered after the dispatch began counts; its status decides', async () => {
-		const clock = new ManualSequencerClock()
+		const clock = new ManualClock()
 		const listeners = new GuidingSettleListeners()
 		listeners.notify({ kind: 'done', status: 0 })
 
@@ -107,7 +107,7 @@ describe('settle wait', () => {
 	})
 
 	test('a refused dispatch, a lost guider, the timeout and a cancellation end the wait', async () => {
-		const clock = new ManualSequencerClock()
+		const clock = new ManualClock()
 		const listeners = new GuidingSettleListeners()
 
 		expect(await waitForGuidingSettle(coordinator, 'settle', listeners, 1000, clock.delay, () => failedOperationResult('unexpectedState'))).toMatchObject({ ok: false, reason: 'unexpectedState' })

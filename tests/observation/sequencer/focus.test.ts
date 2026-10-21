@@ -15,9 +15,10 @@ import type { SequencerAutofocusConfiguration, SequencerCameraCapture, Sequencer
 import { createSequencerRuntimeState } from '../../../src/observation/sequencer/state'
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
 // oxfmt-ignore
-import { assertJournalInvariants, assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, expectNoSequencerLeaks, recordDevices, recordRunner, resetSequencerRig, type RunnerLogEntry, type TestSequence } from './util'
+import { connectSimulatorRig, createSimulatorRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, expectNoRigLeaks, recordDevices, resetSimulatorRig, type TestSequence } from '../../util/rig'
 import type { CameraCaptureStart } from '../../../src/observation/capture/types'
 import { isTimeConsumingTestSkipped } from '../../util'
+import { assertJournalInvariants, assertRunnerInvariants, assertSequencerInvariants, recordRunner, type RunnerLogEntry } from './util'
 
 // Filter, focus offsets and autofocus of the Sequencer on the INDI simulator rig, with the real commanders, the real
 // CameraCapturer, the filesystem storage and checkpoint store, and the e2e clock (the simulated UTC of the mount as wall
@@ -35,14 +36,14 @@ const NO_TRIGGERS = { onStart: false, afterResume: false, afterFlip: false, onFi
 const AUTOFOCUS: SequencerAutofocusConfiguration = { algorithm: ALGORITHM, capture: LIGHT, triggers: NO_TRIGGERS, measureTimeout: 30, onFailure: 'fail' }
 const OK: SequencerTaskResult = { ok: true }
 
-const rig = await createSequencerRig()
+const rig = await createSimulatorRig()
 const ROOT = join(rig.capturesDir, 'sessions')
 const clock: SequencerClock = { wallNow: () => rig.simulators.mount.utcTime, monotonicNow: () => performance.now(), delay: abortableDelay }
 // In-focus position of the reference filter of the modeled optics, in steps.
 const optics = { reference: 10010 }
 
 beforeAll(async () => {
-	await connectSequencerRig(rig)
+	await connectSimulatorRig(rig)
 })
 
 afterAll(async () => {
@@ -50,12 +51,12 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-	await resetSequencerRig(rig, 10000)
+	await resetSimulatorRig(rig, 10000)
 	optics.reference = 10010
 })
 
 afterEach(async () => {
-	await expectNoSequencerLeaks(rig)
+	await expectNoRigLeaks(rig)
 })
 
 // Places the wheel on `slot` and the focuser at `position` through the commanders.

@@ -11,7 +11,7 @@ import type { DitherPhase, DitherRequest } from '../../../src/observation/guidin
 import type { GuidingSettle } from '../../../src/observation/guiding/session'
 import { DEFAULT_PHD2_PAUSED_EVENT_ALLOWANCE, PHD2GuidingSession, type PHD2GuidingSessionOptions, phd2ResourceKey } from '../../../src/observation/guiding/session.phd2'
 import { waitUntil } from '../../util'
-import { ManualSequencerClock } from '../sequencer/util'
+import { ManualClock } from '../../util/rig'
 
 // PHD2GuidingSession against a scripted JSON-RPC server on a free local port: each request is answered by the script
 // of its method (or left unanswered), and the test pushes PHD2 events whenever it wants.
@@ -101,13 +101,13 @@ interface Setup {
 	readonly server: FakePHD2
 	readonly client: PHD2Client
 	readonly session: PHD2GuidingSession
-	readonly clock: ManualSequencerClock
+	readonly clock: ManualClock
 }
 
 function setup(options: Partial<PHD2GuidingSessionOptions> = {}): Setup {
 	const server = new FakePHD2()
 	const client = new PHD2Client()
-	const clock = new ManualSequencerClock()
+	const clock = new ManualClock()
 	const session = new PHD2GuidingSession(client, { host: '127.0.0.1', port: server.port, maxGuidePulse: 2500, delay: clock.delay, ...options })
 	cleanups.push(() => server[Symbol.dispose]())
 	cleanups.push(() => client.close())

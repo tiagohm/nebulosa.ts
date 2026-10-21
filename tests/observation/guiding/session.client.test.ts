@@ -11,11 +11,27 @@ import type { GuidingSettle } from '../../../src/observation/guiding/session'
 import { guideOutputLifecycleKey, LocalGuidingSession } from '../../../src/observation/guiding/session.client'
 import { StarTracker } from '../../../src/observation/guiding/tracker.star'
 import { waitUntil } from '../../util'
-import { assertSequencerInvariants, connectSequencerRig, createSequencerRig, expectNoSequencerLeaks, ManualSequencerClock, recordDevices, resetSequencerRig } from '../sequencer/util'
+import { connectSimulatorRig, createSimulatorRig, type DeviceLogEntry, expectNoRigLeaks, ManualClock, recordDevices, resetSimulatorRig } from '../../util/rig'
 
 // LocalGuidingSession over a real GuiderClient whose guide camera is a fake (its exposures go nowhere) and whose guide
-// output is the ST4 port of the mount simulator of the Sequencer rig, with the real GuideOutputCommander, arbiter,
+// output is the ST4 port of the mount simulator of the simulator rig, with the real GuideOutputCommander, arbiter,
 // coordinator and device lifecycle. Settles are reported by injecting the SettleDone event of the client.
+
+const MOUNT_MOTION_COMMANDS = new Set(['goTo', 'flipTo', 'park', 'unpark', 'home', 'findHome'])
+
+// Throws when a mount motion command was recorded while a guide output reported `pulsing`.
+function expectNoMountMotionWhilePulsing(log: readonly DeviceLogEntry[]) {
+	const pulsing = new Set<string>()
+
+	for (const entry of log.toSorted((a, b) => a.sequence - b.sequence)) {
+		if (entry.kind === 'transition' && entry.property === 'pulsing') {
+			if (entry.value === true) pulsing.add(entry.device)
+			else pulsing.delete(entry.device)
+		} else if (entry.kind === 'command' && entry.manager === 'mount' && MOUNT_MOTION_COMMANDS.has(entry.command) && pulsing.size > 0) {
+			throw new Error(`mount ${entry.command} on ${entry.device} (#${entry.sequence}) while ${[...pulsing].join(', ')} is pulsing`)
+		}
+	}
+}
 
 const SETTLE: GuidingSettle = { pixels: 1.5, time: 1, timeout: 10 }
 const OWNER = { id: 'observation', kind: 'test' }
@@ -32,10 +48,10 @@ class FakeCameraManager {
 
 const GUIDE_CAMERA: Camera = { ...DEFAULT_CAMERA, id: 'Guide Camera', name: 'Guide Camera', hardwareId: 'guide-camera', connected: true }
 
-const rig = await createSequencerRig()
+const rig = await createSimulatorRig()
 
 beforeAll(async () => {
-	await connectSequencerRig(rig)
+	await connectSimulatorRig(rig)
 })
 
 afterAll(async () => {
@@ -43,7 +59,7 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-	await resetSequencerRig(rig, rig.devices().focuser.position.value)
+	await resetSimulatorRig(rig, rig.devices().focuser.position.value)
 })
 
 // Every session of a test, disposed after it.
@@ -60,20 +76,20 @@ afterEach(async () => {
 
 	expect(rig.arbiter.ownersOf(resourceKey(GUIDE_CAMERA))).toEqual([])
 	await waitUntil(() => !rig.devices().guideOutput.pulsing, 3000, 10)
-	await expectNoSequencerLeaks(rig)
+	await expectNoRigLeaks(rig)
 })
 
 interface Setup {
 	readonly client: GuiderClient
 	readonly session: LocalGuidingSession
 	readonly guider: GuiderClientGuiderOptions
-	readonly clock: ManualSequencerClock
+	readonly clock: ManualClock
 }
 
 function setup(options: { readonly pulseCeiling?: number; readonly guider?: GuiderClientGuiderOptions } = {}): Setup {
 	const guider = { ...options.guider }
 	const client = new GuiderClient(new FakeCameraManager() as unknown as CameraManager, rig.managers.guideOutput, new StarTracker(), { guider })
-	const clock = new ManualSequencerClock()
+	const clock = new ManualClock()
 	const session = new LocalGuidingSession(client, GUIDE_CAMERA, rig.devices().guideOutput, rig.commanders.guideOutput, { pulseCeiling: options.pulseCeiling, delay: clock.delay })
 	sessions.push({ client, session })
 	return { client, session, guider, clock }
@@ -382,7 +398,7 @@ describe('49.11 pause and resume', () => {
 		expect(slewed.ok).toBeTrue()
 
 		// I14: the slew never overlapped the pulse.
-		assertSequencerInvariants(recorder.entries)
+		expectNoMountMotionWhilePulsing(recorder.entries)
 	}, 20000)
 
 	test('79 to 81: resume reopens the gate before guiding again; a refusal closes it and pauses; a failed settle keeps it open', async () => {

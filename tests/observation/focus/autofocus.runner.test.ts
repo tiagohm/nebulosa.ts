@@ -13,7 +13,7 @@ import type { CameraCaptureStart } from '../../../src/observation/capture/types'
 import { AutoFocus, type AutoFocusStep } from '../../../src/observation/focus/autofocus'
 import { type AutoFocusCaptureOptions, type AutoFocusFrame, type AutoFocusMeasurer, type AutoFocusRunOptions, type AutoFocusRunResult, autoFocusCaptureRequest, runAutoFocus } from '../../../src/observation/focus/autofocus.runner'
 import { waitUntil } from '../../util'
-import { ManualSequencerClock } from '../sequencer/util'
+import { ManualClock } from '../../util/rig'
 
 // The physical autofocus loop over fakes and a manual clock: the moves of the state machine reproduced on the focuser,
 // invalid measurements, the restore of a failed run, the cancellation, the range check, and the auxiliary FITS handed
@@ -128,7 +128,7 @@ function curveMeasurer(focuser: FakeFocuser, calls: MeasureCall[], order: () => 
 }
 
 interface Harness {
-	readonly clock: ManualSequencerClock
+	readonly clock: ManualClock
 	readonly directory: string
 	readonly focuser: FakeFocuser
 	readonly captures: CaptureCall[]
@@ -147,7 +147,7 @@ interface HarnessOptions {
 
 // Autofocus over the fake optics, focuser and capturer with a manual clock; auxiliary frames in a fresh directory.
 function harness(options: HarnessOptions = {}): Harness {
-	const clock = new ManualSequencerClock()
+	const clock = new ManualClock()
 	const directory = mkdtempSync(join(tmpdir(), 'nebulosa-autofocus-'))
 	const focuser = new FakeFocuser(options.position ?? 25100, 0, options.max ?? 100000)
 	let sequence = 0

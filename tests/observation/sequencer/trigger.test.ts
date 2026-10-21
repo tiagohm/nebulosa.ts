@@ -3,7 +3,7 @@ import type { SequencerAutofocusTriggers, SequencerConfiguration } from '../../.
 import { createSequencerRuntimeState } from '../../../src/observation/sequencer/state'
 // oxfmt-ignore
 import { autofocusDue, bootstrapSequencerElapsedAnchors, lightExposuresSince, recenterDue, recordSequencerActionSuccess, recordSequencerAutofocusSuccess, type SequencerAutofocusObservation, sequencerElapsedSince } from '../../../src/observation/sequencer/trigger'
-import { ManualSequencerClock } from './util'
+import { ManualClock } from '../../util/rig'
 
 // Pure trigger predicates and anchors: the periodic recenter by light exposures and by elapsed monotonic time, the
 // autofocus triggers, the success that advances an anchor, and the bootstrap of the runtime anchors of a resumed session.
@@ -39,7 +39,7 @@ describe('recenter', () => {
 	})
 
 	test('a success advances the light exposures, the wall instant and the monotonic anchor together; elapsed ignores the wall clock', () => {
-		const clock = new ManualSequencerClock(Date.UTC(2026, 0, 1), 5000)
+		const clock = new ManualClock(Date.UTC(2026, 0, 1), 5000)
 		const runtime = createSequencerRuntimeState(CONFIGURATION, clock.wallNow())
 		runtime.anchors.lightExposures = 12
 
@@ -138,7 +138,7 @@ describe('autofocus', () => {
 	})
 
 	test('one success satisfies every trigger at once: anchor, temperature, filter, intent, resume and flip', () => {
-		const clock = new ManualSequencerClock(Date.UTC(2026, 0, 1), 7000)
+		const clock = new ManualClock(Date.UTC(2026, 0, 1), 7000)
 		const runtime = createSequencerRuntimeState(CONFIGURATION, clock.wallNow())
 		const triggers: SequencerAutofocusTriggers = { onStart: true, afterResume: true, afterFlip: true, onFilterChange: true, afterFrames: 2, interval: 600, temperatureDelta: 1 }
 		runtime.anchors.lightExposures = 9

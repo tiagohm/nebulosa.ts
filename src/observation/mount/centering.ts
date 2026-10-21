@@ -58,14 +58,14 @@ export interface CenteringOptions {
 	readonly slew?: Pick<MountCommandOptions, 'timeout' | 'settleTimeout'>
 }
 
-// Clock of a centering, with the contract of the Sequencer clock: `wallNow` (Unix ms) for the exposure midpoint and the
+// Clock of a centering: `wallNow` (Unix ms) for the exposure midpoint and the
 // conversion instant of the mount commands, `monotonicNow` and `delay` for the settle and the solve timeout.
 export interface CenteringClock extends CameraCaptureClock {
 	// Abortable wait in the monotonic domain, in ms.
 	readonly delay: AbortableDelay
 }
 
-// Fixed ICRS target ('J2000' as in `SequencerTarget`), in radians. JNOW is not accepted: a caller holding an
+// Fixed ICRS target ('J2000'), in radians. JNOW is not accepted: a caller holding an
 // equinox-of-date coordinate converts it first, with the instant that defines it.
 export interface CenteringTarget {
 	// Equatorial frame; only 'J2000' (ICRS).

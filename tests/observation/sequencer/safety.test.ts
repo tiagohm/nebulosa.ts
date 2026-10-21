@@ -22,7 +22,8 @@ import { isSequencerSafetyBlocking } from '../../../src/observation/sequencer/st
 import { FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
 import { waitUntil } from '../../util'
 // oxfmt-ignore
-import { assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, expectNoSequencerLeaks, FakeMount, ManualSequencerClock, type RunnerRecorder, recordDevices, recordRunner, resetSequencerRig, ScriptedGuidingSession, ScriptedSafetySource } from './util'
+import { connectSimulatorRig, createSimulatorRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, expectNoRigLeaks, ManualClock, recordDevices, resetSimulatorRig } from '../../util/rig'
+import { assertRunnerInvariants, assertSequencerInvariants, FakeMount, type RunnerRecorder, recordRunner, ScriptedGuidingSession, ScriptedSafetySource } from './util'
 
 // Safety of the Sequencer (sections 18, 20.1, 31, 32 and 49.15–49.16): the gates of the startup and of the pre-capture,
 // the reaction of the runner to a change while running, and the critical protection of `shutdownImmediately`, over a
@@ -97,7 +98,7 @@ class Observatory {
 	mountParked = true
 	cooler = false
 
-	constructor(readonly clock: ManualSequencerClock) {
+	constructor(readonly clock: ManualClock) {
 		this.fake = new FakeMount(clock, -deg(60))
 	}
 
@@ -242,7 +243,7 @@ interface SessionOptions {
 // One session under test.
 interface Session {
 	readonly runner: SequencerRunner
-	readonly clock: ManualSequencerClock
+	readonly clock: ManualClock
 	readonly observatory: Observatory
 	readonly exposures: Exposures
 	readonly source: ScriptedSafetySource
@@ -257,7 +258,7 @@ interface Session {
 // the fake exposures, and the shutdown composed like the session does (guiding pause, tracking off, guiding stop, the
 // observatory steps), the steps of the prefix wrapped by the tracking protection shared with the runner.
 function session(options: SessionOptions = {}): Session {
-	const clock = new ManualSequencerClock()
+	const clock = new ManualClock()
 	const coordinator = new OperationCoordinator(new ResourceArbiter())
 	const recorder = recordRunner(coordinator)
 	recorders.push(recorder)
@@ -374,7 +375,7 @@ describe('gates', () => {
 	})
 
 	test('a gate precedes each opening, only with a safety policy and a source; the pre-capture gate comes first', () => {
-		const observatory = new Observatory(new ManualSequencerClock())
+		const observatory = new Observatory(new ManualClock())
 		const source = new ScriptedSafetySource()
 		const ids = (tasks: readonly SequencerTask[]) => tasks.map((task) => task.id)
 
@@ -389,7 +390,7 @@ describe('gates', () => {
 	})
 
 	test('a startup gate runs only when its opening will run', async () => {
-		const observatory = new Observatory(new ManualSequencerClock())
+		const observatory = new Observatory(new ManualClock())
 		const [, gate, openDome] = sequencerSafetyStartupTasks(observatory.startup(), safetyOf(), new ScriptedSafetySource())
 		const view = {} as Parameters<SequencerTask['shouldRun']>[0]
 		expect(await gate.shouldRun(view)).toBe(await openDome.shouldRun(view))
@@ -413,7 +414,7 @@ describe('gates', () => {
 	})
 
 	test('28: a device sharing the mount is refused under shutdownImmediately only', () => {
-		const clock = new ManualSequencerClock()
+		const clock = new ManualClock()
 		const fake = new FakeMount(clock, 0)
 		const dome = { ...fakeDevice<Dome>(DEFAULT_DOME, 'Dome'), hardwareId: fake.mount.hardwareId }
 		const devices = { camera: fakeDevice<Camera>(DEFAULT_CAMERA, 'Camera'), mount: fake.mount, dome }
@@ -424,7 +425,7 @@ describe('gates', () => {
 	})
 
 	test('49.16 4: without a meridian flip the total timeout still covers the tracking protection bound, inclusive', () => {
-		const clock = new ManualSequencerClock()
+		const clock = new ManualClock()
 		const camera = fakeDevice<Camera>(DEFAULT_CAMERA, 'Camera')
 		const guiding = new ScriptedGuidingSession()
 		const guided = (totalTimeout: number) => configurationOf({ guiding: GUIDING, shutdown: { ...SHUTDOWN, totalTimeout } })
@@ -442,7 +443,7 @@ describe('gates', () => {
 	})
 
 	test('the dome interlock commands nothing over an unparked mount', async () => {
-		const clock = new ManualSequencerClock()
+		const clock = new ManualClock()
 		const fake = new FakeMount(clock, 0)
 		const dome = fakeDevice<Dome>({ ...DEFAULT_DOME, hasShutter: true, shutterState: 'OPEN' }, 'Dome')
 		const commands: string[] = []
@@ -867,7 +868,7 @@ describe('32.4 critical protection', () => {
 
 // Rig of the simulator scenarios of section 50.3, created once for the file: the real commanders, CameraCapturer,
 // storage and the e2e clock (the simulated UTC of the mount as wall time, the process clock as monotonic time).
-const rig = await createSequencerRig()
+const rig = await createSimulatorRig()
 const RIG_ROOT = join(rig.capturesDir, 'sessions')
 const rigClock: SequencerClock = { wallNow: () => rig.simulators.mount.utcTime, monotonicNow: () => performance.now(), delay: abortableDelay }
 const lifecycle: SequencerLifecycleServices = { cameraCommander: rig.commanders.camera, thermometerManager: rig.managers.thermometer, mountCommander: rig.commanders.mount, coverCommander: rig.commanders.cover, domeCommander: rig.commanders.dome }
@@ -878,7 +879,7 @@ describe('50.3 on the simulator rig', () => {
 	const OPEN_STARTUP: SequencerStartupConfiguration = { cooling: { setpoint: 10, tolerance: 1, stableFor: 0, timeout: 60, waitForTemperature: false }, dome: { open: true }, cover: { open: true }, mount: { unpark: true }, onFailure: 'fail' }
 
 	beforeAll(async () => {
-		await connectSequencerRig(rig)
+		await connectSimulatorRig(rig)
 		const { dome } = rig.devices()
 		rig.managers.dome.speed(dome, 12)
 		await waitUntil(() => dome.speed.value === 12, 5000, 10)
@@ -889,11 +890,11 @@ describe('50.3 on the simulator rig', () => {
 	})
 
 	beforeEach(async () => {
-		await resetSequencerRig(rig, rig.devices().focuser.position.value)
+		await resetSimulatorRig(rig, rig.devices().focuser.position.value)
 	})
 
 	afterEach(async () => {
-		await expectNoSequencerLeaks(rig)
+		await expectNoRigLeaks(rig)
 	})
 
 	function rigConfiguration(patch: Partial<SequencerConfiguration> = {}): SequencerConfiguration {

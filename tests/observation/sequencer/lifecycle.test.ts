@@ -17,7 +17,8 @@ import { waitUntil } from '../../util'
 // oxfmt-ignore
 import { assertMountKeyClosure } from './meridian.util'
 // oxfmt-ignore
-import { assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, type DeviceTransitionEntry, expectNoSequencerLeaks, ManualSequencerClock, recordDevices, recordLeases, recordRunner, resetSequencerRig, type RunnerLogEntry } from './util'
+import { connectSimulatorRig, createSimulatorRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, type DeviceTransitionEntry, expectNoRigLeaks, ManualClock, recordDevices, resetSimulatorRig } from '../../util/rig'
+import { assertRunnerInvariants, assertSequencerInvariants, recordLeases, recordRunner, type RunnerLogEntry } from './util'
 
 // Equipment lifecycle of the Sequencer: the thermal stability wait and the pure meridian rule of `ensureTracking`
 // with a manual clock, then startup, pre-capture tracking and shutdown on the INDI simulator rig with the real
@@ -55,7 +56,7 @@ describe('thermal stability', () => {
 	})
 
 	test('resolves after stableFor seconds of continuous samples within tolerance, on the monotonic clock', async () => {
-		const clock = new ManualSequencerClock()
+		const clock = new ManualClock()
 		const { camera, updates, sample, listeners } = fakeCamera(5)
 		let result: OperationResult<void> | undefined
 		void waitForStableTemperature(camera, updates, COOLING, clock, new AbortController().signal).then((value) => (result = value))
@@ -76,7 +77,7 @@ describe('thermal stability', () => {
 	})
 
 	test('a sample out of tolerance restarts the window', async () => {
-		const clock = new ManualSequencerClock()
+		const clock = new ManualClock()
 		const { camera, updates, sample } = fakeCamera(-10)
 		let result: OperationResult<void> | undefined
 		void waitForStableTemperature(camera, updates, COOLING, clock, new AbortController().signal).then((value) => (result = value))
@@ -96,13 +97,13 @@ describe('thermal stability', () => {
 	})
 
 	test('a stability of zero seconds resolves on the first sample within tolerance', async () => {
-		const clock = new ManualSequencerClock()
+		const clock = new ManualClock()
 		const { camera, updates } = fakeCamera(-10)
 		expect(await waitForStableTemperature(camera, updates, { ...COOLING, stableFor: 0 }, clock, new AbortController().signal)).toEqual({ ok: true, value: undefined })
 	})
 
 	test('times out after timeout seconds of the monotonic clock', async () => {
-		const clock = new ManualSequencerClock()
+		const clock = new ManualClock()
 		const { camera, updates, sample } = fakeCamera(0)
 		let result: OperationResult<void> | undefined
 		void waitForStableTemperature(camera, updates, COOLING, clock, new AbortController().signal).then((value) => (result = value))
@@ -118,7 +119,7 @@ describe('thermal stability', () => {
 	})
 
 	test('ends with the reason of the signal, or disconnected when the camera disconnects', async () => {
-		const clock = new ManualSequencerClock()
+		const clock = new ManualClock()
 		const aborted = fakeCamera(0)
 		const controller = new AbortController()
 		const waiting = waitForStableTemperature(aborted.camera, aborted.updates, COOLING, clock, controller.signal)
@@ -305,7 +306,7 @@ describe('calibration optical path', () => {
 })
 
 // Rig of the simulator scenarios, created once for the file.
-const rig = await createSequencerRig()
+const rig = await createSimulatorRig()
 const ROOT = join(rig.capturesDir, 'sessions')
 const clock: SequencerClock = { wallNow: () => rig.simulators.mount.utcTime, monotonicNow: () => performance.now(), delay: abortableDelay }
 const services: SequencerLifecycleServices = { cameraCommander: rig.commanders.camera, thermometerManager: rig.managers.thermometer, mountCommander: rig.commanders.mount, coverCommander: rig.commanders.cover, domeCommander: rig.commanders.dome, flatPanelCommander: rig.commanders.flatPanel }
@@ -317,7 +318,7 @@ describe('on the simulator rig', () => {
 	const OPEN_STARTUP: SequencerStartupConfiguration = { cooling: { setpoint: 10, tolerance: 1, stableFor: 0, timeout: 60, waitForTemperature: false }, dome: { open: true }, cover: { open: true }, mount: { unpark: true, trackMode: 'SIDEREAL' }, onFailure: 'fail' }
 
 	beforeAll(async () => {
-		await connectSequencerRig(rig)
+		await connectSimulatorRig(rig)
 		const { dome } = rig.devices()
 		rig.managers.dome.speed(dome, 12)
 		await waitUntil(() => dome.speed.value === 12, 5000, 10)
@@ -328,11 +329,11 @@ describe('on the simulator rig', () => {
 	})
 
 	beforeEach(async () => {
-		await resetSequencerRig(rig, rig.devices().focuser.position.value)
+		await resetSimulatorRig(rig, rig.devices().focuser.position.value)
 	})
 
 	afterEach(async () => {
-		await expectNoSequencerLeaks(rig)
+		await expectNoRigLeaks(rig)
 	})
 
 	function configurationOf(options: Partial<Pick<SequencerConfiguration, 'startup' | 'shutdown' | 'target' | 'meridianFlip'>> & { readonly frames?: readonly SequencerCameraCapture[] } = {}): SequencerConfiguration {

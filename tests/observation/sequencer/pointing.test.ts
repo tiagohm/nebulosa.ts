@@ -21,8 +21,9 @@ import type { SequencerCameraCapture, SequencerCenteringConfiguration, Sequencer
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
 import { waitUntil } from '../../util'
 // oxfmt-ignore
-import { assertJournalInvariants, assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, type DeviceTransitionEntry, expectNoSequencerLeaks, RIG_INITIAL_POINTING, recordDevices, recordRunner, resetSequencerRig, type RunnerLogEntry } from './util'
+import { connectSimulatorRig, createSimulatorRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, type DeviceTransitionEntry, expectNoRigLeaks, RIG_INITIAL_POINTING, recordDevices, resetSimulatorRig } from '../../util/rig'
 import type { CameraCaptureStart } from '../../../src/observation/capture/types'
+import { assertJournalInvariants, assertRunnerInvariants, assertSequencerInvariants, recordRunner, type RunnerLogEntry } from './util'
 
 // Pointing tasks of the Sequencer on the INDI simulator rig, with the real commanders, the real CameraCapturer, the
 // filesystem storage and the e2e clock (the simulated UTC of the mount as wall time): acquisition and centering
@@ -37,13 +38,13 @@ const POINTING: SequencerPointingConfiguration = { settle: 0.1, centering: CENTE
 // Pointing error of the rig mount: the sky stands 6′ east of what the mount reports.
 const POINTING_ERROR = deg(6 / 60)
 
-const rig = await createSequencerRig()
+const rig = await createSimulatorRig()
 const ROOT = join(rig.capturesDir, 'sessions')
 const clock: SequencerClock = { wallNow: () => rig.simulators.mount.utcTime, monotonicNow: () => performance.now(), delay: abortableDelay }
 const lifecycle: SequencerLifecycleServices = { mountCommander: rig.commanders.mount, cameraCommander: rig.commanders.camera }
 
 beforeAll(async () => {
-	await connectSequencerRig(rig)
+	await connectSimulatorRig(rig)
 })
 
 afterAll(async () => {
@@ -51,11 +52,11 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-	await resetSequencerRig(rig, rig.devices().focuser.position.value)
+	await resetSimulatorRig(rig, rig.devices().focuser.position.value)
 })
 
 afterEach(async () => {
-	await expectNoSequencerLeaks(rig)
+	await expectNoRigLeaks(rig)
 })
 
 // J2000 target 1° north of where the rig points, at the mount clock.

@@ -9,7 +9,7 @@ import { arcsec, deg, safeAngularDifference, toArcsec } from '../../../src/math/
 import type { DitherOffset } from '../../../src/observation/guiding/dither'
 import { type DitherPhase, type DitherRequest, ditherSlewTarget, MountDitherer, type MountDithererOptions } from '../../../src/observation/guiding/ditherer'
 import { waitUntil } from '../../util'
-import { connectSequencerRig, createSequencerRig, expectNoSequencerLeaks, resetSequencerRig } from '../sequencer/util'
+import { connectSimulatorRig, createSimulatorRig, expectNoRigLeaks, resetSimulatorRig } from '../../util/rig'
 
 const AMOUNTS = [arcsec(1), arcsec(10), arcsec(60), deg(0.1), deg(1)]
 const POSITION_ANGLES = [0, 0.3, 1.2, 2.5, -0.7, -2.9, Math.PI]
@@ -91,10 +91,10 @@ describe('49.10 ditherSlewTarget', () => {
 	})
 })
 
-const rig = await createSequencerRig()
+const rig = await createSimulatorRig()
 
 beforeAll(async () => {
-	await connectSequencerRig(rig)
+	await connectSimulatorRig(rig)
 })
 
 afterAll(async () => {
@@ -102,7 +102,7 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-	await resetSequencerRig(rig, rig.devices().focuser.position.value)
+	await resetSimulatorRig(rig, rig.devices().focuser.position.value)
 	const { mount } = rig.devices()
 	const tracked = await rig.commanders.mount.setTracking(rig.coordinator, mount, true)
 	if (!tracked.ok) throw new Error(`tracking: ${tracked.reason}`)
@@ -141,7 +141,7 @@ describe('49.10 MountDitherer by pulse', () => {
 		const moved = eraSeps(middle.rightAscension, middle.declination, mount.equatorialCoordinate.rightAscension, mount.equatorialCoordinate.declination)
 		expect(Math.abs(toArcsec(moved) - 5)).toBeLessThan(1)
 
-		await expectNoSequencerLeaks(rig)
+		await expectNoRigLeaks(rig)
 	}, 15000)
 
 	test('13: RA only never moves the declination', async () => {

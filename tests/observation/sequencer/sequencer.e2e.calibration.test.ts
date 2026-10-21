@@ -13,9 +13,10 @@ import { type SequencerRunner, startSequencerRunner } from '../../../src/observa
 import type { SequencerCameraCapture, SequencerClock, SequencerConfiguration, SequencerEvent, SequencerFrameGroup, SequencerGuidingConfiguration, SequencerResult, SequencerStartupConfiguration, SequencerTriggeredFrameGroup } from '../../../src/observation/sequencer/sequencer'
 import { FileSystemSequencerCheckpointStore, FileSystemSequencerStorage, prepareFrameDestinationTask, readSequencerJournal } from '../../../src/observation/sequencer/storage'
 // oxfmt-ignore
-import { assertJournalInvariants, assertRunnerInvariants, assertSequencerInvariants, connectSequencerRig, createSequencerRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, expectNoSequencerLeaks, type RunnerLogEntry, recordDevices, recordRunner, resetSequencerRig, ScriptedGuidingSession, type SequencerOracleOptions } from './util'
+import { connectSimulatorRig, createSimulatorRig, createTestSequence, type DeviceCommandEntry, type DeviceLogEntry, expectNoRigLeaks, recordDevices, resetSimulatorRig } from '../../util/rig'
 import type { CameraCaptureStart } from '../../../src/observation/capture/types'
 import { isTimeConsumingTestSkipped } from '../../util'
+import { assertJournalInvariants, assertRunnerInvariants, assertSequencerInvariants, type RunnerLogEntry, recordRunner, ScriptedGuidingSession, type SequencerOracleOptions } from './util'
 
 // End-to-end scenarios of the interleaved calibration frames (section 8A, 50.3 7–9 and the pending batch of 50.3 14) on
 // the INDI simulator rig, with the real CameraCapturer, cover, wheel, focuser and camera cooling, the filesystem storage
@@ -30,13 +31,13 @@ const GUIDING: SequencerGuidingConfiguration = { settle: { pixels: 1.5, time: 1,
 // Focus position of the reference filter L the rig reset leaves, in steps.
 const REFERENCE = 10000
 
-const rig = await createSequencerRig()
+const rig = await createSimulatorRig()
 const ROOT = join(rig.capturesDir, 'sessions')
 const clock: SequencerClock = { wallNow: () => rig.simulators.mount.utcTime, monotonicNow: () => performance.now(), delay: abortableDelay }
 const lifecycle: SequencerLifecycleServices = { cameraCommander: rig.commanders.camera, thermometerManager: rig.managers.thermometer, coverCommander: rig.commanders.cover, flatPanelCommander: rig.commanders.flatPanel }
 
 beforeAll(async () => {
-	await connectSequencerRig(rig)
+	await connectSimulatorRig(rig)
 })
 
 afterAll(async () => {
@@ -44,11 +45,11 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-	await resetSequencerRig(rig, REFERENCE)
+	await resetSimulatorRig(rig, REFERENCE)
 })
 
 afterEach(async () => {
-	await expectNoSequencerLeaks(rig)
+	await expectNoRigLeaks(rig)
 })
 
 function light(id: string, count: number, filter: keyof typeof SLOT, capture: SequencerCameraCapture = LIGHT): SequencerFrameGroup {

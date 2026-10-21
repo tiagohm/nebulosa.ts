@@ -16777,8 +16777,8 @@ import { ClientSimulator } from 'nebulosa/src/devices/indi/simulator/client'
 import { DeviceLifecycle } from 'nebulosa/src/devices/orchestration/device.lifecycle'
 import { failedOperationResult, OperationCoordinator } from 'nebulosa/src/devices/orchestration/operation'
 import { ResourceArbiter, resourceKey } from 'nebulosa/src/devices/orchestration/resource'
-import { autoSubFolderName, CameraCapturer } from 'nebulosa/src/devices/runners/camera.capture'
-import { type CameraCaptureStart, DEFAULT_CAMERA_CAPTURE_START } from 'nebulosa/src/devices/runners/camera.capture.types'
+import { autoSubFolderName, CameraCapturer } from 'nebulosa/src/observation/capture/capture'
+import { type CameraCaptureStart, DEFAULT_CAMERA_CAPTURE_START } from 'nebulosa/src/observation/capture/types'
 
 const cameraManager = new CameraManager()
 const arbiter = new ResourceArbiter()

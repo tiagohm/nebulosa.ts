@@ -20,9 +20,8 @@ import type { CameraCaptureHooks, CameraCapturer, CameraCaptureResult } from '..
 import { type CenteringCaptureOptions, type CenteringFrame, type CenteringOptions, type CenteringResult, type CenteringServices, type CenteringSolver, type CenteringTarget, centerTarget, centeringCaptureRequest, exposureMidpoint } from '../../../src/observation/mount/centering'
 import type { CameraCaptureStart } from '../../../src/observation/capture/types'
 import { applyPointingOffset, computePointingError } from '../../../src/observation/mount/pointing'
-import type { SequencerCameraCapture } from '../../../src/observation/sequencer/sequencer'
 import { isBinaryTestSkipped, waitUntil } from '../../util'
-import { connectSequencerRig, createSequencerRig, ManualSequencerClock, RIG_INITIAL_POINTING, resetSequencerRig } from '../sequencer/util'
+import { connectSimulatorRig, createSimulatorRig, ManualClock, RIG_INITIAL_POINTING, resetSimulatorRig } from '../../util/rig'
 
 // Plate-solved centering as a reusable operation: the loop, the coordinate contract and the cooperative solver over
 // fakes and a manual clock, then the auxiliary FITS of the real CameraCapturer on the INDI simulators, and a real ASTAP
@@ -105,7 +104,7 @@ interface FakeCaptureBehavior {
 
 // Capturer recording each request, writing the minimal FITS at the requested path and reporting the instants of the
 // clock: Busy when it starts, Ok after `exposure` (applied by the test through the clock, or immediately).
-function fakeCapturer(clock: ManualSequencerClock, behaviors: FakeCaptureBehavior[] = []) {
+function fakeCapturer(clock: ManualClock, behaviors: FakeCaptureBehavior[] = []) {
 	const starts: { readonly request: CameraCaptureStart; readonly hooks?: CameraCaptureHooks; readonly signal: AbortSignal; resolved?: number }[] = []
 	let order = 0
 
@@ -156,7 +155,7 @@ function skySolver(sky: FakeMount, frames: CenteringFrame[] = []): CenteringSolv
 const CAMERA = { name: 'Fake Camera' } as Camera
 
 interface Harness {
-	readonly clock: ManualSequencerClock
+	readonly clock: ManualClock
 	readonly directory: string
 	readonly services: CenteringServices
 	readonly starts: ReturnType<typeof fakeCapturer>['starts']
@@ -165,7 +164,7 @@ interface Harness {
 
 // Centering over the fake sky, a fake capturer and a manual clock; auxiliary frames in a fresh directory.
 function harness(sky: FakeMount, solver: CenteringSolver, behaviors: FakeCaptureBehavior[] = [], health?: CooperativeJobHealth): Harness {
-	const clock = new ManualSequencerClock()
+	const clock = new ManualClock()
 	const directory = mkdtempSync(join(tmpdir(), 'nebulosa-centering-'))
 	const { capturer, starts } = fakeCapturer(clock, behaviors)
 	const services: CenteringServices = { mountCommander: sky.commander, cameraCapturer: capturer, solver, auxiliaryPath: (attempt) => join(directory, `aux.${attempt}.fit`), clock, ...(health !== undefined && { solverHealth: health }) }
@@ -314,7 +313,7 @@ describe('centering loop', () => {
 	test('right ascension wraps at 0/2π and the pole keeps a finite separation', async () => {
 		const wrapping: CenteringTarget = { frame: 'J2000', rightAscension: deg(0.001), declination: deg(10) }
 		const sky = new FakeMount([deg(359.999), deg(10)], 0, 0)
-		const clock = new ManualSequencerClock()
+		const clock = new ManualClock()
 		const directory = mkdtempSync(join(tmpdir(), 'nebulosa-centering-'))
 		const services: CenteringServices = { mountCommander: sky.commander, cameraCapturer: fakeCapturer(clock).capturer, solver: skySolver(sky), auxiliaryPath: (attempt) => join(directory, `wrap.${attempt}.fit`), clock }
 		const coordinator = new OperationCoordinator(new ResourceArbiter())
@@ -387,23 +386,16 @@ describe('centering loop', () => {
 
 		// @ts-expect-error the transfer format is fixed to FITS, never configured.
 		const options: CenteringCaptureOptions = { ...CAPTURE, transferFormat: 'XISF' }
-		// @ts-expect-error neither for the frames of the Sequencer.
-		const sequencer: SequencerCameraCapture = { ...CAPTURE, transferFormat: 'NATIVE' }
-		expect(options.exposureTime + sequencer.exposureTime).toBe(4)
+		expect(options.exposureTime).toBe(2)
 	})
 })
 
-test('I46: the centering and the Sequencer import no solver, star detector or binding and create no Worker', async () => {
+test('I46: the centering imports no solver, star detector or binding and creates no Worker', async () => {
 	const root = join(dirname(dirname(dirname(__dirname))), 'src', 'observation')
-	const sources = [join(root, 'mount', 'centering.ts'), ...Array.from(new Bun.Glob('*.ts').scanSync(join(root, 'sequencer')), (name) => join(root, 'sequencer', name))]
-	expect(sources.length).toBeGreaterThan(5)
-
-	for (const source of sources) {
-		const text = readFileSync(source, 'utf8')
-		const imports = [...text.matchAll(/from '([^']+)'/g)].map((match) => match[1])
-		expect(imports.filter((path) => /solvers\/(?!platesolver$)|bindings\/|imaging\/stars\//.test(path))).toEqual([])
-		expect(text).not.toMatch(/new Worker\b/)
-	}
+	const text = readFileSync(join(root, 'mount', 'centering.ts'), 'utf8')
+	const imports = [...text.matchAll(/from '([^']+)'/g)].map((match) => match[1])
+	expect(imports.filter((path) => /solvers\/(?!platesolver$)|bindings\/|imaging\/stars\//.test(path))).toEqual([])
+	expect(text).not.toMatch(/new Worker\b/)
 
 	// The centering itself never reaches for a Worker.
 	const worker = spyOn(globalThis, 'Worker')
@@ -505,15 +497,15 @@ describe('cooperative solve', () => {
 })
 
 // Rig of the simulator scenarios, created once for the file.
-const rig = await createSequencerRig()
+const rig = await createSimulatorRig()
 
 describe('on the simulator rig', () => {
 	const directory = join(rig.capturesDir, 'auxiliary', 'centering')
 	const clock = { wallNow: () => rig.simulators.mount.utcTime, monotonicNow: () => performance.now(), delay: abortableDelay }
 
 	beforeAll(async () => {
-		await connectSequencerRig(rig)
-		await resetSequencerRig(rig, rig.devices().focuser.position.value)
+		await connectSimulatorRig(rig)
+		await resetSimulatorRig(rig, rig.devices().focuser.position.value)
 		mkdirSync(directory, { recursive: true })
 	})
 
@@ -554,7 +546,7 @@ describe('on the simulator rig', () => {
 
 	test('auxiliary frames are FITS files of the real capturer, solved after the capture result and corrected by a real slew', async () => {
 		const { mount, camera } = rig.devices()
-		await resetSequencerRig(rig, rig.devices().focuser.position.value)
+		await resetSimulatorRig(rig, rig.devices().focuser.position.value)
 		const calls: { readonly frame: CenteringFrame; readonly signal: AbortSignal; readonly size: number }[] = []
 		const starts: { readonly request: CameraCaptureStart; readonly signal: AbortSignal; resolvedBefore?: number }[] = []
 		const start = rig.capturer.start.bind(rig.capturer)
@@ -592,7 +584,7 @@ describe('on the simulator rig', () => {
 
 	test("'keep' preserves the frames; a failed capture never calls the solver", async () => {
 		const { mount, camera } = rig.devices()
-		await resetSequencerRig(rig, rig.devices().focuser.position.value)
+		await resetSimulatorRig(rig, rig.devices().focuser.position.value)
 		const calls: { readonly frame: CenteringFrame; readonly signal: AbortSignal; readonly size: number }[] = []
 		const kept = await centerTarget(rig.coordinator, mount, camera, rigTarget(), { ...OPTIONS_RIG, auxiliary: 'keep', tolerance: deg(1) }, servicesOf(fileSolver(calls), 'kept'))
 		expect(kept).toMatchObject({ ok: true, value: { attempts: 1 } })
@@ -608,7 +600,7 @@ describe('on the simulator rig', () => {
 
 	test('cancelling during an external solve kills it through the signal of the centering, without watchdog', async () => {
 		const { mount, camera } = rig.devices()
-		await resetSequencerRig(rig, rig.devices().focuser.position.value)
+		await resetSimulatorRig(rig, rig.devices().focuser.position.value)
 		const kill = { solving: 0, killed: 0 }
 		const reports: string[] = []
 		// A one-hour external process that is killed on abort.
@@ -642,7 +634,7 @@ test.skipIf(isBinaryTestSkipped())('a real solver over a FITS of data/ verifies 
 	const source = join(dirname(dirname(dirname(__dirname))), 'data', 'NGC3372--32.1.fit')
 	const solver: CenteringSolver = (frame, signal) => astapPlateSolve(frame.path, { rightAscension: deg(10.7345 * 15), declination: deg(-59.6022), radius: deg(4), fov: deg(0.54) }, signal)
 	const sky = new FakeMount([deg(10.7345 * 15), deg(-59.6022)], 0, 0)
-	const clock = new ManualSequencerClock()
+	const clock = new ManualClock()
 	const directory = mkdtempSync(join(tmpdir(), 'nebulosa-astap-'))
 	const capturer = {
 		start: (_scope: OperationScope, _camera: Camera, request: CameraCaptureStart) => {
