@@ -5,7 +5,7 @@ import { type OrbitFitAngularResidual, type OrbitFitOptions, fitOrbit, type Orbi
 import { type Time, Timescale, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { ASEC2RAD, DAYSPERJY, TAU } from '../../../src/core/constants'
 import { matIdentity } from '../../../src/math/linear-algebra/mat3'
-import { vecDistance, type MutVec3, type Vec3 } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecDistance, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { mulberry32, normal } from '../../../src/math/numerical/random'
 import { normalizeAngle, normalizePI } from '../../../src/math/units/angle'
 
@@ -120,7 +120,7 @@ test('uses the short residual across the RA wrap boundary', () => {
 	const p: MutVec3 = [1, 1e-6, 0]
 	const v: MutVec3 = [0, 0.017, 0.001]
 	const orbit = new KeplerOrbit(p, v, EPOCH, undefined, IDENTITY_ROTATION)
-	const observerPosition: Vec3 = [0, 0, 0]
+	const observerPosition: Vec3 = vecZero()
 	const model = modelRaDec(orbit, EPOCH, observerPosition)
 	const observations = Array.from({ length: 3 }, () => ({ time: EPOCH, rightAscension: normalizeAngle(model.rightAscension - 3e-6), declination: model.declination, raErr: ASEC2RAD, decErr: ASEC2RAD, observerPosition }))
 

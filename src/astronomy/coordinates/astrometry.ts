@@ -313,7 +313,7 @@ function solveLightTime(target: PositionAndVelocityOverTime, observer: PositionA
 // transit), so this is a geometric line of sight, not an apparent place. Reception and emission snapshots
 // are not retained.
 // Iterations must be an integer in [0, 16]; a coincident target returns the zero vector.
-export function topocentricDirection(target: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, time: Time, iterations: number, out: MutVec3 = [0, 0, 0]): Vec3 {
+export function topocentricDirection(target: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, time: Time, iterations: number, out: MutVec3 = vecZero()): Vec3 {
 	solveLightTime(target, observer, time, iterations, out)
 	return out
 }
@@ -326,10 +326,10 @@ export function topocentricDirection(target: PositionAndVelocityOverTime, observ
 // the final vector, which may differ slightly from that sample's input epoch.
 // All returned vectors are owned.
 export function lightTimeSolution(target: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, time: Time, iterations: number): LightTimeSolution | undefined {
-	const position: MutVec3 = [0, 0, 0]
-	const observerPosition: MutVec3 = [0, 0, 0]
-	const observerVelocity: MutVec3 = [0, 0, 0]
-	const targetEmissionPosition: MutVec3 = [0, 0, 0]
+	const position = vecZero()
+	const observerPosition = vecZero()
+	const observerVelocity = vecZero()
+	const targetEmissionPosition = vecZero()
 	const distance = solveLightTime(target, observer, time, iterations, position, { observerPosition, observerVelocity, targetEmissionPosition })
 	if (distance === undefined) return undefined
 	const tau = lightTime(position)

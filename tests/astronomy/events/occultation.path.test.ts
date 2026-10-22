@@ -15,7 +15,7 @@ import { gcrsToItrsRotationMatrix, NO_POLAR_MOTION, type Time, Timescale, time, 
 import { DAYSEC, ELLIPSOID_PARAMETERS, GM_SUN_PITJEVA_2005, PI, SPEED_OF_LIGHT_AU_DAY } from '../../../src/core/constants'
 import { fileHandleSource } from '../../../src/io/file'
 import { type Mat3, matIdentity, matMul, matRotX, matTranspose, matTransposeMulVec } from '../../../src/math/linear-algebra/mat3'
-import { type Vec3, vecClone, vecLength, vecMulScalar, vecPlus } from '../../../src/math/linear-algebra/vec3'
+import { type Vec3, vecClone, vecLength, vecMulScalar, vecPlus, vecX, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { clamp } from '../../../src/math/numerical/math'
 import { arcsec, deg, hour, mas, normalizePI, toDeg } from '../../../src/math/units/angle'
 import { kilometer, toKilometer } from '../../../src/math/units/distance'
@@ -68,7 +68,7 @@ function gcrsCovariance(itrs: Mat3) {
 describe('synthetic straight chord on the oblate Earth', () => {
 	const Z = kilometer(3000)
 	const target = syntheticBody([RANGE, 0, Z], [0, SPEED, 0])
-	const star = syntheticStar([1, 0, 0])
+	const star = syntheticStar(vecX())
 
 	for (const mode of ['approximate', 'rigorous'] as OccultationPathMode[]) {
 		test(mode, () => {
@@ -125,7 +125,7 @@ describe('synthetic straight chord on the oblate Earth', () => {
 test('a polar graze touches the Earth with one limit only', () => {
 	// Axis just above the North Pole: the centerline and the left limit miss, the right limit grazes the cap.
 	const target = syntheticBody([RANGE, 0, B + RADIUS / 2], [0, SPEED, 0])
-	const path = occultationPath(target, syntheticStar([1, 0, 0]), geocenter, T0, timeShift(T0, 60 / DAYSEC), { radius: RADIUS })
+	const path = occultationPath(target, syntheticStar(vecX()), geocenter, T0, timeShift(T0, 60 / DAYSEC), { radius: RADIUS })
 
 	expect(path.central).toHaveLength(0)
 	expect(path.shadow).toHaveLength(1)
@@ -145,7 +145,7 @@ test('a polar graze touches the Earth with one limit only', () => {
 test('limb endpoints are refined where the centerline leaves the Earth', () => {
 	// The axis climbs northward over the pole region, so the centerline leaves the cap during the window.
 	const target = syntheticBody([RANGE, 0, B - kilometer(300)], [0, 0, SPEED])
-	const path = occultationPath(target, syntheticStar([1, 0, 0]), geocenter, T0, timeShift(T0, 120 / DAYSEC), { radius: RADIUS, mode: 'approximate' })
+	const path = occultationPath(target, syntheticStar(vecX()), geocenter, T0, timeShift(T0, 120 / DAYSEC), { radius: RADIUS, mode: 'approximate' })
 
 	expect(path.central).toHaveLength(1)
 	const centralEnd = path.central[0].end
@@ -162,7 +162,7 @@ test('limb endpoints are refined where the centerline leaves the Earth', () => {
 test('a dateline crossing is split into antimeridian polylines', () => {
 	// Star on ITRS -x: the shadow falls around longitude 180 and moves from east of it to west of it.
 	const target = syntheticBody([-RANGE, kilometer(500), kilometer(1000)], [0, -SPEED, 0])
-	const path = occultationPath(target, syntheticStar([-1, 0, 0]), geocenter, T0, timeShift(T0, 100 / DAYSEC), { radius: RADIUS })
+	const path = occultationPath(target, syntheticStar(vecX(-1)), geocenter, T0, timeShift(T0, 100 / DAYSEC), { radius: RADIUS })
 
 	const split = occultationPathPolylines(path, 'center')
 	expect(split).toHaveLength(2)
@@ -182,7 +182,7 @@ test('a dateline crossing is split into antimeridian polylines', () => {
 
 test('a shadow that misses the Earth yields no track', () => {
 	const target = syntheticBody([RANGE, 0, 3 * A], [0, SPEED, 0])
-	const path = occultationPath(target, syntheticStar([1, 0, 0]), geocenter, T0, timeShift(T0, 60 / DAYSEC), { radius: RADIUS })
+	const path = occultationPath(target, syntheticStar(vecX()), geocenter, T0, timeShift(T0, 60 / DAYSEC), { radius: RADIUS })
 	expect(path.samples).toHaveLength(0)
 	expect(path.shadow).toHaveLength(0)
 	expect(path.central).toHaveLength(0)
@@ -190,7 +190,7 @@ test('a shadow that misses the Earth yields no track', () => {
 })
 
 describe('uncertainty corridor', () => {
-	const star = syntheticStar([1, 0, 0])
+	const star = syntheticStar(vecX())
 	const sigma = kilometer(10)
 
 	test('maps an anisotropic body covariance onto the cross-track direction', () => {
@@ -289,10 +289,10 @@ describe('uncertainty corridor', () => {
 test('solar light deflection moves the shadow by the differential deflection', () => {
 	const Z = kilometer(3000)
 	const target = syntheticBody([RANGE, 0, Z], [0, SPEED, 0])
-	const star = syntheticStar([1, 0, 0])
+	const star = syntheticStar(vecX())
 	// Sun 1 AU away along ITRS -z, i.e. 90 degrees from the star; deflection pushes the star away from the Sun.
-	const sunPosition = matTransposeMulVec(ROTATION, [0, 0, -1])
-	const sunSampler: PositionAndVelocityOverTime = () => [sunPosition, [0, 0, 0]]
+	const sunPosition = matTransposeMulVec(ROTATION, vecZ(-1))
+	const sunSampler: PositionAndVelocityOverTime = () => [sunPosition, vecZero()]
 	const plain = occultationPath(target, star, geocenter, T0, timeShift(T0, 10 / DAYSEC), { radius: RADIUS })
 	const deflected = occultationPath(target, star, geocenter, T0, timeShift(T0, 10 / DAYSEC), { radius: RADIUS, sun: sunSampler })
 	const shift = (deflected.samples[0].center!.latitude - plain.samples[0].center!.latitude) * A
@@ -310,7 +310,7 @@ describe('causal ray order', () => {
 		const state = { latest: Number.NEGATIVE_INFINITY }
 		const sampler: PositionAndVelocityOverTime = (t) => {
 			state.latest = Math.max(state.latest, timeSubtract(t, T0))
-			return [position, [0, 0, 0]]
+			return [position, vecZero()]
 		}
 		return { sampler, state }
 	}
@@ -318,9 +318,9 @@ describe('causal ray order', () => {
 	for (const mode of MODES) {
 		test(`a body behind the Earth casts no shadow on it (${mode})`, () => {
 			// Light from the star on +x reaches the Earth before the body at -1 AU, so nothing is occulted.
-			const { sampler, state } = staticBody([-1, 0, 0])
+			const { sampler, state } = staticBody(vecX(-1))
 			const stop = timeShift(T0, 60 / DAYSEC)
-			const path = occultationPath(sampler, [1, 0, 0], geocenter, T0, stop, { radius: RADIUS, mode })
+			const path = occultationPath(sampler, vecX(), geocenter, T0, stop, { radius: RADIUS, mode })
 			expect(path.shadow).toHaveLength(0)
 			expect(path.central).toHaveLength(0)
 			expect(path.samples).toHaveLength(0)
@@ -329,7 +329,7 @@ describe('causal ray order', () => {
 		})
 
 		test(`the same body in front of the Earth casts a central shadow (${mode})`, () => {
-			const path = occultationPath(staticBody([1, 0, 0]).sampler, [1, 0, 0], geocenter, T0, timeShift(T0, 60 / DAYSEC), { radius: RADIUS, mode })
+			const path = occultationPath(staticBody(vecX()).sampler, vecX(), geocenter, T0, timeShift(T0, 60 / DAYSEC), { radius: RADIUS, mode })
 			expect(path.shadow).toHaveLength(1)
 			expect(path.central).toHaveLength(1)
 			// The sub-body point sees the star at the zenith.
@@ -339,27 +339,21 @@ describe('causal ray order', () => {
 		test(`a body just behind the limb casts no shadow (${mode})`, () => {
 			// The axis grazes the Earth inside the limb, but the body sits half an Earth radius downstream of the
 			// geocenter, so the ray would hit the ground before reaching it.
-			const body = syntheticBody([-0.5 * A, 0.95 * A, 0], [0, 0, 0])
-			const path = occultationPath(body, syntheticStar([1, 0, 0]), geocenter, T0, timeShift(T0, 60 / DAYSEC), { radius: RADIUS, mode, lightTimeIterations: 0 })
+			const body = syntheticBody([-0.5 * A, 0.95 * A, 0], vecZero())
+			const path = occultationPath(body, syntheticStar(vecX()), geocenter, T0, timeShift(T0, 60 / DAYSEC), { radius: RADIUS, mode, lightTimeIterations: 0 })
 			expect(path.shadow).toHaveLength(0)
 			expect(path.samples).toHaveLength(0)
 		})
 
 		test(`a finite source must lie beyond the body (${mode})`, () => {
 			// Source at +1 AU and body at +2 AU: the light travels away from the Earth after passing the body.
-			const source: PositionAndVelocityOverTime = () => [
-				[1, 0, 0],
-				[0, 0, 0],
-			]
-			const behind = occultationPath(staticBody([2, 0, 0]).sampler, source, geocenter, T0, timeShift(T0, 60 / DAYSEC), { radius: RADIUS, mode })
+			const source: PositionAndVelocityOverTime = () => [vecX(), vecZero()]
+			const behind = occultationPath(staticBody(vecX(2)).sampler, source, geocenter, T0, timeShift(T0, 60 / DAYSEC), { radius: RADIUS, mode })
 			expect(behind.shadow).toHaveLength(0)
 			expect(behind.samples).toHaveLength(0)
 
-			const beyond: PositionAndVelocityOverTime = () => [
-				[2, 0, 0],
-				[0, 0, 0],
-			]
-			const front = occultationPath(staticBody([1, 0, 0]).sampler, beyond, geocenter, T0, timeShift(T0, 60 / DAYSEC), { radius: RADIUS, mode })
+			const beyond: PositionAndVelocityOverTime = () => [vecX(2), vecZero()]
+			const front = occultationPath(staticBody(vecX()).sampler, beyond, geocenter, T0, timeShift(T0, 60 / DAYSEC), { radius: RADIUS, mode })
 			expect(front.central).toHaveLength(1)
 			// The cone from a source 1 AU behind the body doubles its radius at the Earth.
 			expect(front.samples[0].radius / RADIUS).toBeCloseTo(2, 6)
@@ -381,7 +375,7 @@ describe('separate passes', () => {
 	test('two shadow intervals give two polylines per line', () => {
 		const sigma = kilometer(30)
 		const body = gcrsCovariance([sigma * sigma, 0, 0, 0, sigma * sigma, 0, 0, 0, sigma * sigma])
-		const path = occultationPath(target, syntheticStar([1, 0, 0]), geocenter, T0, timeShift(T0, PERIOD), { radius: RADIUS, mode: 'approximate', step: 1 / DAYSEC, lightTimeIterations: 0, uncertainty: { body } })
+		const path = occultationPath(target, syntheticStar(vecX()), geocenter, T0, timeShift(T0, PERIOD), { radius: RADIUS, mode: 'approximate', step: 1 / DAYSEC, lightTimeIterations: 0, uncertainty: { body } })
 		expect(path.shadow).toHaveLength(2)
 		expect(timeSubtract(path.shadow[0].start, T0)).toBeGreaterThan(0)
 		expect(timeSubtract(path.shadow[1].end, T0)).toBeLessThan(PERIOD)
@@ -419,7 +413,7 @@ describe('separate passes', () => {
 
 test('rejects an invalid light-time iteration count', () => {
 	const target = syntheticBody([RANGE, 0, 0], [0, SPEED, 0])
-	expect(() => occultationPath(target, [1, 0, 0], geocenter, T0, timeShift(T0, 0.001), { radius: RADIUS, lightTimeIterations: 17 })).toThrow()
+	expect(() => occultationPath(target, vecX(), geocenter, T0, timeShift(T0, 0.001), { radius: RADIUS, lightTimeIterations: 17 })).toThrow()
 })
 
 describe('a real asteroid track agrees with the per-site predictor', () => {

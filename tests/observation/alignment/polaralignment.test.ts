@@ -4,7 +4,7 @@ import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { geodeticLocation, localSiderealTime } from '../../../src/astronomy/observer/location'
 import { cirsRotationMatrix, gcrsToItrsRotationMatrix, type Time, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { matMulVec, matTransposeMulVec } from '../../../src/math/linear-algebra/mat3'
-import { vecAngle, vecRotateByRodrigues } from '../../../src/math/linear-algebra/vec3'
+import { vecAngle, vecRotateByRodrigues, vecX } from '../../../src/math/linear-algebra/vec3'
 import { arcmin, deg, hour, normalizePI, parseAngle, toArcmin, toArcsec, toDeg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 import { mountAdjustmentAxes, polarAlignmentError, ThreePointPolarAlignment, threePointPolarAlignmentAfterAdjustment, threePointPolarAlignmentError } from '../../../src/observation/alignment/polaralignment'
@@ -38,7 +38,7 @@ describe('polar altitude error references', () => {
 			for (const error of [-arcmin(30), 0, arcmin(30)]) {
 				const pole = applyMountAdjustment(celestialPoleVector(time, location, false), upAxis, eastAxis, arcmin(3), error)
 				const points = [0, 0.8, 1.6].map((angle) => {
-					const [ra, dec] = eraC2s(...vecRotateByRodrigues([1, 0, 0], pole, angle))
+					const [ra, dec] = eraC2s(...vecRotateByRodrigues(vecX(), pole, angle))
 					return [ra, dec, time] as const
 				})
 				const geometric = threePointPolarAlignmentError(points[0], points[1], points[2], false, location)
@@ -181,7 +181,7 @@ test('uses the northern celestial pole at the equator', () => {
 
 	const targetPole = celestialPoleVector(time, location, false)
 	const points = [0, 0.8, 1.6].map((angle) => {
-		const [rightAscension, declination] = eraC2s(...vecRotateByRodrigues([1, 0, 0], targetPole, angle))
+		const [rightAscension, declination] = eraC2s(...vecRotateByRodrigues(vecX(), targetPole, angle))
 		return [rightAscension, declination, time] as const
 	})
 	const result = threePointPolarAlignmentError(points[0], points[1], points[2], false, location)

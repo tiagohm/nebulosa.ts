@@ -4,7 +4,7 @@ import { type MutVec2, type Vec2, vec2Fill } from './vec2'
 // 2x2 matrix math. Matrices are stored row-major as a flat length-4 tuple [m00,m01, m10,m11].
 // Provides constructors (zero/identity/rotation), element-wise arithmetic, transpose/flip, the fused
 // product variants, and matrix-vector products. Rotation angles are radians. As in mat3.ts, an optional
-// output `o?: MutMat2` (or `m?` for the rotation builder) is written in place and returned when supplied,
+// output `out?: MutMat2` (or `m?` for the rotation builder) is written in place and returned when supplied,
 // otherwise a new matrix is allocated; passing `m` to mat2Rot returns the product R·m.
 
 // Mutable rectangular array of numbers with two rows and two columns.
@@ -14,14 +14,14 @@ export type MutMat2 = [number, number, number, number]
 export type Mat2 = Readonly<MutMat2>
 
 // Creates or fills a matrix with zeroes.
-export function mat2Zero(o?: MutMat2): MutMat2 {
-	if (o) return o.fill(0)
+export function mat2Zero(out?: MutMat2): MutMat2 {
+	if (out) return out.fill(0)
 	else return [0, 0, 0, 0]
 }
 
 // Creates or fills an identity matrix.
-export function mat2Identity(o?: MutMat2): MutMat2 {
-	if (o) return mat2Fill(o, 1, 0, 0, 1)
+export function mat2Identity(out?: MutMat2): MutMat2 {
+	if (out) return mat2Fill(out, 1, 0, 0, 1)
 	else return [1, 0, 0, 1]
 }
 
@@ -57,9 +57,9 @@ export function mat2Clone(m: Mat2): MutMat2 {
 }
 
 // Copies the matrix into another matrix.
-export function mat2Copy(m: Mat2, o: MutMat2): MutMat2 {
-	if (m !== o) for (let i = 0; i < 4; i++) o[i] = m[i]
-	return o
+export function mat2Copy(m: Mat2, out: MutMat2): MutMat2 {
+	if (m !== out) for (let i = 0; i < 4; i++) out[i] = m[i]
+	return out
 }
 
 // Computes the determinant of the matrix.
@@ -73,123 +73,123 @@ export function mat2Trace(m: Mat2) {
 }
 
 // Transposes the matrix.
-export function mat2Transpose(m: Mat2, o?: MutMat2): MutMat2 {
-	if (o) return mat2Fill(o, m[0], m[2], m[1], m[3])
+export function mat2Transpose(m: Mat2, out?: MutMat2): MutMat2 {
+	if (out) return mat2Fill(out, m[0], m[2], m[1], m[3])
 	return [m[0], m[2], m[1], m[3]]
 }
 
 // Flips the matrix around x-axis.
-export function mat2FlipX(m: Mat2, o?: MutMat2): MutMat2 {
-	if (o) return mat2Fill(o, m[2], m[3], m[0], m[1])
+export function mat2FlipX(m: Mat2, out?: MutMat2): MutMat2 {
+	if (out) return mat2Fill(out, m[2], m[3], m[0], m[1])
 	return [m[2], m[3], m[0], m[1]]
 }
 
 // Flips the matrix around y-axis.
-export function mat2FlipY(m: Mat2, o?: MutMat2): MutMat2 {
-	if (o) return mat2Fill(o, m[1], m[0], m[3], m[2])
+export function mat2FlipY(m: Mat2, out?: MutMat2): MutMat2 {
+	if (out) return mat2Fill(out, m[1], m[0], m[3], m[2])
 	return [m[1], m[0], m[3], m[2]]
 }
 
 // Negates the matrix.
-export function mat2Negate(m: Mat2, o?: MutMat2): MutMat2 {
-	if (o) return mat2Fill(o, -m[0], -m[1], -m[2], -m[3])
+export function mat2Negate(m: Mat2, out?: MutMat2): MutMat2 {
+	if (out) return mat2Fill(out, -m[0], -m[1], -m[2], -m[3])
 	return [-m[0], -m[1], -m[2], -m[3]]
 }
 
 // Computes the sum of the matrix by scalar.
-export function mat2PlusScalar(m: Mat2, scalar: number, o?: MutMat2): MutMat2 {
-	if (o) return mat2Fill(o, m[0] + scalar, m[1] + scalar, m[2] + scalar, m[3] + scalar)
+export function mat2PlusScalar(m: Mat2, scalar: number, out?: MutMat2): MutMat2 {
+	if (out) return mat2Fill(out, m[0] + scalar, m[1] + scalar, m[2] + scalar, m[3] + scalar)
 	return [m[0] + scalar, m[1] + scalar, m[2] + scalar, m[3] + scalar]
 }
 
 // Computes the subtraction of the matrix by scalar.
-export function mat2MinusScalar(m: Mat2, scalar: number, o?: MutMat2): MutMat2 {
-	if (o) return mat2Fill(o, m[0] - scalar, m[1] - scalar, m[2] - scalar, m[3] - scalar)
+export function mat2MinusScalar(m: Mat2, scalar: number, out?: MutMat2): MutMat2 {
+	if (out) return mat2Fill(out, m[0] - scalar, m[1] - scalar, m[2] - scalar, m[3] - scalar)
 	return [m[0] - scalar, m[1] - scalar, m[2] - scalar, m[3] - scalar]
 }
 
 // Multiplies the matrix by scalar.
-export function mat2MulScalar(m: Mat2, scalar: number, o?: MutMat2): MutMat2 {
-	if (o) return mat2Fill(o, m[0] * scalar, m[1] * scalar, m[2] * scalar, m[3] * scalar)
+export function mat2MulScalar(m: Mat2, scalar: number, out?: MutMat2): MutMat2 {
+	if (out) return mat2Fill(out, m[0] * scalar, m[1] * scalar, m[2] * scalar, m[3] * scalar)
 	return [m[0] * scalar, m[1] * scalar, m[2] * scalar, m[3] * scalar]
 }
 
 // Computes the division of the matrix by scalar.
-export function mat2DivScalar(m: Mat2, scalar: number, o?: MutMat2): MutMat2 {
-	if (o) return mat2Fill(o, m[0] / scalar, m[1] / scalar, m[2] / scalar, m[3] / scalar)
+export function mat2DivScalar(m: Mat2, scalar: number, out?: MutMat2): MutMat2 {
+	if (out) return mat2Fill(out, m[0] / scalar, m[1] / scalar, m[2] / scalar, m[3] / scalar)
 	return [m[0] / scalar, m[1] / scalar, m[2] / scalar, m[3] / scalar]
 }
 
 // Computes the sum between the matrices.
-export function mat2Plus(a: Mat2, b: Mat2, o?: MutMat2): MutMat2 {
-	if (o) return mat2Fill(o, a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3])
+export function mat2Plus(a: Mat2, b: Mat2, out?: MutMat2): MutMat2 {
+	if (out) return mat2Fill(out, a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3])
 	return [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]]
 }
 
 // Computes the subtraction between the matrices.
-export function mat2Minus(a: Mat2, b: Mat2, o?: MutMat2): MutMat2 {
-	if (o) return mat2Fill(o, a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3])
+export function mat2Minus(a: Mat2, b: Mat2, out?: MutMat2): MutMat2 {
+	if (out) return mat2Fill(out, a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3])
 	return [a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3]]
 }
 
 // Multiplies two matrices.
-export function mat2Mul(a: Mat2, b: Mat2, o?: MutMat2): MutMat2 {
+export function mat2Mul(a: Mat2, b: Mat2, out?: MutMat2): MutMat2 {
 	const c = a[0] * b[0] + a[1] * b[2]
 	const d = a[0] * b[1] + a[1] * b[3]
 	const e = a[2] * b[0] + a[3] * b[2]
 	const f = a[2] * b[1] + a[3] * b[3]
 
-	if (o) return mat2Fill(o, c, d, e, f)
+	if (out) return mat2Fill(out, c, d, e, f)
 	return [c, d, e, f]
 }
 
 // Multiplies the transpose of the matrix to other matrix.
-export function mat2TransposeMul(a: Mat2, b: Mat2, o?: MutMat2): MutMat2 {
+export function mat2TransposeMul(a: Mat2, b: Mat2, out?: MutMat2): MutMat2 {
 	const c = a[0] * b[0] + a[2] * b[2]
 	const d = a[0] * b[1] + a[2] * b[3]
 	const e = a[1] * b[0] + a[3] * b[2]
 	const f = a[1] * b[1] + a[3] * b[3]
 
-	if (o) return mat2Fill(o, c, d, e, f)
+	if (out) return mat2Fill(out, c, d, e, f)
 	return [c, d, e, f]
 }
 
 // Multiplies a matrix to the transpose of other matrix.
-export function mat2MulTranspose(a: Mat2, b: Mat2, o?: MutMat2): MutMat2 {
+export function mat2MulTranspose(a: Mat2, b: Mat2, out?: MutMat2): MutMat2 {
 	const c = a[0] * b[0] + a[1] * b[1]
 	const d = a[0] * b[2] + a[1] * b[3]
 	const e = a[2] * b[0] + a[3] * b[1]
 	const f = a[2] * b[2] + a[3] * b[3]
 
-	if (o) return mat2Fill(o, c, d, e, f)
+	if (out) return mat2Fill(out, c, d, e, f)
 	return [c, d, e, f]
 }
 
 // Multiplies the transpose of two matrices.
-export function mat2TransposeMulTranspose(a: Mat2, b: Mat2, o?: MutMat2): MutMat2 {
+export function mat2TransposeMulTranspose(a: Mat2, b: Mat2, out?: MutMat2): MutMat2 {
 	const c = a[0] * b[0] + a[2] * b[1]
 	const d = a[0] * b[2] + a[2] * b[3]
 	const e = a[1] * b[0] + a[3] * b[1]
 	const f = a[1] * b[2] + a[3] * b[3]
 
-	if (o) return mat2Fill(o, c, d, e, f)
+	if (out) return mat2Fill(out, c, d, e, f)
 	return [c, d, e, f]
 }
 
 // Multiplies the matrix by a vector.
-export function mat2MulVec(a: Mat2, b: Vec2, o?: MutVec2): MutVec2 {
+export function mat2MulVec(a: Mat2, b: Vec2, out?: MutVec2): MutVec2 {
 	const c = a[0] * b[0] + a[1] * b[1]
 	const d = a[2] * b[0] + a[3] * b[1]
 
-	if (o) return vec2Fill(o, c, d)
+	if (out) return vec2Fill(out, c, d)
 	return [c, d]
 }
 
 // Multiplies the transpose of the matrix by a vector.
-export function mat2TransposeMulVec(a: Mat2, b: Vec2, o?: MutVec2): MutVec2 {
+export function mat2TransposeMulVec(a: Mat2, b: Vec2, out?: MutVec2): MutVec2 {
 	const c = a[0] * b[0] + a[2] * b[1]
 	const d = a[1] * b[0] + a[3] * b[1]
 
-	if (o) return vec2Fill(o, c, d)
+	if (out) return vec2Fill(out, c, d)
 	return [c, d]
 }

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { closeApproachBPlane } from '../../../src/astronomy/orbits/bplane'
 import { AU_KM, DAYSEC } from '../../../src/core/constants'
-import { type Vec3, vecDot, vecLength } from '../../../src/math/linear-algebra/vec3'
+import { type Vec3, vecDot, vecLength, vecX, vecY } from '../../../src/math/linear-algebra/vec3'
 
 // Apophis (99942) geocentric state during its 2029-04-13 Earth flyby, from JPL Horizons (ICRF equatorial,
 // AU and AU/day, geometric, 2029-Apr-13 20:00 TDB). The published close approach is 38012 km at a
@@ -53,14 +53,14 @@ test('the S, T, R axes form a right-handed orthonormal frame', () => {
 
 test('a bound relative orbit has no incoming asymptote and throws', () => {
 	// Speed well below escape at this range: the relative orbit is elliptical, so there is no flyby.
-	const slow: Vec3 = [0, 1e-4, 0]
-	expect(() => closeApproachBPlane([1e-3, 0, 0], slow)).toThrow()
+	const slow: Vec3 = vecY(1e-4)
+	expect(() => closeApproachBPlane(vecX(1e-3), slow)).toThrow()
 })
 
 test('a radial head-on hyperbolic encounter has a zero impact parameter', () => {
 	// Position parallel to velocity above escape speed: zero angular momentum, so a direct hit with zero
 	// impact parameter and zero closest-approach distance, and finite (non-NaN) axes.
-	const bplane = closeApproachBPlane([1e-3, 0, 0], [3e-3, 0, 0])
+	const bplane = closeApproachBPlane(vecX(1e-3), vecX(3e-3))
 
 	expect(bplane.impactParameter).toBe(0)
 	expect(bplane.bt).toBe(0)

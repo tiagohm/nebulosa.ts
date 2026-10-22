@@ -5,7 +5,7 @@ import { eraS2p } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { ECLIPTIC_J2000, frameToFrame, GALACTIC, ICRS } from '../../../src/astronomy/coordinates/frame'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { ONE_KILOPARSEC, ONE_PARSEC } from '../../../src/core/constants'
-import { type MutVec3, type Vec3, vecMinus } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecMinus, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { kilometerPerSecond, toKilometerPerSecond } from '../../../src/math/units/velocity'
 
 const TIME = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.UTC)
@@ -110,10 +110,7 @@ test('affine transforms write into an output parameter and run in place', () => 
 // message; parameters: galcen (266.4051, -28.936175) deg, distance 8.122 kpc,
 // z_sun 20.8 pc, roll 0, roll0 58.5986320306 deg.
 const GALACTOCENTRIC_CASES: ReadonlyArray<readonly [icrs: Vec3, gc: Vec3]> = [
-	[
-		[0, 0, 0],
-		[-8.1219733661223, 0, 0.020800000000000003],
-	],
+	[vecZero(), [-8.1219733661223, 0, 0.020800000000000003]],
 	[
 		[1, 2, 3],
 		[-11.374949439876023, 1.8453994199476227, 0.1332617465754201],
@@ -170,10 +167,7 @@ const LSR_CASES: ReadonlyArray<readonly [velKms: Vec3, lsrVelKms: Vec3]> = [
 		[10, -20, 5],
 		[9.14820021332169, -36.57592050970972, 12.078375264084205],
 	],
-	[
-		[0, 0, 0],
-		[-0.8517997866783104, -16.575920509709718, 7.0783752640842055],
-	],
+	[vecZero(), [-0.8517997866783104, -16.575920509709718, 7.0783752640842055]],
 	[
 		[-12, 30, -7],
 		[-12.85179978667831, 13.424079490290282, 0.07837526408420548],
@@ -200,10 +194,7 @@ test('LSRK variant matches Astropy', () => {
 	const lsrk = lsrkFrame()
 	const pos: MutVec3 = [100 * ONE_PARSEC, 200 * ONE_PARSEC, 50 * ONE_PARSEC]
 	const cases: ReadonlyArray<PositionAndVelocity> = [
-		[
-			[0, 0, 0],
-			[0.28999706839034606, -17.317264789717928, 10.00141199546947],
-		],
+		[vecZero(), [0.28999706839034606, -17.317264789717928, 10.00141199546947]],
 		[
 			[10, -20, 5],
 			[10.289997068390345, -37.317264789717925, 15.00141199546947],
@@ -221,10 +212,7 @@ test('LSRD variant matches Astropy', () => {
 	const lsrd = lsrdFrame()
 	const pos: MutVec3 = [100 * ONE_PARSEC, 200 * ONE_PARSEC, 50 * ONE_PARSEC]
 	const cases: ReadonlyArray<PositionAndVelocity> = [
-		[
-			[0, 0, 0],
-			[-0.6382306360182073, -14.585424483191094, 7.8011572411006815],
-		],
+		[vecZero(), [-0.6382306360182073, -14.585424483191094, 7.8011572411006815]],
 		[
 			[10, -20, 5],
 			[9.361769363981793, -34.58542448319109, 12.801157241100682],
@@ -241,12 +229,7 @@ test('LSRD variant matches Astropy', () => {
 test('GalacticLSR variant matches Astropy (galactic orientation plus LSR offset)', () => {
 	const glsr = galacticLsrFrame()
 	const cases: ReadonlyArray<readonly [pos: Vec3, vel: Vec3, expectedPos: Vec3, expectedVel: Vec3]> = [
-		[
-			[100, 200, 50],
-			[0, 0, 0],
-			[-204.36672984321808, -2.205891326052992, -103.58269052620079],
-			[11.1, 12.24, 7.25],
-		],
+		[[100, 200, 50], vecZero(), [-204.36672984321808, -2.205891326052992, -103.58269052620079], [11.1, 12.24, 7.25]],
 		[
 			[100, 200, 50],
 			[10, -20, 5],

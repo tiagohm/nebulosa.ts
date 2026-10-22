@@ -16,7 +16,7 @@ import { parseTLE, recordFromTLE, sgp4 } from '../../../src/astronomy/orbits/pro
 import { gcrsToItrsRotationMatrix, type Time, Timescale, timeShift, timeSubtract, tt } from '../../../src/astronomy/time/time'
 import { AU_KM, DAYSEC, EARTH_RADIUS_AU, ELLIPSOID_PARAMETERS, ONE_SECOND, PIOVERTWO, SPEED_OF_LIGHT_AU_DAY } from '../../../src/core/constants'
 import { matTransposeMulVec } from '../../../src/math/linear-algebra/mat3'
-import { type MutVec3, type Vec3, vecAngle, vecLength, vecMinus } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngle, vecLength, vecMinus, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { clamp } from '../../../src/math/numerical/math'
 import { linearSpline } from '../../../src/math/numerical/spline'
 import { deg, toArcsec, toDeg, type Angle } from '../../../src/math/units/angle'
@@ -350,7 +350,7 @@ test('observer-relative satellite Sun/Moon avoidance paths agree with independen
 	const observer = earthObserverEphemerisPath(SITE, customEphemerisEndpoint('test-site'))
 	const target = relativeEphemerisPath(sgp4EphemerisPath(ISS), observer)
 	const solar = relativeEphemerisPath(
-		ephemerisPath(naifEphemerisEndpoint(Naif.EARTH), naifEphemerisEndpoint(Naif.SUN), (time) => [sunAt(time), [0, 0, 0]]),
+		ephemerisPath(naifEphemerisEndpoint(Naif.EARTH), naifEphemerisEndpoint(Naif.SUN), (time) => [sunAt(time), vecZero()]),
 		observer,
 	)
 	const lunar = relativeEphemerisPath(ephemerisPath(naifEphemerisEndpoint(Naif.EARTH), naifEphemerisEndpoint(Naif.MOON), moon), observer)

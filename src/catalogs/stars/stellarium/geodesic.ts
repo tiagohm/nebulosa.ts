@@ -1,5 +1,5 @@
 import { PIOVERTWO, PI, TAU, ASEC2RAD } from '../../../core/constants'
-import { type MutVec3, type Vec3, vecAngleUnit, vecLatitude, vecMidpoint, vecNormalizeMut, vecTripleProduct } from '../../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngleUnit, vecLatitude, vecMidpoint, vecNormalizeMut, vecTripleProduct, vecZero } from '../../../math/linear-algebra/vec3'
 import type { Angle } from '../../../math/units/angle'
 import type { StarCatalogRaDecBox } from '../catalog'
 
@@ -214,7 +214,7 @@ export function stellariumZoneCover(classify: StellariumCapClassifier, levels: r
 		else list.push({ start, end, inside })
 	}
 
-	const center: MutVec3 = [0, 0, 0]
+	const center = vecZero()
 
 	const walk = (c0: Vec3, c1: Vec3, c2: Vec3, depth: number, zone: number) => {
 		visited++

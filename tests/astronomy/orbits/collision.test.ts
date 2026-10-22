@@ -4,7 +4,7 @@ import { cdmCollisionProbability, cdmEncounterStates, type CollisionProbabilityE
 import { AU_M, DAYSEC, EARTH_ANGULAR_VELOCITY_VECTOR } from '../../../src/core/constants'
 import { type Mat3, matMul, matMulVec, matRotX, matRotY, matRotZ, matTranspose } from '../../../src/math/linear-algebra/mat3'
 import { Matrix } from '../../../src/math/linear-algebra/matrix'
-import { type Vec3, vecCross, vecDot, vecLength, vecMinus, vecPlus } from '../../../src/math/linear-algebra/vec3'
+import { type Vec3, vecCross, vecDot, vecLength, vecMinus, vecPlus, vecX, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { meter, toMeter } from '../../../src/math/units/distance'
 
 // Reference probabilities are 30-digit mpmath 1.3.0 quadratures of the 2D Gaussian density over the disk
@@ -87,9 +87,9 @@ describe('rtnRotation', () => {
 	})
 
 	test('undefined for degenerate states', () => {
-		expect(rtnRotation([0, 0, 0], [1, 0, 0])).toBeUndefined()
+		expect(rtnRotation(vecZero(), vecX())).toBeUndefined()
 		expect(rtnRotation([1, 2, 3], [2, 4, 6])).toBeUndefined()
-		expect(rtnRotation([1, 2, 3], [0, 0, 0])).toBeUndefined()
+		expect(rtnRotation([1, 2, 3], vecZero())).toBeUndefined()
 	})
 })
 
@@ -201,7 +201,7 @@ describe('collisionProbability', () => {
 		const rotation = matMul(matRotZ(1.1), matMul(matRotY(-0.7), matRotX(2.3)))
 		const rotated = rotateEncounter(states, rotation)
 		expectRelative(pc(rotated, 5).probability, pc(states, 5).probability, 1e-9)
-		expect(pc(rotated, 5).geometry.plane.zAxis).toEqual(matMulVec(rotation, [0, 0, 1]).map((x) => expect.closeTo(x, 14)) as unknown as Vec3)
+		expect(pc(rotated, 5).geometry.plane.zAxis).toEqual(matMulVec(rotation, vecZ()).map((x) => expect.closeTo(x, 14)) as unknown as Vec3)
 	})
 
 	test('grazing encounters', () => {

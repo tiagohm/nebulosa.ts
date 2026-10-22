@@ -9,7 +9,7 @@ import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/loc
 import { fitSkyBaseline, KRISCIUNAS_SCHAEFER_V, nanolambertsToSkyMagnitude, skyBrightness, skyBrightnessGeometryAt, type SkyBrightnessGeometry, skyMagnitudeToNanolamberts } from '../../../src/astronomy/sky/brightness'
 import { type Time, Timescale, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { EARTH_RADIUS_AU, PIOVERTWO } from '../../../src/core/constants'
-import { type Vec3, vecAngle, vecCross, vecLength, vecMinus, vecMulScalar, vecNegate, vecNormalize, vecPlus } from '../../../src/math/linear-algebra/vec3'
+import { type Vec3, vecAngle, vecCross, vecLength, vecMinus, vecMulScalar, vecNegate, vecNormalize, vecPlus, vecZ } from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
 import { kilometer, toKilometer } from '../../../src/math/units/distance'
 
@@ -244,7 +244,7 @@ describe('observer and epoch', () => {
 	const sunAt = (time: Time) => vecMinus(sun(time)[0], earth(time)[0])
 	const moonAt = (time: Time) => moon(time)[0]
 	const FULL = nearestLunarPhase(timeYMDHMS(2026, 10, 20, 0, 0, 0, Timescale.UTC), 'FULL', true)
-	const SOUTH_POLE = [0, 0, -1] as const
+	const SOUTH_POLE = vecZ(-1)
 	const ZERO_STATE = zeroPositionAndVelocity()
 
 	// The hour within half a day of full Moon at which the Moon stands highest.
@@ -277,7 +277,7 @@ describe('observer and epoch', () => {
 		// separation is exact while the geocentric one, ~10.5°, falls on the other side of the 10° seam.
 		const observer = observerState(time, ZERO_STATE, SITE)[0]
 		const up = vecNormalize(observer)
-		const east = vecNormalize(vecCross([0, 0, 1], up))
+		const east = vecNormalize(vecCross(vecZ(), up))
 		const along = (zenithDistance: number): Vec3 => vecPlus(vecMulScalar(up, Math.cos(deg(zenithDistance))), vecMulScalar(east, Math.sin(deg(zenithDistance))))
 		const distance = kilometer(384400)
 		const moonGeocentric = vecPlus(observer, vecMulScalar(along(40), distance))

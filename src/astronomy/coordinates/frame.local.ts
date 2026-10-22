@@ -1,5 +1,5 @@
 import { matFill, matTranspose, type MutMat3 } from '../../math/linear-algebra/mat3'
-import { type MutVec3, vecFill, vecLength, type Vec3 } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecFill, vecLength, vecZero } from '../../math/linear-algebra/vec3'
 import { normalizeAngle, type Angle } from '../../math/units/angle'
 import type { HorizontalCoordinate } from './coordinate'
 
@@ -13,7 +13,7 @@ const SINGULAR_HORIZONTAL_EPSILON = 1e-15
 // Altitude is the elevation above the horizon in [-π/2, π/2] radians.
 export function horizontalToEnuVector(azimuth: Angle, altitude: Angle, out?: MutVec3): MutVec3 {
 	const cosAltitude = Math.cos(altitude)
-	return vecFill(out ?? [0, 0, 0], cosAltitude * Math.sin(azimuth), cosAltitude * Math.cos(azimuth), Math.sin(altitude))
+	return vecFill(out ?? vecZero(), cosAltitude * Math.sin(azimuth), cosAltitude * Math.cos(azimuth), Math.sin(altitude))
 }
 
 // Converts a finite non-zero ENU direction into north-through-east azimuth and altitude.

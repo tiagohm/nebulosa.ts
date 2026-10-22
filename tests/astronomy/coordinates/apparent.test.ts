@@ -8,7 +8,7 @@ import { geodeticLocation } from '../../../src/astronomy/observer/location'
 import { tdb, Timescale, timeShift, timeYMDHMS, toJulianDay } from '../../../src/astronomy/time/time'
 import { SPEED_OF_LIGHT_AU_DAY, SUN_RADIUS_AU } from '../../../src/core/constants'
 import { matMulVec } from '../../../src/math/linear-algebra/mat3'
-import { type Vec3, vecAngle, vecClone, vecLength, vecNormalize, vecZero } from '../../../src/math/linear-algebra/vec3'
+import { type Vec3, vecAngle, vecClone, vecLength, vecNormalize, vecX, vecY, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { arcsec, deg, toArcsec } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 import { kilometerPerSecond } from '../../../src/math/units/velocity'
@@ -16,7 +16,7 @@ import { kilometerPerSecond } from '../../../src/math/units/velocity'
 const TIME = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TDB)
 const LOCATION = geodeticLocation(deg(-70.7313), deg(-29.2563), meter(2400))
 
-function constantPv(position: Vec3, velocity: Vec3 = [0, 0, 0]): PositionAndVelocityOverTime {
+function constantPv(position: Vec3, velocity: Vec3 = vecZero()): PositionAndVelocityOverTime {
 	return () => [vecClone(position), vecClone(velocity)]
 }
 
@@ -26,7 +26,7 @@ function farTarget(observerPosition: Vec3, direction: Vec3, distance = 1e9): Pos
 }
 
 test('zero light-time iterations reproduce the geometric same-epoch direction', () => {
-	const observer = constantPv([0, 0, 0])
+	const observer = constantPv(vecZero())
 	const target: PositionAndVelocityOverTime = (t) => [[1 + t.fraction, 2, 3], vecZero()]
 
 	const place = apparentDirection(target, observer, TIME, { lightTimeIterations: 0, aberration: false })!
@@ -39,16 +39,16 @@ test('zero light-time iterations reproduce the geometric same-epoch direction', 
 })
 
 test('snapshot correction matches provider pipeline without mutating its inputs', () => {
-	const observer = constantPv([0, 0, 0], [0, 0.01, 0])
+	const observer = constantPv(vecZero(), vecY(0.01))
 	const target = constantPv([1, 0.1, 0])
-	const sun = constantPv([-1, 0, 0])
-	const body = constantPv([0.5, 0.01, 0], [0, 0.001, 0])
+	const sun = constantPv(vecX(-1))
+	const body = constantPv([0.5, 0.01, 0], vecY(0.001))
 	const deflector = { mass: SUN_LIGHT_DEFLECTOR_MASS, limiter: SUN_LIGHT_DEFLECTOR_LIMITER, state: body }
 	const lowLevel = apparentDirection(target, observer, TIME, { sun, deflectors: [deflector] })!
 	const astrometric = vecClone(lowLevel.astrometric)
-	const corrected = applyApparentDirectionCorrections(astrometric, [1, 0.1, 0], [0, 0, 0], [0, 0.01, 0], lowLevel.lightTime, {
-		sunPosition: [-1, 0, 0],
-		deflectors: [{ mass: deflector.mass, limiter: deflector.limiter, position: [0.5, 0.01, 0], velocity: [0, 0.001, 0] }],
+	const corrected = applyApparentDirectionCorrections(astrometric, [1, 0.1, 0], vecZero(), vecY(0.01), lowLevel.lightTime, {
+		sunPosition: vecX(-1),
+		deflectors: [{ mass: deflector.mass, limiter: deflector.limiter, position: [0.5, 0.01, 0], velocity: vecY(0.001) }],
 	})
 	for (let i = 0; i < 3; i++) {
 		expect(corrected[i]).toBeCloseTo(lowLevel.apparent[i], 15)
@@ -57,13 +57,10 @@ test('snapshot correction matches provider pipeline without mutating its inputs'
 })
 
 test('light-time convergence matches topocentricDirection and is internally consistent', () => {
-	const observer = constantPv([0.1, -0.2, 0.05], [0.01, 0, 0])
+	const observer = constantPv([0.1, -0.2, 0.05], vecX(0.01))
 	const target: PositionAndVelocityOverTime = (t) => {
 		const dt = toJulianDay(t) - toJulianDay(TIME)
-		return [
-			[2 + 0.001 * dt, 0.5, -0.3],
-			[0.001, 0, 0],
-		]
+		return [[2 + 0.001 * dt, 0.5, -0.3], vecX(0.001)]
 	}
 
 	const place = apparentDirection(target, observer, TIME, { lightTimeIterations: 3, aberration: false })!
@@ -83,7 +80,7 @@ test('light-time convergence matches topocentricDirection and is internally cons
 })
 
 test('accepts the maximum supported light-time iteration count', () => {
-	const observer = constantPv([0, 0, 0])
+	const observer = constantPv(vecZero())
 	const target = constantPv([1, 0.2, -0.1])
 	const place = apparentDirection(target, observer, TIME, { lightTimeIterations: 16, aberration: false })!
 	const retarded = topocentricDirection(target, observer, TIME, 16)
@@ -95,28 +92,28 @@ test('accepts the maximum supported light-time iteration count', () => {
 })
 
 test('rejects non-finite light-time iteration counts', () => {
-	const observer = constantPv([0, 0, 0])
-	const target = constantPv([1, 0, 0])
+	const observer = constantPv(vecZero())
+	const target = constantPv(vecX())
 	expect(() => apparentDirection(target, observer, TIME, { aberration: false, lightTimeIterations: Infinity })).toThrow('lightTimeIterations must be an integer in [0, 16]')
 	expect(() => apparentDirection(target, observer, TIME, { aberration: false, lightTimeIterations: -Infinity })).toThrow('lightTimeIterations must be an integer in [0, 16]')
 	expect(() => apparentDirection(target, observer, TIME, { aberration: false, lightTimeIterations: Number.NaN })).toThrow('lightTimeIterations must be an integer in [0, 16]')
 })
 
 test('rejects negative light-time iteration counts', () => {
-	const observer = constantPv([0, 0, 0])
-	const target = constantPv([1, 0, 0])
+	const observer = constantPv(vecZero())
+	const target = constantPv(vecX())
 	expect(() => apparentDirection(target, observer, TIME, { aberration: false, lightTimeIterations: -1 })).toThrow('lightTimeIterations must be an integer in [0, 16]')
 })
 
 test('rejects fractional light-time iteration counts', () => {
-	const observer = constantPv([0, 0, 0])
-	const target = constantPv([1, 0, 0])
+	const observer = constantPv(vecZero())
+	const target = constantPv(vecX())
 	expect(() => apparentDirection(target, observer, TIME, { aberration: false, lightTimeIterations: 1.5 })).toThrow('lightTimeIterations must be an integer in [0, 16]')
 })
 
 test('rejects light-time iteration counts above the supported bound', () => {
-	const observer = constantPv([0, 0, 0])
-	const target = constantPv([1, 0, 0])
+	const observer = constantPv(vecZero())
+	const target = constantPv(vecX())
 	expect(() => apparentDirection(target, observer, TIME, { aberration: false, lightTimeIterations: 17 })).toThrow('lightTimeIterations must be an integer in [0, 16]')
 })
 
@@ -126,15 +123,15 @@ test('zero observer-target distance has no sky direction', () => {
 })
 
 test('aberration without a Sun provider fails explicitly', () => {
-	const observer = constantPv([1, 0, 0])
-	const target = constantPv([2, 0, 0])
+	const observer = constantPv(vecX())
+	const target = constantPv(vecX(2))
 	expect(() => apparentDirection(target, observer, TIME)).toThrow('sun barycentric state is required when aberration is enabled')
 })
 
 test('disabling aberration leaves the astrometric direction unchanged', () => {
-	const observer = constantPv([0, 0, 0], [0.017, 0, 0])
+	const observer = constantPv(vecZero(), vecX(0.017))
 	const target = constantPv([1, 0.2, 0.1])
-	const sun = constantPv([0, 0, 0])
+	const sun = constantPv(vecZero())
 	const place = apparentDirection(target, observer, TIME, { aberration: false, sun, deflectors: [] })!
 
 	expect(place.apparent).not.toBe(place.astrometric)
@@ -149,7 +146,7 @@ test('aberration matches eraAb and stays on the ~20 arcsec annual scale', () => 
 	const [barycentric, heliocentric] = eraEpv00(tdbTime.day, tdbTime.fraction)
 	const earth = constantPv(barycentric[0], barycentric[1])
 	const sun = constantPv([barycentric[0][0] - heliocentric[0][0], barycentric[0][1] - heliocentric[0][1], barycentric[0][2] - heliocentric[0][2]])
-	const direction = vecNormalize([0, 1, 0])
+	const direction = vecNormalize(vecY())
 	const target = farTarget(barycentric[0], direction)
 	const place = apparentDirection(target, earth, TIME, { sun, deflectors: [] })!
 
@@ -196,11 +193,11 @@ test('a topocentric observer includes the diurnal aberration term', () => {
 // Skyfield 1.55 _compute_deflection of a gigaparsec-scale limb star, Sun at the origin,
 // observer at 1 AU along +x. Classical 4GM/(c^2 R) is 1.75119 arcsec.
 test('solar limb deflection approaches the classical 1.75 arcsec scale', () => {
-	const observer = constantPv([1, 0, 0])
-	const sunState = constantPv([0, 0, 0])
+	const observer = constantPv(vecX())
+	const sunState = constantPv(vecZero())
 	const angularRadius = Math.asin(SUN_RADIUS_AU)
 	const limb: Vec3 = [-Math.cos(angularRadius), Math.sin(angularRadius), 0]
-	const target = farTarget([1, 0, 0], limb)
+	const target = farTarget(vecX(), limb)
 	const sun = { mass: SUN_LIGHT_DEFLECTOR_MASS, state: sunState, limiter: 1e-6 }
 
 	const none = apparentDirection(target, observer, TIME, { aberration: false, deflectors: [] })!
@@ -212,7 +209,7 @@ test('solar limb deflection approaches the classical 1.75 arcsec scale', () => {
 	// Skyfield 1.55, same geometry, pmag = 1e9 AU.
 	expect(shift).toBeCloseTo(1.75118, 3)
 
-	const e = vecNormalize([1, 0, 0])
+	const e = vecNormalize(vecX())
 	const era = eraLdSun(vecNormalize(limb), e, 1)
 	expect(toArcsec(vecAngle(vecNormalize(limb), era))).toBeCloseTo(shift, 3)
 })
@@ -278,13 +275,13 @@ test('multi-body star deflection accumulates Sun, Jupiter, and Saturn incrementa
 })
 
 test('a deflector beyond a finite target is not treated as a star at infinity', () => {
-	const observer = constantPv([0, 0, 0])
-	const target = constantPv([1, 0, 0])
+	const observer = constantPv(vecZero())
+	const target = constantPv(vecX())
 	const deflectorPosition: Vec3 = [5, 0.01, 0]
 	const deflector = { mass: SUN_LIGHT_DEFLECTOR_MASS, state: constantPv(deflectorPosition), limiter: 1e-6 }
 
 	const finite = apparentDirection(target, observer, TIME, { aberration: false, lightTimeIterations: 0, deflectors: [deflector] })!
-	const star = farTarget([0, 0, 0], [1, 0, 0])
+	const star = farTarget(vecZero(), vecX())
 	const infinite = apparentDirection(star, observer, TIME, { aberration: false, deflectors: [deflector] })!
 
 	const finiteShift = toArcsec(vecAngle(finite.astrometric, finite.apparent))
@@ -294,11 +291,11 @@ test('a deflector beyond a finite target is not treated as a star at infinity', 
 	expect(starShift).toBeGreaterThan(0.5)
 	expect(starShift).toBeCloseTo(0.814, 2)
 
-	const body: LdBody = { bm: 1, dl: 1e-6, p: deflectorPosition, v: [0, 0, 0] }
-	const naive = eraLdn([body], [0, 0, 0], [1, 0, 0])
+	const body: LdBody = { bm: 1, dl: 1e-6, p: deflectorPosition, v: vecZero() }
+	const naive = eraLdn([body], vecZero(), vecX())
 	expect(toArcsec(vecAngle(finite.apparent, naive))).toBeGreaterThan(0.5)
 
-	const p: Vec3 = [1, 0, 0]
+	const p: Vec3 = vecX()
 	const e = vecNormalize([-5, -0.01, 0])
 	const q = vecNormalize([-4, -0.01, 0])
 	const em = Math.hypot(5, 0.01)

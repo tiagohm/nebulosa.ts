@@ -1,7 +1,7 @@
 import { ANGVEL_PER_DAY, DAYSEC, ELLIPSOID_PARAMETERS, ONE_SECOND, PI, SPEED_OF_LIGHT_AU_DAY, TAU } from '../../core/constants'
 import type { Mat2 } from '../../math/linear-algebra/mat2'
 import { type Mat3, matClone, matMulVec, matRotZ, matTransposeMulVec } from '../../math/linear-algebra/mat3'
-import { type MutVec3, type Vec3, vecCross, vecDot, vecLength, vecNormalizeMut } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecCross, vecDot, vecLength, vecNormalizeMut, vecX, vecY, vecZ, vecZero } from '../../math/linear-algebra/vec3'
 import { clamp } from '../../math/numerical/math'
 import { type Angle, normalizePI } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
@@ -329,7 +329,7 @@ function silhouetteDistance(context: ShadowContext, { anchor, axis }: ShadowAxis
 		cz /= length
 	} else {
 		// Axis through the geocenter: any in-plane direction gives the (signed) radius.
-		const e = Math.abs(axis[2]) < 0.9 ? vecNormalizeMut(vecCross(axis, [0, 0, 1])) : vecNormalizeMut(vecCross(axis, [1, 0, 0]))
+		const e = Math.abs(axis[2]) < 0.9 ? vecNormalizeMut(vecCross(axis, vecZ())) : vecNormalizeMut(vecCross(axis, vecX()))
 		cx = e[0]
 		cy = e[1]
 		cz = e[2]
@@ -352,11 +352,11 @@ function shadowAxis(context: ShadowContext, time: Time, rotation: Mat3 = gcrsToI
 
 	// Ray direction u (source -> body, the light propagation direction) and the retarded epochs as offsets
 	// (days) before reception: lt for the body, lt + ls for the source.
-	const u: MutVec3 = direction !== undefined ? [-direction[0], -direction[1], -direction[2]] : [0, 0, 0]
-	const body: MutVec3 = [0, 0, 0]
-	const bodyVelocity: MutVec3 = [0, 0, 0]
-	const sourcePosition: MutVec3 = [0, 0, 0]
-	const sourceVelocity: MutVec3 = [0, 0, 0]
+	const u: MutVec3 = direction !== undefined ? [-direction[0], -direction[1], -direction[2]] : vecZero()
+	const body = vecZero()
+	const bodyVelocity = vecZero()
+	const sourcePosition = vecZero()
+	const sourceVelocity = vecZero()
 	let lt = 0
 	let ls = 0
 	let sampledLt = 0
@@ -550,7 +550,7 @@ function axisOffset(point: Vec3, { anchor, axis }: ShadowAxis): MutVec3 {
 function solveLimit(context: ShadowContext, before: ShadowAxis, current: ShadowAxis, after: ShadowAxis, seed: Vec3, side: number, extra: number): LineSolution | undefined {
 	const { anchor, axis } = current
 	const point: MutVec3 = [seed[0], seed[1], seed[2]]
-	const origin: MutVec3 = [0, 0, 0]
+	const origin = vecZero()
 	let normal: MutVec3 | undefined
 	let margin = 0
 
@@ -598,7 +598,7 @@ function projectedSigma(context: ShadowContext, current: ShadowAxis, direction: 
 	if (source !== undefined) {
 		// Tangent basis at the source direction (east, north); the axis moves by -lever * angular error.
 		const k = current.axisGcrs
-		const east = Math.abs(k[2]) < 1 - 1e-12 ? vecNormalizeMut(vecCross([0, 0, 1], k)) : vecNormalizeMut(vecCross([0, 1, 0], k))
+		const east = Math.abs(k[2]) < 1 - 1e-12 ? vecNormalizeMut(vecCross(vecZ(), k)) : vecNormalizeMut(vecCross(vecY(), k))
 		const north = vecCross(k, east)
 		const ce = vecDot(direction, east) * current.sourceLever
 		const cn = vecDot(direction, north) * current.sourceLever
@@ -637,7 +637,7 @@ function evaluateSample(context: ShadowContext, time: Time, offset: number, scal
 	const after = shadowAxis(context, timeShift(time, VELOCITY_STEP), matRotZ(ANGVEL_PER_DAY * VELOCITY_STEP, matClone(current.rotation)))
 	const margins = [Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY]
 
-	const centerPoint: MutVec3 = [0, 0, 0]
+	const centerPoint = vecZero()
 	margins[0] = groundLine(context, current, current.anchor, centerPoint)
 	const hit = margins[0] >= 0
 
@@ -660,8 +660,8 @@ function evaluateSample(context: ShadowContext, time: Time, offset: number, scal
 		const depth = (centerPoint[0] - current.anchor[0]) * current.axis[0] + (centerPoint[1] - current.anchor[1]) * current.axis[1] + (centerPoint[2] - current.anchor[2]) * current.axis[2]
 		if (speed > 0) duration = ((2 * (current.radius - depth * current.slope)) / speed) * DAYSEC
 
-		const pb: MutVec3 = [0, 0, 0]
-		const pa: MutVec3 = [0, 0, 0]
+		const pb = vecZero()
+		const pa = vecZero()
 
 		if (groundLine(context, before, before.anchor, pb) >= 0 && groundLine(context, after, after.anchor, pa) >= 0) {
 			const scaleVelocity = 1 / (2 * VELOCITY_STEP)
@@ -819,7 +819,7 @@ export function occultationPath(target: PositionAndVelocityOverTime, source: Vec
 	// The silhouette margins are gated by the causal depth at the axis point (its ground hit or closest approach),
 	// so a body downstream of the Earth yields no contact. For a body within an Earth radius of the fundamental
 	// plane the gate uses that single point, and the per-line margins of the samples decide each ground point.
-	const axisPoint: MutVec3 = [0, 0, 0]
+	const axisPoint = vecZero()
 	const causalMargin = (axis: ShadowAxis) => {
 		intersectGround(axis.anchor, axis.axis, context.equatorialRadius, context.polarRadius, axisPoint)
 		return causalDepth(axis, axisPoint)

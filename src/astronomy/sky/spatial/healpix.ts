@@ -1,6 +1,6 @@
 import { type StarCatalog, type StarCatalogQuery, type StarCatalogRaDecBox, splitRaBox, type Vertex } from '../../../catalogs/stars/catalog'
 import { PI, PIOVERTWO, TAU } from '../../../core/constants'
-import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecDot, vecLength, vecNegateMut, vecNormalize, vecTripleProduct } from '../../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecDot, vecLength, vecNegateMut, vecNormalize, vecTripleProduct, vecZero } from '../../../math/linear-algebra/vec3'
 import { clamp, pmod } from '../../../math/numerical/math'
 import { type Angle, normalizeAngle } from '../../../math/units/angle'
 import type { EquatorialCoordinate } from '../../coordinates/coordinate'
@@ -806,7 +806,7 @@ function buildRegion(vertices: readonly Vertex[], label: 'triangle' | 'polygon')
 		throw new Error('triangle requires exactly three vertices')
 	}
 
-	const centroid: MutVec3 = [0, 0, 0]
+	const centroid = vecZero()
 
 	for (let i = 0; i < cleaned.length; i++) {
 		const vertex = cleaned[i]
@@ -921,7 +921,7 @@ function distanceToRegion(point: Vec3, region: HealpixRegion) {
 }
 
 // Scratch unit vector reused by pointToArcDistance to avoid per-call allocation.
-const ARC_CLOSEST_SCRATCH: MutVec3 = [0, 0, 0]
+const ARC_CLOSEST_SCRATCH = vecZero()
 
 // Computes the angular distance from a point to a great-circle arc.
 // All inputs must be unit vectors. Uses the stable atan2-based vecAngleUnit instead of acos and
@@ -1035,7 +1035,7 @@ function coverPixels(nside: number, options: HealpixCoverOptions | undefined, te
 	const maxDepth = options?.maxDepth === undefined ? order : validateMaxDepth(options.maxDepth, order)
 	const pixels: number[] = []
 	// oxlint-disable-next-line typescript/unbound-method
-	const state: HealpixCoverState = { nside: targetNside, order, maxDepth, pixels, center: [0, 0, 0], intersects: tester.intersects }
+	const state: HealpixCoverState = { nside: targetNside, order, maxDepth, pixels, center: vecZero(), intersects: tester.intersects }
 
 	for (let face = 0; face < HEALPIX_FACE_COUNT; face++) {
 		coverFace(state, face, 0, 0, targetNside, 0)

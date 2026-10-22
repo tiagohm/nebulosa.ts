@@ -1,7 +1,7 @@
 import { PI, PIOVERTWO } from '../../core/constants'
 import { matIdentity } from '../../math/linear-algebra/mat3'
 import { Matrix } from '../../math/linear-algebra/matrix'
-import type { Vec3 } from '../../math/linear-algebra/vec3'
+import { type Vec3, vecX } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 import type { Time } from '../time/time'
 import { KeplerOrbit } from './asteroid'
@@ -137,7 +137,7 @@ export function ephemerisUncertaintyEllipse(covariance: Matrix, geocentric: Vec3
 	let north: Vec3
 	if (horizontal < POLE_TOLERANCE * distance) {
 		const sign = z >= 0 ? 1 : -1
-		east = [1, 0, 0]
+		east = vecX()
 		north = [0, sign, 0]
 	} else {
 		const sinRa = y / horizontal

@@ -1,5 +1,6 @@
 import { ASEC2RAD, AU_KM, DAYSPERJC, DEG2RAD, J2000 } from '../../../../core/constants'
 import { matMulVec } from '../../../../math/linear-algebra/mat3'
+import { vecZero } from '../../../../math/linear-algebra/vec3'
 import type { PositionAndVelocityMut } from '../../../coordinates/astrometry'
 import { type Time, tt } from '../../../time/time'
 import { ELPMPP02_MAIN, ELPMPP02_PERT } from './elpmpp02.data'
@@ -75,8 +76,8 @@ export function moon(time: Time, out?: PositionAndVelocityMut): PositionAndVeloc
 	t[1] = (day - J2000 + fraction) / DAYSPERJC
 	for (let i = 2; i <= 4; i++) t[i] = t[i - 1] * t[1]
 
-	const p = out?.[0] ?? [0, 0, 0]
-	const v = out?.[1] ?? [0, 0, 0]
+	const p = out?.[0] ?? vecZero()
+	const v = out?.[1] ?? vecZero()
 
 	for (let iv = 0; iv <= 2; iv++) {
 		const [cmpb, fmpb] = ELPMPP02_MAIN[iv]

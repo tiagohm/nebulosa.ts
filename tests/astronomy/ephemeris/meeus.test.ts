@@ -5,6 +5,7 @@ import { moonParallax } from '../../../src/astronomy/bodies/moon'
 import { deltaT, deltaTByEspenakMeeus2006 } from '../../../src/astronomy/time/deltat'
 import { time, timeToDate, timeUnix, timeYMD, tt } from '../../../src/astronomy/time/time'
 import { ASEC2RAD, DAYSEC, DEG2RAD, PI, PIOVERTWO, RAD2DEG, TAU } from '../../../src/core/constants'
+import { vecZero } from '../../../src/math/linear-algebra/vec3'
 import { modf, roundToNthDecimal } from '../../../src/math/numerical/math'
 import { deg, dms, formatALT, formatRA, hms, normalizeAngle, secondsOfTime, signedDms, toArcsec, toDeg, toDms, toHms, toSecondsOfTime } from '../../../src/math/units/angle'
 import { meter, toKilometer, toMeter } from '../../../src/math/units/distance'
@@ -2676,7 +2677,7 @@ describe('Elliptic', () => {
 	})
 	test('circular limit and solar conjunction', () => {
 		for (const f of [Elliptic.length1, Elliptic.length2, Elliptic.length4]) expect(f(2, 0)).toBeCloseTo(4 * PI, 14)
-		expect(Elliptic.astrometricJ2000(() => [0, 0, 0], Base.J2000)[2]).toBe(0)
+		expect(Elliptic.astrometricJ2000(() => vecZero(), Base.J2000)[2]).toBe(0)
 		expect(Elliptic.length4(1, 0.999999)).toBeCloseTo(4.00002979, 7)
 	})
 })

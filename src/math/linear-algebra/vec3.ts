@@ -3,8 +3,8 @@ import { type Angle, normalizeAngle } from '../units/angle'
 // Three-component vector math: dot/cross products, length/distance, normalization, normalized midpoints, scalar and
 // element-wise arithmetic, axis and Rodrigues rotations, and spherical extraction (latitude/longitude/
 // colatitude). Components are plain numbers in whatever unit the caller uses; angle outputs are radians.
-// Convention: many helpers take an optional output `o?: MutVec3`; when supplied the result is written
-// into `o` and `o` is returned (it may alias an input), otherwise a freshly allocated vector is returned.
+// Convention: many helpers take an optional output `out?: MutVec3`; when supplied the result is written
+// into `out` and `out` is returned (it may alias an input), otherwise a freshly allocated vector is returned.
 
 // Mutable vector of numbers with three axis.
 export type MutVec3 = [number, number, number]
@@ -34,12 +34,12 @@ export function vecFillWith(v: MutVec3, value: number): MutVec3 {
 }
 
 // Cross product between the vectors.
-export function vecCross(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
+export function vecCross(a: Vec3, b: Vec3, out?: MutVec3): MutVec3 {
 	const c = a[1] * b[2] - a[2] * b[1]
 	const d = a[2] * b[0] - a[0] * b[2]
 	const e = a[0] * b[1] - a[1] * b[0]
 
-	if (o) return vecFill(o, c, d, e)
+	if (out) return vecFill(out, c, d, e)
 	else return [c, d, e]
 }
 
@@ -93,19 +93,19 @@ export function vecZero(): MutVec3 {
 	return [0, 0, 0]
 }
 
-// Creates a new x-axis vector.
-export function vecXAxis(): MutVec3 {
-	return [1, 0, 0]
+// Creates a new vector along the x axis whose x component is `value` (default 1, the unit x axis).
+export function vecX(value: number = 1): MutVec3 {
+	return [value, 0, 0]
 }
 
-// Creates a new y-axis vector.
-export function vecYAxis(): MutVec3 {
-	return [0, 1, 0]
+// Creates a new vector along the y axis whose y component is `value` (default 1, the unit y axis).
+export function vecY(value: number = 1): MutVec3 {
+	return [0, value, 0]
 }
 
-// Creates a new z-axis vector.
-export function vecZAxis(): MutVec3 {
-	return [0, 0, 1]
+// Creates a new vector along the z axis whose z component is `value` (default 1, the unit z axis).
+export function vecZ(value: number = 1): MutVec3 {
+	return [0, 0, value]
 }
 
 // Computes the polar angle (colatitude) of the vector, measured from the +z axis, in radians [0, PI].
@@ -127,8 +127,8 @@ export function vecLongitude(v: Vec3) {
 }
 
 // Negates the vector.
-export function vecNegate(a: Vec3, o?: MutVec3): MutVec3 {
-	if (o) return vecFill(o, -a[0], -a[1], -a[2])
+export function vecNegate(a: Vec3, out?: MutVec3): MutVec3 {
+	if (out) return vecFill(out, -a[0], -a[1], -a[2])
 	else return [-a[0], -a[1], -a[2]]
 }
 
@@ -138,32 +138,32 @@ export function vecNegateMut(a: MutVec3): MutVec3 {
 }
 
 // Computes the sum of the vector by scalar.
-export function vecPlusScalar(a: Vec3, scalar: number, o?: MutVec3): MutVec3 {
-	if (o) return vecFill(o, a[0] + scalar, a[1] + scalar, a[2] + scalar)
+export function vecPlusScalar(a: Vec3, scalar: number, out?: MutVec3): MutVec3 {
+	if (out) return vecFill(out, a[0] + scalar, a[1] + scalar, a[2] + scalar)
 	else return [a[0] + scalar, a[1] + scalar, a[2] + scalar]
 }
 
 // Computes the subtraction of the vector by scalar.
-export function vecMinusScalar(a: Vec3, scalar: number, o?: MutVec3): MutVec3 {
-	if (o) return vecFill(o, a[0] - scalar, a[1] - scalar, a[2] - scalar)
+export function vecMinusScalar(a: Vec3, scalar: number, out?: MutVec3): MutVec3 {
+	if (out) return vecFill(out, a[0] - scalar, a[1] - scalar, a[2] - scalar)
 	else return [a[0] - scalar, a[1] - scalar, a[2] - scalar]
 }
 
 // Computes the multiplication of the vector by scalar.
-export function vecMulScalar(a: Vec3, scalar: number, o?: MutVec3): MutVec3 {
-	if (o) return vecFill(o, a[0] * scalar, a[1] * scalar, a[2] * scalar)
+export function vecMulScalar(a: Vec3, scalar: number, out?: MutVec3): MutVec3 {
+	if (out) return vecFill(out, a[0] * scalar, a[1] * scalar, a[2] * scalar)
 	else return [a[0] * scalar, a[1] * scalar, a[2] * scalar]
 }
 
 // Computes the division of the vector by scalar.
-export function vecDivScalar(a: Vec3, scalar: number, o?: MutVec3): MutVec3 {
-	if (o) return vecFill(o, a[0] / scalar, a[1] / scalar, a[2] / scalar)
+export function vecDivScalar(a: Vec3, scalar: number, out?: MutVec3): MutVec3 {
+	if (out) return vecFill(out, a[0] / scalar, a[1] / scalar, a[2] / scalar)
 	else return [a[0] / scalar, a[1] / scalar, a[2] / scalar]
 }
 
 // Computes the sum between the vectors.
-export function vecPlus(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
-	if (o) return vecFill(o, a[0] + b[0], a[1] + b[1], a[2] + b[2])
+export function vecPlus(a: Vec3, b: Vec3, out?: MutVec3): MutVec3 {
+	if (out) return vecFill(out, a[0] + b[0], a[1] + b[1], a[2] + b[2])
 	else return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
@@ -171,8 +171,8 @@ export function vecPlus(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
 // For equal-length nonzero vectors this is the minor-arc midpoint direction. An exactly zero sum returns
 // zero (no defined direction); nearly opposite inputs retain their represented residual but are ill-conditioned.
 // Overflowing sums are halved before addition; tiny or overflowing norms are scaled before normalization.
-// Writes and returns o when supplied (it may alias either input); otherwise allocates a fresh vector.
-export function vecMidpoint(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
+// Writes and returns out when supplied (it may alias either input); otherwise allocates a fresh vector.
+export function vecMidpoint(a: Vec3, b: Vec3, out?: MutVec3): MutVec3 {
 	let x = a[0] + b[0]
 	let y = a[1] + b[1]
 	let z = a[2] + b[2]
@@ -184,7 +184,7 @@ export function vecMidpoint(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
 	}
 
 	let length = Math.hypot(x, y, z)
-	if (length === 0) return vecFill(o ?? [0, 0, 0], 0, 0, 0)
+	if (length === 0) return vecFill(out ?? vecZero(), 0, 0, 0)
 
 	// Normal-size finite norms keep the common unit-vector path to a single hypot.
 	if (!(length >= Number.MIN_VALUE / Number.EPSILON && Number.isFinite(length))) {
@@ -195,32 +195,32 @@ export function vecMidpoint(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
 		length = Math.hypot(x, y, z)
 	}
 
-	return vecFill(o ?? [0, 0, 0], x / length, y / length, z / length)
+	return vecFill(out ?? vecZero(), x / length, y / length, z / length)
 }
 
 // Computes the subtraction between the vectors.
-export function vecMinus(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
-	if (o) return vecFill(o, a[0] - b[0], a[1] - b[1], a[2] - b[2])
+export function vecMinus(a: Vec3, b: Vec3, out?: MutVec3): MutVec3 {
+	if (out) return vecFill(out, a[0] - b[0], a[1] - b[1], a[2] - b[2])
 	else return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
 // Computes the multiplication between the vectors.
-export function vecMul(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
-	if (o) return vecFill(o, a[0] * b[0], a[1] * b[1], a[2] * b[2])
+export function vecMul(a: Vec3, b: Vec3, out?: MutVec3): MutVec3 {
+	if (out) return vecFill(out, a[0] * b[0], a[1] * b[1], a[2] * b[2])
 	else return [a[0] * b[0], a[1] * b[1], a[2] * b[2]]
 }
 
 // Computes the division between the vectors.
-export function vecDiv(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
-	if (o) return vecFill(o, a[0] / b[0], a[1] / b[1], a[2] / b[2])
+export function vecDiv(a: Vec3, b: Vec3, out?: MutVec3): MutVec3 {
+	if (out) return vecFill(out, a[0] / b[0], a[1] / b[1], a[2] / b[2])
 	else return [a[0] / b[0], a[1] / b[1], a[2] / b[2]]
 }
 
 // Normalizes the vector.
-export function vecNormalize(v: Vec3, o?: MutVec3): MutVec3 {
+export function vecNormalize(v: Vec3, out?: MutVec3): MutVec3 {
 	const len = vecLength(v)
-	if (len === 0) return o ? vecFill(o, v[0], v[1], v[2]) : vecClone(v)
-	else return vecDivScalar(v, len, o)
+	if (len === 0) return out ? vecFill(out, v[0], v[1], v[2]) : vecClone(v)
+	else return vecDivScalar(v, len, out)
 }
 
 // Normalizes the vector in place.
@@ -230,14 +230,14 @@ export function vecNormalizeMut(v: MutVec3): MutVec3 {
 
 // Rotates `v` about `axis` by `angle` (radians) using Rodrigues' rotation formula.
 // `axis` need not be normalized; it is normalized internally. A zero-length axis returns a copy of `v` unchanged.
-export function vecRotateByRodrigues(v: Vec3, axis: Vec3, angle: Angle, o?: MutVec3): MutVec3 {
+export function vecRotateByRodrigues(v: Vec3, axis: Vec3, angle: Angle, out?: MutVec3): MutVec3 {
 	const ax = axis[0]
 	const ay = axis[1]
 	const az = axis[2]
 	const len = Math.hypot(ax, ay, az)
 
 	if (len === 0) {
-		return o ? vecFill(o, v[0], v[1], v[2]) : vecClone(v)
+		return out ? vecFill(out, v[0], v[1], v[2]) : vecClone(v)
 	}
 
 	const invLen = 1 / len
@@ -258,11 +258,11 @@ export function vecRotateByRodrigues(v: Vec3, axis: Vec3, angle: Angle, o?: MutV
 	const cy = kz * vx - kx * vz
 	const cz = kx * vy - ky * vx
 
-	return vecFill(o ?? [0, 0, 0], vx * cosa + cx * sina + kx * kv * omc, vy * cosa + cy * sina + ky * kv * omc, vz * cosa + cz * sina + kz * kv * omc)
+	return vecFill(out ?? vecZero(), vx * cosa + cx * sina + kx * kv * omc, vy * cosa + cy * sina + ky * kv * omc, vz * cosa + cz * sina + kz * kv * omc)
 }
 
 // Obtains the unnormalized normal vector of the plane defined by three points.
-export function vecPlane(a: Vec3, b: Vec3, c: Vec3, o?: MutVec3): MutVec3 {
+export function vecPlane(a: Vec3, b: Vec3, c: Vec3, out?: MutVec3): MutVec3 {
 	const ux = b[0] - a[0]
 	const uy = b[1] - a[1]
 	const uz = b[2] - a[2]
@@ -271,14 +271,14 @@ export function vecPlane(a: Vec3, b: Vec3, c: Vec3, o?: MutVec3): MutVec3 {
 	const vy = c[1] - a[1]
 	const vz = c[2] - a[2]
 
-	return vecFill(o ?? [0, 0, 0], uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx)
+	return vecFill(out ?? vecZero(), uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx)
 }
 
 // Rotates the vector around the x axis.
-export function vecRotX(v: Vec3, angle: Angle, o?: MutVec3): MutVec3 {
+export function vecRotX(v: Vec3, angle: Angle, out?: MutVec3): MutVec3 {
 	const ct = Math.cos(angle)
 	const st = Math.sin(angle)
-	if (o) return vecFill(o, v[0], ct * v[1] - st * v[2], st * v[1] + ct * v[2])
+	if (out) return vecFill(out, v[0], ct * v[1] - st * v[2], st * v[1] + ct * v[2])
 	else return [v[0], ct * v[1] - st * v[2], st * v[1] + ct * v[2]]
 }
 
@@ -288,10 +288,10 @@ export function vecRotXMut(v: MutVec3, angle: Angle): MutVec3 {
 }
 
 // Rotates the vector around the y axis.
-export function vecRotY(v: Vec3, angle: Angle, o?: MutVec3): MutVec3 {
+export function vecRotY(v: Vec3, angle: Angle, out?: MutVec3): MutVec3 {
 	const ct = Math.cos(angle)
 	const st = Math.sin(angle)
-	if (o) return vecFill(o, ct * v[0] + st * v[2], v[1], -st * v[0] + ct * v[2])
+	if (out) return vecFill(out, ct * v[0] + st * v[2], v[1], -st * v[0] + ct * v[2])
 	else return [ct * v[0] + st * v[2], v[1], -st * v[0] + ct * v[2]]
 }
 
@@ -301,10 +301,10 @@ export function vecRotYMut(v: MutVec3, angle: Angle): MutVec3 {
 }
 
 // Rotates the vector around the z axis.
-export function vecRotZ(v: Vec3, angle: Angle, o?: MutVec3): MutVec3 {
+export function vecRotZ(v: Vec3, angle: Angle, out?: MutVec3): MutVec3 {
 	const ct = Math.cos(angle)
 	const st = Math.sin(angle)
-	if (o) return vecFill(o, ct * v[0] - st * v[1], st * v[0] + ct * v[1], v[2])
+	if (out) return vecFill(out, ct * v[0] - st * v[1], st * v[0] + ct * v[1], v[2])
 	else return [ct * v[0] - st * v[1], st * v[0] + ct * v[1], v[2]]
 }
 

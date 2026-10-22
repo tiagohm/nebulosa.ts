@@ -16,7 +16,7 @@ import { type Time, time, Timescale, timeShift, timeSubtract, timeYMDHMS } from 
 import { PI, PIOVERFOUR, PIOVERTWO, SUN_RADIUS_AU, TAU } from '../../../src/core/constants'
 import { fileHandleSource } from '../../../src/io/file'
 import { matRotZ } from '../../../src/math/linear-algebra/mat3'
-import { type MutVec3, type Vec3, vecMinus, vecPlus, vecXAxis } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecMinus, vecPlus, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { deg, toDeg } from '../../../src/math/units/angle'
 import { kilometer } from '../../../src/math/units/distance'
 import { downloadPerTag } from '../../download'
@@ -26,7 +26,7 @@ await downloadPerTag('frame.kernel')
 
 const EPOCH = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TT)
 const SPHERE = bodyShape([1, 1, 1])
-const SOLAR = () => vecXAxis()
+const SOLAR = () => vecX()
 const ROTATING: Frame = { rotationAt: (time) => matRotZ(TAU * timeSubtract(time, EPOCH)) }
 
 test('sphere equator, poles, near poles and longitude wrap have analytic solar altitudes', () => {
@@ -44,7 +44,7 @@ test('sphere equator, poles, near poles and longitude wrap have analytic solar a
 
 test('tri-axial local vertical follows the ellipsoid gradient rather than the radial direction', () => {
 	const location = bodySurfaceLocation(PIOVERFOUR, 0, 10, bodyShape([2, 1, 0.5]), ICRS)
-	const out: MutVec3 = [0, 0, 0]
+	const out = vecZero()
 	expect(bodySurfaceNormal(location, out)).toBe(out)
 	expect(out[0]).toBeCloseTo(1 / Math.sqrt(17), 12)
 	expect(out[1]).toBeCloseTo(4 / Math.sqrt(17), 12)
@@ -69,9 +69,9 @@ test('rotating surface produces chronological sunset and sunrise, including init
 
 test('body frame orientation is evaluated at each epoch without mutating the provider', () => {
 	const location = bodySurfaceLocation(0, 0, 0, SPHERE, ROTATING)
-	const shared: MutVec3 = [1, 0, 0]
+	const shared = vecX()
 	const time = timeShift(EPOCH, 0.1)
-	const solar = () => frameToBase([1, 0, 0], ROTATING, time, shared)
+	const solar = () => frameToBase(vecX(), ROTATING, time, shared)
 	const expected = solar()
 	expect(bodySurfaceSolarAltitude(location, solar, time)).toBeCloseTo(PIOVERTWO, 7)
 	expect(shared).toEqual(expected)
@@ -103,7 +103,7 @@ test('feature horizon angles, phase, and observer parallax on a sphere', () => {
 	const feature = surfaceFeature(bodySurfaceLocation(0, 0, 0, SPHERE, ICRS))
 	const sunAt = () => [FAR, 0, FAR] as const
 	// Observer at 60 radii along +Y, like the Earth from the Moon: parallax drops it below the horizon.
-	const observerAt = () => [0, 60, 0] as const
+	const observerAt = () => vecY(60)
 	const result = surfaceFeatureIllumination(feature, sunAt, observerAt, EPOCH)
 	expect(result.solarAltitude).toBeCloseTo(PIOVERFOUR, 8)
 	expect(result.solarAzimuth).toBeCloseTo(0, 9)
@@ -131,9 +131,9 @@ test('feature azimuth is north through east, wraps below TAU, and follows the me
 
 	for (const longitude of [0, TAU, -TAU]) {
 		const pole = surfaceFeature(bodySurfaceLocation(longitude, PIOVERTWO, 0, SPHERE, ICRS))
-		expectNumberArrayToBeCloseTo(pole.up, [0, 0, 1], 15)
-		expectNumberArrayToBeCloseTo(pole.north, [-1, 0, 0], 15)
-		expectNumberArrayToBeCloseTo(pole.east, [0, 1, 0], 15)
+		expectNumberArrayToBeCloseTo(pole.up, vecZ(), 15)
+		expectNumberArrayToBeCloseTo(pole.north, vecX(-1), 15)
+		expectNumberArrayToBeCloseTo(pole.east, vecY(), 15)
 		const toward = surfaceFeatureIllumination(
 			pole,
 			() => [-FAR, 0, 0],
@@ -147,9 +147,9 @@ test('feature azimuth is north through east, wraps below TAU, and follows the me
 	}
 
 	const south = surfaceFeature(bodySurfaceLocation(PIOVERTWO, -PIOVERTWO, 0, SPHERE, ICRS))
-	expectNumberArrayToBeCloseTo(south.up, [0, 0, -1], 15)
-	expectNumberArrayToBeCloseTo(south.east, [-1, 0, 0], 15)
-	expectNumberArrayToBeCloseTo(south.north, [0, 1, 0], 15)
+	expectNumberArrayToBeCloseTo(south.up, vecZ(-1), 15)
+	expectNumberArrayToBeCloseTo(south.east, vecX(-1), 15)
+	expectNumberArrayToBeCloseTo(south.north, vecY(), 15)
 })
 
 test('tilted facets change incidence and self-shadowing but not the reference horizon', () => {

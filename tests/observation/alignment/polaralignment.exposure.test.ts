@@ -3,13 +3,13 @@ import { geodeticLocation } from '../../../src/astronomy/observer/location'
 import { gcrsToItrsRotationMatrix, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { DAYSEC, PI, PIOVERTWO, SIDEREAL_DRIFT_RATE } from '../../../src/core/constants'
 import { matMulVec, matTransposeMulVec } from '../../../src/math/linear-algebra/mat3'
-import { type Vec3, vecCross, vecNegate, vecNormalize, vecRotateByRodrigues } from '../../../src/math/linear-algebra/vec3'
+import { type Vec3, vecCross, vecNegate, vecNormalize, vecRotateByRodrigues, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { arcmin, arcsec, deg, toArcsec } from '../../../src/math/units/angle'
 // oxfmt-ignore
 import { DEFAULT_POLAR_ALIGNMENT_MAX_TRAIL, polarAlignmentExposureLimit, polarAlignmentExposureLimitForResult, polarAlignmentFieldRadius, polarAlignmentGuidedFieldRotationRate, polarAlignmentImageScale, polarAlignmentResidualAngularVelocity, polarAlignmentUnguidedDriftRate, polarAlignmentWorstCaseDriftRate } from '../../../src/observation/alignment/polaralignment.exposure'
 import { applyMountAdjustment, celestialPoleVector } from '../../../src/observation/alignment/polaralignment.util'
 
-const POLE = [0, 0, 1] as const
+const POLE = vecZ()
 const IMAGE_SCALE = arcsec(1)
 
 function mountWithError(error = arcmin(5)): Vec3 {
@@ -35,12 +35,12 @@ function referenceGuidedTrail(time: number, mount: Vec3, pole: Vec3, guide: Vec3
 
 describe('polar-alignment instantaneous rates', () => {
 	test('returns zero for perfect alignment and preserves inputs', () => {
-		const mount = [0, 0, 4] as const
-		const pole = [0, 0, 2] as const
+		const mount = vecZ(4)
+		const pole = vecZ(2)
 		const mountBefore = [...mount]
 		const poleBefore = [...pole]
 
-		expect(polarAlignmentResidualAngularVelocity(mount, pole)).toEqual([0, 0, 0])
+		expect(polarAlignmentResidualAngularVelocity(mount, pole)).toEqual(vecZero())
 		expect(polarAlignmentWorstCaseDriftRate(mount, pole)).toBe(0)
 		expect([...mount]).toEqual(mountBefore)
 		expect([...pole]).toEqual(poleBefore)
@@ -49,7 +49,7 @@ describe('polar-alignment instantaneous rates', () => {
 	test('normalizes vectors and computes the residual angular-velocity components', () => {
 		const error = arcmin(5)
 		const mount = mountWithError(error)
-		const residual = polarAlignmentResidualAngularVelocity([mount[0] * 3, 0, mount[2] * 3], [0, 0, 7])
+		const residual = polarAlignmentResidualAngularVelocity([mount[0] * 3, 0, mount[2] * 3], vecZ(7))
 
 		expect(residual[0]).toBeCloseTo(-SIDEREAL_DRIFT_RATE * Math.sin(error), 15)
 		expect(residual[1]).toBe(0)
@@ -77,7 +77,7 @@ describe('polar-alignment instantaneous rates', () => {
 	test('depends on target orientation and is symmetric for opposite targets', () => {
 		const mount = mountWithError()
 		const residualDirection = vecNormalize([POLE[0] - mount[0], POLE[1] - mount[1], POLE[2] - mount[2]])
-		const perpendicular = vecNormalize(vecCross(residualDirection, [0, 1, 0]))
+		const perpendicular = vecNormalize(vecCross(residualDirection, vecY()))
 		const maximum = polarAlignmentWorstCaseDriftRate(mount, POLE)
 
 		expect(polarAlignmentUnguidedDriftRate(mount, POLE, residualDirection)).toBeLessThan(maximum * 1e-7)
@@ -86,7 +86,7 @@ describe('polar-alignment instantaneous rates', () => {
 	})
 
 	test('rejects zero and non-finite directions', () => {
-		expect(() => polarAlignmentWorstCaseDriftRate([0, 0, 0], POLE)).toThrow(RangeError)
+		expect(() => polarAlignmentWorstCaseDriftRate(vecZero(), POLE)).toThrow(RangeError)
 		expect(() => polarAlignmentWorstCaseDriftRate([Number.NaN, 0, 1], POLE)).toThrow(RangeError)
 		expect(() => polarAlignmentUnguidedDriftRate(POLE, POLE, [0, Number.POSITIVE_INFINITY, 1])).toThrow(RangeError)
 	})
@@ -110,14 +110,14 @@ describe('guided polar-alignment field rotation', () => {
 	})
 
 	test('returns zero when aligned and undefined near the RA-axis singularity', () => {
-		expect(polarAlignmentGuidedFieldRotationRate(POLE, POLE, [1, 0, 0])).toBeCloseTo(0, 15)
+		expect(polarAlignmentGuidedFieldRotationRate(POLE, POLE, vecX())).toBeCloseTo(0, 15)
 		expect(polarAlignmentGuidedFieldRotationRate(mountWithError(), POLE, mountWithError())).toBeUndefined()
 	})
 })
 
 describe('polar-alignment exposure limits', () => {
 	test('returns unlimited exposures for perfect alignment', () => {
-		const result = polarAlignmentExposureLimit({ mountPole: POLE, celestialPole: POLE, imageScale: IMAGE_SCALE, target: [1, 0, 0], guiding: { guide: [1, 0, 0], fieldRadius: deg(1) } })
+		const result = polarAlignmentExposureLimit({ mountPole: POLE, celestialPole: POLE, imageScale: IMAGE_SCALE, target: vecX(), guiding: { guide: vecX(), fieldRadius: deg(1) } })
 
 		expect(result.polarError).toBe(0)
 		expect(result.maxTrail).toBe(DEFAULT_POLAR_ALIGNMENT_MAX_TRAIL)
@@ -158,7 +158,7 @@ describe('polar-alignment exposure limits', () => {
 	})
 
 	test('scales with image scale and maximum trail', () => {
-		const input = { mountPole: mountWithError(), celestialPole: POLE, target: [0, 1, 0] as const }
+		const input = { mountPole: mountWithError(), celestialPole: POLE, target: vecY() }
 		const base = polarAlignmentExposureLimit({ ...input, imageScale: IMAGE_SCALE, maxTrail: 0.5 })
 		const doubleScale = polarAlignmentExposureLimit({ ...input, imageScale: 2 * IMAGE_SCALE, maxTrail: 0.5 })
 		const doubleTrail = polarAlignmentExposureLimit({ ...input, imageScale: IMAGE_SCALE, maxTrail: 1 })
@@ -176,7 +176,7 @@ describe('polar-alignment exposure limits', () => {
 	test('marks singular guiding and handles a zero-radius field', () => {
 		const mount = mountWithError()
 		const singular = polarAlignmentExposureLimit({ mountPole: mount, celestialPole: POLE, imageScale: IMAGE_SCALE, guiding: { guide: mount, fieldRadius: deg(1) } })
-		const centered = polarAlignmentExposureLimit({ mountPole: mount, celestialPole: POLE, imageScale: IMAGE_SCALE, guiding: { guide: [1, 0, 0], fieldRadius: 0 } })
+		const centered = polarAlignmentExposureLimit({ mountPole: mount, celestialPole: POLE, imageScale: IMAGE_SCALE, guiding: { guide: vecX(), fieldRadius: 0 } })
 
 		expect(singular.guided).toEqual({ fieldRadius: deg(1), singular: true })
 		expect(singular.guided?.rotationRate).toBeUndefined()
@@ -187,8 +187,8 @@ describe('polar-alignment exposure limits', () => {
 
 	test('decreases guided exposure as field radius increases', () => {
 		const input = { mountPole: mountWithError(deg(2)), celestialPole: POLE, imageScale: IMAGE_SCALE }
-		const small = polarAlignmentExposureLimit({ ...input, guiding: { guide: [1, 0, 0], fieldRadius: deg(0.5) } })
-		const large = polarAlignmentExposureLimit({ ...input, guiding: { guide: [1, 0, 0], fieldRadius: deg(1) } })
+		const small = polarAlignmentExposureLimit({ ...input, guiding: { guide: vecX(), fieldRadius: deg(0.5) } })
+		const large = polarAlignmentExposureLimit({ ...input, guiding: { guide: vecX(), fieldRadius: deg(1) } })
 
 		expect(small.guided?.exposure).toBeFinite()
 		expect(large.guided?.exposure).toBeLessThan(small.guided!.exposure!)
@@ -196,7 +196,7 @@ describe('polar-alignment exposure limits', () => {
 	})
 
 	test('scales guided exposure with image scale and maximum trail', () => {
-		const common = { mountPole: mountWithError(deg(2)), celestialPole: POLE, guiding: { guide: [1, 0, 0] as const, fieldRadius: deg(1) } }
+		const common = { mountPole: mountWithError(deg(2)), celestialPole: POLE, guiding: { guide: vecX(), fieldRadius: deg(1) } }
 		const base = polarAlignmentExposureLimit({ ...common, imageScale: IMAGE_SCALE, maxTrail: 0.5 })
 		const doubleScale = polarAlignmentExposureLimit({ ...common, imageScale: 2 * IMAGE_SCALE, maxTrail: 0.5 })
 		const doubleTrail = polarAlignmentExposureLimit({ ...common, imageScale: IMAGE_SCALE, maxTrail: 1 })
@@ -221,7 +221,7 @@ describe('polar-alignment exposure limits', () => {
 		for (const sign of [1, -1]) {
 			const pole = [0, 0, sign] as const
 			const up = [sign, 0, 0] as const
-			const east = [0, 1, 0] as const
+			const east = vecY()
 			for (const [azimuth, altitude] of [
 				[arcmin(5), 0],
 				[0, arcmin(5)],
@@ -237,8 +237,8 @@ describe('polar-alignment exposure limits', () => {
 
 	test('rejects invalid scalar inputs and field radii', () => {
 		const base = { mountPole: mountWithError(), celestialPole: POLE, imageScale: IMAGE_SCALE }
-		expect(() => polarAlignmentExposureLimit({ ...base, guiding: { guide: [1, 0, 0], fieldRadius: -1 } })).toThrow(RangeError)
-		expect(() => polarAlignmentExposureLimit({ ...base, guiding: { guide: [1, 0, 0], fieldRadius: PI + 1 } })).toThrow(RangeError)
+		expect(() => polarAlignmentExposureLimit({ ...base, guiding: { guide: vecX(), fieldRadius: -1 } })).toThrow(RangeError)
+		expect(() => polarAlignmentExposureLimit({ ...base, guiding: { guide: vecX(), fieldRadius: PI + 1 } })).toThrow(RangeError)
 	})
 })
 
@@ -261,7 +261,7 @@ describe('polar-alignment exposure helpers', () => {
 		const location = geodeticLocation(deg(-45), deg(-23), 0)
 		time.location = location
 		const pole = celestialPoleVector(time, location, false)
-		const mount = vecRotateByRodrigues(pole, [1, 0, 0], arcmin(5))
+		const mount = vecRotateByRodrigues(pole, vecX(), arcmin(5))
 		const direct = polarAlignmentExposureLimit({ mountPole: mount, celestialPole: pole, imageScale: IMAGE_SCALE })
 		const convenience = polarAlignmentExposureLimitForResult({ alignment: { pole: mount, time }, imageScale: IMAGE_SCALE })
 
@@ -275,11 +275,11 @@ describe('polar-alignment exposure helpers', () => {
 		alignmentTime.location = location
 		const exposureTime = timeShift(alignmentTime, 600 / DAYSEC)
 		const pole = celestialPoleVector(alignmentTime, location, false)
-		const mount = vecRotateByRodrigues(pole, [1, 0, 0], arcmin(5))
+		const mount = vecRotateByRodrigues(pole, vecX(), arcmin(5))
 		const earthFixed = matMulVec(gcrsToItrsRotationMatrix(alignmentTime), mount)
 		const transportedMount = matTransposeMulVec(gcrsToItrsRotationMatrix(exposureTime), earthFixed, earthFixed)
 		const transportedPole = celestialPoleVector(exposureTime, location, false)
-		const geometry = { imageScale: IMAGE_SCALE, target: [1, 0, 0] as const, guiding: { guide: [0, 1, 0] as const, fieldRadius: deg(1) } }
+		const geometry = { imageScale: IMAGE_SCALE, target: vecX(), guiding: { guide: vecY(), fieldRadius: deg(1) } }
 		const direct = polarAlignmentExposureLimit({ ...geometry, mountPole: transportedMount, celestialPole: transportedPole })
 		const convenience = polarAlignmentExposureLimitForResult({ ...geometry, alignment: { pole: mount, time: alignmentTime }, time: exposureTime })
 

@@ -6,7 +6,7 @@ import { eraEors, eraPnm06a, eraS06, eraS2c } from '../../../src/astronomy/coord
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
 import { tdb, Timescale, timeShift, timeSubtract, timeYMDHMS, tt } from '../../../src/astronomy/time/time'
 import { PIOVERTWO } from '../../../src/core/constants'
-import { type MutVec3, vecZero } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { deg, toArcsec, toDeg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 
@@ -19,10 +19,7 @@ test('zero states allocate independent mutable position and velocity buffers', (
 	const first = zeroPositionAndVelocity()
 	const second = zeroPositionAndVelocity()
 	const view: PositionAndVelocity = first
-	expect(first).toEqual([
-		[0, 0, 0],
-		[0, 0, 0],
-	])
+	expect(first).toEqual([vecZero(), vecZero()])
 	expect(first).not.toBe(second)
 	expect(first[0]).not.toBe(first[1])
 	expect(first[0]).not.toBe(second[0])
@@ -31,15 +28,12 @@ test('zero states allocate independent mutable position and velocity buffers', (
 	first[1][1] = 2
 	expect(view[0][0]).toBe(1)
 	expect(view[1][1]).toBe(2)
-	expect(second).toEqual([
-		[0, 0, 0],
-		[0, 0, 0],
-	])
+	expect(second).toEqual([vecZero(), vecZero()])
 })
 
 test('light time of one AU is about 499 seconds', () => {
 	// One AU of light travel time is ~0.00577552 days (~499 s).
-	expect(lightTime([1, 0, 0])).toBeCloseTo(0.00577552, 8)
+	expect(lightTime(vecX())).toBeCloseTo(0.00577552, 8)
 })
 
 test('position providers borrow their own independent singleton storage', () => {
@@ -81,8 +75,8 @@ test('light-time solution preserves reception and final emission snapshots with 
 	}
 	const solution = lightTimeSolution(target, observer, time, 3)!
 	expect(solution.time).toBe(time)
-	expect(solution.observerPosition).toEqual([0.1, 0, 0])
-	expect(solution.observerVelocity).toEqual([0.02, 0, 0])
+	expect(solution.observerPosition).toEqual(vecX(0.1))
+	expect(solution.observerVelocity).toEqual(vecX(0.02))
 	expect(solution.targetEmissionPosition[0]).toBeCloseTo(solution.position[0] + 0.1, 14)
 	expect(solution.distance).toBeCloseTo(solution.position[0], 14)
 	expect(solution.lightTime).toBeCloseTo(lightTime(solution.position), 14)
@@ -104,14 +98,8 @@ test('light-time solution has a bounded iteration count and no direction at coin
 
 test('light-time iterations, sample counts, and owned snapshots', () => {
 	const time = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.TDB)
-	const observerScratch: PositionAndVelocityMut = [
-		[0.1, -0.02, 0.01],
-		[0.02, 0, 0],
-	]
-	const targetScratch: PositionAndVelocityMut = [
-		[0, 0.3, -0.2],
-		[0.01, 0, 0],
-	]
+	const observerScratch: PositionAndVelocityMut = [[0.1, -0.02, 0.01], vecX(0.02)]
+	const targetScratch: PositionAndVelocityMut = [[0, 0.3, -0.2], vecX(0.01)]
 	let observers = 0
 	let targets = 0
 	const observer: PositionAndVelocityOverTime = () => {
@@ -137,7 +125,7 @@ test('light-time iterations, sample counts, and owned snapshots', () => {
 	expect(refined.lightTime).toBeCloseTo(lightTime(refined.position), 14)
 	expect(refined.emissionTime).toEqual(timeShift(time, -refined.lightTime))
 	expect(refined.observerPosition).toEqual([0.1, -0.02, 0.01])
-	expect(refined.observerVelocity).toEqual([0.02, 0, 0])
+	expect(refined.observerVelocity).toEqual(vecX(0.02))
 	expect(refined.observerPosition).not.toBe(observerScratch[0])
 	expect(refined.observerVelocity).not.toBe(observerScratch[1])
 	expect(refined.targetEmissionPosition).not.toBe(targetScratch[0])
@@ -148,7 +136,7 @@ test('light-time iterations, sample counts, and owned snapshots', () => {
 	expect(refined.observerVelocity[0]).toBeCloseTo(0.02, 14)
 	expect(refined.targetEmissionPosition[0]).toBeLessThan(2)
 	expect(refined.position[0]).toBeLessThan(2)
-	const stationary: PositionAndVelocityOverTime = () => [[2, 0, 0], vecZero()]
+	const stationary: PositionAndVelocityOverTime = () => [vecX(2), vecZero()]
 	const origin: PositionAndVelocityOverTime = () => [vecZero(), vecZero()]
 	const once = lightTimeSolution(stationary, origin, time, 1)!
 	const thrice = lightTimeSolution(stationary, origin, time, 3)!
@@ -159,20 +147,20 @@ test('light-time iterations, sample counts, and owned snapshots', () => {
 })
 
 test('equatorial recovers spherical coordinates from a cartesian position', () => {
-	const [ra, dec, r] = equatorial([1, 0, 0])
+	const [ra, dec, r] = equatorial(vecX())
 	expect(toDeg(ra)).toBeCloseTo(0, 12)
 	expect(toDeg(dec)).toBeCloseTo(0, 12)
 	expect(r).toBeCloseTo(1, 12)
 
-	const [ra2, dec2] = equatorial([0, 0, 1])
+	const [ra2, dec2] = equatorial(vecZ())
 	expect(toDeg(dec2)).toBeCloseTo(90, 12)
 	expect(Number.isFinite(ra2)).toBeTrue()
 })
 
 test('separationFrom returns the angle between two positions', () => {
-	expect(toDeg(separationFrom([1, 0, 0], [0, 1, 0]))).toBeCloseTo(90, 12)
-	expect(separationFrom([1, 0, 0], [2, 0, 0])).toBeCloseTo(0, 12)
-	expect(toDeg(separationFrom([1, 0, 0], [-1, 0, 0]))).toBeCloseTo(180, 12)
+	expect(toDeg(separationFrom(vecX(), vecY()))).toBeCloseTo(90, 12)
+	expect(separationFrom(vecX(), vecX(2))).toBeCloseTo(0, 12)
+	expect(toDeg(separationFrom(vecX(), vecX(-1)))).toBeCloseTo(180, 12)
 })
 
 test('parallactic angle is zero at the zenith and symmetric across the meridian', () => {
@@ -291,11 +279,11 @@ test('topocentricDirection retards the target by light time', () => {
 
 test('phaseAngle is the Sun-body-observer angle at the body', () => {
 	// Sun and observer at right angles as seen from the body.
-	expect(toDeg(phaseAngle([1, 0, 0], [2, 0, 0], [1, 1, 0]))).toBeCloseTo(90, 12)
+	expect(toDeg(phaseAngle(vecX(), vecX(2), [1, 1, 0]))).toBeCloseTo(90, 12)
 	// Observer between the body and the Sun: fully illuminated ("full" phase).
-	expect(phaseAngle([1, 0, 0], [3, 0, 0], [2, 0, 0])).toBeCloseTo(0, 12)
+	expect(phaseAngle(vecX(), vecX(3), vecX(2))).toBeCloseTo(0, 12)
 	// Observer opposite the Sun: "new" phase.
-	expect(toDeg(phaseAngle([1, 0, 0], [2, 0, 0], vecZero()))).toBeCloseTo(180, 12)
+	expect(toDeg(phaseAngle(vecX(), vecX(2), vecZero()))).toBeCloseTo(180, 12)
 })
 
 test('ICRS and CIRS coordinate transforms round-trip', () => {

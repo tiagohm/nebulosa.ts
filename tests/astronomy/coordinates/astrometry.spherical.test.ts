@@ -5,14 +5,14 @@ import { CIRS, ECLIPTIC, frameAt, frameToBase, GALACTIC, galactic, ICRS, ITRS, I
 import { type Time, type TimeProviders, Timescale, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { ANGVEL_PER_DAY, DAYSEC, PI, PIOVERTWO } from '../../../src/core/constants'
 import { matMulVec } from '../../../src/math/linear-algebra/mat3'
-import { vecXAxis, vecYAxis, vecZero } from '../../../src/math/linear-algebra/vec3'
+import { vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { normalizeAngle, normalizePI } from '../../../src/math/units/angle'
 
 const TIME = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.UTC)
 
 test('circular cartesian motion has longitude rate omega', () => {
 	const omega = 0.37
-	const s = sphericalPositionAndVelocity([vecXAxis(), [0, omega, 0]])!
+	const s = sphericalPositionAndVelocity([vecX(), [0, omega, 0]])!
 
 	expect(s.longitude).toBeCloseTo(0, 15)
 	expect(s.latitude).toBeCloseTo(0, 15)
@@ -23,7 +23,7 @@ test('circular cartesian motion has longitude rate omega', () => {
 })
 
 test('pure radial motion has zero angular rates', () => {
-	const s = sphericalPositionAndVelocity([vecXAxis(), [0.01, 0, 0]])!
+	const s = sphericalPositionAndVelocity([vecX(), vecX(0.01)])!
 
 	expect(s.longitude).toBeCloseTo(0, 15)
 	expect(s.latitude).toBeCloseTo(0, 15)
@@ -46,7 +46,7 @@ test('static vector has zero rates', () => {
 
 test('pure latitude motion has latitude rate omega', () => {
 	const omega = -0.22
-	const s = sphericalPositionAndVelocity([vecXAxis(), [0, 0, omega]])!
+	const s = sphericalPositionAndVelocity([vecX(), [0, 0, omega]])!
 
 	expect(s.longitudeRate).toBeCloseTo(0, 15)
 	expect(s.latitudeRate).toBeCloseTo(omega, 15)
@@ -99,8 +99,8 @@ function finiteDifferenceRates(pv: PositionAndVelocity, dt = 1e-6) {
 
 test('analytic rates agree with centered finite differences', () => {
 	const states: ReadonlyArray<PositionAndVelocity> = [
-		[vecXAxis(), [0, 0.37, 0]],
-		[vecXAxis(), [0.01, 0, 0]],
+		[vecX(), vecY(0.37)],
+		[vecX(), vecX(0.01)],
 		[
 			[3, 4, 12],
 			[0.1, -0.2, 0.3],
@@ -125,15 +125,12 @@ test('analytic rates agree with centered finite differences', () => {
 })
 
 test('zero position vector has no sky direction', () => {
-	expect(sphericalPositionAndVelocity([vecZero(), vecXAxis()])).toBeUndefined()
-	expect(frameSphericalPositionAndVelocity([vecZero(), vecYAxis()], ICRS, TIME)).toBeUndefined()
+	expect(sphericalPositionAndVelocity([vecZero(), vecX()])).toBeUndefined()
+	expect(frameSphericalPositionAndVelocity([vecZero(), vecY()], ICRS, TIME)).toBeUndefined()
 })
 
 test('exact north pole keeps scalar geometry and omits angular rates', () => {
-	const s = sphericalPositionAndVelocity([
-		[0, 0, 2],
-		[0.1, -0.2, 0.3],
-	])!
+	const s = sphericalPositionAndVelocity([vecZ(2), [0.1, -0.2, 0.3]])!
 
 	expect(s.longitude).toBeCloseTo(0, 15)
 	expect(s.latitude).toBeCloseTo(PIOVERTWO, 15)
@@ -144,10 +141,7 @@ test('exact north pole keeps scalar geometry and omits angular rates', () => {
 })
 
 test('exact south pole keeps scalar geometry and omits angular rates', () => {
-	const s = sphericalPositionAndVelocity([
-		[0, 0, -4],
-		[0.05, 0.1, -0.8],
-	])!
+	const s = sphericalPositionAndVelocity([vecZ(-4), [0.05, 0.1, -0.8]])!
 
 	expect(s.longitude).toBeCloseTo(0, 15)
 	expect(s.latitude).toBeCloseTo(-PIOVERTWO, 15)
@@ -159,7 +153,7 @@ test('exact south pole keeps scalar geometry and omits angular rates', () => {
 
 test('near-pole longitude rate is the true large analytic value', () => {
 	const x = 1e-12
-	const pv: PositionAndVelocity = [[x, 0, 1], vecYAxis()]
+	const pv: PositionAndVelocity = [[x, 0, 1], vecY()]
 	const s = sphericalPositionAndVelocity(pv)!
 	const expected = 1 / x
 
@@ -170,8 +164,8 @@ test('near-pole longitude rate is the true large analytic value', () => {
 })
 
 test('velocity through the pole is singular only at the exact pole', () => {
-	const v = vecYAxis()
-	const atPole = sphericalPositionAndVelocity([[0, 0, 1], v])!
+	const v = vecY()
+	const atPole = sphericalPositionAndVelocity([vecZ(), v])!
 	expect(atPole.longitudeRate).toBeUndefined()
 	expect(atPole.latitudeRate).toBeUndefined()
 	expect(atPole.radialVelocity).toBeCloseTo(0, 15)
@@ -242,7 +236,7 @@ test('crust-fixed ITRS state has near-zero Earth-fixed angular rates', () => {
 })
 
 test('equatorial crust-fixed ICRS longitude rate is the Earth rotation rate', () => {
-	const itrsRest: PositionAndVelocity = [vecXAxis(), vecZero()]
+	const itrsRest: PositionAndVelocity = [vecX(), vecZero()]
 	const icrs = frameToBase(itrsRest, ITRS, TIME)
 	const icrsSph = frameSphericalPositionAndVelocity(icrs, ICRS, TIME)!
 	const itrsSph = frameSphericalPositionAndVelocity(icrs, ITRS, TIME)!
@@ -288,8 +282,8 @@ test('fixed ICRS direction has celestial-frame coordinate rates from basis drift
 		expect(Number.isFinite(actual.latitudeRate!)).toBe(true)
 		expect(actual.radialVelocity).toBeCloseTo(0, 12)
 
-		const plus = sphericalPositionAndVelocity([matMulVec(frame.rotationAt(timeShift(time, delta)), rest[0]), [0, 0, 0]])!
-		const minus = sphericalPositionAndVelocity([matMulVec(frame.rotationAt(timeShift(time, -delta)), rest[0]), [0, 0, 0]])!
+		const plus = sphericalPositionAndVelocity([matMulVec(frame.rotationAt(timeShift(time, delta)), rest[0]), vecZero()])!
+		const minus = sphericalPositionAndVelocity([matMulVec(frame.rotationAt(timeShift(time, -delta)), rest[0]), vecZero()])!
 		expect(actual.longitudeRate).toBeCloseTo(normalizePI(plus.longitude - minus.longitude) / (2 * delta), 8)
 		expect(actual.latitudeRate).toBeCloseTo((plus.latitude - minus.latitude) / (2 * delta), 8)
 	}

@@ -6,7 +6,7 @@ import { geodeticLocation } from '../../../src/astronomy/observer/location'
 import { timeYMDHMS } from '../../../src/astronomy/time/time'
 import { PI, PIOVERTWO } from '../../../src/core/constants'
 import type { FitsHeader } from '../../../src/io/formats/fits/fits'
-import { vecAngleUnit } from '../../../src/math/linear-algebra/vec3'
+import { vecAngleUnit, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { arcmin, arcsec, deg } from '../../../src/math/units/angle'
 import { mountAdjustmentAxes, type ThreePointPolarAlignmentResult } from '../../../src/observation/alignment/polaralignment'
 import { clipPolarAlignmentOverlaySegment, computeThreePointPolarAlignmentOverlay, polarAlignmentReferenceFromPixel, projectPolarAlignmentOverlayPoint } from '../../../src/observation/alignment/polaralignment.overlay'
@@ -81,10 +81,10 @@ describe('mount adjustment geometry', () => {
 	})
 
 	test('rejects degenerate public adjustment axes', () => {
-		expect(() => applyMountAdjustment([1, 0, 0], [0, 0, 0], [0, 1, 0], 0, 0)).toThrow()
-		expect(() => applyMountAdjustment([1, 0, 0], [0, 1, 0], [0, 2, 0], 0, 0)).toThrow()
-		expect(() => applyMountAdjustment([Number.NaN, 0, 0], [0, 1, 0], [0, 0, 1], 0, 0)).toThrow()
-		expect(() => applyMountAdjustment([Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE], [0, 1, 0], [0, 0, 1], 0, 0)).toThrow()
+		expect(() => applyMountAdjustment(vecX(), vecZero(), vecY(), 0, 0)).toThrow()
+		expect(() => applyMountAdjustment(vecX(), vecY(), vecY(2), 0, 0)).toThrow()
+		expect(() => applyMountAdjustment([Number.NaN, 0, 0], vecY(), vecZ(), 0, 0)).toThrow()
+		expect(() => applyMountAdjustment([Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE], vecY(), vecZ(), 0, 0)).toThrow()
 	})
 
 	test('rejects the undefined antipodal spherical logarithm', () => {
@@ -489,7 +489,7 @@ describe('complete overlay', () => {
 		const timeWithoutLocation = timeYMDHMS(2026, 7, 12, 2, 0, 0)
 		expect(computeThreePointPolarAlignmentOverlay(alignment.result, makeSolution(), timeWithoutLocation, { tolerances: [] })).toMatchObject({ success: false, reason: 'missingLocation' })
 		expect(computeThreePointPolarAlignmentOverlay(alignment.result, makeSolution(), alignment.time, { margin: 300, tolerances: [] })).toMatchObject({ success: false, reason: 'invalidFrame' })
-		expect(computeThreePointPolarAlignmentOverlay({ ...alignment.result, pole: [0, 0, 0] }, makeSolution(), alignment.time, { tolerances: [] })).toMatchObject({ success: false, reason: 'invalidPole' })
+		expect(computeThreePointPolarAlignmentOverlay({ ...alignment.result, pole: vecZero() }, makeSolution(), alignment.time, { tolerances: [] })).toMatchObject({ success: false, reason: 'invalidPole' })
 		expect(computeThreePointPolarAlignmentOverlay(alignment.result, makeSolution(), alignment.time, { reference: { type: 'equatorial', rightAscension: 0, declination: PI }, tolerances: [] })).toMatchObject({ success: false, reason: 'invalidReference' })
 
 		const antipodalPole = [-alignment.targetPole[0], -alignment.targetPole[1], -alignment.targetPole[2]] as const

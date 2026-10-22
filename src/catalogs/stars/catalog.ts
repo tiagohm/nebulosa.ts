@@ -2,7 +2,7 @@ import type { EquatorialCoordinate } from '../../astronomy/coordinates/coordinat
 import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import { DEG2RAD, PI, PIOVERTWO, TAU } from '../../core/constants'
 import { GEOMETRY_EPSILON } from '../../core/validation'
-import { type MutVec3, type Vec3, vecCross, vecDot, vecLength } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecCross, vecDot, vecLength, vecZero } from '../../math/linear-algebra/vec3'
 import { clamp } from '../../math/numerical/math'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import type { Velocity } from '../../math/units/velocity'
@@ -494,7 +494,7 @@ function meanRightAscension(vertices: readonly Vertex[]) {
 // nonpolar or degenerate regions, retaining their planar behavior. Allocates normals once per query.
 function polarPolygonGeometry(vertices: readonly Vertex[], minDEC: Angle, maxDEC: Angle): PolarPolygonGeometry | undefined {
 	const vectors = vertices.map(([ra, dec]) => eraS2c(ra, dec))
-	const centroid: MutVec3 = [0, 0, 0]
+	const centroid = vecZero()
 	for (const vector of vectors) {
 		centroid[0] += vector[0]
 		centroid[1] += vector[1]

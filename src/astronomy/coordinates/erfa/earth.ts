@@ -37,6 +37,7 @@
 //      s2z      SSB-to-Sun          2              z
 
 import { DAYSPERJY, J2000 } from '../../../core/constants'
+import { vecZero } from '../../../math/linear-algebra/vec3'
 import type { PositionAndVelocityMut } from '../astrometry'
 
 // Port of ERFA's eraEpv00: the simplified VSOP2000-based Earth heliocentric and barycentric position
@@ -517,10 +518,10 @@ export function eraEpv00(tdb1: number, tdb2: number, out?: readonly [bary: Posit
 	const t = (tdb1 - J2000 + tdb2) / DAYSPERJY
 	const t2 = t * t
 
-	const pb = out?.[0][0] ?? [0, 0, 0]
-	const vb = out?.[0][1] ?? [0, 0, 0]
-	const ph = out?.[1][0] ?? [0, 0, 0]
-	const vh = out?.[1][1] ?? [0, 0, 0]
+	const pb = out?.[0][0] ?? vecZero()
+	const vb = out?.[0][1] ?? vecZero()
+	const ph = out?.[1][0] ?? vecZero()
+	const vh = out?.[1][1] ?? vecZero()
 
 	// X then Y then Z.
 	for (let i = 0; i < 3; i++) {

@@ -4,7 +4,7 @@ import { arcmin, deg, hour } from '../../../src/math/units/angle'
 // oxfmt-ignore
 import { intersectLineAndSphere, intersectSegmentEllipsoid, midPoint, rectIntersection, type SphericalMountBasis, type SphericalTangentBasis, sphericalCoordinateBasis, sphericalDestination, sphericalDirectionVector, sphericalGreatCirclePole, sphericalInterpolate, sphericalMountBasis, sphericalMountDeclinationAxisVector, sphericalMountPolarAxisVector, sphericalOffsetVector, sphericalPoleVector, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTangentBasis, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
 import { PI, PIOVERTWO } from '../../../src/core/constants'
-import { type Vec3, vecCross, vecDot, vecLength, vecNormalize } from '../../../src/math/linear-algebra/vec3'
+import { type Vec3, vecCross, vecDot, vecLength, vecNormalize, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 
 // Checks a vector with one tolerance per component.
 function expectVectorClose(actual: Vec3, expected: Vec3, digits: number = 14) {
@@ -53,39 +53,39 @@ test('rectangle intersection', () => {
 })
 
 test('intersect line and sphere', () => {
-	const res = intersectLineAndSphere([1, 0, 0], [0, 0, 0], 3)
+	const res = intersectLineAndSphere(vecX(), vecZero(), 3)
 	expect(res).not.toBeFalse()
 	res && expect(res).toEqual([-3, 3])
 
 	// A non-unit endpoint must still yield true distances along the ray.
-	const scaled = intersectLineAndSphere([2, 0, 0], [4, 0, 0], 1)
+	const scaled = intersectLineAndSphere(vecX(2), vecX(4), 1)
 	expect(scaled).not.toBeFalse()
 	scaled && expect(scaled[0]).toBeCloseTo(3, 12)
 	scaled && expect(scaled[1]).toBeCloseTo(5, 12)
 
 	// A degenerate zero-length endpoint has no direction.
-	expect(intersectLineAndSphere([0, 0, 0], [0, 0, 0], 1)).toBeFalse()
+	expect(intersectLineAndSphere(vecZero(), vecZero(), 1)).toBeFalse()
 
 	// A ray running parallel to the x-axis but offset beyond the radius never reaches the sphere.
-	expect(intersectLineAndSphere([1, 0, 0], [0, 5, 0], 1)).toBeFalse()
+	expect(intersectLineAndSphere(vecX(), vecY(5), 1)).toBeFalse()
 
 	// A tangent ray touches the sphere at a single (doubled) distance.
-	const tangent = intersectLineAndSphere([1, 0, 0], [0, 1, 0], 1)
+	const tangent = intersectLineAndSphere(vecX(), vecY(), 1)
 	expect(tangent).not.toBeFalse()
 	tangent && expect(tangent[0]).toBeCloseTo(0, 12)
 	tangent && expect(tangent[1]).toBeCloseTo(0, 12)
 })
 
 test('finite segment intersects an oblate ellipsoid only between its endpoints', () => {
-	const hit = intersectSegmentEllipsoid([3, 0, 0], [-3, 0, 0], 2, 1)
+	const hit = intersectSegmentEllipsoid(vecX(3), vecX(-3), 2, 1)
 	expect(hit).toEqual({ intersects: true, intersection: 1 / 6, tangent: false })
-	expect(intersectSegmentEllipsoid([3, 0, 0], [2.5, 0, 0], 2, 1).intersects).toBeFalse()
-	expect(intersectSegmentEllipsoid([3, 0, 0], [4, 0, 0], 2, 1).intersects).toBeFalse()
-	expect(intersectSegmentEllipsoid([3, 0, 0], [2, 0, 0], 2, 1).intersection).toBeCloseTo(1, 14)
-	expect(intersectSegmentEllipsoid([3, 0, 0], [3, 0, 0], 2, 1).intersects).toBeFalse()
+	expect(intersectSegmentEllipsoid(vecX(3), vecX(2.5), 2, 1).intersects).toBeFalse()
+	expect(intersectSegmentEllipsoid(vecX(3), vecX(4), 2, 1).intersects).toBeFalse()
+	expect(intersectSegmentEllipsoid(vecX(3), vecX(2), 2, 1).intersection).toBeCloseTo(1, 14)
+	expect(intersectSegmentEllipsoid(vecX(3), vecX(3), 2, 1).intersects).toBeFalse()
 	expect(intersectSegmentEllipsoid([3, 0, 2], [-3, 0, 2], 2, 1).intersects).toBeFalse()
-	expect(intersectSegmentEllipsoid([2, 0, 0], [-3, 0, 0], 2, 1).intersection).toBe(0)
-	expect(intersectSegmentEllipsoid([2 + 1e-12, 0, 0], [-3, 0, 0], 2, 1).intersection).toBeGreaterThan(0)
+	expect(intersectSegmentEllipsoid(vecX(2), vecX(-3), 2, 1).intersection).toBe(0)
+	expect(intersectSegmentEllipsoid([2 + 1e-12, 0, 0], vecX(-3), 2, 1).intersection).toBeGreaterThan(0)
 })
 
 test('a surface endpoint stays on the closed segment despite root roundoff', () => {
@@ -98,7 +98,7 @@ test('a surface endpoint stays on the closed segment despite root roundoff', () 
 })
 
 test('a segment entirely inside the ellipsoid intersects at its start', () => {
-	expect(intersectSegmentEllipsoid([0, 0, 0], [1, 0, 0], 2, 1)).toEqual({ intersects: true, intersection: 0, tangent: false })
+	expect(intersectSegmentEllipsoid(vecZero(), vecX(), 2, 1)).toEqual({ intersects: true, intersection: 0, tangent: false })
 })
 
 test('ellipsoid tangent and near-limb classifications remain finite', () => {
@@ -230,16 +230,16 @@ test('spherical tangent basis matches coordinate basis away from the pole', () =
 })
 
 test('spherical tangent basis stays stable at the pole and zero vector', () => {
-	const poleBasis = sphericalTangentBasis([0, 0, 9])
+	const poleBasis = sphericalTangentBasis(vecZ(9))
 	expectOrthonormalBasis(poleBasis)
-	expectVectorClose(poleBasis.origin, [0, 0, 1], 14)
-	expectVectorClose(poleBasis.east, [0, 1, 0], 14)
-	expectVectorClose(poleBasis.north, [-1, 0, 0], 14)
+	expectVectorClose(poleBasis.origin, vecZ(), 14)
+	expectVectorClose(poleBasis.east, vecY(), 14)
+	expectVectorClose(poleBasis.north, vecX(-1), 14)
 
-	const zeroBasis = sphericalTangentBasis([0, 0, 0])
-	expectVectorClose(zeroBasis.origin, [0, 0, 0], 14)
-	expectVectorClose(zeroBasis.east, [1, 0, 0], 14)
-	expectVectorClose(zeroBasis.north, [0, 1, 0], 14)
+	const zeroBasis = sphericalTangentBasis(vecZero())
+	expectVectorClose(zeroBasis.origin, vecZero(), 14)
+	expectVectorClose(zeroBasis.east, vecX(), 14)
+	expectVectorClose(zeroBasis.north, vecY(), 14)
 })
 
 test('spherical direction and pole vectors follow position angle', () => {
@@ -312,7 +312,7 @@ test('spherical mount basis aligns with equatorial east and north for a standard
 
 	expectMountBasis(mountBasis)
 	expectVectorClose(mountBasis.origin, basis.origin, 14)
-	expectVectorClose(mountBasis.polarAxis, [0, 0, 1], 14)
+	expectVectorClose(mountBasis.polarAxis, vecZ(), 14)
 	expectVectorClose(mountBasis.declinationAxis, [-basis.east[0], -basis.east[1], -basis.east[2]], 14)
 	expectVectorClose(mountBasis.hourAngleTangent, basis.east, 14)
 	expectVectorClose(mountBasis.declinationTangent, basis.north, 14)
@@ -322,21 +322,21 @@ test('spherical mount basis aligns with equatorial east and north for a standard
 })
 
 test('spherical mount basis falls back deterministically at the pole and zero vector', () => {
-	const poleBasis = sphericalMountBasis([0, 0, 1], [0, 0, 3])
+	const poleBasis = sphericalMountBasis(vecZ(), vecZ(3))
 	expect(vecLength(poleBasis.origin)).toBeCloseTo(1, 14)
 	expect(vecLength(poleBasis.polarAxis)).toBeCloseTo(1, 14)
-	expectVectorClose(poleBasis.origin, [0, 0, 1], 14)
-	expectVectorClose(poleBasis.polarAxis, [0, 0, 1], 14)
-	expectVectorClose(poleBasis.declinationAxis, [0, -1, 0], 14)
-	expectVectorClose(poleBasis.hourAngleTangent, [0, 1, 0], 14)
-	expectVectorClose(poleBasis.declinationTangent, [-1, 0, 0], 14)
+	expectVectorClose(poleBasis.origin, vecZ(), 14)
+	expectVectorClose(poleBasis.polarAxis, vecZ(), 14)
+	expectVectorClose(poleBasis.declinationAxis, vecY(-1), 14)
+	expectVectorClose(poleBasis.hourAngleTangent, vecY(), 14)
+	expectVectorClose(poleBasis.declinationTangent, vecX(-1), 14)
 
-	const zeroBasis = sphericalMountBasis([0, 0, 0], [0, 0, 0])
-	expectVectorClose(zeroBasis.origin, [0, 0, 0], 14)
-	expectVectorClose(zeroBasis.polarAxis, [0, 0, 1], 14)
-	expectVectorClose(zeroBasis.declinationAxis, [0, -1, 0], 14)
-	expectVectorClose(zeroBasis.hourAngleTangent, [0, 1, 0], 14)
-	expectVectorClose(zeroBasis.declinationTangent, [-1, 0, 0], 14)
+	const zeroBasis = sphericalMountBasis(vecZero(), vecZero())
+	expectVectorClose(zeroBasis.origin, vecZero(), 14)
+	expectVectorClose(zeroBasis.polarAxis, vecZ(), 14)
+	expectVectorClose(zeroBasis.declinationAxis, vecY(-1), 14)
+	expectVectorClose(zeroBasis.hourAngleTangent, vecY(), 14)
+	expectVectorClose(zeroBasis.declinationTangent, vecX(-1), 14)
 })
 
 test('spherical triangle area returns the exact octant excess', () => {

@@ -15,7 +15,7 @@ import { parseTLE, recordFromTLE, SGP4_WGS72, SGP4_WGS84, sgp4 } from '../../../
 import { Timescale, timeFromEpoch, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { DAYSEC, J2000, TAU, WGS84_RADIUS } from '../../../src/core/constants'
 import { fileHandleSource } from '../../../src/io/file'
-import { vecAngle, vecClone, vecLength, vecXAxis, vecYAxis, vecZAxis, vecZero } from '../../../src/math/linear-algebra/vec3'
+import { vecAngle, vecClone, vecLength, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 import { downloadPerTag } from '../../download'
@@ -81,7 +81,7 @@ test('SPK adapter accepts J2000 and rejects any other reference frame', async ()
 		startIndex: 1,
 		endIndex: 1,
 		initialize: () => Promise.resolve(),
-		at: () => [vecXAxis(), vecZero()],
+		at: () => [vecX(), vecZero()],
 	})
 	const spkFor = (frame: number): Spk => {
 		const segment = segmentFor(frame)
@@ -94,7 +94,7 @@ test('SPK adapter accepts J2000 and rejects any other reference frame', async ()
 	const path = (await spkEphemerisPath(spkFor(SPK_FRAME_J2000), Naif.SSB, Naif.EARTH))!
 	expect(path.center).toEqual(naifEphemerisEndpoint(Naif.SSB))
 	expect(path.target).toEqual(naifEphemerisEndpoint(Naif.EARTH))
-	expect(path.stateAt(TIME)).toEqual([vecXAxis(), vecZero()])
+	expect(path.stateAt(TIME)).toEqual([vecX(), vecZero()])
 	expect(spkEphemerisPath(spkFor(17), Naif.SSB, Naif.EARTH)).rejects.toThrow('SPK frame 17 is not the library base frame')
 })
 
@@ -206,7 +206,7 @@ function fakeSegment(center: number, target: number, start: number, end: number,
 		startIndex: 1,
 		endIndex: 1,
 		initialize: () => Promise.resolve(),
-		at: () => [vecClone(position), vecYAxis()],
+		at: () => [vecClone(position), vecY()],
 	}
 }
 
@@ -268,8 +268,8 @@ test('segment coverage and latest-in-file priority are preserved', async () => {
 	expect(() => path.stateAt(timeShift(start, -1))).toThrow('cannot find a segment that covers the date')
 	expect(() => path.stateAt(timeShift(end, 1))).toThrow('cannot find a segment that covers the date')
 
-	const early = fakeSegment(Naif.SSB, Naif.EARTH, -1e8, 0, vecXAxis())
-	const late = fakeSegment(Naif.SSB, Naif.EARTH, 0, 1e8, [2, 0, 0])
+	const early = fakeSegment(Naif.SSB, Naif.EARTH, -1e8, 0, vecX())
+	const late = fakeSegment(Naif.SSB, Naif.EARTH, 0, 1e8, vecX(2))
 	const merged = new MultipleSpkSegment([early, late])
 	const overlapped: Spk = {
 		segments: [[Naif.SSB, Naif.EARTH, merged]],
@@ -280,13 +280,13 @@ test('segment coverage and latest-in-file priority are preserved', async () => {
 	}
 	const resolved = (await spkEphemerisPath(overlapped, Naif.SSB, Naif.EARTH))!
 	const boundary = timeFromEpoch(0, DAYSEC, J2000, 0, Timescale.TDB)
-	expect(resolved.stateAt(boundary)[0]).toEqual([2, 0, 0])
-	expect(resolved.stateAt(timeShift(boundary, -1))[0]).toEqual(vecXAxis())
+	expect(resolved.stateAt(boundary)[0]).toEqual(vecX(2))
+	expect(resolved.stateAt(timeShift(boundary, -1))[0]).toEqual(vecX())
 	expect(resolved.stateAt(boundary)).toEqual(merged.at(boundary))
 })
 
 test('a non-J2000 segment would rotate both position and velocity', () => {
-	const raw: PositionAndVelocity = [vecYAxis(), vecZAxis()]
+	const raw: PositionAndVelocity = [vecY(), vecZ()]
 	const rotated = frameAt(raw, ECLIPTIC_J2000, TIME)
 	expect(vecAngle(rotated[0], raw[0])).toBeGreaterThan(0.3)
 	expect(vecAngle(rotated[1], raw[1])).toBeGreaterThan(0.3)

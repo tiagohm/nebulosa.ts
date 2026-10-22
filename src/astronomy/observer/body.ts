@@ -88,7 +88,7 @@ export function bodySurfaceLocation(longitude: Angle, latitude: Angle, elevation
 // in body-fixed axes. Elevation is ignored: this is the vertical of the reference surface, not relief.
 // Scales by the smallest semi-axis before squaring to avoid overflow from AU inverse squares.
 // Mutates and returns out when supplied, otherwise allocates a vector; does not mutate location.
-export function bodySurfaceNormal(location: BodySurfaceLocation, out: MutVec3 = [0, 0, 0]): MutVec3 {
+export function bodySurfaceNormal(location: BodySurfaceLocation, out: MutVec3 = vecZero()): MutVec3 {
 	const [a, b, c] = location.shape.radii
 	const scale = Math.min(a, b, c)
 	const cosLat = Math.cos(location.latitude)

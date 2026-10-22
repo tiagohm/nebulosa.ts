@@ -1,7 +1,7 @@
 import { ECLIPTIC_J2000_MATRIX, GM_SUN_PITJEVA_2005, PI, TAU } from '../../core/constants'
 import type { Writable } from '../../core/types'
 import { type Mat3, matMulVec, matTranspose } from '../../math/linear-algebra/mat3'
-import { type MutVec3, type Vec3, vecAngle, vecCross, vecCrossLength, vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalize, vecPlus, vecPolarAngle } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngle, vecCross, vecCrossLength, vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalize, vecPlus, vecPolarAngle, vecZero } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import type { PositionAndVelocity, PositionAndVelocityMut } from '../coordinates/astrometry'
@@ -517,8 +517,8 @@ function propagate(position: CartesianCoordinate, velocity: CartesianCoordinate,
 	const pcdot = -(qovr0 / br) * x * c[1]
 	const vcdot = 1 - (bq / br) * x2 * c[2]
 
-	const p: MutVec3 = [0, 0, 0]
-	const v: MutVec3 = [0, 0, 0]
+	const p = vecZero()
+	const v = vecZero()
 
 	vecPlus(vecMulScalar(position, pc, s as never), vecMulScalar(velocity, vc, p), p)
 	vecPlus(vecMulScalar(position, pcdot, s as never), vecMulScalar(velocity, vcdot, v), v)
@@ -533,8 +533,8 @@ const C3_DIV = [2 * 3, 4 * 5, 6 * 7, 8 * 9, 10 * 11, 12 * 13, 14 * 15, 16 * 17, 
 
 // Computes Stumpff functions.
 // Based on the function toolkit/src/spicelib/stmp03.f from the SPICE toolkit.
-export function stumpff(x: number, o?: StumpffOutput) {
-	const c = o ?? [0, 0, 0, 0]
+export function stumpff(x: number, out?: StumpffOutput) {
+	const c = out ?? [0, 0, 0, 0]
 
 	if (x < -1) {
 		const z = Math.sqrt(-x)
@@ -652,11 +652,11 @@ export function eccentricAnomalyFromMean(M: Angle, e: number): Angle {
 }
 
 // Eccentricity vector from `position` (AU) and `velocity` (AU/day) and `mu`. Points toward periapsis
-// with magnitude equal to the eccentricity. Writes into `o` when given, which is returned.
-export function eccentricityVector(position: CartesianCoordinate, velocity: CartesianCoordinate, mu: number, o?: MutVec3): Vec3 {
+// with magnitude equal to the eccentricity. Writes into `out` when given, which is returned.
+export function eccentricityVector(position: CartesianCoordinate, velocity: CartesianCoordinate, mu: number, out?: MutVec3): Vec3 {
 	const r = vecLength(position)
 	const v = vecLength(velocity)
-	const a = vecMulScalar(position, v ** 2 - mu / r, o)
+	const a = vecMulScalar(position, v ** 2 - mu / r, out)
 	const b = vecMulScalar(velocity, vecDot(position, velocity))
 	return vecDivScalar(vecMinus(a, b, a), mu, a)
 }
@@ -706,7 +706,7 @@ export function meanMotion(a: Distance, mu: number): Angle {
 export function nodeVector(hv: Vec3) {
 	const nv = [-hv[1], hv[0], 0] as const
 	const hxy2 = nv[0] * nv[0] + nv[1] * nv[1]
-	return hxy2 > vecDot(hv, hv) * ORBIT_EPSILON_SQUARED ? vecNormalize(nv, nv as never) : ([0, 0, 0] as const)
+	return hxy2 > vecDot(hv, hv) * ORBIT_EPSILON_SQUARED ? vecNormalize(nv, nv as never) : vecZero()
 }
 
 // Periapsis distance (AU) from semi-latus rectum `p` and eccentricity `e`.

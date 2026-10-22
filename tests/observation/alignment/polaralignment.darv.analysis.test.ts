@@ -5,7 +5,7 @@ import type { Streak } from '../../../src/imaging/analysis/streak/types'
 import type { Image } from '../../../src/imaging/model/types'
 import { renderSyntheticStreak } from '../../../src/imaging/synthetic/streak'
 import type { FitsHeader } from '../../../src/io/formats/fits/fits'
-import { type Vec3, vecDot, vecRotateByRodrigues } from '../../../src/math/linear-algebra/vec3'
+import { type Vec3, vecDot, vecRotateByRodrigues, vecY, vecZ } from '../../../src/math/linear-algebra/vec3'
 import type { Point } from '../../../src/math/numerical/geometry'
 import { arcmin, arcsec, deg } from '../../../src/math/units/angle'
 import { darvGeometryFactors } from '../../../src/observation/alignment/polaralignment.darv'
@@ -397,11 +397,11 @@ describe('DARV polar inversion', () => {
 			for (const sign of [-1, 1]) {
 				const azimuth = sign * deg(1)
 				const altitude = -sign * deg(0.7)
-				const pole = applyMountAdjustment([0, 0, 1], [Math.cos(latitude), 0, Math.sin(latitude)], [0, 1, 0], -azimuth, altitude)
+				const pole = applyMountAdjustment(vecZ(), [Math.cos(latitude), 0, Math.sin(latitude)], vecY(), -azimuth, altitude)
 				const observations = [-1.2, 0, 1.2].map((hourAngle) => {
 					const star: Vec3 = [Math.cos(hourAngle), -Math.sin(hourAngle), 0]
 					const position = (seconds: number) => {
-						const earthFixed = vecRotateByRodrigues(star, [0, 0, 1], -SIDEREAL_DRIFT_RATE * seconds)
+						const earthFixed = vecRotateByRodrigues(star, vecZ(), -SIDEREAL_DRIFT_RATE * seconds)
 						const camera = vecRotateByRodrigues(earthFixed, pole, SIDEREAL_DRIFT_RATE * seconds)
 						return Math.atan2(camera[2], vecDot(camera, star))
 					}
@@ -540,8 +540,8 @@ function physicalCapture(azimuth: number, altitude: number, latitude: number, ho
 	const leg = 80
 	const exposure = 2 * leg
 	const up: Vec3 = [Math.cos(latitude), 0, Math.sin(latitude)]
-	const east: Vec3 = [0, 1, 0]
-	const pole = applyMountAdjustment([0, 0, 1], up, east, -azimuth, altitude)
+	const east: Vec3 = vecY()
+	const pole = applyMountAdjustment(vecZ(), up, east, -azimuth, altitude)
 	const dec = 0.2
 	const ra = -hourAngle
 	const star: Vec3 = [Math.cos(dec) * Math.cos(ra), Math.cos(dec) * Math.sin(ra), Math.sin(dec)]
@@ -554,7 +554,7 @@ function physicalCapture(azimuth: number, altitude: number, latitude: number, ho
 	for (let sample = 0; sample <= 2000; sample++) {
 		const elapsed = (exposure * sample) / 2000
 		const excursion = (2 * scale * (elapsed < leg ? elapsed : exposure - elapsed)) / Math.cos(dec)
-		const earthFixed = vecRotateByRodrigues(star, [0, 0, 1], -SIDEREAL_DRIFT_RATE * elapsed)
+		const earthFixed = vecRotateByRodrigues(star, vecZ(), -SIDEREAL_DRIFT_RATE * elapsed)
 		const camera = vecRotateByRodrigues(earthFixed, pole, SIDEREAL_DRIFT_RATE * elapsed + excursion)
 		const denominator = vecDot(camera, star)
 		const e = vecDot(camera, eastBasis) / denominator / scale

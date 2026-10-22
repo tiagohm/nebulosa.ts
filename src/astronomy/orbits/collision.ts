@@ -3,7 +3,7 @@ import type { Mat2 } from '../../math/linear-algebra/mat2'
 import { type Mat3, type MutMat3, matTranspose } from '../../math/linear-algebra/mat3'
 import { Matrix } from '../../math/linear-algebra/matrix'
 import type { Vec2 } from '../../math/linear-algebra/vec2'
-import { type MutVec3, type Vec3, vecCross, vecCrossLength, vecDivScalar, vecDivScalarMut, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalizeMut, vecPlus, vecXAxis, vecYAxis, vecZAxis } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecCross, vecCrossLength, vecDivScalar, vecDivScalarMut, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalizeMut, vecPlus, vecX, vecY, vecZ } from '../../math/linear-algebra/vec3'
 import { erfc } from '../../math/numerical/statistics'
 import type { Angle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
@@ -515,9 +515,9 @@ function absoluteQuadraticForm(m: Float64Array, a: Vec3, b: Vec3) {
 	return a0 * (Math.abs(m[0]) * b0 + Math.abs(m[1]) * b1 + Math.abs(m[2]) * b2) + a1 * (Math.abs(m[3]) * b0 + Math.abs(m[4]) * b1 + Math.abs(m[5]) * b2) + a2 * (Math.abs(m[6]) * b0 + Math.abs(m[7]) * b1 + Math.abs(m[8]) * b2)
 }
 
-const X_AXIS = vecXAxis()
-const Y_AXIS = vecYAxis()
-const Z_AXIS = vecZAxis()
+const X_AXIS = vecX()
+const Y_AXIS = vecY()
+const Z_AXIS = vecZ()
 
 // A unit vector perpendicular to a unit vector, built from the coordinate axis least aligned with it.
 function anyPerpendicular(v: Vec3, out?: MutVec3) {

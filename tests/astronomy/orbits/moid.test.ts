@@ -4,7 +4,7 @@ import { moid } from '../../../src/astronomy/orbits/moid'
 import { Timescale, time } from '../../../src/astronomy/time/time'
 import { GM_SUN_PITJEVA_2005, PI } from '../../../src/core/constants'
 import { matIdentity } from '../../../src/math/linear-algebra/mat3'
-import { type Vec3, vecDot } from '../../../src/math/linear-algebra/vec3'
+import { type Vec3, vecDot, vecX, vecY } from '../../../src/math/linear-algebra/vec3'
 import { normalizePI } from '../../../src/math/units/angle'
 
 // Heliocentric states (Sun-centred, ICRF equatorial, AU and AU/day, geometric) at JD 2461200.5 TDB from
@@ -103,7 +103,7 @@ test('the MOID of an orbit with itself is zero', () => {
 
 test('MOID requires bound orbits', () => {
 	// A hyperbolic relative velocity gives eccentricity > 1, which has no closed curve to intersect.
-	const hyperbolic = new KeplerOrbit([1, 0, 0], [0, 0.05, 0], EPOCH, GM_SUN_PITJEVA_2005, IDENTITY)
+	const hyperbolic = new KeplerOrbit(vecX(), vecY(0.05), EPOCH, GM_SUN_PITJEVA_2005, IDENTITY)
 	expect(hyperbolic.eccentricity).toBeGreaterThan(1)
 	expect(() => moid(hyperbolic, EARTH)).toThrow()
 })

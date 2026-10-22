@@ -1,7 +1,7 @@
 import { PI } from '../../core/constants'
 import { matMulVec, matRodriguesRotation } from '../../math/linear-algebra/mat3'
 import { rigidIdentity, rigidRotationAroundAxis, rigidTransformDirection, rigidTransformPoint, type RigidTransform3 } from '../../math/linear-algebra/rigid3'
-import { type MutVec3, vecClone, vecCross, vecDot, vecLength, vecMinus, vecNormalize, type Vec3, vecNegateMut, vecAngle } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngle, vecClone, vecCross, vecDot, vecLength, vecMinus, vecNegateMut, vecNormalize, vecX, vecY, vecZ, vecZero } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 
 // Forward and inverse kinematics for a serial two-axis telescope mount. Geometry is expressed in a
@@ -255,13 +255,13 @@ export function solveMountEncoders(geometry: Readonly<TwoAxisMountGeometry>, wor
 // Creates an ideal altitude-azimuth geometry in ENU: azimuth is north through east and altitude is
 // elevation above the horizon. Custom pivots and optical origins are expressed in metres.
 export function createIdealAltAzGeometry(options: Readonly<CanonicalMountGeometryOptions> = {}): TwoAxisMountGeometry {
-	return createCanonicalGeometry(options, [0, 0, 1], [1, 0, 0], [0, 1, 0], -1, 1)
+	return createCanonicalGeometry(options, vecZ(), vecX(), vecY(), -1, 1)
 }
 
 // Creates a canonical equatorial geometry in the Taki frame. The primary encoder is west-positive
 // hour angle and the secondary encoder is declination, both in radians.
 export function createCanonicalEquatorialGeometry(options: Readonly<CanonicalMountGeometryOptions> = {}): TwoAxisMountGeometry {
-	return createCanonicalGeometry(options, [0, 0, 1], [0, 1, 0], [1, 0, 0], -1, -1)
+	return createCanonicalGeometry(options, vecZ(), vecY(), vecX(), -1, -1)
 }
 
 // Parsed and validated controls used internally by the inverse solver.
@@ -364,11 +364,11 @@ function makeSolution(primary: Angle, secondary: Angle, converged: boolean, iter
 function createCanonicalGeometry(options: Readonly<CanonicalMountGeometryOptions>, primaryAxis: Vec3, secondaryAxis: Vec3, opticalDirection: Vec3, primaryDirection: 1 | -1, secondaryDirection: 1 | -1): TwoAxisMountGeometry {
 	const geometry: TwoAxisMountGeometry = {
 		baseToWorld: options.baseToWorld ?? rigidIdentity(),
-		primaryPivot: vecClone(options.primaryPivot ?? [0, 0, 0]),
+		primaryPivot: vecClone(options.primaryPivot ?? vecZero()),
 		primaryAxis,
-		secondaryPivot: vecClone(options.secondaryPivot ?? [0, 0, 0]),
+		secondaryPivot: vecClone(options.secondaryPivot ?? vecZero()),
 		secondaryAxis,
-		opticalOrigin: vecClone(options.opticalOrigin ?? [0, 0, 0]),
+		opticalOrigin: vecClone(options.opticalOrigin ?? vecZero()),
 		opticalDirection,
 		primaryIndex: options.primaryIndex,
 		secondaryIndex: options.secondaryIndex,

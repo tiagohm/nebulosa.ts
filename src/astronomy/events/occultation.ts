@@ -1,5 +1,5 @@
 import { DAYSEC, ONE_SECOND } from '../../core/constants'
-import { vecLength, type MutVec3, type Vec3 } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecLength, vecZero } from '../../math/linear-algebra/vec3'
 import { clamp } from '../../math/numerical/math'
 import { brentMinimize } from '../../math/numerical/optimization'
 import type { Angle } from '../../math/units/angle'
@@ -120,8 +120,8 @@ function boundaryMinimum(separationAt: (time: Time) => number, from: Time, to: T
 // that much before `start`; set `lightTimeIterations` to 0 to keep the target strictly in-window too. This
 // lets an `observer` backed by bounded or interpolated states stay valid over exactly the requested window.
 export function occultationCandidates(target: PositionAndVelocityOverTime, star: Vec3, observer: PositionAndVelocityOverTime, start: Time, stop: Time, { radius = 0, maxSeparation = Number.POSITIVE_INFINITY, lightTimeIterations = 2, step = DEFAULT_STEP, tolerance }: OccultationOptions = {}): OccultationCandidate[] {
-	const v0: MutVec3 = [0, 0, 0]
-	const v1: MutVec3 = [0, 0, 0]
+	const v0 = vecZero()
+	const v1 = vecZero()
 
 	const separationAt = (time: Time) => separationFrom(topocentricDirection(target, observer, time, lightTimeIterations, v0), star)
 	const span = timeSubtract(stop, start)

@@ -1,7 +1,7 @@
 import { horizontalToEnuVector } from '../../astronomy/coordinates/frame.local'
 import { matFill, matMul, matMulVec, matRodriguesRotation, matTranspose, type Mat3 } from '../../math/linear-algebra/mat3'
 import { rigidIdentity } from '../../math/linear-algebra/rigid3'
-import { type MutVec3, vecCross, vecCrossLength, vecDot, vecLength, vecNormalize, type Vec3 } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecCross, vecCrossLength, vecDot, vecLength, vecNormalize, vecZero } from '../../math/linear-algebra/vec3'
 import { medianBySelectionOf, STANDARD_DEVIATION_SCALE } from '../../math/numerical/statistics'
 import type { Angle } from '../../math/units/angle'
 import { mountDirectionFromEncoders, type MountEncoderPosition, type TwoAxisMountGeometry } from './kinematics'
@@ -324,7 +324,7 @@ function triadBasis(first: Vec3, second: Vec3): Mat3 {
 // Computes true angular residuals for one rotation.
 function alignmentResiduals(rotation: Mat3, mount: readonly Vec3[], world: readonly Vec3[]): Float64Array {
 	const residuals = new Float64Array(mount.length)
-	const predicted: MutVec3 = [0, 0, 0]
+	const predicted = vecZero()
 
 	for (let i = 0; i < mount.length; i++) {
 		matMulVec(rotation, mount[i], predicted)
@@ -387,9 +387,9 @@ function ensureEffectiveWeights(weights: Readonly<Float64Array>): void {
 // tangent projector I-pp^T and right-hand side p×world for predicted direction p.
 function tangentNormal(rotation: Mat3, mount: readonly Vec3[], world: readonly Vec3[], weights: Readonly<Float64Array>): TangentNormalSystem {
 	const matrix = new Float64Array(6)
-	const rhs: MutVec3 = [0, 0, 0]
-	const predicted: MutVec3 = [0, 0, 0]
-	const cross: MutVec3 = [0, 0, 0]
+	const rhs = vecZero()
+	const predicted = vecZero()
+	const cross = vecZero()
 
 	for (let i = 0; i < mount.length; i++) {
 		const weight = weights[i]

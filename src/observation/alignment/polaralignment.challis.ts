@@ -2,7 +2,7 @@ import { refractedAltitude, type RefractionParameters } from '../../astronomy/co
 import { enuToTakiMatrix, enuVectorToHorizontal, horizontalToEnuVector, takiToEnuMatrix } from '../../astronomy/coordinates/frame.local'
 import { PI, PIOVERTWO, TAU } from '../../core/constants'
 import { matMulVec } from '../../math/linear-algebra/mat3'
-import { vecAngleUnit, vecMulScalar, vecNormalize, type Vec3 } from '../../math/linear-algebra/vec3'
+import { type Vec3, vecAngleUnit, vecMulScalar, vecNormalize, vecX, vecZ } from '../../math/linear-algebra/vec3'
 import { linearLeastSquares, robustLinearLeastSquares, type LinearLeastSquaresResult } from '../../math/numerical/least.squares'
 import type { NumberArray } from '../../math/numerical/math'
 import { normalizeAngle, type Angle } from '../../math/units/angle'
@@ -140,7 +140,7 @@ export function fitChallisPolarAlignment(observations: readonly Readonly<Challis
 	const poleEnu = matMulVec(takiToEnuMatrix(latitude), vecMulScalar(takiPole, hemisphere))
 	const targetEnu = matMulVec(takiToEnuMatrix(latitude), [0, 0, hemisphere])
 	const horizontal = enuVectorToHorizontal(poleEnu)
-	const error = decomposePolarErrorGeodesic(poleEnu, targetEnu, [0, 0, 1], [1, 0, 0])
+	const error = decomposePolarErrorGeodesic(poleEnu, targetEnu, vecZ(), vecX())
 	const totalError = vecAngleUnit(targetEnu, poleEnu)
 
 	const warnings = challisWarnings(observations, weights, fit, magnitude) as string[]

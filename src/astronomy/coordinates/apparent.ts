@@ -1,5 +1,5 @@
 import { DAYSEC, LIGHT_TIME_AU } from '../../core/constants'
-import { type MutVec3, type Vec3, vecClone, vecDistance, vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalizeMut } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecClone, vecDistance, vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalizeMut, vecZero } from '../../math/linear-algebra/vec3'
 import type { Distance } from '../../math/units/distance'
 import type { Time } from '../time/time'
 import { DEFAULT_LIGHT_TIME_ITERATIONS, lightTimeSolution, type PositionAndVelocityOverTime } from './astrometry'
@@ -170,8 +170,8 @@ export function deflectStarlight(direction: Vec3, observerBarycentricPosition: V
 function applyFiniteLightDeflection(direction: MutVec3, targetEmission: Vec3, observerPosition: Vec3, lightTimeDays: number, deflectors: readonly LightDeflectorSnapshot[]) {
 	const op = observerPosition
 	const te = targetEmission
-	const e: MutVec3 = [0, 0, 0]
-	const q: MutVec3 = [0, 0, 0]
+	const e = vecZero()
+	const q = vecZero()
 
 	for (const deflector of deflectors) {
 		const bp = deflector.position

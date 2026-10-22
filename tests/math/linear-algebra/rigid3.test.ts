@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { PIOVERTWO } from '../../../src/core/constants'
 import { matRodriguesRotation } from '../../../src/math/linear-algebra/mat3'
 import { rigidCompose, rigidIdentity, rigidInverse, rigidRotationAroundAxis, rigidTransformDirection, rigidTransformPoint, type RigidTransform3 } from '../../../src/math/linear-algebra/rigid3'
-import type { MutVec3 } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 
 // Tests active rigid-transform composition, inversion, point/direction semantics, and aliasing.
 
@@ -19,17 +19,17 @@ test('identity preserves points and directions', () => {
 
 test('translation affects points but not directions', () => {
 	const transform: RigidTransform3 = {
-		rotation: matRodriguesRotation([0, 0, 1], PIOVERTWO),
+		rotation: matRodriguesRotation(vecZ(), PIOVERTWO),
 		translation: [3, 4, 5],
 	}
 
-	expectVectorClose(rigidTransformPoint(transform, [1, 0, 0]), [3, 5, 5])
-	expectVectorClose(rigidTransformDirection(transform, [1, 0, 0]), [0, 1, 0])
+	expectVectorClose(rigidTransformPoint(transform, vecX()), [3, 5, 5])
+	expectVectorClose(rigidTransformDirection(transform, vecX()), vecY())
 })
 
 test('composition applies before and then after', () => {
-	const before: RigidTransform3 = { rotation: matRodriguesRotation([0, 0, 1], PIOVERTWO), translation: [1, 0, 0] }
-	const after: RigidTransform3 = { rotation: matRodriguesRotation([1, 0, 0], PIOVERTWO), translation: [0, 2, 0] }
+	const before: RigidTransform3 = { rotation: matRodriguesRotation(vecZ(), PIOVERTWO), translation: vecX() }
+	const after: RigidTransform3 = { rotation: matRodriguesRotation(vecX(), PIOVERTWO), translation: vecY(2) }
 	const point = [2, 3, 4] as const
 	const sequential = rigidTransformPoint(after, rigidTransformPoint(before, point))
 	expectVectorClose(rigidTransformPoint(rigidCompose(after, before), point), sequential)
@@ -49,36 +49,36 @@ test('inverse round-trips points and directions', () => {
 })
 
 test('rotation around a non-zero pivot keeps the pivot fixed', () => {
-	const transform = rigidRotationAroundAxis([2, 3, 4], [0, 0, 1], PIOVERTWO)
+	const transform = rigidRotationAroundAxis([2, 3, 4], vecZ(), PIOVERTWO)
 	expectVectorClose(rigidTransformPoint(transform, [2, 3, 4]), [2, 3, 4])
 	expectVectorClose(rigidTransformPoint(transform, [3, 3, 4]), [2, 4, 4])
 })
 
 test('point and direction outputs may alias their inputs', () => {
 	const transform: RigidTransform3 = {
-		rotation: matRodriguesRotation([0, 0, 1], PIOVERTWO),
+		rotation: matRodriguesRotation(vecZ(), PIOVERTWO),
 		translation: [3, 4, 5],
 	}
-	const point: MutVec3 = [1, 0, 0]
-	const direction: MutVec3 = [1, 0, 0]
+	const point = vecX()
+	const direction = vecX()
 
 	expect(rigidTransformPoint(transform, point, point)).toBe(point)
 	expectVectorClose(point, [3, 5, 5])
 	expect(rigidTransformDirection(transform, direction, direction)).toBe(direction)
-	expectVectorClose(direction, [0, 1, 0])
+	expectVectorClose(direction, vecY())
 })
 
 test('point output may alias the transform translation', () => {
 	const translation: MutVec3 = [3, 4, 5]
 	const transform: RigidTransform3 = {
-		rotation: matRodriguesRotation([0, 0, 1], PIOVERTWO),
+		rotation: matRodriguesRotation(vecZ(), PIOVERTWO),
 		translation,
 	}
 
-	expect(rigidTransformPoint(transform, [1, 0, 0], translation)).toBe(translation)
+	expect(rigidTransformPoint(transform, vecX(), translation)).toBe(translation)
 	expectVectorClose(translation, [3, 5, 5])
 })
 
 test('rotation around an invalid axis is rejected', () => {
-	expect(() => rigidRotationAroundAxis([0, 0, 0], [0, 0, 0], 1)).toThrow()
+	expect(() => rigidRotationAroundAxis(vecZero(), vecZero(), 1)).toThrow()
 })

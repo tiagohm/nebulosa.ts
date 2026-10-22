@@ -8,6 +8,7 @@ import { timeShift, timeSubtract, timeToDate, type Time } from '../time/time'
 import { meteorSolarLongitude, meteorSolarLongitudeDelta, timeAtMeteorSolarLongitude } from './solar'
 // oxfmt-ignore
 import type { MeteorComputationContext, MeteorHorizontalRadiant, MeteorRadiant, MeteorRadiantMaximumAltitude, MeteorRadiantMaximumAltitudeOptions, MeteorRadiantOptions, MeteorRadiantPathPoint, MeteorRadiantResult, MeteorRadiantTimePathOptions, MeteorRadiantVisibility, MeteorShowerSolution, TimedMeteorRadiantPathPoint, TimedMeteorRadiantPathSegment } from './types'
+import { vecX } from '../../math/linear-algebra/vec3'
 
 // Radiant evaluation in the catalog's geocentric equatorial J2000 frame and its local reductions.
 // Drift is applied only with its declared unit basis, RA is wrapped after extrapolation, and a
@@ -292,7 +293,7 @@ export function meteorRadiantRiseTransitSet(solution: MeteorShowerSolution, obse
 			const result = meteorRadiantJ2000(solution, context, options)
 			if (result === undefined) {
 				if (timeSubtract(current, time) >= 0 && timeSubtract(stop, current) >= 0) unavailable = true
-				return [1, 0, 0]
+				return vecX()
 			}
 			return meteorRadiantVector(result.radiant)
 		},

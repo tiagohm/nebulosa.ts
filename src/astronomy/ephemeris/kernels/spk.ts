@@ -1,5 +1,5 @@
 import { AU_KM, DAYSEC, J2000 } from '../../../core/constants'
-import type { MutVec3 } from '../../../math/linear-algebra/vec3'
+import { type MutVec3, vecZero } from '../../../math/linear-algebra/vec3'
 import type { PositionAndVelocity, PositionAndVelocityMut } from '../../coordinates/astrometry'
 import { type Time, tdb } from '../../time/time'
 import type { Daf, Summary } from './daf'
@@ -189,7 +189,7 @@ interface Type2And3Coefficient {
 }
 
 // Evaluates one 3D Chebyshev series with a shared normalized time argument.
-function evaluateChebyshevVector(x: Float64Array, y: Float64Array, z: Float64Array, s: number, o: MutVec3): MutVec3 {
+function evaluateChebyshevVector(x: Float64Array, y: Float64Array, z: Float64Array, s: number, out: MutVec3): MutVec3 {
 	const ss = 2 * s
 	let x0 = 0
 	let y0 = 0
@@ -213,11 +213,11 @@ function evaluateChebyshevVector(x: Float64Array, y: Float64Array, z: Float64Arr
 		z0 = z[i] + ss * z1 - z2
 	}
 
-	o[0] = x[0] + s * x0 - x1
-	o[1] = y[0] + s * y0 - y1
-	o[2] = z[0] + s * z0 - z1
+	out[0] = x[0] + s * x0 - x1
+	out[1] = y[0] + s * y0 - y1
+	out[2] = z[0] + s * z0 - z1
 
-	return o
+	return out
 }
 
 // Evaluates a 3D Chebyshev position series and its first derivative in one pass.
@@ -330,8 +330,8 @@ export class Type2And3Segment implements SpkSegment {
 		}
 
 		const s = (seconds - c.mid) / c.radius
-		const p: MutVec3 = [0, 0, 0]
-		const v: MutVec3 = [0, 0, 0]
+		const p = vecZero()
+		const v = vecZero()
 
 		if (this.#type === 3) {
 			evaluateChebyshevVector(c.x, c.y, c.z, s, p)
@@ -474,8 +474,8 @@ export class Type9Segment implements SpkSegment {
 		const begin = this.#windowStart(seconds, index, window)
 		const end = begin + window
 
-		const p: MutVec3 = [0, 0, 0]
-		const v: MutVec3 = [0, 0, 0]
+		const p = vecZero()
+		const v = vecZero()
 
 		for (let i = begin; i < end; i++) {
 			const ti = this.#epochTable[i]
@@ -659,8 +659,8 @@ export class Type21Segment implements SpkSegment {
 
 		// Perform position interpolation: (Note that KS = 1 right now.
 		// We don't know much more than that.)
-		const p: MutVec3 = [0, 0, 0]
-		const v: MutVec3 = [0, 0, 0]
+		const p = vecZero()
+		const v = vecZero()
 
 		for (let i = 0; i < 3; i++) {
 			const kqq = c.kq[i]

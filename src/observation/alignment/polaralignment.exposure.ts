@@ -2,7 +2,7 @@ import { pixelScale } from '../../astronomy/formulas'
 import type { GeographicPosition } from '../../astronomy/observer/location'
 import type { Time } from '../../astronomy/time/time'
 import { PI, PIOVERTWO, SIDEREAL_DAYSEC, SIDEREAL_DRIFT_RATE } from '../../core/constants'
-import { type MutVec3, type Vec3, vecAngleUnit, vecDot, vecLength, vecNegateMut } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngleUnit, vecDot, vecLength, vecNegateMut, vecZero } from '../../math/linear-algebra/vec3'
 import { type Angle, arcsec } from '../../math/units/angle'
 import type { ThreePointPolarAlignmentResult } from './polaralignment'
 import { celestialPoleVector, transportEarthFixed } from './polaralignment.util'
@@ -186,7 +186,7 @@ export function polarAlignmentExposureLimit(input: Readonly<PolarAlignmentExposu
 		const target = normalizeFiniteVector(input.target, 'target')
 		targetRate = unguidedRateForMount(geometry, target, geometry.mount[0], geometry.mount[1], geometry.mount[2], SIDEREAL_DRIFT_RATE)
 
-		const mount: MutVec3 = [0, 0, 0]
+		const mount = vecZero()
 		const rateAt = (sampleTime: number) => {
 			transportedMount(geometry, sampleTime, mount)
 			return unguidedRateForMount(geometry, target, mount[0], mount[1], mount[2], SIDEREAL_DRIFT_RATE)
@@ -212,7 +212,7 @@ export function polarAlignmentExposureLimit(input: Readonly<PolarAlignmentExposu
 		} else {
 			const fieldFactor = Math.sin(Math.min(fieldRadius, PIOVERTWO))
 
-			const mount: MutVec3 = [0, 0, 0]
+			const mount = vecZero()
 			const rateAt = (sampleTime: number) => {
 				transportedMount(geometry, sampleTime, mount)
 				const sampleRate = guidedRateForMount(geometry, guide, poleGuideDot, mount[0], mount[1], mount[2], SIDEREAL_DRIFT_RATE)

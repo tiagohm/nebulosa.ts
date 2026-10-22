@@ -1,6 +1,6 @@
 import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import { PI, PIOVERTWO } from '../../core/constants'
-import { type MutVec3, type Vec3, vecCross, vecDot, vecFill, vecNormalize, vecNormalizeMut } from '../linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecCross, vecDot, vecFill, vecNormalize, vecNormalizeMut, vecZ, vecZero } from '../linear-algebra/vec3'
 import { normalizeAngle } from '../units/angle'
 import { clamp } from './math'
 
@@ -127,7 +127,7 @@ export function intersectSegmentEllipsoid(observer: Vec3, target: Vec3, equatori
 }
 
 // Canonical celestial pole direction (+z), the default mount polar axis.
-const SPHERICAL_POLE_AXIS: Vec3 = [0, 0, 1]
+const SPHERICAL_POLE_AXIS: Vec3 = vecZ()
 
 // Fills or creates a new point with x and y values
 export function fillPoint(out: Point | undefined, x: number, y: number) {
@@ -197,7 +197,7 @@ export function rectIntersection(a: Rect, b: Rect, out?: Rect) {
 
 // Builds the exact orthonormal spherical basis at the given longitude and latitude.
 export function sphericalCoordinateBasis(longitude: number, latitude: number, out?: SphericalTangentBasis): SphericalTangentBasis {
-	const basis = out ?? { origin: [0, 0, 0], east: [0, 0, 0], north: [0, 0, 0] }
+	const basis = out ?? { origin: vecZero(), east: vecZero(), north: vecZero() }
 	const sinLongitude = Math.sin(longitude)
 	const cosLongitude = Math.cos(longitude)
 	const sinLatitude = Math.sin(latitude)
@@ -212,7 +212,7 @@ export function sphericalCoordinateBasis(longitude: number, latitude: number, ou
 
 // Builds an orthonormal tangent basis around the given sky direction.
 export function sphericalTangentBasis(origin: Vec3, out?: SphericalTangentBasis): SphericalTangentBasis {
-	const basis = out ?? { origin: [0, 0, 0], east: [0, 0, 0], north: [0, 0, 0] }
+	const basis = out ?? { origin: vecZero(), east: vecZero(), north: vecZero() }
 
 	vecNormalize(origin, basis.origin)
 
@@ -246,7 +246,7 @@ export function sphericalDirectionVector(origin: Vec3, positionAngle: number, ou
 	const x = localBasis.east[0] * sinPositionAngle + localBasis.north[0] * cosPositionAngle
 	const y = localBasis.east[1] * sinPositionAngle + localBasis.north[1] * cosPositionAngle
 	const z = localBasis.east[2] * sinPositionAngle + localBasis.north[2] * cosPositionAngle
-	return vecNormalizeMut(vecFill(out ?? [0, 0, 0], x, y, z))
+	return vecNormalizeMut(vecFill(out ?? vecZero(), x, y, z))
 }
 
 // Creates the unit great-circle pole for the local arc direction defined by origin and position angle.
@@ -257,12 +257,12 @@ export function sphericalPoleVector(origin: Vec3, positionAngle: number, out?: M
 	const x = localBasis.north[0] * sinPositionAngle - localBasis.east[0] * cosPositionAngle
 	const y = localBasis.north[1] * sinPositionAngle - localBasis.east[1] * cosPositionAngle
 	const z = localBasis.north[2] * sinPositionAngle - localBasis.east[2] * cosPositionAngle
-	return vecNormalizeMut(vecFill(out ?? [0, 0, 0], x, y, z))
+	return vecNormalizeMut(vecFill(out ?? vecZero(), x, y, z))
 }
 
 // Creates the unit great-circle pole through two sky directions, or zero when the plane is degenerate.
 export function sphericalGreatCirclePole(a: Vec3, b: Vec3, out?: MutVec3): MutVec3 {
-	return vecNormalizeMut(vecCross(a, b, out ?? [0, 0, 0]))
+	return vecNormalizeMut(vecCross(a, b, out ?? vecZero()))
 }
 
 // Creates the unit sky vector reached from origin by an angular offset along the given position angle.
@@ -278,7 +278,7 @@ export function sphericalOffsetVector(origin: Vec3, positionAngle: number, dista
 	const x = localBasis.origin[0] * cosDistance + tangentX * sinDistance
 	const y = localBasis.origin[1] * cosDistance + tangentY * sinDistance
 	const z = localBasis.origin[2] * cosDistance + tangentZ * sinDistance
-	return vecNormalizeMut(vecFill(out ?? [0, 0, 0], x, y, z))
+	return vecNormalizeMut(vecFill(out ?? vecZero(), x, y, z))
 }
 
 // Projects a sky direction into gnomonic tangent-plane coordinates around the given origin.
@@ -299,7 +299,7 @@ export function sphericalProjectTangentPlane(direction: Vec3, origin: Vec3, out?
 // Unprojects gnomonic tangent-plane coordinates into a unit sky direction.
 export function sphericalUnprojectTangentPlane(x: number, y: number, origin: Vec3, out?: MutVec3, basis?: SphericalTangentBasis) {
 	const localBasis = sphericalTangentBasis(origin, basis)
-	return vecNormalizeMut(vecFill(out ?? [0, 0, 0], localBasis.origin[0] + x * localBasis.east[0] + y * localBasis.north[0], localBasis.origin[1] + x * localBasis.east[1] + y * localBasis.north[1], localBasis.origin[2] + x * localBasis.east[2] + y * localBasis.north[2]))
+	return vecNormalizeMut(vecFill(out ?? vecZero(), localBasis.origin[0] + x * localBasis.east[0] + y * localBasis.north[0], localBasis.origin[1] + x * localBasis.east[1] + y * localBasis.north[1], localBasis.origin[2] + x * localBasis.east[2] + y * localBasis.north[2]))
 }
 
 // Creates the local mount polar axis vector from site latitude plus azimuth/altitude polar errors.
@@ -312,7 +312,7 @@ export function sphericalMountPolarAxisVector(latitude: number, azimuthError: nu
 
 // Builds the local equatorial-mount basis around the given pointing direction and polar axis.
 export function sphericalMountBasis(origin: Vec3, polarAxis: Vec3 = SPHERICAL_POLE_AXIS, out?: SphericalMountBasis, basis?: SphericalTangentBasis): SphericalMountBasis {
-	const mountBasis = out ?? { origin: [0, 0, 0], polarAxis: [0, 0, 0], declinationAxis: [0, 0, 0], hourAngleTangent: [0, 0, 0], declinationTangent: [0, 0, 0] }
+	const mountBasis = out ?? { origin: vecZero(), polarAxis: vecZero(), declinationAxis: vecZero(), hourAngleTangent: vecZero(), declinationTangent: vecZero() }
 
 	vecNormalize(origin, mountBasis.origin)
 	vecNormalize(polarAxis, mountBasis.polarAxis)
@@ -351,7 +351,7 @@ export function sphericalMountBasis(origin: Vec3, polarAxis: Vec3 = SPHERICAL_PO
 
 // Creates the local declination-axis unit vector for one pointing direction and one polar axis.
 export function sphericalMountDeclinationAxisVector(origin: Vec3, polarAxis: Vec3 = SPHERICAL_POLE_AXIS, out?: MutVec3, basis?: SphericalTangentBasis): MutVec3 {
-	const axis = out ?? [0, 0, 0]
+	const axis = out ?? vecZero()
 	const originLength = Math.hypot(origin[0], origin[1], origin[2])
 
 	if (originLength === 0) return vecFill(axis, 0, -1, 0)

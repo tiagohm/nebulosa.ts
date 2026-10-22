@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 // oxfmt-ignore
 import { type MutMat3, matClone, matDeterminant, matDivScalar, matFlipX, matFlipY, matFromVec3, matIdentity, matIsIdentity, matMinus, matMinusScalar, matMul, matMulScalar, matMulTranspose, matMulVec, matPlus, matPlusScalar, matRodriguesRotation, matRotX, matRotY, matRotZ, matToVec3, matTranspose, matTransposeMul, matTransposeMulTranspose, matZero } from '../../../src/math/linear-algebra/mat3'
 import { PI, PIOVERTWO } from '../../../src/core/constants'
-import type { MutVec3 } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 
 test('is identity', () => {
 	expect(matIsIdentity(matIdentity())).toBeTrue()
@@ -207,15 +207,15 @@ describe('mul transpose', () => {
 })
 
 test('rodrigues rotation matrix', () => {
-	const m = matRodriguesRotation([0, 0, 1], PIOVERTWO)
-	let v = matMulVec(m, [1, 0, 0])
+	const m = matRodriguesRotation(vecZ(), PIOVERTWO)
+	let v = matMulVec(m, vecX())
 
 	expect(v[0]).toBeCloseTo(0, 12)
 	expect(v[1]).toBeCloseTo(1, 12)
 	expect(v[2]).toBeCloseTo(0, 12)
 
-	const n = matMul(m, matRodriguesRotation([1, 0, 0], PIOVERTWO))
-	v = matMulVec(n, [0, 1, 0])
+	const n = matMul(m, matRodriguesRotation(vecX(), PIOVERTWO))
+	v = matMulVec(n, vecY())
 
 	expect(v[0]).toBeCloseTo(0, 12)
 	expect(v[1]).toBeCloseTo(0, 12)
@@ -223,7 +223,7 @@ test('rodrigues rotation matrix', () => {
 })
 
 test('rodrigues rotation matrix with zero axis is identity', () => {
-	expect(matRodriguesRotation([0, 0, 0], PI / 3)).toEqual(matIdentity())
+	expect(matRodriguesRotation(vecZero(), PI / 3)).toEqual(matIdentity())
 })
 
 test('matrix to vector', () => {
@@ -235,7 +235,7 @@ test('matrix to vector', () => {
 })
 
 test('matrix to vector at 180 degrees', () => {
-	expect(matToVec3(matIdentity())).toEqual([0, 0, 0])
+	expect(matToVec3(matIdentity())).toEqual(vecZero())
 
 	const rx = matToVec3([1, 0, 0, 0, -1, 0, 0, 0, -1])
 	expect(rx[0]).toBeCloseTo(PI, 12)

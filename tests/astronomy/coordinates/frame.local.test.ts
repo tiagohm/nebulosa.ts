@@ -4,6 +4,7 @@ import { eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { enuToEquatorialMatrix, enuToTakiMatrix, enuVectorToHorizontal, equatorialToEnuMatrix, horizontalToEnuVector, takiToEnuMatrix } from '../../../src/astronomy/coordinates/frame.local'
 import { PI, PIOVERTWO } from '../../../src/core/constants'
 import { matDeterminant, matIdentity, matMul, matMulVec, matTranspose } from '../../../src/math/linear-algebra/mat3'
+import { vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { deg } from '../../../src/math/units/angle'
 
 // Tests local-frame conventions, round trips, and equivalence with the existing trigonometric API.
@@ -19,17 +20,17 @@ function expectMatrixClose(actual: readonly number[], expected: readonly number[
 }
 
 test('horizontal cardinal directions follow ENU', () => {
-	expectVectorClose(horizontalToEnuVector(0, 0), [0, 1, 0])
-	expectVectorClose(horizontalToEnuVector(PIOVERTWO, 0), [1, 0, 0])
-	expectVectorClose(horizontalToEnuVector(PI, 0), [0, -1, 0])
-	expectVectorClose(horizontalToEnuVector(3 * PIOVERTWO, 0), [-1, 0, 0])
-	expectVectorClose(horizontalToEnuVector(0, PIOVERTWO), [0, 0, 1])
+	expectVectorClose(horizontalToEnuVector(0, 0), vecY())
+	expectVectorClose(horizontalToEnuVector(PIOVERTWO, 0), vecX())
+	expectVectorClose(horizontalToEnuVector(PI, 0), vecY(-1))
+	expectVectorClose(horizontalToEnuVector(3 * PIOVERTWO, 0), vecX(-1))
+	expectVectorClose(horizontalToEnuVector(0, PIOVERTWO), vecZ())
 })
 
 test('ENU conversion canonicalizes azimuth at zenith and nadir', () => {
-	expect(enuVectorToHorizontal([0, 0, 4])).toEqual({ azimuth: 0, altitude: PIOVERTWO })
-	expect(enuVectorToHorizontal([0, 0, -2])).toEqual({ azimuth: 0, altitude: -PIOVERTWO })
-	expect(() => enuVectorToHorizontal([0, 0, 0])).toThrow()
+	expect(enuVectorToHorizontal(vecZ(4))).toEqual({ azimuth: 0, altitude: PIOVERTWO })
+	expect(enuVectorToHorizontal(vecZ(-2))).toEqual({ azimuth: 0, altitude: -PIOVERTWO })
+	expect(() => enuVectorToHorizontal(vecZero())).toThrow()
 })
 
 test('equatorial matrix matches the existing trigonometric conversion', () => {

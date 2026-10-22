@@ -1,5 +1,5 @@
 import { AU_KM, SPEED_OF_LIGHT_AU_DAY, SUN_RADIUS_AU } from '../../core/constants'
-import { type Vec3, vecAngle, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalize, vecPlus } from '../../math/linear-algebra/vec3'
+import { type Vec3, vecAngle, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalize, vecPlus, vecZero } from '../../math/linear-algebra/vec3'
 import { brentRoot } from '../../math/numerical/optimization'
 import type { PositionAndVelocityOverTime } from '../coordinates/astrometry'
 import { callisto, europa, ganymede, io } from '../ephemeris/models/analytical/l12'
@@ -143,7 +143,7 @@ function moonPosition<M extends string>(system: MutualSystem<M>, moon: M, time: 
 // pair is seen as it appears at that instant.
 function apparentDirection<M extends string>(system: MutualSystem<M>, moon: M, observer: Vec3, time: Time): Vec3 {
 	let delay = 0
-	let direction: Vec3 = [0, 0, 0]
+	let direction: Vec3 = vecZero()
 	for (let i = 0; i < 3; i++) {
 		direction = vecMinus(moonPosition(system, moon, timeShift(time, -delay)), observer)
 		delay = vecLength(direction) / SPEED_OF_LIGHT_AU_DAY
