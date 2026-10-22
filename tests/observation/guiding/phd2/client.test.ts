@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { Socket } from 'bun'
-import { PHD2Client } from '../../../src/devices/guiding/phd2'
-import { isBinaryTestSkipped } from '../../util'
+import { PHD2Client } from '../../../../src/observation/guiding/phd2/client'
+import { isBinaryTestSkipped } from '../../../util'
 
 test.skipIf(isBinaryTestSkipped() && process.env.PHD2 !== 'true')(
 	'client',
@@ -48,7 +48,7 @@ test.skipIf(isBinaryTestSkipped() && process.env.PHD2 !== 'true')(
 	5000,
 )
 
-test('reconnect discards a partial message from the previous socket', async () => {
+test('reconnect discards a partial message from the previous socket and a line that is not JSON', async () => {
 	const eventReceived = Promise.withResolvers<string>()
 	const firstClosed = Promise.withResolvers<void>()
 	const connections = new Map<Socket<unknown>, number>()
@@ -60,7 +60,7 @@ test('reconnect discards a partial message from the previous socket', async () =
 			open: (socket) => {
 				const connection = ++connectionCount
 				connections.set(socket, connection)
-				if (connection === 2) socket.write(`${JSON.stringify({ Event: 'Version' })}\r\n`)
+				if (connection === 2) socket.write(`{"Event": nope\r\n${JSON.stringify({ Event: 'Version' })}\r\n`)
 			},
 			data: (socket) => {
 				if (connections.get(socket) === 1) {

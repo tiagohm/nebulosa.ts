@@ -1,6 +1,5 @@
 import { errorMessage } from '../../core/util'
 import { GUIDE_PULSE_STOP_SETTLE_TIMEOUT, type GuideOutputCommander, guidePulseReleaseBound } from '../../devices/commanders/guideoutput'
-import type { PHD2Events } from '../../devices/guiding/phd2'
 import type { Camera, GuideDirection, GuideOutput } from '../../devices/indi/device'
 import { failedOperationResult, type OperationContext, type OperationHandle, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
 import { type AbortableDelay, abortableDelay, abortReason } from '../../devices/orchestration/operation.wait'
@@ -9,6 +8,7 @@ import { toArcsec } from '../../math/units/angle'
 import type { CameraCaptureClock } from '../capture/types'
 import type { GuidePulseAdmission, GuiderClient, GuiderClientConnectOptions, GuiderClientHandler } from './client'
 import { type Ditherer, type DitherPhase, type DitherRequest, type DitherResult, settleOnAbort } from './ditherer'
+import type { PHD2Events } from './phd2/types'
 // oxfmt-ignore
 import { DEFAULT_GUIDING_CLOCK, type GuidingInterruptionKind, GuidingInterruptionHistory, type GuidingSession, type GuidingSessionResources, type GuidingSessionState, type GuidingSettle, GuidingSettleListeners, type GuidingStartOptions, guidingSettleWaitTimeout, waitForGuidingSettle } from './session'
 

@@ -1,94 +1,26 @@
-import { afterEach, describe, expect, test } from 'bun:test'
-import type { Socket, TCPSocketListener } from 'bun'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { GUIDE_PULSE_STOP_SETTLE_TIMEOUT } from '../../../src/devices/commanders/guideoutput'
-import { PHD2Client } from '../../../src/devices/guiding/phd2'
 import { DEFAULT_GUIDE_OUTPUT, type GuideOutput } from '../../../src/devices/indi/device'
 import type { DeviceHandler, DeviceManager } from '../../../src/devices/indi/manager/device'
 import { OperationCoordinator, successfulOperationResult } from '../../../src/devices/orchestration/operation'
 import { ResourceArbiter } from '../../../src/devices/orchestration/resource'
 import { arcsec } from '../../../src/math/units/angle'
 import type { DitherPhase, DitherRequest } from '../../../src/observation/guiding/ditherer'
+import { PHD2Client } from '../../../src/observation/guiding/phd2/client'
+import type { PHD2Settle } from '../../../src/observation/guiding/phd2/types'
 import type { GuidingSettle } from '../../../src/observation/guiding/session'
 import { DEFAULT_PHD2_PAUSED_EVENT_ALLOWANCE, PHD2GuidingSession, type PHD2GuidingSessionOptions, phd2ResourceKey } from '../../../src/observation/guiding/session.phd2'
 import { waitUntil } from '../../util'
+import { createPHD2Rig, PHD2_RIG_PIXEL_SCALE, type PHD2Rig } from '../../util/phd2'
 import { ManualClock } from '../../util/rig'
 
-// PHD2GuidingSession against a scripted JSON-RPC server on a free local port: each request is answered by the script
-// of its method (or left unanswered), and the test pushes PHD2 events whenever it wants.
+// PHD2GuidingSession against a PHD2Server over a real GuiderClient whose devices are fakes (see tests/util/phd2): the
+// commands run on the guider, and the settles its frames would report are injected as SettleDone events of the guider.
+// The guider still tracks the settle it started, which only its frames end, so it reports no running settle to
+// `get_settling`, as a PHD2 whose settle the injected SettleDone ended would.
 
 const SETTLE: GuidingSettle = { pixels: 1.5, time: 1, timeout: 10 }
 const OWNER = { id: 'observation', kind: 'test' }
-
-// One JSON-RPC request the server received.
-interface Request {
-	readonly id: string
-	readonly method: string
-	readonly params?: unknown
-}
-
-// Answer of a scripted method: a result, an RPC error, or nothing (the test answers later or never).
-type Answer = { readonly result: unknown } | { readonly error: { readonly code: number; readonly message: string } } | undefined
-
-class FakePHD2 implements Disposable {
-	readonly requests: Request[] = []
-	readonly script = new Map<string, (request: Request) => Answer>([
-		['get_app_state', () => ({ result: 'Looping' })],
-		['get_pixel_scale', () => ({ result: 1.5 })],
-		['get_settling', () => ({ result: false })],
-		['guide', () => ({ result: 0 })],
-		['set_paused', () => ({ result: 0 })],
-		['stop_capture', () => ({ result: 0 })],
-		['dither', () => ({ result: 0 })],
-		['flip_calibration', () => ({ result: 0 })],
-	])
-	socket?: Socket<unknown>
-	readonly #server: TCPSocketListener
-
-	constructor() {
-		this.#server = Bun.listen({
-			hostname: '127.0.0.1',
-			port: 0,
-			socket: {
-				open: (socket) => {
-					this.socket = socket
-				},
-				data: (socket, data) => {
-					for (const line of data.toString().split('\r\n')) {
-						if (line.trim() === '') continue
-						const request = JSON.parse(line) as Request
-						this.requests.push(request)
-						const answer = this.script.get(request.method)?.(request)
-						if (answer !== undefined) this.reply(request.id, answer)
-					}
-				},
-				close: () => {
-					this.socket = undefined
-				},
-			},
-		})
-	}
-
-	get port() {
-		return this.#server.port
-	}
-
-	reply(id: string, answer: NonNullable<Answer>) {
-		this.socket?.write(`${JSON.stringify({ jsonrpc: '2.0', id, ...answer })}\r\n`)
-	}
-
-	event(event: Record<string, unknown>) {
-		this.socket?.write(`${JSON.stringify({ Timestamp: 0, Host: 'fake', Inst: 1, ...event })}\r\n`)
-	}
-
-	methods() {
-		return this.requests.map((request) => request.method)
-	}
-
-	[Symbol.dispose]() {
-		this.socket?.end()
-		this.#server.stop(true)
-	}
-}
 
 const coordinator = new OperationCoordinator(new ResourceArbiter())
 const cleanups: VoidFunction[] = []
@@ -98,20 +30,22 @@ afterEach(() => {
 })
 
 interface Setup {
-	readonly server: FakePHD2
+	readonly rig: PHD2Rig
 	readonly client: PHD2Client
 	readonly session: PHD2GuidingSession
 	readonly clock: ManualClock
 }
 
 function setup(options: Partial<PHD2GuidingSessionOptions> = {}): Setup {
-	const server = new FakePHD2()
+	const rig = createPHD2Rig()
 	const client = new PHD2Client()
 	const clock = new ManualClock()
-	const session = new PHD2GuidingSession(client, { host: '127.0.0.1', port: server.port, maxGuidePulse: 2500, delay: clock.delay, ...options })
-	cleanups.push(() => server[Symbol.dispose]())
+	const session = new PHD2GuidingSession(client, { host: '127.0.0.1', port: rig.server.port, maxGuidePulse: 2500, delay: clock.delay, ...options })
+	const settling = spyOn(rig.guider, 'getSettling').mockReturnValue(false)
+	cleanups.push(() => rig[Symbol.dispose]())
+	cleanups.push(() => settling.mockRestore())
 	cleanups.push(() => client.close())
-	return { server, client, session, clock }
+	return { rig, client, session, clock }
 }
 
 // Reserves the session resources and returns the scope that opens roots under the reservation.
@@ -122,28 +56,34 @@ function reserve(session: PHD2GuidingSession) {
 	return coordinator.reservedScope(reserved.reservation)
 }
 
-function settleDone(server: FakePHD2, status = 0) {
-	server.event({ Event: 'SettleDone', Status: status, TotalFrames: 1, DroppedFrames: 0 })
+// Reports the end of the settle of the guider, as its frames would.
+function settleDone(rig: PHD2Rig, status = 0) {
+	rig.guider.emitEvent('SettleDone', { Status: status, TotalFrames: 1, DroppedFrames: 0 })
 }
 
-// Starts guiding: PHD2 begins guiding and settles once asked.
-async function startGuiding({ server, session, clock }: Setup) {
+// Number of executed requests of `method`.
+function count(rig: PHD2Rig, method: string) {
+	return rig.methods().filter((each) => each === method).length
+}
+
+// Parameters of the last executed request of `method`.
+function lastParams(rig: PHD2Rig, method: string) {
+	return rig.requests.findLast((entry) => entry.request.method === method)?.request.params
+}
+
+// Starts guiding: the uncalibrated guider starts calibrating and settles once asked.
+async function startGuiding({ rig, session, clock }: Setup) {
 	const reservation = reserve(session)
-	server.script.set('guide', () => {
-		server.event({ Event: 'StartGuiding' })
-		server.event({ Event: 'SettleBegin' })
-		return { result: 0 }
-	})
 	const pending = session.start(coordinator, reservation, { recalibrate: false, settle: SETTLE, clock })
-	await waitUntil(() => server.methods().includes('guide'), 2000, 1)
-	settleDone(server)
+	await waitUntil(() => rig.methods().includes('guide'), 2000, 1)
+	settleDone(rig)
 	return { reservation, started: await pending }
 }
 
 describe('49.11 PHD2 guiding session', () => {
 	test('25 and 47: one logical resource, reserved and held, and the pulse premise as bound', () => {
-		const { session, server } = setup()
-		const key = phd2ResourceKey('127.0.0.1', server.port)
+		const { session, rig } = setup()
+		const key = phd2ResourceKey('127.0.0.1', rig.server.port)
 		expect(session.resources()).toEqual({ reserve: [{ key }], hold: [{ key }] })
 		expect(session.pulseQuiescenceBound()).toBe(2500 + DEFAULT_PHD2_PAUSED_EVENT_ALLOWANCE)
 
@@ -153,71 +93,77 @@ describe('49.11 PHD2 guiding session', () => {
 
 	test('1: start connects, reconciles the state, guides and resolves on the SettleDone even before the RPC reply', async () => {
 		const context = setup()
-		const { server, session, clock } = context
+		const { rig, session, clock } = context
 		const reservation = reserve(session)
 
-		// PHD2 reports the settle before it acknowledges the command.
-		server.script.set('guide', (request) => {
-			server.event({ Event: 'StartGuiding' })
-			settleDone(server)
-			setTimeout(() => server.reply(request.id, { result: 0 }), 20)
-			return undefined
-		})
+		// The guider reports the settle while it executes the command, before the server replies.
+		const settleOnStart = {
+			event: (_: unknown, event: { readonly Event: string }) => {
+				if (event.Event === 'StartCalibration') settleDone(rig)
+			},
+		}
+		rig.guider.addHandler(settleOnStart)
 
 		expect(await session.start(coordinator, reservation, { recalibrate: true, settle: SETTLE, clock })).toEqual(successfulOperationResult(undefined))
-		expect(server.methods().slice(0, 3)).toEqual(['get_app_state', 'get_pixel_scale', 'guide'])
-		expect(server.requests.find((request) => request.method === 'guide')!.params).toMatchObject({ recalibrate: true, settle: SETTLE })
-		expect(session.state()).toBe('guiding')
+		rig.guider.removeHandler(settleOnStart)
+		expect(rig.methods().slice(0, 3)).toEqual(['get_app_state', 'get_pixel_scale', 'guide'])
+		expect(lastParams(rig, 'guide')).toMatchObject({ recalibrate: true, settle: SETTLE })
+		expect(rig.guider.getAppState()).toBe('Calibrating')
+		expect(session.state()).toBe('calibrating')
 		expect(session.operationId()).toBeDefined()
 
-		server.script.set('guide', () => ({ error: { code: 1, message: 'no star' } }))
+		// A guider that refuses to guide fails the start.
+		const refused = spyOn(rig.guider, 'guide').mockReturnValue(false)
 		expect(await session.start(coordinator, reservation, { recalibrate: false, settle: SETTLE, clock })).toMatchObject({ ok: false, reason: 'commandFailed' })
+		refused.mockRestore()
 
 		expect(await session.stop(coordinator)).toEqual(successfulOperationResult(undefined))
+		expect(rig.guider.getAppState()).toBe('Stopped')
 		expect(session.operationId()).toBeUndefined()
 	})
 
 	test('30: pause waits for the Paused event, then for the pulse premise since it', async () => {
 		const context = setup()
-		const { server, session, clock } = context
+		const { rig, session, clock } = context
 		expect((await startGuiding(context)).started.ok).toBeTrue()
-
-		server.script.set('set_paused', () => {
-			setTimeout(() => server.event({ Event: 'Paused' }), 20)
-			return { result: 0 }
-		})
 
 		let resolved = false
 		const pending = session.pause(coordinator).then((result) => ((resolved = true), result))
 		await waitUntil(() => session.state() === 'paused' && clock.pending > 0, 2000, 1)
-		expect(server.requests.find((request) => request.method === 'set_paused')!.params).toEqual([true, 'full'])
+		expect(lastParams(rig, 'set_paused')).toEqual([true, 'full'])
+		expect(rig.guider.getPaused()).toBeTrue()
 		expect(resolved).toBeFalse()
 
 		// The premise is counted on the real clock from the Paused event; the manual delay holds the rest of it.
 		await clock.advance(2500)
 		expect(await pending).toEqual(successfulOperationResult(undefined))
 
-		// A paused session is not paused again, only waited for; resume asks PHD2 to settle again.
+		// A paused session is not paused again, only waited for; resume asks the guider to settle again.
 		const again = session.pause(coordinator)
 		await waitUntil(() => clock.pending > 0, 2000, 1)
 		await clock.advance(2500)
 		expect((await again).ok).toBeTrue()
-		expect(server.methods().filter((method) => method === 'set_paused')).toHaveLength(1)
+		expect(count(rig, 'set_paused')).toBe(1)
 
 		const resumed = session.resume(coordinator, SETTLE)
-		await waitUntil(() => server.methods().filter((method) => method === 'guide').length === 2, 2000, 1)
-		settleDone(server)
+		await waitUntil(() => count(rig, 'guide') === 2, 2000, 1)
+		settleDone(rig)
 		expect(await resumed).toEqual(successfulOperationResult(undefined))
-		expect(server.requests.findLast((request) => request.method === 'set_paused')!.params).toEqual([false])
+		expect(lastParams(rig, 'set_paused')).toEqual([false])
+		expect(rig.guider.getPaused()).toBeFalse()
 	})
 
 	test('a pause whose Paused event never comes times out at the allowance', async () => {
 		const context = setup({ pausedEventAllowance: 300 })
-		const { server, session, clock } = context
+		const { rig, session, clock } = context
 		expect((await startGuiding(context)).started.ok).toBeTrue()
 
+		// The guider accepts the pause but never reports it.
+		const silent = spyOn(rig.guider, 'setPaused').mockReturnValue(true)
+		cleanups.push(() => silent.mockRestore())
+
 		const pending = session.pause(coordinator)
-		await waitUntil(() => server.methods().includes('set_paused') && clock.pending > 0, 2000, 1)
+		await waitUntil(() => rig.methods().includes('set_paused') && clock.pending > 0, 2000, 1)
 		await clock.advance(300)
 		expect(await pending).toMatchObject({ ok: false, reason: 'timeout' })
 	})
@@ -225,13 +171,8 @@ describe('49.11 PHD2 guiding session', () => {
 	test('83: with an observed guide output the pause waits for it to stop pulsing', async () => {
 		const { manager, device, notify } = fakeManager()
 		const context = setup({ guideOutput: { device, manager } })
-		const { server, session } = context
+		const { session } = context
 		expect((await startGuiding(context)).started.ok).toBeTrue()
-
-		server.script.set('set_paused', () => {
-			setTimeout(() => server.event({ Event: 'Paused' }), 5)
-			return { result: 0 }
-		})
 
 		device.pulsing = true
 		let resolved = false
@@ -247,11 +188,11 @@ describe('49.11 PHD2 guiding session', () => {
 
 	test('25: a closed socket loses the guiding, records the interruption and ends the root', async () => {
 		const context = setup()
-		const { server, session, clock } = context
+		const { rig, session, clock } = context
 		expect((await startGuiding(context)).started.ok).toBeTrue()
 
 		await clock.advance(1000)
-		server.socket!.end()
+		rig.server.stop()
 		await waitUntil(() => session.operationId() === undefined, 3000, 5)
 
 		expect(session.state()).toBe('lost')
@@ -266,53 +207,56 @@ describe('49.10 dither through PHD2', () => {
 
 	test('5 to 7: RPC errors, statuses, early events, concurrency, cancellation, lost events, closed socket and units', async () => {
 		const context = setup()
-		const { server, session, clock } = context
+		const { rig, session, clock } = context
 		expect((await startGuiding(context)).started.ok).toBeTrue()
 
-		let dithered: Request | undefined
-		server.script.set('dither', (request) => {
-			dithered = request
-			server.event({ Event: 'GuidingDithered', dx: 1, dy: 2 })
-			server.event({ Event: 'SettleBegin' })
-			return { result: 0 }
+		// The guider has no calibration to dither with, so a guiding one is stood in for: it accepts the dither, reports
+		// the offset and begins the settle, as GuiderClient.dither does.
+		const dither = spyOn(rig.guider, 'dither').mockImplementation((_amount: number, _raOnly?: boolean, _settle?: Partial<PHD2Settle>) => {
+			rig.guider.emitEvent('GuidingDithered', { dx: 1, dy: 2 })
+			rig.guider.emitEvent('SettleBegin')
+			return true
 		})
+		cleanups.push(() => dither.mockRestore())
 
-		// 7: an angle is converted with the pixel scale PHD2 reported; the phases come in order.
+		// 7: an angle is converted with the pixel scale the guider reported; the phases come in order.
 		const phases: DitherPhase[] = []
 		const pending = session.dither(coordinator, request({ unit: 'angle', value: arcsec(3) }), (phase) => phases.push(phase))
-		await waitUntil(() => dithered !== undefined, 2000, 1)
+		await waitUntil(() => count(rig, 'dither') === 1, 2000, 1)
 
-		// 6: a concurrent dither is refused, and JSON that is not JSON is ignored.
+		// 6: a concurrent dither is refused.
 		expect(await session.dither(coordinator, request({ unit: 'guidePixel', value: 1 }))).toMatchObject({ ok: false, reason: 'busy' })
-		server.socket!.write('{"Event": nope\r\n')
-		settleDone(server)
+		settleDone(rig)
 
 		expect(await pending).toEqual(successfulOperationResult({ kind: 'guider', lockShift: [1, 2] }))
-		expect(dithered!.params).toMatchObject({ amount: 2, raOnly: true, settle: { pixels: 1, time: 1, timeout: 10 } })
+		const [amount, raOnly, settle] = dither.mock.calls[0]
+		expect(amount).toBeCloseTo(3 / PHD2_RIG_PIXEL_SCALE, 12)
+		expect(raOnly).toBeTrue()
+		expect(settle).toEqual({ pixels: 1, time: 1, timeout: 10 })
 		expect(phases).toEqual(['dithering', 'dithered', 'settling', 'settled'])
 
-		// 5: a SettleDone before the dispatch does not count; a failed status and an RPC error fail.
-		settleDone(server)
+		// 5: a SettleDone before the dispatch does not count; a failed status and a refused dither fail.
+		settleDone(rig)
 		const failed = session.dither(coordinator, request({ unit: 'guidePixel', value: 1 }))
-		await waitUntil(() => server.methods().filter((method) => method === 'dither').length === 2, 2000, 1)
-		settleDone(server, 1)
+		await waitUntil(() => count(rig, 'dither') === 2, 2000, 1)
+		settleDone(rig, 1)
 		expect(await failed).toMatchObject({ ok: false, reason: 'commandFailed' })
 
-		server.script.set('dither', () => ({ error: { code: 2, message: 'not guiding' } }))
+		dither.mockReturnValue(false)
 		expect(await session.dither(coordinator, request({ unit: 'guidePixel', value: 1 }))).toMatchObject({ ok: false, reason: 'commandFailed' })
-		server.script.set('dither', () => ({ result: 0 }))
+		dither.mockReturnValue(true)
 
 		// 6: a cancelled dither leaves its settle pending, which the next dither waits for before dispatching.
 		const handle = coordinator.start('task', [], (scope) => session.dither(scope, request({ unit: 'guidePixel', value: 1 })))
-		await waitUntil(() => server.methods().filter((method) => method === 'dither').length === 4, 2000, 1)
+		await waitUntil(() => count(rig, 'dither') === 4, 2000, 1)
 		await handle.cancel('aborted')
 		expect(await handle.result).toMatchObject({ ok: false, reason: 'aborted' })
 
 		const next = session.dither(coordinator, request({ unit: 'guidePixel', value: 1 }))
 		await Bun.sleep(30)
-		expect(server.methods().filter((method) => method === 'dither')).toHaveLength(4)
-		settleDone(server)
-		await waitUntil(() => server.methods().filter((method) => method === 'dither').length === 5, 2000, 1)
+		expect(count(rig, 'dither')).toBe(4)
+		settleDone(rig)
+		await waitUntil(() => count(rig, 'dither') === 5, 2000, 1)
 
 		// 6: a lost SettleDone times out locally.
 		await waitUntil(() => clock.pending > 0, 2000, 1)
@@ -321,8 +265,8 @@ describe('49.10 dither through PHD2', () => {
 
 		// 6: a closed socket fails the wait as disconnected.
 		const closing = session.dither(coordinator, request({ unit: 'guidePixel', value: 1 }))
-		await waitUntil(() => server.methods().filter((method) => method === 'dither').length === 6, 2000, 1)
-		server.socket!.end()
+		await waitUntil(() => count(rig, 'dither') === 6, 2000, 1)
+		rig.server.stop()
 		expect(await closing).toMatchObject({ ok: false, reason: 'disconnected' })
 	})
 

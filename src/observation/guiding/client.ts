@@ -3,7 +3,6 @@ import { timeUnix, type Time } from '../../astronomy/time/time'
 import type { PartialOnly, Writable } from '../../core/types'
 import { errorMessage } from '../../core/util'
 import { guidePulseWindow, type GuidePulseQuiescenceWindow } from '../../devices/commanders/guideoutput'
-import { DEFAULT_PHD2_SETTLE, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2EventType, type PHD2GuideDirection, type PHD2GuideStepEvent, type PHD2LockShiftParams, type PHD2Settle, type PHD2StarImage } from '../../devices/guiding/phd2'
 import type { Camera, GuideDirection, GuideOutput } from '../../devices/indi/device'
 import type { CameraManager } from '../../devices/indi/manager/camera'
 import type { DeviceHandler } from '../../devices/indi/manager/device'
@@ -17,6 +16,8 @@ import { DEFAULT_GUIDING_ASSISTANT_CONFIG, GuidingAssistant, type GuidingAssista
 import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationConfig, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
 import { DitherGenerator, type DitherMode } from './dither'
 import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, Guider, type GuiderConfig } from './guider'
+// oxfmt-ignore
+import { DEFAULT_PHD2_SETTLE, PHD2_MSG_VERSION, PHD2_OVERLAP_SUPPORT, PHD2_SUBVER, PHD2_VERSION, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2EventType, type PHD2GuideDirection, type PHD2GuideStepEvent, type PHD2LockShiftParams, type PHD2Settle, type PHD2StarImage } from './phd2/types'
 import type { GuideFrame, GuideTracker, GuideTrackerResult } from './tracker'
 
 // Local autoguiding orchestrator exposing a PHD2-compatible API over INDI camera and guide-output
@@ -33,16 +34,6 @@ import type { GuideFrame, GuideTracker, GuideTrackerResult } from './tracker'
 const DEFAULT_GUIDER_EXPOSURE = 1000
 // Default star-image search-region side, in pixels.
 const DEFAULT_SEARCH_REGION = 64
-
-// PHD2 application version announced in the Version event on connect. The local guider is not PHD2,
-// so this reports the PHD2 release whose event protocol it reproduces.
-const PHD2_VERSION = '2.6.13'
-// PHD2 sub-version component of the Version event; empty for a non-PHD2 implementation.
-const PHD2_SUBVER = ''
-// Event protocol message version implemented by this client, matching PHD2's MsgVersion.
-const PHD2_MSG_VERSION = 1
-// Overlapping exposures are not implemented by the local guider.
-const PHD2_OVERLAP_SUPPORT = false
 // Floor for the missing-BLOB watchdog, in milliseconds. The timeout is max(3 × exposure, this) so a
 // short cadence still waits long enough for a slow INDI round-trip before retrying.
 const EXPOSURE_WATCHDOG_MIN_MS = 5000
