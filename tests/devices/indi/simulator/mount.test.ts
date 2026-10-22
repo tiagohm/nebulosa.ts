@@ -292,6 +292,24 @@ const FAST_SLEW_SPEED = SLEW_RATES.at(-1)!.speed * SLEW_SPEED_FACTOR
 const FAST_FLIP_DURATION = PI / FAST_SLEW_SPEED
 
 describe('mount simulator meridian flip', () => {
+	test('republishes a sync made while tracking', () => {
+		const { mount, simulator } = makeMeridianFlipMount('mount.sync.tracking')
+
+		try {
+			simulator.syncTo(hour(3), deg(10))
+			simulator.setTrackingEnabled(true)
+			simulator.advance(0.1)
+
+			// Inside the coordinate notification interval, and a sidereal-tracking mount never moves its
+			// axes again, so only the sync itself can deliver the new coordinate to clients.
+			simulator.syncTo(hour(5), deg(20))
+			expect(mount.equatorialCoordinate.rightAscension).toBeCloseTo(hour(5), 12)
+			expect(mount.equatorialCoordinate.declination).toBeCloseTo(deg(20), 12)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('keeps manual motion Busy across a sync', () => {
 		const { simulator } = makeMeridianFlipMount('mount.sync.manual')
 
