@@ -15,7 +15,7 @@ import { type PlateSolveOptions, plateSolutionFrom } from './platesolver'
 
 // Options for ASTAP-based star detection.
 export interface AstapStarDetectionOptions {
-	// Path to the ASTAP executable; resolved per-platform when omitted.
+	// Path to the ASTAP executable; `astap` looked up on the PATH when omitted.
 	executable?: string
 	// Minimum star SNR passed to ASTAP's `-extract`.
 	minSNR?: number
@@ -27,13 +27,16 @@ export interface AstapStarDetectionOptions {
 
 // Options for ASTAP-based plate solving.
 export interface AstapPlateSolveOptions extends PlateSolveOptions {
-	// Path to the ASTAP executable; resolved per-platform when omitted.
+	// Path to the ASTAP executable; `astap` looked up on the PATH when omitted.
 	executable?: string
 	// Field-of-view hint (radians); 0 lets ASTAP auto-detect. Omit to use FITS's FOV.
 	fov?: Angle
 	// Whether to enable SIP distortion terms (`-sip`).
 	sip?: boolean
 }
+
+// Executable used when the options name none, resolved through the PATH.
+const DEFAULT_EXECUTABLE = 'astap'
 
 // Default process timeout: 5 minutes, in milliseconds.
 const DEFAULT_TIMEOUT = 300000
@@ -70,7 +73,7 @@ export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0
 	if (signal?.aborted) throw new AstapError('aborted', 'the star detection was aborted')
 
 	const inputPath = resolve(input)
-	executable ||= executableForCurrentPlatform()
+	executable ||= DEFAULT_EXECUTABLE
 	timeout ||= DEFAULT_TIMEOUT
 
 	let process: Bun.Subprocess
@@ -143,7 +146,7 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 	const wcs = Bun.file(join(tmpdir(), `${name}.wcs`))
 	const r = radius ? Math.max(0, Math.min(Math.ceil(toDeg(radius)), 180)) : 180
 
-	executable ||= executableForCurrentPlatform()
+	executable ||= DEFAULT_EXECUTABLE
 	timeout ||= DEFAULT_TIMEOUT
 
 	const commands = [executable, '-o', ini.name!, '-z', downsample.toFixed(0), '-f', input, '-wcs', '-fov', `${fov}`]
@@ -179,14 +182,4 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 	}
 
 	return undefined
-}
-
-// Returns the default ASTAP executable path/name for the current platform.
-function executableForCurrentPlatform() {
-	switch (process.platform) {
-		case 'win32':
-			return 'C:\\Program Files\\astap\\astap.exe'
-		default:
-			return 'astap'
-	}
 }
