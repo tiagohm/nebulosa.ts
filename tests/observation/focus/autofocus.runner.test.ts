@@ -11,7 +11,7 @@ import { isFits } from '../../../src/io/formats/fits/fits'
 import type { CameraCaptureHooks, CameraCapturer, CameraCaptureResult } from '../../../src/observation/capture/capture'
 import type { CameraCaptureStart } from '../../../src/observation/capture/types'
 import { AutoFocus, type AutoFocusStep } from '../../../src/observation/focus/autofocus'
-import { type AutoFocusCaptureOptions, type AutoFocusFrame, type AutoFocusMeasurer, type AutoFocusRunOptions, type AutoFocusRunResult, autoFocusCaptureRequest, runAutoFocus } from '../../../src/observation/focus/autofocus.runner'
+import { type AutoFocusCaptureOptions, type AutoFocusFrame, type AutoFocusMeasurer, type AutoFocusRunEvent, type AutoFocusRunListener, type AutoFocusRunOptions, type AutoFocusRunResult, autoFocusCaptureRequest, runAutoFocus } from '../../../src/observation/focus/autofocus.runner'
 import { waitUntil } from '../../util'
 import { ManualClock } from '../../util/rig'
 
@@ -144,6 +144,7 @@ interface HarnessOptions {
 	readonly measurer?: (focuser: FakeFocuser, calls: MeasureCall[], order: () => number) => AutoFocusMeasurer
 	readonly behaviors?: FakeCaptureBehavior[]
 	readonly health?: CooperativeJobHealth
+	readonly listener?: AutoFocusRunListener
 }
 
 // Autofocus over the fake optics, focuser and capturer with a manual clock; auxiliary frames in a fresh directory.
@@ -158,7 +159,13 @@ function harness(options: HarnessOptions = {}): Harness {
 	const measurer = (options.measurer ?? curveMeasurer)(focuser, measures, order)
 	const coordinator = new OperationCoordinator(new ResourceArbiter())
 	const run = (overrides: Partial<AutoFocusRunOptions> = {}, scope: OperationScope = coordinator) =>
-		runAutoFocus(scope, focuser.focuser, CAMERA, { ...OPTIONS, ...overrides }, { focuserMover: focuser.commander, cameraCapturer: capturer, measurer, auxiliaryPath: (capture) => join(directory, `af.${capture}.fit`), clock, ...(options.health !== undefined && { measurerHealth: options.health }) })
+		runAutoFocus(
+			scope,
+			focuser.focuser,
+			CAMERA,
+			{ ...OPTIONS, ...overrides },
+			{ focuserMover: focuser.commander, cameraCapturer: capturer, measurer, auxiliaryPath: (capture) => join(directory, `af.${capture}.fit`), clock, ...(options.health !== undefined && { measurerHealth: options.health }), ...(options.listener !== undefined && { listener: options.listener }) },
+		)
 	return { clock, directory, focuser, captures: calls, measures, coordinator, run }
 }
 
@@ -195,6 +202,50 @@ describe('autofocus run', () => {
 		expect(captures.map((capture) => capture.position)).toEqual(reference.positions)
 		expect(measures.map((measure) => measure.position)).toEqual(reference.positions)
 		expect(focuser.position).toBe(best)
+	})
+
+	test('the listener sees each move, exposure, measurement and sample in order, with the position and HFD of every frame', async () => {
+		const events: AutoFocusRunEvent[] = []
+		const fits: (string | undefined)[] = []
+		const { run, measures } = harness({
+			listener: (event) => {
+				events.push(event)
+				if (event.type === 'sample') fits.push(event.autoFocus.hyperbolic === undefined ? undefined : 'hyperbolic')
+			},
+		})
+		const reference = referenceRun(25100)
+		const result = await run()
+
+		expect(result).toMatchObject({ ok: true })
+		const samples = events.filter((event) => event.type === 'sample')
+		expect(samples.map((sample) => sample.position)).toEqual(reference.positions)
+		expect(samples.map((sample) => sample.capture)).toEqual(reference.positions.map((_, i) => i + 1))
+		expect(samples.map((sample) => sample.hfd)).toEqual(reference.positions.map(hfdAt))
+		expect(samples.at(-1)!.step).toEqual(reference.step)
+		expect(fits.at(-1)).toBe('hyperbolic')
+
+		// Per frame: the sample move, the exposure, the measurement, then the sample; the run ends moving to the best focus.
+		for (const [i, position] of reference.positions.entries()) {
+			const capture = i + 1
+			const expose = events.findIndex((event) => event.type === 'expose' && event.capture === capture)
+			const measure = events.findIndex((event) => event.type === 'measure' && event.capture === capture)
+			const sample = events.findIndex((event) => event.type === 'sample' && event.capture === capture)
+			expect(events[expose - 1]).toEqual({ type: 'move', purpose: 'sample', target: position })
+			expect(events[expose]).toMatchObject({ position, path: measures[i].path })
+			expect(measure).toBe(expose + 1)
+			expect(sample).toBe(measure + 1)
+		}
+
+		expect(events.at(-1)).toEqual({ type: 'move', purpose: 'best', target: (result as { value: AutoFocusRunResult }).value.position })
+	})
+
+	test('a failure reports the restore move', async () => {
+		const events: AutoFocusRunEvent[] = []
+		const { run } = harness({ behaviors: [{ fail: true }], listener: (event) => events.push(event) })
+
+		expect(await run()).toMatchObject({ ok: false })
+		expect(events.filter((event) => event.type === 'sample')).toEqual([])
+		expect(events.at(-1)).toEqual({ type: 'move', purpose: 'restore', target: 25100 })
 	})
 
 	test('a measurement of NaN, 0, a negative value, undefined or a rejection is an invalid point, never an exception', async () => {
