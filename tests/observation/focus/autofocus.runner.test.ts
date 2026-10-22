@@ -377,6 +377,14 @@ describe('auxiliary frames', () => {
 		expect(captures.some((_, i) => existsSync(join(directory, `af.${i + 1}.fit`)))).toBeFalse()
 	})
 
+	test('the mount, filter wheel and rotator of the capture settings are snooped with the focuser of the run', async () => {
+		const { run, captures } = harness()
+		await run({ capture: { ...CAPTURE, mount: 'Fake Mount', wheel: 'Fake Wheel', rotator: 'Fake Rotator' } })
+
+		expect(captures.length).toBeGreaterThan(0)
+		for (const capture of captures) expect(capture.request).toMatchObject({ mount: 'Fake Mount', focuser: 'Fake Focuser', wheel: 'Fake Wheel', rotator: 'Fake Rotator' })
+	})
+
 	test("'keep' preserves every auxiliary frame", async () => {
 		const { run, captures, directory } = harness()
 		await run({ auxiliary: 'keep' })

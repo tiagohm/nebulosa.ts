@@ -29,9 +29,10 @@ import { AutoFocus, type AutoFocusOptions, type AutoFocusStep } from './autofocu
 // in pixels, configured durations are seconds turned into milliseconds only at the clock. Each capture allocates its
 // request and a few small objects.
 
-// Camera settings of an autofocus frame. Every operational field (mode, count, delay, transfer format, destination) is
-// fixed by the autofocus.
-export type AutoFocusCaptureOptions = Readonly<Pick<CameraCaptureStart, 'exposureTime' | 'exposureTimeUnit' | 'frameType' | 'x' | 'y' | 'width' | 'height' | 'subframe' | 'binX' | 'binY' | 'frameFormat' | 'gain' | 'offset' | 'compressed'>>
+// Camera settings of an autofocus frame, with the names of the mount, filter wheel and rotator the driver stamps into its
+// header (an absent one is cleared). Every operational field (mode, count, delay, transfer format, destination) is fixed
+// by the autofocus, and the focuser snooped is always the one the run moves.
+export type AutoFocusCaptureOptions = Readonly<Pick<CameraCaptureStart, 'exposureTime' | 'exposureTimeUnit' | 'frameType' | 'x' | 'y' | 'width' | 'height' | 'subframe' | 'binX' | 'binY' | 'frameFormat' | 'gain' | 'offset' | 'compressed' | 'mount' | 'wheel' | 'rotator'>>
 
 // Frame handed to the measurer: a complete FITS file on disk, never its bytes.
 export interface AutoFocusFrame {
@@ -246,9 +247,10 @@ function measureResult(outcome: CooperativeJobOutcome<number | undefined>, signa
 }
 
 // Capture request of one autofocus frame at `path`: the camera settings with every operational field fixed (one FITS
-// frame, auto-saved under the exact name) and the focuser snooped, so the header records the position it was taken at.
+// frame, auto-saved under the exact name) and the focuser snooped, so the header records the position it was taken at,
+// along with the mount, filter wheel and rotator the settings name.
 export function autoFocusCaptureRequest(capture: AutoFocusCaptureOptions, path: string, focuser: Pick<Focuser, 'name'>): CameraCaptureStart {
-	const { exposureTime, exposureTimeUnit, frameType, x, y, width, height, subframe, binX, binY, frameFormat, gain, offset, compressed } = capture
+	const { exposureTime, exposureTimeUnit, frameType, x, y, width, height, subframe, binX, binY, frameFormat, gain, offset, compressed, mount, wheel, rotator } = capture
 
 	return {
 		...DEFAULT_CAMERA_CAPTURE_START,
@@ -274,7 +276,10 @@ export function autoFocusCaptureRequest(capture: AutoFocusCaptureOptions, path: 
 		autoSubFolderMode: 'off',
 		outputPath: dirname(path),
 		outputName: basename(path),
+		mount,
 		focuser: focuser.name,
+		wheel,
+		rotator,
 	}
 }
 
