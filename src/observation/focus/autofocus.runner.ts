@@ -4,6 +4,7 @@ import type { FocuserCommandOptions, FocuserMover } from '../../devices/commande
 import type { Camera, Focuser } from '../../devices/indi/device'
 import { type FailedOperationResult, failedOperationResult, type OperationContext, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
 import { type AbortableDelay, abortReason, awaitCooperativeJob, type CooperativeJobHealth, type CooperativeJobOutcome } from '../../devices/orchestration/operation.wait'
+import { resourceKey } from '../../devices/orchestration/resource'
 import type { CameraCapturer } from '../capture/capture'
 import { type CameraCaptureStart, type CameraCaptureClock, DEFAULT_CAMERA_CAPTURE_START } from '../capture/types'
 import { AutoFocus, type AutoFocusOptions, type AutoFocusStep } from './autofocus'
@@ -95,8 +96,9 @@ export interface AutoFocusRunResult {
 	readonly captures: number
 }
 
-// Runs one autofocus of `focuser` with `camera` inside an operation `autofocus` of `scope`, which leases nothing
-// itself: the focuser mover and the capturer lease the focuser and the camera per command. Every position the state
+// Runs one autofocus of `focuser` with `camera` inside an operation `autofocus` of `scope`, which holds the focuser for
+// the whole run, so nothing outside it can move the focuser between a move and the frame measured there; the moves of
+// the mover inherit that lease, and the capturer leases the camera per capture. Every position the state
 // machine asks for is checked against the focuser range before the focuser moves; then one auxiliary frame is
 // captured and measured cooperatively, and the measurement fed back. On COMPLETED the focuser is moved to the rounded
 // best position. A failure that is not a cancellation (the curve rejected, a position out of range, a failed move,
@@ -105,7 +107,7 @@ export interface AutoFocusRunResult {
 // rejected; 'unexpectedState' for a position outside the focuser range or a faulted measurer; 'timeout' when a
 // measurement timed out; the reason of the operation signal when cancelled. Never rejects.
 export async function runAutoFocus(scope: OperationScope, focuser: Focuser, camera: Camera, options: AutoFocusRunOptions, services: AutoFocusServices): Promise<OperationResult<AutoFocusRunResult>> {
-	return await scope.start<AutoFocusRunResult>('autofocus', [], (context) => autoFocusLoop(context, focuser, camera, options, services)).result
+	return await scope.start<AutoFocusRunResult>('autofocus', [{ key: resourceKey(focuser), device: focuser }], (context) => autoFocusLoop(context, focuser, camera, options, services)).result
 }
 
 // Captures of one autofocus inside its operation.

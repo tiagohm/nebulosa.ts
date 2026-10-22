@@ -6,7 +6,7 @@ import type { FocuserMover } from '../../../src/devices/commanders/focuser'
 import type { Camera, Focuser } from '../../../src/devices/indi/device'
 import { failedOperationResult, type OperationContext, OperationCoordinator, type OperationResult, type OperationScope, successfulOperationResult } from '../../../src/devices/orchestration/operation'
 import type { CooperativeJobHealth } from '../../../src/devices/orchestration/operation.wait'
-import { ResourceArbiter } from '../../../src/devices/orchestration/resource'
+import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
 import { isFits } from '../../../src/io/formats/fits/fits'
 import type { CameraCaptureHooks, CameraCapturer, CameraCaptureResult } from '../../../src/observation/capture/capture'
 import type { CameraCaptureStart } from '../../../src/observation/capture/types'
@@ -43,7 +43,7 @@ class FakeFocuser {
 	hangAt?: number
 
 	constructor(position: number, min = 0, max = 100000) {
-		this.focuser = { name: 'Fake Focuser', type: 'focuser', connected: true, moving: false, position: { value: position, min, max } } as Focuser
+		this.focuser = { name: 'Fake Focuser', hardwareId: 'fake-focuser', client: { id: 'fake' }, type: 'focuser', connected: true, moving: false, position: { value: position, min, max } } as Focuser
 	}
 
 	get position() {
@@ -253,6 +253,25 @@ describe('autofocus run', () => {
 		expect(result).toMatchObject({ ok: false, reason: 'unexpectedState', error: expect.stringContaining('100300 is outside the range [0, 100000]') })
 		expect(focuser.moves).toEqual([])
 		expect(captures).toEqual([])
+	})
+
+	test('the focuser is held for the whole run, so nothing outside it can move the focuser between the frames', async () => {
+		const { focuser, coordinator, run } = harness()
+		focuser.hangAt = 4
+		const handle = coordinator.start('parent', [], (context) => run({}, context))
+
+		await waitUntil(() => focuser.moves.length === 4, 5000, 1)
+		let moved = false
+		const outside = await coordinator.start<void>('outside', [{ key: resourceKey(focuser.focuser), device: focuser.focuser }], () => {
+			moved = true
+			return successfulOperationResult(undefined)
+		}).result
+
+		expect(outside.ok).toBeFalse()
+		expect(moved).toBeFalse()
+
+		await handle.cancel('aborted')
+		expect(await handle.result).toMatchObject({ ok: false, reason: 'aborted' })
 	})
 
 	test('a cancellation resolves aborted, opens nothing more and leaves the focuser where the cancellation found it', async () => {
