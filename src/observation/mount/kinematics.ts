@@ -1,7 +1,7 @@
 import { PI } from '../../core/constants'
 import { matMulVec, matRodriguesRotation } from '../../math/linear-algebra/mat3'
 import { rigidIdentity, rigidRotationAroundAxis, rigidTransformDirection, rigidTransformPoint, type RigidTransform3 } from '../../math/linear-algebra/rigid3'
-import { type MutVec3, vecClone, vecCross, vecCrossLength, vecDot, vecLength, vecMinus, vecNormalize, type Vec3, vecNegateMut } from '../../math/linear-algebra/vec3'
+import { type MutVec3, vecClone, vecCross, vecDot, vecLength, vecMinus, vecNormalize, type Vec3, vecNegateMut, vecAngle } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 
 // Forward and inverse kinematics for a serial two-axis telescope mount. Geometry is expressed in a
@@ -164,7 +164,7 @@ export function solveMountEncoders(geometry: Readonly<TwoAxisMountGeometry>, wor
 	let primary = clampToRange(options.initial?.primary ?? 0, controls.primaryRange)
 	let secondary = clampToRange(options.initial?.secondary ?? 0, controls.secondaryRange)
 	let pose = mountPoseFromEncodersUnchecked(geometry, { primary, secondary })
-	let residual = directionResidual(pose.direction, target)
+	let residual = vecAngle(pose.direction, target)
 	let bestPrimary = primary
 	let bestSecondary = secondary
 	let bestResidual = residual
@@ -224,7 +224,7 @@ export function solveMountEncoders(geometry: Readonly<TwoAxisMountGeometry>, wor
 			candidateSecondary = clampToRange(secondary + secondaryStep, controls.secondaryRange)
 			if (candidatePrimary === primary && candidateSecondary === secondary) break
 			candidatePose = mountPoseFromEncodersUnchecked(geometry, { primary: candidatePrimary, secondary: candidateSecondary })
-			candidateResidual = directionResidual(candidatePose.direction, target)
+			candidateResidual = vecAngle(candidatePose.direction, target)
 			if (candidateResidual < residual) {
 				accepted = true
 				break
@@ -302,7 +302,7 @@ function tryAntipodalEscape(geometry: Readonly<TwoAxisMountGeometry>, target: Ve
 		const candidate = candidates[i]
 		if (candidate.primary === primary && candidate.secondary === secondary) continue
 		const pose = mountPoseFromEncodersUnchecked(geometry, candidate)
-		const candidateResidual = directionResidual(pose.direction, target)
+		const candidateResidual = vecAngle(pose.direction, target)
 		if (candidateResidual < bestResidual) {
 			best = { ...candidate, pose, residual: candidateResidual }
 			bestResidual = candidateResidual
@@ -348,11 +348,6 @@ function physicalPrimaryAngle(geometry: Readonly<TwoAxisMountGeometry>, encoder:
 // Converts a secondary encoder angle into its physical active rotation in radians.
 function physicalSecondaryAngle(geometry: Readonly<TwoAxisMountGeometry>, encoder: Angle): Angle {
 	return (geometry.secondaryDirection ?? 1) * encoder + (geometry.secondaryIndex ?? 0)
-}
-
-// Computes stable angular separation between unit directions in radians.
-function directionResidual(current: Vec3, target: Vec3): Angle {
-	return Math.atan2(vecCrossLength(current, target), Math.max(-1, Math.min(1, vecDot(current, target))))
 }
 
 // Restricts an unwrapped encoder angle to an optional inclusive range.
