@@ -152,7 +152,8 @@ test('measure star photometry from image aperture', () => {
 
 	expect(flux).toBeCloseTo(1.3, 6)
 	expect(snr).toBeCloseTo(Math.sqrt(1.3), 6)
-	expect(hfd).toBeCloseTo(1.2307692307692308, 6)
+	// The center spreads 0.5 over radii [0, 0.5] and the four neighbors 0.8 over [0.5, 1.5], so half of 1.3 is enclosed at 0.5 + 0.15 / 0.8.
+	expect(hfd).toBeCloseTo(1.375, 6)
 	expect(fwhm).toBeCloseTo(1.3062191429253263, 6)
 	expect(measureStarPhotometry(image, x, y, 0)).toEqual([0, 0, 0, 0])
 })
@@ -209,6 +210,80 @@ test('detect stars measures round and elongated shapes from central moments', ()
 	expect(elongated.elongation).toBeGreaterThan(1.5)
 	expect(elongated.majorVariance).toBeGreaterThan(elongated.minorVariance!)
 	expect(elongated.theta).toBeCloseTo(0, 1)
+})
+
+// Renders a circular profile integrated over each pixel (8x8 subsamples) on a sky of 0.1, scaled to `peak`, with deterministic Gaussian noise.
+function radialProfileImage(width: number, height: number, cx: number, cy: number, profile: (r: number) => number, peak: number, noise: number, seed: number = 1): Image {
+	const raw = new Float64Array(width * height)
+	const random = mulberry32(seed)
+	let maximum = 0
+
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			let sum = 0
+			for (let j = 0; j < 8; j++) for (let i = 0; i < 8; i++) sum += profile(Math.hypot(x - 0.5 + (i + 0.5) / 8 - cx, y - 0.5 + (j + 0.5) / 8 - cy))
+			raw[y * width + x] = sum / 64
+			maximum = Math.max(maximum, sum / 64)
+		}
+	}
+
+	for (let i = 0; i < raw.length; i++) raw[i] = 0.1 + (peak * raw[i]) / maximum + noise * Math.sqrt(-2 * Math.log(1 - random())) * Math.cos(2 * Math.PI * random())
+	return { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width, strideInBytes: width * 8, bayer: undefined } }
+}
+
+test('detect stars measures a curve-of-growth HFD that is stable against sub-pixel motion', () => {
+	// FWHM 2.5 pixels; integrated over the pixel, the Gaussian variance grows by 1/12 pixel squared.
+	const sigma = 2.5 / (2 * Math.sqrt(2 * Math.LN2))
+	const expected = 2 * Math.sqrt(2 * Math.LN2) * Math.sqrt(sigma * sigma + 1 / 12)
+	const hfd: number[] = []
+
+	for (const [dx, dy] of [
+		[0, 0],
+		[0.25, 0.5],
+		[0.5, 0.5],
+		[0.75, 0.1],
+	]) {
+		const star = detectStars(
+			radialProfileImage(48, 48, 24 + dx, 24 + dy, (r) => Math.exp((-r * r) / (2 * sigma * sigma)), 0.5, 0),
+			{ maxStars: 1 },
+		)[0]
+		expect(star).toBeDefined()
+		hfd.push(star.hfd)
+	}
+
+	for (const value of hfd) expect(value).toBeCloseTo(expected, 1)
+	expect(Math.max(...hfd) - Math.min(...hfd)).toBeLessThan(0.1)
+})
+
+test('detect stars grows the aperture over defocused stars up to the maximum radius', () => {
+	const cx = 48.3
+	const cy = 47.6
+	// A uniform disk of radius R holds half of its flux inside R / sqrt(2), an annulus from 0.4 R to R inside R * sqrt(1.16 / 2).
+	const profiles = [
+		[(r: number) => (r <= 10 ? 1 : 0), 10 * Math.SQRT2],
+		[(r: number) => (r <= 12 && r >= 4.8 ? 1 : 0), 24 * Math.sqrt(1.16 / 2)],
+	] as const
+
+	for (const [profile, expected] of profiles) {
+		const image = radialProfileImage(96, 96, cx, cy, profile, 0.3, 0.002)
+		const fixed = detectStars(image)
+		const adaptive = detectStars(image, { maximumRadius: 32 }).filter((star) => Math.hypot(star.x - cx, star.y - cy) < 16)
+
+		expect(Math.max(...fixed.map((star) => star.hfd))).toBeLessThan(6)
+		expect(adaptive).toHaveLength(1)
+		expect(adaptive[0].hfd).toBeCloseTo(expected, 0)
+		expect(Math.abs(adaptive[0].hfd - expected)).toBeLessThan(0.2)
+		expect(Math.hypot(adaptive[0].x - cx, adaptive[0].y - cy)).toBeLessThan(0.1)
+	}
+})
+
+test('detect stars drops a defocused star larger than the maximum radius or cut by the frame', () => {
+	const disk = (r: number) => (r <= 10 ? 1 : 0)
+	const inside = radialProfileImage(96, 96, 48.3, 47.6, disk, 0.3, 0.002)
+	const nearBorder = radialProfileImage(96, 96, 11.5, 47.6, disk, 0.3, 0.002)
+
+	expect(detectStars(inside, { maximumRadius: 8 }).filter((star) => Math.hypot(star.x - 48.3, star.y - 47.6) < 16)).toHaveLength(0)
+	expect(detectStars(nearBorder, { maximumRadius: 32 }).filter((star) => Math.hypot(star.x - 11.5, star.y - 47.6) < 16)).toHaveLength(0)
 })
 
 test('detect stars keeps a faint field when a few stars are much brighter', () => {
