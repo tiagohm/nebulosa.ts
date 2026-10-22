@@ -1,7 +1,8 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import type { Socket } from 'bun'
 import { PHD2Client } from '../../../../src/observation/guiding/phd2/client'
 import { isBinaryTestSkipped } from '../../../util'
+import { listenPaused } from '../../../util/socket'
 
 test.skipIf(isBinaryTestSkipped() && process.env.PHD2 !== 'true')(
 	'client',
@@ -90,5 +91,45 @@ test('reconnect discards a partial message from the previous socket and a line t
 	} finally {
 		client.close()
 		server.stop(true)
+	}
+})
+
+test('queues commands a server that stops reading did not take and sends them whole once it drains', async () => {
+	using server = listenPaused()
+	const client = new PHD2Client()
+	// The commands still pending when the client closes are logged as failed.
+	const error = spyOn(console, 'error').mockImplementation(() => {})
+
+	try {
+		expect(await client.connect('127.0.0.1', server.port)).toBeTrue()
+
+		// 256 commands of about 32 kB overflow the loopback buffers, which would truncate a command without the queue.
+		const count = 256
+		const value = 'x'.repeat(32000)
+		const pending = Array.from({ length: count }, (_, i) => client.send('set_algo_param', ['ra', `p${i}`, value]))
+
+		const lines = await server.resume(count * 32000).then(async (payload) => {
+			let text = payload.toString()
+			while (text.split('\r\n').length <= count) {
+				await Bun.sleep(5)
+				text = server.received().toString()
+			}
+			return text.split('\r\n')
+		})
+
+		expect(lines).toHaveLength(count + 1)
+		expect(lines[count]).toBe('')
+
+		for (let i = 0; i < count; i++) {
+			const command = JSON.parse(lines[i])
+			expect(command.method).toBe('set_algo_param')
+			expect(command.params).toEqual(['ra', `p${i}`, value])
+		}
+
+		client.close()
+		for (const result of await Promise.all(pending)) expect(result).toEqual({ success: false, error: 'socketUnavailable' })
+	} finally {
+		client.close()
+		error.mockRestore()
 	}
 })

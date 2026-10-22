@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test'
 import { PI } from '../../../src/core/constants'
 import { StellariumProtocolServer } from '../../../src/devices/protocols/stellarium'
+import { waitUntil } from '../../util'
+import { connectPaused } from '../../util/socket'
 
 function gotoMessage(ra: number, dec: number) {
 	const message = Buffer.alloc(20)
@@ -48,6 +50,57 @@ test('decodes concatenated goto messages in order', async () => {
 		])
 	} finally {
 		client.close()
+		server.stop()
+	}
+})
+
+test('skips positions while a client does not read and never sends it a partial message', async () => {
+	let connected = false
+	const server = new StellariumProtocolServer({ handler: { connect: () => (connected = true) } })
+	server.start('127.0.0.1', 0)
+	using client = await connectPaused(server.port)
+
+	try {
+		await waitUntil(() => connected, 1000, 5)
+
+		// The declination field carries the position index: about 9.6 MB of positions overflows the loopback buffers.
+		// Yielding to the event loop between batches, as periodic broadcasts do, makes the socket take partial messages.
+		const position = (i: number) => server.send(0, ((i + 0.5) / 0x80000000) * PI)
+		const count = 400000
+		for (let i = 0; i < count; i++) {
+			position(i)
+			if (i % 100 === 0) await Bun.sleep(0)
+		}
+
+		await client.resume(24)
+
+		// Once drained, a new position goes through again.
+		const marker = count + 1
+		await waitUntil(
+			() => {
+				position(marker)
+				const received = client.received()
+				return received.byteLength % 24 === 0 && received.readInt32LE(received.byteLength - 8) === marker
+			},
+			5000,
+			10,
+		)
+
+		const received = client.received()
+		const messages = received.byteLength / 24
+		let previous = -1
+
+		expect(messages).toBeLessThan(count)
+
+		for (let i = 0; i < messages; i++) {
+			const offset = i * 24
+			expect(received.readInt16LE(offset)).toBe(24)
+			expect(received.readInt16LE(offset + 2)).toBe(0)
+			const index = received.readInt32LE(offset + 16)
+			expect(index).toBeGreaterThanOrEqual(previous)
+			previous = index
+		}
+	} finally {
 		server.stop()
 	}
 })

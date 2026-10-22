@@ -1,10 +1,13 @@
 import type { Client } from './device'
 // oxfmt-ignore
 import type { DefBlob, DefBlobVector, DefLight, DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, DefVector, DelProperty, EnableBlob, GetProperties, Message, NewNumberVector, NewSwitchVector, NewTextVector, OneBlob, OneLight, OneNumber, OneSwitch, OneText, PropertyState, SetBlobVector, SetLightVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, SwitchRule, VectorType } from './types'
+import { SocketWriteQueue } from '../../io/socket'
 import { SimpleXmlParser, type XmlNode } from '../../io/xml'
 
 // INDI protocol client over a TCP socket: parses the streamed XML messages into typed property vectors,
-// dispatches them to a handler, and serializes outgoing getProperties/enableBLOB/newXXX commands.
+// dispatches them to a handler, and serializes outgoing getProperties/enableBLOB/newXXX commands. Output the
+// socket does not take at once is queued until it drains; a server that stops reading for more than the queue
+// bound is disconnected.
 // A simple XML-like communications protocol is described for
 // interactive and automated remote control of diverse instrumentation.
 // http://www.clearskyinstitute.com/INDI/INDI.pdf
@@ -53,6 +56,8 @@ export class IndiClient implements Client {
 
 	readonly #parser = new SimpleXmlParser()
 	#socket?: Bun.Socket
+	// Output of the current connection not yet taken by its socket.
+	readonly #output = new SocketWriteQueue()
 	// Prevents overlapping connection attempts from creating multiple sockets.
 	#connecting = false
 	// Cached [id, remoteHost, remotePort] populated on connect.
@@ -97,6 +102,7 @@ export class IndiClient implements Client {
 
 		this.#connecting = true
 		this.#parser.reset()
+		this.#output.clear()
 
 		try {
 			this.#socket = await Bun.connect({
@@ -107,6 +113,9 @@ export class IndiClient implements Client {
 					data: (_, data) => {
 						this.parse(data)
 					},
+					drain: (socket) => {
+						this.#output.drain(socket)
+					},
 					open: (socket) => {
 						console.info('connection open')
 						this.#socket = socket
@@ -115,6 +124,7 @@ export class IndiClient implements Client {
 					close: () => {
 						console.warn('connection closed by client')
 						this.#parser.reset()
+						this.#output.clear()
 						this.#socket = undefined
 						this.options?.handler?.close?.(this, false)
 					},
@@ -127,6 +137,7 @@ export class IndiClient implements Client {
 					end: () => {
 						console.warn('connection closed by server')
 						this.#parser.reset()
+						this.#output.clear()
 						this.#socket = undefined
 						this.options?.handler?.close?.(this, true)
 					},
@@ -152,6 +163,7 @@ export class IndiClient implements Client {
 	// Terminates the connection.
 	close() {
 		this.#parser.reset()
+		this.#output.clear()
 		this.#socket?.terminate()
 		this.#socket = undefined
 	}
@@ -405,10 +417,17 @@ export class IndiClient implements Client {
 		this.#writeXml(`${message}</newSwitchVector>`)
 	}
 
-	// Writes a serialized XML message to the socket and flushes, no-op when disconnected.
+	// Writes a serialized XML message after the queued output and flushes, no-op when disconnected. Closes a
+	// connection whose server stopped reading for more than the queue bound.
 	#writeXml(message: string) {
 		if (!this.#socket) return
-		this.#socket.write(message)
+
+		if (!this.#output.write(this.#socket, message)) {
+			console.warn('output queue full')
+			this.close()
+			return
+		}
+
 		this.#socket.flush()
 	}
 }

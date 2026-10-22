@@ -17,6 +17,7 @@ import type { DefNumberVector, DefSwitchVector, DefTextVector, PropertyState, Se
 import { SimpleXmlParser, type XmlNode } from '../../../src/io/xml'
 import { downloadPerTag } from '../../download'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
+import { listenPaused } from '../../util/socket'
 
 await downloadPerTag('indi')
 
@@ -365,6 +366,29 @@ describe('write', () => {
 		expect(payload).toContain('<getProperties version="1.7"></getProperties>')
 		expect(payload).toContain('<getProperties version="1.7" device="CCD &amp; &quot;A&quot;" name="PROP&lt;1&gt;"></getProperties>')
 		expect(payload).toContain('<enableBLOB device="CCD &amp; &quot;A&quot;" name="CCD&gt;1">Also</enableBLOB>')
+	})
+
+	test('queues commands a server that stops reading did not take and sends them whole once it drains', async () => {
+		using server = listenPaused()
+		const client = new IndiClient()
+
+		try {
+			await client.connect('127.0.0.1', server.port)
+
+			// 8 MiB of commands overflows the loopback buffers, which would truncate a command without the queue.
+			const value = 'x'.repeat(1000)
+			const count = 8192
+			for (let i = 0; i < count; i++) client.sendText({ device: 'D', name: `P${i}`, elements: { V: value } })
+
+			const getProperties = '<getProperties version="1.7"></getProperties>'
+			const command = (i: number) => `<newTextVector device="D" name="P${i}"><oneText name="V">${value}</oneText></newTextVector>`
+			const expected = getProperties + Array.from({ length: count }, (_, i) => command(i)).join('')
+			const payload = await server.resume(Buffer.byteLength(expected))
+
+			expect(payload.toString() === expected).toBeTrue()
+		} finally {
+			client.close()
+		}
 	})
 })
 

@@ -5,6 +5,7 @@ import { FirmataClientOverTcp } from '../../../src/devices/firmata/client.tcp'
 import { encodePacked7Bit, decodePacked7Bit } from '../../../src/devices/firmata/codecs/numeric'
 import { MAX_FIRMATA_BUFFER_SIZE } from '../../../src/devices/firmata/protocol'
 import { type FirmataClientHandler, type Transport, PinMode, type AnalogMapping, type Pin } from '../../../src/devices/firmata/types'
+import { listenPaused } from '../../util/socket'
 
 describe('command decoding', () => {
 	const result: unknown[] = []
@@ -265,6 +266,41 @@ test('a TCP client can reconnect after a remote socket close', async () => {
 	} finally {
 		client.disconnect()
 		server.stop()
+	}
+})
+
+test('a TCP client queues messages a board that stops reading did not take and sends them whole once it drains', async () => {
+	using board = listenPaused()
+	const client = new FirmataClientOverTcp(new ESP8266())
+
+	try {
+		expect(await client.connect('127.0.0.1', board.port)).toBeTrue()
+
+		// 8 MiB of sysex messages overflows the loopback buffers, which would truncate a message without the queue.
+		const count = 8192
+		const message = new Uint8Array(1000).fill(1)
+		message[0] = 0xf0
+		message[999] = 0xf7
+
+		for (let i = 0; i < count; i++) {
+			message[1] = i & 0x7f
+			message[2] = (i >> 7) & 0x7f
+			client.send(message)
+		}
+
+		const payload = await board.resume(3 + count * 1000)
+
+		expect(payload.byteLength).toBe(3 + count * 1000)
+		expect([...payload.subarray(0, 3)]).toEqual([0xf0, 0x79, 0xf7])
+
+		for (let i = 0; i < count; i++) {
+			const offset = 3 + i * 1000
+			expect(payload[offset]).toBe(0xf0)
+			expect(payload[offset + 1] | (payload[offset + 2] << 7)).toBe(i)
+			expect(payload[offset + 999]).toBe(0xf7)
+		}
+	} finally {
+		client.disconnect()
 	}
 })
 

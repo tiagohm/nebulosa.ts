@@ -1,10 +1,12 @@
 import type { Socket, TCPSocketListener } from 'bun'
 import { eraAnpm } from '../../astronomy/coordinates/erfa/erfa'
 import { PI } from '../../core/constants'
+import { SocketWriteQueue } from '../../io/socket'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 
 // TCP server for Stellarium's telescope-control protocol. It accepts goto targets and broadcasts the
-// current position using radians at the public API boundary.
+// current position using radians at the public API boundary. A client that does not read skips positions
+// until its socket drains instead of receiving a message cut short.
 
 // Callbacks the Stellarium server uses: connect/disconnect notifications and the goto target (radians).
 export interface StellariumProtocolHandler {
@@ -33,6 +35,8 @@ export class StellariumProtocolServer {
 	readonly #sockets: Socket<unknown>[] = []
 	// Per-socket accumulation of length-prefixed messages split across TCP data events.
 	readonly #buffers = new Map<Socket<unknown>, Buffer>()
+	// Per-socket output: at most the unwritten tail of one position message.
+	readonly #outputs = new Map<Socket<unknown>, SocketWriteQueue>()
 	#server?: TCPSocketListener
 
 	constructor(readonly options: Readonly<StellariumProtocolServerOptions>) {}
@@ -58,9 +62,13 @@ export class StellariumProtocolServer {
 				data: (socket, data) => {
 					this.#processData(socket, data)
 				},
+				drain: (socket) => {
+					this.#outputs.get(socket)?.drain(socket)
+				},
 				open: (socket) => {
 					console.info('connection open')
 					this.#sockets.push(socket)
+					this.#outputs.set(socket, new SocketWriteQueue())
 					this.options.handler.connect?.(this)
 				},
 				close: (socket) => {
@@ -68,6 +76,7 @@ export class StellariumProtocolServer {
 					const index = this.#sockets.indexOf(socket)
 					if (index >= 0) this.#sockets.splice(index, 1)
 					this.#buffers.delete(socket)
+					this.#outputs.delete(socket)
 					this.options.handler.disconnect?.(this)
 				},
 				error: (_, error) => {
@@ -91,10 +100,12 @@ export class StellariumProtocolServer {
 		this.#server = undefined
 		this.#sockets.length = 0
 		this.#buffers.clear()
+		this.#outputs.clear()
 	}
 
 	// Broadcasts the current position to all connected Stellarium clients, encoding RA/Dec (radians) as
-	// the protocol's signed fixed-point values in a 24-byte message.
+	// the protocol's signed fixed-point values in a 24-byte message. A socket still writing the tail of an earlier
+	// position skips this one, since the next position supersedes it.
 	send(ra: Angle, dec: Angle) {
 		if (this.#sockets.length > 0) {
 			const buffer = Buffer.allocUnsafe(24)
@@ -108,7 +119,9 @@ export class StellariumProtocolServer {
 			buffer.writeInt32LE(0, 20) // status = OK
 
 			for (const socket of this.#sockets) {
-				socket.write(buffer)
+				const output = this.#outputs.get(socket)
+				if (output === undefined || output.pending > 0) continue
+				output.write(socket, buffer)
 				socket.flush()
 			}
 		}

@@ -1,11 +1,13 @@
 import type { PartialOnly, Writable } from '../../../core/types'
+import { SocketWriteQueue } from '../../../io/socket'
 import type { Point, Size } from '../../../math/numerical/geometry'
 // oxfmt-ignore
 import { DEFAULT_PHD2_PORT, DEFAULT_PHD2_SETTLE, DEFAULT_ROI, type PHD2AppState, type PHD2CalibrationData, type PHD2Command, type PHD2DeclinationGuideMode, type PHD2Equipment, type PHD2Error, type PHD2Events, type PHD2GuideAxis, type PHD2GuideDirection, type PHD2JsonRpcEvent, type PHD2LockShiftParams, type PHD2Profile, type PHD2Settle, type PHD2StarImage, type PHD2WhichMount } from './types'
 
 // Client for PHD2's TCP event-monitoring / JSON-RPC interface. A PHD2Client issues RPC commands (each a thin
 // wrapper over send()) and dispatches async events and command replies to every registered handler. The protocol
-// types live in `./types`; field names mirror the PHD2 protocol.
+// types live in `./types`; field names mirror the PHD2 protocol. Output the socket does not take at once is queued
+// until it drains; a server that stops reading for more than the queue bound is disconnected.
 
 // Outcome of an RPC command: a typed result on success, or an error/timeout on failure.
 export type PHD2CommandResult<T> = { success: false; error: PHD2Error | 'timeout' | 'socketUnavailable' | 'socketError'; result?: never } | { success: true; result: T }
@@ -34,6 +36,8 @@ interface PendingPHD2Command<T> {
 export class PHD2Client implements Disposable {
 	readonly #commands = new Map<string, PendingPHD2Command<unknown>>()
 	#socket?: Bun.Socket
+	// Output of the current connection not yet taken by its socket.
+	readonly #output = new SocketWriteQueue()
 	#buffer?: Buffer
 	#id?: string
 	// Observers of events, command replies and closes, notified in registration order.
@@ -74,6 +78,7 @@ export class PHD2Client implements Disposable {
 	async connect(hostname: string, port: number = DEFAULT_PHD2_PORT) {
 		if (this.#socket) return false
 		this.#buffer = undefined
+		this.#output.clear()
 
 		this.#socket = await Bun.connect({
 			hostname,
@@ -81,6 +86,9 @@ export class PHD2Client implements Disposable {
 			socket: {
 				data: (_, data) => {
 					this.#processData(data)
+				},
+				drain: (socket) => {
+					this.#output.drain(socket)
 				},
 				error: (_, error) => {
 					console.error('socket error:', error)
@@ -105,6 +113,7 @@ export class PHD2Client implements Disposable {
 	close() {
 		this.#socket?.close()
 		this.#socket = undefined
+		this.#output.clear()
 
 		for (const command of this.#commands.values()) {
 			clearTimeout(command.timer)
@@ -137,8 +146,14 @@ export class PHD2Client implements Disposable {
 		this.#commands.set(id, { promise, timer, command } as PendingPHD2Command<unknown>)
 
 		try {
-			this.#socket.write(JSON.stringify(command))
-			this.#socket.write('\r\n')
+			// One write per command, so a backpressured socket never queues a command apart from its terminator.
+			if (!this.#output.write(this.#socket, `${JSON.stringify(command)}\r\n`)) {
+				console.error('socket error: output queue full')
+				clearTimeout(timer)
+				this.#commands.delete(id)
+				this.close()
+				return { success: false, error: 'socketError' }
+			}
 		} catch (e) {
 			console.error('socket error:', e)
 			clearTimeout(timer)

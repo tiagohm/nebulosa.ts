@@ -1,10 +1,13 @@
 import type { Socket, TCPSocketListener } from 'bun'
 import { daysInMonth, formatTemporal, type Temporal, type TemporalDate, temporalAdd, temporalFromDate } from '../../astronomy/time/temporal'
+import { SocketWriteQueue } from '../../io/socket'
 import { type Angle, parseAngle, toDms, toHms } from '../../math/units/angle'
 
 // Server implementing the Meade LX200 serial command protocol over TCP, so LX200-speaking clients (e.g.
 // planetarium apps) can drive a mount. Parses the '#'-framed ASCII commands, delegates reads/actions to a
-// handler, and writes the protocol's ASCII responses. Coordinates exchanged with the handler are J2000.
+// handler, and writes the protocol's ASCII responses. Coordinates exchanged with the handler are J2000. Responses
+// the socket does not take at once are queued until it drains; a client that stops reading for more than the
+// queue bound is disconnected.
 // http://www.company7.com/library/meade/LX200CommandSet.pdf
 // https://soundstepper.sourceforge.net/LX200_Compatible_Commands.html
 // https://www.cloudynights.com/topic/72166-lx-200-gps-serial-commands/
@@ -58,6 +61,8 @@ export class Lx200ProtocolServer {
 	readonly #sockets: Socket<unknown>[] = []
 	// Per-socket accumulation of the partially-received command string.
 	readonly #commands = new Map<Socket<unknown>, string>()
+	// Per-socket responses not yet taken by the socket.
+	readonly #outputs = new Map<Socket<unknown>, SocketWriteQueue>()
 	#server?: TCPSocketListener
 
 	// Staged target coordinates (radians) and the date/time/offset assembled across the set-time sequence.
@@ -90,10 +95,14 @@ export class Lx200ProtocolServer {
 				data: (socket, data) => {
 					this.#processData(socket, data)
 				},
+				drain: (socket) => {
+					this.#outputs.get(socket)?.drain(socket)
+				},
 				open: (socket) => {
 					console.info('connection open')
 					const firstSocket = this.#sockets.length === 0
 					this.#sockets.push(socket)
+					this.#outputs.set(socket, new SocketWriteQueue())
 					this.options.handler.connect?.(this)
 
 					if (firstSocket) {
@@ -106,6 +115,7 @@ export class Lx200ProtocolServer {
 					const index = this.#sockets.indexOf(socket)
 					if (index >= 0) this.#sockets.splice(index, 1)
 					this.#commands.delete(socket)
+					this.#outputs.delete(socket)
 					if (this.#sockets.length === 0) this.options.handler.disconnect?.(this)
 				},
 				error: (_, error) => {
@@ -129,6 +139,7 @@ export class Lx200ProtocolServer {
 		this.#server = undefined
 		this.#sockets.length = 0
 		this.#commands.clear()
+		this.#outputs.clear()
 	}
 
 	// Accumulates received bytes into '#'-framed commands per socket, accepting both ':CMD#' and
@@ -312,21 +323,31 @@ export class Lx200ProtocolServer {
 
 	// Writes the alignment-query ACK byte ('G' = German equatorial).
 	#ack(socket: Socket<unknown>) {
-		socket.write(ACK)
+		this.#write(socket, ACK)
 	}
 
 	// Writes the success ('1') / failure ('0') status byte.
 	#one(socket: Socket<unknown>) {
-		socket.write(ONE)
+		this.#write(socket, ONE)
 	}
 
 	#zero(socket: Socket<unknown>) {
-		socket.write(ZERO)
+		this.#write(socket, ZERO)
 	}
 
 	// Writes an ASCII text response.
 	#text(socket: Socket<unknown>, value: string) {
-		socket.write(Buffer.from(value, 'ascii'))
+		this.#write(socket, Buffer.from(value, 'ascii'))
+	}
+
+	// Writes a response after the queued ones, ending the connection of a client that stopped reading for more
+	// than the queue bound.
+	#write(socket: Socket<unknown>, data: Buffer) {
+		const output = this.#outputs.get(socket)
+		if (output === undefined || output.write(socket, data)) return
+		console.warn('output queue full')
+		this.#outputs.delete(socket)
+		socket.end()
 	}
 
 	// Commits the staged date/time to the handler once all three of the date/time/offset set-commands have
