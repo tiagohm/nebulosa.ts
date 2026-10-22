@@ -782,18 +782,7 @@ Never change documented expected values merely to accommodate a suspected numeri
 
 # Adding a new topic
 
-For a new public capability:
-
-1. identify the owning domain;
-2. verify no existing topic already owns the capability;
-3. choose a concise user-facing title;
-4. insert the new `###` topic in alphabetical order;
-5. write only the scientific/technical context needed for use;
-6. describe purpose, intended use, limitations, and nearby alternatives;
-7. add a small TypeScript example that covers the public callable API owned by the topic;
-8. verify concrete outputs;
-9. add useful cross-topic links;
-10. confirm the topic is discoverable by docsify search.
+Add a `###` topic only after confirming that no existing topic owns the capability. Place it in its owning domain in alphabetical order and give it what the sections above require; the final correctness pass below checks the result.
 
 If the capability requires several unrelated contexts and unrelated examples, reconsider whether it is actually multiple topics.
 
@@ -813,17 +802,7 @@ Prefer:
 - comments close to the call they explain;
 - expected outputs inline.
 
-Avoid:
-
-- marketing language;
-- filler introductions;
-- repetitive headings;
-- large parameter tables when code is clearer;
-- exhaustive source walkthroughs;
-- speculative behavior;
-- unnecessary warnings/notes boxes;
-- repeating global conventions in every topic;
-- repeating the `data/...` fixture note.
+Show behavior in code rather than parameter tables or source walkthroughs, and state a limitation in the topic prose rather than in a warning box. Global conventions and the `data/...` fixture note each live in one place, so a topic relies on them instead of restating them.
 
 The documentation should answer:
 

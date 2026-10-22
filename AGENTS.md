@@ -76,7 +76,7 @@ Project layout conventions:
 
 - Add modules to the existing domain folder that owns the responsibility. Do not create a new top-level `src/` category without a clear architectural need.
 - Keep `tests/` aligned with `src/`; shared `setup.ts`, `download.ts` files stay at the tests root; shared files stay at `tests/util` directory.
-- Prefer dot-separated related filenames within a domain, such as `firmata.barometer.ts`, rather than adding shallow one-file subdirectories.
+- Prefer dot-separated related filenames within a domain, such as `client.tcp.ts`, rather than adding shallow one-file subdirectories.
 - Use direct relative imports without `.ts` extensions. Do not add a barrel or broad `export *` surface unless an aggregated entry point is the task.
 - Reuse existing math, time, image, catalog, coordinate, and I/O modules before creating helpers.
 - Do not rewrite, format, or regenerate `src/**/*.data.ts` unless explicitly requested.
@@ -94,7 +94,7 @@ Use Bun for installs, scripts, tests, and local execution.
 - Refresh the code graph: `bun run index`
 - Run the full suite: `bun test --only-failures --timeout 30000 --parallel`
 - Run test files affected by uncommited changes: `bun test --only-failures --bail --timeout 30000 --parallel --changed`
-- Run one test file: `bun test --timeout 30000 tests/vec3.test.ts`
+- Run one test file: `bun test --timeout 30000 tests/math/linear-algebra/vec3.test.ts`
 
 Tests use `bunfig.toml`, with `tests/` as the root and `tests/setup.ts` as preload. Missing large fixtures may be downloaded through `tests/download.ts`.
 
@@ -381,7 +381,7 @@ Write precise English commit messages with:
 
 Do not use Conventional Commit prefixes. Avoid vague subjects such as `fix bug`, `update code`, `changes`, `misc`, `cleanup`, `final`, or `wip`. Mention breaking changes explicitly.
 
-Wrap body paragraphs at a readable width and use `-` bullets for several independent effects.
+Do not hard-wrap body paragraphs; use `-` bullets, one per line, for several independent effects.
 
 On Windows and across mixed shells:
 
