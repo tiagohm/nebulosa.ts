@@ -2,7 +2,7 @@ import { validatePositiveFinite, validatePositiveInteger } from '../../core/vali
 import { robustLinearLeastSquares, type RobustLinearLeastSquaresResult } from '../../math/numerical/least.squares'
 import { goldenSectionSearch } from '../../math/numerical/optimization'
 import { geometricMeanOf, medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, percentileOf, STANDARD_DEVIATION_SCALE } from '../../math/numerical/statistics'
-import type { BacklashCompensation, BacklashCompensationMode } from './backlash'
+import type { BacklashApproachDirection, BacklashCompensation, BacklashCompensationMode } from './backlash'
 
 // Deterministic focuser-backlash calibration from caller-supplied positions and scalar measurements.
 // The module contains only synchronous numerical fitting and command/event state transitions. Positions,
@@ -517,9 +517,26 @@ export function aggregateBacklashRuns(runs: readonly BacklashRunResult[]): Backl
 	}
 }
 
-// Maps counter directions to the existing IN/OUT backlash-compensation contract.
-export function backlashCompensationFromCalibration(result: BacklashCalibrationResult, mode: BacklashCompensationMode = 'OVERSHOOT'): BacklashCompensation {
-	return { mode, backlashIn: result.decreasing.steps, backlashOut: result.increasing.steps }
+// Compensation built from a calibration: an OVERSHOOT one names the direction every move must end with, since an
+// overshoot on both sides would end IN moves going OUT and OUT moves going IN.
+export type CalibrationCompensationOptions = { readonly mode: 'OVERSHOOT'; readonly finalApproachDirection: BacklashApproachDirection } | { readonly mode: Exclude<BacklashCompensationMode, 'OVERSHOOT'> }
+
+// Maps a calibration to the IN/OUT backlash-compensation contract, in steps. OVERSHOOT puts the recommended overshoot
+// on the side opposite to the final approach and none on the other, so moves towards the final approach direction
+// are direct and the others go past the target and come back: every move ends in that direction. ABSOLUTE takes the
+// measured play of each direction (decreasing as IN, increasing as OUT), and NONE compensates nothing.
+export function backlashCompensationFromCalibration(result: BacklashCalibrationResult, options: CalibrationCompensationOptions): BacklashCompensation {
+	switch (options.mode) {
+		case 'OVERSHOOT': {
+			const overshoot = result.recommendedOvershoot
+			const finalOut = options.finalApproachDirection === 'OUT'
+			return { mode: 'OVERSHOOT', backlashIn: finalOut ? overshoot : 0, backlashOut: finalOut ? 0 : overshoot }
+		}
+		case 'ABSOLUTE':
+			return { mode: 'ABSOLUTE', backlashIn: result.decreasing.steps, backlashOut: result.increasing.steps }
+		case 'NONE':
+			return { mode: 'NONE', backlashIn: 0, backlashOut: 0 }
+	}
 }
 
 // Expands public defaults and rejects combinations that cannot produce a stable fit.

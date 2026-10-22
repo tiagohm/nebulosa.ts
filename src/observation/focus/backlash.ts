@@ -9,6 +9,9 @@ export type BacklashCompensationMode = 'NONE' | 'ABSOLUTE' | 'OVERSHOOT'
 // Last focuser travel direction used for backlash decisions; NONE before any move.
 export type OvershootDirection = 'NONE' | 'IN' | 'OUT'
 
+// Direction of the last leg of every compensated move: IN decreases the position, OUT increases it.
+export type BacklashApproachDirection = Exclude<OvershootDirection, 'NONE'>
+
 // Mechanical backlash parameters for a focuser.
 export interface BacklashCompensation {
 	// Active compensation strategy.

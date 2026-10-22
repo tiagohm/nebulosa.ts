@@ -80,6 +80,31 @@ describe('backlash compensation', () => {
 		expect(compensator.compute(9950, 9000)).toEqual([10150, 9950])
 	})
 
+	test('overshoot on one side ends every move in the same direction', () => {
+		for (const [compensation, final] of [
+			[{ mode: 'OVERSHOOT', backlashIn: 210, backlashOut: 0 }, 1],
+			[{ mode: 'OVERSHOOT', backlashIn: 0, backlashOut: 210 }, -1],
+		] as const) {
+			const compensator = new BacklashCompensator(compensation)
+			let position = 5000
+
+			for (const target of [5400, 5100, 5150, 4900, 4950, 5300, 5000]) {
+				const plan = compensator.compute(target, position)
+				const previous = plan.length === 1 ? position : plan[0]
+				expect(plan.at(-1)).toBe(target)
+				expect(Math.sign(target - previous)).toBe(final)
+				position = target
+			}
+		}
+	})
+
+	test('overshoot on both sides ends each move opposite to its direction', () => {
+		const compensator = new BacklashCompensator({ mode: 'OVERSHOOT', backlashIn: 100, backlashOut: 100 })
+
+		expect(compensator.compute(1000, 500)).toEqual([1100, 1000])
+		expect(compensator.compute(800, 1000)).toEqual([700, 800])
+	})
+
 	test('overshoot no-op', () => {
 		const compensator = new BacklashCompensator({ mode: 'OVERSHOOT', backlashIn: 100, backlashOut: 100 })
 

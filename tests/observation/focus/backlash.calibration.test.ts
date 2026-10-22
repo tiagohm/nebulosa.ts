@@ -376,8 +376,10 @@ describe('backlash run aggregation', () => {
 		const decreasing = aggregateBacklashRuns([makeRun('decreasing', 140), makeRun('decreasing', 140), makeRun('decreasing', 140)])!
 		const result: BacklashCalibrationResult = { increasing, decreasing, recommendedOvershoot: 210, confidence: 1, quality: 'good' }
 
-		expect(backlashCompensationFromCalibration(result)).toEqual({ mode: 'OVERSHOOT', backlashIn: 140, backlashOut: 80 })
-		expect(backlashCompensationFromCalibration(result, 'ABSOLUTE')).toEqual({ mode: 'ABSOLUTE', backlashIn: 140, backlashOut: 80 })
+		expect(backlashCompensationFromCalibration(result, { mode: 'OVERSHOOT', finalApproachDirection: 'OUT' })).toEqual({ mode: 'OVERSHOOT', backlashIn: 210, backlashOut: 0 })
+		expect(backlashCompensationFromCalibration(result, { mode: 'OVERSHOOT', finalApproachDirection: 'IN' })).toEqual({ mode: 'OVERSHOOT', backlashIn: 0, backlashOut: 210 })
+		expect(backlashCompensationFromCalibration(result, { mode: 'ABSOLUTE' })).toEqual({ mode: 'ABSOLUTE', backlashIn: 140, backlashOut: 80 })
+		expect(backlashCompensationFromCalibration(result, { mode: 'NONE' })).toEqual({ mode: 'NONE', backlashIn: 0, backlashOut: 0 })
 	})
 })
 
