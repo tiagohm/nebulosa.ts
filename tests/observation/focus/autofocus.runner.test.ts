@@ -2,7 +2,7 @@ import { describe, expect, spyOn, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
-import type { FocuserCommander } from '../../../src/devices/commanders/focuser'
+import type { FocuserMover } from '../../../src/devices/commanders/focuser'
 import type { Camera, Focuser } from '../../../src/devices/indi/device'
 import { failedOperationResult, type OperationContext, OperationCoordinator, type OperationResult, type OperationScope, successfulOperationResult } from '../../../src/devices/orchestration/operation'
 import type { CooperativeJobHealth } from '../../../src/devices/orchestration/operation.wait'
@@ -71,7 +71,8 @@ class FakeFocuser {
 			Object.assign(this.focuser.position, { value: position })
 			return successfulOperationResult(undefined)
 		},
-	} as unknown as FocuserCommander
+		position: () => this.focuser.position.value,
+	} as unknown as FocuserMover
 }
 
 // Behavior of the fake capturer for one capture.
@@ -157,7 +158,7 @@ function harness(options: HarnessOptions = {}): Harness {
 	const measurer = (options.measurer ?? curveMeasurer)(focuser, measures, order)
 	const coordinator = new OperationCoordinator(new ResourceArbiter())
 	const run = (overrides: Partial<AutoFocusRunOptions> = {}, scope: OperationScope = coordinator) =>
-		runAutoFocus(scope, focuser.focuser, CAMERA, { ...OPTIONS, ...overrides }, { focuserCommander: focuser.commander, cameraCapturer: capturer, measurer, auxiliaryPath: (capture) => join(directory, `af.${capture}.fit`), clock, ...(options.health !== undefined && { measurerHealth: options.health }) })
+		runAutoFocus(scope, focuser.focuser, CAMERA, { ...OPTIONS, ...overrides }, { focuserMover: focuser.commander, cameraCapturer: capturer, measurer, auxiliaryPath: (capture) => join(directory, `af.${capture}.fit`), clock, ...(options.health !== undefined && { measurerHealth: options.health }) })
 	return { clock, directory, focuser, captures: calls, measures, coordinator, run }
 }
 

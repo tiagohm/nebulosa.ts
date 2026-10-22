@@ -1,6 +1,6 @@
 import { unlink } from 'fs/promises'
 import { basename, dirname } from 'path'
-import type { FocuserCommander, FocuserCommandOptions } from '../../devices/commanders/focuser'
+import type { FocuserCommandOptions, FocuserMover } from '../../devices/commanders/focuser'
 import type { Camera, Focuser } from '../../devices/indi/device'
 import { type FailedOperationResult, failedOperationResult, type OperationContext, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
 import { type AbortableDelay, abortReason, awaitCooperativeJob, type CooperativeJobHealth, type CooperativeJobOutcome } from '../../devices/orchestration/operation.wait'
@@ -9,7 +9,7 @@ import { type CameraCaptureStart, type CameraCaptureClock, DEFAULT_CAMERA_CAPTUR
 import { AutoFocus, type AutoFocusOptions, type AutoFocusStep } from './autofocus'
 
 // Physical loop of a camera autofocus, reusable outside the Sequencer: the `AutoFocus` state machine decides every
-// focuser position, this module moves the focuser there through its commander, exposes one auxiliary FITS frame, hands
+// focuser position, this module moves the focuser there through its mover, exposes one auxiliary FITS frame, hands
 // its path to a caller-provided HFD measurer and feeds the measurement back, until the machine completes (the focuser
 // is moved to the best position) or fails (the focuser is moved back to the position the machine names, its start).
 //
@@ -54,7 +54,7 @@ export interface AutoFocusRunOptions {
 	readonly abortGrace: number
 	// Disposition of each auxiliary frame once its measurement ended (or its capture failed). Default 'delete'.
 	readonly auxiliary?: 'delete' | 'keep'
-	// Timing of every focuser move, in ms, passed to `FocuserCommander.moveTo`.
+	// Timing of every focuser move, in ms, passed to `FocuserMover.moveTo`.
 	readonly move?: FocuserCommandOptions
 }
 
@@ -67,8 +67,9 @@ export interface AutoFocusClock extends CameraCaptureClock {
 
 // Services of an autofocus run.
 export interface AutoFocusServices {
-	// Moves of the focuser.
-	readonly focuserCommander: FocuserCommander
+	// Moves of the focuser, in its logical position counter: the focuser commander, or a service that compensates the
+	// backlash of every move.
+	readonly focuserMover: FocuserMover
 	// Auxiliary captures.
 	readonly cameraCapturer: CameraCapturer
 	// HFD measurer of the auxiliary frames.
@@ -95,7 +96,7 @@ export interface AutoFocusRunResult {
 }
 
 // Runs one autofocus of `focuser` with `camera` inside an operation `autofocus` of `scope`, which leases nothing
-// itself: the commander and the capturer lease the focuser and the camera per command. Every position the state
+// itself: the focuser mover and the capturer lease the focuser and the camera per command. Every position the state
 // machine asks for is checked against the focuser range before the focuser moves; then one auxiliary frame is
 // captured and measured cooperatively, and the measurement fed back. On COMPLETED the focuser is moved to the rounded
 // best position. A failure that is not a cancellation (the curve rejected, a position out of range, a failed move,
@@ -112,7 +113,7 @@ async function autoFocusLoop(context: OperationContext, focuser: Focuser, camera
 	if (!focuser.connected) return failedOperationResult('disconnected')
 
 	const autoFocus = new AutoFocus({ ...options.algorithm, maxPosition: focuser.position.max })
-	const initialPosition = focuser.position.value
+	const initialPosition = services.focuserMover.position(focuser)
 	let position = initialPosition
 	let step: AutoFocusStep = autoFocus.add(position, 0)
 	let captures = 0
@@ -146,8 +147,8 @@ async function autoFocusLoop(context: OperationContext, focuser: Focuser, camera
 async function moveWithinRange(context: OperationContext, focuser: Focuser, target: number, options: AutoFocusRunOptions, services: AutoFocusServices): Promise<OperationResult<void>> {
 	const { min, max } = focuser.position
 	if (!(target >= min && target <= max)) return failedOperationResult('unexpectedState', `focus position ${target} is outside the range [${min}, ${max}] of ${focuser.name}`)
-	if (!focuser.moving && focuser.position.value === target) return successfulOperationResult(undefined)
-	return await services.focuserCommander.moveTo(context, focuser, target, options.move)
+	if (!focuser.moving && services.focuserMover.position(focuser) === target) return successfulOperationResult(undefined)
+	return await services.focuserMover.moveTo(context, focuser, target, options.move)
 }
 
 // Resolves `failure` after moving the focuser back to `position` when the operation is still alive; a cancelled
