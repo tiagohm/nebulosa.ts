@@ -16,7 +16,8 @@ import { type CameraCaptureListener, CameraCaptureReporter } from './reporter'
 import { type CameraAutoSubFolderMode, type CameraCaptureClock, type CameraCaptureStart, type CameraFrameEvent, DEFAULT_CAMERA_CAPTURE_EVENT, exposureTimeInMicroseconds, exposureTimeInSeconds, SYSTEM_CAMERA_CAPTURE_CLOCK } from './types'
 
 // Operation-backed camera capture over an INDI CameraManager. A capture acquires the camera through an
-// operation scope, configures each exposure only after its frame path is known, lets the caller veto it
+// operation scope, lets the caller hold each frame back asynchronously before it is prepared, configures
+// each exposure only after its frame path is known, lets the caller veto it
 // synchronously right before dispatch, waits for both the exposure completion and the BLOB of the same
 // generation, decodes, publishes and optionally writes the frame, and quiesces the camera before the lease is
 // released. A BLOB left behind by a terminated exposure quarantines the camera until it is observed, because
@@ -116,6 +117,16 @@ export interface CameraExposureAttempt {
 	readonly generation: number
 }
 
+// Frame about to be prepared, as shown to `CameraCaptureHooks.beforeFrame`.
+export interface CameraFramePreparation {
+	// Generation the frame opens if it is dispatched; the first frame of a capture is 1.
+	readonly generation: number
+}
+
+// Asynchronous gate awaited before each frame is prepared (see `CameraCaptureHooks.beforeFrame`). Resolves
+// undefined to let the frame go, or a failure that ends the capture.
+export type CameraFrameGate = (frame: CameraFramePreparation, signal: AbortSignal) => Promise<FailedOperationResult | undefined>
+
 // Optional collaborators supplied per capture by whoever started it. They apply to that capture only: the next
 // capture resolves its own.
 export interface CameraCaptureHooks {
@@ -123,6 +134,14 @@ export interface CameraCaptureHooks {
 	readonly listener?: CameraCaptureListener
 	// Receives the terminal events of a capture rejected before a session exists; defaults to listener.
 	readonly rejectedListener?: CameraCaptureListener
+	// Gate awaited before every frame, the first included: after the inter-frame delay and before the frame path
+	// is resolved and the camera configured, so a caller can hold the next exposure back, such as until it can
+	// take its frame. The capture keeps the camera lease while it waits, and the delay is not shortened by it.
+	// signal aborts when the capture is cancelled, a device fails, or stop() is called, and the wait ends then
+	// even if the gate ignores it: a stop ends the capture successfully without a new frame, a cancellation or a
+	// device failure with that failure. A resolved failure ends the capture with it without exposing, like a
+	// `beforeExposure` refusal; a rejection not caused by signal refuses the frame as `commandFailed`.
+	readonly beforeFrame?: CameraFrameGate
 	// Last decision before each exposure is dispatched, called synchronously after every camera configuration
 	// command and immediately before the exposure command, with nothing awaited and no device commanded in
 	// between. Returning a failure ends the capture with it without dispatching: no exposure is commanded, no
@@ -176,6 +195,8 @@ interface CameraCaptureSessionContext {
 	readonly options: CameraCapturerOptions
 	// Receives presentation events.
 	readonly listener: CameraCaptureListener
+	// Asynchronous gate before each frame is prepared.
+	readonly beforeFrame?: CameraFrameGate
 	// Synchronous veto right before each exposure is dispatched.
 	readonly beforeExposure?: (attempt: CameraExposureAttempt) => FailedOperationResult | undefined
 	// Writer of auto-saved frames, resolved once for the whole capture.
@@ -277,7 +298,7 @@ export class CameraCapturer implements DeviceHandler<Camera>, Disposable {
 	// composite feature passes its own context so the capture nests inside the operation already owning the
 	// camera; the coordinator starts a new operation tree. The hooks belong to this capture only: its writer is
 	// `hooks.write`, else `options.write`, else `writeFrameExclusively`.
-	start(scope: OperationScope, camera: Camera, request: CameraCaptureStart, { listener = () => {}, rejectedListener = listener, beforeExposure, write, clock = SYSTEM_CAMERA_CAPTURE_CLOCK, framePath }: CameraCaptureHooks = {}): CameraCaptureHandle {
+	start(scope: OperationScope, camera: Camera, request: CameraCaptureStart, { listener = () => {}, rejectedListener = listener, beforeFrame, beforeExposure, write, clock = SYSTEM_CAMERA_CAPTURE_CLOCK, framePath }: CameraCaptureHooks = {}): CameraCaptureHandle {
 		const key = resourceKey(camera)
 		const started = Promise.withResolvers<OperationResult<void>>()
 		let session: CameraCaptureSession | undefined
@@ -298,6 +319,7 @@ export class CameraCapturer implements DeviceHandler<Camera>, Disposable {
 				cameraManager: this.cameraManager,
 				options: this.options,
 				listener,
+				beforeFrame,
 				beforeExposure,
 				write: frameWriter,
 				clock,
@@ -492,6 +514,10 @@ class CameraCaptureSession {
 			// A device failure recorded outside a rendezvous, such as while the frame path is resolved, only
 			// surfaces here.
 			if (this.#failureResult !== undefined) return this.#finish(this.#failureResult)
+
+			const gated = await this.#beforeFrame()
+			if (!gated.ok) return this.#finish(gated)
+			if (this.#stopController.signal.aborted) break
 
 			const frame = await this.#captureFrame()
 			if (!frame.ok) return this.#finish(frame)
@@ -771,6 +797,34 @@ class CameraCaptureSession {
 		cameraManager.offset(this.camera, request.offset)
 		cameraManager.transferFormat(this.camera, request.transferFormat)
 		cameraManager.compression(this.camera, request.compressed)
+	}
+
+	// Awaits the caller's gate of the next frame, racing it against cancellation, device failure, and stop, so a
+	// gate that ignores its signal cannot hold the capture. Returns the refusal or the failure that ended the
+	// wait, a success when the frame may go or a stop ended the wait (the caller checks the stop), and
+	// `commandFailed` for a gate that rejected on its own.
+	async #beforeFrame(): Promise<OperationResult<void>> {
+		const beforeFrame = this.sessionContext.beforeFrame
+		const signal = AbortSignal.any([this.operationContext.signal, this.#failureController.signal, this.#stopController.signal])
+
+		if (beforeFrame !== undefined && !signal.aborted) {
+			const aborted = Promise.withResolvers<undefined>()
+			const onAbort = () => aborted.resolve(undefined)
+			signal.addEventListener('abort', onAbort, { once: true })
+
+			try {
+				const refusal = await Promise.race([beforeFrame({ generation: this.#reporter.generation + 1 }, signal), aborted.promise])
+				if (refusal !== undefined && !signal.aborted) return refusal
+			} catch (error) {
+				if (!signal.aborted) return failedOperationResult('commandFailed', errorMessage(error))
+			} finally {
+				signal.removeEventListener('abort', onAbort)
+			}
+		}
+
+		if (this.#failureResult !== undefined) return this.#failureResult
+		if (this.operationContext.signal.aborted) return failedOperationResult(abortReason(this.operationContext.signal))
+		return successfulOperationResult(undefined)
 	}
 
 	// Asks the caller whether the configured frame may be dispatched, synchronously. Returns the refusal, or

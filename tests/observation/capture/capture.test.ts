@@ -1848,6 +1848,113 @@ describe('exposure dispatch', () => {
 		}
 	})
 
+	test('awaits beforeFrame before every frame, holding the next exposure until it resolves', async () => {
+		const camera = await connected()
+		const order: string[] = []
+		const original = cameraManager.startExposure.bind(cameraManager)
+		const startExposure = spyOn(cameraManager, 'startExposure').mockImplementation((...args) => {
+			order.push('startExposure')
+			return original(...args)
+		})
+		let released = 0
+
+		try {
+			const result = await capturer.start(coordinator, camera, request({ exposureMode: 'fixed', count: 2 }), {
+				beforeFrame: async ({ generation }) => {
+					order.push(`beforeFrame:${generation}`)
+					if (generation === 2) await Bun.sleep(300)
+					released = performance.now()
+					return undefined
+				},
+				beforeExposure: () => {
+					// The exposure is configured only after the gate let the frame go.
+					expect(performance.now()).toBeGreaterThanOrEqual(released)
+					return undefined
+				},
+			}).result
+
+			expect(result.ok).toBeTrue()
+			expect(order).toEqual(['beforeFrame:1', 'startExposure', 'beforeFrame:2', 'startExposure'])
+		} finally {
+			startExposure.mockRestore()
+		}
+	})
+
+	test('ends the capture successfully without a new frame when stopped while beforeFrame waits', async () => {
+		const camera = await connected()
+		const waiting = Promise.withResolvers<void>()
+		let signal: AbortSignal | undefined
+
+		const handle = capturer.start(coordinator, camera, request({ exposureMode: 'loop' }), {
+			beforeFrame: ({ generation }, gateSignal) => {
+				if (generation === 1) return Promise.resolve(undefined)
+				signal = gateSignal
+				waiting.resolve()
+				// A gate that ignores its signal still cannot hold the capture.
+				return new Promise(() => {})
+			},
+		})
+
+		await waiting.promise
+		handle.stop()
+		const result = await handle.result
+
+		expect(result.ok).toBeTrue()
+		if (result.ok) expect(result.value.frameCount).toBe(1)
+		expect(signal?.aborted).toBeTrue()
+		expect(arbiter.availability(keyOf(camera))).toBe('available')
+	})
+
+	test('fails as aborted when cancelled while beforeFrame waits', async () => {
+		const camera = await connected()
+		const waiting = Promise.withResolvers<void>()
+		const startExposure = spyOn(cameraManager, 'startExposure')
+
+		try {
+			const handle = capturer.start(coordinator, camera, request(), {
+				beforeFrame: (_, signal) => {
+					waiting.resolve()
+					return new Promise((resolve) => {
+						signal.addEventListener('abort', () => resolve(undefined))
+					})
+				},
+			})
+
+			await waiting.promise
+			await handle.cancel()
+
+			expect(await handle.result).toEqual(failedOperationResult('aborted'))
+			expect(startExposure).not.toHaveBeenCalled()
+			expect(arbiter.availability(keyOf(camera))).toBe('available')
+		} finally {
+			startExposure.mockRestore()
+		}
+	})
+
+	test('ends the capture with the refusal of beforeFrame, and refuses a frame whose gate rejects', async () => {
+		const camera = await connected()
+		const startExposure = spyOn(cameraManager, 'startExposure')
+
+		try {
+			const refused = await capturer.start(coordinator, camera, request({ exposureMode: 'fixed', count: 3 }), {
+				beforeFrame: ({ generation }) => Promise.resolve(generation === 2 ? failedOperationResult('unexpectedState', 'no analysis capacity') : undefined),
+			}).result
+
+			expect(refused).toEqual(failedOperationResult('unexpectedState', 'no analysis capacity'))
+			expect(startExposure).toHaveBeenCalledTimes(1)
+
+			const rejected = await capturer.start(coordinator, camera, request(), {
+				beforeFrame: () => Promise.reject(new Error('gate failed')),
+			}).result
+
+			expect(rejected).toEqual(failedOperationResult('commandFailed', 'gate failed'))
+			expect(startExposure).toHaveBeenCalledTimes(1)
+			expect(arbiter.availability(keyOf(camera))).toBe('available')
+		} finally {
+			startExposure.mockRestore()
+		}
+	})
+
 	test('fails a dispatch that throws without any physical update and opens no generation', async () => {
 		const camera = await connected()
 		const recording = recorder()
