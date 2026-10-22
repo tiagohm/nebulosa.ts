@@ -602,12 +602,18 @@ function distantSkyStatistics(raw: Image['raw'], stride: number, x: number, y: n
 	return [median, STANDARD_DEVIATION_SCALE * medianBySelectionOf(samples, count), count]
 }
 
+// Returns the number of curve-of-growth bins that holds every sample of an aperture of `radius` pixels: its
+// spread reaches `radius` + STAR_HFD_SAMPLE_HALF_WIDTH, and each ramp touches the bin after its start.
+export function curveOfGrowthBinCount(radius: number) {
+	return Math.ceil((radius + STAR_HFD_SAMPLE_HALF_WIDTH) / STAR_HFD_BIN_WIDTH) + 2
+}
+
 // Adds a sample's positive signal to the curve of growth, spread uniformly over the radii from
 // `distance` - STAR_HFD_SAMPLE_HALF_WIDTH to `distance` + STAR_HFD_SAMPLE_HALF_WIDTH pixels, clamped at
 // the center. The spread is a rising ramp minus a later one, and each ramp touches only the two second
 // differences around its start, so a sample costs O(1). The bins must extend one bin past the radius
 // `distance` + STAR_HFD_SAMPLE_HALF_WIDTH.
-function addToCurveOfGrowth(secondDifferences: Float64Array, distance: number, signal: number) {
+export function addToCurveOfGrowth(secondDifferences: Float64Array, distance: number, signal: number) {
 	const start = Math.max(0, distance - STAR_HFD_SAMPLE_HALF_WIDTH)
 	const end = distance + STAR_HFD_SAMPLE_HALF_WIDTH
 	const density = signal / (end - start)
@@ -628,7 +634,7 @@ function addRampToCurveOfGrowth(secondDifferences: Float64Array, radius: number,
 
 // Returns the diameter, in pixels, at which the curve of growth given by its first `count` second
 // differences reaches half of `flux`, interpolated linearly inside the crossing bin; 0 when it never does.
-function halfFluxDiameter(secondDifferences: Readonly<Float64Array>, count: number, flux: number) {
+export function halfFluxDiameter(secondDifferences: Readonly<Float64Array>, count: number, flux: number) {
 	const halfFlux = 0.5 * flux
 	let binFlux = 0
 	let cumulative = 0
@@ -668,7 +674,7 @@ function measureAperture(raw: Image['raw'], width: number, height: number, strid
 	const signalRadiusSq = signalRadius * signalRadius
 	const edgeRadius = Math.max(0, signalRadius - 1)
 	const edgeRadiusSq = edgeRadius * edgeRadius
-	const binCount = Math.ceil((signalRadius + STAR_HFD_SAMPLE_HALF_WIDTH) / STAR_HFD_BIN_WIDTH) + 2
+	const binCount = curveOfGrowthBinCount(signalRadius)
 	const bins = (workspace.bins = ensureCapacity(workspace.bins, binCount))
 	bins.fill(0, 0, binCount)
 	let flux = 0

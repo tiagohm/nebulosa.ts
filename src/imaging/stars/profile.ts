@@ -4,7 +4,7 @@ import { medianBySelectionOf, medianOf, STANDARD_DEVIATION_SCALE } from '../../m
 import type { Angle } from '../../math/units/angle'
 import type { Image, ImageChannelOrGray } from '../model/types'
 import { grayscale } from '../processing/geometry'
-import { type DetectStarOptions, detectStars } from './detector'
+import { addToCurveOfGrowth, curveOfGrowthBinCount, type DetectStarOptions, detectStars, halfFluxDiameter } from './detector'
 import { createMoffatFitWorkspace, fitEllipticalMoffat, type MoffatFitWorkspace, type MoffatProfileFit } from './profile.moffat'
 import { starMomentShape } from './shape'
 
@@ -13,8 +13,6 @@ import { starMomentShape } from './shape'
 
 // Full width at half maximum of a unit-variance Gaussian, in pixels per standard deviation.
 const GAUSSIAN_FWHM_FACTOR = 2 * Math.sqrt(2 * Math.LN2)
-// Width of the radial bins used to approximate the curve-of-growth HFD, in pixels.
-const HFD_BIN_WIDTH = 0.25
 // Default initial circular aperture radius, in pixels.
 const DEFAULT_INITIAL_RADIUS = 4
 // Default maximum circular aperture radius, in pixels.
@@ -53,7 +51,9 @@ export interface StarProfile extends Readonly<Point> {
 	readonly flux?: number
 	// Background-limited SNR from flux and robust local background deviation in normalized samples.
 	readonly snr?: number
-	// Curve-of-growth half-flux diameter, in pixels, with at most one radial-bin diameter of quantization error.
+	// Curve-of-growth half-flux diameter, in pixels. Each sample spreads its signal uniformly over the radii within
+	// half a pixel of its center, on 0.25-pixel bins, so the HFD of compact stars stays within about 0.1 pixel under
+	// sub-pixel motion; point-sampled pixel distances would jitter by up to about 0.9 pixel.
 	readonly hfd?: number
 	// Geometric-mean Gaussian-equivalent FWHM, in pixels.
 	readonly fwhm?: number
@@ -111,7 +111,7 @@ interface ProfileScratch {
 	ring: Float64Array
 	// Absolute background deviations before sorting for MAD.
 	deviations: Float64Array
-	// Flux accumulated by radial HFD bin.
+	// Second differences of the curve of growth on its radial bin grid.
 	bins: Float64Array
 	// Fixed-size workspace reused by optional Moffat fits.
 	readonly moffat: MoffatFitWorkspace
@@ -260,7 +260,7 @@ function estimateBackground(image: Image, x: number, y: number, radius: number, 
 	return Number.isFinite(deviation) ? { background, deviation, nonFinite } : undefined
 }
 
-// Measures a signal aperture, refines its centroid, and fills radial HFD bins around that centroid.
+// Measures a signal aperture, refines its centroid, and builds its curve of growth around that centroid.
 function measureSignal(image: Image, x: number, y: number, radius: number, background: number, deviation: number, saturationLevel: number, scratch: ProfileScratch): SignalMeasurement | undefined {
 	const { raw, metadata } = image
 	const { width, height, stride } = metadata
@@ -307,7 +307,7 @@ function measureSignal(image: Image, x: number, y: number, radius: number, backg
 	const refinedY0 = Math.max(0, Math.ceil(centroidY - radius))
 	const refinedX1 = Math.min(width - 1, Math.floor(centroidX + radius))
 	const refinedY1 = Math.min(height - 1, Math.floor(centroidY + radius))
-	const binCount = Math.ceil(radius / HFD_BIN_WIDTH) + 1
+	const binCount = curveOfGrowthBinCount(radius)
 	scratch.bins = ensureCapacity(scratch.bins, binCount)
 	scratch.bins.fill(0, 0, binCount)
 
@@ -347,15 +347,14 @@ function measureSignal(image: Image, x: number, y: number, radius: number, backg
 			momentYY += signal * dySq
 			if (signal > peak) peak = signal
 			if (distanceSq >= outerRadiusSq) outerFlux += signal
-			const bin = Math.min(binCount - 1, Math.floor(Math.sqrt(distanceSq) / HFD_BIN_WIDTH))
-			scratch.bins[bin] += signal
+			addToCurveOfGrowth(scratch.bins, Math.sqrt(distanceSq), signal)
 		}
 	}
 
 	if (!(refinedFlux > 0) || refinedAperturePixels === 0 || !Number.isFinite(peak)) return undefined
 
 	const hfd = halfFluxDiameter(scratch.bins, binCount, refinedFlux)
-	if (!Number.isFinite(hfd)) return undefined
+	if (!(hfd > 0)) return undefined
 
 	const shape = starMomentShape(momentXX / refinedFlux, momentXY / refinedFlux, momentYY / refinedFlux)
 	// Samples are normalized, not electrons, so source Poisson variance is not added to the noise.
@@ -377,26 +376,6 @@ function measureSignal(image: Image, x: number, y: number, radius: number, backg
 		outerFlux,
 		nonFinite,
 	}
-}
-
-// Interpolates the radius enclosing half of the positive signal and returns its diameter in pixels.
-function halfFluxDiameter(bins: Readonly<Float64Array>, count: number, flux: number): number {
-	const halfFlux = 0.5 * flux
-	let cumulative = 0
-
-	for (let i = 0; i < count; i++) {
-		const binFlux = bins[i]
-		const next = cumulative + binFlux
-
-		if (next >= halfFlux && binFlux > 0) {
-			const fraction = clamp((halfFlux - cumulative) / binFlux, 0, 1)
-			return 2 * (i + fraction) * HFD_BIN_WIDTH
-		}
-
-		cumulative = next
-	}
-
-	return Number.NaN
 }
 
 // Detects a separated secondary local maximum that makes the single-star aperture plausibly blended.

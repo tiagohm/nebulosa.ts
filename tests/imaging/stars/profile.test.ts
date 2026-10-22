@@ -3,6 +3,7 @@ import { PI, PIOVERFOUR } from '../../../src/core/constants'
 import type { Image } from '../../../src/imaging/model/types'
 import { detectStarProfiles, measureStarProfile, measureStarProfiles } from '../../../src/imaging/stars/profile'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
+import { erfc } from '../../../src/math/numerical/statistics'
 
 // Creates a normalized mono image suitable for deterministic star-profile measurements.
 function image(width: number, height: number, background: number = 0.05): Image {
@@ -84,6 +85,47 @@ test('measures a round Gaussian with refined centroid and HFD', () => {
 	expect(profile.fwhm).toBeCloseTo(expectedFwhm, 1)
 	expect(profile.theta).toBeUndefined()
 	expect(profile.flags).not.toContain('nonFinite')
+})
+
+// Adds a round Gaussian integrated exactly over each pixel, so its flux is `amplitude` times the area under the profile.
+function addPixelIntegratedGaussian(image: Image, x: number, y: number, sigma: number, amplitude: number): void {
+	const { raw, metadata } = image
+	const { width, height, stride } = metadata
+	const scale = 1 / (sigma * Math.SQRT2)
+	const column = new Float64Array(width)
+	for (let px = 0; px < width; px++) column[px] = 0.5 * (erfc((px - 0.5 - x) * scale) - erfc((px + 0.5 - x) * scale))
+
+	for (let py = 0; py < height; py++) {
+		const row = py * stride
+		const weight = amplitude * 0.5 * (erfc((py - 0.5 - y) * scale) - erfc((py + 0.5 - y) * scale))
+		for (let px = 0; px < width; px++) raw[row + px] += weight * column[px]
+	}
+}
+
+// Point-sampled radial bins made the HFD of a compact star jump by up to about ±0.9 pixel with sub-pixel motion.
+test('measures a compact star HFD that is stable against sub-pixel motion', () => {
+	// FWHM 2.5 pixels; integrated over the pixel, the Gaussian variance grows by about 1/12 pixel squared.
+	const sigma = 2.5 / (2 * Math.sqrt(2 * Math.LN2))
+	const expected = 2 * Math.sqrt(2 * Math.LN2) * Math.sqrt(sigma * sigma + 1 / 12)
+	const hfd: number[] = []
+
+	for (const [dx, dy] of [
+		[0, 0],
+		[0.25, 0],
+		[0.5, 0.5],
+		[0.1, 0.75],
+		[0.3, 0.6],
+		[0.75, 0.25],
+	]) {
+		const source = image(49, 49)
+		addPixelIntegratedGaussian(source, 24 + dx, 24 + dy, sigma, 5)
+		const profile = measureStarProfile(source, { x: 24, y: 24 }, { minSNR: 0 })
+		expect(profile.valid).toBeTrue()
+		hfd.push(profile.hfd!)
+	}
+
+	for (const value of hfd) expect(value).toBeCloseTo(expected, 1)
+	expect(Math.max(...hfd) - Math.min(...hfd)).toBeLessThan(0.1)
 })
 
 // Recovers principal Gaussian-equivalent axes and axial orientation from an elliptical profile.
