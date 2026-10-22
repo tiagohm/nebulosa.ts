@@ -1,15 +1,17 @@
 import { tmpdir } from 'os'
 import { basename, dirname, extname, join, resolve } from 'path'
+import { errorMessage } from '../../core/util'
 import type { DetectedStar } from '../../imaging/stars/detector'
-import { readCsv } from '../../io/csv'
+import { type CsvRow, readCsv } from '../../io/csv'
 import { readFits } from '../../io/formats/fits/fits'
 import { bufferSource } from '../../io/io'
 import { type Angle, normalizeAngle, toDeg, toHour } from '../../math/units/angle'
 import { type PlateSolveOptions, plateSolutionFrom } from './platesolver'
 
 // ASTAP command-line solver integration: spawns the local `astap` binary to detect stars (via its
-// CSV output) and to plate-solve images (writing a WCS .ini that is parsed into a PlateSolution). All
-// process I/O uses Bun; angles in options are radians and converted to ASTAP's degree/hour conventions.
+// CSV output, failing with a typed AstapError) and to plate-solve images (writing a WCS .ini that is
+// parsed into a PlateSolution). All process I/O uses Bun; angles in options are radians and converted to
+// ASTAP's degree/hour conventions.
 
 // Options for ASTAP-based star detection.
 export interface AstapStarDetectionOptions {
@@ -36,62 +38,97 @@ export interface AstapPlateSolveOptions extends PlateSolveOptions {
 // Default process timeout: 5 minutes, in milliseconds.
 const DEFAULT_TIMEOUT = 300000
 
-// Detects stars by running ASTAP's `-extract` and parsing its CSV (x, y, hfd, snr, flux). Returns the
-// detections sorted/truncated to `maxStars` by SNR, or an empty array on failure or missing input.
-// ASTAP writes FITS 1-based pixel coordinates (`xc+1`, `yc+1`); results use DetectedStar's 0-based
-// array indices, matching detectStars.
-export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0, executable, timeout }: Readonly<AstapStarDetectionOptions> = {}, signal?: AbortSignal): Promise<DetectedStar[]> {
-	if (!input || !(await Bun.file(input).exists())) {
-		console.error('invalid input or input file does not exists')
-		return []
+// Why an ASTAP star detection produced no result:
+// - unavailable: the executable could not be started, such as a missing file.
+// - timeout: the process ran longer than the timeout and was killed.
+// - aborted: the signal aborted the run and the process was killed.
+// - failed: the input file is missing, or ASTAP ended without writing a readable CSV.
+export type AstapErrorCode = 'unavailable' | 'timeout' | 'aborted' | 'failed'
+
+// Failure of an ASTAP run, with the reason a caller can act on.
+export class AstapError extends Error {
+	// Creates an error of the given reason; cause is the underlying failure, when there is one.
+	constructor(
+		readonly code: AstapErrorCode,
+		message: string,
+		options?: ErrorOptions,
+	) {
+		super(message, options)
+		this.name = 'AstapError'
 	}
+}
+
+// Detects stars by running ASTAP's `-extract` and parsing the CSV (x, y, hfd, snr, flux) it writes next to
+// the input file, which is deleted afterwards, so the input's directory must be writable. Returns the
+// detections sorted/truncated to `maxStars` by SNR, and an empty array only when ASTAP wrote a CSV without
+// stars. Throws AstapError: `unavailable` when the executable cannot be started, `timeout` and `aborted`
+// when the process was killed for either reason, and `failed` for a missing input or when no readable CSV
+// was written (its exit code is in the message). ASTAP writes FITS 1-based pixel coordinates (`xc+1`,
+// `yc+1`); results use DetectedStar's 0-based array indices, matching detectStars.
+export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0, executable, timeout }: Readonly<AstapStarDetectionOptions> = {}, signal?: AbortSignal): Promise<DetectedStar[]> {
+	if (!input || !(await Bun.file(input).exists())) throw new AstapError('failed', `the input file "${input}" does not exist`)
+	if (signal?.aborted) throw new AstapError('aborted', 'the star detection was aborted')
 
 	const inputPath = resolve(input)
 	executable ||= executableForCurrentPlatform()
 	timeout ||= DEFAULT_TIMEOUT
 
-	const process = Bun.spawn([executable, '-f', inputPath, '-z', '0', '-extract', minSNR.toFixed(0)], { signal, timeout })
-	const exitCode = await process.exited
+	let process: Bun.Subprocess
+
+	try {
+		process = Bun.spawn([executable, '-f', inputPath, '-z', '0', '-extract', minSNR.toFixed(0)], { signal, stdout: 'ignore', stderr: 'ignore' })
+	} catch (error) {
+		throw new AstapError('unavailable', `unable to start ASTAP: ${errorMessage(error)}`, { cause: error })
+	}
+
+	let timedOut = false
+
+	const timer = setTimeout(() => {
+		timedOut = true
+		process.kill()
+	}, timeout)
 
 	const file = Bun.file(`${join(dirname(inputPath), basename(inputPath, extname(inputPath)))}.csv`)
 
-	if (await file.exists()) {
+	try {
+		const exitCode = await process.exited
+
+		if (timedOut) throw new AstapError('timeout', `ASTAP did not finish within ${timeout} ms`)
+		if (signal?.aborted) throw new AstapError('aborted', 'the star detection was aborted')
+		if (!(await file.exists())) throw new AstapError('failed', `ASTAP wrote no star list (exit code ${exitCode})`)
+
+		let csv: CsvRow[]
+
 		try {
-			const csv = readCsv(await file.text())
-
-			if (csv.length > 0) {
-				const stars = new Array<DetectedStar>(csv.length)
-
-				for (let i = 0; i < csv.length; i++) {
-					const row = csv[i]
-					const x = +row[0] - 1
-					const y = +row[1] - 1
-					const hfd = +row[2]
-					const snr = +row[3]
-					const flux = +row[4]
-
-					stars[i] = { x, y, hfd, snr, flux }
-				}
-
-				if (maxStars > 0 && stars.length > maxStars) {
-					stars.sort((a, b) => b.snr - a.snr)
-					stars.splice(maxStars)
-				}
-
-				return stars
-			} else {
-				console.warn('no stars')
-			}
-		} catch (e) {
-			console.error('error reading CSV', e)
-		} finally {
-			await file.delete()
+			csv = readCsv(await file.text())
+		} catch (error) {
+			throw new AstapError('failed', `unable to read the star list of ASTAP: ${errorMessage(error)}`, { cause: error })
 		}
-	} else {
-		console.error('astap star detection failed with exit code', exitCode)
-	}
 
-	return []
+		const stars = new Array<DetectedStar>(csv.length)
+
+		for (let i = 0; i < csv.length; i++) {
+			const row = csv[i]
+			const x = +row[0] - 1
+			const y = +row[1] - 1
+			const hfd = +row[2]
+			const snr = +row[3]
+			const flux = +row[4]
+
+			stars[i] = { x, y, hfd, snr, flux }
+		}
+
+		if (maxStars > 0 && stars.length > maxStars) {
+			stars.sort((a, b) => b.snr - a.snr)
+			stars.splice(maxStars)
+		}
+
+		return stars
+	} finally {
+		clearTimeout(timer)
+		// A killed run may still have written a partial list.
+		if (await file.exists()) await file.delete()
+	}
 }
 
 // Plate-solves a file with the local ASTAP executable, then parses the emitted WCS .ini into a

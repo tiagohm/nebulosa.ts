@@ -7056,10 +7056,10 @@ console.log(await astapPlateSolve('data/NGC3372--32.1.fit', { fov: deg(0.54) }, 
 
 `astapDetectStars(input, options?, signal?)` detects the stars of an image with the `-extract` mode of the local ASTAP program and returns them as `DetectedStar` records (`x`, `y`, `hfd`, `snr`, `flux`), the same shape as the built-in detector of the library. It runs `astap` on `input` (a path to a FITS or image file), parses the CSV that ASTAP writes next to the input and deletes it. The ASTAP binary is required (default `C:\Program Files\astap\astap.exe` on Windows, `astap` on the `PATH` elsewhere, or `options.executable`).
 
-The pixel coordinates are converted from the 1-based pixels of ASTAP to 0-based array indices. `minSNR` is the minimum signal-to-noise ratio passed to ASTAP (default 0), `maxStars` keeps only the brightest stars by SNR (0, the default, keeps all) and `timeout` is in milliseconds (default 300000). Failures do not throw: a missing input file, an ASTAP error or an empty list of stars give an empty array after a message on the console, and an aborted `signal` stops ASTAP and also gives an empty array.
+The pixel coordinates are converted from the 1-based pixels of ASTAP to 0-based array indices. `minSNR` is the minimum signal-to-noise ratio passed to ASTAP (default 0), `maxStars` keeps only the brightest stars by SNR (0, the default, keeps all) and `timeout` is in milliseconds (default 300000). The CSV is written next to the input, so its directory must be writable. An empty array means ASTAP ran and found no stars; every other failure rejects with an `AstapError` whose `code` tells why: `unavailable` when the executable cannot be started, `timeout` when ASTAP ran longer than `timeout` and was killed, `aborted` when `signal` aborted it (ASTAP is killed), and `failed` for a missing input file or when ASTAP wrote no readable CSV (the message carries its exit code). A partial CSV of a killed run is deleted too.
 
 ```ts
-import { astapDetectStars } from 'nebulosa/src/astrometry/solvers/astap'
+import { AstapError, astapDetectStars } from 'nebulosa/src/astrometry/solvers/astap'
 
 // The five stars with the highest SNR of an image (file of the repository).
 const stars = await astapDetectStars('data/apod4.jpg', { maxStars: 5 })
@@ -7069,6 +7069,13 @@ console.log(stars[0]) // { x: 464.9656, y: 119.9062, hfd: 7.5315, snr: 295, flux
 // A filter on the signal-to-noise ratio, and a time limit.
 const bright = await astapDetectStars('data/apod4.jpg', { minSNR: 30, timeout: 60000 })
 console.log(bright.every((star) => star.hfd > 0 && star.flux > 0)) // true
+
+// A failure is told apart from an image without stars.
+try {
+	await astapDetectStars('data/apod4.jpg', { executable: '/missing/astap' })
+} catch (error) {
+	if (error instanceof AstapError) console.log(error.code) // unavailable
+}
 ```
 
 ### Astrometry.net Index Selection
