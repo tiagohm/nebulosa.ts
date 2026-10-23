@@ -8,10 +8,32 @@ import { cdMatrix, DEC_TAN, DEC_TAN_SIP, RA_TAN, RA_TAN_SIP, tanUnproject } from
 // PlateSolution (ICRS center of the image, scale, field size, orientation, parity), and only for an
 // equatorial TAN/TAN-SIP solution with known dimensions. ASTAP, nova.astrometry.net, local solve-field, and
 // libastrometry each have their own async entry point and hint rules; they are not implementations of one
-// function type. Angles are radians.
+// function type. The ASTAP and solve-field solvers resolve undefined only for a search that ended without a
+// solution, and reject with a PlateSolveError when they could not search; nova rejects with it for a refused
+// login. Angles are radians.
 
 // Image handedness relative to the sky: NORMAL keeps east-left, FLIPPED is mirror-imaged.
 export type Parity = 'NORMAL' | 'FLIPPED'
+
+// Why a solver could not search:
+// - unavailable: the program could not be started, or the service refused the login.
+// - timeout: the solve ran longer than its timeout and was stopped.
+// - aborted: the caller's signal stopped the solve.
+// - failed: the solver ran and reported an error, or produced an unreadable or invalid WCS.
+export type PlateSolveErrorCode = 'unavailable' | 'timeout' | 'aborted' | 'failed'
+
+// Failure of a plate solve that is not a search without a solution, with the reason a caller can act on.
+export class PlateSolveError extends Error {
+	// Creates an error of the given reason; cause is the underlying failure, when there is one.
+	constructor(
+		readonly code: PlateSolveErrorCode,
+		message: string,
+		options?: ErrorOptions,
+	) {
+		super(message, options)
+		this.name = 'PlateSolveError'
+	}
+}
 
 // Optional hints a backend may use to constrain the search. Each solver decides which fields it
 // sends and whether a radius requires a center. See the backend function for that rule.
@@ -27,6 +49,21 @@ export interface PlateSolveOptions {
 	downsample?: number
 	// Maximum solve time, in milliseconds.
 	timeout?: number
+}
+
+// Reads the last characters of a solver diagnostic stream, at most `limit`, trimmed. Drains the whole stream so a
+// verbose program never blocks on a full pipe, but keeps only the tail. Resolves '' for an absent stream.
+export async function streamTail(stream: ReadableStream<Uint8Array> | undefined, limit: number = 512) {
+	if (!stream) return ''
+
+	const decoder = new TextDecoder()
+	let tail = ''
+
+	for await (const chunk of stream) {
+		tail = (tail + decoder.decode(chunk, { stream: true })).slice(-limit)
+	}
+
+	return (tail + decoder.decode()).slice(-limit).trim()
 }
 
 // A solved field. Extends the source FITS header with derived geometry; angles are radians. rightAscension and
