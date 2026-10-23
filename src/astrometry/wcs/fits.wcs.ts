@@ -8,6 +8,7 @@ import { type Angle, deg, normalizeAngle, normalizePI } from '../../math/units/a
 // variants into a unified row-major CD matrix, builds a compact tangent-plane descriptor (tanHeader),
 // and provides forward/inverse sky↔pixel transforms (tanProject/tanUnproject) including SIP distortion
 // polynomials, whose orders and coefficients are validated on every read (sipOrdersValid, sipKeywordsValid).
+// Non-canonical forward constant/linear terms written by ASTAP are evaluated without changing the header.
 // Angles are radians; FITS keyword values are in degrees and converted on read. References: FITS Standard 4.0
 // §8, WCS Papers I/II (Greisen & Calabretta 2002; Calabretta & Greisen 2002) and the SIP convention.
 
@@ -19,7 +20,7 @@ const PC_KEY_PATTERN = /^PC\d+_\d+$/
 const SIP_COEFFICIENT_KEY_PATTERN = /^(A|AP|B|BP)_(\d+)_(\d+)$/
 // Matches every WCS keyword (including SIP terms) handled by this module.
 const WCS_FITS_KEY_PATTERN = /^(?:WCSAXES|CUNIT\d+|CTYPE\d+|CRPIX\d+|CRVAL\d+|PS\d+_\d+|PV\d+_\d+|CD\d+_\d+|PC\d+_\d+|CDELT\d+|CROTA\d+|RADESYS|LONPOLE|LATPOLE|EQUINOX|A_\d+_\d+|AP_\d+_\d+|B_\d+_\d+|BP_\d+_\d+|A_ORDER|AP_ORDER|B_ORDER|BP_ORDER|A_DMAX|B_DMAX)$/
-// Iteration cap for the Newton inversion of the forward SIP polynomial.
+// Iteration cap for the fixed-point inversion of the forward SIP polynomial.
 const SIP_MAX_ITERATIONS = 20
 // Pixel convergence tolerance for the SIP inversion.
 const SIP_TOLERANCE = 1e-9
@@ -100,8 +101,8 @@ export const DEC_TAN_SIP = 'DEC--TAN-SIP'
 // Largest SIP polynomial order accepted, forward or reverse. It bounds the O(order²) evaluation of an order
 // read from a file; astrometry.net writes at most SIP_MAXORDER - 1 = 9.
 const SIP_MAX_ORDER = 9
-// Smallest forward SIP order: the constant and linear terms belong to CRPIX and the CD matrix, so a forward
-// polynomial only carries terms of degree 2 and up.
+// Smallest declared forward SIP order. Canonical SIP starts at degree 2; ASTAP's constant/linear terms are
+// also preserved within a declared order of at least 2.
 const SIP_MIN_FORWARD_ORDER = 2
 
 // Projection a CTYPE pair declares: plain gnomonic, gnomonic with SIP distortion, or none of them.
@@ -176,10 +177,9 @@ export function sipOrdersValid(header: FitsHeader) {
 
 // Returns whether every SIP coefficient of a TAN-SIP header fits its declared order, after sipOrdersValid: one
 // scan of the keys. A coefficient must be a finite number, its degree p + q at most the order of its
-// polynomial, and a reverse coefficient needs a declared reverse order. A forward term of degree below 2 is
-// only accepted when exactly zero (astrometry.net writes them zeroed), since a non-zero one would repeat CRPIX
-// or the CD matrix; reverse constant and linear terms are legitimate and kept. A malformed SIP is never read
-// as plain TAN.
+// polynomial, and a reverse coefficient needs a declared reverse order. Constant and linear terms are kept
+// in both directions. ASTAP's non-canonical forward terms are evaluated before the CD matrix, not folded into
+// CRPIX/CD or discarded. A malformed SIP is never read as plain TAN.
 export function sipKeywordsValid(header: FitsHeader) {
 	return sipOrdersValid(header) && sipPolynomials(header) !== undefined
 }
@@ -255,12 +255,6 @@ function sipPolynomials(header: FitsHeader): SipPolynomials | undefined {
 		const order = prefix === 0 ? aOrder : prefix === 1 ? bOrder : prefix === 2 ? apOrder : bpOrder
 
 		if (!(p + q <= order)) return undefined
-
-		// Forward (A, B) terms below degree 2 repeat CRPIX and the CD matrix.
-		if (prefix < 2 && p + q < SIP_MIN_FORWARD_ORDER) {
-			if (value !== 0) return undefined
-			continue
-		}
 
 		const offset = prefix === 0 ? 0 : prefix === 1 ? bOffset : prefix === 2 ? apOffset : bpOffset
 		coefficients[offset + p * (order + 1) + q] = value

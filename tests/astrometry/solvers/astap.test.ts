@@ -272,6 +272,5 @@ test.skipIf(SKIP)('plate solve', async () => {
 	expect(solution!.widthInPixels).toBe(1037)
 	expect(solution!.heightInPixels).toBe(706)
 
-	// Don't test SIP for now, since the latest ASTAP version doesn't returning it
-	// expect(solution!.CTYPE1).toBe('RA---TAN-SIP')
+	// Some ASTAP builds omit SIP; the recorded WCS test above covers builds that emit it.
 })

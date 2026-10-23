@@ -11,6 +11,7 @@ import { cdMatrix, DEC_TAN, DEC_TAN_SIP, RA_TAN, RA_TAN_SIP, tanUnproject } from
 // function type. The ASTAP and solve-field solvers resolve undefined only for a search that ended without a
 // solution, and reject with a PlateSolveError when they could not search; nova rejects with it for a refused
 // login. Angles are radians.
+// An optional pixel-to-sky callback supplies the image center; its header interpretation is caller-owned.
 
 // Image handedness relative to the sky: NORMAL keeps east-left, FLIPPED is mirror-imaged.
 export type Parity = 'NORMAL' | 'FLIPPED'
@@ -88,24 +89,33 @@ export interface PlateSolution extends Readonly<FitsHeader>, Readonly<Equatorial
 	readonly heightInPixels: number
 }
 
+// Maps FITS 1-based pixel centers (x, y) through the associated header to [RA, Dec] in radians in its
+// equatorial frame, or undefined when the position cannot be mapped. The WCS angular keywords must use
+// degrees for the CD-derived summary; validate those units and apply the header's SIP if present.
+export type TanUnprojector = (x: number, y: number) => readonly [number, number] | undefined
+
 // Converts a solved FITS WCS header into a compact plate-solution summary, or undefined unless it proves
 // all of these (FITS Standard 4.0 §8; WCS Papers I/II, Greisen & Calabretta 2002 and Calabretta & Greisen 2002):
 // - CTYPE1/CTYPE2 are exactly (RA---TAN, DEC--TAN) or (RA---TAN-SIP, DEC--TAN-SIP), trimmed and in any case; an
 //   absent CTYPE is a linear axis, and other projections, galactic or ecliptic axes and mixed pairs are refused;
-//   CUNIT1/CUNIT2 absent or degrees, and a TAN-SIP solution well formed (see sipOrdersValid and sipKeywordsValid);
 // - the frame is ICRS: RADESYS = ICRS, FK5 with EQUINOX 2000 or absent, or no RADESYS with no EQUINOX (ICRS) or
 //   EQUINOX = 2000 (FK5 J2000, taken as ICRS); FK4, other equinoxes and apparent frames are refused;
 // - the image dimensions (NAXIS1/NAXIS2, else IMAGEW/IMAGEH) are finite and positive;
-// - the center, tanUnproject of the central pixel ((W + 1) / 2, (H + 1) / 2) in FITS 1-based pixels with SIP
-//   applied, is defined. It is never read from CRVAL, which only equals it when CRPIX is central.
-export function plateSolutionFrom(header: FitsHeader): PlateSolution | undefined {
+// - unproject maps the central pixel ((W + 1) / 2, (H + 1) / 2) in FITS 1-based pixels to finite [RA, Dec]
+//   in radians. The default tanUnproject requires degree units and usable SIP orders/coefficients, including
+//   ASTAP's non-canonical constant/linear terms. A custom callback owns the unit/distortion checks and must
+//   use the same degree-valued header/frame; axis/frame, dimension and CD-matrix checks still use header.
+// The center is never read from CRVAL: even central CRPIX can differ with non-zero forward SIP constants.
+// Returns a fresh summary without mutating header; scale, field size, orientation and parity use CD only,
+// independently of the callback and SIP's local distortion.
+export function plateSolutionFrom(header: FitsHeader, unproject: TanUnprojector = (x, y) => tanUnproject(header, x, y)): PlateSolution | undefined {
 	if (!hasEquatorialTanAxes(header) || !hasIcrsFrame(header)) return undefined
 
 	const widthInPixels = widthKeyword(header, 0)
 	const heightInPixels = heightKeyword(header, 0)
 	if (!(widthInPixels > 0 && heightInPixels > 0 && Number.isFinite(widthInPixels) && Number.isFinite(heightInPixels))) return undefined
 
-	const center = tanUnproject(header, (widthInPixels + 1) / 2, (heightInPixels + 1) / 2)
+	const center = unproject((widthInPixels + 1) / 2, (heightInPixels + 1) / 2)
 	if (center === undefined || !Number.isFinite(center[0]) || !Number.isFinite(center[1])) return undefined
 
 	const [cd11, cd12, cd21, cd22] = cdMatrix(header)
