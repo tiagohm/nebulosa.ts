@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { fitTransit, quadraticTransitFlux, scaledSemiMajorAxisFromDuration, type TransitFitOptions, type TransitParameters, transitFlux, transitFullDuration, transitInclination, transitLightCurve, transitSeparation, transitTotalDuration } from '../../../src/astronomy/events/exoplanet.lightcurve'
+import { nelderMead } from '../../../src/math/numerical/optimization'
 import { gaussian, mulberry32 } from '../../../src/math/numerical/random'
 
 // A hot Jupiter: 1% deep, 3.2 h long transit every 3.5 days, with Sun-like limb darkening.
@@ -277,27 +278,69 @@ describe('transit fit', () => {
 		}
 	})
 
-	test('stays finite and flagged near the model limits', () => {
-		// [truth, initial, noise, options]: a shallow transit, a grazing one, a barely touching one, an occulter larger than
-		// the star and a free limb darkening at low signal-to-noise.
+	test('stays finite near the model limits, with the flags each regime implies', () => {
+		// [truth, initial, noise, options, flags every seed must report]: a shallow transit (b unconstrained, so it rests on
+		// 0), a grazing one, a barely touching one, an occulter larger than the star (p, b and a/R* correlated), a free limb
+		// darkening at low signal-to-noise and a noiseless grazing transit. The noisy grazing and touching fits move between
+		// geometries with the noise, so only their finiteness is required.
 		const cases = [
-			[{ ...HOT_JUPITER, radiusRatio: 0.02 }, { ...HOT_JUPITER, radiusRatio: 0.03 }, 5e-4, {}],
-			[{ ...HOT_JUPITER, impactParameter: 1.05 }, { ...HOT_JUPITER, impactParameter: 0.95 }, 3e-4, {}],
-			[{ ...HOT_JUPITER, impactParameter: 1.09 }, { ...HOT_JUPITER, impactParameter: 1 }, 1e-4, {}],
-			[{ ...HOT_JUPITER, radiusRatio: 1.3, impactParameter: 0.1 }, { ...HOT_JUPITER, radiusRatio: 1.25, impactParameter: 0.2 }, 1e-3, { bounds: { radiusRatio: [0, 2] } }],
-			[HOT_JUPITER, HOT_JUPITER, 1e-3, { free: FIT_ALL }],
+			[{ ...HOT_JUPITER, radiusRatio: 0.02 }, { ...HOT_JUPITER, radiusRatio: 0.03 }, 5e-4, {}, ['parameterAtBound']],
+			[{ ...HOT_JUPITER, impactParameter: 1.05 }, { ...HOT_JUPITER, impactParameter: 0.95 }, 3e-4, {}, []],
+			[{ ...HOT_JUPITER, impactParameter: 1.09 }, { ...HOT_JUPITER, impactParameter: 1 }, 1e-4, {}, []],
+			[{ ...HOT_JUPITER, radiusRatio: 1.3, impactParameter: 0.1 }, { ...HOT_JUPITER, radiusRatio: 1.25, impactParameter: 0.2 }, 1e-3, { bounds: { radiusRatio: [0, 2] } }, ['strongDegeneracy']],
+			[HOT_JUPITER, HOT_JUPITER, 1e-3, { free: FIT_ALL }, []],
+			[{ ...HOT_JUPITER, impactParameter: 1.05 }, { ...HOT_JUPITER, impactParameter: 0.95 }, 0, {}, ['strongDegeneracy', 'grazing']],
 		] as const
 
-		for (const [truth, initial, sigma, options] of cases) {
+		for (const [truth, initial, sigma, options, flags] of cases) {
 			for (let seed = 1; seed <= 6; seed++) {
-				const result = fitTransit(time, observe(time, truth, sigma, seed), sigma, initial, options)
+				const result = fitTransit(time, observe(time, truth, sigma, seed), sigma || 1e-4, initial, options)
 				expect(result.status).toBe('ok')
+				for (const flag of flags) expect(result.flags).toContain(flag)
 
 				const values = [result.chiSquare, result.inclination, result.totalDuration, result.fullDuration, result.baseline, result.predictedImprovement!, ...Object.values(result.parameters).flat(), ...Object.values(result.uncertainties ?? {}), ...(result.covariance ?? [])]
 				for (const value of values) expect(Number.isFinite(value)).toBeTrue()
 				if (result.covariance === undefined) expect(result.flags).toContain('singularCovariance')
+				if (result.flags.includes('parameterAtBound')) expect(result.atBound.length).toBeGreaterThan(0)
 			}
 		}
+	})
+
+	test('restarts from the Gauss-Newton direction when the optimizer stalls', () => {
+		// With a free limb darkening at low signal-to-noise the optimizer stalls in a curved valley at χ² = 304.025 with a
+		// predicted improvement of 0.50, and the full Gauss-Newton step raises χ². Three restarts from the best fraction of
+		// the step bring χ² to 303.580; before them the fit ended as 'notConverged'.
+		const sigma = 1e-3
+		const flux = observe(time, HOT_JUPITER, sigma, 1)
+		const result = fitTransit(time, flux, sigma, HOT_JUPITER, { free: FIT_ALL })
+
+		expect(result.status).toBe('ok')
+		expect(result.chiSquare).toBeLessThan(303.6)
+		expect(result.atBound).toEqual(['limbDarkening'])
+
+		// An independent Nelder-Mead search over the parameters off the bounds, in units of their uncertainties, finds no
+		// point lower by the convergence threshold.
+		const { epoch, radiusRatio, impactParameter, scaledSemiMajorAxis } = result.uncertainties!
+
+		const chiSquare = (x: Readonly<ArrayLike<number>>) => {
+			const parameters = {
+				...result.parameters,
+				epoch: result.parameters.epoch + x[0] * epoch!,
+				radiusRatio: result.parameters.radiusRatio + x[1] * radiusRatio!,
+				impactParameter: Math.abs(result.parameters.impactParameter + x[2] * impactParameter!),
+				scaledSemiMajorAxis: result.parameters.scaledSemiMajorAxis + x[3] * scaledSemiMajorAxis!,
+			}
+			const model = transitLightCurve(time, parameters)
+			const baseline = result.baseline + x[4] * result.uncertainties!.baseline!
+			let sum = 0
+			for (let i = 0; i < time.length; i++) sum += ((flux[i] - baseline * model[i]) / sigma) ** 2
+			return sum
+		}
+
+		expect(chiSquare([0, 0, 0, 0, 0])).toBeCloseTo(result.chiSquare, 6)
+		const polished = nelderMead(chiSquare, [0, 0, 0, 0, 0], { initialStep: 0.3, maxIterations: 5000, tolerance: 1e-9 })
+		expect(polished.converged).toBeTrue()
+		expect(result.chiSquare - polished.value).toBeLessThan(1e-3)
 	})
 
 	test('recovers noisy heteroscedastic photometry within its uncertainties', () => {
@@ -420,6 +463,15 @@ describe('transit fit', () => {
 		// The epoch rests on one side of the transit, so it is much less certain.
 		const full = fitTransit(time, observe(time, HOT_JUPITER, 5e-4, 2), 5e-4, HOT_JUPITER)
 		expect(result.uncertainties!.epoch!).toBeGreaterThan(5 * full.uncertainties!.epoch!)
+	})
+
+	test('flags a missing egress', () => {
+		const ingressOnly = grid(HOT_JUPITER.epoch - 0.2, HOT_JUPITER.epoch, 1 / 720)
+		const result = fitTransit(ingressOnly, observe(ingressOnly, HOT_JUPITER, 5e-4, 2), 5e-4, HOT_JUPITER)
+
+		expect(result.status).toBe('ok')
+		expect(result.flags).toContain('missingEgress')
+		expect(result.flags).not.toContain('missingIngress')
 	})
 
 	test('flags the period degeneracy of a single transit', () => {
