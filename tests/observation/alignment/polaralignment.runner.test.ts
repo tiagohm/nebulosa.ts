@@ -284,6 +284,13 @@ describe('acquisition', () => {
 		expect(result).toMatchObject({ ok: false, error: expect.stringContaining('excessiveRotation') })
 	})
 
+	test('refuses a first pose near the pole before moving', async () => {
+		const fake = new FakeMount(new InstantClock(), deg(85))
+		const result = await acquireThreePointPolarAlignment(coordinator(), fake.mount, CAMERA, OPTIONS, services(fake))
+		expect(result).toMatchObject({ ok: false, reason: 'unexpectedState', error: expect.stringContaining('nearPole') })
+		expect(fake.motions).toHaveLength(0)
+	})
+
 	test('stops on a pier-side change', async () => {
 		const fake = new FakeMount(new InstantClock())
 		fake.clock.onDelay = () => Object.assign(fake.mount, { pierSide: 'EAST' })

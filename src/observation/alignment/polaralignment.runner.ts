@@ -13,7 +13,18 @@ import { type Angle, toDeg } from '../../math/units/angle'
 import type { CameraCapturer } from '../capture/capture'
 import { type CenteringCaptureOptions, type CenteringClock, centeringCaptureRequest, exposureMidpoint, solveResult } from '../mount/centering'
 import { ThreePointPolarAlignment, type ThreePointPolarAlignmentInput, type ThreePointPolarAlignmentResult } from './polaralignment'
-import { classifyPolarAlignmentCandidate, DEFAULT_POLAR_ALIGNMENT_GEOMETRY_LIMITS, type PolarAlignmentCandidateClassification, type PolarAlignmentDirection, type PolarAlignmentGeometryLimits, type PolarAlignmentGeometryQuality, polarAlignmentDisplacement, polarAlignmentGeometryQuality } from './polaralignment.geometry'
+import {
+	classifyPolarAlignmentCandidate,
+	DEFAULT_POLAR_ALIGNMENT_GEOMETRY_LIMITS,
+	type PolarAlignmentCandidateClassification,
+	type PolarAlignmentDirection,
+	type PolarAlignmentGeometryLimits,
+	type PolarAlignmentGeometryQuality,
+	polarAlignmentDisplacement,
+	polarAlignmentEarthFixedVector,
+	polarAlignmentGeometryQuality,
+	polarAlignmentPolarDistance,
+} from './polaralignment.geometry'
 
 // Automatic acquisition and refinement of a three-point polar alignment, reusable outside the
 // application: the runner rotates the mount in RA with timed manual motions at a chosen slew-rate
@@ -220,7 +231,7 @@ const PROBE_GROWTH = 4
 // tracks at the sidereal rate (when it reports track modes), can move west-east and abort, and
 // announces `options.slewRate`. The preset is applied and confirmed first; then the first pose is
 // captured where the mount stands, and each further pose is reached by timed motions in
-// `options.direction`, every one followed by the mechanical settle, a capture and a solve that
+// `options.direction` (a first pose near the pole is refused before any motion), every one followed by the mechanical settle, a capture and a solve that
 // decides whether to accept the pose, move further, or fail. A pier-side or tracking change fails the
 // run as `unexpectedState`, as does a geometry rejection that further motion cannot cure, the
 // exhaustion of the attempts, or a mount that does not move. Never rejects.
@@ -268,6 +279,8 @@ async function acquisitionLoop(context: OperationContext, mount: Mount, camera: 
 	const first = await acquireSample(context, mount, camera, 1, ++captures, options, services)
 	if (!first.ok) return first
 	if (first.value === undefined) return failedOperationResult('commandFailed', 'the first pose did not solve')
+	// Refused before any motion: near the pole the rotation about it is no longer the mechanical one.
+	if (polarAlignmentPolarDistance(polarAlignmentEarthFixedVector(first.value.sample)) < limits.minimumPolarDistance) return failedOperationResult('unexpectedState', 'pose 1 rejected: nearPole')
 	listener?.({ type: 'accepted', point: 1, sample: first.value.sample, solution: first.value.solution })
 
 	const points: ThreePointPolarAlignmentInput[] = [first.value.sample]
