@@ -439,7 +439,8 @@ describe('degenerate data', () => {
 
 	// Regression: an error ratio that underflows the relative weight (1e-170, squared) or even its square root
 	// (1e-350) to 0 used to drop the chi-square term of a sample one sigma away, ((large - 0) / large)^2 = 1,
-	// reporting a perfect fit. The four other samples fit the cosine exactly and fix the model, so
+	// reporting a perfect fit; so did a pre-scaling set by that sample, which rounded Number.MIN_VALUE to 0
+	// next to Number.MAX_VALUE. The four other samples fit the cosine exactly and fix the model, so
 	// chi-square goes from 5 to 1.
 	test('chi-square term of a sample with an underflowed weight', () => {
 		const time = [0, 1, 2, 3, 4]
@@ -452,9 +453,12 @@ describe('degenerate data', () => {
 			[1e-200, 1e150, 1],
 			[1e-200, 1e150, 1e50],
 			[1e-200, 1e150, 1e-50],
+			[Number.MIN_VALUE, Number.MAX_VALUE, 1],
+			[Number.MIN_VALUE, -Number.MAX_VALUE, 1],
+			[Number.MIN_VALUE, 1e300, 1],
 		]) {
 			const value = [a, -a, a, -a, large].map((v) => v * k)
-			const error = [a, a, a, a, large].map((e) => e * k)
+			const error = [a, a, a, a, Math.abs(large)].map((e) => e * k)
 			const standard = lombScargle(time, value, error, { ...options, falseAlarm: { ...options.falseAlarm, random: mulberry32(1) } })
 			const psd = lombScargle(time, value, error, { ...options, normalization: 'psd' })
 
@@ -467,7 +471,7 @@ describe('degenerate data', () => {
 			expect(standard.peaks[0].falseAlarmProbability).toBeLessThanOrEqual(1)
 
 			// Four equal values: the fifth sample still adds its one-sigma term, which no sinusoid can remove.
-			const level = lombScargle(time, [a, a, a, a, large], [a, a, a, a, large], options)
+			const level = lombScargle(time, [a, a, a, a, large], [a, a, a, a, Math.abs(large)], options)
 			expect(level.status).toBe('ok')
 			expect(level.mean).toBe(a)
 			expect(level.referenceChiSquare).toBeCloseTo(1, 12)
