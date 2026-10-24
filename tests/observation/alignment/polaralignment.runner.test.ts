@@ -257,7 +257,17 @@ describe('acquisition', () => {
 		fake.response = 0
 		const result = await acquireThreePointPolarAlignment(coordinator(), fake.mount, CAMERA, OPTIONS, services(fake))
 		expect(result).toMatchObject({ ok: false, reason: 'unexpectedState', error: expect.stringContaining('did not rotate') })
-		expect(fake.motions).toHaveLength(2)
+		// Probes of 2, 8 and then the longest motion, 30 s.
+		expect(fake.motions.map((m) => m.seconds)).toEqual([2, 8, 30])
+	})
+
+	test('probes a slow preset with longer motions before sizing them from the rate', async () => {
+		const fake = new FakeMount(new InstantClock())
+		fake.rates.SLOW = deg(0.01)
+		const result = await acquireThreePointPolarAlignment(coordinator(), fake.mount, CAMERA, { ...OPTIONS, maximumMotion: 600, maximumAttempts: 10 }, services(fake))
+		expect(result.ok).toBeTrue()
+		expect(fake.motions.slice(0, 2).map((m) => m.seconds)).toEqual([2, 8])
+		expect(fake.motions[2].seconds).toBeGreaterThan(300)
 	})
 
 	test('stops on a motion in the opposite direction', async () => {

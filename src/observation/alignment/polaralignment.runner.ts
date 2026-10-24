@@ -3,8 +3,8 @@ import type { PlateSolution } from '../../astrometry/solvers/platesolver'
 import { DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters } from '../../astronomy/coordinates/astrometry'
 import { angularDistance } from '../../astronomy/coordinates/coordinate'
 import type { GeographicPosition } from '../../astronomy/observer/location'
-import { timeUnix } from '../../astronomy/time/time'
-import { SIDEREAL_DRIFT_RATE } from '../../core/constants'
+import { Timescale, timeSubtract, timeUnix } from '../../astronomy/time/time'
+import { DAYSEC, SIDEREAL_DRIFT_RATE } from '../../core/constants'
 import type { MountCommander } from '../../devices/commanders/mount'
 import type { Camera, Mount, PierSide } from '../../devices/indi/device'
 import { failedOperationResult, type OperationContext, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
@@ -210,8 +210,10 @@ const MINIMUM_MOTION = 0.2
 // Rotation per motion below which the mount is considered not to have moved, in radians (0.05°).
 const NO_MOTION_ROTATION = 0.05 * (Math.PI / 180)
 
-// Consecutive motions without measurable rotation before the mount is considered stuck.
-const MAXIMUM_STILL_MOTIONS = 2
+// Growth of the motion while no rotation was measured yet. A motion that rotated less than
+// NO_MOTION_ROTATION bounds the rate, so the next, PROBE_GROWTH times longer, rotates less than
+// PROBE_GROWTH × NO_MOTION_ROTATION (0.2°) at the same preset, however slow it is.
+const PROBE_GROWTH = 4
 
 // Acquires the three poses of a polar alignment inside an operation `polarAlignmentAcquisition` of
 // `scope`, which leases nothing itself. The mount must be a connected, unparked equatorial mount that
@@ -274,14 +276,15 @@ async function acquisitionLoop(context: OperationContext, mount: Mount, camera: 
 	// Last solved pose and the rotation rate, in radians per second of motion, observed so far.
 	let last = first.value.sample
 	let rate: number | undefined
-	let still = 0
+	// Duration of the next motion while no rate is known, in seconds.
+	let probe = options.initialMotion
 
 	for (const point of [2, 3] as const) {
 		let accepted = false
 
 		for (let attempt = 1; attempt <= options.maximumAttempts && !accepted; attempt++) {
 			const moved = sign(options.direction) * polarAlignmentDisplacement(previousAccepted, last).rotation
-			const duration = motionDuration(limits.targetRotation - moved, rate, options)
+			const duration = rate === undefined ? probe : motionDuration(limits.targetRotation - moved, rate, options)
 			listener?.({ type: 'move', point, direction: options.direction, duration })
 
 			const motion = await timedMotion(context, mountCommander, mount, options.direction, duration, clock)
@@ -299,15 +302,17 @@ async function acquisitionLoop(context: OperationContext, mount: Mount, camera: 
 			if (solved.value === undefined) continue
 
 			const { sample } = solved.value
-			const increment = sign(options.direction) * polarAlignmentDisplacement(last, sample).rotation
+			const increment = sign(options.direction) * motorRotation(last, sample)
 			last = sample
 
 			if (Math.abs(increment) < NO_MOTION_ROTATION) {
-				if (++still >= MAXIMUM_STILL_MOTIONS) return failedOperationResult('unexpectedState', `mount ${mount.name} did not rotate in RA`)
-			} else {
-				still = 0
+				// A mount that moved before and stands still now is stuck; one that never moved yet may run a
+				// slow preset, and is probed longer up to the longest motion.
+				if (rate !== undefined || duration >= options.maximumMotion) return failedOperationResult('unexpectedState', `mount ${mount.name} did not rotate in RA`)
+				probe = Math.min(options.maximumMotion, duration * PROBE_GROWTH)
+			} else if (increment > 0) {
 				// Only motion towards the requested direction calibrates the rate; a reversal is rejected below.
-				if (increment > 0) rate = increment / duration
+				rate = increment / duration
 			}
 
 			const classification = classifyPolarAlignmentCandidate(points[0], previousAccepted, sample, options.direction, limits)
@@ -453,10 +458,9 @@ async function timedMotion(context: OperationContext, mountCommander: MountComma
 	return waited
 }
 
-// Duration of the next motion, in seconds: the remaining rotation over the observed rate, bounded by
-// the minimum and the longest motion, or the initial motion while no rate is known.
-function motionDuration(remaining: Angle, rate: number | undefined, options: Pick<ThreePointPolarAlignmentAcquisitionOptions, 'initialMotion' | 'maximumMotion'>) {
-	if (rate === undefined || !(rate > 0)) return options.initialMotion
+// Duration of the next motion, in seconds: the remaining rotation over the observed rate (radians
+// per second, > 0), bounded by the minimum and the longest motion.
+function motionDuration(remaining: Angle, rate: number, options: Pick<ThreePointPolarAlignmentAcquisitionOptions, 'maximumMotion'>) {
 	return Math.max(MINIMUM_MOTION, Math.min(options.maximumMotion, remaining / rate))
 }
 
@@ -480,6 +484,13 @@ function poseChanged(mount: Mount, pierSide: PierSide) {
 	if (!mount.tracking) return `mount ${mount.name} stopped tracking`
 	if (mount.hasPierSide && mount.pierSide !== pierSide) return `mount ${mount.name} changed pier side`
 	return undefined
+}
+
+// Rotation the motor added between two solves of a tracking mount, in radians, positive towards the
+// west: the measured change of hour angle less the sidereal tracking over the time between them, which
+// is not motion of the manual axis and would otherwise pass for it at slow presets.
+function motorRotation(from: ThreePointPolarAlignmentInput, to: ThreePointPolarAlignmentInput) {
+	return polarAlignmentDisplacement(from, to).rotation - SIDEREAL_DRIFT_RATE * timeSubtract(to[2], from[2], Timescale.TAI) * DAYSEC
 }
 
 // Sign that makes a rotation in `direction` positive.
