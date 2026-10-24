@@ -414,14 +414,17 @@ describe('degenerate data', () => {
 			).status,
 		).toBe('constant')
 
-		// Every value with a non-zero square-root weight is identical: the error ratio 1e-330 underflows to 0.
+		// A different value is not constant even when its error ratio, 1e-330, underflows: it is 9.7e-9 sigma
+		// away, a negligible but real chi-square term that the fit cannot reduce.
 		const zeroWeight = lombScargle(
 			t,
 			t.map((_, i) => (i === 7 ? 100 : 3)),
 			t.map((_, i) => (i === 7 ? 1e10 : 1e-320)),
 		)
-		expect(zeroWeight.status).toBe('constant')
+		expect(zeroWeight.status).toBe('ok')
 		expect(zeroWeight.mean).toBe(3)
+		expect(zeroWeight.referenceChiSquare / (97 / 1e10) ** 2).toBeCloseTo(1, 12)
+		expect(zeroWeight.peaks).toEqual([])
 
 		for (const extreme of [Number.MAX_VALUE, Number.MIN_VALUE]) {
 			const constant = lombScargle(
@@ -434,17 +437,24 @@ describe('degenerate data', () => {
 		}
 	})
 
-	// Regression: an error ratio of 1e-170 underflows the relative weight to 0, but the chi-square term of a
-	// sample one sigma away, ((1e10 - 0) / 1e10)^2 = 1, used to be dropped, reporting a perfect fit. The four
-	// other samples fit the cosine exactly and fix the model, so chi-square goes from 5 to 1.
+	// Regression: an error ratio that underflows the relative weight (1e-170, squared) or even its square root
+	// (1e-350) to 0 used to drop the chi-square term of a sample one sigma away, ((large - 0) / large)^2 = 1,
+	// reporting a perfect fit. The four other samples fit the cosine exactly and fix the model, so
+	// chi-square goes from 5 to 1.
 	test('chi-square term of a sample with an underflowed weight', () => {
-		const a = 1e-160
 		const time = [0, 1, 2, 3, 4]
 		const options = { frequencies: [0.5], falseAlarm: { method: 'bootstrap', samples: 20, random: mulberry32(1) } } as const
 
-		for (const k of [1, 1e100, 1e-100]) {
-			const value = [a, -a, a, -a, 1e10].map((v) => v * k)
-			const error = [a, a, a, a, 1e10].map((e) => e * k)
+		for (const [a, large, k] of [
+			[1e-160, 1e10, 1],
+			[1e-160, 1e10, 1e100],
+			[1e-160, 1e10, 1e-100],
+			[1e-200, 1e150, 1],
+			[1e-200, 1e150, 1e50],
+			[1e-200, 1e150, 1e-50],
+		]) {
+			const value = [a, -a, a, -a, large].map((v) => v * k)
+			const error = [a, a, a, a, large].map((e) => e * k)
 			const standard = lombScargle(time, value, error, { ...options, falseAlarm: { ...options.falseAlarm, random: mulberry32(1) } })
 			const psd = lombScargle(time, value, error, { ...options, normalization: 'psd' })
 
@@ -455,6 +465,13 @@ describe('degenerate data', () => {
 			expect(standard.peaks[0].amplitude / (a * k)).toBeCloseTo(1, 12)
 			expect(standard.peaks[0].falseAlarmProbability).toBeGreaterThanOrEqual(0)
 			expect(standard.peaks[0].falseAlarmProbability).toBeLessThanOrEqual(1)
+
+			// Four equal values: the fifth sample still adds its one-sigma term, which no sinusoid can remove.
+			const level = lombScargle(time, [a, a, a, a, large], [a, a, a, a, large], options)
+			expect(level.status).toBe('ok')
+			expect(level.mean).toBe(a)
+			expect(level.referenceChiSquare).toBeCloseTo(1, 12)
+			expect(level.peaks).toEqual([])
 		}
 	})
 

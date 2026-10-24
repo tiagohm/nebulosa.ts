@@ -251,18 +251,19 @@ interface WeightedSamples {
 	readonly t: Float64Array
 	// Inverse-variance weights normalized to unit sum.
 	readonly w: Float64Array
-	// Square roots of the weights, (minError / error) normalized so that their squares sum to 1. A square
-	// root underflows to 0 only for an error more than about 1e323 times the smallest one.
+	// Square roots of the weights, (minError / error) normalized so that their squares sum to 1; they enter
+	// only the normal equations, where one that underflows to 0 (an error more than about 1e323 times the
+	// smallest one) has no influence anyway.
 	readonly r: Float64Array
-	// Whitened residuals r * (value - mean), divided by their largest magnitude scale * 2^scaleExponent, in
-	// [-1, 1]; exactly 0 where r is 0. A sample whose weight r^2 underflowed to 0 keeps its residual here.
+	// Whitened residuals (value - mean) / error divided by the largest of them, in [-1, 1], formed without the
+	// error ratio, so that a sample whose r underflowed still keeps its chi-square term.
 	readonly y: Float64Array
 	// Number of samples.
 	readonly count: number
 	// Weighted mean value, value unit.
 	readonly mean: number
-	// Largest absolute whitened residual, value unit, as scale * 2^scaleExponent with scale in [0.5, 4), kept
-	// as two factors because the product can overflow or underflow; scale is 0 for a constant series.
+	// Value-unit scale of the coefficients fitted to y in units of r, as scale * 2^scaleExponent, kept as two
+	// factors because the product can overflow or underflow; scale is 0 for a constant series.
 	readonly scale: number
 	readonly scaleExponent: number
 	// Σ y^2, the weighted variance about the mean in units of the largest whitened residual, at least 1; 0
@@ -476,16 +477,17 @@ function usableSamples(time: Readonly<NumberArray>, value: Readonly<NumberArray>
 }
 
 // Normalizes the inverse-variance weights to unit sum and whitens the values: each residual about the
-// weighted mean is multiplied by the square root of its weight before anything is squared, so a sample
-// whose relative weight (minError / error)^2 underflows to 0 still contributes its chi-square term
-// ((value - mean) / error)^2 whenever that term is representable, while it still has no influence on the
-// mean or the fitted coefficients. The values are first divided by a power of two near the largest of
-// them, which is exact (barring values more than 2^1022 times smaller, which become subnormal), so their
-// differences stay finite even when they span the whole double range; the centering is corrected by the
+// weighted mean is divided by its own error, through binary exponents rather than the error ratio, before
+// anything is squared, so a sample whose relative weight (minError / error)^2 or even its square root
+// underflows to 0 still contributes its chi-square term ((value - mean) / error)^2 whenever that term is
+// representable, while it has no influence on the mean or the fitted coefficients. The values are first
+// scaled by a power of two that brings the largest just below 2^1020, which is exact (barring values more
+// than 2^2039 times smaller, which become subnormal), so their differences stay finite even when they span
+// the whole double range; the centering is corrected by the
 // weighted mean of the first residuals (the corrected two-pass algorithm), subtracted from the small
 // residuals rather than added to the mean, where it would be rounded again to the ulp of a large offset.
-// The series is constant only when every value with a non-zero square-root weight is identical, so a
-// signal of a few ulps on a large offset is kept. Requires at least one sample; the one with the smallest
+// The series is constant only when every usable value is identical, so a signal of a few ulps on a large
+// offset is kept. Requires at least one sample; the one with the smallest
 // error always has a positive weight.
 function weightedSamples(t: Float64Array, value: Float64Array, error: Float64Array): WeightedSamples {
 	const count = t.length
@@ -504,50 +506,77 @@ function weightedSamples(t: Float64Array, value: Float64Array, error: Float64Arr
 	}
 
 	const norm = Math.sqrt(sumW)
-	let reference = Number.NaN
 	let constant = true
 	let maxValue = 0
+	let weightedReference = Number.NaN
+	let weightedConstant = true
 
 	for (let i = 0; i < count; i++) {
 		r[i] /= norm
 		w[i] = r[i] * r[i]
+		if (value[i] !== value[0]) constant = false
+		if (Math.abs(value[i]) > maxValue) maxValue = Math.abs(value[i])
 
-		if (r[i] > 0) {
-			if (Number.isNaN(reference)) reference = value[i]
-			else if (value[i] !== reference) constant = false
-			if (Math.abs(value[i]) > maxValue) maxValue = Math.abs(value[i])
+		if (w[i] > 0) {
+			if (Number.isNaN(weightedReference)) weightedReference = value[i]
+			else if (value[i] !== weightedReference) weightedConstant = false
 		}
 	}
 
-	if (constant) return { t, w, r, y, count, mean: reference, scale: 0, scaleExponent: 0, variance: 0, referenceChiSquare: 0 }
+	if (constant) return { t, w, r, y, count, mean: value[0], scale: 0, scaleExponent: 0, variance: 0, referenceChiSquare: 0 }
 
-	// Two distinct values make maxValue positive; the scaled values lie below 4 in magnitude, so their
-	// differences from the mean lie below 8.
-	const unitExponent = binaryExponent(maxValue)
+	// Two distinct values make maxValue positive. The largest scaled value lies in [2^1017, 2^1020), so the
+	// differences from the mean stay below 2^1021 and, divided by an error mantissa of at least 0.5, below
+	// 2^1022, while every value down to 2^-2039 times the largest stays a normal double; a subnormal maxValue
+	// is scaled by 2^1074 at most.
+	const unitExponent = Math.max(-1074, binaryExponent(maxValue) - 1018)
 	const unit = 2 ** unitExponent
 	let mean = 0
 
-	for (let i = 0; i < count; i++) if (w[i] > 0) mean += w[i] * (value[i] / unit)
+	// When every value with a non-zero weight is identical (the sample with the smallest error always has
+	// one), that value is the exact weighted mean, so their residuals are exactly 0 rather than a rounding
+	// of the mean that a tiny error would magnify into a huge chi-square. Otherwise any two of them differ by
+	// at least an ulp, which dwarfs the rounding of the centering.
+	if (weightedConstant) mean = weightedReference / unit
+	else for (let i = 0; i < count; i++) if (w[i] > 0) mean += w[i] * (value[i] / unit)
 
 	let correction = 0
 
 	for (let i = 0; i < count; i++) {
-		y[i] = r[i] > 0 ? value[i] / unit - mean : 0
+		y[i] = value[i] / unit - mean
 		correction += w[i] * y[i]
-	}
-
-	let maxResidual = 0
-
-	for (let i = 0; i < count; i++) {
-		y[i] = r[i] * (y[i] - correction)
-		if (Math.abs(y[i]) > maxResidual) maxResidual = Math.abs(y[i])
 	}
 
 	mean = (mean + correction) * unit
 
-	// Distinct values whose whitened residuals all round to 0 are constant to working precision; this also
-	// keeps the scaling below from dividing by zero.
-	if (!(maxResidual > 0)) return { t, w, r, y: y.fill(0), count, mean, scale: 0, scaleExponent: 0, variance: 0, referenceChiSquare: 0 }
+	// The whitened residual (value - mean) / error = (d / m) * 2^(unitExponent - e), with d the scaled
+	// residual and error = m * 2^e, is formed as a mantissa and an exponent and brought to the common
+	// exponent of the largest one, so that it neither overflows nor underflows with the ratio of the errors.
+	const exponent = new Int32Array(count)
+	let largestExponent = Number.NEGATIVE_INFINITY
+
+	for (let i = 0; i < count; i++) {
+		const e = binaryExponent(error[i])
+		const q = (y[i] - correction) / (error[i] / 2 ** e)
+		y[i] = q
+		exponent[i] = unitExponent - e
+
+		if (q !== 0) {
+			const k = exponent[i] + binaryExponent(Math.abs(q))
+			if (k > largestExponent) largestExponent = k
+		}
+	}
+
+	// Distinct values whose residuals all round to 0 are constant to working precision; this also keeps the
+	// scaling below from dividing by zero.
+	if (largestExponent === Number.NEGATIVE_INFINITY) return { t, w, r, y: y.fill(0), count, mean, scale: 0, scaleExponent: 0, variance: 0, referenceChiSquare: 0 }
+
+	let maxResidual = 0
+
+	for (let i = 0; i < count; i++) {
+		y[i] = timesPowerOfTwo(y[i], exponent[i] - largestExponent)
+		if (Math.abs(y[i]) > maxResidual) maxResidual = Math.abs(y[i])
+	}
 
 	let variance = 0
 
@@ -556,14 +585,12 @@ function weightedSamples(t: Float64Array, value: Float64Array, error: Float64Arr
 		variance += y[i] * y[i]
 	}
 
-	// maxResidual * unit = scale * 2^scaleExponent, with scale in [0.5, 4), so that neither the residual
-	// scale nor the chi-square below overflows or underflows unless its true value does.
-	const residualExponent = binaryExponent(maxResidual)
-	const scale = maxResidual / 2 ** residualExponent
-	const scaleExponent = residualExponent + unitExponent
+	// y = r * d * unit * norm / (minError * maxResidual * 2^largestExponent), so a fitted coefficient k of
+	// y = k * r * column is the value-unit coefficient k * minError * maxResidual * 2^largestExponent / norm.
 	const errorExponent = binaryExponent(minError)
-	const ratio = scale / (minError / 2 ** errorExponent)
-	const referenceChiSquare = timesPowerOfTwo(ratio * ratio * sumW * variance, 2 * (scaleExponent - errorExponent))
+	const scale = ((minError / 2 ** errorExponent) * maxResidual) / norm
+	const scaleExponent = errorExponent + largestExponent
+	const referenceChiSquare = timesPowerOfTwo(maxResidual * maxResidual * variance, 2 * largestExponent)
 
 	return { t, w, r, y, count, mean, scale, scaleExponent, variance, referenceChiSquare }
 }
