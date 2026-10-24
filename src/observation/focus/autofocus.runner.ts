@@ -6,6 +6,7 @@ import { type FailedOperationResult, failedOperationResult, type OperationContex
 import { type AbortableDelay, abortReason, awaitCooperativeJob, type CooperativeJobHealth, type CooperativeJobOutcome } from '../../devices/orchestration/operation.wait'
 import { resourceKey } from '../../devices/orchestration/resource'
 import type { CameraCapturer } from '../capture/capture'
+import type { CameraCaptureListener } from '../capture/reporter'
 import { type CameraCaptureStart, type CameraCaptureClock, DEFAULT_CAMERA_CAPTURE_START } from '../capture/types'
 import { AutoFocus, type AutoFocusOptions, type AutoFocusStep } from './autofocus'
 
@@ -102,6 +103,8 @@ export interface AutoFocusServices {
 	readonly focuserMover: FocuserMover
 	// Auxiliary captures.
 	readonly cameraCapturer: CameraCapturer
+	// Receives the events of every auxiliary capture, such as the progress of its exposure. Absent reports nothing.
+	readonly captureListener?: CameraCaptureListener
 	// HFD measurer of the auxiliary frames.
 	readonly measurer: AutoFocusMeasurer
 	// Absolute path of the auxiliary FITS of capture `capture` (1-based); its directory exists and the file does not.
@@ -204,13 +207,13 @@ async function failAndRestore(context: OperationContext, focuser: Focuser, posit
 // failure of the capture, of the measurement timeout, of a faulted measurer or of the cancellation. The file is disposed
 // of only after the measurement ended, whatever its outcome; a failed capture never calls the measurer.
 async function captureAndMeasure(context: OperationContext, focuser: Focuser, camera: Camera, capture: number, position: number, options: AutoFocusRunOptions, services: AutoFocusServices): Promise<OperationResult<number | undefined>> {
-	const { cameraCapturer, measurer, clock, measurerHealth, listener } = services
+	const { cameraCapturer, captureListener, measurer, clock, measurerHealth, listener } = services
 	const path = services.auxiliaryPath(capture)
 	const request = autoFocusCaptureRequest(options.capture, path, focuser)
 
 	try {
 		listener?.({ type: 'expose', capture, position, path })
-		const captured = await cameraCapturer.start(context, camera, request, { clock }).result
+		const captured = await cameraCapturer.start(context, camera, request, { clock, listener: captureListener }).result
 		if (!captured.ok) return captured
 
 		const { frames } = captured.value

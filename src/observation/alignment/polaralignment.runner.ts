@@ -11,6 +11,7 @@ import { failedOperationResult, type OperationContext, type OperationResult, typ
 import { awaitCooperativeJob, type CooperativeJobHealth } from '../../devices/orchestration/operation.wait'
 import { type Angle, toDeg } from '../../math/units/angle'
 import type { CameraCapturer } from '../capture/capture'
+import type { CameraCaptureListener } from '../capture/reporter'
 import { type CenteringCaptureOptions, type CenteringClock, centeringCaptureRequest, exposureMidpoint, solveResult } from '../mount/centering'
 import { ThreePointPolarAlignment, type ThreePointPolarAlignmentInput, type ThreePointPolarAlignmentResult } from './polaralignment'
 import {
@@ -183,6 +184,8 @@ export interface ThreePointPolarAlignmentServices {
 	readonly mountCommander: MountCommander
 	// Auxiliary captures.
 	readonly cameraCapturer: CameraCapturer
+	// Receives the events of every auxiliary capture, such as the progress of its exposure. Absent reports nothing.
+	readonly captureListener?: CameraCaptureListener
 	// Plate solver of the auxiliary frames.
 	readonly solver: ThreePointPolarAlignmentSolver
 	// Absolute path of an auxiliary FITS; its directory exists and the file does not.
@@ -424,13 +427,13 @@ async function captureAndSolve(
 	options: Pick<ThreePointPolarAlignmentAcquisitionOptions, 'capture' | 'solveTimeout' | 'abortGrace' | 'auxiliary'>,
 	services: ThreePointPolarAlignmentServices,
 ): Promise<OperationResult<{ readonly sample: ThreePointPolarAlignmentInput; readonly solution: PlateSolution } | undefined>> {
-	const { cameraCapturer, solver, clock, solverHealth, listener } = services
+	const { cameraCapturer, captureListener, solver, clock, solverHealth, listener } = services
 	const path = services.auxiliaryPath(stage, index)
 	const request = centeringCaptureRequest(options.capture, path, mount)
 
 	try {
 		listener?.({ type: 'capture', stage, index, point })
-		const captured = await cameraCapturer.start(context, camera, request, { clock }).result
+		const captured = await cameraCapturer.start(context, camera, request, { clock, listener: captureListener }).result
 		if (!captured.ok) return captured
 
 		const { frames } = captured.value

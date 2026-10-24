@@ -22,7 +22,8 @@ import { type Angle, arcsec, deg, normalizeAngle, toArcsec, toDeg } from '../../
 import { applyMountAdjustment } from '../../../src/observation/alignment/polaralignment.util'
 // oxfmt-ignore
 import { acquireThreePointPolarAlignment, refineThreePointPolarAlignment, type ThreePointPolarAlignmentAcquisitionOptions, type ThreePointPolarAlignmentEvent, type ThreePointPolarAlignmentRefinementOptions, type ThreePointPolarAlignmentServices } from '../../../src/observation/alignment/polaralignment.runner'
-import type { CameraCapturer, CameraCaptureResult } from '../../../src/observation/capture/capture'
+import type { CameraCaptureHooks, CameraCapturer, CameraCaptureResult } from '../../../src/observation/capture/capture'
+import type { CameraCaptureListener } from '../../../src/observation/capture/reporter'
 import type { CenteringCaptureOptions } from '../../../src/observation/mount/centering'
 import { connectSimulatorRig, createSimulatorRig, resetSimulatorRig } from '../../util/rig'
 
@@ -175,9 +176,10 @@ function rigidPole(azimuthError: Angle, altitudeError: Angle): Vec3 {
 }
 
 // Capturer that exposes instantly (advancing the clock by the exposure) and writes nothing useful.
-function fakeCapturer(clock: InstantClock, fails: () => boolean = () => false) {
+function fakeCapturer(clock: InstantClock, fails: () => boolean = () => false, hooks: (CameraCaptureHooks | undefined)[] = []) {
 	return {
-		start: (scope: OperationScope, _camera: Camera) => {
+		start: (scope: OperationScope, _camera: Camera, _request: unknown, captureHooks?: CameraCaptureHooks) => {
+			hooks.push(captureHooks)
 			const { signal } = scope as OperationContext
 			const result = ((): Promise<OperationResult<CameraCaptureResult>> => {
 				if (signal.aborted) return Promise.resolve(failedOperationResult('aborted'))
@@ -233,6 +235,17 @@ describe('acquisition', () => {
 		expect(events[0]).toEqual({ type: 'slewRate', previous: 'FAST', applied: 'SLOW' })
 		expect(events.filter((e) => e.type === 'accepted').map((e) => e.type === 'accepted' && e.point)).toEqual([1, 2, 3])
 		expect(events.at(-1)?.type).toBe('result')
+	})
+
+	test('gives the capture listener of the services to every auxiliary capture', async () => {
+		const fake = new FakeMount(new InstantClock())
+		const hooks: (CameraCaptureHooks | undefined)[] = []
+		const captureListener: CameraCaptureListener = () => {}
+		const result = await acquireThreePointPolarAlignment(coordinator(), fake.mount, CAMERA, OPTIONS, { ...services(fake), cameraCapturer: fakeCapturer(fake.clock, undefined, hooks), captureListener })
+
+		expect(result.ok).toBeTrue()
+		expect(hooks.length).toBeGreaterThanOrEqual(3)
+		expect(hooks.every((hook) => hook?.listener === captureListener)).toBeTrue()
 	})
 
 	test('fails before moving when the slew rate is not confirmed', async () => {

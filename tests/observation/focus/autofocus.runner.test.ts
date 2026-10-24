@@ -9,6 +9,7 @@ import type { CooperativeJobHealth } from '../../../src/devices/orchestration/op
 import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
 import { isFits } from '../../../src/io/formats/fits/fits'
 import type { CameraCaptureHooks, CameraCapturer, CameraCaptureResult } from '../../../src/observation/capture/capture'
+import type { CameraCaptureListener } from '../../../src/observation/capture/reporter'
 import type { CameraCaptureStart } from '../../../src/observation/capture/types'
 import { AutoFocus, type AutoFocusStep } from '../../../src/observation/focus/autofocus'
 import { type AutoFocusCaptureOptions, type AutoFocusFrame, type AutoFocusMeasurer, type AutoFocusRunEvent, type AutoFocusRunListener, type AutoFocusRunOptions, type AutoFocusRunResult, autoFocusCaptureRequest, runAutoFocus } from '../../../src/observation/focus/autofocus.runner'
@@ -145,6 +146,7 @@ interface HarnessOptions {
 	readonly behaviors?: FakeCaptureBehavior[]
 	readonly health?: CooperativeJobHealth
 	readonly listener?: AutoFocusRunListener
+	readonly captureListener?: CameraCaptureListener
 }
 
 // Autofocus over the fake optics, focuser and capturer with a manual clock; auxiliary frames in a fresh directory.
@@ -164,7 +166,16 @@ function harness(options: HarnessOptions = {}): Harness {
 			focuser.focuser,
 			CAMERA,
 			{ ...OPTIONS, ...overrides },
-			{ focuserMover: focuser.commander, cameraCapturer: capturer, measurer, auxiliaryPath: (capture) => join(directory, `af.${capture}.fit`), clock, ...(options.health !== undefined && { measurerHealth: options.health }), ...(options.listener !== undefined && { listener: options.listener }) },
+			{
+				focuserMover: focuser.commander,
+				cameraCapturer: capturer,
+				measurer,
+				auxiliaryPath: (capture) => join(directory, `af.${capture}.fit`),
+				clock,
+				...(options.health !== undefined && { measurerHealth: options.health }),
+				...(options.listener !== undefined && { listener: options.listener }),
+				...(options.captureListener !== undefined && { captureListener: options.captureListener }),
+			},
 		)
 	return { clock, directory, focuser, captures: calls, measures, coordinator, run }
 }
@@ -237,6 +248,15 @@ describe('autofocus run', () => {
 		}
 
 		expect(events.at(-1)).toEqual({ type: 'move', purpose: 'best', target: (result as { value: AutoFocusRunResult }).value.position })
+	})
+
+	test('the capture listener of the services receives the events of every auxiliary capture', async () => {
+		const captureListener: CameraCaptureListener = () => {}
+		const { run, captures } = harness({ captureListener })
+
+		expect(await run()).toMatchObject({ ok: true })
+		expect(captures.length).toBeGreaterThan(0)
+		expect(captures.every((capture) => capture.hooks?.listener === captureListener)).toBeTrue()
 	})
 
 	test('a failure reports the restore move', async () => {
