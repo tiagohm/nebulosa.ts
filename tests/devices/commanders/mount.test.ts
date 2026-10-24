@@ -204,6 +204,24 @@ test('reports a mount that disconnected under a composite operation without comm
 	}
 })
 
+test('refuses an unannounced slew rate and fails one the driver ignores', async () => {
+	const device = await connected()
+	const slewRate = spyOn(mountManager, 'slewRate')
+
+	try {
+		expect(await mountCommander.setSlewRate(operationCoordinator, device, 'WARP')).toMatchObject({ ok: false, reason: 'unexpectedState' })
+		expect(slewRate).not.toHaveBeenCalled()
+
+		slewRate.mockImplementation(() => {})
+		expect(await mountCommander.setSlewRate(operationCoordinator, device, 'SPEED_1', { timeout: 50 })).toMatchObject({ ok: false, reason: 'timeout' })
+		expect(slewRate).toHaveBeenCalledTimes(1)
+		expect(device.slewRate).toBe('SPEED_7')
+		expect(isFree(device)).toBeTrue()
+	} finally {
+		slewRate.mockRestore()
+	}
+})
+
 test('refuses a second command while another operation owns the mount', async () => {
 	const device = await connected()
 	const slewing = mountCommander.goTo(operationCoordinator, device, { type: 'JNOW', JNOW: { x: '05:00:00', y: '30:00:00' } })
