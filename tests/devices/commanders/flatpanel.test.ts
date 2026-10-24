@@ -74,17 +74,112 @@ test('enables, disables, toggles, and clamps panel intensity', async () => {
 	await waitUntil(() => !panel.enabled)
 })
 
-test('dispatches the clamped intensity value', async () => {
+test('dispatches the clamped intensity value and resolves once it is reported', async () => {
+	const panel = await connected()
+	const intensity = spyOn(flatPanelManager, 'intensity')
+
+	try {
+		expect(await flatPanelCommander.intensity(operationCoordinator, panel, -1)).toMatchObject({ ok: true })
+		expect(panel.intensity.value).toBe(panel.intensity.min)
+		expect(await flatPanelCommander.intensity(operationCoordinator, panel, 12)).toMatchObject({ ok: true })
+		expect(panel.intensity.value).toBe(12)
+		expect(intensity).toHaveBeenNthCalledWith(1, panel, panel.intensity.min)
+		expect(intensity).toHaveBeenNthCalledWith(2, panel, 12)
+	} finally {
+		intensity.mockRestore()
+	}
+})
+
+test('resolves a light command only after the driver reports the state', async () => {
+	const panel = await connected()
+	const enable = spyOn(flatPanelManager, 'enable').mockImplementation(() => {})
+
+	try {
+		let settled = false
+		const command = flatPanelCommander.enable(operationCoordinator, panel).then((result) => {
+			settled = true
+			return result
+		})
+
+		await Bun.sleep(30)
+		expect(settled).toBeFalse()
+		enable.mockRestore()
+		flatPanelManager.enable(panel)
+		expect(await command).toMatchObject({ ok: true })
+		expect(panel.enabled).toBeTrue()
+	} finally {
+		enable.mockRestore()
+	}
+})
+
+test('resolves at once when the panel already reports the commanded state', async () => {
+	const panel = await connected()
+	const disable = spyOn(flatPanelManager, 'disable').mockImplementation(() => {})
+
+	try {
+		expect(await flatPanelCommander.disable(operationCoordinator, panel, { timeout: 50 })).toMatchObject({ ok: true })
+		expect(disable).toHaveBeenCalledTimes(1)
+	} finally {
+		disable.mockRestore()
+	}
+})
+
+test('accepts an intensity quantized within half of the published step', async () => {
+	const panel = await connected()
+	const intensity = spyOn(flatPanelManager, 'intensity').mockImplementation((device, value) => {
+		flatPanelManager.numberVector(client, { device: device.name, name: 'FLAT_LIGHT_INTENSITY', state: 'Ok', elements: { FLAT_LIGHT_INTENSITY_VALUE: { name: 'FLAT_LIGHT_INTENSITY_VALUE', value: Math.round(value) } } }, 'setNumberVector')
+	})
+
+	try {
+		expect(panel.intensity.step).toBe(1)
+		expect(await flatPanelCommander.intensity(operationCoordinator, panel, 20.4, { timeout: 50 })).toMatchObject({ ok: true })
+		expect(panel.intensity.value).toBe(20)
+	} finally {
+		intensity.mockRestore()
+	}
+})
+
+test('times out when the driver never reports the commanded state', async () => {
 	const panel = await connected()
 	const intensity = spyOn(flatPanelManager, 'intensity').mockImplementation(() => {})
 
 	try {
-		expect(await flatPanelCommander.intensity(operationCoordinator, panel, -1)).toMatchObject({ ok: true })
-		expect(await flatPanelCommander.intensity(operationCoordinator, panel, 12.5)).toMatchObject({ ok: true })
-		expect(intensity).toHaveBeenNthCalledWith(1, panel, panel.intensity.min)
-		expect(intensity).toHaveBeenNthCalledWith(2, panel, 12.5)
+		expect(await flatPanelCommander.intensity(operationCoordinator, panel, panel.intensity.value + 10, { timeout: 30 })).toMatchObject(failedOperationResult('timeout'))
+		expect(isFree(panel)).toBeTrue()
 	} finally {
 		intensity.mockRestore()
+	}
+})
+
+test('fails a command the driver answers with an Alert', async () => {
+	const panel = await connected()
+	const enable = spyOn(flatPanelManager, 'enable').mockImplementation((device) => {
+		flatPanelManager.switchVector(client, { device: device.name, name: 'FLAT_LIGHT_CONTROL', state: 'Alert', elements: { FLAT_LIGHT_ON: { name: 'FLAT_LIGHT_ON', value: false }, FLAT_LIGHT_OFF: { name: 'FLAT_LIGHT_OFF', value: true } } }, 'setSwitchVector')
+	})
+	const intensity = spyOn(flatPanelManager, 'intensity').mockImplementation((device) => {
+		flatPanelManager.numberVector(client, { device: device.name, name: 'FLAT_LIGHT_INTENSITY', state: 'Alert', elements: { FLAT_LIGHT_INTENSITY_VALUE: { name: 'FLAT_LIGHT_INTENSITY_VALUE', value: device.intensity.value } } }, 'setNumberVector')
+	})
+
+	try {
+		expect(await flatPanelCommander.enable(operationCoordinator, panel, { timeout: 1000 })).toMatchObject(failedOperationResult('alert'))
+		expect(await flatPanelCommander.intensity(operationCoordinator, panel, panel.intensity.value + 10, { timeout: 1000 })).toMatchObject(failedOperationResult('alert'))
+	} finally {
+		enable.mockRestore()
+		intensity.mockRestore()
+	}
+})
+
+test('fails a pending command when the panel disconnects', async () => {
+	const panel = await connected()
+	const enable = spyOn(flatPanelManager, 'enable').mockImplementation(() => {})
+
+	try {
+		const command = flatPanelCommander.enable(operationCoordinator, panel, { timeout: 1000 })
+		await Bun.sleep(10)
+		flatPanelManager.disconnect(panel)
+		expect((await command).ok).toBeFalse()
+	} finally {
+		enable.mockRestore()
 	}
 })
 
