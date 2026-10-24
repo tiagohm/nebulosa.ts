@@ -262,7 +262,7 @@ export async function refineThreePointPolarAlignment(
 
 // Acquisition inside its operation.
 async function acquisitionLoop(context: OperationContext, mount: Mount, camera: Camera, options: ThreePointPolarAlignmentAcquisitionOptions, services: ThreePointPolarAlignmentServices): Promise<OperationResult<ThreePointPolarAlignmentAcquisition>> {
-	const refused = acquisitionRefusal(mount, options.slewRate)
+	const refused = polarAlignmentMountRefusal(mount, options.slewRate)
 	if (refused) return failedOperationResult(refused === 'disconnected' ? 'disconnected' : 'unexpectedState', refused === 'disconnected' ? undefined : refused)
 
 	const { mountCommander, clock, listener } = services
@@ -477,8 +477,11 @@ function motionDuration(remaining: Angle, rate: number, options: Pick<ThreePoint
 	return Math.max(MINIMUM_MOTION, Math.min(options.maximumMotion, remaining / rate))
 }
 
-// Reason the mount cannot run an acquisition at `slewRate`, 'disconnected', or undefined when it can.
-function acquisitionRefusal(mount: Mount, slewRate: string) {
+// Reason the mount cannot run the timed RA motions of a polar alignment (three-point or DARV) at
+// `slewRate`, 'disconnected', or undefined when it can: a connected, unparked equatorial mount that
+// tracks at the sidereal rate (when it reports track modes), can move west-east and abort, and
+// announces the preset.
+export function polarAlignmentMountRefusal(mount: Mount, slewRate: string) {
 	if (!mount.connected) return 'disconnected'
 	if (mount.mountType === 'ALTAZ') return `mount ${mount.name} is not equatorial`
 	if (!mount.canMove || !mount.canMoveWE) return `mount ${mount.name} cannot move west-east`
