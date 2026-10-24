@@ -22542,7 +22542,7 @@ console.log(toMeter(fromPressure(pressureFrom(meter(5000), 10), 10))) // 4999.99
 
 ### Box Least Squares Transit Search
 
-A transit or an eclipse is a short, flat-bottomed dip repeating with the orbital period, which a sinusoidal periodogram detects poorly. Box Least Squares (Kovács, Zucker & Mazeh 2002) fits instead a two-level box: a constant out-of-transit flux and a lower in-transit flux during one trial duration repeating with one trial period. Both levels are inverse-variance weighted means, so the depth is `outOfTransitLevel - inTransitLevel` with uncertainty `sqrt(1/Σw_in + 1/Σw_out)`, and the objective, the `power`, is the improvement in log-likelihood (half the chi-square improvement) over a constant level, `snr² / 2`.
+A transit or an eclipse is a short, flat-bottomed dip repeating with the orbital period, which a sinusoidal periodogram such as the [Lomb-Scargle Periodogram](#lomb-scargle-periodogram) detects poorly. Box Least Squares (Kovács, Zucker & Mazeh 2002) fits instead a two-level box: a constant out-of-transit flux and a lower in-transit flux during one trial duration repeating with one trial period. Both levels are inverse-variance weighted means, so the depth is `outOfTransitLevel - inTransitLevel` with uncertainty `sqrt(1/Σw_in + 1/Σw_out)`, and the objective, the `power`, is the improvement in log-likelihood (half the chi-square improvement) over a constant level, `snr² / 2`.
 
 `math/numerical/bls` searches with `boxLeastSquares(time, flux, fluxError, options)`. The samples, in any order, have times in one uniform unit and timescale (BJD_TDB days for a [Differential Photometry and Light Curves](#differential-photometry-and-light-curves) result converted to numbers, for example), fluxes in any linear unit and one-sigma errors (an array or one value for every sample); a sample with a non-finite time or flux, or a non-finite or non-positive error, is skipped, so a missing value can be `NaN`. A large time offset, such as a Julian Date, is removed before folding. Periods, `durations`, epochs and the `baseline` are in the time unit. For every trial period the samples are folded into equal phase bins of `period / ceil(period * oversample / min(durations))` (`oversample` 10), at most `min(durations) / oversample` wide, each duration is rounded to whole bins of that period (so the reported `duration` is within half a bin of the requested one) and every bin is tried as the box start, as in Astropy's `BoxLeastSquares`. When every period is a whole number of bins, with `minTransits` and `minInTransitPoints` of 1, the periodogram matches the per-period snr, depth, duration and transit time of Astropy 8.0.2's `snr` objective, except for boxes that straddle phase 0 by more than `oversample` bins, which Astropy does not scan. Without explicit `periods`, the grid is uniform in frequency from `minPeriod` (twice the longest duration) with the step `frequencyFactor * min(durations) / baseline²`, for as many steps as fit before `maxPeriod` (`baseline / (minTransits - 1)`, the longest period holding `minTransits` events, or the baseline when `minTransits` is 1); every period lies in `[minPeriod, maxPeriod]`. The weights are normalized by the smallest error and the bin sums are compensated, so errors spanning many orders of magnitude neither overflow nor cancel; `power` overflows to `Infinity` only above an snr of about 1e154. Every duration must be at most half the shortest period. Only dips (positive depth) are detected, and BLS is a detector, not a physical transit model: the box ignores the limb darkening and the ingress and egress shape, which [Exoplanet Transit Light Curves](#exoplanet-transit-light-curves) fits to a candidate.
 
@@ -23220,6 +23220,61 @@ const up = simpleLinearRegression([0, 1, 2], [1, 3, 5])
 const down = simpleLinearRegression([0, 1, 2], [7, 6, 5])
 console.log(intersect(up, down)) // { x: 2, y: 5 }
 console.log(intersect(up, simpleLinearRegression([0, 1, 2], [3, 5, 7]))) // undefined (parallel lines)
+```
+
+### Lomb-Scargle Periodogram
+
+Ground-based light curves and radial velocities are sampled unevenly, with nightly, seasonal and weather gaps, so the FFT, which needs uniform samples, does not apply. The generalized Lomb-Scargle periodogram (Zechmeister & Kürster 2009) instead fits, at every trial frequency `f`, the floating-mean sinusoid `offset + A·cos(2πft) + B·sin(2πft)` by weighted linear least squares with the weights `1/error²`, and the standard power `p = 1 - χ²/χ²_ref` is the fraction of the weighted variance about the weighted mean that the sinusoid removes. Its `psd` normalization is half the chi-square improvement, as in Astropy's `LombScargle` with `fit_mean=True` and `center_data=True`, which it matches to about 1e-9.
+
+`math/numerical/lomb.scargle` evaluates it with `lombScargle(time, value, error, options)`. The samples, in any order, have times in one uniform unit and timescale chosen by the caller (BJD_TDB days, for example; nothing is inferred from the numbers), values in any linear unit and one-sigma errors in that unit (an array, or one value for every sample: `1` gives the unweighted periodogram); a sample with a non-finite time or value, or a non-finite or non-positive error, is skipped. Frequencies are in cycles per time unit, and periods, epochs and the `baseline` in the time unit; a large offset such as a Julian Date is removed first. Without explicit `frequencies` (positive, sorted ascending in the output), the grid is Astropy's `autofrequency`: steps of `1 / (samplesPerPeak · baseline)` (`samplesPerPeak` 5) from `minFrequency` (half a step, or `maxFrequency` alone when that is lower) to `maxFrequency` (`nyquistFactor` 5 times the average Nyquist frequency `0.5·N/baseline`, a reference scale only: irregular sampling resolves much higher frequencies), the last one rounded to within half a step. Every frequency is evaluated directly in O(N), with columns decorrelated by the Zechmeister–Kürster time shift and variances accumulated without cancellation, so arbitrary grids are exact. The residuals are whitened by their errors before they are squared and the values pre-scaled by a power of two, so a sample whose relative weight underflows still adds its chi-square term, and values and errors may span the whole double range; the work, `N · (frequencies + peak refinements)`, multiplied by `samples + 1` with a bootstrap, about 40 ns per sample and frequency, is checked before allocating, and above `maxEvaluations` (2e8) or 2^23 frequencies a `RangeError` is thrown instead of running for an unbounded time. Arrays of different lengths, empty `frequencies` and swapped `minFrequency` and `maxFrequency` also throw. Use the [Fast Fourier Transform](#fast-fourier-transform) for uniform samples and [Box Least Squares Transit Search](#box-least-squares-transit-search) for short box-shaped dips, which a sinusoid detects poorly.
+
+The `normalization` (`'standard'` by default) of the `power` in the `periodogram` and the peaks is `'standard'` (`p`, in [0, 1]), `'model'` (`p / (1 - p)` = `χ²_ref/χ² - 1`), `'log'` (`-ln(1 - p)`) or `'psd'` (`χ²_ref · p / 2`, with `referenceChiSquare` the chi-square about the weighted `mean`; exponentially distributed under pure noise only when the errors are the true ones); `'model'` and `'log'` are `Infinity` for an exact fit. The `periodogram` also has the spectral `window` `|Σ w·exp(2πift)|² / (Σ w)²`, 1 where every sample has the same phase, and the `conditioning` `sqrt(λmin/λmax)` of the two centered sinusoid columns: near 0 for frequencies far below `1 / baseline` or commensurate with a regular cadence, and exactly 0 where a column with a weighted RMS below 1e-9 was dropped as unconstrained by the sampling (multiples of a uniform sampling frequency, its Nyquist frequency). The `grid` reports `count`, `minFrequency`, `maxFrequency`, the largest `maxStep`, the resolution `peakWidth` (`1 / baseline`), `samplesPerPeak` (`peakWidth / maxStep`), `averageNyquistFrequency` and `degenerateCount`, and the result `flags` are `'coarseGrid'` (fewer than 2 frequencies per peak width: a narrow peak can be missed) and `'degenerateFrequencies'`. The `status` is `'ok'`, `'constant'` (every value with a non-zero weight identical, an undefined power; a signal of a few ulps on a large offset is still evaluated) or `'insufficientData'` (fewer than 4 usable samples or a zero baseline); without `'ok'` there is no `grid`, `periodogram` or peak.
+
+The `peaks` (at most `maxPeaks`, 5) are the highest local maxima by decreasing power, each refined by Brent's method between its grid neighbors, so its `frequency`, `period`, `power` and `standardPower` do not depend on the grid step, with its grid `index`, `conditioning`, `window` and the fitted sinusoid `value(t) = offset + amplitude · cos(2π·frequency·(t - epoch))`, `epoch` being a maximum in `[firstTime, firstTime + period)`. A peak whose frequency difference or sum with a stronger one has a window power of at least `aliasWindowPower` (0.5) gets `aliasOf`, the index of that stronger peak, and the `'alias'` flag: the ±1 cycle per day aliases of nightly sampling, side lobes and reflections about a sampling frequency. `'gridEdge'` (the maximum is the first or last frequency: the true one may be outside the band), `'belowBaseline'` (less than one cycle observed: a trend can mimic it) and `'degenerate'` complete the flags. With `falseAlarm`, every peak gets the `falseAlarmProbability` that pure noise yields a highest peak at least as high anywhere in the band, from its standard power whatever the normalization. `{ method: 'baluev' }` is the analytic bound of Baluev (2008) for Gaussian white noise with errors known up to a common factor over the band from 0 to the highest grid frequency (as Astropy's `'baluev'` method), accurate below about 0.1 and conservative above. `{ method: 'bootstrap', samples, random }` resamples the (value, error) pairs with replacement at the original times with the given [seeded random source](#seeded-random-sources) and counts the resamples whose refined highest peak is at least as high: it keeps the sampling and the error distribution, its resolution is `1 / samples` (0 means below that), and it costs `samples` periodograms. Both assume independent samples, which correlated (red) noise violates.
+
+```ts
+import { lombScargle } from 'nebulosa/src/math/numerical/lomb.scargle'
+import { mulberry32 } from 'nebulosa/src/math/numerical/random'
+
+// 25 nights of 12 observations between 0.3 and 0.6 d after midnight (BJD_TDB days) of a 0.2 mag
+// semi-amplitude variable with a 0.7 d period peaking at 2460000.4, and errors from 0.02 to 0.05 mag.
+const random = mulberry32(1)
+const time: number[] = []
+const magnitude: number[] = []
+const error: number[] = []
+
+for (let night = 0; night < 25; night++) {
+	for (let j = 0; j < 12; j++) {
+		const t = 2460000 + night + 0.3 + 0.3 * random()
+		const sigma = 0.02 + 0.03 * random()
+		time.push(t)
+		magnitude.push(12 + 0.2 * Math.cos((2 * Math.PI * (t - 2460000.4)) / 0.7) + sigma * (2 * random() - 1))
+		error.push(sigma)
+	}
+}
+
+// Frequencies up to 4 cycles per day.
+const result = lombScargle(time, magnitude, error, { maxFrequency: 4, falseAlarm: { method: 'baluev' } })
+console.log(result.status, result.sampleCount, result.grid!.count, result.grid!.peakWidth, result.flags) // ok 300 486 0.0412 [] (cycles per day)
+
+const [best, ...others] = result.peaks
+console.log(best.period, best.power, best.falseAlarmProbability) // 0.69996 0.985 1.3e-265 (days, standard power, probability)
+console.log(best.amplitude, best.offset, best.epoch, best.conditioning) // 0.2004 12.00009 2460000.40014 0.998 (mag, mag, BJD_TDB)
+
+// The other peaks are aliases of nightly sampling, linked to a stronger peak.
+console.log(others.map((p) => [p.frequency, p.aliasOf, p.flags]))
+// 0.4304 0 [alias]: 1/0.7 - 1 cycles per day
+// 2.4272 0 [alias]: 1/0.7 + 1 cycles per day
+// 0.5666 1 [alias]
+// 3.4253 2 [alias]
+
+// Explicit frequencies and the psd normalization: half the chi-square improvement and the window power.
+const psd = lombScargle(time, magnitude, error, { frequencies: [1 / 0.7, 1 / 0.7 + 1], normalization: 'psd' })
+console.log(psd.periodogram!.power, psd.periodogram!.window, psd.referenceChiSquare) // [3184.2, 2292.8] [0.0022, 0.0058] 6468.7
+
+// A seeded bootstrap: no resample of 200 reaches the observed peaks.
+const bootstrap = lombScargle(time, magnitude, error, { maxFrequency: 4, maxPeaks: 2, falseAlarm: { method: 'bootstrap', samples: 200, random: mulberry32(2) } })
+console.log(bootstrap.peaks.map((p) => p.falseAlarmProbability)) // [0, 0]
 ```
 
 ### Multivariate Minimization
