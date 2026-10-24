@@ -4,6 +4,7 @@ import { failedOperationResult, type OperationContext, type OperationResult, typ
 import type { CameraCapturer, CameraCaptureHandle } from '../capture/capture'
 import type { CameraFrameEvent } from '../capture/types'
 import { type CenteringCaptureOptions, type CenteringClock, centeringCaptureRequest } from '../mount/centering'
+import { DEFAULT_DARV_LEADING_MARGIN, darvExposureTime } from './polaralignment.darv'
 import type { PolarAlignmentDirection } from './polaralignment.geometry'
 import { polarAlignmentMountRefusal } from './polaralignment.runner'
 
@@ -20,17 +21,6 @@ import { polarAlignmentMountRefusal } from './polaralignment.runner'
 // restores it, as in the three-point runner. Configured durations are seconds; instants come from
 // the monotonic domain of the clock, in milliseconds, shared with the capturer.
 
-// Shutter-open wait before the outbound motion, in seconds. It leaves the stars still for a moment, as
-// the classic procedure does, and absorbs the delay between the shutter opening and Busy being seen.
-export const DEFAULT_DARV_LEADING_MARGIN = 3
-
-// Time budgeted for the mount to stop and start again at the turn, in seconds.
-export const DEFAULT_DARV_TURNAROUND_MARGIN = 3
-
-// Shutter-open time budgeted after the return motion stopped, in seconds; it absorbs the stop of the
-// mount and the drift of the clocks so the exposure never ends while the mount still moves.
-export const DEFAULT_DARV_TRAILING_MARGIN = 3
-
 // Camera settings of the DARV frame; the exposure time is derived from the timing, and the frame
 // type is always LIGHT.
 export type DarvCaptureOptions = Omit<CenteringCaptureOptions, 'exposureTime' | 'exposureTimeUnit' | 'frameType'>
@@ -45,7 +35,7 @@ export interface DarvRunOptions {
 	readonly legDuration: number
 	// Camera settings of the frame.
 	readonly capture: DarvCaptureOptions
-	// Stationary wait before the outbound motion; finite ≥ 0. Default `DEFAULT_DARV_LEADING_MARGIN`.
+	// Stationary wait before the outbound motion; finite ≥ 0. Default `DEFAULT_DARV_LEADING_MARGIN` (polaralignment.darv).
 	readonly leadingMargin?: number
 	// Budget of the turn; finite ≥ 0. Default `DEFAULT_DARV_TURNAROUND_MARGIN`.
 	readonly turnaroundMargin?: number
@@ -114,11 +104,6 @@ export interface DarvRun {
 	readonly direction: PolarAlignmentDirection
 	// Measured timing.
 	readonly timing: DarvRunTiming
-}
-
-// Requested exposure of a DARV frame, in seconds: both legs plus the three margins.
-export function darvExposureTime(legDuration: number, leadingMargin = DEFAULT_DARV_LEADING_MARGIN, turnaroundMargin = DEFAULT_DARV_TURNAROUND_MARGIN, trailingMargin = DEFAULT_DARV_TRAILING_MARGIN) {
-	return leadingMargin + 2 * legDuration + turnaroundMargin + trailingMargin
 }
 
 // Runs one DARV measurement inside an operation `darv` of `scope`, which leases nothing itself. The

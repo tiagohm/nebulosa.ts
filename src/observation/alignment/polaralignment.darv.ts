@@ -161,6 +161,22 @@ function computeDarvDriftDec(targetPolarErrorArcmin: number, geometryFactor: num
 	return driftDec
 }
 
+// Shutter-open wait before the outbound motion, in seconds. It leaves the stars still for a moment, as
+// the classic procedure does, and absorbs the delay between the shutter opening and Busy being seen.
+export const DEFAULT_DARV_LEADING_MARGIN = 3
+
+// Time budgeted for the mount to stop and start again at the turn, in seconds.
+export const DEFAULT_DARV_TURNAROUND_MARGIN = 3
+
+// Shutter-open time budgeted after the return motion stopped, in seconds; it absorbs the stop of the
+// mount and the drift of the clocks so the exposure never ends while the mount still moves.
+export const DEFAULT_DARV_TRAILING_MARGIN = 3
+
+// Requested exposure of a DARV frame, in seconds: both legs plus the three margins.
+export function darvExposureTime(legDuration: number, leadingMargin = DEFAULT_DARV_LEADING_MARGIN, turnaroundMargin = DEFAULT_DARV_TURNAROUND_MARGIN, trailingMargin = DEFAULT_DARV_TRAILING_MARGIN) {
+	return leadingMargin + 2 * legDuration + turnaroundMargin + trailingMargin
+}
+
 // Estimates the recommended exposure time for DARV, not the actual polar error.
 // recommendedLegTime is one outbound or return leg; recommendedExposure is both legs.
 export function estimateDarvExposure(input: Readonly<DarvExposureInput>): DarvExposureEstimate {
