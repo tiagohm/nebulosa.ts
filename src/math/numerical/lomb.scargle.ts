@@ -16,13 +16,15 @@ import { logGamma } from './statistics'
 // variance of each rotated column is accumulated directly instead of by cancelling differences, so the
 // poorly conditioned regimes (frequencies far below 1 / baseline, sampling commensurate with the period)
 // lose accuracy only gracefully; a rotated column whose weighted variance falls below 1e-18 (an RMS of
-// 1e-9 of the unit amplitude) is not constrained by the sampling and is dropped from that fit. Times are
-// in one uniform unit and timescale chosen by the caller (for example BJD_TDB days); frequencies are in
-// cycles per that unit and periods, epochs and the baseline in that unit; values are in any linear unit
-// and their one-sigma errors in the same unit. Nothing is inferred about physical timescales. Pure
-// function: the inputs are never mutated; the periodogram arrays are freshly allocated and owned by the
-// caller, and the work arrays are typed arrays sized by the sample count, allocated per call after the
-// estimated work has been bounded.
+// 1e-9 of the unit amplitude) is not constrained by the sampling and is dropped from that fit. Residuals
+// are whitened by their errors before they are squared and the values are pre-scaled by a power of two,
+// so the chi-square keeps every representable term even when the relative weights underflow, and values
+// and errors may span the whole double range. Times are in one uniform unit and timescale chosen by the
+// caller (for example BJD_TDB days); frequencies are in cycles per that unit and periods, epochs and the
+// baseline in that unit; values are in any linear unit and their one-sigma errors in the same unit.
+// Nothing is inferred about physical timescales. Pure function: the inputs are never mutated; the
+// periodogram arrays are freshly allocated and owned by the caller, and the work arrays are typed arrays
+// sized by the sample count, allocated per call after the estimated work has been bounded.
 
 // Smallest number of usable samples: the model has three parameters and one residual degree of freedom
 // is needed for the power to be informative.
@@ -249,21 +251,22 @@ interface WeightedSamples {
 	readonly t: Float64Array
 	// Inverse-variance weights normalized to unit sum.
 	readonly w: Float64Array
-	// Values minus their weighted mean, divided by unit * scale, in [-1, 1]; exactly 0 where the weight
-	// underflowed to 0, which leaves that sample out of every sum.
+	// Square roots of the weights, (minError / error) normalized so that their squares sum to 1. A square
+	// root underflows to 0 only for an error more than about 1e323 times the smallest one.
+	readonly r: Float64Array
+	// Whitened residuals r * (value - mean), divided by their largest magnitude scale * 2^scaleExponent, in
+	// [-1, 1]; exactly 0 where r is 0. A sample whose weight r^2 underflowed to 0 keeps its residual here.
 	readonly y: Float64Array
 	// Number of samples.
 	readonly count: number
 	// Weighted mean value, value unit.
 	readonly mean: number
-	// Power of two, value unit, near the largest absolute positively weighted value; the values are divided
-	// by it exactly before centering. 1 for a constant series.
-	readonly unit: number
-	// Largest absolute centered value of a positively weighted sample, in units of unit, below 4; y is in
-	// units of unit * scale, which is kept as two factors because the product can exceed the largest double.
-	// 0 for a constant series.
+	// Largest absolute whitened residual, value unit, as scale * 2^scaleExponent with scale in [0.5, 4), kept
+	// as two factors because the product can overflow or underflow; scale is 0 for a constant series.
 	readonly scale: number
-	// Σ w y^2, the weighted variance of y, in (0, 1]; 0 for a constant series.
+	readonly scaleExponent: number
+	// Σ y^2, the weighted variance about the mean in units of the largest whitened residual, at least 1; 0
+	// for a constant series.
 	readonly variance: number
 	// Chi-square of the values about their weighted mean.
 	readonly referenceChiSquare: number
@@ -277,7 +280,8 @@ interface FrequencyFit {
 	window: number
 	// sqrt(λmin / λmax), or 0 when a column was dropped.
 	conditioning: number
-	// Coefficients of cos(2π f t) and sin(2π f t) about their weighted means, in units of scale.
+	// Coefficients of cos(2π f t) and sin(2π f t) about their weighted means, in units of the samples'
+	// scale * 2^scaleExponent.
 	cosine: number
 	sine: number
 	// Weighted means of cos(2π f t) and sin(2π f t).
@@ -471,19 +475,22 @@ function usableSamples(time: Readonly<NumberArray>, value: Readonly<NumberArray>
 	return { t, value: v, error: sigma, count, firstTime, baseline: lastTime - firstTime }
 }
 
-// Normalizes the inverse-variance weights to unit sum and centers the values on their weighted mean,
-// scaled by the largest absolute centered value. The weights are first normalized by the smallest error,
-// (minError / error)^2 in (0, 1], so they cannot overflow, and the centering is corrected by the weighted
-// mean of the first residuals (the corrected two-pass algorithm). The series is constant only when every
-// positively weighted value is identical, so a signal of a few ulps on a large offset is kept: centering
-// subtracts the offset exactly and the scaled residuals keep their full relative precision. The values are
-// first divided by a power of two near the largest of them, which is exact (barring values more than
-// 2^1022 times smaller, below the precision of the sums anyway), so that their differences stay finite even
-// when they span almost the whole double range. Requires at least one sample; the one with the smallest
+// Normalizes the inverse-variance weights to unit sum and whitens the values: each residual about the
+// weighted mean is multiplied by the square root of its weight before anything is squared, so a sample
+// whose relative weight (minError / error)^2 underflows to 0 still contributes its chi-square term
+// ((value - mean) / error)^2 whenever that term is representable, while it still has no influence on the
+// mean or the fitted coefficients. The values are first divided by a power of two near the largest of
+// them, which is exact (barring values more than 2^1022 times smaller, which become subnormal), so their
+// differences stay finite even when they span the whole double range; the centering is corrected by the
+// weighted mean of the first residuals (the corrected two-pass algorithm), subtracted from the small
+// residuals rather than added to the mean, where it would be rounded again to the ulp of a large offset.
+// The series is constant only when every value with a non-zero square-root weight is identical, so a
+// signal of a few ulps on a large offset is kept. Requires at least one sample; the one with the smallest
 // error always has a positive weight.
 function weightedSamples(t: Float64Array, value: Float64Array, error: Float64Array): WeightedSamples {
 	const count = t.length
 	const w = new Float64Array(count)
+	const r = new Float64Array(count)
 	const y = new Float64Array(count)
 	let minError = Number.POSITIVE_INFINITY
 
@@ -492,68 +499,95 @@ function weightedSamples(t: Float64Array, value: Float64Array, error: Float64Arr
 	let sumW = 0
 
 	for (let i = 0; i < count; i++) {
-		const ratio = minError / error[i]
-		w[i] = ratio * ratio
-		sumW += w[i]
+		r[i] = minError / error[i]
+		sumW += r[i] * r[i]
 	}
 
+	const norm = Math.sqrt(sumW)
 	let reference = Number.NaN
 	let constant = true
 	let maxValue = 0
 
 	for (let i = 0; i < count; i++) {
-		w[i] /= sumW
+		r[i] /= norm
+		w[i] = r[i] * r[i]
 
-		if (w[i] > 0) {
+		if (r[i] > 0) {
 			if (Number.isNaN(reference)) reference = value[i]
 			else if (value[i] !== reference) constant = false
 			if (Math.abs(value[i]) > maxValue) maxValue = Math.abs(value[i])
 		}
 	}
 
-	if (constant) return { t, w, y, count, mean: reference, unit: 1, scale: 0, variance: 0, referenceChiSquare: 0 }
+	if (constant) return { t, w, r, y, count, mean: reference, scale: 0, scaleExponent: 0, variance: 0, referenceChiSquare: 0 }
 
-	// Two distinct values make maxValue positive; the scaled values lie below 2 in magnitude (allowing for
-	// the rounding of log2), so their differences from the mean lie below 4.
-	const unit = 2 ** Math.floor(Math.log2(maxValue))
+	// Two distinct values make maxValue positive; the scaled values lie below 4 in magnitude, so their
+	// differences from the mean lie below 8.
+	const unitExponent = binaryExponent(maxValue)
+	const unit = 2 ** unitExponent
 	let mean = 0
 
 	for (let i = 0; i < count; i++) if (w[i] > 0) mean += w[i] * (value[i] / unit)
 
-	// The correction is subtracted from the small residuals, not added to the mean, where it would be
-	// rounded again to the ulp of a large offset and leave the residuals off-center.
-	// A sample whose weight underflowed to 0 gets a zero residual, so that an extreme value there can neither
-	// overflow the scaled residuals nor turn 0 * Infinity into NaN in the sums.
 	let correction = 0
 
 	for (let i = 0; i < count; i++) {
-		y[i] = w[i] > 0 ? value[i] / unit - mean : 0
+		y[i] = r[i] > 0 ? value[i] / unit - mean : 0
 		correction += w[i] * y[i]
 	}
 
-	let scale = 0
+	let maxResidual = 0
 
 	for (let i = 0; i < count; i++) {
-		if (w[i] > 0) y[i] -= correction
-		if (Math.abs(y[i]) > scale) scale = Math.abs(y[i])
+		y[i] = r[i] * (y[i] - correction)
+		if (Math.abs(y[i]) > maxResidual) maxResidual = Math.abs(y[i])
 	}
 
 	mean = (mean + correction) * unit
 
-	// Distinct values whose residuals all round to the correction are constant to working precision; this
-	// also keeps the scaling below from dividing by zero.
-	if (!(scale > 0)) return { t, w, y: y.fill(0), count, mean, unit, scale: 0, variance: 0, referenceChiSquare: 0 }
+	// Distinct values whose whitened residuals all round to 0 are constant to working precision; this also
+	// keeps the scaling below from dividing by zero.
+	if (!(maxResidual > 0)) return { t, w, r, y: y.fill(0), count, mean, scale: 0, scaleExponent: 0, variance: 0, referenceChiSquare: 0 }
 
 	let variance = 0
 
 	for (let i = 0; i < count; i++) {
-		y[i] /= scale
-		variance += w[i] * y[i] * y[i]
+		y[i] /= maxResidual
+		variance += y[i] * y[i]
 	}
 
-	// minError / unit is exact; the chi-square overflows to Infinity only when its true value does.
-	const ratio = scale / (minError / unit)
-	return { t, w, y, count, mean, unit, scale, variance, referenceChiSquare: ratio * ratio * sumW * variance }
+	// maxResidual * unit = scale * 2^scaleExponent, with scale in [0.5, 4), so that neither the residual
+	// scale nor the chi-square below overflows or underflows unless its true value does.
+	const residualExponent = binaryExponent(maxResidual)
+	const scale = maxResidual / 2 ** residualExponent
+	const scaleExponent = residualExponent + unitExponent
+	const errorExponent = binaryExponent(minError)
+	const ratio = scale / (minError / 2 ** errorExponent)
+	const referenceChiSquare = timesPowerOfTwo(ratio * ratio * sumW * variance, 2 * (scaleExponent - errorExponent))
+
+	return { t, w, r, y, count, mean, scale, scaleExponent, variance, referenceChiSquare }
+}
+
+// Exponent e of a power of two near a positive finite x, so that x / 2^e lies in [0.5, 4) and 2^e is
+// representable: Math.log2 can round up across a power of two, notably to 1024 at Number.MAX_VALUE.
+function binaryExponent(x: number) {
+	return Math.min(1023, Math.floor(Math.log2(x)))
+}
+
+// x * 2^exponent for an integer exponent beyond the range of a single power of two, applied in exact
+// steps of at most 2^±1023; the result overflows or underflows only when the true product does.
+function timesPowerOfTwo(x: number, exponent: number) {
+	while (exponent > 1023) {
+		x *= 2 ** 1023
+		exponent -= 1023
+	}
+
+	while (exponent < -1022) {
+		x *= 2 ** -1022
+		exponent += 1022
+	}
+
+	return x * 2 ** exponent
 }
 
 // Fits offset + A cos(2π f t) + B sin(2π f t) to the samples by weighted least squares and writes the
@@ -562,7 +596,7 @@ function weightedSamples(t: Float64Array, value: Float64Array, error: Float64Arr
 // their weighted covariance, and the variances of the columns rotated by the decorrelating angle, which
 // are its eigenvalues accumulated without cancellation.
 function fitFrequency(samples: WeightedSamples, frequency: number, c: Float64Array, s: Float64Array, fit: FrequencyFit) {
-	const { t, w, y, count, variance } = samples
+	const { t, w, r, y, count, variance } = samples
 	const omega = TAU * frequency
 	let meanCosine = 0
 	let meanSine = 0
@@ -590,8 +624,8 @@ function fitFrequency(samples: WeightedSamples, frequency: number, c: Float64Arr
 		cc += wi * u * u
 		ss += wi * v * v
 		cs += wi * u * v
-		yc += wi * y[i] * u
-		ys += wi * y[i] * v
+		yc += y[i] * (r[i] * u)
+		ys += y[i] * (r[i] * v)
 	}
 
 	// The angle 2θ = atan2(2 cs, cc - ss) diagonalizes the covariance; the first rotated column has the
@@ -697,8 +731,8 @@ function extractPeaks(samples: WeightedSamples, frequency: Float64Array, power: 
 			power: normalizePower(fit.power, normalization, samples.referenceChiSquare),
 			standardPower: fit.power,
 			index,
-			amplitude: samples.scale * Math.hypot(fit.cosine, fit.sine) * samples.unit,
-			offset: samples.mean - samples.scale * (fit.cosine * fit.meanCosine + fit.sine * fit.meanSine) * samples.unit,
+			amplitude: timesPowerOfTwo(samples.scale * Math.hypot(fit.cosine, fit.sine), samples.scaleExponent),
+			offset: samples.mean - timesPowerOfTwo(samples.scale * (fit.cosine * fit.meanCosine + fit.sine * fit.meanSine), samples.scaleExponent),
 			epoch: firstTime + ((phase < 0 ? phase + TAU : phase) / TAU) * period,
 			conditioning: fit.conditioning,
 			window: fit.window,

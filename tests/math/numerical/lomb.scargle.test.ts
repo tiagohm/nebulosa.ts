@@ -414,18 +414,53 @@ describe('degenerate data', () => {
 			).status,
 		).toBe('constant')
 
-		// A different value whose weight (1e-170)^2 underflows to 0 does not count.
-		const outlier = lombScargle(
+		// Every value with a non-zero square-root weight is identical: the error ratio 1e-330 underflows to 0.
+		const zeroWeight = lombScargle(
 			t,
 			t.map((_, i) => (i === 7 ? 100 : 3)),
-			t.map((_, i) => (i === 7 ? 1e170 : 1)),
+			t.map((_, i) => (i === 7 ? 1e10 : 1e-320)),
 		)
-		expect(outlier.status).toBe('constant')
-		expect(outlier.mean).toBe(3)
+		expect(zeroWeight.status).toBe('constant')
+		expect(zeroWeight.mean).toBe(3)
+
+		for (const extreme of [Number.MAX_VALUE, Number.MIN_VALUE]) {
+			const constant = lombScargle(
+				t,
+				t.map(() => extreme),
+				dy,
+			)
+			expect(constant.status).toBe('constant')
+			expect(constant.mean).toBe(extreme)
+		}
 	})
 
-	// Regression: an extreme value whose weight (1e-170)^2 underflows to 0 used to scale to Infinity and turn
-	// the sums into NaN, reported as zero power.
+	// Regression: an error ratio of 1e-170 underflows the relative weight to 0, but the chi-square term of a
+	// sample one sigma away, ((1e10 - 0) / 1e10)^2 = 1, used to be dropped, reporting a perfect fit. The four
+	// other samples fit the cosine exactly and fix the model, so chi-square goes from 5 to 1.
+	test('chi-square term of a sample with an underflowed weight', () => {
+		const a = 1e-160
+		const time = [0, 1, 2, 3, 4]
+		const options = { frequencies: [0.5], falseAlarm: { method: 'bootstrap', samples: 20, random: mulberry32(1) } } as const
+
+		for (const k of [1, 1e100, 1e-100]) {
+			const value = [a, -a, a, -a, 1e10].map((v) => v * k)
+			const error = [a, a, a, a, 1e10].map((e) => e * k)
+			const standard = lombScargle(time, value, error, { ...options, falseAlarm: { ...options.falseAlarm, random: mulberry32(1) } })
+			const psd = lombScargle(time, value, error, { ...options, normalization: 'psd' })
+
+			expect(standard.status).toBe('ok')
+			expect(standard.referenceChiSquare).toBeCloseTo(5, 12)
+			expect(standard.periodogram!.power[0]).toBeCloseTo(0.8, 12)
+			expect(psd.periodogram!.power[0]).toBeCloseTo(2, 12)
+			expect(standard.peaks[0].amplitude / (a * k)).toBeCloseTo(1, 12)
+			expect(standard.peaks[0].falseAlarmProbability).toBeGreaterThanOrEqual(0)
+			expect(standard.peaks[0].falseAlarmProbability).toBeLessThanOrEqual(1)
+		}
+	})
+
+	// Regression: an extreme value whose relative weight (1e-170)^2 underflows to 0 used to scale to Infinity
+	// and turn the sums into NaN. It is 1e138 sigma away, so it dominates the chi-square (1 + 1e276) while
+	// leaving the fit, which the sinusoid cannot bend toward it, unchanged: the power is about 1e-276.
 	test('extreme value with an underflowed weight', () => {
 		const frequencies = { frequencies: [0.5] }
 		const base = lombScargle([0, 1, 2, 3], [0, 1, 0, 1], 1, frequencies)
@@ -436,11 +471,18 @@ describe('degenerate data', () => {
 			expect(result.status).toBe('ok')
 			expect(result.sampleCount).toBe(5)
 			expect(result.mean).toBe(base.mean)
-			expect(result.referenceChiSquare).toBe(base.referenceChiSquare)
-			expect(result.periodogram!.power[0]).toBe(base.periodogram!.power[0])
-			expect(result.peaks[0].amplitude).toBeCloseTo(base.peaks[0].amplitude, 15)
+			expect(result.referenceChiSquare / 1e276).toBeCloseTo(1, 12)
+			expect(result.periodogram!.power[0] / 1e-276).toBeCloseTo(1, 6)
+			expect(result.peaks[0].amplitude).toBeCloseTo(base.peaks[0].amplitude, 12)
 			expect(result.peaks[0].falseAlarmProbability).toBeGreaterThanOrEqual(0)
+			expect(result.peaks[0].falseAlarmProbability).toBeLessThanOrEqual(1)
 		}
+
+		// A large error with a negligible normalized residual, 0.3 / 1e170, leaves the result unchanged.
+		const negligible = lombScargle([0, 1, 2, 3, 4], [0, 1, 0, 1, 0.3], [1, 1, 1, 1, 1e170], { ...frequencies, falseAlarm: { method: 'bootstrap', samples: 20, random: mulberry32(1) } })
+		expect(negligible.mean).toBe(base.mean)
+		expect(negligible.referenceChiSquare).toBe(base.referenceChiSquare)
+		expect(negligible.periodogram!.power[0]).toBe(base.periodogram!.power[0])
 	})
 
 	// Regression: a fixed tolerance relative to the largest value used to drop this resolved signal as constant.
@@ -474,7 +516,7 @@ describe('degenerate data', () => {
 		const frequencies = { frequencies: [0.2] }
 		const unit = lombScargle(t, pattern, 1, frequencies)
 
-		for (const k of [1.5e308, 1e-310]) {
+		for (const k of [1.5e308, 1e-310, Number.MIN_VALUE]) {
 			const scaled = lombScargle(
 				t,
 				pattern.map((p) => k * p),
@@ -483,12 +525,38 @@ describe('degenerate data', () => {
 			)
 
 			expect(scaled.status).toBe('ok')
-			expect(scaled.mean / k).toBeCloseTo(unit.mean, 12)
 			expect(scaled.referenceChiSquare).toBeCloseTo(unit.referenceChiSquare, 10)
 			expect(scaled.periodogram!.power[0]).toBeCloseTo(unit.periodogram!.power[0], 12)
+
+			// The mean, amplitude and offset are not representable as multiples of Number.MIN_VALUE.
+			if (k === Number.MIN_VALUE) continue
+
+			expect(scaled.mean / k).toBeCloseTo(unit.mean, 12)
 			expect(scaled.peaks[0].amplitude / k).toBeCloseTo(unit.peaks[0].amplitude, 12)
 			expect(scaled.peaks[0].offset / k).toBeCloseTo(unit.peaks[0].offset, 12)
 		}
+	})
+
+	// Regression: Math.log2(Number.MAX_VALUE) rounds to 1024, which made the pre-scaling unit Infinity and
+	// reported this series as constant.
+	test('values at Number.MAX_VALUE', () => {
+		const hi = Number.MAX_VALUE
+		const t = [0, 1, 2, 3, 4, 5, 6, 7]
+		const sign = [1, -1, 1, -1, 1, -1, 1, -1]
+		const frequencies = { frequencies: [0.5] }
+		const unit = lombScargle(t, sign, 1, frequencies)
+		const extreme = lombScargle(
+			t,
+			sign.map((s) => s * hi),
+			hi,
+			frequencies,
+		)
+
+		expect(extreme.status).toBe('ok')
+		expect(extreme.mean).toBe(0)
+		expect(extreme.referenceChiSquare).toBeCloseTo(unit.referenceChiSquare, 12)
+		expect(extreme.periodogram!.power[0]).toBeCloseTo(unit.periodogram!.power[0], 12)
+		expect(extreme.peaks[0].amplitude / hi).toBeCloseTo(unit.peaks[0].amplitude, 12)
 	})
 
 	test('signal of one ulp', () => {
