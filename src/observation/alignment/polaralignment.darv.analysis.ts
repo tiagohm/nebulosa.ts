@@ -13,8 +13,8 @@ import { type DarvImageTransform, DarvMatrixTransform } from './polaralignment.d
 // Image-based DARV reduction using generic robust streak fits and bounded, DARV-specific pairing.
 // Image positions are zero-based pixel centers (+X right, +Y down). Durations are SI seconds;
 // celestial offsets are radians. Inputs are never mutated and no device/network IO is performed.
-// Model: opposite equal commanded RA speeds, constant local drift, at most one turnaround dwell,
-// no DEC guiding, resolved straight legs, and small sky excursions. Curvature/blends are rejected.
+// Model: opposite equal commanded RA speeds, constant local drift, at most one turnaround dwell plus
+// optional stationary time before and after the motion, no DEC guiding, resolved straight legs, and small sky excursions. Curvature/blends are rejected.
 
 // At most 64 segments (2016 pairs) are examined, including caller-supplied detections.
 const MAX_SEGMENTS = 64
@@ -101,7 +101,7 @@ export interface DarvTrailMeasurement {
 export interface DarvAnalysisInput {
 	// Normalized mono, interleaved RGB, or native CFA image, never modified.
 	readonly image: Image
-	// Actual shutter-open duration in seconds, equal to outbound + return + dwell durations.
+	// Actual shutter-open duration in seconds, equal to leading + outbound + dwell + return + trailing.
 	readonly exposure: number
 	// Nominal per-leg duration, seconds, used only when an actual duration is absent.
 	readonly legDuration: number
@@ -109,8 +109,14 @@ export interface DarvAnalysisInput {
 	readonly outboundDuration?: number
 	// Actual return motion duration in seconds, when measured.
 	readonly returnDuration?: number
-	// Actual stationary-RA turnaround duration, seconds; defaults to exposure minus both legs.
+	// Actual stationary-RA turnaround duration, seconds; defaults to exposure minus both legs and the
+	// leading and trailing intervals.
 	readonly turnaroundDuration?: number
+	// Shutter-open time before the outbound motion starts, with RA stationary, in seconds; default 0.
+	// Only the endpoints of the motion enter the drift, so this time is excluded from its baseline.
+	readonly leadingDuration?: number
+	// Shutter-open time after the return motion stopped, with RA stationary, in seconds; default 0.
+	readonly trailingDuration?: number
 	// First commanded mount RA direction; with a transform identifies the turn side, but equal-time
 	// exposures still need a start marker to distinguish the two close outer endpoints.
 	readonly firstDirection?: DarvRaDirection
@@ -164,8 +170,9 @@ interface DarvTiming {
 	readonly inbound: number
 	// Turnaround interval with tracking continuing and commanded RA excursion paused.
 	readonly dwell: number
-	// Complete shutter-open interval.
-	readonly total: number
+	// Interval from the start of the outbound motion to the end of the return motion, the baseline
+	// of the drift between the two outer endpoints of a trail.
+	readonly motion: number
 }
 
 // Pair identity retained to detect competing assignments before selecting trails.
@@ -283,12 +290,16 @@ export function analyzeDarvImage(input: Readonly<DarvAnalysisInput>): DarvImageA
 
 // Checks the physical relationship between shutter and motion intervals, which otherwise produces
 // a plausible but wrongly scaled drift. This is timing consistency, not routine range validation.
+// Stationary time before and after the motion is accepted but excluded from the drift baseline:
+// tracking keeps the star still in RA there, so it only blurs the outer endpoints along DEC.
 function resolveDarvTiming(input: Readonly<DarvAnalysisInput>): DarvTiming | undefined {
 	const outbound = input.outboundDuration ?? input.legDuration
 	const inbound = input.returnDuration ?? input.legDuration
-	const dwell = input.turnaroundDuration ?? Math.max(0, input.exposure - outbound - inbound)
-	if (!(outbound > 0 && inbound > 0 && dwell >= 0) || !Number.isFinite(input.exposure) || !(Math.abs(outbound + inbound + dwell - input.exposure) <= 1e-6 * input.exposure)) return undefined
-	return { outbound, inbound, dwell, total: input.exposure }
+	const leading = input.leadingDuration ?? 0
+	const trailing = input.trailingDuration ?? 0
+	const dwell = input.turnaroundDuration ?? Math.max(0, input.exposure - outbound - inbound - leading - trailing)
+	if (!(outbound > 0 && inbound > 0 && dwell >= 0 && leading >= 0 && trailing >= 0) || !Number.isFinite(input.exposure) || !(Math.abs(leading + outbound + dwell + inbound + trailing - input.exposure) <= 1e-6 * input.exposure)) return undefined
+	return { outbound, inbound, dwell, motion: outbound + dwell + inbound }
 }
 
 // Freezes the local Jacobian for one trail so a dynamic transform is evaluated at analysis time,
@@ -347,7 +358,7 @@ function measureDarvPair(first: Streak, second: Streak, input: Readonly<DarvAnal
 	const width = Math.max(first.width, second.width)
 	const tolerance = Math.max(3, 2 * width)
 	const closure = Math.hypot(far1.x - far2.x, far1.y - far2.y)
-	if (Math.hypot(near1.x - near2.x, near1.y - near2.y) > tolerance * 3 + (closure * timing.dwell) / timing.total) return undefined
+	if (Math.hypot(near1.x - near2.x, near1.y - near2.y) > tolerance * 3 + (closure * timing.dwell) / timing.motion) return undefined
 
 	const ux = (near1.x - far1.x) / first.length
 	const uy = (near1.y - far1.y) / first.length
@@ -429,8 +440,8 @@ function measureDarvAssignment(first: Streak, second: Streak, far1: Readonly<Poi
 
 	const raX = ((near1.x - far1.x) / timing.outbound - (far2.x - near2.x) / timing.inbound) / 2
 	const raY = ((near1.y - far1.y) / timing.outbound - (far2.y - near2.y) / timing.inbound) / 2
-	const driftX = (far2.x - far1.x - raX * (timing.outbound - timing.inbound)) / timing.total
-	const driftY = (far2.y - far1.y - raY * (timing.outbound - timing.inbound)) / timing.total
+	const driftX = (far2.x - far1.x - raX * (timing.outbound - timing.inbound)) / timing.motion
+	const driftY = (far2.y - far1.y - raY * (timing.outbound - timing.inbound)) / timing.motion
 	if (Math.hypot(near2.x - near1.x - driftX * timing.dwell, near2.y - near1.y - driftY * timing.dwell) > tolerance * 2) return undefined
 
 	if (transform !== undefined) {
@@ -441,7 +452,7 @@ function measureDarvAssignment(first: Streak, second: Streak, far1: Readonly<Poi
 	const north = transform?.imageOffsetToSky(driftX, driftY)[1]
 	const magnitude = north === undefined ? Math.abs(raX * driftY - raY * driftX) / Math.hypot(raX, raY) : Math.abs(north)
 	const residual = Math.hypot(first.rmsResidual, second.rmsResidual) / Math.SQRT2
-	const resolution = (Math.max(0.25, residual, width / 2) * 2) / timing.total
+	const resolution = (Math.max(0.25, residual, width / 2) * 2) / timing.motion
 	const skyX = transform?.imageOffsetToSky(resolution, 0)[1]
 	const skyY = transform?.imageOffsetToSky(0, resolution)[1]
 
@@ -601,7 +612,7 @@ function measureUnresolvedRetrace(streak: Streak, input: Readonly<DarvAnalysisIn
 		directionResolved: false,
 		driftMagnitude: 0,
 		driftUnit: 'radiansPerSecond',
-		uncertainty: (resolution * 2) / timing.total,
+		uncertainty: (resolution * 2) / timing.motion,
 		confidence: streak.confidence * 0.5,
 		rmsResidual: streak.rmsResidual,
 		clipped: streak.clippedAtBorder,
