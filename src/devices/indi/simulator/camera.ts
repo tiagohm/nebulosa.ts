@@ -116,6 +116,13 @@ const BAHTINOV_SPIKE_INDICES = [0, 1, 2] as const
 // simulated mount/guider/focuser/rotator/wheel state when rendering a frame.
 export interface CameraSimulatorOptions extends DeviceSimulatorOptions {
 	readonly catalogSources?: Record<string, CatalogSource | undefined | null>
+	// Catalog source selected when the camera is created: 'RANDOM' or a key of catalogSources whose source is
+	// present. Anything else selects 'RANDOM'. Defaults to 'RANDOM'.
+	readonly catalogSource?: CatalogSourceType
+	// Initial focal length of TELESCOPE_INFO, in millimeters within [1, 10000]. Defaults to 500.
+	readonly focalLength?: number
+	// Initial aperture of TELESCOPE_INFO, in millimeters within [1, 3000]. Defaults to 80.
+	readonly aperture?: number
 	readonly mountManager?: MountManager
 	readonly guideOutputManager?: GuideOutputManager
 	readonly focuserManager?: FocuserManager
@@ -286,12 +293,19 @@ export class CameraSimulator extends DeviceSimulator {
 		}
 
 		if (options?.catalogSources) {
+			const selected = options.catalogSource !== undefined && options.catalogSources[options.catalogSource] ? options.catalogSource : 'RANDOM'
+
 			for (const name of Object.keys(options.catalogSources)) {
 				if (options.catalogSources[name]) {
-					this.#catalogSource.elements[name] = { name, label: name, value: name === 'RANDOM' }
+					this.#catalogSource.elements[name] = { name, label: name, value: name === selected }
 				}
 			}
+
+			this.#catalogSource.elements.RANDOM.value = selected === 'RANDOM'
 		}
+
+		if (options?.focalLength !== undefined) this.#telescopeInfo.elements.FOCAL_LENGTH.value = options.focalLength
+		if (options?.aperture !== undefined) this.#telescopeInfo.elements.APERTURE.value = options.aperture
 
 		this.driverInfo.elements.DRIVER_EXEC.value = 'camera.simulator'
 
