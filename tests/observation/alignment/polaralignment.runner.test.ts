@@ -52,8 +52,8 @@ function tanSolution(rightAscension: Angle, declination: Angle) {
 	return plateSolutionFrom(header)!
 }
 
-// Clock whose waits complete at once by moving both domains, unless a hook cancels them first. Waits
-// of a minute or more are solve timeouts and watchdogs, which only end by cancellation.
+// Clock whose waits complete at once by moving both domains, unless a hook cancels them first. A wait
+// of exactly a minute is the solve timeout, which only ends by cancellation.
 class InstantClock {
 	wall = Date.UTC(2026, 8, 9, 0, 30)
 	onDelay?: (ms: number) => void
@@ -61,7 +61,7 @@ class InstantClock {
 	readonly wallNow = () => this.wall
 	readonly monotonicNow = () => this.wall
 	readonly delay = (ms: number, signal: AbortSignal): Promise<OperationResult<void>> => {
-		if (ms >= 60000) {
+		if (ms === 60000) {
 			return new Promise((resolve) => {
 				if (signal.aborted) resolve(failedOperationResult('aborted'))
 				else signal.addEventListener('abort', () => resolve(failedOperationResult('aborted')), { once: true })
@@ -350,6 +350,21 @@ describe('refinement', () => {
 		fake.clock.onDelay = () => fake.adjust(deg(5), 0)
 		const result = await refineThreePointPolarAlignment(coordinator(), fake.mount, CAMERA, acquisition.alignment, acquisition.points[2], acquisition.pierSide, REFINEMENT, services(fake))
 		expect(result).toMatchObject({ ok: false, reason: 'unexpectedState', error: expect.stringContaining('moved') })
+	})
+
+	test('a long pause while tracking does not invalidate the estimate', async () => {
+		const fake = new FakeMount(new InstantClock())
+		const acquisition = await acquired(fake)
+		const events: ThreePointPolarAlignmentEvent[] = []
+		const operations = coordinator()
+		const cancel = Promise.withResolvers<void>()
+		const refine: ThreePointPolarAlignmentServices = { ...services(fake), listener: (event) => (events.push(event), event.type === 'result' && cancel.resolve()) }
+		const handle = operations.start('session', [], (context) => refineThreePointPolarAlignment(context, fake.mount, CAMERA, acquisition.alignment, acquisition.points[2], acquisition.pierSide, { ...REFINEMENT, delay: 1800 }, refine))
+		void cancel.promise.then(() => handle.cancel('aborted'))
+		expect(await handle.result).toMatchObject({ ok: false, reason: 'aborted' })
+		const result = events.find((e) => e.type === 'result')
+		if (result?.type !== 'result') throw new Error('no refinement result')
+		expectPole(result.result.pole, result.result.time, fake.pole, 5)
 	})
 
 	test('fails after consecutive frames without solution', async () => {

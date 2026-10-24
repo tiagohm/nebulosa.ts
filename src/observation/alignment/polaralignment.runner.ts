@@ -1,6 +1,7 @@
 import { unlink } from 'fs/promises'
 import type { PlateSolution } from '../../astrometry/solvers/platesolver'
 import { DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters } from '../../astronomy/coordinates/astrometry'
+import { angularDistance } from '../../astronomy/coordinates/coordinate'
 import type { GeographicPosition } from '../../astronomy/observer/location'
 import { timeUnix } from '../../astronomy/time/time'
 import { SIDEREAL_DRIFT_RATE } from '../../core/constants'
@@ -65,8 +66,8 @@ export interface ThreePointPolarAlignmentRefinementOptions {
 	readonly delay: number
 	// Consecutive frames without a solution tolerated before the refinement fails; safe integer ≥ 0.
 	readonly maximumFailures: number
-	// Largest great-circle shift between consecutive refinement solves, in radians, beyond which the
-	// mount is considered to have slewed and the estimate invalidated; finite > 0.
+	// Largest great-circle shift of the ICRF center between consecutive refinement solves, in radians,
+	// beyond which the mount is considered to have slewed and the estimate invalidated; finite > 0.
 	readonly maximumShift: Angle
 	// Cooperative timeout of one solve; finite > 0.
 	readonly solveTimeout: number
@@ -375,7 +376,9 @@ async function refinementLoop(
 
 		failures = 0
 		const { sample, solution } = solved.value
-		const shift = polarAlignmentDisplacement(reference, sample).separation
+		// Tracking keeps the field fixed on the sky, so a slew shows as a jump of the inertial center; in the
+		// Earth-fixed frame the tracking itself would grow without bound while the refinement is paused.
+		const shift = angularDistance(reference[0], reference[1], sample[0], sample[1])
 		if (!(shift <= options.maximumShift)) return failedOperationResult('unexpectedState', `the field moved ${toDeg(shift).toFixed(2)}° between refinement frames`)
 
 		const result = alignment.add(...sample)
