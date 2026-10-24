@@ -424,6 +424,25 @@ describe('degenerate data', () => {
 		expect(outlier.mean).toBe(3)
 	})
 
+	// Regression: an extreme value whose weight (1e-170)^2 underflows to 0 used to scale to Infinity and turn
+	// the sums into NaN, reported as zero power.
+	test('extreme value with an underflowed weight', () => {
+		const frequencies = { frequencies: [0.5] }
+		const base = lombScargle([0, 1, 2, 3], [0, 1, 0, 1], 1, frequencies)
+		expect(base.periodogram!.power[0]).toBeCloseTo(1, 15)
+
+		for (const extreme of [1e308, -1e308]) {
+			const result = lombScargle([0, 1, 2, 3, 4], [0, 1, 0, 1, extreme], [1, 1, 1, 1, 1e170], { ...frequencies, falseAlarm: { method: 'bootstrap', samples: 20, random: mulberry32(1) } })
+			expect(result.status).toBe('ok')
+			expect(result.sampleCount).toBe(5)
+			expect(result.mean).toBe(base.mean)
+			expect(result.referenceChiSquare).toBe(base.referenceChiSquare)
+			expect(result.periodogram!.power[0]).toBe(base.periodogram!.power[0])
+			expect(result.peaks[0].amplitude).toBeCloseTo(base.peaks[0].amplitude, 15)
+			expect(result.peaks[0].falseAlarmProbability).toBeGreaterThanOrEqual(0)
+		}
+	})
+
 	// Regression: a fixed tolerance relative to the largest value used to drop this resolved signal as constant.
 	test('signal on a large offset', () => {
 		const t = Array.from({ length: 40 }, (_, i) => 0.27 * i + 0.05 * (i % 3))

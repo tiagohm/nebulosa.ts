@@ -249,8 +249,8 @@ interface WeightedSamples {
 	readonly t: Float64Array
 	// Inverse-variance weights normalized to unit sum.
 	readonly w: Float64Array
-	// Values minus their weighted mean, divided by scale, in [-1, 1] where the weight is positive (a weight
-	// that underflowed to 0 leaves its sample out of every sum).
+	// Values minus their weighted mean, divided by scale, in [-1, 1]; exactly 0 where the weight underflowed
+	// to 0, which leaves that sample out of every sum.
 	readonly y: Float64Array
 	// Number of samples.
 	readonly count: number
@@ -508,18 +508,20 @@ function weightedSamples(t: Float64Array, value: Float64Array, error: Float64Arr
 
 	// The correction is subtracted from the small residuals, not added to the mean, where it would be
 	// rounded again to the ulp of a large offset and leave the residuals off-center.
+	// A sample whose weight underflowed to 0 gets a zero residual, so that an extreme value there can neither
+	// overflow the scaled residuals nor turn 0 * Infinity into NaN in the sums.
 	let correction = 0
 
 	for (let i = 0; i < count; i++) {
-		y[i] = value[i] - mean
+		y[i] = w[i] > 0 ? value[i] - mean : 0
 		correction += w[i] * y[i]
 	}
 
 	let scale = 0
 
 	for (let i = 0; i < count; i++) {
-		y[i] -= correction
-		if (w[i] > 0 && Math.abs(y[i]) > scale) scale = Math.abs(y[i])
+		if (w[i] > 0) y[i] -= correction
+		if (Math.abs(y[i]) > scale) scale = Math.abs(y[i])
 	}
 
 	mean += correction
