@@ -400,11 +400,70 @@ describe('degenerate data', () => {
 		)
 
 		expect(result.status).toBe('constant')
-		expect(result.mean).toBeCloseTo(0.1, 15)
+		expect(result.mean).toBe(0.1)
 		expect(result.referenceChiSquare).toBe(0)
 		expect(result.periodogram).toBeUndefined()
 		expect(result.grid).toBeUndefined()
 		expect(result.peaks).toEqual([])
+
+		expect(
+			lombScargle(
+				t,
+				t.map(() => 1e10),
+				dy,
+			).status,
+		).toBe('constant')
+
+		// A different value whose weight (1e-170)^2 underflows to 0 does not count.
+		const outlier = lombScargle(
+			t,
+			t.map((_, i) => (i === 7 ? 100 : 3)),
+			t.map((_, i) => (i === 7 ? 1e170 : 1)),
+		)
+		expect(outlier.status).toBe('constant')
+		expect(outlier.mean).toBe(3)
+	})
+
+	// Regression: a fixed tolerance relative to the largest value used to drop this resolved signal as constant.
+	test('signal on a large offset', () => {
+		const t = Array.from({ length: 40 }, (_, i) => 0.27 * i + 0.05 * (i % 3))
+		const y = t.map((x) => 1e10 + 5e-5 * Math.cos(2 * Math.PI * 0.31 * x))
+		const frequencies = { frequencies: [0.31] }
+		const offset = lombScargle(t, y, 1e-6, frequencies)
+		const centered = lombScargle(
+			t,
+			y.map((v) => v - 1e10),
+			1e-6,
+			frequencies,
+		)
+
+		expect(offset.status).toBe('ok')
+		expect(offset.periodogram!.power[0]).toBeGreaterThan(0.99)
+		// Subtracting the offset is exact, so the quantized samples and their power are the same.
+		expect(offset.periodogram!.power[0]).toBeCloseTo(centered.periodogram!.power[0], 12)
+		expect(offset.peaks[0].amplitude).toBeCloseTo(centered.peaks[0].amplitude, 15)
+		expect(offset.peaks[0].amplitude / 5e-5).toBeCloseTo(1, 1)
+		// The offset near 1e10 is representable only to its ulp, 2^-19.
+		expect(Math.abs(offset.peaks[0].offset - (1e10 + centered.peaks[0].offset))).toBeLessThanOrEqual(2 ** -19)
+	})
+
+	test('signal of one ulp', () => {
+		// 1e10 lies in [2^33, 2^34), so its ulp is 2^-19; a square wave between two adjacent doubles.
+		const ulp = 2 ** -19
+		const t = Array.from({ length: 50 }, (_, i) => 0.37 * i + 0.1 * Math.sin(i))
+		const wave = t.map((x) => (Math.cos(2 * Math.PI * 0.2 * x) > 0 ? ulp : 0))
+		const frequencies = { frequencies: [0.2] }
+		const offset = lombScargle(
+			t,
+			wave.map((v) => 1e10 + v),
+			ulp,
+			frequencies,
+		)
+		const zero = lombScargle(t, wave, ulp, frequencies)
+
+		expect(offset.status).toBe('ok')
+		expect(offset.periodogram!.power[0]).toBeGreaterThan(0.7)
+		expect(offset.periodogram!.power[0]).toBeCloseTo(zero.periodogram!.power[0], 12)
 	})
 
 	test('insufficient data', () => {
@@ -455,6 +514,16 @@ describe('options', () => {
 		expect(frequency[0]).toBe(0.2)
 		expect(frequency[1] - frequency[0]).toBeCloseTo(0.1 / result.baseline, 15)
 		expect(Math.abs(frequency.at(-1)! - 0.5)).toBeLessThanOrEqual((0.05 / result.baseline) * (1 + 1e-9))
+	})
+
+	// Regression: the default lowest frequency 0.02 used to be searched although above maxFrequency.
+	test('lone maxFrequency below the default lowest frequency', () => {
+		const result = lombScargle([0, 1, 2, 3, 4, 5], [1, 2, 1, 0, 2, 0], 1, { maxFrequency: 0.01 })
+		expect([...result.periodogram!.frequency]).toEqual([0.01])
+		expect(result.grid!.maxFrequency).toBe(0.01)
+
+		const above = lombScargle([0, 1, 2, 3, 4, 5], [1, 2, 1, 0, 2, 0], 1, { maxFrequency: 0.5 })
+		expect(above.periodogram!.frequency[0]).toBeCloseTo(0.02, 15)
 	})
 
 	test('throws on invalid input', () => {

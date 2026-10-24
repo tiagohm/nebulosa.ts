@@ -53,10 +53,6 @@ const MAX_FREQUENCIES = 1 << 23
 // amplitude, is where the rounding of the columns (about 1e-16) would perturb the power by about 1e-6.
 const DEGENERATE_VARIANCE = 1e-18
 
-// Weighted spread of the centered values, relative to the largest absolute value, at or below which the
-// series is constant to rounding and has no defined power.
-const CONSTANT_TOLERANCE = 1e-14
-
 // Iterations of the Brent maximization refining each peak between its grid neighbors.
 const REFINEMENT_ITERATIONS = 64
 
@@ -95,8 +91,8 @@ export type LombScargleFalseAlarm = { readonly method: 'baluev' } | { readonly m
 
 // Outcome of the periodogram.
 // 'ok': the periodogram was evaluated.
-// 'constant': the usable values are constant to rounding, so the power is undefined; there is no
-// periodogram and no peak.
+// 'constant': every usable value with a non-zero weight is identical, so the power is undefined; there is
+// no periodogram and no peak. Values that differ by a single ulp are a signal, not a constant.
 // 'insufficientData': fewer than 4 usable samples or a zero baseline; there is no periodogram and no peak.
 export type LombScargleStatus = 'ok' | 'constant' | 'insufficientData'
 
@@ -125,7 +121,8 @@ export interface LombScargleOptions {
 	// count = max(1, 1 + round((maxFrequency - minFrequency) / step)), so the last frequency may exceed
 	// maxFrequency by up to half a step.
 	readonly frequencies?: Readonly<NumberArray>
-	// Lowest frequency of the default grid, positive. Defaults to half a step, 0.5 / (samplesPerPeak * baseline).
+	// Lowest frequency of the default grid, positive. Defaults to half a step, 0.5 / (samplesPerPeak * baseline),
+	// or to maxFrequency when that is lower, which leaves maxFrequency as the only frequency.
 	readonly minFrequency?: number
 	// Highest frequency of the default grid, positive, not below minFrequency. Defaults to nyquistFactor
 	// times the average Nyquist frequency 0.5 * sampleCount / baseline.
@@ -252,13 +249,15 @@ interface WeightedSamples {
 	readonly t: Float64Array
 	// Inverse-variance weights normalized to unit sum.
 	readonly w: Float64Array
-	// Values minus their weighted mean, divided by scale, in [-1, 1].
+	// Values minus their weighted mean, divided by scale, in [-1, 1] where the weight is positive (a weight
+	// that underflowed to 0 leaves its sample out of every sum).
 	readonly y: Float64Array
 	// Number of samples.
 	readonly count: number
 	// Weighted mean value, value unit.
 	readonly mean: number
-	// Largest absolute centered value, value unit; the unit of y. 0 for a constant series.
+	// Largest absolute centered value of a positively weighted sample, value unit; the unit of y. 0 for a
+	// constant series.
 	readonly scale: number
 	// Σ w y^2, the weighted variance of y, in (0, 1]; 0 for a constant series.
 	readonly variance: number
@@ -349,7 +348,8 @@ export function lombScargle(time: Readonly<NumberArray>, value: Readonly<NumberA
 		frequencyCount = explicit.length
 	} else {
 		step = 1 / (samplesPerPeak * baseline)
-		minFrequency ??= 0.5 * step
+		// A lone maxFrequency below the default lowest frequency must not move the band above it.
+		minFrequency ??= maxFrequency === undefined ? 0.5 * step : Math.min(0.5 * step, maxFrequency)
 		const highest = maxFrequency ?? nyquistFactor * 0.5 * (count / baseline)
 		frequencyCount = Math.max(1, 1 + Math.round((highest - minFrequency) / step))
 	}
@@ -470,8 +470,10 @@ function usableSamples(time: Readonly<NumberArray>, value: Readonly<NumberArray>
 // Normalizes the inverse-variance weights to unit sum and centers the values on their weighted mean,
 // scaled by the largest absolute centered value. The weights are first normalized by the smallest error,
 // (minError / error)^2 in (0, 1], so they cannot overflow, and the centering is corrected by the weighted
-// mean of the first residuals (the corrected two-pass algorithm), so a constant series centers to exact
-// zeros. Requires at least one sample.
+// mean of the first residuals (the corrected two-pass algorithm). The series is constant only when every
+// positively weighted value is identical, so a signal of a few ulps on a large offset is kept: centering
+// subtracts the offset exactly and the scaled residuals keep their full relative precision. Requires at
+// least one sample; the one with the smallest error always has a positive weight.
 function weightedSamples(t: Float64Array, value: Float64Array, error: Float64Array): WeightedSamples {
 	const count = t.length
 	const w = new Float64Array(count)
@@ -489,26 +491,42 @@ function weightedSamples(t: Float64Array, value: Float64Array, error: Float64Arr
 	}
 
 	let mean = 0
-	let maxValue = 0
+	let reference = Number.NaN
+	let constant = true
 
 	for (let i = 0; i < count; i++) {
 		w[i] /= sumW
 		mean += w[i] * value[i]
-		if (Math.abs(value[i]) > maxValue) maxValue = Math.abs(value[i])
+
+		if (w[i] > 0) {
+			if (Number.isNaN(reference)) reference = value[i]
+			else if (value[i] !== reference) constant = false
+		}
 	}
 
+	if (constant) return { t, w, y, count, mean: reference, scale: 0, variance: 0, referenceChiSquare: 0 }
+
+	// The correction is subtracted from the small residuals, not added to the mean, where it would be
+	// rounded again to the ulp of a large offset and leave the residuals off-center.
 	let correction = 0
-	for (let i = 0; i < count; i++) correction += w[i] * (value[i] - mean)
-	mean += correction
+
+	for (let i = 0; i < count; i++) {
+		y[i] = value[i] - mean
+		correction += w[i] * y[i]
+	}
 
 	let scale = 0
 
 	for (let i = 0; i < count; i++) {
-		y[i] = value[i] - mean
-		if (Math.abs(y[i]) > scale) scale = Math.abs(y[i])
+		y[i] -= correction
+		if (w[i] > 0 && Math.abs(y[i]) > scale) scale = Math.abs(y[i])
 	}
 
-	if (!(scale > CONSTANT_TOLERANCE * maxValue)) return { t, w, y: y.fill(0), count, mean, scale: 0, variance: 0, referenceChiSquare: 0 }
+	mean += correction
+
+	// Distinct values whose residuals all round to the correction are constant to working precision; this
+	// also keeps the scaling below from dividing by zero.
+	if (!(scale > 0)) return { t, w, y: y.fill(0), count, mean, scale: 0, variance: 0, referenceChiSquare: 0 }
 
 	let variance = 0
 
