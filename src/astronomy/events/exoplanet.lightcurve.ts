@@ -55,7 +55,8 @@ export interface TransitExposureOptions {
 
 // Parameter that the fit can adjust. 'limbDarkening' frees both coefficients through the Kipping
 // (2013) parameters q1 = (u1 + u2)² and q2 = u1 / (2 (u1 + u2)), each bounded to [0, 1], which keeps
-// the intensity positive and monotonic.
+// the intensity positive and monotonically darkening; a free initial law outside that domain starts from
+// the nearest q1, q2. Fixed coefficients are used exactly as given, whatever law they describe.
 export type TransitFitParameter = 'epoch' | 'period' | 'radiusRatio' | 'impactParameter' | 'scaledSemiMajorAxis' | 'limbDarkening' | 'baseline'
 
 // Fit parameter with explicit box bounds.
@@ -66,10 +67,11 @@ export type TransitBoundedParameter = Exclude<TransitFitParameter, 'limbDarkenin
 export type TransitCovarianceParameter = TransitBoundedParameter | 'u1' | 'u2'
 
 // Outcome of the fit.
-// 'ok': the optimizer converged (the Gauss-Newton step from the result would lower the chi-square by at
-// most 1e-3 over the free parameters not at a bound).
-// 'notConverged': the iteration limit was reached first; the parameters and diagnostics describe the
-// last accepted point.
+// 'ok': the optimizer converged: the Gauss-Newton step from the result over the free parameters not at a
+// bound would lower the chi-square by at most 1e-3, or, where the quadratic model overstates the gain (a
+// curved degenerate valley), no fraction of that step down to 1/1024 lowers it by more than 1e-3.
+// 'notConverged': the iteration and restart limits were reached first; the parameters and diagnostics
+// describe the last accepted point.
 // 'insufficientData': at most as many usable samples as free coefficients, fewer than
 // minInTransitPoints usable samples overlapping the initial transit, or no positive out-of-transit
 // level; no fit was run and the initial parameters are returned.
@@ -83,8 +85,8 @@ export type TransitFitStatus = 'ok' | 'notConverged' | 'insufficientData'
 // 'singularCovariance': the column-scaled Jacobian is rank deficient (condition number above 1e12), so
 // some combination of the free parameters is unconstrained and there is no covariance.
 // 'strongDegeneracy': two free parameters are correlated by more than 0.95 in absolute value.
-// 'grazing': b > 1 − p, so the planet never lies wholly inside the stellar disk; the radius ratio and
-// the impact parameter are then strongly degenerate.
+// 'grazing': b > |1 − p|, so the planet never lies wholly inside the stellar disk (p < 1) or never covers
+// the whole star (p > 1); the radius ratio and the impact parameter are then strongly degenerate.
 // 'noTransit': the fitted geometry has no occultation (p = 0 or b >= 1 + p).
 // 'missingIngress', 'missingEgress': no usable exposure overlaps the fitted ingress (first to second
 // contact) or egress (third to fourth contact) of any event, so that side's shape is unconstrained.
@@ -114,17 +116,20 @@ export interface TransitFitOptions extends TransitExposureOptions {
 	// [0, 1 + max radiusRatio]; scaledSemiMajorAxis [1, 10 a/R*]; baseline ± 50%. An impact parameter
 	// range starting at 0 is searched symmetrically in [−max, max], because the light curve is even in b.
 	readonly bounds?: { readonly [K in TransitBoundedParameter]?: readonly [min: number, max: number] }
-	// Levenberg-Marquardt iterations per run, a positive integer; the fit restarts from the last point up
-	// to three runs while not converged (one more when the impact parameter is held on 0 or released).
-	// Defaults to 200.
+	// Levenberg-Marquardt iterations per run, a positive integer; the fit restarts up to five runs while not
+	// converged, from the last point or from the best fraction of the Gauss-Newton step (one more run when the
+	// impact parameter is held on 0 or released). Defaults to 200.
 	readonly maxIterations?: number
 	// Minimum number of usable samples overlapping the initial transit, a positive integer. Defaults to 3.
 	readonly minInTransitPoints?: number
 }
 
 // Result of fitTransit. Uncertainties are 1σ from the inverse of the Fisher matrix JᵀWJ at the result,
-// with W the inverse flux variances as given (not rescaled by the reduced chi-square), and are
-// meaningful only for a converged fit away from the bounds.
+// with W the inverse flux variances as given (not rescaled by the reduced chi-square). They are a
+// first-order, symmetric description of the local minimum: meaningful for a converged fit away from the
+// bounds, and only indicative where the flags report a bound, a strong degeneracy or a grazing geometry,
+// or for a shallow transit near p = 0, where the likelihood is skewed and a resampling or Markov chain
+// analysis gives the intervals.
 export interface TransitFitResult {
 	readonly status: TransitFitStatus
 	// Diagnostic flags, in the TransitFitFlag declaration order.
@@ -148,8 +153,8 @@ export interface TransitFitResult {
 	// Total duration T14 (first to fourth contact), days, 0 without a transit, and its 1σ uncertainty.
 	readonly totalDuration: number
 	readonly totalDurationError?: number
-	// Full duration T23 (second to third contact), days, 0 for a grazing or no transit, and its 1σ
-	// uncertainty (undefined for a grazing or no transit).
+	// Full duration T23 (second to third contact: the planet wholly inside the disk for p < 1, the star wholly
+	// covered for p > 1), days, 0 for a grazing or no transit, and its 1σ uncertainty (undefined then).
 	readonly fullDuration: number
 	readonly fullDurationError?: number
 	// Free parameters at a bound.
@@ -161,7 +166,7 @@ export interface TransitFitResult {
 	// chiSquare / degreesOfFreedom, undefined without degrees of freedom.
 	readonly reducedChiSquare?: number
 	// Chi-square decrease predicted by one Gauss-Newton step from the result over the free parameters
-	// not at a bound, the convergence measure; undefined for 'insufficientData'.
+	// not at a bound (see the 'ok' status); undefined for 'insufficientData'.
 	readonly predictedImprovement?: number
 	// Samples with finite time and flux and a finite positive error.
 	readonly sampleCount: number
@@ -190,10 +195,11 @@ const DEFAULT_SUBEXPOSURE = 1 / 1440
 // Largest number of sub-exposures of one sample.
 const MAX_SUPERSAMPLE = 1000
 
-// Default Levenberg-Marquardt iterations per run, and the number of runs from the last point while not
-// converged; pinning the impact parameter on 0, or releasing it, adds one run.
+// Default Levenberg-Marquardt iterations per run, and the number of runs while not converged, each from the
+// last point or the best fraction of the Gauss-Newton step; pinning the impact parameter on 0, or releasing
+// it, adds one run.
 const DEFAULT_MAX_ITERATIONS = 200
-const MAX_RUNS = 3
+const MAX_RUNS = 5
 
 // Absolute chi-square improvement at which a Levenberg-Marquardt run stops early.
 const LM_TOLERANCE = 1e-9
@@ -201,6 +207,9 @@ const LM_TOLERANCE = 1e-9
 // Largest Gauss-Newton predicted chi-square decrease of a converged fit: the remaining step is then about
 // 0.03σ or less.
 const CONVERGED_IMPROVEMENT = 1e-3
+
+// Smallest fraction of the Gauss-Newton step tried by the convergence line search.
+const LINE_SEARCH_MIN_FRACTION = 1 / 1024
 
 // Default minimum number of usable samples overlapping the initial transit.
 const DEFAULT_MIN_IN_TRANSIT_POINTS = 3
@@ -266,9 +275,11 @@ const DEFAULT_FREE: readonly TransitFitParameter[] = ['epoch', 'radiusRatio', 'i
 // (non-negative) from the stellar center, normalized to 1 for the unocculted star; 0 when the disk covers
 // the whole star. Mandel & Agol (2002) with the case split of Eastman et al. (2013): the separation snaps
 // to z = p, z = 1 − p or z = 0 within 1e-12 stellar radii, and the elliptic integrals come from cel. The
-// result agrees with exoplanet-core 0.4.0 (Agol, Luger & Foreman-Mackey 2020) within 1e-13 over the (z, p)
-// plane, contacts included, except within 1e-8 stellar radii of the center for p near 1, where the
-// 1 / sqrt(pz) factor of the published expression amplifies rounding to about 3e-11.
+// result agrees with exoplanet-core 0.4.0 (Agol, Luger & Foreman-Mackey 2020) within 5e-14 in absolute flux
+// for p from 1e-4 to 2, on and within 1e-9 to 1e-5 of the contacts (data/exoplanet-core.quadratic.json),
+// which is 3e-8 of the depth p² down to p = 1e-3 and 5e-6 of it at p = 1e-4. For p near 1 within 1e-8
+// stellar radii of the center the 1 / sqrt(pz) factor of the published expression amplifies rounding to
+// about 3e-11.
 export function quadraticTransitFlux(separation: number, radiusRatio: number, limbDarkening: QuadraticLimbDarkening) {
 	const p = radiusRatio
 	let z = separation
@@ -417,11 +428,12 @@ export function transitTotalDuration(parameters: Pick<TransitParameters, 'period
 }
 
 // Full transit duration T23 from second to third contact, days, of a circular orbit:
-// (P / π) asin(sqrt(((1 − p)² − b²) / ((a/R*)² − b²))), 0 for a grazing transit (b >= 1 − p), no transit or
-// p >= 1.
+// (P / π) asin(sqrt(((1 − p)² − b²) / ((a/R*)² − b²))). For p < 1 the planet is then wholly inside the
+// stellar disk, for p > 1 the star is wholly covered (zero flux). 0 for a grazing transit (b >= |1 − p|),
+// p = 0 or p = 1.
 export function transitFullDuration(parameters: Pick<TransitParameters, 'period' | 'radiusRatio' | 'impactParameter' | 'scaledSemiMajorAxis'>) {
 	const p = parameters.radiusRatio
-	return p > 0 && p < 1 ? contactDuration(parameters.period, 1 - p, parameters.impactParameter, parameters.scaledSemiMajorAxis) : 0
+	return p > 0 ? contactDuration(parameters.period, Math.abs(1 - p), parameters.impactParameter, parameters.scaledSemiMajorAxis) : 0
 }
 
 // Semi-major axis a / R* of a circular orbit that gives the total duration T14 (days, in (0, P/2)) for
@@ -555,6 +567,16 @@ function wrapToPeriod(dt: number, period: number) {
 	return dt - Math.round(dt / period) * period
 }
 
+// Optimizer coefficient θ of an internal value bounded to [min, max], kept INITIAL_BOUND_MARGIN of the range off
+// the bounds, where the transform has a zero derivative that would freeze it. The branch θ in [π/2, 3π/2] keeps
+// |θ| >= π/2: levenbergMarquardt differentiates with a step proportional to |θ|, which would vanish for a value
+// in the middle of its range on the principal branch.
+function thetaOf(value: number, min: number, max: number) {
+	const margin = INITIAL_BOUND_MARGIN * (max - min)
+	const clamped = Math.min(max - margin, Math.max(min + margin, value))
+	return PI - Math.asin((2 * (clamped - min)) / (max - min) - 1)
+}
+
 // Kipping (2013) q1, q2 of quadratic limb-darkening coefficients, clamped to [0, 1] (q1 = 0 for u1 + u2 <= 0).
 function kippingFromLimbDarkening(u1: number, u2: number) {
 	const sum = u1 + u2
@@ -587,6 +609,8 @@ interface FitDiagnostics {
 	readonly fisher: Float64Array
 	// Chi-square decrease predicted by a Gauss-Newton step over the parameters not at a bound.
 	readonly predictedImprovement: number
+	// Gauss-Newton step of the physical state per covariance parameter, 0 for the parameters left out of it.
+	readonly step: Float64Array
 	// Whether the minimum lies on the constraint b >= 0 (b free, at or driven to 0).
 	readonly impactAtZero: boolean
 }
@@ -684,22 +708,24 @@ export function fitTransit(time: Readonly<NumberArray>, flux: Readonly<NumberArr
 
 	const coefficients = fitCoefficients(free, initial, baseline0, initialTotalDuration, maxCycles, options.bounds)
 
-	// Internal state [epoch offset, period, p, b, a/R*, q1, q2, baseline] and the optimizer coefficients θ.
+	// Internal state [epoch offset, period, p, b, a/R*, u1 or q1, u2 or q2, baseline] and the optimizer
+	// coefficients θ. Only a free limb darkening goes through Kipping's q1, q2, which cover the monotonically
+	// darkening laws alone; fixed coefficients stay exactly as given, whatever law they describe.
+	const fitLimbDarkening = free.has('limbDarkening')
 	const internal = new Float64Array(state0)
-	const [q1, q2] = kippingFromLimbDarkening(initial.limbDarkening[0], initial.limbDarkening[1])
-	internal[U1] = q1
-	internal[U2] = q2
+
+	if (fitLimbDarkening) {
+		const [q1, q2] = kippingFromLimbDarkening(initial.limbDarkening[0], initial.limbDarkening[1])
+		internal[U1] = q1
+		internal[U2] = q2
+	}
+
 	const theta = new Array<number>(coefficients.length)
 
 	for (let j = 0; j < coefficients.length; j++) {
 		const { index, min, max } = coefficients[j]
-		let value = internal[index]
-		if (index === IMPACT_PARAMETER && min < 0) value = Math.max(value, MIN_INITIAL_IMPACT_PARAMETER)
-		const margin = INITIAL_BOUND_MARGIN * (max - min)
-		value = Math.min(max - margin, Math.max(min + margin, value))
-		// The branch θ in [π/2, 3π/2] keeps |θ| >= π/2: levenbergMarquardt differentiates with a step proportional to
-		// |θ|, which would vanish for a value in the middle of its range on the principal branch.
-		theta[j] = PI - Math.asin((2 * (value - min)) / (max - min) - 1)
+		const value = internal[index]
+		theta[j] = thetaOf(index === IMPACT_PARAMETER && min < 0 ? Math.max(value, MIN_INITIAL_IMPACT_PARAMETER) : value, min, max)
 	}
 
 	// Physical state of θ.
@@ -711,10 +737,13 @@ export function fitTransit(time: Readonly<NumberArray>, flux: Readonly<NumberArr
 			out[index] = min + 0.5 * (max - min) * (1 + Math.sin(params[j]))
 		}
 
-		const sqrtQ1 = Math.sqrt(out[U1])
-		const kq2 = out[U2]
-		out[U1] = 2 * sqrtQ1 * kq2
-		out[U2] = sqrtQ1 * (1 - 2 * kq2)
+		if (fitLimbDarkening) {
+			const sqrtQ1 = Math.sqrt(out[U1])
+			const kq2 = out[U2]
+			out[U1] = 2 * sqrtQ1 * kq2
+			out[U2] = sqrtQ1 * (1 - 2 * kq2)
+		}
+
 		return out
 	}
 
@@ -744,6 +773,38 @@ export function fitTransit(time: Readonly<NumberArray>, flux: Readonly<NumberArr
 	let impactCoefficient: FitCoefficient | undefined
 	let diagnostics: FitDiagnostics | undefined
 	let runs = MAX_RUNS
+	let converged = false
+
+	// Largest χ² decrease along fractions 1, 1/2, ..., LINE_SEARCH_MIN_FRACTION of the Gauss-Newton step from
+	// `final`, each candidate projected into the bounds, and the optimizer coefficients of the best candidate.
+	const candidate = new Float64Array(8)
+	const probeState = new Float64Array(8)
+
+	const searchAlongStep = (current: FitDiagnostics) => {
+		let best = 0
+		let bestTheta: number[] = theta
+
+		for (let fraction = 1; fraction >= LINE_SEARCH_MIN_FRACTION; fraction /= 2) {
+			candidate.set(final)
+			for (let a = 0; a < fitNames.length; a++) candidate[fitNames[a][1]] += fraction * current.step[a]
+
+			if (fitLimbDarkening) {
+				const [q1, q2] = kippingFromLimbDarkening(candidate[U1], candidate[U2])
+				candidate[U1] = q1
+				candidate[U2] = q2
+			}
+
+			const trial = coefficients.map(({ index, min, max }) => thetaOf(candidate[index], min, max))
+			const gain = current.chiSquare - chiSquareOf(ys, ws, evaluateCurve(toState(trial, probeState), ts, model, modelFlux))
+
+			if (gain > best) {
+				best = gain
+				bestTheta = trial
+			}
+		}
+
+		return [best, bestTheta] as const
+	}
 
 	for (let run = 0; run < runs; run++) {
 		if (coefficients.length > 0) levenbergMarquardt(ts, ys, sampleModel, theta, { weights: ws, maxIterations, tolerance: LM_TOLERANCE })
@@ -787,11 +848,10 @@ export function fitTransit(time: Readonly<NumberArray>, flux: Readonly<NumberArr
 			evaluateCurve(final, ts, model, modelFlux)
 
 			if (raised < diagnostics.chiSquare) {
-				const { min, max } = impactCoefficient
 				const j = coefficients.findIndex((c) => c.index > IMPACT_PARAMETER)
 				const at = j < 0 ? coefficients.length : j
 				coefficients.splice(at, 0, impactCoefficient)
-				theta.splice(at, 0, PI - Math.asin((2 * (Math.min(MIN_INITIAL_IMPACT_PARAMETER, 0.5 * max) - min)) / (max - min) - 1))
+				theta.splice(at, 0, thetaOf(MIN_INITIAL_IMPACT_PARAMETER, impactCoefficient.min, impactCoefficient.max))
 				impactPinned = false
 				impactReleased = true
 				fitNames = names
@@ -800,7 +860,24 @@ export function fitTransit(time: Readonly<NumberArray>, flux: Readonly<NumberArr
 			}
 		}
 
-		if (diagnostics.predictedImprovement <= CONVERGED_IMPROVEMENT) break
+		if (diagnostics.predictedImprovement <= CONVERGED_IMPROVEMENT) {
+			converged = true
+			break
+		}
+
+		// In a curved, degenerate valley (grazing geometry, limb darkening on its bounds) the quadratic model
+		// overstates the gain and the full step can raise χ². The point is converged when no fraction of the step
+		// (projected into the bounds) lowers χ² by more than CONVERGED_IMPROVEMENT; otherwise the next run
+		// restarts from the best fraction.
+		const [gain, next] = searchAlongStep(diagnostics)
+		cached.fill(Number.NaN)
+
+		if (!(gain > CONVERGED_IMPROVEMENT)) {
+			converged = true
+			break
+		}
+
+		if (run + 1 < runs) theta.splice(0, theta.length, ...next)
 	}
 
 	const fitted: TransitParameters = {
@@ -814,7 +891,7 @@ export function fitTransit(time: Readonly<NumberArray>, flux: Readonly<NumberArr
 
 	final[IMPACT_PARAMETER] = fitted.impactParameter
 	const atBoundParameters = FIT_PARAMETERS.filter((parameter) => atBound.has(parameter))
-	return fittedResult(diagnostics!, fitted, final, fitNames, atBoundParameters, ts, ws, maxCycles, model, n, count)
+	return fittedResult(diagnostics!, converged, fitted, final, fitNames, atBoundParameters, ts, ws, maxCycles, model, n, count)
 }
 
 // Optimizer coefficients of the free parameters, in internal state order, with their bounds.
@@ -974,9 +1051,14 @@ function fitDiagnostics(state: Readonly<Float64Array>, ts: Readonly<Float64Array
 	}
 
 	let predictedImprovement = 0
-	for (let a = 0; a < selected.length; a++) predictedImprovement += (gradient[selected[a]] / scale[selected[a]]) * step[a]
+	const physicalStep = new Float64Array(k)
 
-	return { chiSquare, jacobian, scale, fisher, predictedImprovement: Math.max(0, predictedImprovement), impactAtZero }
+	for (let a = 0; a < selected.length; a++) {
+		predictedImprovement += (gradient[selected[a]] / scale[selected[a]]) * step[a]
+		physicalStep[selected[a]] = step[a] / scale[selected[a]]
+	}
+
+	return { chiSquare, jacobian, scale, fisher, predictedImprovement: Math.max(0, predictedImprovement), step: physicalStep, impactAtZero }
 }
 
 // Gauss-Newton step H δ = g over the `selected` covariance parameters, in correlation scale (δ_j × scale_j)
@@ -1011,6 +1093,7 @@ function resultGeometry(parameters: TransitParameters, baseline: number, state: 
 // Result of a fit that ran: covariance and its derived uncertainties, flags and sample counts.
 function fittedResult(
 	diagnostics: FitDiagnostics,
+	converged: boolean,
 	parameters: TransitParameters,
 	state: Readonly<Float64Array>,
 	names: readonly (readonly [TransitCovarianceParameter, number])[],
@@ -1118,7 +1201,7 @@ function fittedResult(
 	if (atBound.length > 0) flags.push('parameterAtBound')
 	if (covariance === undefined) flags.push('singularCovariance')
 	if (strongDegeneracy) flags.push('strongDegeneracy')
-	if (!noTransit && parameters.impactParameter > 1 - parameters.radiusRatio) flags.push('grazing')
+	if (!noTransit && parameters.impactParameter > Math.abs(1 - parameters.radiusRatio)) flags.push('grazing')
 	if (noTransit) flags.push('noTransit')
 	if (!noTransit && !ingress) flags.push('missingIngress')
 	if (!noTransit && !egress) flags.push('missingEgress')
@@ -1126,7 +1209,7 @@ function fittedResult(
 
 	return {
 		...geometry,
-		status: predictedImprovement <= CONVERGED_IMPROVEMENT ? 'ok' : 'notConverged',
+		status: converged ? 'ok' : 'notConverged',
 		flags,
 		parameterNames: names.map(([name]) => name),
 		covariance,

@@ -49,6 +49,27 @@ describe('quadratic transit flux', () => {
 		}
 	})
 
+	test('matches an independent reference grid', async () => {
+		// data/exoplanet-core.quadratic.json: exoplanet-core 0.4.0 over p from 1e-4 to 2, separations across the disk
+		// and 0, ±1e-9 and ±1e-5 stellar radii from every contact, for laws on the edges of Kipping's triangle.
+		const reference: { limbDarkening: [number, number][]; cases: { radiusRatio: number; separation: number[]; flux: number[][] }[] } = await Bun.file('data/exoplanet-core.quadratic.json').json()
+		let count = 0
+
+		for (const { radiusRatio, separation, flux } of reference.cases) {
+			// The 1 / sqrt(pz) factor of Mandel & Agol amplifies rounding for p = 1 near the center.
+			const tolerance = radiusRatio === 1 ? 5e-12 : 1e-13
+
+			for (let i = 0; i < reference.limbDarkening.length; i++) {
+				for (let j = 0; j < separation.length; j++) {
+					expect(Math.abs(quadraticTransitFlux(separation[j], radiusRatio, reference.limbDarkening[i]) - flux[i][j])).toBeLessThan(tolerance)
+					count++
+				}
+			}
+		}
+
+		expect(count).toBe(1640)
+	})
+
 	test('limits', () => {
 		// Uniform disk: the occulted fraction is the area ratio.
 		expect(quadraticTransitFlux(0.4, 0.1, [0, 0])).toBeCloseTo(0.99, 15)
@@ -114,12 +135,35 @@ describe('transit geometry', () => {
 		expect(transitFullDuration(grazing)).toBe(0)
 		expect(transitTotalDuration({ ...HOT_JUPITER, impactParameter: 1.1 })).toBe(0)
 		expect(transitTotalDuration({ ...HOT_JUPITER, radiusRatio: 0 })).toBe(0)
+		// With b = 0.3 > p - 1 = 0.2 the larger disk never covers the whole star.
 		expect(transitFullDuration({ ...HOT_JUPITER, radiusRatio: 1.2 })).toBe(0)
 		// A planet whose orbit stays within 1 + p of the stellar center overlaps the star during the whole front half.
 		expect(transitTotalDuration({ ...HOT_JUPITER, scaledSemiMajorAxis: 1.05, impactParameter: 0 })).toBe(1.75)
 		// b > a/R* is a pole-on orbit.
 		expect(transitInclination({ impactParameter: 12, scaledSemiMajorAxis: 9 })).toBe(0)
 		expect(transitSeparation(HOT_JUPITER.epoch, { ...HOT_JUPITER, impactParameter: 12 })).toBeCloseTo(9, 14)
+	})
+
+	test('full duration of an occulter larger than the star', () => {
+		// For p > 1 the second to third contact is the totality z <= p - 1, when the star is wholly covered.
+		const occulter = { ...HOT_JUPITER, radiusRatio: 1.3, impactParameter: 0 }
+		const t23 = transitFullDuration(occulter)
+		expect(t23).toBeCloseTo((3.5 / Math.PI) * Math.asin(0.3 / 9), 15)
+		expect(t23).toBeCloseTo(0.03714303389435977, 14)
+		expect(transitFlux(occulter.epoch + 0.4999 * t23, occulter)).toBe(0)
+		expect(transitFlux(occulter.epoch - 0.5001 * t23, occulter)).toBeGreaterThan(0)
+
+		const offCenter = transitFullDuration({ ...occulter, impactParameter: 0.1 })
+		expect(offCenter).toBeGreaterThan(0)
+		expect(offCenter).toBeLessThan(t23)
+		// b = p - 1 touches the totality at one instant only (the double 1.3 is slightly above 1.3, so a few
+		// nanoseconds remain), and a larger b never covers the whole star.
+		expect(transitFullDuration({ ...occulter, impactParameter: 0.3 })).toBeLessThan(1e-8)
+		expect(transitFullDuration({ ...occulter, impactParameter: 0.4 })).toBe(0)
+		expect(transitFullDuration({ ...occulter, radiusRatio: 1 })).toBe(0)
+		// Both sides approach 0 continuously around p = 1.
+		expect(transitFullDuration({ ...occulter, radiusRatio: 0.999 })).toBeCloseTo(transitFullDuration({ ...occulter, radiusRatio: 1.001 }), 12)
+		expect(transitFullDuration({ ...occulter, radiusRatio: 1.001 })).toBeCloseTo((3.5 / Math.PI) * Math.asin(0.001 / 9), 14)
 	})
 })
 
@@ -208,6 +252,52 @@ describe('transit fit', () => {
 		expect(result.totalDuration).toBeCloseTo(transitTotalDuration(HOT_JUPITER), 6)
 		expect(result.sampleCount).toBe(time.length)
 		expect(result.degreesOfFreedom).toBe(time.length - 7)
+	})
+
+	test('keeps fixed limb darkening exactly as given', () => {
+		// A limb-brightened but positive law, outside the monotonically darkening domain of Kipping's q1, q2.
+		for (const limbDarkening of [
+			[-0.2, 0.1],
+			[0.4, 0.26],
+		] as const) {
+			const truth = { ...HOT_JUPITER, limbDarkening }
+			const flux = observe(time, truth, 0, 1)
+			const result = fitTransit(time, flux, 1e-4, { ...truth, epoch: HOT_JUPITER.epoch + 0.003, impactParameter: 0.4 })
+
+			expect(result.status).toBe('ok')
+			expect(result.parameters.limbDarkening[0]).toBe(limbDarkening[0])
+			expect(result.parameters.limbDarkening[1]).toBe(limbDarkening[1])
+			expect(result.chiSquare).toBeLessThan(1e-6)
+			expect(result.parameters.radiusRatio).toBeCloseTo(0.1, 6)
+			expect(result.parameters.impactParameter).toBeCloseTo(0.3, 4)
+			expect(result.parameterNames).not.toContain('u1')
+
+			const model = transitLightCurve(time, result.parameters)
+			for (let i = 0; i < time.length; i++) expect(Math.abs(result.baseline * model[i] - flux[i])).toBeLessThan(1e-9)
+		}
+	})
+
+	test('stays finite and flagged near the model limits', () => {
+		// [truth, initial, noise, options]: a shallow transit, a grazing one, a barely touching one, an occulter larger than
+		// the star and a free limb darkening at low signal-to-noise.
+		const cases = [
+			[{ ...HOT_JUPITER, radiusRatio: 0.02 }, { ...HOT_JUPITER, radiusRatio: 0.03 }, 5e-4, {}],
+			[{ ...HOT_JUPITER, impactParameter: 1.05 }, { ...HOT_JUPITER, impactParameter: 0.95 }, 3e-4, {}],
+			[{ ...HOT_JUPITER, impactParameter: 1.09 }, { ...HOT_JUPITER, impactParameter: 1 }, 1e-4, {}],
+			[{ ...HOT_JUPITER, radiusRatio: 1.3, impactParameter: 0.1 }, { ...HOT_JUPITER, radiusRatio: 1.25, impactParameter: 0.2 }, 1e-3, { bounds: { radiusRatio: [0, 2] } }],
+			[HOT_JUPITER, HOT_JUPITER, 1e-3, { free: FIT_ALL }],
+		] as const
+
+		for (const [truth, initial, sigma, options] of cases) {
+			for (let seed = 1; seed <= 6; seed++) {
+				const result = fitTransit(time, observe(time, truth, sigma, seed), sigma, initial, options)
+				expect(result.status).toBe('ok')
+
+				const values = [result.chiSquare, result.inclination, result.totalDuration, result.fullDuration, result.baseline, result.predictedImprovement!, ...Object.values(result.parameters).flat(), ...Object.values(result.uncertainties ?? {}), ...(result.covariance ?? [])]
+				for (const value of values) expect(Number.isFinite(value)).toBeTrue()
+				if (result.covariance === undefined) expect(result.flags).toContain('singularCovariance')
+			}
+		}
 	})
 
 	test('recovers noisy heteroscedastic photometry within its uncertainties', () => {
