@@ -1,14 +1,69 @@
 import type { Rect } from '../../../math/numerical/geometry'
 import { medianAbsoluteDeviationOf, medianBySelectionOf } from '../../../math/numerical/statistics'
+import type { CfaPattern } from '../../model/types'
 import { resolveImagePlaneGeometry, resolveLocalCfaPattern } from '../plane'
 import { ROBUST_SAMPLE_CAPACITY, RobustReservoir } from '../robust'
-import { hasIncompleteFlatHeaderCfaOffset, resolveFlatAcquisitionMetadata, resolveFlatContextCfaOffset, resolveFlatFrameExposure } from './context'
+import { hasIncompleteFlatHeaderCfaOffset, type ResolvedFlatAcquisitionMetadata, resolveFlatAcquisitionMetadata, resolveFlatContextCfaOffset, resolveFlatFrameExposure } from './context'
 import { analyzeFlat } from './flat'
-import type { FlatAnalysis, FlatCheck, FlatDiagnostic, FlatDiagnosticCode, FlatFrame, FlatPlane, FlatSequenceAnalysis, FlatSequenceAssessment, FlatSequenceFrameAnalysis, FlatSequenceInput, FlatSequenceOptions, FlatSequencePlaneAnalysis, FlatSignature, FlatSpatialAnalysis, FlatTile } from './types'
+import type { FlatAnalysis, FlatAnalysisInput, FlatCheck, FlatDiagnostic, FlatDiagnosticCode, FlatFrame, FlatPlane, FlatSequenceAnalysis, FlatSequenceAssessment, FlatSequenceFrameAnalysis, FlatSequenceInput, FlatSequenceOptions, FlatSequencePlaneAnalysis, FlatSignature, FlatSpatialAnalysis, FlatTile } from './types'
 
 // Temporal analysis for final flat stacks. Every frame is first reduced by the single-frame path with
-// maps and artifact products disabled; only normalized tile and axis signatures survive, so memory
-// grows with frames times reduced signature size rather than frames times image size.
+// maps and artifact products disabled; only its analysis, normalized row and column profiles, and
+// compatibility metadata survive, so memory grows with frames times reduced signature size rather than
+// frames times image size. The reduction can run as each frame arrives (measureFlatSequenceFrame), so the
+// caller releases every image at once and concludes later with finalizeFlatSequence, or over a whole
+// stack (analyzeFlatSequence); both produce the same result.
+
+// Image-independent compatibility evidence of one sequence frame, captured while its image is available.
+export interface FlatSequenceFrameMetadata extends ResolvedFlatAcquisitionMetadata {
+	// Image width, in pixels.
+	readonly width: number
+	// Image height, in pixels.
+	readonly height: number
+	// Number of stored channels.
+	readonly channels: number
+	// CFA pattern after the frame's CFA offset; absent for mono, RGB, or debayered images.
+	readonly cfaPattern?: CfaPattern
+	// True when the FITS header carries only one of XBAYROFF and YBAYROFF.
+	readonly cfaOffsetIncomplete: boolean
+	// Ordered inclusive digital sample range of the storage format, in digital numbers.
+	readonly digitalRange?: readonly [number, number]
+	// Smallest representable digital step, in digital numbers.
+	readonly quantizationStep?: number
+	// Exposure duration, seconds.
+	readonly exposure?: number
+	// Explicit filter identifier, or the non-empty FITS FILTER value.
+	readonly filter?: string
+	// Illumination source identifier.
+	readonly illuminationSource?: string
+	// Illumination brightness setting, in source-native units.
+	readonly illuminationBrightness?: number
+}
+
+// Selected-plane row and column means normalized by the plane signal and centered on zero.
+export interface FlatSequenceProfiles {
+	// One value per selected-plane row, top to bottom; NaN marks a row without valid samples.
+	readonly row: Float32Array
+	// One value per selected-plane column, left to right; NaN marks a column without valid samples.
+	readonly column: Float32Array
+}
+
+// Reduced representation of one final flat frame that temporal analysis retains instead of its image.
+// It is a plain structured-cloneable value, so it can be produced in a worker and finalized elsewhere.
+export interface FlatSequenceSample {
+	// Caller-defined frame identifier preserved in results.
+	readonly id?: string
+	// Capture timestamp as Unix milliseconds.
+	readonly timestamp?: number
+	// Signal basis: corrected when the frame was measured against a reference, observed otherwise.
+	readonly basis: 'observed' | 'corrected'
+	// Compatibility evidence used to prove the stack homogeneous.
+	readonly metadata: FlatSequenceFrameMetadata
+	// Single-frame analysis without maps or artifacts; its diagnostics carry no frame index yet.
+	readonly analysis: FlatAnalysis
+	// Normalized profiles in analysis plane order; absent for a plane without a positive finite signal.
+	readonly profiles: readonly (FlatSequenceProfiles | undefined)[]
+}
 
 // Numerical equality tolerance used when no exposure compatibility tolerance is configured, seconds.
 const DEFAULT_SEQUENCE_EXPOSURE_TOLERANCE = 1e-9
@@ -58,20 +113,53 @@ interface OutlierResult {
 }
 
 // Analyzes temporal stability of three or more nominally homogeneous final flat frames.
+// Compatibility is proven from metadata before any image traversal; each frame is then reduced to a
+// sample and the stack is concluded exactly as finalizeFlatSequence concludes measured samples.
 export function analyzeFlatSequence(input: FlatSequenceInput, options: Partial<FlatSequenceOptions> = {}): FlatSequenceAnalysis {
-	validateSequenceOptions(input, options)
-	const compatibility = validateSequenceCompatibility(input.frames, options)
+	validateSequenceSize(input.frames.length)
+	validateSequenceAnalysisOptions(options)
+	validateSequenceOptions(options)
+	const metadata = input.frames.map(resolveSequenceFrameMetadata)
+	const compatibility = validateSequenceCompatibility(metadata, options)
+	const samples = input.frames.map((frame, index) => sampleSequenceFrame({ frame, reference: input.reference, mask: input.mask }, metadata[index], options))
+	return analyzeSequenceSamples(samples, compatibility, options)
+}
+
+// Reduces one final flat frame to the sample temporal analysis retains, so the caller can release its
+// image immediately. Every frame of one stack must use the same reference, mask, and analysis options,
+// and the same options must be passed to finalizeFlatSequence. Throws RangeError for map or artifact
+// analysis options and for inconsistent operating-point metadata, as analyzeFlatSequence does.
+export function measureFlatSequenceFrame(input: FlatAnalysisInput, options: Partial<FlatSequenceOptions> = {}): FlatSequenceSample {
+	validateSequenceAnalysisOptions(options)
+	return sampleSequenceFrame(input, resolveSequenceFrameMetadata(input.frame), options)
+}
+
+// Concludes temporal analysis of three or more samples in acquisition order, measured by
+// measureFlatSequenceFrame with the same options. The result equals analyzeFlatSequence over the frames
+// the samples came from. Throws RangeError for fewer than three samples, invalid policy limits,
+// incompatible acquisition metadata, or samples mixing signal bases or plane selections.
+export function finalizeFlatSequence(samples: readonly FlatSequenceSample[], options: Partial<FlatSequenceOptions> = {}): FlatSequenceAnalysis {
+	validateSequenceSize(samples.length)
+	validateSequenceOptions(options)
+	validateSampleConsistency(samples)
+	const compatibility = validateSequenceCompatibility(
+		samples.map((sample) => sample.metadata),
+		options,
+	)
+	return analyzeSequenceSamples(samples, compatibility, options)
+}
+
+// Derives temporal metrics, the verdict, and per-frame results from samples already proven compatible.
+function analyzeSequenceSamples(samples: readonly FlatSequenceSample[], compatibility: SequenceCompatibility, options: Partial<FlatSequenceOptions>): FlatSequenceAnalysis {
 	const diagnostics: FlatDiagnostic[] = []
 	if (compatibility.metadataUnknown) diagnostics.push({ severity: 'warning', code: 'sequenceMetadataUnknown', message: 'Missing acquisition metadata prevents a complete proof that every flat frame is homogeneous.' })
 
-	const analysisOptions = { ...options.analysis, maps: 'none' } as const
-	const analyses = input.frames.map((frame, frameIndex) => {
-		const analysis = analyzeFlat({ frame, reference: input.reference, mask: input.mask }, analysisOptions)
-		for (const diagnostic of analysis.diagnostics) diagnostics.push({ ...diagnostic, frame: frameIndex })
-		return analysis
+	const analyses = samples.map((sample, frameIndex) => {
+		for (const diagnostic of sample.analysis.diagnostics) diagnostics.push({ ...diagnostic, frame: frameIndex })
+		return sample.analysis
 	})
 
-	const timestamps = resolveSequenceTimes(input.frames)
+	const timestamps = resolveSequenceTimes(samples)
 	if (!timestamps) {
 		diagnostics.push({ severity: 'warning', code: 'sequenceMetadataUnknown', message: 'Per-second drift is unavailable because timestamps are missing or not strictly increasing.' })
 	}
@@ -80,7 +168,7 @@ export function analyzeFlatSequence(input: FlatSequenceInput, options: Partial<F
 	const outlierFrames = new Set<number>()
 	let outlierEvidenceComplete = true
 	for (let planeIndex = 0; planeIndex < analyses[0].planes.length; planeIndex++) {
-		const result = analyzeSequencePlane(input, analyses, planeIndex, timestamps, options)
+		const result = analyzeSequencePlane(samples, planeIndex, timestamps, options)
 		planeAnalyses.push(result.analysis)
 		outlierEvidenceComplete &&= result.outlierEvidenceComplete
 		for (const frame of result.analysis.outliers) {
@@ -92,14 +180,67 @@ export function analyzeFlatSequence(input: FlatSequenceInput, options: Partial<F
 	}
 
 	const assessment = assessSequence(analyses, planeAnalyses, compatibility, timestamps !== undefined, outlierFrames, outlierEvidenceComplete, options, diagnostics)
-	const frames = input.frames.map((frame, index) => sequenceFrameResult(frame, index, analyses[index], assessment, compatibility, outlierFrames.has(index), outlierEvidenceComplete, options))
+	const frames = samples.map((sample, index) => sequenceFrameResult(sample, index, assessment, compatibility, outlierFrames.has(index), outlierEvidenceComplete, options))
 	return { frames, planes: planeAnalyses, assessment, diagnostics }
 }
 
-// Validates sequence size and finite non-negative policy limits before any image traversal.
-function validateSequenceOptions(input: FlatSequenceInput, options: Partial<FlatSequenceOptions>): void {
-	if (input.frames.length < 3) throw new RangeError('flat sequence analysis requires at least three frames')
+// Analyzes one frame without maps and measures its normalized profiles while the image is still available.
+function sampleSequenceFrame(input: FlatAnalysisInput, metadata: FlatSequenceFrameMetadata, options: Partial<FlatSequenceOptions>): FlatSequenceSample {
+	const { frame, reference, mask } = input
+	const basis = reference ? 'corrected' : 'observed'
+	const analysis = analyzeFlat(input, { ...options.analysis, maps: 'none' })
+	const profiles = analysis.planes.map((framePlane) => {
+		const statistics = basis === 'corrected' ? framePlane.corrected : framePlane.observed
+		const signal = statistics?.median
+		if (signal === undefined || !Number.isFinite(signal) || signal <= 0) return undefined
+		return measureNormalizedProfiles(frame, reference, mask, analysis.area, framePlane.plane, signal)
+	})
+	return { id: frame.id, timestamp: frame.timestamp, basis, metadata, analysis, profiles }
+}
+
+// Rejects stacks too small for any temporal statistic.
+function validateSequenceSize(count: number): void {
+	if (count < 3) throw new RangeError('flat sequence analysis requires at least three frames')
+}
+
+// Rejects full-resolution products whose retention would defeat the bounded per-frame reduction.
+function validateSequenceAnalysisOptions(options: Partial<FlatSequenceOptions>): void {
 	if (options.analysis && ('maps' in options.analysis || 'artifacts' in options.analysis)) throw new RangeError('flat sequence analysis does not accept map or artifact options')
+}
+
+// Rejects samples measured with different references or plane selections: their signals and signatures
+// would be compared coordinate by coordinate and silently yield plausible-looking wrong metrics.
+function validateSampleConsistency(samples: readonly FlatSequenceSample[]): void {
+	const first = samples[0]
+	for (let index = 1; index < samples.length; index++) {
+		const sample = samples[index]
+		if (sample.basis !== first.basis) throw new RangeError(`flat sequence sample ${index} signal basis must match the first sample`)
+		const planes = sample.analysis.planes
+		if (planes.length !== first.analysis.planes.length || planes.some((plane, planeIndex) => plane.plane !== first.analysis.planes[planeIndex].plane)) throw new RangeError(`flat sequence sample ${index} planes must match the first sample`)
+	}
+}
+
+// Captures the compatibility evidence of one frame from its image layout, explicit context, and FITS header.
+function resolveSequenceFrameMetadata(frame: FlatFrame): FlatSequenceFrameMetadata {
+	const { metadata, digitalRange, quantizationStep } = frame.image
+	return {
+		...resolveFlatAcquisitionMetadata(frame),
+		width: metadata.width,
+		height: metadata.height,
+		channels: metadata.channels,
+		cfaPattern: resolveLocalCfaPattern(frame.image, resolveFlatContextCfaOffset(frame)),
+		cfaOffsetIncomplete: hasIncompleteFlatHeaderCfaOffset(frame),
+		digitalRange,
+		quantizationStep,
+		exposure: resolveFlatFrameExposure(frame),
+		filter: resolveFrameFilter(frame),
+		illuminationSource: frame.illumination?.source,
+		illuminationBrightness: frame.illumination?.brightness,
+	}
+}
+
+// Validates finite non-negative policy limits before any temporal computation.
+function validateSequenceOptions(options: Partial<FlatSequenceOptions>): void {
 	for (const [name, value] of [
 		['exposure tolerance', options.exposureTolerance],
 		['temperature tolerance', options.temperatureTolerance],
@@ -115,35 +256,34 @@ function validateSequenceOptions(input: FlatSequenceInput, options: Partial<Flat
 }
 
 // Enforces every known homogeneity field and records unavailable evidence without inventing equality.
-function validateSequenceCompatibility(frames: readonly FlatFrame[], options: Partial<FlatSequenceOptions>): SequenceCompatibility {
-	const first = frames[0]
-	const firstImage = first.image
-	const firstCfaOffset = resolveFlatContextCfaOffset(first)
-	const firstPattern = resolveLocalCfaPattern(firstImage, firstCfaOffset)
+function validateSequenceCompatibility(metadata: readonly FlatSequenceFrameMetadata[], options: Partial<FlatSequenceOptions>): SequenceCompatibility {
+	const first = metadata[0]
 	const exposureTolerance = options.exposureTolerance ?? DEFAULT_SEQUENCE_EXPOSURE_TOLERANCE
-	let metadataUnknown = frames.some(hasIncompleteFlatHeaderCfaOffset)
+	let metadataUnknown = metadata.some((value) => value.cfaOffsetIncomplete)
 
-	for (let index = 1; index < frames.length; index++) {
-		const frame = frames[index]
-		const image = frame.image
-		if (image.metadata.width !== firstImage.metadata.width || image.metadata.height !== firstImage.metadata.height || image.metadata.channels !== firstImage.metadata.channels) throw new RangeError(`flat sequence frame ${index} geometry and channels must match the first frame`)
-		const pattern = resolveLocalCfaPattern(image, resolveFlatContextCfaOffset(frame))
-		if (pattern !== firstPattern) throw new RangeError(`flat sequence frame ${index} local CFA pattern must match the first frame`)
+	for (let index = 1; index < metadata.length; index++) {
+		const frame = metadata[index]
+		if (frame.width !== first.width || frame.height !== first.height || frame.channels !== first.channels) throw new RangeError(`flat sequence frame ${index} geometry and channels must match the first frame`)
+		if (frame.cfaPattern !== first.cfaPattern) throw new RangeError(`flat sequence frame ${index} local CFA pattern must match the first frame`)
 	}
 
-	const metadata = frames.map(resolveFlatAcquisitionMetadata)
 	metadataUnknown =
 		validateOptionalTupleCompatibility(
-			frames.map((frame) => frame.image.digitalRange),
+			metadata.map((value) => value.digitalRange),
 			'flat sequence digital ranges must match when known',
 		) || metadataUnknown
 	metadataUnknown =
 		validateOptionalNumericCompatibility(
-			frames.map((frame) => frame.image.quantizationStep),
+			metadata.map((value) => value.quantizationStep),
 			0,
 			'flat sequence quantization steps must match when known',
 		) || metadataUnknown
-	metadataUnknown = validateOptionalNumericCompatibility(frames.map(resolveFlatFrameExposure), exposureTolerance, 'flat sequence exposures must match within tolerance when known') || metadataUnknown
+	metadataUnknown =
+		validateOptionalNumericCompatibility(
+			metadata.map((value) => value.exposure),
+			exposureTolerance,
+			'flat sequence exposures must match within tolerance when known',
+		) || metadataUnknown
 	metadataUnknown =
 		validateOptionalNumericCompatibility(
 			metadata.map((value) => value.gain),
@@ -182,15 +322,19 @@ function validateSequenceCompatibility(frames: readonly FlatFrame[], options: Pa
 			0,
 			'flat sequence bit depths must match when known',
 		) || metadataUnknown
-	metadataUnknown = validateOptionalStringCompatibility(frames.map(resolveFrameFilter), 'flat sequence filters must match when known') || metadataUnknown
 	metadataUnknown =
 		validateOptionalStringCompatibility(
-			frames.map((frame) => frame.illumination?.source),
+			metadata.map((value) => value.filter),
+			'flat sequence filters must match when known',
+		) || metadataUnknown
+	metadataUnknown =
+		validateOptionalStringCompatibility(
+			metadata.map((value) => value.illuminationSource),
 			'flat sequence illumination sources must match when known',
 		) || metadataUnknown
 	metadataUnknown =
 		validateOptionalNumericCompatibility(
-			frames.map((frame) => frame.illumination?.brightness),
+			metadata.map((value) => value.illuminationBrightness),
 			0,
 			'flat sequence illumination brightness settings must match when known',
 		) || metadataUnknown
@@ -251,7 +395,7 @@ function resolveFrameFilter(frame: FlatFrame): string | undefined {
 }
 
 // Returns elapsed seconds from the first frame only when every timestamp is finite and increasing.
-function resolveSequenceTimes(frames: readonly FlatFrame[]): Float64Array | undefined {
+function resolveSequenceTimes(frames: readonly FlatSequenceSample[]): Float64Array | undefined {
 	const first = frames[0].timestamp
 	if (first === undefined || !Number.isFinite(first)) return undefined
 	const times = new Float64Array(frames.length)
@@ -265,10 +409,12 @@ function resolveSequenceTimes(frames: readonly FlatFrame[]): Float64Array | unde
 	return times
 }
 
-// Builds reduced signatures and derives robust temporal metrics for one plane index.
-function analyzeSequencePlane(input: FlatSequenceInput, analyses: readonly FlatAnalysis[], planeIndex: number, timestamps: Float64Array | undefined, options: Partial<FlatSequenceOptions>): SequencePlaneResult {
+// Builds reduced signatures and derives robust temporal metrics for one plane index. The canonical tile
+// grid is the union over every sample, so tiles are aligned here rather than when a frame is measured.
+function analyzeSequencePlane(samples: readonly FlatSequenceSample[], planeIndex: number, timestamps: Float64Array | undefined, options: Partial<FlatSequenceOptions>): SequencePlaneResult {
+	const analyses = samples.map((sample) => sample.analysis)
 	const plane = analyses[0].planes[planeIndex].plane
-	const basis = input.reference ? 'corrected' : 'observed'
+	const basis = samples[0].basis
 	const canonicalTiles = collectCanonicalTiles(analyses, planeIndex)
 	const tileIndices = new Map(canonicalTiles.map((tile, index) => [tile.key, index]))
 	const signatures: Array<FlatSignature | undefined> = new Array(analyses.length)
@@ -279,13 +425,13 @@ function analyzeSequencePlane(input: FlatSequenceInput, analyses: readonly FlatA
 		const framePlane = analyses[frameIndex].planes[planeIndex]
 		const statistics = basis === 'corrected' ? framePlane.corrected : framePlane.observed
 		const signal = statistics?.median
-		if (signal === undefined || !Number.isFinite(signal) || signal <= 0) {
+		const profiles = samples[frameIndex].profiles[planeIndex]
+		if (signal === undefined || !Number.isFinite(signal) || signal <= 0 || profiles === undefined) {
 			completeSignals = false
 			continue
 		}
 		availableSignals.push(signal)
 		const tiles = normalizedTileSignature(framePlane.spatial, signal, tileIndices, canonicalTiles.length)
-		const profiles = measureNormalizedProfiles(input.frames[frameIndex], input.reference, input.mask, analyses[frameIndex].area, plane, signal)
 		signatures[frameIndex] = { signal, tiles, rowProfile: profiles.row, columnProfile: profiles.column }
 	}
 
@@ -660,7 +806,8 @@ function sequenceAssessmentReasons(frameQuality: FlatCheck, signal: FlatCheck, s
 }
 
 // Produces one frame status from its own checks plus configured sequence-wide stability evidence.
-function sequenceFrameResult(frame: FlatFrame, index: number, analysis: FlatAnalysis, assessment: FlatSequenceAssessment, compatibility: SequenceCompatibility, outlier: boolean, outlierEvidenceComplete: boolean, options: Partial<FlatSequenceOptions>): FlatSequenceFrameAnalysis {
+function sequenceFrameResult(sample: FlatSequenceSample, index: number, assessment: FlatSequenceAssessment, compatibility: SequenceCompatibility, outlier: boolean, outlierEvidenceComplete: boolean, options: Partial<FlatSequenceOptions>): FlatSequenceFrameAnalysis {
+	const analysis = sample.analysis
 	const required: FlatCheck[] = []
 	const reasons = new Set<FlatDiagnosticCode>()
 	if (hasFrameCriteria(options)) {
@@ -689,5 +836,5 @@ function sequenceFrameResult(frame: FlatFrame, index: number, analysis: FlatAnal
 		if (assessment.profileStability.status !== 'pass') for (const reason of assessment.reasons) if (reason === 'sequenceVariation' || reason === 'insufficientSamples') reasons.add(reason)
 	}
 	const status = required.some((check) => check.status === 'fail') ? 'rejected' : required.length === 0 || required.some((check) => check.status === 'unknown') ? 'inconclusive' : 'accepted'
-	return { index, id: frame.id, status, reasons: Array.from(reasons) }
+	return { index, id: sample.id, status, reasons: Array.from(reasons) }
 }
