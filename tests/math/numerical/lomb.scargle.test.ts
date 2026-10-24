@@ -466,6 +466,31 @@ describe('degenerate data', () => {
 		expect(Math.abs(offset.peaks[0].offset - (1e10 + centered.peaks[0].offset))).toBeLessThanOrEqual(2 ** -19)
 	})
 
+	// Regression: with values near ±1.5e308 and a weighted mean near -1e308, the centered values overflowed
+	// to Infinity and the power collapsed to 0 with a NaN chi-square.
+	test('values spanning almost the whole double range', () => {
+		const t = Array.from({ length: 40 }, (_, i) => 0.37 * i + 0.1 * Math.sin(i))
+		const pattern = t.map((x) => (Math.cos(2 * Math.PI * 0.2 * x) > 0.5 ? 1 : -1))
+		const frequencies = { frequencies: [0.2] }
+		const unit = lombScargle(t, pattern, 1, frequencies)
+
+		for (const k of [1.5e308, 1e-310]) {
+			const scaled = lombScargle(
+				t,
+				pattern.map((p) => k * p),
+				k,
+				frequencies,
+			)
+
+			expect(scaled.status).toBe('ok')
+			expect(scaled.mean / k).toBeCloseTo(unit.mean, 12)
+			expect(scaled.referenceChiSquare).toBeCloseTo(unit.referenceChiSquare, 10)
+			expect(scaled.periodogram!.power[0]).toBeCloseTo(unit.periodogram!.power[0], 12)
+			expect(scaled.peaks[0].amplitude / k).toBeCloseTo(unit.peaks[0].amplitude, 12)
+			expect(scaled.peaks[0].offset / k).toBeCloseTo(unit.peaks[0].offset, 12)
+		}
+	})
+
 	test('signal of one ulp', () => {
 		// 1e10 lies in [2^33, 2^34), so its ulp is 2^-19; a square wave between two adjacent doubles.
 		const ulp = 2 ** -19

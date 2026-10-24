@@ -249,15 +249,19 @@ interface WeightedSamples {
 	readonly t: Float64Array
 	// Inverse-variance weights normalized to unit sum.
 	readonly w: Float64Array
-	// Values minus their weighted mean, divided by scale, in [-1, 1]; exactly 0 where the weight underflowed
-	// to 0, which leaves that sample out of every sum.
+	// Values minus their weighted mean, divided by unit * scale, in [-1, 1]; exactly 0 where the weight
+	// underflowed to 0, which leaves that sample out of every sum.
 	readonly y: Float64Array
 	// Number of samples.
 	readonly count: number
 	// Weighted mean value, value unit.
 	readonly mean: number
-	// Largest absolute centered value of a positively weighted sample, value unit; the unit of y. 0 for a
-	// constant series.
+	// Power of two, value unit, near the largest absolute positively weighted value; the values are divided
+	// by it exactly before centering. 1 for a constant series.
+	readonly unit: number
+	// Largest absolute centered value of a positively weighted sample, in units of unit, below 4; y is in
+	// units of unit * scale, which is kept as two factors because the product can exceed the largest double.
+	// 0 for a constant series.
 	readonly scale: number
 	// Σ w y^2, the weighted variance of y, in (0, 1]; 0 for a constant series.
 	readonly variance: number
@@ -472,8 +476,11 @@ function usableSamples(time: Readonly<NumberArray>, value: Readonly<NumberArray>
 // (minError / error)^2 in (0, 1], so they cannot overflow, and the centering is corrected by the weighted
 // mean of the first residuals (the corrected two-pass algorithm). The series is constant only when every
 // positively weighted value is identical, so a signal of a few ulps on a large offset is kept: centering
-// subtracts the offset exactly and the scaled residuals keep their full relative precision. Requires at
-// least one sample; the one with the smallest error always has a positive weight.
+// subtracts the offset exactly and the scaled residuals keep their full relative precision. The values are
+// first divided by a power of two near the largest of them, which is exact (barring values more than
+// 2^1022 times smaller, below the precision of the sums anyway), so that their differences stay finite even
+// when they span almost the whole double range. Requires at least one sample; the one with the smallest
+// error always has a positive weight.
 function weightedSamples(t: Float64Array, value: Float64Array, error: Float64Array): WeightedSamples {
 	const count = t.length
 	const w = new Float64Array(count)
@@ -490,21 +497,28 @@ function weightedSamples(t: Float64Array, value: Float64Array, error: Float64Arr
 		sumW += w[i]
 	}
 
-	let mean = 0
 	let reference = Number.NaN
 	let constant = true
+	let maxValue = 0
 
 	for (let i = 0; i < count; i++) {
 		w[i] /= sumW
-		mean += w[i] * value[i]
 
 		if (w[i] > 0) {
 			if (Number.isNaN(reference)) reference = value[i]
 			else if (value[i] !== reference) constant = false
+			if (Math.abs(value[i]) > maxValue) maxValue = Math.abs(value[i])
 		}
 	}
 
-	if (constant) return { t, w, y, count, mean: reference, scale: 0, variance: 0, referenceChiSquare: 0 }
+	if (constant) return { t, w, y, count, mean: reference, unit: 1, scale: 0, variance: 0, referenceChiSquare: 0 }
+
+	// Two distinct values make maxValue positive; the scaled values lie below 2 in magnitude (allowing for
+	// the rounding of log2), so their differences from the mean lie below 4.
+	const unit = 2 ** Math.floor(Math.log2(maxValue))
+	let mean = 0
+
+	for (let i = 0; i < count; i++) if (w[i] > 0) mean += w[i] * (value[i] / unit)
 
 	// The correction is subtracted from the small residuals, not added to the mean, where it would be
 	// rounded again to the ulp of a large offset and leave the residuals off-center.
@@ -513,7 +527,7 @@ function weightedSamples(t: Float64Array, value: Float64Array, error: Float64Arr
 	let correction = 0
 
 	for (let i = 0; i < count; i++) {
-		y[i] = w[i] > 0 ? value[i] - mean : 0
+		y[i] = w[i] > 0 ? value[i] / unit - mean : 0
 		correction += w[i] * y[i]
 	}
 
@@ -524,11 +538,11 @@ function weightedSamples(t: Float64Array, value: Float64Array, error: Float64Arr
 		if (Math.abs(y[i]) > scale) scale = Math.abs(y[i])
 	}
 
-	mean += correction
+	mean = (mean + correction) * unit
 
 	// Distinct values whose residuals all round to the correction are constant to working precision; this
 	// also keeps the scaling below from dividing by zero.
-	if (!(scale > 0)) return { t, w, y: y.fill(0), count, mean, scale: 0, variance: 0, referenceChiSquare: 0 }
+	if (!(scale > 0)) return { t, w, y: y.fill(0), count, mean, unit, scale: 0, variance: 0, referenceChiSquare: 0 }
 
 	let variance = 0
 
@@ -537,8 +551,9 @@ function weightedSamples(t: Float64Array, value: Float64Array, error: Float64Arr
 		variance += w[i] * y[i] * y[i]
 	}
 
-	const ratio = scale / minError
-	return { t, w, y, count, mean, scale, variance, referenceChiSquare: ratio * ratio * sumW * variance }
+	// minError / unit is exact; the chi-square overflows to Infinity only when its true value does.
+	const ratio = scale / (minError / unit)
+	return { t, w, y, count, mean, unit, scale, variance, referenceChiSquare: ratio * ratio * sumW * variance }
 }
 
 // Fits offset + A cos(2π f t) + B sin(2π f t) to the samples by weighted least squares and writes the
@@ -682,8 +697,8 @@ function extractPeaks(samples: WeightedSamples, frequency: Float64Array, power: 
 			power: normalizePower(fit.power, normalization, samples.referenceChiSquare),
 			standardPower: fit.power,
 			index,
-			amplitude: samples.scale * Math.hypot(fit.cosine, fit.sine),
-			offset: samples.mean - samples.scale * (fit.cosine * fit.meanCosine + fit.sine * fit.meanSine),
+			amplitude: samples.scale * Math.hypot(fit.cosine, fit.sine) * samples.unit,
+			offset: samples.mean - samples.scale * (fit.cosine * fit.meanCosine + fit.sine * fit.meanSine) * samples.unit,
 			epoch: firstTime + ((phase < 0 ? phase + TAU : phase) / TAU) * period,
 			conditioning: fit.conditioning,
 			window: fit.window,
