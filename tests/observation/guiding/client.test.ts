@@ -1634,6 +1634,16 @@ describe('event envelope', () => {
 		expect(eventsOf(harness.events, 'GuideParamChange').at(-1)).toMatchObject({ Name: 'DecGuideMode', Value: 'North', Timestamp: change.timestamp / 1000 })
 	})
 
+	test('the fast clearing pulse counts toward the longest pulse only while fast recenter is on', () => {
+		const local = makeHarness({ calibrator: { maxClearingPulse: 3000 } })
+		expect(local.client.maxPulseDuration()).toBe(3000)
+		local.client.setFastRecenterEnabled(false)
+		expect(local.client.maxPulseDuration()).toBe(DEFAULT_GUIDER_CONFIG.maxPulseMsDEC)
+		expect(makeHarness({ fastRecenter: false, calibrator: { maxClearingPulse: 3000 } }).client.maxPulseDuration()).toBe(DEFAULT_GUIDER_CONFIG.maxPulseMsDEC)
+		// By default the fast clearing pulse is the guider's RA maximum, so it never raises the longest pulse.
+		expect(makeHarness({ guider: { maxPulseMsRA: 1500, maxPulseMsDEC: 1500 } }).client.maxPulseDuration()).toBe(1500)
+	})
+
 	test('fast recenter is on by default and toggles with a setting change', () => {
 		expect(harness.client.getFastRecenterEnabled()).toBeTrue()
 		expect(makeHarness({ fastRecenter: false }).client.getFastRecenterEnabled()).toBeFalse()
@@ -5192,6 +5202,29 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	function guideStepsFrom(harness: Harness, from: number) {
 		return nativeOf(harness.native.slice(from), 'guideStep')
 	}
+
+	test(
+		'the calibration clearing move returns the forward pulse time in fast pulses',
+		async () => {
+			const fast = makeHarness()
+			await calibrate(fast)
+			const slow = makeHarness({ fastRecenter: false })
+			await calibrate(slow)
+
+			// The simulated mount moves 7.5 px per 650 ms pulse, so two WEST steps pass the 12 px travel: 1300 ms to send
+			// back. A fast pulse moves 0.8 of the 12 px jump limit, about 834 ms at the solved rate, then the rest follows.
+			const east = (harness: Harness) => harness.guideOutputManager.pulses.filter((pulse) => pulse.direction === 'EAST').map((pulse) => pulse.duration)
+			const west = fast.guideOutputManager.pulses.filter((pulse) => pulse.direction === 'WEST').reduce((sum, pulse) => sum + pulse.duration, 0)
+			expect(fast.client.getCalibrated()).toBeTrue()
+			expect(east(fast)).toHaveLength(2)
+			expect(east(fast)[0]).toBeGreaterThan(800)
+			expect(east(fast)[0]).toBeLessThan(870)
+			expect(east(fast)[0] + east(fast)[1]).toBe(west)
+			expect(slow.client.getCalibrated()).toBeTrue()
+			expect(east(slow).every((duration) => duration === 650)).toBeTrue()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
 
 	test(
 		'a dither clears the controller history before the next correction',

@@ -62,6 +62,8 @@ const BASE_CONFIG: Partial<GuidingCalibrationConfig> = {
 	clearingMoveFraction: 1,
 	maxClearingSteps: 10,
 	maxClearingOffsetPx: 0.8,
+	// The clearing tests script one reverse motion per raPulse step; the fast pulses have tests of their own.
+	fastClearing: false,
 	edgeMarginPx: 10,
 	minRatePxPerMs: 1e-4,
 	maxRatePxPerMs: 1,
@@ -285,6 +287,45 @@ test('accepts an RA clearing step that passes the closest approach with perpendi
 	expect(simulation.step.completed).toBeDefined()
 	expect(simulation.phases).toContain('decForwardPulse')
 	expect(simulation.step.diagnostics.clearingSteps).toBe(1)
+})
+
+// RA motion of 0.8, 0.2 px per 100 ms pulse: 0.8246 px, a rate of 0.008246 px/ms, so a fast clearing pulse sized for 0.8
+// of the 4 px jump limit is floor(3.2 / 0.008246) = 388 ms.
+const FAST_RA_VECTOR = [0.8, 0.2] as const
+
+test('fast clearing sends the forward pulse time back in one pulse when it fits', () => {
+	// 3 forward steps reach the 2.4 px travel: 300 ms, shorter than a 388 ms fast pulse, returns to the origin at once.
+	const simulation = runCalibration({ fastClearing: true }, { raVector: FAST_RA_VECTOR, decVector: [-0.15, 0.75] })
+	expect(simulation.step.completed).toBeDefined()
+	expect(simulation.step.diagnostics.clearingSamples.map((sample) => sample.pulse)).toEqual([300])
+	expect(simulation.step.diagnostics.clearingSamples[0].netDistance).toBeCloseTo(0, 6)
+})
+
+test('fast clearing splits the forward pulse time into pulses sized to the jump limit, then steps by raPulse', () => {
+	// 8 forward steps reach 6 px: 800 ms back as 388, 388 and 24 ms. The reverse motion is half as fast (RA backlash or
+	// a slower reverse), so the target is still 3.3 px out and raPulse steps finish the return.
+	const simulation = runCalibration({ fastClearing: true, minNetRaTravelPx: 6, maxClearingSteps: 20 }, { raVector: FAST_RA_VECTOR, decVector: [-0.15, 0.75], reverseRaScale: 0.5 })
+	const pulses = simulation.step.diagnostics.clearingSamples.map((sample) => sample.pulse)
+	expect(simulation.step.completed).toBeDefined()
+	expect(pulses.slice(0, 3)).toEqual([388, 388, 24])
+	expect(pulses.length).toBeGreaterThan(3)
+	expect(pulses.slice(3).every((pulse) => pulse === 100)).toBeTrue()
+	expect(simulation.calibrator.currentState.plannedClearingSteps).toBe(3)
+})
+
+test('fast clearing pulses stop at maxClearingPulse and never go below raPulse', () => {
+	const capped = runCalibration({ fastClearing: true, maxClearingPulse: 150 }, { raVector: FAST_RA_VECTOR, decVector: [-0.15, 0.75] })
+	expect(capped.step.diagnostics.clearingSamples.map((sample) => sample.pulse)).toEqual([150, 150])
+
+	const floored = runCalibration({ fastClearing: true, maxClearingPulse: 50 }, { raVector: FAST_RA_VECTOR, decVector: [-0.15, 0.75] })
+	expect(floored.step.diagnostics.clearingSamples.map((sample) => sample.pulse)).toEqual([100, 100, 100])
+})
+
+test('setFastClearing applies to the next clearing move', () => {
+	const calibrator = new GuidingCalibrator(calibrationConfig({ fastClearing: true }))
+	calibrator.setFastClearing(false)
+	expect(calibrator.config.fastClearing).toBeFalse()
+	expect(() => new GuidingCalibrator(calibrationConfig({ maxClearingMovePx: 0 }))).toThrow('maxClearingMovePx')
 })
 
 test('warns when RA clearing stops near the residual offset', () => {

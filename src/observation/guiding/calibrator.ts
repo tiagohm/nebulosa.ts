@@ -1,4 +1,5 @@
 import { DEG2RAD, PIOVERTWO } from '../../core/constants'
+import type { Writable } from '../../core/types'
 import type { Point } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
 import type { Angle } from '../../math/units/angle'
@@ -10,7 +11,8 @@ import { starTrackingOf } from './tracker.star'
 // tracks the resulting target displacement across frames, and solves the image-motion and inverse
 // (image-to-axis) 2×2 calibration matrices used by the Guider. It handles RA forward travel, an optional
 // clearing move back toward the origin that keeps pulsing until the measurement is close enough, crosses the
-// origin, or hits `maxClearingSteps`, DEC backlash absorption, and rejects frames that are noisy,
+// origin, or hits `maxClearingSteps` (with longer pulses first when `fastClearing`, PHD2's fast recenter of its east
+// leg), DEC backlash absorption, and rejects frames that are noisy,
 // edge-clipped, or show impossible jumps. Positions/distances are pixels; pulse durations are
 // milliseconds; angles are radians.
 
@@ -88,6 +90,16 @@ export interface GuidingCalibrationConfig {
 	readonly maxClearingSteps: number
 	// Maximum residual offset from origin to consider clearing complete, in pixels.
 	readonly maxClearingOffsetPx: number
+	// Whether the clearing move starts with longer pulses, as PHD2's fast recenter of its east leg: the RA pulse time of
+	// the forward leg is sent back in pulses that each move the target by up to 0.8 of the smaller of
+	// `maxClearingMovePx` and `maxFrameJumpPx` at the solved RA rate, at least `raPulse` and at most `maxClearingPulse`
+	// long, before the closed loop resumes with `raPulse` steps.
+	readonly fastClearing: boolean
+	// Largest target motion of one fast clearing pulse before the margin, in pixels (PHD2's maximum move, the search
+	// half-side); > 0.
+	readonly maxClearingMovePx: number
+	// Longest fast clearing pulse, in milliseconds (PHD2 uses the RA maximum pulse of the guider); > 0.
+	readonly maxClearingPulse: number
 	// Minimum RA/DEC axis separation angle to accept the solve, in radians.
 	readonly minAxisSeparation: Angle
 	// Minimum acceptable normalized image-motion matrix determinant, dimensionless.
@@ -331,6 +343,9 @@ interface GuidingCalibratorState {
 	decNoMotionSteps: number
 	clearingSteps: number
 	plannedClearingSteps: number
+	// RA pulse time still to send back with fast clearing pulses, in milliseconds, and the length of one.
+	clearingRemainingMs: number
+	clearingPulseMs: number
 	settleFramesRemaining: number
 	pendingPulseAxis?: 'ra' | 'dec'
 	pendingPulseDirection?: GuideDirectionRA | GuideDirectionDEC
@@ -356,7 +371,8 @@ interface GuidingCalibrationConfigIssue {
 	readonly reason: string
 }
 
-// Default calibration tuning: ~650 ms pulses, west/north legs, RA clearing enabled, 12 px jump
+// Default calibration tuning: ~650 ms pulses, west/north legs, RA clearing enabled with PHD2's fast recenter (a 32 px
+// maximum move, half the guider client's default search square, and the guider's 2000 ms RA maximum pulse), 12 px jump
 // limit matching the guider, 12° minimum axis separation.
 export const DEFAULT_GUIDING_CALIBRATOR_CONFIG: Readonly<GuidingCalibrationConfig> = {
 	raPulse: 650,
@@ -377,6 +393,9 @@ export const DEFAULT_GUIDING_CALIBRATOR_CONFIG: Readonly<GuidingCalibrationConfi
 	clearingMoveFraction: 1,
 	maxClearingSteps: 20,
 	maxClearingOffsetPx: 4,
+	fastClearing: true,
+	maxClearingMovePx: 32,
+	maxClearingPulse: 2000,
 	minAxisSeparation: 12 * DEG2RAD,
 	minDeterminant: 1e-6,
 	edgeMarginPx: 12,
@@ -428,6 +447,8 @@ const EMPTY_GUIDING_CALIBRATOR_STATE: Readonly<GuidingCalibratorState> = {
 	decNoMotionSteps: 0,
 	clearingSteps: 0,
 	plannedClearingSteps: 0,
+	clearingRemainingMs: 0,
+	clearingPulseMs: 0,
 	settleFramesRemaining: 0,
 	pendingPulseAxis: undefined,
 	pendingPulseDirection: undefined,
@@ -507,6 +528,11 @@ export class GuidingCalibrator {
 			default:
 				return this.#fail('bad_frame', `unexpected calibration phase ${this.state.phase}`, frame, ['invalid_phase'], tracking)
 		}
+	}
+
+	// Enables or disables the fast clearing pulses of the next clearing move; a clearing move in progress keeps its plan.
+	setFastClearing(enabled: boolean) {
+		;(this.config as Writable<GuidingCalibrationConfig>).fastClearing = enabled
 	}
 
 	// Resets runtime state while preserving immutable configuration.
@@ -646,8 +672,16 @@ export class GuidingCalibrator {
 				return this.#queuePulse('decForwardPulse', 'dec', this.config.decDirection, this.config.decPulse, frame, ['dec_started'], filtered)
 			}
 
-			this.state.plannedClearingSteps = Math.trunc(clamp(Math.round(this.state.raSamples.length * this.config.clearingMoveFraction), 1, this.config.maxClearingSteps))
-			return this.#queuePulse('raClearPulse', 'ra', oppositeRA(this.config.raDirection), this.config.raPulse, frame, ['ra_clearing_started'], filtered)
+			if (this.config.fastClearing) {
+				// As PHD2's east leg: the whole forward pulse time goes back, in pulses as long as the motion limits allow.
+				this.state.clearingRemainingMs = this.state.raSteps * this.config.raPulse
+				this.state.clearingPulseMs = fastClearingPulse(this.state.raSolution.ratePxPerMs, this.config)
+				this.state.plannedClearingSteps = Math.trunc(clamp(Math.ceil(this.state.clearingRemainingMs / this.state.clearingPulseMs), 1, this.config.maxClearingSteps))
+			} else {
+				this.state.plannedClearingSteps = Math.trunc(clamp(Math.round(this.state.raSamples.length * this.config.clearingMoveFraction), 1, this.config.maxClearingSteps))
+			}
+
+			return this.#queuePulse('raClearPulse', 'ra', oppositeRA(this.config.raDirection), this.#nextClearingPulse(), frame, ['ra_clearing_started'], filtered)
 		}
 
 		if (this.state.raSteps >= this.config.maxRaSteps) {
@@ -663,7 +697,7 @@ export class GuidingCalibrator {
 
 		const previousNetX = this.state.lastX - this.state.startX
 		const previousNetY = this.state.lastY - this.state.startY
-		const sample = this.#recordSample(this.state.clearingSteps + 1, this.config.raPulse, oppositeRA(this.config.raDirection), point, this.state.startX, this.state.startY)
+		const sample = this.#recordSample(this.state.clearingSteps + 1, this.state.pendingPulseMs, oppositeRA(this.config.raDirection), point, this.state.startX, this.state.startY)
 
 		this.state.clearingSteps++
 		this.state.clearingSamples.push(sample)
@@ -682,7 +716,16 @@ export class GuidingCalibrator {
 			return this.#fail('ra_clearing_failed', 'RA clearing pulses did not return the target close enough to the calibration origin', frame, ['ra_clearing_failed'], filtered)
 		}
 
-		return this.#queuePulse('raClearPulse', 'ra', oppositeRA(this.config.raDirection), this.config.raPulse, frame, ['ra_clearing_continue'], filtered)
+		return this.#queuePulse('raClearPulse', 'ra', oppositeRA(this.config.raDirection), this.#nextClearingPulse(), frame, ['ra_clearing_continue'], filtered)
+	}
+
+	// Returns the duration of the next clearing pulse, in milliseconds: a fast pulse while forward pulse time is left to
+	// send back (the last one only the remainder), then the calibration RA pulse.
+	#nextClearingPulse() {
+		if (this.state.clearingRemainingMs <= 0) return this.config.raPulse
+		const duration = Math.min(this.state.clearingPulseMs, this.state.clearingRemainingMs)
+		this.state.clearingRemainingMs -= duration
+		return duration
 	}
 
 	// Records one DEC sample, applies backlash tolerance, and either continues or solves calibration.
@@ -982,6 +1025,8 @@ function validateGuidingCalibratorConfig(config: GuidingCalibrationConfig) {
 	if (config.clearingMoveFraction <= 0) issues.push({ key: 'clearingMoveFraction', reason: 'must be > 0' })
 	if (config.maxClearingSteps <= 0) issues.push({ key: 'maxClearingSteps', reason: 'must be > 0' })
 	if (config.maxClearingOffsetPx < 0) issues.push({ key: 'maxClearingOffsetPx', reason: 'must be >= 0' })
+	if (!(config.maxClearingMovePx > 0)) issues.push({ key: 'maxClearingMovePx', reason: 'must be > 0' })
+	if (!(config.maxClearingPulse > 0)) issues.push({ key: 'maxClearingPulse', reason: 'must be > 0' })
 	if (config.minAxisSeparation <= 0 || config.minAxisSeparation >= PIOVERTWO) issues.push({ key: 'minAxisSeparation', reason: 'must be within (0, pi/2)' })
 	if (config.minDeterminant <= 0) issues.push({ key: 'minDeterminant', reason: 'must be > 0' })
 	if (config.edgeMarginPx < 0) issues.push({ key: 'edgeMarginPx', reason: 'must be >= 0' })
@@ -989,6 +1034,18 @@ function validateGuidingCalibratorConfig(config: GuidingCalibrationConfig) {
 	if (config.minRatePxPerMs <= 0) issues.push({ key: 'minRatePxPerMs', reason: 'must be > 0' })
 	if (config.maxRatePxPerMs <= config.minRatePxPerMs) issues.push({ key: 'maxRatePxPerMs', reason: 'must be > minRatePxPerMs' })
 	return issues
+}
+
+// Fraction of the motion limits a fast clearing pulse is sized for, as PHD2's south return, so an error of the solved
+// rate does not take the target past the frame jump limit or out of the search box.
+const FAST_CLEARING_MARGIN = 0.8
+
+// Returns the length of a fast clearing pulse, in milliseconds, for the solved RA rate in pixels per millisecond: the
+// pulse that moves the target by FAST_CLEARING_MARGIN of the smaller of maxClearingMovePx and maxFrameJumpPx, rounded
+// down to a whole millisecond and clamped to [raPulse, maxClearingPulse], with raPulse winning, as in PHD2.
+function fastClearingPulse(ratePxPerMs: number, config: GuidingCalibrationConfig) {
+	const movePx = FAST_CLEARING_MARGIN * Math.min(config.maxClearingMovePx, config.maxFrameJumpPx)
+	return Math.max(config.raPulse, Math.min(Math.floor(movePx / ratePxPerMs), config.maxClearingPulse))
 }
 
 // Solves one axis vector from measured pulse-to-pulse displacements.

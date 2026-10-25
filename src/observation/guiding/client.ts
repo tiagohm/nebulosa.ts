@@ -127,8 +127,9 @@ export interface GuiderClientOptions {
 	readonly stickyLockPosition?: boolean
 	// Dither pattern used by dither().
 	readonly ditherMode?: DitherMode
-	// Whether a dither is followed by a fast recenter (PHD2's "Fast recenter after calibration or dither"): direct moves
-	// toward the new lock that bypass the guide controller. Defaults to true, as in PHD2.
+	// PHD2's "Fast recenter after calibration or dither": a dither is followed by direct moves toward the new lock that
+	// bypass the guide controller, and the RA clearing move of the calibration starts with longer pulses (the calibrator's
+	// fastClearing, which follows this option). Defaults to true, as in PHD2.
 	readonly fastRecenter?: boolean
 	// Converts a Unix capture timestamp in milliseconds into the caller's astronomical Time model.
 	// The returned value is used for ephemeris evaluation and may carry custom providers/location.
@@ -136,6 +137,8 @@ export interface GuiderClientOptions {
 	// Overrides for the calibration state machine, merged over DEFAULT_GUIDING_CALIBRATOR_CONFIG. Pulse
 	// durations are milliseconds and distances are pixels; an invalid combination throws at
 	// construction. Mounts with a fast guide rate usually only need shorter raPulse/decPulse.
+	// The client sets fastClearing from fastRecenter, and by default sizes the fast clearing pulses with the search
+	// half-side (maxClearingMovePx) and the guider's RA maximum pulse (maxClearingPulse).
 	readonly calibrator?: Partial<GuidingCalibrationConfig>
 	// Controller tuning merged over DEFAULT_GUIDER_CONFIG for every guider the client builds; an invalid
 	// combination throws at construction. Thresholds (deadbands, DEC reversal and backlash) are pixels and
@@ -274,7 +277,7 @@ export class GuiderClient {
 	#lockSearchPosition?: readonly [number, number]
 	#exactLockPosition = false
 	#stickyLockPosition = false
-	// Whether a dither is followed by a fast recenter, and the recenter in progress.
+	// Whether a calibration or a dither is followed by a fast recenter, and the dither recenter in progress.
 	#fastRecenter = true
 	#recenter?: DitherRecenter
 	#appState: PHD2AppState = 'Stopped'
@@ -358,12 +361,14 @@ export class GuiderClient {
 		tracker: GuideTracker,
 		readonly options: GuiderClientOptions,
 	) {
-		this.#calibrator = new GuidingCalibrator(options.calibrator)
-		this.#tracker = tracker
-		this.#guider = this.#makeGuider(undefined)
 		this.#searchRegion = clamp(options.searchRegion || DEFAULT_SEARCH_REGION, 16, 128)
 		this.#stickyLockPosition = options.stickyLockPosition === true
 		this.#fastRecenter = options.fastRecenter !== false
+		// PHD2 sizes the fast recenter of its east leg with the search half-side and the RA maximum pulse.
+		const maxClearingPulse = options.guider?.maxPulseMsRA ?? DEFAULT_GUIDER_CONFIG.maxPulseMsRA
+		this.#calibrator = new GuidingCalibrator({ maxClearingMovePx: this.#searchRegion / 2, maxClearingPulse, ...options.calibrator, fastClearing: this.#fastRecenter })
+		this.#tracker = tracker
+		this.#guider = this.#makeGuider(undefined)
 		this.#dither = new DitherGenerator({ mode: options.ditherMode })
 	}
 
@@ -430,13 +435,15 @@ export class GuiderClient {
 	}
 
 	// Longest pulse, in milliseconds, the current configuration can emit: the guider limits of both axes, the
-	// calibration pulses of both axes and the guiding assistant backlash pulse, rounded like a dispatched pulse.
+	// calibration pulses of both axes, the fast clearing pulse while fast recenter is on and the guiding assistant
+	// backlash pulse, rounded like a dispatched pulse.
 	// Only the default of an admission ceiling and the refusal of an admission rely on it.
 	maxPulseDuration() {
 		const guider = { ...DEFAULT_GUIDER_CONFIG, ...this.options.guider }
 		const calibrator = this.#calibrator.config
 		const backlashPulse = this.#guidingAssistant?.config.backlashPulse ?? DEFAULT_GUIDING_ASSISTANT_CONFIG.backlashPulse
-		return Math.max(1, Math.round(Math.max(guider.maxPulseMsRA, guider.maxPulseMsDEC, calibrator.raPulse, calibrator.decPulse, backlashPulse)))
+		const clearingPulse = calibrator.fastClearing ? calibrator.maxClearingPulse : 0
+		return Math.max(1, Math.round(Math.max(guider.maxPulseMsRA, guider.maxPulseMsDEC, calibrator.raPulse, calibrator.decPulse, clearingPulse, backlashPulse)))
 	}
 
 	// Binds the active camera and guide output, enables image BLOBs, and starts listening.
@@ -707,14 +714,16 @@ export class GuiderClient {
 		return best
 	}
 
-	// Returns whether a dither is followed by a fast recenter.
+	// Returns whether a calibration or a dither is followed by a fast recenter.
 	getFastRecenterEnabled() {
 		return this.#fastRecenter
 	}
 
-	// Enables or disables the fast recenter after a dither; disabling it leaves a recenter in progress to the controller.
+	// Enables or disables the fast recenter after a dither and the fast clearing pulses of the next calibration clearing
+	// move; disabling it leaves a dither recenter in progress to the controller.
 	setFastRecenterEnabled(enabled: boolean) {
 		this.#fastRecenter = enabled
+		this.#calibrator.setFastClearing(enabled)
 		if (!enabled) this.#recenter = undefined
 		this.emitEvent('settingChanged', { setting: 'fastRecenter', value: enabled })
 		return true
