@@ -148,10 +148,13 @@ export interface GuideStarSelection {
 	readonly qualityScore: number
 }
 
-// Default stellar filtering and selection thresholds preserved from the former guider, except the flux: like PHD2, a
-// star is accepted by its SNR, never by an absolute mass, which on a normalized image rejected every real star.
+// Default stellar filtering and selection thresholds preserved from the former guider, except the flux and the SNR. Like
+// PHD2, a star is accepted by its SNR, never by an absolute mass, which on a normalized image rejected every real star.
+// The SNR is background-limited, in standard deviations of the sky: at 2 sigma a full frame of a million pixels accepts
+// hundreds of noise peaks, while the 5 sigma of a detection leaves about none (one-sided Gaussian tail 2.9e-7 per
+// independent aperture), so the guide star and the reference stars are real stars.
 export const DEFAULT_STAR_FILTER_CONFIG: Readonly<StarFilterConfig> = {
-	minStarSnr: 2,
+	minStarSnr: 5,
 	minFlux: 0,
 	maxHfd: 10,
 	borderMarginPx: 10,

@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import type { Image } from '../../../src/imaging/model/types'
-import { estimateTranslation, filterGuideStars, type GuideStar, selectGuideStar, type StarDetectionFrame, StarTracker } from '../../../src/observation/guiding/tracker.star'
+import { detectStars } from '../../../src/imaging/stars/detector'
+import { mulberry32 } from '../../../src/math/numerical/random'
+import { DEFAULT_STAR_FILTER_CONFIG, estimateTranslation, filterGuideStars, type GuideStar, selectGuideStar, type StarDetectionFrame, StarTracker } from '../../../src/observation/guiding/tracker.star'
 import { fixtureGuideImage, fixtureStarDetector, fixtureStarTracker } from '../../util/guiding'
 
 const WIDTH = 800
@@ -47,6 +49,35 @@ test('star filtering rejects low quality detections', () => {
 	expect(filtered.rejectedReasons.saturated).toBe(1)
 	expect(filtered.rejectedReasons.elongated).toBe(1)
 	expect(filtered.rejectedReasons.high_fwhm).toBe(1)
+})
+
+test('the default filter accepts a 5 sigma star of any flux scale and only the rare noise peaks near its threshold', () => {
+	const edge = filterGuideStars(starFrame([star(0, { snr: 5, flux: 0.01 }), star(1, { snr: 4.9 })]), DEFAULT_STAR_FILTER_CONFIG)
+	expect(edge.accepted).toHaveLength(1)
+	expect(edge.rejectedReasons.low_snr).toBe(1)
+
+	// A 512 x 512 sky of Gaussian noise (sigma 0.01 around 0.1) with one star of peak 0.2 (20 sigma) at (256, 256).
+	const size = 512
+	const raw = new Float32Array(size * size)
+	const random = mulberry32(11)
+	for (let i = 0; i < raw.length; i += 2) {
+		const radius = Math.sqrt(-2 * Math.log(1 - random()))
+		const angle = 2 * Math.PI * random()
+		raw[i] = 0.1 + 0.01 * radius * Math.cos(angle)
+		raw[i + 1] = 0.1 + 0.01 * radius * Math.sin(angle)
+	}
+	for (let y = 246; y <= 266; y++) for (let x = 246; x <= 266; x++) raw[y * size + x] += 0.2 * Math.exp(-((x - 256) ** 2 + (y - 256) ** 2) / (2 * 1.5 ** 2))
+	const image: Image = { raw, header: {}, metadata: { width: size, height: size, channels: 1, pixelCount: size * size, pixelSizeInBytes: 4, bitpix: -32, stride: size, strideInBytes: size * 4, bayer: undefined } }
+	const frame = starFrame(detectStars(image), size, size)
+	const accepted = filterGuideStars(frame, DEFAULT_STAR_FILTER_CONFIG).accepted
+	const plotted = accepted.find((each) => Math.hypot(each.x - 256, each.y - 256) < 1)!
+
+	// The star stands far above the noise; the maxima of hundreds of thousands of noise samples reach just above 5 sigma.
+	expect(plotted.snr).toBeGreaterThan(20)
+	const noise = accepted.filter((each) => each !== plotted)
+	expect(noise.length).toBeLessThanOrEqual(3)
+	for (const each of noise) expect(each.snr).toBeLessThan(6)
+	expect(filterGuideStars(frame, { ...DEFAULT_STAR_FILTER_CONFIG, minStarSnr: 2 }).accepted.length).toBeGreaterThan(10 * accepted.length)
 })
 
 test('star filtering rejects detector eccentricity as elongation', () => {

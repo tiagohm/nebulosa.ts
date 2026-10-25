@@ -24,10 +24,14 @@ const blobs = new WeakMap<Buffer, Image>()
 // Zero pixels shared by every fixture image of the same size.
 const pixels = new Map<number, Float32Array>()
 
-// Models what the detector reports for a noise-free plotted star of HFD 3 px: SNR grows with the
-// square root of the flux, and the peak clips at full scale for bright stars.
+// Sky noise summed over the aperture of a fixture star, in normalized full-scale units: the background-limited SNR of
+// a star is its flux over it, so the default 5 sigma filter accepts a flux of 4 or more.
+const FIXTURE_APERTURE_NOISE = 0.8
+
+// Models what the detector reports for a plotted star of HFD 3 px over a sky of FIXTURE_APERTURE_NOISE: SNR grows with
+// the flux, and the peak clips at full scale for bright stars.
 export function fixtureGuideStar(x: number, y: number, flux: number = FIXTURE_STAR_FLUX): GuideStar {
-	return { x, y, flux, snr: Math.sqrt(flux), hfd: 3, fwhm: 3, peak: Math.min(1, flux * PEAK_PER_FLUX) }
+	return { x, y, flux, snr: flux / FIXTURE_APERTURE_NOISE, hfd: 3, fwhm: 3, peak: Math.min(1, flux * PEAK_PER_FLUX) }
 }
 
 // Builds a mono image whose detections are the stars with centres inside the frame, ordered by
