@@ -515,6 +515,95 @@ describe('frame pipeline', () => {
 		expect(harness.cameraManager.startExposureCalls).toHaveLength(1)
 	})
 
+	test('drops a frame prepared across a stop and restart, and the restarted loop keeps one exposure chain', async () => {
+		const deferred = deferredTracker()
+		const harness = makeHarness({}, deferred.tracker)
+		connect(harness)
+		harness.client.loop()
+
+		harness.cameraManager.handler!.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
+		await waitUntil(() => deferred.pending, 1000, 1)
+		harness.client.stopCapture()
+		harness.client.loop()
+		// The frame still being prepared owns the chain, so the restart does not expose on its own.
+		expect(harness.cameraManager.startExposureCalls).toHaveLength(1)
+
+		deferred.resolve()
+		await waitUntil(() => harness.cameraManager.startExposureCalls.length === 2, 1000, 1)
+
+		expect(deferred.contexts).toBeEmpty()
+		expect(eventsOf(harness.events, 'LoopingExposures')).toBeEmpty()
+		expect(harness.client.getAppState()).toBe('Looping')
+		harness.client.stopCapture()
+	})
+
+	test('drops a frame prepared across a full pause and resume', async () => {
+		const deferred = deferredTracker()
+		const harness = makeHarness({}, deferred.tracker)
+		connect(harness)
+		harness.client.loop()
+
+		harness.cameraManager.handler!.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
+		await waitUntil(() => deferred.pending, 1000, 1)
+		harness.client.setPaused(true, true)
+		harness.client.setPaused(false)
+		deferred.resolve()
+		await waitUntil(() => harness.cameraManager.startExposureCalls.length === 2, 1000, 1)
+
+		expect(deferred.contexts).toBeEmpty()
+		expect(eventsOf(harness.events, 'LoopingExposures')).toBeEmpty()
+		harness.client.stopCapture()
+	})
+
+	test('a frame prepared across a partial pause is still tracked', async () => {
+		const deferred = deferredTracker()
+		const harness = makeHarness({}, deferred.tracker)
+		connect(harness)
+		harness.client.loop()
+
+		harness.cameraManager.handler!.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
+		await waitUntil(() => deferred.pending, 1000, 1)
+		harness.client.setPaused(true, false)
+		deferred.resolve()
+		await waitUntil(() => eventsOf(harness.events, 'LoopingExposures').length === 1, 1000, 1)
+
+		expect(deferred.contexts).toHaveLength(1)
+		harness.client.stopCapture()
+	})
+
+	test('a stray BLOB during preparation neither aborts the camera nor makes the next frame stale', async () => {
+		const deferred = deferredTracker()
+		const harness = makeHarness({}, deferred.tracker)
+		connect(harness)
+		harness.client.loop()
+		const handler = harness.cameraManager.handler!
+
+		// A missed frame reserves one stale-BLOB drop; the late original consumes it, and the retry's BLOB is
+		// accepted and arms another drop for whatever its abort may deliver late.
+		await waitUntil(() => eventsOf(harness.events, 'Alert').some((alert) => alert.Type === 'warning' && alert.Msg.includes('timed out')), 10000, 50)
+		handler.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
+		handler.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
+		await waitUntil(() => deferred.pending, 1000, 1)
+
+		// The first BLOB during preparation is that late delivery; the second must be dropped without
+		// side effects instead of arming a drop for the next exposure's own BLOB.
+		handler.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
+		const stops = harness.cameraManager.stopExposureCount
+		handler.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
+		expect(harness.cameraManager.stopExposureCount).toBe(stops)
+
+		const starts = harness.cameraManager.startExposureCalls.length
+		deferred.resolve()
+		await waitUntil(() => harness.cameraManager.startExposureCalls.length === starts + 1, 1000, 1)
+		expect(eventsOf(harness.events, 'LoopingExposures')).toHaveLength(1)
+
+		handler.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
+		await waitUntil(() => deferred.contexts.length === 1 && deferred.pending, 1000, 1)
+		deferred.resolve()
+		await waitUntil(() => eventsOf(harness.events, 'LoopingExposures').length === 2, 1000, 1)
+		harness.client.stopCapture()
+	})
+
 	test('a rejected preparation raises an Alert and keeps the exposure loop running', async () => {
 		const deferred = deferredTracker()
 		const harness = makeHarness({}, deferred.tracker)

@@ -252,6 +252,9 @@ export class GuiderClient {
 	#image?: Image
 	#frameId = 0
 	#processingBlob = false
+	// Current capture run, incremented by a stop or a full pause. A frame admitted in an earlier run is
+	// dropped instead of being tracked against the guide state of the next one.
+	#captureEpoch = 0
 	// True after `#beginExposure` until the matching BLOB is accepted or capture stops. The missing-
 	// BLOB watchdog is not armed from Stopped, so this is what prevents a second CCD_EXPOSURE while
 	// that one-shot start is still outstanding.
@@ -561,6 +564,7 @@ export class GuiderClient {
 
 		this.#abortSettling('capture stopped')
 		this.#emitCaptureStoppedEvent()
+		this.#captureEpoch++
 		this.#blobAdmission = 'accept'
 		this.#awaitingBlob = false
 		this.#hasExposureStart = false
@@ -1097,6 +1101,7 @@ export class GuiderClient {
 			if (this.#guidingAssistant?.measuringBacklash === true) this.#finishGuidingAssistant(false, 'backlash test paused', true)
 			this.#setAppState('Paused')
 			if (this.#fullPause) {
+				this.#captureEpoch++
 				this.#blobAdmission = 'accept'
 				this.#awaitingBlob = false
 				this.#clearExposureWatchdog()
@@ -1126,6 +1131,16 @@ export class GuiderClient {
 	async #processBlob(device: Camera, data: Buffer, encoding: BlobEncoding): Promise<void> {
 		if (!this.#connected || device !== this.#camera) return
 
+		// The calibrator and guider are stateful and not reentrant, so a BLOB that arrives while a
+		// previous frame is still being decoded, prepared or processed is dropped to avoid interleaved
+		// mutation. No exposure of this client is outstanding then (the next one starts only when that
+		// processing ends), so the BLOB may only consume a pending stale-BLOB drop: accepting it as the
+		// admission below does would abort nothing and arm a drop that discards the next exposure's BLOB.
+		if (this.#processingBlob) {
+			if (this.#blobAdmission === 'drop-next') this.#blobAdmission = 'already-dropped'
+			return
+		}
+
 		// A BLOB that arrives after a missing-BLOB retry may be the timed-out original. The
 		// replacement is already outstanding, so accepting it would process a stale frame and
 		// `finally` would start a second capture chain beside the retry. INDI BLOBs have no
@@ -1144,10 +1159,8 @@ export class GuiderClient {
 			this.#blobAdmission = 'accept'
 		}
 
-		// The calibrator and guider are stateful and not reentrant, so a BLOB that arrives while a
-		// previous frame is still being decoded/processed is dropped to avoid interleaved mutation.
-		if (this.#processingBlob) return
 		this.#processingBlob = true
+		const epoch = this.#captureEpoch
 		this.#awaitingBlob = false
 		// Drop the missing-BLOB timer as soon as this exposure is in hand. Leaving it armed until
 		// the next startExposure lets a slow decode or pulse wait trip a false timeout and start an
@@ -1170,7 +1183,7 @@ export class GuiderClient {
 			// tagged with the new (empty) frame id instead of the last successfully decoded frame.
 			this.#image = image
 
-			const frame = await this.#makeGuideFrame(device, image)
+			const frame = await this.#makeGuideFrame(device, epoch, image)
 			if (frame === undefined) return
 			this.#frame = frame
 
@@ -1203,9 +1216,11 @@ export class GuiderClient {
 
 	// Converts a decoded image into a guide frame: awaits the tracker's context-free preparation, when it
 	// has one, and then executes exactly one synchronous tracker pass with the guide state read after
-	// that await. Returns undefined for an out-of-order capture or when `device` stopped being the
-	// connected camera while the frame was being prepared.
-	async #makeGuideFrame(device: Camera, image?: Image): Promise<GuideFrame | undefined> {
+	// that await. `epoch` is the capture run the BLOB was admitted in. Returns undefined for an
+	// out-of-order capture, when a stop or a full pause ended that run while the frame was being decoded
+	// or prepared, or when `device` stopped being the connected camera meanwhile.
+	async #makeGuideFrame(device: Camera, epoch: number, image?: Image): Promise<GuideFrame | undefined> {
+		if (epoch !== this.#captureEpoch) return undefined
 		const width = image?.metadata.width ?? this.#camera?.frame.width.value ?? 0
 		const height = image?.metadata.height ?? this.#camera?.frame.height.value ?? 0
 		const timestamp = this.#hasExposureStart ? this.#exposureStartedAt + this.#inFlightExposure / 2 : Date.now()
@@ -1220,7 +1235,7 @@ export class GuiderClient {
 		const frame: GuideTrackerFrame = { image, width, height, timestamp, captureTime, captureMonotonic, frameId: ++this.#frameId, cadence }
 		// No await without a preparation stage, so the tracker sees the guide state of the turn that built the frame.
 		const trackerFrame = this.#tracker.prepare === undefined ? frame : await this.#tracker.prepare(frame)
-		if (!this.#connected || device !== this.#camera) return undefined
+		if (!this.#connected || device !== this.#camera || epoch !== this.#captureEpoch) return undefined
 
 		const lockSearchPosition = this.#lockSearchPosition ?? this.#lockPosition
 		const appState = this.#appState === 'Paused' && !this.#fullPause ? this.#resumeState : this.#appState
