@@ -650,6 +650,78 @@ describe('dispatched pulse evidence', () => {
 		}
 	})
 
+	test('dispatches pulses synchronously under the owning operation and waits for their end before releasing it', async () => {
+		const camera = await connected()
+		const windows: (ReturnType<typeof guideOutputCommander.dispatch> | undefined)[] = []
+
+		const result = await operationCoordinator.start('guiding', [{ key: resourceKey(camera), device: camera }], (context) => {
+			const dispatchedAt = performance.now()
+			windows.push(guideOutputCommander.dispatch(context, camera, 'NORTH', 200))
+			windows.push(guideOutputCommander.dispatch(context, camera, 'WEST', 100))
+			expect(windows[0]!.busyAckDeadline).toBeCloseTo(guidePulseWindow(dispatchedAt, 200).busyAckDeadline, 0)
+			expect(guideOutputCommander.dispatchedPulseWindow(camera)).toEqual({ busyAckDeadline: windows[0]!.busyAckDeadline, endsBy: windows[0]!.endsBy })
+			return successfulOperationResult(undefined)
+		}).result
+
+		expect(result).toMatchObject({ ok: true })
+		expect(windows.every((window) => window !== undefined)).toBeTrue()
+		// The cleanup registered by the first dispatch held the lease until the end of both pulses was observed.
+		expect(guideOutputCommander.dispatchedPulseWindow(camera)).toBeUndefined()
+		expect(camera.pulsing).toBeFalse()
+		expect(causesOf(camera)).not.toContain('guidePulse')
+		await waitUntil(() => isFree(camera))
+	})
+
+	test('refuses to dispatch for an operation that does not own the device or is being canceled', async () => {
+		const camera = await connected()
+		const driver = silentDriver()
+
+		try {
+			const unrelated = await operationCoordinator.start('other', [], (context) => successfulOperationResult(guideOutputCommander.dispatch(context, camera, 'NORTH', 100))).result
+			expect(unrelated).toMatchObject({ ok: true, value: undefined })
+
+			let refused: unknown = 'not attempted'
+			const holder = operationCoordinator.start('guiding', [{ key: resourceKey(camera), device: camera }], async (context) => {
+				await new Promise((resolve) => {
+					context.signal.addEventListener('abort', resolve, { once: true })
+				})
+				refused = guideOutputCommander.dispatch(context, camera, 'NORTH', 100)
+				return failedOperationResult('aborted')
+			})
+
+			await holder.cancel()
+			expect(refused).toBeUndefined()
+			expect(driver.pulses).toBeEmpty()
+			expect(guideOutputCommander.dispatchedPulseWindow(camera)).toBeUndefined()
+		} finally {
+			driver.spy.mockRestore()
+		}
+	})
+
+	test('blocks the key when the end of a dispatched pulse is unobserved as its operation ends', async () => {
+		const camera = await connected()
+		const driver = silentDriver()
+
+		try {
+			const result = await operationCoordinator.start('guiding', [{ key: resourceKey(camera), device: camera }], (context) => {
+				expect(guideOutputCommander.dispatch(context, camera, 'EAST', 1000)).toBeDefined()
+				cameraManager.disconnect(camera)
+				return successfulOperationResult(undefined)
+			}).result
+
+			expect(result.ok).toBeFalse()
+			expect(guideOutputCommander.dispatchedPulseWindow(camera)).toBeDefined()
+			expect(causesOf(camera)).toContain('guidePulse')
+			expect(resourceArbiter.ownersOf(resourceKey(camera))).toBeEmpty()
+		} finally {
+			driver.spy.mockRestore()
+		}
+
+		await connected()
+		await waitUntil(() => guideOutputCommander.dispatchedPulseWindow(camera) === undefined, 5000, 10)
+		expect(causesOf(camera)).not.toContain('guidePulse')
+	})
+
 	test('keeps the guidePulse cause independent from the other causes and lifts only its own on dispose', async () => {
 		const camera = await connected()
 		const key = resourceKey(camera)

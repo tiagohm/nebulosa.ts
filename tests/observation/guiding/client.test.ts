@@ -1115,6 +1115,37 @@ describe('pulse admission', () => {
 		])
 	})
 
+	test('the dispatcher of an admission sends every pulse it lets through, and a refused dispatch delivers nothing', () => {
+		connect(harness)
+		const dispatched: [string, string, number][] = []
+		let accept = true
+		const admission = harness.client.admitPulses(2500, {
+			dispatch: (guideOutput, direction, duration) => {
+				dispatched.push([guideOutput.name, direction, duration])
+				return accept
+			},
+		})!
+
+		admission.open()
+		expect(harness.client.guidePulse(100.4, 'North')).toBeTrue()
+		expect(harness.client.guidePulse(2600, 'East')).toBeFalse()
+		expect(dispatched).toEqual([[harness.guideOutput.name, 'NORTH', 100]])
+		const window = harness.client.pulseQuiescenceWindow()
+		expect(window).toBeDefined()
+
+		accept = false
+		expect(harness.client.guidePulse(200, 'West')).toBeFalse()
+		expect(dispatched).toHaveLength(2)
+		expect(harness.client.pulseQuiescenceWindow()).toEqual(window)
+		expect(harness.guideOutputManager.pulses).toHaveLength(0)
+
+		// Once the admission is gone the client sends through the guide output manager again.
+		admission[Symbol.dispose]()
+		expect(harness.client.guidePulse(300, 'South')).toBeTrue()
+		expect(dispatched).toHaveLength(2)
+		expect(harness.guideOutputManager.pulses).toEqual([{ direction: 'SOUTH', duration: 300 }])
+	})
+
 	test('guidePulse is unbounded without an admission and after it is disposed', () => {
 		connect(harness)
 		expect(harness.client.guidePulse(60000, 'West')).toBeTrue()

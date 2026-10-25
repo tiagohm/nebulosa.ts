@@ -200,6 +200,18 @@ export interface GuidePulseAdmission extends Disposable {
 	readonly close: () => void
 }
 
+// Sends one admitted guide pulse of `duration` whole milliseconds (≥ 1) on `guideOutput` and returns whether it
+// was sent. A refused pulse is lost like one the admission refused: it records no window and delays nothing.
+export type GuidePulseDispatcher = (guideOutput: GuideOutput, direction: GuideDirection, duration: number) => boolean
+
+// Options of `GuiderClient.admitPulses`.
+export interface GuidePulseAdmissionOptions {
+	// Sends every pulse the admission lets through instead of the guide output manager, so the owner of the
+	// admission dispatches them where it arbitrates the guide output and records their physical evidence, such
+	// as `GuideOutputCommander.dispatch` under the operation holding it. Defaults to the guide output manager.
+	readonly dispatch?: GuidePulseDispatcher
+}
+
 // Admission handed out by `GuiderClient.admitPulses`. Disposing it closes the gate for good and lets the
 // client admit another one.
 class PulseAdmission implements GuidePulseAdmission {
@@ -210,9 +222,11 @@ class PulseAdmission implements GuidePulseAdmission {
 	// Detaches the admission from its client; called once on disposal.
 	readonly #release: (admission: PulseAdmission) => void
 
-	// Creates a closed admission with a ceiling in milliseconds and the callback detaching it from its client.
+	// Creates a closed admission with a ceiling in milliseconds, the dispatcher of the pulses it lets through
+	// (the guide output manager when absent), and the callback detaching it from its client.
 	constructor(
 		readonly maximumDuration: number,
+		readonly dispatch: GuidePulseDispatcher | undefined,
 		release: (admission: PulseAdmission) => void,
 	) {
 		this.#release = release
@@ -406,16 +420,16 @@ export class GuiderClient {
 	// dispatched pulse. While it is active every pulse, from guiding, calibration, the guiding assistant or
 	// `guidePulse`, is refused unless the admission is open and the pulse fits the ceiling. Returns undefined
 	// when another admission is active or when the current configuration already allows a longer pulse
-	// (`maxPulseDuration() > ceiling`). The admission starts closed. Throws for a ceiling that is not a finite
-	// number ≥ 1, since no pulse could ever fit it.
-	admitPulses(maximumDuration: number): GuidePulseAdmission | undefined {
+	// (`maxPulseDuration() > ceiling`). The admission starts closed, and `options.dispatch` sends the pulses it
+	// lets through. Throws for a ceiling that is not a finite number ≥ 1, since no pulse could ever fit it.
+	admitPulses(maximumDuration: number, options: GuidePulseAdmissionOptions = {}): GuidePulseAdmission | undefined {
 		if (!(maximumDuration >= 1 && Number.isFinite(maximumDuration))) throw new Error(`invalid pulse ceiling: ${maximumDuration}`)
 		if (this.#admission !== undefined) return undefined
 
 		const ceiling = Math.max(1, Math.round(maximumDuration))
 		if (this.maxPulseDuration() > ceiling) return undefined
 
-		const admission = new PulseAdmission(ceiling, (released) => {
+		const admission = new PulseAdmission(ceiling, options.dispatch, (released) => {
 			if (this.#admission === released) this.#admission = undefined
 		})
 
@@ -1400,9 +1414,10 @@ export class GuiderClient {
 	}
 
 	// The only sender of guide pulses: rounds the duration, in milliseconds, to a whole millisecond of at least
-	// one, refuses it while paused, while an active admission is closed, or above its ceiling, and records the
-	// window of a delivered pulse. Returns the delivered duration, or 0 when nothing was sent. A correction
-	// refused for its length is lost, never shortened.
+	// one, refuses it while paused, while an active admission is closed, or above its ceiling, sends it through
+	// the dispatcher of the active admission (the guide output manager otherwise), and records the window of a
+	// delivered pulse. Returns the delivered duration, or 0 when nothing was sent. A correction refused for its
+	// length is lost, never shortened.
 	#dispatchPulse(direction: GuideDirection, duration: number) {
 		const guideOutput = this.#guideOutput
 		if (guideOutput === undefined || this.#paused) return 0
@@ -1412,7 +1427,9 @@ export class GuiderClient {
 		if (admission !== undefined && (!admission.isOpen || pulseDuration > admission.maximumDuration)) return 0
 
 		const window = guidePulseWindow(performance.now(), pulseDuration)
-		this.guideOutputManager.pulse(guideOutput, direction, pulseDuration)
+
+		if (admission?.dispatch === undefined) this.guideOutputManager.pulse(guideOutput, direction, pulseDuration)
+		else if (!admission.dispatch(guideOutput, direction, pulseDuration)) return 0
 
 		const previous = this.#pulseWindow
 		this.#pulseWindow = previous === undefined ? window : { busyAckDeadline: Math.max(previous.busyAckDeadline, window.busyAckDeadline), endsBy: Math.max(previous.endsBy, window.endsBy) }
