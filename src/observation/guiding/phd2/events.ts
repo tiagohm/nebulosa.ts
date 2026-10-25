@@ -160,6 +160,8 @@ function phd2GuideParamOf(change: GuiderSettingChange) {
 			return { Name: 'DitherMode', Value: change.value }
 		case 'stickyLockPosition':
 			return { Name: 'StickyLockPosition', Value: change.value }
+		case 'fastRecenter':
+			return { Name: 'FastRecenter', Value: change.value }
 		case 'lockShiftEnabled':
 			return { Name: 'LockShiftEnabled', Value: change.value }
 		case 'lockShift':

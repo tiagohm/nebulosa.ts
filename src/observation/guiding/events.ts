@@ -43,6 +43,7 @@ export type GuiderSettingChange =
 	| { readonly setting: 'guideOutputEnabled'; readonly value: boolean }
 	| { readonly setting: 'ditherMode'; readonly value: DitherMode }
 	| { readonly setting: 'stickyLockPosition'; readonly value: boolean }
+	| { readonly setting: 'fastRecenter'; readonly value: boolean }
 	| { readonly setting: 'lockShiftEnabled'; readonly value: boolean }
 	| { readonly setting: 'lockShift'; readonly value: GuiderLockShift }
 
@@ -182,14 +183,17 @@ export interface GuiderGuideStepEvent extends GuidingEventBase<'guideStep'>, Gui
 	// converted with the solved axis rates, or the raw controller value before calibration.
 	readonly raDistance: number
 	readonly decDistance: number
-	// Filtered error the controller corrected along each axis, in pixels; zero while the output is disabled
-	// or paused.
+	// Filtered error the controller corrected along each axis, or the move of a fast recenter step, in pixels; zero
+	// while the output is disabled or paused.
 	readonly raGuideDistance: number
 	readonly decGuideDistance: number
 	readonly ra: GuidingAxisCorrection
 	readonly dec: GuidingAxisCorrection
 	// Smoothed guide distance, in pixels.
 	readonly averageDistance: number
+	// Present and true when the pulses are a fast recenter step toward a dithered lock rather than the controller's
+	// correction, so they are never limited.
+	readonly recentering?: boolean
 	// Controller diagnostics of the step.
 	readonly diagnostics: GuideDiagnostics
 }

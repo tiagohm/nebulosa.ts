@@ -582,6 +582,35 @@ describe('ra and dec controller fundamentals', () => {
 		expect(b.ra.duration).toBeGreaterThan(a.ra.duration)
 	})
 
+	test('ra follows the PHD2 hysteresis of the error and the last move', () => {
+		const g = guider({ hysteresisRA: 0.1, aggressivenessRA: 0.7, minMoveRA: 0.2, msPerRAUnit: 100, minPulseMsRA: 1, maxPulseMsRA: 10000, maxFrameJumpPx: 20, nominalCadence: 1000 })
+		g.processFrame(guideFrame(BASE_STARS, 0))
+
+		// out = 0.7 x (0.9 x error + 0.1 x last move); an error under the minimum move outputs 0 and becomes the last move.
+		const durations = [5, 3, 0.1, 1].map((error, i) => g.processFrame(guideFrame(shiftStars(BASE_STARS, error, 0), (i + 1) * 1000)).ra.duration)
+		expect(durations[0]).toBeCloseTo(315, 6)
+		expect(durations[1]).toBeCloseTo(211.05, 6)
+		expect(durations[2]).toBe(0)
+		expect(durations[3]).toBeCloseTo(63, 6)
+	})
+
+	test('resetControllers forgets the last move, as PHD2 does when the lock moves', () => {
+		const g = guider({ hysteresisRA: 0.1, aggressivenessRA: 0.7, minMoveRA: 0.2, msPerRAUnit: 100, minPulseMsRA: 1, maxPulseMsRA: 10000, maxFrameJumpPx: 20, nominalCadence: 1000 })
+		g.processFrame(guideFrame(BASE_STARS, 0))
+		expect(g.processFrame(guideFrame(shiftStars(BASE_STARS, 5, 0), 1000)).diagnostics.filteredRA).toBeCloseTo(3.15, 6)
+
+		g.resetControllers()
+		expect(g.processFrame(guideFrame(shiftStars(BASE_STARS, 3, 0), 2000)).ra.duration).toBeCloseTo(189, 6)
+	})
+
+	test('directPulse cancels an image error at full gain, unclipped and within the DEC mode', () => {
+		const g = guider({ aggressivenessRA: 0.5, aggressivenessDEC: 0.5, msPerRAUnit: 100, msPerDECUnit: 100, maxPulseMsRA: 1000 })
+		expect(g.directPulse(0.25, -0.5)).toEqual({ ra: { direction: 'WEST', duration: 25 }, dec: { direction: 'SOUTH', duration: 50 } })
+		expect(g.directPulse(-20, 0).ra).toEqual({ direction: 'EAST', duration: 2000 })
+		expect(g.directPulse(0, 0).ra.duration).toBe(0)
+		expect(guider({ decMode: 'north-only' }).directPulse(0, -0.5).dec.duration).toBe(0)
+	})
+
 	test('dec modes and backlash reversal suppression', () => {
 		const g = guider({ decMode: 'auto', decReversalThreshold: 0.05, decBacklashAccumThreshold: 0.25, minMoveDEC: 0.01 })
 		g.processFrame(guideFrame(BASE_STARS, 0))

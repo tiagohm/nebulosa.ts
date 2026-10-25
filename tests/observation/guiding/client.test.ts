@@ -13,6 +13,7 @@ import { bufferSink } from '../../../src/io/io'
 import { mulberry32 } from '../../../src/math/numerical/random'
 import type { GuidingCalibrationResult } from '../../../src/observation/guiding/calibrator'
 import { GuiderClient, type GuideFrameImage, type GuiderClientConnectOptions, type GuiderClientHandler, type GuiderClientOptions } from '../../../src/observation/guiding/client'
+import { DitherGenerator } from '../../../src/observation/guiding/dither'
 import { ditherPulsePlanFromCalibration } from '../../../src/observation/guiding/dither.pulse'
 import type { GuidingEvent } from '../../../src/observation/guiding/events'
 import { DEFAULT_GUIDER_CONFIG, type GuideDirectionDEC, type GuideDirectionRA } from '../../../src/observation/guiding/guider'
@@ -1631,6 +1632,16 @@ describe('event envelope', () => {
 		expect(change).toMatchObject({ setting: 'decGuideMode', value: 'north-only' })
 		expect(change.timestamp).toBeGreaterThanOrEqual(before)
 		expect(eventsOf(harness.events, 'GuideParamChange').at(-1)).toMatchObject({ Name: 'DecGuideMode', Value: 'North', Timestamp: change.timestamp / 1000 })
+	})
+
+	test('fast recenter is on by default and toggles with a setting change', () => {
+		expect(harness.client.getFastRecenterEnabled()).toBeTrue()
+		expect(makeHarness({ fastRecenter: false }).client.getFastRecenterEnabled()).toBeFalse()
+
+		expect(harness.client.setFastRecenterEnabled(false)).toBeTrue()
+		expect(harness.client.getFastRecenterEnabled()).toBeFalse()
+		expect(nativeOf(harness.native, 'settingChanged').at(-1)).toMatchObject({ setting: 'fastRecenter', value: false })
+		expect(eventsOf(harness.events, 'GuideParamChange').at(-1)).toMatchObject({ Name: 'FastRecenter', Value: false })
 	})
 })
 
@@ -4305,10 +4316,12 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			stickyLockPosition: true,
 			handler: { frame: (_client, frame) => frames.push(frame) },
 		})
+		// The sticky lock stays where the star was selected, which the calibration left far from the star, so the output is
+		// off before guiding corrects toward it: only the 10 px motion below moves the star.
+		harness.client.setGuideOutputEnabled(false)
 		await establishLockReference(harness)
 
 		const lock = harness.client.getLockPosition()!
-		harness.client.setGuideOutputEnabled(false)
 		harness.mount.offsetX += 10
 		for (let i = 0; i < 4; i++) await feedFrame(harness)
 
@@ -5174,6 +5187,139 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		expect(third.dx).toBeCloseTo(first.dx, 6)
 		expect(third.dy).toBeCloseTo(first.dy, 6)
 	})
+
+	// Returns the native guide steps recorded from index `from` of the native event list on.
+	function guideStepsFrom(harness: Harness, from: number) {
+		return nativeOf(harness.native.slice(from), 'guideStep')
+	}
+
+	test(
+		'a dither clears the controller history before the next correction',
+		async () => {
+			const harness = await calibrateAndGuide({ fastRecenter: false })
+			await establishLockReference(harness)
+			harness.mount.driftX = RA_AXIS[0]
+			harness.mount.driftY = RA_AXIS[1]
+			for (let i = 0; i < 3; i++) await feedFrame(harness)
+			harness.mount.driftX = 0
+			harness.mount.driftY = 0
+			expect(nativeOf(harness.native, 'guideStep').at(-1)!.diagnostics.filteredRA).not.toBe(0)
+
+			const from = harness.native.length
+			expect(harness.client.dither(4, true, IMMEDIATE_SETTLE)).toBeTrue()
+			for (let i = 0; i < 3; i++) await feedFrame(harness)
+
+			// PHD2's hysteresis forgets its last move when the lock moves, so the first correction after the dither is the
+			// fresh error alone: aggressiveness x (1 - hysteresis) x error.
+			const { hysteresisRA, aggressivenessRA } = DEFAULT_GUIDER_CONFIG
+			const step = guideStepsFrom(harness, from).find((step) => step.diagnostics.filteredRA !== 0)!
+			expect(step.recentering).toBeUndefined()
+			expect(step.diagnostics.filteredRA).toBeCloseTo(aggressivenessRA * (1 - hysteresisRA) * step.diagnostics.axisErrorRA!, 6)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
+		'fast recenter moves the star onto the dithered lock with one full-gain pulse',
+		async () => {
+			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
+			await establishLockReference(harness)
+
+			const from = harness.native.length
+			const pulsesFrom = harness.guideOutputManager.pulses.length
+			expect(harness.client.dither(5, true, IMMEDIATE_SETTLE)).toBeTrue()
+			await feedFrame(harness)
+
+			// A 5 px dither is shorter than 0.7 of the 32 px search half-side, so the first frame recenters it whole, at the
+			// solved rate and without the controller's aggressiveness.
+			const [recenter] = guideStepsFrom(harness, from)
+			const { xRate } = harness.client.getCalibrationData()
+			expect(recenter.recentering).toBeTrue()
+			expect(recenter.ra.duration).toBeCloseTo(5 / xRate, -1)
+			expect(recenter.ra.limited).toBeFalse()
+			expect(recenter.dec.duration).toBeLessThan(0.1 * recenter.ra.duration)
+			expect(harness.guideOutputManager.pulses.slice(pulsesFrom).map((pulse) => pulse.direction)).toContain(recenter.ra.direction!)
+
+			await feedFrame(harness)
+			const [, next] = guideStepsFrom(harness, from)
+			expect(next.recentering).toBeUndefined()
+			expect(Math.hypot(next.dx, next.dy)).toBeLessThan(0.5)
+			expect(harness.client.getSettling()).toBeFalse()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
+		'fast recenter splits a dither longer than the step into moves of 0.7 of the search half-side',
+		async () => {
+			const harness = await calibrateAndGuide({ ditherMode: 'spiral', searchRegion: 16 })
+			await establishLockReference(harness)
+
+			const from = harness.native.length
+			expect(harness.client.dither(12, true, { pixels: 1, time: 0, timeout: 20 })).toBeTrue()
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+
+			// 12 px in steps of 0.7 x 8 = 5.6 px: 5.6, 5.6 and the 0.8 px left, then the controller takes over.
+			const { xRate } = harness.client.getCalibrationData()
+			const steps = guideStepsFrom(harness, from)
+			const recentering = steps.filter((step) => step.recentering)
+			expect(recentering.map((step) => Math.round(step.ra.duration * xRate * 10) / 10)).toEqual([5.6, 5.6, 0.8])
+			expect(steps[recentering.length].recentering).toBeUndefined()
+			expect(Math.hypot(steps.at(-1)!.dx, steps.at(-1)!.dy)).toBeLessThan(1)
+			expect(eventsOf(harness.events, 'SettleDone').at(-1)!.Status).toBe(0)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
+		'without fast recenter the controller walks the star onto the dithered lock',
+		async () => {
+			const harness = await calibrateAndGuide({ ditherMode: 'spiral', fastRecenter: false })
+			await establishLockReference(harness)
+
+			const from = harness.native.length
+			expect(harness.client.dither(5, true, IMMEDIATE_SETTLE)).toBeTrue()
+			await feedFrame(harness)
+
+			const [first] = guideStepsFrom(harness, from)
+			const { xRate } = harness.client.getCalibrationData()
+			expect(first.recentering).toBeUndefined()
+			expect(first.ra.duration).toBeLessThan(0.8 * (5 / xRate))
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
+		'a dither whose lock would leave the frame is reflected inside it',
+		async () => {
+			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
+			await establishLockReference(harness)
+
+			// The lock sits near the right edge, so the spiral's first RA step would put it out of the 64 px search margin.
+			const before = harness.client.getLockPosition()!
+			const { xAngle } = harness.client.getCalibrationData()
+			const requested = new DitherGenerator({ mode: 'spiral' }).next(60, true).rightAscension
+			const margin = 1 + 64 / 2
+			expect(before[0] + requested * Math.cos(xAngle) + margin).toBeGreaterThanOrEqual(FRAME_WIDTH)
+
+			expect(harness.client.dither(60, true, { pixels: 1, time: 0, timeout: 20 })).toBeTrue()
+			const { dx, dy } = eventsOf(harness.events, 'GuidingDithered').at(-1)!
+			expect(dx).toBeCloseTo(-requested * Math.cos(xAngle), 6)
+			expect(dy).toBeCloseTo(-requested * Math.sin(xAngle), 6)
+
+			const [x, y] = harness.client.getLockPosition()!
+			expect(x).toBeGreaterThanOrEqual(margin)
+			expect(x + margin).toBeLessThan(FRAME_WIDTH)
+			expect(y).toBeGreaterThanOrEqual(margin)
+			expect(y + margin).toBeLessThan(FRAME_HEIGHT)
+
+			// The recenter steps keep the star inside the search box all the way to the reflected lock.
+			for (let i = 0; i < 8 && harness.client.getSettling(); i++) await feedFrame(harness)
+			expect(eventsOf(harness.events, 'LockPositionLost')).toHaveLength(0)
+			expect(eventsOf(harness.events, 'SettleDone').at(-1)!.Status).toBe(0)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
 
 	test('stopping a guiding session reports both stop events and keeps the calibration', async () => {
 		const harness = await calibrateAndGuide()

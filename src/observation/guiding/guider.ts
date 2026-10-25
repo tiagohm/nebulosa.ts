@@ -83,9 +83,9 @@ export interface GuideDiagnostics {
 	readonly axisErrorRA?: number
 	// Calibrated DEC-axis error.
 	readonly axisErrorDEC?: number
-	// Hysteresis-filtered RA error.
+	// Latest RA correction of the hysteresis controller, in axis units (PHD2's last move).
 	readonly filteredRA?: number
-	// Hysteresis-filtered DEC error.
+	// Latest DEC correction of the hysteresis controller, in axis units (PHD2's last move).
 	readonly filteredDEC?: number
 	// Count of rejected candidates by reason.
 	readonly rejectedReasons: Readonly<Record<string, number>>
@@ -153,9 +153,10 @@ export interface GuiderConfig {
 	readonly aggressivenessRA: number
 	// DEC proportional gain in [0, 1].
 	readonly aggressivenessDEC: number
-	// RA hysteresis smoothing factor in [0, 1].
+	// Fraction of the previous RA correction blended into the next, in [0, 1], as PHD2's hysteresis algorithm:
+	// correction = aggressiveness × ((1 − hysteresis) × error + hysteresis × previous correction).
 	readonly hysteresisRA: number
-	// DEC hysteresis smoothing factor in [0, 1].
+	// Fraction of the previous DEC correction blended into the next, in [0, 1], as for RA.
 	readonly hysteresisDEC: number
 	// Milliseconds of RA pulse per unit of axis error.
 	readonly msPerRAUnit: number
@@ -273,8 +274,8 @@ export const DEFAULT_GUIDER_CONFIG: Readonly<GuiderConfig> = {
 	minMoveDEC: 0.14,
 	aggressivenessRA: 0.7,
 	aggressivenessDEC: 0.65,
-	hysteresisRA: 0.7,
-	hysteresisDEC: 0.6,
+	hysteresisRA: 0.1,
+	hysteresisDEC: 0.1,
 	msPerRAUnit: 850,
 	msPerDECUnit: 850,
 	minPulseMsRA: 20,
@@ -334,6 +335,13 @@ export function applyCalibration(calibration: CalibrationMatrix, dx: number, dy:
 // Returns whether two calibration matrices have identical elements.
 function isCalibrationEquals(left: CalibrationMatrix, right: CalibrationMatrix) {
 	return left[0] === right[0] && left[1] === right[1] && left[2] === right[2] && left[3] === right[3]
+}
+
+// Returns the next correction of PHD2's hysteresis algorithm, in axis units: aggressiveness × ((1 − hysteresis) × error +
+// hysteresis × previous), or 0 when the error is below the dead band minMove, which also clears the history PHD2 keeps
+// (the previous correction). Error, previous, and minMove share the axis units.
+export function hysteresisCorrection(error: number, previous: number, hysteresis: number, aggressiveness: number, minMove: number) {
+	return Math.abs(error) < minMove ? 0 : aggressiveness * ((1 - hysteresis) * error + hysteresis * previous)
 }
 
 // Applies deadband threshold and emits zero when magnitude is below threshold.
@@ -511,6 +519,29 @@ export class Guider {
 		this.state.filteredDEC = 0
 		this.state.lastDecDirection = undefined
 		this.state.oppositeDecErrorAccum = 0
+	}
+
+	// Forgets the memory of both axis controllers (the previous corrections, the DEC reversal state) and the buffered
+	// interval errors, keeping the lock, the dither offset, and the calibration. PHD2 resets its guide algorithms this
+	// way whenever the lock moves while guiding, so the corrections toward a new lock never carry the history of the old.
+	resetControllers() {
+		this.#clearRaControlState()
+		this.#clearDecControlState()
+		this.#clearCorrectionState()
+	}
+
+	// Returns the pulses that cancel an image-space error (dx, dy) in pixels, measurement minus target, in one move: the
+	// calibrated axis errors at full gain, without hysteresis, dead band, pulse limits, or controller memory, as PHD2's
+	// recovery moves. The DEC guide mode still applies. Leaves the controller state untouched.
+	directPulse(dx: number, dy: number): { readonly ra: AxisPulse; readonly dec: AxisPulse } {
+		const axis = applyCalibration(this.config.calibration, dx, dy)
+		const raDuration = Math.abs(axis.ra) * this.config.msPerRAUnit
+		const decDuration = Math.abs(axis.dec) * this.config.msPerDECUnit
+		const ra: AxisPulse = raDuration > 0 ? { direction: axis.ra >= 0 ? this.config.raPositiveDirection : oppositeRA(this.config.raPositiveDirection), duration: raDuration } : NO_PULSE
+		const decDirection = axis.dec >= 0 ? this.config.decPositiveDirection : oppositeDEC(this.config.decPositiveDirection)
+		const decAllowed = this.config.decMode === 'auto' || (this.config.decMode === 'north-only' && decDirection === 'NORTH') || (this.config.decMode === 'south-only' && decDirection === 'SOUTH')
+		const dec: AxisPulse = decDuration > 0 && decAllowed ? { direction: decDirection, duration: decDuration } : NO_PULSE
+		return { ra, dec }
 	}
 
 	// Drops RA hysteresis without touching lock, dither, or DEC memory.
@@ -843,11 +874,10 @@ export class Guider {
 
 	// Computes RA pulse with hysteresis smoothing, deadband and proportional gain.
 	#computeRA(axisErrorRA: number, cadenceScale: number): AxisPulse {
-		const deadbanded = applyDeadband(axisErrorRA, this.config.minMoveRA)
-		this.state.filteredRA = this.config.hysteresisRA * this.state.filteredRA + (1 - this.config.hysteresisRA) * deadbanded
+		this.state.filteredRA = hysteresisCorrection(axisErrorRA, this.state.filteredRA, this.config.hysteresisRA, this.config.aggressivenessRA, this.config.minMoveRA)
 		const magnitude = Math.abs(this.state.filteredRA)
-		if (magnitude < this.config.minMoveRA) return NO_PULSE
-		const duration = clamp(magnitude * this.config.msPerRAUnit * this.config.aggressivenessRA * cadenceScale, this.config.minPulseMsRA, this.config.maxPulseMsRA)
+		if (magnitude === 0) return NO_PULSE
+		const duration = clamp(magnitude * this.config.msPerRAUnit * cadenceScale, this.config.minPulseMsRA, this.config.maxPulseMsRA)
 		const direction = this.state.filteredRA >= 0 ? this.config.raPositiveDirection : oppositeRA(this.config.raPositiveDirection)
 		return { direction, duration }
 	}
@@ -856,11 +886,10 @@ export class Guider {
 	#computeDEC(axisErrorDEC: number, cadenceScale: number): AxisPulse {
 		if (this.config.decMode === 'off') return NO_PULSE
 
-		const deadbanded = applyDeadband(axisErrorDEC, this.config.minMoveDEC)
-		this.state.filteredDEC = this.config.hysteresisDEC * this.state.filteredDEC + (1 - this.config.hysteresisDEC) * deadbanded
+		this.state.filteredDEC = hysteresisCorrection(axisErrorDEC, this.state.filteredDEC, this.config.hysteresisDEC, this.config.aggressivenessDEC, this.config.minMoveDEC)
 
 		const magnitude = Math.abs(this.state.filteredDEC)
-		if (magnitude < this.config.minMoveDEC) return NO_PULSE
+		if (magnitude === 0) return NO_PULSE
 
 		const direction = this.state.filteredDEC >= 0 ? this.config.decPositiveDirection : oppositeDEC(this.config.decPositiveDirection)
 		if (this.config.decMode === 'north-only' && direction !== 'NORTH') return NO_PULSE
@@ -868,15 +897,17 @@ export class Guider {
 
 		const last = this.state.lastDecDirection
 
+		// The reversal thresholds are errors, so they are compared with the measured error rather than the correction.
 		if (last !== undefined && last !== direction) {
-			if (magnitude < this.config.decReversalThreshold) return NO_PULSE
-			this.state.oppositeDecErrorAccum += magnitude
+			const error = Math.abs(axisErrorDEC)
+			if (error < this.config.decReversalThreshold) return NO_PULSE
+			this.state.oppositeDecErrorAccum += error
 			if (this.state.oppositeDecErrorAccum < this.config.decBacklashAccumThreshold) return NO_PULSE
 		} else {
 			this.state.oppositeDecErrorAccum = 0
 		}
 
-		const duration = clamp(magnitude * this.config.msPerDECUnit * this.config.aggressivenessDEC * cadenceScale, this.config.minPulseMsDEC, this.config.maxPulseMsDEC)
+		const duration = clamp(magnitude * this.config.msPerDECUnit * cadenceScale, this.config.minPulseMsDEC, this.config.maxPulseMsDEC)
 		this.state.lastDecDirection = direction
 		this.state.oppositeDecErrorAccum = 0
 		return { direction, duration }

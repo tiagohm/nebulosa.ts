@@ -127,6 +127,9 @@ export interface GuiderClientOptions {
 	readonly stickyLockPosition?: boolean
 	// Dither pattern used by dither().
 	readonly ditherMode?: DitherMode
+	// Whether a dither is followed by a fast recenter (PHD2's "Fast recenter after calibration or dither"): direct moves
+	// toward the new lock that bypass the guide controller. Defaults to true, as in PHD2.
+	readonly fastRecenter?: boolean
 	// Converts a Unix capture timestamp in milliseconds into the caller's astronomical Time model.
 	// The returned value is used for ephemeris evaluation and may carry custom providers/location.
 	readonly timeFactory?: (timestampMillis: number) => Time
@@ -271,6 +274,9 @@ export class GuiderClient {
 	#lockSearchPosition?: readonly [number, number]
 	#exactLockPosition = false
 	#stickyLockPosition = false
+	// Whether a dither is followed by a fast recenter, and the recenter in progress.
+	#fastRecenter = true
+	#recenter?: DitherRecenter
 	#appState: PHD2AppState = 'Stopped'
 	#resumeState: PHD2AppState = 'Stopped'
 	#guidingStartTime = 0
@@ -357,6 +363,7 @@ export class GuiderClient {
 		this.#guider = this.#makeGuider(undefined)
 		this.#searchRegion = clamp(options.searchRegion || DEFAULT_SEARCH_REGION, 16, 128)
 		this.#stickyLockPosition = options.stickyLockPosition === true
+		this.#fastRecenter = options.fastRecenter !== false
 		this.#dither = new DitherGenerator({ mode: options.ditherMode })
 	}
 
@@ -502,6 +509,7 @@ export class GuiderClient {
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
 		this.#dither.reset()
+		this.#recenter = undefined
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
@@ -592,6 +600,7 @@ export class GuiderClient {
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
 		this.#dither.reset()
+		this.#recenter = undefined
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
@@ -615,6 +624,7 @@ export class GuiderClient {
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
 		this.#dither.reset()
+		this.#recenter = undefined
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
@@ -630,18 +640,25 @@ export class GuiderClient {
 		}
 	}
 
-	// Applies a random image-space dither and tracks local settle status.
+	// Moves the lock by the next offset of the dither pattern, along the mount axes in pixels, relative to the current
+	// lock as PHD2 does, and starts a settle. An offset whose lock would leave the frame is reflected on the axes first
+	// (ditherWithinFrame). The controllers forget their history, as PHD2's guide algorithms do when the lock moves, and
+	// with fast recenter enabled the next frames move the star to the new lock directly (recenterStep).
 	dither(amount: number, raOnly: boolean = false, settle?: Partial<PHD2Settle>) {
 		if (this.#guidingAssistant !== undefined || this.#calibration === undefined || this.#guider.currentState.state !== 'guiding' || amount <= 0 || !Number.isFinite(amount)) return false
 
 		const { referenceX, referenceY } = this.#guider.currentState
 		const offset = this.#dither.next(amount, raOnly)
-		const [dx, dy] = ditherImageOffset(this.#calibration, offset.rightAscension, offset.declination)
+		const lockX = referenceX + this.#ditherOffsetX + this.#lockShiftOffsetX
+		const lockY = referenceY + this.#ditherOffsetY + this.#lockShiftOffsetY
+		const [dRa, dDec, dx, dy] = this.#ditherWithinFrame(this.#calibration, lockX, lockY, offset.rightAscension, offset.declination)
 
 		this.#ditherOffsetX += dx
 		this.#ditherOffsetY += dy
 		this.#syncGuideTargetOffset()
 		this.#guider.setDithering(true)
+		this.#guider.resetControllers()
+		this.#recenter = this.#fastRecenter ? ditherRecenterOf(dRa, dDec, this.#searchRegion) : undefined
 		this.#lockPosition = [referenceX + this.#ditherOffsetX + this.#lockShiftOffsetX, referenceY + this.#ditherOffsetY + this.#lockShiftOffsetY] as const
 		this.#settle = { ...DEFAULT_PHD2_SETTLE, ...settle }
 		this.#settling = true
@@ -657,6 +674,49 @@ export class GuiderClient {
 		this.emitEvent('dithered', { dx, dy })
 		this.emitEvent('settleStarted')
 
+		return true
+	}
+
+	// Returns the dither (dRa, dDec) along the mount axes, in pixels, and its image offset (dx, dy) that keep the lock
+	// moved from (lockX, lockY) inside the frame: the requested one, else its reflection on the RA axis, on the DEC axis,
+	// or on both, in PHD2's order, else the one whose lock lies farthest from the frame edges. A lock is valid one search
+	// half-side plus a pixel inside every edge, as in PHD2; without a decoded frame the requested dither is kept.
+	#ditherWithinFrame(calibration: GuidingCalibrationResult, lockX: number, lockY: number, dRa: number, dDec: number): readonly [number, number, number, number] {
+		const metadata = this.#image?.metadata
+		const margin = 1 + this.#searchRegion / 2
+		let best: readonly [number, number, number, number] = [dRa, dDec, ...ditherImageOffset(calibration, dRa, dDec)]
+		let bestDistance = Number.NEGATIVE_INFINITY
+
+		for (let q = 0; q < 4; q++) {
+			const ra = q & 1 ? -dRa : dRa
+			const dec = q & 2 ? -dDec : dDec
+			const [dx, dy] = ditherImageOffset(calibration, ra, dec)
+			if (metadata === undefined) return [ra, dec, dx, dy]
+
+			const x = lockX + dx
+			const y = lockY + dy
+			if (x >= margin && x + margin < metadata.width && y >= margin && y + margin < metadata.height) return [ra, dec, dx, dy]
+
+			const distance = Math.min(x, metadata.width - x, y, metadata.height - y)
+			if (distance > bestDistance) {
+				best = [ra, dec, dx, dy]
+				bestDistance = distance
+			}
+		}
+
+		return best
+	}
+
+	// Returns whether a dither is followed by a fast recenter.
+	getFastRecenterEnabled() {
+		return this.#fastRecenter
+	}
+
+	// Enables or disables the fast recenter after a dither; disabling it leaves a recenter in progress to the controller.
+	setFastRecenterEnabled(enabled: boolean) {
+		this.#fastRecenter = enabled
+		if (!enabled) this.#recenter = undefined
+		this.emitEvent('settingChanged', { setting: 'fastRecenter', value: enabled })
 		return true
 	}
 
@@ -883,6 +943,7 @@ export class GuiderClient {
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
 		this.#dither.reset()
+		this.#recenter = undefined
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#tracker.reset()
@@ -931,6 +992,7 @@ export class GuiderClient {
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
 		this.#dither.reset()
+		this.#recenter = undefined
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#tracker.reset()
@@ -989,6 +1051,7 @@ export class GuiderClient {
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
 		this.#dither.reset()
+		this.#recenter = undefined
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
@@ -1354,7 +1417,10 @@ export class GuiderClient {
 			return 0
 		}
 
-		this.#emitGuideStepEvent(frame, command, this.#updateAvgDistance(command.diagnostics.dx ?? 0, command.diagnostics.dy ?? 0))
+		// During a fast recenter the frame still measures and settles, but its pulses are the recenter's.
+		const recenter = this.#recenterStep(command)
+		const issued = recenter ?? command
+		this.#emitGuideStepEvent(frame, issued, this.#updateAvgDistance(command.diagnostics.dx ?? 0, command.diagnostics.dy ?? 0), recenter !== undefined)
 		const assistantDelay = this.#processGuidingAssistantFrame(frame, command)
 
 		this.#resumeState = 'Guiding'
@@ -1364,7 +1430,43 @@ export class GuiderClient {
 
 		if (assistantDelay !== undefined) return assistantDelay
 
-		return Math.max(this.#pulseAxis(command.ra.direction, command.ra.duration), this.#pulseAxis(command.dec.direction, command.dec.duration))
+		return Math.max(this.#pulseAxis(issued.ra.direction, issued.ra.duration), this.#pulseAxis(issued.dec.direction, issued.dec.duration))
+	}
+
+	// Returns the command of the next step of a fast recenter for a measured guiding frame, or undefined without one in
+	// progress, while the pulses would not be sent, or for a bad frame. As PHD2's recovery moves, a step moves the star
+	// along the mount axes toward the new lock by at most 0.7 of the search half-side (ditherRecenterOf), bypassing the
+	// controller; unlike PHD2 it is also shortened to the pulse admission ceiling, since a longer pulse would be refused
+	// whole. The last step ends the recenter and clears the controllers, so guiding resumes without the history of the
+	// recenter frames.
+	#recenterStep(command: GuideCommand): GuideCommand | undefined {
+		const recenter = this.#recenter
+		const calibration = this.#calibration
+		if (recenter === undefined || calibration === undefined || this.#paused || !this.#guideOutputActive || command.diagnostics.badFrame) return undefined
+
+		let ra = Math.min(recenter.remainingRA, recenter.stepRA)
+		let dec = Math.min(recenter.remainingDEC, recenter.stepDEC)
+		const ceiling = this.#admission?.maximumDuration ?? this.maxPulseDuration()
+		const longest = Math.max(calibration.ra.ratePxPerMs > 0 ? ra / calibration.ra.ratePxPerMs : 0, calibration.dec.ratePxPerMs > 0 ? dec / calibration.dec.ratePxPerMs : 0)
+
+		if (longest > ceiling) {
+			ra *= ceiling / longest
+			dec *= ceiling / longest
+		}
+
+		recenter.remainingRA -= ra
+		recenter.remainingDEC -= dec
+		const [vx, vy] = ditherImageOffset(calibration, ra * recenter.signRA, dec * recenter.signDEC)
+		// The controller cancels an error of measurement minus target, so moving the star by v cancels an error of -v.
+		const pulse = this.#guider.directPulse(-vx, -vy)
+
+		if (recenter.remainingRA < RECENTER_DONE_PX && recenter.remainingDEC < RECENTER_DONE_PX) {
+			this.#recenter = undefined
+			this.#guider.resetControllers()
+			this.#avgDistanceNeedReset = true
+		}
+
+		return { ...command, ra: pulse.ra, dec: pulse.dec }
 	}
 
 	// Sends one calibration pulse pair and returns the largest applied delay.
@@ -1825,6 +1927,7 @@ export class GuiderClient {
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
 		this.#dither.reset()
+		this.#recenter = undefined
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
@@ -1929,8 +2032,9 @@ export class GuiderClient {
 		this.emitEvent('calibrationStep', { guideOutput: this.#guideOutput?.name ?? '', diagnostics })
 	}
 
-	// Emits one guide-step event using the latest guider command and diagnostics.
-	#emitGuideStepEvent(frame: GuideFrame, command: GuideCommand, avgDistance: number) {
+	// Emits one guide-step event using the issued command and the guider diagnostics; recentering marks the pulses of a
+	// fast recenter step, which are neither the controller's correction nor clipped by its per-axis maximum.
+	#emitGuideStepEvent(frame: GuideFrame, command: GuideCommand, avgDistance: number, recentering: boolean = false) {
 		const { diagnostics, ra, dec } = command
 		const telemetry = command.tracking?.telemetry ?? frame.tracking?.telemetry
 		const dx = diagnostics.dx ?? 0
@@ -1940,8 +2044,8 @@ export class GuiderClient {
 		const decDuration = outputActive ? Math.round(dec.duration) : 0
 		// An axis is only reported as limited when a pulse was actually issued and clipped by the
 		// per-axis maximum duration, so a suppressed or zero-length pulse never claims a limit.
-		const raLimited = raDuration > 0 && ra.duration >= this.#guider.config.maxPulseMsRA
-		const decLimited = decDuration > 0 && dec.duration >= this.#guider.config.maxPulseMsDEC
+		const raLimited = !recentering && raDuration > 0 && ra.duration >= this.#guider.config.maxPulseMsRA
+		const decLimited = !recentering && decDuration > 0 && dec.duration >= this.#guider.config.maxPulseMsDEC
 
 		const raRate = this.#calibration?.ra.ratePxPerMs ?? 0
 		const decRate = this.#calibration?.dec.ratePxPerMs ?? 0
@@ -1957,8 +2061,9 @@ export class GuiderClient {
 			// back to pixels along the mount axes with the solved rate.
 			raDistance: axisErrorToPixels(diagnostics.axisErrorRA, raRate),
 			decDistance: axisErrorToPixels(diagnostics.axisErrorDEC, decRate),
-			raGuideDistance: outputActive ? axisErrorToPixels(diagnostics.filteredRA, raRate) : 0,
-			decGuideDistance: outputActive ? axisErrorToPixels(diagnostics.filteredDEC, decRate) : 0,
+			// A recenter step reports the move it issues, signed as a controller correction along the axis.
+			raGuideDistance: !outputActive ? 0 : recentering ? axisErrorToPixels(ra.direction === this.#guider.config.raPositiveDirection ? ra.duration : -ra.duration, raRate) : axisErrorToPixels(diagnostics.filteredRA, raRate),
+			decGuideDistance: !outputActive ? 0 : recentering ? axisErrorToPixels(dec.direction === this.#guider.config.decPositiveDirection ? dec.duration : -dec.duration, decRate) : axisErrorToPixels(diagnostics.filteredDEC, decRate),
 			ra: { direction: ra.direction, requested: ra.duration, duration: raDuration, limited: raLimited },
 			dec: { direction: dec.direction, requested: dec.duration, duration: decDuration, limited: decLimited },
 			// Uses zero defaults when the guide frame has no measurable star metadata.
@@ -1967,6 +2072,7 @@ export class GuiderClient {
 			hfd: telemetry?.hfdPx ?? 0,
 			// The smoothed guide distance, not the raw current-frame distance.
 			averageDistance: avgDistance,
+			...(recentering && { recentering }),
 			diagnostics,
 		})
 	}
@@ -2083,6 +2189,38 @@ function calibrationResultToPHD2Data(calibration: GuidingCalibrationResult): PHD
 		yRate: calibration.dec.ratePxPerMs,
 		yParity: calibration.dec.direction === 'NORTH' ? '+' : '-',
 	}
+}
+
+// Remaining distance below which a fast recenter is done on both axes, in pixels, as PHD2's.
+const RECENTER_DONE_PX = 0.5
+
+// Fraction of the search half-side a fast recenter step covers, as PHD2's, so the star stays inside the search box.
+const RECENTER_STEP_FRACTION = 0.7
+
+// Fast recenter after a dither, along the mount axes, in pixels.
+interface DitherRecenter {
+	// Distance still to move along RA, non-negative.
+	remainingRA: number
+	// Distance still to move along DEC, non-negative.
+	remainingDEC: number
+	// Sign of the star's motion toward the new lock along RA, -1, 0 or 1.
+	readonly signRA: number
+	// Sign of the star's motion toward the new lock along DEC, -1, 0 or 1.
+	readonly signDEC: number
+	// Largest RA move of one step, non-negative.
+	readonly stepRA: number
+	// Largest DEC move of one step, non-negative.
+	readonly stepDEC: number
+}
+
+// Returns the fast recenter of a dither of (dRa, dDec) pixels along the mount axes for a search square of searchRegion
+// pixels per side, or undefined for a dither of zero length: each step covers RECENTER_STEP_FRACTION of the search
+// half-side along the dither direction, split between the axes in proportion, as PHD2 computes it.
+function ditherRecenterOf(dRa: number, dDec: number, searchRegion: number): DitherRecenter | undefined {
+	const distance = Math.hypot(dRa, dDec)
+	if (!(distance > 0)) return undefined
+	const f = (RECENTER_STEP_FRACTION * searchRegion) / 2 / distance
+	return { remainingRA: Math.abs(dRa), remainingDEC: Math.abs(dDec), signRA: Math.sign(dRa), signDEC: Math.sign(dDec), stepRA: f * Math.abs(dRa), stepDEC: f * Math.abs(dDec) }
 }
 
 // Rotates a mount-axis RA/DEC dither offset (pixels) into image X/Y with the calibrated axis unit vectors.
