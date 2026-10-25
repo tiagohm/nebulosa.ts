@@ -32,7 +32,7 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 
 		switch (message.name) {
 			case 'FLAT_LIGHT_CONTROL':
-				if (handleSwitchValue(device, 'enabled', message.elements.FLAT_LIGHT_ON?.value)) {
+				if (handleSwitchValue(device, 'enabled', message.elements.FLAT_LIGHT_ON?.value, message.state)) {
 					this.updated(device, 'enabled', message.state)
 				}
 		}
@@ -46,7 +46,8 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 
 		switch (message.name) {
 			case 'FLAT_LIGHT_INTENSITY':
-				if (handleMinMaxValue(device.intensity, message.elements.FLAT_LIGHT_INTENSITY_VALUE, tag)) {
+				// An Alert that leaves the value unchanged still reaches the observers, so a refused brightness fails at once.
+				if (handleMinMaxValue(device.intensity, message.elements.FLAT_LIGHT_INTENSITY_VALUE, tag) || message.state === 'Alert') {
 					this.updated(device, 'intensity', message.state)
 				}
 		}

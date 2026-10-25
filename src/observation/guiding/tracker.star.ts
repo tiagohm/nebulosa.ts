@@ -1,12 +1,13 @@
 import type { Image } from '../../imaging/model/types'
-import { detectStars, type DetectedStar } from '../../imaging/stars/detector'
+import type { DetectedStar } from '../../imaging/stars/detector'
 import { clamp } from '../../math/numerical/math'
 import { medianAbsoluteDeviationOf, medianOf } from '../../math/numerical/statistics'
 import type { GuideMeasurement, GuideTracker, GuideTrackerContext, GuideTrackerFrame, GuideTrackerResult, GuideTrackerTelemetry } from './tracker'
 
-// Star-based implementation of the generic guide tracker. It performs one detector pass per image,
-// enriches peaks once, preserves the selected identity, and exposes a frame-local stellar result
-// for the controller, calibration state machine, PHD2 events, and overlay.
+// Star-based implementation of the generic guide tracker. It runs one pass of the caller-supplied
+// star detector per image, preferably in the asynchronous `prepare` stage, preserves the selected
+// identity, and exposes a frame-local stellar result for the controller, calibration state machine,
+// PHD2 events, and overlay.
 
 // Whether translation is measured from one star or many.
 export type GuidingMode = 'singleStar' | 'multiStar'
@@ -23,6 +24,17 @@ export interface GuideStar extends DetectedStar {
 	readonly ellipticity?: number
 	// Full width at half maximum, in pixels.
 	readonly fwhm?: number
+}
+
+// Detects guide stars in one image, in full-frame pixels with a top-left origin. Detections should
+// carry `peak` (see `enrichGuideStars`) for saturation filtering. The caller decides the detector
+// and where it runs; an asynchronous detector requires the consumer to call `StarTracker.prepare`.
+export type GuideStarDetector = (image: Image) => readonly GuideStar[] | Promise<readonly GuideStar[]>
+
+// Guide frame carrying the detections attached by `StarTracker.prepare`.
+export interface StarTrackerFrame extends GuideTrackerFrame {
+	// Detections of `image` in detector order; when present, `track` uses them instead of detecting.
+	readonly stars?: readonly GuideStar[]
 }
 
 // Star detections plus the image geometry and optional search window used by star-only helpers.
@@ -495,6 +507,12 @@ export type StarTrackerConfigOverrides = Partial<Omit<StarTrackerConfig, 'filter
 	readonly selection?: GuideStarSelectionOptions
 }
 
+// Construction options for a StarTracker: configuration overrides plus the required star detector.
+export type StarTrackerOptions = StarTrackerConfigOverrides & {
+	// Star detector run once per decoded image.
+	readonly detector: GuideStarDetector
+}
+
 // Default star-tracker configuration, preserving the previous guider's stellar tuning.
 export const DEFAULT_STAR_TRACKER_CONFIG: Readonly<StarTrackerConfig> = {
 	mode: 'multiStar',
@@ -535,6 +553,7 @@ export function starTrackingOf(result: GuideTrackerResult | undefined): StarTrac
 // Stateful stellar tracker that replaces repeated client-side detection and matching.
 export class StarTracker implements GuideTracker {
 	readonly config: StarTrackerConfig
+	readonly #detector: GuideStarDetector
 	#lastResult?: StarTrackerResult
 	#referenceStars: readonly GuideStar[] = []
 	#measurementOrigin?: readonly [number, number]
@@ -543,7 +562,9 @@ export class StarTracker implements GuideTracker {
 	#width = 0
 	#height = 0
 
-	constructor(config: StarTrackerConfigOverrides = {}) {
+	// Resolves the configuration overrides over DEFAULT_STAR_TRACKER_CONFIG and keeps the detector.
+	constructor({ detector, ...config }: StarTrackerOptions) {
+		this.#detector = detector
 		const filter = { ...DEFAULT_STAR_TRACKER_CONFIG.filter, ...config.filter }
 		const selection = {
 			...DEFAULT_STAR_TRACKER_CONFIG.selection,
@@ -607,8 +628,17 @@ export class StarTracker implements GuideTracker {
 		this.#pendingMeasurementOrigin = undefined
 	}
 
-	// Detects and tracks exactly one image frame synchronously.
-	track(frame: GuideTrackerFrame, context: GuideTrackerContext): StarTrackerResult {
+	// Runs the detector on the frame image, without touching tracking state, and resolves to the frame
+	// carrying its detections. A frame without an image resolves unchanged.
+	async prepare(frame: GuideTrackerFrame): Promise<StarTrackerFrame> {
+		if (frame.image === undefined) return frame
+		return { ...frame, stars: await this.#detector(frame.image) }
+	}
+
+	// Tracks exactly one image frame synchronously, using the detections attached by `prepare` or
+	// running a synchronous detector otherwise. Throws when the detector is asynchronous and the
+	// frame was not prepared, since there would be no detections to track.
+	track(frame: StarTrackerFrame, context: GuideTrackerContext): StarTrackerResult {
 		if (frame.width !== this.#width || frame.height !== this.#height) {
 			this.#referenceStars = []
 			this.#measurementOrigin = undefined
@@ -632,7 +662,11 @@ export class StarTracker implements GuideTracker {
 			})
 		}
 
-		const detections = enrichGuideStars(detectStars(frame.image), frame.image)
+		const detections = frame.stars ?? this.#detector(frame.image)
+		if (detections instanceof Promise) {
+			void detections.catch(() => undefined)
+			throw new Error('asynchronous star detector requires prepare()')
+		}
 		const orderedDetections = detections.slice()
 		const searchPosition = context.searchPosition
 		const searchRegion = context.searchRegion

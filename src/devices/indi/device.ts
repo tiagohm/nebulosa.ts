@@ -340,7 +340,7 @@ export interface Wheel extends Device {
 	position: number
 }
 
-// Focuser device: absolute/relative move, reverse, sync, backlash, and position (steps); also a
+// Focuser device: absolute/relative move, reverse, sync, driver backlash compensation (steps), and position (steps); also a
 // thermometer.
 export interface Focuser extends Device, Thermometer {
 	readonly type: 'focuser'
@@ -352,7 +352,12 @@ export interface Focuser extends Device, Thermometer {
 	canReverse: boolean
 	reversed: boolean
 	canSync: boolean
+	// Whether the driver publishes a writable backlash compensation of its own (FOCUS_BACKLASH_TOGGLE).
 	hasBacklash: boolean
+	// Whether the driver compensates the backlash of every move itself.
+	backlashEnabled: boolean
+	// Backlash the driver compensates, in steps (FOCUS_BACKLASH_STEPS).
+	readonly backlash: MinMaxValueProperty
 }
 
 // Dew-heater capability with a duty-cycle property (percent).
@@ -721,6 +726,8 @@ export const DEFAULT_FOCUSER: Focuser = {
 	reversed: false,
 	canSync: false,
 	hasBacklash: false,
+	backlashEnabled: false,
+	backlash: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	hasThermometer: false,
 	temperature: 0,
 }

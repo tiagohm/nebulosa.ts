@@ -4,7 +4,7 @@ import type { CatalogSource, CatalogSourceStar } from '../src/devices/indi/simul
 import { normalizeAngle } from '../src/math/units/angle'
 import { calibratedNonSiderealTransform, NonSiderealTracker, type NonSiderealEphemeris } from '../src/observation/guiding/tracker.nonsidereal'
 import { StarTracker } from '../src/observation/guiding/tracker.star'
-import { GuidingSimulation, runGuidingSimulation, type GuidingCatalogContext } from './guiding.simulator'
+import { detectGuideStars, GuidingSimulation, runGuidingSimulation, type GuidingCatalogContext } from './guiding.simulator'
 
 const INITIAL_RIGHT_ASCENSION = 1.2
 const INITIAL_DECLINATION = 0.35
@@ -83,7 +83,7 @@ function transformFromCalibration(simulation: GuidingSimulation) {
 }
 
 const trajectory = movingTarget()
-const tracker = new NonSiderealTracker(new StarTracker())
+const tracker = new NonSiderealTracker(new StarTracker({ detector: detectGuideStars }))
 tracker.arm(trajectory.ephemeris, {
 	offsetToImage: ([east, north]) => [east * 1e6, north * 1e6],
 })

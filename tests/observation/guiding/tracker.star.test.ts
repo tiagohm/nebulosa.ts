@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { Image } from '../../../src/imaging/model/types'
-import { plotStar } from '../../../src/imaging/stars/generator'
 import { estimateTranslation, filterGuideStars, type GuideStar, selectGuideStar, type StarDetectionFrame, StarTracker } from '../../../src/observation/guiding/tracker.star'
+import { fixtureGuideImage, fixtureStarDetector, fixtureStarTracker } from '../../util/guiding'
 
 const WIDTH = 800
 const HEIGHT = 600
@@ -24,21 +24,9 @@ function shiftStars(stars: readonly GuideStar[], dx: number, dy: number, mutate?
 	})
 }
 
-// Builds a detector image with a flat normalized background and configurable stellar fluxes.
-function imageWithStars(stars: readonly (readonly [number, number, number])[]): Image {
-	const width = WIDTH
-	const height = HEIGHT
-	const background = 0.005
-	const raw = new Float32Array(width * height).fill(background)
-	const options = { background, saturationLevel: 1 }
-
-	for (const [x, y, flux] of stars) plotStar(raw, width, height, 1, x, y, flux, 3, 80, 0, undefined, options)
-
-	return {
-		header: {},
-		raw,
-		metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, stride: width, strideInBytes: width * 4, bitpix: -32, bayer: undefined },
-	}
+// Builds an image-free frame whose detections model plotted stars with the given fluxes.
+function imageWithStars(stars: readonly (readonly [number, number, number])[]) {
+	return fixtureGuideImage(WIDTH, HEIGHT, stars)
 }
 
 test('star filtering rejects low quality detections', () => {
@@ -210,7 +198,7 @@ test('multi-star translation rejects outlier and keeps weighted estimate', () =>
 })
 
 test('keeps the last accepted stellar identity after an uncommitted frame', () => {
-	const tracker = new StarTracker()
+	const tracker = fixtureStarTracker()
 	const context = { phase: 'guiding' as const, searchPosition: [100, 100] as const, searchRegion: 64, allowAcquisition: true, preserveIdentity: true }
 	const initial = tracker.track(
 		{
@@ -262,7 +250,7 @@ test('keeps the last accepted stellar identity after an uncommitted frame', () =
 })
 
 test('does not commit an initial acquisition before consumer acceptance', () => {
-	const tracker = new StarTracker()
+	const tracker = fixtureStarTracker()
 	const context = { phase: 'guiding' as const, searchPosition: [100, 100] as const, searchRegion: 64, initialPosition: [100, 100] as const, allowAcquisition: true, preserveIdentity: true }
 	const initial = tracker.track(
 		{
@@ -298,7 +286,7 @@ test('does not commit an initial acquisition before consumer acceptance', () => 
 })
 
 test('exposes a quality-approved primary separately from the nearest raw detection', () => {
-	const tracker = new StarTracker()
+	const tracker = fixtureStarTracker()
 	const result = tracker.track(
 		{
 			image: imageWithStars([
@@ -330,7 +318,7 @@ test('exposes a quality-approved primary separately from the nearest raw detecti
 })
 
 test('keeps the raw primary for telemetry when no search region is active', () => {
-	const tracker = new StarTracker()
+	const tracker = fixtureStarTracker()
 	const result = tracker.track(
 		{
 			image: imageWithStars([
@@ -351,7 +339,7 @@ test('keeps the raw primary for telemetry when no search region is active', () =
 })
 
 test('uses initialPosition to seed unbounded acquisition', () => {
-	const tracker = new StarTracker()
+	const tracker = fixtureStarTracker()
 	const result = tracker.track(
 		{
 			image: imageWithStars([
@@ -371,7 +359,7 @@ test('uses initialPosition to seed unbounded acquisition', () => {
 })
 
 test('honors nested selection filter overrides', () => {
-	const tracker = new StarTracker({ filter: { minStarSnr: 2 }, selection: { filter: { minStarSnr: 100 } } })
+	const tracker = fixtureStarTracker({ filter: { minStarSnr: 2 }, selection: { filter: { minStarSnr: 100 } } })
 	const result = tracker.track(
 		{
 			image: imageWithStars([[300, 300, 10]]),
@@ -389,7 +377,7 @@ test('honors nested selection filter overrides', () => {
 })
 
 test('does not measure a field star when the search box has no acceptable candidate', () => {
-	const tracker = new StarTracker()
+	const tracker = fixtureStarTracker()
 	const context = { phase: 'guiding' as const, searchPosition: [100, 100] as const, searchRegion: 64, allowAcquisition: true, preserveIdentity: true }
 
 	tracker.track(
@@ -424,4 +412,39 @@ test('does not measure a field star when the search box has no acceptable candid
 	expect(result.measurement).toBeUndefined()
 	expect(result.acceptedCount).toBe(1)
 	expect(result.notes).toContain('no_usable_measurement')
+})
+
+test('prepare attaches asynchronous detections that track consumes without detecting again', async () => {
+	let calls = 0
+	const tracker = new StarTracker({
+		detector: (image) => {
+			calls++
+			return Promise.resolve(fixtureStarDetector(image))
+		},
+	})
+	const frame = { image: imageWithStars([[300, 300, 10]]), width: WIDTH, height: HEIGHT, timestamp: 0, frameId: 1 }
+	const prepared = await tracker.prepare(frame)
+
+	expect(calls).toBe(1)
+	expect(prepared.frameId).toBe(1)
+	expect(prepared.stars).toHaveLength(1)
+	expect(tracker.lastResult).toBeUndefined()
+
+	const result = tracker.track(prepared, { phase: 'looping', allowAcquisition: true, preserveIdentity: false })
+	expect(calls).toBe(1)
+	expect(result.measurement?.x).toBe(300)
+	expect(result.measurement?.y).toBe(300)
+})
+
+test('prepare leaves a frame without image unchanged', async () => {
+	const tracker = new StarTracker({ detector: () => Promise.reject(new Error('unexpected detection')) })
+	const frame = { width: WIDTH, height: HEIGHT, timestamp: 0, frameId: 1 }
+	expect(await tracker.prepare(frame)).toBe(frame)
+	expect(tracker.track(frame, { phase: 'looping', allowAcquisition: true, preserveIdentity: false }).notes).toEqual(['image_unavailable'])
+})
+
+test('track refuses an unprepared frame when the detector is asynchronous', () => {
+	const tracker = new StarTracker({ detector: (image) => Promise.resolve(fixtureStarDetector(image)) })
+	const frame = { image: imageWithStars([[300, 300, 10]]), width: WIDTH, height: HEIGHT, timestamp: 0, frameId: 1 }
+	expect(() => tracker.track(frame, { phase: 'looping', allowAcquisition: true, preserveIdentity: false })).toThrow('asynchronous star detector requires prepare()')
 })

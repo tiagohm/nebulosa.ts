@@ -5,7 +5,7 @@ import { DeviceManager, handleMinMaxValue, handleSwitchValue, resetDeviceValue }
 // https://github.com/indilib/indi/blob/master/libs/indibase/indifocuserinterface.cpp
 
 // Manager for focusers; absolute/relative move, sync, reverse, and abort, reflecting position (steps),
-// motion, and temperature.
+// motion, temperature, and the backlash compensation of the driver (steps), which it can switch on or off.
 export class FocuserManager extends DeviceManager<Focuser> {
 	stop(focuser: Focuser, client = focuser[CLIENT]!) {
 		if (focuser.canAbort) {
@@ -45,7 +45,14 @@ export class FocuserManager extends DeviceManager<Focuser> {
 		}
 	}
 
-	// Applies focuser switch vectors: abort capability and reverse capability/state.
+	// Enables or disables the backlash compensation of the driver, when its toggle is writable.
+	backlash(focuser: Focuser, enabled: boolean, client = focuser[CLIENT]!) {
+		if (focuser.hasBacklash) {
+			client.sendSwitch({ device: focuser.name, name: 'FOCUS_BACKLASH_TOGGLE', elements: { [enabled ? 'INDI_ENABLED' : 'INDI_DISABLED']: true } })
+		}
+	}
+
+	// Applies focuser switch vectors: abort capability, reverse capability/state, and driver backlash capability/state.
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -72,11 +79,23 @@ export class FocuserManager extends DeviceManager<Focuser> {
 				if (handleSwitchValue(device, 'reversed', message.elements.INDI_ENABLED?.value)) {
 					this.updated(device, 'reversed', message.state)
 				}
+
+				return
+			case 'FOCUS_BACKLASH_TOGGLE':
+				if (tag[0] === 'd') {
+					if (handleSwitchValue(device, 'hasBacklash', (message as DefSwitchVector).permission !== 'ro')) {
+						this.updated(device, 'hasBacklash', message.state)
+					}
+				}
+
+				if (handleSwitchValue(device, 'backlashEnabled', message.elements.INDI_ENABLED?.value)) {
+					this.updated(device, 'backlashEnabled', message.state)
+				}
 		}
 	}
 
 	// Applies focuser number vectors: sync/relative/absolute capabilities, the absolute position (steps),
-	// and moving state.
+	// the moving state, and the driver backlash (steps).
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -100,6 +119,12 @@ export class FocuserManager extends DeviceManager<Focuser> {
 
 				if (handleSwitchValue(device, 'moving', message.state === 'Busy', message.state)) {
 					this.updated(device, 'moving', message.state)
+				}
+
+				return
+			case 'FOCUS_BACKLASH_STEPS':
+				if (handleMinMaxValue(device.backlash, message.elements.FOCUS_BACKLASH_VALUE, tag)) {
+					this.updated(device, 'backlash', message.state)
 				}
 
 				return
@@ -141,6 +166,13 @@ export class FocuserManager extends DeviceManager<Focuser> {
 		if (full || name === 'FOCUS_REVERSE_MOTION') {
 			resetDeviceValue(this, device, 'canReverse', DEFAULT_FOCUSER.canReverse)
 			resetDeviceValue(this, device, 'reversed', DEFAULT_FOCUSER.reversed)
+		}
+		if (full || name === 'FOCUS_BACKLASH_TOGGLE') {
+			resetDeviceValue(this, device, 'hasBacklash', DEFAULT_FOCUSER.hasBacklash)
+			resetDeviceValue(this, device, 'backlashEnabled', DEFAULT_FOCUSER.backlashEnabled)
+		}
+		if (full || name === 'FOCUS_BACKLASH_STEPS') {
+			resetDeviceValue(this, device, 'backlash', DEFAULT_FOCUSER.backlash)
 		}
 		if (full || name === 'FOCUS_SYNC') {
 			resetDeviceValue(this, device, 'canSync', DEFAULT_FOCUSER.canSync)

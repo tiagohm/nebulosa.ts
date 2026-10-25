@@ -10,7 +10,9 @@ import { DeviceSimulator } from './device'
 import type { DeviceSimulatorOptions, SimulatorProperty } from './types'
 import { applyExclusiveSwitchValues, applyNumberVectorValues } from './util'
 
-// Simulated focuser motion, mechanical backlash, ambient temperature, and temperature compensation.
+// Simulated focuser motion, mechanical backlash, ambient temperature, and temperature compensation. The standard
+// driver backlash compensation properties are published and stored but never applied, so a client can be tested
+// against a driver that reports one.
 
 // Direction of motor travel, with zero denoting a mechanism that has not yet engaged either side.
 type FocuserAxisDirection = -1 | 0 | 1
@@ -39,7 +41,12 @@ export class FocuserSimulator extends DeviceSimulator {
 	readonly #temperatureCompensation = makeSwitchVector('', 'FOCUS_TEMPERATURE_COMPENSATION', 'Temperature Compensation', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'On', false], ['INDI_DISABLED', 'Off', true])
 	readonly #backlash = makeNumberVector('', 'SIMULATOR_BACKLASH', 'Backlash', SIMULATION, 'rw', ['BACKLASH_IN', 'In (steps)', 0, 0, FOCUSER_MAX_POSITION, 1, '%.0f'], ['BACKLASH_OUT', 'Out (steps)', 0, 0, FOCUSER_MAX_POSITION, 1, '%.0f'])
 
-	protected readonly properties: readonly SimulatorProperty[] = [this.#position, this.#relativePosition, this.#motion, this.#abort, this.#reverse, this.#sync, this.#temperature, this.#temperatureCompensation, this.#backlash]
+	// Standard driver backlash compensation switch, stored only: the simulated mechanics never apply it.
+	readonly #driverBacklashToggle = makeSwitchVector('', 'FOCUS_BACKLASH_TOGGLE', 'Backlash', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
+	// Standard driver backlash compensation amount, in steps, stored only.
+	readonly #driverBacklashSteps = makeNumberVector('', 'FOCUS_BACKLASH_STEPS', 'Backlash steps', MAIN_CONTROL, 'rw', ['FOCUS_BACKLASH_VALUE', 'Steps', 0, 0, 1000, 1, '%.0f'])
+
+	protected readonly properties: readonly SimulatorProperty[] = [this.#position, this.#relativePosition, this.#motion, this.#abort, this.#reverse, this.#sync, this.#temperature, this.#temperatureCompensation, this.#backlash, this.#driverBacklashToggle, this.#driverBacklashSteps]
 	protected propertiesToNotSave: readonly SimulatorProperty[] = this.properties.filter((e) => e !== this.#reverse && e !== this.#motion && e !== this.#backlash)
 
 	#timer?: NodeJS.Timeout
@@ -103,7 +110,7 @@ export class FocuserSimulator extends DeviceSimulator {
 		return this.#temperature.elements.TEMPERATURE.value
 	}
 
-	// Handles focuser number commands: absolute/relative move and sync to a position.
+	// Handles focuser number commands: absolute/relative move, sync to a position, and the backlash amounts.
 	sendNumber(vector: NewNumberVector) {
 		switch (vector.name) {
 			case 'ABS_FOCUS_POSITION':
@@ -121,11 +128,15 @@ export class FocuserSimulator extends DeviceSimulator {
 					this.#slackTravel = 0
 					this.notify(this.#backlash)
 				}
+
+				return
+			case 'FOCUS_BACKLASH_STEPS':
+				if (applyNumberVectorValues(this.#driverBacklashSteps, vector.elements)) this.notify(this.#driverBacklashSteps)
 		}
 	}
 
-	// Handles focuser switch commands: connection, motion direction, abort, reverse, and temperature
-	// compensation toggle.
+	// Handles focuser switch commands: connection, motion direction, abort, reverse, temperature compensation
+	// toggle, and driver backlash toggle.
 	sendSwitch(vector: NewSwitchVector) {
 		super.sendSwitch(vector)
 
@@ -148,6 +159,10 @@ export class FocuserSimulator extends DeviceSimulator {
 					this.#lastCompensationTemperature = this.temperature
 					this.notify(this.#temperatureCompensation)
 				}
+
+				return
+			case 'FOCUS_BACKLASH_TOGGLE':
+				if (applyExclusiveSwitchValues(this.#driverBacklashToggle, vector.elements)) this.notify(this.#driverBacklashToggle)
 		}
 	}
 

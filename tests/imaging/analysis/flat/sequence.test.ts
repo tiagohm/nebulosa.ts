@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { analyzeFlatSequence } from '../../../../src/imaging/analysis/flat/sequence'
+import { analyzeFlatSequence, finalizeFlatSequence, measureFlatSequenceFrame } from '../../../../src/imaging/analysis/flat/sequence'
 import type { FlatFrame, FlatReference, FlatSequenceInput, FlatSequenceOptions } from '../../../../src/imaging/analysis/flat/types'
 import { generateSyntheticFlatImage, type SyntheticFlatModel } from '../../../../src/imaging/synthetic/flat'
 
@@ -281,4 +281,60 @@ test('rejects discarded products and undersized runtime tuples before allocating
 	expect(() => analyzeFlatSequence({ frames }, { analysis: { maps: 'all' } } as Partial<FlatSequenceOptions>)).toThrow('map or artifact options')
 	expect(() => analyzeFlatSequence({ frames }, { analysis: { artifacts: { dust: true } } } as Partial<FlatSequenceOptions>)).toThrow('map or artifact options')
 	expect(() => analyzeFlatSequence({ frames: frames.slice(0, 2) as unknown as FlatSequenceInput['frames'] })).toThrow('at least three')
+})
+
+// Measures every frame separately, round-tripping each sample through structured clone as a worker would.
+function streamed(input: FlatSequenceInput, options: Partial<FlatSequenceOptions>) {
+	const samples = input.frames.map((frame) => structuredClone(measureFlatSequenceFrame({ frame, reference: input.reference, mask: input.mask }, options)))
+	return finalizeFlatSequence(samples, options)
+}
+
+test('finalizes streamed samples exactly as the batch analysis', () => {
+	const stable = { frames: asSequence([0, 1, 2, 3, 4].map((index) => completeFrame(index))) }
+	const drifting = { frames: asSequence([0, 1, 2, 3, 4].map((index) => completeFrame(index, { signal: 1000 + index * 20 }))) }
+	const outlier = { frames: asSequence([0, 1, 2, 3, 4, 5, 6].map((index) => completeFrame(index, { signal: index === 3 ? 1400 : 1000 }))) }
+	const unknown = { frames: asSequence([0, 1, 2].map((index) => ({ id: `unknown-${index}`, image: generateSyntheticFlatImage({ width: 32, height: 24, bias: 0, signal: 1000, vignetting: 0 }) }))) }
+	const reference: FlatReference = {
+		kind: 'bias',
+		image: generateSyntheticFlatImage({ width: 64, height: 48, bias: 100, signal: 0, vignetting: 0, lowerClip: 0, upperClip: 65535, quantizationStep: 1 }),
+		operatingPoint: { gain: 100, offset: 20, readoutMode: 'low-noise', binning: [1, 1], sensorOrigin: [0, 0] },
+	}
+	const corrected = { frames: asSequence([0, 1, 2].map((index) => completeFrame(index, { bias: 100, signal: 900 }))), reference }
+
+	for (const [input, options] of [
+		[stable, sequenceOptions()],
+		[drifting, sequenceOptions({ maximumSignalVariation: 1, maximumDriftPerFrame: 0.01, maximumDriftPerSecond: undefined })],
+		[outlier, { analysis: FRAME_ANALYSIS, temperatureTolerance: 0.5, outlierSigma: 3 }],
+		[unknown, { maximumSignalVariation: 0 }],
+		[corrected, sequenceOptions()],
+	] as const) {
+		expect(streamed(input, options)).toEqual(analyzeFlatSequence(input, options))
+	}
+
+	const result = streamed(unknown, { maximumSignalVariation: 0 })
+	expect(result.assessment.verdict).toBe('inconclusive')
+	expect(result.assessment.reasons).toContain('sequenceMetadataUnknown')
+})
+
+test('keeps only reduced profiles in a measured sample', () => {
+	const frame = completeFrame(0)
+	const sample = measureFlatSequenceFrame({ frame }, sequenceOptions())
+
+	expect(sample).toMatchObject({ id: 'flat-0', timestamp: frame.timestamp, basis: 'observed', metadata: { width: 64, height: 48, channels: 1, exposure: 1, filter: 'L', gain: 100, illuminationBrightness: 50 } })
+	expect(sample.profiles).toHaveLength(1)
+	expect(sample.profiles[0]!.row).toHaveLength(48)
+	expect(sample.profiles[0]!.column).toHaveLength(64)
+	expect('image' in sample).toBeFalse()
+})
+
+test('rejects streamed samples that cannot form one homogeneous stack', () => {
+	const options = sequenceOptions()
+	const sample = (frame: FlatFrame, reference?: FlatReference) => measureFlatSequenceFrame({ frame, reference }, options)
+	const reference: FlatReference = { kind: 'bias', image: generateSyntheticFlatImage({ width: 64, height: 48, bias: 0, signal: 0, vignetting: 0, lowerClip: 0, upperClip: 65535, quantizationStep: 1 }) }
+
+	expect(() => finalizeFlatSequence([sample(completeFrame(0)), sample(completeFrame(1))], options)).toThrow('at least three')
+	expect(() => finalizeFlatSequence([sample(completeFrame(0)), sample(completeFrame(1), reference), sample(completeFrame(2))], options)).toThrow('signal basis')
+	expect(() => finalizeFlatSequence([sample(completeFrame(0)), sample(completeFrame(1, {}, { filter: 'R' })), sample(completeFrame(2))], options)).toThrow('filter')
+	expect(() => finalizeFlatSequence([sample(completeFrame(0)), sample(completeFrame(1)), sample(completeFrame(2))], { maximumSignalVariation: -1 })).toThrow('non-negative')
+	expect(() => measureFlatSequenceFrame({ frame: completeFrame(0) }, { analysis: { maps: 'all' } } as Partial<FlatSequenceOptions>)).toThrow('map or artifact options')
 })

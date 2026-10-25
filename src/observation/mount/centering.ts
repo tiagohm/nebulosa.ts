@@ -207,7 +207,8 @@ async function captureAndSolve(context: OperationContext, mount: Mount, camera: 
 
 // Result of one solve: the finite solution, undefined for a frame that did not solve (no solution, a non-finite
 // center, a rejection), or the failure of a timeout (`solveTimeout` in seconds), a cancellation or a faulted solver.
-function solveResult(outcome: CooperativeJobOutcome<PlateSolution | undefined>, signal: AbortSignal, solveTimeout: number): OperationResult<PlateSolution | undefined> {
+// Shared with the polar-alignment runner, whose solves follow the same cooperative contract.
+export function solveResult(outcome: CooperativeJobOutcome<PlateSolution | undefined>, signal: AbortSignal, solveTimeout: number): OperationResult<PlateSolution | undefined> {
 	switch (outcome.kind) {
 		case 'resolved': {
 			const solution = outcome.value

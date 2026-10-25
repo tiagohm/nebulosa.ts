@@ -387,12 +387,18 @@ export class NonSiderealTracker implements GuideTracker {
 	#failureReason?: NonSiderealFailureCode | 'rateUnavailable'
 	#state: NonSiderealState = 'disabled'
 	#lastResult?: NonSiderealTrackerResult
+	// Base tracker's context-free frame preparation, absent when the base has none so consumers keep
+	// the base's synchronous path.
+	readonly prepare?: (frame: GuideTrackerFrame) => Promise<GuideTrackerFrame>
 
 	// Creates a persistent wrapper around a base tracker without changing the base tracker's identity.
 	constructor(
 		readonly baseTracker: GuideTracker,
 		readonly options: NonSiderealTrackerOptions = {},
-	) {}
+	) {
+		const prepare = baseTracker.prepare
+		if (prepare !== undefined) this.prepare = (frame) => prepare.call(baseTracker, frame)
+	}
 
 	// Returns the current state without exposing mutable internal objects.
 	get state() {

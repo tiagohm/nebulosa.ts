@@ -2,16 +2,17 @@ import { describe, expect, spyOn, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
-import type { FocuserCommander } from '../../../src/devices/commanders/focuser'
+import type { FocuserMover } from '../../../src/devices/commanders/focuser'
 import type { Camera, Focuser } from '../../../src/devices/indi/device'
 import { failedOperationResult, type OperationContext, OperationCoordinator, type OperationResult, type OperationScope, successfulOperationResult } from '../../../src/devices/orchestration/operation'
 import type { CooperativeJobHealth } from '../../../src/devices/orchestration/operation.wait'
-import { ResourceArbiter } from '../../../src/devices/orchestration/resource'
+import { ResourceArbiter, resourceKey } from '../../../src/devices/orchestration/resource'
 import { isFits } from '../../../src/io/formats/fits/fits'
 import type { CameraCaptureHooks, CameraCapturer, CameraCaptureResult } from '../../../src/observation/capture/capture'
+import type { CameraCaptureListener } from '../../../src/observation/capture/reporter'
 import type { CameraCaptureStart } from '../../../src/observation/capture/types'
 import { AutoFocus, type AutoFocusStep } from '../../../src/observation/focus/autofocus'
-import { type AutoFocusCaptureOptions, type AutoFocusFrame, type AutoFocusMeasurer, type AutoFocusRunOptions, type AutoFocusRunResult, autoFocusCaptureRequest, runAutoFocus } from '../../../src/observation/focus/autofocus.runner'
+import { type AutoFocusCaptureOptions, type AutoFocusFrame, type AutoFocusMeasurer, type AutoFocusRunEvent, type AutoFocusRunListener, type AutoFocusRunOptions, type AutoFocusRunResult, autoFocusCaptureRequest, runAutoFocus } from '../../../src/observation/focus/autofocus.runner'
 import { waitUntil } from '../../util'
 import { ManualClock } from '../../util/rig'
 
@@ -43,7 +44,7 @@ class FakeFocuser {
 	hangAt?: number
 
 	constructor(position: number, min = 0, max = 100000) {
-		this.focuser = { name: 'Fake Focuser', type: 'focuser', connected: true, moving: false, position: { value: position, min, max } } as Focuser
+		this.focuser = { name: 'Fake Focuser', hardwareId: 'fake-focuser', client: { id: 'fake' }, type: 'focuser', connected: true, moving: false, position: { value: position, min, max } } as Focuser
 	}
 
 	get position() {
@@ -71,7 +72,8 @@ class FakeFocuser {
 			Object.assign(this.focuser.position, { value: position })
 			return successfulOperationResult(undefined)
 		},
-	} as unknown as FocuserCommander
+		position: () => this.focuser.position.value,
+	} as unknown as FocuserMover
 }
 
 // Behavior of the fake capturer for one capture.
@@ -143,6 +145,8 @@ interface HarnessOptions {
 	readonly measurer?: (focuser: FakeFocuser, calls: MeasureCall[], order: () => number) => AutoFocusMeasurer
 	readonly behaviors?: FakeCaptureBehavior[]
 	readonly health?: CooperativeJobHealth
+	readonly listener?: AutoFocusRunListener
+	readonly captureListener?: CameraCaptureListener
 }
 
 // Autofocus over the fake optics, focuser and capturer with a manual clock; auxiliary frames in a fresh directory.
@@ -157,7 +161,22 @@ function harness(options: HarnessOptions = {}): Harness {
 	const measurer = (options.measurer ?? curveMeasurer)(focuser, measures, order)
 	const coordinator = new OperationCoordinator(new ResourceArbiter())
 	const run = (overrides: Partial<AutoFocusRunOptions> = {}, scope: OperationScope = coordinator) =>
-		runAutoFocus(scope, focuser.focuser, CAMERA, { ...OPTIONS, ...overrides }, { focuserCommander: focuser.commander, cameraCapturer: capturer, measurer, auxiliaryPath: (capture) => join(directory, `af.${capture}.fit`), clock, ...(options.health !== undefined && { measurerHealth: options.health }) })
+		runAutoFocus(
+			scope,
+			focuser.focuser,
+			CAMERA,
+			{ ...OPTIONS, ...overrides },
+			{
+				focuserMover: focuser.commander,
+				cameraCapturer: capturer,
+				measurer,
+				auxiliaryPath: (capture) => join(directory, `af.${capture}.fit`),
+				clock,
+				...(options.health !== undefined && { measurerHealth: options.health }),
+				...(options.listener !== undefined && { listener: options.listener }),
+				...(options.captureListener !== undefined && { captureListener: options.captureListener }),
+			},
+		)
 	return { clock, directory, focuser, captures: calls, measures, coordinator, run }
 }
 
@@ -194,6 +213,59 @@ describe('autofocus run', () => {
 		expect(captures.map((capture) => capture.position)).toEqual(reference.positions)
 		expect(measures.map((measure) => measure.position)).toEqual(reference.positions)
 		expect(focuser.position).toBe(best)
+	})
+
+	test('the listener sees each move, exposure, measurement and sample in order, with the position and HFD of every frame', async () => {
+		const events: AutoFocusRunEvent[] = []
+		const fits: (string | undefined)[] = []
+		const { run, measures } = harness({
+			listener: (event) => {
+				events.push(event)
+				if (event.type === 'sample') fits.push(event.autoFocus.hyperbolic === undefined ? undefined : 'hyperbolic')
+			},
+		})
+		const reference = referenceRun(25100)
+		const result = await run()
+
+		expect(result).toMatchObject({ ok: true })
+		const samples = events.filter((event) => event.type === 'sample')
+		expect(samples.map((sample) => sample.position)).toEqual(reference.positions)
+		expect(samples.map((sample) => sample.capture)).toEqual(reference.positions.map((_, i) => i + 1))
+		expect(samples.map((sample) => sample.hfd)).toEqual(reference.positions.map(hfdAt))
+		expect(samples.at(-1)!.step).toEqual(reference.step)
+		expect(fits.at(-1)).toBe('hyperbolic')
+
+		// Per frame: the sample move, the exposure, the measurement, then the sample; the run ends moving to the best focus.
+		for (const [i, position] of reference.positions.entries()) {
+			const capture = i + 1
+			const expose = events.findIndex((event) => event.type === 'expose' && event.capture === capture)
+			const measure = events.findIndex((event) => event.type === 'measure' && event.capture === capture)
+			const sample = events.findIndex((event) => event.type === 'sample' && event.capture === capture)
+			expect(events[expose - 1]).toEqual({ type: 'move', purpose: 'sample', target: position })
+			expect(events[expose]).toMatchObject({ position, path: measures[i].path })
+			expect(measure).toBe(expose + 1)
+			expect(sample).toBe(measure + 1)
+		}
+
+		expect(events.at(-1)).toEqual({ type: 'move', purpose: 'best', target: (result as { value: AutoFocusRunResult }).value.position })
+	})
+
+	test('the capture listener of the services receives the events of every auxiliary capture', async () => {
+		const captureListener: CameraCaptureListener = () => {}
+		const { run, captures } = harness({ captureListener })
+
+		expect(await run()).toMatchObject({ ok: true })
+		expect(captures.length).toBeGreaterThan(0)
+		expect(captures.every((capture) => capture.hooks?.listener === captureListener)).toBeTrue()
+	})
+
+	test('a failure reports the restore move', async () => {
+		const events: AutoFocusRunEvent[] = []
+		const { run } = harness({ behaviors: [{ fail: true }], listener: (event) => events.push(event) })
+
+		expect(await run()).toMatchObject({ ok: false })
+		expect(events.filter((event) => event.type === 'sample')).toEqual([])
+		expect(events.at(-1)).toEqual({ type: 'move', purpose: 'restore', target: 25100 })
 	})
 
 	test('a measurement of NaN, 0, a negative value, undefined or a rejection is an invalid point, never an exception', async () => {
@@ -254,6 +326,25 @@ describe('autofocus run', () => {
 		expect(captures).toEqual([])
 	})
 
+	test('the focuser is held for the whole run, so nothing outside it can move the focuser between the frames', async () => {
+		const { focuser, coordinator, run } = harness()
+		focuser.hangAt = 4
+		const handle = coordinator.start('parent', [], (context) => run({}, context))
+
+		await waitUntil(() => focuser.moves.length === 4, 5000, 1)
+		let moved = false
+		const outside = await coordinator.start<void>('outside', [{ key: resourceKey(focuser.focuser), device: focuser.focuser }], () => {
+			moved = true
+			return successfulOperationResult(undefined)
+		}).result
+
+		expect(outside.ok).toBeFalse()
+		expect(moved).toBeFalse()
+
+		await handle.cancel('aborted')
+		expect(await handle.result).toMatchObject({ ok: false, reason: 'aborted' })
+	})
+
 	test('a cancellation resolves aborted, opens nothing more and leaves the focuser where the cancellation found it', async () => {
 		const { focuser, captures, coordinator, run } = harness()
 		// The fourth move (after three captures) never completes by itself, so the cancellation always finds it in flight.
@@ -304,6 +395,14 @@ describe('auxiliary frames', () => {
 		expect(measures.map((measure) => measure.path)).toEqual(captures.map((_, i) => join(directory, `af.${i + 1}.fit`)))
 		expect(measures.every((measure, i) => measure.order > captures[i].order)).toBeTrue()
 		expect(captures.some((_, i) => existsSync(join(directory, `af.${i + 1}.fit`)))).toBeFalse()
+	})
+
+	test('the mount, filter wheel and rotator of the capture settings are snooped with the focuser of the run', async () => {
+		const { run, captures } = harness()
+		await run({ capture: { ...CAPTURE, mount: 'Fake Mount', wheel: 'Fake Wheel', rotator: 'Fake Rotator' } })
+
+		expect(captures.length).toBeGreaterThan(0)
+		for (const capture of captures) expect(capture.request).toMatchObject({ mount: 'Fake Mount', focuser: 'Fake Focuser', wheel: 'Fake Wheel', rotator: 'Fake Rotator' })
 	})
 
 	test("'keep' preserves every auxiliary frame", async () => {

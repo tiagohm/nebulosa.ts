@@ -33,6 +33,16 @@ interface FocuserUpdate {
 	readonly state?: PropertyState
 }
 
+// Positioning of a focuser in a logical position counter, in steps: the commander itself, whose logical position is the
+// reported one, or a service that turns each position into several commander moves (such as a backlash compensation)
+// and reports where the focuser stands in the same counter. Composite features such as the autofocus move through it.
+export interface FocuserMover {
+	// Moves to a logical position inside the scope and resolves once the focuser stopped there.
+	readonly moveTo: (scope: OperationScope, focuser: Focuser, position: number, options?: FocuserCommandOptions) => Promise<OperationResult<void>>
+	// Logical position the focuser stands at, in steps.
+	readonly position: (focuser: Focuser) => number
+}
+
 // A move resolved against the device range, so the wait and the command agree on where it ends.
 interface MovePlan {
 	// Absolute position, in steps, the focuser must be standing at once the move is over.
@@ -59,7 +69,7 @@ const UNCANCELABLE = new AbortController().signal
 // Each command opens its own nested scope holding the focuser, so a direct endpoint runs it as a whole
 // operation tree while a composite feature, passing its own context, inherits the focuser it already owns
 // and gets cancellation and cleanup that do not disturb the feature around it.
-export class FocuserCommander implements DeviceHandler<Focuser>, Disposable {
+export class FocuserCommander implements DeviceHandler<Focuser>, FocuserMover, Disposable {
 	// Waiters per device, fed by the manager callbacks. A focuser can be observed by several waits at once,
 	// such as a move and the settle of the stop that is canceling it.
 	readonly #listeners = new Map<Focuser, Set<(update: FocuserUpdate) => void>>()
@@ -93,6 +103,11 @@ export class FocuserCommander implements DeviceHandler<Focuser>, Disposable {
 	// and the operation itself is canceled independently by DeviceLifecycle.
 	removed(focuser: Focuser) {
 		this.#emit({ focuser })
+	}
+
+	// Reported position of the focuser, in steps; the commander applies no offset to it.
+	position(focuser: Focuser) {
+		return focuser.position.value
 	}
 
 	// Moves to an absolute position and resolves only after the focuser has stopped there.

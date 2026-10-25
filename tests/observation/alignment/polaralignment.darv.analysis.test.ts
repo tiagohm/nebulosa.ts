@@ -103,6 +103,33 @@ describe('DARV trail measurements', () => {
 		}
 	})
 
+	test('stationary time before and after the motion is excluded from the drift baseline', () => {
+		for (const [outbound, inbound, dwell] of [
+			[100, 100, 0],
+			[80, 120, 30],
+		]) {
+			const input = capture(0.15, outbound, inbound, dwell)
+			const expected = analyzeDarvImage(input)
+			const result = analyzeDarvImage({ ...input, exposure: input.exposure + 7, leadingDuration: 4, trailingDuration: 3 })
+			expect(result.status).toBe('ok')
+			expect(result.drift!).toBeCloseTo(0.15 * SCALE, 13)
+			expect(result.drift!).toBeCloseTo(expected.drift!, 13)
+			expect(result.trails[0].uncertainty).toBeCloseTo(expected.trails[0].uncertainty, 15)
+		}
+
+		const pixels = { ...capture(), starts: undefined, transform: undefined }
+		const unsigned = analyzeDarvImage({ ...pixels, exposure: 210, leadingDuration: 5, trailingDuration: 5, turnaroundDuration: undefined })
+		expect(unsigned.status).toBe('partial')
+		expect(unsigned.driftMagnitude!).toBeCloseTo(analyzeDarvImage(pixels).driftMagnitude!, 13)
+	})
+
+	test('stationary intervals that do not close the shutter interval are invalid timing', () => {
+		const input = capture()
+		const result = analyzeDarvImage({ ...input, leadingDuration: 4, trailingDuration: 3 })
+		expect(result.status).toBe('inconclusive')
+		expect(result.diagnostics).toEqual(['invalidTiming'])
+	})
+
 	test('unequal timing resolves direction without a start marker', () => {
 		const result = analyzeDarvImage({ ...capture(-0.15, 80, 120), starts: undefined })
 		expect(result.status).toBe('ok')

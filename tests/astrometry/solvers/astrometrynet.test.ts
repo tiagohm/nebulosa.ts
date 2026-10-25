@@ -1,11 +1,14 @@
-import { describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { chmod, mkdir, mkdtemp, rm } from 'fs/promises'
+import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { localAstrometryNetPlateSolve, login, novaAstrometryNetPlateSolve, submissionStatus, upload, wcsFile } from '../../../src/astrometry/solvers/astrometrynet'
+import { PlateSolveError } from '../../../src/astrometry/solvers/platesolver'
 import { RA_TAN_SIP, tanUnproject } from '../../../src/astrometry/wcs/fits.wcs'
-import { readFits } from '../../../src/io/formats/fits/fits'
+import { type FitsHeader, readFits } from '../../../src/io/formats/fits/fits'
 import { bufferSource } from '../../../src/io/io'
 import { toArcsec, toDeg, toHour } from '../../../src/math/units/angle'
-import { isLinuxSkipped, isNetworkTestSkipped } from '../../util'
+import { FAKE_EXECUTABLE_PROBE, headerOnlyFits, isLinuxSkipped, isNetworkTestSkipped, settleExecutable } from '../../util'
 
 const SKIP = isNetworkTestSkipped()
 
@@ -113,6 +116,147 @@ test('nova plate solve sends every request to the configured api url', async () 
 
 	expect(solution).toBeUndefined()
 	expect(paths).toEqual(['/api/url_upload', '/api/submissions/3', '/api/jobs/7', '/wcs_file/7'])
+})
+
+describe('local with a fake solve-field', () => {
+	// A TAN-SIP-free solution of a 100x50 image, as solve-field writes it (IMAGEW/IMAGEH, no NAXIS1/NAXIS2).
+	const SOLVED_WCS = { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 50.5, CRPIX2: 25.5, CRVAL1: 42, CRVAL2: -17, CD1_1: 0.0005, CD1_2: 0, CD2_1: 0, CD2_2: 0.0005, IMAGEW: 100, IMAGEH: 50 } as const
+
+	let fakes = ''
+	let count = 0
+
+	beforeAll(async () => {
+		fakes = await mkdtemp(join(tmpdir(), 'nebulosa-solve-field-'))
+	})
+
+	afterAll(() => rm(fakes, { recursive: true, force: true }))
+
+	interface FakeSolveField {
+		// Header of the nebulosa.wcs written into the --dir directory (the fifth argument); none when absent.
+		readonly wcs?: FitsHeader
+		readonly stderr?: string
+		readonly sleep?: number
+		readonly exitCode?: number
+	}
+
+	// Writes an executable behaving like solve-field. It records its arguments in args.txt next to itself.
+	async function fakeSolveField({ wcs, stderr, sleep = 0, exitCode = 0 }: FakeSolveField) {
+		const directory = join(fakes, `run${++count}`)
+		await mkdir(directory)
+		const input = join(directory, 'frame.fit')
+		const args = join(directory, 'args.txt')
+		await Bun.write(input, 'SIMPLE')
+		if (wcs) await Bun.write(join(directory, 'out.wcs'), headerOnlyFits(wcs))
+
+		if (process.platform === 'win32') {
+			const lines = [
+				'@echo off',
+				`if defined ${FAKE_EXECUTABLE_PROBE} exit /b 0`,
+				`echo %*> "${args}"`,
+				...(sleep > 0 ? [`ping -n ${sleep + 1} 127.0.0.1 >nul`] : []),
+				...(wcs ? [`mkdir "%~5" 2>nul`, `copy /y "${join(directory, 'out.wcs')}" "%~5\\nebulosa.wcs" >nul`] : []),
+				...(stderr ? [`echo ${stderr} 1>&2`] : []),
+				`exit /b ${exitCode}`,
+			]
+			const executable = join(directory, 'solve-field.cmd')
+			await Bun.write(executable, lines.join('\r\n'))
+			await settleExecutable(executable)
+			return { executable, input, args }
+		}
+
+		const lines = ['#!/bin/sh', `[ -n "$${FAKE_EXECUTABLE_PROBE}" ] && exit 0`, `echo "$@" > '${args}'`, ...(sleep > 0 ? [`sleep ${sleep}`] : []), ...(wcs ? [`mkdir -p "$5"`, `cp '${join(directory, 'out.wcs')}' "$5/nebulosa.wcs"`] : []), ...(stderr ? [`echo '${stderr}' >&2`] : []), `exit ${exitCode}`]
+		const executable = join(directory, 'solve-field')
+		await Bun.write(executable, lines.join('\n'))
+		await chmod(executable, 0o755)
+		await settleExecutable(executable)
+		return { executable, input, args }
+	}
+
+	// Awaits a plate solve that must fail, returning its error.
+	async function solveError(promise: Promise<unknown>) {
+		try {
+			await promise
+		} catch (error) {
+			expect(error).toBeInstanceOf(PlateSolveError)
+			return error as PlateSolveError
+		}
+
+		throw new Error('the plate solve did not fail')
+	}
+
+	test('builds the solution from the WCS and passes the backend configuration', async () => {
+		const { executable, input, args } = await fakeSolveField({ wcs: SOLVED_WCS })
+		const solution = await localAstrometryNetPlateSolve(input, { executable, config: 'backend.cfg', timeout: 60000 })
+
+		expect(solution).toBeDefined()
+		expect(solution!.widthInPixels).toBe(100)
+		expect(solution!.heightInPixels).toBe(50)
+		expect(toDeg(solution!.rightAscension)).toBeCloseTo(42, 6)
+
+		const recorded = await Bun.file(args).text()
+		expect(recorded).toContain('--config backend.cfg')
+		expect(recorded).toContain('--cpulimit 60')
+	})
+
+	test('resolves undefined when solve-field wrote no WCS', async () => {
+		const { executable, input } = await fakeSolveField({})
+		expect(await localAstrometryNetPlateSolve(input, { executable })).toBeUndefined()
+	})
+
+	test('fails with the exit code and the error output', async () => {
+		const { executable, input } = await fakeSolveField({ stderr: 'no index files', exitCode: 3 })
+		const error = await solveError(localAstrometryNetPlateSolve(input, { executable }))
+
+		expect(error.code).toBe('failed')
+		expect(error.message).toContain('exit code 3')
+		expect(error.message).toContain('no index files')
+	})
+
+	test('fails for a WCS that is not an equatorial TAN solution', async () => {
+		const { executable, input } = await fakeSolveField({ wcs: { ...SOLVED_WCS, RADESYS: 'FK4' } })
+		const error = await solveError(localAstrometryNetPlateSolve(input, { executable }))
+
+		expect(error.code).toBe('failed')
+	})
+
+	test('fails as unavailable when the executable cannot be started', async () => {
+		const { input } = await fakeSolveField({})
+		const error = await solveError(localAstrometryNetPlateSolve(input, { executable: join(dirname(input), 'missing.exe') }))
+
+		expect(error.code).toBe('unavailable')
+	})
+
+	test('kills solve-field when aborted', async () => {
+		const { executable, input } = await fakeSolveField({ sleep: 5 })
+		const controller = new AbortController()
+		setTimeout(() => controller.abort(), 300)
+		const error = await solveError(localAstrometryNetPlateSolve(input, { executable }, controller.signal))
+
+		expect(error.code).toBe('aborted')
+	}, 15000)
+})
+
+test('nova plate solve fails when the login is refused', async () => {
+	const paths: string[] = []
+
+	using server = Bun.serve({
+		port: 0,
+		fetch(req) {
+			paths.push(new URL(req.url).pathname)
+			return Response.json({ status: 'error', errormessage: 'bad apikey' })
+		},
+	})
+
+	try {
+		await novaAstrometryNetPlateSolve('https://example.com/image.jpg', { apiUrl: server.url.origin, apiKey: 'wrong' })
+		throw new Error('the plate solve did not fail')
+	} catch (error) {
+		expect(error).toBeInstanceOf(PlateSolveError)
+		expect((error as PlateSolveError).code).toBe('unavailable')
+		expect((error as PlateSolveError).message).toContain('bad apikey')
+	}
+
+	expect(paths).toEqual(['/api/login'])
 })
 
 test.skipIf(isLinuxSkipped())('local', async () => {

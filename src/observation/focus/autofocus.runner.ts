@@ -1,15 +1,17 @@
 import { unlink } from 'fs/promises'
 import { basename, dirname } from 'path'
-import type { FocuserCommander, FocuserCommandOptions } from '../../devices/commanders/focuser'
+import type { FocuserCommandOptions, FocuserMover } from '../../devices/commanders/focuser'
 import type { Camera, Focuser } from '../../devices/indi/device'
 import { type FailedOperationResult, failedOperationResult, type OperationContext, type OperationResult, type OperationScope, successfulOperationResult } from '../../devices/orchestration/operation'
 import { type AbortableDelay, abortReason, awaitCooperativeJob, type CooperativeJobHealth, type CooperativeJobOutcome } from '../../devices/orchestration/operation.wait'
+import { resourceKey } from '../../devices/orchestration/resource'
 import type { CameraCapturer } from '../capture/capture'
+import type { CameraCaptureListener } from '../capture/reporter'
 import { type CameraCaptureStart, type CameraCaptureClock, DEFAULT_CAMERA_CAPTURE_START } from '../capture/types'
 import { AutoFocus, type AutoFocusOptions, type AutoFocusStep } from './autofocus'
 
 // Physical loop of a camera autofocus, reusable outside the Sequencer: the `AutoFocus` state machine decides every
-// focuser position, this module moves the focuser there through its commander, exposes one auxiliary FITS frame, hands
+// focuser position, this module moves the focuser there through its mover, exposes one auxiliary FITS frame, hands
 // its path to a caller-provided HFD measurer and feeds the measurement back, until the machine completes (the focuser
 // is moved to the best position) or fails (the focuser is moved back to the position the machine names, its start).
 //
@@ -19,7 +21,8 @@ import { AutoFocus, type AutoFocusOptions, type AutoFocusStep } from './autofocu
 // with the signal of the `autofocus` operation; its timeout is cooperative (the signal is aborted and the measurement
 // awaited to its end) and only then is the file removed or kept. A measurement that is undefined, not finite or not
 // positive, or a rejected one, is an invalid point of the curve, never an exception. Curve fitting belongs to
-// `AutoFocus`; star detection, Workers and plate solvers belong to the measurer of the caller.
+// `AutoFocus`; star detection, Workers and plate solvers belong to the measurer of the caller. An optional listener
+// observes every move, exposure, measurement and sample synchronously, with the machine and its fitted curves.
 //
 // A cancelled run never commands anything more: the commanders stop the motion they own, so a cancelled autofocus
 // leaves the focuser quiescent at an indeterminate position, and a caller that needs the original position reads it
@@ -27,9 +30,10 @@ import { AutoFocus, type AutoFocusOptions, type AutoFocusStep } from './autofocu
 // in pixels, configured durations are seconds turned into milliseconds only at the clock. Each capture allocates its
 // request and a few small objects.
 
-// Camera settings of an autofocus frame. Every operational field (mode, count, delay, transfer format, destination) is
-// fixed by the autofocus.
-export type AutoFocusCaptureOptions = Readonly<Pick<CameraCaptureStart, 'exposureTime' | 'exposureTimeUnit' | 'frameType' | 'x' | 'y' | 'width' | 'height' | 'subframe' | 'binX' | 'binY' | 'frameFormat' | 'gain' | 'offset' | 'compressed'>>
+// Camera settings of an autofocus frame, with the names of the mount, filter wheel and rotator the driver stamps into its
+// header (an absent one is cleared). Every operational field (mode, count, delay, transfer format, destination) is fixed
+// by the autofocus, and the focuser snooped is always the one the run moves.
+export type AutoFocusCaptureOptions = Readonly<Pick<CameraCaptureStart, 'exposureTime' | 'exposureTimeUnit' | 'frameType' | 'x' | 'y' | 'width' | 'height' | 'subframe' | 'binX' | 'binY' | 'frameFormat' | 'gain' | 'offset' | 'compressed' | 'mount' | 'wheel' | 'rotator'>>
 
 // Frame handed to the measurer: a complete FITS file on disk, never its bytes.
 export interface AutoFocusFrame {
@@ -54,7 +58,7 @@ export interface AutoFocusRunOptions {
 	readonly abortGrace: number
 	// Disposition of each auxiliary frame once its measurement ended (or its capture failed). Default 'delete'.
 	readonly auxiliary?: 'delete' | 'keep'
-	// Timing of every focuser move, in ms, passed to `FocuserCommander.moveTo`.
+	// Timing of every focuser move, in ms, passed to `FocuserMover.moveTo`.
 	readonly move?: FocuserCommandOptions
 }
 
@@ -65,12 +69,42 @@ export interface AutoFocusClock extends CameraCaptureClock {
 	readonly delay: AbortableDelay
 }
 
+// Why the run moves the focuser: to a sample position the machine asked for, to the best focus, or back to the position
+// a failure restores.
+export type AutoFocusMovePurpose = 'sample' | 'best' | 'restore'
+
+// Progress of one autofocus run, reported synchronously in the order it happens: a move before it is commanded (never
+// for a target outside the focuser range), an exposure before its capture starts, a measurement before the measurer
+// receives the frame, and a sample once the machine took the measurement. Positions are focuser steps, HFD in pixels,
+// `capture` is the 1-based ordinal of the auxiliary frame.
+export type AutoFocusRunEvent =
+	| { readonly type: 'move'; readonly purpose: AutoFocusMovePurpose; readonly target: number }
+	| { readonly type: 'expose'; readonly capture: number; readonly position: number; readonly path: string }
+	| { readonly type: 'measure'; readonly capture: number; readonly position: number; readonly path: string }
+	| {
+			readonly type: 'sample'
+			readonly capture: number
+			readonly position: number
+			// Valid HFD of the frame, in pixels; undefined for an invalid point.
+			readonly hfd?: number
+			// Step the machine returned for this sample.
+			readonly step: AutoFocusStep
+			// Machine of the run, with the curves fitted so far; read it during the call only, never mutate it.
+			readonly autoFocus: AutoFocus
+	  }
+
+// Listener of the progress of a run; called synchronously, it must neither throw nor block.
+export type AutoFocusRunListener = (event: AutoFocusRunEvent) => void
+
 // Services of an autofocus run.
 export interface AutoFocusServices {
-	// Moves of the focuser.
-	readonly focuserCommander: FocuserCommander
+	// Moves of the focuser, in its logical position counter: the focuser commander, or a service that compensates the
+	// backlash of every move.
+	readonly focuserMover: FocuserMover
 	// Auxiliary captures.
 	readonly cameraCapturer: CameraCapturer
+	// Receives the events of every auxiliary capture, such as the progress of its exposure. Absent reports nothing.
+	readonly captureListener?: CameraCaptureListener
 	// HFD measurer of the auxiliary frames.
 	readonly measurer: AutoFocusMeasurer
 	// Absolute path of the auxiliary FITS of capture `capture` (1-based); its directory exists and the file does not.
@@ -80,6 +114,8 @@ export interface AutoFocusServices {
 	// Health of the measurer across the runs of its owner; a faulted measurer is never called again. Absent treats each
 	// run alone.
 	readonly measurerHealth?: CooperativeJobHealth
+	// Progress of the run, such as the samples and curves of a focus chart. Absent reports nothing.
+	readonly listener?: AutoFocusRunListener
 }
 
 // Outcome of a successful autofocus.
@@ -94,8 +130,9 @@ export interface AutoFocusRunResult {
 	readonly captures: number
 }
 
-// Runs one autofocus of `focuser` with `camera` inside an operation `autofocus` of `scope`, which leases nothing
-// itself: the commander and the capturer lease the focuser and the camera per command. Every position the state
+// Runs one autofocus of `focuser` with `camera` inside an operation `autofocus` of `scope`, which holds the focuser for
+// the whole run, so nothing outside it can move the focuser between a move and the frame measured there; the moves of
+// the mover inherit that lease, and the capturer leases the camera per capture. Every position the state
 // machine asks for is checked against the focuser range before the focuser moves; then one auxiliary frame is
 // captured and measured cooperatively, and the measurement fed back. On COMPLETED the focuser is moved to the rounded
 // best position. A failure that is not a cancellation (the curve rejected, a position out of range, a failed move,
@@ -104,7 +141,7 @@ export interface AutoFocusRunResult {
 // rejected; 'unexpectedState' for a position outside the focuser range or a faulted measurer; 'timeout' when a
 // measurement timed out; the reason of the operation signal when cancelled. Never rejects.
 export async function runAutoFocus(scope: OperationScope, focuser: Focuser, camera: Camera, options: AutoFocusRunOptions, services: AutoFocusServices): Promise<OperationResult<AutoFocusRunResult>> {
-	return await scope.start<AutoFocusRunResult>('autofocus', [], (context) => autoFocusLoop(context, focuser, camera, options, services)).result
+	return await scope.start<AutoFocusRunResult>('autofocus', [{ key: resourceKey(focuser), device: focuser }], (context) => autoFocusLoop(context, focuser, camera, options, services)).result
 }
 
 // Captures of one autofocus inside its operation.
@@ -112,7 +149,7 @@ async function autoFocusLoop(context: OperationContext, focuser: Focuser, camera
 	if (!focuser.connected) return failedOperationResult('disconnected')
 
 	const autoFocus = new AutoFocus({ ...options.algorithm, maxPosition: focuser.position.max })
-	const initialPosition = focuser.position.value
+	const initialPosition = services.focuserMover.position(focuser)
 	let position = initialPosition
 	let step: AutoFocusStep = autoFocus.add(position, 0)
 	let captures = 0
@@ -122,32 +159,34 @@ async function autoFocusLoop(context: OperationContext, focuser: Focuser, camera
 
 	while (step.type === 'MOVE') {
 		const target = step.absolute ?? position + step.relative!
-		const moved = await moveWithinRange(context, focuser, target, options, services)
+		const moved = await moveWithinRange(context, focuser, target, 'sample', options, services)
 		if (!moved.ok) return await fail(moved)
 
 		position = target
-		const measured = await captureAndMeasure(context, focuser, camera, ++captures, options, services)
+		const measured = await captureAndMeasure(context, focuser, camera, ++captures, position, options, services)
 		if (!measured.ok) return await fail(measured)
 
 		step = autoFocus.add(position, measured.value ?? Number.NaN)
+		services.listener?.({ type: 'sample', capture: captures, position, hfd: measured.value, step, autoFocus })
 	}
 
 	if (step.type === 'FAILED') return await failAndRestore(context, focuser, step.absolute ?? initialPosition, failedOperationResult('commandFailed', `the focus curve of ${captures} frames was rejected`), options, services)
 
 	const best = Math.round(step.absolute!)
-	const moved = await moveWithinRange(context, focuser, best, options, services)
+	const moved = await moveWithinRange(context, focuser, best, 'best', options, services)
 	if (!moved.ok) return await fail(moved)
 
 	return successfulOperationResult({ position: best, hfd: autoFocus.focusPoint?.y ?? Number.NaN, initialPosition, captures })
 }
 
-// Moves the focuser to `target` (steps) unless it stands there; a target outside the published range fails before
-// anything is commanded.
-async function moveWithinRange(context: OperationContext, focuser: Focuser, target: number, options: AutoFocusRunOptions, services: AutoFocusServices): Promise<OperationResult<void>> {
+// Moves the focuser to `target` (steps) for `purpose` unless it stands there; a target outside the published range
+// fails before anything is commanded or reported.
+async function moveWithinRange(context: OperationContext, focuser: Focuser, target: number, purpose: AutoFocusMovePurpose, options: AutoFocusRunOptions, services: AutoFocusServices): Promise<OperationResult<void>> {
 	const { min, max } = focuser.position
 	if (!(target >= min && target <= max)) return failedOperationResult('unexpectedState', `focus position ${target} is outside the range [${min}, ${max}] of ${focuser.name}`)
-	if (!focuser.moving && focuser.position.value === target) return successfulOperationResult(undefined)
-	return await services.focuserCommander.moveTo(context, focuser, target, options.move)
+	services.listener?.({ type: 'move', purpose, target })
+	if (!focuser.moving && services.focuserMover.position(focuser) === target) return successfulOperationResult(undefined)
+	return await services.focuserMover.moveTo(context, focuser, target, options.move)
 }
 
 // Resolves `failure` after moving the focuser back to `position` when the operation is still alive; a cancelled
@@ -156,30 +195,32 @@ async function failAndRestore(context: OperationContext, focuser: Focuser, posit
 	if (context.signal.aborted) return failedOperationResult(abortReason(context.signal))
 	if (!focuser.connected) return failure
 
-	const restored = await moveWithinRange(context, focuser, position, options, services)
+	const restored = await moveWithinRange(context, focuser, position, 'restore', options, services)
 	if (restored.ok) return failure
 
 	if (context.signal.aborted) return failedOperationResult(abortReason(context.signal))
 	return failedOperationResult(failure.reason, `${failure.error ?? failure.reason}; the focuser was not restored to ${position}: ${restored.error ?? restored.reason}`)
 }
 
-// Captures the auxiliary frame `capture` and measures it cooperatively; resolves the HFD in pixels, undefined for an
-// invalid point (no measurement, a non-finite or non-positive value, a rejection), or the failure of the capture, of the
-// measurement timeout, of a faulted measurer or of the cancellation. The file is disposed of only after the measurement
-// ended, whatever its outcome; a failed capture never calls the measurer.
-async function captureAndMeasure(context: OperationContext, focuser: Focuser, camera: Camera, capture: number, options: AutoFocusRunOptions, services: AutoFocusServices): Promise<OperationResult<number | undefined>> {
-	const { cameraCapturer, measurer, clock, measurerHealth } = services
+// Captures the auxiliary frame `capture` at `position` (steps) and measures it cooperatively; resolves the HFD in
+// pixels, undefined for an invalid point (no measurement, a non-finite or non-positive value, a rejection), or the
+// failure of the capture, of the measurement timeout, of a faulted measurer or of the cancellation. The file is disposed
+// of only after the measurement ended, whatever its outcome; a failed capture never calls the measurer.
+async function captureAndMeasure(context: OperationContext, focuser: Focuser, camera: Camera, capture: number, position: number, options: AutoFocusRunOptions, services: AutoFocusServices): Promise<OperationResult<number | undefined>> {
+	const { cameraCapturer, captureListener, measurer, clock, measurerHealth, listener } = services
 	const path = services.auxiliaryPath(capture)
 	const request = autoFocusCaptureRequest(options.capture, path, focuser)
 
 	try {
-		const captured = await cameraCapturer.start(context, camera, request, { clock }).result
+		listener?.({ type: 'expose', capture, position, path })
+		const captured = await cameraCapturer.start(context, camera, request, { clock, listener: captureListener }).result
 		if (!captured.ok) return captured
 
 		const { frames } = captured.value
 		if (frames.length !== 1) return failedOperationResult('unexpectedState', `an autofocus capture produced ${frames.length} frames`)
 
 		const frame: AutoFocusFrame = { path }
+		listener?.({ type: 'measure', capture, position, path })
 		const outcome = await awaitCooperativeJob((signal) => measurer(frame, signal), { signal: context.signal, timeout: options.measureTimeout * 1000, abortGrace: options.abortGrace * 1000, delay: clock.delay, health: measurerHealth })
 		return measureResult(outcome, context.signal, options.measureTimeout)
 	} finally {
@@ -209,9 +250,10 @@ function measureResult(outcome: CooperativeJobOutcome<number | undefined>, signa
 }
 
 // Capture request of one autofocus frame at `path`: the camera settings with every operational field fixed (one FITS
-// frame, auto-saved under the exact name) and the focuser snooped, so the header records the position it was taken at.
+// frame, auto-saved under the exact name) and the focuser snooped, so the header records the position it was taken at,
+// along with the mount, filter wheel and rotator the settings name.
 export function autoFocusCaptureRequest(capture: AutoFocusCaptureOptions, path: string, focuser: Pick<Focuser, 'name'>): CameraCaptureStart {
-	const { exposureTime, exposureTimeUnit, frameType, x, y, width, height, subframe, binX, binY, frameFormat, gain, offset, compressed } = capture
+	const { exposureTime, exposureTimeUnit, frameType, x, y, width, height, subframe, binX, binY, frameFormat, gain, offset, compressed, mount, wheel, rotator } = capture
 
 	return {
 		...DEFAULT_CAMERA_CAPTURE_START,
@@ -237,7 +279,10 @@ export function autoFocusCaptureRequest(capture: AutoFocusCaptureOptions, path: 
 		autoSubFolderMode: 'off',
 		outputPath: dirname(path),
 		outputName: basename(path),
+		mount,
 		focuser: focuser.name,
+		wheel,
+		rotator,
 	}
 }
 

@@ -69,7 +69,70 @@ const TAN_SIP_HEADER = {
 	BP_2_0: -2.151e-6,
 	BP_2_1: 1.7e-7,
 	BP_3_0: 2.0482e-8,
-}
+} as const satisfies FitsHeader
+
+// WCS emitted by ASTAP CLI 2026.06.29 with -sip for a 2072x1410 FITS image.
+// Only astrometric cards are retained; dimensions are inferred from its central CRPIX as in astapPlateSolve.
+const ASTAP_SIP_HEADER = {
+	NAXIS1: 2072,
+	NAXIS2: 1410,
+	EQUINOX: 2000,
+	CTYPE1: 'RA---TAN-SIP',
+	CTYPE2: 'DEC--TAN-SIP',
+	CUNIT1: 'deg',
+	CRPIX1: 1036.5,
+	CRPIX2: 705.5,
+	CRVAL1: 228.8439336238,
+	CRVAL2: -65.70119704162,
+	CD1_1: -1.079903219473e-3,
+	CD1_2: 5.789461881308e-5,
+	CD2_1: -5.762143664478e-5,
+	CD2_2: -1.079367239763e-3,
+	A_ORDER: 3,
+	A_0_0: -1.599397400696e-2,
+	A_1_0: 6.286091399779e-4,
+	A_0_1: 3.029980544263e-4,
+	A_2_0: 1.867192403307e-8,
+	A_1_1: 3.084667215629e-8,
+	A_0_2: 5.418071626898e-8,
+	A_3_0: -6.557134360888e-10,
+	A_2_1: -3.915168056723e-10,
+	A_1_2: -1.273014423754e-9,
+	A_0_3: 7.86758458763e-11,
+	B_ORDER: 3,
+	B_0_0: 9.402765316743e-2,
+	B_0_1: 2.909543239387e-4,
+	B_1_0: 2.576536496058e-4,
+	B_2_0: -1.340027322956e-7,
+	B_1_1: -1.544082771086e-7,
+	B_0_2: -3.3771713305e-8,
+	B_3_0: 7.192240149936e-11,
+	B_2_1: -8.139562870158e-10,
+	B_1_2: -3.036956018419e-10,
+	B_0_3: -1.746459287858e-10,
+	AP_ORDER: 3,
+	AP_0_0: 1.60799566312e-2,
+	AP_1_0: -6.29067304285e-4,
+	AP_0_1: -3.028715356256e-4,
+	AP_2_0: -1.876479865884e-8,
+	AP_1_1: -3.093726830057e-8,
+	AP_0_2: -5.430269510454e-8,
+	AP_3_0: 6.564930435165e-10,
+	AP_2_1: 3.907769504492e-10,
+	AP_1_2: 1.274022059964e-9,
+	AP_0_3: -7.874314713237e-11,
+	BP_ORDER: 3,
+	BP_0_0: -9.411418543914e-2,
+	BP_1_0: -2.574806621537e-4,
+	BP_0_1: -2.911930355207e-4,
+	BP_2_0: 1.340657585253e-7,
+	BP_1_1: 1.544235180871e-7,
+	BP_0_2: 3.391866381086e-8,
+	BP_3_0: -7.210338800097e-11,
+	BP_2_1: 8.14385260811e-10,
+	BP_1_2: 3.030095495138e-10,
+	BP_0_3: 1.752640351706e-10,
+} as const satisfies FitsHeader
 
 describe('scale and crop FITS WCS', () => {
 	test.each([
@@ -102,6 +165,7 @@ describe('scale and crop FITS WCS', () => {
 		['CROTA', TAN_CROTA_HEADER],
 		['diagonal CDELT', { ...TAN_CROTA_HEADER, CROTA2: undefined }],
 		['SIP', TAN_SIP_HEADER],
+		['ASTAP SIP', ASTAP_SIP_HEADER],
 		['forward SIP', Object.fromEntries(Object.entries(TAN_SIP_HEADER).filter(([key]) => !key.startsWith('AP_') && !key.startsWith('BP_')))],
 	] as const)('%s preserves sky and both pixel directions under anisotropic scale/crop', (_name, source) => {
 		const original = { ...source }
@@ -262,6 +326,7 @@ describe('reflect fits wcs', () => {
 		{ name: 'CDELT plus CROTA', header: TAN_CROTA_HEADER, width: 13689, height: 5849, x: 7012.5, y: 3101.25, precision: 9 },
 		{ name: 'CDELT only', header: { ...TAN_HEADER, CD1_1: undefined, CD1_2: undefined, CD2_1: undefined, CD2_2: undefined, CDELT1: -7e-4, CDELT2: 6.8e-4 }, width: 800, height: 600, x: 512.25, y: 180.75, precision: 10 },
 		{ name: 'SIP', header: TAN_SIP_HEADER, width: 256, height: 256, x: 200.5, y: 210.25, precision: 9 },
+		{ name: 'ASTAP SIP', header: ASTAP_SIP_HEADER, width: 2072, height: 1410, x: 200.5, y: 210.25, precision: 3 },
 	]
 
 	for (const entry of cases) {
@@ -576,11 +641,39 @@ describe('SIP validation', () => {
 		expect(performance.now() - started).toBeLessThan(10)
 	})
 
-	test('a non-zero forward constant or linear term is refused, while zeros are accepted', () => {
+	test('forward constant and linear terms are accepted, including zeros', () => {
 		for (const key of ['A_1_0', 'A_0_1', 'A_0_0', 'B_0_1', 'B_1_0', 'B_0_0']) {
-			expectRefused({ ...M101_HEADER, [key]: 1e-6 })
+			expectAccepted({ ...M101_HEADER, [key]: 1e-6 })
 			expectAccepted({ ...M101_HEADER, [key]: -0 })
 		}
+	})
+
+	test('ASTAP SIP matches WCSLIB at the center and corners without dropping low-degree terms', () => {
+		const forward: FitsHeader = Object.fromEntries(Object.entries(ASTAP_SIP_HEADER).filter(([key]) => !/^(AP|BP)_/.test(key)))
+		const zeroed: FitsHeader = { ...ASTAP_SIP_HEADER, A_0_0: 0, A_1_0: 0, A_0_1: 0, B_0_0: 0, B_1_0: 0, B_0_1: 0 }
+		using native = new Wcs(ASTAP_SIP_HEADER)
+
+		for (const [x, y] of [
+			[1036.5, 705.5],
+			[1, 1],
+			[2072, 1],
+			[2072, 1410],
+			[1, 1410],
+		]) {
+			const sky = tanUnproject(ASTAP_SIP_HEADER, x, y)!
+			expectMatrixCloseTo(sky, native.pixToSky(x, y)!, 12)
+			const fitted = tanProject(ASTAP_SIP_HEADER, ...sky)!
+			const iterated = tanProject(forward, ...sky)!
+			// AP/BP is an approximate inverse fitted by ASTAP; forward-only inversion converges more closely.
+			expect(Math.hypot(fitted[0] - x, fitted[1] - y)).toBeLessThan(0.01)
+			expect(Math.hypot(iterated[0] - x, iterated[1] - y)).toBeLessThan(1e-7)
+			const withoutLowTerms = tanUnproject(zeroed, x, y)!
+			expect(Math.hypot((sky[0] - withoutLowTerms[0]) * Math.cos(sky[1]), sky[1] - withoutLowTerms[1])).toBeGreaterThan(deg(0.3 / 3600))
+		}
+
+		const solution = plateSolutionFrom(ASTAP_SIP_HEADER)!
+		expectMatrixCloseTo([solution.rightAscension, solution.declination], native.pixToSky(1036.5, 705.5)!, 12)
+		expect(solution.A_0_0).toBe(ASTAP_SIP_HEADER.A_0_0)
 	})
 
 	test('a coefficient above its order or without one is refused', () => {
@@ -666,7 +759,7 @@ describe('SIP validation', () => {
 		expect(preserved.A_ORDER).toBe(2)
 		expect(preserved.AP_0_0).toBeCloseTo((M101_HEADER.AP_0_0 as number) * 2, 14)
 
-		for (const malformed of [{ A_ORDER: 1 }, { A_1_0: 1e-6 }]) {
+		for (const malformed of [{ A_ORDER: 1 }, { A_3_0: 1e-6 }]) {
 			const header: FitsHeader = { ...M101_HEADER, ...malformed }
 			scaleAndCropFitsWcs(header, 2, 2, 0, 0)
 			expect(header.CTYPE1).toBeUndefined()

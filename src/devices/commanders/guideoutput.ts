@@ -11,7 +11,8 @@ import { resourceKey, type ResourceArbiter, type ResourceKey } from '../orchestr
 // reported the axis busy and then stopped, or, when no Busy arrives, after the last instant a late Busy could
 // still begin. A canceled pulse is asked to stop with a zero duration, but the standard INDI guider interface
 // and the Alpaca bridge ignore it, so the device is held until the pulse already running has ended.
-// Perpendicular pulses of one nudge run together in one operation.
+// Perpendicular pulses of one nudge run together in one operation. A loop that issues one correction per frame
+// dispatches it synchronously under the operation that holds the device instead, with the same evidence.
 //
 // Every pulse this commander dispatches is recorded per physical key as evidence until the end of the pulse
 // is physically observed, per axis, on a registered and connected guide output view: a whole Busy → stopped
@@ -188,6 +189,8 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 	readonly #entries = new Map<ResourceKey, DispatchedPulseEntry>()
 	// Keys this commander blocked with the `guidePulse` cause.
 	readonly #blocked = new Set<ResourceKey>()
+	// Physical keys each operation dispatched pulses on, so its stop is registered once per key.
+	readonly #dispatchers = new WeakMap<OperationContext, Set<ResourceKey>>()
 
 	// Registers the commander as a guide output observer so waits settle on device events instead of
 	// polling, seeding the registered views from the manager.
@@ -297,6 +300,36 @@ export class GuideOutputCommander implements DeviceHandler<GuideOutput>, Disposa
 			if (device.pulsing) return failedOperationResult('unexpectedState', `guide output ${device.name} is still pulsing`)
 			return successfulOperationResult(undefined)
 		}).result
+	}
+
+	// Sends one timed pulse at once, without awaiting its end, for an operation that already holds the physical
+	// device behind the guide output and cannot run one operation per correction, such as a guider loop. The
+	// pulse is recorded as evidence exactly like an awaited one, and the first dispatch of an operation on a key
+	// registers the stop that runs when the operation ends: both axes are zeroed, the end of every recorded
+	// pulse is waited for, and the key is blocked with the `guidePulse` cause when that end is still unobserved
+	// as the lease is released. Duration is in milliseconds. Returns the quiescence window of the pulse, or
+	// undefined without sending anything when the operation is being canceled or does not own the device, or
+	// when the device is disconnected or cannot pulse guide.
+	dispatch(context: OperationContext, device: GuideOutput, direction: GuideDirection, duration: number): GuidePulseQuiescenceWindow | undefined {
+		const key = resourceKey(device)
+		if (context.signal.aborted || !context.owns(key) || !device.connected || !device.canPulseGuide) return undefined
+
+		let keys = this.#dispatchers.get(context)
+
+		if (keys === undefined) {
+			keys = new Set()
+			this.#dispatchers.set(context, keys)
+		}
+
+		if (!keys.has(key)) {
+			keys.add(key)
+			this.#stopOnCleanup(context, device, ['NORTH', 'WEST'])
+		}
+
+		const window = guidePulseWindow(performance.now(), duration)
+		this.#record(device, window, [DIRECTION_AXIS[direction]])
+		this.guideOutputManager.pulse(device, direction, duration)
+		return window
 	}
 
 	// Sets the guide rate of both axes, as a fraction of the sidereal rate.

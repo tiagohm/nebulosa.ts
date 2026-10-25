@@ -3,6 +3,8 @@ import { TAU } from '../src/core/constants'
 import type { Camera } from '../src/devices/indi/device'
 import type { DeviceHandler } from '../src/devices/indi/manager/device'
 import type { PropertyState, BlobEncoding } from '../src/devices/indi/types'
+import type { FitsHeader } from '../src/io/formats/fits/fits'
+import { formatFitsHeaderValue } from '../src/io/formats/fits/util'
 import { type Vec3, vecAngle } from '../src/math/linear-algebra/vec3'
 import type { NumberArray } from '../src/math/numerical/math'
 import { normalizeAngle } from '../src/math/units/angle'
@@ -110,5 +112,32 @@ export class CameraFrameReceiver implements DeviceHandler<Camera> {
 	// Most recently completed camera frame.
 	get lastFrame() {
 		return this.#frames.at(-1)!
+	}
+}
+
+// Encodes a header-only FITS file, as the solvers write their WCS: 80-character cards after SIMPLE, BITPIX and
+// NAXIS = 0, padded with blanks to whole 2880-byte blocks.
+export function headerOnlyFits(header: FitsHeader) {
+	const cards = ['SIMPLE  = T', 'BITPIX  = 8', 'NAXIS   = 0', ...Object.entries(header).map(([key, value]) => `${key.padEnd(8)}= ${formatFitsHeaderValue(value)}`), 'END']
+	const text = cards.map((card) => card.padEnd(80)).join('')
+	return text.padEnd(Math.ceil(text.length / 2880) * 2880)
+}
+
+// Environment variable that makes a fake executable exit at once, so settleExecutable can probe it.
+export const FAKE_EXECUTABLE_PROBE = 'NEBULOSA_FAKE_PROBE'
+
+// Waits until a freshly written fake executable can be started: on Windows a scanner may still hold the new file,
+// and starting it then fails with EBUSY. The script must exit at once when FAKE_EXECUTABLE_PROBE is set.
+export async function settleExecutable(executable: string, timeout: number = 5000) {
+	const deadline = performance.now() + timeout
+
+	while (true) {
+		try {
+			await Bun.spawn([executable], { env: { ...process.env, [FAKE_EXECUTABLE_PROBE]: '1' }, stdout: 'ignore', stderr: 'ignore' }).exited
+			return
+		} catch (error) {
+			if (performance.now() >= deadline) throw error
+			await Bun.sleep(20)
+		}
 	}
 }

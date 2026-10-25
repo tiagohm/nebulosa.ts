@@ -40,6 +40,14 @@ describe.skipIf(SKIP)('focuser simulator', () => {
 		expect(properties.FOCUS_TEMPERATURE).toBeDefined()
 		expect(properties.FOCUS_TEMPERATURE_COMPENSATION).toBeDefined()
 		expect(properties.SIMULATOR_BACKLASH).toBeDefined()
+		expect(focuser.hasBacklash).toBeTrue()
+		expect(focuser.backlashEnabled).toBeFalse()
+
+		client.sendSwitch({ device: focuser.name, name: 'FOCUS_BACKLASH_TOGGLE', elements: { INDI_ENABLED: true } })
+		client.sendNumber({ device: focuser.name, name: 'FOCUS_BACKLASH_STEPS', elements: { FOCUS_BACKLASH_VALUE: 30 } })
+		await waitUntil(() => focuser.backlashEnabled && focuser.backlash.value === 30)
+		client.sendSwitch({ device: focuser.name, name: 'FOCUS_BACKLASH_TOGGLE', elements: { INDI_DISABLED: true } })
+		await waitUntil(() => !focuser.backlashEnabled)
 
 		const initialTemperature = Number(properties.FOCUS_TEMPERATURE.elements.TEMPERATURE.value)
 		await waitUntil(() => Math.abs(Number(properties.FOCUS_TEMPERATURE.elements.TEMPERATURE.value) - initialTemperature) >= 0.05, 3000)

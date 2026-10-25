@@ -3,15 +3,15 @@ import { basename, dirname, extname, join, resolve } from 'path'
 import { errorMessage } from '../../core/util'
 import type { DetectedStar } from '../../imaging/stars/detector'
 import { type CsvRow, readCsv } from '../../io/csv'
-import { readFits } from '../../io/formats/fits/fits'
+import { type FitsHeader, readFits } from '../../io/formats/fits/fits'
 import { bufferSource } from '../../io/io'
 import { type Angle, normalizeAngle, toDeg, toHour } from '../../math/units/angle'
-import { type PlateSolveOptions, plateSolutionFrom } from './platesolver'
+import { type PlateSolveErrorCode, PlateSolveError, type PlateSolveOptions, plateSolutionFrom } from './platesolver'
 
 // ASTAP command-line solver integration: spawns the local `astap` binary to detect stars (via its
-// CSV output, failing with a typed AstapError) and to plate-solve images (writing a WCS .ini that is
-// parsed into a PlateSolution). All process I/O uses Bun; angles in options are radians and converted to
-// ASTAP's degree/hour conventions.
+// CSV output) and to plate-solve images (a WCS file parsed into a PlateSolution, with the outcome read
+// from its .ini), both failing with a typed AstapError. All process I/O uses Bun; angles in options are
+// radians and converted to ASTAP's degree/hour conventions.
 
 // Options for ASTAP-based star detection.
 export interface AstapStarDetectionOptions {
@@ -41,25 +41,28 @@ const DEFAULT_EXECUTABLE = 'astap'
 // Default process timeout: 5 minutes, in milliseconds.
 const DEFAULT_TIMEOUT = 300000
 
-// Why an ASTAP star detection produced no result:
+// Why an ASTAP run produced no result:
 // - unavailable: the executable could not be started, such as a missing file.
 // - timeout: the process ran longer than the timeout and was killed.
 // - aborted: the signal aborted the run and the process was killed.
-// - failed: the input file is missing, or ASTAP ended without writing a readable CSV.
-export type AstapErrorCode = 'unavailable' | 'timeout' | 'aborted' | 'failed'
+// - failed: the input file is missing, ASTAP reported an error (a star detection without a readable CSV, a
+//   solve with an unreadable image or star database), or it wrote an invalid WCS.
+export type AstapErrorCode = PlateSolveErrorCode
 
-// Failure of an ASTAP run, with the reason a caller can act on.
-export class AstapError extends Error {
+// Failure of an ASTAP run, with the reason a caller can act on. A PlateSolveError, so a caller handling every
+// solver catches it the same way.
+export class AstapError extends PlateSolveError {
 	// Creates an error of the given reason; cause is the underlying failure, when there is one.
-	constructor(
-		readonly code: AstapErrorCode,
-		message: string,
-		options?: ErrorOptions,
-	) {
-		super(message, options)
+	constructor(code: AstapErrorCode, message: string, options?: ErrorOptions) {
+		super(code, message, options)
 		this.name = 'AstapError'
 	}
 }
+
+// ASTAP exit codes of a search that ended without a solution: 1 no solution, 2 not enough stars detected. Every other
+// non-zero code is an error (16 unreadable image, 32 no star database, 33 unreadable star database, ...), as listed
+// by the command-line help of ASTAP.
+const ASTAP_NO_SOLUTION_EXIT_CODES = new Set([1, 2])
 
 // Detects stars by running ASTAP's `-extract` and parsing the CSV (x, y, hfd, snr, flux) it writes next to
 // the input file, which is deleted afterwards, so the input's directory must be writable. Returns the
@@ -134,12 +137,17 @@ export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0
 	}
 }
 
-// Plate-solves a file with the local ASTAP executable, then parses the emitted WCS .ini into a
-// PlateSolution. Async. Star detection is astapDetectStars, not part of this call. Returns undefined
-// when ASTAP exits non-zero or writes no WCS. An aborted signal rejects from the spawned process.
-// RA/Dec are sent only when both are provided (hours and south-polar-distance). A radius without a
-// center is `-r` only, so ASTAP can use the FITS header instead of RA=0h, Dec=0°. Requires the ASTAP binary.
-export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, timeout = 300000, rightAscension, declination, radius, executable, sip = true }: AstapPlateSolveOptions = {}, signal?: AbortSignal) {
+// Plate-solves a file with the local ASTAP executable, then parses the emitted WCS into a PlateSolution. Async.
+// Star detection is astapDetectStars, not part of this call. Resolves undefined only when ASTAP searched and
+// found no solution (exit code 1 or 2, or its .ini reports PLTSOLVD=F without an error). Rejects with AstapError:
+// `unavailable` when the executable cannot be started, `timeout` and `aborted` when the process was killed for
+// either reason, and `failed` for any other exit code (the message carries it and ASTAP's ERROR line) or a WCS
+// that plateSolutionFrom refuses. RA/Dec are sent only when both are provided (hours and south-polar-distance). A
+// radius without a center is `-r` only, so ASTAP can use the FITS header instead of RA=0h, Dec=0°. The .ini and
+// .wcs are written to the temporary directory and always deleted. Requires the ASTAP binary.
+export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, timeout = DEFAULT_TIMEOUT, rightAscension, declination, radius, executable, sip = true }: AstapPlateSolveOptions = {}, signal?: AbortSignal) {
+	if (signal?.aborted) throw new AstapError('aborted', 'the plate solve was aborted')
+
 	fov = Math.max(0, Math.min(toDeg(fov), 360)) // Specify 0 for auto
 	const name = Bun.randomUUIDv7()
 	const ini = Bun.file(join(tmpdir(), `${name}.ini`))
@@ -156,30 +164,83 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 	if (rightAscension !== undefined && declination !== undefined) commands.push('-ra', `${toHour(normalizeAngle(rightAscension))}`, '-spd', `${toDeg(declination) + 90}`)
 	commands.push('-r', `${r}`)
 
-	const process = Bun.spawn(commands, { signal, timeout })
-	const exitCode = await process.exited
+	let process: Bun.Subprocess
 
 	try {
+		process = Bun.spawn(commands, { signal, stdout: 'ignore', stderr: 'ignore' })
+	} catch (error) {
+		throw new AstapError('unavailable', `unable to start ASTAP: ${errorMessage(error)}`, { cause: error })
+	}
+
+	let timedOut = false
+
+	const timer = setTimeout(() => {
+		timedOut = true
+		process.kill()
+	}, timeout)
+
+	try {
+		const exitCode = await process.exited
+
+		if (timedOut) throw new AstapError('timeout', `ASTAP did not finish within ${timeout} ms`)
+		if (signal?.aborted) throw new AstapError('aborted', 'the plate solve was aborted')
+
+		const report = (await ini.exists()) ? astapReport(await ini.text()) : undefined
+
 		if (exitCode === 0 && (await wcs.exists())) {
-			const buffer = Buffer.from(await wcs.arrayBuffer())
-			const fits = await readFits(bufferSource(buffer))
+			let header: FitsHeader | undefined
 
-			if (fits?.hdus.length) {
-				const { header } = fits.hdus[0]
-
-				if (!header.NAXIS) header.NAXIS = 2
-				if (!header.NAXIS1 && header.CRPIX1) header.NAXIS1 = Math.trunc(((header.CRPIX1 as number) - 0.5) * 2)
-				if (!header.NAXIS2 && header.CRPIX2) header.NAXIS2 = Math.trunc(((header.CRPIX2 as number) - 0.5) * 2)
-
-				return plateSolutionFrom(header)
+			try {
+				header = (await readFits(bufferSource(Buffer.from(await wcs.arrayBuffer()))))?.hdus[0]?.header
+			} catch (error) {
+				throw new AstapError('failed', `unable to read the WCS of ASTAP: ${errorMessage(error)}`, { cause: error })
 			}
-		} else {
-			console.error('astap plate solve failed with exit code', exitCode)
+
+			if (!header) throw new AstapError('failed', 'ASTAP wrote an empty WCS')
+
+			if (!header.NAXIS) header.NAXIS = 2
+			if (!header.NAXIS1 && header.CRPIX1) header.NAXIS1 = Math.trunc(((header.CRPIX1 as number) - 0.5) * 2)
+			if (!header.NAXIS2 && header.CRPIX2) header.NAXIS2 = Math.trunc(((header.CRPIX2 as number) - 0.5) * 2)
+
+			const solution = plateSolutionFrom(header)
+			if (!solution) throw new AstapError('failed', 'ASTAP wrote a WCS that is not an equatorial TAN solution')
+			return solution
 		}
+
+		if (report?.error) throw new AstapError('failed', `ASTAP failed with exit code ${exitCode}: ${report.error}`)
+		if (ASTAP_NO_SOLUTION_EXIT_CODES.has(exitCode) || (exitCode === 0 && report?.solved === false)) return undefined
+
+		throw new AstapError('failed', `ASTAP failed with exit code ${exitCode}`)
 	} finally {
+		clearTimeout(timer)
 		if (await ini.exists()) await ini.delete()
 		if (await wcs.exists()) await wcs.delete()
 	}
+}
 
-	return undefined
+// Outcome reported by the .ini of an ASTAP solve: whether it solved (PLTSOLVD) and its ERROR line, if any.
+interface AstapReport {
+	// PLTSOLVD as a boolean; undefined when the keyword is absent.
+	readonly solved?: boolean
+	// Trimmed ERROR value; undefined when absent or empty.
+	readonly error?: string
+}
+
+// Parses the KEY=VALUE lines of an ASTAP .ini into its solve outcome. Unknown lines are ignored.
+function astapReport(text: string): AstapReport {
+	let solved: boolean | undefined
+	let error: string | undefined
+
+	for (const line of text.split(/\r?\n/)) {
+		const separator = line.indexOf('=')
+		if (separator <= 0) continue
+
+		const key = line.slice(0, separator).trim().toUpperCase()
+		const value = line.slice(separator + 1).trim()
+
+		if (key === 'PLTSOLVD') solved = value.toUpperCase() === 'T'
+		else if (key === 'ERROR' && value) error = value
+	}
+
+	return { solved, error }
 }

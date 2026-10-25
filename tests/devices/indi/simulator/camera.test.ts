@@ -404,6 +404,56 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		}
 	})
 
+	test('starts with the catalog source and telescope optics given in its options', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.catalog.initial.simulator', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+
+		cameraManager.addHandler(frameReceiver)
+
+		let queries = 0
+		const catalogProvider: CatalogSource = (rightAscension, declination) => {
+			queries++
+			return [{ snr: 10, hfd: 4, flux: 30, rightAscension, declination }]
+		}
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { SKY: catalogProvider }, catalogSource: 'SKY', focalLength: 50, aperture: 25 })
+		using unknownSimulator = new CameraSimulator('Unknown Camera Simulator', client, { catalogSources: { SKY: catalogProvider }, catalogSource: 'MISSING' })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		expect(cameraSimulator.catalogSourceType).toBe('SKY')
+		expect(cameraSimulator.telescopeFocalLength).toBe(50)
+		expect(cameraSimulator.telescopeAperture).toBe(25)
+		expect(unknownSimulator.catalogSourceType).toBe('RANDOM')
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		expect(cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.SKY.value).toBe(true)
+		expect(cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.RANDOM.value).toBe(false)
+		expect(cameraManager.properties.get(camera)?.TELESCOPE_INFO?.elements.FOCAL_LENGTH.value).toBe(50)
+
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		try {
+			cameraSimulator.startExposure(0.05)
+			await waitUntil(() => frameReceiver.length > 0, 10000, 50)
+			expect(queries).toBe(1)
+		} finally {
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+		}
+	})
+
 	test('displaces the synthetic scene by the configured pointing error', async () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()

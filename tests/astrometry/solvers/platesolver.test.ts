@@ -258,6 +258,20 @@ describe('plate solution contract', () => {
 		expect(plateSolutionFrom({ ...base, NAXIS1: Number.POSITIVE_INFINITY, NAXIS2 })).toBeUndefined()
 	})
 
+	test('a custom unprojector receives the central FITS pixel and controls the center', () => {
+		let pixel: readonly [number, number] | undefined
+		const solution = plateSolutionFrom(OFF_CENTER_TAN, (x, y) => {
+			pixel = [x, y]
+			return [deg(42), deg(-17)]
+		})!
+		expect(pixel).toEqual([500.5, 400.5])
+		expect(solution.rightAscension).toBe(deg(42))
+		expect(solution.declination).toBe(deg(-17))
+		expect(solution.scale).toBe(plateSolutionFrom(OFF_CENTER_TAN)!.scale)
+		expect(plateSolutionFrom(OFF_CENTER_TAN, () => undefined)).toBeUndefined()
+		expect(plateSolutionFrom(OFF_CENTER_TAN, () => [Number.NaN, 0])).toBeUndefined()
+	})
+
 	test('only a declared equatorial TAN or TAN-SIP pair is a solution', () => {
 		const { CTYPE1, CTYPE2, ...linear } = plateHeaderFromCd(0.01, 0, 0, 0.01)
 

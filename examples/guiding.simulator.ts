@@ -11,13 +11,30 @@ import { CameraSimulator } from '../src/devices/indi/simulator/camera'
 import { ClientSimulator } from '../src/devices/indi/simulator/client'
 import { MountSimulator } from '../src/devices/indi/simulator/mount'
 import type { CatalogSource } from '../src/devices/indi/simulator/types'
-import { type GuideFrameImage, GuiderClient, type GuiderEvents } from '../src/observation/guiding/client'
+import type { BlobEncoding } from '../src/devices/indi/types'
+import { readImageFromBuffer, readImageFromSource } from '../src/imaging/model/image'
+import type { Image } from '../src/imaging/model/types'
+import { detectStars } from '../src/imaging/stars/detector'
+import { base64Source, bufferSource } from '../src/io/io'
+import { type GuideFrameImage, GuiderClient } from '../src/observation/guiding/client'
+import type { GuidingEvent } from '../src/observation/guiding/events'
 import type { GuideTracker } from '../src/observation/guiding/tracker'
 import { nonSiderealTrackingOf } from '../src/observation/guiding/tracker.nonsidereal'
+import { enrichGuideStars } from '../src/observation/guiding/tracker.star'
 
 // Shared real-time INDI simulator harness for the interactive guiding examples. The simulators own
 // camera exposures, mount mechanics, pulse latency, and cleanup; this module only wires their managers
 // to GuiderClient and exposes deterministic fault controls through a line-oriented REPL.
+
+// Decodes a simulator camera BLOB, which is FITS either base64-encoded or as raw bytes.
+export async function decodeGuideImage(data: Buffer, encoding: BlobEncoding) {
+	return encoding === 'base64' ? await readImageFromSource(base64Source(bufferSource(data))) : await readImageFromBuffer(data)
+}
+
+// Detects stars in a guide image and samples their peaks for the StarTracker saturation filter.
+export function detectGuideStars(image: Image) {
+	return enrichGuideStars(detectStars(image), image)
+}
 
 // Fault switches controlled by the REPL and observed by each example's catalog provider.
 export interface GuidingSimulationFailures {
@@ -106,6 +123,7 @@ export class GuidingSimulation {
 		this.client = new GuiderClient(this.cameraManager, this.guideOutputManager, this.tracker, {
 			calibrator: { clearingMoveEnabled: false, settleFramesAfterMove: 1, raPulse: 1000, decPulse: 1000, minMovePerStepPx: 0.05, minNetRaTravelPx: 0.5, minNetDecTravelPx: 0.5, maxRaNoMotionSteps: 10, maxDecNoMotionSteps: 10 },
 			timeFactory: options.timeFactory,
+			decodeImage: decodeGuideImage,
 		})
 
 		this.client.addHandler({
@@ -285,11 +303,11 @@ export class GuidingSimulation {
 		this.#print('faults cleared; recovery requested')
 	}
 
-	#handleEvent(event: GuiderEvents) {
-		if (event.Event === 'CalibrationComplete') this.#options.calibrationComplete?.(this)
-		if (event.Event === 'CalibrationDataFlipped') this.#options.calibrationFlipped?.(this)
+	#handleEvent(event: GuidingEvent) {
+		if (event.type === 'calibrationCompleted') this.#options.calibrationComplete?.(this)
+		if (event.type === 'calibrationFlipped') this.#options.calibrationFlipped?.(this)
 		const detail = JSON.stringify(event)
-		this.#print(`[event] ${event.Event}${detail}`)
+		this.#print(`[event] ${event.type}${detail}`)
 	}
 
 	#handleFrame(frame: GuideFrameImage) {

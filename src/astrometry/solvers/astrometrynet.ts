@@ -2,11 +2,12 @@ import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { RequiredOnly } from '../../core/types'
+import { errorMessage } from '../../core/util'
 import { fileHandleSource } from '../../io/file'
-import { readFits } from '../../io/formats/fits/fits'
+import { type FitsHeader, readFits } from '../../io/formats/fits/fits'
 import { bufferSource } from '../../io/io'
 import { type Angle, normalizeAngle, toArcmin, toArcsec, toDeg } from '../../math/units/angle'
-import { type PlateSolution, type PlateSolveOptions, plateSolutionFrom } from './platesolver'
+import { type PlateSolution, PlateSolveError, type PlateSolveOptions, plateSolutionFrom, streamTail } from './platesolver'
 
 // astrometry.net plate-solving integration, both the nova.astrometry.net web API (login → upload →
 // poll submission/job → download WCS) and the local `solve-field` command-line tool. Both paths end by
@@ -107,6 +108,9 @@ export interface NovaAstrometryNetPlateSolveOptions extends PlateSolveOptions, R
 export interface LocalAstrometryNetPlateSolveOptions extends PlateSolveOptions {
 	// Path to the solve-field executable.
 	executable?: string
+	// Path of the astrometry-engine backend configuration (`--config`), which names the index directories; the
+	// program's default configuration when omitted or empty.
+	config?: string
 	// Field-of-view hint (radians); 0 lets the solver guess the scale.
 	fov?: Angle
 }
@@ -115,6 +119,13 @@ export interface LocalAstrometryNetPlateSolveOptions extends PlateSolveOptions {
 export const NOVA_ASTROMETRY_NET_URL = 'https://nova.astrometry.net'
 // Placeholder anonymous API key used when no key is provided.
 export const NOVA_ASTROMETRY_NET_ANONYMOUS_API_KEY = 'XXXXXXXX'
+
+// Default limit of a local solve-field run, in milliseconds (5 minutes), sent as its CPU limit.
+const DEFAULT_LOCAL_TIMEOUT = 300000
+
+// Wall-clock grace after the CPU limit before a solve-field run is killed as timed out, in milliseconds. solve-field
+// gives up by itself at its CPU limit (a search without a solution), so the kill only catches a hung program.
+const LOCAL_KILL_GRACE = 10000
 
 // Logs in to the nova API and returns a session, using the anonymous key when none is configured.
 export function login(options?: Omit<RequestOptions, 'session'>, signal?: AbortSignal) {
@@ -177,8 +188,9 @@ export function wcsFile(jobId: number, options: RequiredOnly<Omit<RequestOptions
 // runs on the service. Requires network access and an API session. center RA, Dec, and radius are
 // uploaded independently when each is set; a radius does not require a center. Logs in unless a
 // session is supplied, polls the submission/job, then parses the downloaded WCS into a PlateSolution.
-// Returns undefined on failure, timeout, or job failure. A caller AbortSignal still throws; only the
-// solve timeout is mapped to undefined.
+// Returns undefined on an upload or HTTP failure, timeout, or job failure. A refused login (a status other
+// than 'success' or no session token) rejects with PlateSolveError `unavailable`, and a caller AbortSignal
+// still throws; only the solve timeout is mapped to undefined.
 export async function novaAstrometryNetPlateSolve(input: string | Blob, options?: Omit<Upload<never>, 'input'>, signal?: AbortSignal): Promise<PlateSolution | undefined> {
 	const timeout = AbortSignal.timeout(options?.timeout || 300000)
 	// Bound every HTTP call and the inter-poll wait by the solve timeout, plus the caller's signal.
@@ -186,6 +198,10 @@ export async function novaAstrometryNetPlateSolve(input: string | Blob, options?
 
 	try {
 		const session = options?.session || (await login(options, wait))
+
+		if (typeof session !== 'string' && !(session?.status === 'success' && session.session)) {
+			throw new PlateSolveError('unavailable', `the nova login failed${session?.errormessage ? `: ${session.errormessage}` : ''}`)
+		}
 
 		if (session) {
 			const submission = await upload({ ...options, input, session }, wait)
@@ -235,18 +251,26 @@ export async function novaAstrometryNetPlateSolve(input: string | Blob, options?
 // https://astrometry.net/doc/readme.html
 
 // Plate-solves a file with the local `solve-field` CLI. Async. Does not accept a Blob. Star detection
-// is inside solve-field. Requires `executable` and the solver's local indexes. Writes a temp directory
-// that is removed on success, failure, timeout, or abort. Returns undefined when no WCS is produced.
-// An aborted signal rejects from the spawned process. --ra/--dec/--radius are emitted only when the
-// caller supplies all three; a radius alone is not a window. `fov` of 0 leaves scale to the solver.
+// is inside solve-field. Requires `executable` and the solver's local indexes, found through its backend
+// configuration (`config`, else the program's default). Writes a temp directory that is removed on success,
+// failure, timeout, or abort. Resolves undefined only when solve-field exited normally without a WCS (no
+// solution within the indexes and the CPU limit). Rejects with PlateSolveError: `unavailable` when the
+// executable cannot be started, `timeout` and `aborted` when the process was killed for either reason, and
+// `failed` for a non-zero exit code (the message carries it and the tail of its error output) or a WCS that
+// plateSolutionFrom refuses. --ra/--dec/--radius are emitted only when the caller supplies all three; a radius
+// alone is not a window. `fov` of 0 leaves scale to the solver.
 export async function localAstrometryNetPlateSolve(input: string, options: RequiredOnly<LocalAstrometryNetPlateSolveOptions, 'executable'>, signal?: AbortSignal) {
-	const timeout = options.timeout ?? 0
+	if (signal?.aborted) throw new PlateSolveError('aborted', 'the plate solve was aborted')
+
+	const timeout = options.timeout || DEFAULT_LOCAL_TIMEOUT
 	const downsample = Math.max(1, options.downsample ?? 2)
 	const fov = Math.max(0, Math.min(toDeg(options?.fov ?? 0), 360))
 	const outDir = join(tmpdir(), Bun.randomUUIDv7())
 	const wcs = join(outDir, 'nebulosa.wcs')
 
-	const commands = [options.executable, '--out', 'nebulosa', '--overwrite', '--dir', outDir, '--cpulimit', timeout >= 1000 ? Math.trunc(timeout / 1000).toFixed(0) : '300', '--crpix-center', '--downsample', downsample.toFixed(0), '--no-verify', '--no-plots', '--skip-solved', '--no-remove-lines', '--uniformize', '0']
+	const commands = [options.executable, '--out', 'nebulosa', '--overwrite', '--dir', outDir, '--cpulimit', Math.max(1, Math.trunc(timeout / 1000)).toFixed(0), '--crpix-center', '--downsample', downsample.toFixed(0), '--no-verify', '--no-plots', '--skip-solved', '--no-remove-lines', '--uniformize', '0']
+
+	if (options.config) commands.push('--config', options.config)
 
 	if (fov > 0) {
 		commands.push('--scale-units', 'degwidth')
@@ -268,25 +292,47 @@ export async function localAstrometryNetPlateSolve(input: string, options: Requi
 
 	commands.push(input)
 
+	let process: Bun.Subprocess<'ignore', 'ignore', 'pipe'>
+
 	try {
-		const process = Bun.spawn(commands, { signal, timeout: options?.timeout || 300000 })
-		const exitCode = await process.exited
-
-		if (exitCode === 0 && (await Bun.file(wcs).exists())) {
-			const handle = await fs.open(wcs)
-			await using source = fileHandleSource(handle)
-			const fits = await readFits(source)
-
-			if (fits?.hdus.length) {
-				const header = fits.hdus[0].header
-				return plateSolutionFrom(header)
-			}
-		}
-	} finally {
+		process = Bun.spawn(commands, { signal, stdin: 'ignore', stdout: 'ignore', stderr: 'pipe' })
+	} catch (error) {
 		await fs.rm(outDir, { recursive: true, force: true })
+		throw new PlateSolveError('unavailable', `unable to start solve-field: ${errorMessage(error)}`, { cause: error })
 	}
 
-	return undefined
+	let timedOut = false
+
+	const timer = setTimeout(() => {
+		timedOut = true
+		process.kill()
+	}, timeout + LOCAL_KILL_GRACE)
+
+	try {
+		const [exitCode, diagnostic] = await Promise.all([process.exited, streamTail(process.stderr)])
+
+		if (timedOut) throw new PlateSolveError('timeout', `solve-field did not finish within ${timeout} ms`)
+		if (signal?.aborted) throw new PlateSolveError('aborted', 'the plate solve was aborted')
+		if (exitCode !== 0) throw new PlateSolveError('failed', `solve-field failed with exit code ${exitCode}${diagnostic ? `: ${diagnostic}` : ''}`)
+		if (!(await Bun.file(wcs).exists())) return undefined
+
+		let header: FitsHeader | undefined
+
+		try {
+			const handle = await fs.open(wcs)
+			await using source = fileHandleSource(handle)
+			header = (await readFits(source))?.hdus[0]?.header
+		} catch (error) {
+			throw new PlateSolveError('failed', `unable to read the WCS of solve-field: ${errorMessage(error)}`, { cause: error })
+		}
+
+		const solution = header && plateSolutionFrom(header)
+		if (!solution) throw new PlateSolveError('failed', 'solve-field wrote a WCS that is not an equatorial TAN solution')
+		return solution
+	} finally {
+		clearTimeout(timer)
+		await fs.rm(outDir, { recursive: true, force: true })
+	}
 }
 
 // Converts a scale hint from radians into the numeric value nova expects for `units`.

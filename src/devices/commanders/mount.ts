@@ -332,16 +332,32 @@ export class MountCommander implements DeviceHandler<Mount>, Disposable {
 		}).result
 	}
 
-	// Selects the speed preset used by manual motion.
-	async setSlewRate(scope: OperationScope, mount: Mount, rate: NameAndLabel | string): Promise<OperationResult<void>> {
-		return await this.#mutate(
-			scope,
-			'mountSlewRate',
-			mount,
-			() => true,
-			'change the slew rate',
-			() => this.mountManager.slewRate(mount, rate),
-		)
+	// Selects the speed preset used by manual motion and resolves only after the mount reports it, so a
+	// timed manual motion never runs at a preset the driver ignored. A preset the mount does not announce
+	// is refused as `unexpectedState`, an Alert on the slew rate fails it as `alert`, and
+	// `options.timeout` bounds the wait.
+	async setSlewRate(scope: OperationScope, mount: Mount, rate: NameAndLabel | string, options: MountCommandOptions = {}): Promise<OperationResult<void>> {
+		const name = typeof rate === 'string' ? rate : rate.name
+
+		return await scope.start<void>('mountSlewRate', [{ key: resourceKey(mount), device: mount }], async (context) => {
+			if (!mount.connected) return failedOperationResult('disconnected')
+			if (!mount.slewRates.some((e) => e.name === name)) return unsupported(mount, `use the slew rate ${name}`)
+
+			const observed = await waitForDeviceState<MountUpdate>({
+				signal: context.signal,
+				timeout: options.timeout ?? DEFAULT_SWITCH_TIMEOUT,
+				subscribe: (listener) => this.#subscribe(mount, listener),
+				current: () => ({ mount }),
+				evaluate: (update) => {
+					if (!mount.connected) return 'disconnected'
+					if (update.state === 'Alert' && update.property === 'slewRate') return 'alert'
+					return mount.slewRate === name ? 'success' : 'pending'
+				},
+				command: () => this.mountManager.slewRate(mount, name),
+			})
+
+			return observed.ok ? successfulOperationResult(undefined) : observed
+		}).result
 	}
 
 	// Writes the observing site the mount computes its pointing from.

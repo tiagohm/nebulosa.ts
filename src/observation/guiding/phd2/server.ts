@@ -3,12 +3,13 @@ import type { Camera, GuideOutput } from '../../../devices/indi/device'
 import type { ImageRawType } from '../../../imaging/model/types'
 import { DEFAULT_MAX_PENDING_WRITE, SocketWriteQueue } from '../../../io/socket'
 import type { GuiderClient, GuiderClientConnectOptions, GuiderClientHandler } from '../client'
+import { phd2EventsOf } from './events'
 // oxfmt-ignore
 import { DEFAULT_PHD2_PORT, PHD2_MSG_VERSION, PHD2_OVERLAP_SUPPORT, PHD2_SUBVER, PHD2_VERSION, type PHD2DeclinationGuideMode, type PHD2Equipment, type PHD2Error, type PHD2EventMap, type PHD2GuideDirection, type PHD2LockShiftParams, type PHD2RateUnit, type PHD2Settle, type PHD2ShiftAxis, type PHD2StarImage } from './types'
 
 // PHD2-compatible TCP server over a local GuiderClient. It speaks PHD2's event-monitoring / JSON-RPC 2.0 protocol
 // (newline-delimited JSON, `\r\n` on output): every request is executed on the GuiderClient and answered on the
-// same socket, and every PHD2 event the GuiderClient emits is broadcast to every connected socket, so any PHD2
+// same socket, and the PHD2 translation of every native event the GuiderClient emits (`phd2EventsOf`) is broadcast to every connected socket, so any PHD2
 // client (PHD2Client, PHD2GuidingSession, imaging applications) can drive the local guider. The server does not
 // own the GuiderClient: its tracker, devices and lifecycle stay with the caller. Commands are synchronous on the
 // GuiderClient, so a reply is written after the events its command emitted, as PHD2 does. Units follow PHD2:
@@ -128,13 +129,12 @@ export class PHD2Server implements Disposable {
 	#server?: TCPSocketListener
 	#sequence = 0
 
-	// Broadcasts the PHD2 events of the guider. Version is only sent by the greeting; the Guiding Assistant events
-	// are not part of the PHD2 protocol.
+	// Broadcasts the PHD2 translation of every native guider event. Version is only sent by the greeting.
 	readonly #guiderHandler: GuiderClientHandler = {
 		event: (_, event) => {
-			const name: string = event.Event
-			if (name === 'Version' || name.startsWith('GuidingAssistant')) return
-			this.#broadcast(event)
+			for (const translated of phd2EventsOf(event)) {
+				if (translated.Event !== 'Version') this.#broadcast(translated)
+			}
 		},
 	}
 
