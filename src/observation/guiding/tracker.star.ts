@@ -53,9 +53,10 @@ export interface StarDetectionFrame {
 
 // Quality and geometry thresholds used to accept or reject guide stars.
 export interface StarFilterConfig {
-	// Minimum signal-to-noise ratio in the detector's sample scale.
+	// Minimum signal-to-noise ratio, as the detector measures it (background-limited, dimensionless).
 	readonly minStarSnr: number
-	// Minimum integrated flux above background in the detector's sample scale.
+	// Minimum integrated flux above background in the detector's sample scale; it depends on that scale, so 0 leaves
+	// faint stars to minStarSnr.
 	readonly minFlux: number
 	// Maximum half-flux diameter, in pixels.
 	readonly maxHfd: number
@@ -147,10 +148,11 @@ export interface GuideStarSelection {
 	readonly qualityScore: number
 }
 
-// Default stellar filtering and selection thresholds preserved from the former guider.
+// Default stellar filtering and selection thresholds preserved from the former guider, except the flux: like PHD2, a
+// star is accepted by its SNR, never by an absolute mass, which on a normalized image rejected every real star.
 export const DEFAULT_STAR_FILTER_CONFIG: Readonly<StarFilterConfig> = {
 	minStarSnr: 2,
-	minFlux: 1,
+	minFlux: 0,
 	maxHfd: 10,
 	borderMarginPx: 10,
 	maxEllipticity: 0.5,

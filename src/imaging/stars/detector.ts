@@ -73,7 +73,8 @@ interface ApertureMeasurement {
 	readonly radius: number
 	// Integrated positive signal above the sky, in sample units.
 	readonly flux: number
-	// flux / sqrt(flux + pixels * noise^2), in the normalized sample scale.
+	// Background-limited signal-to-noise ratio, flux / (noise * sqrt(pixels)): dimensionless, so the same in any
+	// sample scale.
 	readonly snr: number
 	// Curve-of-growth half-flux diameter, in pixels; 0 when it cannot be found.
 	readonly hfd: number
@@ -330,10 +331,11 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 			// Validate each candidate against the original image so ranking uses measured photometry instead of only convolution response.
 			const photometry = measureStarAroundPeak(original, width, height, stride, x, y, minSNR, maximumRadius, workspace, grown)
 			if (photometry === undefined) continue
-			const { flux, snr, hfd, fwhm, eccentricity, elongation, centroidX, centroidY, majorVariance, minorVariance, theta } = photometry
+			const { flux, snr, hfd, fwhm, eccentricity, elongation, centroidX, centroidY, majorVariance, minorVariance, theta, noise, aperturePixels } = photometry
 
-			// Ranks detections by measured signal so real stars survive capacity limits better than noise artifacts.
-			const rank = flux * snr
+			// Ranks detections by measured signal so real stars survive capacity limits better than noise artifacts. The
+			// rank grows as flux^1.5 on a bright star, the scale the score-gap trimming is tuned for, and is not the SNR.
+			const rank = (flux * flux) / Math.sqrt(Math.max(flux + aperturePixels * noise * noise, Number.EPSILON))
 
 			stars.add(centroidX, centroidY, rank, flux, snr, hfd, fwhm, eccentricity, elongation, majorVariance, minorVariance, theta)
 		}
@@ -715,7 +717,9 @@ function measureAperture(raw: Image['raw'], width: number, height: number, strid
 
 	if (flux <= 0 || aperturePixels <= 0) return undefined
 
-	const snr = flux / Math.sqrt(Math.max(flux + aperturePixels * noise * noise, Number.EPSILON))
+	// The PHD2 background-limited SNR. The shot noise of the star needs the electrons per sample unit, which a
+	// normalized image does not carry; adding the flux to the variance mixed units and kept every SNR near sqrt(flux).
+	const snr = flux / Math.max(noise * Math.sqrt(aperturePixels), Number.EPSILON)
 	const hfd = halfFluxDiameter(bins, binCount, flux)
 	// Gaussian-equivalent FWHM from the second radial moment; this avoids fitting a noisy radial profile.
 	const fwhm = radialMomentSq > 0 ? 2 * Math.sqrt((Math.LN2 * radialMomentSq) / flux) : 0

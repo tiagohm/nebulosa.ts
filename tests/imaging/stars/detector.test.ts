@@ -6,7 +6,7 @@ import { type PlotStarOptions, plotStar } from '../../../src/imaging/stars/gener
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from '../../../src/imaging/synthetic/generator'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 import { mulberry32 } from '../../../src/math/numerical/random'
-import { medianOf } from '../../../src/math/numerical/statistics'
+import { medianBySelectionOf, medianOf, STANDARD_DEVIATION_SCALE } from '../../../src/math/numerical/statistics'
 import { downloadPerTag } from '../../download'
 import { readImage } from '../util'
 
@@ -151,7 +151,8 @@ test('measure star photometry from image aperture', () => {
 	const [flux, snr, hfd, fwhm] = measureStarPhotometry(image, x, y, 1)
 
 	expect(flux).toBeCloseTo(1.3, 6)
-	expect(snr).toBeCloseTo(Math.sqrt(1.3), 6)
+	// A noise-free sky has no finite SNR; the guard keeps it finite.
+	expect(snr * Number.EPSILON).toBeCloseTo(1.3, 6)
 	// The center spreads 0.5 over radii [0, 0.5] and the four neighbors 0.8 over [0.5, 1.5], so half of 1.3 is enclosed at 0.5 + 0.15 / 0.8.
 	expect(hfd).toBeCloseTo(1.375, 6)
 	expect(fwhm).toBeCloseTo(1.3062191429253263, 6)
@@ -177,7 +178,47 @@ test('measure star photometry ignores a bright neighbor in the background annulu
 	const [flux, snr] = measureStarPhotometry(image, x, y, 4)
 
 	expect(flux).toBeCloseTo(1.3, 6)
-	expect(snr).toBeCloseTo(Math.sqrt(1.3), 6)
+	// The neighbor is rejected by the median, so the sky stays noise-free.
+	expect(snr * Number.EPSILON).toBeCloseTo(1.3, 6)
+})
+
+test('measure star photometry SNR is background-limited and independent of the sample scale', () => {
+	const width = 32
+	const height = 32
+	const raw = new Float32Array(width * height)
+	const random = mulberry32(7)
+	const x = 16
+	const y = 16
+
+	// Sky noise only outside the aperture of radius 1, so the flux of the star stays exact.
+	for (let py = 0; py < height; py++) {
+		for (let px = 0; px < width; px++) {
+			const d2 = (px - x) ** 2 + (py - y) ** 2
+			raw[py * width + px] = d2 > 1 ? 0.1 + 0.01 * (random() - 0.5) : 0.1
+		}
+	}
+
+	raw[y * width + x] = 0.6
+	raw[y * width + x - 1] = 0.3
+	raw[y * width + x + 1] = 0.3
+	raw[(y - 1) * width + x] = 0.3
+	raw[(y + 1) * width + x] = 0.3
+
+	// The sky annulus of a radius-1 aperture spans radii [2, 4]; its noise is the scaled MAD around the median.
+	const sky: number[] = []
+	for (let py = 0; py < height; py++) for (let px = 0; px < width; px++) if ((px - x) ** 2 + (py - y) ** 2 >= 4 && (px - x) ** 2 + (py - y) ** 2 <= 16) sky.push(raw[py * width + px])
+	const background = medianBySelectionOf(Float64Array.from(sky))
+	const noise = STANDARD_DEVIATION_SCALE * medianBySelectionOf(Float64Array.from(sky, (value) => Math.abs(value - background)))
+	const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
+	const [flux, snr] = measureStarPhotometry(image, x, y, 1)
+
+	expect(snr).toBeCloseTo(flux / (noise * Math.sqrt(5)), 3)
+	expect(snr).toBeGreaterThan(50)
+
+	const scaled: Image = { ...image, raw: raw.map((value) => value * 1000) }
+	const [scaledFlux, scaledSnr] = measureStarPhotometry(scaled, x, y, 1)
+	expect(scaledFlux / flux).toBeCloseTo(1000, 2)
+	expect(scaledSnr).toBeCloseTo(snr, 3)
 })
 
 test('detect stars measures round and elongated shapes from central moments', () => {
