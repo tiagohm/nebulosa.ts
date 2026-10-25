@@ -26,7 +26,7 @@ import { isXisf, readXisf } from '../../../src/io/formats/xisf/xisf'
 import { bufferSource } from '../../../src/io/io'
 import { deg, hour } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
-import { autoSubFolderName, type CameraCaptureResult, CameraCapturer, type CameraCapturerOptions, type CameraExposureAttempt, type CameraFramePathRequest, decodeCameraBlobFromBase64, writeFrameExclusively } from '../../../src/observation/capture/capture'
+import { autoSubFolderName, type CameraCaptureResult, CameraCapturer, type CameraCapturerOptions, type CameraExposureAttempt, type CameraFramePathRequest, configureCameraExposure, decodeCameraBlobFromBase64, writeFrameExclusively } from '../../../src/observation/capture/capture'
 import type { CameraCaptureListener } from '../../../src/observation/capture/reporter'
 import { type CameraCaptureEvent, type CameraCaptureStart, DEFAULT_CAMERA_CAPTURE_START } from '../../../src/observation/capture/types'
 import { waitUntil } from '../../util'
@@ -1753,6 +1753,25 @@ describe('exposure dispatch', () => {
 			])
 		} finally {
 			for (const spy of spies) spy.mockRestore()
+		}
+	})
+
+	test('configureCameraExposure applies the sensor configuration without starting an exposure', async () => {
+		const camera = await connected()
+		const startExposure = spyOn(cameraManager, 'startExposure')
+
+		try {
+			configureCameraExposure(cameraManager, camera, request({ frameType: 'FLAT', subframe: true, x: 2, y: 4, width: 40, height: 30, binX: 2, binY: 2, gain: 9, offset: 4 }))
+
+			await waitUntil(() => camera.gain.value === 9 && camera.offset.value === 4 && camera.bin.x.value === 2 && camera.frame.width.value === 40)
+			expect(camera.frameType).toBe('FLAT')
+			expect(camera.frame.x.value).toBe(2)
+			expect(camera.frame.y.value).toBe(4)
+			expect(camera.frame.height.value).toBe(30)
+			expect(camera.bin.y.value).toBe(2)
+			expect(startExposure).not.toHaveBeenCalled()
+		} finally {
+			startExposure.mockRestore()
 		}
 	})
 

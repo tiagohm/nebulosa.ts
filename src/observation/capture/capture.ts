@@ -785,18 +785,7 @@ class CameraCaptureSession {
 
 	// Sends every camera configuration command of the request, but not the exposure itself.
 	#configureExposure() {
-		const request = this.#request
-		const cameraManager = this.sessionContext.cameraManager
-		cameraManager.enableBlob(this.camera)
-		if (request.width > 0 && request.height > 0 && request.subframe) cameraManager.frame(this.camera, request.x, request.y, request.width, request.height)
-		else if (this.camera.frame.width.max > 0 && this.camera.frame.height.max > 0) cameraManager.frame(this.camera, 0, 0, this.camera.frame.width.max, this.camera.frame.height.max)
-		cameraManager.frameType(this.camera, request.frameType)
-		if (request.frameFormat) cameraManager.frameFormat(this.camera, request.frameFormat)
-		cameraManager.bin(this.camera, request.binX, request.binY)
-		cameraManager.gain(this.camera, request.gain)
-		cameraManager.offset(this.camera, request.offset)
-		cameraManager.transferFormat(this.camera, request.transferFormat)
-		cameraManager.compression(this.camera, request.compressed)
+		configureCameraExposure(this.sessionContext.cameraManager, this.camera, this.#request)
 	}
 
 	// Awaits the caller's gate of the next frame, racing it against cancellation, device failure, and stop, so a
@@ -1041,6 +1030,27 @@ function requestFailure(request: CameraCaptureStart) {
 	if (request.outputPath !== undefined && !isAbsolute(request.outputPath)) return `the output path "${request.outputPath}" is not an absolute path`
 	if (request.outputName !== undefined && !isPathSegment(request.outputName)) return `the output name "${request.outputName}" is not a valid file name`
 	return undefined
+}
+
+// Sensor configuration of one exposure: the subframe, frame type and format, binning, gain, offset, and
+// transfer settings of a capture request.
+export type CameraExposureConfiguration = Pick<CameraCaptureStart, 'subframe' | 'x' | 'y' | 'width' | 'height' | 'frameType' | 'frameFormat' | 'binX' | 'binY' | 'gain' | 'offset' | 'transferFormat' | 'compressed'>
+
+// Sends every configuration command of an exposure to `camera`, but not the exposure itself: enables its
+// BLOBs, selects the subframe in unbinned sensor pixels (or the whole sensor when it is not a valid subframe
+// and the sensor size is known), and sets the frame type, the frame format when one is given, binning, gain,
+// offset, transfer format, and compression. The caller must own the camera, since it commands the driver.
+export function configureCameraExposure(cameraManager: CameraManager, camera: Camera, configuration: CameraExposureConfiguration) {
+	cameraManager.enableBlob(camera)
+	if (configuration.width > 0 && configuration.height > 0 && configuration.subframe) cameraManager.frame(camera, configuration.x, configuration.y, configuration.width, configuration.height)
+	else if (camera.frame.width.max > 0 && camera.frame.height.max > 0) cameraManager.frame(camera, 0, 0, camera.frame.width.max, camera.frame.height.max)
+	cameraManager.frameType(camera, configuration.frameType)
+	if (configuration.frameFormat) cameraManager.frameFormat(camera, configuration.frameFormat)
+	cameraManager.bin(camera, configuration.binX, configuration.binY)
+	cameraManager.gain(camera, configuration.gain)
+	cameraManager.offset(camera, configuration.offset)
+	cameraManager.transferFormat(camera, configuration.transferFormat)
+	cameraManager.compression(camera, configuration.compressed)
 }
 
 // Offset of the local time zone at the Unix time `time`, in minutes east of UTC. It is read per instant
