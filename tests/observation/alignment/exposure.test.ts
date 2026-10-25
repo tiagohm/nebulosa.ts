@@ -6,8 +6,8 @@ import { matMulVec, matTransposeMulVec } from '../../../src/math/linear-algebra/
 import { type Vec3, vecCross, vecNegate, vecNormalize, vecRotateByRodrigues, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { arcmin, arcsec, deg, toArcsec } from '../../../src/math/units/angle'
 // oxfmt-ignore
-import { DEFAULT_POLAR_ALIGNMENT_MAX_TRAIL, polarAlignmentExposureLimit, polarAlignmentExposureLimitForResult, polarAlignmentFieldRadius, polarAlignmentGuidedFieldRotationRate, polarAlignmentImageScale, polarAlignmentResidualAngularVelocity, polarAlignmentUnguidedDriftRate, polarAlignmentWorstCaseDriftRate } from '../../../src/observation/alignment/polaralignment.exposure'
-import { applyMountAdjustment, celestialPoleVector } from '../../../src/observation/alignment/polaralignment.util'
+import { DEFAULT_POLAR_ALIGNMENT_MAX_TRAIL, polarAlignmentExposureLimit, polarAlignmentExposureLimitForResult, polarAlignmentFieldRadius, polarAlignmentGuidedFieldRotationRate, polarAlignmentImageScale, polarAlignmentResidualAngularVelocity, polarAlignmentUnguidedDriftRate, polarAlignmentWorstCaseDriftRate } from '../../../src/observation/alignment/exposure'
+import { applyMountAdjustment, celestialPoleVector } from '../../../src/observation/alignment/polaralignment'
 
 const POLE = vecZ()
 const IMAGE_SCALE = arcsec(1)

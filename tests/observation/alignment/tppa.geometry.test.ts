@@ -6,10 +6,10 @@ import { DAYSEC, PI } from '../../../src/core/constants'
 import { matMulVec, matTransposeMulVec } from '../../../src/math/linear-algebra/mat3'
 import { type Vec3, vecAngle, vecCross, vecNormalize, vecRotateByRodrigues } from '../../../src/math/linear-algebra/vec3'
 import { arcsec, deg, toArcsec } from '../../../src/math/units/angle'
-import { type ThreePointPolarAlignmentInput, threePointPolarAlignmentError } from '../../../src/observation/alignment/polaralignment'
-import { classifyPolarAlignmentCandidate, polarAlignmentDisplacement, polarAlignmentGeometryQuality } from '../../../src/observation/alignment/polaralignment.geometry'
+import { type ThreePointPolarAlignmentInput, threePointPolarAlignmentError } from '../../../src/observation/alignment/tppa'
+import { classifyPolarAlignmentCandidate, polarAlignmentDisplacement, polarAlignmentGeometryQuality } from '../../../src/observation/alignment/tppa.geometry'
 
-// Exact rigid-mount geometry (see polaralignment.tracking.test.ts): a terrestrial mechanical axis
+// Exact rigid-mount geometry (see tppa.tracking.test.ts): a terrestrial mechanical axis
 // with the given polar error and boresights at `declination` about it.
 function rigidMount(latitude: number, declination: number, azimuthError: number = arcsec(300), altitudeError: number = arcsec(300)) {
 	const location = geodeticLocation(deg(-45), latitude)

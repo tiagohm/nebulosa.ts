@@ -10,8 +10,7 @@ import { matMulVec, matTransposeMulVec } from '../../../src/math/linear-algebra/
 import { type Vec3, vecCross, vecDot, vecNormalizeMut, vecRotateByRodrigues, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { type Angle, arcmin, arcsec, deg, toDeg } from '../../../src/math/units/angle'
 import { decomposePolarError, IPolarPolarAlignment, projectGuidePoint, solveImageFixedPoint, solveSimilarityFixedPoint } from '../../../src/observation/alignment/ipolar'
-import { mountAdjustmentAxes } from '../../../src/observation/alignment/polaralignment'
-import { celestialPoleVector } from '../../../src/observation/alignment/polaralignment.util'
+import { celestialPoleVector, mountAdjustmentAxes } from '../../../src/observation/alignment/polaralignment'
 
 test('solve similarity fixed point', () => {
 	const transform = { a: Math.cos(deg(5)), b: Math.sin(deg(5)), tx: 12, ty: -8, mirrored: false } as const

@@ -1,12 +1,12 @@
 import { SIDEREAL_DRIFT_RATE } from '../../core/constants'
 import { estimateLeastSquaresConditioning, linearLeastSquares, robustLinearLeastSquares } from '../../math/numerical/least.squares'
 import type { Angle } from '../../math/units/angle'
-import { darvGeometryFactors, type DarvExposureMode } from './polaralignment.darv'
+import { darvGeometryFactors, type DarvExposureMode } from './darv'
 
 // Inverse, small-angle DARV geometry. Stellar north drift is radians per SI second; polar errors
 // are radians in the three-point convention, relative to the geometric pole. Inputs are unchanged.
 // A single component assumes the other is negligible; a joint fit requires independent hour angles.
-// Use convertPolarAlignmentAltitudeError from polaralignment.util for a refracted display;
+// Use convertPolarAlignmentAltitudeError from polaralignment for a refracted display;
 // it converts both mount-pole and target altitudes without changing these geometric solutions.
 
 // Minimum dimensionless sensitivity accepted for a single component (at most 100-fold amplification).

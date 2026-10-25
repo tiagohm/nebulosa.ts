@@ -8,9 +8,9 @@ import { PI, PIOVERTWO } from '../../../src/core/constants'
 import type { FitsHeader } from '../../../src/io/formats/fits/fits'
 import { vecAngleUnit, vecX, vecY, vecZ, vecZero } from '../../../src/math/linear-algebra/vec3'
 import { arcmin, arcsec, deg } from '../../../src/math/units/angle'
-import { mountAdjustmentAxes, type ThreePointPolarAlignmentResult } from '../../../src/observation/alignment/polaralignment'
-import { clipPolarAlignmentOverlaySegment, computeThreePointPolarAlignmentOverlay, polarAlignmentReferenceFromPixel, projectPolarAlignmentOverlayPoint } from '../../../src/observation/alignment/polaralignment.overlay'
-import { applyInverseMountAdjustment, applyMountAdjustment, celestialPoleVector, decomposePolarErrorGeodesic } from '../../../src/observation/alignment/polaralignment.util'
+import { applyInverseMountAdjustment, applyMountAdjustment, celestialPoleVector, decomposePolarErrorGeodesic, mountAdjustmentAxes } from '../../../src/observation/alignment/polaralignment'
+import type { ThreePointPolarAlignmentResult } from '../../../src/observation/alignment/tppa'
+import { clipPolarAlignmentOverlaySegment, computeThreePointPolarAlignmentOverlay, polarAlignmentReferenceFromPixel, projectPolarAlignmentOverlayPoint } from '../../../src/observation/alignment/tppa.overlay'
 
 // Base anisotropic and slightly sheared TAN WCS used by most overlay tests.
 const BASE_HEADER = {
@@ -52,47 +52,6 @@ function makeAlignment(latitude: number, azimuth: number = arcmin(6), altitude: 
 	const result: ThreePointPolarAlignmentResult = { time, azimuth: 0, altitude: 0, azimuthError: 0, altitudeError: 0, pole: currentPole, azimuthAdjustment: 0, altitudeAdjustment: 0 }
 	return { location, time, targetPole, axes, currentPole, result, azimuth, altitude }
 }
-
-describe('mount adjustment geometry', () => {
-	test('direct and inverse transformations recover arbitrary vectors', () => {
-		const alignment = makeAlignment(deg(35), deg(12), deg(-8))
-		const vectors = [alignment.targetPole, [0.2, -0.7, 0.68] as const, [-0.8, 0.1, 0.55] as const]
-
-		for (const vector of vectors) {
-			const moved = applyMountAdjustment(vector, alignment.axes.upAxis, alignment.axes.eastAxis, alignment.azimuth, alignment.altitude)
-			const recovered = applyInverseMountAdjustment(moved, alignment.axes.upAxis, alignment.axes.eastAxis, alignment.azimuth, alignment.altitude)
-			expect(vecAngleUnit(vector, recovered)).toBeLessThan(1e-14)
-		}
-	})
-
-	test('uses the altitude axis carried by the azimuth-rotated base', () => {
-		const alignment = makeAlignment(deg(-28), deg(30), deg(20))
-		const corrected = applyMountAdjustment(alignment.currentPole, alignment.axes.upAxis, alignment.axes.eastAxis, alignment.azimuth, alignment.altitude)
-		expect(vecAngleUnit(corrected, alignment.targetPole)).toBeLessThan(1e-14)
-	})
-
-	test('geodesic components preserve the exact total error magnitude', () => {
-		const alignment = makeAlignment(deg(42), arcmin(24), arcmin(-15))
-		const components = decomposePolarErrorGeodesic(alignment.currentPole, alignment.targetPole, alignment.axes.upAxis, alignment.axes.eastAxis)
-		expect(components).toBeDefined()
-		if (!components) return
-		expect(Math.hypot(components.azimuth, components.altitude)).toBeCloseTo(components.total, 12)
-		expect(components.total).toBeCloseTo(vecAngleUnit(alignment.currentPole, alignment.targetPole), 12)
-	})
-
-	test('rejects degenerate public adjustment axes', () => {
-		expect(() => applyMountAdjustment(vecX(), vecZero(), vecY(), 0, 0)).toThrow()
-		expect(() => applyMountAdjustment(vecX(), vecY(), vecY(2), 0, 0)).toThrow()
-		expect(() => applyMountAdjustment([Number.NaN, 0, 0], vecY(), vecZ(), 0, 0)).toThrow()
-		expect(() => applyMountAdjustment([Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE], vecY(), vecZ(), 0, 0)).toThrow()
-	})
-
-	test('rejects the undefined antipodal spherical logarithm', () => {
-		const alignment = makeAlignment(deg(35))
-		const antipode = [-alignment.targetPole[0], -alignment.targetPole[1], -alignment.targetPole[2]] as const
-		expect(decomposePolarErrorGeodesic(antipode, alignment.targetPole, alignment.axes.upAxis, alignment.axes.eastAxis)).toBeUndefined()
-	})
-})
 
 describe('pixel geometry', () => {
 	const frame = { x: 10, y: 20, width: 100, height: 80 } as const

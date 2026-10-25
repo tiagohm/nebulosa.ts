@@ -8,11 +8,11 @@ import type { FitsHeader } from '../../../src/io/formats/fits/fits'
 import { type Vec3, vecDot, vecRotateByRodrigues, vecY, vecZ } from '../../../src/math/linear-algebra/vec3'
 import type { Point } from '../../../src/math/numerical/geometry'
 import { arcmin, arcsec, deg } from '../../../src/math/units/angle'
-import { darvGeometryFactors } from '../../../src/observation/alignment/polaralignment.darv'
-import { analyzeDarvImage, type DarvAnalysisInput } from '../../../src/observation/alignment/polaralignment.darv.analysis'
-import { estimateDarvPolarErrorComponent, solveDarvPolarError } from '../../../src/observation/alignment/polaralignment.darv.solve'
-import { DarvCalibrationTransform, type DarvImageTransform, DarvMatrixTransform, DarvWcsTransform } from '../../../src/observation/alignment/polaralignment.darv.transform'
-import { applyMountAdjustment } from '../../../src/observation/alignment/polaralignment.util'
+import { darvGeometryFactors } from '../../../src/observation/alignment/darv'
+import { analyzeDarvImage, type DarvAnalysisInput } from '../../../src/observation/alignment/darv.analysis'
+import { estimateDarvPolarErrorComponent, solveDarvPolarError } from '../../../src/observation/alignment/darv.solve'
+import { DarvCalibrationTransform, type DarvImageTransform, DarvMatrixTransform, DarvWcsTransform } from '../../../src/observation/alignment/darv.transform'
+import { applyMountAdjustment } from '../../../src/observation/alignment/polaralignment'
 
 const SCALE = arcsec(1)
 

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { SIDEREAL_RATE } from '../../../src/core/constants'
 import { hour, deg } from '../../../src/math/units/angle'
-import { type DarvExposureInput, COARSE_DARV_EXPOSURE_PRESET, estimateDarvExposure } from '../../../src/observation/alignment/polaralignment.darv'
+import { type DarvExposureInput, COARSE_DARV_EXPOSURE_PRESET, estimateDarvExposure } from '../../../src/observation/alignment/darv'
 
 function darvInput(input: Partial<DarvExposureInput> = {}): DarvExposureInput {
 	return { focalLength: 1000, pixelSize: 3.75, declination: 0, hourAngle: hour(6), latitude: deg(45), mode: 'altitude', preset: COARSE_DARV_EXPOSURE_PRESET, ...input }

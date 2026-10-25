@@ -9,8 +9,8 @@ import { ASEC2RAD, PI, PIOVERTWO, TAU } from '../../core/constants'
 import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecDot, vecLength, vecNormalize, vecRotateByRodrigues, vecZero } from '../../math/linear-algebra/vec3'
 import { type Point, sphericalTangentBasis } from '../../math/numerical/geometry'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
-import { mountAdjustmentAxes, solveAzAltAdjustment, type ThreePointPolarAlignmentResult } from './polaralignment'
-import { applyInverseMountAdjustment, applyMountAdjustment, celestialPoleVector, decomposePolarErrorGeodesic } from './polaralignment.util'
+import { applyInverseMountAdjustment, applyMountAdjustment, celestialPoleVector, decomposePolarErrorGeodesic, mountAdjustmentAxes, solveAzAltAdjustment } from './polaralignment'
+import type { ThreePointPolarAlignmentResult } from './tppa'
 
 // Geometry-only visual guidance for three-point polar alignment. The module solves the remaining
 // two-axis mount correction in inertial 3D, maps a persistent celestial reference through the full

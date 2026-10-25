@@ -12,7 +12,7 @@ import { matMulVec } from '../../math/linear-algebra/mat3'
 import { type Vec3, vecAngle, vecDot, vecMinus, vecMulScalar } from '../../math/linear-algebra/vec3'
 import { euclideanDistance, type Point } from '../../math/numerical/geometry'
 import { type Angle, normalizePI } from '../../math/units/angle'
-import { celestialPoleVector } from './polaralignment.util'
+import { celestialPoleVector } from './polaralignment'
 
 // iPolar-style camera-based polar alignment driven by plate solutions. The user captures two frames
 // separated by an RA-only rotation; the mount's rotation axis is recovered as the image-space fixed

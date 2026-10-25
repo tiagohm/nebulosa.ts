@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { PI, PIOVERTWO } from '../../../src/core/constants'
 import { deg } from '../../../src/math/units/angle'
-import { challisRefractionCorrection, fitChallisPolarAlignment, type ChallisObservation } from '../../../src/observation/alignment/polaralignment.challis'
+import { challisRefractionCorrection, fitChallisPolarAlignment, type ChallisObservation } from '../../../src/observation/alignment/challis'
 
 // Tests Challis/Taki signs, star intercepts, robust fitting, hemispheres, and refraction correction.
 

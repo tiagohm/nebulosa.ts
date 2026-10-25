@@ -6,7 +6,7 @@ import { type Vec3, vecAngleUnit, vecMulScalar, vecNormalize, vecX, vecZ } from 
 import { linearLeastSquares, robustLinearLeastSquares, type LinearLeastSquaresResult } from '../../math/numerical/least.squares'
 import type { NumberArray } from '../../math/numerical/math'
 import { normalizeAngle, type Angle } from '../../math/units/angle'
-import { decomposePolarErrorGeodesic } from './polaralignment.util'
+import { decomposePolarErrorGeodesic } from './polaralignment'
 
 // Challis/Taki declination-drift estimation of equatorial polar-axis misalignment. Hour angle is
 // west-positive, all angles are radians, and the fitted small-angle components retain Taki's signs.

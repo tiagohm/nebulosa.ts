@@ -3,8 +3,8 @@ import type { MountCommander, MountMoveDirection } from '../../../src/devices/co
 import type { Camera, Mount } from '../../../src/devices/indi/device'
 import { failedOperationResult, OperationCoordinator, type OperationResult, type OperationScope, successfulOperationResult } from '../../../src/devices/orchestration/operation'
 import { ResourceArbiter } from '../../../src/devices/orchestration/resource'
-import { darvExposureTime } from '../../../src/observation/alignment/polaralignment.darv'
-import { type DarvRunEvent, type DarvRunOptions, type DarvRunServices, runDarv } from '../../../src/observation/alignment/polaralignment.darv.runner'
+import { darvExposureTime } from '../../../src/observation/alignment/darv'
+import { type DarvRunEvent, type DarvRunOptions, type DarvRunServices, runDarv } from '../../../src/observation/alignment/darv.runner'
 import type { CameraCapturer, CameraCaptureResult } from '../../../src/observation/capture/capture'
 import type { CameraCaptureStart } from '../../../src/observation/capture/types'
 
