@@ -4,7 +4,8 @@ import { GuidingAssistant, type GuidingAssistantResult } from '../../../src/obse
 import { GuiderClient } from '../../../src/observation/guiding/client'
 import type { GuideCommand } from '../../../src/observation/guiding/guider'
 import { trackingResultFromStars, type GuideFrame } from '../../../src/observation/guiding/tracker'
-import { type GuideStar, StarTracker } from '../../../src/observation/guiding/tracker.star'
+import type { GuideStar } from '../../../src/observation/guiding/tracker.star'
+import { fixtureImageDecoder, fixtureStarTracker } from '../../util/guiding'
 
 const WIDTH = 800
 const HEIGHT = 600
@@ -469,7 +470,7 @@ test('does not report passive guide failures as backlash failures', () => {
 })
 
 test('guider client exposes guiding-assistant hooks without starting outside guiding', () => {
-	const client = new GuiderClient({} as never, {} as never, new StarTracker())
+	const client = new GuiderClient({} as never, {} as never, fixtureStarTracker(), { decodeImage: fixtureImageDecoder })
 	expect(client.guidingAssistantResult()).toBeUndefined()
 	expect(client.startGuidingAssistant()).toBeFalse()
 	expect(client.stopGuidingAssistant()).toBeUndefined()

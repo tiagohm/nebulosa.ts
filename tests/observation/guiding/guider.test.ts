@@ -1,10 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import type { Image } from '../../../src/imaging/model/types'
-import { plotStar } from '../../../src/imaging/stars/generator'
 import { GuidingCalibrator } from '../../../src/observation/guiding/calibrator'
 import { aggregateGuideErrors, applyCalibration, applyDeadband, type GuiderConfig, Guider, invertCalibration, validateCalibration } from '../../../src/observation/guiding/guider'
 import { trackingResultFromStars, type GuideFrame, type GuideTrackerResult } from '../../../src/observation/guiding/tracker'
-import { StarTracker, type GuideStar } from '../../../src/observation/guiding/tracker.star'
+import type { GuideStar } from '../../../src/observation/guiding/tracker.star'
+import { fixtureGuideImage, fixtureStarTracker } from '../../util/guiding'
 
 const WIDTH = 800
 const HEIGHT = 600
@@ -40,18 +39,8 @@ function shiftStars(stars: readonly GuideStar[], dx: number, dy: number, mutate?
 }
 
 // Builds a detector image containing bright synthetic stars for tracker integration tests.
-function imageWithStars(stars: readonly (readonly [number, number, number])[]): Image {
-	const background = 0.005
-	const raw = new Float32Array(WIDTH * HEIGHT).fill(background)
-	const options = { background, saturationLevel: 1 }
-
-	for (const [x, y, flux] of stars) plotStar(raw, WIDTH, HEIGHT, 1, x, y, flux, 3, 80, 0, undefined, options)
-
-	return {
-		header: {},
-		raw,
-		metadata: { width: WIDTH, height: HEIGHT, channels: 1, pixelCount: WIDTH * HEIGHT, pixelSizeInBytes: 4, stride: WIDTH, strideInBytes: WIDTH * 4, bitpix: -32, bayer: undefined },
-	}
+function imageWithStars(stars: readonly (readonly [number, number, number])[]) {
+	return fixtureGuideImage(WIDTH, HEIGHT, stars)
 }
 
 // Creates a guider tuned for deterministic pulse assertions.
@@ -62,7 +51,7 @@ function guider(config: Partial<GuiderConfig> = {}) {
 const BASE_STARS = starList(5)
 
 test('reports stellar counts in guider and calibrator compatibility diagnostics', () => {
-	const tracker = new StarTracker()
+	const tracker = fixtureStarTracker()
 	const tracking = tracker.track(
 		{
 			image: imageWithStars([

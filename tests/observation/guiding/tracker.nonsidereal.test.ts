@@ -576,3 +576,23 @@ describe('NonSiderealTracker decorator', () => {
 		expect(result.targetOffset).toBeUndefined()
 	})
 })
+
+test('exposes the base tracker preparation stage only when the base has one', async () => {
+	expect(new NonSiderealTracker(baseStub(baseResult())).prepare).toBeUndefined()
+
+	const frames: GuideTrackerFrame[] = []
+	const base: GuideTracker = {
+		...baseStub(baseResult()),
+		prepare(frame) {
+			expect(this).toBe(base)
+			frames.push(frame)
+			return Promise.resolve(frame)
+		},
+	}
+	const tracker = new NonSiderealTracker(base)
+	const frame = trackerFrame(0)
+	const prepared = await tracker.prepare!(frame)
+
+	expect(frames).toEqual([frame])
+	expect(prepared).toBe(frame)
+})

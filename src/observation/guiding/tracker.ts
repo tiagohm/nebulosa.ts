@@ -1,9 +1,11 @@
 import type { Time } from '../../astronomy/time/time'
 import type { Image } from '../../imaging/model/types'
 
-// Generic synchronous tracking contracts. Frames use image pixels for coordinates, Unix epoch
-// milliseconds for timestamps, and optional images so a failed decode can still advance the guide
-// pipeline without reusing pixels from an older frame.
+// Generic tracking contracts. Each frame runs an optional asynchronous, context-free preparation
+// stage (e.g. star detection offloaded to a worker) followed by one synchronous, context-dependent
+// tracking pass. Frames use image pixels for coordinates, Unix epoch milliseconds for timestamps,
+// and optional images so a failed decode can still advance the guide pipeline without reusing
+// pixels from an older frame.
 
 // Phase of the surrounding guide-client state machine visible to a tracker.
 export type GuideTrackingPhase = 'looping' | 'selected' | 'calibrating' | 'guiding' | 'lostLock' | 'assistant'
@@ -110,14 +112,22 @@ export interface GuideTargetEnvelope {
 	readonly marginPx?: number
 }
 
-// Stateful synchronous tracker contract. `lastResult` is replaced for every call and contains no
-// historical frame arrays.
+// Stateful tracker contract. `lastResult` is replaced for every call and contains no historical
+// frame arrays. Consumers call `prepare` (when present) and `track` once per frame, never
+// concurrently for two frames.
 export interface GuideTracker {
 	// Clears identity and measurement state without performing I/O.
 	readonly reset: () => void
 	// Most recent frame result, if tracking has run.
 	readonly lastResult?: GuideTrackerResult
-	// Tracks one frame synchronously; it must not return a Promise or perform I/O.
+	// Performs the CPU-heavy, context-free analysis of one frame, such as star detection, possibly off
+	// the calling thread. It must not read the tracking context nor mutate tracker state, so the
+	// consumer may build the context after it settles. Resolves to the same frame (identical frame id,
+	// geometry, and times) carrying implementation-specific analysis that `track` consumes; the
+	// consumer passes the resolved frame to `track`. Trackers without such a stage omit it.
+	readonly prepare?: (frame: GuideTrackerFrame) => Promise<GuideTrackerFrame>
+	// Tracks one frame synchronously, using the analysis attached by `prepare` when present; it must
+	// not return a Promise or perform I/O.
 	readonly track: (frame: GuideTrackerFrame, context: GuideTrackerContext) => GuideTrackerResult
 	// Selects a target from a result produced by this tracker, optionally near a requested position.
 	// Coordinates are full-frame pixels with a top-left origin and X right/Y down. Returns a fresh

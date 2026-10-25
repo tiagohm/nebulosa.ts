@@ -9,8 +9,8 @@ import { type GuidePulseAdmission, GuiderClient, type GuiderClientGuiderOptions 
 import type { DitherPhase, DitherRequest } from '../../../src/observation/guiding/ditherer'
 import type { GuidingSettle } from '../../../src/observation/guiding/session'
 import { guideOutputLifecycleKey, LocalGuidingSession } from '../../../src/observation/guiding/session.client'
-import { StarTracker } from '../../../src/observation/guiding/tracker.star'
 import { waitUntil } from '../../util'
+import { fixtureImageDecoder, fixtureStarTracker } from '../../util/guiding'
 import { connectSimulatorRig, createSimulatorRig, type DeviceLogEntry, expectNoRigLeaks, ManualClock, recordDevices, resetSimulatorRig } from '../../util/rig'
 
 // LocalGuidingSession over a real GuiderClient whose guide camera is a fake (its exposures go nowhere) and whose guide
@@ -88,7 +88,7 @@ interface Setup {
 
 function setup(options: { readonly pulseCeiling?: number; readonly guider?: GuiderClientGuiderOptions } = {}): Setup {
 	const guider = { ...options.guider }
-	const client = new GuiderClient(new FakeCameraManager() as unknown as CameraManager, rig.managers.guideOutput, new StarTracker(), { guider })
+	const client = new GuiderClient(new FakeCameraManager() as unknown as CameraManager, rig.managers.guideOutput, fixtureStarTracker(), { decodeImage: fixtureImageDecoder, guider })
 	const clock = new ManualClock()
 	const session = new LocalGuidingSession(client, GUIDE_CAMERA, rig.devices().guideOutput, rig.commanders.guideOutput, { pulseCeiling: options.pulseCeiling, delay: clock.delay })
 	sessions.push({ client, session })

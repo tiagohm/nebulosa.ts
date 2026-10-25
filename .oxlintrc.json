@@ -1,5 +1,4 @@
 {
-	"$schema": "./node_modules/oxlint/configuration_schema.json",
 	"ignorePatterns": ["*.data.ts", "*.mjs"],
 	"plugins": ["typescript", "eslint", "oxc", "promise", "unicorn", "import"],
 	"categories": {

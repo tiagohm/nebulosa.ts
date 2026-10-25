@@ -7,20 +7,20 @@ import { type Camera, DEFAULT_CAMERA, DEFAULT_GUIDE_OUTPUT, type GuideDirection,
 import type { CameraManager } from '../../../src/devices/indi/manager/camera'
 import type { DeviceHandler } from '../../../src/devices/indi/manager/device'
 import type { GuideOutputManager } from '../../../src/devices/indi/manager/guideoutput'
-import { writeImageToFits } from '../../../src/imaging/model/image'
+import { readImageFromBuffer, writeImageToFits } from '../../../src/imaging/model/image'
 import type { Image } from '../../../src/imaging/model/types'
-import { plotStar } from '../../../src/imaging/stars/generator'
 import { bufferSink } from '../../../src/io/io'
 import { mulberry32 } from '../../../src/math/numerical/random'
 import type { GuidingCalibrationResult } from '../../../src/observation/guiding/calibrator'
 import { GuiderClient, type GuideFrameImage, type GuiderClientConnectOptions, type GuiderClientHandler, type GuiderClientOptions, type GuiderEvents } from '../../../src/observation/guiding/client'
 import { ditherPulsePlanFromCalibration } from '../../../src/observation/guiding/dither.pulse'
 import { DEFAULT_GUIDER_CONFIG, type GuideDirectionDEC, type GuideDirectionRA } from '../../../src/observation/guiding/guider'
-import { type GuideTargetEnvelope, type GuideTracker, type GuideTrackerResult, trackingResultFromStars } from '../../../src/observation/guiding/tracker'
+import { type GuideTargetEnvelope, type GuideTracker, type GuideTrackerContext, type GuideTrackerResult, trackingResultFromStars } from '../../../src/observation/guiding/tracker'
 import { NonSiderealTracker, nonSiderealTrackingOf } from '../../../src/observation/guiding/tracker.nonsidereal'
 import { SolarSystemTracker, solarSystemTrackingOf } from '../../../src/observation/guiding/tracker.solarsystem'
-import { StarTracker, starTrackingOf } from '../../../src/observation/guiding/tracker.star'
-import { isTimeConsumingTestSkipped } from '../../util'
+import { starTrackingOf } from '../../../src/observation/guiding/tracker.star'
+import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
+import { type FixtureStar, fixtureGuideBlob, fixtureGuideImage, fixtureImageDecoder, fixtureStarTracker } from '../../util/guiding'
 import { renderScene, textureScene } from '../../util/scene'
 
 // One recorded pulse issued through the fake guide-output manager.
@@ -127,81 +127,41 @@ const STAR_C = [200, 70] as const
 const FRAME_WIDTH = 240
 const FRAME_HEIGHT = 240
 
-// Integrated flux of the primary synthetic star, in normalized full-scale units. Chosen so the
-// detector measures SNR ~3 with a peak near 0.6: above the guide-star filter thresholds while
+// Integrated flux of the primary fixture star, in normalized full-scale units: a plotted star of
+// this flux measures SNR ~3 with a peak near 0.95, above the guide-star filter thresholds while
 // staying clear of the saturation ceiling.
 const STAR_FLUX = 10
 // Flux of the secondary star as a fraction of the primary, keeping the two stars distinguishable.
 const SECONDARY_STAR_FLUX_RATIO = 0.6
-// Half-flux diameter of the synthetic stars, in pixels.
-const STAR_HFD = 3
-// Nominal SNR requested from the star plotter; high enough that the rendered profile is noise-free
-// and the detector recovers the plotted centroid exactly.
-const STAR_PLOT_SNR = 80
-// Flat background level under the stars, in normalized full-scale units.
-const FRAME_BACKGROUND = 0.005
 
-// Builds an in-memory FITS buffer with two well-separated stars on a flat background, both shifted
-// by the same image-space offset (pixels) so a whole-frame mount motion can be simulated. Passing
-// no stars renders an empty background frame, which the detector reports as a lost star.
-async function buildFrameBuffer(offsetX = 0, offsetY = 0, stars = true): Promise<Buffer> {
-	const raw = new Float32Array(FRAME_WIDTH * FRAME_HEIGHT).fill(FRAME_BACKGROUND)
+// Builds a fixture BLOB with two well-separated stars, both shifted by the same image-space offset
+// (pixels) so a whole-frame mount motion can be simulated. Passing no stars builds an empty frame,
+// which the tracker reports as a lost star.
+function buildFrameBuffer(offsetX = 0, offsetY = 0, stars = true): Buffer {
+	const field: FixtureStar[] = []
 
 	if (stars) {
-		const options = { background: FRAME_BACKGROUND, saturationLevel: 1 }
-		plotStar(raw, FRAME_WIDTH, FRAME_HEIGHT, 1, STAR_A[0] + offsetX, STAR_A[1] + offsetY, STAR_FLUX, STAR_HFD, STAR_PLOT_SNR, 0, undefined, options)
-		plotStar(raw, FRAME_WIDTH, FRAME_HEIGHT, 1, STAR_B[0] + offsetX, STAR_B[1] + offsetY, STAR_FLUX * SECONDARY_STAR_FLUX_RATIO, STAR_HFD, STAR_PLOT_SNR, 0, undefined, options)
+		field.push([STAR_A[0] + offsetX, STAR_A[1] + offsetY, STAR_FLUX])
+		field.push([STAR_B[0] + offsetX, STAR_B[1] + offsetY, STAR_FLUX * SECONDARY_STAR_FLUX_RATIO])
 	}
 
-	const image: Image = {
-		header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: FRAME_WIDTH, NAXIS2: FRAME_HEIGHT },
-		metadata: { width: FRAME_WIDTH, height: FRAME_HEIGHT, channels: 1, pixelCount: FRAME_WIDTH * FRAME_HEIGHT, pixelSizeInBytes: 4, strideInBytes: FRAME_WIDTH * 4, stride: FRAME_WIDTH, bitpix: -32, bayer: undefined },
-		raw,
-	}
-
-	const buffer = Buffer.alloc(FRAME_WIDTH * FRAME_HEIGHT * 4 + 100000)
-	await writeImageToFits(image, bufferSink(buffer))
-	return buffer
+	return fixtureGuideBlob(fixtureGuideImage(FRAME_WIDTH, FRAME_HEIGHT, field))
 }
 
-// Builds a FITS buffer with stars at explicit image-pixel centers, used when a test needs a
+// Builds a fixture BLOB with stars at explicit image-pixel centers, used when a test needs a
 // geometry that the default two-star field cannot produce. An optional third value is the
 // integrated flux; omitted positions use STAR_FLUX.
-async function buildFrameBufferAt(positions: readonly (readonly [number, number] | readonly [number, number, number])[]) {
-	const raw = new Float32Array(FRAME_WIDTH * FRAME_HEIGHT).fill(FRAME_BACKGROUND)
-	const options = { background: FRAME_BACKGROUND, saturationLevel: 1 }
-
-	for (const position of positions) {
-		const [x, y, flux = STAR_FLUX] = position
-		plotStar(raw, FRAME_WIDTH, FRAME_HEIGHT, 1, x, y, flux, STAR_HFD, STAR_PLOT_SNR, 0, undefined, options)
-	}
-
-	const image: Image = {
-		header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: FRAME_WIDTH, NAXIS2: FRAME_HEIGHT },
-		metadata: { width: FRAME_WIDTH, height: FRAME_HEIGHT, channels: 1, pixelCount: FRAME_WIDTH * FRAME_HEIGHT, pixelSizeInBytes: 4, strideInBytes: FRAME_WIDTH * 4, stride: FRAME_WIDTH, bitpix: -32, bayer: undefined },
-		raw,
-	}
-
-	const buffer = Buffer.alloc(FRAME_WIDTH * FRAME_HEIGHT * 4 + 100000)
-	await writeImageToFits(image, bufferSink(buffer))
-	return buffer
+function buildFrameBufferAt(positions: readonly FixtureStar[]) {
+	return fixtureGuideBlob(fixtureGuideImage(FRAME_WIDTH, FRAME_HEIGHT, positions))
 }
 
-// Builds a FITS buffer clipped to full scale, so the detector finds no usable guide star.
-async function buildSaturatedFrameBuffer() {
-	const raw = new Float32Array(FRAME_WIDTH * FRAME_HEIGHT).fill(1)
-	const image: Image = {
-		header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: FRAME_WIDTH, NAXIS2: FRAME_HEIGHT },
-		metadata: { width: FRAME_WIDTH, height: FRAME_HEIGHT, channels: 1, pixelCount: FRAME_WIDTH * FRAME_HEIGHT, pixelSizeInBytes: 4, strideInBytes: FRAME_WIDTH * 4, stride: FRAME_WIDTH, bitpix: -32, bayer: undefined },
-		raw,
-	}
-	const buffer = Buffer.alloc(FRAME_WIDTH * FRAME_HEIGHT * 4 + 100000)
-	await writeImageToFits(image, bufferSink(buffer))
-	return buffer
+// Builds a fixture BLOB of a frame clipped to full scale, where no usable guide star is detected.
+function buildSaturatedFrameBuffer() {
+	return fixtureGuideBlob(fixtureGuideImage(FRAME_WIDTH, FRAME_HEIGHT))
 }
 
 // Frame with both stars at their nominal positions, reused by tests that never move the mount.
-const FRAME_BUFFER = await buildFrameBuffer()
+const FRAME_BUFFER = buildFrameBuffer()
 
 // Image-space star displacement produced by one millisecond of guide pulse on either axis, in
 // pixels/ms. The calibrator's default 650 ms pulses then move the star ~7.5 px per step: below its
@@ -296,16 +256,16 @@ interface Harness {
 }
 
 // Client options plus an observer registered before the event recorder.
-interface HarnessOptions extends GuiderClientOptions {
+interface HarnessOptions extends Partial<GuiderClientOptions> {
 	readonly handler?: GuiderClientHandler
 }
 
 // Creates a fresh client wired to fake managers and an event recorder.
-function makeHarness({ handler, ...options }: HarnessOptions = {}, tracker: GuideTracker = new StarTracker()): Harness {
+function makeHarness({ handler, ...options }: HarnessOptions = {}, tracker: GuideTracker = fixtureStarTracker()): Harness {
 	const cameraManager = new FakeCameraManager()
 	const guideOutputManager = new FakeGuideOutputManager()
 	const events: GuiderEvents[] = []
-	const client = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, tracker, options)
+	const client = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, tracker, { decodeImage: fixtureImageDecoder, ...options })
 	if (handler !== undefined) client.addHandler(handler)
 	client.addHandler({ event: (_client, event) => events.push(event) })
 
@@ -362,13 +322,13 @@ async function feedBuffer(harness: Harness, buffer: Buffer) {
 // it to the client. This closes the loop: the corrections the client commands move the next frame.
 async function feedFrame(harness: Harness) {
 	harness.mount.advance(harness.guideOutputManager.pulses)
-	return await feedBuffer(harness, await buildFrameBuffer(harness.mount.offsetX, harness.mount.offsetY))
+	return await feedBuffer(harness, buildFrameBuffer(harness.mount.offsetX, harness.mount.offsetY))
 }
 
 // Feeds a star-free frame, which the client must report as a lost star.
 async function feedEmptyFrame(harness: Harness) {
 	harness.mount.advance(harness.guideOutputManager.pulses)
-	return await feedBuffer(harness, await buildFrameBuffer(0, 0, false))
+	return await feedBuffer(harness, buildFrameBuffer(0, 0, false))
 }
 
 // Feeds a frame with explicit star centers, shifted by the current mount offset so closed-loop
@@ -379,7 +339,7 @@ async function feedStars(harness: Harness, stars: readonly (readonly [number, nu
 		const [x, y, flux = STAR_FLUX] = star
 		return [x + harness.mount.offsetX, y + harness.mount.offsetY, flux] as const
 	})
-	return await feedBuffer(harness, await buildFrameBufferAt(shifted))
+	return await feedBuffer(harness, buildFrameBufferAt(shifted))
 }
 
 // Returns all recorded events of one type.
@@ -406,7 +366,7 @@ describe('construction', () => {
 	})
 
 	test('accepts an explicitly configured tracker', () => {
-		const tracker = new StarTracker({ filter: { minStarSnr: 8 } })
+		const tracker = fixtureStarTracker({ filter: { minStarSnr: 8 } })
 		expect(makeHarness({}, tracker).client.getAppState()).toBe('Stopped')
 	})
 
@@ -446,7 +406,7 @@ describe('construction', () => {
 })
 
 test('the caller coordinates non-sidereal tracking and lock shift explicitly', () => {
-	const tracker = new NonSiderealTracker(new StarTracker())
+	const tracker = new NonSiderealTracker(fixtureStarTracker())
 	const harness = makeHarness({}, tracker)
 	const ephemeris = {
 		position: (_time: unknown, out: { rightAscension: number; declination: number }) => out,
@@ -466,6 +426,110 @@ test('the caller coordinates non-sidereal tracking and lock shift explicitly', (
 	expect(harness.client.setLockShiftParams({ rate: [1, 0], axes: 'X/Y' })).toBeTrue()
 	tracker.clear()
 	expect(tracker.state).toBe('disabled')
+})
+
+// Star tracker whose preparation stage stays pending until the test settles it, recording the
+// context of every synchronous tracking pass.
+function deferredTracker() {
+	const base = fixtureStarTracker()
+	const contexts: GuideTrackerContext[] = []
+	let settle: { resolve: () => void; reject: (error: Error) => void } | undefined
+	const tracker: GuideTracker = {
+		reset: () => base.reset(),
+		select: (result, position) => base.select(result, position),
+		commit: () => base.commit(),
+		get lastResult() {
+			return base.lastResult
+		},
+		prepare: (frame) => {
+			const { promise, resolve, reject } = Promise.withResolvers<void>()
+			settle = { resolve, reject }
+			return promise.then(() => base.prepare(frame))
+		},
+		track: (frame, context) => {
+			contexts.push(context)
+			return base.track(frame, context)
+		},
+	}
+
+	return {
+		tracker,
+		contexts,
+		get pending() {
+			return settle !== undefined
+		},
+		resolve: () => settle!.resolve(),
+		reject: (error: Error) => settle!.reject(error),
+	}
+}
+
+describe('frame pipeline', () => {
+	test('decodes every BLOB with the injected decoder and its transfer encoding', async () => {
+		const calls: [Buffer, string][] = []
+		const harness = makeHarness({ decodeImage: (data, encoding) => (calls.push([data, encoding]), fixtureImageDecoder(data, encoding)) })
+		connect(harness)
+		harness.client.loop()
+
+		harness.cameraManager.handler!.blobReceived!(harness.camera, FRAME_BUFFER, 'base64')
+		await waitUntil(() => eventsOf(harness.events, 'LoopingExposures').length === 1, 1000, 1)
+
+		expect(calls).toEqual([[FRAME_BUFFER, 'base64']])
+		expect(harness.client.getStarImage()?.frame).toBe(1)
+	})
+
+	test('tracks a prepared frame with the guide state read after preparation settles', async () => {
+		const deferred = deferredTracker()
+		const harness = makeHarness({}, deferred.tracker)
+		connect(harness)
+		harness.client.loop()
+
+		harness.cameraManager.handler!.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
+		await waitUntil(() => deferred.pending, 1000, 1)
+		expect(deferred.contexts).toBeEmpty()
+
+		// The lock changes while the frame is being prepared; tracking must see the new search box.
+		harness.client.setLockPosition(STAR_A[0], STAR_A[1], true)
+		deferred.resolve()
+		await waitUntil(() => eventsOf(harness.events, 'LoopingExposures').length === 1, 1000, 1)
+
+		expect(deferred.contexts).toHaveLength(1)
+		expect(deferred.contexts[0].searchPosition).toEqual(STAR_A)
+		expect(deferred.contexts[0].phase).toBe('selected')
+		expect(harness.cameraManager.startExposureCalls).toHaveLength(2)
+	})
+
+	test('drops a frame whose camera disconnected while it was being prepared', async () => {
+		const deferred = deferredTracker()
+		const harness = makeHarness({}, deferred.tracker)
+		connect(harness)
+		harness.client.loop()
+
+		harness.cameraManager.handler!.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
+		await waitUntil(() => deferred.pending, 1000, 1)
+		harness.client.disconnect()
+		deferred.resolve()
+		await Bun.sleep(10)
+
+		expect(deferred.contexts).toBeEmpty()
+		expect(eventsOf(harness.events, 'LoopingExposures')).toBeEmpty()
+		expect(harness.cameraManager.startExposureCalls).toHaveLength(1)
+	})
+
+	test('a rejected preparation raises an Alert and keeps the exposure loop running', async () => {
+		const deferred = deferredTracker()
+		const harness = makeHarness({}, deferred.tracker)
+		connect(harness)
+		harness.client.loop()
+
+		harness.cameraManager.handler!.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
+		await waitUntil(() => deferred.pending, 1000, 1)
+		deferred.reject(new Error('detector worker crashed'))
+		await waitUntil(() => harness.cameraManager.startExposureCalls.length === 2, 1000, 1)
+
+		expect(deferred.contexts).toBeEmpty()
+		expect(eventsOf(harness.events, 'Alert').map((event) => event.Msg)).toContain('guide frame processing failed: detector worker crashed')
+		expect(harness.client.getAppState()).toBe('Looping')
+	})
 })
 
 describe('connect / disconnect', () => {
@@ -1464,7 +1528,7 @@ describe('frame-driven behavior', () => {
 		const outside = [70 + half + 1, 70] as const
 		expect(Math.hypot(outside[0] - 70, outside[1] - 70)).toBeLessThan(Math.hypot(inside[0] - 70, inside[1] - 70))
 
-		await feedBuffer(local, await buildFrameBufferAt([inside, outside]))
+		await feedBuffer(local, buildFrameBufferAt([inside, outside]))
 
 		const frame = frames.at(-1)!
 		expect(starTrackingOf(frame.tracking)?.primary).toBeDefined()
@@ -1609,7 +1673,7 @@ describe('frame-driven behavior', () => {
 	})
 
 	test('stellar selection and overlays survive explicit non-sidereal decoration', async () => {
-		const tracker = new NonSiderealTracker(new StarTracker())
+		const tracker = new NonSiderealTracker(fixtureStarTracker())
 		const frames: GuideFrameImage[] = []
 		const local = makeHarness({ handler: { frame: (_client, frame) => frames.push(frame) } }, tracker)
 		connect(local)
@@ -1663,7 +1727,7 @@ describe('frame-driven behavior', () => {
 	test('findStar selects the only valid star and locks onto it', async () => {
 		connect(harness)
 		harness.client.loop()
-		await feedBuffer(harness, await buildFrameBufferAt([[120, 120]]))
+		await feedBuffer(harness, buildFrameBufferAt([[120, 120]]))
 
 		const lock = harness.client.findStar()
 		expect(lock).toBeDefined()
@@ -1683,7 +1747,7 @@ describe('frame-driven behavior', () => {
 		// Selection score weights centrality and isolation above a modest flux advantage.
 		await feedBuffer(
 			harness,
-			await buildFrameBufferAt([
+			buildFrameBufferAt([
 				[18, 18, STAR_FLUX * 1.4],
 				[120, 120, STAR_FLUX],
 			]),
@@ -1703,7 +1767,7 @@ describe('frame-driven behavior', () => {
 		expect(harness.client.setLockPosition(70, 70, true)).toBeTrue()
 		await feedBuffer(
 			harness,
-			await buildFrameBufferAt([
+			buildFrameBufferAt([
 				[70, 70, 0.5],
 				[100, 100, STAR_FLUX],
 			]),
@@ -1722,7 +1786,7 @@ describe('frame-driven behavior', () => {
 		// 8 px is below the 12 px neighbor-distance floor, so both detections are double_star.
 		await feedBuffer(
 			harness,
-			await buildFrameBufferAt([
+			buildFrameBufferAt([
 				[120, 120],
 				[128, 120],
 			]),
@@ -1846,7 +1910,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('frame processing robustness', () 
 		const cameraManager = new FakeCameraManager()
 		const guideOutputManager = new FakeGuideOutputManager()
 		const events: GuiderEvents[] = []
-		const client = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, new StarTracker())
+		const client = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, fixtureStarTracker(), { decodeImage: fixtureImageDecoder })
 		client.addHandler({
 			event: (_client, event) => {
 				events.push(event)
@@ -2114,7 +2178,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	// while the client is guiding. Every test owns its harness so the sessions, which spend nearly all
 	// of their wall time asleep waiting for commanded pulses, can run concurrently without sharing
 	// state through the module-level harness.
-	async function calibrateAndGuide(options: HarnessOptions = {}, connectOptions?: GuiderClientConnectOptions, tracker: GuideTracker = new StarTracker()) {
+	async function calibrateAndGuide(options: HarnessOptions = {}, connectOptions?: GuiderClientConnectOptions, tracker: GuideTracker = fixtureStarTracker()) {
 		const harness = makeHarness({ ...options, calibrator: FAST_CALIBRATION }, tracker)
 		await calibrate(harness, connectOptions)
 		return harness
@@ -2310,7 +2374,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		connect(harness)
 		harness.client.loop()
 		// Inside the 10 px quality border, inside the 12 px calibration edge margin.
-		const nearEdge = await buildFrameBufferAt([[11, 120]])
+		const nearEdge = buildFrameBufferAt([[11, 120]])
 		await feedBuffer(harness, nearEdge)
 		expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
 
@@ -2510,7 +2574,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	})
 
 	test('a tracker-supplied target envelope stops guiding before any pulse leaves it', async () => {
-		const base = new StarTracker()
+		const base = fixtureStarTracker()
 		const override: { envelope?: GuideTargetEnvelope } = {}
 		const tracker: GuideTracker = {
 			reset: () => base.reset(),
@@ -2549,7 +2613,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			harness.mount.advance(harness.guideOutputManager.pulses)
 			const jitterX = i % 2
 			const jitterY = (i + 1) % 2
-			await feedBuffer(harness, await buildFrameBuffer(harness.mount.offsetX + jitterX, harness.mount.offsetY + jitterY))
+			await feedBuffer(harness, buildFrameBuffer(harness.mount.offsetX + jitterX, harness.mount.offsetY + jitterY))
 			if (harness.client.getCalibrated()) break
 		}
 
@@ -2603,7 +2667,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		await establishLockReference(harness)
 
 		const pulsesBefore = harness.guideOutputManager.pulses.length
-		const brighter = await buildFrameBufferAt([
+		const brighter = buildFrameBufferAt([
 			[STAR_A[0] + harness.mount.offsetX, STAR_A[1] + harness.mount.offsetY, STAR_FLUX * 2],
 			[STAR_B[0] + harness.mount.offsetX, STAR_B[1] + harness.mount.offsetY, STAR_FLUX * 2 * SECONDARY_STAR_FLUX_RATIO],
 		])
@@ -2949,7 +3013,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			harness.mount.advance(harness.guideOutputManager.pulses)
 			harness.mount.offsetX = originX
 			harness.mount.offsetY = originY
-			await feedBuffer(harness, await buildFrameBuffer(originX, originY))
+			await feedBuffer(harness, buildFrameBuffer(originX, originY))
 		}
 
 		harness.client.setDeclinationGuideMode('Auto')
@@ -2957,7 +3021,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		harness.mount.advance(harness.guideOutputManager.pulses)
 		harness.mount.offsetX = originX
 		harness.mount.offsetY = originY
-		await feedBuffer(harness, await buildFrameBuffer(originX, originY))
+		await feedBuffer(harness, buildFrameBuffer(originX, originY))
 
 		const dumped = harness.guideOutputManager.pulses.slice(from).filter((pulse) => pulse.direction === 'NORTH' || pulse.direction === 'SOUTH')
 		expect(dumped.reduce((sum, pulse) => sum + pulse.duration, 0)).toBeLessThan(errorDEC[0].duration * 0.3)
@@ -3119,7 +3183,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	})
 
 	test('caller invalidates a non-sidereal transform on calibration flip before further correction', async () => {
-		const tracker = new NonSiderealTracker(new StarTracker())
+		const tracker = new NonSiderealTracker(fixtureStarTracker())
 		const harness = await calibrateAndGuide(
 			{
 				handler: {
@@ -3166,7 +3230,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	})
 
 	test('the caller clears non-sidereal sources after stopping or returning to looping', async () => {
-		const tracker = new NonSiderealTracker(new StarTracker())
+		const tracker = new NonSiderealTracker(fixtureStarTracker())
 		const harness = await calibrateAndGuide({}, undefined, tracker)
 		await establishLockReference(harness)
 		const ephemeris = {
@@ -3190,7 +3254,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	})
 
 	test('non-sidereal state is observed on the injected tracker and generic frames across session restart', async () => {
-		const tracker = new NonSiderealTracker(new StarTracker())
+		const tracker = new NonSiderealTracker(fixtureStarTracker())
 		const frames: GuideFrameImage[] = []
 		const harness = await calibrateAndGuide(
 			{
@@ -3225,7 +3289,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		const frames: GuideFrameImage[] = []
 		let providerCalls = 0
 		const source = linearNonSiderealEphemeris(clock)
-		const tracker = new NonSiderealTracker(new StarTracker())
+		const tracker = new NonSiderealTracker(fixtureStarTracker())
 		const harness = makeHarness(
 			{
 				timeFactory: clock.timeFactory,
@@ -3273,7 +3337,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		const providerTimes: Time[] = []
 		let providerCalls = 0
 		const source = linearNonSiderealEphemeris(clock)
-		const tracker = new NonSiderealTracker(new StarTracker())
+		const tracker = new NonSiderealTracker(fixtureStarTracker())
 		const harness = makeHarness(
 			{
 				timeFactory: clock.timeFactory,
@@ -3327,7 +3391,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	test('adds non-sidereal, dither and lock-shift offsets exactly once to the guide target', async () => {
 		const clock = nonSiderealClock()
 		const frames: GuideFrameImage[] = []
-		const tracker = new NonSiderealTracker(new StarTracker())
+		const tracker = new NonSiderealTracker(fixtureStarTracker())
 		const harness = await calibrateAndGuide(
 			{
 				timeFactory: clock.timeFactory,
@@ -3373,7 +3437,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		const frames: GuideFrameImage[] = []
 		const source = linearNonSiderealEphemeris(clock)
 		let failing = false
-		const tracker = new NonSiderealTracker(new StarTracker(), failure === 'rate' ? { maxRate: 1e-12 } : failure === 'angular' ? { geometry: { maxAngularSeparation: 1e-9 } } : {})
+		const tracker = new NonSiderealTracker(fixtureStarTracker(), failure === 'rate' ? { maxRate: 1e-12 } : failure === 'angular' ? { geometry: { maxAngularSeparation: 1e-9 } } : {})
 		const harness = await calibrateAndGuide(
 			{
 				timeFactory: clock.timeFactory,
@@ -3425,7 +3489,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		const clock = nonSiderealClock()
 		let providerCalls = 0
 		const source = linearNonSiderealEphemeris(clock)
-		const tracker = new NonSiderealTracker(new StarTracker())
+		const tracker = new NonSiderealTracker(fixtureStarTracker())
 		const harness = await calibrateAndGuide({ timeFactory: clock.timeFactory }, undefined, tracker)
 		await establishLockReference(harness)
 
@@ -3812,7 +3876,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 
 		const pulsesBefore = harness.guideOutputManager.pulses.length
 		harness.mount.advance(harness.guideOutputManager.pulses)
-		const buffer = await buildFrameBuffer(harness.mount.offsetX, harness.mount.offsetY)
+		const buffer = buildFrameBuffer(harness.mount.offsetX, harness.mount.offsetY)
 		await Bun.sleep(4700)
 		await feedBuffer(harness, buffer)
 
@@ -4284,7 +4348,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		await establishLockReference(harness)
 
 		const pulsesBefore = harness.guideOutputManager.pulses.length
-		const saturated = await buildSaturatedFrameBuffer()
+		const saturated = buildSaturatedFrameBuffer()
 		for (let i = 0; i < 8; i++) {
 			harness.mount.advance(harness.guideOutputManager.pulses)
 			await feedBuffer(harness, saturated)
@@ -4666,7 +4730,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		harness.mount.advance(harness.guideOutputManager.pulses)
 		harness.mount.offsetX = originX
 		harness.mount.offsetY = originY
-		await feedBuffer(harness, await buildFrameBuffer(originX, originY))
+		await feedBuffer(harness, buildFrameBuffer(originX, originY))
 
 		expect(harness.client.getSettling()).toBeTrue()
 		expect(eventsOf(harness.events, 'SettleDone').filter((event) => event.Status === 0)).toHaveLength(successesBefore)
@@ -4984,7 +5048,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 
 		const handler = harness.cameraManager.handler!
 		harness.mount.advance(harness.guideOutputManager.pulses)
-		const buffer = await buildFrameBuffer(harness.mount.offsetX, harness.mount.offsetY)
+		const buffer = buildFrameBuffer(harness.mount.offsetX, harness.mount.offsetY)
 		const exposuresBefore = harness.cameraManager.startExposureCalls.length
 		const pulsesBefore = harness.guideOutputManager.pulses.length
 
@@ -5363,7 +5427,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		const random = mulberry32(17)
 		const gaussian = () => Math.sqrt(-2 * Math.log(Math.max(1e-12, random()))) * Math.cos(TAU * random())
 		const tracker = new SolarSystemTracker({ mode: 'lunar', plane: 'mono' })
-		const harness = makeHarness({ calibrator: FAST_CALIBRATION, guider }, tracker)
+		const harness = makeHarness({ calibrator: FAST_CALIBRATION, guider, decodeImage: (data) => readImageFromBuffer(data) }, tracker)
 		let seed = 0
 		let due = 0
 		const lunarFrame = async (jitter: boolean) => {

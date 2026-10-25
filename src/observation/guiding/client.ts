@@ -8,9 +8,7 @@ import type { CameraManager } from '../../devices/indi/manager/camera'
 import type { DeviceHandler } from '../../devices/indi/manager/device'
 import type { GuideOutputManager } from '../../devices/indi/manager/guideoutput'
 import type { BlobEncoding } from '../../devices/indi/types'
-import { readImageFromBuffer, readImageFromSource } from '../../imaging/model/image'
 import { type Image, type ImageRawType, makeImageRawTypedArray } from '../../imaging/model/types'
-import { base64Source, bufferSource } from '../../io/io'
 import { clamp } from '../../math/numerical/math'
 import { DEFAULT_GUIDING_ASSISTANT_CONFIG, GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './assistant'
 import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationConfig, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
@@ -18,13 +16,14 @@ import { DitherGenerator, type DitherMode } from './dither'
 import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, Guider, type GuiderConfig } from './guider'
 // oxfmt-ignore
 import { DEFAULT_PHD2_SETTLE, PHD2_MSG_VERSION, PHD2_OVERLAP_SUPPORT, PHD2_SUBVER, PHD2_VERSION, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2EventType, type PHD2GuideDirection, type PHD2GuideStepEvent, type PHD2LockShiftParams, type PHD2Settle, type PHD2StarImage } from './phd2/types'
-import type { GuideFrame, GuideTracker, GuideTrackerResult } from './tracker'
+import type { GuideFrame, GuideTracker, GuideTrackerFrame, GuideTrackerResult } from './tracker'
 
 // Local autoguiding orchestrator exposing a PHD2-compatible API over INDI camera and guide-output
-// devices. It decodes each camera BLOB and delegates one frame to a caller-owned generic tracker.
-// Tracker construction and configuration belong to the caller. It drives the GuidingCalibrator and
-// Guider state machines and reproduces PHD2 behaviors — app-state lifecycle, lock position, dithering (random and
-// spiral), lock-shift drift compensation, settle tracking, meridian-flip calibration flip, and the
+// devices. Each camera BLOB is decoded by the caller-supplied decoder, prepared asynchronously by the
+// tracker when it has a preparation stage, and then tracked synchronously against the guide state
+// read after those awaits. Decoder and tracker construction and configuration belong to the caller.
+// It drives the GuidingCalibrator and Guider state machines and reproduces PHD2 behaviors — app-state
+// lifecycle, lock position, dithering (random and spiral), lock-shift drift compensation, settle tracking, meridian-flip calibration flip, and the
 // guiding assistant — while emitting PHD2-shaped events to every registered handler. Every guide pulse,
 // whatever path issued it, goes through one dispatcher that refuses it while paused and, under an active pulse
 // admission, while the admission is closed or when the pulse exceeds its ceiling. Distances are pixels; pulse
@@ -132,8 +131,16 @@ export interface GuideFrameImage {
 	readonly searchRegion: number
 }
 
+// Decodes one camera BLOB into an image. `encoding` is the INDI transfer encoding of `data`
+// ('base64' text or raw bytes). The caller owns the image format support and where the work runs
+// (e.g. a worker). Resolving undefined (unsupported payload) or rejecting is a decode failure for
+// that frame, which still advances the guide pipeline without an image.
+export type GuideImageDecoder = (data: Buffer, encoding: BlobEncoding) => Promise<Image | undefined>
+
 // Construction options for a GuiderClient. Observers are registered with `addHandler`.
 export interface GuiderClientOptions {
+	// Decodes every received camera BLOB into the guide image.
+	readonly decodeImage: GuideImageDecoder
 	// Whether to reverse DEC output after flipping the calibration on a meridian flip.
 	readonly reverseDecOutputAfterMeridianFlip?: boolean
 	// Star-image search-region side, in pixels (clamped to [16, 128]).
@@ -335,27 +342,27 @@ export class GuiderClient {
 			if (device !== this.#camera) return
 			this.stopCapture()
 		},
-		// Decodes each camera frame asynchronously and feeds the guider state machine.
+		// Decodes and prepares each camera frame asynchronously and feeds the guider state machine.
 		blobReceived: (device, data, encoding) => {
 			void this.#processBlob(device, data, encoding)
 		},
 	}
 
-	// Creates a client bound to camera and guide-output managers and one caller-owned synchronous
-	// tracker. The client resets and commits that tracker for session/frame lifecycle changes;
-	// callers own its construction, configuration, and implementation-specific coordination.
+	// Creates a client bound to camera and guide-output managers, one caller-owned tracker, and the
+	// options carrying the BLOB decoder. The client resets and commits that tracker for session/frame
+	// lifecycle changes; callers own its construction, configuration, and implementation-specific coordination.
 	constructor(
 		readonly cameraManager: CameraManager,
 		readonly guideOutputManager: GuideOutputManager,
 		tracker: GuideTracker,
-		readonly options?: GuiderClientOptions,
+		readonly options: GuiderClientOptions,
 	) {
-		this.#calibrator = new GuidingCalibrator(options?.calibrator)
+		this.#calibrator = new GuidingCalibrator(options.calibrator)
 		this.#tracker = tracker
 		this.#guider = this.#makeGuider(undefined)
-		this.#searchRegion = clamp(options?.searchRegion || DEFAULT_SEARCH_REGION, 16, 128)
-		this.#stickyLockPosition = options?.stickyLockPosition === true
-		this.#dither = new DitherGenerator({ mode: options?.ditherMode })
+		this.#searchRegion = clamp(options.searchRegion || DEFAULT_SEARCH_REGION, 16, 128)
+		this.#stickyLockPosition = options.stickyLockPosition === true
+		this.#dither = new DitherGenerator({ mode: options.ditherMode })
 	}
 
 	get camera() {
@@ -424,7 +431,7 @@ export class GuiderClient {
 	// calibration pulses of both axes and the guiding assistant backlash pulse, rounded like a dispatched pulse.
 	// Only the default of an admission ceiling and the refusal of an admission rely on it.
 	maxPulseDuration() {
-		const guider = { ...DEFAULT_GUIDER_CONFIG, ...this.options?.guider }
+		const guider = { ...DEFAULT_GUIDER_CONFIG, ...this.options.guider }
 		const calibrator = this.#calibrator.config
 		const backlashPulse = this.#guidingAssistant?.config.backlashPulse ?? DEFAULT_GUIDING_ASSISTANT_CONFIG.backlashPulse
 		return Math.max(1, Math.round(Math.max(guider.maxPulseMsRA, guider.maxPulseMsDEC, calibrator.raPulse, calibrator.decPulse, backlashPulse)))
@@ -665,7 +672,7 @@ export class GuiderClient {
 	flipCalibration() {
 		if (this.#calibration === undefined || this.#appState === 'Calibrating') return false
 
-		this.#calibration = flipGuidingCalibration(this.#calibration, this.options?.reverseDecOutputAfterMeridianFlip === true)
+		this.#calibration = flipGuidingCalibration(this.#calibration, this.options.reverseDecOutputAfterMeridianFlip === true)
 		this.#applyCalibrationToGuider(this.#calibration)
 		this.#syncGuideTargetOffset()
 		this.emitEvent('CalibrationDataFlipped', { Mount: this.#guideOutput?.name ?? '' })
@@ -1154,11 +1161,7 @@ export class GuiderClient {
 			let image: Image | undefined
 
 			try {
-				if (encoding === 'base64') {
-					image = await readImageFromSource(base64Source(bufferSource(data)))
-				} else {
-					image = await readImageFromBuffer(data)
-				}
+				image = await this.options.decodeImage(data, encoding)
 			} catch (e) {
 				console.error('guide image decode failed:', e)
 			}
@@ -1167,7 +1170,7 @@ export class GuiderClient {
 			// tagged with the new (empty) frame id instead of the last successfully decoded frame.
 			this.#image = image
 
-			const frame = this.#makeGuideFrame(image)
+			const frame = await this.#makeGuideFrame(device, image)
 			if (frame === undefined) return
 			this.#frame = frame
 
@@ -1198,11 +1201,11 @@ export class GuiderClient {
 		}
 	}
 
-	// Converts a decoded image into a guide frame and executes exactly one tracker pass.
-	#makeGuideFrame(image?: Image): GuideFrame | undefined {
-		const lockSearchPosition = this.#lockSearchPosition ?? this.#lockPosition
-		const appState = this.#appState === 'Paused' && !this.#fullPause ? this.#resumeState : this.#appState
-		const phase = this.#guidingAssistant !== undefined ? 'assistant' : appState === 'Calibrating' ? 'calibrating' : appState === 'Guiding' ? 'guiding' : appState === 'LostLock' ? 'lostLock' : appState === 'Selected' ? 'selected' : 'looping'
+	// Converts a decoded image into a guide frame: awaits the tracker's context-free preparation, when it
+	// has one, and then executes exactly one synchronous tracker pass with the guide state read after
+	// that await. Returns undefined for an out-of-order capture or when `device` stopped being the
+	// connected camera while the frame was being prepared.
+	async #makeGuideFrame(device: Camera, image?: Image): Promise<GuideFrame | undefined> {
 		const width = image?.metadata.width ?? this.#camera?.frame.width.value ?? 0
 		const height = image?.metadata.height ?? this.#camera?.frame.height.value ?? 0
 		const timestamp = this.#hasExposureStart ? this.#exposureStartedAt + this.#inFlightExposure / 2 : Date.now()
@@ -1212,8 +1215,16 @@ export class GuiderClient {
 		const captureMonotonic = performance.now()
 		if (this.#lastAcceptedCaptureMonotonic !== undefined && captureMonotonic <= this.#lastAcceptedCaptureMonotonic) return undefined
 		this.#lastAcceptedCaptureMonotonic = captureMonotonic
-		const captureTime = this.options?.timeFactory?.(timestamp) ?? timeUnix(timestamp / 1000)
-		const trackerFrame = { image, width, height, timestamp, captureTime, captureMonotonic, frameId: ++this.#frameId, cadence: this.#inFlightExposure } as const
+		const captureTime = this.options.timeFactory?.(timestamp) ?? timeUnix(timestamp / 1000)
+		const cadence = this.#inFlightExposure
+		const frame: GuideTrackerFrame = { image, width, height, timestamp, captureTime, captureMonotonic, frameId: ++this.#frameId, cadence }
+		// No await without a preparation stage, so the tracker sees the guide state of the turn that built the frame.
+		const trackerFrame = this.#tracker.prepare === undefined ? frame : await this.#tracker.prepare(frame)
+		if (!this.#connected || device !== this.#camera) return undefined
+
+		const lockSearchPosition = this.#lockSearchPosition ?? this.#lockPosition
+		const appState = this.#appState === 'Paused' && !this.#fullPause ? this.#resumeState : this.#appState
+		const phase = this.#guidingAssistant !== undefined ? 'assistant' : appState === 'Calibrating' ? 'calibrating' : appState === 'Guiding' ? 'guiding' : appState === 'LostLock' ? 'lostLock' : appState === 'Selected' ? 'selected' : 'looping'
 		const tracking = this.#tracker.track(trackerFrame, {
 			phase,
 			maxMeasurementJumpPx: this.#calibrator.config.maxFrameJumpPx,
@@ -1229,11 +1240,11 @@ export class GuiderClient {
 			tracking,
 			width,
 			height,
-			timestamp: trackerFrame.timestamp,
-			frameId: trackerFrame.frameId,
-			cadence: this.#inFlightExposure,
-			captureTime: trackerFrame.captureTime,
-			captureMonotonic: trackerFrame.captureMonotonic,
+			timestamp,
+			frameId: frame.frameId,
+			cadence,
+			captureTime,
+			captureMonotonic,
 			targetEnvelope: tracking.targetEnvelope,
 		}
 	}
@@ -1829,7 +1840,7 @@ export class GuiderClient {
 
 	// Builds a guider instance from the caller tuning, current calibration, axis parity, and DEC mode.
 	#makeGuider(calibration: GuidingCalibrationResult | undefined) {
-		const tuning = this.options?.guider
+		const tuning = this.options.guider
 
 		if (calibration === undefined) {
 			return new Guider({
@@ -1854,7 +1865,7 @@ export class GuiderClient {
 	// Pushes a solved calibration onto the running guider without reconstructing it, so lock,
 	// hysteresis, and dither stay intact.
 	#applyCalibrationToGuider(calibration: GuidingCalibrationResult) {
-		const options = calibratedGuiderOptions(calibration, this.options?.guider)
+		const options = calibratedGuiderOptions(calibration, this.options.guider)
 		this.#guider.setCalibration(options.calibration, options)
 	}
 

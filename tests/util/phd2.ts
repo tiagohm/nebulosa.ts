@@ -5,7 +5,7 @@ import type { DeviceHandler } from '../../src/devices/indi/manager/device'
 import type { GuideOutputManager } from '../../src/devices/indi/manager/guideoutput'
 import { GuiderClient, type GuiderClientOptions } from '../../src/observation/guiding/client'
 import { PHD2Server, type PHD2ServerOptions, type PHD2ServerRequest, type PHD2ServerResponse } from '../../src/observation/guiding/phd2/server'
-import { StarTracker } from '../../src/observation/guiding/tracker.star'
+import { fixtureImageDecoder, fixtureStarTracker } from './guiding'
 
 // A PHD2Server on a free local port over a real GuiderClient whose camera and guide-output managers are fakes: the
 // camera exposes nothing unless a test feeds a BLOB through `cameraManager.handler`, and the guide output only
@@ -80,7 +80,7 @@ export interface PHD2Rig extends Disposable {
 // Options of the rig: whether the guider starts connected to its devices, and the guider and server options.
 export interface PHD2RigOptions {
 	readonly connected?: boolean
-	readonly guider?: GuiderClientOptions
+	readonly guider?: Partial<GuiderClientOptions>
 	readonly server?: PHD2ServerOptions
 }
 
@@ -112,7 +112,7 @@ export function makeGuideOutput(): GuideOutput {
 export function createPHD2Rig(options: PHD2RigOptions = {}): PHD2Rig {
 	const cameraManager = new FakeGuideCameraManager()
 	const guideOutputManager = new FakeGuideOutputManager()
-	const guider = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, new StarTracker(), options.guider)
+	const guider = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, fixtureStarTracker(), { decodeImage: fixtureImageDecoder, ...options.guider })
 	const camera = makeGuideCamera()
 	const guideOutput = makeGuideOutput()
 	const connectOptions = { pixelSize: PIXEL_SIZE, focalLength: (ARCSEC_PER_RADIAN / 1000) * (PIXEL_SIZE / PHD2_RIG_PIXEL_SCALE) }

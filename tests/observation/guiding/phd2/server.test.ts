@@ -1,12 +1,10 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
-import { writeImageToFits } from '../../../../src/imaging/model/image'
-import type { Image } from '../../../../src/imaging/model/types'
 import { plotStar } from '../../../../src/imaging/stars/generator'
-import { bufferSink } from '../../../../src/io/io'
 import { PHD2Client } from '../../../../src/observation/guiding/phd2/client'
 import { DEFAULT_PHD2_EXPOSURE_DURATIONS, DEFAULT_PHD2_SERVER_PROFILE } from '../../../../src/observation/guiding/phd2/server'
 import { PHD2_VERSION, type PHD2Events } from '../../../../src/observation/guiding/phd2/types'
 import { waitUntil } from '../../../util'
+import { fixtureGuideBlob, fixtureGuideImage } from '../../../util/guiding'
 import { createPHD2Rig, PHD2_RIG_PIXEL_SCALE, type PHD2Rig, type PHD2RigOptions } from '../../../util/phd2'
 
 // PHD2Server against the real PHD2Client and a raw socket, over a real GuiderClient with fake device managers.
@@ -71,20 +69,14 @@ async function raw({ server }: PHD2Rig) {
 	return { socket, lines, closed: closed.promise }
 }
 
-// A 240 x 240 FITS frame with one star at (70, 70) on a flat background.
-async function starFrame() {
+// A 240 x 240 fixture BLOB with one star at (70, 70) on a flat background; the star is plotted
+// because the crop pixels are inspected.
+function starFrame() {
 	const width = 240
 	const height = 240
 	const raw = new Float32Array(width * height).fill(0.005)
 	plotStar(raw, width, height, 1, 70, 70, 10, 3, 80, 0, undefined, { background: 0.005, saturationLevel: 1 })
-	const image: Image = {
-		header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: width, NAXIS2: height },
-		metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, strideInBytes: width * 4, stride: width, bitpix: -32, bayer: undefined },
-		raw,
-	}
-	const buffer = Buffer.alloc(width * height * 4 + 100000)
-	await writeImageToFits(image, bufferSink(buffer))
-	return buffer
+	return fixtureGuideBlob(fixtureGuideImage(width, height, [[70, 70]], raw))
 }
 
 describe('connection', () => {
@@ -266,7 +258,7 @@ describe('commands', () => {
 		const { client, events } = await connect(context)
 
 		expect(await client.loop()).toEqual({ success: true, result: 0 })
-		cameraManager.handler!.blobReceived!(camera, await starFrame(), 'raw')
+		cameraManager.handler!.blobReceived!(camera, starFrame(), 'raw')
 		await waitUntil(() => events().some((event) => event.Event === 'LoopingExposures'), 5000, 5)
 
 		const star = await client.findStar()

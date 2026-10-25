@@ -1,7 +1,7 @@
 import type { CatalogSource, CatalogSourceStar } from '../src/devices/indi/simulator/types'
 import { normalizeAngle } from '../src/math/units/angle'
 import { StarTracker } from '../src/observation/guiding/tracker.star'
-import { GuidingSimulation, runGuidingSimulation, type GuidingCatalogContext } from './guiding.simulator'
+import { detectGuideStars, GuidingSimulation, runGuidingSimulation, type GuidingCatalogContext } from './guiding.simulator'
 
 // Fixed star field used by the interactive stellar-guiding simulator. Coordinates are generated
 // around the requested camera center so the synthetic mount error can move stars across the frame.
@@ -30,7 +30,7 @@ function starCatalog({ failures }: GuidingCatalogContext): CatalogSource {
 
 const simulation = new GuidingSimulation({
 	title: 'star guiding simulator',
-	tracker: new StarTracker(),
+	tracker: new StarTracker({ detector: detectGuideStars }),
 	catalogSource: starCatalog,
 })
 
