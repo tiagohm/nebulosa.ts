@@ -128,8 +128,8 @@ export interface GuidingSession {
 // Default capacity of the interruption history of an adapter.
 export const DEFAULT_GUIDING_INTERRUPTION_CAPACITY = 256
 
-// Time added to the settle timeout of a guider before the local wait gives up, in ms: the guider reports a settle
-// timeout by itself, and the margin covers its latency.
+// Time added to the settle timeout of a guider before the local wait gives up without any progress, in ms: the
+// guider reports a settle timeout by itself, and the margin covers its latency.
 export const GUIDING_SETTLE_TIMEOUT_MARGIN = 5000
 
 // Clock of a guiding started without one: `Date.now` and `performance.now`.
@@ -200,6 +200,8 @@ export type GuidingSettleEvent =
 	| { readonly kind: 'dithered'; readonly dx: number; readonly dy: number }
 	// A settle began or progresses.
 	| { readonly kind: 'settling' }
+	// A calibration the command started progresses by one step.
+	| { readonly kind: 'calibrating' }
 	// The settle ended; status 0 is success.
 	| { readonly kind: 'done'; readonly status: number; readonly error?: string }
 	// The guider can no longer report the settle (connection or device lost).
@@ -229,7 +231,10 @@ export interface GuidingSettleObservation {
 
 // Dispatches a guider command and waits, as the child `kind` of `scope` without resources, for the first settle end
 // delivered after the dispatch began: status 0 succeeds, another status fails 'commandFailed', a lost guider fails
-// with its reason, `timeout` ms (on `delay`) fail 'timeout' and the cancellation of the child fails with its reason.
+// with its reason, `timeout` ms (on `delay`) without any progress fail 'timeout' and the cancellation of the child fails
+// with its reason. The timeout is a watchdog, restarted by every calibration step and settle progress: a start that
+// calibrates first takes as long as its calibration, which fails by itself, and the settle is bounded by the guider's
+// own timeout, which runs from the start of the settle as in PHD2.
 // A dispatch that fails ends the wait with its failure; one that throws fails 'commandFailed'. Events delivered while
 // the dispatch runs count, so a guider that reports the settle before acknowledging the command is still correlated.
 // `onPhase` receives 'dithered', 'settling' and 'settled' as they are observed. Leaves no listener or timer behind.
@@ -239,7 +244,7 @@ export async function waitForGuidingSettle(scope: OperationScope, kind: string, 
 		[],
 		(context) =>
 			new Promise((resolve) => {
-				const timer = new AbortController()
+				let timer = new AbortController()
 				let lockShift: readonly [number, number] | undefined
 				let settled = false
 
@@ -259,7 +264,11 @@ export async function waitForGuidingSettle(scope: OperationScope, kind: string, 
 							onPhase?.('dithered')
 							return
 						case 'settling':
+							arm()
 							onPhase?.('settling')
+							return
+						case 'calibrating':
+							arm()
 							return
 						case 'done':
 							if (event.status === 0) {
@@ -282,9 +291,17 @@ export async function waitForGuidingSettle(scope: OperationScope, kind: string, 
 					return
 				}
 
-				void delay(timeout, timer.signal).then((elapsed) => {
-					if (elapsed.ok) finish(failedOperationResult('timeout', `no settle within ${timeout} ms`))
-				})
+				// Starts the watchdog again for `timeout` ms; a settled wait leaves it aborted.
+				function arm() {
+					if (settled) return
+					timer.abort()
+					timer = new AbortController()
+					void delay(timeout, timer.signal).then((elapsed) => {
+						if (elapsed.ok) finish(failedOperationResult('timeout', `no calibration or settle progress within ${timeout} ms`))
+					})
+				}
+
+				arm()
 
 				try {
 					void Promise.resolve(dispatch()).then(

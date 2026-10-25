@@ -122,6 +122,24 @@ describe('settle wait', () => {
 		await clock.advance(1)
 		expect(await timed).toMatchObject({ ok: false, reason: 'timeout' })
 
+		// The timeout is a watchdog: calibration steps and settle progress restart it, so a long calibration never times out.
+		const calibrating = waitForGuidingSettle(coordinator, 'settle', listeners, 1000, clock.delay, () => successfulOperationResult(undefined))
+		for (let step = 0; step < 5; step++) {
+			await clock.advance(900)
+			listeners.notify({ kind: 'calibrating' })
+		}
+		await clock.advance(900)
+		listeners.notify({ kind: 'settling' })
+		await clock.advance(900)
+		listeners.notify({ kind: 'done', status: 0 })
+		expect(await calibrating).toEqual(successfulOperationResult({}))
+		expect(clock.pending).toBe(0)
+
+		const stalled = waitForGuidingSettle(coordinator, 'settle', listeners, 1000, clock.delay, () => successfulOperationResult(undefined))
+		listeners.notify({ kind: 'calibrating' })
+		await clock.advance(1000)
+		expect(await stalled).toMatchObject({ ok: false, reason: 'timeout' })
+
 		const handle = coordinator.start('task', [], (scope) => waitForGuidingSettle(scope, 'settle', listeners, 1000, clock.delay, () => successfulOperationResult(undefined)))
 		await handle.cancel('aborted')
 		expect(await handle.result).toMatchObject({ ok: false, reason: 'aborted' })

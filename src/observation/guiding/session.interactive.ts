@@ -503,6 +503,9 @@ export class InteractiveGuidingSession {
 			case 'settling':
 				this.#settle.notify({ kind: 'settling' })
 				return
+			case 'calibrationStep':
+				this.#settle.notify({ kind: 'calibrating' })
+				return
 			case 'settleDone':
 				this.#settle.notify({ kind: 'done', status: event.succeeded ? 0 : 1, error: event.error })
 		}

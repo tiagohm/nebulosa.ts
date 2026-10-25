@@ -282,6 +282,7 @@ export class PHD2GuidingSession implements GuidingSession, Ditherer {
 			case 'StartCalibration':
 			case 'Calibrating':
 				this.#active('Calibrating')
+				this.#settle.notify({ kind: 'calibrating' })
 				return
 			case 'StartGuiding':
 			case 'GuideStep':
