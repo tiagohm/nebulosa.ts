@@ -404,7 +404,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		}
 	})
 
-	test('starts with the catalog source and telescope optics given in its options', async () => {
+	test('starts with the catalog source, telescope optics, and noise reference exposure given in its options', async () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
 		const cameraManager = new CameraManager()
@@ -423,7 +423,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		}
 
 		using mountSimulator = new MountSimulator('Mount Simulator', client)
-		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { SKY: catalogProvider }, catalogSource: 'SKY', focalLength: 50, aperture: 25 })
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { SKY: catalogProvider }, catalogSource: 'SKY', focalLength: 50, aperture: 25, noiseExposureTime: 2 })
 		using unknownSimulator = new CameraSimulator('Unknown Camera Simulator', client, { catalogSources: { SKY: catalogProvider }, catalogSource: 'MISSING' })
 		const mount = mountManager.get(client, mountSimulator.name)!
 		const camera = cameraManager.get(client, cameraSimulator.name)!
@@ -440,6 +440,8 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.SKY.value).toBe(true)
 		expect(cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.RANDOM.value).toBe(false)
 		expect(cameraManager.properties.get(camera)?.TELESCOPE_INFO?.elements.FOCAL_LENGTH.value).toBe(50)
+		expect(cameraManager.properties.get(camera)?.SIMULATOR_NOISE_EXPOSURE?.elements.EXPOSURE_TIME.value).toBe(2)
+		expect(cameraManager.properties.get(cameraManager.get(client, unknownSimulator.name)!)?.SIMULATOR_NOISE_EXPOSURE?.elements.EXPOSURE_TIME.value ?? 60).toBe(60)
 
 		cameraManager.snoop(camera, mount)
 		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)

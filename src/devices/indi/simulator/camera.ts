@@ -123,6 +123,11 @@ export interface CameraSimulatorOptions extends DeviceSimulatorOptions {
 	readonly focalLength?: number
 	// Initial aperture of TELESCOPE_INFO, in millimeters within [1, 3000]. Defaults to 80.
 	readonly aperture?: number
+	// Initial reference exposure of SIMULATOR_NOISE_EXPOSURE, in seconds within [CAMERA_MIN_EXPOSURE,
+	// CAMERA_MAX_EXPOSURE]: the exposure at which the stars have the flux of their source and the sky its nominal
+	// level; both scale linearly with the exposure taken. Defaults to 60 s, so a guide camera, whose exposures last
+	// seconds, sets a few seconds to see the stars a 60 s frame of an imaging camera shows.
+	readonly noiseExposureTime?: number
 	readonly mountManager?: MountManager
 	readonly guideOutputManager?: GuideOutputManager
 	readonly focuserManager?: FocuserManager
@@ -306,6 +311,7 @@ export class CameraSimulator extends DeviceSimulator {
 
 		if (options?.focalLength !== undefined) this.#telescopeInfo.elements.FOCAL_LENGTH.value = options.focalLength
 		if (options?.aperture !== undefined) this.#telescopeInfo.elements.APERTURE.value = options.aperture
+		if (options?.noiseExposureTime !== undefined) this.#noiseExposure.elements.EXPOSURE_TIME.value = options.noiseExposureTime
 
 		this.driverInfo.elements.DRIVER_EXEC.value = 'camera.simulator'
 
