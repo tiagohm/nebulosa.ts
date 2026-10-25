@@ -1,4 +1,4 @@
-import { equatorialToJ2000 } from '../../../astronomy/coordinates/coordinate'
+import { angularDistance, equatorialToJ2000 } from '../../../astronomy/coordinates/coordinate'
 import { pixelScale } from '../../../astronomy/formulas'
 import { Gnomonic } from '../../../astronomy/projections/projection'
 import { formatTemporal } from '../../../astronomy/time/temporal'
@@ -1672,6 +1672,11 @@ export class CameraSimulator extends DeviceSimulator {
 	// of the goto. Those samples carry no light from this field at all, so their weight is dropped
 	// instead. The shares of the remaining samples are left as they are, and no longer sum to one, which
 	// is the point: the exposure really was spent pointing somewhere this scene does not cover.
+	//
+	// The two are told apart by the angular distance, never by comparing coordinates: at a celestial
+	// pole every right ascension names the same direction, so a mount parked there reports a drifting
+	// right ascension whose samples land exactly on the centre, and comparing the coordinates read them
+	// as off the field, dropping the light of one exposure in two.
 	#trajectoryToOffsets(center: readonly [Angle, Angle], pixelScale: Angle, count: number, time: Time) {
 		const buffer = this.#trajectoryBuffer
 		const offset = this.#trajectoryOffset
@@ -1686,7 +1691,7 @@ export class CameraSimulator extends DeviceSimulator {
 			if (boresightOffsetInPixels(center[0], center[1], rightAscension, declination, pixelScale, time, offset)) {
 				buffer[index] = offset.x
 				buffer[index + 1] = offset.y
-			} else if (rightAscension !== center[0] || declination !== center[1]) {
+			} else if (angularDistance(center[0], center[1], rightAscension, declination) >= PIOVERTWO) {
 				buffer[index + 2] = 0
 			}
 		}

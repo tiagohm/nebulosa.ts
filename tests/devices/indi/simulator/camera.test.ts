@@ -1386,6 +1386,65 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		}
 	})
 
+	test('keeps the light of every exposure while the mount points at the celestial pole', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.pole.simulator', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		cameraManager.addHandler(frameReceiver)
+
+		const catalogProvider: CatalogSource = (rightAscension, declination) => [{ snr: 200, hfd: 2, flux: 0.05, rightAscension, declination }]
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		// Exactly at the pole and not tracking, as a mount parked there: every right ascension names the
+		// same direction, and the one reported keeps drifting with the sidereal time.
+		mountSimulator.syncTo(hour(5), PIOVERTWO)
+		mountSimulator.setTrackingEnabled(false)
+		await waitUntil(() => mount.equatorialCoordinate.declination === PIOVERTWO && !mount.tracking)
+
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_SENSOR', elements: { READ_NOISE: 0, BIAS_ELECTRONS: 0, BLACK_LEVEL_ELECTRONS: 0, DARK_CURRENT_AT_REFERENCE_TEMP: 0 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_ARTIFACTS', elements: { FIXED_PATTERN_NOISE_STRENGTH: 0, ROW_NOISE_STRENGTH: 0, COLUMN_NOISE_STRENGTH: 0, BANDING_STRENGTH: 0, HOT_PIXEL_RATE: 0, WARM_PIXEL_RATE: 0, DEAD_PIXEL_RATE: 0 } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_CLAMP_MODE', elements: { NONE: true } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+		try {
+			const fluxes: number[] = []
+
+			// The drifting right ascension lands some samples of the trajectory exactly on the centre after
+			// the conversion to J2000; comparing coordinates read those as off the field and dropped their
+			// share, so about one frame in two came out at half its light or empty.
+			for (let frame = 1; frame <= 8; frame++) {
+				cameraSimulator.startExposure(0.5)
+				await waitUntil(() => frameReceiver.length >= frame, 20000, 20)
+				const image = await readImageFromBuffer(frameReceiver.lastFrame)
+				fluxes.push(sumPixels(image!.raw))
+			}
+
+			expect(fluxes[0]).toBeGreaterThan(0)
+			for (const flux of fluxes) expect(flux / fluxes[0]).toBeCloseTo(1, 2)
+		} finally {
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+		}
+	})
+
 	test('does not draw the field it left back at the centre of the frame', async () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
